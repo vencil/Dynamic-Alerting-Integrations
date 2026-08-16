@@ -149,6 +149,45 @@ jobs:
           path: .ref
           persist-credentials: false
 
+      # The paired ratio assumes both sides run the SAME work. They drift: the
+      # reference is pinned for weeks-to-months while main's benchmark fixtures
+      # keep being edited, and a fixture change makes a permanent step in the
+      # ratio that looks exactly like a regression. Measured on 2026-08-16, all
+      # four exporter `*bench_test.go` files had changed since exporter/v2.9.0.
+      #
+      # This is the only place the comparison can be made — `.ref` exists only
+      # inside this job, so it cannot be recovered from the artifacts later.
+      #
+      # DISCLOSED, NOT ACTED ON (ADR-032 §工作定義漂移). Silencing drifted
+      # benchmarks would silence all of them; auto-re-baselining needs per-bench
+      # step state, which is what sank the frozen-anchor prototype. No
+      # `::error::`/`::warning::` either — drift is constant by construction over
+      # a reference's life, and an annotation that fires every single night is
+      # wallpaper. It goes in the JSON (which the watchdog will read) and the
+      # step summary (which a human reads).
+      - name: Record workload drift between the two sides
+        id: drift
+        if: steps.ref.outputs.ok == 'true'
+        env:
+          REF_APP: .ref/components/threshold-exporter/app
+          MAIN_APP: components/threshold-exporter/app
+        run: |
+          set -uo pipefail
+          mkdir -p .build/paired
+          : > .build/paired/workload-drift.txt
+          # Union of both sides, so a file added or deleted counts as drift too.
+          # `cmp -s` is non-zero for "differs" AND for "missing on one side",
+          # which is the answer we want in both cases.
+          {
+            ( cd "$REF_APP"  && find . -name '*bench_test.go' -type f -print )
+            ( cd "$MAIN_APP" && find . -name '*bench_test.go' -type f -print )
+          } | sed 's|^\./||' | sort -u | while read -r rel; do
+            cmp -s "$REF_APP/$rel" "$MAIN_APP/$rel" \
+              || echo "$rel" >> .build/paired/workload-drift.txt
+          done
+          echo "drifted benchmark test files: $(wc -l < .build/paired/workload-drift.txt)"
+          cat .build/paired/workload-drift.txt
+
       # Measures main HEAD and the reference version ALTERNATELY on this one
       # runner, so the machine's speed divides out of the ratio. Same harness
       # the PR gate uses. ROUNDS=6/BENCHTIME=3s keeps the main side's sample
@@ -220,12 +259,15 @@ jobs:
         if: steps.paired.outputs.status == 'ok'
         env:
           REF_TAG: ${{ steps.ref.outputs.tag }}
+          REF_SHA: ${{ steps.ref.outputs.sha }}
         run: |
           set -uo pipefail
           if python3 scripts/tools/dx/pair_bench_ratio.py \
               --reference .build/paired/bench-base.txt \
               --main .build/paired/bench-pr.txt \
               --reference-tag "${REF_TAG}" \
+              --reference-sha "${REF_SHA}" \
+              --workload-drift .build/paired/workload-drift.txt \
               --out .build/bench-paired.json; then
             echo "status=ok" >> "$GITHUB_OUTPUT"
           else
@@ -240,6 +282,7 @@ jobs:
         if: steps.paired.outputs.status != 'ok' || steps.ratios.outputs.status != 'ok'
         env:
           REF_TAG: ${{ steps.ref.outputs.tag }}
+          REF_SHA: ${{ steps.ref.outputs.sha }}
           # Three distinct causes reach this step and they need different fixes:
           # a pin file nobody can parse, a reference version that no longer
           # builds, and inputs the ratio tool refused. Reporting them all as one
@@ -257,8 +300,8 @@ jobs:
           set -uo pipefail
           echo "::error::paired measurement unusable (${REASON}) — tonight is INCONCLUSIVE for the paired series. The nightly baseline came from ${BASELINE_FROM} and is unaffected. See ADR-032 §待決 3."
           mkdir -p .build
-          printf '{\n  "schema": "bench-paired/v1",\n  "reference_tag": "%s",\n  "status": "INCONCLUSIVE",\n  "reason": "%s"\n}\n' \
-            "${REF_TAG}" "${REASON}" > .build/bench-paired.json
+          printf '{\n  "schema": "bench-paired/v1",\n  "reference_tag": "%s",\n  "reference_sha": "%s",\n  "status": "INCONCLUSIVE",\n  "reason": "%s"\n}\n' \
+            "${REF_TAG}" "${REF_SHA}" "${REASON}" > .build/bench-paired.json
           tail -n 40 .build/paired/bench.err.log 2>/dev/null || true
 
       - name: Summarize results
@@ -270,6 +313,14 @@ jobs:
           echo "### Bench Record — $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "Paired reference: \`${REF_TAG:-unresolved}\` — status \`${PAIRED_STATUS:-not-run}\`" >> "$GITHUB_STEP_SUMMARY"
+          # The one thing in this summary that needs a human. Everything else
+          # here is a number; this is a question ("is that ratio a regression or
+          # a changed fixture?") that only a person can answer.
+          if [ -s .build/paired/workload-drift.txt ]; then
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "⚠️ **Workload drift** — these benchmark test files differ between \`${REF_TAG}\` and main, so a ratio for a benchmark they define may be a changed workload rather than a code change:" >> "$GITHUB_STEP_SUMMARY"
+            sed 's|^|- `|; s|$|`|' .build/paired/workload-drift.txt >> "$GITHUB_STEP_SUMMARY"
+          fi
           if [ -f .build/bench-paired.json ]; then
             echo "" >> "$GITHUB_STEP_SUMMARY"
             echo '```json' >> "$GITHUB_STEP_SUMMARY"
@@ -300,6 +351,7 @@ jobs:
             .build/bench-paired.json
             .build/paired/bench-base.txt
             .build/paired/bench-pr.txt
+            .build/paired/workload-drift.txt
           retention-days: 90
           if-no-files-found: warn
 

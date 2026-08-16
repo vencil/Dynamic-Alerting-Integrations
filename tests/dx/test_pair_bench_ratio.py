@@ -101,7 +101,8 @@ def test_non_positive_reference_median_is_refused_not_divided():
 
 # --- main() ----------------------------------------------------------------
 
-def run(tmp_path: Path, ref_text: str, main_text: str) -> subprocess.CompletedProcess:
+def run(tmp_path: Path, ref_text: str, main_text: str,
+        *extra: str) -> subprocess.CompletedProcess:
     (tmp_path / "ref.txt").write_text(ref_text, encoding="utf-8")
     (tmp_path / "main.txt").write_text(main_text, encoding="utf-8")
     return subprocess.run(
@@ -109,7 +110,7 @@ def run(tmp_path: Path, ref_text: str, main_text: str) -> subprocess.CompletedPr
          "--reference", str(tmp_path / "ref.txt"),
          "--main", str(tmp_path / "main.txt"),
          "--reference-tag", "exporter/v2.9.0",
-         "--out", str(tmp_path / "out.json")],
+         "--out", str(tmp_path / "out.json"), *extra],
         capture_output=True, text=True, timeout=60)
 
 
@@ -124,6 +125,82 @@ def test_happy_path_writes_the_expected_payload(tmp_path: Path):
     assert payload["cpu"] == CPU
     assert payload["evaluated"]["BenchmarkA"]["ratio"] == pytest.approx(1.05)
     assert payload["inconclusive"] == {"BenchmarkNew": "missing-in-reference"}
+
+
+def test_success_payload_carries_an_explicit_status(tmp_path: Path):
+    """The unusable-measurement path writes `"status": "INCONCLUSIVE"`. If the
+    success path omitted the key, every consumer would have to encode "absent
+    means OK" — a default that is silently wrong the day a third status
+    exists."""
+    r = run(tmp_path, side([("BenchmarkA", 100.0)]), side([("BenchmarkA", 100.0)]))
+    assert r.returncode == 0, r.stderr
+    payload = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
+    assert payload["status"] == "OK"
+
+
+def test_reference_sha_is_recorded_verbatim(tmp_path: Path):
+    """A tag can be re-pointed; the SHA is what was actually built. A night
+    series that recorded only the tag cannot be re-read after a re-point."""
+    sha = "3fd96b51f52e61566bb12c4c3fa23fed7e34dfa0"
+    r = run(tmp_path, side([("BenchmarkA", 100.0)]), side([("BenchmarkA", 100.0)]),
+            "--reference-sha", sha)
+    assert r.returncode == 0, r.stderr
+    payload = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
+    assert payload["reference_sha"] == sha
+
+
+def test_reference_sha_absent_is_null_not_missing(tmp_path: Path):
+    r = run(tmp_path, side([("BenchmarkA", 100.0)]), side([("BenchmarkA", 100.0)]))
+    payload = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
+    assert payload["reference_sha"] is None
+
+
+# --- workload drift --------------------------------------------------------
+#
+# Three states, for the same reason the verdict has three: "nobody checked" read
+# as "nothing drifted" is the conflation that makes a changed fixture look like
+# a code change (or the reverse) with nothing in the record to say so.
+
+def test_drift_not_requested_is_distinguishable_from_no_drift(tmp_path: Path):
+    r = run(tmp_path, side([("BenchmarkA", 100.0)]), side([("BenchmarkA", 100.0)]))
+    payload = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
+    assert payload["workload_drift"] == {"status": "not-requested", "files": []}
+
+
+def test_drift_checked_and_empty_is_a_positive_statement(tmp_path: Path):
+    (tmp_path / "drift.txt").write_text("", encoding="utf-8")
+    r = run(tmp_path, side([("BenchmarkA", 100.0)]), side([("BenchmarkA", 100.0)]),
+            "--workload-drift", str(tmp_path / "drift.txt"))
+    assert r.returncode == 0, r.stderr
+    payload = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
+    assert payload["workload_drift"] == {"status": "checked", "files": []}
+
+
+def test_drift_files_are_recorded_deduped_and_sorted(tmp_path: Path):
+    (tmp_path / "drift.txt").write_text(
+        "config_bench_test.go\n\n  pkg/config/simulate_bench_test.go  \n"
+        "config_bench_test.go\n", encoding="utf-8")
+    r = run(tmp_path, side([("BenchmarkA", 100.0)]), side([("BenchmarkA", 105.0)]),
+            "--workload-drift", str(tmp_path / "drift.txt"))
+    assert r.returncode == 0, r.stderr
+    payload = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
+    assert payload["workload_drift"] == {
+        "status": "checked",
+        "files": ["config_bench_test.go", "pkg/config/simulate_bench_test.go"],
+    }
+    assert "workload drift" in r.stdout
+
+
+def test_unreadable_drift_file_is_recorded_not_fatal(tmp_path: Path):
+    """This is a disclosure aid. Failing the night's ratios because an
+    annotation input went missing would trade a working measurement for a
+    warning — and it must not be recorded as `checked` either."""
+    r = run(tmp_path, side([("BenchmarkA", 100.0)]), side([("BenchmarkA", 100.0)]),
+            "--workload-drift", str(tmp_path / "nope.txt"))
+    assert r.returncode == 0, r.stderr
+    payload = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
+    assert payload["workload_drift"] == {"status": "unreadable", "files": []}
+    assert "unreadable" in r.stderr
 
 
 def test_mismatched_cpu_headers_are_refused(tmp_path: Path):

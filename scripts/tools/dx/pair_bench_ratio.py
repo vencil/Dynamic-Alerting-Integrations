@@ -36,6 +36,28 @@ regression silent. So every benchmark lands in exactly one bucket:
 `missing-in-reference` is the expected state for a benchmark added to main
 after the reference version was cut. It is data, not an error, so this script
 still exits 0 — but it never lets that benchmark look clean.
+
+WORKLOAD DRIFT (`--workload-drift`)
+===================================
+The ratio only means "same work, different implementation" while both sides
+define the SAME work. They do not: the reference is pinned for weeks to months
+while main's benchmark test files keep being edited, so the two sides' FIXTURES
+diverge over the reference's lifetime. Measured on the first real night, all
+four of the exporter's `*bench_test.go` files had changed since the reference
+tag, and one of those edits (a metric renamed to a 12-character-longer string,
+in a benchmark that hashes map keys) sits underneath the largest ratio of the
+night. A fixture change produces a PERMANENT STEP in the ratio, which is
+indistinguishable in shape from a real regression.
+
+This script cannot tell the two apart and does not try. It records what the
+caller measured so a human can, per ADR-032's decision to disclose rather than
+either silence the benchmark (all four files drift, so silencing is a total
+outage of the detector) or auto-re-baseline it (that needs per-bench step state,
+which is what the reverted frozen-anchor prototype died of).
+
+⚠️ The disclosure is a HEURISTIC, not a proof. The caller scopes it to
+`*bench_test.go`; a fixture helper living in an ordinary `*_test.go` file can
+change a benchmark's workload without appearing in the list.
 """
 from __future__ import annotations
 
@@ -115,6 +137,34 @@ def pair(ref: dict[str, list[float]],
     return evaluated, inconclusive
 
 
+def read_workload_drift(path: pathlib.Path | None) -> dict:
+    """Three states, for the same reason the verdict has three.
+
+    "not checked" and "checked, nothing drifted" are different facts, and a
+    consumer that cannot tell them apart will read a missing check as a clean
+    bill of health — the exact conflation ADR-032 exists to stop. So the field
+    always carries its own status:
+
+        not-requested  the caller passed no --workload-drift
+        checked        the list is complete as far as the caller's scope goes
+        unreadable     the caller asked, and the file could not be read
+
+    `unreadable` is NOT fatal. This is a disclosure aid; failing the night's
+    ratios over it would trade a working measurement for an annotation.
+    """
+    if path is None:
+        return {"status": "not-requested", "files": []}
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        print(f"[pair_bench_ratio] could not read --workload-drift {path} "
+              f"({type(exc).__name__}) — recording the check as unreadable "
+              f"rather than as clean", file=sys.stderr)
+        return {"status": "unreadable", "files": []}
+    return {"status": "checked",
+            "files": sorted({ln.strip() for ln in text.splitlines() if ln.strip()})}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -124,6 +174,16 @@ def main() -> int:
                     help="bench output of main HEAD, same runner, same job")
     ap.add_argument("--reference-tag", required=True,
                     help="the tag the reference side was built from")
+    # A tag is a movable label; the SHA is what was actually checked out. The
+    # pin file records both for exactly that reason, and a series of nights
+    # that only names the tag cannot be re-read after a tag is re-pointed.
+    ap.add_argument("--reference-sha", default=None,
+                    help="the commit the reference side was built from "
+                         "(recorded verbatim; the tag alone is re-pointable)")
+    ap.add_argument("--workload-drift", type=pathlib.Path, default=None,
+                    metavar="FILE",
+                    help="newline-delimited benchmark test files that differ "
+                         "between the two sides; disclosed, never acted on")
     ap.add_argument("--out", type=pathlib.Path, required=True)
     args = ap.parse_args()
     try_utf8_stdout()
@@ -163,12 +223,19 @@ def main() -> int:
         return 2
 
     evaluated, inconclusive = pair(ref, main_s)
+    # `status` is present on BOTH paths. The workflow's unusable-measurement
+    # step writes `"status": "INCONCLUSIVE"`, and a success payload that simply
+    # omitted the key would force every consumer to encode "absent means OK" —
+    # a default that is wrong the first time a third status exists.
     payload = {
         "schema": "bench-paired/v1",
+        "status": "OK",
         "reference_tag": args.reference_tag,
+        "reference_sha": args.reference_sha,
         "cpu": ref_cpu,
         "evaluated": evaluated,
         "inconclusive": inconclusive,
+        "workload_drift": read_workload_drift(args.workload_drift),
     }
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n",
@@ -182,6 +249,17 @@ def main() -> int:
         print(f"  {100 * (d['ratio'] - 1):+7.2f}%  {bench}")
     for bench, why in sorted(inconclusive.items()):
         print(f"  {'INCONCLUSIVE':>12}  {bench}  ({why})")
+    drift = payload["workload_drift"]
+    if drift["files"]:
+        print(f"[pair_bench_ratio] workload drift — {len(drift['files'])} "
+              f"benchmark test file(s) differ from the reference; ratios for the "
+              f"benchmarks they define may be a changed workload, not a code change:")
+        for f in drift["files"]:
+            print(f"    {f}")
+    elif drift["status"] != "checked":
+        print(f"[pair_bench_ratio] workload drift NOT established "
+              f"({drift['status']}) — the same-work premise is undisclosed, "
+              f"not confirmed")
     return 0
 
 
