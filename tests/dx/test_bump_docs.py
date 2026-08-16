@@ -3078,3 +3078,109 @@ class TestSyncCountsRejectsEverythingItDiscards:
             if r.returncode == 0:
                 continue
             assert flag in r.stderr, (flag, r.stderr[-300:])
+
+
+class TestRoundEightMutationSurvivors:
+    """第八輪盲審 lens C8（112 個變異、只打 diff 動過的行）存活者的補釘。"""
+
+    def test_the_bump_docs_recipe_forwards_every_one_of_the_six_lines(self):
+        """⛔ 把 `$(if $(TENANT_API),--tenant-api …)` 從 recipe 拿掉而全綠：
+        `make bump-docs TENANT_API=… PLATFORM=…` 只會發出 `--platform`，
+        於是**六線 release bump 靜靜地只升了五線並回報成功**。
+
+        從 `VERSION_LINES` 推導 make 變數名，這樣新增第七條線時這條會紅而不是
+        靜靜少釘一個。
+        """
+        import subprocess
+        mk = (Path(bump_docs.REPO_ROOT) / "Makefile").read_text(encoding="utf-8")
+        recipe = mk.split("\nbump-docs:", 1)[1].split("\n\n", 1)[0]
+        for line in bump_docs.VERSION_LINES:
+            var = line.upper().replace("-", "_")
+            flag = "--" + line
+            assert f"$(if $({var})" in recipe, (
+                f"bump-docs recipe 沒有轉發 {var}——那條版號線會在 "
+                f"`make bump-docs` 裡靜靜被跳過\n{recipe}")
+            assert flag in recipe, (var, flag, recipe)
+        # 端到端：同時給兩條，兩條都要出現在展開的命令列上。
+        out = subprocess.run(
+            ["make", "-n", "bump-docs", "TENANT_API=2.9.99",
+             "PLATFORM=2.10.0"],
+            capture_output=True, text=True, timeout=300,
+            cwd=str(bump_docs.REPO_ROOT)).stdout
+        assert "--tenant-api 2.9.99" in out, out
+        assert "--platform 2.10.0" in out, out
+
+    def test_the_two_path_separators_select_the_same_rules(self):
+        """⛔ `_path_is_under` 的兩個 `replace("\\\\", "/")` 各自存活。
+
+        它們存在的理由就是「Windows 風格與 POSIX 風格的 scope 是同一個東西」，
+        所以要釘的是**等價**，不是某一邊的絕對結果：
+
+            拿掉 scope 那個 → `--scope 'docs\\integration'` 從 rc=0 變成
+                              rc=2「selected ZERO rules」
+            拿掉 path 那個  → `_filter_by_scope` 把 scope 當 `path` 參數傳進來，
+                              於是反向包含那條腿悄悄失配，整條版號線掉出檢查
+
+        ⚠️ 第一版我斷言「不得出現 SCOPE-EMPTY」——那是錯的：對一條真的被窄
+        scope 排除掉的線，SCOPE-EMPTY 正是它該說的話（且不致命）。改成逐線比對
+        兩種寫法選到的規則數。
+        """
+        import subprocess
+        all_rules = bump_docs._build_rules()
+        posix = {ln: len(bump_docs._scoped_rules(rs, "docs/integration"))
+                 for ln, rs in all_rules.items()}
+        win = {ln: len(bump_docs._scoped_rules(rs, r"docs\integration"))
+               for ln, rs in all_rules.items()}
+        assert posix == win, (
+            "兩種路徑分隔線選到的規則集不同——那正是這兩個正規化存在的理由\n"
+            f"posix={posix}\nwin={win}")
+        assert sum(posix.values()) > 0, posix
+
+        outs = []
+        for scope in ("docs/integration", r"docs\integration"):
+            r = subprocess.run(
+                [sys.executable, str(bump_docs.__file__), "--check",
+                 "--scope", scope],
+                capture_output=True, text=True, timeout=300,
+                cwd=str(bump_docs.REPO_ROOT))
+            assert r.returncode == 0, (scope, r.returncode, r.stdout[-500:])
+            outs.append(sorted(re.findall(r"SCOPE-EMPTY \[([a-z-]+)\]",
+                                          r.stdout)))
+        assert outs[0] == outs[1], (
+            f"兩種寫法讓不同的版號線掉出檢查：{outs}")
+
+    def test_a_scoped_run_does_not_fail_on_defects_outside_the_scope(
+            self, tmp_path, monkeypatch, capsys, cli_argv):
+        """⛔ `_scoped_rules` 的**展開前**過濾拿掉之後仍然全綠。
+
+        後果不是多做工，是**誤紅**：`--check --scope docs` 會因為
+        `tools/portal/**` 那邊的 GLOB-EMPTY 而 rc=1——一個完全在 scope 之外的
+        缺陷擋下了一次正當的 scoped 檢查。
+        """
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "docs" / "a.md").write_text("v2.9.0\n", encoding="utf-8",
+                                                newline="\n")
+        monkeypatch.setattr(bump_docs, "read_current_versions",
+                            lambda: {line: "2.9.0"
+                                     for line in bump_docs.VERSION_LINES})
+        monkeypatch.setattr(bump_docs, "_build_rules", lambda: {
+            line: ([
+                {"file": "__glob__", "glob_dir": "docs",
+                 "glob_pattern": "**/*.md", "desc": "healthy docs glob",
+                 "pattern": r"v[0-9]+\.[0-9]+\.[0-9]+",
+                 "replacement": lambda v: f"v{v}"},
+                # 完全在 scope 之外，而且是壞的
+                {"file": "__glob__", "glob_dir": "elsewhere",
+                 "glob_pattern": "**/*.jsx", "desc": "broken outside glob",
+                 "pattern": r"v[0-9]+\.[0-9]+\.[0-9]+",
+                 "replacement": lambda v: f"v{v}"},
+            ] if line == "platform" else [])
+            for line in bump_docs.VERSION_LINES})
+        cli_argv("bump_docs", "--check", "--scope", "docs")
+        with pytest.raises(SystemExit) as exc:
+            bump_docs.main()
+        out = capsys.readouterr().out
+        assert "GLOB-EMPTY" not in out, (
+            "--scope docs 因為 scope 之外的缺陷而出聲\n" + out)
+        assert exc.value.code == 0, (exc.value.code, out)

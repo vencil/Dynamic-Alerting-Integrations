@@ -4663,3 +4663,122 @@ class TestRoundEightFindings:
                     offenders[rel] = hits
         assert not offenders, (
             f'裸 issue 引用被寫進客戶 repo，會連到他自己的 issue：{offenders}')
+
+
+class TestRoundEightMutationSurvivors:
+    """第八輪盲審 lens C8（112 個變異、只打 diff 動過的行）存活者的補釘。"""
+
+    _CFG = {
+        'ci': 'both', 'deploy': 'kustomize', 'rule_packs': ['mariadb'],
+        'tenants': ['db-a'], 'namespace': 'monitoring',
+        'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
+    }
+
+    def _subdir_report(self, tmpdir, deploy='kustomize'):
+        import contextlib
+        import io
+        from pathlib import Path as _P
+        repo = _P(tmpdir) / 'repo'
+        (repo / '.git').mkdir(parents=True)
+        sub = repo / 'alerting'
+        sub.mkdir()
+        config = dict(self._CFG, deploy=deploy)
+        created = ip.run_init(config, str(sub))
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            ip._print_summary(created, str(sub), config)
+        return buf.getvalue()
+
+    def test_config_dir_is_in_the_prefix_report(self):
+        """⛔ 從 `_ROOT_RELATIVE_CI_KEYS` 拿掉 `'CONFIG_DIR'` 而全綠。
+
+        它是清單裡**唯一不是 glob** 的那個值，也正是 `docker -v` 拿去掛載的
+        路徑：沒加前綴的話 docker 會**建出**一個空目錄，`validate-config`
+        解析 0 個檔案然後 PASS——正是這一步的文案承諾要防止的結局。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = self._subdir_report(tmpdir)
+        assert 'conf.d  →  alerting/conf.d' in out, (
+            'CONFIG_DIR 沒有出現在前綴清單裡——那是唯一一個會被 docker 掛載'
+            f'的值\n{out}')
+
+    def test_each_listed_path_appears_once_and_in_a_stable_order(self):
+        """⛔ 去重與排序各自存活：去重拿掉之後每個 GitHub glob 印兩次，
+        排序拿掉之後順序變成文件順序。兩者都不會遺失路徑，但客戶是照著這份
+        清單逐條改的。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = self._subdir_report(tmpdir)
+        blocks = out.split('Not done yet')[-1]
+        listed = [ln.split('  →  ')[0].strip()
+                  for ln in blocks.splitlines() if '  →  ' in ln]
+        assert listed, out
+        for shown in (listed[:len(listed) // 2], listed[len(listed) // 2:]):
+            assert len(shown) == len(set(shown)), f'有重複項目：{shown}'
+        # ⚠️ 排序要**逐檔**比對：整份 listed 是兩個檔案的清單接起來的，
+        # 對接起來的序列做 sorted() 永遠會失敗。（第一版我在這裡寫了一句
+        # `... or True` 的恆真斷言，等於沒有。）
+        per_file = [g for g in (blocks.split('alerting/')[1:]) if '  →  ' in g]
+        for chunk in per_file:
+            vals = [ln.split('  →  ')[0].strip()
+                    for ln in chunk.splitlines() if '  →  ' in ln]
+            assert vals == sorted(vals), f'清單沒有排序：{vals}'
+
+    @pytest.mark.parametrize('deploy,binary,secret', [
+        ('kustomize', 'kubectl / kustomize', 'KUBECONFIG'),
+        ('helm', 'helm', 'KUBECONFIG'),
+        ('argocd', 'argocd', 'ARGOCD_SERVER + ARGOCD_AUTH_TOKEN'),
+    ])
+    def test_the_credential_sentence_does_not_swap_its_two_halves(
+            self, deploy, binary, secret):
+        """⛔ 把那個 tuple 的兩個元素對調而全綠：argocd 那句變成
+        「Set **argocd** in your CI (that is what **ARGOCD_SERVER +
+        ARGOCD_AUTH_TOKEN** uses)」——叫客戶去建一個名為 `argocd` 的 CI 變數。
+
+        既有測試只 grep secret 名字，所以**哪個是哪個**完全沒被釘；helm 那列
+        把 binary 換成 `kubectl` 同樣存活。
+        """
+        import contextlib
+        import io
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = dict(self._CFG, ci='github', deploy=deploy)
+            created = ip.run_init(config, tmpdir)
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                ip._print_summary(created, tmpdir, config)
+            out = buf.getvalue()
+        line = next(ln for ln in out.splitlines()
+                    if 'cluster credentials' in ln)
+        assert f'Set {secret} in your CI' in line, (deploy, line)
+        assert f'that is what {binary} uses' in line, (deploy, line)
+
+    def test_an_already_wired_root_does_not_get_a_do_this_first_closing(self):
+        """⛔ 從 `gl_needs_manual` 拿掉 `and gl_status != _GL_ROOT_ALREADY_WIRED`
+        而全綠：結尾訊息在兩行之內自相矛盾——
+
+            6. GitLab wiring already in place … nothing to do
+            7. Complete the step above, then commit and push — only then …
+
+        而那個「step above」就是第 6 行說不用做的那件事。
+        """
+        import contextlib
+        import io
+        from pathlib import Path as _P
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = _P(tmpdir)
+            (root / '.gitlab-ci.yml').write_text(
+                'include:\n  - local: .gitlab-ci.d/dynamic-alerting.yml\n',
+                encoding='utf-8', newline='\n')
+            config = dict(self._CFG, ci='gitlab')
+            created = ip.run_init(config, str(root))
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                ip._print_summary(created, str(root), config)
+            out = buf.getvalue()
+        assert 'already in place' in out, out
+        closing = [ln for ln in out.splitlines()
+                   if 'commit and push' in ln.lower()]
+        assert len(closing) == 1, closing
+        assert 'only then' not in closing[0].lower(), (
+            '一個已經接好線的 repo 被告知還有步驟要做：\n' + '\n'.join(
+                out.splitlines()[-5:]))

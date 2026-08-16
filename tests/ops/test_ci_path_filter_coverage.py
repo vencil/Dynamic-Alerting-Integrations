@@ -3395,3 +3395,38 @@ def test_guard_actually_sees_the_known_two_ended_gates() -> None:
         f"{missing} — the coverage assertion above is now vacuous. Fix the "
         "parser, or update this pin if the test genuinely stopped reading them."
     )
+
+
+def test_the_version_check_filter_covers_the_trees_bump_docs_now_reads():
+    """⛔ 第八輪盲審 lens C8：`tools/portal/**` 與
+    `components/da-portal/QUICKSTART.md` 兩個 filter 條目各自可以被刪掉而全綠。
+
+    刪掉之後，一個只動 portal 的 PR 完全不匹配 `validate` 的 path filter ⇒
+    version-check **skipped**，而被 path filter 跳過的 required check 算作已
+    滿足。那正是這兩個條目被加上去的理由：#1407 的 44 個 JSX 檔停在 v2.7.0，
+    每一道閘門都報綠。
+    """
+    import fnmatch
+    import re as _re
+    from pathlib import Path as _P
+
+    wf = (_P(__file__).resolve().parents[2]
+          / ".github" / "workflows" / "validate.yaml").read_text(
+        encoding="utf-8")
+    m = _re.search(r"\n\s+validate:\n((?:\s+- .*\n|\s+#.*\n)+)", wf)
+    assert m, "could not locate the validate path-filter block"
+    pats = _re.findall(r'- "([^"]+)"', m.group(1))
+
+    def covered(path: str) -> bool:
+        return any(fnmatch.fnmatch(path, p)
+                   or (p.endswith("/**") and path.startswith(p[:-2]))
+                   for p in pats)
+
+    # Each probe is a file `bump_docs --check` actually reads today.
+    for probe in ("tools/portal/src/interactive/tools/glossary.jsx",
+                  "components/da-portal/QUICKSTART.md",
+                  "CHANGELOG.md"):
+        assert covered(probe), (
+            f"{probe} is read by the version gate but matches no `validate` "
+            f"path filter — a PR touching only it skips version-check, and a "
+            f"skipped required check counts as satisfied.\npatterns={pats}")

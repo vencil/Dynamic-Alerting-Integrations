@@ -245,6 +245,28 @@ class TestVersionsCheck:
         assert "check" in result
         assert result["check"] == "versions"
 
+    def test_it_actually_finds_the_tool_it_shells_out_to(self):
+        """⛔ The check above accepts PASS *or* FAIL, so it passed for years
+        while this check had never once run: `_THIS_DIR / "bump_docs.py"`
+        pointed at `scripts/tools/ops/`, and the tool has always lived in
+        `scripts/tools/dx/`. Every developer's `make validate-config` was red
+        with
+
+            [FAIL] versions
+                   can't open file '.../scripts/tools/ops/bump_docs.py':
+                   [Errno 2] No such file or directory
+
+        Reverting the path fix leaves the whole suite green again unless
+        something asserts the tool was *found*, which is what this does.
+        """
+        result = vc.check_versions()
+        detail = " ".join(str(v) for v in result.values())
+        assert "No such file or directory" not in detail, detail
+        assert "can't open file" not in detail, detail
+        assert result["status"] in (vc.PASS, vc.WARN), (
+            "the versions check reported FAIL — if that is real drift, fix the "
+            f"drift; if it is a missing file, fix the path.\n{result}")
+
 
 class TestIntegration:
     """Integration test with real config dir."""
