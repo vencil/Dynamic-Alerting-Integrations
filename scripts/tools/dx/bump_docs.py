@@ -1574,15 +1574,39 @@ def _scoped_rules(rules, scope):
     file, and dropping them would restore the silence they exist to break.
     """
     selected = _filter_by_scope(rules, scope)
+    expanded = _expand_glob_rules(selected)
     if not scope:
-        return selected
-    out = []
-    for rule in _expand_glob_rules(selected):
+        # ⛔ Always expanded, even with no scope. `--what-if` iterates this
+        # result directly and treats each entry as a file, so returning the
+        # unexpanded `__glob__` sentinels made every glob read as MISSING.
+        # `apply_rules` re-expands, which is a no-op on already-expanded
+        # rules, so both callers can rely on one shape.
+        return expanded
+    # ⛔ Which globs did this scope ACTUALLY narrow? Marking every glob as
+    # narrowed whenever a scope was passed at all suppressed genuine,
+    # repo-wide GLOB-DEAD: `--scope docs` (the tool's own --help example)
+    # selects exactly the same files as no scope for a glob rooted at `docs`,
+    # yet the health verdict for that glob vanished. The suppression is only
+    # justified where the subset is genuinely smaller than the whole.
+    total = {}
+    kept = {}
+    for rule in expanded:
+        gid = rule.get("glob_id")
+        if gid is None:
+            continue
+        total[gid] = total.get(gid, 0) + 1
         if rule.get("glob_collapsed") or _path_is_under(rule.get("file", ""),
                                                         scope):
-            if rule.get("glob_id") is not None:
-                rule = dict(rule, scope_narrowed=True)
-            out.append(rule)
+            kept[gid] = kept.get(gid, 0) + 1
+    out = []
+    for rule in expanded:
+        if not (rule.get("glob_collapsed")
+                or _path_is_under(rule.get("file", ""), scope)):
+            continue
+        gid = rule.get("glob_id")
+        if gid is not None and kept.get(gid, 0) < total.get(gid, 0):
+            rule = dict(rule, scope_narrowed=True)
+        out.append(rule)
     return out
 
 
@@ -2116,7 +2140,7 @@ def _require_nonempty_scope(all_rules, scope):
     """
     if not scope:
         return
-    total = sum(len(_filter_by_scope(rules, scope))
+    total = sum(len(_scoped_rules(rules, scope))
                 for rules in all_rules.values())
     if total == 0:
         print(f"ERROR: --scope {scope!r} selected ZERO rules. Nothing would "
@@ -2155,7 +2179,7 @@ def _require_nonempty_line_scope(all_rules, scope, requested_lines):
     if not scope:
         return
     empty = [line for line in requested_lines
-             if not _filter_by_scope(all_rules.get(line, []), scope)]
+             if not _scoped_rules(all_rules.get(line, []), scope)]
     if empty:
         print(f"ERROR: --scope {scope!r} selected ZERO rules for the "
               f"requested version line(s): {', '.join(empty)}. Those lines "
@@ -2176,7 +2200,7 @@ def _scope_empty_note(line, all_rules, scope):
     dropped the entire platform line in silence and still said
     "✅ All version references are consistent."
     """
-    if not scope or _filter_by_scope(all_rules.get(line, []), scope):
+    if not scope or _scoped_rules(all_rules.get(line, []), scope):
         return None
     return (f"--scope {scope!r} excluded all "
             f"{len(all_rules.get(line, []))} rule group(s) on this line — it "
@@ -2387,8 +2411,13 @@ def main():
                       f"group(s) skipped.")
                 continue
 
-            rules = _expand_glob_rules(
-                _filter_by_scope(all_rules.get(line, []), args.scope))
+            # ⛔ Same narrowing every other mode uses. This branch built its
+            # own `_expand_glob_rules(_filter_by_scope(...))` and therefore
+            # applied only the GENEROUS half of the two-sided filter, so
+            # `--what-if --scope docs/integration` audited the whole
+            # `docs/**` tree (2090 rules) while `--dry-run` with the same
+            # scope touched 5 files. `--scope` meant nothing here.
+            rules = _scoped_rules(all_rules.get(line, []), args.scope)
             # glob_id -> total matches across the whole expansion
             glob_hits = {}
 
@@ -2492,7 +2521,15 @@ def main():
             # ✅ for a glob that matches nothing anywhere — that is the whole
             # point of `require_match` defaulting OFF for them — so the only
             # place the defect can surface is here.
+            # ⛔ Same suppression `apply_rules` applies: a glob whose
+            # expansion this `--scope` genuinely narrowed cannot be judged
+            # from the subset. `--what-if` computes its own tally, so the
+            # rule has to be repeated here rather than inherited.
+            _narrowed_gids = {r.get("glob_id") for r in rules
+                              if r.get("scope_narrowed")}
             for gid, (hits, gdesc) in sorted(glob_hits.items()):
+                if gid in _narrowed_gids:
+                    continue
                 if hits == 0 and not any(
                         r.get("glob_id") == gid and r.get("glob_collapsed")
                         for r in rules):

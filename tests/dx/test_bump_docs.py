@@ -2445,3 +2445,94 @@ class TestScopeNarrowedGlobHealth:
             "被 scope 的 --check 因為 GLOB-DEAD 之類的 glob 診斷而紅了——"
             f"那些診斷是整條 glob 的性質，不該由子集判定。\n{r.stdout[-1500:]}")
         assert "GLOB-DEAD" not in r.stdout, r.stdout[-1500:]
+
+
+class TestRoundSixSurvivors:
+    """第六輪盲審：`--scope` 三條路徑各自獨立地說謊。"""
+
+    def _run(self, *args):
+        import subprocess
+        return subprocess.run(
+            [sys.executable, str(bump_docs.__file__), *args],
+            capture_output=True, text=True, cwd=str(bump_docs.REPO_ROOT))
+
+    @pytest.mark.parametrize("line", ["--tools", "--platform", "--tenant-api"])
+    def test_a_scope_that_selects_nothing_after_expansion_is_an_error(
+            self, line):
+        """⛔ 守衛問的問題必須與實跑問的是同一個。
+
+        兩個 `--scope` 守衛都只看**展開前**的寬鬆過濾，而該過濾對 glob 刻意
+        採雙向包含——於是任何位在某條 glob `glob_dir` 底下的路徑都能通過，
+        不論它是否存在、底下有沒有檔案。真正拿去跑的卻是展開**後**再嚴格
+        過濾的結果，對一個不存在的子目錄那是空集合。
+
+        後果：`docs/integration` 打成 `docs/integrations` 這種真實打字錯誤，
+        會讓 `--check` 印「✅ All version references are already up to date.」
+        並 exit 0——release 腳本誤以為版號已核對。那正是這個守衛自己的
+        docstring 引用的原始 bug，只是換了一種輸入。
+        """
+        r = self._run("--check", line, "9.9.9", "--scope", "docs/integrations")
+        assert r.returncode == bump_docs.EXIT_CALLER_ERROR, (
+            f"{line} 搭配不存在的子目錄 scope 仍回報成功\n"
+            f"rc={r.returncode}\n{r.stdout[-800:]}")
+
+    def test_what_if_honours_scope_like_every_other_mode(self):
+        """⛔ `--what-if` 自己組了規則集，只做了雙向過濾的寬鬆那一半。
+
+        於是 `--what-if --scope docs/integration` 稽核的是整棵 `docs/**`
+        （2090 條），而同一個 scope 在 `--dry-run` 下只動 5 個檔——`--scope`
+        在這個模式底下的語意是假的，而 release playbook 指定 `--what-if`
+        當作打 tag 前的規則稽核。
+        """
+        # ⛔ 用「範圍包含」而不是「數字變小」。第一版斷言的是
+        # `narrow < wide`，而未套用窄化時 narrow=2090 / wide=2323——仍然比較
+        # 小（`--tools` 線有 `docs/**` 以外的規則），所以那個變異照樣存活。
+        # 要問的是「有沒有 scope 以外的檔案被稽核」。
+        import re as _re
+        out = self._run("--what-if", "--tools", "9.9.9",
+                        "--scope", "docs/integration").stdout
+        paths = set(_re.findall(r"\bdocs/[\w./-]+\.md\b", out))
+        assert paths, out[-600:]
+        stray = sorted(p for p in paths
+                       if not p.startswith("docs/integration/"))
+        assert not stray, (
+            f"--what-if --scope docs/integration 稽核了 scope 以外的 "
+            f"{len(stray)} 個檔案，例如 {stray[:5]}——`--scope` 在這個模式下"
+            f"沒有意義，而 release playbook 指定它當打 tag 前的規則稽核。")
+
+    def test_a_scope_that_narrows_nothing_keeps_the_glob_verdict(self):
+        """⛔ 抑制的前提是「這個 scope 真的比 glob_dir 窄」。
+
+        原本只要 `--scope` 是 truthy 就對每條倖存規則蓋上 `scope_narrowed`，
+        所以 `--scope docs`（工具自己 --help 的範例用法）會讓根在 `docs` 的
+        glob 上真正**全庫層級**的 GLOB-DEAD 完全消失——即使它選到的檔案集合
+        與不傳 scope 一模一樣。
+        """
+        import tempfile
+        import pathlib
+        tmp = pathlib.Path(tempfile.mkdtemp())
+        (tmp / "docs" / "sub").mkdir(parents=True)
+        (tmp / "docs" / "a.md").write_text("x\n", encoding="utf-8")
+        (tmp / "docs" / "sub" / "b.md").write_text("x\n", encoding="utf-8")
+        old_root = bump_docs.REPO_ROOT
+        try:
+            bump_docs.REPO_ROOT = tmp
+            glob_rule = {
+                "file": "__glob__", "glob_dir": "docs",
+                "glob_pattern": "**/*.md", "desc": "probe",
+                "pattern": r"NEVER-MATCHES-XYZ",
+                "replacement": lambda v: f"x{v}",
+            }
+
+            def statuses(scope):
+                rules = bump_docs._scoped_rules([dict(glob_rule)], scope)
+                return {c[0] for c in bump_docs.apply_rules(
+                    rules, "9.9.9", check_only=True)}
+
+            assert "GLOB-DEAD" in statuses(None)
+            assert "GLOB-DEAD" in statuses("docs"), (
+                "一個什麼都沒窄化的 scope 吃掉了真正的 GLOB-DEAD")
+            assert "GLOB-DEAD" not in statuses("docs/sub"), (
+                "真的窄化過的子集不該被拿來判定整條 glob 的健康度")
+        finally:
+            bump_docs.REPO_ROOT = old_root

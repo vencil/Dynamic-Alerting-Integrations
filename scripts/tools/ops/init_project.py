@@ -2580,6 +2580,16 @@ def _print_summary(created: list[str], output_dir: str, config: dict) -> None:
     gl_root_written = str(Path(output_dir) / _GL_ROOT_SHELL_REL) in created
     gl_status = (_GL_ROOT_CREATE if gl_root_written
                  else _gitlab_root_shell_status(output_dir))
+    # Does the customer's root file actually carry an `include:` key? Only
+    # used to choose a sentence — never to claim the pipeline is wired.
+    gl_has_key = False
+    if not gl_root_written:
+        try:
+            _body = (Path(output_dir) / _GL_ROOT_SHELL_REL).read_text(
+                encoding='utf-8', errors='replace')
+        except OSError:
+            _body = ''
+        gl_has_key = bool(_GL_INCLUDE_KEY_RE.search(_body))
     # ⛔ Every state except "we wrote it" and "already wired" leaves the
     # customer with work to do, so this list must be the complement of those
     # two — enumerating the needs-work states instead is how NEEDS_CONVERT got
@@ -2762,6 +2772,22 @@ def _print_summary(created: list[str], output_dir: str, config: dict) -> None:
                     lead_en = (f"Your repo has a root "
                                f"{_GL_ROOT_SHELL_REL.as_posix()} that could "
                                f"not be parsed")
+                elif gl_status == _GL_ROOT_NEEDS_CONVERT and not gl_has_key:
+                    # ⛔ NEEDS_CONVERT has TWO causes and only one of them
+                    # involves an existing `include:`. The other is a file
+                    # whose SHAPE (a `...` document-end marker, a JSON/flow
+                    # root) makes the append post-condition fail even though
+                    # there is no `include:` key at all. Telling that owner
+                    # their file "already has an `include:`" — and warning
+                    # them not to add a second one — sends them looking for a
+                    # key that is not there, and the likeliest reaction is to
+                    # doubt the tool rather than follow the example below.
+                    lead_zh = (f"你的 repo 已有根目錄 "
+                               f"{_GL_ROOT_SHELL_REL.as_posix()}，"
+                               f"而它的格式讓我們無法安全地直接附加")
+                    lead_en = (f"Your repo's root "
+                               f"{_GL_ROOT_SHELL_REL.as_posix()} has a shape "
+                               f"we cannot safely append to")
                 else:
                     lead_zh = (f"你的 repo 已有根目錄 "
                                f"{_GL_ROOT_SHELL_REL.as_posix()}，且已經有 "
@@ -2975,13 +3001,28 @@ def _handle_dry_run(config: dict, output_dir: str) -> None:
     if repo_root is not None and (_gh_pending or not _gl_ok):
         rel = Path(output_dir).resolve().relative_to(repo_root)
         print()
+        # ⛔ Name only the platforms this run actually selected. The text was
+        # unconditionally "Both GitHub Actions and GitLab", so `--ci github`
+        # — which writes no GitLab config at all — was told its
+        # (non-existent) GitLab config would not load, and vice versa. The
+        # real run already branches correctly; this is the one flag whose job
+        # is answering "what will this do to my repo", so it must not be the
+        # one that describes a platform the run never touched.
+        affected = []
+        if ci_sel in ('github', 'both'):
+            affected.append('GitHub Actions')
+        if ci_sel in ('gitlab', 'both'):
+            affected.append('GitLab')
+        names = ' 與 '.join(affected)
+        names_en = ' and '.join(affected)
         if is_zh:
             print(f"  ⚠️ 輸出目錄是 `{rel.as_posix()}/`，不是 repo 根目錄。"
-                  f"GitHub Actions 與 GitLab 都只讀 repo 根目錄，"
+                  f"{names} 只讀 repo 根目錄，"
                   f"所以產在這裡的 CI 設定不會被載入（實跑時會印出補救步驟）。")
         else:
             print(f"  ⚠️ The output directory is `{rel.as_posix()}/`, not the "
-                  f"repository root. Both GitHub Actions and GitLab read only "
+                  f"repository root. {names_en} read"
+                  f"{'' if len(affected) > 1 else 's'} only "
                   f"the repository root, so CI config generated here is not "
                   f"loaded (the real run prints the remedy).")
     elif ci_sel in ('gitlab', 'both'):

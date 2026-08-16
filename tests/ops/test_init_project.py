@@ -2135,6 +2135,87 @@ class TestRunInit:
                     and 'only' not in ln.lower() and '才會' not in ln
                 ], (ci, out)
 
+    def test_dry_run_subdir_warning_names_only_the_selected_platforms(self):
+        """⛔ `--ci github` writes no GitLab config, so saying GitLab's config
+        will not load describes a file this run never created.
+
+        The text was unconditionally "Both GitHub Actions and GitLab". The
+        REAL run already branches correctly, so this was `--dry-run`-only
+        inconsistency — from the one flag whose job is answering "what will
+        this do to my repo".
+        """
+        import contextlib
+        import io
+        from pathlib import Path as _P
+        expected = {
+            'github': ('GitHub Actions', 'GitLab'),
+            'gitlab': ('GitLab', 'GitHub Actions'),
+        }
+        for ci, (present, absent) in expected.items():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                repo = _P(tmpdir) / 'repo'
+                (repo / '.git').mkdir(parents=True)
+                sub = repo / 'alerting'
+                sub.mkdir()
+                config = {
+                    'ci': ci, 'deploy': 'kustomize',
+                    'rule_packs': ['mariadb'], 'tenants': ['db-a'],
+                    'namespace': 'monitoring',
+                    'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
+                }
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    with pytest.raises(SystemExit):
+                        ip._handle_dry_run(config, str(sub))
+                out = buf.getvalue()
+                warn = [ln for ln in out.splitlines() if '⚠️' in ln]
+                assert warn, (ci, out)
+                joined = ' '.join(warn)
+                assert present in joined, (ci, joined)
+                assert absent not in joined, (
+                    f'--ci {ci} dry-run named {absent}, a platform this run '
+                    f'never touched.\n{joined}')
+
+    def test_a_file_with_no_include_key_is_not_told_it_has_one(self):
+        """⛔ NEEDS_CONVERT has two causes and only one involves an
+        `include:`.
+
+        The other is a file whose SHAPE makes the append post-condition fail
+        — a `...` document-end marker, or a JSON/flow root — with no
+        `include:` key anywhere. Those owners were told their file "already
+        has an `include:`" and warned not to add a second one, which sends
+        them hunting for a key that is not there.
+        """
+        import contextlib
+        import io
+        no_key = {
+            'doc-end marker': 'stages: [test]\njob1: {stage: test, '
+                              'script: echo hi}\n...\n',
+            'json root': '{"stages": ["test"], "job1": {"stage": "test", '
+                         '"script": "echo hi"}}\n',
+        }
+        has_key = {'scalar include': "include: 'other.yml'\n"}
+        config = {
+            'ci': 'gitlab', 'deploy': 'kustomize', 'rule_packs': ['mariadb'],
+            'tenants': ['db-a'], 'namespace': 'monitoring',
+            'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
+        }
+        for group, expect_claim in ((no_key, False), (has_key, True)):
+            for name, body in group.items():
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    with open(os.path.join(tmpdir, '.gitlab-ci.yml'), 'w',
+                              encoding='utf-8', newline='\n') as fh:
+                        fh.write(body)
+                    created = ip.run_init(config, tmpdir)
+                    buf = io.StringIO()
+                    with contextlib.redirect_stdout(buf):
+                        ip._print_summary(created, tmpdir, config)
+                    out = buf.getvalue()
+                    claims = 'already has an `include:`' in out
+                    assert claims == expect_claim, (
+                        f'{name}: claims-existing-include={claims}, '
+                        f'expected {expect_claim}\n{out}')
+
     def test_subdir_already_wired_at_the_repo_root_is_not_nagged(self):
         """The subdirectory branch used to take precedence over every other
         state and never look at the repository root, so a customer who had
