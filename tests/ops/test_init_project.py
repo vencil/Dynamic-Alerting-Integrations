@@ -3404,3 +3404,166 @@ class TestCustomerDeliveredImagePins:
         # ...and must not fire on a pinned ref or on a GitHub runner label.
         assert not self._FLOATING_RE.findall('    runs-on: ubuntu-latest')
         assert not self._FLOATING_RE.findall(f'      image: {ip.GIT_SYNC_IMAGE}')
+
+
+class TestSubdirectoryContentsAreNotOnlyAPlacementProblem:
+    """⛔ 第七輪盲審 lens W：照著我們自己的指示做，pipeline 永遠不會跑。
+
+    子目錄那兩步只講**擺放位置**（把 workflow 移到根、把 include 加到根）。
+    產生出來的 pipeline **內容**卻是以 repo 根目錄為基準寫的，而 GitLab 官方
+    文件對 `rules:changes` 與 `rules:exists` 都寫明 *"Paths are relative to the
+    project directory (`$CI_PROJECT_DIR`)"*，GitHub 的 `on.<event>.paths` 同樣
+    比對 repo 相對路徑。
+
+    實測（`-o alerting/`，照印出來的指示接線完成後）：
+
+        GitHub  paths conf.d/**       vs  實檔 alerting/conf.d/db-a.yaml  → 不符
+        GitLab  changes conf.d/**/*   vs  同上                            → 不符
+        GitLab  exists rule-packs/custom/**/*                             → 不符
+
+    沒有任何 job 會被建立，repo 因此永遠是綠的、而且一個字都沒驗到 —— 正是
+    #1357 的結果，只是這次是**照著我們的補救步驟做出來的**。
+    """
+
+    _CONFIG = {
+        'ci': 'both', 'deploy': 'kustomize',
+        'rule_packs': ['mariadb'], 'tenants': ['db-a'],
+        'namespace': 'monitoring',
+        'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
+    }
+
+    def _summary(self, tmpdir, ci='both', out_sub='alerting'):
+        import contextlib
+        import io
+        from pathlib import Path as _P
+        repo = _P(tmpdir) / 'repo'
+        (repo / '.git').mkdir(parents=True)
+        target = repo / out_sub if out_sub else repo
+        target.mkdir(exist_ok=True)
+        config = dict(self._CONFIG, ci=ci)
+        created = ip.run_init(config, str(target))
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            ip._print_summary(created, str(target), config)
+        return buf.getvalue()
+
+    def test_the_subdir_summary_names_the_paths_that_still_do_not_match(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = self._summary(tmpdir)
+        # 每一個真的會被 GitLab/GitHub 從 repo 根解析的值都要被點名，
+        # 而且要成對出現（現值 → 該變成什麼）。
+        for value in ('conf.d/**', 'kustomize/**', 'rule-packs/**',
+                      'conf.d/**/*', 'rule-packs/custom/**/*'):
+            assert f'{value}  →  alerting/{value}' in out, (
+                f'子目錄結尾訊息沒有點名 {value!r} —— 客戶照做之後這個 filter '
+                f'仍然比對 repo 根，什麼都不會匹配。\n{out}')
+
+    def test_only_the_selected_platform_is_listed(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            gh = self._summary(tmpdir, ci='github')
+        with tempfile.TemporaryDirectory() as tmpdir:
+            gl = self._summary(tmpdir, ci='gitlab')
+        assert 'alerting/.github/workflows/dynamic-alerting.yaml' in gh
+        assert '.gitlab-ci.d/dynamic-alerting.yml' not in gh.split(
+            'Not done yet')[-1]
+        assert 'alerting/.gitlab-ci.d/dynamic-alerting.yml' in gl
+        assert '.github/workflows' not in gl.split('Not done yet')[-1]
+
+    def test_an_install_at_the_repo_root_says_nothing_of_the_kind(self):
+        """反空洞：根目錄安裝沒有這個問題，這一段不該出現。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = self._summary(tmpdir, out_sub='')
+        assert 'Not done yet' not in out, out
+        assert '  →  ' not in out, out
+
+    def test_the_listed_values_are_read_from_the_file_not_hardcoded(self):
+        """⛔ 清單必須由**剛寫出來的檔案**推導。
+
+        寫死一份清單的話，日後新增一個帶 path filter 的 job 會靜靜地不在
+        名單上——而那個 job 就是下一個永遠不會被建立的 job。
+        """
+        from pathlib import Path as _P
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = _P(tmpdir) / 'repo'
+            (repo / '.git').mkdir(parents=True)
+            sub = repo / 'alerting'
+            sub.mkdir()
+            ip.run_init(dict(self._CONFIG), str(sub))
+            gl = sub / ip._GL_PIPELINE_REL
+            doc = yaml.safe_load(gl.read_text(encoding='utf-8'))
+            doc['probe-job'] = {
+                'stage': 'validate', 'script': ['true'],
+                'rules': [{'changes': ['probe-tree/**/*']}],
+            }
+            gl.write_text(yaml.safe_dump(doc), encoding='utf-8', newline='\n')
+            assert 'probe-tree/**/*' in ip._root_relative_ci_paths(gl), (
+                '新加的 job 的 path filter 沒有被推導出來——這份清單是寫死的')
+
+    def test_the_long_form_changes_mapping_is_not_missed(self):
+        """`changes:` 也接 `{paths: [...], compare_to: ...}` 長格式。"""
+        from pathlib import Path as _P
+        with tempfile.TemporaryDirectory() as tmpdir:
+            f = _P(tmpdir) / 'p.yml'
+            f.write_text(
+                'job:\n  rules:\n    - changes:\n        paths:\n'
+                '          - conf.d/**/*\n        compare_to: main\n',
+                encoding='utf-8', newline='\n')
+            assert ip._root_relative_ci_paths(f) == ['conf.d/**/*']
+
+
+class TestShippedStageNumbersMatchTheDeclaredStages:
+    """⛔ 第七輪盲審 lens X：同一份出貨檔案自己打自己。
+
+    #1358 把 GitLab 腿從三個 stage 收成 `validate → apply`，檔頭因此寫
+    「Two stages: validate → apply」——但 apply 區段的分隔註解仍寫死
+    `# ── Stage 3: Apply`，而那一行會**原樣寫進客戶 repo**。
+
+    這與先前那次「root shell 的說明列出一個已被刪掉的 stage 名稱」是同一類
+    缺陷（同樣的 SSOT `_GL_STAGES` 已經在那裡了，只是這三個註解沒接上）。
+    """
+
+    @pytest.mark.parametrize('deploy', ['kustomize', 'helm', 'argocd'])
+    def test_no_stage_banner_numbers_past_the_declared_list(self, deploy):
+        import re as _re
+        body = ip._build_gitlab_apply_stage(deploy, 'monitoring')
+        numbers = [int(n) for n in _re.findall(r'──\s*Stage\s+(\d+)\s*:', body)]
+        assert numbers, body
+        assert max(numbers) <= len(ip._GL_STAGES), (
+            f'{deploy}: apply 區段自稱 Stage {max(numbers)}，但這條 pipeline '
+            f'只宣告 {len(ip._GL_STAGES)} 個 stage {ip._GL_STAGES}——這行會出貨'
+            f'到客戶 repo。\n{body}')
+
+    @pytest.mark.parametrize('deploy', ['kustomize', 'helm', 'argocd'])
+    def test_the_number_is_derived_not_retyped(self, deploy):
+        """反向釘：改動 `_GL_STAGES` 必須連帶改動印出來的編號。"""
+        body_now = ip._build_gitlab_apply_stage(deploy, 'monitoring')
+        original = ip._GL_STAGES
+        try:
+            ip._GL_STAGES = original + ('extra',)
+            body_more = ip._build_gitlab_apply_stage(deploy, 'monitoring')
+        finally:
+            ip._GL_STAGES = original
+        assert body_now != body_more, (
+            f'{deploy}: 多宣告一個 stage 之後 apply 區段的編號沒有跟著動——'
+            '那個數字是重打的，不是推導的')
+
+    def test_the_generated_file_agrees_with_its_own_header(self):
+        """端到端：實際寫出來的檔案裡，檔頭與區段註解不能互相矛盾。"""
+        import re as _re
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = {
+                'ci': 'gitlab', 'deploy': 'kustomize',
+                'rule_packs': ['mariadb'], 'tenants': ['db-a'],
+                'namespace': 'monitoring',
+                'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
+            }
+            from pathlib import Path as _P
+            ip.run_init(config, tmpdir)
+            text = (_P(tmpdir) / ip._GL_PIPELINE_REL).read_text(
+                encoding='utf-8')
+        declared = yaml.safe_load(text)['stages']
+        banners = [int(n) for n in _re.findall(r'──\s*Stage\s+(\d+)\s*:', text)]
+        assert banners, text
+        assert max(banners) <= len(declared), (
+            f'出貨檔案宣告 {declared} 卻有 Stage {max(banners)} 的區段註解:\n'
+            f'{text}')

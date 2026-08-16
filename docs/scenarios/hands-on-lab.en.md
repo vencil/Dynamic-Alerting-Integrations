@@ -314,5 +314,5 @@ cd ~ && rm -rf ~/da-lab
 
 ---
 
-**Document version:** v2.9.0 — 2026-04-18
+**Document version:** v2.9.0
 **Maintainer:** Platform Engineering Team

@@ -717,7 +717,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "a7a50a05fd0bd22c02df8b2ef335e5c2bfd0456879e79007cb1816458fd1702e",
+ "source_digest": "0b6262feea28823373cdc1da5410cb1bc7bf0f06f8f95a3e6fb8e7ceb4f968af",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1066,6 +1066,7 @@
    "tests/ops/test_ci_aggregate_gate_contract.py",
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/ops/test_generated_ci_artifacts.py",
+   "tests/ops/test_init_project.py",
    "tests/ops/test_nightly_race_issue_policy.py",
    "tests/shared/test_actionlint_pin_parity.py"
   ],

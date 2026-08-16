@@ -1314,11 +1314,18 @@ def _build_gitlab_apply_stage(deploy_method: str, namespace: str) -> str:
     including the `else` fallback (see that function's docstring).
     """
     image_var, _ = _gitlab_apply_image(deploy_method)
+    # ⛔ Derived, never literal. This section comment ships INTO the customer's
+    # repo, in the same file whose header states how many stages there are.
+    # When #1358 dropped the GitLab blast-radius stage, that header became
+    # "Two stages: validate → apply" while these banners went on saying
+    # "Stage 3" — the same defect class as naming a stage the pipeline no
+    # longer declares, which `_GL_STAGES` already exists to prevent.
+    stage_no = len(_GL_STAGES)
 
     if deploy_method == 'kustomize':
         return textwrap.dedent("""\
 
-    # ── Stage 3: Apply ───────────────────────────────────────
+    # ── Stage {stage_no}: Apply ─────────────────────────────────────
     apply:
       stage: apply
       image:
@@ -1355,12 +1362,13 @@ def _build_gitlab_apply_stage(deploy_method: str, namespace: str) -> str:
         - kubectl apply --dry-run=server -f /tmp/manifests.yaml
         - kubectl apply -f /tmp/manifests.yaml
         - kubectl rollout restart deployment/prometheus -n $MONITORING_NS
-    """).format(namespace=namespace, image_var=image_var)
+    """).format(namespace=namespace, image_var=image_var,
+                  stage_no=stage_no)
 
     elif deploy_method == 'helm':
         return textwrap.dedent("""\
 
-    # ── Stage 3: Apply via Helm ──────────────────────────────
+    # ── Stage {stage_no}: Apply via Helm ────────────────────────────
     apply:
       stage: apply
       image:
@@ -1399,12 +1407,13 @@ def _build_gitlab_apply_stage(deploy_method: str, namespace: str) -> str:
             -f environments/prod/values.yaml \\
             -n $MONITORING_NS \\
             --wait --timeout 5m
-    """).format(namespace=namespace, image_var=image_var)
+    """).format(namespace=namespace, image_var=image_var,
+                  stage_no=stage_no)
 
     else:  # argocd
         return textwrap.dedent("""\
 
-    # ── Stage 3: Sync ArgoCD Application ─────────────────────
+    # ── Stage {stage_no}: Sync ArgoCD Application ───────────────────
     apply:
       stage: apply
       image:
@@ -1438,7 +1447,7 @@ def _build_gitlab_apply_stage(deploy_method: str, namespace: str) -> str:
           when: manual
       script:
         - argocd app sync dynamic-alerting --prune --timeout 300
-    """).format(image_var=image_var)
+    """).format(image_var=image_var, stage_no=stage_no)
 
 
 # ── Where each CI artifact lands (SSOT for run_init / _preview_files /
@@ -1598,6 +1607,62 @@ def _enclosing_repo_root(output_dir: str) -> Optional[Path]:
     return None
 
 
+# Keys whose values BOTH platforms resolve from the repository root, never
+# from the CI file's own directory.
+#   GitLab — "Paths are relative to the project directory (`$CI_PROJECT_DIR`)"
+#            for both `rules:changes` and `rules:exists`.
+#   GitHub — `on.<event>.paths` globs are matched against repository-relative
+#            changed-file paths.
+# `CONFIG_DIR` joins them because the job scripts run from the checkout root.
+_ROOT_RELATIVE_CI_KEYS = ('paths', 'changes', 'exists', 'CONFIG_DIR')
+
+
+def _root_relative_ci_paths(path: Path) -> list[str]:
+    """Every repo-root-relative path value inside a generated CI file.
+
+    ⛔ Derived from the file we just wrote, never a hand-kept list. The
+    generated pipelines are authored for an install AT the repository root:
+    their path filters and `CONFIG_DIR` name `conf.d/**`, `rule-packs/**`,
+    `kustomize/**`. Written into `-o alerting/` and then wired up exactly as
+    this tool instructs, every one of those resolves against the repository
+    root and matches nothing — no job is ever created, so the repo goes
+    permanently green having validated nothing. That is #1357's outcome
+    reached by obeying our own remedy, which is why the remedy has to say it.
+
+    Walking the parsed document (rather than listing keys per platform) means
+    a job added later cannot quietly acquire a filter this warning omits.
+    """
+    try:
+        doc = yaml.safe_load(path.read_text(encoding='utf-8'))
+    except (OSError, yaml.YAMLError):
+        return []
+    found: list[str] = []
+
+    def _collect(value) -> None:
+        if isinstance(value, str):
+            found.append(value)
+        elif isinstance(value, list):
+            for item in value:
+                _collect(item)
+        elif isinstance(value, dict):
+            # `changes:` also takes the long form {paths: [...], compare_to: …}
+            _collect(value.get('paths'))
+
+    def _walk(node) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key in _ROOT_RELATIVE_CI_KEYS:
+                    _collect(value)
+                else:
+                    _walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                _walk(item)
+
+    _walk(doc)
+    return sorted(dict.fromkeys(found))
+
+
 def _gitlab_root_includes(repo_root: Path, output_dir: Path) -> bool:
     """Does the REPOSITORY-root pipeline already include our subdir pipeline?
 
@@ -1744,10 +1809,15 @@ _GL_INCLUDE_KEY_RE = re.compile(r'^include\s*:', re.MULTILINE)
 def _gitlab_root_snippet_for(status: str) -> str:
     """What to show for a given root-file status.
 
-    Only NEEDS_INCLUDE gets a paste-ready block, and only because adding a
-    brand-new top-level key at the end of a document is the one edit whose
-    correctness does not depend on the rest of the file's style. Every other
-    state shows the end state instead — see `_GL_WIRING_EXAMPLE`.
+    Only NEEDS_INCLUDE gets a paste-ready block, and only because
+    `_classify_root_file` reached that status by APPLYING the block and
+    re-parsing — see the post-condition there. Every other state shows the end
+    state instead — see `_GL_WIRING_EXAMPLE`.
+
+    ⚠️ It is not "appending a top-level key is style-independent". That was the
+    original justification and it is false for at least two shapes GitLab
+    accepts (a `...` document-end marker, a JSON/flow root); restating it here
+    is how someone returns NEEDS_INCLUDE from a path that never ran the check.
     """
     return (_GL_INCLUDE_SNIPPET if status == _GL_ROOT_NEEDS_INCLUDE
             else _GL_WIRING_EXAMPLE)
@@ -2811,6 +2881,57 @@ def _print_summary(created: list[str], output_dir: str, config: dict) -> None:
                 print(f"       {line}")
             print()
         step += 1
+
+    # ⛔ Placement is not wiring. The two steps above say where to PUT the
+    # generated files; they say nothing about what is INSIDE them, and the
+    # contents are authored for an install at the repository root. Follow the
+    # instructions to the letter from `-o alerting/` and the result is a
+    # pipeline that is loaded, valid, and matches nothing — no job is ever
+    # created, so the repo goes permanently green having validated nothing.
+    # That is #1357's outcome reached by obeying our own remedy, so the remedy
+    # has to carry this half too.
+    #
+    # ⚠️ Deliberately a statement of work remaining, not a paste-ready patch:
+    # rewriting a customer's path filters for them is the class of edit the
+    # `include:` work spent three rounds learning not to hand out blind.
+    # Parameterising the generated CONTENT on the subdirectory offset is a
+    # separate change (tracked), not something to half-do in a print().
+    if gl_in_subdir:
+        rel = Path(output_dir).resolve().relative_to(repo_root)
+        targets = []
+        if ci_sel in ('github', 'both'):
+            targets.append(_GH_WORKFLOW_REL)
+        if ci_sel in ('gitlab', 'both'):
+            targets.append(_GL_PIPELINE_REL)
+        listed = []
+        for rel_path in targets:
+            values = _root_relative_ci_paths(Path(output_dir) / rel_path)
+            if values:
+                listed.append(((rel / rel_path).as_posix(), values))
+        if listed:
+            if is_zh:
+                print(f"  {step}. ⚠️ 還沒完：產生出來的 pipeline **內容**是以 "
+                      f"repo 根目錄為基準寫的，而這次寫到 `{rel.as_posix()}/`。"
+                      f"接好線之後，下列路徑仍指向 repo 根目錄下不存在的位置，"
+                      f"每一個都要自己補上 `{rel.as_posix()}/` 前綴 —— 否則 "
+                      f"job 根本不會被建立，pipeline 會永遠是綠的、而且什麼都"
+                      f"沒驗到：")
+            else:
+                print(f"  {step}. ⚠️ Not done yet: the generated pipeline's "
+                      f"CONTENTS are written relative to the repository root, "
+                      f"but this run wrote into `{rel.as_posix()}/`. Once "
+                      f"wired, the paths below still point at places that do "
+                      f"not exist at the repository root. Prefix each of them "
+                      f"with `{rel.as_posix()}/` yourself — otherwise no job "
+                      f"is ever created, and the pipeline stays green forever "
+                      f"having validated nothing:")
+            print()
+            for shown, values in listed:
+                print(f"       {shown}")
+                for value in values:
+                    print(f"         {value}  →  {rel.as_posix()}/{value}")
+            print()
+            step += 1
 
     # ⛔ Was an unconditional "CI will automatically validate your config".
     # False on every `--ci gitlab` run — nothing loaded the pipeline — and it

@@ -600,7 +600,7 @@ onboard-analyze: ## Analyze existing AM/Prometheus configs for onboarding
 
 # 這個 target 是 pre-tag 唯一的版號閘門——`make pre-tag` 不跑 pytest，所以
 # 任何「只有測試抓得到」的守門員對 release 而言等於不存在（#1407 第二輪）。
-# 因此以下五種診斷全部由 `--check` 自己在 runtime 判定，不靠 tests/dx/：
+# 因此以下六種診斷全部由 `--check` 自己在 runtime 判定，不靠 tests/dx/：
 #   DRIFT      版號引用落後 SSOT
 #   DEAD       規則的 pattern 撈不到（檔案在、句型變了）
 #   MISSING    規則指向的檔案不存在

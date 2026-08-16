@@ -105,19 +105,29 @@ document the tool never parsed is no safer. It prints what to paste in its closi
 summary; paste it into your existing `.gitlab-ci.yml` yourself.
 Until you do, the generated pipeline is perfectly valid YAML that never runs once.
 
-⚠️ **If your file already has an `include:`, paste the LIST ITEM, not the whole
-block**:
+⚠️ **Follow what the tool actually prints, not the example below.** This shows
+the END STATE your file should reach; it is not a snippet to paste:
 
 ```yaml
 include:
   - local: .gitlab-ci.d/security.yml           # ← yours, already there
-  - local: .gitlab-ci.d/dynamic-alerting.yml   # ← add only this line
+  - local: .gitlab-ci.d/dynamic-alerting.yml   # ← this line is the new one
 ```
 
-`include:` is a top-level key, so a second one is a duplicate key and YAML keeps
-only one of them — pasting the whole block would **silently delete your own
-includes**. `da-tools init` detects which shape your file is and prints only the
-safe one.
+An existing file comes in more than one shape, and the safe edit differs per
+shape. `include:` is a top-level key, so a second one is a duplicate key and
+YAML keeps only one of them — pasting the whole block would **silently delete
+your own includes**. But `include:` also accepts a scalar (`include: 'a.yml'`),
+a flow sequence (`include: ['a.yml']`) and a single mapping, and under those
+three **adding a list item is a syntax error that stops your entire root
+pipeline from loading** — strictly worse than not wiring it at all.
+
+`da-tools init` tells these shapes apart (including "has an `include:` we
+cannot safely append to" and "the file does not parse") and prints the
+instruction that fits your file: a ready-made block when appending is provably
+safe, and otherwise the end-state example above for you to fit to your own
+document. The one thing it will not do is hand you paste-ready text for a file
+it has not inspected.
 
 #### The GitLab leg has no blast-radius step
 
@@ -445,5 +455,5 @@ With CI pipeline integration, each team only modifies their own conf.d/. The mer
 
 ---
 
-**Document version:** v2.9.0 — 2026-04-18
+**Document version:** v2.9.0
 **Maintainer:** Platform Engineering Team

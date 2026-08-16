@@ -32,7 +32,7 @@ FUSE 掛載 + 缺少 EOF 換行的檔案被 `sed -i` 處理後會被截斷（丟
 CHANGELOG.md + CLAUDE.md + README.md
 ```
 
-完整連動規則見 [`docs/internal/doc-map.md` §Change Impact Matrix](../../../docs/internal/doc-map.md)。pre-commit hook `bump_docs.py --check` 會攔截計數漂移。
+完整連動規則見 [`docs/internal/doc-map.md` §Change Impact Matrix](../../../docs/internal/doc-map.md)。⚠️ **沒有**任何 pre-commit hook 跑 bump_docs——計數漂移只有 `make version-check`（tag 前必跑）與有 path filter 的 CI job 看得見。
 
 典型觸發：
 - 新增 / 刪除 Python 工具（影響 tool-map 計數）

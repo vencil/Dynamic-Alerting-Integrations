@@ -1079,7 +1079,7 @@ class TestCheckWithExplicitVersionFlags:
     def _run(self, *args):
         return subprocess.run(
             [sys.executable, str(self._SCRIPT), *args],
-            capture_output=True, text=True,
+            capture_output=True, text=True, timeout=300,
         )
 
     @pytest.mark.parametrize("flag", [
@@ -1506,7 +1506,7 @@ class TestScopeMustSelectSomething:
 
     def _run(self, *args):
         return subprocess.run([sys.executable, str(self._SCRIPT), *args],
-                              capture_output=True, text=True)
+                              capture_output=True, text=True, timeout=300)
 
     def test_bogus_scope_is_caller_error_in_check(self):
         r = self._run("--check", "--scope", "nosuchdir")
@@ -1776,7 +1776,7 @@ class TestPerLineScopeGuard:
 
     def _run(self, *args):
         return subprocess.run([sys.executable, str(self._SCRIPT), *args],
-                              capture_output=True, text=True)
+                              capture_output=True, text=True, timeout=300)
 
     def test_bump_with_line_empty_scope_is_caller_error(self):
         r = self._run("--tenant-api", "9.9.9", "--scope", "docs", "--dry-run")
@@ -1856,7 +1856,7 @@ class TestSyncCountsFlagContract:
 
     def _run(self, *args):
         return subprocess.run([sys.executable, str(self._SCRIPT), *args],
-                              capture_output=True, text=True)
+                              capture_output=True, text=True, timeout=300)
 
     def test_make_version_check_runs_sync_counts(self):
         """`--sync-counts --check` 必須是 release gate 的一部分。
@@ -2348,7 +2348,7 @@ class TestScopedRulesNarrowsAfterExpansion:
         r = subprocess.run(
             [sys.executable, str(script), "--platform", "9.9.9",
              "--scope", "docs/integration", "--dry-run"],
-            capture_output=True, text=True)
+            capture_output=True, text=True, timeout=300)
         assert r.returncode == 0, r.stdout[-800:]
         stray = sorted({m for m in re.findall(r"docs/[\w./-]+\.md", r.stdout)
                         if not m.startswith("docs/integration/")})
@@ -2440,7 +2440,7 @@ class TestScopeNarrowedGlobHealth:
                   / "dx" / "bump_docs.py")
         r = subprocess.run(
             [sys.executable, str(script), "--check", "--scope",
-             "docs/integration"], capture_output=True, text=True)
+             "docs/integration"], capture_output=True, text=True, timeout=300)
         assert r.returncode == 0, (
             "被 scope 的 --check 因為 GLOB-DEAD 之類的 glob 診斷而紅了——"
             f"那些診斷是整條 glob 的性質，不該由子集判定。\n{r.stdout[-1500:]}")
@@ -2454,7 +2454,8 @@ class TestRoundSixSurvivors:
         import subprocess
         return subprocess.run(
             [sys.executable, str(bump_docs.__file__), *args],
-            capture_output=True, text=True, cwd=str(bump_docs.REPO_ROOT))
+            capture_output=True, text=True, cwd=str(bump_docs.REPO_ROOT),
+            timeout=300)
 
     @pytest.mark.parametrize("line", ["--tools", "--platform", "--tenant-api"])
     def test_a_scope_that_selects_nothing_after_expansion_is_an_error(

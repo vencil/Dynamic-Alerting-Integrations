@@ -103,17 +103,25 @@ include:
 它會在結束訊息裡把該貼的內容印出來，請自行貼進你既有的 `.gitlab-ci.yml`。
 沒貼的話，產生出來的 pipeline 檔案語法完全正確，但一次也不會執行。
 
-⚠️ **你既有的檔案如果已經有 `include:`，要貼的是「清單項目」而不是整個區塊**：
+⚠️ **請照工具實際印出來的那一段做，不要照這裡的範例硬貼。** 下面是接好線之後
+應該長成的**結果**，不是可以直接貼的片段：
 
 ```yaml
 include:
-  - local: .gitlab-ci.d/security.yml    # ← 你原本就有的
-  - local: .gitlab-ci.d/dynamic-alerting.yml   # ← 只加這一行
+  - local: .gitlab-ci.d/security.yml           # ← 你原本就有的
+  - local: .gitlab-ci.d/dynamic-alerting.yml   # ← 這一行是新增的
 ```
 
-`include:` 是 top-level 的 key，寫第二個是重複 key，YAML 只會保留其中一個——
-也就是說「整段貼上」會**靜默刪掉你原本的 include**。`da-tools init` 會偵測你的
-檔案屬於哪一種，只印出安全的那個形狀。
+理由是既有檔案的形狀不只一種，而每一種的安全編輯方式都不同。`include:` 是
+top-level key，再寫第二個是重複 key、YAML 只保留其中一個，所以**整段貼上會靜默
+刪掉你原本的 include**；但反過來，`include:` 也接受純量（`include: 'a.yml'`）、
+flow 序列（`include: ['a.yml']`）與單一 mapping，在這三種底下**加一個清單項目
+是語法錯誤，會讓你整份 root pipeline 停止載入**——比沒接線更糟。
+
+`da-tools init` 會分辨這些形狀（含「有 `include:` 但無法安全附加」與「檔案解析
+不了」），並針對你的檔案印出對應的指示：能安全附加時給現成區塊，其餘一律給上面
+這種**端狀態範例**，請你自己對照著改。工具唯一不會做的事，是在沒看過你的檔案時
+遞給你一段「貼上就好」的內容。
 
 #### GitLab 腿沒有 blast-radius 那一步
 
@@ -431,5 +439,5 @@ python3 scripts/tools/ops/assemble_config_dir.py \
 
 ---
 
-**文件版本：** v2.9.0 — 2026-04-18
+**文件版本：** v2.9.0
 **維護者：** Platform Engineering Team

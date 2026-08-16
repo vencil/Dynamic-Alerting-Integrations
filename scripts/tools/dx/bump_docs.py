@@ -1209,7 +1209,12 @@ COUNT_RULE_IDS = (
 
 
 def _build_count_rules():
-    """Build count replacement rules for CLAUDE.md and README.md.
+    """Build count replacement rules for the files named in COUNT_RULE_IDS.
+
+    ⚠️ Not "CLAUDE.md and README.md" — that was true before the docs count was
+    removed, and the surviving five rules also drive `README.en.md` and
+    `docs/internal/dev-rules.md`. A stale scope sentence here is how a caller
+    concludes a file is covered when no rule points at it.
 
     Returns list of rule dicts for count syncing, one per COUNT_RULE_IDS entry
     and always in that order. Each rule carries:
@@ -2245,8 +2250,10 @@ def main():
                         help="Show all rules with current match status "
                              "(comprehensive rule audit)")
     parser.add_argument("--sync-counts", action="store_true",
-                        help="Auto-update hardcoded counts (tools, rule packs, "
-                             "JSX tools, docs, hooks) across CLAUDE.md and README.md")
+                        help="Auto-update hardcoded counts (pre-commit hooks, "
+                             "JSX tools, rule packs, Python tools) across "
+                             "CLAUDE.md, README.md, README.en.md and "
+                             "docs/internal/dev-rules.md")
 
     args = parser.parse_args()
 

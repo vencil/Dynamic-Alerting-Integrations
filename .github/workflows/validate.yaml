@@ -150,8 +150,16 @@ jobs:
               # and found the same way it should have been found: the two
               # commands that job runs (`bump_docs.py --check` and
               # `--sync-counts --check`) were replayed under an open()/read_text
-              # recorder. They touch 277 tracked files; every one but these nine
-              # already matches a pattern above. Reading the script would not
+              # recorder. RE-MEASURED after #1407 repointed the JSX front-matter
+              # glob at `tools/portal/src/interactive/tools/**` and added the
+              # da-portal QUICKSTART rule: 393 tracked files, of which 115 were
+              # uncovered — 113 under `tools/portal/**`, plus QUICKSTART.md.
+              # Those two entries are below for that reason. (Root CHANGELOG.md
+              # is read but is NOT a rule target — `docs/CHANGELOG.md` is, and
+              # `docs/**` covers it — so it is deliberately still absent.)
+              # ⚠️ This list is maintained BY MEASUREMENT: re-run the recorder
+              # whenever a rule table gains a path, because nothing here fails
+              # when it goes stale — it just goes quiet. Reading the script would not
               # have produced this list — the paths are assembled across several
               # tables — which is the point: an indirect read through a script a
               # job merely invokes is the class the coverage guard in
@@ -169,6 +177,13 @@ jobs:
               - "components/da-tools/app/VERSION"
               - "components/threshold-exporter/README.md"
               - ".github/workflows/config-diff.yaml"
+              # ⛔ #1407 repointed the JSX front-matter glob here (44 of these
+              # files sat at v2.7.0 while the SSOT said 2.9.0 and every gate
+              # reported green). Without this pattern a portal-only PR skips
+              # version-check → required-but-skipped counts as satisfied, and
+              # the drift this branch exists to catch lands on main instead.
+              - "tools/portal/**"
+              - "components/da-portal/QUICKSTART.md"
               # helm/** and docs/** PRs (chart hardening, governance docs) hit the SAME
               # required-checks-contract gap the tenant-api note above describes: main's
               # branch protection requires this workflow's jobs, but the path filter

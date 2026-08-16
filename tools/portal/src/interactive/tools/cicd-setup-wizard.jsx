@@ -401,9 +401,9 @@ function StepReview({ config }) {
                   list said "Validate + Generate" for GitLab for two commits
                   after the removal. */}
               <li>{config.ci === 'gitlab'
-                ? t('git commit → GitLab CI 執行 Validate（前提是上一步的 include 已就位）。GitLab 這一份沒有 Generate 階段——映像內沒有 git，blast radius 基準取不到，見 #1358', 'git commit → GitLab CI runs Validate (once the include above is in place). The GitLab artifact has no Generate stage — its image has no git, so the blast-radius baseline cannot be taken; see #1358')
+                ? t('git commit → GitLab CI 執行 Validate（前提是上一步的 include 已就位）。GitLab 這一份沒有 Generate 階段——映像內沒有 git，blast radius 基準取不到，見 issue 1358', 'git commit → GitLab CI runs Validate (once the include above is in place). The GitLab artifact has no Generate stage — its image has no git, so the blast-radius baseline cannot be taken; see issue 1358')
                 : config.ci === 'both'
-                  ? t('git commit → GitHub Actions 自動執行 Validate + Generate；GitLab CI 在 include 就位後只執行 Validate（沒有 Generate，見 #1358）', 'git commit → GitHub Actions auto-runs Validate + Generate; GitLab CI runs Validate only once the include is in place (no Generate — see #1358)')
+                  ? t('git commit → GitHub Actions 自動執行 Validate + Generate；GitLab CI 在 include 就位後只執行 Validate（沒有 Generate，見 issue 1358）', 'git commit → GitHub Actions auto-runs Validate + Generate; GitLab CI runs Validate only once the include is in place (no Generate — see issue 1358)')
                   : t('git commit → GitHub Actions 自動執行 Validate + Generate', 'git commit → GitHub Actions auto-runs Validate + Generate')}</li>
               <li>{t('PR 審核通過後手動觸發 Apply（或 ArgoCD 自動同步）', 'After PR approval, manually trigger Apply (or ArgoCD auto-syncs)')}</li>
             </ol>
