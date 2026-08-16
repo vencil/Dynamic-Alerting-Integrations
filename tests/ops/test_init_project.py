@@ -1993,6 +1993,115 @@ class TestRunInit:
                 'reads, carrying an include path wrong from the repo root')
             assert os.path.join(sub, '.gitlab-ci.yml') not in created
 
+    def test_the_subdir_remedy_is_never_a_bare_fragment(self):
+        """⛔ The rule, applied to the OTHER root file — asserted on what is
+        actually PRINTED, not on the helpers.
+
+        (An earlier version of this test called `_classify_root_file` and
+        `_gl_block_for` directly and therefore passed with the bare fragment
+        restored — a test of the helpers, not of the behaviour. The mutation
+        that matters is on `_print_summary`'s selection, so that is what this
+        drives.)
+
+        The subdirectory branch printed an unconditional
+        `- local: <sub>/.gitlab-ci.d/...` without inspecting the file it told
+        the customer to edit. Measured: on a repo with NO root pipeline,
+        following it literally produced a top-level SEQUENCE — GitLab
+        requires a hash, so the pipeline still never ran — and on a root
+        whose `include:` is a scalar / flow list / single mapping it was a
+        syntax error that took their ENTIRE root pipeline down.
+        """
+        import contextlib
+        import io
+        from pathlib import Path as _P
+        want = 'alerting/.gitlab-ci.d/dynamic-alerting.yml'
+        cases = {
+            'absent': (None, True),
+            'no include key': ('stages: [build]\n', True),
+            'scalar': ("include: 'other.yml'\n", False),
+            'flow list': ("include: ['other.yml']\n", False),
+            'single mapping': ('include:\n  template: S.yml\n', False),
+            'block list': ('include:\n  - template: S.yml\n', False),
+        }
+        for name, (body, block_expected) in cases.items():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                repo = _P(tmpdir) / 'repo'
+                (repo / '.git').mkdir(parents=True)
+                if body is not None:
+                    (repo / '.gitlab-ci.yml').write_text(
+                        body, encoding='utf-8', newline='\n')
+                sub = repo / 'alerting'
+                sub.mkdir()
+                config = {
+                    'ci': 'gitlab', 'deploy': 'kustomize',
+                    'rule_packs': ['mariadb'], 'tenants': ['db-a'],
+                    'namespace': 'monitoring',
+                    'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
+                }
+                created = ip.run_init(config, str(sub))
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    ip._print_summary(created, str(sub), config)
+                out = buf.getvalue()
+
+                assert want in out, (name, out)
+                printed_block = any(
+                    ln.strip() == 'include:' for ln in out.splitlines())
+                assert printed_block, (
+                    f'{name}: the remedy printed a bare list item with no '
+                    f'`include:` key — a customer creating the root file '
+                    f'from it gets a top-level sequence.\n{out}')
+                if block_expected:
+                    assert '<keep' not in out, (name, out)
+                    # and the block really is safe to paste here
+                    doc = yaml.safe_load(
+                        (body or '') + '\n' + ip._gl_block_for(want))
+                    assert isinstance(doc, dict), (name, doc)
+                    assert want in ip._gitlab_declared_includes(doc), name
+                else:
+                    assert '<keep' in out, (
+                        f'{name}: a ready-made fragment was handed to a root '
+                        f'file whose `include:` shape we cannot safely '
+                        f'extend.\n{out}')
+
+    def test_github_in_a_subdirectory_is_never_an_all_clear(self):
+        """⛔ GitHub cannot be rescued from the root — there is no `include:`.
+
+        The needs-work condition was derived solely from the GitLab question,
+        so a run could warn "GitHub is NOT wired" and then close with "will
+        automatically validate your config".
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from pathlib import Path as _P
+            repo = _P(tmpdir) / 'repo'
+            (repo / '.git').mkdir(parents=True)
+            # GitLab side deliberately already correct, to isolate GitHub.
+            (repo / '.gitlab-ci.yml').write_text(
+                'include:\n  - local: alerting/.gitlab-ci.d/'
+                'dynamic-alerting.yml\n', encoding='utf-8', newline='\n')
+            sub = repo / 'alerting'
+            sub.mkdir()
+            for ci in ('github', 'both'):
+                config = {
+                    'ci': ci, 'deploy': 'kustomize',
+                    'rule_packs': ['mariadb'], 'tenants': ['db-a'],
+                    'namespace': 'monitoring',
+                    'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
+                    'force': True,
+                }
+                import io
+                import contextlib
+                created = ip.run_init(config, str(sub))
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    ip._print_summary(created, str(sub), config)
+                out = buf.getvalue()
+                assert not [
+                    ln for ln in out.splitlines()
+                    if ('automatically validate' in ln or '會自動驗證' in ln)
+                    and 'only' not in ln.lower() and '才會' not in ln
+                ], (ci, out)
+
     def test_subdir_already_wired_at_the_repo_root_is_not_nagged(self):
         """The subdirectory branch used to take precedence over every other
         state and never look at the repository root, so a customer who had
