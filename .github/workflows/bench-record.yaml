@@ -174,6 +174,29 @@ jobs:
         run: |
           set -uo pipefail
           mkdir -p .build/paired
+          rm -f .build/paired/workload-drift.txt
+
+          # ⛔ Establish that BOTH sides were actually enumerable before writing
+          # any answer. Without this the failure is silent and wrong in the worst
+          # direction: a `cd` that fails (an old reference laid out differently)
+          # leaves the pipeline with nothing to compare, the loop writes no rows,
+          # and an EMPTY drift file is indistinguishable from "checked, nothing
+          # drifted". That is the same "could not measure" read as "measured and
+          # clean" conflation this whole ADR exists to remove — reproduced from a
+          # review finding on PR #1455.
+          #
+          # Leaving the file ABSENT is the signal: pair_bench_ratio.py records
+          # `unreadable`, so the night says the premise is undisclosed rather than
+          # confirmed. `::warning::` is right here and wrong for ordinary drift —
+          # this condition is exceptional and must not persist, whereas drift is
+          # constant by construction over a reference's life.
+          ref_n=$( ( cd "$REF_APP"  && find . -name '*bench_test.go' -type f -print ) 2>/dev/null | wc -l )
+          main_n=$( ( cd "$MAIN_APP" && find . -name '*bench_test.go' -type f -print ) 2>/dev/null | wc -l )
+          if [ "$ref_n" -eq 0 ] || [ "$main_n" -eq 0 ]; then
+            echo "::warning::workload-drift enumeration found no benchmark test files (reference=${ref_n}, main=${main_n}) — leaving the drift file absent so tonight records the check as not established, not as clean"
+            exit 0
+          fi
+
           : > .build/paired/workload-drift.txt
           # Union of both sides, so a file added or deleted counts as drift too.
           # `cmp -s` is non-zero for "differs" AND for "missing on one side",
@@ -185,7 +208,7 @@ jobs:
             cmp -s "$REF_APP/$rel" "$MAIN_APP/$rel" \
               || echo "$rel" >> .build/paired/workload-drift.txt
           done
-          echo "drifted benchmark test files: $(wc -l < .build/paired/workload-drift.txt)"
+          echo "enumerated reference=${ref_n} main=${main_n}; drifted benchmark test files: $(wc -l < .build/paired/workload-drift.txt)"
           cat .build/paired/workload-drift.txt
 
       # Measures main HEAD and the reference version ALTERNATELY on this one

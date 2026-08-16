@@ -147,16 +147,26 @@ def read_workload_drift(path: pathlib.Path | None) -> dict:
 
         not-requested  the caller passed no --workload-drift
         checked        the list is complete as far as the caller's scope goes
-        unreadable     the caller asked, and the file could not be read
+        unreadable     the caller asked, and no usable list arrived
 
-    `unreadable` is NOT fatal. This is a disclosure aid; failing the night's
-    ratios over it would trade a working measurement for an annotation.
+    `unreadable` covers every way the answer can fail to show up — the file is
+    missing, unreadable, or not decodable. The caller deletes the file when its
+    own comparison could not be trusted, so "missing" is a deliberate signal,
+    not only an accident.
+
+    ⛔ `unreadable` is NOT fatal, and the exception list below is what makes
+    that true. `UnicodeDecodeError` is a `ValueError`, NOT an `OSError`: catching
+    only `OSError` let a drift file with one non-UTF-8 byte crash the tool, which
+    the workflow reads as "the ratios failed" and turns the whole night into
+    INCONCLUSIVE. That is exactly the trade this function's docstring says it
+    refuses — a working measurement thrown away over an annotation. Caught in
+    review on PR #1455 and reproduced before fixing.
     """
     if path is None:
         return {"status": "not-requested", "files": []}
     try:
         text = path.read_text(encoding="utf-8")
-    except OSError as exc:
+    except (OSError, UnicodeError) as exc:
         print(f"[pair_bench_ratio] could not read --workload-drift {path} "
               f"({type(exc).__name__}) — recording the check as unreadable "
               f"rather than as clean", file=sys.stderr)
