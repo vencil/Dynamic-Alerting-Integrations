@@ -2206,6 +2206,11 @@ def _require_nonempty_line_scope(all_rules, scope, requested_lines):
         sys.exit(EXIT_CALLER_ERROR)
 
 
+def _flag_name(dest: str) -> str:
+    """argparse `dest` → the option string a caller typed."""
+    return "--" + dest.replace("_", "-")
+
+
 def _scope_empty_note(line, all_rules, scope):
     """SCOPE-EMPTY text for a line the caller did not single out, or None.
 
@@ -2280,12 +2285,33 @@ def main():
         # combination instead of pretending to honour it. EXIT_CALLER_ERROR
         # (2) for the same reason as the --scope guards: the repo is fine, the
         # invocation is not.
-        ignored = [name for name, value in
-                   (("--platform", args.platform), ("--exporter", args.exporter),
-                    ("--tools", args.tools), ("--portal", args.portal),
-                    ("--recipe-preview", args.recipe_preview),
-                    ("--tenant-api", args.tenant_api), ("--scope", args.scope))
-                   if value]
+        # ⛔ The list must be the COMPLEMENT of what this branch honours, not
+        # an enumeration of what someone remembered. It shipped naming the six
+        # version flags and `--scope`, and stopped there — so
+        # `--sync-counts --init-changelog 2.10.0` printed "✅ Done." and exited
+        # 0 having written no CHANGELOG stub at all: the exact silent discard
+        # the message below says the guard exists to end, one flag over. And
+        # `--init-changelog` is the one that WRITES.
+        #
+        # Derived from argparse so a flag added later cannot join the gap in
+        # silence: everything the parser declares, minus the two this branch
+        # actually acts on.
+        # ⚠️ Compare against the PARSER's default, not against None/False:
+        # `--changelog-lang` defaults to a non-empty string, so an
+        # emptiness test flags it on every run and the guard rejects a bare
+        # `--sync-counts`.
+        # ⛔ The honoured set is what THIS BRANCH READS, and nothing else —
+        # `apply_count_updates(check_only=args.check, dry_run=args.dry_run)` is
+        # the whole of it. Getting this list wrong in either direction is a
+        # defect: too small and a legitimate `--sync-counts --dry-run` is
+        # rejected (measured — it broke `test_plain_sync_counts_also_fails_on_
+        # no_source`), too large and the silent-discard hole reopens.
+        _HONOURED = {"sync_counts", "check", "dry_run", "help"}
+        ignored = sorted(
+            _flag_name(dest)
+            for dest, value in vars(args).items()
+            if dest not in _HONOURED and value != parser.get_default(dest)
+        )
         if ignored:
             print(f"ERROR: --sync-counts does not accept {', '.join(ignored)} "
                   f"— it syncs hardcoded COUNTS, which have no version and no "

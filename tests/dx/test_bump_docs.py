@@ -2961,3 +2961,89 @@ class TestTheDiagnosticSentencesAreThePayload:
         # 的性質，把某一個檔名放進去會讓讀者去修錯的東西。
         for r in expanded:
             assert r["glob_desc"] == "front matter version: in docs/**/*.md", r
+
+
+class TestSyncCountsRejectsEverythingItDiscards:
+    """⛔ 第八輪盲審 lens B8：那道守衛的名單是**列舉**，不是補集。
+
+    它列了六個版號旗標與 `--scope`，然後停在那裡——於是
+    `--sync-counts --init-changelog 2.10.0` 印出「✅ Done. 0 count(s)
+    updated.」、exit 0，而一個 CHANGELOG stub 都沒寫：正是那句錯誤訊息說它要
+    終結的靜默丟棄，只是換了一個旗標。而 `--init-changelog` 是會**寫檔**的
+    那一個。
+
+    修法是從 argparse 推導（parser 宣告的全部，減去這條分支真的會處理的兩個），
+    所以日後新增的旗標不會靜靜地加入那個缺口。
+    """
+
+    def _run(self, *args):
+        import subprocess
+        return subprocess.run(
+            [sys.executable, str(bump_docs.__file__), *args],
+            capture_output=True, text=True, timeout=300,
+            cwd=str(bump_docs.REPO_ROOT))
+
+    @pytest.mark.parametrize("extra", [
+        ["--platform", "2.10.0"],
+        ["--tenant-api", "2.10.0"],
+        ["--scope", "docs"],
+        ["--init-changelog", "2.10.0"],
+        ["--what-if"],
+        ["--show-current"],
+    ])
+    def test_a_flag_this_branch_would_discard_is_rejected(self, extra):
+        r = self._run("--sync-counts", *extra)
+        assert r.returncode == bump_docs.EXIT_CALLER_ERROR, (
+            f"--sync-counts {' '.join(extra)} 被接受了，而這條分支不會處理它"
+            f"\nrc={r.returncode}\n{r.stdout[-400:]}")
+        assert extra[0] in r.stderr, r.stderr[-300:]
+
+    @pytest.mark.parametrize("args", [
+        ["--sync-counts"],
+        ["--sync-counts", "--check"],
+        # ⛔ `--dry-run` IS honoured (`apply_count_updates(..., dry_run=…)`),
+        # and my first version of the guard rejected it — the derived-complement
+        # fix has to be derived from what the branch READS, not from "anything
+        # that is not check". Measured: it broke
+        # `TestCountSourceUnreadable::test_plain_sync_counts_also_fails_on_no_source`.
+        ["--sync-counts", "--dry-run"],
+    ])
+    def test_the_two_honoured_forms_still_work(self, args):
+        """⚠️ 反向且**必要**：第一版拿 `value not in (None, False)` 當條件，
+        而 `--changelog-lang` 的預設值是非空字串——於是連裸 `--sync-counts`
+        都被自己的守衛擋下。改成與 parser 的預設值比較。
+        """
+        r = self._run(*args)
+        assert r.returncode == 0, (r.returncode, r.stderr[-400:])
+
+    def test_every_declared_flag_is_either_honoured_or_rejected(self):
+        """反空洞：把守衛換回一份寫死的名單時，這條必須紅。
+
+        對 CLI 宣告的每一個旗標各跑一次 `--sync-counts <flag>`，要求結果只有
+        兩種——rc=0（這條分支真的會處理它）或 rc=2（明確拒絕）。沒有第三種：
+        「收下然後丟掉」正是這個守衛存在的理由。
+        """
+        # `bump_docs` builds its parser inline in `main()`, so read the
+        # declaration site — that is the same source of truth the guard
+        # derives from at runtime, and it cannot drift from it.
+        src = Path(bump_docs.__file__).read_text(encoding="utf-8")
+        probe = {
+            "--platform": "2.10.0", "--exporter": "2.10.0",
+            "--tools": "2.10.0", "--portal": "2.10.0",
+            "--recipe-preview": "2.10.0", "--tenant-api": "2.10.0",
+            "--scope": "docs", "--init-changelog": "2.10.0",
+            "--changelog-lang": "en",
+        }
+        flags = sorted({
+            m for m in re.findall(r'add_argument\(\s*"(--[a-z0-9-]+)"', src)
+            if m not in ("--help", "--sync-counts")
+        })
+        assert len(flags) >= 10, flags
+        for flag in flags:
+            extra = [flag] + ([probe[flag]] if flag in probe else [])
+            r = self._run("--sync-counts", *extra)
+            assert r.returncode in (0, bump_docs.EXIT_CALLER_ERROR), (
+                f"--sync-counts {flag} 回了 rc={r.returncode}", r.stderr[-300:])
+            if r.returncode == 0:
+                continue
+            assert flag in r.stderr, (flag, r.stderr[-300:])

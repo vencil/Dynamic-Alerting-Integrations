@@ -154,9 +154,15 @@ jobs:
               # glob at `tools/portal/src/interactive/tools/**` and added the
               # da-portal QUICKSTART rule: 393 tracked files, of which 115 were
               # uncovered — 113 under `tools/portal/**`, plus QUICKSTART.md.
-              # Those two entries are below for that reason. (Root CHANGELOG.md
-              # is read but is NOT a rule target — `docs/CHANGELOG.md` is, and
-              # `docs/**` covers it — so it is deliberately still absent.)
+              # Those two entries are below for that reason.
+              # ⛔ Root CHANGELOG.md is listed too, and the reason it was NOT
+              # listed at first was wrong: `docs/CHANGELOG.md` is a SYMLINK to
+              # `../CHANGELOG.md`, so a contributor editing the root file
+              # produces the changed path `CHANGELOG.md`, `docs/**` never
+              # matches, and the job is skipped — while the front-matter rule
+              # reaches that content through the symlink and does report DRIFT
+              # (measured: rc=1). Every dev-rule-#4 PR touches this file, so
+              # this widens the job's trigger by design.
               # ⚠️ This list is maintained BY MEASUREMENT: re-run the recorder
               # whenever a rule table gains a path, because nothing here fails
               # when it goes stale — it just goes quiet. Reading the script would not
@@ -184,6 +190,7 @@ jobs:
               # the drift this branch exists to catch lands on main instead.
               - "tools/portal/**"
               - "components/da-portal/QUICKSTART.md"
+              - "CHANGELOG.md"
               # helm/** and docs/** PRs (chart hardening, governance docs) hit the SAME
               # required-checks-contract gap the tenant-api note above describes: main's
               # branch protection requires this workflow's jobs, but the path filter

@@ -334,7 +334,15 @@ da-tools 有獨立版號線（`tools/v*`），與 platform 脫鉤。
 
 ```bash
 # 1. 檢查 da-tools 自上次 tools/v* tag 以來是否有 code change
-git diff $(git tag -l 'tools/v*' --sort=-v:refname | head -1)..HEAD -- components/da-tools/app/
+#
+# ⛔ 兩個路徑都要看。映像的**工具本體**是 build.sh 從 `scripts/tools/` 組進去的
+#    （`components/da-tools/app/build.sh` 的 `TOOLS_SRC`），`components/da-tools/app/`
+#    只有 Dockerfile / entrypoint / build.sh 本身。只 diff 後者的話，一個 1010 行
+#    改在 `scripts/tools/ops/init_project.py` 的 release 會被判定為「沒有 code
+#    change → 不用打 tag」，而那次修復就永遠不會出貨（#1357 實際踩到）。
+#    本表第 54 行的對照表寫的一直都是 `scripts/tools/`。
+git diff $(git tag -l 'tools/v*' --sort=-v:refname | head -1)..HEAD --stat \
+    -- components/da-tools/app/ scripts/tools/
 
 # 2. 若有變更 → 推 tag
 git tag "tools/v<VERSION>"

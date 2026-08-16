@@ -4499,3 +4499,114 @@ class TestTheSummaryDoesNotContradictItself:
                   and _probe(v[other]) in text]
         assert not leaked, (
             f'{lang}: --help 裡混進了 {other} 的文案：{leaked[:2]}')
+
+
+class TestRoundEightFindings:
+    """第八輪盲審 lens B8 / D8。三條都是**這個分支自己新增的**東西不完整。"""
+
+    _CFG = {
+        'ci': 'both', 'deploy': 'kustomize', 'rule_packs': ['mariadb'],
+        'tenants': ['db-a'], 'namespace': 'monitoring',
+        'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
+    }
+
+    def test_a_dangling_symlink_marker_does_not_write_outside_the_output_dir(
+            self):
+        """⛔ `.exists()` **follows** symlinks and answers False for a dangling
+        one, so `.da-init.yaml -> /tmp/elsewhere.yaml` (target absent) fell
+        through the new guard and `write_text_secure` followed the link:
+
+            exit=0, and /tmp/elsewhere.yaml created OUTSIDE the -o directory
+
+        The guard's own docstring named "a dangling symlink" as a case it
+        covers. The sibling guard in `_classify_root_file` gets it right
+        (`not root.exists() and not root.is_symlink()`) — the two were written
+        in the same branch and only one of them tested for it.
+        """
+        import subprocess
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from pathlib import Path as _P
+            out = _P(tmpdir) / 'out'
+            out.mkdir()
+            escaped = _P(tmpdir) / 'ESCAPED.yaml'
+            (out / '.da-init.yaml').symlink_to(escaped)
+            r = subprocess.run(
+                [sys.executable, str(_P(ip.__file__)), '--non-interactive',
+                 '--tenants', 'db-a', '--ci', 'github', '-o', str(out)],
+                capture_output=True, text=True, timeout=300)
+            assert r.returncode == ip.EXIT_VIOLATION, (
+                r.returncode, r.stdout[-400:], r.stderr[-400:])
+            assert not escaped.exists(), (
+                '初始化 marker 被寫到 --output-dir 之外的地方（跟著斷掉的'
+                'symlink 走了）')
+            assert sorted(p.name for p in out.iterdir()) == ['.da-init.yaml']
+
+    @pytest.mark.parametrize('deploy', ['kustomize', 'helm'])
+    def test_the_subdir_report_names_the_apply_stage_paths_too(self, deploy):
+        """⛔ 收集器原本只走四個 key（`paths` / `changes` / `exists` /
+        `CONFIG_DIR`），而它的 docstring 與消費它的那一步都宣稱清單就是「還要
+        改的全部」。
+
+        `script:` / `run:` body 裡的 `kustomize build kustomize/overlays/prod`
+        與 `helm … -f environments/prod/values.yaml` 同樣以 repo 根為基準
+        （job 的工作目錄就是 checkout 根），而**沒有任何 key 指出它們是路徑**。
+        客戶照著印出來的前綴改完，job 終於會跑了，然後 apply 死在一個從沒被
+        提到的路徑上。
+        """
+        import contextlib
+        import io
+        from pathlib import Path as _P
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = _P(tmpdir) / 'repo'
+            (repo / '.git').mkdir(parents=True)
+            sub = repo / 'alerting'
+            sub.mkdir()
+            config = dict(self._CFG, deploy=deploy)
+            created = ip.run_init(config, str(sub))
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                ip._print_summary(created, str(sub), config)
+            out = buf.getvalue()
+        needle = ('kustomize/overlays/prod' if deploy == 'kustomize'
+                  else 'environments/prod/values.yaml')
+        assert f'{needle}  →  alerting/{needle}' in out, (
+            f'{deploy}: 子目錄報告沒有點名 apply 階段用的 {needle}\n{out}')
+
+    def test_the_report_does_not_quote_prose_out_of_shell_comments(self):
+        """反向釘：`run: |` 區塊的字串值裡包含該步驟的 shell **註解**，而那些
+        註解是在談論路徑。第一版直接 tokenize 整個 body，於是清單裡出現
+        `conf.d/_defaults.yaml.`（句號）與 ``conf.d/` ``（反引號）——客戶會
+        試著去替一個句子加前綴。
+        """
+        from pathlib import Path as _P
+        with tempfile.TemporaryDirectory() as tmpdir:
+            f = _P(tmpdir) / 'w.yaml'
+            f.write_text(
+                'jobs:\n  j:\n    steps:\n      - run: |\n'
+                '          # edit conf.d/_defaults.yaml. then re-run\n'
+                '          da-tools lint rule-packs/custom/ --ci\n',
+                encoding='utf-8', newline='\n')
+            got = ip._root_relative_ci_paths(f)
+        assert got == ['rule-packs/custom/'], got
+
+    def test_no_bare_issue_ref_is_written_into_a_customer_repo(self):
+        """⛔ `#1358` 之類的裸引用在**客戶的** repo 裡會 autolink 到**客戶的**
+        issue 1358。GitLab 與 GitHub 都是這樣渲染。
+
+        本分支已經為了另一個理由（hex 色碼掃描器）把 portal wizard 的
+        `#1358` 改成 `issue 1358`，所以兩個出貨面原本互相矛盾。
+        """
+        import re as _re
+        with tempfile.TemporaryDirectory() as tmpdir:
+            created = ip.run_init(dict(self._CFG), tmpdir)
+            from pathlib import Path as _P
+            offenders = {}
+            for rel in created:
+                f = _P(tmpdir) / rel
+                if f.suffix not in ('.yaml', '.yml', '.md'):
+                    continue
+                hits = _re.findall(r'#\d{3,}', f.read_text(encoding='utf-8'))
+                if hits:
+                    offenders[rel] = hits
+        assert not offenders, (
+            f'裸 issue 引用被寫進客戶 repo，會連到他自己的 issue：{offenders}')

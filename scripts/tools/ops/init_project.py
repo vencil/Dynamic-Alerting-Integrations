@@ -575,8 +575,11 @@ def _critical_prefill_note(critical: dict) -> str:
     ("this tool wires conf.d/ straight into the threshold-config ConfigMap").
     That mechanism only exists for `--deploy kustomize`: `--deploy helm` and
     `--deploy argocd` generate no `kustomize/` tree at all (measured — the
-    output is `.da-init.yaml`, two CI files, `.pre-commit-config.da.yaml` and
-    `conf.d/`, nothing else), and `_gen_tenant_yaml` never receives `deploy`,
+    output is `.da-init.yaml`, the CI files, `.pre-commit-config.da.yaml` and
+    `conf.d/`, nothing else). ⚠️ "the CI files" is deliberately not a count:
+    `--ci gitlab`/`both` also writes the repo-root `.gitlab-ci.yml` shell
+    (#1357), so the old wording "two CI files" went stale the moment that
+    landed, and `_gen_tenant_yaml` never receives `deploy`,
     so a deploy-specific sentence here cannot be true for two of the three.
     The claim was narrowed to the property that holds for all three: nothing
     generated tracks the platform (blind review, #1218).
@@ -893,7 +896,7 @@ def _build_github_apply_stage(deploy_method: str, namespace: str) -> str:
 
       # ── Stage 3: Apply (manual trigger only) ──────────────
       # `needs: [validate]` only — `generate` is pull_request-only, and a
-      # skipped job skips everything that needs it (#1356).
+      # skipped job skips everything that needs it (issue 1356).
       apply:
         needs: [validate]
         runs-on: ubuntu-latest
@@ -919,7 +922,7 @@ def _build_github_apply_stage(deploy_method: str, namespace: str) -> str:
 
       # ── Stage 3: Apply via Helm (manual trigger only) ─────
       # `needs: [validate]` only — `generate` is pull_request-only, and a
-      # skipped job skips everything that needs it (#1356).
+      # skipped job skips everything that needs it (issue 1356).
       apply:
         needs: [validate]
         runs-on: ubuntu-latest
@@ -947,7 +950,7 @@ def _build_github_apply_stage(deploy_method: str, namespace: str) -> str:
 
       # ── Stage 3: Sync ArgoCD Application ──────────────────
       # `needs: [validate]` only — `generate` is pull_request-only, and a
-      # skipped job skips everything that needs it (#1356).
+      # skipped job skips everything that needs it (issue 1356).
       apply:
         needs: [validate]
         runs-on: ubuntu-latest
@@ -1645,6 +1648,10 @@ def _enclosing_repo_root(output_dir: str) -> Optional[Path]:
     return None
 
 
+# Top-level directories this generator creates in the customer's repo. Used to
+# recognise a root-relative path INSIDE a shell body, where no key names it.
+_GENERATED_TREES = ('conf.d', 'rule-packs', 'kustomize', 'environments')
+
 # Keys whose values BOTH platforms resolve from the repository root, never
 # from the CI file's own directory.
 #   GitLab — "Paths are relative to the project directory (`$CI_PROJECT_DIR`)"
@@ -1656,7 +1663,20 @@ _ROOT_RELATIVE_CI_KEYS = ('paths', 'changes', 'exists', 'CONFIG_DIR')
 
 
 def _root_relative_ci_paths(path: Path) -> list[str]:
-    """Every repo-root-relative path value inside a generated CI file.
+    """Every repo-root-relative path a generated CI file resolves.
+
+    TWO sources, because the structured keys are only half of it:
+      * `paths` / `changes` / `exists` / `CONFIG_DIR` — the platform resolves
+        these from the repository root by definition;
+      * bare paths inside `script:` / `run:` bodies — `kustomize build
+        kustomize/overlays/prod`, `helm … -f environments/prod/values.yaml`.
+        The job's working directory is the checkout root, so these are
+        root-relative too, and NOTHING names them as paths.
+
+    ⛔ The first version walked the four keys only, while its docstring and the
+    summary step that consumes it both claimed the list was everything left to
+    fix. A customer who prefixed exactly what was printed got jobs that finally
+    ran and an apply step that died on a path never mentioned.
 
     ⛔ Derived from the file we just wrote, never a hand-kept list. The
     generated pipelines are authored for an install AT the repository root:
@@ -1697,7 +1717,36 @@ def _root_relative_ci_paths(path: Path) -> list[str]:
             for item in node:
                 _walk(item)
 
+    def _walk_scripts(node) -> None:
+        """Bare `<tree>/...` tokens inside shell bodies."""
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key in ('script', 'run', 'before_script', 'after_script'):
+                    body = value if isinstance(value, list) else [value]
+                    for chunk in body:
+                        if not isinstance(chunk, str):
+                            continue
+                        # ⚠️ A `run: |` block scalar carries the step's shell
+                        # COMMENTS inside the string, and those comments are
+                        # prose about paths. Tokenising them yielded entries
+                        # like `conf.d/_defaults.yaml.` and ``conf.d/` `` —
+                        # the customer would try to prefix a sentence.
+                        for line in chunk.splitlines():
+                            for tok in (line.replace('"', ' ')
+                                            .replace("'", ' ').split()):
+                                if tok.startswith('#'):
+                                    break
+                                tok = tok.strip(',;()`.')
+                                if tok.startswith(_GENERATED_TREES) and '/' in tok:
+                                    found.append(tok)
+                else:
+                    _walk_scripts(value)
+        elif isinstance(node, list):
+            for item in node:
+                _walk_scripts(item)
+
     _walk(doc)
+    _walk_scripts(doc)
     return sorted(dict.fromkeys(found))
 
 
@@ -1920,7 +1969,7 @@ def _gen_gitlab_ci(
     # Two stages: validate → apply
     #
     # The GitHub artifact has a third (blast-radius diff). This one does not
-    # — see the note above the apply stage for why, and #1358.
+    # — see the note above the apply stage for why, and vencil/Dynamic-Alerting-Integrations issue 1358.
 
     stages:
       - validate
@@ -1944,7 +1993,7 @@ def _gen_gitlab_ci(
         # (da-tools is `ENTRYPOINT ["python3", "/opt/da-tools/entrypoint.py"]`)
         # turns that shell invocation into arguments to the tool and the job dies
         # before the first script line. Harmless for images that already start a
-        # shell. (#1408 — the apply stage below carried this from the start; the
+        # shell. (issue 1408 — the apply stage below carried this from the start; the
         # three da-tools jobs were emitted as a bare scalar and did not.)
         entrypoint: [""]
       rules:
@@ -1958,7 +2007,7 @@ def _gen_gitlab_ci(
       stage: validate
       image:
         name: $DA_TOOLS_IMAGE
-        # ⛔ Load-bearing, not boilerplate — see validate-config above (#1408).
+        # ⛔ Load-bearing, not boilerplate — see validate-config above (issue 1408).
         entrypoint: [""]
       rules:
         # ⛔ `exists:` takes FILE globs. It used to say `rule-packs/custom/`
@@ -2008,7 +2057,7 @@ def _gen_gitlab_ci(
     # Shipping nothing is the honest state until the image carries git: a
     # missing check is visible, a confidently wrong one is not.
     #
-    # Tracking: #1358 (the defect) / #1444 (adding git to the image and
+    # Tracking: vencil/Dynamic-Alerting-Integrations issues 1358 (the defect) / 1444 (adding git to the image and
     # porting the GitHub leg's baseline handling, which is what brings this
     # back).
     {apply_stage}
@@ -2690,22 +2739,40 @@ def _print_summary(created: list[str], output_dir: str, config: dict) -> None:
     # ⚠️ Deliberately named as a step rather than half-wired: a guessed secret
     # name is a wrong answer that looks like an answer, and credentials are the
     # one thing this tool must not invent.
+    # ⛔ The third element exists because the first version of this step said
+    # "or the first manual deploy fails on connection" — asserting credentials
+    # were the LAST thing missing. For `--deploy helm` the first failure is
+    # `open environments/prod/values.yaml: no such file` (this generator does
+    # not create it) and for `--deploy argocd` it is an Application this
+    # generator does not create, both BEFORE any connection is attempted.
     _apply_needs = {
-        'kustomize': ('kubectl / kustomize', 'KUBECONFIG'),
-        'helm': ('helm', 'KUBECONFIG'),
-        'argocd': ('argocd', 'ARGOCD_SERVER + ARGOCD_AUTH_TOKEN'),
-    }.get(config.get('deploy'), ('kubectl', 'KUBECONFIG'))
+        'kustomize': ('kubectl / kustomize', 'KUBECONFIG',
+                      'conf.d/ 已連結進 kustomize/base/（見上面的步驟）',
+                      'conf.d/ linked into kustomize/base/ (the step above)'),
+        'helm': ('helm', 'KUBECONFIG',
+                 'environments/prod/values.yaml —— 本工具不會產生它',
+                 'environments/prod/values.yaml, which this tool does not '
+                 'generate'),
+        'argocd': ('argocd', 'ARGOCD_SERVER + ARGOCD_AUTH_TOKEN',
+                   "一個名為 'dynamic-alerting' 的 ArgoCD Application"
+                   '—— 本工具不會建立它',
+                   "an ArgoCD Application named 'dynamic-alerting', which "
+                   'this tool does not create'),
+    }.get(config.get('deploy'),
+          ('kubectl', 'KUBECONFIG', '目標叢集可連線', 'a reachable cluster'))
     if is_zh:
         print(f"  {step}. ⚠️ Apply 階段需要你自己提供叢集憑證——產生出來的 "
               f"pipeline 刻意不含任何憑證。請在你的 CI 設定 "
-              f"{_apply_needs[1]}（{_apply_needs[0]} 會用到），"
-              f"否則第一次手動部署會直接連線失敗")
+              f"{_apply_needs[1]}（{_apply_needs[0]} 會用到）。"
+              f"⚠️ 憑證是**必要條件之一**，不保證 apply 就能跑：這一步還需要"
+              f"目標端已備妥（{_apply_needs[2]}）")
     else:
         print(f"  {step}. ⚠️ The apply stage needs cluster credentials you "
               f"supply — the generated pipeline deliberately contains none. "
               f"Set {_apply_needs[1]} in your CI (that is what "
-              f"{_apply_needs[0]} uses), or the first manual deploy fails on "
-              f"connection")
+              f"{_apply_needs[0]} uses). ⚠️ Credentials are ONE prerequisite, "
+              f"not a guarantee the apply runs: it also needs "
+              f"{_apply_needs[3]}")
     step += 1
 
     # ── CI wiring (#1357) ──────────────────────────────────
@@ -3082,7 +3149,14 @@ def _check_existing_init(output_dir: str, force: bool, parser: argparse.Argument
     # marker I wrote last time", not "unlink whatever occupies that name" —
     # this tool does not remove a directory the customer put there.
     marker = Path(marker_path)
-    if marker.exists() and not marker.is_file():
+    # ⚠️ `.exists()` FOLLOWS symlinks and answers False for a dangling one, so
+    # this predicate needs `is_symlink()` beside it — otherwise a
+    # `.da-init.yaml -> /tmp/elsewhere.yaml` whose target does not exist falls
+    # through both branches and `write_text_secure` follows the link, planting
+    # the marker OUTSIDE `--output-dir` while the run reports success. The
+    # sibling guard in `_classify_root_file` already spells this out; this one
+    # named the case in its own docstring and then did not test for it.
+    if (marker.exists() or marker.is_symlink()) and not marker.is_file():
         if _LANG == 'zh':
             print(f"⚠️  {marker_path} 存在，但不是一般檔案（目錄？符號連結？），"
                   f"無法寫入初始化標記。", file=sys.stderr)
