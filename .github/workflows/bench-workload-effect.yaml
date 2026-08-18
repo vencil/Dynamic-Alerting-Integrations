@@ -145,11 +145,24 @@ jobs:
         with:
           persist-credentials: false
 
+      # ⛔ 這個 job 完全不碰共享 module cache —— 不寫，也不讀。理由與
+      # `bench-record.yaml` 逐字相同（那裡有完整版）：本 job 在 default branch
+      # 的特權情境下編譯並執行**這個 repo 的另一個較舊修訂**（釘死的參考版本），
+      #   寫：參考版本建置留在 `~/go/pkg/mod` 的任何東西一旦被 SAVE，就會被其他
+      #       workflow 還原回去 —— 這就是 CodeQL 的 cache-poisoning 告警，而它是
+      #       公道的：「我們自己幾個月前的程式碼，用今天的權限執行」正是那條規則
+      #       在講的形狀。
+      #   讀：被別人污染的 cache 會直接餵進 main 側的建置。只關寫入是半套。
+      # 代價是每次執行多下載一次 module，在這個 job 的預算內微不足道。
+      # ⚠️ 初版寫的是 `cache-dependency-path`（＝ cache 開著），CodeQL 在 PR #1467
+      #    上掃出 4 筆 high `actions/cache-poisoning/poisonable-step` 才發現 ——
+      #    我當時是照抄 setup-go 的常見用法，沒有照抄同 repo 已經解過同一題的
+      #    `bench-record.yaml`。
       - name: Set up Go 1.26
         uses: actions/setup-go@v6
         with:
           go-version: "1.26"
-          cache-dependency-path: components/threshold-exporter/app/go.sum
+          cache: false
 
       # 與 bench-record.yaml 同一份 pin、同一組 shape check。⛔ 但這裡讀不到
       # 就直接 exit 1（夜跑是走 output 降級）—— 理由見檔頭的失敗策略。
