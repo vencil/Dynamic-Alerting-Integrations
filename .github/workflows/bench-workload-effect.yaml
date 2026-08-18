@@ -1,0 +1,407 @@
+name: Bench Workload Effect (on-demand triage)
+
+# ADR-032 §工作定義漂移 的量測工具 —— 把「真退化」與「工作變了」分開。
+#
+# 為什麼需要它。夜跑的成對比值消掉了機器，但沒有消掉工作定義：參考版本一釘
+# 就是數週到數月，而 main 這邊的 benchmark fixture 會繼續被改，fixture 改動
+# 造成的是永久性階梯，形狀和真退化一模一樣。ADR 對量測管線的決定是「揭露、
+# 不介入」，`bench-paired.json` 的 `workload_drift` 就是那個揭露。
+#
+# 但揭露不是答案。實測三夜（08-16/17/18，run 31924848480 / 31992030018 /
+# 32096162832）：`workload_drift.files` 兩夜逐字相同的四行 —— 四個
+# `*bench_test.go` **全部**漂移，映射到 20 支夜跑 benchmark 就是 20/20，
+# 而同期只有一支有持續階梯（`BenchmarkMergePartialConfigs_1000`，
+# +7.11 / +8.75 / +7.37%，跨三種 CPU）。清單指向所有人，等於沒有指向任何人。
+#
+# 這支 workflow 不猜，直接量。
+#
+# 算術（同一台 runner、同一個 job、交錯量測）
+# ===========================================
+#
+#   R = 參考實作 + 參考測試碼     ← 夜跑今天的分母
+#   W = 參考實作 + main 測試碼    ← 本 workflow 用 overlay 造出來的第三棵樹
+#   M = main 實作 + main 測試碼   ← 夜跑今天的分子
+#
+#   W / R  純「工作定義」效應 —— 兩側同一份實作，只有測試碼不同
+#   M / W  純「實作」效應     —— 兩側同一份測試碼，只有實作不同（免疫於漂移）
+#   M / R  夜跑發布的那個混淆值 = (W/R) × (M/W)
+#
+# 判讀：`MergePartialConfigs_1000` 的 W/R 若也在 +7~9%，那 +7~9% 是改名不是
+# 退化；若 W/R ≈ 0 而 M/W 仍是 +7~9%，那是真的。
+#
+# ⛔ 內建對照：把本 job 的兩個比值相乘，應該對得上當夜 `bench-paired.json`
+#    的 M/R。對不上就是本 job 的前提有問題，別採信結果 —— 這條檢查是刻意的，
+#    一個沒有對照的量測不是量測。
+#
+# ⛔ 這是診斷工具，不是判定器：不開票、不關票、不寫任何跨次執行的狀態，
+#    也不改夜跑。ADR-032 §工作定義漂移 的決定仍然是「揭露、不介入」。
+#
+# ⛔ 失敗策略與 `bench-record.yaml` 相反 —— 這裡一律 fail loud（非零退出）。
+#    夜跑不能因為配對壞掉就倒，因為它同時在產出 release 資產；本 job 沒有
+#    任何東西要保護，一個算不出來的診斷必須是紅的，不能是一份看起來像結果
+#    的東西。
+#
+# ⚠️ OVERLAY 的已知弱點（讀結果前必讀）
+# =====================================
+# overlay 要覆蓋的是「決定 benchmark 工作定義」的那些測試檔。`*bench_test.go`
+# 由 `find` **推導**（含新增/刪除），但 helper 檔是一份**列舉**（`overlay_helpers`
+# 輸入），而列舉錯了的失效模式是**靜默的**：漏掉的 helper 會綁到參考版本的
+# 版本，W 就變成一棵混血樹，而畫面上看不出來。
+#
+# 已量到的實況（2026-08-18，`3fd96b51`..main）：
+#   - `config_bench_test.go` 用到 `config_test.go` 定義的 `SV` / `SVScheduled`
+#     —— fixture 值建構子，影響 8 支夜跑 benchmark，而 `config_test.go`
+#     **不是** `*bench_test.go`，所以夜跑的 drift 清單看不到它。
+#     （這兩支 helper 目前兩側逐字相同，所以今天含不含它結果一樣。）
+#   - `config_test.go` 自己又用到 `watchloop_test.go` / `config_debounce_test.go`
+#     的 helper —— **閉包沒有封閉**，再往外推就會撞到編不過（實測：覆蓋兩個
+#     package 的全部 `*_test.go` 會因 `ExpiryMeta` / `canonicalKeyFor` /
+#     `ValidateTenantKeys().Errors` 等參考版本沒有的產品 API 而編譯失敗）。
+#
+# 因此本 job 做兩件事來把這個弱點從「假設」變成「可量」：
+#   1. `overlay_helpers` 是輸入 —— 用不同範圍各跑一次，W/R 若變了，範圍就
+#      是有影響的，這件事就從推測變成資料。
+#   2. 每次執行都印出 **residue**：overlay 之後仍然有差異的其他測試檔。
+#      residue 非空不代表結果無效，但代表這是一次混血量測，判讀要打折。
+
+on:
+  workflow_dispatch:
+    inputs:
+      bench_re:
+        description: "Go -bench regex。預設只跑兩支嫌疑犯；留空會落到 bench_interleave.sh 的預設（全部 20 支，很慢）"
+        required: false
+        default: 'MergePartialConfigs_1000|ResolveSilentModes_1000'
+      rounds:
+        description: "交錯輪數（夜跑是 6）。留空 = 用 bench_interleave.sh 的預設 6"
+        required: false
+        default: '6'
+      benchtime:
+        description: "每支 bench 的 benchtime（夜跑是 3s）。留空 = 用 bench_interleave.sh 的預設 3s"
+        required: false
+        default: '3s'
+      overlay_helpers:
+        description: "除了 *bench_test.go 之外要一起 overlay 的測試檔（空白分隔，相對 app/）。留空 = 只覆蓋 bench 檔"
+        required: false
+        default: 'config_test.go'
+      measure_implementation:
+        description: "同時量 M/W（純實作效應）。關掉只量 W/R，時間減半"
+        type: boolean
+        required: false
+        default: true
+
+  # SELF-TEST。⛔ `workflow_dispatch` 的 workflow 必須先在 default branch 上，
+  # 「Run workflow」按鈕才會出現 —— 也就是說這支 workflow 在 merge 之前**沒有
+  # 任何辦法被跑到**，第一次執行就會是正式判讀那一次。那等於把一支沒跑過的
+  # 工具直接拿去回答一個要拿來下決定的問題。
+  #
+  # 所以掛一個只匹配「這支 workflow 自己」的 pull_request 觸發，讓引入它、
+  # 以及日後任何修改它的 PR 都自測一次。`bench-gate-pr.yaml` 用的是同一個
+  # pattern（它的 paths 也列了自己，見 benchmark-playbook.md）。
+  pull_request:
+    paths:
+      - '.github/workflows/bench-workload-effect.yaml'
+
+# 只讀。本 job 不開票、不留言、不寫 label —— 見上面的「不是判定器」。
+# fork PR 的 self-test 拿到的也是唯讀 token，而本 job 只讀，所以不需要降級路徑。
+permissions:
+  contents: read
+
+jobs:
+  workload-effect:
+    name: Workload-definition effect (W/R)
+    runs-on: ubuntu-latest
+    # ⛔ 這裡的三元式一律寫成 `是不是 self-test && '字面值' || 使用者輸入`，
+    #    **不能**寫成 `使用者輸入 || '預設值'`。後者在使用者**刻意留空**時會
+    #    悄悄把預設值塞回去 —— 而 `overlay_helpers` 留空正是本 workflow 拿來
+    #    量「overlay 範圍到底有沒有影響」的那個控制項，被塞回去就等於這個控制
+    #    項死了，而且畫面上看不出來。（GHA 的 `A && B || C`：B 是非空字面值時
+    #    才等價於三元式，上面每一個 B 都是非空字面值。）
+    env:
+      SELF_TEST: ${{ github.event_name == 'pull_request' }}
+      # self-test 只要證明機制會動，不是要回答科學問題 —— 所以刻意用最便宜的
+      # 一支 bench、2 輪、100ms，並且關掉 M/W。
+      BENCH_RE: ${{ github.event_name == 'pull_request' && 'ResolveSilentModes_1000' || github.event.inputs.bench_re }}
+      ROUNDS: ${{ github.event_name == 'pull_request' && '2' || github.event.inputs.rounds }}
+      BENCHTIME: ${{ github.event_name == 'pull_request' && '100ms' || github.event.inputs.benchtime }}
+      OVERLAY_HELPERS: ${{ github.event_name == 'pull_request' && 'config_test.go' || github.event.inputs.overlay_helpers }}
+      MEASURE_IMPL: ${{ github.event_name == 'pull_request' && 'false' || github.event.inputs.measure_implementation }}
+    # 夜跑兩側 20 支實測 20m49s。本 job 預設只跑 2 支 bench，是分鐘級的。
+    # ⚠️ 但最壞情況是「bench_re 放寬到全部 20 支 **且** 開 M/W」＝兩次完整
+    # 交錯 ≈ 2 × 夜跑 ≈ 41 分，加上三棵樹的建置會擦到 45 分。所以取 60 —
+    # 這個上限不是估出來的餘裕，是從夜跑實測外推的最壞情況再加一點。
+    timeout-minutes: 60
+    steps:
+      # persist-credentials: false —— 與 bench-record / bench-attrib-main 同
+      # 理由：這個 job 會 checkout 並執行一個舊版本的程式碼，工作區裡不該留
+      # 著可用的 token。
+      - name: Checkout main
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Go 1.26
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+          cache-dependency-path: components/threshold-exporter/app/go.sum
+
+      # 與 bench-record.yaml 同一份 pin、同一組 shape check。⛔ 但這裡讀不到
+      # 就直接 exit 1（夜跑是走 output 降級）—— 理由見檔頭的失敗策略。
+      - name: Read the pinned reference version
+        id: ref
+        run: |
+          set -euo pipefail
+          tag=$(sed -n 's/^tag:[[:space:]]*//p' .github/bench-reference.yaml | head -n1)
+          sha=$(sed -n 's/^sha:[[:space:]]*//p' .github/bench-reference.yaml | head -n1)
+          if ! printf '%s' "$tag" | grep -qE '^exporter/v[0-9]+\.[0-9]+\.[0-9]+$' \
+             || ! printf '%s' "$sha" | grep -qE '^[0-9a-f]{40}$'; then
+            echo "::error::.github/bench-reference.yaml has no usable tag+sha pair (tag='${tag}' sha='${sha}')"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "reference version: $tag ($sha)"
+
+      - name: Checkout reference version (R)
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.ref.outputs.sha }}
+          path: .ref
+          persist-credentials: false
+
+      # W = R 的複本 + main 的測試碼。⛔ bench 檔先「刪光再複製」而不是直接
+      # 覆蓋：main 刪掉的 bench 檔如果留在 W 裡，W 就會跑一支 main 已經沒有
+      # 的 benchmark，而那正是這棵樹存在的意義（讓兩側跑同一件事）的反面。
+      - name: Build the overlay tree (W = reference implementation + main test code)
+        id: overlay
+        run: |
+          set -euo pipefail
+          cp -a .ref .refw
+          MAIN_APP=components/threshold-exporter/app
+          W_APP=.refw/components/threshold-exporter/app
+
+          # *bench_test.go 由 find 推導，不列舉 —— 新增/改名/刪除都自動跟上。
+          ( cd "$W_APP" && find . -name '*bench_test.go' -type f -delete )
+          copied=0
+          while IFS= read -r rel; do
+            mkdir -p "$W_APP/$(dirname "$rel")"
+            cp "$MAIN_APP/$rel" "$W_APP/$rel"
+            echo "  overlay(bench)  $rel"
+            copied=$((copied + 1))
+          done < <( cd "$MAIN_APP" && find . -name '*bench_test.go' -type f -print | sed 's|^\./||' | sort )
+
+          # helper 檔是列舉（見檔頭的弱點說明）。⛔ 指定了卻不存在要當錯誤，
+          # 不能默默跳過：一個打錯字的檔名會讓 overlay 悄悄縮水，而縮水後的
+          # W 是混血樹，畫面上與正確的 W 完全一樣。
+          for rel in ${OVERLAY_HELPERS:-}; do
+            if [ ! -f "$MAIN_APP/$rel" ]; then
+              echo "::error::overlay_helpers names '$rel' but main has no such file under $MAIN_APP"
+              exit 1
+            fi
+            mkdir -p "$W_APP/$(dirname "$rel")"
+            cp "$MAIN_APP/$rel" "$W_APP/$rel"
+            echo "  overlay(helper) $rel"
+            copied=$((copied + 1))
+          done
+
+          if [ "$copied" -eq 0 ]; then
+            echo "::error::overlay copied nothing — W would be identical to R and the ratio would be a tautology"
+            exit 1
+          fi
+          echo "overlaid ${copied} file(s)"
+          echo "count=${copied}" >> "$GITHUB_OUTPUT"
+
+      # RESIDUE —— overlay 之後「還是不一樣」的其他測試檔。這不是錯誤，是
+      # 這次量測的適用範圍聲明：residue 裡任何一個檔如果定義了 benchmark 用
+      # 得到的 helper，W 就是混血樹，W/R 讀成「純工作定義效應」就過頭了。
+      # ⛔ 兩側都列舉得到才寫答案 —— 空的 residue 檔與「比對過、沒有殘差」
+      #    在資料上必須可區分，這是 bench-record.yaml 那個 drift step 在
+      #    PR #1455 review 被抓出來的同一個坑，不重犯。
+      - name: Disclose the residue (test files still differing after the overlay)
+        id: residue
+        run: |
+          set -euo pipefail
+          mkdir -p .build
+          MAIN_APP=components/threshold-exporter/app
+          W_APP=.refw/components/threshold-exporter/app
+          main_n=$( ( cd "$MAIN_APP" && find . -name '*_test.go' -type f -print ) | wc -l )
+          w_n=$( ( cd "$W_APP" && find . -name '*_test.go' -type f -print ) | wc -l )
+          if [ "$main_n" -eq 0 ] || [ "$w_n" -eq 0 ]; then
+            echo "::error::residue enumeration found no test files (main=${main_n}, W=${w_n}) — cannot state this measurement's scope"
+            exit 1
+          fi
+          : > .build/residue.txt
+          {
+            ( cd "$MAIN_APP" && find . -name '*_test.go' -type f -print )
+            ( cd "$W_APP"    && find . -name '*_test.go' -type f -print )
+          } | sed 's|^\./||' | sort -u | while read -r rel; do
+            cmp -s "$W_APP/$rel" "$MAIN_APP/$rel" || echo "$rel" >> .build/residue.txt
+          done
+          n=$(wc -l < .build/residue.txt)
+          echo "count=${n}" >> "$GITHUB_OUTPUT"
+          echo "residue: ${n} test file(s) still differ between W and main"
+          cat .build/residue.txt
+
+      # ⛔ 編不過就紅。這是 §待決 3（舊參考版本總有一天建不起來）在 overlay
+      # 上的變形，而且會來得更早：main 的測試碼用到參考版本沒有的產品 API 就
+      # 編不過。實測 2026-08-18（參考版本 2.5 個月大）：bench 檔 + config_test.go
+      # 編得過且跑得起來；覆蓋兩個 package 的全部 *_test.go 編不過。
+      - name: Verify the overlay tree builds
+        run: |
+          set -euo pipefail
+          cd .refw/components/threshold-exporter/app
+          for pkg in "." "./pkg/config"; do
+            if ! go test -c -o /dev/null "$pkg"; then
+              echo "::error::the overlay tree does not build ($pkg) — main's test code has outgrown the pinned reference's API. Narrow overlay_helpers, or this triage needs the reference moved."
+              exit 1
+            fi
+          done
+          echo "overlay tree builds (both packages)"
+
+      # ── 量測 1：W / R —— 純工作定義效應 ─────────────────────────────────
+      # BASE=R、PR=W，兩側是同一份實作，唯一的差別是測試碼。
+      - name: Interleave R vs W
+        env:
+          BASE_DIR: ${{ github.workspace }}/.ref/components/threshold-exporter/app
+          PR_DIR: ${{ github.workspace }}/.refw/components/threshold-exporter/app
+          CANARY_DIR: ${{ github.workspace }}/scripts/tools/ops/bench-canary
+          BENCH_OUT_DIR: ${{ github.workspace }}/.build/wr
+        run: |
+          set -euo pipefail
+          mkdir -p .build/wr
+          bash scripts/tools/ops/bench_interleave.sh
+
+      # 沿用夜跑同一支比值工具 —— 不另寫算術，也不另寫 parser。
+      # `--reference` 是分母：這裡分母是 R、分子是 W，所以算出來的是 W/R。
+      - name: Compute W / R
+        env:
+          REF_TAG: ${{ steps.ref.outputs.tag }}
+          REF_SHA: ${{ steps.ref.outputs.sha }}
+        run: |
+          set -euo pipefail
+          python3 scripts/tools/dx/pair_bench_ratio.py \
+            --reference .build/wr/bench-base.txt \
+            --main .build/wr/bench-pr.txt \
+            --reference-tag "${REF_TAG}" \
+            --reference-sha "${REF_SHA}" \
+            --out .build/workload-effect-wr.json
+
+      # ── 量測 2（可關）：M / W —— 純實作效應，免疫於工作定義漂移 ─────────
+      # BASE=W、PR=main，兩側是同一份測試碼，唯一的差別是實作。
+      - name: Interleave W vs main
+        if: env.MEASURE_IMPL == 'true'
+        env:
+          BASE_DIR: ${{ github.workspace }}/.refw/components/threshold-exporter/app
+          PR_DIR: ${{ github.workspace }}/components/threshold-exporter/app
+          CANARY_DIR: ${{ github.workspace }}/scripts/tools/ops/bench-canary
+          BENCH_OUT_DIR: ${{ github.workspace }}/.build/mw
+        run: |
+          set -euo pipefail
+          mkdir -p .build/mw
+          bash scripts/tools/ops/bench_interleave.sh
+
+      # ⛔ `--reference-tag` 這裡**不能**照抄 `${REF_TAG}`：這一次的分母是 W，
+      #    不是那個 tag 本身。JSON 是自我描述的資料，寫上 `exporter/v2.9.0`
+      #    會讓事後讀檔的人以為分母是純參考版本 —— 一個看起來完全正常的假標籤。
+      - name: Compute M / W
+        if: env.MEASURE_IMPL == 'true'
+        env:
+          REF_TAG: ${{ steps.ref.outputs.tag }}
+          REF_SHA: ${{ steps.ref.outputs.sha }}
+        run: |
+          set -euo pipefail
+          python3 scripts/tools/dx/pair_bench_ratio.py \
+            --reference .build/mw/bench-base.txt \
+            --main .build/mw/bench-pr.txt \
+            --reference-tag "${REF_TAG} + main test code (overlay tree W)" \
+            --reference-sha "${REF_SHA}" \
+            --out .build/workload-effect-mw.json
+
+      - name: Render step summary
+        if: always()
+        env:
+          REF_TAG: ${{ steps.ref.outputs.tag }}
+          REF_SHA: ${{ steps.ref.outputs.sha }}
+        run: |
+          set -uo pipefail
+          {
+            echo "## Workload-definition effect (ADR-032 §工作定義漂移)"
+            echo
+            # ⛔ self-test 的參數是刻意調小的（2 輪 / 100ms / 一支 bench），
+            #    它證明的是「機制會動」，不是任何一個比值。少了這個橫幅，一份
+            #    self-test 的 summary 和一份正式判讀的 summary 長得一模一樣 ——
+            #    那正是這支 workflow 的檔頭寫著要避免的「看起來像結果的東西」。
+            if [ "${SELF_TEST}" = "true" ]; then
+              echo "> ⚠️ **SELF-TEST 執行（\`pull_request\` 觸發）——下面的比值不是量測結果。**"
+              echo "> 參數被刻意調到最小（1 支 bench／2 輪／100ms／不量 M/W），只用來證明這支"
+              echo "> workflow 端到端會動。要判讀請走 \`workflow_dispatch\` 手動執行。"
+              echo
+            fi
+            echo "參考版本 \`${REF_TAG}\` (\`${REF_SHA}\`) ｜ bench filter \`${BENCH_RE}\`"
+            echo
+            echo '```text'
+            echo 'R = 參考實作 + 參考測試碼      W = 參考實作 + main 測試碼      M = main 實作 + main 測試碼'
+            echo
+            echo 'W / R  = 純工作定義效應（兩側同一份實作）'
+            echo 'M / W  = 純實作效應（兩側同一份測試碼，免疫於漂移）'
+            echo 'M / R  = 夜跑發布的混淆值 = (W/R) x (M/W)   ← 拿去對當夜 bench-paired.json'
+            echo '```'
+            echo
+            echo "### Overlay 範圍與適用性"
+            echo
+            echo "- \`*bench_test.go\`：由 \`find\` 推導（含新增／刪除）"
+            echo "- helper 檔（列舉）：\`${OVERLAY_HELPERS:-（無）}\`"
+            if [ -s .build/residue.txt ]; then
+              echo "- ⚠️ **Residue —— overlay 之後仍有差異的測試檔（$(wc -l < .build/residue.txt) 個）**。"
+              echo "  其中任何一個若定義了 benchmark 用得到的 helper，下面的 W/R 就是一次**混血量測**，"
+              echo "  不能讀成純工作定義效應："
+              sed 's|^|  - `|; s|$|`|' .build/residue.txt
+            else
+              echo "- ✅ Residue 為空：W 與 main 的測試碼在這兩個 package 內完全一致"
+            fi
+            echo
+            for pair in "wr:W / R —— 工作定義效應" "mw:M / W —— 實作效應（drift-free）"; do
+              key="${pair%%:*}"; title="${pair#*:}"
+              echo "### ${title}"
+              echo
+              if [ -f ".build/workload-effect-${key}.json" ]; then
+                echo '```json'
+                cat ".build/workload-effect-${key}.json"
+                echo '```'
+              else
+                echo "（未產出 —— 該量測未執行或失敗，見上面的步驟日誌）"
+              fi
+              echo
+            done
+            echo "---"
+            echo
+            echo "### 讀數字之前先做這兩個對照"
+            echo
+            echo "1. **對照測試（canary）**。\`bench_interleave.sh\` 把**同一個** canary 執行檔跑進兩側，"
+            echo "   所以 \`BenchmarkControlCanaryCPU\` / \`ControlCanarySleep\` 的真值恆為 1.000。"
+            echo "   上面兩份 JSON 裡它們若不接近 0%，這次執行本身就是髒的，下面不用看了。"
+            echo "2. **(W/R) × (M/W) 應該對得上當夜 \`bench-paired.json\` 的 M/R**。對不上就是前提有問題。"
+            echo "   ⚠️ 但要扣掉一個合法差異：夜跑的 M 是**那一夜的 main HEAD**，本 job 的 M 是**現在的 main**。"
+            echo "   main 在這中間動過的話，兩者本來就不該完全相等 —— 比對時要挑一個 main 沒動多少的時間點，"
+            echo "   或直接拿本 job 的 M/R 去比，而不是硬要對上舊的一夜。"
+            echo
+            echo "⛔ 這是診斷，不是判定：本 job 不開票、不關票、不改夜跑。"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: bench-workload-effect-${{ github.run_id }}
+          path: |
+            .build/workload-effect-wr.json
+            .build/workload-effect-mw.json
+            .build/wr/bench-base.txt
+            .build/wr/bench-pr.txt
+            .build/wr/bench.err.log
+            .build/mw/bench-base.txt
+            .build/mw/bench-pr.txt
+            .build/mw/bench.err.log
+            .build/residue.txt
+          retention-days: 90
+          if-no-files-found: warn

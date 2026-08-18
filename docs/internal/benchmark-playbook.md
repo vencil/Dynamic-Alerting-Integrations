@@ -251,7 +251,37 @@ main 的**持續退化**由 nightly trend watchdog 守望（下節），不靠 P
 - **參考版本建置失敗 → fail-loud 但不 fail-job。** 配對序列當夜記 `INCONCLUSIVE` + `::error::` annotation；`bench-baseline.txt` 走 fallback 路徑（等同 ADR-032 之前的行為）照常產出，因為它是 `release-attach-bench-baseline.yaml` 的 release 資產來源。⛔ **絕不降級為 warning**——「量不到」與「量了沒事」必須在資料上可區分，這正是本 ADR 要消滅的失效模式。
 - **新測試沒有分母是預期狀態，不是錯誤。** 參考版本裡不存在的 bench 由 `pair_bench_ratio.py` 記為 `missing-in-reference` 並放進 `inconclusive`，不會被算成乾淨。
 - **成本 2× 而非 3×。** 交錯量測的 main 側**直接當** `bench-baseline.txt`：樣本數（6 輪 × `count=1` vs 現行 `count=6`）、benchtime、bench 集合都相同，且 `bench_interleave.sh` 把單一 canary binary 跑進兩側故 canary 列本就在內。舊監測器與 release 資產無需改動。
-- 交錯參數 `ROUNDS=6 BENCHTIME=3s`；job timeout 30 → 45 分鐘（實際耗時尚未實測，見 ADR-032 §待決 4，這個 job 自己的計時就是那個量測）。
+- 交錯參數 `ROUNDS=6 BENCHTIME=3s`；job timeout 30 → 45 分鐘。⏱️ **已實測 1.92×**（2026-08-16 run 31924848480：1249s vs 前一夜 649s），與 ADR-032 §待決 4「翻倍」的估計相符；舊的 30 分其實夠用，45 是餘裕。
+
+### 工作定義效應歸因（on-demand triage）
+
+夜跑的比值消掉了機器，**沒有消掉工作定義**：參考版本一釘就是數週到數月，而 main 的 benchmark fixture 會繼續被改，改動造成的是**永久性階梯**，形狀和真退化一模一樣（ADR-032 §工作定義漂移）。`bench-paired.json` 的 `workload_drift` 是那個揭露——但**揭露不是答案**：實測三夜（2026-08-16/17/18）該清單兩夜逐字相同的四行，四個 `*bench_test.go` **全部**漂移 ⇒ 映射到 20 支夜跑 benchmark 就是 20/20，而同期只有一支有持續階梯（`BenchmarkMergePartialConfigs_1000`，+7.11 / +8.75 / +7.37%，跨三種 CPU）。**清單指向所有人，等於沒有指向任何人。**
+
+`.github/workflows/bench-workload-effect.yaml`（`workflow_dispatch`）不猜，直接量。同一台 runner、同一個 job 內交錯三棵樹的兩兩配對：
+
+| | 組成 | 用途 |
+|---|---|---|
+| `R` | 參考實作 + 參考測試碼 | 夜跑今天的分母 |
+| `W` | 參考實作 + **main** 測試碼（overlay 造出來） | 中介 |
+| `M` | main 實作 + main 測試碼 | 夜跑今天的分子 |
+
+- **`W / R` = 純工作定義效應**（兩側同一份實作，只有測試碼不同）
+- **`M / W` = 純實作效應**（兩側同一份測試碼，免疫於漂移）
+- **`M / R` = 夜跑發布的那個混淆值 = (W/R) × (M/W)**
+
+判讀：某支 bench 的 `W/R` 若也在 +7~9%，那 +7~9% 是 fixture 改動不是退化；`W/R ≈ 0` 而 `M/W` 仍是 +7~9% 就是真的。
+
+```bash
+gh workflow run bench-workload-effect.yaml --repo vencil/Dynamic-Alerting-Integrations -f bench_re='MergePartialConfigs_1000'
+```
+
+⛔ **讀數字之前先做兩個對照**：(1) `bench_interleave.sh` 把**同一個** canary 執行檔跑進兩側，所以 `BenchmarkControlCanary*` 的真值恆為 1.000——不接近 0% 就是這次執行本身髒了；(2) `(W/R) × (M/W)` 應該對得上當夜 `bench-paired.json` 的比值（要扣掉「夜跑的 M 是那一夜的 HEAD、本 job 的 M 是現在」這個合法差異）。**一個沒有對照的量測不是量測。**
+
+⚠️ **overlay 的已知弱點，讀結果前必讀。** `*bench_test.go` 由 `find` **推導**（新增／改名／刪除自動跟上），但 helper 檔是一份**列舉**（`overlay_helpers` 輸入，預設 `config_test.go`），而列舉錯了的失效模式是**靜默的**：漏掉的 helper 會綁到參考版本的版本，`W` 就變成混血樹而畫面上看不出來。實測（2026-08-18，`3fd96b51`..main）：`config_bench_test.go` 用到 `config_test.go` 定義的 `SV` / `SVScheduled`（fixture 值建構子，影響 8 支夜跑 bench，而它**不是** `*bench_test.go`，所以夜跑的 drift 清單看不到它）；`config_test.go` 自己又用到 `watchloop_test.go` / `config_debounce_test.go` 的 helper，**閉包沒有封閉**，再往外推就會撞到編不過（覆蓋兩個 package 的全部 `*_test.go` 會因 `ExpiryMeta` / `canonicalKeyFor` 等參考版本沒有的產品 API 而編譯失敗）。因此每次執行都會印出 **residue**（overlay 之後仍有差異的其他測試檔）當作這次量測的適用範圍聲明，而 `overlay_helpers` 做成輸入是為了讓「範圍到底有沒有影響」可以**用不同範圍各跑一次量出來**，而不是用假設的。
+
+⛔ **這是診斷，不是判定**：不開票、不關票、不寫任何跨次執行狀態、也不改夜跑。ADR-032 §工作定義漂移 的決定仍然是「揭露、不介入」。
+
+ℹ️ 另有一個只匹配「這支 workflow 自己」的 `pull_request` 觸發做 **self-test**（`bench-gate-pr.yaml` 同一 pattern）——因為 `workflow_dispatch` 的 workflow 必須先在 default branch 上才跑得動，沒有 self-test 的話第一次執行就會是正式判讀那一次。self-test 的參數刻意調到最小（1 支 bench／2 輪／100ms／不量 `M/W`），summary 會掛一條橫幅講明**那些比值不是量測結果**。
 
 ### Nightly sustained-trend watchdog
 
