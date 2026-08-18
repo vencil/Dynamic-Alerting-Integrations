@@ -277,7 +277,18 @@ gh workflow run bench-workload-effect.yaml --repo vencil/Dynamic-Alerting-Integr
 
 ⛔ **讀數字之前先做兩個對照**：(1) `bench_interleave.sh` 把**同一個** canary 執行檔跑進兩側，所以 `BenchmarkControlCanary*` 的真值恆為 1.000——不接近 0% 就是這次執行本身髒了；(2) `(W/R) × (M/W)` 應該對得上當夜 `bench-paired.json` 的比值（要扣掉「夜跑的 M 是那一夜的 HEAD、本 job 的 M 是現在」這個合法差異）。**一個沒有對照的量測不是量測。**
 
-⚠️ **overlay 的已知弱點，讀結果前必讀。** `*bench_test.go` 由 `find` **推導**（新增／改名／刪除自動跟上），但 helper 檔是一份**列舉**（`overlay_helpers` 輸入，預設 `config_test.go`），而列舉錯了的失效模式是**靜默的**：漏掉的 helper 會綁到參考版本的版本，`W` 就變成混血樹而畫面上看不出來。實測（2026-08-18，`3fd96b51`..main）：`config_bench_test.go` 用到 `config_test.go` 定義的 `SV` / `SVScheduled`（fixture 值建構子，影響 8 支夜跑 bench，而它**不是** `*bench_test.go`，所以夜跑的 drift 清單看不到它）；`config_test.go` 自己又用到 `watchloop_test.go` / `config_debounce_test.go` 的 helper，**閉包沒有封閉**，再往外推就會撞到編不過（覆蓋兩個 package 的全部 `*_test.go` 會因 `ExpiryMeta` / `canonicalKeyFor` 等參考版本沒有的產品 API 而編譯失敗）。因此每次執行都會印出 **residue**（overlay 之後仍有差異的其他測試檔）當作這次量測的適用範圍聲明，而 `overlay_helpers` 做成輸入是為了讓「範圍到底有沒有影響」可以**用不同範圍各跑一次量出來**，而不是用假設的。
+⚠️ **overlay 的已知弱點與它的守衛。** `*bench_test.go` 由 `find` **推導**（新增／改名／刪除自動跟上），但 helper 檔是一份**列舉**（`overlay_helpers` 輸入），而列舉錯了的失效模式本來是**靜默的**：漏掉的 helper 會綁到參考版本的版本，`W` 就變成混血樹而畫面上看不出來。
+
+守衛是**封閉性探測**——造一棵「只留 overlay 集合」的樹去 `go test -c -gcflags=-e`，**問 Go 工具鏈而不是用 regex 猜誰引用了誰**：
+
+- 編得過 ⇒ overlay 集合**封閉**，benchmark 的工作定義不依賴任何未被 overlay 的測試檔，residue 可證明無關；
+- 編不過 ⇒ **編譯器自己點名**缺哪些符號，報告再用那個名字反查定義檔、並標出它在不在 residue 裡（＝兩側是否有差異）。
+
+`-gcflags=-e` 是必要的：Go 預設印 10 個錯就 `too many errors` 截斷，實測 `SV` 一支就吃掉 10 行、把 `SVScheduled` 整個藏掉——**一份被截斷的清單長得跟一份完整的清單一模一樣**。
+
+`overlay_helpers` 的預設值是**實測迭代出的閉包**（2026-08-18，`3fd96b51`..main）：4 支 `*bench_test.go` ＋ `config_test.go` / `config_debounce_test.go` / `config_metrics_test.go` / `watchloop_test.go`，共 8 個檔，第 4 輪達到不動點。起點是 `config_bench_test.go` 用到 `config_test.go` 的 `SV` / `SVScheduled`（fixture 值建構子，影響 8 支夜跑 bench，而它**不是** `*bench_test.go`，所以夜跑的 drift 清單看不到它）。⚠️ 範圍不能無限外推：覆蓋兩個 package 的**全部** `*_test.go` 會因 `ExpiryMeta` / `canonicalKeyFor` / `ValidateTenantKeys().Errors` 等參考版本沒有的產品 API 而編譯失敗——所以「全都蓋、絕不遺漏」這個安全方向**不可用**。
+
+residue 完整清單留在 artifact 供稽核，但**不整份貼進 step summary**：首次 self-test 實測 44 個檔、其中真正被 overlay 過的檔引用到的只有 1 個（精確度 2.3%，比它要修的 `workload_drift` 清單 1/20 還差）。summary 印的是封閉性判定，因為那才是「residue 重不重要」的答案。
 
 ⛔ **這是診斷，不是判定**：不開票、不關票、不寫任何跨次執行狀態、也不改夜跑。ADR-032 §工作定義漂移 的決定仍然是「揭露、不介入」。
 

@@ -48,21 +48,27 @@ name: Bench Workload Effect (on-demand triage)
 # 輸入），而列舉錯了的失效模式是**靜默的**：漏掉的 helper 會綁到參考版本的
 # 版本，W 就變成一棵混血樹，而畫面上看不出來。
 #
-# 已量到的實況（2026-08-18，`3fd96b51`..main）：
-#   - `config_bench_test.go` 用到 `config_test.go` 定義的 `SV` / `SVScheduled`
-#     —— fixture 值建構子，影響 8 支夜跑 benchmark，而 `config_test.go`
-#     **不是** `*bench_test.go`，所以夜跑的 drift 清單看不到它。
-#     （這兩支 helper 目前兩側逐字相同，所以今天含不含它結果一樣。）
-#   - `config_test.go` 自己又用到 `watchloop_test.go` / `config_debounce_test.go`
-#     的 helper —— **閉包沒有封閉**，再往外推就會撞到編不過（實測：覆蓋兩個
-#     package 的全部 `*_test.go` 會因 `ExpiryMeta` / `canonicalKeyFor` /
-#     `ValidateTenantKeys().Errors` 等參考版本沒有的產品 API 而編譯失敗）。
+# 已量到的實況（2026-08-18，`3fd96b51`..main）：`config_bench_test.go` 用到
+# `config_test.go` 定義的 `SV` / `SVScheduled`（fixture 值建構子，影響 8 支夜跑
+# benchmark，而 `config_test.go` **不是** `*bench_test.go`，所以夜跑的 drift 清單
+# 看不到它；這兩支目前兩側逐字相同，所以今天含不含它結果一樣）。而 `config_test.go`
+# 自己又往外用，一路推下去 —— 逐輪迭代到不動點，**閉包是 8 個檔**：4 支
+# `*bench_test.go` 加上 `config_test.go` / `config_debounce_test.go` /
+# `config_metrics_test.go` / `watchloop_test.go`。這就是 `overlay_helpers` 的預設值。
+# ⚠️ 但範圍不能無限外推：覆蓋兩個 package 的**全部** `*_test.go` 會因
+# `ExpiryMeta` / `canonicalKeyFor` / `ValidateTenantKeys().Errors` 等參考版本沒有的
+# 產品 API 而編譯失敗 —— 所以「全都蓋、絕不遺漏」這個安全方向不可用。
 #
-# 因此本 job 做兩件事來把這個弱點從「假設」變成「可量」：
-#   1. `overlay_helpers` 是輸入 —— 用不同範圍各跑一次，W/R 若變了，範圍就
-#      是有影響的，這件事就從推測變成資料。
-#   2. 每次執行都印出 **residue**：overlay 之後仍然有差異的其他測試檔。
-#      residue 非空不代表結果無效，但代表這是一次混血量測，判讀要打折。
+# 因此本 job 做三件事，把這個弱點從「假設」變成「可量、且不靜默」：
+#   1. **封閉性探測**（`closure` step）—— 造一棵只留 overlay 集合的樹去編，
+#      問 Go 工具鏈而不是用 regex 猜。編得過 ⇒ 集合封閉；編不過 ⇒ 編譯器**自己
+#      點名**缺哪些符號。列舉錯了不再是靜默的失效。
+#   2. `overlay_helpers` 是輸入 —— 用不同範圍各跑一次，W/R 若變了，範圍就是
+#      有影響的，這件事從推測變成資料。
+#   3. residue（overlay 後仍有差異的其他測試檔）留在 artifact 供稽核，但
+#      **不整份貼進 summary**：首次 self-test 實測 44 個檔、真正被引用到的只有
+#      1 個（精確度 2.3%，比本檔在批評的 `workload_drift` 清單 1/20 還差）。
+#      summary 印的是封閉性判定，因為那才是「residue 重不重要」的答案。
 
 on:
   workflow_dispatch:
@@ -80,9 +86,9 @@ on:
         required: false
         default: '3s'
       overlay_helpers:
-        description: "除了 *bench_test.go 之外要一起 overlay 的測試檔（空白分隔，相對 app/）。留空 = 只覆蓋 bench 檔"
+        description: "除了 *bench_test.go 之外要一起 overlay 的測試檔（空白分隔，相對 app/）。預設是實測迭代出的閉包；留空 = 只覆蓋 bench 檔（會變成混血樹，封閉性探測會講）"
         required: false
-        default: 'config_test.go'
+        default: 'config_test.go config_debounce_test.go config_metrics_test.go watchloop_test.go'
       measure_implementation:
         description: "同時量 M/W（純實作效應）。關掉只量 W/R，時間減半"
         type: boolean
@@ -123,7 +129,7 @@ jobs:
       BENCH_RE: ${{ github.event_name == 'pull_request' && 'ResolveSilentModes_1000' || github.event.inputs.bench_re }}
       ROUNDS: ${{ github.event_name == 'pull_request' && '2' || github.event.inputs.rounds }}
       BENCHTIME: ${{ github.event_name == 'pull_request' && '100ms' || github.event.inputs.benchtime }}
-      OVERLAY_HELPERS: ${{ github.event_name == 'pull_request' && 'config_test.go' || github.event.inputs.overlay_helpers }}
+      OVERLAY_HELPERS: ${{ github.event_name == 'pull_request' && 'config_test.go config_debounce_test.go config_metrics_test.go watchloop_test.go' || github.event.inputs.overlay_helpers }}
       MEASURE_IMPL: ${{ github.event_name == 'pull_request' && 'false' || github.event.inputs.measure_implementation }}
     # 夜跑兩側 20 支實測 20m49s。本 job 預設只跑 2 支 bench，是分鐘級的。
     # ⚠️ 但最壞情況是「bench_re 放寬到全部 20 支 **且** 開 M/W」＝兩次完整
@@ -176,9 +182,16 @@ jobs:
         id: overlay
         run: |
           set -euo pipefail
+          mkdir -p .build
           cp -a .ref .refw
           MAIN_APP=components/threshold-exporter/app
           W_APP=.refw/components/threshold-exporter/app
+
+          # ⛔ 這份清單會被下游的「封閉性探測」再用一次。**寫下來給它讀**，
+          #    而不是讓它照著同一段邏輯再推導一次 —— 兩處各自推導同一個集合，
+          #    遲早會有一處先改而另一處沒跟上，那時 W 與被驗證的樹不是同一個
+          #    集合，而畫面上完全看不出來。
+          : > .build/overlay-files.txt
 
           # *bench_test.go 由 find 推導，不列舉 —— 新增/改名/刪除都自動跟上。
           ( cd "$W_APP" && find . -name '*bench_test.go' -type f -delete )
@@ -186,6 +199,7 @@ jobs:
           while IFS= read -r rel; do
             mkdir -p "$W_APP/$(dirname "$rel")"
             cp "$MAIN_APP/$rel" "$W_APP/$rel"
+            echo "$rel" >> .build/overlay-files.txt
             echo "  overlay(bench)  $rel"
             copied=$((copied + 1))
           done < <( cd "$MAIN_APP" && find . -name '*bench_test.go' -type f -print | sed 's|^\./||' | sort )
@@ -200,6 +214,7 @@ jobs:
             fi
             mkdir -p "$W_APP/$(dirname "$rel")"
             cp "$MAIN_APP/$rel" "$W_APP/$rel"
+            echo "$rel" >> .build/overlay-files.txt
             echo "  overlay(helper) $rel"
             copied=$((copied + 1))
           done
@@ -257,6 +272,91 @@ jobs:
             fi
           done
           echo "overlay tree builds (both packages)"
+
+      # ⛔ 為什麼有這一步：上面那份 residue 清單**自己也會飽和**。首次 self-test
+      # 實測 44 個檔，而真正被 overlay 過的檔引用到的只有 1 個（`watchloop_test.go`）
+      # —— 精確度 2.3%，比本 workflow 檔頭在批評的 `workload_drift` 清單（1/20）
+      # 還差。44 行每次都一樣就是壁紙，而壁紙不是揭露。
+      #
+      # 修法**不是**用 regex 去猜誰引用了誰（那是 parser 的雛形，本 repo 對這條路
+      # 的政策是停手找 engine）。這裡直接問 Go 工具鏈：造一棵「只留 overlay 集合」
+      # 的樹去編 ——
+      #   編得過  ⇒ overlay 集合**封閉**，residue 可證明與 benchmark 工作定義無關
+      #   編不過  ⇒ **編譯器自己點名**還缺哪些符號（實測輸出正好兩行：
+      #             `undefined: startWatchLoopWithFakeClock` / `undefined: waitFor`）
+      #
+      # 這同時把檔頭那個「列舉錯了會靜默」的弱點變成**不靜默**：overlay 集合哪天
+      # 不夠用，編譯器會講，不必等有人發現比值怪怪的。
+      #
+      # ⚠️ 反查定義檔用的 grep 是拿**編譯器給的名字**當鍵去查，不是拿樣式去猜誰是
+      #    helper —— 這兩件事差別很大。查不到就明講查不到（符號可能不是 func），
+      #    不假裝抽取是完整的；完整的地面真相一律是 closure.log 的逐字輸出。
+      - name: Verify the overlay set is closed (ask the toolchain, not a regex)
+        id: closure
+        run: |
+          set -uo pipefail
+          MAIN_APP=components/threshold-exporter/app
+          MIN_APP=.refmin/components/threshold-exporter/app
+          # app/ 是自足的 module（go.mod 就在裡面、無 replace），所以最小樹只複製
+          # 這個目錄就夠，不必再 cp -a 一份完整 checkout。
+          mkdir -p .refmin/components/threshold-exporter
+          cp -a .ref/components/threshold-exporter/app "$MIN_APP"
+
+          # 只留 overlay 集合。⛔ 清單讀 overlay step 寫下的那一份，不重新推導。
+          find "$MIN_APP" -name '*_test.go' -type f -delete
+          while IFS= read -r rel; do
+            [ -n "$rel" ] || continue
+            mkdir -p "$MIN_APP/$(dirname "$rel")"
+            cp "$MAIN_APP/$rel" "$MIN_APP/$rel"
+          done < .build/overlay-files.txt
+
+          : > .build/closure.log
+          closed=true
+          for pkg in "." "./pkg/config"; do
+            # ⛔ `-gcflags=-e` 關掉 Go 預設「印 10 個錯就 `too many errors` 截斷」
+            #    的行為。沒有它，一個被 overlay 集合大量使用的符號（實測 `SV` 一支
+            #    就吃掉 10 行）會把後面其他缺的符號全部擠掉，而報告會看起來像是
+            #    「只缺這一個」—— 一份被截斷的清單長得跟一份完整的清單一模一樣。
+            if ! ( cd "$MIN_APP" && go test -c -gcflags=-e -o /dev/null "$pkg" ) >> .build/closure.log 2>&1; then
+              closed=false
+            fi
+          done
+
+          {
+            if [ "$closed" = "true" ]; then
+              echo "✅ **overlay 集合封閉** —— 只留 overlay 過的測試檔仍然編得過，"
+              echo "代表 benchmark 的工作定義不依賴任何未被 overlay 的測試檔，"
+              echo "residue（$(wc -l < .build/residue.txt) 個檔）可證明與本次比值無關。"
+            else
+              echo "⚠️ **overlay 集合不封閉** —— 下列符號由 overlay 集合使用、但定義在集合之外。"
+              echo "定義檔若同時出現在 residue 裡（兩側有差異），\`W\` 就是一次**混血量測**："
+              echo
+              grep -oE 'undefined: [A-Za-z_][A-Za-z0-9_]*' .build/closure.log \
+                | sed 's/^undefined: //' | sort -u > .build/closure-symbols.txt
+              while IFS= read -r sym; do
+                [ -n "$sym" ] || continue
+                deffile=$( ( cd "$MAIN_APP" && grep -rlE "^(func|var|type|const) ${sym}[ (=]" --include='*_test.go' . ) \
+                           | sed 's|^\./||' | sort | head -n1 )
+                if [ -z "$deffile" ]; then
+                  echo "- \`${sym}\` —— **定義檔查不到**（可能不是 func/var/type/const，或跨行宣告）；看 \`closure.log\` 原文"
+                elif grep -qxF "$deffile" .build/residue.txt; then
+                  echo "- \`${sym}\` ← \`${deffile}\` —— ⚠️ **兩側有差異**（在 residue 裡）"
+                else
+                  echo "- \`${sym}\` ← \`${deffile}\` —— 兩側相同，本次不影響"
+                fi
+              done < .build/closure-symbols.txt
+              # ⛔ 抽取只認 `undefined:` 這一種形狀。其他形狀存在就要說出來，
+              #    否則上面那份清單會被讀成「這就是全部」。
+              err_lines=$( grep -cE '\.go:[0-9]+:[0-9]+: ' .build/closure.log || true )
+              undef_lines=$( grep -cE '\.go:[0-9]+:[0-9]+: undefined: ' .build/closure.log || true )
+              if [ "${err_lines:-0}" -gt "${undef_lines:-0}" ]; then
+                echo
+                echo "⚠️ closure.log 另有 $(( err_lines - undef_lines )) 行**不是** \`undefined:\` 形狀的錯誤 —— 上面的清單不完整，以 \`closure.log\` 為準。"
+              fi
+            fi
+          } > .build/closure-report.md
+          echo "closed=${closed}" >> "$GITHUB_OUTPUT"
+          cat .build/closure-report.md
 
       # ── 量測 1：W / R —— 純工作定義效應 ─────────────────────────────────
       # BASE=R、PR=W，兩側是同一份實作，唯一的差別是測試碼。
@@ -351,13 +451,15 @@ jobs:
             echo
             echo "- \`*bench_test.go\`：由 \`find\` 推導（含新增／刪除）"
             echo "- helper 檔（列舉）：\`${OVERLAY_HELPERS:-（無）}\`"
-            if [ -s .build/residue.txt ]; then
-              echo "- ⚠️ **Residue —— overlay 之後仍有差異的測試檔（$(wc -l < .build/residue.txt) 個）**。"
-              echo "  其中任何一個若定義了 benchmark 用得到的 helper，下面的 W/R 就是一次**混血量測**，"
-              echo "  不能讀成純工作定義效應："
-              sed 's|^|  - `|; s|$|`|' .build/residue.txt
+            echo
+            # ⛔ 這裡印的是**封閉性判定**，不是那份 residue 清單。首次 self-test
+            #    實測 residue 44 個檔、真正被引用到的 1 個 —— 精確度 2.3%，把它整份
+            #    貼進 summary 就是壁紙，而壁紙正是本 workflow 存在要修的那個病。
+            #    完整清單留在 artifact 的 residue.txt，這裡只講「它重不重要」。
+            if [ -f .build/closure-report.md ]; then
+              cat .build/closure-report.md
             else
-              echo "- ✅ Residue 為空：W 與 main 的測試碼在這兩個 package 內完全一致"
+              echo "⚠️ 封閉性未判定（該步驟未執行或失敗）—— 本次 overlay 的適用範圍**未經確認**，不是已確認乾淨。"
             fi
             echo
             for pair in "wr:W / R —— 工作定義效應" "mw:M / W —— 實作效應（drift-free）"; do
@@ -403,5 +505,9 @@ jobs:
             .build/mw/bench-pr.txt
             .build/mw/bench.err.log
             .build/residue.txt
+            .build/overlay-files.txt
+            .build/closure.log
+            .build/closure-symbols.txt
+            .build/closure-report.md
           retention-days: 90
           if-no-files-found: warn
