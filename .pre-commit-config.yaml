@@ -1260,14 +1260,18 @@ repos:
         language: python
         # jsonschema joins pyyaml for the #1443 schema witness (the same pairing
         # threshold-registry-check already carries). The gate imports it INSIDE
-        # the witness — ⛔ which buys exactly one thing, and an earlier wording
-        # here claimed two: `--help` still works without jsonschema, but NO face
-        # does, because every face is built by `_defaults_faces()` and that is
-        # what calls the witness (measured: `--help` rc=0, bare `--ci` rc=2 with
-        # jsonschema blocked). The narrow claim is the one that matters: the
-        # lazy import is why `check_threshold_registry.py` can keep importing
-        # this module at ITS top level without inheriting the dependency.
-        # A test pins this list against the module's own in-function imports.
+        # the witness — ⛔ which buys exactly one thing: `--help` still works
+        # without jsonschema, but no
+        # CHECK does, because `_defaults_faces()` calls the witness and every
+        # run goes through it (measured: `--help` rc=0, bare `--ci` rc=2 with
+        # jsonschema blocked). ⚠️ Not because `_defaults_faces()` builds every
+        # face — `run_check` also builds the declared and chart faces.
+        # The narrow claim is the one that matters: the lazy import is what
+        # keeps `--help` working in an environment without jsonschema.
+        # ⚠️ NOTHING PINS THIS LIST (repo grep: every mention is prose).
+        # Dropping `jsonschema` surfaces as a RuntimeError the first time the
+        # hook runs, not as a red test. Recorded in the disclosure block at the
+        # end of `tests/lint/test_check_threshold_reachability.py`.
         additional_dependencies: ['pyyaml', 'jsonschema']
         pass_filenames: false
         # Fires when the DEMAND side (a rule-pack alert's user_threshold), ANY

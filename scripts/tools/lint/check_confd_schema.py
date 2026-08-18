@@ -82,6 +82,11 @@ def defaults_doc_violations(rel: str, doc: object, platform_schema: dict,
     wearing this lint's authority, and would go on answering confidently after
     this one changed shape.
 
+    ⚠️ THAT IS A DESIGN INTENT, NOT AN ENFORCED ONE. No test asserts that the
+    caller uses this function rather than a private copy; the trade is recorded
+    in the disclosure block at the end of
+    `tests/lint/test_check_threshold_reachability.py`.
+
     `validator` is the jsonschema module, injected for the same reason as in
     `validate_dir`: the import stays lazy so `--help` works without it.
 

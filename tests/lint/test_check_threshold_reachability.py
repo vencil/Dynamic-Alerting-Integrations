@@ -1754,7 +1754,7 @@ def test_the_schema_witness_refuses_an_empty_input():
     """A check that validates nothing passes perfectly."""
     with pytest.raises(gate._GateViolation) as exc:
         gate._assert_defaults_artifacts_match_schema([])
-    assert "no conf.d defaults artifacts" in str(exc.value), exc.value
+    assert "no defaults artifacts" in str(exc.value), exc.value
 
     # …and a population that parses to nothing at all is the other half of it
     with pytest.raises(gate._GateViolation) as exc:
@@ -1900,41 +1900,279 @@ def test_the_witness_validates_artifacts_outside_conf_d_without_refusing_them():
     assert "mis-spelled" not in msg, msg
 
 
+_RENAME_HEADLINE = "MOST LIKELY: a `defaults:` section was mis-spelled"
+
+
+def test_the_rename_headline_is_bound_to_the_artifact_it_diagnoses(monkeypatch):
+    """The headline must come from a conf.d artifact's OWN violation.
+
+    ⛔ THE TWO-FILE CASE IS THE WHOLE POINT. The condition used to ask its two
+    halves of DIFFERENT populations — "is there any conf.d offender" over
+    `offenders`, and "does anything look like a rejected key" over ALL
+    `problems`. Every single-file case passes under both spellings, so a round
+    of single-file tests could not tell them apart; it took one unrelated
+    out-of-conf.d file to re-arm the headline for everybody.
+
+    Measured before the fix, and the reason this test exists: `{x/conf.d:
+    "state_filters: 5", tools/portal: "theme: dark"}` told the owner of
+    `x/conf.d` to "restore the section name" of a `defaults:` block that file
+    never lost — the exact false diagnosis this headline was made conditional
+    to stop.
+    """
+    # ⛔ ASK THE PREDICATE FIRST, and derive its input rather than quoting one.
+    # The headline is gated on `_REJECTED_TOP_LEVEL_KEY`, which matches
+    # jsonschema's WORDING. A library upgrade that rewords `additionalProperties`
+    # /`patternProperties` failures makes the GATE degrade to the ⚠️ branch — on
+    # purpose, and safely. Without this check the MUST-FIRE half below would be
+    # the thing that reddens, naming neither jsonschema nor the predicate, and
+    # its cheapest green is deleting the half that has teeth.
+    import json as _json
+
+    import jsonschema as _js
+    # ⛔ The literal path is here on purpose, and it is also an assertion. This
+    # test's subject is the schema, but it reaches it through
+    # `gate._PLATFORM_DEFAULTS_SCHEMA`, and `verify_diff.py`'s text map is built
+    # from literals — so without this line a schema-only edit does not select
+    # this test locally. (CI's Python leg is a catch-all and runs it regardless;
+    # what is bought is the fast feedback, on the one test whose whole job is to
+    # notice schema and library drift.)
+    assert gate._PLATFORM_DEFAULTS_SCHEMA.as_posix().endswith(
+        "docs/schemas/platform-defaults.schema.json"), gate._PLATFORM_DEFAULTS_SCHEMA
+    # ⛔ `syspath_prepend`, not a bare `sys.path.insert`: this is process
+    # GLOBAL state, and an unguarded insert leaves it behind for every later
+    # test in the session (the sibling probe higher up in this file at least
+    # guards with `not in sys.path`; this one did not). `scripts/tools/lint`
+    # holds a dozen `check_*` modules, so a stale entry is a shadowing hazard,
+    # not just untidiness.
+    monkeypatch.syspath_prepend(
+        str(gate.PROJECT_ROOT / "scripts" / "tools" / "lint"))
+    import check_confd_schema as _sibling
+    _real = _sibling.defaults_doc_violations(
+        "probe/conf.d/_defaults.yaml", {"defalts": {"cpu": 90}},
+        _json.loads(gate._PLATFORM_DEFAULTS_SCHEMA.read_text(encoding="utf-8")),
+        _js)
+    assert _real and any(gate._REJECTED_TOP_LEVEL_KEY(p) for p in _real), (
+        "jsonschema no longer words a rejected top-level key the way "
+        "`_REJECTED_TOP_LEVEL_KEY` matches it. The gate degrades safely — it "
+        "stops printing the MOST LIKELY headline — so the fix is to update the "
+        "predicate, NOT to relax anything below.", _real)
+    # ⛔ AND THE OTHER SPELLING, which today's schema can never produce: its one
+    # `additionalProperties: false` sits at the root and carries
+    # `patternProperties`, so jsonschema always says "regexes". Blind review
+    # measured the second disjunct silently deletable because of that. Probe it
+    # against a stripped copy so it is a branch that has been RUN, not one
+    # assumed to work the day a schema edit drops those prefixes.
+    _stripped = {k: v for k, v in _json.loads(
+        gate._PLATFORM_DEFAULTS_SCHEMA.read_text(encoding="utf-8")).items()
+        if k != "patternProperties"}
+    _alt = _sibling.defaults_doc_violations(
+        "probe/conf.d/_defaults.yaml", {"defalts": {"cpu": 90}}, _stripped, _js)
+    assert _alt and any(gate._REJECTED_TOP_LEVEL_KEY(p) for p in _alt), (
+        "the `Additional properties are not allowed` spelling is no longer "
+        "recognised. That is the wording jsonschema uses when the schema has no "
+        "`patternProperties`; keep the predicate able to read both.", _alt)
+
+    # MUST FIRE: the conf.d artifact's own violation IS a rejected top-level key
+    with pytest.raises(gate._GateViolation) as exc:
+        _witness({"x/conf.d/_defaults.yaml": "defalts:\n  cpu: 90\n"})
+    assert _RENAME_HEADLINE in str(exc.value), exc.value
+
+    # MUST NOT FIRE: this conf.d artifact's own fault is a VALUE SHAPE; the
+    # rejected key belongs to a different file, outside every conf.d tree
+    with pytest.raises(gate._GateViolation) as exc:
+        _witness({"x/conf.d/_defaults.yaml": "state_filters: 5\n",
+                  "tools/portal/_defaults.yaml": "theme: dark\n"})
+    msg = str(exc.value)
+    assert _RENAME_HEADLINE not in msg, msg
+    # …and neither real finding may be lost in the process
+    assert "state_filters" in msg, msg
+    assert "tools/portal/_defaults.yaml" in msg, msg
+
+
+def test_the_undiagnosed_branch_claims_nothing_about_keys_it_never_read():
+    """A file that fails to PARSE has no top-level keys to vouch for.
+
+    The wording this replaces said "every top-level key here is one this schema
+    accepts" — told to a maintainer whose YAML was broken, about a file where
+    not one top-level key had been looked at. Both disjuncts of that sentence
+    were false for this input: the file is inside a conf.d tree, and nothing
+    was parsed.
+    """
+    with pytest.raises(gate._GateViolation) as exc:
+        _witness({"bad/conf.d/_defaults.yaml": "defaults:\n  cpu: 90\n bad: [\n"})
+    msg = str(exc.value)
+    assert "cannot read/parse YAML" in msg, msg
+    # ⛔ …and the file is still COUNTED. Blind review deleted `offenders.add`
+    # from the parse arm and nothing noticed: the header then reads "across 0
+    # defaults artifact(s)", and an unparseable file outside conf.d loses its
+    # scope note, because `outside` is derived from that same set.
+    assert "across 1 defaults artifact" in msg, msg
+    assert _RENAME_HEADLINE not in msg, msg
+    # ⛔ NON-VACUITY: prove the ⚠️ branch is the one that was taken. Without it
+    # the two assertions above are satisfied by messages that never reach it.
+    assert "NOT diagnosed as a renamed" in msg, msg
+    # ⛔ The defect, pinned as the ABSENCE of the sentence that shipped. The
+    # property — "vouches for no key it never read" — has no positive form a
+    # test can check, and the first spelling here asserted the PRESENCE of
+    # today's wording instead: a pure re-wording of the branch reddened it, and
+    # the cheapest green was deleting this line. ⚠️ A differently worded
+    # universal claim would still pass. Disclosed, not covered.
+    assert "every top-level key here is one this schema accepts" not in msg, msg
+
+
+def test_the_call_site_hands_the_witness_the_tracked_scan_not_the_exempt_set(
+        monkeypatch):
+    """⛔ #1443's load-bearing property, and it is only visible at the CALL SITE.
+
+    An entry in `_DEFAULTS_ARTIFACT_EXEMPT` must not ALSO buy schema
+    invisibility — that would turn the one-line disarm this gate exists to
+    close into a two-line one. The exemption test further up drives the witness
+    DIRECTLY, so it cannot observe what `_defaults_faces()` chooses to pass.
+
+    Measured on the real tree: with one exempted, schema-INVALID artifact in a
+    non-shipped root, today's call site exits 1 and names the offender, while
+    an exempt-filtered one exits 0 with `✅ OK`. Nothing else in this module
+    distinguishes the two — swapping the call site kills this test and no other.
+
+    ⛔ ANTI-VACUITY: `_DEFAULTS_ARTIFACT_EXEMPT` is EMPTY today, so "what was
+    passed == the tracked scan" would hold whichever population the call site
+    used. The table is populated here so the two genuinely differ, and that
+    difference is asserted before the run rather than assumed.
+
+    ⚠️ THE PREMISE IS NARROW, AND THAT IS STRUCTURAL. The witness runs LAST, so
+    the exemption must not make any floor raise first — which means the victim
+    has to come from a root that still holds another artifact. Registering the
+    root as may-be-empty instead does NOT help: `_assert_every_root_contributes`
+    reads the `_DEFAULTS_CONFD_ROOTS` pin, and its own message says exempting a
+    root's last artifact lands there with no legal way out. Measured across all
+    12 roots: exactly ONE qualifies today — a non-shipped root holding four.
+    Shipped roots are excluded because their `min_artifacts` floor fires first.
+    """
+    tracked = gate._tracked_defaults_artifacts()
+    shipped = set(gate._SHIPPED_CONFD_ROOTS)
+    by_root: dict[str | None, list[str]] = {}
+    for rel in tracked:
+        by_root.setdefault(gate.conf_d_root(rel), []).append(rel)
+
+    candidates = sorted(
+        (root, rels[0]) for root, rels in by_root.items()
+        if root and root not in shipped and len(rels) > 1)
+    if not candidates:
+        pytest.fail(
+            "no non-shipped conf.d root holds more than one defaults artifact, "
+            "so this test can no longer build the state it checks. It is NOT "
+            "repairable by relaxing the assertions: the property is that an "
+            "artifact exemption cannot hide a file from the schema witness. "
+            "Re-express it against whatever shape the tree now has — do not "
+            "skip it, and do not delete it.")
+    victim_root, victim = candidates[0]
+
+    monkeypatch.setitem(gate._DEFAULTS_ARTIFACT_EXEMPT, victim, "pinned by this test")
+    filtered = {str(p.relative_to(gate.PROJECT_ROOT)).replace("\\", "/")
+                for p in gate._defaults_artifacts()}
+    assert victim not in filtered, (
+        "the exemption did not take, so the two populations are identical and "
+        "this test cannot tell the call site's two candidates apart", victim)
+
+    seen: list[list[str]] = []
+    real = gate._assert_defaults_artifacts_match_schema
+
+    def spy(rels, read=None):
+        seen.append(list(rels))
+        return real(rels, read)
+
+    monkeypatch.setattr(gate, "_assert_defaults_artifacts_match_schema", spy)
+    try:
+        gate._defaults_faces()
+    except gate._GateViolation as exc:
+        if not seen:
+            pytest.fail(
+                "a floor raised before the witness ran, so this run says "
+                f"NOTHING about the call site. Exempting {victim!r} was "
+                f"supposed to leave {victim_root!r} non-empty and every "
+                f"floor quiet; it did not: {exc}")
+
+    # ⚠️ This `except` also swallows the post-witness judged-count floor, which
+    # is the only code between the witness and the return. That floor is
+    # therefore invisible to this test BY CONSTRUCTION, not by oversight; its
+    # own gap is recorded in the disclosure block below.
+    assert seen, "the witness was never called and no floor raised — unreachable"
+    assert victim in seen[0], (
+        "the exempted artifact never reached the schema witness: an artifact "
+        "exemption now buys schema invisibility, which is the two-line disarm "
+        "#1443 exists to prevent", victim, len(seen[0]))
+
+
 # ── ⛔ WHAT THIS FILE DELIBERATELY STOPPED GUARDING (#1443, round 4) ─────────
 #
-# Six further controls stood here and were removed. Not because they were
-# wrong — each one killed a real mutation — but because every one of them was
-# measured to REDDEN on a legitimate edit, and four rounds of blind review
-# produced more defects in this machinery than in the 60 lines it guards. The
-# rule applied: a guard earns its place when its silent failure lets the
-# ORIGINAL defect back. These do not; CI runs the gate's real-tree tests
-# regardless of any of them.
+# NINE test functions stood here and were removed, and two were written in
+# their place. Not because they were wrong — each killed a real mutation — but
+# because every one was measured to REDDEN on a legitimate edit, and four
+# rounds of blind review produced more defects in this machinery than in the 60
+# lines it guards. The rule applied: a guard earns its place when its silent
+# failure lets the ORIGINAL defect back.
 #
-# What is no longer guarded, with the survival facts already measured:
-#   * the hook's `additional_dependencies` and `files:` filter — hoisting the
-#     two lazy imports to module level disarms both, and the local hook then
-#     stops firing on the sibling lint and on the schema. CI's `Python Tests`
-#     leg still runs the real-tree tests, so the defect does not return; only
-#     the local fast feedback does. (Killed M7/M8/M9 before removal; false-red
-#     on `import jsonschema.validators`, a behaviour-identical spelling.)
-#   * the call-site floor on the judged count, and the positive control on the
-#     default reader — both are subsumed by
-#     `test_the_schema_witness_is_silent_on_the_real_tree`, which compares the
-#     judged count against an INDEPENDENT recount of the same tree.
-#   * the AST assertion that the witness runs after the four floors. Running it
-#     first still catches the attack; what the order buys is message quality.
+# ⚠️ A disclosure that is wrong is worse than none — it is read as a
+# measurement. Every line below names how it was measured.
+#
+# What is no longer guarded, with the survival facts measured:
+#   * the hook's `additional_dependencies` — nothing asserts this list (repo
+#     grep: the only mentions are prose). Dropping `jsonschema` surfaces as a
+#     RuntimeError the first time the hook runs, not as a red test.
+#   * that `jsonschema` and `check_confd_schema` stay LAZY, in-function imports.
+#     Hoisting either to module level is invisible to this module, and it is
+#     what keeps `--help` working in an environment with no jsonschema.
+#   * the `files:` filter's `check_confd_schema.py` entry — hand-added, because
+#     the gate reaches that sibling by `import` and the filter test derives its
+#     inputs from imports, path constants and the pack roster within
+#     `search_dirs`, which has no `scripts/tools/lint` entry (#1413).
+#     ⚠️ NOT the schema JSON, which is still covered. Measured — deleting
+#     `docs/schemas/platform-defaults\.schema\.json` from `files:` reddens
+#     `test_precommit_filter_covers_every_input_this_gate_reads`, naming that
+#     exact path, because `_PLATFORM_DEFAULTS_SCHEMA` is a module-level `Path`
+#     and that test derives from every such constant. Overstating a gap costs
+#     the next reader a guard they already have.
+#   * the call-site floor on the judged count. Measured: deleting those eight
+#     lines leaves this module green. The DEFAULT READER half is genuinely
+#     subsumed — stubbing the reader makes
+#     `test_the_schema_witness_is_silent_on_the_real_tree` fail on its
+#     independent recount (17 vs 16) — but the floor itself is not; the two
+#     were disclosed as one item and only one of them was true.
+#   * the AST assertion that the witness runs after the four floors. Measured
+#     by reordering: running it first still catches the attack; what the order
+#     buys is message quality.
 #   * the assertion that the gate calls the sibling's judgement rather than a
-#     private copy.
-#   * `test_the_schema_witness_is_handed_the_tracked_scan_not_the_read_set` —
-#     subsumed by the exemption test above, which maxes out BOTH tables.
+#     private copy. Measured: substituting an inline copy of
+#     `defaults_doc_violations` into this gate leaves BOTH modules at baseline
+#     — 125 passed/3 errors here, 36 passed there. ⚠️ `check_confd_schema.py`'s
+#     own docstring still calls that single implementation "the point"; that
+#     sentence is enforced by nothing, and it is the sibling's to reword.
 #   * the derived silent/caught partition — its two set assertions were true by
 #     construction, and the pin above is what actually held.
+#   * part of #1434's reopen trigger (`no tracked artifact has a `None` conf.d
+#     root`). `tests/ops/test_guard_defaults_scopes.py` still asserts it for
+#     files named exactly `_defaults.yaml`, which is 16 of the 17 tracked
+#     artifacts; what nothing observes is this gate's deliberate `_defaults*`
+#     PREFIX widening — a `_defaults-multidb.yaml`-shaped name outside every
+#     conf.d tree. The replacement test asserts such a file is validated and
+#     stays silent when it is schema-clean, which is intended.
 #
-# ⚠️ Also unguarded, and named because "we caught the file-naming bug" reads
-# like the class is closed: the `except Exception` around the read (added for
-# non-UTF-8 artifacts) and the `TypeError` re-raise predicate both survive
-# being reverted. Writing those tests needs a tmp tree; the trade was made
-# knowingly, not overlooked.
+# ⛔ STILL GUARDED, and deliberately: that the CALL SITE hands the witness the
+# TRACKED scan rather than the exempt-filtered one. Measured on the real tree
+# with one exempted, schema-INVALID artifact in a non-shipped root — rc=1
+# naming the offender as it stands, rc=0 `✅ OK` with the exempt-filtered
+# population. Nothing else in this module tells the two apart: with the
+# exemption alone the failure set is the same either way (2 failures, unrelated
+# to it). Its silent failure brings the original defect back, so it earns its
+# place: `test_the_call_site_hands_the_witness_the_tracked_scan_not_the_exempt_set`.
+#
+# ⚠️ Also unguarded: the `TypeError` re-raise predicate, and the WIDENING of
+# the read's `except` from `(OSError, yaml.YAMLError)` to `Exception`. Measured:
+# reverting to the narrow pair leaves every test green, because the only test
+# that reaches that arm feeds a YAML syntax error through the reader seam and
+# never decodes bytes — and `Exception` is there for `UnicodeDecodeError` on a
+# non-UTF-8 artifact. Narrowing further, to bare `OSError`, IS caught. So the
+# arm has a floor but not a ceiling.
 #
 # ⚠️ And one shape of OVER-reporting: a witness that invents a violation on a
 # legal top-level key is caught only for the keys today's tree actually uses.
