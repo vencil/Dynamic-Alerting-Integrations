@@ -29,9 +29,19 @@ name: Bench Workload Effect (on-demand triage)
 # 判讀：`MergePartialConfigs_1000` 的 W/R 若也在 +7~9%，那 +7~9% 是改名不是
 # 退化；若 W/R ≈ 0 而 M/W 仍是 +7~9%，那是真的。
 #
-# ⛔ 內建對照：把本 job 的兩個比值相乘，應該對得上當夜 `bench-paired.json`
-#    的 M/R。對不上就是本 job 的前提有問題，別採信結果 —— 這條檢查是刻意的，
-#    一個沒有對照的量測不是量測。
+# ⛔ 判讀前要做兩個對照，**兩個都是人工的** —— 本 workflow 不會自動比對，也不會
+#    因為對不上而轉紅：
+#      (a) canary（兩側同一個執行檔，真值恆為 1.000）—— 數字一定會被量到並寫進
+#          輸出，但「它夠不夠接近 0%」要人看。
+#      (b) 把本 job 的兩個比值相乘，應該對得上當夜 `bench-paired.json` 的 M/R。
+#          本 job **不讀**夜跑的 artifact，這一條純粹是給人的對帳指引。
+#    對不上就是本 job 的前提有問題，別採信結果 —— 一個沒有對照的量測不是量測。
+#
+#    ⚠️ 這段原本寫成「內建對照」，是 PR #1467 的 review 指出的過度宣稱：workflow
+#    既沒下載夜跑 artifact、也沒做任何比較。**沒有實作的檢查被描述成內建，比沒有
+#    這個檢查更糟** —— 讀的人會以為已經有人（或有機器）把關過了。
+#    ⛔ 不改成「真的去實作它」，是因為 (b) 帶著一個合法差異項（夜跑的 M 是那一夜
+#    的 main HEAD、本 job 的 M 是現在），機械化的 fail-loud 比較會產出假失敗。
 #
 # ⛔ 這是診斷工具，不是判定器：不開票、不關票、不寫任何跨次執行的狀態，
 #    也不改夜跑。ADR-032 §工作定義漂移 的決定仍然是「揭露、不介入」。
@@ -217,16 +227,47 @@ jobs:
             copied=$((copied + 1))
           done < <( cd "$MAIN_APP" && find . -name '*bench_test.go' -type f -print | sed 's|^\./||' | sort )
 
-          # helper 檔是列舉（見檔頭的弱點說明）。⛔ 指定了卻不存在要當錯誤，
-          # 不能默默跳過：一個打錯字的檔名會讓 overlay 悄悄縮水，而縮水後的
-          # W 是混血樹，畫面上與正確的 W 完全一樣。
-          for rel in ${OVERLAY_HELPERS:-}; do
+          # helper 檔是列舉（見檔頭的弱點說明），所以它的**輸入**要擋三種東西，
+          # 每一種擋的是不同的失效：
+          #   ⛔ 形狀 —— 必須是 `*_test.go`。這**不是**安全檢查，是**正確性**檢查：
+          #      overlay 一個產品檔會讓 W 同時帶進 main 的實作，於是 W/R 不再是
+          #      「同一份實作、只有測試碼不同」，比值的意義整個換掉而畫面上看不
+          #      出來。⚠️ 這一格是下游那個封閉性探測**抓不到**的 —— overlay 一個
+          #      產品 `.go` 檔照樣編得過。（PR #1467 review 指出，實測確認。）
+          #   ⛔ 位置 —— 正規化之後必須落在 `MAIN_APP` 底下。用 `realpath` 問檔案
+          #      系統，**不列舉** `../` / `//` / 絕對路徑那些寫法：列舉語法永遠會
+          #      少一種，而且少的那一種是靜默通過。
+          #   ⛔ 存在 —— 指定了卻不存在要當錯誤，不能默默跳過：一個打錯字的檔名會
+          #      讓 overlay 悄悄縮水，而縮水後的 W 是混血樹，看起來與正確的一樣。
+          MAIN_ABS=$( realpath -e "$MAIN_APP" )
+          # ⛔ `set -f` 之後才做斷詞：不關 glob 的話 `*` 會對**當前目錄**展開，展開
+          #    結果與使用者想指定的東西無關，而且是靜默的。用 `set --` 把斷詞結果
+          #    固定成位置參數，再把 glob 開回來，迴圈本體就不必在關閉 glob 下跑。
+          set -f
+          set -- ${OVERLAY_HELPERS:-}
+          set +f
+          for rel in "$@"; do
+            case "$rel" in
+              *_test.go) ;;
+              *)
+                echo "::error::overlay_helpers entry must name a *_test.go file — overlaying a non-test file would put main's implementation into W and silently change what W/R measures: $rel"
+                exit 1
+                ;;
+            esac
             if [ ! -f "$MAIN_APP/$rel" ]; then
               echo "::error::overlay_helpers names '$rel' but main has no such file under $MAIN_APP"
               exit 1
             fi
+            src=$( realpath -e "$MAIN_APP/$rel" )
+            case "$src" in
+              "$MAIN_ABS"/*) ;;
+              *)
+                echo "::error::overlay_helpers entry resolves outside $MAIN_APP (path traversal or symlink): $rel -> $src"
+                exit 1
+                ;;
+            esac
             mkdir -p "$W_APP/$(dirname "$rel")"
-            cp "$MAIN_APP/$rel" "$W_APP/$rel"
+            cp "$src" "$W_APP/$rel"
             echo "$rel" >> .build/overlay-files.txt
             echo "  overlay(helper) $rel"
             copied=$((copied + 1))
@@ -490,7 +531,10 @@ jobs:
             done
             echo "---"
             echo
-            echo "### 讀數字之前先做這兩個對照"
+            echo "### 讀數字之前先做這兩個對照（⚠️ 兩個都要**人工**做）"
+            echo
+            echo "⛔ 本 workflow **不會**自動比對這兩項、也不會因為對不上而轉紅。它不讀夜跑的"
+            echo "\`bench-paired.json\`，下面第 2 點純粹是給人的對帳指引。"
             echo
             echo "1. **對照測試（canary）**。\`bench_interleave.sh\` 把**同一個** canary 執行檔跑進兩側，"
             echo "   所以 \`BenchmarkControlCanaryCPU\` / \`ControlCanarySleep\` 的真值恆為 1.000。"
