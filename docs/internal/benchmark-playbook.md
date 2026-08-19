@@ -281,7 +281,7 @@ gh workflow run bench-workload-effect.yaml --repo vencil/Dynamic-Alerting-Integr
 
 守衛是**封閉性探測**——造一棵「只留 overlay 集合」的樹去 `go test -c -gcflags=-e`，**問 Go 工具鏈而不是用 regex 猜誰引用了誰**：
 
-- 編得過 ⇒ overlay 集合**封閉**，benchmark 的工作定義不依賴任何未被 overlay 的測試檔，residue 可證明無關；
+- 編得過 ⇒ overlay 集合達成**編譯期封閉**（compile closure），即沒有未滿足的靜態相依。⚠️ **這不等於執行期隔離**：residue 的測試檔仍會被編進 `W` 的測試執行檔、package 層級初始化照常執行（本 repo 實測 residue 內有 `promParser` / `aliasTestNow` / `fileHeaderRe` 等 package 層級 var），而本探測**沒有**檢查那些初始化的副作用。所以正確的讀法是「residue 與比值無關**未經證明**」，不是「已證明無關」；
 - 編不過 ⇒ **編譯器自己點名**缺哪些符號，報告再用那個名字反查定義檔、並標出它在不在 residue 裡（＝兩側是否有差異）。
 
 `-gcflags=-e` 是必要的：Go 預設印 10 個錯就 `too many errors` 截斷，實測 `SV` 一支就吃掉 10 行、把 `SVScheduled` 整個藏掉——**一份被截斷的清單長得跟一份完整的清單一模一樣**。

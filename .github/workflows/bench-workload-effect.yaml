@@ -335,7 +335,12 @@ jobs:
       # 修法**不是**用 regex 去猜誰引用了誰（那是 parser 的雛形，本 repo 對這條路
       # 的政策是停手找 engine）。這裡直接問 Go 工具鏈：造一棵「只留 overlay 集合」
       # 的樹去編 ——
-      #   編得過  ⇒ overlay 集合**封閉**，residue 可證明與 benchmark 工作定義無關
+      #   編得過  ⇒ overlay 集合達成**編譯期封閉**（compile closure）
+      #             ⚠️ 這**不等於**執行期隔離。residue 的測試檔仍然會被編進 `W` 的
+      #             測試執行檔，它們的 package 層級初始化照樣會跑（實測 residue 內
+      #             有 `promParser` / `aliasTestNow` / `fileHeaderRe` 三個 package
+      #             層級 var）。所以正確的說法是「沒有未滿足的靜態相依」，**不是**
+      #             「residue 可證明與比值無關」。（PR #1467 review 指出。）
       #   編不過  ⇒ **編譯器自己點名**還缺哪些符號（實測輸出正好兩行：
       #             `undefined: startWatchLoopWithFakeClock` / `undefined: waitFor`）
       #
@@ -378,9 +383,14 @@ jobs:
 
           {
             if [ "$closed" = "true" ]; then
-              echo "✅ **overlay 集合封閉** —— 只留 overlay 過的測試檔仍然編得過，"
-              echo "代表 benchmark 的工作定義不依賴任何未被 overlay 的測試檔，"
-              echo "residue（$(wc -l < .build/residue.txt) 個檔）可證明與本次比值無關。"
+              echo "✅ **編譯期封閉（compile closure）** —— 只留 overlay 過的測試檔仍然編得過，"
+              echo "代表 overlay 集合**沒有未滿足的靜態相依**。"
+              echo
+              echo "⚠️ **這不等於執行期隔離，而且 residue 不是空的（$(wc -l < .build/residue.txt) 個檔）。**"
+              echo "residue 的測試檔仍會被編進 \`W\` 的測試執行檔，它們的 package 層級初始化照常執行"
+              echo "（本 repo 實測存在 \`promParser\` / \`aliasTestNow\` / \`fileHeaderRe\` 等 package 層級 var）。"
+              echo "本探測**沒有**檢查那些初始化的副作用，所以「residue 與比值無關」是**未經證明**的，"
+              echo "不是已證明為真。"
             else
               echo "⚠️ **overlay 集合不封閉** —— 下列符號由 overlay 集合使用、但定義在集合之外。"
               echo "定義檔若同時出現在 residue 裡（兩側有差異），\`W\` 就是一次**混血量測**："
