@@ -423,7 +423,7 @@ def test_the_gate_states_the_scope_it_does_not_cover():
     `OPS_DIR` is the single directory `collect_dry_run_tools()` walks, so a
     tool that lives anywhere else has never been checked — no failure, no
     skip, no mention. Measured while auditing `bump_docs.py` (#1407): removing
-    ALL FOUR of its `and not dry_run` write guards leaves this file 23/23
+    ALL FOUR of its `and not dry_run` write guards leaves this file 24/24
     green, because `bump_docs.py` is in `scripts/tools/dx/`. That is the tool
     whose dry run would otherwise rewrite ~340 tracked files.
 

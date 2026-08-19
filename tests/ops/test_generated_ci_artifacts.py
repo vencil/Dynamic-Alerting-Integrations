@@ -202,18 +202,13 @@ WHAT THIS GUARD DOES **NOT** BUY
   wizard's preview generator, and worse (it passes ``--old-dir`` a path it
   never mounts); that divergence is #1351, and this change widens it.
 
-  ⚠️ **The GitLab half is broken too, and for a THIRD reason** — an earlier
-  version of this paragraph said it "relies on the same base commit being
-  present and does not pin a depth either", which is true and is NOT the
-  operative cause. That job runs ``git archive $CI_MERGE_REQUEST_DIFF_BASE_SHA``
-  inside ``image: $DA_TOOLS_IMAGE``, and **that image has no git**:
-  ``components/da-tools/app/Dockerfile`` is ``FROM python:3.13.13-alpine3.22``
-  and only ever runs ``apk --no-cache upgrade`` — it never installs one.
-  So the command is ``git: not found``, ``2>/dev/null || true`` swallows it, and
-  ``.output/base/conf.d`` stays empty on every merge request. No fetch-depth
-  change would help; the fix is a git in the image or a different way to fetch
-  the baseline. Correcting this matters because the wrong cause is the sentence
-  a future reader would have acted on.
+  ⛔ This header deliberately does NOT restate what the GitLab leg's
+  ``script:`` contains. It used to, and each time that body changed the prose
+  here was left behind describing a job that no longer exists in that shape —
+  a defect class no regex can guard, because the carrier is English. The single
+  source for that leg's body is
+  ``test_generate_stage_body_is_pinned_on_both_legs``, which asserts against the
+  generated artifact; read it there.
 
   The PORTAL preview has its own, worse instance of the same class, also not
   fixed here: its "Compute blast radius" step mounts only ``conf.d`` yet passes
@@ -243,9 +238,8 @@ WHAT THIS GUARD DOES **NOT** BUY
   went stale a second way: the GitHub base-config step used to spell
   ``conf.d`` literally in ``git show``/``git archive``, and no longer does —
   that step now reads ``$CONFIG_DIR`` throughout, and ``git show`` is not in
-  it at all. The GitLab leg still hardcodes the directory in its ``mkdir`` and
-  its ``--old-dir``, so the boundary holds, but anyone grepping for the
-  command named here would not find it. So a customer
+  it at all. ⛔ The boundary itself is unchanged and is asserted from the
+  artifact, not from this paragraph. So a customer
   who sets ``CONFIG_DIR: configs`` gets tools reading the right directory while
   the trigger filters match none of their files. The knob-reachability assertion
   above answers "is it read AT ALL", which this satisfies; it cannot answer "is
@@ -3928,10 +3922,17 @@ def test_dry_run_does_not_warn_about_a_correctly_wired_subdirectory(
         "generated path filters are still repo-root-relative. Wired is not "
         "done: the pipeline loads, creates no jobs, and stays green having "
         f"validated nothing (#1357's shape from the wired branch).\n{out}")
-    remaining = "prefix" if lang == "en" else "前綴"
-    assert remaining in out, (
-        "the warning does not name the work that is actually left — adding "
-        f"the subdirectory prefix to the generated paths.\n{out}")
+    # ⛔ Deliberately NOT re-pinning the wording here. This file used to also
+    # assert the literal "prefix"/"前綴", which made ONE prose rewrite cost
+    # three reds across two files — and the three messages contradicted each
+    # other and the output ("the step was not printed" when it was). The
+    # wording is pinned in exactly one place,
+    # `test_init_project.py::_DRYRUN_WIRED_MARKERS`, whose companion
+    # `test_the_summary_phrases_still_exist_in_the_tool` turns a rename into a
+    # single red that says which constant to update. What THIS test owns is
+    # the property the other file cannot see: that the wired leg does not
+    # borrow the UNWIRED leg's message (asserted above) while still saying
+    # something.
 
 
 @pytest.mark.parametrize("lang", sorted(_DRYRUN_MARKERS))
@@ -4164,10 +4165,13 @@ def test_generate_stage_body_is_pinned_on_both_legs(generated, ci, deploy) -> No
 
     ⚠️ Do NOT describe this leg as "still invoking config-diff" or as
     carrying a live defect — it emits no such job at all. The ninth blind
-    review found four copies of that stale claim in this module's header,
-    written before the removal and left behind by it; the shipped artifact has
-    three jobs (`validate-config`, `lint-custom-rules`, `apply`) and none of
-    them calls `config-diff`.
+    review has repeatedly found stale copies of that claim in this module's
+    header, written before the removal and left behind by it. ⛔ No count is
+    stated here on purpose: giving one invites the "I fixed the cited
+    instances" reading that let the later copies survive twice. The shipped
+    artifact has three jobs (`validate-config`, `lint-custom-rules`, `apply`)
+    and none of them calls `config-diff` — assert against the artifact, never
+    against this prose.
     """
     root = generated[(ci, deploy)]
 

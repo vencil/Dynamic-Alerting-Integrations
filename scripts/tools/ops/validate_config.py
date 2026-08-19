@@ -495,9 +495,18 @@ def check_versions() -> dict[str, object]:
         # Before the `dx/` path fix this never surfaced — the wrong path made
         # the child print pure-ASCII "can't open file", which any codec
         # decodes. Fixing the path is what made the latent half reachable.
+        # ⛔ Not 15s. `bump_docs --check` now reads ~400 tracked files (#1407
+        # repointed the JSX front-matter glob at `tools/portal/**`), and this
+        # host measures min 3.9 / median 11.2 / max 21.8 seconds across six
+        # runs — i.e. the old bound sat INSIDE the normal distribution and
+        # turned an ordinary slow run into `[FAIL] versions: Version check
+        # timed out`, which the caller cannot distinguish from real drift. A
+        # timeout is a hang detector, not a performance budget; it belongs far
+        # above the working range. Re-measure if the tracked-file set grows
+        # again.
         result = subprocess.run(cmd, capture_output=True, text=True,
                                 encoding="utf-8", errors="replace",
-                                timeout=15)
+                                timeout=120)
         output = (result.stdout + result.stderr).strip()
         lines = [l for l in output.split("\n") if l.strip()] if output else []
 

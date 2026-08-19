@@ -2045,9 +2045,15 @@ TRACED_INDIRECT_INPUTS = {
     # deleting a line is as fatal as adding one.
     ("docs-ci.yaml", "docs", "scripts/tools/lint/mkdocs-anchor-debt.txt"),
     ("docs-ci.yaml", "docs", "components/threshold-exporter/README.md"),
-    # version-check: bump_docs.py's version and count sources. CHANGELOG.md is
-    # deliberately ABSENT — the trace shows it reads docs/CHANGELOG.md, and
-    # adding the root one would drag nearly every PR into three required checks.
+    # version-check: bump_docs.py's version and count sources.
+    # ⛔ CHANGELOG.md USED to be deliberately absent here, on the grounds that
+    # the trace only shows `docs/CHANGELOG.md` and adding the root one would
+    # drag nearly every PR into three required checks. That reasoning was
+    # RETRACTED: `docs/CHANGELOG.md` is a symlink to the root file, so on any
+    # checkout that resolves it the two are the same content, and the widened
+    # trigger is now deliberate (see the note beside the entry in
+    # validate.yaml). The entry is present there on purpose — do not "restore
+    # consistency" by deleting it.
     ("validate.yaml", "validate", "README.md"),
     ("validate.yaml", "validate", "README.en.md"),
     ("validate.yaml", "validate", "CLAUDE.md"),
@@ -3426,15 +3432,36 @@ def test_the_version_check_filter_covers_the_trees_bump_docs_now_reads():
     每一道閘門都報綠。
     """
     import fnmatch
-    import re as _re
     from pathlib import Path as _P
 
-    wf = (_P(__file__).resolve().parents[2]
-          / ".github" / "workflows" / "validate.yaml").read_text(
-        encoding="utf-8")
-    m = _re.search(r"\n\s+validate:\n((?:\s+- .*\n|\s+#.*\n)+)", wf)
-    assert m, "could not locate the validate path-filter block"
-    pats = _re.findall(r'- "([^"]+)"', m.group(1))
+    # ⛔ Parse the filter as YAML, not by matching quote characters. The
+    # previous form was `re.findall(r'- "([^"]+)"', ...)`, which silently sees
+    # only DOUBLE-quoted entries: rewriting one to `- 'tools/portal/**'` —
+    # valid YAML, and the spelling this repo's own `backtest.yaml` /
+    # `bench-attrib-main.yaml` already use, with no yamllint anywhere to
+    # prefer either — dropped it from `pats` and failed here with a message
+    # claiming the entry was missing from the workflow while it sat right
+    # there. A guard whose failure mode is "someone deleted the filter entry"
+    # must not fire on a quote style; derive the value, do not pattern-match
+    # its syntax.
+    wf_path = (_P(__file__).resolve().parents[2]
+               / ".github" / "workflows" / "validate.yaml")
+    doc = yaml.safe_load(wf_path.read_text(encoding="utf-8"))
+    filters = None
+    for job in (doc.get("jobs") or {}).values():
+        for step in (job.get("steps") or []):
+            raw = (step.get("with") or {}).get("filters")
+            if raw and "validate:" in str(raw):
+                filters = yaml.safe_load(str(raw))
+                break
+        if filters:
+            break
+    assert filters and "validate" in filters, (
+        "could not locate the `validate` path-filter block in "
+        f"{wf_path.name} — the detect-changes step's `filters:` input is the "
+        "source of truth for this test")
+    pats = [p for p in filters["validate"] if isinstance(p, str)]
+    assert pats, "the validate filter parsed to an empty pattern list"
 
     def covered(path: str) -> bool:
         return any(fnmatch.fnmatch(path, p)

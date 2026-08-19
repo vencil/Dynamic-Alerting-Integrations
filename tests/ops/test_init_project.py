@@ -22,6 +22,66 @@ import init_project as ip  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# 摘要／dry-run 訊息的片語：**單一來源**
+# ═══════════════════════════════════════════════════════════════════════════
+# ⛔ 這些片語原本被硬寫在四個斷言裡、橫跨兩個檔案。後果不是「不夠嚴謹」，是
+# 兩件具體的事：
+#   (1) 一次純文案改寫（把 `Not done yet` 換成 `One more step`，語意零變化）
+#       要改四處字面值，而三條測試各自報出**互相矛盾的**訊息——其中兩條宣稱
+#       「步驟沒有印出來」／「必須說明 pipeline 會被載入」，而輸出逐字做到了
+#       那兩件事。最便宜的轉綠方式因此是把文案改回去，也就是撤銷正當改動。
+#   (2) 反過來，若有人重新命名片語而沒動測試，`promises` 這一側會**永遠為
+#       False**，結構斷言 `not (pending and promises)` 就恆真、靜默失效——而
+#       它守的正是「工具同時說『還沒完』與『會自動驗證』」那個客戶面缺陷。
+# 所以片語集中在這裡，並由 `test_the_summary_phrases_still_exist_in_the_tool`
+# 直接對產品碼求證：改文案 ⇒ **一條**紅、訊息就是「片語搬家了，改這裡」。
+_PENDING_MARKERS = ('Not done yet', 'NOT wired')
+_AUTOVALIDATE_MARKER = 'will automatically validate'
+_DRYRUN_WIRED_MARKERS = ('IS loaded', 'prefix')
+
+
+@pytest.fixture(autouse=True)
+def _pin_cli_language(monkeypatch):
+    """⛔ 把 `_LANG` 釘成 `'en'`，讓本檔不再依賴主機的 `LANG` 環境變數。
+
+    `init_project._LANG` 是**匯入時**由 `detect_cli_lang()` 求值的模組全域，
+    而那個函式讀的是 `os.environ['LANG']`（預設 `en_US.UTF-8`）。本檔有大量
+    測試斷言**英文**輸出，於是：
+
+        LANG 未設 / en_*  → 343 passed
+        LANG=zh_TW.UTF-8  → **8 failed**（同一顆 commit、同一份程式碼）
+
+    也就是說任何中文 locale 的開發者跑這個檔案都會看到 8 條紅，而 Linux CI
+    的 `LANG` 解析成 en 所以全綠——「只在開發機紅、CI 看不見」的那一類，
+    與本分支修掉的 `encoding=` 是同一族。⚠️ 這不是把測試改寬鬆：語系是這些
+    斷言的**前提**，前提本來就該由測試自己決定，而不是由跑測試的人的環境
+    決定。需要中文的測試在 body 內自行 `monkeypatch.setattr(ip, '_LANG',
+    'zh')`（fixture 先跑，body 的設定會覆蓋它）。
+    """
+    monkeypatch.setattr(ip, '_LANG', 'en')
+
+
+def test_the_summary_phrases_still_exist_in_the_tool():
+    """⛔ 片語重新命名必須是**一條**明確的紅，不是靜默失效。
+
+    上面那組常數是好幾條斷言的判定依據。若產品碼把其中任何一句改寫而這裡
+    沒跟上，那些斷言不會紅——它們只會停止偵測。這條測試把「片語還在不在」
+    變成一個直接、可讀的問題。
+    """
+    from pathlib import Path as _P
+    src = _P(ip.__file__).read_text(encoding='utf-8')
+    missing = [p for p in
+               (*_PENDING_MARKERS, _AUTOVALIDATE_MARKER, *_DRYRUN_WIRED_MARKERS)
+               if p not in src]
+    assert not missing, (
+        f'這些片語已經不在 {_P(ip.__file__).name} 裡了：{missing}。\n'
+        '若是刻意改寫文案，請同步更新本檔頂端的 _PENDING_MARKERS / '
+        '_AUTOVALIDATE_MARKER / _DRYRUN_WIRED_MARKERS——那是唯一要改的地方。\n'
+        '⛔ 不要改成放寬斷言：這幾個片語是「摘要有沒有自相矛盾」的判定依據，'
+        '對不上就等於那道守衛停止偵測而不會有人知道。')
+
+
 def _symlinks_usable(tmp) -> bool:
     """這台機器建得出 symlink 嗎？（Windows 未開發者模式：不行。）
 
@@ -3957,9 +4017,16 @@ class TestTheCliLayerItself:
 
     def _run(self, tmpdir, *args):
         import subprocess
+        # ⛔ 語系要傳給**子行程**。`_pin_cli_language` 那個 autouse fixture 釘
+        # 的是本行程匯入的 `ip._LANG`，對這裡 spawn 出去的 python 毫無作用
+        # ——子行程自己重新 import、重新讀 `os.environ['LANG']`。於是在
+        # `LANG=zh_TW.UTF-8` 的開發機上，斷言英文訊息的那些測試照樣紅。
+        env = dict(os.environ, LANG='en_US.UTF-8')
+        env.pop('DA_LANG', None)
         return subprocess.run(
             [sys.executable, str(self._SCRIPT), '-o', str(tmpdir), *args],
-            capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=300)
+            capture_output=True, text=True, encoding='utf-8',
+            errors='replace', timeout=300, env=env)
 
     def _files(self, tmpdir):
         from pathlib import Path as _P
@@ -4390,10 +4457,12 @@ class TestTheDryRunLegsThatNoTestReaches:
             f'為基準，那是 #1357 的結局，只是從 wired 分支抵達。\n{out}')
         assert 'GitHub Actions' not in out, (
             f'`--ci gitlab` 不得提到 GitHub——那是姊妹測試的鑑別詞。\n{out}')
-        assert 'IS loaded' in out, (
-            f'必須說明 pipeline 會被載入（而不是沿用「不會被載入」）。\n{out}')
-        assert 'prefix' in out, (
-            f'必須指出真正還沒做的事：內容路徑要補子目錄前綴。\n{out}')
+        for _m in _DRYRUN_WIRED_MARKERS:
+            assert _m in out, (
+                f'已 wired 的子目錄 dry-run 缺少 {_m!r}：它必須說明 pipeline '
+                f'會被載入、且內容路徑仍要補子目錄前綴。若這是刻意改寫文案，'
+                f'改本檔頂端的 _DRYRUN_WIRED_MARKERS（唯一要改的地方）。'
+                f'\n{out}')
 
     def test_a_root_that_already_includes_us_is_not_told_to_wire_it(self):
         """⛔ `status not in (CREATE, ALREADY_WIRED)` → `status != CREATE`
@@ -4530,8 +4599,8 @@ class TestTheSummaryDoesNotContradictItself:
             out = self._summary_in_subdir(
                 tmpdir, ci, deploy,
                 root_body=self._WIRED_ROOT if wired else None)
-        pending = ('Not done yet' in out) or ('NOT wired' in out)
-        promises = 'will automatically validate' in out
+        pending = any(m in out for m in _PENDING_MARKERS)
+        promises = _AUTOVALIDATE_MARKER in out
         assert not (pending and promises), (
             f'{ci}/{deploy}/wired={wired}: 訊息自己打自己——既列出未完成的'
             f'步驟，又承諾 CI 會自動驗證。\n{out}')
@@ -4545,9 +4614,11 @@ class TestTheSummaryDoesNotContradictItself:
         with tempfile.TemporaryDirectory() as tmpdir:
             out = self._summary_in_subdir(
                 tmpdir, 'gitlab', 'kustomize', root_body=self._WIRED_ROOT)
-        assert 'Not done yet' in out, (
-            f'子目錄的路徑前綴步驟沒有印出來，上面那條斷言是恆真的。\n{out}')
-        assert 'will automatically validate' not in out, out
+        assert _PENDING_MARKERS[0] in out, (
+            f'子目錄的路徑前綴步驟沒有印出來（找 {_PENDING_MARKERS[0]!r}），'
+            f'上面那條斷言因此是恆真的。若這是刻意改寫文案，改本檔頂端的 '
+            f'_PENDING_MARKERS。\n{out}')
+        assert _AUTOVALIDATE_MARKER not in out, out
 
     @pytest.mark.parametrize('ci', ['github', 'gitlab', 'both'])
     @pytest.mark.parametrize('deploy', ['kustomize', 'helm', 'argocd'])
@@ -4893,16 +4964,27 @@ class TestRoundEightMutationSurvivors:
                     for ln in chunk.splitlines() if '  →  ' in ln]
             assert vals == sorted(vals), f'清單沒有排序：{vals}'
 
-    @pytest.mark.parametrize('deploy,binary,secret,prereq', [
+    # ⛔ 語系是**第四個軸**，不是背景設定。`_apply_needs` 的 tuple 是
+    # `(binary, secret, zh_prereq, en_prereq)`，而這條原本只帶英文 prereq
+    # 並固定 `_LANG='en'` ⇒ **中文那一半零斷言**。實測把 helm 的 zh 前置條件
+    # 換成 argocd 的：650 條測試全綠，而 `_LANG` 預設就是 zh，所以受害的正是
+    # 預設路徑上的客戶。這與本測試 docstring 描述的缺陷同形，只是往語系軸
+    # 移了一格——修的是類別，不是被點名的那一格。
+    @pytest.mark.parametrize('lang,prereq_idx', [('en', 3), ('zh', 2)])
+    @pytest.mark.parametrize('deploy,binary,secret,prereqs', [
         ('kustomize', 'kubectl / kustomize', 'KUBECONFIG',
-         'conf.d/ linked into kustomize/base/'),
+         ('conf.d/ 已連結進 kustomize/base/',
+          'conf.d/ linked into kustomize/base/')),
         ('helm', 'helm', 'KUBECONFIG',
-         'environments/prod/values.yaml'),
+         ('environments/prod/values.yaml —— 本工具不會產生它',
+          'environments/prod/values.yaml')),
         ('argocd', 'argocd', 'ARGOCD_SERVER + ARGOCD_AUTH_TOKEN',
-         "an ArgoCD Application named 'dynamic-alerting'"),
+         ("一個名為 'dynamic-alerting' 的 ArgoCD Application",
+          "an ArgoCD Application named 'dynamic-alerting'")),
     ])
     def test_the_credential_sentence_does_not_swap_its_two_halves(
-            self, deploy, binary, secret, prereq, monkeypatch):
+            self, deploy, binary, secret, prereqs, lang, prereq_idx,
+            monkeypatch):
         """⛔ 把那個 tuple 的兩個元素對調而全綠：argocd 那句變成
         「Set **argocd** in your CI (that is what **ARGOCD_SERVER +
         ARGOCD_AUTH_TOKEN** uses)」——叫客戶去建一個名為 `argocd` 的 CI 變數。
@@ -4925,7 +5007,9 @@ class TestRoundEightMutationSurvivors:
         # 它會 `StopIteration`（英文那行根本不存在，預設是 zh），而
         # `pytest-randomly` 有裝、順序不保證。改用 `monkeypatch` 明確設定並
         # 自動還原：測試不該靠別的測試洩漏的全域狀態才會綠。
-        monkeypatch.setattr(ip, '_LANG', 'en')
+        monkeypatch.setattr(ip, '_LANG', lang)
+        prereq = prereqs[0] if lang == 'zh' else prereqs[1]
+        marker = '叢集憑證' if lang == 'zh' else 'cluster credentials'
         with tempfile.TemporaryDirectory() as tmpdir:
             config = dict(self._CFG, ci='github', deploy=deploy)
             created = ip.run_init(config, tmpdir)
@@ -4933,25 +5017,33 @@ class TestRoundEightMutationSurvivors:
             with contextlib.redirect_stdout(buf):
                 ip._print_summary(created, tmpdir, config)
             out = buf.getvalue()
-        line = next((ln for ln in out.splitlines()
-                     if 'cluster credentials' in ln), None)
+        line = next((ln for ln in out.splitlines() if marker in ln), None)
         assert line is not None, (
-            f'找不到英文的憑證句（_LANG={ip._LANG!r}）。\n{out}')
-        assert f'Set {secret} in your CI' in line, (deploy, line)
-        assert f'that is what {binary} uses' in line, (deploy, line)
+            f'找不到 {lang} 的憑證句（_LANG={ip._LANG!r}）。\n{out}')
+        assert secret in line, (deploy, lang, line)
+        assert binary in line, (deploy, lang, line)
+        if lang == 'en':
+            # 兩半的**順序**只有英文句排得出來（zh 是「請在你的 CI 設定
+            # {secret}（{binary} 會用到）」，同樣兩個值但句構不同）。
+            assert f'Set {secret} in your CI' in line, (deploy, line)
+            assert f'that is what {binary} uses' in line, (deploy, line)
         assert prereq in line, (
-            f'{deploy}: 「憑證只是必要條件之一」那半句沒有指名這個部署方式'
-            f'真正還缺的東西（預期 {prereq!r}）。\n{line}')
-        # 反向：不得指名**別的**部署方式的前置條件。
+            f'{deploy}/{lang}: 「憑證只是必要條件之一」那半句沒有指名這個'
+            f'部署方式真正還缺的東西（預期 {prereq!r}）。\n{line}')
+        # 反向：不得指名**別的**部署方式的前置條件（同語系內比較）。
+        idx = 0 if lang == 'zh' else 1
         others = {
-            'conf.d/ linked into kustomize/base/',
-            'environments/prod/values.yaml',
-            "an ArgoCD Application named 'dynamic-alerting'",
+            ('conf.d/ 已連結進 kustomize/base/',
+             'conf.d/ linked into kustomize/base/')[idx],
+            ('environments/prod/values.yaml —— 本工具不會產生它',
+             'environments/prod/values.yaml')[idx],
+            ("一個名為 'dynamic-alerting' 的 ArgoCD Application",
+             "an ArgoCD Application named 'dynamic-alerting'")[idx],
         } - {prereq}
         for wrong in others:
             assert wrong not in line, (
-                f'{deploy}: 這句話指名了另一個部署方式才需要的 {wrong!r}。'
-                f'\n{line}')
+                f'{deploy}/{lang}: 這句話指名了另一個部署方式才需要的 '
+                f'{wrong!r}。\n{line}')
 
     def test_an_already_wired_root_does_not_get_a_do_this_first_closing(self):
         """⛔ 從 `gl_needs_manual` 拿掉 `and gl_status != _GL_ROOT_ALREADY_WIRED`

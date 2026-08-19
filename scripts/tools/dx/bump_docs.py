@@ -2328,12 +2328,27 @@ def main():
             opt: act.dest
             for act in parser._actions for opt in act.option_strings
         }
+        # ⛔ argparse accepts unambiguous PREFIXES by default (`allow_abbrev`),
+        # so an exact-name lookup is not "did the caller pass this flag" — it
+        # is "did the caller spell it out in full". Measured: `--changelog-la`
+        # and `--change` both reach argparse as `--changelog-lang` and both
+        # slipped through with rc=0, i.e. the same silent discard this guard
+        # exists to end, one abbreviation over. Resolving prefixes here rather
+        # than setting `allow_abbrev=False` keeps the CLI's accepted spellings
+        # unchanged — this is a detection fix, not a behaviour change.
+        def _dest_for(name: str) -> str | None:
+            if name in _opt_to_dest:
+                return _opt_to_dest[name]
+            if not name.startswith("--"):
+                return None
+            hits = {d for o, d in _opt_to_dest.items() if o.startswith(name)}
+            return hits.pop() if len(hits) == 1 else None
+
         passed = set()
         for token in sys.argv[1:]:
             if not token.startswith("-"):
                 continue
-            name = token.split("=", 1)[0]
-            dest = _opt_to_dest.get(name)
+            dest = _dest_for(token.split("=", 1)[0])
             if dest is not None:
                 passed.add(dest)
         ignored = sorted(

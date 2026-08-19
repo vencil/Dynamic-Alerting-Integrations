@@ -2821,7 +2821,7 @@ class TestDryRunWritesNothing:
 
     ⛔ 而 repo 裡那個專門的閘門 `tests/shared/test_dry_run_no_write.py`
     **看不到這支工具**：它的 `OPS_DIR` 只掃 `scripts/tools/ops/`，
-    `bump_docs.py` 在 `dx/`。實測把上述守衛全部拿掉，該檔 23 條測試全綠。
+    `bump_docs.py` 在 `dx/`。實測把上述守衛全部拿掉，該檔 24 條測試全綠。
     這條把斷言放在工具自己的測試檔裡，不依賴跑哪個子集、也不依賴順序。
     """
 
@@ -2869,7 +2869,7 @@ class TestDryRunWritesNothing:
         第四個在 `apply_count_updates`，走的是 `--sync-counts --dry-run`
         ——一個**被接受**的組合（`--dry-run` 不在拒絕名單裡，因為這條分支真的
         會處理它）。實測拿掉那一個守衛，`tests/dx` 加上共用的 dry-run 閘門
-        2474 條全綠。
+        2547 條全綠。
 
         這條同時修正 `tests/shared/test_dry_run_no_write.py` 裡「bump_docs 本身
         已在 TestDryRunWritesNothing 直接釘住」那句話——在此之前那是四分之三。
@@ -3094,7 +3094,13 @@ class TestSyncCountsRejectsEverythingItDiscards:
 
         兩種寫法都要擋（`--flag value` 與 `--flag=value`）。
         """
-        for form in (["--changelog-lang", "zh"], ["--changelog-lang=zh"]):
+        # ⛔ 含 argparse 的**前綴縮寫**。`allow_abbrev` 預設為 True，所以
+        # `--changelog-la` / `--change` 都會被 argparse 展開成
+        # `--changelog-lang`——實測這兩種寫法原本 rc=0 被靜默吞掉，也就是
+        # 這個守衛要終結的同一件事，只是換一種拼法。逐一列出四種拼法，
+        # 讓「只認完整旗標名」的實作無法通過。
+        for form in (["--changelog-lang", "zh"], ["--changelog-lang=zh"],
+                     ["--changelog-la", "zh"], ["--change", "zh"]):
             r = self._run("--sync-counts", *form)
             assert r.returncode == bump_docs.EXIT_CALLER_ERROR, (
                 f"--sync-counts {' '.join(form)} 沒有被拒絕（rc="
