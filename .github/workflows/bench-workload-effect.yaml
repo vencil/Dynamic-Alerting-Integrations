@@ -422,6 +422,40 @@ jobs:
           echo "closed=${closed}" >> "$GITHUB_OUTPUT"
           cat .build/closure-report.md
 
+      # ⚠️ ACCEPTED SECURITY FINDING —— CodeQL `actions/cache-poisoning/poisonable-step`
+      # （PR #1467 的 alert #392–#395，4 筆 high），在 GitHub UI 標為 `won't fix`。
+      # 記在這裡，是因為**只活在下拉選單裡的 dismissal，對下一個讀這個檔的人是隱形的**
+      # —— 與 `bench-record.yaml` 的 alert #390 同一處置、同一理由結構。
+      #
+      # 規則點名的正是下面四個量測步驟：它們在 default branch 的特權情境下
+      # （`workflow_dispatch`）執行一份由 `steps.ref.outputs.sha` 決定的、非 default-branch
+      # 的程式碼。⚠️ 這**不是** `cache: false` 沒設好——初版確實漏設（見上面 setup-go 的
+      # 註解），補上之後這四筆仍在，因為規則點的是「特權情境下執行非預設分支的程式碼」
+      # 這個**形狀**，不是某一個 cache 開關。
+      #
+      # WHAT IS REAL. 本 job 會編譯並執行**這個 repo 的另一個較舊修訂**（釘死的參考版本）。
+      # 一個惡意的參考修訂可以在量測輸出被上傳前竄改它。這條路徑與 CodeQL 怎麼建模無關，
+      # 它就是存在。
+      #
+      # WHAT IS MITIGATED.
+      #   - 參考版本釘的是**不可變的 commit SHA**（tag 可被重新指向；見
+      #     `.github/bench-reference.yaml`），改它需要一個 PR。
+      #   - `permissions: contents: read`，且兩次 checkout 都 `persist-credentials: false`
+      #     ⇒ 工作區裡沒有可用的 token。
+      #   - 本 job **完全不碰共享 cache**：`cache: false`，且全檔只用到 `actions/checkout`
+      #     / `actions/setup-go` / `actions/upload-artifact` 三種 action，沒有
+      #     `actions/cache` ⇒ **規則點名的那條 cache 匯出／匯入路徑，在這個 job 裡並不存在**。
+      #   - 產物是**診斷用 artifact**，不是任何 release 資產的來源。
+      #
+      # WHY ACCEPTED. 剩下的風險要成立，必須是**我們自己過去的某個 release 是惡意的**
+      # —— 那正是那個 release 出貨給客戶時所依據的同一個信任假設。而 `bench-record.yaml`
+      # 是**同一個形狀再加上 release 資產路徑**（它的產物會變成公開 Release 資產），風險
+      # 更高，其 alert #390 已被接受；本 job 嚴格更低風險，所以接受它是前者的推論，不是
+      # 一次新的讓步。
+      #
+      # ⛔ RE-EXAMINE IF：本 job 取得 `contents: read` 以外的權限／開始使用任何 cache
+      # action／其產物開始被任何對外流程消費／參考版本指向本 repo 以外的地方。
+      #
       # ── 量測 1：W / R —— 純工作定義效應 ─────────────────────────────────
       # BASE=R、PR=W，兩側是同一份實作，唯一的差別是測試碼。
       - name: Interleave R vs W
