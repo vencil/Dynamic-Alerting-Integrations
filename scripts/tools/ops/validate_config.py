@@ -295,7 +295,15 @@ def check_custom_rules(
         cmd.extend(["--policy", policy_file])
 
     try:
+        # ⛔ `encoding=`, not the locale default. The tool on the other end
+        # forces UTF-8 on its own stdout (`_lib_compat.try_utf8_stdout`) and
+        # prints `✅`/`—`, so on any non-UTF-8 locale `text=True` alone
+        # decodes with e.g. cp950, raises inside subprocess's reader thread,
+        # and hands back `stdout is None` — which the very next line turns
+        # into `TypeError: NoneType + str`, uncaught, from a checker whose
+        # job is to report FAIL rather than crash.
         result = subprocess.run(cmd, capture_output=True, text=True,
+                                encoding="utf-8", errors="replace",
                                 timeout=30)
         output = (result.stdout + result.stderr).strip()
         lines = [l for l in output.split("\n") if l.strip()] if output else []
@@ -481,7 +489,14 @@ def check_versions() -> dict[str, object]:
            str(_THIS_DIR.parent / "dx" / "bump_docs.py"), "--check"]
 
     try:
+        # ⛔ Same reason as `check_custom_rules`: bump_docs.py forces UTF-8 on
+        # its own stdout and prints `✅`, so decoding it with the locale codec
+        # crashes this checker outright on a non-UTF-8 developer machine.
+        # Before the `dx/` path fix this never surfaced — the wrong path made
+        # the child print pure-ASCII "can't open file", which any codec
+        # decodes. Fixing the path is what made the latent half reachable.
         result = subprocess.run(cmd, capture_output=True, text=True,
+                                encoding="utf-8", errors="replace",
                                 timeout=15)
         output = (result.stdout + result.stderr).strip()
         lines = [l for l in output.split("\n") if l.strip()] if output else []

@@ -3084,6 +3084,17 @@ def _print_summary(created: list[str], output_dir: str, config: dict) -> None:
     # `include:` work spent three rounds learning not to hand out blind.
     # Parameterising the generated CONTENT on the subdirectory offset is a
     # separate change (tracked), not something to half-do in a print().
+    # ⛔ Whether this step PRINTED is the only honest input to the closing
+    # line. `gl_needs_manual` answers "is the include still to be pasted",
+    # which is a different question: on `--ci gitlab` into a subdirectory of
+    # an already-wired repo the include is done, so it is False — and the
+    # closing line then promised "GitLab CI will automatically validate your
+    # config" two lines under a step that says "otherwise no job is ever
+    # created, and the pipeline stays green forever having validated
+    # nothing". Derived from what was actually emitted rather than by adding
+    # another term to the boolean, so a future step that also leaves work
+    # behind cannot forget to enrol itself.
+    subdir_work_pending = False
     if gl_in_subdir:
         rel = Path(output_dir).resolve().relative_to(repo_root)
         targets = []
@@ -3120,6 +3131,7 @@ def _print_summary(created: list[str], output_dir: str, config: dict) -> None:
                     print(f"         {value}  →  {rel.as_posix()}/{value}")
             print()
             step += 1
+            subdir_work_pending = True
 
     # ⛔ Was an unconditional "CI will automatically validate your config".
     # False on every `--ci gitlab` run — nothing loaded the pipeline — and it
@@ -3137,7 +3149,7 @@ def _print_summary(created: list[str], output_dir: str, config: dict) -> None:
         'gitlab': 'GitLab CI',
         'both': 'GitHub Actions + GitLab CI',
     }.get(ci_sel, 'CI')
-    if gl_needs_manual:
+    if gl_needs_manual or subdir_work_pending:
         if gl_in_subdir:
             # ⛔ In a subdirectory the hardcoded `both` sentence is backwards:
             # it says GitHub validates automatically, but GitHub is the leg
@@ -3365,6 +3377,35 @@ def _handle_dry_run(config: dict, output_dir: str) -> None:
                   f"{'' if len(affected) > 1 else 's'} only "
                   f"the repository root, so CI config generated here is not "
                   f"loaded (the real run prints the remedy).")
+    elif repo_root is not None:
+        # ⛔ Subdirectory, and the include is already in place — so the block
+        # above (whose text is "not loaded") would be false here and stayed
+        # silent instead. Silent is worse: being wired is not being done. The
+        # generated CONTENTS are still written relative to the repository
+        # root, so every path filter in them misses the real files and the
+        # pipeline goes green having created no jobs — #1357's outcome, from
+        # the one flag whose entire job is "what will this do to my repo".
+        # The real run enumerates the paths (it can read what it wrote); a
+        # preview has nothing to read, so it names the work without faking a
+        # list.
+        rel = Path(output_dir).resolve().relative_to(repo_root)
+        print()
+        if is_zh:
+            print(f"  ⚠️ 根目錄的 .gitlab-ci.yml 已經 include 了這次的輸出，"
+                  f"所以 pipeline 會被載入 —— 但輸出目錄是 "
+                  f"`{rel.as_posix()}/`，產生出來的**內容**仍以 repo 根目錄"
+                  f"為基準，路徑過濾器一個都對不上，於是不會建立任何 job、"
+                  f"pipeline 永遠是綠的而且什麼都沒驗到"
+                  f"（實跑時會逐條列出要補 `{rel.as_posix()}/` 前綴的路徑）。")
+        else:
+            print(f"  ⚠️ The repository-root .gitlab-ci.yml already includes "
+                  f"this output, so the pipeline IS loaded — but the output "
+                  f"directory is `{rel.as_posix()}/` and the generated "
+                  f"CONTENTS are still written relative to the repository "
+                  f"root. Every path filter in them misses the real files, so "
+                  f"no job is created and the pipeline stays green having "
+                  f"validated nothing (the real run lists each path needing a "
+                  f"`{rel.as_posix()}/` prefix).")
     elif ci_sel in ('gitlab', 'both'):
         status = _gitlab_root_shell_status(output_dir)
         if status not in (_GL_ROOT_CREATE, _GL_ROOT_ALREADY_WIRED):

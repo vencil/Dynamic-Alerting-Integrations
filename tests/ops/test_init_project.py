@@ -22,6 +22,26 @@ import init_project as ip  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 
+def _symlinks_usable(tmp) -> bool:
+    """這台機器建得出 symlink 嗎？（Windows 未開發者模式：不行。）
+
+    ⛔ 探測**能力**，不是猜平台。這兩條 symlink 測試守的是真東西（斷鏈
+    symlink 讓 marker 被寫到 `--output-dir` 之外），在 Linux CI 上照跑；
+    但在沒有 SeCreateSymbolicLinkPrivilege 的 Windows 上它們是**必紅**的，
+    而一條在整類開發機上必紅的斷言，最後會被某個為了無關理由趕時間的人
+    直接刪掉。與 `test_generated_ci_artifacts.py::_symlinks_usable` 同款。
+    """
+    from pathlib import Path as _P
+    probe = _P(tmp) / '_symlink_probe'
+    probe.mkdir(parents=True, exist_ok=True)
+    (probe / 'target').write_text('x\n', encoding='utf-8', newline='\n')
+    try:
+        (probe / 'link').symlink_to('target')
+    except (OSError, NotImplementedError):
+        return False
+    return (probe / 'link').is_symlink()
+
+
 # ============================================================
 # ── 1. RULE_PACK_CATALOG Structure ──
 # ============================================================
@@ -2436,6 +2456,10 @@ class TestRunInit:
         customer-owned path, so it must fail closed.
         """
         with tempfile.TemporaryDirectory() as tmpdir:
+            if not _symlinks_usable(tmpdir):
+                pytest.skip('this host cannot create symlinks (Windows '
+                            'without Developer Mode / '
+                            'SeCreateSymbolicLinkPrivilege); runs on Linux CI')
             outside = os.path.join(tmpdir, 'outside', 'ESCAPE.yml')
             os.makedirs(os.path.dirname(outside))
             target = os.path.join(tmpdir, 'repo')
@@ -3935,7 +3959,7 @@ class TestTheCliLayerItself:
         import subprocess
         return subprocess.run(
             [sys.executable, str(self._SCRIPT), '-o', str(tmpdir), *args],
-            capture_output=True, text=True, timeout=300)
+            capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=300)
 
     def _files(self, tmpdir):
         from pathlib import Path as _P
@@ -4338,13 +4362,38 @@ class TestTheDryRunLegsThatNoTestReaches:
             f'GitHub 那條腿在子目錄下是無條件未完成的。\n{out}')
         assert 'GitHub Actions' in out, out
 
-    def test_gitlab_only_in_a_wired_subdirectory_is_silent(self):
-        """反向：同一個 repo 上 `--ci gitlab` 不得警告（否則上面那條只是
-        『永遠有警告』的同義反覆）。"""
+    def test_gitlab_only_in_a_wired_subdirectory_warns_about_a_different_thing(
+            self, monkeypatch):
+        """反向控制：同一個 repo 上 `--ci gitlab` 必須說**不一樣的話**
+        （否則上面那條只是『永遠有警告』的同義反覆）。
+
+        ⛔ 這條原本斷言的是「完全不警告」，而那是在釘一個缺陷。第九輪盲審
+        實測：`--ci gitlab -o alerting/` 在一個**已接線**的 repo 上，實跑會印
+        「⚠️ 還沒完：…否則 job 根本不會被建立，pipeline 會永遠是綠的而且什麼
+        都沒驗到」，`--dry-run` 卻一個字都不說——而 dry-run 正是客戶在真的寫檔
+        之前唯一的問句。**已接線不等於已完成**：產物內容仍以 repo 根為基準，
+        路徑過濾器一個都對不上。
+
+        鑑別力現在來自「警告的**內容**」而不是「有沒有警告」：GitHub 那條腿
+        的訊息會指名 `GitHub Actions` 並說設定不會被載入；GitLab-only 這格
+        必須說相反的事（pipeline 會被載入，但內容路徑還沒補前綴）。兩者都
+        非空，所以「永遠印同一句」不再能同時通過這兩條。
+        """
+        # ⛔ 斷言的是英文句，語系必須自己釘（`_LANG` 是模組全域，同檔
+        # 別的測試用裸 `setattr` 寫它不還原 ⇒ 單跑綠、全套紅）。
+        monkeypatch.setattr(ip, '_LANG', 'en')
         with tempfile.TemporaryDirectory() as tmpdir:
             out = self._dry(tmpdir, 'gitlab', sub='alerting',
                             root_body=self._WIRED)
-        assert '⚠️' not in out, out
+        assert '⚠️' in out, (
+            '已接線的子目錄上 `--ci gitlab` 完全沉默——產物內容仍以 repo 根'
+            f'為基準，那是 #1357 的結局，只是從 wired 分支抵達。\n{out}')
+        assert 'GitHub Actions' not in out, (
+            f'`--ci gitlab` 不得提到 GitHub——那是姊妹測試的鑑別詞。\n{out}')
+        assert 'IS loaded' in out, (
+            f'必須說明 pipeline 會被載入（而不是沿用「不會被載入」）。\n{out}')
+        assert 'prefix' in out, (
+            f'必須指出真正還沒做的事：內容路徑要補子目錄前綴。\n{out}')
 
     def test_a_root_that_already_includes_us_is_not_told_to_wire_it(self):
         """⛔ `status not in (CREATE, ALREADY_WIRED)` → `status != CREATE`
@@ -4427,6 +4476,79 @@ class TestTheSummaryDoesNotContradictItself:
                 (_re.match(r'\s*(\d+)\. ', ln) for ln in out.splitlines())
                 if m]
 
+    def _summary_in_subdir(self, tmpdir, ci, deploy, root_body=None):
+        """輸出到 `<repo>/alerting/`，可選擇先放一份根 `.gitlab-ci.yml`。"""
+        import contextlib
+        import io
+        from pathlib import Path as _P
+        repo = _P(tmpdir) / 'repo'
+        (repo / '.git').mkdir(parents=True)
+        if root_body is not None:
+            (repo / '.gitlab-ci.yml').write_text(
+                root_body, encoding='utf-8', newline='\n')
+        out_dir = repo / 'alerting'
+        out_dir.mkdir()
+        config = dict(self._CFG, ci=ci, deploy=deploy)
+        created = ip.run_init(config, str(out_dir))
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            ip._print_summary(created, str(out_dir), config)
+        return buf.getvalue()
+
+    # 根檔已經 include 了子目錄裡的 pipeline —— 接線這一半是**做完的**。
+    _WIRED_ROOT = ('include:\n  - local: alerting/.gitlab-ci.d/'
+                   'dynamic-alerting.yml\n')
+
+    @pytest.mark.parametrize('ci', ['github', 'gitlab', 'both'])
+    @pytest.mark.parametrize('deploy', ['kustomize', 'helm', 'argocd'])
+    @pytest.mark.parametrize('wired', [False, True], ids=['unwired', 'wired'])
+    def test_a_pending_step_forbids_promising_automatic_validation(
+            self, ci, deploy, wired, monkeypatch):
+        """⛔ 只要還有任何一步說「還沒完」，結尾就不得承諾 CI 會自動驗證。
+
+        第九輪盲審實測：`--ci gitlab --deploy *` 輸出到**已接線** repo 的子目錄
+        時，第 7 步逐字說「otherwise no job is ever created, and the pipeline
+        stays green forever having validated nothing」，第 8 步緊接著說
+        「Commit and push — GitLab CI will automatically validate your config」。
+        客戶照著推上去，pipeline 確實被載入、然後零個 job 被建立、MR 永遠
+        綠——**#1357 的結局，只是從 wired 分支抵達**。
+
+        成因是驅動結尾句的布林問的是「include 貼了沒」，而子目錄的路徑前綴
+        工作與 include 無關。⚠️ 那次修法只補了 `gh_selected` 那一半（GitHub
+        在子目錄下無條件未完成），把同一類留在 `--ci gitlab` 這條腿上——
+        修了被點名的那一處、沒修類別。
+
+        釘的是**結構關係**（有待辦 ⇒ 不得承諾自動驗證），對全矩陣求值，
+        所以下一個「還沒完」的步驟不必記得把自己登記進某個布林。
+        """
+        # ⛔ 語系必須自己釘住。這條的「承諾」側只認英文句，所以在 zh 下
+        # `promises` 恆為 False、整條斷言變成恆真——而 `_LANG` 是匯入時
+        # 求值的模組全域，同檔別的測試用裸 `setattr` 寫它且不還原，
+        # 於是單跑與全量跑結果不同（實測：單跑綠、全套紅）。
+        monkeypatch.setattr(ip, '_LANG', 'en')
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = self._summary_in_subdir(
+                tmpdir, ci, deploy,
+                root_body=self._WIRED_ROOT if wired else None)
+        pending = ('Not done yet' in out) or ('NOT wired' in out)
+        promises = 'will automatically validate' in out
+        assert not (pending and promises), (
+            f'{ci}/{deploy}/wired={wired}: 訊息自己打自己——既列出未完成的'
+            f'步驟，又承諾 CI 會自動驗證。\n{out}')
+
+    def test_the_pending_step_actually_fires_somewhere(self, monkeypatch):
+        """⛔ 反空洞：上面那條若在所有格子都沒有待辦步驟，它是恆真的。
+
+        子目錄 + 已接線這一格必須真的印出「還沒完」，否則上面那條測不到東西。
+        """
+        monkeypatch.setattr(ip, '_LANG', 'en')
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = self._summary_in_subdir(
+                tmpdir, 'gitlab', 'kustomize', root_body=self._WIRED_ROOT)
+        assert 'Not done yet' in out, (
+            f'子目錄的路徑前綴步驟沒有印出來，上面那條斷言是恆真的。\n{out}')
+        assert 'will automatically validate' not in out, out
+
     @pytest.mark.parametrize('ci', ['github', 'gitlab', 'both'])
     @pytest.mark.parametrize('deploy', ['kustomize', 'helm', 'argocd'])
     def test_step_numbers_are_consecutive(self, ci, deploy):
@@ -4501,10 +4623,42 @@ class TestTheSummaryDoesNotContradictItself:
         cfg = dict(self._CFG, ci='both', deploy='kustomize',
                    git_repo='https://example.com/x.git', config_source='git')
         with tempfile.TemporaryDirectory() as tmpdir:
-            preview = sorted(ip._preview_files(dict(cfg), tmpdir))
-            created = sorted(ip.run_init(dict(cfg), tmpdir))
+            preview = ip._preview_files(dict(cfg), tmpdir)
+            created = ip.run_init(dict(cfg), tmpdir)
         assert any('gitops' in f or 'git-sync' in f for f in created), created
-        assert preview == created, sorted(set(preview) ^ set(created))
+        # ⛔ 比較前正規化分隔符，因為兩邊**刻意**用不同的形式：
+        # `_preview_files` 的 docstring 明寫「Paths use POSIX separators
+        # regardless of OS … Same rationale as _snapshot_mtimes (PR #319)」，
+        # 而 `_write_file` 記錄的是 OS-native 路徑。直接比字串在 Windows 上
+        # 必定不相等，而這條測試要問的是**集合一不一致**，不是誰的分隔符。
+        # ⚠️ 不是放寬斷言：正規化之後任何檔案多出或少掉仍然會紅（下面那條
+        # 反向控制證明它還咬得住）。
+        from pathlib import Path as _NP
+
+        def _norm(paths):
+            return sorted(_NP(p).as_posix() for p in paths)
+        assert _norm(preview) == _norm(created), sorted(
+            set(_norm(preview)) ^ set(_norm(created)))
+
+    def test_the_preview_equality_still_catches_a_missing_file(self):
+        """⛔ 反空洞：上一條把分隔符正規化掉了，必須證明它不是因此變成恆真。
+
+        拿掉預覽清單裡的任何一項，等式就要紅——否則那個正規化順手把鑑別力
+        也一起正規化掉了。
+        """
+        cfg = dict(self._CFG, ci='both', deploy='kustomize',
+                   git_repo='https://example.com/x.git', config_source='git')
+        with tempfile.TemporaryDirectory() as tmpdir:
+            preview = ip._preview_files(dict(cfg), tmpdir)
+            created = ip.run_init(dict(cfg), tmpdir)
+
+        from pathlib import Path as _NP
+
+        def _norm(paths):
+            return sorted(_NP(p).as_posix() for p in paths)
+        assert _norm(preview) == _norm(created), '前提：未變異時兩者相等'
+        assert _norm(preview[:-1]) != _norm(created), (
+            '少掉一個預覽項目之後兩者仍然相等——這條等式沒有鑑別力')
 
     def test_the_defaults_file_keeps_its_authored_key_order(self):
         """⛔ `sort_keys=False` → `True` 存活：46 個情境裡客戶要編輯的那份
@@ -4579,6 +4733,10 @@ class TestRoundEightFindings:
         import subprocess
         with tempfile.TemporaryDirectory() as tmpdir:
             from pathlib import Path as _P
+            if not _symlinks_usable(tmpdir):
+                pytest.skip('this host cannot create symlinks (Windows '
+                            'without Developer Mode / '
+                            'SeCreateSymbolicLinkPrivilege); runs on Linux CI')
             out = _P(tmpdir) / 'out'
             out.mkdir()
             escaped = _P(tmpdir) / 'ESCAPED.yaml'
@@ -4586,7 +4744,7 @@ class TestRoundEightFindings:
             r = subprocess.run(
                 [sys.executable, str(_P(ip.__file__)), '--non-interactive',
                  '--tenants', 'db-a', '--ci', 'github', '-o', str(out)],
-                capture_output=True, text=True, timeout=300)
+                capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=300)
             assert r.returncode == ip.EXIT_VIOLATION, (
                 r.returncode, r.stdout[-400:], r.stderr[-400:])
             assert not escaped.exists(), (
@@ -4642,16 +4800,27 @@ class TestRoundEightFindings:
             got = ip._root_relative_ci_paths(f)
         assert got == ['rule-packs/custom/'], got
 
-    def test_no_bare_issue_ref_is_written_into_a_customer_repo(self):
+    @pytest.mark.parametrize('deploy', ['kustomize', 'helm', 'argocd'])
+    @pytest.mark.parametrize('ci', ['github', 'gitlab', 'both'])
+    def test_no_bare_issue_ref_is_written_into_a_customer_repo(self, ci,
+                                                               deploy):
         """⛔ `#1358` 之類的裸引用在**客戶的** repo 裡會 autolink 到**客戶的**
         issue 1358。GitLab 與 GitHub 都是這樣渲染。
 
         本分支已經為了另一個理由（hex 色碼掃描器）把 portal wizard 的
         `#1358` 改成 `issue 1358`，所以兩個出貨面原本互相矛盾。
+
+        ⛔ 第九輪盲審：這條原本只實例化 `_CFG` 的一組值（`deploy=kustomize`
+        / `ci=both`），而 apply stage 的三個 `--deploy` 分支各有**獨立的**
+        樣板、各自帶一份同樣的註解。實測把 helm 與 argocd 兩支還原成裸
+        `#1356` 之後這條測試全綠（只有 kustomize 那支會咬）——守衛覆蓋了
+        三分之一的出貨面。修的是類別不是被點名的那一處：走遍 `--ci` ×
+        `--deploy` 九格，任何一支樣板日後重新引入裸引用都會紅。
         """
         import re as _re
         with tempfile.TemporaryDirectory() as tmpdir:
-            created = ip.run_init(dict(self._CFG), tmpdir)
+            created = ip.run_init(
+                dict(self._CFG, ci=ci, deploy=deploy), tmpdir)
             from pathlib import Path as _P
             offenders = {}
             for rel in created:
@@ -4724,22 +4893,39 @@ class TestRoundEightMutationSurvivors:
                     for ln in chunk.splitlines() if '  →  ' in ln]
             assert vals == sorted(vals), f'清單沒有排序：{vals}'
 
-    @pytest.mark.parametrize('deploy,binary,secret', [
-        ('kustomize', 'kubectl / kustomize', 'KUBECONFIG'),
-        ('helm', 'helm', 'KUBECONFIG'),
-        ('argocd', 'argocd', 'ARGOCD_SERVER + ARGOCD_AUTH_TOKEN'),
+    @pytest.mark.parametrize('deploy,binary,secret,prereq', [
+        ('kustomize', 'kubectl / kustomize', 'KUBECONFIG',
+         'conf.d/ linked into kustomize/base/'),
+        ('helm', 'helm', 'KUBECONFIG',
+         'environments/prod/values.yaml'),
+        ('argocd', 'argocd', 'ARGOCD_SERVER + ARGOCD_AUTH_TOKEN',
+         "an ArgoCD Application named 'dynamic-alerting'"),
     ])
     def test_the_credential_sentence_does_not_swap_its_two_halves(
-            self, deploy, binary, secret):
+            self, deploy, binary, secret, prereq, monkeypatch):
         """⛔ 把那個 tuple 的兩個元素對調而全綠：argocd 那句變成
         「Set **argocd** in your CI (that is what **ARGOCD_SERVER +
         ARGOCD_AUTH_TOKEN** uses)」——叫客戶去建一個名為 `argocd` 的 CI 變數。
 
         既有測試只 grep secret 名字，所以**哪個是哪個**完全沒被釘；helm 那列
         把 binary 換成 `kubectl` 同樣存活。
+
+        ⛔ 第九輪盲審：同一個缺陷形狀往右移了兩格。那個 tuple 後來長成四元素
+        （加上「憑證只是必要條件之一」要指名的**前置條件**），而只有 `[0]`
+        `[1]` 被釘。實測把 helm 那列的 `[2]`/`[3]` 換成 argocd 的之後全綠：
+        `--deploy helm` 的客戶被告知他還需要「一個名為 'dynamic-alerting' 的
+        ArgoCD Application」——helm 部署根本不需要的東西，而 helm 真正缺的
+        `environments/prod/values.yaml` 消失了。四個元素現在逐一釘住。
         """
         import contextlib
         import io
+        # ⛔ 這條斷言的是**英文**那一句，所以語系必須自己設定。它原本沒有設，
+        # 只在整份檔案一起跑時才通過——因為同檔別的測試用裸 `setattr(ip,
+        # '_LANG', 'en')` 而沒有還原，`_LANG` 就這樣漏了過來。單獨用 `-k` 選
+        # 它會 `StopIteration`（英文那行根本不存在，預設是 zh），而
+        # `pytest-randomly` 有裝、順序不保證。改用 `monkeypatch` 明確設定並
+        # 自動還原：測試不該靠別的測試洩漏的全域狀態才會綠。
+        monkeypatch.setattr(ip, '_LANG', 'en')
         with tempfile.TemporaryDirectory() as tmpdir:
             config = dict(self._CFG, ci='github', deploy=deploy)
             created = ip.run_init(config, tmpdir)
@@ -4747,10 +4933,25 @@ class TestRoundEightMutationSurvivors:
             with contextlib.redirect_stdout(buf):
                 ip._print_summary(created, tmpdir, config)
             out = buf.getvalue()
-        line = next(ln for ln in out.splitlines()
-                    if 'cluster credentials' in ln)
+        line = next((ln for ln in out.splitlines()
+                     if 'cluster credentials' in ln), None)
+        assert line is not None, (
+            f'找不到英文的憑證句（_LANG={ip._LANG!r}）。\n{out}')
         assert f'Set {secret} in your CI' in line, (deploy, line)
         assert f'that is what {binary} uses' in line, (deploy, line)
+        assert prereq in line, (
+            f'{deploy}: 「憑證只是必要條件之一」那半句沒有指名這個部署方式'
+            f'真正還缺的東西（預期 {prereq!r}）。\n{line}')
+        # 反向：不得指名**別的**部署方式的前置條件。
+        others = {
+            'conf.d/ linked into kustomize/base/',
+            'environments/prod/values.yaml',
+            "an ArgoCD Application named 'dynamic-alerting'",
+        } - {prereq}
+        for wrong in others:
+            assert wrong not in line, (
+                f'{deploy}: 這句話指名了另一個部署方式才需要的 {wrong!r}。'
+                f'\n{line}')
 
     def test_an_already_wired_root_does_not_get_a_do_this_first_closing(self):
         """⛔ 從 `gl_needs_manual` 拿掉 `and gl_status != _GL_ROOT_ALREADY_WIRED`

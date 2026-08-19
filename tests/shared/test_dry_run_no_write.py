@@ -446,7 +446,13 @@ def test_the_gate_states_the_scope_it_does_not_cover():
         f"the out-of-scope set moved: {len(uncovered)} dx tool(s) declare "
         f"--dry-run and are NOT covered by this gate: {uncovered}.\n"
         "Either give them recipes (and widen OPS_DIR), or update this count "
-        "deliberately — what must not happen is the set changing in silence."
+        "deliberately — what must not happen is the set changing in silence.\n"
+        "⚠️ If you just added a dx tool with --dry-run, this is expected and "
+        "the fix is one line: bump the number in "
+        "tests/shared/test_dry_run_no_write.py::"
+        "test_the_gate_states_the_scope_it_does_not_cover. You are not "
+        "required to write a recipe to go green — the count is a tripwire so "
+        "the gap stays visible, not a demand that you close it."
     )
 
 

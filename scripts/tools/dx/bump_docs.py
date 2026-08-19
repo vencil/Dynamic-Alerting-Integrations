@@ -1677,8 +1677,17 @@ def _expand_glob_rules(rules):
             per_file.pop("glob_dir", None)
             per_file.pop("glob_pattern", None)
             per_file.update({
-                "file": str(rel),
-                "desc": f"{rule['desc'].split(' in ')[0]} in {rel}",
+                # ⛔ `as_posix()`, not `str()`. Every rule's "file" is a
+                # repo-relative KEY: callers compare it against literals like
+                # "docs/CHANGELOG.md" and against `--scope` prefixes, and the
+                # rule tables themselves are written with forward slashes. On
+                # Windows `str(Path)` yields backslashes, so those lookups all
+                # missed — which did not merely go red, it made
+                # `_changelog_reaching_rules()` return an EMPTY set and its
+                # consumer pass vacuously. A guard that reports success by
+                # examining nothing is worse than one that fails.
+                "file": rel.as_posix(),
+                "desc": f"{rule['desc'].split(' in ')[0]} in {rel.as_posix()}",
                 "from_glob": True,
                 "glob_id": gid,
                 "glob_desc": rule["desc"],
@@ -2306,11 +2315,32 @@ def main():
         # defect: too small and a legitimate `--sync-counts --dry-run` is
         # rejected (measured — it broke `test_plain_sync_counts_also_fails_on_
         # no_source`), too large and the silent-discard hole reopens.
+        # ⛔ The question is "did the caller PASS this flag", not "does its
+        # value differ from the default". Those come apart for any flag with a
+        # non-empty default: `--changelog-lang` defaults to "zh", so
+        # `--sync-counts --changelog-lang zh` was accepted in silence — the
+        # very shape this guard exists to end, reached by explicitly typing
+        # the default. Value-comparison is kept as a UNION term so a caller
+        # that builds the namespace programmatically (no argv) is still
+        # caught; presence is what argv-driven runs are judged on.
         _HONOURED = {"sync_counts", "check", "dry_run", "help"}
+        _opt_to_dest = {
+            opt: act.dest
+            for act in parser._actions for opt in act.option_strings
+        }
+        passed = set()
+        for token in sys.argv[1:]:
+            if not token.startswith("-"):
+                continue
+            name = token.split("=", 1)[0]
+            dest = _opt_to_dest.get(name)
+            if dest is not None:
+                passed.add(dest)
         ignored = sorted(
             _flag_name(dest)
             for dest, value in vars(args).items()
-            if dest not in _HONOURED and value != parser.get_default(dest)
+            if dest not in _HONOURED
+            and (dest in passed or value != parser.get_default(dest))
         )
         if ignored:
             print(f"ERROR: --sync-counts does not accept {', '.join(ignored)} "

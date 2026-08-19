@@ -408,7 +408,7 @@ tools:
 
 **規則**：本條無文字敘述——由 `scripts/tools/lint/check_pr_scope_drift.py` 於 `make pr-preflight` 強制執行。偵測項：
 
-1. **Tool count drift**：`bump_docs.py --sync-counts --check` 不通過（⚠️ 是 `--sync-counts --check`，不是裸 `--check`——後者只看版號，不看計數）（CLAUDE.md「N 個 Python 工具」與實際 `scripts/tools/**/*.py` count 不一致）
+1. **Tool map drift**：`generate_tool_map.py --check --lang all` 不通過（[`tool-map.md`](tool-map.md) 與實際 `scripts/tools/**/*.py` 不一致）。⚠️ 這個 hook **不會**跑 `bump_docs`——本節原本寫的是「`bump_docs.py --sync-counts --check` 不通過」，還加了一句括號在爭論該用哪一種 `bump_docs` 呼叫，而 `check_pr_scope_drift.py` 從頭到尾對 `bump_docs` 零次呼叫（唯一的子行程就是上面那條）。**計數漂移的實際閘門是 `make version-check`（打 tag 前）與 CI 的 `validate` job**，不是 `make pr-preflight`
 2. **Working-tree clean**：準備 merge 的 PR branch 存在未 commit 的修改（`git diff --quiet` + `git diff --cached --quiet` 都必須通過）
 
 設計原則：規則本體即為 hook 程式碼，避免「文字規範 → 記性 → 執行」三段 rot。新增 drift 項目時改 code，不改本節。

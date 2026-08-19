@@ -1079,7 +1079,7 @@ class TestCheckWithExplicitVersionFlags:
     def _run(self, *args):
         return subprocess.run(
             [sys.executable, str(self._SCRIPT), *args],
-            capture_output=True, text=True, timeout=300,
+            capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=300,
         )
 
     @pytest.mark.parametrize("flag", [
@@ -1506,7 +1506,7 @@ class TestScopeMustSelectSomething:
 
     def _run(self, *args):
         return subprocess.run([sys.executable, str(self._SCRIPT), *args],
-                              capture_output=True, text=True, timeout=300)
+                              capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=300)
 
     def test_bogus_scope_is_caller_error_in_check(self):
         r = self._run("--check", "--scope", "nosuchdir")
@@ -1776,7 +1776,7 @@ class TestPerLineScopeGuard:
 
     def _run(self, *args):
         return subprocess.run([sys.executable, str(self._SCRIPT), *args],
-                              capture_output=True, text=True, timeout=300)
+                              capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=300)
 
     def test_bump_with_line_empty_scope_is_caller_error(self):
         r = self._run("--tenant-api", "9.9.9", "--scope", "docs", "--dry-run")
@@ -1856,7 +1856,7 @@ class TestSyncCountsFlagContract:
 
     def _run(self, *args):
         return subprocess.run([sys.executable, str(self._SCRIPT), *args],
-                              capture_output=True, text=True, timeout=300)
+                              capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=300)
 
     def test_make_version_check_runs_sync_counts(self):
         """`--sync-counts --check` 必須是 release gate 的一部分。
@@ -2348,7 +2348,7 @@ class TestScopedRulesNarrowsAfterExpansion:
         r = subprocess.run(
             [sys.executable, str(script), "--platform", "9.9.9",
              "--scope", "docs/integration", "--dry-run"],
-            capture_output=True, text=True, timeout=300)
+            capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=300)
         assert r.returncode == 0, r.stdout[-800:]
         stray = sorted({m for m in re.findall(r"docs/[\w./-]+\.md", r.stdout)
                         if not m.startswith("docs/integration/")})
@@ -2440,7 +2440,7 @@ class TestScopeNarrowedGlobHealth:
                   / "dx" / "bump_docs.py")
         r = subprocess.run(
             [sys.executable, str(script), "--check", "--scope",
-             "docs/integration"], capture_output=True, text=True, timeout=300)
+             "docs/integration"], capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=300)
         assert r.returncode == 0, (
             "被 scope 的 --check 因為 GLOB-DEAD 之類的 glob 診斷而紅了——"
             f"那些診斷是整條 glob 的性質，不該由子集判定。\n{r.stdout[-1500:]}")
@@ -2454,7 +2454,7 @@ class TestRoundSixSurvivors:
         import subprocess
         return subprocess.run(
             [sys.executable, str(bump_docs.__file__), *args],
-            capture_output=True, text=True, cwd=str(bump_docs.REPO_ROOT),
+            capture_output=True, text=True, encoding='utf-8', errors='replace', cwd=str(bump_docs.REPO_ROOT),
             timeout=300)
 
     @pytest.mark.parametrize("line", ["--tools", "--platform", "--tenant-api"])
@@ -3011,7 +3011,7 @@ class TestSyncCountsRejectsEverythingItDiscards:
         import subprocess
         return subprocess.run(
             [sys.executable, str(bump_docs.__file__), *args],
-            capture_output=True, text=True, timeout=300,
+            capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=300,
             cwd=str(bump_docs.REPO_ROOT))
 
     @pytest.mark.parametrize("extra", [
@@ -3079,6 +3079,36 @@ class TestSyncCountsRejectsEverythingItDiscards:
                 continue
             assert flag in r.stderr, (flag, r.stderr[-300:])
 
+    def test_passing_a_flag_its_own_default_value_is_still_rejected(self):
+        """⛔ 守衛問的必須是「有沒有**傳**這個旗標」，不是「值有沒有偏離預設」。
+
+        第九輪盲審：這兩個問句對任何**帶非空預設值**的旗標會分開。
+        `--changelog-lang` 預設 `zh`，於是
+
+            --sync-counts --changelog-lang zh   →  ✅ Done. rc=0   （靜默吞掉）
+            --sync-counts --changelog-lang en   →  ERROR    rc=2
+
+        同一個旗標、同樣不被這條分支處理，只因為打的是預設值就被放行——正是
+        這段錯誤訊息自稱要終結的靜默丟棄。今天只有一個實例，但**任何**日後
+        新增帶預設值的旗標都會自動加入這個洞，所以修的是推導方式而不是那一格。
+
+        兩種寫法都要擋（`--flag value` 與 `--flag=value`）。
+        """
+        for form in (["--changelog-lang", "zh"], ["--changelog-lang=zh"]):
+            r = self._run("--sync-counts", *form)
+            assert r.returncode == bump_docs.EXIT_CALLER_ERROR, (
+                f"--sync-counts {' '.join(form)} 沒有被拒絕（rc="
+                f"{r.returncode}）——打的是預設值就繞過了守衛。"
+                f"\n{r.stdout[-300:]}{r.stderr[-300:]}")
+            assert "--changelog-lang" in r.stderr, r.stderr[-300:]
+        # 反向：這條分支真的會處理的旗標必須仍然被接受，否則上面那條可以靠
+        # 「一律拒絕」通過。
+        for ok in ([], ["--check"], ["--dry-run"]):
+            r = self._run("--sync-counts", *ok)
+            assert r.returncode == 0, (
+                f"--sync-counts {' '.join(ok)} 被誤拒 rc={r.returncode}",
+                r.stderr[-300:])
+
 
 class TestRoundEightMutationSurvivors:
     """第八輪盲審 lens C8（112 個變異、只打 diff 動過的行）存活者的補釘。"""
@@ -3105,7 +3135,7 @@ class TestRoundEightMutationSurvivors:
         out = subprocess.run(
             ["make", "-n", "bump-docs", "TENANT_API=2.9.99",
              "PLATFORM=2.10.0"],
-            capture_output=True, text=True, timeout=300,
+            capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=300,
             cwd=str(bump_docs.REPO_ROOT)).stdout
         assert "--tenant-api 2.9.99" in out, out
         assert "--platform 2.10.0" in out, out
@@ -3141,7 +3171,7 @@ class TestRoundEightMutationSurvivors:
             r = subprocess.run(
                 [sys.executable, str(bump_docs.__file__), "--check",
                  "--scope", scope],
-                capture_output=True, text=True, timeout=300,
+                capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=300,
                 cwd=str(bump_docs.REPO_ROOT))
             assert r.returncode == 0, (scope, r.returncode, r.stdout[-500:])
             outs.append(sorted(re.findall(r"SCOPE-EMPTY \[([a-z-]+)\]",

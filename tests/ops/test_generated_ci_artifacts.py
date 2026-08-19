@@ -124,8 +124,10 @@ WHAT THIS GUARD DOES **NOT** BUY
   `.github/workflows/config-diff.yaml` has carried in its `Run config diff`
   step since it was burned by the same thing (cited by step name, not by line
   range — a range drifts the moment anything above it moves, and nothing here
-  would notice). **The GitLab leg still invokes it bare** — see the
-  deferral recorded on `test_generate_stage_body_is_pinned_on_both_legs`.
+  would notice). **The GitLab leg no longer emits this job at all** — it
+  was REMOVED, not fixed (#1358 option C, owner-approved); see the removal
+  note on `test_generate_stage_body_is_pinned_on_both_legs`, which asserts
+  the ABSENCE.
   ⛔ That deferral's original premise — "nothing loads the GitLab pipeline
   anyway" — NO LONGER HOLDS, and the test that used to pin it says the
   opposite now. `test_gitlab_deferral_premise_still_holds` asserted that NO
@@ -134,8 +136,9 @@ WHAT THIS GUARD DOES **NOT** BUY
   its greenfield polarity INVERTED — it now asserts the root shell IS
   created and DOES `include:` the generated pipeline (its brownfield half,
   "an existing root file is left byte-identical", kept its polarity but
-  changed meaning: tripwire → specification). So the bare invocation below
-  is a LIVE defect, not a dormant one. Do not cite the old name; it is gone.
+  changed meaning: tripwire → specification). Do not cite the old name; it
+  is gone. ⚠️ Nor is there a bare invocation left to describe: wiring the
+  pipeline up is exactly why the job came OUT rather than staying in.
   ⚠️ What is still NOT asserted anywhere: that a *consumer* honours the
   contract. Both guards in the blast-radius step ARE now observed — see
   `test_generated_blast_radius_step_honours_the_exit_contract`, which runs the
@@ -159,9 +162,10 @@ WHAT THIS GUARD DOES **NOT** BUY
   way the docs say. That needs a real instance, same boundary as the
   ``exists:`` note below.
   ⚠️ **Consequence worth reading before touching the GitLab leg:** it is now
-  REACHABLE, so the defects listed on
-  ``test_generate_stage_body_is_pinned_on_both_legs`` stopped being theoretical.
-  See the note there.
+  REACHABLE, which is precisely why the blast-radius job was REMOVED from it
+  rather than left in place — once loaded, its defects would have been
+  customer-visible on every merge request. See the removal note on
+  ``test_generate_stage_body_is_pinned_on_both_legs``.
 * **It executes the shell of TWO steps, and reads the rest.** actionlint
   parses ``run:`` blocks (and could shell-check them, but that integration is
   pinned off — see the ``-shellcheck=`` note). The generate job's "Resolve base
@@ -187,13 +191,14 @@ WHAT THIS GUARD DOES **NOT** BUY
   config directory were both present — returning exit 0 with nothing
   extracted, which is what made #2 visible at all.
 
-  Both are fixed on the GitHub leg (#1358). ⛔ The GitLab leg still carries
-  the equivalent defect and is deliberately NOT fixed here — but it is no
-  longer unreachable, so this is now a live defect rather than a dormant one.
-  See ``test_generate_stage_body_is_pinned_on_both_legs``, whose deferral
-  paragraph records exactly what changed, and
-  ``test_gitlab_root_shell_wires_the_pipeline``, which pins the wiring that
-  made it live. ⛔ So does the portal
+  Both are fixed on the GitHub leg (#1358). ⛔ The GitLab leg carried the
+  equivalent defects, and rather than being fixed here the whole job was
+  REMOVED (#1358 option C): the published image has no ``git``, so its
+  baseline could never be read at all. Restoring the capability needs ``git``
+  in the image plus the GitHub leg's shape — tracked in #1444.
+  See ``test_generate_stage_body_is_pinned_on_both_legs``, whose removal
+  note records exactly what changed, and
+  ``test_gitlab_root_shell_wires_the_pipeline``, which pins the wiring. ⛔ So does the portal
   wizard's preview generator, and worse (it passes ``--old-dir`` a path it
   never mounts); that divergence is #1351, and this change widens it.
 
@@ -3887,6 +3892,20 @@ def test_dry_run_does_not_warn_about_a_correctly_wired_subdirectory(
     subdirectory (its workflow must be moved and there is no `include:`
     indirection), so `github`/`both` warn here correctly and only the GitLab
     leg can be rescued from the root.
+
+    ⛔ This used to also assert TOTAL silence (`"⚠️" not in out`), and that
+    half was pinning a defect. The ninth blind review measured it: being
+    wired is not being done. The generated CONTENTS are still written
+    relative to the repository root, so every path filter in them misses the
+    real files — the pipeline loads, creates no jobs, and goes green having
+    validated nothing. The real run says so explicitly ("otherwise no job is
+    ever created"); `--dry-run` said nothing at all, from the one flag whose
+    entire job is "what will this do to my repo".
+
+    The property that actually matters is preserved and sharpened: the
+    warning must not be the WRONG one. It must not claim the config is
+    unloaded (that is the unwired leg's message), and it must name the real
+    remaining work.
     """
     monkeypatch.setattr(ip, "_LANG", lang)
     subdir_marker, _ = _DRYRUN_MARKERS[lang]
@@ -3902,9 +3921,17 @@ def test_dry_run_does_not_warn_about_a_correctly_wired_subdirectory(
 
     assert subdir_marker not in out, (
         "a correctly wired split-pipeline repo was told by --dry-run that "
-        "its config would not be loaded. The real run prints an all-clear "
-        f"for this exact repo, so the two flags disagree.\n{out}")
-    assert "⚠️" not in out, f"--dry-run warned about nothing at all.\n{out}"
+        "its config would not be loaded. That is the UNWIRED leg's message; "
+        f"here the include is already in place.\n{out}")
+    assert "⚠️" in out, (
+        "--dry-run said nothing at all about a subdirectory install whose "
+        "generated path filters are still repo-root-relative. Wired is not "
+        "done: the pipeline loads, creates no jobs, and stays green having "
+        f"validated nothing (#1357's shape from the wired branch).\n{out}")
+    remaining = "prefix" if lang == "en" else "前綴"
+    assert remaining in out, (
+        "the warning does not name the work that is actually left — adding "
+        f"the subdirectory prefix to the generated paths.\n{out}")
 
 
 @pytest.mark.parametrize("lang", sorted(_DRYRUN_MARKERS))
@@ -4100,12 +4127,12 @@ def test_generate_stage_body_is_pinned_on_both_legs(generated, ci, deploy) -> No
       the checkout, the base commit and the config directory looked up
       separately so a fault and a first import stop being the same outcome,
       and `config-diff`'s exit code handled against the documented contract.
-    * The **GitLab** pin still encodes the broken `script:` shape, and its
-      deferral has LOST the premise it rested on. Read this before touching
-      the leg — the two blockers below used to be three, and the one that was
-      removed is the one that made the other two harmless.
+    * The **GitLab** pin is now EMPTY (`_EXPECTED_GL_GENERATE == []`) because
+      the job was REMOVED rather than fixed (#1358 option C, owner-approved).
+      The assertion on that leg is the ABSENCE of a `generate` stage and of
+      any job invoking `config-diff` — see the removal note in the body.
 
-      Removed:
+      Two of the three original blockers were fixed:
 
       - ~~#1357 — nothing includes `.gitlab-ci.d/dynamic-alerting.yml`, so the
         pipeline does not run at all.~~ **Fixed.** `da-tools init` now emits a
@@ -4113,35 +4140,34 @@ def test_generate_stage_body_is_pinned_on_both_legs(generated, ci, deploy) -> No
         `test_gitlab_root_shell_wires_the_pipeline`.
       - ~~The three `$DA_TOOLS_IMAGE` jobs pass the image as a bare scalar, so
         they inherit its ENTRYPOINT — which is the tool itself.~~ **Fixed
-        (#1408).** The generator's own thrice-stated rule beside the
-        apply-stage images was the correct half and the YAML was the wrong
-        half; all three jobs now carry `entrypoint: [""]`, so they do reach
-        their first script line. ⛔ Which means the remaining blocker is no
-        longer masked by a job that died before running.
+        (#1408).** All three jobs now carry `entrypoint: [""]`, so they do
+        reach their first script line.
 
-      Still live, and now CUSTOMER-VISIBLE rather than dormant:
+      The third could not be fixed from the generator, and fixing the first
+      two is what forced the decision:
 
       - The image has no `git`, so `git archive` cannot work. Installing it in
         `before_script` is not a way out either: the image runs as
         `USER nonroot`, and `apk add` there fails on a locked database. The
         `2>/dev/null || true` after it swallows the failure, so the baseline
-        is empty and every merge request reports every tenant as ADDED —
-        with a green pipeline.
-      - `config-diff` is still invoked bare, so its documented rc=1 ("changes
-        detected", the ordinary outcome) fails the job. That is #1358 on this
-        leg, unfixed.
+        would be empty and every merge request would report every tenant as
+        ADDED — with a green pipeline. Bare `config-diff` then turns its
+        documented rc=1 ("changes detected", the ordinary outcome) into a
+        failed job.
 
-      ⛔ This is a deliberate, stated scope boundary of the #1357/#1408 change
-      and NOT an argument that the leg is fine: the honest summary is that
-      wiring the pipeline up turned two latent defects into live ones. The
-      justification for leaving them is no longer "no customer can observe
-      this" — it is "the fix needs a `git` in the published da-tools image,
-      which is an image change, not a generator change". Do not restate the
-      old justification; it is gone.
+      ⛔ So wiring the pipeline up is exactly WHY the job came out: once
+      loaded, those defects would have been customer-visible on every merge
+      request. **A missing check is visible; a wrong check is not** — hence
+      removal rather than shipping it. Restoring the capability needs `git`
+      in the published image plus the GitHub leg's two-lookup shape, which is
+      an image change, not a generator change; tracked in #1444.
 
-    Fixing the GitLab pin is therefore expected to be a later, deliberate edit
-    here, exactly as this GitHub-side edit was — this pin is what will make
-    that edit visible.
+    ⚠️ Do NOT describe this leg as "still invoking config-diff" or as
+    carrying a live defect — it emits no such job at all. The ninth blind
+    review found four copies of that stale claim in this module's header,
+    written before the removal and left behind by it; the shipped artifact has
+    three jobs (`validate-config`, `lint-custom-rules`, `apply`) and none of
+    them calls `config-diff`.
     """
     root = generated[(ci, deploy)]
 
@@ -4932,6 +4958,29 @@ def test_generated_ci_config_is_reachable_or_ships_wiring(
     `.gitlab/ci/`, into the root file directly, wherever) is only red if it
     breaks reachability. `test_unreachable_ci_artifact_detector_can_say_no` is
     the control that keeps this from being a tautology.
+
+    ⛔ **SCOPE — this holds for GREENFIELD only, and that is measured, not
+    assumed.** The `generated` fixture initialises into an empty directory, so
+    `da-tools init` writes the root `.gitlab-ci.yml` itself. On a BROWNFIELD
+    repo (customer already has a root pipeline) the tool deliberately does not
+    touch it, and this same classifier reports the artifact as UNREACHABLE:
+
+        greenfield  -> []
+        brownfield  -> ['.gitlab-ci.d/dynamic-alerting.yml']
+
+    That is not a hole in the product — the remedy is real, it is just printed
+    to stdout (the paste-ready `include:` block), which a file-tree classifier
+    cannot see. The brownfield half is pinned by
+    `test_gitlab_root_shell_wires_the_pipeline` phase 2 (existing root file
+    left byte-identical) and by the summary assertions in
+    `test_init_project.py`.
+
+    ⚠️ Stated explicitly because the property above reads as universal and is
+    not. The ninth blind review found the docstring claiming the general
+    property while the axis that would falsify it was never instantiated —
+    the recurring shape of "宣稱窮舉卻少一維的軸". Widening the fixture to
+    brownfield is a bigger change (the whole matrix doubles); disclosing the
+    boundary is the honest interim.
     """
     root = generated[(ci, deploy)]
     files = {
