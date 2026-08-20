@@ -81,9 +81,9 @@ tenants:
 
 **Error**: `Unknown key "mysql_conections" not in defaults`
 
-**Cause**: Typo in metric name (missing 'c' in connections)
+**Cause**: usually a typo in the metric name (missing 'c' in connections). ⚠️ But if EVERY tenant key is reported, the cause is on the platform side instead — a `conf.d/` with no `_defaults.yaml`, or one whose `defaults:` block is `{}`, makes every legal override look unknown (a bare `defaults:` key with a null value behaves differently again — on the shipped image it raises `AttributeError` and prints nothing). `validate-config` says which case you are in; **do not delete keys before checking**.
 
-**Resolution**: Check `_defaults.yaml` or run `diagnose.py <tenant> --config-dir conf.d/ --show-inheritance` to see valid metric keys — `resolved` lists the keys that already carry a value, `declared` the ones the platform recognises but assigns no value to (set one and it takes effect; leave it and the alert stays silent)
+**Resolution**: Check `_defaults.yaml` or run `da-tools diagnose <tenant> --config-dir conf.d/ --show-inheritance` to see valid metric keys — `resolved` lists the keys that already carry a value, `declared` the ones the platform recognises but assigns no value to (⚠️ the shipped v2.9.0 image prints `resolved` but not `declared`) (set one and it takes effect; leave it and the alert stays silent)
 
 ### "Invalid time window format"
 

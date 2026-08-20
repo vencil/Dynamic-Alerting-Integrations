@@ -2,10 +2,21 @@
 """validate_config.py — One-stop configuration validation.
 
 Runs all validation checks in sequence and produces a unified report.
-Designed for CI pipelines (exit 0 = all pass, exit 1 = any fail).
+Designed for CI pipelines: exit 0 = all pass, exit 1 = a finding about the
+config (including a file in config-dir this tool could not read), exit 2 =
+this run could not be completed for a reason that is not the config's fault
+(a prerequisite tool missing or timed out).
 
 Checks:
-  1. YAML syntax  — All files in config-dir parse as valid YAML
+  1. YAML syntax  — Every file in config-dir decodes as UTF-8, parses, and
+                    has a mapping at its top level (#1448: the other two are
+                    as fatal to every consumer as a syntax error, and this is
+                    the only check that opens each file by name, so it is the
+                    only one that can name one. ⚠️ It enumerates via
+                    `iter_config_files`, which yields FILES — a *directory*
+                    named `x.yaml` is invisible to it while the routing
+                    reader does see it, so that one shape is a stderr WARN
+                    and a PASS row here. Tracked separately.)
   2. Schema        — Tenant keys validated against known defaults + reserved keys
   3. Routes        — Alertmanager route generation with --validate semantics
   4. Policy        — Webhook domain allowlist (if --policy provided)
@@ -38,6 +49,7 @@ import argparse
 import json
 import os
 import sys
+import traceback
 from pathlib import Path
 
 # Add script dir to path for lib imports
@@ -115,49 +127,200 @@ WARN = "warn"
 FAIL = "fail"
 
 
+# ============================================================
+# Customer-facing strings that tests assert on
+# ============================================================
+# ⛔ Named, not inline. Blind review measured what inline costs: rewording
+# the caveat sentence turned 5 tests red, and the two NEGATIVE controls
+# ("this row must NOT carry the caveat") stayed green while asserting
+# nothing at all, because `"<old wording>" not in output` is satisfied by
+# any reword. A reword is now one edit here, and the negative controls keep
+# their teeth because they reference the same constant.
+UNUSABLE_CAVEAT = ("\u26a0\ufe0f {n} file(s) could not be read and were skipped "
+                   "({listed}); nothing below covers them.")
+READ_ERRORS_FIRST = ("-> Fix the read errors above FIRST — this check's "
+                     "findings may be artefacts of the files it could not "
+                     "read.")
+POLICY_ONLY_SCHEMA_HINT = (
+    "The findings above are ADR-007 domain-policy errors, not tenant key "
+    "problems — no unknown key was reported in this run. \u26d4 Ignore the "
+    "generic advice about removing keys: fix the domain policy file the "
+    "error names, then re-run.")
+NO_DECLARED_DEFAULTS_HINT = (
+    "This config declares no platform defaults at all, so every tenant key "
+    "is reported as unknown — that is the platform's side missing, not a "
+    "typo in the tenant files. \u26d4 Do NOT remove the keys named above: "
+    "they are in force. Add a `defaults:` block — create "
+    "_defaults.yaml if the tree has none, or restore the block that "
+    "was emptied.")
+
+
+def _no_declared_defaults_hint(config_dir: str) -> str | None:
+    """Replacement hint for when the platform declares no defaults at all.
+
+    ⛔ ``check_schema`` reports every tenant key as ``unknown key … not in
+    defaults`` when nothing is declared, and the generic hint for that row
+    says **"Remove unknown keys"** — pointing at overrides that are legal
+    and in force. Following it deletes a working config, and the run exits
+    0 while saying so. Measured on ``origin/main`` with a ``_defaults.yaml``
+    that has no ``defaults:`` key, and again with ``defaults: {}``.
+
+    ⚠️ NOT with ``defaults:`` written as a bare key (null). That spelling
+    reached ``check_profiles`` first and died there with an
+    ``AttributeError`` — the crash this branch fixes elsewhere — so on
+    ``origin/main`` it produced no report at all rather than bad advice. The
+    three spellings are one class *here* and three different outcomes
+    *there*; an earlier version of this sentence collapsed them.
+
+    Only the *advice* changes here. The warnings themselves come from
+    ``validate_tenant_keys``, whose verdicts are pinned key-for-key against
+    the Go twin (``tests/shared/optional_overrides_membership_matrix.json``);
+    silencing them in this report would put the two out of step.
+
+    Returns ``None`` when defaults *are* declared, so the generic hint —
+    which is right for an actual typo — is used unchanged.
+    """
+    tools_dir = os.path.dirname(os.path.abspath(__file__))
+    if tools_dir not in sys.path:
+        sys.path.insert(0, tools_dir)
+    import generate_alertmanager_routes as gen
+
+    # ⛔ Fail soft. This reads a private helper through a re-export and two
+    # dict keys that belong to another module; renaming any of them is an
+    # ordinary refactor over there, and an exception raised here would be
+    # caught by `_run_check`'s catch-all and turn a WARN row into "FAIL,
+    # exit 2, please report this with the traceback" — for a config that is
+    # fine. Losing the replacement hint degrades to today's generic advice,
+    # which is the outcome this whole helper is an improvement on; losing
+    # the run is not.
+    try:
+        parsed = gen._parse_config_files(config_dir)
+        declared = (parsed.get("defaults_keys", set())
+                    | parsed.get("optional_override_keys", set()))
+    except (Exception, SystemExit):  # noqa: BLE001 — see above
+        # ⛔ `SystemExit` is NOT an `Exception`. `_parse_config_files` calls
+        # `sys.exit(EXIT_CALLER_ERROR)` when the directory is gone, which a
+        # bare `except Exception` lets straight through — and `_run_check`
+        # cannot catch it either, so the run dies with no report at all:
+        # #1448 exactly, reintroduced by the guard written to prevent it.
+        # Reachable by TOCTOU — a GitOps ConfigMap projected volume swaps
+        # `..data` atomically between `main()`'s isdir() check and this call.
+        return None
+    if declared:
+        return None
+    return NO_DECLARED_DEFAULTS_HINT
+
+
 def _make_result(
     name: str, status: str, details: list[str] | None = None,
-    caller_error: bool = False,
+    caller_error: bool = False, unusable_files: list[str] | None = None,
+    hint: str | None = None,
 ) -> dict[str, object]:
     """Create a check result dict.
 
     #452/#737: ``caller_error`` marks a FAIL that stems from a caller-error
     class condition (a prerequisite tool missing/timed out, IO failure) rather
     than a genuine validation finding, so the CLI can exit 2 instead of 1.
+
+    #1448: ``unusable_files`` carries the files ``yaml_syntax`` could not
+    read, as *data*. The report needs that list to stop asserting health for
+    files nobody could open, and the first draft recovered it by splitting
+    the report lines it had just printed back apart on ``:`` — so the moment
+    a detail line was prose rather than ``<file>: <error>`` the report
+    invented filenames out of its own sentences. Structure computed upstream
+    does not get re-guessed from a string downstream.
+
+    #1448: ``hint`` replaces the generic ``_CHECK_HINTS`` line for this run
+    when the check knows the generic advice would be wrong — see
+    ``_no_declared_defaults_hint``.
     """
     return {"check": name, "status": status, "details": details or [],
-            "caller_error": caller_error}
+            "caller_error": caller_error,
+            "unusable_files": unusable_files or [],
+            "hint": hint}
 
 
 # ============================================================
 # Check 1: YAML Syntax
 # ============================================================
 def check_yaml_syntax(config_dir: str) -> dict[str, object]:
-    """Validate that all YAML files in config_dir parse successfully.
+    """Validate that every YAML file in config_dir loads into a usable shape.
 
     Recursive since #1339: ADR-016 allows a hierarchical conf.d/ and the
     exporter walks it, so a flat scan here reported `PASS` while never
     reading the tenants it was asked about.
+
+    #1448 widened "loads" twice, because the check that reads every customer
+    file first is the one place that can name the file:
+
+    * **Not UTF-8.** ``open(..., encoding="utf-8")`` raises
+      ``UnicodeDecodeError``, which is not a ``YAMLError``, so it escaped
+      this loop entirely. An editor that saved one tenant file in the local
+      code page therefore killed the whole run, and the exception text does
+      **not** contain the path — the customer got a traceback naming a codec
+      and no filename.
+    * **Parses, but is not a mapping.** A bare YAML list or a lone scalar is
+      dropped by every consumer (they all reach for ``data.get(...)``). That
+      used to surface as a crash, which was at least loud; teaching the
+      readers to skip it instead would have traded the crash for an all-green
+      report on a conf.d whose tenants never loaded, so it is reported here,
+      in the check whose question is "can this file be used at all".
     """
     errors = []
+    unusable = []
     file_count = 0
     for fpath_p in iter_config_files(config_dir):
         fpath = str(fpath_p)
         file_count += 1
+        # Relative path, not bare filename: now that the scan is recursive,
+        # two levels can hold the same `_defaults.yaml`.
+        try:
+            label = fpath_p.relative_to(Path(config_dir)).as_posix()
+        except ValueError:
+            label = fpath_p.name
         try:
             with open(fpath, encoding="utf-8") as f:
-                yaml.safe_load(f)
+                loaded = yaml.safe_load(f)
         except yaml.YAMLError as e:
-            # Relative path, not bare filename: now that the scan is
-            # recursive, two levels can hold the same `_defaults.yaml`.
-            try:
-                label = fpath_p.relative_to(Path(config_dir)).as_posix()
-            except ValueError:
-                label = fpath_p.name
             errors.append(f"{label}: {e}")
+            unusable.append(label)
+            continue
+        except UnicodeDecodeError as e:
+            errors.append(
+                f"{label}: not valid UTF-8 ({e.reason} at byte {e.start}) — "
+                f"re-save this file as UTF-8")
+            unusable.append(label)
+            continue
+        except Exception as e:  # noqa: BLE001 — see below
+            # ⛔ Deliberately open-ended, and this loop is the ONLY place in
+            # the tool where that is the right shape: it is reading one
+            # named file, so whatever comes back it can say *which* file.
+            # Listing the exception types instead is a bet that keeps
+            # losing — `yaml.safe_load` raises `RecursionError` (not a
+            # YAMLError) on deeply nested input — measured at roughly half the recursion
+            # limit — 495 flow-style, 493 block-style on this host —
+            # and it tracks `sys.getrecursionlimit()` rather than being
+            # a constant —
+            # and before this it escaped to the catch-all in `_run_check`,
+            # which exits 2 and prints "please report this" for a file the
+            # customer wrote and this message could not name.
+            errors.append(f"{label}: could not be read — "
+                          f"{e.__class__.__name__}: {' '.join(str(e).split())}")
+            unusable.append(label)
+            continue
+        if loaded is not None and not isinstance(loaded, dict):
+            errors.append(
+                # Not "so its tenants never load": this same message is
+                # emitted for `_domain_policy.yaml` and
+                # `_routing_profiles.yaml`, which hold no tenants at all.
+                f"{label}: top level must be a mapping, got "
+                f"{type(loaded).__name__} — every consumer reaches for keys "
+                f"on it and finds none, so nothing in this file is loaded")
+            unusable.append(label)
 
     if errors:
-        return _make_result("yaml_syntax", FAIL, errors)
+        return _make_result("yaml_syntax", FAIL, errors,
+                            unusable_files=unusable)
     return _make_result("yaml_syntax", PASS,
                         [f"{file_count} files parsed successfully"])
 
@@ -183,11 +346,27 @@ def check_schema(config_dir: str, strict: bool = False) -> dict[str, object]:
 
     policy_errors = [w for w in schema_warnings
                      if w.lstrip().startswith(gen.POLICY_ERROR_PREFIX)]
+    if not schema_warnings:
+        return _make_result("schema", PASS, ["No schema warnings"])
+    # ⛔ Computed once, for BOTH exits. The first version wired it only to
+    # the WARN branch, so `--strict` plus an emptied `defaults:` plus any
+    # domain-policy violation took the FAIL branch and printed "Remove
+    # unknown keys" at overrides that are in force — the exact destructive
+    # advice this hint exists to replace, on the path where the customer is
+    # most likely to be in a hurry.
+    hint = _no_declared_defaults_hint(config_dir)
     if policy_errors:
-        return _make_result("schema", FAIL, schema_warnings)
-    if schema_warnings:
-        return _make_result("schema", WARN, schema_warnings)
-    return _make_result("schema", PASS, ["No schema warnings"])
+        # ⛔ This row is a multiplexer: its details carry unknown-key WARNs
+        # AND ADR-007 policy ERRORs, while the advice line is keyed on the
+        # check NAME. So a run whose only finding is a broken policy file
+        # was still told "Remove unknown keys or add them to the schema" —
+        # the same destructive advice this branch exists to stop, on a path
+        # that reports zero keys. Derived by set difference on the list the
+        # function already split, not by matching the message text.
+        if not [w for w in schema_warnings if w not in policy_errors]:
+            hint = POLICY_ONLY_SCHEMA_HINT
+        return _make_result("schema", FAIL, schema_warnings, hint=hint)
+    return _make_result("schema", WARN, schema_warnings, hint=hint)
 
 
 # ============================================================
@@ -350,7 +529,14 @@ def check_profiles(config_dir: str) -> dict[str, object]:
     defaults_raw = load_yaml_file(defaults_path, default={})
     known_defaults = set()
     if isinstance(defaults_raw, dict):
-        known_defaults = set(defaults_raw.get("defaults", {}).keys())
+        # `or {}`, not just the get() default: a `defaults:` key that exists
+        # with nothing under it (every entry commented out — an ordinary
+        # file) parses to None, and the get() default only fires when the
+        # key is *absent*. #1448: this raised AttributeError and took the
+        # whole report with it, in the very function the ticket named.
+        declared = defaults_raw.get("defaults") or {}
+        if isinstance(declared, dict):
+            known_defaults = set(declared.keys())
 
     warnings = []
     tenant_count = 0
@@ -544,8 +730,13 @@ def _docs_url(rel_path: str) -> str:
 # resolves to something a reader outside this repository can open, so a hint
 # pointing at an unreachable page fails there rather than in their terminal.
 _CHECK_HINTS: dict[str, tuple[str, str]] = {
+    # #1448 widened this check beyond syntax (encoding, top-level shape), so
+    # the one-line remedy had to widen with it: a file rejected for its
+    # encoding sends the reader hunting for indentation that is not wrong.
+    # Each listed file states its own remedy on its own line above this.
     "yaml_syntax": (
-        "Fix YAML syntax errors (indentation, quoting, colons) in the listed files.",
+        "Fix each file listed above as it says — YAML syntax (indentation, "
+        "quoting, colons), file encoding, or top-level shape.",
         "docs/getting-started/for-platform-engineers.md",
     ),
     "schema": (
@@ -586,15 +777,91 @@ _CHECK_HINTS: dict[str, tuple[str, str]] = {
 }
 
 
+def _unusable_files(results: list[dict[str, object]]) -> list[str]:
+    """Files `yaml_syntax` could not read, taken from its own bookkeeping.
+
+    #1448: every other check *skips* a file it cannot read and then reports
+    on what remained — so `schema` says "No schema warnings" and `routes`
+    says PASS about a tenant that was never loaded. Before #1448 nobody saw
+    those rows (the process died first); making the report appear made a
+    report that asserts health for files nobody could open. The rows are
+    left as they are — this only lets the reader see what they exclude.
+
+    ⛔ The list is read from the ``unusable_files`` key ``check_yaml_syntax``
+    filled in, never re-derived from the printed detail lines. The first
+    draft did the latter (``detail.split(":", 1)[0]``) and a run that
+    crashed before the check finished therefore produced three *sentences*
+    where the filenames go — "⚠️ 3 file(s) could not be parsed … (this check
+    could not complete on your input, The report below is incomplete …)" —
+    and put the same sentences into the ``skipped_unusable_files`` JSON
+    field consumed programmatically.
+    """
+    for r in results:
+        if r["check"] == "yaml_syntax":
+            return [str(f) for f in r.get("unusable_files", [])]
+    return []
+
+
+def _caveat_applies(row: dict[str, object]) -> bool:
+    """Does the "files were skipped" caveat belong on this row?
+
+    Derived from what the row is, not from its name: it belongs on a check
+    that reads the config tree (so the unreadable files really were part of
+    its input) and that is not itself the row reporting them.
+
+    ⛔ The first draft asked ``r["check"] != "yaml_syntax"``, which told
+    ``versions`` (a ``bump_docs.py`` subprocess) and ``custom_rules`` (which
+    reads ``--rule-packs``) that a broken file in ``conf.d/`` was why they
+    failed — a false attribution printed straight at the customer.
+
+    Rows built by hand rather than through ``_run_check`` keep the caveat,
+    which is the older behaviour and the safer default: a missing caveat
+    silently over-claims coverage, an extra one only over-warns.
+    """
+    return (bool(row.get("reads_config_dir", True))
+            and not row.get("unusable_files"))
+
+
 def print_report(results: list[dict[str, object]], as_json: bool = False) -> None:
     """Print the validation report with suggested actions (v2.5.0)."""
+    unusable = _unusable_files(results)
+    caveat = ""
+    if unusable:
+        listed = ", ".join(unusable[:5]) + (" …" if len(unusable) > 5 else "")
+        caveat = UNUSABLE_CAVEAT.format(n=len(unusable),
+                                        listed=listed)
+
     # v2.5.0: Inject hints into JSON output for programmatic consumers
     if as_json:
         enriched = []
         for r in results:
             entry = dict(r)
+            # ⛔ Internal bookkeeping does not go in the customer's JSON.
+            # These exist so the report can decide where the skipped-file
+            # caveat belongs and which advice line to print; publishing them
+            # turns an implementation detail into something a consumer can
+            # depend on. An earlier version popped only `reads_config_dir`
+            # while its own comment said "it appears on every row of a
+            # perfectly healthy run" — which was equally true of the other
+            # two: measured on a clean `try-local/seed/conf.d`, every one of
+            # the five PASS rows carried `"unusable_files": []` and
+            # `"hint": null`, growing the document 750B -> 970B for nothing.
+            # `hint` is in any case a duplicate of `suggested_action`, which
+            # this same function already emits.
+            # ⚠️ `caller_error` matches that description too and is NOT
+            # popped: it has been in this document since v2.5.0, so removing
+            # it is a contract change rather than a contract not yet made.
+            # The rule is "do not ADD internal fields", not "no internal
+            # field may remain".
+            entry.pop("reads_config_dir", None)
+            entry.pop("hint", None)
+            if not entry.get("unusable_files"):
+                entry.pop("unusable_files", None)
+            if unusable and _caveat_applies(r):
+                entry["skipped_unusable_files"] = unusable
             if r["status"] != PASS:
                 hint, docs = _CHECK_HINTS.get(r["check"], ("", ""))
+                hint = r.get("hint") or hint
                 if hint:
                     entry["suggested_action"] = hint
                     entry["docs_link"] = _docs_url(docs)
@@ -613,11 +880,22 @@ def print_report(results: list[dict[str, object]], as_json: bool = False) -> Non
         print(f"\n[{icon}] {r['check']}")
         for detail in r.get("details", []):
             print(f"       {detail}")
+        if caveat and _caveat_applies(r):
+            print(f"       {caveat}")
 
         # v2.5.0 Phase C: Show suggested action for non-passing checks
         if r["status"] != PASS:
             hint, docs = _CHECK_HINTS.get(r["check"], ("", ""))
+            hint = r.get("hint") or hint
             if hint:
+                # ⛔ The hint is written for a report that could read every
+                # file. With a broken `_defaults.yaml`, `schema` reports each
+                # legitimate tenant key as "unknown" and this line says
+                # "Remove unknown keys" — following it deletes a working
+                # config. The finding is not suppressed (it may be real once
+                # the read error is fixed); the order of operations is.
+                if caveat and _caveat_applies(r):
+                    print(f"       {READ_ERRORS_FIRST}")
                 print(f"       -> Suggested action: {hint}")
                 print(f"       -> See: {_docs_url(docs)}")
 
@@ -639,6 +917,167 @@ def print_report(results: list[dict[str, object]], as_json: bool = False) -> Non
     else:
         print("  Result: PASS")
     print()
+
+
+# ============================================================
+# Check dispatch
+# ============================================================
+# Exceptions a check raises when the customer's config could not be read,
+# as opposed to "this tool broke".
+#
+# ⛔ This pair is NOT closed, and an earlier draft of this comment claimed it
+# was ("the exception contract of the reader"). It is not: `yaml.safe_load`
+# also raises `RecursionError` on deeply nested input (roughly half
+# `sys.getrecursionlimit()`: 495 flow-style / 493 block-style here, and
+# it moves with the limit, so it is not a constant), and `open()` raises `OSError` on a path it cannot read. The
+# enumeration is only a shortcut for the two overwhelmingly common cases —
+# the guarantee that a customer file is *named* rather than reported as our
+# bug comes from `check_yaml_syntax`, which reads every file under
+# `--config-dir` first, one at a time, and catches everything (it can, since
+# it knows the filename). Anything reaching the classifier below has already
+# been named there if it belongs to a file in that tree.
+_INPUT_ERRORS = (yaml.YAMLError, UnicodeDecodeError)
+
+
+def _reads_config_dir(config_dir, args, kwargs) -> bool:
+    """Was this check actually handed the tree ``--config-dir`` points at?
+
+    #1448: the skipped-file caveat used to be attached to every row except
+    ``yaml_syntax``, so ``versions`` (which shells out to ``bump_docs.py``)
+    and ``custom_rules`` (which reads ``--rule-packs``) were told that an
+    unreadable file in ``conf.d/`` was why they failed.
+
+    ⛔ The answer comes from the **value that was passed**, not from a
+    parameter name. An earlier version asked
+    ``"config_dir" in inspect.signature(fn).parameters``, which made a
+    customer-facing guarantee depend on an identifier that carries no
+    contract: renaming ``check_routes(config_dir, …)`` to ``conf_root``
+    silently dropped the caveat and the "fix the read errors first" line
+    from that row — measured — and the cheapest way back to green was to
+    rename it back. A decorator without ``functools.wraps`` collapses the
+    signature the same way. Comparing the argument survives both.
+
+    ``config_dir`` of ``None`` means the caller did not say; the row keeps
+    the caveat, because a missing caveat over-claims coverage while an
+    extra one only over-warns.
+    """
+    if config_dir is None:
+        return True
+    return any(a == config_dir for a in args) or any(
+        v == config_dir for v in kwargs.values())
+
+
+def _run_check(name: str, fn, *args, _config_dir: str | None = None,
+               **kwargs) -> dict[str, object]:
+    """Run one check and turn an *input*-caused crash into a report row.
+
+    #1448: a YAML syntax error anywhere in the customer's ``conf.d/`` escaped
+    ``check_profiles`` as an uncaught ``yaml.ScannerError``. The process died
+    before ``print_report`` ran, so the command printed a Python traceback on
+    stderr and **zero bytes on stdout** — while §7 of the GitOps guide tells
+    customers to run exactly this command and read the report. The exit code
+    was 1 either way, so nothing downstream noticed the report had vanished.
+
+    Wrapping the *dispatch* rather than the three ``load_yaml_file`` calls
+    that happened to be named in the ticket means a check added later is
+    covered without anyone remembering this;
+    ``TestNoCheckCanKillTheReport`` in ``tests/ops/test_validate_config.py``
+    is what keeps that true — it forces each check in turn to fail the way a
+    bad customer file makes it fail, and requires the report to survive.
+    (Earlier revisions of this branch cited an AST guard here; it was
+    removed for false-redding five ordinary dispatch refactors, and the
+    citation outlived it by a round.)
+
+    ⛔ Every exception is caught, and the first draft of this got that wrong.
+    It converted only ``yaml.YAMLError``/``OSError`` on the theory that
+    anything else "is a defect in this tool" and should keep propagating.
+    Measured against six syntactically **valid** customer configs, three
+    still died with an empty stdout — one of them inside ``check_profiles``,
+    the function #1448 named. The axis was wrong: "is this our bug or theirs"
+    is a different question from "does the customer get a report", and the
+    ticket is about the second.
+
+    ⛔ The *classification*, however, is on the input axis and has to stay
+    there. An editor that saved one tenant file in the local code page
+    raises ``UnicodeDecodeError``; the first draft let that fall into the
+    catch-all, which exits **2** and prints "Please report this along with
+    the file it names" — telling the customer their own encoding problem is
+    our bug, in a message that names no file because ``UnicodeDecodeError``
+    carries no path. It is a finding about their config: exit 1, same as a
+    syntax error.
+
+    Nothing is swallowed: for anything that is genuinely not an input error
+    the traceback still reaches stderr and the run exits 2, so a run that
+    could not complete stays distinguishable from one that found violations.
+    """
+    try:
+        row = fn(*args, **kwargs)
+        row["reads_config_dir"] = _reads_config_dir(
+            _config_dir, args, kwargs)
+        return row
+    except _INPUT_ERRORS as exc:
+        detail = " ".join(str(exc).split())
+        row = _make_result(
+            name, FAIL,
+            [f"could not read the config: {detail}",
+             # ⛔ Not "the file reported by yaml_syntax above": an
+             # unreadable `--policy` or `--rule-packs` file lives outside
+             # `--config-dir`, so yaml_syntax passes and points at nothing.
+             # ⛔ Does not promise a filename. A YAMLError carries the
+             # path; a UnicodeDecodeError carries a codec and an offset and
+             # nothing else — and an unreadable --policy / --rule-packs file
+             # lives outside --config-dir, so yaml_syntax cannot name it
+             # either. Measured: a non-UTF-8 --policy file produced this row
+             # with no filename anywhere in the report, under a sentence
+             # telling the reader to go read the name.
+             "This check never reached its own logic. If no file is named "
+             "above, the fault is in one of the paths you passed on the "
+             "command line — check each one's encoding and syntax."])
+        row["reads_config_dir"] = _reads_config_dir(
+            _config_dir, args, kwargs)
+        return row
+    except SystemExit as exc:
+        # ⛔ `SystemExit` is not an `Exception`, so the clause below does not
+        # see it — and `_parse_config_files` calls `sys.exit()` when the
+        # config directory has gone, which `check_schema` / `check_routes` /
+        # `check_policy` all reach. `main()` checks `isdir` first, so this
+        # needs a TOCTOU to fire (a GitOps ConfigMap projected volume swaps
+        # `..data` atomically), and then the process dies before
+        # `print_report`: #1448's own symptom, through the wrapper written
+        # to prevent it. The sibling fix in `_no_declared_defaults_hint`
+        # landed a round before this one and its comment said this clause
+        # was already covered; it was not.
+        detail = f"a check exited the process (code {exc.code})"
+        row = _make_result(
+            name, FAIL,
+            [f"this check could not complete on your input: {detail}",
+             "The report below is incomplete — this check reached none of "
+             "its own conclusions.",
+             "If every file listed above is readable, this is a defect in "
+             "this tool — please report it."],
+            caller_error=True)
+        row["reads_config_dir"] = _reads_config_dir(_config_dir, args, kwargs)
+        return row
+    except Exception as exc:  # noqa: BLE001 — see the contract above
+        traceback.print_exc()
+        detail = " ".join(str(exc).split()) or exc.__class__.__name__
+        row = _make_result(
+            name, FAIL,
+            [f"this check could not complete on your input: "
+             f"{exc.__class__.__name__}: {detail}",
+             "The report below is incomplete — this check reached none of "
+             "its own conclusions. A traceback was written to stderr.",
+             # ⛔ Conditional on purpose. When yaml_syntax has already named
+             # a file it could not read, every later failure is downstream
+             # of that, and telling the customer to file a bug against us
+             # sends them to the wrong place — measured as the actual
+             # outcome for a tenant file saved in the local code page.
+             "If every file listed above is readable, this is a defect in "
+             "this tool — please report it with the traceback."],
+            caller_error=True)
+        row["reads_config_dir"] = _reads_config_dir(
+            _config_dir, args, kwargs)
+        return row
 
 
 # ============================================================
@@ -678,32 +1117,38 @@ def main() -> None:
     results = []
 
     # 1. YAML syntax
-    results.append(check_yaml_syntax(args.config_dir))
+    results.append(_run_check("yaml_syntax", check_yaml_syntax,
+                              args.config_dir, _config_dir=args.config_dir))
 
     # 2. Schema validation (--strict: domain-policy violations → FAIL)
-    results.append(check_schema(args.config_dir, strict=args.strict))
+    results.append(_run_check("schema", check_schema, args.config_dir,
+                              strict=args.strict, _config_dir=args.config_dir))
 
     # 3. Route validation
-    results.append(check_routes(args.config_dir, args.policy))
+    results.append(_run_check("routes", check_routes, args.config_dir,
+                              args.policy, _config_dir=args.config_dir))
 
     # 4. Policy check (if policy provided)
     if args.policy:
-        results.append(check_policy(args.config_dir, args.policy))
+        results.append(_run_check("policy", check_policy, args.config_dir,
+                                  args.policy, _config_dir=args.config_dir))
 
     # 5. Custom rule lint (if rule-packs dir provided)
     if args.rule_packs:
-        results.append(check_custom_rules(args.rule_packs, args.policy))
+        results.append(_run_check("custom_rules", check_custom_rules,
+                                  args.rule_packs, args.policy, _config_dir=args.config_dir))
 
     # 6. Profile references (v1.12.0)
-    results.append(check_profiles(args.config_dir))
+    results.append(_run_check("profiles", check_profiles, args.config_dir, _config_dir=args.config_dir))
 
     # 7. Version consistency (if requested)
     if args.version_check:
-        results.append(check_versions())
+        results.append(_run_check("versions", check_versions, _config_dir=args.config_dir))
 
     # 8. Policy-as-Code (DSL evaluation)
-    results.append(check_policy_dsl(args.config_dir,
-                                     getattr(args, 'policy_dsl', None)))
+    results.append(_run_check("policy_dsl", check_policy_dsl,
+                              args.config_dir,
+                              getattr(args, 'policy_dsl', None), _config_dir=args.config_dir))
 
     # Report
     print_report(results, as_json=args.json)
@@ -713,8 +1158,34 @@ def main() -> None:
     # #452/#737: a FAIL caused by a missing/timed-out prerequisite tool
     # (lint_custom_rules.py / bump_docs.py) is a caller-error (exit 2), not a
     # config validation finding (exit 1).
+    # #1448: …but only for a check that could actually read the customer's
+    # config. If `yaml_syntax` named a file it could not read, a later
+    # failure *in a check that reads that tree* is downstream of it, and
+    # exit 2 ("this tool broke, report it") sends the customer to the wrong
+    # place for a problem in their own tree.
+    #
+    # ⛔ Per row, not globally. The first version of this asked only "was
+    # anything unreadable?" and downgraded EVERY caller-error — so a
+    # genuine `bump_docs.py not found` from `versions`, which never opens
+    # anything under `--config-dir`, silently became exit 1 because an
+    # unrelated tenant file was saved in the wrong code page. That is the
+    # same false attribution `_caveat_applies` exists to prevent, made in
+    # the exit code instead of the text.
+    # Measured, six cells — the third axis is the point of the rule and
+    # an earlier version of this table left it out, which made the row that
+    # matters most read backwards:
+    #   unreadable=F caller=F                        → 1
+    #   unreadable=F caller=T  reads_config_dir=F    → 2
+    #   unreadable=F caller=T  reads_config_dir=T    → 2
+    #   unreadable=T caller=F                        → 1
+    #   unreadable=T caller=T  reads_config_dir=F    → 2  ← was 1
+    #   unreadable=T caller=T  reads_config_dir=T    → 1  ← downgraded, and
+    #     this is the case the downgrade exists for
+    input_unreadable = bool(_unusable_files(results))
     caller_error = any(
-        r["status"] == FAIL and r.get("caller_error") for r in results
+        r["status"] == FAIL and r.get("caller_error")
+        and not (input_unreadable and r.get("reads_config_dir", True))
+        for r in results
     )
     if caller_error:
         sys.exit(EXIT_CALLER_ERROR)

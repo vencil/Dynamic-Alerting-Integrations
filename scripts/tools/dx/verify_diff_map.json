@@ -559,7 +559,8 @@
    "tests/ops/test_integration.py",
    "tests/ops/test_parse_platform_config.py",
    "tests/ops/test_performance.py",
-   "tests/ops/test_regression.py"
+   "tests/ops/test_regression.py",
+   "tests/ops/test_validate_config.py"
   ],
   "scripts/tools/ops/generate_rule_pack_split.py": [
    "tests/ops/test_generate_rule_pack_split.py",
@@ -724,7 +725,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "7d19386ec90386fcf6ea87addae0bf30d8c6991950780070169209d5009518db",
+ "source_digest": "922fbdccc4cc03348ed75880fa1a8121dadb7faed9f06a55be9a02026fbe3d3a",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -2382,6 +2383,7 @@
    "tests/shared/test_pipeline_integration.py"
   ],
   "scripts/tools/ops/validate_config.py": [
+   "tests/ops/test_validate_config.py",
    "tests/shared/test_help_contract.py",
    "tests/shared/test_pipeline_integration.py"
   ],
@@ -2593,7 +2595,8 @@
    "tests/ops/test_generated_ci_artifacts.py",
    "tests/ops/test_grar_facade_reexports.py",
    "tests/ops/test_nightly_race_issue_policy.py",
-   "tests/ops/test_onboard_platform.py"
+   "tests/ops/test_onboard_platform.py",
+   "tests/ops/test_validate_config.py"
   ],
   "tests/ops/_stub_declared_shared.py": [
    "tests/ops/test_init_project.py",

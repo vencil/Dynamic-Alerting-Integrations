@@ -9,6 +9,7 @@ import fnmatch
 import io
 import json
 import os
+import pathlib
 import subprocess
 import sys
 import tempfile
@@ -58,7 +59,12 @@ class TestSchemaCheck:
 
     def test_valid_config_passes(self):
         """Config with known keys should pass."""
-        conf_dir = os.path.join(os.path.dirname(__file__), "..",
+        # ⛔ TWO levels: `dirname(__file__)` is `tests/ops`. With one,
+        # this resolved to `tests/components/...`, which has never
+        # existed, and the skip guard below hid that on every machine
+        # including CI — a permanently-skipped test reads exactly like
+        # a passing one in the summary line.
+        conf_dir = os.path.join(os.path.dirname(__file__), "..", "..",
                                 "components", "threshold-exporter",
                                 "config", "conf.d")
         if not os.path.isdir(conf_dir):
@@ -225,8 +231,8 @@ class TestCustomRulesCheck:
         check_custom_rules wrapper runs without exception, not that
         all rules pass lint.
         """
-        rule_packs_dir = os.path.join(
-            os.path.dirname(__file__), "..", "rule-packs")
+        rule_packs_dir = os.path.join(  # two levels: see TestSchemaCheck
+            os.path.dirname(__file__), "..", "..", "rule-packs")
         if not os.path.isdir(rule_packs_dir):
             pytest.skip("rule-packs dir not found")
         result = vc.check_custom_rules(rule_packs_dir)
@@ -250,7 +256,7 @@ class TestVersionsCheck:
 class TestIntegration:
     """Integration test with real config dir."""
 
-    CONF_DIR = os.path.join(os.path.dirname(__file__), "..",
+    CONF_DIR = os.path.join(os.path.dirname(__file__), "..", "..",
                             "components", "threshold-exporter",
                             "config", "conf.d")
 
@@ -650,8 +656,14 @@ class TestCheckHintsPointSomewhereCustomersCanOpen:
                 continue
             if line.strip() and not line[0].isspace():
                 break
-            if line.strip() and not line.strip().startswith("#"):
-                patterns.append(line.strip())
+            entry = line.strip()
+            if entry and not entry.startswith("#"):
+                # Tolerate either YAML spelling. Measured: rewriting
+                # `exclude_docs` as a `- `-prefixed list — same meaning to
+                # mkdocs — turned this red, because the `- ` rode along
+                # into the pattern and matched nothing.
+                patterns.append(entry[2:].strip()
+                                if entry.startswith("- ") else entry)
         return patterns
 
     @classmethod
@@ -751,3 +763,1165 @@ class TestCheckHintsPointSomewhereCustomersCanOpen:
             sys.stdout = original
         entry = json.loads(captured.getvalue())[0]
         assert entry["docs_link"].startswith("https://vencil.github.io/")
+
+
+# ============================================================
+# #1448 — the report has to survive a customer file this tool cannot read,
+# and it must not invent facts while surviving.
+# ============================================================
+class TestNoCheckCanKillTheReport:
+    """#1448 stated as a property of the run, not of how ``main()`` is written.
+
+    ⛔ This replaces two AST guards that asked what the source *looks like*
+    ("is every ``check_*`` reference lexically inside a ``_run_check(...)``
+    call?"). Blind review broke them with five edits that are ordinary
+    rather than wrong, each measured to leave behaviour byte-identical:
+    replacing the eight dispatch lines with a ``(name, fn, args, kwargs)``
+    table and a loop; extracting the dispatch into ``_collect_results()``;
+    hoisting the checks into module-level tuples; exporting a ``check_*``
+    that ``main()`` deliberately does not run; and splitting the module so
+    the checks arrive by import. The first turned the guard red while every
+    end-to-end test stayed green — the guard's own message ("a customer file
+    escapes as a traceback and no report is printed") was false as it was
+    printed, and the cheapest way back to green was to revert the refactor.
+
+    Asking the question at runtime removes the whole class: force one check
+    to fail the way an unreadable customer file makes it fail, and require
+    that the report still comes out. Every dispatch shape that keeps that
+    true passes; a check wired up so its failure kills the process does not,
+    however it is written, and however it got into the module.
+
+    ⚠️ What this deliberately no longer catches: a ``check_*`` that is
+    defined but never dispatched. Forcing it to raise changes nothing, so
+    it stays green. That is not #1448's defect — dead code does not stop
+    the report — and pinning it was the source of two of the false reds
+    above (an exported helper, and the population going empty on a module
+    split).
+    """
+
+    # Derived from the module, so a ninth check answers for itself — and
+    # unlike an AST walk over `def` statements, an imported or re-exported
+    # check is in here too.
+    CHECK_NAMES = sorted(n for n in dir(vc)
+                         if n.startswith("check_") and callable(getattr(vc, n)))
+
+    @staticmethod
+    def _conf_d(tmp_path):
+        d = tmp_path / "conf.d"
+        d.mkdir()
+        (d / "_defaults.yaml").write_text(
+            "defaults:\n  mysql_threads_running: 80\n", encoding="utf-8")
+        (d / "db-a.yaml").write_text(
+            "tenants:\n  db_a:\n    mysql_threads_running: 90\n",
+            encoding="utf-8")
+        return str(d)
+
+    def _run_with(self, name, tmp_path, monkeypatch, capsys, cli_argv):
+        """Force `name` to fail the way a bad customer file makes it fail."""
+        def boom(*_a, **_kw):
+            raise yaml.scanner.ScannerError(
+                None, None, "while scanning a quoted scalar", None)
+
+        # The two checks that shell out are stubbed to something fast unless
+        # they are the target: this test is about the dispatch surviving, not
+        # about bump_docs.py being installed.
+        for slow in ("check_versions", "check_custom_rules"):
+            if slow != name and hasattr(vc, slow):
+                monkeypatch.setattr(
+                    vc, slow,
+                    lambda *_a, **_kw: vc._make_result("stub", vc.PASS, ["ok"]))
+        monkeypatch.setattr(vc, name, boom)
+
+        policy = tmp_path / "policy.yaml"
+        policy.write_text("allowed_domains: [hooks.example.com]\n",
+                          encoding="utf-8")
+        packs = tmp_path / "rule-packs"
+        packs.mkdir()
+        cli_argv("validate_config", "--config-dir", self._conf_d(tmp_path),
+                 "--policy", str(policy), "--rule-packs", str(packs),
+                 "--version-check")
+        with pytest.raises(SystemExit) as exc:
+            vc.main()
+        return exc.value.code, capsys.readouterr().out
+
+    @pytest.mark.parametrize("name", CHECK_NAMES)
+    def test_the_report_survives(self, name, tmp_path, monkeypatch, capsys,
+                                 cli_argv):
+        rc, out = self._run_with(name, tmp_path, monkeypatch, capsys, cli_argv)
+        assert "Unified Validation Report" in out, (
+            f"forcing {name} to fail on its input took the whole report with "
+            f"it — that is #1448. stdout was {len(out)} bytes.")
+        assert "Total:" in out, out[-400:]
+        assert rc != vc.EXIT_CALLER_ERROR, (
+            f"{name} failing on unreadable input is a finding about the "
+            f"config (exit 1), not a defect in this tool (exit 2)")
+
+    def test_the_probe_is_observed(self, tmp_path, monkeypatch, capsys,
+                                   cli_argv):
+        """Must-observe control.
+
+        Every assertion above is satisfied by a run in which the injection
+        never happened. This one takes a check that is always dispatched and
+        requires the report to show it failing — so the harness is known to
+        be able to reach the thing it claims to be testing.
+        """
+        rc, out = self._run_with("check_yaml_syntax", tmp_path, monkeypatch,
+                                 capsys, cli_argv)
+        assert "[FAIL] yaml_syntax" in out, out
+        assert "could not read the config" in out, out
+
+    def test_a_clean_run_is_untouched(self, tmp_path, capsys, cli_argv):
+        """Must-succeed control: the same fixture with nothing injected."""
+        cli_argv("validate_config", "--config-dir", self._conf_d(tmp_path))
+        with pytest.raises(SystemExit) as exc:
+            vc.main()
+        out = capsys.readouterr().out
+        assert exc.value.code == 0, out
+        assert "[FAIL]" not in out, out
+
+
+class TestRunCheckContract:
+    """Both directions: what _run_check absorbs, and how it classifies it."""
+
+    def test_yaml_error_becomes_a_report_row(self):
+        def boom(_arg):
+            raise yaml.scanner.ScannerError(
+                None, None, "while scanning a quoted scalar", None)
+
+        result = vc._run_check("profiles", boom, "some-dir")
+        assert result["check"] == "profiles"
+        assert result["status"] == vc.FAIL
+        assert not result.get("caller_error")
+        assert any("could not read the config" in d
+                   for d in result["details"])
+
+    def test_undecodable_input_is_a_finding_not_a_caller_error(self):
+        """⛔ An encoding problem in the customer's file is *their* config.
+
+        Measured before this: one tenant file saved in the local code page
+        made every check raise ``UnicodeDecodeError``, which fell into the
+        catch-all below — so the run exited **2** ("this tool broke") and
+        told the customer "Please report this along with the file it names",
+        in a message that names no file, because ``UnicodeDecodeError``
+        carries a codec and an offset and no path. ``origin/main`` exited 1.
+        A fix that made the report appear must not also change what the exit
+        code means.
+        """
+        def boom(_arg):
+            b"\xb4\xfa".decode("utf-8")
+
+        result = vc._run_check("schema", boom, "some-dir")
+        assert result["status"] == vc.FAIL
+        assert not result.get("caller_error"), (
+            "an undecodable input file must exit 1 like any other finding "
+            "about the customer's config, not 2")
+
+    def test_os_error_is_a_caller_error(self):
+        def boom():
+            raise PermissionError(13, "Permission denied")
+
+        result = vc._run_check("schema", boom)
+        assert result["status"] == vc.FAIL
+        assert result["caller_error"] is True
+
+    def test_other_exceptions_still_produce_a_report_row(self, capsys):
+        """⛔ The contract that replaced "let it propagate".
+
+        The first draft asserted the opposite — that anything which is not a
+        YAMLError keeps propagating, on the theory that it is our bug and
+        should stay loud. Blind review measured six *syntactically valid*
+        customer configs against it: three still died with zero bytes on
+        stdout, one of them inside ``check_profiles``, the function #1448
+        named. "Whose bug is it" and "does the customer get a report" are
+        different questions and the ticket asks the second.
+        """
+        def boom():
+            raise RuntimeError("something we did not foresee")
+
+        result = vc._run_check("routes", boom)
+        assert result["status"] == vc.FAIL
+        assert result["caller_error"] is True
+        assert "Traceback" in capsys.readouterr().err
+
+    def test_a_healthy_check_is_passed_through_untouched(self):
+        """Must-succeed control.
+
+        Without one, a wrapper that swallowed every call and returned a FAIL
+        row would satisfy every assertion above — a group made only of
+        must-fail cases cannot tell "classified correctly" from "the thing
+        under test was never reached".
+
+        ⛔ The keyword argument is REQUIRED on purpose. An earlier version
+        of this control gave it a default, so a wrapper that dropped
+        ``**kwargs`` — which is how ``--strict`` would silently stop
+        reaching ``check_schema`` — kept it green.
+        """
+        seen = {}
+
+        def probe(a, *, strict):
+            seen["args"] = (a, strict)
+            return vc._make_result("routes", vc.PASS, ["all good"])
+
+        row = vc._run_check("routes", probe, "d", strict=True)
+        assert seen["args"] == ("d", True), seen
+        assert row["status"] == vc.PASS
+        assert row["details"] == ["all good"]
+
+
+class TestUnusableFilesAreDataNotProse:
+    """#1448: the skipped-file list is bookkeeping, never re-parsed prose."""
+
+    def test_a_crashed_yaml_syntax_row_names_no_files(self):
+        """⛔ The regression this replaced.
+
+        The first draft recovered the list by splitting the detail lines it
+        had just printed on ``:``. When ``check_yaml_syntax`` itself died,
+        its row's details are three English sentences — so the report
+        announced "⚠️ 3 file(s) could not be parsed and were skipped (this
+        check could not complete on your input, The report below is
+        incomplete …, Please report this …)" and put the same three
+        sentences into the ``skipped_unusable_files`` JSON field. Measured
+        on a conf.d holding exactly one bad file.
+        """
+        crashed = vc._make_result(
+            "yaml_syntax", vc.FAIL,
+            ["this check could not complete on your input: X: y",
+             "The report below is incomplete — a traceback was written.",
+             "Please report this along with the traceback."],
+            caller_error=True)
+        assert vc._unusable_files([crashed]) == []
+
+    def test_the_list_comes_from_the_checks_own_bookkeeping(self):
+        row = vc._make_result("yaml_syntax", vc.FAIL,
+                              ["a.yaml: bad", "b.yaml: worse"],
+                              unusable_files=["a.yaml", "b.yaml"])
+        assert vc._unusable_files([row]) == ["a.yaml", "b.yaml"]
+
+    def test_no_caveat_is_printed_when_nothing_was_skipped(self):
+        """Must-tolerate side: a clean run must not grow a warning."""
+        captured = io.StringIO()
+        original, sys.stdout = sys.stdout, captured
+        try:
+            vc.print_report([vc._make_result("yaml_syntax", vc.PASS, ["ok"]),
+                             vc._make_result("routes", vc.WARN, ["hmm"])])
+        finally:
+            sys.stdout = original
+        assert _caveat_fragment() not in captured.getvalue()
+
+
+class TestCustomerRunsTheCommandInTheTroubleshootingTable:
+    """End to end, as the GitOps guide §7 tells a customer to run it.
+
+    ⛔ The unit tests above all reach into the module. #1448 is about what
+    the *process* does: on ``origin/main`` a single unreadable file in
+    ``conf.d/`` produced **zero bytes on stdout** and a Python traceback,
+    measured both in-tree and against the shipped ``ghcr.io/vencil/da-tools``
+    image (rc=1, 0 bytes). A report that exists only when every file happens
+    to be readable is not a report the troubleshooting table can point at.
+    """
+
+    _SCRIPT = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__)))),
+        "scripts", "tools", "ops", "validate_config.py")
+
+    def _conf_d(self, d, bad_name, bad_bytes):
+        conf = os.path.join(d, "conf.d")
+        os.makedirs(conf)
+        with open(os.path.join(conf, "_defaults.yaml"), "wb") as f:
+            f.write(b"defaults:\n  mysql_threads_running: 80\n")
+        with open(os.path.join(conf, bad_name), "wb") as f:
+            f.write(bad_bytes)
+        return conf
+
+    def _run(self, conf, *extra):
+        p = subprocess.run(
+            [sys.executable, self._SCRIPT, "--config-dir", conf, *extra],
+            capture_output=True, timeout=300)
+        return (p.returncode,
+                p.stdout.decode("utf-8", "replace"),
+                p.stderr.decode("utf-8", "replace"))
+
+    # A tenant file an editor saved in the local code page, and one whose
+    # top level is a list. Both are valid *files*; neither is readable by
+    # this tool, and neither used to leave a report behind.
+    BAD = [
+        ("not-utf8", b"tenants:\n  db_a:\n    # \xb4\xfa\xb8\xd5\n    x: 90\n"),
+        ("not-a-mapping", b"- tenants:\n    db_a:\n      x: 90\n"),
+    ]
+
+    @pytest.mark.parametrize("label,body", BAD, ids=[i for i, _ in BAD])
+    def test_the_report_is_printed_and_names_the_file(self, label, body):
+        with tempfile.TemporaryDirectory() as d:
+            conf = self._conf_d(d, "db-a.yaml", body)
+            rc, out, err = self._run(conf)
+            assert out, f"{label}: zero bytes on stdout — #1448 all over again"
+            assert "Unified Validation Report" in out
+            assert "db-a.yaml" in out, (
+                f"{label}: the report never names the file that stopped it; "
+                f"the customer has nothing to act on.\n{out}")
+            assert "Traceback" not in err, err[-800:]
+
+    @pytest.mark.parametrize("label,body", BAD, ids=[i for i, _ in BAD])
+    def test_an_unreadable_file_is_a_finding_not_a_tool_failure(self, label,
+                                                                body):
+        """⛔ exit 2 says "this tool broke, report it". It is their file.
+
+        ``origin/main`` exited 1 here (by accident — an uncaught exception).
+        The first draft of the fix exited **2** and printed "Please report
+        this along with the file it names", naming no file.
+        """
+        with tempfile.TemporaryDirectory() as d:
+            conf = self._conf_d(d, "db-a.yaml", body)
+            rc, out, _ = self._run(conf)
+            assert rc == 1, f"{label}: expected a validation finding\n{out}"
+            assert "Please report this" not in out, out
+
+    @pytest.mark.parametrize("label,body", BAD, ids=[i for i, _ in BAD])
+    def test_json_lists_real_filenames_only(self, label, body):
+        """⛔ The ``skipped_unusable_files`` field is consumed by machines.
+
+        The first draft filled it by splitting the report's own prose on
+        ``:``, so a run that crashed early published three English sentences
+        there — and the text report said "3 file(s) could not be parsed"
+        about a conf.d holding one bad file.
+        """
+        with tempfile.TemporaryDirectory() as d:
+            conf = self._conf_d(d, "db-a.yaml", body)
+            rc, out, _ = self._run(conf, "--json")
+            entries = json.loads(out)
+            names = {n for e in entries
+                     for n in e.get("skipped_unusable_files", [])}
+            assert names == {"db-a.yaml"}, (
+                f"{label}: the machine-readable skip list is not a list of "
+                f"files: {sorted(names)}")
+
+    def test_a_readable_conf_d_is_unchanged(self):
+        """Must-succeed control.
+
+        Every case above asserts on a broken input; a build of this tool
+        that reported "unreadable" for *everything* would satisfy all of
+        them. This one fails if the fix made a healthy conf.d noisier.
+        """
+        with tempfile.TemporaryDirectory() as d:
+            conf = self._conf_d(
+                d, "db-a.yaml",
+                b"tenants:\n  db_a:\n    mysql_threads_running: 90\n")
+            rc, out, err = self._run(conf)
+            assert _caveat_fragment() not in out, out
+            assert "[FAIL] yaml_syntax" not in out, out
+            assert "Traceback" not in err
+
+
+class TestNullDefaultsBlockDoesNotKillTheReport:
+    """``defaults:`` with every entry commented out parses to ``None``.
+
+    #1448 named ``check_profiles``; this is the line inside it that raised.
+    ``.get("defaults", {})`` returns ``None`` for a key that exists with
+    nothing under it — the default only fires when the key is *absent*.
+    """
+
+    @pytest.mark.parametrize("body", [
+        "defaults:\n",
+        "defaults:\n  # mysql_threads_running: 80\n",
+        "defaults: null\n",
+    ], ids=["bare-key", "all-commented-out", "explicit-null"])
+    def test_check_profiles_survives(self, body):
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "_defaults.yaml"), "w",
+                      encoding="utf-8", newline="\n") as f:
+                f.write(body)
+            result = vc.check_profiles(d)
+            assert result["status"] in (vc.PASS, vc.WARN, vc.FAIL)
+
+    def test_a_populated_defaults_block_is_still_read(self):
+        """Must-succeed control: `or {}` must not swallow real keys.
+
+        A declared key used by a tenant profile must still count as known —
+        otherwise "survives" could be bought by reading nothing at all.
+        """
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "_defaults.yaml"), "w",
+                      encoding="utf-8", newline="\n") as f:
+                f.write("defaults:\n  mysql_threads_running: 80\n")
+            result = vc.check_profiles(d)
+            assert result["status"] == vc.PASS
+
+
+class TestYamlSyntaxNamesWhatItCannotRead:
+    """The one check that opens every customer file is the one that can
+    name it — ``UnicodeDecodeError`` carries a codec and an offset, no path.
+    """
+
+    def test_non_utf8_file_is_reported_with_its_name(self):
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "db-a.yaml"), "wb") as f:
+                f.write(b"tenants:\n  db_a:\n    # \xb4\xfa\xb8\xd5\n")
+            result = vc.check_yaml_syntax(d)
+            assert result["status"] == vc.FAIL
+            assert result["unusable_files"] == ["db-a.yaml"]
+            assert any("UTF-8" in x for x in result["details"]), result
+
+    def test_non_mapping_top_level_is_reported_with_its_name(self):
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "db-a.yaml"), "w",
+                      encoding="utf-8", newline="\n") as f:
+                f.write("- tenants:\n    db_a:\n      x: 90\n")
+            result = vc.check_yaml_syntax(d)
+            assert result["status"] == vc.FAIL
+            assert result["unusable_files"] == ["db-a.yaml"]
+            assert any("mapping" in x for x in result["details"]), result
+
+    @pytest.mark.parametrize("body", ["", "# only a comment\n", "---\n"],
+                             ids=["empty", "comment-only", "doc-marker"])
+    def test_a_file_holding_nothing_is_not_an_error(self, body):
+        """Must-tolerate side.
+
+        ``yaml.safe_load`` returns ``None`` for these, which is *not* a
+        wrong shape — placeholder files are ordinary. Rejecting them would
+        be the cheapest way to make the checks above pass.
+        """
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "placeholder.yaml"), "w",
+                      encoding="utf-8", newline="\n") as f:
+                f.write(body)
+            result = vc.check_yaml_syntax(d)
+            assert result["status"] == vc.PASS, result
+            assert result["unusable_files"] == []
+
+
+
+
+def _caveat_fragment() -> str:
+    """The run-independent part of the skipped-file caveat.
+
+    ⛔ Derived from `vc.UNUSABLE_CAVEAT`, never retyped. Retyped prose is
+    how the negative controls below went vacuous: `"<old wording>" not in
+    output` is satisfied by any reword, so a reword plus a real defect left
+    them green while the positive assertions went red — measured.
+    """
+    return vc.UNUSABLE_CAVEAT.split("{listed}")[-1].strip()
+
+
+
+def _generic_schema_hint() -> str:
+    """The stock advice for the `schema` row, read from the shipped table.
+
+    ⛔ Never retyped. Blind review reworded `_CHECK_HINTS["schema"]` — an
+    ordinary copy edit — and measured two positive assertions going red
+    while **four** `"Remove unknown keys" not in …` controls silently became
+    vacuous, because a reworded string satisfies a `not in` on the old
+    wording. The same trap the caveat constants were hoisted for.
+    """
+    return vc._CHECK_HINTS["schema"][0].split(".")[0]
+
+
+def _report_row(out: str, check: str) -> str:
+    """The block of the text report belonging to one check, status-agnostic.
+
+    Slicing on a hard-coded `[FAIL] <name>` breaks the moment the check
+    passes (which is the point of several of these fixtures: a skipped file
+    leaves other checks PASSing), and slicing to the next `---` runs past
+    into the following row.
+    """
+    lines = out.splitlines(True)
+    start = next((i for i, ln in enumerate(lines)
+                  if ln.strip().endswith("] " + check)
+                  and ln.strip().startswith("[")), None)
+    assert start is not None, f"no row for {check!r} in report:\n{out}"
+    end = next((i for i in range(start + 1, len(lines))
+                if lines[i].strip().startswith("[")
+                or lines[i].startswith("-" * 10)), len(lines))
+    return "".join(lines[start:end])
+
+
+class TestTheCaveatIsActuallyPrinted:
+    """⛔ Re-added after a rewrite dropped it.
+
+    An earlier draft pinned this end to end; rewriting the skipped-file
+    plumbing kept only the *negative* half ("no caveat on a clean run") plus
+    two unit tests on the helper. Measured: deleting the caveat entirely
+    (``caveat = ""``) left **148 passed** — the ⚠️ line and the ordering
+    line, both of which the CHANGELOG calls load-bearing, had no coverage at
+    all. A fix that narrows coverage looks exactly like a fix that narrows
+    false positives.
+    """
+
+    def _report(self, tmp_path, capsys, cli_argv, **kw):
+        d = tmp_path / "conf.d"
+        d.mkdir()
+        (d / "_defaults.yaml").write_text(
+            "defaults:\n  mysql_threads_running: 80\n", encoding="utf-8")
+        (d / "db-a.yaml").write_bytes(b"tenants:\n  db_a: [90\n")
+        cli_argv("validate_config", "--config-dir", str(d), *kw.get("extra", ()))
+        with pytest.raises(SystemExit) as exc:
+            vc.main()
+        return exc.value.code, capsys.readouterr().out
+
+    def test_rows_that_skipped_a_file_say_so_and_say_it_first(
+            self, tmp_path, capsys, cli_argv):
+        rc, out = self._report(tmp_path, capsys, cli_argv)
+        assert vc.UNUSABLE_CAVEAT.format(n=1, listed="db-a.yaml") in out, out
+        assert vc.READ_ERRORS_FIRST in out, (
+            "the 'Remove unknown keys'-style hint must be sequenced after "
+            "the read errors — following it first deletes a working config")
+        # Ordering is a within-row guarantee, so compare inside one row.
+        # (Comparing global offsets was wrong: the FAIL row that *reports*
+        # the unreadable file carries a Suggested action of its own, and it
+        # is printed first.)
+        row = _report_row(out, "profiles")
+        assert (row.index(vc.READ_ERRORS_FIRST)
+                < row.index("-> Suggested action:")), row
+
+    def test_the_row_that_reported_them_does_not_warn_about_itself(
+            self, tmp_path, capsys, cli_argv):
+        rc, out = self._report(tmp_path, capsys, cli_argv)
+        head = _report_row(out, "yaml_syntax")
+        assert _caveat_fragment() not in head, head
+
+    def test_a_check_that_never_reads_config_dir_is_not_blamed(
+            self, tmp_path, capsys, cli_argv, monkeypatch):
+        """⛔ `versions` shells out to bump_docs.py; `custom_rules` reads
+        `--rule-packs`. Neither has ever opened a file in `conf.d/`, and an
+        earlier draft gated the caveat on ``check != "yaml_syntax"`` — so
+        both were told that a broken tenant file was why they failed.
+        """
+        monkeypatch.setattr(
+            vc, "check_versions",
+            lambda: vc._make_result("versions", vc.FAIL, ["bump_docs blew up"]))
+        rc, out = self._report(tmp_path, capsys, cli_argv,
+                               extra=("--version-check",))
+        block = _report_row(out, "versions")
+        assert _caveat_fragment() not in block, block
+
+    def test_a_check_that_does_read_config_dir_still_is(
+            self, tmp_path, capsys, cli_argv):
+        """Must-observe side of the pair above: without it, "attach the
+        caveat to nothing" would satisfy that test."""
+        rc, out = self._report(tmp_path, capsys, cli_argv)
+        block = _report_row(out, "routes")
+        assert _caveat_fragment() in block, block
+
+
+class TestUnreadableInputIsNeverOurBug:
+    """The exit code has to keep saying whose problem it is.
+
+    ⛔ Measured before this: a `conf.d/` file nested ~500 levels deep makes
+    (roughly half ``sys.getrecursionlimit()``, and ⚠️ **not a constant even
+    on one host** — it shifts with how many frames are already on the stack.
+    Measured three ways on this machine: flow-style 495/495/493, block-style
+    493/492/491. Never assert on the number; assert on the behaviour.)
+    ``yaml.safe_load`` raise ``RecursionError`` — not a ``YAMLError`` — so
+    it fell through to the catch-all and the run exited **2** with "Please
+    report this", naming no file. An enumeration of exception types cannot
+    close that; reading each file by name, and deciding the exit code from
+    whether the input was readable at all, can.
+    """
+
+    @staticmethod
+    def _tree(tmp_path, body: bytes):
+        d = tmp_path / "conf.d"
+        d.mkdir()
+        (d / "_defaults.yaml").write_text(
+            "defaults:\n  mysql_threads_running: 80\n", encoding="utf-8")
+        (d / "db-a.yaml").write_bytes(body)
+        return str(d)
+
+    UNREADABLE = [
+        ("not-utf8", b"tenants:\n  db_a:\n    # \xb4\xfa\xb8\xd5\n    x: 1\n"),
+        ("not-a-mapping", b"- tenants:\n    db_a:\n      x: 1\n"),
+        ("syntax-error", b"tenants:\n  db_a: [1\n"),
+        ("deeply-nested",
+         ("".join("  " * i + "k%d:\n" % i for i in range(520))).encode()),
+    ]
+
+    @pytest.mark.parametrize("label,body", UNREADABLE,
+                             ids=[i for i, _ in UNREADABLE])
+    def test_exit_1_and_the_file_is_named(self, label, body, tmp_path,
+                                          capsys, cli_argv):
+        cli_argv("validate_config", "--config-dir", self._tree(tmp_path, body))
+        with pytest.raises(SystemExit) as exc:
+            vc.main()
+        out = capsys.readouterr().out
+        assert exc.value.code == 1, (
+            f"{label}: exit {exc.value.code} tells the customer this tool "
+            f"broke; their file did.\n{out}")
+        assert "db-a.yaml" in out, f"{label}: the report names no file\n{out}"
+
+    def test_a_real_tool_defect_still_exits_2(self, tmp_path, capsys,
+                                              cli_argv, monkeypatch):
+        """Must-distinguish control.
+
+        Without it, "always exit 1" passes every case above and the tool
+        loses the ability to say "this one is on us".
+        """
+        d = tmp_path / "conf.d"
+        d.mkdir()
+        (d / "_defaults.yaml").write_text(
+            "defaults:\n  mysql_threads_running: 80\n", encoding="utf-8")
+
+        def boom(*_a, **_kw):
+            raise RuntimeError("a defect in this tool")
+
+        monkeypatch.setattr(vc, "check_routes", boom)
+        cli_argv("validate_config", "--config-dir", str(d))
+        with pytest.raises(SystemExit) as exc:
+            vc.main()
+        out = capsys.readouterr().out
+        assert exc.value.code == vc.EXIT_CALLER_ERROR, out
+        assert "please report it with the traceback" in out, out
+
+
+class TestEmptyPlatformDefaultsSaysSoInsteadOfAdvisingDeletion:
+    """⛔ "Remove unknown keys" is destructive when nothing is declared.
+
+    Measured on ``origin/main``: a ``_defaults.yaml`` with no ``defaults:``
+    key at all makes ``check_schema`` report every tenant override as
+    ``unknown key … not in defaults``, the row prints "Remove unknown keys
+    or add them to the schema", and the run exits **0**. Those keys are
+    legal and in force; deleting them silently drops the tenant to platform
+    values that do not exist.
+
+    Only the advice changes. The warnings come from ``validate_tenant_keys``,
+    whose verdicts are pinned key-for-key against the Go twin.
+    """
+
+    @staticmethod
+    def _tree(tmp_path, defaults_body: str):
+        d = tmp_path / "conf.d"
+        d.mkdir()
+        (d / "_defaults.yaml").write_text(defaults_body, encoding="utf-8")
+        (d / "db-a.yaml").write_text(
+            "tenants:\n  db_a:\n    mysql_threads_running: 90\n",
+            encoding="utf-8")
+        return str(d)
+
+    @pytest.mark.parametrize("body", [
+        "# nothing declared here\n",
+        "defaults:\n",
+        "defaults: {}\n",
+    ], ids=["no-defaults-key", "null-defaults", "empty-defaults"])
+    def test_the_destructive_hint_is_replaced(self, body, tmp_path, capsys,
+                                              cli_argv):
+        cli_argv("validate_config", "--config-dir", self._tree(tmp_path, body))
+        with pytest.raises(SystemExit):
+            vc.main()
+        out = capsys.readouterr().out
+        assert "unknown key" in out, out
+        assert _generic_schema_hint() not in out, (
+            "the report is still telling the customer to delete overrides "
+            f"that are in force\n{out}")
+        assert vc.NO_DECLARED_DEFAULTS_HINT in out, out
+
+    def test_a_real_typo_still_gets_the_normal_advice(self, tmp_path, capsys,
+                                                     cli_argv):
+        """Must-tolerate side: when defaults ARE declared, an unknown key is
+        a typo and "remove it or add it to the schema" is the right thing to
+        say. Without this, suppressing the hint unconditionally would pass."""
+        d = self._tree(tmp_path, "defaults:\n  mysql_threads_running: 80\n")
+        (pathlib.Path(d) / "db-b.yaml").write_text(
+            "tenants:\n  db_b:\n    mysql_thredas_running: 90\n",
+            encoding="utf-8")
+        cli_argv("validate_config", "--config-dir", d)
+        with pytest.raises(SystemExit):
+            vc.main()
+        out = capsys.readouterr().out
+        assert "unknown key" in out, out
+        assert _generic_schema_hint() in out, out
+        assert vc.NO_DECLARED_DEFAULTS_HINT not in out, out
+
+
+class TestExitCodeAttributionIsPerRow:
+    """Whose fault the run was is decided per check, not for the whole run.
+
+    ⛔ The first version asked one global question — "was anything under
+    `--config-dir` unreadable?" — and downgraded EVERY caller-error to exit
+    1. So a genuine `bump_docs.py not found` from `versions`, which never
+    opens anything in that tree, silently became "your config has a
+    finding" because an unrelated tenant file was saved in the wrong code
+    page. That is the same false attribution `_caveat_applies` exists to
+    prevent, made in the exit code instead of in the text — measured as all
+    four cells below.
+    """
+
+    @staticmethod
+    def _tree(tmp_path, unreadable: bool):
+        d = tmp_path / "conf.d"
+        d.mkdir()
+        (d / "_defaults.yaml").write_text(
+            "defaults:\n  mysql_threads_running: 80\n", encoding="utf-8")
+        if unreadable:
+            (d / "db-a.yaml").write_bytes(
+                b"tenants:\n  db_a:\n    # \xb4\xfa\xb8\xd5\n    x: 1\n")
+        return str(d)
+
+    def _run(self, tmp_path, monkeypatch, capsys, cli_argv, *,
+             unreadable, caller_error):
+        if caller_error:
+            monkeypatch.setattr(vc, "check_versions", lambda: vc._make_result(
+                "versions", vc.FAIL, ["bump_docs.py not found"],
+                caller_error=True))
+        else:
+            monkeypatch.setattr(vc, "check_versions", lambda: vc._make_result(
+                "versions", vc.PASS, ["ok"]))
+        cli_argv("validate_config", "--config-dir",
+                 self._tree(tmp_path, unreadable), "--version-check")
+        with pytest.raises(SystemExit) as exc:
+            vc.main()
+        capsys.readouterr()
+        return exc.value.code
+
+    @pytest.mark.parametrize("unreadable,caller_error,expected", [
+        (False, False, 0),
+        (False, True, 2),
+        (True, False, 1),
+        (True, True, 2),
+    ], ids=["clean", "tool-broke", "bad-file", "bad-file+tool-broke"])
+    def test_the_four_cells(self, unreadable, caller_error, expected,
+                            tmp_path, monkeypatch, capsys, cli_argv):
+        rc = self._run(tmp_path, monkeypatch, capsys, cli_argv,
+                       unreadable=unreadable, caller_error=caller_error)
+        assert rc == expected, (
+            f"unreadable={unreadable} caller_error={caller_error}: got "
+            f"exit {rc}, expected {expected}. `versions` never reads "
+            f"--config-dir, so an unreadable file there cannot explain its "
+            f"failure.")
+
+    def test_a_caller_error_from_a_check_that_does_read_the_tree_is_downgraded(
+            self, tmp_path, monkeypatch, capsys, cli_argv):
+        """The other side of the same rule — without it, "never downgrade"
+        passes every cell above and the customer's own encoding problem is
+        reported as our bug again."""
+        def boom(config_dir, *_a, **_kw):
+            raise RuntimeError("downstream of the unreadable file")
+
+        monkeypatch.setattr(vc, "check_routes", boom)
+        rc = self._run(tmp_path, monkeypatch, capsys, cli_argv,
+                       unreadable=True, caller_error=False)
+        assert rc == 1, rc
+
+
+class TestTheCaveatFollowsTheValueNotTheParameterName:
+    """⛔ A customer-facing promise must not hang on an identifier.
+
+    The first version answered "does this check read the config tree?" with
+    ``"config_dir" in inspect.signature(fn).parameters``. Blind review
+    renamed ``check_routes(config_dir, …)`` to ``conf_root`` — a pure
+    rename, no behaviour change — and measured the ⚠️ caveat and the "fix
+    the read errors first" line vanishing from that row, with the cheapest
+    repair being to rename it back. A decorator without ``functools.wraps``
+    collapses the signature the same way.
+    """
+
+    def test_a_renamed_parameter_keeps_the_caveat(self):
+        def check_renamed(conf_root):
+            return vc._make_result("routes", vc.PASS, ["ok"])
+
+        row = vc._run_check("routes", check_renamed, "/some/dir",
+                            _config_dir="/some/dir")
+        assert row["reads_config_dir"] is True
+
+    def test_a_decorated_check_keeps_the_caveat(self):
+        def undecorated(config_dir):
+            return vc._make_result("routes", vc.PASS, ["ok"])
+
+        def wrap(fn):
+            def inner(*a, **kw):        # deliberately no functools.wraps
+                return fn(*a, **kw)
+            return inner
+
+        row = vc._run_check("routes", wrap(undecorated), "/some/dir",
+                            _config_dir="/some/dir")
+        assert row["reads_config_dir"] is True
+
+    def test_a_check_handed_something_else_does_not_get_it(self):
+        """Must-exclude control: without it, "always True" passes both
+        cases above and `versions` is blamed for `conf.d/` again."""
+        def check_versions():
+            return vc._make_result("versions", vc.PASS, ["ok"])
+
+        row = vc._run_check("versions", check_versions,
+                            _config_dir="/some/dir")
+        assert row["reads_config_dir"] is False
+
+    def test_an_unknown_config_dir_keeps_the_caveat(self):
+        """A caller that does not say gets the over-warning default: a
+        missing caveat over-claims coverage, an extra one only over-warns."""
+        row = vc._run_check("routes", lambda: vc._make_result(
+            "routes", vc.PASS, ["ok"]))
+        assert row["reads_config_dir"] is True
+
+
+class TestTheDestructiveHintIsReplacedOnBothExits:
+    """⛔ `check_schema` returns from two places and only one was wired.
+
+    ``--strict`` plus an emptied ``defaults:`` plus any domain-policy
+    violation takes the FAIL branch, where the generic "Remove unknown
+    keys" survived — the exact advice the replacement exists to stop, on
+    the path where the reader is most likely to be in a hurry.
+    """
+
+    @staticmethod
+    def _tree(tmp_path):
+        d = tmp_path / "conf.d"
+        d.mkdir()
+        (d / "_defaults.yaml").write_text(
+            "defaults:\n\n_routing_defaults:\n"
+            "  group_by: [tenant, alertname]\n  group_wait: 30s\n"
+            "  repeat_interval: 4h\n  receiver:\n    type: slack\n"
+            "    api_url: https://hooks.example/a\n", encoding="utf-8")
+        (d / "_domain_policy.yaml").write_text(
+            "domain_policies:\n  fin:\n    tenants: [db-a]\n"
+            "    constraints:\n      forbidden_receiver_types: [slack]\n",
+            encoding="utf-8")
+        (d / "db-a.yaml").write_text(
+            "tenants:\n  db-a:\n    mysql_threads_running: 90\n",
+            encoding="utf-8")
+        return str(d)
+
+    def test_the_fail_branch_too(self, tmp_path, capsys, cli_argv):
+        cli_argv("validate_config", "--config-dir", self._tree(tmp_path),
+                 "--strict")
+        with pytest.raises(SystemExit):
+            vc.main()
+        out = capsys.readouterr().out
+        assert "[FAIL] schema" in out, out
+        assert _generic_schema_hint() not in out, (
+            "the FAIL path still tells the customer to delete overrides "
+            f"that are in force\n{out}")
+        assert vc.NO_DECLARED_DEFAULTS_HINT.split(".")[0] in out, out
+
+
+class TestUnwatchedHalvesFoundByMutation:
+    """Layers a mutation sweep found with no control on them.
+
+    Each of these survived a single-point weakening of the shipped code
+    while the whole suite stayed green — which is the definition of a layer
+    nobody is watching. The sweep ran 39 mutations; these are its survivors
+    that turned out to be reachable.
+    """
+
+    def test_the_hint_counts_declared_optional_overrides_too(self, tmp_path):
+        """⛔ A platform can declare keys without giving them values.
+
+        ``optional_override_keys`` (#1189) is the platform's declared but
+        valueless surface. Dropping it from the union survived the whole
+        suite: a platform that declares only optional overrides would be
+        told "This config declares no platform defaults at all … ⛔ Do NOT
+        remove the keys named above" — the wrong advice, on the one path
+        this helper exists to make right. Every other test here ships a
+        `defaults:` block, so `defaults_keys` alone satisfied them.
+        """
+        d = tmp_path / "conf.d"
+        d.mkdir()
+        (d / "_defaults.yaml").write_text(
+            "optional_overrides:\n  - mysql_threads_running\n",
+            encoding="utf-8")
+        (d / "db-a.yaml").write_text(
+            "tenants:\n  db_a:\n    mysql_threads_running: 90\n",
+            encoding="utf-8")
+        assert vc._no_declared_defaults_hint(str(d)) is None, (
+            "the platform DOES declare this key, just without a value — "
+            "telling the customer nothing is declared is wrong here")
+
+    def test_a_platform_declaring_nothing_at_all_still_gets_the_hint(
+            self, tmp_path):
+        """Must-fire control for the test above: without it, "always return
+        None" would satisfy it and the destructive advice comes back."""
+        d = tmp_path / "conf.d"
+        d.mkdir()
+        (d / "_defaults.yaml").write_text("# nothing\n", encoding="utf-8")
+        assert vc._no_declared_defaults_hint(str(d)) == \
+            vc.NO_DECLARED_DEFAULTS_HINT
+
+    def test_config_dir_passed_by_keyword_is_recognised(self):
+        """⛔ The kwargs half of the comparison was dead code.
+
+        No dispatch passes ``config_dir=`` by keyword today, so deleting
+        that half survived — and the docstring promises "comparing the
+        argument survives both". A later
+        ``_run_check("routes", check_routes, config_dir=…)`` would silently
+        drop the ⚠️ caveat and the read-errors-first line from that row.
+        """
+        row = vc._run_check("routes",
+                            lambda config_dir: vc._make_result(
+                                "routes", vc.PASS, ["ok"]),
+                            config_dir="/some/dir", _config_dir="/some/dir")
+        assert row["reads_config_dir"] is True
+
+    def test_the_caveat_truncates_a_long_file_list(self, tmp_path, capsys,
+                                                   cli_argv):
+        """⛔ ``unusable[:5]`` and its ``…`` had no fixture with six files.
+
+        A conf.d where everything is unreadable is exactly when the report
+        matters most, and an untruncated join puts an unbounded list inside
+        every row.
+        """
+        d = tmp_path / "conf.d"
+        d.mkdir()
+        (d / "_defaults.yaml").write_text(
+            "defaults:\n  mysql_threads_running: 80\n", encoding="utf-8")
+        # ⛔ SEVEN, not six, and the assertion below is <= 5, not <= 6.
+        # With six files the test could not fail: removing the truncation
+        # leaves six names, and `count(".yaml") <= 5 + 1` accepts six. Six
+        # was exactly one short of discriminating — measured.
+        for i in range(7):
+            (d / f"t{i}.yaml").write_bytes(b"tenants:\n  x: [1\n")
+        cli_argv("validate_config", "--config-dir", str(d))
+        with pytest.raises(SystemExit):
+            vc.main()
+        out = capsys.readouterr().out
+        assert "…" in out, out
+        row = _report_row(out, "routes")
+        assert row.count(".yaml") <= 5, (
+            "the caveat is listing every unreadable file instead of the "
+            f"first five\n{row}")
+
+    def test_two_files_with_the_same_name_at_different_depths(self, tmp_path):
+        """⛔ The relative-path label had no fixture.
+
+        Since #1339 the scan is recursive, so two levels can hold the same
+        `_defaults.yaml`; a bare filename makes the report name the same
+        thing twice and the reader cannot tell which one to open.
+        """
+        d = tmp_path / "conf.d"
+        (d / "team").mkdir(parents=True)
+        (d / "_defaults.yaml").write_bytes(b"defaults: [1\n")
+        (d / "team" / "_defaults.yaml").write_bytes(b"defaults: [2\n")
+        result = vc.check_yaml_syntax(str(d))
+        assert sorted(result["unusable_files"]) == [
+            "_defaults.yaml", "team/_defaults.yaml"], result["unusable_files"]
+
+
+class TestTheJsonDocumentCarriesNoInternalBookkeeping:
+    """⛔ Everything published in `--json` becomes a contract.
+
+    Measured on a clean `conf.d`: an earlier revision put
+    `"unusable_files": []`, `"hint": null` and `"reads_config_dir": true` on
+    every row of a perfectly healthy run (750 B → 970 B for nothing). All
+    three are internal — they exist so the report can decide where the
+    skipped-file caveat belongs and which advice line to print — and `hint`
+    duplicates `suggested_action`, which the same function already emits.
+
+    The version before that popped only `reads_config_dir`, under a comment
+    stating the rule that the other two also broke.
+    """
+
+    @staticmethod
+    def _json(tmp_path, cli_argv, capsys, broken=False):
+        d = tmp_path / "conf.d"
+        d.mkdir()
+        (d / "_defaults.yaml").write_text(
+            "defaults:\n  mysql_threads_running: 80\n", encoding="utf-8")
+        (d / "db-a.yaml").write_text(
+            "tenants:\n  db_a:\n    mysql_threads_running: 90\n",
+            encoding="utf-8")
+        if broken:
+            (d / "db-b.yaml").write_bytes(b"tenants:\n  db_b: [1\n")
+        cli_argv("validate_config", "--config-dir", str(d), "--json")
+        with pytest.raises(SystemExit):
+            vc.main()
+        return json.loads(capsys.readouterr().out)
+
+    INTERNAL = ("reads_config_dir", "hint")
+
+    def test_a_healthy_run_publishes_none_of_it(self, tmp_path, cli_argv,
+                                                capsys):
+        rows = self._json(tmp_path, cli_argv, capsys)
+        assert rows, "no rows at all"
+        for row in rows:
+            leaked = sorted(k for k in self.INTERNAL if k in row)
+            assert not leaked, (row["check"], leaked)
+            assert "unusable_files" not in row, (
+                f"{row['check']}: an empty bookkeeping list is still a "
+                f"published key")
+
+    def test_the_file_list_is_still_published_where_it_says_something(
+            self, tmp_path, cli_argv, capsys):
+        """Must-still-publish control: the point of dropping the empty ones
+        is that the non-empty one keeps meaning something. Without this,
+        popping the key unconditionally would satisfy the test above."""
+        rows = self._json(tmp_path, cli_argv, capsys, broken=True)
+        by = {r["check"]: r for r in rows}
+        assert by["yaml_syntax"]["unusable_files"] == ["db-b.yaml"], rows
+        # ⛔ NOT `all(... for r in rows if check != "yaml_syntax")`. That
+        # form contradicts `_caveat_applies`, which deliberately withholds
+        # the caveat from a check that never read the tree — measured: add
+        # one correctly-classified check that takes no `config_dir` and the
+        # assertion goes red, with the cheapest repair being to fake the
+        # dispatch so the new row DOES carry it, i.e. print the false
+        # attribution the contract exists to prevent. Assert the shape of
+        # what is carried, plus that something carries it, and leave which
+        # rows to the contract.
+        carriers = {r["check"] for r in rows if "skipped_unusable_files" in r}
+        # ⛔ An exact set, not `all(...)` over every non-`yaml_syntax` row and
+        # not merely "somebody carries it".
+        #   * `all(...)` contradicts `_caveat_applies`, which deliberately
+        #     withholds the caveat from a check that never read the tree.
+        #     Measured: add one correctly-classified check taking no
+        #     `config_dir` and it goes red, the cheapest repair being to fake
+        #     the dispatch so the new row DOES carry it — printing exactly the
+        #     false attribution the contract exists to prevent.
+        #   * "somebody carries it" is too weak the other way: drop the caveat
+        #     from one row and the rest keep the assertion green.
+        # An exact set fails in both directions. Adding a check that reads the
+        # tree turns this red on purpose — add its name here, and only if it
+        # really does read `--config-dir`.
+        assert carriers == {
+            "policy_dsl",
+            "profiles",
+            "routes",
+            "schema",
+        }, sorted(carriers)
+        assert all(r["skipped_unusable_files"] == ["db-b.yaml"]
+                   for r in rows if r["check"] in carriers), rows
+        for row in rows:
+            assert not [k for k in self.INTERNAL if k in row], row["check"]
+
+    def test_the_advice_still_reaches_json_under_its_public_name(
+            self, tmp_path, cli_argv, capsys):
+        """`hint` was popped, not silenced.
+
+        ⛔ Asserting only that `suggested_action` is non-empty proves
+        nothing: every non-PASS row gets a non-empty value from the static
+        `_CHECK_HINTS` table regardless. Measured — deleting the JSON
+        branch's `hint` override silently reverted this field to the
+        generic "Remove unknown keys", the very advice this branch exists
+        to stop, and the suite stayed green. The fixture therefore has to be
+        a tree with NO declared defaults, and the assertion has to be on the
+        content.
+        """
+        d = tmp_path / "conf.d"
+        d.mkdir()
+        (d / "_defaults.yaml").write_text("# nothing declared\n",
+                                          encoding="utf-8")
+        (d / "db-a.yaml").write_text(
+            "tenants:\n  db_a:\n    mysql_threads_running: 90\n",
+            encoding="utf-8")
+        cli_argv("validate_config", "--config-dir", str(d), "--json")
+        with pytest.raises(SystemExit):
+            vc.main()
+        rows = json.loads(capsys.readouterr().out)
+        schema = next(r for r in rows if r["check"] == "schema")
+        assert schema["suggested_action"] == vc.NO_DECLARED_DEFAULTS_HINT, (
+            schema.get("suggested_action"))
+        assert _generic_schema_hint() not in schema["suggested_action"]
+
+
+class TestACheckThatExitsTheProcessStillLeavesAReport:
+    """⛔ `SystemExit` is not an `Exception`, and both catchers had to learn it.
+
+    `_parse_config_files` calls `sys.exit(EXIT_CALLER_ERROR)` when the config
+    directory has gone; `check_schema` / `check_routes` / `check_policy` all
+    reach it, and so does `_no_declared_defaults_hint`. `main()` checks
+    `isdir` first, so firing it needs a TOCTOU — a GitOps ConfigMap projected
+    volume swaps `..data` atomically — and then the process dies before
+    `print_report`: #1448's own symptom, through the wrapper written to stop
+    it.
+
+    Both catchers were fixed a round apart, and **neither fix had a test**:
+    deleting `_run_check`'s clause, or narrowing the hint helper's back to
+    `except Exception`, left the whole suite green. A fix nothing pins is a
+    fix that leaves with the next refactor.
+    """
+
+    def test_run_check_turns_it_into_a_row(self):
+        def boom():
+            sys.exit(2)
+
+        row = vc._run_check("schema", boom)
+        assert row["status"] == vc.FAIL
+        assert row["caller_error"] is True
+        assert any("exited the process" in d for d in row["details"]), row
+
+    def test_the_report_survives_it_end_to_end(self, tmp_path, monkeypatch,
+                                               capsys, cli_argv):
+        d = tmp_path / "conf.d"
+        d.mkdir()
+        (d / "_defaults.yaml").write_text(
+            "defaults:\n  mysql_threads_running: 80\n", encoding="utf-8")
+
+        def gone(*_a, **_kw):
+            sys.exit(2)
+
+        monkeypatch.setattr(vc, "check_routes", gone)
+        cli_argv("validate_config", "--config-dir", str(d))
+        with pytest.raises(SystemExit) as exc:
+            vc.main()
+        out = capsys.readouterr().out
+        assert "Unified Validation Report" in out, (
+            f"a check exiting the process took the report with it "
+            f"({len(out)} bytes on stdout)")
+        assert exc.value.code == vc.EXIT_CALLER_ERROR, out
+
+    def test_the_hint_helper_survives_it_too(self, tmp_path, monkeypatch):
+        """The sibling catcher. Without this, narrowing it back to
+        `except Exception` is invisible."""
+        import generate_alertmanager_routes as gen
+
+        def gone(_d):
+            sys.exit(2)
+
+        monkeypatch.setattr(gen, "_parse_config_files", gone)
+        assert vc._no_declared_defaults_hint(str(tmp_path)) is None
+
+    def test_a_check_that_returns_normally_is_untouched(self):
+        """Must-succeed control: catching SystemExit must not swallow a
+        healthy return, which is what "always build a row" would look like."""
+        sentinel = vc._make_result("routes", vc.PASS, ["all good"])
+        assert vc._run_check("routes", lambda: sentinel) is sentinel
+
+
+class TestTheSchemaRowDoesNotAdviseDeletingKeysItNeverReported:
+    """⛔ `check_schema` is a multiplexer; the advice line is keyed on its name.
+
+    Its details carry unknown-key WARNs *and* ADR-007 policy ERRORs, so a run
+    whose only finding is a broken `_domain_policy.yaml` — zero keys reported
+    — still ended with "Remove unknown keys or add them to the schema". That
+    is the destructive advice this branch exists to stop, on a path that has
+    nothing to do with keys.
+    """
+
+    @staticmethod
+    def _tree(tmp_path, policy_body):
+        d = tmp_path / "conf.d"
+        d.mkdir()
+        (d / "_defaults.yaml").write_text(
+            "defaults:\n  mysql_threads_running: 80\n", encoding="utf-8")
+        (d / "db-a.yaml").write_text(
+            "tenants:\n  db-a:\n    mysql_threads_running: 90\n",
+            encoding="utf-8")
+        (d / "_domain_policy.yaml").write_text(policy_body, encoding="utf-8")
+        return str(d)
+
+    def test_a_policy_only_failure_gets_policy_advice(self, tmp_path, capsys,
+                                                      cli_argv):
+        cli_argv("validate_config", "--config-dir",
+                 self._tree(tmp_path, "domain_policies:\n"), "--strict")
+        with pytest.raises(SystemExit):
+            vc.main()
+        out = capsys.readouterr().out
+        assert "[FAIL] schema" in out, out
+        assert _generic_schema_hint() not in out, (
+            "the row reported no keys at all and still told the customer to "
+            f"remove some\n{out}")
+        assert vc.POLICY_ONLY_SCHEMA_HINT in out, out
+
+    def test_an_unknown_key_still_gets_key_advice(self, tmp_path, capsys,
+                                                  cli_argv):
+        """Must-still-fire control: when the row DOES report keys, the
+        generic advice is the right one. Without this, suppressing it
+        unconditionally would pass the test above."""
+        d = self._tree(
+            tmp_path,
+            "domain_policies:\n  fin:\n    tenants: [db-a]\n")
+        (pathlib.Path(d) / "db-b.yaml").write_text(
+            "tenants:\n  db-b:\n    mysql_thredas_running: 90\n",
+            encoding="utf-8")
+        cli_argv("validate_config", "--config-dir", d)
+        with pytest.raises(SystemExit):
+            vc.main()
+        out = capsys.readouterr().out
+        assert "unknown key" in out, out
+        assert _generic_schema_hint() in out, out
+        assert vc.POLICY_ONLY_SCHEMA_HINT not in out, out
