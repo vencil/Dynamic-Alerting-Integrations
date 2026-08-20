@@ -125,6 +125,9 @@
    "tests/dx/test_recipe_lifecycle.py",
    "tests/ops/test_lint_custom_rules.py"
   ],
+  "scripts/tools/dx/converge_status.py": [
+   "tests/dx/test_converge_status.py"
+  ],
   "scripts/tools/dx/coverage_delta.py": [
    "tests/dx/test_coverage_delta.py"
   ],
@@ -140,6 +143,9 @@
   ],
   "scripts/tools/dx/doc_coverage.py": [
    "tests/dx/test_doc_coverage.py"
+  ],
+  "scripts/tools/dx/gen_agent_adapters.py": [
+   "tests/dx/test_gen_agent_adapters.py"
   ],
   "scripts/tools/dx/gen_recipe_status_json.py": [
    "tests/dx/test_gen_recipe_status_json.py"
@@ -724,7 +730,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "1f0325d2d92481e29b62e3c8344e5d7790f4bdfa772498f16b2c3441a16e5e3d",
+ "source_digest": "f05d17743f52a695dbf4e6daabd1ea044f3351d79298e83cca507bcc863b35ce",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -734,6 +740,7 @@
   "tests/dx/test_bump_docs.py",
   "tests/dx/test_bump_playbook_versions.py",
   "tests/dx/test_compile_custom_alerts.py",
+  "tests/dx/test_converge_status.py",
   "tests/dx/test_coverage_delta.py",
   "tests/dx/test_coverage_gap_analysis.py",
   "tests/dx/test_custom_alerts_promtool.py",
@@ -744,6 +751,7 @@
   "tests/dx/test_federation_revocation_dashboard.py",
   "tests/dx/test_fleet_threshold_dashboard.py",
   "tests/dx/test_fuse_plumbing_commit.py",
+  "tests/dx/test_gen_agent_adapters.py",
   "tests/dx/test_gen_recipe_status_json.py",
   "tests/dx/test_generate_adr_index.py",
   "tests/dx/test_generate_alert_reference.py",
@@ -2086,6 +2094,9 @@
    "tests/lint/test_check_structure.py",
    "tests/ops/test_ci_path_filter_coverage.py"
   ],
+  "scripts/tools/dx/converge_status.py": [
+   "tests/dx/test_converge_status.py"
+  ],
   "scripts/tools/dx/coverage_delta.py": [
    "tests/dx/test_coverage_delta.py"
   ],
@@ -2093,6 +2104,9 @@
    "tests/dx/test_describe_tenant.py",
    "tests/golden/test_merge_parity.py",
    "tests/ops/test_property_based.py"
+  ],
+  "scripts/tools/dx/gen_agent_adapters.py": [
+   "tests/dx/test_gen_agent_adapters.py"
   ],
   "scripts/tools/dx/generate_byo_rulepack_table.py": [
    "tests/dx/test_generate_byo_rulepack_table.py"

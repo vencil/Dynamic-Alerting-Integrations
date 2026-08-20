@@ -95,12 +95,14 @@ lang: zh
 | `bump_playbook_versions.py` | Bump `verified-at-version:` front-matter across the 4 operational playbooks. |
 | `check_aria_references.py` | Static JSX ARIA reference closure validator (Phase .a0 Day 5 verification). |
 | `compile_custom_alerts.py` | Compile Custom Alert recipes → rule-packs/rule-pack-custom-alerts.yaml. |
+| `converge_status.py` | Judge whether a multi-round fix chain is converging, from its ROUNDS.jsonl ledger. |
 | `coverage_delta.py` | Per-file + total coverage delta between two runs. |
 | `coverage_gap_analysis.py` | Per-file coverage ranking report |
 | `describe_tenant.py` | Describe effective tenant config — resolve _defaults.yaml inheritance chain. |
 | `diag_pr_ci.py` | PR CI auto-diagnostic CLI (issue #446). |
 | `doc_coverage.py` | 文件覆蓋率 Dashboard |
 | `doc_impact.py` | 文件變更影響分析 |
+| `gen_agent_adapters.py` | Generate the per-vendor agent adapters from the neutral agents/ SSOT (TRK-361). |
 | `gen_recipe_status_json.py` | Generate recipe-status.json from the compiler SSOT (ADR-024 §8, #741 #6 / A1). |
 | `generate_alert_reference.py` | Auto-generate ALERT-REFERENCE.md from Rule Pack YAML files. |
 | `generate_byo_rulepack_table.py` | BYO Prometheus 規則包表產生器（#1267） |

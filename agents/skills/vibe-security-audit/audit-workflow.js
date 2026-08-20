@@ -1,4 +1,3 @@
-// 此檔為產生物，來源 agents/skills/vibe-security-audit/audit-workflow.js —— 請改那份 SSOT，再跑 `make agent-adapters`；不要直接編輯這份複本。
 /**
  * vibe-security-audit — reusable domain-aware security-audit workflow.
  *

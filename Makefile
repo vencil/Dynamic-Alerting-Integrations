@@ -284,6 +284,15 @@ agent-progress: ## 長時 agent progress ledger 快照 + liveness 探針（協�
 		echo ""; \
 	done
 
+.PHONY: agent-adapters
+agent-adapters: ## 由 agents/ 中性 SSOT 重生跨 AI 轉接檔（.claude/** + AGENTS.md；改完 SSOT 必跑）
+	@python3 scripts/tools/dx/gen_agent_adapters.py --generate
+
+.PHONY: converge-status
+converge-status: ## 多輪修正鏈的收斂判定（協議見 vibe-converge skill；用：make converge-status SCOPE=dev/1443）
+	@if [ -z "$(SCOPE)" ]; then echo "❌ SCOPE is required. e.g. make converge-status SCOPE=dev/1443"; exit 1; fi
+	@python3 scripts/tools/dx/converge_status.py --scope "$(SCOPE)"
+
 .PHONY: win-commit
 win-commit: ## Windows 逃生門：sandbox hook-gate → Windows stage/commit/push。用：make win-commit MSG=_msg.txt FILES="a b" [SKIP=hook1,hook2] [SKIP_HOOKS=1]
 	@if [ -z "$(MSG)" ]; then echo "❌ MSG is required. e.g. make win-commit MSG=_msg.txt"; exit 1; fi
