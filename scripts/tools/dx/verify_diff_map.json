@@ -125,6 +125,9 @@
    "tests/dx/test_recipe_lifecycle.py",
    "tests/ops/test_lint_custom_rules.py"
   ],
+  "scripts/tools/dx/converge_status.py": [
+   "tests/dx/test_converge_status.py"
+  ],
   "scripts/tools/dx/coverage_delta.py": [
    "tests/dx/test_coverage_delta.py"
   ],
@@ -724,7 +727,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "dd3bb5d4a098f782833c8c551b36d39d7e7030f03bf674f402955ef44560ffc0",
+ "source_digest": "56c01565d8abae9bf89e00534f530e1834c29327bf0f9253d84899c9dfe5ce85",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -734,6 +737,7 @@
   "tests/dx/test_bump_docs.py",
   "tests/dx/test_bump_playbook_versions.py",
   "tests/dx/test_compile_custom_alerts.py",
+  "tests/dx/test_converge_status.py",
   "tests/dx/test_coverage_delta.py",
   "tests/dx/test_coverage_gap_analysis.py",
   "tests/dx/test_custom_alerts_promtool.py",
@@ -2053,6 +2057,9 @@
    "tests/dx/test_verify_diff.py",
    "tests/lint/test_check_structure.py",
    "tests/ops/test_ci_path_filter_coverage.py"
+  ],
+  "scripts/tools/dx/converge_status.py": [
+   "tests/dx/test_converge_status.py"
   ],
   "scripts/tools/dx/coverage_delta.py": [
    "tests/dx/test_coverage_delta.py"

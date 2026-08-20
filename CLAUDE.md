@@ -30,7 +30,7 @@ Session 起手式 codified 為 **PreToolUse hook** (v2.8.0；#824 改經 `run-ho
 
 ## Skill 體系
 
-Vibe 專案內建 **七個本地 skills**（`.claude/skills/`），在對應情境自動觸發：
+Vibe 專案內建 **八個本地 skills**（`.claude/skills/`），在對應情境自動觸發：
 
 - **`vibe-workflow`** — session 起手式、7 個常見陷阱、標準開發工作流（session 開始或遇到 FUSE / docker / port-forward 類問題時自動觸發）
 - **`vibe-dev-rules`** — 13 條開發規範 + Top 4 違反熱點（commit / push / refactor 前自動觸發）
@@ -38,6 +38,7 @@ Vibe 專案內建 **七個本地 skills**（`.claude/skills/`），在對應情�
 - **`vibe-subagent-review`** — IaC-aware 兩階段 review（code 走 spec→quality、IaC 走 blast-radius）+ 對抗式 review 紀律（finder≠verifier 自審 / verify-before-assert / only-actionable）+ 長時驗證 agent 可觀測性協議（Workflow-first / `dev/<scope>/PROGRESS.jsonl` ledger / 單 agent ~15 min 上限 / `make agent-progress`）（multi-file PR / `Agent` 跑完後、commit 前、或 spawn 長時 reviewer/verifier 前自動觸發；TRK-305）
 - **`vibe-release`** — 六線版號 release 收尾 SOP（make pre-tag → CHANGELOG distill + project-face refresh → **未發布 draft advisory 檢查** → 六線 tag → gh release ×6；release 收尾 / phase e 時觸發；TRK-306 + TRK-354，延伸 #474 Layer 3）
 - **`vibe-brainstorm`** — 設計階段 Socratic ideation（MVP 範圍 / explicit trade-off / defer-with-trigger + proposer≠critic 內部對抗 + 外部 adversarial review；新 ADR / component / epic 拆解 / RFC 時觸發；TRK-308）
+- **`vibe-converge`** — 多輪修正的收斂協議（decidability gate「這題用手上的證據判得出來嗎」／跨輪只傳 verified claim + open question + 已打死方向表／面積預算／三條停止規則 + `dev/<scope>/ROUNDS.jsonl` 帳本 + `make converge-status`；同一缺陷進入第 2 輪修正、或「每修一輪就冒出新洞」時觸發；TRK-360）
 - **`vibe-security-audit`** — 全 component 週期性深度安全稽核 harness（Recon→平行 Hunt→對抗式 Validate→Synthesize，跑在隔離 worktree 快照；借 Cloudflare `security-audit-skill` pattern wrap Vibe 攻擊面向，per-role 走 `.claude/agents/vibe-sec-*`；新信任邊界 GA 前 / incident 後 / 季度觸發，與 diff-scoped `/security-review` 互補、不進 CI）
 
 環境層 skills（`docx` / `pptx` / `xlsx` / `pdf` / `engineering:*` / `data:*` / `design:*` / `marketing:*` 等）**Claude 自主判斷使用**，不需逐次徵詢：判斷符合即讀 SKILL.md 執行（使用前單行說明，如「跑 `engineering:debug` reproduce 步驟」）、多 skill 自主串接、發現該裝沒裝的用 `mcp__plugins__search_plugins` / `mcp__mcp-registry__search_mcp_registry` 主動找 + 建議。

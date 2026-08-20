@@ -35,7 +35,7 @@ allowlist — there is no silent escape (``test_partition_is_exact``).
 
 * BILINGUAL (derived complement, 37 — all pass; repair queue empty) — the
   behavioral assertions above run per tool.
-* ``ENGLISH_ONLY`` (138) — dx convention: non-customer-facing internal tools
+* ``ENGLISH_ONLY`` (139) — dx convention: non-customer-facing internal tools
   may ship English-only help. RATCHET: shrink-only — the gate runs each one
   under ``DA_LANG=zh`` and turns RED the moment its help gains CJK, forcing
   the entry OUT of the allowlist and INTO the bilingual contract.
@@ -52,7 +52,7 @@ allowlist — there is no silent escape (``test_partition_is_exact``).
 COST DESIGN (why not a blind full-matrix sweep)
 -----------------------------------------------
 Subprocess budget = 2×|BILINGUAL| + 1×|ENGLISH_ONLY| + 1×|CHINESE_ONLY|
-= 2×37 + 138 + 28 = 240 (vs 376 already spent by test_tool_exit_codes).
+= 2×37 + 139 + 28 = 241 (vs 376 already spent by test_tool_exit_codes).
 The allowlists are known-conclusion sets: one zh-help run suffices to verify
 "still no CJK" / "still has CJK" — an en-side run there would prove nothing
 this gate asserts. The CHINESE_ONLY wiring ratchet is a source-text check
@@ -159,6 +159,7 @@ ENGLISH_ONLY: dict[str, str] = {
     "check_aria_references.py": _R_DX,
     "compile_custom_alerts.py": _R_DX,
     "coverage_delta.py": _R_DX,
+    "converge_status.py": _R_DX,
     "coverage_gap_analysis.py": _R_DX,
     "describe_tenant.py": _R_DX,
     "diag_pr_ci.py": _R_DX,
@@ -414,8 +415,14 @@ def test_allowlists_shrink_only_count_pin():
     # and this gate's ratchet is what surfaced the inconsistency. The fragment
     # is now English; the tool is English-only by decision rather than by
     # accident.
-    assert len(ENGLISH_ONLY) <= 138, (
-        f"ENGLISH_ONLY grew to {len(ENGLISH_ONLY)} (pin=138). Adding an "
+    # pin 139: bumped from 138 for converge_status.py (TRK-360), the
+    # multi-round convergence ledger reader. Same class as coverage_delta.py
+    # already here: a dx CLI invoked by `make converge-status` and by agents
+    # mid-session, never by a customer. English-only by decision — its whole
+    # output is stop-rule verdicts quoted from in-repo issue numbers, and the
+    # protocol it serves (the vibe-converge skill) carries the Chinese prose.
+    assert len(ENGLISH_ONLY) <= 139, (
+        f"ENGLISH_ONLY grew to {len(ENGLISH_ONLY)} (pin=139). Adding an "
         "English-only tool is allowed but must be an explicit, reviewed "
         "decision — bump this pin in the same commit and justify it."
     )
