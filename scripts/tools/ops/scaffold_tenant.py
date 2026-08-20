@@ -33,7 +33,10 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, str(_THIS_DIR))  # Docker flat layout
 sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
-from _lib_python import read_onboard_hints, detect_cli_lang, write_text_secure  # noqa: E402
+from _lib_python import (  # noqa: E402
+    read_onboard_hints, detect_cli_lang, write_text_secure, DOCS_INSTALL_URL,
+    DOCS_SITE_BASE,
+)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 # The predicate that decides which optional_overrides keys the PLATFORM ships
 # on the runtime `optional_overrides:` list (#1310). Imported rather than
@@ -934,7 +937,8 @@ def generate_report(tenant_name: str, selected_dbs: list[str], output_dir: str, 
             "",
             "## 飽和類指標的 critical 層（教育提示）",
             "  飽和=容量訊號，建議先確認配對症狀告警（如慢查詢），或 warning＋容量規劃。",
-            "  詳見〈告警該響之前〉：docs/alerting-design-fundamentals.md",
+            f"  詳見〈告警該響之前〉：{DOCS_SITE_BASE}"
+            "alerting-design-fundamentals/",
             "  本租戶可用的飽和類 _critical 鍵：",
         ])
         lines.extend(f"    - {key}_critical" for key in saturation_keys)
@@ -944,6 +948,9 @@ def generate_report(tenant_name: str, selected_dbs: list[str], output_dir: str, 
 
     lines.append("```bash")
     lines.append("# 部署/更新 threshold-exporter (Rule Packs 已內建，無需額外 -f)")
+    lines.append("# ⛔ 下面兩個路徑指的是本專案的原始碼樹，不是你的 repo。"
+                 "從 OCI registry 安裝的寫法見")
+    lines.append(f"#    {DOCS_SITE_BASE}scenarios/gitops-ci-integration/")
     lines.append("helm upgrade --install threshold-exporter ./helm/threshold-exporter \\")
     lines.append("  -n monitoring \\")
     lines.append("  -f environments/local/threshold-exporter.yaml")
@@ -971,19 +978,37 @@ def generate_report(tenant_name: str, selected_dbs: list[str], output_dir: str, 
         "## 掛載 Tenant Config",
         "",
         "```bash",
-        "# 方法 1: 直接複製到 conf.d/",
-        f"cp {output_dir}/{tenant_name}.yaml components/threshold-exporter/config/conf.d/",
+        "# 方法 1: 複製到你的 conf.d/（GitOps 流程走這條）",
+        f"cp {output_dir}/{tenant_name}.yaml conf.d/",
         "",
-        "# 方法 2: 用 patch_config.py 動態更新",
-        f"python3 scripts/tools/patch_config.py {tenant_name} <metric_key> <value>",
+        "# 方法 2: 直接改叢集裡的 ConfigMap（見下方 ⛔ 的先決條件）",
+        f"da-tools patch-config {tenant_name} <metric_key> <value>",
         "```",
         "",
         "## 驗證",
         "",
         "```bash",
-        f"python3 scripts/tools/diagnose.py {tenant_name}",
-        f"python3 scripts/tools/check_alert.py MariaDBHighConnections {tenant_name}",
+        "# 純讀設定，不需要叢集：",
+        f"da-tools diagnose {tenant_name} --config-dir conf.d/",
+        "",
+        "# 下面要連得到叢集／Prometheus（裸 diagnose 會去讀 ConfigMap）：",
+        f"da-tools diagnose {tenant_name}",
+    ])
+
+    # `check-alert` needs an alert name, and the only one this report ever
+    # named was MariaDB's — unconditionally, including for tenants that never
+    # selected the mariadb pack. Naming an alert the tenant does not have is
+    # the same failure mode as naming a file they do not have (#1447), so it
+    # is emitted only when that pack is in play.
+    if "mariadb" in (selected_dbs or []):
+        lines.append(
+            f"da-tools check-alert MariaDBHighConnections {tenant_name}")
+    lines.extend([
         "```",
+        "",
+        f"（`da-tools` 的取得方式見 {DOCS_INSTALL_URL}）",
+        "⛔ 需要叢集的那幾個要 kubectl 與叢集存取權，而 da-tools 映像本身不含 "
+        "kubectl——在映像裡跑會是 `FileNotFoundError: 'kubectl'`。",
     ])
 
     return "\n".join(lines)

@@ -60,7 +60,10 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
-from _lib_python import http_get_json, write_text_secure, query_prometheus_instant, add_prometheus_arg  # noqa: E402
+from _lib_python import (  # noqa: E402
+    http_get_json, write_text_secure, query_prometheus_instant,
+    add_prometheus_arg, DOCS_INSTALL_URL,
+)
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 # Alias for backward-compat within this module
@@ -346,17 +349,27 @@ def main():
 
     # 建議 patch 指令
     print(f"\n{'='*70}")
-    print(f"💡 建議 patch 指令（可直接執行或調整後使用）:")
-    print(f"{'='*70}\n")
+    print("💡 建議的閾值（下面用 patch-config 的寫法表示，先決條件見下方 ⛔）:")
+    print(f"{'='*70}")
+    # #1447: these lines used to name `scripts/tools/patch_config.py`, a path
+    # that exists in neither the customer's repository nor (since the tools
+    # moved under `ops/`) this one. The subcommand form is what the reader
+    # actually has — but "可直接執行" was still not true of it, so the
+    # prerequisite is stated rather than implied.
+    print(f"（`da-tools` 的取得方式見 {DOCS_INSTALL_URL}）")
+    print("⛔ patch-config 改的是叢集裡的 ConfigMap，需要 kubectl 與叢集存取權，"
+          "而 da-tools 映像本身不含 kubectl。")
+    print("   走 GitOps 的話請直接把下面的值寫進你 repo 的 conf.d/<tenant>.yaml，"
+          "再 commit。\n")
 
     for key in metrics:
         suggestion = suggest_threshold(all_stats[key], key)
         if suggestion["warning"] is not None:
             config_key = f"mysql_{key}" if not key.startswith("container_") else key
             print(f"  # {key}: warning={suggestion['warning']}")
-            print(f"  python3 scripts/tools/patch_config.py {args.tenant} {config_key} {suggestion['warning']}")
+            print(f"  da-tools patch-config {args.tenant} {config_key} {suggestion['warning']}")
             if suggestion["critical"] is not None:
-                print(f"  python3 scripts/tools/patch_config.py {args.tenant} {config_key}_critical {suggestion['critical']}")
+                print(f"  da-tools patch-config {args.tenant} {config_key}_critical {suggestion['critical']}")
             print()
 
 
