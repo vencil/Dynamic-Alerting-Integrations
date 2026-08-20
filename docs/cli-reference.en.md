@@ -2053,11 +2053,10 @@ docker run --rm \
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--policy <DOMAINS>` | Webhook domain allowlist | (unrestricted) |
-| `--ci` | CI mode (exit code for CI/CD) | false |
 
 **Checks Performed**
 
-- YAML file format (parseable)
+- YAML file usability (parses, decodes as UTF-8, mapping at top level). ⚠️ **The last two landed after v2.9.0**: on the image you have, a non-UTF-8 file or a non-mapping top level raises a traceback with zero bytes on stdout
 - Schema validation (required keys, correct types)
 - Routing rule validation (group_wait/group_interval/repeat_interval in allowed range)
 - Policy checks (webhook domains)
@@ -2076,12 +2075,6 @@ docker run --rm \
   ghcr.io/vencil/da-tools:v2.9.0 \
   validate-config --config-dir /etc/config
 
-# CI mode (strict exit code)
-docker run --rm \
-  -v $(pwd)/conf.d:/etc/config:ro \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  validate-config --config-dir /etc/config --ci
-
 # Check webhook domain allowlist
 docker run --rm \
   -v $(pwd)/conf.d:/etc/config:ro \
@@ -2095,7 +2088,8 @@ docker run --rm \
 | Code | Description |
 |------|-------------|
 | `0` | All validations pass |
-| `1` | Validation failed (one or more checks) |
+| `1` | Validation failed (one or more checks), or a file could not be read |
+| `2` | Caller error (arguments, paths, environment) — not a problem with your config. ⚠️ The v2.9.0 image does not distinguish this code |
 
 ---
 

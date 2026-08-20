@@ -26,6 +26,8 @@ from _lib_constants import (  # noqa: F401
     JOB_DB_MAP,
     METRIC_PREFIX_DB_MAP,
     ONBOARD_HINTS_FILENAME,
+    DOCS_SITE_BASE,
+    DOCS_INSTALL_URL,
     _ALLOWED_SCHEMES,
 )
 

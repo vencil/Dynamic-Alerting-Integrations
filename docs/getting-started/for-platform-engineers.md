@@ -257,7 +257,7 @@ domain_policies:
       max_repeat_interval: 1h
 ```
 
-驗證指令：`da-tools generate-routes --config-dir conf.d/ --validate`（routing profile 引用 + domain policy 約束都在這支裡跑；預設違規只出 WARN，加 `--strict` 轉 ERROR 並 exit 非零——CI 的 validate-config job 跑 `--validate --strict`，domain policy 違規為 blocking）。偵錯指令：`da-tools explain-route --config-dir conf.d/ --tenant <tenant-id>`。JSON Schema 可在 VS Code 中啟用即時驗證（見 `docs/schemas/`）。
+驗證指令：`da-tools generate-routes --config-dir conf.d/ --validate`（routing profile 引用 + domain policy 約束都在這支裡跑；預設違規只出 WARN，加 `--strict` 轉 ERROR 並 exit 非零——CI 的 validate-config job 跑 `--validate --strict`，domain policy 違規為 blocking。⚠️ `--strict` 是 v2.9.0 **之後**才加的，**目前出貨的映像兩支子命令都拒收它**：實測 `generate-routes --validate --strict` 與 `validate-config --strict` 皆為 `rc=2`、`unrecognized arguments: --strict`、stdout 零位元組。在映像更新前，這一段描述的是 CI 上的原始碼行為，不是你在本機跑得到的行為）。偵錯指令：`da-tools explain-route --config-dir conf.d/ --tenant <tenant-id>`。JSON Schema 可在 VS Code 中啟用即時驗證（見 `docs/schemas/`）。
 
 ### 設定 Webhook Domain Allowlist
 

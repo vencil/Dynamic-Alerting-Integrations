@@ -1059,13 +1059,23 @@ class TestSaturationGenerateReport:
         assert "mysql_threads_running_critical" in report
         assert "mysql_connections_critical" in report
         assert "container_cpu_critical" in report
-        assert "docs/alerting-design-fundamentals.md" in report
+        # #1447: this asserted the repo-relative `docs/…md` path. The report
+        # is handed to a tenant whose repository has no `docs/` tree, so the
+        # pointer named a file they cannot open; it is the published URL now.
+        #
+        # ⛔ Assert the WHOLE URL, not the trailing path segment: a substring
+        # match is satisfied by a relative path or the wrong host, which is
+        # exactly the drift this replaced.
+        from _lib_python import DOCS_SITE_BASE
+        assert DOCS_SITE_BASE + "alerting-design-fundamentals/" in report
+        assert "docs/alerting-design-fundamentals.md" not in report, (
+            "the repo-relative form is unreachable for the report's reader")
 
     def test_no_saturation_packs_no_section(self):
         """無飽和鍵組合（空 selected_dbs）→ 無教育段。"""
         report = generate_report("db-x", [], "/tmp/out")
         assert "飽和類指標的 critical 層" not in report
-        assert "docs/alerting-design-fundamentals.md" not in report
+        assert "alerting-design-fundamentals" not in report
 
 
 class TestSaturationRulePacksIntegrity:

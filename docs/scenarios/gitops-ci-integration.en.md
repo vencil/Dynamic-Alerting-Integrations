@@ -27,6 +27,26 @@ This guide explains how to integrate the Dynamic Alerting platform into your exi
 - Target Kubernetes cluster with Prometheus + Alertmanager deployed
 - (Recommended) threshold-exporter deployed via [Helm chart](https://github.com/vencil/Dynamic-Alerting-Integrations/tree/main/components/threshold-exporter)
 
+## Docker Usage Pattern
+
+--8<-- "docs/includes/docker-usage-pattern.en.md"
+
+> Subsequent examples omit this prefix and show only `da-tools <command>` form.
+> **`da-tools` is not an executable you can install onto `$PATH`** — it is an
+> entry point inside the image, so copying a bare `da-tools ...` line gets you
+> `bash: da-tools: command not found`. For how to obtain the image (including
+> air-gapped `docker load`), see the
+> [Migration Toolkit installation guide](../migration-toolkit-installation.en.md).
+
+⚠️ **A problem the mount does not explain, and changing the mount
+does not fix**: the §2.3 shape `generate-routes ... -o .output/xxx.yaml
+--validate` prints `OK: all configs valid` and exits 0 while the file named by
+`-o` never appears — `--validate` finishes before `-o` is used; drop
+`--validate` and it fails with `FileNotFoundError` because the tool does not
+create `.output/`. To actually get the file, `mkdir -p .output` first and do
+not pass `--validate` in the same run. Tracked as
+[#1423](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1423).
+
 ## 1. Quick Init
 
 ### 1.1 Using da-tools init
@@ -175,16 +195,25 @@ graph LR
 
 Runs automatically on every PR and push. Checks:
 
-| Check | Tool | Description |
-|-------|------|-------------|
-| YAML Schema | `da-tools validate-config` | Tenant key validity, three-state value format |
-| Routing Guardrails | `da-tools validate-config` | group_wait 5s–5m, repeat_interval 1m–72h |
-| Domain Policy | `da-tools evaluate-policy` | Business domain constraints (e.g., finance forbids Slack) |
-| Custom Rule Lint | `da-tools lint` | Custom rules deny-list check |
+| Check | Tool | Description | Does a violation block? |
+|-------|------|-------------|-------------|
+| YAML Schema | `da-tools validate-config` | Tenant key validity | **WARN only** (an unknown key reports `unknown key ... not in defaults`, exit 0). ⛔ **Values** are not validated at all — `mysql_connections: 'not-a-number'`, or a negative number, is a clean 5 pass / 0 warn |
+| Routing Guardrails | `da-tools validate-config` | group_wait 5s–5m, group_interval 5s–5m, repeat_interval 1m–72h | **WARN only**, and the value is **emitted anyway** (3 parameters x above-max / below-min / unparseable = all 9 cases exit 0). ⚠️ The substitute is not one thing but two: above-max and below-min are **clamped to the bound**, while an **unparseable** value (e.g. `repeat_interval: banana`) takes the **platform default** instead (`validate_and_clamp` in `_lib_validation.py`). ⚠️ **Do not add `--strict` on the strength of this row**: the flag landed in `validate-config` after v2.9.0 and **the image you have rejects it** — measured `rc=2`, `unrecognized arguments: --strict`, zero bytes on stdout. Once an image ships with it this row is unchanged anyway: `--strict` governs domain policy, and these 9 cases still exit 0 (measured on source) |
+| Domain Policy | `da-tools evaluate-policy` | Business domain constraints (e.g., finance forbids Slack) | ⚠️ **Neither the pre-commit hooks nor the CI that `da-tools init` generates ever calls this command.** The same engine is embedded in `validate-config` as `policy_dsl`, but it needs a `_policies:` section in `_defaults.yaml` and the one `init` writes has none ⇒ a fresh repo prints `No _policies defined — skipped` |
+| Custom Rule Lint | `da-tools lint` | Custom rules deny-list check | ⚠️ Not in the pre-commit hooks. The generated GitHub workflow has the step, but it is wrapped in `if [ -d "rule-packs/custom" ]` and `init` **does not create `rule-packs/`** ⇒ a no-op in a fresh repo until you create that directory yourself |
+
+⛔ **This table says who is looking, not what gets stopped.** Of the four rows,
+only syntax errors and a few structural ones (an unsupported receiver type, say)
+make validation FAIL; everything else is a WARN, and **WARN does not affect the
+exit code**. A clamped threshold, a misspelled tenant key, a threshold written as
+a string — all of those pass commit and CI silently.
 
 ```bash
-# Local validation (same checks as CI)
-# Exits non-zero when any check FAILs — usable as a CI gate with no extra flag
+# Local validation (same command the pre-commit hooks run; the second one is generate-routes, in §2.3)
+# ⚠️ Only a FAIL makes the exit code non-zero. Everything marked "WARN only"
+#    above exits 0 — and pre-commit prints a hook's output only when that hook
+#    fails, so at `git commit` time you see none of those warnings. Run it
+#    yourself to see them:
 da-tools validate-config --config-dir conf.d/
 ```
 
@@ -194,8 +223,12 @@ Runs only on PRs. Generates Alertmanager config fragments and computes blast rad
 
 ```bash
 # Generate Alertmanager routes/receivers/inhibit_rules
+mkdir -p .output
 da-tools generate-routes --config-dir conf.d/ \
-  -o .output/alertmanager-routes.yaml --validate
+  -o .output/alertmanager-routes.yaml
+# ⛔ Do not add --validate to the same call: it returns before -o is used, so
+# it prints OK and writes nothing (#1423). Validate in a separate run:
+da-tools generate-routes --config-dir conf.d/ --dry-run --validate
 
 # Compute blast radius (which tenants, which metrics affected)
 # In CI, first extract the base branch's conf.d/ into conf.d.base/
@@ -447,15 +480,14 @@ git push origin feature/lower-connections
 > ⚠️ **The validate step above will not tell you what you failed to set.** The platform declares a group of keys it recognises but asserts no value for (the `optional_overrides:` list in `_defaults.yaml`): leave one unset and its alert never fires, while validation and CI stay green with **no error message of any kind** — that is the design, not a missing default (these thresholds can only be calibrated against your own baseline). To see what a tenant is currently missing:
 >
 > ```bash
-> python3 scripts/tools/ops/diagnose.py <tenant> \
->   --config-dir conf.d/ --show-inheritance
+> da-tools diagnose <tenant> --config-dir conf.d/ --show-inheritance
 > ```
 >
-> The `declared` section is the list of protections that tenant is going without. Full three-group breakdown in the [Tenant Quick Start Guide](../getting-started/for-tenants.en.md).
+> The `declared` section is the list of protections that tenant is going without. ⚠️ **The image you have (v2.9.0) does not print that section** — measured, its output holds only `chain` / `resolved` / `profile_name`, and it exits 0 without saying anything is missing. It arrives with the next image. Full three-group breakdown in the [Tenant Quick Start Guide](../getting-started/for-tenants.en.md).
 
 ## 6. Multi-Team Sharded Mode
 
-In large organizations, different teams may maintain their own `conf.d/` directories. `assemble_config_dir.py` merges multiple sources:
+In large organizations, different teams may maintain their own `conf.d/` directories. Merging multiple sources is done with `assemble_config_dir.py`:
 
 ```bash
 # Merge multi-team conf.d/ into unified output
@@ -467,16 +499,28 @@ python3 scripts/tools/ops/assemble_config_dir.py \
 
 With CI pipeline integration, each team only modifies their own conf.d/. The merge stage auto-detects conflicts (same tenant in multiple sources).
 
+⛔ **This section is currently reachable only by maintainers of this project.**
+Unlike every other command on this page, `assemble_config_dir.py` has **no
+`da-tools` subcommand** and is not packaged into the `ghcr.io/vencil/da-tools`
+image — the line above needs a source checkout of this repository, which the
+[prerequisites](#prerequisites) do not ask you for. If you need this capability,
+please open an issue. Until then the workable substitute is to copy each team's
+`conf.d/` into one directory in your own CI and run `da-tools validate-config`
+over it (what you lose is the conflict detection).
+
 ## 7. Troubleshooting
 
 | Issue | Diagnosis | Solution |
 |-------|-----------|----------|
-| CI validate fails | `da-tools validate-config --config-dir conf.d/` | Every non-PASS check prints `-> Suggested action:` and `-> See:`; add `--json` for the machine-readable form of the same thing. ⚠️ If `conf.d/` contains a **YAML syntax error** the tool currently raises a Python traceback instead of a report (in both modes) — read the filename and line it ends with |
+| `da-tools: command not found` (rc 127) | `da-tools` is not an installable executable, only an entry point inside the image | Add the `docker run` prefix or define an alias — see [Docker Usage Pattern](#docker-usage-pattern) on this page; to obtain the image see the [Migration Toolkit installation guide](../migration-toolkit-installation.en.md) |
+| CI validate fails | `da-tools validate-config --config-dir conf.d/` | Every non-PASS check prints `-> Suggested action:` and `-> See:`; add `--json` for the machine-readable form of the same thing. ⚠️ **The image you have (v2.9.0)** raises a Python traceback instead of a report (in both modes, with zero bytes on stdout) whenever `conf.d/` holds **any file it cannot get through**. ⛔ **Do not try to read the filename off the traceback**: only the YAML-syntax one ends with a file and line. The others (saved as something other than UTF-8, a top level that is not a mapping, a `tenants:` block whose entries are all commented out, …) end with a codec, a byte offset, or **a path inside our image** — this list is deliberately not exhaustive, because there has been an Nth kind every time. Bisect instead: split `conf.d/` in half, run each half, repeat down to one file. [#1448](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1448) fixes this: **from the next image onward** the report is printed as usual and the `yaml_syntax` row names the files it could not read |
+| The report says "Remove unknown keys" for keys I am still using | the `schema` row of `da-tools validate-config --config-dir conf.d/` | ⛔ **Do not delete them.** If your `_defaults.yaml` has **no `defaults:` block**, has `defaults: {}`, **or the tree has no `_defaults.yaml` at all** (that last shape is the common one in practice), then the platform declares no keys at all and **every** tenant override is reported as an `unknown key` — the gap is on the platform side, not a typo in your tenant files. ⚠️ The three shapes above do **not** include a bare `defaults:` key (null value): on the image you have that raises `AttributeError`, rc=1, zero bytes on stdout — it takes the row above and prints no advice at all. (Nor is it the only shape that misses this row: a `_defaults.yaml` saved as non-UTF-8, or with a non-mapping top level, also ends up there.) It is **the three shapes above** that reach this row, and **the advice the image you have (v2.9.0) prints for those three is wrong** (following it deletes thresholds that are in force, and the run exits 0 while doing so). The fix is to add a `defaults:` block — **create `_defaults.yaml` if the tree has none**; "restore" only applies to the case where one was emptied. From the next image onward this row prints "⛔ Do NOT remove the keys named above" instead ([#1448](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1448)) |
+| Everything PASSes but your change had no effect | `da-tools validate-config --config-dir conf.d/` (run it yourself — do not rely on the green tick at commit time) | Most problems produce only a **WARN**, which does not affect the exit code and is not shown during `git commit` (pre-commit prints a hook's output only when that hook fails). Walk the "Does a violation block?" column in §2.2 |
 | ConfigMap updated but exporter unresponsive | Check `reloadInterval` setting, exporter logs | `kubectl logs -l app=threshold-exporter -n monitoring` |
 | Alertmanager routes not effective | `da-tools explain-route --tenant <name> --config-dir conf.d/` | Check four-layer merge order |
 | Kustomize build fails with `is not in or below` | **Not a broken symlink** — the conf.d files live outside `kustomize/base/` and the default load restrictor refuses them. Re-run with the flag (see §3.1) | `kustomize build --load-restrictor LoadRestrictionsNone kustomize/overlays/prod` |
 | Kustomize build fails with `no such file` | That one IS the link — e.g. pointing at a tenant file that does not exist | `ls -la kustomize/base/` |
-| Config is green but an alert never fires | `diagnose.py <tenant> --config-dir conf.d/ --show-inheritance` | If the key appears in the `declared` section the platform recognises it but asserts no value — **unset means silent, with no error message**. Supply a value calibrated against your own baseline |
+| Config is green but an alert never fires | `da-tools diagnose <tenant> --config-dir conf.d/ --show-inheritance` | If the key appears in the `declared` section the platform recognises it but asserts no value (⚠️ the v2.9.0 image does not print that section — see §5) — **unset means silent, with no error message**. Supply a value calibrated against your own baseline |
 
 ## Related Documents
 

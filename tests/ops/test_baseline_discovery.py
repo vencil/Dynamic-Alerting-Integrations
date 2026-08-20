@@ -540,4 +540,10 @@ class TestReportOutput:
 
         baseline_discovery.main()
         out = capsys.readouterr().out
-        assert "patch_config.py" in out
+        # #1447: this asserted `patch_config.py`, i.e. the suggestion named
+        # `scripts/tools/patch_config.py` — a path that exists in neither the
+        # reader's repository nor (since the tools moved under `ops/`) this
+        # one. The subcommand form is what the reader actually has.
+        assert "da-tools patch-config" in out
+        assert "patch_config.py" not in out, (
+            "the repo-relative form is unreachable for this output's reader")

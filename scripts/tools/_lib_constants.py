@@ -25,6 +25,27 @@ _DISABLED_VALUES: Final[frozenset[str]] = frozenset(("disable", "disabled", "off
 _ALLOWED_SCHEMES: Final[frozenset[str]] = frozenset(("http", "https"))
 
 # ============================================================
+# Published documentation (#1447)
+# ============================================================
+# ⛔ Anything these tools PRINT for a human to act on has to name something
+# that human can open.  The audience is routinely a customer whose repository
+# holds `conf.d/` and whatever `da-tools init` wrote — a `docs/...` or
+# `scripts/...` path is a dead reference over there, and the tool shipped as
+# a container image so there is no repo checkout to fall back on.
+#
+# `mkdocs.yml` builds every page under `docs/` (only `exclude_docs` holds any
+# back) and leaves `use_directory_urls` at its default, so a repo-relative
+# `docs/a/b.md` is served at `<base>a/b/`.
+DOCS_SITE_BASE: Final[str] = (
+    "https://vencil.github.io/Dynamic-Alerting-Integrations/"
+)
+# How to obtain `da-tools` itself. Printed by tools whose output tells the
+# reader to run another `da-tools` subcommand.
+DOCS_INSTALL_URL: Final[str] = (
+    DOCS_SITE_BASE + "migration-toolkit-installation/"
+)
+
+# ============================================================
 # Reserved Tenant Config Keys (Python source of truth)
 # ============================================================
 # Go equivalent: components/threshold-exporter/app/pkg/config/types.go

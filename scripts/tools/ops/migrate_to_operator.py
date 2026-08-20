@@ -467,7 +467,7 @@ def build_migration_checklist(
 
 - [ ] 檢查告警是否繼續正常運作
 - [ ] 檢查 Alertmanager route 配置是否正確
-- [ ] 運行告警品質檢查（`da-tools alert-quality-check --config-dir conf.d/`）
+- [ ] 運行告警品質檢查（`da-tools alert-quality --config-dir conf.d/`）
 - [ ] 記錄遷移完成時間與結果
 
 ## 回滾計畫
@@ -555,7 +555,7 @@ Generated: {timestamp}
 
 - [ ] Check if alerts continue to work normally
 - [ ] Verify Alertmanager route configuration is correct
-- [ ] Run alert quality checks (`da-tools alert-quality-check --config-dir conf.d/`)
+- [ ] Run alert quality checks (`da-tools alert-quality --config-dir conf.d/`)
 - [ ] Record migration completion time and results
 
 ## Rollback Plan

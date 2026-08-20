@@ -1861,11 +1861,10 @@ da-tools validate-config --config-dir <path> [options]
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
 | `--policy <DOMAINS>` | webhook 域名白名單 | （無限制） |
-| `--ci` | CI 模式（exit code 用於 CI/CD） | false |
 
 **檢查項目**
 
-- YAML 檔案格式（可解析）
+- YAML 檔案可用性（可解析、UTF-8 編碼、頂層是 mapping）。⚠️ **後兩項是 v2.9.0 之後才加的**：你手上這顆映像遇到非 UTF-8 或頂層非 mapping 的檔案是丟 traceback、stdout 零位元組
 - Schema 驗證（必需的 key、類型正確）
 - 路由規則驗證（group_wait/group_interval/repeat_interval 在允許範圍）
 - Policy 檢查（webhook 域名）
@@ -1879,7 +1878,6 @@ da-tools validate-config --config-dir <path> [options]
 
 ```bash
 da-tools validate-config --config-dir ./conf.d
-da-tools validate-config --config-dir ./conf.d --ci
 da-tools validate-config --config-dir ./conf.d --policy "webhook.company.com,slack.com"
 ```
 
@@ -1888,7 +1886,8 @@ da-tools validate-config --config-dir ./conf.d --policy "webhook.company.com,sla
 | 代碼 | 說明 |
 |------|------|
 | `0` | 所有驗證通過 |
-| `1` | 驗證失敗（一項或多項） |
+| `1` | 驗證失敗（一項或多項），或有檔案讀不到 |
+| `2` | 呼叫端錯誤（參數、路徑、環境），不是你的設定有問題。⚠️ v2.9.0 映像不區分這一碼 |
 
 ---
 

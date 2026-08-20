@@ -1131,6 +1131,145 @@ class TestCriticalTierPlacement:
             for f in (defaults, tenant):
                 assert 'HAND-EDIT' not in f.read_text(encoding='utf-8'), f.name
 
+    def test_overwrites_are_named_on_both_paths(self):
+        """#1447: the destruction has to be visible where it happens.
+
+        The `.da-init.yaml` warning only reaches someone who already knows
+        they ran `init` here. A repository with a hand-written `conf.d/` and
+        no marker — which the page's own prerequisites describe — got a
+        screen of green ticks and "Initialization complete!" instead.
+
+        Pinned as behaviour on three paths, with the fresh-directory control:
+        without it, a build that marks *everything* passes just as well.
+        """
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        tool = str(Path(ip.__file__).resolve())
+        env = {**os.environ, 'PYTHONUTF8': '1', 'DA_LANG': 'en',
+               'PYTHONDONTWRITEBYTECODE': '1'}
+
+        def run(target, *extra):
+            return subprocess.run(
+                [sys.executable, tool, '-o', target, '--non-interactive',
+                 '--tenants', 'db-a', '--rule-packs', 'mariadb', *extra],
+                capture_output=True, text=True, encoding='utf-8',
+                errors='replace', env=env, timeout=180)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # (1) fresh directory — the control. Nothing existed, so nothing
+            # may be reported as replaced.
+            fresh = run(tmpdir)
+            assert fresh.returncode == 0, fresh.stderr[-400:]
+            assert 'overwritten' not in fresh.stdout
+            assert 'already existed' not in fresh.stdout
+
+            # (2) --force over the tree we just wrote.
+            forced = run(tmpdir, '--force')
+            assert forced.returncode == 0, forced.stderr[-400:]
+            assert '(overwritten)' in forced.stdout
+            assert 'already existed and were replaced' in forced.stdout
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # (3) the shape with no marker at all: hand-written conf.d/.
+            conf = Path(tmpdir) / 'conf.d'
+            conf.mkdir()
+            (conf / '_defaults.yaml').write_text(
+                'defaults:\n  mysql_connections: 412\n', encoding='utf-8')
+            # ⛔ No --force: this path never reaches _check_existing_init,
+            # which is exactly why it used to be silent.
+            proc = run(tmpdir)
+            assert proc.returncode == 0, proc.stderr[-400:]
+            assert 'conf.d\\_defaults.yaml (overwritten)' in proc.stdout \
+                or 'conf.d/_defaults.yaml (overwritten)' in proc.stdout, \
+                proc.stdout[-600:]
+
+    def test_dry_run_previews_which_files_would_be_replaced(self):
+        """--dry-run is the only place the notice is still actionable."""
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        tool = str(Path(ip.__file__).resolve())
+        env = {**os.environ, 'PYTHONUTF8': '1', 'DA_LANG': 'en',
+               'PYTHONDONTWRITEBYTECODE': '1'}
+
+        def run(target):
+            return subprocess.run(
+                [sys.executable, tool, '-o', target, '--non-interactive',
+                 '--tenants', 'db-a', '--rule-packs', 'mariadb', '--dry-run'],
+                capture_output=True, text=True, encoding='utf-8',
+                errors='replace', env=env, timeout=180)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            conf = Path(tmpdir) / 'conf.d'
+            conf.mkdir()
+            (conf / '_defaults.yaml').write_text(
+                'defaults:\n  mysql_connections: 412\n', encoding='utf-8')
+            proc = run(tmpdir)
+            assert proc.returncode == 0, proc.stderr[-400:]
+            assert 'would be overwritten' in proc.stdout, proc.stdout[-600:]
+            assert 'already exist and would be replaced' in proc.stdout
+            # The preview must not have written anything.
+            assert (conf / '_defaults.yaml').read_text(
+                encoding='utf-8').strip().endswith('412')
+
+        with tempfile.TemporaryDirectory() as fresh:
+            proc = run(fresh)
+            assert 'would be overwritten' not in proc.stdout
+            assert 'already exist' not in proc.stdout
+
+    def test_the_already_initialized_message_states_the_blast_radius(self):
+        """#1447: the runtime warning is the only one most operators read.
+
+        `--help` has spelled out "hand edits are lost" for a while, but nobody
+        opens `--help` right after the CLI has told them what to type. The two
+        lines this replaced recommended `--force` while describing it only as
+        "overwrite", and offered "or remove .da-init.yaml manually" as an
+        alternative — measured to be the *same* data loss, minus the flag and
+        minus this warning, because the marker is the entire gate.
+
+        Asserted in both languages: the zh branch is the one customers here
+        read, and it was the branch a substring assertion on English would
+        have missed.
+        """
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        tool = str(Path(ip.__file__).resolve())
+        expectations = {
+            'en': ('REWRITES every generated file',
+                   'conf.d/_defaults.yaml',
+                   'no backup and no diff',
+                   'Deleting .da-init.yaml is not the safer option'),
+            'zh': ('重新產生每一個檔案並覆寫',
+                   'conf.d/_defaults.yaml',
+                   '不會有備份或差異提示',
+                   '刪掉 .da-init.yaml 不是比較安全的做法'),
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = [sys.executable, tool, '-o', tmpdir, '--non-interactive',
+                    '--tenants', 'db-a', '--rule-packs', 'mariadb']
+            env = {**os.environ, 'PYTHONUTF8': '1',
+                   'PYTHONDONTWRITEBYTECODE': '1'}
+            assert subprocess.run(base, capture_output=True, env=env,
+                                  timeout=180).returncode == 0
+
+            for lang, phrases in expectations.items():
+                rerun = subprocess.run(
+                    base, capture_output=True, text=True, encoding='utf-8',
+                    errors='replace', env={**env, 'DA_LANG': lang},
+                    timeout=180)
+                # Refusing is the behaviour; this test is about what it says
+                # while refusing.
+                assert rerun.returncode != 0, (lang, rerun.stdout[-400:])
+                for phrase in phrases:
+                    assert phrase in rerun.stderr, (
+                        f"{lang}: the already-initialized warning no longer "
+                        f"says {phrase!r}:\n{rerun.stderr}")
+
     def test_only_kustomize_deploy_generates_the_kustomize_tree(self):
         """The fact that made the removed sentence wrong, pinned so it cannot
         quietly become true-again-for-one-value without someone noticing.
