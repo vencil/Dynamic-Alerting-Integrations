@@ -70,6 +70,44 @@ class _CallerError(Exception):
     """Environment/invocation failure → EXIT_CALLER_ERROR (2)."""
 
 
+def defaults_doc_violations(rel: str, doc: object, platform_schema: dict,
+                            validator) -> list[str]:
+    """Every platform-defaults violation in ONE parsed `_defaults*` document.
+
+    ⛔ ONE implementation of this judgement, and that is the point of it being a
+    function rather than four lines inside `validate_dir`. It has a second
+    caller — `check_threshold_reachability.py` runs it over every TRACKED
+    defaults artifact, including the trees this lint's `--config-dir` list does
+    not reach (#1443). A second copy over there would be a second opinion
+    wearing this lint's authority, and would go on answering confidently after
+    this one changed shape.
+
+    ⚠️ THAT IS A DESIGN INTENT, NOT AN ENFORCED ONE. No test asserts that the
+    caller uses this function rather than a private copy; the trade is recorded
+    in the disclosure block at the end of
+    `tests/lint/test_check_threshold_reachability.py`.
+
+    `validator` is the jsonschema module, injected for the same reason as in
+    `validate_dir`: the import stays lazy so `--help` works without it.
+
+    ⚠️ `doc is None` is LEGAL and returns no violation — an empty, comment-only
+    or explicit-`null` `_defaults.yaml` is a placeholder, and `hierarchy.go`'s
+    `extractDefaultsBlock` returns nil for a non-map defaults document (no-op).
+    Both callers depend on that, so it lives here rather than in either.
+    """
+    if doc is None:
+        return []
+    if not isinstance(doc, dict):
+        return [f"ERROR: {rel}: top-level YAML document must be a mapping "
+                f"(`_defaults` platform file; got {type(doc).__name__})"]
+    try:
+        validator.validate(doc, platform_schema)
+    except validator.ValidationError as exc:
+        loc = "/".join(str(p) for p in exc.absolute_path)
+        return [f"ERROR: {rel}: {exc.message} @ /{loc}"]
+    return []
+
+
 def _iter_yaml_files(config_dir: str) -> list[str]:
     out: list[str] = []
     for root, _dirs, files in os.walk(config_dir):
@@ -109,31 +147,32 @@ def validate_dir(config_dir: str, schema: dict, validator,
             # a schema violation — surface it as exit 2 (open() can raise OSError
             # too, not only yaml.YAMLError).
             raise _CallerError(f"{rel}: cannot read/parse YAML: {exc}")
-        active_schema = platform_schema if is_defaults else schema
         for doc in docs:
-            if doc is None and is_defaults:
-                # An empty / comment-only / explicit-`null` _defaults.yaml is
-                # loader-LEGAL: hierarchy.go's extractDefaultsBlock returns nil for
-                # a non-map defaults doc → no-op (a placeholder file is valid). Do
-                # NOT flag it (the old skip-all-`_*` behaviour never did, and a
-                # tenant file's `None` is still flagged below because it needs a
-                # `tenants:` block). A LIST/scalar _defaults is still malformed.
+            if is_defaults:
+                # ⛔ Delegated, not duplicated — `defaults_doc_violations` is the
+                # one implementation, and the reachability gate calls the SAME
+                # name over the trees this lint's --config-dir list never
+                # reaches (#1443). The `None`-is-legal rule and the mapping
+                # check moved into it verbatim; only the counting stays here,
+                # because `checked` is this function's own bookkeeping.
+                violations.extend(
+                    defaults_doc_violations(rel, doc, platform_schema, validator))
+                if isinstance(doc, dict):
+                    checked += 1
                 continue
             if not isinstance(doc, dict):
                 # A tenant-shaped file (no `_` prefix) whose top document is a
                 # list / scalar / empty (None) is malformed — flag it instead of
                 # silently skipping, or it would escape this hardening gate
-                # entirely (the schema below is only applied to mappings). A
-                # `_defaults*.yaml` with a list/scalar top document is likewise flagged.
-                kind = "`_defaults` platform file" if is_defaults else (
-                    "tenant file with a `tenants:` block")
+                # entirely (the schema below is only applied to mappings).
                 violations.append(
                     f"ERROR: {rel}: top-level YAML document must be a mapping "
-                    f"({kind}; got {type(doc).__name__})")
+                    "(tenant file with a `tenants:` block; got "
+                    f"{type(doc).__name__})")
                 continue
             checked += 1
             try:
-                validator.validate(doc, active_schema)
+                validator.validate(doc, schema)
             except validator.ValidationError as exc:
                 loc = "/".join(str(p) for p in exc.absolute_path)
                 violations.append(f"ERROR: {rel}: {exc.message} @ /{loc}")

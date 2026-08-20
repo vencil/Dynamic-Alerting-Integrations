@@ -251,7 +251,59 @@ main 的**持續退化**由 nightly trend watchdog 守望（下節），不靠 P
 - **參考版本建置失敗 → fail-loud 但不 fail-job。** 配對序列當夜記 `INCONCLUSIVE` + `::error::` annotation；`bench-baseline.txt` 走 fallback 路徑（等同 ADR-032 之前的行為）照常產出，因為它是 `release-attach-bench-baseline.yaml` 的 release 資產來源。⛔ **絕不降級為 warning**——「量不到」與「量了沒事」必須在資料上可區分，這正是本 ADR 要消滅的失效模式。
 - **新測試沒有分母是預期狀態，不是錯誤。** 參考版本裡不存在的 bench 由 `pair_bench_ratio.py` 記為 `missing-in-reference` 並放進 `inconclusive`，不會被算成乾淨。
 - **成本 2× 而非 3×。** 交錯量測的 main 側**直接當** `bench-baseline.txt`：樣本數（6 輪 × `count=1` vs 現行 `count=6`）、benchtime、bench 集合都相同，且 `bench_interleave.sh` 把單一 canary binary 跑進兩側故 canary 列本就在內。舊監測器與 release 資產無需改動。
-- 交錯參數 `ROUNDS=6 BENCHTIME=3s`；job timeout 30 → 45 分鐘（實際耗時尚未實測，見 ADR-032 §待決 4，這個 job 自己的計時就是那個量測）。
+- 交錯參數 `ROUNDS=6 BENCHTIME=3s`；job timeout 30 → 45 分鐘。⏱️ **已實測 1.92×**（2026-08-16 run 31924848480：1249s vs 前一夜 649s），與 ADR-032 §待決 4「翻倍」的估計相符；舊的 30 分其實夠用，45 是餘裕。
+
+### 工作定義效應歸因（on-demand triage）
+
+夜跑的比值消掉了機器，**沒有消掉工作定義**：參考版本一釘就是數週到數月，而 main 的 benchmark fixture 會繼續被改，改動造成的是**永久性階梯**，形狀和真退化一模一樣（ADR-032 §工作定義漂移）。`bench-paired.json` 的 `workload_drift` 是那個揭露——但**揭露不是答案**：實測三夜（2026-08-16/17/18）該清單兩夜逐字相同的四行，四個 `*bench_test.go` **全部**漂移 ⇒ 映射到 20 支夜跑 benchmark 就是 20/20，而同期只有一支有持續階梯（`BenchmarkMergePartialConfigs_1000`，+7.11 / +8.75 / +7.37%，跨三種 CPU）。**清單指向所有人，等於沒有指向任何人。**
+
+`.github/workflows/bench-workload-effect.yaml`（`workflow_dispatch`）不猜，直接量。同一台 runner、同一個 job 內交錯三棵樹的兩兩配對：
+
+| | 組成 | 用途 |
+|---|---|---|
+| `R` | 參考實作 + 參考測試碼 | 夜跑今天的分母 |
+| `W` | 參考實作 + **main** 測試碼（overlay 造出來） | 中介 |
+| `M` | main 實作 + main 測試碼 | 夜跑今天的分子 |
+
+- **`W / R` = 工作定義效應的估計**（兩側同一份實作，只有測試碼不同）
+- **`M / W` = 實作效應的估計**（兩側同一份測試碼，只有實作不同）
+- **`M / R` = 夜跑發布的那個混淆值 = (W/R) × (M/W)**
+
+⛔ **這兩個是估計，不是已證明的因果分解**，各自帶著一個本 workflow 只能揭露、無法證明的前提：`W/R` 要讀成**純**工作定義效應，前提是 overlay 集合涵蓋了所有影響工作定義的測試檔——而 helper 集合是**手工列舉**；`M/W` 要讀成**純**實作效應，前提是 `W` 與 `M` 的測試樹等價、**含 helper 閉包與執行期初始化**——而封閉性探測只到**編譯期**。因此本節與 workflow 一律不寫「純」與「免疫」：那是無條件說法，這裡的前提是有條件的。
+
+判讀：某支 bench 的 `W/R` 若也在 +7~9%，那 +7~9% 是 fixture 改動不是退化；`W/R ≈ 0` 而 `M/W` 仍是 +7~9% 就是真的。
+
+```bash
+gh workflow run bench-workload-effect.yaml --repo vencil/Dynamic-Alerting-Integrations -f bench_re='MergePartialConfigs_1000'
+```
+
+⚠️ **`bench_re` 的成本會咬人，而且咬人的輸入長得很正常。** Go 的 `-bench` 是**未錨定的 RE2**：`.` 或 `...` 會匹配**全部 41 支**。2026-08-19 有一次 dispatch 就是填了 `...`，跑滿當時的 60 分上限後 timeout，只留下半套結果（`W/R` 有、`M/W` 沒有）。
+
+因此 job 開頭有一道**成本閘門**：用 `go test -list` **問工具鏈**實際選中幾支（不用 shell regex 猜——那與 Go 的 RE2 不是同一套），印出預估耗時，並在超出預算時擋下。成本模型是兩個實測點且互相吻合（**約 1 分鐘/支/次交錯**：41 支 → 42.2 分/次、2 支 → 2.4 分/次）；`timeout-minutes` 依此定為 **120**（全選 × 2 次交錯 ≈ 84 分）。
+
+- **空的 `bench_re` 會被擋下**（rc=1）——留空原本會落到 `bench_interleave.sh` 的預設集合，那是「安靜地跑了你沒要求的東西」。
+- **選不到任何 benchmark 也擋下**——兩側都只剩 canary，比值毫無意義。
+- **`go test -list` 自己失敗（樹編不過、或 regex 語法非法）會被單獨報成「建置或 regex 語法問題」並附原文**，不會被收斂成「選不到 benchmark」。⛔ 這是自審時實測補的：初版把兩者都變成 `sel=0`，於是一個編不過的樹會把人送去改 regex，而真正的問題在別處——fail-closed 沒錯，但**診斷指向錯的地方**。
+- ⛔ **目前真正在發揮作用的是「第一分鐘印出預估 + warning」**：實測最多 41 支 ⇒ 預估上限 84 分 < 預算 100 分，所以那條硬擋**現在打不到**，它是給 benchmark 數量成長之後用的後備。（寫出來是因為「宣稱有一道擋著、實際上打不到」比沒有那道更糟。）
+
+⛔ **讀數字之前先做兩個對照**：(1) `bench_interleave.sh` 把**同一個** canary 執行檔跑進兩側，所以 `BenchmarkControlCanary*` 的真值恆為 1.000——不接近 0% 就是這次執行本身髒了；(2) `(W/R) × (M/W)` 應該對得上當夜 `bench-paired.json` 的比值（要扣掉「夜跑的 M 是那一夜的 HEAD、本 job 的 M 是現在」這個合法差異）。**一個沒有對照的量測不是量測。**
+
+⚠️ **overlay 的已知弱點與它的守衛。** `*bench_test.go` 由 `find` **推導**（新增／改名／刪除自動跟上），但 helper 檔是一份**列舉**（`overlay_helpers` 輸入），而列舉錯了的失效模式本來是**靜默的**：漏掉的 helper 會綁到參考版本的版本，`W` 就變成混血樹而畫面上看不出來。
+
+守衛是**封閉性探測**——造一棵「只留 overlay 集合」的樹去 `go test -c -gcflags=-e`，**問 Go 工具鏈而不是用 regex 猜誰引用了誰**：
+
+- 編得過 ⇒ overlay 集合達成**編譯期封閉**（compile closure），即沒有未滿足的靜態相依。⚠️ **這不等於執行期隔離**：residue 的測試檔仍會被編進 `W` 的測試執行檔、package 層級初始化照常執行（本 repo 實測 residue 內有 `promParser` / `aliasTestNow` / `fileHeaderRe` 等 package 層級 var），而本探測**沒有**檢查那些初始化的副作用。所以正確的讀法是「residue 與比值無關**未經證明**」，不是「已證明無關」；
+- 編不過 ⇒ **編譯器自己點名**缺哪些符號，報告再用那個名字反查定義檔、並標出它在不在 residue 裡（＝兩側是否有差異）。
+
+`-gcflags=-e` 是必要的：Go 預設印 10 個錯就 `too many errors` 截斷，實測 `SV` 一支就吃掉 10 行、把 `SVScheduled` 整個藏掉——**一份被截斷的清單長得跟一份完整的清單一模一樣**。
+
+`overlay_helpers` 的預設值是**實測迭代出的閉包**（2026-08-18，`3fd96b51`..main）：4 支 `*bench_test.go` ＋ `config_test.go` / `config_debounce_test.go` / `config_metrics_test.go` / `watchloop_test.go`，共 8 個檔，第 4 輪達到不動點。起點是 `config_bench_test.go` 用到 `config_test.go` 的 `SV` / `SVScheduled`（fixture 值建構子，影響 8 支夜跑 bench，而它**不是** `*bench_test.go`，所以夜跑的 drift 清單看不到它）。⚠️ 範圍不能無限外推：覆蓋兩個 package 的**全部** `*_test.go` 會因 `ExpiryMeta` / `canonicalKeyFor` / `ValidateTenantKeys().Errors` 等參考版本沒有的產品 API 而編譯失敗——所以「全都蓋、絕不遺漏」這個安全方向**不可用**。
+
+residue 完整清單留在 artifact 供稽核，但**不整份貼進 step summary**：首次 self-test 實測 44 個檔、其中真正被 overlay 過的檔引用到的只有 1 個（精確度 2.3%，比它要修的 `workload_drift` 清單 1/20 還差）。summary 印的是封閉性判定，因為那才是「residue 重不重要」的答案。
+
+⛔ **這是診斷，不是判定**：不開票、不關票、不寫任何跨次執行狀態、也不改夜跑。ADR-032 §工作定義漂移 的決定仍然是「揭露、不介入」。
+
+ℹ️ 另有一個只匹配「這支 workflow 自己」的 `pull_request` 觸發做 **self-test**（`bench-gate-pr.yaml` 同一 pattern）——因為 `workflow_dispatch` 的 workflow 必須先在 default branch 上才跑得動，沒有 self-test 的話第一次執行就會是正式判讀那一次。self-test 的參數刻意調到最小（1 支 bench／2 輪／100ms／不量 `M/W`），summary 會掛一條橫幅講明**那些比值不是量測結果**。
 
 ### Nightly sustained-trend watchdog
 

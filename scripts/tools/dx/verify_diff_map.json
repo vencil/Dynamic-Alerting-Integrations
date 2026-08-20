@@ -126,6 +126,9 @@
    "tests/dx/test_recipe_lifecycle.py",
    "tests/ops/test_lint_custom_rules.py"
   ],
+  "scripts/tools/dx/converge_status.py": [
+   "tests/dx/test_converge_status.py"
+  ],
   "scripts/tools/dx/coverage_delta.py": [
    "tests/dx/test_coverage_delta.py"
   ],
@@ -254,7 +257,8 @@
    "tests/lint/test_check_commit_scope_doc.py"
   ],
   "scripts/tools/lint/check_confd_schema.py": [
-   "tests/lint/test_check_confd_schema.py"
+   "tests/lint/test_check_confd_schema.py",
+   "tests/lint/test_check_threshold_reachability.py"
   ],
   "scripts/tools/lint/check_cross_ns_url_consistency.py": [
    "tests/lint/test_check_cross_ns_url_consistency.py"
@@ -725,7 +729,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "922fbdccc4cc03348ed75880fa1a8121dadb7faed9f06a55be9a02026fbe3d3a",
+ "source_digest": "8f27c1b3088e3a963b1d1db31086903ef43cacfb575ab075b365bbc1c61fd737",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -735,6 +739,7 @@
   "tests/dx/test_bump_docs.py",
   "tests/dx/test_bump_playbook_versions.py",
   "tests/dx/test_compile_custom_alerts.py",
+  "tests/dx/test_converge_status.py",
   "tests/dx/test_coverage_delta.py",
   "tests/dx/test_coverage_gap_analysis.py",
   "tests/dx/test_custom_alerts_promtool.py",
@@ -1501,7 +1506,8 @@
   ],
   "docs/schemas/platform-defaults.schema.json": [
    "tests/helm/test_optional_overrides_render.py",
-   "tests/lint/test_check_confd_schema.py"
+   "tests/lint/test_check_confd_schema.py",
+   "tests/lint/test_check_threshold_reachability.py"
   ],
   "docs/schemas/tenant-config.schema.json": [
    "tests/dx/test_sync_schema.py",
@@ -2067,6 +2073,9 @@
    "tests/lint/test_check_structure.py",
    "tests/ops/test_ci_path_filter_coverage.py"
   ],
+  "scripts/tools/dx/converge_status.py": [
+   "tests/dx/test_converge_status.py"
+  ],
   "scripts/tools/dx/coverage_delta.py": [
    "tests/dx/test_coverage_delta.py"
   ],
@@ -2151,6 +2160,7 @@
    "tests/dx/test_line_ending_policy.py",
    "tests/lint/test_check_cross_ns_url_consistency.py",
    "tests/lint/test_check_lint_toolchain_fit.py",
+   "tests/lint/test_check_threshold_reachability.py",
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/shared/test_bilingual_help_contract.py",
    "tests/shared/test_property_tools.py"
@@ -2539,6 +2549,9 @@
   "tests/golden/fixtures/l0-only/conf.d": [
    "tests/lint/test_check_threshold_reachability.py"
   ],
+  "tests/golden/fixtures/l0-only/conf.d/_defaults.yaml": [
+   "tests/lint/test_check_threshold_reachability.py"
+  ],
   "tests/helm": [
    "tests/dx/test_verify_diff.py",
    "tests/helm/test_optional_overrides_render.py"
@@ -2627,6 +2640,7 @@
    "tests/shared/test_actionlint_pin_parity.py"
   ],
   "tests/ops/test_guard_defaults_scopes.py": [
+   "tests/lint/test_check_threshold_reachability.py",
    "tests/ops/test_ci_aggregate_gate_contract.py"
   ],
   "tests/ops/test_init_project.py": [
@@ -2643,6 +2657,9 @@
   ],
   "tests/ops/test_secret_scan_gate.py": [
    "tests/ops/test_ci_aggregate_gate_contract.py"
+  ],
+  "tests/ops/test_wrapped_path_references.py": [
+   "tests/lint/test_check_threshold_reachability.py"
   ],
   "tests/preview/test_promtool_pin_parity.py": [
    "tests/shared/test_federation_audit_mtail.py",
@@ -2732,6 +2749,7 @@
    "tests/shared/test_help_contract.py"
   ],
   "tools/portal": [
+   "tests/lint/test_check_threshold_reachability.py",
    "tests/ops/test_ci_path_filter_coverage.py"
   ],
   "tools/portal/build.mjs": [
