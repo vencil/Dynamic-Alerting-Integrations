@@ -102,6 +102,7 @@ lang: zh
 | `diag_pr_ci.py` | PR CI auto-diagnostic CLI (issue #446). |
 | `doc_coverage.py` | 文件覆蓋率 Dashboard |
 | `doc_impact.py` | 文件變更影響分析 |
+| `gen_agent_adapters.py` | Generate the per-vendor agent adapters from the neutral agents/ SSOT (TRK-361). |
 | `gen_recipe_status_json.py` | Generate recipe-status.json from the compiler SSOT (ADR-024 §8, #741 #6 / A1). |
 | `generate_alert_reference.py` | Auto-generate ALERT-REFERENCE.md from Rule Pack YAML files. |
 | `generate_byo_rulepack_table.py` | BYO Prometheus 規則包表產生器（#1267） |

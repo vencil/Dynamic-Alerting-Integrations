@@ -184,6 +184,7 @@ lang: zh
 | **架構圖 drift**（Mermaid/C4） | 🧠 skill-advised（TRK-303 第 6 lens）+ dev-rule #4 | code 改了圖沒同步 | 人工 lens；6 個月後評估 auto-detector |
 | **IaC cross-file cascade** | 🧠 `vibe-subagent-review`（TRK-305 已上線）；機械層仍待 #448 | 改 selector 連動 NetworkPolicy/ServiceMonitor 漏改 | skill 補語義層；#448 補機械層 SAST |
 | **多輪修正不收斂**（同一缺陷第 2 輪起） | 🧠 `vibe-converge`（TRK-360）+ `make converge-status`（觀測，**不進 CI / 不進 pre-commit**） | 每輪淨增約 1000 行未受審新面；對資訊上不可判的問題連寫三版述詞；修法 commit 無人審 | 刻意不做成 gate——#1457 剛刪掉六支「守衛的守衛」，對 review 流程再造一支會重演同一個病。工具檢查的是帳本**格式**（verified 有沒有附 evidence），**不檢查那段 evidence 是否真的跑過** |
+| **Agent 指引 SSOT 漂移**（有人改 `.claude/**` 轉接檔而非 `agents/` SSOT） | 🔧 `gen-agent-adapters-check`（pre-commit，TRK-361） | 轉接檔被手改後下次重生就丟失；或 SSOT 已刪的 skill 仍被 vendor 探索到 | 已機械化：四類漂移（stale / missing / extra / SSOT 缺失）皆實測會擋。⚠️ 但**內容正確性**不在此 gate 範圍——它只保證兩側一致，不保證寫得對 |
 | **SAST 7 條的 1/3/7**（encoding/chmod/stderr） | 👁️ reviewer convention（bandit 只 native 蓋 2/4/5/6） | 進 repo | dev-rule #5 已明列；reviewer 把關 |
 | **A-13**（`test.skip()` / `test.fixme()`，任何寫法）在 **worktree** 內 | 🔧 `playwright-lint` hook，但**只在有 `tests/e2e/node_modules` 的 checkout 跑得起來** | `node_modules` 是 gitignored ⇒ 每一棵新開的 worktree 對它都是壞的、且不會自己好 | #1428：三個入口（hook／`make lint-e2e`／CI job）收斂到 `scripts/tools/lint/e2e_spec_lint.sh`（缺依賴時印 `cd tests/e2e && npm ci` 並 fail），並由 `tests/lint/test_e2e_spec_lint.py` 釘住三者真的**執行**它、以及 CI job 不得帶 `if:` / `continue-on-error`。⚠️ **CI 腿目前是 advisory**——`E2E Spec Lint (A-13)` **這個 job 自己**不在 main 的 required checks 內（`Smoke Tests (Chromium)` 也不在，但把後者設成 required 不會讓前者變 blocking）。要 blocking 見該票 |
 

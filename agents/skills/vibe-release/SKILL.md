@@ -2,7 +2,6 @@
 name: vibe-release
 description: Vibe 六線版號 release 收尾 SOP — make pre-tag → CHANGELOG distill + project-face refresh → 未發布 draft advisory 檢查 → 6-line tag push → gh release ×6。Use when wrapping a Vibe release：user 說「release 收尾 / 進入 phase e / 準備 release」、問「release 準備好了嗎」、branch 名 `chore/v*-release-wrapup`、或動到 `make pre-tag` / 六線 tag push / `gh release create`。延伸 #474 Layer 3 的 inline checklist 為系統化流程。
 ---
-<!-- 此檔為產生物，來源 agents/skills/vibe-release/SKILL.md —— 請改那份 SSOT，再跑 `make agent-adapters`；不要直接編輯這份複本。 -->
 
 # vibe-release — 六線版號 release 收尾
 

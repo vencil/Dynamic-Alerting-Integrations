@@ -54,7 +54,7 @@ if hasattr(sys.stdout, "reconfigure"):
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEV_RULES = REPO_ROOT / "docs" / "internal" / "dev-rules.md"
 PRECOMMIT = REPO_ROOT / ".pre-commit-config.yaml"
-SKILLS_DIR = REPO_ROOT / ".claude" / "skills"
+SKILLS_DIR = REPO_ROOT / "agents" / "skills"
 CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
 MEMORY_INDEX_NAME = "MEMORY.md"
 DEFAULT_MEMORY = (
@@ -139,7 +139,12 @@ def load_hooks() -> list[dict]:
 
 
 def load_skills() -> list[dict]:
-    """Read .claude/skills/*/SKILL.md → [{name, description}]."""
+    """Read agents/skills/*/SKILL.md → [{name, description}].
+
+    The neutral SSOT, not the generated `.claude/skills/` mirror (TRK-361):
+    auditing the mirror would report drift against a copy, and a copy that
+    disagrees with its source is already caught by `gen-agent-adapters`.
+    """
     skills: list[dict] = []
     if not SKILLS_DIR.is_dir():
         return skills
