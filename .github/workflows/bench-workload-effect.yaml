@@ -93,23 +93,23 @@ on:
   workflow_dispatch:
     inputs:
       bench_re:
-        description: "Go -bench regex（RE2，未錨定）。預設只跑兩支。⚠️ 成本約 1 分鐘/支/次交錯：`.` 或 `...` 會匹配全部 41 支（另加 2 支 canary 固定成本）⇒ 約 85 分。⛔ 留空會被擋下（rc=1），必須明確指定"
+        description: "Go -bench regex (RE2, UNANCHORED). Defaults to the two suspects. WARNING cost is ~1 min per benchmark per interleave: '.' or '...' matches all 41 (plus 2 fixed-cost canaries) => ~85 min. Empty is REJECTED (rc=1) - name what you want measured."
         required: false
         default: 'MergePartialConfigs_1000|ResolveSilentModes_1000'
       rounds:
-        description: "交錯輪數（夜跑是 6）。留空 = 用 bench_interleave.sh 的預設 6"
+        description: "Interleaved rounds (the nightly uses 6). Empty falls back to bench_interleave.sh's default of 6."
         required: false
         default: '6'
       benchtime:
-        description: "每支 bench 的 benchtime（夜跑是 3s）。留空 = 用 bench_interleave.sh 的預設 3s"
+        description: "-test.benchtime per benchmark (the nightly uses 3s). Empty falls back to bench_interleave.sh's default of 3s."
         required: false
         default: '3s'
       overlay_helpers:
-        description: "除了 *bench_test.go 之外要一起 overlay 的測試檔（空白分隔，相對 app/）。預設是實測迭代出的閉包；留空 = 只覆蓋 bench 檔（會變成混血樹，封閉性探測會講）"
+        description: "Extra test files to overlay besides *bench_test.go (space-separated, relative to app/). The default is the measured dependency closure. Empty = bench files only, which yields a HYBRID tree - the closure probe will say so."
         required: false
         default: 'config_test.go config_debounce_test.go config_metrics_test.go watchloop_test.go'
       measure_implementation:
-        description: "同時量 M/W（實作效應的估計；前提見檔頭）。關掉只量 W/R，時間與成本減半"
+        description: "Also measure M/W (an ESTIMATE of the implementation effect; preconditions are documented at the top of this file). Off = W/R only, halving time and cost."
         type: boolean
         required: false
         default: true
@@ -203,6 +203,14 @@ jobs:
       #    ⚠️ **但 `-list` 只列頂層名稱**：若日後有 benchmark 改用 `b.Run` 開 sub-benchmark，
       #       這裡會**低估**。自審時實測目前 `*bench_test.go` 內 `b.Run(` 出現 **0 次**，
       #       所以今天不低估；加了 sub-benchmark 就要回來看這一行。
+      #    ⚠️ **這裡只數 main 這一側**，而 W/R 那次交錯的分母跑的是**參考版本的** benchmark
+      #       集合。一支「參考版本有、main 已刪或已改名」的 benchmark 會在 R 側被選中卻
+      #       不計入 `sel` ⇒ **低估**。（PR #1475 review 指出。）**沒有改成兩側都數**，
+      #       理由是界限已知且很小：每有一支這種 benchmark 只低估 W/R 約 1 分鐘，而要讓
+      #       它把估計推過預算需要 ~16 支；實測當下兩側各 41 支、**只在參考版本的有 0 支**。
+      #       把守衛移到 checkout 之後才數，會犧牲掉「第一分鐘就講話」這個它存在的理由，
+      #       換一個比模型自身誤差還小的修正 —— 不划算。⛔ 但這是**已知會靜默低估**的一格，
+      #       若哪天大量刪除或改名 benchmark，要回來重估這個取捨。
       #
       # 成本模型＝**兩個實測點，而且互相吻合**（≈1 分鐘/支/次交錯）：
       #      41 支 → 42.2 分/次交錯（run 32315108684）
