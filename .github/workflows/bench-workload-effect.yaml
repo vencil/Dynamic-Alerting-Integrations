@@ -93,7 +93,7 @@ on:
   workflow_dispatch:
     inputs:
       bench_re:
-        description: "Go -bench regex（RE2，未錨定）。預設只跑兩支。⚠️ 成本約 1 分鐘/支/次交錯：`.` 或 `...` 會匹配全部 43 支 ⇒ 約 88 分。留空 = 落到 bench_interleave.sh 的預設 20 支"
+        description: "Go -bench regex（RE2，未錨定）。預設只跑兩支。⚠️ 成本約 1 分鐘/支/次交錯：`.` 或 `...` 會匹配全部 41 支（另加 2 支 canary 固定成本）⇒ 約 85 分。⛔ 留空會被擋下（rc=1），必須明確指定"
         required: false
         default: 'MergePartialConfigs_1000|ResolveSilentModes_1000'
       rounds:
@@ -109,7 +109,7 @@ on:
         required: false
         default: 'config_test.go config_debounce_test.go config_metrics_test.go watchloop_test.go'
       measure_implementation:
-        description: "同時量 M/W（純實作效應）。關掉只量 W/R，時間減半"
+        description: "同時量 M/W（實作效應的估計；前提見檔頭）。關掉只量 W/R，時間與成本減半"
         type: boolean
         required: false
         default: true
@@ -150,14 +150,13 @@ jobs:
       BENCHTIME: ${{ github.event_name == 'pull_request' && '100ms' || github.event.inputs.benchtime }}
       OVERLAY_HELPERS: ${{ github.event_name == 'pull_request' && 'config_test.go config_debounce_test.go config_metrics_test.go watchloop_test.go' || github.event.inputs.overlay_helpers }}
       MEASURE_IMPL: ${{ github.event_name == 'pull_request' && 'false' || github.event.inputs.measure_implementation }}
-    # 夜跑兩側 20 支實測 20m49s。本 job 預設只跑 2 支 bench，是分鐘級的。
-    # ⚠️ 但最壞情況是「bench_re 放寬到全部 20 支 **且** 開 M/W」＝兩次完整
-    # 交錯 ≈ 2 × 夜跑 ≈ 41 分，加上三棵樹的建置會擦到 45 分。所以取 60 —
-    # 這個上限不是估出來的餘裕，是從夜跑實測外推的最壞情況再加一點。
-    # ⏱️ 60 → 120，依實測而非估計。2026-08-19 run 32315108684 以 `bench_re='...'`
-    # （RE2 未錨定，`...` 匹配所有名稱）選中 43 支：第一次交錯耗時 42.2 分
+    # ⏱️ 120，依實測而非估計。（⚠️ 這裡原本有一段從夜跑外推「所以取 60」的推算，
+    # 已刪除：它是估的，而且被下面的實測推翻了 —— 留著會有兩套互相矛盾的理由。）
+    # 2026-08-19 run 32315108684 以 `bench_re='...'`
+    # （RE2 未錨定，`...` 匹配所有名稱）選中 41 支 benchmark：第一次交錯耗時 42.2 分
     # （23:54:00 → 00:36:12），第二次進行中撞上當時的 60 分上限而 timeout。
-    # 43 支 × 2 次交錯 + 開銷 ≈ 88 分 ⇒ 120 才涵蓋得住「全選」這個情境。
+    # 實測 42.2 × 2 ≈ 85 分 ⇒ 120 才涵蓋得住「全選」這個情境。（成本模型獨立算出
+    # 41×2+2 = 84，與實測差 1 分鐘 —— 兩條路徑互相對得上。）
     # ⚠️ 上限放寬的代價是卡住的 job 燒更多分鐘，所以同時加了下面那道成本閘門：
     # 預估超過本上限就在第一分鐘 exit 1，而不是燒滿再死。
     timeout-minutes: 120
@@ -192,16 +191,21 @@ jobs:
       # ⛔ 成本閘門 —— 把「燒滿 timeout 才死」換成「第一分鐘死掉並說清楚原因」。
       #
       # 起因（2026-08-19，run 32315108684）：一次 dispatch 把 `bench_re` 填成 `...`。
-      # Go 的 `-bench` 是**未錨定的 RE2**，`...` 匹配所有名稱 ⇒ 選中 43 支，跑滿
+      # Go 的 `-bench` 是**未錨定的 RE2**，`...` 匹配所有名稱 ⇒ 選中 41 支 benchmark，跑滿
       # 60 分鐘後 timeout。⚠️ **那個輸入在畫面上與一個正常的窄 regex 完全一樣**，
-      # 跑之前沒有任何地方會告訴你「這次會選 43 支」。
+      # 跑之前沒有任何地方會告訴你「這次會選 41 支」。
       #
       # ⛔ 選中幾支一律**問工具鏈**（`go test -list`），不用 shell regex 去猜：
       #    shell 的 regex 與 Go 的 RE2 不是同一套，猜錯的方向是靜默的。這與本檔的
       #    封閉性探測是同一條紀律。
+      #    ✅ **`-list` 與 `-bench` 選中同一組，已實測**（自審）：`-list Merge` 得 2 支、
+      #       實跑 `-bench Merge -benchtime=1x` 也是 2 支 —— 不是假設兩者語意相同。
+      #    ⚠️ **但 `-list` 只列頂層名稱**：若日後有 benchmark 改用 `b.Run` 開 sub-benchmark，
+      #       這裡會**低估**。自審時實測目前 `*bench_test.go` 內 `b.Run(` 出現 **0 次**，
+      #       所以今天不低估；加了 sub-benchmark 就要回來看這一行。
       #
       # 成本模型＝**兩個實測點，而且互相吻合**（≈1 分鐘/支/次交錯）：
-      #      43 支 → 42.2 分/次交錯（run 32315108684）
+      #      41 支 → 42.2 分/次交錯（run 32315108684）
       #       2 支 →  2.4 分/次交錯（run 32315325155）
       # ⚠️ 兩點之間是線性內插，不是量過的曲線。它只用來擋「明顯跑不完」，
       #    **不宣稱能預測實際耗時**。
@@ -229,9 +233,20 @@ jobs:
             echo "::error::bench_re 是空的。本 workflow 是針對性診斷，必須明確指定要量哪幾支；留空會落到 bench_interleave.sh 的預設集合。"
             exit 1
           fi
-          sel=$( ( cd components/threshold-exporter/app \
-                   && go test -list "$BENCH_RE" . \
-                   && go test -list "$BENCH_RE" ./pkg/config ) | grep -c '^Benchmark' || true )
+          # ⛔ `go test -list` 的**失敗**與「regex 選不到東西」必須分開報。
+          #    初版把兩者都收斂成 sel=0，於是一個編不過的樹會被報成「你的 regex
+          #    選不到 benchmark」——fail-closed 沒錯，但**把人送去改 regex，而真正
+          #    的問題在別處**。自審時以「在測試檔尾附加語法錯誤」實測重現。
+          sel=0
+          for pkg in "." "./pkg/config"; do
+            if ! out=$( cd components/threshold-exporter/app && go test -list "$BENCH_RE" "$pkg" 2>&1 ); then
+              echo "::error::go test -list 在 ${pkg} 失敗 —— 這是**建置或 regex 語法**的問題，不是「選不到 benchmark」。原文如下："
+              printf '%s\n' "$out" | tail -20
+              exit 1
+            fi
+            n=$( printf '%s\n' "$out" | grep -c '^Benchmark' || true )
+            sel=$(( sel + n ))
+          done
           runs=1
           if [ "${MEASURE_IMPL:-false}" = "true" ]; then runs=2; fi
           est=$(( sel * runs + 2 ))
@@ -532,7 +547,7 @@ jobs:
       # ⛔ RE-EXAMINE IF：本 job 取得 `contents: read` 以外的權限／開始使用任何 cache
       # action／其產物開始被任何對外流程消費／參考版本指向本 repo 以外的地方。
       #
-      # ── 量測 1：W / R —— 純工作定義效應 ─────────────────────────────────
+      # ── 量測 1：W / R —— 工作定義效應的估計（前提見檔頭）─────────────────
       # BASE=R、PR=W，兩側是同一份實作，唯一的差別是測試碼。
       - name: Interleave R vs W
         env:

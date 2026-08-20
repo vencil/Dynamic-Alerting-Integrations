@@ -283,6 +283,7 @@ gh workflow run bench-workload-effect.yaml --repo vencil/Dynamic-Alerting-Integr
 
 - **空的 `bench_re` 會被擋下**（rc=1）——留空原本會落到 `bench_interleave.sh` 的預設集合，那是「安靜地跑了你沒要求的東西」。
 - **選不到任何 benchmark 也擋下**——兩側都只剩 canary，比值毫無意義。
+- **`go test -list` 自己失敗（樹編不過、或 regex 語法非法）會被單獨報成「建置或 regex 語法問題」並附原文**，不會被收斂成「選不到 benchmark」。⛔ 這是自審時實測補的：初版把兩者都變成 `sel=0`，於是一個編不過的樹會把人送去改 regex，而真正的問題在別處——fail-closed 沒錯，但**診斷指向錯的地方**。
 - ⛔ **目前真正在發揮作用的是「第一分鐘印出預估 + warning」**：實測最多 41 支 ⇒ 預估上限 84 分 < 預算 100 分，所以那條硬擋**現在打不到**，它是給 benchmark 數量成長之後用的後備。（寫出來是因為「宣稱有一道擋著、實際上打不到」比沒有那道更糟。）
 
 ⛔ **讀數字之前先做兩個對照**：(1) `bench_interleave.sh` 把**同一個** canary 執行檔跑進兩側，所以 `BenchmarkControlCanary*` 的真值恆為 1.000——不接近 0% 就是這次執行本身髒了；(2) `(W/R) × (M/W)` 應該對得上當夜 `bench-paired.json` 的比值（要扣掉「夜跑的 M 是那一夜的 HEAD、本 job 的 M 是現在」這個合法差異）。**一個沒有對照的量測不是量測。**
