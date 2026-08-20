@@ -2,7 +2,7 @@
 name: vibe-dev-rules
 description: Vibe 專案 13 條開發規範（dev-rules.md）的快速參考 + 最常違反 Top 4 深入說明。Use before git commit / push, when refactoring multi-tenant logic, when editing mount-path files, when touching API / schema / CLI / counts that require doc sync, or when unsure whether an action follows Vibe conventions. Also use when user asks "can I do X" about project conventions, or when about to hardcode a tenant id, use sed -i, or push directly to main.
 ---
-<!-- GENERATED from agents/skills/vibe-dev-rules/SKILL.md — edit that file, then run `make agent-adapters`. Do not edit this copy. -->
+<!-- 此檔為產生物，來源 agents/skills/vibe-dev-rules/SKILL.md —— 請改那份 SSOT，再跑 `make agent-adapters`；不要直接編輯這份複本。 -->
 
 # vibe-dev-rules — Vibe 13 條開發規範速查
 
@@ -29,7 +29,7 @@ FUSE 掛載 + 缺少 EOF 換行的檔案被 `sed -i` 處理後會被截斷（丟
 
 ### #4 Doc-as-Code —— 影響 API / schema / CLI / 計數的變更須同步三個檔案
 
-```
+```text
 CHANGELOG.md + CLAUDE.md + README.md
 ```
 

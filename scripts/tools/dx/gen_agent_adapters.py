@@ -93,13 +93,42 @@ OUT_ENTRY = "AGENTS.md"
 INDEX_BEGIN = "<!-- BEGIN GENERATED SKILL INDEX -->"
 INDEX_END = "<!-- END GENERATED SKILL INDEX -->"
 
-FRONTMATTER = b"---\n"
+FRONTMATTER_FENCE = b"---"
+
+# Provenance has to be a comment in the ADAPTER's own language, not markdown's.
+# `<!-- ... -->` inside a .js file only parses because Annex B keeps legacy
+# HTML-comment syntax alive in sloppy scripts; it is a hard parse error the
+# moment anything reads the file as an ES module. One comment style per suffix,
+# and an unknown suffix gets no line at all rather than a guessed one -- the
+# drift gate still owns those files, so a missing marker costs nothing while a
+# wrong marker corrupts the artefact.
+COMMENT_STYLES = {
+    ".md": ("<!-- ", " -->"),
+    ".markdown": ("<!-- ", " -->"),
+    ".js": ("// ", ""),
+    ".mjs": ("// ", ""),
+    ".cjs": ("// ", ""),
+    ".ts": ("// ", ""),
+    ".py": ("# ", ""),
+    ".sh": ("# ", ""),
+    ".yaml": ("# ", ""),
+    ".yml": ("# ", ""),
+}
 
 
-def provenance(source_rel):
-    """The single line that separates an adapter from its source."""
-    return (f"<!-- GENERATED from {source_rel} — edit that file, then run "
-            f"`make agent-adapters`. Do not edit this copy. -->\n").encode("utf-8")
+def provenance(source_rel, eol=b"\n"):
+    """The single line that separates an adapter from its source, or b"" .
+
+    Returns empty bytes for a suffix with no known comment syntax: silence is
+    recoverable, a syntactically invalid marker is not.
+    """
+    style = COMMENT_STYLES.get(os.path.splitext(source_rel)[1].lower())
+    if style is None:
+        return b""
+    open_tag, close_tag = style
+    text = (f"{open_tag}此檔為產生物，來源 {source_rel} —— 請改那份 SSOT，"
+            f"再跑 `make agent-adapters`；不要直接編輯這份複本。{close_tag}")
+    return text.encode("utf-8") + eol
 
 
 def project(raw, source_rel):
@@ -114,26 +143,107 @@ def project(raw, source_rel):
     committed -- the failure mode #1363 shipped ("only changed one number, but
     touched every line").
     """
-    line = provenance(source_rel)
-    if not raw.startswith(FRONTMATTER):
+    span = frontmatter_span(raw)
+    if span is None:
+        line = provenance(source_rel, source_eol(raw))
         return line + raw
-    end = raw.find(b"\n---\n", len(FRONTMATTER) - 1)
+    _body_start, cut, eol = span
+    return raw[:cut] + provenance(source_rel, eol) + raw[cut:]
+
+
+def source_eol(raw):
+    """The line ending this file already uses -- CRLF only if the first one is.
+
+    A Windows host writes CRLF, and appending an LF-terminated line into a CRLF
+    file leaves one odd line that every subsequent diff carries. Cheap to match,
+    and it keeps the adapter byte-comparable with what a regeneration on either
+    host produces.
+    """
+    first_lf = raw.find(b"\n")
+    if first_lf > 0 and raw[first_lf - 1:first_lf] == b"\r":
+        return b"\r\n"
+    return b"\n"
+
+
+def frontmatter_span(raw):
+    """(body_start, insert_at, eol) for leading YAML frontmatter, else None.
+
+    Recognises both `---\n` and `---\r\n` fences. Getting this wrong is not a
+    cosmetic miss: an unrecognised CRLF fence sends the provenance line to byte
+    0, which pushes the frontmatter off the top of the file and makes every
+    vendor stop seeing the skill's name and description at all.
+    """
+    eol = source_eol(raw)
+    opening = FRONTMATTER_FENCE + eol
+    if not raw.startswith(opening):
+        return None
+    closing = eol + FRONTMATTER_FENCE + eol
+    end = raw.find(closing, len(opening) - len(eol))
     if end == -1:
         # An opening fence with no closing one: not frontmatter, leave it alone.
-        return line + raw
-    cut = end + len(b"\n---\n")
-    return raw[:cut] + line + raw[cut:]
+        return None
+    return len(opening), end + len(closing), eol
+
+
+def source_of(dest_rel):
+    """Inverse of the projection: adapter path -> the SSOT path it came from.
+
+    One table drives both directions, so a new adapter root cannot be added to
+    the forward map and forgotten in the reverse one.
+    """
+    for ssot_root, out_root in ((SSOT_SKILLS, OUT_SKILLS), (SSOT_ROLES, OUT_ROLES)):
+        if dest_rel == out_root or dest_rel.startswith(out_root + "/"):
+            return ssot_root + dest_rel[len(out_root):]
+    raise KeyError(f"{dest_rel} is not a projected adapter path")
+
+
+class UnsafePath(Exception):
+    """An SSOT source or adapter target that this generator refuses to touch."""
 
 
 def iter_ssot(root):
-    """(source_rel, dest_rel) for every file under one SSOT dir, sorted."""
+    """Every file under one SSOT dir, repo-relative and sorted.
+
+    Symlinks are refused rather than followed. `make agent-adapters` gets run
+    on whatever branch happens to be checked out, so a symlinked SSOT file is a
+    way to pull content from outside the worktree into a committed artefact
+    that reviewers read as repo content. Refusing is safe because the SSOT has
+    no legitimate symlink today, and this repo cannot rely on symlinks anyway
+    (they do not survive a Windows host -- PR #1457).
+    """
     src_abs = os.path.join(REPO_ROOT, root)
     out = []
-    for dirpath, _dirs, files in os.walk(src_abs):
+    for dirpath, dirs, files in os.walk(src_abs):
+        for name in sorted(dirs):
+            if os.path.islink(os.path.join(dirpath, name)):
+                raise UnsafePath(
+                    f"{os.path.relpath(os.path.join(dirpath, name), REPO_ROOT)} "
+                    "is a symlinked directory; the SSOT must be real files")
         for name in sorted(files):
             abs_path = os.path.join(dirpath, name)
+            if os.path.islink(abs_path):
+                raise UnsafePath(
+                    f"{os.path.relpath(abs_path, REPO_ROOT)} is a symlink; "
+                    "the SSOT must be real files")
             out.append(os.path.relpath(abs_path, REPO_ROOT).replace(os.sep, "/"))
     return sorted(out)
+
+
+def assert_writable_target(dest_rel):
+    """Refuse an adapter path that escapes REPO_ROOT or is an existing symlink.
+
+    Two distinct escapes, both cheap to close: a `..` segment in the projected
+    path, and an existing symlink at the destination that `open(..., "wb")`
+    would happily follow out of the tree.
+    """
+    abs_path = os.path.join(REPO_ROOT, dest_rel)
+    resolved_root = os.path.realpath(REPO_ROOT)
+    if os.path.commonpath([os.path.realpath(os.path.dirname(abs_path)),
+                           resolved_root]) != resolved_root:
+        raise UnsafePath(f"{dest_rel} resolves outside the repository")
+    if os.path.islink(abs_path):
+        raise UnsafePath(f"{dest_rel} is a symlink; refusing to write through it")
+    return abs_path
 
 
 def read_frontmatter_field(raw, field):
@@ -144,12 +254,12 @@ def read_frontmatter_field(raw, field):
     the skill-file convention, and the pre-commit hook this feeds runs in an
     environment where adding a parser dependency buys nothing.
     """
-    if not raw.startswith(FRONTMATTER):
+    span = frontmatter_span(raw)
+    if span is None:
         return None
-    end = raw.find(b"\n---\n", len(FRONTMATTER) - 1)
-    if end == -1:
-        return None
-    block = raw[len(FRONTMATTER):end + 1].decode("utf-8", "replace")
+    body_start, insert_at, eol = span
+    block = raw[body_start:insert_at - len(eol) - len(FRONTMATTER_FENCE)].decode(
+        "utf-8", "replace")
     prefix = field + ":"
     for line in block.splitlines():
         if line.startswith(prefix):
@@ -253,6 +363,7 @@ def write_outputs(plan):
     for dest_rel, data in sorted(plan.items()):
         abs_path = os.path.join(REPO_ROOT, dest_rel)
         os.makedirs(os.path.dirname(abs_path) or ".", exist_ok=True)
+        abs_path = assert_writable_target(dest_rel)
         with open(abs_path, "wb") as fh:
             fh.write(data)
         # Generated artefacts ship 0644, the same mode every sibling generator
@@ -298,6 +409,9 @@ def main(argv=None):
     except FileNotFoundError as exc:
         print(f"ERROR: SSOT path missing: {exc}", file=sys.stderr)
         return EXIT_CALLER_ERROR
+    except UnsafePath as exc:
+        print(f"ERROR: refusing to run — {exc}", file=sys.stderr)
+        return EXIT_CALLER_ERROR
     except (ValueError, OSError) as exc:
         print(f"ERROR: cannot build the adapter plan: {exc}", file=sys.stderr)
         return EXIT_CALLER_ERROR
@@ -316,7 +430,11 @@ def main(argv=None):
               "(edit the agents/ SSOT, never the adapter)", file=sys.stderr)
         return EXIT_VIOLATION
 
-    removed = write_outputs(plan)
+    try:
+        removed = write_outputs(plan)
+    except UnsafePath as exc:
+        print(f"ERROR: refusing to write — {exc}", file=sys.stderr)
+        return EXIT_CALLER_ERROR
     print(f"✅ Wrote {len(plan)} adapter file(s) from the agents/ SSOT")
     for item in removed:
         print(f"   removed stale adapter: {item}")

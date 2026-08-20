@@ -2,7 +2,7 @@
 name: vibe-converge
 description: 多輪修正的收斂協議 —— decidability gate（開工前先問「這題用手上的證據判得出來嗎」）、跨輪交接契約（只有 verified claim / open question / 已打死方向表跨輪）、面積預算、三條停止規則。Use when 同一個缺陷進入第 2 輪（含）以後的修正、拿到 review finding 要開始修、或出現「每修一輪就冒出新洞、審不完」的感覺。SKIP for 第一輪實作、單檔 doc-only、以及還沒開始寫 code 的設計階段（用 `vibe-brainstorm`）。
 ---
-<!-- GENERATED from agents/skills/vibe-converge/SKILL.md — edit that file, then run `make agent-adapters`. Do not edit this copy. -->
+<!-- 此檔為產生物，來源 agents/skills/vibe-converge/SKILL.md —— 請改那份 SSOT，再跑 `make agent-adapters`；不要直接編輯這份複本。 -->
 
 # vibe-converge — 多輪修正的收斂協議（TRK-360）
 

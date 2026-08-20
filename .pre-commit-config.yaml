@@ -318,7 +318,9 @@ repos:
         # 觸發面必須同時含 SSOT 與轉接檔：只掛 agents/ 的話，「有人直接改
         # .claude/skills/**」這個本 gate 的主要目標情境不會觸發它——而那正是
         # 最容易發生的漂移（轉接檔看起來就是一般的 skill 檔）。
-        files: ^(agents/|\.claude/(skills|agents)/|AGENTS\.md$)
+        # 產生器自身也算觸發面：只改 gen_agent_adapters.py 就能讓已提交的
+        # .claude/** 過期，而本地 gate 仍全綠——那是「守衛改了但沒人重驗」的形狀。
+        files: ^(agents/|\.claude/(skills|agents)/|AGENTS\.md$|scripts/tools/dx/gen_agent_adapters\.py$)
 
       - id: verify-diff-check
         name: verify_diff map freshness (source→test mapping)

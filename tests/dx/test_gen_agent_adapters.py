@@ -52,20 +52,20 @@ def test_provenance_lands_after_frontmatter():
     out = gaa.project(FM + b"body\n", "agents/skills/x/SKILL.md")
     assert out.startswith(FM), "frontmatter must still start at byte 0"
     rest = out[len(FM):]
-    assert rest.startswith(b"<!-- GENERATED from agents/skills/x/SKILL.md")
+    assert rest.startswith(gaa.provenance("agents/skills/x/SKILL.md"))
     assert rest.endswith(b"body\n")
 
 
 def test_provenance_lands_on_top_when_there_is_no_frontmatter():
     out = gaa.project(b"# just a doc\n", "agents/skills/x/references/d.md")
-    assert out.startswith(b"<!-- GENERATED from agents/skills/x/references/d.md")
+    assert out.startswith(gaa.provenance("agents/skills/x/references/d.md"))
     assert out.endswith(b"# just a doc\n")
 
 
 def test_an_unterminated_fence_is_not_treated_as_frontmatter():
     """`---` with no closing fence is horizontal-rule content, not metadata."""
     out = gaa.project(b"---\nnot closed\n", "agents/skills/x/SKILL.md")
-    assert out.startswith(b"<!-- GENERATED")
+    assert out.startswith(gaa.provenance("agents/skills/x/SKILL.md"))
 
 
 def test_crlf_bytes_survive_untouched():
@@ -84,8 +84,9 @@ def test_a_missing_trailing_newline_is_preserved():
 def test_projection_adds_exactly_one_line_and_changes_nothing_else():
     src = FM + b"line one\nline two\n"
     out = gaa.project(src, "agents/skills/x/SKILL.md")
+    marker = gaa.provenance("agents/skills/x/SKILL.md")
     stripped = b"".join(
-        l + b"\n" for l in out.split(b"\n")[:-1] if not l.startswith(b"<!-- GENERATED"))
+        l + b"\n" for l in out.split(b"\n")[:-1] if l + b"\n" != marker)
     assert stripped == src
 
 
@@ -97,7 +98,7 @@ def test_projection_is_not_idempotent_and_that_is_the_point():
     """
     once = gaa.project(FM + b"b\n", "agents/skills/x/SKILL.md")
     twice = gaa.project(once, "agents/skills/x/SKILL.md")
-    assert twice.count(b"<!-- GENERATED") == 2
+    assert twice.count(gaa.provenance("agents/skills/x/SKILL.md")) == 2
 
 
 # ============================================================
@@ -167,7 +168,7 @@ def test_build_entry_is_its_own_source_and_takes_no_provenance_line(tmp_path,
     """
     _fake_ssot(tmp_path, monkeypatch)
     out = gaa.build_entry()
-    assert not out.startswith(b"<!-- GENERATED from")
+    assert not out.startswith(b"<!-- ")
     assert out.startswith(b"# Head")
 
 
@@ -302,8 +303,14 @@ def test_every_projected_adapter_carries_its_provenance_line():
     projected = {k: v for k, v in plan.items() if k != gaa.OUT_ENTRY}
     assert len(projected) == len(plan) - 1
     for dest_rel, data in projected.items():
-        assert b"<!-- GENERATED from " in data, dest_rel
-    assert b"<!-- GENERATED from " not in plan[gaa.OUT_ENTRY]
+        source_rel = gaa.source_of(dest_rel)
+        assert gaa.provenance(source_rel) in data, dest_rel
+        # The load-bearing half of the marker is that it NAMES its source.
+        assert source_rel.encode("utf-8") in data, dest_rel
+    # AGENTS.md is its own source, so it takes no provenance line. It DOES
+    # legitimately contain the word GENERATED, in its index markers — assert
+    # the derived marker's absence, not a substring that also appears there.
+    assert not plan[gaa.OUT_ENTRY].startswith(gaa.provenance(gaa.OUT_ENTRY))
 
 
 def test_every_ssot_relative_link_resolves_from_both_trees():
@@ -331,3 +338,173 @@ def test_every_ssot_relative_link_resolves_from_both_trees():
                     gaa.REPO_ROOT, os.path.dirname(base), link))
                 assert os.path.exists(target), f"{base} -> {link}"
     assert checked >= 29, f"only {checked} relative links seen; corpus shrank?"
+
+
+# ============================================================
+# provenance comment syntax per file type (CodeRabbit #1481 C1)
+# ============================================================
+
+
+@pytest.mark.parametrize("source,expected_open", [
+    ("agents/skills/a/SKILL.md", b"<!-- "),
+    ("agents/skills/a/notes.markdown", b"<!-- "),
+    ("agents/skills/a/w.js", b"// "),
+    ("agents/skills/a/w.mjs", b"// "),
+    ("agents/skills/a/w.ts", b"// "),
+    ("agents/skills/a/h.py", b"# "),
+    ("agents/skills/a/h.sh", b"# "),
+    ("agents/skills/a/c.yaml", b"# "),
+])
+def test_provenance_uses_the_adapter_language_comment(source, expected_open):
+    assert gaa.provenance(source).startswith(expected_open)
+
+
+def test_provenance_is_empty_for_an_unknown_suffix():
+    """Silence is recoverable; a syntactically invalid marker is not.
+
+    The drift gate still owns such a file byte-for-byte, so the only thing a
+    missing marker costs is the in-file hint.
+    """
+    assert gaa.provenance("agents/skills/a/data.bin") == b""
+
+
+def test_an_html_comment_never_reaches_a_javascript_adapter():
+    """The defect this replaced: `<!-- -->` in a .js file.
+
+    It parsed only because Annex B keeps legacy HTML-comment syntax alive in
+    sloppy scripts, and it is a hard parse error the moment anything reads the
+    file as an ES module.
+    """
+    out = gaa.project(b"const a = 1;\n", "agents/skills/a/w.js")
+    assert b"<!--" not in out
+    assert out.startswith(b"// ")
+    assert out.endswith(b"const a = 1;\n")
+
+
+def test_javascript_projection_keeps_the_body_byte_identical():
+    body = b"export const meta = {};\nreturn { ok: true };\n"
+    out = gaa.project(body, "agents/skills/a/w.js")
+    assert out.split(b"\n", 1)[1] == body
+
+
+# ============================================================
+# CRLF frontmatter (CodeRabbit #1481 C6)
+# ============================================================
+
+
+CRLF_FM = b"---\r\nname: x\r\ndescription: d\r\n---\r\n"
+
+
+def test_crlf_frontmatter_is_recognised_and_stays_at_byte_zero():
+    """An unrecognised CRLF fence would push the frontmatter off the top.
+
+    That is not cosmetic: every vendor stops seeing the skill's name and
+    description, so the skill silently stops being routable.
+    """
+    out = gaa.project(CRLF_FM + b"body\r\n", "agents/skills/a/SKILL.md")
+    assert out.startswith(b"---\r\n")
+    assert out[:len(CRLF_FM)] == CRLF_FM
+
+
+def test_crlf_provenance_is_inserted_after_the_closing_fence():
+    out = gaa.project(CRLF_FM + b"body\r\n", "agents/skills/a/SKILL.md")
+    after = out[len(CRLF_FM):]
+    assert after.startswith(b"<!-- ")
+    assert after.split(b"\r\n", 1)[1] == b"body\r\n"
+
+
+def test_crlf_provenance_terminates_with_crlf_not_lf():
+    """Matching the file's own ending keeps the adapter byte-comparable.
+
+    An LF-terminated line inside a CRLF file leaves one odd line that every
+    later diff carries.
+    """
+    out = gaa.project(CRLF_FM + b"body\r\n", "agents/skills/a/SKILL.md")
+    marker_line = out[len(CRLF_FM):].split(b"\r\n", 1)[0]
+    assert not marker_line.endswith(b"\r")
+    assert out[len(CRLF_FM) + len(marker_line):].startswith(b"\r\n")
+
+
+def test_read_frontmatter_field_handles_crlf():
+    assert gaa.read_frontmatter_field(CRLF_FM + b"body\r\n", "description") == "d"
+    assert gaa.read_frontmatter_field(CRLF_FM + b"body\r\n", "name") == "x"
+
+
+def test_lf_and_crlf_frontmatter_agree_on_the_field_values():
+    assert (gaa.read_frontmatter_field(CRLF_FM, "name")
+            == gaa.read_frontmatter_field(FM, "name").replace("x", "x"))
+
+
+# ============================================================
+# symlink and path-escape hardening (CodeRabbit #1481 C5)
+# ============================================================
+
+
+def _symlinks_work(tmp_path):
+    try:
+        (tmp_path / "_probe").symlink_to(tmp_path)
+    except (OSError, NotImplementedError):
+        return False
+    (tmp_path / "_probe").unlink()
+    return True
+
+
+def test_a_symlinked_ssot_file_is_refused(tmp_path, monkeypatch):
+    """`make agent-adapters` runs on whatever branch is checked out.
+
+    A symlinked SSOT file is a way to pull content from outside the worktree
+    into a committed artefact that reviewers read as repo content.
+    """
+    _fake_ssot(tmp_path, monkeypatch)
+    if not _symlinks_work(tmp_path):
+        pytest.skip("this filesystem cannot create symlinks")
+    outside = tmp_path.parent / "outside.md"
+    outside.write_bytes(b"---\nname: evil\n---\n")
+    (tmp_path / gaa.SSOT_SKILLS / "alpha" / "extra.md").symlink_to(outside)
+    with pytest.raises(gaa.UnsafePath):
+        gaa.planned_outputs()
+
+
+def test_a_symlinked_ssot_directory_is_refused(tmp_path, monkeypatch):
+    _fake_ssot(tmp_path, monkeypatch)
+    if not _symlinks_work(tmp_path):
+        pytest.skip("this filesystem cannot create symlinks")
+    outside = tmp_path.parent / "outside_dir"
+    outside.mkdir(exist_ok=True)
+    (tmp_path / gaa.SSOT_SKILLS / "linked").symlink_to(outside)
+    with pytest.raises(gaa.UnsafePath):
+        gaa.planned_outputs()
+
+
+def test_writing_through_a_symlinked_target_is_refused(tmp_path, monkeypatch):
+    """`open(..., "wb")` follows a symlink and would overwrite outside the tree."""
+    _fake_ssot(tmp_path, monkeypatch)
+    if not _symlinks_work(tmp_path):
+        pytest.skip("this filesystem cannot create symlinks")
+    plan = gaa.planned_outputs()
+    target = tmp_path / gaa.OUT_SKILLS / "alpha" / "SKILL.md"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    outside = tmp_path.parent / "victim.md"
+    outside.write_bytes(b"original\n")
+    target.symlink_to(outside)
+    with pytest.raises(gaa.UnsafePath):
+        gaa.write_outputs(plan)
+    assert outside.read_bytes() == b"original\n"
+
+
+def test_a_clean_tree_passes_the_target_check(tmp_path, monkeypatch):
+    """The guard must not fire on the ordinary case."""
+    _fake_ssot(tmp_path, monkeypatch)
+    gaa.write_outputs(gaa.planned_outputs())
+    assert gaa.diff_against_disk(gaa.planned_outputs()) == ([], [], [])
+
+
+def test_main_reports_an_unsafe_path_as_caller_error(tmp_path, monkeypatch, capsys):
+    _fake_ssot(tmp_path, monkeypatch)
+    if not _symlinks_work(tmp_path):
+        pytest.skip("this filesystem cannot create symlinks")
+    outside = tmp_path.parent / "outside2.md"
+    outside.write_bytes(b"x\n")
+    (tmp_path / gaa.SSOT_SKILLS / "alpha" / "extra.md").symlink_to(outside)
+    assert gaa.main(["--check"]) == gaa.EXIT_CALLER_ERROR
+    assert "refusing" in capsys.readouterr().err

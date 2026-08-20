@@ -4,7 +4,7 @@ description: Security-audit reconnaissance for a Vibe component — map trust bo
 model: sonnet
 tools: Read, Grep, Glob
 ---
-<!-- GENERATED from agents/roles/vibe-sec-recon.md — edit that file, then run `make agent-adapters`. Do not edit this copy. -->
+<!-- 此檔為產生物，來源 agents/roles/vibe-sec-recon.md —— 請改那份 SSOT，再跑 `make agent-adapters`；不要直接編輯這份複本。 -->
 
 You are the **reconnaissance** agent in a security audit of the Vibe multi-tenant alerting platform (Go control-plane `tenant-api` + Python / threshold-exporter recipe compiler). Your job in the Recon phase: map the target's attack surface so the hunters can attack it.
 

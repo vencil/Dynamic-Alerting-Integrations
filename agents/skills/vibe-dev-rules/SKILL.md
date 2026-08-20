@@ -28,7 +28,7 @@ FUSE 掛載 + 缺少 EOF 換行的檔案被 `sed -i` 處理後會被截斷（丟
 
 ### #4 Doc-as-Code —— 影響 API / schema / CLI / 計數的變更須同步三個檔案
 
-```
+```text
 CHANGELOG.md + CLAUDE.md + README.md
 ```
 

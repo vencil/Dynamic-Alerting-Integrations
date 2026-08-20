@@ -26,7 +26,7 @@ make pr-preflight                # ⛔ PR merge 前必跑
 
 1. **⛔ 禁止直推 `main`** — 一律開 branch → PR → owner 同意後 merge。pre-push hook 會擋。
 2. **回應語言** — 面向使用者的散文一律**繁體中文**。
-3. **Commit trailer block** — 所有 trailer（`Refs:` / `Resolves` / `Co-authored-by:`）須為**最底部單一連續段落、全部 `Key: value` 格式**。夾空行或無冒號的裸行會劈裂 block，git 丟棄上方行，CI gate 轉紅。
+3. **Commit trailer block** — 所有 trailer（`Refs:` / `Resolves:` / `Co-authored-by:`）須為**最底部單一連續段落、全部 `Key: value` 格式**。夾空行或無冒號的裸行會劈裂 block，git 丟棄上方行，CI gate 轉紅。
 4. **禁止對掛載路徑用 `sed -i`** — 會截斷缺少 EOF 換行的檔案。用讀取 + 改寫，或 pipe。
 5. **`git add` 用括號 glob 後必驗** — bash 的 `[01]` 只配 `0`/`1` 不配 `2`；跑 `git diff --cached --stat` 確認 staged set。
 6. **Doc-as-Code** — 影響 API / schema / CLI / 計數的變更，須同步 `CHANGELOG.md` + `CLAUDE.md` + `README.md`。
@@ -67,7 +67,7 @@ subagent 角色提示詞在 [`agents/roles/`](agents/roles/)。
 
 ## 這棵樹怎麼維護
 
-```
+```text
 agents/                     ← SSOT，改這裡
   skills/<name>/SKILL.md
   roles/<name>.md

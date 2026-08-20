@@ -26,7 +26,7 @@ description: 全 component 週期性深度安全稽核 — Recon→平行 Hunt(V
    git worktree add --detach .claude/worktrees/sec-audit origin/main
    ```
 3. **跑 Workflow**(⚠️ `args` 必須是 **JSON 物件**,不是字串——否則 `target` 會 undefined、agents 會退回讀主樹):
-   ```
+   ```js
    Workflow({
      scriptPath: ".claude/skills/vibe-security-audit/audit-workflow.js",
      args: { target: "<abs>/.claude/worktrees/sec-audit/components/tenant-api",

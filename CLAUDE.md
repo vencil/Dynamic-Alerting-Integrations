@@ -32,7 +32,7 @@ Session 起手式 codified 為 **PreToolUse hook** (v2.8.0；#824 改經 `run-ho
 
 Vibe 專案內建 **八個本地 skills**，在對應情境自動觸發。
 
-⛔ **SSOT 在 [`agents/skills/`](agents/skills/)，不是 `.claude/skills/`**（TRK-361）——後者是 `make agent-adapters` 的**生成物**，Claude Code 只認那個路徑所以必須存在，但改它會被 `gen-agent-adapters-check` hook 擋下、且下次重生就覆蓋。subagent 角色提示詞同理：SSOT 在 [`agents/roles/`](agents/roles/)，`.claude/agents/` 是生成物。根目錄 [`AGENTS.md`](AGENTS.md)（AAIF 中性標準，Codex / Cursor / Copilot / Gemini CLI / Grok 原生讀）亦由同一棵 SSOT 生成，內容為「高頻不可協商項 inline + 其餘以路徑索引」，**刻意不複製規範內容**。
+⛔ **SSOT 在 [`agents/skills/`](agents/skills/)，不是 `.claude/skills/`**（TRK-361）——後者是 `make agent-adapters` 的**生成物**，Claude Code 只認那個路徑所以必須存在，但改它會被 `gen-agent-adapters-check` hook 擋下、且下次重生就覆蓋。subagent 角色提示詞同理：SSOT 在 [`agents/roles/`](agents/roles/)，`.claude/agents/` 是生成物。根目錄 [`AGENTS.md`](AGENTS.md)（AAIF 中性標準，Codex / Cursor / Copilot / Gemini CLI / Grok 原生讀）是**手寫散文**，內容為「高頻不可協商項 inline + 其餘以路徑索引」、**刻意不複製規範內容**；其中**只有 `BEGIN/END GENERATED SKILL INDEX` 之間的 skill 索引**由 `agents/skills/` 的 frontmatter 生成，其餘直接編輯該檔即可（產生器不會重寫它們）。
 
 
 - **`vibe-workflow`** — session 起手式、7 個常見陷阱、標準開發工作流（session 開始或遇到 FUSE / docker / port-forward 類問題時自動觸發）
@@ -95,7 +95,7 @@ Vibe 專案內建 **八個本地 skills**，在對應情境自動觸發。
 
 公開文件對照表 → [`doc-map.md`](docs/internal/doc-map.md)（`docs/internal/**` 由 CLAUDE.md / skills 直接引用，不入 catalog）；Python 工具 → [`tool-map.md`](docs/internal/tool-map.md)（CLI: `da-tools <cmd> --help`）；JSX 工具 SOT → [`tool-registry.yaml`](docs/assets/tool-registry.yaml)。
 
-**Planning / Tracking ID 對照** → [`planning-id-mapping.md`](docs/internal/planning-id-mapping.md)（v2.8.1 起 `TRK-NNN` 為**唯一新進入點**，取代既有 `TECH-DEBT-NNN` / `TD-NN` / `HA-NN` / `REG-NN`；舊 ID 仍可 grep，本表給對映 + 三段編號分區邏輯）。新追蹤項目一律 `TRK-NNN`（commit trailer 寫 `Resolves TRK-NNN`，見 [`dev-rules.md` §P1](docs/internal/dev-rules.md)）；政策依據與 frontmatter spec 見 [ADR-019 §Namespace Policy](docs/adr/019-planning-ssot.md#namespace-policy三-namespace-共存)。`ADR-NNN` 與 `S#NNN` 為獨立 namespace，不參與 TRK 對映。
+**Planning / Tracking ID 對照** → [`planning-id-mapping.md`](docs/internal/planning-id-mapping.md)（v2.8.1 起 `TRK-NNN` 為**唯一新進入點**，取代既有 `TECH-DEBT-NNN` / `TD-NN` / `HA-NN` / `REG-NN`；舊 ID 仍可 grep，本表給對映 + 三段編號分區邏輯）。新追蹤項目一律 `TRK-NNN`（commit trailer 寫 `Resolves: TRK-NNN`，見 [`dev-rules.md` §P1](docs/internal/dev-rules.md)）；政策依據與 frontmatter spec 見 [ADR-019 §Namespace Policy](docs/adr/019-planning-ssot.md#namespace-policy三-namespace-共存)。`ADR-NNN` 與 `S#NNN` 為獨立 namespace，不參與 TRK 對映。
 
 **Makefile** 必記 Top 11：
 

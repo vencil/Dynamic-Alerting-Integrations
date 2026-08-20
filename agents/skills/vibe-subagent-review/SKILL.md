@@ -75,7 +75,7 @@ description: IaC-aware 兩階段 review — code 走 spec→quality、IaC 走 bl
 
 > **Go `Close()` 讀/寫不對稱**（review 必查，errcheck 分不出）：`defer func(){ _ = x.Close() }()` 只對 **read-closer** 安全（`resp.Body` / `sql.Rows` / `os.Open` 唯讀檔——關閉只釋放資源）。**write-closer**（`os.Create` / `gzip.Writer` / 自訂 `io.WriteCloser`）的 `Close()` error **不可吞**——寫入的 disk-flush 常延到 `Close()` 才發生，吞掉 = silent data loss。
 >
-> 盲區：自訂介面（如 `GetStorage() TenantStateStorage`，內嵌 `io.WriteCloser`）AI/review 缺全域 context 判不出讀/寫，易把 `_ = store.Close()` 誤當資源釋放放行。**正規防禦 = named return + defer 捕捉**（一眼可辨、且擋 panic / early-return 漏判，不靠判斷讀/寫）：
+> 盲區：自訂介面（如 `GetStorage() TenantStateStorage`，內嵌 `io.WriteCloser`）AI/review 缺全域 context 判不出讀/寫，易把 `_ = store.Close()` 誤當資源釋放放行。**正規防禦 = named return + defer 捕捉**（一眼可辨、且不必逐處判斷讀/寫）：⚠️ 精確範圍——`defer` 在 **early return** 時把 `Close()` 的 error 併進具名回傳值；**panic 展開時它一樣會執行，所以 `Close()` 必定被呼叫**，但它**不會 `recover()`、也不會把 panic 轉成 error**，panic 照常向上傳。要攔 panic 得另外明文寫 `recover()` 政策。
 >
 > ```go
 > func WriteTenant() (err error) {

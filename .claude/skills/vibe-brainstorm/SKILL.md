@@ -2,7 +2,7 @@
 name: vibe-brainstorm
 description: 設計階段的 Socratic ideation — 用提問逼出 MVP 範圍、explicit trade-off、defer-with-trigger，加 proposer≠critic 內部對抗 + validate-direction，再走外部 adversarial review。Use when designing a new ADR / new component / epic decomposition / `RFC:` 討論 / 評估技術選型。SKIP for code-level debugging（用 `engineering:debug`）或 PR review（用 `vibe-subagent-review`）——這是「還沒寫 code、在決定要做什麼」的階段。
 ---
-<!-- GENERATED from agents/skills/vibe-brainstorm/SKILL.md — edit that file, then run `make agent-adapters`. Do not edit this copy. -->
+<!-- 此檔為產生物，來源 agents/skills/vibe-brainstorm/SKILL.md —— 請改那份 SSOT，再跑 `make agent-adapters`；不要直接編輯這份複本。 -->
 
 # vibe-brainstorm — 設計階段 Socratic ideation
 
