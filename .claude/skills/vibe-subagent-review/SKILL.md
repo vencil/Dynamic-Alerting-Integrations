@@ -42,6 +42,20 @@ description: IaC-aware 兩階段 review — code 走 spec→quality、IaC 走 bl
 - **修法 commit 本身是新的受審對象**，不是「原 commit 的附錄」——它常比被審的改動更大，而且沒被任何 lens 掃過。實測（#1431）：第一輪審的是 **814 行新增**，據此產出的修法 commit 是 **1336 行新增**（1.6×）且無人審，第二輪補審它才找到整輪唯一的 **Critical**。「已經審過一輪」永遠是指審過**那一版**。
 - **一輪修多條時防 fix-masking**：修法 A 新加的輸出／訊息可能替路徑 B 的缺口作答，讓 B 的回歸案例照樣轉綠、缺口測不出來。逐條驗收要**單獨還原該條修法**看測試轉不轉紅，不要一次還原全部再一起跑。
 - 這是 harness 的**單 agent 便宜版**；要**升級到多 agent** 見下節。
+- ⚠️ **第 2 輪起這一節不算數**——見〈預設檔位〉。
+
+## 預設檔位（第 1 輪 vs 第 2 輪起）
+
+同一個缺陷的**第幾輪**修正，決定上節自審夠不夠：
+
+| 情境 | 預設 | 理由 |
+|---|---|---|
+| **第 1 輪**（新實作 / 例行 multi-file PR） | 上節 finder≠verifier **自審**足夠 | 便宜、涵蓋大多數情況；不為例行 review gold-plate |
+| **第 2 輪起**（修法、re-fix、對同一 issue 再改） | ⛔ 自審**降為 pre-check**，預設改為**換 context 的盲審** | 實測：#1457 前三顆 commit「合計 8 位、59+ 條 finding、61 個單點變異，**作者自審 0 條**」。同一個 context 已經對自己的修法失明——它剛把每條路徑都說服過自己一次 |
+
+「換 context」不必然等於多 agent harness：另開一個**不帶本輪對話**的 reviewer（新 session / 新 subagent / 另一個模型皆可），只餵**受審 diff 本身**與 [`vibe-converge`](../vibe-converge/SKILL.md) 的跨輪交接三件組（verified claim / open question / 已打死方向表）。⛔ **不要餵上一輪的完整 commit body 與修法敘事**——那正是讓下一棒繼承上一棒盲區的東西。
+
+多輪情境的停止時機、什麼時候該**換受審主體**而不是再修一版，走 [`vibe-converge`](../vibe-converge/SKILL.md)（`make converge-status`）。
 
 ## 升級到多 agent harness（大 / 高風險 review；defer-with-trigger）
 
@@ -140,5 +154,6 @@ note 禁含單/雙引號、反斜線、換行（要引用改全形「」）；�
 
 - **[#448](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/448)**（container/k8s SAST lint）：機械層單檔 violation（runAsNonRoot / hostNetwork / ALLOW_EMPTY_PASSWORD…）。本 skill 是 AI 跨檔語義層——**互補不重做機械 lint**。
 - **vibe-dev-rules**：commit / branch / trailer 紀律仍以 dev-rules 為準（本 skill 不重做）。
+- **[vibe-converge](../vibe-converge/SKILL.md)**：本 skill 管**一輪之內**怎麼審；輪與輪之間傳什麼、何時停、何時換受審主體由它管。第 2 輪起兩者一起用。
 - **vibe-security-audit**：稽核 harness 本體已是 Workflow 編排（原生串流）；稽核後 fix 的對抗式重驗 verifier 屬本 skill 長時驗證協議的適用對象。
 - 優先級仲裁見 [CLAUDE.md §Skill 優先級宣告](../../../CLAUDE.md)；衝突時 `vibe-*` supersede 環境層 `engineering:code-review`。
