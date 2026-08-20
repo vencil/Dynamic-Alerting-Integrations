@@ -485,8 +485,33 @@ def check_versions() -> dict[str, object]:
     # ⛔ `dx/`, not `_THIS_DIR`. bump_docs.py has never lived beside this
     # file, so this check has never once run: `make validate-config` was
     # red for every developer with "can't open file .../ops/bump_docs.py".
-    cmd = [sys.executable,
-           str(_THIS_DIR.parent / "dx" / "bump_docs.py"), "--check"]
+    # ⛔ Resolve BEFORE shelling out, and say so plainly when it is absent.
+    # `subprocess.run([sys.executable, "<missing>.py"])` does NOT raise
+    # FileNotFoundError — the INTERPRETER exists, so it starts, prints
+    # "can't open file ..." and exits 2. That is why the `except
+    # FileNotFoundError` branch below was unreachable, and why this check
+    # spent years reporting a bare interpreter error as `[FAIL] versions`
+    # (#1461).
+    # ⚠️ In the published da-tools image this file lives at
+    # `/opt/da-tools/validate_config.py` and `build.sh` FLATTENS the tool set,
+    # so neither `<parent>/dx/bump_docs.py` nor a sibling copy exists —
+    # bump_docs.py is not in the shipped tool list at all. Version/count
+    # consistency is a repo-maintainer gate (`make version-check`,
+    # `make pre-tag`), not something a customer runs from the image. So the
+    # honest answer there is "not applicable here", not a red check.
+    _bump_docs = _THIS_DIR.parent / "dx" / "bump_docs.py"
+    if not _bump_docs.is_file():
+        return _make_result(
+            "versions", WARN,
+            ["Skipped: bump_docs.py is not present in this installation "
+             f"(looked for {_bump_docs}).",
+             "This check is a repository-maintainer gate; the published "
+             "da-tools image ships a flattened tool set that excludes it.",
+             "In a repo checkout run: python3 scripts/tools/dx/bump_docs.py "
+             "--check && python3 scripts/tools/dx/bump_docs.py "
+             "--sync-counts --check"])
+
+    cmd = [sys.executable, str(_bump_docs), "--check"]
 
     try:
         # ⛔ Same reason as `check_custom_rules`: bump_docs.py forces UTF-8 on

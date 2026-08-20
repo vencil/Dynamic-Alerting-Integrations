@@ -4286,8 +4286,22 @@ def test_generate_stage_body_is_pinned_on_both_legs(generated, ci, deploy) -> No
                 continue
             if not any(k in body for k in _SHELL_KEYS):
                 continue
+            # ⛔ Normalise before joining. GitLab accepts `script:` as a
+            # SCALAR as well as a list, and iterating a str yields
+            # CHARACTERS — `apk add git` would join to `a p k   a d d   g i t`,
+            # so `"config-diff" not in script` passes and `\bgit\b` finds
+            # nothing. A job re-introduced in scalar form walks past both
+            # assertions, which is the exact silent re-entry this block exists
+            # to stop. (Same class as the quote-style and flag-abbreviation
+            # bypasses fixed elsewhere in this PR: the guard was reading a
+            # SPELLING, not a value.)
+            def _lines(value):
+                if value is None:
+                    return []
+                return value if isinstance(value, list) else [value]
+
             script = " ".join(
-                str(line) for key in _SHELL_KEYS for line in body.get(key, [])
+                str(line) for key in _SHELL_KEYS for line in _lines(body.get(key))
             )
             assert "config-diff" not in script, (
                 f"GitLab job {name!r} runs `config-diff` again. On this leg "

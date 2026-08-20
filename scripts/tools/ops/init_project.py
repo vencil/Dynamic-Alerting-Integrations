@@ -949,6 +949,16 @@ def _build_github_apply_stage(deploy_method: str, namespace: str) -> str:
         # an image for exactly this reason; the two legs now share the pin.
         # The job has no checkout step (`argocd app sync` talks to the server),
         # so nothing here needs a toolchain the CLI image lacks.
+        # ⛔ `options: --user root`. The argocd image ends with `USER 999`, and
+        # a container job's steps still touch runner-owned mounts (the step
+        # script and `_runner_file_commands/*` under `_temp`) that are created
+        # by the runner user (uid 1001) — a uid mismatch there is the standard
+        # `EACCES` on container jobs, which is why GitHub's own container-job
+        # docs advise against a non-root `USER`. Cheap insurance on a job whose
+        # entire body is one `argocd app sync`.
+        # ⚠️ NOT verified against a live runner from here (no GitHub Actions in
+        # this environment); it is a documented failure mode, not a measured
+        # one. Root in a short-lived sync container is the conservative side.
         return textwrap.dedent("""\
 
       # ── Stage 3: Sync ArgoCD Application ──────────────────
@@ -959,6 +969,7 @@ def _build_github_apply_stage(deploy_method: str, namespace: str) -> str:
         runs-on: ubuntu-latest
         container:
           image: {argocd_image}
+          options: --user root
         if: github.event_name == 'workflow_dispatch'
         environment: production
         steps:
@@ -1542,10 +1553,6 @@ _GL_STAGES = ('validate', 'apply')
 # templates, their `.gitlab-ci.d/` split) silently vanish because they did
 # what we told them to. When their file already has the key, the thing to
 # hand them is the list ITEM to append underneath it.
-_GL_INCLUDE_SNIPPET = (
-    "include:\n"
-    f"  - local: {_GL_PIPELINE_REL.as_posix()}\n"
-)
 # ⛔ There is deliberately NO paste-ready "just this line" fragment any more.
 #
 # Three independent reviews found three different ways one destroys a
@@ -1577,11 +1584,14 @@ def _gl_example_for(want: str) -> str:
             f"  - local: {want}\n")
 
 
-_GL_WIRING_EXAMPLE = (
-    "include:\n"
-    "  - <keep your existing entries here>\n"
-    f"  - local: {_GL_PIPELINE_REL.as_posix()}\n"
-)
+# ⛔ Derived from the helpers, never re-spelled. Both constants and both
+# helpers render wiring for the SAME repository — the root branch returns the
+# constants while the subdirectory branch calls the helpers — so a literal copy
+# that drifts by one space makes the two paths print different instructions for
+# the same file, and only one of them would be pasteable. Defining them from
+# the helpers makes that drift unrepresentable rather than merely discouraged.
+_GL_INCLUDE_SNIPPET = _gl_block_for(_GL_PIPELINE_REL.as_posix())
+_GL_WIRING_EXAMPLE = _gl_example_for(_GL_PIPELINE_REL.as_posix())
 
 
 # Root-shell outcomes. "There is already a root file" is not one case but
@@ -2434,7 +2444,6 @@ def _prompt_text(prompt_text: str, default: str = '') -> str:
 
 def _validate_tenant_name(name: str) -> bool:
     """Validate tenant name follows K8s naming conventions."""
-    import re
     return bool(re.match(r'^[a-z0-9]([a-z0-9-]*[a-z0-9])?$', name)) and len(name) <= 63
 
 

@@ -1112,7 +1112,7 @@ da-tools config-history --config-dir conf.d/ diff 1 2
 在客戶 repo 中初始化 Dynamic Alerting 整合骨架。產生 CI/CD pipeline、conf.d/ 目錄、Kustomize overlays、pre-commit 配置。
 
 ```bash
-da-tools init [--ci <github|gitlab|both>] [--tenants <list>] [--rule-packs <list>] [--deploy <kustomize|helm|argocd>] [-o <dir>] [--non-interactive] [--dry-run]
+da-tools init [--ci <github|gitlab|both>] [--tenants <list>] [--rule-packs <list>] [--deploy <kustomize|helm|argocd>] [-o <dir>] [--non-interactive] [--dry-run] [--force]
 ```
 
 **參數**

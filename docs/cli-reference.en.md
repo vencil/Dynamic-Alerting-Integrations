@@ -1215,7 +1215,7 @@ da-tools config-history --config-dir conf.d/ diff 1 2
 Initialize Dynamic Alerting integration skeleton in a customer repo. Generates CI/CD pipelines, conf.d/ directory, Kustomize overlays, and pre-commit configuration.
 
 ```bash
-da-tools init [--ci <github|gitlab|both>] [--tenants <list>] [--rule-packs <list>] [--deploy <kustomize|helm|argocd>] [-o <dir>] [--non-interactive] [--dry-run]
+da-tools init [--ci <github|gitlab|both>] [--tenants <list>] [--rule-packs <list>] [--deploy <kustomize|helm|argocd>] [-o <dir>] [--non-interactive] [--dry-run] [--force]
 ```
 
 **Parameters**

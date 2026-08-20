@@ -390,8 +390,19 @@ function StepReview({ config }) {
                   to name because the wizard cannot see the target repo. */}
               {(config.ci === 'gitlab' || config.ci === 'both') && (
                 <li>
-                  {t('GitLab：根目錄 .gitlab-ci.yml 是 GitLab 唯一會自動載入的路徑。init 會產生它（內容就是 include: - local: .gitlab-ci.d/dynamic-alerting.yml）；若你的 repo 已有這個檔案，init 不會改動它，請自行貼入該 include，否則 pipeline 不會執行。',
-                     'GitLab: the repo-root .gitlab-ci.yml is the only path GitLab auto-loads. init generates it (its whole body is `include: - local: .gitlab-ci.d/dynamic-alerting.yml`); if your repo already has one, init leaves it untouched — paste that include yourself or the pipeline never runs.')}
+                  {/* ⛔ The include MUST be shown as two lines. It used to be
+                      inlined in this sentence as `include: - local: …`, which
+                      is not valid YAML — `yaml.safe_load` rejects it with
+                      "sequence entries are not allowed here". A reader who
+                      pasted the sentence's snippet into their root
+                      `.gitlab-ci.yml` got a file GitLab cannot parse, i.e. the
+                      whole pipeline stops loading: strictly worse than the
+                      unwired state this step exists to fix. */}
+                  {t('GitLab：根目錄 .gitlab-ci.yml 是 GitLab 唯一會自動載入的路徑。init 會產生它，內容就是下面這兩行；若你的 repo 已有這個檔案，init 不會改動它，請自行把這兩行貼進去（縮排照抄），否則 pipeline 不會執行。',
+                     'GitLab: the repo-root .gitlab-ci.yml is the only path GitLab auto-loads. init generates it with exactly the two lines below; if your repo already has one, init leaves it untouched — paste those two lines in yourself (keep the indentation) or the pipeline never runs.')}
+                  <pre className="mt-1 bg-[color:var(--da-color-surface-hover)] p-4 rounded-lg text-xs font-mono border border-[color:var(--da-color-surface-border)] text-[color:var(--da-color-fg)]">
+                    {'include:\n  - local: .gitlab-ci.d/dynamic-alerting.yml'}
+                  </pre>
                 </li>
               )}
               {/* ⛔ GitLab has no Generate stage (#1358): its image carries no
