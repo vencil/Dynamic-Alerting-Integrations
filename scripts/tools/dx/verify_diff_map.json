@@ -732,7 +732,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "7470eb0a5a157778f776dcf90e8eb2c38b0484c4aa184071be09692ba657536e",
+ "source_digest": "6da30b382766d8cab369497aebddc997ffa51de86575a2bb14c2730618c509cb",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1162,6 +1162,7 @@
    "tests/lint/test_e2e_spec_lint.py",
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/ops/test_generated_ci_artifacts.py",
+   "tests/ops/test_wrapped_path_references.py",
    "tests/shared/test_actionlint_pin_parity.py"
   ],
   "CHANGELOG.md": [
@@ -1294,6 +1295,9 @@
   ],
   "components/threshold-exporter/README.md": [
    "tests/ops/test_ci_path_filter_coverage.py"
+  ],
+  "components/threshold-exporter/app": [
+   "tests/ops/test_wrapped_path_references.py"
   ],
   "components/threshold-exporter/app/collector.go": [
    "tests/lint/test_check_scrape_reachability.py"
@@ -1444,7 +1448,8 @@
    "tests/ops/test_validate_config.py"
   ],
   "docs/integration": [
-   "tests/dx/test_bump_docs.py"
+   "tests/dx/test_bump_docs.py",
+   "tests/ops/test_wrapped_path_references.py"
   ],
   "docs/integration/gitops-deployment.md": [
    "tests/ops/test_config_diff.py",
@@ -2002,6 +2007,9 @@
   "scripts/ops/parse_go_test_json.py": [
    "tests/ops/test_nightly_race_issue_policy.py",
    "tests/ops/test_parse_go_test_json.py"
+  ],
+  "scripts/ops/protect_main_push.sh": [
+   "tests/ops/test_wrapped_path_references.py"
   ],
   "scripts/ops/recover_index.sh": [
    "tests/dx/test_recover_index.py"
@@ -2683,6 +2691,7 @@
   "tests/ops/test_generated_ci_artifacts.py": [
    "tests/ops/test_init_project.py",
    "tests/ops/test_nightly_scan_matrix_drift.py",
+   "tests/ops/test_wrapped_path_references.py",
    "tests/shared/test_actionlint_pin_parity.py"
   ],
   "tests/ops/test_guard_defaults_scopes.py": [
@@ -2801,7 +2810,8 @@
   "tools/portal": [
    "tests/dx/test_bump_docs.py",
    "tests/lint/test_check_threshold_reachability.py",
-   "tests/ops/test_ci_path_filter_coverage.py"
+   "tests/ops/test_ci_path_filter_coverage.py",
+   "tests/ops/test_wrapped_path_references.py"
   ],
   "tools/portal/build.mjs": [
    "tests/ops/test_generated_ci_artifacts.py"
