@@ -144,6 +144,9 @@
   "scripts/tools/dx/doc_coverage.py": [
    "tests/dx/test_doc_coverage.py"
   ],
+  "scripts/tools/dx/gen_agent_adapters.py": [
+   "tests/dx/test_gen_agent_adapters.py"
+  ],
   "scripts/tools/dx/gen_recipe_status_json.py": [
    "tests/dx/test_gen_recipe_status_json.py"
   ],
@@ -727,7 +730,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "56c01565d8abae9bf89e00534f530e1834c29327bf0f9253d84899c9dfe5ce85",
+ "source_digest": "d399285d467a001e85da47bcf31333313ef40e318faa28586c907f70beffe78e",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -748,6 +751,7 @@
   "tests/dx/test_federation_revocation_dashboard.py",
   "tests/dx/test_fleet_threshold_dashboard.py",
   "tests/dx/test_fuse_plumbing_commit.py",
+  "tests/dx/test_gen_agent_adapters.py",
   "tests/dx/test_gen_recipe_status_json.py",
   "tests/dx/test_generate_adr_index.py",
   "tests/dx/test_generate_alert_reference.py",
@@ -2068,6 +2072,9 @@
    "tests/dx/test_describe_tenant.py",
    "tests/golden/test_merge_parity.py",
    "tests/ops/test_property_based.py"
+  ],
+  "scripts/tools/dx/gen_agent_adapters.py": [
+   "tests/dx/test_gen_agent_adapters.py"
   ],
   "scripts/tools/dx/generate_byo_rulepack_table.py": [
    "tests/dx/test_generate_byo_rulepack_table.py"

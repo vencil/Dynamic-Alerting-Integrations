@@ -2,7 +2,6 @@
 name: vibe-security-audit
 description: 全 component 週期性深度安全稽核 — Recon→平行 Hunt(Vibe 專屬攻擊面向)→對抗式 Validate(finder≠verifier 換模型)→Synthesize,跑在隔離 worktree 快照上。Use when 新信任邊界 GA 前(federation / L7 identity / machine identity)、security incident 後的「還漏什麼」sweep、或季度深稽核。SKIP for per-PR diff review(用內建 `/security-review`,那是 diff-scoped 單 agent)、code-level debug(用 `engineering:debug`)、單檔變更 review(用 `vibe-subagent-review`)。
 ---
-<!-- GENERATED from agents/skills/vibe-security-audit/SKILL.md — edit that file, then run `make agent-adapters`. Do not edit this copy. -->
 
 # vibe-security-audit — 週期性深度安全稽核
 

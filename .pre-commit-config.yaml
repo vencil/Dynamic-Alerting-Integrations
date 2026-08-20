@@ -310,6 +310,16 @@ repos:
         files: ^rule-packs/.*\.ya?ml$
         additional_dependencies: ['pyyaml']
 
+      - id: gen-agent-adapters-check
+        name: Agent adapter drift (agents/ SSOT → .claude/** + AGENTS.md)
+        entry: python3 -X utf8 scripts/tools/dx/gen_agent_adapters.py --check
+        language: python
+        pass_filenames: false
+        # 觸發面必須同時含 SSOT 與轉接檔：只掛 agents/ 的話，「有人直接改
+        # .claude/skills/**」這個本 gate 的主要目標情境不會觸發它——而那正是
+        # 最容易發生的漂移（轉接檔看起來就是一般的 skill 檔）。
+        files: ^(agents/|\.claude/(skills|agents)/|AGENTS\.md$)
+
       - id: verify-diff-check
         name: verify_diff map freshness (source→test mapping)
         entry: python3 -X utf8 scripts/tools/dx/verify_diff.py --check
@@ -538,7 +548,11 @@ repos:
         entry: python3 -X utf8 scripts/tools/lint/check_doc_links.py --ci
         language: python
         pass_filenames: false
-        files: ^docs/.*\.md$
+        # 觸發面須含 agents/ 與 AGENTS.md（TRK-361）：CI 的 docs-ci.yaml 是全 repo
+        # 掃描 + --ci，本 hook 若只掛 ^docs/ 就會出現「同一個 gate，CI 擋得到、
+        # 本地看不到」——實測：改壞 AGENTS.md 的一條連結，--ci 直接跑 rc=1，而
+        # pre-commit 因觸發面不合完全不啟動該 hook。
+        files: ^(docs/.*\.md|agents/.*\.md|AGENTS\.md)$
 
       - id: html-doc-links-check
         name: Raw HTML doc-link validation (MkDocs-aware)

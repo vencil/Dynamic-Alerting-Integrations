@@ -1,4 +1,3 @@
-<!-- GENERATED from agents/skills/vibe-security-audit/audit-workflow.js — edit that file, then run `make agent-adapters`. Do not edit this copy. -->
 /**
  * vibe-security-audit — reusable domain-aware security-audit workflow.
  *

@@ -2,7 +2,6 @@
 name: vibe-playbook-nav
 description: Route Vibe 任務到對應 Playbook 章節，避免通讀全文。Use when starting work that touches K8s, docker exec, release/tagging, conf.d, benchmark, Playwright E2E, Go race flake debugging, port-forward, Helm, PowerShell REST, or Windows-side git escape hatch. Also use when the user says "我要做 XXX，需要看哪份 Playbook？" or when unsure which Playbook section applies to the current task.
 ---
-<!-- GENERATED from agents/skills/vibe-playbook-nav/SKILL.md — edit that file, then run `make agent-adapters`. Do not edit this copy. -->
 
 # vibe-playbook-nav — 任務分流 + Playbook 索引
 

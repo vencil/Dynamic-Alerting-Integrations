@@ -128,14 +128,25 @@ class DocLinkChecker:
         self.verbose = verbose
 
         # 掃描範圍
-        self.scan_dirs = ["docs", "rule-packs"]
-        self.root_md_files = ["README.md", "README.en.md", "CHANGELOG.md", "CLAUDE.md"]
+        # `agents/` is the neutral agent-instruction SSOT (TRK-361). Scanned
+        # here rather than its generated `.claude/**` mirror: the mirror is a
+        # byte-copy at the same depth, so the two carry identical links, and
+        # scanning both would double-report every break. Measured before this
+        # line existed: a deliberately broken link in AGENTS.md left all four
+        # doc gates green.
+        self.scan_dirs = ["docs", "rule-packs", "agents"]
+        self.root_md_files = ["README.md", "README.en.md", "CHANGELOG.md",
+                              "CLAUDE.md", "AGENTS.md"]
 
         # Bilingual exemption list
         # Internal docs (docs/internal/) are exempt from bilingual requirements per project policy.
         # Only externally-facing docs need EN counterparts. Utility files also exempt.
         self.bilingual_exempt_paths = {
             "docs/internal/",
+            # Agent instructions: ZH-primary SSOT policy (v2.8.0 S#101), same
+            # class as docs/internal/ — read by tooling and maintainers.
+            "agents/",
+            "AGENTS.md",
             "docs/CHANGELOG.md",
             "docs/includes/",
             "docs/tags.md",

@@ -30,7 +30,10 @@ Session 起手式 codified 為 **PreToolUse hook** (v2.8.0；#824 改經 `run-ho
 
 ## Skill 體系
 
-Vibe 專案內建 **八個本地 skills**（`.claude/skills/`），在對應情境自動觸發：
+Vibe 專案內建 **八個本地 skills**，在對應情境自動觸發。
+
+⛔ **SSOT 在 [`agents/skills/`](agents/skills/)，不是 `.claude/skills/`**（TRK-361）——後者是 `make agent-adapters` 的**生成物**，Claude Code 只認那個路徑所以必須存在，但改它會被 `gen-agent-adapters-check` hook 擋下、且下次重生就覆蓋。subagent 角色提示詞同理：SSOT 在 [`agents/roles/`](agents/roles/)，`.claude/agents/` 是生成物。根目錄 [`AGENTS.md`](AGENTS.md)（AAIF 中性標準，Codex / Cursor / Copilot / Gemini CLI / Grok 原生讀）亦由同一棵 SSOT 生成，內容為「高頻不可協商項 inline + 其餘以路徑索引」，**刻意不複製規範內容**。
+
 
 - **`vibe-workflow`** — session 起手式、7 個常見陷阱、標準開發工作流（session 開始或遇到 FUSE / docker / port-forward 類問題時自動觸發）
 - **`vibe-dev-rules`** — 13 條開發規範 + Top 4 違反熱點（commit / push / refactor 前自動觸發）
@@ -86,7 +89,7 @@ Vibe 專案內建 **八個本地 skills**（`.claude/skills/`），在對應情�
 
 ## Pre-commit 品質閘門
 
-102 auto-run + 13 manual-stage + 3 pre-push hooks，清單見 [`.pre-commit-config.yaml`](.pre-commit-config.yaml)。手動觸發：`pre-commit run --all-files`（auto）/ `pre-commit run --hook-stage manual --all-files`（manual）。**hook ↔ skill 職責邊界**（哪些機械強制 / 哪些 AI 須自覺 / 漏接）見 [`hook-vs-skill-coverage.md`](docs/internal/hook-vs-skill-coverage.md)（TRK-304）。
+103 auto-run + 13 manual-stage + 3 pre-push hooks，清單見 [`.pre-commit-config.yaml`](.pre-commit-config.yaml)。手動觸發：`pre-commit run --all-files`（auto）/ `pre-commit run --hook-stage manual --all-files`（manual）。**hook ↔ skill 職責邊界**（哪些機械強制 / 哪些 AI 須自覺 / 漏接）見 [`hook-vs-skill-coverage.md`](docs/internal/hook-vs-skill-coverage.md)（TRK-304）。
 
 ## 文件 / 工具 / Makefile
 

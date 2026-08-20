@@ -6,7 +6,6 @@ version: v2.9.0
 verified-at-version: v2.9.0
 lang: zh
 ---
-<!-- GENERATED from agents/skills/vibe-converge/references/derivation.md — edit that file, then run `make agent-adapters`. Do not edit this copy. -->
 
 # vibe-converge — 推導與出處（TRK-360）
 

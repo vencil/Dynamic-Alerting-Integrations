@@ -2,7 +2,6 @@
 name: vibe-dev-rules
 description: Vibe 專案 13 條開發規範（dev-rules.md）的快速參考 + 最常違反 Top 4 深入說明。Use before git commit / push, when refactoring multi-tenant logic, when editing mount-path files, when touching API / schema / CLI / counts that require doc sync, or when unsure whether an action follows Vibe conventions. Also use when user asks "can I do X" about project conventions, or when about to hardcode a tenant id, use sed -i, or push directly to main.
 ---
-<!-- GENERATED from agents/skills/vibe-dev-rules/SKILL.md — edit that file, then run `make agent-adapters`. Do not edit this copy. -->
 
 # vibe-dev-rules — Vibe 13 條開發規範速查
 
