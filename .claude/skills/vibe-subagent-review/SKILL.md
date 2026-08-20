@@ -45,6 +45,38 @@ description: IaC-aware 兩階段 review — code 走 spec→quality、IaC 走 bl
 - 這是 harness 的**單 agent 便宜版**；要**升級到多 agent** 見下節。
 - ⚠️ **第 2 輪起，只有「自審 pass 算完整驗證」這一條不算數**——降級為 pre-check，改走〈預設檔位〉的換 context 盲審。本節其餘各條（只報站得住的、verify-before-asserting、FIX 可能移除附帶防護、防 fix-masking）**照常適用，且對盲審一樣適用**。
 
+## 收 review：拿到 finding 之後（借 superpowers `receiving-code-review`）
+
+上面各節管**怎麼發**；這節管**怎麼收**。兩者不對稱：發的時候你在找問題，收的時候你在被說服，而被說服比找問題容易得多。
+
+**1. 每條 finding 先分流，再動手**——`take` / `reframe` / `reject`，逐條給理由：
+
+- **take**：驗過屬實、在本 PR 範圍內 ⇒ 修。
+- **reframe**：症狀對、診斷錯 ⇒ 修真正的那個，並說明差在哪。
+- **reject**：驗過不成立 ⇒ **附證據**駁回，不是「我覺得還好」。
+
+⛔ **收到的「這是 bug」是 claim 不是事實**，適用上節的 verify-before-asserting。實測（#1481）：CodeRabbit 開 14 條，逐條驗證後 **11 條成立、1 條 reject（附雙模式解析實測，reviewer 自行撤回並記為 learning）、3 條交 owner 判為範圍外**。若照單全收，那 1 條會讓一支能跑的 workflow 被改壞。
+
+**2. 禁止表演性同意。** 不寫「你說得對」「好建議」再開始查。要嘛先驗完再回，要嘛直接動手讓 diff 說話。回覆的價值在**證據與處置**，不在態度。
+
+**3. 一次一條，各自驗收。** 多條一起修會 fix-masking（見上節）；逐條修、逐條跑對應的驗證。
+
+**4. 範圍紀律：finding 指向既有內容時，不要在機械性 PR 裡夾帶政策變更。** 搬檔案的 PR 中 diff 顯示為「新增」是搬移的假象。這類 finding 的正解是**開自己的票、自己的受審主體**，不是搭便車通過。⚠️ 但要**明說缺口是實的**，否則「範圍外」會退化成「不修的藉口」。
+
+**5. ⛔ 每一條 finding 都要走到 thread resolved——`is_outdated` 不等於 `is_resolved`。**
+
+實測（#1481，本 skill 作者親身踩到）：11 條修完並推上去後，GitHub 顯示那些 thread 為 `is_outdated: true`（因為 code 變了），我據此宣稱「14 條全部 resolved」——**而 API 上 `is_resolved` 全是 `false`**。分支保護的「Require conversation resolution」因此持續擋著 merge，我卻把原因誤判成「缺 approving review」。逐條 resolve 後 PR 立刻可 merge。
+
+⇒ **三種處置各有自己的收尾，缺一不可**——`reject` 沒有 code fix，所以最容易被漏掉，而未 resolve 的 rejected thread 擋 merge 的力道與其他兩種**完全一樣**：
+
+| 處置 | 收尾 |
+|---|---|
+| `take` | 修 → 回覆處置 → **resolve** |
+| `reframe` | 依重新框定後的問題修 → 回覆說明改了什麼、為何不是原本那條 → **resolve** |
+| `reject` | **無 code fix** → 回覆**附證據**的駁回理由 → **resolve** |
+
+⇒ 只 resolve 你**真的處置過**的：三種處置都必須先有那一則回覆。沒修、也沒寫理由就順手清掉，等於用 resolve 把 finding 埋掉。
+
 ## 預設檔位（第 1 輪 vs 第 2 輪起）
 
 同一個缺陷的**第幾輪**修正，決定上節自審夠不夠：

@@ -26,7 +26,8 @@ Session 起手式 codified 為 **PreToolUse hook** (v2.8.0；#824 改經 `run-ho
 2. **Commit trailer block** — 所有 trailer 行（`Refs:` / `Self-Review-Pass-2:` / `Co-authored-by:`）須為**最底部單一連續段落、全 `Key: value` 格式**；夾空行或無冒號裸行會劈裂 block → git 丟棄上方行 → CI gate fail（燒過 #515/#522/#543）。多項目 / 純文件 commit 依 [`dev-rules.md` §P1](docs/internal/dev-rules.md) 改在 body prose 列 ID，**不寫 `Resolves` 裸行**
 3. **Worktree edit path** — 在 git worktree 內編輯須 anchor worktree 路徑；main repo 同時 checked out，用 main-repo 路徑會悄悄落到 main（燒過 #562）
 4. **`git add` 括號 glob** — bash `[01]` 只配 `0`/`1` 不配 `2`；任何括號 glob 後必跑 `git diff --cached --stat` 驗 staged set（燒過 #485 ~2h）
-5. **commit / push 前先觸發 `vibe-dev-rules` skill** — pre-commit hook 不攔所有 Vibe gate（如 `make lint-docs-mkdocs`）；skip-and-recover 浪費 2+ push cycle
+5. **⛔ 沒有本則訊息內的驗證輸出，就不准宣稱通過** — 「測試過了 / lint 乾淨 / build 成功 / 修好了」都是**主張**，每一個都要對得上**這一輪實際跑過**的指令與其輸出。上一輪的結果不算、部分檢查不算、「應該會過」不算、subagent 回報成功不算（自己看 diff）。⚠️ 本 repo 燒過的具體形狀是**管線遮蔽 exit code**——`cmd | head; echo $?` 讀到的是 `head` 的 rc，不是 `cmd` 的；要 rc 就別接管線（本 session 連燒 3 次）。跑不了就說跑不了：**「量不到」與「量了沒事」必須可區分**
+6. **commit / push 前先觸發 `vibe-dev-rules` skill** — pre-commit hook 不攔所有 Vibe gate（如 `make lint-docs-mkdocs`）；skip-and-recover 浪費 2+ push cycle
 
 ## Skill 體系
 
