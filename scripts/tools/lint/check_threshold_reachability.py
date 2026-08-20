@@ -1064,6 +1064,387 @@ def _defaults_artifacts() -> list[Path]:
             if rel not in _DEFAULTS_ARTIFACT_EXEMPT]
 
 
+# The platform-defaults contract, owned elsewhere. ⛔ Read, never re-stated: the
+# authority for what may sit at the top level of a `_defaults*` file is the Go
+# loader's type, the JSON Schema is its written form, and `check_confd_schema.py`
+# is the lint that already enforces it — on FOUR conf.d trees.
+_PLATFORM_DEFAULTS_SCHEMA_REL = "docs/schemas/platform-defaults.schema.json"
+_PLATFORM_DEFAULTS_SCHEMA = PROJECT_ROOT / _PLATFORM_DEFAULTS_SCHEMA_REL
+
+
+def _REJECTED_TOP_LEVEL_KEY(problem: str) -> bool:
+    """Does this ONE violation say "the schema will not accept that key name"?
+
+    ⛔ Named and separate so the question is asked in ONE place, about ONE
+    violation at a time. Two callers: the `MOST LIKELY` headline below, and the
+    wording tripwire in
+    `test_the_rename_headline_is_bound_to_the_artifact_it_diagnoses`. Nothing
+    else may re-derive this from a rendered message.
+
+    ⚠️ ONLY THE FIRST DISJUNCT IS REACHABLE TODAY, and both are probed by the
+    tripwire named above rather than left to be assumed. The schema has exactly
+    one `additionalProperties: false` — at the root — and it carries
+    `patternProperties`, so jsonschema words the failure as "does not match any
+    of the regexes". The second spelling is what it emits when those prefixes
+    are absent; it is kept because a schema edit could legitimately drop them,
+    and the tripwire probes it against a patternProperties-stripped copy so it
+    cannot rot into a branch nobody has ever run.
+
+    ⚠️ It matches jsonschema's WORDING, which is not a contract this repo owns:
+    a future release that rewords `additionalProperties` / `patternProperties`
+    failures makes this return False and the headline simply stops appearing.
+    That degrades to the ⚠️ branch, which is the safe direction — it never
+    invents a rename that did not happen. Stated here rather than fixed because
+    the fix is structured violations out of `check_confd_schema.py`, which is a
+    change to the sibling lint's contract and not this gate's to make.
+    """
+    return ("does not match any of the regexes" in problem
+            or "Additional properties are not allowed" in problem)
+
+
+def _assert_defaults_artifacts_match_schema(
+        rels: list[str],
+        read: "Callable[[str], str] | None" = None) -> int:
+    """Every TRACKED defaults artifact must satisfy platform-defaults.schema.json.
+
+    `read` defaults to reading the file at `PROJECT_ROOT / rel`, the same seam
+    shape `_assert_every_root_contributes` uses for `tracked_roots`: the real
+    run takes the real tree, and a hermetic caller hands in text. ⛔ The seam is
+    on the READER only — the schema, the judgement and the message are not
+    injectable, so a test cannot accidentally prove its own copy of them.
+
+    ⛔ WHY THIS LIVES HERE AND NOT IN THE EXEMPTION TABLES' NEIGHBOURHOOD (#1443).
+    The fifth floor can be switched off for a tree by one line in
+    `_DEFAULTS_ROOTS_MAY_BE_EMPTY`, and nothing checks whether that tree was
+    broken a minute earlier. Three attempts to check it were withdrawn, and the
+    reason they cannot work is recorded at the end of
+    `_assert_every_root_contributes`: at the moment somebody reaches for that
+    list the tree really is empty, so no predicate over today's content can
+    separate the two cases.
+
+    ⛔ THIS IS NOT A FOURTH ATTEMPT AT THAT QUESTION, and the difference is the
+    SUBJECT, not the cleverness. Those three asked "was this exemption added to
+    hide something" — unanswerable. This asks "is this file valid", which the
+    schema is the authority on and which `check_confd_schema.py` already asks
+    for the four trees its `--config-dir` list names. What it buys is that the
+    answer no longer depends on the exemption at all: the typo shape that starts
+    the attack (`defaults:` renamed to something that is not an allowed
+    top-level key) is a schema violation, and no line in either exemption table
+    reaches this check.
+
+    ⛔ IT VALIDATES THE WHOLE SCHEMA, not just the set of allowed top-level key
+    names, and that is wider than the sentence above needs. It is the same
+    validation `check_confd_schema.py` applies to its four trees, extended to
+    the rest — a `_custom_alerts` entry missing its `recipe` key is reported
+    here too. Stated because "renamed section guard" is how this reads at a
+    glance, and because the widening is only safe on the evidence that today's
+    tree is clean under it — measured as 0 violations across the 16 DOCUMENTS
+    the 17 tracked artifacts yield (one is comment-only and yields none; the
+    paragraph on the judged count below is the same correction, and this
+    sentence is where the stale "all 17" survived it once already).
+
+    ⛔⛔ WHAT IT ACTUALLY CATCHES IS THE TYPO SHAPE, AND THE SILENT SET IS FAR
+    BIGGER THAN TWO SPELLINGS. An earlier wording here named `^_state_` /
+    `^_routing` as the exceptions and said everything else is caught, which
+    invites the reader to conclude the silent set is two spellings wide.
+
+        SILENT: every top-level property the schema ALLOWS whose declared shape
+          a moved `defaults:` block does not actually VIOLATE, plus anything
+          matching an OPEN `patternProperties` prefix (`^_state_`, `^_routing`).
+          ⛔⛔ "HAS NO VALUE SHAPE" IS NOT THE CRITERION. `state_filters` declares
+          `"type": ["object", "null"]` — character for character what `defaults`
+          declares — and is SILENT, because a mapping satisfies it. Renaming
+          `defaults:` to `state_filters:` therefore carries the declarations
+          across with the content untouched and nothing says a word; of every
+          spelling in this list it is the most natural one. The criterion is
+          behavioural and was measured by probing the real validator, not by
+          reading the schema for value-shape keywords: that keyword list is
+          open, and enumerating it turns a legitimate schema improvement RED.
+          ⛔ NO COUNT HERE, deliberately, and an earlier revision
+          carried one in three places at once: the number moves the day anybody
+          shapes a property or adds one, and this file's own rule is that a
+          number restated in three places is a number that gets corrected in
+          one of them. ⚠️ The set is DERIVED and NOTHING ASSERTS IT. A test did,
+          by probing the real validator rather than looking for value-shape
+          keywords — the keyword list is open (`type`, `enum`, `const`,
+          `oneOf`, `$ref`, …) and enumerating it made a legitimate schema
+          improvement turn that assertion RED — but it was removed in #1443's
+          fourth round because its two partition assertions were true by
+          construction, and blind review escaped them in BOTH directions. What
+          stands in its place pins only the CAUGHT side; the measured cost is
+          in the disclosure block at the end of the test file.
+        CAUGHT: every name the schema does not allow AT ALL (`defalts`,
+          `defaultss`, `Defaults`), plus the properties a moved block genuinely
+          violates — today `_custom_alerts` and `optional_overrides`, both
+          declared as ARRAYS, which a mapping cannot satisfy. Those two are
+          pinned by name; see the pin's own docstring for why a pin and not a
+          derived partition.
+
+    ⛔ The cause is not this function. `platform-defaults.schema.json` is
+    essentially a top-level-key allowlist: 11 of its 15 properties carry only a
+    title and description, 2 more carry a bare `type`. That gap is #1414's
+    subject, not something to be patched here — and ⛔ NOT by adding a predicate
+    over the file's content, which is the direction #1434 withdrew three times.
+    ⇒ So state the honest claim: this witness defends against a MIS-SPELLING,
+    not against moving the block under another legal section name.
+
+      * `defaults:` → a name the schema does not allow: CAUGHT (15 of the 15
+        artifacts that have a `defaults:` section).
+      * `defaults:` → any name in the SILENT set above: NOT caught.
+        ⛔⛔ THIS IS A SECOND BYPASS OF #1443, NOT A HARMLESS EDGE. It costs the
+        same one line as the original, the declarations survive untouched, and
+        the fifth floor is what reports the resulting zero — so the exemption
+        finishes the job exactly as before.
+      * a SECOND `defaults:` key appended: NOT caught, and ⛔ THIS IS A THIRD
+        ONE, listed here rather than beside the harmless rows because an earlier
+        revision filed it with them. PyYAML is last-wins, so the block collapses
+        to `None`, the root reaches zero keys, the schema permits it
+        (`"type": ["object", "null"]`) — and the declarations are still sitting
+        in the first block, unread. Nothing in this repo checks for duplicate
+        YAML keys (no yamllint, no `check-yaml`), which is the cheapest thing
+        that would close it and is not this gate's job.
+      * the section DELETED outright: not caught here, and deliberately. THIS
+        one really is harmless in #1443's sense — it removes the declarations
+        rather than hiding them, so it is a visible deletion in the diff.
+      * nested values under `defaults:`: legal, and left legal. The schema says
+        so in as many words, and `_walk_defaults_keys` counts every level, so a
+        re-nested key never zeroes a root in the first place.
+    ⚠️ The CAUGHT rows are pinned by
+    `test_the_witness_catches_a_renamed_section_and_the_pinned_members_stay_caught`.
+    The SILENT rows are WRITTEN, NOT ASSERTED.
+
+    ⛔ NOT RESTRICTED TO CONF.D TREES, and the input is NOT narrowed at all.
+    `_is_defaults_artifact` matches a BASENAME anywhere in the index
+    (deliberately wider than the loader, so `_defaults-multidb.yaml` is
+    reached), while this schema describes a conf.d file. EVERY tracked artifact
+    is judged; what the conf.d question changes is the MESSAGE, not whether the
+    file is looked at. ⛔ The reasoning lives ONCE, beside the `outside`
+    computation further down. Do not restate it here.
+
+    ⛔ THE TRACKED SET, not `_defaults_artifacts()` — and the reason given here
+    used to be wrong. It said `_DEFAULTS_ARTIFACT_EXEMPT` "exists for files
+    whose BYTES must not change"; that phrasing comes from the `missing` arm's
+    message, while the table's OWN comment says it is for "a fixture that
+    deliberately encodes the defective shape (to characterise the loader, say)".
+    Those are two different uses and this witness affects them differently: a
+    byte-frozen golden is schema-valid and unaffected, whereas a deliberately
+    defective one is now impossible to hold ANYWHERE this gate can see: the
+    witness judges every tracked artifact, so such a fixture is a violation
+    inside a conf.d tree and a violation carrying a scope caveat outside one.
+    ⇒ That cost is accepted, not hidden, and the reason is the
+    alternative: letting an artifact exemption also buy schema invisibility
+    turns the one-line disarm this whole function exists to close into a
+    two-line one. If such a fixture is ever actually needed, it needs a
+    deliberate mechanism (a Go-side testdata path this scan does not reach, or
+    an explicit second table), not a quiet reuse of this one.
+    """
+    # ⛔ NOTHING IS FILTERED OUT HERE. `rels` is used whole; the conf.d question
+    # is answered in the message, at the `outside` computation below. A
+    # `[rel for rel in rels if conf_d_root(rel) is None]` binding stood here,
+    # left over from the withdrawn refusal, and was read by nobody.
+    if not rels:
+        raise _GateViolation(
+            "the schema witness was handed no defaults artifacts at "
+            "all. It is called with the TRACKED defaults scan, which "
+            "`_DEFAULTS_ARTIFACT_FLOOR` has already refused to let fall below "
+            f"{_DEFAULTS_ARTIFACT_FLOOR}, so an empty list here means the "
+            "wiring changed rather than the tree. A "
+            "check that validates nothing passes perfectly. (#1443)")
+
+    lint_dir = str(Path(__file__).resolve().parent)
+    if lint_dir not in sys.path:
+        sys.path.insert(0, lint_dir)
+    # ⛔ Every import here stays INSIDE the function, following this module's own
+    # convention (`yaml` is local to each face). Two of them have a reason
+    # beyond convention: `check_threshold_registry.py` imports this module for
+    # `KNOWN_UNWIRED` (itself from inside a function, so it inherits nothing
+    # either way), and `--help` has to keep working in an env without
+    # jsonschema — the sibling lint's docstring records the same choice. ⚠️ Without jsonschema, `--help` still
+    # works and `--ci` does not: the DEFAULTS-TIER faces are built by
+    # `_defaults_faces`, which calls this. (An earlier wording said "every face
+    # is built by `_defaults_faces`" — false: `run_check` also builds the
+    # declared and chart faces and its own supply/demand extractors. The
+    # conclusion survives, the reason did not.)
+    import json  # noqa: E402
+    import yaml  # noqa: E402
+    try:
+        import jsonschema  # noqa: E402
+    except ImportError as exc:  # pragma: no cover — env, not tree
+        # ⛔ RuntimeError, NOT `_GateViolation`. `main()` turns the latter into
+        # EXIT_VIOLATION under a banner that says "1 defaults-tier floor breach"
+        # — a statement about the TREE — while a missing dependency is a
+        # statement about the ENVIRONMENT, which this module already has an exit
+        # code for. Blind review measured the first spelling changing `--ci`
+        # from rc=2 to rc=1 and blaming the tree for a broken venv.
+        raise RuntimeError(
+            f"the schema witness needs jsonschema and it is not importable "
+            f"({exc}). Install it (`pip install jsonschema`); the pre-commit "
+            "hook carries it in `additional_dependencies` and CI's Python "
+            "Tests job installs it. ⛔ Do not make this check optional — a "
+            "witness that disappears with a missing dependency is the failure "
+            "mode it was written against. (#1443)") from exc
+    import check_confd_schema  # noqa: E402 — sibling lint: the ONE judgement
+
+    if read is None:
+        def read(rel: str) -> str:
+            return (PROJECT_ROOT / rel).read_text(encoding="utf-8")
+
+    schema = json.loads(_PLATFORM_DEFAULTS_SCHEMA.read_text(encoding="utf-8"))
+    problems: list[str] = []
+    # ⛔ The offending files are COLLECTED, not re-derived from the message
+    # strings. The first spelling counted them with `p.split(":")[1]`, which is
+    # the same "downstream re-guesses the structure from a rendered string"
+    # this module's own walk docstring forbids — and it raised IndexError the
+    # first time a caller supplied a message without a colon in it.
+    offenders: set[str] = set()
+    # ⛔ PER FILE, for the same reason `offenders` is collected rather than
+    # re-derived from the message strings: the `MOST LIKELY` headline must speak
+    # about ONE artifact's own violation. Asking "is there a conf.d offender"
+    # and "does any problem anywhere look like a rejected key" of two different
+    # populations lets an unrelated out-of-conf.d file arm the headline for a
+    # conf.d file whose only fault is a value shape.
+    # ⚠️ Binding it per file does not make the phrase test robust to jsonschema
+    # rewording its messages; that fragility is unchanged.
+    renamed_shape: set[str] = set()
+    judged = 0
+    for rel in rels:
+        # ⛔ Per FILE, and the file is named on every path out. Without this the
+        # sibling's `_CallerError` discipline was lost: a malformed artifact
+        # escaped as a bare parser traceback saying `<unicode string>`, and a
+        # YAML 1.1 boolean key (`on:`) escaped as a jsonschema `TypeError` —
+        # in both cases `rel` was in hand and not in the message.
+        try:
+            docs = list(yaml.safe_load_all(read(rel)))
+        except Exception as exc:  # noqa: BLE001 — see below
+            # ⛔ `Exception`, matching `_read_artifact_keys` one screen up, and
+            # NOT the `(OSError, yaml.YAMLError)` pair this started as. Blind
+            # review fed a non-UTF-8 artifact: `UnicodeDecodeError` is a
+            # `ValueError`, so it escaped as a bare traceback naming
+            # `<unicode string>` — under a comment claiming the file is named on
+            # every path out. A repo whose comments are largely CJK will meet
+            # that one.
+            problems.append(f"ERROR: {rel}: cannot read/parse YAML: {exc}")
+            offenders.add(rel)
+            continue
+        for doc in docs:
+            judged += 1
+            try:
+                found = check_confd_schema.defaults_doc_violations(
+                    rel, doc, schema, jsonschema)
+            except TypeError as exc:
+                # ⛔ Translate ONLY when the document really has a non-string
+                # key. `TypeError` also arrives when the sibling's signature
+                # drifts, and the first spelling translated that into "quote
+                # your YAML key" — a confident wrong diagnosis on every
+                # artifact at once (blind review, measured). Anything else
+                # re-raises and `main()` reports it as a caller error.
+                if isinstance(doc, dict) and all(
+                        isinstance(k, str) for k in doc):
+                    raise
+                found = [
+                    f"ERROR: {rel}: not schema-checkable ({exc}). A non-string "
+                    "top-level key — YAML 1.1 reads bare `on`/`off`/`yes`/`no` "
+                    "as booleans and an unquoted date as a date — cannot be "
+                    "matched against the schema's key patterns. Quote it."]
+            if found:
+                offenders.add(rel)
+                if any(_REJECTED_TOP_LEVEL_KEY(p) for p in found):
+                    renamed_shape.add(rel)
+            problems += found
+
+    # ⛔ RETURNS DOCUMENTS JUDGED, and the strong floor on it lives at the CALL
+    # SITE rather than here. The distinction between "files handed in" and
+    # "documents judged" is not hypothetical: one tracked artifact is
+    # comment-only, so `safe_load_all` yields ZERO documents for it and the loop
+    # body never runs — which is why "0 violations across all 17 artifacts" was
+    # a claim about 17 files of which 16 were ever looked at.
+    # ⛔ A floor of `_DEFAULTS_ARTIFACT_FLOOR` *inside* this function would be
+    # measuring whatever population the caller passed, and every hermetic caller
+    # passes a handful — so it would either be vacuous or force tests to pad
+    # their fixtures to satisfy it, which is a floor measuring the test. The
+    # real scan's size is known only where the real scan is made.
+    # ⛔ PROBLEMS FIRST. An artifact that fails to parse contributes a problem
+    # and NO judged document, so ordering the vacuity guard ahead of this
+    # replaced a message naming the broken file with one saying "zero documents"
+    # — the reader was blamed for the tree.
+    # ⛔ The conf.d question is answered in the MESSAGE, not by dropping or
+    # refusing the file. Two earlier shapes were measured wrong: a silent
+    # filter (no report at all) and a hard refusal (a legal Go-side
+    # `testdata/_defaults.yaml` failed the whole gate with no in-repo remedy).
+    # What survives is the narrow true claim — this schema describes a conf.d
+    # file, so a violation outside one may mean the contract does not apply.
+    outside = sorted({rel for rel in offenders if conf_d_root(rel) is None})
+    if not problems:
+        if judged == 0:
+            raise _GateViolation(
+                f"the schema witness judged ZERO documents from {len(rels)} "
+                "conf.d artifact(s) — every one of them yielded no YAML at "
+                "all, and none of them failed to parse either. That is what a "
+                "reader returning empty text looks like, and it is "
+                "indistinguishable from a clean tree in every assertion that "
+                "only checks this check stays quiet. (#1443)")
+        return judged
+
+    raise _GateViolation(
+        f"{len(problems)} violation(s) across {len(offenders)} defaults "
+        f"artifact(s) do not satisfy {_PLATFORM_DEFAULTS_SCHEMA_REL}:\n  "
+        + "\n  ".join(problems)
+        # ⛔ CONDITIONAL, AND THE CONDITION IS ABOUT ONE FILE. It applies when a
+        # conf.d artifact's OWN violation is about a top-level key the schema
+        # will not accept. Printed unconditionally — or gated on a question
+        # asked of every file at once — it tells a maintainer whose value SHAPE
+        # is wrong to "restore the section name" of a block they never lost.
+        + ("\n  MOST LIKELY: a `defaults:` section was mis-spelled — a typo, "
+           "or a rename that was not carried through. The declarations are "
+           "still in the file and nothing is reading them. Restore the "
+           "section name.\n"
+           if (renamed_shape - set(outside)) else
+           # ⛔ NO UNIVERSAL CLAIM HERE. This branch fires for a file that could
+           # not be PARSED and for one whose top-level key is not a string — in
+           # neither was a single key ever looked at. Say what was observed, not
+           # what it implies about keys. ⚠️ The list below is illustrative, not
+           # a closed set.
+           "\n  ⚠️ NOT diagnosed as a renamed `defaults:` section: no violation "
+           "in a conf.d artifact has the shape of a top-level key this schema "
+           "refuses. A value-shape error, a file that could not be parsed at "
+           "all, and offenders that sit only outside a conf.d tree all land "
+           "here — in none of them would that headline name a section the file "
+           "ever had.\n")
+        + ("" if not outside else
+           f"  ⚠️ {outside} sit OUTSIDE every `conf.d` tree. This schema "
+           "describes a conf.d file, so the finding above may mean the "
+           "contract does not apply to them rather than that they are wrong — "
+           "decide which, and if it is the former say so in this gate rather "
+           "than moving the file to satisfy a scan. (#1443 / #1434)\n")
+        # ⛔ FORBID THE CHEAP WRONG FIX WITHOUT PUBLISHING IT. One blind round
+        # asked for this warning (a maintainer who "fixes" the red by moving
+        # the block under a legal section name leaves the thresholds unread);
+        # the next round pointed out that the first spelling handed over the
+        # bypass WITH A COUNT of how many names work, under a message that
+        # closes every legitimate door. Both are right, because the line
+        # carries two questions. The prohibition stays; the enumeration and the
+        # number go, and live in the docstring where somebody designing the
+        # guard reads them rather than somebody under pressure to go green.
+        + "  ⛔ DO NOT move the block under a different top-level section name. "
+        "Some of them are legal here and this check would go quiet while the "
+        "thresholds stay unread — which is the defect being reported, not a "
+        "fix for it.\n"
+        "  OR: a genuinely new top-level section is being introduced. Then the "
+        "schema is what has to learn about it, in its own commit, naming the "
+        "Go loader side — `docs/schemas/platform-defaults.schema.json` is the "
+        "written form of a contract owned by "
+        "`components/threshold-exporter/app/pkg/config`, not a list this gate "
+        "keeps. ⛔ That is the ONLY reason to touch the schema. Widening it to "
+        "make this message go away is not local: `check_confd_schema.py` "
+        "validates four shipped conf.d trees against the same file, so a key "
+        "added to quiet this also stops being reported on the trees customers "
+        "read.\n"
+        "  ⛔ AND AN EXEMPTION IS NOT AVAILABLE. Nothing in "
+        "_DEFAULTS_ROOTS_MAY_BE_EMPTY or _DEFAULTS_ARTIFACT_EXEMPT reaches "
+        "this check, on purpose — this is the witness that stays when the "
+        "fifth floor has been switched off for a tree. (#1443)")
+
+
 def _tracked_confd_roots(paths: list[str] | None = None) -> set[str]:
     """Every conf.d root the INDEX knows about — the fifth floor's universe.
 
@@ -1439,6 +1820,34 @@ def _defaults_faces() -> tuple[dict[str, dict[str, KeyInfo]], dict[str, dict[str
     _assert_shipped_roots_intact(by_root)
     _assert_every_root_contributes(all_by_root)
     _assert_keys_floor(generators, artifacts)
+    # ⛔ LAST, and the position was chosen by measurement rather than by
+    # argument (#1443). Running it FIRST also catches the attack — measured,
+    # same 7 roots — but it then speaks INSTEAD of the four floors on the four
+    # roots they already cover, and those messages carry warnings this one does
+    # not (the shipped floor's "⛔ LOWERING THESE NUMBERS IS NOT A REMEDY", the
+    # fifth floor's "adding this root to the list is NOT the remedy"). Last
+    # means a maintainer meets the most specific diagnosis available, and this
+    # witness speaks exactly when every floor has stayed silent — which is the
+    # state #1443 is about.
+    # ⛔ Being last does NOT make it exemption-dependent. The floors above can
+    # be silenced for a tree; silencing them lets control REACH this line, it
+    # does not skip it. Neither exemption table is read here.
+    #
+    # ⛔ THE FLOOR ON ITS RETURN VALUE IS HERE because this is the only place
+    # the population is the real scan. Inside the witness it would be measuring
+    # whatever a caller passed. `_DEFAULTS_ARTIFACT_FLOOR` is hand-maintained
+    # for a different purpose, so it is independent of anything counted here —
+    # and what it catches is a reader that silently stops reading, which every
+    # assertion that only checks the witness stays QUIET is blind to.
+    judged = _assert_defaults_artifacts_match_schema(scanned)
+    if judged < _DEFAULTS_ARTIFACT_FLOOR:
+        raise _GateViolation(
+            f"the schema witness judged only {judged} document(s) out of "
+            f"{len(scanned)} tracked defaults artifact(s), below the floor of "
+            f"{_DEFAULTS_ARTIFACT_FLOOR}. Artifacts that yield no YAML document "
+            "at all (comment-only placeholders) are invisible to it, so a drop "
+            "here means the reader stopped reading rather than the tree got "
+            "cleaner. (#1443)")
     return generators, artifacts
 
 
@@ -1647,6 +2056,13 @@ def _assert_every_root_contributes(
     floors and the placement check all still see it — it simply has no root to
     be a member of. Measured at 0 such artifacts today, and `git log` finds
     none in this repo's history either.
+    ⚠️ AND ONE MORE READER NOW LOOKS AT IT (#1443): the schema witness at the
+    end of `_defaults_faces` judges EVERY tracked artifact, one with no conf.d
+    root included. It does NOT refuse such a file — a legal one reaches a clean
+    run exactly as before, and only a SCHEMA VIOLATION in it is reported, then
+    with a caveat saying the contract may not apply outside a conf.d tree. So
+    the sentence above stays true about the FLOORS, and the rest of the gate is
+    no longer entirely silent about such a file.
 
     `tracked_roots` defaults to the real index scan, the same way `run_check`
     defaults its inputs to the real extractors; hermetic callers inject a set.
