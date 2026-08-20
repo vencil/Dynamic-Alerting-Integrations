@@ -124,7 +124,7 @@ graph LR
 | 檢查 | 工具 | 說明 | 違規時會擋下嗎 |
 |------|------|------|------|
 | YAML Schema | `da-tools validate-config` | 租戶 key 合法性 | **只有 WARN**（未知 key 報 `unknown key ... not in defaults`，exit 0）。⛔ **值**完全不驗——`mysql_connections: 'not-a-number'` 或負數是 5 pass / 0 warn 的純綠 |
-| Routing Guardrails | `da-tools validate-config` | group_wait 5s–5m、group_interval 5s–5m、repeat_interval 1m–72h | **只有 WARN**，且會**自動 clamp 成邊界值後照常產出**（3 個參數 × 超上界／低下界／無法解析＝9 種情境全部 exit 0，加 `--strict` 也一樣） |
+| Routing Guardrails | `da-tools validate-config` | group_wait 5s–5m、group_interval 5s–5m、repeat_interval 1m–72h | **只有 WARN**，且**照常產出**（3 個參數 × 超上界／低下界／無法解析＝9 種情境全部 exit 0）。⚠️ 替代值分兩種、不是一種：超上界／低下界會 **clamp 成邊界值**，而**無法解析**（如 `repeat_interval: banana`）拿的是**平台預設值**、不是邊界值（`_lib_validation.py` 的 `validate_and_clamp`）。⚠️ **不要照這句加 `--strict`**：那個旗標是 v2.9.0 之後才進 `validate-config` 的，**你手上這顆映像不接受**——實測 `rc=2`、`unrecognized arguments: --strict`、stdout 零位元組。等到映像有它之後也不影響本列：`--strict` 管的是 domain policy，這 9 種情境仍然 exit 0（原始碼實測） |
 | Domain Policy | `da-tools evaluate-policy` | 業務域約束（如金融禁止 Slack） | ⚠️ **`da-tools init` 產出的 pre-commit hook 與 CI 都沒有呼叫這支命令**。同一套規則以 `policy_dsl` 的形式內嵌在 `validate-config` 裡，但它需要 `_defaults.yaml` 有 `_policies:` 區段，而 `init` 產出的那份沒有 ⇒ 新 repo 會直接印 `No _policies defined — skipped` |
 | Custom Rule Lint | `da-tools lint` | 自訂規則禁止列表檢查 | ⚠️ 不在 pre-commit hook 裡。產出的 GitHub workflow 有這一步，但它被 `if [ -d "rule-packs/custom" ]` 包住，而 `init` **不建立 `rule-packs/`** ⇒ 在新 repo 是 no-op，直到你自己建立那個目錄為止 |
 
@@ -133,7 +133,7 @@ graph LR
 exit code**。閾值被 clamp、租戶 key 打錯字、閾值填成字串——這些都會安靜地通過 commit 與 CI。
 
 ```bash
-# 本地驗證（與 pre-commit hook 相同的兩支命令）
+# 本地驗證（與 pre-commit hook 相同的命令；第二支是 §2.3 的 generate-routes）
 # ⚠️ 只有 FAIL 會讓 exit code 非零。上表標成「只有 WARN」的情況一律 exit 0，
 #    而 pre-commit 只在 hook 失敗時才把 hook 的輸出印出來——所以那些 WARN
 #    在 `git commit` 當下你一個字都看不到。要看到它們，自己跑一次：
@@ -400,7 +400,7 @@ git push origin feature/lower-connections
 > da-tools diagnose <tenant> --config-dir conf.d/ --show-inheritance
 > ```
 >
-> 輸出的 `declared` 段就是「你目前放棄了哪些保護」。完整的三類 key 判讀見[租戶快速入門指南](../getting-started/for-tenants.md)。
+> 輸出的 `declared` 段就是「你目前放棄了哪些保護」。⚠️ **你手上這顆映像（v2.9.0）的 `diagnose` 沒有這個段**——實測輸出只有 `chain` / `resolved` / `profile_name`，而且 rc=0、不會有任何提示。下一版映像起才有。完整的三類 key 判讀見[租戶快速入門指南](../getting-started/for-tenants.md)。
 
 ## 6. 多團隊 Sharded 模式
 
@@ -428,13 +428,14 @@ issue；在那之前，可行的替代是在你自己的 CI 裡把各團隊的 `
 | 問題 | 診斷 | 解法 |
 |------|------|------|
 | `da-tools: command not found`（rc 127） | `da-tools` 不是可安裝的執行檔，只是映像裡的進入點 | 加上 `docker run` 前綴或自建 alias，見本頁開頭的「Docker 使用模式」一節；取得映像見 [Migration Toolkit 安裝指南](../migration-toolkit-installation.md) |
-| CI validate 失敗 | `da-tools validate-config --config-dir conf.d/` | 每個非 PASS 的檢查會附 `-> Suggested action:` 與 `-> See:`；加 `--json` 可得同樣資訊的機器可讀版。⚠️ 若 `conf.d/` 裡有 **YAML 語法錯**，本工具目前是丟出 Python traceback 而不是報告（兩種模式皆然），此時直接看 traceback 末尾指的檔名與行號（[#1448](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1448)） |
+| CI validate 失敗 | `da-tools validate-config --config-dir conf.d/` | 每個非 PASS 的檢查會附 `-> Suggested action:` 與 `-> See:`；加 `--json` 可得同樣資訊的機器可讀版。⚠️ **你手上這顆映像（v2.9.0）**只要 `conf.d/` 裡有**任何一個它處理不下去的檔案**，就是丟出 Python traceback 而不是報告（兩種模式皆然、stdout 零位元組）。⛔ **不要照著 traceback 找檔名**：只有 YAML 語法錯那一種的末尾會指出檔名與行號，其餘（存成非 UTF-8、頂層不是 mapping、`tenants:` 底下全被註解掉…）指的是 codec、位元組位移或**我們映像裡的路徑**——這裡不列窮舉，因為每次都會有沒列到的第 N 種。可靠的做法是二分法：把 `conf.d/` 的檔案分兩半各跑一次，縮到單一檔案為止。[#1448](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1448) 已修，**下一版映像起**會照常印出報告，並在 `yaml_syntax` 那一列指名讀不到的檔案 |
+| 報告叫我「Remove unknown keys」，但那些 key 我還在用 | `da-tools validate-config --config-dir conf.d/` 的 `schema` 那一列 | ⛔ **先不要刪**。若你的 `_defaults.yaml` **沒有 `defaults:` 區塊**、是 `defaults: {}`，**或這棵樹根本沒有 `_defaults.yaml`**（最後這一種最常見），平台就沒有宣告任何 key，於是**每一個**租戶 override 都會被報成 `unknown key`——問題在平台側，不是你的租戶檔打錯字。⚠️ 上述三種形狀**不包含**寫成 `defaults:` 這個裸 key（值為 null）的那一種：你手上這顆映像對它是丟 `AttributeError`、rc=1、stdout 零位元組，走的是上一列、根本印不出任何建議（同樣到不了這一列的還有存成非 UTF-8 、頂層不是 mapping 的 `_defaults.yaml`）。**上述那三種形狀**才會走到這一列，而**你手上這顆映像（v2.9.0）對這三種印的建議是錯的**（照做會刪掉正在生效的閾值，且該次執行 exit 0）。修法是補上 `defaults:` 區塊——**這棵樹沒有 `_defaults.yaml` 就建一個**，被清空的才是「補回去」。下一版映像起這一列會改印「⛔ Do NOT remove the keys named above」（[#1448](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1448)） |
 | 驗證全 PASS，但你改的東西沒生效 | `da-tools validate-config --config-dir conf.d/`（自己跑，不要只看 commit 時的綠勾） | 多數問題只會產生 **WARN**，而 WARN 不影響 exit code、也不會在 `git commit` 時顯示（pre-commit 只印失敗 hook 的輸出）。逐項對照 §2.2 的「違規時會擋下嗎」欄 |
 | ConfigMap 更新後 exporter 沒反應 | 確認 `reloadInterval` 設定、檢查 exporter logs | `kubectl logs -l app=threshold-exporter -n monitoring` |
 | Alertmanager 路由不生效 | `da-tools explain-route --tenant <name> --config-dir conf.d/` | 檢查四層合併順序 |
 | Kustomize build 失敗，訊息含 `is not in or below` | **不是 symlink 壞掉**——conf.d 的檔案在 `kustomize/base/` 之外，預設 load-restrictor 拒收。加旗標重跑（見 §3.1） | `kustomize build --load-restrictor LoadRestrictionsNone kustomize/overlays/prod` |
 | Kustomize build 失敗，訊息含 `no such file` | 這才是連結本身的問題（例如指向不存在的租戶檔） | `ls -la kustomize/base/` |
-| 配置全綠、告警卻從來不觸發 | `da-tools diagnose <tenant> --config-dir conf.d/ --show-inheritance` | 該 key 若出現在 `declared` 段，代表平台認得它但不主張值——**你不填就是靜默且無錯誤訊息**，填上你自己 baseline 校準出的值即可 |
+| 配置全綠、告警卻從來不觸發 | `da-tools diagnose <tenant> --config-dir conf.d/ --show-inheritance` | 該 key 若出現在 `declared` 段，代表平台認得它但不主張值（⚠️ v2.9.0 映像不印該段，見 §5）——**你不填就是靜默且無錯誤訊息**，填上你自己 baseline 校準出的值即可 |
 
 ## 相關文件
 
