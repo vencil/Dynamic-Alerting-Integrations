@@ -614,6 +614,20 @@ jobs:
             --reference-sha "${REF_SHA}" \
             --out .build/workload-effect-mw.json
 
+      # ⛔ 語言：本 step summary 的內容**刻意維持中文**，owner 已拍板（PR #1475）。
+      #
+      # 本 repo 其他 workflow 的 step summary 是英文（`bench-record.yaml` 的
+      # `### Bench Record — …`、`bench-gate-pr.yaml` 的 `Paired reference: … — status …`），
+      # 而 `workflow_dispatch` 的 input description 也已依同一慣例改成英文（14/14 樣本）。
+      # **這裡是刻意的例外，不是漏改。**
+      #
+      # 理由：下面這些不是 UI 標籤，是**逐字斟酌過的告誡句** —— 「這兩個是估計，不是
+      # 已證明的因果分解」「兩個對照都是人工的，本 workflow 不會自動比對」「SELF-TEST
+      # 執行，下面的比值不是量測結果」。這幾句正是本工具前幾輪被 review 反覆抓出過度
+      # 宣稱之後才收斂到的措辭，硬翻有實際的精確度損失，而它們的讀者就是 owner。
+      #
+      # ⇒ 日後 review 若再 flag 這一區的語言（很可能會），這是**已決事項**：回覆時指向
+      #    這段註解，不要重開。要改的話是 owner 主動要求，並且逐句對照翻、不整段重寫。
       - name: Render step summary
         if: always()
         env:
