@@ -277,6 +277,14 @@ main 的**持續退化**由 nightly trend watchdog 守望（下節），不靠 P
 gh workflow run bench-workload-effect.yaml --repo vencil/Dynamic-Alerting-Integrations -f bench_re='MergePartialConfigs_1000'
 ```
 
+⚠️ **`bench_re` 的成本會咬人，而且咬人的輸入長得很正常。** Go 的 `-bench` 是**未錨定的 RE2**：`.` 或 `...` 會匹配**全部 41 支**。2026-08-19 有一次 dispatch 就是填了 `...`，跑滿當時的 60 分上限後 timeout，只留下半套結果（`W/R` 有、`M/W` 沒有）。
+
+因此 job 開頭有一道**成本閘門**：用 `go test -list` **問工具鏈**實際選中幾支（不用 shell regex 猜——那與 Go 的 RE2 不是同一套），印出預估耗時，並在超出預算時擋下。成本模型是兩個實測點且互相吻合（**約 1 分鐘/支/次交錯**：41 支 → 42.2 分/次、2 支 → 2.4 分/次）；`timeout-minutes` 依此定為 **120**（全選 × 2 次交錯 ≈ 84 分）。
+
+- **空的 `bench_re` 會被擋下**（rc=1）——留空原本會落到 `bench_interleave.sh` 的預設集合，那是「安靜地跑了你沒要求的東西」。
+- **選不到任何 benchmark 也擋下**——兩側都只剩 canary，比值毫無意義。
+- ⛔ **目前真正在發揮作用的是「第一分鐘印出預估 + warning」**：實測最多 41 支 ⇒ 預估上限 84 分 < 預算 100 分，所以那條硬擋**現在打不到**，它是給 benchmark 數量成長之後用的後備。（寫出來是因為「宣稱有一道擋著、實際上打不到」比沒有那道更糟。）
+
 ⛔ **讀數字之前先做兩個對照**：(1) `bench_interleave.sh` 把**同一個** canary 執行檔跑進兩側，所以 `BenchmarkControlCanary*` 的真值恆為 1.000——不接近 0% 就是這次執行本身髒了；(2) `(W/R) × (M/W)` 應該對得上當夜 `bench-paired.json` 的比值（要扣掉「夜跑的 M 是那一夜的 HEAD、本 job 的 M 是現在」這個合法差異）。**一個沒有對照的量測不是量測。**
 
 ⚠️ **overlay 的已知弱點與它的守衛。** `*bench_test.go` 由 `find` **推導**（新增／改名／刪除自動跟上），但 helper 檔是一份**列舉**（`overlay_helpers` 輸入），而列舉錯了的失效模式本來是**靜默的**：漏掉的 helper 會綁到參考版本的版本，`W` 就變成混血樹而畫面上看不出來。
