@@ -724,7 +724,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "348272a8838ce290ebbb1f9b38f8167c50b78cb9652d8e96f59e06525b40d474",
+ "source_digest": "1b1259f9ae5152b57aac29f269d21fd18d237d52f1f68efabdc2c5cb3cd42292",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1185,6 +1185,7 @@
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/ops/test_git_check_lock.py",
    "tests/ops/test_nightly_scan_matrix_drift.py",
+   "tests/ops/test_validate_config.py",
    "tests/ops/test_wrapped_path_references.py",
    "tests/rulepacks/test_vm_alert_parity.py"
   ],
@@ -2794,6 +2795,9 @@
   ],
   "tools/portal/src/interactive/tools/_common/sim/alert-engine.js": [
    "tests/lint/test_counterexample_coverage.py"
+  ],
+  "tools/portal/src/interactive/tools/cicd-setup-wizard.jsx": [
+   "tests/ops/test_generated_ci_artifacts.py"
   ],
   "tools/portal/src/interactive/tools/cicd-setup-wizard/utils": [
    "tests/ops/test_generated_ci_artifacts.py"

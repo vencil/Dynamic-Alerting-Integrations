@@ -390,14 +390,24 @@ function StepReview({ config }) {
                   to name because the wizard cannot see the target repo. */}
               {(config.ci === 'gitlab' || config.ci === 'both') && (
                 <li>
-                  {/* ⛔ The include MUST be shown as two lines. It used to be
-                      inlined in this sentence as `include: - local: …`, which
-                      is not valid YAML — `yaml.safe_load` rejects it with
-                      "sequence entries are not allowed here". A reader who
-                      pasted the sentence's snippet into their root
-                      `.gitlab-ci.yml` got a file GitLab cannot parse, i.e. the
-                      whole pipeline stops loading: strictly worse than the
-                      unwired state this step exists to fix. */}
+                  {/* ⛔ The include MUST be rendered as a two-line block, never
+                      folded into the sentence. The key and its first sequence
+                      entry on one line is not valid YAML — `yaml.safe_load`
+                      rejects it with "sequence entries are not allowed here" —
+                      so a reader who pasted the folded form into their root
+                      `.gitlab-ci.yml` got a file GitLab cannot parse: the whole
+                      pipeline stops loading, strictly worse than the unwired
+                      state this step exists to fix.
+                      NOTE: this comment deliberately does NOT spell the folded
+                      form out. `test_every_include_snippet_we_show_a_customer_
+                      parses_as_yaml` scans this file for it, and an example
+                      inside a warning about the example is indistinguishable
+                      from the real thing — the same trap that made the nightly
+                      matrix comment pull a whole module into its scan.
+                      NOTE: no status glyphs in this comment either — the
+                      axe-lite-static hook scans JSX source for them and does
+                      not exclude comments, so one here fails the commit with a
+                      finding that points at an unrelated line. */}
                   {t('GitLab：根目錄 .gitlab-ci.yml 是 GitLab 唯一會自動載入的路徑。init 會產生它，內容就是下面這兩行；若你的 repo 已有這個檔案，init 不會改動它，請自行把這兩行貼進去（縮排照抄），否則 pipeline 不會執行。',
                      'GitLab: the repo-root .gitlab-ci.yml is the only path GitLab auto-loads. init generates it with exactly the two lines below; if your repo already has one, init leaves it untouched — paste those two lines in yourself (keep the indentation) or the pipeline never runs.')}
                   <pre className="mt-1 bg-[color:var(--da-color-surface-hover)] p-4 rounded-lg text-xs font-mono border border-[color:var(--da-color-surface-border)] text-[color:var(--da-color-fg)]">

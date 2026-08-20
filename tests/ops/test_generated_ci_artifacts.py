@@ -452,6 +452,65 @@ GL_COMBOS = [c for c in MATRIX if c[0] in _EMITS_GITLAB]
 
 _GH_WORKFLOW = Path(".github") / "workflows" / "dynamic-alerting.yaml"
 _GL_PIPELINE = Path(".gitlab-ci.d") / "dynamic-alerting.yml"
+
+# Every GitLab key that can carry shell, per GitLab's own schema. At module
+# scope so the guard and its control cannot drift onto different key sets.
+_SHELL_KEYS = ("before_script", "script", "after_script")
+
+
+def _shell_text(body: dict) -> str:
+    """All shell in a GitLab job body, as one string.
+
+    ⛔ GitLab accepts these keys as a SCALAR as well as a list, and iterating a
+    `str` yields CHARACTERS — `body.get(key, [])` on `script: apk add git`
+    joins to `a p k   a d d   g i t`, so a substring test for `config-diff`
+    passes and `\\bgit\\b` matches nothing. A job re-introduced in scalar form
+    would walk straight past the assertions that exist to stop exactly that
+    (#1358). Normalising in ONE place that both the guard and its control call
+    is what makes the bypass unrepresentable rather than merely fixed at the
+    one call site a reviewer happened to look at.
+    """
+    def _lines(value):
+        if value is None:
+            return []
+        return value if isinstance(value, list) else [value]
+
+    return " ".join(
+        str(line) for key in _SHELL_KEYS for line in _lines(body.get(key))
+    )
+
+
+def test_the_shell_join_is_not_defeated_by_a_scalar_script() -> None:
+    """⛔ Control for `_shell_text`. Without it the GitLab guard is bypassable.
+
+    Measured on the version that used `body.get(key, [])`: a job written with
+    a SCALAR `script:` slipped past both the `config-diff` and the `\\bgit\\b`
+    assertions. Reverting the normaliser scored `9 passed` — the repository
+    had NO control over that fix at all. This is it.
+
+    Both forms carry the same two forbidden tokens, so a normaliser that
+    silently drops a form shows up here as a green that should be red.
+    """
+    scalar = {"script": "apk add --no-cache git && config-diff --old-dir /tmp"}
+    listed = {"script": ["apk add --no-cache git",
+                         "config-diff --old-dir /tmp"]}
+    for label, body in (("scalar", scalar), ("list", listed)):
+        text = _shell_text(body)
+        assert "config-diff" in text, (
+            f"a {label} `script:` hid `config-diff` from the join — the "
+            f"GitLab guard would pass a re-introduced job.\n{text!r}")
+        assert re.search(r"\bgit\b", text), (
+            f"a {label} `script:` hid `git` from the join.\n{text!r}")
+
+    # Anti-vacuity: the join must still be able to say NO, or the assertions
+    # above would hold for any implementation returning a constant containing
+    # both tokens.
+    assert "config-diff" not in _shell_text({"script": ["echo hi"]})
+    assert _shell_text({}) == ""
+    # `before_script` / `after_script` too — narrowing the key set is the other
+    # way this guard has been defeated before.
+    assert "git" in _shell_text({"before_script": "apk add git"})
+    assert "git" in _shell_text({"after_script": ["apk add git"]})
 # #1357 — the root shell. Written ONLY when the target repo has no root
 # `.gitlab-ci.yml`; every fixture here initialises into an empty directory, so
 # in this file it is unconditional for the gitlab-emitting combinations. The
@@ -4280,29 +4339,18 @@ def test_generate_stage_body_is_pinned_on_both_legs(generated, ci, deploy) -> No
         # `_READ_KEYS` above enumerates these from GitLab's schema for exactly
         # this reason — do not narrow this tuple to what the generator
         # happens to emit today.
-        _SHELL_KEYS = ("before_script", "script", "after_script")
+        # ⛔ `_SHELL_KEYS` now lives at module scope beside `_shell_text`, so
+        # this guard and its control cannot drift onto different key sets.
         for name, body in pipe.items():
             if not isinstance(body, dict):
                 continue
             if not any(k in body for k in _SHELL_KEYS):
                 continue
-            # ⛔ Normalise before joining. GitLab accepts `script:` as a
-            # SCALAR as well as a list, and iterating a str yields
-            # CHARACTERS — `apk add git` would join to `a p k   a d d   g i t`,
-            # so `"config-diff" not in script` passes and `\bgit\b` finds
-            # nothing. A job re-introduced in scalar form walks past both
-            # assertions, which is the exact silent re-entry this block exists
-            # to stop. (Same class as the quote-style and flag-abbreviation
-            # bypasses fixed elsewhere in this PR: the guard was reading a
-            # SPELLING, not a value.)
-            def _lines(value):
-                if value is None:
-                    return []
-                return value if isinstance(value, list) else [value]
-
-            script = " ".join(
-                str(line) for key in _SHELL_KEYS for line in _lines(body.get(key))
-            )
+            # ⛔ Scalar-safe. `_shell_text`'s docstring records why
+            # `body.get(key, [])` was a bypass, and
+            # `test_the_shell_join_is_not_defeated_by_a_scalar_script` is the
+            # control that keeps it honest.
+            script = _shell_text(body)
             assert "config-diff" not in script, (
                 f"GitLab job {name!r} runs `config-diff` again. On this leg "
                 "the baseline cannot be taken — the image has no git — so the "
@@ -5756,6 +5804,61 @@ def test_declared_variable_values_match_their_source(tmp_path, ci, deploy) -> No
     )
 
 
+def test_every_include_snippet_we_show_a_customer_parses_as_yaml() -> None:
+    """⛔ An `include:` we tell a customer to paste must be valid YAML.
+
+    The portal wizard used to describe the root shell inline as
+    `include: - local: .gitlab-ci.d/dynamic-alerting.yml` — one line, and NOT
+    valid YAML: `yaml.safe_load` rejects it with "sequence entries are not
+    allowed here". A reader who pasted it into their root `.gitlab-ci.yml`
+    got a file GitLab cannot parse, so their ENTIRE pipeline stops loading —
+    strictly worse than the unwired state the instruction exists to fix.
+
+    ⛔ Scanned across BOTH customer-facing surfaces, because the CLI and the
+    wizard are two producers of the same instruction and only one of them was
+    wrong. Reverting the wizard fix left the suite green (no control existed);
+    this is that control, written at the level of the CLASS rather than the
+    one line that was reported.
+
+    The check is derived, not a denylist: find every `include:` that is
+    followed by `- local:` ON THE SAME LINE, which is precisely the shape YAML
+    rejects. A correctly rendered two-line block cannot match.
+    """
+    # ⛔ `[^\S\n]` (blank-but-not-newline), NOT `\s`. `\s` matches newlines, so
+    # `include:\s*-\s*local:` also matches the CORRECT two-line block — the
+    # guard would then flag the very shape it exists to require. Caught by the
+    # anti-vacuity assertions below, which is what they are for.
+    same_line = re.compile(r"include:[^\S\n]*-[^\S\n]*local:")
+    surfaces = [
+        _REPO_ROOT / "tools/portal/src/interactive/tools/cicd-setup-wizard.jsx",
+        _REPO_ROOT / "scripts/tools/ops/init_project.py",
+    ]
+    offenders = {}
+    for path in surfaces:
+        if not path.is_file():
+            continue
+        hits = [ln.strip()[:140]
+                for ln in path.read_text(encoding="utf-8").splitlines()
+                if same_line.search(ln)]
+        if hits:
+            offenders[path.name] = hits
+    assert not offenders, (
+        "a single-line `include: - local: ...` is shown to customers, and it "
+        "is not valid YAML — pasting it stops their whole pipeline from "
+        f"loading. Render it as two lines.\n{offenders}")
+
+    # Anti-vacuity: the detector must actually fire on the bad shape, or the
+    # assertion above is satisfied by a regex that never matches anything.
+    assert same_line.search("include: - local: .gitlab-ci.d/x.yml")
+    assert not same_line.search("include:\n  - local: .gitlab-ci.d/x.yml")
+    # And the shape it rejects really is invalid YAML, while the two-line form
+    # really is valid — the premise this whole guard rests on.
+    with pytest.raises(yaml.YAMLError):
+        yaml.safe_load("include: - local: .gitlab-ci.d/x.yml\n")
+    assert yaml.safe_load("include:\n  - local: .gitlab-ci.d/x.yml\n") == {
+        "include": [{"local": ".gitlab-ci.d/x.yml"}]}
+
+
 @_needs_node
 @pytest.mark.parametrize("ci,deploy", MATRIX)
 def test_portal_file_tree_matches_what_init_writes(
@@ -5854,6 +5957,17 @@ class TestGitHubLegDefectsFoundInRoundSeven:
         assert job['container']['image'] == ip.ARGOCD_CLI_IMAGE, job['container']
         # ⛔ 兩條腿共用同一個 pin：分成兩份就是下一次版本漂移。
         assert ip._GITLAB_APPLY_IMAGES['argocd'][1] == ip.ARGOCD_CLI_IMAGE
+        # ⛔ 該映像以 `USER 999` 結尾，而 container job 的步驟仍要碰 runner
+        # 建立的掛載（步驟腳本、`_temp/_runner_file_commands/*`，uid 1001）
+        # ——uid 不合正是 container job 的標準 EACCES，GitHub 自己的
+        # container-job 文件因此建議不要用非 root 的 `USER`。
+        # ⚠️ 這是**產物性質的 pin**，不是執行期驗證：本 repo 沒有 GitHub
+        # runner 可跑，所以它擋的是「有人把這個選項悄悄拿掉」，不是「它真的
+        # 解決了 EACCES」。拿掉 `options` 之後整套原本全綠（實測 64 passed），
+        # 這條就是那個缺掉的控制項。
+        assert 'root' in str(job['container'].get('options', '')), (
+            'argocd apply job 的 container 沒有以可寫入工作區的使用者執行'
+            f'——該映像預設 UID 999。\n{job["container"]}')
 
     @pytest.mark.parametrize('deploy', ['kustomize', 'helm', 'argocd'])
     def test_the_only_writable_mount_runs_as_the_runner(self, deploy):

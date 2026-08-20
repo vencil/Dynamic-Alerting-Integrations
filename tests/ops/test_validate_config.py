@@ -267,6 +267,45 @@ class TestVersionsCheck:
             "the versions check reported FAIL — if that is real drift, fix the "
             f"drift; if it is a missing file, fix the path.\n{result}")
 
+    def test_a_missing_bump_docs_degrades_instead_of_leaking_interpreter_output(
+            self, monkeypatch, tmp_path):
+        """⛔ The tool is genuinely ABSENT in the published da-tools image.
+
+        `build.sh` flattens the tool set into `/opt/da-tools/` and
+        `bump_docs.py` is not in the shipped list at all, so no path resolves
+        there. The failure mode that shipped for years is subtle:
+        `subprocess.run([sys.executable, "<missing>.py"])` does NOT raise
+        `FileNotFoundError` — the INTERPRETER exists, so it starts, prints
+        `can't open file ...` to stderr and exits 2. The `except
+        FileNotFoundError` branch is therefore unreachable, and a caller sees
+        a bare interpreter error dressed up as `[FAIL] versions` (#1461).
+
+        ⛔ Reverting the pre-flight existence check leaves the whole suite
+        green — measured: the guard was added with no control, and disabling
+        it scored `44 passed, 3 skipped`. This is that missing control.
+
+        Asserts the SHAPE of a degraded answer, not the wording: not FAIL,
+        no interpreter noise, and an actionable command the reader can run.
+        """
+        monkeypatch.setattr(vc, "_THIS_DIR", tmp_path / "ops")
+        result = vc.check_versions()
+        detail = " ".join(str(v) for v in result.values())
+
+        assert result["status"] != vc.FAIL, (
+            "a tool that is legitimately absent from this installation was "
+            f"reported as a FAILED check.\n{result}")
+        for leak in ("can't open file", "No such file or directory",
+                     "Traceback"):
+            assert leak not in detail, (
+                f"raw interpreter/OS output leaked into the check result "
+                f"({leak!r}) — that is #1461's shape.\n{result}")
+        assert "bump_docs.py" in detail, (
+            f"the degraded answer does not say WHAT is missing.\n{result}")
+        assert "--check" in detail, (
+            "the degraded answer gives the reader no command to run. It must "
+            "not depend on `make` either — the image has no Makefile.\n"
+            f"{result}")
+
 
 class TestIntegration:
     """Integration test with real config dir."""
