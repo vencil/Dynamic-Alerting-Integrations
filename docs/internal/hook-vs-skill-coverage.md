@@ -132,7 +132,7 @@ lang: zh
 
 ---
 
-## 5. 本地 skills（7）— 🧠 advisory，AI 自覺觸發
+## 5. 本地 skills（8）— 🧠 advisory，AI 自覺觸發
 
 | Skill | 涵蓋 | owner 性質 | 與 hook 關係 |
 |---|---|---|---|
@@ -142,6 +142,7 @@ lang: zh
 | `vibe-subagent-review` | IaC-aware 兩階段 review（code spec→quality / IaC blast-radius） | advisory（cross-file 語義層，機械 SAST 抓不到） | **補集 #448**：機械層單檔 SAST 由 #448；本 skill 顧跨檔 cascade（TRK-305） |
 | `vibe-release` | 六線版號 release 收尾 SOP（pre-tag / project-face / milestone-link） | advisory（release 紀律；docker+Trivy 部分已被 #474 機械化進 pre-tag，**Rule 4 未發布 draft advisory 檢查已被 #1295 機械化為 `draft-advisory-check`** — 但只在本地 `make pre-tag` 路徑，直接 push tag 仍繞過） | **延伸**：#474 把 Layer 1/2 機械化，本 skill 系統化 Layer 3 discipline（TRK-306） |
 | `vibe-brainstorm` | 設計階段 Socratic ideation（MVP / trade-off / defer-trigger + 外審） | advisory（純設計流程） | 無對應 hook（設計階段，無 code 可機械驗）（TRK-308） |
+| `vibe-converge` | 多輪修正的收斂協議（decidability gate / 跨輪交接契約 / 面積預算 / 三條停止規則） | advisory（同一缺陷第 2 輪起觸發） | **無對應 hook，刻意的**：`make converge-status` 只觀測不擋，不進 CI / pre-commit（#1457 剛刪掉六支「守衛的守衛」）（TRK-360） |
 | `vibe-security-audit` | 週期性深度安全稽核 harness（Recon→平行 Hunt→對抗式 Validate→Synthesize，跑隔離 worktree 快照） | advisory（新信任邊界 GA 前 / incident 後 / 季度觸發） | **補集**：與 diff-scoped `/security-review` 互補、**不進 CI**（#1001） |
 
 > 優先級仲裁見 [CLAUDE.md §Skill 優先級宣告](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/CLAUDE.md)（TRK-301）：衝突時 `vibe-*` supersede 環境層 generic skill。

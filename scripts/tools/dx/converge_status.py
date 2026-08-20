@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
-"""Read a multi-round fix chain's ROUNDS.jsonl ledger and judge whether it is
-converging (TRK-360; protocol lives in the ``vibe-converge`` skill).
+"""Judge whether a multi-round fix chain is converging, from its ROUNDS.jsonl ledger.
+
+TRK-360; the protocol itself lives in the ``vibe-converge`` skill. The first line
+above is deliberately one whole sentence: generate_tool_map.py publishes only a
+docstring's FIRST LINE into docs/internal/tool-map{,.en}.md, so a wrapped opening
+sentence ships to the tool map truncated mid-clause.
 
     python3 scripts/tools/dx/converge_status.py --scope dev/1443
     make converge-status SCOPE=dev/1443
@@ -168,6 +172,16 @@ def parse_ledger(path):
     return records, unparsable, violations
 
 
+def _is_valid_count(value):
+    """True when `value` is a non-negative int (and not a bool).
+
+    `check_record` rejects on it and `Round._count` sums on it. One predicate,
+    because two copies of "reject bool, reject non-int, reject negative" can
+    drift into a value that is reported as a violation and still summed.
+    """
+    return not isinstance(value, bool) and isinstance(value, int) and value >= 0
+
+
 def check_record(rec):
     """Format-contract checks for one record. Returns a list of messages."""
     out = []
@@ -185,10 +199,12 @@ def check_record(rec):
             value = rec.get(field)
             if value is None:
                 continue
+            if _is_valid_count(value):
+                continue
             if isinstance(value, bool) or not isinstance(value, int):
                 out.append(f"{where}: subject '{field}' must be an integer, got "
                            f"{value!r}")
-            elif value < 0:
+            else:
                 out.append(f"{where}: subject '{field}' must not be negative, "
                            f"got {value!r}")
     tier = rec.get("tier")
@@ -236,9 +252,7 @@ class Round(object):
         typo.
         """
         value = record.get(field)
-        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-            return 0
-        return value
+        return value if _is_valid_count(value) else 0
 
     @property
     def insertions(self):

@@ -141,6 +141,35 @@ def test_clean_verified_finding_passes():
 
 
 # ============================================================
+# _is_valid_count — the one predicate both call sites share
+# ============================================================
+
+
+@pytest.mark.parametrize("value,expected", [
+    (0, True), (7, True),
+    (-1, False),            # negative
+    (True, False),          # bool is an int in Python; must not count as one
+    (False, False),
+    ("7", False), (7.0, False), (None, False),
+])
+def test_is_valid_count(value, expected):
+    assert cs._is_valid_count(value) is expected
+
+
+def test_check_record_and_round_count_agree_on_every_case():
+    """The drift this predicate exists to prevent: reported bad, still summed."""
+    for value in (0, 7, -1, True, False, "7", 7.0, None):
+        record = rec(round=1, kind="subject", subject="s", insertions=value,
+                     _where="t:1")
+        reported = any("insertions" in m for m in cs.check_record(record))
+        summed = cs.Round._count(record, "insertions")
+        if reported:
+            assert summed == 0, f"{value!r} reported as bad but still summed"
+        else:
+            assert summed == (value or 0)
+
+
+# ============================================================
 # build_rounds — folding
 # ============================================================
 
@@ -227,6 +256,18 @@ def test_unreviewed_fix_clears_once_a_later_round_reviews_the_fix():
 def test_ledger_gap_fires_when_a_round_number_is_missing():
     blocking, _ = cs.evaluate(rounds_of([subject(1, "s"), subject(3, "s")]))
     assert any("LEDGER-GAP" in m for m in blocking)
+
+
+def test_ledger_opened_mid_chain_is_not_a_gap():
+    """Rounds 5-6 of a chain whose earlier rounds predate the ledger are legal.
+
+    LEDGER-GAP checks contiguity, NOT that numbering starts at 1 -- the tool
+    docstring says so, and nothing in the file separates "opened mid-chain" from
+    "lost the first four rounds". Pinned so a later tightening of `expected` in
+    evaluate() has to be a deliberate, reviewed change rather than a silent one.
+    """
+    blocking, _ = cs.evaluate(rounds_of([subject(5, "s"), subject(6, "s")]))
+    assert not any("LEDGER-GAP" in m for m in blocking)
 
 
 def test_converged_needs_two_consecutive_quiet_rounds():
