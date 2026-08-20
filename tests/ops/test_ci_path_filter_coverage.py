@@ -2054,6 +2054,22 @@ TRACED_INDIRECT_INPUTS = {
     # trigger is now deliberate (see the note beside the entry in
     # validate.yaml). The entry is present there on purpose — do not "restore
     # consistency" by deleting it.
+    # ⛔ …and RETRACTING the reasoning is not the same as enrolling the entry.
+    # These three filter entries were added with only the COVERAGE end pinned
+    # (`test_the_version_check_filter_covers_the_trees_bump_docs_now_reads`
+    # fnmatches string literals and never touches the filesystem), so renaming
+    # or deleting any of the inputs left a `validate.yaml` line naming nothing
+    # while the whole suite stayed green — measured: deleting
+    # `components/da-portal/QUICKSTART.md` scored `2 passed`. That is the
+    # skip-as-green gap this module exists for, reappearing inside the fix for
+    # it. Enrolled here so BOTH ends are asserted.
+    ("validate.yaml", "validate", "CHANGELOG.md"),
+    ("validate.yaml", "validate", "components/da-portal/QUICKSTART.md"),
+    # A representative of the portal tree: `tools/portal/**` was added for the
+    # ~113 JSX/JS files the version gate reads, and a tree with no tracked
+    # member is the same dead line.
+    ("validate.yaml", "validate",
+     "tools/portal/src/interactive/tools/glossary.jsx"),
     ("validate.yaml", "validate", "README.md"),
     ("validate.yaml", "validate", "README.en.md"),
     ("validate.yaml", "validate", "CLAUDE.md"),
