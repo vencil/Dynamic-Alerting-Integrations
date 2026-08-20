@@ -253,7 +253,8 @@
    "tests/lint/test_check_commit_scope_doc.py"
   ],
   "scripts/tools/lint/check_confd_schema.py": [
-   "tests/lint/test_check_confd_schema.py"
+   "tests/lint/test_check_confd_schema.py",
+   "tests/lint/test_check_threshold_reachability.py"
   ],
   "scripts/tools/lint/check_cross_ns_url_consistency.py": [
    "tests/lint/test_check_cross_ns_url_consistency.py"
@@ -723,7 +724,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "02bdce02aae175d9a04e280a2ace5246cd5b801b9ccdc979b23382b79322539e",
+ "source_digest": "348272a8838ce290ebbb1f9b38f8167c50b78cb9652d8e96f59e06525b40d474",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1513,7 +1514,8 @@
   ],
   "docs/schemas/platform-defaults.schema.json": [
    "tests/helm/test_optional_overrides_render.py",
-   "tests/lint/test_check_confd_schema.py"
+   "tests/lint/test_check_confd_schema.py",
+   "tests/lint/test_check_threshold_reachability.py"
   ],
   "docs/schemas/tenant-config.schema.json": [
    "tests/dx/test_sync_schema.py",
@@ -2167,6 +2169,7 @@
    "tests/dx/test_line_ending_policy.py",
    "tests/lint/test_check_cross_ns_url_consistency.py",
    "tests/lint/test_check_lint_toolchain_fit.py",
+   "tests/lint/test_check_threshold_reachability.py",
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/shared/test_bilingual_help_contract.py",
    "tests/shared/test_property_tools.py"
@@ -2551,6 +2554,9 @@
   "tests/golden/fixtures/l0-only/conf.d": [
    "tests/lint/test_check_threshold_reachability.py"
   ],
+  "tests/golden/fixtures/l0-only/conf.d/_defaults.yaml": [
+   "tests/lint/test_check_threshold_reachability.py"
+  ],
   "tests/helm": [
    "tests/dx/test_verify_diff.py",
    "tests/helm/test_optional_overrides_render.py"
@@ -2639,6 +2645,7 @@
    "tests/shared/test_actionlint_pin_parity.py"
   ],
   "tests/ops/test_guard_defaults_scopes.py": [
+   "tests/lint/test_check_threshold_reachability.py",
    "tests/ops/test_ci_aggregate_gate_contract.py"
   ],
   "tests/ops/test_init_project.py": [
@@ -2655,6 +2662,9 @@
   ],
   "tests/ops/test_secret_scan_gate.py": [
    "tests/ops/test_ci_aggregate_gate_contract.py"
+  ],
+  "tests/ops/test_wrapped_path_references.py": [
+   "tests/lint/test_check_threshold_reachability.py"
   ],
   "tests/preview/test_promtool_pin_parity.py": [
    "tests/shared/test_federation_audit_mtail.py",
@@ -2749,6 +2759,7 @@
   ],
   "tools/portal": [
    "tests/dx/test_bump_docs.py",
+   "tests/lint/test_check_threshold_reachability.py",
    "tests/ops/test_ci_path_filter_coverage.py"
   ],
   "tools/portal/build.mjs": [
