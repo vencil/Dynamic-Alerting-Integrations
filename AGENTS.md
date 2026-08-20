@@ -22,7 +22,7 @@ make pr-preflight                # ⛔ PR merge 前必跑
 
 ## 不可協商的六條
 
-這六條是被實際燒過 ≥2 次才升為 always-on 的，其餘規範在下一節索引：
+這七條是被實際燒過 ≥2 次才升為 always-on 的，其餘規範在下一節索引：
 
 1. **⛔ 禁止直推 `main`** — 一律開 branch → PR → owner 同意後 merge。pre-push hook 會擋。
 2. **回應語言** — 面向使用者的散文一律**繁體中文**。
@@ -30,6 +30,7 @@ make pr-preflight                # ⛔ PR merge 前必跑
 4. **禁止對掛載路徑用 `sed -i`** — 會截斷缺少 EOF 換行的檔案。用讀取 + 改寫，或 pipe。
 5. **`git add` 用括號 glob 後必驗** — bash 的 `[01]` 只配 `0`/`1` 不配 `2`；跑 `git diff --cached --stat` 確認 staged set。
 6. **Doc-as-Code** — 影響 API / schema / CLI / 計數的變更，須同步 `CHANGELOG.md` + `CLAUDE.md` + `README.md`。
+7. **⛔ 沒有本則訊息內的驗證輸出，就不准宣稱通過** — 「測試過了」「lint 乾淨」「build 成功」「修好了」都是**主張**。每個主張要對得上一條**這一輪實際跑過**的指令與它的輸出：上一輪的結果不算、部分檢查不算、「應該會過」不算、agent 回報成功不算（要自己看 diff）。跑不了就說跑不了——**「量不到」與「量了沒事」必須可區分**。
 
 ## 規範在哪裡（索引，非複本）
 
