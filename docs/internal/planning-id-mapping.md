@@ -194,7 +194,7 @@ SOT 在 [`dx-tooling-backlog.md`](dx-tooling-backlog.md)。
 | TRK-359 | [#1439](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1439) | [ADR-032](../adr/032-paired-interleaved-bench-measurement.md) 實作 — 夜跑效能監測改成對交錯量測（三段：量測管線 → 監測器改寫 → 遷移與驗收）；票內收斂六題待決與三個 ADR 未寫的阻塞點 | — |
 | TRK-360 | [#1478](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1478) | 多輪修正收斂協議 —— `vibe-converge` skill + `dev/<scope>/ROUNDS.jsonl` 帳本 + `make converge-status`（decidability gate / 跨輪交接契約 / 面積預算 / 三條停止規則；由 #1411→#1457 六輪鏈的實測導出：三版述詞對同一個資訊上不可判的問題全掛、每輪插入:刪除 43:1〜53:1、作者自審 0 條）（**無 issue，直接以 PR 落地**） | — |
 | TRK-361 | [#1481](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1481) | 跨 AI agent 中性 SSOT — `agents/{skills,roles}/` + `AGENTS.md`（AAIF 標準）成為單一真相源，`.claude/**` 降為 `gen_agent_adapters.py` 的生成物 + drift gate；用複製而非 symlink（Windows host 實測 symlink 壞，#1457）（**無 issue，直接以 PR 落地**） | — |
-| TRK-362 | — | 吸收 superpowers 兩項缺口能力 —— 完成宣稱鐵律升為 always-on 規則（`AGENTS.md` / `CLAUDE.md`）、收 review 紀律進 `vibe-subagent-review`（take/reframe/reject + 修→回覆→resolve 三件套）；刻意不新增第 9 支 skill（**無 issue，直接以 PR 落地**） | — |
+| TRK-362 | [#1485](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1485) | 吸收 superpowers 兩項缺口能力 —— 完成宣稱鐵律升為 always-on 規則（`AGENTS.md` / `CLAUDE.md`）、收 review 紀律進 `vibe-subagent-review`（take/reframe/reject + 修→回覆→resolve 三件套）；刻意不新增第 9 支 skill（**無 issue，直接以 PR 落地**） | — |
 
 ## 不在 mapping 範圍
 

@@ -20,7 +20,7 @@ make lint-docs                   # 文件 lint
 make pr-preflight                # ⛔ PR merge 前必跑
 ```
 
-## 不可協商的六條
+## 不可協商的七條
 
 這七條是被實際燒過 ≥2 次才升為 always-on 的，其餘規範在下一節索引：
 

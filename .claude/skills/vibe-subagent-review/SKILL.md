@@ -63,12 +63,19 @@ description: IaC-aware 兩階段 review — code 走 spec→quality、IaC 走 bl
 
 **4. 範圍紀律：finding 指向既有內容時，不要在機械性 PR 裡夾帶政策變更。** 搬檔案的 PR 中 diff 顯示為「新增」是搬移的假象。這類 finding 的正解是**開自己的票、自己的受審主體**，不是搭便車通過。⚠️ 但要**明說缺口是實的**，否則「範圍外」會退化成「不修的藉口」。
 
-**5. ⛔ 修完要把 thread 標成 resolved——`is_outdated` 不等於 `is_resolved`。**
+**5. ⛔ 每一條 finding 都要走到 thread resolved——`is_outdated` 不等於 `is_resolved`。**
 
 實測（#1481，本 skill 作者親身踩到）：11 條修完並推上去後，GitHub 顯示那些 thread 為 `is_outdated: true`（因為 code 變了），我據此宣稱「14 條全部 resolved」——**而 API 上 `is_resolved` 全是 `false`**。分支保護的「Require conversation resolution」因此持續擋著 merge，我卻把原因誤判成「缺 approving review」。逐條 resolve 後 PR 立刻可 merge。
 
-⇒ 收尾三件事缺一不可：**修 → 回覆處置 → resolve thread**。只做前兩件，PR 不會動。
-⇒ 只 resolve 你**真的處置過**的；沒修也沒說理由的不要順手清掉。
+⇒ **三種處置各有自己的收尾，缺一不可**——`reject` 沒有 code fix，所以最容易被漏掉，而未 resolve 的 rejected thread 擋 merge 的力道與其他兩種**完全一樣**：
+
+| 處置 | 收尾 |
+|---|---|
+| `take` | 修 → 回覆處置 → **resolve** |
+| `reframe` | 依重新框定後的問題修 → 回覆說明改了什麼、為何不是原本那條 → **resolve** |
+| `reject` | **無 code fix** → 回覆**附證據**的駁回理由 → **resolve** |
+
+⇒ 只 resolve 你**真的處置過**的：三種處置都必須先有那一則回覆。沒修、也沒寫理由就順手清掉，等於用 resolve 把 finding 埋掉。
 
 ## 預設檔位（第 1 輪 vs 第 2 輪起）
 
