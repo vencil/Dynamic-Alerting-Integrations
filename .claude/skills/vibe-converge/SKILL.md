@@ -7,18 +7,7 @@ description: 多輪修正的收斂協議 —— decidability gate（開工前先
 
 `vibe-subagent-review` 決定**一輪**怎麼審；本 skill 決定**輪與輪之間**傳什麼、什麼時候該停、什麼時候該換題目。
 
-## 為什麼存在（本 repo 實測，非通則）
-
-2026-08 對 `_DEFAULTS_ROOTS_MAY_BE_EMPTY` 的修正鏈 [#1411](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1411) → #1415 → #1434 → #1442 → [#1443](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1443) → #1457 燒掉六輪。量出來的四件事：
-
-| 現象 | 量測 | 出處 |
-|---|---|---|
-| 對一個**資訊上不可判**的問題連下三版述詞 | v1／v2／v3 全掛，#1443 逐字結論「不是判別式寫得不夠好，是資訊上不可能」 | #1443 §已被實測打死的方向 |
-| 每輪面積單調成長 | 插入:刪除 = #1415 `2882:67`、#1442 `788:41`、#1457 `1018:19` ⇒ 每輪淨增約 1000 行**沒被任何 lens 掃過**的新面 | `git show --shortstat` |
-| 修法 commit 比被審 commit 大且無人審 | 814 行 → 1336 行（**1.6×**），第二輪補審它才找到整輪唯一 Critical | #1431 |
-| 作者自審產能為 0 | 「合計 8 位、59+ 條 finding、61 個單點變異，**作者自審 0 條**」 | #1457 PR 正文 |
-
-⛔ **不是**「語言太囉嗦」。同一批文本量過：證據標記（實測/量測/實跑/rc=0/passed/變異…）**1,002 次** vs 推測標記（可能/建議/應該/推測…）**123 次**，8:1 偏向證據，且「似乎／疑似／理論上／或許」**各 0 次**。這個 repo 的用語紀律不是瓶頸——**問錯題目**與**面積成長**才是。
+> 每條規則的推導、量測、以及**已被打死的判準版本**在 [`references/derivation.md`](references/derivation.md)（不自動載入，需要時才讀）。規則本身在下面，足以照著做。
 
 ## 第 0 步 — decidability gate（每輪開工前，30 秒）
 
@@ -32,9 +21,9 @@ description: 多輪修正的收斂協議 —— decidability gate（開工前先
 - 一樣 ⇒ ⛔ **停。不做第 N 版述詞，換受審主體。** 記一筆 `decidability` 進帳本。
 - 不一樣 ⇒ 繼續，並把「憑什麼分得出」寫進帳本。
 
-> **#1443 的實例**：問題是「這筆豁免正不正當」，而檢查時唯一的證據是**掩蓋之後的狀態**——加豁免的那一刻那棵樹確實是空的。合法與缺陷同構 ⇒ 三版全掛。#1457 成立不是因為第四版更聰明，是**換了受審主體**（改問「這個檔合不合 schema」，權威是 `docs/schemas/platform-defaults.schema.json`）。
+> **同構長什麼樣（錨例，用來校準這個判斷）**：問題是「這筆豁免正不正當」，而檢查時唯一的證據是**掩蓋之後的狀態**——加豁免的那一刻，那棵樹確實是空的。合法與缺陷在該證據下同構 ⇒ 三版述詞全掛。破法不是第四版更聰明，是**換受審主體**：改問「這個檔合不合 schema」，權威是一份 schema 檔。（案號與三版死法：derivation §2、§5）
 
-**換受審主體的三個方向**（優先序）：換到有權威 oracle 的那一面（schema／loader／編譯器）→ 換到可重生的量測產物（「這棵 root 今天實際貢獻幾個 key」）→ 開票交 owner 拍板。
+**換受審主體的三個方向**（優先序）：換到有權威 oracle 的那一面（schema／loader／編譯器）→ 換到可重生的量測產物 → 開票交 owner 拍板。
 
 ## 跨輪交接契約
 
@@ -46,13 +35,13 @@ description: 多輪修正的收斂協議 —— decidability gate（開工前先
 | `question`，status=`open` | 一句話，且寫明「誰能回答／要什麼證據才能收掉」 |
 | `dead-end` | 判準 + **怎麼死的（實測）**。這是負面知識庫，**每輪必帶**，它比 finding 更值錢 |
 
-**證據分級（借 caveman 的 labeled evidence；離線永不自稱 verified）**：
+**證據分級（離線永不自稱 verified）**：
 
 - `verified` — **本輪實際跑過**，帳本裡有指令與輸出。
 - `inferred` — 讀 code 推導、沒跑。**本輪內可用，不跨輪**；要跨輪就先把它跑成 `verified`。
 - `speculative` — 禁止進帳本。想寫它，代表你該去跑一次。
 
-⛔ **不跨輪**：上一輪的完整 commit body、review 對話、修法過程敘事、「我覺得可能還有」。近 40 顆 commit 的 body 合計 **641,785 字元**（單顆最大 95,733）——那是取回用的檔案，不是交接用的訊息。
+⛔ **不跨輪**：上一輪的完整 commit body、review 對話、修法過程敘事、「我覺得可能還有」。那些是**取回用的檔案，不是交接用的訊息**——同一條原則也適用於本 skill 自己，所以出處在 `references/`，不在這裡。
 
 ## 面積預算
 
@@ -60,7 +49,7 @@ description: 多輪修正的收斂協議 —— decidability gate（開工前先
 
 - 插入:刪除 **> 10:1** 且插入 > 300 行、而該輪不是新增測試檔 ⇒ 記一筆 `surface-debt`，並回答一句：**這輪是在換主體，還是在加第 N 版述詞？**
 - 是後者 ⇒ 回第 0 步。
-- ⚠️ 這是**訊號不是禁令**。新增測試檔天然高比值（#1429 `2508:2`），且**加測試是唯一應該讓面積成長的東西**。
+- ⚠️ 這是**訊號不是禁令**。**加測試是唯一應該讓面積成長的東西**。（三輪實測比值與閾值餘裕：derivation §2、§4）
 
 ## 三條停止規則（`make converge-status` 會替你判）
 
@@ -68,9 +57,11 @@ description: 多輪修正的收斂協議 —— decidability gate（開工前先
 2. **CHANGE-SUBJECT** — 同一受審主體上 `dead-end` ≥ 2 ⇒ ⛔ **禁止第 3 版述詞**，強制走第 0 步換主體或開票。
 3. **UNREVIEWED-FIX** — 某輪的修法面積 ≥ 被審面積，而該修法**未在任何後續輪次成為受審主體** ⇒ 這輪不算完成。「已經審過一輪」永遠是指審過**那一版**。
 
+（三個門檻各自的依據與已知不確定性：derivation §4。）
+
 ## 帳本：`dev/<scope>/ROUNDS.jsonl`
 
-append-only，一行一筆 JSON（沿用 `PROGRESS.jsonl` 的慣例：不重寫、不刪行、不換檔名）。
+append-only，一行一筆 JSON（沿用 `PROGRESS.jsonl` 的慣例：不重寫、不刪行、不換檔名）。**必須是 UTF-8**——Windows shell 預設寫本地 codepage，工具會對那一行報 `not UTF-8` 並 exit 2。
 
 ```text
 {"ts":"<date -u +%FT%TZ>","round":1,"kind":"subject","subject":"<受審主體>","insertions":814,"deletions":12,"reviewer":"blind|self"}
@@ -80,18 +71,20 @@ append-only，一行一筆 JSON（沿用 `PROGRESS.jsonl` 的慣例：不重寫�
 {"ts":"...","round":1,"kind":"question","status":"open","claim":"<問題>","evidence":"<要什麼證據才能收掉>"}
 ```
 
-`kind=finding` 且 `tier=verified`、以及 `kind=dead-end`，**`evidence` 不得為空**。
+`kind=finding` 且 `tier=verified`、以及 `kind=dead-end`，**`evidence` 不得為空**；`subject` 的 `insertions` / `deletions` 若寫了就必須是非負整數。
 
 觀測：`make converge-status SCOPE=dev/<scope>`。
 
 ## ⚠️ 誠實邊界（本協議守不到的）
 
-- 帳本是**自陳的**。`make converge-status` 檢查的是**格式**（verified 有沒有附 evidence、輪次有沒有斷）——**不檢查那段 evidence 是不是真的跑過**。沒有任何機制能從離線文字證明一次執行發生過；這正是 tier 標籤只能靠紀律的原因。
-- 本工具**不進 CI、不進 pre-commit**、不擋任何東西。這是刻意的：#1457 剛刪掉六支「守衛的守衛」，對 review 流程再造一支 gate 會重演同一個病。owner 分類 = 🧠 **skill-advised**（見 [`hook-vs-skill-coverage.md`](../../../docs/internal/hook-vs-skill-coverage.md)）。
+- 帳本是**自陳的**。`make converge-status` 檢查的是**格式**——**不檢查那段 evidence 是不是真的跑過**，`"evidence": "yes"` 會過關。沒有任何機制能從離線文字證明一次執行發生過；這正是 tier 標籤只能靠紀律的原因。加內容述詞去補這個洞，本身就會撞上第 0 步（合法與捏造在離線文字下同構）。
 - 停止規則 1（CONVERGED）以**回報的** finding 數為準。一輪沒認真審而回報 0 條，與一輪審完確實 0 條，帳本上長得一樣。這是規則 2、3 存在的理由——它們看的是**主體**與**面積**，不看回報數。
+- `LEDGER-GAP` 只檢查輪號連續，**不檢查是否從 1 開始**。從鏈中途才開帳的 scope 合法且靜默。
+- 本工具**不進 CI、不進 pre-commit**、不擋任何東西。這是刻意的：#1457 剛刪掉六支「守衛的守衛」，對 review 流程再造一支 gate 會重演同一個病。owner 分類 = 🧠 **skill-advised**（見 [`hook-vs-skill-coverage.md`](../../../docs/internal/hook-vs-skill-coverage.md)）。
+- 全部規則由**單一一條修正鏈**導出（n=1）。套到別的情境前先自己量。
 
 ## 與既有體系關係
 
 - **[`vibe-subagent-review`](../vibe-subagent-review/SKILL.md)**：管一輪之內怎麼審（lens 路由、finder≠verifier、只報站得住的）。多輪情境下，該 skill 的預設檔位改由本 skill 決定（見該 skill〈預設檔位〉節）。
-- **[`vibe-brainstorm`](../vibe-brainstorm/SKILL.md)**：還沒開始寫 code 時用它。第 0 步 decidability gate 與 brainstorm 的 blast-radius 提問互補——一個問「這題可判嗎」，一個問「炸掉多大」。
-- **`PROGRESS.jsonl`**（同 repo，`vibe-subagent-review` 長時 agent 協議）：那個是**單一 agent 的存活訊號**；`ROUNDS.jsonl` 是**跨輪的知識交接**。兩者格式慣例相同、用途不重疊，同一個 `dev/<scope>/` 下可並存。
+- **[`vibe-brainstorm`](../vibe-brainstorm/SKILL.md)**：還沒開始寫 code 時用它。第 0 步與 brainstorm 的 blast-radius 提問互補——一個問「這題可判嗎」，一個問「炸掉多大」。
+- **`PROGRESS.jsonl`**（`vibe-subagent-review` 長時 agent 協議）：那個是**單一 agent 的存活訊號**；`ROUNDS.jsonl` 是**跨輪的知識交接**。格式慣例相同、用途不重疊，同一個 `dev/<scope>/` 下可並存。

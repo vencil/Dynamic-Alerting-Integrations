@@ -18,6 +18,11 @@ Coverage:
     rounds) / CONVERGED suppressed while blocking / SURFACE-DEBT advisory /
     SELF-REVIEW-ZERO / UNDECIDABLE
   - find_ledgers: file directly, nested dirs, none
+  - parse_ledger encoding: non-UTF-8 line reported not raised, one bad line does
+    not blind the rest of the ledger, BOM stripped, CRLF tolerated, unreadable
+    path reported
+  - surface counters: non-int / negative / bool rejected by check_record and
+    degraded (not raised) by Round
   - main CLI: missing scope → 2, no ledger → 2, unparsable → 2, blocking → 1,
     format violation → 1, clean → 0
   - the real #1411 -> #1457 chain replayed: the blocking rule fires at the
@@ -371,6 +376,106 @@ def test_parse_ledger_rejects_a_bare_json_scalar(tmp_path):
     path.write_text('"just a string"\n', encoding="utf-8")
     _records, unparsable, _violations = cs.parse_ledger(str(path))
     assert len(unparsable) == 1 and "not a JSON object" in unparsable[0]
+
+
+# ============================================================
+# parse_ledger — encoding (the ledger is written by shells on any host)
+# ============================================================
+
+
+def test_non_utf8_line_is_reported_not_raised(tmp_path):
+    """A Windows shell writes the local codepage; #1372 / #1363 burned on this."""
+    path = tmp_path / cs.LEDGER_NAME
+    path.write_bytes(
+        json.dumps(subject(1, "\u95be\u503c\u5b88\u885b"),
+                   ensure_ascii=False).encode("big5"))
+    _records, unparsable, _violations = cs.parse_ledger(str(path))
+    assert len(unparsable) == 1
+    assert "not UTF-8" in unparsable[0]
+
+
+def test_one_non_utf8_line_does_not_blind_the_rest_of_the_ledger(tmp_path):
+    """Per-line decoding is the whole point — 1 bad line, not 20 lost rounds."""
+    path = tmp_path / cs.LEDGER_NAME
+    good = json.dumps(subject(2, "later round")).encode("utf-8")
+    bad = json.dumps(subject(1, "\u95be\u503c"), ensure_ascii=False).encode("big5")
+    path.write_bytes(bad + b"\n" + good + b"\n")
+    records, unparsable, _violations = cs.parse_ledger(str(path))
+    assert len(unparsable) == 1
+    assert [r["subject"] for r in records] == ["later round"]
+
+
+def test_leading_bom_is_stripped_not_reported(tmp_path):
+    """PowerShell Out-File writes a BOM; that is not the writer's visible doing."""
+    path = tmp_path / cs.LEDGER_NAME
+    path.write_bytes(b"\xef\xbb\xbf" + json.dumps(subject(1, "s")).encode("utf-8"))
+    records, unparsable, violations = cs.parse_ledger(str(path))
+    assert unparsable == [] and violations == []
+    assert len(records) == 1
+
+
+def test_crlf_line_endings_are_tolerated(tmp_path):
+    path = tmp_path / cs.LEDGER_NAME
+    path.write_bytes(json.dumps(subject(1, "s")).encode("utf-8") + b"\r\n")
+    records, unparsable, _violations = cs.parse_ledger(str(path))
+    assert unparsable == [] and len(records) == 1
+
+
+def test_unreadable_path_is_reported_not_raised(tmp_path):
+    """A directory where the ledger should be — OSError must not escape."""
+    (tmp_path / cs.LEDGER_NAME).mkdir()
+    records, unparsable, violations = cs.parse_ledger(str(tmp_path / cs.LEDGER_NAME))
+    assert records == [] and violations == []
+    assert len(unparsable) == 1 and "cannot read" in unparsable[0]
+
+
+def test_main_exits_caller_error_on_a_non_utf8_ledger(tmp_path, capsys):
+    path = tmp_path / cs.LEDGER_NAME
+    path.write_bytes(json.dumps(subject(1, "\u95be\u503c"),
+                                ensure_ascii=False).encode("big5"))
+    assert cs.main(["--scope", str(tmp_path)]) == cs.EXIT_CALLER_ERROR
+    assert "not UTF-8" in capsys.readouterr().err
+
+
+# ============================================================
+# surface counters — reported by check_record, survived by Round
+# ============================================================
+
+
+def test_non_integer_insertions_is_a_violation():
+    out = cs.check_record(subject(1, "s") | {"insertions": "lots", "_where": "t:1"})
+    assert any("'insertions' must be an integer" in m for m in out)
+
+
+def test_negative_deletions_is_a_violation():
+    out = cs.check_record(subject(1, "s") | {"deletions": -3, "_where": "t:1"})
+    assert any("'deletions' must not be negative" in m for m in out)
+
+
+def test_boolean_insertions_is_a_violation():
+    """bool is an int subclass — `isinstance(True, int)` is True, so this needs
+    its own branch or `insertions: true` silently counts as 1."""
+    out = cs.check_record(subject(1, "s") | {"insertions": True, "_where": "t:1"})
+    assert any("'insertions' must be an integer" in m for m in out)
+
+
+def test_absent_surface_counters_are_legal():
+    rec_no_counts = {"ts": "t", "round": 1, "kind": "subject", "subject": "s",
+                     "_where": "t:1"}
+    assert cs.check_record(rec_no_counts) == []
+
+
+def test_round_degrades_a_bad_counter_instead_of_raising():
+    """One typo must not take the other rounds down with it."""
+    r = rounds_of([subject(1, "s") | {"insertions": "lots", "deletions": 4}])[0]
+    assert (r.insertions, r.deletions) == (0, 4)
+
+
+def test_main_reports_a_bad_counter_as_a_violation_without_crashing(tmp_path,
+                                                                    capsys):
+    write_ledger(tmp_path, [subject(1, "s") | {"insertions": "lots"}])
+    assert cs.main(["--scope", str(tmp_path)]) == cs.EXIT_VIOLATION
+    assert "'insertions' must be an integer" in capsys.readouterr().err
 
 
 # ============================================================

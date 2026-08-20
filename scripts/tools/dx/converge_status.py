@@ -45,15 +45,30 @@ guards" for being surface without detection value; wiring a gate around the
 review process itself would repeat exactly that. Owner class is skill-advised
 (docs/internal/hook-vs-skill-coverage.md).
 
+WHAT IT DOES NOT CHECK, BEYOND THE EVIDENCE ITSELF
+==================================================
+Two further gaps, stated here rather than closed, because closing either would
+mean writing a predicate on content that cannot distinguish the legal case from
+the defective one -- the exact move the protocol this tool serves exists to ban:
+
+* ``evidence`` is checked for being non-empty, not for being evidence.
+  ``"evidence": "yes"`` passes. A stronger shape test (must contain a command,
+  must contain "=>") would reject legitimate one-line citations and would still
+  pass a fabricated string, so it buys a false red for no true green.
+* LEDGER-GAP checks that the round numbers present are contiguous, NOT that they
+  start at 1. A ledger opened mid-chain (rounds 5-7 of a chain whose first four
+  rounds predate the ledger) is legal and stays silent. There is no in-file
+  evidence that separates "opened mid-chain" from "lost the first four rounds".
+
 EXIT CODES (scripts/tools/_lib_exitcodes.py)
 ============================================
   0  ledger read; nothing the caller must act on (CONVERGED and advisory
      SURFACE-DEBT / self-review notes land here)
   1  a blocking stop rule fired (CHANGE-SUBJECT / UNREVIEWED-FIX) or the ledger
      breaks the format contract (verified claim with no evidence, banned
-     ``speculative`` tier, round numbers skipped)
+     ``speculative`` tier, non-integer surface counter, round numbers skipped)
   2  cannot do the job: scope missing, no ROUNDS.jsonl under it, or a line that
-     is not JSON
+     is not readable at all (not UTF-8, not JSON, not a JSON object)
 """
 from __future__ import annotations
 
@@ -106,27 +121,50 @@ def find_ledgers(scope):
 def parse_ledger(path):
     """Parse one ledger.
 
-    Returns (records, unparsable, violations). `unparsable` holds lines that are
-    not JSON at all (caller error -- the file is broken). `violations` holds
-    records that parsed but break the format contract (user-actionable).
+    Returns (records, unparsable, violations). `unparsable` holds lines this tool
+    could not read at all -- not valid UTF-8, or not JSON (caller error: the file
+    is broken). `violations` holds records that parsed but break the format
+    contract (user-actionable).
+
+    Read as BYTES and decoded per line, deliberately. The protocol tells agents to
+    append to this ledger with a shell `echo` from whatever host they are on, and
+    a Windows host writes cp950/big5 by default -- this repo has already been
+    burned twice by exactly that (#1372 read an anchor-debt ledger as mojibake,
+    #1363 rewrote a whole file to CRLF). A whole-file text handle raises on the
+    first bad byte and takes the other 20 rounds down with it; per-line decoding
+    turns one bad line into one reported line. A leading BOM (PowerShell
+    `Out-File`) is stripped rather than reported -- it is not the writer's
+    mistake in any way they can see.
     """
     records, unparsable, violations = [], [], []
-    with open(path, "r", encoding="utf-8") as fh:
-        for lineno, raw in enumerate(fh, start=1):
-            line = raw.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except (ValueError, TypeError) as exc:
-                unparsable.append(f"{path}:{lineno}: not JSON ({exc})")
-                continue
-            if not isinstance(rec, dict):
-                unparsable.append(f"{path}:{lineno}: not a JSON object")
-                continue
-            rec["_where"] = f"{path}:{lineno}"
-            violations.extend(check_record(rec))
-            records.append(rec)
+    try:
+        with open(path, "rb") as fh:
+            raw_bytes = fh.read()
+    except OSError as exc:
+        return [], [f"{path}: cannot read ({exc})"], []
+    for lineno, raw in enumerate(raw_bytes.splitlines(), start=1):
+        try:
+            line = raw.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            unparsable.append(
+                f"{path}:{lineno}: not UTF-8 ({exc.reason} at byte {exc.start}) "
+                "-- the ledger must be UTF-8; a Windows shell writes the local "
+                "codepage unless told otherwise")
+            continue
+        line = line.lstrip("\ufeff").strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except (ValueError, TypeError) as exc:
+            unparsable.append(f"{path}:{lineno}: not JSON ({exc})")
+            continue
+        if not isinstance(rec, dict):
+            unparsable.append(f"{path}:{lineno}: not a JSON object")
+            continue
+        rec["_where"] = f"{path}:{lineno}"
+        violations.extend(check_record(rec))
+        records.append(rec)
     return records, unparsable, violations
 
 
@@ -142,6 +180,17 @@ def check_record(rec):
     if not isinstance(rec.get("round"), int):
         out.append(f"{where}: 'round' must be an integer, got "
                    f"{rec.get('round')!r}")
+    if kind == "subject":
+        for field in ("insertions", "deletions"):
+            value = rec.get(field)
+            if value is None:
+                continue
+            if isinstance(value, bool) or not isinstance(value, int):
+                out.append(f"{where}: subject '{field}' must be an integer, got "
+                           f"{value!r}")
+            elif value < 0:
+                out.append(f"{where}: subject '{field}' must not be negative, "
+                           f"got {value!r}")
     tier = rec.get("tier")
     if kind == "finding":
         if tier in BANNED_TIERS:
@@ -177,13 +226,27 @@ class Round(object):
         self.undecidable = []       # decidability records with verdict=undecidable
         self.reviewers = set()
 
+    @staticmethod
+    def _count(record, field):
+        """A counter that check_record has already reported on if it is bad.
+
+        Returning 0 here rather than raising is the point: the surface figure
+        degrades, the round still reports, and the caller still gets exit 1 from
+        the format violation. A traceback would lose the other 19 rounds to one
+        typo.
+        """
+        value = record.get(field)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            return 0
+        return value
+
     @property
     def insertions(self):
-        return sum(int(s.get("insertions") or 0) for s in self.subjects)
+        return sum(self._count(s, "insertions") for s in self.subjects)
 
     @property
     def deletions(self):
-        return sum(int(s.get("deletions") or 0) for s in self.subjects)
+        return sum(self._count(s, "deletions") for s in self.subjects)
 
     @property
     def subject_names(self):
