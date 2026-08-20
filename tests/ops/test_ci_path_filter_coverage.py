@@ -3460,8 +3460,27 @@ def test_the_version_check_filter_covers_the_trees_bump_docs_now_reads():
         "could not locate the `validate` path-filter block in "
         f"{wf_path.name} — the detect-changes step's `filters:` input is the "
         "source of truth for this test")
-    pats = [p for p in filters["validate"] if isinstance(p, str)]
+    # ⛔ dorny/paths-filter@v3 accepts a rule as a bare glob OR as a
+    # `{<change-type>: <glob>}` mapping (`- added|modified: "x/**"`). Keeping
+    # only `isinstance(p, str)` SILENTLY DROPS the mapping form, and the drop
+    # is invisible: the entry vanishes from `pats`, the coverage assertion
+    # below then reports the file as matching no filter, and its message tells
+    # the reader the entry is missing from the workflow while it sits right
+    # there. That is the same defect this test was written to fix, one syntax
+    # over — it read the SPELLING of a rule instead of its value.
+    def _glob_of(rule):
+        if isinstance(rule, str):
+            return rule
+        if isinstance(rule, dict) and len(rule) == 1:
+            return next(iter(rule.values()))
+        raise AssertionError(
+            "unrecognised paths-filter rule shape in `validate`: "
+            f"{rule!r}. Teach this helper the new shape — do NOT let it fall "
+            "through, because a dropped rule reads exactly like a deleted one.")
+
+    pats = [_glob_of(p) for p in filters["validate"]]
     assert pats, "the validate filter parsed to an empty pattern list"
+    assert all(isinstance(p, str) for p in pats), pats
 
     def covered(path: str) -> bool:
         return any(fnmatch.fnmatch(path, p)

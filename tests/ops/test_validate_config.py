@@ -291,9 +291,21 @@ class TestVersionsCheck:
         result = vc.check_versions()
         detail = " ".join(str(v) for v in result.values())
 
-        assert result["status"] != vc.FAIL, (
-            "a tool that is legitimately absent from this installation was "
-            f"reported as a FAILED check.\n{result}")
+        # ⛔ Assert the degraded branch was ACTUALLY TAKEN before asserting
+        # anything about its wording. This patch works by rebinding
+        # `_THIS_DIR`, which only bites while the path is resolved INSIDE the
+        # function; hoisting it to a module-level constant — a behaviour-
+        # preserving refactor this repo does everywhere — silently stops the
+        # patch from applying. Without this check the run reports `pass` and
+        # then fails further down with "the degraded answer does not say WHAT
+        # is missing", a message that is simply false when no degraded answer
+        # was produced at all.
+        assert result["status"] == vc.WARN, (
+            "the degraded branch was not exercised — `check_versions` did not "
+            "see a missing bump_docs.py. If the path is now resolved at import "
+            "time, patch that constant instead of `_THIS_DIR`; this test is "
+            f"about the MISSING-TOOL behaviour, not about where the path is "
+            f"computed.\n{result}")
         for leak in ("can't open file", "No such file or directory",
                      "Traceback"):
             assert leak not in detail, (
@@ -301,10 +313,18 @@ class TestVersionsCheck:
                 f"({leak!r}) — that is #1461's shape.\n{result}")
         assert "bump_docs.py" in detail, (
             f"the degraded answer does not say WHAT is missing.\n{result}")
-        assert "--check" in detail, (
-            "the degraded answer gives the reader no command to run. It must "
-            "not depend on `make` either — the image has no Makefile.\n"
-            f"{result}")
+        # ⛔ "gives the reader something runnable", not a literal flag. The
+        # earlier form pinned `--check`, so redirecting the reader at
+        # `make version-check` — which this branch made the correct answer by
+        # teaching that target BOTH halves of the gate — failed with "gives the
+        # reader no command to run" while a command sat in the detail. The
+        # original rationale ("must not depend on make, the image has no
+        # Makefile") does not hold against that wording either: the sentence
+        # already says "In a repo checkout run:", i.e. it has redirected the
+        # reader somewhere a Makefile exists.
+        assert any(tok in detail for tok in ("bump_docs.py", "version-check")), (
+            "the degraded answer gives the reader nothing runnable — name the "
+            f"command or the make target that performs this check.\n{result}")
 
 
 class TestIntegration:

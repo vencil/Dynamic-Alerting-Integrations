@@ -5843,9 +5843,17 @@ def test_every_include_snippet_we_show_a_customer_parses_as_yaml() -> None:
         if hits:
             offenders[path.name] = hits
     assert not offenders, (
-        "a single-line `include: - local: ...` is shown to customers, and it "
-        "is not valid YAML — pasting it stops their whole pipeline from "
-        f"loading. Render it as two lines.\n{offenders}")
+        "the folded one-line include form appears in a customer-facing "
+        "source. It is not valid YAML, so pasting it stops the whole pipeline "
+        "from loading.\n"
+        "⛔ This guard reads the SOURCE TEXT and cannot tell a rendered "
+        "snippet from prose that merely quotes the bad form — including a "
+        "comment or a warning that names it. That is deliberate: the rule "
+        "this codebase enforces is 'never write the folded literal anywhere', "
+        "because a reader who copies from a warning is just as broken as one "
+        "who copies from an example. If you are warning about it, describe "
+        "the shape in words instead of spelling it out.\n"
+        f"{offenders}")
 
     # Anti-vacuity: the detector must actually fire on the bad shape, or the
     # assertion above is satisfied by a regex that never matches anything.
@@ -5965,9 +5973,20 @@ class TestGitHubLegDefectsFoundInRoundSeven:
         # runner 可跑，所以它擋的是「有人把這個選項悄悄拿掉」，不是「它真的
         # 解決了 EACCES」。拿掉 `options` 之後整套原本全綠（實測 64 passed），
         # 這條就是那個缺掉的控制項。
-        assert 'root' in str(job['container'].get('options', '')), (
+        # ⛔ 問「解析出來的 user 是不是 root」，不是「字面有沒有 root」。
+        # `--user 0` / `--user 0:0` / `--user root:root` 都等價，而 `--user 0`
+        # 在 distroless / scratch base 上**更穩**（不需要映像內有可解析的
+        # `/etc/passwd` 條目）。先前的寫法是 `'root' in options`，把一個更好的
+        # 等價寫法判成「沒有以可寫入的使用者執行」，而錯誤訊息會被它自己印出
+        # 的 `--user 0` 打臉——這正是本 PR 反覆在修的「守衛讀拼法不讀值」，
+        # 而它是這一輪新加的。
+        _opts = str(job['container'].get('options', ''))
+        _m = re.search(r'--user[= ]([^\s]+)', _opts)
+        _user = (_m.group(1) if _m else '').split(':')[0]
+        assert _user in ('root', '0'), (
             'argocd apply job 的 container 沒有以可寫入工作區的使用者執行'
-            f'——該映像預設 UID 999。\n{job["container"]}')
+            f'——該映像預設 UID 999。解析到的 user={_user!r}\n'
+            f'{job["container"]}')
 
     @pytest.mark.parametrize('deploy', ['kustomize', 'helm', 'argocd'])
     def test_the_only_writable_mount_runs_as_the_runner(self, deploy):
