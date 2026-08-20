@@ -408,8 +408,19 @@ function StepReview({ config }) {
                       axe-lite-static hook scans JSX source for them and does
                       not exclude comments, so one here fails the commit with a
                       finding that points at an unrelated line. */}
-                  {t('GitLab：根目錄 .gitlab-ci.yml 是 GitLab 唯一會自動載入的路徑。init 會產生它，內容就是下面這兩行；若你的 repo 已有這個檔案，init 不會改動它，請自行把這兩行貼進去（縮排照抄），否則 pipeline 不會執行。',
-                     'GitLab: the repo-root .gitlab-ci.yml is the only path GitLab auto-loads. init generates it with exactly the two lines below; if your repo already has one, init leaves it untouched — paste those two lines in yourself (keep the indentation) or the pipeline never runs.')}
+                  {t('GitLab：根目錄 .gitlab-ci.yml 是 GitLab 唯一會自動載入的路徑。你的 repo 沒有這個檔案時，init 會產生一份，核心就是下面這個 include 區塊。',
+                     'GitLab: the repo-root .gitlab-ci.yml is the only path GitLab auto-loads. If your repo does not have one, init generates it, and the include block below is its working part.')}
+                  {/* ⛔ 「已經有根檔」不是一種情況而是好幾種，而最危險的那種
+                      是「已經有 include: 這個鍵」——那時候再貼一個 include:
+                      鍵會讓 YAML 的後者覆蓋前者（safe_load 取最後一個），
+                      客戶既有的 template（SAST/Dependency-Scanning 這類預設
+                      引導）就這樣靜默消失；嚴格 loader 則直接 duplicate key
+                      報錯。CLI 對這一格有明文警告，精靈原本沒有——精靈看不到
+                      目標 repo，所以它必須把兩種情況都講出來，而不是給一句
+                      「貼上去就好」。 */}
+                  <br />
+                  {t('若你的 repo 已經有根目錄 .gitlab-ci.yml：init 不會改動它，需要你自己接。此時要看它有沒有 include: 這個鍵——沒有的話，把下面整塊加在檔案最後；已經有的話，只把 - local: 那一項加進你既有的 include: 底下，不要再開第二個 include: 鍵（後者會蓋掉前者，你原本的 template 會消失）。實際跑 init 時，它會判斷你的檔案屬於哪一種並印出對應的做法。',
+                     'If your repo already has a root .gitlab-ci.yml: init leaves it untouched and you wire it yourself. Check whether it already has an include: key — if not, append the whole block below at the end of the file; if it does, add only the - local: item under your existing include:, and do NOT introduce a second include: key (the later one replaces the earlier, so your existing templates would vanish). Running init prints which of these cases your file is in.')}
                   <pre className="mt-1 bg-[color:var(--da-color-surface-hover)] p-4 rounded-lg text-xs font-mono border border-[color:var(--da-color-surface-border)] text-[color:var(--da-color-fg)]">
                     {'include:\n  - local: .gitlab-ci.d/dynamic-alerting.yml'}
                   </pre>
