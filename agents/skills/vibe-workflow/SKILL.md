@@ -2,7 +2,6 @@
 name: vibe-workflow
 description: Vibe session 起手式 + 最常踩的 7 個坑 + 標準開發 session 工作流。Use at the start of any Vibe working session (especially first Bash/Edit/Write call), when encountering FUSE phantom lock / stale git index / docker exec returning empty stdout / port-forward residue / pre-commit lock artifacts / ad-hoc script rejection, or when planning the end-to-end flow from code change through commit to PR. Also use when the user mentions "起手式", "FUSE 卡住", "docker exec 沒輸出", "win-commit", or when orienting to how Vibe's dev loop is supposed to run.
 ---
-<!-- 此檔為產生物，來源 agents/skills/vibe-workflow/SKILL.md —— 請改那份 SSOT，再跑 `make agent-adapters`；不要直接編輯這份複本。 -->
 
 # vibe-workflow — Session 起手式 + 7 個坑 + 標準工作流
 

@@ -26,11 +26,15 @@ Session 起手式 codified 為 **PreToolUse hook** (v2.8.0；#824 改經 `run-ho
 2. **Commit trailer block** — 所有 trailer 行（`Refs:` / `Self-Review-Pass-2:` / `Co-authored-by:`）須為**最底部單一連續段落、全 `Key: value` 格式**；夾空行或無冒號裸行會劈裂 block → git 丟棄上方行 → CI gate fail（燒過 #515/#522/#543）。多項目 / 純文件 commit 依 [`dev-rules.md` §P1](docs/internal/dev-rules.md) 改在 body prose 列 ID，**不寫 `Resolves` 裸行**
 3. **Worktree edit path** — 在 git worktree 內編輯須 anchor worktree 路徑；main repo 同時 checked out，用 main-repo 路徑會悄悄落到 main（燒過 #562）
 4. **`git add` 括號 glob** — bash `[01]` 只配 `0`/`1` 不配 `2`；任何括號 glob 後必跑 `git diff --cached --stat` 驗 staged set（燒過 #485 ~2h）
-5. **commit / push 前先觸發 `vibe-dev-rules` skill** — pre-commit hook 不攔所有 Vibe gate（如 `make lint-docs-mkdocs`）；skip-and-recover 浪費 2+ push cycle
+5. **⛔ 沒有本則訊息內的驗證輸出，就不准宣稱通過** — 「測試過了 / lint 乾淨 / build 成功 / 修好了」都是**主張**，每一個都要對得上**這一輪實際跑過**的指令與其輸出。上一輪的結果不算、部分檢查不算、「應該會過」不算、subagent 回報成功不算（自己看 diff）。⚠️ 本 repo 燒過的具體形狀是**管線遮蔽 exit code**——`cmd | head; echo $?` 讀到的是 `head` 的 rc，不是 `cmd` 的；要 rc 就別接管線（本 session 連燒 3 次）。跑不了就說跑不了：**「量不到」與「量了沒事」必須可區分**
+6. **commit / push 前先觸發 `vibe-dev-rules` skill** — pre-commit hook 不攔所有 Vibe gate（如 `make lint-docs-mkdocs`）；skip-and-recover 浪費 2+ push cycle
 
 ## Skill 體系
 
-Vibe 專案內建 **八個本地 skills**（`.claude/skills/`），在對應情境自動觸發：
+Vibe 專案內建 **八個本地 skills**，在對應情境自動觸發。
+
+⛔ **SSOT 在 [`agents/skills/`](agents/skills/)，不是 `.claude/skills/`**（TRK-361）——後者是 `make agent-adapters` 的**生成物**，Claude Code 只認那個路徑所以必須存在，但改它會被 `gen-agent-adapters-check` hook 擋下、且下次重生就覆蓋。subagent 角色提示詞同理：SSOT 在 [`agents/roles/`](agents/roles/)，`.claude/agents/` 是生成物。根目錄 [`AGENTS.md`](AGENTS.md)（AAIF 中性標準，Codex / Cursor / Copilot / Gemini CLI / Grok 原生讀）是**手寫散文**，內容為「高頻不可協商項 inline + 其餘以路徑索引」、**刻意不複製規範內容**；其中**只有 `BEGIN/END GENERATED SKILL INDEX` 之間的 skill 索引**由 `agents/skills/` 的 frontmatter 生成，其餘直接編輯該檔即可（產生器不會重寫它們）。
+
 
 - **`vibe-workflow`** — session 起手式、7 個常見陷阱、標準開發工作流（session 開始或遇到 FUSE / docker / port-forward 類問題時自動觸發）
 - **`vibe-dev-rules`** — 13 條開發規範 + Top 4 違反熱點（commit / push / refactor 前自動觸發）
@@ -86,13 +90,13 @@ Vibe 專案內建 **八個本地 skills**（`.claude/skills/`），在對應情�
 
 ## Pre-commit 品質閘門
 
-102 auto-run + 13 manual-stage + 3 pre-push hooks，清單見 [`.pre-commit-config.yaml`](.pre-commit-config.yaml)。手動觸發：`pre-commit run --all-files`（auto）/ `pre-commit run --hook-stage manual --all-files`（manual）。**hook ↔ skill 職責邊界**（哪些機械強制 / 哪些 AI 須自覺 / 漏接）見 [`hook-vs-skill-coverage.md`](docs/internal/hook-vs-skill-coverage.md)（TRK-304）。
+103 auto-run + 13 manual-stage + 3 pre-push hooks，清單見 [`.pre-commit-config.yaml`](.pre-commit-config.yaml)。手動觸發：`pre-commit run --all-files`（auto）/ `pre-commit run --hook-stage manual --all-files`（manual）。**hook ↔ skill 職責邊界**（哪些機械強制 / 哪些 AI 須自覺 / 漏接）見 [`hook-vs-skill-coverage.md`](docs/internal/hook-vs-skill-coverage.md)（TRK-304）。
 
 ## 文件 / 工具 / Makefile
 
 公開文件對照表 → [`doc-map.md`](docs/internal/doc-map.md)（`docs/internal/**` 由 CLAUDE.md / skills 直接引用，不入 catalog）；Python 工具 → [`tool-map.md`](docs/internal/tool-map.md)（CLI: `da-tools <cmd> --help`）；JSX 工具 SOT → [`tool-registry.yaml`](docs/assets/tool-registry.yaml)。
 
-**Planning / Tracking ID 對照** → [`planning-id-mapping.md`](docs/internal/planning-id-mapping.md)（v2.8.1 起 `TRK-NNN` 為**唯一新進入點**，取代既有 `TECH-DEBT-NNN` / `TD-NN` / `HA-NN` / `REG-NN`；舊 ID 仍可 grep，本表給對映 + 三段編號分區邏輯）。新追蹤項目一律 `TRK-NNN`（commit trailer 寫 `Resolves TRK-NNN`，見 [`dev-rules.md` §P1](docs/internal/dev-rules.md)）；政策依據與 frontmatter spec 見 [ADR-019 §Namespace Policy](docs/adr/019-planning-ssot.md#namespace-policy三-namespace-共存)。`ADR-NNN` 與 `S#NNN` 為獨立 namespace，不參與 TRK 對映。
+**Planning / Tracking ID 對照** → [`planning-id-mapping.md`](docs/internal/planning-id-mapping.md)（v2.8.1 起 `TRK-NNN` 為**唯一新進入點**，取代既有 `TECH-DEBT-NNN` / `TD-NN` / `HA-NN` / `REG-NN`；舊 ID 仍可 grep，本表給對映 + 三段編號分區邏輯）。新追蹤項目一律 `TRK-NNN`（commit trailer 寫 `Resolves: TRK-NNN`，見 [`dev-rules.md` §P1](docs/internal/dev-rules.md)）；政策依據與 frontmatter spec 見 [ADR-019 §Namespace Policy](docs/adr/019-planning-ssot.md#namespace-policy三-namespace-共存)。`ADR-NNN` 與 `S#NNN` 為獨立 namespace，不參與 TRK 對映。
 
 **Makefile** 必記 Top 11：
 

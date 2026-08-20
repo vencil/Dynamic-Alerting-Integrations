@@ -35,7 +35,7 @@ allowlist — there is no silent escape (``test_partition_is_exact``).
 
 * BILINGUAL (derived complement, 37 — all pass; repair queue empty) — the
   behavioral assertions above run per tool.
-* ``ENGLISH_ONLY`` (139) — dx convention: non-customer-facing internal tools
+* ``ENGLISH_ONLY`` (140) — dx convention: non-customer-facing internal tools
   may ship English-only help. RATCHET: shrink-only — the gate runs each one
   under ``DA_LANG=zh`` and turns RED the moment its help gains CJK, forcing
   the entry OUT of the allowlist and INTO the bilingual contract.
@@ -52,7 +52,7 @@ allowlist — there is no silent escape (``test_partition_is_exact``).
 COST DESIGN (why not a blind full-matrix sweep)
 -----------------------------------------------
 Subprocess budget = 2×|BILINGUAL| + 1×|ENGLISH_ONLY| + 1×|CHINESE_ONLY|
-= 2×37 + 139 + 28 = 241 (vs 376 already spent by test_tool_exit_codes).
+= 2×37 + 140 + 28 = 242 (vs 376 already spent by test_tool_exit_codes).
 The allowlists are known-conclusion sets: one zh-help run suffices to verify
 "still no CJK" / "still has CJK" — an en-side run there would prove nothing
 this gate asserts. The CHINESE_ONLY wiring ratchet is a source-text check
@@ -164,6 +164,7 @@ ENGLISH_ONLY: dict[str, str] = {
     "describe_tenant.py": _R_DX,
     "diag_pr_ci.py": _R_DX,
     "doc_coverage.py": _R_DX,
+    "gen_agent_adapters.py": _R_DX,
     "gen_recipe_status_json.py": _R_DX,
     "generate_alert_reference.py": _R_DX,
     "generate_changelog.py": _R_DX,
@@ -421,8 +422,13 @@ def test_allowlists_shrink_only_count_pin():
     # mid-session, never by a customer. English-only by decision — its whole
     # output is stop-rule verdicts quoted from in-repo issue numbers, and the
     # protocol it serves (the vibe-converge skill) carries the Chinese prose.
-    assert len(ENGLISH_ONLY) <= 139, (
-        f"ENGLISH_ONLY grew to {len(ENGLISH_ONLY)} (pin=139). Adding an "
+    # pin 140: bumped from 139 for gen_agent_adapters.py (TRK-361), the
+    # neutral-SSOT → per-vendor adapter generator. Same class as the sibling
+    # generate_* tools already here: a dx CLI invoked by `make agent-adapters`
+    # and by a pre-commit drift gate, never by a customer. Its whole output is
+    # file paths and a drift verdict.
+    assert len(ENGLISH_ONLY) <= 140, (
+        f"ENGLISH_ONLY grew to {len(ENGLISH_ONLY)} (pin=140). Adding an "
         "English-only tool is allowed but must be an explicit, reviewed "
         "decision — bump this pin in the same commit and justify it."
     )
