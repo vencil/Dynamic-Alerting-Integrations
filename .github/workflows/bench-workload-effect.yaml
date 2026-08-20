@@ -93,23 +93,23 @@ on:
   workflow_dispatch:
     inputs:
       bench_re:
-        description: "Go -bench regex。預設只跑兩支嫌疑犯；留空會落到 bench_interleave.sh 的預設（全部 20 支，很慢）"
+        description: "Go -bench regex (RE2, UNANCHORED). Defaults to the two suspects. WARNING cost is ~1 min per benchmark per interleave: '.' or '...' matches all 41 (plus 2 fixed-cost canaries) => ~85 min. Empty is REJECTED (rc=1) - name what you want measured."
         required: false
         default: 'MergePartialConfigs_1000|ResolveSilentModes_1000'
       rounds:
-        description: "交錯輪數（夜跑是 6）。留空 = 用 bench_interleave.sh 的預設 6"
+        description: "Interleaved rounds (the nightly uses 6). Empty falls back to bench_interleave.sh's default of 6."
         required: false
         default: '6'
       benchtime:
-        description: "每支 bench 的 benchtime（夜跑是 3s）。留空 = 用 bench_interleave.sh 的預設 3s"
+        description: "-test.benchtime per benchmark (the nightly uses 3s). Empty falls back to bench_interleave.sh's default of 3s."
         required: false
         default: '3s'
       overlay_helpers:
-        description: "除了 *bench_test.go 之外要一起 overlay 的測試檔（空白分隔，相對 app/）。預設是實測迭代出的閉包；留空 = 只覆蓋 bench 檔（會變成混血樹，封閉性探測會講）"
+        description: "Extra test files to overlay besides *bench_test.go (space-separated, relative to app/). The default is the measured dependency closure. Empty = bench files only, which yields a HYBRID tree - the closure probe will say so."
         required: false
         default: 'config_test.go config_debounce_test.go config_metrics_test.go watchloop_test.go'
       measure_implementation:
-        description: "同時量 M/W（純實作效應）。關掉只量 W/R，時間減半"
+        description: "Also measure M/W (an ESTIMATE of the implementation effect; preconditions are documented at the top of this file). Off = W/R only, halving time and cost."
         type: boolean
         required: false
         default: true
@@ -150,11 +150,16 @@ jobs:
       BENCHTIME: ${{ github.event_name == 'pull_request' && '100ms' || github.event.inputs.benchtime }}
       OVERLAY_HELPERS: ${{ github.event_name == 'pull_request' && 'config_test.go config_debounce_test.go config_metrics_test.go watchloop_test.go' || github.event.inputs.overlay_helpers }}
       MEASURE_IMPL: ${{ github.event_name == 'pull_request' && 'false' || github.event.inputs.measure_implementation }}
-    # 夜跑兩側 20 支實測 20m49s。本 job 預設只跑 2 支 bench，是分鐘級的。
-    # ⚠️ 但最壞情況是「bench_re 放寬到全部 20 支 **且** 開 M/W」＝兩次完整
-    # 交錯 ≈ 2 × 夜跑 ≈ 41 分，加上三棵樹的建置會擦到 45 分。所以取 60 —
-    # 這個上限不是估出來的餘裕，是從夜跑實測外推的最壞情況再加一點。
-    timeout-minutes: 60
+    # ⏱️ 120，依實測而非估計。（⚠️ 這裡原本有一段從夜跑外推「所以取 60」的推算，
+    # 已刪除：它是估的，而且被下面的實測推翻了 —— 留著會有兩套互相矛盾的理由。）
+    # 2026-08-19 run 32315108684 以 `bench_re='...'`
+    # （RE2 未錨定，`...` 匹配所有名稱）選中 41 支 benchmark：第一次交錯耗時 42.2 分
+    # （23:54:00 → 00:36:12），第二次進行中撞上當時的 60 分上限而 timeout。
+    # 實測 42.2 × 2 ≈ 85 分 ⇒ 120 才涵蓋得住「全選」這個情境。（成本模型獨立算出
+    # 41×2+2 = 84，與實測差 1 分鐘 —— 兩條路徑互相對得上。）
+    # ⚠️ 上限放寬的代價是卡住的 job 燒更多分鐘，所以同時加了下面那道成本閘門：
+    # 預估超過本上限就在第一分鐘 exit 1，而不是燒滿再死。
+    timeout-minutes: 120
     steps:
       # persist-credentials: false —— 與 bench-record / bench-attrib-main 同
       # 理由：這個 job 會 checkout 並執行一個舊版本的程式碼，工作區裡不該留
@@ -182,6 +187,91 @@ jobs:
         with:
           go-version: "1.26"
           cache: false
+
+      # ⛔ 成本閘門 —— 把「燒滿 timeout 才死」換成「第一分鐘死掉並說清楚原因」。
+      #
+      # 起因（2026-08-19，run 32315108684）：一次 dispatch 把 `bench_re` 填成 `...`。
+      # Go 的 `-bench` 是**未錨定的 RE2**，`...` 匹配所有名稱 ⇒ 選中 41 支 benchmark，跑滿
+      # 60 分鐘後 timeout。⚠️ **那個輸入在畫面上與一個正常的窄 regex 完全一樣**，
+      # 跑之前沒有任何地方會告訴你「這次會選 41 支」。
+      #
+      # ⛔ 選中幾支一律**問工具鏈**（`go test -list`），不用 shell regex 去猜：
+      #    shell 的 regex 與 Go 的 RE2 不是同一套，猜錯的方向是靜默的。這與本檔的
+      #    封閉性探測是同一條紀律。
+      #    ✅ **`-list` 與 `-bench` 選中同一組，已實測**（自審）：`-list Merge` 得 2 支、
+      #       實跑 `-bench Merge -benchtime=1x` 也是 2 支 —— 不是假設兩者語意相同。
+      #    ⚠️ **但 `-list` 只列頂層名稱**：若日後有 benchmark 改用 `b.Run` 開 sub-benchmark，
+      #       這裡會**低估**。自審時實測目前 `*bench_test.go` 內 `b.Run(` 出現 **0 次**，
+      #       所以今天不低估；加了 sub-benchmark 就要回來看這一行。
+      #    ⚠️ **這裡只數 main 這一側**，而 W/R 那次交錯的分母跑的是**參考版本的** benchmark
+      #       集合。一支「參考版本有、main 已刪或已改名」的 benchmark 會在 R 側被選中卻
+      #       不計入 `sel` ⇒ **低估**。（PR #1475 review 指出。）**沒有改成兩側都數**，
+      #       理由是界限已知且很小：每有一支這種 benchmark 只低估 W/R 約 1 分鐘，而要讓
+      #       它把估計推過預算需要 ~16 支；實測當下兩側各 41 支、**只在參考版本的有 0 支**。
+      #       把守衛移到 checkout 之後才數，會犧牲掉「第一分鐘就講話」這個它存在的理由，
+      #       換一個比模型自身誤差還小的修正 —— 不划算。⛔ 但這是**已知會靜默低估**的一格，
+      #       若哪天大量刪除或改名 benchmark，要回來重估這個取捨。
+      #
+      # 成本模型＝**兩個實測點，而且互相吻合**（≈1 分鐘/支/次交錯）：
+      #      41 支 → 42.2 分/次交錯（run 32315108684）
+      #       2 支 →  2.4 分/次交錯（run 32315325155）
+      # ⚠️ 兩點之間是線性內插，不是量過的曲線。它只用來擋「明顯跑不完」，
+      #    **不宣稱能預測實際耗時**。
+      #
+      # ⛔ **今天真正在守的是哪一條，要講清楚**：`go test -list '...'` 實測本 repo
+      #    最多選得到 **41 支** ⇒ 預估上限 41×2+2 = **84 分 < 預算 100** ⇒ 下面那條
+      #    `est > BUDGET_MIN` 的**硬擋目前打不到**，它是給 benchmark 數量成長之後
+      #    （約再多 8 支）用的後備。**現在實際發揮作用的是「第一分鐘就把 84 分鐘
+      #    這件事印出來 + warning」**，而事故那次正是沒有人在跑之前知道這個數字。
+      #    —— 寫在這裡是因為「宣稱有一道擋著、實際上打不到」比沒有那道更糟。
+      #
+      # ⚠️ `BUDGET_MIN` 與上面的 `timeout-minutes` 是兩個數字，關係要一起看：
+      #    預算刻意低於上限，好讓**閘門先講話**而不是讓 timeout 先殺。若有人把
+      #    `timeout-minutes` 調到預算以下，這道閘門就會失效（timeout 仍然保護，
+      #    但又回到「燒滿才死」）。改任一個都要看另一個。
+      - name: Cost guard (ask the toolchain how many benchmarks bench_re selects)
+        id: cost
+        env:
+          BUDGET_MIN: "100"
+        run: |
+          set -euo pipefail
+          # ⛔ 空的 bench_re 會落到 bench_interleave.sh 的預設集合 —— 那是一個
+          #    「安靜地跑了你沒要求的東西」的陷阱，這裡直接擋掉而不是寫進文件。
+          if [ -z "${BENCH_RE:-}" ]; then
+            echo "::error::bench_re 是空的。本 workflow 是針對性診斷，必須明確指定要量哪幾支；留空會落到 bench_interleave.sh 的預設集合。"
+            exit 1
+          fi
+          # ⛔ `go test -list` 的**失敗**與「regex 選不到東西」必須分開報。
+          #    初版把兩者都收斂成 sel=0，於是一個編不過的樹會被報成「你的 regex
+          #    選不到 benchmark」——fail-closed 沒錯，但**把人送去改 regex，而真正
+          #    的問題在別處**。自審時以「在測試檔尾附加語法錯誤」實測重現。
+          sel=0
+          for pkg in "." "./pkg/config"; do
+            if ! out=$( cd components/threshold-exporter/app && go test -list "$BENCH_RE" "$pkg" 2>&1 ); then
+              echo "::error::go test -list 在 ${pkg} 失敗 —— 這是**建置或 regex 語法**的問題，不是「選不到 benchmark」。原文如下："
+              printf '%s\n' "$out" | tail -20
+              exit 1
+            fi
+            n=$( printf '%s\n' "$out" | grep -c '^Benchmark' || true )
+            sel=$(( sel + n ))
+          done
+          runs=1
+          if [ "${MEASURE_IMPL:-false}" = "true" ]; then runs=2; fi
+          est=$(( sel * runs + 2 ))
+          echo "bench_re='${BENCH_RE}' 選中 ${sel} 支 × ${runs} 次交錯 ⇒ 預估約 ${est} 分鐘（預算 ${BUDGET_MIN}）"
+          echo "selected=${sel}" >> "$GITHUB_OUTPUT"
+          echo "estimate=${est}" >> "$GITHUB_OUTPUT"
+          if [ "${sel}" -eq 0 ]; then
+            echo "::error::bench_re='${BENCH_RE}' 選不到任何 benchmark —— 兩側都只會剩下 canary，比值毫無意義。"
+            exit 1
+          fi
+          if [ "${est}" -gt "${BUDGET_MIN}" ]; then
+            echo "::error::預估 ${est} 分鐘 > 預算 ${BUDGET_MIN} 分鐘（選中 ${sel} 支）。請縮小 bench_re、或關掉 measure_implementation 只量 W/R、或同時調高 timeout-minutes 與本預算。⛔ 這裡直接停掉，是因為跑到一半 timeout 只會留下半套結果。"
+            exit 1
+          fi
+          if [ "${est}" -gt $(( BUDGET_MIN / 2 )) ]; then
+            echo "::warning::預估 ${est} 分鐘，已超過預算 ${BUDGET_MIN} 的一半（選中 ${sel} 支）。確認這是你要的範圍。"
+          fi
 
       # 與 bench-record.yaml 同一份 pin、同一組 shape check。⛔ 但這裡讀不到
       # 就直接 exit 1（夜跑是走 output 降級）—— 理由見檔頭的失敗策略。
@@ -465,7 +555,7 @@ jobs:
       # ⛔ RE-EXAMINE IF：本 job 取得 `contents: read` 以外的權限／開始使用任何 cache
       # action／其產物開始被任何對外流程消費／參考版本指向本 repo 以外的地方。
       #
-      # ── 量測 1：W / R —— 純工作定義效應 ─────────────────────────────────
+      # ── 量測 1：W / R —— 工作定義效應的估計（前提見檔頭）─────────────────
       # BASE=R、PR=W，兩側是同一份實作，唯一的差別是測試碼。
       - name: Interleave R vs W
         env:
@@ -524,6 +614,20 @@ jobs:
             --reference-sha "${REF_SHA}" \
             --out .build/workload-effect-mw.json
 
+      # ⛔ 語言：本 step summary 的內容**刻意維持中文**，owner 已拍板（PR #1475）。
+      #
+      # 本 repo 其他 workflow 的 step summary 是英文（`bench-record.yaml` 的
+      # `### Bench Record — …`、`bench-gate-pr.yaml` 的 `Paired reference: … — status …`），
+      # 而 `workflow_dispatch` 的 input description 也已依同一慣例改成英文（14/14 樣本）。
+      # **這裡是刻意的例外，不是漏改。**
+      #
+      # 理由：下面這些不是 UI 標籤，是**逐字斟酌過的告誡句** —— 「這兩個是估計，不是
+      # 已證明的因果分解」「兩個對照都是人工的，本 workflow 不會自動比對」「SELF-TEST
+      # 執行，下面的比值不是量測結果」。這幾句正是本工具前幾輪被 review 反覆抓出過度
+      # 宣稱之後才收斂到的措辭，硬翻有實際的精確度損失，而它們的讀者就是 owner。
+      #
+      # ⇒ 日後 review 若再 flag 這一區的語言（很可能會），這是**已決事項**：回覆時指向
+      #    這段註解，不要重開。要改的話是 owner 主動要求，並且逐句對照翻、不整段重寫。
       - name: Render step summary
         if: always()
         env:
