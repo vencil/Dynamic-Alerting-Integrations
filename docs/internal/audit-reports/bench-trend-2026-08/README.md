@@ -52,11 +52,21 @@ python3 -B docs/internal/audit-reports/bench-trend-2026-08/counterfactual.py
 stale `.pyc` 會讓你比到錯的東西。同一個坑的完整說明見
 [`testing-playbook.md` §Mutation harness](../../testing-playbook.md)。
 
-三項檢查（現況全 PASS）：
+四項檢查（現況全 PASS）：
 
 1. **`#1396` 窗口不發射** —— `today=2026-08-12` 應為 `INCONCLUSIVE`、`findings=0`
 2. **零誤報** —— 17 個窗口的 false-positive bench-nights 為 0
 3. **偵測面未漂移** —— 工作區版與 `HEAD` 版在 17 個乾淨窗口 + 240 個 +20% 注入情境上輸出**逐位元相同**
+4. **關票路徑** —— 逐夜驅動 `run_trend_watch`，把每夜 render 出的 body 當下一夜的 issue body 餵回，量「永久退化的票會不會被自動關掉」
+
+⛔ **檢查 1–3 完全沒有碰關票路徑**，而在檢查 4 之前，本檔的 docstring 卻寫著它「calls
+`analyze_trend` / `run_trend_watch` directly」——`run_trend_watch` 在整份檔案裡只出現在那句
+docstring。一個沒有實作的檢查被描述成有，比沒有這個檢查更糟；更正留在檔頭而不是靜默改掉。
+
+檢查 4 的現況數字是 **120/120**（開票後仍有 ≥10 夜可觀察的情境全部被誤關，開票→關票中位 6 夜、
+最長 9 夜），與 ADR-032 引用的數字一致——但那個數字原本出自一支已遺失的 scratchpad harness，
+這裡是**從程式碼重新量出來的**。⚠️ 基準線是 100% 時這個棘輪**沒有牙齒**：沒有「更糟」可抓，
+今天它只會在 harness 自檢失敗、關票落在 runway 之外、或情境母體改變時 FAIL。
 
 ⚠️ **第 3 項證明的是「沒變差」，不是「偵測力有多少」。**
 改動偵測面（fire 算式）時它**應該**要 FAIL——那時要換的是重新論證，不是把這項刪掉。
