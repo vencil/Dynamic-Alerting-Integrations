@@ -244,6 +244,10 @@ def check3(ab, series) -> tuple[bool, str]:
                 f"        diagnostics (NOT compared to CHANGELOG's 83.1%): {diag}")
 
 
+class ReplayError(RuntimeError):
+    """A replay night that could not be interpreted. Never swallowed: see `replay`."""
+
+
 def _fixture_from_records(recs, path: Path) -> Path:
     """Serialise a `to_records()` window into the fixture `run_trend_watch` reads.
 
@@ -300,14 +304,24 @@ def replay(ab, series, bench, start, delta, fixture: Path) -> list[str | None]:
             min_floor_pct=MIN_FLOOR, canary_floor_mult=CANARY_MULT,
             creep_floor_pct=CREEP_FLOOR, assignee="vencil", dry_run=True)
         err = io.StringIO()
+        had_open = open_issue is not None
         ab.render_trend_issue_body = spy
         try:
             with contextlib.redirect_stdout(io.StringIO()), \
                  contextlib.redirect_stderr(err):
-                ab.run_trend_watch(args)
+                rc = ab.run_trend_watch(args)
         finally:
             ab.render_trend_issue_body = real_render
         e = err.getvalue()
+        # ⛔ Both of these used to be swallowed, and both fail in the direction
+        # that UNDER-counts mis-closes: a night that errored out, or one whose
+        # output matched no action marker, simply recorded nothing — so a broken
+        # replay reads as a close path that stopped mis-closing. Louder is the
+        # only safe direction for a harness whose headline number is a defect
+        # rate. (CodeRabbit, PR #1496.)
+        if rc != 0:
+            raise ReplayError(f"run_trend_watch returned rc={rc} on "
+                              f"{series[today]['night']}: {e.strip()[:300]}")
         if _ACT_OPEN in e:
             act, open_issue, open_body = "open", REPLAY_ISSUE, cap.get("body")
         elif _ACT_CLOSE in e:
@@ -318,14 +332,15 @@ def replay(ab, series, bench, start, delta, fixture: Path) -> list[str | None]:
             act, open_body = "update", cap.get("body", open_body)
         else:
             act = None
+        if had_open and act is None:
+            raise ReplayError(f"an issue was open on {series[today]['night']} and the "
+                              f"night matched no action marker: {e.strip()[:300]}")
         acts.append(act)
     return acts
 
 
-def check4(ab, series) -> tuple[bool, str]:
-    """The close path, measured: does a permanent regression's ticket auto-close?"""
-    starts = list(range(WINDOW - 1, len(series) - INJECT_MIN_RUNWAY))
-    benches = sorted({b for r in series for b in r["medians"]})
+def _sweep(ab, series, benches, starts):
+    """Clean replay + one replay per (bench, injection night). Raises `ReplayError`."""
     with tempfile.TemporaryDirectory() as td:
         fx = Path(td) / "nights.json"
         clean = replay(ab, series, None, None, 0.0, fx)
@@ -338,6 +353,19 @@ def check4(ab, series) -> tuple[bool, str]:
                      if o is not None else None)
                 rows.append((o, c, None if o is None else len(acts) - o - 1,
                              sum(1 for a in acts if a == "hold")))
+    return clean, rows
+
+
+def check4(ab, series) -> tuple[bool, str]:
+    """The close path, measured: does a permanent regression's ticket auto-close?"""
+    starts = list(range(WINDOW - 1, len(series) - INJECT_MIN_RUNWAY))
+    benches = sorted({b for r in series for b in r["medians"]})
+    try:
+        clean, rows = _sweep(ab, series, benches, starts)
+    except ReplayError as exc:
+        # Reported as a FAILED check rather than a traceback: the run still has
+        # a verdict line, and the verdict is "this measurement did not happen".
+        return False, f"replay aborted — the number below does not exist: {exc}"
 
     opened = [r for r in rows if r[0] is not None]
     # ⛔ SELF-CHECK, both directions. A harness that never opens a ticket reports
