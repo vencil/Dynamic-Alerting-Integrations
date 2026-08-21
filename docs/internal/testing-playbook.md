@@ -253,7 +253,7 @@ CHANGELOG / CLAUDE.md 的測試計數必須在 `pytest -v` 執行後才寫入。
 
 測試相關的版號重點：
 
-- **`bump_docs.py --check`** 驗證全 repo 版號一致性（pre-commit hook `version-consistency` 自動執行）
+- **`bump_docs.py --check`** 驗證全 repo 版號一致性。⚠️ **沒有任何 pre-commit hook 跑它**——`version-consistency` hook 跑的是 `validate_docs_versions.py`，是另一支工具。版號／計數漂移只有 `make version-check`（tag 前必跑）與有 path filter 的 CI job 看得見
 - **避免 `replace_all` 批次改版號**：用 `bump_docs.py` 按版號線分別處理，改完後 `--check` 驗證
 - **文件計數**必須在 `pytest -v` 執行後才寫入（見上方「文件計數驗證」）
 

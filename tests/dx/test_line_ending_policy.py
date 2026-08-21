@@ -661,8 +661,14 @@ class TestSyncCountsEmitsLF:
         differing = [
             i for i, (a, b) in enumerate(zip(before_lines, after_lines)) if a != b
         ]
-        # 兩條規則各改一行：dx/ 表格列 + hook breakdown 行
-        assert len(differing) == 2, (
-            f"expected exactly 2 changed lines, got {len(differing)}: "
+        # 一條規則改一行：hook breakdown 行。
+        #
+        # 曾經是 2（dx/ 表格列 + hook breakdown），但 CLAUDE.md 那張工具表在
+        # repo 裡已不存在，對應的計數規則隨 #1407 D-5 一併刪除（死規則不留）。
+        # fixture 的 `| dx/ | … | 99 |` 那列刻意留著當**反向對照**：它現在沒有
+        # 任何規則會碰，所以它必須保持原樣——若哪天又有規則手滑改到它，這個
+        # 數字會從 1 變 2，測試就會叫。
+        assert len(differing) == 1, (
+            f"expected exactly 1 changed line, got {len(differing)}: "
             f"{[(before_lines[i], after_lines[i]) for i in differing]}"
         )

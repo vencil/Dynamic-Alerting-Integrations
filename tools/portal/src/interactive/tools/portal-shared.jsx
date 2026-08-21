@@ -2,7 +2,7 @@
 title: "Portal Shared Module"
 tags: [self-service, shared, internal]
 audience: ["platform-engineer"]
-version: v2.7.0
+version: v2.9.0
 lang: en
 dependencies: [
   "_common/data/rule-packs.js"

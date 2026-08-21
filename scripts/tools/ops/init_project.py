@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 import textwrap
 from datetime import datetime, timezone
@@ -213,7 +214,12 @@ GITLAB_HELM_IMAGE = 'alpine/helm:3.21.3'
 # alternatives are worth offering: download it from the customer's own server
 # (`https://$ARGOCD_SERVER/download/argocd-linux-amd64`), or enable auto-sync
 # and drop this stage entirely.
-GITLAB_ARGOCD_IMAGE = 'quay.io/argoproj/argocd:v3.5.0'
+# ⚠️ Named for the CLI, not for a platform: BOTH legs use it now. The
+# GitHub leg used to `run: argocd app sync` on a bare `ubuntu-latest`,
+# whose runner image ships helm / kubectl / kustomize / kind / minikube
+# and no `argocd` — so that job exited 127 on every dispatch while the
+# GitLab sibling had this pin all along.
+ARGOCD_CLI_IMAGE = 'quay.io/argoproj/argocd:v3.5.0'
 
 # registry.k8s.io/git-sync publishes ONLY exact patch tags (no `latest`, no
 # `v4`), so a consumer is forced to name a version. The previous pin, v4.4.0
@@ -248,7 +254,7 @@ DA_TOOLS_IMAGE = 'ghcr.io/vencil/da-tools:latest'
 _GITLAB_APPLY_IMAGES = {
     'kustomize': ('DA_KUBECTL_IMAGE', GITLAB_KUBECTL_IMAGE),
     'helm': ('DA_HELM_IMAGE', GITLAB_HELM_IMAGE),
-    'argocd': ('DA_ARGOCD_IMAGE', GITLAB_ARGOCD_IMAGE),
+    'argocd': ('DA_ARGOCD_IMAGE', ARGOCD_CLI_IMAGE),
 }
 
 
@@ -569,8 +575,11 @@ def _critical_prefill_note(critical: dict) -> str:
     ("this tool wires conf.d/ straight into the threshold-config ConfigMap").
     That mechanism only exists for `--deploy kustomize`: `--deploy helm` and
     `--deploy argocd` generate no `kustomize/` tree at all (measured — the
-    output is `.da-init.yaml`, two CI files, `.pre-commit-config.da.yaml` and
-    `conf.d/`, nothing else), and `_gen_tenant_yaml` never receives `deploy`,
+    output is `.da-init.yaml`, the CI files, `.pre-commit-config.da.yaml` and
+    `conf.d/`, nothing else). ⚠️ "the CI files" is deliberately not a count:
+    `--ci gitlab`/`both` also writes the repo-root `.gitlab-ci.yml` shell
+    (#1357), so the old wording "two CI files" went stale the moment that
+    landed, and `_gen_tenant_yaml` never receives `deploy`,
     so a deploy-specific sentence here cannot be true for two of the three.
     The claim was narrowed to the property that holds for all three: nothing
     generated tracks the platform (blind review, #1218).
@@ -887,7 +896,7 @@ def _build_github_apply_stage(deploy_method: str, namespace: str) -> str:
 
       # ── Stage 3: Apply (manual trigger only) ──────────────
       # `needs: [validate]` only — `generate` is pull_request-only, and a
-      # skipped job skips everything that needs it (#1356).
+      # skipped job skips everything that needs it (issue 1356).
       apply:
         needs: [validate]
         runs-on: ubuntu-latest
@@ -916,7 +925,7 @@ def _build_github_apply_stage(deploy_method: str, namespace: str) -> str:
 
       # ── Stage 3: Apply via Helm (manual trigger only) ─────
       # `needs: [validate]` only — `generate` is pull_request-only, and a
-      # skipped job skips everything that needs it (#1356).
+      # skipped job skips everything that needs it (issue 1356).
       apply:
         needs: [validate]
         runs-on: ubuntu-latest
@@ -934,21 +943,40 @@ def _build_github_apply_stage(deploy_method: str, namespace: str) -> str:
     """).format(namespace=namespace)
 
     else:  # argocd
+        # ⛔ `container:`, not a bare `run:`. `ubuntu-latest` carries helm,
+        # kubectl, kustomize, kind and minikube — and no `argocd`, so the
+        # shipped job exited 127 on every dispatch. The GitLab sibling pinned
+        # an image for exactly this reason; the two legs now share the pin.
+        # The job has no checkout step (`argocd app sync` talks to the server),
+        # so nothing here needs a toolchain the CLI image lacks.
+        # ⛔ `options: --user root`. The argocd image ends with `USER 999`, and
+        # a container job's steps still touch runner-owned mounts (the step
+        # script and `_runner_file_commands/*` under `_temp`) that are created
+        # by the runner user (uid 1001) — a uid mismatch there is the standard
+        # `EACCES` on container jobs, which is why GitHub's own container-job
+        # docs advise against a non-root `USER`. Cheap insurance on a job whose
+        # entire body is one `argocd app sync`.
+        # ⚠️ NOT verified against a live runner from here (no GitHub Actions in
+        # this environment); it is a documented failure mode, not a measured
+        # one. Root in a short-lived sync container is the conservative side.
         return textwrap.dedent("""\
 
       # ── Stage 3: Sync ArgoCD Application ──────────────────
       # `needs: [validate]` only — `generate` is pull_request-only, and a
-      # skipped job skips everything that needs it (#1356).
+      # skipped job skips everything that needs it (issue 1356).
       apply:
         needs: [validate]
         runs-on: ubuntu-latest
+        container:
+          image: {argocd_image}
+          options: --user root
         if: github.event_name == 'workflow_dispatch'
         environment: production
         steps:
           - name: Trigger ArgoCD sync
             run: |
               argocd app sync dynamic-alerting --prune --timeout 300
-    """)
+    """).format(argocd_image=ARGOCD_CLI_IMAGE)
 
 
 def _gen_github_actions(
@@ -1015,9 +1043,16 @@ def _gen_github_actions(
       # `docker run validate-config` with no credentials, already narrowed by
       # the paths filter below. The GitLab leg gets portability from
       # `$CI_DEFAULT_BRANCH`; this is the GitHub equivalent.
+      # ⛔ Same three trees as the pull_request leg. It used to list `conf.d/**`
+      # alone, so a direct push touching only `rule-packs/custom/**` ran nothing
+      # — and the custom-rule governance lint inside `validate` is scoped to
+      # exactly that tree. A repo that permits direct pushes got no lint at all
+      # on tenant-authored PromQL pushed that way.
       push:
         paths:
           - 'conf.d/**'
+          - 'kustomize/**'
+          - 'rule-packs/**'
       workflow_dispatch:
 
     # Least-privilege, and `pull-requests: write` is LOAD-BEARING, not
@@ -1068,6 +1103,16 @@ def _gen_github_actions(
 
           - name: Validate config (schema + routing + policy)
             run: |
+              # ⛔ The same guard the config-diff step carries, and for the same
+              # reason: `docker -v` CREATES a missing host path instead of
+              # failing, so a wrong or moved CONFIG_DIR mounts an EMPTY
+              # directory, `validate-config` parses zero files and exits 0.
+              # Stage 2 refuses to compare in that case; Stage 1 went green and
+              # silent — the worse half, because nothing on the PR hints at it.
+              if [ ! -d "${{{{ env.CONFIG_DIR }}}}" ]; then
+                echo "::error::CONFIG_DIR is set to '${{{{ env.CONFIG_DIR }}}}', which does not exist in this commit. Refusing to validate, because mounting a path that is not there yields an empty directory and a PASS that checked nothing."
+                exit 1
+              fi
               docker run --rm \\
                 -v ${{{{ github.workspace }}}}/${{{{ env.CONFIG_DIR }}}}:/data/conf.d:ro \\
                 ${{{{ env.DA_TOOLS_IMAGE }}}} \\
@@ -1114,7 +1159,15 @@ def _gen_github_actions(
 
           - name: Generate Alertmanager routes
             run: |
+              # ⛔ `--user` is load-bearing on the ONE writable mount in this
+              # workflow. The image ends `USER nonroot:nonroot` (uid 10001)
+              # while `mkdir -p .output` above runs as the runner user (uid
+              # 1001, umask 022) — so the container cannot create a file in
+              # its own output directory and the step dies with EACCES. The
+              # config-diff step below never hits this because it redirects on
+              # the HOST; this one is told `-o` inside the container.
               docker run --rm \\
+                --user $(id -u):$(id -g) \\
                 -v ${{{{ github.workspace }}}}/${{{{ env.CONFIG_DIR }}}}:/data/conf.d:ro \\
                 -v ${{{{ github.workspace }}}}/.output:/data/output \\
                 ${{{{ env.DA_TOOLS_IMAGE }}}} \\
@@ -1316,11 +1369,18 @@ def _build_gitlab_apply_stage(deploy_method: str, namespace: str) -> str:
     including the `else` fallback (see that function's docstring).
     """
     image_var, _ = _gitlab_apply_image(deploy_method)
+    # ⛔ Derived, never literal. This section comment ships INTO the customer's
+    # repo, in the same file whose header states how many stages there are.
+    # When #1358 dropped the GitLab blast-radius stage, that header became
+    # "Two stages: validate → apply" while these banners went on saying
+    # "Stage 3" — the same defect class as naming a stage the pipeline no
+    # longer declares, which `_GL_STAGES` already exists to prevent.
+    stage_no = len(_GL_STAGES)
 
     if deploy_method == 'kustomize':
         return textwrap.dedent("""\
 
-    # ── Stage 3: Apply ───────────────────────────────────────
+    # ── Stage {stage_no}: Apply ─────────────────────────────────────
     apply:
       stage: apply
       image:
@@ -1360,12 +1420,13 @@ def _build_gitlab_apply_stage(deploy_method: str, namespace: str) -> str:
         - kubectl apply --dry-run=server -f /tmp/manifests.yaml
         - kubectl apply -f /tmp/manifests.yaml
         - kubectl rollout restart deployment/prometheus -n $MONITORING_NS
-    """).format(namespace=namespace, image_var=image_var)
+    """).format(namespace=namespace, image_var=image_var,
+                  stage_no=stage_no)
 
     elif deploy_method == 'helm':
         return textwrap.dedent("""\
 
-    # ── Stage 3: Apply via Helm ──────────────────────────────
+    # ── Stage {stage_no}: Apply via Helm ────────────────────────────
     apply:
       stage: apply
       image:
@@ -1404,12 +1465,13 @@ def _build_gitlab_apply_stage(deploy_method: str, namespace: str) -> str:
             -f environments/prod/values.yaml \\
             -n $MONITORING_NS \\
             --wait --timeout 5m
-    """).format(namespace=namespace, image_var=image_var)
+    """).format(namespace=namespace, image_var=image_var,
+                  stage_no=stage_no)
 
     else:  # argocd
         return textwrap.dedent("""\
 
-    # ── Stage 3: Sync ArgoCD Application ─────────────────────
+    # ── Stage {stage_no}: Sync ArgoCD Application ───────────────────
     apply:
       stage: apply
       image:
@@ -1443,7 +1505,467 @@ def _build_gitlab_apply_stage(deploy_method: str, namespace: str) -> str:
           when: manual
       script:
         - argocd app sync dynamic-alerting --prune --timeout 300
-    """).format(image_var=image_var)
+    """).format(image_var=image_var, stage_no=stage_no)
+
+
+# ── Where each CI artifact lands (SSOT for run_init / _preview_files /
+# ── _print_summary) ──────────────────────────────────────────────────────
+#
+# ⛔ These used to be three hand-copied literals: `run_init` wrote them,
+# `_preview_files` re-spelled them for the dry run, and `_print_summary` said
+# nothing about them at all. A path typo in one of the first two is a dry run
+# that lies; naming them once removes that whole class.
+_GH_WORKFLOW_REL = Path('.github') / 'workflows' / 'dynamic-alerting.yaml'
+_GL_PIPELINE_REL = Path('.gitlab-ci.d') / 'dynamic-alerting.yml'
+
+# ⛔ #1357. GitLab auto-loads exactly ONE path per project — the repository
+# root `.gitlab-ci.yml`. Everything else, including our
+# `.gitlab-ci.d/dynamic-alerting.yml`, is inert until something `include:`s it.
+# We therefore emit a root shell whose whole body is that include. The pipeline
+# itself stays where it was: keeping it out of the root file is what lets a
+# customer who already has a root pipeline paste ONE line instead of merging
+# two documents.
+_GL_ROOT_SHELL_REL = Path('.gitlab-ci.yml')
+
+# ⛔ The GitLab pipeline's stage list.
+#
+# The root shell's hand-editing note — which ships into the customer's repo
+# and tells them which `stage:` values their own jobs may use — is DERIVED
+# from this tuple. It previously retyped the list, and when #1358 removed the
+# `generate` stage the note went on naming it; a customer following it gets a
+# pipeline GitLab refuses to build, so nothing runs, validation included.
+#
+# ⚠️ Stated precisely, because the honest scope is narrower than "SSOT": the
+# pipeline template still carries its own literal `stages:` block and each
+# job its own literal `stage:` — `textwrap.dedent` runs before `.format()`,
+# so a multi-line placeholder at column 0 flattens the whole template. What
+# ties them is a TEST (`test_root_shell_only_names_stages_the_pipeline_
+# declares`), not a derivation. That is a tripwire, not an invariant: it
+# catches drift, it does not prevent it.
+_GL_STAGES = ('validate', 'apply')
+
+# The exact wiring the customer must have, in the two SHAPES it is needed.
+#
+# ⛔ These are not interchangeable, and printing the wrong one is destructive.
+# `include:` is a top-level mapping key: pasting the whole block into a root
+# file that ALREADY has an `include:` produces a duplicate key, and YAML keeps
+# exactly one of them — so the customer's own includes (SAST, security
+# templates, their `.gitlab-ci.d/` split) silently vanish because they did
+# what we told them to. When their file already has the key, the thing to
+# hand them is the list ITEM to append underneath it.
+# ⛔ There is deliberately NO paste-ready "just this line" fragment any more.
+#
+# Three independent reviews found three different ways one destroys a
+# customer's root pipeline, and they share a root cause: a fragment carries
+# indentation and block/flow style, and we control neither.
+#   * `include:` as a scalar, a single mapping, or empty — a block item
+#     underneath any of them is a syntax error.
+#   * `include: ['a.yml']` (flow) or `include: *anchor` (alias) — both parse
+#     to a Python list, so a type check calls them safe, yet the value is on
+#     the key's own line and a block item under it is the same syntax error.
+#   * a genuine block list indented 0 or 4 spaces — our fixed 2-space item
+#     does not join it.
+# In every case the customer follows our instruction and their ENTIRE
+# pipeline stops loading — strictly worse than the #1357 bug we set out to
+# fix, which only left OUR pipeline inert.
+#
+# So for any file we did not write we show the END STATE and let the customer
+# fit it to their own document. It is a sentence more to read and it cannot
+# be wrong.
+def _gl_block_for(want: str) -> str:
+    """A ready-made `include:` block wiring in `want`."""
+    return f"include:\n  - local: {want}\n"
+
+
+def _gl_example_for(want: str) -> str:
+    """The end-state example for `want` — never a paste-ready fragment."""
+    return ("include:\n"
+            "  - <keep your existing entries here>\n"
+            f"  - local: {want}\n")
+
+
+# ⛔ Derived from the helpers, never re-spelled. Both constants and both
+# helpers render wiring for the SAME repository — the root branch returns the
+# constants while the subdirectory branch calls the helpers — so a literal copy
+# that drifts by one space makes the two paths print different instructions for
+# the same file, and only one of them would be pasteable. Defining them from
+# the helpers makes that drift unrepresentable rather than merely discouraged.
+_GL_INCLUDE_SNIPPET = _gl_block_for(_GL_PIPELINE_REL.as_posix())
+_GL_WIRING_EXAMPLE = _gl_example_for(_GL_PIPELINE_REL.as_posix())
+
+
+# Root-shell outcomes. "There is already a root file" is not one case but
+# four, because the sentence we print and the snippet we hand over both
+# depend on what is in it — and one of those sentences is an all-clear.
+_GL_ROOT_CREATE = 'create'            # no root file — we write the shell
+_GL_ROOT_ALREADY_WIRED = 'wired'      # their root file already includes ours
+_GL_ROOT_NEEDS_INCLUDE = 'needs-include'  # their root file, no `include:` key
+_GL_ROOT_NEEDS_APPEND = 'needs-append'    # `include:` is a LIST — append an item
+_GL_ROOT_NEEDS_CONVERT = 'needs-convert'  # `include:` exists but is NOT a list
+_GL_ROOT_UNPARSEABLE = 'unparseable'      # their root file did not parse
+
+
+def _gitlab_include_path(raw: str) -> str:
+    """Normalise a `local:` include path the way GitLab itself does.
+
+    ⛔ GitLab strips leading slashes (`Gitlab::Utils.remove_leading_slashes`),
+    and every `include:local` example in its documentation uses one — so
+    `/.gitlab-ci.d/dynamic-alerting.yml` and `.gitlab-ci.d/dynamic-alerting.yml`
+    are the SAME file to GitLab. Comparing the raw strings made a correctly
+    wired repo read as unwired, and we then asked for a second include of the
+    file it already loads.
+    """
+    return raw.lstrip('/').removeprefix('./')
+
+
+def _gitlab_declared_includes(doc: object) -> list[str]:
+    """Local include paths declared by a parsed `.gitlab-ci.yml`.
+
+    `include:` accepts a bare string, a single mapping, or a list of either,
+    so all three shapes are normalised here rather than at each call site.
+    """
+    raw = doc.get('include') if isinstance(doc, dict) else None
+    if raw is None:
+        return []
+    entries = raw if isinstance(raw, list) else [raw]
+    found: list[str] = []
+    for entry in entries:
+        if isinstance(entry, str):
+            found.append(_gitlab_include_path(entry))
+        elif isinstance(entry, dict) and isinstance(entry.get('local'), str):
+            found.append(_gitlab_include_path(entry['local']))
+    return found
+
+
+def _enclosing_repo_root(output_dir: str) -> Optional[Path]:
+    """The git work-tree root above `output_dir`, if it is not `output_dir`.
+
+    ⛔ Every claim this tool makes about GitLab wiring is really a claim about
+    the REPOSITORY root, because that is the only path GitLab auto-loads —
+    but the whole five-state classification reads `--output-dir`. Those are
+    the same directory only when the customer runs it at the top of their
+    repo. `-o` defaults to `.` and its help calls it the "output root", while
+    sibling scaffolders in this same family default to a subdirectory, so
+    `-o alerting/` is a trained habit rather than an exotic case.
+
+    Run that way, the tool writes an inert `.gitlab-ci.yml` one level down,
+    never reads the real root file, and prints "GitLab wiring done" — #1357
+    re-created and then certified, which is precisely the outcome
+    `_gitlab_root_shell_status` exists to prevent. Returning the enclosing
+    root lets the caller downgrade the claim instead of asserting it.
+    """
+    try:
+        here = Path(output_dir).resolve()
+    except OSError:
+        return None
+    for candidate in (here, *here.parents):
+        if (candidate / '.git').exists():
+            return None if candidate == here else candidate
+    return None
+
+
+# Top-level directories this generator creates in the customer's repo. Used to
+# recognise a root-relative path INSIDE a shell body, where no key names it.
+_GENERATED_TREES = ('conf.d', 'rule-packs', 'kustomize', 'environments')
+
+# Keys whose values BOTH platforms resolve from the repository root, never
+# from the CI file's own directory.
+#   GitLab — "Paths are relative to the project directory (`$CI_PROJECT_DIR`)"
+#            for both `rules:changes` and `rules:exists`.
+#   GitHub — `on.<event>.paths` globs are matched against repository-relative
+#            changed-file paths.
+# `CONFIG_DIR` joins them because the job scripts run from the checkout root.
+_ROOT_RELATIVE_CI_KEYS = ('paths', 'changes', 'exists', 'CONFIG_DIR')
+
+
+def _root_relative_ci_paths(path: Path) -> list[str]:
+    """Every repo-root-relative path a generated CI file resolves.
+
+    TWO sources, because the structured keys are only half of it:
+      * `paths` / `changes` / `exists` / `CONFIG_DIR` — the platform resolves
+        these from the repository root by definition;
+      * bare paths inside `script:` / `run:` bodies — `kustomize build
+        kustomize/overlays/prod`, `helm … -f environments/prod/values.yaml`.
+        The job's working directory is the checkout root, so these are
+        root-relative too, and NOTHING names them as paths.
+
+    ⛔ The first version walked the four keys only, while its docstring and the
+    summary step that consumes it both claimed the list was everything left to
+    fix. A customer who prefixed exactly what was printed got jobs that finally
+    ran and an apply step that died on a path never mentioned.
+
+    ⛔ Derived from the file we just wrote, never a hand-kept list. The
+    generated pipelines are authored for an install AT the repository root:
+    their path filters and `CONFIG_DIR` name `conf.d/**`, `rule-packs/**`,
+    `kustomize/**`. Written into `-o alerting/` and then wired up exactly as
+    this tool instructs, every one of those resolves against the repository
+    root and matches nothing — no job is ever created, so the repo goes
+    permanently green having validated nothing. That is #1357's outcome
+    reached by obeying our own remedy, which is why the remedy has to say it.
+
+    Walking the parsed document (rather than listing keys per platform) means
+    a job added later cannot quietly acquire a filter this warning omits.
+    """
+    try:
+        doc = yaml.safe_load(path.read_text(encoding='utf-8'))
+    except (OSError, yaml.YAMLError):
+        return []
+    found: list[str] = []
+
+    def _collect(value) -> None:
+        if isinstance(value, str):
+            found.append(value)
+        elif isinstance(value, list):
+            for item in value:
+                _collect(item)
+        elif isinstance(value, dict):
+            # `changes:` also takes the long form {paths: [...], compare_to: …}
+            _collect(value.get('paths'))
+
+    def _walk(node) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key in _ROOT_RELATIVE_CI_KEYS:
+                    _collect(value)
+                else:
+                    _walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                _walk(item)
+
+    def _walk_scripts(node) -> None:
+        """Bare `<tree>/...` tokens inside shell bodies."""
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key in ('script', 'run', 'before_script', 'after_script'):
+                    body = value if isinstance(value, list) else [value]
+                    for chunk in body:
+                        if not isinstance(chunk, str):
+                            continue
+                        # ⚠️ A `run: |` block scalar carries the step's shell
+                        # COMMENTS inside the string, and those comments are
+                        # prose about paths. Tokenising them yielded entries
+                        # like `conf.d/_defaults.yaml.` and ``conf.d/` `` —
+                        # the customer would try to prefix a sentence.
+                        for line in chunk.splitlines():
+                            for tok in (line.replace('"', ' ')
+                                            .replace("'", ' ').split()):
+                                if tok.startswith('#'):
+                                    break
+                                tok = tok.strip(',;()`.')
+                                if tok.startswith(_GENERATED_TREES) and '/' in tok:
+                                    found.append(tok)
+                else:
+                    _walk_scripts(value)
+        elif isinstance(node, list):
+            for item in node:
+                _walk_scripts(item)
+
+    _walk(doc)
+    _walk_scripts(doc)
+    return sorted(dict.fromkeys(found))
+
+
+def _gitlab_root_includes(repo_root: Path, output_dir: Path) -> bool:
+    """Does the REPOSITORY-root pipeline already include our subdir pipeline?
+
+    Only meaningful when `output_dir` is below `repo_root`. Everything else
+    in this module reads `<output_dir>/.gitlab-ci.yml`; this is the one place
+    that has to look at the real root, because that is the file GitLab reads
+    and the one the subdirectory warning talks about.
+    """
+    root_ci = repo_root / _GL_ROOT_SHELL_REL
+    try:
+        body = root_ci.read_text(encoding='utf-8', errors='replace')
+    except OSError:
+        return False
+    try:
+        doc = yaml.safe_load(body)
+    except yaml.YAMLError:
+        return False
+    try:
+        want = (output_dir.relative_to(repo_root) / _GL_PIPELINE_REL).as_posix()
+    except ValueError:
+        return False
+    return want in _gitlab_declared_includes(doc)
+
+
+def _gitlab_root_shell_status(output_dir: str) -> str:
+    """Decide what to do about the repository-root `.gitlab-ci.yml`.
+
+    ⛔ Existence check, not a `--force` check. `--force` means "rewrite the
+    files this tool generated"; a root `.gitlab-ci.yml` in a customer repo is
+    usually not one of ours — it is their entire pipeline. Overwriting it would
+    delete every job they run, and appending to it would edit a document whose
+    structure we have not parsed. So we never touch an existing one.
+
+    ⛔ The wired/not-wired split PARSES the document; it used to be a substring
+    test on the include path. That test was justified as costing "a missing
+    reminder, never a modified file", which was wrong in the one direction
+    that matters: a root file merely MENTIONING the path in a comment read as
+    wired, and the wired branch does not stay silent — it prints "nothing to
+    do" and the closing line reverts to "GitLab CI will automatically validate
+    your config". A false positive is therefore an affirmative all-clear on a
+    pipeline GitLab never loads, i.e. #1357 re-created and then certified. The
+    tool also refuses to rewrite an existing root file under `--force`, so
+    there is no in-tool route back from that lie.
+
+    ⚠️ `is_symlink()` is checked alongside `exists()`: `exists()` follows
+    symlinks, so a DANGLING symlink at the root path reads as "no file here"
+    and the writer then follows it, planting our shell outside `--output-dir`
+    entirely. Every other generated file follows symlinks too, but this is the
+    one existence check that exists to protect a customer-owned file, so it
+    must fail closed.
+    """
+    return _classify_root_file(Path(output_dir) / _GL_ROOT_SHELL_REL,
+                               _GL_PIPELINE_REL.as_posix())
+
+
+def _classify_root_file(root: Path, want: str) -> str:
+    """Classify ANY root pipeline against the include path we need in it.
+
+    ⛔ Parameterised because there are two such files, not one. When
+    `--output-dir` is below the repository root, the file the customer
+    must edit is the REPO-ROOT one and the path it must carry is
+    `<subdir>/.gitlab-ci.d/...`. That leg used to print an unconditional
+    bare list item without inspecting anything — reintroducing, for the
+    subdirectory case, the exact destructive fragment the rest of this
+    module was rewritten twice to eliminate.
+    """
+    if not root.exists() and not root.is_symlink():
+        return _GL_ROOT_CREATE
+    try:
+        body = root.read_text(encoding='utf-8', errors='replace')
+    except OSError:
+        # Unreadable, a directory, or a broken symlink. Hands off, and say so.
+        return _GL_ROOT_UNPARSEABLE
+    # ⛔ `safe_load`, deliberately, even though it costs us a case. A stranger's
+    # pipeline may use GitLab's own tags (`!reference` is ordinary), and
+    # SafeLoader raises on an unknown tag — so such a file lands in
+    # UNPARSEABLE and its owner is told to check the include rather than being
+    # told "nothing to do". A tag-tolerant SafeLoader subclass would recover
+    # that case, but it can only be installed through `yaml.load(...,
+    # Loader=...)`, which the repo's SAST rule rejects because it cannot see
+    # that the subclass is safe. Widening a security lint to win back a nicer
+    # sentence is the wrong trade: every path out of here that is not
+    # ALREADY_WIRED prints the wiring instructions, so the loss is one
+    # redundant reminder, never a false all-clear.
+    try:
+        doc = yaml.safe_load(body)
+    except yaml.YAMLError:
+        # ⛔ Do not fall through to the block-shaped snippet. `!reference` is
+        # the ordinary route into this branch, and a pipeline sophisticated
+        # enough to use it almost certainly already has an `include:` — the
+        # exact repo for which a second `include:` key silently deletes the
+        # customer's own entries. We cannot parse, but we can still see
+        # whether the key is there, so the shape decision is made on a line
+        # scan rather than on a guess.
+        return (_GL_ROOT_NEEDS_APPEND if _GL_INCLUDE_KEY_RE.search(body)
+                else _GL_ROOT_UNPARSEABLE)
+    includes = _gitlab_declared_includes(doc)
+    if want in includes:
+        return _GL_ROOT_ALREADY_WIRED
+    if not (isinstance(doc, dict) and 'include' in doc):
+        # ⛔ POST-CONDITION, not a premise. The carve-out for "no `include:`
+        # key" was justified as "adding a brand-new top-level key at the end
+        # of a document is the one edit whose correctness does not depend on
+        # the rest of the file's style". That is false for at least two
+        # shapes GitLab accepts: a document closed with `...`, and a
+        # JSON/flow-style root (what jsonnet, CUE and `json.dumps` pipelines
+        # commit). Appending a block mapping to either is a parse error that
+        # takes the customer's whole pipeline down.
+        #
+        # So do not reason about style — apply the edit and check. Anything
+        # the ready-made block would break falls back to the worked example,
+        # which asks the customer to fit it to their own document.
+        # ⚠️ This validates ONE paste position — append at EOF — so the
+        # instruction that unlocks it must name that position. GitLab's own
+        # docs put `include:` at the TOP of the file, and for a document that
+        # opens with `---` a top paste is a parse error while an EOF append
+        # is fine. The message says "at the end" for this reason.
+        try:
+            pasted = yaml.safe_load(body + '\n' + _gl_block_for(want))
+        except yaml.YAMLError:
+            return _GL_ROOT_NEEDS_CONVERT
+        if not (isinstance(pasted, dict)
+                and want in _gitlab_declared_includes(pasted)):
+            return _GL_ROOT_NEEDS_CONVERT
+        return _GL_ROOT_NEEDS_INCLUDE
+    # ⛔ LIST-ness, not mere presence. `include:` also accepts a bare string
+    # (`include: 'a.yml'`) and a single mapping (`include:\n  template: …`),
+    # both documented GitLab forms. Telling the owner of one of those to
+    # "append this list item under your existing include:" produces a block
+    # sequence under a scalar or a mapping — a YAML syntax error that stops
+    # their ENTIRE root pipeline from loading, not just ours. Measured: the
+    # bare-string, single-mapping and empty-`[]` shapes all fail to parse
+    # after following that instruction; only the true list survives.
+    return (_GL_ROOT_NEEDS_APPEND if isinstance(doc['include'], list)
+            and doc['include'] else _GL_ROOT_NEEDS_CONVERT)
+
+
+# A top-level `include:` key, seen without parsing. Used only when the
+# document did not parse — enough to choose a snippet SHAPE, never enough to
+# claim the pipeline is wired.
+_GL_INCLUDE_KEY_RE = re.compile(r'^include\s*:', re.MULTILINE)
+
+
+def _gitlab_root_snippet_for(status: str) -> str:
+    """What to show for a given root-file status.
+
+    Only NEEDS_INCLUDE gets a paste-ready block, and only because
+    `_classify_root_file` reached that status by APPLYING the block and
+    re-parsing — see the post-condition there. Every other state shows the end
+    state instead — see `_GL_WIRING_EXAMPLE`.
+
+    ⚠️ It is not "appending a top-level key is style-independent". That was the
+    original justification and it is false for at least two shapes GitLab
+    accepts (a `...` document-end marker, a JSON/flow root); restating it here
+    is how someone returns NEEDS_INCLUDE from a path that never ran the check.
+    """
+    return (_GL_INCLUDE_SNIPPET if status == _GL_ROOT_NEEDS_INCLUDE
+            else _GL_WIRING_EXAMPLE)
+
+
+def _gitlab_root_shell_is_needed(output_dir: str) -> bool:
+    """True when we may create the root `.gitlab-ci.yml` ourselves.
+
+    ⛔ Also false when `output_dir` is BELOW the repository root. GitLab reads
+    only the repo-root file, so a shell planted in a subdirectory is inert —
+    and worse, its `local:` path is resolved from the repo root, so it is
+    wrong the moment the customer does the obvious `git mv` to rescue it.
+    Writing a file that is both unread and mis-pathed is not a partial fix;
+    the summary tells them what to add at the root instead.
+    """
+    return (_gitlab_root_shell_status(output_dir) == _GL_ROOT_CREATE
+            and _enclosing_repo_root(output_dir) is None)
+
+
+def _gen_gitlab_root_shell() -> str:
+    """Generate the root `.gitlab-ci.yml` whose only job is to be found."""
+    return textwrap.dedent("""\
+    # Dynamic Alerting CI/CD — root pipeline shell
+    # Generated by: da-tools init
+    # Docs: https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/gitops-ci-integration/
+    #
+    # GitLab auto-loads a pipeline from THIS path only — the repository root
+    # `.gitlab-ci.yml`. The real pipeline (stages, jobs, variables) lives in
+    # the included file; this shell exists so that GitLab finds it.
+    #
+    # Safe to hand-edit — keep the `local:` line, or the Dynamic Alerting
+    # pipeline stops running. Add further `include:` entries as list items
+    # under the existing key (a second `include:` key would replace this one).
+    #
+    # `stages:` and `variables:` come from the included file, so do not
+    # restate them here: a `stages:` in THIS file overrides the included one
+    # and breaks every generated job. For the same reason, a job you add here
+    # needs an explicit `stage:` drawn from that list ({stage_names}) —
+    # without one it defaults to `test`, which is not a declared stage, and
+    # the whole pipeline fails to build.
+
+    {include_snippet}""").format(
+        include_snippet=_GL_INCLUDE_SNIPPET,
+        stage_names=", ".join(_GL_STAGES),
+    )
 
 
 def _gen_gitlab_ci(
@@ -1460,11 +1982,13 @@ def _gen_gitlab_ci(
     # Generated by: da-tools init
     # Docs: https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/gitops-ci-integration/
     #
-    # Three stages: validate → generate → apply
+    # Two stages: validate → apply
+    #
+    # The GitHub artifact has a third (blast-radius diff). This one does not
+    # — see the note above the apply stage for why, and vencil/Dynamic-Alerting-Integrations issue 1358.
 
     stages:
       - validate
-      - generate
       - apply
 
     variables:
@@ -1478,7 +2002,16 @@ def _gen_gitlab_ci(
     # ── Stage 1: Validate ────────────────────────────────────
     validate-config:
       stage: validate
-      image: $DA_TOOLS_IMAGE
+      image:
+        name: $DA_TOOLS_IMAGE
+        # ⛔ Load-bearing, not boilerplate. GitLab runs `script:` through a shell
+        # INSIDE this image, so an image whose ENTRYPOINT is the tool itself
+        # (da-tools is `ENTRYPOINT ["python3", "/opt/da-tools/entrypoint.py"]`)
+        # turns that shell invocation into arguments to the tool and the job dies
+        # before the first script line. Harmless for images that already start a
+        # shell. (issue 1408 — the apply stage below carried this from the start; the
+        # three da-tools jobs were emitted as a bare scalar and did not.)
+        entrypoint: [""]
       rules:
         - changes:
             - conf.d/**/*
@@ -1488,12 +2021,25 @@ def _gen_gitlab_ci(
 
     lint-custom-rules:
       stage: validate
-      image: $DA_TOOLS_IMAGE
+      image:
+        name: $DA_TOOLS_IMAGE
+        # ⛔ Load-bearing, not boilerplate — see validate-config above (issue 1408).
+        entrypoint: [""]
       rules:
+        # ⛔ `exists:` takes FILE globs. It used to say `rule-packs/custom/`
+        # — a bare directory with a trailing slash — and GitLab resolves that
+        # form with a `bsearch` over the sorted worktree path list, i.e. a
+        # binary search against a predicate that is not monotonic. Whether it
+        # finds the directory then depends on where the search happens to
+        # land: with the bare generated layout it hits, and adding any tree
+        # that sorts after `rule-packs/` makes it miss. A missed `exists:` is
+        # ANDed with `changes:`, so the job is simply never created — no
+        # error, no red, just a governance gate that quietly is not there.
+        # A pattern glob is matched with fnmatch over every path instead.
         - changes:
             - rule-packs/custom/**/*
           exists:
-            - rule-packs/custom/
+            - rule-packs/custom/**/*
       # ⛔ NO `allow_failure:`. `da-tools lint --ci` exits non-zero on ERROR
       # only (lint_custom_rules.py: `if args.ci and errors`), and its ERRORs are
       # the governance deny-list on tenant-authored raw PromQL — denied
@@ -1510,23 +2056,26 @@ def _gen_gitlab_ci(
       script:
         - da-tools lint rule-packs/custom/ --ci
 
-    # ── Stage 2: Generate routes + blast radius ──────────────
-    generate-routes:
-      stage: generate
-      image: $DA_TOOLS_IMAGE
-      rules:
-        - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-          changes:
-            - conf.d/**/*
-      script:
-        - mkdir -p .output .output/base/conf.d
-        - git archive $CI_MERGE_REQUEST_DIFF_BASE_SHA -- conf.d/ | tar -x -C .output/base/ 2>/dev/null || true
-        - da-tools generate-routes --config-dir $CONFIG_DIR -o .output/alertmanager-routes.yaml --validate
-        - da-tools config-diff --old-dir .output/base/conf.d --new-dir $CONFIG_DIR --format markdown > .output/blast-radius.md
-      artifacts:
-        paths:
-          - .output/
-        expire_in: 7 days
+    # ── Blast-radius (config-diff) is NOT emitted on this platform yet ──
+    #
+    # The GitHub artifact runs it; this one deliberately does not, and the
+    # reason is a property of the image rather than of your repository.
+    #
+    # GitLab runs `script:` inside $DA_TOOLS_IMAGE, and that image has no
+    # `git` (it is python:alpine plus the tool). The baseline for a blast
+    # radius comes from `git archive <base sha>`, so on this platform the
+    # comparison cannot be taken at all — and an absent baseline does not
+    # read as "no changes", it reads as "every tenant is new". Emitting the
+    # job anyway produced a report nobody should trust, and then failed the
+    # job on `config-diff`'s exit code 1, which is its ORDINARY "changes
+    # found" answer rather than an error.
+    #
+    # Shipping nothing is the honest state until the image carries git: a
+    # missing check is visible, a confidently wrong one is not.
+    #
+    # Tracking: vencil/Dynamic-Alerting-Integrations issues 1358 (the defect) / 1444 (adding git to the image and
+    # porting the GitHub leg's baseline handling, which is what brings this
+    # back).
     {apply_stage}
     """).format(
         da_tools_image=da_tools_image,
@@ -1895,7 +2444,6 @@ def _prompt_text(prompt_text: str, default: str = '') -> str:
 
 def _validate_tenant_name(name: str) -> bool:
     """Validate tenant name follows K8s naming conventions."""
-    import re
     return bool(re.match(r'^[a-z0-9]([a-z0-9-]*[a-z0-9])?$', name)) and len(name) <= 63
 
 
@@ -2001,9 +2549,16 @@ def _preview_files(config: dict, output_dir: str) -> list[str]:
     for t in tenants:
         _add(out / 'conf.d' / f'{t}.yaml')
     if ci in ('github', 'both'):
-        _add(out / '.github' / 'workflows' / 'dynamic-alerting.yaml')
+        _add(out / _GH_WORKFLOW_REL)
     if ci in ('gitlab', 'both'):
-        _add(out / '.gitlab-ci.d' / 'dynamic-alerting.yml')
+        _add(out / _GL_PIPELINE_REL)
+        # Conditional, and it has to be: the root shell is the one artifact
+        # whose existence depends on the target repo rather than on the flags.
+        # Listing it unconditionally would tell a customer who already has a
+        # root pipeline that we are about to write over it — the exact fear
+        # `--dry-run` exists to settle.
+        if _gitlab_root_shell_is_needed(output_dir):
+            _add(out / _GL_ROOT_SHELL_REL)
     if deploy == 'kustomize':
         _add(out / 'kustomize' / 'base' / 'kustomization.yaml')
         _add(out / 'kustomize' / 'base' / 'README.md')
@@ -2077,17 +2632,29 @@ def run_init(config: dict, output_dir: str) -> list[str]:
     # ── 2. CI/CD pipelines ─────────────────────────────────
     if ci in ('github', 'both'):
         _write_file(
-            str(out / '.github' / 'workflows' / 'dynamic-alerting.yaml'),
+            str(out / _GH_WORKFLOW_REL),
             _gen_github_actions(namespace, da_tools_image, deploy),
             created,
         )
 
     if ci in ('gitlab', 'both'):
         _write_file(
-            str(out / '.gitlab-ci.d' / 'dynamic-alerting.yml'),
+            str(out / _GL_PIPELINE_REL),
             _gen_gitlab_ci(namespace, da_tools_image, deploy),
             created,
         )
+        # #1357 — the pipeline above is inert on its own. Give GitLab the one
+        # path it looks at, unless the customer already has one, in which case
+        # `_print_summary` prints the include for them to paste. ⛔ The
+        # skip must stay silent HERE and loud THERE: appending `created` for a
+        # file we did not write would make the summary, the dry run and
+        # `--force`'s blast radius all overstate what happened.
+        if _gitlab_root_shell_is_needed(output_dir):
+            _write_file(
+                str(out / _GL_ROOT_SHELL_REL),
+                _gen_gitlab_root_shell(),
+                created,
+            )
 
     # ── 3. Kustomize overlays ──────────────────────────────
     if deploy == 'kustomize':
@@ -2261,10 +2828,406 @@ def _print_summary(created: list[str], output_dir: str, config: dict,
               f"into your existing repos: list (pasting the file whole drops your hooks)")
     step += 1
 
+    # ⛔ The apply stage cannot succeed as delivered and NOTHING said so. Every
+    # deploy method's apply job talks to a cluster (or to an Argo CD server),
+    # and the generator emits no `KUBECONFIG`, no secret reference, no login
+    # step — by design, because those are the customer's own credentials. But
+    # "by design" was only ever true inside this file: the summary listed
+    # thresholds, pre-commit and CI wiring, then said "commit and push",
+    # leaving the first manual deploy to fail with `connection refused` (or
+    # `argocd: not logged in`) and nothing to connect that to a missing step.
+    #
+    # ⚠️ Deliberately named as a step rather than half-wired: a guessed secret
+    # name is a wrong answer that looks like an answer, and credentials are the
+    # one thing this tool must not invent.
+    # ⛔ The third element exists because the first version of this step said
+    # "or the first manual deploy fails on connection" — asserting credentials
+    # were the LAST thing missing. For `--deploy helm` the first failure is
+    # `open environments/prod/values.yaml: no such file` (this generator does
+    # not create it) and for `--deploy argocd` it is an Application this
+    # generator does not create, both BEFORE any connection is attempted.
+    _apply_needs = {
+        'kustomize': ('kubectl / kustomize', 'KUBECONFIG',
+                      'conf.d/ 已連結進 kustomize/base/（見上面的步驟）',
+                      'conf.d/ linked into kustomize/base/ (the step above)'),
+        'helm': ('helm', 'KUBECONFIG',
+                 'environments/prod/values.yaml —— 本工具不會產生它',
+                 'environments/prod/values.yaml, which this tool does not '
+                 'generate'),
+        'argocd': ('argocd', 'ARGOCD_SERVER + ARGOCD_AUTH_TOKEN',
+                   "一個名為 'dynamic-alerting' 的 ArgoCD Application"
+                   '—— 本工具不會建立它',
+                   "an ArgoCD Application named 'dynamic-alerting', which "
+                   'this tool does not create'),
+    }.get(config.get('deploy'),
+          ('kubectl', 'KUBECONFIG', '目標叢集可連線', 'a reachable cluster'))
     if is_zh:
-        print(f"  {step}. 提交並推送 — CI 會自動驗證你的配置")
+        print(f"  {step}. ⚠️ Apply 階段需要你自己提供叢集憑證——產生出來的 "
+              f"pipeline 刻意不含任何憑證。請在你的 CI 設定 "
+              f"{_apply_needs[1]}（{_apply_needs[0]} 會用到）。"
+              f"⚠️ 憑證是**必要條件之一**，不保證 apply 就能跑：這一步還需要"
+              f"目標端已備妥（{_apply_needs[2]}）")
     else:
-        print(f"  {step}. Commit and push — CI will automatically validate your config")
+        print(f"  {step}. ⚠️ The apply stage needs cluster credentials you "
+              f"supply — the generated pipeline deliberately contains none. "
+              f"Set {_apply_needs[1]} in your CI (that is what "
+              f"{_apply_needs[0]} uses). ⚠️ Credentials are ONE prerequisite, "
+              f"not a guarantee the apply runs: it also needs "
+              f"{_apply_needs[3]}")
+    step += 1
+
+    # ── CI wiring (#1357) ──────────────────────────────────
+    # ⛔ "Did we write it" comes from `created`, never from the disk: by the
+    # time this runs the file exists either way, so a second existence check
+    # here would report our own shell as the customer's pre-existing pipeline.
+    # Only the remaining question — is a file we did NOT write already wired —
+    # is answered by reading, and then only to choose a sentence.
+    ci_sel = config.get('ci', 'both')
+    gl_root_written = str(Path(output_dir) / _GL_ROOT_SHELL_REL) in created
+    gl_status = (_GL_ROOT_CREATE if gl_root_written
+                 else _gitlab_root_shell_status(output_dir))
+    # Does the customer's root file actually carry an `include:` key? Only
+    # used to choose a sentence — never to claim the pipeline is wired.
+    gl_has_key = False
+    if not gl_root_written:
+        try:
+            _body = (Path(output_dir) / _GL_ROOT_SHELL_REL).read_text(
+                encoding='utf-8', errors='replace')
+        except OSError:
+            _body = ''
+        gl_has_key = bool(_GL_INCLUDE_KEY_RE.search(_body))
+    # ⛔ Every state except "we wrote it" and "already wired" leaves the
+    # customer with work to do, so this list must be the complement of those
+    # two — enumerating the needs-work states instead is how NEEDS_CONVERT got
+    # added later and silently inherited "CI will automatically validate".
+    # ⛔ Complement, not an enumeration of needs-work states — enumerating is
+    # how NEEDS_CONVERT silently inherited "CI will automatically validate".
+    # The subdirectory case is unfinished work too: whatever we wrote, the
+    # repository root does not include it yet.
+    repo_root = _enclosing_repo_root(output_dir)
+    gl_in_subdir = repo_root is not None
+    gl_subdir_wired = (gl_in_subdir and _gitlab_root_includes(
+        repo_root, Path(output_dir).resolve()))
+    # ⛔ In a subdirectory the LOCAL status is meaningless — `gl_status` reads
+    # `<output_dir>/.gitlab-ci.yml`, a path GitLab never looks at. The only
+    # question that matters there is whether the REPOSITORY root includes us.
+    # Mixing the two made a correctly-wired subdir repo get "nothing to do"
+    # on one line and "you still have work" on the next.
+    if gl_in_subdir:
+        # ⛔ GitHub is unconditionally unfinished in a subdirectory: its
+        # workflow must be MOVED to the repository root and there is no
+        # `include:` indirection to rescue it. Deriving this solely from the
+        # GitLab question meant a run could warn "GitHub is NOT wired" and
+        # then close with "will automatically validate your config" — the
+        # contradiction the non-subdir path was fixed for, still live here.
+        gh_selected = ci_sel in ('github', 'both')
+        gl_selected = ci_sel in ('gitlab', 'both')
+        gl_needs_manual = gh_selected or (gl_selected and not gl_subdir_wired)
+    else:
+        gl_needs_manual = (ci_sel in ('gitlab', 'both')
+                           and not gl_root_written
+                           and gl_status != _GL_ROOT_ALREADY_WIRED)
+
+    if ci_sel in ('github', 'both'):
+        # ⛔ GitHub needs this warning MORE than GitLab, not less. GitLab at
+        # least has `include:`, so a pipeline in a subdirectory can be
+        # rescued from the root; GitHub Actions loads
+        # `<repo-root>/.github/workflows/` and nothing else, with no
+        # indirection to recover it. A workflow written one level down is
+        # simply inert, so "GitHub wiring done" there is a clean bill of
+        # health for something that will never run — #1357's shape, on the
+        # leg that has no remedy.
+        if repo_root is not None:
+            rel = Path(output_dir).resolve().relative_to(repo_root)
+            if is_zh:
+                print(f"  {step}. ⚠️ GitHub 尚未接線：workflow 產在 "
+                      f"`{rel.as_posix()}/` 底下，而 GitHub Actions 只會載入 "
+                      f"**repo 根目錄**的 `.github/workflows/`。請把 "
+                      f"`{(rel / _GH_WORKFLOW_REL).as_posix()}` 移到 "
+                      f"`{_GH_WORKFLOW_REL.as_posix()}`"
+                      f"（GitHub 沒有 include 機制可以繞過這件事）")
+            else:
+                print(f"  {step}. ⚠️ GitHub is NOT wired: the workflow was "
+                      f"written under `{rel.as_posix()}/`, and GitHub Actions "
+                      f"loads only the **repository root** "
+                      f"`.github/workflows/`. Move "
+                      f"`{(rel / _GH_WORKFLOW_REL).as_posix()}` to "
+                      f"`{_GH_WORKFLOW_REL.as_posix()}` — GitHub has no "
+                      f"`include:` mechanism to work around this.")
+        elif is_zh:
+            print(f"  {step}. GitHub 接線已完成：{_GH_WORKFLOW_REL.as_posix()} "
+                  f"位於 GitHub Actions 會自動載入的目錄")
+        else:
+            print(f"  {step}. GitHub wiring done: {_GH_WORKFLOW_REL.as_posix()} "
+                  f"sits where GitHub Actions auto-loads it")
+        step += 1
+
+    if ci_sel in ('gitlab', 'both'):
+        # ⛔ Every GitLab claim below is about the REPOSITORY root, which is
+        # the only path GitLab auto-loads. If we were pointed at a
+        # subdirectory, none of them is true of the repo — say so instead of
+        # asserting wiring we did not do.
+        if repo_root is not None and _gitlab_root_includes(
+                repo_root, Path(output_dir).resolve()):
+            # ⛔ Check the REAL root file before instructing. The subdir
+            # branch used to take precedence over every other state and
+            # never looked at the repository root at all, so a customer who
+            # had already wired the subdirectory path correctly was told to
+            # add a line their file already contains.
+            rel = Path(output_dir).resolve().relative_to(repo_root)
+            if is_zh:
+                print(f"  {step}. GitLab 接線已就緒：repo 根目錄的 "
+                      f"{_GL_ROOT_SHELL_REL.as_posix()} 已經 include 了 "
+                      f"`{(rel / _GL_PIPELINE_REL).as_posix()}`（未修改），"
+                      f"無需額外動作")
+            else:
+                print(f"  {step}. GitLab wiring already in place: the "
+                      f"repository-root {_GL_ROOT_SHELL_REL.as_posix()} "
+                      f"already includes "
+                      f"`{(rel / _GL_PIPELINE_REL).as_posix()}` "
+                      f"(left untouched) — nothing to do")
+        elif repo_root is not None:
+            rel = Path(output_dir).resolve().relative_to(repo_root)
+            want = (rel / _GL_PIPELINE_REL).as_posix()
+            # ⛔ Same machinery as the non-subdir leg. This branch used to
+            # print an unconditional bare list item without looking at the
+            # file at all — which is the destructive fragment this module was
+            # rewritten twice to eliminate, reintroduced for the subdirectory
+            # case. Measured: on a repo with NO root pipeline it produced a
+            # top-level sequence (GitLab requires a hash, so the pipeline
+            # still never ran), and on a root file whose `include:` is a
+            # scalar / flow list / single mapping it was a syntax error that
+            # took the customer's ENTIRE root pipeline down.
+            root_status = _classify_root_file(
+                repo_root / _GL_ROOT_SHELL_REL, want)
+            # CREATE (there is no repo-root pipeline at all) takes the block
+            # too: the customer is writing a brand-new file whose entire
+            # content is what we print, so there is no existing style to
+            # collide with. NEEDS_INCLUDE is the append-at-EOF case the
+            # post-condition already proved safe.
+            snippet = (_gl_block_for(want)
+                       if root_status in (_GL_ROOT_CREATE,
+                                          _GL_ROOT_NEEDS_INCLUDE)
+                       else _gl_example_for(want))
+            if is_zh:
+                print(f"  {step}. ⚠️ 這次的輸出目錄是 `{rel.as_posix()}/`，"
+                      f"不是 repo 根目錄。GitLab 只會自動載入 **repo 根目錄** 的 "
+                      f"`.gitlab-ci.yml`，所以產在這個子目錄裡的那一份不會被讀到。"
+                      f"請讓 repo 根目錄的 `.gitlab-ci.yml` 最後長成這樣"
+                      f"（保留你原本的項目，照你檔案既有的縮排）：")
+            else:
+                print(f"  {step}. ⚠️ This run wrote into `{rel.as_posix()}/`, "
+                      f"not the repository root. GitLab auto-loads only the "
+                      f"**repository root** `.gitlab-ci.yml`, so the one "
+                      f"generated here is not read. Make your "
+                      f"repository-root `.gitlab-ci.yml` end up like this "
+                      f"(keep your own entries, match its indentation):")
+            print()
+            for line in snippet.rstrip('\n').splitlines():
+                print(f"       {line}")
+            print()
+        elif gl_root_written:
+            if is_zh:
+                print(f"  {step}. GitLab 接線已完成：已產生根目錄 "
+                      f"{_GL_ROOT_SHELL_REL.as_posix()}（GitLab 只會自動載入這個路徑），"
+                      f"它 include 了 {_GL_PIPELINE_REL.as_posix()}")
+            else:
+                print(f"  {step}. GitLab wiring done: generated "
+                      f"{_GL_ROOT_SHELL_REL.as_posix()} (the only path GitLab "
+                      f"auto-loads), which includes {_GL_PIPELINE_REL.as_posix()}")
+        elif gl_status == _GL_ROOT_ALREADY_WIRED:
+            if is_zh:
+                print(f"  {step}. GitLab 接線已就緒：你既有的根目錄 "
+                      f"{_GL_ROOT_SHELL_REL.as_posix()} 已經 include "
+                      f"{_GL_PIPELINE_REL.as_posix()}（未修改），無需額外動作")
+            else:
+                print(f"  {step}. GitLab wiring already in place: your existing "
+                      f"root {_GL_ROOT_SHELL_REL.as_posix()} already includes "
+                      f"{_GL_PIPELINE_REL.as_posix()} (left untouched) — "
+                      f"nothing to do")
+        else:
+            # ⛔ The one place this tool asks the customer to edit a file
+            # itself refused to touch. Print the literal snippet: "add an
+            # include" is an instruction they have to translate, and this is
+            # the point at which a wrong translation leaves the whole pipeline
+            # inert with nothing red anywhere.
+            # ⛔ Three states, one safe instruction. NEEDS_APPEND,
+            # NEEDS_CONVERT and UNPARSEABLE differ in what we know about
+            # their file, but not in what we can safely tell them: show the
+            # end state, never a fragment whose indentation and block/flow
+            # style we cannot see. (An earlier version printed a ready-made
+            # list item for NEEDS_APPEND; flow sequences, aliases and
+            # non-2-space indentation all made that a syntax error that took
+            # the customer's whole pipeline down.)
+            if gl_status == _GL_ROOT_NEEDS_INCLUDE:
+                if is_zh:
+                    print(f"  {step}. ⚠️ 你的 repo 已有根目錄 "
+                          f"{_GL_ROOT_SHELL_REL.as_posix()}，但裡面沒有 "
+                          f"`include:` — 未修改。請把下列這段**加在檔案最後**，"
+                          f"否則產生的 pipeline 不會執行：")
+                else:
+                    print(f"  {step}. ⚠️ Your repo has a root "
+                          f"{_GL_ROOT_SHELL_REL.as_posix()} with no "
+                          f"`include:` — left untouched. Append the block below "
+                          f"AT THE END of that file, or the generated "
+                          f"pipeline never runs:")
+            else:
+                if gl_status == _GL_ROOT_UNPARSEABLE:
+                    lead_zh = (f"你的 repo 已有根目錄 "
+                               f"{_GL_ROOT_SHELL_REL.as_posix()}，但無法解析它")
+                    lead_en = (f"Your repo has a root "
+                               f"{_GL_ROOT_SHELL_REL.as_posix()} that could "
+                               f"not be parsed")
+                elif gl_status == _GL_ROOT_NEEDS_CONVERT and not gl_has_key:
+                    # ⛔ NEEDS_CONVERT has TWO causes and only one of them
+                    # involves an existing `include:`. The other is a file
+                    # whose SHAPE (a `...` document-end marker, a JSON/flow
+                    # root) makes the append post-condition fail even though
+                    # there is no `include:` key at all. Telling that owner
+                    # their file "already has an `include:`" — and warning
+                    # them not to add a second one — sends them looking for a
+                    # key that is not there, and the likeliest reaction is to
+                    # doubt the tool rather than follow the example below.
+                    lead_zh = (f"你的 repo 已有根目錄 "
+                               f"{_GL_ROOT_SHELL_REL.as_posix()}，"
+                               f"而它的格式讓我們無法安全地直接附加")
+                    lead_en = (f"Your repo's root "
+                               f"{_GL_ROOT_SHELL_REL.as_posix()} has a shape "
+                               f"we cannot safely append to")
+                else:
+                    lead_zh = (f"你的 repo 已有根目錄 "
+                               f"{_GL_ROOT_SHELL_REL.as_posix()}，且已經有 "
+                               f"`include:`")
+                    lead_en = (f"Your repo's root "
+                               f"{_GL_ROOT_SHELL_REL.as_posix()} already has "
+                               f"an `include:`")
+                if is_zh:
+                    print(f"  {step}. ⚠️ {lead_zh} — 未修改。請自行編輯它，"
+                          f"讓 `include:` 最後長成下面這樣（保留你原本的項目，"
+                          f"照你檔案既有的縮排來寫；不要另外再開一個 "
+                          f"`include:`，那會蓋掉你原本的）：")
+                else:
+                    print(f"  {step}. ⚠️ {lead_en} — left untouched. Edit it "
+                          f"so the `include:` ends up like this (keep your "
+                          f"own entries, and match your file's existing "
+                          f"indentation; do not add a second `include:` key "
+                          f"— it would drop what you have):")
+            print()
+            for line in _gitlab_root_snippet_for(gl_status).rstrip('\n').splitlines():
+                print(f"       {line}")
+            print()
+        step += 1
+
+    # ⛔ Placement is not wiring. The two steps above say where to PUT the
+    # generated files; they say nothing about what is INSIDE them, and the
+    # contents are authored for an install at the repository root. Follow the
+    # instructions to the letter from `-o alerting/` and the result is a
+    # pipeline that is loaded, valid, and matches nothing — no job is ever
+    # created, so the repo goes permanently green having validated nothing.
+    # That is #1357's outcome reached by obeying our own remedy, so the remedy
+    # has to carry this half too.
+    #
+    # ⚠️ Deliberately a statement of work remaining, not a paste-ready patch:
+    # rewriting a customer's path filters for them is the class of edit the
+    # `include:` work spent three rounds learning not to hand out blind.
+    # Parameterising the generated CONTENT on the subdirectory offset is a
+    # separate change (tracked), not something to half-do in a print().
+    # ⛔ Whether this step PRINTED is the only honest input to the closing
+    # line. `gl_needs_manual` answers "is the include still to be pasted",
+    # which is a different question: on `--ci gitlab` into a subdirectory of
+    # an already-wired repo the include is done, so it is False — and the
+    # closing line then promised "GitLab CI will automatically validate your
+    # config" two lines under a step that says "otherwise no job is ever
+    # created, and the pipeline stays green forever having validated
+    # nothing". Derived from what was actually emitted rather than by adding
+    # another term to the boolean, so a future step that also leaves work
+    # behind cannot forget to enrol itself.
+    subdir_work_pending = False
+    if gl_in_subdir:
+        rel = Path(output_dir).resolve().relative_to(repo_root)
+        targets = []
+        if ci_sel in ('github', 'both'):
+            targets.append(_GH_WORKFLOW_REL)
+        if ci_sel in ('gitlab', 'both'):
+            targets.append(_GL_PIPELINE_REL)
+        listed = []
+        for rel_path in targets:
+            values = _root_relative_ci_paths(Path(output_dir) / rel_path)
+            if values:
+                listed.append(((rel / rel_path).as_posix(), values))
+        if listed:
+            if is_zh:
+                print(f"  {step}. ⚠️ 還沒完：產生出來的 pipeline **內容**是以 "
+                      f"repo 根目錄為基準寫的，而這次寫到 `{rel.as_posix()}/`。"
+                      f"接好線之後，下列路徑仍指向 repo 根目錄下不存在的位置，"
+                      f"每一個都要自己補上 `{rel.as_posix()}/` 前綴 —— 否則 "
+                      f"job 根本不會被建立，pipeline 會永遠是綠的、而且什麼都"
+                      f"沒驗到：")
+            else:
+                print(f"  {step}. ⚠️ Not done yet: the generated pipeline's "
+                      f"CONTENTS are written relative to the repository root, "
+                      f"but this run wrote into `{rel.as_posix()}/`. Once "
+                      f"wired, the paths below still point at places that do "
+                      f"not exist at the repository root. Prefix each of them "
+                      f"with `{rel.as_posix()}/` yourself — otherwise no job "
+                      f"is ever created, and the pipeline stays green forever "
+                      f"having validated nothing:")
+            print()
+            for shown, values in listed:
+                print(f"       {shown}")
+                for value in values:
+                    print(f"         {value}  →  {rel.as_posix()}/{value}")
+            print()
+            step += 1
+            subdir_work_pending = True
+
+    # ⛔ Was an unconditional "CI will automatically validate your config".
+    # False on every `--ci gitlab` run — nothing loaded the pipeline — and it
+    # is still false on the brownfield GitLab path until the include is
+    # pasted. The claim now names the platform it is true for.
+    #
+    # ⛔ `gl_needs_manual` is a GitLab-only condition, so on `--ci both` it must
+    # not be spoken over the combined platform name: GitHub Actions auto-loads
+    # `.github/workflows/` and validates on push no matter what the customer
+    # does about the GitLab include. Saying "only then does GitHub Actions +
+    # GitLab CI validate" contradicts the GitHub wiring line printed two steps
+    # earlier, and teaches the reader that the two legs are coupled.
+    platform = {
+        'github': 'GitHub Actions',
+        'gitlab': 'GitLab CI',
+        'both': 'GitHub Actions + GitLab CI',
+    }.get(ci_sel, 'CI')
+    if gl_needs_manual or subdir_work_pending:
+        if gl_in_subdir:
+            # ⛔ In a subdirectory the hardcoded `both` sentence is backwards:
+            # it says GitHub validates automatically, but GitHub is the leg
+            # that cannot be rescued from the root. Say the generic thing.
+            if is_zh:
+                print(f"  {step}. 依上面的說明處理完之後提交並推送 — "
+                      f"CI 才會讀到這些設定")
+            else:
+                print(f"  {step}. Complete the step(s) above, then commit and "
+                      f"push — only then does CI see this config")
+        elif ci_sel == 'both':
+            if is_zh:
+                print(f"  {step}. 提交並推送 — GitHub Actions 會自動驗證；"
+                      f"GitLab CI 要等你依上面的說明處理完之後才會")
+            else:
+                print(f"  {step}. Commit and push — GitHub Actions validates "
+                      f"automatically; GitLab CI only after you complete the "
+                      f"step above")
+        elif is_zh:
+            print(f"  {step}. 依上面的說明處理完之後提交並推送 — "
+                  f"{platform} 才會驗證你的配置")
+        else:
+            print(f"  {step}. Complete the step above, then commit and push — "
+                  f"only then does {platform} validate your config")
+    else:
+        if is_zh:
+            print(f"  {step}. 提交並推送 — {platform} 會自動驗證你的配置")
+        else:
+            print(f"  {step}. Commit and push — {platform} will automatically "
+                  f"validate your config")
     step += 1
 
     print()
@@ -2311,7 +3274,38 @@ def _check_existing_init(output_dir: str, force: bool, parser: argparse.Argument
     which pins today's semantics on purpose).
     """
     marker_path = str(Path(output_dir) / '.da-init.yaml')
-    if Path(marker_path).is_file() and not force:
+    # ⛔ Exists but is not a regular file — a directory, a fifo, a dangling
+    # symlink. `.is_file()` alone answers False for all of those, so the run
+    # proceeded, wrote ELEVEN files, and then died on the marker write with a
+    # raw `IsADirectoryError` traceback. Half a scaffold plus a stack trace is
+    # the worst of the three possible outcomes: `--force` cannot help (the
+    # write fails either way), and nothing names the path that is in the way.
+    #
+    # ⚠️ Checked before `force`, deliberately. `--force` means "overwrite the
+    # marker I wrote last time", not "unlink whatever occupies that name" —
+    # this tool does not remove a directory the customer put there.
+    marker = Path(marker_path)
+    # ⚠️ `.exists()` FOLLOWS symlinks and answers False for a dangling one, so
+    # this predicate needs `is_symlink()` beside it — otherwise a
+    # `.da-init.yaml -> /tmp/elsewhere.yaml` whose target does not exist falls
+    # through both branches and `write_text_secure` follows the link, planting
+    # the marker OUTSIDE `--output-dir` while the run reports success. The
+    # sibling guard in `_classify_root_file` already spells this out; this one
+    # named the case in its own docstring and then did not test for it.
+    if (marker.exists() or marker.is_symlink()) and not marker.is_file():
+        if _LANG == 'zh':
+            print(f"⚠️  {marker_path} 存在，但不是一般檔案（目錄？符號連結？），"
+                  f"無法寫入初始化標記。", file=sys.stderr)
+            print("   請自行移除或改名該路徑後再執行；--force 不會刪除它。",
+                  file=sys.stderr)
+        else:
+            print(f"⚠️  {marker_path} exists but is not a regular file "
+                  f"(a directory? a symlink?), so the init marker cannot be "
+                  f"written.", file=sys.stderr)
+            print("   Remove or rename that path yourself and re-run; "
+                  "--force will not delete it.", file=sys.stderr)
+        sys.exit(EXIT_VIOLATION)
+    if marker.is_file() and not force:
         if _LANG == 'zh':
             print(f"⚠️  此目錄已初始化 ({marker_path})。", file=sys.stderr)
             print("   加上 --force 會**重新產生每一個檔案並覆寫**——包含"
@@ -2445,6 +3439,100 @@ def _handle_dry_run(config: dict, output_dir: str) -> None:
         else:
             print(f"  ⚠️  {overwritten} of them already exist and would be "
                   f"replaced, with no backup.")
+
+    # ⛔ `--dry-run` is the flag people use to answer "what will this do to my
+    # repo", and it exits before `_print_summary` — which is the only place
+    # the manual-wiring instruction lives. So on a repo that already has a
+    # root `.gitlab-ci.yml` the ONLY signal was an absent filename, and the
+    # reader had no way to learn the GitLab leg would be inert until they
+    # hand-edit their own file.
+    # ⛔ The subdirectory case first: `_gitlab_root_shell_status` reads
+    # `<output_dir>/.gitlab-ci.yml`, so with `-o sub/` it reports `create`
+    # and this whole block stayed silent — while the REAL run warned. The
+    # flag whose job is "what will this do to my repo" must not be the one
+    # that hides it.
+    repo_root = _enclosing_repo_root(output_dir)
+    ci_sel = config.get('ci', 'both')
+    # ⛔ Same question the real run asks. Warning unconditionally told a
+    # customer with a correctly wired split-pipeline repo that their config
+    # would not be loaded, and promised a remedy the real run never prints —
+    # from the flag whose entire job is "what will this do to my repo".
+    _gl_ok = (repo_root is not None
+              and ci_sel in ('gitlab', 'both')
+              and _gitlab_root_includes(repo_root,
+                                        Path(output_dir).resolve()))
+    _gh_pending = repo_root is not None and ci_sel in ('github', 'both')
+    if repo_root is not None and (_gh_pending or not _gl_ok):
+        rel = Path(output_dir).resolve().relative_to(repo_root)
+        print()
+        # ⛔ Name only the platforms this run actually selected. The text was
+        # unconditionally "Both GitHub Actions and GitLab", so `--ci github`
+        # — which writes no GitLab config at all — was told its
+        # (non-existent) GitLab config would not load, and vice versa. The
+        # real run already branches correctly; this is the one flag whose job
+        # is answering "what will this do to my repo", so it must not be the
+        # one that describes a platform the run never touched.
+        affected = []
+        if ci_sel in ('github', 'both'):
+            affected.append('GitHub Actions')
+        if ci_sel in ('gitlab', 'both'):
+            affected.append('GitLab')
+        names = ' 與 '.join(affected)
+        names_en = ' and '.join(affected)
+        if is_zh:
+            print(f"  ⚠️ 輸出目錄是 `{rel.as_posix()}/`，不是 repo 根目錄。"
+                  f"{names} 只讀 repo 根目錄，"
+                  f"所以產在這裡的 CI 設定不會被載入（實跑時會印出補救步驟）。")
+        else:
+            print(f"  ⚠️ The output directory is `{rel.as_posix()}/`, not the "
+                  f"repository root. {names_en} read"
+                  f"{'' if len(affected) > 1 else 's'} only "
+                  f"the repository root, so CI config generated here is not "
+                  f"loaded (the real run prints the remedy).")
+    elif repo_root is not None:
+        # ⛔ Subdirectory, and the include is already in place — so the block
+        # above (whose text is "not loaded") would be false here and stayed
+        # silent instead. Silent is worse: being wired is not being done. The
+        # generated CONTENTS are still written relative to the repository
+        # root, so every path filter in them misses the real files and the
+        # pipeline goes green having created no jobs — #1357's outcome, from
+        # the one flag whose entire job is "what will this do to my repo".
+        # The real run enumerates the paths (it can read what it wrote); a
+        # preview has nothing to read, so it names the work without faking a
+        # list.
+        rel = Path(output_dir).resolve().relative_to(repo_root)
+        print()
+        if is_zh:
+            print(f"  ⚠️ 根目錄的 .gitlab-ci.yml 已經 include 了這次的輸出，"
+                  f"所以 pipeline 會被載入 —— 但輸出目錄是 "
+                  f"`{rel.as_posix()}/`，產生出來的**內容**仍以 repo 根目錄"
+                  f"為基準，路徑過濾器一個都對不上，於是不會建立任何 job、"
+                  f"pipeline 永遠是綠的而且什麼都沒驗到"
+                  f"（實跑時會逐條列出要補 `{rel.as_posix()}/` 前綴的路徑）。")
+        else:
+            print(f"  ⚠️ The repository-root .gitlab-ci.yml already includes "
+                  f"this output, so the pipeline IS loaded — but the output "
+                  f"directory is `{rel.as_posix()}/` and the generated "
+                  f"CONTENTS are still written relative to the repository "
+                  f"root. Every path filter in them misses the real files, so "
+                  f"no job is created and the pipeline stays green having "
+                  f"validated nothing (the real run lists each path needing a "
+                  f"`{rel.as_posix()}/` prefix).")
+    elif ci_sel in ('gitlab', 'both'):
+        status = _gitlab_root_shell_status(output_dir)
+        if status not in (_GL_ROOT_CREATE, _GL_ROOT_ALREADY_WIRED):
+            print()
+            if is_zh:
+                print(f"  ⚠️ 你的 repo 已有根目錄 {_GL_ROOT_SHELL_REL.as_posix()}，"
+                      f"本工具不會修改它。實際執行後仍須自行接上 include:，"
+                      f"否則產生的 GitLab pipeline 不會執行"
+                      f"（實跑時會印出該貼的內容）。")
+            else:
+                print(f"  ⚠️ Your repo already has a root "
+                      f"{_GL_ROOT_SHELL_REL.as_posix()}; this tool will not "
+                      f"modify it. You will still have to wire in the "
+                      f"include: yourself or the generated GitLab pipeline "
+                      f"never runs (the real run prints what to add).")
     sys.exit(EXIT_OK)
 
 
@@ -2495,10 +3583,15 @@ def _build_parser() -> argparse.ArgumentParser:
     # every conf.d/<tenant>.yaml, discarding hand-tuned thresholds. That
     # understatement got worse with #1218: re-running is now the only in-tool
     # route to the corrected `_defaults.yaml`, so someone WILL reach for it.
+    # ⚠️ #1357 carved out one exception, so "every generated file" is no longer
+    # true: the root `.gitlab-ci.yml` is never rewritten once it exists, on any
+    # run, forced or not — it is the one artifact that may be the customer's
+    # own pipeline. That also means there is no in-tool route to regenerate it.
     parser.add_argument('--force', action='store_true',
                         help='Re-run in an initialised directory: REWRITES every '
                              'generated file, including conf.d/_defaults.yaml and '
-                             'each conf.d/<tenant>.yaml (hand edits are lost)'
+                             'each conf.d/<tenant>.yaml (hand edits are lost). '
+                             'Does NOT rewrite an existing root .gitlab-ci.yml'
                         if _LANG == 'en'
                         # ⚠️ 大寫「重寫所有產生的檔案」而非 markdown `**`：這是
                         # argparse help，會**原樣**印到終端機（實測 `--help` 輸出
@@ -2506,7 +3599,8 @@ def _build_parser() -> argparse.ArgumentParser:
                         # 用了 markdown 語法——全 repo 唯一一處，不是慣例。
                         else '在已初始化的目錄重跑：會「重寫所有產生的檔案」，'
                              '含 conf.d/_defaults.yaml 與每一份 conf.d/<tenant>.yaml'
-                             '（手動調整會遺失）')
+                             '（手動調整會遺失）。不會重寫已存在的根目錄 '
+                             '.gitlab-ci.yml')
     parser.add_argument('--dry-run', action='store_true',
                         help='Show what files would be created without writing'
                         if _LANG == 'en' else '顯示會產生的檔案但不寫入')

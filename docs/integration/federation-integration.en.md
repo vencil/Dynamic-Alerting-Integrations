@@ -9,7 +9,7 @@ lang: en
 
 > **Language / 語言：** **English (Current)** | [中文](federation-integration.md)
 
-> **v2.6.0** — Central Evaluation architecture: central threshold-exporter + multi-edge Prometheus scrape. §2–§7 describes Central Evaluation; §8 describes Edge Evaluation.
+> **v2.9.0** — Central Evaluation architecture: central threshold-exporter + multi-edge Prometheus scrape. §2–§7 describes Central Evaluation; §8 describes Edge Evaluation.
 
 ## 1. Overview
 

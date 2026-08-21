@@ -1215,7 +1215,7 @@ da-tools config-history --config-dir conf.d/ diff 1 2
 Initialize Dynamic Alerting integration skeleton in a customer repo. Generates CI/CD pipelines, conf.d/ directory, Kustomize overlays, and pre-commit configuration.
 
 ```bash
-da-tools init [--ci <github|gitlab|both>] [--tenants <list>] [--rule-packs <list>] [--deploy <kustomize|helm|argocd>] [-o <dir>] [--non-interactive] [--dry-run]
+da-tools init [--ci <github|gitlab|both>] [--tenants <list>] [--rule-packs <list>] [--deploy <kustomize|helm|argocd>] [-o <dir>] [--non-interactive] [--dry-run] [--force]
 ```
 
 **Parameters**
@@ -1228,7 +1228,7 @@ da-tools init [--ci <github|gitlab|both>] [--tenants <list>] [--rule-packs <list
 | `--deploy` | Deployment method | `kustomize` |
 | `--non-interactive` | Skip interactive prompts (requires `--tenants`) | — |
 | `--dry-run` | Show files that would be generated without writing | — |
-| `--force` | Re-run in an initialised directory: **rewrites every generated file**, including `conf.d/_defaults.yaml` and each `conf.d/<tenant>.yaml` (hand edits are lost) | — |
+| `--force` | Re-run in an initialised directory: **rewrites every generated file**, including `conf.d/_defaults.yaml` and each `conf.d/<tenant>.yaml` (hand edits are lost). ⚠️ **Exception: it never rewrites an existing root `.gitlab-ci.yml`** — that may be the customer's own pipeline, so it is left alone on every run (and there is therefore no in-tool way to regenerate it) | — |
 
 **Examples**
 

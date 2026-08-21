@@ -22,6 +22,86 @@ import init_project as ip  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# 摘要／dry-run 訊息的片語：**單一來源**
+# ═══════════════════════════════════════════════════════════════════════════
+# ⛔ 這些片語原本被硬寫在四個斷言裡、橫跨兩個檔案。後果不是「不夠嚴謹」，是
+# 兩件具體的事：
+#   (1) 一次純文案改寫（把 `Not done yet` 換成 `One more step`，語意零變化）
+#       要改四處字面值，而三條測試各自報出**互相矛盾的**訊息——其中兩條宣稱
+#       「步驟沒有印出來」／「必須說明 pipeline 會被載入」，而輸出逐字做到了
+#       那兩件事。最便宜的轉綠方式因此是把文案改回去，也就是撤銷正當改動。
+#   (2) 反過來，若有人重新命名片語而沒動測試，`promises` 這一側會**永遠為
+#       False**，結構斷言 `not (pending and promises)` 就恆真、靜默失效——而
+#       它守的正是「工具同時說『還沒完』與『會自動驗證』」那個客戶面缺陷。
+# 所以片語集中在這裡，並由 `test_the_summary_phrases_still_exist_in_the_tool`
+# 直接對產品碼求證：改文案 ⇒ **一條**紅、訊息就是「片語搬家了，改這裡」。
+_PENDING_MARKERS = ('Not done yet', 'NOT wired')
+_AUTOVALIDATE_MARKER = 'will automatically validate'
+_DRYRUN_WIRED_MARKERS = ('IS loaded', 'prefix')
+
+
+@pytest.fixture(autouse=True)
+def _pin_cli_language(monkeypatch):
+    """⛔ 把 `_LANG` 釘成 `'en'`，讓本檔不再依賴主機的 `LANG` 環境變數。
+
+    `init_project._LANG` 是**匯入時**由 `detect_cli_lang()` 求值的模組全域，
+    而那個函式讀的是 `os.environ['LANG']`（預設 `en_US.UTF-8`）。本檔有大量
+    測試斷言**英文**輸出，於是：
+
+        LANG 未設 / en_*  → 343 passed
+        LANG=zh_TW.UTF-8  → **8 failed**（同一顆 commit、同一份程式碼）
+
+    也就是說任何中文 locale 的開發者跑這個檔案都會看到 8 條紅，而 Linux CI
+    的 `LANG` 解析成 en 所以全綠——「只在開發機紅、CI 看不見」的那一類，
+    與本分支修掉的 `encoding=` 是同一族。⚠️ 這不是把測試改寬鬆：語系是這些
+    斷言的**前提**，前提本來就該由測試自己決定，而不是由跑測試的人的環境
+    決定。需要中文的測試在 body 內自行 `monkeypatch.setattr(ip, '_LANG',
+    'zh')`（fixture 先跑，body 的設定會覆蓋它）。
+    """
+    monkeypatch.setattr(ip, '_LANG', 'en')
+
+
+def test_the_summary_phrases_still_exist_in_the_tool():
+    """⛔ 片語重新命名必須是**一條**明確的紅，不是靜默失效。
+
+    上面那組常數是好幾條斷言的判定依據。若產品碼把其中任何一句改寫而這裡
+    沒跟上，那些斷言不會紅——它們只會停止偵測。這條測試把「片語還在不在」
+    變成一個直接、可讀的問題。
+    """
+    from pathlib import Path as _P
+    src = _P(ip.__file__).read_text(encoding='utf-8')
+    missing = [p for p in
+               (*_PENDING_MARKERS, _AUTOVALIDATE_MARKER, *_DRYRUN_WIRED_MARKERS)
+               if p not in src]
+    assert not missing, (
+        f'這些片語已經不在 {_P(ip.__file__).name} 裡了：{missing}。\n'
+        '若是刻意改寫文案，請同步更新本檔頂端的 _PENDING_MARKERS / '
+        '_AUTOVALIDATE_MARKER / _DRYRUN_WIRED_MARKERS——那是唯一要改的地方。\n'
+        '⛔ 不要改成放寬斷言：這幾個片語是「摘要有沒有自相矛盾」的判定依據，'
+        '對不上就等於那道守衛停止偵測而不會有人知道。')
+
+
+def _symlinks_usable(tmp) -> bool:
+    """這台機器建得出 symlink 嗎？（Windows 未開發者模式：不行。）
+
+    ⛔ 探測**能力**，不是猜平台。這兩條 symlink 測試守的是真東西（斷鏈
+    symlink 讓 marker 被寫到 `--output-dir` 之外），在 Linux CI 上照跑；
+    但在沒有 SeCreateSymbolicLinkPrivilege 的 Windows 上它們是**必紅**的，
+    而一條在整類開發機上必紅的斷言，最後會被某個為了無關理由趕時間的人
+    直接刪掉。與 `test_generated_ci_artifacts.py::_symlinks_usable` 同款。
+    """
+    from pathlib import Path as _P
+    probe = _P(tmp) / '_symlink_probe'
+    probe.mkdir(parents=True, exist_ok=True)
+    (probe / 'target').write_text('x\n', encoding='utf-8', newline='\n')
+    try:
+        (probe / 'link').symlink_to('target')
+    except (OSError, NotImplementedError):
+        return False
+    return (probe / 'link').is_symlink()
+
+
 # ============================================================
 # ── 1. RULE_PACK_CATALOG Structure ──
 # ============================================================
@@ -1366,12 +1446,17 @@ class TestGenGitlabCi:
         assert 'stages:' in yaml_str
         assert 'variables:' in yaml_str
 
-    def test_three_stages(self):
-        """Pipeline has validate, generate, apply stages."""
+    def test_two_stages(self):
+        """Pipeline has validate and apply — and NOT generate (#1358).
+
+        The blast-radius job was removed: GitLab runs `script:` inside
+        $DA_TOOLS_IMAGE, which carries no `git`, so its baseline could never
+        be taken and it reported every tenant as new before failing on
+        config-diff's ordinary exit code 1.
+        """
         yaml_str = ip._gen_gitlab_ci('monitoring', 'ghcr.io/vencil/da-tools:latest', 'kustomize')
-        assert '- validate' in yaml_str
-        assert '- generate' in yaml_str
-        assert '- apply' in yaml_str
+        stages = yaml.safe_load(yaml_str)['stages']
+        assert stages == ['validate', 'apply'], stages
 
     def test_validate_config_job(self):
         """validate-config job is present."""
@@ -1379,11 +1464,23 @@ class TestGenGitlabCi:
         assert 'validate-config:' in yaml_str
         assert 'da-tools validate-config' in yaml_str
 
-    def test_generate_routes_job(self):
-        """generate-routes job is present."""
+    def test_no_blast_radius_job(self):
+        """⛔ Absence is the assertion (#1358).
+
+        Parsed, not grepped: the removal left an explanatory comment that
+        names `config-diff` and `git`, so a substring test on the raw text
+        would pass for the wrong reason — and would keep passing if the job
+        came back.
+        """
         yaml_str = ip._gen_gitlab_ci('monitoring', 'ghcr.io/vencil/da-tools:latest', 'kustomize')
-        assert 'generate-routes:' in yaml_str
-        assert 'da-tools generate-routes' in yaml_str
+        doc = yaml.safe_load(yaml_str)
+        assert 'generate-routes' not in doc, sorted(doc)
+        for name, body in doc.items():
+            if not isinstance(body, dict) or 'script' not in body:
+                continue
+            script = ' '.join(str(x) for x in body['script'])
+            assert 'config-diff' not in script, (name, script)
+            assert 'git ' not in script, (name, script)
 
     def test_kustomize_apply_job(self):
         """Kustomize deployment includes apply job."""
@@ -1407,6 +1504,41 @@ class TestGenGitlabCi:
         """DA_TOOLS_IMAGE variable is set."""
         yaml_str = ip._gen_gitlab_ci('monitoring', 'ghcr.io/custom/da-tools:v1.0', 'kustomize')
         assert 'DA_TOOLS_IMAGE: ghcr.io/custom/da-tools:v1.0' in yaml_str
+
+    def test_da_tools_jobs_override_the_image_entrypoint(self):
+        """#1408 — every $DA_TOOLS_IMAGE job must clear the ENTRYPOINT.
+
+        The da-tools image is `ENTRYPOINT ["python3", "/opt/da-tools/
+        entrypoint.py"]`, not a shell. GitLab's docker executor runs `script:`
+        by invoking a shell inside the image, so a bare `image: $DA_TOOLS_IMAGE`
+        feeds that invocation to the tool as arguments and the job dies before
+        its first script line. The generator already said so three times beside
+        the apply-stage images and applied it to the kubectl image only.
+
+        Parsed, not grepped: `'entrypoint' in yaml_str` was true BEFORE the fix
+        (the apply job had it), so a substring test here could never have gone
+        red.
+        """
+        for deploy in ('kustomize', 'helm', 'argocd'):
+            pipe = yaml.safe_load(
+                ip._gen_gitlab_ci('monitoring', 'ghcr.io/vencil/da-tools:latest', deploy)
+            )
+            jobs = {
+                name: body for name, body in pipe.items()
+                if isinstance(body, dict) and 'script' in body
+            }
+            assert jobs, f"--deploy {deploy} produced no jobs to check"
+            for name, body in jobs.items():
+                image = body.get('image')
+                assert isinstance(image, dict), (
+                    f"--deploy {deploy}: job {name!r} declares `image: "
+                    f"{image!r}` as a bare scalar, so it inherits the image's "
+                    "ENTRYPOINT and never reaches its first script line."
+                )
+                assert image.get('entrypoint') == [''], (
+                    f"--deploy {deploy}: job {name!r} has entrypoint "
+                    f"{image.get('entrypoint')!r}, expected ['']."
+                )
 
 
 # ============================================================
@@ -1711,15 +1843,39 @@ class TestPreviewFiles:
         files = ip._preview_files(config, '/tmp')
         assert any('github/workflows' in f and '.yaml' in f for f in files)
 
-    def test_includes_gitlab_pipeline(self):
-        """Preview includes GitLab CI when ci=gitlab."""
+    def test_includes_gitlab_pipeline(self, tmp_path):
+        """Preview includes GitLab CI when ci=gitlab.
+
+        ⛔ A real (empty) directory, not `/tmp`. Since #1357 the preview reads
+        the target for a pre-existing root `.gitlab-ci.yml`, and `/tmp` on a
+        shared machine is not a directory whose contents this test controls.
+        """
         config = {
             'ci': 'gitlab',
             'deploy': 'kustomize',
             'tenants': ['db-a'],
         }
-        files = ip._preview_files(config, '/tmp')
+        files = ip._preview_files(config, str(tmp_path))
         assert any('gitlab-ci.d' in f for f in files)
+
+    def test_includes_gitlab_root_shell_when_repo_has_none(self, tmp_path):
+        """#1357 — the preview lists the root shell on a greenfield repo."""
+        config = {'ci': 'gitlab', 'deploy': 'kustomize', 'tenants': ['db-a']}
+        files = ip._preview_files(config, str(tmp_path))
+        assert any(f.endswith('/.gitlab-ci.yml') for f in files), files
+
+    def test_omits_gitlab_root_shell_when_repo_already_has_one(self, tmp_path):
+        """…and does NOT list it when init would refuse to write it.
+
+        An over-promise is the same defect as an under-promise: `--dry-run`
+        would be telling a customer their existing root pipeline is about to be
+        replaced, which is the fear the flag exists to settle.
+        """
+        (tmp_path / '.gitlab-ci.yml').write_text('stages: [build]\n', encoding='utf-8')
+        config = {'ci': 'gitlab', 'deploy': 'kustomize', 'tenants': ['db-a']}
+        files = ip._preview_files(config, str(tmp_path))
+        assert not any(f.endswith('/.gitlab-ci.yml') for f in files), files
+        assert any('gitlab-ci.d' in f for f in files), files
 
     def test_both_ci_includes_github_and_gitlab(self):
         """Preview includes both when ci=both."""
@@ -1846,6 +2002,680 @@ class TestRunInit:
             created = ip.run_init(config, tmpdir)
             pipeline_path = os.path.join(tmpdir, '.gitlab-ci.d', 'dynamic-alerting.yml')
             assert os.path.isfile(pipeline_path)
+
+    def test_creates_gitlab_root_shell(self):
+        """#1357 — run_init also wires the pipeline into a root .gitlab-ci.yml."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = {
+                'ci': 'gitlab',
+                'deploy': 'kustomize',
+                'rule_packs': ['mariadb'],
+                'tenants': ['db-a'],
+                'namespace': 'monitoring',
+                'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
+            }
+            created = ip.run_init(config, tmpdir)
+            root_path = os.path.join(tmpdir, '.gitlab-ci.yml')
+            assert os.path.isfile(root_path)
+            assert root_path in created
+            doc = yaml.safe_load(open(root_path, encoding='utf-8').read())
+            assert doc == {
+                'include': [{'local': '.gitlab-ci.d/dynamic-alerting.yml'}]
+            }, doc
+
+    def test_leaves_an_existing_gitlab_root_shell_alone(self):
+        """…and never touches one the customer already had (option B, #1357)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root_path = os.path.join(tmpdir, '.gitlab-ci.yml')
+            original = 'stages: [build]\n\nbuild:\n  script:\n    - echo hi\n'
+            with open(root_path, 'w', encoding='utf-8', newline='\n') as fh:
+                fh.write(original)
+            config = {
+                'ci': 'gitlab',
+                'deploy': 'kustomize',
+                'rule_packs': ['mariadb'],
+                'tenants': ['db-a'],
+                'namespace': 'monitoring',
+                'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
+            }
+            created = ip.run_init(config, tmpdir)
+            assert open(root_path, encoding='utf-8').read() == original
+            assert root_path not in created
+
+    def test_github_only_writes_no_gitlab_root_shell(self):
+        """The root shell would `include:` a file --ci github never wrote."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = {
+                'ci': 'github',
+                'deploy': 'kustomize',
+                'rule_packs': ['mariadb'],
+                'tenants': ['db-a'],
+                'namespace': 'monitoring',
+                'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
+            }
+            ip.run_init(config, tmpdir)
+            assert not os.path.exists(os.path.join(tmpdir, '.gitlab-ci.yml'))
+
+    # ── Root-shell status detection (adversarial review round 1) ──────────
+    #
+    # Each of these pins a way the tool previously told the customer something
+    # false about a file it refuses to touch. The status is what selects both
+    # the sentence and the snippet SHAPE, and one of the wrong answers deletes
+    # the customer's own `include:` entries.
+
+    def _status_for(self, tmpdir, body):
+        root = os.path.join(tmpdir, '.gitlab-ci.yml')
+        with open(root, 'w', encoding='utf-8', newline='\n') as fh:
+            fh.write(body)
+        return ip._gitlab_root_shell_status(tmpdir)
+
+    def test_root_file_mentioning_the_path_only_in_a_comment_is_not_wired(self):
+        """A comment is not an include. Reading it as one prints an all-clear.
+
+        The wired branch does not merely stay quiet — it says "nothing to do"
+        and the closing line promises GitLab will validate. So a false positive
+        here is #1357 re-created and then certified, with no in-tool route back
+        (`--force` never rewrites an existing root file).
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            status = self._status_for(
+                tmpdir,
+                '# TODO: wire in .gitlab-ci.d/dynamic-alerting.yml someday\n'
+                'stages: [build]\n',
+            )
+            assert status == ip._GL_ROOT_NEEDS_INCLUDE, status
+
+    def test_no_existing_file_ever_gets_a_paste_ready_fragment(self):
+        """⛔ The rule three reviews converged on, stated once.
+
+        A ready-made fragment carries indentation and block/flow style, and
+        we control neither. Every one of these shapes was demonstrated to
+        turn the customer's ENTIRE root pipeline into a syntax error when
+        they followed the instruction we printed:
+
+          * `include:` scalar / single mapping / empty  — block item under a
+            non-list
+          * `include: ['a.yml']` and `include: *anchor` — parse to a Python
+            list, so a type check calls them safe, but the value is on the
+            key's own line
+          * a real block list indented 0 or 4 spaces      — our fixed 2-space
+            item does not join it
+
+        That is strictly worse than #1357 itself, which only left OUR
+        pipeline inert. So for any file we did not write we show the END
+        STATE and let the customer fit it to their document.
+        """
+        shapes = {
+            'scalar': "include: 'templates/base.yml'\n",
+            'single mapping': 'include:\n  template: Security/SAST.yml\n',
+            'empty list': 'include: []\n',
+            'flow sequence': "include: ['a.yml', 'b.yml']\n",
+            'alias': '.inc: &inc\n  - local: a.yml\ninclude: *inc\n',
+            'block list 0-indent': 'include:\n- local: a.yml\n',
+            'block list 2-indent': 'include:\n  - local: a.yml\n',
+            'block list 4-indent': 'include:\n    - local: a.yml\n',
+            'unparseable + include': (
+                'include:\n  - local: a.yml\nx: !reference [.a, b]\n'),
+        }
+        # ⛔ The STATUS, not only the snippet. Both NEEDS_APPEND and
+        # NEEDS_CONVERT hand back `_GL_WIRING_EXAMPLE`, so the snippet
+        # assertion below is satisfied by either — which is how the mutation
+        # `return _GL_ROOT_NEEDS_APPEND` (i.e. drop the LIST-ness check
+        # entirely) survived this test, the one test whose docstring argues
+        # that the list-vs-not-a-list distinction is the whole point.
+        #
+        # The three non-list shapes are exactly the ones the production
+        # comment names: bare string, single mapping, empty `[]`. Everything
+        # that really is a non-empty list — flow, alias, and block lists at
+        # any indentation — is NEEDS_APPEND, and `unparseable + include` gets
+        # there via the line scan rather than the parse.
+        expected_status = {
+            'scalar': ip._GL_ROOT_NEEDS_CONVERT,
+            'single mapping': ip._GL_ROOT_NEEDS_CONVERT,
+            'empty list': ip._GL_ROOT_NEEDS_CONVERT,
+            'flow sequence': ip._GL_ROOT_NEEDS_APPEND,
+            'alias': ip._GL_ROOT_NEEDS_APPEND,
+            'block list 0-indent': ip._GL_ROOT_NEEDS_APPEND,
+            'block list 2-indent': ip._GL_ROOT_NEEDS_APPEND,
+            'block list 4-indent': ip._GL_ROOT_NEEDS_APPEND,
+            'unparseable + include': ip._GL_ROOT_NEEDS_APPEND,
+        }
+        assert set(expected_status) == set(shapes), (
+            'the status table drifted from the shape table — a shape with no '
+            'expected status is back to being graded only on its snippet')
+        for name, body in shapes.items():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                status = self._status_for(tmpdir, body)
+                assert status != ip._GL_ROOT_ALREADY_WIRED, (name, status)
+                assert status == expected_status[name], (
+                    f'{name}: classified {status!r}, expected '
+                    f'{expected_status[name]!r}. NEEDS_APPEND and '
+                    f'NEEDS_CONVERT print the same snippet but DIFFERENT '
+                    f'lead sentences, and collapsing them tells the owner of '
+                    f'a scalar / single-mapping / empty `include:` that they '
+                    f'already have a list to append to.')
+                snippet = ip._gitlab_root_snippet_for(status)
+                assert snippet == ip._GL_WIRING_EXAMPLE, (
+                    f'{name}: got a paste-ready fragment instead of the '
+                    f'end-state example — {snippet!r}')
+
+    def test_everything_we_print_is_itself_valid_yaml_and_wires_us_in(self):
+        """⛔ The check that would have caught three rounds of this bug at once.
+
+        Every previous defect in this area was found by a human reading the
+        output; nothing mechanically took what we print and asked "is this
+        even YAML, and does it wire us in?". A mutation that mangles the
+        worked example so the customer's own entry loses its `- ` — producing
+        a document that does not parse, i.e. exactly the outcome this state
+        exists to prevent — survived the entire suite.
+
+        Both artifacts are checked structurally, not by substring:
+          * the ready-made block, as pasted into a file with no `include:`
+          * the end-state example, on its own
+        """
+        # 1. The end-state example must parse, and `include:` must be a LIST
+        #    whose last entry is ours — the shape we are asking them to reach.
+        doc = yaml.safe_load(ip._GL_WIRING_EXAMPLE)
+        assert isinstance(doc, dict), ip._GL_WIRING_EXAMPLE
+        entries = doc.get('include')
+        assert isinstance(entries, list) and entries, ip._GL_WIRING_EXAMPLE
+        assert entries[-1] == {'local': ip._GL_PIPELINE_REL.as_posix()}, entries
+        assert len(entries) >= 2, (
+            'the example does not show the customer keeping their own '
+            'entries, so it reads as "replace yours with ours"')
+
+        # 2. The ready-made block, actually pasted onto a file that has no
+        #    `include:` key — the only state it is offered for.
+        original = 'stages: [build]\nbuild:\n  script: [echo hi]\n'
+        pasted = original + '\n' + ip._GL_INCLUDE_SNIPPET
+        merged = yaml.safe_load(pasted)
+        assert merged['include'] == [
+            {'local': ip._GL_PIPELINE_REL.as_posix()}], merged
+        assert 'build' in merged, (
+            'pasting the block lost the rest of the customer file')
+
+    def test_the_block_carve_out_is_verified_not_assumed(self):
+        """⛔ Post-condition, not premise.
+
+        The carve-out was justified as "adding a brand-new top-level key at
+        the end of a document is style-independent". That is false for at
+        least two shapes GitLab accepts: a document closed with `...`, and a
+        JSON/flow-style root (what jsonnet, CUE and json.dumps pipelines
+        commit). Appending a block mapping to either is a parse error that
+        takes the customer's whole pipeline down — the failure class this
+        redesign exists to eliminate.
+
+        So the classifier applies the edit and checks, rather than reasoning
+        about style.
+        """
+        for name, body in {
+            'doc-end marker': 'stages: [build]\n...\n',
+            'json root': '{"stages": ["build"], "build": {"script": ["x"]}}\n',
+        }.items():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                status = self._status_for(tmpdir, body)
+                assert status == ip._GL_ROOT_NEEDS_CONVERT, (name, status)
+                assert (ip._gitlab_root_snippet_for(status)
+                        == ip._GL_WIRING_EXAMPLE), name
+        # …and a plain block document still gets the convenient block.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            status = self._status_for(tmpdir, 'stages: [build]\n')
+            assert status == ip._GL_ROOT_NEEDS_INCLUDE, status
+
+    def test_no_shell_is_planted_in_a_subdirectory(self):
+        """⛔ GitLab reads only the repo root, and the shell's `local:` path is
+        resolved from there — so a shell written into a subdirectory is both
+        unread AND wrong the moment the customer does the obvious `git mv`
+        to rescue it. Writing it is not a partial fix.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = os.path.join(tmpdir, 'repo')
+            os.makedirs(os.path.join(repo, '.git'))
+            sub = os.path.join(repo, 'alerting')
+            os.makedirs(sub)
+            config = {
+                'ci': 'gitlab', 'deploy': 'kustomize',
+                'rule_packs': ['mariadb'], 'tenants': ['db-a'],
+                'namespace': 'monitoring',
+                'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
+            }
+            created = ip.run_init(config, sub)
+            assert not os.path.exists(os.path.join(sub, '.gitlab-ci.yml')), (
+                'a root shell was planted in a subdirectory GitLab never '
+                'reads, carrying an include path wrong from the repo root')
+            assert os.path.join(sub, '.gitlab-ci.yml') not in created
+
+    def test_the_subdir_remedy_is_never_a_bare_fragment(self):
+        """⛔ The rule, applied to the OTHER root file — asserted on what is
+        actually PRINTED, not on the helpers.
+
+        (An earlier version of this test called `_classify_root_file` and
+        `_gl_block_for` directly and therefore passed with the bare fragment
+        restored — a test of the helpers, not of the behaviour. The mutation
+        that matters is on `_print_summary`'s selection, so that is what this
+        drives.)
+
+        The subdirectory branch printed an unconditional
+        `- local: <sub>/.gitlab-ci.d/...` without inspecting the file it told
+        the customer to edit. Measured: on a repo with NO root pipeline,
+        following it literally produced a top-level SEQUENCE — GitLab
+        requires a hash, so the pipeline still never ran — and on a root
+        whose `include:` is a scalar / flow list / single mapping it was a
+        syntax error that took their ENTIRE root pipeline down.
+        """
+        import contextlib
+        import io
+        from pathlib import Path as _P
+        want = 'alerting/.gitlab-ci.d/dynamic-alerting.yml'
+        cases = {
+            'absent': (None, True),
+            'no include key': ('stages: [build]\n', True),
+            'scalar': ("include: 'other.yml'\n", False),
+            'flow list': ("include: ['other.yml']\n", False),
+            'single mapping': ('include:\n  template: S.yml\n', False),
+            'block list': ('include:\n  - template: S.yml\n', False),
+        }
+        for name, (body, block_expected) in cases.items():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                repo = _P(tmpdir) / 'repo'
+                (repo / '.git').mkdir(parents=True)
+                if body is not None:
+                    (repo / '.gitlab-ci.yml').write_text(
+                        body, encoding='utf-8', newline='\n')
+                sub = repo / 'alerting'
+                sub.mkdir()
+                config = {
+                    'ci': 'gitlab', 'deploy': 'kustomize',
+                    'rule_packs': ['mariadb'], 'tenants': ['db-a'],
+                    'namespace': 'monitoring',
+                    'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
+                }
+                created = ip.run_init(config, str(sub))
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    ip._print_summary(created, str(sub), config)
+                out = buf.getvalue()
+
+                assert want in out, (name, out)
+                printed_block = any(
+                    ln.strip() == 'include:' for ln in out.splitlines())
+                assert printed_block, (
+                    f'{name}: the remedy printed a bare list item with no '
+                    f'`include:` key — a customer creating the root file '
+                    f'from it gets a top-level sequence.\n{out}')
+                if block_expected:
+                    assert '<keep' not in out, (name, out)
+                    # and the block really is safe to paste here
+                    doc = yaml.safe_load(
+                        (body or '') + '\n' + ip._gl_block_for(want))
+                    assert isinstance(doc, dict), (name, doc)
+                    assert want in ip._gitlab_declared_includes(doc), name
+                else:
+                    assert '<keep' in out, (
+                        f'{name}: a ready-made fragment was handed to a root '
+                        f'file whose `include:` shape we cannot safely '
+                        f'extend.\n{out}')
+
+    def test_github_in_a_subdirectory_is_never_an_all_clear(self):
+        """⛔ GitHub cannot be rescued from the root — there is no `include:`.
+
+        The needs-work condition was derived solely from the GitLab question,
+        so a run could warn "GitHub is NOT wired" and then close with "will
+        automatically validate your config".
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from pathlib import Path as _P
+            repo = _P(tmpdir) / 'repo'
+            (repo / '.git').mkdir(parents=True)
+            # GitLab side deliberately already correct, to isolate GitHub.
+            (repo / '.gitlab-ci.yml').write_text(
+                'include:\n  - local: alerting/.gitlab-ci.d/'
+                'dynamic-alerting.yml\n', encoding='utf-8', newline='\n')
+            sub = repo / 'alerting'
+            sub.mkdir()
+            for ci in ('github', 'both'):
+                config = {
+                    'ci': ci, 'deploy': 'kustomize',
+                    'rule_packs': ['mariadb'], 'tenants': ['db-a'],
+                    'namespace': 'monitoring',
+                    'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
+                    'force': True,
+                }
+                import io
+                import contextlib
+                created = ip.run_init(config, str(sub))
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    ip._print_summary(created, str(sub), config)
+                out = buf.getvalue()
+                assert not [
+                    ln for ln in out.splitlines()
+                    if ('automatically validate' in ln or '會自動驗證' in ln)
+                    and 'only' not in ln.lower() and '才會' not in ln
+                ], (ci, out)
+
+    def test_dry_run_subdir_warning_names_only_the_selected_platforms(self):
+        """⛔ `--ci github` writes no GitLab config, so saying GitLab's config
+        will not load describes a file this run never created.
+
+        The text was unconditionally "Both GitHub Actions and GitLab". The
+        REAL run already branches correctly, so this was `--dry-run`-only
+        inconsistency — from the one flag whose job is answering "what will
+        this do to my repo".
+        """
+        import contextlib
+        import io
+        from pathlib import Path as _P
+        expected = {
+            'github': ('GitHub Actions', 'GitLab'),
+            'gitlab': ('GitLab', 'GitHub Actions'),
+        }
+        for ci, (present, absent) in expected.items():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                repo = _P(tmpdir) / 'repo'
+                (repo / '.git').mkdir(parents=True)
+                sub = repo / 'alerting'
+                sub.mkdir()
+                config = {
+                    'ci': ci, 'deploy': 'kustomize',
+                    'rule_packs': ['mariadb'], 'tenants': ['db-a'],
+                    'namespace': 'monitoring',
+                    'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
+                }
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    with pytest.raises(SystemExit):
+                        ip._handle_dry_run(config, str(sub))
+                out = buf.getvalue()
+                warn = [ln for ln in out.splitlines() if '⚠️' in ln]
+                assert warn, (ci, out)
+                joined = ' '.join(warn)
+                assert present in joined, (ci, joined)
+                assert absent not in joined, (
+                    f'--ci {ci} dry-run named {absent}, a platform this run '
+                    f'never touched.\n{joined}')
+
+    def test_a_file_with_no_include_key_is_not_told_it_has_one(self):
+        """⛔ NEEDS_CONVERT has two causes and only one involves an
+        `include:`.
+
+        The other is a file whose SHAPE makes the append post-condition fail
+        — a `...` document-end marker, or a JSON/flow root — with no
+        `include:` key anywhere. Those owners were told their file "already
+        has an `include:`" and warned not to add a second one, which sends
+        them hunting for a key that is not there.
+        """
+        import contextlib
+        import io
+        no_key = {
+            'doc-end marker': 'stages: [test]\njob1: {stage: test, '
+                              'script: echo hi}\n...\n',
+            'json root': '{"stages": ["test"], "job1": {"stage": "test", '
+                         '"script": "echo hi"}}\n',
+        }
+        has_key = {'scalar include': "include: 'other.yml'\n"}
+        config = {
+            'ci': 'gitlab', 'deploy': 'kustomize', 'rule_packs': ['mariadb'],
+            'tenants': ['db-a'], 'namespace': 'monitoring',
+            'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
+        }
+        for group, expect_claim in ((no_key, False), (has_key, True)):
+            for name, body in group.items():
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    with open(os.path.join(tmpdir, '.gitlab-ci.yml'), 'w',
+                              encoding='utf-8', newline='\n') as fh:
+                        fh.write(body)
+                    created = ip.run_init(config, tmpdir)
+                    buf = io.StringIO()
+                    with contextlib.redirect_stdout(buf):
+                        ip._print_summary(created, tmpdir, config)
+                    out = buf.getvalue()
+                    claims = 'already has an `include:`' in out
+                    assert claims == expect_claim, (
+                        f'{name}: claims-existing-include={claims}, '
+                        f'expected {expect_claim}\n{out}')
+
+    def test_subdir_already_wired_at_the_repo_root_is_not_nagged(self):
+        """The subdirectory branch used to take precedence over every other
+        state and never look at the repository root, so a customer who had
+        already wired the subdir path correctly was told to add a line their
+        file already contains.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = os.path.join(tmpdir, 'repo')
+            os.makedirs(os.path.join(repo, '.git'))
+            sub = os.path.join(repo, 'alerting')
+            os.makedirs(sub)
+            root_ci = os.path.join(repo, '.gitlab-ci.yml')
+            with open(root_ci, 'w', encoding='utf-8', newline='\n') as fh:
+                fh.write('include:\n  - local: alerting/'
+                         '.gitlab-ci.d/dynamic-alerting.yml\n')
+            from pathlib import Path as _P
+            assert ip._gitlab_root_includes(_P(repo), _P(sub))
+
+            # ⛔ 這條測試原本到此為止——它只呼叫 helper，**從不驅動
+            # `_print_summary`**，儘管名字與 docstring 講的都是結尾訊息的
+            # 行為。實測：把子目錄的 already-wired 判斷整段換成 `if False`
+            # （於是一個接線正確的 repo 又被要求加一次它已經有的那一行），
+            # 這條測試照樣綠。這正是隔壁 `test_the_subdir_remedy_is_never_a_
+            # bare_fragment` 的 docstring 才剛警告過的同一個缺陷。
+            import contextlib
+            import io
+            config = {
+                'ci': 'gitlab', 'deploy': 'kustomize',
+                'rule_packs': ['mariadb'], 'tenants': ['db-a'],
+                'namespace': 'monitoring',
+                'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
+            }
+            created = ip.run_init(config, sub)
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                ip._print_summary(created, sub, config)
+            out = buf.getvalue()
+            assert 'GitLab wiring already in place' in out, out
+            wiring_warnings = [
+                ln for ln in out.splitlines()
+                if '⚠️' in ln and '.gitlab-ci' in ln]
+            assert not wiring_warnings, (
+                '一個接線正確的 split-pipeline repo 仍被要求接線：\n'
+                + '\n'.join(wiring_warnings))
+
+            # …and a root that includes something else does NOT count.
+            with open(root_ci, 'w', encoding='utf-8', newline='\n') as fh:
+                fh.write('include:\n  - template: Security/SAST.yml\n')
+            assert not ip._gitlab_root_includes(_P(repo), _P(sub))
+            created = ip.run_init(config, sub)
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                ip._print_summary(created, sub, config)
+            out2 = buf.getvalue()
+            assert 'GitLab wiring already in place' not in out2, out2
+            assert any('⚠️' in ln and '.gitlab-ci' in ln
+                       for ln in out2.splitlines()), out2
+
+    def test_only_a_file_without_an_include_key_gets_a_paste_ready_block(self):
+        """The one edit whose correctness does not depend on the file's style.
+
+        Adding a brand-new top-level key at the end of a document cannot
+        collide with an existing `include:` and cannot mis-indent into one.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            status = self._status_for(tmpdir, 'stages: [build]\n')
+            assert status == ip._GL_ROOT_NEEDS_INCLUDE, status
+            assert ip._gitlab_root_snippet_for(status) == ip._GL_INCLUDE_SNIPPET
+
+    def test_output_dir_below_the_repo_root_is_not_reported_as_wired(self):
+        """⛔ Every GitLab claim is about the REPOSITORY root.
+
+        The classification reads `--output-dir`, and those are the same
+        directory only when the tool is run at the top of the repo. `-o`
+        defaults to `.` but its help calls it the "output root", and sibling
+        scaffolders in this family default to a subdirectory — so `-o sub/`
+        is a trained habit. Run that way the tool wrote an inert
+        `.gitlab-ci.yml` one level down, never read the real root file, and
+        printed "GitLab wiring done": #1357 re-created and then certified.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = os.path.join(tmpdir, 'repo')
+            os.makedirs(os.path.join(repo, '.git'))
+            with open(os.path.join(repo, '.gitlab-ci.yml'), 'w',
+                      encoding='utf-8', newline='\n') as fh:
+                fh.write('include:\n  - local: .gitlab-ci.d/sast.yml\n')
+            sub = os.path.join(repo, 'alerting')
+            os.makedirs(sub)
+            assert ip._enclosing_repo_root(sub) is not None
+            assert ip._enclosing_repo_root(repo) is None, (
+                'the repo root itself must not be treated as a subdirectory')
+
+    # ⛔ RESTORED. These three were written to close earlier review findings
+    # and were then silently deleted by an index-based slice edit while a
+    # neighbouring block was rewritten. Nothing caught it — the deleted
+    # things WERE the guards, and a test that no longer exists cannot fail.
+    # A later round found the `_GL_STAGES` one only because the source
+    # comment still named it and the name resolved to nothing.
+    def test_force_does_not_rewrite_an_existing_root_gitlab_ci(self):
+        """⛔ The `--force` help promises this exception; nothing tested it.
+
+        `--force` is the most destructive flag the tool has — it exists to
+        discard hand edits — and the one file it must never touch is the one
+        that may be the customer's ENTIRE pipeline. A mutation that ORs
+        `--force` into the root-shell write condition left the whole suite
+        green, so the promise lived only in prose.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root_path = os.path.join(tmpdir, '.gitlab-ci.yml')
+            original = 'stages: [build]\n\nbuild:\n  script:\n    - echo hi\n'
+            with open(root_path, 'w', encoding='utf-8', newline='\n') as fh:
+                fh.write(original)
+            config = {
+                'ci': 'gitlab',
+                'deploy': 'kustomize',
+                'rule_packs': ['mariadb'],
+                'tenants': ['db-a'],
+                'namespace': 'monitoring',
+                'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
+                'force': True,
+            }
+            # Two runs: the second is the "already initialised, forced" shape.
+            ip.run_init(config, tmpdir)
+            created = ip.run_init(config, tmpdir)
+            assert open(root_path, encoding='utf-8').read() == original, (
+                '--force rewrote an existing root .gitlab-ci.yml, deleting '
+                "the customer's own pipeline")
+            assert root_path not in created
+
+    def test_gitlab_strips_leading_slashes_so_we_must_too(self):
+        """`local: /path` and `local: path` are the same file to GitLab.
+
+        Its own docs use the leading slash in every `include:local` example,
+        so comparing raw strings made a correctly wired repo read as unwired —
+        and we then asked for a second include of the file it already loads.
+        """
+        for spelling in ('/.gitlab-ci.d/dynamic-alerting.yml',
+                         './.gitlab-ci.d/dynamic-alerting.yml'):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                status = self._status_for(
+                    tmpdir, f'include:\n  - local: {spelling}\n')
+                assert status == ip._GL_ROOT_ALREADY_WIRED, (spelling, status)
+
+    def test_root_shell_only_names_stages_the_pipeline_declares(self):
+        """⛔ The shell is shipped INTO the customer's repo and tells them
+        which `stage:` values their own jobs may use. It named `generate`
+        for two commits after #1358 deleted that stage — a customer following
+        it gets a pipeline GitLab refuses to build, so nothing runs at all,
+        validation included. Derive, do not retype.
+        """
+        shell = ip._gen_gitlab_root_shell()
+        declared = yaml.safe_load(
+            ip._gen_gitlab_ci('monitoring', 'img', 'kustomize'))['stages']
+        assert list(ip._GL_STAGES) == declared, (ip._GL_STAGES, declared)
+        named = re.search(r'drawn from that list \(([^)]*)\)', shell)
+        assert named, shell
+        assert [x.strip() for x in named.group(1).split(',')] == declared
+
+    def test_root_file_already_including_ours_is_wired(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            status = self._status_for(
+                tmpdir,
+                'include:\n  - local: .gitlab-ci.d/dynamic-alerting.yml\n',
+            )
+            assert status == ip._GL_ROOT_ALREADY_WIRED, status
+
+    def test_include_shorthand_string_form_is_understood(self):
+        """`include:` also accepts a bare string; that is still wired."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            status = self._status_for(
+                tmpdir, 'include: .gitlab-ci.d/dynamic-alerting.yml\n')
+            assert status == ip._GL_ROOT_ALREADY_WIRED, status
+
+    def test_gitlab_custom_tags_degrade_safely_not_to_a_false_all_clear(self):
+        """`!reference` is ordinary in a real pipeline and SafeLoader raises.
+
+        ⛔ Pinning the DIRECTION of that loss. A tag-tolerant loader would
+        classify this file precisely, but installing one needs
+        `yaml.load(..., Loader=...)` and the repo's SAST rule rejects that —
+        it cannot tell a SafeLoader subclass from an unsafe load, and
+        widening a security lint to win a nicer sentence is the wrong trade.
+
+        So the owner is asked to check wiring they may already have: one
+        redundant reminder. What must never happen is the other direction —
+        a file GitLab does not load being reported as wired.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            status = self._status_for(
+                tmpdir,
+                'include:\n  - local: .gitlab-ci.d/dynamic-alerting.yml\n'
+                'job:\n  script:\n    - !reference [.setup, script]\n',
+            )
+            assert status != ip._GL_ROOT_ALREADY_WIRED, status
+            assert ip._gitlab_root_snippet_for(status) == ip._GL_WIRING_EXAMPLE
+            assert not ip._gitlab_root_shell_is_needed(tmpdir)
+
+    def test_unparseable_without_an_include_key_gets_the_block(self):
+        """No parse AND no `include:` line — the whole block is safe here."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            status = self._status_for(
+                tmpdir, 'job:\n  script:\n    - !reference [.a, script]\n')
+            assert status == ip._GL_ROOT_UNPARSEABLE, status
+            assert 'include:' in ip._gitlab_root_snippet_for(status)
+
+    def test_unparseable_root_file_is_never_reported_as_wired(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            status = self._status_for(tmpdir, 'include: [unclosed\n')
+            # The property that matters is never "wired" — the shape choice
+            # may legitimately come from the line scan.
+            assert status != ip._GL_ROOT_ALREADY_WIRED, status
+            assert not ip._gitlab_root_shell_is_needed(tmpdir)
+
+    def test_dangling_symlink_at_the_root_path_is_not_written_through(self):
+        """`exists()` follows symlinks, so a broken one reads as "no file".
+
+        The writer follows it too, planting our shell outside --output-dir.
+        This is the one existence check whose job is protecting a
+        customer-owned path, so it must fail closed.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            if not _symlinks_usable(tmpdir):
+                pytest.skip('this host cannot create symlinks (Windows '
+                            'without Developer Mode / '
+                            'SeCreateSymbolicLinkPrivilege); runs on Linux CI')
+            outside = os.path.join(tmpdir, 'outside', 'ESCAPE.yml')
+            os.makedirs(os.path.dirname(outside))
+            target = os.path.join(tmpdir, 'repo')
+            os.makedirs(target)
+            os.symlink(outside, os.path.join(target, '.gitlab-ci.yml'))
+            config = {
+                'ci': 'gitlab',
+                'deploy': 'kustomize',
+                'rule_packs': ['mariadb'],
+                'tenants': ['db-a'],
+                'namespace': 'monitoring',
+                'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
+            }
+            ip.run_init(config, target)
+            assert not os.path.exists(outside), (
+                'run_init followed a dangling symlink and wrote the root shell '
+                'outside --output-dir')
 
     def test_creates_kustomize_base(self):
         """run_init creates kustomize/base/kustomization.yaml."""
@@ -2833,3 +3663,1554 @@ class TestCustomerDeliveredImagePins:
         # ...and must not fire on a pinned ref or on a GitHub runner label.
         assert not self._FLOATING_RE.findall('    runs-on: ubuntu-latest')
         assert not self._FLOATING_RE.findall(f'      image: {ip.GIT_SYNC_IMAGE}')
+
+
+class TestSubdirectoryContentsAreNotOnlyAPlacementProblem:
+    """⛔ 第七輪盲審 lens W：照著我們自己的指示做，pipeline 永遠不會跑。
+
+    子目錄那兩步只講**擺放位置**（把 workflow 移到根、把 include 加到根）。
+    產生出來的 pipeline **內容**卻是以 repo 根目錄為基準寫的，而 GitLab 官方
+    文件對 `rules:changes` 與 `rules:exists` 都寫明 *"Paths are relative to the
+    project directory (`$CI_PROJECT_DIR`)"*，GitHub 的 `on.<event>.paths` 同樣
+    比對 repo 相對路徑。
+
+    實測（`-o alerting/`，照印出來的指示接線完成後）：
+
+        GitHub  paths conf.d/**       vs  實檔 alerting/conf.d/db-a.yaml  → 不符
+        GitLab  changes conf.d/**/*   vs  同上                            → 不符
+        GitLab  exists rule-packs/custom/**/*                             → 不符
+
+    沒有任何 job 會被建立，repo 因此永遠是綠的、而且一個字都沒驗到 —— 正是
+    #1357 的結果，只是這次是**照著我們的補救步驟做出來的**。
+    """
+
+    _CONFIG = {
+        'ci': 'both', 'deploy': 'kustomize',
+        'rule_packs': ['mariadb'], 'tenants': ['db-a'],
+        'namespace': 'monitoring',
+        'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
+    }
+
+    def _summary(self, tmpdir, ci='both', out_sub='alerting'):
+        import contextlib
+        import io
+        from pathlib import Path as _P
+        repo = _P(tmpdir) / 'repo'
+        (repo / '.git').mkdir(parents=True)
+        target = repo / out_sub if out_sub else repo
+        target.mkdir(exist_ok=True)
+        config = dict(self._CONFIG, ci=ci)
+        created = ip.run_init(config, str(target))
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            ip._print_summary(created, str(target), config)
+        return buf.getvalue()
+
+    def test_the_subdir_summary_names_the_paths_that_still_do_not_match(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = self._summary(tmpdir)
+        # 每一個真的會被 GitLab/GitHub 從 repo 根解析的值都要被點名，
+        # 而且要成對出現（現值 → 該變成什麼）。
+        for value in ('conf.d/**', 'kustomize/**', 'rule-packs/**',
+                      'conf.d/**/*', 'rule-packs/custom/**/*'):
+            assert f'{value}  →  alerting/{value}' in out, (
+                f'子目錄結尾訊息沒有點名 {value!r} —— 客戶照做之後這個 filter '
+                f'仍然比對 repo 根，什麼都不會匹配。\n{out}')
+
+    def test_only_the_selected_platform_is_listed(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            gh = self._summary(tmpdir, ci='github')
+        with tempfile.TemporaryDirectory() as tmpdir:
+            gl = self._summary(tmpdir, ci='gitlab')
+        assert 'alerting/.github/workflows/dynamic-alerting.yaml' in gh
+        assert '.gitlab-ci.d/dynamic-alerting.yml' not in gh.split(
+            'Not done yet')[-1]
+        assert 'alerting/.gitlab-ci.d/dynamic-alerting.yml' in gl
+        assert '.github/workflows' not in gl.split('Not done yet')[-1]
+
+    def test_a_leftover_file_from_an_earlier_run_is_not_listed(self):
+        """⛔ 上面那條在「檔案不存在」時是恆真的，因此擋不住 `ci_sel` 過濾被
+        拿掉——實測把它改成 `('gitlab', 'both', 'github')` 仍然全綠。
+
+        真正會分辨的情境是**再跑一次 init 但縮小 `--ci`**：目錄裡還留著上一次
+        `--ci both` 寫下的 GitLab pipeline。這一次沒有產生它、也沒有要求客戶
+        接線它，把它列進「你還要改這些路徑」只會指派一件本次根本沒發生的工作。
+        """
+        import contextlib
+        import io
+        from pathlib import Path as _P
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = _P(tmpdir) / 'repo'
+            (repo / '.git').mkdir(parents=True)
+            sub = repo / 'alerting'
+            sub.mkdir()
+            stale = sub / ip._GL_PIPELINE_REL
+            stale.parent.mkdir(parents=True, exist_ok=True)
+            stale.write_text(
+                'stages: [validate]\n'
+                'job:\n  stage: validate\n  script: [true]\n'
+                '  rules:\n    - changes: [stale-tree/**/*]\n',
+                encoding='utf-8', newline='\n')
+            config = dict(self._CONFIG, ci='github')
+            created = ip.run_init(config, str(sub))
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                ip._print_summary(created, str(sub), config)
+            out = buf.getvalue()
+        assert 'Not done yet' in out, out
+        assert 'stale-tree/**/*' not in out, (
+            '`--ci github` 的結尾訊息列出了上一次執行留下的 GitLab pipeline '
+            f'裡的 path filter——這一次既沒產生它也沒要求接線它。\n{out}')
+
+    def test_a_leftover_github_workflow_is_not_listed_either(self):
+        """⛔ 上一條只替 **GitLab** 那半解除了恆真，GitHub 那道過濾
+        （`ci_sel in ('github', 'both')`）留在它被寫來修正的那個完全一樣的
+        恆真狀態裡：把它改成 `if True:` 仍然全綠。
+
+        鏡像情境：目錄裡留著上一次 `--ci both` 寫下的 GitHub workflow，這次
+        跑 `--ci gitlab`。
+        """
+        import contextlib
+        import io
+        from pathlib import Path as _P
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = _P(tmpdir) / 'repo'
+            (repo / '.git').mkdir(parents=True)
+            sub = repo / 'alerting'
+            sub.mkdir()
+            stale = sub / ip._GH_WORKFLOW_REL
+            stale.parent.mkdir(parents=True, exist_ok=True)
+            stale.write_text(
+                'name: stale\non:\n  push:\n    paths:\n'
+                '      - stale-gh-tree/**\njobs:\n  j:\n'
+                '    runs-on: ubuntu-latest\n    steps:\n      - run: true\n',
+                encoding='utf-8', newline='\n')
+            config = dict(self._CONFIG, ci='gitlab')
+            created = ip.run_init(config, str(sub))
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                ip._print_summary(created, str(sub), config)
+            out = buf.getvalue()
+        assert 'Not done yet' in out, out
+        assert 'stale-gh-tree/**' not in out, (
+            '`--ci gitlab` 的結尾訊息列出了上一次執行留下的 GitHub workflow '
+            f'裡的 path filter。\n{out}')
+
+    def test_an_install_at_the_repo_root_says_nothing_of_the_kind(self):
+        """反空洞：根目錄安裝沒有這個問題，這一段不該出現。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = self._summary(tmpdir, out_sub='')
+        assert 'Not done yet' not in out, out
+        assert '  →  ' not in out, out
+
+    def test_the_listed_values_are_read_from_the_file_not_hardcoded(self):
+        """⛔ 清單必須由**剛寫出來的檔案**推導。
+
+        寫死一份清單的話，日後新增一個帶 path filter 的 job 會靜靜地不在
+        名單上——而那個 job 就是下一個永遠不會被建立的 job。
+        """
+        from pathlib import Path as _P
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = _P(tmpdir) / 'repo'
+            (repo / '.git').mkdir(parents=True)
+            sub = repo / 'alerting'
+            sub.mkdir()
+            ip.run_init(dict(self._CONFIG), str(sub))
+            gl = sub / ip._GL_PIPELINE_REL
+            doc = yaml.safe_load(gl.read_text(encoding='utf-8'))
+            doc['probe-job'] = {
+                'stage': 'validate', 'script': ['true'],
+                'rules': [{'changes': ['probe-tree/**/*']}],
+            }
+            gl.write_text(yaml.safe_dump(doc), encoding='utf-8', newline='\n')
+            assert 'probe-tree/**/*' in ip._root_relative_ci_paths(gl), (
+                '新加的 job 的 path filter 沒有被推導出來——這份清單是寫死的')
+
+    def test_the_long_form_changes_mapping_is_not_missed(self):
+        """`changes:` 也接 `{paths: [...], compare_to: ...}` 長格式。"""
+        from pathlib import Path as _P
+        with tempfile.TemporaryDirectory() as tmpdir:
+            f = _P(tmpdir) / 'p.yml'
+            f.write_text(
+                'job:\n  rules:\n    - changes:\n        paths:\n'
+                '          - conf.d/**/*\n        compare_to: main\n',
+                encoding='utf-8', newline='\n')
+            assert ip._root_relative_ci_paths(f) == ['conf.d/**/*']
+
+
+class TestShippedStageNumbersMatchTheDeclaredStages:
+    """⛔ 第七輪盲審 lens X：同一份出貨檔案自己打自己。
+
+    #1358 把 GitLab 腿從三個 stage 收成 `validate → apply`，檔頭因此寫
+    「Two stages: validate → apply」——但 apply 區段的分隔註解仍寫死
+    `# ── Stage 3: Apply`，而那一行會**原樣寫進客戶 repo**。
+
+    這與先前那次「root shell 的說明列出一個已被刪掉的 stage 名稱」是同一類
+    缺陷（同樣的 SSOT `_GL_STAGES` 已經在那裡了，只是這三個註解沒接上）。
+    """
+
+    @pytest.mark.parametrize('deploy', ['kustomize', 'helm', 'argocd'])
+    def test_no_stage_banner_numbers_past_the_declared_list(self, deploy):
+        import re as _re
+        body = ip._build_gitlab_apply_stage(deploy, 'monitoring')
+        numbers = [int(n) for n in _re.findall(r'──\s*Stage\s+(\d+)\s*:', body)]
+        assert numbers, body
+        assert max(numbers) <= len(ip._GL_STAGES), (
+            f'{deploy}: apply 區段自稱 Stage {max(numbers)}，但這條 pipeline '
+            f'只宣告 {len(ip._GL_STAGES)} 個 stage {ip._GL_STAGES}——這行會出貨'
+            f'到客戶 repo。\n{body}')
+
+    @pytest.mark.parametrize('deploy', ['kustomize', 'helm', 'argocd'])
+    def test_the_number_is_derived_not_retyped(self, deploy):
+        """反向釘：改動 `_GL_STAGES` 必須連帶改動印出來的編號。"""
+        body_now = ip._build_gitlab_apply_stage(deploy, 'monitoring')
+        original = ip._GL_STAGES
+        try:
+            ip._GL_STAGES = original + ('extra',)
+            body_more = ip._build_gitlab_apply_stage(deploy, 'monitoring')
+        finally:
+            ip._GL_STAGES = original
+        assert body_now != body_more, (
+            f'{deploy}: 多宣告一個 stage 之後 apply 區段的編號沒有跟著動——'
+            '那個數字是重打的，不是推導的')
+
+    def test_the_generated_file_agrees_with_its_own_header(self):
+        """端到端：實際寫出來的檔案裡，檔頭與區段註解不能互相矛盾。"""
+        import re as _re
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = {
+                'ci': 'gitlab', 'deploy': 'kustomize',
+                'rule_packs': ['mariadb'], 'tenants': ['db-a'],
+                'namespace': 'monitoring',
+                'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
+            }
+            from pathlib import Path as _P
+            ip.run_init(config, tmpdir)
+            text = (_P(tmpdir) / ip._GL_PIPELINE_REL).read_text(
+                encoding='utf-8')
+        declared = yaml.safe_load(text)['stages']
+        banners = [int(n) for n in _re.findall(r'──\s*Stage\s+(\d+)\s*:', text)]
+        assert banners, text
+        assert max(banners) <= len(declared), (
+            f'出貨檔案宣告 {declared} 卻有 Stage {max(banners)} 的區段註解:\n'
+            f'{text}')
+
+
+class TestTheApplyStageAdmitsItNeedsCredentials:
+    """⛔ 第七輪盲審 lens W：apply 階段以出貨狀態不可能成功，而沒有任何一句話說。
+
+    六種（平台 × 部署方式）組合的 apply job 都要跟叢集或 Argo CD server 講話，
+    產生器**刻意**不放任何憑證——那是對的，憑證是這個工具最不該發明的東西。
+    問題是「刻意」這件事只寫在原始碼註解裡：結尾訊息列了閾值、pre-commit、CI
+    接線，然後說「commit 並推送」，於是第一次手動部署以 `connection refused`
+    收場，而沒有任何東西把它連到一個沒做的步驟。
+
+    ⚠️ 這條釘的是「有講」，不是「有接好」。半接一個猜出來的 secret 名稱是一個
+    看起來像答案的錯答案。
+    """
+
+    @pytest.mark.parametrize('deploy,needle', [
+        ('kustomize', 'KUBECONFIG'),
+        ('helm', 'KUBECONFIG'),
+        ('argocd', 'ARGOCD_AUTH_TOKEN'),
+    ])
+    @pytest.mark.parametrize('lang', ['en', 'zh'])
+    def test_the_summary_names_the_credential_the_apply_stage_needs(
+            self, deploy, needle, lang, monkeypatch):
+        """⚠️ `_LANG` 是**匯入時**求值的（`init_project.py:66`），所以
+        `monkeypatch.setenv('DA_LANG', …)` 對它毫無作用——這條的語系軸原本
+        是死的，兩列都在測英文那一句。實測：把整段中文憑證訊息刪掉，這個
+        class 7/7 全綠、tests/ops 4515 全綠。
+
+        同一分支的其他測試用的都是 `setattr(ip, '_LANG', …)`；這條是唯一的
+        例外，而它偏偏是宣稱雙語的那條。
+        """
+        import contextlib
+        import io
+        monkeypatch.setattr(ip, '_LANG', lang)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = {
+                'ci': 'github', 'deploy': deploy,
+                'rule_packs': ['mariadb'], 'tenants': ['db-a'],
+                'namespace': 'monitoring',
+                'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
+            }
+            created = ip.run_init(config, tmpdir)
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                ip._print_summary(created, tmpdir, config)
+            out = buf.getvalue()
+        assert needle in out, (
+            f'{deploy}/{lang}: 結尾訊息沒有點名 apply 需要的憑證——客戶會在'
+            f'第一次部署撞上 connection refused 而沒有線索。\n{out}')
+
+    def test_the_generator_still_supplies_no_credential_of_its_own(self):
+        """反向：說明歸說明，產生器不得開始猜 secret 名稱塞進 YAML。"""
+        for deploy in ('kustomize', 'helm', 'argocd'):
+            wf = ip._gen_github_actions(
+                'monitoring', 'ghcr.io/vencil/da-tools:latest', deploy)
+            gl = ip._gen_gitlab_ci(
+                'monitoring', 'ghcr.io/vencil/da-tools:latest', deploy)
+            for text, label in ((wf, 'github'), (gl, 'gitlab')):
+                assert 'KUBECONFIG' not in text, (deploy, label, text)
+                assert 'ARGOCD_AUTH_TOKEN' not in text, (deploy, label, text)
+
+
+class TestEnclosingRepoRootIsTheBasisOfEverySubdirClaim:
+    """⛔ 第七輪盲審 lens Y：所有子目錄宣稱的**基礎**沒有守衛。
+
+    `_enclosing_repo_root` 的三個消費端都被釘得很緊，這個原語本身沒有——所以
+    它可以被改成把「在 repo 根」說成「在子目錄」（反過來也行），而整份測試全綠。
+    三個實測存活的變異各對應下面一條，兩條的後果是**把 #1357 重造一次並認證**。
+    """
+
+    def _root(self, tmp, sub=''):
+        from pathlib import Path as _P
+        return ip._enclosing_repo_root(str(_P(tmp) / sub) if sub else str(tmp))
+
+    def test_the_repo_root_itself_is_not_a_subdirectory(self):
+        """⛔ `for candidate in (here, *here.parents)` 的第一項。
+
+        拿掉 `here` 之後，一個**巢狀在別的 git 目錄裡**的 repo（很常見：把
+        clone 放在另一個受版控的目錄下）會被判成子目錄安裝：實測不再寫根
+        `.gitlab-ci.yml`（12 → 11 個檔案），並印出兩句假警告
+        （「⚠️ GitHub is NOT wired … Move `repo/.github/workflows/…`」）——
+        對一個**確實**在 repo 根跑的執行。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from pathlib import Path as _P
+            outer = _P(tmpdir) / 'outer'
+            (outer / '.git').mkdir(parents=True)
+            inner = outer / 'inner'
+            (inner / '.git').mkdir(parents=True)
+            assert ip._enclosing_repo_root(str(inner)) is None, (
+                '一個自己就是 repo 根的目錄被判成別人的子目錄')
+            assert ip._enclosing_repo_root(str(inner / 'a')) == inner
+
+    def test_a_git_file_worktree_is_still_a_repository_root(self):
+        """⛔ `.git` 是**檔案**的情形：git worktree 與 submodule 都是。
+
+        `.exists()` → `.is_dir()` 之後，`-o alerting/` 在這種 repo 裡實測從
+        11 個檔案 + 正確的兩句警告，變成 **12 個檔案**（在子目錄裡種下一份
+        GitLab 永遠不會載入的 `.gitlab-ci.yml`）+「GitHub wiring done」+
+        「GitLab wiring done」+「will automatically validate your config」。
+        #1357 完整重造並認證。
+
+        ⚠️ 這不是罕見形狀——本專案自己的盲審就是在 worktree 裡跑的。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from pathlib import Path as _P
+            repo = _P(tmpdir) / 'repo'
+            (repo / 'alerting').mkdir(parents=True)
+            (repo / '.git').write_text(
+                'gitdir: /elsewhere/.git/worktrees/x\n',
+                encoding='utf-8', newline='\n')
+            assert ip._enclosing_repo_root(str(repo / 'alerting')) == repo, (
+                '`.git` 是檔案（worktree / submodule）時沒有被認出是 repo 根'
+                '——子目錄安裝會被當成根安裝並發出全綠宣告')
+
+    def test_the_search_does_not_stop_one_level_up(self):
+        """⛔ `here.parents[:1]`：`-o a/b/`（兩層）就找不到 repo 根。
+
+        實測同樣是 11 → 12 個檔案 + 兩句「wiring done」+「will automatically
+        validate」。深度 ≥2 的輸出目錄不是特例，是 `-o infra/alerting/` 這種
+        很自然的擺法。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from pathlib import Path as _P
+            repo = _P(tmpdir) / 'repo'
+            (repo / '.git').mkdir(parents=True)
+            deep = repo / 'a' / 'b'
+            deep.mkdir(parents=True)
+            assert ip._enclosing_repo_root(str(deep)) == repo, (
+                '兩層深的輸出目錄找不到 repo 根')
+
+    def test_no_git_anywhere_is_not_a_subdirectory(self):
+        """反向：完全不在 repo 裡時必須回 None，否則每一次 greenfield 都會
+        被掛上子目錄警告。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            assert ip._enclosing_repo_root(tmpdir) is None
+
+
+class TestTheClassifierEdgesThatProduceAFalseAllClear:
+    """⛔ lens Y：五個存活變異，後果都是對一條 GitLab 永遠不會載入的 pipeline
+    宣告「已接好、什麼都不用做」——#1357 本身的形狀。
+    """
+
+    _WANT = '.gitlab-ci.d/dynamic-alerting.yml'
+
+    def test_a_path_gitlab_does_not_resolve_is_not_already_wired(self):
+        """⛔ 正規化不得比 GitLab 本身**寬**。
+
+        GitLab 做的是 `remove_leading_slashes`——它不砍尾端斜線。給正規化加上
+        `.rstrip('/')` 之後，一個寫成 `- local: .gitlab-ci.d/dynamic-alerting.yml/`
+        （GitLab 解析不到的路徑）的 repo 實測得到「GitLab wiring already in
+        place … nothing to do」+「will automatically validate your config」。
+        """
+        assert ip._gitlab_include_path('/' + self._WANT) == self._WANT
+        assert ip._gitlab_include_path('//' + self._WANT) == self._WANT, (
+            'GitLab 的 remove_leading_slashes 砍的是「所有」前導斜線，'
+            '正規化只砍一個會讓正確接線的 repo 被反覆要求再接一次')
+        assert ip._gitlab_include_path('./' + self._WANT) == self._WANT
+        assert ip._gitlab_include_path(self._WANT + '/') != self._WANT, (
+            '尾端斜線被砍掉了——那讓一個 GitLab 解析不到的路徑被認證為已接線')
+
+    def test_an_unparseable_root_file_is_not_treated_as_wired(self):
+        """⛔ `_gitlab_root_includes` 的 `YAMLError` 腿必須 fail-CLOSED。
+
+        回 True 之後，`-o alerting/` 搭配一份**解析不了**的 repo 根 pipeline
+        實測印出「GitLab wiring already in place: the repository-root
+        .gitlab-ci.yml already includes `alerting/…` … nothing to do」——一句
+        由一個沒能解析的檔案推導出來的全綠宣告。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from pathlib import Path as _P
+            repo = _P(tmpdir) / 'repo'
+            (repo / 'alerting').mkdir(parents=True)
+            (repo / '.gitlab-ci.yml').write_text(
+                'job:\n  script:\n    - !reference [.x, script]\n',
+                encoding='utf-8', newline='\n')
+            assert ip._gitlab_root_includes(repo, repo / 'alerting') is False, (
+                '解析不了的 repo 根檔被當成「已經 include 我們」')
+
+    def test_a_root_file_with_no_trailing_newline_keeps_the_safe_path(self):
+        """⛔ 試貼後置條件必須自己補分隔換行。
+
+        少了 `'\\n'` 之後，一份**沒有結尾換行**且沒有 `include:` 的根檔會從
+        「可以安全附加，這是現成區塊」掉到「形狀無法安全附加」的端狀態範例。
+        不是資料損毀，但唯一一條 paste-ready 路徑對所有缺 EOF 換行的檔案消失
+        ——而缺 EOF 換行正是本 repo dev-rule #11 說到會被踩的那種檔案。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from pathlib import Path as _P
+            repo = _P(tmpdir) / 'repo'
+            repo.mkdir()
+            (repo / '.gitlab-ci.yml').write_text(
+                'stages:\n  - build', encoding='utf-8', newline='\n')
+            assert ip._classify_root_file(
+                repo / ip._GL_ROOT_SHELL_REL, self._WANT) == \
+                ip._GL_ROOT_NEEDS_INCLUDE, (
+                    '沒有結尾換行的根檔失去了唯一一條可安全附加的路徑')
+
+    def test_an_include_nested_under_a_job_is_not_a_top_level_include(self):
+        """⛔ 解析失敗後的行掃描必須錨在行首。
+
+        少了 `^` 之後，一份用 `!reference` 而解析不了、且唯一的 `include:` 是
+        **巢狀在某個 job 底下**的根檔，實測從「⚠️ 你的根 .gitlab-ci.yml 解析
+        不了」變成「⚠️ 你的根 .gitlab-ci.yml 已經有 `include:`」——斷言一個
+        不存在的 top-level key，並要客戶去找它。
+        """
+        assert ip._GL_INCLUDE_KEY_RE.search('include: a.yml\n')
+        assert ip._GL_INCLUDE_KEY_RE.search('x: 1\ninclude:\n  - a.yml\n')
+        assert not ip._GL_INCLUDE_KEY_RE.search(
+            'job:\n  variables:\n    include: nope\n'), (
+                '巢狀在 job 底下的 include: 被當成 top-level key')
+
+    def test_the_subdirectory_snippet_is_a_valid_include_entry(self):
+        """子目錄用的那對 helper（`_gl_block_for` / `_gl_example_for`）產出的
+        內容，必須是 GitLab 解析得到的 include 條目。
+
+        ⚠️ **這條釘的不是 `local:` 這個 key。** 盲審把「拿掉 `local:`」報成
+        缺陷（說裸字串不是合法 include、客戶貼完仍然不會載入），查證後不成立：
+        GitLab 文件明寫 `include:` 接受純字串與字串陣列，本地路徑等同
+        `include:local`（`doc/ci/yaml/includes.md`）。本檔案自己的
+        `_gitlab_declared_includes` 早就照這個語意實作。所以那個變異是等價的，
+        已殺掉——留下的是真正該釘的性質：印出來的東西 parse 得出來，而且
+        `_gitlab_declared_includes` 在裡面找得到我們要的路徑。
+
+        縮排那一段是**渲染一致性**釘，不是正確性釘：4 空格的 block sequence
+        同樣是合法 YAML。它擋的是無意的漂移，不是客戶會踩的破口。
+        """
+        want = 'alerting/.gitlab-ci.d/dynamic-alerting.yml'
+        for text in (ip._gl_block_for(want), ip._gl_example_for(want)):
+            doc = yaml.safe_load(text.replace(
+                '<keep your existing entries here>', 'other.yml'))
+            assert isinstance(doc, dict) and 'include' in doc, text
+            assert want in ip._gitlab_declared_includes(doc), (
+                f'子目錄片段沒有宣告一個 GitLab 認得的 local include:\n{text}')
+        # 縮排也是合約的一部分：範例被拿來對照客戶自己的檔案。
+        items = [ln for ln in ip._gl_example_for(want).splitlines()
+                 if ln.lstrip().startswith('- ')]
+        assert items and all(ln.startswith('  - ') for ln in items), items
+
+
+class TestTheCliLayerItself:
+    """⛔ 第七輪盲審 lens Y 最大的一個破口：`main()` / `_build_config_from_args`
+    / `_validate_config` / `_check_existing_init` / parser 預設值這一層**幾乎
+    零覆蓋**——127 個變異裡 13 個實測存活者住在這裡。
+
+    形狀是：所有從 `config` dict 往下的東西（`run_init` / `_preview_files` /
+    `_print_summary`）被釘得非常緊，而**把 CLI 參數變成那個 dict** 的那一層
+    沒有。後果分兩類：改掉客戶實際收到什麼（預設值），以及把必要參數檢查整個
+    反轉（合法輸入被拒 / 非法輸入被收下）。
+
+    ⚠️ 全部走 `subprocess`，因為要釘的正是 `main()` 那一層的結束碼與 stderr。
+    """
+
+    _SCRIPT = None
+
+    @classmethod
+    def setup_class(cls):
+        from pathlib import Path as _P
+        cls._SCRIPT = _P(ip.__file__)
+
+    def _run(self, tmpdir, *args):
+        import subprocess
+        # ⛔ 語系要傳給**子行程**。`_pin_cli_language` 那個 autouse fixture 釘
+        # 的是本行程匯入的 `ip._LANG`，對這裡 spawn 出去的 python 毫無作用
+        # ——子行程自己重新 import、重新讀 `os.environ['LANG']`。於是在
+        # `LANG=zh_TW.UTF-8` 的開發機上，斷言英文訊息的那些測試照樣紅。
+        env = dict(os.environ, LANG='en_US.UTF-8')
+        env.pop('DA_LANG', None)
+        return subprocess.run(
+            [sys.executable, str(self._SCRIPT), '-o', str(tmpdir), *args],
+            capture_output=True, text=True, encoding='utf-8',
+            errors='replace', timeout=300, env=env)
+
+    def _files(self, tmpdir):
+        from pathlib import Path as _P
+        return sorted(p.relative_to(tmpdir).as_posix()
+                      for p in _P(tmpdir).rglob('*') if p.is_file())
+
+    # ── 非互動判定：少算一個旗標就掉進互動提示，CI 裡直接死 ──────────
+    @pytest.mark.parametrize('flag,value', [
+        ('--deploy', 'helm'),
+        ('--ci', 'github'),
+        ('--rule-packs', 'mariadb'),
+        ('--tenants', 'db-a'),
+    ])
+    def test_any_single_generating_flag_means_non_interactive(
+            self, flag, value):
+        """⛔ `has_cli_args` 少算 `--deploy`（或 `--ci`）之後，
+        `da-tools init --deploy helm` 從 rc=0 / 8 個檔案變成 **rc=1 / 0 個
+        檔案**——掉進互動提示，然後在關閉的 stdin 上死掉。
+
+        四個旗標各自都必須足以構成「這是非互動呼叫」。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            r = self._run(tmpdir, flag, value)
+            assert r.returncode == 0, (
+                f'{flag} {value} 沒有被當成非互動呼叫\n'
+                f'rc={r.returncode}\n{r.stderr[-600:]}')
+            assert self._files(tmpdir), '沒有產生任何檔案'
+
+    # ── 必要參數檢查：兩個方向都要對 ────────────────────────────────
+    def test_non_interactive_without_tenants_is_a_caller_error(self):
+        """⛔ 拿掉這個守衛之後 `--non-interactive` 單獨呼叫從 rc=2 變 rc=0，
+        並**靜默地為兩個憑空發明的租戶 `db-a,db-b` 產生 12 個檔案**。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            r = self._run(tmpdir, '--non-interactive')
+            assert r.returncode == 2, (r.returncode, r.stderr[-400:])
+            assert not self._files(tmpdir), self._files(tmpdir)
+
+    def test_git_config_source_requires_a_repo_url(self):
+        """⛔ 這個檢查被反轉過（`not args.git_repo` → `args.git_repo`）而全綠：
+        **附了 URL** 的合法呼叫變成 rc=2 / 0 個檔案，錯誤訊息還說少了那個
+        URL。兩個方向都釘。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            r = self._run(tmpdir, '--non-interactive', '--tenants', 'db-a',
+                          '--config-source', 'git')
+            assert r.returncode == 2, (r.returncode, r.stderr[-400:])
+        with tempfile.TemporaryDirectory() as tmpdir:
+            r = self._run(tmpdir, '--non-interactive', '--tenants', 'db-a',
+                          '--config-source', 'git',
+                          '--git-repo', 'https://example.com/x.git')
+            assert r.returncode == 0, (
+                '附了 --git-repo 的合法呼叫被拒絕\n'
+                f'rc={r.returncode}\n{r.stderr[-600:]}')
+            assert self._files(tmpdir)
+
+    def test_an_unknown_rule_pack_is_rejected(self):
+        """⛔ `invalid = []` 之後，`--rule-packs bogus` 從 rc=2 / 0 個檔案變成
+        **rc=0 / 9 個檔案**，`defaults:` 是空的——一份什麼都不會告警的配置。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            r = self._run(tmpdir, '--non-interactive', '--tenants', 'db-a',
+                          '--rule-packs', 'bogus')
+            assert r.returncode == 2, (r.returncode, r.stdout[-400:])
+            assert not self._files(tmpdir)
+
+    def test_an_auto_enabled_pack_is_accepted_on_the_cli(self):
+        """⛔ 反向：自動啟用的 pack 必須仍可在 CLI 上指名。
+
+        拿掉那道過濾之後 `--rule-packs platform,mariadb` 變成 rc=2
+        「Unknown Rule Packs: platform」——一個工具自己會自動啟用的 pack。
+        """
+        auto = ip._auto_enabled_rule_packs()
+        assert auto, '沒有 auto-enabled pack，這條測試就空了'
+        with tempfile.TemporaryDirectory() as tmpdir:
+            r = self._run(tmpdir, '--non-interactive', '--tenants', 'db-a',
+                          '--rule-packs', f'{sorted(auto)[0]},mariadb')
+            assert r.returncode == 0, (
+                f'auto-enabled pack {sorted(auto)[0]!r} 在 CLI 上被拒絕\n'
+                f'{r.stderr[-600:]}')
+
+    def test_the_auto_filter_keeps_the_selectable_packs(self):
+        """⛔ 過濾條件從 `not in auto` 反轉成 `in auto` 之後，
+        `--rule-packs mariadb,redis` 產出 `rule_packs: []`、`# Rule Packs:`
+        空白，而 `defaults:` 裡 **mariadb 與 redis 的每一條閾值都不見了**。
+        47 個情境都受影響，而且全綠。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            r = self._run(tmpdir, '--non-interactive', '--tenants', 'db-a',
+                          '--rule-packs', 'mariadb,redis')
+            assert r.returncode == 0, r.stderr[-400:]
+            from pathlib import Path as _P
+            marker = yaml.safe_load(
+                (_P(tmpdir) / '.da-init.yaml').read_text(encoding='utf-8'))
+            assert 'mariadb' in marker['rule_packs'], marker
+            assert 'redis' in marker['rule_packs'], marker
+
+    def test_tenant_names_are_stripped_before_validation(self):
+        """⛔ 少了 `.strip()`：`--tenants " db-a , db-b "` 從 rc=0 / 10 個檔案
+        變成 rc=2 / **0 個檔案**，錯誤是「Invalid tenant names (K8s
+        convention)」——一個人手打的空白就讓整次呼叫失敗。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            r = self._run(tmpdir, '--non-interactive',
+                          '--tenants', ' db-a , db-b ')
+            assert r.returncode == 0, (
+                f'租戶名稱前後的空白沒有被剝掉\nrc={r.returncode}\n'
+                f'{r.stderr[-600:]}')
+            from pathlib import Path as _P
+            assert (_P(tmpdir) / 'conf.d' / 'db-a.yaml').exists()
+            assert (_P(tmpdir) / 'conf.d' / 'db-b.yaml').exists()
+
+    # ── parser 預設值：改一個字就換掉客戶收到的整棵樹 ────────────────
+    def test_the_shipped_defaults_are_what_they_claim(self):
+        """⛔ 四個預設值全部沒有被釘住，而每一個都直接決定客戶收到什麼：
+
+            --ci      both → github      : 少 2 個檔案，GitLab 腿整個消失
+            --deploy  kustomize → helm   : kustomize/ 四個檔案消失，
+                                           apply 階段從 kubectl 換成 helm
+            --rule-packs mariadb,kubernetes → mariadb
+                                         : _defaults.yaml 少三條 container_* 閾值
+            --tenants db-a,db-b → db-a   : 少一個租戶檔
+
+        釘在 parser 上（單一來源），而不是逐條比對產出的檔案清單。
+        """
+        parser = ip._build_parser()
+        defaults = {a.dest: a.default for a in parser._actions}
+        assert defaults['ci'] is None and defaults['deploy'] is None, (
+            'CI/deploy 的預設值搬到 argparse 了——那會讓 `has_cli_args` 恆真，'
+            '互動流程從此不可達', defaults)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            r = self._run(tmpdir, '--non-interactive', '--tenants', 'db-a')
+            assert r.returncode == 0, r.stderr[-400:]
+            from pathlib import Path as _P
+            marker = yaml.safe_load(
+                (_P(tmpdir) / '.da-init.yaml').read_text(encoding='utf-8'))
+        assert marker['ci_platform'] == 'both', marker
+        assert marker['deploy_method'] == 'kustomize', marker
+        assert 'mariadb' in marker['rule_packs'], marker
+        assert 'kubernetes' in marker['rule_packs'], marker
+
+    def test_the_default_tenants_are_two_not_one(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            r = self._run(tmpdir, '--ci', 'github')
+            assert r.returncode == 0, r.stderr[-400:]
+            from pathlib import Path as _P
+            names = sorted(p.stem for p in (_P(tmpdir) / 'conf.d').iterdir()
+                           if not p.stem.startswith('_'))
+            assert names == ['db-a', 'db-b'], names
+
+    # ── 已初始化目錄：結束碼與閘門順序都是合約 ──────────────────────
+    def test_reinit_without_force_is_a_violation_not_a_caller_error(self):
+        """⛔ `EXIT_VIOLATION` → `EXIT_CALLER_ERROR` 存活：結束碼 1 → 2 而全綠。
+
+        兩者意思不同（1 = 你的樹的狀態擋住了；2 = 你的命令列寫錯了），呼叫端
+        腳本會照這個分。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            assert self._run(tmpdir, '--non-interactive',
+                             '--tenants', 'db-a').returncode == 0
+            again = self._run(tmpdir, '--non-interactive', '--tenants', 'db-a')
+            assert again.returncode == ip.EXIT_VIOLATION, (
+                again.returncode, again.stderr[-400:])
+            assert '--force' in again.stderr
+
+    def test_the_already_initialized_gate_runs_before_argument_validation(self):
+        """⛔ 兩個閘門的先後是合約，而它是自由的：把 `_check_existing_init`
+        搬到驗證之後，已初始化的目錄 + `--rule-packs bogus` 從
+        「already initialized … Use --force」變成「Unknown Rule Packs」。
+
+        先講樹的狀態才對——那是客戶下一步要處理的東西，而參數在他刪掉 marker
+        之前根本不會被用到。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            assert self._run(tmpdir, '--non-interactive',
+                             '--tenants', 'db-a').returncode == 0
+            r = self._run(tmpdir, '--non-interactive', '--tenants', 'db-a',
+                          '--rule-packs', 'bogus')
+            assert 'already initialized' in r.stderr, r.stderr[-500:]
+            assert r.returncode == ip.EXIT_VIOLATION, r.returncode
+
+    def test_a_marker_that_is_a_directory_does_not_crash(self):
+        """⛔ `.da-init.yaml` 是**目錄**時，`.is_file()` 讓它繞過守衛，然後在
+        寫了 11 個檔案之後以裸 `IsADirectoryError` traceback 死掉。
+
+        這條釘的是「不得半寫後崩潰」，不預設哪一種收場才對。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from pathlib import Path as _P
+            (_P(tmpdir) / '.da-init.yaml').mkdir()
+            r = self._run(tmpdir, '--non-interactive', '--tenants', 'db-a')
+            assert 'Traceback' not in r.stderr, (
+                '.da-init.yaml 是目錄時以未處理的例外收場\n'
+                f'{r.stderr[-800:]}')
+            assert r.returncode == ip.EXIT_VIOLATION, r.returncode
+            assert '.da-init.yaml' in r.stderr, r.stderr[-400:]
+            # ⛔ 而且不得半寫：擋下來就一個檔案都不留。
+            assert not self._files(tmpdir), self._files(tmpdir)
+
+        # `--force` 同樣不得刪掉客戶放在那裡的目錄。
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from pathlib import Path as _P
+            (_P(tmpdir) / '.da-init.yaml').mkdir()
+            r = self._run(tmpdir, '--non-interactive', '--tenants', 'db-a',
+                          '--force')
+            assert r.returncode == ip.EXIT_VIOLATION, (
+                r.returncode, r.stderr[-400:])
+            assert (_P(tmpdir) / '.da-init.yaml').is_dir()
+
+
+class TestTheClosingLineAndTheSubdirWarningSayTrueThings:
+    """⛔ 第七輪盲審 lens U：結尾那句與子目錄警告的**內容**幾乎沒有被斷言。
+
+    四個各自獨立的存活變異，共同點是既有斷言「因為別的理由」而成立：
+      * 子目錄的 `--ci both` 分岔可以整個拿掉——擋它的守衛詞出現在它要抓的
+        那句反話裡；
+      * 結尾那句可以指名一個這次沒選的平台；
+      * 整段子目錄 GitHub 警告可以換成一句佔位噪音；
+      * 「加在檔案最後」這五個字可以刪掉。
+    """
+
+    _CFG = {
+        'deploy': 'kustomize', 'rule_packs': ['mariadb'], 'tenants': ['db-a'],
+        'namespace': 'monitoring',
+        'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
+    }
+
+    def _summary(self, tmpdir, ci, sub='', root_body=None):
+        import contextlib
+        import io
+        from pathlib import Path as _P
+        repo = _P(tmpdir) / 'repo'
+        (repo / '.git').mkdir(parents=True)
+        target = repo / sub if sub else repo
+        target.mkdir(exist_ok=True)
+        if root_body is not None:
+            (repo / '.gitlab-ci.yml').write_text(
+                root_body, encoding='utf-8', newline='\n')
+        config = dict(self._CFG, ci=ci)
+        created = ip.run_init(config, str(target))
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            ip._print_summary(created, str(target), config)
+        return buf.getvalue()
+
+    def _closing(self, out):
+        """結尾那句：講「提交並推送」的那一行。"""
+        hits = [ln.strip() for ln in out.splitlines()
+                if 'commit and push' in ln.lower() or '提交並推送' in ln
+                or '推送' in ln]
+        assert len(hits) == 1, (hits, out)
+        return hits[0]
+
+    # ⛔ BOTH fixtures, and that is the finding. The first version passed only
+    # `root_body=None` — a greenfield install at the repo root, where
+    # `gl_root_written` is True, `gl_needs_manual` is False, and the closing
+    # sentence therefore always comes from the `else` branch. The branch that
+    # HARDCODES "GitHub Actions" into the closing line (`elif ci_sel == 'both'`)
+    # was unreachable for every row, so mutating it to `elif True:` stayed
+    # green while `--ci gitlab` on a brownfield repo closed with
+    # "GitHub Actions validates automatically; GitLab CI only after…".
+    @pytest.mark.parametrize('root_body', [None, 'stages:\n  - build\n'],
+                             ids=['greenfield', 'brownfield'])
+    @pytest.mark.parametrize('ci,forbidden', [
+        ('gitlab', 'GitHub Actions'),
+        ('github', 'GitLab'),
+    ])
+    def test_the_closing_line_never_names_an_unselected_platform(
+            self, ci, forbidden, root_body):
+        """⛔ 平台名稱查表的兩個值都可以被改掉而全綠：`--ci gitlab` 可以收尾在
+        「GitHub Actions + GitLab CI will automatically validate your config」。
+
+        釘住它的那句斷言（`"GitHub Actions + GitLab CI" not in summary`）在
+        `if ci == "both"` 底下——也就是只在**已經選了 both** 的時候才檢查。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = self._summary(tmpdir, ci, root_body=root_body)
+        line = self._closing(out)
+        assert forbidden not in line, (
+            f'--ci {ci} ({root_body and "brownfield" or "greenfield"}) '
+            f'的結尾句指名了 {forbidden}：{line}')
+
+    def test_a_subdirectory_never_closes_with_an_automatic_validation_claim(
+            self):
+        """⛔ 子目錄的 `--ci both` 分岔拿掉之後，收尾變成
+        「GitHub Actions validates automatically; GitLab CI only after you
+        complete the step above」——而它印在「⚠️ GitHub is NOT wired」的兩步
+        之後，GitHub 正是那條**沒有** `include:` 可以從根救回來的腿。
+
+        ⚠️ 既有的守衛用 `"only" not in ln` 當豁免詞，而那句反話裡就有 "only"
+        （"GitLab CI **only** after…"）——斷言被它要抓的那句話自己滿足。改成
+        判定：子目錄下的結尾句不得對**任何**平台宣稱自動驗證。
+        """
+        wired = ('include:\n  - local: alerting/.gitlab-ci.d/'
+                 'dynamic-alerting.yml\n')
+        for root_body in (None, wired):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                out = self._summary(tmpdir, 'both', sub='alerting',
+                                    root_body=root_body)
+            line = self._closing(out)
+            assert 'automatically' not in line.lower(), (
+                '子目錄安裝的結尾句宣稱有東西會自動驗證——GitHub 那條腿在'
+                f'子目錄下是無條件未完成的：{line}')
+            assert '自動驗證' not in line, line
+
+    @pytest.mark.parametrize('lang', ['en', 'zh'])
+    def test_the_subdir_github_warning_names_the_file_and_its_destination(
+            self, lang, monkeypatch):
+        """⛔ 整段警告可以被換成 `⚠️ something about \\`alerting/\\`` 而全綠：
+        既有斷言只有「summary 裡有 ⚠️」與「summary 裡有 alerting」兩句，
+        佔位字串兩句都滿足。
+
+        客戶真正需要的兩件事——**哪個檔案**、**移到哪裡**——一個都沒被斷言。
+        兩個語系分開釘：只釘一次的話，刪掉其中一個語系的整段（讓另一個語系的
+        文案印給使用者）照樣過。
+        """
+        monkeypatch.setattr(ip, '_LANG', lang)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = self._summary(tmpdir, 'github', sub='alerting')
+        src = 'alerting/.github/workflows/dynamic-alerting.yaml'
+        dst = '.github/workflows/dynamic-alerting.yaml'
+        warn = [ln for ln in out.splitlines() if '⚠️' in ln and src in ln]
+        assert warn, (
+            f'{lang}: 子目錄的 GitHub 警告沒有指名要搬的那個檔案 {src}\n{out}')
+        assert any(dst in ln for ln in warn), (
+            f'{lang}: 警告說了要搬，但沒說搬到哪裡\n{warn}')
+        # 語系必須真的切換，否則「兩個語系」這個軸是假的。
+        marker = '尚未接線' if lang == 'zh' else 'is NOT wired'
+        assert any(marker in ln for ln in warn), (lang, warn)
+
+    def test_the_append_instruction_names_the_paste_position(self):
+        """⛔ 「加在檔案最後」可以刪掉而全綠。
+
+        產品碼的註解說得很清楚：後置條件只驗證了**一個**貼上位置（EOF
+        append），而 GitLab 官方文件把 `include:` 放在檔案**開頭**——對以
+        `---` 開頭的文件，頂端貼是 parse error。那五個字就是讓被驗證過的
+        片段成立的東西。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = self._summary(tmpdir, 'gitlab',
+                                root_body='stages:\n  - build\n')
+        assert 'AT THE END' in out, (
+            '可安全附加的指示沒有指明貼在哪裡——後置條件只驗過檔尾那一個位置'
+            f'\n{out}')
+
+
+class TestTheDryRunLegsThatNoTestReaches:
+    """⛔ 第七輪盲審 lens U：`--dry-run` 的三個分支條件沒有任何測試觀察得到。
+
+    共同成因：既有測試各自為了正當理由把軸縮窄了（「GitHub 在子目錄下是無條件
+    未完成的，所以這條只測 gitlab」），而縮窄所**蘊含**的那條姊妹測試從來沒有
+    被寫出來——於是縮窄留下的那一格永遠沒人看。
+
+    `--dry-run` 是「這會對我的 repo 做什麼」那個旗標，它說錯話的成本與實跑一樣。
+    """
+
+    _CFG = {
+        'deploy': 'kustomize', 'rule_packs': ['mariadb'], 'tenants': ['db-a'],
+        'namespace': 'monitoring',
+        'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
+    }
+
+    def _dry(self, tmpdir, ci, sub='', root_body=None):
+        import contextlib
+        import io
+        from pathlib import Path as _P
+        repo = _P(tmpdir) / 'repo'
+        (repo / '.git').mkdir(parents=True)
+        target = repo / sub if sub else repo
+        target.mkdir(exist_ok=True)
+        if root_body is not None:
+            (repo / '.gitlab-ci.yml').write_text(
+                root_body, encoding='utf-8', newline='\n')
+        buf = io.StringIO()
+        # `_handle_dry_run` ends in `sys.exit(0)` — it is a terminal CLI leg.
+        with contextlib.redirect_stdout(buf), pytest.raises(SystemExit) as exc:
+            ip._handle_dry_run(dict(self._CFG, ci=ci), str(target))
+        assert exc.value.code == 0, exc.value.code
+        return buf.getvalue()
+
+    _WIRED = ('include:\n  - local: alerting/.gitlab-ci.d/'
+              'dynamic-alerting.yml\n')
+
+    # ⚠️ 只有 `both` 對那個變異有鑑別力：`--ci github` 之下 `_gl_ok` 因為
+    # `ci_sel` 那一項就已經是 False，所以 `not _gl_ok` 仍然為真、警告照印。
+    # `github` 這一格留著是為了釘住「兩個值都必須被警告」這個性質本身。
+    @pytest.mark.parametrize('ci', ['github', 'both'])
+    def test_github_in_a_wired_subdirectory_is_still_warned_about(self, ci):
+        """⛔ 拿掉 `_gh_pending` 這一項之後，一個 GitLab 已正確接線的
+        split-pipeline repo 跑 `-o alerting/ --ci both --dry-run` 只會印出檔案
+        清單、什麼都不說——而實跑會印「⚠️ GitHub is NOT wired … move it」。
+
+        既有那條「已接線的子目錄不該被警告」刻意只用 `--ci gitlab`，
+        docstring 也解釋了為什麼；但**沒有任何姊妹測試涵蓋同一個 repo 上的
+        github / both**。另一條正向測試確實有跑遍 `--ci` 三值，可是它的
+        fixture 根本沒有 root pipeline，於是 `_gl_ok` 恆假、`_gh_pending`
+        從來不需要出力。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = self._dry(tmpdir, ci, sub='alerting', root_body=self._WIRED)
+        assert '⚠️' in out, (
+            f'--ci {ci} 在一個 GitLab 已接線的子目錄裡完全沒有警告——'
+            f'GitHub 那條腿在子目錄下是無條件未完成的。\n{out}')
+        assert 'GitHub Actions' in out, out
+
+    def test_gitlab_only_in_a_wired_subdirectory_warns_about_a_different_thing(
+            self, monkeypatch):
+        """反向控制：同一個 repo 上 `--ci gitlab` 必須說**不一樣的話**
+        （否則上面那條只是『永遠有警告』的同義反覆）。
+
+        ⛔ 這條原本斷言的是「完全不警告」，而那是在釘一個缺陷。第九輪盲審
+        實測：`--ci gitlab -o alerting/` 在一個**已接線**的 repo 上，實跑會印
+        「⚠️ 還沒完：…否則 job 根本不會被建立，pipeline 會永遠是綠的而且什麼
+        都沒驗到」，`--dry-run` 卻一個字都不說——而 dry-run 正是客戶在真的寫檔
+        之前唯一的問句。**已接線不等於已完成**：產物內容仍以 repo 根為基準，
+        路徑過濾器一個都對不上。
+
+        鑑別力現在來自「警告的**內容**」而不是「有沒有警告」：GitHub 那條腿
+        的訊息會指名 `GitHub Actions` 並說設定不會被載入；GitLab-only 這格
+        必須說相反的事（pipeline 會被載入，但內容路徑還沒補前綴）。兩者都
+        非空，所以「永遠印同一句」不再能同時通過這兩條。
+        """
+        # ⛔ 斷言的是英文句，語系必須自己釘（`_LANG` 是模組全域，同檔
+        # 別的測試用裸 `setattr` 寫它不還原 ⇒ 單跑綠、全套紅）。
+        monkeypatch.setattr(ip, '_LANG', 'en')
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = self._dry(tmpdir, 'gitlab', sub='alerting',
+                            root_body=self._WIRED)
+        assert '⚠️' in out, (
+            '已接線的子目錄上 `--ci gitlab` 完全沉默——產物內容仍以 repo 根'
+            f'為基準，那是 #1357 的結局，只是從 wired 分支抵達。\n{out}')
+        assert 'GitHub Actions' not in out, (
+            f'`--ci gitlab` 不得提到 GitHub——那是姊妹測試的鑑別詞。\n{out}')
+        for _m in _DRYRUN_WIRED_MARKERS:
+            assert _m in out, (
+                f'已 wired 的子目錄 dry-run 缺少 {_m!r}：它必須說明 pipeline '
+                f'會被載入、且內容路徑仍要補子目錄前綴。若這是刻意改寫文案，'
+                f'改本檔頂端的 _DRYRUN_WIRED_MARKERS（唯一要改的地方）。'
+                f'\n{out}')
+
+    def test_a_root_that_already_includes_us_is_not_told_to_wire_it(self):
+        """⛔ `status not in (CREATE, ALREADY_WIRED)` → `status != CREATE`
+        存活：一個根 `.gitlab-ci.yml` **已經 include 我們** 的 repo 被
+        `--dry-run` 告知「this tool will not modify it; you will still have to
+        wire in the include: yourself」——實跑說不用做的事。
+
+        既有的 brownfield 測試用的是**未接線**的根檔，靜默測試用的是
+        greenfield，已接線的根檔兩者都不涵蓋。
+        """
+        wired_root = ('include:\n  - local: .gitlab-ci.d/'
+                      'dynamic-alerting.yml\n')
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = self._dry(tmpdir, 'gitlab', root_body=wired_root)
+        assert '⚠️' not in out, (
+            '一個已經 include 我們的根檔被要求再接一次\n' + out)
+
+    def test_ci_github_is_not_told_about_a_gitlab_include(self):
+        """⛔ `elif ci_sel in ('gitlab','both')` → `elif True` 存活：
+        `--ci github --dry-run` 在一個 brownfield 根檔上印出 GitLab 的 include
+        警告——這次執行根本沒產生任何 GitLab 設定。
+
+        brownfield 測試的 `ci` 軸是 `["gitlab","both"]`，`github` 被排除在外；
+        靜默測試用 greenfield。於是「`--ci github` + 既有根 pipeline」這一格
+        沒有任何觀察者。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = self._dry(tmpdir, 'github',
+                            root_body='stages:\n  - build\n')
+        assert '⚠️' not in out, (
+            '--ci github 被告知它不存在的 GitLab 設定接線問題\n' + out)
+
+    def test_a_dry_run_writes_nothing_at_all(self):
+        """⛔ 四個寫檔守衛的 `and not dry_run` 全部拿掉時，`tests/ops` 與
+        `tests/dx` 裡沒有任何**直接**斷言會抓到它——上一輪那個「紅」是後面
+        某條測試讀到被弄髒的樹，是順序相依的巧合，而 `pytest-randomly`
+        有裝。
+
+        `tests/shared/test_dry_run_no_write.py` 有直接斷言，但那是另一個檔案；
+        這條把同一句話放進**產生器自己的**測試檔，讓它不依賴跑哪個子集。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from pathlib import Path as _P
+            self._dry(tmpdir, 'both')
+            repo = _P(tmpdir) / 'repo'
+            written = sorted(p.relative_to(repo).as_posix()
+                             for p in repo.rglob('*') if p.is_file())
+        before, after = [], written
+        assert before == after, (
+            f'--dry-run 寫了東西到磁碟：{sorted(set(after) - set(before))}')
+
+
+class TestTheSummaryDoesNotContradictItself:
+    """⛔ 第七輪盲審 lens Y：結尾訊息的**結構**沒有被斷言。
+
+    四個存活變異各自讓同一份訊息自己打自己，或指向一個這次沒產生的東西。
+    這裡釘的是結構性質（編號連續、路徑相對、步驟與產物一致），不是逐字文案
+    ——文案改寫不該讓測試紅，結構壞掉必須紅。
+    """
+
+    _CFG = {
+        'rule_packs': ['mariadb'], 'tenants': ['db-a'],
+        'namespace': 'monitoring',
+        'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
+    }
+
+    def _summary(self, tmpdir, ci='both', deploy='kustomize', **extra):
+        import contextlib
+        import io
+        config = dict(self._CFG, ci=ci, deploy=deploy, **extra)
+        created = ip.run_init(config, tmpdir)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            ip._print_summary(created, tmpdir, config)
+        return buf.getvalue(), created
+
+    def _steps(self, out):
+        import re as _re
+        return [int(m.group(1)) for m in
+                (_re.match(r'\s*(\d+)\. ', ln) for ln in out.splitlines())
+                if m]
+
+    def _summary_in_subdir(self, tmpdir, ci, deploy, root_body=None):
+        """輸出到 `<repo>/alerting/`，可選擇先放一份根 `.gitlab-ci.yml`。"""
+        import contextlib
+        import io
+        from pathlib import Path as _P
+        repo = _P(tmpdir) / 'repo'
+        (repo / '.git').mkdir(parents=True)
+        if root_body is not None:
+            (repo / '.gitlab-ci.yml').write_text(
+                root_body, encoding='utf-8', newline='\n')
+        out_dir = repo / 'alerting'
+        out_dir.mkdir()
+        config = dict(self._CFG, ci=ci, deploy=deploy)
+        created = ip.run_init(config, str(out_dir))
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            ip._print_summary(created, str(out_dir), config)
+        return buf.getvalue()
+
+    # 根檔已經 include 了子目錄裡的 pipeline —— 接線這一半是**做完的**。
+    _WIRED_ROOT = ('include:\n  - local: alerting/.gitlab-ci.d/'
+                   'dynamic-alerting.yml\n')
+
+    @pytest.mark.parametrize('ci', ['github', 'gitlab', 'both'])
+    @pytest.mark.parametrize('deploy', ['kustomize', 'helm', 'argocd'])
+    @pytest.mark.parametrize('wired', [False, True], ids=['unwired', 'wired'])
+    def test_a_pending_step_forbids_promising_automatic_validation(
+            self, ci, deploy, wired, monkeypatch):
+        """⛔ 只要還有任何一步說「還沒完」，結尾就不得承諾 CI 會自動驗證。
+
+        第九輪盲審實測：`--ci gitlab --deploy *` 輸出到**已接線** repo 的子目錄
+        時，第 7 步逐字說「otherwise no job is ever created, and the pipeline
+        stays green forever having validated nothing」，第 8 步緊接著說
+        「Commit and push — GitLab CI will automatically validate your config」。
+        客戶照著推上去，pipeline 確實被載入、然後零個 job 被建立、MR 永遠
+        綠——**#1357 的結局，只是從 wired 分支抵達**。
+
+        成因是驅動結尾句的布林問的是「include 貼了沒」，而子目錄的路徑前綴
+        工作與 include 無關。⚠️ 那次修法只補了 `gh_selected` 那一半（GitHub
+        在子目錄下無條件未完成），把同一類留在 `--ci gitlab` 這條腿上——
+        修了被點名的那一處、沒修類別。
+
+        釘的是**結構關係**（有待辦 ⇒ 不得承諾自動驗證），對全矩陣求值，
+        所以下一個「還沒完」的步驟不必記得把自己登記進某個布林。
+        """
+        # ⛔ 語系必須自己釘住。這條的「承諾」側只認英文句，所以在 zh 下
+        # `promises` 恆為 False、整條斷言變成恆真——而 `_LANG` 是匯入時
+        # 求值的模組全域，同檔別的測試用裸 `setattr` 寫它且不還原，
+        # 於是單跑與全量跑結果不同（實測：單跑綠、全套紅）。
+        monkeypatch.setattr(ip, '_LANG', 'en')
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = self._summary_in_subdir(
+                tmpdir, ci, deploy,
+                root_body=self._WIRED_ROOT if wired else None)
+        pending = any(m in out for m in _PENDING_MARKERS)
+        promises = _AUTOVALIDATE_MARKER in out
+        assert not (pending and promises), (
+            f'{ci}/{deploy}/wired={wired}: 訊息自己打自己——既列出未完成的'
+            f'步驟，又承諾 CI 會自動驗證。\n{out}')
+
+    def test_the_pending_step_actually_fires_somewhere(self, monkeypatch):
+        """⛔ 反空洞：上面那條若在所有格子都沒有待辦步驟，它是恆真的。
+
+        子目錄 + 已接線這一格必須真的印出「還沒完」，否則上面那條測不到東西。
+        """
+        monkeypatch.setattr(ip, '_LANG', 'en')
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = self._summary_in_subdir(
+                tmpdir, 'gitlab', 'kustomize', root_body=self._WIRED_ROOT)
+        assert _PENDING_MARKERS[0] in out, (
+            f'子目錄的路徑前綴步驟沒有印出來（找 {_PENDING_MARKERS[0]!r}），'
+            f'上面那條斷言因此是恆真的。若這是刻意改寫文案，改本檔頂端的 '
+            f'_PENDING_MARKERS。\n{out}')
+        assert _AUTOVALIDATE_MARKER not in out, out
+
+    @pytest.mark.parametrize('ci', ['github', 'gitlab', 'both'])
+    @pytest.mark.parametrize('deploy', ['kustomize', 'helm', 'argocd'])
+    def test_step_numbers_are_consecutive(self, ci, deploy):
+        """⛔ 少一個 `step += 1` 之後，41 個情境的結尾訊息出現重複編號
+        （`7. GitLab wiring done…` 緊接著 `7. Commit and push…`），全綠。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out, _ = self._summary(tmpdir, ci=ci, deploy=deploy)
+        steps = self._steps(out)
+        assert steps == list(range(1, len(steps) + 1)), (
+            f'{ci}/{deploy}: 步驟編號不連續 {steps}\n{out}')
+
+    def test_the_generated_file_list_is_relative_to_the_output_dir(self):
+        """⛔ 拿掉 `relative_to(output_dir)` 之後，45 個情境的每一個 ✓ 行都變成
+        絕對路徑（`✓ /tmp/…/repo/conf.d/_defaults.yaml`）。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out, created = self._summary(tmpdir)
+        shown = [ln.strip()[2:].strip() for ln in out.splitlines()
+                 if ln.strip().startswith('✓')]
+        assert shown, out
+        assert not any(os.path.isabs(s) for s in shown), (
+            f'產出清單印的是絕對路徑：{[s for s in shown if os.path.isabs(s)]}')
+        assert len(shown) == len(created), (len(shown), len(created))
+
+    @pytest.mark.parametrize('deploy', ['helm', 'argocd'])
+    def test_a_step_never_points_at_a_tree_this_run_did_not_generate(
+            self, deploy):
+        """⛔ `deploy == 'kustomize'` 改成 `!= 'argocd'` 之後，`--deploy helm`
+        的第一步變成「Create symlinks from conf.d/ to kustomize/base/」——指向
+        一個 `--deploy helm` 從來不產生的目錄樹。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out, created = self._summary(tmpdir, deploy=deploy)
+        assert not any(f.startswith('kustomize/') for f in created), created
+        assert 'kustomize/' not in out, (
+            f'--deploy {deploy} 的結尾訊息提到 kustomize/，而這次沒有產生它'
+            f'\n{out}')
+
+    def test_greenfield_both_does_not_promise_a_step_it_never_printed(self):
+        """⛔ 從 `gl_needs_manual` 拿掉 `and not gl_root_written` 之後，13 個
+        情境自相矛盾：第 N 行說「GitLab wiring done: generated .gitlab-ci.yml」，
+        第 N+1 行說「GitLab CI only after you complete the step above」——而
+        那個 step 從來沒有被印出來。這是最常見的組態（greenfield `--ci both`）。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out, _ = self._summary(tmpdir, ci='both')
+        assert 'GitLab wiring done' in out, out
+        closing = [ln for ln in out.splitlines()
+                   if 'commit and push' in ln.lower()]
+        assert len(closing) == 1, closing
+        assert 'only after you complete' not in closing[0].lower(), (
+            'greenfield 的結尾句指向一個從來沒被印出來的步驟：\n'
+            + '\n'.join(out.splitlines()[-6:]))
+
+    def test_the_gitops_artifacts_need_both_flags_not_either(self):
+        """⛔ `config_source == 'git' and git_repo` 兩處都可以改成 `or` 而全綠
+        （preview 與實跑一起改，於是兩者仍然一致、沒有測試看得見差別）。
+
+        後果：只給 `--git-repo X`（沒有 `--config-source git`）就會多寫出
+        `kustomize/overlays/gitops/kustomization.yaml` 與 git-sync patch——
+        一份會改動客戶 Deployment 的檔案。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _, created = self._summary(
+                tmpdir, git_repo='https://example.com/x.git',
+                config_source='local')
+        gitops = [f for f in created if 'gitops' in f or 'git-sync' in f]
+        assert not gitops, (
+            '只給了 --git-repo（沒有 --config-source git）卻產生了 gitops '
+            f'產物：{gitops}')
+        # 反向：兩個旗標都給時，那些產物**必須**出現，而且預覽與實跑要一致。
+        # ⚠️ 預覽要在寫入**之前**取——寫完再問會得到一個「對錯誤世界正確」的
+        # 答案（根 shell 是唯一取決於目標 repo 而非旗標的產物）。
+        cfg = dict(self._CFG, ci='both', deploy='kustomize',
+                   git_repo='https://example.com/x.git', config_source='git')
+        with tempfile.TemporaryDirectory() as tmpdir:
+            preview = ip._preview_files(dict(cfg), tmpdir)
+            created = ip.run_init(dict(cfg), tmpdir)
+        assert any('gitops' in f or 'git-sync' in f for f in created), created
+        # ⛔ 比較前正規化分隔符，因為兩邊**刻意**用不同的形式：
+        # `_preview_files` 的 docstring 明寫「Paths use POSIX separators
+        # regardless of OS … Same rationale as _snapshot_mtimes (PR #319)」，
+        # 而 `_write_file` 記錄的是 OS-native 路徑。直接比字串在 Windows 上
+        # 必定不相等，而這條測試要問的是**集合一不一致**，不是誰的分隔符。
+        # ⚠️ 不是放寬斷言：正規化之後任何檔案多出或少掉仍然會紅（下面那條
+        # 反向控制證明它還咬得住）。
+        from pathlib import Path as _NP
+
+        def _norm(paths):
+            return sorted(_NP(p).as_posix() for p in paths)
+        assert _norm(preview) == _norm(created), sorted(
+            set(_norm(preview)) ^ set(_norm(created)))
+
+    def test_the_preview_equality_still_catches_a_missing_file(self):
+        """⛔ 反空洞：上一條把分隔符正規化掉了，必須證明它不是因此變成恆真。
+
+        拿掉預覽清單裡的任何一項，等式就要紅——否則那個正規化順手把鑑別力
+        也一起正規化掉了。
+        """
+        cfg = dict(self._CFG, ci='both', deploy='kustomize',
+                   git_repo='https://example.com/x.git', config_source='git')
+        with tempfile.TemporaryDirectory() as tmpdir:
+            preview = ip._preview_files(dict(cfg), tmpdir)
+            created = ip.run_init(dict(cfg), tmpdir)
+
+        from pathlib import Path as _NP
+
+        def _norm(paths):
+            return sorted(_NP(p).as_posix() for p in paths)
+        assert _norm(preview) == _norm(created), '前提：未變異時兩者相等'
+        assert _norm(preview[:-1]) != _norm(created), (
+            '少掉一個預覽項目之後兩者仍然相等——這條等式沒有鑑別力')
+
+    def test_the_defaults_file_keeps_its_authored_key_order(self):
+        """⛔ `sort_keys=False` → `True` 存活：46 個情境裡客戶要編輯的那份
+        `conf.d/_defaults.yaml` 被整份重排（`_routing_defaults` 被拉到
+        `defaults:` 上面，每個 metric key 字母排序）。
+
+        那份檔案的順序是刻意的——它是客戶第一個打開來讀的東西。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._summary(tmpdir)
+            from pathlib import Path as _P
+            body = (_P(tmpdir) / 'conf.d' / '_defaults.yaml').read_text(
+                encoding='utf-8')
+        keys = [ln.split(':')[0] for ln in body.splitlines()
+                if ln and not ln.startswith((' ', '#'))]
+        assert keys == ['defaults', 'state_filters', '_routing_defaults'], keys
+        # 反空洞：這個順序必須**不是**字母序，否則 sort_keys 開不開都一樣、
+        # 這條測試等於沒有鑑別力。
+        assert keys != sorted(keys), keys
+
+    @pytest.mark.parametrize('lang', ['en', 'zh'])
+    def test_the_help_text_follows_the_locale(self, lang, monkeypatch):
+        """⛔ `_h()` 改成永遠回英文而全綠：`LANG=zh_TW.UTF-8 … --help` 的每一句
+        雙語說明都退回英文。`_HELP` 的中文那一半從來沒有被斷言過。"""
+        monkeypatch.setattr(ip, '_LANG', lang)
+        text = ip._build_parser().format_help()
+        # ⛔ 從 `_HELP` 表本身推導期望值，不是挑一個字面字串。第一版挑了
+        # 「初始化」／「產生」，而那兩個詞在別處也出現，於是 `_h()` 改成永遠
+        # 回英文之後測試照樣綠——測到的是別的東西。
+        def _probe(s):
+            # argparse 會把 `%(prog)s` 換掉，所以比對只取第一個插值之前的
+            # 那一段（epilog 的第一行就是這樣一句）。
+            return s.split('%')[0].split('(')[0].strip()[:12]
+
+        expected = [v[lang] for v in ip._HELP.values() if lang in v]
+        assert len(expected) >= 10, len(expected)
+        missing = [e for e in expected if _probe(e) and _probe(e) not in text]
+        assert not missing, (
+            f'{lang}: `_HELP` 裡有 {len(missing)} 句沒有出現在 --help 輸出裡'
+            f'——語系選擇沒有生效。例如 {missing[:2]}')
+        other = 'en' if lang == 'zh' else 'zh'
+        leaked = [v[other] for v in ip._HELP.values()
+                  if other in v and lang in v
+                  and _probe(v[other]) and _probe(v[other]) != _probe(v[lang])
+                  and _probe(v[other]) in text]
+        assert not leaked, (
+            f'{lang}: --help 裡混進了 {other} 的文案：{leaked[:2]}')
+
+
+class TestRoundEightFindings:
+    """第八輪盲審 lens B8 / D8。三條都是**這個分支自己新增的**東西不完整。"""
+
+    _CFG = {
+        'ci': 'both', 'deploy': 'kustomize', 'rule_packs': ['mariadb'],
+        'tenants': ['db-a'], 'namespace': 'monitoring',
+        'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
+    }
+
+    def test_a_dangling_symlink_marker_does_not_write_outside_the_output_dir(
+            self):
+        """⛔ `.exists()` **follows** symlinks and answers False for a dangling
+        one, so `.da-init.yaml -> /tmp/elsewhere.yaml` (target absent) fell
+        through the new guard and `write_text_secure` followed the link:
+
+            exit=0, and /tmp/elsewhere.yaml created OUTSIDE the -o directory
+
+        The guard's own docstring named "a dangling symlink" as a case it
+        covers. The sibling guard in `_classify_root_file` gets it right
+        (`not root.exists() and not root.is_symlink()`) — the two were written
+        in the same branch and only one of them tested for it.
+        """
+        import subprocess
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from pathlib import Path as _P
+            if not _symlinks_usable(tmpdir):
+                pytest.skip('this host cannot create symlinks (Windows '
+                            'without Developer Mode / '
+                            'SeCreateSymbolicLinkPrivilege); runs on Linux CI')
+            out = _P(tmpdir) / 'out'
+            out.mkdir()
+            escaped = _P(tmpdir) / 'ESCAPED.yaml'
+            (out / '.da-init.yaml').symlink_to(escaped)
+            r = subprocess.run(
+                [sys.executable, str(_P(ip.__file__)), '--non-interactive',
+                 '--tenants', 'db-a', '--ci', 'github', '-o', str(out)],
+                capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=300)
+            assert r.returncode == ip.EXIT_VIOLATION, (
+                r.returncode, r.stdout[-400:], r.stderr[-400:])
+            assert not escaped.exists(), (
+                '初始化 marker 被寫到 --output-dir 之外的地方（跟著斷掉的'
+                'symlink 走了）')
+            assert sorted(p.name for p in out.iterdir()) == ['.da-init.yaml']
+
+    @pytest.mark.parametrize('deploy', ['kustomize', 'helm'])
+    def test_the_subdir_report_names_the_apply_stage_paths_too(self, deploy):
+        """⛔ 收集器原本只走四個 key（`paths` / `changes` / `exists` /
+        `CONFIG_DIR`），而它的 docstring 與消費它的那一步都宣稱清單就是「還要
+        改的全部」。
+
+        `script:` / `run:` body 裡的 `kustomize build kustomize/overlays/prod`
+        與 `helm … -f environments/prod/values.yaml` 同樣以 repo 根為基準
+        （job 的工作目錄就是 checkout 根），而**沒有任何 key 指出它們是路徑**。
+        客戶照著印出來的前綴改完，job 終於會跑了，然後 apply 死在一個從沒被
+        提到的路徑上。
+        """
+        import contextlib
+        import io
+        from pathlib import Path as _P
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = _P(tmpdir) / 'repo'
+            (repo / '.git').mkdir(parents=True)
+            sub = repo / 'alerting'
+            sub.mkdir()
+            config = dict(self._CFG, deploy=deploy)
+            created = ip.run_init(config, str(sub))
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                ip._print_summary(created, str(sub), config)
+            out = buf.getvalue()
+        needle = ('kustomize/overlays/prod' if deploy == 'kustomize'
+                  else 'environments/prod/values.yaml')
+        assert f'{needle}  →  alerting/{needle}' in out, (
+            f'{deploy}: 子目錄報告沒有點名 apply 階段用的 {needle}\n{out}')
+
+    def test_the_report_does_not_quote_prose_out_of_shell_comments(self):
+        """反向釘：`run: |` 區塊的字串值裡包含該步驟的 shell **註解**，而那些
+        註解是在談論路徑。第一版直接 tokenize 整個 body，於是清單裡出現
+        `conf.d/_defaults.yaml.`（句號）與 ``conf.d/` ``（反引號）——客戶會
+        試著去替一個句子加前綴。
+        """
+        from pathlib import Path as _P
+        with tempfile.TemporaryDirectory() as tmpdir:
+            f = _P(tmpdir) / 'w.yaml'
+            f.write_text(
+                'jobs:\n  j:\n    steps:\n      - run: |\n'
+                '          # edit conf.d/_defaults.yaml. then re-run\n'
+                '          da-tools lint rule-packs/custom/ --ci\n',
+                encoding='utf-8', newline='\n')
+            got = ip._root_relative_ci_paths(f)
+        assert got == ['rule-packs/custom/'], got
+
+    @pytest.mark.parametrize('deploy', ['kustomize', 'helm', 'argocd'])
+    @pytest.mark.parametrize('ci', ['github', 'gitlab', 'both'])
+    def test_no_bare_issue_ref_is_written_into_a_customer_repo(self, ci,
+                                                               deploy):
+        """⛔ `#1358` 之類的裸引用在**客戶的** repo 裡會 autolink 到**客戶的**
+        issue 1358。GitLab 與 GitHub 都是這樣渲染。
+
+        本分支已經為了另一個理由（hex 色碼掃描器）把 portal wizard 的
+        `#1358` 改成 `issue 1358`，所以兩個出貨面原本互相矛盾。
+
+        ⛔ 第九輪盲審：這條原本只實例化 `_CFG` 的一組值（`deploy=kustomize`
+        / `ci=both`），而 apply stage 的三個 `--deploy` 分支各有**獨立的**
+        樣板、各自帶一份同樣的註解。實測把 helm 與 argocd 兩支還原成裸
+        `#1356` 之後這條測試全綠（只有 kustomize 那支會咬）——守衛覆蓋了
+        三分之一的出貨面。修的是類別不是被點名的那一處：走遍 `--ci` ×
+        `--deploy` 九格，任何一支樣板日後重新引入裸引用都會紅。
+        """
+        import re as _re
+        with tempfile.TemporaryDirectory() as tmpdir:
+            created = ip.run_init(
+                dict(self._CFG, ci=ci, deploy=deploy), tmpdir)
+            from pathlib import Path as _P
+            offenders = {}
+            for rel in created:
+                f = _P(tmpdir) / rel
+                if f.suffix not in ('.yaml', '.yml', '.md'):
+                    continue
+                hits = _re.findall(r'#\d{3,}', f.read_text(encoding='utf-8'))
+                if hits:
+                    offenders[rel] = hits
+        assert not offenders, (
+            f'裸 issue 引用被寫進客戶 repo，會連到他自己的 issue：{offenders}')
+
+
+class TestRoundEightMutationSurvivors:
+    """第八輪盲審 lens C8（112 個變異、只打 diff 動過的行）存活者的補釘。"""
+
+    _CFG = {
+        'ci': 'both', 'deploy': 'kustomize', 'rule_packs': ['mariadb'],
+        'tenants': ['db-a'], 'namespace': 'monitoring',
+        'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
+    }
+
+    def _subdir_report(self, tmpdir, deploy='kustomize'):
+        import contextlib
+        import io
+        from pathlib import Path as _P
+        repo = _P(tmpdir) / 'repo'
+        (repo / '.git').mkdir(parents=True)
+        sub = repo / 'alerting'
+        sub.mkdir()
+        config = dict(self._CFG, deploy=deploy)
+        created = ip.run_init(config, str(sub))
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            ip._print_summary(created, str(sub), config)
+        return buf.getvalue()
+
+    def test_config_dir_is_in_the_prefix_report(self):
+        """⛔ 從 `_ROOT_RELATIVE_CI_KEYS` 拿掉 `'CONFIG_DIR'` 而全綠。
+
+        它是清單裡**唯一不是 glob** 的那個值，也正是 `docker -v` 拿去掛載的
+        路徑：沒加前綴的話 docker 會**建出**一個空目錄，`validate-config`
+        解析 0 個檔案然後 PASS——正是這一步的文案承諾要防止的結局。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = self._subdir_report(tmpdir)
+        assert 'conf.d  →  alerting/conf.d' in out, (
+            'CONFIG_DIR 沒有出現在前綴清單裡——那是唯一一個會被 docker 掛載'
+            f'的值\n{out}')
+
+    def test_each_listed_path_appears_once_and_in_a_stable_order(self):
+        """⛔ 去重與排序各自存活：去重拿掉之後每個 GitHub glob 印兩次，
+        排序拿掉之後順序變成文件順序。兩者都不會遺失路徑，但客戶是照著這份
+        清單逐條改的。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = self._subdir_report(tmpdir)
+        blocks = out.split('Not done yet')[-1]
+        listed = [ln.split('  →  ')[0].strip()
+                  for ln in blocks.splitlines() if '  →  ' in ln]
+        assert listed, out
+        for shown in (listed[:len(listed) // 2], listed[len(listed) // 2:]):
+            assert len(shown) == len(set(shown)), f'有重複項目：{shown}'
+        # ⚠️ 排序要**逐檔**比對：整份 listed 是兩個檔案的清單接起來的，
+        # 對接起來的序列做 sorted() 永遠會失敗。（第一版我在這裡寫了一句
+        # `... or True` 的恆真斷言，等於沒有。）
+        per_file = [g for g in (blocks.split('alerting/')[1:]) if '  →  ' in g]
+        for chunk in per_file:
+            vals = [ln.split('  →  ')[0].strip()
+                    for ln in chunk.splitlines() if '  →  ' in ln]
+            assert vals == sorted(vals), f'清單沒有排序：{vals}'
+
+    # ⛔ 語系是**第四個軸**，不是背景設定。`_apply_needs` 的 tuple 是
+    # `(binary, secret, zh_prereq, en_prereq)`，而這條原本只帶英文 prereq
+    # 並固定 `_LANG='en'` ⇒ **中文那一半零斷言**。實測把 helm 的 zh 前置條件
+    # 換成 argocd 的：650 條測試全綠，而 `_LANG` 預設就是 zh，所以受害的正是
+    # 預設路徑上的客戶。這與本測試 docstring 描述的缺陷同形，只是往語系軸
+    # 移了一格——修的是類別，不是被點名的那一格。
+    @pytest.mark.parametrize('lang,prereq_idx', [('en', 3), ('zh', 2)])
+    @pytest.mark.parametrize('deploy,binary,secret,prereqs', [
+        ('kustomize', 'kubectl / kustomize', 'KUBECONFIG',
+         ('conf.d/ 已連結進 kustomize/base/',
+          'conf.d/ linked into kustomize/base/')),
+        ('helm', 'helm', 'KUBECONFIG',
+         ('environments/prod/values.yaml —— 本工具不會產生它',
+          'environments/prod/values.yaml')),
+        ('argocd', 'argocd', 'ARGOCD_SERVER + ARGOCD_AUTH_TOKEN',
+         ("一個名為 'dynamic-alerting' 的 ArgoCD Application",
+          "an ArgoCD Application named 'dynamic-alerting'")),
+    ])
+    def test_the_credential_sentence_does_not_swap_its_two_halves(
+            self, deploy, binary, secret, prereqs, lang, prereq_idx,
+            monkeypatch):
+        """⛔ 把那個 tuple 的兩個元素對調而全綠：argocd 那句變成
+        「Set **argocd** in your CI (that is what **ARGOCD_SERVER +
+        ARGOCD_AUTH_TOKEN** uses)」——叫客戶去建一個名為 `argocd` 的 CI 變數。
+
+        既有測試只 grep secret 名字，所以**哪個是哪個**完全沒被釘；helm 那列
+        把 binary 換成 `kubectl` 同樣存活。
+
+        ⛔ 第九輪盲審：同一個缺陷形狀往右移了兩格。那個 tuple 後來長成四元素
+        （加上「憑證只是必要條件之一」要指名的**前置條件**），而只有 `[0]`
+        `[1]` 被釘。實測把 helm 那列的 `[2]`/`[3]` 換成 argocd 的之後全綠：
+        `--deploy helm` 的客戶被告知他還需要「一個名為 'dynamic-alerting' 的
+        ArgoCD Application」——helm 部署根本不需要的東西，而 helm 真正缺的
+        `environments/prod/values.yaml` 消失了。四個元素現在逐一釘住。
+        """
+        import contextlib
+        import io
+        # ⛔ 這條斷言的是**英文**那一句，所以語系必須自己設定。它原本沒有設，
+        # 只在整份檔案一起跑時才通過——因為同檔別的測試用裸 `setattr(ip,
+        # '_LANG', 'en')` 而沒有還原，`_LANG` 就這樣漏了過來。單獨用 `-k` 選
+        # 它會 `StopIteration`（英文那行根本不存在，預設是 zh），而
+        # `pytest-randomly` 有裝、順序不保證。改用 `monkeypatch` 明確設定並
+        # 自動還原：測試不該靠別的測試洩漏的全域狀態才會綠。
+        monkeypatch.setattr(ip, '_LANG', lang)
+        prereq = prereqs[0] if lang == 'zh' else prereqs[1]
+        marker = '叢集憑證' if lang == 'zh' else 'cluster credentials'
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = dict(self._CFG, ci='github', deploy=deploy)
+            created = ip.run_init(config, tmpdir)
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                ip._print_summary(created, tmpdir, config)
+            out = buf.getvalue()
+        line = next((ln for ln in out.splitlines() if marker in ln), None)
+        assert line is not None, (
+            f'找不到 {lang} 的憑證句（_LANG={ip._LANG!r}）。\n{out}')
+        assert secret in line, (deploy, lang, line)
+        assert binary in line, (deploy, lang, line)
+        if lang == 'en':
+            # 兩半的**順序**只有英文句排得出來（zh 是「請在你的 CI 設定
+            # {secret}（{binary} 會用到）」，同樣兩個值但句構不同）。
+            assert f'Set {secret} in your CI' in line, (deploy, line)
+            assert f'that is what {binary} uses' in line, (deploy, line)
+        assert prereq in line, (
+            f'{deploy}/{lang}: 「憑證只是必要條件之一」那半句沒有指名這個'
+            f'部署方式真正還缺的東西（預期 {prereq!r}）。\n{line}')
+        # 反向：不得指名**別的**部署方式的前置條件（同語系內比較）。
+        idx = 0 if lang == 'zh' else 1
+        others = {
+            ('conf.d/ 已連結進 kustomize/base/',
+             'conf.d/ linked into kustomize/base/')[idx],
+            ('environments/prod/values.yaml —— 本工具不會產生它',
+             'environments/prod/values.yaml')[idx],
+            ("一個名為 'dynamic-alerting' 的 ArgoCD Application",
+             "an ArgoCD Application named 'dynamic-alerting'")[idx],
+        } - {prereq}
+        for wrong in others:
+            assert wrong not in line, (
+                f'{deploy}/{lang}: 這句話指名了另一個部署方式才需要的 '
+                f'{wrong!r}。\n{line}')
+
+    def test_an_already_wired_root_does_not_get_a_do_this_first_closing(self):
+        """⛔ 從 `gl_needs_manual` 拿掉 `and gl_status != _GL_ROOT_ALREADY_WIRED`
+        而全綠：結尾訊息在兩行之內自相矛盾——
+
+            6. GitLab wiring already in place … nothing to do
+            7. Complete the step above, then commit and push — only then …
+
+        而那個「step above」就是第 6 行說不用做的那件事。
+        """
+        import contextlib
+        import io
+        from pathlib import Path as _P
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = _P(tmpdir)
+            (root / '.gitlab-ci.yml').write_text(
+                'include:\n  - local: .gitlab-ci.d/dynamic-alerting.yml\n',
+                encoding='utf-8', newline='\n')
+            config = dict(self._CFG, ci='gitlab')
+            created = ip.run_init(config, str(root))
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                ip._print_summary(created, str(root), config)
+            out = buf.getvalue()
+        assert 'already in place' in out, out
+        closing = [ln for ln in out.splitlines()
+                   if 'commit and push' in ln.lower()]
+        assert len(closing) == 1, closing
+        assert 'only then' not in closing[0].lower(), (
+            '一個已經接好線的 repo 被告知還有步驟要做：\n' + '\n'.join(
+                out.splitlines()[-5:]))

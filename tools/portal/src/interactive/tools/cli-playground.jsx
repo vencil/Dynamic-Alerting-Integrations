@@ -2,7 +2,7 @@
 title: "da-tools CLI Playground"
 tags: [cli, da-tools, docker]
 audience: ["platform-engineer"]
-version: v2.7.0
+version: v2.9.0
 lang: en
 related: [wizard, onboarding-checklist, glossary]
 ---
@@ -300,7 +300,7 @@ export default function CLIPlayground() {
                   {isDocker && (
                     <>
                       <div>
-                        <span className="font-medium text-slate-900">{t('映像:', 'Image:')}</span> ghcr.io/vencil/da-tools:v2.7.0
+                        <span className="font-medium text-slate-900">{t('映像:', 'Image:')}</span> ghcr.io/vencil/da-tools:v2.9.0
                       </div>
                       <div>
                         <span className="font-medium text-slate-900">{t('網路:', 'Network:')}</span> {network.label}

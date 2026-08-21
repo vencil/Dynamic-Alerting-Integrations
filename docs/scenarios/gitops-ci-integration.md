@@ -16,7 +16,7 @@ lang: zh
 本指南說明如何將 Dynamic Alerting 平台整合到你的既有 CI/CD 流程中。涵蓋從零開始的完整路徑：
 
 - **快速初始化**：`da-tools init` 一鍵產生所有整合檔案
-- **三階段 Pipeline**：Validate → Generate → Apply
+- **三階段 Pipeline**：Validate → Generate → Apply（GitHub Actions；GitLab 為 Validate → Apply 兩階段，見 §1）
 - **四種部署模式**：Kustomize、Helm、ArgoCD、GitOps Native（git-sync sidecar）
 - **兩大 CI 平台**：GitHub Actions、GitLab CI
 
@@ -82,7 +82,8 @@ your-repo/
 ├── .github/workflows/
 │   └── dynamic-alerting.yaml    # GitHub Actions pipeline
 ├── .gitlab-ci.d/
-│   └── dynamic-alerting.yml     # GitLab CI pipeline
+│   └── dynamic-alerting.yml     # GitLab CI pipeline（真正的 stages / jobs）
+├── .gitlab-ci.yml               # GitLab 根 pipeline 外殼（只有一行 include）
 ├── kustomize/
 │   ├── base/
 │   │   └── kustomization.yaml   # ConfigMap generator
@@ -92,6 +93,59 @@ your-repo/
 ├── .pre-commit-config.da.yaml   # Pre-commit hooks 片段
 └── .da-init.yaml                # 初始化標記（升級偵測用）
 ```
+
+#### GitLab 為什麼是兩個檔案
+
+GitHub Actions 會自動載入 `.github/workflows/` 底下**所有** workflow，所以那一份
+檔案放好就會跑。GitLab 不是：一個專案只會自動載入**根目錄的 `.gitlab-ci.yml`**
+這一個路徑，其他位置的 pipeline 檔案在被 `include:` 之前完全不會執行——而且不會
+有任何錯誤訊息，因為對 GitLab 來說那只是一個普通檔案。
+
+所以 `da-tools init` 會多產生一份根目錄外殼，內容就只有這樣：
+
+```yaml
+# .gitlab-ci.yml
+include:
+  - local: .gitlab-ci.d/dynamic-alerting.yml
+```
+
+被 `include:` 進來的檔案裡的 `stages:` 與 `variables:` 會併入這條 pipeline，所以
+外殼不需要重述任何東西。真正的 pipeline 仍然留在 `.gitlab-ci.d/`，方便你把它跟
+自己的 CI 設定分開管理、也方便日後升級時整份覆蓋。
+
+**如果你的 repo 已經有根目錄 `.gitlab-ci.yml`**：`da-tools init` **不會**改動它
+（覆寫會刪掉你所有的 job，而在一份沒被解析過的 YAML 後面追加內容同樣不安全）。
+它會在結束訊息裡把該貼的內容印出來，請自行貼進你既有的 `.gitlab-ci.yml`。
+沒貼的話，產生出來的 pipeline 檔案語法完全正確，但一次也不會執行。
+
+⚠️ **請照工具實際印出來的那一段做，不要照這裡的範例硬貼。** 下面是接好線之後
+應該長成的**結果**，不是可以直接貼的片段：
+
+```yaml
+include:
+  - local: .gitlab-ci.d/security.yml           # ← 你原本就有的
+  - local: .gitlab-ci.d/dynamic-alerting.yml   # ← 這一行是新增的
+```
+
+理由是既有檔案的形狀不只一種，而每一種的安全編輯方式都不同。`include:` 是
+top-level key，再寫第二個是重複 key、YAML 只保留其中一個，所以**整段貼上會靜默
+刪掉你原本的 include**；但反過來，`include:` 也接受純量（`include: 'a.yml'`）、
+flow 序列（`include: ['a.yml']`）與單一 mapping，在這三種底下**加一個清單項目
+是語法錯誤，會讓你整份 root pipeline 停止載入**——比沒接線更糟。
+
+`da-tools init` 會分辨這些形狀（含「有 `include:` 但無法安全附加」與「檔案解析
+不了」），並針對你的檔案印出對應的指示：能安全附加時給現成區塊，其餘一律給上面
+這種**端狀態範例**，請你自己對照著改。工具唯一不會做的事，是在沒看過你的檔案時
+遞給你一段「貼上就好」的內容。
+
+#### GitLab 腿沒有 blast-radius 那一步
+
+GitHub 那一份有第三個階段（config-diff 算爆炸半徑、貼成 PR comment），GitLab
+這一份**刻意沒有**，原因在映像而不在你的 repo：GitLab 是在 `$DA_TOOLS_IMAGE`
+**裡面**跑 `script:`，而那顆映像沒有 `git`，所以比較基準（`git archive <base>`）
+在這個平台根本取不到。取不到的基準不會表現成「沒有變更」，而是表現成「每一個
+租戶都是新增的」。與其出貨一份不能信的報告，不如先不出貨——缺少的檢查看得見，
+錯誤的檢查看不見。追蹤在 [#1358](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1358)，補回的作法見 [#1444](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1444)。
 
 ## 2. 三階段 CI/CD Pipeline
 
@@ -116,6 +170,10 @@ graph LR
     end
     V1 --> V2 --> V3 --> G1 --> G2 --> G3 --> A1 --> A2 --> A3
 ```
+
+> ℹ️ 上圖是 **GitHub Actions** 那一份的形狀。**GitLab 那一份沒有 Stage 2**
+> （映像裡沒有 `git`，比較基準取不到——理由見 §1「GitLab 腿沒有 blast-radius
+> 那一步」），只有 Validate 與 Apply 兩個 stage。
 
 ### 2.2 Stage 1: Validate
 
@@ -447,5 +505,5 @@ issue；在那之前，可行的替代是在你自己的 CI 裡把各團隊的 `
 
 ---
 
-**文件版本：** v2.7.0 — 2026-04-18
+**文件版本：** v2.9.0
 **維護者：** Platform Engineering Team

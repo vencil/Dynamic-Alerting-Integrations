@@ -252,6 +252,87 @@ class TestVersionsCheck:
         assert "check" in result
         assert result["check"] == "versions"
 
+    def test_it_actually_finds_the_tool_it_shells_out_to(self):
+        """⛔ The check above accepts PASS *or* FAIL, so it passed for years
+        while this check had never once run: `_THIS_DIR / "bump_docs.py"`
+        pointed at `scripts/tools/ops/`, and the tool has always lived in
+        `scripts/tools/dx/`. Every developer's `make validate-config` was red
+        with
+
+            [FAIL] versions
+                   can't open file '.../scripts/tools/ops/bump_docs.py':
+                   [Errno 2] No such file or directory
+
+        Reverting the path fix leaves the whole suite green again unless
+        something asserts the tool was *found*, which is what this does.
+        """
+        result = vc.check_versions()
+        detail = " ".join(str(v) for v in result.values())
+        assert "No such file or directory" not in detail, detail
+        assert "can't open file" not in detail, detail
+        assert result["status"] in (vc.PASS, vc.WARN), (
+            "the versions check reported FAIL — if that is real drift, fix the "
+            f"drift; if it is a missing file, fix the path.\n{result}")
+
+    def test_a_missing_bump_docs_degrades_instead_of_leaking_interpreter_output(
+            self, monkeypatch, tmp_path):
+        """⛔ The tool is genuinely ABSENT in the published da-tools image.
+
+        `build.sh` flattens the tool set into `/opt/da-tools/` and
+        `bump_docs.py` is not in the shipped list at all, so no path resolves
+        there. The failure mode that shipped for years is subtle:
+        `subprocess.run([sys.executable, "<missing>.py"])` does NOT raise
+        `FileNotFoundError` — the INTERPRETER exists, so it starts, prints
+        `can't open file ...` to stderr and exits 2. The `except
+        FileNotFoundError` branch is therefore unreachable, and a caller sees
+        a bare interpreter error dressed up as `[FAIL] versions` (#1461).
+
+        ⛔ Reverting the pre-flight existence check leaves the whole suite
+        green — measured: the guard was added with no control, and disabling
+        it scored `44 passed, 3 skipped`. This is that missing control.
+
+        Asserts the SHAPE of a degraded answer, not the wording: not FAIL,
+        no interpreter noise, and an actionable command the reader can run.
+        """
+        monkeypatch.setattr(vc, "_THIS_DIR", tmp_path / "ops")
+        result = vc.check_versions()
+        detail = " ".join(str(v) for v in result.values())
+
+        # ⛔ Assert the degraded branch was ACTUALLY TAKEN before asserting
+        # anything about its wording. This patch works by rebinding
+        # `_THIS_DIR`, which only bites while the path is resolved INSIDE the
+        # function; hoisting it to a module-level constant — a behaviour-
+        # preserving refactor this repo does everywhere — silently stops the
+        # patch from applying. Without this check the run reports `pass` and
+        # then fails further down with "the degraded answer does not say WHAT
+        # is missing", a message that is simply false when no degraded answer
+        # was produced at all.
+        assert result["status"] == vc.WARN, (
+            "the degraded branch was not exercised — `check_versions` did not "
+            "see a missing bump_docs.py. If the path is now resolved at import "
+            "time, patch that constant instead of `_THIS_DIR`; this test is "
+            f"about the MISSING-TOOL behaviour, not about where the path is "
+            f"computed.\n{result}")
+        for leak in ("can't open file", "No such file or directory",
+                     "Traceback"):
+            assert leak not in detail, (
+                f"raw interpreter/OS output leaked into the check result "
+                f"({leak!r}) — that is #1461's shape.\n{result}")
+        assert "bump_docs.py" in detail, (
+            f"the degraded answer does not say WHAT is missing.\n{result}")
+        # ⛔ "gives the reader something runnable", not a literal flag. The
+        # earlier form pinned `--check`, so redirecting the reader at
+        # `make version-check` — which this branch made the correct answer by
+        # teaching that target BOTH halves of the gate — failed with "gives the
+        # reader no command to run" while a command sat in the detail. The
+        # original rationale ("must not depend on make, the image has no
+        # Makefile") does not hold against that wording either: the sentence
+        # already says "In a repo checkout run:", i.e. it has redirected the
+        # reader somewhere a Makefile exists.
+        assert any(tok in detail for tok in ("bump_docs.py", "version-check")), (
+            "the degraded answer gives the reader nothing runnable — name the "
+            f"command or the make target that performs this check.\n{result}")
+
 
 class TestIntegration:
     """Integration test with real config dir."""

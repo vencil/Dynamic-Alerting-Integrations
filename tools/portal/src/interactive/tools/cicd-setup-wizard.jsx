@@ -2,7 +2,7 @@
 title: "CI/CD Setup Wizard"
 tags: [cicd, gitops, setup, wizard, adoption]
 audience: ["platform-engineer"]
-version: v2.7.0
+version: v2.9.0
 lang: en
 related: [self-service-portal, template-gallery, onboarding-checklist]
 dependencies: [
@@ -380,7 +380,63 @@ function StepReview({ config }) {
             <ol className="text-sm text-[color:var(--da-color-fg)] space-y-1 list-decimal list-inside">
               <li>{t('在你的 repo 根目錄執行上方的 Docker 命令', 'Run the Docker command above in your repo root')}</li>
               <li>{t('編輯 conf.d/ 中的 tenant YAML，調整閾值', 'Edit tenant YAML in conf.d/, adjust thresholds')}</li>
-              <li>{t('git commit → CI 自動執行 Validate + Generate', 'git commit → CI auto-runs Validate + Generate')}</li>
+              {/* ⛔ #1357. This step used to read "git commit → CI auto-runs
+                  Validate + Generate" for every platform, which was false on
+                  the GitLab leg: GitLab auto-loads the repository-root
+                  `.gitlab-ci.yml` and nothing else, so the generated
+                  `.gitlab-ci.d/dynamic-alerting.yml` did not run at all. `init`
+                  now writes that root shell too — unless the repo already has
+                  one, which it never edits, and that is the case this text has
+                  to name because the wizard cannot see the target repo. */}
+              {(config.ci === 'gitlab' || config.ci === 'both') && (
+                <li>
+                  {/* ⛔ The include MUST be rendered as a two-line block, never
+                      folded into the sentence. The key and its first sequence
+                      entry on one line is not valid YAML — `yaml.safe_load`
+                      rejects it with "sequence entries are not allowed here" —
+                      so a reader who pasted the folded form into their root
+                      `.gitlab-ci.yml` got a file GitLab cannot parse: the whole
+                      pipeline stops loading, strictly worse than the unwired
+                      state this step exists to fix.
+                      NOTE: this comment deliberately does NOT spell the folded
+                      form out. `test_every_include_snippet_we_show_a_customer_
+                      parses_as_yaml` scans this file for it, and an example
+                      inside a warning about the example is indistinguishable
+                      from the real thing — the same trap that made the nightly
+                      matrix comment pull a whole module into its scan.
+                      NOTE: no status glyphs in this comment either — the
+                      axe-lite-static hook scans JSX source for them and does
+                      not exclude comments, so one here fails the commit with a
+                      finding that points at an unrelated line. */}
+                  {t('GitLab：根目錄 .gitlab-ci.yml 是 GitLab 唯一會自動載入的路徑。你的 repo 沒有這個檔案時，init 會產生一份，核心就是下面這個 include 區塊。',
+                     'GitLab: the repo-root .gitlab-ci.yml is the only path GitLab auto-loads. If your repo does not have one, init generates it, and the include block below is its working part.')}
+                  {/* ⛔ 「已經有根檔」不是一種情況而是好幾種，而最危險的那種
+                      是「已經有 include: 這個鍵」——那時候再貼一個 include:
+                      鍵會讓 YAML 的後者覆蓋前者（safe_load 取最後一個），
+                      客戶既有的 template（SAST/Dependency-Scanning 這類預設
+                      引導）就這樣靜默消失；嚴格 loader 則直接 duplicate key
+                      報錯。CLI 對這一格有明文警告，精靈原本沒有——精靈看不到
+                      目標 repo，所以它必須把兩種情況都講出來，而不是給一句
+                      「貼上去就好」。 */}
+                  <br />
+                  {t('若你的 repo 已經有根目錄 .gitlab-ci.yml：init 不會改動它，需要你自己接。此時要看它有沒有 include: 這個鍵——沒有的話，把下面整塊加在檔案最後；已經有的話，只把 - local: 那一項加進你既有的 include: 底下，不要再開第二個 include: 鍵（後者會蓋掉前者，你原本的 template 會消失）。實際跑 init 時，它會判斷你的檔案屬於哪一種並印出對應的做法。',
+                     'If your repo already has a root .gitlab-ci.yml: init leaves it untouched and you wire it yourself. Check whether it already has an include: key — if not, append the whole block below at the end of the file; if it does, add only the - local: item under your existing include:, and do NOT introduce a second include: key (the later one replaces the earlier, so your existing templates would vanish). Running init prints which of these cases your file is in.')}
+                  <pre className="mt-1 bg-[color:var(--da-color-surface-hover)] p-4 rounded-lg text-xs font-mono border border-[color:var(--da-color-surface-border)] text-[color:var(--da-color-fg)]">
+                    {'include:\n  - local: .gitlab-ci.d/dynamic-alerting.yml'}
+                  </pre>
+                </li>
+              )}
+              {/* ⛔ GitLab has no Generate stage (#1358): its image carries no
+                  `git`, so the blast-radius baseline cannot be taken and the
+                  job was removed rather than shipped computing a report from
+                  an empty baseline. Restoring it is tracked in #1444. This
+                  list said "Validate + Generate" for GitLab for two commits
+                  after the removal. */}
+              <li>{config.ci === 'gitlab'
+                ? t('git commit → GitLab CI 執行 Validate（前提是上一步的 include 已就位）。GitLab 這一份沒有 Generate 階段——映像內沒有 git，blast radius 基準取不到，見 issue 1358', 'git commit → GitLab CI runs Validate (once the include above is in place). The GitLab artifact has no Generate stage — its image has no git, so the blast-radius baseline cannot be taken; see issue 1358')
+                : config.ci === 'both'
+                  ? t('git commit → GitHub Actions 自動執行 Validate + Generate；GitLab CI 在 include 就位後只執行 Validate（沒有 Generate，見 issue 1358）', 'git commit → GitHub Actions auto-runs Validate + Generate; GitLab CI runs Validate only once the include is in place (no Generate — see issue 1358)')
+                  : t('git commit → GitHub Actions 自動執行 Validate + Generate', 'git commit → GitHub Actions auto-runs Validate + Generate')}</li>
               <li>{t('PR 審核通過後手動觸發 Apply（或 ArgoCD 自動同步）', 'After PR approval, manually trigger Apply (or ArgoCD auto-syncs)')}</li>
             </ol>
           </div>

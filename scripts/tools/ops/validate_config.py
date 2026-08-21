@@ -477,7 +477,15 @@ def check_custom_rules(
         cmd.extend(["--policy", policy_file])
 
     try:
+        # ⛔ `encoding=`, not the locale default. The tool on the other end
+        # forces UTF-8 on its own stdout (`_lib_compat.try_utf8_stdout`) and
+        # prints `✅`/`—`, so on any non-UTF-8 locale `text=True` alone
+        # decodes with e.g. cp950, raises inside subprocess's reader thread,
+        # and hands back `stdout is None` — which the very next line turns
+        # into `TypeError: NoneType + str`, uncaught, from a checker whose
+        # job is to report FAIL rather than crash.
         result = subprocess.run(cmd, capture_output=True, text=True,
+                                encoding="utf-8", errors="replace",
                                 timeout=30)
         output = (result.stdout + result.stderr).strip()
         lines = [l for l in output.split("\n") if l.strip()] if output else []
@@ -663,11 +671,56 @@ def check_policy_dsl(config_dir: str, policy_dsl_file: str | None = None) -> dic
 # ============================================================
 def check_versions() -> dict[str, object]:
     """Run bump_docs.py --check for version consistency."""
-    cmd = [sys.executable, str(_THIS_DIR / "bump_docs.py"), "--check"]
+    # ⛔ `dx/`, not `_THIS_DIR`. bump_docs.py has never lived beside this
+    # file, so this check has never once run: `make validate-config` was
+    # red for every developer with "can't open file .../ops/bump_docs.py".
+    # ⛔ Resolve BEFORE shelling out, and say so plainly when it is absent.
+    # `subprocess.run([sys.executable, "<missing>.py"])` does NOT raise
+    # FileNotFoundError — the INTERPRETER exists, so it starts, prints
+    # "can't open file ..." and exits 2. That is why the `except
+    # FileNotFoundError` branch below was unreachable, and why this check
+    # spent years reporting a bare interpreter error as `[FAIL] versions`
+    # (#1461).
+    # ⚠️ In the published da-tools image this file lives at
+    # `/opt/da-tools/validate_config.py` and `build.sh` FLATTENS the tool set,
+    # so neither `<parent>/dx/bump_docs.py` nor a sibling copy exists —
+    # bump_docs.py is not in the shipped tool list at all. Version/count
+    # consistency is a repo-maintainer gate (`make version-check`,
+    # `make pre-tag`), not something a customer runs from the image. So the
+    # honest answer there is "not applicable here", not a red check.
+    _bump_docs = _THIS_DIR.parent / "dx" / "bump_docs.py"
+    if not _bump_docs.is_file():
+        return _make_result(
+            "versions", WARN,
+            ["Skipped: bump_docs.py is not present in this installation "
+             f"(looked for {_bump_docs}).",
+             "This check is a repository-maintainer gate; the published "
+             "da-tools image ships a flattened tool set that excludes it.",
+             "In a repo checkout run: python3 scripts/tools/dx/bump_docs.py "
+             "--check && python3 scripts/tools/dx/bump_docs.py "
+             "--sync-counts --check"])
+
+    cmd = [sys.executable, str(_bump_docs), "--check"]
 
     try:
+        # ⛔ Same reason as `check_custom_rules`: bump_docs.py forces UTF-8 on
+        # its own stdout and prints `✅`, so decoding it with the locale codec
+        # crashes this checker outright on a non-UTF-8 developer machine.
+        # Before the `dx/` path fix this never surfaced — the wrong path made
+        # the child print pure-ASCII "can't open file", which any codec
+        # decodes. Fixing the path is what made the latent half reachable.
+        # ⛔ Not 15s. `bump_docs --check` now reads ~400 tracked files (#1407
+        # repointed the JSX front-matter glob at `tools/portal/**`), and this
+        # host measures min 3.9 / median 11.2 / max 21.8 seconds across six
+        # runs — i.e. the old bound sat INSIDE the normal distribution and
+        # turned an ordinary slow run into `[FAIL] versions: Version check
+        # timed out`, which the caller cannot distinguish from real drift. A
+        # timeout is a hang detector, not a performance budget; it belongs far
+        # above the working range. Re-measure if the tracked-file set grows
+        # again.
         result = subprocess.run(cmd, capture_output=True, text=True,
-                                timeout=15)
+                                encoding="utf-8", errors="replace",
+                                timeout=120)
         output = (result.stdout + result.stderr).strip()
         lines = [l for l in output.split("\n") if l.strip()] if output else []
 

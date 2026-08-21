@@ -172,6 +172,10 @@ if !waitFor(t, 2*time.Second, func() bool {
 
 ## 測試檔案對照
 
+⚠️ **「測試數」是指示性快照，沒有任何 gate 在對帳。** 三個數字在一次 PR 內就被
+同一個 PR 的後續 commit 作廢過（`test_bump_docs.py` 11 → 191 → 199），所以帶 `~`
+的是「這個量級」而不是精確值；要精確值請跑 `pytest <file> --collect-only -q`。
+
 | 測試檔案 | 測試目標 | 測試數 | 備註 |
 |---------|---------|--------|------|
 | `ops/test_generate_alertmanager_routes.py` | routing / receiver / inhibit / enforced | 142 | 最大功能測試（Wave 13 去重 -13） |
@@ -188,7 +192,9 @@ if !waitFor(t, 2*time.Second, func() bool {
 | `ops/test_regression.py` | 已知 bug 回歸 | 9 | regression marker |
 | `ops/test_validate_config.py` | validate_config.py 配置驗證 | 25 | Wave 12 unittest→pytest |
 | `ops/test_config_diff.py` | config_diff.py 差異偵測 | 40 | Wave 12 unittest→pytest |
-| `dx/test_bump_docs.py` | bump_docs.py 版號更新 | 11 | Wave 12 unittest→pytest |
+| `dx/test_bump_docs.py` | bump_docs.py 六條版號線 + 計數同步 + 診斷 × gating mode | ~214 | Wave 12 unittest→pytest；#1407 大幅擴充 |
+| `ops/test_init_project.py` | `da-tools init` 產生器：GitLab root 五態分類、子目錄接線、summary 真話、CLI 契約 | ~341 | #1357 |
+| `ops/test_generated_ci_artifacts.py` | 產出的 CI YAML 本身（可解析 / 可達 / image pin / 不含 `git`） | ~312 | #1357 / #1358 / #1408 |
 | `dx/test_line_ending_policy.py` | 行尾政策：出貨/生產 Python（`scripts`+`components`+`helm`）的寫檔 site 必須明確表態 `newline=` | 292 | ⚠️ 三層：正反例樣本證明偵測器活著／static AST guard 跨平台會紅／行為測試只在 Windows 具鑑別力 |
 | `ops/test_maintenance_scheduler.py` | maintenance_scheduler.py 排程 | 55 | Wave 12 mock 統一 |
 | `ops/test_performance.py` | 效能曲線（scaling / load） | 7 | slow marker |

@@ -9,7 +9,7 @@ lang: zh
 
 > **Language / 語言：** **中文 (Current)** | [English](./gitops-deployment.en.md)
 
-> **版本**：v2.6.0
+> **版本**：v2.9.0
 > **受眾**：Platform Engineers、DevOps、SREs
 > **前置文件**：[BYO Prometheus 整合指南](byo-prometheus-integration.md)
 
@@ -65,16 +65,18 @@ components/threshold-exporter/config/conf.d/db-b.yaml       @<org>/team-db-b
 
 ### PR Review 變更影響分析
 
-當 PR 修改 `conf.d/` 下的 tenant 配置時，CI 自動執行 `config-diff` 產出 blast radius 報告，讓 reviewer 一眼看出變更影響範圍。
+當 PR 修改 `conf.d/` 下的 tenant 配置時，**GitHub Actions** 會自動執行 `config-diff` 產出 blast radius 報告，讓 reviewer 一眼看出變更影響範圍。
 
-**現成 CI 範本**（可直接 include 使用）：
+**CI 範本**：
 
-| 平台 | 範本位置 | 觸發條件 |
-|------|---------|---------|
-| GitHub Actions | `.github/workflows/config-diff.yaml` | PR 修改 `conf.d/**` |
-| GitLab CI | `.gitlab/ci/config-diff.gitlab-ci.yml` | MR 修改 `conf.d/**` |
+| 平台 | 取得方式 | blast radius | 觸發條件 |
+|------|---------|-------------|---------|
+| GitHub Actions | 本 repo 內建 `.github/workflows/config-diff.yaml`，可直接複製套用 | ✅ 自動貼成 PR comment | PR 修改 `conf.d/**` |
+| GitLab CI | 由 `da-tools init --ci gitlab` 產生 `.gitlab-ci.d/dynamic-alerting.yml`，並以根目錄 `.gitlab-ci.yml` 的 `include: local` 接進 pipeline | ❌ 尚未提供（見下） | MR 修改 `conf.d/**` |
 
 GitHub Actions 範本會自動將 blast radius 報告貼為 PR comment（冪等更新，不重複建立）。
+
+⚠️ **GitLab 那一份目前不含 blast radius**：`da-tools init --ci gitlab` 產出的 pipeline 只有 validate 與 apply 兩個 stage。原因在映像而不在你的 repo —— GitLab 是在 `$DA_TOOLS_IMAGE` 內跑 `script:`，而該映像沒有 `git`，所以比較基準取不到；取不到的基準會表現成「每一個租戶都是新增的」，因此寧可不出貨。詳見 [#1358](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1358)，補回作法見 [#1444](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1444)。
 
 **Exit codes**（供 CI pipeline 判斷）：
 

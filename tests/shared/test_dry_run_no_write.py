@@ -417,6 +417,45 @@ def test_recipe_table_covers_every_dry_run_tool():
     )
 
 
+def test_the_gate_states_the_scope_it_does_not_cover():
+    """⛔ This gate's scope is `scripts/tools/ops/` ONLY, and nothing said so.
+
+    `OPS_DIR` is the single directory `collect_dry_run_tools()` walks, so a
+    tool that lives anywhere else has never been checked — no failure, no
+    skip, no mention. Measured while auditing `bump_docs.py` (#1407): removing
+    ALL FOUR of its `and not dry_run` write guards leaves this file 24/24
+    green, because `bump_docs.py` is in `scripts/tools/dx/`. That is the tool
+    whose dry run would otherwise rewrite ~340 tracked files.
+
+    ⚠️ This test does NOT widen the gate — writing 15 more recipes with their
+    fixtures is a change of its own. It makes the hole COUNTED, so it cannot
+    grow in silence the way it arrived. `bump_docs.py` itself is now pinned
+    directly in `tests/dx/test_bump_docs.py::TestDryRunWritesNothing`.
+    """
+    dx_dir = REPO_ROOT / "scripts" / "tools" / "dx"
+    uncovered = sorted(
+        f.stem for f in dx_dir.glob("*.py")
+        if not f.name.startswith("_")
+        and DRY_RUN_FLAG_RE.search(f.read_text(encoding="utf-8"))
+    )
+    assert "bump_docs" in uncovered, (
+        "bump_docs.py no longer declares --dry-run, or the scan broke — this "
+        "test's whole premise is that it is OUT of this gate's reach"
+    )
+    assert len(uncovered) == 15, (
+        f"the out-of-scope set moved: {len(uncovered)} dx tool(s) declare "
+        f"--dry-run and are NOT covered by this gate: {uncovered}.\n"
+        "Either give them recipes (and widen OPS_DIR), or update this count "
+        "deliberately — what must not happen is the set changing in silence.\n"
+        "⚠️ If you just added a dx tool with --dry-run, this is expected and "
+        "the fix is one line: bump the number in "
+        "tests/shared/test_dry_run_no_write.py::"
+        "test_the_gate_states_the_scope_it_does_not_cover. You are not "
+        "required to write a recipe to go green — the count is a tripwire so "
+        "the gap stays visible, not a demand that you close it."
+    )
+
+
 def test_one_recipe_per_tool():
     """Runtime discipline: exactly one subprocess per tool (see docstring §2)."""
     tools = [r.tool for r in RECIPES]

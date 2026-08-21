@@ -59,6 +59,19 @@ function cicdGeneratedPaths(config) {
   }
   if (config.ci === 'gitlab' || config.ci === 'both') {
     paths.push('.gitlab-ci.d/dynamic-alerting.yml');
+    // #1357 — the root shell. GitLab auto-loads `.gitlab-ci.yml` and nothing
+    // else, so the file above is inert until something includes it; `init`
+    // writes this one-line include for you.
+    //
+    // ⚠️ Conditional in the CLI, unconditional here, and that is the honest
+    // shape rather than a bug: `init` skips it when the repo ALREADY has a
+    // root `.gitlab-ci.yml` (it never edits a pipeline it did not write, and
+    // prints the include for you to paste instead). This wizard has no view
+    // of the target repo, so it describes the greenfield run — which is also
+    // what the cross-check test compares against, since that fixture
+    // initialises into an empty directory. The wizard's Next Steps carry the
+    // brownfield caveat in prose.
+    paths.push('.gitlab-ci.yml');
   }
   if (config.deploy === 'kustomize') {
     paths.push('kustomize/base/kustomization.yaml');

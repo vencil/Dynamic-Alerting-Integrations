@@ -4,11 +4,11 @@
 # Build from the REPO ROOT (not from components/tenant-api/) because go.mod
 # uses a replace directive pointing to ../threshold-exporter/app:
 #
-#   docker build -t ghcr.io/vencil/tenant-api:2.4.0 \
+#   docker build -t ghcr.io/vencil/tenant-api:v2.9.20 \
 #     -f components/tenant-api/Dockerfile .
 #
 # Run:
-#   docker run -p 8080:8080 -v $(pwd)/conf.d:/conf.d ghcr.io/vencil/tenant-api:2.4.0
+#   docker run -p 8080:8080 -v $(pwd)/conf.d:/conf.d ghcr.io/vencil/tenant-api:v2.9.20
 
 # ── Build stage ──────────────────────────────────────────────────────────────
 # #463 multi-arch: builder pinned to the native BUILDPLATFORM, cross-compiles
@@ -71,4 +71,4 @@ EXPOSE 8080
 LABEL org.opencontainers.image.title="tenant-api" \
       org.opencontainers.image.description="Tenant Management API — Dynamic Alerting Platform" \
       org.opencontainers.image.source="https://github.com/vencil/vibe-k8s-lab" \
-      org.opencontainers.image.version="2.9.7"
+      org.opencontainers.image.version="2.9.20"

@@ -150,8 +150,28 @@ jobs:
               # and found the same way it should have been found: the two
               # commands that job runs (`bump_docs.py --check` and
               # `--sync-counts --check`) were replayed under an open()/read_text
-              # recorder. They touch 277 tracked files; every one but these nine
-              # already matches a pattern above. Reading the script would not
+              # recorder. RE-MEASURED after #1407 repointed the JSX front-matter
+              # glob at `tools/portal/src/interactive/tools/**` and added the
+              # da-portal QUICKSTART rule: 393 tracked files, of which 115 were
+              # uncovered — 113 under `tools/portal/**`, plus QUICKSTART.md.
+              # Those two entries are below for that reason.
+              # ⛔ Root CHANGELOG.md is listed too, and the reason it was NOT
+              # listed at first was wrong: `docs/CHANGELOG.md` is a SYMLINK to
+              # `../CHANGELOG.md`, so a contributor editing the root file
+              # produces the changed path `CHANGELOG.md`, `docs/**` never
+              # matches, and the job is skipped — while the front-matter rule
+              # reaches that content through the symlink and does report DRIFT
+              # (measured: rc=1 on a checkout where the symlink RESOLVES —
+              # Linux CI and any `core.symlinks=true` clone). ⚠️ On a Windows
+              # checkout with `core.symlinks=false` the path is a 15-byte text
+              # file holding the link target, the front-matter rule never sees
+              # the content, and the same probe measures rc=0 — so this entry
+              # protects CI but is NOT a local backstop there.
+              # Every dev-rule-#4 PR touches this file, so
+              # this widens the job's trigger by design.
+              # ⚠️ This list is maintained BY MEASUREMENT: re-run the recorder
+              # whenever a rule table gains a path, because nothing here fails
+              # when it goes stale — it just goes quiet. Reading the script would not
               # have produced this list — the paths are assembled across several
               # tables — which is the point: an indirect read through a script a
               # job merely invokes is the class the coverage guard in
@@ -169,6 +189,14 @@ jobs:
               - "components/da-tools/app/VERSION"
               - "components/threshold-exporter/README.md"
               - ".github/workflows/config-diff.yaml"
+              # ⛔ #1407 repointed the JSX front-matter glob here (46 of these
+              # files sat at v2.7.0 while the SSOT said 2.9.0 and every gate
+              # reported green). Without this pattern a portal-only PR skips
+              # version-check → required-but-skipped counts as satisfied, and
+              # the drift this branch exists to catch lands on main instead.
+              - "tools/portal/**"
+              - "components/da-portal/QUICKSTART.md"
+              - "CHANGELOG.md"
               # helm/** and docs/** PRs (chart hardening, governance docs) hit the SAME
               # required-checks-contract gap the tenant-api note above describes: main's
               # branch protection requires this workflow's jobs, but the path filter

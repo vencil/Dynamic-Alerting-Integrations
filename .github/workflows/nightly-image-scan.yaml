@@ -364,17 +364,29 @@ jobs:
         # 70KB general-purpose generator that is not a nightly helper at all.
         # The pin table lives in the tools/ops tree; the matrix-drift module
         # holds the one literal path, cross-checked against the checker.
+        # ⛔ Basename only, and that rule applies to THIS COMMENT too.
+        # The nightly matrix-drift guard discovers extra files to scan by
+        # regex-matching `(scripts|tests)/….py` in this workflow's text, so
+        # any full path written here — including a path naming the guard
+        # itself — silently enlarges that scanned corpus. Measured twice while
+        # writing this very comment: spelling the generator's full path pulled
+        # the whole generator in, and then naming the guard's own module
+        # pulled the guard in, whereupon its own literal fixture strings
+        # tripped a sibling assertion. ⛔ So this comment deliberately names
+        # NO path — not even as an example. The CONSTANT NAME is the real
+        # anchor (it is what check_image_refs_resolve.py binds to); paths add
+        # nothing here and are not free.
         include:
-          - name: delivered-kubectl # GITLAB_KUBECTL_IMAGE (init_project.py:190)
+          - name: delivered-kubectl # GITLAB_KUBECTL_IMAGE (init_project.py)
             ref: "alpine/k8s:1.34.9"
-          - name: delivered-helm # GITLAB_HELM_IMAGE (init_project.py:204)
+          - name: delivered-helm # GITLAB_HELM_IMAGE (init_project.py)
             ref: "alpine/helm:3.21.3"
-          - name: delivered-argocd # GITLAB_ARGOCD_IMAGE (init_project.py:214)
+          - name: delivered-argocd # ARGOCD_CLI_IMAGE (init_project.py)
             ref: "quay.io/argoproj/argocd:v3.5.0"
           # Not routed through _GITLAB_APPLY_IMAGES — this one is the git-sync
           # sidecar + init container in the generated kustomize gitops overlay,
           # emitted only on the `config_source=git` path.
-          - name: delivered-git-sync # GIT_SYNC_IMAGE (init_project.py:223)
+          - name: delivered-git-sync # GIT_SYNC_IMAGE (init_project.py)
             ref: "registry.k8s.io/git-sync/git-sync:v4.7.1"
           # ⛔ The PUBLISHED tool image, and the only delivered ref that reaches
           # 100% of generated projects — measured across all 18 option

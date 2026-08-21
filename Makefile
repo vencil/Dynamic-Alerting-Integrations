@@ -607,8 +607,26 @@ validate-config: ## 一站式配置驗證 (YAML + schema + routes + policy + cus
 onboard-analyze: ## Analyze existing AM/Prometheus configs for onboarding
 	@python3 scripts/tools/ops/onboard_platform.py $(ARGS)
 
-version-check: ## 檢查版號一致性 (CI lint 用)
+# 這個 target 是 pre-tag 唯一的版號閘門——`make pre-tag` 不跑 pytest，所以
+# 任何「只有測試抓得到」的守門員對 release 而言等於不存在（#1407 第二輪）。
+# 因此以下六種診斷全部由 `--check` 自己在 runtime 判定，不靠 tests/dx/：
+#   DRIFT      版號引用落後 SSOT
+#   DEAD       規則的 pattern 撈不到（檔案在、句型變了）
+#   MISSING    規則指向的檔案不存在
+#   GLOB-EMPTY glob 展開到 0 個檔案（整條規則對所有 gate 隱形）
+#   GLOB-DEAD  glob 展開到檔案、但整棵樹一個都沒撈到
+#   NO-SSOT    六條版號線之一讀不到 source-of-truth（該線全部規則未被評估）
+# `--scope` 過濾後剩 0 條規則會以 exit 2 擋下，不會回報「一致」。
+#
+# 第二行 `--sync-counts --check` 同一個理由（#1407 第三輪）：計數規則自己的三種
+# 診斷——NO-SOURCE（計數來源讀不到）/ DEAD（句型變了撈不到）/ MISSING（檔案不在）
+# ——在 repo 內只有 .github/workflows/validate.yaml 的 version-check job 跑得到，
+# 而那個 job 有 path filter。「只有 path-filtered PR job 看得到的守門員」對
+# release 而言，跟「只有 pytest 看得到」是同一句話：等於不存在。tag 前必須
+# 自己跑一次。
+version-check: ## 檢查版號一致性 + 計數一致性 (CI lint 用；DRIFT/DEAD/MISSING/GLOB-EMPTY/GLOB-DEAD/NO-SSOT/NO-SOURCE 皆會 fail)
 	@python3 ./scripts/tools/dx/bump_docs.py --check
+	@python3 ./scripts/tools/dx/bump_docs.py --sync-counts --check
 
 .PHONY: pre-tag
 pre-tag: version-check lint-docs playbook-freshness-ll draft-advisory-check benchmark-report-warn docker-build-all trivy-scan-all ## ⛔ Pre-tag 品質閘門（所有檢查必須通過才能打 tag；benchmark-report + trivy informational）
@@ -953,16 +971,17 @@ lint-new-script: ## Run all CLI/SAST conventions on a single new lint script (PR
 	@echo ""
 	@echo "✓ All convention gates pass for $(SCRIPT)"
 
-version-show: ## 顯示目前三條版號線
+version-show: ## 顯示目前六條版號線（含讀不到 SSOT 的線）
 	@python3 ./scripts/tools/dx/bump_docs.py --show-current
 
-bump-docs: ## 更新版號引用 (使用: make bump-docs PLATFORM=0.10.0 TOOLS=0.2.0 EXPORTER=0.6.0 PORTAL=2.8.0 RECIPE_PREVIEW=2.9.0)
+bump-docs: ## 更新版號引用 (使用: make bump-docs PLATFORM=0.10.0 TOOLS=0.2.0 EXPORTER=0.6.0 PORTAL=2.8.0 RECIPE_PREVIEW=2.9.0 TENANT_API=2.9.20)
 	@python3 ./scripts/tools/dx/bump_docs.py \
 		$(if $(PLATFORM),--platform $(PLATFORM)) \
 		$(if $(EXPORTER),--exporter $(EXPORTER)) \
 		$(if $(TOOLS),--tools $(TOOLS)) \
 		$(if $(PORTAL),--portal $(PORTAL)) \
-		$(if $(RECIPE_PREVIEW),--recipe-preview $(RECIPE_PREVIEW))
+		$(if $(RECIPE_PREVIEW),--recipe-preview $(RECIPE_PREVIEW)) \
+		$(if $(TENANT_API),--tenant-api $(TENANT_API))
 
 # ----------------------------------------------------------
 # Python 測試 & 覆蓋率

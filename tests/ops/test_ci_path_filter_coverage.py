@@ -2045,9 +2045,31 @@ TRACED_INDIRECT_INPUTS = {
     # deleting a line is as fatal as adding one.
     ("docs-ci.yaml", "docs", "scripts/tools/lint/mkdocs-anchor-debt.txt"),
     ("docs-ci.yaml", "docs", "components/threshold-exporter/README.md"),
-    # version-check: bump_docs.py's version and count sources. CHANGELOG.md is
-    # deliberately ABSENT — the trace shows it reads docs/CHANGELOG.md, and
-    # adding the root one would drag nearly every PR into three required checks.
+    # version-check: bump_docs.py's version and count sources.
+    # ⛔ CHANGELOG.md USED to be deliberately absent here, on the grounds that
+    # the trace only shows `docs/CHANGELOG.md` and adding the root one would
+    # drag nearly every PR into three required checks. That reasoning was
+    # RETRACTED: `docs/CHANGELOG.md` is a symlink to the root file, so on any
+    # checkout that resolves it the two are the same content, and the widened
+    # trigger is now deliberate (see the note beside the entry in
+    # validate.yaml). The entry is present there on purpose — do not "restore
+    # consistency" by deleting it.
+    # ⛔ …and RETRACTING the reasoning is not the same as enrolling the entry.
+    # These three filter entries were added with only the COVERAGE end pinned
+    # (`test_the_version_check_filter_covers_the_trees_bump_docs_now_reads`
+    # fnmatches string literals and never touches the filesystem), so renaming
+    # or deleting any of the inputs left a `validate.yaml` line naming nothing
+    # while the whole suite stayed green — measured: deleting
+    # `components/da-portal/QUICKSTART.md` scored `2 passed`. That is the
+    # skip-as-green gap this module exists for, reappearing inside the fix for
+    # it. Enrolled here so BOTH ends are asserted.
+    ("validate.yaml", "validate", "CHANGELOG.md"),
+    ("validate.yaml", "validate", "components/da-portal/QUICKSTART.md"),
+    # A representative of the portal tree: `tools/portal/**` was added for the
+    # ~113 JSX/JS files the version gate reads, and a tree with no tracked
+    # member is the same dead line.
+    ("validate.yaml", "validate",
+     "tools/portal/src/interactive/tools/glossary.jsx"),
     ("validate.yaml", "validate", "README.md"),
     ("validate.yaml", "validate", "README.en.md"),
     ("validate.yaml", "validate", "CLAUDE.md"),
@@ -3414,3 +3436,78 @@ def test_guard_actually_sees_the_known_two_ended_gates() -> None:
         f"{missing} — the coverage assertion above is now vacuous. Fix the "
         "parser, or update this pin if the test genuinely stopped reading them."
     )
+
+
+def test_the_version_check_filter_covers_the_trees_bump_docs_now_reads():
+    """⛔ 第八輪盲審 lens C8：`tools/portal/**` 與
+    `components/da-portal/QUICKSTART.md` 兩個 filter 條目各自可以被刪掉而全綠。
+
+    刪掉之後，一個只動 portal 的 PR 完全不匹配 `validate` 的 path filter ⇒
+    version-check **skipped**，而被 path filter 跳過的 required check 算作已
+    滿足。那正是這兩個條目被加上去的理由：#1407 的 44 個 JSX 檔停在 v2.7.0，
+    每一道閘門都報綠。
+    """
+    import fnmatch
+    from pathlib import Path as _P
+
+    # ⛔ Parse the filter as YAML, not by matching quote characters. The
+    # previous form was `re.findall(r'- "([^"]+)"', ...)`, which silently sees
+    # only DOUBLE-quoted entries: rewriting one to `- 'tools/portal/**'` —
+    # valid YAML, and the spelling this repo's own `backtest.yaml` /
+    # `bench-attrib-main.yaml` already use, with no yamllint anywhere to
+    # prefer either — dropped it from `pats` and failed here with a message
+    # claiming the entry was missing from the workflow while it sat right
+    # there. A guard whose failure mode is "someone deleted the filter entry"
+    # must not fire on a quote style; derive the value, do not pattern-match
+    # its syntax.
+    wf_path = (_P(__file__).resolve().parents[2]
+               / ".github" / "workflows" / "validate.yaml")
+    doc = yaml.safe_load(wf_path.read_text(encoding="utf-8"))
+    filters = None
+    for job in (doc.get("jobs") or {}).values():
+        for step in (job.get("steps") or []):
+            raw = (step.get("with") or {}).get("filters")
+            if raw and "validate:" in str(raw):
+                filters = yaml.safe_load(str(raw))
+                break
+        if filters:
+            break
+    assert filters and "validate" in filters, (
+        "could not locate the `validate` path-filter block in "
+        f"{wf_path.name} — the detect-changes step's `filters:` input is the "
+        "source of truth for this test")
+    # ⛔ dorny/paths-filter@v3 accepts a rule as a bare glob OR as a
+    # `{<change-type>: <glob>}` mapping (`- added|modified: "x/**"`). Keeping
+    # only `isinstance(p, str)` SILENTLY DROPS the mapping form, and the drop
+    # is invisible: the entry vanishes from `pats`, the coverage assertion
+    # below then reports the file as matching no filter, and its message tells
+    # the reader the entry is missing from the workflow while it sits right
+    # there. That is the same defect this test was written to fix, one syntax
+    # over — it read the SPELLING of a rule instead of its value.
+    def _glob_of(rule):
+        if isinstance(rule, str):
+            return rule
+        if isinstance(rule, dict) and len(rule) == 1:
+            return next(iter(rule.values()))
+        raise AssertionError(
+            "unrecognised paths-filter rule shape in `validate`: "
+            f"{rule!r}. Teach this helper the new shape — do NOT let it fall "
+            "through, because a dropped rule reads exactly like a deleted one.")
+
+    pats = [_glob_of(p) for p in filters["validate"]]
+    assert pats, "the validate filter parsed to an empty pattern list"
+    assert all(isinstance(p, str) for p in pats), pats
+
+    def covered(path: str) -> bool:
+        return any(fnmatch.fnmatch(path, p)
+                   or (p.endswith("/**") and path.startswith(p[:-2]))
+                   for p in pats)
+
+    # Each probe is a file `bump_docs --check` actually reads today.
+    for probe in ("tools/portal/src/interactive/tools/glossary.jsx",
+                  "components/da-portal/QUICKSTART.md",
+                  "CHANGELOG.md"):
+        assert covered(probe), (
+            f"{probe} is read by the version gate but matches no `validate` "
+            f"path filter — a PR touching only it skips version-check, and a "
+            f"skipped required check counts as satisfied.\npatterns={pats}")

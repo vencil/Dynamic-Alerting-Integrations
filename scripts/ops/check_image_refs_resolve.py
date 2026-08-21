@@ -261,7 +261,7 @@ def delivered_refs(root: Path) -> set[str]:
     # the resolver fails and the gate exits 1". That is true only WHERE A RESOLVER
     # IS INSTALLED: `main()` below prints `::warning::` and returns 0 when neither
     # skopeo nor docker is present. CI installs skopeo (image-ref-resolve.yaml,
-    # pinned by test_the_delivered_scope_step_has_a_resolver_installed), so the
+    # pinned by test_the_delivered_scope_job_has_a_resolver_installed), so the
     # gate itself is safe. ⚠️ Tense matters here: WITHOUT this check, a local
     # `--scope delivered` run on a box with neither WOULD exit 0 over a blanked
     # pin. With it, that run exits 1 — the SystemExit below fires before `main()`

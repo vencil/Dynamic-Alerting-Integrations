@@ -9,7 +9,7 @@ lang: en
 
 > **Audience**: Platform Engineers, SREs
 > **Prerequisite Reading**: [Architecture and Design](../architecture-and-design.md) §1–§3 (Vector matching and Projected Volume principles)
-> **Version**: 
+> **Version**: v2.9.0
 
 > **Language / 語言:** **English (Current)** | [中文](byo-prometheus-integration.md)
 

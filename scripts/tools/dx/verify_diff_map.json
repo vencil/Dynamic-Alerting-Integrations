@@ -732,7 +732,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "e9990c7bd48d3b43239b0fe35d712e1632aab806046ed9b981492d647bef7db2",
+ "source_digest": "03b897ebd69083d755a38fac6b4aae1f691010a6c811991f1e1951518379a026",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1086,6 +1086,8 @@
    "tests/lint/test_e2e_spec_lint.py",
    "tests/ops/test_ci_aggregate_gate_contract.py",
    "tests/ops/test_ci_path_filter_coverage.py",
+   "tests/ops/test_generated_ci_artifacts.py",
+   "tests/ops/test_init_project.py",
    "tests/ops/test_nightly_race_issue_policy.py",
    "tests/shared/test_actionlint_pin_parity.py"
   ],
@@ -1138,6 +1140,10 @@
   ".github/workflows/try-local-smoke.yaml": [
    "tests/ops/test_trylocal_compose_pins.py"
   ],
+  ".github/workflows/validate.yaml": [
+   "tests/dx/test_bump_docs.py",
+   "tests/ops/test_ci_path_filter_coverage.py"
+  ],
   ".pre-commit-config.yaml": [
    "tests/dx/test_bump_docs.py",
    "tests/dx/test_compile_custom_alerts.py",
@@ -1171,12 +1177,14 @@
   ],
   "CLAUDE.md": [
    "tests/dx/test_add_frontmatter.py",
+   "tests/dx/test_bump_docs.py",
    "tests/dx/test_line_ending_policy.py",
    "tests/lint/test_check_doc_freshness.py",
    "tests/lint/test_check_frontmatter_versions.py",
    "tests/lint/test_validate_docs_versions.py"
   ],
   "Makefile": [
+   "tests/dx/test_bump_docs.py",
    "tests/dx/test_compile_custom_alerts.py",
    "tests/dx/test_makefile_utf8_mode.py",
    "tests/dx/test_recover_index.py",
@@ -1188,6 +1196,7 @@
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/ops/test_git_check_lock.py",
    "tests/ops/test_nightly_scan_matrix_drift.py",
+   "tests/ops/test_validate_config.py",
    "tests/ops/test_wrapped_path_references.py",
    "tests/rulepacks/test_vm_alert_parity.py"
   ],
@@ -1197,6 +1206,7 @@
   ],
   "README.md": [
    "tests/dx/test_add_frontmatter.py",
+   "tests/dx/test_bump_docs.py",
    "tests/dx/test_generate_adr_index.py",
    "tests/dx/test_verify_diff.py",
    "tests/lint/test_check_bilingual_structure.py",
@@ -1212,6 +1222,10 @@
   "components/da-portal/Dockerfile": [
    "tests/helm/test_portal_relay_token_guard.py",
    "tests/lint/test_check_portal_asset_shipping.py"
+  ],
+  "components/da-portal/QUICKSTART.md": [
+   "tests/dx/test_bump_docs.py",
+   "tests/ops/test_ci_path_filter_coverage.py"
   ],
   "components/da-portal/README.md": [
    "tests/ops/test_ci_path_filter_coverage.py"
@@ -1231,12 +1245,12 @@
    "tests/lint/test_check_subprocess_timeout.py"
   ],
   "components/da-tools/README.md": [
+   "tests/dx/test_bump_docs.py",
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/ops/test_generated_ci_artifacts.py"
   ],
   "components/da-tools/app/Dockerfile": [
-   "tests/lint/test_check_iac_vibe_rules.py",
-   "tests/ops/test_generated_ci_artifacts.py"
+   "tests/lint/test_check_iac_vibe_rules.py"
   ],
   "components/da-tools/app/VERSION": [
    "tests/ops/test_ci_path_filter_coverage.py",
@@ -1264,6 +1278,9 @@
   "components/tenant-api": [
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/ops/test_nightly_race_issue_policy.py"
+  ],
+  "components/tenant-api/Dockerfile": [
+   "tests/dx/test_bump_docs.py"
   ],
   "components/tenant-api/internal/federation/token/manager.go": [
    "tests/ops/test_revoked_set_contract.py"
@@ -1378,6 +1395,7 @@
    "tests/lint/test_lint_jsx_babel_frontmatter.py"
   ],
   "docs/assets/platform-data.json": [
+   "tests/dx/test_bump_docs.py",
    "tests/lint/test_check_makefile_targets.py",
    "tests/lint/test_check_portal_asset_shipping.py",
    "tests/lint/test_check_threshold_unit_sanity.py",
@@ -1425,6 +1443,9 @@
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/ops/test_validate_config.py"
   ],
+  "docs/integration": [
+   "tests/dx/test_bump_docs.py"
+  ],
   "docs/integration/gitops-deployment.md": [
    "tests/ops/test_config_diff.py",
    "tests/ops/test_generated_ci_artifacts.py"
@@ -1446,6 +1467,7 @@
   ],
   "docs/internal": [
    "tests/dx/test_add_frontmatter.py",
+   "tests/dx/test_bump_docs.py",
    "tests/dx/test_bump_playbook_versions.py",
    "tests/dx/test_doc_coverage.py",
    "tests/dx/test_generate_doc_map.py",
@@ -1456,6 +1478,9 @@
   ],
   "docs/internal/backend-compat-baseline.md": [
    "tests/rulepacks/test_vm_backend_parity.py"
+  ],
+  "docs/internal/design-system-guide.md": [
+   "tests/dx/test_bump_docs.py"
   ],
   "docs/internal/dev-rules.md": [
    "tests/dx/test_bump_docs.py",
@@ -1672,6 +1697,9 @@
    "tests/helm/test_oauth2_gitlab_profile.py",
    "tests/helm/test_single_writer_guard.py"
   ],
+  "helm/tenant-api/Chart.yaml": [
+   "tests/dx/test_bump_docs.py"
+  ],
   "helm/tenant-api/templates/configmap-federation-store.yaml": [
    "tests/helm/test_federation_store_namespace_guard.py"
   ],
@@ -1848,6 +1876,7 @@
    "tests/ops/test_generate_routes_orchestration.py"
   ],
   "k8s/04-tenant-api/deployment.yaml": [
+   "tests/dx/test_bump_docs.py",
    "tests/lint/test_check_k8s_manifests.py",
    "tests/lint/test_check_single_writer_invariant.py",
    "tests/ops/test_nightly_scan_matrix_drift.py"
@@ -2061,7 +2090,9 @@
    "tests/dx/test_line_ending_policy.py",
    "tests/dx/test_verify_diff.py",
    "tests/ops/test_property_based.py",
-   "tests/shared/test_bilingual_help_contract.py"
+   "tests/ops/test_validate_config.py",
+   "tests/shared/test_bilingual_help_contract.py",
+   "tests/shared/test_dry_run_no_write.py"
   ],
   "scripts/tools/dx/_atomic_write.py": [
    "tests/dx/test_atomic_write.py",
@@ -2071,6 +2102,7 @@
    "tests/dx/test_axe_lite_static.py"
   ],
   "scripts/tools/dx/bump_docs.py": [
+   "tests/dx/test_bump_docs.py",
    "tests/dx/test_coverage_gap_analysis.py",
    "tests/dx/test_makefile_utf8_mode.py",
    "tests/dx/test_verify_diff.py",
@@ -2317,14 +2349,17 @@
    "tests/lint/test_check_structure.py"
   ],
   "scripts/tools/ops": [
+   "tests/dx/test_bump_docs.py",
    "tests/dx/test_line_ending_policy.py",
    "tests/helm/test_federation_store_sentinel_guard.py",
    "tests/lint/test_check_threshold_reachability.py",
    "tests/ops/test_grar_facade_reexports.py",
    "tests/ops/test_nightly_scan_matrix_drift.py",
    "tests/ops/test_printed_paths_are_reachable.py",
+   "tests/ops/test_validate_config.py",
    "tests/shared/test_bilingual_help_contract.py",
    "tests/shared/test_dispatch_contract.py",
+   "tests/shared/test_dry_run_no_write.py",
    "tests/shared/test_entrypoint.py",
    "tests/shared/test_lang_detection_guard.py"
   ],
@@ -2440,7 +2475,9 @@
    "tests/dx/test_verify_diff.py"
   ],
   "tests/dx": [
-   "tests/ops/test_ci_path_filter_coverage.py"
+   "tests/dx/test_bump_docs.py",
+   "tests/ops/test_ci_path_filter_coverage.py",
+   "tests/ops/test_init_project.py"
   ],
   "tests/dx/fixtures/custom_alert_validation_vectors.json": [
    "tests/dx/test_compile_custom_alerts.py"
@@ -2465,7 +2502,8 @@
    "tests/dx/test_line_ending_policy.py"
   ],
   "tests/dx/test_bump_docs.py": [
-   "tests/dx/test_verify_diff.py"
+   "tests/dx/test_verify_diff.py",
+   "tests/shared/test_dry_run_no_write.py"
   ],
   "tests/dx/test_coverage_delta.py": [
    "tests/dx/test_dx_json_stdout_contract.py"
@@ -2614,6 +2652,7 @@
    "tests/lint/test_check_threshold_registry.py",
    "tests/ops/test_generated_ci_artifacts.py",
    "tests/ops/test_grar_facade_reexports.py",
+   "tests/ops/test_init_project.py",
    "tests/ops/test_nightly_race_issue_policy.py",
    "tests/ops/test_onboard_platform.py",
    "tests/ops/test_validate_config.py"
@@ -2714,6 +2753,10 @@
   "tests/shared/property-coverage.yaml": [
    "tests/lint/test_check_property_coverage.py"
   ],
+  "tests/shared/test_dry_run_no_write.py": [
+   "tests/dx/test_bump_docs.py",
+   "tests/ops/test_init_project.py"
+  ],
   "tests/shared/test_go_mutation_pilot.py": [
    "tests/shared/test_mutation_catalog.py"
   ],
@@ -2756,6 +2799,7 @@
    "tests/shared/test_help_contract.py"
   ],
   "tools/portal": [
+   "tests/dx/test_bump_docs.py",
    "tests/lint/test_check_threshold_reachability.py",
    "tests/ops/test_ci_path_filter_coverage.py"
   ],
@@ -2766,6 +2810,7 @@
    "tests/ops/test_ci_path_filter_coverage.py"
   ],
   "tools/portal/src": [
+   "tests/dx/test_bump_docs.py",
    "tests/dx/test_scan_component_health.py",
    "tests/lint/test_check_design_token_usage.py",
    "tests/lint/test_check_jsx_i18n.py",
@@ -2782,17 +2827,26 @@
   "tools/portal/src/interactive/tools/YamlValidatorTab.jsx": [
    "tests/lint/test_counterexample_coverage.py"
   ],
+  "tools/portal/src/interactive/tools/_common/data/images.js": [
+   "tests/dx/test_bump_docs.py"
+  ],
   "tools/portal/src/interactive/tools/_common/data/rule-packs.js": [
    "tests/lint/test_counterexample_coverage.py"
   ],
   "tools/portal/src/interactive/tools/_common/sim/alert-engine.js": [
    "tests/lint/test_counterexample_coverage.py"
   ],
+  "tools/portal/src/interactive/tools/cicd-setup-wizard.jsx": [
+   "tests/ops/test_generated_ci_artifacts.py"
+  ],
   "tools/portal/src/interactive/tools/cicd-setup-wizard/utils": [
    "tests/ops/test_generated_ci_artifacts.py"
   ],
   "tools/portal/src/interactive/tools/cicd-setup-wizard/utils/generators.js": [
    "tests/ops/test_generated_ci_artifacts.py"
+  ],
+  "tools/portal/src/interactive/tools/glossary.jsx": [
+   "tests/ops/test_ci_path_filter_coverage.py"
   ],
   "tools/portal/src/interactive/tools/multi-tenant-comparison.jsx": [
    "tests/lint/test_counterexample_coverage.py"

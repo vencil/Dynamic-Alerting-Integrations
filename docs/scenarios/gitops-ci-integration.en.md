@@ -16,7 +16,7 @@ lang: en
 This guide explains how to integrate the Dynamic Alerting platform into your existing CI/CD workflow. Covers the complete path from zero:
 
 - **Quick init**: `da-tools init` generates all integration files in one command
-- **Three-stage pipeline**: Validate → Generate → Apply
+- **Three-stage pipeline**: Validate → Generate → Apply (GitHub Actions; the GitLab artifact has two stages, Validate → Apply — see §1)
 - **Four deployment modes**: Kustomize, Helm, ArgoCD, GitOps Native (git-sync sidecar)
 - **Two CI platforms**: GitHub Actions, GitLab CI
 
@@ -87,7 +87,8 @@ your-repo/
 ├── .github/workflows/
 │   └── dynamic-alerting.yaml    # GitHub Actions pipeline
 ├── .gitlab-ci.d/
-│   └── dynamic-alerting.yml     # GitLab CI pipeline
+│   └── dynamic-alerting.yml     # GitLab CI pipeline (the real stages / jobs)
+├── .gitlab-ci.yml               # GitLab root pipeline shell (one include line)
 ├── kustomize/
 │   ├── base/
 │   │   └── kustomization.yaml   # ConfigMap generator
@@ -97,6 +98,69 @@ your-repo/
 ├── .pre-commit-config.da.yaml   # Pre-commit hooks snippet
 └── .da-init.yaml                # Init marker (for upgrade detection)
 ```
+
+#### Why GitLab gets two files
+
+GitHub Actions auto-loads **every** workflow under `.github/workflows/`, so
+dropping that one file in place is enough. GitLab does not: a project auto-loads
+exactly one path, the repository-root `.gitlab-ci.yml`. A pipeline file anywhere
+else does not run until something `include:`s it — and it fails silently, because
+as far as GitLab is concerned it is just a file.
+
+So `da-tools init` also writes a root shell whose entire body is:
+
+```yaml
+# .gitlab-ci.yml
+include:
+  - local: .gitlab-ci.d/dynamic-alerting.yml
+```
+
+`stages:` and `variables:` from the included file are merged into this pipeline,
+so the shell restates nothing. The real pipeline stays in `.gitlab-ci.d/`, which
+keeps it separable from your own CI config and replaceable wholesale on upgrade.
+
+**If your repo already has a root `.gitlab-ci.yml`**, `da-tools init` does **not**
+touch it — overwriting would delete every job you run, and appending to a YAML
+document the tool never parsed is no safer. It prints what to paste in its closing
+summary; paste it into your existing `.gitlab-ci.yml` yourself.
+Until you do, the generated pipeline is perfectly valid YAML that never runs once.
+
+⚠️ **Follow what the tool actually prints, not the example below.** This shows
+the END STATE your file should reach; it is not a snippet to paste:
+
+```yaml
+include:
+  - local: .gitlab-ci.d/security.yml           # ← yours, already there
+  - local: .gitlab-ci.d/dynamic-alerting.yml   # ← this line is the new one
+```
+
+An existing file comes in more than one shape, and the safe edit differs per
+shape. `include:` is a top-level key, so a second one is a duplicate key and
+YAML keeps only one of them — pasting the whole block would **silently delete
+your own includes**. But `include:` also accepts a scalar (`include: 'a.yml'`),
+a flow sequence (`include: ['a.yml']`) and a single mapping, and under those
+three **adding a list item is a syntax error that stops your entire root
+pipeline from loading** — strictly worse than not wiring it at all.
+
+`da-tools init` tells these shapes apart (including "has an `include:` we
+cannot safely append to" and "the file does not parse") and prints the
+instruction that fits your file: a ready-made block when appending is provably
+safe, and otherwise the end-state example above for you to fit to your own
+document. The one thing it will not do is hand you paste-ready text for a file
+it has not inspected.
+
+#### The GitLab leg has no blast-radius step
+
+The GitHub artifact has a third stage (config-diff computes the blast radius and
+posts it as a PR comment). This one deliberately does not, and the reason is the
+image rather than your repository: GitLab runs `script:` **inside**
+`$DA_TOOLS_IMAGE`, and that image carries no `git`, so the baseline
+(`git archive <base>`) cannot be taken on this platform at all. A baseline that
+cannot be read does not look like "no changes" — it looks like "every tenant is
+new". Rather than ship a report nobody should trust, we ship none: a missing
+check is visible, a confidently wrong one is not. Tracked in
+[#1358](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1358); the plan to
+restore it is [#1444](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1444).
 
 ## 2. Three-Stage CI/CD Pipeline
 
@@ -121,6 +185,11 @@ graph LR
     end
     V1 --> V2 --> V3 --> G1 --> G2 --> G3 --> A1 --> A2 --> A3
 ```
+
+> ℹ️ The diagram shows the **GitHub Actions** artifact. **The GitLab artifact has
+> no Stage 2** — its image carries no `git`, so the comparison baseline cannot be
+> taken (see "The GitLab leg has no blast-radius step" in §1). It has two stages:
+> Validate and Apply.
 
 ### 2.2 Stage 1: Validate
 
@@ -463,5 +532,5 @@ over it (what you lose is the conflict detection).
 
 ---
 
-**Document version:** v2.7.0 — 2026-04-18
+**Document version:** v2.9.0
 **Maintainer:** Platform Engineering Team

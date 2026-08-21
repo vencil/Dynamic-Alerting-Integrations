@@ -306,5 +306,5 @@ cd ~ && rm -rf ~/da-lab
 
 ---
 
-**文件版本：** v2.7.0 — 2026-04-18
+**文件版本：** v2.9.0
 **維護者：** Platform Engineering Team
