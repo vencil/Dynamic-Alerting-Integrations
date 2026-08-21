@@ -570,6 +570,280 @@ class TestRepoSmoke:
         assert "warnings" in payload["summary"]
 
 
+class TestPlatformVersionSourceIsLoadBearing:
+    """#1480 — losing the source of truth must be loud, not silent.
+
+    (Surfaced during the #1447 sweep; it is maintainer-side, not one of
+    that issue's six customer-path items, so it is tracked separately.)
+
+    The platform version used to be read here by a local regex anchored on
+    ``## 專案概覽 (vX.Y.Z)``.  `abe27478` (2026-04-09) rewrote that heading
+    and moved the version to the line below; the regex stopped matching, and
+    because both of its consumers were guarded by ``if "platform" in
+    versions`` they simply stopped running.  The tool printed
+    ``platform:  v???`` and exited 0 for five releases (v2.7.0..v2.9.1).
+    """
+
+    @staticmethod
+    def _claude(tmp_path, body):
+        path = tmp_path / "CLAUDE.md"
+        path.write_bytes(body.encode("utf-8"))
+        return path
+
+    def test_reads_the_current_lead_in_line_spelling(self, tmp_path,
+                                                     monkeypatch):
+        claude = self._claude(tmp_path, (
+            "# CLAUDE.md\n\n## 專案概覽\n\n"
+            "**Multi-Tenant Dynamic Alerting 平台 (v3.4.5)** — ...\n"))
+        monkeypatch.setattr(mod, "DA_TOOLS_VERSION", tmp_path / "absent")
+        monkeypatch.setattr(mod, "CHART_YAML", tmp_path / "absent2")
+        monkeypatch.setattr(mod, "CLAUDE_MD", claude)
+        assert mod.read_source_versions().get("platform") == "3.4.5"
+
+    def test_still_reads_the_historical_inline_spelling(self, tmp_path,
+                                                        monkeypatch):
+        """Both spellings resolve, so moving the version again is survivable."""
+        claude = self._claude(tmp_path,
+                              "# CLAUDE.md\n\n## 專案概覽 (v3.4.5)\n\nBody\n")
+        monkeypatch.setattr(mod, "DA_TOOLS_VERSION", tmp_path / "absent")
+        monkeypatch.setattr(mod, "CHART_YAML", tmp_path / "absent2")
+        monkeypatch.setattr(mod, "CLAUDE_MD", claude)
+        assert mod.read_source_versions().get("platform") == "3.4.5"
+
+    def test_a_bare_version_below_the_heading_is_not_the_platform_version(
+            self, tmp_path, monkeypatch):
+        r"""⛔ Must-not-fire half of the two spellings above.
+
+        The inline pattern originally joined the heading text to `(v` with
+        `\s*`, and `\s` matches newlines — so a 'precise phrase' silently
+        spanned any number of blank lines and read a stray `(v9.9.9)`
+        further down the file as the platform version. The class is
+        horizontal-only now. Nothing in this module caught it; the existing
+        `check_frontmatter_versions` test did, once #1480 pointed both at
+        the same reader.
+        """
+        claude = self._claude(
+            tmp_path, "# CLAUDE.md\n\n## 專案概覽\n" + "\n" * 10 + "(v9.9.9)\n")
+        monkeypatch.setattr(mod, "DA_TOOLS_VERSION", tmp_path / "absent")
+        monkeypatch.setattr(mod, "CHART_YAML", tmp_path / "absent2")
+        monkeypatch.setattr(mod, "CLAUDE_MD", claude)
+        assert "platform" not in mod.read_source_versions()
+
+    def test_a_stray_product_line_above_the_heading_does_not_win(
+            self, tmp_path, monkeypatch):
+        """⛔ The search is anchored at the heading, not at the top of file.
+
+        An earlier revision searched the whole document because the product
+        name plus `(v` "cannot be satisfied by an unrelated mention". A
+        quoted release note above the heading satisfies it exactly, and the
+        reader this replaced was anchored — so the unanchored version was a
+        regression, justified by a property of that day's CLAUDE.md rather
+        than of the pattern.
+        """
+        claude = self._claude(tmp_path, (
+            "# CLAUDE.md\n\n"
+            "**Multi-Tenant Dynamic Alerting 平台 (v1.0.0)** — old release note\n\n"
+            "## 專案概覽\n\n"
+            "**Multi-Tenant Dynamic Alerting 平台 (v3.4.5)** — the real one\n"))
+        monkeypatch.setattr(mod, "DA_TOOLS_VERSION", tmp_path / "absent")
+        monkeypatch.setattr(mod, "CHART_YAML", tmp_path / "absent2")
+        monkeypatch.setattr(mod, "CLAUDE_MD", claude)
+        assert mod.read_source_versions().get("platform") == "3.4.5"
+
+    def test_a_toc_entry_cannot_move_the_anchor(self, tmp_path, monkeypatch):
+        """The anchor must be a heading line.
+
+        The reader this replaced anchored on *any* line containing 專案概覽,
+        so a table-of-contents entry hijacked it. Requiring `^#{1,6}` costs
+        nothing and removes that whole family.
+        """
+        claude = self._claude(tmp_path, (
+            "- [專案概覽](#overview)\n\n"
+            "**Multi-Tenant Dynamic Alerting 平台 (v1.0.0)** — stray\n\n"
+            "## 專案概覽\n\n"
+            "**Multi-Tenant Dynamic Alerting 平台 (v3.4.5)** — the real one\n"))
+        monkeypatch.setattr(mod, "DA_TOOLS_VERSION", tmp_path / "absent")
+        monkeypatch.setattr(mod, "CHART_YAML", tmp_path / "absent2")
+        monkeypatch.setattr(mod, "CLAUDE_MD", claude)
+        assert mod.read_source_versions().get("platform") == "3.4.5"
+
+    def test_no_overview_heading_yields_no_platform_key(
+            self, tmp_path, monkeypatch):
+        """No heading to anchor on ⇒ unreadable ⇒ the fail-closed path."""
+        claude = self._claude(tmp_path, (
+            "# CLAUDE.md\n\n"
+            "**Multi-Tenant Dynamic Alerting 平台 (v1.0.0)** — stray\n"))
+        monkeypatch.setattr(mod, "DA_TOOLS_VERSION", tmp_path / "absent")
+        monkeypatch.setattr(mod, "CHART_YAML", tmp_path / "absent2")
+        monkeypatch.setattr(mod, "CLAUDE_MD", claude)
+        assert "platform" not in mod.read_source_versions()
+
+    def test_reads_the_file_it_is_told_to_read(self, tmp_path, monkeypatch):
+        """⛔ The injection seam itself.
+
+        An earlier draft of this fix called the shared reader with no path
+        argument, so it read the *real* CLAUDE.md no matter what a test
+        injected — and the existing seam test kept passing for that reason
+        while testing nothing. Asserting a version this repository does not
+        have is what makes that impossible to repeat.
+        """
+        claude = self._claude(tmp_path, (
+            "# CLAUDE.md\n\n## 專案概覽\n\n"
+            "**Multi-Tenant Dynamic Alerting 平台 (v99.98.97)** — ...\n"))
+        monkeypatch.setattr(mod, "DA_TOOLS_VERSION", tmp_path / "absent")
+        monkeypatch.setattr(mod, "CHART_YAML", tmp_path / "absent2")
+        monkeypatch.setattr(mod, "CLAUDE_MD", claude)
+        assert mod.read_source_versions().get("platform") == "99.98.97"
+
+    def test_absent_anchor_yields_no_platform_key(self, tmp_path, monkeypatch):
+        claude = self._claude(tmp_path, "# CLAUDE.md\n\nNo overview heading.\n")
+        monkeypatch.setattr(mod, "DA_TOOLS_VERSION", tmp_path / "absent")
+        monkeypatch.setattr(mod, "CHART_YAML", tmp_path / "absent2")
+        monkeypatch.setattr(mod, "CLAUDE_MD", claude)
+        assert "platform" not in mod.read_source_versions()
+
+    def test_every_source_of_truth_fails_closed_not_just_the_platform_one(
+            self, tmp_path, monkeypatch, capsys):
+        """⛔ The generalisation itself, pinned.
+
+        The first fix guarded only `platform`, because `platform` was the key
+        the issue happened to name — while `if "tools" in versions` and
+        `if "exporter" in versions` sat two lines away, unguarded. Measured
+        then: one stray `v` in the da-tools VERSION file dropped the `tools`
+        key and took 161 errors down to 0 at rc=0.
+
+        ⚠️ Without this test the loop can be narrowed back to `["platform"]`
+        and every other test still passes — measured by mutation, that edit
+        SURVIVED. A guard that does not pin its own generality is one edit
+        away from the bug it replaced.
+
+        This is also the must-not-fire half: `platform` is readable here, so
+        it must NOT report a source failure.
+        """
+        claude = self._claude(tmp_path, (
+            "# CLAUDE.md\n\n## 專案概覽\n\n"
+            "**Multi-Tenant Dynamic Alerting 平台 (v3.4.5)** — ...\n"))
+        monkeypatch.setattr(mod, "CLAUDE_MD", claude)
+        # The shape that actually happens: a stray `v` the reader refuses.
+        bad = tmp_path / "VERSION"
+        bad.write_text("v9.9.9\n", encoding="utf-8")
+        monkeypatch.setattr(mod, "DA_TOOLS_VERSION", bad)
+        monkeypatch.setattr(mod, "CHART_YAML", tmp_path / "absent-chart.yaml")
+
+        versions = mod.read_source_versions()
+        assert "platform" in versions, versions
+        assert "tools" not in versions, versions
+        assert "exporter" not in versions, versions
+
+        monkeypatch.setattr(sys, "argv",
+                            ["validate_docs_versions", "--json", "--ci"])
+        with pytest.raises(SystemExit) as exc:
+            mod.main()
+        payload = json.loads(capsys.readouterr().out)
+        raised = {i["check"] for i in payload["issues"]
+                  if i["check"].endswith("-version-source")}
+        assert "tools-version-source" in raised, raised
+        assert "exporter-version-source" in raised, raised
+        assert "platform-version-source" not in raised, (
+            "platform was readable, so it must not report a source failure")
+
+        # ⛔ Key presence alone does not pin the guarantee. It would still
+        # hold if the dependent checks had ALSO run — against a guessed
+        # version. What the guarantee says is "they did not run, and that
+        # fact is loud", so assert the other half too. `da-tools-version`
+        # alone was 130 of the 161 errors that silently became 0 before this
+        # loop existed.
+        exclusive = sorted(i["check"] for i in payload["issues"]
+                           if i["check"] in ("da-tools-version",
+                                             "release-tag-version",
+                                             "exporter-version"))
+        assert not exclusive, (
+            "checks comparing against an unreadable source must not run at "
+            "all; these did: %s" % exclusive)
+        # `mkdocs-extra-version` is ONE check id covering all three keys, so
+        # it legitimately still runs here — for `platform`, which is readable
+        # in this fixture. ⚠️ Asserting it away wholesale would have been a
+        # loosening dressed as a fix; assert instead that neither unreadable
+        # key produced a row under it.
+        mkdocs_rows = [i["message"] for i in payload["issues"]
+                       if i["check"] == "mkdocs-extra-version"]
+        assert not [m for m in mkdocs_rows
+                    if "tools_version" in m or "exporter_version" in m], (
+            "mkdocs rows were emitted for an unreadable source: %s"
+            % mkdocs_rows)
+        assert payload["summary"]["errors"] >= len(raised), payload["summary"]
+        # ⚠️ Deliberately no `errors == baseline + len(raised)`: losing a
+        # source also REMOVES whatever its dependants were reporting, so the
+        # delta is not a constant. The sibling test below pins the exit-code
+        # causation differentially; this one pins the skip-vs-report half.
+        assert exc.value.code != 0, (
+            "an unreadable source of truth must not exit 0 under --ci")
+
+    @staticmethod
+    def _run_json(monkeypatch, capsys, ci=True):
+        """Run main() with --json, return (payload, exit_code_or_None)."""
+        argv = ["validate_docs_versions", "--json"] + (["--ci"] if ci else [])
+        monkeypatch.setattr(sys, "argv", argv)
+        code = None
+        try:
+            mod.main()
+        except SystemExit as exc:
+            code = exc.value if not isinstance(exc, SystemExit) else exc.code
+        return json.loads(capsys.readouterr().out), code
+
+    def test_unreadable_source_is_an_error_not_a_skip(self, tmp_path,
+                                                      monkeypatch, capsys):
+        """The whole point: no platform version ⇒ an ERROR, not a silent skip.
+
+        ⛔ The exit-code half is asserted **differentially**, against a control
+        run on the same tree with a readable CLAUDE.md. A bare
+        `assert exit_code != 0` would pass whenever the repository happens to
+        hold any unrelated error, so it proves nothing about this issue —
+        raised by CodeRabbit on #1493, and correct. Subtracting the control
+        cancels whatever unrelated errors exist, in either direction: this
+        stays honest on a dirty tree and does not go red because of one.
+        """
+        # Control first: the real CLAUDE.md, same tree, same checks.
+        before, _ = self._run_json(monkeypatch, capsys)
+        assert not [i for i in before["issues"]
+                    if i["check"].endswith("-version-source")], before["summary"]
+        baseline_errors = before["summary"]["errors"]
+
+        claude = self._claude(tmp_path, "# CLAUDE.md\n\nNo overview heading.\n")
+        monkeypatch.setattr(mod, "CLAUDE_MD", claude)
+        after, code = self._run_json(monkeypatch, capsys)
+
+        sources = [i for i in after["issues"]
+                   if i["check"] == "platform-version-source"]
+        assert sources, "no platform-version-source issue was raised"
+        assert sources[0]["severity"] == "error"
+        # The delta is exactly the source failures — the dependent checks did
+        # not quietly contribute (or suppress) anything else.
+        assert after["summary"]["errors"] == baseline_errors + len(sources), (
+            "errors moved by something other than the source failure: "
+            "%s -> %s" % (baseline_errors, after["summary"]["errors"]))
+        assert code not in (0, None), (
+            "--ci must exit non-zero once the source of truth is unreadable")
+
+    def test_readable_source_raises_no_such_error(self, monkeypatch, capsys):
+        """⛔ Must-tolerate control.
+
+        A check that only ever fires cannot be told apart from one wired to
+        fire unconditionally; this runs against the real CLAUDE.md, which
+        does carry a platform version.
+        """
+        monkeypatch.setattr(sys, "argv", ["validate_docs_versions", "--json"])
+        try:
+            mod.main()
+        except SystemExit:
+            pass
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["source_of_truth"]["platform"], (
+            "the real CLAUDE.md should yield a platform version")
+        assert not [i for i in payload["issues"]
+                    if i["check"] == "platform-version-source"]
+
+
 # ============================================================
 # check_release_tag_currency (TB-F1 class — release-tag forms)
 # ============================================================

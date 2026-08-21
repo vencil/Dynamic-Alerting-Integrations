@@ -54,7 +54,6 @@ from _version_patterns import (
     SCENARIO_COUNT_PATTERNS,
     BILINGUAL_PAIR_PATTERN,
     BILINGUAL_NUMBER_PATTERNS,
-    PLATFORM_VERSION_PATTERN,
     DA_TOOLS_VERSION_PATTERN,
     EXPORTER_VERSION_PATTERN,
     MKDOCS_EXTRA_CHECKS,
@@ -82,11 +81,39 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_VIOLATION  # noqa: E402
+from _lib_versions import read_platform_version  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
 # Read source of truth
 # ---------------------------------------------------------------------------
+
+# Which module-level constant each source of truth is read from.
+#
+# ⛔ The constant NAME, not a second copy of the path. Retyping the path
+# gives one file two declarations that drift apart, and the failure message
+# would then name a file the reader never opened — the exact class of stale
+# description this change set exists to remove. (CodeRabbit raised this on
+# #1493; the first draft did retype all three paths.)
+#
+# Resolved lazily through globals() so that tests which monkeypatch the
+# constants still see the path they injected.
+_SSOT_SOURCE_ATTRS = {
+    "platform": "CLAUDE_MD",
+    "tools": "DA_TOOLS_VERSION",
+    "exporter": "CHART_YAML",
+}
+
+
+def _ssot_source_label(key: str) -> str:
+    """Repo-relative path of the file *key* is read from, for the message."""
+    path = globals().get(_SSOT_SOURCE_ATTRS.get(key, ""))
+    if path is None:
+        return "(unknown source)"
+    try:
+        return Path(path).resolve().relative_to(REPO_ROOT).as_posix()
+    except (ValueError, OSError):
+        return str(path)
 
 def read_source_versions() -> Dict[str, str]:
     """Read version numbers from source-of-truth files."""
@@ -105,12 +132,28 @@ def read_source_versions() -> Dict[str, str]:
         if m:
             versions["exporter"] = m.group(1)
 
-    # Platform version from CLAUDE.md
-    if CLAUDE_MD.exists():
-        content = CLAUDE_MD.read_text(encoding="utf-8")
-        m = re.search(PLATFORM_VERSION_PATTERN, content)
-        if m:
-            versions["platform"] = m.group(1)
+    # Platform version from CLAUDE.md.
+    #
+    # #1480: this used to be a fourth local regex (`PLATFORM_VERSION_PATTERN`,
+    # anchored on `專案概覽 (vX.Y.Z)`). It went dead on 2026-04-09 when
+    # `abe27478` — a chore commit about phantom locks, nothing to do with
+    # version governance — rewrote that heading to a bare `## 專案概覽` and
+    # moved the version into the bold lead-in line below it. Nothing said so:
+    # both consumers were guarded by `if "platform" in versions`, so they
+    # simply stopped running while this tool kept printing `platform: v???`
+    # and exiting 0. That held across v2.7.0, v2.8.0, v2.8.1, v2.9.0 and
+    # v2.9.1 — five tagged platform releases, roughly four and a half
+    # months. Measured damage: `tests/e2e/package.json` froze at 2.6.0,
+    # the exact version at which the gate stopped being able to see it.
+    #
+    # `_lib_versions.read_platform_version` already reads the current shape
+    # and is what the doc-map / tool-map generators use, so this defers to it
+    # instead of maintaining yet another copy of the same lookup. The explicit
+    # empty default keeps "could not read it" distinguishable — its own
+    # fallback would otherwise hand back a stale release string.
+    platform = read_platform_version(default="", claude_md=CLAUDE_MD)
+    if platform:
+        versions["platform"] = platform.lstrip("v")
 
     return versions
 
@@ -406,7 +449,16 @@ def check_release_tag_currency(tools_expected: str,
 
 
 def check_platform_version(expected: str) -> List[Issue]:
-    """Check frontmatter version: fields and inline version references."""
+    """Check the platform version in `docs/**/*.md` and `docs/**/*.jsx`
+    frontmatter.
+
+    ⚠️ The old one-liner ("and inline version references") over-stated
+    the scope: both scans are `re.match` on
+    `PLATFORM_VERSION_FRONTMATTER_PATTERN`, which is line-anchored to a
+    `version:` key. Nothing here looks at prose. #1480 copied that stale
+    sentence into a CHANGELOG entry before catching it, which is what a
+    docstring describing an intention rather than the code costs.
+    """
     issues = []
 
     # Scan all docs/**/*.md frontmatter
@@ -1116,6 +1168,36 @@ def main():
             versions["tools"], versions.get("exporter")))
     if "platform" in versions:
         all_issues.extend(check_platform_version(versions["platform"]))
+    # ⛔ Fail-closed on EVERY source of truth, not just the one #1480 named.
+    #
+    # The key set is DERIVED from `MKDOCS_EXTRA_CHECKS` (the existing
+    # declaration of "these are the versions this tool knows about") rather
+    # than retyped here, so a fourth SSOT added there is covered on the day
+    # it lands instead of quietly joining the fail-open set.
+    #
+    # Measured before this loop existed: writing `v2.9.0` instead of `2.9.0`
+    # into `components/da-tools/app/VERSION` — one extra character, a
+    # release-day typo — made `read_source_versions()` drop the `tools` key,
+    # which silently switched off `check_da_tools_version`,
+    # `check_release_tag_currency` and the mkdocs `tools_version` row: **161
+    # errors became 0 and the tool exited 0**. Only `platform` had a guard,
+    # because `platform` was the key the issue happened to name.
+    #
+    # ⛔ The message deliberately does NOT list which checks were skipped.
+    # An earlier version did, named two of them, and was already wrong — the
+    # platform version has three consumers, not two. A list of dependants is
+    # a description that rots silently every time someone adds one; "every
+    # check that compares against it" cannot.
+    for _ssot_key in sorted({_key for _, _key in MKDOCS_EXTRA_CHECKS}):
+        if _ssot_key in versions:
+            continue
+        all_issues.append(Issue(
+            f"{_ssot_key}-version-source", "error",
+            _ssot_source_label(_ssot_key), 0,
+            f"could not read the {_ssot_key} version from its source of "
+            f"truth, so every check that compares against it was skipped "
+            f"rather than run. Fix the reader; do not remove this error."))
+
     all_issues.extend(check_rule_pack_counts(rule_counts))
     all_issues.extend(check_bilingual_badge(bilingual_pairs))
     all_issues.extend(check_roadmap_changelog_overlap())

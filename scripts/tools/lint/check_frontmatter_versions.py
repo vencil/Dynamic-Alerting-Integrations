@@ -24,6 +24,9 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import write_text_secure  # noqa: E402
 from _lib_exitcodes import EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_versions import (  # noqa: E402
+    read_platform_version as _read_shared_platform_version,
+)
 
 # ---------------------------------------------------------------------------
 # Repo root detection
@@ -70,42 +73,28 @@ class DriftItem:
 
 
 def read_platform_version() -> Optional[str]:
-    """Read the platform version from CLAUDE.md.
+    """Read the platform version from CLAUDE.md, without the ``v`` prefix.
 
-    Supports two header formats seen across the project's history:
+    Delegates to :func:`_lib_versions.read_platform_version`, which is the
+    reader the doc-map / tool-map generators and the ``version-consistency``
+    hook all share. ``None`` when CLAUDE.md is missing or neither spelling
+    matches — the caller decides how to report that.
 
-    1. Inline (early format, still used in unit tests)::
-
-           ## 專案概覽 (v2.0.0)
-
-    2. Body (current format, see CLAUDE.md v2.6.0+)::
-
-           ## 專案概覽
-
-           **Multi-Tenant Dynamic Alerting 平台 (v2.6.0)** — ...
-
-    The function anchors on the first line containing ``專案概覽`` and
-    scans that line plus up to 5 following lines for a ``(vX.Y.Z[...])``
-    token, returning the first match. Matching a few lines beyond the
-    heading keeps the inline case trivial while supporting the body case
-    where the version sits in a bold-wrapped tagline under the heading.
+    ⛔ This used to be a fourth private copy of the same lookup, and it read
+    CLAUDE.md the looser of the two this change collapses: anchor on the
+    first line
+    containing ``專案概覽``, then scan that line plus five more for a
+    ``(vX.Y.Z)`` token. That shape trades one expiry date for three — an
+    earlier mention of 專案概覽 (a table of contents entry, a cross-reference)
+    wins the anchor; an admonition under the heading pushes the real lead-in
+    out of the window; and ``[^)]*`` swallows any prose sharing the
+    parentheses. It happened to be correct on the CLAUDE.md of the day, which
+    is exactly how #1480's sibling copy stayed broken for five releases
+    without anyone noticing. The shared reader matches two *precise* phrases
+    instead, so distance to the heading stops mattering.
     """
-    if not CLAUDE_MD.exists():
-        return None
-    lines = CLAUDE_MD.read_text(encoding="utf-8").splitlines()
-    version_re = re.compile(r"\(v([0-9]+\.[0-9]+\.[0-9]+[^)]*)\)")
-    for i, line in enumerate(lines):
-        if "專案概覽" in line:
-            # Scan the anchor line and the next 5 lines.
-            for scan_line in lines[i:i + 6]:
-                m = version_re.search(scan_line)
-                if m:
-                    return m.group(1)
-            # Anchor found but no version nearby — do not keep scanning
-            # the rest of the file; bail out so we don't pick up an
-            # unrelated `(vX.Y.Z)` elsewhere in the document.
-            return None
-    return None
+    return _read_shared_platform_version(
+        default="", claude_md=CLAUDE_MD).lstrip("v") or None
 
 
 def extract_frontmatter(file_path: Path) -> FrontmatterInfo:

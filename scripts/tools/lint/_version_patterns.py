@@ -133,8 +133,13 @@ BILINGUAL_NUMBER_PATTERNS: List[Tuple[str, str]] = [
 # Source-of-truth pattern extraction
 # ============================================================================
 
-# Platform version extraction from CLAUDE.md
-PLATFORM_VERSION_PATTERN = r"專案概覽 \(v([0-9]+\.[0-9]+[^)]+)\)"
+# Platform version extraction from CLAUDE.md — REMOVED in #1480.
+#
+# This was a second copy of the lookup, pinned to the pre-v2.6.0 inline
+# spelling; it silently stopped matching for five releases while its only
+# consumer kept exiting 0. ⛔ Do not reintroduce it: the reader is
+# `_lib_versions.read_platform_version`, which the doc-map / tool-map
+# generators and this module now share. Details in issue #1480.
 
 # da-tools version extraction from VERSION file
 DA_TOOLS_VERSION_PATTERN = r"^[0-9]+\.[0-9]+\.[0-9]+"

@@ -305,11 +305,13 @@ class TestReadPlatformVersion:
         # Must not match the stray (v9.9.9) — anchor-less.
         assert cfv.read_platform_version() is None
 
-    def test_version_beyond_window(self, tmp_path, monkeypatch):
-        """Version too far from the 專案概覽 anchor is ignored.
+    def test_a_bare_version_near_the_heading_is_not_the_platform_version(
+            self, tmp_path, monkeypatch):
+        """A stray version-shaped token under the anchor must not be read.
 
-        Prevents accidentally picking up an unrelated ``(vX.Y.Z)`` that
-        appears much later in the file (e.g. in a changelog snippet).
+        The reader requires a precise phrase, so distance to the heading is
+        irrelevant — which is the point: the previous implementation scanned
+        six lines past the anchor and would have taken this one.
         """
         claude = tmp_path / "CLAUDE.md"
         claude.write_text(
