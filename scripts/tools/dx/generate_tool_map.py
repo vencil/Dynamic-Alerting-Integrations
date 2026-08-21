@@ -21,8 +21,14 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 sys.path.insert(0, str(SCRIPT_DIR.parent))
 from _atomic_write import atomic_write_text  # noqa: E402
-from _lib_exitcodes import EXIT_VIOLATION  # noqa: E402
-from _lib_versions import read_platform_version  # noqa: E402
+from _lib_exitcodes import (  # noqa: E402
+    EXIT_CALLER_ERROR,
+    EXIT_VIOLATION,
+)
+from _lib_versions import (  # noqa: E402
+    PlatformVersionUnreadable,
+    require_platform_version,
+)
 
 REPO_ROOT = SCRIPT_DIR.parent.parent.parent
 TOOLS_ROOT = REPO_ROOT / "scripts" / "tools"
@@ -126,7 +132,17 @@ def gather_tools() -> dict:
 def generate_tool_map(categorized: dict, lang: str = "zh") -> str:
     """Generate tool-map.md content."""
     headers = CATEGORY_HEADERS[lang]
-    platform_version = read_platform_version()
+    # ⛔ #1480: a generator must not stamp a guessed version. The
+    # shared reader's default is a hard-coded release string that
+    # nothing updates, so a broken anchor would silently write a
+    # stale `version:` into this file's frontmatter — the very field
+    # `check_platform_version` validates. Fail with one line and the
+    # caller-error code instead of a traceback.
+    try:
+        platform_version = require_platform_version()
+    except PlatformVersionUnreadable as exc:
+        print("ERROR: %s" % exc, file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
 
     if lang == "en":
         lines = [

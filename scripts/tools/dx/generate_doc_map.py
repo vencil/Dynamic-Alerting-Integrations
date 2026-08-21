@@ -31,8 +31,14 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_versions import read_platform_version  # noqa: E402
-from _lib_exitcodes import EXIT_VIOLATION  # noqa: E402
+from _lib_versions import (  # noqa: E402
+    PlatformVersionUnreadable,
+    require_platform_version,
+)
+from _lib_exitcodes import (  # noqa: E402
+    EXIT_CALLER_ERROR,
+    EXIT_VIOLATION,
+)
 
 REPO_ROOT = SCRIPT_DIR.parent.parent.parent
 DOC_MAP_ZH = REPO_ROOT / "docs" / "internal" / "doc-map.md"
@@ -381,7 +387,17 @@ def gather_docs(lang: str = "zh", include_adr: bool = False) -> list:
 def generate_doc_map(lang: str = "zh", include_adr: bool = False) -> str:
     """Generate the full doc-map content."""
     entries = gather_docs(lang, include_adr=include_adr)
-    platform_version = read_platform_version()
+    # ⛔ #1480: a generator must not stamp a guessed version. The
+    # shared reader's default is a hard-coded release string that
+    # nothing updates, so a broken anchor would silently write a
+    # stale `version:` into this file's frontmatter — the very field
+    # `check_platform_version` validates. Fail with one line and the
+    # caller-error code instead of a traceback.
+    try:
+        platform_version = require_platform_version()
+    except PlatformVersionUnreadable as exc:
+        print("ERROR: %s" % exc, file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
 
     if lang == "en":
         lines = [
