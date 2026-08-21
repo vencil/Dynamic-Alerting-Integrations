@@ -45,18 +45,34 @@ job logs ──parse_logs.py──▶ raw_samples.json + nights.json   ← 中�
 ```bash
 python3 -B docs/internal/audit-reports/bench-trend-2026-08/counterfactual.py
 # --tool PATH   改驗別份 analyze_bench_history.py（預設 scripts/tools/dx/ 那份）
-# --skip-slow   跳過 check 3（injection sweep，最耗時的一項）
+# --skip-slow   跳過 check 3（HEAD 比對用的 injection sweep）；check 4 仍會跑
 ```
+
+⚠️ **「最耗時的一項」這個舊敘述已經不對了。** 實測（同一次執行內逐項計時）：
+`check1 0.00s / check2 0.00s / check3 0.53s / check4 2.13s` —— check 4 才是最貴的。
+它仍留在快速模式裡是刻意的：整套跑完不到 3 秒，而 check 4 是**唯一**會碰關票路徑的檢查，
+用它換 2 秒不划算。（PR #1496 的 review 建議 `--skip-slow` 一併跳過 check 4；前提「check 4
+比 check 3 貴」實測**成立**，但結論不採——理由是絕對成本，見上。）
 
 `-B` 不是裝飾：harness 會載入兩份同名模組（工作區版 + `git show HEAD` 版），
 stale `.pyc` 會讓你比到錯的東西。同一個坑的完整說明見
 [`testing-playbook.md` §Mutation harness](../../testing-playbook.md)。
 
-三項檢查（現況全 PASS）：
+四項檢查（現況全 PASS）：
 
 1. **`#1396` 窗口不發射** —— `today=2026-08-12` 應為 `INCONCLUSIVE`、`findings=0`
 2. **零誤報** —— 17 個窗口的 false-positive bench-nights 為 0
 3. **偵測面未漂移** —— 工作區版與 `HEAD` 版在 17 個乾淨窗口 + 240 個 +20% 注入情境上輸出**逐位元相同**
+4. **關票路徑** —— 逐夜驅動 `run_trend_watch`，把每夜 render 出的 body 當下一夜的 issue body 餵回，量「永久退化的票會不會被自動關掉」
+
+⛔ **檢查 1–3 完全沒有碰關票路徑**，而在檢查 4 之前，本檔的 docstring 卻寫著它「calls
+`analyze_trend` / `run_trend_watch` directly」——`run_trend_watch` 在整份檔案裡只出現在那句
+docstring。一個沒有實作的檢查被描述成有，比沒有這個檢查更糟；更正留在檔頭而不是靜默改掉。
+
+檢查 4 的現況數字是 **120/120**（開票後仍有 ≥10 夜可觀察的情境全部被誤關，開票→關票中位 6 夜、
+最長 9 夜），與 ADR-032 引用的數字一致——但那個數字原本出自一支已遺失的 scratchpad harness，
+這裡是**從程式碼重新量出來的**。⚠️ 基準線是 100% 時這個棘輪**沒有牙齒**：沒有「更糟」可抓，
+今天它只會在 harness 自檢失敗、關票落在 runway 之外、或情境母體改變時 FAIL。
 
 ⚠️ **第 3 項證明的是「沒變差」，不是「偵測力有多少」。**
 改動偵測面（fire 算式）時它**應該**要 FAIL——那時要換的是重新論證，不是把這項刪掉。
@@ -72,16 +88,22 @@ stale `.pyc` 會讓你比到錯的東西。同一個坑的完整說明見
 **新 harness 上線前先讓它對一個已知會 fire 的輸入產出 fire**，再相信它的統計。
 
 本檔的反面驗證（對**這份 committed 版本**現場重跑，非沿用舊結論）：把 `analyze_trend` 的
-分層判定改成永遠走未分層退路——即扣掉「記錄主機類別」之前的行為——三項全部轉紅：
+分層判定改成永遠走未分層退路——即扣掉「記錄主機類別」之前的行為——四項全部轉紅：
 
 ```text
 [FAIL] 1  today=2026-08-12  status=FINDINGS  findings=5   (同類夜 14/14，因為所有夜都算同類)
 [FAIL] 2  17 windows, 17 evaluable, false-positive bench-nights=15
 [FAIL] 3  clean replay: DIFFERS;  +20% injection sweep: DIFFERS
-0/3 PASS
+[FAIL] 4  MIS-CLOSED 81/120（baseline 120/120）；self-check: clean series opens nothing = False
+0/4 PASS
 ```
 
-所以「三項 PASS」是有訊息量的證據，不是恆真式。
+所以「四項 PASS」是有訊息量的證據，不是恆真式。
+
+⭐ **第 4 項紅的方式值得單獨記**：它的誤關率在這個突變下**下降**到 81/120——只看棘輪
+（`81 ≤ 120`）會判成通過，甚至看起來像「關票路徑變好了」。真正把它擋下來的是**自檢**：
+未分層之後乾淨序列開始開假票，`clean series opens nothing` 變成 `False`。一個只有比率、
+沒有自檢的版本，會在偵測器變糟的同一刻回報「改善」。
 （上面的 5 / 15 是**這組窗口**下的量測值；不要和 #1431 PR body 引用的數字互相代換，
 那是另一組窗口組態下量的。）
 
