@@ -32,6 +32,13 @@ Two things a caller can do — pick deliberately, never by accident:
 `tests/shared/test_confd_enumeration_contract.py` enforces that every tool
 reading a tenant config dir does one or the other — a new tool cannot
 quietly join the silent-zero class.
+
+Alongside those, `unusable_config_paths(dir)` (#1469) answers the question
+`iter_config_files` deliberately does not: what did it DROP that the
+operator will still call configuration — a directory named `beta.yaml`, a
+broken symlink, a file it cannot read. Every reader should name those; the
+selection being shared is what stops two readers reaching two verdicts,
+and this is what stops "shared" from meaning "equally silent".
 """
 
 from __future__ import annotations
@@ -46,6 +53,8 @@ __all__ = [
     "nested_yaml_files",
     "nested_yaml_warning",
     "reset_warned_for_test",
+    "unusable_config_paths",
+    "unusable_reason",
     "warn_nested",
 ]
 
@@ -102,6 +111,87 @@ def iter_config_files(config_dir: str | os.PathLike[str], *, recursive: bool = T
                 found.append(Path(dirpath) / fn)
     for p in sorted(found, key=lambda q: q.relative_to(root).as_posix()):
         yield p
+
+
+def _is_readable_file(p: Path) -> bool:
+    """Can this path be opened and read as a file, right now?"""
+    try:
+        return p.is_file() and os.access(p, os.R_OK)
+    except OSError:
+        return False
+
+
+def unusable_reason(p: Path) -> str:
+    """Why `p` is not usable as a config file — one short clause.
+
+    Split out so the two readers phrase the same finding the same way; a
+    reader that invented its own wording would put a second answer to
+    "what happened to beta.yaml" in front of the operator.
+    """
+    try:
+        if p.is_dir():
+            return "is a directory, not a config file"
+        if p.is_symlink() and not p.exists():
+            return "is a broken symlink"
+        if p.exists() and not os.access(p, os.R_OK):
+            return "is not readable (permission denied)"
+    except OSError as e:  # noqa: BLE001 — surfacing the errno IS the answer
+        return f"could not be stat'ed — {e.__class__.__name__}: {e.strerror}"
+    return "is not a readable file"
+
+
+def unusable_config_paths(
+    config_dir: str | os.PathLike[str], *, recursive: bool = True,
+) -> list[Path]:
+    """Paths NAMED like a config file that are not a readable config file.
+
+    Sibling of `iter_config_files`, and the reason it can stay simple.
+    `iter_config_files` answers "what should I read"; anything it drops
+    disappears without a trace, which is fine for `notes.txt` and wrong
+    for a *directory* called `beta.yaml` (an interrupted `mkdir`, a bad
+    merge, a ConfigMap projected as a dir), a broken symlink, or a file
+    with no read permission. Those look like configuration to the operator
+    who put them there, so silence reads as "your config is fine".
+
+    Measured before this existed (#1469): `_grar_parse._parse_config_files`
+    listed the directory, tried to `open()` it and reported
+    `WARN: skip beta.yaml`, while `check_yaml_syntax` — walking the same
+    tree through `iter_config_files` — never saw it at all. Two readers,
+    two answers. Unifying the *selection* alone would have settled that by
+    making BOTH silent, i.e. one signal fewer than before; this function is
+    the half that keeps the signal, so both readers can name the path.
+
+    `recursive` mirrors `iter_config_files` exactly, so a caller gets the
+    unusable set for the same tree it just read — recursive for
+    `validate-config`, flat for the routing parser (ADR-016 hierarchy is
+    reported separately by `warn_nested`).
+
+    Sorted by POSIX relative path, the same promise `iter_config_files`
+    makes, so a report can interleave the two lists deterministically.
+
+    ⚠️ The permission case is only observable when the process is NOT
+    root: `os.access` reports success for mode-000 files under uid 0.
+    Directories and broken symlinks are detected regardless.
+    """
+    root = Path(config_dir)
+    if not root.is_dir():
+        return []
+    found: list[Path] = []
+    if not recursive:
+        for p in sorted(root.iterdir(), key=lambda q: q.name):
+            if _is_config(p.name) and not _is_readable_file(p):
+                found.append(p)
+        return found
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames if not _is_hidden(d))
+        # Directories first: a config-named DIRECTORY is the case that made
+        # this function necessary, and `os.walk` never puts it in filenames.
+        for name in list(dirnames) + list(filenames):
+            p = Path(dirpath) / name
+            if _is_config(name) and not _is_readable_file(p):
+                found.append(p)
+    found.sort(key=lambda q: q.relative_to(root).as_posix())
+    return found
 
 
 def nested_yaml_files(config_dir: str | os.PathLike[str]) -> list[Path]:
