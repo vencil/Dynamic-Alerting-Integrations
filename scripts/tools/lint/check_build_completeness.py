@@ -317,8 +317,9 @@ def check_layout_depth_assumptions(
 
     ⇒ **今天出貨檔裡確實還有第 3+4 條合起來造成的活體漏網**（`_registry_lib`
     與 `_observed_map_lib` 各一處 ``_THIS_DIR`` + 三個 ``".."``）。修法與這些
-    盲點的收口一起放在後續票，刻意不夾帶進 #1494——理由是本規則每被加固一
-    輪就製造新的缺陷，而真正與拼法無關的守衛是上面那支行為測試。
+    盲點的收口一起放在 **issue 1503**（那兩處程式碼本身是 **issue 1501**），
+    刻意不夾帶進 #1494——理由是本規則每被加固一輪就製造新的缺陷，而真正與
+    拼法無關的守衛是上面那支行為測試。
 
     ⚠️ **本規則在 CI 的執行點是 pytest twin，不是 pre-commit hook。**
     ``build-completeness-check`` 掛在 ``.pre-commit-config.yaml``，而沒有任何
@@ -327,7 +328,7 @@ def check_layout_depth_assumptions(
     （``test_actual_repo_has_no_depth_assumptions`` 與 ``TestRepoSmoke``），
     它們住在 ``tests/`` 底下由 ``python-tests-run`` 帶到。後果是：只加在 hook
     側、twin 沒跟上的新規則在 CI 是零覆蓋。把 hook 也接進 Lint job 一併留在
-    後續票。
+    **issue 1503**。
 
     Returns:
         list of (severity, message) tuples
