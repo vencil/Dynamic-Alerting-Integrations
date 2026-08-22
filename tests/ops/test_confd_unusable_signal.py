@@ -261,3 +261,63 @@ def test_diagnose_shares_the_selection_predicate(confd_with_dir_named_yaml):
     assert "beta.yaml" in accounted
     assert "beta.yaml" not in shared
     assert shared == ["_defaults.yaml", "acme.yaml"]
+
+
+# ── the two remaining silent paths in `resolve_inheritance_chain` ────────
+#
+# Coverage showed these two `_skip` calls untested. They are not filler:
+# each is a distinct way for the chain to come back short, and #1468 is
+# precisely "the chain came back short and nothing said why". An untested
+# signal path is one refactor away from being silent again.
+
+
+def test_diagnose_names_a_tenant_file_that_is_not_a_mapping(tmp_path: pathlib.Path):
+    """A bare YAML list parses fine and then has no `tenants:` to read.
+
+    Distinct from the unparseable case: nothing raises, so an early version
+    of this loop would simply move on and hand back a chain missing its
+    tenant layer — the #1468 symptom exactly, reached by a different door.
+    """
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    (root / "_defaults.yaml").write_text(
+        "defaults:\n  mysql_threads_running: 80\n", encoding="utf-8")
+    (root / "acme.yaml").write_text("- not\n- a\n- mapping\n", encoding="utf-8")
+
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        chain = diagnose.resolve_inheritance_chain("acme", str(root))
+
+    assert "WARN: skip acme.yaml" in err.getvalue()
+    assert "top level must be a mapping" in err.getvalue()
+    assert "list" in err.getvalue()
+    assert chain["skipped_unusable_files"] == ["acme.yaml"]
+
+
+def test_diagnose_names_an_unreadable_profiles_file(tmp_path: pathlib.Path):
+    """`_profiles.yaml` is the profile layer's only source.
+
+    If it cannot be parsed the chain silently loses that layer, and the
+    tenant's `_profile` reference resolves to nothing. The tenant file here
+    is deliberately VALID so the only thing wrong is the profiles file —
+    otherwise this test would pass for the wrong reason.
+    """
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    (root / "_defaults.yaml").write_text(
+        "defaults:\n  mysql_threads_running: 80\n", encoding="utf-8")
+    (root / "acme.yaml").write_text(
+        "tenants:\n  acme:\n    _profile: gold\n    mysql_threads_running: 90\n",
+        encoding="utf-8")
+    (root / "_profiles.yaml").write_text(
+        "profiles:\n  gold: [unclosed\n", encoding="utf-8")
+
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        chain = diagnose.resolve_inheritance_chain("acme", str(root))
+
+    assert "WARN: skip _profiles.yaml" in err.getvalue()
+    assert chain["skipped_unusable_files"] == ["_profiles.yaml"]
+    # Control: the tenant layer is intact, so the caveat is about the
+    # profiles file alone and not a side effect of a broken tenant file.
+    assert "tenant" in [c["layer"] for c in chain["chain"]]
