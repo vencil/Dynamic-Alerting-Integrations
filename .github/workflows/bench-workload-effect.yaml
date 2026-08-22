@@ -104,6 +104,12 @@ on:
         description: "-test.benchtime per benchmark (the nightly uses 3s). Empty falls back to bench_interleave.sh's default of 3s."
         required: false
         default: '3s'
+      # ⛔ SSOT 是 `.github/bench-reference.yaml` 的 `workload_closure.helpers`。
+      # 這裡的字面值無法消除——workflow_dispatch 的 `default:` 必須是字面字串，
+      # GitHub Actions 不在那裡求值 `${{ }}`，而這個 input 正是本 workflow 用來
+      # 變動範圍的實驗旋鈕。改由 pre-commit 的 `workload-closure-drift` 擋住兩邊
+      # 分岔：漏掉的 helper 會綁在參考版本那側，W 變混血樹而畫面上看不出來，
+      # 且下游的封閉性探測抓不到它。
       overlay_helpers:
         description: "Extra test files to overlay besides *bench_test.go (space-separated, relative to app/). The default is the measured dependency closure. Empty = bench files only, which yields a HYBRID tree - the closure probe will say so."
         required: false

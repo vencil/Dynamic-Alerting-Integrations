@@ -414,6 +414,9 @@
   "scripts/tools/lint/check_workflow_git_push_permissions.py": [
    "tests/lint/test_check_workflow_git_push_permissions.py"
   ],
+  "scripts/tools/lint/check_workload_closure_drift.py": [
+   "tests/lint/test_check_workload_closure_drift.py"
+  ],
   "scripts/tools/lint/detect_sed_damage.py": [
    "tests/lint/test_detect_sed_damage.py"
   ],
@@ -732,7 +735,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "6da30b382766d8cab369497aebddc997ffa51de86575a2bb14c2730618c509cb",
+ "source_digest": "a1c8247d5401391099bdc214f2698a60986088d28f49040091b985b82979a1ce",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -889,6 +892,7 @@
   "tests/lint/test_check_vmalert_coverage.py",
   "tests/lint/test_check_window_x_no_fallback.py",
   "tests/lint/test_check_workflow_git_push_permissions.py",
+  "tests/lint/test_check_workload_closure_drift.py",
   "tests/lint/test_counterexample_coverage.py",
   "tests/lint/test_detect_sed_damage.py",
   "tests/lint/test_docs_yaml_split_parity.py",
@@ -1078,6 +1082,10 @@
   ".github/CODEOWNERS": [
    "tests/dx/test_generate_rule_pack_stats_injection.py"
   ],
+  ".github/bench-reference.yaml": [
+   "tests/lint/test_check_workload_closure_drift.py",
+   "tests/shared/test_bilingual_help_contract.py"
+  ],
   ".github/custom-rule-policy.yaml": [
    "tests/ops/test_lint_custom_rules.py"
   ],
@@ -1090,6 +1098,9 @@
    "tests/ops/test_init_project.py",
    "tests/ops/test_nightly_race_issue_policy.py",
    "tests/shared/test_actionlint_pin_parity.py"
+  ],
+  ".github/workflows/bench-workload-effect.yaml": [
+   "tests/lint/test_check_workload_closure_drift.py"
   ],
   ".github/workflows/ci.yml": [
    "tests/dx/test_compile_custom_alerts.py",

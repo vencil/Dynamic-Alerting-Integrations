@@ -55,13 +55,40 @@ either silence the benchmark (all four files drift, so silencing is a total
 outage of the detector) or auto-re-baseline it (that needs per-bench step state,
 which is what the reverted frozen-anchor prototype died of).
 
-⚠️ The disclosure is a HEURISTIC, not a proof. The caller scopes it to
-`*bench_test.go`; a fixture helper living in an ordinary `*_test.go` file can
-change a benchmark's workload without appearing in the list.
+⚠️ The disclosure is a HEURISTIC, not a proof. Its scope is whatever the caller
+enumerated — see `.github/bench-reference.yaml`'s `workload_closure`, which is a
+derived glob plus a HAND-ENUMERATED helper list. A fixture helper nobody put on
+that list can change a benchmark's workload without appearing anywhere here.
+
+WORKLOAD DIGEST (`--workload-digest`)
+=====================================
+The drift list above SATURATES. Measured over three nights (2026-08-16/17/18)
+it was the same four lines verbatim — all four `*bench_test.go` differ from the
+reference — which maps to 20/20 nightly benchmarks while only ONE had a
+persistent step. A list that points at everyone points at no one: precision 1/20.
+
+The digest is the same fact compressed to something that can actually change.
+Per side, one scalar over the closure's contents; consumers compare a night's
+digest with the PREVIOUS night's to learn the one thing the list cannot tell
+them — *tonight the work definition moved*, which is exactly when a new step in
+the ratio is suspect.
+
+⛔ This script does NOT compute that comparison, and deliberately holds no
+cross-run state. It records tonight's digests; deriving the transition belongs
+to whoever reads the series. ADR-032 already recorded what happens when a
+nightly starts remembering per-benchmark state across runs (its frozen-baseline
+section, where the frozen-anchor prototype died of exactly that), and
+`bench-workload-effect.yaml` carries
+the same rule. Recording a scalar is not remembering; comparing to last night
+inside the nightly would be.
+
+⚠️ Same heuristic caveat as the list, for the same reason: a digest over an
+under-enumerated closure is a confident-looking scalar over the wrong set.
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import pathlib
@@ -175,6 +202,106 @@ def read_workload_drift(path: pathlib.Path | None) -> dict:
             "files": sorted({ln.strip() for ln in text.splitlines() if ln.strip()})}
 
 
+_DIGEST_SIDES = ("reference", "main")
+
+# ⛔ Shape-check the hash, not just its presence. `sha256sum | cut -d' ' -f1`
+# yields 64 lowercase hex characters; anything else means the caller's pipeline
+# broke in a way that still produced a line — e.g. an error string, a truncated
+# read, or a `cut` that took the wrong field. Accepting it would hash the
+# garbage into a digest that renders exactly like a real one and gets compared
+# across nights. Measured before this guard: `reference\tconfig_test.go\t
+# not-a-hash` returned `status: checked` with a perfectly normal-looking digest.
+_SHA256_RE = re.compile(r"[0-9a-f]{64}")
+
+
+def read_workload_digest(path: pathlib.Path | None) -> dict:
+    """Aggregate the caller's per-file hashes into one scalar per side.
+
+    Same three states as `read_workload_drift`, for the same reason: "not
+    digested" and "digested, here it is" are different facts, and a consumer
+    that cannot tell them apart reads an absent check as a clean one.
+
+    Input format, one record per line, TAB-separated — written by the caller
+    while BOTH source trees are still on disk, which is the only moment this
+    comparison is possible at all:
+
+        <side>\\t<path relative to the app dir>\\t<sha256 of the file>
+
+    ⛔ The per-file hashes come from the caller (`sha256sum`), not from here.
+    This tool never touches the source trees: it reads bench output and does
+    arithmetic. Handing it tree paths would make "which files count as the
+    workload" a second, silently divergent definition — the closure is defined
+    once, in `.github/bench-reference.yaml`.
+
+    The aggregate is a hash over that side's own sorted `<path> <sha>` lines, so
+    it moves when a file's CONTENT changes and equally when a file is ADDED or
+    REMOVED. Both are work-definition changes; a digest blind to the second
+    would go quiet exactly when a new benchmark file lands.
+
+    ⛔ Malformed input is `unreadable`, never a partial digest. A digest built
+    from half the closure is worse than no digest: it renders as a normal-looking
+    scalar and every downstream comparison against it is meaningless. This is the
+    same trade the drift reader makes, and the same one the whole ADR-032 line
+    keeps re-learning — a wrong number that renders correctly is the failure mode.
+    """
+    if path is None:
+        return {"status": "not-requested", "sides": {}, "files": []}
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        print(f"[pair_bench_ratio] could not read --workload-digest {path} "
+              f"({type(exc).__name__}) — recording the digest as unreadable "
+              f"rather than as clean", file=sys.stderr)
+        return {"status": "unreadable", "sides": {}, "files": []}
+
+    per_side: dict[str, dict[str, str]] = {s: {} for s in _DIGEST_SIDES}
+    for lineno, raw in enumerate(text.splitlines(), 1):
+        line = raw.strip()
+        if not line:
+            continue
+        parts = line.split("\t")
+        if (len(parts) != 3 or parts[0] not in per_side or not all(parts)
+                or not _SHA256_RE.fullmatch(parts[2])):
+            print(f"[pair_bench_ratio] --workload-digest {path}:{lineno} is not "
+                  f"`<side>\\t<path>\\t<sha256>` with side in {list(_DIGEST_SIDES)} "
+                  f"and a 64-hex sha "
+                  f"— recording the digest as unreadable rather than digesting "
+                  f"part of the closure", file=sys.stderr)
+            return {"status": "unreadable", "sides": {}, "files": []}
+        side, rel, sha = parts
+        if rel in per_side[side]:
+            print(f"[pair_bench_ratio] --workload-digest {path}:{lineno} repeats "
+                  f"{rel!r} for side {side!r} — a duplicated record means the "
+                  f"caller's enumeration is not a set; recording as unreadable",
+                  file=sys.stderr)
+            return {"status": "unreadable", "sides": {}, "files": []}
+        per_side[side][rel] = sha
+
+    if not all(per_side[s] for s in _DIGEST_SIDES):
+        empty = [s for s in _DIGEST_SIDES if not per_side[s]]
+        print(f"[pair_bench_ratio] --workload-digest {path} carries no records "
+              f"for {' and '.join(empty)} — a one-sided digest cannot be compared, "
+              f"so it is unreadable, not clean", file=sys.stderr)
+        return {"status": "unreadable", "sides": {}, "files": []}
+
+    sides = {}
+    for s in _DIGEST_SIDES:
+        canon = "\n".join(f"{rel} {per_side[s][rel]}" for rel in sorted(per_side[s]))
+        sides[s] = {
+            "digest": hashlib.sha256(canon.encode("utf-8")).hexdigest(),
+            "n_files": len(per_side[s]),
+        }
+    return {
+        "status": "checked",
+        "sides": sides,
+        # Kept for audit. ⛔ Deliberately NOT surfaced in the run summary: the
+        # per-file view is the saturating list this digest exists to replace,
+        # and the residue experiment already measured what printing a
+        # low-precision list does (2.3% — worse than the 1/20 it was fixing).
+        "files": sorted({rel for s in _DIGEST_SIDES for rel in per_side[s]}),
+    }
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -194,6 +321,11 @@ def main() -> int:
                     metavar="FILE",
                     help="newline-delimited benchmark test files that differ "
                          "between the two sides; disclosed, never acted on")
+    ap.add_argument("--workload-digest", type=pathlib.Path, default=None,
+                    metavar="FILE",
+                    help="TAB-separated `<side>\t<relpath>\t<sha256>` records "
+                         "over the workload closure; aggregated per side, never "
+                         "compared across nights here")
     ap.add_argument("--out", type=pathlib.Path, required=True)
     args = ap.parse_args()
     try_utf8_stdout()
@@ -238,7 +370,10 @@ def main() -> int:
     # omitted the key would force every consumer to encode "absent means OK" —
     # a default that is wrong the first time a third status exists.
     payload = {
-        "schema": "bench-paired/v1",
+        # v2: `workload_digest` joined the payload. Bumped rather than added
+        # silently so a consumer pinned to v1 stops instead of quietly reading a
+        # night whose work-definition evidence it does not know how to weigh.
+        "schema": "bench-paired/v2",
         "status": "OK",
         "reference_tag": args.reference_tag,
         "reference_sha": args.reference_sha,
@@ -246,6 +381,7 @@ def main() -> int:
         "evaluated": evaluated,
         "inconclusive": inconclusive,
         "workload_drift": read_workload_drift(args.workload_drift),
+        "workload_digest": read_workload_digest(args.workload_digest),
     }
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n",
@@ -270,6 +406,22 @@ def main() -> int:
         print(f"[pair_bench_ratio] workload drift NOT established "
               f"({drift['status']}) — the same-work premise is undisclosed, "
               f"not confirmed")
+    dg = payload["workload_digest"]
+    if dg["status"] == "checked":
+        ref_d, main_d = dg["sides"]["reference"], dg["sides"]["main"]
+        # Short prefixes: this line is for a human eyeballing two nights side by
+        # side. The full digests are in the JSON. ⛔ No "changed"/"unchanged"
+        # verdict here — this run has no idea what last night's was, and saying
+        # otherwise would be the cross-run state the docstring refuses.
+        print(f"[pair_bench_ratio] workload closure digest — "
+              f"reference {ref_d['digest'][:12]} ({ref_d['n_files']} files), "
+              f"main {main_d['digest'][:12]} ({main_d['n_files']} files); "
+              f"compare with the previous night to see whether the work "
+              f"definition moved")
+    else:
+        print(f"[pair_bench_ratio] workload closure digest NOT established "
+              f"({dg['status']}) — tonight cannot be compared with any other "
+              f"night's work definition")
     return 0
 
 

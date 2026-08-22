@@ -250,6 +250,17 @@ repos:
         pass_filenames: true
         files: ^scripts/ops/.*\.bat$
 
+      - id: workload-closure-drift
+        name: "Guard: workload closure literal copies agree with .github/bench-reference.yaml"
+        entry: python3 -X utf8 scripts/tools/lint/check_workload_closure_drift.py
+        language: python
+        additional_dependencies: [pyyaml]
+        pass_filenames: false
+        # The lint itself is in scope: editing its parser or its matching rule
+        # is exactly when you want the gate to run, and without this a change
+        # that made it match nothing would land green.
+        files: ^(\.github/(bench-reference\.yaml|workflows/bench-workload-effect\.yaml)|scripts/tools/lint/check_workload_closure_drift\.py)$
+
       - id: doc-map-check
         name: Doc map coverage
         entry: python3 -X utf8 scripts/tools/dx/generate_doc_map.py --check --lang all
