@@ -348,6 +348,45 @@ residue 完整清單留在 artifact 供稽核，但**不整份貼進 step summar
 
 本機 dry-run：`py scripts/tools/dx/analyze_bench_history.py --trend-watch --fixture-json <nights.json> --dry-run`（`--fixture-open-issue N` + `--fixture-open-body '<marker>'` 可離線測 update-in-place / transition-only comment / recovering label / close 閉環）。fixture 每筆可帶選用的 `"cpu_model"` 欄位測分層;省略即走未分層退路。
 
+### 配對判斷引擎（ADR-032 第二段 PR-B1 — summary-only）
+
+`paired-trend-watch` job 跑 [`paired_trend_watch.py`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/scripts/tools/dx/paired_trend_watch.py)，把上一節那支 watchdog 的**配對版判定**寫進 step summary。
+
+⛔ **它不開票、不更新票、不關票。** `perf-trend` issue 仍由上一節的絕對序列 watchdog 持有。兩者**並行**累積 2–4 週後才談切換（[ADR-032 §待決 6](../adr/032-paired-interleaved-bench-measurement.md)）。
+
+三層保證，由弱到強：模組註解 → `tests/dx/test_paired_trend_watch.py` 走 AST 檢查禁用名稱與網路 import → **job 的 token 不含 `issues: write`**。最後一層在前兩層都寫錯時依然成立，這也是唯一值得在並行期依賴的一層。
+
+| 判定 | 意思 |
+|---|---|
+| `FINDINGS` | ≥1 支在**連續 2 個計數日曆夜**比值 > 5% |
+| `CLEAR` | ⛔ **規則跑得起來**（≥1 支確實有連續 2 夜的讀數）**且無人超標** |
+| `INCONCLUSIVE` | 沒有夜被計數／沒有 bench 有分母／**沒有任何一支湊得出連續 2 夜** ⛔ **不是 CLEAR** |
+
+⛔ 第三個 `INCONCLUSIVE` 條件是外部 review 抓到的缺陷，而它牴觸 ADR-032 §待決 6 的明文：
+「切換當下比值序列從零開始，持續判準需要幾夜才能發射——**那幾夜必須回報「無法評估」，不得回報「無發現」**。」
+實測形狀：六夜、某支**每夜都 +42%**、對照測試隔夜擋一次使得沒有兩個計數夜相鄰 ⇒ 規則算術上不可能發射 ⇒ 原本回報 `CLEAR`，而那支的名字與 +42% **整份報告一個字都沒提**。
+⚠️ **這個 job 自己的頭幾夜就會踩到**：它跑 `--from-gh --limit 14`，而配對管線上線前的夜會載成 `unreadable`，所以一開始只有 1 個計數夜。
+
+**「日曆夜」不是「執行次數」。** `bench-record.yaml` 有 `workflow_dispatch`、夜跑也會被 re-run，所以同一個 UTC 日期兩次執行是常態。連續判準數的是**日曆夜**；同一夜的多次執行若對門檻**意見不一致**，該夜記為 undecidable（不投票、不取平均——平均出來的是沒有人量過的數字）。
+
+**怎麼讀 step summary**
+
+- **Nights 表**：`counted` / `not-counted (原因)` / `unreadable (原因)`。⛔ 沒有第四種「看起來還好」。
+- **Work-definition transitions**：`workload_digest` 的第一個消費者。`UNKNOWN` 表示某一端的 digest 缺席（schema v1）／`not-requested`／`unreadable` ⛔ **不表示工作定義沒動**。`reference pin CHANGED` 是**吸收事件**（§待決 1），不是 fixture 編輯——跨越它的比值分屬不同基準，不可讀成同一條序列。
+- **Benchmarks the rule could NOT judge**：湊不出連續 K 夜讀數的那些。⛔ 沒判 ≠ 乾淨。
+- **Over the threshold, but not sustained**：超過門檻但沒連續的讀數。**不是** finding，列出來的理由是「報告從不提及的讀數，與從未發生的讀數無法區分」——六夜資料裡這一節會列出 #1497 那支的 +25.02%。
+- **Counterfactuals**：門檻 5/3/2/1% × K=2/3、閘門 0.5/1/2%。§待決 5 要的 2–4 週實測分布由此累積，不需另寫收集程式。
+
+**⚠️ 三件不要誤讀的事**
+
+1. **閘門門檻 1.0% 是 provisional**，不是已決定值。而且它**幾乎攔不到東西**：六夜實測 canary 從未偏離超過 0.12%，同期卻有兩夜某支擺了 −19.34% / +25.02%。它回答「配對量測今晚有沒有壞掉」，**不是**「這支今晚穩不穩」。
+2. **被閘門擋下的夜對「連續 N 夜」是中斷還是跳過 —— ADR 沒有裁決。** 預設取中斷（不憑空製造連續性），另一種以反事實同時輸出。⛔ 封存的六夜**無法**裁決這題（那六夜從未被擋下），錨點測試通過不構成支持預設值的證據。
+3. **已被接受的成本不會被抑制。** 第一張會發射的是 `MergePartialConfigs_1000`（六夜重播算出來的，不是預測），而它已由 [#1474](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1474) 量測、歸因、決定接受。`ACCEPTED` 帳本是 PR-B2 的範圍；在那之前**標註而不隱藏**——臨時的手寫排除清單正是靜音的原型。
+
+**一夜落差**：與上一節同源——本次 run 自己的 artifact 在 job 執行當下還不是 `success`，所以今晚的數字落在明天的判定裡。
+
+本機重播（不需網路、不需 `gh`）：`python3 scripts/tools/dx/paired_trend_watch.py --dataset docs/internal/audit-reports/bench-paired-2026-08`
+
 ### Troubleshooting
 
 | 症狀 | 原因 | 處理 |

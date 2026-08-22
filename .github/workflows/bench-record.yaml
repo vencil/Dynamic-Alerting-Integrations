@@ -496,3 +496,55 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python3 scripts/tools/dx/analyze_bench_history.py --trend-watch --trend-limit 14
+
+  # ── ADR-032 phase 2 (PR-B1): the PAIRED verdict, running BESIDE the old one ──
+  #
+  # ADR-032 §待決 6 pinned "新舊並行，不直接切換": accumulate two-to-four weeks of
+  # paired verdicts next to the absolute-series watchdog above, compare the two,
+  # and only then cut over. So this job reports and does nothing else.
+  #
+  # ⛔ NOTE THE PERMISSIONS. `issues: write` is deliberately ABSENT. The
+  # summary-only property is asserted three ways, weakest to strongest: a
+  # comment in the module, a test that walks its AST for issue-mutating names
+  # and network imports, and this token scope — which holds even if both of the
+  # other two are wrong. During a parallel-run period whose entire purpose is
+  # that nobody trusts the new verdict yet, the token is the one that matters.
+  #
+  # Why a separate job rather than a step in `trend-watch`: a crash in an
+  # unproven reporter must not entangle with the status of the watchdog that
+  # currently owns the `perf-trend` issue. Cost is one runner and a checkout.
+  #
+  # ⚠️ One-night lag, same as the watchdog above: this run's own artifact is not
+  # `success` yet while the job is running, so tonight's numbers land in
+  # tomorrow's verdict. Fine for a K-night rule; stated so nobody reads the
+  # newest row as tonight.
+  paired-trend-watch:
+    name: Paired trend verdict (summary only — opens/closes nothing)
+    needs: bench-record
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read   # gh run list / gh run download (prior nights' artifacts)
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      # ⛔ Explicit, not inherited. The `bench-record` job above reads
+      # `.github/bench-reference.yaml` with the image's system `python3` and no
+      # setup step — the only place in this repo that imports `yaml` in a
+      # workflow without `setup-python` first. That gap is being handled
+      # separately; this job does not reproduce it.
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Paired verdict (reports only)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 scripts/tools/dx/paired_trend_watch.py --from-gh --limit 14

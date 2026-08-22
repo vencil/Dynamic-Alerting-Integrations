@@ -176,6 +176,7 @@ ENGLISH_ONLY: dict[str, str] = {
     "generate_tenant_metadata.py": _R_DX,
     "migrate_conf_d.py": _R_DX,
     "pair_bench_ratio.py": _R_DX,
+    "paired_trend_watch.py": _R_DX,
     "render_soak_diff.py": _R_DX,
     "reword_chain.py": _R_DX,
     "run_chaos_soak.py": _R_DX,
@@ -437,8 +438,23 @@ def test_allowlists_shrink_only_count_pin():
     # deliberate choice, not a default: scripts/tools/lint/ is 81 English-only
     # to 0 bilingual, so wiring detect_cli_lang() here would have made this the
     # lone exception in its own directory rather than the start of a trend.
-    assert len(ENGLISH_ONLY) <= 141, (
-        f"ENGLISH_ONLY grew to {len(ENGLISH_ONLY)} (pin=141). Adding an "
+    # pin 142: bumped from 141 for paired_trend_watch.py (TRK-359, ADR-032
+    # PR-B1), the paired-measurement trend verdict. Same class as the two
+    # siblings already here — pair_bench_ratio.py produces the nightly's ratios
+    # and analyze_bench_history.py judges the absolute series; this judges the
+    # paired one. A dx CLI invoked by bench-record.yaml and by a maintainer
+    # replaying an archival dataset, never by a customer, and its output is a
+    # GitHub step summary that sits directly beneath the existing English one
+    # that job already writes.
+    # ⛔ Worth recording what is NOT claimed by this entry: the tool's rendered
+    # SUMMARY is not CJK-free. It quotes ADR section names (`§待決 5`) as
+    # identifiers, exactly as analyze_paired.py does and as review accepted on
+    # #1498, and it carries one verbatim Chinese quotation from the ADR
+    # (glossed in English inline, so the quote stays checkable against its
+    # Chinese source without being opaque to a reader who cannot read it).
+    # Only `--help` is this gate's jurisdiction, and that is English.
+    assert len(ENGLISH_ONLY) <= 142, (
+        f"ENGLISH_ONLY grew to {len(ENGLISH_ONLY)} (pin=142). Adding an "
         "English-only tool is allowed but must be an explicit, reviewed "
         "decision — bump this pin in the same commit and justify it."
     )

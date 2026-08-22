@@ -190,6 +190,9 @@
   "scripts/tools/dx/pair_bench_ratio.py": [
    "tests/dx/test_pair_bench_ratio.py"
   ],
+  "scripts/tools/dx/paired_trend_watch.py": [
+   "tests/dx/test_paired_trend_watch.py"
+  ],
   "scripts/tools/dx/pr_preflight.py": [
    "tests/dx/test_pr_preflight_checks.py",
    "tests/dx/test_pr_preflight_orchestrator.py"
@@ -739,7 +742,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "007d59c74aedf8f3a67b3a108c3393161344cb8aa44f0b5c30c72cc0aac4dce5",
+ "source_digest": "103b788cdd0f10b88b9a00f9dbcab024dd46929d0e6634c0f40d462ceb1fa5ce",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -781,6 +784,7 @@
   "tests/dx/test_makefile_utf8_mode.py",
   "tests/dx/test_migrate_conf_d.py",
   "tests/dx/test_pair_bench_ratio.py",
+  "tests/dx/test_paired_trend_watch.py",
   "tests/dx/test_pr_preflight_checks.py",
   "tests/dx/test_pr_preflight_orchestrator.py",
   "tests/dx/test_preflight_bash.py",
@@ -1104,6 +1108,9 @@
    "tests/ops/test_init_project.py",
    "tests/ops/test_nightly_race_issue_policy.py",
    "tests/shared/test_actionlint_pin_parity.py"
+  ],
+  ".github/workflows/bench-record.yaml": [
+   "tests/dx/test_paired_trend_watch.py"
   ],
   ".github/workflows/bench-workload-effect.yaml": [
    "tests/lint/test_check_workload_closure_drift.py"
@@ -1506,6 +1513,12 @@
    "tests/lint/test_check_bilingual_structure.py",
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/ops/test_generate_routes_orchestration.py"
+  ],
+  "docs/internal/audit-reports/bench-paired-2026-08": [
+   "tests/dx/test_paired_trend_watch.py"
+  ],
+  "docs/internal/audit-reports/bench-paired-2026-08/nights.json": [
+   "tests/dx/test_paired_trend_watch.py"
   ],
   "docs/internal/backend-compat-baseline.md": [
    "tests/rulepacks/test_vm_backend_parity.py"
@@ -2193,6 +2206,9 @@
   "scripts/tools/dx/inject_waveform.py": [
    "tests/dx/test_inject_waveform.py",
    "tests/dx/test_waveform_score.py"
+  ],
+  "scripts/tools/dx/paired_trend_watch.py": [
+   "tests/dx/test_paired_trend_watch.py"
   ],
   "scripts/tools/dx/pr_preflight.py": [
    "tests/dx/test_preflight_marker.py",
