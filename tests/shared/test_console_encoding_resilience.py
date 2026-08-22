@@ -183,8 +183,9 @@ def _is_cli_entrypoint(path: Path) -> bool:
     a ``__main__`` block.
 
     Detected structurally rather than by a name-prefix heuristic, so that an
-    underscore-prefixed daemon CLI (e.g. ops/_federation_revocation_
-    reconciler.py) IS covered while a shared ``_lib_*`` helper (argparse-free,
+    underscore-prefixed daemon CLI (e.g.
+    ops/_federation_revocation_reconciler.py) IS covered while a shared
+    ``_lib_*`` helper (argparse-free,
     no ``__main__``) is NOT. Over-inclusion is harmless (a false CLI would
     just be asked to import a carrier); under-inclusion is the real risk, and
     this errs toward inclusion.
