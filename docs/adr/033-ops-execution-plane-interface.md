@@ -2,7 +2,7 @@
 title: "ADR-033: 與運維執行平面的協同介面 — MariaDB 計畫性作業"
 tags: [adr, alerting, integration, mariadb, maintenance]
 audience: [platform-engineers, sre]
-version: v2.10.0
+version: v2.9.0
 lang: zh
 id: ADR-033
 tracking_kind: adr
