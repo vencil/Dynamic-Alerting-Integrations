@@ -1121,6 +1121,42 @@ class TestPlatformPackLocationIsLayoutIndependent:
         finally:
             shutil.rmtree(root, ignore_errors=True)
 
+    def test_a_tree_without_git_still_finds_its_pack(self, capsys):
+        """⛔ 原始碼 tarball（無 `.git`）不得退化成 6 筆 fallback。
+
+        這一格是 `describe_tenant` 那邊同名情境的雙胞胎，而**這一側更嚴重**：
+        那邊找不到會報錯，這邊找不到會安靜地把探針集從 41 降到 6（fail-OPEN）。
+        上一版只把 `describe_tenant` 換成標記集合、這一側留著 `.git`-only，
+        於是被點名的那一半修好了、比較嚴重的那一半沒有。
+        """
+        root = self._staging_dir()
+        try:
+            proj = root / "proj"
+            (proj / "k8s" / "03-monitoring").mkdir(parents=True)
+            shutil.copy2(
+                os.path.join(REPO_ROOT, "k8s", "03-monitoring",
+                             "configmap-rules-platform.yaml"),
+                proj / "k8s" / "03-monitoring"
+                / "configmap-rules-platform.yaml")
+            (proj / "Makefile").write_text("all:\n", encoding="utf-8")
+            assert not (proj / ".git").exists(), "這棵樹刻意沒有 .git"
+            d = proj / "scripts" / "tools" / "ops"
+            d.mkdir(parents=True)
+            self._stage(d, with_pack=False)
+            try:
+                mod = self._load_isolated(d)
+                found = mod._find_platform_rules_configmap()
+                assert found is not None, (
+                    "無 .git 的 tarball 樹被判成「不在任何專案裡」⇒ 探針集"
+                    "靜默降級成 6 筆（fail-OPEN）")
+                assert len(mod.platform_alert_identities()) > len(
+                    mod.PLATFORM_ALERT_IDENTITY_LABELS)
+                assert "WARN" not in capsys.readouterr().err
+            finally:
+                sys.path.remove(str(d))
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
     def test_repo_layout_still_resolves_the_real_pack(self):
         """repo 佈局（開發者與 CI 走的那條）行為未變。"""
         import _grar_validate as g

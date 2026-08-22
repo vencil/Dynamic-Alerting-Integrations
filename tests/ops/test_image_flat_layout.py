@@ -124,18 +124,37 @@ def _dir_with_image_ancestor_count() -> "tuple[Path, Path]":
             reasons.append(f"{base}: already deeper than the image layout")
             continue
         # ⛔ The leaf's PARENT is on sys.path during this run, so a stray
-        # module sitting next to us would be imported instead of the real
-        # one. At image depth the parent is forced to be a shared directory
+        # module sitting next to us would be imported instead of the real one.
+        # At image depth that parent is forced to be a shared directory
         # (`/tmp`, or the drive root) — depth three leaves no room for a
-        # private one — and ten shipped modules still insert their parent
-        # directory even after build.sh's strip. A planted `/tmp/yaml.py`
-        # therefore breaks the run (measured: 40+ modules) or, worse,
-        # SATISFIES an import the image could not. Reject a dirty base and
-        # say why, rather than producing a result that depends on it.
-        intruders = sorted(p.name for p in base.glob("*.py"))
+        # private one — and **16 lines across 13 shipped modules** still insert
+        # their parent directory after build.sh's strip (10 lines spell it with
+        # literal `".."`, 6 with `.parent` / `parents[1]`; build.sh's sed only
+        # matches the `_THIS_DIR` spelling).
+        #
+        # ⚠️ Two numbers here were wrong before and are corrected rather than
+        # dropped: it said "ten shipped modules", which counted only the `".."`
+        # family — the FIRST module that actually puts the parent on sys.path
+        # in this harness is `_federation_revocation_reconciler`, a `parents[1]`
+        # spelling that was outside that count. And "measured: 40+ modules
+        # break" was measured BEFORE the strip above existed; with the strip,
+        # a planted `yaml.py` is already shadowed too late to matter, so what
+        # this rejection actually buys is protection for names imported AFTER
+        # the first surviving parent-dir insert.
+        # ⛔ Check the directory that actually lands on sys.path — the LEAF's
+        # parent — not the base. They coincide on POSIX (`/tmp/<uuid>`), but on
+        # Windows the base is the drive anchor and the leaf is one level deeper,
+        # so checking `base` inspected `C:\` (which can never shadow anything)
+        # while the directory that DOES go on sys.path went unchecked. Worse,
+        # any stray `.py` at `C:\` then rejected every base and the module
+        # SKIPPED — reopening, on the main development platform, exactly the
+        # silent-skip hole this file was just fixed for.
+        shadow_dir = leaf.parent
+        intruders = (sorted(p.name for p in shadow_dir.glob("*.py"))
+                     if shadow_dir.exists() else [])
         if intruders:
             reasons.append(
-                f"{base}: contains {intruders[:5]} — a module there would "
+                f"{shadow_dir}: contains {intruders[:5]} — a module there would "
                 f"shadow imports through the parent-dir sys.path entries the "
                 f"shipped tools carry. Remove them or point TMPDIR elsewhere.")
             continue

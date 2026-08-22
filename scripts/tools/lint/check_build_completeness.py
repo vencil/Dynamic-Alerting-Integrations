@@ -322,8 +322,12 @@ def check_layout_depth_assumptions(
     拼法無關的守衛是上面那支行為測試。
 
     ⚠️ **本規則在 CI 的執行點是 pytest twin，不是 pre-commit hook。**
-    ``build-completeness-check`` 掛在 ``.pre-commit-config.yaml``，而沒有任何
-    workflow 呼叫 ``pre-commit run``；CI 上實際跑到這條規則的是
+    ``build-completeness-check`` 掛在 ``.pre-commit-config.yaml``。⛔ 先前這裡
+    寫「沒有任何 workflow 呼叫 ``pre-commit run``」是**錯的**——``ci.yml`` 的
+    Lint job 有 **47** 條 ``pre-commit run <hook-id> --all-files``，只是這個
+    hook **不在那份列舉裡**（``grep build-completeness .github/workflows/``
+    零命中）。差別很要緊：修法是往既有清單加一行，不是引進 pre-commit。
+    CI 上實際跑到這條規則的是
     ``tests/lint/test_check_build_completeness.py`` 的 repo-level 迴歸
     （``test_actual_repo_has_no_depth_assumptions`` 與 ``TestRepoSmoke``），
     它們住在 ``tests/`` 底下由 ``python-tests-run`` 帶到。後果是：只加在 hook

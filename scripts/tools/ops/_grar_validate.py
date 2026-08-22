@@ -28,6 +28,7 @@ import yaml
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
+from _lib_compat import PROJECT_ROOT_MARKERS  # noqa: E402
 from _lib_python import (  # noqa: E402
     parse_duration_seconds,
     RECEIVER_URL_FIELDS,
@@ -360,15 +361,22 @@ def _find_platform_rules_configmap() -> "Path | None":
     flat = here / _PLATFORM_RULES_BASENAME
     if flat.is_file():
         return flat
-    # ⛔ BOUNDED at the repository root. An unbounded ancestor walk keeps
-    # climbing past the checkout, so a stray `k8s/03-monitoring/` anywhere
-    # above it — another checkout, a home directory, `/` — would be adopted as
-    # this platform's rule pack. `.git` is a directory in a clone and a FILE in
-    # a git worktree, hence `exists()`. The image carries no `.git`, so there
-    # this branch is unreachable by construction and the flat copy above is the
-    # only answer, which is exactly the intended shape.
+    # ⛔ BOUNDED at the project root. An unbounded ancestor walk keeps climbing
+    # past the checkout, so a stray `k8s/03-monitoring/` anywhere above it —
+    # another checkout, a home directory, `/` — would be adopted as this
+    # platform's rule pack.
+    #
+    # ⛔ The marker set is shared with `describe_tenant`, and sharing it is the
+    # point: this side was left keyed on `.git` alone for one revision while
+    # the other side had already been widened, which made a source tarball
+    # (`git archive`, a release zip, a vendored copy — no `.git`) fall back to
+    # the 6-entry constant instead of the 41-entry pack. That is the fail-OPEN
+    # direction, and it was the MORE serious of the two places, so "fixed the
+    # one that was pointed at" left the worse half broken. `.git` is a
+    # directory in a clone and a FILE in a worktree, hence `exists()`.
     repo_root = next(
-        (base for base in (here, *here.parents) if (base / ".git").exists()),
+        (base for base in (here, *here.parents)
+         if any((base / m).exists() for m in PROJECT_ROOT_MARKERS)),
         None,
     )
     if repo_root is not None:

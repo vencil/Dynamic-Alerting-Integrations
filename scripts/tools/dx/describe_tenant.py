@@ -28,15 +28,8 @@ from typing import Any
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
-from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_compat import try_utf8_stdout, PROJECT_ROOT_MARKERS  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
-
-# Entries that mark the top of a checkout of THIS project, used to bound the
-# `conf.d` search (#1494). Deliberately more than `.git`: a source tarball or
-# a vendored copy has none of git's metadata but is still a project root, and
-# keying only on `.git` broke exactly those trees. All three are tracked at
-# the repository root, so `git archive` carries them.
-_PROJECT_ROOT_MARKERS = (".git", "Makefile", "pyproject.toml")
 
 try:
     import yaml
@@ -388,7 +381,7 @@ def main() -> None:
         # replaced (that one at least stayed inside the repo).
         #
         # "Project root" = the nearest ancestor carrying one of
-        # `_PROJECT_ROOT_MARKERS`. ⚠️ `.git` ALONE is not enough: a source
+        # `PROJECT_ROOT_MARKERS`. ⚠️ `.git` ALONE is not enough: a source
         # tarball (`git archive`, a GitHub release zip, a vendored or rsync'd
         # copy) has no `.git`, and keying only on it turned a tree the OLD
         # code handled correctly into an error — a regression introduced while
@@ -399,7 +392,7 @@ def main() -> None:
         # remedy — the same outcome the old code produced.
         repo_root = next(
             (base for base in (here, *here.parents)
-             if any((base / m).exists() for m in _PROJECT_ROOT_MARKERS)),
+             if any((base / m).exists() for m in PROJECT_ROOT_MARKERS)),
             None,
         )
         conf_d = None

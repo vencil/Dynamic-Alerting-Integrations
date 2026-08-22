@@ -415,6 +415,9 @@
   "scripts/tools/lint/check_workflow_git_push_permissions.py": [
    "tests/lint/test_check_workflow_git_push_permissions.py"
   ],
+  "scripts/tools/lint/check_workload_closure_drift.py": [
+   "tests/lint/test_check_workload_closure_drift.py"
+  ],
   "scripts/tools/lint/detect_sed_damage.py": [
    "tests/lint/test_detect_sed_damage.py"
   ],
@@ -711,6 +714,10 @@
   "tests/ops/test_alertmanager_amtool_validity.py": [
    "tests/ops/test_alertmanager_routing_correctness.py"
   ],
+  "tests/ops/test_ci_aggregate_gate_contract.py": [
+   "tests/ops/test_blast_radius.py",
+   "tests/ops/test_ci_baseline_substitution.py"
+  ],
   "tests/ops/test_ci_path_filter_coverage.py": [
    "tests/lint/test_e2e_spec_lint.py"
   ],
@@ -733,7 +740,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "82f1c349f0f2d3a1a80dc010791e354b129cb4dcbbdabb5398905cdaa8bcf095",
+ "source_digest": "76a705c599b41fc4b144748f8d268d3827f4f0b2b1d6720127e8a935cdb90182",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -890,6 +897,7 @@
   "tests/lint/test_check_vmalert_coverage.py",
   "tests/lint/test_check_window_x_no_fallback.py",
   "tests/lint/test_check_workflow_git_push_permissions.py",
+  "tests/lint/test_check_workload_closure_drift.py",
   "tests/lint/test_counterexample_coverage.py",
   "tests/lint/test_detect_sed_damage.py",
   "tests/lint/test_docs_yaml_split_parity.py",
@@ -923,6 +931,7 @@
   "tests/ops/test_check_alert.py",
   "tests/ops/test_check_image_refs_resolve.py",
   "tests/ops/test_ci_aggregate_gate_contract.py",
+  "tests/ops/test_ci_baseline_substitution.py",
   "tests/ops/test_ci_flake_retry.py",
   "tests/ops/test_ci_path_filter_coverage.py",
   "tests/ops/test_commit_helper.py",
@@ -1080,6 +1089,10 @@
   ".github/CODEOWNERS": [
    "tests/dx/test_generate_rule_pack_stats_injection.py"
   ],
+  ".github/bench-reference.yaml": [
+   "tests/lint/test_check_workload_closure_drift.py",
+   "tests/shared/test_bilingual_help_contract.py"
+  ],
   ".github/custom-rule-policy.yaml": [
    "tests/ops/test_lint_custom_rules.py"
   ],
@@ -1087,11 +1100,19 @@
    "tests/lint/test_check_workflow_git_push_permissions.py",
    "tests/lint/test_e2e_spec_lint.py",
    "tests/ops/test_ci_aggregate_gate_contract.py",
+   "tests/ops/test_ci_baseline_substitution.py",
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/ops/test_generated_ci_artifacts.py",
    "tests/ops/test_init_project.py",
    "tests/ops/test_nightly_race_issue_policy.py",
    "tests/shared/test_actionlint_pin_parity.py"
+  ],
+  ".github/workflows/bench-workload-effect.yaml": [
+   "tests/lint/test_check_workload_closure_drift.py"
+  ],
+  ".github/workflows/blast-radius.yml": [
+   "tests/ops/test_blast_radius.py",
+   "tests/ops/test_ci_baseline_substitution.py"
   ],
   ".github/workflows/ci.yml": [
    "tests/dx/test_compile_custom_alerts.py",
@@ -1114,10 +1135,12 @@
    "tests/ops/test_nightly_scan_matrix_drift.py"
   ],
   ".github/workflows/config-diff.yaml": [
+   "tests/ops/test_ci_baseline_substitution.py",
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/ops/test_generated_ci_artifacts.py"
   ],
   ".github/workflows/guard-defaults-impact.yml": [
+   "tests/ops/test_ci_baseline_substitution.py",
    "tests/ops/test_guard_defaults_scopes.py"
   ],
   ".github/workflows/image-ref-resolve.yaml": [
@@ -1164,6 +1187,7 @@
    "tests/lint/test_e2e_spec_lint.py",
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/ops/test_generated_ci_artifacts.py",
+   "tests/ops/test_wrapped_path_references.py",
    "tests/shared/test_actionlint_pin_parity.py"
   ],
   "CHANGELOG.md": [
@@ -1181,7 +1205,6 @@
    "tests/dx/test_add_frontmatter.py",
    "tests/dx/test_bump_docs.py",
    "tests/dx/test_line_ending_policy.py",
-   "tests/lint/test_check_doc_freshness.py",
    "tests/lint/test_check_frontmatter_versions.py",
    "tests/lint/test_validate_docs_versions.py"
   ],
@@ -1196,8 +1219,10 @@
    "tests/lint/test_check_threshold_reachability.py",
    "tests/lint/test_check_unpinned_deps.py",
    "tests/lint/test_e2e_spec_lint.py",
+   "tests/ops/test_ci_baseline_substitution.py",
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/ops/test_git_check_lock.py",
+   "tests/ops/test_grar_strict_hardening.py",
    "tests/ops/test_nightly_scan_matrix_drift.py",
    "tests/ops/test_validate_config.py",
    "tests/ops/test_wrapped_path_references.py",
@@ -1217,6 +1242,7 @@
    "tests/lint/test_check_doc_links.py",
    "tests/lint/test_check_planning_status_sync.py",
    "tests/lint/test_validate_docs_versions.py",
+   "tests/ops/test_ci_baseline_substitution.py",
    "tests/ops/test_generated_ci_artifacts.py",
    "tests/ops/test_gitops_check.py",
    "tests/ops/test_inject_metadata_join.py",
@@ -1253,7 +1279,8 @@
    "tests/ops/test_generated_ci_artifacts.py"
   ],
   "components/da-tools/app/Dockerfile": [
-   "tests/lint/test_check_iac_vibe_rules.py"
+   "tests/lint/test_check_iac_vibe_rules.py",
+   "tests/ops/test_ci_baseline_substitution.py"
   ],
   "components/da-tools/app/VERSION": [
    "tests/ops/test_ci_path_filter_coverage.py",
@@ -1298,6 +1325,9 @@
   "components/threshold-exporter/README.md": [
    "tests/ops/test_ci_path_filter_coverage.py"
   ],
+  "components/threshold-exporter/app": [
+   "tests/ops/test_wrapped_path_references.py"
+  ],
   "components/threshold-exporter/app/collector.go": [
    "tests/lint/test_check_scrape_reachability.py"
   ],
@@ -1335,6 +1365,7 @@
   "components/threshold-exporter/config/conf.d": [
    "tests/dx/test_compile_custom_alerts.py",
    "tests/lint/test_check_threshold_reachability.py",
+   "tests/ops/test_ci_baseline_substitution.py",
    "tests/ops/test_guard_defaults_scopes.py"
   ],
   "components/threshold-exporter/config/conf.d/_defaults.yaml": [
@@ -1447,7 +1478,8 @@
    "tests/ops/test_validate_config.py"
   ],
   "docs/integration": [
-   "tests/dx/test_bump_docs.py"
+   "tests/dx/test_bump_docs.py",
+   "tests/ops/test_wrapped_path_references.py"
   ],
   "docs/integration/gitops-deployment.md": [
    "tests/ops/test_config_diff.py",
@@ -1539,7 +1571,8 @@
   "docs/schemas/platform-defaults.schema.json": [
    "tests/helm/test_optional_overrides_render.py",
    "tests/lint/test_check_confd_schema.py",
-   "tests/lint/test_check_threshold_reachability.py"
+   "tests/lint/test_check_threshold_reachability.py",
+   "tests/ops/test_blast_radius.py"
   ],
   "docs/schemas/tenant-config.schema.json": [
    "tests/dx/test_sync_schema.py",
@@ -1999,6 +2032,7 @@
   ],
   "scripts/ops/guard_defaults_scopes.py": [
    "tests/lint/test_check_threshold_reachability.py",
+   "tests/ops/test_ci_baseline_substitution.py",
    "tests/ops/test_guard_defaults_scopes.py"
   ],
   "scripts/ops/inject_default_key.py": [
@@ -2007,6 +2041,9 @@
   "scripts/ops/parse_go_test_json.py": [
    "tests/ops/test_nightly_race_issue_policy.py",
    "tests/ops/test_parse_go_test_json.py"
+  ],
+  "scripts/ops/protect_main_push.sh": [
+   "tests/ops/test_wrapped_path_references.py"
   ],
   "scripts/ops/recover_index.sh": [
    "tests/dx/test_recover_index.py"
@@ -2050,6 +2087,7 @@
    "tests/lint/test_check_build_completeness.py",
    "tests/lint/test_check_structure.py",
    "tests/lint/test_check_threshold_reachability.py",
+   "tests/lint/test_validate_docs_versions.py",
    "tests/ops/test_ci_flake_retry.py",
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/ops/test_generated_ci_artifacts.py",
@@ -2086,7 +2124,8 @@
    "tests/shared/test_tool_exit_codes.py"
   ],
   "scripts/tools/_lib_io.py": [
-   "tests/dx/test_verify_diff.py"
+   "tests/dx/test_verify_diff.py",
+   "tests/ops/test_ci_baseline_substitution.py"
   ],
   "scripts/tools/_lib_python.py": [
    "tests/lint/test_check_structure.py"
@@ -2115,6 +2154,7 @@
    "tests/dx/test_makefile_utf8_mode.py",
    "tests/dx/test_verify_diff.py",
    "tests/lint/test_check_structure.py",
+   "tests/lint/test_validate_docs_versions.py",
    "tests/ops/test_ci_path_filter_coverage.py"
   ],
   "scripts/tools/dx/converge_status.py": [
@@ -2126,6 +2166,7 @@
   "scripts/tools/dx/describe_tenant.py": [
    "tests/dx/test_describe_tenant.py",
    "tests/golden/test_merge_parity.py",
+   "tests/ops/test_ci_baseline_substitution.py",
    "tests/ops/test_property_based.py"
   ],
   "scripts/tools/dx/gen_agent_adapters.py": [
@@ -2577,7 +2618,8 @@
    "tests/lint/test_e2e_spec_lint.py"
   ],
   "tests/e2e/package.json": [
-   "tests/lint/test_e2e_spec_lint.py"
+   "tests/lint/test_e2e_spec_lint.py",
+   "tests/lint/test_validate_docs_versions.py"
   ],
   "tests/e2e/playwright.config.ts": [
    "tests/lint/test_e2e_spec_lint.py"
@@ -2673,6 +2715,9 @@
    "tests/ops/test_init_project.py",
    "tests/ops/test_scaffold_tenant.py"
   ],
+  "tests/ops/test_blast_radius.py": [
+   "tests/ops/test_ci_baseline_substitution.py"
+  ],
   "tests/ops/test_byo_check.py": [
    "tests/ops/test_threshold_govern.py",
    "tests/ops/test_threshold_recommend.py"
@@ -2695,6 +2740,7 @@
   "tests/ops/test_generated_ci_artifacts.py": [
    "tests/ops/test_init_project.py",
    "tests/ops/test_nightly_scan_matrix_drift.py",
+   "tests/ops/test_wrapped_path_references.py",
    "tests/shared/test_actionlint_pin_parity.py"
   ],
   "tests/ops/test_guard_defaults_scopes.py": [
@@ -2816,7 +2862,8 @@
   "tools/portal": [
    "tests/dx/test_bump_docs.py",
    "tests/lint/test_check_threshold_reachability.py",
-   "tests/ops/test_ci_path_filter_coverage.py"
+   "tests/ops/test_ci_path_filter_coverage.py",
+   "tests/ops/test_wrapped_path_references.py"
   ],
   "tools/portal/build.mjs": [
    "tests/ops/test_generated_ci_artifacts.py"
