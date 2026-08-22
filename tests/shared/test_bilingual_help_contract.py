@@ -449,9 +449,13 @@ def test_allowlists_shrink_only_count_pin():
     # ⛔ Worth recording what is NOT claimed by this entry: the tool's rendered
     # SUMMARY is not CJK-free. It quotes ADR section names (`§待決 5`) as
     # identifiers, exactly as analyze_paired.py does and as review accepted on
-    # #1498, and it carries one verbatim Chinese quotation from the ADR
-    # (glossed in English inline, so the quote stays checkable against its
-    # Chinese source without being opaque to a reader who cannot read it).
+    # #1498, and it carries TWO verbatim Chinese quotations from the ADR, both
+    # glossed in English inline so they stay checkable against their Chinese
+    # source without being opaque to a reader who cannot read it:
+    # `不判定也不關票` in the gap-handling note, and `無法評估`/`無發現` in the
+    # could-not-judge section. (This comment said "one" until review counted
+    # them — the second only renders when that section is non-empty, which the
+    # frozen dataset never triggers.)
     # Only `--help` is this gate's jurisdiction, and that is English.
     assert len(ENGLISH_ONLY) <= 142, (
         f"ENGLISH_ONLY grew to {len(ENGLISH_ONLY)} (pin=142). Adding an "

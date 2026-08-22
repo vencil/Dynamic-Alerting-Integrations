@@ -1466,3 +1466,25 @@ def test_the_real_dataset_renders_the_canary_signs_it_measured():
            if l.startswith("| 2026-08-17 ")][0]
     assert "| -0.12% | Sleep -0.09% |" in row
 
+
+def test_the_docstrings_first_line_survives_the_tool_map():
+    """⛔ `generate_tool_map.py` publishes only a docstring's FIRST LINE.
+
+    A wrapped opening sentence therefore ships to `tool-map{,.en}.md` truncated
+    mid-clause. This module did exactly that ("...whether main has a sustained",
+    no verb, no period, in both languages) even though `converge_status.py`
+    already carries a standing warning about the same trap — walked into twice,
+    so it is pinned here rather than left to the next person's memory.
+    """
+    src = (_TOOLS_DIR / "paired_trend_watch.py").read_text(encoding="utf-8")
+    first = src.split('"""', 2)[1].strip().split("\n")[0]
+    assert first.endswith("."), (
+        f"first docstring line {first!r} is not a complete sentence — it is "
+        "what the tool map publishes verbatim")
+    assert len(first) <= 100
+    # and the published row must match it
+    row = [l for l in (_REPO / "docs" / "internal" / "tool-map.md")
+           .read_text(encoding="utf-8").splitlines()
+           if "`paired_trend_watch.py`" in l]
+    assert len(row) == 1 and first in row[0]
+

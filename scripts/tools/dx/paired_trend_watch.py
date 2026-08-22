@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
-"""Decide, from a series of PAIRED nightly runs, whether main has a sustained
-regression against the pinned reference (ADR-032 §待決 5, phase 2 / PR-B1).
+"""Judge a series of PAIRED nightly runs for a sustained regression (ADR-032).
+
+⛔ The first line above is deliberately ONE WHOLE SENTENCE on ONE LINE.
+`generate_tool_map.py` publishes only a docstring's first line into
+`docs/internal/tool-map{,.en}.md`, so a wrapped opening sentence ships to the
+tool map truncated mid-clause — which is exactly what this module did until
+review caught it ("...whether main has a sustained", no verb, no period, in
+both languages). `converge_status.py` carries the same warning for the same
+reason; this is the second time the trap has been walked into.
+
+This is ADR-032 §待決 5, phase 2 / PR-B1.
 
     # replay the frozen six-night dataset (no network)
     python3 scripts/tools/dx/paired_trend_watch.py \
