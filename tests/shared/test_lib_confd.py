@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import pathlib
 import sys
 
@@ -297,3 +298,88 @@ def test_unusable_paths_on_missing_dir_is_empty(tmp_path: pathlib.Path):
 def test_unusable_reason_distinguishes_the_causes(with_unusable):
     assert "directory" in unusable_reason(with_unusable / "beta.yaml")
     assert "symlink" in unusable_reason(with_unusable / "gamma.yaml")
+
+
+# ── `unusable_reason`'s remaining answers ────────────────────────────────
+#
+# This function exists to put ONE sentence in front of the operator, and
+# coverage showed three of its four possible answers had no test: the
+# permission clause, the stat-failure clause, and the fallback. A wrong or
+# missing sentence here is the same defect class #1469 is about — the
+# reader says something, and what it says is not what happened.
+
+
+def test_unusable_reason_fallback_for_a_non_regular_file(tmp_path: pathlib.Path):
+    """A FIFO is not a dir, not a broken symlink, and is readable — yet it
+    is not a config file. That combination is the fallback clause, and it
+    is reachable in the wild (a socket or device node dropped into conf.d
+    by a bad mount)."""
+    fifo = tmp_path / "queue.yaml"
+    try:
+        os.mkfifo(fifo)
+    except (AttributeError, NotImplementedError, OSError) as e:
+        pytest.skip(f"platform cannot create a FIFO here: {e}")
+
+    assert unusable_reason(fifo) == "is not a readable file"
+    # And it must be REPORTED, not silently skipped — the whole point.
+    assert fifo in unusable_config_paths(tmp_path, recursive=False)
+
+
+def test_unusable_reason_reports_a_stat_failure_instead_of_raising(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+):
+    """If the stat itself fails, the reason must carry the errno text.
+
+    ⛔ The alternative — letting OSError escape — is exactly the shape
+    #1469's sibling defect had: a reader that dies instead of naming the
+    file it could not read.
+    """
+    target = tmp_path / "weird.yaml"
+    target.write_text("a: 1\n", encoding="utf-8")
+
+    def boom(self):  # noqa: ANN001
+        raise OSError(5, "Input/output error")
+
+    monkeypatch.setattr(pathlib.Path, "is_dir", boom)
+
+    reason = unusable_reason(target)
+    assert "could not be stat" in reason
+    assert "OSError" in reason
+    assert "Input/output error" in reason
+
+
+def test_is_readable_file_survives_a_stat_failure(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+):
+    """The selection helper must answer False, not raise, when stat fails —
+    otherwise one bad inode takes down the whole enumeration."""
+    target = tmp_path / "weird.yaml"
+    target.write_text("a: 1\n", encoding="utf-8")
+
+    def boom(self):  # noqa: ANN001
+        raise OSError(5, "Input/output error")
+
+    monkeypatch.setattr(pathlib.Path, "is_file", boom)
+
+    # Reached through the public entry point, not by importing the private
+    # helper: what matters is that enumeration does not explode.
+    assert unusable_config_paths(tmp_path, recursive=False) == [target]
+
+
+@pytest.mark.skipif(
+    hasattr(os, "geteuid") and os.geteuid() == 0,
+    reason="root bypasses the read permission bit, so os.access always returns True",
+)
+def test_unusable_reason_names_permission_denied(tmp_path: pathlib.Path):
+    """⚠️ Skipped when running as root — and this test exists partly to make
+    that skip VISIBLE. The container this suite is usually developed in runs
+    as uid 0, where the clause is unreachable; CI runners do not, so the
+    branch is exercised there rather than silently never."""
+    locked = tmp_path / "locked.yaml"
+    locked.write_text("a: 1\n", encoding="utf-8")
+    locked.chmod(0o000)
+    try:
+        assert unusable_reason(locked) == "is not readable (permission denied)"
+        assert locked in unusable_config_paths(tmp_path, recursive=False)
+    finally:
+        locked.chmod(0o600)
