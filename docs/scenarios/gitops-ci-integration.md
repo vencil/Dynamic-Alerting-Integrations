@@ -53,6 +53,7 @@ lang: zh
 ```bash
 # 使用 Docker 執行（無需安裝）
 docker run --rm -it \
+  --user $(id -u):$(id -g) \
   -v $(pwd):/workspace -w /workspace \
   ghcr.io/vencil/da-tools:latest \
   init

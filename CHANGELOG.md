@@ -13,7 +13,16 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 <!-- 下一版 in-flight 工作暫存區。每筆 entry 目標 3-6 行使用者重點 + 一行指回內部 artifact；session 過程 / FUSE trap / 完整 commit list 不入此處。release 收尾時做最終 condensation 並切正式 `## [vX.Y.Z]` heading。 -->
 
+### Fixed
+
+- **給客戶的 `docker run` 缺 `--user`：第一個複製貼上的指令就寫不出任何檔（[#1495](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1495)；docs、portal、lint）**：出貨映像以 `USER nonroot`（UID 10001）執行，而客戶掛進去的是自己的 checkout（典型 UID 1000）⇒ 任何會寫檔的子命令在第一次寫入就 `PermissionError`，而且是**裸 Python traceback**、寫出 0 個檔。在**單一 Linux 容器內**實測（⚠️ Windows bind mount 與 Docker Desktop named volume 都給假綠，驗不出這個缺陷）：uid 10001 → PermissionError，uid 1000 → 寫入成功。
+- **修法依「掛載宣告的意圖」分流，而不是依子命令**：會寫的補 `--user $(id -u):$(id -g)`（25 處，含 CI/CD 精靈產生的那條——客戶第一個複製的指令，先前只有 CLI 腿有這個旗標、精靈那份手抄生成器沒同步，是 [#1351](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1351) 的分岔第一次以客戶可見的失敗現形）；只讀的把掛載標成 `:ro`（26 處）。⛔ 刻意不建「哪些子命令會寫」的清單——同一支工具帶不同旗標會寫或不寫（`generate-routes --validate` 在用到 `-o` 之前就結束），那份清單得對著每支工具的 argparse 維護。**可寫掛載是範例自己宣告的意圖**，所以不變式讀作：宣告了會寫，就得帶寫得進去的 uid。
+- **共用範本一併修**：`docs/includes/docker-usage-pattern{,.en}.md` 是 `cli-reference` 與 `gitops-ci-integration` 引用的「標準寫法」，也就是大家抄的源頭。
+
 ### Added
+
+- **兩支互補守衛，把「可寫掛載必須帶 `--user`」變成機械檢查（[#1495](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1495)；lint、portal）**：擴充既有的 `check_doc_datools_cmds.py`（不新增 lint），涵蓋 `docs/**` 與三份客戶會落地的 repo 外 markdown；精靈那條指令是執行期產生的字串、Python 掃不到，所以由 `tools/portal/tests/cicdGenerators.test.ts` 釘住（含「`--user` 必須排在 image 之前」——排在後面會被當成傳給容器的參數，畫面看起來仍然正確）。
+- ⚠️ **守衛的第一版近乎空轉，是量出來才發現的**：它沿用了姊妹檢查的 placeholder 跳過規則，而那個字元集含 `$`——於是**122 個區塊裡 97 個被跳過**，包含全部 15 個剛修好的。兩個檢查判的是不同東西（`<command>` 讓**子命令**無法判定，卻不影響**掛載**），所以跳過條件不能共用。修正後實際評估面從 25 升到 122，並立刻抓出 16 個先前漏掉的違規。兩支守衛各配變異控制項：撤掉任一處 `--user`，Python lint rc 0→1 並指名該檔、portal 測試 2 failed。
 
 - **成對量測的頭六夜比值序列進 repo（ADR-032 第二段的門檻決策依據；internal、dx）**：新增 [`audit-reports/bench-paired-2026-08/`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/audit-reports/bench-paired-2026-08/README.md) —— 2026-08-16..21 六夜 × 22 支（20 benchmark + 2 對照）的比值，每夜附 run/job id、head SHA、CPU 型號與當夜 `workload_drift` 狀態，另附**可直接重跑**的 `analyze_paired.py`（唯一輸入是旁邊的 `nights.json`，與隔壁 `bench-trend-2026-08/` 那兩支不可重跑的方法紀錄不同）。**收它的理由是它正在腐爛**：來源是逐夜解析的 job log（會過期），而 artifact 只留 90 天。⛔ **單位與隔壁那份不同、不可池化**：這份是 `main ÷ 釘死參考版本` 的比值（機器項在同一 runner 上相消），那份是絕對 ns/op（機器項不相消、且是該序列最大噪音來源）——混用等於抹掉 ADR-032 的論證，兩份 README 互相標註。**六夜量到三件事**：⑴ 已拍板的判定規則（門檻 5%、連續 2 夜）在真實序列上**只發射一次**，而且是 [#1474](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1474) 已歸因並決定接受的那一支——第二段切換後的第一張票是「真的但不該修」，這是重播算出來的不是預測；門檻下調 3%→3 支、1%→9 支同樣是量出來的。⑵ 離群集中在**單一** benchmark：120 個 bench-night 中位 0.66%，扣掉 #1474 已歸因的兩支後 max 仍是 25.02%，再扣掉 [#1497](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1497) 那一支則 max 3.25%、**0 筆超過 5%**。⑶ 六夜中有**兩夜**是「對照測試乾淨（≤0.12%）而某一支擺 20 個百分點以上」——已拍板的對照測試閘門回答的是「成對量測今晚有沒有壞掉」，不是「這支 bench 今晚穩不穩」。⛔ **並含一次更正**：#1497 與先前討論引用過「per-bench 門檻 +27.94%，所以 +30.38% 照樣穿過去」，那出自**四夜窗**；六夜下同一支的門檻是 **+7.46%**（兩個數字都已在本檔重現），該論據不成立——結論方向不變（per-bench 門檻救不了那支 bench），但當時的依據是錯的。而「門檻本身在 n 從 4 到 6 時移動 20 個百分點」反而成了「歷史不足時它不能用」的更強證據；另記 rustc-perf 形（`Q3 + IQR×3`）套在**對釘死參考版本的水位**上時是一台吸收機（門檻長在 +8% 水位之上），若日後採用必須改成「離散度定寬度、水位走 ACCEPTED 出口」那一形。實作追蹤 [#1439](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1439)（TRK-359）。
 

@@ -109,9 +109,138 @@ def check_datools_subcommands(doc_files: List[Path],
     return issues
 
 
+# Customer-facing markdown that lives OUTSIDE docs/. Enumerated by FILE, not
+# by spelling: these are the entry points a customer actually lands on, and
+# each already carries `docker run` examples. A new one has to be added here —
+# accepted, because the alternative (scan every .md in the repo) pulls in
+# internal notes and archived reports whose examples are deliberately stale.
+_EXTRA_DOC_FILES = (
+    "components/da-tools/README.md",
+    "components/da-tools/app/QUICKSTART.md",
+    "try-local/README.md",
+)
+
+_DOCKER_RUN_RE = re.compile(r"\bdocker\s+run\b")
+_DATOOLS_IMAGE_RE = re.compile(r"da[-_]tools", re.IGNORECASE)
+
+
+def _mounts(flat: str) -> List[str]:
+    """Every `-v` / `--volume` spec in *flat*, quoting-normalised.
+
+    ⛔ Strip quotes and trailing punctuation BEFORE reading the option field.
+    A naive regex reads `"$(pwd)/conf.d:/conf.d:ro"` as writable because the
+    closing quote lands in the option group — i.e. it over-reports, which for
+    a guard means誤紅 on examples that are already correct.
+    """
+    toks = flat.split()
+    out: List[str] = []
+    for i, t in enumerate(toks):
+        if t in ("-v", "--volume") and i + 1 < len(toks):
+            out.append(toks[i + 1].strip("\"'").rstrip("\\,;)]\"'"))
+    return out
+
+
+def _is_writable(spec: str) -> bool:
+    parts = spec.split(":")
+    opts = parts[-1].split(",") if len(parts) >= 3 else []
+    return "ro" not in opts
+
+
+def check_writable_mount_has_user(doc_files: List[Path],
+                                  repo_root: Path) -> List[Issue]:
+    """A da-tools `docker run` with a WRITABLE mount must pass `--user`.
+
+    The shipped image ends ``USER nonroot:nonroot`` (uid 10001,
+    ``components/da-tools/app/Dockerfile``) while the directory a customer
+    mounts is their own checkout (typically uid 1000). Any subcommand that
+    writes then dies on a bare ``PermissionError`` traceback with zero files
+    produced — measured inside a single Linux container: uid 10001 fails,
+    uid 1000 succeeds (#1495).
+
+    ⛔ The predicate is the MOUNT, not the subcommand. "Which subcommands
+    write" is a list that has to be maintained against every tool's argparse
+    (and the same tool writes or not depending on its flags — ``generate-routes
+    --validate`` exits before it touches ``-o``). A writable mount is the
+    example's own declaration of intent, so the invariant reads: if you
+    declared you may write there, pass the uid that can. An example that never
+    writes should say so with ``:ro`` and is then out of scope by construction.
+
+    Placeholder-bearing lines are skipped by the same rule the subcommand check
+    uses: a synopsis like ``<command> [flags]`` cannot be judged, and guessing
+    would put誤紅 on documentation that is deliberately generic.
+    """
+    issues: List[Issue] = []
+    for f in doc_files:
+        try:
+            lines = f.read_text(encoding="utf-8", errors="ignore").splitlines()
+        except OSError:
+            continue
+        rel = str(f.relative_to(repo_root)).replace("\\", "/")
+        in_code = False
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            if line.lstrip().startswith("```"):
+                in_code = not in_code
+                i += 1
+                continue
+            if not in_code or not _DOCKER_RUN_RE.search(line):
+                i += 1
+                continue
+            start = i
+            buf = [line]
+            while (buf[-1].rstrip().endswith("\\")
+                   and i + 1 < len(lines)
+                   and not lines[i + 1].lstrip().startswith("```")):
+                i += 1
+                buf.append(lines[i])
+            blk = "\n".join(buf)
+            i += 1
+            flat = " ".join(blk.split())
+            if not _DATOOLS_IMAGE_RE.search(flat):
+                continue
+            # ⛔ NOT `_PLACEHOLDER_CHARS`. That set is `<>${}`, and `$` appears
+            # in essentially every real example (`-v $(pwd)/conf.d:...`), so
+            # reusing it here skipped 97 of 122 blocks — including all fifteen
+            # this rule was written to hold. Measured before shipping, which is
+            # the only reason it was noticed: the check was GREEN either way.
+            #
+            # The two checks need different skips because they judge different
+            # things. A `<command>` placeholder makes the SUBCOMMAND
+            # unjudgeable; it says nothing about the MOUNT, and `$(pwd)` is a
+            # real shell expression rather than a placeholder at all. So skip
+            # only when the mount spec itself is a placeholder.
+            if INLINE_IGNORE in blk:
+                continue
+            if "--user" in flat:
+                continue
+            specs = _mounts(flat)
+            # `<host>:/path` is a placeholder; `${{ github.workspace }}/x:/y`
+            # is an UNEXPANDED CI template whose spaces defeat token splitting
+            # (it parses as the fragment `${{`). Both are "not a mount spec
+            # yet", so both are out of scope rather than reported — reporting a
+            # fragment would be a誤紅 whose only cheap fix is deleting the
+            # example.
+            if any(("<" in s or ">" in s or "{{" in s) for s in specs):
+                continue
+            writable = [m for m in specs if _is_writable(m)]
+            if writable:
+                issues.append(Issue(
+                    "datools-writable-mount-without-user", rel, start + 1,
+                    f"writable mount(s) {writable} but no --user; the image "
+                    f"runs as uid 10001 and a customer's directory does not, "
+                    f"so anything this writes fails with PermissionError. "
+                    f"Add `--user $(id -u):$(id -g)`, or mark the mount `:ro` "
+                    f"if it is only read (#1495)."))
+    return issues
+
+
 def run(repo_root: Path = REPO_ROOT) -> List[Issue]:
-    return check_datools_subcommands(
-        _doc_files(repo_root / "docs"), WRAPPER_SUBCOMMANDS, repo_root)
+    docs = _doc_files(repo_root / "docs")
+    extra = [repo_root / rel for rel in _EXTRA_DOC_FILES]
+    return (check_datools_subcommands(docs, WRAPPER_SUBCOMMANDS, repo_root)
+            + check_writable_mount_has_user(docs + [f for f in extra
+                                                    if f.is_file()], repo_root))
 
 
 def main() -> int:

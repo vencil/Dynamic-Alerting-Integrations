@@ -82,7 +82,7 @@ python3 scripts/tools/ops/baseline_discovery.py --tenant db-a --duration 1800 --
 kubectl port-forward svc/prometheus 9090:9090 -n monitoring &
 
 docker run --rm --network=host \
-  -v $(pwd)/migration_output:/data \
+  -v $(pwd)/migration_output:/data:ro \
   ghcr.io/vencil/da-tools:v2.9.0 \
   validate --mapping /data/prefix-mapping.yaml \
   --prometheus http://localhost:9090 \
@@ -268,7 +268,7 @@ v1.10.0 提供 `da-tools cutover`，單一指令自動完成以下全部步驟�
 ```bash
 # Step 1: Dry run — 預覽切換步驟，不做任何變更
 docker run --rm --network=host \
-  -v $(pwd)/validation_output:/data \
+  -v $(pwd)/validation_output:/data:ro \
   -e PROMETHEUS_URL=http://localhost:9090 \
   ghcr.io/vencil/da-tools:v2.9.0 \
   cutover --readiness-json /data/cutover-readiness.json \
@@ -283,7 +283,7 @@ docker run --rm --network=host \
 
 # Step 2: 執行切換
 docker run --rm --network=host \
-  -v $(pwd)/validation_output:/data \
+  -v $(pwd)/validation_output:/data:ro \
   -e PROMETHEUS_URL=http://localhost:9090 \
   ghcr.io/vencil/da-tools:v2.9.0 \
   cutover --readiness-json /data/cutover-readiness.json --tenant db-a
@@ -291,7 +291,7 @@ docker run --rm --network=host \
 # Step 3: 批次切換多個 tenant（逐一執行）
 for tenant in db-a db-b db-c; do
   docker run --rm --network=host \
-    -v $(pwd)/validation_output:/data \
+    -v $(pwd)/validation_output:/data:ro \
     -e PROMETHEUS_URL=http://localhost:9090 \
     ghcr.io/vencil/da-tools:v2.9.0 \
     cutover --readiness-json /data/cutover-readiness.json --tenant "$tenant"
@@ -343,7 +343,7 @@ kubectl apply -f old-recording-rules.yaml
 
 # 3. 重啟 Shadow Monitor
 docker run --rm --network=host \
-  -v $(pwd)/migration_output:/data \
+  -v $(pwd)/migration_output:/data:ro \
   ghcr.io/vencil/da-tools:v2.9.0 \
   validate --mapping /data/prefix-mapping.yaml \
   --prometheus http://localhost:9090 \
@@ -359,6 +359,7 @@ rm -rf validation_output/
 
 # 批次下架不再需要的 custom_ prefix 規則
 docker run --rm -v $(pwd)/conf.d:/data/conf.d ghcr.io/vencil/da-tools:v2.9.0 \
+  --user $(id -u):$(id -g) \
   deprecate custom_mysql_connections custom_mysql_replication_lag --execute
 ```
 
