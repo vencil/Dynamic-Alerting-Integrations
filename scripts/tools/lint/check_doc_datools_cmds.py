@@ -161,6 +161,21 @@ def _image_index(toks: List[str]) -> "int | None":
         if t.startswith("-"):
             i += 1
             continue
+        # ⛔ The operand must actually LOOK like the image. `_VALUE_FLAGS` is an
+        # enumeration, and an enumeration of docker's flags is never complete:
+        # any value-taking flag missing from it (`--platform linux/amd64`,
+        # `--group-add 999`, `--userns host`, …) donates its VALUE as the
+        # "image", so a `--user` that is correctly ahead of the real image gets
+        # reported as coming after it — with a message prescribing a move that
+        # is already done, i.e. no legal way to go green. Measured: three such
+        # flags each produced that誤紅.
+        #
+        # This predicate is derivable rather than enumerated, and the two are
+        # complementary: the flag list still has to skip `-v
+        # $(pwd)/da-tools-out:/data/output`, whose VALUE does contain da-tools.
+        if not _DATOOLS_IMAGE_RE.search(t):
+            i += 1
+            continue
         return i
     return None
 
@@ -217,11 +232,19 @@ def _mounts(flat: str) -> List[str]:
     rule would need a second parser to judge it. Consequence: rewriting `-v`
     as `--mount` leaves the example unchecked.
     """
-    toks = _normalise(flat).split()
+    # ⛔ Drop continuation backslashes HERE too. This function does its own
+    # split, so filtering them in the caller's token list left this path
+    # unchanged: a `-v` at the end of a wrapped line took `\` as its value,
+    # which `rstrip` reduced to the empty string — no mount, silently clean.
+    toks = [t for t in _normalise(flat).split() if t != "\\"]
     out: List[str] = []
     for i, t in enumerate(toks):
         if t in ("-v", "--volume") and i + 1 < len(toks):
             out.append(toks[i + 1].strip("\"'").rstrip("\\,;)]\"'"))
+        elif t.startswith(("--volume=", "-v=")):
+            # `--volume=host:ctr` is the same mount in the form docker also
+            # accepts; not recognising it was a second silent pass.
+            out.append(t.split("=", 1)[1].strip("\"'").rstrip("\\,;)]\"'"))
     return out
 
 
@@ -235,15 +258,23 @@ def _is_bind_mount(spec: str) -> bool:
     An anonymous volume (`-v /cache`, one segment) is the same story. Flagging
     those would be a誤紅 whose prescribed remedy is actively harmful.
     """
-    if ":" not in spec:
-        return False                      # anonymous volume
     # ⛔ Windows drive letters must be recognised BEFORE splitting on ":".
     # An earlier version tested `head[1] == ":"` on `spec.split(":")[0]`, where
     # a colon can never appear — dead code that nonetheless carried a comment
     # claiming the case was handled, so `C:\Users\me:/data/output` was silently
     # treated as a named volume and skipped.
     if _WINDOWS_PATH_RE.match(spec):
-        return True
+        # …but a drive letter alone is not a mount: `-v C:\cache` has no
+        # container path, so it is still an anonymous volume. The colon that
+        # `":" not in spec` was meant to catch IS the drive's colon, which is
+        # why that guard cannot be the one asking.
+        return ":" in spec[2:]
+    if spec.startswith("\\\\"):
+        # UNC (`\\server\share:/data`) is a host path, so it IS a bind mount;
+        # judging it as a named volume was fail-open.
+        return ":" in spec[2:]
+    if ":" not in spec:
+        return False                      # anonymous volume
     head = spec.split(":")[0]
     return head.startswith(("/", ".", "~", "$"))
 
@@ -389,6 +420,23 @@ def check_writable_mount_has_user(doc_files: List[Path],
             # ⚠️ `${{ … }}` is NOT excluded any more: it is a real CI mount
             # with a template in it, and skipping those hid a live defect.
             if any(("<" in s or ">" in s) for s in specs):
+                continue
+            # ⛔ A spec that still carries a brace after normalisation is a
+            # template this reader could not join back together — an
+            # unterminated `${{`, or a non-GitHub `{{ var }}`. Say so instead
+            # of dropping it: "silently skipped a templated mount" is the exact
+            # failure this rule was rewritten for, and a second spelling of it
+            # would be the same defect wearing a different hat.
+            unresolved = [s for s in _mounts(flat)
+                          if "{" in s or "}" in s]
+            if unresolved:
+                issues.append(Issue(
+                    "datools-mount-not-resolvable", rel, start + 1,
+                    f"mount spec(s) {unresolved} still contain template braces "
+                    f"after normalisation, so this example cannot be judged. "
+                    f"Use a form this reader can join (`${{{{ x }}}}` is "
+                    f"supported) or add `{INLINE_IGNORE}` with a reason — do "
+                    f"not leave it silently unchecked (#1495)."))
                 continue
             if writable:
                 issues.append(Issue(
