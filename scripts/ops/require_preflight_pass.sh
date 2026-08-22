@@ -11,13 +11,14 @@
 #   1. If GIT_PREFLIGHT_BYPASS=1 in env → allow (escape hatch)
 #   2. If target branch is main/master → allow (protect_main_push owns that)
 #   3. If no commits being pushed (delete ref, tag push, etc.) → allow
-#   4. If GIT_PREFLIGHT_STRICT=1 or none of the pushed branches has an OPEN
-#      PR (checked via `gh pr view`) → skip the marker requirement. The idea:
-#      WIP/feature branches without a PR yet are being iterated on; the
-#      marker requirement kicks in once a PR exists (i.e. the work is ready
-#      to be reviewed, so CI noise matters).
-#      If `gh` is missing / unauthenticated / errors → fall back to "require
-#      marker" (safe default, preserves prior behavior).
+#   4. If GIT_PREFLIGHT_STRICT=1 → require the marker regardless of PR state.
+#      Otherwise, if `gh` confirms that none of the pushed branches has an
+#      OPEN PR → skip the marker requirement. The idea: WIP/feature branches
+#      without a PR yet are being iterated on; the marker requirement kicks
+#      in once a PR exists (i.e. the work is ready to be reviewed, so CI
+#      noise matters).
+#      If `gh` is missing, or the PR query itself fails (unauthenticated,
+#      API/network error) → require the marker (safe default).
 #   5. Marker present for HEAD sha → allow
 #   6. Otherwise → block with instruction to run `make pr-preflight`
 #
@@ -93,15 +94,23 @@ if [ "${GIT_PREFLIGHT_STRICT:-0}" != "1" ]; then
     fi
     if [ "$gh_available" = "1" ]; then
         for b in "${pushed_branches[@]}"; do
-            # `gh pr view <branch>` resolves the PR whose head matches this
-            # branch on the current repo. Non-zero exit = no PR, not
-            # authenticated, or API error; treat all as "no open PR" (the
-            # gh_available=1 + has_open_pr=0 block below then allows the push).
-            state="$(gh pr view "$b" --json state --jq '.state' 2>/dev/null || true)"
-            if [ "$state" = "OPEN" ]; then
-                has_open_pr=1
+            # Query with `gh pr list --json`, not `gh pr view`: `pr view`
+            # exits non-zero when the branch simply has no PR (NotFoundError),
+            # so its exit code cannot separate "no PR" from "the query
+            # failed". `pr list` with an exporter set prints `[]` and exits 0
+            # when nothing matches, so here a non-zero exit means the query
+            # itself failed — not authenticated, API or network error — and
+            # that must fall back to requiring the marker rather than being
+            # read as "this branch has no PR".
+            if ! open_prs="$(gh pr list --head "$b" --state open \
+                --json number --jq 'length' 2>/dev/null)"; then
+                gh_available=0
                 break
             fi
+            case "$open_prs" in
+                ''|0) ;;   # query succeeded, no open PR for this branch
+                *)    has_open_pr=1; break ;;
+            esac
         done
     fi
 
