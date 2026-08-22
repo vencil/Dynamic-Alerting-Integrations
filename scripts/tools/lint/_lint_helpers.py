@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+from functools import lru_cache
 from pathlib import Path
 from typing import Dict, Set
 
@@ -171,6 +172,24 @@ def strip_bash_comment(line: str) -> str:
     return _BASH_COMMENT_RE.sub("", line).strip()
 
 
+def array_open_pattern(array_name: str) -> str:
+    """Regex source matching a bash array header for *array_name*.
+
+    ⛔ Anchored at a word start. A plain ``f"{name}=(" in line`` substring test
+    also matches ``EXTRA_TOOL_FILES=(``, so a second, unrelated array opens the
+    block and donates its entries to this one's caller. Exported as the pattern
+    SOURCE (not a compiled object) because ``check_image_pin_capability.py``
+    keeps a standalone copy of this reader for tag blobs and mirrors the rule
+    from here — see :func:`_parse_build_sh_array`.
+    """
+    return rf"(?:^|[\s;]){re.escape(array_name)}=\("
+
+
+@lru_cache(maxsize=None)
+def _array_open_re(array_name: str) -> "re.Pattern[str]":
+    return re.compile(array_open_pattern(array_name))
+
+
 def _parse_build_sh_array(path: Path, array_name: str) -> Set[str]:
     """Shared reader for the ``TOOL_FILES`` / ``REPO_DATA_FILES`` bash arrays.
 
@@ -196,23 +215,34 @@ def _parse_build_sh_array(path: Path, array_name: str) -> Set[str]:
     """
     entries: Set[str] = set()
     in_block = False
+    open_re = _array_open_re(array_name)
     with open(path, encoding="utf-8") as f:
         for line in f:
-            stripped = line.strip()
-            if f"{array_name}=(" in stripped:
-                in_block = True
+            # ⛔ Strip the comment FIRST — before the open test and before the
+            # close test, not just before entry parsing. Doing it last left
+            # three measured holes, all of which ADD spurious entries (the
+            # fail-open direction, since the shipped set feeds
+            # `check_required_data_files` and `check_layout_depth_assumptions`):
+            #   `# TOOL_FILES=(`   opened a block         ⇒ ['ops/ghost.py']
+            #   `)  # end of list` did not close one      ⇒ the parser swallowed
+            #                                               the REST of the file
+            #                                               (`RANDOM_LINE=3`,
+            #                                                `more_junk`, …)
+            stripped = strip_bash_comment(line.strip())
+            if not in_block:
+                # ⛔ Anchored at a word start, not a substring: `in stripped`
+                # let `EXTRA_TOOL_FILES=(` match `TOOL_FILES=(` and yield that
+                # other array's entries (measured: ['ops/extra.py']).
+                if open_re.search(stripped):
+                    in_block = True
                 continue
-            if in_block:
-                if stripped == ")":
-                    break
-                # Drop a trailing comment BEFORE anything else, so an entry
-                # carrying one is still recognised as that entry.
-                stripped = strip_bash_comment(stripped)
-                if not stripped:
-                    continue
-                name = stripped.strip("\"'(),").strip()
-                if name:
-                    entries.add(name)
+            if stripped == ")":
+                break
+            if not stripped:
+                continue
+            name = stripped.strip("\"'(),").strip()
+            if name:
+                entries.add(name)
     return entries
 
 

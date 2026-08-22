@@ -350,9 +350,12 @@ def _find_platform_rules_configmap() -> "Path | None":
     looks for the file. Order matters: flat-first, because in the image the
     pack ships beside this module (``build.sh`` ``REPO_DATA_FILES``, paired to
     this module by ``REQUIRED_DATA_FILES``), while a repo checkout keeps it
-    under ``k8s/``. Neither branch assumes a repo marker exists: the image has
-    no ``.git`` / ``Makefile`` / ``k8s`` at all, so a marker walk would be one
-    more assumption that is false exactly where this one was.
+    under ``k8s/``. **The flat branch comes first precisely because it assumes
+    no marker**: the image has no ``.git`` / ``Makefile`` / ``k8s`` at all, so
+    the image path must resolve before any marker is consulted. The bounded
+    marker walk below serves only the repo branch, where a marker does exist —
+    its markers are ``.git`` / ``Makefile`` / ``pyproject.toml``
+    (``_lib_compat.PROJECT_ROOT_MARKERS``).
 
     Returns None when no copy is reachable — the caller degrades loudly rather
     than raising, because a missing pack must not take the tool down.

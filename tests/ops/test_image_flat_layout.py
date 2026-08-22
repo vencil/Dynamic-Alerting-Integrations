@@ -35,6 +35,7 @@ detect.
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -103,12 +104,40 @@ def _image_depth_bases() -> "list[Path]":
     return bases
 
 
-def _dir_with_image_ancestor_count() -> "tuple[Path, Path]":
+def _shadowable_names(tool_paths) -> "set[str]":
+    """Module names a stray file next to the staged copies could shadow.
+
+    ⛔ The set is derived, not listed: every top-level name the shipped tools
+    import (plus the tools' own stems, since they import each other) — anything
+    else in the same directory is simply never looked up, so rejecting a base
+    for it is a false red. Parsed with ``ast`` rather than grepped, and a file
+    that will not parse contributes nothing here because the import test itself
+    is what reports that.
+    """
+    names: "set[str]" = set()
+    for rel in tool_paths:
+        src = TOOLS_SRC / rel
+        names.add(Path(rel).stem)
+        try:
+            tree = ast.parse(src.read_text(encoding="utf-8-sig"))
+        except (OSError, SyntaxError, UnicodeDecodeError):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names.update(a.name.split(".")[0] for a in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                names.add(node.module.split(".")[0])
+    return names
+
+
+def _dir_with_image_ancestor_count(at_risk: "set[str]") -> "tuple[Path, Path]":
     """``(leaf, cleanup_root)`` where a file in *leaf* has the image's depth.
 
     *cleanup_root* is the single directory this creates under its base, so one
-    ``rmtree`` removes everything it made. Raises ``OSError`` if no candidate
-    base is usable — the caller decides whether that is a skip or a failure.
+    ``rmtree`` removes everything it made. *at_risk* is the shadowable-name set
+    from :func:`_shadowable_names`; a base is rejected only when the directory
+    that lands on ``sys.path`` holds one of those names. Raises ``OSError`` if
+    no candidate base is usable — the caller decides skip vs failure.
     """
     # ⛔ One reason PER BASE, not just the last one. Reporting only the final
     # failure names the anchor's EACCES even when the real story is that the
@@ -149,14 +178,26 @@ def _dir_with_image_ancestor_count() -> "tuple[Path, Path]":
         # any stray `.py` at `C:\` then rejected every base and the module
         # SKIPPED — reopening, on the main development platform, exactly the
         # silent-skip hole this file was just fixed for.
+        #
+        # ⛔ Judge by CONSEQUENCE, not by appearance. Rejecting the base for ANY
+        # `*.py` sitting there was an appearance test, and on POSIX it fails the
+        # whole module: `/tmp` on a shared runner or a developer box very often
+        # holds some unrelated script, the preferred base is then rejected, the
+        # anchor fallback raises EACCES for a non-root user, and the fixture
+        # calls `pytest.fail`. A stray file nobody imports would turn this file
+        # red — the opposite error from the silent skip it was written to end,
+        # and just as useless. Only a name the shipped set actually IMPORTS can
+        # shadow anything, so that is the predicate.
         shadow_dir = leaf.parent
-        intruders = (sorted(p.name for p in shadow_dir.glob("*.py"))
+        intruders = (sorted(p.name for p in shadow_dir.glob("*.py")
+                            if p.stem in at_risk)
                      if shadow_dir.exists() else [])
         if intruders:
             reasons.append(
-                f"{shadow_dir}: contains {intruders[:5]} — a module there would "
-                f"shadow imports through the parent-dir sys.path entries the "
-                f"shipped tools carry. Remove them or point TMPDIR elsewhere.")
+                f"{shadow_dir}: contains {intruders[:5]}, whose name(s) the "
+                f"shipped set imports — a module there would win through the "
+                f"parent-dir sys.path entries those tools carry. Remove them "
+                f"or point TMPDIR elsewhere.")
             continue
         try:
             leaf.mkdir(parents=True)
@@ -199,8 +240,16 @@ for name, path in payload:
             exc, ModuleNotFoundError) else None
         results.append([name, type(exc).__name__ + ": " + str(exc)[:200],
                         missing])
-print(json.dumps(results))
+sys.stdout.write("\n__FLAT_LAYOUT_RESULTS__" + json.dumps(results))
 """
+
+# ⛔ The child's payload must be locatable inside its stdout, not BE its stdout.
+# A shipped module that prints anything at import time (a deprecation notice, a
+# degraded-probe warning routed to stdout) made `json.loads(proc.stdout)` raise
+# JSONDecodeError from inside the fixture — a message naming neither the module
+# nor the text it printed. `returncode == 0` does not catch it, because the
+# child still exits 0.
+_RESULTS_MARKER = "__FLAT_LAYOUT_RESULTS__"
 
 
 @pytest.fixture(scope="module")
@@ -211,7 +260,8 @@ def flat_import_results():
     assert tool_paths, "TOOL_FILES parsed empty — the harness proves nothing"
 
     try:
-        flat, cleanup_root = _dir_with_image_ancestor_count()
+        flat, cleanup_root = _dir_with_image_ancestor_count(
+            _shadowable_names(tool_paths))
     except OSError as exc:
         # ⛔ fail, not skip, wherever a base SHOULD have worked. On POSIX
         # $TMPDIR always yields image depth and is world-writable, so an error
@@ -276,7 +326,19 @@ def flat_import_results():
             f"the import harness itself failed (rc={proc.returncode}).\n"
             f"stdout: {proc.stdout[-2000:]}\nstderr: {proc.stderr[-2000:]}"
         )
-        yield json.loads(proc.stdout), {Path(p).name for p in tool_paths}
+        assert _RESULTS_MARKER in proc.stdout, (
+            f"the child produced no result payload — it exited 0 without "
+            f"reaching the final write.\nstdout: {proc.stdout[-2000:]}\n"
+            f"stderr: {proc.stderr[-2000:]}"
+        )
+        noise, _, payload_json = proc.stdout.partition(_RESULTS_MARKER)
+        if noise.strip():
+            # Not a failure: import-time chatter is the tools' business. But it
+            # must be visible, because it is exactly what used to corrupt the
+            # payload and get reported as a parse error somewhere else.
+            print(f"[flat-layout] import-time stdout from the child:\n"
+                  f"{noise.strip()[-2000:]}")
+        yield json.loads(payload_json), {Path(p).name for p in tool_paths}
     finally:
         shutil.rmtree(cleanup_root, ignore_errors=True)
 
@@ -346,7 +408,9 @@ def test_the_harness_would_notice_a_depth_assumption(flat_import_results):
     results, _ = flat_import_results
     assert results, "control cannot run: the harness imported zero modules"
 
-    probe_dir, cleanup_root = _dir_with_image_ancestor_count()
+    # 這一格只放一個自己命名的 probe 模組，不 import 出貨集合，所以沒有任何
+    # 名字會被遮蔽 —— 傳空集合即為它真正的風險面。
+    probe_dir, cleanup_root = _dir_with_image_ancestor_count(set())
     try:
         probe = probe_dir / "depth_probe.py"
         probe.write_text(
@@ -360,7 +424,12 @@ def test_the_harness_would_notice_a_depth_assumption(flat_import_results):
             capture_output=True, text=True, encoding="utf-8", timeout=60,
         )
         assert proc.returncode == 0, proc.stderr[-2000:]
-        (_, error, _), = json.loads(proc.stdout)
+        assert _RESULTS_MARKER in proc.stdout, (
+            f"the control child produced no result payload.\n"
+            f"stdout: {proc.stdout[-2000:]}\nstderr: {proc.stderr[-2000:]}"
+        )
+        (_, error, _), = json.loads(
+            proc.stdout.partition(_RESULTS_MARKER)[2])
         assert error is not None and error.startswith("IndexError"), (
             "the control module was supposed to blow up at image depth but "
             f"reported {error!r} — the harness is not measuring what it claims"

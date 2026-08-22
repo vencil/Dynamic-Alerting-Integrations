@@ -179,10 +179,17 @@ def check_underscore_imports(
             # function of this file is the same defect as in the other.
             imported = _underscore_imports_of(
                 src_path.read_text(encoding="utf-8-sig"))
-        except SyntaxError as exc:  # pragma: no cover - shipped tools must parse
+        # ⛔ Three exception types, not one. `read_text` raises OSError for an
+        # unreadable file and UnicodeDecodeError for a non-UTF-8 one; catching
+        # only SyntaxError let either escape and abort main() with a traceback
+        # instead of producing an error entry — i.e. the scanner reported
+        # NOTHING about that file and everything after it. The sibling scanner
+        # below already caught all three, so this was the same defect the
+        # comment above claims to have fixed "here too", still half-applied.
+        except (OSError, SyntaxError, UnicodeDecodeError) as exc:
             errors.append((
                 "error",
-                f"'{rel}' 無法以 ast 解析（{exc.msg} @ line {exc.lineno}）—"
+                f"'{rel}' 無法讀取或以 ast 解析（{type(exc).__name__}）—"
                 f" 無法驗證其 import 完整性。"
             ))
             continue

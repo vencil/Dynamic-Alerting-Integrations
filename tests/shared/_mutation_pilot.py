@@ -622,17 +622,59 @@ MUTATIONS: list[Mutation] = [
         target_file="scripts/tools/lint/_lint_helpers.py",
         test_file="tests/shared/test_property_tools.py",
         label="parse_build_sh: ignore closing paren (slurps next array)",
-        fn_name="parse_build_sh_tools",
-        old='                if stripped == ")":\n                    break',
-        new='                if False:\n                    break',
+        # ⚠️ The loop moved into the shared `_parse_build_sh_array` reader when
+        # REPO_DATA_FILES was added (#1494). The `old` anchor still matched, so
+        # this entry never went red — only the ATTRIBUTION had rotted, which is
+        # the silent half: a dangling fn_name still names the right FILE, so a
+        # survivor triage lands in the wrong function and looks merely stale.
+        fn_name="_parse_build_sh_array",
+        old='            if stripped == ")":\n                break',
+        new='            if False:\n                break',
+        kill_test="test_parser_stops_at_closing_paren",
+    ),
+    Mutation(
+        target_file="scripts/tools/lint/_lint_helpers.py",
+        test_file="tests/lint/test_check_build_completeness.py",
+        label="parse_build_sh: unanchored array name (EXTRA_TOOL_FILES matches)",
+        fn_name="_parse_build_sh_array",
+        # ⛔ Added because the fix for this shipped WITHOUT a guard: injected as
+        # an experiment, the substring form survived all three parser test files
+        # (test_property_tools / test_check_build_completeness /
+        # test_check_image_pin_capability, 0 failures). The entry and
+        # `test_block_boundaries_are_word_anchored` were written together.
+        old="                if open_re.search(stripped):",
+        new='                if f"{array_name}=(" in stripped:',
+        kill_test="test_block_boundaries_are_word_anchored",
     ),
     Mutation(
         target_file="scripts/tools/lint/_lint_helpers.py",
         test_file="tests/shared/test_property_tools.py",
-        label="parse_build_sh: drop comment skip (# lines included as tools)",
-        fn_name="parse_build_sh_tools",
-        old="                if not stripped or stripped.startswith(\"#\"):\n                    continue",
-        new="                if not stripped:\n                    continue",
+        label="parse_build_sh: drop comment strip (# lines become entries)",
+        fn_name="_parse_build_sh_array",
+        # Re-anchored for the same move as above. The old shape tested for the
+        # comment INLINE (`not stripped or stripped.startswith("#")`); comment
+        # handling now goes through `strip_bash_comment`, so the equivalent
+        # injection is to skip that call — whole-line `#` comments then survive
+        # into the entry set, which is the identical observable.
+        old="            stripped = strip_bash_comment(line.strip())",
+        new="            stripped = line.strip()",
+        kill_test="test_skips_comments_and_blanks",
+    ),
+    Mutation(
+        target_file="scripts/tools/lint/_lint_helpers.py",
+        test_file="tests/lint/test_check_build_completeness.py",
+        label="strip_bash_comment: naive split (truncates a `#` inside a name)",
+        fn_name="strip_bash_comment",
+        # ⛔ Covers the half the re-anchored entry above does NOT: that one
+        # kills "comments are not stripped", this one kills "too much is
+        # stripped". bash opens a comment only at a WORD START, so
+        # `ops/a.py#tag` and `"ops/c#d.py"` keep their `#`; a naive split
+        # shortens them, the reader then finds no such file and SILENTLY skips
+        # it — the fail-open direction, and invisible to test_property_tools.py
+        # (measured: that file stays 175-passed under this injection).
+        old='return _BASH_COMMENT_RE.sub("", line).strip()',
+        new='return line.split("#", 1)[0].strip()',
+        kill_test="test_entry_forms_bash_accepts",
     ),
     # ── latest_version_from_changelog (check_flaky_registry) ─────
     Mutation(

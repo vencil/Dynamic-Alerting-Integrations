@@ -342,30 +342,32 @@ def parse_tool_files_text(text: str) -> set[str]:
     """
     tools: set[str] = set()
     in_block = False
+    # ⛔ Same word-start rules as `_lint_helpers`, for both the comment and the
+    # array header. This parser is deliberately standalone (it reads a TAG's
+    # blob as text, not a file), and `test_text_parsers_match_lib_lint_helpers_
+    # on_head` pins the two together — so fixing only the other one does not
+    # remove a defect, it RELOCATES it: the divergent input then trips THAT test
+    # with a message about parser drift instead of about the real cause.
+    #   comment: `#` opens one only at a word start, so `ops/a.py#tag` and
+    #     `"ops/c#d.py"` stay whole (silently shortening a name makes the file
+    #     look absent, which is fail-open);
+    #   header: an unanchored substring test also matches `EXTRA_TOOL_FILES=(`;
+    #   ordering: strip the comment BEFORE the open and close tests, or
+    #     `# TOOL_FILES=(` opens a block and `)  # end` fails to close one.
+    open_re = re.compile(r"(?:^|[\s;])TOOL_FILES=\(")
     for line in text.split("\n"):
-        stripped = line.strip()
-        if "TOOL_FILES=(" in stripped:
-            in_block = True
+        stripped = re.sub(r"(?:^|\s)#.*$", "", line.strip()).strip()
+        if not in_block:
+            if open_re.search(stripped):
+                in_block = True
             continue
-        if in_block:
-            if stripped == ")":
-                break
-            # ⛔ Same bash comment rule as `_lint_helpers.strip_bash_comment`.
-            # This parser is deliberately standalone (it reads a TAG's blob as
-            # text, not a file), and `test_text_parsers_match_lib_lint_helpers_
-            # on_head` pins the two together — so fixing only the other one
-            # does not remove the defect, it relocates it: an entry carrying a
-            # trailing comment would parse differently here and trip THAT test
-            # with a message about parser drift instead of about the comment.
-            # `#` opens a comment only at a word start, so `ops/a.py#tag` and
-            # `"ops/c#d.py"` stay whole (silently shortening a name makes the
-            # file look absent, which is fail-open).
-            stripped = re.sub(r"(?:^|\s)#.*$", "", stripped).strip()
-            if not stripped:
-                continue
-            name = stripped.strip("\"'(),").strip()
-            if name:
-                tools.add(os.path.basename(name))
+        if stripped == ")":
+            break
+        if not stripped:
+            continue
+        name = stripped.strip("\"'(),").strip()
+        if name:
+            tools.add(os.path.basename(name))
     return tools
 
 

@@ -618,7 +618,11 @@ class TestConfDSearchIsBounded:
         return m
 
     def _resolve(self, mod, monkeypatch, capsys):
-        """跑 main() 不帶 --conf-d，回傳它最後決定要讀的路徑。"""
+        """跑 main() 不帶 --conf-d，回傳它寫到 **stderr** 的文字。
+
+        兩個呼叫端都對回傳值做子字串比對，所以行為一直是對的——錯的是原本
+        寫「回傳它最後決定要讀的路徑」，那會讓下一個人以為可以拿它比對路徑。
+        """
         monkeypatch.setattr(sys, "argv", ["describe_tenant", "--all"])
         with pytest.raises(SystemExit):
             mod.main()
@@ -656,8 +660,16 @@ class TestConfDSearchIsBounded:
             "routing:\n  receiver: x\n", encoding="utf-8")
         mod = self._staged_copy(proj, "scripts/tools/dx/describe_tenant.py")
         monkeypatch.setattr(sys, "argv", ["describe_tenant", "--all"])
+        # ⛔ 讀一次、存起來。`capsys.readouterr()` 會**清空**緩衝區，所以原本
+        # 在 SystemExit 路徑上第二次呼叫拿到的是空字串，
+        # `"conf.d/ not found" not in ""` 恆為 True——那條斷言在最重要的那條
+        # 路徑上是空的。今天擋住退化的其實是下一行的 exit code 檢查，一旦有人
+        # 放寬它，這一格就靜默變成什麼都不驗。
+        exit_code = None
         try:
             mod.main()
         except SystemExit as exc:      # --all 正常結束也可能 raise
-            assert exc.code in (0, None), capsys.readouterr().err
-        assert "conf.d/ not found" not in capsys.readouterr().err
+            exit_code = exc.code
+        err = capsys.readouterr().err
+        assert exit_code in (0, None), err
+        assert "conf.d/ not found" not in err

@@ -20,6 +20,9 @@
   "scripts/ops/parse_go_test_json.py": [
    "tests/ops/test_parse_go_test_json.py"
   ],
+  "scripts/tools/_lib_compat.py": [
+   "tests/ops/test_grar_strict_hardening.py"
+  ],
   "scripts/tools/_lib_confd.py": [
    "tests/shared/test_lib_confd.py"
   ],
@@ -317,6 +320,9 @@
   "scripts/tools/lint/check_iac_vibe_rules.py": [
    "tests/lint/test_check_iac_vibe_rules.py",
    "tests/lint/test_fallback_image_digest_pin.py"
+  ],
+  "scripts/tools/lint/check_image_pin_capability.py": [
+   "tests/lint/test_check_build_completeness.py"
   ],
   "scripts/tools/lint/check_includes_sync.py": [
    "tests/lint/test_check_includes_sync.py"
@@ -740,7 +746,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "76a705c599b41fc4b144748f8d268d3827f4f0b2b1d6720127e8a935cdb90182",
+ "source_digest": "be0dcb6a9fa66f2c99bbc84f29badfabe692595c975db94d39cfb63c48f5820a",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",

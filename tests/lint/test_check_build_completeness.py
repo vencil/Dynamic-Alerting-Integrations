@@ -753,6 +753,59 @@ class TestBuildShArrayReaderMatchesBash:
         bs.write_text("TOOL_FILES=(\n    ops/a.py\n)\n", encoding="utf-8")
         assert _parse_build_sh_array(bs, "REPO_DATA_FILES") == set()
 
+    @pytest.mark.parametrize("source,expected,why", [
+        (
+            "# TOOL_FILES=(\n    ops/ghost.py\n)\nSOMETHING=2\n",
+            set(),
+            "被註解掉的陣列頭不得開啟區塊（實測會撈到 ops/ghost.py）",
+        ),
+        (
+            "TOOL_FILES=(\n    ops/a.py\n)  # end of list\nRANDOM_LINE=3\njunk\n",
+            {"ops/a.py"},
+            "帶尾註解的收尾括號要能關閉區塊（實測會把檔案剩下的行全部吞進來）",
+        ),
+        (
+            "EXTRA_TOOL_FILES=(\n    ops/extra.py\n)\n",
+            set(),
+            "陣列名要在 word 起點對齊（實測 `in` 子字串比對會配到 EXTRA_ 前綴）",
+        ),
+        (
+            "OTHER=1\nTOOL_FILES=(\n    ops/a.py\n)\n",
+            {"ops/a.py"},
+            "正控制：正常的陣列必須照樣讀得到，否則上面三格可能只是 reader 壞了",
+        ),
+    ])
+    def test_block_boundaries_are_word_anchored(
+        self, tmp_path, source, expected, why
+    ):
+        """⛔ 三種邊界失誤全部是**多**撈東西，而多撈的方向是 fail-open。
+
+        解析出來的集合會餵進 `check_required_data_files` 與
+        `check_layout_depth_assumptions`，多出來的名字在那裡會變成「這個檔沒
+        出貨」之類與真因無關的訊息。三格都實測過現況會怎麼錯（見各自的 why）。
+        """
+        from _lint_helpers import _parse_build_sh_array
+        bs = tmp_path / "build.sh"
+        bs.write_text(source, encoding="utf-8")
+        assert _parse_build_sh_array(bs, "TOOL_FILES") == expected, why
+
+    @pytest.mark.parametrize("source,expected", [
+        ("# TOOL_FILES=(\n    ops/ghost.py\n)\nX=2\n", set()),
+        ("TOOL_FILES=(\n    ops/a.py\n)  # end\nRANDOM=3\njunk\n", {"a.py"}),
+        ("EXTRA_TOOL_FILES=(\n    ops/extra.py\n)\n", set()),
+        ("TOOL_FILES=(\n    ops/a.py\n)\n", {"a.py"}),
+    ])
+    def test_the_tag_blob_parser_has_the_same_boundaries(self, source, expected):
+        """⛔ 鏡像 parser 必須同步，否則只是把缺陷搬進等價測試裡。
+
+        `check_image_pin_capability.py` 為了讀 git TAG 的 blob（文字而非檔案）
+        保留了自己的一份 reader，`test_text_parsers_match_lib_lint_helpers_on_head`
+        釘住兩者。只修一邊時那個等價測試會轉紅，而它的訊息講的是「parser 漂移」
+        ——與真正的原因（邊界規則）無關，讀的人會被送去修錯的東西。
+        """
+        from check_image_pin_capability import parse_tool_files_text
+        assert parse_tool_files_text(source) == expected
+
 
 class TestRepoDataFilesArePairedWithTheirConsumer:
     """``REPO_DATA_FILES``（build.sh 第二條搬運路徑）也要進配對集合。"""
@@ -778,7 +831,15 @@ class TestRepoDataFilesArePairedWithTheirConsumer:
     def test_omitting_the_repo_data_file_is_caught(self):
         """反向控制：拿掉它就必須紅，否則上面那格是恆真的。"""
         from _lint_helpers import parse_build_sh_tools
-        errors = mod.check_required_data_files(parse_build_sh_tools())
+        tools = parse_build_sh_tools()
+        # 與上一格的 `assert repo_data` 同一個理由：`check_required_data_files`
+        # 會跳過不出貨的 module，所以哪天 `_grar_validate.py` 從 TOOL_FILES
+        # 移除，這個反向控制會轉紅並抱怨「配對規則沒開火」——而真正的原因是
+        # 消費端不見了。前置條件要自己說話。
+        assert "_grar_validate.py" in tools, (
+            "消費端 module 已不出貨 —— 這個反向控制什麼都沒證明"
+        )
+        errors = mod.check_required_data_files(tools)
         assert any("configmap-rules-platform.yaml" in m for _, m in errors), (
             "配對規則沒有在 REPO_DATA_FILES 缺席時開火 —— "
             f"實際得到 {errors}"

@@ -24,6 +24,7 @@ from generate_alertmanager_routes import (  # noqa: E402
     load_tenant_configs,
 )
 from _grar_validate import _parse_policy_duration  # noqa: E402
+from _lib_compat import PROJECT_ROOT_MARKERS  # noqa: E402
 
 TESTS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO_ROOT = os.path.dirname(TESTS_DIR)
@@ -1005,9 +1006,21 @@ class TestPlatformPackLocationIsLayoutIndependent:
             d.mkdir(parents=True)
         except OSError:
             d = Path(tempfile.mkdtemp())
-        assert not any((p / ".git").exists() for p in (d, *d.parents)), (
-            f"staging dir {d} sits inside a checkout; the isolation this "
-            f"class depends on does not hold here")
+        # ⛔ 用被測程式碼**同一份**標記集合，不要重抄 `.git`。被測的
+        # `_find_platform_rules_configmap` 認的是 `PROJECT_ROOT_MARKERS`
+        # （`.git` / `Makefile` / `pyproject.toml`），而這裡原本只檢查
+        # `.git`：`Path(sys.executable).anchor` 不可寫時會退到
+        # `tempfile.mkdtemp()`（即上面 docstring 明言要避開的 `$TMPDIR`），
+        # 若那條祖先鏈上的 checkout 沒有 `.git`（`git archive` / vendored CI
+        # checkout，正是 `test_a_tree_without_git_still_finds_its_pack` 描述的
+        # 那種樹）就會通過這道護欄，然後解析到真的 pack 而誤紅。
+        # 這正是本 PR 在修的那一類——標記集合被抄成第二份、只更新一份。
+        offenders = [str(p) for p in (d, *d.parents)
+                     if any((p / m).exists() for m in PROJECT_ROOT_MARKERS)]
+        assert not offenders, (
+            f"staging dir {d} sits inside a project tree (markers found at "
+            f"{offenders}); the isolation this class depends on does not hold "
+            f"here")
         return d
 
     @staticmethod
