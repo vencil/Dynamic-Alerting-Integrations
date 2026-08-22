@@ -350,7 +350,18 @@ def parse_tool_files_text(text: str) -> set[str]:
         if in_block:
             if stripped == ")":
                 break
-            if not stripped or stripped.startswith("#"):
+            # ⛔ Same bash comment rule as `_lint_helpers.strip_bash_comment`.
+            # This parser is deliberately standalone (it reads a TAG's blob as
+            # text, not a file), and `test_text_parsers_match_lib_lint_helpers_
+            # on_head` pins the two together — so fixing only the other one
+            # does not remove the defect, it relocates it: an entry carrying a
+            # trailing comment would parse differently here and trip THAT test
+            # with a message about parser drift instead of about the comment.
+            # `#` opens a comment only at a word start, so `ops/a.py#tag` and
+            # `"ops/c#d.py"` stay whole (silently shortening a name makes the
+            # file look absent, which is fail-open).
+            stripped = re.sub(r"(?:^|\s)#.*$", "", stripped).strip()
+            if not stripped:
                 continue
             name = stripped.strip("\"'(),").strip()
             if name:

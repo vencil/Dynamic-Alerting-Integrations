@@ -733,7 +733,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "6e757355b666ea92457dab12f1e7cac7da17c1b2fa69b1af31a127d4f93ee75a",
+ "source_digest": "82f1c349f0f2d3a1a80dc010791e354b129cb4dcbbdabb5398905cdaa8bcf095",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1188,6 +1188,7 @@
   "Makefile": [
    "tests/dx/test_bump_docs.py",
    "tests/dx/test_compile_custom_alerts.py",
+   "tests/dx/test_describe_tenant.py",
    "tests/dx/test_makefile_utf8_mode.py",
    "tests/dx/test_recover_index.py",
    "tests/lint/test_check_makefile_targets.py",
@@ -1814,6 +1815,7 @@
   "k8s/03-monitoring": [
    "tests/lint/test_check_pint.py",
    "tests/ops/test_generate_routes_orchestration.py",
+   "tests/ops/test_grar_strict_hardening.py",
    "tests/ops/test_scaffold_db.py"
   ],
   "k8s/03-monitoring/configmap-alertmanager.yaml": [

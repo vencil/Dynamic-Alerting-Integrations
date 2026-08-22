@@ -1079,13 +1079,47 @@ class TestPlatformPackLocationIsLayoutIndependent:
         try:
             mod = self._load_isolated(d)
             mod.platform_alert_identities()
-            capsys.readouterr()
+            # ⛔ 先斷言第一次真的有出聲。只斷言「第二次沒有」的話，任何讓
+            # pack 變成解析得到的改動都會讓這一格靜默退化成恆真。
+            assert "WARN" in capsys.readouterr().err
             mod._PLATFORM_IDENTITY_CACHE = None  # 強迫再走一次解析
             mod.platform_alert_identities()
             assert "WARN" not in capsys.readouterr().err
         finally:
             sys.path.remove(str(d))
             shutil.rmtree(d, ignore_errors=True)
+
+    def test_the_search_stops_at_the_project_root(self, capsys):
+        """⛔ 上界本身要有守衛，否則撤掉它全套仍綠。
+
+        盲審實測：把上界拿掉（改回無上界祖先走訪），
+        `-k PlatformPackLocation` 仍 4 passed —— 因為 staging 目錄之上本來就
+        沒有 `k8s/03-monitoring/`，有界無界看起來一模一樣。這一格在祖先種一個
+        **誘餌** pack：無上界會採用它（＝把別人的規則當成本平台的），有界必須
+        回 None 並降級。
+        """
+        root = self._staging_dir()
+        try:
+            decoy = (root / "k8s" / "03-monitoring")
+            decoy.mkdir(parents=True)
+            (decoy / "configmap-rules-platform.yaml").write_text(
+                "kind: ConfigMap\n", encoding="utf-8")
+            d = root / "sub"
+            d.mkdir()
+            self._stage(d, with_pack=False)
+            try:
+                mod = self._load_isolated(d)
+                found = mod._find_platform_rules_configmap()
+                assert found is None, (
+                    f"走訪越過了專案邊界，採用了祖先層的誘餌 {found} —— "
+                    f"那等於把別人的 pack 當成本平台的規則")
+                assert mod.platform_alert_identities() == (
+                    mod.PLATFORM_ALERT_IDENTITY_LABELS)
+                assert "WARN" in capsys.readouterr().err
+            finally:
+                sys.path.remove(str(d))
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
 
     def test_repo_layout_still_resolves_the_real_pack(self):
         """repo 佈局（開發者與 CI 走的那條）行為未變。"""

@@ -606,7 +606,13 @@ class TestCheckLayoutDepthAssumptions:
         assert "IndexError" not in errors[0][1]
 
     def test_nested_dirname_counts_the_same(self, tmp_path):
-        """換 os.path 拼法不是轉綠的路——規則問的是算術不是拼法。"""
+        """巢狀 dirname 與 parents/.parent 同樣被計數。
+
+        ⚠️ 這一格**不**證明「換拼法不是轉綠的路」——那句宣稱已被撤回。
+        規則只認三種建模過的拼法；字面 `".."` 段、`os.pardir`、間接
+        `_THIS_DIR` 賦值都繞得過，逐條列在
+        `check_layout_depth_assumptions` 的 docstring 裡。
+        """
         _make_tool(tmp_path, "ops/t.py",
                    "import os\n"
                    "ROOT = os.path.dirname(os.path.dirname(os.path.dirname(\n"
@@ -614,6 +620,33 @@ class TestCheckLayoutDepthAssumptions:
         errors = mod.check_layout_depth_assumptions(
             {"ops/t.py"}, tools_src=tmp_path)
         assert len(errors) == 1
+
+    def test_parents_index_message_says_indexerror_not_saturation(
+        self, tmp_path
+    ):
+        """⛔ index 分支的訊息也要被釘住。
+
+        盲審實測：把 `_ascent_kind` 整個塌成 `return "chain"`，
+        `-k LayoutDepth` 全綠——也就是 index 與 mixed 兩個分支當時沒有任何
+        斷言，`parents[3]`（#1494 原形）被報成「不會拋錯、安靜飽和」也不會
+        有人發現，而那正是這項修正宣稱要防的誤導。
+        """
+        _make_tool(tmp_path, "ops/t.py",
+                   "from pathlib import Path\n"
+                   "ROOT = Path(__file__).resolve().parents[3]\n")
+        msg = mod.check_layout_depth_assumptions(
+            {"ops/t.py"}, tools_src=tmp_path)[0][1]
+        assert "IndexError" in msg
+        assert "飽和" not in msg
+
+    def test_mixed_spelling_message_admits_it_depends(self, tmp_path):
+        """兩種拼法混用時，後果取決於運算順序——訊息不得假裝確定。"""
+        _make_tool(tmp_path, "ops/t.py",
+                   "from pathlib import Path\n"
+                   "ROOT = Path(__file__).resolve().parent.parents[2]\n")
+        msg = mod.check_layout_depth_assumptions(
+            {"ops/t.py"}, tools_src=tmp_path)[0][1]
+        assert "視實際運算順序" in msg
 
     def test_non_literal_index_is_reported_not_waved_through(self, tmp_path):
         """讀不出來的 index 是「無法擔保」，不是「沒問題」（fail-closed）。"""
@@ -627,7 +660,11 @@ class TestCheckLayoutDepthAssumptions:
         assert "不是字面常數" in errors[0][1]
 
     @pytest.mark.parametrize("body", [
-        # 恰好踩在映像的合法上限
+        # ⚠️ 這一格釘的是**今天的（已知偏低的）門檻**，不是「這樣寫是安全的」。
+        # `parents[2]` 與 `.parent` ×3 爬一樣多層、在映像深度都解析成 `/`，
+        # 但目前只有後者被擋（盲點 #1／#7，見 check_layout_depth_assumptions
+        # 的 docstring）。⇒ 修那個偏移量時**必須同時改這一格**，否則會被自己
+        # 的測試擋住。
         "from pathlib import Path\nROOT = Path(__file__).resolve().parents[2]\n",
         # 同目錄尋址：映像 flat layout 的正解，必須不被擋
         "from pathlib import Path\nD = Path(__file__).resolve().parent / 'x.yaml'\n",
@@ -647,6 +684,23 @@ class TestCheckLayoutDepthAssumptions:
             {"ops/t.py"}, tools_src=tmp_path)
         assert len(errors) == 1
         assert "無法確認" in errors[0][1]
+
+    def test_a_bom_prefixed_shipped_file_is_not_a_finding(self, tmp_path):
+        """⛔ BOM 的檔案 Python 跑得動，兩支掃描器都不得報成解析失敗。
+
+        Windows 編輯器存出來的 UTF-8 檔常帶 BOM；`ast.parse` 對 U+FEFF 會拋
+        `invalid non-printable character`，但 `python x.py` rc=0。這在同一支
+        檔案裡有**兩個**掃描器會踩到，所以兩個一起釘。
+        """
+        p = tmp_path / "ops" / "t.py"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(
+            b"\xef\xbb\xbffrom pathlib import Path\n"
+            b"D = Path(__file__).resolve().parent\n")
+        assert mod.check_layout_depth_assumptions(
+            {"ops/t.py"}, tools_src=tmp_path) == []
+        assert mod.check_underscore_imports(
+            {"ops/t.py"}, {"t.py"}, tools_src=tmp_path) == []
 
     def test_non_python_entries_are_ignored(self, tmp_path):
         """TOOL_FILES 也含資料檔，別拿 ast 去解析 YAML。"""
@@ -676,7 +730,11 @@ class TestBuildShArrayReaderMatchesBash:
         # 訊息完全沒提到註解。最便宜的轉綠是刪掉註解，也就是這條守衛的
         # 實質規則變成「不准替出貨清單寫註解」。
         ("    ops/a.py   # BYO preflight", "ops/a.py"),
-        ("    ops/a.py#no-space", "ops/a.py"),
+        # ⛔ bash 只在 word 開頭起註解。實測 `printf '[%s]' "${TOOL_FILES[@]}"`：
+        # `ops/a.py#no-space` 與 `"ops/c#d.py"` 都保持完整。截短檔名的方向是
+        # fail-open——`is_file()` 為 False，該檔就被靜默跳過不掃描。
+        ("    ops/a.py#no-space", "ops/a.py#no-space"),
+        ('    "ops/c#d.py"', "ops/c#d.py"),
     ])
     def test_entry_forms_bash_accepts(self, tmp_path, entry_line, expected):
         from _lint_helpers import _parse_build_sh_array

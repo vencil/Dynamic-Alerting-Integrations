@@ -172,8 +172,13 @@ def check_underscore_imports(
             # 這裡不重複報。
             continue
         try:
+            # utf-8-sig for the same reason as the layout rule below: a BOM is
+            # invisible to Python's import machinery but makes `ast.parse`
+            # raise, so a runnable tool would be reported as unparseable.
+            # ⛔ Fixed here TOO, not only where it was noticed — one誤紅 in one
+            # function of this file is the same defect as in the other.
             imported = _underscore_imports_of(
-                src_path.read_text(encoding="utf-8"))
+                src_path.read_text(encoding="utf-8-sig"))
         except SyntaxError as exc:  # pragma: no cover - shipped tools must parse
             errors.append((
                 "error",
@@ -303,11 +308,26 @@ def check_layout_depth_assumptions(
        ``joinpath("..")``、``p / ".."``）完全不計數。
     5. ``Path(*parts[:-4])`` 這類切片不計數。
     6. ``try/except IndexError`` 已經處置過的寫法仍會被報。
+    7. 因為第 1 條，**等價的兩種拼法判決不同**：``parents[2]`` 與
+       ``.parent`` ×3 爬一樣多層、在映像深度都解析成 ``/``，但前者放行、後者
+       被擋。⇒ 把 ``.parent.parent.parent`` 改寫成 ``parents[2]`` 就是一條
+       轉綠路。⚠️ 而 ``tests/lint/test_check_build_completeness.py`` 的
+       ``test_legal_shapes_stay_green`` 目前把 ``parents[2]`` 明文釘成合法，
+       所以修第 1 條時**必須同時改那一格**，否則會被自己的測試擋住。
 
     ⇒ **今天出貨檔裡確實還有第 3+4 條合起來造成的活體漏網**（`_registry_lib`
     與 `_observed_map_lib` 各一處 ``_THIS_DIR`` + 三個 ``".."``）。修法與這些
     盲點的收口一起放在後續票，刻意不夾帶進 #1494——理由是本規則每被加固一
     輪就製造新的缺陷，而真正與拼法無關的守衛是上面那支行為測試。
+
+    ⚠️ **本規則在 CI 的執行點是 pytest twin，不是 pre-commit hook。**
+    ``build-completeness-check`` 掛在 ``.pre-commit-config.yaml``，而沒有任何
+    workflow 呼叫 ``pre-commit run``；CI 上實際跑到這條規則的是
+    ``tests/lint/test_check_build_completeness.py`` 的 repo-level 迴歸
+    （``test_actual_repo_has_no_depth_assumptions`` 與 ``TestRepoSmoke``），
+    它們住在 ``tests/`` 底下由 ``python-tests-run`` 帶到。後果是：只加在 hook
+    側、twin 沒跟上的新規則在 CI 是零覆蓋。把 hook 也接進 Lint job 一併留在
+    後續票。
 
     Returns:
         list of (severity, message) tuples

@@ -152,6 +152,25 @@ def parse_build_sh_repo_data_files(path: Path | None = None) -> Set[str]:
     return _parse_build_sh_array(path or BUILD_SH_PATH, "REPO_DATA_FILES")
 
 
+_BASH_COMMENT_RE = re.compile(r"(?:^|\s)#.*$")
+
+
+def strip_bash_comment(line: str) -> str:
+    """Remove a bash comment from *line*, using bash's own rule.
+
+    ⛔ ``#`` opens a comment only at the START OF A WORD — line start or after
+    whitespace. A naive ``split("#", 1)`` also truncates ``ops/a.py#tag`` and
+    ``"ops/c#d.py"``, which bash keeps whole; the reader would then look for a
+    file under a shortened name, find nothing, and SILENTLY skip it. That is
+    the fail-open direction, so the rule is transcribed rather than
+    approximated.
+
+    Verified against bash: ``TOOL_FILES=( ops/a.py#no-space  ops/b.py  # c
+    "ops/c#d.py" )`` expands to three words, two of which keep their ``#``.
+    """
+    return _BASH_COMMENT_RE.sub("", line).strip()
+
+
 def _parse_build_sh_array(path: Path, array_name: str) -> Set[str]:
     """Shared reader for the ``TOOL_FILES`` / ``REPO_DATA_FILES`` bash arrays.
 
@@ -166,10 +185,14 @@ def _parse_build_sh_array(path: Path, array_name: str) -> Set[str]:
 
     ⚠️ This is the reader for these two arrays, not for every build.sh array in
     the repo: ``scripts/tools/lint/check_image_pin_capability.py`` carries its
-    own ``TOOL_FILES`` parser (it reads the array out of a git TAG's blob, a
-    different input entirely). Consolidating the two is worth doing and is NOT
-    done here — see the follow-up issue referenced in
-    ``check_build_completeness.check_layout_depth_assumptions``.
+    own ``TOOL_FILES`` parser, because its input is a git TAG's blob rather
+    than a file on disk. ``test_text_parsers_match_lib_lint_helpers_on_head``
+    pins the two together, so **a parsing rule fixed here must be fixed there
+    too** — fixing only one relocates the defect into that equivalence test,
+    where the failure message talks about parser drift and never mentions the
+    real cause. Consolidating them properly is deliberately NOT done here
+    (the two have genuinely different inputs); the comment-handling rule is
+    shared via :func:`strip_bash_comment` and mirrored inline there.
     """
     entries: Set[str] = set()
     in_block = False
@@ -184,7 +207,7 @@ def _parse_build_sh_array(path: Path, array_name: str) -> Set[str]:
                     break
                 # Drop a trailing comment BEFORE anything else, so an entry
                 # carrying one is still recognised as that entry.
-                stripped = stripped.split("#", 1)[0].strip()
+                stripped = strip_bash_comment(stripped)
                 if not stripped:
                     continue
                 name = stripped.strip("\"'(),").strip()

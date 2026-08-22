@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -59,6 +60,13 @@ from _lint_helpers import (  # noqa: E402
 # `/opt/da-tools/x.py` -> parents are (/opt/da-tools, /opt, /). Three.
 IMAGE_ANCESTOR_COUNT = 3
 
+# build.sh's own sed, transcribed. Kept next to the assertion that it matched
+# something, so a change on either side surfaces instead of silently making
+# this harness less like the image.
+_BUILD_SH_STRIP_RE = re.compile(
+    r"""sys\.path\.insert.*os\.path\.join.*_THIS_DIR.*["']\.\.["']\)"""
+)
+
 
 def _image_depth_bases() -> "list[Path]":
     """Candidate parents to build the image-depth directory under, best first.
@@ -77,11 +85,20 @@ def _image_depth_bases() -> "list[Path]":
     shortened, so there the anchor is still the only way to reach depth three.
     """
     bases = []
-    tmp = Path(tempfile.gettempdir()).resolve()
-    # A file in <tmp>/<unique> has len(tmp.parts) + 1 ancestors; only a
-    # single-component tmp (POSIX /tmp) can land on the image's count.
-    if len(tmp.parts) + 1 == IMAGE_ANCESTOR_COUNT:
-        bases.append(tmp)
+    candidates = [Path(tempfile.gettempdir())]
+    if os.name == "posix":
+        # ⚠️ Not only $TMPDIR. A runner that exports a deep TMPDIR would leave
+        # the anchor as the sole option, and the anchor is root-owned — the
+        # exact combination that made this file silently skip in CI. `/tmp`
+        # exists on every POSIX host and is world-writable, so name it
+        # directly rather than trusting the environment to point at it.
+        candidates.append(Path("/tmp"))
+    for cand in candidates:
+        cand = cand.resolve()
+        # A file in <cand>/<unique> has len(cand.parts) + 1 ancestors; only a
+        # single-component base (POSIX /tmp) lands on the image's count.
+        if len(cand.parts) + 1 == IMAGE_ANCESTOR_COUNT and cand not in bases:
+            bases.append(cand)
     bases.append(Path(Path(sys.executable).anchor))
     return bases
 
@@ -93,23 +110,44 @@ def _dir_with_image_ancestor_count() -> "tuple[Path, Path]":
     ``rmtree`` removes everything it made. Raises ``OSError`` if no candidate
     base is usable — the caller decides whether that is a skip or a failure.
     """
-    last_error = None
+    # ⛔ One reason PER BASE, not just the last one. Reporting only the final
+    # failure names the anchor's EACCES even when the real story is that the
+    # preferred base was rejected for a different cause entirely — a message
+    # that sends the reader to fix the wrong thing.
+    reasons: "list[str]" = []
     for base in _image_depth_bases():
         cleanup_root = base / f"vibe1494-{uuid.uuid4().hex[:8]}"
         leaf = cleanup_root
         while len((leaf / "probe.py").parents) < IMAGE_ANCESTOR_COUNT:
             leaf = leaf / "d"
         if len((leaf / "probe.py").parents) != IMAGE_ANCESTOR_COUNT:
-            continue  # base is already deeper than the image; try the next
+            reasons.append(f"{base}: already deeper than the image layout")
+            continue
+        # ⛔ The leaf's PARENT is on sys.path during this run, so a stray
+        # module sitting next to us would be imported instead of the real
+        # one. At image depth the parent is forced to be a shared directory
+        # (`/tmp`, or the drive root) — depth three leaves no room for a
+        # private one — and ten shipped modules still insert their parent
+        # directory even after build.sh's strip. A planted `/tmp/yaml.py`
+        # therefore breaks the run (measured: 40+ modules) or, worse,
+        # SATISFIES an import the image could not. Reject a dirty base and
+        # say why, rather than producing a result that depends on it.
+        intruders = sorted(p.name for p in base.glob("*.py"))
+        if intruders:
+            reasons.append(
+                f"{base}: contains {intruders[:5]} — a module there would "
+                f"shadow imports through the parent-dir sys.path entries the "
+                f"shipped tools carry. Remove them or point TMPDIR elsewhere.")
+            continue
         try:
             leaf.mkdir(parents=True)
         except OSError as exc:
-            last_error = exc
+            reasons.append(f"{base}: {exc}")
             continue
         return leaf, cleanup_root
     raise OSError(
-        f"no writable base yields an image-depth path "
-        f"(tried {[str(b) for b in _image_depth_bases()]}): {last_error}"
+        "no usable base for an image-depth directory; each candidate was "
+        "rejected for its own reason: " + " | ".join(reasons)
     )
 
 
@@ -162,8 +200,10 @@ def flat_import_results():
         # is exactly how this file spent its first version not running in CI.
         if os.name == "posix":
             pytest.fail(
-                f"no image-depth directory could be created on a POSIX host, "
-                f"where $TMPDIR should always work: {exc}"
+                f"no image-depth directory could be built on a POSIX host, "
+                f"where /tmp normally provides one. Each candidate's own "
+                f"reason is below — fix the one you care about rather than "
+                f"the last one listed: {exc}"
             )
         pytest.skip(f"no writable image-depth path on this host: {exc}")
 
@@ -174,15 +214,33 @@ def flat_import_results():
         for rel in data_paths:
             shutil.copy2(REPO_ROOT / rel, flat / Path(rel).name)
 
-        # ⚠️ build.sh additionally seds out the parent-dir `sys.path.insert`
-        # line. Not replicated: re-implementing it here would be a second copy
-        # of that rule, free to drift from the one in build.sh. Leaving the
-        # line in is the conservative direction — the parent directory it adds
-        # to sys.path is EMPTY (this harness creates the chain itself, so the
-        # directory exists but holds nothing), which can only fail to resolve
-        # something, never resolve something the image would not.
-        # ⛔ An earlier version of this comment claimed the directory did not
-        # exist. It does; the conclusion survives but the reasoning did not.
+        # build.sh strips the repo-layout parent-dir `sys.path.insert` lines
+        # from its copies, so the image does not carry them. Replicated here
+        # with build.sh's own pattern, because NOT replicating it was wrong in
+        # both directions: the harness diverged from the image, AND every line
+        # left in inserts the leaf's parent — a SHARED directory at image
+        # depth — onto sys.path.
+        #
+        # ⛔ Two earlier versions of this comment were false. The first said
+        # the parent directory does not exist (it does). The second said it is
+        # empty (it is `/tmp`, or the drive root). The pattern below is a
+        # second copy of build.sh's rule and can drift from it, which is a real
+        # cost — the assertion after it makes the drift visible rather than
+        # silent: build.sh's sed matches only the `_THIS_DIR` spelling, so a
+        # measured TEN shipped lines survive it and still run in the image.
+        stripped = 0
+        for copy in flat.glob("*.py"):
+            text = copy.read_text(encoding="utf-8")
+            kept = [ln for ln in text.splitlines(keepends=True)
+                    if not _BUILD_SH_STRIP_RE.search(ln)]
+            if len(kept) != len(text.splitlines(keepends=True)):
+                stripped += 1
+                copy.write_text("".join(kept), encoding="utf-8")
+        assert stripped, (
+            "the build.sh strip pattern matched nothing — either build.sh "
+            "changed its sed and this copy did not follow, or the staging "
+            "step is not copying what it thinks it is"
+        )
         payload = [
             [Path(rel).stem, str(flat / Path(rel).name)]
             for rel in tool_paths if rel.endswith(".py")
@@ -209,13 +267,23 @@ def test_every_shipped_module_imports_under_the_image_layout(
 ):
     """No shipped module may fail to import when flattened.
 
-    ⛔ A ``ModuleNotFoundError`` for a third-party distribution is NOT counted
-    as a failure: the image ships a virtualenv (``COPY --from=builder
-    /opt/venv``) that this test host does not have, so that class of error says
-    something about the runner, not about the layout. Every other exception is
-    fatal — ``IndexError`` from a depth assumption is exactly the shape #1494
-    had. The environment-only skips are printed so the exemption can never
-    quietly grow to cover a real failure.
+    ⛔ The third-party exemption is ASSERTED EMPTY, not merely reported.
+
+    An earlier version excused any module whose failure was a
+    ``ModuleNotFoundError`` for a name outside the shipped set, on the grounds
+    that the image ships a virtualenv this host lacks — and printed the
+    excused list "so the exemption can never quietly grow". Both halves were
+    wrong. The exemption is per-MODULE, not per-line: Python stops at the
+    first error, so a single ``import <third-party>`` ABOVE a depth assumption
+    means the assumption never executes and the whole module is forgiven —
+    measured, both guards green on a module that dies on its first line in the
+    customer's image. And the print was invisible where it mattered: CI runs
+    pytest without ``-s``, so passing-test stdout is captured and dropped.
+
+    An assertion needs nobody to read it. The expected set is empty because
+    every shipped module imports cleanly against the image's own dependency
+    set; if that stops being true, this fails loudly and the exemption gets
+    discussed rather than absorbed.
     """
     results, shipped_names = flat_import_results
 
@@ -230,10 +298,16 @@ def test_every_shipped_module_imports_under_the_image_layout(
         else:
             real.append((name, error))
 
-    print(f"\nimported {len(results)} shipped modules at image depth "
-          f"({IMAGE_ANCESTOR_COUNT} ancestors); "
-          f"{len(env_only)} skipped for missing third-party distributions: "
-          f"{sorted({m for _, m in env_only})}")
+    assert not env_only, (
+        "shipped module(s) could not be imported because a third-party "
+        "distribution is missing here:\n"
+        + "\n".join(f"  {n}: missing {m}" for n, m in env_only)
+        + "\n⛔ This is not a free pass. Python stops at the first error, so "
+        "everything below that import — including any layout assumption this "
+        "test exists to catch — never ran, and the module is UNCHECKED. "
+        "Either install the distribution where this test runs, or establish "
+        "that the image does not ship this module."
+    )
 
     assert not real, (
         "shipped module(s) fail to import once the image flattens them — this "

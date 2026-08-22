@@ -204,6 +204,7 @@ modules:
     excluded:
       parse_command_map_keys: "Trivial wrapper around parse_command_map; covered transitively"
       _parse_build_sh_array: "#1494 shared reader extracted from parse_build_sh_tool_paths (array name parameterised); every existing property test of parse_build_sh_tools / parse_build_sh_tool_paths now runs through it"
+      strip_bash_comment: "#1494 transcription of bash's word-start `#` rule; table-covered by test_check_build_completeness.py::TestBuildShArrayReaderMatchesBash (bare / quoted / trailing-comment / `#`-in-name / quoted-`#`-in-name), expectations taken from a real bash expansion"
       parse_build_sh_repo_data_files: "#1494 thin wrapper over _parse_build_sh_array for build.sh's second copy lane; repo-level assertions in test_check_build_completeness.py::TestRepoDataFilesArePairedWithTheirConsumer"
       resolve_diff_base: "Env-var lookup + git rev-parse subprocess wrapper; integration-tested via check_codename_leak --ci runs (smoke verified missing-base error path)"
       get_diff_added_lines: "Subprocess wrapper around git diff --unified=0; parsing logic split into _parse_unified_zero_diff which has dedicated unit tests in test_check_codename_leak.py::TestDiffParsing"
