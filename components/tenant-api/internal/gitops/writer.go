@@ -33,6 +33,37 @@ var ErrConflict = errors.New("conflict: repository was updated concurrently, ple
 // ErrPendingPR is returned when a tenant already has a pending PR (PR mode only).
 var ErrPendingPR = errors.New("pending PR exists for this tenant")
 
+// ErrPrecondition reports that a caller-supplied base hash no longer describes
+// the tenant file on disk: someone else wrote it between the caller's read and
+// this write, so overwriting would silently drop their change. Callers match it
+// with errors.Is; errors.As on *PreconditionError also yields the hash the file
+// actually has, so a client can refresh against the right base.
+var ErrPrecondition = errors.New("precondition failed: the tenant configuration changed since it was read")
+
+// PreconditionError carries both sides of a failed base-hash check.
+//
+// Current is the hash the file has NOW; it is empty when the tenant file does
+// not exist at all (deleted, or never created), which is reported the same way
+// — a caller holding a base hash for a file that is gone is just as stale as
+// one holding an outdated hash, and both need a fresh read before retrying.
+type PreconditionError struct {
+	TenantID string
+	Expected string
+	Current  string
+}
+
+func (e *PreconditionError) Error() string {
+	current := e.Current
+	if current == "" {
+		current = "<no such tenant file>"
+	}
+	return fmt.Sprintf("%s (tenant %s: expected base %s, on disk %s)",
+		ErrPrecondition.Error(), e.TenantID, e.Expected, current)
+}
+
+// Unwrap makes errors.Is(err, ErrPrecondition) hold for the typed error.
+func (e *PreconditionError) Unwrap() error { return ErrPrecondition }
+
 // ErrForgeDegraded is returned when the in-lock base fetch (TRK-318) exceeds
 // TA_GIT_FETCH_TIMEOUT — the forge is unreachable or too slow to refresh the
 // local base. The writer mutex is released as the caller returns and the
@@ -172,6 +203,37 @@ func (w *Writer) SetOnWrite(fn OnWriteFunc) {
 // nil — handlers surface them in the 200 response so the author sees the
 // migration signal on the very write that succeeded with an old spelling.
 func (w *Writer) Write(ctx context.Context, tenantID, authorEmail, yamlContent string) (notices []string, err error) {
+	return w.write(ctx, tenantID, authorEmail, yamlContent, "")
+}
+
+// WriteIfUnchanged is Write with an optimistic-concurrency precondition:
+// the tenant file must still hash to baseHash at the moment of the write, or
+// nothing is written and *PreconditionError (errors.Is ErrPrecondition) is
+// returned.
+//
+// The check runs INSIDE the writer lock, immediately before the commit, so it
+// is the authoritative one: a caller that also compares hashes in its handler
+// is doing a cheap early rejection, not concurrency control — that comparison
+// reads the file outside the lock, leaving a window in which another write can
+// land between the read and the commit (the TOCTOU the custom-alerts handler
+// documented as a future hardening).
+//
+// baseHash is compared against cfg.ComputeSourceHash of the raw on-disk bytes,
+// i.e. exactly the `source_hash` GET /tenants/{id} reports. An empty baseHash
+// is rejected rather than treated as "no precondition": this method exists to
+// enforce one, and silently degrading to an unconditional overwrite when a
+// caller's hash variable happens to be empty is the failure mode it is meant to
+// prevent. Callers that genuinely want no precondition call Write.
+func (w *Writer) WriteIfUnchanged(ctx context.Context, tenantID, authorEmail, yamlContent, baseHash string) (notices []string, err error) {
+	if baseHash == "" {
+		return nil, &PreconditionError{TenantID: tenantID, Expected: "", Current: ""}
+	}
+	return w.write(ctx, tenantID, authorEmail, yamlContent, baseHash)
+}
+
+// write is the shared body of Write / WriteIfUnchanged. baseHash is empty for
+// an unconditional write.
+func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, baseHash string) (notices []string, err error) {
 	// Step 0: reserved-id backstop (defense-in-depth; see guardTenantID).
 	if err := guardTenantID(tenantID); err != nil {
 		return nil, err
@@ -193,8 +255,28 @@ func (w *Writer) Write(ctx context.Context, tenantID, authorEmail, yamlContent s
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
+	filePath := filepath.Join(w.configDir, tenantID+".yaml")
+
+	// Optimistic concurrency, under the lock and immediately before the write:
+	// anything that lands between here and commitFileChange would have to hold
+	// w.mu, which this goroutine has.
+	if baseHash != "" {
+		existing, rerr := os.ReadFile(filePath)
+		if rerr != nil && !os.IsNotExist(rerr) {
+			return nil, fmt.Errorf("read current tenant file for %s: %w", tenantID, rerr)
+		}
+		// os.IsNotExist leaves existing nil → current stays empty → mismatch.
+		var current string
+		if rerr == nil {
+			current = cfg.ComputeSourceHash(existing)
+		}
+		if current != baseHash {
+			return nil, &PreconditionError{TenantID: tenantID, Expected: baseHash, Current: current}
+		}
+	}
+
 	if err := w.commitFileChange(
-		filepath.Join(w.configDir, tenantID+".yaml"),
+		filePath,
 		tenantID,
 		authorEmail,
 		[]byte(yamlContent),
