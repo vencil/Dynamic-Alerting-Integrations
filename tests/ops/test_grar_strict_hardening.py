@@ -6,9 +6,12 @@ byte-identical（零 policy 訊息、exit 0）。另鎖 POLICY_ERROR_PREFIX 唯�
 來源（_policy_errors() 的 blocking 判定不被其他 ERROR 字串汙染）。
 """
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
+import uuid
+from pathlib import Path
 
 import pytest
 import yaml
@@ -21,6 +24,7 @@ from generate_alertmanager_routes import (  # noqa: E402
     load_tenant_configs,
 )
 from _grar_validate import _parse_policy_duration  # noqa: E402
+from _lib_compat import PROJECT_ROOT_MARKERS  # noqa: E402
 
 TESTS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO_ROOT = os.path.dirname(TESTS_DIR)
@@ -956,3 +960,220 @@ class TestTheGoAsymmetryWarningStaysTrue:
     #     keep `partial` and the customer-facing sentence goes false.
     # Nothing here will tell you when that happens. A real pin belongs in a
     # Go test, next to the code it is about.
+
+
+class TestPlatformPackLocationIsLayoutIndependent:
+    """#1494 — pack 的定位不得靠「數上去幾層」，且退化必須出聲。
+
+    這一組釘的是本 PR 的承重宣稱：客戶在**映像**裡拿到的是完整探針集，
+    不是降級版。原本的 `parents[3]` 在映像佈局（3 個祖先）是 IndexError，
+    而修法之後真正該問的是「它到底找不找得到、找不到會不會講」。
+    """
+
+    @staticmethod
+    def _load_isolated(tmpdir):
+        """把 _grar_validate 從 *tmpdir* 載入成獨立模組實例。
+
+        ⛔ 不能重用 already-imported 的那份：模組層的 `__file__` 決定解析
+        起點，而快取的那份指向 repo 樹。每次給一個新名字，也讓
+        `_PLATFORM_IDENTITY_CACHE` / warn-once 旗標不互相污染。
+        """
+        import importlib.util
+        import uuid
+        name = "grar_probe_" + uuid.uuid4().hex[:8]
+        spec = importlib.util.spec_from_file_location(
+            name, os.path.join(tmpdir, "_grar_validate.py"))
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[name] = mod
+        spec.loader.exec_module(mod)
+        return mod
+
+    @staticmethod
+    def _staging_dir():
+        """一個**保證不在 repo 之下**的暫存目錄。
+
+        ⛔ 不用 pytest 的 `tmp_path`。被測函式會往上找 repo root，而
+        `tmp_path` 的位置是環境決定的：`--basetemp=.pytest-tmp` 或把
+        `TMPDIR` 指進 workspace（CI 為了避開小 /tmp、開發者為了留現場，
+        兩者都很常見）都會讓 staged 副本的祖先鏈含到本 repo，於是
+        「找不到 pack」那一格誤紅，而 warn-once 那一格會靜默退化成空斷言
+        ——誤紅與偽綠同時發生。
+        """
+        import tempfile
+        base = Path(sys.executable).anchor
+        d = Path(base) / f"vibe1494t-{uuid.uuid4().hex[:8]}"
+        try:
+            d.mkdir(parents=True)
+        except OSError:
+            d = Path(tempfile.mkdtemp())
+        # ⛔ 用被測程式碼**同一份**標記集合，不要重抄 `.git`。被測的
+        # `_find_platform_rules_configmap` 認的是 `PROJECT_ROOT_MARKERS`
+        # （`.git` / `Makefile` / `pyproject.toml`），而這裡原本只檢查
+        # `.git`：`Path(sys.executable).anchor` 不可寫時會退到
+        # `tempfile.mkdtemp()`（即上面 docstring 明言要避開的 `$TMPDIR`），
+        # 若那條祖先鏈上的 checkout 沒有 `.git`（`git archive` / vendored CI
+        # checkout，正是 `test_a_tree_without_git_still_finds_its_pack` 描述的
+        # 那種樹）就會通過這道護欄，然後解析到真的 pack 而誤紅。
+        # 這正是本 PR 在修的那一類——標記集合被抄成第二份、只更新一份。
+        offenders = [str(p) for p in (d, *d.parents)
+                     if any((p / m).exists() for m in PROJECT_ROOT_MARKERS)]
+        assert not offenders, (
+            f"staging dir {d} sits inside a project tree (markers found at "
+            f"{offenders}); the isolation this class depends on does not hold "
+            f"here")
+        return d
+
+    @staticmethod
+    def _stage(tmpdir, with_pack: bool):
+        """把 module 與 pack 擺成映像的扁平佈局。
+
+        ⚠️ 只複製 `_grar_validate.py` 與 `_lib_python.py`。其餘遞移相依
+        （`_lib_compat` / `_lib_constants` …）仍由 `tests/conftest.py` 放進
+        `sys.path` 的 **repo 樹**解析——所以這不是完整的映像模擬，只是把
+        **被測函式看到的 `__file__`** 放到扁平位置。完整的映像 import 由
+        `tests/ops/test_image_flat_layout.py` 負責。
+        """
+        import shutil
+        for fname in ("_grar_validate.py", "_lib_python.py"):
+            src = (os.path.join(_OPS_DIR, fname) if fname.startswith("_grar")
+                   else os.path.join(REPO_ROOT, "scripts", "tools", fname))
+            shutil.copy2(src, os.path.join(tmpdir, fname))
+        if with_pack:
+            shutil.copy2(
+                os.path.join(REPO_ROOT, "k8s", "03-monitoring",
+                             "configmap-rules-platform.yaml"),
+                os.path.join(tmpdir, "configmap-rules-platform.yaml"))
+        sys.path.insert(0, str(tmpdir))
+
+    def test_flat_layout_with_the_pack_beside_it_gets_the_full_set(
+        self, capsys
+    ):
+        """出貨組態：pack 與模組同目錄 ⇒ 完整探針集、零警告。"""
+        d = self._staging_dir()
+        self._stage(d, with_pack=True)
+        try:
+            mod = self._load_isolated(d)
+            found = mod._find_platform_rules_configmap()
+            assert found is not None
+            assert found.parent == d, (
+                f"應該解析到同目錄那份，實際 {found}")
+            full = mod.platform_alert_identities()
+            assert len(full) > len(mod.PLATFORM_ALERT_IDENTITY_LABELS), (
+                "同目錄有 pack 卻仍拿到 fallback 常數 —— 出貨的檢查是降級版")
+            assert "WARN" not in capsys.readouterr().err
+        finally:
+            sys.path.remove(str(d))
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_without_the_pack_it_degrades_and_says_so(self, capsys):
+        """對照組：拿掉 pack ⇒ 退回常數，而且**出聲**。
+
+        ⛔ 沒有這一格，上面那格證明不了「41 是因為 pack 在那裡」——
+        它可能來自任何別的來源。
+        """
+        d = self._staging_dir()
+        self._stage(d, with_pack=False)
+        try:
+            mod = self._load_isolated(d)
+            assert mod._find_platform_rules_configmap() is None
+            degraded = mod.platform_alert_identities()
+            assert degraded == mod.PLATFORM_ALERT_IDENTITY_LABELS
+            err = capsys.readouterr().err
+            assert "WARN" in err and "degraded" in err, err
+            assert "configmap-rules-platform.yaml" in err, err
+        finally:
+            sys.path.remove(str(d))
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_the_warning_is_emitted_once_per_process(self, capsys):
+        """降級警告不得每次呼叫都刷一次（會淹掉客戶的真實輸出）。"""
+        d = self._staging_dir()
+        self._stage(d, with_pack=False)
+        try:
+            mod = self._load_isolated(d)
+            mod.platform_alert_identities()
+            # ⛔ 先斷言第一次真的有出聲。只斷言「第二次沒有」的話，任何讓
+            # pack 變成解析得到的改動都會讓這一格靜默退化成恆真。
+            assert "WARN" in capsys.readouterr().err
+            mod._PLATFORM_IDENTITY_CACHE = None  # 強迫再走一次解析
+            mod.platform_alert_identities()
+            assert "WARN" not in capsys.readouterr().err
+        finally:
+            sys.path.remove(str(d))
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_the_search_stops_at_the_project_root(self, capsys):
+        """⛔ 上界本身要有守衛，否則撤掉它全套仍綠。
+
+        盲審實測：把上界拿掉（改回無上界祖先走訪），
+        `-k PlatformPackLocation` 仍 4 passed —— 因為 staging 目錄之上本來就
+        沒有 `k8s/03-monitoring/`，有界無界看起來一模一樣。這一格在祖先種一個
+        **誘餌** pack：無上界會採用它（＝把別人的規則當成本平台的），有界必須
+        回 None 並降級。
+        """
+        root = self._staging_dir()
+        try:
+            decoy = (root / "k8s" / "03-monitoring")
+            decoy.mkdir(parents=True)
+            (decoy / "configmap-rules-platform.yaml").write_text(
+                "kind: ConfigMap\n", encoding="utf-8")
+            d = root / "sub"
+            d.mkdir()
+            self._stage(d, with_pack=False)
+            try:
+                mod = self._load_isolated(d)
+                found = mod._find_platform_rules_configmap()
+                assert found is None, (
+                    f"走訪越過了專案邊界，採用了祖先層的誘餌 {found} —— "
+                    f"那等於把別人的 pack 當成本平台的規則")
+                assert mod.platform_alert_identities() == (
+                    mod.PLATFORM_ALERT_IDENTITY_LABELS)
+                assert "WARN" in capsys.readouterr().err
+            finally:
+                sys.path.remove(str(d))
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+    def test_a_tree_without_git_still_finds_its_pack(self, capsys):
+        """⛔ 原始碼 tarball（無 `.git`）不得退化成 6 筆 fallback。
+
+        這一格是 `describe_tenant` 那邊同名情境的雙胞胎，而**這一側更嚴重**：
+        那邊找不到會報錯，這邊找不到會安靜地把探針集從 41 降到 6（fail-OPEN）。
+        上一版只把 `describe_tenant` 換成標記集合、這一側留著 `.git`-only，
+        於是被點名的那一半修好了、比較嚴重的那一半沒有。
+        """
+        root = self._staging_dir()
+        try:
+            proj = root / "proj"
+            (proj / "k8s" / "03-monitoring").mkdir(parents=True)
+            shutil.copy2(
+                os.path.join(REPO_ROOT, "k8s", "03-monitoring",
+                             "configmap-rules-platform.yaml"),
+                proj / "k8s" / "03-monitoring"
+                / "configmap-rules-platform.yaml")
+            (proj / "Makefile").write_text("all:\n", encoding="utf-8")
+            assert not (proj / ".git").exists(), "這棵樹刻意沒有 .git"
+            d = proj / "scripts" / "tools" / "ops"
+            d.mkdir(parents=True)
+            self._stage(d, with_pack=False)
+            try:
+                mod = self._load_isolated(d)
+                found = mod._find_platform_rules_configmap()
+                assert found is not None, (
+                    "無 .git 的 tarball 樹被判成「不在任何專案裡」⇒ 探針集"
+                    "靜默降級成 6 筆（fail-OPEN）")
+                assert len(mod.platform_alert_identities()) > len(
+                    mod.PLATFORM_ALERT_IDENTITY_LABELS)
+                assert "WARN" not in capsys.readouterr().err
+            finally:
+                sys.path.remove(str(d))
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+    def test_repo_layout_still_resolves_the_real_pack(self):
+        """repo 佈局（開發者與 CI 走的那條）行為未變。"""
+        import _grar_validate as g
+        found = g._find_platform_rules_configmap()
+        assert found is not None and found.is_file()
+        assert found.parts[-3:] == (
+            "k8s", "03-monitoring", "configmap-rules-platform.yaml")

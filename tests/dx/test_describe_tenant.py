@@ -585,3 +585,91 @@ class TestCustomAlertsUnionInheritance:
         names = {a["name"] for a in eff["_custom_alerts"]}
         assert names == {"own_alert"}                    # REPLACE, not union
         assert "_custom_alerts_resolution" not in eff
+
+
+class TestConfDSearchIsBounded:
+    """#1494 — 自動搜尋 conf.d 不得走出這個專案。
+
+    ⛔ 這一整條分支（不帶 `--conf-d` 時的自動搜尋）在本檔其餘測試裡是零覆蓋：
+    它們一律走 `--conf-d` 或直接用 `ConfDScanner`。盲審實測把上界整個拿掉，
+    本檔仍 26 passed —— 也就是那個修法沒有任何守衛。
+    """
+
+    @staticmethod
+    def _staged_copy(root, subpath):
+        """把 describe_tenant.py 複製到 *root/subpath*，回傳載入後的模組。
+
+        用 staged 副本而不是 import 進來的那一份：被測邏輯讀的是模組自己的
+        `__file__`，所以必須讓 `__file__` 落在我們控制的樹裡。遞移相依仍由
+        conftest 的 repo sys.path 解析（這裡測的是路徑解析，不是映像模擬）。
+        """
+        import importlib.util
+        import shutil
+        import uuid
+        dest = root / subpath
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(os.path.join(REPO_ROOT, "scripts", "tools", "dx",
+                                  "describe_tenant.py"), dest)
+        name = "dt_probe_" + uuid.uuid4().hex[:8]
+        spec = importlib.util.spec_from_file_location(name, dest)
+        m = importlib.util.module_from_spec(spec)
+        sys.modules[name] = m
+        spec.loader.exec_module(m)
+        return m
+
+    def _resolve(self, mod, monkeypatch, capsys):
+        """跑 main() 不帶 --conf-d，回傳它寫到 **stderr** 的文字。
+
+        唯一的呼叫端對回傳值做子字串比對，所以行為一直是對的——錯的是原本
+        寫「回傳它最後決定要讀的路徑」，那會讓下一個人以為可以拿它比對路徑。
+        """
+        monkeypatch.setattr(sys, "argv", ["describe_tenant", "--all"])
+        with pytest.raises(SystemExit):
+            mod.main()
+        return capsys.readouterr().err
+
+    def test_a_stray_conf_d_above_the_project_is_not_used(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """祖先層有 conf.d，但專案內沒有 ⇒ 必須報找不到，不得採用外面那個。
+
+        方向很重要：採用外面那個不會報錯，它會**安靜地描述錯的租戶**。
+        """
+        (tmp_path / "conf.d").mkdir()                       # 專案之外的誘餌
+        proj = tmp_path / "proj"
+        (proj / ".git").mkdir(parents=True)
+        mod = self._staged_copy(proj, "scripts/tools/dx/describe_tenant.py")
+        err = self._resolve(mod, monkeypatch, capsys)
+        assert "conf.d/ not found" in err, err
+        assert str(tmp_path / "conf.d") not in err, (
+            f"採用了專案之外的 conf.d：{err}")
+
+    def test_a_tree_without_git_still_finds_its_own_conf_d(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """原始碼 tarball / vendored 樹沒有 `.git`，但仍是專案根。
+
+        ⛔ 只認 `.git` 的上界會把這種樹判成「不在任何專案裡」而報錯，
+        而舊碼是找得到的 —— 那是修 unbounded 時引進的退化。
+        """
+        proj = tmp_path / "proj"
+        (proj).mkdir()
+        (proj / "Makefile").write_text("all:\n", encoding="utf-8")
+        (proj / "conf.d").mkdir()
+        (proj / "conf.d" / "t-a.yaml").write_text(
+            "routing:\n  receiver: x\n", encoding="utf-8")
+        mod = self._staged_copy(proj, "scripts/tools/dx/describe_tenant.py")
+        monkeypatch.setattr(sys, "argv", ["describe_tenant", "--all"])
+        # ⛔ 讀一次、存起來。`capsys.readouterr()` 會**清空**緩衝區，所以原本
+        # 在 SystemExit 路徑上第二次呼叫拿到的是空字串，
+        # `"conf.d/ not found" not in ""` 恆為 True——那條斷言在最重要的那條
+        # 路徑上是空的。今天擋住退化的其實是下一行的 exit code 檢查，一旦有人
+        # 放寬它，這一格就靜默變成什麼都不驗。
+        exit_code = None
+        try:
+            mod.main()
+        except SystemExit as exc:      # --all 正常結束也可能 raise
+            exit_code = exc.code
+        err = capsys.readouterr().err
+        assert exit_code in (0, None), err
+        assert "conf.d/ not found" not in err

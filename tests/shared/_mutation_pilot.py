@@ -621,18 +621,54 @@ MUTATIONS: list[Mutation] = [
     Mutation(
         target_file="scripts/tools/lint/_lint_helpers.py",
         test_file="tests/shared/test_property_tools.py",
-        label="parse_build_sh: ignore closing paren (slurps next array)",
-        fn_name="parse_build_sh_tools",
-        old='                if stripped == ")":\n                    break',
-        new='                if False:\n                    break',
+        label="parse_build_sh: drop comment strip (# lines become entries)",
+        fn_name="parse_build_sh_array_text",
+        old="        stripped = strip_bash_comment(line.strip())",
+        new="        stripped = line.strip()",
+        kill_test="test_skips_comments_and_blanks",
     ),
     Mutation(
         target_file="scripts/tools/lint/_lint_helpers.py",
-        test_file="tests/shared/test_property_tools.py",
-        label="parse_build_sh: drop comment skip (# lines included as tools)",
-        fn_name="parse_build_sh_tools",
-        old="                if not stripped or stripped.startswith(\"#\"):\n                    continue",
-        new="                if not stripped:\n                    continue",
+        test_file="tests/lint/test_check_build_completeness.py",
+        label="parse_build_sh: unanchored array name (EXTRA_TOOL_FILES matches)",
+        fn_name="parse_build_sh_array_text",
+        old="        m = open_re.search(stripped)",
+        new='        m = open_re.search(stripped) if not stripped.startswith("EXTRA") else open_re.search(stripped[6:])',
+        kill_test="test_block_boundaries_are_word_anchored",
+    ),
+    Mutation(
+        target_file="scripts/tools/lint/_lint_helpers.py",
+        test_file="tests/lint/test_check_build_completeness.py",
+        label="parse_build_sh: ignore the header line's remainder (never closes)",
+        fn_name="parse_build_sh_array_text",
+        # ⛔ 這一筆是補上來的：修法落地時零測試轉紅（三個 parser 測試檔全綠），
+        # 也就是「陣列頭那一行也要解析」當初是無守衛的。
+        old="            rest = stripped[m.end():]",
+        new='            rest = ""',
+        kill_test="test_block_boundaries_are_word_anchored",
+    ),
+    Mutation(
+        target_file="scripts/tools/lint/_lint_helpers.py",
+        test_file="tests/lint/test_check_build_completeness.py",
+        label="parse_build_sh: += and = both append (reassignment over-reports)",
+        fn_name="parse_build_sh_array_text",
+        old='            if not m.group("append"):',
+        new="            if False:",
+        kill_test="test_block_boundaries_are_word_anchored",
+    ),
+    Mutation(
+        target_file="scripts/tools/lint/_lint_helpers.py",
+        test_file="tests/lint/test_check_build_completeness.py",
+        label="strip_bash_comment: naive split (truncates a `#` inside a name)",
+        fn_name="strip_bash_comment",
+        # ⛔ Covers the direction the parser entries do NOT: those kill "comments
+        # are not stripped", this one kills "too much is stripped". bash opens a
+        # comment only at a WORD START, so `ops/a.py#tag` and `"ops/c#d.py"` keep
+        # their `#`; a naive split shortens them, the reader then finds no such
+        # file and SILENTLY skips it — the fail-open direction.
+        old='return _BASH_COMMENT_RE.sub("", line).strip()',
+        new='return line.split("#", 1)[0].strip()',
+        kill_test="test_entry_forms_bash_accepts",
     ),
     # ── latest_version_from_changelog (check_flaky_registry) ─────
     Mutation(

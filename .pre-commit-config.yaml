@@ -673,11 +673,18 @@ repos:
 
       # --- v2.4.0 Phase A: 防守工具補強 ---
       - id: build-completeness-check
-        name: build.sh ↔ COMMAND_MAP bidirectional sync
+        name: build.sh ↔ COMMAND_MAP sync + shipped-tool image-layout fitness
         entry: python3 -X utf8 scripts/tools/lint/check_build_completeness.py --ci
         language: python
         pass_filenames: false
-        files: ^components/da-tools/app/(entrypoint\.py|build\.sh)$
+        # ⛔ scripts/tools/**/*.py is load-bearing, not tidiness (#1494). The
+        # layout-depth rule reads the CONTENT of every shipped tool, so the
+        # commit that introduces a bad path assumption edits a file under
+        # scripts/tools/ and nothing under components/da-tools/app/ — with the
+        # old two-file filter that commit never ran this hook at all. Kept as
+        # the whole subtree rather than an enumeration of the shipped dirs:
+        # the shipped set is decided by build.sh's TOOL_FILES, which moves.
+        files: ^(components/da-tools/app/(entrypoint\.py|build\.sh)|scripts/tools/.*\.py)$
 
       - id: cli-coverage-check
         name: CLI command coverage (cheat-sheet ↔ cli-reference ↔ component README ↔ COMMAND_MAP)
