@@ -124,9 +124,36 @@ State after the #1339 fix:
 
 | Plane | Hierarchical `conf.d/` |
 |:--|:--|
-| threshold-exporter (thresholds) | ✅ full recursive inheritance |
+| threshold-exporter **library** (`pkg/config`'s `ResolveEffective`; `/effective` and `describe_tenant.py` read through it) | ✅ full recursive inheritance |
+| threshold-exporter **metrics it actually emits** | ⚠️ **still flat** — see the correction below |
 | `validate_config.py` | ✅ now recursive |
 | routing generator / remaining flat tools | ⚠️ **still flat**, but they now name the files they skip and point here |
+
+> ⚠️ **Correction (2026-08-22)**: this table used to carry a single row,
+> `threshold-exporter (thresholds) | ✅ full recursive inheritance`. That holds for
+> the **library** and does not hold for the metrics the exporter actually emits.
+> The recursive scanner (`scanDirHierarchical`) is **opt-in** — `config_hierarchy.go`'s
+> own header says it adds the recursive walk "without disturbing the single-level
+> `scanDirFileHashes` path — **callers opt in** by invoking `scanDirHierarchical`
+> directly" — and both paths that feed `GetConfig()` (`IncrementalLoad` /
+> `fullDirLoad`) call the flat `scanDirFileHashes`.
+>
+> Measured (a valid root `_defaults.yaml` plus `top-tenant.yaml` at the top level and
+> `sub/nested-tenant.yaml`, through `NewConfigManager(dir).Load()`):
+>
+> ```text
+> Mode()               = directory
+> GetConfig().Tenants  = [top-tenant]
+> ResolveAt tenants    = map[top-tenant:true]
+> ```
+>
+> **A tenant in a subdirectory reaches no metric at all**, while `/effective` resolves
+> it — one config, two readers, populations that can never be equal. Same defect class
+> as [#1469](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1469)
+> (which closes on exactly that sentence), on the Go side rather than the Python side.
+> **The "should recurse" promise is kept and only the status description is corrected**:
+> rewriting the promise to match today's implementation would promote the defect from
+> fixable to protected.
 
 ⇒ **The routing plane does not support a hierarchical layout yet**:
 `_routing_defaults` and a tenant's own `_routing` are consumed by nothing when
