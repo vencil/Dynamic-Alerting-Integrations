@@ -82,7 +82,7 @@ Output includes p50/p90/p95/p99 statistics and threshold suggestions in CSV form
 kubectl port-forward svc/prometheus 9090:9090 -n monitoring &
 
 docker run --rm --network=host \
-  -v $(pwd)/migration_output:/data \
+  -v $(pwd)/migration_output:/data:ro \
   ghcr.io/vencil/da-tools:v2.9.0 \
   validate --mapping /data/prefix-mapping.yaml \
   --prometheus http://localhost:9090 \
@@ -268,7 +268,7 @@ v1.10.0 provides `da-tools cutover`, which automatically completes all steps in 
 ```bash
 # Step 1: Dry run — preview cutover steps without making changes
 docker run --rm --network=host \
-  -v $(pwd)/validation_output:/data \
+  -v $(pwd)/validation_output:/data:ro \
   -e PROMETHEUS_URL=http://localhost:9090 \
   ghcr.io/vencil/da-tools:v2.9.0 \
   cutover --readiness-json /data/cutover-readiness.json \
@@ -283,7 +283,7 @@ docker run --rm --network=host \
 
 # Step 2: Execute cutover
 docker run --rm --network=host \
-  -v $(pwd)/validation_output:/data \
+  -v $(pwd)/validation_output:/data:ro \
   -e PROMETHEUS_URL=http://localhost:9090 \
   ghcr.io/vencil/da-tools:v2.9.0 \
   cutover --readiness-json /data/cutover-readiness.json --tenant db-a
@@ -291,7 +291,7 @@ docker run --rm --network=host \
 # Step 3: Batch cutover multiple tenants (execute sequentially)
 for tenant in db-a db-b db-c; do
   docker run --rm --network=host \
-    -v $(pwd)/validation_output:/data \
+    -v $(pwd)/validation_output:/data:ro \
     -e PROMETHEUS_URL=http://localhost:9090 \
     ghcr.io/vencil/da-tools:v2.9.0 \
     cutover --readiness-json /data/cutover-readiness.json --tenant "$tenant"
@@ -343,7 +343,7 @@ kubectl apply -f old-recording-rules.yaml
 
 # 3. Restart Shadow Monitor
 docker run --rm --network=host \
-  -v $(pwd)/migration_output:/data \
+  -v $(pwd)/migration_output:/data:ro \
   ghcr.io/vencil/da-tools:v2.9.0 \
   validate --mapping /data/prefix-mapping.yaml \
   --prometheus http://localhost:9090 \
@@ -359,6 +359,7 @@ rm -rf validation_output/
 
 # Batch deprecate custom_ prefix rules no longer needed
 docker run --rm -v $(pwd)/conf.d:/data/conf.d ghcr.io/vencil/da-tools:v2.9.0 \
+  --user $(id -u):$(id -g) \
   deprecate custom_mysql_connections custom_mysql_replication_lag --execute
 ```
 

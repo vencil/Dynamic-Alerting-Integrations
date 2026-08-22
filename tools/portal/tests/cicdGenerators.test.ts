@@ -89,6 +89,30 @@ describe('cicdGenerateDockerCommand', () => {
     // it's just "init --ci github ...".
     expect(out.match(/da-tools init/g) ?? []).toHaveLength(0);
   });
+
+  it('passes --user, because the mount is writable and the image is not root', () => {
+    // ⛔ #1495. This is the FIRST command a customer copies. The image ends
+    // `USER nonroot:nonroot` (uid 10001) while the mounted directory is the
+    // customer's own checkout (typically uid 1000), so `init` — which creates
+    // conf.d/, the CI workflow and the deploy tree — cannot write and dies on
+    // a bare `PermissionError` traceback having produced zero files. Measured
+    // inside one Linux container: uid 10001 fails, uid 1000 succeeds.
+    //
+    // The equivalent Python guard (check_doc_datools_cmds) cannot reach this
+    // string: it scans markdown, and this command is generated at runtime.
+    const out = cicdGenerateDockerCommand(baseConfig());
+    expect(out).toContain('--user $(id -u):$(id -g)');
+  });
+
+  it('keeps --user ahead of the image reference', () => {
+    // Docker only accepts flags BEFORE the image name; anything after it is
+    // passed to the container as arguments. A `--user` that drifts below the
+    // image would be silently handed to `da-tools init` instead — the command
+    // would still look right in the wizard and still fail for the customer.
+    const out = cicdGenerateDockerCommand(baseConfig());
+    expect(out.indexOf('--user')).toBeGreaterThan(-1);
+    expect(out.indexOf('--user')).toBeLessThan(out.indexOf('ghcr.io/vencil/da-tools'));
+  });
 });
 
 describe('cicdGenerateFileTree', () => {

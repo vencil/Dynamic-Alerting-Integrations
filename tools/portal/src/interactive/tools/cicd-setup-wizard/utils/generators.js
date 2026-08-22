@@ -29,9 +29,21 @@ function cicdGenerateInitCommand(config) {
   return parts.join(' \\\n  ');
 }
 
+// ⛔ `--user` is load-bearing, and this is the FIRST command a customer
+// copies. The image ends `USER nonroot:nonroot` (uid 10001, see
+// components/da-tools/app/Dockerfile), while the directory being mounted is
+// the customer's own checkout (typically uid 1000). Without `--user`, `init`
+// — which creates conf.d/, the CI workflow and the deploy tree — cannot write
+// into /workspace and dies on a bare Python traceback (`PermissionError:
+// '/workspace/conf.d'`, 0 files written). Measured inside one Linux container:
+// uid 10001 -> PermissionError, uid 1000 -> writes fine.
+//
+// The CLI leg of this same generator already carries the flag; this hand-kept
+// twin did not, which is #1351's divergence showing up as a customer-visible
+// failure rather than as drift.
 function cicdGenerateDockerCommand(config) {
   const init = cicdGenerateInitCommand(config);
-  return `docker run --rm -it \\\n  -v $(pwd):/workspace -w /workspace \\\n  ghcr.io/vencil/da-tools:latest \\\n  ${init.replace('da-tools ', '')}`;
+  return `docker run --rm -it \\\n  --user $(id -u):$(id -g) \\\n  -v $(pwd):/workspace -w /workspace \\\n  ghcr.io/vencil/da-tools:latest \\\n  ${init.replace('da-tools ', '')}`;
 }
 
 // ⛔ This list is a CLAIM about another program's behaviour, so it is held to

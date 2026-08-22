@@ -45,6 +45,7 @@ Use the CI/CD Setup Wizard or run `da-tools init` directly.
 
 ```bash
 docker run --rm -it \
+  --user $(id -u):$(id -g) \
   -v $(pwd):/workspace -w /workspace \
   ghcr.io/vencil/da-tools:latest \
   init \
@@ -215,7 +216,7 @@ mkdir -p .output
 
 docker run --rm \
   -v $(pwd)/conf.d:/data/conf.d:ro \
-  -v $(pwd)/.output:/data/output \
+  -v $(pwd)/.output:/data/output:ro \
   ghcr.io/vencil/da-tools:latest \
   generate-routes --config-dir /data/conf.d \
   -o /data/output/alertmanager-routes.yaml --validate
