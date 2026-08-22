@@ -160,12 +160,32 @@ func formatDivergenceLog(divergent []string, tenantSources map[string]string, ro
 // naming a healthy tenant, from the very check whose job is to be
 // trustworthy about which tenants are missing.
 //
-// Reading both under commitConfig's existing Lock fixes the pairing without
-// serialising reloads: whatever is reported is the true (collector view,
-// /effective view) pair as of one instant. ⚠️ It does NOT make overlapping
-// reloads impossible — the last commit still wins, which is the pre-existing
-// behaviour for m.config itself. It only guarantees the two halves of this
-// comparison are never stitched together from different reloads.
+// Reading both under commitConfig's existing Lock buys exactly one thing,
+// stated precisely because an earlier draft of this comment overstated it:
+// the pair is the manager's OWN state at one instant — what /metrics and
+// /effective are really serving at the moment cfg is installed. Nothing
+// more.
+//
+// ⛔ In particular it does NOT guarantee both halves come from the same
+// reload, and claiming that was wrong. `populateHierarchyState`
+// (config.go) installs tenantSources under its own Lock and releases it;
+// commitConfig acquires m.mu later, with a directory scan and a YAML parse
+// in between. With reloads unserialised, reload B's hierarchy can be in
+// place by the time reload A commits its cfg. Measured: audit then names a
+// tenant from B against A's config.
+//
+// That report is still TRUE, which is why this is the accepted design and
+// not an open bug — measured in the same probe: at that instant
+// Resolve() DOES serve the named tenant and the collector does NOT emit
+// it, so the ERROR describes the live split rather than inventing one.
+// What the mixed state can produce is a TRANSIENT: a tenant that reload B
+// is about to make visible to the flat side is reported divergent until
+// B's own commit re-runs this audit and clears the gauge. Self-correcting
+// by construction, because the gauge is Set on every commit.
+//
+// ⚠️ Serialising reloads outright would remove the transient, and is
+// deliberately not done here — it is a behaviour change to the reload
+// pipeline, not an observability fix. See #1521.
 //
 // The gauge is Set (not Inc) on every commit, including the healthy case,
 // so it returns to 0 as soon as the offending file is moved or removed —
