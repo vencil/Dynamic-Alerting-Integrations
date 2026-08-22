@@ -1588,6 +1588,13 @@ paths:
         in: header
         name: X-DA-Write-Source
         type: string
+      - description: 'Optimistic concurrency: the source_hash GET /tenants/{id} returned
+          for the file this body was derived from. 409 if the file changed since.
+          16 lowercase hex chars; a malformed value is a 400, never ignored. Direct
+          write-back mode only (501 in PR mode).'
+        in: header
+        name: X-DA-Base-Hash
+        type: string
       produces:
       - application/json
       responses:
@@ -1609,6 +1616,10 @@ paths:
             $ref: '#/definitions/ErrorResponse'
         "500":
           description: Internal Server Error
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        "501":
+          description: Not Implemented
           schema:
             $ref: '#/definitions/ErrorResponse'
         "503":

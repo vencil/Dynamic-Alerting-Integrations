@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -55,11 +56,13 @@ type PutTenantResponse struct {
 // @Param       id    path     string true  "Tenant ID"
 // @Param       body  body     string true  "Tenant YAML content"
 // @Param       X-DA-Write-Source header string false "Attribute the PR to a non-UI write source. Allowlisted: threshold-governance (#656). Omit for tenant-manager UI."
+// @Param       X-DA-Base-Hash header string false "Optimistic concurrency: the source_hash GET /tenants/{id} returned for the file this body was derived from. 409 if the file changed since. 16 lowercase hex chars; a malformed value is a 400, never ignored. Direct write-back mode only (501 in PR mode)."
 // @Success     200   {object} PutTenantResponse
 // @Failure     400   {object} ErrorResponse
 // @Failure     403   {object} ErrorResponse
 // @Failure     409   {object} ErrorResponse
 // @Failure     500   {object} ErrorResponse
+// @Failure     501   {object} ErrorResponse
 // @Failure     503   {object} ErrorResponse
 // @Router      /api/v1/tenants/{id} [put]
 func PutTenant(d *Deps) http.HandlerFunc {
@@ -78,6 +81,17 @@ func PutTenant(d *Deps) http.HandlerFunc {
 		}
 		email := rbac.RequestEmail(r)
 
+		// Optimistic concurrency (opt-in). Parsed before the body is read so a
+		// malformed precondition costs nothing and can never be mistaken for
+		// "no precondition was asked for" — the whole point of the header is
+		// that the caller wanted the write gated, so anything that stops the
+		// gate from running has to be an error, not a silent unconditional
+		// overwrite.
+		baseHash, ok := readBaseHashHeader(rw, r)
+		if !ok {
+			return
+		}
+
 		body, ok := readLimitedBody(rw, r, d)
 		if !ok {
 			return
@@ -94,15 +108,54 @@ func PutTenant(d *Deps) http.HandlerFunc {
 
 		// v2.6.0: PR-based write-back mode (ADR-011) — supports GitHub + GitLab
 		if d.WriteMode.IsPRMode() && d.PRClient != nil && d.PRTracker != nil {
+			// A base hash cannot mean anything here. PR mode writes on a
+			// feature branch and then restores the working tree to base, so
+			// the file this handler could hash is the BASE version — a second
+			// write quoting the same hash would pass the check while an
+			// unmerged PR already carries a change to that tenant. Refuse
+			// rather than answer 200 to a request whose guarantee we did not
+			// provide: silently ignoring it is worse than not supporting it,
+			// because the caller cannot tell the difference.
+			if baseHash != "" {
+				WriteJSONError(rw, r, http.StatusNotImplemented,
+					"X-DA-Base-Hash is not supported in PR write-back mode: the on-disk file "+
+						"tracks the base branch, so it cannot witness a pending PR's change")
+				return
+			}
 			putTenantPRMode(d, rw, r, tenantID, email, string(body))
 			return
 		}
 
 		// Default: direct commit-on-write (ADR-009)
-		notices, err := d.Writer.Write(r.Context(), tenantID, email, string(body))
+		var notices []string
+		var err error
+		if baseHash != "" {
+			notices, err = d.Writer.WriteIfUnchanged(r.Context(), tenantID, email, string(body), baseHash)
+		} else {
+			notices, err = d.Writer.Write(r.Context(), tenantID, email, string(body))
+		}
 		if err != nil {
 			if errors.Is(err, gitops.ErrWriteOverloaded) {
 				WriteOverloaded(rw, r)
+				return
+			}
+			// Same 409 + CONFLICT code as the custom-alerts base_hash check:
+			// from the caller's side both mean "the file moved under you,
+			// re-read and retry", and the current hash tells them what to
+			// re-read against.
+			var pre *gitops.PreconditionError
+			if errors.As(err, &pre) {
+				extra := map[string]any{
+					"message": "the tenant configuration was updated by someone else; refresh and retry",
+				}
+				if pre.Current != "" {
+					extra["current_source_hash"] = pre.Current
+				}
+				WriteErrorEnvelope(rw, r, http.StatusConflict, ErrorResponse{
+					Error: gitops.ErrPrecondition.Error(),
+					Code:  CodeConflict,
+					Extra: extra,
+				})
 				return
 			}
 			if errors.Is(err, gitops.ErrConflict) {
@@ -225,6 +278,56 @@ func putTenantPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, tenantID,
 		Message:  "PR/MR created. Configuration will take effect after merge.",
 		Warnings: result.Notices,
 	})
+}
+
+// BaseHashHeader is the request header carrying the optimistic-concurrency
+// base hash for a raw-YAML tenant write. The value is the `source_hash` that
+// GET /tenants/{id} reports for the file the body was derived from.
+//
+// It is a header rather than a body field because this endpoint's body is the
+// tenant YAML document itself, committed verbatim — there is nowhere in it to
+// put a protocol field. The name follows the X-DA-* convention this endpoint
+// already uses for X-DA-Write-Source, and deliberately not If-Match: honouring
+// If-Match would imply the rest of HTTP conditional requests (ETag on GET,
+// If-None-Match, 304, weak validators), none of which this API provides.
+const BaseHashHeader = "X-DA-Base-Hash"
+
+// readBaseHashHeader returns the base hash a request is asking to be gated on,
+// or "" when it asked for no gate. It writes a 400 and returns ok=false for a
+// present-but-malformed value.
+//
+// Shape is enforced rather than pattern-matched-and-shrugged-at: a typo'd or
+// truncated hash can never equal a real one, so accepting it would turn every
+// write into a 409 the caller cannot explain, and accepting-then-ignoring it
+// would hand back an unconditional overwrite under the name of a precondition.
+// 400 says exactly which of the two happened.
+func readBaseHashHeader(rw http.ResponseWriter, r *http.Request) (string, bool) {
+	raw := strings.TrimSpace(r.Header.Get(BaseHashHeader))
+	if raw == "" {
+		return "", true
+	}
+	if !isSourceHash(raw) {
+		WriteJSONError(rw, r, http.StatusBadRequest,
+			BaseHashHeader+" must be a source_hash: 16 lowercase hex characters, "+
+				"as returned by GET /api/v1/tenants/{id}")
+		return "", false
+	}
+	return raw, true
+}
+
+// isSourceHash reports whether s has the shape cfg.ComputeSourceHash produces:
+// SHA-256 rendered with %x and truncated to 16 chars, so lowercase hex only.
+func isSourceHash(s string) bool {
+	if len(s) != 16 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // extractPatchKeys extracts flat key-value pairs from a tenant YAML body.

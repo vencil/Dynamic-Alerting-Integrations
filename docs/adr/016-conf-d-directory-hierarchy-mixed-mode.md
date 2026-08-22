@@ -128,9 +128,26 @@ Directory Scanner 的設計哲學是「檔案系統即 source of truth」。
 
 | 面 | 階層 `conf.d/` |
 |:--|:--|
-| threshold-exporter（閾值） | ✅ 完整遞迴繼承 |
+| threshold-exporter **函式庫**（`pkg/config` 的 `ResolveEffective`；`/effective`、`describe_tenant.py` 走這裡） | ✅ 完整遞迴繼承 |
+| threshold-exporter **實際吐出的 metric** | ⚠️ **仍是平面** — 見下方修正 |
 | `validate_config.py` | ✅ 已改為遞迴 |
 | 路由生成器 / 其餘平面工具 | ⚠️ **仍是平面**，但會列出被跳過的檔案並指回本節 |
+
+> ⚠️ **修正（2026-08-22）**：本表原本只有一列 `threshold-exporter（閾值）｜✅ 完整遞迴繼承`，那對**函式庫**成立、對 **exporter 真正吐出去的 metric 不成立**。
+> 遞迴掃描器（`scanDirHierarchical`）是 **opt-in**——`config_hierarchy.go` 的檔頭就寫著它「without disturbing the single-level `scanDirFileHashes` path — **callers opt in** by invoking `scanDirHierarchical` directly」，
+> 而餵給 `GetConfig()` 的兩條路（`IncrementalLoad` / `fullDirLoad`）用的都是平面的 `scanDirFileHashes`。
+>
+> 實測（根目錄一份合法 `_defaults.yaml` + 頂層 `top-tenant.yaml` + `sub/nested-tenant.yaml`，跑 `NewConfigManager(dir).Load()`）：
+>
+> ```text
+> Mode()               = directory
+> GetConfig().Tenants  = [top-tenant]
+> ResolveAt tenants    = map[top-tenant:true]
+> ```
+>
+> **子目錄裡的租戶不會出現在任何 metric 裡**，而 `/effective` 查得到它——同一份設定，兩個 reader 的母體不相等。
+> 這與 [#1469](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1469) 描述的是同一類缺陷（該票收在「一個 reader 遞迴、另一個平面，兩者的母體因此永遠不會相等」），只是那張票談的是 Python 側、這裡是 Go 側。
+> **保留「應該遞迴」這個承諾、只更正現況描述**：把承諾改寫成符合現行實作，會讓這個缺陷從「可以修」變成「被文件保護」。
 
 ⇒ **路由面尚未支援階層布局**：`_routing_defaults` 與租戶本體的 `_routing` 在子目錄裡
 不會被任何元件消費。要用路由就把租戶檔放在 `conf.d/` 頂層。

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -137,27 +138,25 @@ func PutView(d *Deps) http.HandlerFunc {
 			return
 		}
 
-		cfg := d.Views.Get()
-		newCfg := &views.ViewsConfig{
-			Views: make(map[string]views.View, len(cfg.Views)+1),
-		}
-		for k, v := range cfg.Views {
-			newCfg.Views[k] = v
-		}
-		newCfg.Views[viewID] = views.View{
-			Label:       req.Label,
-			Description: req.Description,
-			CreatedBy:   email,
-			Filters:     req.Filters,
-		}
-
-		yamlBytes, err := views.MarshalConfig(newCfg)
-		if err != nil {
-			WriteJSONError(w, r, http.StatusInternalServerError, "marshal views: "+err.Error())
-			return
-		}
-
-		if err := d.Writer.WriteViewsFile(r.Context(), email, string(yamlBytes)); err != nil {
+		// Rebuild from the copy ON DISK, under the writer lock — see the
+		// comment in PutGroup for why the in-memory snapshot cannot be the
+		// base of a whole-file rewrite. _views.yaml has exactly the same
+		// shape: one shared object, one snapshot that only refreshes on the
+		// Reload a failed write never reaches.
+		if err := d.Writer.MutateConfigFile(r.Context(), "_views.yaml", "views", email,
+			func(current []byte) ([]byte, error) {
+				cfg, perr := parseViewsFile(current)
+				if perr != nil {
+					return nil, perr
+				}
+				cfg.Views[viewID] = views.View{
+					Label:       req.Label,
+					Description: req.Description,
+					CreatedBy:   email,
+					Filters:     req.Filters,
+				}
+				return views.MarshalConfig(cfg)
+			}); err != nil {
 			writeConfigFileError(w, r, err)
 			return
 		}
@@ -200,22 +199,20 @@ func DeleteView(d *Deps) http.HandlerFunc {
 			return
 		}
 
-		newCfg := &views.ViewsConfig{
-			Views: make(map[string]views.View, len(cfg.Views)),
-		}
-		for k, v := range cfg.Views {
-			if k != viewID {
-				newCfg.Views[k] = v
-			}
-		}
-
-		yamlBytes, err := views.MarshalConfig(newCfg)
-		if err != nil {
-			WriteJSONError(w, r, http.StatusInternalServerError, "marshal views: "+err.Error())
-			return
-		}
-
-		if err := d.Writer.WriteViewsFile(r.Context(), email, string(yamlBytes)); err != nil {
+		// In-lock rebuild, and an already-absent target is a no-op success —
+		// same reasoning as DeleteGroup.
+		if err := d.Writer.MutateConfigFile(r.Context(), "_views.yaml", "views", email,
+			func(current []byte) ([]byte, error) {
+				vcfg, perr := parseViewsFile(current)
+				if perr != nil {
+					return nil, perr
+				}
+				if _, present := vcfg.Views[viewID]; !present {
+					return nil, nil
+				}
+				delete(vcfg.Views, viewID)
+				return views.MarshalConfig(vcfg)
+			}); err != nil {
 			writeConfigFileError(w, r, err)
 			return
 		}
@@ -232,4 +229,21 @@ func DeleteView(d *Deps) http.HandlerFunc {
 // ViewIDFromPath extracts the view ID from the URL for middleware.
 var ViewIDFromPath = func(r *http.Request) string {
 	return chi.URLParam(r, "id")
+}
+
+// parseViewsFile decodes _views.yaml bytes as read under the writer lock.
+// Missing file → empty start; unparseable existing file → error, never an
+// empty start (see parseGroupsFile for why that distinction matters).
+func parseViewsFile(current []byte) (*views.ViewsConfig, error) {
+	if len(current) == 0 {
+		return &views.ViewsConfig{Views: make(map[string]views.View)}, nil
+	}
+	cfg, err := views.ParseConfig(current)
+	if err != nil {
+		return nil, fmt.Errorf("read current _views.yaml: %w", err)
+	}
+	if cfg.Views == nil {
+		cfg.Views = make(map[string]views.View)
+	}
+	return cfg, nil
 }
