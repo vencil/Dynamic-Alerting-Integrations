@@ -58,6 +58,7 @@ The fastest path is running `da-tools init`, which scaffolds the complete integr
 ```bash
 # Run via Docker (no install required)
 docker run --rm -it \
+  --user $(id -u):$(id -g) \
   -v $(pwd):/workspace -w /workspace \
   ghcr.io/vencil/da-tools:latest \
   init

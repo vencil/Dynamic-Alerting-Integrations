@@ -1342,7 +1342,7 @@ da-tools guard --conf-d conf.d/ --report
 make dc-run CMD="da-tools guard --conf-d conf.d/ --report"
 
 # Or Docker (no dev-container environment)
-docker run --rm -v "$(pwd):/work" -w /work \
+docker run --rm -v "$(pwd):/work:ro" -w /work \
     ghcr.io/vencil/da-tools:latest guard --conf-d conf.d/ --report
 # expected: 4-layer PASS / FAIL report, equivalent to CI
 ```
