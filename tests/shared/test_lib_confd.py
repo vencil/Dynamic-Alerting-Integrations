@@ -15,6 +15,8 @@ from _lib_confd import (  # noqa: E402
     nested_yaml_files,
     nested_yaml_warning,
     reset_warned_for_test,
+    unusable_config_paths,
+    unusable_reason,
     warn_nested,
 )
 
@@ -222,3 +224,76 @@ def test_reset_is_idempotent_not_save_restore(capsys, hierarchical):
     assert warn_nested(hierarchical) is True
     reset_warned_for_test()
     assert warn_nested(hierarchical) is True, "after reset it may warn again"
+
+
+# ── #1469: the half that keeps the signal ──────────────────────────────
+#
+# Unifying the two readers' SELECTION (`_parse_config_files` now calls
+# `iter_config_files(..., recursive=False)`) removes a divergence, but on
+# its own it also removes the one message anybody was getting about a
+# config-named directory. These pin the replacement.
+
+
+@pytest.fixture()
+def with_unusable(tmp_path: pathlib.Path) -> pathlib.Path:
+    """A conf.d holding the shape #1469 was reported on."""
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    (root / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 80\n",
+                                         encoding="utf-8")
+    (root / "acme.yaml").write_text(
+        'tenants:\n  acme:\n    mysql_connections: "90"\n', encoding="utf-8")
+    (root / "beta.yaml").mkdir()                    # interrupted mkdir / bad merge
+    (root / "gamma.yaml").symlink_to(root / "nope.yaml")   # broken symlink
+    (root / "notes.txt").write_text("not a config\n", encoding="utf-8")
+    return root
+
+
+def test_unusable_paths_names_directory_and_broken_symlink(with_unusable):
+    got = [p.name for p in unusable_config_paths(with_unusable)]
+    assert got == ["beta.yaml", "gamma.yaml"]
+
+
+def test_unusable_paths_excludes_readable_files_and_non_config_names(with_unusable):
+    got = {p.name for p in unusable_config_paths(with_unusable)}
+    assert "_defaults.yaml" not in got and "acme.yaml" not in got
+    # `notes.txt` is not config-shaped at all — it is not this list's business.
+    assert "notes.txt" not in got
+
+
+def test_unusable_paths_is_disjoint_from_iter_config_files(with_unusable):
+    """The two lists partition the config-named entries — never overlap.
+
+    An entry in both would mean a reader is told to read something the
+    same module says it cannot read.
+    """
+    readable = {p.resolve() for p in iter_config_files(with_unusable)}
+    unusable = {p for p in unusable_config_paths(with_unusable)}
+    assert not (readable & {p.resolve() for p in unusable if p.exists()})
+
+
+def test_unusable_paths_respects_recursive_false(tmp_path: pathlib.Path):
+    """Flat callers (the routing parser) must not inherit nested findings."""
+    root = tmp_path / "conf.d"
+    (root / "team-a").mkdir(parents=True)
+    (root / "top.yaml").mkdir()
+    (root / "team-a" / "deep.yaml").mkdir()
+    assert [p.name for p in unusable_config_paths(root, recursive=False)] == ["top.yaml"]
+    assert [p.relative_to(root).as_posix()
+            for p in unusable_config_paths(root)] == ["team-a/deep.yaml", "top.yaml"]
+
+
+def test_unusable_paths_skips_hidden_like_iter_config_files(tmp_path: pathlib.Path):
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    (root / ".hidden.yaml").mkdir()
+    assert unusable_config_paths(root) == []
+
+
+def test_unusable_paths_on_missing_dir_is_empty(tmp_path: pathlib.Path):
+    assert unusable_config_paths(tmp_path / "nope") == []
+
+
+def test_unusable_reason_distinguishes_the_causes(with_unusable):
+    assert "directory" in unusable_reason(with_unusable / "beta.yaml")
+    assert "symlink" in unusable_reason(with_unusable / "gamma.yaml")
