@@ -358,8 +358,8 @@ rm -rf migration_output/
 rm -rf validation_output/
 
 # 批次下架不再需要的 custom_ prefix 規則
-docker run --rm -v $(pwd)/conf.d:/data/conf.d ghcr.io/vencil/da-tools:v2.9.0 \
-  --user $(id -u):$(id -g) \
+docker run --rm --user $(id -u):$(id -g) \
+  -v $(pwd)/conf.d:/data/conf.d ghcr.io/vencil/da-tools:v2.9.0 \
   deprecate custom_mysql_connections custom_mysql_replication_lag --execute
 ```
 

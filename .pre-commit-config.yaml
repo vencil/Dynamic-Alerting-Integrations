@@ -377,11 +377,17 @@ repos:
         files: ^(docs/.*\.md|k8s/.*\.ya?ml)$
 
       - id: doc-datools-cmds
-        name: Doc da-tools wrapper subcommands valid
+        name: Doc da-tools examples — wrapper subcommands + writable-mount --user
         entry: python3 -X utf8 scripts/tools/lint/check_doc_datools_cmds.py --ci
         language: python
         pass_filenames: false
-        files: ^(docs/.*\.md|scripts/tools/ops/.*_dispatch\.py)$
+        # ⛔ The three non-docs entries are load-bearing (#1495): `run()` scans
+        # components/da-tools/README.md, app/QUICKSTART.md and try-local/README.md
+        # — customer landing pages that carry `docker run` examples — and with
+        # the old two-pattern filter a commit touching ONLY those never invoked
+        # this hook. A scan surface wider than the trigger surface is a gate
+        # that cannot fire on the files it was widened for.
+        files: ^(docs/.*\.md|scripts/tools/ops/.*_dispatch\.py|components/da-tools/(README\.md|app/QUICKSTART\.md)|try-local/README\.md)$
 
       - id: design-token-usage
         name: Design token compliance (JSX)

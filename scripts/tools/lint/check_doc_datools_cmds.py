@@ -122,6 +122,42 @@ _EXTRA_DOC_FILES = (
 
 _DOCKER_RUN_RE = re.compile(r"\bdocker\s+run\b")
 _DATOOLS_IMAGE_RE = re.compile(r"da[-_]tools", re.IGNORECASE)
+# The image token itself — everything before it is a docker flag, everything
+# after it is an argument handed to the container.
+_IMAGE_TOKEN_RE = re.compile(r"(?:\S*da[-_]tools\S*)", re.IGNORECASE)
+
+
+def _unquote_md(line: str) -> str:
+    """Drop one level of markdown blockquote prefix.
+
+    ⛔ The shared `docs/includes/docker-usage-pattern{,.en}.md` — the pattern
+    every other page copies — puts its fence inside a blockquote (``> ```bash``).
+    Without this, `startswith("```")` is False, the code block never opens, and
+    that file is invisible: reverting the fix it carries left the guard GREEN.
+    """
+    s = line.lstrip()
+    return s[2:] if s.startswith("> ") else (s[1:] if s.startswith(">") else line)
+
+
+def _is_fence(line: str) -> bool:
+    # `~~~` is a valid mkdocs fence too; treating only ``` as one leaves a
+    # whole fence style unscanned.
+    s = line.lstrip()
+    return s.startswith("```") or s.startswith("~~~")
+
+
+# `${{ github.workspace }}` — a CI template whose INTERNAL spaces would split
+# a mount spec into fragments. Collapsed to a space-free token so the spec
+# stays parseable. ⛔ It is deliberately NOT skipped: an earlier version
+# excluded any spec containing `{{`, and that exclusion hid a real
+# customer-facing defect (a GitHub Actions example whose writable `/output`
+# mount had no `--user`, on a command that writes unconditionally). Removing a
+# 誤紅 by widening an exclusion is how a guard acquires a false GREEN.
+_CI_TEMPLATE_RE = re.compile(r"\$\{\{[^}]*\}\}")
+
+
+def _normalise(flat: str) -> str:
+    return _CI_TEMPLATE_RE.sub(lambda m: "".join(m.group(0).split()), flat)
 
 
 def _mounts(flat: str) -> List[str]:
@@ -131,8 +167,13 @@ def _mounts(flat: str) -> List[str]:
     A naive regex reads `"$(pwd)/conf.d:/conf.d:ro"` as writable because the
     closing quote lands in the option group — i.e. it over-reports, which for
     a guard means誤紅 on examples that are already correct.
+
+    ⚠️ `--mount type=bind,...` is NOT recognised. Disclosed rather than
+    modelled: it is a different syntax with its own option grammar, and this
+    rule would need a second parser to judge it. Consequence: rewriting `-v`
+    as `--mount` leaves the example unchecked.
     """
-    toks = flat.split()
+    toks = _normalise(flat).split()
     out: List[str] = []
     for i, t in enumerate(toks):
         if t in ("-v", "--volume") and i + 1 < len(toks):
@@ -140,10 +181,42 @@ def _mounts(flat: str) -> List[str]:
     return out
 
 
+def _is_bind_mount(spec: str) -> bool:
+    """Is *spec* a HOST-PATH mount (as opposed to a named/anonymous volume)?
+
+    ⛔ Only bind mounts are in this rule's domain. A named volume
+    (`da-tools-cache:/cache`) has no host directory and no host uid: docker
+    seeds it from the image, ownership included, so the container's own user
+    can write there and `--user $(id -u)` would BREAK it — measured both ways.
+    An anonymous volume (`-v /cache`, one segment) is the same story. Flagging
+    those would be a誤紅 whose prescribed remedy is actively harmful.
+    """
+    head = spec.split(":")[0]
+    if ":" not in spec:
+        return False                      # anonymous volume
+    return (head.startswith(("/", ".", "~", "$"))
+            or (len(head) > 1 and head[1] == ":")   # C:\... on Windows hosts
+            or head.startswith("${"))
+
+
 def _is_writable(spec: str) -> bool:
     parts = spec.split(":")
+    # A Windows host path (`C:\x:/y`) shifts the field count; only treat the
+    # last field as options when it looks like one.
     opts = parts[-1].split(",") if len(parts) >= 3 else []
-    return "ro" not in opts
+    return not any(o in ("ro", "readonly") for o in opts)
+
+
+def _has_user_flag(toks: List[str]) -> bool:
+    """`--user`, `--user=…` or the official short form `-u`.
+
+    ⛔ Not `"--user" in flat`. That substring test both over- and
+    under-matches: it misses `-u $(id -u)` (a correct command, reported as
+    missing the flag, with a message telling the author to add what is already
+    there) and it accepts `--userns=keep-id`, which sets no uid at all.
+    """
+    return any(t == "--user" or t == "-u" or t.startswith("--user=")
+               for t in toks)
 
 
 def check_writable_mount_has_user(doc_files: List[Path],
@@ -165,9 +238,29 @@ def check_writable_mount_has_user(doc_files: List[Path],
     declared you may write there, pass the uid that can. An example that never
     writes should say so with ``:ro`` and is then out of scope by construction.
 
-    Placeholder-bearing lines are skipped by the same rule the subcommand check
-    uses: a synopsis like ``<command> [flags]`` cannot be judged, and guessing
-    would put誤紅 on documentation that is deliberately generic.
+    Mount specs that are still placeholders (``<host>:/path``) are skipped —
+    there is nothing to judge yet. ⚠️ Note this is NOT the subcommand check's
+    ``_PLACEHOLDER_CHARS`` set: that one contains ``$``, which appears in
+    essentially every real example, and reusing it here skipped 97 of 122
+    blocks including every site this rule was written to hold.
+
+    ⚠️ **Known NOT covered — disclosed rather than left to be discovered:**
+
+    1. ``--mount type=bind,...`` is a different syntax and is not parsed, so
+       rewriting ``-v`` as ``--mount`` leaves an example unchecked.
+    2. **Writes to a RELATIVE default output path** are a different failure with
+       the same symptom, and ``--user`` does not fix them: e.g. ``validate``
+       defaults ``--output-dir`` to ``validation_output``, which resolves under
+       the image's ``WORKDIR /opt/da-tools`` — root-owned, so uid 10001 AND the
+       customer's uid both fail. The remedy there is ``-o`` into a mounted path
+       or ``-w /workspace``, and this rule cannot see it because such examples
+       legitimately mount nothing writable.
+    3. **tenant-api's docs** have the same root cause (that image is also
+       non-root and its gitops writer creates temp files inside the mounted
+       ``conf.d``) but are outside this scan set.
+
+    (2) and (3) are tracked separately; they are not "rare edge cases" but
+    classes this invariant genuinely does not express.
     """
     issues: List[Issue] = []
     for f in doc_files:
@@ -179,8 +272,8 @@ def check_writable_mount_has_user(doc_files: List[Path],
         in_code = False
         i = 0
         while i < len(lines):
-            line = lines[i]
-            if line.lstrip().startswith("```"):
+            line = _unquote_md(lines[i])
+            if _is_fence(line):
                 in_code = not in_code
                 i += 1
                 continue
@@ -191,9 +284,9 @@ def check_writable_mount_has_user(doc_files: List[Path],
             buf = [line]
             while (buf[-1].rstrip().endswith("\\")
                    and i + 1 < len(lines)
-                   and not lines[i + 1].lstrip().startswith("```")):
+                   and not _is_fence(_unquote_md(lines[i + 1]))):
                 i += 1
-                buf.append(lines[i])
+                buf.append(_unquote_md(lines[i]))
             blk = "\n".join(buf)
             i += 1
             flat = " ".join(blk.split())
@@ -212,18 +305,33 @@ def check_writable_mount_has_user(doc_files: List[Path],
             # only when the mount spec itself is a placeholder.
             if INLINE_IGNORE in blk:
                 continue
-            if "--user" in flat:
-                continue
-            specs = _mounts(flat)
-            # `<host>:/path` is a placeholder; `${{ github.workspace }}/x:/y`
-            # is an UNEXPANDED CI template whose spaces defeat token splitting
-            # (it parses as the fragment `${{`). Both are "not a mount spec
-            # yet", so both are out of scope rather than reported — reporting a
-            # fragment would be a誤紅 whose only cheap fix is deleting the
-            # example.
-            if any(("<" in s or ">" in s or "{{" in s) for s in specs):
-                continue
+            norm = _normalise(flat)
+            toks = norm.split()
+            specs = [s for s in _mounts(flat) if _is_bind_mount(s)]
             writable = [m for m in specs if _is_writable(m)]
+            img = _IMAGE_TOKEN_RE.search(norm)
+            if _has_user_flag(toks):
+                # ⛔ Position matters as much as presence. Docker applies only
+                # the flags BEFORE the image; a `--user` after it is handed to
+                # the container as an argument — the uid is unchanged AND the
+                # argv is polluted. Measured on an image ending `USER 10001`:
+                # flag-after-image gave the same euid as no flag at all.
+                if writable and img and norm.index(toks[
+                        next(k for k, t in enumerate(toks)
+                             if t in ("--user", "-u") or t.startswith("--user="))
+                ]) > img.start():
+                    issues.append(Issue(
+                        "datools-user-flag-after-image", rel, start + 1,
+                        "`--user` appears AFTER the image reference, so docker "
+                        "passes it to the container instead of applying it — "
+                        "the uid is unchanged and the tool sees two junk "
+                        "arguments. Move it ahead of the image (#1495)."))
+                continue
+            # `<host>:/path` is still a placeholder — nothing to judge yet.
+            # ⚠️ `${{ … }}` is NOT excluded any more: it is a real CI mount
+            # with a template in it, and skipping those hid a live defect.
+            if any(("<" in s or ">" in s) for s in specs):
+                continue
             if writable:
                 issues.append(Issue(
                     "datools-writable-mount-without-user", rel, start + 1,
