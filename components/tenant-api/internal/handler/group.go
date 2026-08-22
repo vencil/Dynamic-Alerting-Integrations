@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -221,28 +222,31 @@ func PutGroup(d *Deps) http.HandlerFunc {
 			return
 		}
 
-		// Update the in-memory config and write to disk
-		cfg := d.Groups.Get()
-		newCfg := &groups.GroupsConfig{
-			Groups: make(map[string]groups.Group, len(cfg.Groups)+1),
-		}
-		for k, v := range cfg.Groups {
-			newCfg.Groups[k] = v
-		}
-		newCfg.Groups[groupID] = groups.Group{
-			Label:       req.Label,
-			Description: req.Description,
-			Filters:     req.Filters,
-			Members:     req.Members,
-		}
-
-		yamlBytes, err := groups.MarshalConfig(newCfg)
-		if err != nil {
-			WriteJSONError(w, r, http.StatusInternalServerError, "marshal groups: "+err.Error())
-			return
-		}
-
-		if err := d.Writer.WriteGroupsFile(r.Context(), email, string(yamlBytes)); err != nil {
+		// Rebuild the whole file from the copy ON DISK, under the writer lock
+		// (MutateConfigFile). _groups.yaml is a single shared object, so this
+		// write necessarily rewrites every OTHER group too — computing it from
+		// the in-memory snapshot silently reverts anything the snapshot has not
+		// seen. That is not hypothetical: the snapshot only refreshes on the
+		// Reload below, which a failed write never reaches, while
+		// commitFileChange has already written the file; the next edit to any
+		// other group then deletes the one that "failed". Two concurrent edits
+		// to different groups lose one the same way. Reading the base inside
+		// the lock removes both — the same fix WriteMerged made for the tenant
+		// batch path (#1097).
+		if err := d.Writer.MutateConfigFile(r.Context(), "_groups.yaml", "groups", email,
+			func(current []byte) ([]byte, error) {
+				cfg, perr := parseGroupsFile(current)
+				if perr != nil {
+					return nil, perr
+				}
+				cfg.Groups[groupID] = groups.Group{
+					Label:       req.Label,
+					Description: req.Description,
+					Filters:     req.Filters,
+					Members:     req.Members,
+				}
+				return groups.MarshalConfig(cfg)
+			}); err != nil {
 			writeConfigFileError(w, r, err)
 			return
 		}
@@ -304,22 +308,25 @@ func DeleteGroup(d *Deps) http.HandlerFunc {
 			return
 		}
 
-		newCfg := &groups.GroupsConfig{
-			Groups: make(map[string]groups.Group, len(cfg.Groups)),
-		}
-		for k, v := range cfg.Groups {
-			if k != groupID {
-				newCfg.Groups[k] = v
-			}
-		}
-
-		yamlBytes, err := groups.MarshalConfig(newCfg)
-		if err != nil {
-			WriteJSONError(w, r, http.StatusInternalServerError, "marshal groups: "+err.Error())
-			return
-		}
-
-		if err := d.Writer.WriteGroupsFile(r.Context(), email, string(yamlBytes)); err != nil {
+		// Same in-lock rebuild as PutGroup — see the comment there for why the
+		// on-disk copy, not the snapshot, has to be the base. A target that is
+		// already absent from the file returns nil (no-op success): the 404
+		// above answered "does it exist" from the snapshot, and re-answering it
+		// here would turn a concurrent delete of the same group into an error
+		// for the caller who lost the race, on a request whose desired end
+		// state was reached anyway.
+		if err := d.Writer.MutateConfigFile(r.Context(), "_groups.yaml", "groups", email,
+			func(current []byte) ([]byte, error) {
+				cfg, perr := parseGroupsFile(current)
+				if perr != nil {
+					return nil, perr
+				}
+				if _, present := cfg.Groups[groupID]; !present {
+					return nil, nil
+				}
+				delete(cfg.Groups, groupID)
+				return groups.MarshalConfig(cfg)
+			}); err != nil {
 			writeConfigFileError(w, r, err)
 			return
 		}
@@ -336,4 +343,23 @@ func DeleteGroup(d *Deps) http.HandlerFunc {
 // GroupIDFromPath extracts the group ID from the URL for RBAC middleware.
 var GroupIDFromPath = func(r *http.Request) string {
 	return chi.URLParam(r, "id")
+}
+
+// parseGroupsFile decodes _groups.yaml bytes as read under the writer lock.
+// A missing file (current == nil, the first-ever write) starts from an empty
+// config; an existing but unparseable file is an ERROR, never an empty start —
+// silently treating a malformed file as "no groups" would let one bad edit wipe
+// every group on the next unrelated write.
+func parseGroupsFile(current []byte) (*groups.GroupsConfig, error) {
+	if len(current) == 0 {
+		return &groups.GroupsConfig{Groups: make(map[string]groups.Group)}, nil
+	}
+	cfg, err := groups.ParseConfig(current)
+	if err != nil {
+		return nil, fmt.Errorf("read current _groups.yaml: %w", err)
+	}
+	if cfg.Groups == nil {
+		cfg.Groups = make(map[string]groups.Group)
+	}
+	return cfg, nil
 }
