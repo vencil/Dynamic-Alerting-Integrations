@@ -370,6 +370,118 @@ _REC = (("reference", "config_bench_test.go", "a" * 64),
         ("main", "config_test.go", "c" * 64))
 
 
+# --- read_workload_digest(), called directly --------------------------------
+#
+# Same reason the drift block above calls its reader directly, and it was worth
+# re-learning: the first version of this PR tested the digest ONLY through the
+# CLI, and the coverage bot measured the cost — `pair_bench_ratio.py` fell
+# 87.8% → 69.3%, the whole 240-283 body reading as untested. Nothing was
+# actually untested (the subprocess cases below walk every state, and the
+# intentional-break pass turned 6/6 red), but a subprocess is opaque to
+# coverage, so the gap is invisible to anyone reading the report — and no gate
+# catches it either, because the repo-wide floor (fail_under = 75) stays green
+# at 83.7%.
+#
+# The second half of that convention matters just as much: when one of these
+# fails it names the state that broke, where the subprocess version hands back
+# a JSON diff. The CLI tests below stay as the end-to-end check; these pin the
+# reader itself.
+
+def test_read_digest_no_path_is_not_requested():
+    assert pbr.read_workload_digest(None) == {
+        "status": "not-requested", "sides": {}, "files": []}
+
+
+def test_read_digest_missing_file_is_unreadable(tmp_path: Path):
+    assert pbr.read_workload_digest(tmp_path / "nope.tsv") == {
+        "status": "unreadable", "sides": {}, "files": []}
+
+
+def test_read_digest_directory_is_unreadable_not_a_crash(tmp_path: Path):
+    """IsADirectoryError is an OSError. Pinned for the same reason as the drift
+    reader's twin: the caller passes a path it built, and a layout change could
+    aim it at one."""
+    (tmp_path / "adir").mkdir()
+    assert pbr.read_workload_digest(tmp_path / "adir") == {
+        "status": "unreadable", "sides": {}, "files": []}
+
+
+def test_read_digest_undecodable_bytes_are_unreadable(tmp_path: Path):
+    """⛔ UnicodeDecodeError is a ValueError, not an OSError — the except clause
+    has to name UnicodeError explicitly or this path raises instead of
+    degrading."""
+    p = tmp_path / "digest.bin"
+    p.write_bytes(b"reference\tconfig_test.go\t\xff\xfe\n")
+    assert pbr.read_workload_digest(p) == {
+        "status": "unreadable", "sides": {}, "files": []}
+
+
+def _write_digest(dest_dir: Path, *records: tuple[str, str, str]) -> Path:
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    p = dest_dir / "digest.tsv"
+    p.write_text(_digest_tsv(*records), encoding="utf-8")
+    return p
+
+
+def test_read_digest_happy_path_is_checked_with_both_sides(tmp_path: Path):
+    got = pbr.read_workload_digest(_write_digest(tmp_path, *_REC))
+    assert got["status"] == "checked"
+    assert set(got["sides"]) == {"reference", "main"}
+    assert all(got["sides"][s]["n_files"] == 2 for s in ("reference", "main"))
+    assert got["files"] == ["config_bench_test.go", "config_test.go"]
+
+
+def test_read_digest_sides_differ_when_a_files_content_differs(tmp_path: Path):
+    """`config_test.go` is `b`… on the reference side and `c`… on main in _REC.
+    That difference IS the signal, so the two aggregates must not collide."""
+    got = pbr.read_workload_digest(_write_digest(tmp_path, *_REC))
+    assert got["sides"]["reference"]["digest"] != got["sides"]["main"]["digest"]
+
+
+def test_read_digest_is_order_independent(tmp_path: Path):
+    """The caller's enumeration order is `find`'s, which is not guaranteed
+    stable across runners. A digest that moved with it would report a
+    work-definition change on every quiet night."""
+    a = pbr.read_workload_digest(_write_digest(tmp_path / "a", *_REC))
+    b = pbr.read_workload_digest(_write_digest(tmp_path / "b", *reversed(_REC)))
+    assert a["sides"] == b["sides"]
+
+
+def test_read_digest_blank_lines_are_skipped_not_fatal(tmp_path: Path):
+    p = tmp_path / "digest.tsv"
+    p.write_text("\n" + _digest_tsv(*_REC) + "  \n", encoding="utf-8")
+    assert pbr.read_workload_digest(p)["status"] == "checked"
+
+
+@pytest.mark.parametrize("body,why", [
+    ("reference\tconfig_test.go\n", "wrong field count"),
+    ("REF\tconfig_test.go\t" + "a" * 64 + "\n", "unknown side"),
+    ("reference\t\t" + "a" * 64 + "\n", "empty path"),
+    (_digest_tsv(*_REC) + "reference\tconfig_test.go\t" + "f" * 64 + "\n",
+     "duplicate record"),
+    ("reference\tconfig_test.go\t" + "a" * 64 + "\n", "one side only"),
+    # ⛔ The bad line comes LAST here, after a complete valid set, and that
+    # ordering is the whole point. The three cases above put the malformed line
+    # first, so both sides stay empty and the "one-sided" guard catches them —
+    # which means they pass even when the field-count guard is deleted. Measured
+    # during the break pass: replacing that guard's `return` with `break` left
+    # all five green. With this case, the same mutation yields a fully-populated
+    # `checked` digest built from part of the input, which is exactly the
+    # partial digest this function must never produce.
+    (_digest_tsv(*_REC) + "reference\tconfig_test.go\n", "bad line after a valid set"),
+])
+def test_read_digest_malformed_is_unreadable_never_partial(
+        tmp_path: Path, body: str, why: str):
+    """⛔ Every rejection returns empty `sides`, never the half it managed to
+    parse. Asserted here as well as through the CLI because this is the branch
+    where a partial digest would be born, and a partial digest renders exactly
+    like a real one."""
+    p = tmp_path / "digest.tsv"
+    p.write_text(body, encoding="utf-8")
+    got = pbr.read_workload_digest(p)
+    assert got == {"status": "unreadable", "sides": {}, "files": []}, why
+
+
 def _run_with_digest(tmp_path: Path, body: str | None):
     extra = []
     if body is not None:
