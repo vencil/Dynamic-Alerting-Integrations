@@ -735,7 +735,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "a1c8247d5401391099bdc214f2698a60986088d28f49040091b985b82979a1ce",
+ "source_digest": "f3b4ea277bc9e95c920c3da7a22a58bd4611dbf38b92620b3e600094212d20dc",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1191,7 +1191,6 @@
    "tests/dx/test_add_frontmatter.py",
    "tests/dx/test_bump_docs.py",
    "tests/dx/test_line_ending_policy.py",
-   "tests/lint/test_check_doc_freshness.py",
    "tests/lint/test_check_frontmatter_versions.py",
    "tests/lint/test_validate_docs_versions.py"
   ],
@@ -2063,6 +2062,7 @@
    "tests/dx/test_verify_diff.py",
    "tests/lint/test_check_structure.py",
    "tests/lint/test_check_threshold_reachability.py",
+   "tests/lint/test_validate_docs_versions.py",
    "tests/ops/test_ci_flake_retry.py",
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/ops/test_generated_ci_artifacts.py",
@@ -2126,6 +2126,7 @@
    "tests/dx/test_makefile_utf8_mode.py",
    "tests/dx/test_verify_diff.py",
    "tests/lint/test_check_structure.py",
+   "tests/lint/test_validate_docs_versions.py",
    "tests/ops/test_ci_path_filter_coverage.py"
   ],
   "scripts/tools/dx/converge_status.py": [
@@ -2584,7 +2585,8 @@
    "tests/lint/test_e2e_spec_lint.py"
   ],
   "tests/e2e/package.json": [
-   "tests/lint/test_e2e_spec_lint.py"
+   "tests/lint/test_e2e_spec_lint.py",
+   "tests/lint/test_validate_docs_versions.py"
   ],
   "tests/e2e/playwright.config.ts": [
    "tests/lint/test_e2e_spec_lint.py"

@@ -49,6 +49,7 @@ from _version_patterns import (
     VERSION_CURRENCY_IGNORE,
     RULE_PACK_COUNT_PATTERNS,
     TOOL_COUNT_PATTERNS,
+    TOOL_COUNT_SUBDIRS,
     ADR_COUNT_PATTERNS,
     DOC_FILE_COUNT_PATTERNS,
     SCENARIO_COUNT_PATTERNS,
@@ -784,21 +785,37 @@ def check_tool_map_coverage() -> List[Issue]:
 
 
 def _count_python_tools() -> int:
-    """How many Python tools `scripts/tools/` holds — one implementation.
+    """How many Python tools `scripts/tools/{ops,dx,lint}` holds.
 
-    ⛔ #1483: this used to exist twice. `check_tool_count_in_docs` scanned the
-    root plus `ops/`, `dx/`, `lint/`; `_auto_fix` scanned the root only. The
-    check therefore reported "found 219, actual is 220" and the repair wrote
-    **1** into README.md and printed `🔧 Fixed tool-count`. Because
-    `tool-count` is a warning, nothing went red afterwards — the tool
-    corrupted the file it was asked to keep correct, and said it had fixed
-    it. Measured on `65b38054`: flat glob = 1, root+subdirs = 220.
+    ⛔ #1483: this used to exist twice inside this module.
+    `check_tool_count_in_docs` scanned the root plus `ops/`, `dx/`, `lint/`
+    (220); `_auto_fix` scanned the root only (1), so `--fix` wrote
+    "1 個 Python 工具" into README.md and printed `🔧 Fixed tool-count`.
+    `tool-count` is a warning, so nothing went red afterwards.
+
+    ⚠️ The first repair for that unified both halves on the **checker's**
+    number, 220 — and 220 is itself wrong. The scope is written into the
+    sentence being checked: ``scripts/tools/{ops,dx,lint}`` 下 N 個 Python
+    工具. The root is not in it. Both writers agree: `bump_docs.
+    _count_python_tools` and `generate_tool_map.gather_tools` each produce
+    219. Unifying on 220 would have made `--fix` write 220 while
+    `bump_docs --sync-counts` wrote 219 back — two tools fighting over one
+    number, with the gate emitting a warning neither side could satisfy.
+    Measured on `0da92961`: root only 1, {ops,dx,lint} 219, root+subs 220.
+
+    ⛔ Do not "derive" this with `rglob`. Measured: 223, because
+    `dx/custom_alerts/` is a package (`__init__.py`, no `main()` in any of
+    its three modules) — library code, not tools. The subdirectory tuple
+    is not an enumeration standing in for a rule; it *is* the documented
+    scope, and `TestTheCounterMatchesTheScopeTheDocsDeclare` fails if a new
+    non-package subdirectory appears without this tuple and that sentence
+    being updated together.
     """
     tools_dir = REPO_ROOT / "scripts" / "tools"
     if not tools_dir.exists():
         return 0
-    all_py = list(tools_dir.glob("*.py"))
-    for subdir in ("ops", "dx", "lint"):
+    all_py: List[Path] = []
+    for subdir in TOOL_COUNT_SUBDIRS:
         sub = tools_dir / subdir
         if sub.is_dir():
             all_py.extend(sub.glob("*.py"))
@@ -1019,6 +1036,10 @@ def _auto_fix(issues: List[Issue], bilingual_pairs: int,
 
         if new_content != content:
             fpath.write_text(new_content, encoding="utf-8", newline="\n")
+            # `_auto_fix` reads fresh now, so the cache no longer causes the
+            # revert bug — but leaving pre-repair text in it would hand
+            # stale content to any re-verify pass added later in-process.
+            _CONTENT_CACHE.pop(fpath, None)
             os.chmod(fpath,
                      stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP
                      | stat.S_IROTH)
@@ -1162,7 +1183,23 @@ def check_e2e_and_jsx_versions(expected_platform: str) -> List[Issue]:
         ))
     else:
         for jsx_file in sorted(jsx_dir.rglob("*.jsx")):
-            content = jsx_file.read_text(encoding="utf-8", errors="replace")
+            # The e2e half turns an unreadable file into a named Issue; this
+            # half used to let it raise. A file that is unreadable, or that
+            # disappears between the rglob and the read, would abort the
+            # whole validator with a traceback and no Issue at all — the
+            # same "the check went quiet" class this block argues against,
+            # in crash form.
+            try:
+                content = jsx_file.read_text(encoding="utf-8",
+                                             errors="replace")
+            except OSError as exc:
+                issues.append(Issue(
+                    "jsx-frontmatter-version", "error",
+                    str(jsx_file.relative_to(REPO_ROOT)), 0,
+                    f"could not be read, so its frontmatter version was "
+                    f"never compared: {exc}",
+                ))
+                continue
             # JSX frontmatter is between --- delimiters
             if not content.startswith("---"):
                 continue
