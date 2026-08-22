@@ -201,10 +201,31 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
     # imports `check` in-process and its aggregation semantics would have to
     # be redefined first. Tracked separately — see #1468 L3.
     skipped: list[str] = []
+    _said: set[tuple[str, str]] = set()
 
     def _skip(label: str, reason: str) -> None:
-        skipped.append(label)
-        print(f"  WARN: skip {label}: {reason}", file=sys.stderr)
+        """Record once per FILE, announce once per (file, reason).
+
+        ⛔ One file can reach here twice. `_profiles.yaml` is the case that
+        exists today: the tenant-file loop opens every `*.yaml` in the
+        directory — including it — and the Layer 2 profile read opens it
+        again by name. Appending blindly put the same path in
+        `skipped_unusable_files` twice, and that field is a list of FILES;
+        a consumer counting it (batch_diagnose reads this in-process) would
+        double-count one broken file. Caught by
+        test_diagnose_names_an_unreadable_profiles_file.
+
+        The two dedup keys differ on purpose. The list is per-file, because
+        that is what the field means. The WARN is per (file, reason),
+        because the second visit can fail for a DIFFERENT reason than the
+        first and an operator needs both — suppressing by file alone would
+        trade a duplicate line for a lost one.
+        """
+        if label not in skipped:
+            skipped.append(label)
+        if (label, reason) not in _said:
+            _said.add((label, reason))
+            print(f"  WARN: skip {label}: {reason}", file=sys.stderr)
 
     # Layer 1: Global defaults
     defaults_path = base / "_defaults.yaml"
