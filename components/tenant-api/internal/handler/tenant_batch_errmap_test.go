@@ -11,10 +11,9 @@ package handler
 // induced through the real machinery:
 //   - overload: TA_WRITE_QUEUE_DEPTH=0 + a WriteMerged parked inside its
 //     MergeFunc holds the single admission token; the next applyPatch sheds.
-//   - conflict: commitFileChange's parent check — a write whose merged content
-//     is byte-identical to HEAD (but differs from a dirty working tree) stages
-//     nothing, so HEAD does not advance and the parent check reports the
-//     stale-HEAD conflict shape.
+//   - conflict: commitFileChange's parent check — a pre-commit hook advances
+//     the branch ref behind the writer's back, so the commit it then creates
+//     hangs off that external commit instead of the HEAD it recorded.
 
 import (
 	"context"
@@ -98,31 +97,60 @@ func TestApplyPatch_WriteOverloadedMapsToRetryMessage(t *testing.T) {
 	}
 }
 
+// installExternalCommitHook makes the NEXT index update advance the current
+// branch by one commit behind the writer's back. That is the honest shape of
+// the conflict commitFileChange looks for: something else committed between
+// the HEAD it recorded and the commit it creates, so that commit's parent is
+// no longer the recorded HEAD.
+//
+// Two details are load-bearing:
+//   - post-index-change, not pre-commit. The hook has to land in the window
+//     between currentHEAD() and `git commit`; `git add` writes the index and
+//     opens exactly that window. Moving the ref from pre-commit instead is too
+//     late — git has already resolved HEAD for the commit it is building and
+//     aborts with "cannot lock ref 'HEAD'" rather than committing onto the new
+//     tip, so the conflict arm is never reached.
+//   - one-shot. `git commit` writes the index too and would re-fire the hook
+//     mid-commit, hitting the same ref-lock abort; the marker file makes the
+//     external commit happen exactly once, on the `git add`.
+//
+// commit-tree + update-ref (rather than `git commit`) leaves the index and
+// working tree alone, so the writer's own staged change survives and still
+// becomes a real commit afterwards. Needs git >= 2.22 for post-index-change.
+func installExternalCommitHook(t *testing.T, dir string) {
+	t.Helper()
+	hook := filepath.Join(dir, ".git", "hooks", "post-index-change")
+	const script = `#!/bin/sh
+set -e
+marker="$(git rev-parse --git-dir)/external-commit-done"
+[ -e "$marker" ] && exit 0
+: > "$marker"
+ref=$(git symbolic-ref HEAD)
+tree=$(git rev-parse HEAD^{tree})
+new=$(git commit-tree "$tree" -p HEAD -m "external commit")
+git update-ref "$ref" "$new"
+`
+	if err := os.WriteFile(hook, []byte(script), 0o755); err != nil {
+		t.Fatalf("install post-index-change hook: %v", err)
+	}
+}
+
 func TestApplyPatch_ConflictMapsToRefreshMessage(t *testing.T) {
 	t.Parallel()
-	// Reach commitFileChange's ErrConflict arm deterministically: HEAD holds
-	// exactly the post-merge content, the working tree holds a dirty pre-merge
-	// copy. The merge output differs from disk (so it is written) but is
-	// byte-identical to HEAD → `git add` stages nothing → HEAD does not move →
-	// the parent check sees HEAD~1 != recorded HEAD and reports ErrConflict.
+	// Reach commitFileChange's ErrConflict arm deterministically: the writer
+	// records HEAD, a pre-commit hook moves the branch ref, and the writer's
+	// commit then hangs off that external commit → parent != recorded HEAD.
 	const base = "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n"
 	patch := map[string]string{"_silent_mode": "critical"}
-	merged, err := mergePatchYAML([]byte(base), "db-a", patch)
-	if err != nil {
-		t.Fatalf("mergePatchYAML: %v", err)
-	}
 
 	configDir := setupConfigDir(t, nil)
 	initGitRepo(t, configDir) // commit #1 (init)
-	if err := os.WriteFile(filepath.Join(configDir, "db-a.yaml"), []byte(merged), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	runGit(t, configDir, "add", "db-a.yaml")
-	runGit(t, configDir, "commit", "-m", "post-merge content") // commit #2 → HEAD~1 exists
-	// Dirty working tree: revert the file to the pre-merge content, uncommitted.
 	if err := os.WriteFile(filepath.Join(configDir, "db-a.yaml"), []byte(base), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	runGit(t, configDir, "add", "db-a.yaml")
+	runGit(t, configDir, "commit", "-m", "base content") // commit #2 → HEAD~1 exists
+	installExternalCommitHook(t, configDir)
 
 	gw := newTestWriter(configDir)
 	res := applyPatch(context.Background(), gw, configDir,

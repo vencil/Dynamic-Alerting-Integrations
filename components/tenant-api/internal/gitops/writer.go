@@ -416,9 +416,23 @@ func (w *Writer) commitFileChange(filePath, commitTag, authorEmail string, conte
 		return fmt.Errorf("write file: %w", err)
 	}
 
-	if err := w.gitCommit(filePath, commitTag, authorEmail, trailer...); err != nil {
+	committed, err := w.gitCommit(filePath, commitTag, authorEmail, trailer...)
+	if err != nil {
 		slog.Warn("gitops: commit failed", "commit_tag", commitTag, "error", err)
 		return fmt.Errorf("git commit: %w", err)
+	}
+
+	// Nothing was staged — the file on disk already matched HEAD, so the
+	// caller's desired state is what the repository holds and no commit was
+	// created. The parent check below only makes sense when we DID commit:
+	// with HEAD unmoved, HEAD~1 is our own predecessor rather than the commit
+	// we branched from, so it never equals headBefore and would report a
+	// permanent, unrecoverable ErrConflict for what is really an idempotent
+	// re-write (the same misfire WriteMerged's no-op short-circuit documents
+	// and sidesteps — this closes it for every direct-commit caller).
+	if !committed {
+		slog.Info("gitops: no changes to commit", "commit_tag", commitTag)
+		return nil
 	}
 
 	if headBefore != "" {
@@ -465,16 +479,22 @@ func (w *Writer) commitParent() (string, error) {
 
 // gitCommit stages filePath and creates a commit with the operator's email as author.
 //
+// committed reports whether a commit was actually created: staging a file whose
+// content already equals HEAD's leaves nothing to commit, which is a success
+// (the desired state is already in the repository) but leaves HEAD where it
+// was. Callers that reason about HEAD movement must branch on this rather than
+// assume a nil error means a new commit exists.
+//
 // Committer identity is sourced from the GIT_COMMITTER_NAME / GIT_COMMITTER_EMAIL
 // environment variables (set in the K8s Deployment). This keeps the audit trail clean:
 //   - author  = the human operator (from X-Forwarded-Email via oauth2-proxy)
 //   - committer = the service account (da-portal@dynamic-alerting.local)
-func (w *Writer) gitCommit(filePath, tenantID, authorEmail string, trailer ...string) error {
+func (w *Writer) gitCommit(filePath, tenantID, authorEmail string, trailer ...string) (committed bool, err error) {
 	// Stage the file
 	addCmd, addCtx, addCancel := w.gitCmd("-C", w.gitDir, "add", filePath)
 	defer addCancel()
 	if out, err := addCmd.CombinedOutput(); err != nil {
-		return w.gitErr(addCtx, "add", err, out)
+		return false, w.gitErr(addCtx, "add", err, out)
 	}
 
 	// Check if there's actually something to commit
@@ -482,7 +502,7 @@ func (w *Writer) gitCommit(filePath, tenantID, authorEmail string, trailer ...st
 	defer statusCancel()
 	if err := statusCmd.Run(); err == nil {
 		// Exit 0 means no changes staged — nothing to commit
-		return nil
+		return false, nil
 	}
 
 	msg := fmt.Sprintf("tenant/%s: update via portal\n\nTimestamp: %s\nSource: da-portal/tenant-manager",
@@ -521,9 +541,9 @@ func (w *Writer) gitCommit(filePath, tenantID, authorEmail string, trailer ...st
 	)
 	defer commitCancel()
 	if out, err := commitCmd.CombinedOutput(); err != nil {
-		return w.gitErr(commitCtx, "commit", err, out)
+		return false, w.gitErr(commitCtx, "commit", err, out)
 	}
-	return nil
+	return true, nil
 }
 
 // PR-mode write-back (PRWriteResult / WritePR / WritePRBatch / PRBatchOp) lives
