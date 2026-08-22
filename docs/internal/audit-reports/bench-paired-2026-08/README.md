@@ -32,6 +32,25 @@
 
 ⚠️ 與隔壁不同的一點：那份的兩支 `.py` 不可重跑（需要未收進 repo 的中間產物）。這一份**可以**——它唯一的輸入就是旁邊的 `nights.json`。
 
+### 腳本會拒絕分析不對的資料
+
+`load()` 有三道守衛，任一不符就 `ValueError` 中止：`schema` 必須是 `bench-paired-series/v1`、
+`unit` 必須是那句百分比比值、`reference.sha` 必須是 `3fd96b51f52e61566bb12c4c3fa23fed7e34dfa0`。
+
+理由不是防呆，是**這份資料特有的失效模式**：把單位換成絕對 ns/op、或把參考版本換掉之後，
+下面每一張表**還是會正常印出來**，數字看不出任何異狀。錯的數字會正常 render——
+這正是整個目錄存在要記錄的那個病。
+
+守衛本身做過 intentional-break（弄壞 → 確認會擋 → 還原），不是「寫了就算」：
+
+```text
+未破壞               → EXIT=0
+破壞 schema          → EXIT=1  unsupported schema 'bench-paired-series/v2'
+破壞 unit            → EXIT=1  unexpected unit 'median ns/op'
+破壞 reference.sha   → EXIT=1  pinned reference is '000…0', expected '3fd96b51…'
+還原                 → EXIT=0
+```
+
 ## Provenance
 
 參考版本固定為 `exporter/v2.9.0` / `3fd96b51f52e61566bb12c4c3fa23fed7e34dfa0`
