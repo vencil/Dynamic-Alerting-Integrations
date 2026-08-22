@@ -309,9 +309,24 @@ func (m *ConfigManager) commitConfig(cfg *ThresholdConfig, hash string, flatScan
 	}
 	m.configSource = configSource
 	m.gitCommit = gitCommit
+	// #1521: snapshot the hierarchical population inside the SAME lock
+	// window that installs cfg. Reloads can overlap (see the pairing note
+	// in config_divergence.go), so reading it later would let the audit
+	// compare two different reloads' halves.
+	hierTenantSources := m.hierarchy.tenantSources
 	m.mu.Unlock()
 
 	logConfigStats(m.getLogger(), cfg, logHeader)
+
+	// #1521: the flat scanner that produced `cfg` is not recursive while
+	// the hierarchical scanner behind /effective is. Compare the two
+	// tenant populations here — this is the only site in the package that
+	// assigns m.config, so hooking the audit in means every publishing
+	// path (Load, fullDirLoad, IncrementalLoad, and diffAndReload via
+	// installNewHierarchyState → fullDirLoad) is covered by construction
+	// rather than by remembering to add a call. Observability only: it
+	// never fails the commit — see config_divergence.go for why not.
+	m.auditHierarchyDivergence(cfg, hierTenantSources, logHeader)
 }
 
 // runHierarchyScanReject runs populateHierarchyState with the
