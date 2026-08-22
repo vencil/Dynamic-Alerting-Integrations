@@ -62,6 +62,7 @@ from __future__ import annotations
 import ast
 import copy
 import json
+import re
 import os
 import subprocess
 import sys
@@ -99,9 +100,18 @@ def _payload(**over):
                                "reference_ns": 100.0, "n_main": 6, "n_reference": 6},
             "BenchmarkBeta": {"ratio": 1.00, "main_ns": 100.0,
                               "reference_ns": 100.0, "n_main": 6, "n_reference": 6},
+            # ⛔ BOTH canaries, because the real harness runs both:
+            # `bench_interleave.sh` compiles `bench-canary/` and invokes it with
+            # `-test.bench=.`. The first version of this fixture carried only
+            # the CPU one, which is why a whole class of "one canary missing"
+            # never got exercised — review found the hole, and the fixture
+            # being unrealistic is why it could hide there.
             "BenchmarkControlCanaryCPU": {"ratio": 1.0002, "main_ns": 100.02,
                                           "reference_ns": 100.0, "n_main": 6,
                                           "n_reference": 6},
+            "BenchmarkControlCanarySleep": {"ratio": 1.0000, "main_ns": 100.0,
+                                            "reference_ns": 100.0, "n_main": 6,
+                                            "n_reference": 6},
         },
         "inconclusive": {},
         "workload_drift": {"status": "checked", "files": ["config_test.go"]},
@@ -252,12 +262,28 @@ def test_guard_unusable_ratio_becomes_inconclusive_never_dropped(bad):
 
 
 def test_guard_unusable_ratio_keeps_the_night_out_of_clear():
+    """⛔ k=1 AND a positive control, both for the same reason.
+
+    Review found the first version vacuous: it asserted INCONCLUSIVE on a
+    one-night series at the default k=2, where the later `judgeable()` gate
+    makes EVERY one-night series INCONCLUSIVE — so it passed with the NaN
+    replaced by a healthy ratio. At k=1 a healthy counted night is judgeable
+    and reads CLEAR, so the two branches are distinguishable and the control
+    below fails loudly if the guard is removed.
+    """
     payload = _payload()
     for bench in ("BenchmarkAlpha", "BenchmarkBeta"):
         payload["evaluated"][bench]["ratio"] = float("nan")
     night = ptw.load_night(payload, night_utc="2026-08-23", run_id=1)
-    result = ptw.decide([night])
-    assert result["status"] == ptw.STATUS_INCONCLUSIVE
+    assert ptw.decide([night], k=1)["status"] == ptw.STATUS_INCONCLUSIVE
+    # positive control — the same night with real, quiet ratios IS judged.
+    # (`_payload()`'s Alpha is +10%, which at k=1 legitimately fires; the
+    # control has to be under the threshold to distinguish CLEAR from
+    # INCONCLUSIVE rather than from FINDINGS.)
+    quiet = _payload()
+    quiet["evaluated"]["BenchmarkAlpha"]["ratio"] = 1.001
+    healthy = ptw.load_night(quiet, night_utc="2026-08-23", run_id=1)
+    assert ptw.decide([healthy], k=1)["status"] == ptw.STATUS_CLEAR
 
 
 @pytest.mark.parametrize("status", ["clean", "", None, "CHECKED"])
@@ -316,11 +342,52 @@ def test_gate_without_a_canary_reading_fails_closed():
     """No canary is no evidence the measurement worked — and no evidence it
     broke is not evidence it did not."""
     payload = _payload()
-    del payload["evaluated"]["BenchmarkControlCanaryCPU"]
+    for canary in ("BenchmarkControlCanaryCPU", "BenchmarkControlCanarySleep"):
+        del payload["evaluated"][canary]
     night = ptw.load_night(payload, night_utc="2026-08-23", run_id=1)
     ptw.apply_gate(night, 1.0)
     assert night.outcome == ptw.NIGHT_NOT_COUNTED
     assert "cannot be evaluated" in night.reason
+
+
+def test_gate_with_a_canary_absent_from_the_payload_entirely_fails_closed():
+    """⛔ The third canary case, and the one review found still open.
+
+    Distinct from a canary that ran and produced garbage (`inconclusive`) and
+    from no canary at all. A canary present in NEITHER bucket was invisible to
+    the guard, so the gate judged the night on the survivor and rendered
+    `counted | +0.01%`. Reachable without anything exotic: the payload's
+    benchmark set is `set(reference) | set(main)` over the raw `go test -bench`
+    output, so a name that stops matching on both sides never appears at all.
+    """
+    payload = _payload()
+    del payload["evaluated"]["BenchmarkControlCanaryCPU"]   # Sleep survives
+    night = ptw.load_night(payload, night_utc="2026-08-23", run_id=1)
+    assert night.missing_canaries == ["BenchmarkControlCanaryCPU"]
+    ptw.apply_gate(night, 1.0)
+    assert night.outcome == ptw.NIGHT_NOT_COUNTED
+    assert "not established" in night.reason
+    assert "BenchmarkControlCanaryCPU" in night.reason
+
+
+def test_canary_names_match_the_real_benchmark_source():
+    """⛔ The friction that makes the guard above safe rather than brittle.
+
+    Requiring the DECLARED canary set means removing one from the harness would
+    blank the gate on every night. That is only acceptable if the two cannot
+    drift apart quietly — so the declaration is pinned against the Go source.
+    Changing the instrumentation means changing both, in a reviewed commit;
+    same deliberate friction `.github/bench-reference.yaml` uses for the pin.
+    """
+    src = (_REPO / "scripts" / "tools" / "ops" / "bench-canary"
+           / "canary_test.go").read_text(encoding="utf-8")
+    declared = set(re.findall(r"^func (Benchmark\w+)\(b \*testing\.B\)",
+                              src, re.M))
+    assert declared == set(ptw.CANARY_BENCHES), (
+        f"canary_test.go declares {sorted(declared)} but CANARY_BENCHES is "
+        f"{sorted(ptw.CANARY_BENCHES)} — the gate requires every declared "
+        "canary, so a silent divergence here either blanks the gate on every "
+        "night or halves it without saying so")
 
 
 def test_gate_rejects_a_night_whose_canary_moved():
@@ -348,6 +415,7 @@ def _series(values, **over):
         payload = _payload(**over)
         payload["evaluated"] = {
             "BenchmarkControlCanaryCPU": {"ratio": 1.0002},
+            "BenchmarkControlCanarySleep": {"ratio": 1.0000},
         }
         if value is not None:
             payload["evaluated"]["BenchmarkAlpha"] = {"ratio": 1.0 + value / 100.0}
@@ -363,8 +431,19 @@ def test_fire_needs_k_consecutive_nights():
 
 
 def test_a_night_with_no_reading_breaks_the_run():
-    """⛔ 'not measured' is not 'under the threshold'."""
+    """⛔ 'not measured' is not 'under the threshold'.
+
+    ⚠️ The `decide()` assertion below CANNOT discriminate that sentence, and
+    saying so is the point of this docstring. Inside `fires()` a `None` reading
+    and a `False` (under-threshold) reading both reset the run to 0, so a code
+    change that conflates the two leaves this line green — review demonstrated
+    exactly that. The tri-state return is asserted where it is observable, at
+    `_night_reading`; this stays as the integration check it actually is, with
+    a positive control so at least the run-breaking half is real.
+    """
+    assert ptw._night_reading([_run("2026-08-11", 2)], "BenchmarkAlpha", 5.0) is None
     assert ptw.decide(_series([9.0, None, 9.0]), k=2)["fired"] == {}
+    assert ptw.decide(_series([9.0, 9.0, 9.0]), k=2)["fired"]   # control
 
 
 def _exact(values):
@@ -382,6 +461,7 @@ def _exact(values):
         night = ptw.Night(f"2026-08-{10 + i:02d}", i + 1)
         night.schema = "bench-paired/v2"
         night.canary_pct["BenchmarkControlCanaryCPU"] = 0.02
+        night.canary_pct["BenchmarkControlCanarySleep"] = 0.00
         if value is not None:
             night.ratios_pct["BenchmarkAlpha"] = value
         out.append(night)
@@ -425,11 +505,21 @@ def test_uncounted_night_breaks_the_run_by_default_and_is_skipped_on_request():
 # ── The three-state verdict ───────────────────────────────────────────────
 
 def test_no_counted_night_is_inconclusive_not_clear():
-    """⛔ The whole point. A window that judged nothing is not a clean window."""
+    """⛔ The whole point. A window that judged nothing is not a clean window.
+
+    ⛔ Same correction as the test above, found the same way: at the default
+    k=2 this passed with the canary put back, because one night is never
+    judgeable at k=2. k=1 plus a positive control makes the assertion mean what
+    its name says.
+    """
     payload = _payload()
     del payload["evaluated"]["BenchmarkControlCanaryCPU"]
     night = ptw.load_night(payload, night_utc="2026-08-23", run_id=1)
-    assert ptw.decide([night])["status"] == ptw.STATUS_INCONCLUSIVE
+    assert ptw.decide([night], k=1)["status"] == ptw.STATUS_INCONCLUSIVE
+    quiet = _payload()
+    quiet["evaluated"]["BenchmarkAlpha"]["ratio"] = 1.001
+    withcanary = ptw.load_night(quiet, night_utc="2026-08-23", run_id=1)
+    assert ptw.decide([withcanary], k=1)["status"] == ptw.STATUS_CLEAR
 
 
 def test_empty_series_is_inconclusive():
@@ -656,7 +746,8 @@ if argv[:2] == ["run", "download"]:
         "reference_sha": "3f" + "0" * 38,
         "evaluated": {
             "BenchmarkAlpha": {"ratio": 1.09},
-            "BenchmarkControlCanaryCPU": {"ratio": 1.0002}},
+            "BenchmarkControlCanaryCPU": {"ratio": 1.0002},
+            "BenchmarkControlCanarySleep": {"ratio": 1.0000}},
         "inconclusive": {},
         "workload_drift": {"status": "checked", "files": ["config_test.go"]},
         "workload_digest": {
@@ -771,6 +862,7 @@ def test_from_gh_two_runs_on_one_calendar_night_do_not_satisfy_k_of_2(tmp_path):
 def _run(date, run_id, alpha=None):
     night = ptw.Night(date, run_id)
     night.canary_pct["BenchmarkControlCanaryCPU"] = 0.02
+    night.canary_pct["BenchmarkControlCanarySleep"] = 0.00
     if alpha is not None:
         night.ratios_pct["BenchmarkAlpha"] = alpha
     return night
@@ -821,6 +913,8 @@ def test_partial_canary_failure_fails_closed():
     night = ptw.Night("2026-08-20", 1)
     night.canary_pct["BenchmarkControlCanarySleep"] = 0.01
     night.inconclusive["BenchmarkControlCanaryCPU"] = "unreadable-ratio (nan)"
+    # (Sleep present and calm, CPU present-but-unreadable — the survivor's
+    #  reading must not stand in for the night.)
     night.ratios_pct["BenchmarkAlpha"] = 0.5
     ptw.apply_gate(night, 1.0)
     assert night.outcome == ptw.NIGHT_NOT_COUNTED
@@ -849,6 +943,7 @@ def test_rule_that_cannot_complete_reports_inconclusive_not_clear():
     for i in range(6):
         night = ptw.Night(f"2026-08-{10 + i}", i)
         night.canary_pct["BenchmarkControlCanaryCPU"] = 9.0 if i % 2 else 0.02
+        night.canary_pct["BenchmarkControlCanarySleep"] = 0.00
         night.ratios_pct["BenchmarkAlpha"] = 42.0
         nights.append(night)
     result = ptw.decide(nights, k=2)
@@ -865,6 +960,7 @@ def test_the_jobs_own_first_nights_are_inconclusive():
     a k=2 rule that cannot complete."""
     first = ptw.Night("2026-08-20", 1)
     first.canary_pct["BenchmarkControlCanaryCPU"] = 0.02
+    first.canary_pct["BenchmarkControlCanarySleep"] = 0.00
     first.ratios_pct["BenchmarkAlpha"] = 42.0
     older = [ptw.Night(f"2026-08-{15 + i}", 90 + i).unreadable("pre-pipeline")
              for i in range(3)]
@@ -929,9 +1025,15 @@ def test_a_reading_over_the_threshold_is_never_silently_omitted():
 
 
 def test_reference_pin_is_unknown_when_a_side_has_no_sha():
-    """⛔ Schema v1 carries no `reference_sha`, and this module accepts v1 —
-    so the column rendered `same` for a pin that was never compared, directly
-    above the note forbidding that reading."""
+    """⛔ The column rendered `same` for a pin that was never compared, directly
+    above the note forbidding that reading.
+
+    ⛔ CORRECTION: this docstring used to say "schema v1 carries no
+    `reference_sha`". Measured false in a later review — v1 has carried it
+    since #1455. The reachable route is that `pair_bench_ratio.py` defaults
+    `--reference-sha` to `None`, so an ordinary v2 payload can carry
+    `"reference_sha": null`; that is what the test below constructs.
+    """
     older = _run("2026-08-22", 1, 1.0)
     older.reference_sha = None
     newer = _run("2026-08-23", 2, 1.0)
@@ -986,4 +1088,93 @@ def test_a_benchmark_missing_from_one_nights_payload_is_disclosed():
     assert "absent-from-payload" in result["inconclusive"]["BenchmarkAlpha"][
         "2026-08-11"]
     assert "BenchmarkAlpha" in ptw.render(result)
+
+
+# ── 6. FIXES FOR THE THIRD REVIEW ROUND ───────────────────────────────────
+
+def test_judgeable_honours_gap_so_it_cannot_contradict_fires():
+    """⛔ Two guards on the same page must not disagree.
+
+    `fires()` honoured `--gap skip` and `judgeable()` did not, so under `skip` a
+    benchmark that DID fire was listed in the same report under "the rule could
+    NOT judge", and the verdict was downgraded FINDINGS → INCONCLUSIVE. That
+    switch is the open question this tool exists to help decide, so adopting
+    `skip` would have turned every sustained regression into an INCONCLUSIVE.
+    """
+    nights = [_run("2026-08-10", 1, 9.0),
+              _run("2026-08-11", 2, 9.0),      # gated out below
+              _run("2026-08-12", 3, 9.0)]
+    nights[1].canary_pct["BenchmarkControlCanaryCPU"] = 4.0
+    result = ptw.decide(nights, k=2, gap=ptw.GAP_SKIP)
+    assert result["fired"] == {"BenchmarkAlpha": "2026-08-12"}
+    assert result["unjudgeable"] == []
+    assert result["status"] == ptw.STATUS_FINDINGS
+    # and `break`, the default, still refuses to bridge the gated-out night
+    broken = ptw.decide(nights, k=2, gap=ptw.GAP_BREAK)
+    assert broken["fired"] == {}
+
+
+def test_the_gate_counterfactual_uses_the_same_predicate_as_the_verdict():
+    """⛔ The counterfactual table had its own copy of the gate, and the
+    partial-canary fix landed in only one of them: the Nights table said
+    `not-counted` while the gate table reported `0 nights rejected` at the same
+    value. That table is the data ADR-032 §待決 5 says will pick the real
+    threshold."""
+    good = _run("2026-08-20", 1, 1.0)
+    half = _run("2026-08-21", 2, 1.0)
+    half.canary_pct = {"BenchmarkControlCanarySleep": 0.01}
+    half.inconclusive["BenchmarkControlCanaryCPU"] = "unreadable-ratio (nan)"
+    result = ptw.decide([good, half])
+    assert [n.outcome for n in result["nights"]] == [
+        ptw.NIGHT_COUNTED, ptw.NIGHT_NOT_COUNTED]
+    for _gate, rejected in ptw.counterfactual_gates(result["nights"]):
+        assert rejected == ["2026-08-21"]
+    body = ptw.render(result)
+    assert "| 0.5% | 1 (2026-08-21) |" in body
+
+
+def test_gate_verdict_is_the_only_implementation_of_the_gate():
+    """Structural: both call sites must route through the one predicate, so a
+    future gate change cannot land in half the report."""
+    # ⛔ Asked of the parser, not of a substring count — the first version of
+    # this test asserted `"deviation > gate" not in body`, which is false of the
+    # ONE legitimate comparison inside `gate_verdict` itself, and counted a
+    # docstring mention of `unreadable_canaries` as a call site. Prose is not
+    # code; the same lesson as the summary-only check above.
+    deciders = set()
+    for func in [n for n in ast.walk(_TREE)
+                 if isinstance(n, ast.FunctionDef)]:
+        for node in ast.walk(func):
+            if not isinstance(node, ast.Compare):
+                continue
+            # ⛔ ORDERING comparisons only. `render` legitimately does
+            # `gate == result["gate_pct"]` to mark which row is the default —
+            # that is a label, not an accept/reject decision. The invariant is
+            # about who decides, so it is about `<`/`>`, not about `==`.
+            if not any(isinstance(op, (ast.Lt, ast.LtE, ast.Gt, ast.GtE))
+                       for op in node.ops):
+                continue
+            names = {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+            if names & {"gate_pct", "gate"}:
+                deciders.add(func.name)
+    assert deciders == {"gate_verdict"}, (
+        f"the gate threshold is compared in {sorted(deciders)} — it must be "
+        "decided in exactly one place, or a future change lands in half the "
+        "report (which is how the counterfactual table came to disagree with "
+        "the verdict)")
+
+
+def test_a_v2_payload_can_carry_a_null_reference_sha():
+    """⛔ The route that actually reaches the pin defect — recorded because the
+    first attribution ("schema v1 has no `reference_sha`") was measured FALSE:
+    v1 has carried it since #1455. `pair_bench_ratio.py` defaults
+    `--reference-sha` to `None`, so an ordinary v2 payload can carry null."""
+    payload = _payload()
+    payload["reference_sha"] = None
+    night = ptw.load_night(payload, night_utc="2026-08-23", run_id=1)
+    assert night.readable
+    assert night.reference_sha is None
+    other = ptw.load_night(_payload(), night_utc="2026-08-24", run_id=2)
+    assert ptw.digest_transitions(
+        [night, other])[0]["reference_pin_changed"] is None
 

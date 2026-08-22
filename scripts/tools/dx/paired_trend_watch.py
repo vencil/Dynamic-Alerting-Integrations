@@ -235,14 +235,37 @@ class Night:
 
     @property
     def unreadable_canaries(self):
-        """Canaries that were present in the payload but could not be read.
+        """Canaries the payload TRIED to produce and failed on.
 
-        ⛔ Distinct from "not present at all". A canary whose ratio was NaN, or
-        whose record was malformed, landed in `inconclusive` — the paired
-        measurement TRIED to produce it and failed, which is evidence about the
-        measurement, not the absence of evidence.
+        A canary whose ratio was NaN or whose record was malformed landed in
+        `inconclusive` — evidence about the measurement, not absence of it.
         """
         return sorted(b for b in self.inconclusive if b in CANARY_BENCHES)
+
+    @property
+    def missing_canaries(self):
+        """Declared canaries the payload does not mention AT ALL.
+
+        ⛔ A third case, and review found it open after the first two were
+        closed. `unreadable_canaries` only sees a canary that reached
+        `inconclusive`; one that appears in NEITHER bucket was invisible, so the
+        gate judged the night on the surviving canary alone and rendered
+        `counted | +0.01%`. Reachable without anything exotic:
+        `pair_bench_ratio.py` builds its benchmark set from
+        `set(reference) | set(main)`, so a name absent from both sides' raw
+        `go test -bench` output — a `-bench` filter that stops matching, a
+        renamed function — never enters the payload in any form.
+
+        ⚠️ This deliberately requires the DECLARED set, which makes removing a
+        canary from the harness a loud failure rather than a silent halving of
+        the gate. `tests/dx/test_paired_trend_watch.py` pins `CANARY_BENCHES`
+        against `bench-canary/canary_test.go`, so the two cannot drift apart
+        quietly; changing the instrumentation means changing both, in a
+        reviewed commit. That is the same deliberate friction
+        `.github/bench-reference.yaml` uses for the reference pin.
+        """
+        seen = set(self.ratios_pct) | set(self.canary_pct) | set(self.inconclusive)
+        return sorted(CANARY_BENCHES - seen)
 
     @property
     def canary_deviation_pct(self):
@@ -417,8 +440,40 @@ def load_night(payload, *, night_utc, run_id):
     return night
 
 
+def gate_verdict(night, gate_pct):
+    """Would this readable night count at `gate_pct`? → (counts, reason).
+
+    ⛔ ONE implementation, deliberately. The counterfactual table used to carry
+    a second copy of this logic, and review caught the predictable result: the
+    partial-canary fix landed in `apply_gate` and not in the copy, so the main
+    table said `not-counted` while the "Canary gate" table three sections below
+    reported `0 nights rejected` at the very same gate value. That table is the
+    data ADR-032 §待決 5 says will decide the real threshold, and it was
+    under-counting exactly the rejections that mean "could not evaluate".
+    """
+    deviation = night.canary_deviation_pct
+    broken = night.unreadable_canaries + night.missing_canaries
+    if deviation is None:
+        return False, ("no control-canary reading — the gate cannot be "
+                       "evaluated, so this night is not counted")
+    if broken:
+        # ⛔ Partial instrumentation is not instrumentation. The surviving
+        # canary's calm reading is evidence that ONE canary was calm, not that
+        # the paired measurement held — and the two canaries are deliberately
+        # different shapes (CPU-bound and sleep-bound), so they are not
+        # substitutes for one another.
+        return False, ("control canary not established: " + ", ".join(broken)
+                       + f" — the remaining canary read {deviation:.2f}%, "
+                       "which is evidence about that canary only, not about "
+                       "the night")
+    if deviation > gate_pct:
+        return False, (f"control canary deviated {deviation:.2f}% "
+                       f"(gate {gate_pct:.2f}%) — paired measurement suspect")
+    return True, None
+
+
 def apply_gate(night, gate_pct):
-    """Decide whether a readable night counts, from the control canary.
+    """Stamp a readable night's outcome from `gate_verdict`.
 
     ⛔ Fails closed. A night with no canary reading has no evidence that the
     paired measurement worked, and "no evidence it broke" is not "evidence it
@@ -426,31 +481,9 @@ def apply_gate(night, gate_pct):
     """
     if not night.readable:
         return night
-    deviation = night.canary_deviation_pct
-    broken = night.unreadable_canaries
-    if deviation is None:
-        night.outcome = NIGHT_NOT_COUNTED
-        night.reason = ("no control-canary reading — the gate cannot be "
-                        "evaluated, so this night is not counted")
-    elif broken:
-        # ⛔ Partial instrumentation is not instrumentation. The surviving
-        # canary's calm reading is evidence that ONE canary was calm, not that
-        # the paired measurement held — and the two canaries are deliberately
-        # different shapes (CPU-bound and sleep-bound), so they are not
-        # substitutes for one another.
-        night.outcome = NIGHT_NOT_COUNTED
-        night.reason = ("control canary unreadable: "
-                        + ", ".join(broken)
-                        + f" — the remaining canary read {deviation:.2f}%, "
-                        "which is evidence about that canary only, not about "
-                        "the night")
-    elif deviation > gate_pct:
-        night.outcome = NIGHT_NOT_COUNTED
-        night.reason = (f"control canary deviated {deviation:.2f}% "
-                        f"(gate {gate_pct:.2f}%) — paired measurement suspect")
-    else:
-        night.outcome = NIGHT_COUNTED
-        night.reason = None
+    counts, reason = gate_verdict(night, gate_pct)
+    night.outcome = NIGHT_COUNTED if counts else NIGHT_NOT_COUNTED
+    night.reason = reason
     return night
 
 
@@ -527,7 +560,7 @@ def fires(nights, benches, threshold_pct, k, gap=GAP_BREAK):
     return out
 
 
-def judgeable(nights, benches, k):
+def judgeable(nights, benches, k, gap=GAP_BREAK):
     """Which benchmarks the K-consecutive rule was even ABLE to judge.
 
     ⛔ THE RULE CANNOT RETURN A VERDICT IT WAS NEVER IN A POSITION TO REACH.
@@ -563,8 +596,18 @@ def judgeable(nights, benches, k):
             if counted and all(bench in n.ratios_pct for n in counted):
                 run += 1
                 best = max(best, run)
-            else:
-                run = 0
+                continue
+            # ⛔ `gap` must mean the same thing here as in `fires()`. Review
+            # caught them disagreeing: `fires()` honoured `--gap skip` and this
+            # did not, so under `skip` a benchmark that DID fire was listed in
+            # the same report as one the rule "was not in a position to judge",
+            # and the verdict was downgraded from FINDINGS to INCONCLUSIVE.
+            # Worse, that switch is precisely the open question this tool exists
+            # to help the owner decide — adopting `skip` would have turned every
+            # sustained regression into an INCONCLUSIVE.
+            if gap == GAP_SKIP and not counted:
+                continue
+            run = 0
         out[bench] = best >= k
     return out
 
@@ -590,10 +633,23 @@ def digest_transitions(nights):
         # is a different and much louder thing than a fixture edit on main.
         #
         # ⛔ Tri-state, like everything else on this row. It used to return
-        # False when either side had no `reference_sha` — and schema v1, which
-        # this module deliberately accepts, has no such field — so the column
-        # rendered "same" for a pin that was never compared, printed directly
-        # above the note forbidding exactly that reading. Reported in review.
+        # False when either side had no `reference_sha`, so the column rendered
+        # "same" for a pin that was never compared — printed directly above the
+        # note forbidding exactly that reading.
+        #
+        # ⛔ CORRECTION. The first version of this comment justified the fix
+        # with "schema v1 has no `reference_sha`". That is FALSE and a later
+        # review measured it false: `pair_bench_ratio.py` has written
+        # `reference_sha` into the v1 payload since #1455 (`60f4523`,
+        # 2026-08-16), which covers every v1 night a 14-night window can reach.
+        # The one earlier shape that lacks it (#1441) also lacks `status`, so
+        # `load_night` marks it unreadable and `digest_transitions` — which
+        # walks readable nights only — never sees it.
+        #
+        # The fix stands; the reachable route is different. `--reference-sha`
+        # defaults to `None` (`pair_bench_ratio.py`), so a perfectly ordinary
+        # v2 payload can carry `"reference_sha": null` — verified by running
+        # that tool without the flag.
         if prev.reference_sha is None or cur.reference_sha is None:
             rec["reference_pin_changed"] = None
         else:
@@ -642,7 +698,7 @@ def decide(nights, *, threshold_pct=DEFAULT_THRESHOLD_PCT,
                 "absent-from-payload — the night carried neither a ratio nor a "
                 "reason for this benchmark")
 
-    can_judge = judgeable(nights, benches, k)
+    can_judge = judgeable(nights, benches, k, gap=gap)
     unjudgeable = sorted(b for b, ok in can_judge.items() if not ok)
 
     # Readings that crossed the threshold at least once without ever completing
@@ -872,11 +928,8 @@ def counterfactual_gates(nights):
     rows = []
     readable = [n for n in nights if n.readable]
     for gate in COUNTERFACTUAL_GATES:
-        rejected = []
-        for night in readable:
-            deviation = night.canary_deviation_pct
-            if deviation is None or deviation > gate:
-                rejected.append(night.night_utc)
+        rejected = [n.night_utc for n in readable
+                    if not gate_verdict(n, gate)[0]]
         rows.append((gate, rejected))
     return rows
 

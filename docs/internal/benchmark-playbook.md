@@ -383,6 +383,8 @@ residue 完整清單留在 artifact 供稽核，但**不整份貼進 step summar
 2. **被閘門擋下的夜對「連續 N 夜」是中斷還是跳過 —— ADR 沒有裁決。** 預設取中斷（不憑空製造連續性），另一種以反事實同時輸出。⛔ 封存的六夜**無法**裁決這題（那六夜從未被擋下），錨點測試通過不構成支持預設值的證據。
 3. **已被接受的成本不會被抑制。** 第一張會發射的是 `MergePartialConfigs_1000`（六夜重播算出來的，不是預測），而它已由 [#1474](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1474) 量測、歸因、決定接受。`ACCEPTED` 帳本是 PR-B2 的範圍；在那之前**標註而不隱藏**——臨時的手寫排除清單正是靜音的原型。
 
+⚠️ **`--gap skip` 與 `break` 必須兩個閘門一致。** 判定「湊不湊得出連續 K 夜」與判定「有沒有發射」讀的是同一個 `gap`；兩者不一致時，同一份報告會同時說某支「發射了」與「無法判定」（第三輪盲審實測）。
+
 **一夜落差**：與上一節同源——本次 run 自己的 artifact 在 job 執行當下還不是 `success`，所以今晚的數字落在明天的判定裡。
 
 本機重播（不需網路、不需 `gh`）：`python3 scripts/tools/dx/paired_trend_watch.py --dataset docs/internal/audit-reports/bench-paired-2026-08`

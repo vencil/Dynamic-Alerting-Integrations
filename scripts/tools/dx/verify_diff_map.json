@@ -742,7 +742,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "103b788cdd0f10b88b9a00f9dbcab024dd46929d0e6634c0f40d462ceb1fa5ce",
+ "source_digest": "7d926b21ac79a5f7987abe599ad5bff172cc4940cc2e69c096aceb6bd071067d",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1092,6 +1092,7 @@
    "tests/dx/test_generate_rule_pack_stats_injection.py"
   ],
   ".github/bench-reference.yaml": [
+   "tests/dx/test_paired_trend_watch.py",
    "tests/lint/test_check_workload_closure_drift.py",
    "tests/shared/test_bilingual_help_contract.py"
   ],
@@ -2437,6 +2438,9 @@
   ],
   "scripts/tools/ops/alert_quality.py": [
    "tests/shared/test_help_contract.py"
+  ],
+  "scripts/tools/ops/bench-canary/canary_test.go": [
+   "tests/dx/test_paired_trend_watch.py"
   ],
   "scripts/tools/ops/bench_report_pr.sh": [
    "tests/ops/test_nightly_scan_matrix_drift.py"
