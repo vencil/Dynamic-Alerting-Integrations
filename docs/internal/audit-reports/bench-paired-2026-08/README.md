@@ -34,7 +34,10 @@
 
 ## Provenance
 
-參考版本固定為 `exporter/v2.9.0` / `3fd96b51f52e61566bb12c4c3fa23fed7e34dfa0`（[`.github/bench-reference.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/.github/bench-reference.yaml)）。
+參考版本固定為 `exporter/v2.9.0` / `3fd96b51f52e61566bb12c4c3fa23fed7e34dfa0`
+（[`.github/bench-reference.yaml` @ `55a86d1d`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/55a86d1d5d9c23078c4cce4ed878e038e5e116fe/.github/bench-reference.yaml)
+—— 刻意連到**不可變的 revision** 而不是 `main`：那個檔案的內容就是這批資料的意義所在，換版之後 `main` 上的它會指向別的參考版本，而這六夜不會跟著改）。
+`analyze_paired.py` 載入時會驗證 `nights.json` 的 `reference.sha` 與這裡一致，不一致就拒絕分析。
 
 | 夜 | run | CPU | `workload_drift` |
 |---|---|---|---|
@@ -90,7 +93,7 @@ threshold 1% / 2 nights -> 9 fire(s)
 IncrementalLoad_1000_OneFileChanged   n=6  thr=+7.46%   leave-one-out +6.33% .. +8.49%
 ```
 
-⛔ 而同一支在**只有前四夜**（08-18..21）時算出來的門檻是 **+27.94%**。多兩夜、門檻移動 **20 個百分點**——這比 leave-one-out 更能說明「歷史不足時這個門檻不能用」。
+⛔ 而同一支只取**後四夜**（08-18..21，即六夜序列的第 3–6 夜）時算出來的門檻是 **+27.94%**。少兩夜、門檻移動 **20 個百分點**——這比 leave-one-out 更能說明「歷史不足時這個門檻不能用」。兩個數字都由 `analyze_paired.py` 同一次執行印出，可逐字對照。
 
 ⚠️ 這一段同時是一次更正：本序列進 repo 之前，[#1497](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1497) 與相關討論裡引用過「門檻 +27.94%，所以 +30.38% 照樣穿過去」——那個數字出自四夜窗，六夜下**不成立**（+25.02% 會被 +7.46% 的門檻抓到）。結論的方向不變（per-bench 門檻解決不了那支 benchmark），但當時的**論據**是錯的。
 

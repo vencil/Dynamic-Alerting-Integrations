@@ -20,16 +20,43 @@ import statistics as st
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+
+# The dataset's contract. Checked on load, because every number below changes
+# meaning if any of the three moves and NOTHING about the output would look
+# different: swap the unit for absolute ns/op and the "spread" table still
+# prints, swap the pinned reference and the ratios still look like ratios. A
+# wrong number that renders correctly is the failure mode this whole directory
+# exists to document. (CodeRabbit, PR #1498.)
+EXPECTED_SCHEMA = "bench-paired-series/v1"
+EXPECTED_UNIT = "percent change of main vs the pinned reference (M/R - 1) * 100"
+EXPECTED_REFERENCE_SHA = "3fd96b51f52e61566bb12c4c3fa23fed7e34dfa0"
+
 CANARY = {"BenchmarkControlCanaryCPU", "BenchmarkControlCanarySleep"}
 # Attributed to a real implementation cost and ACCEPTED in #1474 — excluded when
 # the question is "how noisy is a bench-night", included everywhere else.
 ATTRIBUTED = {"BenchmarkMergePartialConfigs_1000", "BenchmarkResolveSilentModes_1000"}
 # Measured run-to-run bimodal, #1497. Excluded only where the README says so.
 UNSTABLE = "BenchmarkIncrementalLoad_1000_OneFileChanged"
+# The window the README's `+27.94%` comes from — nights 3..6 of the six, i.e.
+# the LAST four. Named by date rather than sliced off the end, so adding a
+# seventh night makes the constant obviously stale instead of silently
+# re-pointing at a different four nights.
+FOUR_NIGHT_WINDOW = ("2026-08-18", "2026-08-19", "2026-08-20", "2026-08-21")
 
 
 def load():
     d = json.loads((HERE / "nights.json").read_text(encoding="utf-8"))
+    if d.get("schema") != EXPECTED_SCHEMA:
+        raise ValueError(f"unsupported schema {d.get('schema')!r} "
+                         f"(expected {EXPECTED_SCHEMA!r}) — refusing to analyse")
+    if d.get("unit") != EXPECTED_UNIT:
+        raise ValueError(f"unexpected unit {d.get('unit')!r} — every statistic below "
+                         "assumes a percent ratio; refusing to analyse")
+    got = (d.get("reference") or {}).get("sha")
+    if got != EXPECTED_REFERENCE_SHA:
+        raise ValueError(f"pinned reference is {got!r}, expected "
+                         f"{EXPECTED_REFERENCE_SHA!r} — these ratios would be measured "
+                         "against a different baseline; refusing to analyse")
     return [(n["night_utc"], n["ratios_pct"]) for n in d["nights"]]
 
 
@@ -114,6 +141,21 @@ def main() -> int:
         print(f"  {b.replace('Benchmark', ''):<40} n={len(v)} thr={base:+7.2f}%  "
               f"leave-one-out {min(loo):+7.2f}% .. {max(loo):+7.2f}%  "
               f"(swing {max(loo) - min(loo):.2f} pts)")
+    # ⛔ The README quotes BOTH windows, because "the threshold itself moved 20
+    # points when n went 4 -> 6" is the actual evidence that this rule needs more
+    # history. Printing only one of them left half the argument unreproducible
+    # while the module docstring promised otherwise. (CodeRabbit, PR #1498.)
+    four = [r[UNSTABLE] for night, r in nights
+            if night in FOUR_NIGHT_WINDOW and UNSTABLE in r]
+    if len(four) == len(FOUR_NIGHT_WINDOW):
+        print(f"  ⇒ same bench over the LAST four nights "
+              f"({FOUR_NIGHT_WINDOW[0]}..{FOUR_NIGHT_WINDOW[-1]}, n={len(four)}): "
+              f"thr={threshold(four):+7.2f}%  — the six-night value above is "
+              f"{threshold([r[UNSTABLE] for _, r in nights if UNSTABLE in r]):+.2f}%; "
+              f"that gap is the point")
+    else:
+        print(f"  ⚠️ four-night window incomplete ({len(four)}/{len(FOUR_NIGHT_WINDOW)} "
+              f"nights present) — the README's four-night figure is NOT reproduced here")
     print("  ⛔ and the structural objection, shown rather than asserted:")
     for b in sorted(ATTRIBUTED):
         v = [r[b] for _, r in nights if b in r]
