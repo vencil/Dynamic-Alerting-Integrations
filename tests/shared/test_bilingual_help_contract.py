@@ -259,6 +259,7 @@ ENGLISH_ONLY: dict[str, str] = {
     "check_vmalert_coverage.py": _R_LINT,
     "check_window_x_no_fallback.py": _R_LINT,
     "check_workflow_git_push_permissions.py": _R_LINT,
+    "check_workload_closure_drift.py": _R_LINT,
     "detect_sed_damage.py": _R_LINT,
     "fix_doc_links.py": _R_LINT,
     "fix_file_hygiene.py": _R_LINT,
@@ -427,8 +428,17 @@ def test_allowlists_shrink_only_count_pin():
     # generate_* tools already here: a dx CLI invoked by `make agent-adapters`
     # and by a pre-commit drift gate, never by a customer. Its whole output is
     # file paths and a drift verdict.
-    assert len(ENGLISH_ONLY) <= 140, (
-        f"ENGLISH_ONLY grew to {len(ENGLISH_ONLY)} (pin=140). Adding an "
+    # pin 141: bumped from 140 for check_workload_closure_drift.py (TRK-359,
+    # ADR-032 PR-A), the lint that stops the workload-closure helper list in
+    # bench-workload-effect.yaml from silently diverging from its SSOT in
+    # .github/bench-reference.yaml. Same class as the 81 sibling lints already
+    # here: a pre-commit/CI gate, never invoked by a customer. Its whole output
+    # is two file paths and an agree/disagree verdict. ⛔ Recorded as a
+    # deliberate choice, not a default: scripts/tools/lint/ is 81 English-only
+    # to 0 bilingual, so wiring detect_cli_lang() here would have made this the
+    # lone exception in its own directory rather than the start of a trend.
+    assert len(ENGLISH_ONLY) <= 141, (
+        f"ENGLISH_ONLY grew to {len(ENGLISH_ONLY)} (pin=141). Adding an "
         "English-only tool is allowed but must be an explicit, reviewed "
         "decision — bump this pin in the same commit and justify it."
     )

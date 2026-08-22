@@ -732,7 +732,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "dc231da3ee1348a25a2e5993cc32b872f7322954c25fc03f4480927bf63de19e",
+ "source_digest": "b52debd723d2f0a5b51a3c564d623766ec48dd3276a1736e94580d6345349420",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1077,6 +1077,9 @@
   ],
   ".github/CODEOWNERS": [
    "tests/dx/test_generate_rule_pack_stats_injection.py"
+  ],
+  ".github/bench-reference.yaml": [
+   "tests/shared/test_bilingual_help_contract.py"
   ],
   ".github/custom-rule-policy.yaml": [
    "tests/ops/test_lint_custom_rules.py"

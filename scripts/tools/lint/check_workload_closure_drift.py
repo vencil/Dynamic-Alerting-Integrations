@@ -27,11 +27,25 @@ Exit codes follow the dev-rules #13 convention: 0 clean, 1 violation,
 """
 from __future__ import annotations
 
+import argparse
+import os
 import pathlib
 import re
 import sys
 
 import yaml
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+try:
+    from _lib_compat import try_utf8_stdout  # noqa: E402
+except Exception:  # pragma: no cover - compat shim optional
+    def try_utf8_stdout() -> None:  # type: ignore
+        pass
+from _lib_exitcodes import (  # noqa: E402
+    EXIT_CALLER_ERROR,
+    EXIT_OK,
+    EXIT_VIOLATION,
+)
 
 REPO = pathlib.Path(__file__).resolve().parents[3]
 PIN = REPO / ".github" / "bench-reference.yaml"
@@ -47,14 +61,27 @@ _LIST_RE = re.compile(r"'((?:[A-Za-z0-9_]+_test\.go)(?:\s+[A-Za-z0-9_]+_test\.go
 
 def _fail(msg: str) -> int:
     print(f"[workload-closure-drift] {msg}", file=sys.stderr)
-    return 1
+    return EXIT_VIOLATION
 
 
 def main() -> int:
+    try_utf8_stdout()
+    # No options: both paths are structural (the SSOT pin file and the one
+    # workflow that must duplicate it), so there is nothing to parameterise.
+    # The parser exists anyway so an unrecognised flag exits 2 instead of
+    # being silently ignored — tests/shared/test_tool_exit_codes.py asserts
+    # exactly that, and a lint that ignores its own argv is a lint whose
+    # invocation nobody can trust.
+    argparse.ArgumentParser(
+        description="Fail if the literal workload-closure helper lists in "
+        ".github/workflows/bench-workload-effect.yaml disagree with their SSOT "
+        "in .github/bench-reference.yaml."
+    ).parse_args()
+
     for p in (PIN, WORKFLOW):
         if not p.is_file():
             print(f"[workload-closure-drift] not a file: {p}", file=sys.stderr)
-            return 2
+            return EXIT_CALLER_ERROR
     try:
         pin = yaml.safe_load(PIN.read_text(encoding="utf-8"))
         expected = list(pin["workload_closure"]["helpers"])
@@ -62,11 +89,11 @@ def main() -> int:
         print(f"[workload-closure-drift] {PIN} has no usable "
               f"workload_closure.helpers ({type(exc).__name__}) — refusing to "
               f"pass a check whose reference point is missing", file=sys.stderr)
-        return 2
+        return EXIT_CALLER_ERROR
     if not expected:
         print(f"[workload-closure-drift] {PIN} lists no helpers — an empty "
               f"closure would make this lint vacuously true", file=sys.stderr)
-        return 2
+        return EXIT_CALLER_ERROR
 
     text = WORKFLOW.read_text(encoding="utf-8")
     found = [m.group(1).split() for m in _LIST_RE.finditer(text)]
@@ -91,7 +118,7 @@ def main() -> int:
     print(f"[workload-closure-drift] {len(found)} literal cop{'y' if len(found) == 1 else 'ies'} "
           f"in {WORKFLOW.relative_to(REPO)} agree with {PIN.relative_to(REPO)} "
           f"({len(expected)} helpers)")
-    return 0
+    return EXIT_OK
 
 
 if __name__ == "__main__":

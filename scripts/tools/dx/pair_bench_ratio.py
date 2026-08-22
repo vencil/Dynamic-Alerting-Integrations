@@ -76,8 +76,9 @@ the ratio is suspect.
 ⛔ This script does NOT compute that comparison, and deliberately holds no
 cross-run state. It records tonight's digests; deriving the transition belongs
 to whoever reads the series. ADR-032 already recorded what happens when a
-nightly starts remembering per-benchmark state across runs (§凍結基準值 — the
-frozen-anchor prototype died of it), and `bench-workload-effect.yaml` carries
+nightly starts remembering per-benchmark state across runs (its frozen-baseline
+section, where the frozen-anchor prototype died of exactly that), and
+`bench-workload-effect.yaml` carries
 the same rule. Recording a scalar is not remembering; comparing to last night
 inside the nightly would be.
 
