@@ -620,7 +620,7 @@ class TestConfDSearchIsBounded:
     def _resolve(self, mod, monkeypatch, capsys):
         """跑 main() 不帶 --conf-d，回傳它寫到 **stderr** 的文字。
 
-        兩個呼叫端都對回傳值做子字串比對，所以行為一直是對的——錯的是原本
+        唯一的呼叫端對回傳值做子字串比對，所以行為一直是對的——錯的是原本
         寫「回傳它最後決定要讀的路徑」，那會讓下一個人以為可以拿它比對路徑。
         """
         monkeypatch.setattr(sys, "argv", ["describe_tenant", "--all"])

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -746,6 +747,33 @@ class TestBuildShArrayReaderMatchesBash:
             ")\n", encoding="utf-8")
         assert _parse_build_sh_array(bs, "TOOL_FILES") == {expected}
 
+    @pytest.mark.parametrize("name,payload,kind", [
+        ("bad_syntax.py", b"import os\n\n\n\ndef f(:\n    pass\n", "SyntaxError"),
+        ("bad_enc.py", b"import os\n# \xe9\xe9\xe9 not utf-8\n", "UnicodeDecodeError"),
+    ])
+    def test_an_unreadable_tool_is_reported_not_a_traceback(
+        self, tmp_path, name, payload, kind
+    ):
+        """⛔ 掃描器必須把「讀不了這個檔」變成一筆 error，而不是讓 main() 炸掉。
+
+        `read_text` 對不可讀檔拋 `OSError`、對非 UTF-8 拋 `UnicodeDecodeError`；
+        只接 `SyntaxError` 時兩者都會逃逸並中斷整個 `main()`——**那個檔以及它
+        之後的每一個檔都沒有被回報**，而畫面上是一個 traceback，不是掃描結果。
+
+        訊息必須帶 `str(exc)`：只印型別名的話，`SyntaxError` 連行號都沒有，
+        讀的人不知道要修哪裡。這一格同時釘住「有回報」與「回報得夠具體」。
+        """
+        (tmp_path / "ops").mkdir()
+        (tmp_path / "ops" / name).write_bytes(payload)
+        errors = mod.check_underscore_imports(
+            {f"ops/{name}"}, {name}, tools_src=tmp_path)
+        assert len(errors) == 1, errors
+        severity, message = errors[0]
+        assert severity == "error"
+        assert kind in message, message
+        # 型別名之外還要有內容——SyntaxError 的行號就在 str(exc) 裡
+        assert f"{kind}: " in message, message
+
     def test_absent_array_is_empty_not_an_error(self, tmp_path):
         """舊版 build.sh 沒有 REPO_DATA_FILES —— 空集合，不是例外。"""
         from _lint_helpers import _parse_build_sh_array
@@ -774,6 +802,38 @@ class TestBuildShArrayReaderMatchesBash:
             {"ops/a.py"},
             "正控制：正常的陣列必須照樣讀得到，否則上面三格可能只是 reader 壞了",
         ),
+        # ⛔ 以下四格釘的是同一件事：**陣列頭那一行的剩餘內容也要解析**。
+        # 少了它，「開了但這一行就關掉」與「開了而條目就在同一行」兩種合法寫法
+        # 都會讓區塊永不關閉，於是解析器把 build.sh 剩下的每一行都當成條目。
+        # 這與 `) # end of list` 是同一個失敗模式、不同根因——所以修法不是再補
+        # 幾個樣式，而是「解析那一行」。
+        (
+            "TOOL_FILES=()\nSOMETHING=1\njunk_line\n",
+            set(),
+            "空陣列必須當場關閉（實測會吞掉 SOMETHING=1 / junk_line）",
+        ),
+        (
+            "TOOL_FILES=( ops/a.py ops/b.py )\nSOMETHING=1\n",
+            {"ops/a.py", "ops/b.py"},
+            "單行式要讀得到自己的條目並當場關閉（實測兩者皆失敗）",
+        ),
+        (
+            "TOOL_FILES=( ops/a.py\n    ops/b.py\n)\n",
+            {"ops/a.py", "ops/b.py"},
+            "陣列頭與第一個條目同行：那個條目不得被丟掉",
+        ),
+        # ⛔ 這兩格釘 bash 的 `+=` 語意：追加 vs 重新指派。把兩者一律當成
+        # 「加進去」，會讓一個被重新指派的陣列被回報成兩次的聯集。
+        (
+            "TOOL_FILES=(\n    ops/a.py\n)\nTOOL_FILES+=(\n    ops/b.py\n)\n",
+            {"ops/a.py", "ops/b.py"},
+            "`+=` 是追加",
+        ),
+        (
+            "TOOL_FILES=(\n    ops/a.py\n)\nTOOL_FILES=(\n    ops/b.py\n)\n",
+            {"ops/b.py"},
+            "第二次 `=` 是重新指派，前一次的內容要被丟掉",
+        ),
     ])
     def test_block_boundaries_are_word_anchored(
         self, tmp_path, source, expected, why
@@ -789,22 +849,26 @@ class TestBuildShArrayReaderMatchesBash:
         bs.write_text(source, encoding="utf-8")
         assert _parse_build_sh_array(bs, "TOOL_FILES") == expected, why
 
-    @pytest.mark.parametrize("source,expected", [
-        ("# TOOL_FILES=(\n    ops/ghost.py\n)\nX=2\n", set()),
-        ("TOOL_FILES=(\n    ops/a.py\n)  # end\nRANDOM=3\njunk\n", {"a.py"}),
-        ("EXTRA_TOOL_FILES=(\n    ops/extra.py\n)\n", set()),
-        ("TOOL_FILES=(\n    ops/a.py\n)\n", {"a.py"}),
-    ])
-    def test_the_tag_blob_parser_has_the_same_boundaries(self, source, expected):
+    @pytest.mark.parametrize(
+        "source,expected,why",
+        test_block_boundaries_are_word_anchored.pytestmark[0].args[1],
+    )
+    def test_the_tag_blob_parser_has_the_same_boundaries(
+        self, source, expected, why
+    ):
         """⛔ 鏡像 parser 必須同步，否則只是把缺陷搬進等價測試裡。
 
-        `check_image_pin_capability.py` 為了讀 git TAG 的 blob（文字而非檔案）
-        保留了自己的一份 reader，`test_text_parsers_match_lib_lint_helpers_on_head`
-        釘住兩者。只修一邊時那個等價測試會轉紅，而它的訊息講的是「parser 漂移」
-        ——與真正的原因（邊界規則）無關，讀的人會被送去修錯的東西。
+        `check_image_pin_capability.py` 讀的是 git TAG 的 blob（文字而非檔案），
+        現在它 delegate 給同一支 reader，只在外面套 basename。這一格釘住那個
+        delegate 沒有被人「為了獨立性」再抄回去。
+
+        ⛔ 案例表與上一格**共用同一份**，不是手抄的第二份。兩份四列的表原本各自
+        維護，而它們正是在防「只修一邊」——加第五列時漏抄一邊不會有任何東西紅，
+        等於把同一個漂移搬進了測試資料層。期望值的差異（basename）由推導產生。
         """
         from check_image_pin_capability import parse_tool_files_text
-        assert parse_tool_files_text(source) == expected
+        assert parse_tool_files_text(source) == {
+            os.path.basename(x) for x in expected}, why
 
 
 class TestRepoDataFilesArePairedWithTheirConsumer:

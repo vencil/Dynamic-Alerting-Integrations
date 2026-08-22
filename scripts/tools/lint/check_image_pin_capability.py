@@ -133,6 +133,7 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lint_helpers import parse_build_sh_array_text  # noqa: E402
 from _lib_validation import i18n_text  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -340,35 +341,19 @@ def parse_tool_files_text(text: str) -> set[str]:
     Basenames, not the `ops/…` paths as written: build.sh copies the array
     flat into the image, so the basename is what `/opt/da-tools/<x>` resolves.
     """
-    tools: set[str] = set()
-    in_block = False
-    # ⛔ Same word-start rules as `_lint_helpers`, for both the comment and the
-    # array header. This parser is deliberately standalone (it reads a TAG's
-    # blob as text, not a file), and `test_text_parsers_match_lib_lint_helpers_
-    # on_head` pins the two together — so fixing only the other one does not
-    # remove a defect, it RELOCATES it: the divergent input then trips THAT test
-    # with a message about parser drift instead of about the real cause.
-    #   comment: `#` opens one only at a word start, so `ops/a.py#tag` and
-    #     `"ops/c#d.py"` stay whole (silently shortening a name makes the file
-    #     look absent, which is fail-open);
-    #   header: an unanchored substring test also matches `EXTRA_TOOL_FILES=(`;
-    #   ordering: strip the comment BEFORE the open and close tests, or
-    #     `# TOOL_FILES=(` opens a block and `)  # end` fails to close one.
-    open_re = re.compile(r"(?:^|[\s;])TOOL_FILES=\(")
-    for line in text.split("\n"):
-        stripped = re.sub(r"(?:^|\s)#.*$", "", line.strip()).strip()
-        if not in_block:
-            if open_re.search(stripped):
-                in_block = True
-            continue
-        if stripped == ")":
-            break
-        if not stripped:
-            continue
-        name = stripped.strip("\"'(),").strip()
-        if name:
-            tools.add(os.path.basename(name))
-    return tools
+    # ⛔ Delegate. This used to be a transcription of `_lint_helpers`' reader,
+    # kept standalone because the INPUT differs (a tag's blob as text, not a
+    # file on disk) — but the input is the only thing that differed; every
+    # parsing RULE was duplicated. Measured cost of that: four rules had to be
+    # applied twice, and one round applied a fix to only one side. The drift
+    # detector (`test_text_parsers_match_lib_lint_helpers_on_head`) could not
+    # help there either — it compares both readers on HEAD's build.sh, which
+    # exercises none of the boundary cases.
+    #
+    # `_lint_helpers` is lint-only (neither it nor this file is in TOOL_FILES),
+    # so importing it carries no flat-image concern.
+    return {os.path.basename(name)
+            for name in parse_build_sh_array_text(text, "TOOL_FILES")}
 
 
 # --- git plumbing -----------------------------------------------------------

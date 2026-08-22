@@ -189,7 +189,7 @@ def check_underscore_imports(
         except (OSError, SyntaxError, UnicodeDecodeError) as exc:
             errors.append((
                 "error",
-                f"'{rel}' 無法讀取或以 ast 解析（{type(exc).__name__}）—"
+                f"'{rel}' 無法讀取或以 ast 解析（{type(exc).__name__}: {exc}）—"
                 f" 無法驗證其 import 完整性。"
             ))
             continue
@@ -365,7 +365,7 @@ def check_layout_depth_assumptions(
         except (OSError, SyntaxError, UnicodeDecodeError) as exc:
             errors.append((
                 "error",
-                f"{rel}: 檔案在，但解析失敗（{type(exc).__name__}），"
+                f"{rel}: 檔案在，但解析失敗（{type(exc).__name__}: {exc}），"
                 f"無法確認它有沒有做佈局深度假設。"
             ))
             continue

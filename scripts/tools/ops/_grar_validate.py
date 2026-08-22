@@ -351,11 +351,16 @@ def _find_platform_rules_configmap() -> "Path | None":
     pack ships beside this module (``build.sh`` ``REPO_DATA_FILES``, paired to
     this module by ``REQUIRED_DATA_FILES``), while a repo checkout keeps it
     under ``k8s/``. **The flat branch comes first precisely because it assumes
-    no marker**: the image has no ``.git`` / ``Makefile`` / ``k8s`` at all, so
-    the image path must resolve before any marker is consulted. The bounded
-    marker walk below serves only the repo branch, where a marker does exist —
-    its markers are ``.git`` / ``Makefile`` / ``pyproject.toml``
-    (``_lib_compat.PROJECT_ROOT_MARKERS``).
+    no marker**: the shipped image is ``python:*-alpine`` with ``WORKDIR
+    /opt/da-tools`` and only ``entrypoint.py`` / ``VERSION`` / ``tools/``
+    copied in, so none of ``_lib_compat.PROJECT_ROOT_MARKERS`` (``.git`` /
+    ``Makefile`` / ``pyproject.toml``) exists anywhere on that ancestor chain
+    — nor does ``k8s/``. The image path must therefore resolve before any
+    marker is consulted, and the bounded marker walk below serves only the
+    repo branch, where a marker does exist. One enumeration, from the shared
+    constant: the earlier revision listed the markers twice and the two lists
+    disagreed (``k8s`` is not a marker; ``pyproject.toml``, the one a Python
+    image is most likely to carry, was missing from the first list).
 
     Returns None when no copy is reachable — the caller degrades loudly rather
     than raising, because a missing pack must not take the tool down.

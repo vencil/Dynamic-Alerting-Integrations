@@ -39,6 +39,7 @@ import ast
 import json
 import os
 import re
+import warnings
 import shutil
 import subprocess
 import sys
@@ -104,40 +105,20 @@ def _image_depth_bases() -> "list[Path]":
     return bases
 
 
-def _shadowable_names(tool_paths) -> "set[str]":
-    """Module names a stray file next to the staged copies could shadow.
-
-    ⛔ The set is derived, not listed: every top-level name the shipped tools
-    import (plus the tools' own stems, since they import each other) — anything
-    else in the same directory is simply never looked up, so rejecting a base
-    for it is a false red. Parsed with ``ast`` rather than grepped, and a file
-    that will not parse contributes nothing here because the import test itself
-    is what reports that.
-    """
-    names: "set[str]" = set()
-    for rel in tool_paths:
-        src = TOOLS_SRC / rel
-        names.add(Path(rel).stem)
-        try:
-            tree = ast.parse(src.read_text(encoding="utf-8-sig"))
-        except (OSError, SyntaxError, UnicodeDecodeError):
-            continue
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                names.update(a.name.split(".")[0] for a in node.names)
-            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-                names.add(node.module.split(".")[0])
-    return names
-
-
-def _dir_with_image_ancestor_count(at_risk: "set[str]") -> "tuple[Path, Path]":
+def _dir_with_image_ancestor_count() -> "tuple[Path, Path]":
     """``(leaf, cleanup_root)`` where a file in *leaf* has the image's depth.
 
     *cleanup_root* is the single directory this creates under its base, so one
-    ``rmtree`` removes everything it made. *at_risk* is the shadowable-name set
-    from :func:`_shadowable_names`; a base is rejected only when the directory
-    that lands on ``sys.path`` holds one of those names. Raises ``OSError`` if
-    no candidate base is usable — the caller decides skip vs failure.
+    ``rmtree`` removes everything it made. Raises ``OSError`` if no candidate
+    base is usable — the caller decides whether that is a skip or a failure.
+
+    ⚠️ This deliberately does NOT vet the directory that lands on ``sys.path``.
+    Two versions tried and both were wrong in opposite directions: "reject the
+    base if it holds any ``*.py``" failed the whole module on POSIX whenever
+    ``/tmp`` held an unrelated script, and "reject it if it holds a name the
+    shipped set imports directly" missed 119 of the 166 names actually loaded.
+    Shadowing is now DETECTED after the fact from module provenance in the
+    child — see ``_CHILD`` — which needs no predicate at all.
     """
     # ⛔ One reason PER BASE, not just the last one. Reporting only the final
     # failure names the anchor's EACCES even when the real story is that the
@@ -178,27 +159,6 @@ def _dir_with_image_ancestor_count(at_risk: "set[str]") -> "tuple[Path, Path]":
         # any stray `.py` at `C:\` then rejected every base and the module
         # SKIPPED — reopening, on the main development platform, exactly the
         # silent-skip hole this file was just fixed for.
-        #
-        # ⛔ Judge by CONSEQUENCE, not by appearance. Rejecting the base for ANY
-        # `*.py` sitting there was an appearance test, and on POSIX it fails the
-        # whole module: `/tmp` on a shared runner or a developer box very often
-        # holds some unrelated script, the preferred base is then rejected, the
-        # anchor fallback raises EACCES for a non-root user, and the fixture
-        # calls `pytest.fail`. A stray file nobody imports would turn this file
-        # red — the opposite error from the silent skip it was written to end,
-        # and just as useless. Only a name the shipped set actually IMPORTS can
-        # shadow anything, so that is the predicate.
-        shadow_dir = leaf.parent
-        intruders = (sorted(p.name for p in shadow_dir.glob("*.py")
-                            if p.stem in at_risk)
-                     if shadow_dir.exists() else [])
-        if intruders:
-            reasons.append(
-                f"{shadow_dir}: contains {intruders[:5]}, whose name(s) the "
-                f"shipped set imports — a module there would win through the "
-                f"parent-dir sys.path entries those tools carry. Remove them "
-                f"or point TMPDIR elsewhere.")
-            continue
         try:
             leaf.mkdir(parents=True)
         except OSError as exc:
@@ -214,11 +174,22 @@ def _dir_with_image_ancestor_count(at_risk: "set[str]") -> "tuple[Path, Path]":
 # Imported by the child process below. Kept as a module-level constant so the
 # assertion message can quote it verbatim.
 _CHILD = r"""
-import json, sys, importlib.util
+import json, os, sys, importlib.util
 payload = json.load(sys.stdin)
-shipped = {name for name, _ in payload}
+mods, flat_dir, shadow_dir = payload["modules"], payload["flat"], payload["shadow"]
+shipped = {name for name, _ in mods}
 results = []
-for name, path in payload:
+for name, path in mods:
+    # Each entrypoint subcommand is its OWN process in the image, so a module
+    # broken halfway through must not be left in sys.modules for the next one
+    # to import from. Measured: without this reset, `_grar_validate` failing at
+    # line 334 still satisfied `from _grar_validate import
+    # find_ungated_equal_label_inhibits` (bound at line ~190, before the blow-up)
+    # and byo_check reported CLEAN while the image would have died. The harness
+    # under-reported, in the reassuring direction.
+    for cached in list(sys.modules):
+        if cached in shipped:
+            del sys.modules[cached]
     # Each entrypoint subcommand is its OWN process in the image, so a module
     # broken halfway through must not be left in sys.modules for the next one
     # to import from. Measured: without this reset, `_grar_validate` failing at
@@ -240,7 +211,30 @@ for name, path in payload:
             exc, ModuleNotFoundError) else None
         results.append([name, type(exc).__name__ + ": " + str(exc)[:200],
                         missing])
-sys.stdout.write("\n__FLAT_LAYOUT_RESULTS__" + json.dumps(results))
+# ⛔ Report what was ACTUALLY shadowed, do not predict what COULD be.
+# The leaf's parent is on sys.path for this run and at image depth it is forced
+# to be a shared directory (`/tmp`, or the drive root). The previous guard tried
+# to decide up front whether anything there mattered — first "any *.py at all"
+# (rejected a base for a stray file nobody imports, failing the module on POSIX),
+# then "a *.py whose stem the shipped set imports directly". Measured, the second
+# predicate missed 119 of the 166 module names this harness actually loads,
+# including `logging`, `warnings`, `ssl`, `socket` and the transitive third-party
+# deps `attr` / `idna` / `rpds` — i.e. it traded a false red for a false GREEN.
+# Provenance answers the real question and needs no list: a module whose file
+# lives under the shadow dir (but not under the staged dir) WAS shadowed, and a
+# package directory or a .pyd is caught the same way a .py is.
+def _under(p, root):
+    p, root = os.path.abspath(p), os.path.abspath(root)
+    return p == root or p.startswith(root + os.sep)
+
+
+shadowed = sorted(
+    (n, m.__file__) for n, m in list(sys.modules.items())
+    if getattr(m, "__file__", None)
+    and _under(m.__file__, shadow_dir) and not _under(m.__file__, flat_dir)
+)
+sys.stdout.write("\n__FLAT_LAYOUT_RESULTS__" + json.dumps(
+    {"results": results, "shadowed": shadowed}))
 """
 
 # ⛔ The child's payload must be locatable inside its stdout, not BE its stdout.
@@ -260,8 +254,7 @@ def flat_import_results():
     assert tool_paths, "TOOL_FILES parsed empty — the harness proves nothing"
 
     try:
-        flat, cleanup_root = _dir_with_image_ancestor_count(
-            _shadowable_names(tool_paths))
+        flat, cleanup_root = _dir_with_image_ancestor_count()
     except OSError as exc:
         # ⛔ fail, not skip, wherever a base SHOULD have worked. On POSIX
         # $TMPDIR always yields image depth and is world-writable, so an error
@@ -318,7 +311,8 @@ def flat_import_results():
         env["PYTHONPATH"] = str(flat)
         proc = subprocess.run(
             [sys.executable, "-c", _CHILD],
-            input=json.dumps(payload),
+            input=json.dumps({"modules": payload, "flat": str(flat),
+                              "shadow": str(Path(flat).parent)}),
             capture_output=True, text=True, encoding="utf-8",
             cwd=str(flat), env=env, timeout=300,
         )
@@ -331,14 +325,30 @@ def flat_import_results():
             f"reaching the final write.\nstdout: {proc.stdout[-2000:]}\n"
             f"stderr: {proc.stderr[-2000:]}"
         )
-        noise, _, payload_json = proc.stdout.partition(_RESULTS_MARKER)
+        # ⛔ rpartition, not partition. The marker is a plain string; if a
+        # shipped module happens to print it at import time, splitting on the
+        # FIRST occurrence hands json the noise and reproduces the very
+        # JSONDecodeError this framing exists to remove. The last occurrence is
+        # always the child's own write.
+        noise, _, payload_json = proc.stdout.rpartition(_RESULTS_MARKER)
         if noise.strip():
-            # Not a failure: import-time chatter is the tools' business. But it
-            # must be visible, because it is exactly what used to corrupt the
-            # payload and get reported as a parse error somewhere else.
-            print(f"[flat-layout] import-time stdout from the child:\n"
-                  f"{noise.strip()[-2000:]}")
-        yield json.loads(payload_json), {Path(p).name for p in tool_paths}
+            # ⚠️ warnings, not print. CI runs pytest without `-s` and with
+            # `-n auto`, so a passing test's stdout is captured and dropped —
+            # this file argues that exact point about a print 30 lines below,
+            # and a print here would have been invisible in the only place it
+            # matters. Warnings survive both.
+            warnings.warn(
+                f"[flat-layout] the child wrote to stdout during import:\n"
+                f"{noise.strip()[-2000:]}", stacklevel=1)
+        parsed = json.loads(payload_json)
+        # ⛔ Shadowing is judged here, from what the child actually loaded.
+        assert not parsed["shadowed"], (
+            "a module was imported from the directory that shares sys.path "
+            "with the staged copies, so this run measured the wrong files:\n"
+            + "\n".join(f"  {n} <- {f}" for n, f in parsed["shadowed"])
+            + "\nRemove them, or point TMPDIR at a directory of your own."
+        )
+        yield parsed["results"], {Path(p).name for p in tool_paths}
     finally:
         shutil.rmtree(cleanup_root, ignore_errors=True)
 
@@ -397,6 +407,63 @@ def test_every_shipped_module_imports_under_the_image_layout(
     )
 
 
+
+@pytest.mark.parametrize("plant,expect_shadowed", [
+    (None, False),                       # 控制組：shadow dir 乾淨
+    ("module", True),                    # 種一個真的被 import 到的模組
+    ("package", True),                   # ⛔ 套件目錄——`glob("*.py")` 看不到它
+    ("unrelated", False),                # ⛔ 沒人 import 的檔案不得誤紅
+])
+def test_shadowing_is_detected_by_provenance_not_predicted(
+    tmp_path, plant, expect_shadowed
+):
+    """⛔ 兩個方向都要釘，因為這條檢查在兩個方向上各錯過一次。
+
+    先前是「shadow dir 有任何 `*.py` 就拒絕這個 base」——`/tmp` 有個無關腳本
+    就讓整個模組在 POSIX 紅（`unrelated` 那格）。改成「名字在出貨集合直接
+    import 的清單裡才拒絕」之後，換成漏掉 166 個實際載入名字中的 119 個，
+    `logging` / `ssl` / `attr` 全部在外（`module` 那格的方向）——**用誤紅換到了
+    偽綠**。
+
+    現在不預測、改成事後查 provenance：模組的 `__file__` 落在 shadow dir（且不
+    在 staged dir）就是被遮蔽了。套件目錄與 `.pyd` 同樣涵蓋，因為判準是檔案位置
+    而不是副檔名。
+    """
+    shadow = tmp_path / "shadow"
+    flat = shadow / "d"
+    flat.mkdir(parents=True)
+    (flat / "probe_mod.py").write_text(
+        "import zzshadowcanary\n", encoding="utf-8")
+    if plant == "module":
+        (shadow / "zzshadowcanary.py").write_text("V=1\n", encoding="utf-8")
+    elif plant == "package":
+        pkg = shadow / "zzshadowcanary"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text("V=1\n", encoding="utf-8")
+    elif plant == "unrelated":
+        (shadow / "nobody_imports_this.py").write_text("V=1\n", encoding="utf-8")
+
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join([str(flat), str(shadow)])
+    proc = subprocess.run(
+        [sys.executable, "-c", _CHILD],
+        input=json.dumps({"modules": [["probe_mod", str(flat / "probe_mod.py")]],
+                          "flat": str(flat), "shadow": str(shadow)}),
+        capture_output=True, text=True, encoding="utf-8",
+        env=env, cwd=str(flat), timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    assert _RESULTS_MARKER in proc.stdout, proc.stdout[-2000:]
+    parsed = json.loads(proc.stdout.rpartition(_RESULTS_MARKER)[2])
+    got = bool(parsed["shadowed"])
+    assert got is expect_shadowed, (
+        f"plant={plant!r}: shadowed={parsed['shadowed']}, "
+        f"results={parsed['results']}")
+    if expect_shadowed:
+        (name, path), = parsed["shadowed"]
+        assert name == "zzshadowcanary"
+        assert str(shadow) in path
+
 def test_the_harness_would_notice_a_depth_assumption(flat_import_results):
     """Control: the same harness must FAIL on a deliberately broken module.
 
@@ -410,7 +477,7 @@ def test_the_harness_would_notice_a_depth_assumption(flat_import_results):
 
     # 這一格只放一個自己命名的 probe 模組，不 import 出貨集合，所以沒有任何
     # 名字會被遮蔽 —— 傳空集合即為它真正的風險面。
-    probe_dir, cleanup_root = _dir_with_image_ancestor_count(set())
+    probe_dir, cleanup_root = _dir_with_image_ancestor_count()
     try:
         probe = probe_dir / "depth_probe.py"
         probe.write_text(
@@ -420,7 +487,9 @@ def test_the_harness_would_notice_a_depth_assumption(flat_import_results):
         )
         proc = subprocess.run(
             [sys.executable, "-c", _CHILD],
-            input=json.dumps([["depth_probe", str(probe)]]),
+            input=json.dumps({"modules": [["depth_probe", str(probe)]],
+                              "flat": str(probe_dir),
+                              "shadow": str(probe_dir.parent)}),
             capture_output=True, text=True, encoding="utf-8", timeout=60,
         )
         assert proc.returncode == 0, proc.stderr[-2000:]
@@ -429,7 +498,7 @@ def test_the_harness_would_notice_a_depth_assumption(flat_import_results):
             f"stdout: {proc.stdout[-2000:]}\nstderr: {proc.stderr[-2000:]}"
         )
         (_, error, _), = json.loads(
-            proc.stdout.partition(_RESULTS_MARKER)[2])
+            proc.stdout.rpartition(_RESULTS_MARKER)[2])["results"]
         assert error is not None and error.startswith("IndexError"), (
             "the control module was supposed to blow up at image depth but "
             f"reported {error!r} — the harness is not measuring what it claims"

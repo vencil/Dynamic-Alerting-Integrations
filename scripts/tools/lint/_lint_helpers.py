@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import subprocess
 from functools import lru_cache
 from pathlib import Path
@@ -177,12 +178,13 @@ def array_open_pattern(array_name: str) -> str:
 
     ⛔ Anchored at a word start. A plain ``f"{name}=(" in line`` substring test
     also matches ``EXTRA_TOOL_FILES=(``, so a second, unrelated array opens the
-    block and donates its entries to this one's caller. Exported as the pattern
-    SOURCE (not a compiled object) because ``check_image_pin_capability.py``
-    keeps a standalone copy of this reader for tag blobs and mirrors the rule
-    from here — see :func:`_parse_build_sh_array`.
+    block and donates its entries to this one's caller.
+
+    The ``append`` group distinguishes ``NAME+=(`` from ``NAME=(``: bash
+    appends for the first and RESETS for the second, and a reader that treats
+    both as "add" over-reports a reassigned array.
     """
-    return rf"(?:^|[\s;]){re.escape(array_name)}=\("
+    return rf"(?:^|[\s;]){re.escape(array_name)}(?P<append>\+)?=\("
 
 
 @lru_cache(maxsize=None)
@@ -190,60 +192,101 @@ def _array_open_re(array_name: str) -> "re.Pattern[str]":
     return re.compile(array_open_pattern(array_name))
 
 
-def _parse_build_sh_array(path: Path, array_name: str) -> Set[str]:
-    """Shared reader for the ``TOOL_FILES`` / ``REPO_DATA_FILES`` bash arrays.
+def _array_words(text: str) -> "list[str]":
+    """Split one array fragment into words the way bash would.
 
-    Handles quoted entries, whole-line ``#`` comments, TRAILING ``#`` comments
-    on an entry line, and the bare ``)`` that ends the block.
+    ``shlex`` rather than ``.split()`` so a quoted entry survives, and rather
+    than ``.strip("\\"'(),")`` so an entry is not silently reshaped. Unbalanced
+    quotes fall back to whitespace splitting: this reader must never raise on a
+    build.sh it cannot fully understand — a crash here takes down the lint that
+    was supposed to report the problem.
+    """
+    try:
+        words = shlex.split(text, comments=False)
+    except ValueError:
+        words = text.split()
+    return [w for w in (x.strip("(),") for x in words) if w]
 
-    ⚠️ Trailing comments were NOT handled before, and the omission was silent:
-    ``ops/byo_check.py  # BYO preflight`` parsed as one entry whose name
-    included the comment, so the file read as absent and the bidirectional
-    check reported a missing tool. bash treats that line as one word; the
-    reader now does too.
 
-    ⚠️ This is the reader for these two arrays, not for every build.sh array in
-    the repo: ``scripts/tools/lint/check_image_pin_capability.py`` carries its
-    own ``TOOL_FILES`` parser, because its input is a git TAG's blob rather
-    than a file on disk. ``test_text_parsers_match_lib_lint_helpers_on_head``
-    pins the two together, so **a parsing rule fixed here must be fixed there
-    too** — fixing only one relocates the defect into that equivalence test,
-    where the failure message talks about parser drift and never mentions the
-    real cause. Consolidating them properly is deliberately NOT done here
-    (the two have genuinely different inputs); the comment-handling rule is
-    shared via :func:`strip_bash_comment` and mirrored inline there.
+def parse_build_sh_array_text(text: str, array_name: str) -> Set[str]:
+    """Parse one bash array out of build.sh **source text**.
+
+    ⛔ THE reader for these arrays — there is no second copy.
+    ``check_image_pin_capability.py`` needs the same rules against a git TAG's
+    blob (text, not a file), and used to keep its own transcription;
+    ``test_text_parsers_match_lib_lint_helpers_on_head`` existed to notice when
+    the two drifted. A transcription that must be kept in sync is the defect,
+    not the drift detector: measured, four parsing rules had to be applied in
+    two places and one round fixed only one side. The file-reading wrapper is
+    :func:`_parse_build_sh_array`; everything else lives here.
+
+    Rules, each with the measured failure it prevents:
+
+    * **Strip the comment before every other test.** ``# TOOL_FILES=(`` must
+      not open a block (measured: yielded ``ops/ghost.py``) and ``)  # end of
+      list`` must close one (measured: swallowed every remaining line of
+      build.sh as entries).
+    * **Anchor the array name at a word start.** ``in stripped`` let
+      ``EXTRA_TOOL_FILES=(`` match (measured: yielded ``ops/extra.py``).
+    * **Parse the header line's remainder, and close on it.** Without this,
+      ``TOOL_FILES=()`` and the one-line ``TOOL_FILES=( a b )`` opened a block
+      that never closed — same swallow-the-rest failure as the trailing-comment
+      case, and the one-line form did not even yield its own entries. This is
+      why the fix is not "handle three more spellings": the *class* is "a line
+      that both opens and closes", and the class is closed by parsing the line
+      rather than by pattern-matching its shape.
+    * **``+=`` appends, plain ``=`` resets**, as bash does. A second ``=(``
+      block silently added to the first before, over-reporting the shipped set.
+    * A repeated header **inside** an unclosed block is not an entry (measured:
+      yielded a literal ``TOOL_FILES=``).
     """
     entries: Set[str] = set()
     in_block = False
     open_re = _array_open_re(array_name)
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            # ⛔ Strip the comment FIRST — before the open test and before the
-            # close test, not just before entry parsing. Doing it last left
-            # three measured holes, all of which ADD spurious entries (the
-            # fail-open direction, since the shipped set feeds
-            # `check_required_data_files` and `check_layout_depth_assumptions`):
-            #   `# TOOL_FILES=(`   opened a block         ⇒ ['ops/ghost.py']
-            #   `)  # end of list` did not close one      ⇒ the parser swallowed
-            #                                               the REST of the file
-            #                                               (`RANDOM_LINE=3`,
-            #                                                `more_junk`, …)
-            stripped = strip_bash_comment(line.strip())
-            if not in_block:
-                # ⛔ Anchored at a word start, not a substring: `in stripped`
-                # let `EXTRA_TOOL_FILES=(` match `TOOL_FILES=(` and yield that
-                # other array's entries (measured: ['ops/extra.py']).
-                if open_re.search(stripped):
-                    in_block = True
+    for line in text.split("\n"):
+        stripped = strip_bash_comment(line.strip())
+        if not stripped:
+            continue
+        m = open_re.search(stripped)
+        if m is not None:
+            if in_block:
                 continue
-            if stripped == ")":
-                break
-            if not stripped:
-                continue
-            name = stripped.strip("\"'(),").strip()
-            if name:
-                entries.add(name)
+            if not m.group("append"):
+                entries.clear()
+            in_block = True
+            rest = stripped[m.end():]
+            closed = ")" in rest
+            if closed:
+                rest = rest.split(")", 1)[0]
+            entries.update(_array_words(rest))
+            if closed:
+                in_block = False
+            continue
+        if not in_block:
+            continue
+        # ⛔ 沒有 `stripped == ")"` 那一格：`")".endswith(")")` 為真，下面這格
+        # 已經涵蓋它（`_array_words("")` 是空的）。留著是等價分支——變異實測
+        # 把它停用後零測試轉紅，那不是「缺守衛」而是「這段程式碼不存在」。
+        if stripped.endswith(")"):
+            entries.update(_array_words(stripped[:-1]))
+            in_block = False
+            continue
+        entries.update(_array_words(stripped))
     return entries
+
+
+def _parse_build_sh_array(path: Path, array_name: str) -> Set[str]:
+    """File-reading wrapper over :func:`parse_build_sh_array_text`.
+
+    ⛔ ``utf-8-sig``. A BOM is invisible to bash and to Python's import
+    machinery, but ``\\ufeff`` is not whitespace, so the word-start anchor
+    could not match a header on line 1 and the array read as EMPTY — the
+    silent, worse direction. This repo already assumes BOMs exist (two
+    scanners in ``check_build_completeness.py`` open with ``utf-8-sig`` for the
+    same reason, citing Windows editors).
+    """
+    return parse_build_sh_array_text(
+        path.read_text(encoding="utf-8-sig"), array_name)
 
 
 # ---------------------------------------------------------------------------
