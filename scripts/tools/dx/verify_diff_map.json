@@ -90,6 +90,11 @@
    "tests/shared/test_mutation_guards.py",
    "tests/shared/test_property.py"
   ],
+  "scripts/tools/_lib_toolcount.py": [
+   "tests/dx/test_generate_tool_map.py",
+   "tests/lint/test_validate_docs_versions.py",
+   "tests/shared/test_lib_toolcount.py"
+  ],
   "scripts/tools/_lib_validation.py": [
    "tests/shared/test_property_tools.py"
   ],
@@ -755,7 +760,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "52f769189dafe67cc8e64e3526b243f13a58de4a6d5d626cc0c62eb18ed5ab11",
+ "source_digest": "53ca2a7ee9b02c69203fcd8c49b679b7e38886122c82ea068ad8ab772886391e",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1058,6 +1063,7 @@
   "tests/shared/test_lib_godispatch.py",
   "tests/shared/test_lib_helpers.py",
   "tests/shared/test_lib_python.py",
+  "tests/shared/test_lib_toolcount.py",
   "tests/shared/test_mutation_catalog.py",
   "tests/shared/test_mutation_guards.py",
   "tests/shared/test_nginx_proxy.py",
@@ -1589,7 +1595,8 @@
    "tests/ops/test_secret_scan_gate.py"
   ],
   "docs/internal/tool-map.md": [
-   "tests/dx/test_paired_trend_watch.py"
+   "tests/dx/test_paired_trend_watch.py",
+   "tests/shared/test_lib_toolcount.py"
   ],
   "docs/scenarios": [
    "tests/dx/test_bump_docs.py",
@@ -2143,6 +2150,7 @@
    "tests/shared/test_dispatch_contract.py",
    "tests/shared/test_entrypoint.py",
    "tests/shared/test_json_stdout_contract.py",
+   "tests/shared/test_lib_toolcount.py",
    "tests/shared/test_prometheus_url_fallback_guard.py",
    "tests/shared/test_property_tools.py",
    "tests/shared/test_sast.py",
@@ -2199,7 +2207,8 @@
    "tests/dx/test_verify_diff.py",
    "tests/lint/test_check_structure.py",
    "tests/lint/test_validate_docs_versions.py",
-   "tests/ops/test_ci_path_filter_coverage.py"
+   "tests/ops/test_ci_path_filter_coverage.py",
+   "tests/shared/test_lib_toolcount.py"
   ],
   "scripts/tools/dx/converge_status.py": [
    "tests/dx/test_converge_status.py"
@@ -2241,7 +2250,8 @@
   ],
   "scripts/tools/dx/generate_tool_map.py": [
    "tests/dx/test_atomic_write.py",
-   "tests/dx/test_generate_tool_map_encoding.py"
+   "tests/dx/test_generate_tool_map_encoding.py",
+   "tests/shared/test_lib_toolcount.py"
   ],
   "scripts/tools/dx/inject_waveform.py": [
    "tests/dx/test_inject_waveform.py",
@@ -2440,7 +2450,8 @@
    "tests/ops/test_secret_scan_gate.py"
   ],
   "scripts/tools/lint/validate_docs_versions.py": [
-   "tests/lint/test_validate_docs_versions.py"
+   "tests/lint/test_validate_docs_versions.py",
+   "tests/shared/test_lib_toolcount.py"
   ],
   "scripts/tools/metric-dictionary.yaml": [
    "tests/lint/test_check_structure.py"
@@ -2890,6 +2901,10 @@
   ],
   "tests/shared/test_lib_godispatch.py": [
    "tests/shared/test_dispatch_contract.py"
+  ],
+  "tests/shared/test_lib_toolcount.py": [
+   "tests/dx/test_generate_tool_map.py",
+   "tests/lint/test_validate_docs_versions.py"
   ],
   "tests/shared/test_property.py": [
    "tests/shared/test_property_tools.py"

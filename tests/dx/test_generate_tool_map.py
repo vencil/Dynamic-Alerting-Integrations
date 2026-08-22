@@ -9,8 +9,10 @@ import pytest
 
 _TOOLS_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'scripts', 'tools', 'dx')
 sys.path.insert(0, _TOOLS_DIR)
+sys.path.insert(0, os.path.join(_TOOLS_DIR, '..'))
 
 import generate_tool_map as gtm  # noqa: E402
+import _lib_toolcount  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -92,6 +94,14 @@ class TestConstants:
             for cat in gtm.CATEGORY_ORDER:
                 assert cat in gtm.CATEGORY_HEADERS[lang]
 
-    def test_skip_prefixes_excludes_lib(self):
-        assert any("_lib" in p for p in gtm.SKIP_PREFIXES)
-        assert any("__init__" in p for p in gtm.SKIP_PREFIXES)
+    def test_the_scanner_is_the_shared_one_not_a_local_copy(self):
+        """#1511: this module used to own a second `SKIP_PREFIXES` tuple.
+
+        Pinning a local copy's contents would still pass if someone
+        reintroduced a private scanner beside it, so this pins identity:
+        the function `gather_tools` calls must BE the shared one. What
+        that scanner accepts and rejects is asserted against a synthetic
+        tree in tests/shared/test_lib_toolcount.py.
+        """
+        assert gtm.tool_map_scope is _lib_toolcount.tool_map_scope
+        assert not hasattr(gtm, "SKIP_PREFIXES")

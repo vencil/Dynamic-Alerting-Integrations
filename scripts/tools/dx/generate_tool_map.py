@@ -25,6 +25,7 @@ from _lib_exitcodes import (  # noqa: E402
     EXIT_CALLER_ERROR,
     EXIT_VIOLATION,
 )
+from _lib_toolcount import tool_map_scope  # noqa: E402
 from _lib_versions import (  # noqa: E402
     PlatformVersionUnreadable,
     require_platform_version,
@@ -34,8 +35,13 @@ REPO_ROOT = SCRIPT_DIR.parent.parent.parent
 TOOLS_ROOT = REPO_ROOT / "scripts" / "tools"
 TOOL_MAP = REPO_ROOT / "docs" / "internal" / "tool-map.md"
 
-# Skip patterns
-SKIP_PREFIXES = ("_lib", "__init__", "__pycache__")
+# ⛔ #1511: the skip prefixes and the subdirectory list used to be a second
+# and third copy of what `scripts/tools/_lib_toolcount.py` now owns. This
+# module's scope is `tool_map_scope` — the three subdirectories PLUS the
+# repo root — and that is NOT the scope the "N 個 Python 工具" sentence
+# declares. Do not "unify" the two: `check_tool_map_coverage` requires the
+# repo-root tools to appear in this file, so dropping the root here turns
+# that gate red. Read the shared module's docstring first.
 
 # Subdirectory → category mapping (auto-detect from filesystem)
 SUBDIR_CATEGORY = {
@@ -100,31 +106,21 @@ def get_tool_category(name: str, subdir: str) -> str:
 
 
 def gather_tools() -> dict:
-    """Gather all tools from ops/, dx/, lint/ grouped by category.
+    """Gather all tools from ops/, dx/, lint/ and the repo root, by category.
 
     Returns: {category: [(filename, description), ...]}
+
+    The repo-root tools (`validate_all.py` etc.) are tagged ``None`` by
+    `tool_map_scope` and land under `ops`, which is where they have been
+    listed since this generator was written — and where
+    `check_tool_map_coverage` needs to find them.
     """
     categorized = {cat: [] for cat in CATEGORY_ORDER}
 
-    # Scan each subdirectory
-    for subdir in ("ops", "dx", "lint"):
-        subdir_path = TOOLS_ROOT / subdir
-        if not subdir_path.is_dir():
-            continue
-        for f in sorted(subdir_path.glob("*.py")):
-            if any(f.name.startswith(p) for p in SKIP_PREFIXES):
-                continue
-            name = f.stem
-            desc = extract_tool_description(f)
-            cat = get_tool_category(name, subdir)
-            categorized[cat].append((f.name, desc))
-
-    # Root-level tools (validate_all.py etc.)
-    for f in sorted(TOOLS_ROOT.glob("*.py")):
-        if any(f.name.startswith(p) for p in SKIP_PREFIXES):
-            continue
+    for subdir, f in tool_map_scope(TOOLS_ROOT):
         desc = extract_tool_description(f)
-        categorized["ops"].append((f.name, desc))
+        cat = "ops" if subdir is None else get_tool_category(f.stem, subdir)
+        categorized[cat].append((f.name, desc))
 
     return categorized
 

@@ -68,6 +68,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_toolcount import count_by_subdir  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Repo root detection
@@ -1070,14 +1071,20 @@ def _count_python_tools():
     """Count Python tools in scripts/tools/{ops,dx,lint}/ directories.
 
     Returns (total_count, ops_count, dx_count, lint_count).
-    """
-    ops_dir = REPO_ROOT / "scripts" / "tools" / "ops"
-    dx_dir = REPO_ROOT / "scripts" / "tools" / "dx"
-    lint_dir = REPO_ROOT / "scripts" / "tools" / "lint"
 
-    ops_count = len(list(ops_dir.glob("*.py"))) if ops_dir.exists() else 0
-    dx_count = len(list(dx_dir.glob("*.py"))) if dx_dir.exists() else 0
-    lint_count = len(list(lint_dir.glob("*.py"))) if lint_dir.exists() else 0
+    ⛔ #1511: this used to hold its own three hard-coded directory paths
+    and — unlike the gate that checks the number it writes — skipped no
+    filename prefixes at all. The two agreed only because those three
+    directories happen to hold no `_lib*` or `__init__.py`. Measured with
+    one `scripts/tools/lint/_lib_probe.py` added: this wrote 221 into
+    README, the gate warned "found 221, actual is 220", `--fix` wrote 220
+    back, and `--sync-counts --check` immediately called it outdated
+    again. The scan is `_lib_toolcount.count_scope` for both sides now.
+    """
+    counts = count_by_subdir(REPO_ROOT / "scripts" / "tools")
+    ops_count = counts["ops"]
+    dx_count = counts["dx"]
+    lint_count = counts["lint"]
 
     total = ops_count + dx_count + lint_count
     return total, ops_count, dx_count, lint_count
