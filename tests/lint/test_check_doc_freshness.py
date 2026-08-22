@@ -66,24 +66,6 @@ class TestIsIgnored:
 
 
 # ---------------------------------------------------------------------------
-# extract_version_from_claude_md
-# ---------------------------------------------------------------------------
-class TestExtractVersion:
-    def test_valid_claude_md(self, tmp_path):
-        claude_md = tmp_path / "CLAUDE.md"
-        claude_md.write_text("## 專案概覽 (v2.1.0)\nsome text", encoding="utf-8")
-        assert cdf.extract_version_from_claude_md(tmp_path) == "v2.1.0"
-
-    def test_missing_claude_md(self, tmp_path):
-        assert cdf.extract_version_from_claude_md(tmp_path) is None
-
-    def test_no_version_pattern(self, tmp_path):
-        claude_md = tmp_path / "CLAUDE.md"
-        claude_md.write_text("# Some other heading\n", encoding="utf-8")
-        assert cdf.extract_version_from_claude_md(tmp_path) is None
-
-
-# ---------------------------------------------------------------------------
 # extract_paths_from_markdown
 # ---------------------------------------------------------------------------
 class TestExtractPaths:

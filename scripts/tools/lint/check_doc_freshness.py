@@ -113,28 +113,6 @@ def _is_ignored(issue: Dict, patterns: Set[str]) -> bool:
     return False
 
 
-def extract_version_from_claude_md(root_path: Path) -> Optional[str]:
-    """
-    Extract version from CLAUDE.md header like '## 專案概覽 (v2.1.0)'.
-
-    Returns the version string (e.g., 'v2.1.0') or None.
-    """
-    claude_md = root_path / "CLAUDE.md"
-    if not claude_md.exists():
-        return None
-
-    try:
-        content = claude_md.read_text(encoding='utf-8')
-        # Look for pattern like (v2.1.0)
-        match = re.search(r'\(v[\d.]+\)', content)
-        if match:
-            return match.group(0).strip('()')
-    except Exception:
-        pass
-
-    return None
-
-
 def extract_paths_from_markdown(markdown_text: str) -> Set[str]:
     """
     Extract file paths from markdown code blocks and inline code.
