@@ -195,7 +195,7 @@ def test_happy_path_writes_the_expected_payload(tmp_path: Path):
             side([("BenchmarkA", 105.0), ("BenchmarkNew", 7.0)]))
     assert r.returncode == 0, r.stderr
     payload = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
-    assert payload["schema"] == "bench-paired/v1"
+    assert payload["schema"] == "bench-paired/v2"
     assert payload["reference_tag"] == "exporter/v2.9.0"
     assert payload["cpu"] == CPU
     assert payload["evaluated"]["BenchmarkA"]["ratio"] == pytest.approx(1.05)
@@ -351,3 +351,149 @@ def test_missing_input_file_is_a_caller_error(tmp_path: Path):
         capture_output=True, text=True, timeout=60)
     assert r.returncode == 2
     assert "not a file" in r.stderr
+
+
+# ── workload digest (PR-A, ADR-032 §工作定義漂移) ──────────────────────────
+#
+# The drift LIST saturates: measured 2026-08-16/17/18 it was the same four lines
+# verbatim, 20/20 benchmarks implicated while one had a step (precision 1/20).
+# The digest is the same evidence compressed into something that can change.
+
+
+def _digest_tsv(*records: tuple[str, str, str]) -> str:
+    return "".join(f"{s}\t{f}\t{h}\n" for s, f, h in records)
+
+
+_REC = (("reference", "config_bench_test.go", "a" * 64),
+        ("reference", "config_test.go", "b" * 64),
+        ("main", "config_bench_test.go", "a" * 64),
+        ("main", "config_test.go", "c" * 64))
+
+
+def _run_with_digest(tmp_path: Path, body: str | None):
+    extra = []
+    if body is not None:
+        (tmp_path / "digest.tsv").write_text(body, encoding="utf-8")
+        extra = ["--workload-digest", str(tmp_path / "digest.tsv")]
+    r = run(tmp_path, side([("BenchmarkA", 100.0)]), side([("BenchmarkA", 100.0)]), *extra)
+    assert r.returncode == 0, r.stderr
+    return json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))["workload_digest"], r
+
+
+def test_digest_absent_is_not_requested_not_clean(tmp_path: Path):
+    """Same three-state discipline as the drift list. A consumer that cannot
+    tell "nobody asked" from "asked, nothing moved" reads the first as the
+    second, which is the conflation this whole ADR exists to stop."""
+    dg, _ = _run_with_digest(tmp_path, None)
+    assert dg["status"] == "not-requested"
+    assert dg["sides"] == {}
+
+
+def test_digest_happy_path_aggregates_per_side(tmp_path: Path):
+    dg, r = _run_with_digest(tmp_path, _digest_tsv(*_REC))
+    assert dg["status"] == "checked"
+    assert set(dg["sides"]) == {"reference", "main"}
+    assert dg["sides"]["reference"]["n_files"] == 2
+    # The sides share one file and differ on the other, so the aggregates must
+    # differ — a digest that collapsed them would report "same work" for a night
+    # whose fixtures had actually diverged.
+    assert dg["sides"]["reference"]["digest"] != dg["sides"]["main"]["digest"]
+    assert "workload closure digest" in r.stdout
+
+
+def test_digest_is_stable_and_order_independent(tmp_path: Path):
+    a, _ = _run_with_digest(tmp_path, _digest_tsv(*_REC))
+    b, _ = _run_with_digest(tmp_path, _digest_tsv(*reversed(_REC)))
+    assert a["sides"] == b["sides"], "record order must not move the digest"
+
+
+def test_digest_moves_when_a_file_changes(tmp_path: Path):
+    before, _ = _run_with_digest(tmp_path, _digest_tsv(*_REC))
+    changed = list(_REC)
+    changed[1] = ("reference", "config_test.go", "d" * 64)
+    after, _ = _run_with_digest(tmp_path, _digest_tsv(*changed))
+    assert after["sides"]["reference"]["digest"] != before["sides"]["reference"]["digest"]
+    assert after["sides"]["main"]["digest"] == before["sides"]["main"]["digest"]
+
+
+def test_digest_moves_when_a_file_is_added_or_removed(tmp_path: Path):
+    """A content-only hash would go quiet exactly when a new benchmark file
+    lands — the moment the work definition changed most."""
+    before, _ = _run_with_digest(tmp_path, _digest_tsv(*_REC))
+    added, _ = _run_with_digest(
+        tmp_path, _digest_tsv(*_REC, ("main", "new_bench_test.go", "e" * 64)))
+    assert added["sides"]["main"]["digest"] != before["sides"]["main"]["digest"]
+    removed, _ = _run_with_digest(
+        tmp_path, _digest_tsv(*[r for r in _REC if r[1] != "config_test.go"]))
+    assert removed["sides"]["main"]["digest"] != before["sides"]["main"]["digest"]
+
+
+@pytest.mark.parametrize("body,why", [
+    ("reference\tconfig_test.go\n", "wrong field count"),
+    ("REF\tconfig_test.go\t" + "a" * 64 + "\n", "unknown side"),
+    ("reference\t\t" + "a" * 64 + "\n", "empty path"),
+    (_digest_tsv(*_REC) + "reference\tconfig_test.go\t" + "f" * 64 + "\n", "duplicate record"),
+    ("reference\tconfig_test.go\t" + "a" * 64 + "\n", "one side only"),
+])
+def test_malformed_digest_is_unreadable_never_partial(tmp_path: Path, body: str, why: str):
+    """⛔ A digest built from part of the closure is worse than none: it renders
+    as a normal scalar and every comparison against it is meaningless."""
+    dg, _ = _run_with_digest(tmp_path, body)
+    assert dg["status"] == "unreadable", why
+    assert dg["sides"] == {}
+
+
+def test_unreadable_digest_does_not_fail_the_night(tmp_path: Path):
+    """Same trade as the drift reader: a working measurement is never thrown
+    away over a broken annotation."""
+    dg, r = _run_with_digest(tmp_path, "garbage\n")
+    assert dg["status"] == "unreadable"
+    assert r.returncode == 0
+    assert "NOT established" in r.stdout
+
+
+def test_digest_moves_when_a_file_is_renamed_with_identical_content(tmp_path: Path):
+    """⛔ Added because the intentional-break pass found this hole: dropping the
+    PATH from the aggregate (hashing only the contents) left every other digest
+    test green. A rename is a work-definition change — `find` picks the new name
+    up and the old one out — so an aggregate blind to paths would report "same
+    work" across it."""
+    before, _ = _run_with_digest(tmp_path, _digest_tsv(*_REC))
+    renamed = [(s, "renamed_test.go" if f == "config_test.go" else f, h)
+               for s, f, h in _REC]
+    after, _ = _run_with_digest(tmp_path, _digest_tsv(*renamed))
+    assert after["sides"]["reference"]["digest"] != before["sides"]["reference"]["digest"]
+    assert after["sides"]["main"]["digest"] != before["sides"]["main"]["digest"]
+
+
+def _run_digest_path(tmp_path: Path, path: Path):
+    """Point --workload-digest at `path` WITHOUT creating it first."""
+    r = run(tmp_path, side([("BenchmarkA", 100.0)]), side([("BenchmarkA", 100.0)]),
+            "--workload-digest", str(path))
+    assert r.returncode == 0, r.stderr
+    return json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))["workload_digest"], r
+
+
+def test_absent_digest_file_is_unreadable_not_checked(tmp_path: Path):
+    """⛔ Added because the intentional-break pass found this hole: flipping the
+    FILE-READ failure branch to `checked` left all 40 other tests green. The
+    parse-failure path was covered; this one was not — and it is the higher
+    stake of the two, because the caller DELETES the file on purpose when its
+    own comparison could not be trusted. Reading that deliberate absence as a
+    clean bill of health is the exact "could not measure" → "measured and clean"
+    conflation ADR-032 exists to remove."""
+    dg, r = _run_digest_path(tmp_path, tmp_path / "never-written.tsv")
+    assert dg["status"] == "unreadable"
+    assert dg["sides"] == {}
+    assert "NOT established" in r.stdout
+
+
+def test_non_utf8_digest_file_is_unreadable_not_a_crash(tmp_path: Path):
+    """`UnicodeDecodeError` is a `ValueError`, not an `OSError` — the drift
+    reader was crashed by exactly this on PR #1455, which the workflow reads as
+    "the ratios failed" and turns a usable night INCONCLUSIVE."""
+    p = tmp_path / "binary.tsv"
+    p.write_bytes(b"reference\tconfig_test.go\t\xff\xfe not utf-8\n")
+    dg, r = _run_digest_path(tmp_path, p)
+    assert dg["status"] == "unreadable"
+    assert r.returncode == 0

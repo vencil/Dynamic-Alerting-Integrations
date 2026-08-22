@@ -33,3 +33,38 @@
 
 tag: exporter/v2.9.0
 sha: 3fd96b51f52e61566bb12c4c3fa23fed7e34dfa0
+
+# ── 工作定義閉包（ADR-032 §工作定義漂移）────────────────────────────────
+#
+# 比值 M/R 要讀成「同一件事，新舊實作誰比較貴」，前提是兩側**做同一件事**。
+# 決定「同一件事」的不是產品程式碼，是這批測試檔。它們一改，比值就會出現一階
+# 永久階梯，形狀與真退化一模一樣。
+#
+# ⛔ 這裡放的是**規則**不是凍結結果。`derived_glob` 由 find 推導，所以新增或
+#    刪除 benchmark 檔會自動進出閉包；把 8 個檔名全部寫死的話，新增一支
+#    benchmark 會**靜默**掉出閉包——而掉出去的失效模式看起來與正常一模一樣。
+#
+# ⛔ `helpers` 是**手工列舉**，這是已知弱點不是疏漏：列舉錯了的失效是靜默的
+#    （漏掉的 helper 綁在參考版本那側，兩側工作定義分岔而畫面上看不出來）。
+#    現值是實測迭代出的閉包（2026-08-18，`3fd96b51`..main，第 4 輪不動點）：
+#    起點是 config_bench_test.go 用到 config_test.go 的 SV / SVScheduled
+#    （fixture 值建構子，影響 8 支夜跑 bench，而它不是 *bench_test.go，
+#    所以舊版夜跑的 drift 清單看不到它）。
+#    ⚠️ 範圍不能無限外推：覆蓋兩個 package 的全部 *_test.go 會因參考版本沒有
+#    的產品 API（ExpiryMeta / canonicalKeyFor 等）編譯失敗——「全都蓋、絕不
+#    遺漏」這個安全方向不可用。詳見 benchmark-playbook.md §工作定義效應。
+#
+# 消費者：
+#    - bench-record.yaml（夜跑）—— drift 清單與 digest 的範圍
+#    - bench-workload-effect.yaml —— overlay 集合。⚠️ 它的 workflow_dispatch
+#      input 預設值必須是字面值（GitHub Actions 不在 input default 求值
+#      `${{ }}`），所以那份副本無法消除，改由一道漂移檢查擋住：兩邊不一致就
+#      讓 job 紅掉，而不是靜默分岔。
+
+workload_closure:
+  derived_glob: "*bench_test.go"
+  helpers:
+    - config_test.go
+    - config_debounce_test.go
+    - config_metrics_test.go
+    - watchloop_test.go

@@ -1,0 +1,98 @@
+#!/usr/bin/env python3
+"""The workload closure is defined once; make every copy of it prove it agrees.
+
+SSOT: `.github/bench-reference.yaml` → `workload_closure.helpers`.
+
+`bench-record.yaml` (the nightly) reads that file at runtime, so it cannot
+drift. `bench-workload-effect.yaml` CANNOT: a `workflow_dispatch` input's
+`default:` must be a literal string — GitHub Actions does not evaluate
+`${{ }}` there — and that default is the experiment knob the workflow exists to
+vary. So the list is duplicated in that file by necessity.
+
+⛔ A duplicated definition is not the problem; a duplicated definition that can
+diverge SILENTLY is. The failure mode is specific and invisible: a helper
+dropped from one copy stays pinned to the reference side, `W` quietly becomes a
+hybrid tree, and `W/R` stops meaning "same implementation, only the test code
+differs" — while every number on screen still renders normally. That is the
+exact shape `bench-workload-effect.yaml`'s own header warns about, and the
+closure probe there does not catch it.
+
+This lint turns that silence into a red hook. It compares the literal helper
+lists in the workflow against the pin file and fails on any disagreement.
+
+    python3 -X utf8 scripts/tools/lint/check_workload_closure_drift.py
+
+Exit codes follow the dev-rules #13 convention: 0 clean, 1 violation,
+2 caller error (a file missing or unparseable).
+"""
+from __future__ import annotations
+
+import pathlib
+import re
+import sys
+
+import yaml
+
+REPO = pathlib.Path(__file__).resolve().parents[3]
+PIN = REPO / ".github" / "bench-reference.yaml"
+WORKFLOW = REPO / ".github" / "workflows" / "bench-workload-effect.yaml"
+
+# Both literal copies live on lines that assign the space-separated list: the
+# `default:` of the workflow_dispatch input, and the `OVERLAY_HELPERS:` env
+# expression used for the pull_request self-test. Matching on "a quoted run of
+# *_test.go names" finds them without hard-coding either line's shape — a new
+# third copy would be caught too, which a two-anchor regex would miss.
+_LIST_RE = re.compile(r"'((?:[A-Za-z0-9_]+_test\.go)(?:\s+[A-Za-z0-9_]+_test\.go)*)'")
+
+
+def _fail(msg: str) -> int:
+    print(f"[workload-closure-drift] {msg}", file=sys.stderr)
+    return 1
+
+
+def main() -> int:
+    for p in (PIN, WORKFLOW):
+        if not p.is_file():
+            print(f"[workload-closure-drift] not a file: {p}", file=sys.stderr)
+            return 2
+    try:
+        pin = yaml.safe_load(PIN.read_text(encoding="utf-8"))
+        expected = list(pin["workload_closure"]["helpers"])
+    except (yaml.YAMLError, KeyError, TypeError) as exc:
+        print(f"[workload-closure-drift] {PIN} has no usable "
+              f"workload_closure.helpers ({type(exc).__name__}) — refusing to "
+              f"pass a check whose reference point is missing", file=sys.stderr)
+        return 2
+    if not expected:
+        print(f"[workload-closure-drift] {PIN} lists no helpers — an empty "
+              f"closure would make this lint vacuously true", file=sys.stderr)
+        return 2
+
+    text = WORKFLOW.read_text(encoding="utf-8")
+    found = [m.group(1).split() for m in _LIST_RE.finditer(text)]
+    if not found:
+        return _fail(
+            f"found no literal helper list in {WORKFLOW.relative_to(REPO)}. Either "
+            f"the duplication is gone (delete this lint and say so) or the shape "
+            f"changed and this check is now vacuous — a lint that matches nothing "
+            f"passes forever, which is worse than not having it.")
+
+    bad = [got for got in found if got != expected]
+    if bad:
+        return _fail(
+            f"{WORKFLOW.relative_to(REPO)} disagrees with {PIN.relative_to(REPO)}:\n"
+            f"  pin file : {expected}\n"
+            + "".join(f"  workflow : {got}\n" for got in bad)
+            + "  ⛔ A helper missing from one copy stays pinned to the reference\n"
+              "     side; W becomes a hybrid tree and W/R silently stops meaning\n"
+              "     'same implementation, only test code differs'. Fix the copy,\n"
+              "     or change the pin file if the closure genuinely moved.")
+
+    print(f"[workload-closure-drift] {len(found)} literal cop{'y' if len(found) == 1 else 'ies'} "
+          f"in {WORKFLOW.relative_to(REPO)} agree with {PIN.relative_to(REPO)} "
+          f"({len(expected)} helpers)")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

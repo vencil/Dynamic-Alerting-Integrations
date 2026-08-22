@@ -250,6 +250,14 @@ repos:
         pass_filenames: true
         files: ^scripts/ops/.*\.bat$
 
+      - id: workload-closure-drift
+        name: "Guard: workload closure literal copies agree with .github/bench-reference.yaml"
+        entry: python3 -X utf8 scripts/tools/lint/check_workload_closure_drift.py
+        language: python
+        additional_dependencies: [pyyaml]
+        pass_filenames: false
+        files: ^\.github/(bench-reference\.yaml|workflows/bench-workload-effect\.yaml)$
+
       - id: doc-map-check
         name: Doc map coverage
         entry: python3 -X utf8 scripts/tools/dx/generate_doc_map.py --check --lang all

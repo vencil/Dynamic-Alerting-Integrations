@@ -257,6 +257,8 @@ main 的**持續退化**由 nightly trend watchdog 守望（下節），不靠 P
 
 夜跑的比值消掉了機器，**沒有消掉工作定義**：參考版本一釘就是數週到數月，而 main 的 benchmark fixture 會繼續被改，改動造成的是**永久性階梯**，形狀和真退化一模一樣（ADR-032 §工作定義漂移）。`bench-paired.json` 的 `workload_drift` 是那個揭露——但**揭露不是答案**：實測三夜（2026-08-16/17/18）該清單兩夜逐字相同的四行，四個 `*bench_test.go` **全部**漂移 ⇒ 映射到 20 支夜跑 benchmark 就是 20/20，而同期只有一支有持續階梯（`BenchmarkMergePartialConfigs_1000`，+7.11 / +8.75 / +7.37%，跨三種 CPU）。**清單指向所有人，等於沒有指向任何人。**
 
+**PR-A 的處置（ADR-032 §工作定義漂移 修訂）**：範圍從 4 支 `*bench_test.go` 補齊為 8 檔閉包（SSOT 在 [`.github/bench-reference.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/.github/bench-reference.yaml) 的 `workload_closure`），並加 `workload_digest`——每側一個純量，內容改／新增／刪除／改名都會動。counterfactual（`3fd96b51`..main 兩棵真實的樹）：舊範圍涵蓋 4 檔、`config_test.go` 出現 **0 次**；新範圍涵蓋 8 檔、出現 **1 次**，`cmp` 與 sha256 獨立確認兩側確實不同。⚠️ 新範圍**沒有**更飽和：8 檔中只有 6 檔漂移。⛔ 夜跑**不做跨夜比較**——它只記錄今晚的 digest，轉變由讀序列的人導出；在夜跑裡記昨夜的值就是凍結基準值原型死掉的那種跨次狀態。`bench-paired.json` schema 因此 `v1` → `v2`。
+
 `.github/workflows/bench-workload-effect.yaml`（`workflow_dispatch`）不猜，直接量。同一台 runner、同一個 job 內交錯三棵樹的兩兩配對：
 
 | | 組成 | 用途 |

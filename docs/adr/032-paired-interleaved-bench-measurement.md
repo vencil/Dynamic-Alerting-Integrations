@@ -205,7 +205,32 @@ updated_at: 2026-08-16
 | **自動重新設定基準** | 需要替每支測試各自記住「階梯發生在哪一夜」。凍結基準值的原型就是死在這種狀態管理上（見 §凍結基準值）。**延後，觸發條件：人工判讀成為瓶頸** |
 | **縮短參考版本壽命** | 換參考版本本身就是吸收事件——這是拿要壓的風險去換另一個 |
 
-⚠️ 揭露是**啟發式，不是證明**：比對範圍只有基準測試檔本身，一個住在普通測試檔裡的輔助函式改了，不會出現在清單上。
+⚠️ 揭露是**啟發式，不是證明**：比對範圍是被列舉出來的那些檔，列舉之外的東西改了不會出現在清單上。
+
+### 修訂（PR-A）：揭露的範圍補齊，並加一個會變的量
+
+「揭露、不介入」的決定**不變**。變的是揭露本身有兩個實測缺陷：
+
+**缺陷一：清單飽和，精確度 1/20。** 三夜（2026-08-16/17/18）的清單兩夜逐字相同的四行，四個 `*bench_test.go` 全部漂移 ⇒ 映射到 20 支夜跑 benchmark 就是 20/20，而同期只有一支有持續階梯。**清單指向所有人，等於沒有指向任何人。**
+
+**缺陷二：範圍比工作定義窄。** 原本只比對 `*bench_test.go`，而實測的相依閉包是 **8 檔**（4 支 `*bench_test.go` ＋ `config_test.go` / `config_debounce_test.go` / `config_metrics_test.go` / `watchloop_test.go`，2026-08-18 第 4 輪不動點）。counterfactual（對 `3fd96b51`..main 兩棵真實的樹實跑）：
+
+```text
+舊範圍  涵蓋 4 檔、漂移 4 檔 —— config_test.go 出現 0 次
+新範圍  涵蓋 8 檔、漂移 6 檔 —— config_test.go 出現 1 次
+獨立確認：cmp 判定兩側不同，sha256 b9faa7a7… vs eae290f1…
+```
+
+`config_bench_test.go` 用 `config_test.go` 的 `SV` / `SVScheduled`（fixture 值建構子，影響 8 支夜跑 bench）。**它一直在改變工作定義，而舊的揭露看不到它。**
+
+處置兩項：
+
+1. **閉包收斂為單一定義**，放在 [`.github/bench-reference.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/.github/bench-reference.yaml) 的 `workload_closure`（`derived_glob` 由 `find` 推導以自動吸收新增／刪除；`helpers` 手工列舉）。夜跑執行時讀它；`bench-workload-effect.yaml` 因 `workflow_dispatch` 的 `default:` 必須是字面值而無法讀，改由 pre-commit lint 擋住兩邊分岔。
+2. **加 `workload_digest`**（`bench-paired.json` schema `v1` → `v2`）：對閉包每一側算一個純量。它會因**內容改變、檔案新增、檔案刪除、檔案改名**而變動——清單做不到的是「今晚動了沒有」，而那正是新階梯可疑與否的判準。
+
+⛔ **夜跑不做跨夜比較，也不持有跨次執行狀態。** 它只記錄今晚的 digest；「轉變」由讀序列的人／工具導出。凍結基準值的原型就是死在跨次狀態管理上（見 §凍結基準值），`bench-workload-effect.yaml` 也明文「不寫跨次執行狀態」。**記一個純量不是記憶；在夜跑裡跟昨夜比才是。**
+
+⚠️ 仍然是啟發式：`helpers` 是手工列舉，列舉之外的輔助函式改了依舊看不到；digest 只是把同一份證據壓成會變的量，不會讓範圍變成證明。三態（`not-requested` / `checked` / `unreadable`）與清單同一套紀律——⛔ 讀不到就是讀不到，不得讀成乾淨。
 
 ### 長期正解：把基準測試抽成獨立模組
 

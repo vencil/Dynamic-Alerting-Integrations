@@ -197,18 +197,48 @@ jobs:
             exit 0
           fi
 
-          : > .build/paired/workload-drift.txt
+          # ⛔ The closure is the glob PLUS the hand-enumerated helpers, and it
+          # comes from `.github/bench-reference.yaml` — one definition, read by
+          # both this workflow and bench-workload-effect.yaml. Scoping the check
+          # to `*bench_test.go` alone (what this step did until PR-A) misses the
+          # measured dependency: config_bench_test.go uses config_test.go's
+          # `SV`/`SVScheduled` fixture constructors, which feed 8 nightly
+          # benchmarks and are NOT in a `*bench_test.go` file. That gap is the
+          # "⚠️ heuristic, not a proof" the ADR admits; this narrows it.
+          GLOB=$(python3 -c "import yaml,sys; print(yaml.safe_load(open('.github/bench-reference.yaml',encoding='utf-8'))['workload_closure']['derived_glob'])")
+          python3 -c "import yaml; [print(h) for h in yaml.safe_load(open('.github/bench-reference.yaml',encoding='utf-8'))['workload_closure']['helpers']]" > .build/paired/closure-helpers.txt
+          if [ ! -s .build/paired/closure-helpers.txt ] || [ -z "$GLOB" ]; then
+            echo "::warning::could not read workload_closure from .github/bench-reference.yaml — leaving drift and digest absent so tonight records both as not established, not as clean"
+            exit 0
+          fi
+
           # Union of both sides, so a file added or deleted counts as drift too.
+          {
+            ( cd "$REF_APP"  && find . -name "$GLOB" -type f -print )
+            ( cd "$MAIN_APP" && find . -name "$GLOB" -type f -print )
+            sed 's|^|./|' .build/paired/closure-helpers.txt
+          } | sed 's|^\./||' | sort -u > .build/paired/closure-files.txt
+          echo "workload closure: $(wc -l < .build/paired/closure-files.txt) file(s) — glob '${GLOB}' on both sides + $(wc -l < .build/paired/closure-helpers.txt) enumerated helper(s)"
+
+          : > .build/paired/workload-drift.txt
+          : > .build/paired/workload-digest.tsv
           # `cmp -s` is non-zero for "differs" AND for "missing on one side",
           # which is the answer we want in both cases.
-          {
-            ( cd "$REF_APP"  && find . -name '*bench_test.go' -type f -print )
-            ( cd "$MAIN_APP" && find . -name '*bench_test.go' -type f -print )
-          } | sed 's|^\./||' | sort -u | while read -r rel; do
+          while read -r rel; do
             cmp -s "$REF_APP/$rel" "$MAIN_APP/$rel" \
               || echo "$rel" >> .build/paired/workload-drift.txt
-          done
-          echo "enumerated reference=${ref_n} main=${main_n}; drifted benchmark test files: $(wc -l < .build/paired/workload-drift.txt)"
+            # A side that does not have the file contributes no record. That is
+            # deliberate: the aggregate hashes each side's own `<path> <sha>`
+            # lines, so an added or removed file moves that side's digest — the
+            # thing a content-only hash would go quiet about.
+            for side in reference main; do
+              case "$side" in reference) app="$REF_APP";; *) app="$MAIN_APP";; esac
+              [ -f "$app/$rel" ] || continue
+              sha=$(sha256sum "$app/$rel" | cut -d' ' -f1)
+              printf '%s\t%s\t%s\n' "$side" "$rel" "$sha" >> .build/paired/workload-digest.tsv
+            done
+          done < .build/paired/closure-files.txt
+          echo "enumerated reference=${ref_n} main=${main_n}; drifted files: $(wc -l < .build/paired/workload-drift.txt) of $(wc -l < .build/paired/closure-files.txt)"
           cat .build/paired/workload-drift.txt
 
       # Measures main HEAD and the reference version ALTERNATELY on this one
@@ -291,6 +321,7 @@ jobs:
               --reference-tag "${REF_TAG}" \
               --reference-sha "${REF_SHA}" \
               --workload-drift .build/paired/workload-drift.txt \
+              --workload-digest .build/paired/workload-digest.tsv \
               --out .build/bench-paired.json; then
             echo "status=ok" >> "$GITHUB_OUTPUT"
           else
@@ -323,7 +354,7 @@ jobs:
           set -uo pipefail
           echo "::error::paired measurement unusable (${REASON}) — tonight is INCONCLUSIVE for the paired series. The nightly baseline came from ${BASELINE_FROM} and is unaffected. See ADR-032 §待決 3."
           mkdir -p .build
-          printf '{\n  "schema": "bench-paired/v1",\n  "reference_tag": "%s",\n  "reference_sha": "%s",\n  "status": "INCONCLUSIVE",\n  "reason": "%s"\n}\n' \
+          printf '{\n  "schema": "bench-paired/v2",\n  "reference_tag": "%s",\n  "reference_sha": "%s",\n  "status": "INCONCLUSIVE",\n  "reason": "%s"\n}\n' \
             "${REF_TAG}" "${REF_SHA}" "${REASON}" > .build/bench-paired.json
           tail -n 40 .build/paired/bench.err.log 2>/dev/null || true
 
@@ -375,6 +406,8 @@ jobs:
             .build/paired/bench-base.txt
             .build/paired/bench-pr.txt
             .build/paired/workload-drift.txt
+            .build/paired/workload-digest.tsv
+            .build/paired/closure-files.txt
           retention-days: 90
           if-no-files-found: warn
 
