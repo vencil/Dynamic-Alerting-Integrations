@@ -362,15 +362,30 @@ def main() -> None:
     if args.conf_d:
         conf_d = Path(args.conf_d)
     else:
-        repo_root = Path(__file__).resolve().parent.parent.parent.parent
-        conf_d = repo_root / "conf.d"
-        if not conf_d.exists():
-            # Try tests/fixtures as fallback
-            for fixture_dir in sorted((repo_root / "tests" / "fixtures").glob("synthetic-*")):
-                candidate = fixture_dir / "conf.d"
-                if candidate.exists():
-                    conf_d = candidate
-                    break
+        # ⛔ Was `.parent` four times (#1494). This file ships flattened into
+        # the image (`/opt/da-tools/describe_tenant.py`, three ancestors), and
+        # a `.parent` chain does not raise past the top — it SATURATES at the
+        # filesystem root, so the walk silently produced `/` and then looked
+        # for `/conf.d`. Search for the directory instead of counting levels;
+        # the repo-layout answer is unchanged, and outside a checkout the
+        # search simply comes up empty and the existing error path below says
+        # so with the `--conf-d` remedy.
+        here = Path(__file__).resolve().parent
+        conf_d = None
+        for base in (here, *here.parents):
+            if (base / "conf.d").is_dir():
+                conf_d = base / "conf.d"
+                break
+            fixtures = base / "tests" / "fixtures"
+            if fixtures.is_dir():
+                for fixture_dir in sorted(fixtures.glob("synthetic-*")):
+                    if (fixture_dir / "conf.d").is_dir():
+                        conf_d = fixture_dir / "conf.d"
+                        break
+            if conf_d is not None:
+                break
+        if conf_d is None:
+            conf_d = here / "conf.d"  # non-existent: reported by the check below
 
     if not conf_d.exists():
         print(f"❌ conf.d/ not found at {conf_d}", file=sys.stderr)

@@ -36,6 +36,7 @@ from _lint_helpers import (
     parse_command_map,
     parse_build_sh_tools,
     parse_build_sh_tool_paths,
+    parse_build_sh_repo_data_files,
     BUILD_EXEMPT,
     ENTRYPOINT_PATH,
     BUILD_SH_PATH,
@@ -71,10 +72,23 @@ _SIBLING_MODULE_DIRS = ("", "ops", "dx", "lint")
 # migrate_rule / generate_tenant_mapping_rules 也讀 metric-dictionary.yaml，
 # 但走「自動偵測」非單一同目錄預設；上面的 analyze_rule_pack_gaps 條目已足以
 # 把該資料檔錨在 TOOL_FILES，故不重複列。
+#   - _grar_validate.py: _find_platform_rules_configmap() 先找 <module 同目錄>/
+#     configmap-rules-platform.yaml（映像 flat layout），找不到才往上找 repo 的
+#     k8s/03-monitoring/。缺檔時 platform_alert_identities() 退回 6 筆常數，
+#     而完整 pack 是 41 筆（實測）→ 少掉的 35 個 alertname 不會被
+#     find_tenant_silenceable_platform_inhibits 探測，是 fail-OPEN 方向（#1494）。
+#     該檔不在 scripts/tools/ 底下，由 build.sh 的 REPO_DATA_FILES 搬運。
 REQUIRED_DATA_FILES: dict = {
     "_observed_map_lib.py": ("metric_observed_map.yaml",),
     "analyze_rule_pack_gaps.py": ("metric-dictionary.yaml",),
+    "_grar_validate.py": ("configmap-rules-platform.yaml",),
 }
+
+# 映像把每支工具攤平到 WORKDIR（Dockerfile `WORKDIR /opt/da-tools` + build.sh
+# 的 `cp <src> tools/`），所以 `/opt/da-tools/x.py` 只有 3 個祖先 → 合法的
+# `parents[N]` 上限是 2。repo 佈局下同一支檔案有 8~9 個，因此任何「數上去幾層」
+# 的寫法在兩種佈局下必然分岔，而 repo 佈局會把它藏住。
+MAX_IMAGE_ANCESTOR_INDEX = 2
 
 
 def check_bidirectional(command_map: dict, build_tools: set) -> list:
@@ -185,6 +199,134 @@ def check_underscore_imports(
     return errors
 
 
+def _walks_up_from_file(node: ast.AST) -> "int | None":
+    """How many directory levels *node* climbs, if it is rooted at ``__file__``.
+
+    Returns None when the expression is not rooted at ``__file__`` (nothing to
+    say about it) and ``-1`` when it climbs by an amount this reader cannot
+    evaluate — a non-literal ``parents[n]``. That case is reported rather than
+    waved through: an index the lint cannot read is an index it cannot vouch
+    for, and fail-open is the direction that let #1494 ship.
+
+    ⛔ Three spellings, not one. `parents[N]` raises IndexError past the end,
+    while a `.parent` chain and `os.path.dirname` nesting SATURATE at the
+    filesystem root — same wrong answer, no exception, which is strictly
+    harder to notice (measured: `Path('/opt/da-tools/x.py').parent` four times
+    is `/`, no error). A lint that understood only the loud spelling would
+    name the two quiet ones as its own bypass route.
+    """
+    if not any(isinstance(n, ast.Name) and n.id == "__file__"
+               for n in ast.walk(node)):
+        return None
+    depth, cur, unknown = 0, node, False
+    while True:
+        if (isinstance(cur, ast.Subscript)
+                and isinstance(cur.value, ast.Attribute)
+                and cur.value.attr == "parents"):
+            idx = cur.slice
+            if isinstance(idx, ast.Constant) and isinstance(idx.value, int):
+                depth += idx.value
+            else:
+                unknown = True
+            cur = cur.value.value
+            continue
+        if isinstance(cur, ast.Attribute) and cur.attr == "parent":
+            depth += 1
+            cur = cur.value
+            continue
+        if isinstance(cur, ast.Attribute) and cur.attr in ("resolve", "absolute"):
+            cur = cur.value
+            continue
+        if isinstance(cur, ast.Call):
+            func = cur.func
+            if isinstance(func, ast.Attribute) and func.attr == "dirname":
+                depth += 1
+                cur = cur.args[0] if cur.args else func.value
+                continue
+            cur = func
+            continue
+        break
+    return -1 if unknown else depth
+
+
+def check_layout_depth_assumptions(
+    tool_rel_paths: set, tools_src: Path = None
+) -> list:
+    """出貨檔不得靠「數上去幾層」定位 repo 內的東西（#1494）。
+
+    映像把每支工具攤平（``/opt/da-tools/x.py``，3 個祖先），repo 佈局下同一支
+    有 8~9 個。任何 ``__file__`` 起算、上溯超過
+    :data:`MAX_IMAGE_ANCESTOR_INDEX` 層的寫法，在 repo 測試裡永遠是對的，在
+    客戶手上的映像裡永遠是錯的 —— 這正是本 repo 全套 5000+ 測試看不到
+    ``_grar_validate.py`` 那一行的原因。
+
+    ⛔ 這條規則問的是**算術**（爬幾層），不是拼法。三種等價寫法（``parents[N]``
+    / ``.parent`` 鏈 / 巢狀 ``os.path.dirname``）都算同一個數，所以「換一種寫法」
+    不是轉綠的路；轉綠的路只有「不要用相對深度定位」。
+
+    Returns:
+        list of (severity, message) tuples
+    """
+    tools_src = TOOLS_SRC if tools_src is None else tools_src
+    errors = []
+    for rel in sorted(tool_rel_paths):
+        if not rel.endswith(".py"):
+            continue
+        src_path = tools_src / rel
+        # ⛔ 「不存在」與「存在但驗不了」是兩個問題，這裡只管後者。
+        # TOOL_FILES 指向不存在的檔案由 build.sh 自己 fail-fast
+        # （`✗ Missing: … exit 1`），在這裡重複報會讓本規則對合成 fixture
+        # 誤紅——而誤紅正是守衛被刪掉的原因。
+        if not src_path.is_file():
+            continue
+        try:
+            tree = ast.parse(src_path.read_text(encoding="utf-8"))
+        except (OSError, SyntaxError, UnicodeDecodeError) as exc:
+            errors.append((
+                "error",
+                f"{rel}: 檔案在，但解析失敗（{type(exc).__name__}），"
+                f"無法確認它有沒有做佈局深度假設。"
+            ))
+            continue
+        # innermost def/class per line → module scope is "no enclosing scope"
+        enclosing = {}
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                 ast.ClassDef)):
+                for ln in range(node.lineno,
+                                (node.end_lineno or node.lineno) + 1):
+                    enclosing.setdefault(ln, True)
+        worst = {}
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.Attribute, ast.Subscript, ast.Call)):
+                continue
+            depth = _walks_up_from_file(node)
+            if depth is None:
+                continue
+            if depth != -1 and depth <= MAX_IMAGE_ANCESTOR_INDEX:
+                continue
+            prev = worst.get(node.lineno)
+            if prev is None or depth == -1 or depth > prev:
+                worst[node.lineno] = depth
+        for lineno, depth in sorted(worst.items()):
+            where = "函式內" if lineno in enclosing else "module scope"
+            how = ("上溯層數不是字面常數，無法驗證"
+                   if depth == -1 else f"從 __file__ 上溯 {depth} 層")
+            consequence = (
+                "映像 import 期就會 IndexError／算到檔案系統根目錄"
+                if lineno not in enclosing else
+                "被呼叫時會算到檔案系統根目錄（不會拋錯，安靜地錯）"
+            )
+            errors.append((
+                "error",
+                f"{rel}:{lineno} ({where}) {how}，"
+                f"但映像攤平後只有 {MAX_IMAGE_ANCESTOR_INDEX + 1} 個祖先 → "
+                f"{consequence}。改成「找檔案」而不是「數層數」"
+                f"（見 _grar_validate._find_platform_rules_configmap）。"
+            ))
+    return errors
+
+
 def check_required_data_files(
     build_tools: set, required: dict = None
 ) -> list:
@@ -269,7 +411,15 @@ def main():
     errors = check_bidirectional(command_map, build_tools)
     tool_rel_paths = parse_build_sh_tool_paths(BUILD_SH_PATH)
     errors += check_underscore_imports(tool_rel_paths, build_tools)
-    errors += check_required_data_files(build_tools)
+    # ⛔ REQUIRED_DATA_FILES 比對的是「會不會一起進映像」，而 build.sh 有兩條
+    # 搬運路徑（TOOL_FILES 走 scripts/tools、REPO_DATA_FILES 走 repo 樹）。只餵
+    # 前者會讓一個確實有出貨的資料檔被報成缺漏（#1494）。刻意不併進
+    # `build_tools` 本身 —— 那個集合還餵給雙向檢查，資料檔在那裡會變成孤兒警告。
+    shipped_basenames = build_tools | {
+        Path(p).name for p in parse_build_sh_repo_data_files(BUILD_SH_PATH)
+    }
+    errors += check_required_data_files(shipped_basenames)
+    errors += check_layout_depth_assumptions(tool_rel_paths)
 
     if args.json:
         print(format_json_report(errors, command_map, build_tools))

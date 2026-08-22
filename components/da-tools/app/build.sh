@@ -215,6 +215,32 @@ done
 
 echo "  Copied ${#TOOL_FILES[@]} files from scripts/tools/"
 
+# ── Data files that live OUTSIDE scripts/tools/ ─────────────────────
+# TOOL_FILES entries resolve against $TOOLS_SRC, so anything the shipped
+# tools read from elsewhere in the repo needs its own list. Paths here are
+# PROJECT_ROOT-relative and land flat in the image, same as everything else.
+#
+# ⛔ #1494. `_grar_validate.py` reads the platform rules pack to derive the
+# platform alert identities its tenant-silenceability guard probes. Without
+# the pack the guard falls back to a 6-entry constant against a 41-entry
+# pack (measured) — and that direction is fail-OPEN: an alert missing from
+# the probe set is one nothing tests, so a tenant inhibit that would silence
+# it reads as safe. The customer ran that degraded check silently. Pairing is
+# enforced by REQUIRED_DATA_FILES in check_build_completeness.py.
+REPO_DATA_FILES=(
+    k8s/03-monitoring/configmap-rules-platform.yaml
+)
+
+for f in "${REPO_DATA_FILES[@]}"; do
+    if [ ! -f "$PROJECT_ROOT/$f" ]; then
+        echo "✗ Missing: $PROJECT_ROOT/$f" >&2
+        exit 1
+    fi
+    cp "$PROJECT_ROOT/$f" "$SCRIPT_DIR/tools/"
+done
+
+echo "  Copied ${#REPO_DATA_FILES[@]} data file(s) from the repo tree"
+
 # ── Strip repo-layout sys.path hack ──────────────────────────────────
 # In the repo, tools use dual sys.path (current dir + parent dir) to
 # support both flat Docker layout and subdir repo layout.  In Docker

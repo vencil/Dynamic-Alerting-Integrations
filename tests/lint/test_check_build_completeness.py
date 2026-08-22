@@ -535,10 +535,24 @@ class TestCheckRequiredDataFiles:
 
     def test_repo_required_data_files_present(self):
         # Regression: the real REQUIRED_DATA_FILES mapping must be satisfied
-        # by the actual shipped TOOL_FILES.
-        from _lint_helpers import parse_build_sh_tools
-        build_tools = parse_build_sh_tools()
-        errors = mod.check_required_data_files(build_tools)
+        # by everything that actually ships.
+        #
+        # ⛔ 「出貨集合」自 #1494 起是**兩條**搬運路徑的聯集：TOOL_FILES
+        # （相對 scripts/tools/）與 REPO_DATA_FILES（相對 repo root，給住在
+        # scripts/tools/ 之外的資料檔）。這一格原本只餵前者；那個定義在
+        # configmap-rules-platform.yaml 進來之後就不再等於「會不會一起進
+        # 映像」，會把一個確實有出貨的檔案報成缺漏。
+        # 反向控制在 TestRepoDataFilesArePairedWithTheirConsumer，
+        # 它斷言只餵 TOOL_FILES 時規則**仍會**開火 —— 所以這裡放寬的是
+        # 集合的定義，不是規則的嚴格度。
+        from _lint_helpers import (
+            parse_build_sh_repo_data_files,
+            parse_build_sh_tools,
+        )
+        shipped = parse_build_sh_tools() | {
+            Path(p).name for p in parse_build_sh_repo_data_files()
+        }
+        errors = mod.check_required_data_files(shipped)
         assert errors == [], (
             "shipped module missing its required data file: "
             + "; ".join(m for _, m in errors)
@@ -549,3 +563,131 @@ class TestCheckRequiredDataFiles:
 # tests/shared/test_property_tools.py::TestParseBuildShToolPathsProperties
 # (sibling of the parse_build_sh_tools coverage), per the
 # property-coverage.yaml manifest convention.
+
+
+class TestCheckLayoutDepthAssumptions:
+    """#1494 — 出貨檔不得靠「數上去幾層」定位 repo 內的東西。
+
+    映像把工具攤平到 ``/opt/da-tools/``（3 個祖先），repo 佈局有 8~9 個，
+    所以這一類在 repo 測試裡永遠是綠的、在客戶手上永遠是壞的。
+    """
+
+    def test_module_scope_parents_index_is_error(self, tmp_path):
+        # 這正是 #1494 的形狀：module scope、import 期就會 IndexError。
+        _make_tool(tmp_path, "ops/t.py",
+                   "from pathlib import Path\n"
+                   "ROOT = Path(__file__).resolve().parents[3] / 'k8s'\n")
+        errors = mod.check_layout_depth_assumptions(
+            {"ops/t.py"}, tools_src=tmp_path)
+        assert len(errors) == 1
+        sev, msg = errors[0]
+        assert sev == "error"
+        assert "ops/t.py:2" in msg and "module scope" in msg
+
+    def test_parent_chain_is_error_even_inside_a_function(self, tmp_path):
+        """⛔ 安靜的那一種也要抓。
+
+        ``.parent`` 鏈超過根目錄不會拋錯，它**飽和**在 ``/``，所以只斷言
+        「import 不會爆」的守衛看不到它（實測：映像深度下 ``.parent`` 四次
+        得到 ``/`` 而非例外）。這一格就是那個差別。
+        """
+        _make_tool(tmp_path, "dx/t.py",
+                   "from pathlib import Path\n"
+                   "def f():\n"
+                   "    return Path(__file__).resolve()"
+                   ".parent.parent.parent.parent\n")
+        errors = mod.check_layout_depth_assumptions(
+            {"dx/t.py"}, tools_src=tmp_path)
+        assert len(errors) == 1
+        assert "函式內" in errors[0][1]
+        assert "安靜地錯" in errors[0][1]
+
+    def test_nested_dirname_counts_the_same(self, tmp_path):
+        """換 os.path 拼法不是轉綠的路——規則問的是算術不是拼法。"""
+        _make_tool(tmp_path, "ops/t.py",
+                   "import os\n"
+                   "ROOT = os.path.dirname(os.path.dirname(os.path.dirname(\n"
+                   "    os.path.abspath(__file__))))\n")
+        errors = mod.check_layout_depth_assumptions(
+            {"ops/t.py"}, tools_src=tmp_path)
+        assert len(errors) == 1
+
+    def test_non_literal_index_is_reported_not_waved_through(self, tmp_path):
+        """讀不出來的 index 是「無法擔保」，不是「沒問題」（fail-closed）。"""
+        _make_tool(tmp_path, "ops/t.py",
+                   "from pathlib import Path\n"
+                   "N = 3\n"
+                   "ROOT = Path(__file__).resolve().parents[N]\n")
+        errors = mod.check_layout_depth_assumptions(
+            {"ops/t.py"}, tools_src=tmp_path)
+        assert len(errors) == 1
+        assert "不是字面常數" in errors[0][1]
+
+    @pytest.mark.parametrize("body", [
+        # 恰好踩在映像的合法上限
+        "from pathlib import Path\nROOT = Path(__file__).resolve().parents[2]\n",
+        # 同目錄尋址：映像 flat layout 的正解，必須不被擋
+        "from pathlib import Path\nD = Path(__file__).resolve().parent / 'x.yaml'\n",
+        # 與 __file__ 無關的深度運算不歸這條規則管
+        "from pathlib import Path\nROOT = Path('/etc/a/b').parents[2]\n",
+    ])
+    def test_legal_shapes_stay_green(self, tmp_path, body):
+        """⛔ 誤紅面。這三種都是正當寫法，擋掉它們會讓人把規則刪掉。"""
+        _make_tool(tmp_path, "ops/t.py", body)
+        assert mod.check_layout_depth_assumptions(
+            {"ops/t.py"}, tools_src=tmp_path) == []
+
+    def test_unparseable_shipped_file_is_an_error_not_a_skip(self, tmp_path):
+        """讀不到就等於沒查過——沉默地略過是 fail-open。"""
+        _make_tool(tmp_path, "ops/t.py", "def (\n")
+        errors = mod.check_layout_depth_assumptions(
+            {"ops/t.py"}, tools_src=tmp_path)
+        assert len(errors) == 1
+        assert "無法確認" in errors[0][1]
+
+    def test_non_python_entries_are_ignored(self, tmp_path):
+        """TOOL_FILES 也含資料檔，別拿 ast 去解析 YAML。"""
+        _make_tool(tmp_path, "ops/x.yaml", "a: 1\n")
+        assert mod.check_layout_depth_assumptions(
+            {"ops/x.yaml"}, tools_src=tmp_path) == []
+
+    def test_actual_repo_has_no_depth_assumptions(self):
+        """Repo 級迴歸：今天出貨的 71 支 .py 一處都不許有。"""
+        from _lint_helpers import parse_build_sh_tool_paths
+        errors = mod.check_layout_depth_assumptions(
+            parse_build_sh_tool_paths())
+        assert errors == [], (
+            "shipped tool(s) still count directory levels:\n"
+            + "\n".join(m for _, m in errors)
+        )
+
+
+class TestRepoDataFilesArePairedWithTheirConsumer:
+    """``REPO_DATA_FILES``（build.sh 第二條搬運路徑）也要進配對集合。"""
+
+    def test_repo_data_file_satisfies_required_data_files(self):
+        """⛔ 只餵 TOOL_FILES 會把一個真的有出貨的資料檔報成缺漏。
+
+        這一格釘的是 main() 的接線：``configmap-rules-platform.yaml`` 走
+        ``REPO_DATA_FILES``（它不在 scripts/tools/ 底下），若配對檢查只看
+        ``TOOL_FILES`` 就會對 ``_grar_validate.py`` 誤報。
+        """
+        from _lint_helpers import (
+            parse_build_sh_repo_data_files,
+            parse_build_sh_tools,
+        )
+        repo_data = parse_build_sh_repo_data_files()
+        assert repo_data, "REPO_DATA_FILES 解析為空 —— 這一格什麼都沒證明"
+        shipped = parse_build_sh_tools() | {
+            Path(p).name for p in repo_data
+        }
+        assert mod.check_required_data_files(shipped) == []
+
+    def test_omitting_the_repo_data_file_is_caught(self):
+        """反向控制：拿掉它就必須紅，否則上面那格是恆真的。"""
+        from _lint_helpers import parse_build_sh_tools
+        errors = mod.check_required_data_files(parse_build_sh_tools())
+        assert any("configmap-rules-platform.yaml" in m for _, m in errors), (
+            "配對規則沒有在 REPO_DATA_FILES 缺席時開火 —— "
+            f"實際得到 {errors}"
+        )

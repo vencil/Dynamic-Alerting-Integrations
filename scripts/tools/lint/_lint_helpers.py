@@ -134,13 +134,37 @@ def parse_build_sh_tool_paths(path: Path | None = None) -> Set[str]:
     can open and inspect the source files (the transitive underscore-import
     scan in check_build_completeness.py needs file contents, not just names).
     """
-    path = path or BUILD_SH_PATH
-    tools: Set[str] = set()
+    return _parse_build_sh_array(path or BUILD_SH_PATH, "TOOL_FILES")
+
+
+def parse_build_sh_repo_data_files(path: Path | None = None) -> Set[str]:
+    """Parse the ``REPO_DATA_FILES`` array from build.sh (repo-root-relative).
+
+    ``TOOL_FILES`` entries resolve against ``scripts/tools``; this second array
+    carries the files a shipped tool reads from elsewhere in the repo tree and
+    which therefore need copying into the flat image by their own loop (#1494).
+    Returned paths are PROJECT_ROOT-relative as written, e.g.
+    ``k8s/03-monitoring/configmap-rules-platform.yaml``.
+
+    An absent array is not an error — it yields the empty set, so callers that
+    only care about ``TOOL_FILES`` keep working against an older build.sh.
+    """
+    return _parse_build_sh_array(path or BUILD_SH_PATH, "REPO_DATA_FILES")
+
+
+def _parse_build_sh_array(path: Path, array_name: str) -> Set[str]:
+    """Shared reader for build.sh's bash arrays.
+
+    ⛔ One reader, two callers. The two arrays had identical parsing needs, and
+    a copy would be a second place to forget that entries can be quoted, that
+    ``#`` comments share the line, and that the block ends at a bare ``)``.
+    """
+    entries: Set[str] = set()
     in_block = False
     with open(path, encoding="utf-8") as f:
         for line in f:
             stripped = line.strip()
-            if "TOOL_FILES=(" in stripped:
+            if f"{array_name}=(" in stripped:
                 in_block = True
                 continue
             if in_block:
@@ -150,8 +174,8 @@ def parse_build_sh_tool_paths(path: Path | None = None) -> Set[str]:
                     continue
                 name = stripped.strip("\"'(),").strip()
                 if name:
-                    tools.add(name)
-    return tools
+                    entries.add(name)
+    return entries
 
 
 # ---------------------------------------------------------------------------

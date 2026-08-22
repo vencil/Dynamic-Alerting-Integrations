@@ -180,6 +180,8 @@ modules:
       assert_watchdog_inhibit_immunity: "Raises-wrapper over find_watchdog_suppressing_inhibits; covered by TestWatchdogInhibitImmunity + the assemble fail-closed test"
       find_tenant_silenceable_platform_inhibits: "Tenant-cannot-silence-platform finder (tenant-gated source × platform-matching target); example-covered by test_generate_routes_orchestration.py::TestPlatformAlertsNotTenantSilenceable (committed-base / mutation self-proof / narrowness / derived-label-set cases)"
       assert_platform_alerts_not_tenant_silenceable: "Raises-wrapper over find_tenant_silenceable_platform_inhibits; covered by TestPlatformAlertsNotTenantSilenceable (assemble fail-closed + --validate tripwire)"
+      _find_platform_rules_configmap: "#1494 layout-independent lookup (flat-image copy first, then k8s/ under any ancestor); example-covered by test_grar_strict_hardening.py::TestPlatformPackLocationIsLayoutIndependent (flat-with-pack / flat-without / repo-layout cases)"
+      _warn_probe_set_degraded: "Print-once side effect on the fail-OPEN fallback path; covered by the same class (message names cause + emitted once per process)"
       platform_alert_identities: "Derives the guard's probe set from configmap-rules-platform.yaml (rule-level labels ∪ expr-produced, alert_source-filtered); example-covered by TestPlatformAlertsNotTenantSilenceable (runtime-default==derived, unreachable-ConfigMap fallback, unsampled-alertname) — property-testing a ConfigMap-shaped parser would only re-assert PyYAML"
       _configmap_rule_bodies: "Yields every rule-file body a kubelet projects from a ConfigMap doc (all data keys + base64-decoded binaryData, per-key fail-soft); example-covered by test_generate_routes_orchestration.py::TestPlatformIdentityReaderCompleteness (second-data-key / second-document / binaryData-decoded / undecodable-key-does-not-blank-the-set), each verified red against the pre-fix reader"
       _pinned_label_values: "Extracts literal `label=\"v\"` values from a matcher list (reuses _INHIBIT_MATCHER_RE); covered by TestPlatformAlertsNotTenantSilenceable::test_target_pinning_a_literal_tenant_is_still_caught + the structurally-unreachable false-positive guard"
@@ -201,6 +203,8 @@ modules:
       - parse_build_sh_tool_paths
     excluded:
       parse_command_map_keys: "Trivial wrapper around parse_command_map; covered transitively"
+      _parse_build_sh_array: "#1494 shared reader extracted from parse_build_sh_tool_paths (array name parameterised); every existing property test of parse_build_sh_tools / parse_build_sh_tool_paths now runs through it"
+      parse_build_sh_repo_data_files: "#1494 thin wrapper over _parse_build_sh_array for build.sh's second copy lane; repo-level assertions in test_check_build_completeness.py::TestRepoDataFilesArePairedWithTheirConsumer"
       resolve_diff_base: "Env-var lookup + git rev-parse subprocess wrapper; integration-tested via check_codename_leak --ci runs (smoke verified missing-base error path)"
       get_diff_added_lines: "Subprocess wrapper around git diff --unified=0; parsing logic split into _parse_unified_zero_diff which has dedicated unit tests in test_check_codename_leak.py::TestDiffParsing"
       _parse_unified_zero_diff: "Pure parser tested via 5 parametrized cases in test_check_codename_leak.py::TestDiffParsing covering simple add, multi-add hunk, deletion-only, mixed hunks with distinct line numbers, empty input"

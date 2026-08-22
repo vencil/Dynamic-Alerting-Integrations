@@ -330,11 +330,69 @@ PLATFORM_ALERT_IDENTITY_LABELS = (
 # hand-written sample) is what makes the guard fail-closed over alertnames — a
 # fixed sample goes stale the moment anyone adds an alert, and it did: the pack
 # grew 5 alerts (#1259, #1266) while this PR was open, none of them sampled.
-_PLATFORM_RULES_CONFIGMAP = (
-    Path(__file__).resolve().parents[3]
-    / "k8s" / "03-monitoring" / "configmap-rules-platform.yaml"
-)
+_PLATFORM_RULES_BASENAME = "configmap-rules-platform.yaml"
+
+
+def _find_platform_rules_configmap() -> "Path | None":
+    """Locate the shipped platform pack without counting directory levels.
+
+    ⛔ This used to be a module-scope ``Path(__file__).resolve().parents[3]``.
+    That index is only correct for ONE of the two layouts this file ships in,
+    and it raised ``IndexError`` at **import** time in the other (#1494): the
+    image flattens every tool into ``/opt/da-tools/`` (``build.sh`` copies with
+    a bare ``cp <src> tools/``; ``Dockerfile`` ``WORKDIR /opt/da-tools``), which
+    leaves only three ancestors. Two module-scope importers
+    (``generate_alertmanager_routes``, ``byo_check``) meant the whole
+    ``generate-routes`` / ``byo-check`` surface died before its first line.
+
+    ⛔ Counting levels is the defect, so the fix does not count levels — it
+    looks for the file. Order matters: flat-first, because in the image the
+    pack ships beside this module (``build.sh`` ``REPO_DATA_FILES``, paired to
+    this module by ``REQUIRED_DATA_FILES``), while a repo checkout keeps it
+    under ``k8s/``. Neither branch assumes a repo marker exists: the image has
+    no ``.git`` / ``Makefile`` / ``k8s`` at all, so a marker walk would be one
+    more assumption that is false exactly where this one was.
+
+    Returns None when no copy is reachable — the caller degrades loudly rather
+    than raising, because a missing pack must not take the tool down.
+    """
+    here = Path(__file__).resolve().parent
+    flat = here / _PLATFORM_RULES_BASENAME
+    if flat.is_file():
+        return flat
+    for base in (here, *here.parents):
+        candidate = base / "k8s" / "03-monitoring" / _PLATFORM_RULES_BASENAME
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 _PLATFORM_IDENTITY_CACHE: "tuple[dict, ...] | None" = None
+_PLATFORM_DEGRADED_WARNED = False
+
+
+def _warn_probe_set_degraded(reason: str) -> None:
+    """Say out loud that the identity probe set fell back to the constant.
+
+    ⛔ The fallback is fail-OPEN (an alert absent from the probe set is one
+    :func:`find_tenant_silenceable_platform_inhibits` never tests), and it is
+    a 6-entry constant against a 41-entry pack — measured, not estimated. The
+    docstring below used to argue the degradation "cannot go unnoticed"
+    because a repo-anchored test pins the full set; that test only ever runs
+    in a repo layout, so in the image the degradation was precisely unnoticed.
+    One line on stderr, once per process, is what makes the claim true.
+    """
+    global _PLATFORM_DEGRADED_WARNED
+    if _PLATFORM_DEGRADED_WARNED:
+        return
+    _PLATFORM_DEGRADED_WARNED = True
+    print(
+        f"WARN: platform alert identity probe set degraded to the "
+        f"{len(PLATFORM_ALERT_IDENTITY_LABELS)}-entry built-in fallback "
+        f"({reason}). Tenant inhibit rules that would silence any platform "
+        f"alert outside that fallback are NOT checked in this run.",
+        file=sys.stderr,
+    )
 # `sum by (tenant)` / `max by (namespace, tenant)` … — a label the alert only
 # carries at fire time, which is exactly the class that made this guard necessary.
 #
@@ -403,7 +461,18 @@ def platform_alert_identities(
     global _PLATFORM_IDENTITY_CACHE
     if configmap_path is None and _PLATFORM_IDENTITY_CACHE is not None:
         return _PLATFORM_IDENTITY_CACHE
-    path = Path(configmap_path) if configmap_path else _PLATFORM_RULES_CONFIGMAP
+    if configmap_path:
+        path = Path(configmap_path)
+    else:
+        path = _find_platform_rules_configmap()
+        if path is None:
+            _warn_probe_set_degraded(
+                f"{_PLATFORM_RULES_BASENAME} not found beside this tool nor "
+                f"under any ancestor's k8s/03-monitoring/"
+            )
+            identities = PLATFORM_ALERT_IDENTITY_LABELS
+            _PLATFORM_IDENTITY_CACHE = identities
+            return identities
     try:
         docs = [d for d in yaml.safe_load_all(path.read_text(encoding="utf-8"))
                 if d and d.get("kind") == "ConfigMap"]
@@ -440,9 +509,14 @@ def platform_alert_identities(
                         if _EXPR_TENANT_AGG_RE.search(str(rule.get("expr", ""))):
                             labels.setdefault("tenant", "any-tenant")
                         out.append(labels)
-        identities = tuple(out) if out else PLATFORM_ALERT_IDENTITY_LABELS
+        if out:
+            identities = tuple(out)
+        else:
+            _warn_probe_set_degraded(f"{path} yielded no platform alert")
+            identities = PLATFORM_ALERT_IDENTITY_LABELS
     except (OSError, yaml.YAMLError, KeyError, StopIteration, AttributeError,
-            TypeError, ValueError):
+            TypeError, ValueError) as exc:
+        _warn_probe_set_degraded(f"{path} unreadable: {type(exc).__name__}")
         identities = PLATFORM_ALERT_IDENTITY_LABELS
     if configmap_path is None:
         _PLATFORM_IDENTITY_CACHE = identities

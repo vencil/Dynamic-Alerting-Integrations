@@ -956,3 +956,105 @@ class TestTheGoAsymmetryWarningStaysTrue:
     #     keep `partial` and the customer-facing sentence goes false.
     # Nothing here will tell you when that happens. A real pin belongs in a
     # Go test, next to the code it is about.
+
+
+class TestPlatformPackLocationIsLayoutIndependent:
+    """#1494 — pack 的定位不得靠「數上去幾層」，且退化必須出聲。
+
+    這一組釘的是本 PR 的承重宣稱：客戶在**映像**裡拿到的是完整探針集，
+    不是降級版。原本的 `parents[3]` 在映像佈局（3 個祖先）是 IndexError，
+    而修法之後真正該問的是「它到底找不找得到、找不到會不會講」。
+    """
+
+    @staticmethod
+    def _load_isolated(tmpdir):
+        """把 _grar_validate 從 *tmpdir* 載入成獨立模組實例。
+
+        ⛔ 不能重用 already-imported 的那份：模組層的 `__file__` 決定解析
+        起點，而快取的那份指向 repo 樹。每次給一個新名字，也讓
+        `_PLATFORM_IDENTITY_CACHE` / warn-once 旗標不互相污染。
+        """
+        import importlib.util
+        import uuid
+        name = "grar_probe_" + uuid.uuid4().hex[:8]
+        spec = importlib.util.spec_from_file_location(
+            name, os.path.join(tmpdir, "_grar_validate.py"))
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[name] = mod
+        spec.loader.exec_module(mod)
+        return mod
+
+    @staticmethod
+    def _stage(tmpdir, with_pack: bool):
+        """複製 module + 其 import 相依到 *tmpdir*（模擬映像的扁平佈局）。"""
+        import shutil
+        for fname in ("_grar_validate.py", "_lib_python.py"):
+            src = (os.path.join(_OPS_DIR, fname) if fname.startswith("_grar")
+                   else os.path.join(REPO_ROOT, "scripts", "tools", fname))
+            shutil.copy2(src, os.path.join(tmpdir, fname))
+        if with_pack:
+            shutil.copy2(
+                os.path.join(REPO_ROOT, "k8s", "03-monitoring",
+                             "configmap-rules-platform.yaml"),
+                os.path.join(tmpdir, "configmap-rules-platform.yaml"))
+        sys.path.insert(0, tmpdir)
+
+    def test_flat_layout_with_the_pack_beside_it_gets_the_full_set(
+        self, tmp_path, capsys
+    ):
+        """出貨組態：pack 與模組同目錄 ⇒ 完整探針集、零警告。"""
+        d = str(tmp_path)
+        self._stage(d, with_pack=True)
+        try:
+            mod = self._load_isolated(d)
+            found = mod._find_platform_rules_configmap()
+            assert found is not None
+            assert found.parent == tmp_path, (
+                f"應該解析到同目錄那份，實際 {found}")
+            full = mod.platform_alert_identities()
+            assert len(full) > len(mod.PLATFORM_ALERT_IDENTITY_LABELS), (
+                "同目錄有 pack 卻仍拿到 fallback 常數 —— 出貨的檢查是降級版")
+            assert "WARN" not in capsys.readouterr().err
+        finally:
+            sys.path.remove(d)
+
+    def test_without_the_pack_it_degrades_and_says_so(self, tmp_path, capsys):
+        """對照組：拿掉 pack ⇒ 退回常數，而且**出聲**。
+
+        ⛔ 沒有這一格，上面那格證明不了「41 是因為 pack 在那裡」——
+        它可能來自任何別的來源。
+        """
+        d = str(tmp_path)
+        self._stage(d, with_pack=False)
+        try:
+            mod = self._load_isolated(d)
+            assert mod._find_platform_rules_configmap() is None
+            degraded = mod.platform_alert_identities()
+            assert degraded == mod.PLATFORM_ALERT_IDENTITY_LABELS
+            err = capsys.readouterr().err
+            assert "WARN" in err and "degraded" in err, err
+            assert "configmap-rules-platform.yaml" in err, err
+        finally:
+            sys.path.remove(d)
+
+    def test_the_warning_is_emitted_once_per_process(self, tmp_path, capsys):
+        """降級警告不得每次呼叫都刷一次（會淹掉客戶的真實輸出）。"""
+        d = str(tmp_path)
+        self._stage(d, with_pack=False)
+        try:
+            mod = self._load_isolated(d)
+            mod.platform_alert_identities()
+            capsys.readouterr()
+            mod._PLATFORM_IDENTITY_CACHE = None  # 強迫再走一次解析
+            mod.platform_alert_identities()
+            assert "WARN" not in capsys.readouterr().err
+        finally:
+            sys.path.remove(d)
+
+    def test_repo_layout_still_resolves_the_real_pack(self):
+        """repo 佈局（開發者與 CI 走的那條）行為未變。"""
+        import _grar_validate as g
+        found = g._find_platform_rules_configmap()
+        assert found is not None and found.is_file()
+        assert found.parts[-3:] == (
+            "k8s", "03-monitoring", "configmap-rules-platform.yaml")
