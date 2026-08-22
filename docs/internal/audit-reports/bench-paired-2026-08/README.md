@@ -34,22 +34,63 @@
 
 ### 腳本會拒絕分析不對的資料
 
-`load()` 有三道守衛，任一不符就 `ValueError` 中止：`schema` 必須是 `bench-paired-series/v1`、
-`unit` 必須是那句百分比比值、`reference.sha` 必須是 `3fd96b51f52e61566bb12c4c3fa23fed7e34dfa0`。
+`load()` 把這份**封存快照**的形狀當契約執行，任一不符就 `ValueError` 中止：
 
-理由不是防呆，是**這份資料特有的失效模式**：把單位換成絕對 ns/op、或把參考版本換掉之後，
-下面每一張表**還是會正常印出來**，數字看不出任何異狀。錯的數字會正常 render——
-這正是整個目錄存在要記錄的那個病。
+| 面向 | 契約 |
+|---|---|
+| metadata | `schema` = `bench-paired-series/v1`、`unit` = 那句百分比比值、`reference.sha` = `3fd96b51f52e61566bb12c4c3fa23fed7e34dfa0` |
+| 形狀 | `nights` 為非空 list、每筆是 object、`night_utc` 皆為字串、唯一且嚴格遞增 |
+| 身分 | 日期序列**逐一**等於 `2026-08-16 .. 2026-08-21`（**不是**「六夜」而已） |
+| 完整性 | 每夜有 `ratios_pct`，且 key 集合**逐一**等於釘死的那 22 支**名字**（不是「22 支」而已） |
 
-守衛本身做過 intentional-break（弄壞 → 確認會擋 → 還原），不是「寫了就算」：
+理由不是防呆，是**這份資料特有的失效模式**：換單位、換參考版本、少一夜的讀數——
+下面每一張表**還是會正常印出來**，數字看不出任何異狀。錯的數字會正常 render。
+
+⛔ 「身分」那一列是量出來的，不是保守起見：**只驗夜數擋不住**。一份把六夜整體位移一天的
+資料（`08-17..08-22`）夜數對、唯一、遞增，全部通過，但後四夜窗的 `08-18..21` 仍全在，
+於是腳本照樣印出「LAST four nights」——而實際最後四夜是 `08-19..22`。標籤說謊，零警告。
+同理「重複一夜」能把已拍板的 5%/2 判定從 **1 fire 變 3 fires**，憑空生出兩張票。
+
+⛔ **同一個錯我在這裡犯了第二次，寫下來。** 這批守衛的第一版把 benchmark 那一列寫成
+「數量 == 22」——正是我上一段剛論證過不夠的形狀。實測：把某一支在六夜全部改名，
+數量仍是 22、各夜仍一致，守衛全過，然後死在 `statistics.quantiles` 的
+`StatisticsError` stack trace。改成釘死**名字**之後才擋得住。下面每一節都以特定名字
+索引（`ATTRIBUTED` / `UNSTABLE` / §3 那三支），所以契約是那 22 個**身分**，
+數量只是它的後果。
+
+也因為身分被釘死，`FOUR_NIGHT_WINDOW` 現在**直接由 `EXPECTED_DATES[-4:]` 導出**，
+「最後四夜」是結構上必然而非另一個手寫常數。原本那個「窗不完整就警告」的退路已移除——
+它在唯一宣稱能擋的情境（加第七夜）裡**根本不會觸發**，看起來像守衛卻是死碼。
+
+守衛本身逐道做過 intentional-break（弄壞 → 確認會擋 → 還原），不是「寫了就算」：
 
 ```text
-未破壞               → EXIT=0
-破壞 schema          → EXIT=1  unsupported schema 'bench-paired-series/v2'
-破壞 unit            → EXIT=1  unexpected unit 'median ns/op'
-破壞 reference.sha   → EXIT=1  pinned reference is '000…0', expected '3fd96b51…'
-還原                 → EXIT=0
+未破壞      → EXIT=0                 （還原後輸出與此逐位元相同）
+schema      → EXIT=1  unsupported schema 'bench-paired-series/v2'
+unit        → EXIT=1  unexpected unit 'median ns/op'
+reference   → EXIT=1  pinned reference is '000…0', expected '3fd96b51…'
+nights 空   → EXIT=1  nights must be a non-empty list, got list of length 0
+非 list     → EXIT=1  nights must be a non-empty list, got dict of length n/a
+夜非 object → EXIT=1  every night must be an object
+日期非字串  → EXIT=1  every night needs a string night_utc
+重複一夜    → EXIT=1  night_utc must be unique and strictly increasing
+順序顛倒    → EXIT=1  night_utc must be unique and strictly increasing
+整體位移    → EXIT=1  this is a pinned archival snapshot of [...]
+加第七夜    → EXIT=1  this is a pinned archival snapshot of [...]
+缺 ratios   → EXIT=1  night 2026-08-18 has no ratios_pct mapping
+只剩 21 支  → EXIT=1  night 2026-08-16 does not carry the pinned 22 benchmarks (missing […])
+各夜不齊    → EXIT=1  night 2026-08-18 does not carry the pinned 22 benchmarks (missing […])
+改名一支    → EXIT=1  night 2026-08-16 does not carry the pinned 22 benchmarks (missing […], extra […])
 ```
+
+⚠️ 上表的「未破壞」與「還原」兩列輸出**逐位元相同**，且與加守衛前的正本輸出也**逐位元相同**
+——守衛只擋壞資料，沒有動到任何統計。
+
+**這六種修改前不會紅**（counterfactual，對 `173a4710` 版實跑）：重複一夜、順序顛倒、
+整體位移、加第七夜、各夜不齊、日期非字串——全部 `EXIT=0` 靜默通過。另六種（`nights` 空、
+非 list、夜非 object、缺 `ratios`、只剩 21 支、改名一支）修改前就會死，但死在 `IndexError` /
+`TypeError` / `StatisticsError` 的 stack trace，不是說得出「哪個契約被違反」的錯誤。
+**那不算偵測，只是碰巧撞死。**
 
 ## Provenance
 
