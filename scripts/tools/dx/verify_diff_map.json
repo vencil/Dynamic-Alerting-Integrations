@@ -714,6 +714,7 @@
    "tests/ops/test_alertmanager_routing_correctness.py"
   ],
   "tests/ops/test_ci_aggregate_gate_contract.py": [
+   "tests/ops/test_blast_radius.py",
    "tests/ops/test_ci_baseline_substitution.py"
   ],
   "tests/ops/test_ci_path_filter_coverage.py": [
@@ -738,7 +739,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "420ab5239434b0c74512091baefaa63ea2081f683449b7f0512c5570260bb100",
+ "source_digest": "ca23cb752d1c026a72c7c238084f3aa6b4ea2d8d2812aec6a917ba15bf0271cb",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1108,6 +1109,7 @@
    "tests/lint/test_check_workload_closure_drift.py"
   ],
   ".github/workflows/blast-radius.yml": [
+   "tests/ops/test_blast_radius.py",
    "tests/ops/test_ci_baseline_substitution.py"
   ],
   ".github/workflows/ci.yml": [
@@ -1568,7 +1570,8 @@
   "docs/schemas/platform-defaults.schema.json": [
    "tests/helm/test_optional_overrides_render.py",
    "tests/lint/test_check_confd_schema.py",
-   "tests/lint/test_check_threshold_reachability.py"
+   "tests/lint/test_check_threshold_reachability.py",
+   "tests/ops/test_blast_radius.py"
   ],
   "docs/schemas/tenant-config.schema.json": [
    "tests/dx/test_sync_schema.py",

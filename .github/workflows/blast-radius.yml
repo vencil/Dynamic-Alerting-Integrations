@@ -7,7 +7,9 @@
 # Tiers:
 #   A = threshold / routing receiver changes (highlight)
 #   B = other alerting field changes (list)
-#   C = format-only changes (don't list)
+#   C = PROVABLY format-only changes (count only; NOT the fallback —
+#       anything unclassified is B, because C's rendered text claims
+#       "no threshold/routing/alerting impact", #1419)
 
 name: Blast Radius
 
@@ -247,67 +249,117 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
         run: |
           # Find changed conf.d files for header
-          # ⛔ NO `-z` on this one, and that is a decision with a measurement
-          # behind it. This value is DISPLAY-ONLY: it is truncated to five
-          # entries, comma-joined, and printed in the comment header — nothing
-          # parses it back into paths. An earlier version of this PR added `-z`
-          # here for symmetry with the two listings that ARE parsed, and it
-          # made the consumer crash on exactly the paths it was added for:
-          # raw non-UTF-8 bytes reach `--changed-files`, argv decodes them to
-          # surrogates, and `blast_radius.py` writes its report with
-          # `write_text(encoding="utf-8")` — strict — so
-          #   UnicodeEncodeError: surrogates not allowed
-          # kills the step and points the traceback at blast_radius.py.
-          # Measured; the pre-`-z` C-quoted form returns 0 on the same input.
-          # Making the pair safe means changing the CONSUMER too, so the
-          # producer and the consumer move together in the tier-semantics PR
-          # rather than landing half here. Until then git's C-quoting in this
-          # header is ugly and lossless, which is the correct trade for a
-          # string nobody splits.
-          # ⛔ Capture git's own status. This step has no `set -o pipefail` and
-          # the value comes out of a pipeline, so the assignment inherits
-          # `sed`'s success: a bad base ref printed `fatal: bad revision` and
-          # left CHANGED_FILES empty, rc 0 — the header line then silently
-          # disappears from a report that otherwise renders normally. "git
-          # could not tell me what changed" became "nothing changed", which is
-          # this file's own defect class on the line the comment above is
-          # about. ⚠️ A warning rather than a failure: the header is
-          # decoration, and killing the whole report over it would trade a
-          # quiet degradation for a loud one.
-          # ⚠️ Captured WITHOUT a redirect to a file, deliberately. The first
-          # version of this fix wrote the listing to `$changed_raw` and the
-          # sibling `-z` rule then fired on it — correctly by its own
-          # definition ("a listing whose output is read back"), and wrongly for
-          # this line, whose content is still collapsed into one display
-          # string. Assigning the substitution directly keeps git's status
-          # visible and keeps the line out of the parsed class, so the two
-          # rules stop disagreeing about it.
-          # ⛔⛔ THE TIER-SEMANTICS PR EDITS THIS SAME STATEMENT, and it carries
-          # the MERGED form. It adds `-z` here (its `_printable()` is the other
-          # half, which is why the pair could not land in this PR), and `-z` is
-          # structurally incompatible with the variable capture below: bash
-          # drops NUL bytes from a command substitution, so `changed_raw` would
-          # come back as every path concatenated into one string (measured).
-          # Its version therefore routes the listing through a file and keeps
-          # this rc check around it. ⛔ When the two are rebased together the
-          # conflict on these lines must resolve to THAT version, IN PLACE.
-          # ⛔ Not `git checkout --theirs` on this file: that swaps the WHOLE
-          # file and drops the four hunks git already auto-merged from this
-          # branch, with no conflict markers to show for it. Measured on the
-          # real merge — in place: `1 failed, 283 passed`; file-level: `17
-          # failed, 267 passed`. The single remaining red is answered in that
-          # branch's copy of this comment block, which is the copy that
-          # SURVIVES the resolution; this one does not, so treat it as a
-          # pointer rather than the instruction.
+          # ⛔⛔ HOW TO RESOLVE THE CONFLICT THIS BLOCK CAUSES, measured on the
+          # real merge rather than reasoned about. The baseline-substitution PR
+          # edits this same file, and merging the two produces exactly ONE
+          # conflict hunk — this statement and its comments. Resolve it IN
+          # PLACE to the version below.
+          # ⛔ Do NOT run file-level `git checkout --theirs` on this workflow
+          # (`.github/workflows/blast-radius.yml`) — that form replaces the
+          # WHOLE FILE with this branch's copy and
+          # silently discards the FOUR hunks git had already auto-merged from
+          # the other branch — no conflict markers, no warning. Measured: the
+          # in-place resolution gives `1 failed, 283 passed`, the file-level
+          # one gives `17 failed, 267 passed`, and the extra sixteen name the
+          # other branch's guards rather than anything about this line.
+          # ⛔ The remaining single red is `test_control_the_display_only_
+          # exemption_is_not_stale`, and the fix is to DELETE the
+          # `_DISPLAY_ONLY_LISTINGS` exemption in the other branch's test
+          # module (plus the paragraph above it), NOT to re-point its literal
+          # at the statement below. The version below carries `-z`, so the rule
+          # covers it for real. Measured: deleting gives 284 passed.
+          # ⚠️ This note lives on THIS side of the hunk on purpose. The same
+          # guidance used to sit on the other side, where resolving the
+          # conflict deletes it — instructions that only exist inside the thing
+          # being replaced are gone precisely when someone needs them.
+          #
+          # ⛔ `-z` and the consumer's surrogate handling are ONE change and
+          # land together. Without `-z` git C-quotes any non-ASCII path and the
+          # reviewer reads `"\347\222\260-prod/conf.d/_defaults.yaml"` as the
+          # list of what changed. With `-z` alone the raw bytes reach
+          # `--changed-files`, argv decodes them to lone surrogates, and
+          # `blast_radius.py` writes its report with
+          # `write_text(encoding="utf-8")` — strict — so the step died with
+          # `UnicodeEncodeError: surrogates not allowed` and a traceback
+          # blaming the tool. Measured both ways. `_printable()` in
+          # `blast_radius.py` is the other half; splitting them across PRs is
+          # what made the workflow-side PR revert its own copy of this line.
+          # ⛔ The cap is taken on the SEPARATOR THE PRODUCER EMITS. This was
+          # `tr '\0' '\n' | head -5`, and the five-file limit then depended on
+          # the order of two pipeline stages that look interchangeable: move
+          # the `tr` after the `head` and the stream reaching `head` contains
+          # no newlines at all, so it is one "line", the cap passes everything
+          # through, and a 300-file PR renders 300 paths into the comment
+          # header with nothing to say the limit stopped applying. `head -z`
+          # counts the NUL-terminated records `git diff -z` actually writes, so
+          # there is no ordering left to get wrong.
+          # ⚠️ Second effect, and the reason the old caveat is gone: a filename
+          # containing a literal newline used to be split and counted as two
+          # entries. It now stays one record; the newline is flattened to a
+          # space AFTER the cap, so it can neither inflate the count nor break
+          # the header line.
+          # ⛔⛔ THIS STATEMENT IS EDITED BY BOTH #1419 PRs AND THIS IS THE
+          # MERGED FORM. The sibling PR (baseline substitution) rewrote the same
+          # line to capture git's own exit status, because this step has no
+          # `set -o pipefail` and the value came out of a pipeline: the
+          # assignment inherited `sed`'s success, so a bad base ref printed
+          # `fatal: bad revision`, left the value empty, returned 0, and the
+          # header silently disappeared from a report that otherwise rendered
+          # normally — "git could not tell me what changed" rendered as "nothing
+          # changed", this file's own defect class. Whichever PR merged second
+          # would have replaced the other's hardening with no conflict marker on
+          # the semantics, so both live here.
+          # ⛔ Through a FILE, not a variable, and that is forced rather than
+          # stylistic: `$(git diff -z …)` cannot work. bash drops NUL bytes from
+          # a command substitution (measured: six changed paths came back as one
+          # concatenated string, with the warning only on stderr), so capturing
+          # the listing to check its status would destroy the separators the cap
+          # then counts. The sibling's variable form and `-z` are incompatible;
+          # the file is what lets both properties hold at once.
+          # ⚠️ And writing it to a file is now CORRECT for the `-z` rule too.
+          # The sibling's comment records that an earlier file-based version
+          # made that rule fire — rightly by its own definition, since a listing
+          # read back from a file must be NUL-separated. It is, here.
+          # ⚠️ No `set -o pipefail`, and the reason is the second half of
+          # this sentence rather than the first. git is NOT in the pipeline
+          # here — it redirects to a file and `head` reads that file — so the
+          # SIGPIPE story an earlier version of this comment told ("`head -z`
+          # closes the pipe early, so git comes back 141 on every large PR")
+          # cannot happen: measured at 3000 records with pipefail on, rc=0 and
+          # the value correct. That rationale was carried over verbatim from
+          # the pre-merge `git … | head` form and stopped being true the
+          # moment the merge moved git out of the pipeline. What is true is
+          # that the status that matters is git's own, taken before the
+          # pipeline — which is exactly why nothing downstream needs to
+          # propagate one.
+          changed_raw=$(mktemp)
           set +e
-          changed_raw=$(git diff --name-only "origin/$BASE_REF"...HEAD -- "${{ steps.detect.outputs.conf_d }}")
+          git diff -z --name-only "origin/$BASE_REF"...HEAD -- "${{ steps.detect.outputs.conf_d }}" > "$changed_raw"
           diff_rc=$?
           set -e
           if [ "$diff_rc" -ne 0 ]; then
-            echo "::warning::git diff exited $diff_rc listing the changed files for the comment header — the header will omit the file list, which is NOT the same as this PR changing nothing"
-            CHANGED_FILES=""
+            echo "::warning::git diff exited $diff_rc listing the changed files for the comment header — the header will say so, which is NOT the same as this PR changing nothing"
+            # ⛔ A SENTENCE, not an empty string. Emptiness renders exactly the
+            # same header as never passing `--changed-files` at all (measured:
+            # both give `### Blast Radius Report`), so on the reviewer's screen
+            # "git could not tell me what changed" and "nobody asked" were
+            # byte-identical — the `::warning::` above only exists in the job
+            # log, which nobody reading the comment sees. Fixing this at the
+            # shell layer and stopping there is the defect this file is about,
+            # one layer up.
+            CHANGED_FILES="(could not be listed — git diff exited $diff_rc; see the job log)"
           else
-            CHANGED_FILES=$(printf '%s\n' "$changed_raw" | head -5 | tr '\n' ', ' | sed 's/,$//')
+            total=$(tr -cd '\0' < "$changed_raw" | wc -c)
+            CHANGED_FILES=$(head -z -n 5 < "$changed_raw" | tr '\n' ' ' | tr '\0' ',' | sed 's/,$//')
+            # ⚠️ The cap has to SAY it capped. `git diff --name-only` is sorted,
+            # so an 8-file PR rendered the alphabetically-first five and read as
+            # a complete list; the only contradicting signal was the `Affected
+            # tenants` row further down. The comment above worried about the
+            # opposite direction (a 300-path header) and the cap fixed that
+            # half; the disclosure is the other half.
+            if [ "$total" -gt 5 ]; then
+              CHANGED_FILES="$CHANGED_FILES (+$((total - 5)) more)"
+            fi
           fi
 
           python3 scripts/tools/ops/blast_radius.py \

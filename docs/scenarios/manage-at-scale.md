@@ -88,16 +88,18 @@ python3 scripts/tools/ops/blast_radius.py \
 | Affected tenants | 187 |
 | Tier A (threshold/routing) | 187 |
 
-<details>
-<summary>Substantive changes: 187 tenants</summary>
+> :warning: Affected tenant count exceeds the inline-detail threshold (50). Showing tenant list only — per-field diffs are available in the workflow artifact.
 
-- **tenant-fin-001**
-  - `mysql_connections`: 90 → 95
-- **tenant-fin-002**
-  - `mysql_connections`: 90 → 95
+<details>
+<summary>Tier A (threshold/routing): 187 tenants</summary>
+
+- `tenant-fin-001`
+- `tenant-fin-002`
 ...
 </details>
 ```
+
+⚠️ 187 > `SUMMARY_MODE_TENANT_THRESHOLD`（50），所以版面是**租戶清單 + artifact**，不是逐租戶展開。上一版這裡寫的是 `Substantive changes: 187 tenants` 加逐租戶欄位差異——那個版面**結構上不可能產生**。同一份文件下方的 PR Comment 範例是同一類，兩處一起修（[#1419](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1419)）。
 
 注意：已自行覆蓋 `mysql_connections` 的租戶（例如設為 98）不會出現在影響清單中——覆寫的鍵是指標 key，不是告警名。
 
@@ -207,27 +209,36 @@ PR 提交 → CI 觸發 blast-radius.yml
 |--------|-------|
 | Total tenants scanned | 500 |
 | Affected tenants | 347 |
-| Tier A (threshold/routing) | 12 |
-| Tier B (other alerting) | 0 |
-| Tier C (format-only) | 335 |
+| Tier A (threshold/routing) | 347 |
+
+> :warning: Affected tenant count exceeds the inline-detail threshold (50). Showing tenant list only — per-field diffs are available in the workflow artifact.
 
 <details>
-<summary>Substantive changes: 12 tenants</summary>
-- **tenant-fin-001**: `mysql_connections`: 90 → 95
-- **tenant-fin-002**: `mysql_connections`: 90 → 95
-...
-</details>
+<summary>Tier A (threshold/routing): 347 tenants</summary>
 
-Format-only changes: 335 tenants (no threshold/routing/alerting impact)
+- `tenant-fin-000`
+- `tenant-fin-001`
+...
+- _…and 147 more (see artifact)_
+
+</details>
 ```
+
+⚠️ 這段是**實際跑 `blast_radius.py` 產出的**，不是手寫的。上一版寫的是 `Tier A | 12` ／ `Tier C (format-only) | 335`，那是 [#1419](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1419) 修掉的那個缺陷的輸出——繼承下來的閾值變更當時全被歸成「無影響」。而 347 個受影響租戶會跨過 inline-detail 門檻（50），所以連版面都不是逐租戶展開，而是租戶清單 + artifact。
 
 ### Tier 分類邏輯
 
 | Tier | 定義 | PR Comment 行為 |
 |------|------|----------------|
-| **A** | 閾值數值變動、routing receiver 變動 | 高亮，展開細節 |
-| **B** | 其他 alerting 欄位變動（severity、rules 等） | 列表 |
-| **C** | 純格式 / metadata / timezone 等非告警欄位 | 僅計數，不展開 |
+| **A** | 閾值數值變動、routing receiver 變動 | 計入 highlight 計數；**逐租戶模式**下與 Tier B 一樣是 `<details>` 內的一條 bullet，但**帶新舊值** |
+| **B** | 其他 alerting 欄位變動（severity、rules 等） | 同一個 `<details>` 內的 bullet；⚠️ 新增／移除時**只寫欄位名不寫值** |
+| **C** | 註解類欄位（`_comment` / `_comments` / `_description` / `_metadata`），以及**兩個 recipe 欄位一起**純重排 | 僅計數，不展開 |
+
+⚠️ **A 與 B 的版面差異比這張表以前寫的小**：舊版寫「A 高亮、展開細節／B 列表」，實際上 `_tenant_change_summary` 把兩者輸出成同一組**縮排兩格的** `-` bullet；真正的差別是**值**（B 的 add/remove 只印欄位名，所以 `_silent_mode: "all"` 這種開關看不到設成什麼）。**summary 模式下 Tier A 完全沒有 per-field 細節**，只有租戶清單。
+
+⚠️ Tier C 是**可證明無影響**的那一類，不是「沒被分類到」的桶子——未被辨識的欄位落在 Tier B（列出但不高亮），因為 Tier C 印出來的字是「無 threshold/routing/alerting 影響」，那是一個正面宣稱。`effective_config` 裡不以 `_` 開頭的鍵是**閾值**，屬 Tier A（#1419）——例外是平台文件本身的結構鍵（`profiles` / `tenants` / `optional_overrides` / `state_filters` / `max_metrics_per_tenant`），它們**在自己那一層**是結構、歸 Tier B；其底下的路徑仍是閾值。
+
+⚠️ 表上兩格值得單獨說明，實測後記在這裡而不是留給讀者自己撞：**①`_metadata`（真管線目前到不了）** —— `deep_merge` 無條件丟棄它，所以改 `_metadata.db_type` 根本不產生 diff；今天真正走得到 Tier C 的載體是 `_comment` / `_comments` / `_description`。**②純重排（本次修好，現在到得了）** —— `describe_tenant` 用同一份 `resolved` 清單依序寫出 `_custom_alerts` 與 `_custom_alerts_resolution`，所以重排一定同時重排兩者；降級規則先前只認 `_custom_alerts`，真實重排因此走不到降級。**本次已同時涵蓋兩個欄位，實測純重排會落在 Tier C。** 這兩格原本被同一句「真管線目前到不了」一起帶過，而②在同一顆 commit 裡就已經不成立了。
 
 ## 情景 5：大規模遷移後驗證
 
