@@ -92,6 +92,27 @@ class TestWritableMountNeedsUser:
     repo-level 斷言，於是「它在 CI 上到底有沒有跑」無法回答（實測：沒有）。
     """
 
+    # ⛔ Built with chr(92), never a "\\" literal. The first version of these
+    # fixtures wrote the continuation marker as an escape sequence and every
+    # one of them came out as the two characters backslash+n INSIDE a single
+    # line — so all 12 tests exercised one-line commands, the continuation
+    # buffer was never entered, and reverting the continuation handling left
+    # the suite green. The bug was invisible because the fixtures still
+    # "looked" multi-line in the source.
+    _BS = chr(92)
+
+    @classmethod
+    def _fenced(cls, *arg_lines, quote=False, fence="```"):
+        """A fenced block whose command really does span physical lines."""
+        cont = " " + cls._BS
+        body = [fence + "bash"]
+        body += [ln + cont for ln in arg_lines[:-1]]
+        body.append(arg_lines[-1])
+        body.append(fence)
+        if quote:
+            body = ["> " + ln for ln in body]
+        return "\n".join(body) + "\n"
+
     @staticmethod
     def _doc(tmp_path, body):
         p = tmp_path / "docs" / "x.md"
@@ -99,19 +120,30 @@ class TestWritableMountNeedsUser:
         p.write_text(body, encoding="utf-8")
         return p
 
+    def test_the_fixture_helper_really_produces_continuation_lines(self):
+        """⛔ 先證明器材本身是對的，否則下面每一格都在測單行指令。"""
+        out = self._fenced("docker run --rm", "  -v a:/b", "  img cmd")
+        lines = out.splitlines()
+        assert len(lines) == 5, lines
+        assert lines[1].endswith(" " + self._BS), repr(lines[1])
+        assert lines[3] == "  img cmd", repr(lines[3])
+        assert (self._BS + "n") not in out, "又寫成字面反斜線 n 了"
+
     def test_writable_bind_mount_without_user_is_flagged(self, tmp_path):
-        p = self._doc(tmp_path, "```bash\ndocker run --rm \\n"
-                                "  -v $(pwd)/out:/data/output \\n"
-                                "  ghcr.io/vencil/da-tools:v2.9.0 \\n"
-                                "  generate-routes -o /data/output/x.yaml\n```\n")
+        p = self._doc(tmp_path, self._fenced(
+            "docker run --rm",
+            "  -v $(pwd)/out:/data/output",
+            "  ghcr.io/vencil/da-tools:v2.9.0",
+            "  generate-routes -o /data/output/x.yaml"))
         issues = mod.check_writable_mount_has_user([p], tmp_path)
         assert len(issues) == 1
         assert issues[0].check == "datools-writable-mount-without-user"
 
     def test_read_only_mount_is_not_flagged(self, tmp_path):
-        p = self._doc(tmp_path, "```bash\ndocker run --rm \\n"
-                                "  -v $(pwd)/conf.d:/etc/config:ro \\n"
-                                "  ghcr.io/vencil/da-tools:v2.9.0 validate-config\n```\n")
+        p = self._doc(tmp_path, self._fenced(
+            "docker run --rm",
+            "  -v $(pwd)/conf.d:/etc/config:ro",
+            "  ghcr.io/vencil/da-tools:v2.9.0 validate-config"))
         assert mod.check_writable_mount_has_user([p], tmp_path) == []
 
     @pytest.mark.parametrize("flag", [
@@ -120,23 +152,60 @@ class TestWritableMountNeedsUser:
         "-u $(id -u):$(id -g)",          # 官方短式；子字串比對認不得
     ])
     def test_every_spelling_of_the_flag_satisfies_the_rule(self, tmp_path, flag):
-        p = self._doc(tmp_path, f"```bash\ndocker run --rm {flag} \\n"
-                                "  -v $(pwd)/out:/data/output \\n"
-                                "  ghcr.io/vencil/da-tools:v2.9.0 init\n```\n")
+        p = self._doc(tmp_path, self._fenced(
+            f"docker run --rm {flag}",
+            "  -v $(pwd)/out:/data/output",
+            "  ghcr.io/vencil/da-tools:v2.9.0 init"))
         assert mod.check_writable_mount_has_user([p], tmp_path) == []
 
     def test_userns_is_not_mistaken_for_user(self, tmp_path):
         """`--userns=keep-id` 設不了 uid —— 子字串比對會誤放。"""
-        p = self._doc(tmp_path, "```bash\ndocker run --rm --userns=keep-id \\n"
-                                "  -v $(pwd)/out:/data/output \\n"
-                                "  ghcr.io/vencil/da-tools:v2.9.0 init\n```\n")
+        p = self._doc(tmp_path, self._fenced(
+            "docker run --rm --userns=keep-id",
+            "  -v $(pwd)/out:/data/output",
+            "  ghcr.io/vencil/da-tools:v2.9.0 init"))
         assert len(mod.check_writable_mount_has_user([p], tmp_path)) == 1
 
     def test_user_after_the_image_is_its_own_finding(self, tmp_path):
         """docker 只套用 image 之前的旗標；之後的會變成容器的參數。"""
-        p = self._doc(tmp_path, "```bash\ndocker run --rm -v $(pwd)/o:/data/output"
-                                " ghcr.io/vencil/da-tools:v2.9.0 \\n"
-                                "  --user $(id -u):$(id -g) \\n  init\n```\n")
+        p = self._doc(tmp_path, self._fenced(
+            "docker run --rm -v $(pwd)/o:/data/output"
+            " ghcr.io/vencil/da-tools:v2.9.0",
+            "  --user $(id -u):$(id -g)",
+            "  init"))
+        issues = mod.check_writable_mount_has_user([p], tmp_path)
+        assert len(issues) == 1
+        assert issues[0].check == "datools-user-flag-after-image"
+
+    def test_a_mount_path_containing_da_tools_is_not_mistaken_for_the_image(
+        self, tmp_path
+    ):
+        """⛔ image token 不能用「第一個含 da-tools 的 token」找。
+
+        掛載路徑叫 `da-tools-out` 時，那個 token 會被當成 image，於是一個
+        **排在 image 之前的正確 `--user`** 被判成排在之後——而訊息叫人
+        「移到 image 之前」，它已經在前面，沒有任何合法改寫能轉綠。
+        """
+        p = self._doc(tmp_path, self._fenced(
+            "docker run --rm",
+            "  -v $(pwd)/da-tools-out:/data/output",
+            "  --user $(id -u):$(id -g)",
+            "  ghcr.io/vencil/da-tools:v2.9.0 init"))
+        assert mod.check_writable_mount_has_user([p], tmp_path) == []
+
+    def test_a_flagged_position_is_found_by_token_not_by_substring(
+        self, tmp_path
+    ):
+        """⛔ 位置要比 token 序，不能比字串偏移。
+
+        `build-utils` 裡就有 `-u`，`norm.index("-u")` 會落在 image 之前，
+        於是真正排錯位的短旗標整條消失。
+        """
+        p = self._doc(tmp_path, self._fenced(
+            "docker run --rm -v $(pwd)/build-utils:/data/output"
+            " ghcr.io/vencil/da-tools:v2.9.0",
+            "  -u $(id -u):$(id -g)",
+            "  init"))
         issues = mod.check_writable_mount_has_user([p], tmp_path)
         assert len(issues) == 1
         assert issues[0].check == "datools-user-flag-after-image"
@@ -147,27 +216,88 @@ class TestWritableMountNeedsUser:
     ])
     def test_volumes_are_out_of_domain(self, tmp_path, spec):
         """⛔ 具名／匿名 volume 沒有 host uid，加 `--user` 反而寫不進去。"""
-        p = self._doc(tmp_path, f"```bash\ndocker run --rm \\n  -v {spec} \\n"
-                                "  ghcr.io/vencil/da-tools:v2.9.0 guard defaults-impact\n```\n")
+        p = self._doc(tmp_path, self._fenced(
+            "docker run --rm",
+            f"  -v {spec}",
+            "  ghcr.io/vencil/da-tools:v2.9.0 guard defaults-impact"))
         assert mod.check_writable_mount_has_user([p], tmp_path) == []
 
+    def test_a_windows_host_path_is_a_bind_mount(self, tmp_path):
+        """`C:\\Users\\me\\out:/data/output` 是 bind mount，不是具名 volume。"""
+        p = self._doc(tmp_path, self._fenced(
+            "docker run --rm",
+            "  -v C:" + chr(92) + "Users" + chr(92) + "me:/data/output",
+            "  ghcr.io/vencil/da-tools:v2.9.0 init"))
+        assert len(mod.check_writable_mount_has_user([p], tmp_path)) == 1
+
+    def test_a_readonly_alias_mount_is_not_flagged(self, tmp_path):
+        p = self._doc(tmp_path, self._fenced(
+            "docker run --rm",
+            "  -v $(pwd)/conf.d:/etc/config:readonly",
+            "  ghcr.io/vencil/da-tools:v2.9.0 validate-config"))
+        assert mod.check_writable_mount_has_user([p], tmp_path) == []
+
+    def test_a_tilde_fence_is_scanned_too(self, tmp_path):
+        p = self._doc(tmp_path, self._fenced(
+            "docker run --rm",
+            "  -v $(pwd)/out:/data/output",
+            "  ghcr.io/vencil/da-tools:v2.9.0 init", fence="~~~"))
+        assert len(mod.check_writable_mount_has_user([p], tmp_path)) == 1
+
     def test_a_fence_inside_a_blockquote_is_still_scanned(self, tmp_path):
-        """共用範本 `docs/includes/docker-usage-pattern.md` 就是這個形狀。"""
-        p = self._doc(tmp_path, "> ```bash\n> docker run --rm \\n"
-                                ">   -v $(pwd)/out:/data/output \\n"
-                                ">   ghcr.io/vencil/da-tools:v2.9.0 init\n> ```\n")
+        """共用範本 `docs/includes/docker-usage-pattern.md` 就是這個形狀
+        ——**三行 blockquote 續行**，所以續行的去引號也被這一格走到。"""
+        p = self._doc(tmp_path, self._fenced(
+            "docker run --rm",
+            "  -v $(pwd)/out:/data/output",
+            "  ghcr.io/vencil/da-tools:v2.9.0 init", quote=True))
         assert len(mod.check_writable_mount_has_user([p], tmp_path)) == 1
 
     def test_a_ci_template_mount_is_judged_not_skipped(self, tmp_path):
         """`${{ github.workspace }}` 內含空白；跳過它曾蓋住一個真缺陷。"""
-        p = self._doc(tmp_path, "```bash\ndocker run --rm \\n"
-                                "  -v ${{ github.workspace }}/out:/output \\n"
-                                "  ghcr.io/vencil/da-tools:latest operator-generate\n```\n")
+        p = self._doc(tmp_path, self._fenced(
+            "docker run --rm",
+            "  -v ${{ github.workspace }}/out:/output",
+            "  ghcr.io/vencil/da-tools:latest operator-generate"))
+        assert len(mod.check_writable_mount_has_user([p], tmp_path)) == 1
+
+    def test_a_nested_brace_ci_template_is_not_silently_skipped(self, tmp_path):
+        """⛔ `${{ format('{0}/x', github.workspace) }}` 有內層 `}`。
+
+        正規化的樣式是 `[^}]*`，配不到它 ⇒ 掛載被空白切碎 ⇒ 既不是 bind
+        mount 也不是 placeholder ⇒ **靜默跳過**。這正是本輪的核心教訓
+        （「靜默跳過 CI 樣板會蓋住真缺陷」）的同一個形狀，所以它要嘛被判定、
+        要嘛被明確揭露，不能默默消失。
+        """
+        p = self._doc(tmp_path, self._fenced(
+            "docker run --rm",
+            "  -v ${{ format('{0}/out', github.workspace) }}:/output",
+            "  ghcr.io/vencil/da-tools:latest operator-generate"))
         assert len(mod.check_writable_mount_has_user([p], tmp_path)) == 1
 
     def test_actual_repo_is_clean(self):
         """⛔ repo-level 迴歸：沒有這一格，上面全部只證明函式能動，
-        不證明**這棵樹**符合不變式——而 CI 跑的正是這棵樹。"""
-        assert mod.run() == [] or all(
-            i.check == "datools-bad-subcommand" for i in mod.run()), [
-                i.message for i in mod.run()]
+        不證明**這棵樹**符合不變式——而 CI 跑的正是這棵樹。
+
+        ⚠️ 斷言 `run()` 完全為空，不是「除了 bad-subcommand 以外為空」。
+        先前的寫法對姊妹規則恆真——樹上任何 `datools-bad-subcommand` 都會被
+        靜默放過，而那條規則在 pytest 側沒有別的 repo-level 斷言。
+        """
+        issues = mod.run()          # 呼叫一次；它掃約 700 個檔
+        assert issues == [], [f"{i.file}:{i.line} {i.check}" for i in issues]
+
+    def test_a_blockquoted_fence_is_scanned_by_the_subcommand_rule_too(
+        self, tmp_path
+    ):
+        """⛔ blockquote 這個類別要對**兩條**規則都成立。
+
+        只修 mount 那一支的話，共用範本對子命令規則仍然隱形——而那份檔案
+        正是這個修法的起因。
+        """
+        p = self._doc(tmp_path, self._fenced(
+            "docker run --rm ghcr.io/vencil/da-tools:v2.9.0"
+            " guard totally-bogus-subcommand", quote=True))
+        issues = mod.check_datools_subcommands(
+            [p], mod.WRAPPER_SUBCOMMANDS, tmp_path)
+        assert len(issues) == 1, issues
+        assert issues[0].check == "datools-bad-subcommand"

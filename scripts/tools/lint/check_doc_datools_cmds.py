@@ -85,8 +85,13 @@ def check_datools_subcommands(doc_files: List[Path],
             continue
         rel = str(f.relative_to(repo_root)).replace("\\", "/")
         in_code = False
-        for i, line in enumerate(lines, 1):
-            if line.lstrip().startswith("```"):
+        for i, raw in enumerate(lines, 1):
+            # ⛔ Same fence handling as the mount rule below. Fixing blockquote
+            # fences only there left this check blind to the very file the fix
+            # was about — the shared include is one document, and "the class"
+            # is both rules, not the one that was pointed at.
+            line = _unquote_md(raw)
+            if _is_fence(line):
                 in_code = not in_code
                 continue
             # Only fenced code blocks hold real invocations; prose / inline-code
@@ -124,7 +129,40 @@ _DOCKER_RUN_RE = re.compile(r"\bdocker\s+run\b")
 _DATOOLS_IMAGE_RE = re.compile(r"da[-_]tools", re.IGNORECASE)
 # The image token itself — everything before it is a docker flag, everything
 # after it is an argument handed to the container.
-_IMAGE_TOKEN_RE = re.compile(r"(?:\S*da[-_]tools\S*)", re.IGNORECASE)
+_WINDOWS_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
+
+# docker flags that consume the NEXT token as their value. Needed to tell the
+# image apart from a flag argument that merely happens to mention da-tools.
+_VALUE_FLAGS = frozenset({
+    "-v", "--volume", "-e", "--env", "-w", "--workdir", "-u", "--user",
+    "--name", "--network", "--entrypoint", "--mount", "--label", "-l",
+    "--env-file", "--add-host", "-p", "--publish",
+})
+
+
+def _image_index(toks: List[str]) -> "int | None":
+    """Index of the IMAGE token — the first bare operand after `docker run`.
+
+    ⛔ Not "the first token containing da-tools". A mount path may contain it
+    (`-v $(pwd)/da-tools-out:/data/output`), and taking that as the image made a
+    correctly-placed `--user` look like it came after the image — a誤紅 whose
+    message says "move it ahead of the image" when it already is, leaving no
+    legal way to go green.
+    """
+    i = 0
+    while i < len(toks) and toks[i] != "run":
+        i += 1
+    i += 1
+    while i < len(toks):
+        t = toks[i]
+        if t in _VALUE_FLAGS:
+            i += 2
+            continue
+        if t.startswith("-"):
+            i += 1
+            continue
+        return i
+    return None
 
 
 def _unquote_md(line: str) -> str:
@@ -153,7 +191,13 @@ def _is_fence(line: str) -> bool:
 # customer-facing defect (a GitHub Actions example whose writable `/output`
 # mount had no `--user`, on a command that writes unconditionally). Removing a
 # 誤紅 by widening an exclusion is how a guard acquires a false GREEN.
-_CI_TEMPLATE_RE = re.compile(r"\$\{\{[^}]*\}\}")
+# ⛔ `.*?\}\}`, not `[^}]*`. A CI expression may contain braces of its own —
+# `${{ format('{0}/out', github.workspace) }}` — and a class that stops at the
+# first `}` fails to match it, so the mount is split on its spaces, becomes the
+# fragment `${{`, is neither a bind mount nor a placeholder, and vanishes
+# SILENTLY. That is the exact failure this round was about; leaving a second
+# spelling of it in place would repeat it.
+_CI_TEMPLATE_RE = re.compile(r"\$\{\{.*?\}\}")
 
 
 def _normalise(flat: str) -> str:
@@ -191,12 +235,17 @@ def _is_bind_mount(spec: str) -> bool:
     An anonymous volume (`-v /cache`, one segment) is the same story. Flagging
     those would be a誤紅 whose prescribed remedy is actively harmful.
     """
-    head = spec.split(":")[0]
     if ":" not in spec:
         return False                      # anonymous volume
-    return (head.startswith(("/", ".", "~", "$"))
-            or (len(head) > 1 and head[1] == ":")   # C:\... on Windows hosts
-            or head.startswith("${"))
+    # ⛔ Windows drive letters must be recognised BEFORE splitting on ":".
+    # An earlier version tested `head[1] == ":"` on `spec.split(":")[0]`, where
+    # a colon can never appear — dead code that nonetheless carried a comment
+    # claiming the case was handled, so `C:\Users\me:/data/output` was silently
+    # treated as a named volume and skipped.
+    if _WINDOWS_PATH_RE.match(spec):
+        return True
+    head = spec.split(":")[0]
+    return head.startswith(("/", ".", "~", "$"))
 
 
 def _is_writable(spec: str) -> bool:
@@ -306,20 +355,29 @@ def check_writable_mount_has_user(doc_files: List[Path],
             if INLINE_IGNORE in blk:
                 continue
             norm = _normalise(flat)
-            toks = norm.split()
+            # ⛔ Drop the line-continuation backslashes. Flattening a multi-line
+            # command leaves each `\` as its own token, and a bare `\` is not a
+            # flag — so the FIRST one was picked as the image and every
+            # correctly-ordered `--user` in a multi-line example was reported as
+            # coming after it. The single-line probe I first checked this with
+            # had no backslashes, which is precisely why it looked fine.
+            toks = [t for t in norm.split() if t != "\\"]
             specs = [s for s in _mounts(flat) if _is_bind_mount(s)]
             writable = [m for m in specs if _is_writable(m)]
-            img = _IMAGE_TOKEN_RE.search(norm)
+            img_i = _image_index(toks)
             if _has_user_flag(toks):
                 # ⛔ Position matters as much as presence. Docker applies only
                 # the flags BEFORE the image; a `--user` after it is handed to
                 # the container as an argument — the uid is unchanged AND the
                 # argv is polluted. Measured on an image ending `USER 10001`:
                 # flag-after-image gave the same euid as no flag at all.
-                if writable and img and norm.index(toks[
-                        next(k for k, t in enumerate(toks)
-                             if t in ("--user", "-u") or t.startswith("--user="))
-                ]) > img.start():
+                # ⛔ Compare TOKEN indices. `norm.index(tok)` returns the first
+                # SUBSTRING occurrence, which lands anywhere the same text
+                # appears earlier — `-v $(pwd)/build-utils:...` contains `-u`,
+                # so a genuinely misplaced short flag reported as fine.
+                user_i = next(k for k, t in enumerate(toks)
+                              if t in ("--user", "-u") or t.startswith("--user="))
+                if writable and img_i is not None and user_i > img_i:
                     issues.append(Issue(
                         "datools-user-flag-after-image", rel, start + 1,
                         "`--user` appears AFTER the image reference, so docker "
