@@ -742,7 +742,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "7d926b21ac79a5f7987abe599ad5bff172cc4940cc2e69c096aceb6bd071067d",
+ "source_digest": "35a6bcab2dbddf1cfb0885da6903f4134adb83312d5aa5618284991f86760933",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -2149,6 +2149,9 @@
   "scripts/tools/dx/_atomic_write.py": [
    "tests/dx/test_atomic_write.py",
    "tests/dx/test_verify_diff.py"
+  ],
+  "scripts/tools/dx/analyze_bench_history.py": [
+   "tests/dx/test_paired_trend_watch.py"
   ],
   "scripts/tools/dx/axe_lite_static.py": [
    "tests/dx/test_axe_lite_static.py"

@@ -340,14 +340,44 @@ def test_guard_unparseable_file_becomes_an_unreadable_night_not_a_gap(tmp_path):
 
 def test_gate_without_a_canary_reading_fails_closed():
     """No canary is no evidence the measurement worked — and no evidence it
-    broke is not evidence it did not."""
+    broke is not evidence it did not.
+
+    The reason names the missing GATING canary rather than saying "no reading":
+    with one gating canary those are the same night, and the specific message is
+    the one an operator can act on.
+    """
     payload = _payload()
     for canary in ("BenchmarkControlCanaryCPU", "BenchmarkControlCanarySleep"):
         del payload["evaluated"][canary]
     night = ptw.load_night(payload, night_utc="2026-08-23", run_id=1)
     ptw.apply_gate(night, 1.0)
     assert night.outcome == ptw.NIGHT_NOT_COUNTED
-    assert "cannot be evaluated" in night.reason
+    assert "not established" in night.reason
+    assert "BenchmarkControlCanaryCPU" in night.reason
+
+
+def test_gate_no_reading_branch_is_reachable_and_fails_closed():
+    """⛔ Covers the branch that `load_night` can no longer produce.
+
+    With a single gating canary, every route through the loader that leaves no
+    reading also populates `missing_canaries` or `unreadable_canaries`, so the
+    bare "no reading" arm is unreachable from real input. It stays because it is
+    the fail-closed DEFAULT of a safety predicate — deleting it would make the
+    function fall through to `return True` for a night with nothing to judge —
+    and it is tested here rather than left as untested dead surface, which is
+    what this repo deletes elsewhere.
+    """
+    night = ptw.Night("2026-08-23", 1)
+    night.schema = "bench-paired/v2"
+    # constructed directly: no canary anywhere, and `missing_canaries` bypassed
+    # by pre-seeding the name so the specific branch does not claim it
+    night.ratios_pct["BenchmarkControlCanaryCPU"] = 0.0
+    assert night.missing_canaries == []
+    assert night.unreadable_canaries == []
+    assert night.canary_deviation_pct is None
+    counts, reason = ptw.gate_verdict(night, 1.0)
+    assert counts is False
+    assert "cannot be evaluated" in reason
 
 
 def test_gate_with_a_canary_absent_from_the_payload_entirely_fails_closed():
@@ -368,6 +398,34 @@ def test_gate_with_a_canary_absent_from_the_payload_entirely_fails_closed():
     assert night.outcome == ptw.NIGHT_NOT_COUNTED
     assert "not established" in night.reason
     assert "BenchmarkControlCanaryCPU" in night.reason
+
+
+def test_the_informational_canary_going_missing_does_not_gate_the_night():
+    """⛔ The counterpart, and the reason the rule above is safe rather than
+    brittle.
+
+    `canary_test.go` calls the sleep canary "INFORMATIONAL ONLY ... NOT part of
+    the gate decision", so its absence must not discard a night. An earlier
+    version required BOTH canaries and gated on BOTH — measured consequence: a
+    benchmark at +9% on every one of six nights never fired, because the sleep
+    canary jittered 3% on alternate nights, which that same file calls healthy.
+    """
+    payload = _payload()
+    del payload["evaluated"]["BenchmarkControlCanarySleep"]
+    night = ptw.load_night(payload, night_utc="2026-08-23", run_id=1)
+    assert night.missing_canaries == []
+    ptw.apply_gate(night, 1.0)
+    assert night.outcome == ptw.NIGHT_COUNTED
+    assert night.reason is None
+
+
+def test_the_informational_canary_jittering_does_not_gate_the_night():
+    payload = _payload()
+    payload["evaluated"]["BenchmarkControlCanarySleep"]["ratio"] = 1.03  # +3%
+    night = ptw.load_night(payload, night_utc="2026-08-23", run_id=1)
+    ptw.apply_gate(night, 1.0)
+    assert night.outcome == ptw.NIGHT_COUNTED
+    assert night.informational_canary_pct["BenchmarkControlCanarySleep"] > 2.9
 
 
 def test_canary_names_match_the_real_benchmark_source():
@@ -913,11 +971,12 @@ def test_partial_canary_failure_fails_closed():
     night = ptw.Night("2026-08-20", 1)
     night.canary_pct["BenchmarkControlCanarySleep"] = 0.01
     night.inconclusive["BenchmarkControlCanaryCPU"] = "unreadable-ratio (nan)"
-    # (Sleep present and calm, CPU present-but-unreadable — the survivor's
-    #  reading must not stand in for the night.)
+    # (Sleep present and calm, CPU — the ONLY gating canary — present but
+    #  unreadable. The survivor is informational and must not stand in.)
     night.ratios_pct["BenchmarkAlpha"] = 0.5
     ptw.apply_gate(night, 1.0)
     assert night.outcome == ptw.NIGHT_NOT_COUNTED
+    assert "not established" in night.reason
     assert "BenchmarkControlCanaryCPU" in night.reason
     assert ptw.decide([night])["status"] == ptw.STATUS_INCONCLUSIVE
 
@@ -969,10 +1028,10 @@ def test_the_jobs_own_first_nights_are_inconclusive():
 
 def test_judgeable_needs_k_consecutive_readings_not_k_readings():
     over = [_run(f"2026-08-{10 + i}", i, 9.0) for i in range(3)]
-    assert ptw.judgeable(over, ["BenchmarkAlpha"], 2)["BenchmarkAlpha"] is True
+    assert ptw.judgeable(over, ["BenchmarkAlpha"], 5.0, 2)["BenchmarkAlpha"] is True
     gapped = [_run("2026-08-10", 1, 9.0), _run("2026-08-11", 2),
               _run("2026-08-12", 3, 9.0)]
-    assert ptw.judgeable(gapped, ["BenchmarkAlpha"], 2)["BenchmarkAlpha"] is False
+    assert ptw.judgeable(gapped, ["BenchmarkAlpha"], 5.0, 2)["BenchmarkAlpha"] is False
 
 
 def test_judgeable_needs_every_run_of_a_night_to_carry_the_reading():
@@ -985,10 +1044,10 @@ def test_judgeable_needs_every_run_of_a_night_to_carry_the_reading():
     """
     partial = [_run("2026-08-10", 1, 9.0), _run("2026-08-10", 2),
                _run("2026-08-11", 3, 9.0)]
-    assert ptw.judgeable(partial, ["BenchmarkAlpha"], 2)["BenchmarkAlpha"] is False
+    assert ptw.judgeable(partial, ["BenchmarkAlpha"], 5.0, 2)["BenchmarkAlpha"] is False
     full = [_run("2026-08-10", 1, 9.0), _run("2026-08-10", 2, 9.0),
             _run("2026-08-11", 3, 9.0)]
-    assert ptw.judgeable(full, ["BenchmarkAlpha"], 2)["BenchmarkAlpha"] is True
+    assert ptw.judgeable(full, ["BenchmarkAlpha"], 5.0, 2)["BenchmarkAlpha"] is True
 
 
 def test_two_runs_of_one_night_are_one_night_for_the_consecutive_rule():
@@ -1177,4 +1236,102 @@ def test_a_v2_payload_can_carry_a_null_reference_sha():
     other = ptw.load_night(_payload(), night_utc="2026-08-24", run_id=2)
     assert ptw.digest_transitions(
         [night, other])[0]["reference_pin_changed"] is None
+
+
+def test_the_new_job_cannot_take_the_nights_data_down_with_it():
+    """⛔ Both watchdogs find prior nights with `--status success`, which keys on
+    the RUN's conclusion, and one failed job fails the run.
+
+    So an exit-2 from this unproven reporter would delete that night's
+    `bench-paired.json` and `bench-baseline.txt` from BOTH watchdogs' future
+    windows — silently shortening a window the operator believes is 14 nights.
+    `continue-on-error` is what makes the "does not entangle" claim in the
+    workflow comment actually true.
+    """
+    yaml = pytest.importorskip("yaml")
+    workflow = yaml.safe_load(
+        (_REPO / ".github" / "workflows" / "bench-record.yaml").read_text(
+            encoding="utf-8"))
+    assert workflow["jobs"]["paired-trend-watch"]["continue-on-error"] is True
+    # ⚠️ NOT asserted for `trend-watch`: it owns the `perf-trend` issue, so its
+    # failure IS the nightly failing. Pinning the asymmetry so a future edit
+    # cannot quietly make this reporter load-bearing, or that watchdog silent.
+    assert "continue-on-error" not in workflow["jobs"]["trend-watch"]
+    # The window query this depends on, pinned at its source.
+    watchdog = (_REPO / "scripts" / "tools" / "dx"
+                / "analyze_bench_history.py").read_text(encoding="utf-8")
+    assert '"--status", "success"' in watchdog
+
+
+# ── 7. FIXES FOR THE FIFTH REVIEW ROUND ───────────────────────────────────
+#
+# ⛔ All four of these exist because the break harness reported STILL GREEN for
+# the guards the fixes had just added. The code was right and untested, which is
+# the state this file's whole discipline exists to refuse.
+
+def test_a_window_of_undecidable_nights_is_inconclusive_not_clear():
+    """⛔ The seam between `judgeable()` and `fires()`.
+
+    `judgeable()` used to ask "does every counted run carry a reading" while
+    `fires()` asks "do they AGREE about the threshold". Two calendar nights,
+    each measured twice with the runs straddling 5% (5.1 and 4.9): every night
+    is undecidable, and the report said CLEAR. Both now route through
+    `_night_reading`, so the seam cannot reopen.
+    """
+    nights = [_run("2026-08-20", 1, 5.1), _run("2026-08-20", 2, 4.9),
+              _run("2026-08-21", 3, 5.1), _run("2026-08-21", 4, 4.9)]
+    assert [ptw._night_reading(g, "BenchmarkAlpha", 5.0)
+            for _d, g in ptw.calendar_nights(nights)] == [None, None]
+    result = ptw.decide(nights, k=2)
+    assert result["status"] == ptw.STATUS_INCONCLUSIVE
+    assert result["unjudgeable"] == ["BenchmarkAlpha"]
+    assert "**CLEAR**" not in ptw.render(result)
+
+
+def test_over_not_sustained_counts_calendar_nights_not_runs():
+    nights = [_run("2026-08-20", 1, 9.1), _run("2026-08-20", 2, 9.2)]
+    result = ptw.decide(nights, k=2)
+    assert result["over_not_sustained"]["BenchmarkAlpha"] == {"2026-08-20": 9.2}
+    row = [l for l in ptw.render(result).splitlines()
+           if "`BenchmarkAlpha` |" in l][0]
+    assert "1 (08-20)" in row
+    assert "08-20, 08-20" not in row
+
+
+def test_the_gate_counterfactual_counts_calendar_nights_not_runs():
+    """⛔ This table is the data ADR-032 §待決 5 says will pick the real
+    threshold, so a re-run inflating its rejection count biases the very
+    decision it exists to feed."""
+    nights = [_run("2026-08-21", 1, 1.0), _run("2026-08-21", 2, 1.0)]
+    for night in nights:
+        night.canary_pct["BenchmarkControlCanaryCPU"] = 4.0
+    result = ptw.decide(nights)
+    for _gate, rejected in ptw.counterfactual_gates(result["nights"]):
+        assert rejected == ["2026-08-21"]
+    assert "2026-08-21, 2026-08-21" not in ptw.render(result)
+
+
+def test_transitions_never_emit_a_night_to_itself():
+    nights = [_run("2026-08-20", 1, 1.0), _run("2026-08-20", 2, 1.0),
+              _run("2026-08-21", 3, 1.0)]
+    recs = ptw.digest_transitions(nights)
+    assert [(r["from"], r["to"]) for r in recs] == [("2026-08-20", "2026-08-21")]
+
+
+def test_the_informational_canary_is_actually_rendered():
+    """⛔ "Emitted + rendered for human eyes" is the stated reason the sleep
+    canary is parsed at all, so it has to actually appear.
+
+    The first cut of the gating fix added `informational_canary_pct` and never
+    called it — dead code and a false justification in one stroke.
+    """
+    body = ptw.render(ptw.decide(ptw.nights_from_dataset(DATASET)))
+    assert "canary (gating)" in body
+    assert "canary (info)" in body
+    assert "Sleep" in body
+    # and the gating column must NOT be the max over both
+    night = ptw.load_night(_payload(), night_utc="2026-08-23", run_id=1)
+    night.canary_pct["BenchmarkControlCanarySleep"] = 9.0
+    assert night.canary_deviation_pct < 1.0
+    assert night.informational_canary_pct == {"BenchmarkControlCanarySleep": 9.0}
 

@@ -138,10 +138,42 @@ COUNTERFACTUAL_GATES = (0.5, 1.0, 2.0)
 
 # Both canaries run the SAME compiled binary on both sides, so their true ratio
 # is 1.000 by construction; any deviation is that night's residual paired noise.
+# Neither is a product benchmark, so neither is ever judged for regressions.
 CANARY_BENCHES = frozenset({
     "BenchmarkControlCanaryCPU",
     "BenchmarkControlCanarySleep",
 })
+
+# ⛔ ONLY THE CPU CANARY GATES. This is not a simplification — it is what the
+# harness says, and an earlier version of this module got it wrong in the
+# dangerous direction.
+#
+# `scripts/tools/ops/bench-canary/canary_test.go` states it in as many words:
+#
+#     BenchmarkControlCanaryCPU   — ... GATING: this is the canary that drives
+#                                   the INCONCLUSIVE verdict.
+#     BenchmarkControlCanarySleep — ... INFORMATIONAL ONLY: a 3-4% drift here
+#                                   is only ~30-40us, well inside the jitter a
+#                                   virtualised GH runner shows even when
+#                                   healthy, so gating on it would flap
+#                                   INCONCLUSIVE constantly. Emitted + rendered
+#                                   for human eyes; NOT part of the gate
+#                                   decision.
+#
+# and the other two consumers agree: `analyze_bench_history.py` has
+# `CANARY_BENCH = "BenchmarkControlCanaryCPU"` (singular) and
+# `bench_gate_compare.sh` greps `ControlCanaryCPU` for its presence fail-safe.
+#
+# ⛔ The earlier version gated on BOTH, and justified it in a comment claiming
+# the two "are deliberately different shapes ... so they are not substitutes for
+# one another". That sentence was invented, not read: it is true that they
+# measure different things, and false that both therefore gate. Measured
+# consequence — six nights with a benchmark at +9% EVERY night and the Sleep
+# canary jittering 3% on alternate nights (the level `canary_test.go` calls
+# healthy) never fires: `status: INCONCLUSIVE, fired: {}`. A guard that blanks
+# the detector is the same disease as a guard that lets it lie, and this one was
+# introduced while fixing the other.
+GATING_CANARIES = frozenset({"BenchmarkControlCanaryCPU"})
 
 # ⛔ v1 is accepted deliberately, not by omission. Every night before
 # 2026-08-23 is v1, so rejecting it would leave the engine with no real series
@@ -240,7 +272,7 @@ class Night:
         A canary whose ratio was NaN or whose record was malformed landed in
         `inconclusive` — evidence about the measurement, not absence of it.
         """
-        return sorted(b for b in self.inconclusive if b in CANARY_BENCHES)
+        return sorted(b for b in self.inconclusive if b in GATING_CANARIES)
 
     @property
     def missing_canaries(self):
@@ -265,7 +297,7 @@ class Night:
         `.github/bench-reference.yaml` uses for the reference pin.
         """
         seen = set(self.ratios_pct) | set(self.canary_pct) | set(self.inconclusive)
-        return sorted(CANARY_BENCHES - seen)
+        return sorted(GATING_CANARIES - seen)
 
     @property
     def canary_deviation_pct(self):
@@ -281,9 +313,22 @@ class Night:
         was counted. Half the gate's instrumentation had failed and the page
         said so nowhere. The gate now consults both properties.
         """
-        if not self.canary_pct:
+        readings = [abs(v) for b, v in self.canary_pct.items()
+                    if b in GATING_CANARIES]
+        if not readings:
             return None
-        return max(abs(v) for v in self.canary_pct.values())
+        return max(readings)
+
+    @property
+    def informational_canary_pct(self):
+        """Non-gating canary readings, for display only.
+
+        `canary_test.go` says the sleep canary is "emitted + rendered for human
+        eyes; NOT part of the gate decision" — so it is rendered, and it does
+        not decide anything.
+        """
+        return {b: v for b, v in self.canary_pct.items()
+                if b not in GATING_CANARIES}
 
 
 def _finite_pct(value):
@@ -453,19 +498,24 @@ def gate_verdict(night, gate_pct):
     """
     deviation = night.canary_deviation_pct
     broken = night.unreadable_canaries + night.missing_canaries
-    if deviation is None:
-        return False, ("no control-canary reading — the gate cannot be "
-                       "evaluated, so this night is not counted")
+    # ⛔ The specific reason first. With one gating canary, "it is broken" and
+    # "there is no reading" are the same night, and the generic message wins the
+    # race unless this is ordered — losing the one thing an operator needs,
+    # which is WHICH canary.
     if broken:
         # ⛔ Partial instrumentation is not instrumentation. The surviving
         # canary's calm reading is evidence that ONE canary was calm, not that
         # the paired measurement held — and the two canaries are deliberately
         # different shapes (CPU-bound and sleep-bound), so they are not
         # substitutes for one another.
-        return False, ("control canary not established: " + ", ".join(broken)
-                       + f" — the remaining canary read {deviation:.2f}%, "
-                       "which is evidence about that canary only, not about "
-                       "the night")
+        rest = ("" if deviation is None else
+                f" — the remaining gating canary read {deviation:.2f}%, which "
+                "is evidence about that canary only, not about the night")
+        return False, ("control canary not established: "
+                       + ", ".join(broken) + rest)
+    if deviation is None:
+        return False, ("no control-canary reading — the gate cannot be "
+                       "evaluated, so this night is not counted")
     if deviation > gate_pct:
         return False, (f"control canary deviated {deviation:.2f}% "
                        f"(gate {gate_pct:.2f}%) — paired measurement suspect")
@@ -560,7 +610,7 @@ def fires(nights, benches, threshold_pct, k, gap=GAP_BREAK):
     return out
 
 
-def judgeable(nights, benches, k, gap=GAP_BREAK):
+def judgeable(nights, benches, threshold_pct, k, gap=GAP_BREAK):
     """Which benchmarks the K-consecutive rule was even ABLE to judge.
 
     ⛔ THE RULE CANNOT RETURN A VERDICT IT WAS NEVER IN A POSITION TO REACH.
@@ -593,7 +643,15 @@ def judgeable(nights, benches, k, gap=GAP_BREAK):
         best = run = 0
         for _date, runs in grouped:
             counted = [n for n in runs if n.outcome == NIGHT_COUNTED]
-            if counted and all(bench in n.ratios_pct for n in counted):
+            # ⛔ `_night_reading`, not a presence check. Review found the seam:
+            # this used to ask "does every counted run carry a reading", while
+            # `fires()` asks "do they AGREE about the threshold". A calendar
+            # night measured twice with the two runs straddling the threshold
+            # (5.1 and 4.9) is undecidable to `fires()` and was judgeable here —
+            # so a window in which EVERY night was undecidable rendered as
+            # CLEAR. One predicate now answers both questions, which is the only
+            # way the seam cannot reopen.
+            if counted and _night_reading(runs, bench, threshold_pct) is not None:
                 run += 1
                 best = max(best, run)
                 continue
@@ -620,7 +678,15 @@ def digest_transitions(nights):
     ⛔ UNKNOWN is never rendered as "did not move".
     """
     out = []
-    usable = [n for n in nights if n.readable]
+    # ⛔ One entry per calendar night, so a re-run cannot emit a
+    # `2026-08-20 → 2026-08-20` transition row. The night's LAST readable run
+    # is the one carried, matching "what the work definition was by the end of
+    # that night".
+    per_night = {}
+    for night in nights:
+        if night.readable:
+            per_night[night.night_utc] = night
+    usable = list(per_night.values())
     for prev, cur in zip(usable, usable[1:]):
         rec = {"from": prev.night_utc, "to": cur.night_utc, "sides": {}}
         for side in ("reference", "main"):
@@ -698,17 +764,22 @@ def decide(nights, *, threshold_pct=DEFAULT_THRESHOLD_PCT,
                 "absent-from-payload — the night carried neither a ratio nor a "
                 "reason for this benchmark")
 
-    can_judge = judgeable(nights, benches, k, gap=gap)
+    can_judge = judgeable(nights, benches, threshold_pct, k, gap=gap)
     unjudgeable = sorted(b for b, ok in can_judge.items() if not ok)
 
     # Readings that crossed the threshold at least once without ever completing
     # K consecutive nights. Previously invisible: not a fire, so nothing on the
     # page mentioned them at all.
+    # ⛔ Keyed by CALENDAR NIGHT, not by run. Review caught the same run-vs-night
+    # confusion the header already had: a re-run of one night rendered as
+    # "2 (08-20, 08-20)". The worst reading of that night is kept.
     seen_over = {}
     for night in counted:
         for bench, value in night.ratios_pct.items():
             if value > threshold_pct and bench not in fired:
-                seen_over.setdefault(bench, []).append((night.night_utc, value))
+                per_night = seen_over.setdefault(bench, {})
+                if value > per_night.get(night.night_utc, float("-inf")):
+                    per_night[night.night_utc] = value
 
     if not counted or not benches or not any(can_judge.values()):
         # ⛔ Not CLEAR. No benchmark was in a position to be judged, so the
@@ -928,8 +999,11 @@ def counterfactual_gates(nights):
     rows = []
     readable = [n for n in nights if n.readable]
     for gate in COUNTERFACTUAL_GATES:
-        rejected = [n.night_utc for n in readable
-                    if not gate_verdict(n, gate)[0]]
+        # ⛔ Distinct calendar nights, same reason as above — this table is the
+        # data ADR-032 §待決 5 says will pick the real threshold, so a re-run
+        # inflating its rejection count biases the decision it exists to feed.
+        rejected = sorted({n.night_utc for n in readable
+                           if not gate_verdict(n, gate)[0]})
         rows.append((gate, rejected))
     return rows
 
@@ -987,11 +1061,22 @@ def render(result):
     # Night-by-night, including why a night did not count.
     lines.append("### Nights")
     lines.append("")
-    lines.append("| night | run | outcome | canary worst | drift | digest |")
-    lines.append("|---|---|---|---|---|---|")
+    # ⛔ Two canary columns, not one. Only the CPU canary gates; the sleep
+    # canary is informational, and `canary_test.go` says it is "emitted +
+    # rendered for human eyes". A first cut of the gating fix added an
+    # `informational_canary_pct` property and then never rendered it — dead code
+    # AND a false justification in the same stroke, since "still displayed" was
+    # the stated reason for keeping the reading at all. Caught in self-review
+    # before it reached a reviewer, which is not the same as it never happening.
+    lines.append("| night | run | outcome | canary (gating) | canary (info) "
+                 "| drift | digest |")
+    lines.append("|---|---|---|---|---|---|---|")
     for night in nights:
         deviation = night.canary_deviation_pct
         canary = _pct(deviation) if deviation is not None else "—"
+        info = night.informational_canary_pct
+        info_cell = ", ".join(f"{b.replace('BenchmarkControlCanary', '')} "
+                              f"{_pct(v)}" for b, v in sorted(info.items())) or "—"
         note = "" if night.outcome == NIGHT_COUNTED else f" ({night.reason})"
         drift = night.drift_status
         if drift == "checked":
@@ -1000,7 +1085,8 @@ def render(result):
             drift = f"checked, {count} file(s){named}"
         lines.append(
             f"| {night.night_utc or '?'} | `{night.run_id or '?'}` | "
-            f"{night.outcome}{note} | {canary} | {drift} | {night.digest_status} |")
+            f"{night.outcome}{note} | {canary} | {info_cell} | {drift} "
+            f"| {night.digest_status} |")
     lines.append("")
 
     # ⛔ These two sections are why a CLEAR is trustworthy. Without them a
@@ -1028,8 +1114,8 @@ def render(result):
         lines.append("| benchmark | nights over | worst |")
         lines.append("|---|---|---|")
         for bench, hits in sorted(result["over_not_sustained"].items()):
-            worst = max(v for _d, v in hits)
-            dates = ", ".join(d[5:] for d, _v in hits)
+            worst = max(hits.values())
+            dates = ", ".join(d[5:] for d in sorted(hits))
             lines.append(f"| `{bench}` | {len(hits)} ({dates}) | {_pct(worst)} |")
         lines.append("")
         lines.append("⚠️ These did not meet the consecutive-nights rule, so they "

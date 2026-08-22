@@ -524,6 +524,28 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # ⛔ THE JOB MUST NOT BE ABLE TO FAIL THE RUN, and this is not tidiness.
+    # Both watchdogs find prior nights with `gh run list --status success`,
+    # which keys on the WORKFLOW RUN's conclusion — and one failed job fails the
+    # run. So without this, an exit-2 here (the tool's documented "could not do
+    # the job" path: `gh` unauthenticated, a rate limit, a renamed workflow)
+    # would delete that night's `bench-paired.json` AND its `bench-baseline.txt`
+    # from BOTH watchdogs' future windows. A K-of-N rule over a window the
+    # operator believes is 14 nights but is quietly 13 fires later than
+    # advertised — the same silent-window-shortening this module's own loader
+    # refuses to do, arriving instead through the workflow graph.
+    #
+    # This also makes true a claim the comment above already made: that a crash
+    # in an unproven reporter does not entangle with the watchdog that owns the
+    # `perf-trend` issue. It was not true until this line existed — found by
+    # review, which flagged it as an unverified hypothesis; the `--status
+    # success` half is verified in `analyze_bench_history.py`, and the
+    # run-conclusion half is documented GitHub behaviour.
+    #
+    # The failure is still visible: the job shows as failed in the run's job
+    # list and its step summary is absent. What it cannot do is take the night's
+    # data with it.
+    continue-on-error: true
     permissions:
       contents: read
       actions: read   # gh run list / gh run download (prior nights' artifacts)

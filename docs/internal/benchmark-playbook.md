@@ -380,6 +380,8 @@ residue 完整清單留在 artifact 供稽核，但**不整份貼進 step summar
 **⚠️ 三件不要誤讀的事**
 
 1. **閘門門檻 1.0% 是 provisional**，不是已決定值。而且它**幾乎攔不到東西**：六夜實測 canary 從未偏離超過 0.12%，同期卻有兩夜某支擺了 −19.34% / +25.02%。它回答「配對量測今晚有沒有壞掉」，**不是**「這支今晚穩不穩」。
+   ⛔ **只有 `BenchmarkControlCanaryCPU` 參與閘門。** `BenchmarkControlCanarySleep` 是 informational——[`canary_test.go`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/scripts/tools/ops/bench-canary/canary_test.go) 明文寫「3-4% 漂移只有 ~30-40us，落在健康 GH runner 的抖動範圍內，**gating on it would flap INCONCLUSIVE constantly**；NOT part of the gate decision」，`analyze_bench_history.py` 的 `CANARY_BENCH` 與 `bench_gate_compare.sh` 的 presence fail-safe 也都只認 CPU 那支。
+   ⚠️ 本工具第一版**兩支都當 gating**，實測後果：某支每夜 +9%、Sleep 在文件宣稱的健康值 3% 隔夜抖動 ⇒ 判定永遠停在 `INCONCLUSIVE`、一次都發射不了。**擋住偵測器與讓它說謊是同一種病。**
 2. **被閘門擋下的夜對「連續 N 夜」是中斷還是跳過 —— ADR 沒有裁決。** 預設取中斷（不憑空製造連續性），另一種以反事實同時輸出。⛔ 封存的六夜**無法**裁決這題（那六夜從未被擋下），錨點測試通過不構成支持預設值的證據。
 3. **已被接受的成本不會被抑制。** 第一張會發射的是 `MergePartialConfigs_1000`（六夜重播算出來的，不是預測），而它已由 [#1474](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1474) 量測、歸因、決定接受。`ACCEPTED` 帳本是 PR-B2 的範圍；在那之前**標註而不隱藏**——臨時的手寫排除清單正是靜音的原型。
 
