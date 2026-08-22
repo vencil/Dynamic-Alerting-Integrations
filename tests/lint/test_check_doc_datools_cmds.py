@@ -193,6 +193,79 @@ class TestWritableMountNeedsUser:
             "  ghcr.io/vencil/da-tools:v2.9.0 init"))
         assert mod.check_writable_mount_has_user([p], tmp_path) == []
 
+    @pytest.mark.parametrize("extra", [
+        "--platform linux/amd64",
+        "--group-add 999",
+        "--userns host",          # ⚠️ 空白形式；`--userns=` 那格在別處
+        "--security-opt label=disable",
+    ])
+    def test_an_unlisted_value_flag_does_not_donate_its_value_as_the_image(
+        self, tmp_path, extra
+    ):
+        """⛔ `_VALUE_FLAGS` 是列舉，而 docker 的旗標集合永遠列不完。
+
+        清單裡沒有的「吃下一個 token」旗標，會把**它的值**當成 image，於是
+        一個正確排在 image 之前的 `--user` 被判成排在之後——而訊息叫人做
+        它已經做了的事，沒有任何合法轉綠路徑。所以判定不能只靠列舉：
+        候選 operand 還必須真的長得像 da-tools image。
+        """
+        p = self._doc(tmp_path, self._fenced(
+            f"docker run --rm {extra}",
+            "  --user $(id -u):$(id -g)",
+            "  -v $(pwd)/out:/data/output",
+            "  ghcr.io/vencil/da-tools:v2.9.0 init"))
+        assert mod.check_writable_mount_has_user([p], tmp_path) == []
+
+    def test_a_mount_wrapped_right_after_dash_v_is_still_seen(self, tmp_path):
+        """⛔ `-v` 落在行尾時，續行的 `\\` 曾被當成它的值。
+
+        `_mounts()` 自己再 split 一次，所以只在呼叫端丟掉 `\\` 不夠——那條
+        路徑會得到空字串掛載、靜默判乾淨。
+        """
+        p = self._doc(tmp_path, self._fenced(
+            "docker run --rm -v",
+            "  $(pwd)/out:/data/output",
+            "  ghcr.io/vencil/da-tools:v2.9.0 init"))
+        assert len(mod.check_writable_mount_has_user([p], tmp_path)) == 1
+
+    def test_the_equals_form_of_volume_is_recognised(self, tmp_path):
+        p = self._doc(tmp_path, self._fenced(
+            "docker run --rm",
+            "  --volume=$(pwd)/out:/data/output",
+            "  ghcr.io/vencil/da-tools:v2.9.0 init"))
+        assert len(mod.check_writable_mount_has_user([p], tmp_path)) == 1
+
+    @pytest.mark.parametrize("spec,expect_issue", [
+        ("{{ mkdocs_var }}/out:/output", True),    # 非 GitHub 樣板
+        ("${{ github.workspace /out:/output", True),   # 缺結尾 }}
+    ])
+    def test_an_unjoinable_template_is_reported_not_dropped(
+        self, tmp_path, spec, expect_issue
+    ):
+        """⛔ 接不回去的樣板要「說不知道」，不能安靜消失。
+
+        這是本輪核心教訓的第二種拼法：靜默跳過樣板掛載正是先前蓋住真缺陷的
+        機制。
+        """
+        p = self._doc(tmp_path, self._fenced(
+            "docker run --rm",
+            f"  -v {spec}",
+            "  ghcr.io/vencil/da-tools:v2.9.0 operator-generate"))
+        issues = mod.check_writable_mount_has_user([p], tmp_path)
+        assert bool(issues) is expect_issue, issues
+        if issues:
+            assert issues[0].check == "datools-mount-not-resolvable"
+
+    @pytest.mark.parametrize("spec,is_bind", [
+        ("C:" + chr(92) + "Users" + chr(92) + "me:/data/output", True),
+        ("C:" + chr(92) + "cache", False),          # 磁碟機代號但無容器路徑
+        (chr(92) * 2 + "srv" + chr(92) + "share:/data/output", True),  # UNC
+        ("/cache", False),                            # 匿名 volume
+        ("cache-vol:/data/output", False),            # 具名 volume
+    ])
+    def test_bind_mount_domain_boundaries(self, spec, is_bind):
+        assert mod._is_bind_mount(spec) is is_bind, spec
+
     def test_a_flagged_position_is_found_by_token_not_by_substring(
         self, tmp_path
     ):
@@ -283,7 +356,7 @@ class TestWritableMountNeedsUser:
         先前的寫法對姊妹規則恆真——樹上任何 `datools-bad-subcommand` 都會被
         靜默放過，而那條規則在 pytest 側沒有別的 repo-level 斷言。
         """
-        issues = mod.run()          # 呼叫一次；它掃約 700 個檔
+        issues = mod.run()          # 呼叫一次；它掃 258 個檔（實測，非估計）
         assert issues == [], [f"{i.file}:{i.line} {i.check}" for i in issues]
 
     def test_a_blockquoted_fence_is_scanned_by_the_subcommand_rule_too(
