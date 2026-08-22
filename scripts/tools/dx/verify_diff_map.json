@@ -742,7 +742,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "3e1be2190e063daa147f2b64e221686c1e20cfb9f7bec445abe9c549fd4c411f",
+ "source_digest": "9e48d77234a026e09cfd40531114a33a263d7bf845bca84dfcefe0d413fe60ff",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1092,7 +1092,6 @@
    "tests/dx/test_generate_rule_pack_stats_injection.py"
   ],
   ".github/bench-reference.yaml": [
-   "tests/dx/test_paired_trend_watch.py",
    "tests/lint/test_check_workload_closure_drift.py",
    "tests/shared/test_bilingual_help_contract.py"
   ],

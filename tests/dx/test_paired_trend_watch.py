@@ -428,24 +428,61 @@ def test_the_informational_canary_jittering_does_not_gate_the_night():
     assert night.informational_canary_pct["BenchmarkControlCanarySleep"] > 2.9
 
 
-def test_canary_names_match_the_real_benchmark_source():
-    """⛔ The friction that makes the guard above safe rather than brittle.
+def test_canary_roles_match_the_real_benchmark_source():
+    """⛔ Pins BOTH sets, and pins them by ROLE rather than by name.
 
-    Requiring the DECLARED canary set means removing one from the harness would
-    blank the gate on every night. That is only acceptable if the two cannot
-    drift apart quietly — so the declaration is pinned against the Go source.
-    Changing the instrumentation means changing both, in a reviewed commit;
-    same deliberate friction `.github/bench-reference.yaml` uses for the pin.
+    An earlier version pinned only `CANARY_BENCHES` — the recognised set — and
+    a docstring claimed that friction protected the set that GATES. It did not:
+    `GATING_CANARIES` was pinned to nothing. Adding a third gating canary to
+    `canary_test.go` would have forced an update to `CANARY_BENCHES`, the
+    docstring would have said that was enough, and the new canary would have
+    been silently demoted to informational — the gate quietly weaker with every
+    surface reporting normal.
+
+    So the role is read out of the Go doc comment, which states it explicitly:
+    the CPU canary's block says "GATING: this is the canary that drives the
+    INCONCLUSIVE verdict", the sleep canary's says "INFORMATIONAL ONLY ... NOT
+    part of the gate decision".
     """
     src = (_REPO / "scripts" / "tools" / "ops" / "bench-canary"
            / "canary_test.go").read_text(encoding="utf-8")
-    declared = set(re.findall(r"^func (Benchmark\w+)\(b \*testing\.B\)",
-                              src, re.M))
+
+    declared = set(re.findall(r"^func (Benchmark\w+)\(b \*testing\.B\)", src, re.M))
     assert declared == set(ptw.CANARY_BENCHES), (
         f"canary_test.go declares {sorted(declared)} but CANARY_BENCHES is "
-        f"{sorted(ptw.CANARY_BENCHES)} — the gate requires every declared "
-        "canary, so a silent divergence here either blanks the gate on every "
-        "night or halves it without saying so")
+        f"{sorted(ptw.CANARY_BENCHES)} — a canary this module does not "
+        "recognise would be judged as an ordinary product benchmark")
+
+    # Split the header comment into one block per canary and read its role.
+    blocks, current = {}, None
+    for line in src.splitlines():
+        if not line.startswith("//"):
+            continue
+        text = line.lstrip("/").strip()
+        match = re.match(r"^(Benchmark\w+)\s+[—-]\s*(.*)$", text)
+        if match:
+            current = match.group(1)
+            blocks[current] = match.group(2)
+        elif current:
+            blocks[current] += " " + text
+    assert set(blocks) == declared, (
+        f"the doc comment documents {sorted(blocks)} but the file declares "
+        f"{sorted(declared)} — a canary with no documented role cannot be "
+        "classified, and guessing is how the gate came to include an "
+        "informational probe in the first place")
+
+    gating = {b for b, doc in blocks.items() if "GATING:" in doc}
+    informational = {b for b, doc in blocks.items() if "INFORMATIONAL ONLY" in doc}
+    assert gating and informational, "expected both roles to be documented"
+    assert not (gating & informational), (
+        f"{sorted(gating & informational)} is documented as both — the source "
+        "of truth contradicts itself")
+    assert gating == set(ptw.GATING_CANARIES), (
+        f"canary_test.go marks {sorted(gating)} as GATING but GATING_CANARIES "
+        f"is {sorted(ptw.GATING_CANARIES)}. Too wide and a night is discarded "
+        "for jitter the harness calls healthy; too narrow and a real "
+        "measurement failure passes as a good night.")
+    assert set(ptw.GATING_CANARIES) <= set(ptw.CANARY_BENCHES)
 
 
 def test_gate_rejects_a_night_whose_canary_moved():
@@ -1364,4 +1401,68 @@ def test_judgeable_is_threshold_dependent_and_that_is_deliberate():
         "BenchmarkAlpha": False}
     assert ptw.judgeable(nights, ["BenchmarkAlpha"], 1.0, 2) == {
         "BenchmarkAlpha": True}
+
+
+# ── 8. FIXES FOR THE SEVENTH REVIEW ROUND ─────────────────────────────────
+
+def test_counterfactual_rows_distinguish_no_fires_from_no_answer():
+    """⛔ The governing rule, one level down, in the table that will pick the
+    real threshold.
+
+    `fires()` returns `{}` both when the rule ran clean and when it could not
+    produce an answer, and every row printed `0`. Two measured shapes: a
+    two-night series makes every `K=3` row arithmetically unreachable, and a
+    series whose same-night re-runs straddle 3% reads "5%: 0, 3%: 0, 2%: 0,
+    1%: 1" — from which a maintainer concludes "3% buys nothing, go to 2%",
+    when at 3% and 2% the rule answered nothing at all.
+    """
+    nights = [_run("2026-08-20", 1, 4.0), _run("2026-08-20", 2, 2.0),
+              _run("2026-08-21", 3, 4.0), _run("2026-08-21", 4, 2.0)]
+    rows = {(t, k): (fired, blind) for t, k, fired, blind
+            in ptw.counterfactual_thresholds(nights, ["BenchmarkAlpha"],
+                                             ptw.GAP_BREAK)}
+    assert rows[(5.0, 2)] == ({}, [])                       # ran, found nothing
+    assert rows[(3.0, 2)] == ({}, ["BenchmarkAlpha"])       # answered nothing
+    assert rows[(1.0, 2)][0] == {"BenchmarkAlpha": "2026-08-21"}
+    body = ptw.render(ptw.decide(nights))
+    assert "| 3% | 2 | **n/a** | **1/1** |" in body
+    assert "| 5% ← pinned | 2 | 0 | — |" in body
+
+
+def test_a_two_night_series_marks_every_k3_row_unreachable():
+    nights = [_run("2026-08-20", 1, 0.3), _run("2026-08-21", 2, 0.4)]
+    rows = {(t, k): blind for t, k, _f, blind
+            in ptw.counterfactual_thresholds(nights, ["BenchmarkAlpha"],
+                                             ptw.GAP_BREAK)}
+    assert all(rows[(t, 3)] == ["BenchmarkAlpha"] for t in (5.0, 3.0, 2.0, 1.0))
+    assert all(rows[(t, 2)] == [] for t in (5.0, 3.0, 2.0, 1.0))
+
+
+def test_the_gating_canary_column_carries_the_measured_sign():
+    """⛔ A wrong number rendering perfectly: `max(abs(...))` printed a canary
+    measured at −0.12% as `+0.12%`, asserting main was SLOWER on the control
+    when it was faster — beside an informational column carrying the true sign.
+    For a control canary the direction is the diagnostic."""
+    night = _run("2026-08-20", 1, 1.0)
+    night.canary_pct["BenchmarkControlCanaryCPU"] = -0.12
+    night.canary_pct["BenchmarkControlCanarySleep"] = -0.09
+    assert night.canary_deviation_pct == -0.12
+    row = [l for l in ptw.render(ptw.decide([night])).splitlines()
+           if l.startswith("| 2026-08-20 ")][0]
+    assert "-0.12%" in row
+    assert "+0.12%" not in row
+    # and the gate still compares MAGNITUDE, so a negative excursion gates
+    night.canary_pct["BenchmarkControlCanaryCPU"] = -4.0
+    counts, reason = ptw.gate_verdict(night, 1.0)
+    assert counts is False
+    assert "-4.00%" in reason
+
+
+def test_the_real_dataset_renders_the_canary_signs_it_measured():
+    nights = {n.night_utc: n for n in ptw.nights_from_dataset(DATASET)}
+    # 2026-08-17 measured CPU -0.12 / Sleep -0.09 (see nights.json)
+    assert nights["2026-08-17"].canary_deviation_pct == -0.12
+    row = [l for l in ptw.render(ptw.decide(list(nights.values()))).splitlines()
+           if l.startswith("| 2026-08-17 ")][0]
+    assert "| -0.12% | Sleep -0.09% |" in row
 

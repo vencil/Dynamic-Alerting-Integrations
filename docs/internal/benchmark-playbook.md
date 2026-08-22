@@ -359,7 +359,7 @@ residue 完整清單留在 artifact 供稽核，但**不整份貼進 step summar
 | 判定 | 意思 |
 |---|---|
 | `FINDINGS` | ≥1 支在**連續 2 個計數日曆夜**比值 > 5% |
-| `CLEAR` | ⛔ **規則跑得起來**（≥1 支確實有連續 2 夜的讀數）**且無人超標** |
+| `CLEAR` | ⛔ **規則跑得起來**（≥1 支確實湊得出連續 2 夜的答案）**且無人達成持續判準**。⚠️ 不等於「沒有任何一夜超標」——單夜超標但沒連續的讀數會列在「Over the threshold, but not sustained」 |
 | `INCONCLUSIVE` | 沒有夜被計數／沒有 bench 有分母／**沒有任何一支湊得出連續 2 夜** ⛔ **不是 CLEAR** |
 
 ⛔ 第三個 `INCONCLUSIVE` 條件是外部 review 抓到的缺陷，而它牴觸 ADR-032 §待決 6 的明文：
@@ -376,6 +376,8 @@ residue 完整清單留在 artifact 供稽核，但**不整份貼進 step summar
 - **Benchmarks the rule could NOT judge**：湊不出連續 K 夜讀數的那些。⛔ 沒判 ≠ 乾淨。
 - **Over the threshold, but not sustained**：超過門檻但沒連續的讀數。**不是** finding，列出來的理由是「報告從不提及的讀數，與從未發生的讀數無法區分」——六夜資料裡這一節會列出 #1497 那支的 +25.02%。
 - **Counterfactuals**：門檻 5/3/2/1% × K=2/3、閘門 0.5/1/2%。§待決 5 要的 2–4 週實測分布由此累積，不需另寫收集程式。
+  ⛔ **`not judgeable` 欄要先看。** `fires` 回空集合有兩種意思——「跑了沒發現」與「根本答不出來」。標 **n/a** 的列是後者，**不得讀成 0 fires**。判得動與否**隨門檻改變**（同夜多次執行跨在某個門檻兩側時該夜無解），所以逐列不同。實測過的誤讀形狀：某序列印「5%: 0、3%: 0、2%: 0、1%: 1」，讀者會得出「收緊到 3% 沒好處、要下到 2%」——而 3% 與 2% 其實一個答案都沒產生。
+- **canary 兩欄**：`canary (gating)` 只有 CPU 那支且**帶正負號**（方向本身是診斷資訊：thermal throttle vs frequency boost）；閘門比的是絕對值。`canary (info)` 是 Sleep，不參與准駁。
 
 **⚠️ 三件不要誤讀的事**
 

@@ -288,13 +288,18 @@ class Night:
         `go test -bench` output — a `-bench` filter that stops matching, a
         renamed function — never enters the payload in any form.
 
-        ⚠️ This deliberately requires the DECLARED set, which makes removing a
-        canary from the harness a loud failure rather than a silent halving of
-        the gate. `tests/dx/test_paired_trend_watch.py` pins `CANARY_BENCHES`
-        against `bench-canary/canary_test.go`, so the two cannot drift apart
-        quietly; changing the instrumentation means changing both, in a
-        reviewed commit. That is the same deliberate friction
-        `.github/bench-reference.yaml` uses for the reference pin.
+        ⚠️ This requires the GATING set, not every declared canary — an
+        informational canary going missing must not discard a night.
+
+        ⛔ CORRECTION: this docstring used to say "the DECLARED set" and cite
+        the `CANARY_BENCHES` pin as the friction that keeps it safe. Both
+        halves were wrong after the gating split, and wrong in a directive way:
+        they told the next person the pin covers the set that gates. It did
+        not. Adding a third GATING canary to `canary_test.go` would have forced
+        an update to `CANARY_BENCHES` — and silently demoted the new canary to
+        informational. `test_canary_roles_match_the_real_benchmark_source` now
+        pins BOTH sets, reading each canary's role out of the Go doc comment
+        ("GATING:" vs "INFORMATIONAL ONLY"), so neither can drift quietly.
         """
         seen = set(self.ratios_pct) | set(self.canary_pct) | set(self.inconclusive)
         return sorted(GATING_CANARIES - seen)
@@ -313,11 +318,18 @@ class Night:
         was counted. Half the gate's instrumentation had failed and the page
         said so nowhere. The gate now consults both properties.
         """
-        readings = [abs(v) for b, v in self.canary_pct.items()
+        readings = [v for b, v in self.canary_pct.items()
                     if b in GATING_CANARIES]
         if not readings:
             return None
-        return max(readings)
+        # ⛔ SIGNED, and the magnitude is taken at the comparison instead.
+        # This used to return `max(abs(...))`, so a canary measured at −0.12%
+        # rendered as `+0.12%` — the page asserting main was SLOWER on the
+        # control when it was faster, next to an informational column carrying
+        # the true sign. For a control canary the direction is the diagnostic
+        # (thermal throttle vs frequency boost), and "a wrong number that
+        # renders correctly" is this module's own worst case.
+        return max(readings, key=abs)
 
     @property
     def informational_canary_pct(self):
@@ -509,16 +521,16 @@ def gate_verdict(night, gate_pct):
         # different shapes (CPU-bound and sleep-bound), so they are not
         # substitutes for one another.
         rest = ("" if deviation is None else
-                f" — the remaining gating canary read {deviation:.2f}%, which "
+                f" — the remaining gating canary read {deviation:+.2f}%, which "
                 "is evidence about that canary only, not about the night")
         return False, ("control canary not established: "
                        + ", ".join(broken) + rest)
     if deviation is None:
         return False, ("no control-canary reading — the gate cannot be "
                        "evaluated, so this night is not counted")
-    if deviation > gate_pct:
-        return False, (f"control canary deviated {deviation:.2f}% "
-                       f"(gate {gate_pct:.2f}%) — paired measurement suspect")
+    if abs(deviation) > gate_pct:
+        return False, (f"control canary deviated {deviation:+.2f}% "
+                       f"(gate ±{gate_pct:.2f}%) — paired measurement suspect")
     return True, None
 
 
@@ -972,19 +984,37 @@ def _pct(value):
     return f"{value:+.2f}%"
 
 
-def counterfactual_thresholds(nights, benches, gate_pct, gap):
+def counterfactual_thresholds(nights, benches, gap):
     """What each candidate threshold WOULD have opened, on this same series.
 
     ADR-032 §待決 5 pinned 5% "先維持" and asked for two-to-four weeks of real
     distribution before deciding. This is that data, produced every run at no
     extra measurement cost — the alternative is deciding the threshold from the
     experiment harness's median, which the ADR explicitly warns against.
+
+    ⛔ EACH ROW CARRIES ITS OWN JUDGEABILITY. `fires()` returns `{}` both when
+    the rule ran and found nothing and when it could not produce an answer at
+    all, and printing `0` for both is this module's governing failure one level
+    down — in the one table ADR-032 §待決 5 designates as the data that will
+    pick the real threshold.
+
+    Two ways it bites, both measured. A two-night series makes every `K=3` row
+    arithmetically unreachable, and all four printed `0`. And since
+    `judgeable()` became threshold-dependent, a series whose same-night re-runs
+    straddle 3% reads "5%: 0, 3%: 0, 2%: 0, 1%: 1" — from which a maintainer
+    concludes "tightening to 3% buys nothing, go to 2%", when at 3% and 2% the
+    rule produced no answer whatsoever.
+
+    (`gate_pct` used to be a parameter here and was never read — the vestige of
+    the same intent, removed rather than left as decoration.)
     """
     rows = []
     for threshold in COUNTERFACTUAL_THRESHOLDS:
         for k in (2, 3):
             fired = fires(nights, benches, threshold, k, gap=gap)
-            rows.append((threshold, k, fired))
+            can_judge = judgeable(nights, benches, threshold, k, gap=gap)
+            rows.append((threshold, k, fired,
+                         sorted(b for b, ok in can_judge.items() if not ok)))
     return rows
 
 
@@ -1179,15 +1209,31 @@ def render(result):
     lines.append("")
     lines.append("**Threshold × consecutive nights**")
     lines.append("")
-    lines.append("| threshold | K | fires | benchmarks |")
-    lines.append("|---|---|---|---|")
-    for threshold, k, fired in counterfactual_thresholds(
-            nights, result["benches"], result["gate_pct"], result["gap"]):
+    lines.append("| threshold | K | fires | not judgeable | benchmarks |")
+    lines.append("|---|---|---|---|---|")
+    total = len(result["benches"])
+    for threshold, k, fired, blind in counterfactual_thresholds(
+            nights, result["benches"], result["gap"]):
         names = ", ".join(f"`{b.replace('Benchmark', '')}`@{d[5:]}"
                           for b, d in sorted(fired.items())) or "—"
         marker = " ← pinned" if (threshold == result["threshold_pct"]
                                  and k == result["k"]) else ""
-        lines.append(f"| {threshold:.0f}%{marker} | {k} | {len(fired)} | {names} |")
+        # ⛔ A row where NOTHING was judgeable does not print `0 fires`; `0`
+        # there means "the rule ran and found nothing", which is the opposite
+        # of what happened.
+        count = "**n/a**" if blind and len(blind) == total else str(len(fired))
+        blind_cell = ("—" if not blind else
+                      f"**{len(blind)}/{total}**" if len(blind) == total
+                      else f"{len(blind)}/{total}")
+        lines.append(f"| {threshold:.0f}%{marker} | {k} | {count} "
+                     f"| {blind_cell} | {names} |")
+    lines.append("")
+    lines.append("⛔ `not judgeable` is how many benchmarks the rule could not "
+                 "answer for at that `(threshold, K)` — no run of K consecutive "
+                 "counted nights that produced an answer. A row reading "
+                 "**n/a** judged nothing at all, and must not be read as "
+                 "\"0 fires\". Judgeability is threshold-dependent, so it can "
+                 "differ row to row.")
     lines.append("")
 
     lines.append("**Canary gate**")
