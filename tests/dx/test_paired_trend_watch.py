@@ -1335,3 +1335,33 @@ def test_the_informational_canary_is_actually_rendered():
     assert night.canary_deviation_pct < 1.0
     assert night.informational_canary_pct == {"BenchmarkControlCanarySleep": 9.0}
 
+
+def test_the_unjudgeable_section_describes_the_predicate_it_actually_uses():
+    """⛔ Self-caught: changing `judgeable()` from a presence check to an
+    agreement check left the rendered explanation describing the OLD predicate.
+
+    In the case below every night carried a reading, so "never had K
+    consecutive counted nights carrying a reading" was simply false about the
+    rows printed underneath it. A wrong explanation attached to a correct
+    verdict is still a wrong page.
+    """
+    nights = [_run("2026-08-20", 1, 5.1), _run("2026-08-20", 2, 4.9),
+              _run("2026-08-21", 3, 5.1), _run("2026-08-21", 4, 4.9)]
+    result = ptw.decide(nights, threshold_pct=5.0, k=2)
+    assert result["unjudgeable"] == ["BenchmarkAlpha"]
+    body = ptw.render(result)
+    assert "carrying a reading, so the sustained rule" not in body
+    assert "the runs disagreed about" in body
+    assert "THRESHOLD-DEPENDENT" in body
+    # every night DID carry a reading — the old wording would have been a lie
+    assert all("BenchmarkAlpha" in n.ratios_pct for n in nights)
+
+
+def test_judgeable_is_threshold_dependent_and_that_is_deliberate():
+    nights = [_run("2026-08-20", 1, 5.1), _run("2026-08-20", 2, 4.9),
+              _run("2026-08-21", 3, 5.1), _run("2026-08-21", 4, 4.9)]
+    assert ptw.judgeable(nights, ["BenchmarkAlpha"], 5.0, 2) == {
+        "BenchmarkAlpha": False}
+    assert ptw.judgeable(nights, ["BenchmarkAlpha"], 1.0, 2) == {
+        "BenchmarkAlpha": True}
+

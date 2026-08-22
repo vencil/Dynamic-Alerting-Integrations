@@ -1096,9 +1096,12 @@ def render(result):
     if result.get("unjudgeable"):
         lines.append("### Benchmarks the rule could NOT judge")
         lines.append("")
-        lines.append(f"These never had **{result['k']}** consecutive counted "
-                     "nights carrying a reading, so the sustained rule was not "
-                     "in a position to return an answer for them:")
+        lines.append(f"These never produced an answer on **{result['k']}** "
+                     "consecutive counted nights, so the sustained rule was not "
+                     "in a position to judge them. A night produces no answer "
+                     "when it carried no reading for the benchmark, or when it "
+                     "was measured more than once and the runs disagreed about "
+                     f"the **{result['threshold_pct']:.2f}%** threshold:")
         lines.append("")
         for bench in result["unjudgeable"]:
             lines.append(f"- `{bench}`")
@@ -1106,6 +1109,11 @@ def render(result):
         lines.append("⛔ Not judged is not clean. ADR-032 §待決 6: the nights "
                      "before the rule can fire **must** report 無法評估, never "
                      "無發現.")
+        lines.append("")
+        lines.append("⚠️ This list is THRESHOLD-DEPENDENT, so it does not "
+                     "contradict a counterfactual row below that shows a fire "
+                     "for the same benchmark: runs that straddle one threshold "
+                     "can agree about another.")
         lines.append("")
 
     if result.get("over_not_sustained"):
