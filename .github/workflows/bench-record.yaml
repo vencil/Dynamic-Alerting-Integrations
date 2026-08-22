@@ -220,6 +220,31 @@ jobs:
           } | sed 's|^\./||' | sort -u > .build/paired/closure-files.txt
           echo "workload closure: $(wc -l < .build/paired/closure-files.txt) file(s) — glob '${GLOB}' on both sides + $(wc -l < .build/paired/closure-helpers.txt) enumerated helper(s)"
 
+          # ⛔ A closure member that exists on NEITHER side is a broken closure
+          # definition, not a measurement. The glob half can only name files
+          # that exist; the hand-enumerated `helpers` half is never checked, so
+          # one typo there produces two lies at once, both of which render
+          # normally: `cmp -s` fails on two absent files and writes a PHANTOM
+          # drift line, and each side skips the digest record, so the digest is
+          # computed over a SILENTLY SMALLER closure while still reporting
+          # `checked`. Measured on two simulated trees: a typo'd helper gave
+          # `status=checked, n_files=2` for a closure claiming 3 files.
+          #
+          # Fail closed: leave BOTH output files absent so the ratio tool
+          # records `unreadable` on each. ⛔ Not an empty file — an empty
+          # drift file means "checked, nothing moved", which is the false
+          # all-clear this whole line keeps re-learning to avoid.
+          missing=""
+          while read -r rel; do
+            if [ ! -f "$REF_APP/$rel" ] && [ ! -f "$MAIN_APP/$rel" ]; then
+              missing="${missing}${missing:+, }${rel}"
+            fi
+          done < .build/paired/closure-files.txt
+          if [ -n "$missing" ]; then
+            echo "::warning::workload closure member(s) absent from BOTH sides: ${missing} — the closure definition in .github/bench-reference.yaml names a file that does not exist (typo, or deleted without updating the pin). Leaving drift and digest absent so tonight records both as not established, not as clean."
+            exit 0
+          fi
+
           : > .build/paired/workload-drift.txt
           : > .build/paired/workload-digest.tsv
           # `cmp -s` is non-zero for "differs" AND for "missing on one side",
@@ -354,7 +379,19 @@ jobs:
           set -uo pipefail
           echo "::error::paired measurement unusable (${REASON}) — tonight is INCONCLUSIVE for the paired series. The nightly baseline came from ${BASELINE_FROM} and is unaffected. See ADR-032 §待決 3."
           mkdir -p .build
-          printf '{\n  "schema": "bench-paired/v2",\n  "reference_tag": "%s",\n  "reference_sha": "%s",\n  "status": "INCONCLUSIVE",\n  "reason": "%s"\n}\n' \
+          # ⛔ Same schema string must mean the same shape. The success path
+          # (pair_bench_ratio.py) always emits `workload_drift` and
+          # `workload_digest`; this fallback emitted neither, so a v2 consumer
+          # had to handle two structures under one schema and could not tell
+          # "absent field" from "checked, nothing moved".
+          #
+          # ⚠️ The asymmetry is NOT new in v2 — the v1 fallback omitted
+          # `workload_drift` the same way (see 0da92961). PR-A only added a
+          # second field to the same hole. Bumping the schema is the moment to
+          # close it, so both fields are emitted here as `unreadable`: this
+          # path never ran the closure comparison, and `unreadable` is the
+          # state that says exactly that.
+          printf '{\n  "schema": "bench-paired/v2",\n  "reference_tag": "%s",\n  "reference_sha": "%s",\n  "status": "INCONCLUSIVE",\n  "reason": "%s",\n  "workload_drift": {\n    "status": "unreadable",\n    "files": []\n  },\n  "workload_digest": {\n    "status": "unreadable",\n    "sides": {},\n    "files": []\n  }\n}\n' \
             "${REF_TAG}" "${REF_SHA}" "${REASON}" > .build/bench-paired.json
           tail -n 40 .build/paired/bench.err.log 2>/dev/null || true
 

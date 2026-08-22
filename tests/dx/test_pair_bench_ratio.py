@@ -469,6 +469,24 @@ def test_read_digest_blank_lines_are_skipped_not_fatal(tmp_path: Path):
     # `checked` digest built from part of the input, which is exactly the
     # partial digest this function must never produce.
     (_digest_tsv(*_REC) + "reference\tconfig_test.go\n", "bad line after a valid set"),
+    # ⛔ Shape-check the hash itself, not just its presence. The caller builds
+    # these with `sha256sum | cut -d' ' -f1`; a pipeline that breaks while still
+    # emitting a line (an error string, a truncated read, a `cut` on the wrong
+    # field) used to sail through — measured before the guard,
+    # `…\tnot-a-hash` returned `status: checked` with a normal-looking digest,
+    # which is the "wrong number that renders correctly" failure this whole
+    # line keeps re-learning. Both halves of the shape are pinned because a
+    # length-only check passes `zzzz…` and a hex-only check passes `abc`.
+    ("reference\tconfig_test.go\tnot-a-hash\n"
+     + "main\tconfig_test.go\t" + "a" * 64 + "\n", "sha is not hex at all"),
+    ("reference\tconfig_test.go\t" + "a" * 63 + "\n"
+     + "main\tconfig_test.go\t" + "a" * 64 + "\n", "sha one char too short"),
+    ("reference\tconfig_test.go\t" + "a" * 65 + "\n"
+     + "main\tconfig_test.go\t" + "a" * 64 + "\n", "sha one char too long"),
+    ("reference\tconfig_test.go\t" + "A" * 64 + "\n"
+     + "main\tconfig_test.go\t" + "a" * 64 + "\n", "uppercase hex is not what sha256sum emits"),
+    ("reference\tconfig_test.go\t" + "a" * 63 + "g\n"
+     + "main\tconfig_test.go\t" + "a" * 64 + "\n", "right length, non-hex char"),
 ])
 def test_read_digest_malformed_is_unreadable_never_partial(
         tmp_path: Path, body: str, why: str):

@@ -204,6 +204,15 @@ def read_workload_drift(path: pathlib.Path | None) -> dict:
 
 _DIGEST_SIDES = ("reference", "main")
 
+# ⛔ Shape-check the hash, not just its presence. `sha256sum | cut -d' ' -f1`
+# yields 64 lowercase hex characters; anything else means the caller's pipeline
+# broke in a way that still produced a line — e.g. an error string, a truncated
+# read, or a `cut` that took the wrong field. Accepting it would hash the
+# garbage into a digest that renders exactly like a real one and gets compared
+# across nights. Measured before this guard: `reference\tconfig_test.go\t
+# not-a-hash` returned `status: checked` with a perfectly normal-looking digest.
+_SHA256_RE = re.compile(r"[0-9a-f]{64}")
+
 
 def read_workload_digest(path: pathlib.Path | None) -> dict:
     """Aggregate the caller's per-file hashes into one scalar per side.
@@ -251,9 +260,11 @@ def read_workload_digest(path: pathlib.Path | None) -> dict:
         if not line:
             continue
         parts = line.split("\t")
-        if len(parts) != 3 or parts[0] not in per_side or not all(parts):
+        if (len(parts) != 3 or parts[0] not in per_side or not all(parts)
+                or not _SHA256_RE.fullmatch(parts[2])):
             print(f"[pair_bench_ratio] --workload-digest {path}:{lineno} is not "
                   f"`<side>\\t<path>\\t<sha256>` with side in {list(_DIGEST_SIDES)} "
+                  f"and a 64-hex sha "
                   f"— recording the digest as unreadable rather than digesting "
                   f"part of the closure", file=sys.stderr)
             return {"status": "unreadable", "sides": {}, "files": []}

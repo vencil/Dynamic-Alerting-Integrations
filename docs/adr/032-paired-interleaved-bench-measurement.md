@@ -232,6 +232,21 @@ updated_at: 2026-08-16
 
 ⚠️ 仍然是啟發式：`helpers` 是手工列舉，列舉之外的輔助函式改了依舊看不到；digest 只是把同一份證據壓成會變的量，不會讓範圍變成證明。三態（`not-requested` / `checked` / `unreadable`）與清單同一套紀律——⛔ 讀不到就是讀不到，不得讀成乾淨。
 
+#### 外部 review 補上的四道「壞輸入被讀成乾淨」缺口
+
+PR-A 的第一版把三態紀律寫進了 Python 端，卻在**輸入邊界**留了四個洞。四個都不會讓任何畫面出錯——這正是它們危險的原因，也正是本 ADR 反覆在學的同一課：**會正常 render 的錯誤數字，比缺數字更糟**。
+
+| 缺口 | 修正前的實測行為 | 修正後 |
+|---|---|---|
+| `helpers` 有 typo（或兩側都刪了該檔） | 幽靈 drift 一行 + digest 靜默縮小；模擬兩棵樹得 `status=checked, n_files=2`，而閉包宣稱 3 檔 | 夜跑在建輸出檔前檢查每個閉包成員至少存在於一側，否則兩份檔案都不產出 → 兩者皆 `unreadable` |
+| `sha` 欄位不是 64-hex | `…\tnot-a-hash` 得到 `status: checked` 與一個長相完全正常的 digest | 形狀驗證；壞行整份 `unreadable`，絕不部分 digest |
+| INCONCLUSIVE 退路 | 只有 `schema`/`status`/`reason`，**同一個 schema 兩種結構**；consumer 無法分辨「欄位缺席」與「檢查過、沒動」 | 補上 `workload_drift` + `workload_digest`，兩者皆 `unreadable`（該路徑確實沒跑過閉包比對）<br>⚠️ 此不對稱**非 v2 引入**：v1 退路同樣沒有 `workload_drift`（見 `0da92961`）。bump schema 正是收掉它的時機 |
+| lint 讀不到自己的參考點 | `helpers` 寫成純量會被 `list()` 拆成字元、回報 **exit 1（violation）**；檔案非 UTF-8 直接 traceback | 型別驗證 + 捕捉 `OSError`/`UnicodeError` → 一律 exit 2（cannot check），不與 violation 混淆 |
+
+⛔ **四個洞的共同形狀**：都是「量不到」被寫成「量了沒事」。前三個在資料邊界，第四個在**判定者自己**身上——一支自己壞掉時會回報 violation 的 lint，比沒有 lint 更誤導。
+
+⛔ **這支 lint 當初沒有任何行為測試**（只有 allowlist 與 exit-code 通用掃描指到它），第四個洞因此撐到 review 才被抓。已補 `tests/lint/test_check_workload_closure_drift.py`，每個案例釘的都是**離開碼**——三個碼就是全部的契約，把任兩個混在一起就是這一類 bug。該測試檔隨即又抓出第五個：錯誤訊息用的 `Path.relative_to(REPO)` 對 repo 外路徑會丟 `ValueError`，而它正好長在「本該優雅降級」的分支上。
+
 ### 長期正解：把基準測試抽成獨立模組
 
 對照測試之所以能是乾淨的對照，正是因為它自成一個模組、**兩側共用同一份編譯出來的執行檔**——交錯執行腳本只編譯它一次，把同一個檔案跑進兩側。主基準測試若也這樣抽出去，分岔在結構上就不存在了。

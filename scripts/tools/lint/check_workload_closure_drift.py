@@ -59,6 +59,22 @@ WORKFLOW = REPO / ".github" / "workflows" / "bench-workload-effect.yaml"
 _LIST_RE = re.compile(r"'((?:[A-Za-z0-9_]+_test\.go)(?:\s+[A-Za-z0-9_]+_test\.go)*)'")
 
 
+def _rel(p: pathlib.Path) -> str:
+    """Repo-relative for readability, absolute when that is impossible.
+
+    ⛔ `Path.relative_to` RAISES for a path outside the repo, and three of the
+    four call sites are inside error branches — so the crash would land exactly
+    where the tool is supposed to be degrading gracefully, converting a clean
+    exit 2 into a traceback. Found by this file's own tests (which retarget the
+    two paths into tmp_path), not in production, where both constants are
+    always under REPO.
+    """
+    try:
+        return str(p.relative_to(REPO))
+    except ValueError:
+        return str(p)
+
+
 def _fail(msg: str) -> int:
     print(f"[workload-closure-drift] {msg}", file=sys.stderr)
     return EXIT_VIOLATION
@@ -82,24 +98,43 @@ def main() -> int:
         if not p.is_file():
             print(f"[workload-closure-drift] not a file: {p}", file=sys.stderr)
             return EXIT_CALLER_ERROR
+    # ⛔ `list()` on the raw value is not a type check: a scalar `helpers:
+    # config_test.go` becomes ['c','o','n',...] and the run reports
+    # EXIT_VIOLATION with a per-character diff — a caller error dressed up as a
+    # real finding, which is the worst of the three outcomes. Validate the
+    # shape explicitly instead. OSError/UnicodeError are caught for the same
+    # reason: an unreadable reference point is "cannot check" (2), never
+    # "checked" (0) and never "violation" (1).
     try:
         pin = yaml.safe_load(PIN.read_text(encoding="utf-8"))
-        expected = list(pin["workload_closure"]["helpers"])
-    except (yaml.YAMLError, KeyError, TypeError) as exc:
+        helpers = pin["workload_closure"]["helpers"]
+        if (not isinstance(helpers, list) or not helpers
+                or not all(isinstance(h, str) and h.strip() for h in helpers)):
+            raise TypeError(
+                "workload_closure.helpers must be a non-empty list of "
+                f"non-empty strings, got {type(helpers).__name__} "
+                f"{helpers!r} — an empty or malformed closure would make this "
+                f"lint vacuously true")
+        expected = list(helpers)
+    except (OSError, UnicodeError, yaml.YAMLError, KeyError, TypeError) as exc:
         print(f"[workload-closure-drift] {PIN} has no usable "
-              f"workload_closure.helpers ({type(exc).__name__}) — refusing to "
-              f"pass a check whose reference point is missing", file=sys.stderr)
-        return EXIT_CALLER_ERROR
-    if not expected:
-        print(f"[workload-closure-drift] {PIN} lists no helpers — an empty "
-              f"closure would make this lint vacuously true", file=sys.stderr)
+              f"workload_closure.helpers ({type(exc).__name__}: {exc}) — "
+              f"refusing to pass a check whose reference point is missing",
+              file=sys.stderr)
         return EXIT_CALLER_ERROR
 
-    text = WORKFLOW.read_text(encoding="utf-8")
+    try:
+        text = WORKFLOW.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        print(f"[workload-closure-drift] cannot read "
+              f"{_rel(WORKFLOW)} ({type(exc).__name__}) — a lint "
+              f"that cannot read its subject has not checked it",
+              file=sys.stderr)
+        return EXIT_CALLER_ERROR
     found = [m.group(1).split() for m in _LIST_RE.finditer(text)]
     if not found:
         return _fail(
-            f"found no literal helper list in {WORKFLOW.relative_to(REPO)}. Either "
+            f"found no literal helper list in {_rel(WORKFLOW)}. Either "
             f"the duplication is gone (delete this lint and say so) or the shape "
             f"changed and this check is now vacuous — a lint that matches nothing "
             f"passes forever, which is worse than not having it.")
@@ -107,7 +142,7 @@ def main() -> int:
     bad = [got for got in found if got != expected]
     if bad:
         return _fail(
-            f"{WORKFLOW.relative_to(REPO)} disagrees with {PIN.relative_to(REPO)}:\n"
+            f"{_rel(WORKFLOW)} disagrees with {_rel(PIN)}:\n"
             f"  pin file : {expected}\n"
             + "".join(f"  workflow : {got}\n" for got in bad)
             + "  ⛔ A helper missing from one copy stays pinned to the reference\n"
@@ -116,7 +151,7 @@ def main() -> int:
               "     or change the pin file if the closure genuinely moved.")
 
     print(f"[workload-closure-drift] {len(found)} literal cop{'y' if len(found) == 1 else 'ies'} "
-          f"in {WORKFLOW.relative_to(REPO)} agree with {PIN.relative_to(REPO)} "
+          f"in {_rel(WORKFLOW)} agree with {_rel(PIN)} "
           f"({len(expected)} helpers)")
     return EXIT_OK
 

@@ -256,7 +256,10 @@ repos:
         language: python
         additional_dependencies: [pyyaml]
         pass_filenames: false
-        files: ^\.github/(bench-reference\.yaml|workflows/bench-workload-effect\.yaml)$
+        # The lint itself is in scope: editing its parser or its matching rule
+        # is exactly when you want the gate to run, and without this a change
+        # that made it match nothing would land green.
+        files: ^(\.github/(bench-reference\.yaml|workflows/bench-workload-effect\.yaml)|scripts/tools/lint/check_workload_closure_drift\.py)$
 
       - id: doc-map-check
         name: Doc map coverage
