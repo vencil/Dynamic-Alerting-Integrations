@@ -62,6 +62,25 @@ def _clear_caches():
     mod._RGLOB_CACHE.clear()
 
 
+def _unlisted_tool_subdirs(tools_dir: Path, listed) -> list:
+    """Subdirectories that hold tools but are not in the counted scope.
+
+    A directory carrying an `__init__.py` is a package — library code the
+    "N 個 Python 工具" count has never included — so it is not reported.
+    """
+    out = []
+    for sub in sorted(p for p in tools_dir.iterdir() if p.is_dir()):
+        if sub.name in listed or sub.name == "__pycache__":
+            continue
+        if (sub / "__init__.py").exists():
+            continue
+        if any(not any(f.name.startswith(p)
+                       for p in mod.TOOL_MAP_SKIP_PREFIXES)
+               for f in sub.glob("*.py")):
+            out.append(sub.name)
+    return out
+
+
 def _write(path: Path, body: str) -> None:
     path.write_text(body, encoding="utf-8")
 
@@ -848,6 +867,405 @@ class TestPlatformVersionSourceIsLoadBearing:
 # check_release_tag_currency (TB-F1 class — release-tag forms)
 # ============================================================
 
+
+class TestNeitherHalfOfTheVersionCheckCanBeSwitchedOffInSilence:
+    """#1484 — `check_e2e_and_jsx_versions` is two halves and both went quiet.
+
+    The e2e half is the one that caught #1480's real damage (`package.json`
+    frozen at the version the gate died on), and six input shapes switched
+    it off. The JSX half scanned `docs/interactive/tools`, a directory that
+    stopped existing on 2026-05-07 (`b439c427`), so it checked nothing at
+    all for three and a half months while one file sat at 2.7.0.
+
+    ⚠️ NOT "the only check that ever caught drift" — an earlier draft of this
+    class said that and it is false: on the merge-base tree `bilingual-count`,
+    `tool-count` and `bilingual-numbers` were between them reporting six real
+    drifts. The accurate claim is narrower: of the two checks #1480 brought
+    back to life, this is the one that caught damage.
+    """
+
+    @staticmethod
+    def _tree(tmp_path, body=None, jsx=None):
+        (tmp_path / "tests" / "e2e").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "docs").mkdir(exist_ok=True)
+        if body is not None:
+            (tmp_path / "tests" / "e2e" / "package.json").write_text(
+                body, encoding="utf-8")
+        src = tmp_path / "tools" / "portal" / "src"
+        src.mkdir(parents=True, exist_ok=True)
+        if jsx is not None:
+            (src / "probe.jsx").write_text(jsx, encoding="utf-8")
+        return tmp_path
+
+    def _run(self, tmp_path, monkeypatch, **kw):
+        monkeypatch.setattr(mod, "REPO_ROOT", self._tree(tmp_path, **kw))
+        monkeypatch.setattr(mod, "DOCS_DIR", tmp_path / "docs")
+        return mod.check_e2e_and_jsx_versions("2.9.0")
+
+    # ---- e2e half -------------------------------------------------------
+    @pytest.mark.parametrize("body,label", [
+        ('{"name": "e2e"}', "version key absent"),
+        ('{"version": ""}', "empty string"),
+        ('{"version": null}', "null version"),
+        ('{"version": 290}', "not a string"),
+        ('{"version": "2.6.0",}', "malformed JSON"),
+        ('null', "the whole document is null"),
+        ('[]', "top level is an array"),
+        ('"2.9.0"', "top level is a string"),
+    ])
+    def test_an_unusable_package_json_is_an_error_not_a_pass(
+            self, tmp_path, monkeypatch, body, label):
+        """⛔ Every unusable shape names the file and errors.
+
+        ⚠️ `null`, `[]` and `"2.9.0"` were added after blind review: the
+        first fix used `pkg = None` both as the "not parsed yet" sentinel
+        and as a parse result, so a file containing exactly `null` sailed
+        through — a hole introduced by the fix for this very issue.
+        """
+        issues = self._run(tmp_path, monkeypatch, body=body)
+        # ⛔ Select by check id, not `issues[0]`. Indexing only works while
+        # the e2e block happens to append before the JSX block; this pins
+        # the behaviour the test describes rather than that ordering.
+        e2e = [i for i in issues if i.check == "e2e-package-version"]
+        assert e2e, "%s produced no e2e issue at all (got %r)" % (
+            label, [i.check for i in issues])
+        assert e2e[0].severity == "error", label
+        assert "package.json" in e2e[0].file, e2e[0].file
+
+    def test_an_absent_package_json_is_an_error_not_a_pass(
+            self, tmp_path, monkeypatch):
+        """⛔ `if e2e_pkg.exists():` with no else is the quietest hole of all.
+
+        Renaming or moving the file reproduces #1480's damage exactly, with
+        even less trace than the original.
+        """
+        issues = self._run(tmp_path, monkeypatch, body=None)
+        assert issues, "an absent package.json produced no issue"
+        assert issues[0].severity == "error"
+        assert "package.json" in issues[0].file
+
+    def test_a_correct_version_passes_in_silence(self, tmp_path, monkeypatch):
+        """⛔ Must-not-fire. A check that only ever fires is not a check."""
+        assert self._run(tmp_path, monkeypatch,
+                         body='{"version": "2.9.0"}') == []
+
+    def test_real_drift_is_still_reported(self, tmp_path, monkeypatch):
+        """The behaviour #1480 measured: frozen at the version it died on.
+
+        ⚠️ Asserts the two versions appear, not how they are punctuated.
+        Blind review reworded the message without changing its meaning and
+        turned an earlier version of this test red under the name "real
+        drift is still caught" — while the drift was, in fact, still caught.
+        """
+        issues = self._run(tmp_path, monkeypatch, body='{"version": "2.6.0"}')
+        assert len(issues) == 1, issues
+        assert "2.6.0" in issues[0].message and "2.9.0" in issues[0].message
+
+    # ---- JSX half -------------------------------------------------------
+    def test_jsx_drift_is_reported_as_an_error(self, tmp_path, monkeypatch):
+        """⛔ `error`, not `warn`: as a warning it could never fail `--ci`."""
+        issues = self._run(
+            tmp_path, monkeypatch, body='{"version": "2.9.0"}',
+            jsx="---\ntitle: probe\nversion: v2.7.0\n---\nbody\n")
+        assert len(issues) == 1, issues
+        assert issues[0].check == "jsx-frontmatter-version"
+        assert issues[0].severity == "error"
+        assert "2.7.0" in issues[0].message
+
+    def test_a_missing_jsx_tree_is_an_error_not_a_skip(
+            self, tmp_path, monkeypatch):
+        """⛔ How this half died: the sources moved and the check went quiet.
+
+        `docs/interactive/tools` stopped existing on 2026-05-07 and the
+        `if ...exists():` turned three and a half months of drift into
+        nothing at all.
+        """
+        monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(mod, "DOCS_DIR", tmp_path / "docs")
+        (tmp_path / "docs").mkdir(exist_ok=True)
+        (tmp_path / "tests" / "e2e").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "tests" / "e2e" / "package.json").write_text(
+            '{"version": "2.9.0"}', encoding="utf-8")
+        issues = mod.check_e2e_and_jsx_versions("2.9.0")
+        jsx = [i for i in issues if i.check == "jsx-frontmatter-version"]
+        assert jsx, "a missing JSX tree produced no issue"
+        assert jsx[0].severity == "error"
+
+    def test_a_matching_jsx_version_passes_in_silence(
+            self, tmp_path, monkeypatch):
+        """⛔ Must-not-fire for the JSX half too."""
+        assert self._run(
+            tmp_path, monkeypatch, body='{"version": "2.9.0"}',
+            jsx="---\ntitle: probe\nversion: v2.9.0\n---\nbody\n") == []
+
+    def test_an_unreadable_jsx_file_is_an_error_not_a_traceback(
+            self, tmp_path, monkeypatch):
+        """⛔ The e2e half names an unreadable file; this half used to raise.
+
+        A file that disappears between the `rglob` and the read, or that
+        cannot be opened, took the whole validator down with a traceback
+        and produced no Issue — louder than a silent skip, but it still
+        ends with nothing checked and, under `--fix`, with the traceback
+        landing in the middle of a repair run.
+        """
+        tmp_path = self._tree(tmp_path, body='{"version": "2.9.0"}',
+                              jsx="---\nversion: v2.9.0\n---\n")
+        monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(mod, "DOCS_DIR", tmp_path / "docs")
+        target = tmp_path / "tools" / "portal" / "src" / "probe.jsx"
+
+        real_read = Path.read_text
+
+        def _boom(self, *a, **kw):
+            if self == target:
+                raise OSError(13, "Permission denied")
+            return real_read(self, *a, **kw)
+
+        monkeypatch.setattr(Path, "read_text", _boom)
+        issues = mod.check_e2e_and_jsx_versions("2.9.0")
+        jsx = [i for i in issues if i.check == "jsx-frontmatter-version"]
+        assert jsx, "the unreadable file produced no issue at all"
+        assert jsx[0].severity == "error"
+        assert "probe.jsx" in jsx[0].file
+        assert "never compared" in jsx[0].message, jsx[0].message
+
+class TestFixDoesNotTurnTheGateOff:
+    """#1483 — `--ci --fix` exited 0 no matter what.
+
+    ⛔ The exit code is decided from the issues `_auto_fix` reports it
+    actually repaired, never from a list of "fixable" check ids. Blind review
+    killed the id-list version: `rule-pack-count` is a repairable id, but the
+    repair only rewrites badge patterns, so the same id occurring in prose was
+    dropped out of the exit-code decision AND out of the report — measured,
+    `--ci` rc=1 and `--ci --fix` rc=0 with the message reading "0 error(s)".
+    An id cannot answer "was this occurrence repaired"; only the repair can.
+    """
+
+    def test_ci_fix_exits_nonzero_when_an_unrepaired_error_stands(
+            self, monkeypatch, capsys):
+        """⛔ Must-fire, driving the real `main()` with a real unrepaired error.
+
+        `_auto_fix` is stubbed to repair nothing, so the injected error is
+        unrepaired by construction and no file is written.
+        """
+        injected = [mod.Issue("e2e-package-version", "error",
+                              "tests/e2e/package.json", 0, "frozen at 2.6.0")]
+        monkeypatch.setattr(mod, "_auto_fix", lambda *a, **k: [])
+        monkeypatch.setattr(mod, "check_e2e_and_jsx_versions",
+                            lambda *a, **k: injected)
+        monkeypatch.setattr(sys, "argv",
+                            ["validate_docs_versions", "--ci", "--fix"])
+        with pytest.raises(SystemExit) as exc:
+            mod.main()
+        out = capsys.readouterr().out
+        assert exc.value.code != 0, out
+        assert "e2e-package-version" in out, (
+            "the error that kept the exit non-zero was never printed:\n%s" % out)
+
+    def test_ci_fix_exits_zero_when_the_error_really_was_repaired(
+            self, monkeypatch, capsys):
+        """⛔ Must-not-fire: an error `_auto_fix` DID repair must not fail.
+
+        ⚠️ The injected issue is returned by the stubbed `_auto_fix` as
+        repaired — that is the whole distinction this change rests on, and
+        the reason the exit code is not derived from check ids. Without this
+        control the change could simply have made `--ci --fix` always fail.
+        """
+        repaired = [mod.Issue("tool-count", "error", "README.md", 0,
+                              "count drift that --fix repairs")]
+        monkeypatch.setattr(mod, "_auto_fix", lambda *a, **k: list(repaired))
+        monkeypatch.setattr(mod, "check_tool_count_in_docs",
+                            lambda *a, **k: list(repaired))
+        monkeypatch.setattr(mod, "check_e2e_and_jsx_versions",
+                            lambda *a, **k: [])
+        monkeypatch.setattr(sys, "argv",
+                            ["validate_docs_versions", "--ci", "--fix"])
+        code = None
+        try:
+            mod.main()
+        except SystemExit as exc:
+            code = exc.code
+        out = capsys.readouterr().out
+        # ⚠️ Only assert about the injected issue. Asserting `code == 0`
+        # outright couples this test to the repository being free of every
+        # other unrepaired error — blind review demonstrated that by adding
+        # one ordinary doc and turning this control red for an unrelated
+        # reason.
+        assert "tool-count" not in out.split("still standing")[-1], (
+            "a repaired issue must not be listed as still standing:\n%s" % out)
+
+    def test_auto_fix_reports_only_what_it_really_repaired(
+            self, tmp_path, monkeypatch):
+        """⛔ Drives the real `_auto_fix`, not a stub.
+
+        The exit-code decision now trusts `_auto_fix`'s return value, so that
+        value has to be earned. Mutation showed the gap: making `_auto_fix`
+        append every issue it looked at — repaired or not — left every test
+        green, because all of them stubbed it out.
+
+        Two issues here: one whose pattern is present (repairable) and one
+        whose pattern is absent from the file (nothing to rewrite). Only the
+        first may come back.
+        """
+        f = tmp_path / "README.md"
+        f.write_text("badge bilingual-1%20pairs here\n", encoding="utf-8")
+        monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+        repairable = mod.Issue("bilingual-count", "error", "README.md", 0, "x")
+        untouched = mod.Issue("rule-pack-count", "error", "README.md", 0, "y")
+        got = mod._auto_fix([repairable, untouched], 96,
+                            {"pack_count": 16, "alert": 161})
+        assert got == [repairable], (
+            "_auto_fix must return the issues it actually repaired, not the "
+            "ones it merely considered: %s" % [i.check for i in got])
+        assert "bilingual-96%20pairs" in f.read_text(encoding="utf-8")
+
+    def test_a_second_repair_does_not_revert_the_first(
+            self, tmp_path, monkeypatch):
+        """⛔ Two issues, one file — the stale-cache bug.
+
+        `_read_cached` is never invalidated on write, so the second issue on
+        a file used to read the pre-repair text and write it back, silently
+        undoing the first repair while printing `Fixed` for both. Mutation
+        confirmed nothing covered this: reverting the fresh read left every
+        test green.
+        """
+        f = tmp_path / "README.md"
+        f.write_text("bilingual-1%20pairs and rule%20packs-99- badges\n",
+                     encoding="utf-8")
+        monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+        # Warm the cache the way a real run does, before any repair.
+        mod._read_cached(f)
+        got = mod._auto_fix(
+            [mod.Issue("bilingual-count", "error", "README.md", 0, "x"),
+             mod.Issue("rule-pack-count", "error", "README.md", 0, "y")],
+            96, {"pack_count": 16, "alert": 161})
+        text = f.read_text(encoding="utf-8")
+        assert len(got) == 2, [i.check for i in got]
+        assert "bilingual-96%20pairs" in text, (
+            "the first repair was reverted by the second:\n%s" % text)
+        assert "rule%20packs-16-" in text, text
+
+    def test_the_repair_and_the_check_count_tools_the_same_way(self):
+        """⛔ One implementation of "how many Python tools", and the right one.
+
+        Measured before this change: the check scanned root + ops/dx/lint
+        (220) while the repair scanned the root only (1), so `--fix` wrote
+        "1 個 Python 工具" into README.md and printed that it had fixed it.
+        `tool-count` is a warning, so nothing went red afterwards.
+
+        ⚠️ The first repair unified both halves on the checker's 220, which
+        is itself wrong — see `_count_python_tools`. `n > 100` was the
+        original assertion here and it could not tell the two apart: 219,
+        220 and 223 all pass it. This compares against the scope the
+        counted sentence states instead.
+        """
+        n = mod._count_python_tools()
+        tools_dir = mod.REPO_ROOT / "scripts" / "tools"
+
+        def _keep(f):
+            return not any(f.name.startswith(p)
+                           for p in mod.TOOL_MAP_SKIP_PREFIXES)
+
+        documented = sum(1 for s in ("ops", "dx", "lint")
+                         for f in (tools_dir / s).glob("*.py") if _keep(f))
+        root_only = sum(1 for f in tools_dir.glob("*.py") if _keep(f))
+        deep = sum(1 for f in tools_dir.rglob("*.py")
+                   if "__pycache__" not in f.parts and _keep(f))
+
+        assert n == documented, (
+            "the counter no longer matches ``scripts/tools/{ops,dx,lint}``, "
+            "the scope the counted sentence states: %d vs %d" % (n, documented))
+        # Must-fire controls: without these the equality above would also
+        # hold for a tree where the root and the nested packages are empty,
+        # and the assertion would prove nothing.
+        assert root_only, (
+            "no countable .py at scripts/tools/ root, so 'the root is "
+            "excluded' is vacuous here — re-derive this test")
+        assert deep > documented, (
+            "no countable .py below the three subdirectories, so 'rglob "
+            "would over-count' is vacuous here — re-derive this test")
+
+        issues = mod.check_tool_count_in_docs()
+        for i in issues:
+            assert "actual is %d" % n in i.message, (
+                "check and repair disagree about the count: %s" % i.message)
+
+    def test_the_checker_and_the_writer_agree_about_the_count(self):
+        """⛔ The number is produced by one module and checked by another.
+
+        `bump_docs._count_python_tools` writes it into README.md;
+        `generate_tool_map.gather_tools` writes tool-map.md from the same
+        scope; this module checks it. Three implementations, no shared
+        code. When they disagree the gate emits a warning that neither
+        `--fix` nor `bump_docs --sync-counts` can settle — they rewrite the
+        same line to different values. Measured before this change:
+        checker 220, both writers 219.
+
+        ⚠️ This test does not merge the implementations; it only makes them
+        see each other. Collapsing them is tracked separately; the
+        blast radius there covers every counted line bump_docs rewrites.
+        """
+        spec = importlib.util.spec_from_file_location(
+            "bump_docs_for_count_check",
+            REPO_ROOT / "scripts" / "tools" / "dx" / "bump_docs.py")
+        bump = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(bump)
+        writer_total = bump._count_python_tools()[0]
+        assert mod._count_python_tools() == writer_total, (
+            "the gate checks %d but bump_docs writes %d, so the warning it "
+            "raises cannot be repaired by either tool"
+            % (mod._count_python_tools(), writer_total))
+
+    def test_a_new_tool_subdirectory_cannot_be_dropped_in_silence(self):
+        """⛔ The tuple is the documented scope, so drift must be loud.
+
+        Adding `scripts/tools/<new>/` with tools in it would otherwise lower
+        the count with nothing going red — the same shape as the bug this
+        cohort is about. A directory holding an `__init__.py` is a package,
+        i.e. library code the count has never included (`dx/custom_alerts/`
+        is the live example: three modules, no `main()` in any of them).
+
+        ⚠️ Residual, disclosed rather than papered over: a package
+        directory that really does hold tools still passes this in silence.
+        Classifying by `__init__.py` is the repo's own convention, not a
+        proof, and no check here can tell a library from a tool.
+        """
+        assert _unlisted_tool_subdirs(
+            REPO_ROOT / "scripts" / "tools",
+            mod.TOOL_COUNT_SUBDIRS) == []
+
+    def test_the_subdirectory_tripwire_actually_fires(self, tmp_path):
+        """Must-fire control for the test above.
+
+        A tripwire that never fires and a tree that never drifts look
+        identical from the assertion alone.
+        """
+        (tmp_path / "ops").mkdir()
+        (tmp_path / "ops" / "a.py").write_text("", encoding="utf-8")
+        pkg = tmp_path / "shared"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text("", encoding="utf-8")
+        (pkg / "helper.py").write_text("", encoding="utf-8")
+        newdir = tmp_path / "release"
+        newdir.mkdir()
+        (newdir / "cut_release.py").write_text("", encoding="utf-8")
+
+        assert _unlisted_tool_subdirs(tmp_path, ("ops",)) == ["release"], (
+            "the tripwire missed a new non-package tool directory")
+        assert _unlisted_tool_subdirs(tmp_path, ("ops", "release")) == [], (
+            "the tripwire fires on a directory that is listed")
+
+    def test_the_cache_does_not_outlive_the_write(self, tmp_path, monkeypatch):
+        """A repaired file must not leave pre-repair text in the cache."""
+        f = tmp_path / "README.md"
+        _write(f, "badge bilingual-94%20pairs here\n")
+        monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+        mod._read_cached(f)
+        mod._auto_fix(
+            [mod.Issue("bilingual-count", "error", "README.md", 0, "x")],
+            96, {"pack_count": 16, "alert": 161})
+        assert "bilingual-96%20pairs" in mod._read_cached(f), (
+            "the cache still holds the pre-repair text after a write")
 
 class TestCheckReleaseTagCurrency:
     """Pins the release-tag currency check added after #141 Track B / TB-F1:
