@@ -337,8 +337,9 @@ jobs:
               # as PASS. A raised budget or a broken gate merges unexercised.
               - "scripts/tools/lint/check_portal_bundle_size.py"
               - ".github/workflows/ci.yml"
-            # docs: threshold-exporter's pkg/config/docs_defaults_sample
-            # _test.go (#1327) walks docs/**/*.md and decodes every documented
+            # docs: threshold-exporter's
+            # pkg/config/docs_defaults_sample_test.go (#1327) walks
+            # docs/**/*.md and decodes every documented
             # `_defaults.yaml` sample through the real ThresholdConfig
             # loader — so documentation is a Go-test input, and a docs-only
             # PR (which is exactly how eight unloadable blocks landed) must

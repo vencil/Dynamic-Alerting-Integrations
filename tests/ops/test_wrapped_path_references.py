@@ -36,39 +36,144 @@ invisible here, because the quotes sit between the halves and break the token �
     "# app/pkg/config/resolve.go）。",
 
 That is `scripts/tools/ops/_registry_lib.py`, which GENERATES the comment blocks
-spliced into `rule-packs/*.yaml`. This guard saw the six generated outputs and
-not their source, so fixing only the outputs was silently reverted by
+spliced into `rule-packs/*.yaml`. This guard saw the generated outputs — six of
+them at the time, nine today — and not their source, so fixing only the outputs
+was silently reverted by
 `check_threshold_registry.py --regen` — the repo's own staleness gate is what
 caught it. If you are unwrapping a path and the gate keeps coming back, look
 for a generator.
 
-⛔ That class was swept to ZERO by hand and is NOT held there by anything. The
-sweep: for each adjacent pair of lines where the first ends in a quote and the
-second starts with one, splice them and ask the same question this guard asks.
-It found 7 (`_registry_lib.py` ×2, `waveform_score.py` ×2,
-`check_devcontainer_dep_parity.py`, `check_image_pin_capability.py`,
-`test_check_scrape_reachability.py`); all 7 are fixed. Two of them sat two lines
-apart, and the first pass caught only one — the number is recorded here because
-"known gap" without a size reads as "handled". Re-run that sweep when it
-matters; nothing will tell you.
+⛔ That class was swept to zero by hand once, is held there by NOTHING, and is
+NO LONGER AT ZERO. The sweep: for each adjacent pair of lines where the first
+ends in a quote and the second starts with one, splice them — ⚠️ stripping the
+second literal's own comment marker, without which the token stays broken and
+the sweep reports a clean tree it never actually looked at — and ask the same
+question this guard asks. It found 7 in #1383; all 7 were fixed. Re-run for
+#1452 — same answer on the merge base and on this branch, so it is a property
+of the tree and not of one commit — **2**, one of them live —
+
+  * `tests/ops/test_generated_ci_artifacts.py:3591` splits
+    `tools/portal/…/cicd-setup-wizard/utils/generators.js`. `git grep` on the
+    whole path returns that file (line 311) and NOT line 3591, so a rename
+    sweep working from `grep -n` fixes one and leaves the other. #1373 verbatim.
+  * `:35` of this file — the illustration above uses a REAL tracked path and
+    escapes its own guard only because this class is unmodelled. Contrast the
+    top-of-file illustration, which uses a path that does not exist for exactly
+    this reason.
+
+Neither is fixed here: the mechanism is the TOKENISER (quotes break the token
+before the resolver is reached), not the resolver that #1452 is about, and it
+already has a ticket — #1394. What is fixed here is this paragraph, which
+asserted zero while two counter-examples sat in the tree. That is the same
+sentence-shape #1452 exists to punish, fifteen lines above the one it punished.
 
 What is deliberately NOT modelled (under-detection, the safe direction):
   * a token split across two string literals — see the gap above;
-  * a token split across THREE or more lines — the window is two lines;
+  * a token split across THREE or more lines — the window is two lines.
+    Measured: a three-line window adds 0 reports on this tree, so the gap is
+    structural and currently empty, not a backlog;
   * a reference assembled from variables, or reached through a glob;
   * a comment marker outside the five `LINE_PREFIX` knows (`>` blockquote,
-    `::`/`REM`, `%`, `!`) — blind review demonstrated every one of them;
-  * a RELATIVE spelling (`./x.md`, `../x.md`, `/x.md`): the token comes out
-    with the prefix attached and `_resolves` compares exactly, so it does not
-    match a tracked path. Also blind review;
+    `::`/`REM`, `%`, `!`) — blind review demonstrated every one of them.
+    Measured the same way: teaching `LINE_PREFIX` all five adds 0 reports;
+  * a PREFIXED spelling — relative (`./x`, `../x`), anchored (`/x`, `~/x`) or
+    partial (`pkg/config/x`) — whose basename does not clear the bare-name
+    bounds three lines down. Since #1452 the basename is asked when the whole
+    token resolves to nothing, so `../check_pint.py` is caught; `./__init__.py`
+    (under `_MIN_BARE_NAME`), `./.claudeignore` (no separator) and
+    `./_defaults.yaml` (16 tracked paths, so not unique) are not. ⚠️ Measured,
+    because the first wording of this bullet named only non-uniqueness and used
+    `./utils.py` as its example — and `utils.py` names no file in this repo at
+    all, so it was excluded for a different reason than the one given: of the
+    1970 repo-unique basenames, 132 are excluded by the separator bound alone
+    and 22 by the length bound alone;
+  * one of OUR paths cited with EXTRA leading segments — the
+    `https://github.com/vencil/…/blob/main/<our path>` form, and `../blob/main/…`
+    beside it. The basename fallback requires a SUFFIX-compatible spelling, and
+    a URL is longer than the path it ends with, so it stays silent: 120 distinct
+    such tokens on this branch (118 on the merge base), none of them wrapped on
+    either. ⛔ Accepting the other direction (token longer, ending in our whole
+    path) is not a free fix — it re-admits `/src/.pre-commit-config.yaml`, the
+    CUSTOMER's copy at pre-commit's docker mount, for every single-segment path
+    of ours;
+  * the MIRROR of that, and it is over-detection rather than under: somebody
+    else's file written as a spelling that happens to be suffix-compatible with
+    one of ours — `ops/protect_main_push.sh` cited as upstream's, while ours is
+    `scripts/ops/protect_main_push.sh`. Structure cannot separate that from our
+    own partial spellings, because it is exactly what our own references look
+    like. It is named here rather than fixed because the remedy the guard asks
+    for does not damage the file when it is wrong — ⚠️ though it is not free
+    either: reflowing a citation of somebody else's file buys this repo
+    nothing;
   * a bare filename that is not repo-unique, shorter than `_MIN_BARE_NAME`, or
-    containing neither `_` nor `-` — that last condition alone excludes 129
-    otherwise-unique names, and all three are here to keep `utils.py` from
-    flooding the scan;
+    containing neither `_` nor `-` — that last condition alone excludes 132
+    otherwise-unique names, and all three are here to keep generic ones out of
+    the scan: `README.md` names 37 tracked files and `values.yaml` 11, while
+    `index.md` and `resolve.go` are unique but fall under the floor. ⚠️ Pick
+    those examples from the tree: two earlier wordings of this bullet named
+    `utils.py` and then `config.py`, and NEITHER names a file in this repo, so
+    both were illustrating a bound with something the bound never touched;
   * binary content is read too, decoded with replacement — nothing is
     skipped, because silently dropping input is how a scan reports "clean"
     while never having looked (and pinning WHICH files get dropped turned out
     to be environment-dependent; see the note by `_read_tracked`).
+
+⛔ GOING GREEN WITHOUT FIXING ANYTHING is easy, and the class is OPEN: anything
+that stops the two halves being joined does it. Measured examples, on a real
+defect, are a trailing space on the first line, an inserted blank or
+comment-only line, a `.` after the break, swapping the second line's marker for
+one this guard does not model, wrapping either half in backticks or quotes, and
+renaming or deleting the file the reference points AT — that last one silences
+a real defect with a single character, and it is here rather than in the
+message for the same reason as the rest. That is a sample, not a list — do not
+read it as a boundary.
+
+The failure message forbids all of it and deliberately does NOT describe it,
+because a hurried contributor reading a red test needs a fix, and any
+description of the cheap wrong ones is a set of instructions. ⚠️ The quoting
+example is the one to worry about: putting a path in backticks is ordinary
+Markdown hygiene, and it is the same mechanism as the string-literal gap at the
+top of this file — somebody tidying prose can disarm this guard believing they
+were formatting. That is also why the false-positive shapes below matter more
+than they look: every false report teaches somebody one of these edits.
+
+⚠️ FALSE POSITIVES THIS GUARD IS KNOWN TO PRODUCE. The join is mechanical, so
+anything that leaves a directory-ish string at the end of one line and a
+filename-ish string at the start of the next reads as a wrapped reference:
+
+  * a directory-tree listing — `dir/` and then an indented member. Connector
+    characters (`├──`, `|--`, `- `) happen to silence it, by accident of the
+    token character class rather than by design;
+  * any list whose consecutive items are a directory and a file, under ANY of
+    the five continuation markers — measured, all five produce it, and `#` is
+    far commoner in this tree than the Markdown `*` case that first showed it.
+    ⛔ Dropping a marker is NOT the fix: `*` is load-bearing for the
+    block-comment case `test_detector_finds_a_synthetic_wrap` pins;
+  * a sentence whose last word runs into a filename on the next line. The join
+    invents a name nobody wrote, and reports it the day somebody adds a file
+    that happens to have that name — from a file they never touched.
+
+⛔ None of these is fixable by REFLOWING, because there is no reference to
+reflow. Each does have a harmless rewrite, measured rather than guessed: a
+connector character in the tree listing (`├──`, `|--`, `- `), a different
+bullet, or moving one word in the sentence — and the failure message already
+says prose may wrap wherever it likes. ⚠️ Do not read those as fixes: the
+guard still cannot see that shape afterwards, so the report was noise and the
+silence that follows is also noise. What this module does NOT have is a
+per-line exemption, so a false report cannot be annotated away — it is
+rewritten harmlessly, or the guard is fixed. The tree is at zero today, so
+all three are latent, not live.
+
+⚠️ A fixture that must genuinely contain a wrapped path should cite a path that
+does not exist — the `docs/integration/…` illustration at the very top of this
+module, which is deliberately not a tracked file. ⛔ That belongs HERE and not
+in the failure message: applied to a REAL defect the same edit is a
+one-character disarm, and it is worse than the ones above because it also
+leaves the pointer aimed at nothing. (The other illustration — the one in the
+KNOWN GAP paragraph above — uses a REAL tracked path on purpose; do not copy
+that one. Naming it by paragraph rather than by line distance is deliberate:
+an earlier wording said "fifteen lines lower", which was copied from a nearby
+sentence and was wrong by half.)
 
 ⚠️ SELECTION, not coverage: this guard reads the whole tree, but
 `verify_diff.py` maps it through `text_map`, i.e. only the handful of paths it
@@ -82,8 +187,9 @@ widening selection would mean changing that schema. Raised by CodeRabbit
 on #1383.
 
 ⛔ FIXED, and worth keeping the shape written down. `python-tests-run` used to
-be genuinely path-gated while 101 tracked files fell outside ci.yml's `python`
-filter, so a PR touching only such a file did not run this guard at all.
+be genuinely path-gated while 101 tracked files — counted then, against the
+pre-`**` filter — fell outside ci.yml's `python` filter, so a PR touching only
+such a file did not run this guard at all.
 ⚠️ The required check `Python Tests (3.13)` is reported by the always-run
 aggregate, not by the skipped leg — so it reported SUCCESS, never `skipped`.
 The defect was never "a skipped required check satisfies branch protection";
@@ -111,8 +217,13 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 
-# Longest extension in the repo worth treating as one. Six covers `.config`
-# and everything shorter; beyond that the tail is dotted version fragments.
+# Longest extension worth treating as one. What the cap EXCLUDES is measured
+# rather than guessed: ten tails in this tree are longer (`gitattributes`,
+# `trufflehogignore`, `dockerignore`, `doclinkignore`, `claudeignore`,
+# `helmignore`, `gitignore`, `nojekyll`, `gitkeep`, `example`), and every one of
+# them is a REAL extension — not the dotted version fragment an earlier wording
+# claimed. Nothing is lost: a path the extension pattern cannot fullmatch is
+# exactly what `_extensionless_token` takes, so those files are tokenised there.
 _MAX_EXTENSION = 6
 
 
@@ -153,7 +264,7 @@ def _extension_token() -> re.Pattern[str]:
 def _extensionless_token() -> re.Pattern[str]:
     """The tracked paths an extension-anchored pattern can never produce.
 
-    ⛔ `Makefile`, `Dockerfile` ×8, `LICENSE`, every `.gitignore`-family file,
+    ⛔ `Makefile`, `Dockerfile` ×9, `LICENSE`, every `.gitignore`-family file,
     `components/da-tools/app/VERSION`, `scripts/hooks/commit-msg`,
     `tests/rulepacks/vm_engine_version` — 43 tracked files whose basename has no
     usable extension. The first version required `.<ext>`, so none of them was
@@ -174,7 +285,16 @@ def _extensionless_token() -> re.Pattern[str]:
         return re.compile(r"(?!)")
     ordered = sorted(names, key=lambda n: (-len(n), n))
     return re.compile(
-        r"(?<![A-Za-z0-9_.\-/])(?:"
+        # ⛔ THE OPTIONAL PREFIX MAKES THIS SYMMETRIC WITH THE EXTENSION HALF,
+        # which is `[A-Za-z0-9_.\-/]+\.<ext>` and so swallows any directory
+        # prefix. Without it the lookbehind's `/` killed every PREFIXED
+        # extensionless spelling before the resolver ever saw it: blind review
+        # measured `wrong/dir/vm_engine_version` producing no token at all while
+        # the bare name produced one — so #1452's whole class stayed open for
+        # the 43 tracked files with no usable extension, including the very file
+        # this docstring cites as the live violation. The name still has to be
+        # in the alternation, so this widens the SPELLING, not the inventory.
+        r"(?<![A-Za-z0-9_.\-/])(?:[A-Za-z0-9_.\-]+/)*(?:"
         + "|".join(re.escape(n) for n in ordered)
         + r")(?![A-Za-z0-9_.\-/])")
 
@@ -193,15 +313,23 @@ def _tokens(text: str) -> set[str]:
 # fixed, but the gap is real, so it is named rather than implied.
 LINE_PREFIX = re.compile(r"^[ \t]*(?:#|//|\*|--|;)?[ \t]*")
 
-# A bare filename counts as a reference only if it is unambiguous. Both bounds
-# earn their place: without uniqueness, `values.yaml` matches 30 charts; without
-# the length/separator floor, `main.go` and `index.md` flood the scan.
+# A bare filename counts as a reference only if it is unambiguous, at least this
+# long, and carries a separator. What each bound EXCLUDES is measured over the
+# tree: uniqueness drops `README.md` (37 tracked paths), `_defaults.yaml` (16)
+# and `values.yaml` (11); the length/separator floor drops a further 264
+# otherwise-unique basenames, `index.md` and `resolve.go` among them.
+# ⚠️ That is not the same as "measured to earn their place". Relaxing any one of
+# them — or all three at once — does not change what this guard reports: zero on
+# this branch, and the same two references on the merge base, where those two
+# were still live (#1452). They keep generic names out of the scan, and on
+# today's corpus that value is prospective, not demonstrated.
 _MIN_BARE_NAME = 12
 
 # Coverage floors — they answer "did the scan run at all?", nothing finer.
 # ⛔ Do NOT read them as protecting the token model: blind review cut
 # `_extensions()` down to a SINGLE extension and all three floors still passed
-# (19× slack on tokens alone). What actually holds the model honest is
+# (the token floor alone carries 11.2× slack as shipped). What holds the
+# model honest is
 # `test_extensions_are_derived_and_longest_first`. `_MIN_FILES` is weaker
 # still — `_unread_drift` runs first and demands every tracked file, so by the
 # time this is reached the count is always the full tree; it only fires if the
@@ -285,20 +413,140 @@ def _resolves(token: str) -> bool:
     return token in set(_tracked()) or token in _unique_basenames()
 
 
+def _names_a_file_through_its_basename(token: str, raw: str) -> str | None:
+    """The tracked file a PREFIXED token names, when the prefix resolves to nothing.
+
+    ⛔ THE GAP THIS CLOSES IS ONE THE MODULE ALREADY CLAIMED TO HAVE CLOSED.
+    `_resolves` compares the WHOLE token, so a rejoined
+    `pkg/config/docs_defaults_sample_test.go` matches no tracked path — the real
+    file lives under `components/threshold-exporter/app/`. The basename does
+    resolve, and is repo-unique, and is exactly what a rename sweep greps for.
+    Two such pointers were sitting in the tree while this file said the tree was
+    at zero (#1452).
+
+    ⛔ DERIVED, NOT LISTED: it reuses `_unique_basenames()` — the same bounds
+    (repo-unique, `_MIN_BARE_NAME` long, contains a separator) that already keep
+    `utils.py` out of the scan. No new inventory of "important" names.
+
+    ⛔ THE PREFIX MUST BE A SPELLING OF OUR PATH, not merely carry a familiar
+    basename. Blind review measured the first version reporting
+    `vendor/github.com/prometheus/common/config/config_test.go`,
+    `https://github.com/prometheus/prometheus/blob/main/config/config_test.go`,
+    `/src/.pre-commit-config.yaml` and `~/work/myrepo/.pre-commit-config.yaml`
+    — every one of them a correct citation of somebody ELSE's file, reported as
+    ours, because the prefix was thrown away. That is worse than a false red:
+    the remedy it demands (reflow so a rename sweep can grep it) is unfounded,
+    since nobody sweeping THIS repo greps a vendored or customer-side path.
+    Requiring the token to be a suffix-compatible spelling of the real path
+    keeps the class the ticket is about: `../x.md` and `docs/x.md` still
+    resolve, because they are spellings of our file.
+
+    ⚠️ WHAT THAT FILTER COSTS AND BUYS. Occurrences, over every tracked file,
+    and the corpus is named for each number because they are not all from the
+    same one. ON THE MERGE BASE (where the two live defects still sat): as
+    shipped the filter removes ZERO reports — nothing wrapped there
+    misattributes — and its effect is only visible once `base not in raw` is
+    removed as well, where it takes 322 reports down to 20. The material is real
+    even though none of it is wrapped: ON THIS BRANCH 276 distinct prefixed
+    tokens carry one of our basenames without being a spelling of our path (269
+    on the merge base), of which 156 name something else (151) and 120 are our
+    own file cited with EXTRA leading segments (118) — `…/blob/main/<our path>`,
+    which this filter silences too. That half is a gap and it is in the gap
+    list.
+
+    ⛔ HOW A CANDIDATE IS CLASSIFIED, because the counts above are not
+    reproducible without it. A candidate is a token that appears in the rejoined
+    window and NOT in the raw one; it is then sorted by the FIRST of these that
+    applies, in this order: `_resolves` as a whole (the pre-#1452 class) → no
+    prefix at all → basename fails the bare-name bounds → basename appears
+    contiguously in the window → not a spelling of our path → reported here.
+    Reordering those tests redistributes the same population into different
+    buckets, so a bucket count without this order attached means nothing.
+
+    ⛔ `base not in raw` IS THE WHOLE POINT, not a nicety. When the basename
+    already appears contiguously somewhere in the two-line window, `git grep`
+    finds it and the break hides nothing. Dropping it costs 18 extra reports:
+    2 → 20 on the merge base, 0 → 18 on this branch. Seventeen of those 18 are
+    joins like `//git_shell.go` and `/tenant_custom_alerts.go`, where a comment
+    marker or a bare slash is all that was glued on; the eighteenth is a real
+    partial path, correctly let through because its basename is right there in
+    the window.
+    """
+    base = token.rsplit("/", 1)[-1]
+    if base == token:
+        # ⛔ Equivalent to falling through ONLY because the sole caller asks
+        # `_resolves` first, and a bare token that resolves is reported there.
+        # Measured over a full scan: 1181 invocations, 593 of them bare, and
+        # removing this line changes NOTHING — every bare token that gets here
+        # has already failed `_resolves`, so its basename does not resolve
+        # either and the lookup below would return None anyway. A second caller
+        # that does not ask `_resolves` first would break that, and no test
+        # would notice.
+        return None            # no prefix — `_resolves` has already had its say
+    if base in raw:
+        return None            # grep still finds it; the line break hides nothing
+    real = _unique_basenames().get(base)
+    if real is None:
+        return None
+    return real if _is_a_spelling_of(token, real) else None
+
+
+def _is_a_spelling_of(token: str, real: str) -> bool:
+    """Could `token` be this repo's `real` path, written from somewhere else?
+
+    Anchored, relative and partial spellings of our own path all end with the
+    same segments; a vendored copy, an upstream URL or a container path carries
+    segments ours does not have, so it is longer than the real path or diverges
+    inside it. Compared on SEGMENT boundaries, so `.../app/config_test.go` is
+    not satisfied by `.../myapp/config_test.go`.
+
+    ⛔ NO LIST OF PREFIXES TO STRIP. A first spelling peeled `~`, `src`, `http:`
+    off the front, which is an enumeration that would need a new entry for every
+    mount point anyone ever documents — and it re-admitted
+    `/src/.pre-commit-config.yaml` (the CUSTOMER's file at pre-commit's docker
+    mount) as ours. Only `.` and `..` are dropped, because they name no segment.
+    """
+    parts = [p for p in token.split("/") if p not in ("", ".", "..")]
+    if not parts:
+        return False
+    real_parts = real.split("/")
+    return len(parts) <= len(real_parts) and real_parts[-len(parts):] == parts
+
+
 def _wrapped_references(text: str) -> list[tuple[int, str]]:
     """(1-based line of the break, token) for every reference split in two.
 
     A token is reported only when it appears in the REJOINED two-line window and
     NOT in the raw window — i.e. the line break is what hides it.
+
+    ⛔ THE CARRIAGE RETURN IS DROPPED HERE, and that is not cosmetic. Splitting
+    on `\\n` alone leaves a CR at the end of the first half, and the token
+    character class does not contain it, so the rejoin produces a BROKEN token
+    and the file is structurally invisible to this guard. `.gitattributes` puts
+    `*.bat`, `*.cmd` and `*.ps1` on CRLF deliberately ("Windows-specific shells
+    — MUST be CRLF"), so this was a permanent blind spot over six tracked files,
+    three of them `.ps1` whose `#` continuation marker `LINE_PREFIX` already
+    models. Measured both ways: the same text is reported under LF and silent
+    under CRLF (pinned below).
+
+    ⚠️ It buys nothing on today's tree — stripping the CR across the whole
+    corpus unlocks ZERO new reports, so this removes a structural blind spot
+    rather than finding a live defect. Done HERE and not in `_read_tracked`,
+    whose contract is that every tracked byte reached the scan; normalising line
+    endings belongs to the consumer that cares about line structure.
     """
-    lines = text.split("\n")
+    lines = [line[:-1] if line.endswith("\r") else line
+             for line in text.split("\n")]
     found: list[tuple[int, str]] = []
     for index in range(len(lines) - 1):
         raw = lines[index] + "\n" + lines[index + 1]
         prefix = LINE_PREFIX.match(lines[index + 1]).group(0)
         rejoined = lines[index] + lines[index + 1][len(prefix):]
         for token in sorted(_tokens(rejoined)):
-            if token in raw or not _resolves(token):
+            if token in raw:
+                continue
+            if not (_resolves(token)
+                    or _names_a_file_through_its_basename(token, raw)):
                 continue
             found.append((index + 1, token))
     return found
@@ -421,9 +669,11 @@ def _decode_whole(raw: bytes, size: int, path: str) -> str:
 
     ⛔ Every other guard here pins the PATH SET — `_unread_drift`, the
     independent `git ls-files` cross-check, the no-slicing check. None of them
-    sees content: `read_bytes()[:4096]` keeps all 2293 paths, satisfies all
-    three, and still truncates 1615 files, dropping ~74% of the corpus and
-    ~58% of the path-like tokens. Measured: a wrapped reference injected past
+    sees content: `read_bytes()[:4096]` keeps all 2315 paths, satisfies all
+    three, and still truncates 1636 files, dropping ~76% of the corpus and
+    ~58% of the path-like tokens. ⚠️ Count files by BYTES here, which is the
+    unit that slice cuts in; counting decoded characters gives 1608 and is the
+    wrong question. Measured: a wrapped reference injected past
     the cut is invisible while the suite stays green (and the run gets 2.4x
     faster, which is what makes the edit attractive).
 
@@ -454,12 +704,22 @@ def test_no_reference_is_split_across_a_line_break() -> None:
 
     offenders = _offenders(files)
     assert not offenders, (
-        "a file reference is split across a line break, so grepping its whole "
-        "name will not find it — and a rename sweep that greps the whole name "
-        "will report the tree clean while leaving this pointer behind (#1373 "
-        "shipped exactly that).\n"
-        "Fix by reflowing so the path sits on ONE line; the surrounding prose "
-        "can wrap wherever you like.\n"
+        "a file reference is split across a line break, so grepping the string "
+        "as written does not find it. Reflow so the reference sits on ONE "
+        "line; the surrounding prose can wrap wherever you like.\n"
+        "⚠️ Reflowing restores exactly one property: the spelling AS WRITTEN "
+        "becomes greppable. If the reference is a PARTIAL path, grepping the "
+        "full tracked path still will not return this site — and it may return "
+        "OTHER files, so a sweep reads a non-empty result as coverage it does "
+        "not have. The reflow is the floor here, not the ceiling.\n"
+        "⛔ A reflow is the only fix. Going green any other way leaves the "
+        "reference exactly as invisible as it is now.\n"
+        "⚠️ If this fired on something that is NOT a reference — a directory "
+        "listing, two unrelated list items, a sentence whose last word ran "
+        "into a filename — then there is nothing to reflow and the report is "
+        "wrong. That is a defect in THIS GUARD, not in your change, and this "
+        "module has no per-line exemption on purpose, so raise it against the "
+        "guard.\n"
         + "\n".join(
             f"    {path}:\n" + "\n".join(f"      {hit}" for hit in hits)
             for path, hits in sorted(offenders.items())))
@@ -467,7 +727,16 @@ def test_no_reference_is_split_across_a_line_break() -> None:
 
 def test_detector_finds_a_synthetic_wrap() -> None:
     """Anti-vacuity: the tree is at zero, so the assertion above proves nothing
-    on its own. A scanner that returned `[]` unconditionally would pass it."""
+    on its own. A scanner that returned `[]` unconditionally would pass it.
+
+    ⛔ EVERY marker `LINE_PREFIX` models needs a case here, and that is not
+    tidiness. The false-positive note in the module docstring generalises a
+    prohibition to all five ("dropping a marker is NOT the fix"), and a
+    prohibition nothing enforces is a promise. Measured: with only the first
+    four cases, deleting `--` or `;` from `LINE_PREFIX` left this module fully
+    green, so two of the five could be removed for free — silently ending
+    detection under a marker that heads thousands of tracked lines.
+    """
     target = "tests/ops/test_wrapped_path_references.py"
     assert target in _tracked(), "this module moved; re-point the fixture"
     head, tail = target[:20], target[20:]
@@ -476,6 +745,8 @@ def test_detector_finds_a_synthetic_wrap() -> None:
         (f"# see {head}\n# {tail} for the rule\n", "hash comment"),
         (f"// see {head}\n//     {tail} for the rule\n", "slash comment"),
         (f" * see {head}\n *  {tail} for the rule\n", "star block"),
+        (f"-- see {head}\n--  {tail} for the rule\n", "sql/lua comment"),
+        (f"; see {head}\n;  {tail} for the rule\n", "semicolon comment"),
         (f"    see {head}\n    {tail} for the rule\n", "bare indent"),
     ):
         hits = _wrapped_references(wrapped)
@@ -485,6 +756,144 @@ def test_detector_finds_a_synthetic_wrap() -> None:
     assert _wrapped_references(contiguous) == [], (
         "a reference that is NOT split must not be reported — otherwise every "
         "normal citation reds and the fix is to delete the guard")
+
+
+def test_a_prefixed_token_is_resolved_through_its_basename() -> None:
+    """⛔ THE #1452 CASE, and it sits inside the class this file called empty.
+
+    A wrapped token that rejoins into a PARTIAL spelling of a real path —
+    `pkg/config/x_test.go` for a file under `components/…/app/` — matches no
+    tracked path, so `_resolves` says no, while the basename resolves and is
+    exactly what a rename sweep greps for. Two such pointers were live in the
+    tree when this was written.
+
+    Every case below is DERIVED from the tree, so none can rot into fiction;
+    the subject is this module itself.
+    """
+    target = "tests/ops/test_wrapped_path_references.py"
+    assert target in _tracked(), "this module moved; re-point the fixture"
+    base = target.rsplit("/", 1)[-1]
+    assert base in _unique_basenames(), (
+        base + " stopped being a repo-unique basename; this test's premise is "
+        "gone — re-derive a subject rather than relaxing the assertions")
+
+    head, tail = base[:12], base[12:]
+    partial = "ops/" + base          # a real, shorter spelling of `target`
+    assert target.endswith(partial) and partial not in _tracked(), (
+        "the fixture must be a PARTIAL spelling of a tracked path, not a "
+        "tracked path itself — otherwise `_resolves` handles it and this test "
+        "stops exercising the basename fallback")
+
+    # MUST REPORT: partial spelling of our own path, and the basename is split,
+    # so grepping either spelling finds nothing.
+    wrapped = "# see ops/" + head + "\n# " + tail + " for the rule\n"
+    hits = _wrapped_references(wrapped)
+    assert [t for _, t in hits] == [partial], hits
+
+    # MUST NOT REPORT: the basename ALSO appears contiguously in the window —
+    # `git grep <base>` finds it, so the break hides nothing. This half is what
+    # keeps the guard off the ~320 innocent wraps in this tree; without it the
+    # cheapest way to go green is deleting the guard.
+    grepable = ("# see " + base + " at ops/" + head
+                + "\n# " + tail + " for the rule\n")
+    assert _wrapped_references(grepable) == [], (
+        "a prefixed token whose basename is still greppable in the same window "
+        "must NOT be reported")
+
+    # MUST NOT REPORT: somebody ELSE's file that merely shares a basename with
+    # one of ours. Blind review measured the first version reporting a vendored
+    # path, an upstream URL and a container mount as if they were this repo's
+    # files — asking for a reflow that no rename sweep here would ever need.
+    foreign = "vendor/github.com/example/" + base
+    assert foreign.rsplit("/", 1)[-1] in _unique_basenames(), (
+        "this case only means something while the basename still resolves")
+    hits = _wrapped_references(
+        "# copied from vendor/github.com/example/" + head
+        + "\n# " + tail + " (Apache-2.0)\n")
+    assert hits == [], (
+        "a citation of another project's file must NOT be reported as ours: " + repr(hits))
+
+    # MUST NOT REPORT: the prefix has to match on SEGMENT boundaries. The tail
+    # of one of our directory names is not one of our directories, and comparing
+    # the joined strings with `endswith` would accept it — mutation testing said
+    # so: swapping the segment comparison for a string suffix left every other
+    # case in this module green.
+    parent = target.rsplit("/", 2)[1]
+    assert len(parent) > 1, (
+        parent + " can no longer be clipped; pick a subject whose parent "
+        "directory has more than one character")
+    clipped = parent[1:] + "/" + base
+    assert target.endswith(clipped) and clipped.split("/")[0] not in target.split("/"), (
+        "this case only means something while the fixture is a suffix of the "
+        "STRING and not a suffix of the PATH")
+    assert _wrapped_references(
+        "# see " + parent[1:] + "/" + head + "\n# " + tail + " here\n") == [], (
+        "a prefix that only matches mid-segment must NOT be reported: "
+        + clipped + " is not a spelling of " + target)
+
+    # MUST NOT REPORT: an AMBIGUOUS basename stays out with a prefix exactly as
+    # it does without one. Derived, because the first spelling here used a name
+    # that is not in the tree at all and is below `_MIN_BARE_NAME` — it could
+    # never have failed, so it pinned nothing.
+    counts: dict[str, int] = {}
+    for path in _tracked():
+        name = path.rsplit("/", 1)[-1]
+        counts[name] = counts.get(name, 0) + 1
+    ambiguous = sorted(
+        n for n, k in counts.items()
+        if k > 1 and len(n) >= _MIN_BARE_NAME and re.search(r"[_-]", n))
+    assert ambiguous, (
+        "no basename is both ambiguous and past this module's bare-name bounds "
+        "any more — re-derive this case instead of deleting it")
+    amb = ambiguous[0]
+    assert amb not in _unique_basenames(), amb
+    split = max(1, len(amb) // 2)
+    assert _wrapped_references(
+        "# see wrong/dir/" + amb[:split] + "\n# " + amb[split:] + " here\n") == [], (
+        "a prefixed token whose basename is ambiguous must NOT be reported")
+
+
+def test_a_wrapped_reference_is_seen_in_a_crlf_file() -> None:
+    """⛔ CRLF made this guard structurally BLIND, not merely quieter.
+
+    `.gitattributes` puts `*.bat`, `*.cmd` and `*.ps1` on CRLF on purpose. A
+    split on the newline alone leaves the CR at the end of the first half, and
+    CR is not in the token character class — so the rejoin produced a broken
+    token and no wrapped reference in those files could ever be reported. Six
+    tracked files were affected when this was written, three of them `.ps1`,
+    whose `#` continuation marker this guard already models: a file type it
+    looked covered for and never was.
+
+    ⛔ SYNTHETIC ON PURPOSE. The input carries its own line endings, so this
+    does not depend on how a given checkout expanded `.gitattributes` — the
+    same mistake the pinned-unreadable-set version of this module made (see the
+    note by `_read_tracked`).
+    """
+    target = "tests/ops/test_wrapped_path_references.py"
+    assert target in _tracked(), "this module moved; re-point the fixture"
+    base = target.rsplit("/", 1)[-1]
+    head, tail = base[:12], base[12:]
+
+    lf = "# see ops/" + head + "\n# " + tail + " for the rule\n"
+    expected = [tok for _, tok in _wrapped_references(lf)]
+    assert expected, (
+        "the LF control did not report, so the CRLF case below would pass for "
+        "the wrong reason — re-derive the fixture rather than dropping this")
+
+    crlf = lf.replace("\n", "\r\n")
+    assert [tok for _, tok in _wrapped_references(crlf)] == expected, (
+        "the same reference must be reported when the file is CRLF; a trailing "
+        "CR breaks the rejoined token and silences EVERY wrapped reference in "
+        "the `*.bat` / `*.cmd` / `*.ps1` trees")
+
+    # MUST NOT REPORT: dropping the CR must not turn ordinary CRLF text into
+    # findings — the raw window has to lose it too, or every reference that sits
+    # at a line end starts looking wrapped.
+    for quiet in ("# see ops/" + base + " for the rule\r\n# and more\r\n",
+                  "# see " + base + " at ops/" + head + "\r\n# " + tail + "\r\n"):
+        assert _wrapped_references(quiet) == [], (
+            "a CRLF reference that is NOT hidden by the break must stay "
+            "silent: " + repr(quiet))
 
 
 def test_extensions_are_derived_and_longest_first() -> None:
@@ -556,15 +965,40 @@ def test_extensionless_paths_are_tokenised_too() -> None:
         and name != path  # root dotfiles are already covered as full paths
     )
     assert bare, (
-        "no repo-unique extensionless basename qualifies any more — either the "
-        "tree changed or `_unique_basenames`' bounds did. Re-decide whether the "
-        "bare-name half still earns its place instead of leaving it untested.")
+        "no repo-unique extensionless basename qualifies any more, so the "
+        "bare-name half of `_extensionless_token` has no subject left. "
+        "⚠️ That population is ONE member deep today, so the usual trigger is "
+        "somebody adding a second file with that basename — which says nothing "
+        "about whether the half earns its place. ⛔ Two legitimate exits, and "
+        "deleting this block is neither: re-derive a subject if the tree still "
+        "has one, or — if it genuinely has none — say so HERE, in place, "
+        "because this block is the only case that drives that half and a quiet "
+        "deletion is the half going dark.")
     subject = bare[0]
     split = max(1, len(subject) // 2)
     hits = _wrapped_references(
         f"# see {subject[:split]}\n# {subject[split:]} here\n")
     assert [tok for _, tok in hits] == [subject], (
         f"a wrapped bare extensionless name ({subject}) must be reported")
+
+    # ⛔ The optional directory PREFIX in `_extensionless_token`, which is what
+    # makes it symmetric with the extension half. Without it the lookbehind's
+    # `/` kills a prefixed spelling before it is ever a token, so #1452's class
+    # stays open for all of these files — and this very path is the live
+    # violation `ci.yml` was carrying. Mutation testing put this case here: with
+    # only the two cases above, deleting the prefix left the module green.
+    name = target.rsplit("/", 1)[-1]
+    partial = target.split("/", 1)[1]
+    assert name in _unique_basenames() and partial not in _tracked(), (
+        "this case needs a PARTIAL spelling whose basename still resolves; "
+        f"{target} no longer provides one")
+    cut = max(1, len(name) // 2)
+    prefixed = _wrapped_references(
+        f"# see {partial[:len(partial) - len(name) + cut]}\n"
+        f"# {name[cut:]} here\n")
+    assert [tok for _, tok in prefixed] == [partial], (
+        f"a wrapped PARTIAL spelling of an extensionless path ({partial}) must "
+        f"be reported, got {prefixed}")
 
 
 def test_tracked_split_refuses_a_narrowed_listing() -> None:
@@ -618,8 +1052,8 @@ def test_partial_read_is_refused() -> None:
 
 def test_tracked_set_matches_an_independent_git_listing() -> None:
     """⛔ The floor has ~1300 files of headroom, so it cannot see a narrowing
-    that stays above it — blind review dropped every `.md` (306 files, the
-    exact surface this scan exists for: CHANGELOG.md alone carries 601
+    that stays above it — blind review dropped every `.md` (309 files, the
+    exact surface this scan exists for: CHANGELOG.md alone carries 631 distinct
     resolvable references) and the whole module stayed green, because
     `_unread_drift` compares the scan against the SAME narrowed sequence and
     so agrees with itself.
@@ -680,6 +1114,10 @@ def test_each_tripwire_fires_on_degenerate_input() -> None:
     three survived until they were given a case that can tell the difference.
     """
     target = "tests/ops/test_wrapped_path_references.py"
+    # ⛔ The same premise guard its three siblings carry. Without it, renaming
+    # this module makes the assertion below report that the DETECTOR is broken,
+    # and the cheapest way to believe that message is to loosen the detector.
+    assert target in _tracked(), "this module moved; re-point the fixture"
     head, tail = target[:24], target[24:]
     wrapped = f"# see {head}\n# {tail} for the rule\n"
     assert _offenders([("fake.py", wrapped)]), (
@@ -703,3 +1141,32 @@ def test_each_tripwire_fires_on_degenerate_input() -> None:
     assert len(_coverage_shortfalls([])) == 4, (
         "every floor must report independently, so one collapsing does not hide "
         "the others")
+
+    # ⛔ AND ONE NON-EMPTY CASE, which is what pins the floors' VALUES. With `[]`
+    # every floor fires for free (`0 <= 0`), so the empty case cannot tell a
+    # floor of 1500 from a floor of 0 — blind review set all three to zero and
+    # the whole module stayed green. 200 files carrying one resolvable
+    # reference between them is still degenerate against a tree of 2315, so
+    # every floor must still speak.
+    degenerate = [(f"f{i}.py", "see " + target + " for the rule\n")
+                  for i in range(200)]
+    assert len(_coverage_shortfalls(degenerate)) == 4, (
+        "a 200-file scan of a 2000+ file repo must still trip all four floors. "
+        "If it does not, one of them has been lowered until this scan no "
+        "longer falls below it — ⛔ raise it back; do not shrink this case.")
+    # ⚠️ WHAT THIS PINS, exactly, because it is less than the sentence above
+    # may suggest. Measured, one floor at a time:
+    #   `_MIN_FILES`      >= 200  (199 fails, 200 PASSES, 750 passes)
+    #   `_MIN_TOKENS`     >= 200  (199 fails, 200 PASSES)
+    #   `_MIN_RESOLVING`  >= 1 ONLY — this corpus carries ONE distinct resolving
+    #                     reference, so `_MIN_RESOLVING = 1` passes. Raising
+    #                     that bar means giving each synthetic file a different
+    #                     real path, i.e. taking the case's discrimination from
+    #                     the tree it protects; disclosed instead of taken.
+    # `_MIN_FILES = 3` is the 500x weakening an earlier three-file version of
+    # this case let through, and is the whole reason the corpus here is 200.
+    # Gradual drift is not covered: pinning the literals against it needs a
+    # second source of truth for how big the corpus ought to be, which is the
+    # thing these floors are too crude to have. 200 is an independent constant,
+    # deliberately NOT derived from `_tracked()`, because a floor taken from
+    # the thing it protects is not a floor.
