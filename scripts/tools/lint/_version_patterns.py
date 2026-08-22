@@ -193,6 +193,13 @@ DOC_MAP_SKIP_NAME_PATTERNS = (
 # Tool map coverage check skips these filename prefixes
 TOOL_MAP_SKIP_PREFIXES = ("_lib", "__init__", "__pycache__")
 
+# The subdirectories the "N 個 Python 工具" counts cover. This is the
+# scope the counted sentence states verbatim — ``scripts/tools/{ops,dx,lint}``
+# 下 N 個 Python 工具 — and the same three `bump_docs._count_python_tools`
+# and `generate_tool_map.gather_tools` scan. The repo root is deliberately
+# excluded; see `_count_python_tools` for what including it cost.
+TOOL_COUNT_SUBDIRS = ("ops", "dx", "lint")
+
 # ============================================================================
 # Roadmap/changelog overlap detection
 # ============================================================================

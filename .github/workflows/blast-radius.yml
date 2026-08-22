@@ -50,16 +50,55 @@ jobs:
             echo "conf_d=components/threshold-exporter/config/conf.d" >> $GITHUB_OUTPUT
           else
             echo "conf_d=" >> $GITHUB_OUTPUT
-            echo "::warning::No conf.d/ directory found, skipping blast radius"
+            # ⛔ On a pull_request this is not a benign "nothing to do". The
+            # `paths:` filter above only fires when conf.d/ itself changed, so
+            # a PR that triggers this workflow and then finds no directory has
+            # removed the tree from where this step looks — by deleting it, or
+            # by MOVING or renaming it, which the `::error::` at the end of
+            # this branch already tells the reader to fix ("If the tree moved,
+            # update the two paths this step searches"). ⚠️ An earlier version
+            # of this comment said "the one PR that can … is the PR that
+            # DELETED the tree", which its own neighbouring message
+            # contradicts. Either way it is the largest blast radius there is.
+            # (⛔ And it pointed at that message as "three lines below", which
+            # was twelve — the same line-counting habit a sibling file in this
+            # PR now bans outright. Named, not counted.)
+            # ⚠️ NOT "every later step", which is what this said, and no
+            # count replacing it either — the correction that first went in
+            # here carried a number nothing asserts, on a line whose whole
+            # subject is a claim that went stale. Named instead: every step
+            # that can PRODUCE a report is gated on this output; `Post PR
+            # comment` gates on `steps.blast.outputs.has_report` and `Upload
+            # report artifact` is `always()`, both deliberately and both
+            # argued for further down. What holds is the part that matters
+            # here: nothing downstream can produce a
+            # report, this job has no verdict step, so the old
+            # warning-and-continue meant that PR got a green run and no
+            # comment at all (#1419).
+            # No event test here: `on:` accepts pull_request only, so there is
+            # no second arm to write. guard-defaults-impact.yml does test the
+            # event because it also accepts workflow_dispatch.
+            echo "::error::No conf.d/ directory found on a PR that changed conf.d/ — nothing was analysed. If the tree moved, update the two paths this step searches."
+            exit 1
           fi
 
       - name: Generate PR effective configs
         if: steps.detect.outputs.conf_d != ''
+        env:
+          CONF_D: ${{ steps.detect.outputs.conf_d }}
         run: |
+          set -euo pipefail
           python3 scripts/tools/dx/describe_tenant.py \
             --all \
-            --conf-d "${{ steps.detect.outputs.conf_d }}" \
+            --conf-d "$CONF_D" \
             --output /tmp/pr-effective.json
+          # Symmetric with the base side below. Without this an exit-0 run that
+          # wrote nothing leaves the PR side empty against a full baseline, and
+          # the report flips into "every tenant was deleted".
+          if [ ! -s /tmp/pr-effective.json ]; then
+            echo "::error::describe-tenant exited 0 but wrote no PR-side configs to /tmp/pr-effective.json"
+            exit 1
+          fi
 
       - name: Generate base effective configs
         if: steps.detect.outputs.conf_d != ''
@@ -69,23 +108,135 @@ jobs:
         # raw ${{ github.event.* }} / ${{ github.base_ref }} inside run:.
         env:
           BASE_REF: ${{ github.base_ref }}
+          CONF_D: ${{ steps.detect.outputs.conf_d }}
         run: |
-          git stash --include-untracked || true
-          git checkout "origin/$BASE_REF" -- . 2>/dev/null || true
+          set -euo pipefail
+          base_tree=/tmp/base-conf.d
+          rm -rf "$base_tree"; mkdir -p "$base_tree"
 
-          # Base branch may not have describe-tenant yet (pre-v2.7.0)
-          if [ -f "scripts/tools/dx/describe_tenant.py" ]; then
-            python3 scripts/tools/dx/describe_tenant.py \
-              --all \
-              --conf-d "${{ steps.detect.outputs.conf_d }}" \
-              --output /tmp/base-effective.json || echo "{}" > /tmp/base-effective.json
-          else
-            echo "{}" > /tmp/base-effective.json
+          # ⛔ The baseline is rebuilt from git OBJECTS into a directory of its
+          # own. It used to be produced by overlaying the base branch onto the
+          # PR worktree (`git checkout "origin/$BASE_REF" -- .`), which is wrong
+          # in two ways that need no command to fail (#1419):
+          #   * `git checkout <ref> -- .` does not DELETE files the PR added, so
+          #     a newly added tenant stayed on disk and was read as part of the
+          #     "base". Both sides then matched and the report said "no changes"
+          #     — for the single loudest thing a conf.d PR can do. Measured: a
+          #     PR adding db-new got "No effective tenant config changes
+          #     detected"; rebuilding the baseline gets "db-new (NEW)".
+          #   * the restore afterwards (`git checkout - -- .`) needs an `@{-1}`
+          #     that a detached PR checkout has no reason to have — measured
+          #     rc=128 every run — so the worktree was left holding BASE
+          #     content, and the very next step runs blast_radius.py FROM the
+          #     worktree. A PR touching both conf.d/ and that script got its
+          #     report computed by the OLD tool.
+          # Not touching the worktree removes both, and the stash/restore dance
+          # with them.
+          if ! git rev-parse --verify --quiet "origin/${BASE_REF}^{commit}" >/dev/null; then
+            echo "::error::base ref origin/${BASE_REF} does not resolve — the checkout step must keep fetch-depth: 0"
+            exit 1
           fi
 
-          # Restore PR state
-          git checkout - -- . 2>/dev/null || true
-          git stash pop 2>/dev/null || true
+          # Base branch may not have describe-tenant yet (pre-v2.7.0). THAT case
+          # has no baseline to compute and `{}` is the honest answer; a crash of
+          # the tool is not the same statement. Asked of the base COMMIT, not of
+          # the worktree, now that the worktree is never rewritten.
+          # ⛔ Probed with ls-tree, not `cat-file -e`. `cat-file -e` returns 128
+          # for BOTH "no such path" and "git could not answer" (broken object
+          # store, partial-clone fetch failure), so its exit code cannot carry
+          # the distinction this branch depends on — and collapsing them turns
+          # "I do not know" into "the base branch is old", hands `{}` to the
+          # comparison and prints a ::notice:: asserting something false. That
+          # is the defect class this whole file is about.
+          # ls-tree separates them: absent is rc=0 with empty output, broken is
+          # rc!=0. Same shape as the listing below, deliberately.
+          probe=$(mktemp)
+          set +e
+          git ls-tree -z "origin/$BASE_REF" -- scripts/tools/dx/describe_tenant.py > "$probe"
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::git ls-tree exited $rc probing origin/$BASE_REF for describe-tenant — cannot tell whether the base has it"
+            exit "$rc"
+          fi
+          if [ ! -s "$probe" ]; then
+            echo "::notice::base origin/$BASE_REF predates describe-tenant — comparing against an empty baseline"
+            echo "{}" > /tmp/base-effective.json
+            exit 0
+          fi
+
+          # `-r` because conf.d/ is hierarchical (ADR-016/017) and the baseline
+          # has to carry the whole inheritance chain. `-z` because ls-tree
+          # otherwise C-quotes non-ASCII paths and the `git show` below would
+          # then fail with a message blaming the object rather than the quoting.
+          # ⚠️ `-z` does that ON ITS OWN. An earlier draft also passed
+          # `-c core.quotePath=false` and this comment credited it; measured
+          # against git 2.54, `-c core.quotePath=true` WITH `-z` is already
+          # unquoted, so the flag was doing nothing.
+          # No `--name-only`: the type/mode column is what keeps a gitlink or a
+          # symlink out of the baseline, the same reason config-diff.yaml keeps
+          # it.
+          listing=$(mktemp)
+          set +e
+          git ls-tree -r -z "origin/$BASE_REF" -- "$CONF_D/" > "$listing"
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::git ls-tree exited $rc for origin/$BASE_REF:$CONF_D/ — cannot build a baseline"
+            exit "$rc"
+          fi
+          if [ ! -s "$listing" ]; then
+            echo "::notice::base origin/$BASE_REF has no $CONF_D/ — comparing against an empty baseline"
+            echo "{}" > /tmp/base-effective.json
+            exit 0
+          fi
+
+          while IFS=$'\t' read -r -d '' meta path; do
+            # Regular blobs only. A gitlink has no blob to show (the run would
+            # die blaming a "truncated baseline"), and a symlink's blob is its
+            # TARGET PATH — `git show` would write that string into a file and
+            # the baseline would quietly contain a config-shaped lie.
+            case "$meta" in
+              "100644 blob "*|"100755 blob "*) ;;
+              *) echo "::warning::skipping non-file entry in $CONF_D/: $path"; continue ;;
+            esac
+            rel="${path#"$CONF_D"/}"
+            # `--` so a path starting with `-` is not read as an option; without
+            # it dirname prints its usage to stderr, `set -e` does not see it
+            # inside a command substitution, and the failure surfaces later as a
+            # confusing `mv` error.
+            mkdir -p "$base_tree/$(dirname -- "$rel")"
+            # Scratch first, promote on success: redirecting onto the
+            # destination creates the file before git runs, which is how empty
+            # files used to stand in for real configs.
+            scratch=$(mktemp)
+            if ! git show "origin/$BASE_REF:$path" > "$scratch"; then
+              echo "::error::git show failed for origin/$BASE_REF:$path — refusing to compute a blast radius against a truncated baseline"
+              exit 1
+            fi
+            # Same 0600-from-mktemp trap as config-diff.yaml. Consumed by
+            # python3 as the runner user here rather than by a container,
+            # so it is not currently fatal — pinned anyway so the two
+            # baselines cannot drift into disagreeing about readability.
+            # ⛔ Same shape as config-diff.yaml: `cmd && rm` puts `cmd` on the
+            # LEFT of `&&`, where `bash -e` does not stop for it. Measured: the
+            # loop finished, the script continued, the step exited 0 — an
+            # incomplete baseline reported as a clean one.
+            if ! install -m 0644 "$scratch" "$base_tree/$rel"; then
+              echo "::error::failed to place the baseline copy at $base_tree/$rel — refusing to compute a blast radius against an incomplete baseline"
+              exit 1
+            fi
+            rm -f "$scratch"
+          done < "$listing"
+
+          python3 scripts/tools/dx/describe_tenant.py \
+            --all \
+            --conf-d "$base_tree" \
+            --output /tmp/base-effective.json
+          if [ ! -s /tmp/base-effective.json ]; then
+            echo "::error::describe-tenant exited 0 but wrote no baseline to /tmp/base-effective.json"
+            exit 1
+          fi
 
       - name: Compute blast radius
         if: steps.detect.outputs.conf_d != ''
@@ -96,7 +247,68 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
         run: |
           # Find changed conf.d files for header
-          CHANGED_FILES=$(git diff --name-only "origin/$BASE_REF"...HEAD -- "${{ steps.detect.outputs.conf_d }}" | head -5 | tr '\n' ', ' | sed 's/,$//')
+          # ⛔ NO `-z` on this one, and that is a decision with a measurement
+          # behind it. This value is DISPLAY-ONLY: it is truncated to five
+          # entries, comma-joined, and printed in the comment header — nothing
+          # parses it back into paths. An earlier version of this PR added `-z`
+          # here for symmetry with the two listings that ARE parsed, and it
+          # made the consumer crash on exactly the paths it was added for:
+          # raw non-UTF-8 bytes reach `--changed-files`, argv decodes them to
+          # surrogates, and `blast_radius.py` writes its report with
+          # `write_text(encoding="utf-8")` — strict — so
+          #   UnicodeEncodeError: surrogates not allowed
+          # kills the step and points the traceback at blast_radius.py.
+          # Measured; the pre-`-z` C-quoted form returns 0 on the same input.
+          # Making the pair safe means changing the CONSUMER too, so the
+          # producer and the consumer move together in the tier-semantics PR
+          # rather than landing half here. Until then git's C-quoting in this
+          # header is ugly and lossless, which is the correct trade for a
+          # string nobody splits.
+          # ⛔ Capture git's own status. This step has no `set -o pipefail` and
+          # the value comes out of a pipeline, so the assignment inherits
+          # `sed`'s success: a bad base ref printed `fatal: bad revision` and
+          # left CHANGED_FILES empty, rc 0 — the header line then silently
+          # disappears from a report that otherwise renders normally. "git
+          # could not tell me what changed" became "nothing changed", which is
+          # this file's own defect class on the line the comment above is
+          # about. ⚠️ A warning rather than a failure: the header is
+          # decoration, and killing the whole report over it would trade a
+          # quiet degradation for a loud one.
+          # ⚠️ Captured WITHOUT a redirect to a file, deliberately. The first
+          # version of this fix wrote the listing to `$changed_raw` and the
+          # sibling `-z` rule then fired on it — correctly by its own
+          # definition ("a listing whose output is read back"), and wrongly for
+          # this line, whose content is still collapsed into one display
+          # string. Assigning the substitution directly keeps git's status
+          # visible and keeps the line out of the parsed class, so the two
+          # rules stop disagreeing about it.
+          # ⛔⛔ THE TIER-SEMANTICS PR EDITS THIS SAME STATEMENT, and it carries
+          # the MERGED form. It adds `-z` here (its `_printable()` is the other
+          # half, which is why the pair could not land in this PR), and `-z` is
+          # structurally incompatible with the variable capture below: bash
+          # drops NUL bytes from a command substitution, so `changed_raw` would
+          # come back as every path concatenated into one string (measured).
+          # Its version therefore routes the listing through a file and keeps
+          # this rc check around it. ⛔ When the two are rebased together the
+          # conflict on these lines must resolve to THAT version, IN PLACE.
+          # ⛔ Not `git checkout --theirs` on this file: that swaps the WHOLE
+          # file and drops the four hunks git already auto-merged from this
+          # branch, with no conflict markers to show for it. Measured on the
+          # real merge — in place: `1 failed, 283 passed`; file-level: `17
+          # failed, 267 passed`. The single remaining red is answered in that
+          # branch's copy of this comment block, which is the copy that
+          # SURVIVES the resolution; this one does not, so treat it as a
+          # pointer rather than the instruction.
+          set +e
+          changed_raw=$(git diff --name-only "origin/$BASE_REF"...HEAD -- "${{ steps.detect.outputs.conf_d }}")
+          diff_rc=$?
+          set -e
+          if [ "$diff_rc" -ne 0 ]; then
+            echo "::warning::git diff exited $diff_rc listing the changed files for the comment header — the header will omit the file list, which is NOT the same as this PR changing nothing"
+            CHANGED_FILES=""
+          else
+            CHANGED_FILES=$(printf '%s\n' "$changed_raw" | head -5 | tr '\n' ', ' | sed 's/,$//')
+          fi
 
           python3 scripts/tools/ops/blast_radius.py \
             --base /tmp/base-effective.json \
@@ -125,8 +337,18 @@ jobs:
           script: |
             const fs = require('fs');
             const report = fs.readFileSync('/tmp/blast-radius-comment.md', 'utf8');
+            // ⛔ Provenance, because this comment is STICKY. A run that fails
+            // before this step leaves the PREVIOUS verdict in place, unedited
+            // and with no "edited" badge, reading as though it describes the
+            // current push — and #1419 made that MORE common by converting
+            // silent-green paths into red ones. The SHA and run link are the
+            // only way a reader can tell. Read from `context`, never from an
+            // Actions expression interpolation (#1021 class house rule).
+            const sha = (context.payload.pull_request?.head?.sha || context.sha).slice(0, 7);
+            const runUrl = context.serverUrl + '/' + context.repo.owner + '/' + context.repo.repo + '/actions/runs/' + context.runId;
+            const stamp = '\n<sub>commit `' + sha + '` • [run log](' + runUrl + ')</sub>\n';
             const marker = '<!-- blast-radius-bot -->';
-            const body = `${marker}\n${report}\n\n---\n*Generated by [blast_radius.py](../blob/main/scripts/tools/ops/blast_radius.py) • v2.7.0 Hierarchical Config Blast Radius*`;
+            const body = `${marker}\n${report}\n\n---\n*Generated by [blast_radius.py](../blob/main/scripts/tools/ops/blast_radius.py) • v2.7.0 Hierarchical Config Blast Radius*${stamp}`;
 
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
@@ -152,9 +374,47 @@ jobs:
             }
 
       - name: Upload report artifact
-        if: steps.blast.outputs.has_report == 'true'
+        # ⛔ NOT gated on `steps.blast.outputs.has_report`, which is set by the
+        # SECOND blast_radius.py call while the artifact is written by the
+        # FIRST. So the markdown call raising, or `Post PR comment` failing,
+        # leaves a COMPLETE report.json on disk and no comment on the PR — the
+        # exact moment the artifact is the only place the diff exists, and the
+        # exact moment the old condition threw it away.
+        #
+        # ⚠️ An earlier version of this comment said "the partial artifact is
+        # the only diagnostic" and claimed the same argument as the sibling in
+        # guard-defaults-impact.yml. That was WRONG for this file and is
+        # corrected here rather than deleted, because the wrong version reads
+        # more reassuring than the right one. That sibling BUILDS its report
+        # incrementally (`: > "$REPORT"` at step top, appended per tree), so a
+        # mid-step death genuinely leaves a partial. This one is a single
+        # `out_path.write_text` after all computation (`blast_radius.py`), so on
+        # every earlier failure path (Detect exiting 1, dependency install,
+        # either describe-tenant call, the json call itself) there is NO file at
+        # all and this upload is a no-op.
+        # ⚠️ NOT "complete or absent, never partial", which is what this said.
+        # That conflates "the CONTENT was finished" with "the FILE was
+        # finished", and only the first follows from writing once at the end.
+        # `write_text` opens with mode `w`, i.e. it TRUNCATES first and then
+        # flushes in chunks (measured: 24 bytes → 0 on open → 100000 before
+        # close), so a kill during the write leaves a truncated file on disk —
+        # reproduced with SIGTERM mid-write, 35MB of a 60MB payload, rc 143.
+        # The cancellation half of the old claim was therefore false, and it is
+        # the half the sentence went out of its way to assert.
+        # ⚠️ Kept as `always()` anyway, and the reason is a size argument rather
+        # than an impossibility one: this report is bounded by
+        # COMMENT_SAFETY_LIMIT, so it is written in a single flush in practice
+        # and a torn one is not a shape anybody has seen. If that bound ever
+        # goes away, a partial report uploaded under the name of a complete one
+        # is a real hazard and this needs a marker, not a bigger claim.
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: blast-radius-report
           path: /tmp/blast-radius-report.json
           retention-days: 30
+          # Explicit for the same reason the sibling pins it: on the (common)
+          # no-file paths above, the absence must not add a second red on top of
+          # the real failure. `warn` IS the action's current default — pinning it
+          # is a pin against a future major changing that, not a behaviour change.
+          if-no-files-found: warn

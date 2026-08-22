@@ -86,6 +86,67 @@ class TestRootResolution:
         assert targets == []
         assert unmanaged == ["docs/example/_defaults.yaml"]
 
+    def test_a_leading_blank_does_not_move_the_file_to_another_tree(self):
+        """⛔ 這是 TAB 缺陷的安靜版本，而且結局一樣是綠燈報錯的樹。
+
+        ` conf.d/db/_defaults.yaml`（一個前導空格）在 Linux 上是一棵**不同**的
+        樹。先前 `resolve()` 開頭寫 `raw.strip()`，於是它被改寫成
+        `conf.d/db/_defaults.yaml`——**一棵確實存在的別的樹**——da-guard 去驗
+        那一棵、sticky 留言貼綠。#1219 的結局，換一個入口。
+        """
+        targets, unmanaged = mod.resolve([" conf.d/db/_defaults.yaml"])
+        assert targets == [], (
+            f"a path was rewritten onto another tree: {targets}")
+        assert unmanaged == [" conf.d/db/_defaults.yaml"], (
+            "the leading blank must survive into the report, so the operator "
+            f"sees the name that was actually changed: {unmanaged}")
+
+    def test_a_trailing_blank_is_not_trimmed_away_either(self):
+        """同一條的另一半：尾隨空白也是檔名的一部分。"""
+        targets, _ = mod.resolve(["x/conf.d/db /_defaults.yaml"])
+        assert targets == [("x/conf.d", "x/conf.d/db ")], targets
+
+    def test_a_backslash_in_a_name_is_not_a_directory_separator(self):
+        """⛔ 同一類別的第三個成員，先前活在同一個函式裡。
+
+        反斜線在 POSIX 檔名裡合法（`mkdir 'we\\ird'` 在 Linux 上直接成功），而
+        `conf_d_root` / `resolve` 都對路徑做過 `replace("\\\\", "/")`。於是
+        `conf.d/we\\ird/_defaults.yaml` 被改寫成 `conf.d/we/ird`——scope 指向一個
+        **不存在的目錄** ⇒ da-guard exit 2 ⇒ job 紅，而訊息指著一個從沒出現在
+        PR diff 裡的路徑。輸入永遠來自 Linux 的 `git diff -z`，`/` 是唯一的分隔符，
+        所以那個正規化沒有任何合法輸入。
+        """
+        path = "conf.d/we\\ird/_defaults.yaml"
+        assert mod.conf_d_root(path) == "conf.d", mod.conf_d_root(path)
+        targets, unmanaged = mod.resolve([path])
+        assert targets == [("conf.d", "conf.d/we\\ird")], targets
+        assert unmanaged == []
+
+    def test_a_backslash_does_not_invent_a_conf_d_ancestor(self):
+        """另一個方向：正規化也會**憑空生出**一層 conf.d 祖先。
+
+        真實目錄名 `we\\conf.d` 是一個元件、不是兩層，所以這個檔案不在任何
+        conf.d 樹底下（正確答案是 unmanaged、由呼叫端出聲）。改寫過後它變成
+        `we/conf.d/...`，於是被當成 target 送去驗一棵不存在的樹。
+        """
+        path = "we\\conf.d/x/_defaults.yaml"
+        assert mod.conf_d_root(path) is None
+        targets, unmanaged = mod.resolve([path])
+        assert targets == []
+        assert unmanaged == [path]
+
+    @pytest.mark.parametrize("entries, expect_unmanaged", [
+        # 分隔符是**終止符**，所以最後一個切片一定是 ""。只有它該被跳過。
+        (["x/conf.d/_defaults.yaml", ""], []),
+        # ⛔ 反向：全空白的項目不是空字串，不可以被靜默丟掉——它沒有 conf.d
+        # 祖先，所以該落到 unmanaged 讓呼叫端出聲說「沒有為它驗任何東西」。
+        ([" "], [" "]),
+    ], ids=["trailing-empty-is-skipped", "whitespace-only-is-reported"])
+    def test_only_the_genuinely_empty_entry_is_skipped(self, entries,
+                                                       expect_unmanaged):
+        _, unmanaged = mod.resolve(entries)
+        assert unmanaged == expect_unmanaged
+
 
 class TestLiveRepo:
     def test_discovery_is_not_vacuous(self):
@@ -97,14 +158,33 @@ class TestLiveRepo:
             "否則下面每一條斷言都會空虛通過"
         )
 
-    def test_every_repo_defaults_file_resolves_to_a_tree(self):
-        """逐項而非全域下限：任何一個解不出根的檔案都要點名。"""
+    def test_no_repo_defaults_file_is_silently_dropped(self):
+        """⛔ 逐項對帳：每一個檔案要嘛落在某個 target 的根底下，要嘛被點名為
+        unmanaged。**沒有第三種下場**——靜默消失正是 #1219 的形狀。
+
+        ⚠️ 這一條**刻意不再斷言 `unmanaged == []`**。那個版本斷言的是 repo 的
+        擺放政策（「所有 `_defaults.yaml` 都必須住在某棵 conf.d 樹裡」），不是
+        guard 的正確性：`resolve()` 設計上就把樹外的檔案報成 unmanaged，那是它
+        該做的事。於是任何一個新增的樹外 `_defaults.yaml`——文件範例、客戶樣板、
+        測試 fixture——都會讓這條紅，而它**沒有豁免機制**，所以最省事的轉綠方式
+        是在 `_discover_defaults()` 裡自己發明一份 skip list。那份清單會擴散、
+        不需要理由、而且會連帶蓋掉真正該被看見的檔案。
+
+        現在守的是可推導的那一半：`conf_d_root()` 與 `resolve()` 對每一個檔案的
+        判斷必須一致。任一個檔案兩邊都沒有認領它，這裡就點名它。
+        """
         found = _discover_defaults()
-        _, unmanaged = mod.resolve(found)
-        assert unmanaged == [], (
-            f"這些 _defaults.yaml 不在任何 conf.d 樹下：{unmanaged}。"
-            "guard 會回報『未檢查』而非靜默貼綠，但若這是預期外的擺放位置，"
-            "應該先確認它是否真的該被 guard 涵蓋"
+        targets, unmanaged = mod.resolve(found)
+        roots = {root for root, _scope in targets}
+        missing = []
+        for path in found:
+            root = mod.conf_d_root(path)
+            claimed = path in unmanaged if root is None else root in roots
+            if not claimed:
+                missing.append((path, root))
+        assert not missing, (
+            f"這些 _defaults.yaml 既沒有被解析成 target、也沒有被回報為 "
+            f"unmanaged，等於從 guard 的視野裡消失：{missing}"
         )
 
     def test_repo_spans_more_than_the_legacy_root(self):
@@ -221,3 +301,307 @@ class TestWorkflowContract:
         assert "guard_defaults_scopes.py" in runs, (
             "scope 解析必須走 scripts/ops/guard_defaults_scopes.py（有單元測試釘住）"
         )
+
+
+class TestNonAsciiPathsAreNotSilentlyMisplaced:
+    """git 預設會編碼非 ASCII 路徑，而本腳本無法安全解碼它。
+
+    ⛔ 這一類**兩個方向都壞、其中一個是靜默的**（皆為實測，#1419 第七輪）：
+    conf.d 根在上層時解析成一個不存在的目錄（da-guard exit 2 → 紅，訊息指著
+    da-guard）；根在下層時被歸成 `unmanaged` → WORST 維持 0 → **job 綠**，
+    而留言斷言「此檔不在任何 conf.d 樹底下」——它就在底下。
+
+    因此正解是**拒絕評分**而不是加一個反跳脫器：判準是「git 只有在編碼過時
+    才會產生開頭的 `"`」，對兩個方向都封閉，不需要列舉跳脫序列的形狀。
+    """
+
+    _QUOTED_ABOVE_ROOT = '"\\347\\222\\260\\345\\242\\203-prod/conf.d/_defaults.yaml"'
+    _QUOTED_BELOW_ROOT = '"conf.d/\\347\\247\\237\\346\\210\\266-a/_defaults.yaml"'
+
+    @pytest.mark.parametrize("line", [_QUOTED_ABOVE_ROOT, _QUOTED_BELOW_ROOT])
+    def test_c_quoted_input_is_refused_not_scored(self, line, capsys,
+                                                  monkeypatch):
+        """⛔ Newline 模式才拒絕——這一半的封閉性是實測過的。
+
+        git 對「本來就以引號開頭的檔名」會再包一層引號，所以 newline 模式下
+        每一個 `"` 開頭的行都是編碼過的輸出，拒絕是唯一安全的答案。
+        （NUL 模式相反，見下一支測試。）
+        """
+        monkeypatch.setattr("sys.stdin", _Stdin(line + "\n"))
+        rc = mod.main(["-"])
+        captured = capsys.readouterr()
+        # ⛔ 字面值，不是 `mod.EXIT_QUOTED_INPUT`。從產物抄期望值只證明它等於
+        # 自己：把那個常數改成 0 之後「拒絕評分」變成印一段 stderr 然後回 0，
+        # 呼叫端在 `bash -e` 下看不到失敗、TSV 是空檔、workflow 落到 whole-tree
+        # 分支——綠燈，而那個檔從頭到尾沒被評分。整份測試仍全綠。
+        assert rc == 2, (
+            f"C-quoted input was scored instead of refused (rc={rc}); "
+            f"stdout={captured.out!r}")
+        assert mod.EXIT_QUOTED_INPUT == 2, (
+            "the caller-visible contract is a non-zero exit; changing the "
+            "constant is a behaviour change, not a rename")
+        assert not captured.out, (
+            f"a refused run still emitted rows: {captured.out!r} — the caller "
+            f"writes stdout to guard-targets.tsv, so a partial answer here is "
+            f"worse than none")
+        assert "-z" in captured.err and "--null" in captured.err, (
+            f"the refusal must name the fix on the producer side: {captured.err!r}")
+
+    def test_the_refusal_message_does_not_advise_dropping_the_paths(self, capsys,
+                                                                    monkeypatch):
+        """守衛的錯誤訊息也是一條繳械路徑。
+
+        「照做之後系統會變好還是變壞」——教人剝掉引號或略過這些列，就是把這個
+        缺陷原樣留下並且從此不再出聲。
+        """
+        monkeypatch.setattr("sys.stdin", _Stdin(self._QUOTED_ABOVE_ROOT + "\n"))
+        mod.main(["-"])
+        err = capsys.readouterr().err
+        assert "Do NOT drop" in err and "do NOT strip" in err, err
+
+    def test_null_separated_input_is_read_verbatim(self, capsys, monkeypatch):
+        """`-z` 之後路徑是原始位元組，非 ASCII 必須原封不動落到 target。"""
+        payload = "conf.d/租戶-a/_defaults.yaml\0conf.d/租戶-b/_defaults.yaml\0"
+        monkeypatch.setattr("sys.stdin", _Stdin(payload))
+        rc = mod.main(["--null", "-"])
+        out = capsys.readouterr().out
+        assert rc == 0, out
+        # 兩個目錄同根 → scope 收窄到根（既有規則），且完全沒有 unmanaged。
+        assert "unmanaged" not in out, (
+            f"a real conf.d tree was reported as outside every tree: {out!r}")
+        assert out.splitlines() == ["target\tconf.d\tconf.d"], out
+
+    def test_ascii_input_still_works_without_the_flag(self, capsys, monkeypatch):
+        """反向樣本：拒絕規則不可以朝『見人就咬』漂移。"""
+        monkeypatch.setattr("sys.stdin", _Stdin("conf.d/a/_defaults.yaml\n"))
+        rc = mod.main(["-"])
+        out = capsys.readouterr().out
+        assert rc == 0, out
+        assert out.splitlines() == ["target\tconf.d\tconf.d/a"], out
+
+    def test_a_leading_quote_is_a_legal_name_under_null_mode(self, capsys,
+                                                             monkeypatch):
+        """⛔ 反向樣本：`-z` 之下開頭的 `"` 是檔名本身，不是編碼。
+
+        實測（`git mktree -z` 建出名為 `"quoted-dir` 的目錄）：
+          git diff --name-only     -> "\\"quoted-dir/conf.d/_defaults.yaml"
+          git diff -z --name-only  -> "quoted-dir/conf.d/_defaults.yaml\\0
+        先前把拒絕擴到 NUL 模式，就是對這個合法名字硬失敗（`set -euo pipefail`
+        之下整個 step 死掉），而訊息叫操作者「改用 -z + --null」——那正是他
+        已經在做的事。一個走不通的補救配一個誤紅。
+        """
+        monkeypatch.setattr(
+            "sys.stdin", _Stdin('"quoted-dir/conf.d/_defaults.yaml\0'))
+        rc = mod.main(["--null", "-"])
+        out = capsys.readouterr()
+        assert rc == 0, f"a legal directory name was refused: {out.err!r}"
+        assert out.out.splitlines() == [
+            'target\t"quoted-dir/conf.d\t"quoted-dir/conf.d'], out.out
+
+    @pytest.mark.parametrize("bad", ["conf.d/we\tird/_defaults.yaml",
+                                     "conf.d/we\nird/_defaults.yaml"])
+    def test_a_path_carrying_the_output_delimiters_is_refused(self, bad, capsys,
+                                                              monkeypatch):
+        """⛔ 控制字元不可能出現在欄位裡，而理由有兩層。
+
+        實測：路徑內含 TAB 時輸出 `unmanaged\\twe\\tird/…`，呼叫端的
+        `IFS=$'\\t' read -r kind a b` 把欄位整個位移，列形狀檢查照過（兩欄都
+        非空），最後 sticky 留言寫 `### \\`we\\` — NOT CHECKED`——**綠燈，而且
+        指著一個不存在的檔案**。這一層封閉在**輸出格式**上。
+
+        ⚠️ 但 `\\r` 過得了那一層而仍然是缺陷：`read` 把它留在欄位裡、da-guard
+        拿到一個不存在的目錄 ⇒ 紅燈，**而那則 `::error::` 被終端機重畫**，操作
+        者讀到的是另一個路徑。所以判準取兩個來源的聯集（格式的分隔符＋ASCII
+        C0），不是「TAB 與 newline」這兩個字。
+        """
+        monkeypatch.setattr("sys.stdin", _Stdin(bad + "\0"))
+        rc = mod.main(["--null", "-"])
+        out = capsys.readouterr()
+        assert rc == 3, f"an unrepresentable path was emitted: {out.out!r}"
+        assert not out.out, out.out
+        assert "control character" in out.err, out.err
+        # ⛔ 訊息要指名是哪一個字元。第一版只說「TAB or newline」，而現在被拒的
+        # 集合更大——一則說不出兇手的拒絕，操作者無從照做（訊息教人 rename）。
+        assert repr(next(c for c in bad if c in mod.UNREPRESENTABLE)) in out.err, \
+            out.err
+
+    @pytest.mark.parametrize("sep", ['\r', '\x0b', '\x0c', '\x1c', '\x1d', '\x1e'],
+                             ids=["cr", "vtab", "ff", "fs", "gs", "rs"])
+    def test_a_c0_separator_is_refused_rather_than_splitting_the_path(
+            self, sep, capsys, monkeypatch):
+        """⛔ 切分器只准斷在真正的換行上 —— 而這條先前零覆蓋。
+
+        `splitlines()` 在**十一**個字元上斷行。實測：把它放回去，
+        `conf.d/we<SEP>ird/_defaults.yaml` 會被腰斬成兩列——一列 target 把驗證
+        範圍擴到整棵根，一列 unmanaged 指著一個**不存在的檔案**——而 rc=0 全綠。
+        下面那道拒絕看的是切完之後的碎片，所以它完全不會醒：切分器在它上游。
+        """
+        monkeypatch.setattr(
+            "sys.stdin", _Stdin("conf.d/we" + sep + "ird/_defaults.yaml\n"))
+        rc = mod.main(["-"])
+        out = capsys.readouterr()
+        assert rc == 3, (
+            f"{sep!r} split the path instead of being refused: {out.out!r}")
+        assert not out.out, out.out
+
+    @pytest.mark.parametrize("sep", ['\x85', '\u2028', '\u2029'],
+                             ids=["nel", "ls", "ps"])
+    def test_a_non_c0_line_separator_survives_whole(self, sep, capsys,
+                                                    monkeypatch):
+        """⛔ 同一條規則的另一半，而且這一半才抓得住剩下的三種切法。
+
+        `splitlines()` 的十一個字元裡有三個**不在** C0（NEL 是 C1，LS/PS 是
+        Unicode），所以拒絕集合對它們沉默——換回 `splitlines()` 之後它們照樣把
+        路徑腰斬，而上面那六格全部照過。這裡要的不是「被拒絕」而是「**原封不動
+        穿過**」：它們在 TSV 裡可表示（消費端的 `read` 只斷換行），所以正確行為
+        是逐字保留。
+        """
+        path = "conf.d/we" + sep + "ird/_defaults.yaml"
+        monkeypatch.setattr("sys.stdin", _Stdin(path + "\n"))
+        rc = mod.main(["-"])
+        out = capsys.readouterr()
+        assert rc == 0, out.err
+        expected = "target\tconf.d\tconf.d/we" + sep + "ird\n"
+        assert out.out == expected, (
+            f"{sep!r} split the path: {out.out!r}")
+    def test_the_newline_splitter_still_accepts_ordinary_lines(self, capsys,
+                                                               monkeypatch):
+        """反向樣本：真正的換行仍然是分隔符，兩筆就是兩筆。"""
+        monkeypatch.setattr("sys.stdin", _Stdin(
+            "a/conf.d/x/_defaults.yaml\nb/conf.d/y/_defaults.yaml\n"))
+        rc = mod.main(["-"])
+        out = capsys.readouterr()
+        assert rc == 0, out.err
+        assert out.out.splitlines() == ["target\ta/conf.d\ta/conf.d/x",
+                                        "target\tb/conf.d\tb/conf.d/y"], out.out
+
+    @pytest.mark.parametrize("suffix", ["\r", "\v", "\x85"],
+                             ids=["cr", "vtab", "nel"])
+    def test_both_modes_give_the_same_answer_for_the_same_bytes(
+            self, suffix, capsys, monkeypatch):
+        """⛔ 同一串位元組，兩個模式必須同一個答案。
+
+        newline 模式先前在切分後做 `p[:-1] if p.endswith("\\r")`，也就是把一個
+        已經被 UNREPRESENTABLE 判死的字元**在拒絕之前**剝掉。實測 `conf.d/db` 尾隨
+        一個 CR：`--null` rc=3 拒絕，newline 模式 rc=0 且輸出 `target\\tconf.d\\tconf.d`
+        ——同一個輸入、相反的結局，而剝除那半正是同檔 `resolve()` 判死的 `strip()`。
+
+        ⚠️ 誠實揭露鑑別力：這三格裡真正動過的只有 `[cr]`（CR 剝除那個回歸）與
+        `[vtab]`（切分器換回 `splitlines()`）；`[nel]` 在本輪四個相關變異裡**一次
+        都沒開火**。它是冗餘而不是覆蓋——絕對值那一面由上面兩支（C0 必拒／非 C0
+        必須原封穿過）釘住，這一支釘的只是「兩個模式必須給同一個答案」這個差分
+        性質。留著是因為那個性質本身值得釘，但不要把它讀成三種輸入都被證明過。
+        """
+        payload = f"conf.d/db{suffix}"
+        monkeypatch.setattr("sys.stdin", _Stdin(payload + "\n"))
+        newline_rc = mod.main(["-"])
+        capsys.readouterr()
+        monkeypatch.setattr("sys.stdin", _Stdin(payload + "\0"))
+        null_rc = mod.main(["--null", "-"])
+        capsys.readouterr()
+        assert newline_rc == null_rc, (
+            f"{payload!r} was refused in one mode and scored in the other: "
+            f"newline={newline_rc} null={null_rc}")
+
+    def test_the_two_refusals_do_not_share_one_exit_code(self, capsys,
+                                                          monkeypatch):
+        """⛔ 兩個拒絕的補救動作相反，退出碼不可以同一個。
+
+        `EXIT_QUOTED_INPUT` 說的是「生產端沒給 `-z`」（去改 producer），
+        unrepresentable 說的是「這個檔名不能被表示」（去 rename）。先前兩者共用
+        一個常數，於是一個名叫 QUOTED_INPUT 的碼被回給一個含 TAB 的路徑——
+        斷言了一個從未成立的成因。
+        ⚠️ 呼叫端目前**不**分辨兩者（`set -euo pipefail` 之下都是死），這條釘的
+        是日誌與這支測試分得出來，不是行為差異。
+        """
+        assert mod.EXIT_QUOTED_INPUT != mod.EXIT_UNREPRESENTABLE_PATH
+        monkeypatch.setattr("sys.stdin", _Stdin(self._QUOTED_ABOVE_ROOT + "\n"))
+        quoted_rc = mod.main(["-"])
+        capsys.readouterr()
+        monkeypatch.setattr(
+            "sys.stdin", _Stdin("conf.d/we\tird/_defaults.yaml\0"))
+        tab_rc = mod.main(["--null", "-"])
+        capsys.readouterr()
+        assert quoted_rc != tab_rc, (
+            "the C-quoted refusal and the unrepresentable-path refusal are "
+            "indistinguishable from the outside")
+
+    @pytest.mark.parametrize("path, refused", [
+        # 必須被拒：格式層（兩個分隔符）
+        ("conf.d/we\tird/_defaults.yaml", True),
+        ("conf.d/we\nird/_defaults.yaml", True),
+        # 必須被拒：訊息層（C0，先前整批放行）
+        ("conf.d/we\rird/_defaults.yaml", True),
+        ("conf.d/we\vird/_defaults.yaml", True),
+        ("conf.d/we\x1eird/_defaults.yaml", True),
+        ("conf.d/we\x7fird/_defaults.yaml", True),
+        # ⛔ 反向樣本：規則不可朝「見人就咬」漂移。這些都是 Linux 上合法且
+        # 完全可表示的名字，被擋掉的話最省事的轉綠方式是刪掉這道拒絕。
+        ("conf.d/we ird/_defaults.yaml", False),
+        ("conf.d/ leading/_defaults.yaml", False),
+        ("conf.d/trailing /_defaults.yaml", False),
+        ("conf.d/租戶-a/_defaults.yaml", False),
+        ('conf.d/"quoted/_defaults.yaml', False),
+    ], ids=["tab", "newline", "cr", "vtab", "rs", "del",
+            "interior-space", "leading-space", "trailing-space",
+            "non-ascii", "quote-under-null"])
+    def test_the_refusal_set_is_two_sided(self, path, refused, capsys,
+                                          monkeypatch):
+        """正反兩組樣本。只釘「該拒的被拒」的話，全部拒絕也能通過那一半。"""
+        monkeypatch.setattr("sys.stdin", _Stdin(path + "\0"))
+        rc = mod.main(["--null", "-"])
+        out = capsys.readouterr()
+        if refused:
+            assert rc == 3, f"{path!r} was emitted anyway: {out.out!r}"
+            assert not out.out, out.out
+        else:
+            assert rc == 0, f"a legal path was refused: {out.err!r}"
+            # 輸出的是 scope（父目錄），所以逐位元組比對的對象是父目錄——這正
+            # 是「別把期望值從產物抄下來」的相反面：期望值由**輸入**推導。
+            scope = path.rsplit("/", 1)[0]
+            assert out.out == f"target\tconf.d\t{scope}\n", (
+                f"{scope!r} did not reach the output verbatim: {out.out!r}")
+
+    def test_non_utf8_path_bytes_survive_verbatim(self, capsysbinary,
+                                                  monkeypatch):
+        """⛔ `-z` 只解掉 C-quoting，不解掉「位元組不是 UTF-8」。
+
+        盲審實測：Big5 位元組在預設 reader 下被讀成 `??`，於是又落到一個不存在
+        的目錄 ⇒ da-guard exit 2 ⇒ 紅燈怪罪 da-guard——正是 `-z` 宣稱已消除的那
+        個結果。stdin 讀 bytes + surrogateescape、輸出同樣編回去，才是真的解掉。
+        """
+        raw = b"conf.d/\xb4\xfa-prod/_defaults.yaml\0"
+        stdin = _Stdin("")
+        stdin.buffer = _StdinBuffer(raw)
+        monkeypatch.setattr("sys.stdin", stdin)
+        rc = mod.main(["--null", "-"])
+        out = capsysbinary.readouterr().out
+        assert rc == 0, out
+        # 逐位元組原封不動——不是 `??`，也不是任何 replacement 字元。
+        assert out == b"target\tconf.d\tconf.d/\xb4\xfa-prod\n", out
+        assert b"?" not in out
+
+
+class _Stdin:
+    """⛔ Exposes `.buffer`, because the script reads BYTES.
+
+    A text-only stub would have made the surrogateescape path — added so that
+    non-UTF-8 path bytes survive instead of decoding to `??` and pointing at a
+    directory that does not exist — untestable, and the stub raising
+    AttributeError is the only reason that was noticed.
+    """
+
+    def __init__(self, text: str) -> None:
+        self._text = text
+        self.buffer = _StdinBuffer(text.encode("utf-8", errors="surrogateescape"))
+
+    def read(self) -> str:
+        return self._text
+
+
+class _StdinBuffer:
+    def __init__(self, data: bytes) -> None:
+        self._data = data
+
+    def read(self) -> bytes:
+        return self._data

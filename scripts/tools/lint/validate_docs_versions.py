@@ -49,6 +49,7 @@ from _version_patterns import (
     VERSION_CURRENCY_IGNORE,
     RULE_PACK_COUNT_PATTERNS,
     TOOL_COUNT_PATTERNS,
+    TOOL_COUNT_SUBDIRS,
     ADR_COUNT_PATTERNS,
     DOC_FILE_COUNT_PATTERNS,
     SCENARIO_COUNT_PATTERNS,
@@ -783,6 +784,45 @@ def check_tool_map_coverage() -> List[Issue]:
     return issues
 
 
+def _count_python_tools() -> int:
+    """How many Python tools `scripts/tools/{ops,dx,lint}` holds.
+
+    ⛔ #1483: this used to exist twice inside this module.
+    `check_tool_count_in_docs` scanned the root plus `ops/`, `dx/`, `lint/`
+    (220); `_auto_fix` scanned the root only (1), so `--fix` wrote
+    "1 個 Python 工具" into README.md and printed `🔧 Fixed tool-count`.
+    `tool-count` is a warning, so nothing went red afterwards.
+
+    ⚠️ The first repair for that unified both halves on the **checker's**
+    number, 220 — and 220 is itself wrong. The scope is written into the
+    sentence being checked: ``scripts/tools/{ops,dx,lint}`` 下 N 個 Python
+    工具. The root is not in it. Both writers agree: `bump_docs.
+    _count_python_tools` and `generate_tool_map.gather_tools` each produce
+    219. Unifying on 220 would have made `--fix` write 220 while
+    `bump_docs --sync-counts` wrote 219 back — two tools fighting over one
+    number, with the gate emitting a warning neither side could satisfy.
+    Measured on `0da92961`: root only 1, {ops,dx,lint} 219, root+subs 220.
+
+    ⛔ Do not "derive" this with `rglob`. Measured: 223, because
+    `dx/custom_alerts/` is a package (`__init__.py`, no `main()` in any of
+    its three modules) — library code, not tools. The subdirectory tuple
+    is not an enumeration standing in for a rule; it *is* the documented
+    scope, and `TestTheCounterMatchesTheScopeTheDocsDeclare` fails if a new
+    non-package subdirectory appears without this tuple and that sentence
+    being updated together.
+    """
+    tools_dir = REPO_ROOT / "scripts" / "tools"
+    if not tools_dir.exists():
+        return 0
+    all_py: List[Path] = []
+    for subdir in TOOL_COUNT_SUBDIRS:
+        sub = tools_dir / subdir
+        if sub.is_dir():
+            all_py.extend(sub.glob("*.py"))
+    return sum(1 for f in all_py
+               if not any(f.name.startswith(p) for p in TOOL_MAP_SKIP_PREFIXES))
+
+
 def check_tool_count_in_docs() -> List[Issue]:
     """Check that CLAUDE.md and README tool counts match actual scripts/tools/*.py.
 
@@ -791,20 +831,9 @@ def check_tool_count_in_docs() -> List[Issue]:
     (excluding _lib_*, __init__, __pycache__).
     """
     issues = []
-    tools_dir = REPO_ROOT / "scripts" / "tools"
-    if not tools_dir.exists():
+    if not (REPO_ROOT / "scripts" / "tools").exists():
         return issues
-
-    # Scan all subdirectories (ops/, dx/, lint/) + root
-    all_py_files = list(tools_dir.glob("*.py"))
-    for subdir in ("ops", "dx", "lint"):
-        sub_path = tools_dir / subdir
-        if sub_path.is_dir():
-            all_py_files.extend(sub_path.glob("*.py"))
-    actual_count = sum(
-        1 for f in all_py_files
-        if not any(f.name.startswith(p) for p in TOOL_MAP_SKIP_PREFIXES)
-    )
+    actual_count = _count_python_tools()
 
     for fpath in TOOL_COUNT_CHECK_FILES:
         if not fpath.exists():
@@ -939,17 +968,32 @@ def check_scenario_count_in_docs() -> List[Issue]:
 
 
 def _auto_fix(issues: List[Issue], bilingual_pairs: int,
-              rule_counts: dict) -> int:
-    """Auto-fix fixable issues. Returns count of fixes applied."""
+              rule_counts: dict) -> List[Issue]:
+    """Repair what can be repaired; return the issues actually repaired.
+
+    ⛔ Returns the issues, not a count. #1483's first attempt decided the exit
+    code from "is this check id in a list of fixable ids", which is a proxy
+    for "was this issue handled" and not the same thing: `rule-pack-count` is
+    in that list, but the repair only rewrites two badge patterns, so the
+    same id occurring in prose is never touched. `--ci --fix` then dropped a
+    real error out of the exit-code decision AND out of the printed report —
+    measured: a `99 個 Rule Pack` line in a doc gave `--ci` rc=1 and
+    `--ci --fix` rc=0 with the message reading "0 error(s)".
+
+    ⚠️ Reads each file fresh rather than through `_read_cached`. The cache is
+    never invalidated on write, so a second issue on the same file used to
+    read the pre-repair text and write it back — silently reverting the first
+    repair while printing `🔧 Fixed` for both.
+    """
     import stat
-    fixed = 0
+    repaired: List[Issue] = []
 
     for issue in issues:
         fpath = REPO_ROOT / issue.file
         if not fpath.exists():
             continue
 
-        content = _read_cached(fpath)
+        content = fpath.read_text(encoding="utf-8")
         new_content = content
 
         if issue.check == "bilingual-count":
@@ -960,11 +1004,7 @@ def _auto_fix(issues: List[Issue], bilingual_pairs: int,
 
         elif issue.check == "tool-count":
             # Fix "XX 個 Python 工具" count
-            tools_dir = REPO_ROOT / "scripts" / "tools"
-            actual_count = sum(
-                1 for f in tools_dir.glob("*.py")
-                if not any(f.name.startswith(p) for p in TOOL_MAP_SKIP_PREFIXES)
-            )
+            actual_count = _count_python_tools()
             pattern = AUTO_FIX_PATTERNS["tool-count"]["pattern"]
             replacement = AUTO_FIX_PATTERNS["tool-count"]["replacement_template"].format(value=actual_count)
             new_content = re.sub(pattern, replacement, new_content)
@@ -996,13 +1036,17 @@ def _auto_fix(issues: List[Issue], bilingual_pairs: int,
 
         if new_content != content:
             fpath.write_text(new_content, encoding="utf-8", newline="\n")
+            # `_auto_fix` reads fresh now, so the cache no longer causes the
+            # revert bug — but leaving pre-repair text in it would hand
+            # stale content to any re-verify pass added later in-process.
+            _CONTENT_CACHE.pop(fpath, None)
             os.chmod(fpath,
                      stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP
                      | stat.S_IROTH)
             print(f"  🔧 Fixed {issue.check} in {issue.file}")
-            fixed += 1
+            repaired.append(issue)
 
-    return fixed
+    return repaired
 
 
 def check_image_tag_v_prefix() -> List[Issue]:
@@ -1049,43 +1093,131 @@ def check_e2e_and_jsx_versions(expected_platform: str) -> List[Issue]:
     e2e_pkg = REPO_ROOT / "tests" / "e2e" / "package.json"
 
     # Check e2e/package.json
-    if e2e_pkg.exists():
+    #
+    # ⛔ #1484: every way this file can fail to yield a version is an ERROR
+    # that names it. Measured on the old code, six shapes returned no issue
+    # at all or killed the run: a missing `version` key, an empty string,
+    # malformed JSON, `"version": null`, a non-string version, and the file
+    # being absent entirely. Of the two checks #1480 brought back to
+    # life this is the one that caught real damage, and any of those
+    # shapes switched it off. ⚠️ Not "the only check in the gate that
+    # ever caught drift" — an earlier draft said that and it is false:
+    # `bilingual-count`, `tool-count` and `bilingual-numbers` were
+    # between them reporting six real drifts on the same tree.
+    #
+    # ⚠️ `_UNREAD` rather than `None` as the "not parsed yet" sentinel:
+    # `null` is legal JSON, so `json.loads` returning `None` is a *result*.
+    # Using `None` for both collapsed them and let a file containing just
+    # `null` pass silently — a bug introduced by the first attempt at this
+    # very fix, and found by blind review.
+    rel = str(e2e_pkg.relative_to(REPO_ROOT)) if e2e_pkg.is_absolute() \
+        else str(e2e_pkg)
+    if not e2e_pkg.exists():
+        issues.append(Issue(
+            "e2e-package-version", "error", rel, 0,
+            "is missing, so the version it pins was never compared against "
+            "the platform version; restore it or drop this check",
+        ))
+    else:
+        _UNREAD = object()
+        pkg = _UNREAD
         try:
             pkg = json.loads(e2e_pkg.read_text(encoding="utf-8"))
-            found = pkg.get("version", "")
-            # Normalize: remove leading 'v' for comparison
-            norm_expected = expected_platform.lstrip("v")
-            norm_found = found.lstrip("v")
-            if norm_found and norm_found != norm_expected:
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
+            issues.append(Issue(
+                "e2e-package-version", "error", rel, 0,
+                f"could not be read, so its version was never compared "
+                f"against the platform version: {exc}",
+            ))
+        if pkg is not _UNREAD:
+            found = pkg.get("version") if isinstance(pkg, dict) else None
+            if not isinstance(pkg, dict):
                 issues.append(Issue(
-                    "e2e-package-version", "error",
-                    str(e2e_pkg.relative_to(REPO_ROOT)), 0,
-                    f'package.json version "{found}" should be "{expected_platform}"',
+                    "e2e-package-version", "error", rel, 0,
+                    f"top level is {type(pkg).__name__}, not an object, so "
+                    f"it carries no version to compare",
                 ))
-        except (json.JSONDecodeError, OSError):
-            pass
+            elif not isinstance(found, str) or not found.strip():
+                issues.append(Issue(
+                    "e2e-package-version", "error", rel, 0,
+                    f"has no usable version string to compare against the "
+                    f"platform version (found {found!r})",
+                ))
+            else:
+                # Normalize: remove leading 'v' for comparison
+                norm_expected = expected_platform.lstrip("v")
+                norm_found = found.lstrip("v")
+                if norm_found != norm_expected:
+                    issues.append(Issue(
+                        "e2e-package-version", "error", rel, 0,
+                        f"version {found} does not match the platform "
+                        f"version {expected_platform}",
+                    ))
 
     # Check JSX frontmatter versions
-    jsx_dir = DOCS_DIR / "interactive" / "tools"
-    if jsx_dir.exists():
-        for jsx_file in sorted(jsx_dir.glob("*.jsx")):
-            content = jsx_file.read_text(encoding="utf-8", errors="replace")
+    #
+    # ⛔ The directory this scanned — `docs/interactive/tools` — stopped
+    # existing on 2026-05-07 (`b439c427`, the portal monorepo restructure,
+    # #279/TD-042), which moved the sources to `tools/portal/src`. The
+    # `if jsx_dir.exists():` then made three and a half months of drift
+    # invisible: measured on this tree, 68 `.jsx` files, 49 of them carrying
+    # a `version:`, one of them (`getting-started/wizard.jsx`) still at
+    # 2.7.0. Nothing else covered it — `lint_tool_consistency` checks
+    # `related:` not `version:`, and `check_frontmatter_versions` only walks
+    # `docs/**/*.md`.
+    #
+    # ⚠️ Missing directory is now an error, not a skip: "the source tree
+    # moved again" and "there is nothing to check" are the same picture
+    # otherwise, and that is exactly how this half died the first time.
+    # ⚠️ Severity is `error`, not `warn`: as a warning it could never make
+    # `--ci` non-zero, so even after the path was corrected nothing would
+    # have stopped the drift from shipping.
+    jsx_dir = REPO_ROOT / "tools" / "portal" / "src"
+    if not jsx_dir.is_dir():
+        issues.append(Issue(
+            "jsx-frontmatter-version", "error",
+            str(jsx_dir.relative_to(REPO_ROOT)), 0,
+            "the JSX source tree is not where this check looks, so no JSX "
+            "frontmatter version was compared; update the path here rather "
+            "than letting the check disappear",
+        ))
+    else:
+        for jsx_file in sorted(jsx_dir.rglob("*.jsx")):
+            # The e2e half turns an unreadable file into a named Issue; this
+            # half used to let it raise. A file that is unreadable, or that
+            # disappears between the rglob and the read, would abort the
+            # whole validator with a traceback and no Issue at all — the
+            # same "the check went quiet" class this block argues against,
+            # in crash form.
+            try:
+                content = jsx_file.read_text(encoding="utf-8",
+                                             errors="replace")
+            except OSError as exc:
+                issues.append(Issue(
+                    "jsx-frontmatter-version", "error",
+                    str(jsx_file.relative_to(REPO_ROOT)), 0,
+                    f"could not be read, so its frontmatter version was "
+                    f"never compared: {exc}",
+                ))
+                continue
             # JSX frontmatter is between --- delimiters
-            if content.startswith("---"):
-                end = content.find("---", 3)
-                if end > 0:
-                    frontmatter = content[3:end]
-                    m = re.search(r"^version:\s*v?(\S+)", frontmatter, re.MULTILINE)
-                    if m:
-                        found = m.group(1)
-                        norm = expected_platform.lstrip("v")
-                        if found != norm and found != expected_platform:
-                            rel = jsx_file.relative_to(REPO_ROOT)
-                            issues.append(Issue(
-                                "jsx-frontmatter-version", "warn",
-                                str(rel), 0,
-                                f'version: "{found}" should be "{expected_platform}"',
-                            ))
+            if not content.startswith("---"):
+                continue
+            end = content.find("---", 3)
+            if end <= 0:
+                continue
+            m = re.search(r"^version:\s*v?(\S+)", content[3:end], re.MULTILINE)
+            if not m:
+                continue
+            found = m.group(1)
+            norm = expected_platform.lstrip("v")
+            if found != norm and found != expected_platform:
+                issues.append(Issue(
+                    "jsx-frontmatter-version", "error",
+                    str(jsx_file.relative_to(REPO_ROOT)), 0,
+                    f"version {found} does not match the platform version "
+                    f"{expected_platform}",
+                ))
     return issues
 
 
@@ -1215,16 +1347,34 @@ def main():
 
     # --fix mode: auto-fix fixable issues
     if args.fix and all_issues:
-        fixed = _auto_fix(all_issues, bilingual_pairs, rule_counts)
-        if fixed:
-            print(f"🔧 Auto-fixed {fixed} issue(s). Re-run to verify.")
+        repaired = _auto_fix(all_issues, bilingual_pairs, rule_counts)
+        if repaired:
+            print(f"Auto-fixed {len(repaired)} issue(s). Re-run to verify.")
         else:
             print("No auto-fixable issues found.")
-            unfixable = [i for i in all_issues
-                         if i.check in ("platform-version", "da-tools-version",
-                                        "exporter-version")]
-            if unfixable:
-                print("  ℹ️  Version issues: run bump_docs.py to fix")
+
+        # The exit-code decision, from what was ACTUALLY repaired.
+        #
+        # #1483: returning here meant `--ci --fix` exited 0 while real errors
+        # stood, and printed nothing about them. The first attempt at this
+        # decided from "is the check id in a list of fixable ids" — a proxy
+        # that is not the same question, because a repair can decline to
+        # touch a particular occurrence (a `rule-pack-count` in prose rather
+        # than in a badge). Asking `_auto_fix` what it repaired removes the
+        # proxy, and with it a list that had to be kept in step with the
+        # repairs by hand.
+        remaining = [i for i in all_issues if i not in repaired]
+        remaining_errors = [i for i in remaining if i.severity == "error"]
+        if remaining:
+            print()
+            print(f"  {len(remaining)} issue(s) still standing after --fix "
+                  f"({len(remaining_errors)} error(s)):")
+            for issue in remaining:
+                icon = "[E]" if issue.severity == "error" else "[W]"
+                print(f"    {icon} [{issue.check}] {issue.file}:{issue.line} "
+                      f"— {issue.message}")
+        if args.ci and remaining_errors:
+            sys.exit(EXIT_VIOLATION)
         return
 
     errors = [i for i in all_issues if i.severity == "error"]

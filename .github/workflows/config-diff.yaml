@@ -1,4 +1,6 @@
-# config-diff.yaml — Blast Radius Report on Config PRs
+# config-diff.yaml — Config Diff report on flat conf.d PRs
+# (⚠️ NOT "Blast Radius Report" — blast-radius.yml owns that name; two
+#  identically-named checks on one PR is what this was renamed away from.)
 #
 # Automatically posts a config diff report as a PR comment when tenant
 # configs are modified. Part of the Data-Driven Threshold Review pipeline:
@@ -6,9 +8,18 @@
 #   2. backtest (manual / on-demand) — historical threshold replay
 #
 # Exit codes from config_diff.py:
-#   0 = no changes (skip comment)
-#   1 = changes detected (post report)
+#   0 = no changes
+#   1 = changes detected
 #   2 = error
+# ⚠️ rc=0 does NOT mean "skip the comment", which is what this block used
+# to say. The comment is gated on the report being non-empty, and the tool
+# emits a non-empty "No changes detected." report on rc=0, so the gate is
+# satisfied either way. ⚠️ No byte count here on purpose: the report embeds
+# both directory paths, so its size moves with where it was run — the #1358
+# entry in CHANGELOG.md declined to cite a number for exactly this reason,
+# and an earlier draft of this comment cited one anyway.
+# `docs/integration/gitops-deployment.md` already carried the correction;
+# this header did not (#1419).
 
 name: Config Diff
 
@@ -22,8 +33,11 @@ permissions:
   pull-requests: write
 
 jobs:
-  blast-radius:
-    name: Blast Radius Report
+  config-diff:
+    # ⚠️ Deliberately NOT "Blast Radius Report": blast-radius.yml renders a
+    # check by that exact name, so the PR checks list had two identically
+    # named entries and a reviewer could not tell which one had failed.
+    name: Config Diff (flat conf.d)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -31,18 +45,245 @@ jobs:
           fetch-depth: 0  # need full history for base branch comparison
 
       - name: Extract base branch configs
+        id: extract
         # Bind the base ref via env, NOT raw ${{ }} interpolation into the
         # run: script (#1021 class house rule: zero raw
         # ${{ github.event.* }} / ${{ github.base_ref }} inside run:).
         env:
           BASE_REF: ${{ github.base_ref }}
         run: |
-          mkdir -p /tmp/old-conf.d
-          git show "origin/$BASE_REF:components/threshold-exporter/config/conf.d/" > /dev/null 2>&1 || exit 0
-          for f in $(git ls-tree --name-only "origin/$BASE_REF" components/threshold-exporter/config/conf.d/); do
-            fname=$(basename "$f")
-            git show "origin/$BASE_REF:$f" > "/tmp/old-conf.d/$fname" 2>/dev/null || true
-          done
+          set -euo pipefail
+          conf_d=components/threshold-exporter/config/conf.d
+          old=/tmp/old-conf.d
+          rm -rf "$old"; mkdir -p "$old"
+
+          # ⛔ Everything below builds the BASELINE — the "before" side the
+          # next step measures the PR against. An empty baseline is not a
+          # neutral value here: `_lib_io.load_tenant_configs` turns a
+          # zero-byte `db-a.yaml` into a tenant with no thresholds (its
+          # docstring says so, and it is measured), so every threshold in the
+          # PR then reads as newly added. A report that is confidently wrong
+          # is worse than no report, so each failure below is classified and
+          # fatal instead of swallowed (#1419).
+
+          # 1. The ref has to resolve. It used to be probed with
+          #    `git show <ref>:<dir> || exit 0`, so a missing ref — every git
+          #    call below failing — was indistinguishable from "the base
+          #    simply had no conf.d/ yet".
+          if ! git rev-parse --verify --quiet "origin/${BASE_REF}^{commit}" >/dev/null; then
+            echo "::error::base ref origin/${BASE_REF} does not resolve — the checkout step must keep fetch-depth: 0"
+            exit 1
+          fi
+
+          # 2. `git ls-tree` separates the two outcomes that `|| exit 0`
+          #    collapsed into one success code: exit 0 with no output means
+          #    the base really has no conf.d/, and an empty baseline is then
+          #    CORRECT (every tenant is new). A non-zero exit means we do not
+          #    know, which is not the same thing.
+          # `-z`: ls-tree otherwise C-quotes any non-ASCII path, and the
+          # `git show` below then fails with a message blaming the object
+          # instead of the quoting. ⚠️ `-z` is sufficient on its own — an
+          # earlier draft also passed `-c core.quotePath=false` and credited it
+          # here, but `-c core.quotePath=true` WITH `-z` is already unquoted
+          # (measured, git 2.54), so the flag was doing nothing.
+          listing=$(mktemp)
+          set +e
+          git ls-tree -z "origin/$BASE_REF" -- "$conf_d/" > "$listing"
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::git ls-tree exited $rc for origin/$BASE_REF:$conf_d/ — cannot build a baseline"
+            exit "$rc"
+          fi
+          # ⛔ NOTE, not `exit 0`. The early exit was pure short-circuit — the
+          # blob loop below reads `$listing` and simply does not iterate when it
+          # is empty — but it sat ABOVE the blind-spot disclosure block, so it
+          # took that block out with it. Measured: a PR that CREATES the first
+          # `conf.d/` (base has none) containing `_defaults.yaml` plus a nested
+          # tenant got a green run, a posted comment saying "No changes
+          # detected.", and NO disclosure — on a PR that added an inherited
+          # defaults file every tenant will pick up. That is this block's own
+          # stated defect class ("a confident report about a question the tool
+          # never asked"), on the bootstrap PR shape. The sibling shape (first
+          # nested tenant against a flat base) was already called out below as
+          # the one this exists for; this one was not swept with it.
+          if [ ! -s "$listing" ]; then
+            echo "::notice::base origin/$BASE_REF has no $conf_d/ — comparing against an empty baseline"
+          fi
+
+          # 3. Blobs only. `git show <ref>:<dir>` succeeds on a directory and
+          #    writes its *tree listing* out as a file. ⚠️ That file is inert
+          #    today — both loaders read conf.d/ FLAT and only accept
+          #    `.yaml`/`.yml` (`_lib_io.iter_yaml_files`), so an extensionless
+          #    `examples` is skipped, and an earlier draft of this comment
+          #    overstated it as "looking like a tenant config". It is excluded
+          #    because a baseline should contain configs and nothing else, not
+          #    because it is currently doing harm.
+          while IFS=$'\t' read -r -d '' meta path; do
+            # Regular blobs only — matching on `blob` alone accepts mode
+            # 120000, whose "content" is the symlink TARGET PATH. That
+            # lands in the baseline as a non-mapping document, the tenant
+            # drops out of it, and every threshold reports as new.
+            case "$meta" in
+              "100644 blob "*|"100755 blob "*) ;;
+              # A sub-directory is expected here (the read is flat) and the
+              # blind-spot block below already reports it — warning on it
+              # every run would just train readers to skip annotations.
+              *" tree "*) continue ;;
+              *) echo "::warning::skipping non-file entry in $conf_d/: $path"; continue ;;
+            esac
+            # Write to a scratch file and promote it only once git succeeded.
+            # Redirecting straight onto the destination creates the file
+            # BEFORE git runs, which is what left zero-byte configs behind.
+            scratch=$(mktemp)
+            if ! git show "origin/$BASE_REF:$path" > "$scratch"; then
+              echo "::error::git show failed for origin/$BASE_REF:$path — refusing to hand the diff a truncated baseline"
+              exit 1
+            fi
+            # ⛔ `install -m 0644`, not `mv`. `mktemp` creates 0600 and `mv`
+            # preserves it, while the old direct redirect got umask 0644.
+            # The next step mounts this directory into
+            # `ghcr.io/vencil/da-tools` which runs as uid 10001
+            # (`components/da-tools/app/Dockerfile:73-75`), so a 0600 file
+            # owned by the runner is UNREADABLE to it: PermissionError →
+            # exit 1 → indistinguishable from "changes detected" → empty
+            # report → `has_changes` unset → no comment → GREEN. That is
+            # this file's own defect class, created by its own fix, on every
+            # conf.d PR. ⚠️ Invisible on a Windows dev host, where mktemp
+            # already yields 0644 — measured 0600 in the Linux container.
+            # ⛔ NOT `install … && rm`. Under the interpreter Actions gives an
+            # undeclared step (`bash -e`), a command on the LEFT of `&&` is
+            # exempt from errexit — measured: a failing left side let the loop
+            # finish, let the script continue, and left the step at exit 0.
+            # A baseline file silently missing while the report still renders
+            # is this workflow's own defect class, reintroduced by the fix for
+            # it. Found by CodeRabbit on PR #1509, not by twenty review rounds.
+            if ! install -m 0644 "$scratch" "$old/${path##*/}"; then
+              echo "::error::failed to place the baseline copy at $old/${path##*/} — refusing to diff against an incomplete baseline"
+              exit 1
+            fi
+            rm -f "$scratch"
+          done < "$listing"
+
+          # A count cross-check ("files on disk == blobs in the tree") used to
+          # sit here as belt-and-braces. It was removed rather than kept:
+          # mutation-testing it (replace the comparison with `if false`) left
+          # the whole suite green, and working out why showed it had no
+          # reachable trigger — under `set -e` a failed `git show` or `mv`
+          # already exits, and top-level blob names cannot collide. A check
+          # nothing can fire reads like a second line of defence and is not
+          # one.
+          echo "Baseline: $(find "$old" -maxdepth 1 -type f | wc -l) file(s) from origin/$BASE_REF:$conf_d/"
+
+          # ⛔ Declare what this comparison CANNOT see, in the report itself.
+          # `config-diff` reads conf.d FLAT and skips `_`-prefixed files, so a
+          # change to `_defaults.yaml` — which every tenant inherits — or to a
+          # tenant in a sub-directory produces the words "No changes detected."
+          # That is the #1419 defect class with no command failing: a confident
+          # report about a question the tool never asked.
+          # ⚠️ This lives in the WORKFLOW, not in `config_diff.py`, because the
+          # step runs a pinned published image. `_lib_confd.warn_nested` (#1339)
+          # already prints this warning in repo source, but no released
+          # `tools/v*` tag contains it (added in 7413b57e, after tools/v2.9.0),
+          # so the fix cannot reach CI through the image until a release. Bump
+          # the pin and this block can go.
+          # ⛔ Both queries are about WHAT THIS PR CHANGED, and both classify
+          # git's exit code instead of reading its output through a test that
+          # cannot tell "no" from "git failed". The first draft of this block
+          # got both wrong: it measured sub-directories on the BASE tree — a
+          # static property, so every PR was told it "touches 7 sub-directory
+          # files" it had never opened, while the one PR shape this exists for
+          # (adding the first nested tenant to a flat base) got no disclosure at
+          # all — and it wrapped the queries in `[ -n "$(...)" ]` / `|| true`,
+          # which turn a git failure into "nothing to disclose". That is this
+          # file's own defect class, reproduced by its fix.
+          # ⛔ Branch topology is NOT a broken git. A PR whose branch shares no
+          # history with the base (orphan branch, re-imported or squashed repo)
+          # makes the three-dot form exit 128 with "no merge base". Before the
+          # early `exit 0` above was removed, that shape never reached this
+          # block and the run was green; failing here would make the cheapest
+          # green "put the exit 0 back", i.e. revert the fix. It is also not the
+          # same question as "git is broken", and the message below used to
+          # answer the wrong one — it pointed at the disclosure while the cause
+          # was the branch. ⚠️ NOT downgraded to silence: the disclosure cannot
+          # be computed, and "could not compute" must stay distinguishable from
+          # "nothing to disclose", so it is announced and carried into the
+          # comment body.
+          # ⛔ Discriminate on the EXIT CODE, never on `! cmd`. `git merge-base`
+          # returns 1 for "these two share no history" and 128 for "I could not
+          # answer" (bad ref, corrupt object, missing fetch). `if ! …` collapses
+          # the two and `2>&1` throws the `fatal:` away — so a broken git got
+          # reported to the reviewer, in the comment body, as an established
+          # fact about the branch topology. That is the same shape as the
+          # `[ -n "$(...)" ]` / `|| true` wrappers condemned at the top of
+          # this same block, reproduced by the fix for it.
+          # (⛔ No line distance: the first version said "twelve lines
+          # above" and the measured distance was twenty-two. A comment that
+          # counts lines is wrong after the next edit to the lines it counts,
+          # and nothing recounts it.)
+          mb_err=$(mktemp)
+          set +e
+          git merge-base "origin/$BASE_REF" HEAD >/dev/null 2>"$mb_err"
+          mb_rc=$?
+          set -e
+          if [ "$mb_rc" -gt 1 ]; then
+            echo "::error::git merge-base exited $mb_rc for origin/$BASE_REF — cannot tell whether this branch shares history, so the disclosure below would be a guess: $(tr '\n' ' ' < "$mb_err")"
+            exit "$mb_rc"
+          fi
+          if [ "$mb_rc" -eq 1 ]; then
+            echo "::warning::origin/$BASE_REF and HEAD have no merge base — cannot determine which $conf_d/ files this PR changed, so the blind-spot disclosure below is UNKNOWN rather than empty"
+            {
+              echo "blind_spots<<EOF"
+              echo "> ⚠️ **This PR's branch shares no history with \`$BASE_REF\`,** so the"
+              echo "> workflow could not work out which \`$conf_d/\` files it changes. The"
+              echo "> report below is still a directory-vs-directory comparison, but the"
+              echo "> usual note about inherited defaults and nested tenants could NOT be"
+              echo "> computed — treat \"no changes\" as unverified."
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed=$(mktemp)
+          set +e
+          git diff -z --name-only "origin/$BASE_REF...HEAD" -- "$conf_d/" > "$changed"
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::git diff exited $rc listing this PR's $conf_d/ changes — cannot say what the comparison misses"
+            exit "$rc"
+          fi
+
+          blind=""
+          inherited=0
+          nested=0
+          while IFS= read -r -d '' path; do
+            rel="${path#"$conf_d"/}"
+            # Two INDEPENDENT questions, not a first-match case: a nested
+            # `_defaults.yaml` is both, and a single `case` named only the
+            # sub-directory half so the inherited blind spot went unreported.
+            # `${rel##*/}` so an inherited file inside a sub-directory still
+            # counts as inherited.
+            case "$rel" in */*) nested=$((nested + 1)) ;; esac
+            case "${rel##*/}" in _*) inherited=$((inherited + 1)) ;; esac
+          done < "$changed"
+          if [ "$inherited" -gt 0 ]; then
+            blind="$inherited \`_\`-prefixed inherited file(s) (e.g. \`_defaults.yaml\`)"
+          fi
+          if [ "$nested" -gt 0 ]; then
+            blind="${blind:+$blind and }$nested file(s) in sub-directories"
+          fi
+          if [ -n "$blind" ]; then
+            echo "::warning::config-diff reads $conf_d/ FLAT and skips _-prefixed files — this PR touches $blind, which the report below does NOT cover"
+            {
+              echo "blind_spots<<EOF"
+              echo "> ⚠️ **This report does not cover $blind.** \`config-diff\` reads"
+              echo "> \`conf.d/\` flat and skips \`_\`-prefixed files, so inherited defaults and"
+              echo "> nested tenants are outside the comparison — \"no changes\" below means"
+              echo "> \"no changes among the files it read\". The Blast Radius report on this"
+              echo "> PR is the one that resolves inheritance."
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Run config diff
         id: diff
@@ -70,19 +311,52 @@ jobs:
             echo "::error::config-diff exited $rc (expected 0=no changes or 1=changes) — image pull, entrypoint, or mount problem"
             exit "$rc"
           fi
-          if [ -s /tmp/diff-report.md ]; then
-            echo "has_changes=true" >> $GITHUB_OUTPUT
+          # ⛔ An accepted rc with NOTHING written is the same silent green the
+          # block above describes — removing the 0600 cause did not remove the
+          # detector's blind spot. Measured with the pinned v2.9.0 image: a
+          # malformed YAML (or non-UTF-8 bytes) in conf.d makes it traceback with
+          # rc=1, which "changes detected" also uses, stdout is 0 bytes,
+          # has_changes stays unset, the comment step is skipped and the job is
+          # GREEN. `Generate PR effective configs` and `Generate base effective
+          # configs` in blast-radius.yml got exactly this check in the same
+          # commit ("exited 0 but wrote no ..."); this one did not.
+          # ⚠️ NOT a completeness claim over that file: a third producer there,
+          # `Compute blast radius`, still carries the old
+          # `if [ -s X ]; then …=true; fi` shape. It is left alone because
+          # `generate_pr_comment` returns a non-empty string on every branch, so
+          # it cannot fire — that is a property of today's callee, not of the
+          # step, so do not read it as swept.
+          # rc=0 still writes a non-empty "No changes detected." report, so this
+          # cannot false-red. ⚠️ No byte count here — see this file's header for
+          # why: three independent measurements of the SAME rc=0 report came back
+          # 83 / 69 / 164 bytes, differing only in where it was run.
+          if [ ! -s /tmp/diff-report.md ]; then
+            echo "::error::config-diff exited $rc but wrote no report — the comparison produced nothing, which is not the same as finding nothing"
+            exit 1
           fi
+          echo "has_changes=true" >> $GITHUB_OUTPUT
 
       - name: Post PR comment
         if: steps.diff.outputs.has_changes == 'true'
         uses: actions/github-script@v9
+        env:
+          BLIND_SPOTS: ${{ steps.extract.outputs.blind_spots }}
         with:
           script: |
             const fs = require('fs');
             const report = fs.readFileSync('/tmp/diff-report.md', 'utf8');
+            // ⛔ Provenance — see the equivalent block in blast-radius.yml.
+            // These comments are sticky, so a failed run leaves the previous
+            // verdict in place looking current.
+            const sha = (context.payload.pull_request?.head?.sha || context.sha).slice(0, 7);
+            const runUrl = context.serverUrl + '/' + context.repo.owner + '/' + context.repo.repo + '/actions/runs/' + context.runId;
+            const stamp = '\n<sub>commit `' + sha + '` • [run log](' + runUrl + ')</sub>\n';
             const marker = '<!-- config-diff-bot -->';
-            const body = `${marker}\n## 🔍 Config Diff — Blast Radius Report\n\n${report}\n\n---\n*Generated by [da-tools config-diff](../blob/main/scripts/tools/ops/config_diff.py) • Data-Driven Threshold Review*`;
+            // The disclosure goes ABOVE the report: a reader who stops at
+            // "No changes detected." has to have already seen what the
+            // comparison could not look at.
+            const blind = process.env.BLIND_SPOTS ? process.env.BLIND_SPOTS + '\n\n' : '';
+            const body = `${marker}\n## 🔍 Config Diff — flat conf.d\n\n${blind}${report}\n\n---\n*Generated by [da-tools config-diff](../blob/main/scripts/tools/ops/config_diff.py) • Data-Driven Threshold Review*${stamp}`;
 
             // Find and update existing comment, or create new
             const { data: comments } = await github.rest.issues.listComments({
