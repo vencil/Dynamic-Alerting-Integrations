@@ -216,6 +216,26 @@ class TestWritableMountNeedsUser:
             "  ghcr.io/vencil/da-tools:v2.9.0 init"))
         assert mod.check_writable_mount_has_user([p], tmp_path) == []
 
+    def test_an_image_not_named_da_tools_still_anchors_the_position_check(
+        self, tmp_path
+    ):
+        """⛔ 上一格的修法（operand 必須長得像 da-tools image）有反方向代價。
+
+        它嚴格擴大了「找不到 image」的集合，而找不到時位置檢查是 fail-OPEN
+        （呼叫端寫的是 `img_i is not None and ...`）⇒ 私有鏡像、改名的 build
+        裡一個真的排錯位置的 `--user` 會**靜默通過**。所以第二層要退回「第一個
+        裸 operand」。
+
+        這一格與上一格互為對照：兩者都不能單獨拿掉。
+        """
+        p = self._doc(tmp_path, self._fenced(
+            "docker run --rm",
+            "  -v $(pwd)/da-tools-out:/data/output",
+            "  ghcr.io/acme/platform-cli:v1 --user 1000 init"))
+        issues = mod.check_writable_mount_has_user([p], tmp_path)
+        assert len(issues) == 1, issues
+        assert issues[0].check == "datools-user-flag-after-image"
+
     def test_a_mount_wrapped_right_after_dash_v_is_still_seen(self, tmp_path):
         """⛔ `-v` 落在行尾時，續行的 `\\` 曾被當成它的值。
 
@@ -236,16 +256,28 @@ class TestWritableMountNeedsUser:
         assert len(mod.check_writable_mount_has_user([p], tmp_path)) == 1
 
     @pytest.mark.parametrize("spec,expect_issue", [
-        ("{{ mkdocs_var }}/out:/output", True),    # 非 GitHub 樣板
-        ("${{ github.workspace /out:/output", True),   # 缺結尾 }}
+        # 判得到的：`_normalise` 接得回去，或接不回去但殘骸仍以 `$` 開頭
+        ("${{ github.workspace }}/out:/output", True),        # 支援的樣板
+        ("${{ format('{0}/out', github.workspace) }}:/output", True),  # 巢狀括號
+        ("${PWD}/out:/data/output", True),                    # 普通 shell 展開
+        # ⛔ 判不到的：已在 check_writable_mount_has_user docstring §4 揭露
+        ("{{ mkdocs_var }}/out:/output", False),   # 非 GitHub 樣板，接回去的頭是 `}}`
+        ("${{ github.workspace /out:/output", False),  # 缺結尾 `}}`，`-v` 的值變成碎片
     ])
-    def test_an_unjoinable_template_is_reported_not_dropped(
+    def test_template_mounts_judged_or_disclosed_never_guessed(
         self, tmp_path, spec, expect_issue
     ):
-        """⛔ 接不回去的樣板要「說不知道」，不能安靜消失。
+        """⛔ 這一格的兩個方向都要釘，因為只釘一邊各燒過一次。
 
-        這是本輪核心教訓的第二種拼法：靜默跳過樣板掛載正是先前蓋住真缺陷的
-        機制。
+        **漏判方向**：靜默跳過 `${{ }}` 掛載，曾經蓋住 operator-gitops-deployment
+        的一個真缺陷。**誤判方向**：接著補上的「有括號就說判不了」，反過來對
+        上面三個 `True` 的正當寫法全部誤紅，還把那個真缺陷從「指名 + 正確處方」
+        降級成「判不了」。
+
+        所以 `expect_issue` 這一欄必須兩種值都有——它只有 True 的時候，斷言退化
+        成 `assert issues`，第二個方向等於沒測。兩個 False 是**已揭露的盲區**
+        （docstring §4），不是「還沒修的 bug」：把它們改成 True 之前，先讀那一節
+        為什麼第三個「看外觀」的謂詞不該再寫一次。
         """
         p = self._doc(tmp_path, self._fenced(
             "docker run --rm",
@@ -254,7 +286,9 @@ class TestWritableMountNeedsUser:
         issues = mod.check_writable_mount_has_user([p], tmp_path)
         assert bool(issues) is expect_issue, issues
         if issues:
-            assert issues[0].check == "datools-mount-not-resolvable"
+            # ⛔ 斷言 check 名，不只斷言「有一條」。少了這一行，任何新的
+            # finding kind 都能滿足這一格，而守衛本體停用照樣綠。
+            assert issues[0].check == "datools-writable-mount-without-user"
 
     @pytest.mark.parametrize("spec,is_bind", [
         ("C:" + chr(92) + "Users" + chr(92) + "me:/data/output", True),
@@ -332,21 +366,13 @@ class TestWritableMountNeedsUser:
             "docker run --rm",
             "  -v ${{ github.workspace }}/out:/output",
             "  ghcr.io/vencil/da-tools:latest operator-generate"))
-        assert len(mod.check_writable_mount_has_user([p], tmp_path)) == 1
-
-    def test_a_nested_brace_ci_template_is_not_silently_skipped(self, tmp_path):
-        """⛔ `${{ format('{0}/x', github.workspace) }}` 有內層 `}`。
-
-        正規化的樣式是 `[^}]*`，配不到它 ⇒ 掛載被空白切碎 ⇒ 既不是 bind
-        mount 也不是 placeholder ⇒ **靜默跳過**。這正是本輪的核心教訓
-        （「靜默跳過 CI 樣板會蓋住真缺陷」）的同一個形狀，所以它要嘛被判定、
-        要嘛被明確揭露，不能默默消失。
-        """
-        p = self._doc(tmp_path, self._fenced(
-            "docker run --rm",
-            "  -v ${{ format('{0}/out', github.workspace) }}:/output",
-            "  ghcr.io/vencil/da-tools:latest operator-generate"))
-        assert len(mod.check_writable_mount_has_user([p], tmp_path)) == 1
+        issues = mod.check_writable_mount_has_user([p], tmp_path)
+        assert len(issues) == 1, issues
+        # ⛔ 這一行不是裝飾。原本只斷言 `len(issues) == 1` 時，一個新增的
+        # finding kind 把這格從「指名可寫掛載缺 --user」換成「我判不了」，
+        # 斷言照樣成立、測試照樣綠——整條 writable 規則停用也綠。守衛的名字
+        # 就是它的斷言，不驗名字等於只驗「有東西被回報」。
+        assert issues[0].check == "datools-writable-mount-without-user"
 
     def test_actual_repo_is_clean(self):
         """⛔ repo-level 迴歸：沒有這一格，上面全部只證明函式能動，

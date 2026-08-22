@@ -153,6 +153,7 @@ def _image_index(toks: List[str]) -> "int | None":
     while i < len(toks) and toks[i] != "run":
         i += 1
     i += 1
+    operands = []
     while i < len(toks):
         t = toks[i]
         if t in _VALUE_FLAGS:
@@ -161,23 +162,35 @@ def _image_index(toks: List[str]) -> "int | None":
         if t.startswith("-"):
             i += 1
             continue
-        # ⛔ The operand must actually LOOK like the image. `_VALUE_FLAGS` is an
-        # enumeration, and an enumeration of docker's flags is never complete:
-        # any value-taking flag missing from it (`--platform linux/amd64`,
-        # `--group-add 999`, `--userns host`, …) donates its VALUE as the
-        # "image", so a `--user` that is correctly ahead of the real image gets
-        # reported as coming after it — with a message prescribing a move that
-        # is already done, i.e. no legal way to go green. Measured: three such
-        # flags each produced that誤紅.
-        #
-        # This predicate is derivable rather than enumerated, and the two are
-        # complementary: the flag list still has to skip `-v
-        # $(pwd)/da-tools-out:/data/output`, whose VALUE does contain da-tools.
-        if not _DATOOLS_IMAGE_RE.search(t):
-            i += 1
-            continue
-        return i
-    return None
+        operands.append(i)
+        i += 1
+    # ⛔ TIER 1 — the operand must actually LOOK like the image. `_VALUE_FLAGS`
+    # is an enumeration, and an enumeration of docker's flags is never complete:
+    # any value-taking flag missing from it (`--platform linux/amd64`,
+    # `--group-add 999`, `--userns host`, `--security-opt label=disable`, …)
+    # donates its VALUE as the "image", so a `--user` that is correctly ahead of
+    # the real image gets reported as coming after it — with a message
+    # prescribing a move that is already done, i.e. no legal way to go green.
+    # Measured: four such flags each produced that誤紅.
+    #
+    # This predicate is derivable rather than enumerated, and the two are
+    # complementary: the flag list still has to skip `-v
+    # $(pwd)/da-tools-out:/data/output`, whose VALUE does contain da-tools.
+    for k in operands:
+        if _DATOOLS_IMAGE_RE.search(toks[k]):
+            return k
+    # ⛔ TIER 2 — no da-tools-shaped operand at all. Returning None here is
+    # fail-OPEN: the caller's position check is `img_i is not None and ...`, so
+    # a genuinely misplaced `--user` in an example that pulls the tool under a
+    # different image name (a private mirror, a renamed build) passes silently.
+    # Measured: `-v $(pwd)/da-tools-out:/data/output ghcr.io/acme/platform-cli:v1
+    # --user 1000 init` was reported CLEAN once tier 1 was the only tier, while
+    # the same shape with a da-tools image was correctly flagged.
+    #
+    # Falling back to the FIRST bare operand restores that. It cannot reopen the
+    # tier-1誤紅 class: those all carry a real da-tools image, so tier 1 wins
+    # before this line is ever reached.
+    return operands[0] if operands else None
 
 
 def _unquote_md(line: str) -> str:
@@ -338,8 +351,28 @@ def check_writable_mount_has_user(doc_files: List[Path],
     3. **tenant-api's docs** have the same root cause (that image is also
        non-root and its gitops writer creates temp files inside the mounted
        ``conf.d``) but are outside this scan set.
+    4. **A template ``_normalise`` cannot join back together is skipped in
+       silence.** Measured, three forms behave differently and only the third
+       is blind: ``${{ github.workspace }}/out:/output`` is joined and judged
+       (skipping it once hid a live defect), and so is the nested-brace ``${{
+       format('{0}/out', github.workspace) }}:/output`` — the joined spec still
+       starts with ``$``, which is what ``_is_bind_mount`` keys on. What falls
+       out unchecked is a template that is not GitHub's at all
+       (``{{ mkdocs_var }}/out:/output`` — the joined head is ``}}``) or an
+       unterminated one (``${{ github.workspace /out:/output`` — the ``-v``
+       value becomes the ``${{`` fragment, so the real spec is never a mount
+       operand). Both are CLEAN today.
+       A revision that reported these ("cannot be judged") was removed: judging
+       by BRACE PRESENCE is an appearance test standing in for the consequence
+       "could this spec be parsed", and it fired on the supported ``${{ x }}``
+       form, on plain ``${PWD}``/``${HOME}`` shell expansion, and on ``:ro``
+       specs out of this rule's domain — while DOWNGRADING the one real defect
+       it existed to protect from a named finding with a correct fix to
+       "unjudgeable". Two brace-shaped predicates were wrong in this spot; the
+       fix, if taken, is a consequence test (does the spec parse?), not a third
+       appearance test.
 
-    (2) and (3) are tracked separately; they are not "rare edge cases" but
+    (2), (3) and (4) are tracked separately; they are not "rare edge cases" but
     classes this invariant genuinely does not express.
     """
     issues: List[Issue] = []
@@ -421,23 +454,21 @@ def check_writable_mount_has_user(doc_files: List[Path],
             # with a template in it, and skipping those hid a live defect.
             if any(("<" in s or ">" in s) for s in specs):
                 continue
-            # ⛔ A spec that still carries a brace after normalisation is a
-            # template this reader could not join back together — an
-            # unterminated `${{`, or a non-GitHub `{{ var }}`. Say so instead
-            # of dropping it: "silently skipped a templated mount" is the exact
-            # failure this rule was rewritten for, and a second spelling of it
-            # would be the same defect wearing a different hat.
-            unresolved = [s for s in _mounts(flat)
-                          if "{" in s or "}" in s]
-            if unresolved:
-                issues.append(Issue(
-                    "datools-mount-not-resolvable", rel, start + 1,
-                    f"mount spec(s) {unresolved} still contain template braces "
-                    f"after normalisation, so this example cannot be judged. "
-                    f"Use a form this reader can join (`${{{{ x }}}}` is "
-                    f"supported) or add `{INLINE_IGNORE}` with a reason — do "
-                    f"not leave it silently unchecked (#1495)."))
-                continue
+            # ⛔ BLIND SPOT, deliberately left open — see the module docstring.
+            # A previous revision reported every spec that still carried a brace
+            # after normalisation ("this example cannot be judged"). Measured, it
+            # cost more than it bought: it fired on `${{ github.workspace }}`
+            # (the supported form, which `_normalise` DOES join — the message
+            # then prescribed the spelling already in use, leaving no legal way
+            # to go green), on plain `${PWD}`/`${HOME}` shell expansion, and on
+            # `:ro` specs this rule does not judge at all. Worse, it DOWNGRADED
+            # the one real defect it was supposed to protect: a writable
+            # `${{ … }}` mount stopped being named as
+            # `datools-writable-mount-without-user` (with the correct fix) and
+            # became "unjudgeable". Braces are an APPEARANCE test standing in
+            # for a CONSEQUENCE ("could this spec be parsed"); two successive
+            # brace-shaped predicates got it wrong in this same spot, so the
+            # third one is not attempted here.
             if writable:
                 issues.append(Issue(
                     "datools-writable-mount-without-user", rel, start + 1,
