@@ -88,28 +88,56 @@ BUILD_EXEMPT = frozenset({
 })
 
 
+def _strip_bom(text: str) -> str:
+    """Drop a leading BOM.
+
+    ⛔ Both text readers need this and both used to do it inline — two copies
+    of a one-liner is still two copies, and the first version of the fix landed
+    in only one of them. The BOM matters because ``\\ufeff`` is not whitespace:
+    a word-start anchor cannot match a header on line 1 behind one, so the
+    array (or the command map) reads as EMPTY. The file wrappers open with
+    ``utf-8-sig``, but the tag-blob caller decodes with plain ``utf-8`` and
+    hands the BOM straight through.
+    """
+    return text.lstrip("﻿")
+
+
+_COMMAND_MAP_ENTRY_RE = re.compile(r'"([a-z][a-z0-9-]+)":\s*"([^"]+)"')
+
+
+def parse_command_map_text(text: str) -> Dict[str, str]:
+    """Parse ``COMMAND_MAP`` (command → script filename) from entrypoint source.
+
+    ⛔ THE reader — ``check_image_pin_capability.py`` imports this rather than
+    keeping its own transcription for tag blobs. It used to keep one, and that
+    copy sat thirty lines above a ``⛔`` comment saying transcriptions-that-must-
+    be-kept-in-sync are themselves the defect: the admonition had a live
+    instance in its own file.
+    """
+    commands: Dict[str, str] = {}
+    in_map = False
+    for line in _strip_bom(text).split("\n"):
+        stripped = line.strip()
+        if stripped.startswith("COMMAND_MAP"):
+            in_map = True
+            continue
+        if in_map:
+            if stripped == "}":
+                break
+            m = _COMMAND_MAP_ENTRY_RE.match(stripped)
+            if m:
+                commands[m.group(1)] = m.group(2)
+    return commands
+
+
 def parse_command_map(path: Path | None = None) -> Dict[str, str]:
     """Parse COMMAND_MAP from entrypoint.py.
 
     Returns dict mapping command name → script filename.
     e.g. {"check-alert": "check_alert.py", ...}
     """
-    path = path or ENTRYPOINT_PATH
-    commands: Dict[str, str] = {}
-    in_map = False
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            stripped = line.strip()
-            if stripped.startswith("COMMAND_MAP"):
-                in_map = True
-                continue
-            if in_map:
-                if stripped == "}":
-                    break
-                m = re.match(r'"([a-z][a-z0-9-]+)":\s*"([^"]+)"', stripped)
-                if m:
-                    commands[m.group(1)] = m.group(2)
-    return commands
+    return parse_command_map_text(
+        (path or ENTRYPOINT_PATH).read_text(encoding="utf-8-sig"))
 
 
 def parse_command_map_keys(path: Path | None = None) -> Set[str]:
@@ -180,11 +208,10 @@ def array_open_pattern(array_name: str) -> str:
     also matches ``EXTRA_TOOL_FILES=(``, so a second, unrelated array opens the
     block and donates its entries to this one's caller.
 
-    The ``append`` group distinguishes ``NAME+=(`` from ``NAME=(``: bash
-    appends for the first and RESETS for the second, and a reader that treats
-    both as "add" over-reports a reassigned array.
+    ⚠️ ``NAME+=(`` deliberately does NOT match: see :func:`parse_build_sh_array_text`
+    for why modelling bash's assignment semantics textually was reverted.
     """
-    return rf"(?:^|[\s;]){re.escape(array_name)}(?P<append>\+)?=\("
+    return rf"(?:^|[\s;]){re.escape(array_name)}=\("
 
 
 @lru_cache(maxsize=None)
@@ -192,20 +219,65 @@ def _array_open_re(array_name: str) -> "re.Pattern[str]":
     return re.compile(array_open_pattern(array_name))
 
 
+def _split_at_array_close(text: str) -> "tuple[str, bool]":
+    """``(before_the_close, closed)`` for one line of an array literal.
+
+    ⛔ ONE rule for the close, used on the header line and on every body line
+    alike. Matching a shape instead — ``stripped == ")"``, then
+    ``stripped.endswith(")")`` — is what kept the "block opens and never
+    closes" class alive through three rounds of fixes: each round added the
+    spelling it had been shown (`)`, `)  # comment`, `TOOL_FILES=()`) and
+    declared the class closed, and the next round found `);` and
+    ``) > /dev/null``. Both are ordinary bash and both made the reader swallow
+    the whole rest of build.sh as entries.
+
+    Quote-aware, because ``"ops/a(1).py"`` is a legal entry and the ``)``
+    inside it does not close anything. Backslash escapes are honoured for the
+    same reason.
+    """
+    quote = ""
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if quote:
+            if ch == "\\" and quote == '"':
+                i += 2
+                continue
+            if ch == quote:
+                quote = ""
+        elif ch in "\"'":
+            quote = ch
+        elif ch == "\\":
+            i += 2
+            continue
+        elif ch == ")":
+            return text[:i], True
+        i += 1
+    return text, False
+
+
 def _array_words(text: str) -> "list[str]":
     """Split one array fragment into words the way bash would.
 
-    ``shlex`` rather than ``.split()`` so a quoted entry survives, and rather
-    than ``.strip("\\"'(),")`` so an entry is not silently reshaped. Unbalanced
-    quotes fall back to whitespace splitting: this reader must never raise on a
-    build.sh it cannot fully understand — a crash here takes down the lint that
-    was supposed to report the problem.
+    ``shlex`` rather than ``.split()`` so a quoted entry survives whole.
+
+    ⛔ A trailing lone ``\\`` is a LINE CONTINUATION, not a word. bash joins the
+    lines and yields the entries either side; this reader works line by line,
+    so it drops the marker instead — leaving it in produced a phantom entry
+    named ``\\`` (measured against real bash, which yields two entries and no
+    such token).
+
+    Unbalanced quotes fall back to whitespace splitting: this reader must never
+    raise on a build.sh it cannot fully understand — a crash here takes down
+    the lint that was supposed to report the problem. ⚠️ The fallback strips
+    quote characters too, because leaving a leading ``"`` on the name makes the
+    file read as absent, and "absent" is silently skipped.
     """
     try:
         words = shlex.split(text, comments=False)
     except ValueError:
-        words = text.split()
-    return [w for w in (x.strip("(),") for x in words) if w]
+        words = [w.strip("\"'") for w in text.split()]
+    return [w for w in (x.strip("(),") for x in words) if w and w != "\\"]
 
 
 def parse_build_sh_array_text(text: str, array_name: str) -> Set[str]:
@@ -235,43 +307,55 @@ def parse_build_sh_array_text(text: str, array_name: str) -> Set[str]:
       why the fix is not "handle three more spellings": the *class* is "a line
       that both opens and closes", and the class is closed by parsing the line
       rather than by pattern-matching its shape.
-    * **``+=`` appends, plain ``=`` resets**, as bash does. A second ``=(``
-      block silently added to the first before, over-reporting the shipped set.
-    * A repeated header **inside** an unclosed block is not an entry (measured:
-      yielded a literal ``TOOL_FILES=``).
+    * **Stop at the first close.** A revision tried to model bash's assignment
+      semantics instead (``+=`` appends, plain ``=`` resets) and kept scanning
+      to EOF so a later block could be seen. Measured against real ``bash``,
+      that made THREE ordinary constructs wrong, every one of them in the
+      silent direction — the array was replaced by whatever the last textual
+      ``NAME=(`` happened to be:
+
+      ==============================================  ==================  ================
+      build.sh construct                              bash                that revision
+      ==============================================  ==================  ================
+      ``usage() { echo "  TOOL_FILES=( ops/x.py )" }``  ``a.py b.py``       ``x.py``
+      ``if [ "$M" = 1 ]; then TOOL_FILES=( t.py ); fi``  ``a.py``            ``t.py``
+      a heredoc that mentions the array                ``a.py``            ``doc.py``
+      ==============================================  ==================  ================
+
+      Text scanning cannot tell an assignment from a mention of one; only a
+      shell can. Stopping at the close is what the reader can actually justify,
+      and it is what every one of those cases needs.
+
+      ⚠️ Consequence, disclosed rather than papered over: a later
+      ``NAME+=( … )`` is NOT read. ``build.sh`` uses no ``+=`` today (checked),
+      and the failure direction if one is added is under-reporting, which the
+      bidirectional check in ``check_build_completeness`` reports loudly.
     """
     entries: Set[str] = set()
     in_block = False
     open_re = _array_open_re(array_name)
-    for line in text.split("\n"):
+    # ⛔ Strip a BOM HERE, not only in the file wrapper. The tag-blob caller
+    # decodes with plain ``utf-8``, so a BOM reached this reader untouched, the
+    # word-start anchor could not match a header on line 1, and that tag read
+    # as shipping NO tools at all. Fixing only the wrapper left the shared
+    # reader carrying the defect for its other caller.
+    for line in _strip_bom(text).split("\n"):
         stripped = strip_bash_comment(line.strip())
         if not stripped:
             continue
-        m = open_re.search(stripped)
-        if m is not None:
-            if in_block:
-                continue
-            if not m.group("append"):
-                entries.clear()
-            in_block = True
-            rest = stripped[m.end():]
-            closed = ")" in rest
-            if closed:
-                rest = rest.split(")", 1)[0]
-            entries.update(_array_words(rest))
-            if closed:
-                in_block = False
-            continue
         if not in_block:
-            continue
-        # ⛔ 沒有 `stripped == ")"` 那一格：`")".endswith(")")` 為真，下面這格
-        # 已經涵蓋它（`_array_words("")` 是空的）。留著是等價分支——變異實測
-        # 把它停用後零測試轉紅，那不是「缺守衛」而是「這段程式碼不存在」。
-        if stripped.endswith(")"):
-            entries.update(_array_words(stripped[:-1]))
-            in_block = False
-            continue
-        entries.update(_array_words(stripped))
+            m = open_re.search(stripped)
+            if m is None:
+                continue
+            in_block = True
+            stripped = stripped[m.end():]
+        # ⛔ 同一條收尾規則，陣列頭那一行與每一行本體都走它。用形狀比對
+        # （`== ")"`、`endswith(")")`）是這一類活過三輪修法的原因：每一輪都補上
+        # 剛被指出的那個拼法然後宣告關閉，下一輪就找到 `);` 與 `) > /dev/null`。
+        body, closed = _split_at_array_close(stripped)
+        entries.update(_array_words(body))
+        if closed:
+            break
     return entries
 
 

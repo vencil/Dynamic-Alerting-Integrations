@@ -133,32 +133,14 @@ def _dir_with_image_ancestor_count() -> "tuple[Path, Path]":
         if len((leaf / "probe.py").parents) != IMAGE_ANCESTOR_COUNT:
             reasons.append(f"{base}: already deeper than the image layout")
             continue
-        # ⛔ The leaf's PARENT is on sys.path during this run, so a stray
-        # module sitting next to us would be imported instead of the real one.
-        # At image depth that parent is forced to be a shared directory
-        # (`/tmp`, or the drive root) — depth three leaves no room for a
-        # private one — and **16 lines across 13 shipped modules** still insert
-        # their parent directory after build.sh's strip (10 lines spell it with
-        # literal `".."`, 6 with `.parent` / `parents[1]`; build.sh's sed only
-        # matches the `_THIS_DIR` spelling).
-        #
-        # ⚠️ Two numbers here were wrong before and are corrected rather than
-        # dropped: it said "ten shipped modules", which counted only the `".."`
-        # family — the FIRST module that actually puts the parent on sys.path
-        # in this harness is `_federation_revocation_reconciler`, a `parents[1]`
-        # spelling that was outside that count. And "measured: 40+ modules
-        # break" was measured BEFORE the strip above existed; with the strip,
-        # a planted `yaml.py` is already shadowed too late to matter, so what
-        # this rejection actually buys is protection for names imported AFTER
-        # the first surviving parent-dir insert.
-        # ⛔ Check the directory that actually lands on sys.path — the LEAF's
-        # parent — not the base. They coincide on POSIX (`/tmp/<uuid>`), but on
-        # Windows the base is the drive anchor and the leaf is one level deeper,
-        # so checking `base` inspected `C:\` (which can never shadow anything)
-        # while the directory that DOES go on sys.path went unchecked. Worse,
-        # any stray `.py` at `C:\` then rejected every base and the module
-        # SKIPPED — reopening, on the main development platform, exactly the
-        # silent-skip hole this file was just fixed for.
+        # ⚠️ Context for the reader, NOT a check: the leaf's parent lands on
+        # sys.path for this run, because **16 lines across 13 shipped modules**
+        # insert their own parent directory after build.sh's strip (10 spell it
+        # with a literal `".."`, 6 with `.parent` / `parents[1]`; the sed only
+        # matches the `_THIS_DIR` spelling). At image depth that parent must be
+        # a shared directory — depth three leaves no room for a private one.
+        # Whether anything there actually shadowed a module is decided AFTER the
+        # imports, from provenance, in `_CHILD`.
         try:
             leaf.mkdir(parents=True)
         except OSError as exc:
@@ -179,17 +161,41 @@ payload = json.load(sys.stdin)
 mods, flat_dir, shadow_dir = payload["modules"], payload["flat"], payload["shadow"]
 shipped = {name for name, _ in mods}
 results = []
+
+
+# ⛔ Report what was ACTUALLY shadowed, do not predict what COULD be. The leaf's
+# parent is on sys.path for this run and at image depth it is forced to be a
+# shared directory (`/tmp`, or the drive root). Two predictive guards were tried
+# and both were wrong in opposite directions: "any *.py at all" rejected a base
+# for a stray file nobody imports (failing the module on POSIX), and "a *.py
+# whose stem the shipped set imports directly" missed 119 of the 166 names this
+# harness actually loads — `logging`, `ssl`, and the transitive `attr` / `idna` /
+# `rpds` among them — i.e. it traded a false red for a false GREEN. Provenance
+# needs no list: a module whose file lives under the shadow dir (but not under
+# the staged dir) WAS shadowed, and a package directory or a .pyd is caught the
+# same way a .py is.
+def _under(p, root):
+    p, root = os.path.abspath(p), os.path.abspath(root)
+    return p == root or p.startswith(root + os.sep)
+
+
+shadowed = {}
+
+
+def _sweep():
+    # ⛔ Sweep BEFORE each reset, not once at the end. The reset below deletes
+    # every shipped name from sys.modules, so a shadow-dir file whose name is a
+    # SHIPPED module's — the highest-risk case, since the tools import each
+    # other — had its evidence deleted before the final sweep could see it, and
+    # the run reported CLEAN. Accumulating across iterations keeps it.
+    for n, m in list(sys.modules.items()):
+        f = getattr(m, "__file__", None)
+        if f and _under(f, shadow_dir) and not _under(f, flat_dir):
+            shadowed[n] = f
+
+
 for name, path in mods:
-    # Each entrypoint subcommand is its OWN process in the image, so a module
-    # broken halfway through must not be left in sys.modules for the next one
-    # to import from. Measured: without this reset, `_grar_validate` failing at
-    # line 334 still satisfied `from _grar_validate import
-    # find_ungated_equal_label_inhibits` (bound at line ~190, before the blow-up)
-    # and byo_check reported CLEAN while the image would have died. The harness
-    # under-reported, in the reassuring direction.
-    for cached in list(sys.modules):
-        if cached in shipped:
-            del sys.modules[cached]
+    _sweep()
     # Each entrypoint subcommand is its OWN process in the image, so a module
     # broken halfway through must not be left in sys.modules for the next one
     # to import from. Measured: without this reset, `_grar_validate` failing at
@@ -211,30 +217,9 @@ for name, path in mods:
             exc, ModuleNotFoundError) else None
         results.append([name, type(exc).__name__ + ": " + str(exc)[:200],
                         missing])
-# ⛔ Report what was ACTUALLY shadowed, do not predict what COULD be.
-# The leaf's parent is on sys.path for this run and at image depth it is forced
-# to be a shared directory (`/tmp`, or the drive root). The previous guard tried
-# to decide up front whether anything there mattered — first "any *.py at all"
-# (rejected a base for a stray file nobody imports, failing the module on POSIX),
-# then "a *.py whose stem the shipped set imports directly". Measured, the second
-# predicate missed 119 of the 166 module names this harness actually loads,
-# including `logging`, `warnings`, `ssl`, `socket` and the transitive third-party
-# deps `attr` / `idna` / `rpds` — i.e. it traded a false red for a false GREEN.
-# Provenance answers the real question and needs no list: a module whose file
-# lives under the shadow dir (but not under the staged dir) WAS shadowed, and a
-# package directory or a .pyd is caught the same way a .py is.
-def _under(p, root):
-    p, root = os.path.abspath(p), os.path.abspath(root)
-    return p == root or p.startswith(root + os.sep)
-
-
-shadowed = sorted(
-    (n, m.__file__) for n, m in list(sys.modules.items())
-    if getattr(m, "__file__", None)
-    and _under(m.__file__, shadow_dir) and not _under(m.__file__, flat_dir)
-)
+_sweep()
 sys.stdout.write("\n__FLAT_LAYOUT_RESULTS__" + json.dumps(
-    {"results": results, "shadowed": shadowed}))
+    {"results": results, "shadowed": sorted(shadowed.items())}))
 """
 
 # ⛔ The child's payload must be locatable inside its stdout, not BE its stdout.
@@ -346,7 +331,14 @@ def flat_import_results():
             "a module was imported from the directory that shares sys.path "
             "with the staged copies, so this run measured the wrong files:\n"
             + "\n".join(f"  {n} <- {f}" for n, f in parsed["shadowed"])
-            + "\nRemove them, or point TMPDIR at a directory of your own."
+            + "\nDelete or rename those files. ⛔ Pointing TMPDIR elsewhere does "
+              "NOT help: `_image_depth_bases` names `/tmp` directly on POSIX "
+              "precisely because a deep TMPDIR would leave only the root-owned "
+              "anchor, and any directory of your own has more than one path "
+              "component so it cannot reach the image's ancestor count. An "
+              "earlier version of this message advised exactly that, which "
+              "would have sent the reader to an action measured not to work — "
+              "and the cheapest remaining response is to delete this guard."
         )
         yield parsed["results"], {Path(p).name for p in tool_paths}
     finally:
@@ -408,14 +400,15 @@ def test_every_shipped_module_imports_under_the_image_layout(
 
 
 
-@pytest.mark.parametrize("plant,expect_shadowed", [
-    (None, False),                       # 控制組：shadow dir 乾淨
-    ("module", True),                    # 種一個真的被 import 到的模組
-    ("package", True),                   # ⛔ 套件目錄——`glob("*.py")` 看不到它
-    ("unrelated", False),                # ⛔ 沒人 import 的檔案不得誤紅
+@pytest.mark.parametrize("plant,expect_shadowed,victim_name", [
+    (None, False, None),                 # 控制組：shadow dir 乾淨
+    ("module", True, "zzshadowcanary"),  # 種一個真的被 import 到的模組
+    ("package", True, "zzshadowcanary"),  # ⛔ 套件目錄——`glob("*.py")` 看不到它
+    ("unrelated", False, None),          # ⛔ 沒人 import 的檔案不得誤紅
+    ("shipped_name", True, "victim"),    # ⛔ 名字在出貨集合內——最高風險那一格
 ])
 def test_shadowing_is_detected_by_provenance_not_predicted(
-    tmp_path, plant, expect_shadowed
+    tmp_path, plant, expect_shadowed, victim_name
 ):
     """⛔ 兩個方向都要釘，因為這條檢查在兩個方向上各錯過一次。
 
@@ -432,8 +425,11 @@ def test_shadowing_is_detected_by_provenance_not_predicted(
     shadow = tmp_path / "shadow"
     flat = shadow / "d"
     flat.mkdir(parents=True)
+    # ⛔ probe 自己把 parent dir 插到 sys.path[0] —— 這是出貨模組真的會做的事
+    # （build.sh 的 sed 不剝的那 6 行 `.parent` 拼法），也是遮蔽得以發生的
+    # 唯一機制。少了它，flat 永遠先命中，這個測試就什麼都沒測到。
     (flat / "probe_mod.py").write_text(
-        "import zzshadowcanary\n", encoding="utf-8")
+        'import os, sys\nsys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))\ntry:\n    import zzshadowcanary\nexcept ImportError:\n    pass\ntry:\n    import victim\nexcept ImportError:\n    pass\n', encoding="utf-8")
     if plant == "module":
         (shadow / "zzshadowcanary.py").write_text("V=1\n", encoding="utf-8")
     elif plant == "package":
@@ -442,12 +438,23 @@ def test_shadowing_is_detected_by_provenance_not_predicted(
         (pkg / "__init__.py").write_text("V=1\n", encoding="utf-8")
     elif plant == "unrelated":
         (shadow / "nobody_imports_this.py").write_text("V=1\n", encoding="utf-8")
+    elif plant == "shipped_name":
+        # ⛔ 最高風險的一格，也是先前靜默漏掉的那一格：被遮蔽者的名字**在出貨
+        # 集合內**。`_CHILD` 每輪開頭會把所有出貨名字從 sys.modules 刪掉，所以
+        # 只在最後掃一次的話，證據在被看見之前就被刪了——實測回報 CLEAN。
+        # 出貨模組彼此互相 import，所以這正是最可能發生的形狀。
+        (flat / "victim.py").write_text("SRC = 'flat'\n", encoding="utf-8")
+        (shadow / "victim.py").write_text("SRC = 'shadow'\n", encoding="utf-8")
 
     env = os.environ.copy()
     env["PYTHONPATH"] = os.pathsep.join([str(flat), str(shadow)])
+    modules = [["probe_mod", str(flat / "probe_mod.py")]]
+    if plant == "shipped_name":
+        # victim 也在出貨集合裡 —— 這正是讓 `_CHILD` 的 reset 把證據刪掉的條件。
+        modules.append(["victim", str(flat / "victim.py")])
     proc = subprocess.run(
         [sys.executable, "-c", _CHILD],
-        input=json.dumps({"modules": [["probe_mod", str(flat / "probe_mod.py")]],
+        input=json.dumps({"modules": modules,
                           "flat": str(flat), "shadow": str(shadow)}),
         capture_output=True, text=True, encoding="utf-8",
         env=env, cwd=str(flat), timeout=60,
@@ -460,9 +467,9 @@ def test_shadowing_is_detected_by_provenance_not_predicted(
         f"plant={plant!r}: shadowed={parsed['shadowed']}, "
         f"results={parsed['results']}")
     if expect_shadowed:
-        (name, path), = parsed["shadowed"]
-        assert name == "zzshadowcanary"
-        assert str(shadow) in path
+        names = [n for n, _ in parsed["shadowed"]]
+        assert victim_name in names, (victim_name, parsed["shadowed"])
+        assert all(str(shadow) in path for _, path in parsed["shadowed"])
 
 def test_the_harness_would_notice_a_depth_assumption(flat_import_results):
     """Control: the same harness must FAIL on a deliberately broken module.

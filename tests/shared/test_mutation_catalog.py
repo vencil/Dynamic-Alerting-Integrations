@@ -82,7 +82,16 @@ def file_cache():
 
     def read(path: Path) -> str:
         if path not in cache:
-            cache[path] = path.read_text(encoding="utf-8")
+            # ⛔ newline="" — read exactly what `Mutation.apply()` reads. With
+            # universal-newline translation this fixture saw LF while apply()
+            # saw CRLF, so a MULTI-LINE anchor could satisfy the "present
+            # exactly once" lane here and still raise "old_string not found" in
+            # the runner. Measured: one entry did exactly that. The lane is
+            # supposed to be the early warning FOR that failure, so reading the
+            # file differently from the thing it guards made it silently
+            # inapplicable to every multi-line anchor on a CRLF checkout.
+            with open(path, encoding="utf-8", newline="") as f:
+                cache[path] = f.read()
         return cache[path]
 
     return read
@@ -129,32 +138,53 @@ class TestMutationCatalogAnchored:
         three entries in one refactor, and none of the other three lanes
         (anchor / old!=new / kill_test) noticed.
 
-        Python only: the Go pilot's ``fn_name`` is checked by its own runner's
-        selector. A ``fn_name`` naming something that is not a function
-        definition (a module-level constant, say) is exempt — the field is
-        documentation there, and demanding otherwise would fail entries this
-        lane was not written for.
+        ⚠️ **Python entries only — 30 of the catalog's entries are Go and this
+        lane does not see them.** Their runner checks that ``func <name>(``
+        appears somewhere in the package, which catches a RENAME but not the
+        rot this lane exists for (code moving into a different function in the
+        same file, anchor still matching). So Go attribution is currently
+        unguarded; stated here rather than left to be inferred from a skip.
+
+        A ``fn_name`` naming something that is not a function definition (a
+        module-level constant, say) is exempt — the field is documentation
+        there. ⚠️ That exemption is also the cheapest way to silence this lane,
+        so the skip message says so.
         """
         if mutation.target_file.endswith(".go"):
-            pytest.skip("Go entries: fn_name is the runner's selector, not a def")
+            pytest.skip("Go entries: see the docstring — attribution unguarded")
         src = file_cache(base_dir / mutation.target_file)
-        tree = ast.parse(src)
-        defs = {n.name: (n.lineno, n.end_lineno) for n in ast.walk(tree)
-                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
-        if mutation.fn_name not in defs:
+        if mutation.old not in src:
+            pytest.skip("anchor already rotted — the old-string lane reports it")
+        # ⛔ A LIST of spans per name, not a dict. Two functions may legitimately
+        # share a name (one per class, or an `if sys.version_info` compat pair),
+        # and a dict keeps only the last — which made this lane fail on three
+        # measured-legal shapes AND print `Actually at: []` while the anchor sat
+        # squarely inside a function of exactly that name.
+        spans: "dict[str, list[tuple[int, int]]]" = {}
+        for n in ast.walk(tree := ast.parse(src)):
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                # Decorators belong to the function: an anchor on `@lru_cache`
+                # is inside it for every purpose a triage cares about, but
+                # `n.lineno` points at the `def`.
+                lo = min([n.lineno] + [d.lineno for d in n.decorator_list])
+                spans.setdefault(n.name, []).append((lo, n.end_lineno))
+        del tree
+        if mutation.fn_name not in spans:
             pytest.skip(
                 f"{mutation.fn_name!r} is not a function definition in "
-                f"{mutation.target_file} — out of this lane's scope")
+                f"{mutation.target_file} — out of this lane's scope. ⚠️ Renaming "
+                f"fn_name to a non-function is therefore the cheapest way to "
+                f"silence this check; that is not a fix.")
         anchor_line = src[:src.index(mutation.old)].count("\n") + 1
-        lo, hi = defs[mutation.fn_name]
-        assert lo <= anchor_line <= hi, (
+        ok = any(lo <= anchor_line <= hi for lo, hi in spans[mutation.fn_name])
+        assert ok, (
             f"attribution rot: {mutation.label!r} anchors at "
             f"{mutation.target_file}:{anchor_line}, but fn_name="
-            f"{mutation.fn_name!r} spans lines {lo}-{hi}. The code moved and "
-            f"the entry followed it only by accident (`old` still matched), so "
-            f"a survivor triage would be sent to the wrong function. "
-            f"Actually at: "
-            f"{sorted(n for n, (a, b) in defs.items() if a <= anchor_line <= b)}"
+            f"{mutation.fn_name!r} spans {spans[mutation.fn_name]}. The code "
+            f"moved and the entry followed it only by accident (`old` still "
+            f"matched), so a survivor triage would be sent to the wrong "
+            f"function. Actually at: "
+            f"{sorted(n for n, ss in spans.items() for lo, hi in ss if lo <= anchor_line <= hi)}"
         )
 
 

@@ -747,33 +747,6 @@ class TestBuildShArrayReaderMatchesBash:
             ")\n", encoding="utf-8")
         assert _parse_build_sh_array(bs, "TOOL_FILES") == {expected}
 
-    @pytest.mark.parametrize("name,payload,kind", [
-        ("bad_syntax.py", b"import os\n\n\n\ndef f(:\n    pass\n", "SyntaxError"),
-        ("bad_enc.py", b"import os\n# \xe9\xe9\xe9 not utf-8\n", "UnicodeDecodeError"),
-    ])
-    def test_an_unreadable_tool_is_reported_not_a_traceback(
-        self, tmp_path, name, payload, kind
-    ):
-        """⛔ 掃描器必須把「讀不了這個檔」變成一筆 error，而不是讓 main() 炸掉。
-
-        `read_text` 對不可讀檔拋 `OSError`、對非 UTF-8 拋 `UnicodeDecodeError`；
-        只接 `SyntaxError` 時兩者都會逃逸並中斷整個 `main()`——**那個檔以及它
-        之後的每一個檔都沒有被回報**，而畫面上是一個 traceback，不是掃描結果。
-
-        訊息必須帶 `str(exc)`：只印型別名的話，`SyntaxError` 連行號都沒有，
-        讀的人不知道要修哪裡。這一格同時釘住「有回報」與「回報得夠具體」。
-        """
-        (tmp_path / "ops").mkdir()
-        (tmp_path / "ops" / name).write_bytes(payload)
-        errors = mod.check_underscore_imports(
-            {f"ops/{name}"}, {name}, tools_src=tmp_path)
-        assert len(errors) == 1, errors
-        severity, message = errors[0]
-        assert severity == "error"
-        assert kind in message, message
-        # 型別名之外還要有內容——SyntaxError 的行號就在 str(exc) 裡
-        assert f"{kind}: " in message, message
-
     def test_absent_array_is_empty_not_an_error(self, tmp_path):
         """舊版 build.sh 沒有 REPO_DATA_FILES —— 空集合，不是例外。"""
         from _lint_helpers import _parse_build_sh_array
@@ -822,17 +795,65 @@ class TestBuildShArrayReaderMatchesBash:
             {"ops/a.py", "ops/b.py"},
             "陣列頭與第一個條目同行：那個條目不得被丟掉",
         ),
-        # ⛔ 這兩格釘 bash 的 `+=` 語意：追加 vs 重新指派。把兩者一律當成
-        # 「加進去」，會讓一個被重新指派的陣列被回報成兩次的聯集。
+        # ⛔ 以下五格的期望值**逐格對真 bash 量過**（`source build.sh` 後
+        # `printf '%s\n' "${TOOL_FILES[@]}"`），不是推想的。前三格是「開了但
+        # 永不關」那一類的第六、第七個成員——前一版只把「解析那一行」套在陣列
+        # 頭、收尾仍是 `endswith(")")` 樣式比對，於是 `);` 與 `) > /dev/null`
+        # 這兩個普通寫法照樣吞掉檔案剩下的每一行。收尾與開頭現在共用同一條
+        # quote-aware 的規則。
         (
-            "TOOL_FILES=(\n    ops/a.py\n)\nTOOL_FILES+=(\n    ops/b.py\n)\n",
-            {"ops/a.py", "ops/b.py"},
-            "`+=` 是追加",
+            "TOOL_FILES=(\n    ops/a.py\n);\nX=1\njunk_line\n",
+            {"ops/a.py"},
+            "`);` 收尾（bash: ops/a.py）",
         ),
         (
-            "TOOL_FILES=(\n    ops/a.py\n)\nTOOL_FILES=(\n    ops/b.py\n)\n",
-            {"ops/b.py"},
-            "第二次 `=` 是重新指派，前一次的內容要被丟掉",
+            "TOOL_FILES=(\n    ops/a.py\n) > /dev/null\nX=1\njunk\n",
+            {"ops/a.py"},
+            "`) > /dev/null` 收尾（bash: ops/a.py）",
+        ),
+        (
+            'TOOL_FILES=( "ops/a(1).py" ops/b.py )\nX=1\n',
+            {"ops/a(1).py", "ops/b.py"},
+            "引號內的 `)` 不得收尾（bash 兩個條目都在）",
+        ),
+        (
+            "TOOL_FILES=(\n    ops/a.py \\\n    ops/b.py\n)\n",
+            {"ops/a.py", "ops/b.py"},
+            "行尾續行的 `\\` 不是條目（bash 只有兩個條目）",
+        ),
+        (
+            'TOOL_FILES=(\n    "ops/a b.py"\n    ops/c.py\n)\n',
+            {"ops/a b.py", "ops/c.py"},
+            "含空白的引號檔名要保持完整（bash 給兩個條目）",
+        ),
+        # ⛔ 這三格釘的是**反方向**：文字裡「提到」陣列不是「指派」陣列。
+        # 一個試圖模擬 bash `+=`/`=` 語意的版本會掃到檔尾，於是 echo 裡、
+        # heredoc 裡、甚至不會執行的分支裡的 `TOOL_FILES=(` 都把陣列洗掉——
+        # 三格都是靜默方向。文字掃描分不出指派與提及，只有 shell 分得出。
+        (
+            'TOOL_FILES=(\n  ops/a.py\n  ops/b.py\n)\nusage() { echo "  TOOL_FILES=( ops/x.py )"; }\n',
+            {"ops/a.py", "ops/b.py"},
+            "echo 裡提到陣列不得取代它（bash: a+b）",
+        ),
+        (
+            'TOOL_FILES=(\n  ops/a.py\n)\nif [ "$M" = 1 ]; then TOOL_FILES=( ops/tiny.py ); fi\n',
+            {"ops/a.py"},
+            "不會執行的分支不得取代它（bash: a）",
+        ),
+        (
+            "TOOL_FILES=(\n  ops/a.py\n)\ncat <<EOF\nsee TOOL_FILES=( ops/doc.py )\nEOF\n",
+            {"ops/a.py"},
+            "heredoc 裡提到不得取代它（bash: a）",
+        ),
+        # ⛔ BOM 走 text 這條路徑。檔案 wrapper 用 `utf-8-sig` 擋得住，但讀 git
+        # tag blob 的呼叫端是用 `utf-8` 解出來的字串，BOM 會原封不動進來；
+        # `﻿` 不是空白，word 錨點配不到第 1 行的陣列頭 ⇒ **整個陣列讀成空**，
+        # 是「少撈」這個更糟的方向。只修 wrapper 等於讓共用 reader 帶著缺陷服務
+        # 另一個呼叫端。
+        (
+            "﻿TOOL_FILES=(\n    ops/a.py\n)\n",
+            {"ops/a.py"},
+            "BOM 在第 1 行且陣列頭也在第 1 行",
         ),
     ])
     def test_block_boundaries_are_word_anchored(
@@ -908,3 +929,64 @@ class TestRepoDataFilesArePairedWithTheirConsumer:
             "配對規則沒有在 REPO_DATA_FILES 缺席時開火 —— "
             f"實際得到 {errors}"
         )
+
+
+class TestUnreadableToolIsReportedNotRaised:
+    """讀不了的出貨檔要變成一筆 error，而不是讓 main() 帶 traceback 死。
+
+    ⛔ 自成一類：這兩格測的是 `check_underscore_imports` /
+    `check_layout_depth_assumptions` 的例外處理，與 build.sh 陣列 reader
+    無關。原本掛在 `TestBuildShArrayReaderMatchesBash` 底下，順帶讓
+    `property-coverage.yaml` 那句「`_array_words` 由該 class 的每一格
+    覆蓋」變成假話。
+    """
+
+    @pytest.mark.parametrize("name,payload,kind", [
+        ("bad_syntax.py", b"import os\n\n\n\ndef f(:\n    pass\n", "SyntaxError"),
+        ("bad_enc.py", b"import os\n# \xe9\xe9\xe9 not utf-8\n", "UnicodeDecodeError"),
+    ])
+    def test_an_unreadable_tool_is_reported_not_a_traceback(
+        self, tmp_path, name, payload, kind
+    ):
+        """⛔ 掃描器必須把「讀不了這個檔」變成一筆 error，而不是讓 main() 炸掉。
+
+        `read_text` 對不可讀檔拋 `OSError`、對非 UTF-8 拋 `UnicodeDecodeError`；
+        只接 `SyntaxError` 時兩者都會逃逸並中斷整個 `main()`——**那個檔以及它
+        之後的每一個檔都沒有被回報**，而畫面上是一個 traceback，不是掃描結果。
+
+        訊息必須帶 `str(exc)`：只印型別名的話，`SyntaxError` 連行號都沒有，
+        讀的人不知道要修哪裡。這一格同時釘住「有回報」與「回報得夠具體」。
+        """
+        (tmp_path / "ops").mkdir()
+        (tmp_path / "ops" / name).write_bytes(payload)
+        errors = mod.check_underscore_imports(
+            {f"ops/{name}"}, {name}, tools_src=tmp_path)
+        assert len(errors) == 1, errors
+        severity, message = errors[0]
+        assert severity == "error"
+        assert kind in message, message
+        # 型別名之外還要有內容——SyntaxError 的行號就在 str(exc) 裡
+        assert f"{kind}: " in message, message
+
+    @pytest.mark.parametrize("name,payload,kind", [
+        ("bad_syntax.py", b"import os\n\n\n\ndef f(:\n    pass\n", "SyntaxError"),
+        ("bad_enc.py", b"import os\n# \xe9\xe9\xe9 not utf-8\n", "UnicodeDecodeError"),
+    ])
+    def test_the_layout_scanner_reports_the_same_way(
+        self, tmp_path, name, payload, kind
+    ):
+        """⛔ 這個檔案有**兩個**掃描器，兩個都做同樣的 read+parse。
+
+        上一格只釘住其中一個。把另一個的訊息改回只印型別名，四個相關測試檔
+        **零轉紅**——也就是「修了被點名那一處，沒修那一類」在同一個檔案裡、
+        相隔 176 行。兩格內容一樣是刻意的：這一類的成員就是要各自有守衛。
+        """
+        (tmp_path / "ops").mkdir()
+        (tmp_path / "ops" / name).write_bytes(payload)
+        errors = mod.check_layout_depth_assumptions(
+            {f"ops/{name}"}, tools_src=tmp_path)
+        assert len(errors) == 1, errors
+        severity, message = errors[0]
+        assert severity == "error"
+        assert f"{kind}: " in message, message
+

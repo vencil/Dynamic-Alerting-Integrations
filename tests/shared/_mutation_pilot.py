@@ -20,39 +20,30 @@ Why hand-crafted vs `mutmut`/`cosmic-ray`:
 Usage:
   python tests/shared/_mutation_pilot.py [--target FUNC]
 
-Current floor: 75/78 caught (~96%) across 34 functions, 0
-setup-failures — composed of the 2026-07-16 full-suite baseline (67/70
-caught after re-anchoring 6 entries whose old_string had rotted against
-refactored sources) plus ROI-refactor round 5 (2026-07-17): 8 new
-entries covering the _grar_validate policy semantic core that #1136
-promoted from dead code to the CI blocking gate (_parse_policy_duration
-sign/bool/grammar drops + check_domain_policies strict→WARN downgrade,
-silent constraint skip, comparison flip, truthiness regression,
-subset-direction flip — all fail-open bug classes), each
-injection-verified per entry on the host (apply → kill scope red →
-revert green). The round-5 injection run also produced one real
-finding: the group_wait is-not-None → truthiness mutant survived the
-51-test strict hardening suite (only "0s" was covered; bare int 0
-slipped the truthiness branch) and is now killed by
-test_bare_zero_group_wait_strict_violates.
-The 3 survivors are all equivalent mutations:
+Current count: 83 entries across 40 functions (counted from this file;
+re-count rather than trust this line).
+
+⛔ A pass-rate sentence used to stand here — "75/78 caught (~96%) across
+34 functions" — plus several paragraphs of per-batch history. It was two
+refactors stale and nobody noticed, because **nothing derives it**: the
+number is only true on the day someone runs the pilot and edits the
+docstring by hand. Run the pilot for the current figure.
+
+What IS mechanically enforced lives in `test_mutation_catalog.py`: every
+entry's anchor must be present exactly once, old != new, the test_file
+must exist, a named kill_test must be defined, and `fn_name` must be the
+function the anchor actually sits in. Those lanes run on every commit;
+this docstring does not.
+
+Known equivalent mutations (survive by construction, do NOT fail a run):
   - parse_duration_seconds: drop type-check before m.match's str()
     coercion (str() catches the non-string case downstream).
-  - strip_frontmatter: offset 3→0 in `find("\\n---", 3)` — opening
-    `---` is always at index 0, so the alternate offset matches the
-    same closing tag for any valid frontmatter.
-  - _parse_front_matter: drop the explicit `startswith("---")` early
-    return — the subsequent `re.match(r"^---\\n…", …)` already rejects
-    non-frontmatter inputs, so the early return is redundant.
+  - strip_frontmatter: offset 3->0 in find(chr(92)+"n---", 3) - the opening
+    `---` is always at index 0, so the alternate offset matches the same
+    closing tag for any valid frontmatter.
+  - _parse_front_matter: drop the explicit startswith("---") early return -
+    the subsequent re.match already rejects non-frontmatter inputs.
 
-Two further obvious-looking mutations on `latest_version_from_changelog`
-were found to be equivalent (anchored regex makes match≡search; CHANGELOG
-regex's capture always satisfies parse_version's shape) and skipped — see
-the inline note above that mutation entry.
-
-The 4% survivor rate is the floor: real test gaps have been chased
-down across batches; what remains is true code-level redundancy that
-no behavioral test can pin without overspecifying the implementation.
 See PR descriptions / commit messages for findings across batches.
 """
 from __future__ import annotations
@@ -597,17 +588,27 @@ MUTATIONS: list[Mutation] = [
         target_file="scripts/tools/lint/_lint_helpers.py",
         test_file="tests/shared/test_property_tools.py tests/lint/test_check_cli_coverage.py",
         label="parse_cmd_map: ignore closing brace (slurps text after }}",
-        fn_name="parse_command_map",
-        old='                if stripped == "}":\n                    break',
-        new='                if False:\n                    break',
+        # ⚠️ Re-anchored + re-attributed: the loop moved into
+        # `parse_command_map_text` when the tag-blob reader stopped keeping its
+        # own transcription. Both the indentation and the owning function
+        # changed, so this is the visible half of catalog rot AND the silent
+        # half at once.
+        fn_name="parse_command_map_text",
+        # ⛔ 單行錨點。多行錨點在 CRLF checkout 上會失配（`apply()` 讀 raw、
+        # 而錨點寫的是 `\n`），而那個失配一路到 runner 才會現形。
+        old='            if stripped == "}":',
+        new='            if False:',
     ),
     Mutation(
         target_file="scripts/tools/lint/_lint_helpers.py",
         test_file="tests/shared/test_property_tools.py tests/lint/test_check_cli_coverage.py",
         label="parse_cmd_map: relax key regex (uppercase keys leak in)",
-        fn_name="parse_command_map",
-        old='                m = re.match(r\'"([a-z][a-z0-9-]+)":\\s*"([^"]+)"\', stripped)',
-        new='                m = re.match(r\'"([a-zA-Z][a-zA-Z0-9-]+)":\\s*"([^"]+)"\', stripped)',
+        # ⚠️ 同上：regex 抽成模組層常數，錨點與歸屬都要跟著搬。
+        fn_name="parse_command_map_text",
+        # ⛔ 注入在**函式內**的使用點，不是模組層那個 compile。錨在模組常數上
+        # 的話 `fn_name` 就沒有誠實的值可填——歸屬 lane 立刻抓到這一點。
+        old="            m = _COMMAND_MAP_ENTRY_RE.match(stripped)",
+        new='            m = re.match(r\'"([a-zA-Z][a-zA-Z0-9-]+)":\\s*"([^"]+)"\', stripped)',
     ),
     # ── parse_build_sh_tools (_lint_helpers) ─────────────────────
     Mutation(
@@ -630,31 +631,51 @@ MUTATIONS: list[Mutation] = [
     Mutation(
         target_file="scripts/tools/lint/_lint_helpers.py",
         test_file="tests/lint/test_check_build_completeness.py",
-        label="parse_build_sh: unanchored array name (EXTRA_TOOL_FILES matches)",
-        fn_name="parse_build_sh_array_text",
-        old="        m = open_re.search(stripped)",
-        new='        m = open_re.search(stripped) if not stripped.startswith("EXTRA") else open_re.search(stripped[6:])',
+        label="array_open_pattern: drop the word-start anchor",
+        fn_name="array_open_pattern",
+        # ⛔ Mutates the PATTERN, not a caller. An earlier version of this entry
+        # special-cased the literal `"EXTRA"` from the test fixture, so it was
+        # built to be killed rather than being the defect it names — and it did
+        # not even live in the function its fn_name claimed.
+        old=r'''return rf"(?:^|[\s;]){re.escape(array_name)}=\("''',
+        new=r'''return rf"{re.escape(array_name)}=\("''',
         kill_test="test_block_boundaries_are_word_anchored",
     ),
     Mutation(
         target_file="scripts/tools/lint/_lint_helpers.py",
         test_file="tests/lint/test_check_build_completeness.py",
-        label="parse_build_sh: ignore the header line's remainder (never closes)",
+        label="parse_build_sh: ignore the header line's remainder",
         fn_name="parse_build_sh_array_text",
-        # ⛔ 這一筆是補上來的：修法落地時零測試轉紅（三個 parser 測試檔全綠），
-        # 也就是「陣列頭那一行也要解析」當初是無守衛的。
-        old="            rest = stripped[m.end():]",
-        new='            rest = ""',
+        old="            stripped = stripped[m.end():]",
+        new='            stripped = ""',
         kill_test="test_block_boundaries_are_word_anchored",
     ),
     Mutation(
         target_file="scripts/tools/lint/_lint_helpers.py",
         test_file="tests/lint/test_check_build_completeness.py",
-        label="parse_build_sh: += and = both append (reassignment over-reports)",
-        fn_name="parse_build_sh_array_text",
-        old='            if not m.group("append"):',
-        new="            if False:",
+        label="array close: ignore quoting (a `)` inside a name closes it)",
+        fn_name="_split_at_array_close",
+        old='        elif ch in "\\"\'":',
+        new="        elif False:",
         kill_test="test_block_boundaries_are_word_anchored",
+    ),
+    Mutation(
+        target_file="scripts/tools/lint/_lint_helpers.py",
+        test_file="tests/lint/test_check_build_completeness.py",
+        label="array words: keep the line-continuation backslash as an entry",
+        fn_name="_array_words",
+        old=' and w != "\\\\"',
+        new="",
+        kill_test="test_block_boundaries_are_word_anchored",
+    ),
+    Mutation(
+        target_file="scripts/tools/lint/_lint_helpers.py",
+        test_file="tests/lint/test_check_build_completeness.py",
+        label="strip_bom: stop stripping the BOM (line-1 header stops matching)",
+        fn_name="_strip_bom",
+        old='    return text.lstrip("﻿")',
+        new="    return text",
+        kill_test="test_the_tag_blob_parser_has_the_same_boundaries",
     ),
     Mutation(
         target_file="scripts/tools/lint/_lint_helpers.py",
