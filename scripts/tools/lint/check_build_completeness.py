@@ -199,6 +199,30 @@ def check_underscore_imports(
     return errors
 
 
+def _ascent_kind(node: ast.AST) -> str:
+    """Which spelling produced the ascent: ``index`` / ``chain`` / ``mixed``.
+
+    ⛔ The CONSEQUENCE differs by spelling, not by scope, and the failure
+    message has to say which one: ``parents[N]`` past the end raises
+    ``IndexError`` (loud, wherever it sits), while a ``.parent`` chain or
+    nested ``dirname`` SATURATES at the filesystem root and returns a wrong
+    path with no exception (quiet). An earlier version of this message keyed
+    the consequence off module-vs-function scope, which is unrelated: a
+    ``parents[N]`` inside a function still raises.
+    """
+    has_index = any(
+        isinstance(n, ast.Subscript) and isinstance(n.value, ast.Attribute)
+        and n.value.attr == "parents" for n in ast.walk(node))
+    has_chain = any(
+        (isinstance(n, ast.Attribute) and n.attr == "parent")
+        or (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+            and n.func.attr == "dirname")
+        for n in ast.walk(node))
+    if has_index and has_chain:
+        return "mixed"
+    return "index" if has_index else "chain"
+
+
 def _walks_up_from_file(node: ast.AST) -> "int | None":
     """How many directory levels *node* climbs, if it is rooted at ``__file__``.
 
@@ -260,9 +284,30 @@ def check_layout_depth_assumptions(
     客戶手上的映像裡永遠是錯的 —— 這正是本 repo 全套 5000+ 測試看不到
     ``_grar_validate.py`` 那一行的原因。
 
-    ⛔ 這條規則問的是**算術**（爬幾層），不是拼法。三種等價寫法（``parents[N]``
-    / ``.parent`` 鏈 / 巢狀 ``os.path.dirname``）都算同一個數，所以「換一種寫法」
-    不是轉綠的路；轉綠的路只有「不要用相對深度定位」。
+    ⚠️ **這是 best-effort 的補刀，不是完整的類別守衛。** 它認得三種拼法
+    （``parents[N]`` / ``.parent`` 鏈 / 巢狀 ``os.path.dirname``），而**與拼法
+    無關**的那一支是 ``tests/ops/test_image_flat_layout.py``（實際 import，
+    任何拼法都躲不掉，但只看得到會拋錯的那一半）。本規則的價值在於補「安靜
+    飽和」那一半，代價是它只覆蓋建模過的拼法。
+
+    ⛔ 三輪對抗式盲審實測出來的已知盲點，逐條列在這裡而不是留白：
+
+    1. ``parents[N]`` 的層數記成 N，實際是 **N+1**（``parents[2]`` ≡
+       ``.parent`` ×3）。方向是**少報**（只會漏，不會誤擋）。
+    2. 鏈式 ``parents[1].parents[1]`` 因此被算成 2 層而放行，但它在映像深度
+       實測就是 ``IndexError`` ——與 #1494 同形。
+    3. ``__file__`` 必須字面出現在同一個運算式裡；隔一層 ``_THIS_DIR =
+       os.path.dirname(__file__)`` 就看不到，而 71 支出貨檔裡有 **58 支**用
+       這個慣用寫法。
+    4. 字面 ``".."`` / ``os.pardir`` 路徑段（``os.path.join(d, "..", "..")``、
+       ``joinpath("..")``、``p / ".."``）完全不計數。
+    5. ``Path(*parts[:-4])`` 這類切片不計數。
+    6. ``try/except IndexError`` 已經處置過的寫法仍會被報。
+
+    ⇒ **今天出貨檔裡確實還有第 3+4 條合起來造成的活體漏網**（`_registry_lib`
+    與 `_observed_map_lib` 各一處 ``_THIS_DIR`` + 三個 ``".."``）。修法與這些
+    盲點的收口一起放在後續票，刻意不夾帶進 #1494——理由是本規則每被加固一
+    輪就製造新的缺陷，而真正與拼法無關的守衛是上面那支行為測試。
 
     Returns:
         list of (severity, message) tuples
@@ -280,7 +325,11 @@ def check_layout_depth_assumptions(
         if not src_path.is_file():
             continue
         try:
-            tree = ast.parse(src_path.read_text(encoding="utf-8"))
+            # utf-8-sig, not utf-8: a BOM is invisible to Python's own import
+            # machinery but makes `ast.parse` raise on U+FEFF, so a perfectly
+            # runnable tool (saved by a Windows editor, which this repo has)
+            # would be reported as unverifiable.
+            tree = ast.parse(src_path.read_text(encoding="utf-8-sig"))
         except (OSError, SyntaxError, UnicodeDecodeError) as exc:
             errors.append((
                 "error",
@@ -306,17 +355,18 @@ def check_layout_depth_assumptions(
             if depth != -1 and depth <= MAX_IMAGE_ANCESTOR_INDEX:
                 continue
             prev = worst.get(node.lineno)
-            if prev is None or depth == -1 or depth > prev:
-                worst[node.lineno] = depth
-        for lineno, depth in sorted(worst.items()):
+            if prev is None or depth == -1 or depth > prev[0]:
+                worst[node.lineno] = (depth, _ascent_kind(node))
+        for lineno, (depth, kind) in sorted(worst.items()):
             where = "函式內" if lineno in enclosing else "module scope"
             how = ("上溯層數不是字面常數，無法驗證"
                    if depth == -1 else f"從 __file__ 上溯 {depth} 層")
-            consequence = (
-                "映像 import 期就會 IndexError／算到檔案系統根目錄"
-                if lineno not in enclosing else
-                "被呼叫時會算到檔案系統根目錄（不會拋錯，安靜地錯）"
-            )
+            # ⛔ 後果由**拼法**決定，不是由 scope 決定。
+            consequence = {
+                "index": "超出範圍時 IndexError（module scope 就是 import 期死）",
+                "chain": "不會拋錯，飽和在檔案系統根目錄——安靜地算出錯的路徑",
+                "mixed": "視實際運算順序而定：可能 IndexError，也可能安靜飽和",
+            }[kind]
             errors.append((
                 "error",
                 f"{rel}:{lineno} ({where}) {how}，"

@@ -733,7 +733,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "73dc235391f946f640d49b7da7b68b6f665c2662110fb3ed9fe0eb35a036f839",
+ "source_digest": "6e757355b666ea92457dab12f1e7cac7da17c1b2fa69b1af31a127d4f93ee75a",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -2467,6 +2467,7 @@
    "tests/golden/test_merge_parity.py",
    "tests/ops/test_gitops_check.py",
    "tests/ops/test_grar_facade_reexports.py",
+   "tests/ops/test_grar_strict_hardening.py",
    "tests/ops/test_image_flat_layout.py",
    "tests/shared/test_bilingual_help_contract.py",
    "tests/shared/test_console_encoding_resilience.py",
@@ -2697,6 +2698,9 @@
   "tests/ops/test_guard_defaults_scopes.py": [
    "tests/lint/test_check_threshold_reachability.py",
    "tests/ops/test_ci_aggregate_gate_contract.py"
+  ],
+  "tests/ops/test_image_flat_layout.py": [
+   "tests/ops/test_grar_strict_hardening.py"
   ],
   "tests/ops/test_init_project.py": [
    "tests/ops/test_generated_ci_artifacts.py",

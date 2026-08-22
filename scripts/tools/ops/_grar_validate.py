@@ -360,8 +360,20 @@ def _find_platform_rules_configmap() -> "Path | None":
     flat = here / _PLATFORM_RULES_BASENAME
     if flat.is_file():
         return flat
-    for base in (here, *here.parents):
-        candidate = base / "k8s" / "03-monitoring" / _PLATFORM_RULES_BASENAME
+    # ⛔ BOUNDED at the repository root. An unbounded ancestor walk keeps
+    # climbing past the checkout, so a stray `k8s/03-monitoring/` anywhere
+    # above it — another checkout, a home directory, `/` — would be adopted as
+    # this platform's rule pack. `.git` is a directory in a clone and a FILE in
+    # a git worktree, hence `exists()`. The image carries no `.git`, so there
+    # this branch is unreachable by construction and the flat copy above is the
+    # only answer, which is exactly the intended shape.
+    repo_root = next(
+        (base for base in (here, *here.parents) if (base / ".git").exists()),
+        None,
+    )
+    if repo_root is not None:
+        candidate = (repo_root / "k8s" / "03-monitoring"
+                     / _PLATFORM_RULES_BASENAME)
         if candidate.is_file():
             return candidate
     return None
@@ -381,6 +393,14 @@ def _warn_probe_set_degraded(reason: str) -> None:
     because a repo-anchored test pins the full set; that test only ever runs
     in a repo layout, so in the image the degradation was precisely unnoticed.
     One line on stderr, once per process, is what makes the claim true.
+
+    ⚠️ The once-per-process flag is ONE boolean for all three degradation
+    causes, not one per cause. A run that degrades for a second, different
+    reason stays silent about it. That is deliberate for now — a single run
+    realistically hits one cause, and a per-cause set would make a noisy path
+    noisier — but it means "every degradation path speaks" is true per
+    PROCESS, not per CAUSE. Stated because the earlier wording implied the
+    latter.
     """
     global _PLATFORM_DEGRADED_WARNED
     if _PLATFORM_DEGRADED_WARNED:

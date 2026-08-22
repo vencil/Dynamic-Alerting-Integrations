@@ -153,11 +153,23 @@ def parse_build_sh_repo_data_files(path: Path | None = None) -> Set[str]:
 
 
 def _parse_build_sh_array(path: Path, array_name: str) -> Set[str]:
-    """Shared reader for build.sh's bash arrays.
+    """Shared reader for the ``TOOL_FILES`` / ``REPO_DATA_FILES`` bash arrays.
 
-    ⛔ One reader, two callers. The two arrays had identical parsing needs, and
-    a copy would be a second place to forget that entries can be quoted, that
-    ``#`` comments share the line, and that the block ends at a bare ``)``.
+    Handles quoted entries, whole-line ``#`` comments, TRAILING ``#`` comments
+    on an entry line, and the bare ``)`` that ends the block.
+
+    ⚠️ Trailing comments were NOT handled before, and the omission was silent:
+    ``ops/byo_check.py  # BYO preflight`` parsed as one entry whose name
+    included the comment, so the file read as absent and the bidirectional
+    check reported a missing tool. bash treats that line as one word; the
+    reader now does too.
+
+    ⚠️ This is the reader for these two arrays, not for every build.sh array in
+    the repo: ``scripts/tools/lint/check_image_pin_capability.py`` carries its
+    own ``TOOL_FILES`` parser (it reads the array out of a git TAG's blob, a
+    different input entirely). Consolidating the two is worth doing and is NOT
+    done here — see the follow-up issue referenced in
+    ``check_build_completeness.check_layout_depth_assumptions``.
     """
     entries: Set[str] = set()
     in_block = False
@@ -170,7 +182,10 @@ def _parse_build_sh_array(path: Path, array_name: str) -> Set[str]:
             if in_block:
                 if stripped == ")":
                     break
-                if not stripped or stripped.startswith("#"):
+                # Drop a trailing comment BEFORE anything else, so an entry
+                # carrying one is still recognised as that entry.
+                stripped = stripped.split("#", 1)[0].strip()
+                if not stripped:
                     continue
                 name = stripped.strip("\"'(),").strip()
                 if name:

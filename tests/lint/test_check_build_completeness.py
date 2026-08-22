@@ -600,7 +600,10 @@ class TestCheckLayoutDepthAssumptions:
             {"dx/t.py"}, tools_src=tmp_path)
         assert len(errors) == 1
         assert "函式內" in errors[0][1]
-        assert "安靜地錯" in errors[0][1]
+        # ⛔ 後果必須由拼法決定：`.parent` 鏈飽和、不拋錯。訊息若說成
+        # IndexError，讀到的人會低估（或高估）優先級。
+        assert "不會拋錯" in errors[0][1] and "飽和" in errors[0][1]
+        assert "IndexError" not in errors[0][1]
 
     def test_nested_dirname_counts_the_same(self, tmp_path):
         """換 os.path 拼法不是轉綠的路——規則問的是算術不是拼法。"""
@@ -660,6 +663,37 @@ class TestCheckLayoutDepthAssumptions:
             "shipped tool(s) still count directory levels:\n"
             + "\n".join(m for _, m in errors)
         )
+
+
+class TestBuildShArrayReaderMatchesBash:
+    """陣列 reader 對「bash 讀得到的東西」不得比 bash 嚴格。"""
+
+    @pytest.mark.parametrize("entry_line,expected", [
+        ("    ops/a.py", "ops/a.py"),
+        ('    "ops/a.py"', "ops/a.py"),
+        # ⛔ 行內註解：bash 視為同一個 word，reader 先前把註解一起吃進檔名，
+        # 於是該檔被讀成不存在 → 雙向檢查報「TOOL_FILES 缺少此檔案」，而
+        # 訊息完全沒提到註解。最便宜的轉綠是刪掉註解，也就是這條守衛的
+        # 實質規則變成「不准替出貨清單寫註解」。
+        ("    ops/a.py   # BYO preflight", "ops/a.py"),
+        ("    ops/a.py#no-space", "ops/a.py"),
+    ])
+    def test_entry_forms_bash_accepts(self, tmp_path, entry_line, expected):
+        from _lint_helpers import _parse_build_sh_array
+        bs = tmp_path / "build.sh"
+        bs.write_text(
+            "TOOL_FILES=(\n"
+            "    # whole-line comment\n"
+            f"{entry_line}\n"
+            ")\n", encoding="utf-8")
+        assert _parse_build_sh_array(bs, "TOOL_FILES") == {expected}
+
+    def test_absent_array_is_empty_not_an_error(self, tmp_path):
+        """舊版 build.sh 沒有 REPO_DATA_FILES —— 空集合，不是例外。"""
+        from _lint_helpers import _parse_build_sh_array
+        bs = tmp_path / "build.sh"
+        bs.write_text("TOOL_FILES=(\n    ops/a.py\n)\n", encoding="utf-8")
+        assert _parse_build_sh_array(bs, "REPO_DATA_FILES") == set()
 
 
 class TestRepoDataFilesArePairedWithTheirConsumer:

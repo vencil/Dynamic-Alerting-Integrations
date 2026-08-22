@@ -6,9 +6,12 @@ byte-identical（零 policy 訊息、exit 0）。另鎖 POLICY_ERROR_PREFIX 唯�
 來源（_policy_errors() 的 blocking 判定不被其他 ERROR 字串汙染）。
 """
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
+import uuid
+from pathlib import Path
 
 import pytest
 import yaml
@@ -985,8 +988,38 @@ class TestPlatformPackLocationIsLayoutIndependent:
         return mod
 
     @staticmethod
+    def _staging_dir():
+        """一個**保證不在 repo 之下**的暫存目錄。
+
+        ⛔ 不用 pytest 的 `tmp_path`。被測函式會往上找 repo root，而
+        `tmp_path` 的位置是環境決定的：`--basetemp=.pytest-tmp` 或把
+        `TMPDIR` 指進 workspace（CI 為了避開小 /tmp、開發者為了留現場，
+        兩者都很常見）都會讓 staged 副本的祖先鏈含到本 repo，於是
+        「找不到 pack」那一格誤紅，而 warn-once 那一格會靜默退化成空斷言
+        ——誤紅與偽綠同時發生。
+        """
+        import tempfile
+        base = Path(sys.executable).anchor
+        d = Path(base) / f"vibe1494t-{uuid.uuid4().hex[:8]}"
+        try:
+            d.mkdir(parents=True)
+        except OSError:
+            d = Path(tempfile.mkdtemp())
+        assert not any((p / ".git").exists() for p in (d, *d.parents)), (
+            f"staging dir {d} sits inside a checkout; the isolation this "
+            f"class depends on does not hold here")
+        return d
+
+    @staticmethod
     def _stage(tmpdir, with_pack: bool):
-        """複製 module + 其 import 相依到 *tmpdir*（模擬映像的扁平佈局）。"""
+        """把 module 與 pack 擺成映像的扁平佈局。
+
+        ⚠️ 只複製 `_grar_validate.py` 與 `_lib_python.py`。其餘遞移相依
+        （`_lib_compat` / `_lib_constants` …）仍由 `tests/conftest.py` 放進
+        `sys.path` 的 **repo 樹**解析——所以這不是完整的映像模擬，只是把
+        **被測函式看到的 `__file__`** 放到扁平位置。完整的映像 import 由
+        `tests/ops/test_image_flat_layout.py` 負責。
+        """
         import shutil
         for fname in ("_grar_validate.py", "_lib_python.py"):
             src = (os.path.join(_OPS_DIR, fname) if fname.startswith("_grar")
@@ -997,34 +1030,35 @@ class TestPlatformPackLocationIsLayoutIndependent:
                 os.path.join(REPO_ROOT, "k8s", "03-monitoring",
                              "configmap-rules-platform.yaml"),
                 os.path.join(tmpdir, "configmap-rules-platform.yaml"))
-        sys.path.insert(0, tmpdir)
+        sys.path.insert(0, str(tmpdir))
 
     def test_flat_layout_with_the_pack_beside_it_gets_the_full_set(
-        self, tmp_path, capsys
+        self, capsys
     ):
         """出貨組態：pack 與模組同目錄 ⇒ 完整探針集、零警告。"""
-        d = str(tmp_path)
+        d = self._staging_dir()
         self._stage(d, with_pack=True)
         try:
             mod = self._load_isolated(d)
             found = mod._find_platform_rules_configmap()
             assert found is not None
-            assert found.parent == tmp_path, (
+            assert found.parent == d, (
                 f"應該解析到同目錄那份，實際 {found}")
             full = mod.platform_alert_identities()
             assert len(full) > len(mod.PLATFORM_ALERT_IDENTITY_LABELS), (
                 "同目錄有 pack 卻仍拿到 fallback 常數 —— 出貨的檢查是降級版")
             assert "WARN" not in capsys.readouterr().err
         finally:
-            sys.path.remove(d)
+            sys.path.remove(str(d))
+            shutil.rmtree(d, ignore_errors=True)
 
-    def test_without_the_pack_it_degrades_and_says_so(self, tmp_path, capsys):
+    def test_without_the_pack_it_degrades_and_says_so(self, capsys):
         """對照組：拿掉 pack ⇒ 退回常數，而且**出聲**。
 
         ⛔ 沒有這一格，上面那格證明不了「41 是因為 pack 在那裡」——
         它可能來自任何別的來源。
         """
-        d = str(tmp_path)
+        d = self._staging_dir()
         self._stage(d, with_pack=False)
         try:
             mod = self._load_isolated(d)
@@ -1035,11 +1069,12 @@ class TestPlatformPackLocationIsLayoutIndependent:
             assert "WARN" in err and "degraded" in err, err
             assert "configmap-rules-platform.yaml" in err, err
         finally:
-            sys.path.remove(d)
+            sys.path.remove(str(d))
+            shutil.rmtree(d, ignore_errors=True)
 
-    def test_the_warning_is_emitted_once_per_process(self, tmp_path, capsys):
+    def test_the_warning_is_emitted_once_per_process(self, capsys):
         """降級警告不得每次呼叫都刷一次（會淹掉客戶的真實輸出）。"""
-        d = str(tmp_path)
+        d = self._staging_dir()
         self._stage(d, with_pack=False)
         try:
             mod = self._load_isolated(d)
@@ -1049,7 +1084,8 @@ class TestPlatformPackLocationIsLayoutIndependent:
             mod.platform_alert_identities()
             assert "WARN" not in capsys.readouterr().err
         finally:
-            sys.path.remove(d)
+            sys.path.remove(str(d))
+            shutil.rmtree(d, ignore_errors=True)
 
     def test_repo_layout_still_resolves_the_real_pack(self):
         """repo 佈局（開發者與 CI 走的那條）行為未變。"""

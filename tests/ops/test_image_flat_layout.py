@@ -40,6 +40,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import uuid
 from pathlib import Path
 
@@ -59,26 +60,57 @@ from _lint_helpers import (  # noqa: E402
 IMAGE_ANCESTOR_COUNT = 3
 
 
+def _image_depth_bases() -> "list[Path]":
+    """Candidate parents to build the image-depth directory under, best first.
+
+    ⛔ The first version of this used ``Path(sys.executable).anchor`` only —
+    i.e. it created its directory at the filesystem root. On Linux ``/`` is
+    root-owned and a CI runner is not root, so ``mkdir`` raised EACCES and the
+    whole module SKIPPED. `python-tests-run` (`ci.yml`) has no ``container:``
+    and the pytest invocation carries no ``-rs``, so the skip was invisible and
+    the job stayed green: this file's guard did not run on the platform it was
+    written for. Measured with ``--user 1001:1001``: ``PermissionError``.
+
+    ``$TMPDIR`` comes first because on POSIX it is ``/tmp`` — one component —
+    so ``/tmp/<unique>/f.py`` has exactly the image's three ancestors AND is
+    world-writable. Windows temp is many components deep and cannot be
+    shortened, so there the anchor is still the only way to reach depth three.
+    """
+    bases = []
+    tmp = Path(tempfile.gettempdir()).resolve()
+    # A file in <tmp>/<unique> has len(tmp.parts) + 1 ancestors; only a
+    # single-component tmp (POSIX /tmp) can land on the image's count.
+    if len(tmp.parts) + 1 == IMAGE_ANCESTOR_COUNT:
+        bases.append(tmp)
+    bases.append(Path(Path(sys.executable).anchor))
+    return bases
+
+
 def _dir_with_image_ancestor_count() -> "tuple[Path, Path]":
     """``(leaf, cleanup_root)`` where a file in *leaf* has the image's depth.
 
-    ⛔ Derived, not hardcoded per platform. POSIX reaches three ancestors with
-    ``/<unique>``; Windows needs ``C:\\<unique>\\<sub>`` because the drive
-    anchor already eats one level. Appending until the count matches gets both
-    right without a branch that only one CI platform ever exercises.
-
-    *cleanup_root* is the single directory created directly under the
-    filesystem anchor, so one ``rmtree`` removes everything this made.
+    *cleanup_root* is the single directory this creates under its base, so one
+    ``rmtree`` removes everything it made. Raises ``OSError`` if no candidate
+    base is usable — the caller decides whether that is a skip or a failure.
     """
-    anchor = Path(Path(sys.executable).anchor)
-    cleanup_root = anchor / f"vibe1494-{uuid.uuid4().hex[:8]}"
-    leaf = cleanup_root
-    while len((leaf / "probe.py").parents) < IMAGE_ANCESTOR_COUNT:
-        leaf = leaf / "d"
-    assert len((leaf / "probe.py").parents) == IMAGE_ANCESTOR_COUNT, (
-        f"could not construct an image-depth path from anchor {anchor}"
+    last_error = None
+    for base in _image_depth_bases():
+        cleanup_root = base / f"vibe1494-{uuid.uuid4().hex[:8]}"
+        leaf = cleanup_root
+        while len((leaf / "probe.py").parents) < IMAGE_ANCESTOR_COUNT:
+            leaf = leaf / "d"
+        if len((leaf / "probe.py").parents) != IMAGE_ANCESTOR_COUNT:
+            continue  # base is already deeper than the image; try the next
+        try:
+            leaf.mkdir(parents=True)
+        except OSError as exc:
+            last_error = exc
+            continue
+        return leaf, cleanup_root
+    raise OSError(
+        f"no writable base yields an image-depth path "
+        f"(tried {[str(b) for b in _image_depth_bases()]}): {last_error}"
     )
-    return leaf, cleanup_root
 
 
 # Imported by the child process below. Kept as a module-level constant so the
@@ -121,15 +153,19 @@ def flat_import_results():
     data_paths = sorted(parse_build_sh_repo_data_files())
     assert tool_paths, "TOOL_FILES parsed empty — the harness proves nothing"
 
-    flat, cleanup_root = _dir_with_image_ancestor_count()
     try:
-        flat.mkdir(parents=True)
-    except OSError as exc:  # pragma: no cover - locked-down filesystem
-        pytest.skip(
-            f"cannot create an image-depth directory at {flat} ({exc}); this "
-            f"gate needs a writable path {IMAGE_ANCESTOR_COUNT} levels from "
-            f"the filesystem anchor"
-        )
+        flat, cleanup_root = _dir_with_image_ancestor_count()
+    except OSError as exc:
+        # ⛔ fail, not skip, wherever a base SHOULD have worked. On POSIX
+        # $TMPDIR always yields image depth and is world-writable, so an error
+        # there means the gate is broken, not inapplicable — and a silent skip
+        # is exactly how this file spent its first version not running in CI.
+        if os.name == "posix":
+            pytest.fail(
+                f"no image-depth directory could be created on a POSIX host, "
+                f"where $TMPDIR should always work: {exc}"
+            )
+        pytest.skip(f"no writable image-depth path on this host: {exc}")
 
     try:
         # Same flattening build.sh performs: destination is one directory.
@@ -141,9 +177,12 @@ def flat_import_results():
         # ⚠️ build.sh additionally seds out the parent-dir `sys.path.insert`
         # line. Not replicated: re-implementing it here would be a second copy
         # of that rule, free to drift from the one in build.sh. Leaving the
-        # line in is the conservative direction — it adds a NON-EXISTENT
-        # parent directory to sys.path, which can only fail to resolve
+        # line in is the conservative direction — the parent directory it adds
+        # to sys.path is EMPTY (this harness creates the chain itself, so the
+        # directory exists but holds nothing), which can only fail to resolve
         # something, never resolve something the image would not.
+        # ⛔ An earlier version of this comment claimed the directory did not
+        # exist. It does; the conclusion survives but the reasoning did not.
         payload = [
             [Path(rel).stem, str(flat / Path(rel).name)]
             for rel in tool_paths if rel.endswith(".py")
@@ -215,7 +254,6 @@ def test_the_harness_would_notice_a_depth_assumption(flat_import_results):
     assert results, "control cannot run: the harness imported zero modules"
 
     probe_dir, cleanup_root = _dir_with_image_ancestor_count()
-    probe_dir.mkdir(parents=True)
     try:
         probe = probe_dir / "depth_probe.py"
         probe.write_text(

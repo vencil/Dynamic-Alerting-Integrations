@@ -371,21 +371,39 @@ def main() -> None:
         # search simply comes up empty and the existing error path below says
         # so with the `--conf-d` remedy.
         here = Path(__file__).resolve().parent
+        # ⛔ BOUNDED. The search stops at the repository root and never looks
+        # above it. An unbounded `for base in (here, *here.parents)` walk —
+        # which is what the first version of this fix did — keeps climbing
+        # past the checkout and will happily bind to a `conf.d` that belongs
+        # to somebody else: `C:\Users\<user>\conf.d` on a dev box, `/opt` or
+        # `/` inside the image. That direction fails by silently describing
+        # the WRONG tenants, which is worse than the level-counting bug it
+        # replaced (that one at least stayed inside the repo).
+        #
+        # "Repository root" = the ancestor carrying `.git` (a directory in a
+        # normal clone, a FILE in a git worktree — hence `exists()`, not
+        # `is_dir()`). The image has no `.git` anywhere, so there the loop
+        # ends empty and the error path below prints the `--conf-d` remedy —
+        # the same outcome the old code produced there.
+        repo_root = next(
+            (base for base in (here, *here.parents) if (base / ".git").exists()),
+            None,
+        )
         conf_d = None
-        for base in (here, *here.parents):
-            if (base / "conf.d").is_dir():
-                conf_d = base / "conf.d"
-                break
-            fixtures = base / "tests" / "fixtures"
-            if fixtures.is_dir():
+        if repo_root is not None:
+            if (repo_root / "conf.d").is_dir():
+                conf_d = repo_root / "conf.d"
+            else:
+                fixtures = repo_root / "tests" / "fixtures"
                 for fixture_dir in sorted(fixtures.glob("synthetic-*")):
                     if (fixture_dir / "conf.d").is_dir():
                         conf_d = fixture_dir / "conf.d"
                         break
-            if conf_d is not None:
-                break
         if conf_d is None:
-            conf_d = here / "conf.d"  # non-existent: reported by the check below
+            # Non-existent on purpose: the check below reports it with the
+            # `--conf-d` remedy. Named under the repo root when we found one
+            # so the message points somewhere the reader recognises.
+            conf_d = (repo_root or here) / "conf.d"
 
     if not conf_d.exists():
         print(f"❌ conf.d/ not found at {conf_d}", file=sys.stderr)
