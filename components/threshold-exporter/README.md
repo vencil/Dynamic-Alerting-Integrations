@@ -112,6 +112,7 @@
 | `da_config_last_scan_complete_unixtime_seconds` | Gauge | 上次掃描完成時間（`time() − 此值` = 卡住偵測） |
 | `da_config_last_reload_complete_unixtime_seconds` | Gauge | 上次 reload 完成時間 |
 | `da_config_free_os_memory_total` | Counter | 主動還記憶體給 OS 的次數（未開 `-free-os-mem-after-reload` 時恆 0） |
+| `da_config_hierarchy_divergent_tenants` | Gauge | 目前「`/effective` 查得到、但不會產生 `user_threshold`」的租戶數（#1521）。>0 代表有租戶檔放在 `conf.d/` 子目錄——只有遞迴掃描器看得到，collector 看不到，**這些租戶的告警不會觸發**。每次 config commit 重設，修好即歸 0；同時會有 ERROR log 具名租戶與來源檔 |
 
 ### 3.4 Exit Codes（CLI binaries）
 
