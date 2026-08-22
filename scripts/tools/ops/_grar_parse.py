@@ -23,7 +23,12 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import is_disabled as _is_disabled  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
-from _lib_confd import warn_nested  # noqa: E402
+from _lib_confd import (  # noqa: E402
+    iter_config_files,
+    unusable_config_paths,
+    unusable_reason,
+    warn_nested,
+)
 
 from _grar_merge import (  # noqa: E402
     _substitute_tenant,
@@ -323,12 +328,27 @@ def _parse_config_files(config_dir: str) -> dict:
     # than "this tool cannot see your tenants". Say which files are skipped.
     warn_nested(config_dir, tool="routing generator")
 
-    files = sorted(f for f in os.listdir(config_dir)
-                   if (f.endswith(".yaml") or f.endswith(".yml"))
-                   and not f.startswith("."))
+    # #1469: name the config-named things that are not readable files (a
+    # DIRECTORY called `beta.yaml`, a broken symlink, an unreadable file)
+    # BEFORE the read loop, because the loop below no longer meets them —
+    # `iter_config_files` drops them, as it should. Dropping them silently
+    # would have been one signal fewer than this reader gave before the
+    # enumerators were unified, so the record is kept, through the same
+    # `_drop_unusable_policy` bookkeeping every other dropped file uses.
+    for bad in unusable_config_paths(config_dir, recursive=False):
+        _drop_unusable_policy(
+            bad.name, unusable_reason(bad),
+            f"remove {bad.name} or replace it with a readable YAML file",
+            result)
 
-    for fname in files:
-        path = os.path.join(config_dir, fname)
+    # #1469: ONE predicate for "what is a config file", shared with
+    # `check_yaml_syntax`. `recursive=False` is load-bearing — this reader
+    # is flat BY DESIGN (the ADR-016 hierarchy is reported by `warn_nested`
+    # above, not routed), and recursing here would silently change which
+    # tenants generate-routes emits routes for.
+    for path_p in iter_config_files(config_dir, recursive=False):
+        fname = path_p.name
+        path = str(path_p)
         # ⛔ `open()` is INSIDE the try. It was outside it for one round, and
         # an open-ended `except` around only `safe_load` reads exactly like
         # one that covers the read — measured: a *directory* named

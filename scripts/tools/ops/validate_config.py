@@ -65,7 +65,11 @@ sys.path.insert(0, str(_THIS_DIR))  # Docker flat layout
 sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
 from _lib_python import detect_cli_lang  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
-from _lib_confd import iter_config_files  # noqa: E402
+from _lib_confd import (  # noqa: E402
+    iter_config_files,
+    unusable_config_paths,
+    unusable_reason,
+)
 
 # Language detection for bilingual help
 _LANG = detect_cli_lang()
@@ -317,6 +321,23 @@ def check_yaml_syntax(config_dir: str) -> dict[str, object]:
                 f"{type(loaded).__name__} — every consumer reaches for keys "
                 f"on it and finds none, so nothing in this file is loaded")
             unusable.append(label)
+
+    # #1469: entries NAMED like a config file that `iter_config_files`
+    # correctly refuses to hand over — a directory called `beta.yaml`, a
+    # broken symlink, a file with no read permission. This check is the one
+    # place that enumerates the whole tree, so it is the only place that can
+    # name them; before this they were invisible here while the routing
+    # parser reported them, which is the two-readers-two-answers split #1469
+    # is about. ⛔ The selection is NOT re-derived locally — that would make
+    # a third implementation of "what is a config file".
+    for bad in unusable_config_paths(config_dir):
+        try:
+            label = bad.relative_to(Path(config_dir)).as_posix()
+        except ValueError:
+            label = bad.name
+        errors.append(f"{label}: {unusable_reason(bad)} — nothing in it is "
+                      f"loaded, by this tool or by threshold-exporter")
+        unusable.append(label)
 
     if errors:
         return _make_result("yaml_syntax", FAIL, errors,

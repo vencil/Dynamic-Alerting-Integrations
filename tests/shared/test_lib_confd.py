@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import pathlib
 import sys
 
@@ -15,6 +16,8 @@ from _lib_confd import (  # noqa: E402
     nested_yaml_files,
     nested_yaml_warning,
     reset_warned_for_test,
+    unusable_config_paths,
+    unusable_reason,
     warn_nested,
 )
 
@@ -222,3 +225,161 @@ def test_reset_is_idempotent_not_save_restore(capsys, hierarchical):
     assert warn_nested(hierarchical) is True
     reset_warned_for_test()
     assert warn_nested(hierarchical) is True, "after reset it may warn again"
+
+
+# ── #1469: the half that keeps the signal ──────────────────────────────
+#
+# Unifying the two readers' SELECTION (`_parse_config_files` now calls
+# `iter_config_files(..., recursive=False)`) removes a divergence, but on
+# its own it also removes the one message anybody was getting about a
+# config-named directory. These pin the replacement.
+
+
+@pytest.fixture()
+def with_unusable(tmp_path: pathlib.Path) -> pathlib.Path:
+    """A conf.d holding the shape #1469 was reported on."""
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    (root / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 80\n",
+                                         encoding="utf-8")
+    (root / "acme.yaml").write_text(
+        'tenants:\n  acme:\n    mysql_connections: "90"\n', encoding="utf-8")
+    (root / "beta.yaml").mkdir()                    # interrupted mkdir / bad merge
+    (root / "gamma.yaml").symlink_to(root / "nope.yaml")   # broken symlink
+    (root / "notes.txt").write_text("not a config\n", encoding="utf-8")
+    return root
+
+
+def test_unusable_paths_names_directory_and_broken_symlink(with_unusable):
+    got = [p.name for p in unusable_config_paths(with_unusable)]
+    assert got == ["beta.yaml", "gamma.yaml"]
+
+
+def test_unusable_paths_excludes_readable_files_and_non_config_names(with_unusable):
+    got = {p.name for p in unusable_config_paths(with_unusable)}
+    assert "_defaults.yaml" not in got and "acme.yaml" not in got
+    # `notes.txt` is not config-shaped at all — it is not this list's business.
+    assert "notes.txt" not in got
+
+
+def test_unusable_paths_is_disjoint_from_iter_config_files(with_unusable):
+    """The two lists partition the config-named entries — never overlap.
+
+    An entry in both would mean a reader is told to read something the
+    same module says it cannot read.
+    """
+    readable = {p.resolve() for p in iter_config_files(with_unusable)}
+    unusable = {p for p in unusable_config_paths(with_unusable)}
+    assert not (readable & {p.resolve() for p in unusable if p.exists()})
+
+
+def test_unusable_paths_respects_recursive_false(tmp_path: pathlib.Path):
+    """Flat callers (the routing parser) must not inherit nested findings."""
+    root = tmp_path / "conf.d"
+    (root / "team-a").mkdir(parents=True)
+    (root / "top.yaml").mkdir()
+    (root / "team-a" / "deep.yaml").mkdir()
+    assert [p.name for p in unusable_config_paths(root, recursive=False)] == ["top.yaml"]
+    assert [p.relative_to(root).as_posix()
+            for p in unusable_config_paths(root)] == ["team-a/deep.yaml", "top.yaml"]
+
+
+def test_unusable_paths_skips_hidden_like_iter_config_files(tmp_path: pathlib.Path):
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    (root / ".hidden.yaml").mkdir()
+    assert unusable_config_paths(root) == []
+
+
+def test_unusable_paths_on_missing_dir_is_empty(tmp_path: pathlib.Path):
+    assert unusable_config_paths(tmp_path / "nope") == []
+
+
+def test_unusable_reason_distinguishes_the_causes(with_unusable):
+    assert "directory" in unusable_reason(with_unusable / "beta.yaml")
+    assert "symlink" in unusable_reason(with_unusable / "gamma.yaml")
+
+
+# ── `unusable_reason`'s remaining answers ────────────────────────────────
+#
+# This function exists to put ONE sentence in front of the operator, and
+# coverage showed three of its four possible answers had no test: the
+# permission clause, the stat-failure clause, and the fallback. A wrong or
+# missing sentence here is the same defect class #1469 is about — the
+# reader says something, and what it says is not what happened.
+
+
+def test_unusable_reason_fallback_for_a_non_regular_file(tmp_path: pathlib.Path):
+    """A FIFO is not a dir, not a broken symlink, and is readable — yet it
+    is not a config file. That combination is the fallback clause, and it
+    is reachable in the wild (a socket or device node dropped into conf.d
+    by a bad mount)."""
+    fifo = tmp_path / "queue.yaml"
+    try:
+        os.mkfifo(fifo)
+    except (AttributeError, NotImplementedError, OSError) as e:
+        pytest.skip(f"platform cannot create a FIFO here: {e}")
+
+    assert unusable_reason(fifo) == "is not a readable file"
+    # And it must be REPORTED, not silently skipped — the whole point.
+    assert fifo in unusable_config_paths(tmp_path, recursive=False)
+
+
+def test_unusable_reason_reports_a_stat_failure_instead_of_raising(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+):
+    """If the stat itself fails, the reason must carry the errno text.
+
+    ⛔ The alternative — letting OSError escape — is exactly the shape
+    #1469's sibling defect had: a reader that dies instead of naming the
+    file it could not read.
+    """
+    target = tmp_path / "weird.yaml"
+    target.write_text("a: 1\n", encoding="utf-8")
+
+    def boom(self):  # noqa: ANN001
+        raise OSError(5, "Input/output error")
+
+    monkeypatch.setattr(pathlib.Path, "is_dir", boom)
+
+    reason = unusable_reason(target)
+    assert "could not be stat" in reason
+    assert "OSError" in reason
+    assert "Input/output error" in reason
+
+
+def test_is_readable_file_survives_a_stat_failure(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+):
+    """The selection helper must answer False, not raise, when stat fails —
+    otherwise one bad inode takes down the whole enumeration."""
+    target = tmp_path / "weird.yaml"
+    target.write_text("a: 1\n", encoding="utf-8")
+
+    def boom(self):  # noqa: ANN001
+        raise OSError(5, "Input/output error")
+
+    monkeypatch.setattr(pathlib.Path, "is_file", boom)
+
+    # Reached through the public entry point, not by importing the private
+    # helper: what matters is that enumeration does not explode.
+    assert unusable_config_paths(tmp_path, recursive=False) == [target]
+
+
+@pytest.mark.skipif(
+    hasattr(os, "geteuid") and os.geteuid() == 0,
+    reason="root bypasses the read permission bit, so os.access always returns True",
+)
+def test_unusable_reason_names_permission_denied(tmp_path: pathlib.Path):
+    """⚠️ Skipped when running as root — and this test exists partly to make
+    that skip VISIBLE. The container this suite is usually developed in runs
+    as uid 0, where the clause is unreachable; CI runners do not, so the
+    branch is exercised there rather than silently never."""
+    locked = tmp_path / "locked.yaml"
+    locked.write_text("a: 1\n", encoding="utf-8")
+    locked.chmod(0o000)
+    try:
+        assert unusable_reason(locked) == "is not readable (permission denied)"
+        assert locked in unusable_config_paths(tmp_path, recursive=False)
+    finally:
+        locked.chmod(0o600)

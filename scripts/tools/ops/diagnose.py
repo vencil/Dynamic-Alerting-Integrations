@@ -40,7 +40,12 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import detect_cli_lang, http_get_json, query_prometheus_instant, add_prometheus_arg  # noqa: E402
 from _lib_python import format_json_report  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
-from _lib_confd import warn_nested  # noqa: E402
+from _lib_confd import (  # noqa: E402
+    iter_config_files,
+    unusable_config_paths,
+    unusable_reason,
+    warn_nested,
+)
 
 # Language detection for bilingual help
 _LANG = detect_cli_lang()
@@ -105,18 +110,21 @@ def lookup_tenant_profile(tenant: str, config_dir: str | None) -> str | None:
         return None
     # #1339: flat read — a hierarchical conf.d must not look empty.
     warn_nested(base, tool="diagnose")
-    for entry in sorted(base.iterdir(), key=lambda p: p.name):
+    # #1469: the selection predicate is `_lib_confd`'s, not a fourth
+    # hand-rolled copy. `iter_config_files` already applies `_is_config`
+    # (suffix + not hidden) and, on the `recursive=False` branch, `is_file()`
+    # — the three checks that used to sit inline here.
+    for entry in iter_config_files(base, recursive=False):
         fname = entry.name
-        if not fname.endswith((".yaml", ".yml")):
-            continue
-        if fname.startswith("."):
-            continue
-        if not entry.is_file():
-            continue
         try:
             with open(entry, encoding="utf-8") as f:
                 raw = yaml.safe_load(f)
         except (OSError, yaml.YAMLError):
+            # ⛔ Still silent, deliberately — see #1522. `check()` calls this
+            # AND `resolve_inheritance_chain` over the same directory, so
+            # announcing here would print every skip twice. The signal for a
+            # `check()` caller comes from the sibling; a caller reaching this
+            # function on its own still gets nothing, which is what #1522 is.
             continue
         if not isinstance(raw, dict):
             continue
@@ -180,6 +188,45 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
     if not base.is_dir():
         return None
 
+    # #1468: every `except (OSError, yaml.YAMLError)` below used to `pass` /
+    # `continue` in silence, so a `conf.d/` this function could only half
+    # read produced a TRUNCATED chain at rc=0 with zero bytes on stderr —
+    # measured: `acme.yaml` missing one `]` turned `['defaults','tenant']`
+    # into `['defaults']`, and nothing said why. The skips are now recorded
+    # (L2, `skipped_unusable_files`, same field name and shape #1448 gave
+    # `validate-config`) and announced (L1, the `WARN: skip ...` line
+    # `_grar_parse` already prints).
+    #
+    # ⛔ The exit code is deliberately NOT changed: `batch_diagnose.py`
+    # imports `check` in-process and its aggregation semantics would have to
+    # be redefined first. Tracked separately — see #1468 L3.
+    skipped: list[str] = []
+    _said: set[tuple[str, str]] = set()
+
+    def _skip(label: str, reason: str) -> None:
+        """Record once per FILE, announce once per (file, reason).
+
+        ⛔ One file can reach here twice. `_profiles.yaml` is the case that
+        exists today: the tenant-file loop opens every `*.yaml` in the
+        directory — including it — and the Layer 2 profile read opens it
+        again by name. Appending blindly put the same path in
+        `skipped_unusable_files` twice, and that field is a list of FILES;
+        a consumer counting it (batch_diagnose reads this in-process) would
+        double-count one broken file. Caught by
+        test_diagnose_names_an_unreadable_profiles_file.
+
+        The two dedup keys differ on purpose. The list is per-file, because
+        that is what the field means. The WARN is per (file, reason),
+        because the second visit can fail for a DIFFERENT reason than the
+        first and an operator needs both — suppressing by file alone would
+        trade a duplicate line for a lost one.
+        """
+        if label not in skipped:
+            skipped.append(label)
+        if (label, reason) not in _said:
+            _said.add((label, reason))
+            print(f"  WARN: skip {label}: {reason}", file=sys.stderr)
+
     # Layer 1: Global defaults
     defaults_path = base / "_defaults.yaml"
     defaults_raw = {}
@@ -191,25 +238,38 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
             defaults_raw = raw.get("defaults", {}) or {}
             listed = raw.get("optional_overrides") or []
             declared = [k for k in listed if isinstance(k, str)]
-    except (OSError, yaml.YAMLError):
+    except FileNotFoundError:
+        # Absent `_defaults.yaml` is a legal config, not a read failure.
         pass
+    except (OSError, yaml.YAMLError) as e:
+        _skip(defaults_path.name, f"{e.__class__.__name__}: "
+                                  f"{' '.join(str(e).split())}")
 
     # Find tenant config
     tenant_overrides = {}
     # #1339: flat read — a hierarchical conf.d must not look empty.
     warn_nested(base, tool="diagnose")
-    for entry in sorted(base.iterdir(), key=lambda p: p.name):
+    # #1469: same selection predicate as `validate-config` and the routing
+    # parser — `_lib_confd`, not a fourth hand-rolled copy. The paired
+    # `unusable_config_paths` pass runs FIRST so a config-named directory or
+    # a broken symlink is named in the SAME words the other two readers use
+    # (`unusable_reason`), instead of leaking a raw `IsADirectoryError`
+    # through the `except` below. Unifying the predicate without this pass
+    # would make those paths silent here — the direction #1469 exists to
+    # reverse.
+    for bad in unusable_config_paths(base, recursive=False):
+        _skip(bad.name, unusable_reason(bad))
+    for entry in iter_config_files(base, recursive=False):
         fname = entry.name
-        if not fname.endswith((".yaml", ".yml")):
-            continue
-        if fname.startswith("."):
-            continue
         try:
             with open(entry, encoding="utf-8") as f:
                 raw = yaml.safe_load(f) or {}
-        except (OSError, yaml.YAMLError):
+        except (OSError, yaml.YAMLError) as e:
+            _skip(fname, f"{e.__class__.__name__}: {' '.join(str(e).split())}")
             continue
         if not isinstance(raw, dict):
+            _skip(fname, f"top level must be a mapping, got "
+                         f"{type(raw).__name__}")
             continue
         tenants = {}
         if "tenants" in raw and isinstance(raw.get("tenants"), dict):
@@ -233,8 +293,16 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
                 raw = yaml.safe_load(f) or {}
             all_profiles = raw.get("profiles", {}) if isinstance(raw, dict) else {}
             profile_keys = all_profiles.get(profile_name, {})
-        except (OSError, yaml.YAMLError):
-            pass
+        except FileNotFoundError:
+            # No `_profiles.yaml` at all: the tenant references a profile
+            # this directory does not define. Still a read the chain is
+            # missing a layer because of, so it is recorded.
+            _skip(profiles_path.name,
+                  f"not found, but {tenant} references profile "
+                  f"{profile_name}")
+        except (OSError, yaml.YAMLError) as e:
+            _skip(profiles_path.name, f"{e.__class__.__name__}: "
+                                      f"{' '.join(str(e).split())}")
 
     # Layer 3: Tenant-specific (non-reserved metric keys only)
     tenant_metric_keys = {
@@ -275,13 +343,20 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
                 resolved[k] = v
     resolved.update(tenant_metric_keys)
 
-    return {
+    out: dict[str, object] = {
         "chain": chain,
         "resolved": resolved,
         "profile_name": profile_name,
         # settable, but with no platform value — see the docstring
         "declared": declared,
     }
+    # #1468: only when non-empty. An always-present empty list on a healthy
+    # run is the shape `validate_config.print_report` deliberately pops off
+    # its own rows; a caveat field that appears on clean output stops being
+    # read as a caveat.
+    if skipped:
+        out["skipped_unusable_files"] = skipped
+    return out
 
 
 def _format_chain_summary(inheritance):
@@ -296,7 +371,7 @@ def _format_chain_summary(inheritance):
             "source": c["source"],
             "key_count": len(c["keys"]),
         })
-    return {
+    summary = {
         "layers": layers,
         "resolved_count": len(inheritance.get("resolved", {})),
         # settable-but-unvalued keys are counted separately, never folded into
@@ -304,6 +379,14 @@ def _format_chain_summary(inheritance):
         "declared_count": len(inheritance.get("declared", []) or []),
         "profile": inheritance.get("profile_name"),
     }
+    # #1468: the truncation caveat rides along with the summary, because the
+    # summary IS what `check()` puts in its JSON and what
+    # `batch_diagnose.py` reads back — a `layers` list short of a layer must
+    # not be the only trace that a file could not be read.
+    skipped = inheritance.get("skipped_unusable_files") or []
+    if skipped:
+        summary["skipped_unusable_files"] = list(skipped)
+    return summary
 
 
 def check(tenant: str, prom_url: str, config_dir: str | None = None) -> str:
