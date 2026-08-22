@@ -210,8 +210,9 @@ docker run --rm \
 mkdir -p .output
 
 docker run --rm \
+  --user $(id -u):$(id -g) \
   -v $(pwd)/conf.d:/data/conf.d:ro \
-  -v $(pwd)/.output:/data/output:ro \
+  -v $(pwd)/.output:/data/output \
   ghcr.io/vencil/da-tools:latest \
   generate-routes --config-dir /data/conf.d \
   -o /data/output/alertmanager-routes.yaml --validate

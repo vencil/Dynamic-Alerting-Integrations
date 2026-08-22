@@ -732,7 +732,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "6da30b382766d8cab369497aebddc997ffa51de86575a2bb14c2730618c509cb",
+ "source_digest": "a65f541fcf6c531c40ed1d7f3c868ad6085b43e065492908f469f736bf3c6841",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1442,6 +1442,9 @@
   ],
   "docs/glossary.md": [
    "tests/lint/test_check_codename_gate.py"
+  ],
+  "docs/includes/docker-usage-pattern.md": [
+   "tests/lint/test_check_doc_datools_cmds.py"
   ],
   "docs/index.md": [
    "tests/ops/test_ci_path_filter_coverage.py",
