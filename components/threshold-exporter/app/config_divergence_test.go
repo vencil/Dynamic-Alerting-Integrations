@@ -307,3 +307,65 @@ func TestFormatDivergenceLog_CapsTheSample(t *testing.T) {
 		t.Errorf("expected exactly %d sampled paths, got:\n%s", divergenceLogSampleLimit, line)
 	}
 }
+
+// TestDivergenceAudit_PairsOneInstant pins the invariant that the audit
+// judges the snapshot it was HANDED, never a hierarchy it re-reads for
+// itself.
+//
+// Why this matters, and why it is asserted rather than reasoned about:
+// reloads are not serialised. `fireDebounced` clears `debounce.timer`,
+// releases `debounce.mu`, and only then calls `diffAndReload`, so a fresh
+// event can arm another timer and a second reload can overlap the first.
+// While the audit read `m.hierarchy.tenantSources` under its own RLock —
+// after commitConfig had released `m.mu` — it could pair reload N's config
+// with reload N+1's hierarchy and name a tenant that was never actually
+// missing at any single instant. A check that exists to be believed about
+// which tenants have no metrics cannot itself invent one.
+//
+// The test drives that apart deliberately: the live hierarchy is clean, the
+// handed-in snapshot is not. If someone reinstates the internal read, the
+// audit will consult the clean live map and report 0 — and this fails.
+func TestDivergenceAudit_PairsOneInstant(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"),
+		"defaults:\n  mysql_connections: 50\n")
+	writeTestYAML(t, filepath.Join(dir, "root-tenant.yaml"),
+		"tenants:\n  root-tenant:\n    mysql_connections: \"90\"\n")
+
+	m, fresh, logBuf := newAuditedManager(t, dir)
+	if err := m.Load(); err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+
+	// Baseline: the live tree is flat and clean, so a self-read would see
+	// nothing to report. This is the control — without it, a passing
+	// assertion below could just mean "the tree was broken all along".
+	if got := testutil.ToFloat64(fresh.hierarchyDivergentTenants); got != 0 {
+		t.Fatalf("setup: flat tree should start clean, gauge = %v", got)
+	}
+	m.mu.RLock()
+	liveSources := m.hierarchy.tenantSources
+	m.mu.RUnlock()
+	if _, leaked := liveSources["ghost-tenant"]; leaked {
+		t.Fatalf("setup: live hierarchy must not already contain the probe tenant")
+	}
+
+	// Hand it a snapshot the live manager does not hold.
+	handed := map[string]string{
+		"ghost-tenant": filepath.Join(dir, "db", "ghost-tenant.yaml"),
+	}
+	logBuf.Reset()
+	got := m.auditHierarchyDivergence(m.GetConfig(), handed, "pairing-probe")
+
+	if got != 1 {
+		t.Errorf("audit judged something other than the handed snapshot: got %d, want 1 "+
+			"(a 0 here means it re-read m.hierarchy, which is the overlapping-reload bug)", got)
+	}
+	if gauge := testutil.ToFloat64(fresh.hierarchyDivergentTenants); gauge != 1 {
+		t.Errorf("gauge = %v, want 1 — it must follow the handed snapshot too", gauge)
+	}
+	if logs := logBuf.String(); !strings.Contains(logs, "ghost-tenant") {
+		t.Errorf("ERROR log must name the tenant from the handed snapshot, got:\n%s", logs)
+	}
+}

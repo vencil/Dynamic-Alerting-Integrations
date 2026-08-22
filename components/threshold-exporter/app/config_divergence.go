@@ -148,21 +148,32 @@ func formatDivergenceLog(divergent []string, tenantSources map[string]string, ro
 // modes), fullDirLoad, IncrementalLoad, and the hierarchical hot-reload
 // path (diffAndReload → installNewHierarchyState → fullDirLoad).
 //
-// `cfg` is passed in rather than read back from m.config because
-// commitConfig calls this after releasing m.mu; using the argument keeps
-// the audit pinned to the exact config that was just committed. The
-// hierarchy side IS read under RLock, so the comparison is against the
-// tenantSources snapshot that /effective would serve at this instant.
+// ⛔ BOTH halves are passed in, and that is the whole point: they must come
+// from ONE lock window. An earlier revision took `cfg` as an argument but
+// read `m.hierarchy.tenantSources` here under its own RLock, after
+// commitConfig had already released m.mu. Reloads are not serialised —
+// `fireDebounced` (config_debounce.go) sets `debounce.timer = nil`, unlocks,
+// and only then calls diffAndReload, so a fresh event can arm a new timer
+// and a second reload can overlap the first. In that window the audit could
+// pair reload N's `cfg` with reload N+1's tenantSources and report a
+// divergence that never existed at any single instant — a false ERROR
+// naming a healthy tenant, from the very check whose job is to be
+// trustworthy about which tenants are missing.
+//
+// Reading both under commitConfig's existing Lock fixes the pairing without
+// serialising reloads: whatever is reported is the true (collector view,
+// /effective view) pair as of one instant. ⚠️ It does NOT make overlapping
+// reloads impossible — the last commit still wins, which is the pre-existing
+// behaviour for m.config itself. It only guarantees the two halves of this
+// comparison are never stitched together from different reloads.
 //
 // The gauge is Set (not Inc) on every commit, including the healthy case,
 // so it returns to 0 as soon as the offending file is moved or removed —
 // see the gauge-vs-counter note on da_config_hierarchy_divergent_tenants
 // in config_metrics.go.
-func (m *ConfigManager) auditHierarchyDivergence(cfg *ThresholdConfig, context string) int {
-	m.mu.RLock()
-	tenantSources := m.hierarchy.tenantSources
-	m.mu.RUnlock()
-
+func (m *ConfigManager) auditHierarchyDivergence(
+	cfg *ThresholdConfig, tenantSources map[string]string, context string,
+) int {
 	divergent := hierarchyDivergentTenants(tenantSources, cfg)
 	m.getMetrics().SetHierarchyDivergentTenants(len(divergent))
 	if len(divergent) == 0 {
