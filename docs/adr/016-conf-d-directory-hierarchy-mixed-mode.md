@@ -128,7 +128,8 @@ Directory Scanner 的設計哲學是「檔案系統即 source of truth」。
 
 | 面 | 階層 `conf.d/` |
 |:--|:--|
-| threshold-exporter（閾值） | ✅ 完整遞迴繼承 |
+| threshold-exporter `/effective`（繼承解析） | ✅ 完整遞迴繼承 |
+| threshold-exporter `/metrics`（Prometheus 輸出） | ⛔ **仍是平面**，見下方 #1521 |
 | `validate_config.py` | ✅ 已改為遞迴 |
 | 路由生成器 / 其餘平面工具 | ⚠️ **仍是平面**，但會列出被跳過的檔案並指回本節 |
 
@@ -138,6 +139,28 @@ Directory Scanner 的設計哲學是「檔案系統即 source of truth」。
 這個「平面但出聲」的契約由 `tests/shared/test_confd_enumeration_contract.py` 強制：
 新工具若平面讀取又不出聲會被擋下來，**選擇必須是刻意的**。共用列舉層在
 `scripts/tools/_lib_confd.py`。
+
+### ⛔ 已知缺陷：巢狀租戶 `/effective` 解析得到，`/metrics` 卻沒有 series（#1521，2026-08-22 補記）
+
+上面「影響」清單裡的 **「Prometheus metrics：目錄深度不影響 metric label」目前是假的**。
+threshold-exporter **自己內部**就有兩個對 `conf.d/` 的掃描器，對「哪些檔存在」的答案不同：
+
+| 掃描器 | 列舉方式 | 出海口 |
+|:--|:--|:--|
+| `config_hierarchy.go` `scanDirHierarchical` | `filepath.WalkDir` — **遞迴，每一層** | `hierarchy.tenantSources` → `Resolve()` → `/effective` |
+| `flat_scanner.go` `scanDirFileHashes` | `os.ReadDir` + `if IsDir() { continue }` — **只有頂層** | `m.config` → `ThresholdCollector` → `/metrics` |
+
+⇒ 放在子目錄的租戶檔（`conf.d/db/hier-tenant.yaml`）**`/effective` 查得到、`/metrics` 一條 series 都沒有**，
+所以它的告警**永遠不會 fire**。#1526 之前是**零信號**：沒有 ERROR、沒有 WARN、沒有 parse_failure，
+連 "Config loaded" 統計行都看不出來。
+
+現況（#1526 止血後）：新增 gauge `da_config_hierarchy_divergent_tenants` + 一行 ERROR 會**點名**受害租戶——
+但**沒有修好**，那些租戶仍然不產生指標。⚠️ 純平面模式下 gauge 可能維持 `0` 直到重啟，
+**別把 0 讀成「已完整檢查」**（兩個成因與釘住它的回歸測試見
+[threshold-exporter README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md)）。
+
+⇒ 在 #1521 關閉前：**要指標，租戶檔就得放在 `conf.d/` 頂層**。
+關閉 #1521 的那支 PR 同時負責移除本節與還原上面的表格列。
 
 ## 相關
 
