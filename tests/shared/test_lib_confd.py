@@ -657,6 +657,9 @@ def test_a_config_named_directory_that_is_also_unscannable_is_listed_once(
         "one problem as two", [str(p) for p in unusable])
     assert unusable == [both], (
         "nothing else in this tree is unusable", [str(p) for p in unusable])
-    # Control: the rest of the scan is unaffected — this is a signal, not
-    # a refusal, and the duplicate would otherwise hide behind a pass.
+    # ⚠️ NOT a control for the de-duplication — `iter_config_files` is
+    # untouched by that filter, so this line can neither hide nor reveal a
+    # duplicate. What it does prove is that the injected `os.scandir`
+    # failure is scoped to `beta.yaml`: the other reader still sees the
+    # tree, so a red above is the overlap and not a broken fixture.
     assert [p.name for p in iter_config_files(root)] == ["top.yaml"]
