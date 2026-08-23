@@ -124,7 +124,8 @@ State after the #1339 fix:
 
 | Plane | Hierarchical `conf.d/` |
 |:--|:--|
-| threshold-exporter (thresholds) | ✅ full recursive inheritance |
+| threshold-exporter `/effective` (inheritance resolution) | ✅ full recursive inheritance |
+| threshold-exporter `/metrics` (Prometheus output) | ⛔ **still flat**, see #1521 below |
 | `validate_config.py` | ✅ now recursive |
 | routing generator / remaining flat tools | ⚠️ **still flat**, but they now name the files they skip and point here |
 
@@ -137,6 +138,33 @@ The "flat but loud" contract is enforced by
 `tests/shared/test_confd_enumeration_contract.py`: a new tool that reads flat and
 stays silent fails the gate, so **the choice has to be deliberate**. The shared
 enumeration layer is `scripts/tools/_lib_confd.py`.
+
+### ⛔ Known defect: nested tenants resolve on `/effective` but have no series on `/metrics` (#1521, added 2026-08-22)
+
+The line in the Consequences list above — **"Prometheus metrics: Directory depth
+does not affect metric labels" — is currently false**. threshold-exporter has
+**two** `conf.d/` scanners of its own, and they disagree about which files exist:
+
+| Scanner | Enumeration | Outlet |
+|:--|:--|:--|
+| `config_hierarchy.go` `scanDirHierarchical` | `filepath.WalkDir` — **recursive, every depth** | `hierarchy.tenantSources` → `Resolve()` → `/effective` |
+| `flat_scanner.go` `scanDirFileHashes` | `os.ReadDir` + `if IsDir() { continue }` — **top level only** | `m.config` → `ThresholdCollector` → `/metrics` |
+
+⇒ A tenant file placed in a sub-directory (`conf.d/db/hier-tenant.yaml`) **is
+resolvable via `/effective` and has not a single series on `/metrics`**, so its
+alerts **can never fire**. Before #1526 this was **zero signal**: no ERROR, no
+WARN, no parse_failure, nothing in the "Config loaded" stats line.
+
+State after the #1526 stopgap: a new gauge `da_config_hierarchy_divergent_tenants`
+plus one ERROR line **names** the affected tenants — but **does not fix them**;
+those tenants still emit no metrics. ⚠️ In pure flat mode the gauge can stay at
+`0` until restart, so **do not read 0 as "fully checked"** (both causes and the
+regression tests pinning them are in the
+[threshold-exporter README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md)).
+
+⇒ Until #1521 is closed: **if you want metrics, the tenant file has to sit at the
+`conf.d/` top level**. The PR that closes #1521 owns removing this section and
+restoring the table row above.
 
 ## Related
 
