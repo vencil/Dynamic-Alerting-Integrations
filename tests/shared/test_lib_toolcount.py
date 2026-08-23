@@ -205,10 +205,16 @@ class TestAllThreeConsumers:
 
     ⛔ The first repair for that shared the scan but not the total: the
     writer re-added `counts["ops"] + counts["dx"] + counts["lint"]`.
-    Measured with a fourth subdirectory declared in `COUNT_SUBDIRS`:
-    checker 221, writer 220. `test_the_breakdown_follows_the_declared_scope`
-    is the control for that, and it is the reason the writer returns a
-    mapping instead of a fixed-width tuple.
+    Measured **on `5cff2359`** with a fourth subdirectory declared in
+    `COUNT_SUBDIRS`: checker 221, writer 220.
+    `test_the_breakdown_follows_the_declared_scope` is the control for
+    that, and it is the reason the writer returns a mapping instead of a
+    fixed-width tuple.
+
+    ⚠️ Anchored on purpose: the repo-wide tool count moves whenever anyone
+    adds a tool, so the pair reads as wrong later even though the
+    divergence it records is real. What matters is the gap between the two
+    numbers, not either number.
     """
 
     def _consumers(self, tmp_path, monkeypatch):

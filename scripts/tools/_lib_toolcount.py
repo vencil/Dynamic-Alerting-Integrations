@@ -87,8 +87,10 @@ SHARED_LIB_PREFIX = "_lib"
 # Filename prefixes that mark a file as something other than a tool.
 # ⚠️ `__pycache__` is inert, and NOT for the reason once written here.
 # An earlier comment claimed it was kept "in case a caller hands this a
-# recursive listing" — measured, that is false too: `rglob("*.py")` with
-# and without the member both give 224, because the prefix is matched
+# recursive listing" — measured on `5cff2359`, that is false too:
+# `rglob("*.py")` with and without the member both give 224 (the equality
+# is the point; the absolute number moves with the tree, and on
+# `2ca04d14` the same pair reads 225/225), because the prefix is matched
 # against `path.name` and `__pycache__/` holds `.pyc`, which the suffix
 # test already rejects. The only input it can ever reject is a file
 # literally named `__pycache__*.py`. Kept because removing it would be a

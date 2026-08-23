@@ -1077,16 +1077,21 @@ def _count_python_tools():
     ⛔ #1511: this used to hold its own three hard-coded directory paths
     and — unlike that gate — skipped no filename prefixes at all. The two
     agreed only because those three directories happen to hold no `_lib*`
-    or `__init__.py`. Measured with one `scripts/tools/lint/_lib_probe.py`
-    added: this wrote 221 into README, the gate warned "found 221, actual
-    is 220", `--fix` wrote 220 back, and `--sync-counts --check`
-    immediately called it outdated again.
+    or `__init__.py`. Measured **on `5cff2359`** with one
+    `scripts/tools/lint/_lib_probe.py` added: this wrote 221 into README,
+    the gate warned "found 221, actual is 220", `--fix` wrote 220 back,
+    and `--sync-counts --check` immediately called it outdated again.
 
     ⛔ The first repair for THAT still re-added the total from three
     hard-coded keys (`counts["ops"] + counts["dx"] + counts["lint"]`)
-    while the gate counted `COUNT_SUBDIRS`. Measured with a fourth
-    subdirectory declared: gate 221, this 220 — the same divergence one
-    layer down, in the commit that claimed to remove it.
+    while the gate counted `COUNT_SUBDIRS`. Measured **on `5cff2359`**
+    with a fourth subdirectory declared: gate 221, this 220 — the same
+    divergence one layer down, in the commit that claimed to remove it.
+
+    ⚠️ Both figures are anchored on purpose. The tool count moves whenever
+    anyone adds a tool, so an unanchored "measured N" goes stale without
+    anybody editing this file — the invariant is that the two sides agree,
+    not that they agree on any particular number.
     """
     tools_dir = REPO_ROOT / "scripts" / "tools"
     return len(count_scope(tools_dir)), count_by_subdir(tools_dir)
