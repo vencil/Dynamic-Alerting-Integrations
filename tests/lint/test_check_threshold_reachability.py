@@ -2156,9 +2156,28 @@ def test_the_call_site_hands_the_witness_the_tracked_scan_not_the_exempt_set(
 #     `test_the_schema_witness_is_silent_on_the_real_tree` fail on its
 #     independent recount (17 vs 16) — but the floor itself is not; the two
 #     were disclosed as one item and only one of them was true.
-#   * the AST assertion that the witness runs after the four floors. Measured
-#     by reordering: running it first still catches the attack; what the order
-#     buys is message quality.
+#   * (NOW GUARDED — #1458 blind review, round 4) the witness's position.
+#     There is still no AST assertion; the CONSEQUENCE is pinned behaviourally
+#     instead, once per floor, by
+#     `test_every_floor_that_runs_before_the_witness_is_still_heard_over_it`,
+#     and for the loader-readable floor's real message by
+#     `test_the_schema_witness_speaks_last_so_a_floor_is_heard_first`. Leaving
+#     the old disclosure here would cost the next reader a guard they already
+#     have, which is the failure this block warns about above.
+#   * the order of the floors AMONG THEMSELVES — measured, and NOT an
+#     equivalence. `_assert_every_root_contributes` and
+#     `_assert_every_root_stays_loader_readable` both raise on one input (a
+#     root whose `_defaults.yaml` was renamed AND whose `defaults:` section was
+#     renamed — #1458's two moves at once), with different messages, so
+#     swapping them changes which diagnosis the caller reads. The swap is green
+#     today. Left unguarded on purpose: the witness is the case #1443 is about,
+#     and pinning every pairwise order would freeze a call sequence that
+#     legitimately grows. ⚠️ An earlier wording called this pair an EQUIVALENT
+#     mutation because "their domains do not overlap"; that argument was wrong
+#     — the `continue` it rested on hands over one arm, not both.
+#   * the witness's threshold BOUNDARY. Replacing `judged < ...` with
+#     `judged <= ...` survives: every rig drives `judged` to 0, far under the
+#     floor, so nothing exercises `judged == _DEFAULTS_ARTIFACT_FLOOR`.
 #   * the assertion that the gate calls the sibling's judgement rather than a
 #     private copy. Measured: substituting an inline copy of
 #     `defaults_doc_violations` into this gate leaves BOTH modules at baseline
@@ -5432,31 +5451,150 @@ def test_the_two_loader_floors_are_bracketed_by_what_the_sibling_cannot_see():
         "vacuous", {"mirrored": mirrored, "owned": owned})
 
 
+# ── the witness runs after every floor ───────────────────────────────────────
+
+# The assertions `_defaults_faces()` calls BEFORE the schema witness. Hand-kept
+# so the parametrisation reads; the table is held to the gate's own source by
+# `test_the_floor_table_matches_what_the_real_entry_actually_calls`, so the two
+# cannot drift.
+_FLOORS_BEFORE_THE_WITNESS = (
+    "_assert_shipped_roots_intact",
+    "_assert_loader_readable_floor",
+    "_assert_every_root_contributes",
+    "_assert_every_root_stays_loader_readable",
+    "_assert_keys_floor",
+)
+
+
+def _floors_the_real_entry_calls_before_the_witness() -> list[str]:
+    """The `_assert_*` calls in `_defaults_faces`, read off the gate's source."""
+    assert GATE_SRC.count("def _defaults_faces(") == 1
+    body = GATE_SRC.split("def _defaults_faces(", 1)[1]
+    witness = "judged = _assert_defaults_artifacts_match_schema"
+    assert witness in body, "the witness call moved or was renamed"
+    return re.findall(r"^    (_assert_\w+)\(", body.split(witness, 1)[0], re.M)
+
+
+def test_the_floor_table_matches_what_the_real_entry_actually_calls():
+    """A floor added above the witness must join the table, not slip past it.
+
+    ⛔ Without this, the parametrisation below is only as good as someone
+    remembering to extend a tuple — and the defect it exists for is EXACTLY
+    that kind of forgetting: the gate comment said "the four floors" while the
+    call list held three, then went on saying it once #1458 made it five
+    (blind review, round 4).
+    """
+    derived = _floors_the_real_entry_calls_before_the_witness()
+    assert derived, (
+        "extraction returned nothing — the regex or the anchor is stale, and a "
+        "silently empty list would make this test and the parametrised one "
+        "below vacuous together")
+    assert derived == list(_FLOORS_BEFORE_THE_WITNESS), (
+        "`_FLOORS_BEFORE_THE_WITNESS` no longer matches the calls in "
+        "`_defaults_faces`. A floor added before the witness must be added "
+        "here too, or nothing checks that the witness stays behind it.",
+        {"in_source": derived, "in_table": list(_FLOORS_BEFORE_THE_WITNESS)})
+
+
+@pytest.mark.parametrize("floor_name", _FLOORS_BEFORE_THE_WITNESS)
+def test_every_floor_that_runs_before_the_witness_is_still_heard_over_it(
+        monkeypatch, floor_name):
+    """Breach this floor AND the witness; the floor must be the one heard.
+
+    ⛔ Blind review (#1458, round 4) measured that the sibling test below —
+    which rigs the SECOND floor specifically — buys much less than its name
+    promises. Two reorderings left the whole suite green:
+
+        witness moved to just after `_assert_loader_readable_floor`
+            → 156 passed, rc=0; floors 3, 4 and 5 all lose their voice
+        witness swapped with `_assert_keys_floor` alone — the adjacent pair,
+        the one a refactor is likeliest to disturb
+            → 156 passed, rc=0; floor 5 loses its voice
+
+    Both were measured through `_defaults_faces()` by standing one floor down
+    and reading which message reached the caller: on the real code every floor
+    in the table speaks; under either reordering the witness speaks instead.
+    The property is therefore per-floor, and this is parametrised over the
+    table.
+
+    ⚠️ WHAT THIS DOES NOT PIN: the order of the floors AMONG THEMSELVES. Each
+    case stands exactly one floor down, so any permutation of the others is
+    invisible here. One such difference is measured and real — see the
+    disclosure block near the top of this file.
+
+    Vacuity: `monkeypatch.setattr` defaults to `raising=True`, so a floor this
+    table names but the gate no longer has fails here instead of dropping out.
+    """
+    sentinel = f"SENTINEL-{floor_name}"
+
+    monkeypatch.setattr(gate, "_assert_defaults_artifacts_match_schema",
+                        lambda *_a, **_k: 0)
+
+    def _this_floor_speaks(*_a, **_k):
+        raise gate._GateViolation(sentinel)
+
+    monkeypatch.setattr(gate, floor_name, _this_floor_speaks)
+
+    with pytest.raises(gate._GateViolation) as exc:
+        gate._defaults_faces()
+    msg = str(exc.value)
+    assert sentinel in msg, (
+        f"`{floor_name}` was breached and so was the witness, but the caller "
+        "did not read this floor. Either the witness now runs before it — in "
+        "which case a maintainer meets a generic count instead of this floor's "
+        "remedy — or the real entry stopped calling this floor at all.",
+        msg[:400])
+
+
 def test_the_schema_witness_speaks_last_so_a_floor_is_heard_first(monkeypatch):
-    """The witness's POSITION, which its own comment says was chosen by measurement.
+    """The loader-readable floor's REAL message survives a breached witness.
 
     ⛔ Surviving mutation (C-tier, mutation review round 3): moving the schema
-    witness and its `_DEFAULTS_ARTIFACT_FLOOR` check from the END of
-    `_defaults_faces` to the front left all 155 tests green. Its comment
-    meanwhile states the position is load-bearing and says exactly what it
-    buys — "Running it FIRST also catches the attack ... but it then speaks
-    INSTEAD of the four floors on the four roots they already cover, and
-    those messages carry warnings this one does not". That is a behavioural
-    claim about WHICH diagnosis a maintainer reads, with nothing enforcing it.
+    witness and its `_DEFAULTS_ARTIFACT_FLOOR` check out of the END of
+    `_defaults_faces` left the suite green. Its comment meanwhile states the
+    position is load-bearing — the witness would speak INSTEAD of the floors
+    on the roots they already cover, and their messages carry remedies its own
+    does not. That is a behavioural claim about WHICH diagnosis a maintainer
+    reads, and nothing enforced it.
 
-    ⚠️ Order is not automatically load-bearing here and this test does not
-    assume it is: swapping `_assert_every_root_contributes` with
-    `_assert_every_root_stays_loader_readable` is also green, and that one is
-    an EQUIVALENT mutation — the latter defers to the former with an explicit
-    `continue` for an absent root, so their domains do not overlap and the
-    order genuinely cannot matter. The witness is different because its
-    domain OVERLAPS the floors': it fires on the same input they do.
+    ⛔ THE LANDING SPOT IS PART OF THE CLAIM. "To the front" has two readings
+    and they do not measure the same, so both are stated rather than one being
+    passed off as "the" result (blind review, #1458 round 4):
+
+        inserted before `_assert_shipped_roots_intact`, i.e. at the head of
+        the floor sequence              → 1 failed, 155 passed
+        inserted after `scanned = _tracked_defaults_artifacts()`, i.e. at the
+        head of the function body       → 3 failed, 153 passed
+            (the two extra were `test_an_empty_artifact_scan_is_an_error_not_a_pass`
+             and `test_every_floor_breach_is_a_violation_not_a_crash[scan]`)
+
+    ⛔ THIS TEST RIGS THE SECOND FLOOR ONLY, which is much less than its name
+    suggests; blind review measured two reorderings it does not catch. The
+    general property is covered per-floor by
+    `test_every_floor_that_runs_before_the_witness_is_still_heard_over_it`.
+    What this one adds on top is that the floor's REAL message — not a
+    sentinel — is what reaches the caller.
+
+    ⚠️ An earlier wording here claimed that swapping
+    `_assert_every_root_contributes` with
+    `_assert_every_root_stays_loader_readable` is an EQUIVALENT mutation,
+    because the latter has an explicit `continue` for an absent root "so their
+    domains do not overlap". ⛔ THAT ARGUMENT IS WRONG and the claim is false.
+    The `continue` hands over ONE arm — the root that vanished entirely. The
+    former also has a zero-keys arm, and a root whose file was renamed AND
+    whose `defaults:` section was renamed trips both; measured on that input,
+    each raises its own, different message. The swap is green today, which
+    makes it an untested behavioural difference rather than an equivalence. It
+    is disclosed near the top of this file, not guarded here.
 
     The property, therefore: rig BOTH a floor breach and a witness breach at
     once, and the caller must be told the floor's story — the one that names
     the remedy and warns against lowering the number.
     """
+    witness_calls = []
+
     def _witness_is_starving(*_a, **_k):
+        witness_calls.append(1)
         return 0  # below _DEFAULTS_ARTIFACT_FLOOR, so the witness would fire
 
     assert 0 < gate._DEFAULTS_ARTIFACT_FLOOR, (
@@ -5471,7 +5609,9 @@ def test_the_schema_witness_speaks_last_so_a_floor_is_heard_first(monkeypatch):
     assert "the schema witness judged only" in str(exc.value), (
         "precondition: the rig must be able to trip the witness on its own, "
         "or part (2) proves nothing", str(exc.value)[:300])
+    assert witness_calls, "the witness stub was never reached in part (1)"
     monkeypatch.undo()
+    witness_calls.clear()
 
     # (2) The property: with a FLOOR also breached, the floor speaks.
     real_pred = gate._is_loader_readable_defaults
@@ -5496,6 +5636,13 @@ def test_the_schema_witness_speaks_last_so_a_floor_is_heard_first(monkeypatch):
     assert "LOWERING THESE NUMBERS IS NOT A REMEDY" in msg, (
         "and its message carries a warning the witness's does not — which is "
         "the whole reason the order was chosen", msg[:400])
+    # ⛔ MEASURED, not inferred. The three asserts above pass just as happily
+    # with no witness stub installed at all, so "both were breached at once"
+    # rested on the reader trusting part (1). The spy makes the ordering itself
+    # observable: the witness must not have been reached.
+    assert not witness_calls, (
+        "the witness RAN before the breached floor raised, so the asserts "
+        "above say nothing about order", witness_calls)
     monkeypatch.undo()
 
     # Control: unpatched, the real tree is clean through the real entry, so

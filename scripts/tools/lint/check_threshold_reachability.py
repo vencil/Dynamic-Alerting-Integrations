@@ -1917,18 +1917,33 @@ def _defaults_faces() -> tuple[dict[str, dict[str, KeyInfo]], dict[str, dict[str
     _assert_every_root_contributes(all_by_root)
     _assert_every_root_stays_loader_readable(all_by_root)
     _assert_keys_floor(generators, artifacts)
-    # ⛔ LAST, and the position was chosen by measurement rather than by
-    # argument (#1443). Running it FIRST also catches the attack — measured,
-    # same 7 roots — but it then speaks INSTEAD of the four floors on the four
-    # roots they already cover, and those messages carry warnings this one does
-    # not (the shipped floor's "⛔ LOWERING THESE NUMBERS IS NOT A REMEDY", the
-    # fifth floor's "adding this root to the list is NOT the remedy"). Last
-    # means a maintainer meets the most specific diagnosis available, and this
-    # witness speaks exactly when every floor has stayed silent — which is the
-    # state #1443 is about.
+    # ⛔ LAST, and the position is load-bearing. Every assertion above can fire
+    # on the same tree this one judges, and their messages carry remedies this
+    # one does not — the shipped floor's and the loader-readable floor's
+    # "⛔ LOWERING THESE NUMBERS IS NOT A REMEDY", the fifth floor's
+    # "⛔ Adding this root to _DEFAULTS_ROOTS_MAY_BE_EMPTY is NOT the remedy".
+    # Last means a maintainer meets the most specific diagnosis available, and
+    # this witness speaks exactly when every floor has stayed silent — which is
+    # the state #1443 is about.
+    #
+    # ⛔ DO NOT TAKE THE NUMBER OF FLOORS ABOVE FROM THIS COMMENT. An earlier
+    # wording said "the four floors" when the call list held three, and it was
+    # still saying four once #1458 made it five. The list is now derived from
+    # this function's own source and each floor is stood down in turn by
+    # `test_every_floor_that_runs_before_the_witness_is_still_heard_over_it`,
+    # so a floor added above without extending that table reddens instead of
+    # going quietly unordered (#1458 blind review).
+    #
+    # ⚠️ An earlier wording also said "running it FIRST also catches the attack
+    # — measured, same 7 roots". Nothing in the repo derives that figure and no
+    # test reproduces it, so it is dropped rather than restated: what is pinned
+    # is the CONSEQUENCE (which diagnosis the caller reads), not that claim.
+    #
     # ⛔ Being last does NOT make it exemption-dependent. The floors above can
     # be silenced for a tree; silencing them lets control REACH this line, it
-    # does not skip it. Neither exemption table is read here.
+    # does not skip it. No exemption table is read here (there are three:
+    # `_DEFAULTS_ARTIFACT_EXEMPT`, `_DEFAULTS_ROOTS_MAY_BE_EMPTY`,
+    # `_ROOTS_WITHOUT_LOADER_READABLE_DEFAULTS`).
     #
     # ⛔ THE FLOOR ON ITS RETURN VALUE IS HERE because this is the only place
     # the population is the real scan. Inside the witness it would be measuring
