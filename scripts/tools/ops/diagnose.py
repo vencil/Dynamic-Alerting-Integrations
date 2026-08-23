@@ -290,9 +290,35 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
         profiles_path = base / "_profiles.yaml"
         try:
             with open(profiles_path, encoding="utf-8") as f:
-                raw = yaml.safe_load(f) or {}
-            all_profiles = raw.get("profiles", {}) if isinstance(raw, dict) else {}
-            profile_keys = all_profiles.get(profile_name, {})
+                raw = yaml.safe_load(f)
+            # ⛔ NOT `or {}`. That coerces every FALSY document — `[]`, `0`,
+            # `false` — into an empty mapping, so a `_profiles.yaml` whose
+            # whole body is `[]` loses the profile layer with zero signal:
+            # the exact defect #1468 is about, inside the fix for #1468.
+            # Only `None` (an empty document) is legitimately nothing.
+            #
+            # ⛔ And the `profiles:` VALUE needs its own check. `raw` can be
+            # a fine mapping whose `profiles:` is a list, and the old
+            # `all_profiles.get(...)` then raised AttributeError — which is
+            # NOT in the `except (OSError, yaml.YAMLError)` below, so it
+            # escaped and killed the whole call. That is #1447's death
+            # ("parses cleanly, is not a mapping, reaches .get(), takes the
+            # run with it") reproduced one directory over.
+            if raw is None:
+                raw = {}
+            if not isinstance(raw, dict):
+                _skip(profiles_path.name,
+                      f"top level must be a mapping, got {type(raw).__name__}")
+            else:
+                all_profiles = raw.get("profiles")
+                if all_profiles is None:
+                    all_profiles = {}
+                if not isinstance(all_profiles, dict):
+                    _skip(profiles_path.name,
+                          f"'profiles' must be a mapping, got "
+                          f"{type(all_profiles).__name__}")
+                else:
+                    profile_keys = all_profiles.get(profile_name, {})
         except FileNotFoundError:
             # No `_profiles.yaml` at all: the tenant references a profile
             # this directory does not define. Still a read the chain is

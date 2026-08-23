@@ -383,3 +383,60 @@ def test_unusable_reason_names_permission_denied(tmp_path: pathlib.Path):
         assert locked in unusable_config_paths(tmp_path, recursive=False)
     finally:
         locked.chmod(0o600)
+
+
+# ── the two enumerations must not overlap ────────────────────────────────
+
+
+def _deny_read(monkeypatch: pytest.MonkeyPatch, target: pathlib.Path) -> None:
+    """Make one path unreadable without needing non-root.
+
+    `chmod 000` is invisible to uid 0, and the container this suite is
+    usually developed in runs as root — so the overlap this guards against
+    would be untestable here. Patching `os.access` reproduces the exact
+    condition `_is_readable_file` consults.
+    """
+    real = os.access
+
+    def fake(path, mode, **kw):  # noqa: ANN001
+        if os.fspath(path) == os.fspath(target) and mode == os.R_OK:
+            return False
+        return real(path, mode, **kw)
+
+    monkeypatch.setattr(os, "access", fake)
+
+
+@pytest.mark.parametrize("recursive", [False, True])
+def test_the_two_enumerations_are_disjoint(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, recursive: bool,
+):
+    """An unreadable REGULAR file must not appear in both lists.
+
+    ⛔ Callers consume the two together, so anything in both is reported
+    twice: `validate-config` put it in `unusable_files` twice, and the
+    routing parser and `diagnose` printed the permission clause and then
+    the `PermissionError`. Measured before the fix — both lists returned
+    `locked.yaml`.
+
+    The unreadable file is NOT lost by narrowing this: `iter_config_files`
+    still yields it, and the reader's own `open()` names it, with the real
+    errno rather than a one-clause summary.
+    """
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    (root / "_defaults.yaml").write_text("defaults:\n  a: 1\n", encoding="utf-8")
+    locked = root / "locked.yaml"
+    locked.write_text("tenants: {}\n", encoding="utf-8")
+    (root / "beta.yaml").mkdir()  # the case unusable_config_paths is FOR
+
+    _deny_read(monkeypatch, locked)
+
+    usable = {p.name for p in iter_config_files(root, recursive=recursive)}
+    unusable = {p.name for p in unusable_config_paths(root, recursive=recursive)}
+
+    assert usable & unusable == set(), (
+        f"overlap would be double-reported: {sorted(usable & unusable)}")
+    # Still enumerated, so the reader's open() will speak for it.
+    assert "locked.yaml" in usable
+    # And the directory — which no open() can ever speak for — is still named.
+    assert "beta.yaml" in unusable

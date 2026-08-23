@@ -169,6 +169,31 @@ def unusable_config_paths(
     Sorted by POSIX relative path, the same promise `iter_config_files`
     makes, so a report can interleave the two lists deterministically.
 
+    ⛔ DISJOINT from `iter_config_files` by construction: this returns only
+    paths that iteration will NOT hand the caller. The two are consumed
+    together, so any overlap is reported twice.
+
+    That is not hypothetical. An unreadable REGULAR `.yaml` file satisfies
+    "config-named and not readable", but it is still a file, so
+    `iter_config_files` yields it too — and the caller then reports it once
+    from this list and again when its own `open()` raises `PermissionError`.
+    Measured before this guard: `iter_config_files` and
+    `unusable_config_paths` both returned `locked.yaml`.
+
+    The complement is also the honest division of labour. A path this
+    function is *for* — a config-named directory, a broken symlink — can
+    never be opened, so nothing else will ever speak for it. A file that
+    exists but cannot be read WILL be spoken for, by the reader's own
+    `open()` failure, and with the real errno attached, which is strictly
+    more informative than this function's one-clause summary.
+
+    ⚠️ Deliberately NOT fixed by filtering `iter_config_files` instead. That
+    would put an `os.access` syscall on every file of every scan for a
+    check that cannot be trusted anyway — the file can turn unreadable
+    between the check and the open — so readers would still need the
+    `open()` fallback. Narrowing this function removes the duplicate
+    without paying for a guarantee the filesystem will not give.
+
     ⚠️ The permission case is only observable when the process is NOT
     root: `os.access` reports success for mode-000 files under uid 0.
     Directories and broken symlinks are detected regardless.
@@ -176,10 +201,24 @@ def unusable_config_paths(
     root = Path(config_dir)
     if not root.is_dir():
         return []
+
+    def _unusable(p: Path) -> bool:
+        # `is_file()` is the exact predicate `iter_config_files` uses to
+        # decide it will hand this path over; if it will, this list must
+        # not also carry it. Wrapped because a broken symlink or a
+        # permission-denied parent can make the stat itself raise, and a
+        # path we cannot even stat is precisely one to report.
+        try:
+            if p.is_file():
+                return False
+        except OSError:
+            return True
+        return not _is_readable_file(p)
+
     found: list[Path] = []
     if not recursive:
         for p in sorted(root.iterdir(), key=lambda q: q.name):
-            if _is_config(p.name) and not _is_readable_file(p):
+            if _is_config(p.name) and _unusable(p):
                 found.append(p)
         return found
     for dirpath, dirnames, filenames in os.walk(root):
@@ -188,7 +227,7 @@ def unusable_config_paths(
         # this function necessary, and `os.walk` never puts it in filenames.
         for name in list(dirnames) + list(filenames):
             p = Path(dirpath) / name
-            if _is_config(name) and not _is_readable_file(p):
+            if _is_config(name) and _unusable(p):
                 found.append(p)
     found.sort(key=lambda q: q.relative_to(root).as_posix())
     return found

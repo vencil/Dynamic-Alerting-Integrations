@@ -321,3 +321,79 @@ def test_diagnose_names_an_unreadable_profiles_file(tmp_path: pathlib.Path):
     # Control: the tenant layer is intact, so the caveat is about the
     # profiles file alone and not a side effect of a broken tenant file.
     assert "tenant" in [c["layer"] for c in chain["chain"]]
+
+
+# ── `_profiles.yaml` that parses but is the wrong shape ──────────────────
+#
+# Both of these were live defects in the first cut of this PR, found by
+# review. They are the #1447 death ("parses cleanly, is not a mapping,
+# reaches .get(), takes the run with it") and the #1468 death (a falsy
+# document coerced to {} and the layer vanishes) — reproduced INSIDE the
+# change that exists to fix that family. Pinned so they cannot come back.
+
+
+def _profile_ref_confd(root: pathlib.Path, profiles_body: str) -> pathlib.Path:
+    root.mkdir(parents=True)
+    (root / "_defaults.yaml").write_text(
+        "defaults:\n  mysql_threads_running: 80\n", encoding="utf-8")
+    (root / "acme.yaml").write_text(
+        "tenants:\n  acme:\n    _profile: gold\n    mysql_threads_running: 90\n",
+        encoding="utf-8")
+    (root / "_profiles.yaml").write_text(profiles_body, encoding="utf-8")
+    return root
+
+
+def test_diagnose_survives_profiles_key_that_is_a_list(tmp_path: pathlib.Path):
+    """`profiles:` as a list used to raise AttributeError from `.get()`.
+
+    ⛔ That exception is NOT in the `except (OSError, yaml.YAMLError)` around
+    this read, so it escaped and killed the whole call — a crash, not a
+    truncated answer.
+    """
+    root = _profile_ref_confd(tmp_path / "conf.d", "profiles:\n  - gold\n  - silver\n")
+
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        chain = diagnose.resolve_inheritance_chain("acme", str(root))  # must not raise
+
+    assert "WARN: skip _profiles.yaml" in err.getvalue()
+    assert "'profiles' must be a mapping" in err.getvalue()
+    assert "list" in err.getvalue()
+    assert chain["skipped_unusable_files"] == ["_profiles.yaml"]
+    # The tenant layer is unaffected — only the profile layer is missing.
+    assert "tenant" in [c["layer"] for c in chain["chain"]]
+
+
+def test_diagnose_names_a_falsy_profiles_document(tmp_path: pathlib.Path):
+    """A whole-document `[]` is falsy, and `or {}` silently made it empty.
+
+    Nothing raised, nothing printed, and the profile layer was simply gone
+    — the shape this PR exists to eliminate.
+    """
+    root = _profile_ref_confd(tmp_path / "conf.d", "[]\n")
+
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        chain = diagnose.resolve_inheritance_chain("acme", str(root))
+
+    assert "WARN: skip _profiles.yaml" in err.getvalue()
+    assert "top level must be a mapping" in err.getvalue()
+    assert chain["skipped_unusable_files"] == ["_profiles.yaml"]
+
+
+def test_diagnose_still_accepts_an_empty_profiles_document(tmp_path: pathlib.Path):
+    """⛔ Control for the two above: an EMPTY document is legal, not a fault.
+
+    Without this, the fix could over-trigger and start reporting every
+    `_profiles.yaml` that happens to be blank — trading a silent miss for a
+    false alarm, which is the failure mode this whole PR is trying not to
+    introduce.
+    """
+    root = _profile_ref_confd(tmp_path / "conf.d", "")
+
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        chain = diagnose.resolve_inheritance_chain("acme", str(root))
+
+    assert "_profiles.yaml" not in err.getvalue()
+    assert "skipped_unusable_files" not in chain
