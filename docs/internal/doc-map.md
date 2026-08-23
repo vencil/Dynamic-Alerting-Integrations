@@ -44,7 +44,7 @@ lang: zh
 | `docs/adr/031-slo-burn-rate-recipe.md` | Platform Engineers, SREs, domain-experts | ADR-031: slo_burn_rate recipe — 宣告式 SLO 告警編譯 |
 | `docs/adr/032-paired-interleaved-bench-measurement.md` | Platform Engineers, contributors | ADR-032: 夜跑效能監測改用成對交錯量測，取代跨夜滑動錨點 |
 | `docs/adr/033-ops-execution-plane-interface.md` | Platform Engineers, SREs | ADR-033: 與運維執行平面的協同介面 — MariaDB 計畫性作業 |
-| `docs/adr/034-declaration-reality-divergence.md` | Platform Engineers, SREs, contributors | ADR-034: 決定「檢查跑不跑」的設定值，必須驗證 |
+| `docs/adr/034-legal-value-as-fallback.md` | Platform Engineers, SREs, contributors | ADR-034: 合法值不得同時當作無法辨識時的 fallback |
 | `docs/alerting-best-practices.md` (.en.md) | SREs, Platform Engineers | Actionable 之後：從告警決策到自動化動作的冪等光譜 |
 | `docs/alerting-design-fundamentals.md` (.en.md) | SREs, Domain Experts (DBA), Tenants | 告警該響之前：從資源飽和到症狀導向的告警設計 |
 | `docs/alerting-slo-error-budget.md` (.en.md) | SREs, Domain Experts (DBA), Tenants | 多嚴才算嚴：用 SLO 與錯誤預算決定告警門檻 |

@@ -384,7 +384,7 @@ spec:
 | ADR-031 | [slo_burn_rate recipe — 宣告式 SLO 告警編譯](adr/031-slo-burn-rate-recipe.md) | ✅ Accepted | — |
 | ADR-032 | [夜跑效能監測改用成對交錯量測，取代跨夜滑動錨點](adr/032-paired-interleaved-bench-measurement.md) | ✅ Accepted | — |
 | ADR-033 | [與運維執行平面的協同介面 — MariaDB 計畫性作業](adr/033-ops-execution-plane-interface.md) | 🟡 Proposed | — |
-| ADR-034 | [決定「檢查跑不跑」的設定值，必須驗證](adr/034-declaration-reality-divergence.md) | 🟡 Proposed | — |
+| ADR-034 | [合法值不得同時當作無法辨識時的 fallback](adr/034-legal-value-as-fallback.md) | 🟡 Proposed | — |
 
 <!-- ADR_INDEX_END -->
 
