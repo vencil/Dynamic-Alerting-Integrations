@@ -104,6 +104,20 @@ describe('cicdGenerateDockerCommand', () => {
     expect(out).toContain('--user $(id -u):$(id -g)');
   });
 
+  it('quotes the bind mount, because a checkout path may contain spaces', () => {
+    // The wizard emits a command the customer pastes into their own shell.
+    // Unquoted, `-v $(pwd):/workspace` word-splits as soon as the checkout
+    // lives under a path like `C:\Users\A B\repo` or `~/My Projects/repo`,
+    // and docker rejects the fragment as an invalid volume spec. Quoting is
+    // the form the shared template docs/includes/docker-usage-pattern{,.en}.md
+    // already prescribes.
+    // ⚠️ Pinned deliberately: the quotes are one character each and the whole
+    // suite stayed green when they were missing, so nothing else guards them.
+    const out = cicdGenerateDockerCommand(baseConfig());
+    expect(out).toContain('-v "$(pwd):/workspace"');
+    expect(out).not.toMatch(/-v \$\(pwd\)/);
+  });
+
   it('keeps --user ahead of the image reference', () => {
     // Docker only accepts flags BEFORE the image name; anything after it is
     // passed to the container as arguments. A `--user` that drifts below the

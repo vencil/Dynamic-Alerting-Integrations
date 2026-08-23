@@ -43,7 +43,7 @@ function cicdGenerateInitCommand(config) {
 // failure rather than as drift.
 function cicdGenerateDockerCommand(config) {
   const init = cicdGenerateInitCommand(config);
-  return `docker run --rm -it \\\n  --user $(id -u):$(id -g) \\\n  -v $(pwd):/workspace -w /workspace \\\n  ghcr.io/vencil/da-tools:latest \\\n  ${init.replace('da-tools ', '')}`;
+  return `docker run --rm -it \\\n  --user $(id -u):$(id -g) \\\n  -v "$(pwd):/workspace" -w /workspace \\\n  ghcr.io/vencil/da-tools:latest \\\n  ${init.replace('da-tools ', '')}`;
 }
 
 // ⛔ This list is a CLAIM about another program's behaviour, so it is held to

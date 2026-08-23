@@ -1977,6 +1977,7 @@ docker run --rm \
   -v $(pwd)/conf.d:/etc/config:rw \
   ghcr.io/vencil/da-tools:v2.9.0 \
   deprecate old_metric_1 old_metric_2 \
+    --config-dir /etc/config \
     --reason "Replaced by new_metric; migration complete"
 ```
 

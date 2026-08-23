@@ -127,8 +127,6 @@ _EXTRA_DOC_FILES = (
 
 _DOCKER_RUN_RE = re.compile(r"\bdocker\s+run\b")
 _DATOOLS_IMAGE_RE = re.compile(r"da[-_]tools", re.IGNORECASE)
-# The image token itself — everything before it is a docker flag, everything
-# after it is an argument handed to the container.
 _WINDOWS_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
 
 # docker flags that consume the NEXT token as their value. Needed to tell the
@@ -142,6 +140,10 @@ _VALUE_FLAGS = frozenset({
 
 def _image_index(toks: List[str]) -> "int | None":
     """Index of the IMAGE token — the first bare operand after `docker run`.
+
+    The image is the pivot of the whole command: everything BEFORE it is a
+    docker flag, everything after it is an argument handed to the container.
+    That is why the index — not merely the presence — of `--user` matters.
 
     ⛔ Not "the first token containing da-tools". A mount path may contain it
     (`-v $(pwd)/da-tools-out:/data/output`), and taking that as the image made a
@@ -427,6 +429,17 @@ def check_writable_mount_has_user(doc_files: List[Path],
             # had no backslashes, which is precisely why it looked fine.
             toks = [t for t in norm.split() if t != "\\"]
             specs = [s for s in _mounts(flat) if _is_bind_mount(s)]
+            # ⛔ Drop placeholder specs INDIVIDUALLY, not the whole block. A
+            # `<…>` spec cannot be judged, but its neighbours in the same
+            # example can. Measured: `-v /srv/<tenant>/conf.d:/data/conf.d -v
+            # $(pwd)/out:/data/output` with no `--user` reported 0 issues,
+            # while the identical `$(pwd)/out` mount alone reported 1 — one
+            # unjudgeable spec was silencing a judgeable sibling.
+            # ⚠️ The reviewer's own example (`-v <your-repo>:/workspace`) does
+            # NOT reach here: `_is_bind_mount` already rejects it, so it never
+            # entered `specs`. The reachable shape is a placeholder embedded in
+            # an otherwise concrete path, which does pass that filter.
+            specs = [s for s in specs if not ("<" in s or ">" in s)]
             writable = [m for m in specs if _is_writable(m)]
             img_i = _image_index(toks)
             if _has_user_flag(toks):
@@ -449,11 +462,8 @@ def check_writable_mount_has_user(doc_files: List[Path],
                         "the uid is unchanged and the tool sees two junk "
                         "arguments. Move it ahead of the image (#1495)."))
                 continue
-            # `<host>:/path` is still a placeholder — nothing to judge yet.
-            # ⚠️ `${{ … }}` is NOT excluded any more: it is a real CI mount
-            # with a template in it, and skipping those hid a live defect.
-            if any(("<" in s or ">" in s) for s in specs):
-                continue
+            # ⚠️ `${{ … }}` is NOT excluded: it is a real CI mount with a
+            # template in it, and skipping those hid a live defect.
             # ⛔ BLIND SPOT, deliberately left open — see the module docstring.
             # A previous revision reported every spec that still carried a brace
             # after normalisation ("this example cannot be judged"). Measured, it
@@ -482,10 +492,24 @@ def check_writable_mount_has_user(doc_files: List[Path],
 
 def run(repo_root: Path = REPO_ROOT) -> List[Issue]:
     docs = _doc_files(repo_root / "docs")
-    extra = [repo_root / rel for rel in _EXTRA_DOC_FILES]
-    return (check_datools_subcommands(docs, WRAPPER_SUBCOMMANDS, repo_root)
-            + check_writable_mount_has_user(docs + [f for f in extra
-                                                    if f.is_file()], repo_root))
+    # ⛔ A missing entry is reported, never silently skipped. The previous
+    # `[f for f in extra if f.is_file()]` meant that renaming or moving one of
+    # these landing pages shrank the scan surface with no signal at all — the
+    # scan would keep passing while the file it was widened to cover had
+    # stopped being read. That is the same silent-gap shape this whole checker
+    # exists to close, so it must not be how the checker handles its own list.
+    present, missing = [], []
+    for rel in _EXTRA_DOC_FILES:
+        (present if (repo_root / rel).is_file() else missing).append(rel)
+    issues = [Issue("datools-doc-file-missing", rel, 1,
+                    "listed in _EXTRA_DOC_FILES but not found; either restore "
+                    "the path or drop it from the tuple — silently scanning "
+                    "fewer files is how a guard stops guarding (#1495).")
+              for rel in missing]
+    return (issues
+            + check_datools_subcommands(docs, WRAPPER_SUBCOMMANDS, repo_root)
+            + check_writable_mount_has_user(
+                docs + [repo_root / rel for rel in present], repo_root))
 
 
 def main() -> int:

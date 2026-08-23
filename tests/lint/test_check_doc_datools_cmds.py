@@ -400,3 +400,90 @@ class TestWritableMountNeedsUser:
             [p], mod.WRAPPER_SUBCOMMANDS, tmp_path)
         assert len(issues) == 1, issues
         assert issues[0].check == "datools-bad-subcommand"
+class TestPlaceholderIsFilteredPerSpec:
+    """一個不可判的掛載，不可以讓同一個範例裡可判的鄰居也免受檢查。"""
+
+    _BS = TestWritableMountNeedsUser._BS
+    _fenced = TestWritableMountNeedsUser._fenced
+    # ⚠️ staticmethod() is required: reading it off the other class yields the
+    # plain function, which this class body would turn back into an instance
+    # method and hand `self` as the first argument.
+    _doc = staticmethod(TestWritableMountNeedsUser._doc)
+
+    def test_placeholder_inside_a_concrete_path_no_longer_silences_its_sibling(
+        self, tmp_path
+    ):
+        """⛔ counterfactual：這一格在修改前回報 0 個 issue。
+
+        `-v /srv/<tenant>/conf.d:/data/conf.d` 通得過 `_is_bind_mount`（以 `/`
+        開頭），所以它**進得了** `specs`；舊版看到 specs 裡任何一個帶 `<`
+        就 `continue`，整塊跳過——連旁邊那個完全具體、確實可寫、確實缺
+        `--user` 的 `$(pwd)/out` 都不判。下一格就是同一個掛載單獨出現時的
+        對照組，證明差別只來自那個佔位符鄰居。
+        """
+        p = self._doc(tmp_path, self._fenced(
+            "docker run --rm",
+            "  -v /srv/<tenant>/conf.d:/data/conf.d",
+            "  -v $(pwd)/out:/data/output",
+            "  ghcr.io/vencil/da-tools:v2.9.0 init"))
+        issues = mod.check_writable_mount_has_user([p], tmp_path)
+        assert len(issues) == 1, issues
+        assert issues[0].check == "datools-writable-mount-without-user"
+        # 只點名判得動的那一個，不把佔位符寫進訊息
+        assert "$(pwd)/out:/data/output" in issues[0].message
+        assert "<tenant>" not in issues[0].message
+
+    def test_control_the_same_concrete_mount_alone_is_flagged(self, tmp_path):
+        p = self._doc(tmp_path, self._fenced(
+            "docker run --rm",
+            "  -v $(pwd)/out:/data/output",
+            "  ghcr.io/vencil/da-tools:v2.9.0 init"))
+        assert len(mod.check_writable_mount_has_user([p], tmp_path)) == 1
+
+    def test_a_placeholder_only_command_stays_unjudged(self, tmp_path):
+        """誤紅方向的對照：全部不可判時仍然不可以報。"""
+        p = self._doc(tmp_path, self._fenced(
+            "docker run --rm",
+            "  -v /srv/<tenant>/out:/data/output",
+            "  ghcr.io/vencil/da-tools:v2.9.0 init"))
+        assert mod.check_writable_mount_has_user([p], tmp_path) == []
+
+    def test_a_placeholder_neighbour_does_not_manufacture_a_finding(
+        self, tmp_path
+    ):
+        """誤紅方向：帶了 `--user` 就不該因為多一個佔位符而轉紅。"""
+        p = self._doc(tmp_path, self._fenced(
+            "docker run --rm",
+            "  --user $(id -u):$(id -g)",
+            "  -v /srv/<tenant>/conf.d:/data/conf.d",
+            "  -v $(pwd)/out:/data/output",
+            "  ghcr.io/vencil/da-tools:v2.9.0 init"))
+        assert mod.check_writable_mount_has_user([p], tmp_path) == []
+
+
+class TestExtraDocListIsNotSilentlyShrunk:
+    """`_EXTRA_DOC_FILES` 少一個檔，必須是訊號，不是靜靜少掃一個檔。"""
+
+    def test_a_missing_entry_reports_instead_of_being_dropped(
+        self, tmp_path, monkeypatch
+    ):
+        """⛔ 舊版是 `[f for f in extra if f.is_file()]`。
+
+        把其中一個 landing page 改名或搬走，掃描面就少一個檔而**輸出完全
+        不變**——閘門看起來仍然全綠，實際上已經不再看守那一頁。這正是這
+        支 checker 存在要擋的形狀，所以它處理自己的清單時不能是這個形狀。
+        """
+        (tmp_path / "docs").mkdir()
+        monkeypatch.setattr(mod, "_EXTRA_DOC_FILES", ("no/such/README.md",))
+        issues = mod.run(tmp_path)
+        missing = [i for i in issues if i.check == "datools-doc-file-missing"]
+        assert len(missing) == 1, issues
+        assert missing[0].file == "no/such/README.md"
+
+    def test_a_present_entry_produces_no_such_issue(self, tmp_path, monkeypatch):
+        (tmp_path / "docs").mkdir()
+        real = tmp_path / "READY.md"
+        real.write_text("no docker commands here\n", encoding="utf-8")
+        monkeypatch.setattr(mod, "_EXTRA_DOC_FILES", ("READY.md",))
+        assert [i for i in mod.run(tmp_path)
+                if i.check == "datools-doc-file-missing"] == []
