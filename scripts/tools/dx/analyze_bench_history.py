@@ -519,8 +519,12 @@ def render_markdown_table(
 # `CANARY_BENCH` from the judged set, so `BenchmarkControlCanarySleep` was
 # evaluated like any tenant-facing benchmark and could open a `sustained`
 # regression on the real `perf-trend` issue for scheduler jitter the harness
-# itself calls healthy. Measured on synthetic nights: `status: FINDINGS`,
-# `FINDING: BenchmarkControlCanarySleep sustained 20.00%`. `bench-baseline.txt`
+# itself calls healthy. Counterfactual on synthetic nights (the sleep canary
+# 20% above its anchor, everything else flat), `--trend-watch --dry-run`: with
+# `CANARY_BENCHES` the run prints the one-line CLEAR verdict; reverted to
+# `- {CANARY_BENCH}` the same input renders the regression table with
+# `| `BenchmarkControlCanarySleep` | sustained | 1.2 ms | +20.0% | +20.0% |`
+# and `-> [dry-run] would open new perf-trend issue`. `bench-baseline.txt`
 # does carry both canary rows (`bench-record.yaml` says so where it copies the
 # paired main side), so the path was live, not latent.
 CANARY_BENCH = "BenchmarkControlCanaryCPU"
