@@ -746,7 +746,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "4ecb17c864bfeef6a75cc12a63d26a4f927ce6b8429aec3281190de77134420b",
+ "source_digest": "0f573325dc8c1e647637150ed321bde036b06dbb079dc7acc5a18ecf33e57612",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -2449,6 +2449,9 @@
   ],
   "scripts/tools/ops/alert_quality.py": [
    "tests/shared/test_help_contract.py"
+  ],
+  "scripts/tools/ops/bench-canary/canary_test.go": [
+   "tests/dx/test_analyze_bench_history.py"
   ],
   "scripts/tools/ops/bench_report_pr.sh": [
    "tests/ops/test_nightly_scan_matrix_drift.py"
