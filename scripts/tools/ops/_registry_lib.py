@@ -676,7 +676,7 @@ def _entry_lines(
     meta = f"{entry['unit']} — {entry['desc']}"
     inline = f"{keyline}   # {meta}"
     lines = [inline] if len(inline) <= 100 else [keyline] + [
-        f"{cont}{seg}" for seg in textwrap.wrap(meta, 100 - len(cont))
+        f"{cont}{seg}" for seg in _wrap_comment(meta, 100 - len(cont))
     ]
     return lines + _counterexample_lines(entry, cont)
 
@@ -862,8 +862,8 @@ def annotate_defaults_counterexamples(dumped: str, rule_packs: Optional[dict] = 
             indent = line[: len(line) - len(line.lstrip())]
             cont = f"{indent}# "
             body = "⚠ " + " ".join(counterexample_sentence(ce, lang).split())
-            out.extend(f"{cont}{seg}" for seg in textwrap.wrap(
-                body, _COMMENT_WIDTH - len(cont), break_on_hyphens=False))
+            out.extend(f"{cont}{seg}" for seg in _wrap_comment(
+                body, _COMMENT_WIDTH - len(cont)))
         out.append(line)
     return "\n".join(out)
 
@@ -884,11 +884,9 @@ def _counterexample_lines(entry: dict, cont: str = "#       ") -> list[str]:
     body = (f"⚠ 參考庫實測反例（#{ce['issue']}）："
             f"{counterexample_observed(ce, 'zh')} —— {verdict}；"
             f"這個數字是起點，不是平台背書的值")
-    # break_on_hyphens=False: the default splits `negative-db2.yaml` after the
-    # hyphen, so a reader (and any gate comparing content) sees a filename cut
-    # in half across two comment lines.
-    return [f"{cont}{seg}"
-            for seg in textwrap.wrap(body, 100 - len(cont), break_on_hyphens=False)]
+    # `_wrap_comment` owns the no-split rule (both flags). The note that used to
+    # sit here named only the hyphen half.
+    return [f"{cont}{seg}" for seg in _wrap_comment(body, 100 - len(cont))]
 
 
 # ---------------------------------------------------------------------------
@@ -1152,7 +1150,7 @@ def render_chart_defaults_lines(doc: dict, indent: int) -> list[str]:
                     f"（critical 加嚴 opt-in：{crit_key}，"
                     f"registry 建議 {_fmt_value(crit['value'])}）"
                 )
-            for seg in textwrap.wrap(meta, 100 - indent - 2):
+            for seg in _wrap_comment(meta, 100 - indent - 2):
                 lines.append(f"{ind}# {seg}")
             # Wired now, not "when a chart_default key gets one": no shipped
             # chart_default carries a counter-example today, so this emits
@@ -1164,6 +1162,26 @@ def render_chart_defaults_lines(doc: dict, indent: int) -> list[str]:
 
 
 _COMMENT_WIDTH = 100
+
+
+def _wrap_comment(body: str, width: int) -> list[str]:
+    """Wrap prose for a generated comment block WITHOUT ever splitting a token.
+
+    ⛔ BOTH flags, and neither is style. `textwrap` defaults to breaking on
+    hyphens AND to breaking long words, so either one can cut an identifier or a
+    path in half across the two comment lines it emits — and a reference split
+    that way is invisible to `git grep`, which is the #1373 accident shape that
+    `tests/ops/test_wrapped_path_references.py` exists to catch.
+
+    ⛔ THE POINT OF THIS FUNCTION IS THAT THERE IS ONLY ONE. The hyphen half was
+    fixed at three of the six call sites in an earlier change (its comment names
+    `negative-db2.yaml` being cut after the hyphen); the long-word half was
+    fixed at NONE of them, and the other three never got the hyphen fix either.
+    Six call sites meant six chances to get half of it. Deciding here means a
+    caller cannot (#1453).
+    """
+    return textwrap.wrap(body, width, break_on_hyphens=False,
+                         break_long_words=False)
 
 
 def _append_wrapped_comment(lines: list[str], item: str, meta: str, cont: str,
@@ -1190,7 +1208,7 @@ def _append_wrapped_comment(lines: list[str], item: str, meta: str, cont: str,
         lines.append(inline)
         return lines
     lines.append(item)
-    lines += [f"{cont}{seg}" for seg in textwrap.wrap(meta, width - len(cont))]
+    lines += [f"{cont}{seg}" for seg in _wrap_comment(meta, width - len(cont))]
     return lines
 
 
@@ -1366,10 +1384,10 @@ def stub_counterexample_lines(ce: dict, cont: str, lang: str = "zh") -> list[str
     else:
         body = (f"⚠ #{ce['issue']} {mark}: "
                 f"{counterexample_observed(ce, 'en')} ({verdict})")
-    # break_on_hyphens=False for the same reason as the header renderer: the
-    # default cuts `negative-db2.yaml` in half across two lines.
+    # No-split rule lives in `_wrap_comment`, for the same reason as the header
+    # renderer: the defaults cut `negative-db2.yaml` in half across two lines.
     return [f"{cont}{seg}" for seg in
-            textwrap.wrap(body, _COMMENT_WIDTH - len(cont), break_on_hyphens=False)]
+            _wrap_comment(body, _COMMENT_WIDTH - len(cont))]
 
 
 def _optional_entry_index(rule_packs: Optional[dict] = None) -> dict[str, dict]:

@@ -20,8 +20,8 @@ defaults:
   # % — Container memory % of limit (weakest link)
   container_memory: 85
   # ── postgresql：PostgreSQL (postgres_exporter) ──
-  # % of max_connections — Connection usage % warning（critical 加嚴 opt-
-  # in：pg_connections_critical，registry 建議 90）
+  # % of max_connections — Connection usage % warning（critical 加嚴
+  # opt-in：pg_connections_critical，registry 建議 90）
   pg_connections: 80
   # seconds — Replication lag warning（critical 加嚴 opt-in：pg_replication_lag_critical，registry 建議 60）
   pg_replication_lag: 30
@@ -31,13 +31,13 @@ defaults:
   mysql_connections: 80
   # threads — threads_running saturation, NOT host CPU% — running-threads 1m-avg warning; 80→30 =
   # PMM/Nichter 'high' (#944); renamed from mysql_cpu (#1231 owner-approved reversal of the #944
-  # keep — 2-release alias window, old spelling still resolves)（critical 加嚴 opt-
-  # in：mysql_threads_running_critical，registry 建議 50）
+  # keep — 2-release alias window, old spelling still resolves)（critical 加嚴
+  # opt-in：mysql_threads_running_critical，registry 建議 50）
   mysql_threads_running: 30
   # seconds — Async replication lag warning (seconds behind primary, sql_delay-adjusted); 30 =
-  # APA/mysqld-mixin consensus trigger (they page critical at 30s; demoted to warning — PMM's lag-
-  # template family default is 600s warning). Enabled by default (#1200 WS5-P0-a Q3=C)（critical 加嚴
-  # opt-in：mysql_replication_lag_critical，registry 建議 120）
+  # APA/mysqld-mixin consensus trigger (they page critical at 30s; demoted to warning — PMM's
+  # lag-template family default is 600s warning). Enabled by default (#1200 WS5-P0-a Q3=C)（critical
+  # 加嚴 opt-in：mysql_replication_lag_critical，registry 建議 120）
   mysql_replication_lag: 30
   # <<< GENERATED:threshold-registry:dev-defaults
 

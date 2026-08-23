@@ -884,3 +884,45 @@ def test_tenant_doc_three_population_claim_matches_the_derivation(path):
             f"{path.name}: the doc offers `{family}_*_critical` as an example "
             f"of the dormant group, but no dormant key starts with "
             f"'{family}_' (dormant={sorted(dormant)})")
+
+def test_no_call_site_wraps_a_comment_on_its_own() -> None:
+    """⛔ `_wrap_comment` must stay the ONLY place that calls `textwrap`.
+
+    The two flags it passes are not style: `textwrap` breaks on hyphens AND
+    breaks long words by default, so either can cut an identifier or a path in
+    half across the two comment lines this module emits — and a reference split
+    that way is invisible to `git grep` (#1373 shipped exactly that).
+
+    ⛔ This is a SET assertion, not a spot check, because the defect it guards
+    is precisely "one call site did not get the fix". Before #1453 there were
+    six call sites: three passed `break_on_hyphens=False`, three did not, and
+    NONE passed `break_long_words=False`. Fixing the cited site would have left
+    five. Measured at the time: two shipped artifacts carried live hyphen
+    splits (`opt-in` and `lag-template` cut in half) — one of them a
+    customer-facing `_defaults.yaml`.
+    """
+    import ast
+
+    tree = ast.parse(_SCRIPT.read_text(encoding="utf-8"))
+    raw = [
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in ("wrap", "fill")
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "textwrap"
+    ]
+    inside = [
+        node.lineno
+        for fn in ast.walk(tree)
+        if isinstance(fn, ast.FunctionDef) and fn.name == "_wrap_comment"
+        for node in ast.walk(fn)
+        if isinstance(node, ast.Call)
+    ]
+    assert raw and set(raw) <= set(inside), (
+        "every textwrap call in this module must sit inside `_wrap_comment`; "
+        f"raw calls at lines {raw}, `_wrap_comment` spans {inside}. ⛔ Route the "
+        "new call through the helper — do not copy the two keyword arguments, "
+        "which is how three of the six original sites ended up with half the "
+        "rule and three with none of it.")
