@@ -1259,8 +1259,9 @@ def test_the_may_be_empty_list_is_not_a_blanket_exemption():
     # `_DEFAULTS_ROOTS_MAY_BE_EMPTY`, the old construction failed on
     # "...is listed in _DEFAULTS_ROOTS_MAY_BE_EMPTY, but it contributes 1
     # threshold key(s) today" — a true message about a fixture the test built
-    # itself. Same construction as `test_the_may_be_empty_list_must_earn_its_
-    # entries_on_every_run`, and for the same reason.
+    # itself. Same construction as
+    # `test_the_may_be_empty_list_must_earn_its_entries_on_every_run`, and for
+    # the same reason.
     by_root = {r: ([(f"{r}/_defaults.yaml", {})]
                    if r in gate._DEFAULTS_ROOTS_MAY_BE_EMPTY
                    else _root_face(r, "x"))
@@ -1593,8 +1594,9 @@ def test_the_probe_and_the_gate_bucket_through_the_same_implementation(monkeypat
 
     Left open because reaching it takes deliberate construction — a discarded
     call plus a second implementation — and because the payload is covered from
-    the other side: `test_the_floor_probe_asks_the_real_floors_rather_than_
-    modelling_them` replaces the two floor FUNCTIONS, so a probe that bucketed
+    the other side:
+    `test_the_floor_probe_asks_the_real_floors_rather_than_modelling_them`
+    replaces the two floor FUNCTIONS, so a probe that bucketed
     privately and fed the result to the real floors still has to agree with
     them, and one that bucketed privately and modelled the floors too is the
     mutant that test is built to kill. What is genuinely unguarded is the
@@ -3030,8 +3032,8 @@ def test_every_floor_breach_is_a_violation_not_a_crash(
     every breach. Measured: with the floor a case is named for disabled
     outright, the case still passed — a neighbouring floor caught the same
     probe. The whole parametrisation is therefore pinned to the message its own
-    floor emits, which is the discipline `test_the_two_floors_blame_the_right_
-    cause` and the two `match="shipped conf.d root"` call sites already use.
+    floor emits, which is the discipline `test_the_two_floors_blame_the_right_cause`
+    and the two `match="shipped conf.d root"` call sites already use.
     """
     trip(monkeypatch)
     assert gate.main(["--ci"]) == gate.EXIT_VIOLATION

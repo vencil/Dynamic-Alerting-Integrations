@@ -358,8 +358,9 @@ func TestEveryInhibitRuleIsTenantScoped(t *testing.T) {
 //
 // An ungated equal-label is the #1132 footgun: Alertmanager treats a label
 // missing from BOTH sides as equal, so the rule silently over-suppresses alerts
-// that lack it. The generator PREVENTS this for its output (assert_equal_labels_
-// gated); this is the structural guard for the repo's HAND-WRITTEN configs
+// that lack it. The generator PREVENTS this for its output
+// (assert_equal_labels_gated); this is the structural guard for the
+// repo's HAND-WRITTEN configs
 // (try-local, and the k8s base rules), covering rules that do not exist yet — a
 // fixture-based test cannot. It uses Alertmanager's own matcher (see
 // sideGatesLabel), so it can never disagree with the generator invariant.

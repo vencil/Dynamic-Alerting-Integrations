@@ -430,8 +430,9 @@ def platform_alert_identities(
                         labels = dict(rule.get("labels") or {})
                         if labels.get("alert_source") != "platform":
                             # Watchdog rides its own index-0 lane and deliberately
-                            # carries no discriminator; assert_watchdog_inhibit_
-                            # immunity covers it at the same call sites. Keying on
+                            # carries no discriminator;
+                            # assert_watchdog_inhibit_immunity covers it at the
+                            # same call sites. Keying on
                             # the marker (not on the alertname) means a future
                             # unmarked alert is excluded for the same stated reason
                             # rather than by accident.

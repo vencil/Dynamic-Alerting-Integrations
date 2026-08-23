@@ -1612,8 +1612,9 @@ class TestWritePlaneArgv:
         # checked, and it is the one every later night reads back. Dropping it
         # here (`body.split("<!-- perf-trend-state")[0]`) left all 227 tests
         # green while disarming the close guard from the first step of the
-        # lifecycle: no marker ⇒ `test_unreadable_marker_keeps_the_previous_
-        # behaviour` ⇒ the next CLEAR night closes the issue unconditionally.
+        # lifecycle: no marker ⇒
+        # `test_unreadable_marker_keeps_the_previous_behaviour` ⇒ the next
+        # CLEAR night closes the issue unconditionally.
         assert ab._parse_state_marker(_body_of(create)) == [[_BENCH, "sustained"]]
 
     def test_label_is_ensured_before_the_first_issue_is_filed(

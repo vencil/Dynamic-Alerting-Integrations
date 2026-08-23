@@ -22,6 +22,21 @@ replaces it with the derivable rule.
 THE RULE: rejoin comment continuations; every path-like token that then names a
 real repo file must ALSO appear contiguously in the raw text.
 
+THE SECOND RULE (#1453), same window and same rejoin: every identifier-shaped
+token that then names something this repo DEFINES must also appear contiguously.
+The accident is the same one — #1373 was a rename sweep, and a sweep greps for a
+symbol as readily as for a path — but a symbol carries no slash and no
+extension, so it needs its own resolver: an `ast` inventory of names defined
+exactly once across the tracked Python tree, filtered by the bare-name bounds
+below transposed onto symbols. What that inventory is, what its bounds are
+actually worth, and what it cannot see are all on `_identifier_inventory`.
+
+⛔ It is a SEPARATE test with a SEPARATE message, and that is not tidiness. A
+path-like token that resolves IS a reference; an identifier-shaped one can be
+prose that spelled a symbol by accident, so the path side's "a reflow is the
+only fix" is false here and following it would damage the file. The two halves
+also fail for different reasons and deserve to go red separately.
+
 ⛔ The metric is defined HERE, not in a ticket. Four different counts of "how
 many wrapped references exist" were produced while scoping this (16 / 28 / 35 /
 44) — every one honest, every one measuring something slightly different
@@ -118,6 +133,29 @@ What is deliberately NOT modelled (under-detection, the safe direction):
     while never having looked (and pinning WHICH files get dropped turned out
     to be environment-dependent; see the note by `_read_tracked`).
 
+What the IDENTIFIER half additionally does not model:
+  * every definition side that is not Python — a Go `func`, a shell function, a
+    Make target, a YAML anchor, a JS export. The ticket proposed reaching them
+    by also accepting any name that occurs contiguously somewhere in the tree;
+    measured, that admits 25 further reports and every one is prose glue
+    (`the_defaults`, `when_defaults`, `d_custom_alerts` — an English word
+    running into the next line's identifier). Under that evidence a legitimate
+    sentence and a broken reference are the same object, so this is disclosed
+    rather than closed. It is the largest gap here, and the shape of it is worth
+    stating precisely: 4 of the 20 references the scan first reported sit in
+    non-Python FILES, but all 20 name Python DEFINITIONS, and nothing measures
+    how many non-Python definitions are wrapped, because there is no way to ask;
+  * a genuinely dangling name — one whose spelling exists nowhere in the tree
+    any more — is undetectable in principle, because the resolver has nothing
+    left to resolve against. Same shape as the path half's equivalent;
+  * ⛔ AND ONE FREE DISARM THE PATH HALF DOES NOT HAVE. Uniqueness is a bound,
+    so defining the same name a second time ANYWHERE silences a real report
+    permanently — one `def test_defaults(): ...` in any test file does it, and
+    that line looks entirely ordinary in review. The path half needs a second
+    tracked file with the same basename to achieve the same thing, which is
+    conspicuous; this needs one line. Named rather than fixed, because dropping
+    uniqueness is what re-admits the prose-glue family above.
+
 ⛔ GOING GREEN WITHOUT FIXING ANYTHING is easy, and the class is OPEN: anything
 that stops the two halves being joined does it. Measured examples, on a real
 defect, are a trailing space on the first line, an inserted blank or
@@ -152,6 +190,24 @@ filename-ish string at the start of the next reads as a wrapped reference:
   * a sentence whose last word runs into a filename on the next line. The join
     invents a name nobody wrote, and reports it the day somebody adds a file
     that happens to have that name — from a file they never touched.
+
+⚠️ THE IDENTIFIER HALF PRODUCES MORE OF THEM, because a symbol name is built out
+of ordinary English words and so can be spelled by accident in a way a path
+cannot. The same shapes recur — prose running on, a directory listing, a YAML
+key under a scalar, an indented two-column table, a `*` bullet list — and the
+exposure is measurable rather than hypothetical: of the 11977 names in the
+inventory, 156 have a split whose first half already ends some line in this tree
+while its second half already starts some line, so an edit that puts two such
+lines next to each other reports a symbol nobody wrote. That is 1.3%, and the
+tree reports none of them today, so all 156 are latent.
+
+⛔ That exposure is why the identifier message offers no remedy except reflow and
+otherwise sends people at the guard. Every OTHER way to make one of those
+reports quiet costs something real — a listing loses its shape, a generated file
+gets its keys reordered, a bullet marker becomes one the false-positive note
+above says must not be dropped — and a message that named them would be handing
+out those trades to whoever is in a hurry. They are described here, where
+somebody fixing the guard reads them, and not there.
 
 ⛔ None of these is fixable by REFLOWING, because there is no reference to
 reflow. Each does have a harmless rewrite, measured rather than guessed: a
@@ -341,6 +397,52 @@ _MIN_TRACKED_FILES = 1000
 _MIN_FILES = 1500
 _MIN_TOKENS = 2000
 _MIN_RESOLVING = 300
+
+# An identifier-shaped token. Deliberately NOT anchored on backticks: 4 of the 20
+# references this scan found when it was written carry none, and a guard that
+# required them would have reported 16.
+_IDENT_TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+# Anti-vacuity floor for the identifier scan, counted over identifiers seen
+# OUTSIDE the file that defines them. An independent literal, derived from
+# nothing this module computes.
+#
+# ⛔ THE OBVIOUS METRIC IS TAUTOLOGICAL, which is why this one is stranger than
+# it looks. "How many inventory names appear in the corpus" measures NOTHING:
+# every name is defined in a tracked `.py` that is itself part of the corpus, so
+# the answer is the size of the inventory, always. Measured twice from separate
+# implementations: 11977 names, 11977 seen, zero unseen. A floor on that number
+# would have been the inventory reciting itself, and it would have cleared any
+# threshold under 11977 no matter how broken the scan was.
+#
+# Excluding the defining file is what makes it move, because a definition site
+# can no longer vouch for itself. One broken thing at a time, all from a single
+# run so the numbers share a definition:
+#
+#   today                                                       1774
+#   the separator bound inverted (`"_" not in name`)             114
+#   the length bound raised 12 -> 40                              69
+#   every file truncated to its first 4096 BYTES                 106
+#   `scripts/` deleted outright (a legitimate edit)               262
+#   `tests/` deleted outright (a legitimate edit)                 529
+#
+# ⚠️ SO THE USABLE WINDOW IS 114..262, i.e. 2.3x, and that is NARROW — the path
+# side's `_MIN_RESOLVING` sits in a 300..2385 window, nearly 8x. 250 catches
+# every silent failure above and clears the smallest legitimate deletion above,
+# the latter by 1.05x. Deleting all of `scripts/` is the only measured edit that
+# comes near it, and that is not a change anyone makes by accident. Written down
+# rather than smoothed over: a floor with one part in twenty of slack is a
+# tripwire, not a guarantee.
+#
+# ⛔ WHAT THIS FLOOR CANNOT SEE, measured rather than reasoned:
+#   * the rejoin itself breaking — the number does not move by one count, so
+#     the synthetic wrap in `test_identifier_detector_finds_a_synthetic_wrap` is
+#     the only thing standing between a dead detector and a green suite;
+#   * the corpus shrinking to Python only — 1774 becomes 1604, a tenth, still
+#     far clear of the floor. What actually refuses that corpus is
+#     `_unread_drift`, which is why the identifier scan is handed the SAME list
+#     of files rather than reading the tree a second time.
+_MIN_IDENT_OFFSITE = 250
 
 # ⛔ NOTHING is skipped: every tracked file is decoded with `errors="replace"`.
 #
@@ -637,6 +739,151 @@ def _coverage_shortfalls(files: list[tuple[str, str]]) -> list[str]:
     return problems
 
 
+# ---------------------------------------------------------------------------
+# The identifier side (#1453). Same window, same rejoin, different resolver.
+# ---------------------------------------------------------------------------
+
+
+def _identifier_inventory(files: list[tuple[str, str]]) -> dict[str, str]:
+    """Every name this repo DEFINES exactly once, mapped to the file defining it.
+
+    ⛔ DERIVED, NOT LISTED, and the derivation is `ast` rather than a regex: the
+    question "is this token a symbol somebody could rename" is answered by the
+    definition sites, and those are structure. A list of "important names" would
+    be the enumeration this module refuses everywhere else.
+
+    ⛔ THE THREE BOUNDS ARE THE BARE-NAME BOUNDS, TRANSPOSED. The path side
+    accepts a bare filename only when it is repo-unique, at least
+    `_MIN_BARE_NAME` long and carries a separator. The symbol side asks the same
+    three questions of a name: defined in exactly one place, at least
+    `_MIN_BARE_NAME` long, and contains an underscore. `_MIN_BARE_NAME` is
+    SHARED rather than copied, so the transposition cannot drift apart from the
+    thing it was transposed from.
+
+    ⚠️ WHAT THOSE BOUNDS ARE ACTUALLY WORTH, because the honest answer is less
+    than "measured to earn their place". Relaxing any ONE of them changes what
+    this scan reports by nothing at all. Relaxing all three together adds 4
+    reports, and all 4 are prose glue — an English word ending one line running
+    into the start of the next, spelling `check4`, `alertname`, `filename`,
+    `score`. So the bounds are worth 4 as a conjunction and zero individually,
+    which means NO MUTATION CAN KILL ANY ONE OF THEM: do not read a surviving
+    single-bound mutant as a hole. They are kept because the 4 they exclude are
+    exactly the family #1500 is about, not because a test would notice.
+
+    ⛔ ASSIGNMENTS COUNT, BUT ONLY AT MODULE AND CLASS LEVEL, and the boundary is
+    measured rather than conventional. A module constant is precisely the thing
+    a rename sweep greps for, so it belongs in. A function-local name is not:
+    admitting them grows the inventory by 838 names (11977 -> 12815) and grows
+    the set of names an innocent edit could accidentally spell by 96 (156 ->
+    252). ⚠️ "Accidentally spell" is measured as: some line in this tree ends
+    with the name's first half and some line starts with its second, so a future
+    edit that puts those two lines next to each other reports a symbol nobody
+    wrote. Both halves of that trade are cost; the benefit measured on the tree
+    this landed against was one further real reference, and it was a module
+    constant, not a local.
+
+    ⚠️ NOT MODELLED, and it is the biggest gap here: every definition side that
+    is not Python. A Go `func`, a shell function, a Make target, a YAML anchor,
+    a JS export — `ast` never parses any of them, so a wrapped reference to one
+    is invisible. The ticket proposed closing that by also accepting any name
+    that occurs contiguously somewhere in the tree; measured, that admits 25
+    further reports and every one of them is prose glue, because an identifier
+    has no analogue of the slash and extension that give a path its shape. Under
+    that evidence a legitimate sentence and a broken reference are the same
+    object, so the gap is disclosed rather than closed.
+    """
+    sites: dict[str, list[str]] = {}
+    for path, text in files:
+        if not path.endswith(".py"):
+            continue
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:  # pragma: no cover - the tree parses today
+            continue
+        names = [node.name for node in ast.walk(tree)
+                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                      ast.ClassDef))]
+        bodies = [tree.body]
+        bodies += [node.body for node in ast.walk(tree)
+                   if isinstance(node, ast.ClassDef)]
+        for body in bodies:
+            for stmt in body:
+                if isinstance(stmt, ast.Assign):
+                    for target in stmt.targets:
+                        names += [sub.id for sub in ast.walk(target)
+                                  if isinstance(sub, ast.Name)]
+                elif isinstance(stmt, ast.AnnAssign) and isinstance(
+                        stmt.target, ast.Name):
+                    names.append(stmt.target.id)
+        for name in names:
+            sites.setdefault(name, []).append(path)
+    return {
+        name: paths[0]
+        for name, paths in sites.items()
+        if len(paths) == 1 and len(name) >= _MIN_BARE_NAME and "_" in name
+    }
+
+
+def _wrapped_identifiers(text: str,
+                         inventory: dict[str, str]) -> list[tuple[int, str]]:
+    """(1-based line of the break, name) for every symbol split in two.
+
+    The window, the carriage-return strip and the rejoin are the path side's,
+    deliberately: a reference broken by a comment continuation is one mechanism,
+    and modelling it twice would be two things to keep in step. Only the
+    question asked of the rejoined token differs.
+    """
+    lines = [line[:-1] if line.endswith("\r") else line
+             for line in text.split("\n")]
+    found: list[tuple[int, str]] = []
+    for index in range(len(lines) - 1):
+        raw = lines[index] + "\n" + lines[index + 1]
+        prefix = LINE_PREFIX.match(lines[index + 1]).group(0)
+        rejoined = lines[index] + lines[index + 1][len(prefix):]
+        for token in sorted(set(_IDENT_TOKEN.findall(rejoined))):
+            if token in raw:
+                continue
+            if token in inventory:
+                found.append((index + 1, token))
+    return found
+
+
+def _identifier_offenders(files: list[tuple[str, str]],
+                          inventory: dict[str, str]) -> dict[str, list[str]]:
+    """path -> human-readable hits, for every file with a wrapped identifier."""
+    found: dict[str, list[str]] = {}
+    for path, text in files:
+        for line, token in _wrapped_identifiers(text, inventory):
+            found.setdefault(path, []).append(f"line {line} → {token}")
+    return found
+
+
+def _identifier_shortfalls(files: list[tuple[str, str]],
+                           inventory: dict[str, str]) -> list[str]:
+    """Non-empty when too few defined names were seen away from their definition.
+
+    ⛔ OFFSITE IS THE WHOLE POINT — see the note on `_MIN_IDENT_OFFSITE`. Counted
+    over the corpus this scan was HANDED, so truncating or narrowing the corpus
+    moves it; counted excluding each name's own defining file, so the
+    inventory cannot vouch for itself.
+    """
+    offsite = set()
+    for path, text in files:
+        for token in set(_IDENT_TOKEN.findall(text)) & inventory.keys():
+            if inventory[token] != path:
+                offsite.add(token)
+    if len(offsite) > _MIN_IDENT_OFFSITE:
+        return []
+    return [
+        f"only {len(offsite)} defined name(s) were seen anywhere other than the "
+        f"file defining them (floor {_MIN_IDENT_OFFSITE}) — so the scan below "
+        "would be asking its question of almost nothing. ⛔ The fix is upstream "
+        "of this number: check that the corpus is complete and that the `ast` "
+        "walk still returns definitions. ⛔ Do NOT reach this floor by widening "
+        "the inventory bounds; that direction re-admits the prose-glue family "
+        "(#1500) and buys silence rather than coverage."]
+
+
 def _read_tracked() -> list[tuple[str, str]]:
     """Every tracked file, decoded with replacement so none is ever skipped.
 
@@ -689,8 +936,24 @@ def _decode_whole(raw: bytes, size: int, path: str) -> str:
     return raw.decode("utf-8", "replace")
 
 
-def test_no_reference_is_split_across_a_line_break() -> None:
-    files = _read_tracked()
+@pytest.fixture(scope="module")
+def corpus() -> list[tuple[str, str]]:
+    """The whole tracked tree, read ONCE and shared by both scans.
+
+    ⛔ SHARED RATHER THAN RE-READ, and that is load-bearing rather than thrift.
+    `_unread_drift` and `_decoded_shortfall` are assertions about THIS list; a
+    scan that fetched the tree for itself would sit outside both of them. It
+    matters here specifically because the identifier scan's own floor barely
+    notices a narrowed corpus — measured, dropping every non-Python file costs
+    it 10% and leaves it far above its floor, while `_unread_drift` refuses that
+    corpus outright.
+    """
+    return _read_tracked()
+
+
+def test_no_reference_is_split_across_a_line_break(
+        corpus: list[tuple[str, str]]) -> None:
+    files = corpus
 
     drift = _unread_drift({path for path, _ in files})
     assert not drift, (
@@ -756,6 +1019,108 @@ def test_detector_finds_a_synthetic_wrap() -> None:
     assert _wrapped_references(contiguous) == [], (
         "a reference that is NOT split must not be reported — otherwise every "
         "normal citation reds and the fix is to delete the guard")
+
+
+def test_no_identifier_is_split_across_a_line_break(
+        corpus: list[tuple[str, str]]) -> None:
+    """#1453: the same accident, with a symbol instead of a path.
+
+    #1373 was a rename sweep that grepped for a moved module, got a clean
+    answer, and shipped a dangling pointer — the reference had wrapped mid-name.
+    The path scan above closes that for paths. A symbol wrapped the same way is
+    just as invisible to `git grep` and to `sed`, and nothing was watching it:
+    when this was written the tree carried 20 such references, all real.
+
+    ⚠️ THE HARM IS AN OCCURRENCE, NOT USUALLY A FILE. Measured over those 20:
+    only 7 are invisible at file granularity. For the other 13 the name does
+    appear contiguously elsewhere in the same file — because that file is where
+    the symbol is defined — so a sweep opens the file, fixes what it can see,
+    and silently leaves this one behind having counted one occurrence fewer than
+    exists. The ticket's wording said all of them were file-invisible; measured,
+    that is true of 7.
+
+    ⛔ THIS IS A FLOW, NOT A BACKLOG, which is the argument for spending a guard
+    on it rather than sweeping once. Run against the tree as it stood when the
+    ticket was filed, the same scan reports 14 — and those 14 are a strict
+    subset of the 20 this landed with, the other 6 having arrived over the
+    following six days in two merged commits. ⚠️ Whether the path half sees the
+    same rate was not measured, so no comparison is claimed here.
+    """
+    inventory = _identifier_inventory(corpus)
+
+    shortfalls = _identifier_shortfalls(corpus, inventory)
+    assert not shortfalls, (
+        "the identifier scan stopped reaching the tree, so a green result below "
+        "would mean nothing: " + "; ".join(shortfalls))
+
+    offenders = _identifier_offenders(corpus, inventory)
+    assert not offenders, (
+        "a name this repo defines is split across a line break, so grepping it "
+        "as written does not find this site.\n"
+        "⚠️ READ THIS FIRST, because unlike the path scan this one can be wrong "
+        "about what it found: the rejoin is mechanical, so ordinary prose, a "
+        "listing or a table can spell a real symbol by accident. If what is "
+        "named below is NOT a reference to that symbol, there is nothing to "
+        "reflow — the report is a defect in THIS GUARD, and this module has no "
+        "per-line exemption on purpose, so raise it against the guard.\n"
+        "⛔ Either way, do not make this quiet by reshaping the surrounding "
+        "lines into something the scan cannot see. If the report is wrong the "
+        "guard is what needs fixing; if it is right, only moving the name onto "
+        "one line fixes anything.\n"
+        "If it IS a reference: reflow so the whole name sits on ONE line. The "
+        "surrounding prose can wrap wherever you like. ⚠️ That restores one "
+        "occurrence to `git grep`, and usually nothing else — most of these "
+        "sites are in the file that defines the name, so a sweep was already "
+        "opening the file and still miscounting.\n"
+        + "\n".join(
+            f"    {path}:\n" + "\n".join(f"      {hit}" for hit in hits)
+            for path, hits in sorted(offenders.items())))
+
+
+def test_identifier_detector_finds_a_synthetic_wrap(
+        corpus: list[tuple[str, str]]) -> None:
+    """Anti-vacuity, and the ONLY thing that notices a dead rejoin.
+
+    ⛔ The floor cannot do this job. Break the continuation strip and the
+    identifier scan reports nothing while `_identifier_shortfalls` does not move
+    by a single count — measured, 1771 before and after — because a coverage
+    number answers "was there anything to look at", not "did the detector run".
+    Everything standing between that mutation and a green suite is below.
+
+    ⛔ EVERY marker `LINE_PREFIX` models gets a case, for the reason the path
+    side's twin gives: the module docstring generalises a prohibition to all
+    five, and a prohibition nothing enforces is a promise.
+    """
+    probe = "_MIN_IDENT_OFFSITE"
+    inventory = _identifier_inventory(corpus)
+    assert probe in inventory, (
+        f"{probe} is no longer a uniquely-defined name of its own module, so "
+        "this test's premise is gone — re-derive a subject from the inventory "
+        "rather than relaxing the assertions")
+    head, tail = probe[:8], probe[8:]
+
+    for wrapped, label in (
+        (f"# see {head}\n# {tail} for the rule\n", "hash comment"),
+        (f"// see {head}\n//     {tail} for the rule\n", "slash comment"),
+        (f" * see {head}\n *  {tail} for the rule\n", "star block"),
+        (f"-- see {head}\n--  {tail} for the rule\n", "sql/lua comment"),
+        (f"; see {head}\n;  {tail} for the rule\n", "semicolon comment"),
+        (f"    see {head}\n    {tail} for the rule\n", "bare indent"),
+    ):
+        hits = _wrapped_identifiers(wrapped, inventory)
+        assert [t for _, t in hits] == [probe], f"{label}: {hits}"
+
+    contiguous = f"# see {probe} for the rule\n# and more prose here\n"
+    assert _wrapped_identifiers(contiguous, inventory) == [], (
+        "a name that is NOT split must not be reported — otherwise every "
+        "ordinary mention reds and the cheapest fix is to delete the guard")
+
+    # ⛔ The inventory, not the regex, is what decides. Without this the whole
+    # thing could be "any token that spans the seam" and every case above would
+    # still pass — and that predicate reports thousands.
+    assert _wrapped_identifiers(f"# see {head}\n# {tail} onwards\n", {}) == [], (
+        "with an empty inventory nothing can resolve, so nothing may be "
+        "reported; if this fires, the resolver is not what gates a hit")
 
 
 def test_a_prefixed_token_is_resolved_through_its_basename() -> None:
@@ -1170,3 +1535,73 @@ def test_each_tripwire_fires_on_degenerate_input() -> None:
     # thing these floors are too crude to have. 200 is an independent constant,
     # deliberately NOT derived from `_tracked()`, because a floor taken from
     # the thing it protects is not a floor.
+
+
+def test_identifier_tripwires_fire_on_degenerate_input(
+        corpus: list[tuple[str, str]]) -> None:
+    """Same shape as its path-side twin, and for the same reason: both the
+    aggregation and the floor guard conditions that are currently FALSE, so
+    deleting either is invisible without an input that can tell the difference.
+    """
+    inventory = _identifier_inventory(corpus)
+
+    # ⛔ THE MUST-SUCCEED MEMBER, first. A group of only must-fail cases looks
+    # exactly like a harness that never ran the thing under test.
+    assert _identifier_shortfalls(corpus, inventory) == [], (
+        "the real corpus must CLEAR the floor, otherwise every case below "
+        "passes for the wrong reason")
+
+    assert _identifier_shortfalls([], inventory), "an empty scan must be a shortfall"
+    assert _identifier_shortfalls(corpus, {}), (
+        "an empty inventory must be a shortfall — that is the `ast` walk having "
+        "died, which is precisely the silent failure this floor exists for")
+
+    # ⛔ AND A NON-EMPTY CASE, which is what pins the floor's VALUE. With `[]`
+    # the floor fires for free at any setting, so the empty case cannot tell 250
+    # from 0.
+    sample = sorted(inventory)[:100]
+    assert len(sample) == 100, "inventory too small to build this case"
+    degenerate = [(f"synthetic{i}.py", " ".join(sample)) for i in range(3)]
+    assert _identifier_shortfalls(degenerate, inventory), (
+        "a corpus carrying 100 defined names must still trip the floor. If it "
+        "does not, the floor has been lowered until this case no longer falls "
+        "below it — ⛔ raise it back; do not shrink this case.")
+    # ⚠️ WHAT THIS PINS, exactly: 100 <= `_MIN_IDENT_OFFSITE` < 1771, the upper
+    # bound coming from the must-succeed member above. It does NOT pin the
+    # inventory's correctness — the sample is drawn from the inventory, so a
+    # broken inventory degenerates this case rather than failing it, which is
+    # why the empty-inventory assertion above is separate. Disclosed rather
+    # than fixed: making the case independent of the inventory means hard-coding
+    # names, and a hard-coded name is the enumeration this module refuses.
+
+    # ⛔ AND THE OFFSITE CONDITION ITSELF, which nothing above can see. A corpus
+    # where every name appears ONLY in the file defining it has zero offsite
+    # sightings and must trip the floor.
+    # ⚠️ That this case is what catches it is measured, not assumed: delete the
+    # `inventory[token] != path` test — reverting to counting sightings anywhere
+    # — and with this case present the module goes red, while with this case
+    # removed the same edit leaves all 15 tests passing. The reverted metric
+    # cannot fall below ANY threshold, because it equals the inventory's size.
+    by_definer: dict[str, list[str]] = {}
+    for name, definer in inventory.items():
+        by_definer.setdefault(definer, []).append(name)
+    picked = list(by_definer.items())[:400]
+    carried = sum(len(names) for _, names in picked)
+    assert carried > _MIN_IDENT_OFFSITE, (
+        f"this case carries {carried} name(s) and needs more than "
+        f"{_MIN_IDENT_OFFSITE} to tell the two metrics apart")
+    onsite_only = [(definer, " ".join(names)) for definer, names in picked]
+    assert _identifier_shortfalls(onsite_only, inventory), (
+        "a corpus in which every name is seen only where it is defined has ZERO "
+        "offsite sightings and must trip the floor. If it does not, the floor "
+        "is counting sightings anywhere — the inventory reciting itself.")
+
+    probe = "_MIN_IDENT_OFFSITE"
+    assert probe in inventory, "re-derive a subject; this one moved"
+    head, tail = probe[:8], probe[8:]
+    assert _identifier_offenders(
+        [("fake.py", f"# see {head}\n# {tail} onwards\n")], inventory), (
+        "the offender aggregation reported nothing for a file that plainly "
+        "contains a wrapped identifier")
+    assert _identifier_offenders(
+        [("fake.py", "# nothing to see here\n# at all\n")], inventory) == {}

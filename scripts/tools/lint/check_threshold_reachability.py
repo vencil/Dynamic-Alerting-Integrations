@@ -1031,9 +1031,9 @@ def _tracked_defaults_artifacts(paths: list[str] | None = None) -> list[str]:
     move the file(s) back") names the one repair that is not the problem.
 
     `paths` defaults to the real index listing, the same way `run_check` defaults
-    its inputs to the real extractors; `test_the_index_listing_is_a_real_seam_on
-    _both_derivations` injects a synthetic one and requires the answer to follow
-    it. ⚠️ That sentence was here before the test was — the injectable half had
+    its inputs to the real extractors;
+    `test_the_index_listing_is_a_real_seam_on_both_derivations` injects a
+    synthetic one and requires the answer to follow it. ⚠️ That sentence was here before the test was — the injectable half had
     no caller and no assertion, so the docstring was describing an intention.
     Both derivations that take this seam are exercised through it now.
     """
@@ -1453,9 +1453,9 @@ def _tracked_confd_roots(paths: list[str] | None = None) -> set[str]:
     artifact, which makes the "a new root must be registered" arm structurally
     unable to fire for a root that has no `_defaults*` file: there is nothing to
     compare it to. Two such roots were already in the tree, measured.
-    ⛔ `git ls-files`, not a filesystem walk, for the reason `_DEFAULTS_ARTIFACT_
-    SUFFIXES` spells out at length: from the main repo a walk reaches every other
-    branch's working copy under `.claude/worktrees/`.
+    ⛔ `git ls-files`, not a filesystem walk, for the reason
+    `_DEFAULTS_ARTIFACT_SUFFIXES` spells out at length: from the main repo a walk
+    reaches every other branch's working copy under `.claude/worktrees/`.
 
     ⛔ `paths` is the seam that makes "it reads the index" ASSERTABLE rather than
     merely stated — see `_tracked_paths`. Every other test of this floor takes
