@@ -114,32 +114,80 @@ tenants:
 effective = deep_merge(L0, L1, L2, L3, tenant_yaml)
 ```
 
-⛔ **Scope: `effective` contains ONLY the `defaults:` block of `_defaults.yaml`**, not its
-siblings `state_filters` / `optional_overrides` / `_routing_defaults` / `_routing_enforced` /
-`profiles` / `max_metrics_per_tenant`. Both implementations agree verbatim:
-`describe_tenant.py`'s `ddata.get("defaults", ddata)` and Go's
-`pkg/config.extractDefaultsBlock`.
+⛔ **Scope: `effective` takes ONLY the `defaults:` block of `_defaults.yaml`**, not the other
+top-level properties of `defaults:` in
+[`platform-defaults.schema.json`](../schemas/platform-defaults.schema.json) (`state_filters` /
+`optional_overrides` / `profiles` / `max_metrics_per_tenant` / `_routing*` etc.). **That schema
+is the authoritative list — do not start a second enumeration here.** The two unwrap
+implementations agree on this shape: `describe_tenant.py`'s `ddata.get("defaults", ddata)` and
+Go's `pkg/config.extractDefaultsBlock`.
 
-**Why**: `merged_hash` is the **input to the reload decision** (`config_debounce.go`: the
-hash moving triggers `IncReloadTrigger(ReloadReasonDefaults)`), and the reason this ADR
-exists is the question above — how to avoid a reload storm. Putting `_routing_defaults`,
-which the exporter does not consume at all, inside it would move **every** tenant's hash on
-every platform routing edit — exactly the consequence that got alternative A rejected.
+⚠️ **Two exceptions, both reachable. The merge behaviour itself is deliberate, but each
+has an open ticket on its consequences**:
+
+1. **A file with no `defaults:` wrapper** (the schema permits it) merges the **entire
+   document** into `effective`, siblings included. The repo already contains this shape
+   (`rule-packs/recipes/examples/conf.d/`). Rationale and the existing guard: see the
+   `PLATFORM_DOCUMENT_KEYS` comment in `blast_radius.py`. ⇒ This shape being invisible to the
+   reachability gate is the subject of [#1552](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1552).
+2. **`_custom_alerts` is injected by ADR-024's UNION resolver AFTER the unwrap**
+   (`describe_tenant.py`, #772), so it **enters `effective` even when the `defaults:` wrapper
+   is present**; Go has no such injection path. Measured on identical input: Python yields
+   `{cpu_usage, _custom_alerts, _custom_alerts_resolution}`, Go yields only `{cpu_usage}` ⇒
+   **the two implementations' `effective` are different sets, so `merged_hash` differs** ⇒
+   [#1549](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1549).
+
+⛔ Every `_defaults.yaml` under `tests/golden/fixtures` currently has the "wrapped, zero
+siblings" shape, so the **golden parity suite structurally cannot detect either exception** —
+do not read its green as an endorsement that the two implementations are equivalent.
+
+**Why the siblings are not merged in** (three reasons, equally load-bearing):
+
+1. **It would manufacture reload-attribution noise.** `merged_hash` is the **input to reload
+   attribution and to the blast-radius signal**: `config_debounce.go` uses it to decide
+   whether a defaults change is recorded as `applied`
+   (`IncReloadTrigger(ReloadReasonDefaults)`) or as `shadowed` / `cosmetic`, and how many
+   tenants `da_config_blast_radius_tenants_affected` reports. (The rebuild itself runs
+   `fullDirLoad` unconditionally — it is **not** gated on the hash.) The reason this ADR
+   exists is the question above — how to avoid a reload storm. Putting `_routing_defaults`,
+   which the exporter does not consume at all, inside it would record **every** tenant as
+   affected on every platform routing edit — exactly the consequence that got alternative A
+   rejected.
+2. **It would invalidate every existing snapshot at once.** `merged_hash` is the comparison
+   value for `da-tools tenant-verify --expect-merged-hash`; widening the domain makes all
+   existing snapshots mismatch.
+3. **deep_merge cannot express the semantics.** `_routing_defaults` is overridden by
+   `_routing` — a **different key name** — as a top-level shallow overwrite (`_grar_merge.py`),
+   not a same-key deep merge. Measured: one edit to the platform `_routing_defaults.group_wait`
+   records all 5 tenants as affected, yet the one tenant carrying its own `_routing` sees no
+   change to its actual route at all — that attribution is provably false.
 
 ⚠️ **This does not make those keys dead.** Each reaches tenants by another path:
 `state_filters` / `optional_overrides` are merged into `ThresholdConfig` by `pkg/config` and
-expanded per tenant at resolve time; `_routing_defaults` / `_routing_enforced` are consumed
-by the four-layer merge in `generate_alertmanager_routes.py`. **Measured**: any change to a
-`_`-prefixed file takes the full-rebuild path (`isTenantOnlyChange` in `config.go`), so their
-APPLICATION does not depend on `merged_hash` — changing only `state_filters.severity` takes
-effect while `merged_hash` stays byte-identical.
+expanded per tenant at resolve time; `_routing_defaults` / `_routing_enforced` are consumed by
+the four-layer merge in `generate_alertmanager_routes.py`. (Note the asymmetry: the exporter
+does not consume `_routing_defaults`, but it **does** consume tenant-level `_routing` —
+`ResolveRouting` in `resolve.go`. That asymmetry is the mechanism behind reason 3 above.)
 
-⚠️ **The cost is known and deliberate**: platform-level changes are therefore structurally
-invisible to every diagnostic and reporting surface that takes `effective_config` /
-`merged_hash` as input (`GET /effective`, `describe_tenant`, `blast_radius`). That is the
-subject of [#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516), and
-the remedy is a separate platform-plane comparison — NOT widening the domain here.
+**Measured**: their application does not depend on `merged_hash` — changing only
+`state_filters.<filter>.severity` takes effect while `merged_hash` stays byte-identical.
+Neither load path is gated on the hash: in flat mode any change to a `_`-prefixed file takes
+the full-rebuild path (`isTenantOnlyChange` in `config.go`), and in hierarchical mode
+`installNewHierarchyState` runs `fullDirLoad` every time.
 
+⚠️ **The cost is known and deliberate**: platform-level changes are structurally invisible to
+every consumer that takes `effective_config` / `merged_hash` as input — `GET /effective`,
+`describe_tenant`, `blast_radius`, the what-if preview (`handler_simulate.go`, Portal
+`simulate-preview.jsx`), and `da-guard`.
+
+⛔ Among those, **`da-tools tenant-verify --expect-merged-hash` is a gate, not a diagnostic**
+(the blocking signal in the rollback checklist, exit 2 = mismatch): after a platform-plane
+rollback it returns exit 0, and **that means "this plane was not covered", not "the rollback
+is verified"**.
+
+That is the subject of
+[#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516), and the remedy
+is a separate platform-plane comparison — NOT widening the domain here.
 
 ### Dual-Hash Mechanism
 
@@ -166,6 +214,13 @@ elif any ancestor _defaults.yaml changed:
     else:
         increment da_config_defaults_change_noop_total
 ```
+
+⚠️ **This pseudocode describes how a change is CLASSIFIED, not whether a rebuild
+happens.** In the implementation, the hierarchical path's `diffAndReload` calls
+`installNewHierarchyState` **unconditionally** after `classifyAndCount`, and the first thing
+that function does is run `fullDirLoad` unconditionally. `merged_hash` decides whether the
+change is recorded as `applied` (`IncReloadTrigger`) or as `shadowed` / `cosmetic` — it does
+**not** decide the rebuild.
 
 ### Inheritance Graph Data Structure
 

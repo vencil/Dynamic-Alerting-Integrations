@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: exporter
 created_at: 2026-04-18
-updated_at: 2026-05-13
+updated_at: 2026-08-23
 ---
 # ADR-017: _defaults.yaml 繼承語意 + dual-hash hot-reload
 
@@ -114,28 +114,64 @@ tenants:
 effective = deep_merge(L0, L1, L2, L3, tenant_yaml)
 ```
 
-⛔ **範圍：`effective` 只含 `_defaults.yaml` 的 `defaults:` 區塊**，不含與它同層的
-`state_filters` / `optional_overrides` / `_routing_defaults` / `_routing_enforced` /
-`profiles` / `max_metrics_per_tenant`。兩個實作逐字一致：`describe_tenant.py` 的
-`ddata.get("defaults", ddata)`、Go 的 `pkg/config.extractDefaultsBlock`。
+⛔ **範圍：`effective` 只取 `_defaults.yaml` 的 `defaults:` 區塊**，不取 `defaults:` 在
+[`platform-defaults.schema.json`](../schemas/platform-defaults.schema.json) 中的其他頂層
+properties（`state_filters` / `optional_overrides` / `profiles` / `max_metrics_per_tenant` /
+`_routing*` 等）。**權威清單是那份 schema，勿在此處另立列舉。** 兩個 unwrap 實作在這個
+形狀上同義：`describe_tenant.py` 的 `ddata.get("defaults", ddata)`、Go 的
+`pkg/config.extractDefaultsBlock`。
 
-**為什麼**：`merged_hash` 是 **reload 決策的輸入**（`config_debounce.go`：hash 一動就
-`IncReloadTrigger(ReloadReasonDefaults)`），而本 ADR 存在的理由正是上面那句「如何避免
-reload 風暴」。把 exporter 根本不消費的 `_routing_defaults` 放進來，會讓每一次平台路由
-編輯移動**每一個**租戶的 hash —— 正是被否決的替代方案 A 的後果。
+⚠️ **兩個例外，都可達。合併行為本身是刻意的，但兩者的後果各有未結的票**：
+
+1. **沒有 `defaults:` 包裝的檔案**（schema 允許）會把**整份文件**併進 `effective`，兄弟鍵
+   一併進來。repo 內現有此形狀（`rule-packs/recipes/examples/conf.d/`）。理由與既有防護見
+   `blast_radius.py` 的 `PLATFORM_DOCUMENT_KEYS` 註解。⇒ 該形狀對可達性 gate 隱形是
+   [#1552](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1552) 的主題。
+2. **`_custom_alerts` 由 ADR-024 的 UNION 解析器在 unwrap 之後注入**（`describe_tenant.py`，
+   #772），**即使有 `defaults:` 包裝也會進 `effective`**；Go 沒有這條注入路徑。實測同一份
+   輸入：Python 得 `{cpu_usage, _custom_alerts, _custom_alerts_resolution}`、Go 只得
+   `{cpu_usage}` ⇒ **兩實作的 `effective` 不同集，`merged_hash` 因此不等** ⇒ [#1549](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1549)。
+
+⛔ `tests/golden/fixtures` 的 `_defaults.yaml` 目前全為「有包裝、零兄弟鍵」形狀，**golden
+parity 套件結構上偵測不到上述任一例外** —— 不要把它的綠燈讀成「兩實作全等」的背書。
+
+**為什麼不把兄弟鍵併進來**（三條，同等承重）：
+
+1. **會製造 reload 歸因噪音**。`merged_hash` 是 **reload 歸因與 blast-radius 訊號的輸入**：
+   `config_debounce.go` 用它決定一次 defaults 變更記成 `applied`
+   （`IncReloadTrigger(ReloadReasonDefaults)`）還是 `shadowed` / `cosmetic`，以及
+   `da_config_blast_radius_tenants_affected` 報幾個租戶。（rebuild 本身無條件跑
+   `fullDirLoad`，**不**以 hash 為條件。）而本 ADR 存在的理由正是上面那句「如何避免 reload
+   風暴」。把 exporter 根本不消費的 `_routing_defaults` 放進來，會讓每一次平台路由編輯把
+   **每一個**租戶都記成受影響 —— 正是被否決的替代方案 A 的後果。
+2. **既存快照一次作廢**。`merged_hash` 是 `da-tools tenant-verify --expect-merged-hash` 的
+   比對值，擴張定義域會讓所有既存快照失配。
+3. **deep_merge 表達不了那個語意**。`_routing_defaults` 是被**不同鍵名**的 `_routing` 以頂層
+   淺覆蓋（`_grar_merge.py`），不是同鍵深合併。實測：改一次平台
+   `_routing_defaults.group_wait`，5 個租戶全被記為受影響，而其中自帶 `_routing` 的那個租戶
+   實際 route 完全不變 —— 該筆歸因可證為假。
 
 ⚠️ **這不代表那些鍵是死的。** 它們各自由別的路徑到達租戶：`state_filters` /
-`optional_overrides` 由 `pkg/config` 的 merge 併入 `ThresholdConfig` 並在 resolve 期
-逐租戶展開；`_routing_defaults` / `_routing_enforced` 由 `generate_alertmanager_routes.py`
-的四層合併消費。**實測**：任何 `_` 前綴檔變更都走 full rebuild（`config.go` 的
-`isTenantOnlyChange`），所以它們的**套用**不依賴 `merged_hash` —— 只改
-`state_filters.severity` 時，設定確實生效而 `merged_hash` 逐字不動。
+`optional_overrides` 由 `pkg/config` 的 merge 併入 `ThresholdConfig` 並在 resolve 期逐租戶
+展開；`_routing_defaults` / `_routing_enforced` 由 `generate_alertmanager_routes.py` 的四層
+合併消費。（注意不對稱：exporter 不消費 `_routing_defaults`，但**確實**消費租戶層的
+`_routing` —— `resolve.go` 的 `ResolveRouting`。這正是上面第 3 條的機制根源。）
 
-⚠️ **代價是已知且刻意的**：因此「平台面變更」對所有以 `effective_config` / `merged_hash`
-為輸入的診斷與報告面（`GET /effective`、`describe_tenant`、`blast_radius`）**結構上不可見**。
+**實測**：它們的套用不依賴 `merged_hash` —— 只改 `state_filters.<filter>.severity` 時，設定
+確實生效而 `merged_hash` 逐字不動。兩條載入路徑都不以 hash 為條件：flat 模式下任何 `_` 前綴
+檔變更都走 full rebuild（`config.go` 的 `isTenantOnlyChange`），hierarchical 模式下
+`installNewHierarchyState` 每次都跑 `fullDirLoad`。
+
+⚠️ **代價是已知且刻意的**：「平台面變更」對所有以 `effective_config` / `merged_hash` 為輸入
+的消費端**結構上不可見** —— `GET /effective`、`describe_tenant`、`blast_radius`、what-if 預覽
+（`handler_simulate.go`、Portal `simulate-preview.jsx`）、`da-guard`。
+
+⛔ 其中 **`da-tools tenant-verify --expect-merged-hash` 不是診斷而是閘門**（rollback
+checklist 的擋下訊號，exit 2 = 不一致）：平台面 rollback 之後它會回 exit 0，而**那代表
+「這一面沒被涵蓋」，不代表「rollback 已驗證」**。
+
 那是 [#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516) 的主題，
 處置方式是另建一個平台面比較平面，**不是**擴張這裡的定義域。
-
 
 ### Dual-Hash 機制
 
@@ -162,6 +198,11 @@ elif any ancestor _defaults.yaml changed:
     else:
         increment da_config_defaults_change_noop_total
 ```
+
+⚠️ **這段虛擬碼描述的是「一次變更被歸類成什麼」，不是「rebuild 會不會發生」。**
+實作中 hierarchical 路徑的 `diffAndReload` 在 `classifyAndCount` 之後**無條件**呼叫
+`installNewHierarchyState`，而後者第一件事就是無條件跑 `fullDirLoad`。`merged_hash` 決定的是
+這次變更記成 `applied`（`IncReloadTrigger`）還是 `shadowed` / `cosmetic`，**不決定重建**。
 
 ### 繼承圖資料結構
 
