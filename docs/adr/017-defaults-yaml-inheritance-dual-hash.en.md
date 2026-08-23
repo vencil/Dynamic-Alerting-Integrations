@@ -105,13 +105,41 @@ tenants:
                                   # platform defaults are map[string]float64
     # pg_replication_lag_seconds: inherited from L0 = 30
     # pg_locks_count: inherited from L1 = 100
-    # _routing_defaults.group_wait: inherited from L0 = 60s
+    # _routing_defaults.group_wait: inherited by the four-layer routing engine = 60s
+    #   ⛔ but NOT part of the effective config below — see the scope note that follows
 ```
 
 **Effective config computation**:
 ```
 effective = deep_merge(L0, L1, L2, L3, tenant_yaml)
 ```
+
+⛔ **Scope: `effective` contains ONLY the `defaults:` block of `_defaults.yaml`**, not its
+siblings `state_filters` / `optional_overrides` / `_routing_defaults` / `_routing_enforced` /
+`profiles` / `max_metrics_per_tenant`. Both implementations agree verbatim:
+`describe_tenant.py`'s `ddata.get("defaults", ddata)` and Go's
+`pkg/config.extractDefaultsBlock`.
+
+**Why**: `merged_hash` is the **input to the reload decision** (`config_debounce.go`: the
+hash moving triggers `IncReloadTrigger(ReloadReasonDefaults)`), and the reason this ADR
+exists is the question above — how to avoid a reload storm. Putting `_routing_defaults`,
+which the exporter does not consume at all, inside it would move **every** tenant's hash on
+every platform routing edit — exactly the consequence that got alternative A rejected.
+
+⚠️ **This does not make those keys dead.** Each reaches tenants by another path:
+`state_filters` / `optional_overrides` are merged into `ThresholdConfig` by `pkg/config` and
+expanded per tenant at resolve time; `_routing_defaults` / `_routing_enforced` are consumed
+by the four-layer merge in `generate_alertmanager_routes.py`. **Measured**: any change to a
+`_`-prefixed file takes the full-rebuild path (`isTenantOnlyChange` in `config.go`), so their
+APPLICATION does not depend on `merged_hash` — changing only `state_filters.severity` takes
+effect while `merged_hash` stays byte-identical.
+
+⚠️ **The cost is known and deliberate**: platform-level changes are therefore structurally
+invisible to every diagnostic and reporting surface that takes `effective_config` /
+`merged_hash` as input (`GET /effective`, `describe_tenant`, `blast_radius`). That is the
+subject of [#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516), and
+the remedy is a separate platform-plane comparison — NOT widening the domain here.
+
 
 ### Dual-Hash Mechanism
 

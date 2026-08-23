@@ -105,13 +105,37 @@ tenants:
                                   # 平台預設是 map[string]float64
     # pg_replication_lag_seconds: 繼承 L0 = 30
     # pg_locks_count: 繼承 L1 = 100
-    # _routing_defaults.group_wait: 繼承 L0 = 60s
+    # _routing_defaults.group_wait: 由四層 routing 引擎繼承 = 60s
+    #   ⛔ 但它不在下面那個 effective config 裡 —— 見緊接著的範圍註記
 ```
 
 **Effective config 計算**：
 ```
 effective = deep_merge(L0, L1, L2, L3, tenant_yaml)
 ```
+
+⛔ **範圍：`effective` 只含 `_defaults.yaml` 的 `defaults:` 區塊**，不含與它同層的
+`state_filters` / `optional_overrides` / `_routing_defaults` / `_routing_enforced` /
+`profiles` / `max_metrics_per_tenant`。兩個實作逐字一致：`describe_tenant.py` 的
+`ddata.get("defaults", ddata)`、Go 的 `pkg/config.extractDefaultsBlock`。
+
+**為什麼**：`merged_hash` 是 **reload 決策的輸入**（`config_debounce.go`：hash 一動就
+`IncReloadTrigger(ReloadReasonDefaults)`），而本 ADR 存在的理由正是上面那句「如何避免
+reload 風暴」。把 exporter 根本不消費的 `_routing_defaults` 放進來，會讓每一次平台路由
+編輯移動**每一個**租戶的 hash —— 正是被否決的替代方案 A 的後果。
+
+⚠️ **這不代表那些鍵是死的。** 它們各自由別的路徑到達租戶：`state_filters` /
+`optional_overrides` 由 `pkg/config` 的 merge 併入 `ThresholdConfig` 並在 resolve 期
+逐租戶展開；`_routing_defaults` / `_routing_enforced` 由 `generate_alertmanager_routes.py`
+的四層合併消費。**實測**：任何 `_` 前綴檔變更都走 full rebuild（`config.go` 的
+`isTenantOnlyChange`），所以它們的**套用**不依賴 `merged_hash` —— 只改
+`state_filters.severity` 時，設定確實生效而 `merged_hash` 逐字不動。
+
+⚠️ **代價是已知且刻意的**：因此「平台面變更」對所有以 `effective_config` / `merged_hash`
+為輸入的診斷與報告面（`GET /effective`、`describe_tenant`、`blast_radius`）**結構上不可見**。
+那是 [#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516) 的主題，
+處置方式是另建一個平台面比較平面，**不是**擴張這裡的定義域。
+
 
 ### Dual-Hash 機制
 
