@@ -617,3 +617,46 @@ def test_an_unlistable_root_names_itself_instead_of_raising(
 
     assert unusable_config_paths(root, recursive=recursive) == [root]
     assert list(iter_config_files(root, recursive=recursive)) == []
+
+
+def test_a_config_named_directory_that_is_also_unscannable_is_listed_once(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+):
+    """One path, one entry — even when it qualifies twice over.
+
+    ⛔ Surviving mutation (B-tier, mutation review round 3): dropping the
+    `if d not in found` filter where the unscannable directories are
+    appended left the whole suite green. Nothing covered the overlap,
+    because every existing fixture puts a path in exactly one of the two
+    branches: `beta.yaml` (a config-named directory) is listable, and
+    `locked` (an unlistable directory) is not config-named.
+
+    A directory called `beta.yaml` that ALSO cannot be scanned qualifies
+    on both counts — config-named and not a regular file, so the walk of
+    its PARENT records it; unscannable, so `_walk_error` records it too —
+    and is emitted twice without the filter.
+
+    ⚠️ Duplicates are not cosmetic here, and this exact failure has already
+    shipped twice in this function's history (an unreadable regular
+    `.yaml`, then a broken symlink): callers COUNT this list. `check_yaml_
+    syntax`'s caveat line said "2 file(s)" for one path, which sends an
+    operator looking for a second problem that does not exist — from the
+    list whose entire purpose is to describe the tree accurately.
+    """
+    root = tmp_path / "conf.d"
+    both = root / "beta.yaml"
+    both.mkdir(parents=True)
+    (root / "top.yaml").write_text("tenants: {}\n", encoding="utf-8")
+
+    _deny_scandir(monkeypatch, both)
+
+    unusable = unusable_config_paths(root)
+    assert unusable.count(both) == 1, (
+        "a path that is BOTH config-named-but-not-a-file AND unscannable "
+        "must appear once; callers count this list, so a duplicate reports "
+        "one problem as two", [str(p) for p in unusable])
+    assert unusable == [both], (
+        "nothing else in this tree is unusable", [str(p) for p in unusable])
+    # Control: the rest of the scan is unaffected — this is a signal, not
+    # a refusal, and the duplicate would otherwise hide behind a pass.
+    assert [p.name for p in iter_config_files(root)] == ["top.yaml"]
