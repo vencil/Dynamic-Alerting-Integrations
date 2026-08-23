@@ -143,7 +143,7 @@ class TenantOutcome:
     """The result of attempting (or simulating) a governance PR for one tenant."""
 
     tenant: str
-    status: str             # planned | pr_opened | already_pending | error | skipped
+    status: str             # planned | pr_opened | already_pending | no_changes | error | skipped
     keys: list[str] = field(default_factory=list)
     pr_url: str = ""
     pr_number: int = 0
@@ -640,9 +640,12 @@ def open_governance_pr(
 ) -> TenantOutcome:
     """GET → surgical merge → verify → PUT a per-tenant governance PR.
 
-    Maps the tenant-api response: 200 → ``pr_opened``; 409 → ``already_pending``
-    (the dedup path — a prior run's PR is still open, leave it); anything else →
-    ``error`` (recorded, not raised, so one bad tenant doesn't sink the run).
+    Maps the tenant-api response: 200 + ``pending_review`` → ``pr_opened``;
+    200 + ``no_changes`` → ``no_changes`` (the API found the body already equal
+    to its fresh base — nothing to propose, and no PR to open); 409 →
+    ``already_pending`` (the dedup path — a prior run's PR is still open, leave
+    it); anything else → ``error`` (recorded, not raised, so one bad tenant
+    doesn't sink the run).
     """
     keys = [c.key for c in plan.changes]
     base = args.tenant_api_url.rstrip("/")
@@ -684,6 +687,21 @@ def open_governance_pr(
         # branch — which would silently bypass review AND kill the 409 dedup.
         # Refuse to claim a PR we didn't get, so a non-PR-mode target fails loud
         # on the first run instead of direct-committing tenant config for weeks.
+        # A PR-mode API answers `no_changes` when the body it was handed is
+        # already byte-identical to the branch base it just cut. That is a
+        # healthy no-op, not a misconfigured deployment: this run planned the
+        # change off the pod's on-disk copy, which the write path deliberately
+        # does NOT treat as the base (the fresh origin base is re-resolved per
+        # write), so the two can legitimately disagree once the change has
+        # landed upstream. Recording it as an error would (a) tell the operator
+        # to set a write-mode that is already set, and (b) feed the systemic-
+        # failure ratio, failing a Job that in fact had nothing left to do.
+        if body.get("status") == "no_changes":
+            return TenantOutcome(
+                plan.tenant, "no_changes", keys,
+                message="tenant-api reports the proposed content already matches "
+                        "its base — nothing to propose",
+            )
         if body.get("status") != "pending_review" or not body.get("pr_url"):
             return TenantOutcome(
                 plan.tenant, "error", keys,
@@ -824,6 +842,7 @@ def format_text_report(
             tag = {
                 "pr_opened": "✓ PR",
                 "already_pending": "• skip (already open)",
+                "no_changes": "• no-op (already at base)",
                 "error": "✗ error",
             }.get(o.status, o.status)
             detail = o.pr_url or o.message
@@ -836,12 +855,14 @@ def format_text_report(
 
     opened = sum(1 for o in outcomes if o.status == "pr_opened")
     pending = sum(1 for o in outcomes if o.status == "already_pending")
+    nochange = sum(1 for o in outcomes if o.status == "no_changes")
     errors = sum(1 for o in outcomes if o.status == "error")
     lines.append("\n" + "=" * 78)
     if applied:
         lines.append(
             f"Summary: {opened} PR(s) opened, {pending} already-pending (skipped), "
-            f"{errors} error(s); {len(plans)} tenant(s) actionable." + _deferred_note()
+            f"{nochange} no-op, {errors} error(s); {len(plans)} tenant(s) actionable."
+            + _deferred_note()
         )
     else:
         total_changes = sum(len(p.changes) for p in plans)
@@ -874,6 +895,7 @@ def format_json_report(
             "changes": sum(len(p.changes) for p in plans),
             "prs_opened": sum(1 for o in outcomes if o.status == "pr_opened"),
             "already_pending": sum(1 for o in outcomes if o.status == "already_pending"),
+            "no_changes": sum(1 for o in outcomes if o.status == "no_changes"),
             "errors": sum(1 for o in outcomes if o.status == "error"),
             "ungoverned_lower_bound": len(ung),
             "not_applicable": len(na),

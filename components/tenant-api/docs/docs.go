@@ -960,6 +960,12 @@ const docTemplate = `{
                         "description": "Attribute the PR to a non-UI write source. Allowlisted: threshold-governance (#656). Omit for tenant-manager UI.",
                         "name": "X-DA-Write-Source",
                         "in": "header"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Optimistic concurrency: the source_hash GET /tenants/{id} returned for the file this body was derived from. 409 if the file changed since. 16 lowercase hex chars; a malformed value is a 400, never ignored. Direct write-back mode only (501 in PR mode).",
+                        "name": "X-DA-Base-Hash",
+                        "in": "header"
                     }
                 ],
                 "responses": {
@@ -989,6 +995,12 @@ const docTemplate = `{
                     },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "501": {
+                        "description": "Not Implemented",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }

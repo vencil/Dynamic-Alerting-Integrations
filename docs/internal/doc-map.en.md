@@ -43,6 +43,7 @@ lang: en
 | `docs/adr/030-decision-layer-migration-validation.md` | Platform Engineers, contributors | ADR-030: 決策層遷移驗證 — 製造 Oracle 而非觀測 |
 | `docs/adr/031-slo-burn-rate-recipe.md` | Platform Engineers, SREs, domain-experts | ADR-031: slo_burn_rate recipe — 宣告式 SLO 告警編譯 |
 | `docs/adr/032-paired-interleaved-bench-measurement.md` | Platform Engineers, contributors | ADR-032: 夜跑效能監測改用成對交錯量測，取代跨夜滑動錨點 |
+| `docs/adr/033-ops-execution-plane-interface.md` | Platform Engineers, SREs | ADR-033: 與運維執行平面的協同介面 — MariaDB 計畫性作業 |
 | `docs/alerting-best-practices.md` (.en.md) | SREs, Platform Engineers | Beyond Actionable: From Alert Decisions to the Idempotency Spectrum of Automated Actions |
 | `docs/alerting-design-fundamentals.md` (.en.md) | SREs, Domain Experts (DBA), Tenants | Before the Alert Fires: From Resource Saturation to Symptom-Based Alerting |
 | `docs/alerting-slo-error-budget.md` (.en.md) | SREs, Domain Experts (DBA), Tenants | How Strict Is Strict Enough: Setting Alert Thresholds with SLOs and Error Budgets |

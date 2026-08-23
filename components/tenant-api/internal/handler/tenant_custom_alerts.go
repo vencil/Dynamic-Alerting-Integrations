@@ -159,12 +159,16 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 		}
 
 		// Optimistic concurrency (Reef 3): reject if the file moved under us.
-		// NB (self-review F4): this check is outside the writer's lock, so a
-		// narrow TOCTOU remains — two requests that load the SAME base_hash
-		// and submit within the read→write window can still last-write-wins.
-		// This catches the common case (a stale load) and is strictly safer
-		// than the existing PutTenant (no OCC at all); full atomicity (re-
-		// check under the writer lock) is a future hardening.
+		// This is the CHEAP check — it runs outside the writer's lock, so it
+		// can only catch a base that was already stale when the request
+		// arrived. It exists to reject those before they consume a write
+		// admission slot; the authoritative comparison happens inside the lock
+		// in Writer.WriteIfUnchanged below, which is what closes the read→write
+		// window this comment previously recorded as a remaining TOCTOU (F4).
+		//
+		// The two checks share one base: `raw` is both what this hash is
+		// computed over and what `merged` is built from, so the in-lock check
+		// passing proves the merge base was still current at commit time.
 		currentHash := cfg.ComputeSourceHash(raw)
 		if req.BaseHash != currentHash {
 			WriteErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{
@@ -235,10 +239,26 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 		// Commit via the shared writer (re-validates schema + custom alerts,
 		// attributes the commit to the operator).
 		email := rbac.RequestEmail(r)
-		notices, err := d.Writer.Write(r.Context(), tenantID, email, merged)
+		notices, err := d.Writer.WriteIfUnchanged(r.Context(), tenantID, email, merged, req.BaseHash)
 		if err != nil {
 			if errors.Is(err, gitops.ErrWriteOverloaded) {
 				WriteOverloaded(w, r)
+				return
+			}
+			// The base moved between the pre-check above and the lock. Same
+			// envelope as that pre-check so a client cannot tell which of the
+			// two rejected it — only that it must re-read and retry.
+			var pre *gitops.PreconditionError
+			if errors.As(err, &pre) {
+				extra := map[string]any{}
+				if pre.Current != "" {
+					extra["current_source_hash"] = pre.Current
+				}
+				WriteErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{
+					Error: "the tenant configuration was updated by someone else; refresh and retry",
+					Code:  CodeConflict,
+					Extra: extra,
+				})
 				return
 			}
 			if errors.Is(err, gitops.ErrConflict) {
