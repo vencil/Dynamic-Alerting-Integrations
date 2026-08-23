@@ -52,14 +52,21 @@ question this guard asks. It found 7 in #1383; all 7 were fixed. Re-run for
 #1452 — same answer on the merge base and on this branch, so it is a property
 of the tree and not of one commit — **2**, one of them live —
 
-  * `tests/ops/test_generated_ci_artifacts.py:3591` splits
-    `tools/portal/…/cicd-setup-wizard/utils/generators.js`. `git grep` on the
-    whole path returns that file (line 311) and NOT line 3591, so a rename
-    sweep working from `grep -n` fixes one and leaves the other. #1373 verbatim.
-  * `:35` of this file — the illustration above uses a REAL tracked path and
-    escapes its own guard only because this class is unmodelled. Contrast the
-    top-of-file illustration, which uses a path that does not exist for exactly
-    this reason.
+  * `tests/ops/test_generated_ci_artifacts.py` splits
+    `tools/portal/…/cicd-setup-wizard/utils/generators.js` across two string
+    literals. `git grep` on the whole path returns that file at its OTHER,
+    contiguous mention and NOT at the split one, so a rename sweep working from
+    `grep -n` fixes one and leaves the other. #1373 verbatim.
+  * the KNOWN GAP illustration in this very docstring — it uses a REAL tracked
+    path and escapes its own guard only because this class is unmodelled.
+    Contrast the top-of-file illustration, which uses a path that does not exist
+    for exactly this reason.
+  ⚠️ Both were cited by absolute line number until #1453. Measured at that
+  point: two of the three numbers had rotted (the split was at 3740, not 3591;
+  the contiguous mention at 332, not 311) and the third still happened to be
+  right. Cite the symbol, the paragraph, or the other mention — never the line.
+  A line number that is correct today is not a different KIND of thing from one
+  that has already rotted; it is the same thing earlier.
 
 Neither is fixed here: the mechanism is the TOKENISER (quotes break the token
 before the resolver is reached), not the resolver that #1452 is about, and it
@@ -117,6 +124,40 @@ What is deliberately NOT modelled (under-detection, the safe direction):
     skipped, because silently dropping input is how a scan reports "clean"
     while never having looked (and pinning WHICH files get dropped turned out
     to be environment-dependent; see the note by `_read_tracked`).
+
+⛔ AND THE SIBLING CLASS THIS GUARD DOES NOT COVER: a wrapped IDENTIFIER. The
+accident is the same one — #1373 was a rename sweep, and a sweep greps for a
+symbol as readily as for a path — but a symbol carries no slash and no
+extension, so nothing here can resolve one. Measured while #1453 was scoped:
+20 such references were live in this tree (that ticket's PR reflowed all 20),
+and the same scan run against the tree six days earlier reports 14, a strict
+subset — so the class REGENERATES rather than being a backlog.
+
+⛔ A scan for it was built and then WITHDRAWN, and the reason is a property of
+the problem rather than of the implementation: any resolver for a symbol has to
+consult a GLOBAL set of names, so its verdict is not attributable to the change
+that produced it. Blind review demonstrated that end to end — an ordinary new
+helper in one file turned an untouched, entirely correct comment in another file
+red — and the cheapest way back to green is to rename your own function, which
+leaves a clean diff, passes review, and records nothing about why the name got
+worse. A guard that rewards that edit is worse than no guard.
+
+Three predicates were tried, each measured, each failed differently, and the
+counts and the reproductions are on #1453 rather than here:
+  * also accepting any name that occurs contiguously in the tree reaches the
+    non-Python definition side and finds 8 further REAL references there — but
+    it is self-contaminating: writing prose about the guard changes what the
+    guard reports, demonstrated by an earlier draft of this very file;
+  * scoping to the change's own diff separates nothing — the true positive and
+    the false positive have the same shape under it (symbol in the diff, carrier
+    file not), so one variant deletes the detection and the other keeps the
+    false positive;
+  * a minimum-length bound only moves the threshold: the demonstrated false
+    positive is 21 characters, and the bound can be raised far enough to drop
+    real references while every test stays green.
+⚠️ Do not read this as "identifiers are fine". They are unguarded, the class is
+growing, and #1453 holds the measurements anyone re-attempting it should start
+from — including the shapes that make it hard, which is the expensive part.
 
 ⛔ GOING GREEN WITHOUT FIXING ANYTHING is easy, and the class is OPEN: anything
 that stops the two halves being joined does it. Measured examples, on a real
@@ -704,22 +745,28 @@ def test_no_reference_is_split_across_a_line_break() -> None:
 
     offenders = _offenders(files)
     assert not offenders, (
-        "a file reference is split across a line break, so grepping the string "
-        "as written does not find it. Reflow so the reference sits on ONE "
-        "line; the surrounding prose can wrap wherever you like.\n"
-        "⚠️ Reflowing restores exactly one property: the spelling AS WRITTEN "
+        "rejoining two lines below produces a token that names a real repo "
+        "file, and that token does not appear in the raw text — so grepping it "
+        "as written does not return this site.\n"
+        "⚠️ FIRST DECIDE WHICH ONE YOU HAVE, because this guard cannot. If the "
+        "thing named below is NOT a reference — a directory listing, two "
+        "unrelated list items, a sentence whose last word ran into a filename — "
+        "then there is nothing to reflow and the report is wrong. That is a "
+        "defect in THIS GUARD, not in your change: this module has no per-line "
+        "exemption on purpose, so raise it against the guard. The paragraph "
+        "beginning `⚠️ FALSE POSITIVES THIS GUARD IS KNOWN TO PRODUCE` in this "
+        "module's docstring names those three shapes and, for each, a rewrite "
+        "that is harmless — and that fixes NOTHING, which is why it is there "
+        "and not here.\n"
+        "⛔ If it IS a reference: reflow so it sits on ONE line; the "
+        "surrounding prose can wrap wherever you like. That is the only fix — "
+        "going green any other way leaves it exactly as invisible as it is "
+        "now.\n"
+        "⚠️ And it restores exactly one property: the spelling AS WRITTEN "
         "becomes greppable. If the reference is a PARTIAL path, grepping the "
         "full tracked path still will not return this site — and it may return "
         "OTHER files, so a sweep reads a non-empty result as coverage it does "
         "not have. The reflow is the floor here, not the ceiling.\n"
-        "⛔ A reflow is the only fix. Going green any other way leaves the "
-        "reference exactly as invisible as it is now.\n"
-        "⚠️ If this fired on something that is NOT a reference — a directory "
-        "listing, two unrelated list items, a sentence whose last word ran "
-        "into a filename — then there is nothing to reflow and the report is "
-        "wrong. That is a defect in THIS GUARD, not in your change, and this "
-        "module has no per-line exemption on purpose, so raise it against the "
-        "guard.\n"
         + "\n".join(
             f"    {path}:\n" + "\n".join(f"      {hit}" for hit in hits)
             for path, hits in sorted(offenders.items())))
@@ -927,7 +974,7 @@ def test_extensions_are_derived_and_longest_first() -> None:
 def test_extensionless_paths_are_tokenised_too() -> None:
     """The class the first version could not see at all.
 
-    43 tracked files have no usable extension (`Makefile`, eight `Dockerfile`s,
+    43 tracked files have no usable extension (`Makefile`, nine `Dockerfile`s,
     `LICENSE`, the `.gitignore` family, `components/da-tools/app/VERSION`,
     `tests/rulepacks/vm_engine_version`, …). An extension-anchored pattern never
     produces them as tokens, so a wrapped reference to one was not "let through
