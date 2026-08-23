@@ -25,6 +25,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 _TOOLS = REPO_ROOT / "scripts" / "tools"
 for _p in (str(_TOOLS), str(_TOOLS / "lint"), str(_TOOLS / "dx")):
@@ -273,6 +275,28 @@ class TestAllThreeConsumers:
             "the breakdown dropped a declared subdirectory silently; "
             "`--sync-counts` prints it, so the line would just vanish. "
             "Got: %r" % (breakdown,))
+
+    def test_a_new_counted_subdirectory_must_be_categorised_not_guessed(
+            self, tmp_path, monkeypatch):
+        """⛔ The tool map is a shipped document; a guess belongs to nobody.
+
+        `gather_tools` follows `COUNT_SUBDIRS` since #1511, which made
+        `get_tool_category`'s old `.get(subdir, "dx")` fallback reachable.
+        Measured before it was closed: a fourth declared subdirectory's
+        tools were filed under `dx` and written into tool-map.md with
+        nothing said. Declaring a subdirectory and categorising it are now
+        one edit, not one edit and a silent default.
+        """
+        _checker, _writer, generator = self._consumers(tmp_path, monkeypatch)
+        extra = tmp_path / "scripts" / "tools" / "zzscope"
+        extra.mkdir()
+        (extra / "cut_release.py").write_text(_STUB, encoding="utf-8",
+                                              newline="\n")
+        monkeypatch.setattr(tc, "COUNT_SUBDIRS",
+                            tc.COUNT_SUBDIRS + ("zzscope",))
+
+        with pytest.raises(KeyError, match="zzscope"):
+            generator.gather_tools()
 
     def test_a_repeated_subdirectory_is_not_counted_twice(
             self, tmp_path, monkeypatch):

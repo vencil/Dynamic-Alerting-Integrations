@@ -100,10 +100,32 @@ def extract_tool_description(filepath: Path) -> str:
 
 
 def get_tool_category(name: str, subdir: str) -> str:
-    """Determine category from subdirectory location."""
+    """Determine category from subdirectory location.
+
+    ⛔ #1511: this used to end `SUBDIR_CATEGORY.get(subdir, "dx")`. That
+    fallback was unreachable while `gather_tools` walked a hard-coded
+    three-name tuple; it became reachable when the walk started following
+    `_lib_toolcount.COUNT_SUBDIRS`. Measured with a fourth declared
+    subdirectory: its tools were filed under `dx` and written into
+    tool-map.md — a shipped document — with nothing said.
+
+    A new counted subdirectory needs a category decided by a person, so
+    refuse rather than guess. The tuple already forces one edit (see
+    `test_a_new_tool_subdirectory_cannot_be_dropped_in_silence`); this
+    makes the second edit unavoidable instead of silently defaulted.
+    ⚠️ Behaviour today is unchanged: every member of `COUNT_SUBDIRS` is
+    in `SUBDIR_CATEGORY`, so this branch is still not taken.
+    """
     if subdir == "dx" and name in DX_AUTOMATION:
         return "dx"
-    return SUBDIR_CATEGORY.get(subdir, "dx")
+    if subdir not in SUBDIR_CATEGORY:
+        raise KeyError(
+            f"{name}: no tool-map category for subdirectory {subdir!r}. "
+            f"It is counted (COUNT_SUBDIRS) but unmapped here, so its "
+            f"tools would be filed under 'dx' in a shipped document. Add "
+            f"{subdir!r} to SUBDIR_CATEGORY and CATEGORY_HEADERS/"
+            f"CATEGORY_ORDER, or drop it from COUNT_SUBDIRS.")
+    return SUBDIR_CATEGORY[subdir]
 
 
 def gather_tools() -> dict:
