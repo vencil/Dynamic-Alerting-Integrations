@@ -199,6 +199,12 @@ def _stub_result(errors=(), infos=()):
     }
 
 
+# Sources read once for the citation guard at the end of this file.
+GATE_SRC = (REPO_ROOT / "scripts" / "tools" / "lint"
+            / "check_threshold_reachability.py").read_text(encoding="utf-8")
+TEST_FILE_SRC = Path(__file__).read_text(encoding="utf-8")
+
+
 def _flat(*paths: str) -> dict[str, gate.KeyInfo]:
     """A synthetic face: these key paths, all at the top level of `defaults:`.
 
@@ -1268,7 +1274,9 @@ def test_the_may_be_empty_list_is_not_a_blanket_exemption():
     gate._assert_every_root_contributes(by_root)      # must NOT raise
 
 
-# ⛔ `test_the_pin_matches_what_the_real_repo_actually_has` was DELETED here
+# ⛔ test_the_pin_matches_what_the_real_repo_actually_has was DELETED here
+# (un-backticked deliberately — see
+# test_every_test_name_this_module_cites_actually_exists)
 # (#1434), and this note is what stops it being written again. It asserted
 # `pin == the roots the defaults scan reached`, having first called
 # `_defaults_faces()` — which enforces that same equality in both directions
@@ -1440,6 +1448,16 @@ def test_every_scanned_root_is_wired_to_the_fifth_floor_through_the_real_entry(
         monkeypatch.setattr(gate, "_DEFAULTS_ARTIFACT_READ_FLOOR", 0)
         monkeypatch.setattr(gate, "_assert_keys_floor", lambda *_a, **_k: None)
         monkeypatch.setattr(gate, "_assert_shipped_roots_intact",
+                            lambda *_a, **_k: None)
+        # ⛔ The SIXTH floor stands down here too, and it has to: it runs
+        # before the fifth and, for a shipped root, catches the same zeroed-keys
+        # input first (measured — this test failed on
+        # `components/threshold-exporter/config/conf.d` with the sixth floor's
+        # message rather than the fifth's). That is precisely the shadowing this
+        # docstring says has to be probed from both sides, and standing it down
+        # is what keeps the loop a statement about the FIFTH floor. The sixth
+        # floor's own wiring is pinned separately below. (#1458)
+        monkeypatch.setattr(gate, "_assert_loader_readable_floor",
                             lambda *_a, **_k: None)
 
         def _empty_under_victim(path, _victim=victim, _real=real_read):
@@ -2138,9 +2156,28 @@ def test_the_call_site_hands_the_witness_the_tracked_scan_not_the_exempt_set(
 #     `test_the_schema_witness_is_silent_on_the_real_tree` fail on its
 #     independent recount (17 vs 16) — but the floor itself is not; the two
 #     were disclosed as one item and only one of them was true.
-#   * the AST assertion that the witness runs after the four floors. Measured
-#     by reordering: running it first still catches the attack; what the order
-#     buys is message quality.
+#   * (NOW GUARDED — #1458 blind review, round 4) the witness's position.
+#     There is still no AST assertion; the CONSEQUENCE is pinned behaviourally
+#     instead, once per floor, by
+#     `test_every_floor_that_runs_before_the_witness_is_still_heard_over_it`,
+#     and for the loader-readable floor's real message by
+#     `test_the_schema_witness_speaks_last_so_a_floor_is_heard_first`. Leaving
+#     the old disclosure here would cost the next reader a guard they already
+#     have, which is the failure this block warns about above.
+#   * the order of the floors AMONG THEMSELVES — measured, and NOT an
+#     equivalence. `_assert_every_root_contributes` and
+#     `_assert_every_root_stays_loader_readable` both raise on one input (a
+#     root whose `_defaults.yaml` was renamed AND whose `defaults:` section was
+#     renamed — #1458's two moves at once), with different messages, so
+#     swapping them changes which diagnosis the caller reads. The swap is green
+#     today. Left unguarded on purpose: the witness is the case #1443 is about,
+#     and pinning every pairwise order would freeze a call sequence that
+#     legitimately grows. ⚠️ An earlier wording called this pair an EQUIVALENT
+#     mutation because "their domains do not overlap"; that argument was wrong
+#     — the `continue` it rested on hands over one arm, not both.
+#   * the witness's threshold BOUNDARY. Replacing `judged < ...` with
+#     `judged <= ...` survives: every rig drives `judged` to 0, far under the
+#     floor, so nothing exercises `judged == _DEFAULTS_ARTIFACT_FLOOR`.
 #   * the assertion that the gate calls the sibling's judgement rather than a
 #     private copy. Measured: substituting an inline copy of
 #     `defaults_doc_violations` into this gate leaves BOTH modules at baseline
@@ -4792,3 +4829,822 @@ def test_every_floor_names_its_own_ticket_because_the_banner_cannot():
     assert "names the floor and its ticket" in banner, (
         "the banner no longer points at the line that does know — without that "
         "pointer, dropping the ticket just removed information", banner)
+
+
+# ── SIXTH floor: the loader-readable half of a root (#1458) ─────────────────
+#
+# The defect these cover is not "a floor is too low"; it is that every floor in
+# this module counts files the RUNNING EXPORTER may never open. `git mv
+# _defaults.yaml _defaults-legacy.yaml` leaves the artifact count, the wide key
+# count and every global floor exactly where they were, and stops the platform
+# loading a single declaration in that tree. Measured on the ticket, and again
+# here (see the control-group test at the end of this block).
+
+
+def test_the_loader_readable_predicate_is_exactly_the_loaders_test():
+    """The predicate must be EQUALITY, not the wide prefix its sibling uses.
+
+    ⛔ Behaviour table only — deliberately NOT a grep of `config_hierarchy.go`.
+    This repo measured (#1448 blind review) that a Python guard asserting things
+    about Go source text goes red on legitimate Go refactors and states
+    something false when it does. What is pinned here is that
+    `_is_loader_readable_defaults` and `_is_defaults_artifact` DISAGREE on
+    exactly the names the loader skips — if someone "unifies" them, the sixth
+    floor still runs and can no longer fire.
+    """
+    reads = ["_defaults.yaml", "_defaults.yml", "_DEFAULTS.YAML", "_Defaults.Yml"]
+    skips = ["_defaults-legacy.yaml", "_defaults.bak.yaml", "_defaults2.yaml",
+             "_defaults-multidb.yaml", "defaults.yaml", "_defaults.yaml.bak"]
+    for name in reads:
+        assert gate._is_loader_readable_defaults(name), name
+        assert gate._is_defaults_artifact(name), (name, "sibling must agree here")
+    for name in skips:
+        assert not gate._is_loader_readable_defaults(name), name
+    # ⛔ And the disagreement is the point: these are the names the WIDE
+    # predicate keeps counting while the loader ignores them. If this set ever
+    # empties, the two predicates have been merged and the floor is dead code.
+    divergent = [n for n in skips if gate._is_defaults_artifact(n)]
+    assert divergent, (
+        "the two predicates no longer disagree anywhere — merging them removes "
+        "the sixth floor's reason to exist without removing its code")
+
+
+def test_the_loader_readable_floor_fires_where_the_wide_floor_stays_quiet():
+    """The measurement that justifies a sixth floor, not just an assertion.
+
+    Same input, both floors: the shipped root keeps 2 artifacts and 19 keys
+    (so `_assert_shipped_roots_intact` is satisfied), while zero of them is a
+    name the exporter opens.
+    """
+    root = "components/threshold-exporter/config/conf.d"
+    by_root = {r: [] for r in gate._SHIPPED_CONFD_ROOTS}
+    by_root[root] = [
+        (root + "/_defaults-legacy.yaml", _flat(*[f"k{i}" for i in range(8)])),
+        (root + "/examples/_defaults-multidb.yaml",
+         _flat(*[f"m{i}" for i in range(11)])),
+    ]
+    for other, (min_a, min_k, _why) in gate._SHIPPED_CONFD_ROOTS.items():
+        if other == root:
+            continue
+        by_root[other] = [(other + "/_defaults.yaml",
+                           _flat(*[f"x{i}" for i in range(max(min_k, 1))]))
+                          ] * max(min_a, 1)
+
+    # The wide floor is quiet — this is the "before", measured not assumed.
+    gate._assert_shipped_roots_intact(by_root)
+    # The narrow one is not.
+    with pytest.raises(gate._GateViolation) as exc:
+        gate._assert_loader_readable_floor(by_root)
+    msg = str(exc.value)
+    assert "WILL ACTUALLY READ" in msg
+    assert "2 artifact(s) / 19 key(s)" in msg, (
+        "the message must state the wide count too, or the reader cannot tell "
+        "why the sibling floor is silent")
+    assert "RENAMED" in msg
+
+
+def test_every_root_stays_loader_readable_catches_the_ticket_reproduction():
+    """#1458's own attack was on a bench fixture, which no shipped floor covers.
+
+    ⛔ This arm exists because the sibling floor above is NOT enough: the
+    ticket's measured `git mv` was under `tests/e2e-bench/fixture/synthetic-v1`,
+    a root with 1 key out of 70 against a global floor of 60 — ten keys of
+    slack, so its whole contribution can vanish inside the rounding.
+    """
+    victim = "tests/e2e-bench/fixture/synthetic-v1/conf.d"
+    assert victim in gate._DEFAULTS_CONFD_ROOTS, "probe root must be pinned"
+    all_by_root = {
+        r: [(r + "/_defaults.yaml", _flat("k"))]
+        for r in gate._DEFAULTS_CONFD_ROOTS}
+    # Control: the healthy shape is silent.
+    gate._assert_every_root_stays_loader_readable(all_by_root)
+
+    all_by_root[victim] = [(victim + "/_defaults-legacy.yaml", _flat("k"))]
+    with pytest.raises(gate._GateViolation) as exc:
+        gate._assert_every_root_stays_loader_readable(all_by_root)
+    msg = str(exc.value)
+    assert victim in msg
+    assert "_defaults-legacy.yaml" in msg, "name the file, not just the root"
+    assert "1458" in msg
+
+
+def test_a_root_absent_entirely_is_left_to_the_fifth_floor():
+    """Shadowing, probed from the other side.
+
+    A vanished root must NOT be reported by the sixth floor: the fifth floor
+    has a more specific message for it (tree moved / deleted / stopped matching
+    the predicate), and two floors answering the same input is how a message
+    that fits worse ends up being the one the maintainer reads.
+    """
+    all_by_root = {
+        r: [(r + "/_defaults.yaml", _flat("k"))]
+        for r in gate._DEFAULTS_CONFD_ROOTS}
+    del all_by_root["tests/golden/fixtures/l0-only/conf.d"]
+    gate._assert_every_root_stays_loader_readable(all_by_root)
+
+
+def test_the_loader_readable_exemption_list_is_empty_and_not_needed():
+    """Non-vacuity: the floor must have something to be true of.
+
+    ⛔ An exemption list that grows is how this floor dies quietly, so its
+    emptiness is asserted rather than assumed — and asserted TOGETHER with the
+    fact that makes emptiness affordable: every pinned root really does carry a
+    loader-readable `_defaults.yaml` today. If a legitimate case ever needs an
+    entry, this test is the place that has to change with it, in the same
+    commit, with the reason.
+    """
+    assert gate._ROOTS_WITHOUT_LOADER_READABLE_DEFAULTS == frozenset()
+
+    _generators, artifacts = gate._defaults_faces()
+    by_root: dict[str, list[str]] = {}
+    for face in artifacts:
+        rel = gate._artifact_rel(face)
+        if rel is None:
+            continue
+        root = gate.conf_d_root(rel)
+        if root is not None:
+            by_root.setdefault(root, []).append(rel.rsplit("/", 1)[-1])
+    assert by_root, "the scan found no roots — this test would pass vacuously"
+    barren = sorted(r for r, names in by_root.items()
+                    if not any(gate._is_loader_readable_defaults(n) for n in names))
+    assert barren == [], (
+        "these roots hold `_defaults*` files that the exporter will never "
+        "open; either that is a defect to fix or they need an entry in "
+        "_ROOTS_WITHOUT_LOADER_READABLE_DEFAULTS with a reason", barren)
+
+
+def test_both_new_floors_are_reached_through_the_real_entry(monkeypatch):
+    """Wiring, not just behaviour — the failure mode that keeps recurring here.
+
+    ⛔ Each floor is isolated by standing the OTHER one down, because they
+    shadow: the shipped-root arm runs first and catches the shipped root's
+    input before the per-root arm sees it. Measured — the first version of this
+    test asserted the per-root message and got the shipped-root one. A probe
+    that does not stand its neighbour down proves the neighbour works.
+    """
+    real_pred = gate._is_loader_readable_defaults
+
+    def _nothing_is_loader_readable(name, _r=real_pred):
+        return False if name.lower() == "_defaults.yaml" else _r(name)
+
+    # (1) The per-root arm, with the shipped-root arm stood down.
+    monkeypatch.setattr(gate, "_assert_loader_readable_floor",
+                        lambda *_a, **_k: None)
+    monkeypatch.setattr(gate, "_is_loader_readable_defaults",
+                        _nothing_is_loader_readable)
+    with pytest.raises(gate._GateViolation) as exc:
+        gate._defaults_faces()
+    msg = str(exc.value)
+    assert "conf.d root(s)" in msg
+    assert msg.count("/conf.d") > 1, (
+        "the loop must walk the pin, not one hard-coded root", msg)
+    assert "1458" in msg
+    monkeypatch.undo()
+
+    # (2) The shipped-root arm, with the per-root arm stood down.
+    monkeypatch.setattr(gate, "_assert_every_root_stays_loader_readable",
+                        lambda *_a, **_k: None)
+    monkeypatch.setattr(gate, "_is_loader_readable_defaults",
+                        _nothing_is_loader_readable)
+    with pytest.raises(gate._GateViolation) as exc:
+        gate._defaults_faces()
+    assert "WILL ACTUALLY READ" in str(exc.value)
+    monkeypatch.undo()
+
+    # Control: nothing patched, the real tree is clean through the real entry —
+    # so both raises above are the probe's doing, not a broken repo.
+    gate._defaults_faces()
+
+
+def test_the_loader_readable_floor_numbers_have_slack_and_are_not_zero():
+    """The NUMBERS in `_LOADER_READABLE_FLOORS`, not just the mechanism.
+
+    ⛔ Added because the mechanism shipped with its values unguarded and the
+    gap was measured, not guessed: dropping the exporter root's key floor from
+    6 to 0 — which silently deletes that root's protection while leaving every
+    line of the floor in place — turned NOTHING in this file red. That is the
+    same shape as every other "the guard exists, its threshold does not" defect
+    this module has paid for.
+
+    A bracket rather than an equality, for the reason the sibling floors state:
+    an exact number would go red on a legitimate edit that ADDS a key, so
+    maintainers would learn to edit the table. What is pinned is the two
+    properties a floor has to have —
+
+      * not zero (a floor of 0 is not a floor), and
+      * STRICTLY below today's measured count (slack, so a legitimate removal
+        of one key is not a CI incident and nobody learns to lower it)
+
+    — with the right-hand side DERIVED from the real scan, so this test cannot
+    drift from the tree it is about.
+
+    ⚠️ A root that legitimately declares no keys keeps `min_keys == 0`; the
+    bracket cannot apply to it, and demanding one would force a fake key into a
+    shipped example tree. Its artifact count is what guards it, exactly as the
+    sibling table says.
+    """
+    _generators, artifacts = gate._defaults_faces()
+    measured: dict[str, tuple[int, int]] = {}
+    for face, keys in artifacts.items():
+        rel = gate._artifact_rel(face)
+        if rel is None:
+            continue
+        root = gate.conf_d_root(rel)
+        if root not in gate._LOADER_READABLE_FLOORS:
+            continue
+        if not gate._is_loader_readable_defaults(rel.rsplit("/", 1)[-1]):
+            continue
+        n_a, n_k = measured.get(root, (0, 0))
+        measured[root] = (n_a + 1, n_k + len(keys))
+
+    assert set(measured) == set(gate._LOADER_READABLE_FLOORS), (
+        "every root in the table must actually be measurable, or this test "
+        "passes vacuously for the ones that are not",
+        {"in table": sorted(gate._LOADER_READABLE_FLOORS),
+         "measured": sorted(measured)})
+
+    for root, (min_a, min_k, _why) in sorted(gate._LOADER_READABLE_FLOORS.items()):
+        got_a, got_k = measured[root]
+        assert 1 <= min_a <= got_a, (
+            f"{root}: artifact floor {min_a} against {got_a} measured", root)
+        if got_k == 0:
+            assert min_k == 0, (
+                f"{root}: declares no loader-readable keys today, so a "
+                f"non-zero key floor of {min_k} would be unsatisfiable")
+            continue
+        assert 0 < min_k < got_k, (
+            f"{root}: key floor {min_k} against {got_k} measured — a floor of "
+            f"0 is not a floor, and a floor equal to today's count has no "
+            f"slack, which is what teaches people to edit the table")
+
+
+def _defined_test_names(src: str) -> set[str]:
+    """Every `def test_...` in a source text."""
+    import re as _re
+    return set(_re.findall(r"^def (test_\w+)", src, _re.M))
+
+
+def _broken_citations(
+    sources: tuple[tuple[str, str], ...], defined: set[str],
+) -> list[tuple[str, int, str]]:
+    """Single-line backtick citations of test names that do not resolve.
+
+    Extracted so the guard below and its POSITIVE CONTROL run the same
+    code. See `test_the_citation_guard_can_actually_fail` for why that
+    matters.
+    """
+    import re as _re
+    broken: list[tuple[str, int, str]] = []
+    for label, src in sources:
+        for lineno, line in enumerate(src.splitlines(), 1):
+            for cited in _re.findall(r"`(test_\w+)`", line):
+                # A citation of a test FILE is a different thing and resolves
+                # by path, not by function name.
+                if cited.endswith("_py") or f"{cited}.py" in line:
+                    continue
+                if cited not in defined:
+                    broken.append((cited, lineno, label))
+    return broken
+
+
+def test_the_citation_guard_can_actually_fail():
+    """Positive control: feed the matcher a broken citation, demand a report.
+
+    ⛔ Surviving mutation (B-tier, mutation review round 3): emptying the
+    guard's source list — so it scans nothing at all — left it GREEN, and
+    so did narrowing the pattern until it matched nothing. A guard whose
+    only assertion is `not broken` is satisfied perfectly by a guard that
+    cannot see anything, and this module's whole history is guards that
+    were quiet for the wrong reason (`_tracked_paths`' seam note lists two
+    more of the same shape).
+
+    ⚠️ The bogus name is ASSEMBLED at runtime rather than written out.
+    Spelling it inside backticks in this file would be a real unresolved
+    citation, and the guard would correctly turn red on its own control.
+    """
+    fake = "test_" + "this_name_is_assembled_so_it_is_not_a_citation"
+    defined = _defined_test_names(TEST_FILE_SRC)
+    assert fake not in defined, "the probe name must not accidentally exist"
+
+    synthetic = "# a docstring claiming coverage: " + chr(96) + fake + chr(96)
+    broken = _broken_citations((("synthetic", synthetic),), defined)
+    assert [c for c, _l, _s in broken] == [fake], (
+        "the matcher must report a single-line backtick citation of a test "
+        "that does not exist — without this the real guard passes whenever "
+        "it happens to be looking at nothing", broken)
+
+    # ...and it must stay silent on a name that DOES resolve, or "reports
+    # something" would be all this control proves.
+    real = sorted(defined)[0]
+    ok = "# " + chr(96) + real + chr(96)
+    assert _broken_citations((("synthetic", ok),), defined) == [], (
+        "a citation that resolves must not be reported", real)
+
+    # The convention itself: plain text is a MENTION, not a citation.
+    plain = "# " + fake + " was deleted in this PR"
+    assert _broken_citations((("synthetic", plain),), defined) == [], (
+        "only backticked names are citations — that distinction is what "
+        "lets a comment record a removed test without an allowlist")
+
+
+def test_every_test_name_this_module_cites_actually_exists():
+    """A prose claim that names a test must name a REAL one.
+
+    ⛔ The defect this catches is not hypothetical and not rare — it is the
+    third instance in one working session. `_is_loader_readable_defaults`'s
+    docstring cited test_loader_readable_predicate_mirrors_the_go_test — no
+    backticks, per the convention this guard defines below —
+    which never existed, and the sentence around it also over-claimed what the
+    (differently-named) real test does. Two sibling PRs in the same batch each
+    carried one: a docstring saying a boundary was "pinned by the regression
+    tests in the README" where the README names no test, and one saying a test
+    pins the call site when it pins the callee.
+
+    Why it matters here specifically: this module's guard rails are load-
+    bearing prose. Someone deciding whether it is safe to widen a predicate
+    reads "X pins the pair", greps for X, finds nothing — and now has to
+    reconstruct from scratch what is actually guarded, at the exact moment the
+    comment was supposed to save them that. A citation that does not resolve is
+    worse than no citation: it asserts coverage that is not there.
+
+    ⚠️ DELIBERATELY UNDER-INCLUSIVE, and that is the whole design. It only
+    considers names written inside backticks ON ONE LINE. This module wraps
+    long identifiers across comment lines routinely (`test_the_index_listing_is
+    _a_real_seam_on_both_derivations` spans two), and a matcher that tried to
+    rejoin them would guess — producing false reds whose message states
+    something untrue, which is the failure mode this file has paid for more
+    than once (#1448). Skipping the ambiguous cases keeps every red this test
+    produces literally true. It catches the single-line citation, which is the
+    shape that has actually gone wrong.
+    """
+    defined = _defined_test_names(TEST_FILE_SRC)
+    assert defined, "no tests discovered — this guard would pass vacuously"
+
+    broken = _broken_citations(
+        (("check_threshold_reachability.py", GATE_SRC),
+         ("test_check_threshold_reachability.py", TEST_FILE_SRC)),
+        defined)
+
+    assert not broken, (
+        "prose in this module cites test(s) that do not exist — either the "
+        "test was renamed and the citation was not, or the citation was "
+        "written for a test that was never added. Both mean the sentence "
+        "around it is claiming coverage nobody can find.\n"
+        "  ⛔ IF THE NAME IS ABSENT ON PURPOSE — recording that a test was "
+        "deleted, or quoting a citation that turned out to be wrong — write "
+        "it WITHOUT backticks. Backticks are what make it a CITATION; plain "
+        "text is a MENTION. That distinction is the whole convention, and it "
+        "needs no allowlist to maintain",
+        [f"{label}:{lineno} cites `{cited}`" for cited, lineno, label in broken])
+
+
+def _healthy_loader_readable_by_root() -> dict[str, list]:
+    """A `by_root` every entry of `_LOADER_READABLE_FLOORS` is satisfied by."""
+    by_root: dict[str, list] = {r: [] for r in gate._SHIPPED_CONFD_ROOTS}
+    for root, (min_a, min_k, _why) in gate._LOADER_READABLE_FLOORS.items():
+        n_files = max(min_a, 1)
+        # Spread the required keys over the required files, with one spare
+        # so the fixture itself is not sitting exactly on the floor.
+        per_file = [_flat(*[f"{root}-f{i}-k{j}" for j in range(min_k + 1)])
+                    if i == 0 else _flat()
+                    for i in range(n_files)]
+        by_root[root] = [(f"{root}/_defaults.yaml" if i == 0
+                          else f"{root}/sub{i}/_defaults.yaml", keys)
+                         for i, keys in enumerate(per_file)]
+    return by_root
+
+
+@pytest.mark.parametrize("root", sorted(gate._LOADER_READABLE_FLOORS))
+def test_the_loader_readable_floor_visits_every_root_in_its_table(root):
+    """Each entry of the table must be enforced, not just the first one.
+
+    ⛔ Surviving mutations (B-tier, mutation review round 3): iterating only
+    `sorted(...)[:1]` — and, separately, skipping one root — left the suite
+    green. Every existing test breaks the SAME root (the exporter's), which
+    happens to sort first, so a loop that stops after one iteration answers
+    all of them correctly.
+
+    A table with three entries and one enforced entry is two silent roots
+    wearing a floor's name, which is the "the guard exists, its threshold
+    does not" shape this module has paid for repeatedly.
+    """
+    healthy = _healthy_loader_readable_by_root()
+    gate._assert_loader_readable_floor(healthy)  # control: nothing fires
+
+    broken = _healthy_loader_readable_by_root()
+    # Rename every loader-readable file under THIS root only — #1458's
+    # attack, which takes the narrow count to 0/0 while the wide count is
+    # untouched.
+    broken[root] = [(rel.replace("_defaults.yaml", "_defaults-legacy.yaml"), keys)
+                    for rel, keys in broken[root]]
+    with pytest.raises(gate._GateViolation) as exc:
+        gate._assert_loader_readable_floor(broken)
+    assert root in str(exc.value), (
+        "the violation must name the root that broke", str(exc.value)[:400])
+
+
+@pytest.mark.parametrize("root", sorted(gate._DEFAULTS_CONFD_ROOTS))
+def test_every_pinned_root_is_actually_visited_by_the_rename_arm(root):
+    """Same coverage question for the twelve-root arm.
+
+    ⛔ Surviving mutation (B-tier): skipping a root in
+    `_assert_every_root_stays_loader_readable`'s loop left the suite green —
+    the only root any existing test breaks is `synthetic-v1` (the ticket's
+    own reproduction). A loop that skips any OTHER root still answers that
+    test correctly, and this arm exists precisely because the roots nobody
+    thinks about are the ones the shipped floors do not cover.
+    """
+    healthy = {r: [(r + "/_defaults.yaml", _flat("k"))]
+               for r in gate._DEFAULTS_CONFD_ROOTS}
+    gate._assert_every_root_stays_loader_readable(healthy)  # control
+
+    broken = dict(healthy)
+    broken[root] = [(root + "/_defaults-legacy.yaml", _flat("k"))]
+    with pytest.raises(gate._GateViolation) as exc:
+        gate._assert_every_root_stays_loader_readable(broken)
+    assert root in str(exc.value), (
+        "the violation must name the root that broke", str(exc.value)[:400])
+
+
+def test_the_loader_readable_floor_needs_both_halves_not_either():
+    """`artifacts >= floor AND keys >= floor`, not `OR`.
+
+    ⛔ Surviving mutation (A-tier): flipping that `and` to `or` left the
+    suite green. Every existing breach takes BOTH counts to zero at once
+    (the #1458 rename removes the file, so its keys go with it), and either
+    operator reports that identically. The shapes that separate them are the
+    one-sided ones, and both are reachable:
+
+      * keys short, artifacts fine — a `_defaults.yaml` that stays put while
+        its `defaults:` block is emptied out;
+      * artifacts short, keys fine — a root whose floor is about FILES (the
+        recipe examples declare no keys at all, so `min_keys` is 0 there and
+        the artifact count is the only thing guarding it).
+
+    Under `or` each of these satisfies the other half and is waved through.
+    """
+    # (a) keys short, artifacts satisfied — the exporter root, whose floor
+    #     is 1 artifact / 6 keys.
+    keys_short = _healthy_loader_readable_by_root()
+    root = "components/threshold-exporter/config/conf.d"
+    min_a, min_k, _why = gate._LOADER_READABLE_FLOORS[root]
+    assert min_a >= 1 and min_k >= 1, (
+        "this probe needs a root whose floor constrains both", root)
+    keys_short[root] = [(root + "/_defaults.yaml",
+                         _flat(*[f"k{i}" for i in range(min_k - 1)]))]
+    with pytest.raises(gate._GateViolation) as exc:
+        gate._assert_loader_readable_floor(keys_short)
+    assert root in str(exc.value)
+
+    # (b) artifacts short, keys satisfied — the recipe examples, floor
+    #     2 artifacts / 0 keys, so any file count below 2 breaches while
+    #     the key half is trivially true.
+    files_short = _healthy_loader_readable_by_root()
+    rroot = "rule-packs/recipes/examples/conf.d"
+    rmin_a, rmin_k, _rwhy = gate._LOADER_READABLE_FLOORS[rroot]
+    assert rmin_a >= 2 and rmin_k == 0, (
+        "this probe needs a root guarded by its FILE count alone", rroot)
+    files_short[rroot] = [(rroot + "/_defaults.yaml", _flat("k"))]
+    with pytest.raises(gate._GateViolation) as exc:
+        gate._assert_loader_readable_floor(files_short)
+    assert rroot in str(exc.value)
+
+
+def test_the_breach_message_says_which_numbers_are_now_and_which_are_the_floor():
+    """Two number pairs in one sentence; swapping them stays true-looking.
+
+    ⛔ Surviving mutation (A-tier): exchanging `{len(found)}/{n_keys}` with
+    `{min_artifacts}/{min_keys}` in the violation text left the suite green.
+    The existing assertions check the WIDE pair and some prose, and a
+    swapped message is still a grammatical English sentence with four
+    plausible numbers in it — so the only reader who notices is the
+    maintainer who acts on it, at the moment they are trying to work out
+    whether the tree shrank or the table grew.
+    """
+    root = "components/threshold-exporter/config/conf.d"
+    min_a, min_k, _why = gate._LOADER_READABLE_FLOORS[root]
+    by_root = _healthy_loader_readable_by_root()
+    by_root[root] = [(root + "/_defaults-legacy.yaml",
+                      _flat(*[f"k{i}" for i in range(min_k + 2)]))]
+
+    with pytest.raises(gate._GateViolation) as exc:
+        gate._assert_loader_readable_floor(by_root)
+    msg = str(exc.value)
+    assert f"{0} artifact(s) / {0} key(s) THAT THE EXPORTER" in msg, (
+        "the FIRST pair is what the tree contributes right now", msg[:400])
+    assert f"floor of {min_a} artifact(s) / {min_k} key(s)" in msg, (
+        "the SECOND pair is the floor from the table", msg[:400])
+    assert f"floor of {0} artifact(s)" not in msg, (
+        "swapped: the floor clause is carrying the measured numbers", msg[:400])
+
+
+def test_the_two_loader_floors_are_bracketed_by_what_the_sibling_cannot_see():
+    """The NUMBERS, bounded below by the erosion the wide floor is blind to.
+
+    ⛔ The bracket that shipped with this table (`0 < min_k < measured`)
+    could not see a mutation from 6 to 1: a floor of 1 still catches #1458's
+    rename, because the rename takes the count to 0. What it stops catching
+    is EROSION — keys disappearing out of a `_defaults.yaml` that stays
+    where it is — and that is the half of this floor's job the sibling
+    cannot do.
+
+    So the lower bound is derived from the sibling rather than from a
+    percentage of today's count (a percentage is a ratchet, which #1411
+    locked this project out of):
+
+      * where a root has keys the loader will NOT read, the wide floor has
+        slack — `wide_total − wide_floor` — and erosion inside that band is
+        invisible to it. This floor has to fire first, so
+        `min_k > narrow_total − wide_slack`.
+      * where a root is entirely loader-readable, the table says in so many
+        words that this floor "mirrors its sibling entry" — there is no band
+        for it to own, and the assertion is that the mirror is intact. That
+        also pins the artifact halves, which are otherwise unconstrained
+        above 1.
+
+    ⚠️ The bound MOVES WITH THE TREE, in the same way the sibling bracket
+    does — and an earlier revision of this docstring disclosed only half of
+    that, which a blind reviewer caught. Both directions, measured:
+
+      (a) adding loader-readable keys raises `narrow_total`, so the bound
+          rises. Disclosed from the start.
+      (b) removing keys from the part of the root the loader does NOT read
+          shrinks the sibling's slack, which raises the bound too. NOT
+          disclosed, and it is the surprising one: it is an edit to a file
+          this floor is not about. Measured — deleting 2 of the 11 keys in
+          `examples/_defaults-multidb.yaml` leaves the production gate at
+          rc=0 and turns this test red.
+
+    ⛔ (b) is a TRUE positive, not collateral damage. A smaller blind band
+    means the sibling tolerates less erosion, so the window in which BOTH
+    floors stay silent moves up: with slack 2 instead of 4, loader-readable
+    keys eroding 8 -> 6 leaves the wide count at exactly the sibling's floor
+    and a `min_keys` of 6 silent as well. The remedy is to RAISE the floor.
+    ⚠️ Nor is it a new maintenance burden this test invented: the same edit
+    already turns `test_the_headroom_note_states_both_directions_and_both_are_current`
+    red, because that root's blind-side key count is pinned prose already.
+    """
+    _generators, artifacts = gate._defaults_faces()
+    wide: dict[str, tuple[int, int]] = {}
+    narrow: dict[str, tuple[int, int]] = {}
+    for face, keys in artifacts.items():
+        rel = gate._artifact_rel(face)
+        if rel is None:
+            continue
+        root = gate.conf_d_root(rel)
+        if root not in gate._LOADER_READABLE_FLOORS:
+            continue
+        a, k = wide.get(root, (0, 0))
+        wide[root] = (a + 1, k + len(keys))
+        if gate._is_loader_readable_defaults(rel.rsplit("/", 1)[-1]):
+            a, k = narrow.get(root, (0, 0))
+            narrow[root] = (a + 1, k + len(keys))
+
+    assert set(narrow) == set(gate._LOADER_READABLE_FLOORS), (
+        "every root in the table must be measurable or this passes vacuously",
+        {"table": sorted(gate._LOADER_READABLE_FLOORS), "measured": sorted(narrow)})
+
+    mirrored, owned = [], []
+    for root, (min_a, min_k, _why) in sorted(gate._LOADER_READABLE_FLOORS.items()):
+        wide_a, wide_k = wide[root]
+        narrow_a, narrow_k = narrow[root]
+        sib_a, sib_k, _sw = gate._SHIPPED_CONFD_ROOTS[root]
+        if (wide_a, wide_k) == (narrow_a, narrow_k):
+            mirrored.append(root)
+            assert (min_a, min_k) == (sib_a, sib_k), (
+                f"{root} is entirely loader-readable, so the table's own "
+                f"reason for its numbers is that they mirror the sibling "
+                f"entry {(sib_a, sib_k)} — this floor owns no band of its "
+                f"own here. Got {(min_a, min_k)}; change both or neither")
+            continue
+        owned.append(root)
+        sib_slack = wide_k - sib_k
+        blind_band = narrow_k - sib_slack
+        assert blind_band < min_k <= narrow_k, (
+            f"{root}: key floor {min_k} must sit strictly above {blind_band} "
+            f"and at or below today's {narrow_k}.\n"
+            f"  Where {blind_band} comes from: {narrow_k} loader-readable "
+            f"key(s) minus the sibling floor's slack of {sib_slack} "
+            f"({wide_k} wide key(s) against its floor of {sib_k}). Erosion "
+            f"that stops at {blind_band} leaves the wide count at exactly "
+            f"{sib_k}, so the sibling stays silent — this floor is the only "
+            f"one left, and a floor at or below {blind_band} is silent too.\n"
+            f"  ⛔ TWO EDITS MOVE THIS BOUND, and only one of them is about "
+            f"this floor's subject:\n"
+            f"    (a) ADDING loader-readable keys raises {narrow_k}, so the "
+            f"bound rises. Expected; raise {min_k} in the same commit.\n"
+            f"    (b) REMOVING keys from the part of this root the loader "
+            f"does NOT read shrinks the sibling's slack, which ALSO raises "
+            f"the bound. ⚠️ That looks unrelated and is not: a smaller "
+            f"blind band means the sibling tolerates less, so the window "
+            f"where BOTH floors are silent moves up. The hole is real, and "
+            f"the remedy is to raise {min_k} — not to relax this test.\n"
+            f"  ⛔ LOWERING {min_k} IS NEVER THE REMEDY. A floor inside the "
+            f"band still catches a RENAME (which takes the count to 0) and "
+            f"stops catching keys draining out of a file that stays put, "
+            f"which is the half of this floor's job the wide one cannot do")
+        assert 1 <= min_a <= narrow_a, (
+            f"{root}: artifact floor {min_a} against {narrow_a} measured")
+
+    assert mirrored and owned, (
+        "this test needs at least one root of each kind, or half of it is "
+        "vacuous", {"mirrored": mirrored, "owned": owned})
+
+
+# ── the witness runs after every floor ───────────────────────────────────────
+
+# The assertions `_defaults_faces()` calls BEFORE the schema witness. Hand-kept
+# so the parametrisation reads; the table is held to the gate's own source by
+# `test_the_floor_table_matches_what_the_real_entry_actually_calls`, so the two
+# cannot drift.
+_FLOORS_BEFORE_THE_WITNESS = (
+    "_assert_shipped_roots_intact",
+    "_assert_loader_readable_floor",
+    "_assert_every_root_contributes",
+    "_assert_every_root_stays_loader_readable",
+    "_assert_keys_floor",
+)
+
+
+def _floors_the_real_entry_calls_before_the_witness() -> list[str]:
+    """The `_assert_*` calls in `_defaults_faces`, read off the gate's source."""
+    assert GATE_SRC.count("def _defaults_faces(") == 1
+    body = GATE_SRC.split("def _defaults_faces(", 1)[1]
+    witness = "judged = _assert_defaults_artifacts_match_schema"
+    assert witness in body, "the witness call moved or was renamed"
+    return re.findall(r"^    (_assert_\w+)\(", body.split(witness, 1)[0], re.M)
+
+
+def test_the_floor_table_matches_what_the_real_entry_actually_calls():
+    """A floor added above the witness must join the table, not slip past it.
+
+    ⛔ Without this, the parametrisation below is only as good as someone
+    remembering to extend a tuple — and the defect it exists for is EXACTLY
+    that kind of forgetting: the gate comment said "the four floors" while the
+    call list held three, then went on saying it once #1458 made it five
+    (blind review, round 4).
+    """
+    derived = _floors_the_real_entry_calls_before_the_witness()
+    assert derived, (
+        "extraction returned nothing — the regex or the anchor is stale, and a "
+        "silently empty list would make this test and the parametrised one "
+        "below vacuous together")
+    assert derived == list(_FLOORS_BEFORE_THE_WITNESS), (
+        "`_FLOORS_BEFORE_THE_WITNESS` no longer matches the calls in "
+        "`_defaults_faces`. A floor added before the witness must be added "
+        "here too, or nothing checks that the witness stays behind it.",
+        {"in_source": derived, "in_table": list(_FLOORS_BEFORE_THE_WITNESS)})
+
+
+@pytest.mark.parametrize("floor_name", _FLOORS_BEFORE_THE_WITNESS)
+def test_every_floor_that_runs_before_the_witness_is_still_heard_over_it(
+        monkeypatch, floor_name):
+    """Breach this floor AND the witness; the floor must be the one heard.
+
+    ⛔ Blind review (#1458, round 4) measured that the sibling test below —
+    which rigs the SECOND floor specifically — buys much less than its name
+    promises. Two reorderings left the whole suite green:
+
+        witness moved to just after `_assert_loader_readable_floor`
+            → 156 passed, rc=0; floors 3, 4 and 5 all lose their voice
+        witness swapped with `_assert_keys_floor` alone — the adjacent pair,
+        the one a refactor is likeliest to disturb
+            → 156 passed, rc=0; floor 5 loses its voice
+
+    Both were measured through `_defaults_faces()` by standing one floor down
+    and reading which message reached the caller: on the real code every floor
+    in the table speaks; under either reordering the witness speaks instead.
+    The property is therefore per-floor, and this is parametrised over the
+    table.
+
+    ⚠️ WHAT THIS DOES NOT PIN: the order of the floors AMONG THEMSELVES. Each
+    case stands exactly one floor down, so any permutation of the others is
+    invisible here. One such difference is measured and real — see the
+    disclosure block near the top of this file.
+
+    Vacuity: `monkeypatch.setattr` defaults to `raising=True`, so a floor this
+    table names but the gate no longer has fails here instead of dropping out.
+    """
+    sentinel = f"SENTINEL-{floor_name}"
+
+    monkeypatch.setattr(gate, "_assert_defaults_artifacts_match_schema",
+                        lambda *_a, **_k: 0)
+
+    def _this_floor_speaks(*_a, **_k):
+        raise gate._GateViolation(sentinel)
+
+    monkeypatch.setattr(gate, floor_name, _this_floor_speaks)
+
+    with pytest.raises(gate._GateViolation) as exc:
+        gate._defaults_faces()
+    msg = str(exc.value)
+    assert sentinel in msg, (
+        f"`{floor_name}` was breached and so was the witness, but the caller "
+        "did not read this floor. Either the witness now runs before it — in "
+        "which case a maintainer meets a generic count instead of this floor's "
+        "remedy — or the real entry stopped calling this floor at all.",
+        msg[:400])
+
+
+def test_the_schema_witness_speaks_last_so_a_floor_is_heard_first(monkeypatch):
+    """The loader-readable floor's REAL message survives a breached witness.
+
+    ⛔ Surviving mutation (C-tier, mutation review round 3): moving the schema
+    witness and its `_DEFAULTS_ARTIFACT_FLOOR` check out of the END of
+    `_defaults_faces` left the suite green. Its comment meanwhile states the
+    position is load-bearing — the witness would speak INSTEAD of the floors
+    on the roots they already cover, and their messages carry remedies its own
+    does not. That is a behavioural claim about WHICH diagnosis a maintainer
+    reads, and nothing enforced it.
+
+    ⛔ THE LANDING SPOT IS PART OF THE CLAIM. "To the front" has two readings
+    and they do not measure the same, so both are stated rather than one being
+    passed off as "the" result (blind review, #1458 round 4):
+
+        inserted before `_assert_shipped_roots_intact`, i.e. at the head of
+        the floor sequence              → 1 failed, 155 passed
+        inserted after `scanned = _tracked_defaults_artifacts()`, i.e. at the
+        head of the function body       → 3 failed, 153 passed
+            (the two extra were `test_an_empty_artifact_scan_is_an_error_not_a_pass`
+             and `test_every_floor_breach_is_a_violation_not_a_crash[scan]`)
+
+    ⛔ THIS TEST RIGS THE SECOND FLOOR ONLY, which is much less than its name
+    suggests; blind review measured two reorderings it does not catch. The
+    general property is covered per-floor by
+    `test_every_floor_that_runs_before_the_witness_is_still_heard_over_it`.
+    What this one adds on top is that the floor's REAL message — not a
+    sentinel — is what reaches the caller.
+
+    ⚠️ An earlier wording here claimed that swapping
+    `_assert_every_root_contributes` with
+    `_assert_every_root_stays_loader_readable` is an EQUIVALENT mutation,
+    because the latter has an explicit `continue` for an absent root "so their
+    domains do not overlap". ⛔ THAT ARGUMENT IS WRONG and the claim is false.
+    The `continue` hands over ONE arm — the root that vanished entirely. The
+    former also has a zero-keys arm, and a root whose file was renamed AND
+    whose `defaults:` section was renamed trips both; measured on that input,
+    each raises its own, different message. The swap is green today, which
+    makes it an untested behavioural difference rather than an equivalence. It
+    is disclosed near the top of this file, not guarded here.
+
+    The property, therefore: rig BOTH a floor breach and a witness breach at
+    once, and the caller must be told the floor's story — the one that names
+    the remedy and warns against lowering the number.
+    """
+    witness_calls = []
+
+    def _witness_is_starving(*_a, **_k):
+        witness_calls.append(1)
+        return 0  # below _DEFAULTS_ARTIFACT_FLOOR, so the witness would fire
+
+    assert 0 < gate._DEFAULTS_ARTIFACT_FLOOR, (
+        "the rig depends on 0 being below the floor", gate._DEFAULTS_ARTIFACT_FLOOR)
+
+    # (1) Non-vacuity: the witness really is reachable and the rig really does
+    #     trip it, with every floor left alone and the tree otherwise clean.
+    monkeypatch.setattr(gate, "_assert_defaults_artifacts_match_schema",
+                        _witness_is_starving)
+    with pytest.raises(gate._GateViolation) as exc:
+        gate._defaults_faces()
+    assert "the schema witness judged only" in str(exc.value), (
+        "precondition: the rig must be able to trip the witness on its own, "
+        "or part (2) proves nothing", str(exc.value)[:300])
+    assert witness_calls, "the witness stub was never reached in part (1)"
+    monkeypatch.undo()
+    witness_calls.clear()
+
+    # (2) The property: with a FLOOR also breached, the floor speaks.
+    real_pred = gate._is_loader_readable_defaults
+
+    def _nothing_is_loader_readable(name, _r=real_pred):
+        return False if name.lower() == "_defaults.yaml" else _r(name)
+
+    monkeypatch.setattr(gate, "_assert_defaults_artifacts_match_schema",
+                        _witness_is_starving)
+    monkeypatch.setattr(gate, "_is_loader_readable_defaults",
+                        _nothing_is_loader_readable)
+    with pytest.raises(gate._GateViolation) as exc:
+        gate._defaults_faces()
+    msg = str(exc.value)
+    assert "the schema witness judged only" not in msg, (
+        "the witness spoke INSTEAD of a floor that was also breached — it must "
+        "run LAST, so a maintainer meets the most specific diagnosis available "
+        "and the remedy warnings that go with it", msg[:400])
+    assert "WILL ACTUALLY READ" in msg, (
+        "the loader-readable floor is the one that should have spoken here",
+        msg[:400])
+    assert "LOWERING THESE NUMBERS IS NOT A REMEDY" in msg, (
+        "and its message carries a warning the witness's does not — which is "
+        "the whole reason the order was chosen", msg[:400])
+    # ⛔ MEASURED, not inferred. The three asserts above pass just as happily
+    # with no witness stub installed at all, so "both were breached at once"
+    # rested on the reader trusting part (1). The spy makes the ordering itself
+    # observable: the witness must not have been reached.
+    assert not witness_calls, (
+        "the witness RAN before the breached floor raised, so the asserts "
+        "above say nothing about order", witness_calls)
+    monkeypatch.undo()
+
+    # Control: unpatched, the real tree is clean through the real entry, so
+    # both raises above are the rig's doing rather than a broken repo.
+    gate._defaults_faces()
