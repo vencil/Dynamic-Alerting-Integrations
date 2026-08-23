@@ -53,12 +53,17 @@ Inheritance order: **L0 → L1 → L2 → L3 → tenant YAML** (later overrides 
 
 - **Dict/Map fields**: deep merge (child layer's new keys preserved, same keys overridden by child)
 - **Array/List fields**: **replace, not concat** (avoids ambiguity — "I overrode group_by, why are old values there?")
+  - ⚠️ **One exception: `_custom_alerts` uses UNION** (ADR-024 / #772) — a tenant's own list
+    **adds to** the inherited platform/domain policy recipes rather than replacing them
+    (`describe_tenant.py` overwrites that key after deep_merge).
 - **Scalar fields**: child overrides parent
 - **Null values — per-field, not a blanket rule** (#1339 split what used to be one line):
   - **The four routing fields** (`group_by` / `group_wait` / `group_interval` /
     `repeat_interval` under `_routing`): an explicit `null` **opts out of
     inheritance** and the generated route omits the field. It is the only way to
-    say so — these timing fields have no `"disable"` sentinel.
+    say so — these fields have no `"disable"` sentinel. (⚠️ `group_by` is not a timing
+    field; and `group_by: []` also causes the field to be omitted — `_grar_routes.py`
+    uses a falsy check `if group_by and isinstance(group_by, list)`, not `is not None`.)
     `_routing.receiver` and `_routing.overrides` are **excluded**: the former
     makes the tenant's entire route disappear (alerts fall through to the
     catch-all), the latter has nothing above it to opt out of.
@@ -67,6 +72,12 @@ Inheritance order: **L0 → L1 → L2 → L3 → tenant YAML** (later overrides 
     already ignores the null and falls back to the platform default; the
     diagnostic path (`/effective`, `describe_tenant`, simulate) was aligned to
     it in #1339.
+  - **Every other `_`-prefixed reserved key** (`_silent_mode` / `_profile` /
+    `_severity_dedup` / `_namespaces` …): an explicit `null` **does opt out** —
+    `deepMerge` in `pkg/config/hierarchy.go` runs `delete(result, k)` for an explicit
+    null on any `_`-prefixed key, while a non-`_` key (i.e. a threshold) only
+    `continue`s. ⚠️ That code names THIS ADR as the authority for the rule, so the rule
+    is stated here: **the test is "is it `_`-prefixed", not "is it a routing field".**
 - **⚠️ A blank value and an explicit `null` are the same thing** — listing them
   as "Null / empty values" was itself the misleading part: `mysql_connections: ~`
   and `mysql_connections:` are different syntax that YAML parses to the **same
@@ -114,20 +125,26 @@ tenants:
 effective = deep_merge(L0, L1, L2, L3, tenant_yaml)
 ```
 
-⛔ **Scope: `effective` takes ONLY the `defaults:` block of `_defaults.yaml`**, not the other
-top-level properties of `defaults:` in
+⛔ **Scope: `effective` takes ONLY the `defaults:` block of `_defaults.yaml`**, not the
+**sibling** top-level properties declared alongside `defaults:` in
 [`platform-defaults.schema.json`](../schemas/platform-defaults.schema.json) (`state_filters` /
-`optional_overrides` / `profiles` / `max_metrics_per_tenant` / `_routing*` etc.). **That schema
+`optional_overrides` / `profiles` / `max_metrics_per_tenant` / `_routing*` etc.). ⛔ They are
+`defaults:`'s **siblings, not fields underneath it** — indenting them INTO `defaults:` makes the
+whole file fail to parse (see the warning in the worked example above). **That schema
 is the authoritative list — do not start a second enumeration here.** The two unwrap
 implementations agree on this shape: `describe_tenant.py`'s `ddata.get("defaults", ddata)` and
 Go's `pkg/config.extractDefaultsBlock`.
 
-⚠️ **Two exceptions, both reachable. The merge behaviour itself is deliberate, but each
-has an open ticket on its consequences**:
+⚠️ **Known reachable exceptions (NOT exhaustive — this list is not a guarantee). The merge
+behaviour is deliberate, but the consequences each have an open ticket**:
 
-1. **A file with no `defaults:` wrapper** (the schema permits it) merges the **entire
-   document** into `effective`, siblings included. The repo already contains this shape
-   (`rule-packs/recipes/examples/conf.d/`). Rationale and the existing guard: see the
+1. **A file with no `defaults:` wrapper** merges the **entire document** into `effective`,
+   siblings included. ⚠️ The schema only admits this when **every** top-level key is on the
+   whitelist (`additionalProperties: false` + 15 fixed properties + `^_state_` / `^_routing`
+   patternProperties), so "drop the `defaults:` wrapper and write bare threshold keys" is in
+   fact rejected. The one instance in the repo is
+   `rule-packs/recipes/examples/conf.d/finance/_defaults.yaml` (its only top-level key is
+   `_custom_alerts`). Rationale and the existing guard: see the
    `PLATFORM_DOCUMENT_KEYS` comment in `blast_radius.py`. ⇒ This shape being invisible to the
    reachability gate is the subject of [#1552](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1552).
 2. **`_custom_alerts` is injected by ADR-024's UNION resolver AFTER the unwrap**
@@ -136,9 +153,16 @@ has an open ticket on its consequences**:
    `{cpu_usage, _custom_alerts, _custom_alerts_resolution}`, Go yields only `{cpu_usage}` ⇒
    **the two implementations' `effective` are different sets, so `merged_hash` differs** ⇒
    [#1549](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1549).
+3. **`defaults:` present but explicitly `null`** (the schema's `type: ["object","null"]`
+   permits it; `check_confd_schema.py` was measured to admit it): Go's type assertion
+   `m["defaults"].(map[string]any)` fails ⇒ it falls through and merges the entire document;
+   Python's `ddata.get("defaults", ddata)` returns `None` for a key that exists with a null
+   value (**not** the fallback) ⇒ `deep_merge` raises `AttributeError` and `describe_tenant`
+   crashes outright. ⇒ Not yet ticketed.
 
 ⛔ Every `_defaults.yaml` under `tests/golden/fixtures` currently has the "wrapped, zero
-siblings" shape, so the **golden parity suite structurally cannot detect either exception** —
+siblings" shape, so the **golden parity suite structurally cannot detect any of these
+exceptions** —
 do not read its green as an endorsement that the two implementations are equivalent.
 
 **Why the siblings are not merged in** (three reasons, equally load-bearing):
@@ -148,7 +172,7 @@ do not read its green as an endorsement that the two implementations are equival
    whether a defaults change is recorded as `applied`
    (`IncReloadTrigger(ReloadReasonDefaults)`) or as `shadowed` / `cosmetic`, and how many
    tenants `da_config_blast_radius_tenants_affected` reports. (The rebuild itself runs
-   `fullDirLoad` unconditionally — it is **not** gated on the hash.) The reason this ADR
+   `fullDirLoad` unconditionally — it is **not** gated on `merged_hash`.) The reason this ADR
    exists is the question above — how to avoid a reload storm. Putting `_routing_defaults`,
    which the exporter does not consume at all, inside it would record **every** tenant as
    affected on every platform routing edit — exactly the consequence that got alternative A
@@ -165,17 +189,24 @@ do not read its green as an endorsement that the two implementations are equival
 ⚠️ **This does not make those keys dead.** Each reaches tenants by another path:
 `state_filters` / `optional_overrides` are merged into `ThresholdConfig` by `pkg/config` and
 expanded per tenant at resolve time; `_routing_defaults` / `_routing_enforced` are consumed by
-the four-layer merge in `generate_alertmanager_routes.py`. (Note the asymmetry: the exporter
-does not consume `_routing_defaults`, but it **does** consume tenant-level `_routing` —
-`ResolveRouting` in `resolve.go`. That asymmetry is the mechanism behind reason 3 above.)
+the four-layer merge in `generate_alertmanager_routes.py`. (⚠️ Neither `_routing_defaults` nor
+tenant-level `_routing` reaches the exporter's `ThresholdConfig`: `ResolveRouting()` still has
+no production caller, and `types.go` states verbatim that it "is currently not called by the
+exporter", retained as a guardrail reference implementation. The mechanism behind reason 3
+above is `merge_routing_with_defaults` in `_grar_merge.py` itself, not what the exporter
+reads.)
 
-**Measured**: their application does not depend on `merged_hash` — changing only
-`state_filters.<filter>.severity` takes effect while `merged_hash` stays byte-identical.
-Neither load path is gated on the hash: in flat mode any change to a `_`-prefixed file takes
-the full-rebuild path (`isTenantOnlyChange` in `config.go`), and in hierarchical mode
-`installNewHierarchyState` runs `fullDirLoad` every time.
+**Measured**: their application does not depend on `merged_hash` — **in the wrapped shape**,
+changing only `state_filters.<filter>.severity` takes effect while `merged_hash` stays
+byte-identical (⚠️ in the wrapper-less shape the same edit moves **every** tenant's hash — see
+exception 1 above). Neither load path is gated on **`merged_hash`**: in flat mode any change to
+a `_`-prefixed file takes the full-rebuild path (`isTenantOnlyChange` in `config.go`), and in
+hierarchical mode `installNewHierarchyState` runs `fullDirLoad` every time. ⚠️ The flat path
+does have a separate per-file composite-hash no-op fast path that returns early
+(`compositeHash == prevHash` in `config.go`) — that is a **different hash**, not
+`merged_hash`.
 
-⚠️ **The cost is known and deliberate**: platform-level changes are structurally invisible to
+⚠️ **The cost is known and deliberate**: platform-level changes are **structurally invisible** to
 every consumer that takes `effective_config` / `merged_hash` as input — `GET /effective`,
 `describe_tenant`, `blast_radius`, the what-if preview (`handler_simulate.go`, Portal
 `simulate-preview.jsx`), and `da-guard`.
@@ -220,7 +251,7 @@ happens.** In the implementation, the hierarchical path's `diffAndReload` calls
 `installNewHierarchyState` **unconditionally** after `classifyAndCount`, and the first thing
 that function does is run `fullDirLoad` unconditionally. `merged_hash` decides whether the
 change is recorded as `applied` (`IncReloadTrigger`) or as `shadowed` / `cosmetic` — it does
-**not** decide the rebuild.
+**not decide the rebuild**.
 
 ### Inheritance Graph Data Structure
 
@@ -235,13 +266,22 @@ type InheritanceGraph struct {
 }
 ```
 
-When `_defaults.yaml` changes, `DefaultsToTenants` quickly identifies which tenants need `merged_hash` recomputation, avoiding full recalculation.
+⚠️ **`DefaultsToTenants` / `TenantsAffectedBy` currently have no production consumer** (every
+hit in the repo is inside `inheritance_graph.go` itself — constructor and accessor — plus
+tests). The actual reload path, `classifyAndCount`, iterates over every scanned tenant and uses
+the **reverse** map `TenantDefaults[tid]`, then skips recomputation via the per-tenant
+`merged_hash` comparison — "avoiding full recalculation" is achieved by that comparison, not by
+this forward map. The map is retained as existing structure; changing it does not change
+behaviour.
 
 ### Watch Mechanism: Maintain Periodic Scan
 
 - **Do not adopt inotify/fsnotify**: container mount event loss + kernel watch limits
 - Maintain existing periodic scan (configurable interval, default 30s)
-- Scan only recalculates hashes for files whose `stat()` changed → avoids O(n) hash computation
+- ⚠️ **"Only recalculate hashes for files whose `stat()` changed" is NOT implemented**: the
+  `priorMtimes` parameter of `scanDirHierarchical` is currently ignored (`config_hierarchy.go`
+  says verbatim `_ = priorMtimes // reserved for Phase 3`), and every file walked is hashed
+  unconditionally with `sha256.Sum256`. The benchmark numbers are the cost of hashing everything.
 
 ### Debounce
 
@@ -261,8 +301,8 @@ When `_defaults.yaml` changes, `DefaultsToTenants` quickly identifies which tena
 | Metric | Type | Labels | Description |
 |:-------|:-----|:-------|:------------|
 | `da_config_scan_duration_seconds` | histogram | — | Single periodic scan duration |
-| `da_config_reload_trigger_total` | counter | `reason` | Reload reason: source / defaults / new / delete |
-| `da_config_defaults_change_noop_total` | counter | — | Skipped reloads when merged_hash unchanged — **v2.8.0 narrows the semantics to cosmetic-only** (see Amendment 2026-04-25) |
+| `da_config_reload_trigger_total` | counter | `reason` | Reload reason, **five values**: source / defaults / new / delete / **forced** (manual trigger). ⚠️ A **different domain** from `blast_radius`'s `reason` below — that one has only the first four; `forced` is filtered out |
+| `da_config_defaults_change_noop_total` | counter | — | **Classification** count: a defaults change whose merged_hash did not move. ⚠️ **Not "rebuilds saved"** — the rebuild runs unconditionally (see the note under §Reload decision logic) — **v2.8.0 narrows the semantics to cosmetic-only** (see Amendment 2026-04-25) |
 | `da_config_defaults_shadowed_total` | counter | — | **v2.8.0 (Issue #61)** — Defaults change blocked by tenant override (split out from `da_config_defaults_change_noop_total`) |
 | `da_config_blast_radius_tenants_affected` | histogram | `reason / scope / effect` | **v2.8.0 (Issue #61)** — Per-tick distribution of affected tenants |
 
@@ -294,7 +334,7 @@ elif any ancestor _defaults.yaml changed:
 ```
 
 Implementation notes:
-- New `m.parsedDefaults` field on `ConfigManager`, atomic-swapped together with `hierarchyHashes`, caching the normalized parsed dict (`map[string]any`) of every `_defaults.yaml`. ~1 MB at 1000 tenants.
+- `m.hierarchy.parsedDefaults` and `m.hierarchy.hashes` (folded into the `hierarchyState` sub-struct as of v2.8.0; the `m.parsedDefaults` / `hierarchyHashes` names in this ADR's original text are no longer the actual field names), atomic-swapped together, caching the normalized parsed dict (`map[string]any`) of every `_defaults.yaml`. ~1 MB at 1000 tenants.
 - `populateHierarchyState` eager-parses every defaults file at cold start; `diffAndReload` only re-parses files whose hash actually moved, reusing the prior parse otherwise.
 - See `components/threshold-exporter/app/config_defaults_diff.go` and Issue #61 RFC.
 
@@ -323,7 +363,7 @@ Replace semantics are more intuitive and consistent with Helm values merge behav
 - **Directory Scanner Go code**: New inheritance graph + dual-hash + debounce logic
 - **CLI**: New `describe-tenant` command expands effective config + shows inheritance sources
 - **Tenant API**: New `GET /api/v1/tenants/{id}/effective` endpoint
-- **Schema**: `tenant-config.schema.json` upgraded to support `_defaults.yaml` structure
+- **Schema**: new `platform-defaults.schema.json` for `_defaults*.yaml`. ⚠️ **Not** an upgrade to `tenant-config.schema.json` — that file's root has only `tenants` with `additionalProperties: false` and structurally cannot express platform defaults; the routing lives in `check_confd_schema.py`
 - **Benchmark**: Thousand-tenant + multi-layer inheritance scan performance compared against the v2.7.0 planning baseline (validated)
 
 ## Related

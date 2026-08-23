@@ -300,7 +300,7 @@ func reportResourceMetrics(b *testing.B) {
 //     It DOES NOT see nested files under domain/region/env subdirs.
 //   - diffAndReload (post-A-10 path, PR #54) uses scanDirHierarchical and
 //     is what WatchLoop calls in production post-A-10. Updates
-//     hierarchyHashes + mergedHashes.
+//     m.hierarchy.hashes + m.hierarchy.mergedHashes.
 // All hierarchical benchmarks below use diffAndReload to measure the real
 // production hot path. The v2.6.0 IncrementalLoad path is left in place for
 // flat-mode callers and is already covered by the flat benchmarks in

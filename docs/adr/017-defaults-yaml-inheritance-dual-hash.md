@@ -58,16 +58,26 @@ conf.d/
 
 - **Dict/Map 欄位**：deep merge（子層新增的 key 會保留，相同 key 子層覆蓋父層）
 - **Array/List 欄位**：**replace，不 concat**（避免語意歧義 — "我覆蓋了 group_by，怎麼多出舊值？"）
+  - ⚠️ **唯一例外：`_custom_alerts` 走 UNION**（ADR-024 / #772）——租戶自己的清單**加到**
+    繼承來的平台 / domain policy recipe 上，不取代它們（`describe_tenant.py` 在 deep_merge
+    之後覆寫該鍵）。
 - **Scalar 欄位**：子層覆蓋父層
 - **Null 值 — 依欄位而分，不是通則**（#1339 拆開原本合寫的一行）：
   - **路由的四個欄位**（`_routing` 底下的 `group_by` / `group_wait` /
     `group_interval` / `repeat_interval`）：顯式 `null` **退出繼承**，產出的 route
-    省略該欄位。這是唯一的表達方式——這些時間欄位沒有 `"disable"` 哨兵值。
+    省略該欄位。這是唯一的表達方式——這些欄位沒有 `"disable"` 哨兵值。（⚠️ `group_by` 並不是
+    時間欄位；且 `group_by: []` 同樣會讓該欄位被省略——`_grar_routes.py` 用的是 falsy 檢查
+    `if group_by and isinstance(group_by, list)`，不是 `is not None`。）
     `_routing.receiver` 與 `_routing.overrides` **不適用**：前者會讓該租戶整條
     route 消失（告警落到 catch-all），後者無上層可退。
   - **閾值 key**：顯式 `null` **不退出繼承**，請改用 `"disable"`。發射面
     （`collector.go` → `ResolveAtWithStats`）本來就會忽略 null 並回退平台預設；
     診斷面（`/effective`、`describe_tenant`、simulate）已於 #1339 對齊。
+  - **其餘 `_` 前綴的保留 key**（`_silent_mode` / `_profile` / `_severity_dedup` /
+    `_namespaces` 等）：顯式 `null` **退出繼承**——`pkg/config/hierarchy.go` 的 `deepMerge`
+    對任何 `_` 前綴鍵的 explicit null 做 `delete(result, k)`，非 `_` 前綴（＝閾值鍵）只
+    `continue`。⚠️ 該處註解把本 ADR 指為這條規則的權威，所以規則寫在這裡：**判準是「是否
+    `_` 前綴」，不是「是否路由欄位」。**
 - **⚠️ 「空值」與顯式 `null` 是同一件事**——原文把兩者並列成「Null / 空值」，
   正是誤導的來源：`mysql_connections: ~` 與 `mysql_connections:` 語法不同，但
   YAML 解析出來**都是 null**。所以若讓閾值面的 null 生效，等於明文規定
@@ -114,23 +124,34 @@ tenants:
 effective = deep_merge(L0, L1, L2, L3, tenant_yaml)
 ```
 
-⛔ **範圍：`effective` 只取 `_defaults.yaml` 的 `defaults:` 區塊**，不取 `defaults:` 在
-[`platform-defaults.schema.json`](../schemas/platform-defaults.schema.json) 中的其他頂層
-properties（`state_filters` / `optional_overrides` / `profiles` / `max_metrics_per_tenant` /
-`_routing*` 等）。**權威清單是那份 schema，勿在此處另立列舉。** 兩個 unwrap 實作在這個
+⛔ **範圍：`effective` 只取 `_defaults.yaml` 的 `defaults:` 區塊**，不取
+[`platform-defaults.schema.json`](../schemas/platform-defaults.schema.json) 中**與 `defaults:`
+平級的**其他頂層 properties（`state_filters` / `optional_overrides` / `profiles` /
+`max_metrics_per_tenant` / `_routing*` 等）。⛔ 它們是 `defaults:` 的**兄弟鍵，不是它底下的
+欄位**——縮排進 `defaults:` 會讓整份檔案解析失敗（見上方 worked example 的警告）。
+**權威清單是那份 schema，勿在此處另立列舉。** 兩個 unwrap 實作在這個
 形狀上同義：`describe_tenant.py` 的 `ddata.get("defaults", ddata)`、Go 的
 `pkg/config.extractDefaultsBlock`。
 
-⚠️ **兩個例外，都可達。合併行為本身是刻意的，但兩者的後果各有未結的票**：
+⚠️ **目前已知的可達例外（非窮舉——這份清單本身不是保證）。合併行為是刻意的，但後果各有未結的票**：
 
-1. **沒有 `defaults:` 包裝的檔案**（schema 允許）會把**整份文件**併進 `effective`，兄弟鍵
-   一併進來。repo 內現有此形狀（`rule-packs/recipes/examples/conf.d/`）。理由與既有防護見
+1. **沒有 `defaults:` 包裝的檔案**會把**整份文件**併進 `effective`，兄弟鍵一併進來。
+   ⚠️ schema 只在**頂層鍵全部落在白名單內**時才放行（`additionalProperties: false` ＋ 15 個
+   固定 properties ＋ `^_state_` / `^_routing` patternProperties），所以「省略 `defaults:`
+   直接裸寫閾值鍵」其實會被擋下。repo 內唯一的實例是
+   `rule-packs/recipes/examples/conf.d/finance/_defaults.yaml`（頂層只有 `_custom_alerts`）。
+   理由與既有防護見
    `blast_radius.py` 的 `PLATFORM_DOCUMENT_KEYS` 註解。⇒ 該形狀對可達性 gate 隱形是
    [#1552](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1552) 的主題。
 2. **`_custom_alerts` 由 ADR-024 的 UNION 解析器在 unwrap 之後注入**（`describe_tenant.py`，
    #772），**即使有 `defaults:` 包裝也會進 `effective`**；Go 沒有這條注入路徑。實測同一份
    輸入：Python 得 `{cpu_usage, _custom_alerts, _custom_alerts_resolution}`、Go 只得
    `{cpu_usage}` ⇒ **兩實作的 `effective` 不同集，`merged_hash` 因此不等** ⇒ [#1549](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1549)。
+3. **`defaults:` 存在但值為 explicit `null`**（schema 的 `type: ["object","null"]` 明文允許，
+   `check_confd_schema.py` 實測放行）：Go 的型別斷言 `m["defaults"].(map[string]any)` 失敗 ⇒
+   fall-through 併整份文件；Python 的 `ddata.get("defaults", ddata)` 對「鍵存在但值為 `None`」
+   回傳 `None`（**不是** fallback）⇒ `deep_merge` 直接 `AttributeError`，`describe_tenant`
+   整支 crash。⇒ 尚未開票。
 
 ⛔ `tests/golden/fixtures` 的 `_defaults.yaml` 目前全為「有包裝、零兄弟鍵」形狀，**golden
 parity 套件結構上偵測不到上述任一例外** —— 不要把它的綠燈讀成「兩實作全等」的背書。
@@ -141,7 +162,7 @@ parity 套件結構上偵測不到上述任一例外** —— 不要把它的綠
    `config_debounce.go` 用它決定一次 defaults 變更記成 `applied`
    （`IncReloadTrigger(ReloadReasonDefaults)`）還是 `shadowed` / `cosmetic`，以及
    `da_config_blast_radius_tenants_affected` 報幾個租戶。（rebuild 本身無條件跑
-   `fullDirLoad`，**不**以 hash 為條件。）而本 ADR 存在的理由正是上面那句「如何避免 reload
+   `fullDirLoad`，**不**以 `merged_hash` 為條件。）而本 ADR 存在的理由正是上面那句「如何避免 reload
    風暴」。把 exporter 根本不消費的 `_routing_defaults` 放進來，會讓每一次平台路由編輯把
    **每一個**租戶都記成受影響 —— 正是被否決的替代方案 A 的後果。
 2. **既存快照一次作廢**。`merged_hash` 是 `da-tools tenant-verify --expect-merged-hash` 的
@@ -154,13 +175,18 @@ parity 套件結構上偵測不到上述任一例外** —— 不要把它的綠
 ⚠️ **這不代表那些鍵是死的。** 它們各自由別的路徑到達租戶：`state_filters` /
 `optional_overrides` 由 `pkg/config` 的 merge 併入 `ThresholdConfig` 並在 resolve 期逐租戶
 展開；`_routing_defaults` / `_routing_enforced` 由 `generate_alertmanager_routes.py` 的四層
-合併消費。（注意不對稱：exporter 不消費 `_routing_defaults`，但**確實**消費租戶層的
-`_routing` —— `resolve.go` 的 `ResolveRouting`。這正是上面第 3 條的機制根源。）
+合併消費。（⚠️ `_routing_defaults` 與租戶層 `_routing` **都不進** exporter 的
+`ThresholdConfig`：`ResolveRouting()` 至今沒有 production 呼叫端，`types.go` 逐字註明它
+「is currently not called by the exporter」，保留為 guardrail 參考實作。上面第 3 條的機制
+根源是 `_grar_merge.py` 的 `merge_routing_with_defaults` 本身，與 exporter 讀不讀無關。）
 
-**實測**：它們的套用不依賴 `merged_hash` —— 只改 `state_filters.<filter>.severity` 時，設定
-確實生效而 `merged_hash` 逐字不動。兩條載入路徑都不以 hash 為條件：flat 模式下任何 `_` 前綴
-檔變更都走 full rebuild（`config.go` 的 `isTenantOnlyChange`），hierarchical 模式下
-`installNewHierarchyState` 每次都跑 `fullDirLoad`。
+**實測**：它們的套用不依賴 `merged_hash` —— **在有 `defaults:` 包裝的形狀下**，只改
+`state_filters.<filter>.severity` 時設定確實生效而 `merged_hash` 逐字不動（⚠️ wrapper-less
+形狀下同一筆編輯會讓**每個**租戶的 hash 都動，見上方例外 1）。兩條載入路徑都不以
+**`merged_hash`** 為條件：flat 模式下任何 `_` 前綴檔變更都走 full rebuild（`config.go` 的
+`isTenantOnlyChange`），hierarchical 模式下 `installNewHierarchyState` 每次都跑 `fullDirLoad`。
+⚠️ flat 路徑另有一道 per-file composite hash 的 no-op 快篩會提早返回（`config.go` 的
+`compositeHash == prevHash`）—— 那是**不同的 hash**，不是 `merged_hash`。
 
 ⚠️ **代價是已知且刻意的**：「平台面變更」對所有以 `effective_config` / `merged_hash` 為輸入
 的消費端**結構上不可見** —— `GET /effective`、`describe_tenant`、`blast_radius`、what-if 預覽
@@ -179,30 +205,37 @@ checklist 的擋下訊號，exit 2 = 不一致）：平台面 rollback 之後它
 
 | Hash | 定義 | 用途 |
 |:-----|:-----|:-----|
-| `source_hash` | SHA-256 of tenant YAML file bytes | 判斷 tenant 原始檔案是否變動 |
-| `merged_hash` | SHA-256 of effective config (merge 後的 canonical JSON) | 判斷最終生效設定是否變動 |
+| `source_hash` | SHA-256 of tenant YAML file bytes，**截斷為前 16 個 hex 字元** | 判斷 tenant 原始檔案是否變動 |
+| `merged_hash` | SHA-256 of effective config (merge 後的 canonical JSON)，**截斷為前 16 個 hex 字元** | 判斷最終生效設定是否變動 |
+
+⛔ **兩者都是 16 字元，不是完整的 64 字元 digest** —— 直接 `sha256sum` 算出來的值永遠不會 match
+`--expect-merged-hash`。另注意**同名不同物**：scanner 內部的 `m.hierarchy.hashes` 是 per-file 的
+**64 字元** SHA-256，與表中的 `source_hash` 撞名，但不是同一個值。
 
 **Reload 判斷邏輯**：
 
 ```
 if source_hash changed:
     recompute effective config → update merged_hash
-    if merged_hash changed:
-        trigger reload  ← 真正的 alerting config 變了
-    else:
-        increment da_config_defaults_change_noop_total  ← defaults 改了但此 tenant 不受影響
+    記為 applied（reason=source；此租戶初次出現則 reason=new）
+    ⚠️ 這條分支不比對 merged_hash —— 見下方註記
 elif any ancestor _defaults.yaml changed:
     recompute effective config → update merged_hash
     if merged_hash changed:
-        trigger reload
+        記為 applied（reason=defaults）
     else:
-        increment da_config_defaults_change_noop_total
+        記為 shadowed / cosmetic（見 §Amendment 2026-04-25）
 ```
 
 ⚠️ **這段虛擬碼描述的是「一次變更被歸類成什麼」，不是「rebuild 會不會發生」。**
 實作中 hierarchical 路徑的 `diffAndReload` 在 `classifyAndCount` 之後**無條件**呼叫
 `installNewHierarchyState`，而後者第一件事就是無條件跑 `fullDirLoad`。`merged_hash` 決定的是
 這次變更記成 `applied`（`IncReloadTrigger`）還是 `shadowed` / `cosmetic`，**不決定重建**。
+
+⛔ **本 ADR 原文在 `source_hash` 分支也寫了一次 `merged_hash` 比對，那在實作裡不存在。**
+`config_debounce.go` 的 `if sourceChanged` 直接記為 `applied`，`prev == mh` 的比對只出現在
+`else if defaultsChanged`。上方虛擬碼已改寫為實際行為。⚠️ 後果是：**純註解編輯一個租戶
+YAML 也會被記成 `applied`**，污染 blast-radius 的高影響訊號——這是已知落差，不是本 ADR 的決策。
 
 ### 繼承圖資料結構
 
@@ -217,14 +250,19 @@ type InheritanceGraph struct {
 }
 ```
 
-`_defaults.yaml` 變動時，透過 `DefaultsToTenants` 快速查出需要重算 `merged_hash` 的 tenant 清單，
-避免全量重算。
+⚠️ **`DefaultsToTenants` / `TenantsAffectedBy` 目前沒有 production 消費端**（全 repo 命中只在
+`inheritance_graph.go` 自身的建構子與存取器，加上測試）。實際的 reload 路徑 `classifyAndCount`
+對所有掃到的租戶迭代，取的是**反方向**的 `TenantDefaults[tid]`，再靠 per-tenant 的 `merged_hash`
+比對跳過 recompute ——「避免全量重算」是那個比對達成的，不是這張反向表。這張表保留為既有結構，
+改動它不會改變行為。
 
 ### Watch 機制：維持 Periodic Scan
 
 - **不採用 inotify/fsnotify**：container mount 事件遺失 + kernel watch 上限
 - 維持既有 periodic scan（可設定 interval，default 30s）
-- 掃描只重算 `stat()` 變動的檔案 → 避免 O(n) hash 計算
+- ⚠️ **「只重算 `stat()` 變動的檔案」尚未實作**：`scanDirHierarchical` 的 `priorMtimes` 參數
+  目前被忽略（`config_hierarchy.go` 逐字 `_ = priorMtimes // reserved for Phase 3`），每次掃描
+  對走訪到的**每個**檔案無條件 `sha256.Sum256`。benchmark 數字即為全量 hash 的成本。
 
 ### Debounce
 
@@ -244,8 +282,8 @@ type InheritanceGraph struct {
 | Metric | Type | Labels | Description |
 |:-------|:-----|:-------|:------------|
 | `da_config_scan_duration_seconds` | histogram | — | 單次 periodic scan 耗時 |
-| `da_config_reload_trigger_total` | counter | `reason` | reload 原因：source / defaults / new / delete |
-| `da_config_defaults_change_noop_total` | counter | — | merged_hash 不變時跳過 reload 的次數 — **v2.8.0 起語義收窄為 cosmetic-only**（見 §Amendment 2026-04-25） |
+| `da_config_reload_trigger_total` | counter | `reason` | reload 原因，**五個值**：source / defaults / new / delete / **forced**（手動觸發）。⚠️ 與下方 `blast_radius` 的 `reason` **定義域不同** —— 那個只有前四個，forced 被過濾 |
+| `da_config_defaults_change_noop_total` | counter | — | defaults 變動但 merged_hash 不變的**歸類**次數。⚠️ **不是「被省下的 rebuild」** —— rebuild 無條件執行（見 §Reload 判斷邏輯下方註記） — **v2.8.0 起語義收窄為 cosmetic-only**（見 §Amendment 2026-04-25） |
 | `da_config_defaults_shadowed_total` | counter | — | **v2.8.0 (Issue #61)** — defaults 變動但被 tenant override 擋下的次數（從 `da_config_defaults_change_noop_total` 拆出） |
 | `da_config_blast_radius_tenants_affected` | histogram | `reason / scope / effect` | **v2.8.0 (Issue #61)** — 每 tick 受影響 tenant 數的分佈 |
 
@@ -277,7 +315,9 @@ elif any ancestor _defaults.yaml changed:
 ```
 
 實作要點：
-- `m.parsedDefaults` 新增的 ConfigManager 欄位，與 `hierarchyHashes` 同 atomic-swap，存放每個 `_defaults.yaml` 的 normalized parsed dict（`map[string]any`），記憶體 ~1MB / 1000 tenants
+- `m.hierarchy.parsedDefaults` 與 `m.hierarchy.hashes`（v2.8.0 起收進 `hierarchyState`
+  sub-struct；本 ADR 原文寫的 `m.parsedDefaults` / `hierarchyHashes` 已不是實際欄位名）同
+  atomic-swap，存放每個 `_defaults.yaml` 的 normalized parsed dict（`map[string]any`），記憶體 ~1MB / 1000 tenants
 - 在 `populateHierarchyState` cold-start 時 eager-parse 全部 defaults；`diffAndReload` 時只重新 parse 有 hash 變動的檔案，未變動的沿用前值
 - 詳見 `components/threshold-exporter/app/config_defaults_diff.go` + Issue #61 RFC
 
@@ -306,7 +346,9 @@ Replace 語意更直覺，且與 Helm values merge 行為一致。
 - **Directory Scanner Go 程式碼**：新增 inheritance graph + dual-hash + debounce
 - **CLI**：新增 `describe-tenant` 可展開 effective config + 顯示繼承來源
 - **Tenant API**：新增 `GET /api/v1/tenants/{id}/effective` endpoint
-- **Schema**：`tenant-config.schema.json` 升級支援 `_defaults.yaml` 結構
+- **Schema**：新增 `platform-defaults.schema.json` 供 `_defaults*.yaml` 使用。⚠️ **不是**升級
+  `tenant-config.schema.json` —— 後者 root 只有 `tenants` 且 `additionalProperties: false`，
+  結構上表達不了平台預設；分流見 `check_confd_schema.py`
 - **Benchmark**：千租戶 + 多層繼承的 scan 效能對照 v2.7.0 規劃期 baseline（已驗證）
 
 ## 相關

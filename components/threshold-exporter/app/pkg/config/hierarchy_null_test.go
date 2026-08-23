@@ -51,12 +51,20 @@ func TestDeepMerge_NullOnThresholdKey_KeepsInheritedValue(t *testing.T) {
 func TestDeepMerge_NullOnReservedKey_StillDeletes(t *testing.T) {
 	t.Parallel()
 
-	// ADR-017's opt-out is kept for reserved keys. Note this branch is not
-	// reachable from a shipped _defaults.yaml — extractDefaultsBlock hands
-	// deepMerge only the `defaults:` sub-map, which holds flat metric keys
-	// and no `_`-prefixed ones — so it is defensive alignment with the ADR
-	// rather than live behaviour. Pinned so a future simplification is a
-	// deliberate choice instead of an accident.
+	// ADR-017's opt-out is kept for reserved keys.
+	//
+	// ⚠️ This branch IS reachable from a shipped _defaults.yaml. An earlier
+	// version of this comment claimed it was not, on the grounds that
+	// extractDefaultsBlock hands deepMerge only the `defaults:` sub-map. That
+	// is false whenever the type assertion on `m["defaults"]` fails —
+	// no `defaults:` key at all, or one that is explicitly null — because
+	// extractDefaultsBlock then falls through and returns the WHOLE document,
+	// `_`-prefixed siblings included. rule-packs/recipes/examples/conf.d/
+	// finance/_defaults.yaml does exactly that with `_custom_alerts` today.
+	// See ADR-017 §Scope, "known reachable exceptions".
+	//
+	// Pinned so a future simplification is a deliberate choice, not an
+	// accident — and do NOT delete it as dead code.
 	base := map[string]any{
 		"_silent_mode":      "warning",
 		"mysql_connections": 80,
