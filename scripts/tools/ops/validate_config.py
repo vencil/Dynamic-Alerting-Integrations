@@ -65,7 +65,11 @@ sys.path.insert(0, str(_THIS_DIR))  # Docker flat layout
 sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
 from _lib_python import detect_cli_lang  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
-from _lib_confd import iter_config_files  # noqa: E402
+from _lib_confd import (  # noqa: E402
+    iter_config_files,
+    unusable_config_paths,
+    unusable_reason,
+)
 
 # Language detection for bilingual help
 _LANG = detect_cli_lang()
@@ -243,6 +247,36 @@ def _make_result(
 # ============================================================
 # Check 1: YAML Syntax
 # ============================================================
+def _unusable_consequence(bad: Path) -> str:
+    """What the operator actually loses because of `bad` — one clause.
+
+    ⛔ This used to be the single fixed sentence "nothing in it is loaded,
+    by this tool or by threshold-exporter", and for one shape that sentence
+    was measurably FALSE. A DIRECTORY named `beta.yaml` that CONTAINS
+    `.yaml` files does not stop anything from loading them: this very scan
+    reads `beta.yaml/inner.yaml` through `iter_config_files`, and the Go
+    side descends too — `hierarchy.go`'s `WalkDir` only `SkipDir`s names
+    beginning with `.`. So the run printed a blocking `FAIL` whose stated
+    reason had just been contradicted by the same run's own file list.
+
+    Saying a true thing matters more here than usual: this check is a
+    required gate, and the sentence is what a customer reads when it turns
+    their build red.
+    """
+    reason = unusable_reason(bad)
+    if reason.startswith("is a directory that could not be read"):
+        return ("so THIS REPORT IS INCOMPLETE: fix the permissions and "
+                "re-run before trusting it")
+    inside = list(iter_config_files(bad)) if bad.is_dir() else []
+    if inside:
+        return (f"but the {len(inside)} config file(s) INSIDE it ARE "
+                f"loaded — by this scan and by threshold-exporter's "
+                f"recursive scanner alike, so those declarations are live. "
+                f"A `.yaml` name on a DIRECTORY is almost always an "
+                f"interrupted `mkdir` or a bad merge: rename it")
+    return "nothing in it is loaded, by this tool or by threshold-exporter"
+
+
 def check_yaml_syntax(config_dir: str) -> dict[str, object]:
     """Validate that every YAML file in config_dir loads into a usable shape.
 
@@ -317,6 +351,25 @@ def check_yaml_syntax(config_dir: str) -> dict[str, object]:
                 f"{type(loaded).__name__} — every consumer reaches for keys "
                 f"on it and finds none, so nothing in this file is loaded")
             unusable.append(label)
+
+    # #1469: entries NAMED like a config file that `iter_config_files`
+    # correctly refuses to hand over — a directory called `beta.yaml`, a
+    # broken symlink, a file with no read permission. This check is the one
+    # place that enumerates the whole tree, so it is the only place that can
+    # name them; before this they were invisible here while the routing
+    # parser reported them, which is the two-readers-two-answers split #1469
+    # is about. ⛔ The selection is NOT re-derived locally — that would make
+    # a third implementation of "what is a config file".
+    for bad in unusable_config_paths(config_dir):
+        try:
+            label = bad.relative_to(Path(config_dir)).as_posix()
+        except ValueError:
+            label = bad.name
+        if label in (".", ""):
+            label = bad.name
+        errors.append(f"{label}: {unusable_reason(bad)} — "
+                      f"{_unusable_consequence(bad)}")
+        unusable.append(label)
 
     if errors:
         return _make_result("yaml_syntax", FAIL, errors,

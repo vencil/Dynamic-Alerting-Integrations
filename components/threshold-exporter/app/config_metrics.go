@@ -83,6 +83,14 @@ type configMetrics struct {
 	// tenants are evicted automatically. See pkg/config/resolve.go
 	// ResolveAtWithStats for the producer side.
 	tenantMetricsOverLimit *prometheus.GaugeVec
+	// #1521: state-coded gauge for the conf.d dual-scanner divergence
+	// (hierarchical scanner sees a tenant, the flat scanner that feeds
+	// the collector does not). Gauge, not counter: the value is the
+	// CURRENT size of the divergent set, so fixing the layout drives it
+	// back to 0. A counter could only ever say "it happened N times",
+	// where N tracks reload frequency rather than misconfiguration
+	// severity. Set on every commitConfig — see config_divergence.go.
+	hierarchyDivergentTenants prometheus.Gauge
 }
 
 // Default metric instance used by the production server. Tests that want
@@ -169,6 +177,10 @@ func newConfigMetrics() *configMetrics {
 			Name: "da_tenant_metrics_over_limit",
 			Help: "State-coded magnitude of per-tenant cardinality cap-hit (#652): max(0, count - max_metrics_per_tenant). 0 means the tenant fits under the cap. Set per scrape from ResolveAtWithStats; vanished tenants are evicted by Reset() before the per-tenant Set() pass. NOT a counter — a tenant stuck 100-over-limit reports 100 for as long as the truncation persists (does not inflate with scrape frequency). Alert: > 0 per-tenant (TenantMetricsOverLimit, warning); count without (tenant)(... > 0) > 50 as a defaults-storm sentinel (DefaultsTruncationStorm, critical).",
 		}, []string{"tenant"}),
+		hierarchyDivergentTenants: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "da_config_hierarchy_divergent_tenants",
+			Help: "Number of tenants currently visible to the hierarchical conf.d scanner (/effective) but ABSENT from the merged config that feeds the collector (#1521). Non-zero means those tenants emit no user_threshold series and their alerts cannot fire — the known cause is a tenant file in a conf.d sub-directory, which only the recursive scanner sees (ADR-016 requires directory depth NOT to affect metric labels). State-coded: re-Set on every config commit, so it returns to 0 once the layout is fixed. 0 does NOT mean 'fully checked', though: in PURE FLAT mode (no _defaults.yaml anywhere in the tree) a nested file added at runtime can leave this at 0 until the next RESTART — adding it changes no flat composite hash (so no reload fires) and IncrementalLoad never refreshes the hierarchy snapshot. SUGGESTED alert: > 0 for 10m = page ops — no PrometheusRule ships for it yet, deliberately: #1521 is an OPEN defect, so arming the page before the fix would page every already-divergent deployment on upgrade. The accompanying ERROR log names the tenants and their source files.",
+		}),
 	}
 }
 
@@ -198,6 +210,7 @@ func registerConfigMetrics(reg prometheus.Registerer, m *configMetrics) {
 	reg.MustRegister(m.lastReloadComplete)
 	reg.MustRegister(m.freeOSMemory)
 	reg.MustRegister(m.tenantMetricsOverLimit)
+	reg.MustRegister(m.hierarchyDivergentTenants)
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -382,6 +395,19 @@ func (cm *configMetrics) IncFreeOSMemory() {
 // Collect within the same Gather: ThresholdCollector is registered
 // first (see collector.go MetricsHandler), so its Reset+Set runs before
 // the GaugeVec is asked to emit its current state.
+// SetHierarchyDivergentTenants publishes the current size of the conf.d
+// dual-scanner divergent set (#1521). Called from
+// ConfigManager.auditHierarchyDivergence on every config commit,
+// including the healthy case (n == 0) — the zero write is what lets the
+// gauge recover after an operator moves the misplaced tenant file, and it
+// distinguishes "audited, clean" from "never audited" only in combination
+// with the load having happened at all. See config_divergence.go for why
+// this is a gauge rather than a counter, and why the divergence does not
+// fail the load.
+func (cm *configMetrics) SetHierarchyDivergentTenants(n int) {
+	cm.hierarchyDivergentTenants.Set(float64(n))
+}
+
 func (cm *configMetrics) PublishTenantMetricsOverLimit(perTenant map[string]int) {
 	cm.tenantMetricsOverLimit.Reset()
 	for tenant, magnitude := range perTenant {

@@ -112,6 +112,7 @@
 | `da_config_last_scan_complete_unixtime_seconds` | Gauge | 上次掃描完成時間（`time() − 此值` = 卡住偵測） |
 | `da_config_last_reload_complete_unixtime_seconds` | Gauge | 上次 reload 完成時間 |
 | `da_config_free_os_memory_total` | Counter | 主動還記憶體給 OS 的次數（未開 `-free-os-mem-after-reload` 時恆 0） |
+| `da_config_hierarchy_divergent_tenants` | Gauge | 目前「`/effective` 查得到、但不會產生 `user_threshold`」的租戶數（#1521）。>0 代表有租戶檔放在 `conf.d/` 子目錄——只有遞迴掃描器看得到，collector 看不到，**這些租戶的告警不會觸發**。每次 config commit 重設，修好即歸 0。**ERROR log 只在受影響租戶集合「變化」時印一次**（含冷啟動、以及歸零後再度發生）——這個缺陷是持續性的，而 reload 由整個艦隊的設定變更驅動，無條件每次印會讓同一行的重複率反映艦隊有多忙、而不是問題有多嚴重；gauge 仍每次 commit 重設，所以「現在幾個」永遠讀得到。⚠️ **沒有出貨任何 PrometheusRule**（#1521 還開著，現在武裝 `> 0 for 10m` 這條 page 會讓每個既有受害部署一升級就被叫）。⚠️ **0 不等於「已完整檢查」**：純平面模式（全樹沒有任何 `_defaults.yaml`）下，執行期新增的巢狀檔可能維持 0 直到**下次重啟**——新增巢狀檔不改變平面 composite hash（不觸發 reload），而 `IncrementalLoad` 不刷新階層快照。這正是最常見的誤放形狀，別把 0 讀成健康 |
 
 ### 3.4 Exit Codes（CLI binaries）
 

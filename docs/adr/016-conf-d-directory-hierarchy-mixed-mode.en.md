@@ -125,7 +125,7 @@ State after the #1339 fix:
 | Plane | Hierarchical `conf.d/` |
 |:--|:--|
 | threshold-exporter **library** (`pkg/config`'s `ResolveEffective`; `/effective` and `describe_tenant.py` read through it) | ✅ full recursive inheritance |
-| threshold-exporter **metrics it actually emits** | ⚠️ **still flat** — see the correction below |
+| threshold-exporter **metrics it actually emits** | ⛔ **still flat** — see the correction below and #1521 |
 | `validate_config.py` | ✅ now recursive |
 | routing generator / remaining flat tools | ⚠️ **still flat**, but they now name the files they skip and point here |
 
@@ -164,6 +164,38 @@ The "flat but loud" contract is enforced by
 `tests/shared/test_confd_enumeration_contract.py`: a new tool that reads flat and
 stays silent fails the gate, so **the choice has to be deliberate**. The shared
 enumeration layer is `scripts/tools/_lib_confd.py`.
+
+### ⛔ #1521: what signal the platform gives for that "still flat" (added 2026-08-22)
+
+The correction above already establishes that "directory depth does not affect
+metric labels" is false for the metrics the exporter actually emits. This
+section adds only the two things it does not cover: WHICH two scanners, and
+whether the platform says anything after #1526.
+
+| Scanner | Enumeration | Outlet |
+|:--|:--|:--|
+| `config_hierarchy.go` `scanDirHierarchical` | `filepath.WalkDir` — **recursive, every depth** | `hierarchy.tenantSources` → `Resolve()` → `/effective` |
+| `flat_scanner.go` `scanDirFileHashes` | `os.ReadDir` + `if IsDir() { continue }` — **top level only** | `m.config` → `ThresholdCollector` → `/metrics` |
+
+Before #1526 this was **zero signal**: no ERROR, no WARN, no parse_failure,
+nothing in the "Config loaded" stats line.
+
+State after the #1526 stopgap: a new gauge `da_config_hierarchy_divergent_tenants`
+**names** the affected tenants, and one ERROR line is written whenever that set
+CHANGES (cold start and post-recovery relapse included) — but nothing is fixed;
+those tenants still emit no metrics.
+
+⚠️ In pure flat mode (no `_defaults.yaml` anywhere in the tree) the gauge can stay
+at `0` until restart, so **do not read 0 as "fully checked"**. Both causes are
+pinned by `TestDivergenceAudit_HotReload_FlatModeNeverDetects`
+(`components/threshold-exporter/app/config_divergence_test.go`), which also
+asserts that a restart DOES report it; the operator-facing description is in the
+[threshold-exporter README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md)
+§3.3.
+
+⇒ Until #1521 is closed: **if you want metrics, the tenant file has to sit at the
+`conf.d/` top level**. The PR that closes #1521 owns removing this section and
+restoring the table row above.
 
 ## Related
 

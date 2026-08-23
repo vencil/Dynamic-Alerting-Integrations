@@ -24,6 +24,7 @@
    "tests/ops/test_grar_strict_hardening.py"
   ],
   "scripts/tools/_lib_confd.py": [
+   "tests/ops/test_confd_unusable_signal.py",
    "tests/shared/test_lib_confd.py"
   ],
   "scripts/tools/_lib_constants.py": [
@@ -463,6 +464,9 @@
   "scripts/tools/ops/_grar_merge.py": [
    "tests/shared/test_property_tools.py"
   ],
+  "scripts/tools/ops/_grar_parse.py": [
+   "tests/ops/test_confd_unusable_signal.py"
+  ],
   "scripts/tools/ops/_grar_render.py": [
    "tests/ops/test_generate_routes_orchestration.py"
   ],
@@ -542,6 +546,7 @@
    "tests/ops/test_offboard_deprecate.py"
   ],
   "scripts/tools/ops/diagnose.py": [
+   "tests/ops/test_confd_unusable_signal.py",
    "tests/ops/test_diagnose.py",
    "tests/ops/test_diagnose_inheritance.py"
   ],
@@ -689,6 +694,7 @@
    "tests/ops/test_threshold_recommend.py"
   ],
   "scripts/tools/ops/validate_config.py": [
+   "tests/ops/test_confd_unusable_signal.py",
    "tests/ops/test_validate_config.py"
   ],
   "scripts/tools/ops/validate_migration.py": [
@@ -749,7 +755,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "c733ad70cf2e6da2b038e620b6bc8cfeeb6bf85d04f8063ebc49c3a72e863617",
+ "source_digest": "1ec46e9b8e45940288e88ca60d15cb3231b1723f0a8cc266616dfaa1e88aa02a",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -945,6 +951,7 @@
   "tests/ops/test_ci_flake_retry.py",
   "tests/ops/test_ci_path_filter_coverage.py",
   "tests/ops/test_commit_helper.py",
+  "tests/ops/test_confd_unusable_signal.py",
   "tests/ops/test_config_diff.py",
   "tests/ops/test_config_history.py",
   "tests/ops/test_cutover_tenant.py",
@@ -1180,7 +1187,8 @@
   ],
   ".github/workflows/validate.yaml": [
    "tests/dx/test_bump_docs.py",
-   "tests/ops/test_ci_path_filter_coverage.py"
+   "tests/ops/test_ci_path_filter_coverage.py",
+   "tests/ops/test_confd_unusable_signal.py"
   ],
   ".pre-commit-config.yaml": [
    "tests/dx/test_bump_docs.py",
@@ -2862,6 +2870,9 @@
   ],
   "tests/shared/property-coverage.yaml": [
    "tests/lint/test_check_property_coverage.py"
+  ],
+  "tests/shared/test_confd_enumeration_contract.py": [
+   "tests/ops/test_confd_unusable_signal.py"
   ],
   "tests/shared/test_dry_run_no_write.py": [
    "tests/dx/test_bump_docs.py",

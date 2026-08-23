@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 
 import yaml
 
@@ -23,7 +24,12 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import is_disabled as _is_disabled  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
-from _lib_confd import warn_nested  # noqa: E402
+from _lib_confd import (  # noqa: E402
+    iter_config_files,
+    unusable_config_paths,
+    unusable_reason,
+    warn_nested,
+)
 
 from _grar_merge import (  # noqa: E402
     _substitute_tenant,
@@ -323,12 +329,58 @@ def _parse_config_files(config_dir: str) -> dict:
     # than "this tool cannot see your tenants". Say which files are skipped.
     warn_nested(config_dir, tool="routing generator")
 
-    files = sorted(f for f in os.listdir(config_dir)
-                   if (f.endswith(".yaml") or f.endswith(".yml"))
-                   and not f.startswith("."))
+    # #1469: name the config-named things that are not readable files (a
+    # DIRECTORY called `beta.yaml`, a broken symlink, an unreadable file)
+    # BEFORE the read loop, because the loop below no longer meets them —
+    # `iter_config_files` drops them, as it should. Dropping them silently
+    # would have been one signal fewer than this reader gave before the
+    # enumerators were unified, so the record is kept, through the same
+    # `_drop_unusable_policy` bookkeeping every other dropped file uses.
+    unusable = unusable_config_paths(config_dir, recursive=False)
 
-    for fname in files:
-        path = os.path.join(config_dir, fname)
+    # ⛔ THE ROOT ITSELF, before anything else. `unusable_config_paths` reports
+    # a conf.d root it could not list (a `chmod 111` directory: traversable,
+    # not readable) by returning the root — which means this reader saw ZERO
+    # files, not "no tenants are configured".
+    #
+    # Left to fall through, that is a silent green: the loop below prints one
+    # stderr WARN, the read loop finds nothing, and `main` reports "No tenants
+    # found in config directory." and exits 0. `.github/workflows/validate.yaml`
+    # runs `generate-routes --validate --strict` as a REQUIRED check, and
+    # GitHub Actions does not fail a step for stderr output — so an unreadable
+    # conf.d would turn that gate green with zero routes.
+    #
+    # ⚠️ Measured, and it is a REGRESSION this change set introduced: before
+    # `unusable_config_paths` grew its `except OSError` the same input raised
+    # `PermissionError` out of `root.iterdir()` and the process died with a
+    # traceback. rc went 1 → 0. Catching the exception was right; letting the
+    # caller treat "unreadable" as "empty" was not.
+    #
+    # EXIT_CALLER_ERROR, matching the `not os.path.isdir` guard a few lines up:
+    # both mean "the directory you pointed me at is not usable as input", which
+    # is a different statement from "your configuration has a finding".
+    root_path = Path(config_dir)
+    if any(p == root_path for p in unusable):
+        print(f"ERROR: config directory could not be read: {config_dir} — "
+              f"{unusable_reason(root_path)}. Nothing was scanned, so an "
+              f"empty result here would mean 'unreadable', not 'no tenants'.",
+              file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
+
+    for bad in unusable:
+        _drop_unusable_policy(
+            bad.name, unusable_reason(bad),
+            f"remove {bad.name} or replace it with a readable YAML file",
+            result)
+
+    # #1469: ONE predicate for "what is a config file", shared with
+    # `check_yaml_syntax`. `recursive=False` is load-bearing — this reader
+    # is flat BY DESIGN (the ADR-016 hierarchy is reported by `warn_nested`
+    # above, not routed), and recursing here would silently change which
+    # tenants generate-routes emits routes for.
+    for path_p in iter_config_files(config_dir, recursive=False):
+        fname = path_p.name
+        path = str(path_p)
         # ⛔ `open()` is INSIDE the try. It was outside it for one round, and
         # an open-ended `except` around only `safe_load` reads exactly like
         # one that covers the read — measured: a *directory* named
