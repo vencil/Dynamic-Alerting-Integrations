@@ -1640,11 +1640,21 @@ def test_unusable_rule_parameters_are_rejected_at_the_boundary(flag, value):
         --limit 0 / -5          → accepted outright
 
     Only `-inf` was already refused, and only because argparse cannot parse it.
+
+    ⚠️ The assertion is `stdout == ""`, not merely "no **CLEAR**". Measured: that
+    change buys ZERO detection today — removing any one of the four guards is
+    caught by `returncode == 2` first, identically under both forms (4/4 breaks,
+    same failure counts). It is here for the exit-code change `main()` already
+    anticipates: "Exit 0 for FINDINGS as well as CLEAR. This is a REPORTER during
+    the parallel-run period". When FINDINGS stops exiting 0, `returncode == 2` no
+    longer separates "rejected" from "fired" and this line becomes the
+    load-bearing one — at which point excluding only `**CLEAR**` would leave it
+    blind to two thirds of the verdict space this very docstring enumerates.
     """
     proc = _cli(flag, value)
     assert proc.returncode == 2
     assert flag in proc.stderr
-    assert "**CLEAR**" not in proc.stdout
+    assert proc.stdout == ""
 
 
 def test_a_negative_threshold_is_deliberately_still_allowed():
