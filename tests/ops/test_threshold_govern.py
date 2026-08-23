@@ -278,6 +278,33 @@ def test_open_pr_409_maps_to_already_pending_dedup(monkeypatch):
     assert out.pr_url == "https://gh/9"
 
 
+def test_open_pr_no_changes_is_not_an_error(monkeypatch):
+    # A PR-mode tenant-api answers 200 {status: no_changes} when the body it was
+    # handed already equals the branch base it just cut. That is a healthy no-op:
+    # this run planned off the pod's on-disk copy, while the write path
+    # re-resolves the fresh origin base per write, so the two legitimately
+    # disagree once the change has landed upstream.
+    #
+    # Classifying it as an error would print "tenant-api is not in PR write-mode"
+    # at a deployment that IS in PR write-mode, and feed the systemic-failure
+    # ratio — failing a Job that had nothing left to do.
+    calls = _patch_http(monkeypatch, put_result=(
+        200, {"status": "no_changes", "tenant_id": "db-a",
+              "message": "No changes to apply; no PR/MR created."}, None))
+    out = tg.open_governance_pr(_plan(), _args())
+    assert out.status == "no_changes"
+    assert "PR write-mode" not in out.message
+    assert calls["put_count"] == 1
+
+
+def test_no_changes_does_not_trip_systemic_failure(monkeypatch):
+    # The dead-man's switch must not fire on a run whose every tenant was
+    # already at base: no PR opened, but also nothing broken.
+    outcomes = [tg.TenantOutcome("db-a", "no_changes", []),
+                tg.TenantOutcome("db-b", "no_changes", [])]
+    assert tg._is_systemic_failure(outcomes, applied=True) is False
+
+
 def test_open_pr_direct_mode_200_is_error(monkeypatch):
     # tenant-api in default "direct" write-mode returns 200 {status: ok} having
     # committed straight to base — NOT a PR. The tool must refuse to claim a PR

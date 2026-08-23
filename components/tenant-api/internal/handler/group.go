@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"gopkg.in/yaml.v3"
+
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/tenantorg"
@@ -303,10 +305,23 @@ func DeleteGroup(d *Deps) http.HandlerFunc {
 		// service surface against teams who depend on dashboards
 		// keyed off that group.
 		//
-		// This one runs on the snapshot and is only the CHEAP pre-rejection:
-		// it turns away an obviously-forbidden caller before they consume a
-		// write admission slot. The authoritative check is the identical call
-		// inside the transform below.
+		// This one runs on the snapshot. It exists to turn away an
+		// obviously-forbidden caller before they consume a write admission
+		// slot, and the identical call inside the transform below is what
+		// makes ALLOWING correct — a snapshot that has gone stale can no
+		// longer let a forbidden delete through.
+		//
+		// ⚠️ It is NOT merely an optimisation: on the DENY side it is final,
+		// because this branch returns and the in-lock check never runs. A
+		// snapshot that is stale in the other direction (the file has since
+		// lost the member the caller cannot write — an admin edited it directly, or
+		// a write landed on disk whose commit failed and so never reached
+		// Reload) therefore 403s a caller who is in fact entitled to delete.
+		// groupMgr has no WatchLoop, so that refusal persists until some other
+		// write succeeds. Closing the fail-closed half means dropping this
+		// pre-check entirely and paying an admission slot per forbidden call;
+		// that trade is deliberately not made here — it is recorded so the
+		// next reader does not mistake the current shape for full coverage.
 		if forbidden := tenantsLackingPermission(d.RBAC, d.TenantOrg, p, existing.Members, rbac.PermWrite); len(forbidden) > 0 {
 			writeGroupMemberForbidden(w, r, "delete", forbidden)
 			return
@@ -374,9 +389,22 @@ var GroupIDFromPath = func(r *http.Request) string {
 // config; an existing but unparseable file is an ERROR, never an empty start —
 // silently treating a malformed file as "no groups" would let one bad edit wipe
 // every group on the next unrelated write.
+//
+// "Unparseable" has to mean more than "yaml.Unmarshal returned an error".
+// yaml.v3 is not strict by default, so a document that is valid YAML but the
+// wrong SHAPE — a typo'd top-level key, someone's ConfigMap wrapper, another
+// file entirely — decodes cleanly into a zero GroupsConfig. That is
+// indistinguishable from "no groups" to the code above, and rebuilding the
+// file from it is precisely the one-bad-edit wipe this function exists to
+// refuse. So the top-level key has to be probed for PRESENCE, not read for its
+// value. An explicit `groups:` with a null or empty value stays legal: the
+// shape is recognised and the file is genuinely declaring zero groups.
 func parseGroupsFile(current []byte) (*groups.GroupsConfig, error) {
 	if len(current) == 0 {
 		return &groups.GroupsConfig{Groups: make(map[string]groups.Group)}, nil
+	}
+	if err := requireTopLevelKey(current, "groups"); err != nil {
+		return nil, fmt.Errorf("read current _groups.yaml: %w", err)
 	}
 	cfg, err := groups.ParseConfig(current)
 	if err != nil {
@@ -388,9 +416,26 @@ func parseGroupsFile(current []byte) (*groups.GroupsConfig, error) {
 	return cfg, nil
 }
 
+// requireTopLevelKey fails unless data is a YAML mapping carrying key at its
+// top level. Shared by parseGroupsFile / parseViewsFile: both rebuild a whole
+// shared config file from what they read, so both need the shape of what they
+// read to be the shape they think it is.
+func requireTopLevelKey(data []byte, key string) error {
+	var doc map[string]yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return err
+	}
+	if _, present := doc[key]; !present {
+		return fmt.Errorf("no top-level %q key — refusing to rebuild the file from a document "+
+			"whose shape is not recognised (a wipe of every existing entry would look identical "+
+			"to a legitimate write)", key)
+	}
+	return nil
+}
+
 // errGroupMemberForbidden is returned by DeleteGroup's transform when the
-// group AS STORED has member tenants the caller may not write. It travels out
-// through MutateConfigFile (which wraps transform errors) and is matched with
+// group AS STORED has member tenants the caller may not write. MutateConfigFile
+// returns a transform error unchanged, so it arrives here as-is, and is matched with
 // errors.Is so the handler can answer 403 instead of the generic 500 a
 // transform failure would otherwise produce. The offending ids ride alongside
 // in a captured variable rather than in the error, because the transform runs

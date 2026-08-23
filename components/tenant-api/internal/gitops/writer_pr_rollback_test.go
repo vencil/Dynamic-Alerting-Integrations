@@ -207,19 +207,32 @@ func TestWritePR_NoOpBodyReturnsNoChanges(t *testing.T) {
 	repo := initRepoOnMain(t)
 	w := NewWriter(repo, repo)
 
-	// Land the content on the base branch first.
-	if err := os.WriteFile(filepath.Join(repo, "db-a.yaml"), []byte(validTenantYAML), 0o644); err != nil {
+	// The body carries a deprecated key spelling AND is byte-identical to the
+	// base. The two are orthogonal — validate() runs before anything is staged —
+	// so the no-op path is exactly where a dropped notice would go unnoticed.
+	// Asserting only `res != nil` would stay green with the notices thrown away.
+	const deprecatedBody = "tenants:\n  db-a:\n    mysql_cpu: \"70\"\n"
+
+	// Land the content on the base branch first. The defaults carry the NEW
+	// spelling, which is what makes the old one a deprecation rather than an
+	// unknown key.
+	if err := os.WriteFile(filepath.Join(repo, "_defaults.yaml"),
+		[]byte("defaults:\n  mysql_threads_running: 90\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	gitRun(t, repo, "add", "db-a.yaml")
+	if err := os.WriteFile(filepath.Join(repo, "db-a.yaml"), []byte(deprecatedBody), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repo, "add", ".")
 	gitRun(t, repo, "commit", "-m", "base content")
 
-	res, err := w.WritePR(context.Background(), "db-a", "alice@example.com", validTenantYAML)
+	res, err := w.WritePR(context.Background(), "db-a", "alice@example.com", deprecatedBody)
 	if !errors.Is(err, ErrNoChanges) {
 		t.Fatalf("err = %v, want ErrNoChanges for a body matching the base", err)
 	}
 	if res == nil {
-		t.Error("result is nil; ErrNoChanges must still carry the notices channel")
+		t.Fatal("result is nil; ErrNoChanges must still carry the notices channel")
 	}
+	assertDeprecationNotice(t, res.Notices)
 	assertCleanOnBase(t, repo, "main", "tenant-api/")
 }

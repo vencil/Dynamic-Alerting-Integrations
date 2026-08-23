@@ -238,6 +238,9 @@ func parseViewsFile(current []byte) (*views.ViewsConfig, error) {
 	if len(current) == 0 {
 		return &views.ViewsConfig{Views: make(map[string]views.View)}, nil
 	}
+	if err := requireTopLevelKey(current, "views"); err != nil {
+		return nil, fmt.Errorf("read current _views.yaml: %w", err)
+	}
 	cfg, err := views.ParseConfig(current)
 	if err != nil {
 		return nil, fmt.Errorf("read current _views.yaml: %w", err)

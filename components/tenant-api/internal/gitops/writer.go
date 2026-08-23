@@ -80,10 +80,10 @@ var ErrForgeDegraded = errors.New("forge degradation: base fetch timed out — w
 // fmt.Errorf("%w: …", ErrValidation, …), so errors.Is(err, ErrValidation) holds.
 var ErrValidation = errors.New("validation failed")
 
-// ErrNoChanges is returned by WritePRBatch when EVERY op is a byte-identical
-// no-op (an idempotent batch / a client retry): the feature branch would carry
-// no commits beyond base, so pushing it and opening a PR/MR would yield a
-// change-free PR (or a forge 422). The handler maps this to a clean "no changes"
+// ErrNoChanges is returned by WritePR when the single body is a byte-identical
+// no-op, and by WritePRBatch when EVERY op is one (an idempotent batch / a
+// client retry): the feature branch would carry no commits beyond base, so
+// pushing it and opening a PR/MR would yield a change-free PR (or a forge 422). The handler maps this to a clean "no changes"
 // success — the PR-mode analogue of WriteMerged's direct-path no-op short-circuit
 // (#1097 / #1102 review). Unusually for a Go error return, the accompanying
 // *PRWriteResult is NON-nil in this case: it carries the per-op deprecation
