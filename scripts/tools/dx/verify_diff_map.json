@@ -193,6 +193,9 @@
   "scripts/tools/dx/pair_bench_ratio.py": [
    "tests/dx/test_pair_bench_ratio.py"
   ],
+  "scripts/tools/dx/paired_trend_watch.py": [
+   "tests/dx/test_paired_trend_watch.py"
+  ],
   "scripts/tools/dx/pr_preflight.py": [
    "tests/dx/test_pr_preflight_checks.py",
    "tests/dx/test_pr_preflight_orchestrator.py"
@@ -746,7 +749,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "dbe80b622e158bea441b3f8a278253db902d8e2d3b096ab59090ec0ccd69233c",
+ "source_digest": "23641009e69c8e2c9644354a9461c9aed34c9be456fb6380431623eeb97d4d52",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -788,6 +791,7 @@
   "tests/dx/test_makefile_utf8_mode.py",
   "tests/dx/test_migrate_conf_d.py",
   "tests/dx/test_pair_bench_ratio.py",
+  "tests/dx/test_paired_trend_watch.py",
   "tests/dx/test_pr_preflight_checks.py",
   "tests/dx/test_pr_preflight_orchestrator.py",
   "tests/dx/test_preflight_bash.py",
@@ -1112,6 +1116,9 @@
    "tests/ops/test_init_project.py",
    "tests/ops/test_nightly_race_issue_policy.py",
    "tests/shared/test_actionlint_pin_parity.py"
+  ],
+  ".github/workflows/bench-record.yaml": [
+   "tests/dx/test_paired_trend_watch.py"
   ],
   ".github/workflows/bench-workload-effect.yaml": [
    "tests/lint/test_check_workload_closure_drift.py"
@@ -1528,6 +1535,12 @@
   "docs/internal/archive": [
    "tests/lint/test_check_doc_datools_cmds.py"
   ],
+  "docs/internal/audit-reports/bench-paired-2026-08": [
+   "tests/dx/test_paired_trend_watch.py"
+  ],
+  "docs/internal/audit-reports/bench-paired-2026-08/nights.json": [
+   "tests/dx/test_paired_trend_watch.py"
+  ],
   "docs/internal/backend-compat-baseline.md": [
    "tests/rulepacks/test_vm_backend_parity.py"
   ],
@@ -1566,6 +1579,9 @@
   ],
   "docs/internal/secret-leak-remediation-sop.md": [
    "tests/ops/test_secret_scan_gate.py"
+  ],
+  "docs/internal/tool-map.md": [
+   "tests/dx/test_paired_trend_watch.py"
   ],
   "docs/scenarios": [
    "tests/dx/test_bump_docs.py",
@@ -2162,6 +2178,9 @@
    "tests/dx/test_atomic_write.py",
    "tests/dx/test_verify_diff.py"
   ],
+  "scripts/tools/dx/analyze_bench_history.py": [
+   "tests/dx/test_paired_trend_watch.py"
+  ],
   "scripts/tools/dx/axe_lite_static.py": [
    "tests/dx/test_axe_lite_static.py"
   ],
@@ -2219,6 +2238,9 @@
   "scripts/tools/dx/inject_waveform.py": [
    "tests/dx/test_inject_waveform.py",
    "tests/dx/test_waveform_score.py"
+  ],
+  "scripts/tools/dx/paired_trend_watch.py": [
+   "tests/dx/test_paired_trend_watch.py"
   ],
   "scripts/tools/dx/pr_preflight.py": [
    "tests/dx/test_preflight_marker.py",
@@ -2451,7 +2473,8 @@
    "tests/shared/test_help_contract.py"
   ],
   "scripts/tools/ops/bench-canary/canary_test.go": [
-   "tests/dx/test_analyze_bench_history.py"
+   "tests/dx/test_analyze_bench_history.py",
+   "tests/dx/test_paired_trend_watch.py"
   ],
   "scripts/tools/ops/bench_report_pr.sh": [
    "tests/ops/test_nightly_scan_matrix_drift.py"
