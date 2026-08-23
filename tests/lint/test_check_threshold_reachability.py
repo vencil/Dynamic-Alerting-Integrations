@@ -5430,3 +5430,74 @@ def test_the_two_loader_floors_are_bracketed_by_what_the_sibling_cannot_see():
     assert mirrored and owned, (
         "this test needs at least one root of each kind, or half of it is "
         "vacuous", {"mirrored": mirrored, "owned": owned})
+
+
+def test_the_schema_witness_speaks_last_so_a_floor_is_heard_first(monkeypatch):
+    """The witness's POSITION, which its own comment says was chosen by measurement.
+
+    ⛔ Surviving mutation (C-tier, mutation review round 3): moving the schema
+    witness and its `_DEFAULTS_ARTIFACT_FLOOR` check from the END of
+    `_defaults_faces` to the front left all 155 tests green. Its comment
+    meanwhile states the position is load-bearing and says exactly what it
+    buys — "Running it FIRST also catches the attack ... but it then speaks
+    INSTEAD of the four floors on the four roots they already cover, and
+    those messages carry warnings this one does not". That is a behavioural
+    claim about WHICH diagnosis a maintainer reads, with nothing enforcing it.
+
+    ⚠️ Order is not automatically load-bearing here and this test does not
+    assume it is: swapping `_assert_every_root_contributes` with
+    `_assert_every_root_stays_loader_readable` is also green, and that one is
+    an EQUIVALENT mutation — the latter defers to the former with an explicit
+    `continue` for an absent root, so their domains do not overlap and the
+    order genuinely cannot matter. The witness is different because its
+    domain OVERLAPS the floors': it fires on the same input they do.
+
+    The property, therefore: rig BOTH a floor breach and a witness breach at
+    once, and the caller must be told the floor's story — the one that names
+    the remedy and warns against lowering the number.
+    """
+    def _witness_is_starving(*_a, **_k):
+        return 0  # below _DEFAULTS_ARTIFACT_FLOOR, so the witness would fire
+
+    assert 0 < gate._DEFAULTS_ARTIFACT_FLOOR, (
+        "the rig depends on 0 being below the floor", gate._DEFAULTS_ARTIFACT_FLOOR)
+
+    # (1) Non-vacuity: the witness really is reachable and the rig really does
+    #     trip it, with every floor left alone and the tree otherwise clean.
+    monkeypatch.setattr(gate, "_assert_defaults_artifacts_match_schema",
+                        _witness_is_starving)
+    with pytest.raises(gate._GateViolation) as exc:
+        gate._defaults_faces()
+    assert "the schema witness judged only" in str(exc.value), (
+        "precondition: the rig must be able to trip the witness on its own, "
+        "or part (2) proves nothing", str(exc.value)[:300])
+    monkeypatch.undo()
+
+    # (2) The property: with a FLOOR also breached, the floor speaks.
+    real_pred = gate._is_loader_readable_defaults
+
+    def _nothing_is_loader_readable(name, _r=real_pred):
+        return False if name.lower() == "_defaults.yaml" else _r(name)
+
+    monkeypatch.setattr(gate, "_assert_defaults_artifacts_match_schema",
+                        _witness_is_starving)
+    monkeypatch.setattr(gate, "_is_loader_readable_defaults",
+                        _nothing_is_loader_readable)
+    with pytest.raises(gate._GateViolation) as exc:
+        gate._defaults_faces()
+    msg = str(exc.value)
+    assert "the schema witness judged only" not in msg, (
+        "the witness spoke INSTEAD of a floor that was also breached — it must "
+        "run LAST, so a maintainer meets the most specific diagnosis available "
+        "and the remedy warnings that go with it", msg[:400])
+    assert "WILL ACTUALLY READ" in msg, (
+        "the loader-readable floor is the one that should have spoken here",
+        msg[:400])
+    assert "LOWERING THESE NUMBERS IS NOT A REMEDY" in msg, (
+        "and its message carries a warning the witness's does not — which is "
+        "the whole reason the order was chosen", msg[:400])
+    monkeypatch.undo()
+
+    # Control: unpatched, the real tree is clean through the real entry, so
+    # both raises above are the rig's doing rather than a broken repo.
+    gate._defaults_faces()
