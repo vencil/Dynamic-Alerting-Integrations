@@ -827,3 +827,184 @@ func TestDivergenceAudit_LogNamesTheRootAndTheCommit(t *testing.T) {
 		t.Errorf("log must name the commit context, got:\n%s", line)
 	}
 }
+
+// TestDivergenceAudit_TheMemoryTracksTheLatestSetNotTheFirst pins that
+// `d.last` is REPLACED on every logged set, not written once.
+//
+// ⛔ Surviving mutation (A-tier, mutation review round 3): making the
+// assignment conditional — `if d.last == "" { d.last = key }` — left the
+// whole suite green. Every existing sequence happened to be A→A→B or
+// A→B→recovery→B, and a memory frozen on the FIRST set answers all of
+// those identically: A is suppressed because it matches, B logs because
+// it does not, and the healthy commit clears the memory back to "" before
+// the next comparison can expose the freeze.
+//
+// The sequence that separates them is A→B→A with no healthy commit in
+// between. Correct behaviour logs three times (the operator's last line
+// must always describe the CURRENT set). A frozen memory logs twice and
+// then goes quiet on a divergence that is live — the exact failure this
+// de-duplication was rewritten once already to avoid.
+func TestDivergenceAudit_TheMemoryTracksTheLatestSetNotTheFirst(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeDivergenceRoot(t, dir)
+	m, _, logBuf := newAuditedManager(t, dir)
+	if err := m.Load(); err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+	cfg := m.GetConfig()
+
+	setA := map[string]string{"nested-a": filepath.Join(dir, "db", "a.yaml")}
+	setB := map[string]string{"nested-b": filepath.Join(dir, "db", "b.yaml")}
+	count := func() int { return strings.Count(logBuf.String(), "scanner divergence") }
+
+	logBuf.Reset()
+	m.auditHierarchyDivergence(cfg, setA, "commit-A1")
+	if count() != 1 {
+		t.Fatalf("first sighting of A must log, got %d", count())
+	}
+	m.auditHierarchyDivergence(cfg, setB, "commit-B")
+	if count() != 2 {
+		t.Fatalf("a different set must log, got %d", count())
+	}
+	// ⛔ The one that matters. B is what the memory should now hold, so A
+	// is news again. With the memory stuck on A this is silent.
+	m.auditHierarchyDivergence(cfg, setA, "commit-A2")
+	if got := count(); got != 3 {
+		t.Errorf("going back to a PREVIOUS divergent set must log again "+
+			"(the last line an operator has must describe the current set): "+
+			"%d line(s), want 3\nlog:\n%s", got, logBuf.String())
+	}
+	if !strings.Contains(logBuf.String(), "commit-A2") {
+		t.Errorf("the third line must be the A2 commit; log:\n%s", logBuf.String())
+	}
+}
+
+// TestDivergenceAudit_TheGaugeIsRepublishedEvenWhenTheLogIsSuppressed pins
+// that the gauge is Set on EVERY commit, including the ones the
+// de-duplication silences.
+//
+// ⛔ Surviving mutation (A-tier): moving `setGauge` below the
+// `d.last == key` early return — so the level is only written when the
+// line is written — left the suite green. Nothing noticed, because the
+// gauge already HELD the right number from the commit that did log, and
+// every assertion read it after that.
+//
+// The consequence is real rather than stylistic: a gauge written only on
+// change is a change-detector wearing a level's name, and it is wrong the
+// moment anything else moves the underlying metric. This test moves it the
+// way this package's own seam does — `SetMetrics` with a fresh registry,
+// which is exactly what a metrics re-registration does in production. The
+// divergence is unchanged and still live, so the log stays (correctly)
+// silent; the new gauge must nevertheless carry the count. Under the
+// mutation it reads 0 — a platform reporting "healthy" over a defect it is
+// still observing.
+func TestDivergenceAudit_TheGaugeIsRepublishedEvenWhenTheLogIsSuppressed(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeDivergenceRoot(t, dir)
+	m, first, logBuf := newAuditedManager(t, dir)
+	if err := m.Load(); err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+	cfg := m.GetConfig()
+	sources := map[string]string{"nested-a": filepath.Join(dir, "db", "a.yaml")}
+	count := func() int { return strings.Count(logBuf.String(), "scanner divergence") }
+
+	logBuf.Reset()
+	m.auditHierarchyDivergence(cfg, sources, "commit-1")
+	if count() != 1 {
+		t.Fatalf("first sighting must log, got %d", count())
+	}
+	if got := testutil.ToFloat64(first.hierarchyDivergentTenants); got != 1 {
+		t.Fatalf("first gauge = %v, want 1", got)
+	}
+
+	// The metric object is replaced; the divergence is not.
+	second, _ := freshMetrics(t)
+	m.SetMetrics(second)
+	if got := testutil.ToFloat64(second.hierarchyDivergentTenants); got != 0 {
+		t.Fatalf("a fresh metrics instance must start at 0, got %v", got)
+	}
+
+	m.auditHierarchyDivergence(cfg, sources, "commit-2")
+	if got := count(); got != 1 {
+		t.Errorf("the unchanged set must still not re-log: %d line(s)", got)
+	}
+	if got := testutil.ToFloat64(second.hierarchyDivergentTenants); got != 1 {
+		t.Errorf("gauge on the CURRENT metrics = %v, want 1 — the level must "+
+			"be re-published on every commit, not only on the ones that log, "+
+			"or a metrics re-registration leaves the platform reporting 0 "+
+			"over a divergence it is still observing", got)
+	}
+}
+
+// TestDivergenceAudit_TheReturnValueSurvivesSuppression pins that the
+// count handed back to callers is the size of the divergent set, not
+// "how much did I print".
+//
+// ⛔ Surviving mutation (B-tier): `return 0` on the suppressed path left
+// the suite green — every existing assertion on the return value happened
+// to be on a FIRST sighting, which logs. The value is the audit's
+// programmatic answer (`commitConfig` and the tests read it); tying it to
+// the de-duplication would make "is there a divergence right now?" mean
+// "did we happen to print about it this time?".
+func TestDivergenceAudit_TheReturnValueSurvivesSuppression(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeDivergenceRoot(t, dir)
+	m, _, logBuf := newAuditedManager(t, dir)
+	if err := m.Load(); err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+	cfg := m.GetConfig()
+	sources := map[string]string{
+		"nested-a": filepath.Join(dir, "db", "a.yaml"),
+		"nested-b": filepath.Join(dir, "db", "b.yaml"),
+	}
+
+	logBuf.Reset()
+	if got := m.auditHierarchyDivergence(cfg, sources, "commit-1"); got != 2 {
+		t.Fatalf("first sighting returned %d, want 2", got)
+	}
+	got := m.auditHierarchyDivergence(cfg, sources, "commit-2")
+	if lines := strings.Count(logBuf.String(), "scanner divergence"); lines != 1 {
+		t.Fatalf("precondition: the second call must be suppressed, %d line(s)", lines)
+	}
+	if got != 2 {
+		t.Errorf("suppressed call returned %d, want 2 — the return value is "+
+			"the size of the divergent set, not whether this call printed", got)
+	}
+}
+
+// TestDivergenceLogState_TheKeyCannotBeAmbiguousAcrossTenantAndSource pins
+// the separator BETWEEN a tenant ID and its source path.
+//
+// ⛔ Surviving mutation (B-tier): dropping that `WriteByte(0)` left the
+// suite green. Concatenation without it is not injective — `{a → bc}` and
+// `{ab → c}` both render as "abc", so a genuinely different divergent set
+// is mistaken for a repeat and the operator is told nothing.
+//
+// ⚠️ The SECOND separator (after the source path) is a different matter
+// and deliberately has no test: with the first one present, the number of
+// NUL bytes equals the number of pairs and each pair contributes exactly
+// one, so the encoding stays injective without it for any ID and path that
+// do not themselves contain a NUL. Removing it is an EQUIVALENT mutation,
+// not an uncovered one. The byte stays because the cost is one write and
+// the argument depends on an assumption about the inputs; recording why no
+// test exists is the honest alternative to inventing one that would only
+// re-state the implementation.
+func TestDivergenceLogState_TheKeyCannotBeAmbiguousAcrossTenantAndSource(t *testing.T) {
+	t.Parallel()
+	var d divergenceLogState
+	noop := func(int) {}
+
+	if !d.recordAndDecide([]string{"a"}, map[string]string{"a": "bc"}, noop) {
+		t.Fatalf("first set must be reported as new")
+	}
+	if !d.recordAndDecide([]string{"ab"}, map[string]string{"ab": "c"}, noop) {
+		t.Errorf("{ab → c} is a DIFFERENT divergent set from {a → bc} and must " +
+			"be reported as new; without the tenant/source separator both " +
+			"render as \"abc\" and the second one is silently swallowed")
+	}
+}
