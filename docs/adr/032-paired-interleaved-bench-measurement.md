@@ -394,7 +394,7 @@ PR-A 的第一版把三態紀律寫進了 Python 端，卻在**輸入邊界**留
 
 | 層級 | 意思 | 實作中的成因 |
 |---|---|---|
-| **(a) 整夜 `unreadable`** | 這一夜的資料根本讀不出來 | payload 不是 JSON object／schema 不在支援清單／night status 未知／夜跑自己回報 INCONCLUSIVE／缺 `ratios_pct`／artifact 下載失敗或不完整／讀檔失敗 |
+| **(a) 整夜 `unreadable`** | 這一夜的資料根本讀不出來 | payload 不是 JSON object／schema 不在支援清單／night status 未知／夜跑自己回報 INCONCLUSIVE／缺 `ratios_pct`／artifact 下載失敗或不完整／讀檔失敗／**該次執行早於成對量測管線上線（artifact 裡沒有 `bench-paired.json`）** |
 | **(b) 整夜 `not-counted`** | 資料讀得出來，但**閘門**判定這一夜的成對量測不可信 | gating 對照測試缺失或不可讀／完全沒有對照測試讀數／偏離超過 gate |
 | **(c) 單支測試 `inconclusive`** | 這一夜整體可用，但**這一支**沒有可用比值 | `unreadable-record`／`unreadable-ratio`（含 §待決 2 的單側測試） |
 
@@ -468,7 +468,7 @@ PR-A 的第一版把三態紀律寫進了 Python 端，卻在**輸入邊界**留
 - **誰能標記 ACCEPTED、標記在哪裡？** 一個進版控的帳本檔？issue 上的標籤？前者可審查、後者好操作。
 - **標記的粒度是什麼？** 「這支測試的這個量級」還是「這支測試」？若只綁測試名，之後**在已接受的基線上再退化一次**就會被吞掉——那會把這條出口變成新的靜默來源，正是本 ADR 要防的病。
 - **參考版本重新釘選時，既有的 ACCEPTED 標記怎麼辦？** re-pin 會把已接受的成本吸收進新基線，標記理應同時失效；但「理應」需要一個機制，否則就是陳舊標記繼續生效。
-- **要不要有 UNSTABLE 這一類？** 像 `BenchmarkIncrementalLoad_1000_OneFileChanged` 那種雙峰測試（見 [#1497](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1497)、[#1545](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1545)），問題既不是退化也不是刻意成本，而是**這支測試本身量不準**。把它塞進 ACCEPTED 會混淆兩件很不同的事。
+- **要不要有 UNSTABLE 這一類？** 像 `BenchmarkIncrementalLoad_1000_OneFileChanged` 那種雙峰測試（見 [#1497](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1497)、[#1545](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1545)），它的問題既不是退化也不是刻意成本。⛔ **但「它到底是什麼」本身還沒有答案，這裡不得替它作答**：#1497 把「benchmark 缺陷還是產品特性」列為未決，並要求「有一個**量測**（不是判斷）回答」才算數——而若答案是產品特性，那「benchmark 沒說謊」，該改的是監測器怎麼讀它，不是把它歸類成量不準。#1545 亦已自我更正，把 2 秒 mtime 窗與 #1497 的關係從「根因」降為「共病」。⇒ 需要 UNSTABLE 的**動機**成立（這類東西塞進 ACCEPTED 會混淆兩件很不同的事），但**它涵蓋什麼**要等 #1497 的量測有結論。
 
 ⚠️ 本節的問題陳述來自 [#1439 的 2026-08-20 歸因紀錄](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1439#issuecomment-5356110529)；上面那組行數與 commit 數即出自該次歸因，不是本節新量的。
 
