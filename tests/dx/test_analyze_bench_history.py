@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re as _re
 import math
 import subprocess
 import types
@@ -4388,3 +4389,105 @@ class TestThinAnchorSeparatesTheWindowFromTheBench:
         # thin never produces `thin-anchor`.
         _f2, meta2 = _meta_for(_new_bench_only_in_the_newest_three())
         assert set(meta2["inconclusive_reasons"].values()) == {ab.REASON_THIN_BENCH}
+
+
+class TestCanariesAreNeverJudgedAsProductBenchmarks:
+    """⛔ Neither control canary is a product benchmark, so neither may open a
+    `perf-trend` ticket.
+
+    Until #1439/TRK-359 this module subtracted only `CANARY_BENCH` (the CPU one)
+    from the judged set, so `BenchmarkControlCanarySleep` was evaluated like any
+    tenant-facing benchmark. `bench-canary/canary_test.go` calls it
+    "INFORMATIONAL ONLY: a 3-4% drift here is only ~30-40us ... so gating on it
+    would flap INCONCLUSIVE constantly. Emitted + rendered for human eyes; NOT
+    part of the gate decision." — and `bench-record.yaml` copies the paired main
+    side — canary rows included — into `bench-baseline.txt`, which is what this
+    module parses. So the path was live: scheduler jitter the harness itself
+    calls healthy could file a sustained regression against a real issue.
+
+    ⚠️ The CPU canary keeps its OTHER job — raising the noise floor from its
+    night-to-night CV. Two constants, two jobs; conflating them is the bug.
+    """
+
+    @staticmethod
+    def _nights(sleep_recent, sleep_settled):
+        out, rid = [], 100
+        for i in range(3):
+            out.append(ab.NightRecord(
+                run_id=rid, created_at=f"2026-08-{20 - i:02d}T03:00:00Z",
+                medians={"BenchmarkControlCanaryCPU": 1000.0,
+                         "BenchmarkControlCanarySleep": sleep_recent,
+                         "BenchmarkFoo_1000": 500000.0},
+                cpu_model="Intel Xeon Test"))
+            rid -= 1
+        for i in range(5):
+            out.append(ab.NightRecord(
+                run_id=rid, created_at=f"2026-08-{15 - i:02d}T03:00:00Z",
+                medians={"BenchmarkControlCanaryCPU": 1000.0,
+                         "BenchmarkControlCanarySleep": sleep_settled,
+                         "BenchmarkFoo_1000": 500000.0},
+                cpu_model="Intel Xeon Test"))
+            rid -= 1
+        return out
+
+    def test_a_drifting_sleep_canary_opens_nothing(self):
+        """20% drift on the informational canary, everything else flat."""
+        findings, meta = ab.analyze_trend(
+            self._nights(1_200_000.0, 1_000_000.0), recent_k=3,
+            min_floor_pct=5.0, canary_floor_mult=3.0, creep_floor_pct=10.0)
+        assert [f.bench for f in findings] == []
+        assert meta["status"] == ab.STATUS_CLEAR
+        assert "BenchmarkControlCanarySleep" not in meta["evaluated_benches"]
+
+    def test_neither_canary_appears_in_the_judged_or_window_sets(self):
+        _findings, meta = ab.analyze_trend(
+            self._nights(1_000_000.0, 1_000_000.0), recent_k=3,
+            min_floor_pct=5.0, canary_floor_mult=3.0, creep_floor_pct=10.0)
+        for canary in ab.CANARY_BENCHES:
+            assert canary not in meta["evaluated_benches"]
+            assert canary not in meta["window_benches"]
+
+    def test_a_real_benchmark_still_fires_beside_a_quiet_canary(self):
+        """⛔ The positive control: the exclusion must not blunt the detector."""
+        nights, rid = [], 100
+        for i in range(3):
+            nights.append(ab.NightRecord(
+                run_id=rid, created_at=f"2026-08-{20 - i:02d}T03:00:00Z",
+                medians={"BenchmarkControlCanaryCPU": 1000.0,
+                         "BenchmarkControlCanarySleep": 1_000_000.0,
+                         "BenchmarkFoo_1000": 600000.0},
+                cpu_model="Intel Xeon Test"))
+            rid -= 1
+        for i in range(5):
+            nights.append(ab.NightRecord(
+                run_id=rid, created_at=f"2026-08-{15 - i:02d}T03:00:00Z",
+                medians={"BenchmarkControlCanaryCPU": 1000.0,
+                         "BenchmarkControlCanarySleep": 1_000_000.0,
+                         "BenchmarkFoo_1000": 500000.0},
+                cpu_model="Intel Xeon Test"))
+            rid -= 1
+        findings, meta = ab.analyze_trend(
+            nights, recent_k=3, min_floor_pct=5.0, canary_floor_mult=3.0,
+            creep_floor_pct=10.0)
+        assert [f.bench for f in findings] == ["BenchmarkFoo_1000"]
+        assert meta["status"] == ab.STATUS_FINDINGS
+
+    def test_the_cpu_canary_keeps_its_noise_floor_job(self):
+        """⛔ Two constants, two jobs — the exclusion must not have taken the
+        floor with it."""
+        src = Path(ab.__file__).read_text(encoding="utf-8")
+        assert "canary_series = [n.medians[CANARY_BENCH]" in src
+        assert set(ab.CANARY_BENCHES) == {"BenchmarkControlCanaryCPU",
+                                       "BenchmarkControlCanarySleep"}
+        assert ab.CANARY_BENCH in ab.CANARY_BENCHES
+
+    def test_the_declared_canaries_match_the_real_benchmark_source(self):
+        """The same role pin #1536's `paired_trend_watch.py` carries — ⛔ that
+        file is NOT in this tree, so until #1536 lands this module is the only
+        consumer pinned to the harness; once it does, neither can drift."""
+        src = (Path(__file__).resolve().parents[2] / "scripts" / "tools" / "ops"
+               / "bench-canary" / "canary_test.go").read_text(encoding="utf-8")
+        declared = set(_re.findall(r"^func (Benchmark\w+)\(b \*testing\.B\)",
+                                   src, _re.M))
+        assert declared == set(ab.CANARY_BENCHES)
+
