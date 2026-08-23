@@ -397,3 +397,224 @@ def test_diagnose_still_accepts_an_empty_profiles_document(tmp_path: pathlib.Pat
 
     assert "_profiles.yaml" not in err.getvalue()
     assert "skipped_unusable_files" not in chain
+
+
+# ── the sentence the gate prints has to be true (#1469 follow-up) ────────
+
+
+def _deny_scandir(monkeypatch: pytest.MonkeyPatch, target: pathlib.Path) -> None:
+    """Unlistable directory at any uid — `chmod 000` is invisible to root."""
+    import os
+    real = os.scandir
+
+    def fake(path=".", *a, **kw):  # noqa: ANN001
+        if os.fspath(path) == os.fspath(target):
+            raise PermissionError(13, "Permission denied", os.fspath(target))
+        return real(path, *a, **kw)
+
+    monkeypatch.setattr(os, "scandir", fake)
+
+
+def test_a_config_named_directory_with_files_in_it_is_not_called_empty(
+    tmp_path: pathlib.Path,
+):
+    """⛔ The blocking message asserted something the same run disproved.
+
+    `check_yaml_syntax` printed one fixed sentence for every unusable
+    entry — "nothing in it is loaded, by this tool or by
+    threshold-exporter" — and for a DIRECTORY named `beta.yaml` that
+    contains `.yaml` files that is false on both counts: this scan reads
+    `beta.yaml/inner.yaml` through `iter_config_files`, and the Go side
+    descends too (`hierarchy.go`'s `WalkDir` only `SkipDir`s names starting
+    with `.`). So a required gate turned a build red while stating a reason
+    its own file list contradicted.
+    """
+    root = tmp_path / "conf.d"
+    (root / "beta.yaml").mkdir(parents=True)
+    (root / "beta.yaml" / "inner.yaml").write_text(
+        "tenants:\n  inner:\n    mysql_threads_running: 90\n", encoding="utf-8")
+    (root / "empty.yaml").mkdir()
+    (root / "_defaults.yaml").write_text(
+        "defaults:\n  mysql_threads_running: 80\n", encoding="utf-8")
+
+    res = vc.check_yaml_syntax(str(root))
+    assert res["status"] == "fail"
+    by_label = {d.split(":", 1)[0]: d for d in res["details"]}
+
+    # The one that DOES still load its contents says so, with the count.
+    assert "INSIDE it ARE" in by_label["beta.yaml"]
+    assert "1 config file(s)" in by_label["beta.yaml"]
+    # The empty one keeps the original sentence, which is true for it.
+    assert "nothing in it is loaded" in by_label["empty.yaml"]
+    assert "INSIDE it ARE" not in by_label["empty.yaml"]
+    # Control: the scan really did read the nested file, which is the whole
+    # reason the old sentence was wrong.
+    assert any(p.name == "inner.yaml" for p in iter_config_files(root))
+
+
+def test_an_untraversable_directory_says_the_report_is_incomplete(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+):
+    """`pass` on a tree half of which was never opened is the #1339 shape."""
+    root = tmp_path / "conf.d"
+    locked = root / "locked"
+    locked.mkdir(parents=True)
+    (locked / "tenant.yaml").write_text("tenants: {}\n", encoding="utf-8")
+    (root / "_defaults.yaml").write_text(
+        "defaults:\n  mysql_threads_running: 80\n", encoding="utf-8")
+
+    _deny_scandir(monkeypatch, locked)
+
+    res = vc.check_yaml_syntax(str(root))
+    assert res["status"] == "fail", "a partially-unread tree must not pass"
+    assert res["unusable_files"] == ["locked"]
+    assert "INCOMPLETE" in res["details"][0]
+
+
+def test_diagnose_gives_one_answer_for_a_defaults_file_that_is_a_directory(
+    tmp_path: pathlib.Path,
+):
+    """⛔ Two lines, two vocabularies, one cause — from the guard against it.
+
+    `_defaults.yaml` is opened BY NAME in Layer 1, so it never met the
+    shared `unusable_config_paths` pass while that pass sat lower down.
+    Measured before the reorder:
+
+        WARN: skip _defaults.yaml: IsADirectoryError: [Errno 21] Is a
+              directory: '/abs/.../conf.d/_defaults.yaml'
+        WARN: skip _defaults.yaml: is a directory, not a config file
+
+    Note the absolute path in the first line — the raw errno leaks the
+    caller's filesystem layout into a report meant for a tenant operator.
+    `_skip` dedupes on (file, reason) and these are two different reasons,
+    so only ordering plus `_skip_read_failure` could collapse them.
+    """
+    root = tmp_path / "conf.d"
+    (root / "_defaults.yaml").mkdir(parents=True)
+    (root / "acme.yaml").write_text(
+        "tenants:\n  acme:\n    mysql_threads_running: 90\n", encoding="utf-8")
+
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        res = diagnose.resolve_inheritance_chain("acme", str(root))
+
+    lines = [ln for ln in err.getvalue().splitlines() if "_defaults.yaml" in ln]
+    assert len(lines) == 1, f"one cause, one line — got {lines}"
+    assert "is a directory, not a config file" in lines[0]
+    assert "IsADirectoryError" not in lines[0]
+    assert str(tmp_path) not in lines[0], "no absolute path in operator output"
+    assert res["skipped_unusable_files"] == ["_defaults.yaml"]
+
+
+def test_routing_parsers_unusable_pass_stays_flat(tmp_path: pathlib.Path):
+    """The pass must not out-scope the reader it annotates.
+
+    `_parse_config_files` is flat BY DESIGN (ADR-016 nesting is reported by
+    `warn_nested`), so its unusable pass has to be flat too. If it recursed
+    it would start naming paths for which this tool generates nothing,
+    drowning `warn_nested` — the signal that exists for exactly that — in
+    findings the reader is not responsible for.
+    """
+    root = tmp_path / "conf.d"
+    (root / "team-a").mkdir(parents=True)
+    (root / "team-a" / "beta.yaml").mkdir()
+    (root / "acme.yaml").write_text(
+        "tenants:\n  acme:\n    mysql_threads_running: 90\n", encoding="utf-8")
+
+    stderr = _grar_population_and_stderr(root)
+    assert "beta.yaml" not in stderr
+
+
+def test_a_policy_file_that_is_a_directory_blocks_strict(tmp_path: pathlib.Path):
+    """This change added a new way for `--strict` to exit 1; pin it as chosen.
+
+    `_domain_policy.yaml` as a DIRECTORY now reaches `_drop_unusable_policy`
+    and lands in `policy_file_errors`, which `generate-routes --validate
+    --strict` treats as blocking (ADR-007). Untested, that cuts both ways:
+    someone "simplifying" the pass into a bare `print` silently removes a
+    gate, and nobody can tell whether an accidental `mkdir` failing a
+    release pipeline is the design or a side effect. This test says it is
+    the design.
+    """
+    root = tmp_path / "conf.d"
+    (root / "_domain_policy.yaml").mkdir(parents=True)
+    (root / "acme.yaml").write_text(
+        "tenants:\n  acme:\n    mysql_threads_running: 90\n", encoding="utf-8")
+
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        result = _parse_config_files(str(root))
+
+    errs = result["policy_file_errors"]
+    assert errs, "a policy file that cannot be read must block --strict"
+    assert "_domain_policy.yaml" in errs[0]
+    assert "is a directory, not a config file" in errs[0]
+
+
+def test_a_conf_d_without_defaults_is_legal_not_a_read_failure(
+    tmp_path: pathlib.Path,
+):
+    """Control group for the `except FileNotFoundError: pass` in Layer 1.
+
+    Nothing covered it, so turning that branch into a `_skip` would have
+    been green — and every conf.d that simply declares no platform defaults
+    would start carrying an "unusable files" caveat.
+    """
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    (root / "acme.yaml").write_text(
+        "tenants:\n  acme:\n    mysql_threads_running: 90\n", encoding="utf-8")
+
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        res = diagnose.resolve_inheritance_chain("acme", str(root))
+
+    assert "skipped_unusable_files" not in res
+    assert err.getvalue() == ""
+
+
+def test_diagnose_names_a_missing_profiles_file_the_tenant_points_at(
+    tmp_path: pathlib.Path,
+):
+    """A referenced-but-absent `_profiles.yaml` is a MISSING CHAIN LAYER.
+
+    Absent `_defaults.yaml` is legal (nothing referenced it); absent
+    `_profiles.yaml` when a tenant carries `_profile: gold` is not the same
+    thing — the resolved chain is short by one layer and the numbers the
+    operator is reading are not the numbers they configured. #1468 is that
+    silence. Nothing covered this branch.
+    """
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    (root / "_defaults.yaml").write_text(
+        "defaults:\n  mysql_threads_running: 80\n", encoding="utf-8")
+    (root / "acme.yaml").write_text(
+        "tenants:\n  acme:\n    _profile: gold\n"
+        "    mysql_threads_running: 90\n", encoding="utf-8")
+
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        res = diagnose.resolve_inheritance_chain("acme", str(root))
+
+    assert res["skipped_unusable_files"] == ["_profiles.yaml"]
+    assert "references profile gold" in err.getvalue()
+
+
+def test_diagnose_treats_a_null_profiles_key_as_no_profiles(
+    tmp_path: pathlib.Path,
+):
+    """`profiles:` with nothing under it is empty, not broken.
+
+    The `is None -> {}` normalisation had no test, so replacing it with any
+    other value stayed green. It has to stay distinct from the `not a
+    mapping` branch below it: this shape is a legal empty document and must
+    NOT produce a skip entry.
+    """
+    root = _profile_ref_confd(tmp_path / "conf.d", "profiles:\n")
+
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        res = diagnose.resolve_inheritance_chain("acme", str(root))
+
+    assert "skipped_unusable_files" not in res
+    assert "profiles" not in err.getvalue()

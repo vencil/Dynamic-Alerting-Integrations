@@ -227,6 +227,50 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
             _said.add((label, reason))
             print(f"  WARN: skip {label}: {reason}", file=sys.stderr)
 
+    # #1469: same selection predicate as `validate-config` and the routing
+    # parser — `_lib_confd`, not a fourth hand-rolled copy. The paired
+    # `unusable_config_paths` pass names a config-named directory, a broken
+    # symlink or an untraversable directory in the SAME words the other two
+    # readers use (`unusable_reason`), instead of leaking a raw
+    # `IsADirectoryError` through the `except` clauses below. Unifying the
+    # predicate without this pass would make those paths silent here — the
+    # direction #1469 exists to reverse.
+    #
+    # ⛔ IT RUNS BEFORE LAYER 1, not before the tenant loop, and that is a
+    # fix rather than tidying: `_defaults.yaml` and `_profiles.yaml` are
+    # opened BY NAME, so with the pass sitting lower a `_defaults.yaml`
+    # that is a DIRECTORY produced two lines for one cause, in two
+    # different vocabularies, the first of them a bare errno carrying an
+    # absolute path —
+    #
+    #     WARN: skip _defaults.yaml: IsADirectoryError: [Errno 21] Is a
+    #           directory: '/abs/.../conf.d/_defaults.yaml'
+    #     WARN: skip _defaults.yaml: is a directory, not a config file
+    #
+    # — which is the two-answers-for-one-file shape this whole change set
+    # is against, produced by the guard against it. `_skip` dedupes on
+    # (file, reason) and these are two different reasons, so the dedupe
+    # could not collapse them; only the ORDER can. Running first means the
+    # shared wording is already recorded when Layer 1's `except` fires, and
+    # `_skip`'s own bookkeeping keeps `skipped_unusable_files` at one entry.
+    named_by_shared_pass: set[str] = set()
+    for bad in unusable_config_paths(base, recursive=False):
+        _skip(bad.name, unusable_reason(bad))
+        named_by_shared_pass.add(bad.name)
+
+    def _skip_read_failure(label: str, e: BaseException) -> None:
+        """Record a read failure UNLESS the shared pass already spoke.
+
+        Ordering alone does not collapse the duplicate — `_skip` dedupes on
+        (file, reason) and a bare errno is a different reason from
+        `unusable_reason`'s clause, so both would print. This is the half
+        that picks ONE vocabulary: if the shared enumerator already named
+        the path, its wording stands and the errno is dropped.
+        """
+        if label in named_by_shared_pass:
+            return
+        _skip(label, f"{e.__class__.__name__}: {' '.join(str(e).split())}")
+
     # Layer 1: Global defaults
     defaults_path = base / "_defaults.yaml"
     defaults_raw = {}
@@ -242,30 +286,19 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
         # Absent `_defaults.yaml` is a legal config, not a read failure.
         pass
     except (OSError, yaml.YAMLError) as e:
-        _skip(defaults_path.name, f"{e.__class__.__name__}: "
-                                  f"{' '.join(str(e).split())}")
+        _skip_read_failure(defaults_path.name, e)
 
     # Find tenant config
     tenant_overrides = {}
     # #1339: flat read — a hierarchical conf.d must not look empty.
     warn_nested(base, tool="diagnose")
-    # #1469: same selection predicate as `validate-config` and the routing
-    # parser — `_lib_confd`, not a fourth hand-rolled copy. The paired
-    # `unusable_config_paths` pass runs FIRST so a config-named directory or
-    # a broken symlink is named in the SAME words the other two readers use
-    # (`unusable_reason`), instead of leaking a raw `IsADirectoryError`
-    # through the `except` below. Unifying the predicate without this pass
-    # would make those paths silent here — the direction #1469 exists to
-    # reverse.
-    for bad in unusable_config_paths(base, recursive=False):
-        _skip(bad.name, unusable_reason(bad))
     for entry in iter_config_files(base, recursive=False):
         fname = entry.name
         try:
             with open(entry, encoding="utf-8") as f:
                 raw = yaml.safe_load(f) or {}
         except (OSError, yaml.YAMLError) as e:
-            _skip(fname, f"{e.__class__.__name__}: {' '.join(str(e).split())}")
+            _skip_read_failure(fname, e)
             continue
         if not isinstance(raw, dict):
             _skip(fname, f"top level must be a mapping, got "
@@ -327,8 +360,7 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
                   f"not found, but {tenant} references profile "
                   f"{profile_name}")
         except (OSError, yaml.YAMLError) as e:
-            _skip(profiles_path.name, f"{e.__class__.__name__}: "
-                                      f"{' '.join(str(e).split())}")
+            _skip_read_failure(profiles_path.name, e)
 
     # Layer 3: Tenant-specific (non-reserved metric keys only)
     tenant_metric_keys = {

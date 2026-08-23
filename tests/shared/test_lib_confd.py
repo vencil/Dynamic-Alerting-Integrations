@@ -267,10 +267,26 @@ def test_unusable_paths_is_disjoint_from_iter_config_files(with_unusable):
 
     An entry in both would mean a reader is told to read something the
     same module says it cannot read.
+
+    ⛔ Two things in the original version of this test made it unable to
+    fail, and the fixture it runs on contains the very entry it was blind
+    to (`gamma.yaml`, a broken symlink):
+
+      * it compared `p.resolve()`, which collapses a healthy symlink onto
+        its target and could invent an overlap that is not one; and
+      * it filtered the unusable side through `if p.exists()`, which drops
+        every BROKEN symlink — and a broken symlink was the ONLY class that
+        actually appeared in both lists. Measured on this fixture: raw name
+        overlap `['gamma.yaml']`, the filtered assertion `True`.
+
+    So it compares raw paths now, and nothing is filtered out.
     """
-    readable = {p.resolve() for p in iter_config_files(with_unusable)}
-    unusable = {p for p in unusable_config_paths(with_unusable)}
-    assert not (readable & {p.resolve() for p in unusable if p.exists()})
+    readable = set(iter_config_files(with_unusable))
+    unusable = set(unusable_config_paths(with_unusable))
+    assert readable & unusable == set(), (
+        f"reported twice: {sorted(p.name for p in readable & unusable)}")
+    # And the broken symlink is on exactly one side, not neither.
+    assert (with_unusable / "gamma.yaml") in unusable
 
 
 def test_unusable_paths_respects_recursive_false(tmp_path: pathlib.Path):
@@ -472,3 +488,132 @@ def test_the_two_enumerations_are_disjoint(
     assert "locked.yaml" in usable
     # And the directory — which no open() can ever speak for — is still named.
     assert "beta.yaml" in unusable
+
+
+# ── the recursive branch is not a second implementation ──────────────────
+
+
+@pytest.mark.parametrize("recursive", [False, True])
+def test_a_broken_symlink_is_on_exactly_one_side(
+    tmp_path: pathlib.Path, recursive: bool,
+):
+    """⛔ The regression `test_the_two_enumerations_are_disjoint` could not see.
+
+    That test parametrises `recursive` too, but its unusable entry is an
+    unreadable REGULAR file — and `is_file()` is True for one in BOTH
+    branches, so the asymmetry between them was invisible to it.
+
+    The asymmetry was real: `iter_config_files`'s flat branch filtered on
+    `p.is_file()` and its recursive branch filtered on nothing at all, so
+    `os.walk` handed broken symlinks, FIFOs and symlink loops straight
+    through while `unusable_config_paths` also collected them. Measured:
+
+        recursive=True   OVERLAP: ['a.yaml', 'b.yaml']
+        recursive=False  OVERLAP: []
+
+    and end to end, `check_yaml_syntax` reported one `ghost.yaml` twice —
+    once as `OSError: [Errno 40] Too many levels of symbolic links`, once
+    as `is a broken symlink` — so its caveat line said "2 file(s)".
+    """
+    root = tmp_path / "conf.d"
+    (root / "sub").mkdir(parents=True)
+    (root / "sub" / "real.yaml").write_text("tenants: {}\n", encoding="utf-8")
+    (root / "sub" / "ghost.yaml").symlink_to(root / "sub" / "nope.yaml")
+    # A symlink LOOP as well: `is_file()` raises ELOOP rather than
+    # returning False, which is the other way the shared predicate has to
+    # answer without exploding.
+    (root / "sub" / "loop_a.yaml").symlink_to(root / "sub" / "loop_b.yaml")
+    (root / "sub" / "loop_b.yaml").symlink_to(root / "sub" / "loop_a.yaml")
+
+    scan = root if recursive else root / "sub"
+    readable = set(iter_config_files(scan, recursive=recursive))
+    unusable = set(unusable_config_paths(scan, recursive=recursive))
+
+    assert readable & unusable == set(), (
+        f"reported twice: {sorted(p.name for p in readable & unusable)}")
+    names_r = {p.name for p in readable}
+    names_u = {p.name for p in unusable}
+    assert names_r == {"real.yaml"}
+    assert {"ghost.yaml", "loop_a.yaml", "loop_b.yaml"} <= names_u
+
+
+# ── a directory the scan could not enter is not "no findings" ────────────
+
+
+def _deny_scandir(monkeypatch: pytest.MonkeyPatch, target: pathlib.Path) -> None:
+    """Make one directory unlistable at any uid.
+
+    `chmod 000` is invisible to root and this suite is usually developed in
+    a uid-0 container, so the real syscall cannot be provoked here.
+    Patching `os.scandir` reproduces exactly what `os.walk` reacts to.
+    """
+    real = os.scandir
+
+    def fake(path=".", *a, **kw):  # noqa: ANN001
+        if os.fspath(path) == os.fspath(target):
+            raise PermissionError(13, "Permission denied", os.fspath(target))
+        return real(path, *a, **kw)
+
+    monkeypatch.setattr(os, "scandir", fake)
+
+
+def test_an_untraversable_subdir_is_named_not_silently_dropped(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+):
+    """⛔ `os.walk` defaults to `onerror=None`, which SWALLOWS the failure.
+
+    The subtree simply is not there — not filtered, never seen — so both
+    enumerations return as if the tree were healthy. Measured before the
+    `onerror` callback, with one chmod-000 sub-directory holding a tenant
+    file, `check_yaml_syntax` answered:
+
+        status: pass / "1 files parsed successfully" / unusable_files: []
+
+    which is ADR-016's own description of the #1339 defect ("a green light
+    for a directory it never read") reproduced one level down, inside the
+    list whose entire job is to make such things audible.
+    """
+    root = tmp_path / "conf.d"
+    locked = root / "locked"
+    locked.mkdir(parents=True)
+    (locked / "tenant.yaml").write_text("tenants: {}\n", encoding="utf-8")
+    (root / "top.yaml").write_text("tenants: {}\n", encoding="utf-8")
+
+    _deny_scandir(monkeypatch, locked)
+
+    unusable = unusable_config_paths(root)
+    assert locked in unusable, (
+        "a subtree that was never scanned must not read as 'nothing found'")
+    # ⚠️ And it must NOT be described as "you named a directory like a
+    # config file" — the operator's problem is the subtree, not the name.
+    assert "could not be read" in unusable_reason(locked)
+    assert "NOT scanned" in unusable_reason(locked)
+    # The rest of the scan still works; this is a signal, not a refusal.
+    assert [p.name for p in iter_config_files(root)] == ["top.yaml"]
+
+
+@pytest.mark.parametrize("recursive", [False, True])
+def test_an_unlistable_root_names_itself_instead_of_raising(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, recursive: bool,
+):
+    """⛔ Both wrong answers were live at once, one per branch.
+
+    A `chmod 111` conf.d root (traversable, not readable) made the FLAT
+    branch of both functions raise `PermissionError` — and `_grar_parse`
+    and `diagnose` call `unusable_config_paths` OUTSIDE any `try`, so the
+    tool died with a traceback instead of naming the path, which is the
+    death #1447 is about. The RECURSIVE branch did the opposite and
+    returned `[]`, a clean bill of health for a directory it never opened.
+    """
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    (root / "x.yaml").write_text("tenants: {}\n", encoding="utf-8")
+    _deny_scandir(monkeypatch, root)
+    monkeypatch.setattr(
+        pathlib.Path, "iterdir",
+        lambda self: (_ for _ in ()).throw(
+            PermissionError(13, "Permission denied", str(self)))
+        if os.fspath(self) == os.fspath(root) else iter([]))
+
+    assert unusable_config_paths(root, recursive=recursive) == [root]
+    assert list(iter_config_files(root, recursive=recursive)) == []
