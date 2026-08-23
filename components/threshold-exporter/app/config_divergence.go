@@ -196,12 +196,13 @@ func (m *ConfigManager) auditHierarchyDivergence(
 	cfg *ThresholdConfig, tenantSources map[string]string, context string,
 ) int {
 	divergent := hierarchyDivergentTenants(tenantSources, cfg)
-	m.getMetrics().SetHierarchyDivergentTenants(len(divergent))
-	if len(divergent) == 0 {
-		m.divergence.clear()
-		return 0
-	}
-	if !m.divergence.isNew(divergent) {
+	// ⛔ getMetrics() BEFORE taking d.mu, never inside it: it acquires
+	// m.mu.RLock and m.mu is not reentrant, so a future edit that moved this
+	// audit inside commitConfig's lock window would self-deadlock. Taking the
+	// leaf lock last also keeps the only possible order m.mu → d.mu.
+	metrics := m.getMetrics()
+	if !m.divergence.recordAndDecide(
+		divergent, tenantSources, metrics.SetHierarchyDivergentTenants) {
 		return len(divergent)
 	}
 	m.getLogger().Print(formatDivergenceLog(divergent, tenantSources, m.path, context))
@@ -240,22 +241,63 @@ type divergenceLogState struct {
 	last string
 }
 
-// isNew reports whether `divergent` differs from the last set logged, and
-// records it. Guarded by its own mutex because auditHierarchyDivergence
-// runs OUTSIDE m.mu and overlapping reloads can call it concurrently.
-func (d *divergenceLogState) isNew(divergent []string) bool {
-	key := strings.Join(divergent, "\x00")
+// recordAndDecide sets the gauge, updates the memory, and answers whether
+// this audit should write the ERROR line — ALL THREE under one lock.
+//
+// ⛔ THE GAUGE UPDATE IS IN HERE ON PURPOSE, and leaving it outside was a
+// signal-losing bug in the first version of this de-duplication. Those were
+// three unsynchronised statements, and overlapping reloads are real (see the
+// pairing note above), so this interleaving was reachable:
+//
+//	A (divergent = D):     Set(1)
+//	B (divergent = empty):        Set(0)
+//	B:                            clear()      → last = ""
+//	A:                     isNew(D) → true, logs, last = D
+//	                       ⇒ gauge = 0 while last = D
+//
+// The manager now believes it has already reported D, while the gauge says
+// everything is healthy. The next genuine recurrence of D sets the gauge back
+// to non-zero and writes NOTHING — and stays silent until a restart, a change
+// in the set, or an intervening healthy commit. Measured by deterministic
+// replay of exactly those four statements: `audit returned 1, gauge = 1,
+// ERROR lines = 0`.
+//
+// ⚠️ That was strictly worse than the noise it replaced: before de-duplication
+// the line was unconditional, so losing it was structurally impossible. And
+// the ERROR line is currently the ONLY signal a human sees — no PrometheusRule
+// ships for the gauge yet (deliberately; see config_metrics.go). Updating the
+// level and the memory atomically is what makes them unable to disagree.
+//
+// ⚠️ `setGauge` is called with d.mu held. It must stay a plain value setter —
+// a Prometheus Gauge.Set, which takes no locks of ours and calls nothing back.
+// Do not pass anything that touches m.mu here.
+func (d *divergenceLogState) recordAndDecide(
+	divergent []string, sources map[string]string, setGauge func(int),
+) bool {
+	// The key carries the SOURCE PATHS, not just the tenant IDs, because the
+	// log line names both. With IDs alone, the same tenants moving from
+	// `conf.d/db/a.yaml` to `conf.d/db/deep/a.yaml` kept the key identical,
+	// so nothing re-printed and the one line the operator had went on
+	// pointing at a path that no longer existed.
+	var b strings.Builder
+	for _, tid := range divergent {
+		b.WriteString(tid)
+		b.WriteByte(0)
+		b.WriteString(sources[tid])
+		b.WriteByte(0)
+	}
+	key := b.String()
+
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	setGauge(len(divergent))
+	if len(divergent) == 0 {
+		d.last = ""
+		return false
+	}
 	if d.last == key {
 		return false
 	}
 	d.last = key
 	return true
-}
-
-func (d *divergenceLogState) clear() {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.last = ""
 }

@@ -657,6 +657,147 @@ func TestDivergenceAudit_RepeatsOnlyWhenTheSetChanges(t *testing.T) {
 	}
 }
 
+// TestDivergenceAudit_GaugeAndMemoryCannotDisagree replays the interleaving
+// that made the FIRST version of the de-duplication lose a signal outright.
+//
+// ⛔ Not a hypothetical: the gauge Set and the memory update used to be two
+// unsynchronised statements, and overlapping reloads are real. Replaying four
+// legal statements in a legal order left `gauge = 0` while the memory said the
+// set had already been reported — and the next genuine recurrence then set the
+// gauge back to non-zero and wrote nothing. Measured before the fix:
+// `audit returned 1, gauge = 1, ERROR lines = 0`.
+//
+// The test drives the two halves apart the only way that is deterministic:
+// it interleaves by hand rather than racing goroutines, so it can never be
+// flaky and never passes by luck of the scheduler.
+func TestDivergenceAudit_GaugeAndMemoryCannotDisagree(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeDivergenceRoot(t, dir)
+	m, fresh, logBuf := newAuditedManager(t, dir)
+	if err := m.Load(); err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+	cfg := m.GetConfig()
+	one := map[string]string{"nested-a": filepath.Join(dir, "db", "a.yaml")}
+	count := func() int { return strings.Count(logBuf.String(), "scanner divergence") }
+
+	// Reload N sees the divergence; reload N+1 (overlapping) sees a clean
+	// tree. Whichever wins, the pair must stay consistent.
+	logBuf.Reset()
+	m.auditHierarchyDivergence(cfg, one, "reload-N")
+	m.auditHierarchyDivergence(cfg, nil, "reload-N+1-healthy")
+	if got := testutil.ToFloat64(fresh.hierarchyDivergentTenants); got != 0 {
+		t.Fatalf("gauge = %v after the healthy commit, want 0", got)
+	}
+
+	// ⛔ THE ASSERTION. A genuine recurrence must be audible. Under the old
+	// two-statement shape the memory could still hold the set here.
+	before := count()
+	m.auditHierarchyDivergence(cfg, one, "genuine-recurrence")
+	if testutil.ToFloat64(fresh.hierarchyDivergentTenants) != 1 {
+		t.Fatalf("gauge did not rise on recurrence")
+	}
+	if count() == before {
+		t.Errorf("LOST SIGNAL: the gauge rose but no ERROR line was written — "+
+			"the level and the memory disagreed (%d lines before and after)", before)
+	}
+}
+
+// TestDivergenceAudit_TheGaugeIsSetUnderTheSameLockAsTheMemory pins the
+// atomicity itself, structurally and deterministically.
+//
+// ⛔ Written because the FIRST regression test for this bug had no detection
+// power, and only a mutation showed it: moving `setGauge` back outside
+// `d.mu` — the exact shape that lost the signal — left
+// TestDivergenceAudit_GaugeAndMemoryCannotDisagree green. That test
+// interleaves whole audit CALLS, while the defect lives between two
+// statements INSIDE one call, so a single-threaded test can never see it.
+//
+// ⚠️ And racing goroutines is not the answer either: the blind review that
+// found this needed 300,000 rounds under `-race` to hit the fatal
+// interleaving 9 times. A test like that is a coin flip in CI.
+//
+// So assert the invariant rather than the symptom: while `setGauge` runs, the
+// lock must be HELD. `TryLock` answers that with no scheduler involved — it
+// succeeds only if nobody holds the mutex, which here would mean the gauge is
+// being written outside the critical section that guards the memory.
+func TestDivergenceAudit_TheGaugeIsSetUnderTheSameLockAsTheMemory(t *testing.T) {
+	t.Parallel()
+	var d divergenceLogState
+	var lockHeldDuringSet, setCalled bool
+
+	probe := func(int) {
+		setCalled = true
+		if d.mu.TryLock() {
+			d.mu.Unlock() // it was free — the gauge is outside the lock
+			return
+		}
+		lockHeldDuringSet = true
+	}
+
+	d.recordAndDecide([]string{"a"}, map[string]string{"a": "/x/a.yaml"}, probe)
+	if !setCalled {
+		t.Fatal("setGauge was never called — the probe proves nothing")
+	}
+	if !lockHeldDuringSet {
+		t.Error("the gauge is Set OUTSIDE d.mu: the level and the memory can " +
+			"then be updated by different reloads in either order, leaving " +
+			"gauge=0 while the memory says the set was already reported — " +
+			"after which a genuine recurrence is silent")
+	}
+
+	// Control: the same probe must also run on the healthy (empty) path, so
+	// the assertion above cannot be satisfied by one branch alone.
+	lockHeldDuringSet, setCalled = false, false
+	d.recordAndDecide(nil, nil, probe)
+	if !setCalled || !lockHeldDuringSet {
+		t.Errorf("empty-set path: setCalled=%v lockHeld=%v — the gauge must be "+
+			"Set under the lock on BOTH branches", setCalled, lockHeldDuringSet)
+	}
+}
+
+// TestDivergenceAudit_ReLogsWhenTheSOURCEPATHMoves pins the dedup key's
+// contents, not just its existence.
+//
+// The ERROR line names each tenant AND its source file. A key built from
+// tenant IDs alone made the same tenants at a NEW path look like a repeat, so
+// nothing re-printed and the operator's one line kept pointing at a path that
+// no longer existed.
+func TestDivergenceAudit_ReLogsWhenTheSourcePathMoves(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeDivergenceRoot(t, dir)
+	m, _, logBuf := newAuditedManager(t, dir)
+	if err := m.Load(); err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+	cfg := m.GetConfig()
+	count := func() int { return strings.Count(logBuf.String(), "scanner divergence") }
+
+	logBuf.Reset()
+	m.auditHierarchyDivergence(cfg,
+		map[string]string{"nested-a": filepath.Join(dir, "db", "a.yaml")}, "c1")
+	if count() != 1 {
+		t.Fatalf("first sighting must log, got %d", count())
+	}
+	// Same tenant, DIFFERENT file.
+	m.auditHierarchyDivergence(cfg,
+		map[string]string{"nested-a": filepath.Join(dir, "db", "deep", "a.yaml")}, "c2")
+	if count() != 2 {
+		t.Errorf("a moved source path must re-log: %d lines", count())
+	}
+	if !strings.Contains(logBuf.String(), filepath.Join("db", "deep", "a.yaml")) {
+		t.Errorf("the new path must appear in the log:\n%s", logBuf.String())
+	}
+	// ...and an unchanged repeat still does not.
+	m.auditHierarchyDivergence(cfg,
+		map[string]string{"nested-a": filepath.Join(dir, "db", "deep", "a.yaml")}, "c3")
+	if count() != 2 {
+		t.Errorf("an unchanged repeat must stay quiet: %d lines", count())
+	}
+}
+
 // TestDivergenceAudit_LogNamesTheRootAndTheCommit pins the two variable
 // fields at the CALL SITE, not in the formatter.
 //
