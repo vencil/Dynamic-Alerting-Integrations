@@ -505,7 +505,29 @@ def render_markdown_table(
 #   - the GO/NO-GO variance gate (`--ci`, `main()`) is separately under-covered
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ⛔ TWO CONSTANTS, TWO JOBS — and conflating them is the bug this pair exists
+# to prevent.
+#
+# `CANARY_BENCH` is the GATING canary: the one whose night-to-night CV raises
+# the noise floor. Only the CPU canary does that, and `bench-canary/
+# canary_test.go` says so in as many words: the sleep canary is "INFORMATIONAL
+# ONLY ... gating on it would flap INCONCLUSIVE constantly; NOT part of the
+# gate decision".
+#
+# `CANARY_BENCHES` is every canary, and it exists because NEITHER of them is a
+# product benchmark. Until #1439/TRK-359 this file subtracted only
+# `CANARY_BENCH` from the judged set, so `BenchmarkControlCanarySleep` was
+# evaluated like any tenant-facing benchmark and could open a `sustained`
+# regression on the real `perf-trend` issue for scheduler jitter the harness
+# itself calls healthy. Measured on synthetic nights: `status: FINDINGS`,
+# `FINDING: BenchmarkControlCanarySleep sustained 20.00%`. `bench-baseline.txt`
+# does carry both canary rows (`bench-record.yaml` says so where it copies the
+# paired main side), so the path was live, not latent.
 CANARY_BENCH = "BenchmarkControlCanaryCPU"
+CANARY_BENCHES = frozenset({
+    "BenchmarkControlCanaryCPU",
+    "BenchmarkControlCanarySleep",
+})
 PERF_TREND_LABEL = "perf-trend"
 # Applied when every current finding is `creep` (the sustained regression has
 # cleared but a softer creep remains) so subscribers can tell "still degraded"
@@ -754,7 +776,7 @@ def analyze_trend(
     inconclusive: list[str] = []
     inconclusive_reasons: dict[str, str] = {}
     evaluated: list[str] = []
-    benches = {b for n in series for b in n.medians} - {CANARY_BENCH}
+    benches = {b for n in series for b in n.medians} - CANARY_BENCHES
     # The settled (anchor) half of tonight's stratum, hoisted out of the loop:
     # its LENGTH is bench-independent, and it is exactly what separates "the
     # window is too thin for anything" from "this benchmark is new here" below.
@@ -860,7 +882,7 @@ def analyze_trend(
         # machine" (self-clearing) apart from "renamed or deleted" (never
         # clears) — two states that were reported with one, wrong, sentence.
         "window_benches": sorted({b for n in nights for b in n.medians}
-                                 - {CANARY_BENCH}),
+                                 - CANARY_BENCHES),
     }
     return findings, meta
 
