@@ -766,6 +766,35 @@ def digest_transitions(nights):
     return out
 
 
+def _ordering_key(night):
+    """A TOTAL order over nights, whatever types they carry.
+
+    ⛔ The sort used to be `(night_utc or "", run_id or 0)`, which compares
+    whatever the input happened to contain. Self-review found the consequence:
+    a dataset with a numeric `night_utc` (`20260816` instead of `"2026-08-16"`)
+    died on `TypeError: '<' not supported between instances of 'str' and 'int'`
+    — a traceback and exit 1, the code this module documents as never chosen.
+    A wrong-typed `run_id` is the same defect, latent: it only compares when two
+    runs share a calendar night, which is exactly the re-run case this module
+    handles everywhere else.
+
+    ⚠️ Total order is defence in depth, NOT the fix — `nights_from_dataset()`
+    rejects both shapes at the boundary with a named exit 2, because coercing
+    silently would let `20260816` render as a night label nobody wrote. This
+    exists because Nights are also built by hand (tests, future adapters) and a
+    sort must not be the thing that decides whether the tool runs.
+
+    Integers keep numeric order rather than becoming strings: `digest_transitions`
+    keeps a calendar night's LAST readable run, and under a string sort run 10
+    would fall before run 9.
+    """
+    date = night.night_utc if isinstance(night.night_utc, str) else ""
+    run = night.run_id
+    if isinstance(run, int) and not isinstance(run, bool):
+        return (date, 0, run, "")
+    return (date, 1, 0, str(run) if run is not None else "")
+
+
 def decide(nights, *, threshold_pct=DEFAULT_THRESHOLD_PCT,
            k=DEFAULT_CONSECUTIVE, gate_pct=DEFAULT_CANARY_GATE_PCT,
            gap=GAP_BREAK):
@@ -775,7 +804,7 @@ def decide(nights, *, threshold_pct=DEFAULT_THRESHOLD_PCT,
     a list of Nights, and the CI path and the offline replay path exercise
     exactly the same code.
     """
-    nights = sorted(nights, key=lambda n: (n.night_utc or "", n.run_id or 0))
+    nights = sorted(nights, key=_ordering_key)
     for night in nights:
         apply_gate(night, gate_pct)
 
@@ -935,7 +964,20 @@ def nights_from_dataset(directory):
     for rec in nights:
         if not isinstance(rec, dict):
             raise ValueError(f"{path}: every night must be an object")
-        night = Night(rec.get("night_utc"), rec.get("run_id"))
+        # ⛔ Typed at the boundary, not coerced. A numeric `night_utc`
+        # (`20260816`) crashed the ordering with a traceback and exit 1; letting
+        # it through as `str(...)` would be worse, because the night would then
+        # render under a label nobody wrote. Same for `run_id`, whose wrong type
+        # is latent until two runs share a calendar night.
+        night_utc = rec.get("night_utc")
+        if not isinstance(night_utc, str):
+            raise ValueError(f"{path}: night_utc is "
+                             f"{type(night_utc).__name__}, expected a string")
+        run_id = rec.get("run_id")
+        if run_id is not None and not isinstance(run_id, (int, str)):
+            raise ValueError(f"{path}: run_id is {type(run_id).__name__}, "
+                             "expected an integer, a string or absent")
+        night = Night(night_utc, run_id)
         night.schema = DATASET_SCHEMA
         # The archival snapshot names it `cpu_model`; the nightly JSON names it
         # `cpu`. Both are accepted so neither adapter has to lie about the other.

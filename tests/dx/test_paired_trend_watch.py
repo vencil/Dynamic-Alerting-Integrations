@@ -1557,3 +1557,51 @@ def test_the_invented_justification_is_gone_from_every_copy():
     header = src.split("GATING_CANARIES = ")[0]
     assert phrase in header
 
+
+@pytest.mark.parametrize("mutate,expect", [
+    (lambda d: d.__setitem__("nights", {"a": 1}), "'nights' must be"),
+    (lambda d: d["nights"].__setitem__(0, "nope"), "every night must be"),
+    (lambda d: d["nights"][0].__setitem__("night_utc", 20260816), "night_utc is int"),
+    (lambda d: d["nights"][0].__setitem__("night_utc", None), "night_utc is NoneType"),
+    (lambda d: d["nights"][0].__setitem__("run_id", {"x": 1}), "run_id is dict"),
+])
+def test_every_malformed_dataset_shape_exits_cannot_check(tmp_path, mutate, expect):
+    """⛔ Exit 2 and one line, for every shape the adapter reads.
+
+    Two of these used to escape the round-17 guards entirely: a numeric
+    `night_utc` died in the SORT with `TypeError: '<' not supported between
+    instances of 'str' and 'int'` — traceback, exit 1 — and a wrong-typed
+    `run_id` is the same defect latent, comparing only when two runs share a
+    calendar night, which is precisely the re-run case handled everywhere else.
+    Found in self-review by enumerating malformed shapes rather than by
+    reasoning about which ones mattered.
+    """
+    payload = json.loads((DATASET / "nights.json").read_text(encoding="utf-8"))
+    mutate(payload)
+    (tmp_path / "nights.json").write_text(json.dumps(payload), encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, str(_TOOLS_DIR / "paired_trend_watch.py"),
+         "--dataset", str(tmp_path)],
+        capture_output=True, text=True, encoding="utf-8", timeout=120)
+    assert proc.returncode == ptw.EXIT_CANNOT_CHECK
+    assert "Traceback" not in proc.stderr
+    assert expect in proc.stderr
+
+
+def test_the_ordering_is_total_even_for_hand_built_nights():
+    """⚠️ Defence in depth, not the fix — the boundary guard above is the fix.
+
+    Nights are also built by hand (these tests, future adapters), and a sort
+    must never be the thing that decides whether the tool runs at all.
+    """
+    a, b = ptw.Night("2026-08-20", {"x": 1}), ptw.Night("2026-08-20", 2)
+    assert ptw.decide([a, b])["status"] == ptw.STATUS_INCONCLUSIVE
+    assert ptw.decide([ptw.Night(None, 1), ptw.Night("2026-08-20", 2)])
+
+
+def test_integer_run_ids_keep_numeric_order_not_string_order():
+    """⛔ `digest_transitions` keeps a calendar night's LAST readable run, so a
+    string sort putting run 10 before run 9 would change which one that is."""
+    nights = [ptw.Night("2026-08-20", 9), ptw.Night("2026-08-20", 10)]
+    assert [n.run_id for n in sorted(nights, key=ptw._ordering_key)] == [9, 10]
+
