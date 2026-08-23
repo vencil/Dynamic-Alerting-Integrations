@@ -44,6 +44,14 @@ _LINT_DIR = str(REPO_ROOT / "scripts" / "tools" / "lint")
 if _LINT_DIR not in sys.path:
     sys.path.insert(0, _LINT_DIR)
 
+# #1511: the tool-file predicate is shared with both writers now; see
+# tests/shared/test_lib_toolcount.py for the synthetic-tree assertions.
+_TOOLS_DIR = str(REPO_ROOT / "scripts" / "tools")
+if _TOOLS_DIR not in sys.path:
+    sys.path.insert(0, _TOOLS_DIR)
+
+import _lib_toolcount as _toolcount  # noqa: E402
+
 _spec = importlib.util.spec_from_file_location("validate_docs_versions", _SCRIPT)
 mod = importlib.util.module_from_spec(_spec)
 sys.modules["validate_docs_versions"] = mod
@@ -75,7 +83,7 @@ def _unlisted_tool_subdirs(tools_dir: Path, listed) -> list:
         if (sub / "__init__.py").exists():
             continue
         if any(not any(f.name.startswith(p)
-                       for p in mod.TOOL_MAP_SKIP_PREFIXES)
+                       for p in _toolcount.TOOL_SKIP_PREFIXES)
                for f in sub.glob("*.py")):
             out.append(sub.name)
     return out
@@ -1153,18 +1161,19 @@ class TestFixDoesNotTurnTheGateOff:
         "1 個 Python 工具" into README.md and printed that it had fixed it.
         `tool-count` is a warning, so nothing went red afterwards.
 
-        ⚠️ The first repair unified both halves on the checker's 220, which
-        is itself wrong — see `_count_python_tools`. `n > 100` was the
-        original assertion here and it could not tell the two apart: 219,
-        220 and 223 all pass it. This compares against the scope the
-        counted sentence states instead.
+        ⚠️ The first repair unified both halves on the checker's number,
+        which is itself wrong — see `_count_python_tools`. `n > 100` was
+        the original assertion here and it could not tell the candidates
+        apart: every one of them passes it. This compares against the
+        scope the counted sentence states instead, re-derived here rather
+        than read back from the module under test.
         """
         n = mod._count_python_tools()
         tools_dir = mod.REPO_ROOT / "scripts" / "tools"
 
         def _keep(f):
             return not any(f.name.startswith(p)
-                           for p in mod.TOOL_MAP_SKIP_PREFIXES)
+                           for p in _toolcount.TOOL_SKIP_PREFIXES)
 
         documented = sum(1 for s in ("ops", "dx", "lint")
                          for f in (tools_dir / s).glob("*.py") if _keep(f))
@@ -1193,17 +1202,22 @@ class TestFixDoesNotTurnTheGateOff:
     def test_the_checker_and_the_writer_agree_about_the_count(self):
         """⛔ The number is produced by one module and checked by another.
 
-        `bump_docs._count_python_tools` writes it into README.md;
-        `generate_tool_map.gather_tools` writes tool-map.md from the same
-        scope; this module checks it. Three implementations, no shared
-        code. When they disagree the gate emits a warning that neither
-        `--fix` nor `bump_docs --sync-counts` can settle — they rewrite the
-        same line to different values. Measured before this change:
-        checker 220, both writers 219.
+        `bump_docs._count_python_tools` writes it into README.md and
+        README.en.md; this module checks it. When they disagree the gate
+        emits a warning that neither `--fix` nor `bump_docs --sync-counts`
+        can settle — they rewrite the same line to different values.
 
-        ⚠️ This test does not merge the implementations; it only makes them
-        see each other. Collapsing them is tracked separately; the
-        blast radius there covers every counted line bump_docs rewrites.
+        ⚠️ Since #1511 both sides call `_lib_toolcount.count_scope`, so on
+        the repo's own tree this can only fail if someone reintroduces a
+        private scanner. It stays because that is exactly the regression
+        worth catching; the predicate itself is exercised against a
+        synthetic tree in tests/shared/test_lib_toolcount.py.
+
+        ⛔ `generate_tool_map.gather_tools` is deliberately NOT compared
+        here. It scans a wider scope — the same three subdirectories plus
+        the repo root, which `check_tool_map_coverage` requires it to list
+        — and has never produced this number. The ticket's own table said
+        it did; it never has.
         """
         spec = importlib.util.spec_from_file_location(
             "bump_docs_for_count_check",
@@ -1232,7 +1246,7 @@ class TestFixDoesNotTurnTheGateOff:
         """
         assert _unlisted_tool_subdirs(
             REPO_ROOT / "scripts" / "tools",
-            mod.TOOL_COUNT_SUBDIRS) == []
+            _toolcount.COUNT_SUBDIRS) == []
 
     def test_the_subdirectory_tripwire_actually_fires(self, tmp_path):
         """Must-fire control for the test above.

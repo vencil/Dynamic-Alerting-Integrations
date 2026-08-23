@@ -49,7 +49,6 @@ from _version_patterns import (
     VERSION_CURRENCY_IGNORE,
     RULE_PACK_COUNT_PATTERNS,
     TOOL_COUNT_PATTERNS,
-    TOOL_COUNT_SUBDIRS,
     ADR_COUNT_PATTERNS,
     DOC_FILE_COUNT_PATTERNS,
     SCENARIO_COUNT_PATTERNS,
@@ -64,7 +63,6 @@ from _version_patterns import (
     DOC_MAP_SKIP_DIRS,
     DOC_MAP_SKIP_NAMES,
     DOC_MAP_SKIP_NAME_PATTERNS,
-    TOOL_MAP_SKIP_PREFIXES,
     ROADMAP_SECTIONS,
     SKIP_FEATURE_HEADINGS,
     TOOL_COUNT_CHECK_FILES,
@@ -82,6 +80,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_VIOLATION  # noqa: E402
+from _lib_toolcount import count_scope, is_tool_file  # noqa: E402
 from _lib_versions import read_platform_version  # noqa: E402
 
 
@@ -755,11 +754,44 @@ def check_doc_map_coverage() -> List[Issue]:
 
 
 def check_tool_map_coverage() -> List[Issue]:
-    """Check that tool-map.md lists all scripts/tools/*.py files.
+    """Check that tool-map.md lists the repo-root scripts/tools/*.py files.
 
-    Scans actual scripts/tools/ for .py files (excluding __pycache__,
-    _lib_*, and __init__) and verifies each is referenced in
-    docs/internal/tool-map.md.
+    Scans the `scripts/tools/` root — a flat glob, NOT the subdirectories —
+    and asks `_lib_toolcount.is_tool_file`, then verifies each result is
+    referenced in docs/internal/tool-map.md.
+
+    ⛔ #1511: this used to spell the predicate out again right here, a
+    fourth hand-written copy inside the very change that collapsed the
+    other three — and this docstring already claimed it called the shared
+    one. ⚠️ Switching is NOT behaviour-neutral. Measured, TWO classes of
+    name are globbed here but rejected by `is_tool_file`:
+
+      `B.PY` / `tool.PY`   uppercase suffix — `Path.suffix` is
+                           case-sensitive, and a case-insensitive
+                           filesystem still hands them to `glob("*.py")`.
+      `.py` / `..py`       leading-dot names, whose `Path.suffix` is the
+                           empty string. `Path.glob` does not exclude
+                           dotfiles the way `glob.glob` does, so this
+                           class is not filesystem-specific — ⚠️ measured
+                           on this Windows host only, not on Linux.
+
+    Today's tree contains neither (13 root `.py`, zero disagreement
+    measured), so the swap changes nothing that ships. An earlier version
+    of this note claimed "one cell" and that the swap made the two
+    platforms agree; only the first class supports that.
+
+    ⚠️ The docstring used to claim this scanned `scripts/tools/`, which
+    read as all of it. It does not — and the subdirectories are covered by
+    a different mechanism, not by nothing: `generate_tool_map --check
+    --lang all` regenerates the whole document and compares. Measured with
+    `ops/blast_radius.py`'s row deleted: this function reports nothing,
+    while that command exits 1 with `(missing: blast_radius.py)`, and
+    `ci.yml`'s `lint` job runs it as `pre-commit run tool-map-check
+    --all-files` with no `if:`, `needs:` or `continue-on-error`.
+
+    ⚠️ What is genuinely narrow here: this function reports at `warn`, so
+    even the root-level gap it does check exits 0. Widening the scan
+    changes what the gate reports, so it is tracked separately.
     """
     issues = []
     tool_map = DOCS_DIR / "internal" / "tool-map.md"
@@ -770,7 +802,7 @@ def check_tool_map_coverage() -> List[Issue]:
     map_content = tool_map.read_text(encoding="utf-8").lower()
 
     for f in sorted(tools_dir.glob("*.py")):
-        if any(f.name.startswith(p) for p in TOOL_MAP_SKIP_PREFIXES):
+        if not is_tool_file(f):
             continue
 
         lookup = f.name.lower()
@@ -794,33 +826,20 @@ def _count_python_tools() -> int:
     `tool-count` is a warning, so nothing went red afterwards.
 
     ⚠️ The first repair for that unified both halves on the **checker's**
-    number, 220 — and 220 is itself wrong. The scope is written into the
-    sentence being checked: ``scripts/tools/{ops,dx,lint}`` 下 N 個 Python
-    工具. The root is not in it. Both writers agree: `bump_docs.
-    _count_python_tools` and `generate_tool_map.gather_tools` each produce
-    219. Unifying on 220 would have made `--fix` write 220 while
-    `bump_docs --sync-counts` wrote 219 back — two tools fighting over one
-    number, with the gate emitting a warning neither side could satisfy.
-    Measured on `0da92961`: root only 1, {ops,dx,lint} 219, root+subs 220.
+    number — and that number is itself wrong. The scope is written into
+    the sentence being checked: ``scripts/tools/{ops,dx,lint}`` 下 N 個
+    Python 工具. The root is not in it. Unifying on the root-inclusive
+    number would have made `--fix` write one value while
+    `bump_docs --sync-counts` wrote another back — two tools fighting over
+    one line, with the gate emitting a warning neither side could satisfy.
 
-    ⛔ Do not "derive" this with `rglob`. Measured: 223, because
-    `dx/custom_alerts/` is a package (`__init__.py`, no `main()` in any of
-    its three modules) — library code, not tools. The subdirectory tuple
-    is not an enumeration standing in for a rule; it *is* the documented
-    scope, and `TestTheCounterMatchesTheScopeTheDocsDeclare` fails if a new
-    non-package subdirectory appears without this tuple and that sentence
-    being updated together.
+    ⛔ #1511: the scan itself lives in `scripts/tools/_lib_toolcount.py`
+    now, shared with both writers, so that fight cannot restart from a
+    third copy drifting. `count_scope` is deliberately NOT the scope
+    `generate_tool_map` uses — read that module's docstring before
+    changing either.
     """
-    tools_dir = REPO_ROOT / "scripts" / "tools"
-    if not tools_dir.exists():
-        return 0
-    all_py: List[Path] = []
-    for subdir in TOOL_COUNT_SUBDIRS:
-        sub = tools_dir / subdir
-        if sub.is_dir():
-            all_py.extend(sub.glob("*.py"))
-    return sum(1 for f in all_py
-               if not any(f.name.startswith(p) for p in TOOL_MAP_SKIP_PREFIXES))
+    return len(count_scope(REPO_ROOT / "scripts" / "tools"))
 
 
 def check_tool_count_in_docs() -> List[Issue]:

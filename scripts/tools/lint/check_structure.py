@@ -48,6 +48,7 @@ ALLOWED_TOOLS_ROOT = {
     "_lib_versions.py",    # platform / da-tools version SSOT readers for doc generators
     "_lib_yaml.py",        # v2.10.0 ROI r5 W2: minimal CRD YAML serializer (operator_generate + migrate_to_operator)
     "_lib_confd.py",       # #1339: single answer to "what is in a conf.d/" (recursive read + flat-reader guard)
+    "_lib_toolcount.py",   # #1511: single answer to "what counts as a Python tool" (lint checker + two dx writers)
     "metric-dictionary.yaml",
     "validate_all.py",
     "vendor_download.sh",
@@ -96,8 +97,21 @@ def check_tools_root(project_root: Path, tracked: list[str]) -> list[str]:
             continue
         basename = os.path.basename(rest)
         if basename not in ALLOWED_TOOLS_ROOT:
+            # ⛔ #1511: naming only the "move it" outlet steers shared
+            # libraries into ops/dx/lint, where they are skipped by the
+            # tool scan AND missed by generate_tool_map's shared-library
+            # footer (root-only glob) — i.e. invisible in tool-map.md.
+            # ⚠️ Naming both outlets does not make the check able to tell
+            # them apart, and the mirror is real: a genuine TOOL parked
+            # here and allowlisted is cheaper than moving it, and the
+            # repo-root is permanently outside the counted scope, so it
+            # would never appear in "N 個 Python 工具". The message says
+            # which answer belongs to which case; nothing verifies the
+            # author picked the true one.
             violations.append(
-                f"  STRAY   {f}  (move to ops/, dx/, or lint/)"
+                f"  STRAY   {f}  (a tool → move to ops/, dx/, or lint/, "
+                f"or it stays out of the tool count for good; a shared "
+                f"library → add it to ALLOWED_TOOLS_ROOT here)"
             )
     return violations
 
