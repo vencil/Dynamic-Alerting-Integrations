@@ -1470,7 +1470,7 @@ kubectl logs -n monitoring deployment/threshold-exporter | grep "SHA256"
 **Step 3: 驗證**
 ```bash
 # 確認 alerts 正常觸發
-da-tools drift-check --dirs conf.d --mode configmap
+da-tools drift-detect --dirs conf.d --mode configmap
 promtool query instant 'count(ALERTS{alertstate="firing"})'
 ```
 
@@ -1973,9 +1973,11 @@ da-tools deprecate <metric_keys...> [options]
 ```bash
 # 標記多個指標為 disabled
 docker run --rm \
+  --user $(id -u):$(id -g) \
   -v $(pwd)/conf.d:/etc/config:rw \
   ghcr.io/vencil/da-tools:v2.9.0 \
   deprecate old_metric_1 old_metric_2 \
+    --config-dir /etc/config \
     --reason "Replaced by new_metric; migration complete"
 ```
 

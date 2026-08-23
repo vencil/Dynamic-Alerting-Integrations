@@ -105,6 +105,7 @@ jobs:
       - name: Generate CRDs
         run: |
           docker run --rm \
+            --user $(id -u):$(id -g) \
             -v ${{ github.workspace }}/conf.d:/conf.d:ro \
             -v ${{ github.workspace }}/rule-packs:/rule-packs:ro \
             -v ${{ github.workspace }}/prometheus-operator-crds:/output \

@@ -1334,14 +1334,14 @@ diff <(jq -r '.discovery.tier_a_static.orphan_rules[].name' /tmp/state.json | so
 
 ```bash
 # 透過 da-tools CLI（推薦）
-da-tools guard --conf-d conf.d/ --report
+da-tools guard defaults-impact --config-dir conf.d/
 
 # 或 dev container 統一入口（vibe 內）
-make dc-run CMD="da-tools guard --conf-d conf.d/ --report"
+make dc-run CMD="da-tools guard defaults-impact --config-dir conf.d/"
 
 # 或 Docker（無 dev container 環境）
-docker run --rm -v "$(pwd):/work" -w /work \
-    ghcr.io/vencil/da-tools:latest guard --conf-d conf.d/ --report
+docker run --rm -v "$(pwd):/work:ro" -w /work \
+    ghcr.io/vencil/da-tools:latest guard defaults-impact --config-dir conf.d/
 # expected: 4 layer 各自 PASS / FAIL 報告，與 CI 等價
 ```
 
@@ -1356,9 +1356,10 @@ docker run --rm -v "$(pwd):/work" -w /work \
 **Quick diagnosis**：
 
 ```bash
-# 看具體哪個檔、哪個欄位
-da-tools guard --conf-d conf.d/ --layer schema --verbose
-# expected: file path + JSON path + schema rule 違反
+# 看具體哪個檔、哪個欄位。schema 檢查由 --required-fields 驅動，
+# 留空等於停用該層（見 `da-tools guard defaults-impact --help`）。
+da-tools guard defaults-impact --config-dir conf.d/ --required-fields thresholds.cpu,routing.receiver.type
+# expected: 報告的 Schema 段落列出檔案路徑 + 缺少的 dotted path
 ```
 
 **最常見原因**：
@@ -1369,12 +1370,12 @@ da-tools guard --conf-d conf.d/ --layer schema --verbose
 **Fix**：
 
 ```bash
-# 看當前 schema 定義
-da-tools schema show --version current
+# 看當前 schema 定義：conf.d/*.yaml 由這份 JSON Schema 規範
+cat docs/schemas/tenant-config.schema.json
 # 對照修 yaml，補欄位 / 改拼字
 
-# 重跑 layer
-da-tools guard --conf-d conf.d/ --layer schema
+# 重跑（一次跑完 schema + routing + cardinality）
+da-tools guard defaults-impact --config-dir conf.d/
 ```
 
 #### 2.2.2 Routing 層失敗
@@ -1386,8 +1387,8 @@ da-tools guard --conf-d conf.d/ --layer schema
 **Fix**：
 
 ```bash
-# 列出 routing 圖
-da-tools guard --conf-d conf.d/ --layer routing --show-graph
+# 重跑守衛，看報告的 Routing 段落
+da-tools guard defaults-impact --config-dir conf.d/
 # 找出孤立節點，補對應 domain entry 或 tenant assignment
 ```
 
@@ -1417,8 +1418,8 @@ cardinality_budget: <new_M>
 **Fix**：
 
 ```bash
-# 看哪些 redundant override
-da-tools guard --conf-d conf.d/ --layer redundant --show-diffs
+# 看哪些 redundant override：重跑守衛，看報告的 Redundant Override 段落
+da-tools guard defaults-impact --config-dir conf.d/
 # 從 tenant yaml 移除與 default 相同的欄位
 # Profile-as-Directory-Default 會自動繼承
 ```
