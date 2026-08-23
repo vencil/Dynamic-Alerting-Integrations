@@ -1441,6 +1441,16 @@ def test_every_scanned_root_is_wired_to_the_fifth_floor_through_the_real_entry(
         monkeypatch.setattr(gate, "_assert_keys_floor", lambda *_a, **_k: None)
         monkeypatch.setattr(gate, "_assert_shipped_roots_intact",
                             lambda *_a, **_k: None)
+        # ⛔ The SIXTH floor stands down here too, and it has to: it runs
+        # before the fifth and, for a shipped root, catches the same zeroed-keys
+        # input first (measured — this test failed on
+        # `components/threshold-exporter/config/conf.d` with the sixth floor's
+        # message rather than the fifth's). That is precisely the shadowing this
+        # docstring says has to be probed from both sides, and standing it down
+        # is what keeps the loop a statement about the FIFTH floor. The sixth
+        # floor's own wiring is pinned separately below. (#1458)
+        monkeypatch.setattr(gate, "_assert_loader_readable_floor",
+                            lambda *_a, **_k: None)
 
         def _empty_under_victim(path, _victim=victim, _real=real_read):
             rel = path.relative_to(gate.PROJECT_ROOT).as_posix()
@@ -4792,3 +4802,250 @@ def test_every_floor_names_its_own_ticket_because_the_banner_cannot():
     assert "names the floor and its ticket" in banner, (
         "the banner no longer points at the line that does know — without that "
         "pointer, dropping the ticket just removed information", banner)
+
+
+# ── SIXTH floor: the loader-readable half of a root (#1458) ─────────────────
+#
+# The defect these cover is not "a floor is too low"; it is that every floor in
+# this module counts files the RUNNING EXPORTER may never open. `git mv
+# _defaults.yaml _defaults-legacy.yaml` leaves the artifact count, the wide key
+# count and every global floor exactly where they were, and stops the platform
+# loading a single declaration in that tree. Measured on the ticket, and again
+# here (see the control-group test at the end of this block).
+
+
+def test_the_loader_readable_predicate_is_exactly_the_loaders_test():
+    """The predicate must be EQUALITY, not the wide prefix its sibling uses.
+
+    ⛔ Behaviour table only — deliberately NOT a grep of `config_hierarchy.go`.
+    This repo measured (#1448 blind review) that a Python guard asserting things
+    about Go source text goes red on legitimate Go refactors and states
+    something false when it does. What is pinned here is that
+    `_is_loader_readable_defaults` and `_is_defaults_artifact` DISAGREE on
+    exactly the names the loader skips — if someone "unifies" them, the sixth
+    floor still runs and can no longer fire.
+    """
+    reads = ["_defaults.yaml", "_defaults.yml", "_DEFAULTS.YAML", "_Defaults.Yml"]
+    skips = ["_defaults-legacy.yaml", "_defaults.bak.yaml", "_defaults2.yaml",
+             "_defaults-multidb.yaml", "defaults.yaml", "_defaults.yaml.bak"]
+    for name in reads:
+        assert gate._is_loader_readable_defaults(name), name
+        assert gate._is_defaults_artifact(name), (name, "sibling must agree here")
+    for name in skips:
+        assert not gate._is_loader_readable_defaults(name), name
+    # ⛔ And the disagreement is the point: these are the names the WIDE
+    # predicate keeps counting while the loader ignores them. If this set ever
+    # empties, the two predicates have been merged and the floor is dead code.
+    divergent = [n for n in skips if gate._is_defaults_artifact(n)]
+    assert divergent, (
+        "the two predicates no longer disagree anywhere — merging them removes "
+        "the sixth floor's reason to exist without removing its code")
+
+
+def test_the_loader_readable_floor_fires_where_the_wide_floor_stays_quiet():
+    """The measurement that justifies a sixth floor, not just an assertion.
+
+    Same input, both floors: the shipped root keeps 2 artifacts and 19 keys
+    (so `_assert_shipped_roots_intact` is satisfied), while zero of them is a
+    name the exporter opens.
+    """
+    root = "components/threshold-exporter/config/conf.d"
+    by_root = {r: [] for r in gate._SHIPPED_CONFD_ROOTS}
+    by_root[root] = [
+        (root + "/_defaults-legacy.yaml", _flat(*[f"k{i}" for i in range(8)])),
+        (root + "/examples/_defaults-multidb.yaml",
+         _flat(*[f"m{i}" for i in range(11)])),
+    ]
+    for other, (min_a, min_k, _why) in gate._SHIPPED_CONFD_ROOTS.items():
+        if other == root:
+            continue
+        by_root[other] = [(other + "/_defaults.yaml",
+                           _flat(*[f"x{i}" for i in range(max(min_k, 1))]))
+                          ] * max(min_a, 1)
+
+    # The wide floor is quiet — this is the "before", measured not assumed.
+    gate._assert_shipped_roots_intact(by_root)
+    # The narrow one is not.
+    with pytest.raises(gate._GateViolation) as exc:
+        gate._assert_loader_readable_floor(by_root)
+    msg = str(exc.value)
+    assert "WILL ACTUALLY READ" in msg
+    assert "2 artifact(s) / 19 key(s)" in msg, (
+        "the message must state the wide count too, or the reader cannot tell "
+        "why the sibling floor is silent")
+    assert "RENAMED" in msg
+
+
+def test_every_root_stays_loader_readable_catches_the_ticket_reproduction():
+    """#1458's own attack was on a bench fixture, which no shipped floor covers.
+
+    ⛔ This arm exists because the sibling floor above is NOT enough: the
+    ticket's measured `git mv` was under `tests/e2e-bench/fixture/synthetic-v1`,
+    a root with 1 key out of 70 against a global floor of 60 — ten keys of
+    slack, so its whole contribution can vanish inside the rounding.
+    """
+    victim = "tests/e2e-bench/fixture/synthetic-v1/conf.d"
+    assert victim in gate._DEFAULTS_CONFD_ROOTS, "probe root must be pinned"
+    all_by_root = {
+        r: [(r + "/_defaults.yaml", _flat("k"))]
+        for r in gate._DEFAULTS_CONFD_ROOTS}
+    # Control: the healthy shape is silent.
+    gate._assert_every_root_stays_loader_readable(all_by_root)
+
+    all_by_root[victim] = [(victim + "/_defaults-legacy.yaml", _flat("k"))]
+    with pytest.raises(gate._GateViolation) as exc:
+        gate._assert_every_root_stays_loader_readable(all_by_root)
+    msg = str(exc.value)
+    assert victim in msg
+    assert "_defaults-legacy.yaml" in msg, "name the file, not just the root"
+    assert "1458" in msg
+
+
+def test_a_root_absent_entirely_is_left_to_the_fifth_floor():
+    """Shadowing, probed from the other side.
+
+    A vanished root must NOT be reported by the sixth floor: the fifth floor
+    has a more specific message for it (tree moved / deleted / stopped matching
+    the predicate), and two floors answering the same input is how a message
+    that fits worse ends up being the one the maintainer reads.
+    """
+    all_by_root = {
+        r: [(r + "/_defaults.yaml", _flat("k"))]
+        for r in gate._DEFAULTS_CONFD_ROOTS}
+    del all_by_root["tests/golden/fixtures/l0-only/conf.d"]
+    gate._assert_every_root_stays_loader_readable(all_by_root)
+
+
+def test_the_loader_readable_exemption_list_is_empty_and_not_needed():
+    """Non-vacuity: the floor must have something to be true of.
+
+    ⛔ An exemption list that grows is how this floor dies quietly, so its
+    emptiness is asserted rather than assumed — and asserted TOGETHER with the
+    fact that makes emptiness affordable: every pinned root really does carry a
+    loader-readable `_defaults.yaml` today. If a legitimate case ever needs an
+    entry, this test is the place that has to change with it, in the same
+    commit, with the reason.
+    """
+    assert gate._ROOTS_WITHOUT_LOADER_READABLE_DEFAULTS == frozenset()
+
+    _generators, artifacts = gate._defaults_faces()
+    by_root: dict[str, list[str]] = {}
+    for face in artifacts:
+        rel = gate._artifact_rel(face)
+        if rel is None:
+            continue
+        root = gate.conf_d_root(rel)
+        if root is not None:
+            by_root.setdefault(root, []).append(rel.rsplit("/", 1)[-1])
+    assert by_root, "the scan found no roots — this test would pass vacuously"
+    barren = sorted(r for r, names in by_root.items()
+                    if not any(gate._is_loader_readable_defaults(n) for n in names))
+    assert barren == [], (
+        "these roots hold `_defaults*` files that the exporter will never "
+        "open; either that is a defect to fix or they need an entry in "
+        "_ROOTS_WITHOUT_LOADER_READABLE_DEFAULTS with a reason", barren)
+
+
+def test_both_new_floors_are_reached_through_the_real_entry(monkeypatch):
+    """Wiring, not just behaviour — the failure mode that keeps recurring here.
+
+    ⛔ Each floor is isolated by standing the OTHER one down, because they
+    shadow: the shipped-root arm runs first and catches the shipped root's
+    input before the per-root arm sees it. Measured — the first version of this
+    test asserted the per-root message and got the shipped-root one. A probe
+    that does not stand its neighbour down proves the neighbour works.
+    """
+    real_pred = gate._is_loader_readable_defaults
+
+    def _nothing_is_loader_readable(name, _r=real_pred):
+        return False if name.lower() == "_defaults.yaml" else _r(name)
+
+    # (1) The per-root arm, with the shipped-root arm stood down.
+    monkeypatch.setattr(gate, "_assert_loader_readable_floor",
+                        lambda *_a, **_k: None)
+    monkeypatch.setattr(gate, "_is_loader_readable_defaults",
+                        _nothing_is_loader_readable)
+    with pytest.raises(gate._GateViolation) as exc:
+        gate._defaults_faces()
+    msg = str(exc.value)
+    assert "conf.d root(s)" in msg
+    assert msg.count("/conf.d") > 1, (
+        "the loop must walk the pin, not one hard-coded root", msg)
+    assert "1458" in msg
+    monkeypatch.undo()
+
+    # (2) The shipped-root arm, with the per-root arm stood down.
+    monkeypatch.setattr(gate, "_assert_every_root_stays_loader_readable",
+                        lambda *_a, **_k: None)
+    monkeypatch.setattr(gate, "_is_loader_readable_defaults",
+                        _nothing_is_loader_readable)
+    with pytest.raises(gate._GateViolation) as exc:
+        gate._defaults_faces()
+    assert "WILL ACTUALLY READ" in str(exc.value)
+    monkeypatch.undo()
+
+    # Control: nothing patched, the real tree is clean through the real entry —
+    # so both raises above are the probe's doing, not a broken repo.
+    gate._defaults_faces()
+
+
+def test_the_loader_readable_floor_numbers_have_slack_and_are_not_zero():
+    """The NUMBERS in `_LOADER_READABLE_FLOORS`, not just the mechanism.
+
+    ⛔ Added because the mechanism shipped with its values unguarded and the
+    gap was measured, not guessed: dropping the exporter root's key floor from
+    6 to 0 — which silently deletes that root's protection while leaving every
+    line of the floor in place — turned NOTHING in this file red. That is the
+    same shape as every other "the guard exists, its threshold does not" defect
+    this module has paid for.
+
+    A bracket rather than an equality, for the reason the sibling floors state:
+    an exact number would go red on a legitimate edit that ADDS a key, so
+    maintainers would learn to edit the table. What is pinned is the two
+    properties a floor has to have —
+
+      * not zero (a floor of 0 is not a floor), and
+      * STRICTLY below today's measured count (slack, so a legitimate removal
+        of one key is not a CI incident and nobody learns to lower it)
+
+    — with the right-hand side DERIVED from the real scan, so this test cannot
+    drift from the tree it is about.
+
+    ⚠️ A root that legitimately declares no keys keeps `min_keys == 0`; the
+    bracket cannot apply to it, and demanding one would force a fake key into a
+    shipped example tree. Its artifact count is what guards it, exactly as the
+    sibling table says.
+    """
+    _generators, artifacts = gate._defaults_faces()
+    measured: dict[str, tuple[int, int]] = {}
+    for face, keys in artifacts.items():
+        rel = gate._artifact_rel(face)
+        if rel is None:
+            continue
+        root = gate.conf_d_root(rel)
+        if root not in gate._LOADER_READABLE_FLOORS:
+            continue
+        if not gate._is_loader_readable_defaults(rel.rsplit("/", 1)[-1]):
+            continue
+        n_a, n_k = measured.get(root, (0, 0))
+        measured[root] = (n_a + 1, n_k + len(keys))
+
+    assert set(measured) == set(gate._LOADER_READABLE_FLOORS), (
+        "every root in the table must actually be measurable, or this test "
+        "passes vacuously for the ones that are not",
+        {"in table": sorted(gate._LOADER_READABLE_FLOORS),
+         "measured": sorted(measured)})
+
+    for root, (min_a, min_k, _why) in sorted(gate._LOADER_READABLE_FLOORS.items()):
+        got_a, got_k = measured[root]
+        assert 1 <= min_a <= got_a, (
+            f"{root}: artifact floor {min_a} against {got_a} measured", root)
+        if got_k == 0:
+            assert min_k == 0, (
+                f"{root}: declares no loader-readable keys today, so a "
+                f"non-zero key floor of {min_k} would be unsatisfiable")
+            continue
+        assert 0 < min_k < got_k, (
+            f"{root}: key floor {min_k} against {got_k} measured — a floor of "
+            f"0 is not a floor, and a floor equal to today's count has no "
+            f"slack, which is what teaches people to edit the table")

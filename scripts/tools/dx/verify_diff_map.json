@@ -739,7 +739,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "f989a4fb8f9ff50f5a06f3fb0519c4aa6a2a66e5a5be4512696cd05da0034f5c",
+ "source_digest": "7f6742df7fbdd478ac4eb042c7360fa4b384138c8ca743e8855a47edb9a43496",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -2591,6 +2591,12 @@
   ],
   "tests/e2e-bench/driver/driver.py": [
    "tests/e2e-bench/driver/test_driver.py"
+  ],
+  "tests/e2e-bench/fixture/synthetic-v1": [
+   "tests/lint/test_check_threshold_reachability.py"
+  ],
+  "tests/e2e-bench/fixture/synthetic-v1/conf.d": [
+   "tests/lint/test_check_threshold_reachability.py"
   ],
   "tests/e2e-bench/receiver/Dockerfile": [
    "tests/ops/test_nightly_scan_matrix_drift.py"

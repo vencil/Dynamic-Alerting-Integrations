@@ -975,6 +975,83 @@ def _is_defaults_artifact(name: str) -> bool:
     return lower.startswith("_defaults") and lower.endswith(_DEFAULTS_ARTIFACT_SUFFIXES)
 
 
+def _is_loader_readable_defaults(name: str) -> bool:
+    """EXACTLY what `config_hierarchy.go` will enter into `defaults` (#1458).
+
+    ⛔ Deliberately NARROWER than `_is_defaults_artifact`, and the two must not
+    be merged. That one is a PREFIX match on purpose (see its docstring); this
+    one mirrors the loader's equality test verbatim:
+
+        components/threshold-exporter/app/config_hierarchy.go:206
+            if lower == "_defaults.yaml" || lower == "_defaults.yml" {
+
+    Same lowercasing, exact basename, nothing else. If that line ever changes,
+    this one changes with it — `test_loader_readable_predicate_mirrors_the_go_test`
+    pins the pair.
+    """
+    return name.lower() in ("_defaults.yaml", "_defaults.yml")
+
+
+# ── SIXTH floor: the loader-readable half of each shipped root (#1458) ──────
+#
+# ⛔ THE GAP THIS CLOSES, in one measurement. `_SHIPPED_CONFD_ROOTS` floors the
+# exporter's own root at `(2 artifacts, 15 keys)`. Split that by whether the Go
+# loader will actually read the file:
+#
+#     _defaults.yaml                 8 keys   loader reads it
+#     examples/_defaults-multidb.yaml 11 keys  loader SKIPS it (name is not
+#                                              `_defaults.yaml`; the test at
+#                                              config_hierarchy.go:206 is exact)
+#
+# ⇒ 11 of that root's 19 keys — the majority — come from a file the platform
+# never loads at runtime. The floor is satisfied, and would stay satisfied if
+# every loader-readable key vanished: 11 >= ... no, the ARTIFACT count would
+# still be 2 and the KEY count would still be 11, under 15, so that particular
+# collapse does fire. What does NOT fire is #1458's actual attack: rename
+# `_defaults.yaml` to `_defaults-legacy.yaml` and the loader stops reading it
+# while `_is_defaults_artifact`'s prefix keeps counting all 19 keys. Measured on
+# the ticket: `GATE rc=0`, 17 artifacts, every floor satisfied, and the
+# thresholds sitting in a file nothing reads.
+#
+# ⚠️ NOT fixed by narrowing `_is_defaults_artifact` to the loader's equality.
+# That is the reflex and it is wrong: the width is what let #1392 see
+# `examples/_defaults-multidb.yaml` at all, and narrowing re-creates that blind
+# spot. The two questions are genuinely different —
+#
+#     "is this file part of the platform's declared thresholds?"  (wide)
+#     "will the running exporter read it?"                        (exact)
+#
+# — so they get two floors instead of one compromise.
+#
+# The numbers are the loader-readable subset measured today, with the same kind
+# of slack the sibling table carries (exporter 19 vs 15). Measured per root:
+#
+#     components/threshold-exporter/config/conf.d   1 artifact /  8 keys
+#     try-local/seed/conf.d                         1 artifact /  4 keys
+#     rule-packs/recipes/examples/conf.d            2 artifacts / 0 keys
+#
+# ⇒ two of the three roots are 100% loader-readable, so this floor costs them
+# nothing and needs no exemption. Only the exporter root differs, which is the
+# whole finding.
+#
+# ⛔ Same rule as the sibling table: LOWERING A NUMBER HERE IS NOT A REMEDY.
+_LOADER_READABLE_FLOORS: dict[str, tuple[int, int, str]] = {
+    "components/threshold-exporter/config/conf.d": (
+        1, 6,
+        "the exporter's own conf.d. Its `_defaults.yaml` is the only file in "
+        "this tree the running exporter reads as platform defaults; the "
+        "`examples/` sibling is documentation the loader skips by name."),
+    "try-local/seed/conf.d": (
+        1, 3,
+        "the one-command demo stack. Entirely loader-readable today, so this "
+        "floor mirrors its sibling entry."),
+    "rule-packs/recipes/examples/conf.d": (
+        2, 0,
+        "the custom-alert recipe examples. Entirely loader-readable today; "
+        "min keys is 0 for the same reason as its sibling entry."),
+}
+
+
 def _tracked_paths() -> list[str]:
     """Every repo-relative path in the INDEX. The one place this module shells out.
 
@@ -1818,7 +1895,9 @@ def _defaults_faces() -> tuple[dict[str, dict[str, KeyInfo]], dict[str, dict[str
             "(#1411)")
 
     _assert_shipped_roots_intact(by_root)
+    _assert_loader_readable_floor(by_root)
     _assert_every_root_contributes(all_by_root)
+    _assert_every_root_stays_loader_readable(all_by_root)
     _assert_keys_floor(generators, artifacts)
     # ⛔ LAST, and the position was chosen by measurement rather than by
     # argument (#1443). Running it FIRST also catches the attack — measured,
@@ -2037,6 +2116,134 @@ def _assert_shipped_roots_intact(
             ".pre-commit-config.yaml in the same commit (a test pins the ROOT "
             "SET to those hooks — it does NOT police these two numbers, so they "
             "are on you). (TRK-344 / #1392)")
+
+
+def _assert_loader_readable_floor(
+        by_root: dict[str, list[tuple[str, dict[str, KeyInfo]]]]) -> None:
+    """Each shipped root must still declare thresholds the LOADER will read.
+
+    Sibling of `_assert_shipped_roots_intact`, counting the same tree through
+    the loader's own filename test instead of this module's wider one. See
+    `_LOADER_READABLE_FLOORS` for why both exist.
+
+    ⛔ This is the floor that #1458's rename walks past. `git mv _defaults.yaml
+    _defaults-legacy.yaml` leaves the file count and the wide key count exactly
+    where they were — the ticket measured `GATE rc=0` with zero exemptions
+    added — while the exporter stops reading the file entirely.
+    """
+    for root, (min_artifacts, min_keys, why) in sorted(
+            _LOADER_READABLE_FLOORS.items()):
+        found = [(rel, keys) for rel, keys in by_root[root]
+                 if _is_loader_readable_defaults(rel.rsplit("/", 1)[-1])]
+        n_keys = sum(len(keys) for _rel, keys in found)
+        if len(found) >= min_artifacts and n_keys >= min_keys:
+            continue
+        wide = by_root[root]
+        wide_keys = sum(len(keys) for _rel, keys in wide)
+        raise _GateViolation(
+            f"shipped conf.d root {root!r} now contributes "
+            f"{len(found)} artifact(s) / {n_keys} key(s) THAT THE EXPORTER "
+            f"WILL ACTUALLY READ, below its floor of {min_artifacts} "
+            f"artifact(s) / {min_keys} key(s). This root ships: {why}\n"
+            f"  Counted the wide way it still has {len(wide)} artifact(s) / "
+            f"{wide_keys} key(s), which is why the sibling floor "
+            "(_SHIPPED_CONFD_ROOTS) is quiet — that one asks whether the "
+            "declarations exist, this one asks whether anything loads them.\n"
+            "  MOST LIKELY: a `_defaults.yaml` was RENAMED. The loader's test "
+            "is exact (`config_hierarchy.go`: `lower == \"_defaults.yaml\" || "
+            "lower == \"_defaults.yml\"`), so `_defaults-legacy.yaml` or "
+            "`_defaults.bak.yaml` keeps every declaration in the tree and stops "
+            "every one of them from being loaded. Rename it back, or move the "
+            "declarations into a real `_defaults.yaml`.\n"
+            "  OR: the file was deleted, or its `defaults:` section was renamed "
+            "or emptied.\n"
+            "  ⛔ LOWERING THESE NUMBERS IS NOT A REMEDY, and neither is "
+            "widening `_is_loader_readable_defaults`: that predicate mirrors a "
+            "specific line of Go and is the only thing here that knows what the "
+            "platform actually reads. Widening it to match "
+            "`_is_defaults_artifact` deletes this floor without deleting the "
+            "code. (#1458)")
+
+
+# Roots that legitimately hold no loader-readable `_defaults.yaml` at all.
+#
+# ⛔ EMPTY, and measured empty: all 12 pinned roots carry one today. The list
+# exists so that a future legitimate case has somewhere to go WITH A REASON,
+# not as slack to be spent — an entry here hands back the whole of
+# `_assert_every_root_stays_loader_readable` for that root, which is the same
+# shape of "one line buys silence" that #1443 is about. Adding one is a claim
+# that the tree is not meant to be loaded by the exporter at all.
+_ROOTS_WITHOUT_LOADER_READABLE_DEFAULTS: frozenset[str] = frozenset()
+
+
+def _assert_every_root_stays_loader_readable(
+        all_by_root: dict[str, list[tuple[str, dict[str, KeyInfo]]]]) -> None:
+    """Every pinned conf.d root must keep a `_defaults.yaml` the loader reads.
+
+    ⛔ THIS IS THE ARM THAT CLOSES #1458's OWN REPRODUCTION, and the shipped-root
+    floor next to it does not. That one covers three roots; the ticket's
+    measured attack renamed a file under `tests/e2e-bench/fixture/synthetic-v1`,
+    which is not one of them. Measured with only the sibling floor in place:
+
+        git mv .../synthetic-v1/conf.d/_defaults.yaml \
+               .../synthetic-v1/conf.d/_defaults-legacy.yaml
+        GATE rc=0
+
+    Why nothing else catches it: `_is_defaults_artifact` matches a PREFIX, so
+    the renamed file is still counted — same artifact count, same key count,
+    every file floor and both key floors satisfied. And the GLOBAL key floor
+    cannot see this root either: it carries 1 key out of 70 against a floor of
+    60, i.e. ten keys of slack, so its entire contribution can vanish inside
+    the rounding. ⚠️ That slack is itself uneven — `synthetic-v2` contributes
+    12 and WOULD trip the global floor — so "the global floor protects the
+    bench fixtures" is true of one of them and false of the other. Per-root is
+    the only formulation that does not depend on which fixture happens to be
+    bigger.
+
+    ⛔ COUNTS FILES, NOT KEYS, and that is deliberate. A key floor here would
+    need a per-root number, and #1411 locked the project out of
+    ratchet-to-measured numbers (zero-slack floors teach people to treat the
+    floor as adjustable). "At least one file the loader will actually open" is
+    a property, not a measurement: it does not drift, it needs no table, and it
+    is exactly what a rename destroys. Measured: all 12 pinned roots satisfy it
+    today, so it ships with an empty exemption list.
+    """
+    offenders = []
+    for root in sorted(_DEFAULTS_CONFD_ROOTS):
+        if root in _ROOTS_WITHOUT_LOADER_READABLE_DEFAULTS:
+            continue
+        found = all_by_root.get(root, [])
+        if not found:
+            # Absent entirely — `_assert_every_root_contributes` owns that
+            # case and says something more specific about it.
+            continue
+        if any(_is_loader_readable_defaults(rel.rsplit("/", 1)[-1])
+               for rel, _keys in found):
+            continue
+        offenders.append((root, sorted(rel for rel, _k in found)))
+    if not offenders:
+        return
+    detail = "\n".join(
+        f"    {root}: has {files} — none of them is `_defaults.yaml`/`.yml`"
+        for root, files in offenders)
+    raise _GateViolation(
+        f"conf.d root(s) {[r for r, _f in offenders]} still contain "
+        "`_defaults*` files, but NOT ONE of them is a name the exporter will "
+        "read:\n" + detail + "\n"
+        "  The loader's test is exact (`config_hierarchy.go`: "
+        "`lower == \"_defaults.yaml\" || lower == \"_defaults.yml\"`), so a "
+        "rename to `_defaults-legacy.yaml`, `_defaults.bak.yaml` or similar "
+        "keeps every declaration in the tree, keeps every other floor in this "
+        "module satisfied, and stops the platform from loading any of it. That "
+        "is #1458 verbatim: the ticket's own reproduction was `git mv` on one "
+        "file, zero exemptions added, gate rc=0.\n"
+        "  REMEDY: rename it back, or move the declarations into a real "
+        "`_defaults.yaml` in the same tree.\n"
+        "  ⛔ Adding the root to _ROOTS_WITHOUT_LOADER_READABLE_DEFAULTS is NOT "
+        "the remedy unless the tree genuinely is not meant to be loaded by the "
+        "exporter — that list is empty today and an entry hands back this "
+        "root's whole coverage for one line, the exact shape #1443 is about. "
+        "(#1458)")
 
 
 def _assert_every_root_contributes(
