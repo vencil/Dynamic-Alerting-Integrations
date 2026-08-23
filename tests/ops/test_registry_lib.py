@@ -885,22 +885,54 @@ def test_tenant_doc_three_population_claim_matches_the_derivation(path):
             f"of the dormant group, but no dormant key starts with "
             f"'{family}_' (dormant={sorted(dormant)})")
 
-def _textwrap_module_names(tree) -> set[str]:
-    """Every name `textwrap` is reachable under in this module.
+# The `textwrap` entry points that can emit a wrapped line. ⛔ Enumerating THESE
+# is legitimate where enumerating spellings was not: the list has an authority
+# outside this repo — it is `textwrap`'s public API — and the other two members
+# of that API (`dedent`, `indent`) cannot split anything, so admitting them
+# would only produce false reports.
+_TEXTWRAP_WRAPPING_API = ("wrap", "fill", "shorten", "TextWrapper")
 
-    ⛔ `import textwrap as tw` is the third spelling. The first version of the
-    guard below matched the literal `textwrap` only; blind review added the
-    `from textwrap import wrap` form, and blind review of THAT added this one —
-    a set assertion that knows two of three spellings is still a spot check.
+
+def _textwrap_wrapping_calls(tree) -> list[int]:
+    """Line of every call reaching a `textwrap` wrapping entry point, ANY spelling.
+
+    ⛔ DERIVED ON THE SPELLING AXIS, and it took three rounds of blind review to
+    stop enumerating that axis. Version one matched the literal `textwrap.wrap`;
+    version two added `from textwrap import wrap`; version three added
+    `import textwrap as tw` while calling itself a set assertion that knew
+    "two of three spellings" — and review then walked straight through the
+    fourth, `textwrap.TextWrapper(width=...).wrap(...)`, which is the stdlib's
+    own OO form and splits `negative-db2.yaml` exactly like the rest. There is
+    no fifth-spelling problem here only because this now asks what the callee
+    RESOLVES to rather than how it is written.
     """
     import ast
 
-    names = {"textwrap"}
+    module_names = {"textwrap"}
+    from_names: dict[str, str] = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            names |= {a.asname or a.name
-                      for a in node.names if a.name == "textwrap"}
-    return names
+            module_names |= {a.asname or a.name
+                             for a in node.names if a.name == "textwrap"}
+        elif isinstance(node, ast.ImportFrom) and node.module == "textwrap":
+            for alias in node.names:
+                from_names[alias.asname or alias.name] = alias.name
+
+    def reaches(func) -> bool:
+        if isinstance(func, ast.Attribute):
+            if isinstance(func.value, ast.Name):
+                return (func.value.id in module_names
+                        and func.attr in _TEXTWRAP_WRAPPING_API)
+            # `TextWrapper(...).wrap(...)` — the receiver is itself a call.
+            if isinstance(func.value, ast.Call):
+                return reaches(func.value.func)
+            return False
+        if isinstance(func, ast.Name):
+            return from_names.get(func.id) in _TEXTWRAP_WRAPPING_API
+        return False
+
+    return [node.lineno for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and reaches(node.func)]
 
 
 def test_no_call_site_wraps_a_comment_on_its_own() -> None:
@@ -922,40 +954,13 @@ def test_no_call_site_wraps_a_comment_on_its_own() -> None:
     import ast
 
     tree = ast.parse(_SCRIPT.read_text(encoding="utf-8"))
-    raw = [
-        node.lineno
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr in ("wrap", "fill")
-        and isinstance(node.func.value, ast.Name)
-        and node.func.value.id in _textwrap_module_names(tree)
-    ]
+    raw = _textwrap_wrapping_calls(tree)
     inside = [
         node.lineno
         for fn in ast.walk(tree)
         if isinstance(fn, ast.FunctionDef) and fn.name == "_wrap_comment"
         for node in ast.walk(fn)
         if isinstance(node, ast.Call)
-    ]
-    # ⛔ AND THE OTHER SPELLING. `from textwrap import wrap` produces a bare
-    # `Name` call that the `Attribute` scan above cannot see, and that idiom is
-    # already house style here — three sibling test modules import `dedent` that
-    # way. A guard that only knows one spelling is a spot check wearing the
-    # word SET.
-    imported = {
-        alias.asname or alias.name
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom) and node.module == "textwrap"
-        for alias in node.names
-        if alias.name in ("wrap", "fill")
-    }
-    raw += [
-        node.lineno
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id in imported
     ]
 
     assert raw and set(raw) <= set(inside), (

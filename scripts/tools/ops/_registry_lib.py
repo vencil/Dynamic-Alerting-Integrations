@@ -675,8 +675,8 @@ def _entry_lines(
     keyline = f"{prefix}{key}: {_fmt_value(entry['value'])}{tag}"
     meta = f"{entry['unit']} — {entry['desc']}"
     inline = f"{keyline}   # {meta}"
-    lines = [inline] if len(inline) <= 100 else [keyline] + [
-        f"{cont}{seg}" for seg in _wrap_comment(meta, 100 - len(cont))
+    lines = [inline] if len(inline) <= _COMMENT_WIDTH else [keyline] + [
+        f"{cont}{seg}" for seg in _wrap_comment(meta, _COMMENT_WIDTH - len(cont))
     ]
     return lines + _counterexample_lines(entry, cont)
 
@@ -886,7 +886,8 @@ def _counterexample_lines(entry: dict, cont: str = "#       ") -> list[str]:
             f"這個數字是起點，不是平台背書的值")
     # `_wrap_comment` owns the no-split rule (both flags). The note that used to
     # sit here named only the hyphen half.
-    return [f"{cont}{seg}" for seg in _wrap_comment(body, 100 - len(cont))]
+    return [f"{cont}{seg}"
+            for seg in _wrap_comment(body, _COMMENT_WIDTH - len(cont))]
 
 
 # ---------------------------------------------------------------------------
@@ -1150,7 +1151,7 @@ def render_chart_defaults_lines(doc: dict, indent: int) -> list[str]:
                     f"（critical 加嚴 opt-in：{crit_key}，"
                     f"registry 建議 {_fmt_value(crit['value'])}）"
                 )
-            for seg in _wrap_comment(meta, 100 - indent - 2):
+            for seg in _wrap_comment(meta, _COMMENT_WIDTH - indent - 2):
                 lines.append(f"{ind}# {seg}")
             # Wired now, not "when a chart_default key gets one": no shipped
             # chart_default carries a counter-example today, so this emits
@@ -1179,6 +1180,15 @@ def _wrap_comment(body: str, width: int) -> list[str]:
     fixed at NONE of them, and the other three never got the hyphen fix either.
     Six call sites meant six chances to get half of it. Deciding here means a
     caller cannot (#1453).
+
+    ⚠️ THAT SENTENCE WAS TRUE OF THE FLAGS AND FALSE OF THE WIDTH when it was
+    written: three call sites still passed a bare `100` while three used
+    `_COMMENT_WIDTH`, so the base column budget was exactly the kind of
+    half-applied decision this function exists to end — the same defect, one
+    parameter over. All of them route through `_COMMENT_WIDTH` now, and nothing
+    asserts that, so re-read it if you add a call site. What legitimately stays
+    per-call-site is the SUBTRACTION (`- len(cont)` versus `- indent - 2`):
+    different renderers spend different amounts of the line on their prefix.
     """
     return textwrap.wrap(body, width, break_on_hyphens=False,
                          break_long_words=False)
@@ -1196,10 +1206,15 @@ def _append_wrapped_comment(lines: list[str], item: str, meta: str, cont: str,
     eventually stop looking alike — they render the SAME declared set to two
     audiences, so a divergence in wrapping is a divergence nobody chose.
 
-    ⛔ Byte-for-byte identical to what each renderer did inline: three spaces
-    before the ``#``, ``textwrap.wrap`` at ``width - len(cont)``. The generated
-    surfaces are gate-compared (``check_threshold_registry.py --ci``), so a
-    cosmetic drift here reads as a real regen diff.
+    ⚠️ THAT RULE IS NO LONGER "whatever each renderer did inline", and this
+    paragraph used to say it was. The layout is unchanged — three spaces before
+    the ``#``, continuation indented to ``cont`` — but the wrapping goes through
+    ``_wrap_comment``, whose entire purpose is that ``textwrap``'s two splitting
+    defaults are OFF (#1453). For any ``meta`` carrying a hyphenated or
+    over-width token the output therefore DIFFERS from the old inline call, on
+    purpose. The generated surfaces are gate-compared
+    (``check_threshold_registry.py --ci``), so that difference landed as a real
+    regen diff rather than a cosmetic one.
 
     Mutates and returns ``lines`` (the callers accumulate into one list).
     """
