@@ -133,6 +133,10 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lint_helpers import (  # noqa: E402
+    parse_build_sh_array_text,
+    parse_command_map_text as parse_command_map_text_shared,
+)
 from _lib_validation import i18n_text  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -309,29 +313,24 @@ def attributed_pin(image_paths: set[str], pin_trails: list[str]) -> str | None:
 
 # --- capability extraction (text in, facts out) ------------------------------
 # Deliberately text-based, not path-based: the inputs come from `git show
-# <tag>:<path>` and must never touch the working tree. Kept behaviourally
-# identical to scripts/tools/lint/_lint_helpers.py's file-based parsers —
-# tests/lint/test_check_image_pin_capability.py pins that equivalence on HEAD
-# so the two cannot drift.
-_COMMAND_MAP_ENTRY_RE = re.compile(r'"([a-z][a-z0-9-]+)":\s*"([^"]+)"')
+# <tag>:<path>` and must never touch the working tree. ⛔ Both readers now
+# DELEGATE to `_lint_helpers`, which is why "text in" no longer implies a
+# second implementation. It used to: two transcriptions were kept in step by
+# `test_text_parsers_match_lib_lint_helpers_on_head`, and that test compares
+# them only on HEAD's own build.sh — measured, it stays green under every
+# boundary case the two parsers disagreed on, so it was never the drift
+# detector this comment claimed.
 
 
 def parse_command_map_text(text: str) -> dict[str, str]:
-    """Parse `COMMAND_MAP` (subcommand -> script filename) from entrypoint.py source."""
-    commands: dict[str, str] = {}
-    in_map = False
-    for line in text.split("\n"):
-        stripped = line.strip()
-        if stripped.startswith("COMMAND_MAP"):
-            in_map = True
-            continue
-        if in_map:
-            if stripped == "}":
-                break
-            match = _COMMAND_MAP_ENTRY_RE.match(stripped)
-            if match:
-                commands[match.group(1)] = match.group(2)
-    return commands
+    """Parse `COMMAND_MAP` (subcommand -> script filename) from entrypoint.py source.
+
+    ⛔ Delegates. This was a verbatim copy of `_lint_helpers.parse_command_map`
+    — the same regex, the same `in_map` loop, the same `stripped == "}"` close
+    — sitting thirty lines above a comment declaring that a transcription which
+    must be kept in sync IS the defect. Both readers now share one rule.
+    """
+    return parse_command_map_text_shared(text)
 
 
 def parse_tool_files_text(text: str) -> set[str]:
@@ -340,22 +339,19 @@ def parse_tool_files_text(text: str) -> set[str]:
     Basenames, not the `ops/…` paths as written: build.sh copies the array
     flat into the image, so the basename is what `/opt/da-tools/<x>` resolves.
     """
-    tools: set[str] = set()
-    in_block = False
-    for line in text.split("\n"):
-        stripped = line.strip()
-        if "TOOL_FILES=(" in stripped:
-            in_block = True
-            continue
-        if in_block:
-            if stripped == ")":
-                break
-            if not stripped or stripped.startswith("#"):
-                continue
-            name = stripped.strip("\"'(),").strip()
-            if name:
-                tools.add(os.path.basename(name))
-    return tools
+    # ⛔ Delegate. This used to be a transcription of `_lint_helpers`' reader,
+    # kept standalone because the INPUT differs (a tag's blob as text, not a
+    # file on disk) — but the input is the only thing that differed; every
+    # parsing RULE was duplicated. Measured cost of that: four rules had to be
+    # applied twice, and one round applied a fix to only one side. The drift
+    # detector (`test_text_parsers_match_lib_lint_helpers_on_head`) could not
+    # help there either — it compares both readers on HEAD's build.sh, which
+    # exercises none of the boundary cases.
+    #
+    # `_lint_helpers` is lint-only (neither it nor this file is in TOOL_FILES),
+    # so importing it carries no flat-image concern.
+    return {os.path.basename(name)
+            for name in parse_build_sh_array_text(text, "TOOL_FILES")}
 
 
 # --- git plumbing -----------------------------------------------------------

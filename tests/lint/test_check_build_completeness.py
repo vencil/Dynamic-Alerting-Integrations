@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -535,10 +536,24 @@ class TestCheckRequiredDataFiles:
 
     def test_repo_required_data_files_present(self):
         # Regression: the real REQUIRED_DATA_FILES mapping must be satisfied
-        # by the actual shipped TOOL_FILES.
-        from _lint_helpers import parse_build_sh_tools
-        build_tools = parse_build_sh_tools()
-        errors = mod.check_required_data_files(build_tools)
+        # by everything that actually ships.
+        #
+        # ⛔ 「出貨集合」自 #1494 起是**兩條**搬運路徑的聯集：TOOL_FILES
+        # （相對 scripts/tools/）與 REPO_DATA_FILES（相對 repo root，給住在
+        # scripts/tools/ 之外的資料檔）。這一格原本只餵前者；那個定義在
+        # configmap-rules-platform.yaml 進來之後就不再等於「會不會一起進
+        # 映像」，會把一個確實有出貨的檔案報成缺漏。
+        # 反向控制在 TestRepoDataFilesArePairedWithTheirConsumer，
+        # 它斷言只餵 TOOL_FILES 時規則**仍會**開火 —— 所以這裡放寬的是
+        # 集合的定義，不是規則的嚴格度。
+        from _lint_helpers import (
+            parse_build_sh_repo_data_files,
+            parse_build_sh_tools,
+        )
+        shipped = parse_build_sh_tools() | {
+            Path(p).name for p in parse_build_sh_repo_data_files()
+        }
+        errors = mod.check_required_data_files(shipped)
         assert errors == [], (
             "shipped module missing its required data file: "
             + "; ".join(m for _, m in errors)
@@ -549,3 +564,529 @@ class TestCheckRequiredDataFiles:
 # tests/shared/test_property_tools.py::TestParseBuildShToolPathsProperties
 # (sibling of the parse_build_sh_tools coverage), per the
 # property-coverage.yaml manifest convention.
+
+
+class TestCheckLayoutDepthAssumptions:
+    """#1494 — 出貨檔不得靠「數上去幾層」定位 repo 內的東西。
+
+    映像把工具攤平到 ``/opt/da-tools/``（3 個祖先），repo 佈局有 8~9 個，
+    所以這一類在 repo 測試裡永遠是綠的、在客戶手上永遠是壞的。
+    """
+
+    def test_module_scope_parents_index_is_error(self, tmp_path):
+        # 這正是 #1494 的形狀：module scope、import 期就會 IndexError。
+        _make_tool(tmp_path, "ops/t.py",
+                   "from pathlib import Path\n"
+                   "ROOT = Path(__file__).resolve().parents[3] / 'k8s'\n")
+        errors = mod.check_layout_depth_assumptions(
+            {"ops/t.py"}, tools_src=tmp_path)
+        assert len(errors) == 1
+        sev, msg = errors[0]
+        assert sev == "error"
+        assert "ops/t.py:2" in msg and "module scope" in msg
+
+    def test_parent_chain_is_error_even_inside_a_function(self, tmp_path):
+        """⛔ 安靜的那一種也要抓。
+
+        ``.parent`` 鏈超過根目錄不會拋錯，它**飽和**在 ``/``，所以只斷言
+        「import 不會爆」的守衛看不到它（實測：映像深度下 ``.parent`` 四次
+        得到 ``/`` 而非例外）。這一格就是那個差別。
+        """
+        _make_tool(tmp_path, "dx/t.py",
+                   "from pathlib import Path\n"
+                   "def f():\n"
+                   "    return Path(__file__).resolve()"
+                   ".parent.parent.parent.parent\n")
+        errors = mod.check_layout_depth_assumptions(
+            {"dx/t.py"}, tools_src=tmp_path)
+        assert len(errors) == 1
+        assert "函式內" in errors[0][1]
+        # ⛔ 後果必須由拼法決定：`.parent` 鏈飽和、不拋錯。訊息若說成
+        # IndexError，讀到的人會低估（或高估）優先級。
+        assert "不會拋錯" in errors[0][1] and "飽和" in errors[0][1]
+        assert "IndexError" not in errors[0][1]
+
+    def test_nested_dirname_counts_the_same(self, tmp_path):
+        """巢狀 dirname 與 parents/.parent 同樣被計數。
+
+        ⚠️ 這一格**不**證明「換拼法不是轉綠的路」——那句宣稱已被撤回。
+        規則只認三種建模過的拼法；字面 `".."` 段、`os.pardir`、間接
+        `_THIS_DIR` 賦值都繞得過，逐條列在
+        `check_layout_depth_assumptions` 的 docstring 裡。
+        """
+        _make_tool(tmp_path, "ops/t.py",
+                   "import os\n"
+                   "ROOT = os.path.dirname(os.path.dirname(os.path.dirname(\n"
+                   "    os.path.abspath(__file__))))\n")
+        errors = mod.check_layout_depth_assumptions(
+            {"ops/t.py"}, tools_src=tmp_path)
+        assert len(errors) == 1
+
+    def test_parents_index_message_says_indexerror_not_saturation(
+        self, tmp_path
+    ):
+        """⛔ index 分支的訊息也要被釘住。
+
+        盲審實測：把 `_ascent_kind` 整個塌成 `return "chain"`，
+        `-k LayoutDepth` 全綠——也就是 index 與 mixed 兩個分支當時沒有任何
+        斷言，`parents[3]`（#1494 原形）被報成「不會拋錯、安靜飽和」也不會
+        有人發現，而那正是這項修正宣稱要防的誤導。
+        """
+        _make_tool(tmp_path, "ops/t.py",
+                   "from pathlib import Path\n"
+                   "ROOT = Path(__file__).resolve().parents[3]\n")
+        msg = mod.check_layout_depth_assumptions(
+            {"ops/t.py"}, tools_src=tmp_path)[0][1]
+        assert "IndexError" in msg
+        assert "飽和" not in msg
+
+    def test_mixed_spelling_message_admits_it_depends(self, tmp_path):
+        """兩種拼法混用時，後果取決於運算順序——訊息不得假裝確定。"""
+        _make_tool(tmp_path, "ops/t.py",
+                   "from pathlib import Path\n"
+                   "ROOT = Path(__file__).resolve().parent.parents[2]\n")
+        msg = mod.check_layout_depth_assumptions(
+            {"ops/t.py"}, tools_src=tmp_path)[0][1]
+        assert "視實際運算順序" in msg
+
+    def test_non_literal_index_is_reported_not_waved_through(self, tmp_path):
+        """讀不出來的 index 是「無法擔保」，不是「沒問題」（fail-closed）。"""
+        _make_tool(tmp_path, "ops/t.py",
+                   "from pathlib import Path\n"
+                   "N = 3\n"
+                   "ROOT = Path(__file__).resolve().parents[N]\n")
+        errors = mod.check_layout_depth_assumptions(
+            {"ops/t.py"}, tools_src=tmp_path)
+        assert len(errors) == 1
+        assert "不是字面常數" in errors[0][1]
+
+    @pytest.mark.parametrize("body", [
+        # ⚠️ 這一格釘的是**今天的（已知偏低的）門檻**，不是「這樣寫是安全的」。
+        # `parents[2]` 與 `.parent` ×3 爬一樣多層、在映像深度都解析成 `/`，
+        # 但目前只有後者被擋（盲點 #1／#7，見 check_layout_depth_assumptions
+        # 的 docstring）。⇒ 修那個偏移量時**必須同時改這一格**，否則會被自己
+        # 的測試擋住。
+        "from pathlib import Path\nROOT = Path(__file__).resolve().parents[2]\n",
+        # 同目錄尋址：映像 flat layout 的正解，必須不被擋
+        "from pathlib import Path\nD = Path(__file__).resolve().parent / 'x.yaml'\n",
+        # 與 __file__ 無關的深度運算不歸這條規則管
+        "from pathlib import Path\nROOT = Path('/etc/a/b').parents[2]\n",
+    ])
+    def test_legal_shapes_stay_green(self, tmp_path, body):
+        """⛔ 誤紅面。這三種都是正當寫法，擋掉它們會讓人把規則刪掉。"""
+        _make_tool(tmp_path, "ops/t.py", body)
+        assert mod.check_layout_depth_assumptions(
+            {"ops/t.py"}, tools_src=tmp_path) == []
+
+    def test_unparseable_shipped_file_is_an_error_not_a_skip(self, tmp_path):
+        """讀不到就等於沒查過——沉默地略過是 fail-open。"""
+        _make_tool(tmp_path, "ops/t.py", "def (\n")
+        errors = mod.check_layout_depth_assumptions(
+            {"ops/t.py"}, tools_src=tmp_path)
+        assert len(errors) == 1
+        assert "無法確認" in errors[0][1]
+
+    def test_a_bom_prefixed_shipped_file_is_not_a_finding(self, tmp_path):
+        """⛔ BOM 的檔案 Python 跑得動，兩支掃描器都不得報成解析失敗。
+
+        Windows 編輯器存出來的 UTF-8 檔常帶 BOM；`ast.parse` 對 U+FEFF 會拋
+        `invalid non-printable character`，但 `python x.py` rc=0。這在同一支
+        檔案裡有**兩個**掃描器會踩到，所以兩個一起釘。
+        """
+        p = tmp_path / "ops" / "t.py"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(
+            b"\xef\xbb\xbffrom pathlib import Path\n"
+            b"D = Path(__file__).resolve().parent\n")
+        assert mod.check_layout_depth_assumptions(
+            {"ops/t.py"}, tools_src=tmp_path) == []
+        assert mod.check_underscore_imports(
+            {"ops/t.py"}, {"t.py"}, tools_src=tmp_path) == []
+
+    def test_non_python_entries_are_ignored(self, tmp_path):
+        """TOOL_FILES 也含資料檔，別拿 ast 去解析 YAML。"""
+        _make_tool(tmp_path, "ops/x.yaml", "a: 1\n")
+        assert mod.check_layout_depth_assumptions(
+            {"ops/x.yaml"}, tools_src=tmp_path) == []
+
+    def test_actual_repo_has_no_depth_assumptions(self):
+        """Repo 級迴歸：今天出貨的 71 支 .py 一處都不許有。"""
+        from _lint_helpers import parse_build_sh_tool_paths
+        errors = mod.check_layout_depth_assumptions(
+            parse_build_sh_tool_paths())
+        assert errors == [], (
+            "shipped tool(s) still count directory levels:\n"
+            + "\n".join(m for _, m in errors)
+        )
+
+
+class TestBuildShArrayReaderMatchesBash:
+    """陣列 reader 對「bash 讀得到的東西」不得比 bash 嚴格。"""
+
+    @pytest.mark.parametrize("entry_line,expected", [
+        ("    ops/a.py", "ops/a.py"),
+        ('    "ops/a.py"', "ops/a.py"),
+        # ⛔ 行內註解：bash 視為同一個 word，reader 先前把註解一起吃進檔名，
+        # 於是該檔被讀成不存在 → 雙向檢查報「TOOL_FILES 缺少此檔案」，而
+        # 訊息完全沒提到註解。最便宜的轉綠是刪掉註解，也就是這條守衛的
+        # 實質規則變成「不准替出貨清單寫註解」。
+        ("    ops/a.py   # BYO preflight", "ops/a.py"),
+        # ⛔ bash 只在 word 開頭起註解。實測 `printf '[%s]' "${TOOL_FILES[@]}"`：
+        # `ops/a.py#no-space` 與 `"ops/c#d.py"` 都保持完整。截短檔名的方向是
+        # fail-open——`is_file()` 為 False，該檔就被靜默跳過不掃描。
+        ("    ops/a.py#no-space", "ops/a.py#no-space"),
+        ('    "ops/c#d.py"', "ops/c#d.py"),
+    ])
+    def test_entry_forms_bash_accepts(self, tmp_path, entry_line, expected):
+        from _lint_helpers import _parse_build_sh_array
+        bs = tmp_path / "build.sh"
+        bs.write_text(
+            "TOOL_FILES=(\n"
+            "    # whole-line comment\n"
+            f"{entry_line}\n"
+            ")\n", encoding="utf-8")
+        assert _parse_build_sh_array(bs, "TOOL_FILES") == {expected}
+
+    @pytest.mark.parametrize("expansion", [
+        "ops/b$(( 0 + 1 )).py",     # 算術展開，自帶兩層 `)`
+        "$(echo ops/generated.py)",  # 命令替換
+        "$(f $(g))",                 # 巢狀
+    ])
+    def test_an_expansion_does_not_close_the_array(self, tmp_path, expansion):
+        """⛔ 展開自帶的 `)` 不得被當成陣列收尾。
+
+        ⚠️ 這一格釘的是**「它後面的條目不會消失」**，不是「展開被求值」。
+        reader 不是 shell，`$(…)` 的值它拿不到——那一點在 docstring 揭露。但把
+        第一個 `)` 當收尾會讓**其後每一條真條目靜默消失**（實測：
+        `TOOL_FILES=( a  b$(( 0 + 1 )).py  diagnose.py )` 掉了 `diagnose.py`），
+        而改動前的 reader 三條都在。這是回歸，不是既有限制。
+        """
+        from _lint_helpers import _parse_build_sh_array
+        bs = tmp_path / "build.sh"
+        bs.write_text(
+            f"TOOL_FILES=(\n  ops/first.py\n  {expansion}\n  ops/last.py\n)\n",
+            encoding="utf-8")
+        got = _parse_build_sh_array(bs, "TOOL_FILES")
+        assert "ops/first.py" in got, got
+        assert "ops/last.py" in got, (
+            f"展開 {expansion!r} 之後的條目被吞掉了：{sorted(got)}")
+
+    def test_absent_array_is_empty_not_an_error(self, tmp_path):
+        """舊版 build.sh 沒有 REPO_DATA_FILES —— 空集合，不是例外。"""
+        from _lint_helpers import _parse_build_sh_array
+        bs = tmp_path / "build.sh"
+        bs.write_text("TOOL_FILES=(\n    ops/a.py\n)\n", encoding="utf-8")
+        assert _parse_build_sh_array(bs, "REPO_DATA_FILES") == set()
+
+    @pytest.mark.parametrize("source,expected,why", [
+        (
+            "# TOOL_FILES=(\n    ops/ghost.py\n)\nSOMETHING=2\n",
+            set(),
+            "被註解掉的陣列頭不得開啟區塊（實測會撈到 ops/ghost.py）",
+        ),
+        (
+            "TOOL_FILES=(\n    ops/a.py\n)  # end of list\nRANDOM_LINE=3\njunk\n",
+            {"ops/a.py"},
+            "帶尾註解的收尾括號要能關閉區塊（實測會把檔案剩下的行全部吞進來）",
+        ),
+        (
+            "EXTRA_TOOL_FILES=(\n    ops/extra.py\n)\n",
+            set(),
+            "陣列名要在 word 起點對齊（實測 `in` 子字串比對會配到 EXTRA_ 前綴）",
+        ),
+        (
+            "OTHER=1\nTOOL_FILES=(\n    ops/a.py\n)\n",
+            {"ops/a.py"},
+            "正控制：正常的陣列必須照樣讀得到，否則上面三格可能只是 reader 壞了",
+        ),
+        # ⛔ 以下四格釘的是同一件事：**陣列頭那一行的剩餘內容也要解析**。
+        # 少了它，「開了但這一行就關掉」與「開了而條目就在同一行」兩種合法寫法
+        # 都會讓區塊永不關閉，於是解析器把 build.sh 剩下的每一行都當成條目。
+        # 這與 `) # end of list` 是同一個失敗模式、不同根因——所以修法不是再補
+        # 幾個樣式，而是「解析那一行」。
+        (
+            "TOOL_FILES=()\nSOMETHING=1\njunk_line\n",
+            set(),
+            "空陣列必須當場關閉（實測會吞掉 SOMETHING=1 / junk_line）",
+        ),
+        (
+            "TOOL_FILES=( ops/a.py ops/b.py )\nSOMETHING=1\n",
+            {"ops/a.py", "ops/b.py"},
+            "單行式要讀得到自己的條目並當場關閉（實測兩者皆失敗）",
+        ),
+        (
+            "TOOL_FILES=( ops/a.py\n    ops/b.py\n)\n",
+            {"ops/a.py", "ops/b.py"},
+            "陣列頭與第一個條目同行：那個條目不得被丟掉",
+        ),
+        # ⛔ 以下五格的期望值**逐格對真 bash 量過**（`source build.sh` 後
+        # `printf '%s\n' "${TOOL_FILES[@]}"`），不是推想的。前三格是「開了但
+        # 永不關」那一類的第六、第七個成員——前一版只把「解析那一行」套在陣列
+        # 頭、收尾仍是 `endswith(")")` 樣式比對，於是 `);` 與 `) > /dev/null`
+        # 這兩個普通寫法照樣吞掉檔案剩下的每一行。收尾與開頭現在共用同一條
+        # quote-aware 的規則。
+        (
+            "TOOL_FILES=(\n    ops/a.py\n);\nX=1\njunk_line\n",
+            {"ops/a.py"},
+            "`);` 收尾（bash: ops/a.py）",
+        ),
+        (
+            "TOOL_FILES=(\n    ops/a.py\n) > /dev/null\nX=1\njunk\n",
+            {"ops/a.py"},
+            "`) > /dev/null` 收尾（bash: ops/a.py）",
+        ),
+        (
+            'TOOL_FILES=( "ops/a(1).py" ops/b.py )\nX=1\n',
+            {"ops/a(1).py", "ops/b.py"},
+            "引號內的 `)` 不得收尾（bash 兩個條目都在）",
+        ),
+        (
+            "TOOL_FILES=(\n    ops/a.py \\\n    ops/b.py\n)\n",
+            {"ops/a.py", "ops/b.py"},
+            "行尾續行的 `\\` 不是條目（bash 只有兩個條目）",
+        ),
+        (
+            'TOOL_FILES=(\n    "ops/a b.py"\n    ops/c.py\n)\n',
+            {"ops/a b.py", "ops/c.py"},
+            "含空白的引號檔名要保持完整（bash 給兩個條目）",
+        ),
+        # ⛔ 以下六格釘的是**反方向**：文字裡「提到」陣列不是「指派」陣列。
+        # ⚠️ **提及在陣列「之前」與「之後」是兩個不同的缺陷，必須各釘一次。**
+        # 只放「之後」那三格時，reader 在自己的 `)` 就 break 了、根本沒讀到那
+        # 幾行——那三格釘的是 `break`，不是「提及 ≠ 指派」。把順序對調後實測
+        # 三格全部靜默答錯（回傳 ghost 清單**取代**真陣列）。兩個方向的期望值
+        # 都取自真 bash。
+        (
+            'usage() { echo "  packaged: TOOL_FILES=( ops/ghost.py )"; }\n'
+            "TOOL_FILES=(\n  ops/a.py\n  ops/b.py\n)\n",
+            {"ops/a.py", "ops/b.py"},
+            "提及在陣列之前（echo）——第一個文字提及不得獲勝",
+        ),
+        (
+            "cat <<EOF\nsee TOOL_FILES=( ops/doc.py )\nEOF\n"
+            "TOOL_FILES=(\n  ops/a.py\n)\n",
+            {"ops/a.py"},
+            "提及在陣列之前（heredoc）",
+        ),
+        (
+            'if [ "$M" = 1 ]; then TOOL_FILES=( ops/tiny.py ); fi\n'
+            "TOOL_FILES=(\n  ops/a.py\n)\n",
+            {"ops/a.py"},
+            "不會執行的分支在陣列之前",
+        ),
+        # ⛔ 這兩格是行首錨點的反方向代價，**只有真實語料抓得到**：出貨測試表
+        # 的其他列沒有任何一列帶宣告關鍵字，所以一個裸 `^` 錨點在表上全綠、
+        # 卻讓這兩種普通寫法整個陣列讀成空。
+        (
+            "local TOOL_FILES=(\n  ops/a.py\n)\n",
+            {"ops/a.py"},
+            "`local` 宣告的陣列仍要讀得到",
+        ),
+        (
+            "declare -a TOOL_FILES=(\n  ops/a.py\n)\n",
+            {"ops/a.py"},
+            "`declare -a` 宣告的陣列仍要讀得到",
+        ),
+        (
+            'TOOL_FILES=(\n  ops/a.py\n  ops/b.py\n)\nusage() { echo "  TOOL_FILES=( ops/x.py )"; }\n',
+            {"ops/a.py", "ops/b.py"},
+            "echo 裡提到陣列不得取代它（bash: a+b）",
+        ),
+        (
+            'TOOL_FILES=(\n  ops/a.py\n)\nif [ "$M" = 1 ]; then TOOL_FILES=( ops/tiny.py ); fi\n',
+            {"ops/a.py"},
+            "不會執行的分支不得取代它（bash: a）",
+        ),
+        (
+            "TOOL_FILES=(\n  ops/a.py\n)\ncat <<EOF\nsee TOOL_FILES=( ops/doc.py )\nEOF\n",
+            {"ops/a.py"},
+            "heredoc 裡提到不得取代它（bash: a）",
+        ),
+        # ⛔ BOM 走 text 這條路徑。檔案 wrapper 用 `utf-8-sig` 擋得住，但讀 git
+        # tag blob 的呼叫端是用 `utf-8` 解出來的字串，BOM 會原封不動進來；
+        # `﻿` 不是空白，word 錨點配不到第 1 行的陣列頭 ⇒ **整個陣列讀成空**，
+        # 是「少撈」這個更糟的方向。只修 wrapper 等於讓共用 reader 帶著缺陷服務
+        # 另一個呼叫端。
+        (
+            "﻿TOOL_FILES=(\n    ops/a.py\n)\n",
+            {"ops/a.py"},
+            "BOM 在第 1 行且陣列頭也在第 1 行",
+        ),
+    ])
+    def test_block_boundaries_are_word_anchored(
+        self, tmp_path, source, expected, why
+    ):
+        """⛔ 三種邊界失誤全部是**多**撈東西，而多撈的方向是 fail-open。
+
+        解析出來的集合會餵進 `check_required_data_files` 與
+        `check_layout_depth_assumptions`，多出來的名字在那裡會變成「這個檔沒
+        出貨」之類與真因無關的訊息。三格都實測過現況會怎麼錯（見各自的 why）。
+        """
+        from _lint_helpers import _parse_build_sh_array
+        bs = tmp_path / "build.sh"
+        bs.write_text(source, encoding="utf-8")
+        assert _parse_build_sh_array(bs, "TOOL_FILES") == expected, why
+
+    @pytest.mark.parametrize(
+        "source,expected,why",
+        test_block_boundaries_are_word_anchored.pytestmark[0].args[1],
+    )
+    def test_the_tag_blob_parser_has_the_same_boundaries(
+        self, source, expected, why
+    ):
+        """⛔ 鏡像 parser 必須同步，否則只是把缺陷搬進等價測試裡。
+
+        `check_image_pin_capability.py` 讀的是 git TAG 的 blob（文字而非檔案），
+        現在它 delegate 給同一支 reader，只在外面套 basename。這一格釘住那個
+        delegate 沒有被人「為了獨立性」再抄回去。
+
+        ⛔ 案例表與上一格**共用同一份**，不是手抄的第二份。兩份四列的表原本各自
+        維護，而它們正是在防「只修一邊」——加第五列時漏抄一邊不會有任何東西紅，
+        等於把同一個漂移搬進了測試資料層。期望值的差異（basename）由推導產生。
+        """
+        from check_image_pin_capability import parse_tool_files_text
+        assert parse_tool_files_text(source) == {
+            os.path.basename(x) for x in expected}, why
+
+
+class TestRepoDataFilesArePairedWithTheirConsumer:
+    """``REPO_DATA_FILES``（build.sh 第二條搬運路徑）也要進配對集合。"""
+
+    def test_repo_data_file_satisfies_required_data_files(self):
+        """⛔ 只餵 TOOL_FILES 會把一個真的有出貨的資料檔報成缺漏。
+
+        這一格釘的是 main() 的接線：``configmap-rules-platform.yaml`` 走
+        ``REPO_DATA_FILES``（它不在 scripts/tools/ 底下），若配對檢查只看
+        ``TOOL_FILES`` 就會對 ``_grar_validate.py`` 誤報。
+        """
+        from _lint_helpers import (
+            parse_build_sh_repo_data_files,
+            parse_build_sh_tools,
+        )
+        repo_data = parse_build_sh_repo_data_files()
+        assert repo_data, "REPO_DATA_FILES 解析為空 —— 這一格什麼都沒證明"
+        shipped = parse_build_sh_tools() | {
+            Path(p).name for p in repo_data
+        }
+        assert mod.check_required_data_files(shipped) == []
+
+    def test_omitting_the_repo_data_file_is_caught(self):
+        """反向控制：拿掉它就必須紅，否則上面那格是恆真的。"""
+        from _lint_helpers import parse_build_sh_tools
+        tools = parse_build_sh_tools()
+        # 與上一格的 `assert repo_data` 同一個理由：`check_required_data_files`
+        # 會跳過不出貨的 module，所以哪天 `_grar_validate.py` 從 TOOL_FILES
+        # 移除，這個反向控制會轉紅並抱怨「配對規則沒開火」——而真正的原因是
+        # 消費端不見了。前置條件要自己說話。
+        assert "_grar_validate.py" in tools, (
+            "消費端 module 已不出貨 —— 這個反向控制什麼都沒證明"
+        )
+        errors = mod.check_required_data_files(tools)
+        assert any("configmap-rules-platform.yaml" in m for _, m in errors), (
+            "配對規則沒有在 REPO_DATA_FILES 缺席時開火 —— "
+            f"實際得到 {errors}"
+        )
+
+
+class TestAppendFormIsRejected:
+    """`NAME+=( … )` 在 build.sh 裡必須被擋下來。
+
+    ⛔ 這一類原本只是 docstring 裡的一句「揭露」，而那句揭露的減災說法是**假的**
+    ——它說「少撈會被雙向檢查抓到」，實測只有「該檔在 COMMAND_MAP 裡」或「被別的
+    出貨模組 import」兩種情形才會紅；函式庫、資料檔、`BUILD_EXEMPT` daemon 用
+    `+=` 加進來時全綠，而且 `check_layout_depth_assumptions`（#1494 自己那條規則）
+    完全掃不到它。揭露改成守衛。
+    """
+
+    def _build_sh(self, tmp_path, extra):
+        real = (REPO_ROOT / "components" / "da-tools" / "app" / "build.sh"
+                ).read_text(encoding="utf-8")
+        p = tmp_path / "build.sh"
+        p.write_text(real + extra, encoding="utf-8")
+        return p
+
+    def test_the_real_build_sh_is_clean(self):
+        """正控制：今天的 build.sh 沒有 `+=`，所以下面的紅不是背景噪音。"""
+        assert mod.check_append_form_arrays(
+            REPO_ROOT / "components" / "da-tools" / "app" / "build.sh") == []
+
+    @pytest.mark.parametrize("extra,why", [
+        ("\nTOOL_FILES+=(\n  ops/_lib_brandnew.py\n)\n", "多行追加"),
+        ("\ndeclare -a REPO_DATA_FILES+=( k8s/x.yaml )\n", "帶宣告關鍵字的單行追加"),
+    ])
+    def test_append_form_is_an_error(self, tmp_path, extra, why):
+        errors = mod.check_append_form_arrays(self._build_sh(tmp_path, extra))
+        assert len(errors) == 1, (why, errors)
+        severity, message = errors[0]
+        assert severity == "error"
+        assert "+=(" in message
+
+    def test_a_mention_of_the_append_form_is_not_an_error(self, tmp_path):
+        """⛔ 反方向：守衛自己也不能把「提及」當成「指派」。
+
+        這正是 reader 讀不到 `+=` 的原因，所以 tripwire 若用裸子字串比對，就會
+        在講述這條規則的註解或訊息上開火。
+        """
+        assert mod.check_append_form_arrays(
+            self._build_sh(tmp_path, '\necho "TOOL_FILES+=( ghost )"\n')) == []
+
+
+class TestUnreadableToolIsReportedNotRaised:
+    """讀不了的出貨檔要變成一筆 error，而不是讓 main() 帶 traceback 死。
+
+    ⛔ 自成一類：這兩格測的是 `check_underscore_imports` /
+    `check_layout_depth_assumptions` 的例外處理，與 build.sh 陣列 reader
+    無關。原本掛在 `TestBuildShArrayReaderMatchesBash` 底下，順帶讓
+    `property-coverage.yaml` 那句「`_array_words` 由該 class 的每一格
+    覆蓋」變成假話。
+    """
+
+    @pytest.mark.parametrize("name,payload,kind", [
+        ("bad_syntax.py", b"import os\n\n\n\ndef f(:\n    pass\n", "SyntaxError"),
+        ("bad_enc.py", b"import os\n# \xe9\xe9\xe9 not utf-8\n", "UnicodeDecodeError"),
+    ])
+    def test_an_unreadable_tool_is_reported_not_a_traceback(
+        self, tmp_path, name, payload, kind
+    ):
+        """⛔ 掃描器必須把「讀不了這個檔」變成一筆 error，而不是讓 main() 炸掉。
+
+        `read_text` 對不可讀檔拋 `OSError`、對非 UTF-8 拋 `UnicodeDecodeError`；
+        只接 `SyntaxError` 時兩者都會逃逸並中斷整個 `main()`——**那個檔以及它
+        之後的每一個檔都沒有被回報**，而畫面上是一個 traceback，不是掃描結果。
+
+        訊息必須帶 `str(exc)`：只印型別名的話，`SyntaxError` 連行號都沒有，
+        讀的人不知道要修哪裡。這一格同時釘住「有回報」與「回報得夠具體」。
+        """
+        (tmp_path / "ops").mkdir()
+        (tmp_path / "ops" / name).write_bytes(payload)
+        errors = mod.check_underscore_imports(
+            {f"ops/{name}"}, {name}, tools_src=tmp_path)
+        assert len(errors) == 1, errors
+        severity, message = errors[0]
+        assert severity == "error"
+        assert kind in message, message
+        # 型別名之外還要有內容——SyntaxError 的行號就在 str(exc) 裡
+        assert f"{kind}: " in message, message
+
+    @pytest.mark.parametrize("name,payload,kind", [
+        ("bad_syntax.py", b"import os\n\n\n\ndef f(:\n    pass\n", "SyntaxError"),
+        ("bad_enc.py", b"import os\n# \xe9\xe9\xe9 not utf-8\n", "UnicodeDecodeError"),
+    ])
+    def test_the_layout_scanner_reports_the_same_way(
+        self, tmp_path, name, payload, kind
+    ):
+        """⛔ 這個檔案有**兩個**掃描器，兩個都做同樣的 read+parse。
+
+        上一格只釘住其中一個。把另一個的訊息改回只印型別名，四個相關測試檔
+        **零轉紅**——也就是「修了被點名那一處，沒修那一類」在同一個檔案裡、
+        相隔 176 行。兩格內容一樣是刻意的：這一類的成員就是要各自有守衛。
+        """
+        (tmp_path / "ops").mkdir()
+        (tmp_path / "ops" / name).write_bytes(payload)
+        errors = mod.check_layout_depth_assumptions(
+            {f"ops/{name}"}, tools_src=tmp_path)
+        assert len(errors) == 1, errors
+        severity, message = errors[0]
+        assert severity == "error"
+        assert f"{kind}: " in message, message
+
