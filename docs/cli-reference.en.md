@@ -464,6 +464,7 @@ docker run --rm --network=host \
 
 # Auto-detect convergence
 docker run --rm --network=host \
+  --user $(id -u):$(id -g) \
   -v $(pwd)/mapping.csv:/data/mapping.csv:ro \
   -v $(pwd)/output:/data/output \
   -e PROMETHEUS_URL=http://prometheus.monitoring.svc.cluster.local:9090 \
@@ -523,7 +524,7 @@ da-tools cutover --tenant <name> [options]
 ```bash
 # Dry run — preview cutover
 docker run --rm --network=host \
-  -v $(pwd)/output:/data \
+  -v $(pwd)/output:/data:ro \
   -e PROMETHEUS_URL=http://prometheus.monitoring.svc.cluster.local:9090 \
   ghcr.io/vencil/da-tools:v2.9.0 \
   cutover --readiness-json /data/cutover-readiness.json \
@@ -531,7 +532,7 @@ docker run --rm --network=host \
 
 # Execute cutover
 docker run --rm --network=host \
-  -v $(pwd)/output:/data \
+  -v $(pwd)/output:/data:ro \
   -e PROMETHEUS_URL=http://prometheus.monitoring.svc.cluster.local:9090 \
   ghcr.io/vencil/da-tools:v2.9.0 \
   cutover --readiness-json /data/cutover-readiness.json \
@@ -662,6 +663,7 @@ docker run --rm \
 
 # Generate YAML for CronJob use
 docker run --rm \
+  --user $(id -u):$(id -g) \
   -v $(pwd)/conf.d:/etc/config:ro \
   -v $(pwd)/output:/data/output \
   ghcr.io/vencil/da-tools:v2.9.0 \
@@ -1561,7 +1563,7 @@ kubectl logs -n monitoring deployment/threshold-exporter | grep "SHA256"
 **Step 3: Verify**
 ```bash
 # Confirm alerts are firing normally
-da-tools drift-check --dirs conf.d --mode configmap
+da-tools drift-detect --dirs conf.d --mode configmap
 promtool query instant 'count(ALERTS{alertstate="firing"})'
 ```
 
@@ -1768,6 +1770,7 @@ docker run --rm \
 
 # Generate fragment to file
 docker run --rm \
+  --user $(id -u):$(id -g) \
   -v $(pwd)/conf.d:/etc/config:ro \
   -v $(pwd)/output:/data/output \
   ghcr.io/vencil/da-tools:v2.9.0 \
@@ -1776,6 +1779,7 @@ docker run --rm \
 
 # Generate complete ConfigMap
 docker run --rm \
+  --user $(id -u):$(id -g) \
   -v $(pwd)/conf.d:/etc/config:ro \
   -v $(pwd)/output:/data/output \
   ghcr.io/vencil/da-tools:v2.9.0 \
@@ -1784,6 +1788,7 @@ docker run --rm \
 
 # With custom base config
 docker run --rm \
+  --user $(id -u):$(id -g) \
   -v $(pwd)/conf.d:/etc/config:ro \
   -v $(pwd)/base-alertmanager.yaml:/data/base.yaml:ro \
   -v $(pwd)/output:/data/output \
@@ -1922,12 +1927,14 @@ docker run --rm -it \
 ```bash
 # Interactive generation
 docker run --rm -it \
+  --user $(id -u):$(id -g) \
   -v $(pwd)/output:/data/output \
   ghcr.io/vencil/da-tools:v2.9.0 \
   scaffold --output /data/output
 
 # Non-interactive generation (CI/CD)
 docker run --rm \
+  --user $(id -u):$(id -g) \
   -v $(pwd)/output:/data/output \
   ghcr.io/vencil/da-tools:v2.9.0 \
   scaffold --non-interactive \
@@ -2005,6 +2012,7 @@ docker run --rm \
 
 # Convert and output triage report
 docker run --rm \
+  --user $(id -u):$(id -g) \
   -v $(pwd)/my-rules.yml:/data/input.yml:ro \
   -v $(pwd)/output:/data/output \
   ghcr.io/vencil/da-tools:v2.9.0 \
@@ -2012,6 +2020,7 @@ docker run --rm \
 
 # Complete conversion (with manual review)
 docker run --rm \
+  --user $(id -u):$(id -g) \
   -v $(pwd)/my-rules.yml:/data/input.yml:ro \
   -v $(pwd)/output:/data/output \
   ghcr.io/vencil/da-tools:v2.9.0 \
@@ -2139,6 +2148,7 @@ docker run --rm \
 
 # Execute offboard with backup
 docker run --rm \
+  --user $(id -u):$(id -g) \
   -v $(pwd)/conf.d:/etc/config:rw \
   -v $(pwd)/backup:/data/backup \
   ghcr.io/vencil/da-tools:v2.9.0 \
@@ -2166,7 +2176,7 @@ Mark metrics as disabled to prevent accidental use.
 docker run --rm \
   -v <config_dir>:/etc/config:rw \
   ghcr.io/vencil/da-tools:v2.9.0 \
-  deprecate <metric_keys...> [options]
+  deprecate <metric_keys...> --config-dir /etc/config [options]
 ```
 
 **Required Parameters**
@@ -2192,9 +2202,11 @@ Add or update metric key with `enabled: false` flag in _defaults.yaml.
 ```bash
 # Mark multiple metrics as disabled
 docker run --rm \
+  --user $(id -u):$(id -g) \
   -v $(pwd)/conf.d:/etc/config:rw \
   ghcr.io/vencil/da-tools:v2.9.0 \
   deprecate old_metric_1 old_metric_2 \
+    --config-dir /etc/config \
     --reason "Replaced by new_metric; migration complete"
 ```
 
@@ -2308,6 +2320,7 @@ JSON format migration hints (`onboard-hints.json`), including:
 ```bash
 # Analyze Alertmanager config
 docker run --rm \
+  --user $(id -u):$(id -g) \
   -v $(pwd)/alertmanager.yaml:/data/config.yml:ro \
   -v $(pwd)/output:/data/output \
   ghcr.io/vencil/da-tools:v2.9.0 \
