@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import subprocess
+from functools import lru_cache
 from pathlib import Path
 from typing import Dict, Set
 
@@ -86,28 +88,56 @@ BUILD_EXEMPT = frozenset({
 })
 
 
+def _strip_bom(text: str) -> str:
+    """Drop a leading BOM.
+
+    ⛔ Both text readers need this and both used to do it inline — two copies
+    of a one-liner is still two copies, and the first version of the fix landed
+    in only one of them. The BOM matters because ``\\ufeff`` is not whitespace:
+    a word-start anchor cannot match a header on line 1 behind one, so the
+    array (or the command map) reads as EMPTY. The file wrappers open with
+    ``utf-8-sig``, but the tag-blob caller decodes with plain ``utf-8`` and
+    hands the BOM straight through.
+    """
+    return text.lstrip("﻿")
+
+
+_COMMAND_MAP_ENTRY_RE = re.compile(r'"([a-z][a-z0-9-]+)":\s*"([^"]+)"')
+
+
+def parse_command_map_text(text: str) -> Dict[str, str]:
+    """Parse ``COMMAND_MAP`` (command → script filename) from entrypoint source.
+
+    ⛔ THE reader — ``check_image_pin_capability.py`` imports this rather than
+    keeping its own transcription for tag blobs. It used to keep one, and that
+    copy sat thirty lines above a ``⛔`` comment saying transcriptions-that-must-
+    be-kept-in-sync are themselves the defect: the admonition had a live
+    instance in its own file.
+    """
+    commands: Dict[str, str] = {}
+    in_map = False
+    for line in _strip_bom(text).split("\n"):
+        stripped = line.strip()
+        if stripped.startswith("COMMAND_MAP"):
+            in_map = True
+            continue
+        if in_map:
+            if stripped == "}":
+                break
+            m = _COMMAND_MAP_ENTRY_RE.match(stripped)
+            if m:
+                commands[m.group(1)] = m.group(2)
+    return commands
+
+
 def parse_command_map(path: Path | None = None) -> Dict[str, str]:
     """Parse COMMAND_MAP from entrypoint.py.
 
     Returns dict mapping command name → script filename.
     e.g. {"check-alert": "check_alert.py", ...}
     """
-    path = path or ENTRYPOINT_PATH
-    commands: Dict[str, str] = {}
-    in_map = False
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            stripped = line.strip()
-            if stripped.startswith("COMMAND_MAP"):
-                in_map = True
-                continue
-            if in_map:
-                if stripped == "}":
-                    break
-                m = re.match(r'"([a-z][a-z0-9-]+)":\s*"([^"]+)"', stripped)
-                if m:
-                    commands[m.group(1)] = m.group(2)
-    return commands
+    return parse_command_map_text(
+        (path or ENTRYPOINT_PATH).read_text(encoding="utf-8-sig"))
 
 
 def parse_command_map_keys(path: Path | None = None) -> Set[str]:
@@ -134,24 +164,263 @@ def parse_build_sh_tool_paths(path: Path | None = None) -> Set[str]:
     can open and inspect the source files (the transitive underscore-import
     scan in check_build_completeness.py needs file contents, not just names).
     """
-    path = path or BUILD_SH_PATH
-    tools: Set[str] = set()
-    in_block = False
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            stripped = line.strip()
-            if "TOOL_FILES=(" in stripped:
-                in_block = True
+    return _parse_build_sh_array(path or BUILD_SH_PATH, "TOOL_FILES")
+
+
+def parse_build_sh_repo_data_files(path: Path | None = None) -> Set[str]:
+    """Parse the ``REPO_DATA_FILES`` array from build.sh (repo-root-relative).
+
+    ``TOOL_FILES`` entries resolve against ``scripts/tools``; this second array
+    carries the files a shipped tool reads from elsewhere in the repo tree and
+    which therefore need copying into the flat image by their own loop (#1494).
+    Returned paths are PROJECT_ROOT-relative as written, e.g.
+    ``k8s/03-monitoring/configmap-rules-platform.yaml``.
+
+    An absent array is not an error — it yields the empty set, so callers that
+    only care about ``TOOL_FILES`` keep working against an older build.sh.
+    """
+    return _parse_build_sh_array(path or BUILD_SH_PATH, "REPO_DATA_FILES")
+
+
+_BASH_COMMENT_RE = re.compile(r"(?:^|\s)#.*$")
+
+
+def strip_bash_comment(line: str) -> str:
+    """Remove a bash comment from *line*, using bash's own rule.
+
+    ⛔ ``#`` opens a comment only at the START OF A WORD — line start or after
+    whitespace. A naive ``split("#", 1)`` also truncates ``ops/a.py#tag`` and
+    ``"ops/c#d.py"``, which bash keeps whole; the reader would then look for a
+    file under a shortened name, find nothing, and SILENTLY skip it. That is
+    the fail-open direction, so the rule is transcribed rather than
+    approximated.
+
+    Verified against bash: ``TOOL_FILES=( ops/a.py#no-space  ops/b.py  # c
+    "ops/c#d.py" )`` expands to three words, two of which keep their ``#``.
+    """
+    return _BASH_COMMENT_RE.sub("", line).strip()
+
+
+def array_open_pattern(array_name: str) -> str:
+    r"""Regex source matching a bash array header for *array_name*.
+
+    ⛔ Anchored, not a substring. A plain ``f"{name}=(" in line`` test also
+    matches ``EXTRA_TOOL_FILES=(``, so a second, unrelated array opens the block
+    and donates its entries to this one's caller.
+
+    ⛔ Anchored at LINE START, not at any whitespace. ``(?:^|[\s;])`` treats the
+    space inside a double-quoted string as a word start, so a line that merely
+    MENTIONS the array — ``echo "  packaged: TOOL_FILES=( ops/ghost.py )"``, a
+    doc heredoc, a log message — opened a block. Combined with "a line may open
+    and close", the first such mention won outright and the reader stopped
+    there: measured against real bash, three ordinary build.sh shapes returned
+    the ghost list INSTEAD of the array. That is the silent direction, and it
+    was a REGRESSION against the pre-rework reader, which over-collected on
+    those inputs (loud) rather than replacing them.
+
+    The line is ``.strip()``-ed before matching, so an indented header still
+    matches; only a header in the MIDDLE of a line stops matching. A leading
+    declaration keyword is allowed, because ``local TOOL_FILES=(`` and
+    ``declare -a TOOL_FILES=(`` are ordinary and a bare ``^`` anchor dropped
+    both — the array then read as EMPTY. ⛔ That regression was invisible to the
+    boundary table (16 rows, none of them declared) and only showed up against a
+    corpus of real-shaped build.sh files: **a test table is not an oracle**.
+
+    ⚠️ NOT allowed: a header after ``;`` on a shared line (``MODE=x;
+    TOOL_FILES=( … )``). Permitting it would also permit ``echo "…; TOOL_FILES=(
+    ghost )"``, and the two are textually identical. The chosen failure
+    direction is the loud one: an unread header yields an EMPTY set, and empty
+    is loud in every consumer measured (the bidirectional check errors on all 51
+    commands, ``capabilities_for_tag`` refuses 0 entries outright, and the
+    flat-layout harness asserts a non-empty set) — whereas a hijacked header is
+    silently WRONG.
+
+    ⚠️ ``NAME+=(`` deliberately does NOT match: see :func:`parse_build_sh_array_text`
+    for why modelling bash's assignment semantics textually was reverted.
+    """
+    return (r"^(?:(?:local|declare|export|readonly|typeset)"
+            r"(?:\s+-\w+)*\s+)?" + re.escape(array_name) + r"=\(")
+
+
+@lru_cache(maxsize=None)
+def _array_open_re(array_name: str) -> "re.Pattern[str]":
+    return re.compile(array_open_pattern(array_name))
+
+
+def _split_at_array_close(text: str) -> "tuple[str, bool]":
+    """``(before_the_close, closed)`` for one line of an array literal.
+
+    ⛔ ONE rule for the close, used on the header line and on every body line
+    alike. Matching a shape instead — ``stripped == ")"``, then
+    ``stripped.endswith(")")`` — is what kept the "block opens and never
+    closes" class alive through three rounds of fixes: each round added the
+    spelling it had been shown (`)`, `)  # comment`, `TOOL_FILES=()`) and
+    declared the class closed, and the next round found `);` and
+    ``) > /dev/null``. Both are ordinary bash and both made the reader swallow
+    the whole rest of build.sh as entries.
+
+    Quote-aware, because ``"ops/a(1).py"`` is a legal entry and the ``)``
+    inside it does not close anything. Backslash escapes are honoured for the
+    same reason.
+
+    ⛔ Also EXPANSION-aware. ``$(…)`` and ``$((…))`` carry their own ``)``, and
+    reading the first one as the array's close silently dropped every remaining
+    entry — measured, ``TOOL_FILES=( a  b$(( 0 + 1 )).py  diagnose.py )`` lost
+    ``diagnose.py`` and gained four fragments, where the pre-rework reader kept
+    all three. Depth counting is cheap; being wrong here is not.
+    """
+    quote = ""
+    depth = 0
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if quote:
+            if ch == "\\" and quote == '"':
+                i += 2
                 continue
-            if in_block:
-                if stripped == ")":
-                    break
-                if not stripped or stripped.startswith("#"):
-                    continue
-                name = stripped.strip("\"'(),").strip()
-                if name:
-                    tools.add(name)
-    return tools
+            if ch == quote:
+                quote = ""
+        elif ch in "\"'":
+            quote = ch
+        elif ch == "\\":
+            i += 2
+            continue
+        elif ch == "$" and text[i + 1:i + 3] == "((":
+            depth += 2
+            i += 3
+            continue
+        elif ch == "$" and text[i + 1:i + 2] == "(":
+            depth += 1
+            i += 2
+            continue
+        elif ch == ")":
+            if depth == 0:
+                return text[:i], True
+            depth -= 1
+        i += 1
+    return text, False
+
+
+def _array_words(text: str) -> "list[str]":
+    """Split one array fragment into words the way bash would.
+
+    ``shlex`` rather than ``.split()`` so a quoted entry survives whole.
+
+    ⛔ A trailing lone ``\\`` is a LINE CONTINUATION, not a word. bash joins the
+    lines and yields the entries either side; this reader works line by line,
+    so it drops the marker instead — leaving it in produced a phantom entry
+    named ``\\`` (measured against real bash, which yields two entries and no
+    such token).
+
+    Unbalanced quotes fall back to whitespace splitting: this reader must never
+    raise on a build.sh it cannot fully understand — a crash here takes down
+    the lint that was supposed to report the problem. ⚠️ The fallback strips
+    quote characters too, because leaving a leading ``"`` on the name makes the
+    file read as absent, and "absent" is silently skipped.
+    """
+    try:
+        words = shlex.split(text, comments=False)
+    except ValueError:
+        words = [w.strip("\"'") for w in text.split()]
+    return [w for w in (x.strip("(),") for x in words) if w and w != "\\"]
+
+
+def parse_build_sh_array_text(text: str, array_name: str) -> Set[str]:
+    """Parse one bash array out of build.sh **source text**.
+
+    ⛔ THE reader for these arrays — there is no second copy.
+    ``check_image_pin_capability.py`` needs the same rules against a git TAG's
+    blob (text, not a file), and used to keep its own transcription;
+    ``test_text_parsers_match_lib_lint_helpers_on_head`` existed to notice when
+    the two drifted. A transcription that must be kept in sync is the defect,
+    not the drift detector: measured, four parsing rules had to be applied in
+    two places and one round fixed only one side. The file-reading wrapper is
+    :func:`_parse_build_sh_array`; everything else lives here.
+
+    Rules, each with the measured failure it prevents:
+
+    * **Strip the comment before every other test.** ``# TOOL_FILES=(`` must
+      not open a block (measured: yielded ``ops/ghost.py``) and ``)  # end of
+      list`` must close one (measured: swallowed every remaining line of
+      build.sh as entries).
+    * **Anchor the array name at a word start.** ``in stripped`` let
+      ``EXTRA_TOOL_FILES=(`` match (measured: yielded ``ops/extra.py``).
+    * **Parse the header line's remainder, and close on it.** Without this,
+      ``TOOL_FILES=()`` and the one-line ``TOOL_FILES=( a b )`` opened a block
+      that never closed — same swallow-the-rest failure as the trailing-comment
+      case, and the one-line form did not even yield its own entries. This is
+      why the fix is not "handle three more spellings": the *class* is "a line
+      that both opens and closes", and the class is closed by parsing the line
+      rather than by pattern-matching its shape.
+    * **Stop at the first close.** A revision tried to model bash's assignment
+      semantics instead (``+=`` appends, plain ``=`` resets) and kept scanning
+      to EOF so a later block could be seen. Measured against real ``bash``,
+      that made THREE ordinary constructs wrong, every one of them in the
+      silent direction — the array was replaced by whatever the last textual
+      ``NAME=(`` happened to be:
+
+      ==============================================  ==================  ================
+      build.sh construct                              bash                that revision
+      ==============================================  ==================  ================
+      ``usage() { echo "  TOOL_FILES=( ops/x.py )" }``  ``a.py b.py``       ``x.py``
+      ``if [ "$M" = 1 ]; then TOOL_FILES=( t.py ); fi``  ``a.py``            ``t.py``
+      a heredoc that mentions the array                ``a.py``            ``doc.py``
+      ==============================================  ==================  ================
+
+      Text scanning cannot tell an assignment from a mention of one; only a
+      shell can. Stopping at the close is what the reader can actually justify,
+      and it is what every one of those cases needs.
+
+      ⚠️ Consequence: a later ``NAME+=( … )`` is NOT read. ⛔ The first version
+      of this note claimed that was safe because "under-reporting is loud in the
+      bidirectional check" — measured, that is FALSE for the likeliest case. A
+      library, a data file or a ``BUILD_EXEMPT`` daemon added via ``+=`` passes
+      completely green: the bidirectional check only speaks when the file is in
+      ``COMMAND_MAP``, and ``check_layout_depth_assumptions`` — #1494's own rule
+      — never sees it at all. So the note is no longer the mitigation:
+      ``check_build_completeness.check_append_form_arrays`` rejects the form
+      outright, with a message naming the replacement.
+    """
+    entries: Set[str] = set()
+    in_block = False
+    open_re = _array_open_re(array_name)
+    # ⛔ Strip a BOM HERE, not only in the file wrapper. The tag-blob caller
+    # decodes with plain ``utf-8``, so a BOM reached this reader untouched, the
+    # word-start anchor could not match a header on line 1, and that tag read
+    # as shipping NO tools at all. Fixing only the wrapper left the shared
+    # reader carrying the defect for its other caller.
+    for line in _strip_bom(text).split("\n"):
+        stripped = strip_bash_comment(line.strip())
+        if not stripped:
+            continue
+        if not in_block:
+            m = open_re.search(stripped)
+            if m is None:
+                continue
+            in_block = True
+            stripped = stripped[m.end():]
+        # ⛔ 同一條收尾規則，陣列頭那一行與每一行本體都走它。用形狀比對
+        # （`== ")"`、`endswith(")")`）是這一類活過三輪修法的原因：每一輪都補上
+        # 剛被指出的那個拼法然後宣告關閉，下一輪就找到 `);` 與 `) > /dev/null`。
+        body, closed = _split_at_array_close(stripped)
+        entries.update(_array_words(body))
+        if closed:
+            break
+    return entries
+
+
+def _parse_build_sh_array(path: Path, array_name: str) -> Set[str]:
+    """File-reading wrapper over :func:`parse_build_sh_array_text`.
+
+    ⛔ ``utf-8-sig``. A BOM is invisible to bash and to Python's import
+    machinery, but ``\\ufeff`` is not whitespace, so the word-start anchor
+    could not match a header on line 1 and the array read as EMPTY — the
+    silent, worse direction. This repo already assumes BOMs exist (two
+    scanners in ``check_build_completeness.py`` open with ``utf-8-sig`` for the
+    same reason, citing Windows editors).
+    """
+    return parse_build_sh_array_text(
+        path.read_text(encoding="utf-8-sig"), array_name)
 
 
 # ---------------------------------------------------------------------------

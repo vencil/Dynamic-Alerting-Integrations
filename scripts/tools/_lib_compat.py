@@ -168,3 +168,23 @@ def harden_stdout_errors() -> None:
 # hardening must land before argparse.parse_args() can print --help, and
 # module import of a shared root lib is the only guaranteed pre-parse hook.
 harden_stdout_errors()
+
+
+# ── Project-root markers, shared by every layout-independent path lookup ──
+#
+# ⛔ ONE definition, deliberately. Shipped tools must not locate repo content by
+# counting directory levels: the image flattens every tool into one directory
+# (`/opt/da-tools/`, three ancestors) while a checkout has eight or nine, so a
+# level count is right in exactly one of the two layouts (#1494). The
+# replacement is "walk up until a marker appears" — and that walk needs an
+# upper bound, or it climbs past the checkout and adopts somebody else's files.
+#
+# ⛔ `.git` alone is NOT enough, and the cost of learning that twice is why this
+# lives here: a source tarball (`git archive`, a release zip, a vendored or
+# rsync'd copy) carries no git metadata but is still a project root. When the
+# two call sites each kept their own copy of this tuple, one was widened and
+# the other was not — and the one left behind was the fail-OPEN side, where a
+# missed root silently degrades a governance check instead of printing an
+# error. All three entries are tracked at the repository root, so `git archive`
+# carries them; the image carries none, which is the intended answer there.
+PROJECT_ROOT_MARKERS = (".git", "Makefile", "pyproject.toml")
