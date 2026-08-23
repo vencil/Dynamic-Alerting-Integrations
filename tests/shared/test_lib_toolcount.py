@@ -226,9 +226,14 @@ class TestAllThreeConsumers:
         checker, writer, _generator = self._consumers(tmp_path, monkeypatch)
 
         total, breakdown = writer._count_python_tools()
+        expected = dict.fromkeys(tc.COUNT_SUBDIRS, 0)
+        expected.update({"ops": 2, "dx": 1, "lint": 1})
         assert checker._count_python_tools() == 4
         assert total == 4
-        assert breakdown == {"ops": 2, "dx": 1, "lint": 1}
+        assert breakdown == expected, (
+            "if this failed only because COUNT_SUBDIRS gained a member, "
+            "the fixture tree just needs a file for it; the failure worth "
+            "reading is checker != writer above")
 
     def test_the_breakdown_follows_the_declared_scope(
             self, tmp_path, monkeypatch):
@@ -239,24 +244,53 @@ class TestAllThreeConsumers:
         subdirectory made it disagree with the checker again — the same
         divergence one layer down. This declares one and requires both
         sides to move.
+
+        ⚠️ The name is deliberately one no real subdirectory uses. An
+        earlier version appended `"release"`, which is also the name the
+        tripwire's own fixture uses; had it ever become a real counted
+        subdirectory the tuple would have held it twice.
         """
         checker, writer, _generator = self._consumers(tmp_path, monkeypatch)
-        extra = tmp_path / "scripts" / "tools" / "release"
+        extra = tmp_path / "scripts" / "tools" / "zzscope"
         extra.mkdir()
         (extra / "cut_release.py").write_text(_STUB, encoding="utf-8",
                                               newline="\n")
         monkeypatch.setattr(tc, "COUNT_SUBDIRS",
-                            tc.COUNT_SUBDIRS + ("release",))
+                            tc.COUNT_SUBDIRS + ("zzscope",))
 
         total, breakdown = writer._count_python_tools()
-        assert checker._count_python_tools() == 5, (
-            "the checker did not pick up the declared subdirectory")
+        checked = checker._count_python_tools()
+        assert checked == 5, (
+            "the checker read %d, not 5, for a tree holding 5 counted "
+            "files across the declared subdirectories" % checked)
         assert total == 5, (
-            "the writer's total is still bound to the old subdirectories, "
-            "so it will write a different number than the gate checks")
-        assert breakdown.get("release") == 1, (
+            "the writer read %d while the checker read %d: its total is "
+            "bound to something other than COUNT_SUBDIRS, so it will "
+            "write a number the gate does not check" % (total, checked))
+        assert breakdown.get("zzscope") == 1, (
             "the breakdown dropped a declared subdirectory silently; "
-            "`--sync-counts` prints it, so the line would just vanish")
+            "`--sync-counts` prints it, so the line would just vanish. "
+            "Got: %r" % (breakdown,))
+
+    def test_a_repeated_subdirectory_is_not_counted_twice(
+            self, tmp_path, monkeypatch):
+        """⛔ A duplicate must not inflate the published number.
+
+        Measured before `scan` collapsed them: a tuple holding the same
+        name twice walked the directory twice and reported 5 files for a
+        tree holding 4, with `count_by_subdir` saying `2`. A wrong number
+        that looks entirely normal is the failure this module exists to
+        remove, so it must not be reachable through its own scope knob.
+        """
+        checker, writer, _generator = self._consumers(tmp_path, monkeypatch)
+        monkeypatch.setattr(tc, "COUNT_SUBDIRS",
+                            tc.COUNT_SUBDIRS + ("ops",))
+
+        total, breakdown = writer._count_python_tools()
+        assert checker._count_python_tools() == 4, "duplicate inflated the gate"
+        assert total == 4, "duplicate inflated the writer's total"
+        assert breakdown["ops"] == 2, (
+            "duplicate inflated the breakdown: %r" % (breakdown,))
 
     def test_the_generator_keeps_the_root_and_only_the_root(
             self, tmp_path, monkeypatch):

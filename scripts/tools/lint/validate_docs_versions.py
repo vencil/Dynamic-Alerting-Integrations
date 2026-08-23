@@ -80,7 +80,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_VIOLATION  # noqa: E402
-from _lib_toolcount import TOOL_SKIP_PREFIXES, count_scope  # noqa: E402
+from _lib_toolcount import count_scope, is_tool_file  # noqa: E402
 from _lib_versions import read_platform_version  # noqa: E402
 
 
@@ -757,8 +757,18 @@ def check_tool_map_coverage() -> List[Issue]:
     """Check that tool-map.md lists the repo-root scripts/tools/*.py files.
 
     Scans the `scripts/tools/` root — a flat glob, NOT the subdirectories —
-    for tool files (`_lib_toolcount.is_tool_file`) and verifies each is
+    and asks `_lib_toolcount.is_tool_file`, then verifies each result is
     referenced in docs/internal/tool-map.md.
+
+    ⛔ #1511: this used to spell the predicate out again right here, a
+    fourth hand-written copy inside the very change that collapsed the
+    other three — and this docstring already claimed it called the shared
+    one. ⚠️ Switching is NOT behaviour-neutral in one measured cell: on
+    Windows `glob("*.py")` also matches `B.PY`, which the old inline test
+    accepted and `is_tool_file` rejects (`Path.suffix` is case-sensitive).
+    Linux never globbed it at all, so the swap makes the two platforms
+    agree; today's tree has no such file (13 root `.py`, zero disagreement
+    measured).
 
     ⚠️ The docstring used to claim this scanned `scripts/tools/`, which
     read as all of it. It does not — and the subdirectories are covered by
@@ -782,7 +792,7 @@ def check_tool_map_coverage() -> List[Issue]:
     map_content = tool_map.read_text(encoding="utf-8").lower()
 
     for f in sorted(tools_dir.glob("*.py")):
-        if any(f.name.startswith(p) for p in TOOL_SKIP_PREFIXES):
+        if not is_tool_file(f):
             continue
 
         lookup = f.name.lower()

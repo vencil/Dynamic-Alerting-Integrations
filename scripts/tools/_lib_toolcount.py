@@ -85,15 +85,21 @@ from typing import Dict, List, Optional, Tuple
 SHARED_LIB_PREFIX = "_lib"
 
 # Filename prefixes that mark a file as something other than a tool.
-# ⚠️ `__pycache__` is inert against the flat globs below — a `*.py` glob
-# never returns a directory's children — and is kept only so the predicate
-# stays correct if a caller ever hands it a recursive listing. It is not a
-# second check on today's inputs; do not read it as one.
-# ⚠️ Neither is `_lib` doing work inside `count_scope` today: measured on
+# ⚠️ `__pycache__` is inert, and NOT for the reason once written here.
+# An earlier comment claimed it was kept "in case a caller hands this a
+# recursive listing" — measured, that is false too: `rglob("*.py")` with
+# and without the member both give 224, because the prefix is matched
+# against `path.name` and `__pycache__/` holds `.pyc`, which the suffix
+# test already rejects. The only input it can ever reject is a file
+# literally named `__pycache__*.py`. Kept because removing it would be a
+# behaviour change in that one pathological case for no gain — but do not
+# read it as a second check on anything real.
+# ⚠️ `_lib` does no work inside `count_scope` either: measured on
 # `5cff2359`, the raw `*.py` glob of `ops`/`dx`/`lint` is 63/52/105 and the
 # counted result is the same 63/52/105. The prefixes only bite at the repo
-# root (12 of 13 files skipped). Emptying this tuple leaves the published
-# number untouched — which is why the tests for it use a synthetic tree.
+# root — 11 of 12 files there on `5cff2359`, 12 of 13 once this module was
+# added. Emptying this tuple leaves the published number untouched, which
+# is why the tests for it use a synthetic tree.
 TOOL_SKIP_PREFIXES: Tuple[str, ...] = (
     SHARED_LIB_PREFIX, "__init__", "__pycache__")
 
@@ -118,9 +124,15 @@ def scan(tools_root: Path, *,
 
     Prefer `count_scope` / `tool_map_scope`: each names the declaration it
     serves, so a caller cannot pick the wrong scope by accident.
+
+    ⛔ Duplicates in `COUNT_SUBDIRS` are collapsed. Measured before this:
+    a tuple holding `release` twice walked the directory twice and
+    reported 5 files where the tree held 4, and `count_by_subdir` said
+    `release: 2` — a wrong number that looks entirely normal, which is
+    the failure mode this whole module exists to remove. Order is kept.
     """
     found: List[Tuple[Optional[str], Path]] = []
-    for subdir in COUNT_SUBDIRS:
+    for subdir in dict.fromkeys(COUNT_SUBDIRS):
         directory = tools_root / subdir
         if not directory.is_dir():
             continue
@@ -148,7 +160,7 @@ def count_by_subdir(tools_root: Path) -> Dict[str, int]:
     A missing directory reports 0 rather than dropping out, so a caller
     unpacking the breakdown cannot silently lose a line.
     """
-    counts = {subdir: 0 for subdir in COUNT_SUBDIRS}
+    counts = {subdir: 0 for subdir in dict.fromkeys(COUNT_SUBDIRS)}
     for subdir, _path in count_scope(tools_root):
         counts[str(subdir)] += 1
     return counts

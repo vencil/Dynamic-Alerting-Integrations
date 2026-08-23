@@ -91,7 +91,6 @@
    "tests/shared/test_property.py"
   ],
   "scripts/tools/_lib_toolcount.py": [
-   "tests/dx/test_generate_tool_map.py",
    "tests/lint/test_validate_docs_versions.py",
    "tests/shared/test_lib_toolcount.py"
   ],
@@ -760,7 +759,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "6cf6ee51bfc7fcef5d0cc58cf0ae1d90817de7f75f6b3ea90e3609fd01522a10",
+ "source_digest": "0588884eddbe80808e8e4918abff2488053aa773839ea8ca5c17b8a5be492edf",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -2130,6 +2129,7 @@
   "scripts/tools": [
    "tests/dx/test_bump_docs.py",
    "tests/dx/test_generate_rule_pack_readme.py",
+   "tests/dx/test_generate_tool_map.py",
    "tests/dx/test_line_ending_policy.py",
    "tests/dx/test_verify_diff.py",
    "tests/lint/test_check_build_completeness.py",
@@ -2903,6 +2903,7 @@
    "tests/shared/test_dispatch_contract.py"
   ],
   "tests/shared/test_lib_toolcount.py": [
+   "tests/dx/test_generate_tool_map.py",
    "tests/lint/test_validate_docs_versions.py"
   ],
   "tests/shared/test_property.py": [

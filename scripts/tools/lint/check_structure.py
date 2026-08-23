@@ -101,11 +101,17 @@ def check_tools_root(project_root: Path, tracked: list[str]) -> list[str]:
             # libraries into ops/dx/lint, where they are skipped by the
             # tool scan AND missed by generate_tool_map's shared-library
             # footer (root-only glob) — i.e. invisible in tool-map.md.
-            # Register the second outlet so the cheaper answer is not the
-            # one that hides the file.
+            # ⚠️ Naming both outlets does not make the check able to tell
+            # them apart, and the mirror is real: a genuine TOOL parked
+            # here and allowlisted is cheaper than moving it, and the
+            # repo-root is permanently outside the counted scope, so it
+            # would never appear in "N 個 Python 工具". The message says
+            # which answer belongs to which case; nothing verifies the
+            # author picked the true one.
             violations.append(
-                f"  STRAY   {f}  (a tool → move to ops/, dx/, or lint/; "
-                f"a shared library → add it to ALLOWED_TOOLS_ROOT here)"
+                f"  STRAY   {f}  (a tool → move to ops/, dx/, or lint/, "
+                f"or it stays out of the tool count for good; a shared "
+                f"library → add it to ALLOWED_TOOLS_ROOT here)"
             )
     return violations
 

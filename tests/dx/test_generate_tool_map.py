@@ -9,10 +9,11 @@ import pytest
 
 _TOOLS_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'scripts', 'tools', 'dx')
 sys.path.insert(0, _TOOLS_DIR)
+# generate_tool_map imports `_lib_toolcount` from scripts/tools/, so that
+# directory has to be importable for the module under test to load at all.
 sys.path.insert(0, os.path.join(_TOOLS_DIR, '..'))
 
 import generate_tool_map as gtm  # noqa: E402
-import _lib_toolcount  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -94,60 +95,29 @@ class TestConstants:
             for cat in gtm.CATEGORY_ORDER:
                 assert cat in gtm.CATEGORY_HEADERS[lang]
 
-    def test_gather_tools_calls_the_shared_scanner(self):
-        """#1511: this module used to own a second `SKIP_PREFIXES` tuple.
-
-        ⛔ The first version of this test asserted
-        `gtm.tool_map_scope is _lib_toolcount.tool_map_scope`, which pins
-        the IMPORT SPELLING, not the behaviour its name claimed.
-        Measured, both directions wrong: rewriting `from X import f` to
-        `import X` + `X.f(...)` (identical behaviour, generator rc=0)
-        turned it RED, while putting a full private `_local_scan()` back
-        inside `gather_tools` and leaving the import line in place kept
-        all 11 tests GREEN.
-
-        So assert what the function actually reaches for. `co_names`
-        holds the global names the compiled body looks up, so a private
-        replacement stops satisfying it whichever way the import is
-        spelled.
-        """
-        reached = set(gtm.gather_tools.__code__.co_names)
-        assert "tool_map_scope" in reached or "_lib_toolcount" in reached, (
-            "gather_tools no longer reaches for _lib_toolcount.tool_map_scope; "
-            "a private scanner here is how the #1511 divergence started. "
-            "Globals it does reach: %s" % sorted(reached))
-        assert not hasattr(gtm, "SKIP_PREFIXES"), (
-            "a module-level SKIP_PREFIXES is back; the prefixes live in "
-            "_lib_toolcount.TOOL_SKIP_PREFIXES so both halves of the "
-            "partition come from one string")
-
-    def test_the_shared_library_footer_follows_the_shared_prefix(
-            self, tmp_path, monkeypatch):
-        """⛔ Control for the other half of the same partition.
-
-        The tool tables skip `_lib*` and this document's shared-library
-        section lists them, so the two must read one string. Measured
-        before this control existed: reverting the footer to its own
-        literal `"_lib*.py"` left all 98 tests green — the collapse had
-        no guard at all, which is how a second spelling comes back.
-
-        Moving the prefix must move BOTH halves, so the footer is driven
-        off a changed `SHARED_LIB_PREFIX` here; a hard-coded glob keeps
-        listing the old name and fails.
-        """
-        tools = tmp_path / "tools"
-        tools.mkdir()
-        for name in ("_lib_old.py", "_zzlib_new.py", "realtool.py"):
-            (tools / name).write_text(
-                '"""%s — stub."""\n' % name, encoding="utf-8", newline="\n")
-        monkeypatch.setattr(gtm, "TOOLS_ROOT", tools)
-        monkeypatch.setattr(gtm, "SHARED_LIB_PREFIX", "_zzlib")
-
-        rendered = gtm.generate_tool_map({c: [] for c in gtm.CATEGORY_ORDER})
-
-        assert "_zzlib_new.py" in rendered, (
-            "the shared-library footer ignored SHARED_LIB_PREFIX, so this "
-            "module spells the prefix a second time — the partition is "
-            "back to two definitions")
-        assert "_lib_old.py" not in rendered, (
-            "the footer still lists the old prefix after it moved")
+    # ⛔ #1511: two guards lived here and both were withdrawn, measured
+    # rather than argued. Neither could see the thing its own failure
+    # message named, and neither one's silent failure brings back the
+    # defect this cohort is about (a checker and a writer producing
+    # different numbers) — that is held by the behavioural assertions in
+    # tests/shared/test_lib_toolcount.py.
+    #
+    #   `test_gather_tools_calls_the_shared_scanner` asserted
+    #   `"tool_map_scope" in gather_tools.__code__.co_names`. `co_names`
+    #   holds NAMES, not provenance: a module-level private
+    #   `def tool_map_scope(root)` satisfies it. Measured — 24 passed,
+    #   generator rc=0 — including a version that dropped the repo root.
+    #
+    #   `test_the_shared_library_footer_follows_the_shared_prefix`
+    #   monkeypatched `gtm.SHARED_LIB_PREFIX`, so it only proved the
+    #   footer reads a module global. A second literal
+    #   `SHARED_LIB_PREFIX = "_lib"` written right here satisfies it.
+    #   Measured — 24 passed.
+    #
+    # What IS still guarded, and what is not:
+    #   guarded   — a private scanner whose BEHAVIOUR differs (drops the
+    #               root, stops skipping `_lib`): the synthetic-tree
+    #               assertions go red.
+    #   not       — a behaviour-identical private copy, or a second
+    #               spelling of the prefix. Nothing here objects. That is
+    #               a disclosed gap, not an oversight.

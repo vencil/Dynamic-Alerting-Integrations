@@ -83,7 +83,7 @@ def _unlisted_tool_subdirs(tools_dir: Path, listed) -> list:
         if (sub / "__init__.py").exists():
             continue
         if any(not any(f.name.startswith(p)
-                       for p in mod.TOOL_SKIP_PREFIXES)
+                       for p in _toolcount.TOOL_SKIP_PREFIXES)
                for f in sub.glob("*.py")):
             out.append(sub.name)
     return out
@@ -1173,7 +1173,7 @@ class TestFixDoesNotTurnTheGateOff:
 
         def _keep(f):
             return not any(f.name.startswith(p)
-                           for p in mod.TOOL_SKIP_PREFIXES)
+                           for p in _toolcount.TOOL_SKIP_PREFIXES)
 
         documented = sum(1 for s in ("ops", "dx", "lint")
                          for f in (tools_dir / s).glob("*.py") if _keep(f))
