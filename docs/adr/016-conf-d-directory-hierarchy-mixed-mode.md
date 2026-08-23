@@ -128,10 +128,26 @@ Directory Scanner 的設計哲學是「檔案系統即 source of truth」。
 
 | 面 | 階層 `conf.d/` |
 |:--|:--|
-| threshold-exporter `/effective`（繼承解析） | ✅ 完整遞迴繼承 |
-| threshold-exporter `/metrics`（Prometheus 輸出） | ⛔ **仍是平面**，見下方 #1521 |
+| threshold-exporter **函式庫**（`pkg/config` 的 `ResolveEffective`；`/effective`、`describe_tenant.py` 走這裡） | ✅ 完整遞迴繼承 |
+| threshold-exporter **實際吐出的 metric** | ⛔ **仍是平面** — 見下方修正與 #1521 |
 | `validate_config.py` | ✅ 已改為遞迴 |
 | 路由生成器 / 其餘平面工具 | ⚠️ **仍是平面**，但會列出被跳過的檔案並指回本節 |
+
+> ⚠️ **修正（2026-08-22）**：本表原本只有一列 `threshold-exporter（閾值）｜✅ 完整遞迴繼承`，那對**函式庫**成立、對 **exporter 真正吐出去的 metric 不成立**。
+> 遞迴掃描器（`scanDirHierarchical`）是 **opt-in**——`config_hierarchy.go` 的檔頭就寫著它「without disturbing the single-level `scanDirFileHashes` path — **callers opt in** by invoking `scanDirHierarchical` directly」，
+> 而餵給 `GetConfig()` 的兩條路（`IncrementalLoad` / `fullDirLoad`）用的都是平面的 `scanDirFileHashes`。
+>
+> 實測（根目錄一份合法 `_defaults.yaml` + 頂層 `top-tenant.yaml` + `sub/nested-tenant.yaml`，跑 `NewConfigManager(dir).Load()`）：
+>
+> ```text
+> Mode()               = directory
+> GetConfig().Tenants  = [top-tenant]
+> ResolveAt tenants    = map[top-tenant:true]
+> ```
+>
+> **子目錄裡的租戶不會出現在任何 metric 裡**，而 `/effective` 查得到它——同一份設定，兩個 reader 的母體不相等。
+> 這與 [#1469](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1469) 描述的是同一類缺陷（該票收在「一個 reader 遞迴、另一個平面，兩者的母體因此永遠不會相等」），只是那張票談的是 Python 側、這裡是 Go 側。
+> **保留「應該遞迴」這個承諾、只更正現況描述**：把承諾改寫成符合現行實作，會讓這個缺陷從「可以修」變成「被文件保護」。
 
 ⇒ **路由面尚未支援階層布局**：`_routing_defaults` 與租戶本體的 `_routing` 在子目錄裡
 不會被任何元件消費。要用路由就把租戶檔放在 `conf.d/` 頂層。
@@ -140,26 +156,29 @@ Directory Scanner 的設計哲學是「檔案系統即 source of truth」。
 新工具若平面讀取又不出聲會被擋下來，**選擇必須是刻意的**。共用列舉層在
 `scripts/tools/_lib_confd.py`。
 
-### ⛔ 已知缺陷：巢狀租戶 `/effective` 解析得到，`/metrics` 卻沒有 series（#1521，2026-08-22 補記）
+### ⛔ #1521：上面那個「仍是平面」在平台上留下什麼訊號（2026-08-22 補記）
 
-上面「影響」清單裡的 **「Prometheus metrics：目錄深度不影響 metric label」目前是假的**。
-threshold-exporter **自己內部**就有兩個對 `conf.d/` 的掃描器，對「哪些檔存在」的答案不同：
+上面的 ⚠️ 修正已經證明「目錄深度不影響 metric label」對 exporter 實際吐出的
+metric 不成立。本節只補兩件那段沒講的事：**是哪兩個掃描器**，以及 **#1526 之後
+平台會不會出聲**。
 
 | 掃描器 | 列舉方式 | 出海口 |
 |:--|:--|:--|
 | `config_hierarchy.go` `scanDirHierarchical` | `filepath.WalkDir` — **遞迴，每一層** | `hierarchy.tenantSources` → `Resolve()` → `/effective` |
 | `flat_scanner.go` `scanDirFileHashes` | `os.ReadDir` + `if IsDir() { continue }` — **只有頂層** | `m.config` → `ThresholdCollector` → `/metrics` |
 
-⇒ 放在子目錄的租戶檔（`conf.d/db/hier-tenant.yaml`）**`/effective` 查得到、`/metrics` 一條 series 都沒有**，
-所以它的告警**永遠不會 fire**。#1526 之前是**零信號**：沒有 ERROR、沒有 WARN、沒有 parse_failure，
-連 "Config loaded" 統計行都看不出來。
+#1526 之前是**零信號**：沒有 ERROR、沒有 WARN、沒有 parse_failure，連
+"Config loaded" 統計行都看不出來。
 
-現況（#1526 止血後）：新增 gauge `da_config_hierarchy_divergent_tenants` + 一行 ERROR 會**點名**受害租戶——
-但**沒有修好**，那些租戶仍然不產生指標。⚠️ 純平面模式下 gauge 可能維持 `0` 直到重啟，
+現況（#1526 止血後）：新增 gauge `da_config_hierarchy_divergent_tenants` 會**點名**
+受害租戶，並在受影響集合**變化**時（含冷啟動、以及歸零後復發）印一行 ERROR——
+但**沒有修好**，那些租戶仍然不產生指標。
+
+⚠️ 純平面模式（全樹沒有任何 `_defaults.yaml`）下 gauge 可能維持 `0` 直到重啟，
 **別把 0 讀成「已完整檢查」**。兩個成因由
 `TestDivergenceAudit_HotReload_FlatModeNeverDetects`
-（`components/threshold-exporter/app/config_divergence_test.go`）釘住，該測試同時斷言
-「重啟後 gauge == 1」；面向維運的描述在
+（`components/threshold-exporter/app/config_divergence_test.go`）釘住，該測試同時
+斷言「重啟後 gauge == 1」；面向維運的描述在
 [threshold-exporter README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md)
 §3.3。
 

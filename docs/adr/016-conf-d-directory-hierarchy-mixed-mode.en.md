@@ -124,10 +124,36 @@ State after the #1339 fix:
 
 | Plane | Hierarchical `conf.d/` |
 |:--|:--|
-| threshold-exporter `/effective` (inheritance resolution) | ✅ full recursive inheritance |
-| threshold-exporter `/metrics` (Prometheus output) | ⛔ **still flat**, see #1521 below |
+| threshold-exporter **library** (`pkg/config`'s `ResolveEffective`; `/effective` and `describe_tenant.py` read through it) | ✅ full recursive inheritance |
+| threshold-exporter **metrics it actually emits** | ⛔ **still flat** — see the correction below and #1521 |
 | `validate_config.py` | ✅ now recursive |
 | routing generator / remaining flat tools | ⚠️ **still flat**, but they now name the files they skip and point here |
+
+> ⚠️ **Correction (2026-08-22)**: this table used to carry a single row,
+> `threshold-exporter (thresholds) | ✅ full recursive inheritance`. That holds for
+> the **library** and does not hold for the metrics the exporter actually emits.
+> The recursive scanner (`scanDirHierarchical`) is **opt-in** — `config_hierarchy.go`'s
+> own header says it adds the recursive walk "without disturbing the single-level
+> `scanDirFileHashes` path — **callers opt in** by invoking `scanDirHierarchical`
+> directly" — and both paths that feed `GetConfig()` (`IncrementalLoad` /
+> `fullDirLoad`) call the flat `scanDirFileHashes`.
+>
+> Measured (a valid root `_defaults.yaml` plus `top-tenant.yaml` at the top level and
+> `sub/nested-tenant.yaml`, through `NewConfigManager(dir).Load()`):
+>
+> ```text
+> Mode()               = directory
+> GetConfig().Tenants  = [top-tenant]
+> ResolveAt tenants    = map[top-tenant:true]
+> ```
+>
+> **A tenant in a subdirectory reaches no metric at all**, while `/effective` resolves
+> it — one config, two readers, populations that can never be equal. Same defect class
+> as [#1469](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1469)
+> (which closes on exactly that sentence), on the Go side rather than the Python side.
+> **The "should recurse" promise is kept and only the status description is corrected**:
+> rewriting the promise to match today's implementation would promote the defect from
+> fixable to protected.
 
 ⇒ **The routing plane does not support a hierarchical layout yet**:
 `_routing_defaults` and a tenant's own `_routing` are consumed by nothing when
@@ -139,30 +165,32 @@ The "flat but loud" contract is enforced by
 stays silent fails the gate, so **the choice has to be deliberate**. The shared
 enumeration layer is `scripts/tools/_lib_confd.py`.
 
-### ⛔ Known defect: nested tenants resolve on `/effective` but have no series on `/metrics` (#1521, added 2026-08-22)
+### ⛔ #1521: what signal the platform gives for that "still flat" (added 2026-08-22)
 
-The line in the Consequences list above — **"Prometheus metrics: Directory depth
-does not affect metric labels" — is currently false**. threshold-exporter has
-**two** `conf.d/` scanners of its own, and they disagree about which files exist:
+The correction above already establishes that "directory depth does not affect
+metric labels" is false for the metrics the exporter actually emits. This
+section adds only the two things it does not cover: WHICH two scanners, and
+whether the platform says anything after #1526.
 
 | Scanner | Enumeration | Outlet |
 |:--|:--|:--|
 | `config_hierarchy.go` `scanDirHierarchical` | `filepath.WalkDir` — **recursive, every depth** | `hierarchy.tenantSources` → `Resolve()` → `/effective` |
 | `flat_scanner.go` `scanDirFileHashes` | `os.ReadDir` + `if IsDir() { continue }` — **top level only** | `m.config` → `ThresholdCollector` → `/metrics` |
 
-⇒ A tenant file placed in a sub-directory (`conf.d/db/hier-tenant.yaml`) **is
-resolvable via `/effective` and has not a single series on `/metrics`**, so its
-alerts **can never fire**. Before #1526 this was **zero signal**: no ERROR, no
-WARN, no parse_failure, nothing in the "Config loaded" stats line.
+Before #1526 this was **zero signal**: no ERROR, no WARN, no parse_failure,
+nothing in the "Config loaded" stats line.
 
 State after the #1526 stopgap: a new gauge `da_config_hierarchy_divergent_tenants`
-plus one ERROR line **names** the affected tenants — but **does not fix them**;
-those tenants still emit no metrics. ⚠️ In pure flat mode the gauge can stay at
-`0` until restart, so **do not read 0 as "fully checked"**. Both causes are pinned by
-`TestDivergenceAudit_HotReload_FlatModeNeverDetects`
+**names** the affected tenants, and one ERROR line is written whenever that set
+CHANGES (cold start and post-recovery relapse included) — but nothing is fixed;
+those tenants still emit no metrics.
+
+⚠️ In pure flat mode (no `_defaults.yaml` anywhere in the tree) the gauge can stay
+at `0` until restart, so **do not read 0 as "fully checked"**. Both causes are
+pinned by `TestDivergenceAudit_HotReload_FlatModeNeverDetects`
 (`components/threshold-exporter/app/config_divergence_test.go`), which also
-asserts that a restart DOES report it; the operator-facing description is in
-the [threshold-exporter README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md)
+asserts that a restart DOES report it; the operator-facing description is in the
+[threshold-exporter README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md)
 §3.3.
 
 ⇒ Until #1521 is closed: **if you want metrics, the tenant file has to sit at the
