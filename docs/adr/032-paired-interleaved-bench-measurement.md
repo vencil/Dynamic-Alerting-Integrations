@@ -394,9 +394,11 @@ PR-A 的第一版把三態紀律寫進了 Python 端，卻在**輸入邊界**留
 
 | 層級 | 意思 | 實作中的成因 |
 |---|---|---|
-| **(a) 整夜 `unreadable`** | 這一夜的資料根本讀不出來 | payload 不是 JSON object／schema 不在支援清單／night status 未知／夜跑自己回報 INCONCLUSIVE／缺 `ratios_pct`／artifact 下載失敗或不完整／讀檔失敗／**該次執行早於成對量測管線上線（artifact 裡沒有 `bench-paired.json`）** |
+| **(a) 整夜 `unreadable`** | 這一夜的資料根本讀不出來 | 截至 `96a6afa` 共 **10 個呼叫點**：payload 不是 JSON object／schema 不在支援清單／night status 未知／夜跑自己回報 INCONCLUSIVE／**`evaluated` 不是 object**／**`inconclusive` 不是 object**／讀檔失敗／缺 `ratios_pct`／artifact 下載失敗或不完整／該次執行早於成對量測管線上線（artifact 裡沒有 `bench-paired.json`） |
 | **(b) 整夜 `not-counted`** | 資料讀得出來，但**閘門**判定這一夜的成對量測不可信 | gating 對照測試缺失或不可讀／完全沒有對照測試讀數／偏離超過 gate |
 | **(c) 單支測試 `inconclusive`** | 這一夜整體可用，但**這一支**沒有可用比值 | `unreadable-record`／`unreadable-ratio`（含 §待決 2 的單側測試） |
+
+⛔ 上表的成因清單是**逐一列舉 `night.unreadable(...)` 的呼叫點**得到的，不是憑印象回想 —— 本節前兩版各漏一次（先漏 3 條、補後仍漏 2 條），兩次都是靠盲審抓出來的，而不是靠寫的人自己回頭數。**`evaluated` 不是 object** 與 **`inconclusive` 不是 object** 這一對特別容易漏，因為它們防的不是壞掉的檔案而是**形狀對、語意錯**的檔案：後者的錯誤訊息明寫「an absent disclosure is not an empty one」——一份沒有 `inconclusive` 欄位的 JSON 不等於一份宣告「沒有任何測試無法評估」的 JSON，這正是本 ADR 全線在防的同一種混淆。這一對之所以成對，是因為 [`CHANGELOG.md`](../CHANGELOG.md) 記的 #1536 intentional-break 第 ⑹ 項正是抓到它們**當時不對稱**：「`inconclusive` 欄缺席被讀成空的（`evaluated` 缺席則 unreadable）」——現在兩者同為型別守衛，缺席與型別錯一律 `unreadable`。清單若再變動，唯一可信的更新法仍是重新列舉呼叫點。
 
 (b) 正是本節上面決定的那道閘門。把它與 (a) 分開的理由是**可診斷性**：(a) 要修的是管線，(b) 要看的是機器當夜的狀況，(c) 要看的是那一支測試。三者若共用一個字，操作者拿到的是「壞了」而不是「哪裡壞了」。
 
