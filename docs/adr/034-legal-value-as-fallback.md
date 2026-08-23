@@ -102,7 +102,7 @@ default:                  → 直接 commit
 | 有合法值當 fallback 嗎？ | 有——`direct` 就是 `default` |
 | **結論** | **適用，必須驗證** |
 
-**最小修法**：解讀前先比對合法值集合，不在集合內就啟動失敗。
+**最小修法**：解讀前先比對合法值集合，不在集合內就啟動失敗。追蹤於 [#1559](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1559)，七個輸入的實測輸出在該票。
 
 ⚠️ **終態必須是報錯**——「先出一版只警告」等於仍舊落到合法值上再多印一行 log，而本文的論證正是那行 log 不可靠。過渡要怎麼排（要不要先警告一版、警告多久）是那張票的 rollout 決定，但不改變終態。
 
@@ -144,19 +144,21 @@ default:                  → 直接 commit
 - 合法值集合定義在 `internal/handler/deps.go`，且沒有任何地方把輸入與它比對
 - `default` 分支印的就是 `slog.Info("direct write mode (commit-on-write)")` 那一行本身——所以與合法 `direct` 的輸出必然相同
 - `dev-rules.md` 內「不得靜默 X」語氣的規則共四處，且各自綁定場景
+- **（本輪補測）** 直接呼叫 `wirePRBackend` 餵七個輸入（六個錯的 + `direct`），全部回傳 `mode="direct"` 且 `slog` 輸出逐字相同——見 [#1559](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1559)
+- **（本輪補測）** `--write-mode` 從 flag 到 `prBackendFlags.Mode` 全程沒有 `TrimSpace`，所以前導／尾隨空白確實會落到 `default`
+- **（本輪補測）** 合法的 PR 值在缺 token 時走 `log.Fatalf`——**這個元件已經會在啟動期硬失敗，只有 `default` 那條沒有**
 
 **⚠️ 沒有實際重現的**：
 
-- **沒有真的餵一個打錯的值去啟動服務**。上述結論由讀 switch 與合法值定義推得，推論鏈短且完整，但未端到端執行。
-- 「前導空白沒有去空白處理」只驗到 switch 這一段，**沒有追完整條解析路徑**（flag 定義、環境變數讀取）。若上游有 trim，`" pr"` 那一列不成立；另外三列不受影響。
+- **沒有真的啟動整個服務程序**。上述實測是直接呼叫 `wirePRBackend` 這個函式，涵蓋了「輸入如何被解讀」與「印出什麼日誌」，但沒有跑完整個 `main()` 的啟動流程。
 
 ## 盤點時另外發現的缺陷（**不是本規則的實例**）
 
 記在這裡的唯一理由是：它是上面「廣義版套不進來」那個論證的證據。**它套不進本規則**——那裡沒有「被寫錯的設定值」，而是檢查涵蓋不足。
 
-`PUT /api/v1/tenants/{id}` 讓租戶送一份 YAML 上來，而告警接收端的必填欄位本身就是憑證。寫入端的欄位檢查是白名單式——`internal/handler/body_validator.go` 的註解逐字寫著「keys NOT in this map pass through without further checks」（**放行**，不是擋下），白名單裡只有四個非憑證欄位。平台有憑證形狀檢查，但只掃 `helm/**` 與 `k8s/**`，沒有涵蓋租戶設定目錄。
+`PUT /api/v1/tenants/{id}` 讓租戶送一份 YAML 上來，而告警接收端的必填欄位本身就是憑證。**整檔 PUT 這條路上沒有任何 key 層級的檢查**——它跑的是 YAML 解析、拒絕非 `tenants` 頂層 key、要求 tenant 區段存在、以及 key **名稱**對照 `_defaults.yaml`，四步都不看欄位的值。（`internal/handler/body_validator.go` 那份 reserved-key 驗證器只被批次 patch 端點呼叫。）平台有憑證形狀檢查，但只掃 `helm/**` 與 `k8s/**`，沒有涵蓋租戶設定目錄。
 
-⛔ **這段需要自己的票，且該票要補端到端實測**（本輪沒有真的送一份帶憑證的 `PUT` 再檢查落點）。⚠️ 開票之前它掛在一份未生效的 ADR 末尾——如果本 ADR 被 reject 或擱置，這段會跟著沉掉。**開票是本 ADR 的未完項，不是它的產出。**
+已開票追蹤：[#1560](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1560)，端到端實測（PUT → 200 → 值出現在 `git show HEAD`）已補在該票，本 ADR 不重複。
 
 ## Related
 
