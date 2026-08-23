@@ -885,6 +885,24 @@ def test_tenant_doc_three_population_claim_matches_the_derivation(path):
             f"of the dormant group, but no dormant key starts with "
             f"'{family}_' (dormant={sorted(dormant)})")
 
+def _textwrap_module_names(tree) -> set[str]:
+    """Every name `textwrap` is reachable under in this module.
+
+    ⛔ `import textwrap as tw` is the third spelling. The first version of the
+    guard below matched the literal `textwrap` only; blind review added the
+    `from textwrap import wrap` form, and blind review of THAT added this one —
+    a set assertion that knows two of three spellings is still a spot check.
+    """
+    import ast
+
+    names = {"textwrap"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names |= {a.asname or a.name
+                      for a in node.names if a.name == "textwrap"}
+    return names
+
+
 def test_no_call_site_wraps_a_comment_on_its_own() -> None:
     """⛔ `_wrap_comment` must stay the ONLY place that calls `textwrap`.
 
@@ -911,7 +929,7 @@ def test_no_call_site_wraps_a_comment_on_its_own() -> None:
         and isinstance(node.func, ast.Attribute)
         and node.func.attr in ("wrap", "fill")
         and isinstance(node.func.value, ast.Name)
-        and node.func.value.id == "textwrap"
+        and node.func.value.id in _textwrap_module_names(tree)
     ]
     inside = [
         node.lineno
@@ -949,23 +967,31 @@ def test_no_call_site_wraps_a_comment_on_its_own() -> None:
 
 
 def test_wrap_comment_never_splits_a_token() -> None:
-    """⛔ The two keyword arguments themselves, which nothing else pins.
+    """⛔ The two keyword arguments themselves, asked as behaviour not spelling.
 
     `test_no_call_site_wraps_a_comment_on_its_own` proves the DECISION lives in
     one place. It does not prove the decision is still the right one: measured,
-    deleting `break_on_hyphens=False` AND `break_long_words=False` together
-    leaves that test — and the whole module, 46 passed — completely green. The
-    centralisation was guarded and the thing centralised was not.
+    deleting `break_on_hyphens=False` AND `break_long_words=False` together left
+    that test — and the whole module — green. The centralisation was guarded and
+    the thing centralised was not.
 
-    So this asks the behaviour instead of the spelling: whatever the helper
-    does, no output segment may end mid-token. The two shapes below are the two
-    defaults that would do it — a hyphenated name, and a name longer than the
-    whole width — and both are drawn from real cut tokens: `negative-db2.yaml`
-    is the filename the original note named, and an over-width identifier is the
-    #1453 shape.
+    ⚠️ WHAT EACH HALF IS ACTUALLY WORTH, because the first version of this
+    docstring claimed both were unpinned and that was wrong. Deleting the hyphen
+    flag alone reds `tests/lint/test_check_threshold_registry.py::test_real_repo_is_green`,
+    which compares the regenerated artifact — so that half already had a witness,
+    just an indirect one in another module. Deleting the long-word flag alone
+    reds nothing but this test. The net new coverage here is the long-word half;
+    the hyphen case is kept as a direct, local witness for a rule whose only
+    other guard is a golden comparison three modules away.
+
+    ⛔ THE WIDTH IS LOAD-BEARING AND WAS WRONG. At 24 the hyphen assertion is
+    TAUTOLOGICAL — measured, `textwrap` produces byte-identical output with and
+    without the flag at that width, so the case passed for a reason unrelated to
+    what it claims to test. Only at 20 or below does the mutant split the token
+    while the shipped helper does not. Do not raise it.
     """
     hyphenated = "see negative-db2.yaml for the counterexample and then stop"
-    segments = lib._wrap_comment(hyphenated, 24)
+    segments = lib._wrap_comment(hyphenated, 20)
     assert len(segments) > 1, "width too generous to exercise wrapping at all"
     assert any("negative-db2.yaml" in seg for seg in segments), (
         "`negative-db2.yaml` came back split across segments: "
