@@ -140,6 +140,36 @@ func TestPutTenant_MalformedBaseHashIsRejectedNotIgnored(t *testing.T) {
 	}
 }
 
+// A header that is PRESENT but blank is a caller asking for the gate and
+// handing over nothing to gate on. It must not fall through to the
+// unconditional-write path — Header.Get flattens absent and present-blank to
+// the same "", which is exactly how that silent downgrade would happen.
+func TestPutTenant_BlankBaseHashHeaderIsRejected(t *testing.T) {
+	t.Parallel()
+	for name, value := range map[string]string{
+		"empty":           "",
+		"spaces":          "   ",
+		"tab-and-newline": "\t",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			h, path, _ := baseHashFixture(t)
+			req := newRequestWithChiParam("PUT", "/api/v1/tenants/db-a", "id", "db-a",
+				bytes.NewBufferString(baseHashUpdate))
+			req.Header.Set("X-Forwarded-Email", "op@example.com")
+			req.Header.Set("X-Forwarded-Groups", "admins")
+			req.Header.Set(BaseHashHeader, value) // present, blank
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, req)
+
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400: %s", w.Code, w.Body.String())
+			}
+			assertFile(t, path, baseHashSeed)
+		})
+	}
+}
+
 func assertFile(t *testing.T, path, want string) {
 	t.Helper()
 	got, err := os.ReadFile(path)

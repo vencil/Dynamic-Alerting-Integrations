@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/textproto"
 	"strings"
 	"time"
 
@@ -233,6 +234,23 @@ func putTenantPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, tenantID,
 	// Create feature branch + commit
 	result, err := d.Writer.WritePR(r.Context(), tenantID, email, yamlContent)
 	if err != nil {
+		// The body matched the branch base, so no commit — and therefore no
+		// branch and no PR/MR. That is a success, not a forge error; mirrors
+		// the all-no-op batch's clean 200 (#1102). Carries the deprecation
+		// notices for the same reason the batch path does.
+		if errors.Is(err, gitops.ErrNoChanges) {
+			var warnings []string
+			if result != nil {
+				warnings = result.Notices
+			}
+			writeJSON(rw, http.StatusOK, PutTenantResponse{
+				Status:   "no_changes",
+				TenantID: tenantID,
+				Message:  "No changes to apply; no PR/MR created.",
+				Warnings: warnings,
+			})
+			return
+		}
 		// TRK-320 ErrWriteOverloaded / TRK-318 ErrForgeDegraded → canonical
 		// retry-hinting 503s (shared with the batch path).
 		if writeWriteFlowError(rw, r, err) {
@@ -302,10 +320,16 @@ const BaseHashHeader = "X-DA-Base-Hash"
 // would hand back an unconditional overwrite under the name of a precondition.
 // 400 says exactly which of the two happened.
 func readBaseHashHeader(rw http.ResponseWriter, r *http.Request) (string, bool) {
-	raw := strings.TrimSpace(r.Header.Get(BaseHashHeader))
-	if raw == "" {
+	// Absent and present-but-blank are NOT the same request. `Header.Get`
+	// flattens both to "", which would send `X-DA-Base-Hash:` (or a value of
+	// only spaces) down the unconditional-write path — a caller who asked for
+	// the gate silently not getting one, the exact failure this header exists
+	// to prevent. Only a header that is not there at all means "no gate".
+	values, present := r.Header[textproto.CanonicalMIMEHeaderKey(BaseHashHeader)]
+	if !present || len(values) == 0 {
 		return "", true
 	}
+	raw := strings.TrimSpace(r.Header.Get(BaseHashHeader))
 	if !isSourceHash(raw) {
 		WriteJSONError(rw, r, http.StatusBadRequest,
 			BaseHashHeader+" must be a source_hash: 16 lowercase hex characters, "+

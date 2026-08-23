@@ -18,7 +18,7 @@ updated_at: 2026-08-22
 
 🟡 **Proposed**（2026-08-22）。owner 核可後昇格 Accepted。
 
-> 依語言政策，ADR 自 ADR-019 起不另製 `.en.md`。
+> 依語言政策（自 ADR-019 起預設 ZH-only；ADR-024 / ADR-025 為保留 `.en.md` sibling 的例外），本 ADR 不另製 `.en.md`。
 
 ## TL;DR
 

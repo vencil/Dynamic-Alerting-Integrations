@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -194,4 +195,31 @@ func TestWritePRBatch_DeletesLocalBranchAfterConfirmedPush(t *testing.T) {
 	}
 	// …remote branch present (the PR needs it) — gitOut aborts the test on miss.
 	gitOut(t, dir, "rev-parse", "--verify", fmt.Sprintf("refs/remotes/origin/%s", res.BranchName))
+}
+
+// TestWritePR_NoOpBodyReturnsNoChanges: the body is byte-identical to what the
+// base branch already holds, so `git add` stages nothing and the feature branch
+// would carry no commits. Pushing that branch and asking the forge to open a
+// change-free PR/MR is a 422 plus a leaked branch, so WritePR must roll the
+// branch back and report ErrNoChanges — the same clean outcome WritePRBatch
+// already returns for an all-no-op batch (#1102).
+func TestWritePR_NoOpBodyReturnsNoChanges(t *testing.T) {
+	repo := initRepoOnMain(t)
+	w := NewWriter(repo, repo)
+
+	// Land the content on the base branch first.
+	if err := os.WriteFile(filepath.Join(repo, "db-a.yaml"), []byte(validTenantYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repo, "add", "db-a.yaml")
+	gitRun(t, repo, "commit", "-m", "base content")
+
+	res, err := w.WritePR(context.Background(), "db-a", "alice@example.com", validTenantYAML)
+	if !errors.Is(err, ErrNoChanges) {
+		t.Fatalf("err = %v, want ErrNoChanges for a body matching the base", err)
+	}
+	if res == nil {
+		t.Error("result is nil; ErrNoChanges must still carry the notices channel")
+	}
+	assertCleanOnBase(t, repo, "main", "tenant-api/")
 }
