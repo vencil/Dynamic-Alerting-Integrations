@@ -985,15 +985,13 @@ func TestDivergenceAudit_TheReturnValueSurvivesSuppression(t *testing.T) {
 // `{ab → c}` both render as "abc", so a genuinely different divergent set
 // is mistaken for a repeat and the operator is told nothing.
 //
-// ⚠️ The SECOND separator (after the source path) is a different matter
-// and deliberately has no test: with the first one present, the number of
-// NUL bytes equals the number of pairs and each pair contributes exactly
-// one, so the encoding stays injective without it for any ID and path that
-// do not themselves contain a NUL. Removing it is an EQUIVALENT mutation,
-// not an uncovered one. The byte stays because the cost is one write and
-// the argument depends on an assumption about the inputs; recording why no
-// test exists is the honest alternative to inventing one that would only
-// re-state the implementation.
+// ⚠️ The SECOND separator (after the source path) has its own test —
+// see TestDivergenceLogState_TheKeyCannotBeAmbiguousAcrossAdjacentPairs.
+// An earlier revision of this comment argued it was an EQUIVALENT mutation
+// and needed none. That argument was wrong and a blind reviewer broke it:
+// counting NUL bytes fixes how many PAIRS the key holds, but not where
+// `source[i]` ends and `tenant[i+1]` begins, and that boundary is exactly
+// what the trailing byte marks.
 func TestDivergenceLogState_TheKeyCannotBeAmbiguousAcrossTenantAndSource(t *testing.T) {
 	t.Parallel()
 	var d divergenceLogState
@@ -1006,5 +1004,56 @@ func TestDivergenceLogState_TheKeyCannotBeAmbiguousAcrossTenantAndSource(t *test
 		t.Errorf("{ab → c} is a DIFFERENT divergent set from {a → bc} and must " +
 			"be reported as new; without the tenant/source separator both " +
 			"render as \"abc\" and the second one is silently swallowed")
+	}
+}
+
+// TestDivergenceLogState_TheKeyCannotBeAmbiguousAcrossAdjacentPairs pins the
+// separator AFTER the source path — the boundary between one pair and the
+// next.
+//
+// ⛔ This test exists because a blind reviewer broke an argument this file
+// used to carry, and the argument was mine. The claim was that with the
+// tenant/source separator present the encoding stays injective without this
+// one, because "the number of NUL bytes equals the number of pairs". That is
+// true and irrelevant: knowing there are N pairs does not say where
+// `source[i]` stops and `tenant[i+1]` starts, and nothing else marks that
+// boundary. Measured with the byte removed — two divergent sets that share
+// no tenant ID and no path collapse onto the same key:
+//
+//	{acme-corp → /etc/conf.d/xy, z-tenant  → /etc/other.yaml}
+//	{acme-corp → /etc/conf.d/x,  yz-tenant → /etc/other.yaml}
+//	both → "acme-corp\0/etc/conf.d/xyz-tenant\0/etc/other.yaml"
+//
+// ⚠️ No NUL byte, no empty tenant ID, no exotic filename — ordinary
+// alphanumeric-and-hyphen tenant IDs and ordinary absolute paths, which is
+// what makes it worth a test rather than a caveat. The consequence is the
+// same one the sibling test guards: the second set is taken for a repeat and
+// the operator is told nothing about a divergence that is live.
+func TestDivergenceLogState_TheKeyCannotBeAmbiguousAcrossAdjacentPairs(t *testing.T) {
+	t.Parallel()
+	var d divergenceLogState
+	noop := func(int) {}
+
+	first := d.recordAndDecide(
+		[]string{"acme-corp", "z-tenant"},
+		map[string]string{
+			"acme-corp": "/etc/conf.d/xy",
+			"z-tenant":  "/etc/other.yaml",
+		}, noop)
+	if !first {
+		t.Fatalf("first set must be reported as new")
+	}
+
+	second := d.recordAndDecide(
+		[]string{"acme-corp", "yz-tenant"},
+		map[string]string{
+			"acme-corp": "/etc/conf.d/x",
+			"yz-tenant": "/etc/other.yaml",
+		}, noop)
+	if !second {
+		t.Errorf("a divergent set that shares no tenant ID and no path with the " +
+			"previous one must be reported as new; without the separator after " +
+			"the source path the two render identically and the second is " +
+			"silently swallowed")
 	}
 }
