@@ -760,11 +760,18 @@ def check_tool_map_coverage() -> List[Issue]:
     for tool files (`_lib_toolcount.is_tool_file`) and verifies each is
     referenced in docs/internal/tool-map.md.
 
-    ⚠️ Disclosed, not fixed here: the 220 tools under `ops/`, `dx/` and
-    `lint/` are inventoried by `generate_tool_map.gather_tools` but their
-    tool-map coverage is not checked by anything. The docstring used to
-    claim this scanned `scripts/tools/`, which read as all of it. Widening
-    the scan changes what the gate reports, so it is tracked separately.
+    ⚠️ The docstring used to claim this scanned `scripts/tools/`, which
+    read as all of it. It does not — and the subdirectories are covered by
+    a different mechanism, not by nothing: `generate_tool_map --check
+    --lang all` regenerates the whole document and compares. Measured with
+    `ops/blast_radius.py`'s row deleted: this function reports nothing,
+    while that command exits 1 with `(missing: blast_radius.py)`, and
+    `ci.yml`'s `lint` job runs it as `pre-commit run tool-map-check
+    --all-files` with no `if:`, `needs:` or `continue-on-error`.
+
+    ⚠️ What is genuinely narrow here: this function reports at `warn`, so
+    even the root-level gap it does check exits 0. Widening the scan
+    changes what the gate reports, so it is tracked separately.
     """
     issues = []
     tool_map = DOCS_DIR / "internal" / "tool-map.md"

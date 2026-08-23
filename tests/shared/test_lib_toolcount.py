@@ -8,11 +8,16 @@ docs/internal/tool-map.md. The writer skipped no filename prefixes at
 all, so the three agreed only because `ops/`, `dx/` and `lint/` happen to
 hold no `_lib*` or `__init__.py`.
 
-Every assertion here runs against a SYNTHETIC tree, not the repo's own.
-On the repo tree the interesting shapes are absent, so a real-tree test
-cannot tell a working predicate from a stub: emptying
-`TOOL_SKIP_PREFIXES` leaves today's count untouched. The tree built by
-`_build_tree` contains one of every shape the predicate has to judge.
+Every assertion that touches a filesystem runs against a SYNTHETIC tree,
+not the repo's own. On the repo tree the interesting shapes are absent,
+so a real-tree test cannot tell a working predicate from a stub: measured
+on `5cff2359`, emptying `TOOL_SKIP_PREFIXES` leaves the published count
+at 220. The tree built by `_build_tree` contains one of every shape the
+predicate has to judge.
+
+⚠️ `TestThePredicate` is the exception and says so: it feeds bare
+`Path("name.py")` strings and touches no tree at all, so it pins the
+predicate's answer for a filename — never that any such file exists here.
 """
 from __future__ import annotations
 
@@ -76,18 +81,40 @@ class TestThePredicate:
     def test_it_judges_both_directions(self):
         """A predicate tested only on tools drifts into "accept anything"."""
         for name in ("alpha.py", "validate_all.py", "check_x.py"):
-            assert tc.is_tool_file(Path(name)), name
+            assert tc.is_tool_file(Path(name)), (
+                "%s must be judged a tool; the predicate has drifted "
+                "towards rejecting everything" % name)
         for name in ("_lib_io.py", "__init__.py", "notes.txt", "README.md"):
-            assert not tc.is_tool_file(Path(name)), name
+            assert not tc.is_tool_file(Path(name)), (
+                "%s must NOT be judged a tool; the predicate has drifted "
+                "towards accepting everything" % name)
 
-    def test_the_counted_helpers_are_counted_on_purpose(self):
-        """⚠️ `_lib` is the convention; `_grar_*` and `_registry_lib.py` are
-        helper modules that do not follow it, so they count as tools today.
-        Pinned so "the count includes some libraries" stays a known fact
-        rather than a surprise the next reader has to re-derive.
+    def test_underscore_helpers_without_the_lib_prefix_are_still_counted(self):
+        """⛔ This pins a CONSEQUENCE nobody has decided to accept.
+
+        `_lib` is the convention for a shared module, and the counted
+        subdirectories hold helper modules that do not carry it, so the
+        published number includes them. `verify_diff_rules.yaml` matches
+        the same files as 「子目錄共用 helper」 — the repo holds both
+        opinions at once.
+
+        ⚠️ Read on before "fixing" this: narrowing the predicate here
+        LOWERS the number in README.md and README.en.md, so it is a
+        decision about the published sentence, not a cleanup. Change this
+        test together with that sentence and the tracking ticket, or not
+        at all. Deleting the assertions to go green removes the only
+        place the trade-off is written down.
+
+        ⚠️ This asserts on a filename, not on the tree — it stays true
+        even if every such file is renamed. The live count is measured in
+        `TestTheTwoScopes`.
         """
-        assert tc.is_tool_file(Path("_grar_parse.py"))
-        assert tc.is_tool_file(Path("_observed_map_lib.py"))
+        assert tc.is_tool_file(Path("_grar_parse.py")), (
+            "the predicate stopped counting non-`_lib` helper modules; "
+            "if that is intended, README's count changes with it")
+        assert tc.is_tool_file(Path("_registry_lib.py")), (
+            "the predicate stopped counting non-`_lib` helper modules; "
+            "if that is intended, README's count changes with it")
 
 
 class TestTheTwoScopes:
@@ -96,7 +123,13 @@ class TestTheTwoScopes:
 
         assert _names(tc.count_scope(tools)) == [
             "alpha.py", "beta.py", "delta.py", "gamma.py"]
-        assert tc.count_by_subdir(tools) == {"ops": 2, "dx": 1, "lint": 1}
+        expected = dict.fromkeys(tc.COUNT_SUBDIRS, 0)
+        expected.update({"ops": 2, "dx": 1, "lint": 1})
+        assert tc.count_by_subdir(tools) == expected, (
+            "if this failed only because COUNT_SUBDIRS gained a member, "
+            "the expectation above just needs the new key; check first "
+            "whether the checker and the writer still agree — that is the "
+            "failure worth reading")
 
     def test_the_skipping_is_doing_work_on_this_tree(self, tmp_path):
         """Must-fire control: an empty `TOOL_SKIP_PREFIXES` must be visible.
@@ -149,7 +182,12 @@ class TestTheTwoScopes:
         (tools / "ops" / "only.py").write_text(_STUB, encoding="utf-8",
                                                newline="\n")
 
-        assert tc.count_by_subdir(tools) == {"ops": 1, "dx": 0, "lint": 0}
+        expected = dict.fromkeys(tc.COUNT_SUBDIRS, 0)
+        expected["ops"] = 1
+        assert tc.count_by_subdir(tools) == expected, (
+            "every declared subdirectory must report a number, including "
+            "the missing ones — a caller printing the breakdown would "
+            "otherwise drop a line without noticing")
         assert tc.count_scope(tmp_path / "nowhere") == []
 
 
@@ -157,11 +195,18 @@ class TestAllThreeConsumers:
     """The three call sites must read one definition, not three.
 
     Measured against the pre-#1511 implementations on this exact tree:
-    the checker said 4, the writer said 6 (it counted `dx/__init__.py` and
-    `lint/_lib_helper.py`). From that gap `bump_docs --sync-counts` wrote
-    the writer's number into README, the gate warned that it did not match
-    the checker's, `--fix` wrote the checker's back, and neither tool could
-    clear the warning.
+    the checker said 4, the writer said `(6, 2, 2, 2)` (it counted
+    `dx/__init__.py` and `lint/_lib_helper.py`). From that gap
+    `bump_docs --sync-counts` wrote the writer's number into README, the
+    gate warned that it did not match the checker's, `--fix` wrote the
+    checker's back, and neither tool could clear the warning.
+
+    ⛔ The first repair for that shared the scan but not the total: the
+    writer re-added `counts["ops"] + counts["dx"] + counts["lint"]`.
+    Measured with a fourth subdirectory declared in `COUNT_SUBDIRS`:
+    checker 221, writer 220. `test_the_breakdown_follows_the_declared_scope`
+    is the control for that, and it is the reason the writer returns a
+    mapping instead of a fixed-width tuple.
     """
 
     def _consumers(self, tmp_path, monkeypatch):
@@ -180,8 +225,38 @@ class TestAllThreeConsumers:
             self, tmp_path, monkeypatch):
         checker, writer, _generator = self._consumers(tmp_path, monkeypatch)
 
+        total, breakdown = writer._count_python_tools()
         assert checker._count_python_tools() == 4
-        assert writer._count_python_tools() == (4, 2, 1, 1)
+        assert total == 4
+        assert breakdown == {"ops": 2, "dx": 1, "lint": 1}
+
+    def test_the_breakdown_follows_the_declared_scope(
+            self, tmp_path, monkeypatch):
+        """⛔ Control for the half the first repair missed.
+
+        Sharing the scan is not enough: the writer used to re-add its
+        total from three hard-coded keys, so a fourth declared
+        subdirectory made it disagree with the checker again — the same
+        divergence one layer down. This declares one and requires both
+        sides to move.
+        """
+        checker, writer, _generator = self._consumers(tmp_path, monkeypatch)
+        extra = tmp_path / "scripts" / "tools" / "release"
+        extra.mkdir()
+        (extra / "cut_release.py").write_text(_STUB, encoding="utf-8",
+                                              newline="\n")
+        monkeypatch.setattr(tc, "COUNT_SUBDIRS",
+                            tc.COUNT_SUBDIRS + ("release",))
+
+        total, breakdown = writer._count_python_tools()
+        assert checker._count_python_tools() == 5, (
+            "the checker did not pick up the declared subdirectory")
+        assert total == 5, (
+            "the writer's total is still bound to the old subdirectories, "
+            "so it will write a different number than the gate checks")
+        assert breakdown.get("release") == 1, (
+            "the breakdown dropped a declared subdirectory silently; "
+            "`--sync-counts` prints it, so the line would just vanish")
 
     def test_the_generator_keeps_the_root_and_only_the_root(
             self, tmp_path, monkeypatch):
@@ -195,16 +270,24 @@ class TestAllThreeConsumers:
         assert len(listed) == checker._count_python_tools() + 1
         assert "validate_all.py" in [n for n, _d in categorized["ops"]]
 
-    def test_unifying_the_two_scopes_would_turn_a_live_gate_red(
+    def test_unifying_the_two_scopes_leaves_an_unclearable_warning(
             self, tmp_path, monkeypatch):
         """⛔ Why the generator must NOT adopt `count_scope`.
 
         `check_tool_map_coverage` requires every repo-root tool to appear
         in tool-map.md. A tool map built from `count_scope` omits them, so
-        "one scope for all three" would trade this warning for the tidier
-        code. Both directions are asserted — the wrong scope must be
-        reported AND the right scope must be silent — or this only proves
-        the gate is noisy.
+        "one scope for all three" buys a report no regeneration can clear.
+
+        ⚠️ Named for what was measured, not for what sounds worse: this
+        check emits `warn`, and `validate_docs_versions --ci` exits **0**
+        with the warning present. An earlier name said "turn a live gate
+        red"; that was false, and this module argues elsewhere that a
+        warning nobody can satisfy is the disease, so the accurate name is
+        also the stronger one.
+
+        Both directions are asserted — the wrong scope must be reported
+        AND the right scope must be silent — or this only proves the gate
+        is noisy.
         """
         checker, _writer, _generator = self._consumers(tmp_path, monkeypatch)
         internal = tmp_path / "docs" / "internal"

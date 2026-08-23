@@ -760,7 +760,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "53ca2a7ee9b02c69203fcd8c49b679b7e38886122c82ea068ad8ab772886391e",
+ "source_digest": "6cf6ee51bfc7fcef5d0cc58cf0ae1d90817de7f75f6b3ea90e3609fd01522a10",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -2903,7 +2903,6 @@
    "tests/shared/test_dispatch_contract.py"
   ],
   "tests/shared/test_lib_toolcount.py": [
-   "tests/dx/test_generate_tool_map.py",
    "tests/lint/test_validate_docs_versions.py"
   ],
   "tests/shared/test_property.py": [

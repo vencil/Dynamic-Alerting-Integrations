@@ -68,7 +68,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
-from _lib_toolcount import count_by_subdir  # noqa: E402
+from _lib_toolcount import count_by_subdir, count_scope  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Repo root detection
@@ -1068,26 +1068,28 @@ def _build_rules():
 # ---------------------------------------------------------------------------
 
 def _count_python_tools():
-    """Count Python tools in scripts/tools/{ops,dx,lint}/ directories.
+    """Count the Python tools `_lib_toolcount.COUNT_SUBDIRS` covers.
 
-    Returns (total_count, ops_count, dx_count, lint_count).
+    Returns ``(total_count, {subdir: count})``. Both halves are derived
+    from that tuple, so widening it cannot make this disagree with the
+    gate that checks the number this writes.
 
     ⛔ #1511: this used to hold its own three hard-coded directory paths
-    and — unlike the gate that checks the number it writes — skipped no
-    filename prefixes at all. The two agreed only because those three
-    directories happen to hold no `_lib*` or `__init__.py`. Measured with
-    one `scripts/tools/lint/_lib_probe.py` added: this wrote 221 into
-    README, the gate warned "found 221, actual is 220", `--fix` wrote 220
-    back, and `--sync-counts --check` immediately called it outdated
-    again. The scan is `_lib_toolcount.count_scope` for both sides now.
-    """
-    counts = count_by_subdir(REPO_ROOT / "scripts" / "tools")
-    ops_count = counts["ops"]
-    dx_count = counts["dx"]
-    lint_count = counts["lint"]
+    and — unlike that gate — skipped no filename prefixes at all. The two
+    agreed only because those three directories happen to hold no `_lib*`
+    or `__init__.py`. Measured with one `scripts/tools/lint/_lib_probe.py`
+    added: this wrote 221 into README, the gate warned "found 221, actual
+    is 220", `--fix` wrote 220 back, and `--sync-counts --check`
+    immediately called it outdated again.
 
-    total = ops_count + dx_count + lint_count
-    return total, ops_count, dx_count, lint_count
+    ⛔ The first repair for THAT still re-added the total from three
+    hard-coded keys (`counts["ops"] + counts["dx"] + counts["lint"]`)
+    while the gate counted `COUNT_SUBDIRS`. Measured with a fourth
+    subdirectory declared: gate 221, this 220 — the same divergence one
+    layer down, in the commit that claimed to remove it.
+    """
+    tools_dir = REPO_ROOT / "scripts" / "tools"
+    return len(count_scope(tools_dir)), count_by_subdir(tools_dir)
 
 
 def _count_rule_packs():
@@ -1238,7 +1240,7 @@ def _build_count_rules():
     # The per-directory ops/dx/lint split and the docs count are still
     # reported by `--sync-counts` (main() calls the _count_* helpers
     # directly) — they just no longer have a doc sentence to patch.
-    total_tools, _ops, _dx, _lint = _count_python_tools()
+    total_tools, _breakdown = _count_python_tools()
     rule_packs = _count_rule_packs()
     jsx_tools = _count_jsx_tools()
 
@@ -2372,7 +2374,7 @@ def main():
                   f"the version bump as a separate command.", file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)
 
-        total_tools, ops_tools, dx_tools, lint_tools = _count_python_tools()
+        total_tools, tool_breakdown = _count_python_tools()
         rule_packs = _count_rule_packs()
         jsx_tools = _count_jsx_tools()
         docs = _count_docs()
@@ -2380,9 +2382,11 @@ def main():
 
         print("Current counts detected:")
         print(f"  Python tools (total): {total_tools}")
-        print(f"    - ops/: {ops_tools}")
-        print(f"    - dx/: {dx_tools}")
-        print(f"    - lint/: {lint_tools}")
+        # ⛔ #1511: iterate the breakdown instead of printing three named
+        # locals. A fourth counted subdirectory used to vanish from this
+        # listing while the total silently stayed on the old three.
+        for _subdir, _count in tool_breakdown.items():
+            print(f"    - {_subdir}/: {_count}")
         print(f"  Rule Packs: {rule_packs}")
         print(f"  JSX tools: {jsx_tools}")
         print(f"  Documentation files: {docs}")

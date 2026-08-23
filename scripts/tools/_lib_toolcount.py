@@ -1,4 +1,9 @@
-"""_lib_toolcount.py — Single definition of what counts as a Python tool.
+"""_lib_toolcount.py — One scan behind the "N 個 Python 工具" sentence.
+
+⛔ Read the scope note below before reusing this. It answers exactly two
+questions — which files the counted sentence covers, and which files
+docs/internal/tool-map.md inventories — and it is NOT the repo's only
+opinion about what a Python tool is (see "Other corpora").
 
 ⛔ #1511: this predicate existed three times, in three modules that never
 shared a line of code — `validate_docs_versions._count_python_tools`
@@ -12,8 +17,7 @@ and from there `bump_docs --sync-counts` rewrote README to 221,
 `validate_docs_versions --ci --fix` rewrote it back to 220, and neither
 side could clear the warning.
 
-⛔ There are TWO scopes here, not one, and collapsing them would break a
-live gate:
+⛔ There are TWO scopes here, not one:
 
   count_scope     `scripts/tools/{ops,dx,lint}` — the scope the counted
                   sentence states verbatim (the repo-map row of README.md
@@ -23,11 +27,16 @@ live gate:
   tool_map_scope  the same three subdirectories PLUS the repo root, which
                   is what docs/internal/tool-map.md inventories.
                   `check_tool_map_coverage` scans the repo root and
-                  requires every file it finds to be listed there;
-                  measured, with `validate_all.py`'s row deleted from
-                  tool-map.md: `tool not listed in tool-map: validate_all.py`.
-                  So the generator has to keep the root, and it has never
-                  produced the same number as the other two.
+                  requires every file it finds to be listed there.
+
+⛔ Collapsing the two is not a red/green question, which is why it is
+worth stating precisely. Measured, with `validate_all.py`'s row deleted
+from tool-map.md: `validate_docs_versions --ci` prints
+`⚠️ [tool-map-coverage] … tool not listed in tool-map: validate_all.py`
+and exits **0** — that check emits `warn`, and only `error` fails the
+gate. So a unified scope buys a warning no tool can clear (the exact
+disease #1511 is about) plus `validate_all.py` quietly leaving the tool
+map. Not a red build.
 
 ⛔ Do not "derive" the subdirectory tuple with `rglob`. Measured on
 `5cff2359`: 224, because `dx/custom_alerts/` is a package (`__init__.py`,
@@ -35,26 +44,58 @@ no `main()` in any of its three modules) — library code, not tools. The
 tuple is not an enumeration standing in for a rule; it *is* the documented
 scope, and `test_a_new_tool_subdirectory_cannot_be_dropped_in_silence`
 goes red when a new non-package subdirectory appears without this tuple
-and that sentence being updated together.
+being updated. ⚠️ That tripwire guards the tuple only — the counted
+sentence itself is guarded by a `warn`, so a tuple widened without the
+sentence being rewritten exits 0.
 
-⚠️ Residual, disclosed rather than papered over: classifying a directory
-as library code by its `__init__.py` is this repo's own convention, not a
-proof, and a package directory that really does hold tools still passes in
-silence. Likewise `_lib` is the naming convention for shared modules —
-`_grar_*.py` and `_registry_lib.py` are helper modules that do NOT carry
-it, and they are counted as tools today.
+⚠️ Residuals, disclosed rather than papered over:
+  - Classifying a directory as library code by its `__init__.py` is this
+    repo's own convention, not a proof. A package directory that really
+    does hold tools passes in silence.
+  - `_lib` is the naming convention for shared modules, and the counted
+    subdirectories hold helper modules that do not carry it — they are
+    counted as tools today. ⛔ The repo holds the opposite opinion in
+    machine-readable form: `scripts/tools/dx/verify_diff_rules.yaml`
+    matches `scripts/tools/*/_*.py` and justifies it as 「子目錄共用
+    helper」. Neither side knows about the other; reconciling them moves
+    the published number, so it is tracked separately rather than decided
+    here.
+
+## Other corpora (this module is not their definition)
+
+  - `tests/shared/test_tool_exit_codes.py` and
+    `scripts/tools/lint/check_i18n_coverage.py` share a corpus drawn with
+    `startswith("_")` as the boundary, so it is smaller than
+    `count_scope`. Nothing explains why the published count draws the line
+    at `_lib` instead.
+  - `scripts/tools/lint/check_build_completeness.py` declares its own
+    subdirectory tuple for a different question (which directories hold
+    shipped sibling modules).
+Both answer questions this module does not; do not "unify" them without
+deciding what the published sentence is supposed to mean.
 """
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+# The naming convention for a module shared between tools rather than run
+# as one. `generate_tool_map` lists these in its own section, so the two
+# halves of the partition have to come from the same string.
+SHARED_LIB_PREFIX = "_lib"
+
 # Filename prefixes that mark a file as something other than a tool.
 # ⚠️ `__pycache__` is inert against the flat globs below — a `*.py` glob
 # never returns a directory's children — and is kept only so the predicate
 # stays correct if a caller ever hands it a recursive listing. It is not a
 # second check on today's inputs; do not read it as one.
-TOOL_SKIP_PREFIXES: Tuple[str, ...] = ("_lib", "__init__", "__pycache__")
+# ⚠️ Neither is `_lib` doing work inside `count_scope` today: measured on
+# `5cff2359`, the raw `*.py` glob of `ops`/`dx`/`lint` is 63/52/105 and the
+# counted result is the same 63/52/105. The prefixes only bite at the repo
+# root (12 of 13 files skipped). Emptying this tuple leaves the published
+# number untouched — which is why the tests for it use a synthetic tree.
+TOOL_SKIP_PREFIXES: Tuple[str, ...] = (
+    SHARED_LIB_PREFIX, "__init__", "__pycache__")
 
 # The subdirectories both scopes cover, in the order the tool map lists them.
 COUNT_SUBDIRS: Tuple[str, ...] = ("ops", "dx", "lint")

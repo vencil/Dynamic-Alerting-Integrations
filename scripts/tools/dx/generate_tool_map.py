@@ -25,7 +25,7 @@ from _lib_exitcodes import (  # noqa: E402
     EXIT_CALLER_ERROR,
     EXIT_VIOLATION,
 )
-from _lib_toolcount import tool_map_scope  # noqa: E402
+from _lib_toolcount import SHARED_LIB_PREFIX, tool_map_scope  # noqa: E402
 from _lib_versions import (  # noqa: E402
     PlatformVersionUnreadable,
     require_platform_version,
@@ -40,8 +40,9 @@ TOOL_MAP = REPO_ROOT / "docs" / "internal" / "tool-map.md"
 # module's scope is `tool_map_scope` — the three subdirectories PLUS the
 # repo root — and that is NOT the scope the "N 個 Python 工具" sentence
 # declares. Do not "unify" the two: `check_tool_map_coverage` requires the
-# repo-root tools to appear in this file, so dropping the root here turns
-# that gate red. Read the shared module's docstring first.
+# repo-root tools to appear in this file, and it reports at `warn`, so
+# dropping the root buys a warning nothing can clear rather than a red
+# build. Read the shared module's docstring first.
 
 # Subdirectory → category mapping (auto-detect from filesystem)
 SUBDIR_CATEGORY = {
@@ -111,9 +112,10 @@ def gather_tools() -> dict:
     Returns: {category: [(filename, description), ...]}
 
     The repo-root tools (`validate_all.py` etc.) are tagged ``None`` by
-    `tool_map_scope` and land under `ops`, which is where they have been
-    listed since this generator was written — and where
-    `check_tool_map_coverage` needs to find them.
+    `tool_map_scope` and land under `ops`. `check_tool_map_coverage` scans
+    the repo root and requires every file it finds to be listed in this
+    document, so dropping them here would leave a `tool-map-coverage`
+    warning that regenerating cannot clear.
     """
     categorized = {cat: [] for cat in CATEGORY_ORDER}
 
@@ -194,9 +196,15 @@ def generate_tool_map(categorized: dict, lang: str = "zh") -> str:
 
         lines.append("")
 
-    # Shared libraries footer (dynamically list all _lib*.py files)
+    # Shared libraries footer — the other half of the same partition the
+    # tool tables use, so the prefix comes from the shared module rather
+    # than being spelled a second time here (#1511).
+    # ⚠️ Root only, deliberately unchanged: a `_lib*` module placed in
+    # `ops/`, `dx/` or `lint/` is skipped by the tool scan AND missed
+    # here, so it appears nowhere in this file. Widening the glob would
+    # add rows to a shipped document, so it is tracked separately.
     shared_libs = sorted(
-        f for f in TOOLS_ROOT.glob("_lib*.py") if f.is_file()
+        f for f in TOOLS_ROOT.glob(f"{SHARED_LIB_PREFIX}*.py") if f.is_file()
     )
 
     if lang == "en":

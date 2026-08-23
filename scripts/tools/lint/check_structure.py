@@ -97,8 +97,15 @@ def check_tools_root(project_root: Path, tracked: list[str]) -> list[str]:
             continue
         basename = os.path.basename(rest)
         if basename not in ALLOWED_TOOLS_ROOT:
+            # ⛔ #1511: naming only the "move it" outlet steers shared
+            # libraries into ops/dx/lint, where they are skipped by the
+            # tool scan AND missed by generate_tool_map's shared-library
+            # footer (root-only glob) — i.e. invisible in tool-map.md.
+            # Register the second outlet so the cheaper answer is not the
+            # one that hides the file.
             violations.append(
-                f"  STRAY   {f}  (move to ops/, dx/, or lint/)"
+                f"  STRAY   {f}  (a tool → move to ops/, dx/, or lint/; "
+                f"a shared library → add it to ALLOWED_TOOLS_ROOT here)"
             )
     return violations
 
