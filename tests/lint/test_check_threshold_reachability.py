@@ -3783,17 +3783,17 @@ def test_the_headroom_note_states_both_directions_and_both_are_current():
     # UP: the largest pure addition that keeps `total - biggest < floor` true.
     up_gen = gate._DEFAULTS_GENERATOR_KEYS_FLOOR - (g_total - g_biggest) - 1
     up_art = gate._DEFAULTS_ARTIFACT_KEYS_FLOOR - (a_total - a_biggest) - 1
-    assert (up_art, up_gen) == (8, 28), (
-        f"the HEADROOM note beside the key floors says artifacts +8 / generators "
+    assert (up_art, up_gen) == (6, 28), (
+        f"the HEADROOM note beside the key floors says artifacts +6 / generators "
         f"+28 upward; measured {up_art} / {up_gen}. Update the note and this "
         "assertion together, and keep the DIRECTION word beside each number.")
 
     # DOWN: how many keys may disappear before the floor itself speaks.
     down_gen = g_total - gate._DEFAULTS_GENERATOR_KEYS_FLOOR
     down_art = a_total - gate._DEFAULTS_ARTIFACT_KEYS_FLOOR
-    assert (down_art, down_gen) == (10, 22), (
-        f"the note says artifacts 10 / generators 22 downward — and the fifth "
-        f"floor's own comment repeats the artifact one as '10 keys of slack'; "
+    assert (down_art, down_gen) == (12, 22), (
+        f"the note says artifacts 12 / generators 22 downward — and the fifth "
+        f"floor's own comment repeats the artifact one as '12 keys of slack'; "
         f"measured {down_art} / {down_gen}. Both places move together.")
 
     # ⛔ and they must not collide. ⚠️ NOT because they once did: at `188cfb17`,

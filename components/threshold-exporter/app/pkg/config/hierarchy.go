@@ -515,7 +515,7 @@ func ComputeEffectiveConfig(
 // ComputeMergedHash returns the 16-char `merged_hash` user-facing
 // fingerprint. SHA-256 over CanonicalJSON of ComputeEffectiveConfig's
 // output, truncated to 16 hex chars. Parity with describe_tenant.py
-// pinned by 8 golden fixtures.
+// pinned by the golden fixtures under tests/golden/.
 func ComputeMergedHash(
 	tenantYAMLBytes []byte,
 	tenantID string,

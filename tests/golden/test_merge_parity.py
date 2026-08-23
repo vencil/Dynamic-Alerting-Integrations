@@ -2,7 +2,7 @@
 Golden parity test for describe_tenant.py deep_merge + inheritance.
 
 This test is the trump card for ADR-017 semantic verification:
-- Runs describe_tenant.py against 8 deterministic fixture scenarios
+- Runs describe_tenant.py against every scenario captured in golden.json
 - Compares source_hash + merged_hash + effective_config against golden.json
 - If any hash diverges, either:
     (a) Python describe_tenant.py logic changed → bug or intentional update (regen golden)
@@ -18,6 +18,9 @@ Fixtures cover every deep_merge rule from ADR-017:
 - opt-out-null-threshold: real flat-metric-key shape — null keeps the
                      inherited default, "disable" is the opt-out (#1339)
 - metadata-skipped:  _metadata never propagates
+- wrapper-siblings:  `defaults:` wrapper WITH sibling top-level keys — the
+                     shape the shipped platform file has. See
+                     build_and_capture.py for what it does and does not buy.
 
 Regenerate golden.json by running tests/golden/build_and_capture.py after
 intentional semantic changes.
@@ -96,51 +99,17 @@ def test_merge_parity_python(golden: dict):
 
 
 # -------------------------------------------------------------------------
-# Go parity — skipped unless Go binary is available (Dev Container only)
+# Go parity lives in the Go tree, not here.
 # -------------------------------------------------------------------------
-
-def _go_binary_path() -> Path | None:
-    """Locate the threshold-exporter Go binary for parity verification.
-
-    Dev Container builds to: components/threshold-exporter/bin/threshold-exporter
-    Returns None if binary doesn't exist (Cowork VM doesn't have Go).
-    """
-    candidate = REPO_ROOT / "components" / "threshold-exporter" / "bin" / "threshold-exporter"
-    return candidate if candidate.exists() else None
-
-
-@pytest.mark.skipif(_go_binary_path() is None, reason="Go binary not built (skipped outside Dev Container)")
-@pytest.mark.parametrize("golden", GOLDEN, ids=lambda g: f"{g['scenario']}/{g['tenant_id']}")
-def test_merge_parity_go(golden: dict):
-    """Verify Go port of deep_merge produces byte-identical hashes to Python.
-
-    Expects the Go binary to expose a subcommand like:
-        threshold-exporter dump-merged --conf-d <path> --tenant <id>
-    emitting JSON: {"source_hash": "...", "merged_hash": "...", "effective_config": {...}}
-
-    This is the single most important test for ADR-017 conformance.
-    Any divergence = immediate blocker on v2.7.0 tag.
-    """
-    binary = _go_binary_path()
-    conf_d = _fixture_path(golden["fixture_dir"])
-
-    cmd = [
-        str(binary), "dump-merged",
-        "--conf-d", str(conf_d),
-        "--tenant", golden["tenant_id"],
-    ]
-    result = subprocess.run(
-        cmd, capture_output=True, text=True, encoding="utf-8", timeout=30,
-    )
-    if result.returncode != 0:
-        pytest.fail(f"Go dump-merged failed for {golden['tenant_id']}: {result.stderr}")
-
-    go_result = json.loads(result.stdout)
-
-    assert go_result["source_hash"] == golden["source_hash"], \
-        f"Go source_hash != Python for {golden['scenario']}"
-    assert go_result["merged_hash"] == golden["merged_hash"], \
-        f"Go merged_hash != Python for {golden['scenario']} — ADR-017 semantic drift"
-    # effective_config parity is stricter — catches ordering / type-coercion drift
-    assert go_result["effective_config"] == golden["effective_config"], \
-        f"Go effective_config != Python for {golden['scenario']}"
+#
+# A `test_merge_parity_go` used to sit here, shelling out to
+# `components/threshold-exporter/bin/threshold-exporter dump-merged`.
+# Removed: nothing in the repo builds that path (its own docstring was the
+# only mention of it), no `dump-merged` subcommand exists in the Go
+# sources, and measured in the Dev Container — which does have Go — the
+# whole parametrized set reported `skipped`. It asserted nothing while
+# calling itself "the single most important test for ADR-017 conformance".
+#
+# The Go end of the parity contract is
+# components/threshold-exporter/app/config_golden_parity_test.go, which
+# reads this same golden.json directly and runs under `Go Tests`.

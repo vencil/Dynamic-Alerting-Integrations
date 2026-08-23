@@ -611,11 +611,15 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 #   UP (addition) — the paired bracket test requires each floor to stay strictly
 #     ABOVE "biggest conf.d root / producer gone". A pure ADDITION raises that
 #     lower bound, so too many new keys turn the TEST red. Today: artifacts
-#     tolerate +8, generators +28. Red here means RAISE the floor.
-#     (Was "+9" for artifacts, off by one: 70 total − 19 in the biggest root
-#      = 51, and 51 + 9 = 60 is not strictly below the floor of 60.)
+#     tolerate +6, generators +28. Red here means RAISE the floor.
+#     (#1516 added the `wrapper-siblings` fixture, +2 artifact keys, so this
+#      moved 8 -> 6 and the DOWN figure below 10 -> 12. The test named at the
+#      end of this block is what forced them to move together.)
+#     (Was "+9" for artifacts, off by one against the 70-key corpus of the
+#      time: 70 total − 19 in the biggest root = 51, and 51 + 9 = 60 is not
+#      strictly below the floor of 60.)
 #   DOWN (removal) — the floor itself fires when its class drops below it, which
-#     is the floor doing its job. Today the slack is total − floor: artifacts 10
+#     is the floor doing its job. Today the slack is total − floor: artifacts 12
 #     keys, generators 22. Red here means REPAIR THE PRODUCER — and only if keys
 #     were removed on purpose (a fixture retired) does it mean LOWER the floor,
 #     in the same commit, naming what went.
@@ -665,10 +669,10 @@ _SHIPPED_CONFD_ROOTS: dict[str, tuple[int, int, str]] = {
 # ── FIFTH floor: every conf.d root, not just the shipped three (#1411) ───────
 #
 # The four floors above leave a measured gap: with the shipped roots covered by
-# the table above and the rest covered only by a GLOBAL key floor with 10 keys
-# of DOWNWARD slack (today's artifact total 70 − the floor of 60: how many keys
+# the table above and the rest covered only by a GLOBAL key floor with 12 keys
+# of DOWNWARD slack (today's artifact total 72 − the floor of 60: how many keys
 # may disappear before that floor speaks), a whole fixture tree can stop
-# yielding in silence. ⛔ Not the +8 in that floor's own HEADROOM note — that
+# yielding in silence. ⛔ Not the +6 in that floor's own HEADROOM note — that
 # one is UPWARD, measured against "biggest root gone", and asks for a HIGHER
 # floor. Same word, opposite directions, different baselines.
 #
@@ -862,6 +866,7 @@ _DEFAULTS_CONFD_ROOTS: frozenset[str] = frozenset({
     "tests/golden/fixtures/mixed-mode/conf.d",
     "tests/golden/fixtures/opt-out-null/conf.d",
     "tests/golden/fixtures/opt-out-null-threshold/conf.d",
+    "tests/golden/fixtures/wrapper-siblings/conf.d",
 })
 
 # Roots that legitimately carry zero threshold keys. ⛔ Explicit, because
