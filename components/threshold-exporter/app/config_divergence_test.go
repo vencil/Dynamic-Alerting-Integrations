@@ -275,16 +275,80 @@ func TestDivergenceAudit_HotReload_FlatModeNeverDetects(t *testing.T) {
 // never sit at 0.
 func TestHierarchyDivergentTenants_OneDirectionOnly(t *testing.T) {
 	t.Parallel()
-	cfg := &ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{
-		"flat-only": {},
-	}}
-	if got := hierarchyDivergentTenants(nil, cfg); got != nil {
+	if got := hierarchyDivergentTenants(nil, &ThresholdConfig{}); got != nil {
 		t.Errorf("empty tenantSources must yield no divergence, got %v", got)
 	}
-	sources := map[string]string{"flat-only": "/x/flat-only.yaml", "nested": "/x/db/nested.yaml"}
+
+	// ⛔ The REVERSE case has to actually exist in the fixture, and in the
+	// first version of this test it did not: every tenant in cfg was also
+	// in sources, so the reverse difference was the empty set and the
+	// assertion held no matter which direction the implementation
+	// compared. Measured — adding a reverse comparison to
+	// hierarchyDivergentTenants left this test green.
+	//
+	// `underscore-tenant` is the shape the one-directional rule exists
+	// for and it is not hypothetical: the hierarchical walker skips every
+	// `_*.yaml` as a non-tenant file, while the flat merge keeps a
+	// `tenants:` block found in one. Reporting it would make the gauge
+	// non-zero at rest on a legal layout and destroy "0 means healthy".
+	cfg := &ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{
+		"flat-only":         {},
+		"underscore-tenant": {}, // in cfg, absent from the hierarchy
+	}}
+	sources := map[string]string{
+		"flat-only": "/x/flat-only.yaml",
+		"nested":    "/x/db/nested.yaml", // in the hierarchy, absent from cfg
+	}
 	got := hierarchyDivergentTenants(sources, cfg)
 	if len(got) != 1 || got[0] != "nested" {
-		t.Errorf("hierarchyDivergentTenants = %v, want [nested]", got)
+		t.Errorf("hierarchyDivergentTenants = %v, want [nested] only — "+
+			"`underscore-tenant` is the reverse difference and must NOT "+
+			"be reported", got)
+	}
+}
+
+// TestHierarchyDivergentTenants_IsSorted pins the ORDER, which decides
+// which ten of a large divergent set the operator is shown.
+//
+// ⛔ The ordering had no test at all. `TestFormatDivergenceLog_CapsTheSample`
+// looks like it covers this, and does not: it hands `formatDivergenceLog`
+// an already-ordered slice, so it never exercises the `sort.Strings` that
+// produces one. Measured — reversing that sort left the package green.
+// Without it the divergent set comes out of Go's randomised map order, so
+// `shown[:10]` is a DIFFERENT ten on every reload and an operator chasing
+// one misplaced sub-tree watches the names churn.
+func TestHierarchyDivergentTenants_IsSorted(t *testing.T) {
+	t.Parallel()
+	cfg := &ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{}}
+	sources := map[string]string{
+		"zulu": "/x/db/zulu.yaml", "alpha": "/x/db/alpha.yaml",
+		"mike": "/x/db/mike.yaml", "bravo": "/x/db/bravo.yaml",
+	}
+	// Map iteration order is randomised per run, so a single pass could
+	// pass by luck; repeat until the odds of a false green are gone.
+	want := []string{"alpha", "bravo", "mike", "zulu"}
+	for i := 0; i < 20; i++ {
+		got := hierarchyDivergentTenants(sources, cfg)
+		if len(got) != len(want) {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+		for j := range want {
+			if got[j] != want[j] {
+				t.Fatalf("iteration %d: got %v, want sorted %v", i, got, want)
+			}
+		}
+	}
+}
+
+// TestHierarchyDivergentTenants_NilConfigIsNotAPanic covers the other half
+// of the guard clause. Untested, deleting `|| cfg == nil` stayed green —
+// and a nil cfg would then panic on `cfg.Tenants[tid]` INSIDE commitConfig,
+// taking the whole reload down from an observability-only code path.
+func TestHierarchyDivergentTenants_NilConfigIsNotAPanic(t *testing.T) {
+	t.Parallel()
+	sources := map[string]string{"nested": "/x/db/nested.yaml"}
+	if got := hierarchyDivergentTenants(sources, nil); got != nil {
+		t.Errorf("nil cfg must yield no divergence, got %v", got)
 	}
 }
 
@@ -303,8 +367,29 @@ func TestFormatDivergenceLog_CapsTheSample(t *testing.T) {
 	if !strings.Contains(line, "and 5 more") {
 		t.Errorf("expected truncation suffix, got:\n%s", line)
 	}
-	if strings.Count(line, "/conf.d/db/") != divergenceLogSampleLimit {
-		t.Errorf("expected exactly %d sampled paths, got:\n%s", divergenceLogSampleLimit, line)
+	// ⛔ The literal 10, not `divergenceLogSampleLimit`. Both sides of the
+	// old assertion referenced the constant, so shrinking it to 3 — which
+	// silently cuts what the operator is shown — kept the test green. It
+	// pinned that truncation HAPPENS, never how much survives.
+	if strings.Count(line, "/conf.d/db/") != 10 {
+		t.Errorf("expected exactly 10 sampled paths, got:\n%s", line)
+	}
+	// The sample must be the FIRST ten of the slice it was handed, not an
+	// arbitrary ten. (Whether that slice is sorted is
+	// `hierarchyDivergentTenants`' job and is pinned by
+	// TestHierarchyDivergentTenants_IsSorted — this test hands in an
+	// already-ordered slice, so it cannot speak to the sort.)
+	if !strings.Contains(line, " ta (") || strings.Contains(line, " tk (") {
+		t.Errorf("sample must be the first ten in sorted order (ta..tj), got:\n%s", line)
+	}
+	// The two variable fields the message is useless without: WHICH
+	// conf.d, and WHICH commit. Passing empty strings for both stayed
+	// green before this.
+	if !strings.Contains(line, "top level of /conf.d") {
+		t.Errorf("log must name the conf.d root, got:\n%s", line)
+	}
+	if !strings.Contains(line, "(Config loaded (directory))") {
+		t.Errorf("log must name the commit context, got:\n%s", line)
 	}
 }
 
@@ -367,5 +452,237 @@ func TestDivergenceAudit_PairsOneInstant(t *testing.T) {
 	}
 	if logs := logBuf.String(); !strings.Contains(logs, "ghost-tenant") {
 		t.Errorf("ERROR log must name the tenant from the handed snapshot, got:\n%s", logs)
+	}
+}
+
+// ── what the first round of tests could not see ──────────────────────────
+//
+// Every test below exists because an adversarial pass MEASURED that the
+// behaviour above it survives being broken. Each one names the mutation it
+// kills, so a later reader can re-run the counterfactual instead of
+// trusting this comment.
+
+// TestDivergenceAudit_SnapshotIsTakenInsideTheLockWindow pins the actual
+// content of the pairing fix.
+//
+// ⛔ `TestDivergenceAudit_PairsOneInstant` pins that the audit FUNCTION
+// judges what it was handed. It does not pin where the CALLER read it —
+// and the caller is what the fix changed. Measured: moving
+// `m.hierarchy.tenantSources` out of the swap into its own RLock
+// afterwards left `go test -count=1 .` at rc=0, so the whole commit could
+// be reverted in silence.
+//
+// The seam makes the two implementations distinguishable with no
+// concurrency and no timing: swap the live hierarchy in the one instant
+// after the lock is released. A snapshot taken inside the window still
+// carries the pre-swap population; one taken afterwards sees the clean map
+// and reports nothing.
+func TestDivergenceAudit_SnapshotIsTakenInsideTheLockWindow(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeDivergenceRoot(t, dir)
+	writeNestedTenant(t, dir)
+
+	m, fresh, logBuf := newAuditedManager(t, dir)
+	m.SetAfterCommitUnlockForTest(func() {
+		// Stand in for a second, overlapping reload landing a clean
+		// hierarchy between the swap and the audit.
+		m.mu.Lock()
+		m.hierarchy.tenantSources = map[string]string{}
+		m.mu.Unlock()
+	})
+
+	if err := m.Load(); err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+
+	if got := testutil.ToFloat64(fresh.hierarchyDivergentTenants); got != 1 {
+		t.Fatalf("gauge = %v, want 1 — the audit compared against the "+
+			"hierarchy as it stood AFTER the commit, not the snapshot "+
+			"taken inside the lock window", got)
+	}
+	if !strings.Contains(logBuf.String(), "hier-tenant") {
+		t.Errorf("ERROR log must still name the tenant, got:\n%s", logBuf.String())
+	}
+	// Control: the live map really was replaced, so the assertion above
+	// distinguishes the two implementations rather than passing because
+	// nothing changed.
+	m.mu.RLock()
+	live := len(m.hierarchy.tenantSources)
+	m.mu.RUnlock()
+	if live != 0 {
+		t.Fatalf("setup: hook did not replace the live hierarchy (%d entries)", live)
+	}
+}
+
+// TestDivergenceAudit_GaugeIsRegisteredUnderItsPublishedName asserts the
+// metric reaches /metrics at all.
+//
+// ⛔ Every other test in this file reads the Go field through
+// `testutil.ToFloat64(fresh.hierarchyDivergentTenants)`, which bypasses the
+// registry entirely. Measured: deleting `reg.MustRegister(...)` — after
+// which the series never appears on /metrics and the alert in the HELP
+// text can never fire — left the package green; so did renaming the metric.
+// This gauge is the only machine-readable output of the whole #1521
+// stopgap, and nothing asserted it existed.
+func TestDivergenceAudit_GaugeIsRegisteredUnderItsPublishedName(t *testing.T) {
+	t.Parallel()
+	const name = "da_config_hierarchy_divergent_tenants"
+	fresh, reg := freshMetrics(t)
+	fresh.SetHierarchyDivergentTenants(3)
+
+	if got := testutil.CollectAndCount(reg, name); got != 1 {
+		t.Fatalf("%s: %d series in the registry, want 1 — the gauge is not "+
+			"registered, so it never reaches /metrics", name, got)
+	}
+	// Value through the registry too, but WITHOUT `GatherAndCompare`:
+	// that helper insists on an exact HELP line, which would couple this
+	// assertion to a paragraph of operator prose and turn every wording
+	// edit into a test failure. Gather and read the family instead.
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("Gather(): %v", err)
+	}
+	var seen bool
+	for _, fam := range families {
+		if fam.GetName() != name {
+			continue
+		}
+		seen = true
+		if got := fam.GetMetric()[0].GetGauge().GetValue(); got != 3 {
+			t.Errorf("%s = %v via the registry, want 3", name, got)
+		}
+	}
+	if !seen {
+		t.Errorf("%s absent from Gather() output", name)
+	}
+}
+
+// TestDivergenceAudit_GaugeCountsTenantsNotJustPresence pins the magnitude.
+//
+// ⛔ Every integration scenario in this file has exactly ONE nested tenant,
+// so the gauge is only ever observed as 0 or 1. Measured: clamping it to
+// `min(len, 1)` — turning "how many tenants are dark" into a boolean —
+// left the package green. A misplaced sub-directory is commonly a whole
+// sub-tree, and the dashboard number would be wrong by that whole factor.
+func TestDivergenceAudit_GaugeCountsTenantsNotJustPresence(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeDivergenceRoot(t, dir)
+	sub := filepath.Join(dir, "db")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatalf("mkdir db: %v", err)
+	}
+	for _, id := range []string{"one", "two", "three"} {
+		writeTestYAML(t, filepath.Join(sub, id+".yaml"),
+			"tenants:\n  "+id+":\n    mysql_connections: \"95\"\n")
+	}
+
+	m, fresh, _ := newAuditedManager(t, dir)
+	if err := m.Load(); err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+	if got := testutil.ToFloat64(fresh.hierarchyDivergentTenants); got != 3 {
+		t.Errorf("gauge = %v, want 3 — the gauge must count tenants, not "+
+			"report presence", got)
+	}
+}
+
+// TestDivergenceAudit_RepeatsOnlyWhenTheSetChanges pins the de-duplication
+// decided in review.
+//
+// The divergent state is persistent by construction — #1521 is not fixed —
+// while config commits are driven by unrelated fleet churn: any tenant
+// editing their own thresholds (ADR-024) causes detectChange → reload →
+// commitConfig. The unconditional version re-printed the same ERROR about
+// the same untouched tenant every time, so the line's repetition rate
+// measured how busy the fleet was rather than how bad the problem was.
+// The sibling mechanism already worked this way: `classifyTenant` returns
+// early when neither a tenant's source nor its defaults chain moved.
+//
+// ⛔ Three separate properties, because dropping any one of them turns a
+// noise fix into a lost signal: the gauge is still Set on EVERY commit,
+// the log repeats when the SET changes, and recovery to zero re-arms it so
+// a relapse is loud again.
+func TestDivergenceAudit_RepeatsOnlyWhenTheSetChanges(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeDivergenceRoot(t, dir)
+	m, fresh, logBuf := newAuditedManager(t, dir)
+	if err := m.Load(); err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+
+	cfg := m.GetConfig()
+	one := map[string]string{"nested-a": filepath.Join(dir, "db", "a.yaml")}
+	two := map[string]string{
+		"nested-a": filepath.Join(dir, "db", "a.yaml"),
+		"nested-b": filepath.Join(dir, "db", "b.yaml"),
+	}
+	count := func() int { return strings.Count(logBuf.String(), "scanner divergence") }
+
+	logBuf.Reset()
+	m.auditHierarchyDivergence(cfg, one, "commit-1")
+	if count() != 1 {
+		t.Fatalf("first sighting must be logged, got %d lines", count())
+	}
+	m.auditHierarchyDivergence(cfg, one, "commit-2")
+	m.auditHierarchyDivergence(cfg, one, "commit-3")
+	if count() != 1 {
+		t.Errorf("an unchanged divergent set must not re-log: %d lines", count())
+	}
+	// ...but the gauge is a level and is re-Set every time.
+	if got := testutil.ToFloat64(fresh.hierarchyDivergentTenants); got != 1 {
+		t.Errorf("gauge = %v, want 1 after the repeat commits", got)
+	}
+
+	// A CHANGED set is news.
+	m.auditHierarchyDivergence(cfg, two, "commit-4")
+	if count() != 2 {
+		t.Errorf("a changed divergent set must log again: %d lines", count())
+	}
+	if got := testutil.ToFloat64(fresh.hierarchyDivergentTenants); got != 2 {
+		t.Errorf("gauge = %v, want 2", got)
+	}
+
+	// Recovery clears the memory, so a relapse is loud rather than
+	// swallowed as "same as last time".
+	m.auditHierarchyDivergence(cfg, nil, "commit-5-healthy")
+	if got := testutil.ToFloat64(fresh.hierarchyDivergentTenants); got != 0 {
+		t.Fatalf("gauge = %v, want 0 on recovery", got)
+	}
+	m.auditHierarchyDivergence(cfg, two, "commit-6-relapse")
+	if count() != 3 {
+		t.Errorf("a relapse after recovery must log again: %d lines", count())
+	}
+}
+
+// TestDivergenceAudit_LogNamesTheRootAndTheCommit pins the two variable
+// fields at the CALL SITE, not in the formatter.
+//
+// ⛔ `TestFormatDivergenceLog_CapsTheSample` passes `"/conf.d"` and a
+// context string in by hand, so it proves the formatter renders whatever
+// it is given — not that `auditHierarchyDivergence` gives it anything.
+// Measured: replacing both arguments at the call site with `""` left the
+// package green. The resulting line reads "the flat scanner reads only the
+// top level of " and opens with an empty "()", i.e. the operator is told a
+// tenant is dark without being told which conf.d or which reload.
+func TestDivergenceAudit_LogNamesTheRootAndTheCommit(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeDivergenceRoot(t, dir)
+	writeNestedTenant(t, dir)
+
+	m, _, logBuf := newAuditedManager(t, dir)
+	if err := m.Load(); err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+
+	line := logBuf.String()
+	if !strings.Contains(line, "top level of "+dir) {
+		t.Errorf("log must name the conf.d root %q, got:\n%s", dir, line)
+	}
+	if !strings.Contains(line, "(Config loaded (directory))") {
+		t.Errorf("log must name the commit context, got:\n%s", line)
 	}
 }

@@ -66,6 +66,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 )
 
 // divergenceLogSampleLimit caps how many tenant IDs are named inline in
@@ -197,8 +198,64 @@ func (m *ConfigManager) auditHierarchyDivergence(
 	divergent := hierarchyDivergentTenants(tenantSources, cfg)
 	m.getMetrics().SetHierarchyDivergentTenants(len(divergent))
 	if len(divergent) == 0 {
+		m.divergence.clear()
 		return 0
+	}
+	if !m.divergence.isNew(divergent) {
+		return len(divergent)
 	}
 	m.getLogger().Print(formatDivergenceLog(divergent, tenantSources, m.path, context))
 	return len(divergent)
+}
+
+// divergenceLogState remembers the last divergent set that was written to
+// the log, so the ERROR is emitted once per CHANGE rather than once per
+// config commit.
+//
+// ⛔ Why this exists. The gauge is re-Set on every commit and that is
+// correct — a gauge is a level. The log is not: the divergent state is
+// persistent by construction (#1521 is not fixed, the tenants stay
+// invisible), while commits are driven by unrelated fleet churn. Every
+// tenant in a self-service deployment who edits their own thresholds
+// (ADR-024) triggers detectChange → reload → commitConfig, and the
+// unconditional version re-printed the same ERROR naming the same
+// unrelated tenant each time. The line's repetition rate then measured
+// how busy the fleet was, not how bad the problem was.
+//
+// ⚠️ The sibling mechanism in this package already works this way and the
+// audit was the odd one out: `classifyTenant` (config_debounce.go) returns
+// early on `!sourceChanged && !defaultsChanged`, so a tenant nobody
+// touched is not re-judged — and not re-reported — during someone else's
+// reload.
+//
+// ⛔ What it deliberately does NOT do is suppress the line on a fresh
+// process. `clear()` on a healthy commit resets the memory, and a new
+// manager starts empty, so a restart and a recovery-then-relapse both log
+// again with the full tenant list. That is the answer to the one real cost
+// of de-duplicating: an operator whose logs have rotated past the original
+// line still gets it back at the next restart, and the gauge carries the
+// state in between.
+type divergenceLogState struct {
+	mu   sync.Mutex
+	last string
+}
+
+// isNew reports whether `divergent` differs from the last set logged, and
+// records it. Guarded by its own mutex because auditHierarchyDivergence
+// runs OUTSIDE m.mu and overlapping reloads can call it concurrently.
+func (d *divergenceLogState) isNew(divergent []string) bool {
+	key := strings.Join(divergent, "\x00")
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.last == key {
+		return false
+	}
+	d.last = key
+	return true
+}
+
+func (d *divergenceLogState) clear() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.last = ""
 }

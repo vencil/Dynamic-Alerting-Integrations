@@ -94,6 +94,18 @@ type ConfigManager struct {
 	configSource string // "configmap", "operator", or "git-sync"
 	gitCommit    string // git commit hash from .git-revision file, or ""
 
+	// afterCommitUnlock is a TEST-ONLY seam fired by commitConfig as the
+	// first statement after installConfig releases m.mu (#1521). Nil in
+	// production. Read inside that same lock window so a concurrent
+	// SetAfterCommitUnlockForTest can never race the read; per-manager
+	// rather than package-level so `t.Parallel()` tests do not share it.
+	afterCommitUnlock func()
+
+	// divergence tracks what the conf.d divergence audit last put in the
+	// log, so a persistent divergence is stated once per change instead of
+	// once per config commit. See config_divergence.go.
+	divergence divergenceLogState
+
 	// clock abstracts time.NewTicker / time.AfterFunc so tests can drive
 	// the WatchLoop ticker + debounce timer deterministically with a
 	// clockwork.FakeClock instead of time.Sleep'ing for real wall-clock
@@ -228,6 +240,27 @@ func (m *ConfigManager) SetLogger(logger *log.Logger) {
 	m.logger = logger
 }
 
+// SetAfterCommitUnlockForTest installs a callback fired by commitConfig
+// as the FIRST statement after installConfig releases m.mu (#1521).
+//
+// ⛔ Test-only, and narrow on purpose. It exists to make one specific
+// regression observable: the divergence audit must compare the config it
+// just installed against the hierarchy AS IT STOOD IN THAT LOCK WINDOW,
+// not against whatever the live manager holds by the time the audit runs.
+// Adversarial review measured that moving that read back outside the lock
+// left the entire package green, so the invariant had no test at all. A
+// callback here lets a test change the live hierarchy in exactly the
+// instant that separates the two implementations.
+//
+// Per-manager rather than package-level so `t.Parallel()` tests never
+// share it, and read back under m.mu (in installConfig) so setting it
+// cannot race the read.
+func (m *ConfigManager) SetAfterCommitUnlockForTest(fn func()) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.afterCommitUnlock = fn
+}
+
 // getLogger returns m.logger, lazy-initializing to log.Default() if
 // the constructor was bypassed (test struct-literal pattern). Always
 // returns a non-nil pointer so callers can write
@@ -299,22 +332,16 @@ func (m *ConfigManager) commitConfig(cfg *ThresholdConfig, hash string, flatScan
 	// config + config-info land in one consistent lock window.
 	configSource, gitCommit := m.detectConfigSource()
 
-	m.mu.Lock()
-	m.config = cfg
-	m.loaded = true
-	m.lastReload = time.Now()
-	m.lastHash = hash
-	if flatScan != nil {
-		m.flat = *flatScan
+	hierTenantSources, afterUnlock := m.installConfig(
+		cfg, hash, flatScan, configSource, gitCommit)
+	if afterUnlock != nil {
+		// Test-only seam, and it must stay the FIRST statement after the
+		// swap: it exists so a test can mutate the live hierarchy in the
+		// one instant that separates "snapshot taken inside the lock" from
+		// "snapshot taken afterwards". Anything inserted above it that
+		// reads m.hierarchy would slip past the check.
+		afterUnlock()
 	}
-	m.configSource = configSource
-	m.gitCommit = gitCommit
-	// #1521: snapshot the hierarchical population inside the SAME lock
-	// window that installs cfg. Reloads can overlap (see the pairing note
-	// in config_divergence.go), so reading it later would let the audit
-	// compare two different reloads' halves.
-	hierTenantSources := m.hierarchy.tenantSources
-	m.mu.Unlock()
 
 	logConfigStats(m.getLogger(), cfg, logHeader)
 
@@ -327,6 +354,45 @@ func (m *ConfigManager) commitConfig(cfg *ThresholdConfig, hash string, flatScan
 	// rather than by remembering to add a call. Observability only: it
 	// never fails the commit — see config_divergence.go for why not.
 	m.auditHierarchyDivergence(cfg, hierTenantSources, logHeader)
+}
+
+// installConfig performs the atomic swap under m.mu and RETURNS the
+// hierarchical tenant population as it stood at that instant, together
+// with the test-only after-unlock hook read in the same window.
+//
+// ⛔ The first return value is the whole reason this function exists, and
+// the reason it is a return value rather than a comment. An earlier
+// revision assigned m.config here and let the caller read
+// m.hierarchy.tenantSources afterwards, outside the lock. Reloads are not
+// serialised — `fireDebounced` sets `debounce.timer = nil`, unlocks, and
+// only then calls diffAndReload — so the audit could pair reload N's cfg
+// with reload N+1's hierarchy and name a HEALTHY tenant as having no
+// metrics, from the one check whose entire value is being trustworthy
+// about that.
+//
+// ⛔ The fix was originally a comment saying "read this inside the lock",
+// and adversarial review measured what that was worth: moving the read
+// back out to its own RLock left the whole package green — no test could
+// tell. Returning the snapshot moves the invariant into the signature,
+// where deleting it is an edit a reviewer sees rather than one that looks
+// like tidying. `TestDivergenceAudit_SnapshotIsTakenInsideTheLockWindow`
+// covers the remaining shape (a re-read placed after the swap).
+func (m *ConfigManager) installConfig(
+	cfg *ThresholdConfig, hash string, flatScan *flatScanState,
+	configSource, gitCommit string,
+) (hierTenantSources map[string]string, afterUnlock func()) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.config = cfg
+	m.loaded = true
+	m.lastReload = time.Now()
+	m.lastHash = hash
+	if flatScan != nil {
+		m.flat = *flatScan
+	}
+	m.configSource = configSource
+	m.gitCommit = gitCommit
+	return m.hierarchy.tenantSources, m.afterCommitUnlock
 }
 
 // runHierarchyScanReject runs populateHierarchyState with the

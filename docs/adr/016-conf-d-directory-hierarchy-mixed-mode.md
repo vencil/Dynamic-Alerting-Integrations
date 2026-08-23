@@ -156,8 +156,12 @@ threshold-exporter **自己內部**就有兩個對 `conf.d/` 的掃描器，對�
 
 現況（#1526 止血後）：新增 gauge `da_config_hierarchy_divergent_tenants` + 一行 ERROR 會**點名**受害租戶——
 但**沒有修好**，那些租戶仍然不產生指標。⚠️ 純平面模式下 gauge 可能維持 `0` 直到重啟，
-**別把 0 讀成「已完整檢查」**（兩個成因與釘住它的回歸測試見
-[threshold-exporter README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md)）。
+**別把 0 讀成「已完整檢查」**。兩個成因由
+`TestDivergenceAudit_HotReload_FlatModeNeverDetects`
+（`components/threshold-exporter/app/config_divergence_test.go`）釘住，該測試同時斷言
+「重啟後 gauge == 1」；面向維運的描述在
+[threshold-exporter README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md)
+§3.3。
 
 ⇒ 在 #1521 關閉前：**要指標，租戶檔就得放在 `conf.d/` 頂層**。
 關閉 #1521 的那支 PR 同時負責移除本節與還原上面的表格列。

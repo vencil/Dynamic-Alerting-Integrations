@@ -158,9 +158,12 @@ WARN, no parse_failure, nothing in the "Config loaded" stats line.
 State after the #1526 stopgap: a new gauge `da_config_hierarchy_divergent_tenants`
 plus one ERROR line **names** the affected tenants — but **does not fix them**;
 those tenants still emit no metrics. ⚠️ In pure flat mode the gauge can stay at
-`0` until restart, so **do not read 0 as "fully checked"** (both causes and the
-regression tests pinning them are in the
-[threshold-exporter README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md)).
+`0` until restart, so **do not read 0 as "fully checked"**. Both causes are pinned by
+`TestDivergenceAudit_HotReload_FlatModeNeverDetects`
+(`components/threshold-exporter/app/config_divergence_test.go`), which also
+asserts that a restart DOES report it; the operator-facing description is in
+the [threshold-exporter README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md)
+§3.3.
 
 ⇒ Until #1521 is closed: **if you want metrics, the tenant file has to sit at the
 `conf.d/` top level**. The PR that closes #1521 owns removing this section and
