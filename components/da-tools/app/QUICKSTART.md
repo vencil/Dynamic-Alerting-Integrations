@@ -20,7 +20,7 @@
 內附 fixture [`examples/cardinality-demo/conf.d/`](examples/cardinality-demo/conf.d/) 是一個**故意過度配置**的租戶（60 個 metric 閾值；每個 key = runtime 一條 series）。對它跑 da-guard，預算設低 50（production 預設 500）：
 
 ```sh
-docker run --rm -v "$(pwd)/examples:/work" ghcr.io/vencil/da-tools:v2.9.0 \
+docker run --rm -v "$(pwd)/examples:/work:ro" ghcr.io/vencil/da-tools:v2.9.0 \
   guard defaults-impact --config-dir /work/cardinality-demo/conf.d --cardinality-limit 50
 ```
 

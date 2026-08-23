@@ -746,7 +746,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "9089d41e0c7c766dade344a6ea6438484dcb02e869d2488997a5b7b9a50a458d",
+ "source_digest": "0f573325dc8c1e647637150ed321bde036b06dbb079dc7acc5a18ecf33e57612",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1281,12 +1281,16 @@
   ],
   "components/da-tools/README.md": [
    "tests/dx/test_bump_docs.py",
+   "tests/lint/test_check_doc_datools_cmds.py",
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/ops/test_generated_ci_artifacts.py"
   ],
   "components/da-tools/app/Dockerfile": [
    "tests/lint/test_check_iac_vibe_rules.py",
    "tests/ops/test_ci_baseline_substitution.py"
+  ],
+  "components/da-tools/app/QUICKSTART.md": [
+   "tests/lint/test_check_doc_datools_cmds.py"
   ],
   "components/da-tools/app/VERSION": [
    "tests/ops/test_ci_path_filter_coverage.py",
@@ -1480,6 +1484,9 @@
   "docs/glossary.md": [
    "tests/lint/test_check_codename_gate.py"
   ],
+  "docs/includes/docker-usage-pattern.md": [
+   "tests/lint/test_check_doc_datools_cmds.py"
+  ],
   "docs/index.md": [
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/ops/test_validate_config.py"
@@ -1517,6 +1524,9 @@
    "tests/lint/test_check_bilingual_structure.py",
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/ops/test_generate_routes_orchestration.py"
+  ],
+  "docs/internal/archive": [
+   "tests/lint/test_check_doc_datools_cmds.py"
   ],
   "docs/internal/backend-compat-baseline.md": [
    "tests/rulepacks/test_vm_backend_parity.py"
@@ -2936,6 +2946,9 @@
   ],
   "tools/portal/vitest.config.ts": [
    "tests/ops/test_ci_path_filter_coverage.py"
+  ],
+  "try-local/README.md": [
+   "tests/lint/test_check_doc_datools_cmds.py"
   ],
   "try-local/alertmanager.yml": [
    "tests/dx/test_verify_diff.py",
