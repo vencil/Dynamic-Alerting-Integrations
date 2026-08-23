@@ -1033,7 +1033,8 @@ def _tracked_defaults_artifacts(paths: list[str] | None = None) -> list[str]:
     `paths` defaults to the real index listing, the same way `run_check` defaults
     its inputs to the real extractors;
     `test_the_index_listing_is_a_real_seam_on_both_derivations` injects a
-    synthetic one and requires the answer to follow it. ⚠️ That sentence was here before the test was — the injectable half had
+    synthetic one and requires the answer to follow it. ⚠️ That sentence was
+    here before the test was — the injectable half had
     no caller and no assertion, so the docstring was describing an intention.
     Both derivations that take this seam are exercised through it now.
     """

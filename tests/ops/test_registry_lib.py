@@ -920,9 +920,61 @@ def test_no_call_site_wraps_a_comment_on_its_own() -> None:
         for node in ast.walk(fn)
         if isinstance(node, ast.Call)
     ]
+    # ⛔ AND THE OTHER SPELLING. `from textwrap import wrap` produces a bare
+    # `Name` call that the `Attribute` scan above cannot see, and that idiom is
+    # already house style here — three sibling test modules import `dedent` that
+    # way. A guard that only knows one spelling is a spot check wearing the
+    # word SET.
+    imported = {
+        alias.asname or alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module == "textwrap"
+        for alias in node.names
+        if alias.name in ("wrap", "fill")
+    }
+    raw += [
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in imported
+    ]
+
     assert raw and set(raw) <= set(inside), (
         "every textwrap call in this module must sit inside `_wrap_comment`; "
         f"raw calls at lines {raw}, `_wrap_comment` spans {inside}. ⛔ Route the "
         "new call through the helper — do not copy the two keyword arguments, "
         "which is how three of the six original sites ended up with half the "
         "rule and three with none of it.")
+
+
+def test_wrap_comment_never_splits_a_token() -> None:
+    """⛔ The two keyword arguments themselves, which nothing else pins.
+
+    `test_no_call_site_wraps_a_comment_on_its_own` proves the DECISION lives in
+    one place. It does not prove the decision is still the right one: measured,
+    deleting `break_on_hyphens=False` AND `break_long_words=False` together
+    leaves that test — and the whole module, 46 passed — completely green. The
+    centralisation was guarded and the thing centralised was not.
+
+    So this asks the behaviour instead of the spelling: whatever the helper
+    does, no output segment may end mid-token. The two shapes below are the two
+    defaults that would do it — a hyphenated name, and a name longer than the
+    whole width — and both are drawn from real cut tokens: `negative-db2.yaml`
+    is the filename the original note named, and an over-width identifier is the
+    #1453 shape.
+    """
+    hyphenated = "see negative-db2.yaml for the counterexample and then stop"
+    segments = lib._wrap_comment(hyphenated, 24)
+    assert len(segments) > 1, "width too generous to exercise wrapping at all"
+    assert any("negative-db2.yaml" in seg for seg in segments), (
+        "`negative-db2.yaml` came back split across segments: "
+        f"{segments}. ⛔ A reference broken that way is invisible to `git grep`, "
+        "which is the accident this helper exists to prevent.")
+
+    long_name = "test_the_index_listing_is_a_real_seam_on_both_derivations"
+    segments = lib._wrap_comment(f"pinned by {long_name} today", 24)
+    assert any(long_name in seg for seg in segments), (
+        f"a token longer than the width came back split: {segments}. ⛔ The "
+        "default breaks long words; that is the half none of the six original "
+        "call sites had.")
