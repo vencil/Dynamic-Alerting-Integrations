@@ -985,9 +985,27 @@ def _is_loader_readable_defaults(name: str) -> bool:
         components/threshold-exporter/app/config_hierarchy.go:206
             if lower == "_defaults.yaml" || lower == "_defaults.yml" {
 
-    Same lowercasing, exact basename, nothing else. If that line ever changes,
-    this one changes with it — `test_loader_readable_predicate_mirrors_the_go_test`
-    pins the pair.
+    Same lowercasing, exact basename, nothing else.
+
+    ⛔ NOTHING PINS THAT PAIRING, and an earlier version of this docstring
+    claimed something did — it named
+    test_loader_readable_predicate_mirrors_the_go_test (deliberately not in
+    backticks: that name never existed, so it is not a citation), a test that
+    does not exist. The sentence was wrong twice over, because even a correctly-named
+    test would not have been doing that: what
+    `test_the_loader_readable_predicate_is_exactly_the_loaders_test` actually
+    pins is a BEHAVIOUR TABLE plus the requirement that this predicate and
+    `_is_defaults_artifact` keep DISAGREEING on the names the loader skips. It
+    never reads a line of Go.
+
+    That is deliberate, not an oversight: this repo measured (#1448 blind
+    review) that a Python guard asserting things about Go source text goes red
+    on legitimate Go refactors and states something false when it does.
+
+    ⚠️ The consequence, stated because the previous wording hid it: if
+    `config_hierarchy.go` changes its filename test, this floor goes SILENTLY
+    WRONG rather than red. Anyone touching that Go line owns changing this
+    function with it.
     """
     return name.lower() in ("_defaults.yaml", "_defaults.yml")
 

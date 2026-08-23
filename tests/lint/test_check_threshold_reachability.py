@@ -199,6 +199,12 @@ def _stub_result(errors=(), infos=()):
     }
 
 
+# Sources read once for the citation guard at the end of this file.
+GATE_SRC = (REPO_ROOT / "scripts" / "tools" / "lint"
+            / "check_threshold_reachability.py").read_text(encoding="utf-8")
+TEST_FILE_SRC = Path(__file__).read_text(encoding="utf-8")
+
+
 def _flat(*paths: str) -> dict[str, gate.KeyInfo]:
     """A synthetic face: these key paths, all at the top level of `defaults:`.
 
@@ -1268,7 +1274,9 @@ def test_the_may_be_empty_list_is_not_a_blanket_exemption():
     gate._assert_every_root_contributes(by_root)      # must NOT raise
 
 
-# ⛔ `test_the_pin_matches_what_the_real_repo_actually_has` was DELETED here
+# ⛔ test_the_pin_matches_what_the_real_repo_actually_has was DELETED here
+# (un-backticked deliberately — see
+# test_every_test_name_this_module_cites_actually_exists)
 # (#1434), and this note is what stops it being written again. It asserted
 # `pin == the roots the defaults scan reached`, having first called
 # `_defaults_faces()` — which enforces that same equality in both directions
@@ -5049,3 +5057,63 @@ def test_the_loader_readable_floor_numbers_have_slack_and_are_not_zero():
             f"{root}: key floor {min_k} against {got_k} measured — a floor of "
             f"0 is not a floor, and a floor equal to today's count has no "
             f"slack, which is what teaches people to edit the table")
+
+
+def test_every_test_name_this_module_cites_actually_exists():
+    """A prose claim that names a test must name a REAL one.
+
+    ⛔ The defect this catches is not hypothetical and not rare — it is the
+    third instance in one working session. `_is_loader_readable_defaults`'s
+    docstring cited test_loader_readable_predicate_mirrors_the_go_test — no
+    backticks, per the convention this guard defines below —
+    which never existed, and the sentence around it also over-claimed what the
+    (differently-named) real test does. Two sibling PRs in the same batch each
+    carried one: a docstring saying a boundary was "pinned by the regression
+    tests in the README" where the README names no test, and one saying a test
+    pins the call site when it pins the callee.
+
+    Why it matters here specifically: this module's guard rails are load-
+    bearing prose. Someone deciding whether it is safe to widen a predicate
+    reads "X pins the pair", greps for X, finds nothing — and now has to
+    reconstruct from scratch what is actually guarded, at the exact moment the
+    comment was supposed to save them that. A citation that does not resolve is
+    worse than no citation: it asserts coverage that is not there.
+
+    ⚠️ DELIBERATELY UNDER-INCLUSIVE, and that is the whole design. It only
+    considers names written inside backticks ON ONE LINE. This module wraps
+    long identifiers across comment lines routinely (`test_the_index_listing_is
+    _a_real_seam_on_both_derivations` spans two), and a matcher that tried to
+    rejoin them would guess — producing false reds whose message states
+    something untrue, which is the failure mode this file has paid for more
+    than once (#1448). Skipping the ambiguous cases keeps every red this test
+    produces literally true. It catches the single-line citation, which is the
+    shape that has actually gone wrong.
+    """
+    import re as _re
+
+    defined = set(_re.findall(r"^def (test_\w+)", TEST_FILE_SRC, _re.M))
+    assert defined, "no tests discovered — this guard would pass vacuously"
+
+    broken: list[tuple[str, int, str]] = []
+    for label, src in (("check_threshold_reachability.py", GATE_SRC),
+                       ("test_check_threshold_reachability.py", TEST_FILE_SRC)):
+        for lineno, line in enumerate(src.splitlines(), 1):
+            for cited in _re.findall(r"`(test_\w+)`", line):
+                # A citation of a test FILE is a different thing and resolves
+                # by path, not by function name.
+                if cited.endswith("_py") or f"{cited}.py" in line:
+                    continue
+                if cited not in defined:
+                    broken.append((cited, lineno, label))
+
+    assert not broken, (
+        "prose in this module cites test(s) that do not exist — either the "
+        "test was renamed and the citation was not, or the citation was "
+        "written for a test that was never added. Both mean the sentence "
+        "around it is claiming coverage nobody can find.\n"
+        "  ⛔ IF THE NAME IS ABSENT ON PURPOSE — recording that a test was "
+        "deleted, or quoting a citation that turned out to be wrong — write "
+        "it WITHOUT backticks. Backticks are what make it a CITATION; plain "
+        "text is a MENTION. That distinction is the whole convention, and it "
+        "needs no allowlist to maintain",
+        [f"{label}:{lineno} cites `{cited}`" for cited, lineno, label in broken])
