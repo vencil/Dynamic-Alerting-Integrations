@@ -524,9 +524,9 @@ def render_markdown_table(
 # `CANARY_BENCHES` the run prints the one-line CLEAR verdict; reverted to
 # `- {CANARY_BENCH}` the same input renders the regression table with
 # `| `BenchmarkControlCanarySleep` | sustained | 1.2 ms | +20.0% | +20.0% |`
-# and `-> [dry-run] would open new perf-trend issue`. `bench-baseline.txt`
-# does carry both canary rows (`bench-record.yaml` says so where it copies the
-# paired main side), so the path was live, not latent.
+# and `→ [dry-run] would open new perf-trend issue (assignee: vencil)`.
+# `bench-baseline.txt` does carry both canary rows (`bench-record.yaml` says
+# so where it copies the paired main side), so the path was live, not latent.
 CANARY_BENCH = "BenchmarkControlCanaryCPU"
 CANARY_BENCHES = frozenset({
     "BenchmarkControlCanaryCPU",
