@@ -45,6 +45,7 @@ Use the CI/CD Setup Wizard or run `da-tools init` directly.
 
 ```bash
 docker run --rm -it \
+  --user $(id -u):$(id -g) \
   -v $(pwd):/workspace -w /workspace \
   ghcr.io/vencil/da-tools:latest \
   init \
@@ -214,6 +215,7 @@ If any warnings appear, review the key names and timing guardrails.
 mkdir -p .output
 
 docker run --rm \
+  --user $(id -u):$(id -g) \
   -v $(pwd)/conf.d:/data/conf.d:ro \
   -v $(pwd)/.output:/data/output \
   ghcr.io/vencil/da-tools:latest \

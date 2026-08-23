@@ -72,7 +72,7 @@ docker run --rm --network=host \
 
 # 形態 B：檔案系統工具（mount conf.d/，可選 --network=host 走 Prometheus）
 docker run --rm \
-  -v $(pwd)/conf.d:/data/conf.d \
+  -v $(pwd)/conf.d:/data/conf.d:ro \
   ghcr.io/vencil/da-tools \
   validate-config --config-dir /data/conf.d
 ```
@@ -223,7 +223,7 @@ $DA baseline --tenant db-a --duration 300
 
 # 3. Shadow Monitoring 雙軌比對（auto-convergence）
 docker run --rm --network=host \
-  -v $(pwd)/mapping.csv:/data/mapping.csv \
+  -v $(pwd)/mapping.csv:/data/mapping.csv:ro \
   -e PROMETHEUS_URL=$PROM \
   ghcr.io/vencil/da-tools \
   validate --mapping /data/mapping.csv --watch --rounds 5
@@ -233,6 +233,7 @@ docker run --rm --network=host \
 
 ```bash
 docker run --rm \
+  --user $(id -u):$(id -g) \
   -v $(pwd)/my-rules.yml:/data/my-rules.yml \
   -v $(pwd)/output:/data/output \
   ghcr.io/vencil/da-tools \
@@ -249,7 +250,8 @@ docker run --rm \
 
 ```bash
 docker run --rm \
-  -v $(pwd)/conf.d:/data/conf.d \
+  --user $(id -u):$(id -g) \
+  -v $(pwd)/conf.d:/data/conf.d:ro \
   -v $(pwd)/output:/data/output \
   ghcr.io/vencil/da-tools \
   generate-routes --config-dir /data/conf.d --output-configmap \
@@ -268,7 +270,7 @@ docker run --rm \
 
 ```bash
 docker run --rm \
-  -v $(pwd)/conf.d:/data/conf.d \
+  -v $(pwd)/conf.d:/data/conf.d:ro \
   ghcr.io/vencil/da-tools \
   guard defaults-impact \
     --config-dir /data/conf.d \
@@ -284,6 +286,7 @@ docker run --rm \
 
 ```bash
 docker run --rm \
+  --user $(id -u):$(id -g) \
   -v $(pwd)/plan.json:/data/plan.json \
   -v $(pwd)/emit:/data/emit \
   -v $(pwd)/customer-repo:/data/repo \
@@ -304,11 +307,11 @@ Refresh / refresh-source 兩個子命令處理 Base PR merge 後的 rebase 與 h
 
 ```bash
 # Pre-base：拍快照
-docker run --rm -v $(pwd)/conf.d:/data/conf.d ghcr.io/vencil/da-tools \
+docker run --rm -v $(pwd)/conf.d:/data/conf.d:ro ghcr.io/vencil/da-tools \
   tenant-verify --all --json --conf-d /data/conf.d > pre-base-snapshot.json
 
 # Rollback 後：比對 merged_hash
-docker run --rm -v $(pwd)/conf.d:/data/conf.d ghcr.io/vencil/da-tools \
+docker run --rm -v $(pwd)/conf.d:/data/conf.d:ro ghcr.io/vencil/da-tools \
   tenant-verify db-a --conf-d /data/conf.d \
   --expect-merged-hash $(jq -r '.["db-a"].merged_hash' pre-base-snapshot.json)
 # exit 0 = 與快照一致，rollback 成功；非 0 = 不一致，需追查

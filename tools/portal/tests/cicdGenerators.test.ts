@@ -43,6 +43,28 @@ describe('cicdGenerateInitCommand', () => {
     expect(out).toContain('--non-interactive');
   });
 
+  // ⛔ Every other fixture in this file is `ci: 'github', deploy: 'kustomize',
+  // packs: ['mariadb-core']`, so three separate mutations survived the whole
+  // suite: hard-coding `--ci github`, hard-coding `--deploy kustomize`, and
+  // joining packs with `;` instead of `,`. The values were never varied, so
+  // "it interpolates the config" was never actually tested — only "it prints
+  // these particular strings".
+  it.each([
+    ['gitlab', 'kustomize'],
+    ['both', 'helm'],
+  ])('interpolates ci=%s / deploy=%s rather than emitting a fixed value',
+    (ci, deploy) => {
+      const out = cicdGenerateInitCommand(baseConfig({ ci, deploy }));
+      expect(out).toContain(`--ci ${ci}`);
+      expect(out).toContain(`--deploy ${deploy}`);
+    });
+
+  it('comma-joins multiple rule packs, like it does for tenants', () => {
+    const out = cicdGenerateInitCommand(
+      baseConfig({ packs: ['mariadb-core', 'mysql-core', 'pg-core'] }));
+    expect(out).toContain('--rule-packs mariadb-core,mysql-core,pg-core');
+  });
+
   it('omits --tenants flag when tenants array is empty', () => {
     expect(cicdGenerateInitCommand(baseConfig({ tenants: [] }))).not.toMatch(/--tenants/);
   });
@@ -88,6 +110,92 @@ describe('cicdGenerateDockerCommand', () => {
     // "da-tools init" appears only ONCE in init form; inside docker,
     // it's just "init --ci github ...".
     expect(out.match(/da-tools init/g) ?? []).toHaveLength(0);
+  });
+
+  it('passes --user, because the mount is writable and the image is not root', () => {
+    // ⛔ #1495. This is the FIRST command a customer copies. The image ends
+    // `USER nonroot:nonroot` (uid 10001) while the mounted directory is the
+    // customer's own checkout (typically uid 1000), so `init` — which creates
+    // conf.d/, the CI workflow and the deploy tree — cannot write and dies on
+    // a bare `PermissionError` traceback having produced zero files. Measured
+    // inside one Linux container: uid 10001 fails, uid 1000 succeeds.
+    //
+    // The equivalent Python guard (check_doc_datools_cmds) cannot reach this
+    // string: it scans markdown, and this command is generated at runtime.
+    const out = cicdGenerateDockerCommand(baseConfig());
+    expect(out).toContain('--user $(id -u):$(id -g)');
+  });
+
+  it('quotes the bind mount, because a checkout path may contain spaces', () => {
+    // The wizard emits a command the customer pastes into their own shell.
+    // Unquoted, `-v $(pwd):/workspace` word-splits as soon as the checkout
+    // lives under a path like `C:\Users\A B\repo` or `~/My Projects/repo`,
+    // and docker rejects the fragment as an invalid volume spec. Quoting is
+    // the form the shared template docs/includes/docker-usage-pattern{,.en}.md
+    // already prescribes.
+    // ⚠️ Pinned deliberately: the quotes are one character each and the whole
+    // suite stayed green when they were missing, so nothing else guards them.
+    const out = cicdGenerateDockerCommand(baseConfig());
+    expect(out).toContain('-v "$(pwd):/workspace"');
+    expect(out).not.toMatch(/-v \$\(pwd\)/);
+  });
+
+  it('sets the working directory to the mount point', () => {
+    // ⛔ Same failure family as the missing --user, and `--user` cannot fix it.
+    // Without `-w /workspace` the container keeps the image's own WORKDIR
+    // (/opt/da-tools, root-owned), so `init` writes conf.d/ and the CI
+    // workflow *inside the image* — the customer's mounted checkout stays
+    // empty and the run still exits 0. Pinned because a mutation deleting
+    // this flag survived both this suite and the Python ops suite.
+    const out = cicdGenerateDockerCommand(baseConfig());
+    expect(out).toContain('-w /workspace');
+  });
+
+  it('keeps --user ahead of the image reference', () => {
+    // Docker only accepts flags BEFORE the image name; anything after it is
+    // passed to the container as arguments. A `--user` that drifts below the
+    // image would be silently handed to `da-tools init` instead — the command
+    // would still look right in the wizard and still fail for the customer.
+    const out = cicdGenerateDockerCommand(baseConfig());
+    expect(out.indexOf('--user')).toBeGreaterThan(-1);
+    expect(out.indexOf('--user')).toBeLessThan(out.indexOf('ghcr.io/vencil/da-tools'));
+  });
+});
+
+describe('cicdGenerateGitHubActionsPreview — writable mounts', () => {
+  it('runs the only container that writes into a mount as the runner', () => {
+    // ⛔ #1495 again, in the OTHER generator of this module. `generate-routes
+    // -o /data/output/routes.yaml` writes into the mounted `.output`, which
+    // belongs to the runner uid; the image is uid 10001, so without --user the
+    // very first PR fails with PermissionError and zero files. The CLI twin
+    // (scripts/tools/ops/init_project.py, the "Generate Alertmanager routes"
+    // step) has carried the flag all along — this is #1351's divergence
+    // surfacing as the exact defect #1495 is about.
+    //
+    // ⚠️ Asserted per step, not per file: the "Compute blast radius" step
+    // mounts nothing writable (its output is a shell redirect written by the
+    // runner), so a whole-file `toContain('--user')` would pass even if this
+    // step lost the flag again.
+    const yaml = cicdGenerateGitHubActionsPreview(baseConfig());
+    const step = yaml.slice(yaml.indexOf('- name: Generate routes'),
+      yaml.indexOf('- name: Compute blast radius'));
+    expect(step).toContain('-v ${{ github.workspace }}/.output:/data/output');
+    expect(step).toContain('--user $(id -u):$(id -g)');
+    expect(step.indexOf('--user')).toBeLessThan(step.indexOf('ghcr.io/vencil/da-tools'));
+  });
+
+  it('keeps the tenant config mounted read-only in every step', () => {
+    // The workflow we hand customers should never give a container write
+    // access to their conf.d — these steps only read it. Dropping `:ro`
+    // survived both suites, and it is the kind of edit that looks like
+    // tidying: the command still works, so nothing goes red until something
+    // writes there.
+    const yaml = cicdGenerateGitHubActionsPreview(baseConfig());
+    const mounts = yaml.match(/-v \$\{\{ github\.workspace \}\}\/conf\.d:[^ \\]*/g) ?? [];
+    expect(mounts.length).toBeGreaterThan(0);
+    for (const m of mounts) {
+      expect(m).toMatch(/:ro$/);
+    }
   });
 });
 

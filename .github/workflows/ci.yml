@@ -441,6 +441,12 @@ jobs:
           pre-commit run doc-map-check --all-files
           pre-commit run rule-pack-stats-check --all-files
           pre-commit run byo-rulepack-table-check --all-files
+          # #1495: the documented `docker run` examples are a customer's first
+          # contact with the tool. Listed here because this job runs the hooks
+          # BY NAME — a hook that is only in .pre-commit-config.yaml has no CI
+          # entry point at all, which is how the writable-mount rule shipped
+          # with zero CI coverage in its first revision.
+          pre-commit run doc-datools-cmds --all-files
           # #1268: version-consistency guards the README rule-pack/alert badges.
           # It was NOT in this list, and there is no blanket `pre-commit run
           # --all-files` anywhere — so in CI it was only reached transitively:
