@@ -347,6 +347,19 @@ func BenchmarkFullDirLoad_1000(b *testing.B) {
 func BenchmarkIncrementalLoad_1000_NoChange(b *testing.B) {
 	dir := buildDirConfig(b, 1000)
 	silenceLogs(b)
+	// ⛔ Age the fixture past the scanner's 2-second mtime-guard window before
+	// timing anything. Without this the benchmark measures WARM-UP, not steady
+	// state: buildDirConfig creates all 1000 files at once, so for the first
+	// two seconds every one of them is "young", the guard in
+	// flat_scanner.go:134-138 never applies, and each iteration re-reads and
+	// re-hashes the whole directory. Measured (TRK-363, #1545):
+	//
+	//   benchtime=1s  7.00 ms/op   |   benchtime=8s  2.30 ms/op   = 3.05x
+	//
+	// A per-op figure that depends on b.N is not a per-op figure. The 2-second
+	// window is real product behaviour and is tracked on its own in #1545;
+	// what this line fixes is the benchmark silently measuring it.
+	backdateFiles(b, dir)
 	mgr := NewConfigManager(dir)
 	if err := mgr.fullDirLoad(); err != nil {
 		b.Fatal(err)
@@ -380,6 +393,11 @@ func BenchmarkIncrementalLoad_1000_NoChange_MtimeGuard(b *testing.B) {
 func BenchmarkIncrementalLoad_1000_OneFileChanged(b *testing.B) {
 	dir := buildDirConfig(b, 1000)
 	silenceLogs(b)
+	// Same warm-up fix as _NoChange above; measured 8.65 -> 3.83 ms/op between
+	// benchtime=1s and 8s (2.26x). The file this loop rewrites each iteration
+	// becomes young by design and is re-hashed — that is the work being
+	// measured. The other 999 are aged so they stop being measured too.
+	backdateFiles(b, dir)
 	mgr := NewConfigManager(dir)
 	if err := mgr.fullDirLoad(); err != nil {
 		b.Fatal(err)
