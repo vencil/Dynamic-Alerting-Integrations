@@ -33,6 +33,37 @@ var ErrConflict = errors.New("conflict: repository was updated concurrently, ple
 // ErrPendingPR is returned when a tenant already has a pending PR (PR mode only).
 var ErrPendingPR = errors.New("pending PR exists for this tenant")
 
+// ErrPrecondition reports that a caller-supplied base hash no longer describes
+// the tenant file on disk: someone else wrote it between the caller's read and
+// this write, so overwriting would silently drop their change. Callers match it
+// with errors.Is; errors.As on *PreconditionError also yields the hash the file
+// actually has, so a client can refresh against the right base.
+var ErrPrecondition = errors.New("precondition failed: the tenant configuration changed since it was read")
+
+// PreconditionError carries both sides of a failed base-hash check.
+//
+// Current is the hash the file has NOW; it is empty when the tenant file does
+// not exist at all (deleted, or never created), which is reported the same way
+// — a caller holding a base hash for a file that is gone is just as stale as
+// one holding an outdated hash, and both need a fresh read before retrying.
+type PreconditionError struct {
+	TenantID string
+	Expected string
+	Current  string
+}
+
+func (e *PreconditionError) Error() string {
+	current := e.Current
+	if current == "" {
+		current = "<no such tenant file>"
+	}
+	return fmt.Sprintf("%s (tenant %s: expected base %s, on disk %s)",
+		ErrPrecondition.Error(), e.TenantID, e.Expected, current)
+}
+
+// Unwrap makes errors.Is(err, ErrPrecondition) hold for the typed error.
+func (e *PreconditionError) Unwrap() error { return ErrPrecondition }
+
 // ErrForgeDegraded is returned when the in-lock base fetch (TRK-318) exceeds
 // TA_GIT_FETCH_TIMEOUT — the forge is unreachable or too slow to refresh the
 // local base. The writer mutex is released as the caller returns and the
@@ -49,10 +80,10 @@ var ErrForgeDegraded = errors.New("forge degradation: base fetch timed out — w
 // fmt.Errorf("%w: …", ErrValidation, …), so errors.Is(err, ErrValidation) holds.
 var ErrValidation = errors.New("validation failed")
 
-// ErrNoChanges is returned by WritePRBatch when EVERY op is a byte-identical
-// no-op (an idempotent batch / a client retry): the feature branch would carry
-// no commits beyond base, so pushing it and opening a PR/MR would yield a
-// change-free PR (or a forge 422). The handler maps this to a clean "no changes"
+// ErrNoChanges is returned by WritePR when the single body is a byte-identical
+// no-op, and by WritePRBatch when EVERY op is one (an idempotent batch / a
+// client retry): the feature branch would carry no commits beyond base, so
+// pushing it and opening a PR/MR would yield a change-free PR (or a forge 422). The handler maps this to a clean "no changes"
 // success — the PR-mode analogue of WriteMerged's direct-path no-op short-circuit
 // (#1097 / #1102 review). Unusually for a Go error return, the accompanying
 // *PRWriteResult is NON-nil in this case: it carries the per-op deprecation
@@ -172,6 +203,37 @@ func (w *Writer) SetOnWrite(fn OnWriteFunc) {
 // nil — handlers surface them in the 200 response so the author sees the
 // migration signal on the very write that succeeded with an old spelling.
 func (w *Writer) Write(ctx context.Context, tenantID, authorEmail, yamlContent string) (notices []string, err error) {
+	return w.write(ctx, tenantID, authorEmail, yamlContent, "")
+}
+
+// WriteIfUnchanged is Write with an optimistic-concurrency precondition:
+// the tenant file must still hash to baseHash at the moment of the write, or
+// nothing is written and *PreconditionError (errors.Is ErrPrecondition) is
+// returned.
+//
+// The check runs INSIDE the writer lock, immediately before the commit, so it
+// is the authoritative one: a caller that also compares hashes in its handler
+// is doing a cheap early rejection, not concurrency control — that comparison
+// reads the file outside the lock, leaving a window in which another write can
+// land between the read and the commit (the TOCTOU the custom-alerts handler
+// documented as a future hardening).
+//
+// baseHash is compared against cfg.ComputeSourceHash of the raw on-disk bytes,
+// i.e. exactly the `source_hash` GET /tenants/{id} reports. An empty baseHash
+// is rejected rather than treated as "no precondition": this method exists to
+// enforce one, and silently degrading to an unconditional overwrite when a
+// caller's hash variable happens to be empty is the failure mode it is meant to
+// prevent. Callers that genuinely want no precondition call Write.
+func (w *Writer) WriteIfUnchanged(ctx context.Context, tenantID, authorEmail, yamlContent, baseHash string) (notices []string, err error) {
+	if baseHash == "" {
+		return nil, &PreconditionError{TenantID: tenantID, Expected: "", Current: ""}
+	}
+	return w.write(ctx, tenantID, authorEmail, yamlContent, baseHash)
+}
+
+// write is the shared body of Write / WriteIfUnchanged. baseHash is empty for
+// an unconditional write.
+func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, baseHash string) (notices []string, err error) {
 	// Step 0: reserved-id backstop (defense-in-depth; see guardTenantID).
 	if err := guardTenantID(tenantID); err != nil {
 		return nil, err
@@ -193,8 +255,28 @@ func (w *Writer) Write(ctx context.Context, tenantID, authorEmail, yamlContent s
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
+	filePath := filepath.Join(w.configDir, tenantID+".yaml")
+
+	// Optimistic concurrency, under the lock and immediately before the write:
+	// anything that lands between here and commitFileChange would have to hold
+	// w.mu, which this goroutine has.
+	if baseHash != "" {
+		existing, rerr := os.ReadFile(filePath)
+		if rerr != nil && !os.IsNotExist(rerr) {
+			return nil, fmt.Errorf("read current tenant file for %s: %w", tenantID, rerr)
+		}
+		// os.IsNotExist leaves existing nil → current stays empty → mismatch.
+		var current string
+		if rerr == nil {
+			current = cfg.ComputeSourceHash(existing)
+		}
+		if current != baseHash {
+			return nil, &PreconditionError{TenantID: tenantID, Expected: baseHash, Current: current}
+		}
+	}
+
 	if err := w.commitFileChange(
-		filepath.Join(w.configDir, tenantID+".yaml"),
+		filePath,
 		tenantID,
 		authorEmail,
 		[]byte(yamlContent),
@@ -416,9 +498,23 @@ func (w *Writer) commitFileChange(filePath, commitTag, authorEmail string, conte
 		return fmt.Errorf("write file: %w", err)
 	}
 
-	if err := w.gitCommit(filePath, commitTag, authorEmail, trailer...); err != nil {
+	committed, err := w.gitCommit(filePath, commitTag, authorEmail, trailer...)
+	if err != nil {
 		slog.Warn("gitops: commit failed", "commit_tag", commitTag, "error", err)
 		return fmt.Errorf("git commit: %w", err)
+	}
+
+	// Nothing was staged — the file on disk already matched HEAD, so the
+	// caller's desired state is what the repository holds and no commit was
+	// created. The parent check below only makes sense when we DID commit:
+	// with HEAD unmoved, HEAD~1 is our own predecessor rather than the commit
+	// we branched from, so it never equals headBefore and would report a
+	// permanent, unrecoverable ErrConflict for what is really an idempotent
+	// re-write (the same misfire WriteMerged's no-op short-circuit documents
+	// and sidesteps — this closes it for every direct-commit caller).
+	if !committed {
+		slog.Info("gitops: no changes to commit", "commit_tag", commitTag)
+		return nil
 	}
 
 	if headBefore != "" {
@@ -465,16 +561,22 @@ func (w *Writer) commitParent() (string, error) {
 
 // gitCommit stages filePath and creates a commit with the operator's email as author.
 //
+// committed reports whether a commit was actually created: staging a file whose
+// content already equals HEAD's leaves nothing to commit, which is a success
+// (the desired state is already in the repository) but leaves HEAD where it
+// was. Callers that reason about HEAD movement must branch on this rather than
+// assume a nil error means a new commit exists.
+//
 // Committer identity is sourced from the GIT_COMMITTER_NAME / GIT_COMMITTER_EMAIL
 // environment variables (set in the K8s Deployment). This keeps the audit trail clean:
 //   - author  = the human operator (from X-Forwarded-Email via oauth2-proxy)
 //   - committer = the service account (da-portal@dynamic-alerting.local)
-func (w *Writer) gitCommit(filePath, tenantID, authorEmail string, trailer ...string) error {
+func (w *Writer) gitCommit(filePath, tenantID, authorEmail string, trailer ...string) (committed bool, err error) {
 	// Stage the file
 	addCmd, addCtx, addCancel := w.gitCmd("-C", w.gitDir, "add", filePath)
 	defer addCancel()
 	if out, err := addCmd.CombinedOutput(); err != nil {
-		return w.gitErr(addCtx, "add", err, out)
+		return false, w.gitErr(addCtx, "add", err, out)
 	}
 
 	// Check if there's actually something to commit
@@ -482,7 +584,7 @@ func (w *Writer) gitCommit(filePath, tenantID, authorEmail string, trailer ...st
 	defer statusCancel()
 	if err := statusCmd.Run(); err == nil {
 		// Exit 0 means no changes staged — nothing to commit
-		return nil
+		return false, nil
 	}
 
 	msg := fmt.Sprintf("tenant/%s: update via portal\n\nTimestamp: %s\nSource: da-portal/tenant-manager",
@@ -521,9 +623,9 @@ func (w *Writer) gitCommit(filePath, tenantID, authorEmail string, trailer ...st
 	)
 	defer commitCancel()
 	if out, err := commitCmd.CombinedOutput(); err != nil {
-		return w.gitErr(commitCtx, "commit", err, out)
+		return false, w.gitErr(commitCtx, "commit", err, out)
 	}
-	return nil
+	return true, nil
 }
 
 // PR-mode write-back (PRWriteResult / WritePR / WritePRBatch / PRBatchOp) lives
