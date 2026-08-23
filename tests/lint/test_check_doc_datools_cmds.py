@@ -727,3 +727,136 @@ class TestBindMountHeadsAreAllCovered:
     def test_a_named_volume_is_still_not_a_bind_mount(self, tmp_path):
         """誤紅方向的對照：放寬 head 不可以把名稱卷拉進來。"""
         assert self._scan_one(tmp_path, "da-tools-cache:/cache") == []
+class TestScopingInvariantsOfTheMountRule:
+    """模組 docstring 宣稱的兩個範圍前提，mount 規則這一側原本零斷言。
+
+    子命令規則兩條都有測（`test_ignores_prose_outside_code_block`、
+    `test_respects_inline_ignore`），mount 規則兩條都沒有——實測兩個變異
+    都存活。兩者都是**誤紅方向**：放寬之後受害的是本來就正確的文件。
+    """
+
+    _BS = chr(92)
+    _fenced = TestWritableMountNeedsUser._fenced
+    _doc = staticmethod(TestWritableMountNeedsUser._doc)
+
+    def test_prose_outside_a_fence_is_not_judged(self, tmp_path):
+        """散文裡的 inline-code `docker run` 不是可執行範例。"""
+        p = self._doc(tmp_path, (
+            "Mount your checkout with "
+            "`docker run --rm -v $(pwd)/out:/data/output "
+            "ghcr.io/vencil/da-tools:v2.9.0 init` and you are done.\n"))
+        assert mod.check_writable_mount_has_user([p], tmp_path) == []
+
+    def test_an_inline_ignore_exempts_the_whole_block(self, tmp_path):
+        """逃生門必須真的開著——否則標了記號的歷史範例會轉紅。"""
+        p = self._doc(tmp_path, self._fenced(
+            "docker run --rm  # datools-cmd-ignore: historical example",
+            "  -v $(pwd)/out:/data/output",
+            "  ghcr.io/vencil/da-tools:v2.9.0 init"))
+        assert mod.check_writable_mount_has_user([p], tmp_path) == []
+
+    def test_a_continuation_does_not_swallow_the_closing_fence(self, tmp_path):
+        r"""收尾 fence 前一行以反斜線結尾時，緩衝區不可以吞掉 fence 之後的散文。
+
+        ⛔ 素材刻意設計成**變異前後不同**：fence 內的指令不完整（沒有
+        image），所以現況判不動、回 `[]`；而 fence 之後的散文帶著 image
+        卻沒有 `--user`。緩衝區若越過 fence，兩段會被併成一條「有可寫掛載、
+        有 image、沒有 --user」的假指令——對一段散文誤紅。
+        （第一版素材在變異前後都是 `[]`，等於沒有對照組。）
+        """
+        body = (
+            "```bash" + "\n"
+            "docker run --rm -v $(pwd)/out:/data/output " + self._BS + "\n"
+            "```" + "\n"
+            "\n"
+            "接著改用 ghcr.io/vencil/da-tools:v2.9.0 init 重跑一次。\n")
+        p = self._doc(tmp_path, body)
+        assert mod.check_writable_mount_has_user([p], tmp_path) == []
+
+    def test_archived_notes_are_out_of_scope(self, tmp_path, monkeypatch):
+        """`docs/internal/archive/` 的例子是刻意過期的歷史紀錄。"""
+        p = tmp_path / "docs" / "internal" / "archive" / "old.md"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(self._fenced(
+            "docker run --rm",
+            "  -v $(pwd)/out:/data/output",
+            "  ghcr.io/vencil/da-tools:v2.9.0 init"), encoding="utf-8")
+        # tmp 樹沒有那三個 landing page，否則 run() 會回 datools-doc-file-missing
+        monkeypatch.setattr(mod, "_EXTRA_DOC_FILES", ())
+        assert mod.run(tmp_path) == []
+
+
+class TestPositionCheckDoesNotFireOutsideItsDomain:
+    """`datools-user-flag-after-image` 的兩個前置條件都是誤紅方向。
+
+    ⛔ 這條 issue 的訊息是「Move it ahead of the image」。當它誤紅時，
+    使用者**已經做了訊息要求的事**——沒有任何合法的轉綠路徑，只剩下
+    `:ro` 或 `datools-cmd-ignore` 這類會順帶關掉真檢查的手段。
+    """
+
+    _BS = chr(92)
+    _fenced = TestWritableMountNeedsUser._fenced
+    _doc = staticmethod(TestWritableMountNeedsUser._doc)
+
+    def test_a_read_only_example_is_out_of_domain_even_with_a_late_user(
+        self, tmp_path
+    ):
+        """實測：拿掉 `writable and` 前置後，這一格從 `[]` 變成一條誤紅。"""
+        p = self._doc(tmp_path, self._fenced(
+            "docker run --rm -v $(pwd)/conf.d:/etc/config:ro"
+            " ghcr.io/vencil/da-tools:v2.9.0",
+            "  --user $(id -u):$(id -g)",
+            "  validate-config"))
+        assert mod.check_writable_mount_has_user([p], tmp_path) == []
+
+    def test_continuation_backslashes_do_not_become_the_image(self, tmp_path):
+        r"""⛔ 多行指令的每個 `\` 都是獨立 token。
+
+        不濾掉它們時，第一個 `\` 會被當成 image，於是每一個**正確**排在
+        image 之前的 `--user` 都被判成排在之後。實測：這一格在該過濾器被
+        拿掉後從 `[]` 變成 `datools-user-flag-after-image`。
+        """
+        p = self._doc(tmp_path, self._fenced(
+            "docker run --rm",
+            "  --user $(id -u):$(id -g)",
+            "  -v $(pwd)/da-tools-out:/data/output",
+            "  ghcr.io/acme/platform-cli:v1 init"))
+        assert mod.check_writable_mount_has_user([p], tmp_path) == []
+
+    def test_an_env_value_is_not_mistaken_for_the_image(self, tmp_path):
+        """`-e` 吃下一個 token；它的值不可以變成 image 錨點。"""
+        p = self._doc(tmp_path, self._fenced(
+            "docker run --rm -e DA_TOOLS_MODE=strict",
+            "  --user $(id -u):$(id -g)",
+            "  -v $(pwd)/out:/data/output",
+            "  ghcr.io/vencil/da-tools:v2.9.0 init"))
+        assert mod.check_writable_mount_has_user([p], tmp_path) == []
+
+    def test_a_quoted_writable_spec_is_still_judged(self, tmp_path):
+        """⛔ 這是去引號真正守著的方向，而且是**假陰性**方向。
+
+        不剝掉前引號時，host 端變成 `"$(pwd)/out`，開頭是引號而不是
+        `/ . ~ $` 之一 ⇒ `_is_bind_mount` 判否 ⇒ 整個掛載從判定面消失、
+        回報乾淨。⚠️ 前一版只測唯讀方向，分不出差別：`rstrip` 仍會去掉
+        尾引號，所以 option 欄位照樣讀成 `ro`，變異前後都是 `[]`。
+        而引號正是本 repo 主推的寫法（共用範本與 CI/CD 精靈都產出引號版）。
+        """
+        p = self._doc(tmp_path, self._fenced(
+            "docker run --rm",
+            '  -v "$(pwd)/out:/data/output"',
+            "  ghcr.io/vencil/da-tools:v2.9.0 init"))
+        issues = mod.check_writable_mount_has_user([p], tmp_path)
+        assert len(issues) == 1, issues
+        assert issues[0].check == "datools-writable-mount-without-user"
+
+    def test_a_quoted_read_only_spec_is_not_read_as_writable(self, tmp_path):
+        """引號是本 repo 主推的寫法（共用範本與精靈都產出引號版）。
+
+        不先剝引號就讀 option 欄位時，`"…:/conf.d:ro"` 的收尾引號會落進
+        option group，於是唯讀掛載被讀成可寫——對一個已經正確的範例誤紅。
+        """
+        p = self._doc(tmp_path, self._fenced(
+            "docker run --rm",
+            '  -v "$(pwd)/conf.d:/etc/config:ro"',
+            "  ghcr.io/vencil/da-tools:v2.9.0 validate-config"))
+        assert mod.check_writable_mount_has_user([p], tmp_path) == []

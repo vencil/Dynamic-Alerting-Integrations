@@ -746,7 +746,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "ef39b31117f8379310590295e40b7c5b365f4f88ea96be4d49772f4ab991433d",
+ "source_digest": "4ecb17c864bfeef6a75cc12a63d26a4f927ce6b8429aec3281190de77134420b",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1524,6 +1524,9 @@
    "tests/lint/test_check_bilingual_structure.py",
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/ops/test_generate_routes_orchestration.py"
+  ],
+  "docs/internal/archive": [
+   "tests/lint/test_check_doc_datools_cmds.py"
   ],
   "docs/internal/backend-compat-baseline.md": [
    "tests/rulepacks/test_vm_backend_parity.py"

@@ -183,6 +183,20 @@ describe('cicdGenerateGitHubActionsPreview — writable mounts', () => {
     expect(step).toContain('--user $(id -u):$(id -g)');
     expect(step.indexOf('--user')).toBeLessThan(step.indexOf('ghcr.io/vencil/da-tools'));
   });
+
+  it('keeps the tenant config mounted read-only in every step', () => {
+    // The workflow we hand customers should never give a container write
+    // access to their conf.d — these steps only read it. Dropping `:ro`
+    // survived both suites, and it is the kind of edit that looks like
+    // tidying: the command still works, so nothing goes red until something
+    // writes there.
+    const yaml = cicdGenerateGitHubActionsPreview(baseConfig());
+    const mounts = yaml.match(/-v \$\{\{ github\.workspace \}\}\/conf\.d:[^ \\]*/g) ?? [];
+    expect(mounts.length).toBeGreaterThan(0);
+    for (const m of mounts) {
+      expect(m).toMatch(/:ro$/);
+    }
+  });
 });
 
 describe('cicdGenerateFileTree', () => {
