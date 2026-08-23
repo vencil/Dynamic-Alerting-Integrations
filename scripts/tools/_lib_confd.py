@@ -32,6 +32,13 @@ Two things a caller can do — pick deliberately, never by accident:
 `tests/shared/test_confd_enumeration_contract.py` enforces that every tool
 reading a tenant config dir does one or the other — a new tool cannot
 quietly join the silent-zero class.
+
+Alongside those, `unusable_config_paths(dir)` (#1469) answers the question
+`iter_config_files` deliberately does not: what did it DROP that the
+operator will still call configuration — a directory named `beta.yaml`, a
+broken symlink, a file it cannot read. Every reader should name those; the
+selection being shared is what stops two readers reaching two verdicts,
+and this is what stops "shared" from meaning "equally silent".
 """
 
 from __future__ import annotations
@@ -46,6 +53,8 @@ __all__ = [
     "nested_yaml_files",
     "nested_yaml_warning",
     "reset_warned_for_test",
+    "unusable_config_paths",
+    "unusable_reason",
     "warn_nested",
 ]
 
@@ -90,18 +99,224 @@ def iter_config_files(config_dir: str | os.PathLike[str], *, recursive: bool = T
     if not root.is_dir():
         return
     if not recursive:
-        for p in sorted(root.iterdir(), key=lambda q: q.name):
-            if p.is_file() and _is_config(p.name):
+        try:
+            entries = sorted(root.iterdir(), key=lambda q: q.name)
+        except OSError:
+            # ⛔ Do NOT let this escape. Both flat callers (`_grar_parse`,
+            # `diagnose`) iterate this generator without a try, so an
+            # unlistable conf.d root would kill the tool with a traceback
+            # instead of naming the path — the death this module exists to
+            # replace with a sentence. `unusable_config_paths` carries the
+            # signal for exactly this case; see its `_walk_error` note.
+            return
+        for p in entries:
+            if _is_regular_file(p) and _is_config(p.name):
                 yield p
         return
     found = []
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = sorted(d for d in dirnames if not _is_hidden(d))
         for fn in filenames:
-            if _is_config(fn):
+            if _is_config(fn) and _is_regular_file(Path(dirpath) / fn):
                 found.append(Path(dirpath) / fn)
     for p in sorted(found, key=lambda q: q.relative_to(root).as_posix()):
         yield p
+
+
+def _is_regular_file(p: Path) -> bool:
+    """`Path.is_file()` that answers False instead of raising.
+
+    ⛔ THE single predicate BOTH enumerations consult, and that is the
+    point: whatever this returns True for `iter_config_files` hands to the
+    reader, whatever it returns False for `unusable_config_paths` names.
+    One predicate cannot disagree with itself, so the two lists cannot
+    overlap.
+
+    Measured before it was shared (#1469 follow-up): the RECURSIVE branch
+    of `iter_config_files` applied no file check at all while the flat
+    branch did, so a broken symlink came back from BOTH lists under
+    `recursive=True` — `validate-config` reported it twice, once as
+    `OSError: [Errno 40] Too many levels of symbolic links` and once as
+    `is a broken symlink`, and the parametrised disjointness test could not
+    see it because its fixture used an unreadable REGULAR file, for which
+    `is_file()` is True in both branches.
+    """
+    try:
+        return p.is_file()
+    except OSError:
+        return False
+
+
+def unusable_reason(p: Path) -> str:
+    """Why `p` is not usable as a config file — one short clause.
+
+    Split out so the two readers phrase the same finding the same way; a
+    reader that invented its own wording would put a second answer to
+    "what happened to beta.yaml" in front of the operator.
+    """
+    try:
+        if p.is_dir():
+            # A different fact from "you named a directory like a config
+            # file": this one means a whole subtree was NOT scanned, so the
+            # report that follows is INCOMPLETE.
+            #
+            # ⛔ Decided by ATTEMPTING THE SAME OPERATION that failed, not
+            # by asking `os.access`. The first version asked, and it was
+            # wrong twice over: `os.access` ignores the mode bits for uid 0,
+            # so under root this clause was unreachable — and a walk can
+            # fail for reasons permission bits do not model at all (EIO,
+            # ELOOP, a directory deleted mid-scan, a FUSE mount going away).
+            # The two answers could therefore disagree, and the one derived
+            # from the weaker probe is the one the operator would read.
+            # `os.walk` with an `onerror` recorder is the exact mechanism
+            # that put this path in `unusable_config_paths`, stopped after
+            # the first step, so the reason cannot drift from the finding.
+            probe_failed: list[bool] = []
+            for _ in os.walk(p, onerror=lambda _e: probe_failed.append(True)):
+                break
+            if probe_failed:
+                return ("is a directory that could not be read — the config "
+                        "files inside it were NOT scanned")
+            return "is a directory, not a config file"
+        if p.is_symlink() and not p.exists():
+            return "is a broken symlink"
+        if p.exists() and not os.access(p, os.R_OK):
+            return "is not readable (permission denied)"
+    except OSError as e:  # noqa: BLE001 — surfacing the errno IS the answer
+        return f"could not be stat'ed — {e.__class__.__name__}: {e.strerror}"
+    return "is not a readable file"
+
+
+def unusable_config_paths(
+    config_dir: str | os.PathLike[str], *, recursive: bool = True,
+) -> list[Path]:
+    """Paths NAMED like a config file that are not a readable config file.
+
+    (Plus any directory whose contents could not be enumerated — see the
+    ⛔ note below; that one is NOT necessarily config-named, because what
+    it costs the caller is a whole subtree rather than one file.)
+
+    Sibling of `iter_config_files`, and the reason it can stay simple.
+    `iter_config_files` answers "what should I read"; anything it drops
+    disappears without a trace, which is fine for `notes.txt` and wrong
+    for a *directory* called `beta.yaml` (an interrupted `mkdir`, a bad
+    merge, a ConfigMap projected as a dir), a broken symlink, or a file
+    with no read permission. Those look like configuration to the operator
+    who put them there, so silence reads as "your config is fine".
+
+    Measured before this existed (#1469): `_grar_parse._parse_config_files`
+    listed the directory, tried to `open()` it and reported
+    `WARN: skip beta.yaml`, while `check_yaml_syntax` — walking the same
+    tree through `iter_config_files` — never saw it at all. Two readers,
+    two answers. Unifying the *selection* alone would have settled that by
+    making BOTH silent, i.e. one signal fewer than before; this function is
+    the half that keeps the signal, so both readers can name the path.
+
+    `recursive` mirrors `iter_config_files` exactly, so a caller gets the
+    unusable set for the same tree it just read — recursive for
+    `validate-config`, flat for the routing parser (ADR-016 hierarchy is
+    reported separately by `warn_nested`).
+
+    Sorted by POSIX relative path, the same promise `iter_config_files`
+    makes, so a report can interleave the two lists deterministically.
+
+    ⛔ DISJOINT from `iter_config_files`, and enforced by SHARING the
+    predicate rather than by two definitions agreeing: both call
+    `_is_regular_file`, this one on the complement. The two lists are
+    consumed together, so any overlap is reported twice.
+
+    That is not hypothetical, and it was live twice. First an unreadable
+    REGULAR `.yaml` appeared in both, because it is still a file so
+    `iter_config_files` yields it: measured, both lists returned
+    `locked.yaml`. Then — after that was fixed by narrowing THIS function —
+    a broken symlink appeared in both, because the fix was written against
+    `iter_config_files`'s FLAT branch while its RECURSIVE branch had no
+    file check at all: measured, `check_yaml_syntax` reported `ghost.yaml`
+    once as `OSError: [Errno 40] Too many levels of symbolic links` and
+    again as `is a broken symlink`, and `unusable_files` carried it twice
+    so the caveat line said "2 file(s)" for one path. Hence the single
+    shared predicate: two branches cannot drift from one function.
+
+    The complement is the honest division of labour. A path this function
+    is *for* — a config-named directory, a broken symlink, a FIFO — can
+    never be `open()`ed as config, so nothing else will ever speak for it.
+    A regular file that exists but cannot be read WILL be spoken for, by
+    the reader's own `open()` failure, with the real errno attached, which
+    is strictly more informative than a one-clause summary here.
+
+    ⚠️ So an unreadable REGULAR file is deliberately NOT in this list, and
+    an earlier version of this note claimed the opposite ("the permission
+    case is only observable when the process is NOT root"). That was left
+    behind by the narrowing and was simply false afterwards: the permission
+    clause of `unusable_reason` is unreachable from here for regular files
+    at ANY uid, because they never get past `_is_regular_file`. The clause
+    is still live for what this list DOES carry — an unreadable directory.
+
+    ⛔ ALSO RETURNS A DIRECTORY THAT COULD NOT BE TRAVERSED, config-named
+    or not. `os.walk` swallows a scandir failure by default and drops the
+    whole subtree, which cost more than a single file: measured, one
+    chmod-000 sub-directory holding a tenant file made `check_yaml_syntax`
+    answer `pass` / `1 files parsed successfully` / `unusable_files: []`.
+    The flat branch had the mirror-image bug — `root.iterdir()` raised
+    `PermissionError` straight through two callers that do not wrap it.
+
+    ⚠️ Cost: this walks the tree a second time (measured on 1000 tenants /
+    20 sub-dirs: 12.5 ms for `iter_config_files`, 11.7 ms for this — both
+    negligible beside the YAML parsing that follows). An earlier revision
+    of this docstring rejected an alternative design for adding "an
+    `os.access` syscall on every file", which did not square with paying
+    for a whole extra walk here; the real reason to keep the two separate
+    is that they answer different questions, not syscall count.
+    """
+    root = Path(config_dir)
+    if not root.is_dir():
+        return []
+
+    found: list[Path] = []
+    if not recursive:
+        try:
+            entries = sorted(root.iterdir(), key=lambda q: q.name)
+        except OSError:
+            # The root itself cannot be listed (`chmod 111`: traversable,
+            # not readable). ⛔ Two wrong answers were both live here:
+            # raising killed `_grar_parse` / `diagnose`, which call this
+            # OUTSIDE any try, and returning [] was a green light for a
+            # directory nothing ever read. Name the root instead.
+            return [root]
+        for p in entries:
+            if _is_config(p.name) and not _is_regular_file(p):
+                found.append(p)
+        return found
+
+    unscannable: list[Path] = []
+
+    def _walk_error(err: OSError) -> None:
+        # ⛔ `os.walk` defaults to onerror=None, which SWALLOWS a scandir
+        # failure: an unreadable sub-directory drops out of the walk with
+        # its whole subtree and no signal at all. Measured before this
+        # callback existed — a conf.d with one chmod-000 sub-directory
+        # holding a tenant file made `check_yaml_syntax` report
+        # `status: pass` / `1 files parsed successfully` /
+        # `unusable_files: []`. That is the #1339 shape ("a green light for
+        # a directory it never read") one level further down, inside the
+        # very list that exists to make such things audible.
+        if err.filename is not None:
+            unscannable.append(Path(err.filename))
+
+    for dirpath, dirnames, filenames in os.walk(root, onerror=_walk_error):
+        dirnames[:] = sorted(d for d in dirnames if not _is_hidden(d))
+        # Directories first: a config-named DIRECTORY is the case that made
+        # this function necessary, and `os.walk` never puts it in filenames.
+        for name in list(dirnames) + list(filenames):
+            p = Path(dirpath) / name
+            if _is_config(name) and not _is_regular_file(p):
+                found.append(p)
+    # An unscannable directory is reported even when it is NOT config-named:
+    # what it costs the caller is not one file but everything underneath it.
+    found.extend(d for d in unscannable if d not in found)
+    found.sort(key=lambda q: q.relative_to(root).as_posix()
+               if q != root else "")
+    return found
 
 
 def nested_yaml_files(config_dir: str | os.PathLike[str]) -> list[Path]:

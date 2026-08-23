@@ -254,11 +254,38 @@ class TestPolicyErrorPrefixPin:
                 f"{mod} 出現 ERROR: 字面值——會汙染 --strict 的 blocking 判定"
 
     def test_parse_error_literal_only_fatal_print(self):
-        """_grar_parse 的 'ERROR:' 字面值只允許 fatal print+exit 那一處。"""
-        lines = [line for line in self._src("_grar_parse.py").splitlines()
-                 if "ERROR:" in line and "POLICY_ERROR_PREFIX" not in line]
-        assert len(lines) == 1 and "config directory not found" in lines[0], \
-            f"非預期的 ERROR: 字面值: {lines}"
+        """_grar_parse 的 'ERROR:' 字面值只允許出現在 fatal print+exit。
+
+        ⛔ 這條原本斷言的是「恰好一處，而且是 config directory not found」。
+        那把**性質**（bare `ERROR:` 只能是致命出口）寫成了**計數**，於是新增
+        第二個同類別的致命出口就會誤紅——本輪確實發生了：一棵整個 root 不可
+        列舉的 conf.d 現在會 `print("ERROR: config directory could not be
+        read: ...")` 然後 `sys.exit(EXIT_CALLER_ERROR)`，與既有那一處是同一
+        個形狀、同一個理由。
+
+        ⚠️ 放寬成「幾個都可以」會把這道守衛拆掉——它存在的理由是 bare
+        `ERROR:` 會污染 `--strict` 的 blocking 判定（`_grar_validate` 用
+        `POLICY_ERROR_PREFIX` 掃 warning stream）。所以改為斷言那個**性質**：
+        每一個 bare `ERROR:` 字面值後面幾行之內必須有 `sys.exit(`。走 warning
+        stream 的那些一定沒有，會被抓到。
+        """
+        src_lines = self._src("_grar_parse.py").splitlines()
+        offenders = []
+        for i, line in enumerate(src_lines):
+            if "ERROR:" not in line or "POLICY_ERROR_PREFIX" in line:
+                continue
+            # 一個 print(...) 可以跨數行；往後看一小段足以涵蓋它與緊接的 exit。
+            window = "\n".join(src_lines[i:i + 8])
+            if "sys.exit(" not in window:
+                offenders.append(f"{i + 1}: {line.strip()}")
+        assert not offenders, (
+            "bare 'ERROR:' 字面值必須是 fatal print+exit；下列這些不是，"
+            "它們會流進 --strict 的 warning stream 並污染 blocking 判定: "
+            f"{offenders}")
+        # 非空性：這道守衛不能因為「一個 ERROR: 都沒有」而空過。
+        bare = [ln for ln in src_lines
+                if "ERROR:" in ln and "POLICY_ERROR_PREFIX" not in ln]
+        assert bare, "沒有任何 bare 'ERROR:' 可查——這條守衛會 vacuously pass"
 
     def test_validate_error_literal_only_constant_definition(self):
         lines = [line for line in self._src("_grar_validate.py").splitlines()
