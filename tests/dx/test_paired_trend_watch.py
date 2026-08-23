@@ -1605,3 +1605,65 @@ def test_integer_run_ids_keep_numeric_order_not_string_order():
     nights = [ptw.Night("2026-08-20", 9), ptw.Night("2026-08-20", 10)]
     assert [n.run_id for n in sorted(nights, key=ptw._ordering_key)] == [9, 10]
 
+
+# ── 10. CLI RULE-PARAMETER VALIDATION (CodeRabbit, PR #1536) ──────────────
+
+def _cli(*extra):
+    return subprocess.run(
+        [sys.executable, str(_TOOLS_DIR / "paired_trend_watch.py"),
+         "--dataset", str(DATASET), *extra],
+        capture_output=True, text=True, encoding="utf-8", timeout=120)
+
+
+@pytest.mark.parametrize("flag,value", [
+    ("--threshold-pct", "nan"),
+    ("--threshold-pct", "inf"),
+    ("--canary-gate-pct", "nan"),
+    ("--canary-gate-pct", "-1"),
+    ("--limit", "0"),
+    ("--limit", "-5"),
+    ("--consecutive", "0"),
+])
+def test_unusable_rule_parameters_are_rejected_at_the_boundary(flag, value):
+    """⛔ A rule that cannot fire must not render a verdict.
+
+    Reported by CodeRabbit for `--threshold-pct` / `--canary-gate-pct`, and the
+    enumeration that followed found two more it had not named. Measured before
+    the fix, on the frozen six-night series which DOES contain a fire at 5%:
+
+        --threshold-pct nan     → **CLEAR**       (every `>` comparison False)
+        --threshold-pct inf     → **CLEAR**       (nothing can exceed infinity)
+        --canary-gate-pct nan   → **FINDINGS**    (gate silently disabled —
+                                                   `abs(dev) > nan` is False,
+                                                   so no night is rejected)
+        --canary-gate-pct -1    → **INCONCLUSIVE**(every night rejected)
+        --limit 0 / -5          → accepted outright
+
+    Only `-inf` was already refused, and only because argparse cannot parse it.
+    """
+    proc = _cli(flag, value)
+    assert proc.returncode == 2
+    assert flag in proc.stderr
+    assert "**CLEAR**" not in proc.stdout
+
+
+def test_a_negative_threshold_is_deliberately_still_allowed():
+    """⚠️ The counterpart: the rejection must not over-reach.
+
+    A negative threshold is NOISY, not silent — it fires on nearly everything,
+    which is a legitimate way to ask "what would a rule this loose have said".
+    What the guards above reject is the parameter that produces a confident,
+    EMPTY answer.
+    """
+    proc = _cli("--threshold-pct", "-3")
+    assert proc.returncode == ptw.EXIT_OK
+    assert "**FINDINGS**" in proc.stdout
+
+
+def test_the_pinned_defaults_still_produce_the_anchor_verdict():
+    """Positive control for the whole validation block."""
+    proc = _cli()
+    assert proc.returncode == ptw.EXIT_OK
+    assert "**FINDINGS**" in proc.stdout
+    assert "`MergePartialConfigs_1000`@08-17" in proc.stdout
+

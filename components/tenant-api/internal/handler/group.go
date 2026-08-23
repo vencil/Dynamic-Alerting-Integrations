@@ -2,10 +2,14 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"gopkg.in/yaml.v3"
+
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/tenantorg"
@@ -221,28 +225,31 @@ func PutGroup(d *Deps) http.HandlerFunc {
 			return
 		}
 
-		// Update the in-memory config and write to disk
-		cfg := d.Groups.Get()
-		newCfg := &groups.GroupsConfig{
-			Groups: make(map[string]groups.Group, len(cfg.Groups)+1),
-		}
-		for k, v := range cfg.Groups {
-			newCfg.Groups[k] = v
-		}
-		newCfg.Groups[groupID] = groups.Group{
-			Label:       req.Label,
-			Description: req.Description,
-			Filters:     req.Filters,
-			Members:     req.Members,
-		}
-
-		yamlBytes, err := groups.MarshalConfig(newCfg)
-		if err != nil {
-			WriteJSONError(w, r, http.StatusInternalServerError, "marshal groups: "+err.Error())
-			return
-		}
-
-		if err := d.Writer.WriteGroupsFile(r.Context(), email, string(yamlBytes)); err != nil {
+		// Rebuild the whole file from the copy ON DISK, under the writer lock
+		// (MutateConfigFile). _groups.yaml is a single shared object, so this
+		// write necessarily rewrites every OTHER group too — computing it from
+		// the in-memory snapshot silently reverts anything the snapshot has not
+		// seen. That is not hypothetical: the snapshot only refreshes on the
+		// Reload below, which a failed write never reaches, while
+		// commitFileChange has already written the file; the next edit to any
+		// other group then deletes the one that "failed". Two concurrent edits
+		// to different groups lose one the same way. Reading the base inside
+		// the lock removes both — the same fix WriteMerged made for the tenant
+		// batch path (#1097).
+		if err := d.Writer.MutateConfigFile(r.Context(), "_groups.yaml", "groups", email,
+			func(current []byte) ([]byte, error) {
+				cfg, perr := parseGroupsFile(current)
+				if perr != nil {
+					return nil, perr
+				}
+				cfg.Groups[groupID] = groups.Group{
+					Label:       req.Label,
+					Description: req.Description,
+					Filters:     req.Filters,
+					Members:     req.Members,
+				}
+				return groups.MarshalConfig(cfg)
+			}); err != nil {
 			writeConfigFileError(w, r, err)
 			return
 		}
@@ -297,29 +304,68 @@ func DeleteGroup(d *Deps) http.HandlerFunc {
 		// group whose members they don't own — a denial-of-
 		// service surface against teams who depend on dashboards
 		// keyed off that group.
+		//
+		// This one runs on the snapshot. It exists to turn away an
+		// obviously-forbidden caller before they consume a write admission
+		// slot, and the identical call inside the transform below is what
+		// makes ALLOWING correct — a snapshot that has gone stale can no
+		// longer let a forbidden delete through.
+		//
+		// ⚠️ It is NOT merely an optimisation: on the DENY side it is final,
+		// because this branch returns and the in-lock check never runs. A
+		// snapshot that is stale in the other direction (the file has since
+		// lost the member the caller cannot write — an admin edited it directly, or
+		// a write landed on disk whose commit failed and so never reached
+		// Reload) therefore 403s a caller who is in fact entitled to delete.
+		// groupMgr has no WatchLoop, so that refusal persists until some other
+		// write succeeds. Closing the fail-closed half means dropping this
+		// pre-check entirely and paying an admission slot per forbidden call;
+		// that trade is deliberately not made here — it is recorded so the
+		// next reader does not mistake the current shape for full coverage.
 		if forbidden := tenantsLackingPermission(d.RBAC, d.TenantOrg, p, existing.Members, rbac.PermWrite); len(forbidden) > 0 {
-			WriteJSONError(w, r, http.StatusForbidden,
-				"insufficient permission to delete group with forbidden member tenants: "+
-					strings.Join(forbidden, ", "))
+			writeGroupMemberForbidden(w, r, "delete", forbidden)
 			return
 		}
 
-		newCfg := &groups.GroupsConfig{
-			Groups: make(map[string]groups.Group, len(cfg.Groups)),
-		}
-		for k, v := range cfg.Groups {
-			if k != groupID {
-				newCfg.Groups[k] = v
+		// Same in-lock rebuild as PutGroup — see the comment there for why the
+		// on-disk copy, not the snapshot, has to be the base. A target that is
+		// already absent from the file returns nil (no-op success): the 404
+		// above answered "does it exist" from the snapshot, and re-answering it
+		// here would turn a concurrent delete of the same group into an error
+		// for the caller who lost the race, on a request whose desired end
+		// state was reached anyway.
+		//
+		// The member gate is re-evaluated HERE, against the group as it exists
+		// on disk, because this is a DELETE: the object being destroyed is the
+		// stored one, not one the request supplies. Checking the snapshot alone
+		// would authorize against a member list that no longer describes what
+		// gets removed — and the snapshot can stay wrong indefinitely, since
+		// groupMgr has no WatchLoop and only refreshes on a successful write's
+		// Reload below. Under org-scoped RBAC (ADR-027) that gap is a real
+		// authorization bypass: the route gate only proves platform-wide write,
+		// while OrgAllowed can still deny individual member tenants.
+		var forbiddenOnDisk []string
+		if err := d.Writer.MutateConfigFile(r.Context(), "_groups.yaml", "groups", email,
+			func(current []byte) ([]byte, error) {
+				cfg, perr := parseGroupsFile(current)
+				if perr != nil {
+					return nil, perr
+				}
+				stored, present := cfg.Groups[groupID]
+				if !present {
+					return nil, nil
+				}
+				if f := tenantsLackingPermission(d.RBAC, d.TenantOrg, p, stored.Members, rbac.PermWrite); len(f) > 0 {
+					forbiddenOnDisk = f
+					return nil, errGroupMemberForbidden
+				}
+				delete(cfg.Groups, groupID)
+				return groups.MarshalConfig(cfg)
+			}); err != nil {
+			if errors.Is(err, errGroupMemberForbidden) {
+				writeGroupMemberForbidden(w, r, "delete", forbiddenOnDisk)
+				return
 			}
-		}
-
-		yamlBytes, err := groups.MarshalConfig(newCfg)
-		if err != nil {
-			WriteJSONError(w, r, http.StatusInternalServerError, "marshal groups: "+err.Error())
-			return
-		}
-
-		if err := d.Writer.WriteGroupsFile(r.Context(), email, string(yamlBytes)); err != nil {
 			writeConfigFileError(w, r, err)
 			return
 		}
@@ -336,4 +382,70 @@ func DeleteGroup(d *Deps) http.HandlerFunc {
 // GroupIDFromPath extracts the group ID from the URL for RBAC middleware.
 var GroupIDFromPath = func(r *http.Request) string {
 	return chi.URLParam(r, "id")
+}
+
+// parseGroupsFile decodes _groups.yaml bytes as read under the writer lock.
+// A missing file (current == nil, the first-ever write) starts from an empty
+// config; an existing but unparseable file is an ERROR, never an empty start —
+// silently treating a malformed file as "no groups" would let one bad edit wipe
+// every group on the next unrelated write.
+//
+// "Unparseable" has to mean more than "yaml.Unmarshal returned an error".
+// yaml.v3 is not strict by default, so a document that is valid YAML but the
+// wrong SHAPE — a typo'd top-level key, someone's ConfigMap wrapper, another
+// file entirely — decodes cleanly into a zero GroupsConfig. That is
+// indistinguishable from "no groups" to the code above, and rebuilding the
+// file from it is precisely the one-bad-edit wipe this function exists to
+// refuse. So the top-level key has to be probed for PRESENCE, not read for its
+// value. An explicit `groups:` with a null or empty value stays legal: the
+// shape is recognised and the file is genuinely declaring zero groups.
+func parseGroupsFile(current []byte) (*groups.GroupsConfig, error) {
+	if len(current) == 0 {
+		return &groups.GroupsConfig{Groups: make(map[string]groups.Group)}, nil
+	}
+	if err := requireTopLevelKey(current, "groups"); err != nil {
+		return nil, fmt.Errorf("read current _groups.yaml: %w", err)
+	}
+	cfg, err := groups.ParseConfig(current)
+	if err != nil {
+		return nil, fmt.Errorf("read current _groups.yaml: %w", err)
+	}
+	if cfg.Groups == nil {
+		cfg.Groups = make(map[string]groups.Group)
+	}
+	return cfg, nil
+}
+
+// requireTopLevelKey fails unless data is a YAML mapping carrying key at its
+// top level. Shared by parseGroupsFile / parseViewsFile: both rebuild a whole
+// shared config file from what they read, so both need the shape of what they
+// read to be the shape they think it is.
+func requireTopLevelKey(data []byte, key string) error {
+	var doc map[string]yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return err
+	}
+	if _, present := doc[key]; !present {
+		return fmt.Errorf("no top-level %q key — refusing to rebuild the file from a document "+
+			"whose shape is not recognised (a wipe of every existing entry would look identical "+
+			"to a legitimate write)", key)
+	}
+	return nil
+}
+
+// errGroupMemberForbidden is returned by DeleteGroup's transform when the
+// group AS STORED has member tenants the caller may not write. MutateConfigFile
+// returns a transform error unchanged, so it arrives here as-is, and is matched with
+// errors.Is so the handler can answer 403 instead of the generic 500 a
+// transform failure would otherwise produce. The offending ids ride alongside
+// in a captured variable rather than in the error, because the transform runs
+// under the writer lock and the handler renders the response after it returns.
+var errGroupMemberForbidden = errors.New("group has member tenants the caller may not write")
+
+// writeGroupMemberForbidden renders the 403 for both the pre-check and the
+// in-lock check, so a caller cannot tell which of the two rejected them.
+func writeGroupMemberForbidden(w http.ResponseWriter, r *http.Request, verb string, forbidden []string) {
+	WriteJSONError(w, r, http.StatusForbidden,
+		"insufficient permission to "+verb+" group with forbidden member tenants: "+
+			strings.Join(forbidden, ", "))
 }

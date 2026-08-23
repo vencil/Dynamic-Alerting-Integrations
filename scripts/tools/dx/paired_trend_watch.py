@@ -1384,8 +1384,39 @@ def main(argv=None):
                              "(defaults to $GITHUB_STEP_SUMMARY when set)")
     args = parser.parse_args(argv)
 
+    # ⛔ EVERY numeric rule parameter, not just the one that was already
+    # checked. `--consecutive` was validated and the two float knobs were not,
+    # and review measured the asymmetry: `--threshold-pct nan` makes every
+    # `value > threshold_pct` comparison False, so each night reads as decidable
+    # and under threshold and the page renders `**CLEAR**` — on the frozen
+    # six-night series that DOES contain a fire at 5%. A rendered all-clear for
+    # a threshold nobody can meet is precisely the conflation this module exists
+    # to refuse, arriving through the CLI instead of through the data.
+    #
+    # ⛔ Enumerated rather than reasoned about, which is how the extra two were
+    # found: `--canary-gate-pct nan` silently DISABLES the gate (`abs(dev) > nan`
+    # is False, so no night is ever rejected → FINDINGS on a series whose gate
+    # was never applied), and `--limit 0` / `-5` were accepted outright. Only
+    # `-inf` was already rejected, and only because argparse cannot parse it.
     if args.consecutive < 1:
         parser.error("--consecutive must be at least 1")
+    if args.limit < 1:
+        parser.error("--limit must be at least 1 — a window of zero nights "
+                     "judges nothing, and 'judged nothing' must not be reported "
+                     "as a verdict")
+    if not math.isfinite(args.threshold_pct):
+        parser.error("--threshold-pct must be finite — NaN compares False "
+                     "against every reading and infinity can never be exceeded, "
+                     "so both render as CLEAR for a rule that cannot fire")
+    if not math.isfinite(args.canary_gate_pct) or args.canary_gate_pct < 0:
+        parser.error("--canary-gate-pct must be finite and non-negative — NaN "
+                     "silently disables the gate (nothing is ever rejected) and "
+                     "a negative gate rejects every night (nothing is ever "
+                     "judged); both are the detector blanked, not tightened")
+    # ⚠️ A NEGATIVE `--threshold-pct` is deliberately allowed. It is noisy, not
+    # silent — it fires on almost everything — and it is a legitimate way to ask
+    # "what would a rule this loose have said". The parameters rejected above
+    # are the ones that produce a CONFIDENT, EMPTY answer.
 
     try:
         if args.dataset:

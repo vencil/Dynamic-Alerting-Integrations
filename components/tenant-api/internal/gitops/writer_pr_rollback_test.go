@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -194,4 +195,44 @@ func TestWritePRBatch_DeletesLocalBranchAfterConfirmedPush(t *testing.T) {
 	}
 	// …remote branch present (the PR needs it) — gitOut aborts the test on miss.
 	gitOut(t, dir, "rev-parse", "--verify", fmt.Sprintf("refs/remotes/origin/%s", res.BranchName))
+}
+
+// TestWritePR_NoOpBodyReturnsNoChanges: the body is byte-identical to what the
+// base branch already holds, so `git add` stages nothing and the feature branch
+// would carry no commits. Pushing that branch and asking the forge to open a
+// change-free PR/MR is a 422 plus a leaked branch, so WritePR must roll the
+// branch back and report ErrNoChanges — the same clean outcome WritePRBatch
+// already returns for an all-no-op batch (#1102).
+func TestWritePR_NoOpBodyReturnsNoChanges(t *testing.T) {
+	repo := initRepoOnMain(t)
+	w := NewWriter(repo, repo)
+
+	// The body carries a deprecated key spelling AND is byte-identical to the
+	// base. The two are orthogonal — validate() runs before anything is staged —
+	// so the no-op path is exactly where a dropped notice would go unnoticed.
+	// Asserting only `res != nil` would stay green with the notices thrown away.
+	const deprecatedBody = "tenants:\n  db-a:\n    mysql_cpu: \"70\"\n"
+
+	// Land the content on the base branch first. The defaults carry the NEW
+	// spelling, which is what makes the old one a deprecation rather than an
+	// unknown key.
+	if err := os.WriteFile(filepath.Join(repo, "_defaults.yaml"),
+		[]byte("defaults:\n  mysql_threads_running: 90\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "db-a.yaml"), []byte(deprecatedBody), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repo, "add", ".")
+	gitRun(t, repo, "commit", "-m", "base content")
+
+	res, err := w.WritePR(context.Background(), "db-a", "alice@example.com", deprecatedBody)
+	if !errors.Is(err, ErrNoChanges) {
+		t.Fatalf("err = %v, want ErrNoChanges for a body matching the base", err)
+	}
+	if res == nil {
+		t.Fatal("result is nil; ErrNoChanges must still carry the notices channel")
+	}
+	assertDeprecationNotice(t, res.Notices)
+	assertCleanOnBase(t, repo, "main", "tenant-api/")
 }

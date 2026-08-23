@@ -108,9 +108,21 @@ func (w *Writer) WritePR(ctx context.Context, tenantID, authorEmail, yamlContent
 	}
 
 	// Step 5: commit on feature branch
-	if err := w.gitCommit(filePath, tenantID, authorEmail); err != nil {
+	committed, err := w.gitCommit(filePath, tenantID, authorEmail)
+	if err != nil {
 		w.abortFeatureBranch(base, branchName)
 		return nil, fmt.Errorf("git commit on branch: %w", err)
+	}
+	// Nothing was staged — the body is byte-identical to the branch base, so
+	// this branch would carry no commits. Pushing it and asking the forge to
+	// open a change-free PR/MR is a 422 plus a leaked branch, so roll back and
+	// signal the same clean "no changes" outcome WritePRBatch already returns
+	// for an all-no-op batch (#1102). The notices ride along for the same
+	// reason they do there: an idempotent retry of a body carrying a deprecated
+	// spelling must keep its migration signal.
+	if !committed {
+		w.abortFeatureBranch(base, branchName)
+		return &PRWriteResult{Notices: notices}, ErrNoChanges
 	}
 
 	// Step 6: push branch to origin
@@ -245,11 +257,17 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 			w.abortFeatureBranch(base, branchName)
 			return nil, fmt.Errorf("write file for %s: %w", op.TenantID, err)
 		}
-		if err := w.gitCommit(filePath, op.TenantID, authorEmail); err != nil {
+		committed, err := w.gitCommit(filePath, op.TenantID, authorEmail)
+		if err != nil {
 			w.abortFeatureBranch(base, branchName)
 			return nil, fmt.Errorf("commit for %s: %w", op.TenantID, err)
 		}
-		changed = true
+		// Track the commit that actually happened, not the attempt: content
+		// can differ from the dirty working tree yet equal HEAD, in which case
+		// nothing is staged and the branch gains no commit. Marking `changed`
+		// there would push a commit-free branch and ask the forge to open a
+		// change-free PR/MR (the 422 the block below exists to avoid).
+		changed = changed || committed
 	}
 
 	// Every op was a no-op → the branch has no commits beyond base. Don't push an
