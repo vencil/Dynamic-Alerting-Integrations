@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -301,10 +302,13 @@ func DeleteGroup(d *Deps) http.HandlerFunc {
 		// group whose members they don't own — a denial-of-
 		// service surface against teams who depend on dashboards
 		// keyed off that group.
+		//
+		// This one runs on the snapshot and is only the CHEAP pre-rejection:
+		// it turns away an obviously-forbidden caller before they consume a
+		// write admission slot. The authoritative check is the identical call
+		// inside the transform below.
 		if forbidden := tenantsLackingPermission(d.RBAC, d.TenantOrg, p, existing.Members, rbac.PermWrite); len(forbidden) > 0 {
-			WriteJSONError(w, r, http.StatusForbidden,
-				"insufficient permission to delete group with forbidden member tenants: "+
-					strings.Join(forbidden, ", "))
+			writeGroupMemberForbidden(w, r, "delete", forbidden)
 			return
 		}
 
@@ -315,18 +319,38 @@ func DeleteGroup(d *Deps) http.HandlerFunc {
 		// here would turn a concurrent delete of the same group into an error
 		// for the caller who lost the race, on a request whose desired end
 		// state was reached anyway.
+		//
+		// The member gate is re-evaluated HERE, against the group as it exists
+		// on disk, because this is a DELETE: the object being destroyed is the
+		// stored one, not one the request supplies. Checking the snapshot alone
+		// would authorize against a member list that no longer describes what
+		// gets removed — and the snapshot can stay wrong indefinitely, since
+		// groupMgr has no WatchLoop and only refreshes on a successful write's
+		// Reload below. Under org-scoped RBAC (ADR-027) that gap is a real
+		// authorization bypass: the route gate only proves platform-wide write,
+		// while OrgAllowed can still deny individual member tenants.
+		var forbiddenOnDisk []string
 		if err := d.Writer.MutateConfigFile(r.Context(), "_groups.yaml", "groups", email,
 			func(current []byte) ([]byte, error) {
 				cfg, perr := parseGroupsFile(current)
 				if perr != nil {
 					return nil, perr
 				}
-				if _, present := cfg.Groups[groupID]; !present {
+				stored, present := cfg.Groups[groupID]
+				if !present {
 					return nil, nil
+				}
+				if f := tenantsLackingPermission(d.RBAC, d.TenantOrg, p, stored.Members, rbac.PermWrite); len(f) > 0 {
+					forbiddenOnDisk = f
+					return nil, errGroupMemberForbidden
 				}
 				delete(cfg.Groups, groupID)
 				return groups.MarshalConfig(cfg)
 			}); err != nil {
+			if errors.Is(err, errGroupMemberForbidden) {
+				writeGroupMemberForbidden(w, r, "delete", forbiddenOnDisk)
+				return
+			}
 			writeConfigFileError(w, r, err)
 			return
 		}
@@ -362,4 +386,21 @@ func parseGroupsFile(current []byte) (*groups.GroupsConfig, error) {
 		cfg.Groups = make(map[string]groups.Group)
 	}
 	return cfg, nil
+}
+
+// errGroupMemberForbidden is returned by DeleteGroup's transform when the
+// group AS STORED has member tenants the caller may not write. It travels out
+// through MutateConfigFile (which wraps transform errors) and is matched with
+// errors.Is so the handler can answer 403 instead of the generic 500 a
+// transform failure would otherwise produce. The offending ids ride alongside
+// in a captured variable rather than in the error, because the transform runs
+// under the writer lock and the handler renders the response after it returns.
+var errGroupMemberForbidden = errors.New("group has member tenants the caller may not write")
+
+// writeGroupMemberForbidden renders the 403 for both the pre-check and the
+// in-lock check, so a caller cannot tell which of the two rejected them.
+func writeGroupMemberForbidden(w http.ResponseWriter, r *http.Request, verb string, forbidden []string) {
+	WriteJSONError(w, r, http.StatusForbidden,
+		"insufficient permission to "+verb+" group with forbidden member tenants: "+
+			strings.Join(forbidden, ", "))
 }
