@@ -366,28 +366,6 @@ def test_is_readable_file_survives_a_stat_failure(
     assert unusable_config_paths(tmp_path, recursive=False) == [target]
 
 
-@pytest.mark.skipif(
-    hasattr(os, "geteuid") and os.geteuid() == 0,
-    reason="root bypasses the read permission bit, so os.access always returns True",
-)
-def test_unusable_reason_names_permission_denied(tmp_path: pathlib.Path):
-    """⚠️ Skipped when running as root — and this test exists partly to make
-    that skip VISIBLE. The container this suite is usually developed in runs
-    as uid 0, where the clause is unreachable; CI runners do not, so the
-    branch is exercised there rather than silently never."""
-    locked = tmp_path / "locked.yaml"
-    locked.write_text("a: 1\n", encoding="utf-8")
-    locked.chmod(0o000)
-    try:
-        assert unusable_reason(locked) == "is not readable (permission denied)"
-        assert locked in unusable_config_paths(tmp_path, recursive=False)
-    finally:
-        locked.chmod(0o600)
-
-
-# ── the two enumerations must not overlap ────────────────────────────────
-
-
 def _deny_read(monkeypatch: pytest.MonkeyPatch, target: pathlib.Path) -> None:
     """Make one path unreadable without needing non-root.
 
@@ -404,6 +382,60 @@ def _deny_read(monkeypatch: pytest.MonkeyPatch, target: pathlib.Path) -> None:
         return real(path, mode, **kw)
 
     monkeypatch.setattr(os, "access", fake)
+
+
+def test_unusable_reason_names_permission_denied(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+):
+    """The permission clause, exercised on EVERY runner including root.
+
+    ⛔ This test used to exist only in the `chmod 000` form below, which is
+    skipped under uid 0 — and that skip hid a contradiction between two
+    tests in this file for two commits: one asserted an unreadable regular
+    file IS in `unusable_config_paths`, the other (correctly) that it is
+    not. Only the non-root CI runner ran both, so CI found it and the
+    development container never could. A skip makes "untestable here"
+    visible; it does not make it tested. Hence this monkeypatched twin.
+    """
+    locked = tmp_path / "locked.yaml"
+    locked.write_text("a: 1\n", encoding="utf-8")
+    _deny_read(monkeypatch, locked)
+    assert unusable_reason(locked) == "is not readable (permission denied)"
+
+
+@pytest.mark.skipif(
+    hasattr(os, "geteuid") and os.geteuid() == 0,
+    reason="root bypasses the read permission bit, so os.access always returns True",
+)
+def test_unusable_reason_names_permission_denied_for_real(tmp_path: pathlib.Path):
+    """Same clause via a real `chmod 000`, so the monkeypatched twin above
+    is pinned against the genuine syscall on runners that can observe it.
+
+    ⚠️ Skipped when running as root — and this test exists partly to make
+    that skip VISIBLE. The container this suite is usually developed in runs
+    as uid 0, where the clause is unreachable; CI runners do not, so the
+    branch is exercised there rather than silently never.
+    """
+    locked = tmp_path / "locked.yaml"
+    locked.write_text("a: 1\n", encoding="utf-8")
+    locked.chmod(0o000)
+    try:
+        assert unusable_reason(locked) == "is not readable (permission denied)"
+        # ⛔ NOT in `unusable_config_paths`, and that is the contract rather
+        # than an omission: an unreadable REGULAR file is still a file, so
+        # `iter_config_files` hands it to the reader and the reader's own
+        # `open()` names it — with the real errno. Listing it here as well
+        # would report it twice; see `test_the_two_enumerations_are_disjoint`,
+        # which pins the same partition through the monkeypatched route.
+        names = {q.name for q in unusable_config_paths(tmp_path, recursive=False)}
+        assert "locked.yaml" not in names
+        assert "locked.yaml" in {
+            q.name for q in iter_config_files(tmp_path, recursive=False)}
+    finally:
+        locked.chmod(0o600)
+
+
+# ── the two enumerations must not overlap ────────────────────────────────
 
 
 @pytest.mark.parametrize("recursive", [False, True])
