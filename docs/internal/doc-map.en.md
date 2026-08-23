@@ -44,7 +44,7 @@ lang: en
 | `docs/adr/031-slo-burn-rate-recipe.md` | Platform Engineers, SREs, domain-experts | ADR-031: slo_burn_rate recipe — 宣告式 SLO 告警編譯 |
 | `docs/adr/032-paired-interleaved-bench-measurement.md` | Platform Engineers, contributors | ADR-032: 夜跑效能監測改用成對交錯量測，取代跨夜滑動錨點 |
 | `docs/adr/033-ops-execution-plane-interface.md` | Platform Engineers, SREs | ADR-033: 與運維執行平面的協同介面 — MariaDB 計畫性作業 |
-| `docs/adr/034-declaration-reality-divergence.md` | Platform Engineers, SREs, contributors | ADR-034: 宣告與現實不一致時的預設行為 — fail-loud 為預設，fail-soft 需列舉 |
+| `docs/adr/034-declaration-reality-divergence.md` | Platform Engineers, SREs, contributors | ADR-034: 決定「檢查跑不跑」的設定值，必須驗證 |
 | `docs/alerting-best-practices.md` (.en.md) | SREs, Platform Engineers | Beyond Actionable: From Alert Decisions to the Idempotency Spectrum of Automated Actions |
 | `docs/alerting-design-fundamentals.md` (.en.md) | SREs, Domain Experts (DBA), Tenants | Before the Alert Fires: From Resource Saturation to Symptom-Based Alerting |
 | `docs/alerting-slo-error-budget.md` (.en.md) | SREs, Domain Experts (DBA), Tenants | How Strict Is Strict Enough: Setting Alert Thresholds with SLOs and Error Budgets |

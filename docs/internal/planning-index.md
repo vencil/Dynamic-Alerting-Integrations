@@ -68,7 +68,7 @@ lang: zh
 |----|------|-------|--------|------|--------|
 | `ADR-026` | adr | ADR-026: Node/Cluster 維護告警抑制 — 不需要子系統 | k8s | — | [docs/adr/026-node-maintenance-liveness-suppression.md](../adr/026-node-maintenance-liveness-suppression.md) |
 | `ADR-033` | adr | ADR-033: 與運維執行平面的協同介面 — MariaDB 計畫性作業 | integration | — | [docs/adr/033-ops-execution-plane-interface.md](../adr/033-ops-execution-plane-interface.md) |
-| `ADR-034` | adr | ADR-034: 宣告與現實不一致時的預設行為 — fail-loud 為預設，fail-soft 需列舉 | platform | — | [docs/adr/034-declaration-reality-divergence.md](../adr/034-declaration-reality-divergence.md) |
+| `ADR-034` | adr | ADR-034: 決定「檢查跑不跑」的設定值，必須驗證 | platform | — | [docs/adr/034-declaration-reality-divergence.md](../adr/034-declaration-reality-divergence.md) |
 | `TRK-001` | dx | TRK-001: `check_noqa_hygiene.py` — noqa/nosec 必要性驗證 | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 | `TRK-002` | dx | TRK-002: `make test-impact` — 變更影響測試自動縮減 | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 | `TRK-003` | dx | TRK-003: Pre-commit hook CI gate | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |

@@ -1,5 +1,5 @@
 ---
-title: "ADR-034: 宣告與現實不一致時的預設行為 — fail-loud 為預設，fail-soft 需列舉"
+title: "ADR-034: 決定「檢查跑不跑」的設定值，必須驗證"
 tags: [adr, config, security, dx, reliability]
 audience: [platform-engineers, sre, contributors]
 version: v2.9.0
@@ -12,164 +12,175 @@ created_at: 2026-08-23
 updated_at: 2026-08-23
 ---
 
-# ADR-034: 宣告與現實不一致時的預設行為
+# ADR-034: 決定「檢查跑不跑」的設定值，必須驗證
 
 ## 狀態
 
-🟡 **Proposed**（2026-08-23）。owner 核可後昇格 Accepted。
+🟡 **Proposed**（2026-08-23）。owner 核可後昇格 Accepted；在那之前這條規則不對任何人生效。
 
 > 依語言政策（自 ADR-019 起預設 ZH-only；ADR-024 / ADR-025 為保留 `.en.md` sibling 的例外），本 ADR 不另製 `.en.md`。
 
-## TL;DR
+## 摘要
 
-- **一句話**：DAI 有多處在「**宣告**與**現實**不一致」時，選擇相信宣告、且不驗證——結果不是明顯壞掉，而是**看起來正常地做錯事**。
-- **本 ADR 決定一條原則加它的例外清單**，不決定個別缺陷的修法（那些各自開票）。
-- **原則**：宣告與現實不一致時，預設 **fail-loud**。fail-soft 只在明確列舉的情況允許，且每一項必須說出「退到下一層是**保守的預設**，還是**沉默的零檢查**」。
-- 這條判準借自協同產品 db-runbooks 的四層解析（見〈外部來源〉）。它的安全性關鍵不是「有 auto-detect」，而是**每一層都定義了偵測不到時往哪退、且絕不猜**。DAI 缺的正是那條邊界的明文化。
+- **問題**：有些設定值決定了「某道檢查跑不跑」。這種值一旦寫錯，系統不會當掉——它會**照常運行，但少了那道檢查**，而且從外面看不出差別。
+- **決定**：這類值必須對照它自己宣告的合法集合驗證，驗不過就停下來報錯。
+- **本 ADR 不修任何東西。** 兩個已量到的案例只用來示範這條規則怎麼判，各自另外開票。
 
-## 背景
+## 名詞
 
-### 三個看似無關的發現，同一個根
+只列本文用到、而讀者可能不熟的：
 
-2026-08-22/23 對 DAI 做了一輪三個互斥 lens 的盤點（設定值解析分層／手工清單漂移／憑證分類）。三份結果表面上分屬三個領域，但把它們並排會看到同一個形狀：
+| 詞 | 意思 |
+|:--|:--|
+| tenant-api | 負責寫入租戶設定的服務。設定以 git commit 保存 |
+| threshold-exporter | 負責讀取租戶設定、產出監控指標的服務 |
+| `conf.d` | 存放租戶設定 YAML 的目錄 |
+| 接收端（receiver） | 告警要送到哪裡——Slack、PagerDuty、webhook 等 |
 
-| 領域 | 宣告 | 現實 | 系統的選擇 |
-|:--|:--|:--|:--|
-| 設定解析 | `--write-mode: pr-guthub` | 這不是合法值 | 相信宣告 → 靜默降級為 direct commit |
-| 文件清單 | `test-map.md` 說某腳本是 lint tripwire | 零 runner 引用 | 相信宣告 → 讀者以為有機械防線 |
-| 憑證 | `_routing_profile` 的慣例說憑證留平台側 | body 可直接 inline 明文憑證 | 相信慣例 → 明文落 git |
+## 問題：一個打錯的字，關掉整道審核
 
-三者都不是「壞掉」——是**壞得像沒壞**。
+tenant-api 用 `--write-mode` 決定寫入行為：`direct` 是直接 commit，`pr` / `pr-github` / `pr-gitlab` 是開 PR 讓人審核。
 
-⚠️ **現行規範完全沒有涵蓋這個形狀**：`docs/internal/dev-rules.md` 的 13 條裡，grep `fail-loud` **零命中**；最接近的 §5 是 SAST 的 7 條安全 review 準則，談的是程式碼寫法，不是「宣告與現實脫鉤時該怎麼辦」。所以這不是「規範沒被遵守」，是**規範沒有這一條**。
-
-### 為什麼現在寫
-
-`_silent_mode` 的三態（dev-rules §3）、Sentinel Alert（§8）、Cardinality Guard 這些既有設計都有明確的「不確定時怎麼辦」。但它們是**逐案**決定的，沒有共同判準——所以新增一個解析點時，作者要自己重新發明一次，而發明的方向取決於當下在想什麼。上面三個發現分屬三個不同時期、三個不同作者，卻犯同一個形狀，就是缺共同判準的證據。
-
-## 決策
-
-### 原則
-
-> **當「被宣告的值」與「現實」不一致時，DAI 的預設行為是 fail-loud。**
->
-> fail-soft 只在本 ADR〈允許 fail-soft 的情況〉列舉的類別中允許。新增一個 fail-soft 的解析點時，必須在該處的註解回答一個問題：
->
-> **「退到下一層之後，得到的是保守的預設，還是沉默的零檢查？」**
->
-> 前者可以 fail-soft；**後者一律 fail-loud**。
-
-### 判準的操作型定義
-
-「保守的預設」= 退下去之後，系統做的事**比宣告要求的少**，且少掉的部分是可觀測的。
-「沉默的零檢查」= 退下去之後，某道閘門**整個消失**，而且消失後的外觀與「閘門通過」無法區分。
-
-⚠️ 判斷的是**退下去之後的狀態**，不是退下去的原因。「檔案不存在」與「路徑打錯」的原因不同，但如果兩者退到同一個狀態，判準只看那個狀態。
-
-### 允許 fail-soft 的情況（列舉，非窮舉原則）
-
-1. **布局偵測** — 「conf.d 是 flat 還是 hierarchical」「路徑是檔案還是目錄」這一類。退下去的行為是**保守的**：少讀一些設定，而不是少做一道檢查。
-2. **診斷性標籤** — `configSource`（configmap / git-sync / operator）這一類只影響可觀測性、不影響行為的值。
-3. **繼承鏈的缺層** — `_defaults.yaml` 某層不存在時跳過該層。這是繼承語意本身的定義，不是偵測失敗。
-
-### 一律 fail-loud 的情況
-
-1. **治理決策** — 「要不要走 PR 審核」「授權檔在哪」這一類。這些的下一層是「閘門消失」，不是「做得少一點」。
-2. **信任邊界的宣告** — 憑證來源、身分來源、org 標記。
-3. **enforcement 的存在性宣告** — 文件說「這件事有機械防線」時，那個宣告本身要可驗證（見〈連帶決策〉）。
-
-### 連帶決策：宣告有 gate 的文件，自己要有 gate
-
-DAI 已經有一整套 generator + `--check` 把索引類文件釘住（ADR 索引、planning-index、doc-map、tool-map、agent adapters，皆 byte-exact 或 fixed-expectation）。**沒有 gate 的那些，剛好是「宣告哪些東西有 gate」的那幾份。**
-
-⇒ **凡是宣稱某項檢查存在的文件段落，該宣稱必須是可機械驗證的**：要嘛引用一個真實存在的 hook / target / workflow job 名（可被 grep 驗證），要嘛不要宣稱。
-
-這條不追求「所有手工清單都要有 gate」——那個目標在文件量這個級別不現實。它只約束**enforcement 宣稱**這一個子集，因為那是唯一會讓讀者（含 AI agent）**因為相信它而少做事**的一類。
-
-## 適用到現況：三個已量到的案例
-
-⚠️ 以下是**本 ADR 原則的適用示範**，缺陷本身各自開票追蹤，不在本 ADR 修。
-
-### A. `--write-mode` 的 `default:` 分支 → 該改 fail-loud
-
-`cmd/server/wire.go` 的 `switch` 是全 repo 唯一解讀該字串的地方，其 `default:` 直接回 `WriteModeDirect`。合法值定義在 `internal/handler/deps.go`，但沒有任何地方把輸入比對那個集合。
+實際解讀這個字串的地方只有一個 switch（`components/tenant-api/cmd/server/wire.go`），合法值的定義在 `internal/handler/deps.go`——但**沒有任何一行程式把輸入拿去跟那份定義比對**：
 
 ```text
-wire.go  case WriteModePR, WriteModePRGitHub:  → PR 模式
-wire.go  case WriteModePRGitLab:               → MR 模式
-wire.go  default:                              → direct commit
+case "pr", "pr-github":   → 開 PR
+case "pr-gitlab":         → 開 MR
+default:                  → 直接 commit
 ```
 
-⇒ 打錯字（`PR` / `pr-guthub` / 前導空白，此處無 `TrimSpace`）落到 `default:`。一個以為所有變更走 PR 審核的部署，實際上每次 `PUT` 直接 commit 進 base branch，而**啟動 log 那行 INFO 與正常 direct 部署逐字相同**。
+任何不在前兩行的字串都落到 `default`。`pr-guthub`（打錯字）、`PR`（大小寫）、`" pr"`（前導空白，此處沒有去空白處理）——全部變成直接 commit。
 
-判準套用：退下去之後，PR 審核這道閘門**整個消失**，且與「刻意選 direct」無法區分 ⇒ **沉默的零檢查** ⇒ fail-loud。
+更麻煩的是**沒有訊號**。`default` 分支印的那行日誌，跟一個真的選了 `direct` 的部署**是同一行程式碼**（`slog.Info("direct write mode (commit-on-write)")`），所以輸出必然一模一樣。
 
-### B. 布局偵測 → **維持 fail-soft**（本 ADR 明確不改它）
+⇒ 一個以為「所有變更都要經過審核」的部署，可能每次寫入都直接 commit，而沒有任何跡象可循。
 
-`resolveConfigPath()` 探測 `/etc/threshold-exporter/conf.d` 是否為目錄、`ConfigManager` 以 `os.Stat().IsDir()` 決定 single-file vs directory、hierarchy 旗標由「樹裡是否存在 `_defaults.yaml`」推導。
+**這不是罕見的疏忽。** 平台既有規範裡已經有四處在處理同一種精神——「不得靜默忽略旗標」「新工具無法靜默逃脫 gate」「no-op 即 fail-open 直接紅」（`docs/internal/dev-rules.md`）——但四處各自綁在自己的場景上。缺的不是意識，是**一條可以套到新情況上的判準**。
 
-判準套用：退下去之後讀到的租戶**變少**（可從 metric 觀察），而不是某道檢查消失 ⇒ **保守的預設** ⇒ 允許 fail-soft。
+## 決定
 
-⚠️ 但有一個**不屬於布局偵測**的例外要分開看：階層布局下子目錄的租戶完全不進 metric（[ADR-016 §支援邊界](016-conf-d-directory-hierarchy-mixed-mode.md) 已記錄實測），那是「兩個 reader 的母體不相等」，不是 fail-soft 的結果——它連退都沒退，是壓根沒讀。本 ADR 的原則不涵蓋它，它的處置在 ADR-016。
+### 適用範圍
 
-### C. 憑證：DAI 只有第 1 類與第 3 類，中間是空的
+這條規則**只管一種值**：
 
-借 db-runbooks 的三分法：
+> **決定了「某道檢查是否執行」或「信任從哪裡來」的設定值。**
 
-| 類別 | 定義 | DAI 現況 |
-|:--|:--|:--|
-| 1 · by-reference | 只傳「去哪裡拿」（Secret 名 + key 名），值不經過 API | ✅ 有：部署期憑證（forge PAT、federation 私鑰）全走 K8s Secret → env/volume |
-| 2 · by-value 但加密 | 值經過 API，但事先以部署金鑰加密 | ❌ **完全沒有**。無部署金鑰、無加密 payload、無 plan/apply 兩段式 |
-| 3 · by-value 明文 | 值以明文進入 API | ⚠️ 有，且最大的一處在**租戶自助寫入平面** |
+例如：走不走審核流程、授權設定檔在哪、憑證從哪來。
 
-第 3 類最大的一處是 `PUT /api/v1/tenants/{id}` 的 raw YAML body：`_routing.receiver` 的必填欄位本身就是憑證（Slack `api_url`、PagerDuty `service_key`、webhook `url`）。寫入面的 key 檢查是 **soft-whitelist**——`internal/handler/body_validator.go` 的註解逐字寫著「keys NOT in this map pass through without further checks」，而表裡只有四個 key；`internal/policy/policy.go` 只檢查 receiver 的 **type**，不碰任何憑證欄位的值。
+⛔ **不管**其他值。判斷檔案是平面還是階層佈局、標記設定來源是 ConfigMap 還是 git-sync——這些值寫錯會讀到比較少的東西，那是另一個問題，本 ADR 不處理也不主張。
 
-值的落點：git commit（永久）→ Alertmanager ConfigMap（明文，非 Secret）→ `GET /tenants/{id}` 的 `raw_yaml`（有 read 權即可讀回）。
+### 規則
 
-⚠️ **secret-scan 四層防線在這條路徑上的實際涵蓋**（這一點必須精確，否則會高估或低估）：L1（開發者 pre-commit）與 L3（release image digest）與此無關；L0（GitHub push-protection）與 L2（server-side workflow）要等 commit 到達 GitHub 才有作用，而 **direct 模式（出貨預設）的 tenant-api 只 commit 不 push**（`push` 在 `internal/gitops/` 只出現於 PR 模式路徑）。⇒ direct 模式下這四層**沒有東西可掃**；PR 模式會 push，L0 對已知 pattern 仍可能攔下。
+> 適用範圍內的值，**必須對照它自己宣告的合法集合驗證**。驗不過就停下來報錯，不要退到預設值繼續跑。
 
-而 `conf.d` **沒有任何 secret-shape lint**——`scripts/tools/lint/check_helm_values_secrets.py` 管的是 `helm/**` 與 `k8s/**`，同樣的檢查沒有對稱地套到 `conf.d`。
+### 為什麼是這一類
 
-判準套用：慣例說憑證應該留在平台側 profile（`_routing_profile` 名稱參照），現實是可以直接 inline。「相信慣例、不驗證」⇒ 那道慣例是**沉默的零檢查** ⇒ fail-loud。最小的 fail-loud 形式是把 conf.d 納入既有的 secret-shape lint；完整解是補第 2 類。
+因為這一類**錯了之後看不出來**。
 
-## 考慮過的替代方案
+一個檢查如果因為設定寫錯而沒有執行，系統的外觀跟「檢查跑過而且通過了」完全一樣——沒有錯誤、沒有告警、沒有計數器。相對地，如果一個值寫錯只是讓系統少讀了一些設定，那件事在指標上會反映出來，事後追得回去。
 
-### A：不寫原則，逐案修三個缺陷
+**判斷方法**：問一句話——
 
-❌ 三個缺陷分屬三個時期、三個作者、三個領域，卻是同一個形狀——這說明缺的是判準而不是修補。逐案修完，下一個解析點還是會重新發明一次。
+### **「這個值寫錯之後，從外面看得出來嗎？」**
 
-### B：一律 fail-loud，不留例外
+看不出來 ⇒ 屬於本規則，必須驗證。
 
-❌ 布局偵測與繼承鏈缺層若改 fail-loud，會讓「conf.d 只有一個檔案」這種完全合法的部署開不起來。而且那兩類退下去確實是保守的——把它們一起硬化，只會製造為了繞過而寫的組態。
+## 兩個案例
 
-### C：把判準寫進 dev-rules 而不是 ADR
+⚠️ 以下是**示範規則怎麼判**。缺陷本身各自開票，本 ADR 不修。
 
-❌ dev-rules 是給貢獻者的操作規範（「不要做 X」），這裡要記錄的是**為什麼**與**邊界在哪**，包含刻意保留 fail-soft 的三類。那是 ADR 的體裁。dev-rules 可以在原則被接受後加一行指過來。
+### 案例 A · `--write-mode`
 
-### D：照抄 db-runbooks 的四層解析
+即上一節那個例子。
 
-❌ 那四層的第三層是「去問活的叢集」，而 DAI 的等價資訊全部走硬編檔名（`internal/confd/confd.go` 是讀寫共用的單一謂詞，那是刻意的合約）。照抄會把「宣告即合約」變成「猜」，製造 tenant 混淆。**借的是判準，不是分層本身。**
+- **它決定檢查跑不跑嗎？** 是——決定寫入要不要經過人工審核。
+- **寫錯之後看得出來嗎？** 看不出來，日誌是同一行程式碼印的。
+- **判定**：適用，必須驗證。
+- **最小修法**：解讀前先比對合法值集合，不在集合內就啟動失敗。
+
+### 案例 B · 憑證可以明文寫進租戶設定
+
+`PUT /api/v1/tenants/{id}` 讓租戶自己送一份 YAML 上來。告警接收端的必填欄位**本身就是憑證**——Slack 的 webhook URL、PagerDuty 的整合金鑰——而它們就寫在那份 YAML 裡。
+
+寫入端的欄位檢查是白名單式的，`internal/handler/body_validator.go` 的註解逐字寫著：
+
+> keys NOT in this map pass through without further checks
+
+而那份白名單裡只有四個欄位，都不是憑證欄位。另一道檢查（`internal/policy/policy.go`）只看接收端的**類型**，不看任何欄位的值。
+
+明文憑證因此會進 git（永久保存）、被 render 進 Alertmanager 的 ConfigMap（明文，不是 Secret）、並且可以從 `GET /tenants/{id}` 讀回來。
+
+- **它決定檢查跑不跑嗎？** 是——這裡的「檢查」是「憑證不該以明文進入設定」。平台有這個檢查，但只掃 `helm/**` 與 `k8s/**`（`scripts/tools/lint/check_helm_values_secrets.py`），**沒有套到 `conf.d`**。
+- **寫錯之後看得出來嗎？** 看不出來。既有的四道 secret 掃描在這條路上涵蓋有限：兩道（開發者本機的 pre-commit、發版時的 image 檢查）與這條路無關；另兩道（GitHub 推送保護、伺服器端掃描）要等 commit 送到 GitHub 才起作用——而 direct 模式的 tenant-api **只 commit 不 push**。
+- **判定**：適用，必須驗證。
+- **最小修法**：把 `conf.d` 納入既有的憑證形狀檢查。**完整解**：讓憑證能以加密形式提交（平台目前只有「傳 Secret 參照」與「傳明文」兩種形態，中間那一階是空的）。
+
+## 連帶決定：宣稱有自動檢查的文件，那個宣稱要能被驗證
+
+上面兩個案例都是程式的問題。盤點時發現同一個形狀也出現在文件上——**文件說某件事有自動檢查，實際上沒有**，而讀者會因為相信它而少做事。
+
+實測到兩個例子：
+
+| 文件宣稱 | 實際 |
+|:--|:--|
+| `test-map.md` 說某個腳本兼任自動檢查 | 該腳本在 Makefile / CI workflow / pre-commit / 測試裡被引用 **0 處** |
+| `CLAUDE.md` 列出 9 個核心設計概念、說「見架構文件某節」 | 其中 **4 個**在該架構文件裡出現 **0 次** |
+
+⇒ **凡是宣稱某項自動檢查存在的段落，要嘛指名一個真實存在、grep 得到的 hook / target / CI job，要嘛就不要宣稱。**
+
+這條**不要求**所有手工清單都得有自動檢查——只約束「宣稱有檢查」這個子集。
+
+## 這條規則自己受不受約束
+
+讀者會問（而且應該問）：這條規則本身有沒有執行機制？
+
+**沒有。** 它靠 code review。
+
+按它自己的判斷方法檢驗：有人新增了一個沒驗證的設定值，這件事**在 diff 裡看得見**——多出一個吃設定值的分支，reviewer 讀得到。所以它落在「看得出來」那一側，符合規則對自己的要求。
+
+但這是個弱的執行機制，本 ADR 不假裝它不是。如果之後發現 review 抓不住，就該補一個機械檢查；那時候這份 ADR 應該被修訂，而不是被默默繞過。
+
+## 考慮過的其他做法
+
+**逐案修這兩個缺陷，不立規則。**
+❌ 兩個缺陷分屬不同領域，形狀相同。而平台既有規範裡已經有四處在各自的場景重新處理同一件事——那正是缺通則的跡象。
+
+**所有 fail-soft 都要改成報錯。**
+❌ 範圍過寬。判斷檔案佈局、標記設定來源這類值寫錯只會少讀一些設定，硬化它們只會逼出「為了繞過而寫的組態」。本 ADR 因此明確把適用範圍限縮在「決定檢查跑不跑」的值。
+
+**寫進 dev-rules 而不是 ADR。**
+❌ dev-rules 記的是「不要做 X」，這裡要記的是**適用邊界**與**為什麼**。判準被接受後，dev-rules 可以加一行指過來。
 
 ## 後果
 
-- **新增解析點時多一個必答問題**（退下去是保守預設還是零檢查），寫在該處註解裡。成本是一句話。
-- **三個既有案例各自開票**；本 ADR 只提供判準與已量到的證據。
-- **會多出一些啟動期失敗**：A 案例修掉之後，今天靜默降級的部署會變成開不起來。這是刻意的——那些部署本來就沒有在做它以為在做的事。
-- ⛔ **不影響布局偵測**：B 案例明確維持現狀，避免這條原則被讀成「所有 fail-soft 都要硬化」。
+- 新增一個「決定檢查跑不跑」的設定值時，要多寫一段驗證。
+- **會多出一些啟動期失敗**：案例 A 修掉之後，今天會悄悄降級的部署會變成開不起來。這是刻意的——那些部署本來就沒有在做它以為在做的事。⚠️ 但**要不要先用一版警告過渡**，是那張票要決定的，本 ADR 不預設。
+- ⛔ **明確不涵蓋**：判斷佈局、診斷用標籤、繼承鏈缺層。這些不在適用範圍內，本 ADR 不主張它們該改。
+- 兩個案例各自開票；本 ADR 只提供判準與證據。
 
-## 未量到的（誠實標註）
+## 證據與限制
 
-- 三份盤點皆為**靜態閱讀 + grep**。本 ADR 中經實際執行驗證的只有：write-mode 的 `switch` 分支與合法值定義、`body_validator.go` 的 soft-whitelist 註解、`push` 在 `internal/gitops/` 的出現位置、`conf.d` 無 secret-shape lint、`test-map.md` 宣稱的腳本引用數、`CLAUDE.md` 九個設計概念在目標文件的字串命中數。
-- **C 案例沒有端到端重現**：沒有實際送一個含 `api_url` 的 `PUT` 進去、再檢查 git 與 ConfigMap。推論鏈由三段程式碼路徑構成，但未實測。
-- 其餘盤點結果（`--config-dir` 指到錯目錄、`--rbac` 路徑打錯、`-config-dir` 指到檔案）的觸發條件皆為程式碼推導，**未重現**。它們支持本 ADR 的論點，但不應被引用為已驗證的事實。
+結論來自 2026-08-22/23 的一輪程式碼盤點。
 
-## 外部來源
+**跑過指令、看過輸出的**：
 
-判準借自同 MariaDB domain 的協同產品 db-runbooks——[ADR-033](033-ops-execution-plane-interface.md) 記錄了兩邊的關係與那次協同介面評估的結論。該產品對任務參數採四層解析（呼叫者輸入 → 部署期設定 → 查詢現況 → 硬編 fallback），其安全性關鍵是**每一層都定義了偵測不到時往哪退，且絕不猜**。本 ADR 借的是那條「往哪退」的判準，不是分層結構本身（理由見〈替代方案 D〉）。
+- `--write-mode` 的 switch 分支與合法值定義各在哪個檔，以及沒有任何地方比對兩者
+- `default` 分支的日誌就是 `slog.Info("direct write mode (commit-on-write)")` 那一行本身
+- `body_validator.go` 白名單註解的原文與白名單內的欄位數
+- `push` 在 `internal/gitops/` 只出現於 PR 模式的路徑
+- `conf.d` 沒有憑證形狀檢查，而 `helm/**`、`k8s/**` 有
+- `test-map.md` 宣稱的腳本被引用 0 處；`CLAUDE.md` 九個概念中有 4 個在架構文件出現 0 次
+- `dev-rules.md` 內「不得靜默 X」語氣的規則共四處，且各自綁定場景
+
+**⚠️ 沒有實際重現的**：
+
+- **案例 B 的完整路徑**——沒有真的送一份帶憑證的 `PUT`，再回頭檢查 git 與 ConfigMap。結論建立在三段程式碼路徑的閱讀上。
+- **「引用 0 處」是字面 grep 的結果**，不排除變數展開、別名或間接呼叫。對「宣稱有自動檢查」這個判斷已經夠用（宣稱者本來就該指得出來），但不等於「絕對沒有任何機制」。
+- 盤點中另外看到幾個同類形狀（設定目錄指到錯的地方、授權檔路徑打錯），觸發條件都是程式碼推導，**未重現**，不應被當成已驗證的事實引用。
 
 ## Related
 
-- [ADR-016: conf.d/ 目錄階層 + 混合模式](016-conf-d-directory-hierarchy-mixed-mode.md) — 子目錄租戶不進 metric 的處置在該 ADR，本 ADR 不涵蓋
-- [ADR-023: 寫入平面 single-writer 不變式](023-write-plane-single-writer-invariant.md) — 寫入平面的併發保證；本 ADR 的 A 案例在其之上
-- [ADR-024: 宣告式 Dimensional 告警引擎（含 Custom Alerts）](024-version-aware-threshold-via-dimensional-label.md) — 把告警機械開放給租戶階層的能力，C 案例的寫入平面由它開啟
-- [ADR-033: 與運維執行平面的協同介面](033-ops-execution-plane-interface.md) — 判準的外部來源
+- [ADR-016: conf.d/ 目錄階層 + 混合模式](016-conf-d-directory-hierarchy-mixed-mode.md) — 階層佈局下子目錄租戶不進指標的問題記在該 ADR，不在本 ADR 適用範圍
+- [ADR-023: 寫入平面 single-writer 不變式](023-write-plane-single-writer-invariant.md) — 寫入平面的併發保證
+- [ADR-024: 宣告式 Dimensional 告警引擎（含 Custom Alerts）](024-version-aware-threshold-via-dimensional-label.md) — 把告警機制開放到租戶階層，案例 B 的寫入平面由它開啟
+- [ADR-033: 與運維執行平面的協同介面](033-ops-execution-plane-interface.md) — 本規則的判斷方法借自該 ADR 記錄的協同產品：借的是「偵測不到時往哪退，而且絕不猜」這條判斷，不是它的分層結構
