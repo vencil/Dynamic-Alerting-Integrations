@@ -29,6 +29,7 @@ v2.4.0 新增：解決 v2.3.0 release 過程中 opa-evaluate 加入 COMMAND_MAP
 import argparse
 import ast
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -36,6 +37,7 @@ from _lint_helpers import (
     parse_command_map,
     parse_build_sh_tools,
     parse_build_sh_tool_paths,
+    parse_build_sh_repo_data_files,
     BUILD_EXEMPT,
     ENTRYPOINT_PATH,
     BUILD_SH_PATH,
@@ -71,10 +73,57 @@ _SIBLING_MODULE_DIRS = ("", "ops", "dx", "lint")
 # migrate_rule / generate_tenant_mapping_rules 也讀 metric-dictionary.yaml，
 # 但走「自動偵測」非單一同目錄預設；上面的 analyze_rule_pack_gaps 條目已足以
 # 把該資料檔錨在 TOOL_FILES，故不重複列。
+#   - _grar_validate.py: _find_platform_rules_configmap() 先找 <module 同目錄>/
+#     configmap-rules-platform.yaml（映像 flat layout），找不到才往上找 repo 的
+#     k8s/03-monitoring/。缺檔時 platform_alert_identities() 退回 6 筆常數，
+#     而完整 pack 是 41 筆（實測）→ 少掉的 35 個 alertname 不會被
+#     find_tenant_silenceable_platform_inhibits 探測，是 fail-OPEN 方向（#1494）。
+#     該檔不在 scripts/tools/ 底下，由 build.sh 的 REPO_DATA_FILES 搬運。
 REQUIRED_DATA_FILES: dict = {
     "_observed_map_lib.py": ("metric_observed_map.yaml",),
     "analyze_rule_pack_gaps.py": ("metric-dictionary.yaml",),
+    "_grar_validate.py": ("configmap-rules-platform.yaml",),
 }
+
+# 映像把每支工具攤平到 WORKDIR（Dockerfile `WORKDIR /opt/da-tools` + build.sh
+# 的 `cp <src> tools/`），所以 `/opt/da-tools/x.py` 只有 3 個祖先 → 合法的
+# `parents[N]` 上限是 2。repo 佈局下同一支檔案有 8~9 個，因此任何「數上去幾層」
+# 的寫法在兩種佈局下必然分岔，而 repo 佈局會把它藏住。
+MAX_IMAGE_ANCESTOR_INDEX = 2
+
+
+_APPEND_ARRAYS = ("TOOL_FILES", "REPO_DATA_FILES")
+
+
+def check_append_form_arrays(build_sh: Path = None) -> list:
+    """`NAME+=( … )` 在 build.sh 裡是禁止的，因為 reader 讀不到它。
+
+    ⛔ 這條是把一個**揭露**升級成守衛，因為那個揭露的減災說法是假的。原本寫的是
+    「`+=` 讀不到，但方向是少撈，雙向檢查會大聲」——實測只有兩種情形會大聲：
+    該檔在 `COMMAND_MAP` 裡，或某支已出貨模組 import 它。函式庫、資料檔、以及
+    `BUILD_EXEMPT` 的 daemon 三類都不在其中，用 `+=` 加進來會**全綠**，而且
+    `check_layout_depth_assumptions`（#1494 自己那條規則）根本不會掃到它。
+
+    reader 之所以讀不到，是因為文字掃描分不出「指派」與「提及」（試圖分辨的那
+    一版讓 `echo "… TOOL_FILES=( … )"` 取代了整個陣列）。所以正解不是讓 reader
+    更聰明，而是讓**這種寫法不存在**——一行 tripwire，訊息直接給替代寫法。
+    """
+    src = (build_sh or BUILD_SH_PATH).read_text(encoding="utf-8-sig")
+    errors = []
+    for name in _APPEND_ARRAYS:
+        pattern = re.compile(
+            r"^(?:(?:local|declare|export|readonly|typeset)(?:\s+-\w+)*\s+)?"
+            + re.escape(name) + r"\+=\(", re.M)
+        for m in pattern.finditer(src):
+            line = src[:m.start()].count("\n") + 1
+            errors.append((
+                "error",
+                f"build.sh:{line} 用了 `{name}+=(`。出貨清單的 reader 讀不到"
+                f"追加形式（文字掃描分不出指派與提及），所以這樣加進來的檔案會"
+                f"**靜默地**不被層數守衛與配對檢查涵蓋。請併進同名陣列的單一"
+                f"`{name}=(` 區塊。"
+            ))
+    return errors
 
 
 def check_bidirectional(command_map: dict, build_tools: set) -> list:
@@ -158,12 +207,24 @@ def check_underscore_imports(
             # 這裡不重複報。
             continue
         try:
+            # utf-8-sig for the same reason as the layout rule below: a BOM is
+            # invisible to Python's import machinery but makes `ast.parse`
+            # raise, so a runnable tool would be reported as unparseable.
+            # ⛔ Fixed here TOO, not only where it was noticed — one誤紅 in one
+            # function of this file is the same defect as in the other.
             imported = _underscore_imports_of(
-                src_path.read_text(encoding="utf-8"))
-        except SyntaxError as exc:  # pragma: no cover - shipped tools must parse
+                src_path.read_text(encoding="utf-8-sig"))
+        # ⛔ Three exception types, not one. `read_text` raises OSError for an
+        # unreadable file and UnicodeDecodeError for a non-UTF-8 one; catching
+        # only SyntaxError let either escape and abort main() with a traceback
+        # instead of producing an error entry — i.e. the scanner reported
+        # NOTHING about that file and everything after it. The sibling scanner
+        # below already caught all three, so this was the same defect the
+        # comment above claims to have fixed "here too", still half-applied.
+        except (OSError, SyntaxError, UnicodeDecodeError) as exc:
             errors.append((
                 "error",
-                f"'{rel}' 無法以 ast 解析（{exc.msg} @ line {exc.lineno}）—"
+                f"'{rel}' 無法讀取或以 ast 解析（{type(exc).__name__}: {exc}）—"
                 f" 無法驗證其 import 完整性。"
             ))
             continue
@@ -182,6 +243,204 @@ def check_underscore_imports(
                     f" TOOL_FILES 缺少 '{mod_file}'。Docker image（flat layout）"
                     f"內 import 會 ImportError。"
                 ))
+    return errors
+
+
+def _ascent_kind(node: ast.AST) -> str:
+    """Which spelling produced the ascent: ``index`` / ``chain`` / ``mixed``.
+
+    ⛔ The CONSEQUENCE differs by spelling, not by scope, and the failure
+    message has to say which one: ``parents[N]`` past the end raises
+    ``IndexError`` (loud, wherever it sits), while a ``.parent`` chain or
+    nested ``dirname`` SATURATES at the filesystem root and returns a wrong
+    path with no exception (quiet). An earlier version of this message keyed
+    the consequence off module-vs-function scope, which is unrelated: a
+    ``parents[N]`` inside a function still raises.
+    """
+    has_index = any(
+        isinstance(n, ast.Subscript) and isinstance(n.value, ast.Attribute)
+        and n.value.attr == "parents" for n in ast.walk(node))
+    has_chain = any(
+        (isinstance(n, ast.Attribute) and n.attr == "parent")
+        or (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+            and n.func.attr == "dirname")
+        for n in ast.walk(node))
+    if has_index and has_chain:
+        return "mixed"
+    return "index" if has_index else "chain"
+
+
+def _walks_up_from_file(node: ast.AST) -> "int | None":
+    """How many directory levels *node* climbs, if it is rooted at ``__file__``.
+
+    Returns None when the expression is not rooted at ``__file__`` (nothing to
+    say about it) and ``-1`` when it climbs by an amount this reader cannot
+    evaluate — a non-literal ``parents[n]``. That case is reported rather than
+    waved through: an index the lint cannot read is an index it cannot vouch
+    for, and fail-open is the direction that let #1494 ship.
+
+    ⛔ Three spellings, not one. `parents[N]` raises IndexError past the end,
+    while a `.parent` chain and `os.path.dirname` nesting SATURATE at the
+    filesystem root — same wrong answer, no exception, which is strictly
+    harder to notice (measured: `Path('/opt/da-tools/x.py').parent` four times
+    is `/`, no error). A lint that understood only the loud spelling would
+    name the two quiet ones as its own bypass route.
+    """
+    if not any(isinstance(n, ast.Name) and n.id == "__file__"
+               for n in ast.walk(node)):
+        return None
+    depth, cur, unknown = 0, node, False
+    while True:
+        if (isinstance(cur, ast.Subscript)
+                and isinstance(cur.value, ast.Attribute)
+                and cur.value.attr == "parents"):
+            idx = cur.slice
+            if isinstance(idx, ast.Constant) and isinstance(idx.value, int):
+                depth += idx.value
+            else:
+                unknown = True
+            cur = cur.value.value
+            continue
+        if isinstance(cur, ast.Attribute) and cur.attr == "parent":
+            depth += 1
+            cur = cur.value
+            continue
+        if isinstance(cur, ast.Attribute) and cur.attr in ("resolve", "absolute"):
+            cur = cur.value
+            continue
+        if isinstance(cur, ast.Call):
+            func = cur.func
+            if isinstance(func, ast.Attribute) and func.attr == "dirname":
+                depth += 1
+                cur = cur.args[0] if cur.args else func.value
+                continue
+            cur = func
+            continue
+        break
+    return -1 if unknown else depth
+
+
+def check_layout_depth_assumptions(
+    tool_rel_paths: set, tools_src: Path = None
+) -> list:
+    """出貨檔不得靠「數上去幾層」定位 repo 內的東西（#1494）。
+
+    映像把每支工具攤平（``/opt/da-tools/x.py``，3 個祖先），repo 佈局下同一支
+    有 8~9 個。任何 ``__file__`` 起算、上溯超過
+    :data:`MAX_IMAGE_ANCESTOR_INDEX` 層的寫法，在 repo 測試裡永遠是對的，在
+    客戶手上的映像裡永遠是錯的 —— 這正是本 repo 全套 5000+ 測試看不到
+    ``_grar_validate.py`` 那一行的原因。
+
+    ⚠️ **這是 best-effort 的補刀，不是完整的類別守衛。** 它認得三種拼法
+    （``parents[N]`` / ``.parent`` 鏈 / 巢狀 ``os.path.dirname``），而**與拼法
+    無關**的那一支是 ``tests/ops/test_image_flat_layout.py``（實際 import，
+    任何拼法都躲不掉，但只看得到會拋錯的那一半）。本規則的價值在於補「安靜
+    飽和」那一半，代價是它只覆蓋建模過的拼法。
+
+    ⛔ 三輪對抗式盲審實測出來的已知盲點，逐條列在這裡而不是留白：
+
+    1. ``parents[N]`` 的層數記成 N，實際是 **N+1**（``parents[2]`` ≡
+       ``.parent`` ×3）。方向是**少報**（只會漏，不會誤擋）。
+    2. 鏈式 ``parents[1].parents[1]`` 因此被算成 2 層而放行，但它在映像深度
+       實測就是 ``IndexError`` ——與 #1494 同形。
+    3. ``__file__`` 必須字面出現在同一個運算式裡；隔一層 ``_THIS_DIR =
+       os.path.dirname(__file__)`` 就看不到，而 71 支出貨檔裡有 **58 支**用
+       這個慣用寫法。
+    4. 字面 ``".."`` / ``os.pardir`` 路徑段（``os.path.join(d, "..", "..")``、
+       ``joinpath("..")``、``p / ".."``）完全不計數。
+    5. ``Path(*parts[:-4])`` 這類切片不計數。
+    6. ``try/except IndexError`` 已經處置過的寫法仍會被報。
+    7. 因為第 1 條，**等價的兩種拼法判決不同**：``parents[2]`` 與
+       ``.parent`` ×3 爬一樣多層、在映像深度都解析成 ``/``，但前者放行、後者
+       被擋。⇒ 把 ``.parent.parent.parent`` 改寫成 ``parents[2]`` 就是一條
+       轉綠路。⚠️ 而 ``tests/lint/test_check_build_completeness.py`` 的
+       ``test_legal_shapes_stay_green`` 目前把 ``parents[2]`` 明文釘成合法，
+       所以修第 1 條時**必須同時改那一格**，否則會被自己的測試擋住。
+
+    ⇒ **今天出貨檔裡確實還有第 3+4 條合起來造成的活體漏網**（`_registry_lib`
+    與 `_observed_map_lib` 各一處 ``_THIS_DIR`` + 三個 ``".."``）。修法與這些
+    盲點的收口一起放在 **issue 1503**（那兩處程式碼本身是 **issue 1501**），
+    刻意不夾帶進 #1494——理由是本規則每被加固一輪就製造新的缺陷，而真正與
+    拼法無關的守衛是上面那支行為測試。
+
+    ⚠️ **本規則在 CI 的執行點是 pytest twin，不是 pre-commit hook。**
+    ``build-completeness-check`` 掛在 ``.pre-commit-config.yaml``。⛔ 先前這裡
+    寫「沒有任何 workflow 呼叫 ``pre-commit run``」是**錯的**——``ci.yml`` 的
+    Lint job 有 **47** 條 ``pre-commit run <hook-id> --all-files``，只是這個
+    hook **不在那份列舉裡**（``grep build-completeness .github/workflows/``
+    零命中）。差別很要緊：修法是往既有清單加一行，不是引進 pre-commit。
+    CI 上實際跑到這條規則的是
+    ``tests/lint/test_check_build_completeness.py`` 的 repo-level 迴歸
+    （``test_actual_repo_has_no_depth_assumptions`` 與 ``TestRepoSmoke``），
+    它們住在 ``tests/`` 底下由 ``python-tests-run`` 帶到。後果是：只加在 hook
+    側、twin 沒跟上的新規則在 CI 是零覆蓋。把 hook 也接進 Lint job 一併留在
+    **issue 1503**。
+
+    Returns:
+        list of (severity, message) tuples
+    """
+    tools_src = TOOLS_SRC if tools_src is None else tools_src
+    errors = []
+    for rel in sorted(tool_rel_paths):
+        if not rel.endswith(".py"):
+            continue
+        src_path = tools_src / rel
+        # ⛔ 「不存在」與「存在但驗不了」是兩個問題，這裡只管後者。
+        # TOOL_FILES 指向不存在的檔案由 build.sh 自己 fail-fast
+        # （`✗ Missing: … exit 1`），在這裡重複報會讓本規則對合成 fixture
+        # 誤紅——而誤紅正是守衛被刪掉的原因。
+        if not src_path.is_file():
+            continue
+        try:
+            # utf-8-sig, not utf-8: a BOM is invisible to Python's own import
+            # machinery but makes `ast.parse` raise on U+FEFF, so a perfectly
+            # runnable tool (saved by a Windows editor, which this repo has)
+            # would be reported as unverifiable.
+            tree = ast.parse(src_path.read_text(encoding="utf-8-sig"))
+        except (OSError, SyntaxError, UnicodeDecodeError) as exc:
+            errors.append((
+                "error",
+                f"{rel}: 檔案在，但解析失敗（{type(exc).__name__}: {exc}），"
+                f"無法確認它有沒有做佈局深度假設。"
+            ))
+            continue
+        # innermost def/class per line → module scope is "no enclosing scope"
+        enclosing = {}
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                 ast.ClassDef)):
+                for ln in range(node.lineno,
+                                (node.end_lineno or node.lineno) + 1):
+                    enclosing.setdefault(ln, True)
+        worst = {}
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.Attribute, ast.Subscript, ast.Call)):
+                continue
+            depth = _walks_up_from_file(node)
+            if depth is None:
+                continue
+            if depth != -1 and depth <= MAX_IMAGE_ANCESTOR_INDEX:
+                continue
+            prev = worst.get(node.lineno)
+            if prev is None or depth == -1 or depth > prev[0]:
+                worst[node.lineno] = (depth, _ascent_kind(node))
+        for lineno, (depth, kind) in sorted(worst.items()):
+            where = "函式內" if lineno in enclosing else "module scope"
+            how = ("上溯層數不是字面常數，無法驗證"
+                   if depth == -1 else f"從 __file__ 上溯 {depth} 層")
+            # ⛔ 後果由**拼法**決定，不是由 scope 決定。
+            consequence = {
+                "index": "超出範圍時 IndexError（module scope 就是 import 期死）",
+                "chain": "不會拋錯，飽和在檔案系統根目錄——安靜地算出錯的路徑",
+                "mixed": "視實際運算順序而定：可能 IndexError，也可能安靜飽和",
+            }[kind]
+            errors.append((
+                "error",
+                f"{rel}:{lineno} ({where}) {how}，"
+                f"但映像攤平後只有 {MAX_IMAGE_ANCESTOR_INDEX + 1} 個祖先 → "
+                f"{consequence}。改成「找檔案」而不是「數層數」"
+                f"（見 _grar_validate._find_platform_rules_configmap）。"
+            ))
     return errors
 
 
@@ -266,10 +525,19 @@ def main():
 
     command_map = parse_command_map(ENTRYPOINT_PATH)
     build_tools = parse_build_sh_tools(BUILD_SH_PATH)
-    errors = check_bidirectional(command_map, build_tools)
+    errors = check_append_form_arrays(BUILD_SH_PATH)
+    errors += check_bidirectional(command_map, build_tools)
     tool_rel_paths = parse_build_sh_tool_paths(BUILD_SH_PATH)
     errors += check_underscore_imports(tool_rel_paths, build_tools)
-    errors += check_required_data_files(build_tools)
+    # ⛔ REQUIRED_DATA_FILES 比對的是「會不會一起進映像」，而 build.sh 有兩條
+    # 搬運路徑（TOOL_FILES 走 scripts/tools、REPO_DATA_FILES 走 repo 樹）。只餵
+    # 前者會讓一個確實有出貨的資料檔被報成缺漏（#1494）。刻意不併進
+    # `build_tools` 本身 —— 那個集合還餵給雙向檢查，資料檔在那裡會變成孤兒警告。
+    shipped_basenames = build_tools | {
+        Path(p).name for p in parse_build_sh_repo_data_files(BUILD_SH_PATH)
+    }
+    errors += check_required_data_files(shipped_basenames)
+    errors += check_layout_depth_assumptions(tool_rel_paths)
 
     if args.json:
         print(format_json_report(errors, command_map, build_tools))
