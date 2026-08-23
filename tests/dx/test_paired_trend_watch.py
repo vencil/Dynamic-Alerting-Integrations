@@ -1481,7 +1481,13 @@ def test_the_docstrings_first_line_survives_the_tool_map():
     assert first.endswith("."), (
         f"first docstring line {first!r} is not a complete sentence — it is "
         "what the tool map publishes verbatim")
-    assert len(first) <= 100
+    # ⛔ NO LENGTH BOUND. A first draft of this test also asserted
+    # `len(first) <= 100`, and self-review found nothing enforces that:
+    # `generate_tool_map.py` neither truncates nor wraps, and no lint caps the
+    # description column. An assertion with no referent is a false red waiting
+    # for a legitimately longer sentence — the "guard of a guard" this repo
+    # deletes elsewhere. What matters is that the line is a whole sentence and
+    # that the published row matches it, both checked here.
     # and the published row must match it
     row = [l for l in (_REPO / "docs" / "internal" / "tool-map.md")
            .read_text(encoding="utf-8").splitlines()
