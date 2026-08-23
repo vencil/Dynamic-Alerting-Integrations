@@ -1494,3 +1494,66 @@ def test_the_docstrings_first_line_survives_the_tool_map():
            if "`paired_trend_watch.py`" in l]
     assert len(row) == 1 and first in row[0]
 
+
+# ── 9. FIXES FOR THE NINTH REVIEW ROUND ───────────────────────────────────
+
+@pytest.mark.parametrize("payload", ["[]", '"a string"', "42", "null"])
+def test_dataset_adapter_rejects_a_bad_shape_with_cannot_check(tmp_path, payload):
+    """⛔ Exit 2, not the traceback-and-1 it used to give.
+
+    `load_night()` has had a top-level shape guard from the start; this adapter
+    did not, so a JSON array crashed with `AttributeError: 'list' object has no
+    attribute 'get'` and Python's default exit 1 — the code this module reserves
+    and documents as never chosen, so that non-zero can never read as "found a
+    regression". The identical shape had already been fixed on the `--from-gh`
+    side; this was the same defect at a second entrance.
+    """
+    (tmp_path / "nights.json").write_text(payload, encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, str(_TOOLS_DIR / "paired_trend_watch.py"),
+         "--dataset", str(tmp_path)],
+        capture_output=True, text=True, encoding="utf-8", timeout=120)
+    assert proc.returncode == ptw.EXIT_CANNOT_CHECK
+    assert proc.stderr.startswith("error:")
+    assert "Traceback" not in proc.stderr
+
+
+def test_dataset_adapter_rejects_a_non_object_reference_block(tmp_path):
+    payload = json.loads((DATASET / "nights.json").read_text(encoding="utf-8"))
+    payload["reference"] = ["exporter/v2.9.0"]
+    (tmp_path / "nights.json").write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="'reference' is list"):
+        ptw.nights_from_dataset(tmp_path)
+
+
+def test_the_gate_message_never_invokes_a_canary_that_does_not_remain():
+    """⛔ With ONE gating canary there is no "remaining" one.
+
+    The old wording named the CPU canary as not-established and, in the same
+    sentence, quoted "the remaining gating canary read +0.02%" — which was that
+    same canary's own reading.
+    """
+    night = ptw.load_night(_payload(), night_utc="2026-08-20", run_id=1)
+    night.inconclusive["BenchmarkControlCanaryCPU"] = "no denominator"
+    counts, reason = ptw.gate_verdict(night, 1.0)
+    assert counts is False
+    assert reason == ("control canary not established: "
+                      "BenchmarkControlCanaryCPU")
+    assert "remaining" not in reason
+
+
+def test_the_invented_justification_is_gone_from_every_copy():
+    """⛔ A rationale this file records as INVENTED must not survive anywhere
+    but in the record of the correction — a copy left in place quietly argues
+    the overturned model back to the next reader."""
+    src = (_TOOLS_DIR / "paired_trend_watch.py").read_text(encoding="utf-8")
+    # ⛔ Exactly ONE occurrence, and it must be the header's correction record.
+    # A first cut of this test asserted the same thing while the fix itself
+    # quoted the sentence a second time to explain the deletion — which is the
+    # sentence back in the reader's path with a disclaimer attached. One
+    # record, in the place that records corrections.
+    phrase = "deliberately different shapes"
+    assert src.count(phrase) == 1
+    header = src.split("GATING_CANARIES = ")[0]
+    assert phrase in header
+

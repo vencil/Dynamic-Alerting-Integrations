@@ -213,9 +213,16 @@ GAP_BREAK = "break"
 GAP_SKIP = "skip"
 
 # ⛔ Two codes, and they mean different things — 0 "reported a verdict" and
-# 2 "could not do the job". 1 is deliberately UNUSED so it can never be read as
+# 2 "could not do the job". 1 is never CHOSEN, so it can never be read as
 # "found a regression": this tool is a reporter, and a reporter that exits
 # non-zero on FINDINGS is a gate wearing a reporter's docstring.
+#
+# ⚠️ "Never chosen" is the honest claim, not "never seen". An unanticipated
+# exception still leaves Python's default 1 — with a traceback, which is what
+# distinguishes it from a verdict. That is precisely why every input boundary
+# below carries its own shape guard converting malformed input into a named
+# exit 2: the contract is kept by the guards, not by a catch-all, because a
+# catch-all would turn a real logic bug into a tidy "could not check".
 #
 # 2, not 1, for the cannot-check case, because that is the repo's convention and
 # the distinction is load-bearing here: `check_workload_closure_drift.py` pins
@@ -524,14 +531,28 @@ def gate_verdict(night, gate_pct):
     # race unless this is ordered — losing the one thing an operator needs,
     # which is WHICH canary.
     if broken:
-        # ⛔ Partial instrumentation is not instrumentation. The surviving
-        # canary's calm reading is evidence that ONE canary was calm, not that
-        # the paired measurement held — and the two canaries are deliberately
-        # different shapes (CPU-bound and sleep-bound), so they are not
-        # substitutes for one another.
-        rest = ("" if deviation is None else
-                f" — the remaining gating canary read {deviation:+.2f}%, which "
-                "is evidence about that canary only, not about the night")
+        # ⛔ Partial instrumentation is not instrumentation: a gating canary
+        # that is missing or unreadable means the night has no complete
+        # evidence its paired measurement held.
+        #
+        # ⛔ The justification that used to sit here is the one the header
+        # records as INVENTED rather than read (see GATING_CANARIES). It is
+        # deleted rather than quoted again: an overturned rationale needs
+        # exactly ONE record — the correction — and a second copy, even one
+        # framed as "this was wrong", is still the sentence sitting in the
+        # reader's path.
+        #
+        # ⛔ And "the remaining canary" only exists if one remains. With a
+        # single gating canary the old wording produced a message that named
+        # the CPU canary as not-established and, in the same sentence, quoted
+        # "the remaining gating canary read +0.02%" — which was that same
+        # canary's own reading.
+        others = sorted(set(GATING_CANARIES) - set(broken))
+        readable = [night.canary_pct[b] for b in others if b in night.canary_pct]
+        rest = ("" if not readable else
+                f" — the remaining gating canary read "
+                f"{max(readable, key=abs):+.2f}%, which is evidence about that "
+                "canary only, not about the night")
         return False, ("control canary not established: "
                        + ", ".join(broken) + rest)
     if deviation is None:
@@ -883,6 +904,21 @@ def nights_from_dataset(directory):
     path = Path(directory) / "nights.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
 
+    # ⛔ Shape first. `load_night()` has had this guard from the start; this
+    # adapter did not, so a top-level JSON array crashed with
+    # `AttributeError: 'list' object has no attribute 'get'` and exit 1 — the
+    # code this module reserves and documents as NEVER USED, so that a
+    # non-zero exit can never be read as "found a regression". Review found it
+    # after the identical shape had already been fixed on the `--from-gh` side:
+    # same defect, second entrance.
+    if not isinstance(payload, dict):
+        raise ValueError(f"{path}: top level is {type(payload).__name__}, "
+                         "expected a JSON object")
+    reference = payload.get("reference")
+    if reference is not None and not isinstance(reference, dict):
+        raise ValueError(f"{path}: 'reference' is {type(reference).__name__}, "
+                         "expected an object")
+
     if payload.get("schema") != DATASET_SCHEMA:
         raise ValueError(f"{path}: unsupported dataset schema "
                          f"{payload.get('schema')!r} (expected {DATASET_SCHEMA!r})")
@@ -890,7 +926,7 @@ def nights_from_dataset(directory):
         raise ValueError(f"{path}: unexpected unit {payload.get('unit')!r} — every "
                          "comparison below assumes a percent ratio")
 
-    reference_sha = (payload.get("reference") or {}).get("sha")
+    reference_sha = (reference or {}).get("sha")
     nights = payload.get("nights")
     if not isinstance(nights, list) or not nights:
         raise ValueError(f"{path}: 'nights' must be a non-empty list")
