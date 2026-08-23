@@ -1,12 +1,17 @@
 """Tests for the conditional pre-push marker gate (PR #44 C7).
 
-The gate in `scripts/ops/require_preflight_pass.sh` now consults
-`gh pr view <branch> --json state --jq .state` per pushed branch:
+The gate in `scripts/ops/require_preflight_pass.sh` consults
+`gh pr list --head <branch> --state open --json number --jq length` per
+pushed branch:
 
     * STRICT (GIT_PREFLIGHT_STRICT=1) → always require marker (old behavior).
     * gh available + OPEN PR exists    → require marker.
     * gh available + no OPEN PR        → allow (WIP branch, pre-review).
-    * gh unavailable / errors          → require marker (safe fallback).
+    * gh missing, or the query fails   → require marker (safe fallback).
+
+The query deliberately is not `gh pr view`: that command exits non-zero for
+a branch with no PR as well, so its exit code cannot separate "no PR" from
+"the query failed" — and the two must land on opposite sides of this gate.
 
 These tests fake `gh` on PATH via a shim shell script so we can control
 its output and exit code deterministically, without needing an actual
@@ -65,22 +70,28 @@ def _make_fake_gh(dir_: Path, *, state: str | None = "OPEN",
                   exit_code: int = 0) -> Path:
     """Write a shim `gh` executable into `dir_` and return its directory.
 
-    - state=None with exit_code=0 → prints nothing (gh auth'd but no PR).
-    - exit_code=1 → simulates `gh pr view` failing (no PR / not auth'd).
-    - state="OPEN"/"CLOSED"/"MERGED" → printed on stdout, exit 0.
-
     The shim matches our real invocation:
-        gh pr view <branch> --json state --jq .state
+        gh pr list --head <branch> --state open --json number --jq length
+
+    That prints how many OPEN PRs have <branch> as their head, so `state`
+    maps onto a count — only "OPEN" survives the server-side `--state open`
+    filter:
+
+    - state="OPEN"                 → prints 1 (an open PR exists).
+    - state=None/"CLOSED"/"MERGED" → prints 0 (query fine, no open PR).
+    - exit_code=1 → the query itself fails (not authenticated, API/network
+      error). This is NOT "no PR": with `--json` set, `gh pr list` reports an
+      empty result as `[]` on exit 0, so a non-zero exit can only mean the
+      query did not run to completion.
     """
     dir_.mkdir(parents=True, exist_ok=True)
     gh = dir_ / "gh"
     script = "#!/bin/sh\n"
     if exit_code != 0:
         script += f"exit {exit_code}\n"
-    elif state is None:
-        script += "exit 0\n"
     else:
-        script += f'printf "%s\\n" "{state}"\n'
+        open_count = 1 if state == "OPEN" else 0
+        script += f'printf "%s\\n" "{open_count}"\n'
     gh.write_text(script)
     gh.chmod(gh.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
     return dir_
@@ -162,9 +173,28 @@ def test_no_open_pr_allows_without_marker(tmp_path: Path):
     assert r.returncode == 0, f"stderr: {r.stderr}"
 
 
-def test_gh_errors_treated_as_no_pr_allows_without_marker(tmp_path: Path):
-    """`gh pr view` exit != 0 (no PR or not logged in) → no OPEN PR found → allow."""
+def test_gh_query_failure_requires_marker(tmp_path: Path):
+    """A failed PR query (not logged in, API/network error) is not "no PR".
+
+    `gh pr list --json` reports an empty result as `[]` on exit 0, so a
+    non-zero exit means the gate learned nothing about this branch — and an
+    unknown PR state has to land on the conservative side, same as `gh`
+    being absent altogether.
+    """
     sha = _init_git(tmp_path)
+    shim = _make_fake_gh(tmp_path / "bin", exit_code=1)
+    r = _run_gate(
+        tmp_path, _refspec("feat/x", sha),
+        path_prepend=shim,
+    )
+    assert r.returncode == 1, f"stdout: {r.stdout}"
+
+
+def test_gh_query_failure_with_marker_still_allows(tmp_path: Path):
+    """The fallback only reinstates the marker requirement — it does not
+    block a push that already has a passing preflight for this HEAD."""
+    sha = _init_git(tmp_path)
+    (tmp_path / ".git" / f".preflight-ok.{sha}").touch()
     shim = _make_fake_gh(tmp_path / "bin", exit_code=1)
     r = _run_gate(
         tmp_path, _refspec("feat/x", sha),
@@ -280,8 +310,8 @@ def test_multi_branch_any_open_pr_activates_gate(tmp_path: Path):
     gh = shim_dir / "gh"
     gh.write_text(
         "#!/bin/sh\n"
-        # Args: pr view <branch> --json state --jq .state
-        'if [ "$3" = "feat/b" ]; then printf "OPEN\\n"; fi\n'
+        # Args: pr list --head <branch> --state open --json number --jq length
+        'if [ "$4" = "feat/b" ]; then printf "1\\n"; else printf "0\\n"; fi\n'
         "exit 0\n"
     )
     gh.chmod(gh.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
