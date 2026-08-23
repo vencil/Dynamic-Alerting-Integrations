@@ -5343,9 +5343,27 @@ def test_the_two_loader_floors_are_bracketed_by_what_the_sibling_cannot_see():
         also pins the artifact halves, which are otherwise unconstrained
         above 1.
 
-    ⚠️ Both directions move with the tree, deliberately and in the same way
-    the sibling bracket does: a pure addition of loader-readable keys raises
-    the lower bound and asks for a HIGHER floor, in one edit, with a reason.
+    ⚠️ The bound MOVES WITH THE TREE, in the same way the sibling bracket
+    does — and an earlier revision of this docstring disclosed only half of
+    that, which a blind reviewer caught. Both directions, measured:
+
+      (a) adding loader-readable keys raises `narrow_total`, so the bound
+          rises. Disclosed from the start.
+      (b) removing keys from the part of the root the loader does NOT read
+          shrinks the sibling's slack, which raises the bound too. NOT
+          disclosed, and it is the surprising one: it is an edit to a file
+          this floor is not about. Measured — deleting 2 of the 11 keys in
+          `examples/_defaults-multidb.yaml` leaves the production gate at
+          rc=0 and turns this test red.
+
+    ⛔ (b) is a TRUE positive, not collateral damage. A smaller blind band
+    means the sibling tolerates less erosion, so the window in which BOTH
+    floors stay silent moves up: with slack 2 instead of 4, loader-readable
+    keys eroding 8 -> 6 leaves the wide count at exactly the sibling's floor
+    and a `min_keys` of 6 silent as well. The remedy is to RAISE the floor.
+    ⚠️ Nor is it a new maintenance burden this test invented: the same edit
+    already turns `test_the_headroom_note_states_both_directions_and_both_are_current`
+    red, because that root's blind-side key count is pinned prose already.
     """
     _generators, artifacts = gate._defaults_faces()
     wide: dict[str, tuple[int, int]] = {}
@@ -5381,15 +5399,31 @@ def test_the_two_loader_floors_are_bracketed_by_what_the_sibling_cannot_see():
                 f"own here. Got {(min_a, min_k)}; change both or neither")
             continue
         owned.append(root)
-        blind_band = narrow_k - (wide_k - sib_k)
+        sib_slack = wide_k - sib_k
+        blind_band = narrow_k - sib_slack
         assert blind_band < min_k <= narrow_k, (
-            f"{root}: key floor {min_k} must sit above {blind_band} — the "
-            f"erosion the sibling floor cannot see ({narrow_k} loader-readable "
-            f"key(s) minus the sibling's slack of {wide_k - sib_k}) — and at "
-            f"or below today's {narrow_k}. A floor below that band still "
-            f"catches a RENAME (which goes to 0) and stops catching keys "
-            f"draining out of a file that stays put, which is the half of "
-            f"this floor's job the wide one cannot do")
+            f"{root}: key floor {min_k} must sit strictly above {blind_band} "
+            f"and at or below today's {narrow_k}.\n"
+            f"  Where {blind_band} comes from: {narrow_k} loader-readable "
+            f"key(s) minus the sibling floor's slack of {sib_slack} "
+            f"({wide_k} wide key(s) against its floor of {sib_k}). Erosion "
+            f"that stops at {blind_band} leaves the wide count at exactly "
+            f"{sib_k}, so the sibling stays silent — this floor is the only "
+            f"one left, and a floor at or below {blind_band} is silent too.\n"
+            f"  ⛔ TWO EDITS MOVE THIS BOUND, and only one of them is about "
+            f"this floor's subject:\n"
+            f"    (a) ADDING loader-readable keys raises {narrow_k}, so the "
+            f"bound rises. Expected; raise {min_k} in the same commit.\n"
+            f"    (b) REMOVING keys from the part of this root the loader "
+            f"does NOT read shrinks the sibling's slack, which ALSO raises "
+            f"the bound. ⚠️ That looks unrelated and is not: a smaller "
+            f"blind band means the sibling tolerates less, so the window "
+            f"where BOTH floors are silent moves up. The hole is real, and "
+            f"the remedy is to raise {min_k} — not to relax this test.\n"
+            f"  ⛔ LOWERING {min_k} IS NEVER THE REMEDY. A floor inside the "
+            f"band still catches a RENAME (which takes the count to 0) and "
+            f"stops catching keys draining out of a file that stays put, "
+            f"which is the half of this floor's job the wide one cannot do")
         assert 1 <= min_a <= narrow_a, (
             f"{root}: artifact floor {min_a} against {narrow_a} measured")
 
