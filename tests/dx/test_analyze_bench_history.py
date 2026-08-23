@@ -4398,8 +4398,9 @@ class TestCanariesAreNeverJudgedAsProductBenchmarks:
     Until #1439/TRK-359 this module subtracted only `CANARY_BENCH` (the CPU one)
     from the judged set, so `BenchmarkControlCanarySleep` was evaluated like any
     tenant-facing benchmark. `bench-canary/canary_test.go` calls it
-    "INFORMATIONAL ONLY ... gating on it would flap INCONCLUSIVE constantly; NOT
-    part of the gate decision", and `bench-record.yaml` copies the paired main
+    "INFORMATIONAL ONLY: a 3-4% drift here is only ~30-40us ... so gating on it
+    would flap INCONCLUSIVE constantly. Emitted + rendered for human eyes; NOT
+    part of the gate decision." — and `bench-record.yaml` copies the paired main
     side — canary rows included — into `bench-baseline.txt`, which is what this
     module parses. So the path was live: scheduler jitter the harness itself
     calls healthy could file a sustained regression against a real issue.
@@ -4481,8 +4482,9 @@ class TestCanariesAreNeverJudgedAsProductBenchmarks:
         assert ab.CANARY_BENCH in ab.CANARY_BENCHES
 
     def test_the_declared_canaries_match_the_real_benchmark_source(self):
-        """The same role pin `paired_trend_watch.py` carries, so the two
-        consumers cannot drift apart from the harness or from each other."""
+        """The same role pin #1536's `paired_trend_watch.py` carries — ⛔ that
+        file is NOT in this tree, so until #1536 lands this module is the only
+        consumer pinned to the harness; once it does, neither can drift."""
         src = (Path(__file__).resolve().parents[2] / "scripts" / "tools" / "ops"
                / "bench-canary" / "canary_test.go").read_text(encoding="utf-8")
         declared = set(_re.findall(r"^func (Benchmark\w+)\(b \*testing\.B\)",
