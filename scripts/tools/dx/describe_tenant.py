@@ -28,7 +28,7 @@ from typing import Any
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
-from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_compat import try_utf8_stdout, PROJECT_ROOT_MARKERS  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 try:
@@ -362,15 +362,54 @@ def main() -> None:
     if args.conf_d:
         conf_d = Path(args.conf_d)
     else:
-        repo_root = Path(__file__).resolve().parent.parent.parent.parent
-        conf_d = repo_root / "conf.d"
-        if not conf_d.exists():
-            # Try tests/fixtures as fallback
-            for fixture_dir in sorted((repo_root / "tests" / "fixtures").glob("synthetic-*")):
-                candidate = fixture_dir / "conf.d"
-                if candidate.exists():
-                    conf_d = candidate
-                    break
+        # ⛔ Was `.parent` four times (#1494). This file ships flattened into
+        # the image (`/opt/da-tools/describe_tenant.py`, three ancestors), and
+        # a `.parent` chain does not raise past the top — it SATURATES at the
+        # filesystem root, so the walk silently produced `/` and then looked
+        # for `/conf.d`. Search for the directory instead of counting levels;
+        # the repo-layout answer is unchanged, and outside a checkout the
+        # search simply comes up empty and the existing error path below says
+        # so with the `--conf-d` remedy.
+        here = Path(__file__).resolve().parent
+        # ⛔ BOUNDED. The search stops at the repository root and never looks
+        # above it. An unbounded `for base in (here, *here.parents)` walk —
+        # which is what the first version of this fix did — keeps climbing
+        # past the checkout and will happily bind to a `conf.d` that belongs
+        # to somebody else: `C:\Users\<user>\conf.d` on a dev box, `/opt` or
+        # `/` inside the image. That direction fails by silently describing
+        # the WRONG tenants, which is worse than the level-counting bug it
+        # replaced (that one at least stayed inside the repo).
+        #
+        # "Project root" = the nearest ancestor carrying one of
+        # `PROJECT_ROOT_MARKERS`. ⚠️ `.git` ALONE is not enough: a source
+        # tarball (`git archive`, a GitHub release zip, a vendored or rsync'd
+        # copy) has no `.git`, and keying only on it turned a tree the OLD
+        # code handled correctly into an error — a regression introduced while
+        # fixing the unbounded walk, measured on two of ten layouts. `.git` is
+        # a directory in a clone and a FILE in a git worktree, hence
+        # `exists()`. The image carries none of these markers, so there the
+        # search ends empty and the error path below prints the `--conf-d`
+        # remedy — the same outcome the old code produced.
+        repo_root = next(
+            (base for base in (here, *here.parents)
+             if any((base / m).exists() for m in PROJECT_ROOT_MARKERS)),
+            None,
+        )
+        conf_d = None
+        if repo_root is not None:
+            if (repo_root / "conf.d").is_dir():
+                conf_d = repo_root / "conf.d"
+            else:
+                fixtures = repo_root / "tests" / "fixtures"
+                for fixture_dir in sorted(fixtures.glob("synthetic-*")):
+                    if (fixture_dir / "conf.d").is_dir():
+                        conf_d = fixture_dir / "conf.d"
+                        break
+        if conf_d is None:
+            # Non-existent on purpose: the check below reports it with the
+            # `--conf-d` remedy. Named under the repo root when we found one
+            # so the message points somewhere the reader recognises.
+            conf_d = (repo_root or here) / "conf.d"
 
     if not conf_d.exists():
         print(f"❌ conf.d/ not found at {conf_d}", file=sys.stderr)
