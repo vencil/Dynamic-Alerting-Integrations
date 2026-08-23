@@ -394,7 +394,7 @@ PR-A 的第一版把三態紀律寫進了 Python 端，卻在**輸入邊界**留
 
 | 層級 | 意思 | 實作中的成因 |
 |---|---|---|
-| **(a) 整夜 `unreadable`** | 這一夜的資料根本讀不出來 | 截至 `96a6afa` 共 **10 個呼叫點**，分屬四條入口路徑。**`load_night`（6，解析單夜 `bench-paired.json`）**：payload 不是 JSON object／schema 不在支援清單／night status 未知／夜跑自己回報 INCONCLUSIVE／`evaluated` 不是 object／`inconclusive` 不是 object。**`nights_from_paths`（1）**：讀檔或解析失敗。**`nights_from_dataset`（1，`--dataset` 封存重播）**：該筆封存記錄缺 `ratios_pct` mapping。**`nights_from_gh`（2）**：artifact 下載失敗或不完整／該次執行早於成對量測管線上線（artifact 裡沒有 `bench-paired.json`） |
+| **(a) 整夜 `unreadable`** | 這一夜的資料根本讀不出來 | 截至 `96a6afa` 共 **10 個呼叫點**，分屬四個函式。⚠️ **它們不是四條入口**：CLI 只有 `--dataset` 與 `--from-gh` 兩條，而 `nights_from_gh` → `nights_from_paths` → `load_night` 是同一條鏈，所以一個夜跑的夜實際可觸發其中 **9** 條，`--dataset` 那條只有 1 條。**`load_night`（6，解析單夜 `bench-paired.json`）**：payload 不是 JSON object／schema 不在支援清單／night status 未知／夜跑自己回報 INCONCLUSIVE／`evaluated` 不是 object／`inconclusive` 不是 object。**`nights_from_paths`（1，僅由 `--from-gh` 經過）**：讀檔或解析失敗。**`nights_from_dataset`（1，`--dataset` 封存重播）**：該筆封存記錄缺 `ratios_pct` mapping。**`nights_from_gh`（2）**：artifact 下載失敗或不完整／該次執行早於成對量測管線上線（artifact 裡沒有 `bench-paired.json`） |
 | **(b) 整夜 `not-counted`** | 資料讀得出來，但**閘門**判定這一夜的成對量測不可信 | gating 對照測試缺失或不可讀／完全沒有對照測試讀數／偏離超過 gate |
 | **(c) 單支測試 `inconclusive`** | 這一夜整體可用，但**這一支**沒有可用比值 | `unreadable-record`／`unreadable-ratio`（含 §待決 2 的單側測試） |
 
@@ -451,7 +451,7 @@ PR-A 的第一版把三態紀律寫進了 Python 端，卻在**輸入邊界**留
 
 ⛔ **這一題是在第一段上線、拿真實比值回頭歸因時才浮出來的，本文原始版本沒有預見。**
 
-釘死參考版本量的是**累積的實作差異**，而其中一部分是**刻意加的功能成本**。參考版本以來 `pkg/config` 淨增約 2,170 行，其中三個最大來源是 `resolve.go` +785、`merge_tenant.go` +128、`custom_alert.go` +660；⚠️ 這三項合計 1,573 行，**不是** 2,170 的完整拆解，餘下約 597 行散在該 package 的其他檔案（此為對引用數字的算術，非本節新量）。同一份歸因另記有 10 顆 commit 觸及 `BenchmarkMergePartialConfigs_1000` 與 `BenchmarkResolveSilentModes_1000` 的路徑。這些成本是**真的**——比值不是假象、不是 fixture 問題、不是機器噪音——但它們是有人刻意換來的功能，未必該「修」。
+釘死參考版本量的是**累積的實作差異**，而其中一部分是**刻意加的功能成本**。參考版本以來 `pkg/config` 淨增約 2,170 行，該次歸因括號內列出的是 `resolve.go` +785、`merge_tenant.go` +128、`custom_alert.go` +660；⛔ 原文**未主張**這三個是最大來源（本節先前如此寫是自行加上的排序，且錯：以參考版本起算，`aliases.go` 淨增 +254 就大於 `merge_tenant.go`——此為本節新量，非該次歸因所載）。⚠️ 這三項合計 1,573 行，**不是** 2,170 的完整拆解，餘下約 597 行散在該 package 的其他檔案（此為對引用數字的算術，非本節新量）。同一份歸因另記有 10 顆 commit 觸及 `BenchmarkMergePartialConfigs_1000` 與 `BenchmarkResolveSilentModes_1000` 的路徑。這些成本是**真的**——比值不是假象、不是 fixture 問題、不是機器噪音——但它們是有人刻意換來的功能，未必該「修」。
 
 所以第二段監測器的第一張票，很可能落在既有分類之外的**第三類**：
 
@@ -474,7 +474,7 @@ PR-A 的第一版把三態紀律寫進了 Python 端，卻在**輸入邊界**留
 
 ⚠️ 本節的問題陳述來自 [#1439 的 2026-08-20 歸因紀錄](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1439#issuecomment-5356110529)；上面那組行數與 commit 數即出自該次歸因，不是本節新量的。
 
-⛔ **本段前一版把那句話原文照搬，結果它在這裡說了一件假的事。** 原文寫的是「10 顆 commit 觸及**這兩支**的路徑」，緊接在三個 `.go` 檔的行數之後——在 #1439 裡讀者剛看過那次 triage 的兩支 scoped benchmark，在這裡沒有，最近的前指變成剛列出的**三個**檔案。這是引文脫離了提供其指涉對象的上下文，不是原文的錯。⚠️ 追查時另發現：#1439 對「這兩支」也**只靠版面相鄰**綁定（「scoped 到兩支」後接兩列表格，與該句之間隔了六個區塊），沒有任何一句寫出對應關係——所以上面改成指名兩支 benchmark，是**本節依表格所作的解讀**，不是原文的敘述。由 CodeRabbit 在 [#1562](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1562) 察覺（它報的是「列三個檔卻寫兩支」，⛔ 但提出的兩個修法——補列 597 行的來源、或把總數改成 1,573——都會把一個查證過的真數字換成部分明細的算術產物，故未採納）。
+⛔ **本段前一版把那句話原文照搬，結果它在這裡說了一件假的事。** 原文寫的是「10 顆 commit 觸及**這兩支**的路徑」，緊接在三個 `.go` 檔的行數之後——在 #1439 裡讀者剛看過那次 triage 的兩支 scoped benchmark，在這裡沒有，最近的前指變成剛列出的**三個**檔案。這是引文脫離了提供其指涉對象的上下文，不是原文的錯。⚠️ 那麼「這兩支」在原文裡指誰？原文**沒有**任何一句直接寫出照應（沒有「這兩支即 A 與 B」這種句子），但指涉是**散文建立的、不只靠表格相鄰**：在「scoped 到兩支」與該句之間，§哪些可引用、哪些不可 的兩個 bullet 各自指名 `MergePartialConfigs_1000` 與 `ResolveSilentModes_1000` 並各下一句判斷。所以上面指名兩支 benchmark 是**有原文散文支持的還原**，缺的只是那一句自己的照應未明寫。由 CodeRabbit 在 [#1562](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1562) 察覺（它報的是「列三個檔卻寫兩支」，⛔ 但提出的兩個修法——補列 597 行的來源、或把總數改成 1,573——都會把一個查證過的真數字換成部分明細的算術產物，故未採納）。
 
 ## 這些數字有多可信
 
