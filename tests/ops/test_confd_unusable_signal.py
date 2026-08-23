@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import os
 import pathlib
 import sys
 
@@ -618,3 +619,76 @@ def test_diagnose_treats_a_null_profiles_key_as_no_profiles(
 
     assert "skipped_unusable_files" not in res
     assert "profiles" not in err.getvalue()
+
+
+def test_an_unreadable_conf_d_root_blocks_the_routing_reader(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+):
+    """⛔ "Unreadable" must never reach the caller as "no tenants".
+
+    This is the end-to-end half that the library-level test
+    (`test_an_unlistable_root_names_itself_instead_of_raising`) does not
+    reach, and the gap was a REGRESSION this change set introduced.
+
+    Before `unusable_config_paths` grew its `except OSError`, a `chmod 111`
+    conf.d root (traversable, not readable) raised `PermissionError` out of
+    `root.iterdir()` and the process died — loud, and non-zero. Catching it
+    was right; what was missed is that the caller then treated an empty
+    result as "no tenants are configured". Measured A/B with
+    `setpriv --reuid=65534` against a real chmod-111 directory:
+
+        OLD  rc=1  PermissionError traceback
+        NEW  rc=0  "No tenants found in config directory."
+
+    `.github/workflows/validate.yaml` runs `generate-routes --validate
+    --strict` as a REQUIRED check, and GitHub Actions does not fail a step
+    for stderr output — so an unreadable conf.d turned that gate GREEN with
+    zero routes. That is the exact shape (#1339 / #1448) this whole change
+    set exists to remove: a green light for a directory nothing read.
+    """
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    (root / "acme.yaml").write_text(
+        "tenants:\n  acme:\n    mysql_threads_running: 90\n", encoding="utf-8")
+
+    real_iterdir = pathlib.Path.iterdir
+
+    def deny(self):
+        if os.fspath(self) == os.fspath(root):
+            raise PermissionError(13, "Permission denied", str(self))
+        return real_iterdir(self)
+
+    monkeypatch.setattr(pathlib.Path, "iterdir", deny)
+
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err), pytest.raises(SystemExit) as exc:
+        _parse_config_files(str(root))
+
+    # Non-zero is the point; 2 matches the `not os.path.isdir` guard beside
+    # it — both mean "the directory you pointed me at is not usable input",
+    # which is a different statement from "your config has a finding".
+    assert exc.value.code == 2, (
+        "an unreadable conf.d root must not exit 0 — CI reads the exit code, "
+        "not stderr")
+    msg = err.getvalue()
+    assert "could not be read" in msg
+    assert "not 'no tenants'" in msg, (
+        "the message must say why an empty result would be a lie")
+
+
+def test_a_readable_but_empty_conf_d_root_is_still_fine(tmp_path: pathlib.Path):
+    """Control group for the guard above — "empty" must stay legal.
+
+    Without this, the cheapest way to satisfy the assertion above is to make
+    every empty directory blocking, which would break the legitimate
+    "no tenants yet" case that the reader has always supported.
+    """
+    root = tmp_path / "conf.d"
+    root.mkdir()
+
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        result = _parse_config_files(str(root))
+    assert result["tenant_keys"] == {}
+    assert result["policy_file_errors"] == []
+    assert "could not be read" not in err.getvalue()

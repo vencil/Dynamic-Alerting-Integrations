@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 
 import yaml
 
@@ -335,7 +336,38 @@ def _parse_config_files(config_dir: str) -> dict:
     # would have been one signal fewer than this reader gave before the
     # enumerators were unified, so the record is kept, through the same
     # `_drop_unusable_policy` bookkeeping every other dropped file uses.
-    for bad in unusable_config_paths(config_dir, recursive=False):
+    unusable = unusable_config_paths(config_dir, recursive=False)
+
+    # ⛔ THE ROOT ITSELF, before anything else. `unusable_config_paths` reports
+    # a conf.d root it could not list (a `chmod 111` directory: traversable,
+    # not readable) by returning the root — which means this reader saw ZERO
+    # files, not "no tenants are configured".
+    #
+    # Left to fall through, that is a silent green: the loop below prints one
+    # stderr WARN, the read loop finds nothing, and `main` reports "No tenants
+    # found in config directory." and exits 0. `.github/workflows/validate.yaml`
+    # runs `generate-routes --validate --strict` as a REQUIRED check, and
+    # GitHub Actions does not fail a step for stderr output — so an unreadable
+    # conf.d would turn that gate green with zero routes.
+    #
+    # ⚠️ Measured, and it is a REGRESSION this change set introduced: before
+    # `unusable_config_paths` grew its `except OSError` the same input raised
+    # `PermissionError` out of `root.iterdir()` and the process died with a
+    # traceback. rc went 1 → 0. Catching the exception was right; letting the
+    # caller treat "unreadable" as "empty" was not.
+    #
+    # EXIT_CALLER_ERROR, matching the `not os.path.isdir` guard a few lines up:
+    # both mean "the directory you pointed me at is not usable as input", which
+    # is a different statement from "your configuration has a finding".
+    root_path = Path(config_dir)
+    if any(p == root_path for p in unusable):
+        print(f"ERROR: config directory could not be read: {config_dir} — "
+              f"{unusable_reason(root_path)}. Nothing was scanned, so an "
+              f"empty result here would mean 'unreadable', not 'no tenants'.",
+              file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
+
+    for bad in unusable:
         _drop_unusable_policy(
             bad.name, unusable_reason(bad),
             f"remove {bad.name} or replace it with a readable YAML file",
