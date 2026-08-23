@@ -746,7 +746,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "d12aef5a078d1f7fcb89fbdeed9c5d1840946724694ae461e48542a3c8107437",
+ "source_digest": "fc75ea54ce1aa797656ca184d37c7b67a3b41eb15025d76cfab8acba14d19683",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1293,6 +1293,7 @@
    "tests/ops/test_wrapped_path_references.py"
   ],
   "components/da-tools/app/build.sh": [
+   "tests/lint/test_check_build_completeness.py",
    "tests/lint/test_check_image_pin_capability.py",
    "tests/shared/test_entrypoint.py"
   ],

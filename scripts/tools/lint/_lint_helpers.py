@@ -202,16 +202,44 @@ def strip_bash_comment(line: str) -> str:
 
 
 def array_open_pattern(array_name: str) -> str:
-    """Regex source matching a bash array header for *array_name*.
+    r"""Regex source matching a bash array header for *array_name*.
 
-    ⛔ Anchored at a word start. A plain ``f"{name}=(" in line`` substring test
-    also matches ``EXTRA_TOOL_FILES=(``, so a second, unrelated array opens the
-    block and donates its entries to this one's caller.
+    ⛔ Anchored, not a substring. A plain ``f"{name}=(" in line`` test also
+    matches ``EXTRA_TOOL_FILES=(``, so a second, unrelated array opens the block
+    and donates its entries to this one's caller.
+
+    ⛔ Anchored at LINE START, not at any whitespace. ``(?:^|[\s;])`` treats the
+    space inside a double-quoted string as a word start, so a line that merely
+    MENTIONS the array — ``echo "  packaged: TOOL_FILES=( ops/ghost.py )"``, a
+    doc heredoc, a log message — opened a block. Combined with "a line may open
+    and close", the first such mention won outright and the reader stopped
+    there: measured against real bash, three ordinary build.sh shapes returned
+    the ghost list INSTEAD of the array. That is the silent direction, and it
+    was a REGRESSION against the pre-rework reader, which over-collected on
+    those inputs (loud) rather than replacing them.
+
+    The line is ``.strip()``-ed before matching, so an indented header still
+    matches; only a header in the MIDDLE of a line stops matching. A leading
+    declaration keyword is allowed, because ``local TOOL_FILES=(`` and
+    ``declare -a TOOL_FILES=(`` are ordinary and a bare ``^`` anchor dropped
+    both — the array then read as EMPTY. ⛔ That regression was invisible to the
+    boundary table (16 rows, none of them declared) and only showed up against a
+    corpus of real-shaped build.sh files: **a test table is not an oracle**.
+
+    ⚠️ NOT allowed: a header after ``;`` on a shared line (``MODE=x;
+    TOOL_FILES=( … )``). Permitting it would also permit ``echo "…; TOOL_FILES=(
+    ghost )"``, and the two are textually identical. The chosen failure
+    direction is the loud one: an unread header yields an EMPTY set, and empty
+    is loud in every consumer measured (the bidirectional check errors on all 51
+    commands, ``capabilities_for_tag`` refuses 0 entries outright, and the
+    flat-layout harness asserts a non-empty set) — whereas a hijacked header is
+    silently WRONG.
 
     ⚠️ ``NAME+=(`` deliberately does NOT match: see :func:`parse_build_sh_array_text`
     for why modelling bash's assignment semantics textually was reverted.
     """
-    return rf"(?:^|[\s;]){re.escape(array_name)}=\("
+    return (r"^(?:(?:local|declare|export|readonly|typeset)"
+            r"(?:\s+-\w+)*\s+)?" + re.escape(array_name) + r"=\(")
 
 
 @lru_cache(maxsize=None)
@@ -234,8 +262,15 @@ def _split_at_array_close(text: str) -> "tuple[str, bool]":
     Quote-aware, because ``"ops/a(1).py"`` is a legal entry and the ``)``
     inside it does not close anything. Backslash escapes are honoured for the
     same reason.
+
+    ⛔ Also EXPANSION-aware. ``$(…)`` and ``$((…))`` carry their own ``)``, and
+    reading the first one as the array's close silently dropped every remaining
+    entry — measured, ``TOOL_FILES=( a  b$(( 0 + 1 )).py  diagnose.py )`` lost
+    ``diagnose.py`` and gained four fragments, where the pre-rework reader kept
+    all three. Depth counting is cheap; being wrong here is not.
     """
     quote = ""
+    depth = 0
     i = 0
     while i < len(text):
         ch = text[i]
@@ -250,8 +285,18 @@ def _split_at_array_close(text: str) -> "tuple[str, bool]":
         elif ch == "\\":
             i += 2
             continue
+        elif ch == "$" and text[i + 1:i + 3] == "((":
+            depth += 2
+            i += 3
+            continue
+        elif ch == "$" and text[i + 1:i + 2] == "(":
+            depth += 1
+            i += 2
+            continue
         elif ch == ")":
-            return text[:i], True
+            if depth == 0:
+                return text[:i], True
+            depth -= 1
         i += 1
     return text, False
 
@@ -326,10 +371,15 @@ def parse_build_sh_array_text(text: str, array_name: str) -> Set[str]:
       shell can. Stopping at the close is what the reader can actually justify,
       and it is what every one of those cases needs.
 
-      ⚠️ Consequence, disclosed rather than papered over: a later
-      ``NAME+=( … )`` is NOT read. ``build.sh`` uses no ``+=`` today (checked),
-      and the failure direction if one is added is under-reporting, which the
-      bidirectional check in ``check_build_completeness`` reports loudly.
+      ⚠️ Consequence: a later ``NAME+=( … )`` is NOT read. ⛔ The first version
+      of this note claimed that was safe because "under-reporting is loud in the
+      bidirectional check" — measured, that is FALSE for the likeliest case. A
+      library, a data file or a ``BUILD_EXEMPT`` daemon added via ``+=`` passes
+      completely green: the bidirectional check only speaks when the file is in
+      ``COMMAND_MAP``, and ``check_layout_depth_assumptions`` — #1494's own rule
+      — never sees it at all. So the note is no longer the mitigation:
+      ``check_build_completeness.check_append_form_arrays`` rejects the form
+      outright, with a message naming the replacement.
     """
     entries: Set[str] = set()
     in_block = False

@@ -29,6 +29,7 @@ v2.4.0 新增：解決 v2.3.0 release 過程中 opa-evaluate 加入 COMMAND_MAP
 import argparse
 import ast
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -89,6 +90,40 @@ REQUIRED_DATA_FILES: dict = {
 # `parents[N]` 上限是 2。repo 佈局下同一支檔案有 8~9 個，因此任何「數上去幾層」
 # 的寫法在兩種佈局下必然分岔，而 repo 佈局會把它藏住。
 MAX_IMAGE_ANCESTOR_INDEX = 2
+
+
+_APPEND_ARRAYS = ("TOOL_FILES", "REPO_DATA_FILES")
+
+
+def check_append_form_arrays(build_sh: Path = None) -> list:
+    """`NAME+=( … )` 在 build.sh 裡是禁止的，因為 reader 讀不到它。
+
+    ⛔ 這條是把一個**揭露**升級成守衛，因為那個揭露的減災說法是假的。原本寫的是
+    「`+=` 讀不到，但方向是少撈，雙向檢查會大聲」——實測只有兩種情形會大聲：
+    該檔在 `COMMAND_MAP` 裡，或某支已出貨模組 import 它。函式庫、資料檔、以及
+    `BUILD_EXEMPT` 的 daemon 三類都不在其中，用 `+=` 加進來會**全綠**，而且
+    `check_layout_depth_assumptions`（#1494 自己那條規則）根本不會掃到它。
+
+    reader 之所以讀不到，是因為文字掃描分不出「指派」與「提及」（試圖分辨的那
+    一版讓 `echo "… TOOL_FILES=( … )"` 取代了整個陣列）。所以正解不是讓 reader
+    更聰明，而是讓**這種寫法不存在**——一行 tripwire，訊息直接給替代寫法。
+    """
+    src = (build_sh or BUILD_SH_PATH).read_text(encoding="utf-8-sig")
+    errors = []
+    for name in _APPEND_ARRAYS:
+        pattern = re.compile(
+            r"^(?:(?:local|declare|export|readonly|typeset)(?:\s+-\w+)*\s+)?"
+            + re.escape(name) + r"\+=\(", re.M)
+        for m in pattern.finditer(src):
+            line = src[:m.start()].count("\n") + 1
+            errors.append((
+                "error",
+                f"build.sh:{line} 用了 `{name}+=(`。出貨清單的 reader 讀不到"
+                f"追加形式（文字掃描分不出指派與提及），所以這樣加進來的檔案會"
+                f"**靜默地**不被層數守衛與配對檢查涵蓋。請併進同名陣列的單一"
+                f"`{name}=(` 區塊。"
+            ))
+    return errors
 
 
 def check_bidirectional(command_map: dict, build_tools: set) -> list:
@@ -490,7 +525,8 @@ def main():
 
     command_map = parse_command_map(ENTRYPOINT_PATH)
     build_tools = parse_build_sh_tools(BUILD_SH_PATH)
-    errors = check_bidirectional(command_map, build_tools)
+    errors = check_append_form_arrays(BUILD_SH_PATH)
+    errors += check_bidirectional(command_map, build_tools)
     tool_rel_paths = parse_build_sh_tool_paths(BUILD_SH_PATH)
     errors += check_underscore_imports(tool_rel_paths, build_tools)
     # ⛔ REQUIRED_DATA_FILES 比對的是「會不會一起進映像」，而 build.sh 有兩條

@@ -628,19 +628,7 @@ MUTATIONS: list[Mutation] = [
         new="        stripped = line.strip()",
         kill_test="test_skips_comments_and_blanks",
     ),
-    Mutation(
-        target_file="scripts/tools/lint/_lint_helpers.py",
-        test_file="tests/lint/test_check_build_completeness.py",
-        label="array_open_pattern: drop the word-start anchor",
-        fn_name="array_open_pattern",
-        # ⛔ Mutates the PATTERN, not a caller. An earlier version of this entry
-        # special-cased the literal `"EXTRA"` from the test fixture, so it was
-        # built to be killed rather than being the defect it names — and it did
-        # not even live in the function its fn_name claimed.
-        old=r'''return rf"(?:^|[\s;]){re.escape(array_name)}=\("''',
-        new=r'''return rf"{re.escape(array_name)}=\("''',
-        kill_test="test_block_boundaries_are_word_anchored",
-    ),
+
     Mutation(
         target_file="scripts/tools/lint/_lint_helpers.py",
         test_file="tests/lint/test_check_build_completeness.py",
@@ -676,6 +664,48 @@ MUTATIONS: list[Mutation] = [
         old='    return text.lstrip("﻿")',
         new="    return text",
         kill_test="test_the_tag_blob_parser_has_the_same_boundaries",
+    ),
+    Mutation(
+        target_file="scripts/tools/lint/_lint_helpers.py",
+        test_file="tests/lint/test_check_build_completeness.py",
+        label="array header: any-whitespace anchor (a mention hijacks the array)",
+        fn_name="array_open_pattern",
+        # ⛔ 這一格釘的是「第一個文字提及不得取代真陣列」。用 `[\s;]` 當錨點時，
+        # 雙引號字串裡的一個空白就算 word start ⇒ echo/heredoc/未執行分支裡的
+        # 提及會整組取代陣列，而且是靜默方向。
+        old=r'''return (r"^(?:(?:local|declare|export|readonly|typeset)"''',
+        new=r'''return (r"(?:^|[\s;])(?:(?:local|declare|export|readonly|typeset)"''',
+        kill_test="test_block_boundaries_are_word_anchored",
+    ),
+    Mutation(
+        target_file="scripts/tools/lint/_lint_helpers.py",
+        test_file="tests/lint/test_check_build_completeness.py",
+        label="array header: drop the declaration-keyword allowance",
+        fn_name="array_open_pattern",
+        # ⛔ 反方向：裸 `^` 錨點讓 `local TOOL_FILES=(` / `declare -a …` 整個
+        # 陣列讀成空。這格是實測才發現的——出貨測試表 16 列沒有任何一列帶宣告
+        # 關鍵字，是拿真實形狀的語料比對才抓到。
+        old=r'''r"(?:\s+-\w+)*\s+)?" + re.escape(array_name)''',
+        new=r'''r")?" + re.escape(array_name)''',
+        kill_test="test_block_boundaries_are_word_anchored",
+    ),
+    Mutation(
+        target_file="scripts/tools/lint/_lint_helpers.py",
+        test_file="tests/lint/test_check_build_completeness.py",
+        label="array close: treat an expansion's `)` as the array close",
+        fn_name="_split_at_array_close",
+        old='        elif ch == "$" and text[i + 1:i + 2] == "(":',
+        new="        elif False:",
+        kill_test="test_an_expansion_does_not_close_the_array",
+    ),
+    Mutation(
+        target_file="scripts/tools/lint/check_build_completeness.py",
+        test_file="tests/lint/test_check_build_completeness.py",
+        label="append-form tripwire: stop rejecting `NAME+=(`",
+        fn_name="check_append_form_arrays",
+        old="        for m in pattern.finditer(src):",
+        new="        for m in []:",
+        kill_test="test_append_form_is_an_error",
     ),
     Mutation(
         target_file="scripts/tools/lint/_lint_helpers.py",

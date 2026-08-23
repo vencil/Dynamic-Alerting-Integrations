@@ -1415,6 +1415,12 @@ repos:
         # KNOWN_UNKNOWN_SOURCE exit-lock breach; the 8 helm-only unknowns are
         # INFO. Single-cluster face only — federation plane assignment is the
         # split tool's contract, not this gate's (see module docstring).
+        # ⛔ `_lint_helpers.py` belongs here: this gate now DELEGATES both of
+        # its parsers to it (#1494), so an edit there can change this gate's
+        # verdict. Without it the hook is the exact shape the comment above
+        # warns about — an edit that never runs the gate. (CI runs it with
+        # `--all-files`, so the gap was local-only — and local is where it
+        # is supposed to be cheap to find out.)
         files: ^(k8s/.*\.ya?ml|rule-packs/rule-pack-.*\.ya?ml|scripts/tools/(ops/generate_rule_pack_split|lint/check_scrape_reachability)\.py)$
 
       - id: image-pin-capability-check
@@ -1439,7 +1445,7 @@ repos:
         # and `templates/**` at any depth. A `files:` regex wider than the
         # scanner gives a hook that fires and prints OK; one narrower gives an
         # edit that never runs the gate.
-        files: ^(k8s/.*\.ya?ml|helm/[^/]+/(values[^/]*\.ya?ml|Chart\.ya?ml|templates/.*\.ya?ml)|components/da-tools/app/(entrypoint\.py|build\.sh)|scripts/tools/lint/check_image_pin_capability\.py)$
+        files: ^(k8s/.*\.ya?ml|helm/[^/]+/(values[^/]*\.ya?ml|Chart\.ya?ml|templates/.*\.ya?ml)|components/da-tools/app/(entrypoint\.py|build\.sh)|scripts/tools/lint/(check_image_pin_capability|_lint_helpers)\.py)$
 
       - id: devcontainer-dep-parity
         name: "dev container must declare every Python dep CI installs (#1254)"

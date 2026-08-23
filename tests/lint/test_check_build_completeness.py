@@ -747,6 +747,30 @@ class TestBuildShArrayReaderMatchesBash:
             ")\n", encoding="utf-8")
         assert _parse_build_sh_array(bs, "TOOL_FILES") == {expected}
 
+    @pytest.mark.parametrize("expansion", [
+        "ops/b$(( 0 + 1 )).py",     # 算術展開，自帶兩層 `)`
+        "$(echo ops/generated.py)",  # 命令替換
+        "$(f $(g))",                 # 巢狀
+    ])
+    def test_an_expansion_does_not_close_the_array(self, tmp_path, expansion):
+        """⛔ 展開自帶的 `)` 不得被當成陣列收尾。
+
+        ⚠️ 這一格釘的是**「它後面的條目不會消失」**，不是「展開被求值」。
+        reader 不是 shell，`$(…)` 的值它拿不到——那一點在 docstring 揭露。但把
+        第一個 `)` 當收尾會讓**其後每一條真條目靜默消失**（實測：
+        `TOOL_FILES=( a  b$(( 0 + 1 )).py  diagnose.py )` 掉了 `diagnose.py`），
+        而改動前的 reader 三條都在。這是回歸，不是既有限制。
+        """
+        from _lint_helpers import _parse_build_sh_array
+        bs = tmp_path / "build.sh"
+        bs.write_text(
+            f"TOOL_FILES=(\n  ops/first.py\n  {expansion}\n  ops/last.py\n)\n",
+            encoding="utf-8")
+        got = _parse_build_sh_array(bs, "TOOL_FILES")
+        assert "ops/first.py" in got, got
+        assert "ops/last.py" in got, (
+            f"展開 {expansion!r} 之後的條目被吞掉了：{sorted(got)}")
+
     def test_absent_array_is_empty_not_an_error(self, tmp_path):
         """舊版 build.sh 沒有 REPO_DATA_FILES —— 空集合，不是例外。"""
         from _lint_helpers import _parse_build_sh_array
@@ -826,10 +850,43 @@ class TestBuildShArrayReaderMatchesBash:
             {"ops/a b.py", "ops/c.py"},
             "含空白的引號檔名要保持完整（bash 給兩個條目）",
         ),
-        # ⛔ 這三格釘的是**反方向**：文字裡「提到」陣列不是「指派」陣列。
-        # 一個試圖模擬 bash `+=`/`=` 語意的版本會掃到檔尾，於是 echo 裡、
-        # heredoc 裡、甚至不會執行的分支裡的 `TOOL_FILES=(` 都把陣列洗掉——
-        # 三格都是靜默方向。文字掃描分不出指派與提及，只有 shell 分得出。
+        # ⛔ 以下六格釘的是**反方向**：文字裡「提到」陣列不是「指派」陣列。
+        # ⚠️ **提及在陣列「之前」與「之後」是兩個不同的缺陷，必須各釘一次。**
+        # 只放「之後」那三格時，reader 在自己的 `)` 就 break 了、根本沒讀到那
+        # 幾行——那三格釘的是 `break`，不是「提及 ≠ 指派」。把順序對調後實測
+        # 三格全部靜默答錯（回傳 ghost 清單**取代**真陣列）。兩個方向的期望值
+        # 都取自真 bash。
+        (
+            'usage() { echo "  packaged: TOOL_FILES=( ops/ghost.py )"; }\n'
+            "TOOL_FILES=(\n  ops/a.py\n  ops/b.py\n)\n",
+            {"ops/a.py", "ops/b.py"},
+            "提及在陣列之前（echo）——第一個文字提及不得獲勝",
+        ),
+        (
+            "cat <<EOF\nsee TOOL_FILES=( ops/doc.py )\nEOF\n"
+            "TOOL_FILES=(\n  ops/a.py\n)\n",
+            {"ops/a.py"},
+            "提及在陣列之前（heredoc）",
+        ),
+        (
+            'if [ "$M" = 1 ]; then TOOL_FILES=( ops/tiny.py ); fi\n'
+            "TOOL_FILES=(\n  ops/a.py\n)\n",
+            {"ops/a.py"},
+            "不會執行的分支在陣列之前",
+        ),
+        # ⛔ 這兩格是行首錨點的反方向代價，**只有真實語料抓得到**：出貨測試表
+        # 的其他列沒有任何一列帶宣告關鍵字，所以一個裸 `^` 錨點在表上全綠、
+        # 卻讓這兩種普通寫法整個陣列讀成空。
+        (
+            "local TOOL_FILES=(\n  ops/a.py\n)\n",
+            {"ops/a.py"},
+            "`local` 宣告的陣列仍要讀得到",
+        ),
+        (
+            "declare -a TOOL_FILES=(\n  ops/a.py\n)\n",
+            {"ops/a.py"},
+            "`declare -a` 宣告的陣列仍要讀得到",
+        ),
         (
             'TOOL_FILES=(\n  ops/a.py\n  ops/b.py\n)\nusage() { echo "  TOOL_FILES=( ops/x.py )"; }\n',
             {"ops/a.py", "ops/b.py"},
@@ -929,6 +986,49 @@ class TestRepoDataFilesArePairedWithTheirConsumer:
             "配對規則沒有在 REPO_DATA_FILES 缺席時開火 —— "
             f"實際得到 {errors}"
         )
+
+
+class TestAppendFormIsRejected:
+    """`NAME+=( … )` 在 build.sh 裡必須被擋下來。
+
+    ⛔ 這一類原本只是 docstring 裡的一句「揭露」，而那句揭露的減災說法是**假的**
+    ——它說「少撈會被雙向檢查抓到」，實測只有「該檔在 COMMAND_MAP 裡」或「被別的
+    出貨模組 import」兩種情形才會紅；函式庫、資料檔、`BUILD_EXEMPT` daemon 用
+    `+=` 加進來時全綠，而且 `check_layout_depth_assumptions`（#1494 自己那條規則）
+    完全掃不到它。揭露改成守衛。
+    """
+
+    def _build_sh(self, tmp_path, extra):
+        real = (REPO_ROOT / "components" / "da-tools" / "app" / "build.sh"
+                ).read_text(encoding="utf-8")
+        p = tmp_path / "build.sh"
+        p.write_text(real + extra, encoding="utf-8")
+        return p
+
+    def test_the_real_build_sh_is_clean(self):
+        """正控制：今天的 build.sh 沒有 `+=`，所以下面的紅不是背景噪音。"""
+        assert mod.check_append_form_arrays(
+            REPO_ROOT / "components" / "da-tools" / "app" / "build.sh") == []
+
+    @pytest.mark.parametrize("extra,why", [
+        ("\nTOOL_FILES+=(\n  ops/_lib_brandnew.py\n)\n", "多行追加"),
+        ("\ndeclare -a REPO_DATA_FILES+=( k8s/x.yaml )\n", "帶宣告關鍵字的單行追加"),
+    ])
+    def test_append_form_is_an_error(self, tmp_path, extra, why):
+        errors = mod.check_append_form_arrays(self._build_sh(tmp_path, extra))
+        assert len(errors) == 1, (why, errors)
+        severity, message = errors[0]
+        assert severity == "error"
+        assert "+=(" in message
+
+    def test_a_mention_of_the_append_form_is_not_an_error(self, tmp_path):
+        """⛔ 反方向：守衛自己也不能把「提及」當成「指派」。
+
+        這正是 reader 讀不到 `+=` 的原因，所以 tripwire 若用裸子字串比對，就會
+        在講述這條規則的註解或訊息上開火。
+        """
+        assert mod.check_append_form_arrays(
+            self._build_sh(tmp_path, '\necho "TOOL_FILES+=( ghost )"\n')) == []
 
 
 class TestUnreadableToolIsReportedNotRaised:
