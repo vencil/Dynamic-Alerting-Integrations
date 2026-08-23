@@ -187,6 +187,71 @@ func TestNestedTenantReachesTheOutputPlane(t *testing.T) {
 	}
 }
 
+// TestASubtreeDefaultNeverLeaksIntoTheGlobalOnes guards what the acceptance
+// test above cannot see. A design panel caught the gap: a subdirectory
+// `_defaults.yaml` overwriting the root one for EVERY tenant in the tree.
+//
+// ⛔ Why the test above is blind to it: the flat merge is last-writer-wins
+// over sorted keys (`flat_scanner.go`: `sort.Strings(names)` then
+// `merged.Defaults[k] = v`), and with relative-path keys `_defaults.yaml`
+// (`_` = 0x5F) sorts BEFORE `nested/_defaults.yaml` (`n` = 0x6E) — the subtree
+// value lands last and wins globally. Both tenants in the fixture above carry
+// their own override, so a poisoned default never shows through either
+// assertion. Green test, broken semantics.
+//
+// ⚠️ THE TRIGGER IS TWO CHANGES, NOT ONE, and this was measured rather than
+// argued — an earlier wording here blamed recursion alone, which is false:
+//
+//	recursion only                  → this test stays GREEN. `applyBoundaryRules`
+//	                                  keys the underscore convention off the WHOLE
+//	                                  name, so `nested/_defaults.yaml` reads as a
+//	                                  tenant file and its `defaults:` is stripped
+//	                                  (loudly — one WARN per nested file).
+//	recursion + `path.Base` in that  → this test goes RED (`the global default is
+//	convention                        60, not the root's 50`), while the
+//	                                  acceptance test above goes green.
+//
+// The basename fix is not optional — `isTenantOnlyChange` misroutes a nested
+// `_defaults.yaml` into the tenant-patch fast path without it — so any design
+// that recurses arrives at the red state and has to answer for it.
+//
+// The property is design-independent: whatever reconciles the two scanners, a
+// subtree's defaults must not silently re-price tenants in sibling subtrees.
+func TestASubtreeDefaultNeverLeaksIntoTheGlobalOnes(t *testing.T) {
+	const flatTenant, nestedTenant = "tenant-flat", "tenant-nested"
+	const rootDefault, subtreeDefault = 50.0, 60.0
+
+	dir := t.TempDir()
+	writeSplitPopulationFixture(t, dir, flatTenant, nestedTenant)
+
+	m := NewConfigManager(dir)
+	defer m.Close()
+	if err := m.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	cfg := m.GetConfig()
+	if cfg == nil {
+		t.Fatalf("GetConfig() is nil")
+	}
+	got, ok := cfg.Defaults["mysql_connections"]
+	if !ok {
+		t.Fatalf("premise: the root `_defaults.yaml` must reach the flat "+
+			"Defaults map, or this test cannot tell leakage from absence; "+
+			"got %v", cfg.Defaults)
+	}
+	if got != rootDefault {
+		t.Errorf("the global default is %v, not the root's %v. A subtree's "+
+			"`_defaults.yaml` (this fixture declares %v one level down) has "+
+			"been merged into the single global Defaults map, which re-prices "+
+			"every tenant in the tree that does not carry its own override — "+
+			"including tenants in unrelated subtrees. `ThresholdConfig."+
+			"Defaults` has no subtree scope, so a nested defaults file cannot "+
+			"be admitted here as-is.",
+			got, rootDefault, subtreeDefault)
+	}
+}
+
 // TestTheSameTenantFlattenedIsFine is the counterfactual for the test above:
 // identical content, identical assertions, only the DEPTH changes. Without it
 // a red run above could be blamed on the fixture, the collector wiring, or the
