@@ -231,9 +231,11 @@ class TestAllThreeConsumers:
         assert checker._count_python_tools() == 4
         assert total == 4
         assert breakdown == expected, (
-            "if this failed only because COUNT_SUBDIRS gained a member, "
-            "the fixture tree just needs a file for it; the failure worth "
-            "reading is checker != writer above")
+            "⛔ do NOT 'fix' this by adding a directory for the new member "
+            "to _TREE — measured, that turns one red into five, because "
+            "every count in this module is pinned against that fixture. "
+            "`expected` already absorbs a new COUNT_SUBDIRS member as 0; "
+            "if this is red the writer and the checker really do disagree")
 
     def test_the_breakdown_follows_the_declared_scope(
             self, tmp_path, monkeypatch):

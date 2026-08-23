@@ -160,7 +160,11 @@ def count_by_subdir(tools_root: Path) -> Dict[str, int]:
     A missing directory reports 0 rather than dropping out, so a caller
     unpacking the breakdown cannot silently lose a line.
     """
-    counts = {subdir: 0 for subdir in dict.fromkeys(COUNT_SUBDIRS)}
+    # ⚠️ No `dict.fromkeys` here on purpose: a dict comprehension already
+    # collapses a repeated name, so wrapping it read like a second guard
+    # while being a no-op. Measured — removing it leaves every test green;
+    # the one place collapsing actually changes an answer is `scan`.
+    counts = {subdir: 0 for subdir in COUNT_SUBDIRS}
     for subdir, _path in count_scope(tools_root):
         counts[str(subdir)] += 1
     return counts

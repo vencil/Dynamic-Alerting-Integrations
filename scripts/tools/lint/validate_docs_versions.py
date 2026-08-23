@@ -763,12 +763,22 @@ def check_tool_map_coverage() -> List[Issue]:
     ⛔ #1511: this used to spell the predicate out again right here, a
     fourth hand-written copy inside the very change that collapsed the
     other three — and this docstring already claimed it called the shared
-    one. ⚠️ Switching is NOT behaviour-neutral in one measured cell: on
-    Windows `glob("*.py")` also matches `B.PY`, which the old inline test
-    accepted and `is_tool_file` rejects (`Path.suffix` is case-sensitive).
-    Linux never globbed it at all, so the swap makes the two platforms
-    agree; today's tree has no such file (13 root `.py`, zero disagreement
-    measured).
+    one. ⚠️ Switching is NOT behaviour-neutral. Measured, TWO classes of
+    name are globbed here but rejected by `is_tool_file`:
+
+      `B.PY` / `tool.PY`   uppercase suffix — `Path.suffix` is
+                           case-sensitive, and a case-insensitive
+                           filesystem still hands them to `glob("*.py")`.
+      `.py` / `..py`       leading-dot names, whose `Path.suffix` is the
+                           empty string. `Path.glob` does not exclude
+                           dotfiles the way `glob.glob` does, so this
+                           class is not filesystem-specific — ⚠️ measured
+                           on this Windows host only, not on Linux.
+
+    Today's tree contains neither (13 root `.py`, zero disagreement
+    measured), so the swap changes nothing that ships. An earlier version
+    of this note claimed "one cell" and that the swap made the two
+    platforms agree; only the first class supports that.
 
     ⚠️ The docstring used to claim this scanned `scripts/tools/`, which
     read as all of it. It does not — and the subdirectories are covered by

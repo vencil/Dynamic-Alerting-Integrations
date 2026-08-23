@@ -95,29 +95,88 @@ class TestConstants:
             for cat in gtm.CATEGORY_ORDER:
                 assert cat in gtm.CATEGORY_HEADERS[lang]
 
-    # ⛔ #1511: two guards lived here and both were withdrawn, measured
-    # rather than argued. Neither could see the thing its own failure
-    # message named, and neither one's silent failure brings back the
-    # defect this cohort is about (a checker and a writer producing
-    # different numbers) — that is held by the behavioural assertions in
-    # tests/shared/test_lib_toolcount.py.
+    # ⛔ #1511: these two were briefly DELETED on the grounds that neither
+    # could see the case its own failure message named. That was wrong,
+    # and the correction is worth keeping because it is the mistake this
+    # whole cohort is about — one measured bypass was generalised into
+    # "blind". Re-measured at both commits, each catches its named case
+    # and each has exactly ONE bypass:
     #
-    #   `test_gather_tools_calls_the_shared_scanner` asserted
-    #   `"tool_map_scope" in gather_tools.__code__.co_names`. `co_names`
-    #   holds NAMES, not provenance: a module-level private
-    #   `def tool_map_scope(root)` satisfies it. Measured — 24 passed,
-    #   generator rc=0 — including a version that dropped the repo root.
+    #   guard                              catches                bypass
+    #   test_gather_tools_calls_...        a RENAMED private      a private
+    #                                      scanner (`_local_scan`) `def tool_map_scope`
+    #   test_the_shared_library_footer_... the footer glob        a second
+    #                                      re-spelled `_lib*`     module-level literal
     #
-    #   `test_the_shared_library_footer_follows_the_shared_prefix`
-    #   monkeypatched `gtm.SHARED_LIB_PREFIX`, so it only proved the
-    #   footer reads a module global. A second literal
-    #   `SHARED_LIB_PREFIX = "_lib"` written right here satisfies it.
-    #   Measured — 24 passed.
+    # ⚠️ And the claim that the deletion leaned on — "including a version
+    # that dropped the repo root, 24 passed, generator rc=0" — was never
+    # run by its author. Measured: that version is KILLED at both commits
+    # by `test_the_generator_keeps_the_root_and_only_the_root`.
     #
-    # What IS still guarded, and what is not:
-    #   guarded   — a private scanner whose BEHAVIOUR differs (drops the
-    #               root, stops skipping `_lib`): the synthetic-tree
-    #               assertions go red.
-    #   not       — a behaviour-identical private copy, or a second
-    #               spelling of the prefix. Nothing here objects. That is
-    #               a disclosed gap, not an oversight.
+    # So both bypasses are disclosed below rather than used as a reason to
+    # delete. A guard with one known hole still refuses the other shapes.
+
+    def test_gather_tools_calls_the_shared_scanner(self):
+        """#1511: this module used to own a second `SKIP_PREFIXES` tuple.
+
+        ⛔ An earlier version asserted `gtm.tool_map_scope is
+        _lib_toolcount.tool_map_scope`, which pins the IMPORT SPELLING.
+        Measured, wrong in both directions: rewriting `from X import f`
+        to `import X` + `X.f(...)` (identical behaviour, generator rc=0)
+        turned it RED, while a private `_local_scan()` inside
+        `gather_tools` with the import line left in place kept it GREEN.
+
+        `co_names` holds the global names the compiled body looks up, so
+        a private scanner under a DIFFERENT name stops satisfying it
+        whichever way the import is spelled. Measured at `d5133cc8`: a
+        renamed behaviour-identical `_local_scan` → this test fails with
+        the globals it does reach printed.
+
+        ⚠️ Known bypass, measured, not papered over: a private
+        `def tool_map_scope(root)` in this module satisfies it, because
+        `co_names` records names and not provenance. What still refuses
+        that shape is behaviour — `test_the_generator_keeps_the_root_and
+        _only_the_root` kills any private copy whose output differs.
+        """
+        reached = set(gtm.gather_tools.__code__.co_names)
+        assert "tool_map_scope" in reached or "_lib_toolcount" in reached, (
+            "gather_tools no longer reaches for _lib_toolcount.tool_map_scope; "
+            "a private scanner here is how the #1511 divergence started. "
+            "Globals it does reach: %s" % sorted(reached))
+        assert not hasattr(gtm, "SKIP_PREFIXES"), (
+            "a module-level SKIP_PREFIXES is back; the prefixes live in "
+            "_lib_toolcount.TOOL_SKIP_PREFIXES so both halves of the "
+            "partition come from one string")
+
+    def test_the_shared_library_footer_follows_the_shared_prefix(
+            self, tmp_path, monkeypatch):
+        """⛔ Control for the other half of the same partition.
+
+        The tool tables skip `_lib*` and this document's shared-library
+        section lists them, so the two must read one string. Measured
+        before this control existed: reverting the footer to its own
+        literal `"_lib*.py"` left every test green — the collapse had no
+        guard at all, which is how a second spelling comes back. With
+        this control, that same edit fails, naming it.
+
+        ⚠️ Known bypass, measured: writing a second module-level
+        `SHARED_LIB_PREFIX = "_lib"` here satisfies it, because the
+        monkeypatch below proves only that the footer reads a module
+        global — not where that global came from.
+        """
+        tools = tmp_path / "tools"
+        tools.mkdir()
+        for name in ("_lib_old.py", "_zzlib_new.py", "realtool.py"):
+            (tools / name).write_text(
+                '"""%s — stub."""\n' % name, encoding="utf-8", newline="\n")
+        monkeypatch.setattr(gtm, "TOOLS_ROOT", tools)
+        monkeypatch.setattr(gtm, "SHARED_LIB_PREFIX", "_zzlib")
+
+        rendered = gtm.generate_tool_map({c: [] for c in gtm.CATEGORY_ORDER})
+
+        assert "_zzlib_new.py" in rendered, (
+            "the shared-library footer ignored SHARED_LIB_PREFIX, so this "
+            "module spells the prefix a second time — the partition is "
+            "back to two definitions")
+        assert "_lib_old.py" not in rendered, (
+            "the footer still lists the old prefix after it moved")

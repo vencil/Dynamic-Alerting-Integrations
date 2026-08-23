@@ -759,7 +759,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "0588884eddbe80808e8e4918abff2488053aa773839ea8ca5c17b8a5be492edf",
+ "source_digest": "676bd4169da520a260529434ec8362cd81ade1c17fb8fcfec183912d0f18556b",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -2903,7 +2903,6 @@
    "tests/shared/test_dispatch_contract.py"
   ],
   "tests/shared/test_lib_toolcount.py": [
-   "tests/dx/test_generate_tool_map.py",
    "tests/lint/test_validate_docs_versions.py"
   ],
   "tests/shared/test_property.py": [
