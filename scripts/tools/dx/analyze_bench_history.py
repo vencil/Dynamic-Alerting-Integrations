@@ -511,8 +511,9 @@ def render_markdown_table(
 # `CANARY_BENCH` is the GATING canary: the one whose night-to-night CV raises
 # the noise floor. Only the CPU canary does that, and `bench-canary/
 # canary_test.go` says so in as many words: the sleep canary is "INFORMATIONAL
-# ONLY ... gating on it would flap INCONCLUSIVE constantly; NOT part of the
-# gate decision".
+# ONLY: a 3-4% drift here is only ~30-40us ... so gating on it would flap
+# INCONCLUSIVE constantly. Emitted + rendered for human eyes; NOT part of the
+# gate decision."
 #
 # `CANARY_BENCHES` is every canary, and it exists because NEITHER of them is a
 # product benchmark. Until #1439/TRK-359 this file subtracted only
@@ -522,9 +523,11 @@ def render_markdown_table(
 # itself calls healthy. Counterfactual on synthetic nights (the sleep canary
 # 20% above its anchor, everything else flat), `--trend-watch --dry-run`: with
 # `CANARY_BENCHES` the run prints the one-line CLEAR verdict; reverted to
-# `- {CANARY_BENCH}` the same input renders the regression table with
-# `| `BenchmarkControlCanarySleep` | sustained | 1.2 ms | +20.0% | +20.0% |`
-# and `→ [dry-run] would open new perf-trend issue (assignee: vencil)`.
+# `- {CANARY_BENCH}` the same input renders, on STDOUT, the regression-table
+# row `| `BenchmarkControlCanarySleep` | sustained | 1.2 ms | +20.0% | +20.0% |`
+# and logs, on STDERR (`print(..., file=sys.stderr)`), the line
+# `→ [dry-run] would open new perf-trend issue (assignee: vencil)` — two
+# different streams, so `--dry-run | grep` alone will never show the second.
 # `bench-baseline.txt` does carry both canary rows (`bench-record.yaml` says
 # so where it copies the paired main side), so the path was live, not latent.
 CANARY_BENCH = "BenchmarkControlCanaryCPU"
