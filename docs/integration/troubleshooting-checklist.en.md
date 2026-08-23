@@ -1336,14 +1336,14 @@ diff <(jq -r '.discovery.tier_a_static.orphan_rules[].name' /tmp/state.json | so
 
 ```bash
 # Via the da-tools CLI (recommended)
-da-tools guard --conf-d conf.d/ --report
+da-tools guard defaults-impact --config-dir conf.d/
 
 # Or the unified dev-container entry (within vibe)
-make dc-run CMD="da-tools guard --conf-d conf.d/ --report"
+make dc-run CMD="da-tools guard defaults-impact --config-dir conf.d/"
 
 # Or Docker (no dev-container environment)
 docker run --rm -v "$(pwd):/work:ro" -w /work \
-    ghcr.io/vencil/da-tools:latest guard --conf-d conf.d/ --report
+    ghcr.io/vencil/da-tools:latest guard defaults-impact --config-dir conf.d/
 # expected: 4-layer PASS / FAIL report, equivalent to CI
 ```
 
@@ -1358,9 +1358,11 @@ docker run --rm -v "$(pwd):/work:ro" -w /work \
 **Quick diagnosis**:
 
 ```bash
-# See specifically which file, which field
-da-tools guard --conf-d conf.d/ --layer schema --verbose
-# expected: file path + JSON path + schema rule violated
+# See specifically which file, which field. The schema layer is driven by
+# --required-fields; leaving it empty disables that check (see
+# `da-tools guard defaults-impact --help`).
+da-tools guard defaults-impact --config-dir conf.d/ --required-fields thresholds.cpu,routing.receiver.type
+# expected: the report's Schema section lists the file path + missing dotted path
 ```
 
 **Most likely causes**:
@@ -1371,12 +1373,12 @@ da-tools guard --conf-d conf.d/ --layer schema --verbose
 **Fix**:
 
 ```bash
-# View current schema definition
-da-tools schema show --version current
+# View current schema definition: conf.d/*.yaml is governed by this JSON Schema
+cat docs/schemas/tenant-config.schema.json
 # Compare and modify the yaml — add field / fix spelling
 
-# Re-run the layer
-da-tools guard --conf-d conf.d/ --layer schema
+# Re-run (one pass covers schema + routing + cardinality)
+da-tools guard defaults-impact --config-dir conf.d/
 ```
 
 #### 2.2.2 Routing-layer failure
@@ -1388,8 +1390,8 @@ da-tools guard --conf-d conf.d/ --layer schema
 **Fix**:
 
 ```bash
-# List the routing graph
-da-tools guard --conf-d conf.d/ --layer routing --show-graph
+# Re-run the guard and read the report's Routing section
+da-tools guard defaults-impact --config-dir conf.d/
 # Find isolated nodes; add the corresponding domain entry or tenant assignment
 ```
 
@@ -1419,8 +1421,9 @@ cardinality_budget: <new_M>
 **Fix**:
 
 ```bash
-# View which overrides are redundant
-da-tools guard --conf-d conf.d/ --layer redundant --show-diffs
+# View which overrides are redundant: re-run the guard and read the
+# report's Redundant Override section
+da-tools guard defaults-impact --config-dir conf.d/
 # Remove fields from the tenant yaml that match the default
 # Profile-as-Directory-Default will inherit automatically
 ```

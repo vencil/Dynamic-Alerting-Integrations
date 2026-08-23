@@ -43,6 +43,28 @@ describe('cicdGenerateInitCommand', () => {
     expect(out).toContain('--non-interactive');
   });
 
+  // ⛔ Every other fixture in this file is `ci: 'github', deploy: 'kustomize',
+  // packs: ['mariadb-core']`, so three separate mutations survived the whole
+  // suite: hard-coding `--ci github`, hard-coding `--deploy kustomize`, and
+  // joining packs with `;` instead of `,`. The values were never varied, so
+  // "it interpolates the config" was never actually tested — only "it prints
+  // these particular strings".
+  it.each([
+    ['gitlab', 'kustomize'],
+    ['both', 'helm'],
+  ])('interpolates ci=%s / deploy=%s rather than emitting a fixed value',
+    (ci, deploy) => {
+      const out = cicdGenerateInitCommand(baseConfig({ ci, deploy }));
+      expect(out).toContain(`--ci ${ci}`);
+      expect(out).toContain(`--deploy ${deploy}`);
+    });
+
+  it('comma-joins multiple rule packs, like it does for tenants', () => {
+    const out = cicdGenerateInitCommand(
+      baseConfig({ packs: ['mariadb-core', 'mysql-core', 'pg-core'] }));
+    expect(out).toContain('--rule-packs mariadb-core,mysql-core,pg-core');
+  });
+
   it('omits --tenants flag when tenants array is empty', () => {
     expect(cicdGenerateInitCommand(baseConfig({ tenants: [] }))).not.toMatch(/--tenants/);
   });
@@ -118,6 +140,17 @@ describe('cicdGenerateDockerCommand', () => {
     expect(out).not.toMatch(/-v \$\(pwd\)/);
   });
 
+  it('sets the working directory to the mount point', () => {
+    // ⛔ Same failure family as the missing --user, and `--user` cannot fix it.
+    // Without `-w /workspace` the container keeps the image's own WORKDIR
+    // (/opt/da-tools, root-owned), so `init` writes conf.d/ and the CI
+    // workflow *inside the image* — the customer's mounted checkout stays
+    // empty and the run still exits 0. Pinned because a mutation deleting
+    // this flag survived both this suite and the Python ops suite.
+    const out = cicdGenerateDockerCommand(baseConfig());
+    expect(out).toContain('-w /workspace');
+  });
+
   it('keeps --user ahead of the image reference', () => {
     // Docker only accepts flags BEFORE the image name; anything after it is
     // passed to the container as arguments. A `--user` that drifts below the
@@ -126,6 +159,29 @@ describe('cicdGenerateDockerCommand', () => {
     const out = cicdGenerateDockerCommand(baseConfig());
     expect(out.indexOf('--user')).toBeGreaterThan(-1);
     expect(out.indexOf('--user')).toBeLessThan(out.indexOf('ghcr.io/vencil/da-tools'));
+  });
+});
+
+describe('cicdGenerateGitHubActionsPreview — writable mounts', () => {
+  it('runs the only container that writes into a mount as the runner', () => {
+    // ⛔ #1495 again, in the OTHER generator of this module. `generate-routes
+    // -o /data/output/routes.yaml` writes into the mounted `.output`, which
+    // belongs to the runner uid; the image is uid 10001, so without --user the
+    // very first PR fails with PermissionError and zero files. The CLI twin
+    // (scripts/tools/ops/init_project.py, the "Generate Alertmanager routes"
+    // step) has carried the flag all along — this is #1351's divergence
+    // surfacing as the exact defect #1495 is about.
+    //
+    // ⚠️ Asserted per step, not per file: the "Compute blast radius" step
+    // mounts nothing writable (its output is a shell redirect written by the
+    // runner), so a whole-file `toContain('--user')` would pass even if this
+    // step lost the flag again.
+    const yaml = cicdGenerateGitHubActionsPreview(baseConfig());
+    const step = yaml.slice(yaml.indexOf('- name: Generate routes'),
+      yaml.indexOf('- name: Compute blast radius'));
+    expect(step).toContain('-v ${{ github.workspace }}/.output:/data/output');
+    expect(step).toContain('--user $(id -u):$(id -g)');
+    expect(step.indexOf('--user')).toBeLessThan(step.indexOf('ghcr.io/vencil/da-tools'));
   });
 });
 

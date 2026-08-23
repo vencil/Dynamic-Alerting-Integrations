@@ -48,6 +48,7 @@ jobs:
       - name: Generate routes
         run: |
           docker run --rm \\
+            --user $(id -u):$(id -g) \\
             -v \${{ github.workspace }}/conf.d:/data/conf.d:ro \\
             -v \${{ github.workspace }}/.output:/data/output \\
             ghcr.io/vencil/da-tools:latest \\

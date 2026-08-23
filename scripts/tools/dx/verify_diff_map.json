@@ -746,7 +746,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "b9e8a9de07ef9bbcd954f4bdbec0ffa7f764756ef1b3718a41c757d011d74448",
+ "source_digest": "ef39b31117f8379310590295e40b7c5b365f4f88ea96be4d49772f4ab991433d",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1281,12 +1281,16 @@
   ],
   "components/da-tools/README.md": [
    "tests/dx/test_bump_docs.py",
+   "tests/lint/test_check_doc_datools_cmds.py",
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/ops/test_generated_ci_artifacts.py"
   ],
   "components/da-tools/app/Dockerfile": [
    "tests/lint/test_check_iac_vibe_rules.py",
    "tests/ops/test_ci_baseline_substitution.py"
+  ],
+  "components/da-tools/app/QUICKSTART.md": [
+   "tests/lint/test_check_doc_datools_cmds.py"
   ],
   "components/da-tools/app/VERSION": [
    "tests/ops/test_ci_path_filter_coverage.py",
@@ -2936,6 +2940,9 @@
   ],
   "tools/portal/vitest.config.ts": [
    "tests/ops/test_ci_path_filter_coverage.py"
+  ],
+  "try-local/README.md": [
+   "tests/lint/test_check_doc_datools_cmds.py"
   ],
   "try-local/alertmanager.yml": [
    "tests/dx/test_verify_diff.py",

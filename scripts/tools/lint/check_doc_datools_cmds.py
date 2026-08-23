@@ -52,8 +52,13 @@ WRAPPER_SUBCOMMANDS: Dict[str, Set[str]] = {
 
 # `da-tools` (binary) or `da-tools:vX.Y.Z` (image), then the wrapper command +
 # whatever token follows (the candidate subcommand).
+# ⛔ The tag part must accept ANY reference form, not just `:vN.N`. The
+# previous `(?::v[0-9.]+)?` silently excluded `:latest` (36 occurrences in the
+# scanned docs), `:2.9.0`, `:v2.9.0-rc1` and `@sha256:…` digest pins — and two
+# of those `:latest` lines carried the stale `guard --conf-d` invocation, so
+# the narrow tag pattern was a second, independent way to miss the same defect.
 _DATOOLS_RE = re.compile(
-    r"da-tools(?::v[0-9.]+)?\s+(guard|parser|batch-pr)(?:\s+([^\s\\]+))?")
+    r"da-tools(?:[:@][^\s\\]+)?\s+(guard|parser|batch-pr)(?:\s+([^\s\\]+))?")
 
 _PLACEHOLDER_CHARS = "<>${}"
 INLINE_IGNORE = "datools-cmd-ignore"
@@ -103,8 +108,17 @@ def check_datools_subcommands(doc_files: List[Path],
             for m in _DATOOLS_RE.finditer(line):
                 wrapper, nxt = m.group(1), m.group(2)
                 valid = sub_map.get(wrapper, set())
-                # A bare `--flag` (e.g. --help) is a valid invocation.
-                if nxt is None or nxt.startswith("-"):
+                # ⛔ Only `--help` / `-h` are valid WITHOUT a subcommand. The
+                # previous predicate was `nxt.startswith("-")`, i.e. the code
+                # was broader than the comment right above it claimed — every
+                # dash-prefixed token was waved through. Measured on the tree
+                # this narrowing landed in: it turned 12 shipped invocations of
+                # the exact class this checker exists for
+                # (`da-tools guard --conf-d conf.d/ --layer schema`, which the
+                # real dispatcher answers with `Error: unknown guard subcommand
+                # '--conf-d'`) from CLEAN into findings, with zero new false
+                # positives across all of docs/.
+                if nxt is None or nxt in ("--help", "-h"):
                     continue
                 if nxt not in valid:
                     issues.append(Issue(
@@ -485,8 +499,21 @@ def check_writable_mount_has_user(doc_files: List[Path],
                     f"writable mount(s) {writable} but no --user; the image "
                     f"runs as uid 10001 and a customer's directory does not, "
                     f"so anything this writes fails with PermissionError. "
-                    f"Add `--user $(id -u):$(id -g)`, or mark the mount `:ro` "
-                    f"if it is only read (#1495)."))
+                    f"Add `--user $(id -u):$(id -g)` (#1495)."))
+                    # ⛔ This message deliberately offers exactly ONE remedy.
+                    # It used to end "or mark the mount `:ro` if it is only
+                    # read", and `:ro` is seven characters against a judgement
+                    # call — so it is the cheaper fix for anyone who just wants
+                    # green. Measured on a real example that writes via
+                    # `--output /data/output/...`: deleting `--user` reports 1
+                    # issue, appending `:ro` reports 0. The customer's failure
+                    # merely changes from PermissionError to "Read-only file
+                    # system", and the block leaves the rule's judged set for
+                    # good (an empty `writable` also disables the
+                    # user-flag-after-image check on it). `:ro` remains the
+                    # correct annotation for a genuinely read-only mount — but
+                    # that is an author's up-front declaration, not something
+                    # to suggest to someone at the moment they are blocked.
     return issues
 
 
@@ -501,10 +528,21 @@ def run(repo_root: Path = REPO_ROOT) -> List[Issue]:
     present, missing = [], []
     for rel in _EXTRA_DOC_FILES:
         (present if (repo_root / rel).is_file() else missing).append(rel)
+    # ⛔ The message names exactly one remedy, and it is the one that keeps the
+    # page covered. An earlier wording offered "either restore the path or drop
+    # it from the tuple"; dropping is by far the cheapest and it re-opens the
+    # very hole this Issue exists to close. Measured: rename a landing page ->
+    # 1 `datools-doc-file-missing`; drop it from the tuple -> 0 issues, and the
+    # writable-mount defect on that same page then ships unreported. Renaming
+    # is also the likeliest trigger, and "update the tuple to the new path" was
+    # the one option the old message did not list.
     issues = [Issue("datools-doc-file-missing", rel, 1,
-                    "listed in _EXTRA_DOC_FILES but not found; either restore "
-                    "the path or drop it from the tuple — silently scanning "
-                    "fewer files is how a guard stops guarding (#1495).")
+                    "listed in _EXTRA_DOC_FILES but not found. Point the tuple "
+                    "at the file's current path (if it moved, this is a rename "
+                    "— follow it). Deleting the entry instead stops this page "
+                    "being scanned at all, which is how a guard silently stops "
+                    "guarding; only do that once the page itself is gone "
+                    "(#1495).")
               for rel in missing]
     return (issues
             + check_datools_subcommands(docs, WRAPPER_SUBCOMMANDS, repo_root)

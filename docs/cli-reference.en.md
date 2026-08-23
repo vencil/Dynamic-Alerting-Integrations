@@ -1563,7 +1563,7 @@ kubectl logs -n monitoring deployment/threshold-exporter | grep "SHA256"
 **Step 3: Verify**
 ```bash
 # Confirm alerts are firing normally
-da-tools drift-check --dirs conf.d --mode configmap
+da-tools drift-detect --dirs conf.d --mode configmap
 promtool query instant 'count(ALERTS{alertstate="firing"})'
 ```
 
