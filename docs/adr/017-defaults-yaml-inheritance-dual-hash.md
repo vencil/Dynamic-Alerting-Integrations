@@ -141,7 +141,8 @@ effective = deep_merge( defaults_block(L0), …, defaults_block(Ln), tenant_body
 ```
 
 兩個 unwrap 實作：`describe_tenant.py` 的 `ddata.get("defaults", ddata)`、Go 的
-`pkg/config.extractDefaultsBlock`（`config_inheritance.go` 另有一份同名副本）。
+`pkg/config.ExtractDefaultsBlock`（實作是同檔私有的 `extractDefaultsBlock`；
+`config_inheritance.go` 有一個同名 thin wrapper 直接轉呼叫它，不是第二份實作）。
 
 ### 給要編輯 `_defaults.yaml` 的人：這四條
 
@@ -161,12 +162,16 @@ effective = deep_merge( defaults_block(L0), …, defaults_block(Ln), tenant_body
 
 2. ⛔ **不要把平級鍵縮排進 `defaults:` 想讓它們「被看見」。三個平面下場不同，其中一個會讓客戶
    收不到告警**：
-   - **exporter**：欄位型別是 `map[string]float64`（`types.go`），巢狀 mapping 會 unmarshal
-     失敗 ⇒ `parsePartialConfig` 回 `ok=false`、**整份檔案被丟棄**並 log
-     `ERROR: ... entire block dropped`。連同檔內其他平級鍵一起陪葬。
+   - **exporter**：欄位型別是 `map[string]float64`（`types.go`）。**非純量**的兄弟鍵
+     （mapping / list）會 unmarshal 失敗 ⇒ `parsePartialConfig` 回 `ok=false`、**整份檔案被
+     丟棄**並 log `ERROR: ... entire block dropped`，連同檔內其他平級鍵一起陪葬。
+     ⛔ **但純量的兄弟鍵會被靜默接受成一個閾值鍵**：實測把 `max_metrics_per_tenant: 100`
+     縮排進去 ⇒ `ok=true`、**log 是空字串**、`Defaults` 多出一個值為 100 的鍵，等於替每個
+     租戶武裝了一個假閾值。這一面**沒有任何訊號**。
    - **路由**：⛔ `_routing_defaults` 一旦離開頂層，`generate_alertmanager_routes.py` 就找不到
      它——**沒有自己 `_routing` 的租戶會整條 route ＋ receiver 消失**（實測：`Found 2 tenant(s)
-     with routing config: db-a, db-b` → `Found 1 tenant(s): db-b`，`tenant-db-a` receiver 消失，
+     with routing config: db-a, db-b` → `Found 1 tenant(s) with routing config: db-b`，
+     `tenant-db-a` receiver 消失，
      **RC=0、零 error、零 warning**）。`check_confd_schema.py` 也**不擋**（實測兩者皆 `RC=0`；
      `defaults` 的 sub-schema 逐字宣告 values left loose）。
    - **`effective`**：**靜默接受**成一個巢狀鍵，而 blast-radius 會因此從「無變更」變成一份
@@ -176,16 +181,30 @@ effective = deep_merge( defaults_block(L0), …, defaults_block(Ln), tenant_body
    （那三個面看不到，而且執行期會把它標成 `effect="cosmetic"`，見下方「診斷面的代價」）。
    **改去問真正的消費端**：
    - `state_filters` → exporter `/metrics` 的 `user_state_filter{tenant,filter,severity}`
-   - `_silent_mode` → `user_silent_mode{tenant,target_severity}`
+   - `_silent_mode`（指 `_defaults.yaml` 裡 **`tenants:` 區塊**底下的那個；寫在與 `defaults:`
+     平級的頂層是第 1 條說的靜默 no-op）→ `user_silent_mode{tenant,target_severity}`
    - `_routing_defaults` / `_routing_enforced` → `generate_alertmanager_routes.py --config-dir
-     conf.d/ --dry-run`，比對前後的 `Found N tenant(s) with routing config` 與 receiver 集合
+     conf.d/ --dry-run`，**diff 前後的完整輸出**。⛔ 只看 `Found N tenant(s) with routing
+     config` 那一行與 receiver 集合**不夠**：那兩個訊號只對「整條 route／receiver 出現或消失」
+     反應，**時間參數之類的值變更兩者逐字不動**（實測 `_routing_defaults.group_wait`
+     30s→35s：完整輸出有差，那兩個訊號完全相同——而 `group_wait` 正是上方繼承圖的示範鍵）。
 
-4. **想用顯式 `null` 退掉一個繼承來的 `_` 前綴鍵：`null` 必須與被繼承的那個值在同一個位置。**
-   判準是「是否 `_` 前綴」（`pkg/config/hierarchy.go` 的 `deepMerge` 對 `_` 前綴鍵做
-   `delete(result, k)`，非 `_` 前綴只 `continue`）。可用的組合只有兩種：**兩者都在 `defaults:`
-   內部**，或**兩者都在無 `defaults:` 包裝的檔案頂層**。⛔ 寫在 `defaults:` 的**兄弟**位置＝
-   沒有東西可刪＝靜默 no-op；⛔ 寫在**租戶檔**一律被 `check_confd_schema.py` 擋下
-   （`tenant-config.schema.json` 對這些鍵宣告了非 null 型別）。
+4. **想用顯式 `null` 退掉一個繼承來的 `_` 前綴鍵：判準是「unwrap 之後兩者落在同一個鍵路徑」。**
+   哪些鍵適用由前綴決定（`pkg/config/hierarchy.go` 的 `deepMerge` 對 `_` 前綴鍵做
+   `delete(result, k)`，非 `_` 前綴只 `continue`）；**位置**則因為 `defaults_block(f)` 是**逐檔**
+   套用的，所以不必兩個檔案同形狀。實測四臂（含對照組）：
+
+   | 父檔 | 子檔的 `null` 寫在 | 結果 |
+   |:--|:--|:--|
+   | 有包裝 | （無子檔，對照組） | 保留 |
+   | 有包裝 | 子檔 `defaults:` 的**兄弟**位置 | ⛔ **保留＝靜默 no-op** |
+   | 有包裝 | 子檔 `defaults:` **內部** | 刪除 ✅ |
+   | 有包裝 | **無包裝子檔的頂層** | 刪除 ✅ |
+
+   ⛔ 真正無效的只有「同一個檔案內寫在 `defaults:` 的兄弟位置」——那裡沒有東西可刪。
+   ⛔ 寫在**檔名不以 `_` 開頭的租戶檔**一律被 `check_confd_schema.py` 擋下
+   （`tenant-config.schema.json` 對這些鍵宣告了非 null 型別）；但寫在 `_defaults.yaml` 的
+   **`tenants:` 區塊**底下**不會**被擋（實測 `RC=0`）——而第 1 條正把讀者指向那個位置。
 
 ### 已知的可達例外（非窮舉——這份清單不是保證）
 
@@ -391,8 +410,9 @@ Replace 語意更直覺，且與 Helm values merge 行為一致。
    `applied`（`IncReloadTrigger`）還是
    `shadowed` / `cosmetic`。合併兄弟鍵之後，每一次平台路由編輯都會把每個租戶從 `cosmetic`
    翻成 `applied`，並讓 `da_config_reload_trigger_total{reason="defaults"}` 逐次增量——而本 ADR
-   存在的理由正是上面那句「如何避免 reload 風暴」。**這正是上面替代方案 A 被否決的同一個
-   後果。**⚠️ 精確地說：租戶**現在就已經**每次都被送進
+   存在的理由正是上面那句「如何避免 reload 風暴」。**與替代方案 A 被否決的理由同源（都在
+   reload 歸因這條線上），但後果不同**：A 是真的多做 reload，這裡是把 `effect` 標籤與 counter
+   打成 `applied`——兩個分支都已經跑完 `recomputeMergedHash`，不會觸發額外載入。⚠️ 精確地說：租戶**現在就已經**每次都被送進
    `da_config_blast_radius_tenants_affected` 的直方圖，改變的是 `effect` label 與 counter 是否
    增量，不是「有沒有被記」。
 

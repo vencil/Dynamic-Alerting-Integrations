@@ -146,8 +146,9 @@ effective = deep_merge( defaults_block(L0), …, defaults_block(Ln), tenant_body
 ```
 
 The two unwrap implementations: `ddata.get("defaults", ddata)` in `describe_tenant.py`, and
-`pkg/config.extractDefaultsBlock` in Go (`config_inheritance.go` carries a second copy of the
-same function).
+`pkg/config.ExtractDefaultsBlock` in Go (implemented by the file-private `extractDefaultsBlock`;
+`config_inheritance.go` holds a same-named thin wrapper that just forwards to it — not a second
+implementation).
 
 ### If you are editing a `_defaults.yaml`, these four things
 
@@ -172,14 +173,19 @@ same function).
 
 2. ⛔ **Do not indent sibling keys INTO `defaults:` to "make them visible". Three planes fail
    differently, and one of them stops a customer receiving alerts**:
-   - **exporter**: the field is typed `map[string]float64` (`types.go`), so a nested mapping
-     fails to unmarshal ⇒ `parsePartialConfig` returns `ok=false`, **the entire file is
-     dropped**, and it logs `ERROR: ... entire block dropped`. Every other sibling key in that
-     file goes down with it.
+   - **exporter**: the field is typed `map[string]float64` (`types.go`). A **non-scalar**
+     sibling (mapping / list) fails to unmarshal ⇒ `parsePartialConfig` returns `ok=false`,
+     **the entire file is dropped**, and it logs `ERROR: ... entire block dropped`, taking every
+     other sibling key in that file with it.
+     ⛔ **But a scalar sibling is silently accepted as a threshold key**: measured, indenting
+     `max_metrics_per_tenant: 100` gives `ok=true`, an **empty log**, and a `Defaults` entry
+     worth 100 — arming a bogus threshold for every tenant. **That plane emits no signal at
+     all.**
    - **routing**: ⛔ once `_routing_defaults` leaves the top level,
      `generate_alertmanager_routes.py` cannot find it — **a tenant with no `_routing` of its own
      loses its entire route AND receiver** (measured: `Found 2 tenant(s) with routing config:
-     db-a, db-b` → `Found 1 tenant(s): db-b`, the `tenant-db-a` receiver gone, with **RC=0, zero
+     db-a, db-b` → `Found 1 tenant(s) with routing config: db-b`, the `tenant-db-a` receiver
+     gone, with **RC=0, zero
      errors, zero warnings**). `check_confd_schema.py` does **not** block it either (measured:
      `RC=0` both ways; the `defaults` sub-schema says verbatim that its values are left loose).
    - **`effective`**: **silently accepted** as a nested key — and blast-radius therefore goes
@@ -190,19 +196,37 @@ same function).
    confirm it took effect** (those three cannot see it, and the runtime labels it
    `effect="cosmetic"` — see "The diagnostic cost" below). **Ask the real consumer instead**:
    - `state_filters` → `user_state_filter{tenant,filter,severity}` on the exporter's `/metrics`
-   - `_silent_mode` → `user_silent_mode{tenant,target_severity}`
+   - `_silent_mode` (the one under the **`tenants:` block** of `_defaults.yaml`; written at the
+     top level alongside `defaults:` it is the silent no-op from item 1) →
+     `user_silent_mode{tenant,target_severity}`
    - `_routing_defaults` / `_routing_enforced` → `generate_alertmanager_routes.py --config-dir
-     conf.d/ --dry-run`, comparing the before/after `Found N tenant(s) with routing config` line
-     and the receiver set
+     conf.d/ --dry-run`, and **diff the full before/after output**. ⛔ The `Found N tenant(s)
+     with routing config` line and the receiver set are **not enough**: those two only react to
+     a whole route/receiver appearing or disappearing — **a value change such as a timing
+     parameter leaves both byte-identical** (measured: `_routing_defaults.group_wait` 30s→35s
+     changes the full output while those two signals do not move — and `group_wait` is the very
+     key used in the inheritance example above).
 
-4. **To opt out of an inherited `_`-prefixed key with an explicit `null`, the `null` must sit in
-   the SAME position as the value it is opting out of.** The test is "is it `_`-prefixed"
+4. **To opt out of an inherited `_`-prefixed key with an explicit `null`, the test is "after the
+   unwrap, do the two land on the SAME key path".** Which keys qualify is decided by the prefix
    (`deepMerge` in `pkg/config/hierarchy.go` runs `delete(result, k)` for `_`-prefixed keys,
-   while a non-`_` key only `continue`s). Only two combinations work: **both inside
-   `defaults:`**, or **both at the top level of a wrapper-less file**. ⛔ Writing it as a
-   **sibling** of `defaults:` leaves nothing to delete — a silent no-op; ⛔ writing it in a
-   **tenant** file is always rejected by `check_confd_schema.py` (`tenant-config.schema.json`
-   declares non-null types for those keys).
+   while a non-`_` key only `continue`s). **Position** does not require the two files to have the
+   same shape, because `defaults_block(f)` is applied **per file**. Measured, four arms with a
+   control:
+
+   | Parent | Where the child's `null` sits | Result |
+   |:--|:--|:--|
+   | wrapped | (no child file — control) | kept |
+   | wrapped | **sibling** of the child's `defaults:` | ⛔ **kept = silent no-op** |
+   | wrapped | **inside** the child's `defaults:` | deleted ✅ |
+   | wrapped | **top level of a wrapper-less child** | deleted ✅ |
+
+   ⛔ The only combination that does nothing is "sibling of `defaults:` within the same file" —
+   there is nothing there to delete.
+   ⛔ Writing it in a **tenant file whose name does not start with `_`** is always rejected by
+   `check_confd_schema.py` (`tenant-config.schema.json` declares non-null types for those keys);
+   writing it under the **`tenants:` block of a `_defaults.yaml` is NOT rejected** (measured
+   `RC=0`) — and item 1 points the reader at exactly that position.
 
 ### Known reachable exceptions (NOT exhaustive — this list is not a guarantee)
 
@@ -429,8 +453,11 @@ equally load-bearing, all measured**:
    `cosmetic`. Merging the siblings in would flip every tenant from `cosmetic` to `applied` on
    every platform routing edit, and increment
    `da_config_reload_trigger_total{reason="defaults"}` each time — while the reason this ADR
-   exists is the question above, how to avoid a reload storm. **That is the very consequence
-   that got alternative A rejected.** ⚠️ Precisely: tenants are
+   exists is the question above, how to avoid a reload storm. **It shares its root with why
+   alternative A was rejected (both live on the reload-attribution line), but the consequence
+   differs**: A actually performs more reloads, whereas this only flips the `effect` label and
+   the counter to `applied` — both branches have already run `recomputeMergedHash`, so no extra
+   load is triggered. ⚠️ Precisely: tenants are
    **already** fed into the `da_config_blast_radius_tenants_affected` histogram on every tick;
    what would change is the `effect` label and whether the counter increments, not whether they
    are recorded at all.
@@ -446,7 +473,7 @@ equally load-bearing, all measured**:
    its own `_routing` sees **no change at all** to its actual route — that attribution is
    provably false.
 
-**Two measurements back this decision, each paired with a control that DID move**:
+**Two findings back this decision — the first is a measurement with a control that DID move**:
 
 - Applying a sibling key does not depend on `merged_hash`. In the wrapped shape, changing only
   `state_filters.<filter>.severity` takes effect while `merged_hash` stays byte-identical; the
