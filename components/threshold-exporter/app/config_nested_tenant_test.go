@@ -438,3 +438,82 @@ func TestADisabledKeyIsNotRevivedByInheritance(t *testing.T) {
 			"pages someone who opted out.", got)
 	}
 }
+
+// TestTheDeepestSubtreeDefaultWins is the case the single-level fixtures above
+// are structurally blind to, and it caught a real defect in the overlay
+// (CodeRabbit, #1569).
+//
+// ⛔ What was wrong: `DefaultsChain` is ROOT-FIRST, so the overlay walks
+// shallowest → deepest. Its "never touch what the tenant authored" guard asked
+// `overrides[key]`, which after the first subtree write can no longer tell the
+// tenant's own value from one the overlay itself put there a level ago — so
+// every deeper defaults file was skipped and the SHALLOWEST subtree won.
+//
+// Measured on this exact fixture before the fix: `/effective` reported 70 and
+// the series reported 60. That is this ticket's own defect — the two planes
+// disagreeing on one tenant's number — reintroduced one directory deeper by
+// its fix.
+//
+// ADR-016 documents `domain/region/env` as a supported layout, so three levels
+// is the shape a real deployment reaches, not a contrived one.
+func TestTheDeepestSubtreeDefaultWins(t *testing.T) {
+	const inheritor, author = "tenant-deep", "tenant-deep-author"
+
+	dir := t.TempDir()
+	writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"),
+		"defaults:\n  mysql_connections: 50\n")
+	domain := filepath.Join(dir, "domain")
+	region := filepath.Join(domain, "region")
+	if err := os.MkdirAll(region, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	writeTestYAML(t, filepath.Join(domain, "_defaults.yaml"),
+		"defaults:\n  mysql_connections: 60\n")
+	writeTestYAML(t, filepath.Join(region, "_defaults.yaml"),
+		"defaults:\n  mysql_connections: 70\n")
+	writeTestYAML(t, filepath.Join(region, "inheritor.yaml"),
+		"tenants:\n  "+inheritor+": {}\n")
+	writeTestYAML(t, filepath.Join(region, "author.yaml"),
+		"tenants:\n  "+author+":\n    mysql_connections: \"88\"\n")
+
+	m := NewConfigManager(dir)
+	defer m.Close()
+	if err := m.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	eff, ok := m.Resolve(inheritor)
+	if !ok {
+		t.Fatalf("premise: Resolve(%s) must succeed", inheritor)
+	}
+	if len(eff.DefaultsChain) != 3 {
+		t.Fatalf("premise: this test is about a THREE-level chain; got %d level(s): %v",
+			len(eff.DefaultsChain), eff.DefaultsChain)
+	}
+	if got := eff.Config["mysql_connections"]; got != 70 {
+		t.Fatalf("premise: /effective should report the deepest default 70, got %v", got)
+	}
+
+	got, present := seriesFor(t, m, inheritor, "connections")
+	if !present {
+		t.Fatalf("no series for %s", inheritor)
+	}
+	if got != 70 {
+		t.Errorf("the series says %v while /effective says 70. The overlay stopped "+
+			"at a shallower defaults file — it must let a DEEPER one overwrite a "+
+			"value it wrote itself, while still never touching one the tenant "+
+			"authored.", got)
+	}
+
+	// The other half, in the same fixture: depth must not start overwriting
+	// what a tenant declared for itself.
+	if got, present := seriesFor(t, m, author, "connections"); !present || got != 88 {
+		t.Errorf("%s declared 88 through three levels of inherited defaults; the "+
+			"series says %v (present=%v)", author, got, present)
+	}
+
+	if got := m.GetConfig().Defaults["mysql_connections"]; got != 50 {
+		t.Errorf("global default moved to %v — a subtree file leaked into the one "+
+			"global map", got)
+	}
+}

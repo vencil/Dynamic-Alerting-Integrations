@@ -64,10 +64,26 @@ func applySubtreeDefaults(
 		if len(chain) < 2 {
 			continue // root-only chain: nothing a subtree adds
 		}
+		// ⛔ WHICH KEYS THIS OVERLAY WROTE, tracked separately from the tenant's
+		// own map — because after the first subtree file writes a key, asking
+		// `overrides[key]` again cannot tell "the tenant authored this" from
+		// "I put it there one level ago".
+		//
+		// `chain` is root-first (`EffectiveConfig.DefaultsChain`: "L0→Ln
+		// defaults file paths (root first)"), so this loop walks SHALLOWEST to
+		// deepest and the deeper file must win. Conflating the two made the
+		// shallowest subtree win instead — measured on
+		// root 50 → finance 60 → finance/us-east 70: `/effective` said 70 and
+		// the series said 60, which is this ticket's own defect reintroduced
+		// one directory deeper. The single-level tests could not see it.
+		// (CodeRabbit, #1569.)
+		inherited := make(map[string]struct{})
 		for _, defaultsPath := range chain[1:] {
 			for key, raw := range parsed[defaultsPath] {
-				if _, authored := overrides[key]; authored {
-					continue
+				if _, present := overrides[key]; present {
+					if _, mine := inherited[key]; !mine {
+						continue // the tenant authored it — never touched
+					}
 				}
 				value, ok := scalarToThresholdString(raw)
 				if !ok {
@@ -81,8 +97,11 @@ func applySubtreeDefaults(
 					overrides = map[string]ScheduledValue{}
 					cfg.Tenants[tenantID] = overrides
 				}
+				if _, mine := inherited[key]; !mine {
+					filled++ // count keys filled, not times overwritten
+				}
+				inherited[key] = struct{}{}
 				overrides[key] = ScheduledValue{Default: value}
-				filled++
 			}
 		}
 	}
