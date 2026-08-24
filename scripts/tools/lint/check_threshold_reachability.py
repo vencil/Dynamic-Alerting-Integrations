@@ -824,7 +824,7 @@ _SHIPPED_CONFD_ROOTS: dict[str, tuple[int, int, str]] = {
 # at is how the next person stops checking.
 #
 # ⛔ Why not per-root NUMBERS for all 12 (the obvious extension of
-# `_SHIPPED_CONFD_ROOTS`): 9 of the 12 roots hold a single file, and for those the
+# `_SHIPPED_CONFD_ROOTS`): 10 of the 13 roots hold a single file, and for those the
 # bracket test that governs that table (`lo == 0` branch) collapses the pair to
 # "at least 1 artifact, at least 1 key" — literally this floor. Twelve
 # hand-maintained number pairs would buy nothing on 9 of them while adding twelve
@@ -2205,7 +2205,7 @@ def _assert_loader_readable_floor(
 
 # Roots that legitimately hold no loader-readable `_defaults.yaml` at all.
 #
-# ⛔ EMPTY, and measured empty: all 12 pinned roots carry one today. The list
+# ⛔ EMPTY, and measured empty: all 13 pinned roots carry one today. The list
 # exists so that a future legitimate case has somewhere to go WITH A REASON,
 # not as slack to be spent — an entry here hands back the whole of
 # `_assert_every_root_stays_loader_readable` for that root, which is the same
@@ -2230,8 +2230,8 @@ def _assert_every_root_stays_loader_readable(
     Why nothing else catches it: `_is_defaults_artifact` matches a PREFIX, so
     the renamed file is still counted — same artifact count, same key count,
     every file floor and both key floors satisfied. And the GLOBAL key floor
-    cannot see this root either: it carries 1 key out of 70 against a floor of
-    60, i.e. ten keys of slack, so its entire contribution can vanish inside
+    cannot see this root either: it carries 1 key out of 72 against a floor of
+    60, i.e. twelve keys of slack, so its entire contribution can vanish inside
     the rounding. ⚠️ That slack is itself uneven — `synthetic-v2` contributes
     12 and WOULD trip the global floor — so "the global floor protects the
     bench fixtures" is true of one of them and false of the other. Per-root is
@@ -2243,7 +2243,7 @@ def _assert_every_root_stays_loader_readable(
     ratchet-to-measured numbers (zero-slack floors teach people to treat the
     floor as adjustable). "At least one file the loader will actually open" is
     a property, not a measurement: it does not drift, it needs no table, and it
-    is exactly what a rename destroys. Measured: all 12 pinned roots satisfy it
+    is exactly what a rename destroys. Measured: all 13 pinned roots satisfy it
     today, so it ships with an empty exemption list.
     """
     offenders = []
