@@ -25,6 +25,7 @@ from _lib_exitcodes import (  # noqa: E402
     EXIT_CALLER_ERROR,
     EXIT_VIOLATION,
 )
+from _lib_toolcount import SHARED_LIB_PREFIX, tool_map_scope  # noqa: E402
 from _lib_versions import (  # noqa: E402
     PlatformVersionUnreadable,
     require_platform_version,
@@ -34,8 +35,14 @@ REPO_ROOT = SCRIPT_DIR.parent.parent.parent
 TOOLS_ROOT = REPO_ROOT / "scripts" / "tools"
 TOOL_MAP = REPO_ROOT / "docs" / "internal" / "tool-map.md"
 
-# Skip patterns
-SKIP_PREFIXES = ("_lib", "__init__", "__pycache__")
+# ⛔ #1511: the skip prefixes and the subdirectory list used to be a second
+# and third copy of what `scripts/tools/_lib_toolcount.py` now owns. This
+# module's scope is `tool_map_scope` — the three subdirectories PLUS the
+# repo root — and that is NOT the scope the "N 個 Python 工具" sentence
+# declares. Do not "unify" the two: `check_tool_map_coverage` requires the
+# repo-root tools to appear in this file, and it reports at `warn`, so
+# dropping the root buys a warning nothing can clear rather than a red
+# build. Read the shared module's docstring first.
 
 # Subdirectory → category mapping (auto-detect from filesystem)
 SUBDIR_CATEGORY = {
@@ -93,38 +100,51 @@ def extract_tool_description(filepath: Path) -> str:
 
 
 def get_tool_category(name: str, subdir: str) -> str:
-    """Determine category from subdirectory location."""
+    """Determine category from subdirectory location.
+
+    ⛔ #1511: this used to end `SUBDIR_CATEGORY.get(subdir, "dx")`. That
+    fallback was unreachable while `gather_tools` walked a hard-coded
+    three-name tuple; it became reachable when the walk started following
+    `_lib_toolcount.COUNT_SUBDIRS`. Measured with a fourth declared
+    subdirectory: its tools were filed under `dx` and written into
+    tool-map.md — a shipped document — with nothing said.
+
+    A new counted subdirectory needs a category decided by a person, so
+    refuse rather than guess. The tuple already forces one edit (see
+    `test_a_new_tool_subdirectory_cannot_be_dropped_in_silence`); this
+    makes the second edit unavoidable instead of silently defaulted.
+    ⚠️ Behaviour today is unchanged: every member of `COUNT_SUBDIRS` is
+    in `SUBDIR_CATEGORY`, so this branch is still not taken.
+    """
     if subdir == "dx" and name in DX_AUTOMATION:
         return "dx"
-    return SUBDIR_CATEGORY.get(subdir, "dx")
+    if subdir not in SUBDIR_CATEGORY:
+        raise KeyError(
+            f"{name}: no tool-map category for subdirectory {subdir!r}. "
+            f"It is counted (COUNT_SUBDIRS) but unmapped here, so its "
+            f"tools would be filed under 'dx' in a shipped document. Add "
+            f"{subdir!r} to SUBDIR_CATEGORY and CATEGORY_HEADERS/"
+            f"CATEGORY_ORDER, or drop it from COUNT_SUBDIRS.")
+    return SUBDIR_CATEGORY[subdir]
 
 
 def gather_tools() -> dict:
-    """Gather all tools from ops/, dx/, lint/ grouped by category.
+    """Gather all tools from ops/, dx/, lint/ and the repo root, by category.
 
     Returns: {category: [(filename, description), ...]}
+
+    The repo-root tools (`validate_all.py` etc.) are tagged ``None`` by
+    `tool_map_scope` and land under `ops`. `check_tool_map_coverage` scans
+    the repo root and requires every file it finds to be listed in this
+    document, so dropping them here would leave a `tool-map-coverage`
+    warning that regenerating cannot clear.
     """
     categorized = {cat: [] for cat in CATEGORY_ORDER}
 
-    # Scan each subdirectory
-    for subdir in ("ops", "dx", "lint"):
-        subdir_path = TOOLS_ROOT / subdir
-        if not subdir_path.is_dir():
-            continue
-        for f in sorted(subdir_path.glob("*.py")):
-            if any(f.name.startswith(p) for p in SKIP_PREFIXES):
-                continue
-            name = f.stem
-            desc = extract_tool_description(f)
-            cat = get_tool_category(name, subdir)
-            categorized[cat].append((f.name, desc))
-
-    # Root-level tools (validate_all.py etc.)
-    for f in sorted(TOOLS_ROOT.glob("*.py")):
-        if any(f.name.startswith(p) for p in SKIP_PREFIXES):
-            continue
+    for subdir, f in tool_map_scope(TOOLS_ROOT):
         desc = extract_tool_description(f)
-        categorized["ops"].append((f.name, desc))
+        cat = "ops" if subdir is None else get_tool_category(f.stem, subdir)
+        categorized[cat].append((f.name, desc))
 
     return categorized
 
@@ -198,9 +218,15 @@ def generate_tool_map(categorized: dict, lang: str = "zh") -> str:
 
         lines.append("")
 
-    # Shared libraries footer (dynamically list all _lib*.py files)
+    # Shared libraries footer — the other half of the same partition the
+    # tool tables use, so the prefix comes from the shared module rather
+    # than being spelled a second time here (#1511).
+    # ⚠️ Root only, deliberately unchanged: a `_lib*` module placed in
+    # `ops/`, `dx/` or `lint/` is skipped by the tool scan AND missed
+    # here, so it appears nowhere in this file. Widening the glob would
+    # add rows to a shipped document, so it is tracked separately.
     shared_libs = sorted(
-        f for f in TOOLS_ROOT.glob("_lib*.py") if f.is_file()
+        f for f in TOOLS_ROOT.glob(f"{SHARED_LIB_PREFIX}*.py") if f.is_file()
     )
 
     if lang == "en":

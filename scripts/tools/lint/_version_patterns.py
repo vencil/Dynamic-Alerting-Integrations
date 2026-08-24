@@ -190,15 +190,12 @@ DOC_MAP_SKIP_NAME_PATTERNS = (
     re.compile(r"^_project-structure-audit-.*\.md$"),
 )
 
-# Tool map coverage check skips these filename prefixes
-TOOL_MAP_SKIP_PREFIXES = ("_lib", "__init__", "__pycache__")
-
-# The subdirectories the "N 個 Python 工具" counts cover. This is the
-# scope the counted sentence states verbatim — ``scripts/tools/{ops,dx,lint}``
-# 下 N 個 Python 工具 — and the same three `bump_docs._count_python_tools`
-# and `generate_tool_map.gather_tools` scan. The repo root is deliberately
-# excluded; see `_count_python_tools` for what including it cost.
-TOOL_COUNT_SUBDIRS = ("ops", "dx", "lint")
+# ⛔ #1511: "which files are tools" and "which subdirectories the counted
+# sentence covers" used to live here as `TOOL_MAP_SKIP_PREFIXES` and
+# `TOOL_COUNT_SUBDIRS`, with two more copies in `bump_docs` and
+# `generate_tool_map`. They now have one home — `scripts/tools/_lib_toolcount.py`
+# — because this is a pattern registry for one checker, and the predicate is
+# shared by a checker and two writers.
 
 # ============================================================================
 # Roadmap/changelog overlap detection
