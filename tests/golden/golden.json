@@ -160,5 +160,20 @@
     "source_file": "tenants.yaml",
     "source_hash": "a45e4f69518f27dd",
     "tenant_id": "tenant-meta"
+  },
+  {
+    "defaults_chain": [
+      "_defaults.yaml"
+    ],
+    "effective_config": {
+      "container_memory": 85,
+      "mysql_connections": "70"
+    },
+    "fixture_dir": "wrapper-siblings",
+    "merged_hash": "8f6230805638d782",
+    "scenario": "wrapper-siblings",
+    "source_file": "tenants.yaml",
+    "source_hash": "12125e7113d19eee",
+    "tenant_id": "tenant-sib"
   }
 ]

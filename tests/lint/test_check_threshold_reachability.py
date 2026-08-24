@@ -866,7 +866,7 @@ def test_the_two_floors_blame_the_right_cause(monkeypatch):
                    if not any(rel == root or rel.startswith(root + "/")
                               for root in gate._SHIPPED_CONFD_ROOTS)]
     # …and a THIRD collision to dodge, same reason as the two above: the #1411
-    # per-root floor fires when a root contributes nothing, and 9 of the 12
+    # per-root floor fires when a root contributes nothing, and 10 of the 13
     # roots hold a single file — exempting that file empties its root and that
     # floor speaks first. So only files whose root has a sibling are usable
     # here. ⛔ This is picking a probe that isolates the floor under test, NOT
@@ -2063,7 +2063,7 @@ def test_the_call_site_hands_the_witness_the_tracked_scan_not_the_exempt_set(
     root as may-be-empty instead does NOT help: `_assert_every_root_contributes`
     reads the `_DEFAULTS_CONFD_ROOTS` pin, and its own message says exempting a
     root's last artifact lands there with no legal way out. Measured across all
-    12 roots: exactly ONE qualifies today — a non-shipped root holding four.
+    13 roots: exactly ONE qualifies today — a non-shipped root holding four.
     Shipped roots are excluded because their `min_artifacts` floor fires first.
     """
     tracked = gate._tracked_defaults_artifacts()
@@ -3759,8 +3759,9 @@ def test_the_headroom_note_states_both_directions_and_both_are_current():
     nothing used to make any of them go red.
 
     It went stale exactly as its own text predicted: it said artifacts tolerate
-    "+9 keys" upward when the arithmetic gives +8 (70 total − 19 in the biggest
-    conf.d root = 51, and 51 + 9 = 60 is not strictly below a floor of 60), in a
+    "+9 keys" upward when the arithmetic of the time gave +8 (70 total − 19 in
+    the biggest conf.d root = 51, and 51 + 9 = 60 is not strictly below a floor
+    of 60), in a
     paragraph whose opening sentence is "these numbers need maintaining in BOTH
     directions" and whose closing one is "nobody should discover the direction by
     guessing". A comment that names a direction still needs a tripwire on the
@@ -3783,17 +3784,17 @@ def test_the_headroom_note_states_both_directions_and_both_are_current():
     # UP: the largest pure addition that keeps `total - biggest < floor` true.
     up_gen = gate._DEFAULTS_GENERATOR_KEYS_FLOOR - (g_total - g_biggest) - 1
     up_art = gate._DEFAULTS_ARTIFACT_KEYS_FLOOR - (a_total - a_biggest) - 1
-    assert (up_art, up_gen) == (8, 28), (
-        f"the HEADROOM note beside the key floors says artifacts +8 / generators "
+    assert (up_art, up_gen) == (6, 28), (
+        f"the HEADROOM note beside the key floors says artifacts +6 / generators "
         f"+28 upward; measured {up_art} / {up_gen}. Update the note and this "
         "assertion together, and keep the DIRECTION word beside each number.")
 
     # DOWN: how many keys may disappear before the floor itself speaks.
     down_gen = g_total - gate._DEFAULTS_GENERATOR_KEYS_FLOOR
     down_art = a_total - gate._DEFAULTS_ARTIFACT_KEYS_FLOOR
-    assert (down_art, down_gen) == (10, 22), (
-        f"the note says artifacts 10 / generators 22 downward — and the fifth "
-        f"floor's own comment repeats the artifact one as '10 keys of slack'; "
+    assert (down_art, down_gen) == (12, 22), (
+        f"the note says artifacts 12 / generators 22 downward — and the fifth "
+        f"floor's own comment repeats the artifact one as '12 keys of slack'; "
         f"measured {down_art} / {down_gen}. Both places move together.")
 
     # ⛔ and they must not collide. ⚠️ NOT because they once did: at `188cfb17`,
@@ -4908,7 +4909,7 @@ def test_every_root_stays_loader_readable_catches_the_ticket_reproduction():
 
     ⛔ This arm exists because the sibling floor above is NOT enough: the
     ticket's measured `git mv` was under `tests/e2e-bench/fixture/synthetic-v1`,
-    a root with 1 key out of 70 against a global floor of 60 — ten keys of
+    a root with 1 key out of 72 against a global floor of 60 — twelve keys of
     slack, so its whole contribution can vanish inside the rounding.
     """
     victim = "tests/e2e-bench/fixture/synthetic-v1/conf.d"

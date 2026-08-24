@@ -1,0 +1,3 @@
+tenants:
+  tenant-sib:
+    mysql_connections: "70"

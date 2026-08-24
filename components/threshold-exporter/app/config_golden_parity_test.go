@@ -4,7 +4,7 @@ package main
 //
 // This test reads tests/golden/golden.json (captured from Python
 // describe_tenant.py) and runs the Go computeMergedHash + computeSourceHash
-// against the same 8 fixtures. Byte-for-byte hash equality is required;
+// against the same fixtures. Byte-for-byte hash equality is required;
 // any divergence is a §8.11.2 semantic trap and a ship blocker.
 //
 // Fixtures cover every deep_merge rule from ADR-017:
@@ -17,6 +17,9 @@ package main
 //   opt-out-null-threshold — real flat-metric-key shape: null keeps the
 //                       inherited default, "disable" is the opt-out (#1339)
 //   metadata-skipped  — _metadata never propagates
+//   wrapper-siblings  — `defaults:` wrapper WITH sibling top-level keys, the
+//                       shape the shipped platform file has; see
+//                       tests/golden/build_and_capture.py for its limits
 //
 // If this test is red and the Python side is green, the Go port has drifted.
 // Run `python3 tests/golden/build_and_capture.py` only when Python semantics
