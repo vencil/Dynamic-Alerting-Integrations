@@ -112,7 +112,7 @@
 | `da_config_last_scan_complete_unixtime_seconds` | Gauge | 上次掃描完成時間（`time() − 此值` = 卡住偵測） |
 | `da_config_last_reload_complete_unixtime_seconds` | Gauge | 上次 reload 完成時間 |
 | `da_config_free_os_memory_total` | Counter | 主動還記憶體給 OS 的次數（未開 `-free-os-mem-after-reload` 時恆 0） |
-| `da_config_hierarchy_divergent_tenants` | Gauge | 「`/effective` 查得到、但不會產生 `user_threshold`」的租戶數。**#1521 修好之後這是一條不變量：正常運作下恆為 0。**非 0 代表兩個 conf.d 掃描器的母體又分歧了——`scanDirFileHashes` 與 `scanDirHierarchical` 看到的租戶集合不一致，受影響租戶的告警不會觸發。每次 config commit 重設；**ERROR log 只在受影響集合「變化」時印一次**（含冷啟動、以及歸零後再度發生）。⚠️ **沒有出貨任何 PrometheusRule**——門檻與抑制窗由部署方決定，`> 0 for 10m` 是合理起點。⭐ **保留一個 release 當迴歸遙測**：#1521 已關閉，它的職責從「點名受害者」變成「證明修復仍然成立」，確認生產環境全程為 0 之後才退役 |
+| `da_config_hierarchy_divergent_tenants` | Gauge | 「`/effective` 查得到、但不會產生 `user_threshold`」的租戶數。**#1521 修好之後這是一條不變量：正常運作下恆為 0。**非 0 代表兩個 conf.d 掃描器的母體又分歧了——`scanDirFileHashes` 與 `scanDirHierarchical` 看到的租戶集合不一致，受影響租戶的告警不會觸發。⛔ **目錄深度已不再是成因**（平面掃描器自 #1521 起遞迴）；目前可達的成因是**某個檔的平台區塊過不了平面解析**（`defaults:` 只吃數字），該檔連同它的 `tenants:` 整份被丟棄，而階層 walker 仍註冊了那些租戶。ERROR log 會指向先前那行點名該檔的 ERROR/WARN。每次 config commit 重設；**ERROR log 只在受影響集合「變化」時印一次**（含冷啟動、以及歸零後再度發生）。⚠️ **沒有出貨任何 PrometheusRule**——門檻與抑制窗由部署方決定，`> 0 for 10m` 是合理起點。⭐ **保留一個 release 當迴歸遙測**：#1521 已關閉，它的職責從「點名受害者」變成「證明修復仍然成立」，確認生產環境全程為 0 之後才退役 |
 
 ### 3.4 Exit Codes（CLI binaries）
 

@@ -4,37 +4,38 @@ package main
 // conf.d dual-scanner divergence audit (#1521)
 // ============================================================
 //
-// THE DEFECT THIS FILE MAKES AUDIBLE (it does NOT fix it)
+// WHAT THIS FILE GUARDS (the defect it was built for is CLOSED)
 //
-// conf.d/ is read by two independent scanners with two different
-// definitions of "which files exist":
+// conf.d/ is read by two independent scanners:
 //
-//	flat_scanner.go  scanDirFileHashes    os.ReadDir + `if IsDir() { continue }`
-//	                                      → top level ONLY
+//	flat_scanner.go  scanDirFileHashes    filepath.WalkDir, recursive
 //	                 → fullDirLoad → mergePartialConfigs → m.config
 //	                 → GetConfig() → ThresholdCollector → /metrics
 //
-//	config_hierarchy.go scanDirHierarchical  filepath.WalkDir
-//	                                      → RECURSIVE, every depth
+//	config_hierarchy.go scanDirHierarchical  filepath.WalkDir, recursive
 //	                 → m.hierarchy.tenantSources → Resolve() → /effective
 //
-// Nothing compared the two populations. A tenant file placed in a
-// sub-directory (`conf.d/db/hier-tenant.yaml`) is therefore resolvable
-// via /effective, absent from /metrics, and — before this file — emitted
-// ZERO signal: no ERROR, no WARN, no parse_failure, nothing in the
-// "Config loaded" stats line. ADR-016 §"目錄深度不影響 metric label"
+// They originally disagreed by construction: the flat one was
+// `os.ReadDir` + `if IsDir() { continue }`, so a tenant file one directory
+// down (`conf.d/db/hier-tenant.yaml`) resolved via /effective, was absent
+// from /metrics, and emitted ZERO signal — no ERROR, no WARN, no
+// parse_failure, nothing in the "Config loaded" stats line. ADR-016
+// §"目錄深度不影響 metric label"
 // (docs/adr/016-conf-d-directory-hierarchy-mixed-mode.md:115) promises the
-// opposite.
+// opposite. This file made that audible; #1521 then made the flat scanner
+// recursive, so depth is no longer a cause.
 //
-// SCOPE OF THIS FILE (deliberately narrow — issue #1521 "option C")
-//
-// Stop-the-bleeding only: compare the two populations on every config
-// commit, name the casualties in an ERROR log, and expose the size of the
-// divergence as a gauge. The nested tenants still produce no metrics
-// afterwards. Actually teaching the collector-side pipeline to see nested
-// tenant files is a separate change with a much larger blast radius
-// (merge precedence, composite-hash construction, per-file cache keys,
-// duplicate detection across depths) and is intentionally NOT done here.
+// ⛔ THE AUDIT IS NOT OBSOLETE, and the reason is not sentimental. The two
+// scanners still parse what they find SEPARATELY, so a file can be dropped
+// by one and kept by the other. The reachable cause today is a file whose
+// platform block fails the flat parse: `Defaults` is
+// `map[string]float64`, so a `defaults:` entry of the wrong shape makes
+// `parsePartialConfig` discard the WHOLE file — tenants and all — while
+// the hierarchical walker, which reads the same file for its `tenants:`
+// declarations only, still registers them. Measured: `cfg.Tenants` empty,
+// `hierarchy.tenantSources` = [t-bad]. Two enumerators over one tree is
+// the defect CLASS (#1339); recursion closed one instance of it, not the
+// class, which is why this gauge stays armed and why #1568 exists.
 //
 // ⛔ WHY THIS IS NOT FAIL-CLOSED (rejecting the load on divergence)
 //
@@ -118,9 +119,11 @@ func formatDivergenceLog(divergent []string, tenantSources map[string]string, ro
 	fmt.Fprintf(&b,
 		"ERROR: conf.d scanner divergence (%s): %d tenant(s) are visible to the hierarchical scanner (/effective) "+
 			"but ABSENT from the merged config that feeds the collector — these tenants emit NO user_threshold series, "+
-			"so their alerts can never fire. Cause: the flat scanner reads only the top level of %s, so tenant files in "+
-			"sub-directories never reach /metrics (ADR-016 requires directory depth NOT to affect metric labels). "+
-			"Workaround: move the tenant file to the conf.d root. Tracking: %s. Affected:",
+			"so their alerts can never fire. Cause: their file was dropped while building the merged config under %s but "+
+			"still declared them to the hierarchical walker — most often a platform block that fails to parse "+
+			"(`defaults:` takes numbers only), which discards the WHOLE file including its `tenants:`. "+
+			"Fix: look for the ERROR/WARN line naming that file earlier in this log and correct it. "+
+			"Tracking: %s. Affected:",
 		context, len(divergent), root, divergenceIssueURL)
 
 	shown := divergent

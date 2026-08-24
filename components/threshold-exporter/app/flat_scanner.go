@@ -126,13 +126,32 @@ func scanDirFileHashes(dir string, oldHashes map[string]string, oldMtimes map[st
 	if _, serr := os.Stat(dir); serr != nil {
 		return nil, "", nil, nil, fmt.Errorf("read config dir %s: %w", dir, serr)
 	}
+	// ⛔ THE WALK ROOT IS THE RESOLVED PATH, and that is a fix rather than a
+	// tidy-up. `os.Stat` above follows symlinks, but `filepath.WalkDir` LSTATS
+	// its root and never follows one — so a `-config-dir` that is a symlink to
+	// the real directory was visited once as a non-directory, matched no
+	// `.yaml` suffix, and the walk ended with zero files and a nil error.
+	// `fullDirLoad`'s empty guard then failed the whole load with
+	// "no .yaml files found". Measured: `Load(real dir)` nil vs
+	// `Load(symlink)` "no .yaml files found", at uid 0 and uid 65534 alike.
+	// The pre-#1521 `os.ReadDir` followed the link, so this was a regression
+	// introduced by the recursion, not a pre-existing gap.
+	//
+	// ⚠️ Only the ROOT is resolved. Symlinked entries INSIDE the tree are
+	// still not followed — that is WalkDir's documented behaviour, it matches
+	// the hierarchical scanner walking the same tree, and following them would
+	// open a cycle risk that neither scanner is written to survive.
+	walkRoot := dir
+	if resolved, rerr := filepath.EvalSymlinks(dir); rerr == nil {
+		walkRoot = resolved
+	}
 
 	type dirFile struct {
 		name string      // root-relative, slash-separated
 		info os.FileInfo // from DirEntry.Info(), avoids separate os.Stat
 	}
 	var files []dirFile
-	walkErr := filepath.WalkDir(dir, func(full string, entry fs.DirEntry, werr error) error {
+	walkErr := filepath.WalkDir(walkRoot, func(full string, entry fs.DirEntry, werr error) error {
 		if werr != nil {
 			// One unreadable subtree must not blank the whole config; the
 			// hierarchical scanner reading the same tree logs and continues too.
@@ -148,7 +167,7 @@ func scanDirFileHashes(dir string, oldHashes map[string]string, oldMtimes map[st
 			// K8s ConfigMap symlink shims (`..data`, `..2026_04_25_…`), since a
 			// `..` name is a `.` name. Measured on a real mount layout: both
 			// scanners see the two root-level entries and nothing doubled.
-			if full != dir && strings.HasPrefix(name, ".") {
+			if full != walkRoot && strings.HasPrefix(name, ".") {
 				return fs.SkipDir
 			}
 			return nil
@@ -170,7 +189,7 @@ func scanDirFileHashes(dir string, oldHashes map[string]string, oldMtimes map[st
 			logger.Printf("WARN: skip unreadable entry %s: %v", full, ierr)
 			return nil
 		}
-		rel, rerr := filepath.Rel(dir, full)
+		rel, rerr := filepath.Rel(walkRoot, full)
 		if rerr != nil {
 			logger.Printf("WARN: skip path outside root %s: %v", full, rerr)
 			return nil

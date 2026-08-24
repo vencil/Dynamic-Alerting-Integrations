@@ -542,6 +542,33 @@ func (m *ConfigManager) IncrementalLoad() error {
 	sort.Strings(reparse)
 	for _, name := range reparse {
 		fullPath := filepath.Join(m.path, name)
+		// ⛔ A nested `_` file is scanned (change detection must see it) but
+		// contributes NOTHING to the merged config. `ThresholdConfig.Defaults`
+		// is ONE global map with no subtree scope, and the merge is
+		// last-writer-wins over sorted keys — so `nested/_defaults.yaml` sorts
+		// after the root's and would re-price every tenant in the tree,
+		// including tenants in unrelated subtrees. Measured; see
+		// `TestASubtreeDefaultNeverLeaksIntoTheGlobalOnes`.
+		//
+		// ⚠️ UNREACHABLE TODAY and kept deliberately: `anyNestedKey` above
+		// redirects any change under a subdirectory to `fullDirLoad`, so no
+		// nested key reaches this loop. It stays as the second line of the
+		// same defence — if that redirect is ever narrowed, the leak it
+		// prevents is silent. Measured unreachable: a `panic` in this branch
+		// does not fire across the whole package suite.
+		//
+		// ⛔ BEFORE THE PARSE, not after it, and that ordering is a fix. Parsing
+		// a file whose content is then discarded is not free of consequence:
+		// `Defaults` is `map[string]float64`, so a subtree defaults file using
+		// the SCHEDULE form (`{default: "90", overrides: [...]}`) — a shape the
+		// hierarchical plane accepts and `/effective` renders — fails to
+		// unmarshal and `parsePartialConfig` logs `ERROR: skip unparseable
+		// defaults/profiles file …`. Pre-#1521 the flat scanner never saw
+		// nested files, so the recursion introduced that ERROR on a tree that
+		// is entirely valid. Skipping first removes the log and the work.
+		if strings.Contains(name, "/") && strings.HasPrefix(scanKeyBase(name), "_") {
+			continue
+		}
 		data, ok := dataCache[name]
 		if !ok {
 			// Fallback: file not in cache (shouldn't happen, but be safe)
@@ -559,16 +586,6 @@ func (m *ConfigManager) IncrementalLoad() error {
 			continue
 		}
 		// Apply boundary enforcement (same rules as fullDirLoad)
-		// ⛔ A nested `_` file is scanned (change detection must see it) but
-		// contributes NOTHING to the merged config. `ThresholdConfig.Defaults`
-		// is ONE global map with no subtree scope, and the merge is
-		// last-writer-wins over sorted keys — so `nested/_defaults.yaml` sorts
-		// after the root's and would re-price every tenant in the tree,
-		// including tenants in unrelated subtrees. Measured; see
-		// `TestASubtreeDefaultNeverLeaksIntoTheGlobalOnes`.
-		if strings.Contains(name, "/") && strings.HasPrefix(scanKeyBase(name), "_") {
-			continue
-		}
 		applyBoundaryRules(name, &partial, m.getLogger())
 		newConfigs[name] = partial
 	}
@@ -739,6 +756,26 @@ func (m *ConfigManager) fullDirLoad() error {
 
 	for _, name := range fileNames {
 		fullPath := filepath.Join(m.path, name)
+		// ⛔ A nested `_` file is scanned (change detection must see it) but
+		// contributes NOTHING to the merged config. `ThresholdConfig.Defaults`
+		// is ONE global map with no subtree scope, and the merge is
+		// last-writer-wins over sorted keys — so `nested/_defaults.yaml` sorts
+		// after the root's and would re-price every tenant in the tree,
+		// including tenants in unrelated subtrees. Measured; see
+		// `TestASubtreeDefaultNeverLeaksIntoTheGlobalOnes`.
+		//
+		// ⛔ BEFORE THE PARSE, not after it, and that ordering is a fix. Parsing
+		// a file whose content is then discarded is not free of consequence:
+		// `Defaults` is `map[string]float64`, so a subtree defaults file using
+		// the SCHEDULE form (`{default: "90", overrides: [...]}`) — a shape the
+		// hierarchical plane accepts and `/effective` renders — fails to
+		// unmarshal and `parsePartialConfig` logs `ERROR: skip unparseable
+		// defaults/profiles file …`. Pre-#1521 the flat scanner never saw
+		// nested files, so the recursion introduced that ERROR on a tree that
+		// is entirely valid. Skipping first removes the log and the work.
+		if strings.Contains(name, "/") && strings.HasPrefix(scanKeyBase(name), "_") {
+			continue
+		}
 		data, ok := dataCache[name]
 		if !ok {
 			// Fallback: read from disk (shouldn't happen on first load)
@@ -751,16 +788,6 @@ func (m *ConfigManager) fullDirLoad() error {
 		}
 		partial, ok := parsePartialConfig(name, fullPath, data, m.getMetrics(), m.getLogger())
 		if !ok {
-			continue
-		}
-		// ⛔ A nested `_` file is scanned (change detection must see it) but
-		// contributes NOTHING to the merged config. `ThresholdConfig.Defaults`
-		// is ONE global map with no subtree scope, and the merge is
-		// last-writer-wins over sorted keys — so `nested/_defaults.yaml` sorts
-		// after the root's and would re-price every tenant in the tree,
-		// including tenants in unrelated subtrees. Measured; see
-		// `TestASubtreeDefaultNeverLeaksIntoTheGlobalOnes`.
-		if strings.Contains(name, "/") && strings.HasPrefix(scanKeyBase(name), "_") {
 			continue
 		}
 		applyBoundaryRules(name, &partial, m.getLogger())
@@ -788,7 +815,7 @@ func (m *ConfigManager) fullDirLoad() error {
 	}
 	parsedDefaults := m.hierarchy.parsedDefaults
 	m.mu.RUnlock()
-	if n := applySubtreeDefaults(&merged, tenantDefaults, parsedDefaults); n > 0 {
+	if n := applySubtreeDefaults(&merged, m.path, tenantDefaults, parsedDefaults); n > 0 {
 		m.getLogger().Printf(
 			"INFO: applied %d inherited subtree default(s) to the collector config "+
 				"(conf.d subdirectories declare defaults; without this the series "+

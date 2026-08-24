@@ -298,9 +298,34 @@ tenants:
   db-a:
     mysql_connections: "70"
 `)
+	// ⛔ THE HIDDEN FILE DECLARES A TENANT, and that is the fix to this test
+	// rather than a decoration. It used to carry only `defaults: 999`, and the
+	// `!= 80` assertion below could not fail: the merge is last-writer-wins
+	// over sorted keys and `.hidden.yaml` (0x2E) sorts BEFORE `_defaults.yaml`
+	// (0x5F), so the root's 80 overwrote the 999 whether or not dot-files were
+	// skipped. Measured: with the dot-file skip deleted from the scanner, this
+	// test still PASSED — only `TestScanDirFileHashes_SkipsHiddenAndSubdirs`
+	// went red. A tenant is detectable regardless of merge order. (#1569
+	// blind review.)
 	writeTestFile(t, dir, ".hidden.yaml", `
 defaults:
   mysql_connections: 999
+tenants:
+  db-hidden:
+    mysql_connections: "999"
+`)
+
+	// ⛔ A hidden DIRECTORY, which nothing in the package covered either. The
+	// recursion prunes these whole, and that prune is the defence against K8s
+	// ConfigMap backing dirs (`..data`, `..2026_04_25_…`): without it the flat
+	// scanner walks the backing directory and emits a second copy of every
+	// tenant under a `..2026_*/…` key while the hierarchical scanner emits one.
+	hiddenDir := filepath.Join(dir, ".data")
+	os.MkdirAll(hiddenDir, 0700)
+	writeTestFile(t, hiddenDir, "shadow.yaml", `
+tenants:
+  db-shadow:
+    mysql_connections: "555"
 `)
 
 	subdir := filepath.Join(dir, "subdir")
@@ -323,15 +348,25 @@ tenants:
 	// ⛔ CONTRACT CHANGED BY #1521: a tenant in a subdirectory now reaches the
 	// merged config. It always resolved through `Resolve()` / `/effective`;
 	// what it never reached was `GetConfig()`, and therefore the collector —
-	// so its alerts could not fire. The dot-file half of this test is
-	// unchanged, and the `!= 80` assertion above still proves it.
+	// so its alerts could not fire.
 	if _, ok := cfg.Tenants["db-c"]; !ok {
 		t.Errorf("subdirectory tenant db-c missing from the merged config; "+
 			"got %d tenant(s)", len(cfg.Tenants))
 	}
+	// The dot-file and dot-directory halves, asserted where they can actually
+	// fail — by tenant identity, not by a defaults value the merge order
+	// decides anyway.
+	if _, ok := cfg.Tenants["db-hidden"]; ok {
+		t.Errorf("tenant from the dot-FILE .hidden.yaml reached the merged config")
+	}
+	if _, ok := cfg.Tenants["db-shadow"]; ok {
+		t.Errorf("tenant from the dot-DIRECTORY .data/ reached the merged config; " +
+			"the ConfigMap backing-dir prune is gone and every tenant under a " +
+			"`..data` shim would be counted twice")
+	}
 	if len(cfg.Tenants) != 2 {
-		t.Errorf("expected the root tenant and the subdirectory tenant, got %d",
-			len(cfg.Tenants))
+		t.Errorf("expected exactly the root tenant and the subdirectory tenant, got %d: %v",
+			len(cfg.Tenants), keysOfTenants(cfg))
 	}
 }
 

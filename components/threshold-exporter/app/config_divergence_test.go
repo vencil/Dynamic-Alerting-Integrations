@@ -365,9 +365,16 @@ func TestFormatDivergenceLog_CapsTheSample(t *testing.T) {
 	// The two variable fields the message is useless without: WHICH
 	// conf.d, and WHICH commit. Passing empty strings for both stayed
 	// green before this.
-	if !strings.Contains(line, "top level of /conf.d") {
+	//
+	// ⛔ The root is asserted by VALUE, not by the sentence around it. The
+	// earlier form pinned the literal "top level of /conf.d" — prose that
+	// stopped being true the moment #1521 made the scanner recursive, and
+	// the test's only reaction was to keep the stale wording alive until
+	// someone edited the message and got a red for the wrong reason.
+	if !strings.Contains(line, "/conf.d") {
 		t.Errorf("log must name the conf.d root, got:\n%s", line)
 	}
+	assertNoStaleRemediation(t, line)
 	if !strings.Contains(line, "(Config loaded (directory))") {
 		t.Errorf("log must name the commit context, got:\n%s", line)
 	}
@@ -782,9 +789,10 @@ func TestDivergenceAudit_LogNamesTheRootAndTheCommit(t *testing.T) {
 		"Config loaded (directory)")
 
 	line := logBuf.String()
-	if !strings.Contains(line, "top level of "+dir) {
+	if !strings.Contains(line, dir) {
 		t.Errorf("log must name the conf.d root %q, got:\n%s", dir, line)
 	}
+	assertNoStaleRemediation(t, line)
 	if !strings.Contains(line, "(Config loaded (directory))") {
 		t.Errorf("log must name the commit context, got:\n%s", line)
 	}
@@ -1017,5 +1025,32 @@ func TestDivergenceLogState_TheKeyCannotBeAmbiguousAcrossAdjacentPairs(t *testin
 			"previous one must be reported as new; without the separator after " +
 			"the source path the two render identically and the second is " +
 			"silently swallowed")
+	}
+}
+
+// assertNoStaleRemediation fails if the operator-facing divergence message
+// still carries the pre-#1521 diagnosis.
+//
+// ⛔ THIS ASSERTS AN INVARIANT, NOT A SENTENCE, and the distinction is the
+// whole point. "The flat scanner reads only the top level" and "move the
+// tenant file to the conf.d root" were true when the message was written and
+// false the moment the scanner became recursive — an operator following that
+// remediation today would move a file that was never the problem. A test that
+// pins the exact wording cannot tell "the prose was improved" from "the
+// diagnosis went stale"; one that forbids the OBSOLETE CLAIM can. Found by
+// blind review of #1569, which noticed the message and this file's own header
+// still described the closed defect.
+func assertNoStaleRemediation(t *testing.T, line string) {
+	t.Helper()
+	for _, stale := range []string{
+		"top level of",
+		"move the tenant file",
+		"sub-directories never reach",
+	} {
+		if strings.Contains(line, stale) {
+			t.Errorf("divergence message still carries the pre-#1521 diagnosis %q "+
+				"(directory depth stopped being a cause when the flat scanner became "+
+				"recursive); got:\n%s", stale, line)
+		}
 	}
 }
