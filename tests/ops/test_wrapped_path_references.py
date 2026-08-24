@@ -62,9 +62,12 @@ of the tree and not of one commit — **2**, one of them live —
     Contrast the top-of-file illustration, which uses a path that does not exist
     for exactly this reason.
   ⚠️ Both were cited by absolute line number until #1453. Measured at that
-  point: two of the three numbers had rotted (the split was at 3740, not 3591;
-  the contiguous mention at 332, not 311) and the third still happened to be
-  right. Cite the symbol, the paragraph, or the other mention — never the line.
+  point: two of the three numbers had rotted and the third still happened to be
+  right. ⛔ The corrected values are deliberately NOT repeated here, because the
+  first draft of this paragraph did repeat them and one had already gone stale
+  by a line inside the commit that recorded it — moved by an unrelated hunk of
+  that same commit, which also touched the file being cited. Cite the symbol,
+  the paragraph, or the other mention — never the line.
   A line number that is correct today is not a different KIND of thing from one
   that has already rotted; it is the same thing earlier.
 

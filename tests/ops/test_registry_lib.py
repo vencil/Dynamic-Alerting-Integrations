@@ -920,9 +920,20 @@ def _textwrap_wrapping_calls(tree) -> list[int]:
     ⚠️ ONE SECOND LINE OF DEFENCE, and it covers exactly one call site. Planting
     an escape at each of the six in turn, `check_threshold_registry --ci` stays
     green for five of them and goes RED for `render_chart_defaults_lines` —
-    because that is the renderer whose output reaches the shipped
-    `_defaults.yaml` and `values.yaml`, so a changed wrap shows up as a stale
-    generated block. The other five write nothing a golden comparison sees.
+    that renderer is the one whose bodies carry a token the escape actually
+    splits today, so a changed wrap surfaces there as a stale generated block.
+    ⛔ Do NOT read the other five greens as "nothing is watching them"; an
+    earlier wording of this paragraph said exactly that and it was measured
+    false. Perturbing each call site's width in turn and re-running `--regen`,
+    `_entry_lines` rewrites 6 golden-compared blocks and `_counterexample_lines`
+    rewrites 5 — including the same two files this paragraph used to hand to
+    `render_chart_defaults_lines` alone. Those two sites are green because
+    their bodies happen to wrap identically, NOT because a golden comparison
+    cannot see them. The three that genuinely reach no golden surface, at 0
+    each, are `annotate_defaults_counterexamples`, `_append_wrapped_comment`
+    and `stub_counterexample_lines` — and the middle one is the very call site
+    whose docstring claims a byte-for-byte revert, so that claim has no golden
+    witness behind it either.
     """
     import ast
 
