@@ -140,24 +140,52 @@ effective = deep_merge( defaults_block(L0), …, defaults_block(Ln), tenant_body
        ⤷ 該鍵缺席、或存在但值為 null 時，退回 f 本身（＝整份文件；見下方例外 1 / 3）
 ```
 
-### 給要編輯 `_defaults.yaml` 的人：三條就夠
+兩個 unwrap 實作：`describe_tenant.py` 的 `ddata.get("defaults", ddata)`、Go 的
+`pkg/config.extractDefaultsBlock`（`config_inheritance.go` 另有一份同名副本）。
+
+### 給要編輯 `_defaults.yaml` 的人：這四條
 
 1. **只有 `defaults:` 區塊裡的鍵會進 `effective`。** 與它**平級**的頂層鍵（`state_filters` /
-   `optional_overrides` / `profiles` / `max_metrics_per_tenant` / `_routing*` 等；權威清單見
-   [`platform-defaults.schema.json`](../schemas/platform-defaults.schema.json)）**照樣生效**，
+   `optional_overrides` / `profiles` / `max_metrics_per_tenant` / `_routing*` 等）**照樣生效**，
    只是各走各的管線：`state_filters` / `optional_overrides` 由 `pkg/config` 的 merge 併入
    `ThresholdConfig` 並在 resolve 期逐租戶展開，`_routing_defaults` / `_routing_enforced` 由
-   `generate_alertmanager_routes.py` 的四層合併消費。它們不經過 `effective` / `merged_hash`。
+   `generate_alertmanager_routes.py`（實作在它匯入的 `_grar_*` 模組）的四層合併消費。它們不經過
+   `effective` / `merged_hash`。
+   ⛔ **哪些鍵允許出現，見 [`platform-defaults.schema.json`](../schemas/platform-defaults.schema.json)
+   ——但那是「這個檔案允許哪些頂層鍵」的清單，不是「這個鍵放在這裡就會生效」的清單。**
+   `_silent_mode` / `_profile` / `_severity_dedup` 都列在該 schema 的頂層，但它們真正被消費的
+   位置是 `_defaults.yaml` 裡的 **`tenants:` 區塊**；寫在與 `defaults:` 平級的頂層是**靜默
+   no-op**（實測：exporter 零 WARN、`merged_hash` 不變、schema lint 回 `OK`）。
+   ⛔ 允許出現的鍵以那份 schema 為準，**勿在本 ADR 另立一份列舉**——上面括號裡的幾個名字是
+   舉例，不是清單。
 
-2. **不要把它們縮排進 `defaults:` 想讓它們「被看見」。** 那會改變它們的意義，而且兩個平面的
-   下場不同：`ThresholdConfig` 側的欄位型別是 `map[string]float64`（`types.go`），巢狀 mapping
-   會 unmarshal 失敗 ⇒ `parsePartialConfig` 回 `ok=false`、**整份檔案被丟棄**並 log
-   `ERROR: ... entire block dropped`；`effective` 側則會**靜默接受**成一個巢狀鍵（repo 內
-   `tests/golden/fixtures/opt-out-null` 就是這個形狀且釘著 `merged_hash`）。⇒ 你會同時失去所有
-   平台預設、而診斷面看起來一切正常。
+2. ⛔ **不要把平級鍵縮排進 `defaults:` 想讓它們「被看見」。三個平面下場不同，其中一個會讓客戶
+   收不到告警**：
+   - **exporter**：欄位型別是 `map[string]float64`（`types.go`），巢狀 mapping 會 unmarshal
+     失敗 ⇒ `parsePartialConfig` 回 `ok=false`、**整份檔案被丟棄**並 log
+     `ERROR: ... entire block dropped`。連同檔內其他平級鍵一起陪葬。
+   - **路由**：⛔ `_routing_defaults` 一旦離開頂層，`generate_alertmanager_routes.py` 就找不到
+     它——**沒有自己 `_routing` 的租戶會整條 route ＋ receiver 消失**（實測：`Found 2 tenant(s)
+     with routing config: db-a, db-b` → `Found 1 tenant(s): db-b`，`tenant-db-a` receiver 消失，
+     **RC=0、零 error、零 warning**）。`check_confd_schema.py` 也**不擋**（實測兩者皆 `RC=0`；
+     `defaults` 的 sub-schema 逐字宣告 values left loose）。
+   - **`effective`**：**靜默接受**成一個巢狀鍵，而 blast-radius 會因此從「無變更」變成一份
+     Tier B 報告。⚠️ **也就是說：診斷面會正向獎勵這個動作，而它同時讓一個租戶失去告警。**
 
-3. **改了平級鍵之後，不要拿 `merged_hash` / `/effective` / `blast_radius` 去確認它生效。**
-   那三個面看不到你的變更；更糟的是執行期會把它**標成別的東西**（見下方「診斷面的代價」）。
+3. **改了平級鍵之後，不要拿 `merged_hash` / `/effective` / `blast_radius` 去確認它生效**
+   （那三個面看不到，而且執行期會把它標成 `effect="cosmetic"`，見下方「診斷面的代價」）。
+   **改去問真正的消費端**：
+   - `state_filters` → exporter `/metrics` 的 `user_state_filter{tenant,filter,severity}`
+   - `_silent_mode` → `user_silent_mode{tenant,target_severity}`
+   - `_routing_defaults` / `_routing_enforced` → `generate_alertmanager_routes.py --config-dir
+     conf.d/ --dry-run`，比對前後的 `Found N tenant(s) with routing config` 與 receiver 集合
+
+4. **想用顯式 `null` 退掉一個繼承來的 `_` 前綴鍵：`null` 必須與被繼承的那個值在同一個位置。**
+   判準是「是否 `_` 前綴」（`pkg/config/hierarchy.go` 的 `deepMerge` 對 `_` 前綴鍵做
+   `delete(result, k)`，非 `_` 前綴只 `continue`）。可用的組合只有兩種：**兩者都在 `defaults:`
+   內部**，或**兩者都在無 `defaults:` 包裝的檔案頂層**。⛔ 寫在 `defaults:` 的**兄弟**位置＝
+   沒有東西可刪＝靜默 no-op；⛔ 寫在**租戶檔**一律被 `check_confd_schema.py` 擋下
+   （`tenant-config.schema.json` 對這些鍵宣告了非 null 型別）。
 
 ### 已知的可達例外（非窮舉——這份清單不是保證）
 
@@ -202,8 +230,8 @@ unwrap，所以 `classifyDefaultsNoOpEffect` 拿不到兄弟鍵——一次「�
 「rollback 已驗證」**。
 
 ⇒ 這是 [#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516) 的主題，
-處置是**另建一個平台面比較平面**。為什麼不直接擴張這裡的定義域，見
-[§考量的替代方案 D](#d-擴張-effective-的定義域把兄弟鍵合併進來-已否決)。
+處置是**另建一個平台面比較平面**。為什麼不直接擴張這裡的定義域，見本文件的
+**§考量的替代方案 D**。
 
 ### Dual-Hash 機制
 
@@ -341,7 +369,7 @@ elif any ancestor _defaults.yaml changed:
 
 ❌ 在 container mount（NFS/FUSE/projected volume）環境下事件遺失是已知問題。
 kernel watch 限制（default 8192）在千租戶環境會被用盡。
-periodic scan 的實測成本見 [`benchmarks.md` §1](../benchmarks.md#1-規模能撐多少租戶)：
+periodic scan 的實測成本見 [`benchmarks.md`](../benchmarks.md) §1：
 **1000 租戶**冷啟動全量載入 **112 ms**、穩態 reload **1.3 ms**。⚠️ 本 ADR 早期版本寫的
 「2000 tenant < 200ms」在 repo 內找不到出處，已改為實際可查的數字。
 
@@ -359,10 +387,12 @@ Replace 語意更直覺，且與 Helm values merge 行為一致。
 也併進 `effective`。**三條理由同等承重，都是量出來的**：
 
 1. **會製造 reload 歸因噪音。** `merged_hash` 是 reload **歸因**與 blast-radius 訊號的輸入：
-   `classifyAndCount` 用它決定一次 defaults 變更記成 `applied`（`IncReloadTrigger`）還是
+   `config_debounce.go` 的 `classifyTenant` 用它決定一次 defaults 變更記成
+   `applied`（`IncReloadTrigger`）還是
    `shadowed` / `cosmetic`。合併兄弟鍵之後，每一次平台路由編輯都會把每個租戶從 `cosmetic`
    翻成 `applied`，並讓 `da_config_reload_trigger_total{reason="defaults"}` 逐次增量——而本 ADR
-   存在的理由正是上面那句「如何避免 reload 風暴」。⚠️ 精確地說：租戶**現在就已經**每次都被送進
+   存在的理由正是上面那句「如何避免 reload 風暴」。**這正是上面替代方案 A 被否決的同一個
+   後果。**⚠️ 精確地說：租戶**現在就已經**每次都被送進
    `da_config_blast_radius_tenants_affected` 的直方圖，改變的是 `effect` label 與 counter 是否
    增量，不是「有沒有被記」。
 
