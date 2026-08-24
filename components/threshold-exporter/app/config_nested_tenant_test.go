@@ -293,3 +293,147 @@ func TestTheSameTenantFlattenedIsFine(t *testing.T) {
 		}
 	}
 }
+
+// seriesFor returns the emitted `user_threshold` value for one tenant+metric,
+// through a real collector on a real registry. The acceptance test above
+// asserts a tenant is PRESENT; this is how the tests below assert it is
+// present with the RIGHT NUMBER — the half that stays broken if only the
+// scanner is fixed.
+func seriesFor(t *testing.T, m *ConfigManager, tenant, metric string) (float64, bool) {
+	t.Helper()
+	reg := prometheus.NewRegistry()
+	if err := reg.Register(NewThresholdCollector(m)); err != nil {
+		t.Fatalf("register collector: %v", err)
+	}
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	for _, fam := range families {
+		if fam.GetName() != "user_threshold" {
+			continue
+		}
+		for _, mm := range fam.Metric {
+			labels := map[string]string{}
+			for _, pair := range mm.Label {
+				labels[pair.GetName()] = pair.GetValue()
+			}
+			if labels["tenant"] == tenant && labels["metric"] == metric {
+				return mm.Gauge.GetValue(), true
+			}
+		}
+	}
+	return 0, false
+}
+
+// writeInheritanceFixture is the value-plane fixture: one subtree with its own
+// `_defaults.yaml` and three tenants in it that differ ONLY in what they say
+// about the inherited key.
+func writeInheritanceFixture(t *testing.T, dir string) {
+	t.Helper()
+	writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"), "defaults:\n  mysql_connections: 50\n")
+	writeTestYAML(t, filepath.Join(dir, "flat.yaml"),
+		"tenants:\n  tenant-flat:\n    mysql_connections: \"55\"\n")
+
+	sub := filepath.Join(dir, nestedSubdir)
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", nestedSubdir, err)
+	}
+	writeTestYAML(t, filepath.Join(sub, "_defaults.yaml"), "defaults:\n  mysql_connections: 60\n")
+	writeTestYAML(t, filepath.Join(sub, "inheritor.yaml"), "tenants:\n  tenant-inheritor: {}\n")
+	writeTestYAML(t, filepath.Join(sub, "own.yaml"),
+		"tenants:\n  tenant-own:\n    mysql_connections: \"77\"\n")
+	writeTestYAML(t, filepath.Join(sub, "off.yaml"),
+		"tenants:\n  tenant-off:\n    mysql_connections: \"disable\"\n")
+}
+
+// TestTheEmittedValueMatchesTheResolvedOne closes the half that survives a
+// scanner-only fix.
+//
+// ⛔ Measured before this was wired: with the nested tenant merely PRESENT,
+// `/effective` reported the subtree's 60 and the series carried the root's 50.
+// That is worse than the absence it replaced in one specific way — the tenant
+// now exists on both planes, so the #1526 divergence audit sees a reconciled
+// tree and says nothing. Silence plus a wrong number, on the exact question
+// #1447 sends operators to `diagnose --show-inheritance` to answer.
+func TestTheEmittedValueMatchesTheResolvedOne(t *testing.T) {
+	dir := t.TempDir()
+	writeInheritanceFixture(t, dir)
+
+	m := NewConfigManager(dir)
+	defer m.Close()
+	if err := m.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// Control first: a root-level tenant is unaffected by any of this.
+	if got, ok := seriesFor(t, m, "tenant-flat", "connections"); !ok || got != 55 {
+		t.Fatalf("control: tenant-flat should emit its own 55, got %v (present=%v)", got, ok)
+	}
+	// And the global defaults map is untouched — a subtree file must never
+	// re-price the tree (see the leakage guard above).
+	if got := m.GetConfig().Defaults["mysql_connections"]; got != 50 {
+		t.Fatalf("control: global default moved to %v; the subtree's defaults "+
+			"leaked into the one global map", got)
+	}
+
+	eff, ok := m.Resolve("tenant-inheritor")
+	if !ok {
+		t.Fatalf("premise: Resolve(tenant-inheritor) must succeed")
+	}
+	if got := eff.Config["mysql_connections"]; got != 60 {
+		t.Fatalf("premise: /effective should report the subtree default 60, got %v", got)
+	}
+
+	got, ok := seriesFor(t, m, "tenant-inheritor", "connections")
+	if !ok {
+		t.Fatalf("#1521: no series at all for the inheriting tenant")
+	}
+	if got != 60 {
+		t.Errorf("#1521: the series says %v while /effective says 60. The alert "+
+			"fires at a threshold the operator was never shown, and the "+
+			"divergence audit stays quiet because the tenant IS present on "+
+			"both planes.", got)
+	}
+}
+
+// TestATenantsOwnValueBeatsWhatItInherits and
+// TestADisabledKeyIsNotRevivedByInheritance are the two ways the overlay above
+// could be wrong in the dangerous direction — by overwriting something the
+// tenant said. Split into two tests so a failure names which one.
+func TestATenantsOwnValueBeatsWhatItInherits(t *testing.T) {
+	dir := t.TempDir()
+	writeInheritanceFixture(t, dir)
+
+	m := NewConfigManager(dir)
+	defer m.Close()
+	if err := m.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	got, ok := seriesFor(t, m, "tenant-own", "connections")
+	if !ok {
+		t.Fatalf("tenant-own emitted no series")
+	}
+	if got != 77 {
+		t.Errorf("tenant-own declared 77 and inherits 60; the series says %v. "+
+			"Inherited values must fill gaps, never overwrite what a tenant "+
+			"authored.", got)
+	}
+}
+
+func TestADisabledKeyIsNotRevivedByInheritance(t *testing.T) {
+	dir := t.TempDir()
+	writeInheritanceFixture(t, dir)
+
+	m := NewConfigManager(dir)
+	defer m.Close()
+	if err := m.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got, ok := seriesFor(t, m, "tenant-off", "connections"); ok {
+		t.Errorf("tenant-off set mysql_connections to \"disable\" and inherits 60; "+
+			"a series appeared anyway at %v. Silently re-enabling a threshold a "+
+			"tenant switched off is the worst failure this overlay can have — it "+
+			"pages someone who opted out.", got)
+	}
+}

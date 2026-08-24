@@ -458,6 +458,20 @@ func (m *ConfigManager) Load() error {
 	return nil
 }
 
+// anyNestedKey reports whether any scan key names a file below the conf.d
+// root. Keys are root-relative slash paths since #1521, so a separator IS the
+// test — no path parsing required.
+func anyNestedKey(groups ...[]string) bool {
+	for _, g := range groups {
+		for _, name := range g {
+			if strings.Contains(name, "/") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (m *ConfigManager) IncrementalLoad() error {
 	// Single-file mode or first load: fall back to full Load
 	if !m.isDir {
@@ -497,6 +511,22 @@ func (m *ConfigManager) IncrementalLoad() error {
 	m.mu.RUnlock()
 
 	changed, added, removed := diffFileHashes(oldHashes, newHashes)
+
+	// ⛔ #1521: a change under a SUBDIRECTORY takes the full path. This one is
+	// not about the merge — it is about `m.hierarchy`, which IncrementalLoad
+	// never refreshes (measured: zero references to it in this function, and
+	// `tenantSources` has exactly two writers, neither on this path). A nested
+	// tenant added here would land in the config with no inheritance chain
+	// known for it, so `applySubtreeDefaults` could not give it the subtree
+	// values `/effective` reports — presence without the right number, which is
+	// the residual this ticket exists to close.
+	//
+	// ⚠️ Cost stated rather than hidden: nested trees lose the tenant-patch
+	// fast path entirely. Flat trees — every deployment that never nests — are
+	// unaffected, because no key contains a separator.
+	if anyNestedKey(changed, added, removed) {
+		return m.fullDirLoad()
+	}
 
 	// Copy cache for mutation — deferred until after diff to avoid
 	// unnecessary allocation when the per-file diff shows no changes
@@ -745,6 +775,24 @@ func (m *ConfigManager) fullDirLoad() error {
 	// as Load() — see runHierarchyScanReject.
 	if err := m.runHierarchyScanReject("fullDirLoad"); err != nil {
 		return err
+	}
+
+	// #1521 second half: the scan above just refreshed the inheritance graph,
+	// so each tenant's L1..Ln defaults can be materialised into its own map
+	// before the commit. Read under RLock because the scan published them
+	// under its own Lock and released it.
+	m.mu.RLock()
+	var tenantDefaults map[string][]string
+	if m.hierarchy.graph != nil {
+		tenantDefaults = m.hierarchy.graph.TenantDefaults
+	}
+	parsedDefaults := m.hierarchy.parsedDefaults
+	m.mu.RUnlock()
+	if n := applySubtreeDefaults(&merged, tenantDefaults, parsedDefaults); n > 0 {
+		m.getLogger().Printf(
+			"INFO: applied %d inherited subtree default(s) to the collector config "+
+				"(conf.d subdirectories declare defaults; without this the series "+
+				"would carry the root value while /effective reports the subtree's)", n)
 	}
 
 	m.commitConfig(&merged, compositeHash, &flatScanState{
