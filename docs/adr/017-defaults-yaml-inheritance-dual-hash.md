@@ -141,7 +141,7 @@ effective = deep_merge( defaults_block(L0), …, defaults_block(Ln), tenant_body
 ```
 
 兩個 unwrap 實作：`describe_tenant.py` 的 `ddata.get("defaults", ddata)`、Go 的
-`pkg/config.ExtractDefaultsBlock`（實作是同檔私有的 `extractDefaultsBlock`；
+`pkg/config.ExtractDefaultsBlock`（實作是同 package 內未匯出的 `extractDefaultsBlock`；
 `config_inheritance.go` 有一個同名 thin wrapper 直接轉呼叫它，不是第二份實作）。
 
 ### 給要編輯 `_defaults.yaml` 的人：這四條
@@ -165,9 +165,17 @@ effective = deep_merge( defaults_block(L0), …, defaults_block(Ln), tenant_body
    - **exporter**：欄位型別是 `map[string]float64`（`types.go`）。**非純量**的兄弟鍵
      （mapping / list）會 unmarshal 失敗 ⇒ `parsePartialConfig` 回 `ok=false`、**整份檔案被
      丟棄**並 log `ERROR: ... entire block dropped`，連同檔內其他平級鍵一起陪葬。
-     ⛔ **但純量的兄弟鍵會被靜默接受成一個閾值鍵**：實測把 `max_metrics_per_tenant: 100`
-     縮排進去 ⇒ `ok=true`、**log 是空字串**、`Defaults` 多出一個值為 100 的鍵，等於替每個
-     租戶武裝了一個假閾值。這一面**沒有任何訊號**。
+     ⛔ **分界不是「純量 vs 非純量」，是「能不能解成 `float64`」**：實測 `100`、`1.5`、
+     以及 **`null`（變成 0）** 三者 `ok=true`、**log 是空字串**；而 `_profile: standard`、
+     加引號的 `"100"`、`true` 這些**也是純量**的值，走的是上面那條大聲失敗的路。
+     ⛔ 靜默那一格真正的損害不是「多一個假閾值」：那條 series 是
+     `user_threshold{component="max", metric="metrics_per_tenant"}`，而 repo 內 **73 個會被
+     評估的 `user_threshold` 選擇器**中 72 個明寫 `metric=`（`metrics_per_tenant` 零命中）、
+     剩下 1 個釘 `component="custom"`，都選不到它。真正的損害是**那個平級鍵本身失效**：`max_metrics_per_tenant` 一旦離開頂層，
+     `ThresholdConfig.MaxMetricsPerTenant` 就是 0，執行期 fallback 到內建的
+     `DefaultMaxMetricsPerTenant = 500`（`resolve.go`）⇒ **你寫的每租戶基數上限被靜默放寬**
+     （100 → 500）。這一面沒有任何**失敗**訊號，只有 `/metrics` 上多出的一條無人消費的
+     `user_threshold` series。
    - **路由**：⛔ `_routing_defaults` 一旦離開頂層，`generate_alertmanager_routes.py` 就找不到
      它——**沒有自己 `_routing` 的租戶會整條 route ＋ receiver 消失**（實測：`Found 2 tenant(s)
      with routing config: db-a, db-b` → `Found 1 tenant(s) with routing config: db-b`，
@@ -185,9 +193,14 @@ effective = deep_merge( defaults_block(L0), …, defaults_block(Ln), tenant_body
      平級的頂層是第 1 條說的靜默 no-op）→ `user_silent_mode{tenant,target_severity}`
    - `_routing_defaults` / `_routing_enforced` → `generate_alertmanager_routes.py --config-dir
      conf.d/ --dry-run`，**diff 前後的完整輸出**。⛔ 只看 `Found N tenant(s) with routing
-     config` 那一行與 receiver 集合**不夠**：那兩個訊號只對「整條 route／receiver 出現或消失」
-     反應，**時間參數之類的值變更兩者逐字不動**（實測 `_routing_defaults.group_wait`
-     30s→35s：完整輸出有差，那兩個訊號完全相同——而 `group_wait` 正是上方繼承圖的示範鍵）。
+     config` 那一行與 receiver 集合**不夠，而且兩者的盲區不同**：
+     - `Found N` 那一行追的是**有幾個租戶 parse 出 routing config**，不是產出了幾條 route。
+       實測拿掉 `_routing_defaults.receiver.type` ⇒ db-a 的 route 與 receiver **雙雙消失**
+       （`2 route(s), 2 receiver(s)` → `1, 1`），該行**逐位元組不動**。
+     - receiver 集合只對 receiver 出現／消失反應，對**值**變更全盲。實測
+       `_routing_defaults.group_wait` 30s→35s，以及把 `receiver.to` 改成**另一個網域的收件人**
+       ——兩次完整輸出都只差那一行，Found 行與 receiver 集合皆逐位元組不動。⚠️ 也就是說盲區
+       包含**通知送到哪裡**，不只時間參數；而 `group_wait` 正是上方繼承圖的示範鍵。
 
 4. **想用顯式 `null` 退掉一個繼承來的 `_` 前綴鍵：判準是「unwrap 之後兩者落在同一個鍵路徑」。**
    哪些鍵適用由前綴決定（`pkg/config/hierarchy.go` 的 `deepMerge` 對 `_` 前綴鍵做
@@ -201,9 +214,12 @@ effective = deep_merge( defaults_block(L0), …, defaults_block(Ln), tenant_body
    | 有包裝 | 子檔 `defaults:` **內部** | 刪除 ✅ |
    | 有包裝 | **無包裝子檔的頂層** | 刪除 ✅ |
 
-   ⛔ 真正無效的只有「同一個檔案內寫在 `defaults:` 的兄弟位置」——那裡沒有東西可刪。
-   ⛔ 寫在**檔名不以 `_` 開頭的租戶檔**一律被 `check_confd_schema.py` 擋下
-   （`tenant-config.schema.json` 對這些鍵宣告了非 null 型別）；但寫在 `_defaults.yaml` 的
+   ⛔ 真正無效的只有「同一個檔案內、`defaults:` **是一個真的 mapping** 時寫在它的兄弟
+   位置」——那裡沒有東西可刪。⚠️ `defaults:` 缺席或為 null 時 unwrap 退回整份文件，那個位置
+   就變成有效（見〈已知的可達例外 1 / 3〉）。
+   ⛔ 寫在**檔名不以 `_` 開頭的租戶檔**一律被 `check_confd_schema.py` 擋下（具名的那幾個鍵
+   `tenant-config.schema.json` 宣告了非 null 型別，其餘 `_*` 由 catch-all 擋；實測 14 個鍵
+   全數 `RC=1`）；但寫在 `_defaults.yaml` 的
    **`tenants:` 區塊**底下**不會**被擋（實測 `RC=0`）——而第 1 條正把讀者指向那個位置。
 
 ### 已知的可達例外（非窮舉——這份清單不是保證）
@@ -411,8 +427,10 @@ Replace 語意更直覺，且與 Helm values merge 行為一致。
    `shadowed` / `cosmetic`。合併兄弟鍵之後，每一次平台路由編輯都會把每個租戶從 `cosmetic`
    翻成 `applied`，並讓 `da_config_reload_trigger_total{reason="defaults"}` 逐次增量——而本 ADR
    存在的理由正是上面那句「如何避免 reload 風暴」。**與替代方案 A 被否決的理由同源（都在
-   reload 歸因這條線上），但後果不同**：A 是真的多做 reload，這裡是把 `effect` 標籤與 counter
-   打成 `applied`——兩個分支都已經跑完 `recomputeMergedHash`，不會觸發額外載入。⚠️ 精確地說：租戶**現在就已經**每次都被送進
+   reload 歸因這條線上），但問題不同**：A 的否決理由是**無法逐租戶歸因、只能全量處理**；
+   這裡則是把**已經在做的那一次 tick** 從 `cosmetic` 誤標成 `applied`——`classifyTenant` 的
+   兩個分支都已經跑完 `recomputeMergedHash`，`installNewHierarchyState` 也是無條件執行，
+   所以合併兄弟鍵不會改變載入工作量，只改變標籤與計數。⚠️ 精確地說：租戶**現在就已經**每次都被送進
    `da_config_blast_radius_tenants_affected` 的直方圖，改變的是 `effect` label 與 counter 是否
    增量，不是「有沒有被記」。
 
@@ -424,7 +442,7 @@ Replace 語意更直覺，且與 Helm values merge 行為一致。
    平台 `_routing_defaults.group_wait`，5 個租戶全被記為受影響，而其中自帶 `_routing` 的那個
    租戶實際 route **完全不變** —— 該筆歸因可證為假。
 
-**兩個帶對照組的量測支撐這個決定**：
+**兩個發現支撐這個決定——第一個是帶對照組的量測**：
 
 - 兄弟鍵的**套用**不依賴 `merged_hash`。在有 `defaults:` 包裝的形狀下，只改
   `state_filters.<filter>.severity` 時設定確實生效而 `merged_hash` 逐字不動；對照組（改

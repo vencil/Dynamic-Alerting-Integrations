@@ -146,7 +146,8 @@ effective = deep_merge( defaults_block(L0), …, defaults_block(Ln), tenant_body
 ```
 
 The two unwrap implementations: `ddata.get("defaults", ddata)` in `describe_tenant.py`, and
-`pkg/config.ExtractDefaultsBlock` in Go (implemented by the file-private `extractDefaultsBlock`;
+`pkg/config.ExtractDefaultsBlock` in Go (implemented by the unexported `extractDefaultsBlock`
+in the same package;
 `config_inheritance.go` holds a same-named thin wrapper that just forwards to it — not a second
 implementation).
 
@@ -177,10 +178,21 @@ implementation).
      sibling (mapping / list) fails to unmarshal ⇒ `parsePartialConfig` returns `ok=false`,
      **the entire file is dropped**, and it logs `ERROR: ... entire block dropped`, taking every
      other sibling key in that file with it.
-     ⛔ **But a scalar sibling is silently accepted as a threshold key**: measured, indenting
-     `max_metrics_per_tenant: 100` gives `ok=true`, an **empty log**, and a `Defaults` entry
-     worth 100 — arming a bogus threshold for every tenant. **That plane emits no signal at
-     all.**
+     ⛔ **The line is not "scalar vs non-scalar" — it is "does it parse as `float64`"**:
+     measured, `100`, `1.5` and **`null` (which becomes 0)** all give `ok=true` and an **empty
+     log**, while `_profile: standard`, a quoted `"100"` and `true` — all scalars too — take the
+     loud failure path above.
+     ⛔ The real damage on the silent side is not "one bogus threshold": that series is
+     `user_threshold{component="max", metric="metrics_per_tenant"}`, and of the **73 evaluated
+     `user_threshold` selectors** in the repo, 72 name a specific `metric=`
+     (`metrics_per_tenant` has zero hits) and the remaining one pins `component="custom"` —
+     none of them can select it. The real damage is that **the sibling key itself stops
+     working**: once
+     `max_metrics_per_tenant` leaves the top level, `ThresholdConfig.MaxMetricsPerTenant` is 0
+     and the runtime falls back to the built-in `DefaultMaxMetricsPerTenant = 500`
+     (`resolve.go`) ⇒ **the per-tenant cardinality cap you wrote is silently widened**
+     (100 → 500). That plane emits no **failure** signal — only one extra, unconsumed
+     `user_threshold` series on `/metrics`.
    - **routing**: ⛔ once `_routing_defaults` leaves the top level,
      `generate_alertmanager_routes.py` cannot find it — **a tenant with no `_routing` of its own
      loses its entire route AND receiver** (measured: `Found 2 tenant(s) with routing config:
@@ -201,11 +213,18 @@ implementation).
      `user_silent_mode{tenant,target_severity}`
    - `_routing_defaults` / `_routing_enforced` → `generate_alertmanager_routes.py --config-dir
      conf.d/ --dry-run`, and **diff the full before/after output**. ⛔ The `Found N tenant(s)
-     with routing config` line and the receiver set are **not enough**: those two only react to
-     a whole route/receiver appearing or disappearing — **a value change such as a timing
-     parameter leaves both byte-identical** (measured: `_routing_defaults.group_wait` 30s→35s
-     changes the full output while those two signals do not move — and `group_wait` is the very
-     key used in the inheritance example above).
+     with routing config` line and the receiver set are **not enough, and their blind spots
+     differ**:
+     - The `Found N` line counts **how many tenants parsed a routing config**, not how many
+       routes came out. Measured: dropping `_routing_defaults.receiver.type` makes db-a's route
+       AND receiver **both disappear** (`2 route(s), 2 receiver(s)` → `1, 1`) while that line
+       stays byte-identical.
+     - The receiver set only reacts to a receiver appearing or disappearing; it is blind to
+       **values**. Measured with `_routing_defaults.group_wait` 30s→35s, and again with
+       `receiver.to` changed to **a recipient on a different domain** — both times the full
+       output differed by that one line while the `Found N` line and the receiver set did not
+       move. ⚠️ So the blind spot covers **where the notification goes**, not just timing
+       parameters; and `group_wait` is the very key used in the inheritance example above.
 
 4. **To opt out of an inherited `_`-prefixed key with an explicit `null`, the test is "after the
    unwrap, do the two land on the SAME key path".** Which keys qualify is decided by the prefix
@@ -221,10 +240,13 @@ implementation).
    | wrapped | **inside** the child's `defaults:` | deleted ✅ |
    | wrapped | **top level of a wrapper-less child** | deleted ✅ |
 
-   ⛔ The only combination that does nothing is "sibling of `defaults:` within the same file" —
-   there is nothing there to delete.
+   ⛔ The only combination that does nothing is "sibling of `defaults:` within the same file,
+   **while `defaults:` is a real mapping**" — there is nothing there to delete. ⚠️ When
+   `defaults:` is absent or null the unwrap falls back to the whole document, and that same
+   position becomes effective (see Known reachable exceptions, 1 and 3).
    ⛔ Writing it in a **tenant file whose name does not start with `_`** is always rejected by
-   `check_confd_schema.py` (`tenant-config.schema.json` declares non-null types for those keys);
+   `check_confd_schema.py` (the named keys have non-null types in `tenant-config.schema.json`;
+   the rest of `_*` are caught by the catch-all — measured, 14 keys all `RC=1`);
    writing it under the **`tenants:` block of a `_defaults.yaml` is NOT rejected** (measured
    `RC=0`) — and item 1 points the reader at exactly that position.
 
@@ -454,10 +476,12 @@ equally load-bearing, all measured**:
    every platform routing edit, and increment
    `da_config_reload_trigger_total{reason="defaults"}` each time — while the reason this ADR
    exists is the question above, how to avoid a reload storm. **It shares its root with why
-   alternative A was rejected (both live on the reload-attribution line), but the consequence
-   differs**: A actually performs more reloads, whereas this only flips the `effect` label and
-   the counter to `applied` — both branches have already run `recomputeMergedHash`, so no extra
-   load is triggered. ⚠️ Precisely: tenants are
+   alternative A was rejected (both live on the reload-attribution line), but the problem
+   differs**: A was rejected because it **cannot attribute per tenant and must process
+   everything**; this would mislabel **the tick that already happens** from `cosmetic` to
+   `applied` — both branches of `classifyTenant` have already run `recomputeMergedHash`, and
+   `installNewHierarchyState` runs unconditionally, so merging the siblings in changes the
+   labels and counters, not the amount of loading. ⚠️ Precisely: tenants are
    **already** fed into the `da_config_blast_radius_tenants_affected` histogram on every tick;
    what would change is the `effect` label and whether the counter increments, not whether they
    are recorded at all.
