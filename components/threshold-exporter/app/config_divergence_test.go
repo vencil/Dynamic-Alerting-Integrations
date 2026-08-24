@@ -59,53 +59,41 @@ func writeDivergenceRoot(t *testing.T, dir string) {
 	writeTestYAML(t, filepath.Join(dir, "root-tenant.yaml"), "tenants:\n  root-tenant:\n    mysql_connections: \"90\"\n")
 }
 
-// TestDivergenceAudit_ColdStart_NestedTenantIsLoud drives the real entry
-// point (NewConfigManager → Load) against a mixed flat+nested tree and
-// asserts the tenant is named, the consequence is spelled out, and the
-// gauge reads 1.
-func TestDivergenceAudit_ColdStart_NestedTenantIsLoud(t *testing.T) {
+// TestDivergenceAudit_ColdStart_NestedTenantIsNowSilent is the INVERTED
+// tripwire. It used to assert the audit shouted about a nested tenant; #1521
+// closed the divergence, so the same tree must now be silent AND the tenant
+// must be on the output plane.
+//
+// ⛔ Kept rather than deleted, and kept driving the REAL entry: the audit code
+// stays in the tree for one release as an invariant (gauge must read 0), so
+// this is the assertion that a relapse — a scanner that stops recursing, a key
+// shape that collides — is loud again on the next commit.
+func TestDivergenceAudit_ColdStart_NestedTenantIsNowSilent(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	writeDivergenceRoot(t, dir)
-	nestedPath := writeNestedTenant(t, dir)
+	writeNestedTenant(t, dir)
 
 	m, fresh, logBuf := newAuditedManager(t, dir)
 	if err := m.Load(); err != nil {
-		t.Fatalf("Load must NOT fail on divergence (option C is not fail-closed): %v", err)
+		t.Fatalf("Load: %v", err)
 	}
 
-	// The defect itself, pinned: /effective sees it, /metrics does not.
+	// Both planes, same tenant. The pair is the point — either one alone was
+	// satisfied before the fix.
 	if _, ok := m.Resolve("hier-tenant"); !ok {
-		t.Fatalf("precondition: hierarchical scanner should resolve hier-tenant")
+		t.Fatalf("precondition: the hierarchical scanner must still resolve hier-tenant")
 	}
-	if _, ok := m.GetConfig().Tenants["hier-tenant"]; ok {
-		t.Fatalf("precondition changed: hier-tenant now reaches the collector config — " +
-			"the #1521 defect appears fixed, this audit test needs revisiting")
+	if _, ok := m.GetConfig().Tenants["hier-tenant"]; !ok {
+		t.Errorf("#1521 REGRESSED: the nested tenant is back to resolving through "+
+			"/effective while missing from the collector config, so its alerts "+
+			"cannot fire. Tenants: %v", keysOfTenants(m.GetConfig()))
 	}
-
-	logs := logBuf.String()
-	if !strings.Contains(logs, "ERROR: conf.d scanner divergence") {
-		t.Errorf("expected divergence ERROR log, got:\n%s", logs)
+	if got := testutil.ToFloat64(fresh.hierarchyDivergentTenants); got != 0 {
+		t.Errorf("da_config_hierarchy_divergent_tenants = %v, want 0", got)
 	}
-	if !strings.Contains(logs, "hier-tenant") {
-		t.Errorf("ERROR log must name the affected tenant, got:\n%s", logs)
-	}
-	if !strings.Contains(logs, nestedPath) {
-		t.Errorf("ERROR log must name the source file %s, got:\n%s", nestedPath, logs)
-	}
-	if !strings.Contains(logs, "user_threshold") {
-		t.Errorf("ERROR log must state the consequence (no user_threshold series), got:\n%s", logs)
-	}
-	if !strings.Contains(logs, "1521") {
-		t.Errorf("ERROR log must point at the tracking issue, got:\n%s", logs)
-	}
-	// The healthy root-level tenant must not be swept into the report.
-	if strings.Contains(logs, "root-tenant (") {
-		t.Errorf("root-level tenant must not be reported as divergent, got:\n%s", logs)
-	}
-
-	if got := testutil.ToFloat64(fresh.hierarchyDivergentTenants); got != 1 {
-		t.Errorf("da_config_hierarchy_divergent_tenants = %v, want 1", got)
+	if logs := logBuf.String(); strings.Contains(logs, "conf.d scanner divergence") {
+		t.Errorf("a reconciled tree must produce no divergence ERROR, got:\n%s", logs)
 	}
 }
 
@@ -135,41 +123,42 @@ func TestDivergenceAudit_FlatControl_IsSilent(t *testing.T) {
 }
 
 // TestDivergenceAudit_GaugeRecoversToZero proves the gauge is state-coded
-// (the gauge-over-counter argument): remove the misplaced file, reload,
-// and the gauge must fall back to 0.
+// (the gauge-over-counter argument): a divergent set reads N, a clean one
+// falls back to 0.
+//
+// ⛔ Driven through `auditHierarchyDivergence` directly rather than through a
+// nested fixture, because #1521 removed the only way to make a real tree
+// diverge. The property under test was never about the tree — it is about the
+// gauge being Set on every commit rather than incremented.
 func TestDivergenceAudit_GaugeRecoversToZero(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
-	writeDivergenceRoot(t, dir)
-	nestedPath := writeNestedTenant(t, dir)
+	m, fresh, _ := newAuditedManager(t, t.TempDir())
 
-	m, fresh, _ := newAuditedManager(t, dir)
-	if err := m.Load(); err != nil {
-		t.Fatalf("Load: %v", err)
+	divergent := map[string]string{"hier-tenant": "/conf.d/db/hier-tenant.yaml"}
+	clean := &ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{}}
+	if n := m.auditHierarchyDivergence(clean, divergent, "probe"); n != 1 {
+		t.Fatalf("setup: audit reported %d divergent tenant(s), want 1", n)
 	}
 	if got := testutil.ToFloat64(fresh.hierarchyDivergentTenants); got != 1 {
 		t.Fatalf("setup: gauge = %v, want 1", got)
 	}
 
-	if err := os.Remove(nestedPath); err != nil {
-		t.Fatalf("remove nested tenant: %v", err)
-	}
-	if err := m.fullDirLoad(); err != nil {
-		t.Fatalf("reload after fix: %v", err)
+	reconciled := &ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{
+		"hier-tenant": {},
+	}}
+	if n := m.auditHierarchyDivergence(reconciled, divergent, "probe"); n != 0 {
+		t.Errorf("audit still reports %d divergent tenant(s) after reconciliation", n)
 	}
 	if got := testutil.ToFloat64(fresh.hierarchyDivergentTenants); got != 0 {
-		t.Errorf("gauge did not recover after the layout was fixed: %v, want 0", got)
+		t.Errorf("gauge did not recover: %v, want 0", got)
 	}
 }
 
-// TestDivergenceAudit_HotReload_HierarchicalPath is the load-bearing one:
-// #1521 explicitly left "is the hot-reload path also broken?" unverified.
-// It drives the real detect→debounce→diffAndReload chain via tickOnce
-// (debounce window 0 = synchronous, the seam config_debounce.go documents)
-// and answers both halves:
-//
-//	(a) does a nested tenant added AFTER startup reach m.config?  → no
-//	(b) does the audit fire on that path?                         → yes
+// TestDivergenceAudit_HotReload_HierarchicalPath drives the real
+// detect→debounce→diffAndReload chain via tickOnce (debounce window 0 = the
+// synchronous seam config_debounce.go documents) and asserts the half that
+// used to fail: a nested tenant added to a RUNNING exporter now reaches
+// m.config, not just Resolve().
 func TestDivergenceAudit_HotReload_HierarchicalPath(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -184,88 +173,79 @@ func TestDivergenceAudit_HotReload_HierarchicalPath(t *testing.T) {
 	}
 	logBuf.Reset()
 
-	// Now introduce the nested tenant into a RUNNING exporter.
-	nestedPath := writeNestedTenant(t, dir)
-	// mtime-guard safety window is 2s for the flat scanner; the
-	// hierarchical detect path re-hashes unconditionally, so tickOnce sees
-	// the new file immediately.
+	writeNestedTenant(t, dir)
 	m.tickOnce()
 
-	// (a) Is the hot-reload path itself broken the same way?
-	if _, ok := m.GetConfig().Tenants["hier-tenant"]; ok {
-		t.Errorf("FINDING CHANGED: hot-reload now admits the nested tenant into the collector config; " +
-			"#1521 hot-reload divergence would be fixed and this test needs revisiting")
-	}
 	if _, ok := m.Resolve("hier-tenant"); !ok {
-		t.Errorf("hot-reload should have made the nested tenant resolvable via /effective")
+		t.Errorf("hot reload should have made the nested tenant resolvable via /effective")
 	}
-
-	// (b) Does option C speak up on this path?
-	logs := logBuf.String()
-	if !strings.Contains(logs, "ERROR: conf.d scanner divergence") {
-		t.Errorf("hot-reload path emitted no divergence ERROR, got:\n%s", logs)
+	if _, ok := m.GetConfig().Tenants["hier-tenant"]; !ok {
+		t.Errorf("#1521 REGRESSED on the hot-reload path: the nested tenant did not "+
+			"reach the collector config. Tenants: %v", keysOfTenants(m.GetConfig()))
 	}
-	if !strings.Contains(logs, nestedPath) {
-		t.Errorf("hot-reload ERROR must name the source file %s, got:\n%s", nestedPath, logs)
+	if got := testutil.ToFloat64(fresh.hierarchyDivergentTenants); got != 0 {
+		t.Errorf("gauge after hot reload = %v, want 0", got)
 	}
-	if got := testutil.ToFloat64(fresh.hierarchyDivergentTenants); got != 1 {
-		t.Errorf("da_config_hierarchy_divergent_tenants after hot reload = %v, want 1", got)
+	if logs := logBuf.String(); strings.Contains(logs, "conf.d scanner divergence") {
+		t.Errorf("hot reload of a reconciled tree must be silent, got:\n%s", logs)
 	}
 }
 
-// TestDivergenceAudit_HotReload_FlatModeNeverDetects documents a boundary
-// the audit cannot cover: with no _defaults.yaml anywhere, hierarchical
-// mode never activates, so detectChange uses the flat top-level composite
-// hash — adding a file in a sub-directory triggers no reload at all, hence
-// no commitConfig and no audit. The cold-start audit still catches it on
-// the next restart (asserted at the end).
-func TestDivergenceAudit_HotReload_FlatModeNeverDetects(t *testing.T) {
+// TestDivergenceAudit_HotReload_FlatModeNowDetects closes the boundary this
+// test used to DOCUMENT.
+//
+// ⛔ Before #1521 it asserted the opposite and said so in its name: with no
+// `_defaults.yaml` anywhere, hierarchical mode never activates, so
+// `detectChange` used the flat TOP-LEVEL composite hash and a file added in a
+// subdirectory triggered no reload at all — no commit, no audit, nothing until
+// the next restart. Making the flat scanner recurse moves those files INTO the
+// composite hash, so the same edit is now a detected change.
+//
+// Measured, not reasoned: `detectChange` returns changed=true / reason=source
+// on this fixture, where it returned false before.
+func TestDivergenceAudit_HotReload_FlatModeNowDetects(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	writeTestYAML(t, filepath.Join(dir, "root-tenant.yaml"), "tenants:\n  root-tenant:\n    mysql_connections: \"90\"\n")
+	writeTestYAML(t, filepath.Join(dir, "root-tenant.yaml"),
+		"tenants:\n  root-tenant:\n    mysql_connections: \"90\"\n")
 
 	m, fresh, logBuf := newAuditedManager(t, dir)
 	if err := m.Load(); err != nil {
 		t.Fatalf("initial Load: %v", err)
 	}
-	writeNestedTenant(t, dir)
-	m.tickOnce()
+	m.mu.RLock()
+	hierarchical := m.hierarchy.enabled
+	m.mu.RUnlock()
+	if hierarchical {
+		t.Fatalf("precondition: this tree has no _defaults.yaml, so hierarchical " +
+			"mode must be off — otherwise the flat branch under test is not the " +
+			"one being exercised")
+	}
 
+	// mtime guard has a 2s safety window for files younger than that; the new
+	// file is new, so its hash is computed rather than reused.
+	writeNestedTenant(t, dir)
+
+	changed, reason, err := m.detectChange()
+	if err != nil {
+		t.Fatalf("detectChange: %v", err)
+	}
+	if !changed {
+		t.Errorf("flat-mode detectChange did not see a file added in a "+
+			"subdirectory (reason=%q). Before #1521 this was the documented "+
+			"dead spot: nothing reloaded until the next restart", reason)
+	}
+
+	m.tickOnce()
+	if _, ok := m.GetConfig().Tenants["hier-tenant"]; !ok {
+		t.Errorf("flat-mode hot reload did not admit the nested tenant: %v",
+			keysOfTenants(m.GetConfig()))
+	}
 	if got := testutil.ToFloat64(fresh.hierarchyDivergentTenants); got != 0 {
-		t.Errorf("flat-mode hot reload unexpectedly re-audited: gauge = %v", got)
+		t.Errorf("gauge = %v, want 0", got)
 	}
 	if logs := logBuf.String(); strings.Contains(logs, "conf.d scanner divergence") {
-		t.Errorf("flat-mode tick was not expected to reload at all, got:\n%s", logs)
-	}
-
-	// Second boundary, measured rather than reasoned: even when an
-	// UNRELATED root-level edit does trigger a reload, the flat path taken
-	// (diffAndReload → scanAndCheckHierarchical fallback → IncrementalLoad
-	// → commitConfig) never refreshes m.hierarchy.tenantSources, so the
-	// audit compares against a stale hierarchy snapshot and still reports
-	// 0. The audit call site covers this path; the DATA it reads does not.
-	writeTestYAML(t, filepath.Join(dir, "root-tenant.yaml"), "tenants:\n  root-tenant:\n    mysql_connections: \"91\"\n")
-	logBuf.Reset()
-	m.tickOnce()
-	if _, ok := m.GetConfig().Tenants["root-tenant"]; !ok {
-		t.Fatalf("setup: the root edit should have reloaded")
-	}
-	if got := testutil.ToFloat64(fresh.hierarchyDivergentTenants); got != 0 {
-		t.Errorf("BOUNDARY CHANGED: flat IncrementalLoad path now reports divergence (gauge=%v); "+
-			"the stale-tenantSources limitation documented here would be gone", got)
-	}
-
-	// A restart (cold start) does see it, because populateHierarchyState
-	// runs regardless of whether hierarchical mode is enabled.
-	m2, fresh2, logBuf2 := newAuditedManager(t, dir)
-	if err := m2.Load(); err != nil {
-		t.Fatalf("restart Load: %v", err)
-	}
-	if got := testutil.ToFloat64(fresh2.hierarchyDivergentTenants); got != 1 {
-		t.Errorf("cold start after restart: gauge = %v, want 1", got)
-	}
-	if !strings.Contains(logBuf2.String(), "hier-tenant") {
-		t.Errorf("cold start after restart must name the tenant, got:\n%s", logBuf2.String())
+		t.Errorf("no divergence expected, got:\n%s", logs)
 	}
 }
 
@@ -462,33 +442,29 @@ func TestDivergenceAudit_PairsOneInstant(t *testing.T) {
 // kills, so a later reader can re-run the counterfactual instead of
 // trusting this comment.
 
-// TestDivergenceAudit_SnapshotIsTakenInsideTheLockWindow pins the actual
-// content of the pairing fix.
+// TestDivergenceAudit_SnapshotIsTakenInsideTheLockWindow keeps the property
+// and INVERTS the rig, because #1521 removed the tree that used to diverge.
 //
-// ⛔ `TestDivergenceAudit_PairsOneInstant` pins that the audit FUNCTION
-// judges what it was handed. It does not pin where the CALLER read it —
-// and the caller is what the fix changed. Measured: moving
-// `m.hierarchy.tenantSources` out of the swap into its own RLock
-// afterwards left `go test -count=1 .` at rc=0, so the whole commit could
-// be reverted in silence.
-//
-// The seam makes the two implementations distinguishable with no
-// concurrency and no timing: swap the live hierarchy in the one instant
-// after the lock is released. A snapshot taken inside the window still
-// carries the pre-swap population; one taken afterwards sees the clean map
-// and reports nothing.
+// Before: the tree was divergent and the hook wiped the live hierarchy after
+// the commit; a gauge of 1 proved the audit had used the snapshot.
+// Now: the tree is clean and the hook DIRTIES the live hierarchy after the
+// commit. A gauge of 0 proves the same thing — the audit read the snapshot
+// taken inside the lock window, not whatever the live map became afterwards.
+// Same discrimination, opposite polarity: an implementation that re-read the
+// live map would report 1 here.
 func TestDivergenceAudit_SnapshotIsTakenInsideTheLockWindow(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	writeDivergenceRoot(t, dir)
-	writeNestedTenant(t, dir)
 
-	m, fresh, logBuf := newAuditedManager(t, dir)
+	m, fresh, _ := newAuditedManager(t, dir)
 	m.SetAfterCommitUnlockForTest(func() {
-		// Stand in for a second, overlapping reload landing a clean
+		// Stand in for a second, overlapping reload landing a DIVERGENT
 		// hierarchy between the swap and the audit.
 		m.mu.Lock()
-		m.hierarchy.tenantSources = map[string]string{}
+		m.hierarchy.tenantSources = map[string]string{
+			"ghost-tenant": filepath.Join(dir, "db", "ghost.yaml"),
+		}
 		m.mu.Unlock()
 	})
 
@@ -496,22 +472,19 @@ func TestDivergenceAudit_SnapshotIsTakenInsideTheLockWindow(t *testing.T) {
 		t.Fatalf("Load(): %v", err)
 	}
 
-	if got := testutil.ToFloat64(fresh.hierarchyDivergentTenants); got != 1 {
-		t.Fatalf("gauge = %v, want 1 — the audit compared against the "+
-			"hierarchy as it stood AFTER the commit, not the snapshot "+
-			"taken inside the lock window", got)
-	}
-	if !strings.Contains(logBuf.String(), "hier-tenant") {
-		t.Errorf("ERROR log must still name the tenant, got:\n%s", logBuf.String())
+	if got := testutil.ToFloat64(fresh.hierarchyDivergentTenants); got != 0 {
+		t.Fatalf("gauge = %v, want 0 — the audit compared against the hierarchy "+
+			"as it stood AFTER the commit, not the snapshot taken inside the "+
+			"lock window", got)
 	}
 	// Control: the live map really was replaced, so the assertion above
 	// distinguishes the two implementations rather than passing because
 	// nothing changed.
 	m.mu.RLock()
-	live := len(m.hierarchy.tenantSources)
+	_, ghost := m.hierarchy.tenantSources["ghost-tenant"]
 	m.mu.RUnlock()
-	if live != 0 {
-		t.Fatalf("setup: hook did not replace the live hierarchy (%d entries)", live)
+	if !ghost {
+		t.Fatalf("setup: hook did not replace the live hierarchy")
 	}
 }
 
@@ -558,29 +531,25 @@ func TestDivergenceAudit_GaugeIsRegisteredUnderItsPublishedName(t *testing.T) {
 	}
 }
 
-// TestDivergenceAudit_GaugeCountsTenantsNotJustPresence pins the magnitude.
+// TestDivergenceAudit_GaugeCountsTenantsNotJustPresence pins that the gauge is
+// a COUNT, not a 0/1 flag — an implementation that Set(1) on any divergence
+// would pass every other assertion in this file.
 //
-// ⛔ Every integration scenario in this file has exactly ONE nested tenant,
-// so the gauge is only ever observed as 0 or 1. Measured: clamping it to
-// `min(len, 1)` — turning "how many tenants are dark" into a boolean —
-// left the package green. A misplaced sub-directory is commonly a whole
-// sub-tree, and the dashboard number would be wrong by that whole factor.
+// ⛔ Driven through `auditHierarchyDivergence` directly: #1521 removed the tree
+// shape that produced three divergent tenants, and the property was never
+// about the tree.
 func TestDivergenceAudit_GaugeCountsTenantsNotJustPresence(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
-	writeDivergenceRoot(t, dir)
-	sub := filepath.Join(dir, "db")
-	if err := os.MkdirAll(sub, 0o755); err != nil {
-		t.Fatalf("mkdir db: %v", err)
-	}
-	for _, id := range []string{"one", "two", "three"} {
-		writeTestYAML(t, filepath.Join(sub, id+".yaml"),
-			"tenants:\n  "+id+":\n    mysql_connections: \"95\"\n")
-	}
+	m, fresh, _ := newAuditedManager(t, t.TempDir())
 
-	m, fresh, _ := newAuditedManager(t, dir)
-	if err := m.Load(); err != nil {
-		t.Fatalf("Load(): %v", err)
+	sources := map[string]string{}
+	for _, id := range []string{"one", "two", "three"} {
+		sources[id] = "/conf.d/db/" + id + ".yaml"
+	}
+	empty := &ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{}}
+
+	if n := m.auditHierarchyDivergence(empty, sources, "probe"); n != 3 {
+		t.Errorf("audit returned %d, want 3", n)
 	}
 	if got := testutil.ToFloat64(fresh.hierarchyDivergentTenants); got != 3 {
 		t.Errorf("gauge = %v, want 3 — the gauge must count tenants, not "+
@@ -798,26 +767,19 @@ func TestDivergenceAudit_ReLogsWhenTheSourcePathMoves(t *testing.T) {
 	}
 }
 
-// TestDivergenceAudit_LogNamesTheRootAndTheCommit pins the two variable
-// fields at the CALL SITE, not in the formatter.
-//
-// ⛔ `TestFormatDivergenceLog_CapsTheSample` passes `"/conf.d"` and a
-// context string in by hand, so it proves the formatter renders whatever
-// it is given — not that `auditHierarchyDivergence` gives it anything.
-// Measured: replacing both arguments at the call site with `""` left the
-// package green. The resulting line reads "the flat scanner reads only the
-// top level of " and opens with an empty "()", i.e. the operator is told a
-// tenant is dark without being told which conf.d or which reload.
+// TestDivergenceAudit_LogNamesTheRootAndTheCommit pins the two pieces of
+// context an operator needs to act on the line: WHICH tree, and WHICH commit
+// produced it. Driven through the audit directly for the same reason as its
+// siblings — the real tree no longer diverges.
 func TestDivergenceAudit_LogNamesTheRootAndTheCommit(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	writeDivergenceRoot(t, dir)
-	writeNestedTenant(t, dir)
-
 	m, _, logBuf := newAuditedManager(t, dir)
-	if err := m.Load(); err != nil {
-		t.Fatalf("Load(): %v", err)
-	}
+
+	m.auditHierarchyDivergence(
+		&ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{}},
+		map[string]string{"hier-tenant": filepath.Join(dir, "db", "hier-tenant.yaml")},
+		"Config loaded (directory)")
 
 	line := logBuf.String()
 	if !strings.Contains(line, "top level of "+dir) {
