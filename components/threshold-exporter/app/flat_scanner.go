@@ -29,8 +29,10 @@ package main
 import (
 	"crypto/sha256"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -66,11 +68,20 @@ func loadFile(path string) (ThresholdConfig, string, error) {
 // (drives the underscore severity choice); `path` is the display path used for
 // logs and the metric basename. Shared by IncrementalLoad and fullDirLoad so
 // the flat-mode parse paths report failures identically.
+// scanKeyBase is the underscore convention's unit of judgement: the FILE NAME,
+// not the whole scan key. Keys are root-relative slash paths since #1521
+// (`nested/_defaults.yaml`), and every `_`-prefix test in this package means
+// "is this file platform-scoped" — a question the directory part cannot answer.
+// One helper so the three call sites cannot drift apart, and so
+// `parsePartialConfig`, whose own parameter is named `path`, can ask it without
+// shadowing the package.
+func scanKeyBase(key string) string { return path.Base(key) }
+
 func parsePartialConfig(name, path string, data []byte, metrics *configMetrics, logger *log.Logger) (ThresholdConfig, bool) {
 	var partial ThresholdConfig
 	if err := yaml.Unmarshal(data, &partial); err != nil {
 		metrics.IncParseFailure(filepath.Base(path))
-		if strings.HasPrefix(name, "_") {
+		if strings.HasPrefix(scanKeyBase(name), "_") {
 			logger.Printf("ERROR: skip unparseable defaults/profiles file %s: %v (entire block dropped — fix file or remove)", path, err)
 		} else {
 			logger.Printf("WARN: skip unparseable file %s: %v", path, err)
@@ -96,29 +107,79 @@ func scanDirFileHashes(dir string, oldHashes map[string]string, oldMtimes map[st
 	if logger == nil {
 		logger = log.Default()
 	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, "", nil, nil, fmt.Errorf("read config dir %s: %w", dir, err)
+	// ⛔ RECURSIVE since #1521. It was `os.ReadDir` + `if IsDir() { continue }`,
+	// which gave this scanner a SMALLER population than the hierarchical one
+	// reading the same tree: a tenant one directory down resolved through
+	// `/effective` and emitted no `user_threshold` at all, with no error and no
+	// metric to notice it by. See `config_nested_tenant_test.go`.
+	//
+	// ⛔ THE MAP KEY IS NOW A ROOT-RELATIVE SLASH PATH, not a bare filename, and
+	// that is load-bearing rather than cosmetic. With bare names `a/x.yaml` and
+	// `x.yaml` collide in `perFile`/`mtimes`/`dataCache` and one of the two
+	// tenants disappears silently — the same failure this change exists to fix.
+	// Callers already rebuild the path as `filepath.Join(m.path, name)`, which
+	// stays correct for a relative path, so the key change is invisible to them.
+	//
+	// ⚠️ WalkDir's error is NOT swallowed: a missing root has to stay a hard
+	// error (the caller treats it as "config dir unreadable"), so it is checked
+	// up front rather than left to the callback.
+	if _, serr := os.Stat(dir); serr != nil {
+		return nil, "", nil, nil, fmt.Errorf("read config dir %s: %w", dir, serr)
 	}
 
 	type dirFile struct {
-		name string
+		name string      // root-relative, slash-separated
 		info os.FileInfo // from DirEntry.Info(), avoids separate os.Stat
 	}
 	var files []dirFile
-	for _, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() || strings.HasPrefix(name, ".") {
-			continue
-		}
-		if strings.HasSuffix(name, ".yaml") || strings.HasSuffix(name, ".yml") {
-			info, ierr := entry.Info()
-			if ierr != nil {
-				logger.Printf("WARN: skip unreadable entry %s: %v", name, ierr)
-				continue
+	walkErr := filepath.WalkDir(dir, func(full string, entry fs.DirEntry, werr error) error {
+		if werr != nil {
+			// One unreadable subtree must not blank the whole config; the
+			// hierarchical scanner reading the same tree logs and continues too.
+			logger.Printf("WARN: skip unreadable path %s: %v", full, werr)
+			if entry != nil && entry.IsDir() {
+				return fs.SkipDir
 			}
-			files = append(files, dirFile{name: name, info: info})
+			return nil
 		}
+		name := entry.Name()
+		if entry.IsDir() {
+			// Dot-prefixed directories are pruned whole — which also covers the
+			// K8s ConfigMap symlink shims (`..data`, `..2026_04_25_…`), since a
+			// `..` name is a `.` name. Measured on a real mount layout: both
+			// scanners see the two root-level entries and nothing doubled.
+			if full != dir && strings.HasPrefix(name, ".") {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if strings.HasPrefix(name, ".") {
+			return nil
+		}
+		// ⛔ CASE-INSENSITIVE since #1521, matching `config_hierarchy.go` and the
+		// loader itself. It used to be exact, so `UPPER.YAML` AT THE ROOT — no
+		// nesting involved — produced the identical symptom: found by `Resolve()`,
+		// absent from `/metrics`. Two enumerators over one tree with two
+		// different skip rules is the defect class; this closes the second half.
+		lower := strings.ToLower(name)
+		if !strings.HasSuffix(lower, ".yaml") && !strings.HasSuffix(lower, ".yml") {
+			return nil
+		}
+		info, ierr := entry.Info()
+		if ierr != nil {
+			logger.Printf("WARN: skip unreadable entry %s: %v", full, ierr)
+			return nil
+		}
+		rel, rerr := filepath.Rel(dir, full)
+		if rerr != nil {
+			logger.Printf("WARN: skip path outside root %s: %v", full, rerr)
+			return nil
+		}
+		files = append(files, dirFile{name: filepath.ToSlash(rel), info: info})
+		return nil
+	})
+	if walkErr != nil {
+		return nil, "", nil, nil, fmt.Errorf("read config dir %s: %w", dir, walkErr)
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].name < files[j].name })
 
@@ -181,8 +242,13 @@ func applyBoundaryRules(name string, partial *ThresholdConfig, logger *log.Logge
 	if logger == nil {
 		logger = log.Default()
 	}
-	isDefaultsFile := strings.HasPrefix(name, "_")
-	isProfilesFile := name == "_profiles.yaml" || name == "_profiles.yml"
+	// ⛔ BASENAME, not the whole key. Keys are root-relative since #1521, so
+	// `HasPrefix(name, "_")` would read `nested/_defaults.yaml` as a TENANT file
+	// and strip its platform sections with a WARN — quietly, and for a file the
+	// convention plainly marks as platform-scoped.
+	base := scanKeyBase(name)
+	isDefaultsFile := strings.HasPrefix(base, "_")
+	isProfilesFile := base == "_profiles.yaml" || base == "_profiles.yml"
 
 	if !isDefaultsFile {
 		if len(partial.StateFilters) > 0 {

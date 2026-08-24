@@ -9,6 +9,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"testing"
 	"time"
 )
@@ -62,9 +63,39 @@ func TestScanDirFileHashes_SkipsHiddenAndSubdirs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed: %v", err)
 	}
-	if len(hashes) != 1 {
-		t.Errorf("expected 1 file (hidden + subdir skipped), got %d", len(hashes))
+	// ⛔ CONTRACT CHANGED BY #1521, and only one half of it. A subdirectory is
+	// now DESCENDED (its tenants used to resolve through `/effective` and emit
+	// no metrics at all); a dot-file is still skipped. The old assertion —
+	// `len(hashes) != 1`, "hidden + subdir skipped" — conflated the two, so it
+	// could not tell the fix from a regression in hidden-file handling. Assert
+	// the keys, not the count.
+	if _, ok := hashes["_defaults.yaml"]; !ok {
+		t.Errorf("root file missing from scan: %v", scanKeysOf(hashes))
 	}
+	if _, ok := hashes["subdir/extra.yaml"]; !ok {
+		t.Errorf("subdirectory file missing, or keyed by bare name instead of a "+
+			"root-relative path (bare names collide across directories): %v",
+			scanKeysOf(hashes))
+	}
+	if _, ok := hashes[".hidden.yaml"]; ok {
+		t.Errorf("dot-files must still be skipped: %v", scanKeysOf(hashes))
+	}
+	if len(hashes) != 2 {
+		t.Errorf("expected exactly the root file and the subdirectory file, got %v",
+			scanKeysOf(hashes))
+	}
+}
+
+// scanKeysOf renders a scan result for a failure message — the counts alone
+// never said WHICH file went missing. Named apart from the sibling `keysOf` in
+// config_simulate_test.go, which takes a different map type.
+func scanKeysOf(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func TestScanDirFileHashes_StableComposite(t *testing.T) {

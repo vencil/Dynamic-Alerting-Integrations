@@ -529,6 +529,16 @@ func (m *ConfigManager) IncrementalLoad() error {
 			continue
 		}
 		// Apply boundary enforcement (same rules as fullDirLoad)
+		// ⛔ A nested `_` file is scanned (change detection must see it) but
+		// contributes NOTHING to the merged config. `ThresholdConfig.Defaults`
+		// is ONE global map with no subtree scope, and the merge is
+		// last-writer-wins over sorted keys — so `nested/_defaults.yaml` sorts
+		// after the root's and would re-price every tenant in the tree,
+		// including tenants in unrelated subtrees. Measured; see
+		// `TestASubtreeDefaultNeverLeaksIntoTheGlobalOnes`.
+		if strings.Contains(name, "/") && strings.HasPrefix(scanKeyBase(name), "_") {
+			continue
+		}
 		applyBoundaryRules(name, &partial, m.getLogger())
 		newConfigs[name] = partial
 	}
@@ -593,7 +603,10 @@ func diffFileHashes(oldHashes, newHashes map[string]string) (changed, added, rem
 func isTenantOnlyChange(changed, added, removed []string) bool {
 	for _, group := range [][]string{changed, added, removed} {
 		for _, name := range group {
-			if strings.HasPrefix(name, "_") {
+			// basename: a nested `_defaults.yaml` is still a platform file, and
+			// routing it into the tenant-patch fast path would apply a defaults
+			// edit as if it were a tenant edit (#1521).
+			if strings.HasPrefix(scanKeyBase(name), "_") {
 				return false
 			}
 		}
@@ -708,6 +721,16 @@ func (m *ConfigManager) fullDirLoad() error {
 		}
 		partial, ok := parsePartialConfig(name, fullPath, data, m.getMetrics(), m.getLogger())
 		if !ok {
+			continue
+		}
+		// ⛔ A nested `_` file is scanned (change detection must see it) but
+		// contributes NOTHING to the merged config. `ThresholdConfig.Defaults`
+		// is ONE global map with no subtree scope, and the merge is
+		// last-writer-wins over sorted keys — so `nested/_defaults.yaml` sorts
+		// after the root's and would re-price every tenant in the tree,
+		// including tenants in unrelated subtrees. Measured; see
+		// `TestASubtreeDefaultNeverLeaksIntoTheGlobalOnes`.
+		if strings.Contains(name, "/") && strings.HasPrefix(scanKeyBase(name), "_") {
 			continue
 		}
 		applyBoundaryRules(name, &partial, m.getLogger())

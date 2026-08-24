@@ -320,8 +320,18 @@ tenants:
 	if cfg.Defaults["mysql_connections"] != 80 {
 		t.Errorf("expected 80 (hidden file ignored), got %.0f", cfg.Defaults["mysql_connections"])
 	}
-	if len(cfg.Tenants) != 1 {
-		t.Errorf("expected 1 tenant (subdir ignored), got %d", len(cfg.Tenants))
+	// ⛔ CONTRACT CHANGED BY #1521: a tenant in a subdirectory now reaches the
+	// merged config. It always resolved through `Resolve()` / `/effective`;
+	// what it never reached was `GetConfig()`, and therefore the collector —
+	// so its alerts could not fire. The dot-file half of this test is
+	// unchanged, and the `!= 80` assertion above still proves it.
+	if _, ok := cfg.Tenants["db-c"]; !ok {
+		t.Errorf("subdirectory tenant db-c missing from the merged config; "+
+			"got %d tenant(s)", len(cfg.Tenants))
+	}
+	if len(cfg.Tenants) != 2 {
+		t.Errorf("expected the root tenant and the subdirectory tenant, got %d",
+			len(cfg.Tenants))
 	}
 }
 
