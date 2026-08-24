@@ -168,14 +168,18 @@ effective = deep_merge( defaults_block(L0), …, defaults_block(Ln), tenant_body
      ⛔ **分界不是「純量 vs 非純量」，是「能不能解成 `float64`」**：實測 `100`、`1.5`、
      以及 **`null`（變成 0）** 三者 `ok=true`、**log 是空字串**；而 `_profile: standard`、
      加引號的 `"100"`、`true` 這些**也是純量**的值，走的是上面那條大聲失敗的路。
-     ⛔ 靜默那一格真正的損害不是「多一個假閾值」：那條 series 是
-     `user_threshold{component="max", metric="metrics_per_tenant"}`，而 repo 內 **73 個會被
-     評估的 `user_threshold` 選擇器**中 72 個明寫 `metric=`（`metrics_per_tenant` 零命中）、
-     剩下 1 個釘 `component="custom"`，都選不到它。真正的損害是**那個平級鍵本身失效**：`max_metrics_per_tenant` 一旦離開頂層，
-     `ThresholdConfig.MaxMetricsPerTenant` 就是 0，執行期 fallback 到內建的
-     `DefaultMaxMetricsPerTenant = 500`（`resolve.go`）⇒ **你寫的每租戶基數上限被靜默放寬**
-     （100 → 500）。這一面沒有任何**失敗**訊號，只有 `/metrics` 上多出的一條無人消費的
-     `user_threshold` series。
+     ⛔ 靜默那一格真正的損害是**那個平級鍵本身失效**：`max_metrics_per_tenant` 一旦離開
+     頂層，`ThresholdConfig.MaxMetricsPerTenant` 就是 0（實測），執行期 fallback 到內建的
+     `DefaultMaxMetricsPerTenant = 500`（`resolve.go`，條件是 `== 0`）⇒ **你寫的每租戶基數
+     上限被靜默換成 500**。⚠️ 方向取決於你原本寫什麼：寫 100 是放寬 5 倍；**寫大於 500 的人
+     會被靜默收緊，多出來的 metric 直接被截斷**。
+     ⚠️ 副作用是每個租戶各多一條 `user_threshold{component="max", metric="metrics_per_tenant"}`。
+     **任何不指名 `metric=` 的查詢都會選到它**——repo 內現成的例子是 Grafana 的
+     `count(user_threshold)`、`count by(component) (user_threshold)` 與
+     `label_values(user_threshold, metric)`。⛔ **本文件刻意不列出「誰會吃到它」的清單**：
+     那份清單橫跨 rule-pack、dashboard、recording rule 與 operator manifest，列了就會漂移。
+     要知道**你的**環境有誰吃到，在跑起來的 Prometheus 上跑
+     `count by(component) (user_threshold)` ——多出 `component="max"` 這一格就是它。
    - **路由**：⛔ `_routing_defaults` 一旦離開頂層，`generate_alertmanager_routes.py` 就找不到
      它——**沒有自己 `_routing` 的租戶會整條 route ＋ receiver 消失**（實測：`Found 2 tenant(s)
      with routing config: db-a, db-b` → `Found 1 tenant(s) with routing config: db-b`，
@@ -196,7 +200,9 @@ effective = deep_merge( defaults_block(L0), …, defaults_block(Ln), tenant_body
      config` 那一行與 receiver 集合**不夠，而且兩者的盲區不同**：
      - `Found N` 那一行追的是**有幾個租戶 parse 出 routing config**，不是產出了幾條 route。
        實測拿掉 `_routing_defaults.receiver.type` ⇒ db-a 的 route 與 receiver **雙雙消失**
-       （`2 route(s), 2 receiver(s)` → `1, 1`），該行**逐位元組不動**。
+       （`2 route(s), 2 receiver(s)` → `1, 1`），該行**逐位元組不動**。⚠️ 這一格另有
+       `WARN: db-a: missing required 'receiver.type', skipping`——與第 2 條那個真正零訊號的
+       縮排不同，別把兩者混為一談。
      - receiver 集合只對 receiver 出現／消失反應，對**值**變更全盲。實測
        `_routing_defaults.group_wait` 30s→35s，以及把 `receiver.to` 改成**另一個網域的收件人**
        ——兩次完整輸出都只差那一行，Found 行與 receiver 集合皆逐位元組不動。⚠️ 也就是說盲區
@@ -215,11 +221,13 @@ effective = deep_merge( defaults_block(L0), …, defaults_block(Ln), tenant_body
    | 有包裝 | **無包裝子檔的頂層** | 刪除 ✅ |
 
    ⛔ 真正無效的只有「同一個檔案內、`defaults:` **是一個真的 mapping** 時寫在它的兄弟
-   位置」——那裡沒有東西可刪。⚠️ `defaults:` 缺席或為 null 時 unwrap 退回整份文件，那個位置
-   就變成有效（見〈已知的可達例外 1 / 3〉）。
-   ⛔ 寫在**檔名不以 `_` 開頭的租戶檔**一律被 `check_confd_schema.py` 擋下（具名的那幾個鍵
-   `tenant-config.schema.json` 宣告了非 null 型別，其餘 `_*` 由 catch-all 擋；實測 14 個鍵
-   全數 `RC=1`）；但寫在 `_defaults.yaml` 的
+   位置」——那裡沒有東西可刪。⚠️ `defaults:` **缺席**時兩個實作都退回整份文件，那個位置就變成
+   有效；`defaults:` 為 **null** 時只有 Go 退回（實測兄弟位置的 `null` 會刪除），Python 的
+   `ddata.get("defaults", ddata)` 回 `None` ⇒ `describe_tenant` 整支 crash（見〈已知的可達
+   例外 1 / 3〉）。
+   ⛔ 寫在**檔名不以 `_` 開頭的租戶檔**一律被 `check_confd_schema.py` 擋下（`tenant-config.schema.json` 的
+   `definitions/tenantConfig` 對具名的那幾個鍵宣告了非 null 型別，其餘 `_*` 由
+   `additionalProperties` 的 `oneOf` catch-all 擋下；兩條路徑實測皆 `RC=1`）；但寫在 `_defaults.yaml` 的
    **`tenants:` 區塊**底下**不會**被擋（實測 `RC=0`）——而第 1 條正把讀者指向那個位置。
 
 ### 已知的可達例外（非窮舉——這份清單不是保證）
@@ -427,10 +435,14 @@ Replace 語意更直覺，且與 Helm values merge 行為一致。
    `shadowed` / `cosmetic`。合併兄弟鍵之後，每一次平台路由編輯都會把每個租戶從 `cosmetic`
    翻成 `applied`，並讓 `da_config_reload_trigger_total{reason="defaults"}` 逐次增量——而本 ADR
    存在的理由正是上面那句「如何避免 reload 風暴」。**與替代方案 A 被否決的理由同源（都在
-   reload 歸因這條線上），但問題不同**：A 的否決理由是**無法逐租戶歸因、只能全量處理**；
-   這裡則是把**已經在做的那一次 tick** 從 `cosmetic` 誤標成 `applied`——`classifyTenant` 的
-   兩個分支都已經跑完 `recomputeMergedHash`，`installNewHierarchyState` 也是無條件執行，
-   所以合併兄弟鍵不會改變載入工作量，只改變標籤與計數。⚠️ 精確地說：租戶**現在就已經**每次都被送進
+   reload 歸因這條線上），但問題不同**：A 的否決理由逐字是「無法判斷哪些 tenant 真正受
+   影響，只能全量 reload。1000+ tenant 環境下 reload 風暴不可接受」；這裡的問題純粹在
+   **歸因**——把**已經在做的那一次 tick** 從 `cosmetic` 誤標成 `applied`。`classifyTenant`
+   在 `defaultsChanged` 的兩個分支都已經跑完 `recomputeMergedHash`，`installNewHierarchyState`
+   也是無條件執行，所以合併兄弟鍵不改變載入工作量，只改標籤與計數。
+   ⚠️ **順帶揭露一個本 ADR 自己沒說清楚的張力**：hierarchical 模式**本來就每個 tick 跑一次
+   `fullDirLoad`**。也就是說 dual-hash 買到的是**歸因**，不是「省下載入」——§A 那句「只能全量
+   reload」在描述今天的實作時已經過時。⚠️ 精確地說：租戶**現在就已經**每次都被送進
    `da_config_blast_radius_tenants_affected` 的直方圖，改變的是 `effect` label 與 counter 是否
    增量，不是「有沒有被記」。
 

@@ -182,17 +182,22 @@ implementation).
      measured, `100`, `1.5` and **`null` (which becomes 0)** all give `ok=true` and an **empty
      log**, while `_profile: standard`, a quoted `"100"` and `true` — all scalars too — take the
      loud failure path above.
-     ⛔ The real damage on the silent side is not "one bogus threshold": that series is
-     `user_threshold{component="max", metric="metrics_per_tenant"}`, and of the **73 evaluated
-     `user_threshold` selectors** in the repo, 72 name a specific `metric=`
-     (`metrics_per_tenant` has zero hits) and the remaining one pins `component="custom"` —
-     none of them can select it. The real damage is that **the sibling key itself stops
-     working**: once
-     `max_metrics_per_tenant` leaves the top level, `ThresholdConfig.MaxMetricsPerTenant` is 0
-     and the runtime falls back to the built-in `DefaultMaxMetricsPerTenant = 500`
-     (`resolve.go`) ⇒ **the per-tenant cardinality cap you wrote is silently widened**
-     (100 → 500). That plane emits no **failure** signal — only one extra, unconsumed
-     `user_threshold` series on `/metrics`.
+     ⛔ The real damage on the silent side is that **the sibling key itself stops working**:
+     once `max_metrics_per_tenant` leaves the top level, `ThresholdConfig.MaxMetricsPerTenant`
+     is 0 (measured) and the runtime falls back to the built-in
+     `DefaultMaxMetricsPerTenant = 500` (`resolve.go`, on `== 0`) ⇒ **the per-tenant
+     cardinality cap you wrote is silently replaced by 500**. ⚠️ The direction depends on what
+     you wrote: 100 widens it 5×; **anyone who wrote more than 500 is silently tightened, and
+     the excess metrics are truncated**.
+     ⚠️ The side effect is one extra
+     `user_threshold{component="max", metric="metrics_per_tenant"}` series per tenant. **Any
+     query that does not name `metric=` will select it** — ready examples in this repo are
+     Grafana's `count(user_threshold)`, `count by(component) (user_threshold)` and
+     `label_values(user_threshold, metric)`. ⛔ **This document deliberately does not enumerate
+     who consumes it**: that list spans rule packs, dashboards, recording rules and operator
+     manifests, and any enumeration here would drift. To find out for **your** environment, run
+     `count by(component) (user_threshold)` against the live Prometheus — an extra
+     `component="max"` bucket is it.
    - **routing**: ⛔ once `_routing_defaults` leaves the top level,
      `generate_alertmanager_routes.py` cannot find it — **a tenant with no `_routing` of its own
      loses its entire route AND receiver** (measured: `Found 2 tenant(s) with routing config:
@@ -218,7 +223,9 @@ implementation).
      - The `Found N` line counts **how many tenants parsed a routing config**, not how many
        routes came out. Measured: dropping `_routing_defaults.receiver.type` makes db-a's route
        AND receiver **both disappear** (`2 route(s), 2 receiver(s)` → `1, 1`) while that line
-       stays byte-identical.
+       stays byte-identical. ⚠️ This one does emit
+       `WARN: db-a: missing required 'receiver.type', skipping` — unlike the genuinely
+       signal-free indenting in item 2; do not conflate the two.
      - The receiver set only reacts to a receiver appearing or disappearing; it is blind to
        **values**. Measured with `_routing_defaults.group_wait` 30s→35s, and again with
        `receiver.to` changed to **a recipient on a different domain** — both times the full
@@ -242,11 +249,14 @@ implementation).
 
    ⛔ The only combination that does nothing is "sibling of `defaults:` within the same file,
    **while `defaults:` is a real mapping**" — there is nothing there to delete. ⚠️ When
-   `defaults:` is absent or null the unwrap falls back to the whole document, and that same
-   position becomes effective (see Known reachable exceptions, 1 and 3).
+   `defaults:` is **absent** both implementations fall back to the whole document and that
+   position becomes effective; when `defaults:` is **null** only Go falls back (measured: the
+   sibling-position `null` does delete), while Python's `ddata.get("defaults", ddata)` returns
+   `None` ⇒ `describe_tenant` crashes outright (see Known reachable exceptions, 1 and 3).
    ⛔ Writing it in a **tenant file whose name does not start with `_`** is always rejected by
-   `check_confd_schema.py` (the named keys have non-null types in `tenant-config.schema.json`;
-   the rest of `_*` are caught by the catch-all — measured, 14 keys all `RC=1`);
+   `check_confd_schema.py` (`definitions/tenantConfig` in `tenant-config.schema.json`
+   declares non-null types for the named keys, and the rest of `_*` are caught by the
+   `additionalProperties` `oneOf` catch-all — both paths measured at `RC=1`);
    writing it under the **`tenants:` block of a `_defaults.yaml` is NOT rejected** (measured
    `RC=0`) — and item 1 points the reader at exactly that position.
 
@@ -477,11 +487,15 @@ equally load-bearing, all measured**:
    `da_config_reload_trigger_total{reason="defaults"}` each time — while the reason this ADR
    exists is the question above, how to avoid a reload storm. **It shares its root with why
    alternative A was rejected (both live on the reload-attribution line), but the problem
-   differs**: A was rejected because it **cannot attribute per tenant and must process
-   everything**; this would mislabel **the tick that already happens** from `cosmetic` to
-   `applied` — both branches of `classifyTenant` have already run `recomputeMergedHash`, and
-   `installNewHierarchyState` runs unconditionally, so merging the siblings in changes the
-   labels and counters, not the amount of loading. ⚠️ Precisely: tenants are
+   differs**: A's rejection reads verbatim "cannot tell which tenants are actually affected,
+   so it can only reload everything. At 1000+ tenants a reload storm is unacceptable." The
+   problem here is purely **attribution** — mislabelling **the tick that already happens** from
+   `cosmetic` to `applied`. Both `defaultsChanged` branches of `classifyTenant` have already
+   run `recomputeMergedHash`, and `installNewHierarchyState` runs unconditionally, so merging
+   the siblings in changes the labels and counters, not the amount of loading.
+   ⚠️ **Which surfaces a tension this ADR never states**: hierarchical mode **already runs
+   `fullDirLoad` on every tick**. What dual-hash buys is **attribution**, not saved loading —
+   §A's "can only reload everything" is stale as a description of today's implementation. ⚠️ Precisely: tenants are
    **already** fed into the `da_config_blast_radius_tenants_affected` histogram on every tick;
    what would change is the `effect` label and whether the counter increments, not whether they
    are recorded at all.
