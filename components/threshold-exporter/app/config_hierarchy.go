@@ -140,6 +140,16 @@ func scanDirHierarchicalWithMetrics(rootPath string, priorMtimes map[string]file
 		return nil, nil, nil, nil, nil, fmt.Errorf("resolve root %q: %w", rootPath, aerr)
 	}
 	absRoot = filepath.Clean(absRoot)
+	// ⛔ SAME ROOT DERIVATION AS THE FLAT SCANNER, via the one helper. This
+	// walker lstats its root too, so an unresolved symlinked `-config-dir`
+	// made it return zero tenants and a NIL error — `populateHierarchyState`
+	// then read that as "flat tree, nothing to do" and never built the
+	// inheritance graph. Measured: on a symlinked root the tenant was in
+	// `GetConfig()` but `hierarchy.enabled` was false, so its series carried
+	// the root default 50 instead of the subtree's 90 — this ticket's own
+	// defect, rebuilt through a path nobody was looking at, and invisible to
+	// the divergence audit because that only reports the other direction.
+	absRoot = resolveScanRoot(absRoot)
 
 	info, serr := os.Stat(absRoot)
 	if serr != nil {

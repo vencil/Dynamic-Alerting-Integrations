@@ -366,14 +366,15 @@ func TestFormatDivergenceLog_CapsTheSample(t *testing.T) {
 	// conf.d, and WHICH commit. Passing empty strings for both stayed
 	// green before this.
 	//
-	// ⛔ The root is asserted by VALUE, not by the sentence around it. The
-	// earlier form pinned the literal "top level of /conf.d" — prose that
-	// stopped being true the moment #1521 made the scanner recursive, and
-	// the test's only reaction was to keep the stale wording alive until
-	// someone edited the message and got a red for the wrong reason.
-	if !strings.Contains(line, "/conf.d") {
-		t.Errorf("log must name the conf.d root, got:\n%s", line)
-	}
+	// ⛔ The root is asserted in the HEADER, not anywhere in the line. Pinning
+	// the literal "top level of /conf.d" kept a sentence alive that stopped
+	// being true the moment #1521 made the scanner recursive; relaxing it to
+	// a bare `Contains(line, dir)` then made it a TAUTOLOGY, because the
+	// `Affected: t (…/db/x.yaml)` tail already carries the root. Measured:
+	// with the root dropped from the Cause sentence entirely, the whole
+	// package stayed green. Splitting at "Affected:" asks the question the
+	// comment below claims to be asking. (#1569 blind review.)
+	assertNamesTheRootBeforeTheList(t, line, "/conf.d")
 	assertNoStaleRemediation(t, line)
 	if !strings.Contains(line, "(Config loaded (directory))") {
 		t.Errorf("log must name the commit context, got:\n%s", line)
@@ -789,9 +790,7 @@ func TestDivergenceAudit_LogNamesTheRootAndTheCommit(t *testing.T) {
 		"Config loaded (directory)")
 
 	line := logBuf.String()
-	if !strings.Contains(line, dir) {
-		t.Errorf("log must name the conf.d root %q, got:\n%s", dir, line)
-	}
+	assertNamesTheRootBeforeTheList(t, line, dir)
 	assertNoStaleRemediation(t, line)
 	if !strings.Contains(line, "(Config loaded (directory))") {
 		t.Errorf("log must name the commit context, got:\n%s", line)
@@ -1052,5 +1051,38 @@ func assertNoStaleRemediation(t *testing.T, line string) {
 				"(directory depth stopped being a cause when the flat scanner became "+
 				"recursive); got:\n%s", stale, line)
 		}
+	}
+	// ⛔ A BLACKLIST IS NOT AN INVARIANT, and pretending otherwise was this
+	// round's own overstatement. A reviewer reinstated the exact obsolete
+	// claim in different words — "only enumerates the first directory level",
+	// "relocate the tenant YAML into the conf.d root" — and the package
+	// stayed green: the helper forbids three STRINGS, not the CLAIM. The
+	// positive half below is what actually holds the diagnosis in place; the
+	// blacklist stays as a cheap tripwire for a literal revert. (#1569.)
+	for _, required := range []string{"dropped", "parse"} {
+		if !strings.Contains(strings.ToLower(line), required) {
+			t.Errorf("operator text no longer states the CURRENT cause (a file dropped "+
+				"while building the merged config because its platform block failed to "+
+				"parse) — %q is missing; got:\n%s", required, line)
+		}
+	}
+}
+
+// assertNamesTheRootBeforeTheList checks the root is named in the message
+// HEADER rather than merely appearing somewhere in the line.
+//
+// ⛔ The affected-tenant list ends every message with source PATHS, all of
+// which contain the root, so `Contains(line, root)` is satisfied even when
+// the header never says which conf.d produced the divergence. Measured: with
+// the root removed from the Cause sentence, the package stayed green.
+func assertNamesTheRootBeforeTheList(t *testing.T, line, root string) {
+	t.Helper()
+	head, _, found := strings.Cut(line, "Affected:")
+	if !found {
+		t.Fatalf("message has no %q section, so the header cannot be isolated:\n%s", "Affected:", line)
+	}
+	if !strings.Contains(head, root) {
+		t.Errorf("the header never names the conf.d root %q — an operator reading a "+
+			"multi-tree log stream cannot tell which tree diverged; header:\n%s", root, head)
 	}
 }

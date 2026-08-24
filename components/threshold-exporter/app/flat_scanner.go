@@ -77,6 +77,63 @@ func loadFile(path string) (ThresholdConfig, string, error) {
 // shadowing the package.
 func scanKeyBase(key string) string { return path.Base(key) }
 
+// resolveScanRoot is the ONE derivation of "which directory is the conf.d
+// root" that every enumerator over that tree must use.
+//
+// ⛔ IT EXISTS BECAUSE HAVING TWO OF THEM IS THIS TICKET'S ENTIRE DEFECT
+// CLASS. `filepath.WalkDir` lstats its root and never follows a symlink, so
+// each scanner that starts from an unresolved `-config-dir` silently sees an
+// EMPTY tree when that path is a link. Fixing only the flat scanner produced
+// exactly the split this PR closes, one layer down: measured on a symlinked
+// root, `GetConfig()` had the tenant while `hierarchy.enabled` was false and
+// `tenantSources` was empty, so the tenant's series carried the ROOT default
+// (50) instead of the subtree's (90) — and the divergence audit reports only
+// the opposite direction, so the gauge stayed at 0. (#1569 blind review.)
+//
+// ⚠️ Falls back to the given path when resolution fails (dangling link,
+// permission), so the caller's own error handling still decides — this
+// function never turns a broken path into a different one.
+// isNestedPlatformFile reports whether a scan key names an underscore-prefixed
+// platform file BELOW the conf.d root.
+//
+// ⛔ ONE PREDICATE, TWO CALLERS, ON PURPOSE. `fullDirLoad` and
+// `IncrementalLoad` each decide which files reach the merged config, and a
+// predicate copied into both is precisely the shape of the defect this whole
+// change set exists to close: two enumerations over one tree that can drift
+// apart silently. (CodeRabbit, #1569.)
+func isNestedPlatformFile(key string) bool {
+	return strings.Contains(key, "/") && strings.HasPrefix(scanKeyBase(key), "_")
+}
+
+func resolveScanRoot(dir string) string {
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		return resolved
+	}
+	return dir
+}
+
+// reportUnparseableNestedPlatformFile keeps a genuinely broken nested
+// `_defaults.yaml` / `_profiles.yaml` loud, even though its content is
+// deliberately excluded from the merged config.
+//
+// ⛔ THE DISTINCTION IS BETWEEN "BROKEN" AND "NOT FOR THIS PLANE", and losing
+// it was a severity downgrade. `Defaults` is `map[string]float64`, so a
+// perfectly valid subtree defaults file written in the schedule form fails to
+// decode into `ThresholdConfig` — running the full parse on files this plane
+// discards therefore logged an ERROR for healthy trees. Skipping them outright
+// then went too far the other way: a file with real syntax damage stopped
+// incrementing `parse_failure` and stopped logging at all. A syntax-only probe
+// answers the right question — the same one `ERROR:` has always meant here.
+func reportUnparseableNestedPlatformFile(fullPath string, data []byte, metrics *configMetrics, logger *log.Logger) {
+	var probe any
+	err := yaml.Unmarshal(data, &probe)
+	if err == nil {
+		return // syntactically fine; its content simply is not for this plane
+	}
+	metrics.IncParseFailure(filepath.Base(fullPath))
+	logger.Printf("ERROR: skip unparseable defaults/profiles file %s: %v (entire block dropped — fix file or remove)", fullPath, err)
+}
+
 func parsePartialConfig(name, path string, data []byte, metrics *configMetrics, logger *log.Logger) (ThresholdConfig, bool) {
 	var partial ThresholdConfig
 	if err := yaml.Unmarshal(data, &partial); err != nil {
@@ -141,10 +198,7 @@ func scanDirFileHashes(dir string, oldHashes map[string]string, oldMtimes map[st
 	// still not followed — that is WalkDir's documented behaviour, it matches
 	// the hierarchical scanner walking the same tree, and following them would
 	// open a cycle risk that neither scanner is written to survive.
-	walkRoot := dir
-	if resolved, rerr := filepath.EvalSymlinks(dir); rerr == nil {
-		walkRoot = resolved
-	}
+	walkRoot := resolveScanRoot(dir)
 
 	type dirFile struct {
 		name string      // root-relative, slash-separated

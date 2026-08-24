@@ -504,6 +504,27 @@ func (m *ConfigManager) IncrementalLoad() error {
 		return nil
 	}
 
+	// ⛔ A SCAN THAT FINDS NOTHING IS AN ERROR, NEVER AN EMPTY CONFIG.
+	// `fullDirLoad` has always treated `len(perFileHashes) == 0` as a hard
+	// error; this path did not, and the asymmetry was a silent total outage.
+	// `diffFileHashes` classifies every known file as REMOVED, the merge of
+	// nothing commits cleanly, and the watch loop logs
+	// "Config reloaded (incremental, 0 changed, 0 added, N removed)" at INFO.
+	// Measured on a symlinked `-config-dir` re-pointed at a directory holding
+	// no YAML — an ordinary step of a blue/green or `..data` swap, no race
+	// needed: `IncrementalLoad` returned nil and `GetConfig().Tenants` went
+	// from 1 to 0. Every tenant's thresholds vanish, every alert stops firing,
+	// and nothing says so. (#1569 blind review.)
+	//
+	// Returning an error keeps the PREVIOUS config live, which is the
+	// fail-safe direction: a stale threshold still protects, an absent one
+	// does not.
+	if len(newHashes) == 0 {
+		return fmt.Errorf(
+			"no .yaml files found in %s during incremental reload — refusing to "+
+				"commit an empty config (previous config kept)", m.path)
+	}
+
 	// Phase 2: diff per-file hashes → identify changed/added/removed
 	m.mu.RLock()
 	oldHashes := m.flat.hashes
@@ -542,6 +563,17 @@ func (m *ConfigManager) IncrementalLoad() error {
 	sort.Strings(reparse)
 	for _, name := range reparse {
 		fullPath := filepath.Join(m.path, name)
+		data, ok := dataCache[name]
+		if !ok {
+			// Fallback: file not in cache (shouldn't happen, but be safe)
+			var rerr error
+			data, rerr = os.ReadFile(fullPath)
+			if rerr != nil {
+				m.getLogger().Printf("WARN: skip unreadable file %s: %v", fullPath, rerr)
+				delete(newConfigs, name)
+				continue
+			}
+		}
 		// ⛔ A nested `_` file is scanned (change detection must see it) but
 		// contributes NOTHING to the merged config. `ThresholdConfig.Defaults`
 		// is ONE global map with no subtree scope, and the merge is
@@ -557,28 +589,23 @@ func (m *ConfigManager) IncrementalLoad() error {
 		// prevents is silent. Measured unreachable: a `panic` in this branch
 		// does not fire across the whole package suite.
 		//
-		// ⛔ BEFORE THE PARSE, not after it, and that ordering is a fix. Parsing
-		// a file whose content is then discarded is not free of consequence:
-		// `Defaults` is `map[string]float64`, so a subtree defaults file using
-		// the SCHEDULE form (`{default: "90", overrides: [...]}`) — a shape the
-		// hierarchical plane accepts and `/effective` renders — fails to
-		// unmarshal and `parsePartialConfig` logs `ERROR: skip unparseable
-		// defaults/profiles file …`. Pre-#1521 the flat scanner never saw
-		// nested files, so the recursion introduced that ERROR on a tree that
-		// is entirely valid. Skipping first removes the log and the work.
-		if strings.Contains(name, "/") && strings.HasPrefix(scanKeyBase(name), "_") {
+		// ⛔ NOT `parsePartialConfig`, BUT NOT SILENT EITHER. Running the full
+		// parse here logs `ERROR: skip unparseable defaults/profiles file …`
+		// for a tree that is entirely valid: `Defaults` is
+		// `map[string]float64`, so a subtree defaults file in the SCHEDULE
+		// form (`{default: "90", overrides: […]}`) — which the hierarchical
+		// plane accepts and `/effective` renders — cannot decode into it.
+		// Skipping outright, though, dropped the parse-failure counter and the
+		// ERROR for files that are GENUINELY broken (measured: a nested
+		// `_defaults.yaml` containing `defaults: [this is not a map` scored 0
+		// on the counter and produced no ERROR — a severity downgrade the
+		// recursion introduced). The probe below separates the two: a syntax
+		// error is still counted and still loud; content this plane simply
+		// does not want is skipped in silence. (#1569 blind review.)
+		if isNestedPlatformFile(name) {
+			reportUnparseableNestedPlatformFile(fullPath, data, m.getMetrics(), m.getLogger())
+			delete(newConfigs, name)
 			continue
-		}
-		data, ok := dataCache[name]
-		if !ok {
-			// Fallback: file not in cache (shouldn't happen, but be safe)
-			var rerr error
-			data, rerr = os.ReadFile(fullPath)
-			if rerr != nil {
-				m.getLogger().Printf("WARN: skip unreadable file %s: %v", fullPath, rerr)
-				delete(newConfigs, name)
-				continue
-			}
 		}
 		partial, ok := parsePartialConfig(name, fullPath, data, m.getMetrics(), m.getLogger())
 		if !ok {
@@ -756,26 +783,6 @@ func (m *ConfigManager) fullDirLoad() error {
 
 	for _, name := range fileNames {
 		fullPath := filepath.Join(m.path, name)
-		// ⛔ A nested `_` file is scanned (change detection must see it) but
-		// contributes NOTHING to the merged config. `ThresholdConfig.Defaults`
-		// is ONE global map with no subtree scope, and the merge is
-		// last-writer-wins over sorted keys — so `nested/_defaults.yaml` sorts
-		// after the root's and would re-price every tenant in the tree,
-		// including tenants in unrelated subtrees. Measured; see
-		// `TestASubtreeDefaultNeverLeaksIntoTheGlobalOnes`.
-		//
-		// ⛔ BEFORE THE PARSE, not after it, and that ordering is a fix. Parsing
-		// a file whose content is then discarded is not free of consequence:
-		// `Defaults` is `map[string]float64`, so a subtree defaults file using
-		// the SCHEDULE form (`{default: "90", overrides: [...]}`) — a shape the
-		// hierarchical plane accepts and `/effective` renders — fails to
-		// unmarshal and `parsePartialConfig` logs `ERROR: skip unparseable
-		// defaults/profiles file …`. Pre-#1521 the flat scanner never saw
-		// nested files, so the recursion introduced that ERROR on a tree that
-		// is entirely valid. Skipping first removes the log and the work.
-		if strings.Contains(name, "/") && strings.HasPrefix(scanKeyBase(name), "_") {
-			continue
-		}
 		data, ok := dataCache[name]
 		if !ok {
 			// Fallback: read from disk (shouldn't happen on first load)
@@ -785,6 +792,31 @@ func (m *ConfigManager) fullDirLoad() error {
 				m.getLogger().Printf("WARN: skip unreadable file %s: %v", fullPath, rerr)
 				continue
 			}
+		}
+		// ⛔ A nested `_` file is scanned (change detection must see it) but
+		// contributes NOTHING to the merged config. `ThresholdConfig.Defaults`
+		// is ONE global map with no subtree scope, and the merge is
+		// last-writer-wins over sorted keys — so `nested/_defaults.yaml` sorts
+		// after the root's and would re-price every tenant in the tree,
+		// including tenants in unrelated subtrees. Measured; see
+		// `TestASubtreeDefaultNeverLeaksIntoTheGlobalOnes`.
+		//
+		// ⛔ NOT `parsePartialConfig`, BUT NOT SILENT EITHER. Running the full
+		// parse here logs `ERROR: skip unparseable defaults/profiles file …`
+		// for a tree that is entirely valid: `Defaults` is
+		// `map[string]float64`, so a subtree defaults file in the SCHEDULE
+		// form (`{default: "90", overrides: […]}`) — which the hierarchical
+		// plane accepts and `/effective` renders — cannot decode into it.
+		// Skipping outright, though, dropped the parse-failure counter and the
+		// ERROR for files that are GENUINELY broken (measured: a nested
+		// `_defaults.yaml` containing `defaults: [this is not a map` scored 0
+		// on the counter and produced no ERROR — a severity downgrade the
+		// recursion introduced). The probe below separates the two: a syntax
+		// error is still counted and still loud; content this plane simply
+		// does not want is skipped in silence. (#1569 blind review.)
+		if isNestedPlatformFile(name) {
+			reportUnparseableNestedPlatformFile(fullPath, data, m.getMetrics(), m.getLogger())
+			continue
 		}
 		partial, ok := parsePartialConfig(name, fullPath, data, m.getMetrics(), m.getLogger())
 		if !ok {

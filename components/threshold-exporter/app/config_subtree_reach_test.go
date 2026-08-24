@@ -18,12 +18,14 @@ package main
 import (
 	"bytes"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	"gopkg.in/yaml.v3"
 )
 
 // captureLoad runs a real Load with a captured logger and returns the log.
@@ -280,7 +282,7 @@ func TestAnUppercaseExtensionAtTheRootStillEmits(t *testing.T) {
 // TestTheUnderscoreConventionJudgesTheFileName pins `scanKeyBase`'s contract
 // DIRECTLY, and says plainly why it cannot be pinned through a Load.
 //
-// ⛔ MEASURED: reverting both `scanKeyBase(name)` call sites to the whole key
+// ⛔ MEASURED: reverting the two LIVE `scanKeyBase(name)` call sites to the whole key
 // left the package GREEN. That is not because the helper is pointless — it is
 // because both flat-mode loops now drop nested `_` files BEFORE reaching
 // these functions, and `anyNestedKey` sends any nested change to
@@ -417,5 +419,216 @@ func TestNonThresholdSubtreeKeysStayOutOfTheCollectorPlane(t *testing.T) {
 	if strings.Contains(logged, "invalid declared threshold") ||
 		strings.Contains(logged, "unknown key") {
 		t.Errorf("a valid tree logs threshold-validation noise:\n%s", logged)
+	}
+}
+
+// TestTheScalarFastPathMatchesTheRoundTrip pins the one property that makes
+// the fast path in `scheduledValueFromRaw` safe.
+//
+// ⛔ WHY THIS EXISTS. The function's contract is "render the value exactly as
+// a tenant file's own value would have been parsed", which it gets by handing
+// the value to the same `ScheduledValue.UnmarshalYAML` the tenant path uses.
+// A fast path is a SECOND implementation of that contract, and a second
+// implementation that silently disagrees is how the overlay's first version
+// went wrong. So the reference is computed here, in the test, and compared.
+//
+// ⛔ float64 IS ASSERTED TO STAY ON THE SLOW PATH. Measured: YAML renders 1e6
+// as "1e+06" while `strconv.FormatFloat(…, 'f', -1, 64)` renders "1000000",
+// and at MaxFloat64 the latter is a 300-digit string. Adding `case float64`
+// to the fast path is exactly the mistake this half of the test catches.
+func TestTheScalarFastPathMatchesTheRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	// The reference: what the function did before the fast path existed.
+	roundTrip := func(raw any) (string, bool) {
+		encoded, err := yaml.Marshal(raw)
+		if err != nil {
+			return "", false
+		}
+		var sv ScheduledValue
+		if err := yaml.Unmarshal(encoded, &sv); err != nil {
+			return "", false
+		}
+		return sv.Default, true
+	}
+
+	// Every shape a defaults file can hold that the fast path claims.
+	// The odd-looking strings are the ones YAML would otherwise reinterpret.
+	for _, raw := range []any{
+		"80", "80:critical", "disable", "yes", "no", "on", "off", "null", "~",
+		"", " 80 ", "1e6", "0x10", "007", "true",
+		int(60), int(0), int(-5), int(1000000),
+		int64(60), int64(math.MaxInt64), int64(math.MinInt64),
+	} {
+		want, wantOK := roundTrip(raw)
+		got, gotOK := scheduledValueFromRaw(raw)
+		if !wantOK || !gotOK {
+			t.Errorf("%#v: ok mismatch (round-trip=%v fast=%v)", raw, wantOK, gotOK)
+			continue
+		}
+		if got.Default != want {
+			t.Errorf("%#v: fast path gives %q, the round-trip gives %q — the two "+
+				"implementations of one contract disagree", raw, got.Default, want)
+		}
+	}
+
+	// And the type the fast path must NOT claim.
+	for raw, want := range map[float64]string{
+		1e6:  "1e+06",
+		1e21: "1e+21",
+		60.5: "60.5",
+	} {
+		got, ok := scheduledValueFromRaw(raw)
+		if !ok {
+			t.Fatalf("%v: rejected outright", raw)
+		}
+		if got.Default != want {
+			t.Errorf("%v rendered as %q, want %q — float64 was added to the scalar "+
+				"fast path, where strconv and YAML disagree", raw, got.Default, want)
+		}
+	}
+}
+
+// TestTheGaugeHelpStatesTheCurrentCause applies to the OTHER operator-facing
+// surface this change set rewrote.
+//
+// ⛔ MEASURED: the round that rewrote both the ERROR log and this HELP text
+// asserted only the log. Reinstating the pre-#1521 diagnosis in the HELP —
+// "the known cause is a tenant file in a conf.d sub-directory … move the
+// tenant file to the conf.d root" — left the whole package green. The HELP is
+// what an operator actually reads in Prometheus or Grafana when the gauge
+// fires, so it is the surface most likely to be believed. (#1569 blind
+// review.)
+func TestTheGaugeHelpStatesTheCurrentCause(t *testing.T) {
+	t.Parallel()
+	_, reg := freshMetrics(t)
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("Gather: %v", err)
+	}
+	var help string
+	for _, fam := range families {
+		if fam.GetName() == "da_config_hierarchy_divergent_tenants" {
+			help = fam.GetHelp()
+		}
+	}
+	if help == "" {
+		t.Fatalf("gauge is not registered, so its HELP reaches no operator")
+	}
+	for _, stale := range []string{
+		"the known cause is a tenant file in a conf.d sub-directory",
+		"move the tenant file to the conf.d root",
+		"is an OPEN defect",
+	} {
+		if strings.Contains(help, stale) {
+			t.Errorf("HELP carries the pre-#1521 diagnosis %q", stale)
+		}
+	}
+	for _, required := range []string{"recursively", "parse"} {
+		if !strings.Contains(strings.ToLower(help), required) {
+			t.Errorf("HELP no longer states the current cause — %q missing; got:\n%s", required, help)
+		}
+	}
+}
+
+// TestANestedTenantKeepsItsSubtreeDefaultAcrossAnIncrementalReload covers the
+// `anyNestedKey` redirect, which had no test at all.
+//
+// ⛔ MEASURED: making `anyNestedKey` return false — the obvious future
+// optimisation, since the redirect is what costs nested trees their
+// tenant-patch fast path — left the package green while a nested tenant
+// silently reverted to the ROOT threshold after an ordinary edit: 60 became
+// 80 while `/effective` still said 60. Presence with the wrong number, this
+// ticket's exact residual, reachable through the reload path rather than the
+// cold one. (#1569 blind review.)
+func TestANestedTenantKeepsItsSubtreeDefaultAcrossAnIncrementalReload(t *testing.T) {
+	dir := t.TempDir()
+	writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"),
+		"defaults:\n  mysql_connections: 80\n")
+	mkSub(t, dir, "finance")
+	writeTestYAML(t, filepath.Join(dir, "finance", "_defaults.yaml"),
+		"defaults:\n  mysql_connections: 60\n")
+	writeTestYAML(t, filepath.Join(dir, "finance", "t1.yaml"),
+		"tenants:\n  t1: {}\n")
+
+	m := NewConfigManager(dir)
+	defer m.Close()
+	captureLoad(t, m)
+	if got, ok := seriesFor(t, m, "t1", "connections"); !ok || got != 60 {
+		t.Fatalf("cold load: got %v (present=%v), want the subtree's 60", got, ok)
+	}
+
+	// An ordinary edit to the nested tenant's own file.
+	writeTestYAML(t, filepath.Join(dir, "finance", "t1.yaml"),
+		"tenants:\n  t1: {}\n# touched\n")
+	if err := m.IncrementalLoad(); err != nil {
+		t.Fatalf("IncrementalLoad: %v", err)
+	}
+	got, ok := seriesFor(t, m, "t1", "connections")
+	if !ok {
+		t.Fatalf("the nested tenant vanished from the output plane after a reload")
+	}
+	if got != 60 {
+		t.Fatalf("after an incremental reload the nested tenant emits %v — the ROOT "+
+			"default — while /effective still resolves the subtree's 60; the reload "+
+			"path did not refresh the inheritance state", got)
+	}
+}
+
+// TestWhatASubtreeMayAndMayNotHandDown pins the threshold-shape filter across
+// the forms it has to judge, each of which was measured wrong at some point.
+func TestWhatASubtreeMayAndMayNotHandDown(t *testing.T) {
+	dir := t.TempDir()
+	writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"),
+		"defaults:\n  mysql_connections: 50\n  redis_evicted_keys: 10\n  mongo_replication_lag: 5\n")
+	mkSub(t, dir, "finance")
+	writeTestYAML(t, filepath.Join(dir, "finance", "_defaults.yaml"),
+		"defaults:\n"+
+			// ⛔ `disable` must be inheritable: neutralising the IsDisabled branch
+			// left the package green while the tenant emitted the root's number
+			// and /effective said disabled.
+			"  mysql_connections: \"disable\"\n"+
+			// ⛔ the inline-severity form resolveBaseRows accepts from tenant files;
+			// no fixture used it, so dropping the `:` split went unnoticed.
+			"  redis_evicted_keys: \"77:critical\"\n"+
+			// ⛔ a YAML bool is a flag, not a threshold — but the round-trip renders
+			// it "false" and IsDisabled counts "false" as a disable synonym, so it
+			// entered the THRESHOLD map and the declared surface.
+			"  paging_enabled: false\n"+
+			// ⛔ a schedule whose value lives ENTIRELY in the windows. Judging
+			// `Default` alone dropped it, leaving /effective rendering the
+			// schedule while the series carried the root value. A
+			// tenant-authored copy of the same block resolves to 88, measured.
+			"  mongo_replication_lag:\n"+
+			"    default: \"\"\n"+
+			"    overrides:\n"+
+			"      - window: \"00:00-23:59\"\n"+
+			"        value: \"88\"\n")
+	writeTestYAML(t, filepath.Join(dir, "finance", "t1.yaml"),
+		"tenants:\n  t1: {}\n")
+
+	m := NewConfigManager(dir)
+	defer m.Close()
+	captureLoad(t, m)
+	cfg := m.GetConfig()
+
+	if _, present := seriesFor(t, m, "t1", "connections"); present {
+		t.Errorf("a subtree `disable` was not inherited: the tenant still emits a " +
+			"threshold while /effective resolves it to disabled")
+	}
+	if got, ok := seriesFor(t, m, "t1", "evicted_keys"); !ok || got != 77 {
+		t.Errorf("inline `value:severity` from a subtree: got %v (present=%v), want 77", got, ok)
+	}
+	if got, ok := seriesFor(t, m, "t1", "replication_lag"); !ok || got != 88 {
+		t.Errorf("a schedule whose value lives only in `overrides:` was dropped: "+
+			"got %v (present=%v), want the window's 88", got, ok)
+	}
+	if _, carried := cfg.Tenants["t1"]["paging_enabled"]; carried {
+		t.Errorf("a YAML bool entered the tenant's THRESHOLD map; tenant map = %v", cfg.Tenants["t1"])
+	}
+	for _, declared := range cfg.OptionalOverrides {
+		if declared == "paging_enabled" {
+			t.Errorf("a YAML bool widened the platform's declared write surface")
+		}
 	}
 }

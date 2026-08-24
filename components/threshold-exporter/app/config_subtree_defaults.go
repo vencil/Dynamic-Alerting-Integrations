@@ -91,6 +91,7 @@ func applySubtreeDefaults(
 	if abs, aerr := filepath.Abs(root); aerr == nil {
 		rootDir = filepath.Clean(abs)
 	}
+	rootDir = resolveScanRoot(rootDir)
 	// Keys this overlay introduced that the ROOT defaults do not carry. See
 	// declareSubtreeKeys for why they have to be declared, and what it costs.
 	subtreeOnly := map[string]struct{}{}
@@ -214,11 +215,64 @@ func declareSubtreeKeys(cfg *ThresholdConfig, subtreeOnly map[string]struct{}) {
 // (#1569 blind review.)
 //
 // ok=false only for a value that cannot be marshalled or that the tenant path
-// would also refuse, and for an explicit null — `key:` with no value is a
-// declaration, not a threshold.
+// would also refuse.
+//
+// ⚠️ The `raw == nil` guard below is REDUNDANT, stated because this file's
+// standard is that a comment names what was measured: removing it changes
+// nothing, since the round-trip renders nil as "null" and the shape filter
+// rejects that anyway. It stays as an explicit statement of intent for
+// `key:` with no value, not because anything depends on it. (#1569.)
 func scheduledValueFromRaw(raw any) (ScheduledValue, bool) {
 	var sv ScheduledValue
 	if raw == nil {
+		return sv, false
+	}
+	// ⛔ SCALAR FAST PATH, and it is a fix rather than an optimisation reflex.
+	// The round-trip costs ~8µs per call against ~10ns for this switch —
+	// measured, ~700-1000× — and it runs once per (tenant, inherited key), so
+	// on the 1000-tenant hierarchical bench it moved
+	// `FullDirLoad_Hierarchical_1000` from +29.67% to +34.74% against
+	// merge-base. That increment is mine, not the structural
+	// two-enumerators cost the PR already discloses.
+	//
+	// ⛔ ONLY THE THREE TYPES BELOW, because only they were MEASURED to give a
+	// byte-identical result to the round-trip. The table run covered
+	// `yes`/`no`/`on`/`off`/`null`/`~`/`007`/`0x10`/empty/space-padded strings
+	// and MaxInt64/MinInt64.
+	//
+	// ⛔ float64 IS DELIBERATELY ABSENT: the two disagree there. YAML renders
+	// 1e6 as "1e+06" while `strconv.FormatFloat(…,'f',-1,64)` renders
+	// "1000000", and at MaxFloat64 the second is 300-odd digits. Both parse
+	// back to the same number, but "the overlay writes what the tenant file
+	// would have held" is the property this function exists to guarantee, and
+	// only the round-trip has it. Floats in a defaults file are rare next to
+	// integers, so the slow path costs nothing that matters.
+	// `TestTheScalarFastPathMatchesTheRoundTrip` pins all of this.
+	switch v := raw.(type) {
+	case string:
+		sv.Default = v
+		return sv, true
+	case int:
+		sv.Default = strconv.Itoa(v)
+		return sv, true
+	case int64:
+		sv.Default = strconv.FormatInt(v, 10)
+		return sv, true
+	case bool:
+		// ⛔ A YAML BOOL IS NEVER A THRESHOLD, and this branch is load-bearing
+		// rather than defensive. The round-trip renders `false` as the STRING
+		// "false", and `config.IsDisabled` counts "false" and "off" as disable
+		// synonyms — so a plain feature flag in a subtree defaults file
+		// (`paging_enabled: false`) passed the threshold-shape filter, entered
+		// the tenant's THRESHOLD map, and was appended to the platform's
+		// declared surface. Measured: tenant map
+		// `map[paging_enabled:false redis_evicted_keys:44]`, declared
+		// `[paging_enabled redis_evicted_keys]`, no warning anywhere.
+		// A tenant writing the string "false" in its own file is a deliberate
+		// disable; a YAML bool in a defaults file is a flag. The types are
+		// distinguishable here and nowhere downstream. (#1569 blind review —
+		// the earlier version of this function had the branch and this round
+		// dropped it.)
 		return sv, false
 	}
 	encoded, err := yaml.Marshal(raw)
@@ -258,7 +312,34 @@ func scheduledValueFromRaw(raw any) (ScheduledValue, bool) {
 // map. Inheriting those through a subtree is a separate feature with its own
 // resolution path; it is not silently half-done here.
 func isThresholdShaped(sv ScheduledValue) bool {
-	raw := strings.TrimSpace(sv.Default)
+	if thresholdScalar(sv.Default) {
+		return true
+	}
+	// ⛔ A SCHEDULE CAN CARRY ITS VALUE ENTIRELY IN THE WINDOWS. `default: ""`
+	// with a populated `overrides:` list is a shape `ScheduledValue.ResolveValue`
+	// honours — measured on a tenant-authored control, which emitted 90 inside
+	// the window — so judging `Default` alone dropped the inherited copy and
+	// left the two planes disagreeing again: `/effective` rendered the whole
+	// schedule while the series carried the ROOT's 50. Found independently by
+	// two reviewers. (#1569.)
+	//
+	// ⚠️ An `overrides:`-only mapping with NO `default:` key at all is a
+	// different shape and is correctly rejected: `UnmarshalYAML` takes its
+	// arbitrary-mapping branch there, so nothing is decoded into `Overrides`
+	// and the tenant path resolves it to the platform value too. Measured
+	// both ways.
+	for _, window := range sv.Overrides {
+		if thresholdScalar(window.Value) {
+			return true
+		}
+	}
+	return false
+}
+
+// thresholdScalar reports whether one rendered value is something
+// `resolveBaseRows` could turn into a series.
+func thresholdScalar(value string) bool {
+	raw := strings.TrimSpace(value)
 	if raw == "" {
 		return false
 	}
