@@ -3,12 +3,13 @@ package main
 // The acceptance criterion for #1521, written BEFORE the fix and independent
 // of which fix is chosen.
 //
-// ⛔ THIS FILE IS RED ON PURPOSE until #1521 lands. It is the first commit of
-// that branch, not a shippable state: a tenant declared in a conf.d
-// SUBDIRECTORY resolves through `Resolve()` / `/effective` but never reaches
-// `GetConfig()`, so `ThresholdCollector` emits no `user_threshold` for it and
-// its alerts never fire. #1526 shipped observability only — it makes the
-// divergence loud, it does not close it.
+// ⛔ IT WAS RED WHEN IT LANDED, as the first commit of the branch, and the
+// order was the point: the criterion had to be fixed before the design was, or
+// it would have been written to match whatever the implementation happened to
+// do. The defect it pinned — a tenant declared in a conf.d SUBDIRECTORY
+// resolving through `Resolve()` / `/effective` while never reaching
+// `GetConfig()`, so `ThresholdCollector` emits no `user_threshold` and its
+// alerts can never fire — is closed. #1526 had only made the divergence loud.
 //
 // ⛔ WHY IT IS WRITTEN THIS WAY. The existing tests miss this defect for two
 // reasons this file deliberately does not repeat:
