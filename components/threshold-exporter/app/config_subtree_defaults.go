@@ -215,7 +215,7 @@ func keyCanReachTheOutputPlane(cfg *ThresholdConfig, key string) bool {
 	// `canonicalizeDefaults`/`canonicalizeOverrides` before any row is built,
 	// so a subtree key written with a retired spelling emits under its
 	// canonical name. Measured: with `mysql_threads_running` as a root default
-	// and `mysql_cpu: 42` inherited from a subtree, a tenant authoring
+	// and the retired spelling carrying 42 inherited from a subtree, a tenant authoring
 	// `mysql_cpu` emitted 42 on both the canonical and the legacy twin while
 	// the inheritor was refused and stayed at the root's 80.
 	if canon, ok := config.CanonicalKeyFor(key); ok {

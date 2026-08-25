@@ -730,9 +730,10 @@ func assertDivergenceLineNames(t *testing.T, logs, name string) {
 //	`k_critical`    → resolveCriticalRows
 //	`_state_<name>` → ResolveStateFiltersAt
 //
-// and a fourth case is the declared surface being consulted under the wrong
-// spelling: the resolvers canonicalize deprecated aliases first, so a subtree
-// key written with a retired name reaches the plane under its canonical twin.
+// The fourth case — the declared surface consulted under a RETIRED spelling —
+// lives in `config_subtree_alias_test.go`, because writing that key with a
+// value is the exact shape the #1231 re-introduction guard forbids and that
+// file is the named exception.
 //
 // ⛔ `_state_` IS THE ONE WITH A SAFETY CONSEQUENCE: refusing an inherited
 // `"disable"` silently switched a tenant's maintenance filter back ON
@@ -745,8 +746,6 @@ func TestKeysServedByTheirOwnResolverAreNeverRefused(t *testing.T) {
 			"  'mysql_connections{env=\"prod\"}': 70\n", `mysql_connections{env="prod"}`},
 		{"critical", "  mysql_connections: 80\n",
 			"  mysql_connections_critical: 95\n", "mysql_connections_critical"},
-		{"deprecated-alias", "  mysql_threads_running: 80\n",
-			"  mysql_cpu: 42\n", "mysql_cpu"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()

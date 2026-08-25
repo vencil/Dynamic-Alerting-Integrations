@@ -1221,7 +1221,7 @@ repos:
         name: "#1231: forbid re-introducing the retired mysql_cpu threshold key as a live value"
         entry: '\bmysql_[c]pu(_critical)?["'']?\s*:\s*(["'']?[0-9.]|["'']?disable|\{|\s*$)|tenant:alert_threshold:mysql_[c]pu'
         language: pygrep
-        exclude: ^(CHANGELOG\.md|components/threshold-exporter/app/pkg/config/aliases_test\.go|components/threshold-exporter/app/config_alias_collector_test\.go|components/tenant-api/internal/handler/tenant_deprecation_test\.go|components/tenant-api/internal/gitops/writer_deprecation_test\.go|tools/portal/tests/playground-validation\.test\.ts|tests/ops/test_generate_alertmanager_routes\.py|tests/lint/test_check_threshold_registry\.py)$
+        exclude: ^(CHANGELOG\.md|components/threshold-exporter/app/pkg/config/aliases_test\.go|components/threshold-exporter/app/config_alias_collector_test\.go|components/threshold-exporter/app/config_subtree_alias_test\.go|components/tenant-api/internal/handler/tenant_deprecation_test\.go|components/tenant-api/internal/gitops/writer_deprecation_test\.go|tools/portal/tests/playground-validation\.test\.ts|tests/ops/test_generate_alertmanager_routes\.py|tests/lint/test_check_threshold_registry\.py)$
         # #1231 renamed mysql_cpu → mysql_threads_running (the metric never
         # measured host CPU%). Prose mentions ("renamed from mysql_cpu") and the
         # alias SSOT (`mysql_cpu: mysql_threads_running` — value is an
