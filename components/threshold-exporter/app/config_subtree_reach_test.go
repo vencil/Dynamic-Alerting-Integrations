@@ -412,10 +412,14 @@ func TestARelativeConfigDirStillTellsTheRootApart(t *testing.T) {
 			"relative -config-dir; the root file was mistaken for a subtree one. "+
 			"tenant map = %v", overrides)
 	}
-	if line := logBuf.String(); !strings.Contains(line, "redis_evicted_keys") {
-		t.Errorf("control: the genuine subtree-only key must still be reported, or this "+
-			"test would pass with the overlay doing nothing at all; log:\n%s", line)
-	}
+	// ⛔ ASSERTED ON THE DIVERGENCE LINE, NOT ANYWHERE IN THE LOG. Measured:
+	// with the reachability gate deleted outright this key is DELIVERED, no
+	// divergence ERROR fires at all — and a bare `Contains(log, key)` still
+	// passed, because `ValidateTenantKeys` then logs
+	// `WARN: unknown key "redis_evicted_keys" not in defaults` for the very
+	// same key. The control was matching the symptom of the bug it was meant
+	// to rule out. (#1569 blind review.)
+	assertDivergenceLineNames(t, logBuf.String(), "redis_evicted_keys")
 }
 
 // TestNonThresholdSubtreeKeysStayOutOfTheCollectorPlane pins that the shape
@@ -426,13 +430,20 @@ func TestARelativeConfigDirStillTellsTheRootApart(t *testing.T) {
 // not on the declared surface, and NOT in the divergence report either.
 // Reporting it would train operators to ignore the line: the audit's whole
 // value is that everything it names is genuinely a threshold that cannot fire.
+//
+// ⚠️ THE FIXTURE CARRIES A GENUINELY UNREACHABLE THRESHOLD KEY TOO. An earlier
+// version had only non-threshold keys plus one globally-declared threshold, so
+// the reachability gate could be deleted outright with this test staying green
+// — it never reached the branch whose ORDERING its own name claims to pin.
+// (#1569 blind review.)
 func TestNonThresholdSubtreeKeysStayOutOfTheCollectorPlane(t *testing.T) {
 	dir := t.TempDir()
 	writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"),
 		"defaults:\n  mysql_connections: 50\n")
 	mkSub(t, dir, "finance")
 	writeTestYAML(t, filepath.Join(dir, "finance", "_defaults.yaml"),
-		"defaults:\n  region: us-east\n  pages:\n    - b\n  mysql_connections: 44\n")
+		"defaults:\n  region: us-east\n  pages:\n    - b\n  mysql_connections: 44\n"+
+			"  redis_evicted_keys: 55\n")
 	writeTestYAML(t, filepath.Join(dir, "finance", "t1.yaml"),
 		"tenants:\n  t1: {}\n")
 
@@ -460,14 +471,16 @@ func TestNonThresholdSubtreeKeysStayOutOfTheCollectorPlane(t *testing.T) {
 	if got, ok := seriesFor(t, m, "t1", "connections"); !ok || got != 44 {
 		t.Fatalf("control: the threshold-shaped subtree value must still arrive, got %v (present=%v)", got, ok)
 	}
-	// A tree whose only oddity is non-threshold metadata is HEALTHY.
-	if got := testutil.ToFloat64(fresh.hierarchyDivergentTenants); got != 0 {
-		t.Errorf("da_config_hierarchy_divergent_tenants = %v, want 0 — non-threshold "+
-			"metadata in a subtree defaults file is not a divergence", got)
+	// The genuinely unreachable THRESHOLD key is reported — and it is what
+	// makes the assertions above discriminating, because it forces the
+	// reachability branch to run at all.
+	assertDivergenceLineNames(t, logBuf.String(), "redis_evicted_keys")
+	if got := testutil.ToFloat64(fresh.hierarchyDivergentTenants); got != 1 {
+		t.Errorf("da_config_hierarchy_divergent_tenants = %v, want 1", got)
 	}
 	if logs := logBuf.String(); strings.Contains(logs, "invalid declared threshold") ||
 		strings.Contains(logs, "unknown key") {
-		t.Errorf("a valid tree logs threshold-validation noise:\n%s", logs)
+		t.Errorf("refusing a key must not also hand it to the validators:\n%s", logs)
 	}
 }
 
@@ -679,5 +692,254 @@ func TestWhatASubtreeMayAndMayNotHandDown(t *testing.T) {
 		if declared == "paging_enabled" {
 			t.Errorf("a YAML bool widened the platform's declared write surface")
 		}
+	}
+}
+
+// assertDivergenceLineNames checks a name appears in the divergence ERROR
+// itself, not merely somewhere in the log.
+//
+// ⛔ WHY THE DISTINCTION IS LOAD-BEARING. When the reachability gate is
+// removed the key is delivered instead of refused, no divergence line is
+// printed at all — but `ValidateTenantKeys` then logs `unknown key "<name>"`
+// for the same key, so a whole-log `Contains` still matches. Measured: that
+// mutation left the assertion green with zero divergence output.
+func assertDivergenceLineNames(t *testing.T, logs, name string) {
+	t.Helper()
+	for _, line := range strings.Split(logs, "\n") {
+		if !strings.Contains(line, "conf.d scanner divergence") {
+			continue
+		}
+		if strings.Contains(line, name) {
+			return
+		}
+		t.Errorf("the divergence ERROR does not name %q; line:\n%s", name, line)
+		return
+	}
+	t.Errorf("no divergence ERROR was logged at all, so %q cannot be named in one; log:\n%s", name, logs)
+}
+
+// TestKeysServedByTheirOwnResolverAreNeverRefused covers the shapes the
+// reachability gate must let through.
+//
+// ⛔ EVERY ONE OF THESE WAS MEASURED BEING DROPPED by a broader version of the
+// gate, while a tenant writing the IDENTICAL key in its own file got it
+// emitted. They do not go through the declared surface at all — three separate
+// resolvers read the tenant's override map directly:
+//
+//	`k{label="v"}`  → resolveDimensionalRows
+//	`k_critical`    → resolveCriticalRows
+//	`_state_<name>` → ResolveStateFiltersAt
+//
+// and a fourth case is the declared surface being consulted under the wrong
+// spelling: the resolvers canonicalize deprecated aliases first, so a subtree
+// key written with a retired name reaches the plane under its canonical twin.
+//
+// ⛔ `_state_` IS THE ONE WITH A SAFETY CONSEQUENCE: refusing an inherited
+// `"disable"` silently switched a tenant's maintenance filter back ON
+// (`ResolveStateFilters` went from empty to `[{t1 maintenance warning}]`).
+func TestKeysServedByTheirOwnResolverAreNeverRefused(t *testing.T) {
+	for _, tc := range []struct {
+		name, rootDefaults, subtreeKey, wantInMap string
+	}{
+		{"dimensional", "  mysql_connections: 80\n",
+			"  'mysql_connections{env=\"prod\"}': 70\n", `mysql_connections{env="prod"}`},
+		{"critical", "  mysql_connections: 80\n",
+			"  mysql_connections_critical: 95\n", "mysql_connections_critical"},
+		{"deprecated-alias", "  mysql_threads_running: 80\n",
+			"  mysql_cpu: 42\n", "mysql_cpu"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"), "defaults:\n"+tc.rootDefaults)
+			mkSub(t, dir, "finance")
+			writeTestYAML(t, filepath.Join(dir, "finance", "_defaults.yaml"), "defaults:\n"+tc.subtreeKey)
+			writeTestYAML(t, filepath.Join(dir, "finance", "t1.yaml"), "tenants:\n  t1: {}\n")
+
+			m, fresh, logBuf := newAuditedManager(t, dir)
+			if err := m.Load(); err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if _, got := m.GetConfig().Tenants["t1"][tc.wantInMap]; !got {
+				t.Errorf("%s: the inherited key was refused, but a tenant authoring the "+
+					"identical key in its own file gets it emitted; tenant map = %v",
+					tc.name, m.GetConfig().Tenants["t1"])
+			}
+			if got := testutil.ToFloat64(fresh.hierarchyDivergentTenants); got != 0 {
+				t.Errorf("%s: a deliverable key was reported as a divergence (gauge=%v); "+
+					"the audit must only name thresholds that genuinely cannot fire", tc.name, got)
+			}
+			if strings.Contains(logBuf.String(), "conf.d scanner divergence") {
+				t.Errorf("%s: divergence ERROR on a healthy tree:\n%s", tc.name, logBuf.String())
+			}
+		})
+	}
+
+	// `_state_` gets its own body because the assertion is behavioural, not
+	// just presence: the inherited disable must actually take effect.
+	t.Run("state-filter-disable", func(t *testing.T) {
+		dir := t.TempDir()
+		writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"),
+			"defaults:\n  mysql_connections: 80\n"+
+				"state_filters:\n  maintenance:\n    severity: warning\n    default_state: enable\n")
+		mkSub(t, dir, "finance")
+		writeTestYAML(t, filepath.Join(dir, "finance", "_defaults.yaml"),
+			"defaults:\n  _state_maintenance: \"disable\"\n")
+		writeTestYAML(t, filepath.Join(dir, "finance", "t1.yaml"), "tenants:\n  t1: {}\n")
+
+		m, fresh, _ := newAuditedManager(t, dir)
+		if err := m.Load(); err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if filters := m.GetConfig().ResolveStateFilters(); len(filters) != 0 {
+			t.Errorf("the inherited `disable` did not take effect — the tenant's "+
+				"maintenance filter is back ON: %v", filters)
+		}
+		if got := testutil.ToFloat64(fresh.hierarchyDivergentTenants); got != 0 {
+			t.Errorf("a legitimate tree was reported as divergent (gauge=%v)", got)
+		}
+	})
+}
+
+// TestTheReportAttributesEachKeyToItsOwnTenant needs more than one tenant,
+// which every other fixture in this round lacks.
+//
+// ⛔ With a single tenant, a bug that files every refused key under one ID —
+// or under the wrong one — is indistinguishable from correct behaviour.
+func TestTheReportAttributesEachKeyToItsOwnTenant(t *testing.T) {
+	dir := t.TempDir()
+	writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"), "defaults:\n  mysql_connections: 80\n")
+	mkSub(t, dir, "finance")
+	mkSub(t, dir, "ops")
+	writeTestYAML(t, filepath.Join(dir, "finance", "_defaults.yaml"),
+		"defaults:\n  redis_evicted_keys: 100\n")
+	writeTestYAML(t, filepath.Join(dir, "finance", "fin.yaml"), "tenants:\n  fin: {}\n")
+	writeTestYAML(t, filepath.Join(dir, "ops", "_defaults.yaml"),
+		"defaults:\n  kafka_lag_seconds: 900\n")
+	writeTestYAML(t, filepath.Join(dir, "ops", "ops-a.yaml"), "tenants:\n  ops-a: {}\n")
+
+	m, fresh, logBuf := newAuditedManager(t, dir)
+	if err := m.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := testutil.ToFloat64(fresh.hierarchyDivergentTenants); got != 2 {
+		t.Errorf("gauge = %v, want 2 — it counts TENANTS, and two of them are "+
+			"affected by different keys", got)
+	}
+	var line string
+	for _, l := range strings.Split(logBuf.String(), "\n") {
+		if strings.Contains(l, "conf.d scanner divergence") {
+			line = l
+		}
+	}
+	if line == "" {
+		t.Fatalf("no divergence ERROR; log:\n%s", logBuf.String())
+	}
+	// ⛔ Each key must sit next to ITS OWN tenant. A report that names both
+	// keys but attributes them to one tenant passes a naive Contains check.
+	for _, want := range []string{"fin", "redis_evicted_keys", "ops-a", "kafka_lag_seconds"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("the report never mentions %q; line:\n%s", want, line)
+		}
+	}
+	finAt := strings.Index(line, "fin (")
+	opsAt := strings.Index(line, "ops-a (")
+	redisAt := strings.Index(line, "redis_evicted_keys")
+	kafkaAt := strings.Index(line, "kafka_lag_seconds")
+	if finAt < 0 || opsAt < 0 || redisAt < 0 || kafkaAt < 0 {
+		t.Fatalf("cannot locate the per-tenant segments; line:\n%s", line)
+	}
+	// Entries are sorted by tenant ID, so `fin` precedes `ops-a`; each key must
+	// fall inside its own tenant's segment.
+	if !(finAt < redisAt && redisAt < opsAt) {
+		t.Errorf("redis_evicted_keys is not attributed to `fin`; line:\n%s", line)
+	}
+	if !(opsAt < kafkaAt) {
+		t.Errorf("kafka_lag_seconds is not attributed to `ops-a`; line:\n%s", line)
+	}
+}
+
+// TestAChangedUnreachableSetRePrintsTheReport covers the de-duplication key.
+//
+// ⛔ The ERROR is printed once per CHANGE, not once per commit, and the change
+// signature is built from the affected tenants. It carried tenant IDs and
+// source paths but NOT the refused keys — so a tenant whose refused set
+// changed while its ID and path did not was suppressed as a repeat. Measured:
+// rewriting `finance/_defaults.yaml` from `redis_evicted_keys` to
+// `kafka_lag_seconds` printed ZERO lines on the second load while the gauge
+// correctly stayed at 1, leaving the operator's only line naming a key that no
+// longer existed and never naming the new one. (#1569 blind review.)
+func TestAChangedUnreachableSetRePrintsTheReport(t *testing.T) {
+	dir := t.TempDir()
+	writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"), "defaults:\n  mysql_connections: 80\n")
+	mkSub(t, dir, "finance")
+	writeTestYAML(t, filepath.Join(dir, "finance", "t1.yaml"), "tenants:\n  t1: {}\n")
+	writeTestYAML(t, filepath.Join(dir, "finance", "_defaults.yaml"),
+		"defaults:\n  redis_evicted_keys: 100\n")
+
+	m, _, logBuf := newAuditedManager(t, dir)
+	if err := m.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	assertDivergenceLineNames(t, logBuf.String(), "redis_evicted_keys")
+
+	// Same tenant, same file path, DIFFERENT refused key.
+	logBuf.Reset()
+	writeTestYAML(t, filepath.Join(dir, "finance", "_defaults.yaml"),
+		"defaults:\n  kafka_lag_seconds: 900\n")
+	if err := m.Load(); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	assertDivergenceLineNames(t, logBuf.String(), "kafka_lag_seconds")
+
+	// ...and an unchanged repeat still stays quiet, or the de-duplication that
+	// makes this line readable at all would be gone.
+	logBuf.Reset()
+	if err := m.Load(); err != nil {
+		t.Fatalf("third load: %v", err)
+	}
+	if strings.Contains(logBuf.String(), "conf.d scanner divergence") {
+		t.Errorf("an unchanged repeat re-printed the ERROR:\n%s", logBuf.String())
+	}
+}
+
+// TestTheRefusedSetIsRefreshedOnTheIncrementalPath closes the asymmetry between
+// the two fields the commit hands to the audit.
+//
+// ⛔ `tenantSources` is snapshotted on every commit; the refused set was
+// written in ONE loader. A root `_defaults.yaml` edit is a flat key, so
+// `anyNestedKey` does not redirect it to the full loader — and the audit then
+// reported a set belonging to the previous config. Measured: after the tree
+// was repaired the gauge stayed at 1, and only a later full `Load()` cleared
+// it. Latent rather than live (the production watch path goes through the full
+// loader), fixed because the asymmetry is exactly the kind that becomes live.
+func TestTheRefusedSetIsRefreshedOnTheIncrementalPath(t *testing.T) {
+	dir := t.TempDir()
+	writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"), "defaults:\n  mysql_connections: 80\n")
+	mkSub(t, dir, "finance")
+	writeTestYAML(t, filepath.Join(dir, "finance", "_defaults.yaml"),
+		"defaults:\n  redis_evicted_keys: 100\n")
+	writeTestYAML(t, filepath.Join(dir, "finance", "t1.yaml"), "tenants:\n  t1: {}\n")
+
+	m, fresh, _ := newAuditedManager(t, dir)
+	if err := m.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := testutil.ToFloat64(fresh.hierarchyDivergentTenants); got != 1 {
+		t.Fatalf("precondition: gauge = %v, want 1", got)
+	}
+
+	// Repair the tree by declaring the key at the ROOT — a flat key.
+	writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"),
+		"defaults:\n  mysql_connections: 80\n  redis_evicted_keys: 10\n")
+	if err := m.IncrementalLoad(); err != nil {
+		t.Fatalf("IncrementalLoad: %v", err)
+	}
+	if got := testutil.ToFloat64(fresh.hierarchyDivergentTenants); got != 0 {
+		t.Errorf("gauge = %v after the tree was repaired through the incremental path — "+
+			"the audit is reporting a refused set from an earlier config", got)
+	}
+	if _, delivered := m.GetConfig().Tenants["t1"]["redis_evicted_keys"]; !delivered {
+		t.Errorf("the now-declared key was not delivered on the incremental path; "+
+			"tenant map = %v", m.GetConfig().Tenants["t1"])
 	}
 }

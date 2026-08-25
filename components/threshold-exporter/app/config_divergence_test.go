@@ -713,7 +713,7 @@ func TestDivergenceAudit_TheGaugeIsSetUnderTheSameLockAsTheMemory(t *testing.T) 
 		lockHeldDuringSet = true
 	}
 
-	d.recordAndDecide([]string{"a"}, map[string]string{"a": "/x/a.yaml"}, probe)
+	d.recordAndDecide([]string{"a"}, map[string]string{"a": "/x/a.yaml"}, nil, probe)
 	if !setCalled {
 		t.Fatal("setGauge was never called — the probe proves nothing")
 	}
@@ -727,7 +727,7 @@ func TestDivergenceAudit_TheGaugeIsSetUnderTheSameLockAsTheMemory(t *testing.T) 
 	// Control: the same probe must also run on the healthy (empty) path, so
 	// the assertion above cannot be satisfied by one branch alone.
 	lockHeldDuringSet, setCalled = false, false
-	d.recordAndDecide(nil, nil, probe)
+	d.recordAndDecide(nil, nil, nil, probe)
 	if !setCalled || !lockHeldDuringSet {
 		t.Errorf("empty-set path: setCalled=%v lockHeld=%v — the gauge must be "+
 			"Set under the lock on BOTH branches", setCalled, lockHeldDuringSet)
@@ -967,10 +967,10 @@ func TestDivergenceLogState_TheKeyCannotBeAmbiguousAcrossTenantAndSource(t *test
 	var d divergenceLogState
 	noop := func(int) {}
 
-	if !d.recordAndDecide([]string{"a"}, map[string]string{"a": "bc"}, noop) {
+	if !d.recordAndDecide([]string{"a"}, map[string]string{"a": "bc"}, nil, noop) {
 		t.Fatalf("first set must be reported as new")
 	}
-	if !d.recordAndDecide([]string{"ab"}, map[string]string{"ab": "c"}, noop) {
+	if !d.recordAndDecide([]string{"ab"}, map[string]string{"ab": "c"}, nil, noop) {
 		t.Errorf("{ab → c} is a DIFFERENT divergent set from {a → bc} and must " +
 			"be reported as new; without the tenant/source separator both " +
 			"render as \"abc\" and the second one is silently swallowed")
@@ -1009,7 +1009,7 @@ func TestDivergenceLogState_TheKeyCannotBeAmbiguousAcrossAdjacentPairs(t *testin
 		map[string]string{
 			"acme-corp": "/etc/conf.d/xy",
 			"z-tenant":  "/etc/other.yaml",
-		}, noop)
+		}, nil, noop)
 	if !first {
 		t.Fatalf("first set must be reported as new")
 	}
@@ -1019,7 +1019,7 @@ func TestDivergenceLogState_TheKeyCannotBeAmbiguousAcrossAdjacentPairs(t *testin
 		map[string]string{
 			"acme-corp": "/etc/conf.d/x",
 			"yz-tenant": "/etc/other.yaml",
-		}, noop)
+		}, nil, noop)
 	if !second {
 		t.Errorf("a divergent set that shares no tenant ID and no path with the " +
 			"previous one must be reported as new; without the separator after " +

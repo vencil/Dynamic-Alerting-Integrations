@@ -155,14 +155,12 @@ func applySubtreeDefaults(
 				// state is "not delivered, and LOUD about it" — recorded here
 				// and reported by the divergence audit. The one thing this
 				// must never be again is silent. (#1569 blind review.)
-				if _, global := cfg.Defaults[key]; !global {
-					if !declaredIn(cfg.OptionalOverrides, key) {
-						if unreachable[tenantID] == nil {
-							unreachable[tenantID] = map[string]struct{}{}
-						}
-						unreachable[tenantID][key] = struct{}{}
-						continue
+				if !keyCanReachTheOutputPlane(cfg, key) {
+					if unreachable[tenantID] == nil {
+						unreachable[tenantID] = map[string]struct{}{}
 					}
+					unreachable[tenantID][key] = struct{}{}
+					continue
 				}
 				if overrides == nil {
 					overrides = map[string]ScheduledValue{}
@@ -182,9 +180,83 @@ func applySubtreeDefaults(
 	return filled, unreachableKeys(unreachable)
 }
 
-// declaredIn reports whether the platform already recognises this key.
-func declaredIn(declared []string, key string) bool {
-	for _, d := range declared {
+// keyCanReachTheOutputPlane reports whether SOMETHING downstream will iterate
+// this key if the overlay writes it into a tenant's override map.
+//
+// ⛔ AN EARLIER VERSION OF THIS CHECK WAS `cfg.Defaults ∪ cfg.OptionalOverrides`
+// AND THAT IS TOO STRICT — measured, three separate shapes were dropped that a
+// tenant writing the identical key in its OWN file gets emitted:
+//
+//	inherited `mysql_connections{env="prod"}: 70`  → no series; the same key
+//	    authored by a tenant emitted `env=prod … = 70`
+//	inherited `mysql_connections_critical: 95`     → no series; authored emitted
+//	    `severity=critical … = 95`
+//	inherited `_state_maintenance: "disable"`      → the tenant's maintenance
+//	    filter came back ON (`ResolveStateFilters` = [{t1 maintenance warning}])
+//	    and a legitimate tree got a divergence ERROR
+//
+// The reason is that those three do not go through the declared surface at all:
+// `resolveDimensionalRows`, `resolveCriticalRows` and `ResolveStateFiltersAt`
+// each iterate the tenant's override map DIRECTLY. Refusing them bought
+// nothing and lost behaviour — and for `_state_` it lost a SAFETY setting,
+// silently re-enabling something a subtree had switched off.
+//
+// So the refusal is now narrowed to exactly the shape it was built for: a
+// plain base key that only `resolveBaseRows` / `resolveDeclaredRows` could
+// serve, and that neither of them will find. (#1569 blind review.)
+func keyCanReachTheOutputPlane(cfg *ThresholdConfig, key string) bool {
+	if keyBypassesTheDeclaredSurface(key) {
+		return true
+	}
+	if declaredAnywhere(cfg, key) {
+		return true
+	}
+	// ⛔ CANONICALIZE BEFORE GIVING UP. `ResolveAtWithStats` runs
+	// `canonicalizeDefaults`/`canonicalizeOverrides` before any row is built,
+	// so a subtree key written with a retired spelling emits under its
+	// canonical name. Measured: with `mysql_threads_running` as a root default
+	// and `mysql_cpu: 42` inherited from a subtree, a tenant authoring
+	// `mysql_cpu` emitted 42 on both the canonical and the legacy twin while
+	// the inheritor was refused and stayed at the root's 80.
+	if canon, ok := config.CanonicalKeyFor(key); ok {
+		return declaredAnywhere(cfg, canon)
+	}
+	return false
+}
+
+// keyBypassesTheDeclaredSurface reports whether this key is served by a
+// resolver that reads the tenant's override map directly.
+//
+// ⚠️ `_critical` is included even though `resolveCriticalRows` does consult
+// `defaults[base]`: writing it costs nothing when the base is absent (the row
+// simply is not built, exactly as for a tenant who authored the key in its own
+// file), and refusing it would drop the common case where the base IS a root
+// default.
+func keyBypassesTheDeclaredSurface(key string) bool {
+	switch {
+	case strings.Contains(key, "{"): // resolveDimensionalRows
+		return true
+	case strings.HasSuffix(key, criticalKeySuffix): // resolveCriticalRows
+		return true
+	case strings.HasPrefix(key, "_state_"), // ResolveStateFiltersAt
+		strings.HasPrefix(key, "_silent_"), // ResolveSilentModes
+		strings.HasPrefix(key, "_routing"), // ResolveRouting
+		key == "_severity_dedup":           // ResolveSeverityDedup
+		return true
+	}
+	return false
+}
+
+// criticalKeySuffix mirrors pkg/config's unexported `criticalSuffix`.
+const criticalKeySuffix = "_critical"
+
+// declaredAnywhere reports whether the platform recognises this exact key on
+// either surface `resolveBaseRows` / `resolveDeclaredRows` iterate.
+func declaredAnywhere(cfg *ThresholdConfig, key string) bool {
+	if _, global := cfg.Defaults[key]; global {
+		return true
+	}
+	for _, d := range cfg.OptionalOverrides {
 		if d == key {
 			return true
 		}

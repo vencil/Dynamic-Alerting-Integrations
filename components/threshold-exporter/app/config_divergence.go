@@ -235,7 +235,7 @@ func (m *ConfigManager) auditHierarchyDivergence(
 	// leaf lock last also keeps the only possible order m.mu → d.mu.
 	metrics := m.getMetrics()
 	if !m.divergence.recordAndDecide(
-		divergent, tenantSources, metrics.SetHierarchyDivergentTenants) {
+		divergent, tenantSources, unreachable, metrics.SetHierarchyDivergentTenants) {
 		return len(divergent)
 	}
 	m.getLogger().Print(formatDivergenceLog(divergent, tenantSources, unreachable, m.path, context))
@@ -305,18 +305,34 @@ type divergenceLogState struct {
 // a Prometheus Gauge.Set, which takes no locks of ours and calls nothing back.
 // Do not pass anything that touches m.mu here.
 func (d *divergenceLogState) recordAndDecide(
-	divergent []string, sources map[string]string, setGauge func(int),
+	divergent []string, sources map[string]string,
+	unreachable map[string][]string, setGauge func(int),
 ) bool {
 	// The key carries the SOURCE PATHS, not just the tenant IDs, because the
 	// log line names both. With IDs alone, the same tenants moving from
 	// `conf.d/db/a.yaml` to `conf.d/db/deep/a.yaml` kept the key identical,
 	// so nothing re-printed and the one line the operator had went on
 	// pointing at a path that no longer existed.
+	//
+	// ⛔ AND IT CARRIES THE UNREACHABLE KEYS FOR THE SAME REASON, one field
+	// down. The line names them too, so a tenant whose unreachable set CHANGES
+	// while its ID and path do not was suppressed as a repeat: measured with
+	// `finance/_defaults.yaml` rewritten from `redis_evicted_keys` to
+	// `kafka_lag_seconds`, the second load printed ZERO lines while the gauge
+	// correctly stayed at 1 — so the only line the operator had went on naming
+	// a key that no longer existed, and the new one was never named at all.
+	// This is the same defect the path component above was added to fix.
+	// (#1569 blind review.)
 	var b strings.Builder
 	for _, tid := range divergent {
 		b.WriteString(tid)
 		b.WriteByte(0)
 		b.WriteString(sources[tid])
+		b.WriteByte(0)
+		for _, k := range unreachable[tid] {
+			b.WriteString(k)
+			b.WriteByte(1)
+		}
 		b.WriteByte(0)
 	}
 	key := b.String()

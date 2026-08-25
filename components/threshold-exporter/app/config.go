@@ -635,6 +635,32 @@ func (m *ConfigManager) IncrementalLoad() error {
 	// Phase 4: merge — incremental tenant patch when only tenant files changed,
 	// full rebuild when a _defaults/_profiles/_state_filters file changed.
 	var merged ThresholdConfig
+	// ⛔ #1569: THIS PATH MUST REFRESH THE REFUSED-KEY SET TOO. `m.hierarchy`
+	// is not re-scanned here (a nested change was redirected to `fullDirLoad`
+	// above), but `cfg.Defaults` CAN change on this path — a root
+	// `_defaults.yaml` edit is a flat key — and the refused set is derived
+	// from it. Leaving the field alone made the audit report a set belonging
+	// to an earlier config: measured, the gauge stayed at 1 after the tree was
+	// repaired and only a later full `Load()` cleared it.
+	//
+	// ⚠️ Latent rather than live: the production watch path reaches
+	// `fullDirLoad` via `installNewHierarchyState`, so a real deployment
+	// refreshes it. Fixed anyway — the asymmetry between the two fields
+	// `installConfig` returns is exactly the kind that becomes live later.
+	refreshRefused := func(merged *ThresholdConfig) {
+		m.mu.RLock()
+		var td map[string][]string
+		if m.hierarchy.graph != nil {
+			td = m.hierarchy.graph.TenantDefaults
+		}
+		pd := m.hierarchy.parsedDefaults
+		m.mu.RUnlock()
+		_, unreachable := applySubtreeDefaults(merged, m.path, td, pd)
+		m.mu.Lock()
+		m.hierarchy.unreachableInherited = unreachable
+		m.mu.Unlock()
+	}
+
 	if isTenantOnlyChange(changed, added, removed) && m.config != nil {
 		// Incremental patch: copy existing merged config, patch only affected
 		// tenants. Avoids the O(N) merge for the common "1 tenant file changed"
@@ -648,6 +674,7 @@ func (m *ConfigManager) IncrementalLoad() error {
 		merged = mergePartialConfigs(newConfigs)
 		merged.ApplyProfiles()
 	}
+	refreshRefused(&merged)
 
 	m.commitConfig(&merged, compositeHash, &flatScanState{
 		hashes:  newHashes,
