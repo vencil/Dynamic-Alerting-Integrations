@@ -849,10 +849,10 @@ func TestTheReportAttributesEachKeyToItsOwnTenant(t *testing.T) {
 	}
 	// Entries are sorted by tenant ID, so `fin` precedes `ops-a`; each key must
 	// fall inside its own tenant's segment.
-	if !(finAt < redisAt && redisAt < opsAt) {
+	if finAt >= redisAt || redisAt >= opsAt {
 		t.Errorf("redis_evicted_keys is not attributed to `fin`; line:\n%s", line)
 	}
-	if !(opsAt < kafkaAt) {
+	if opsAt >= kafkaAt {
 		t.Errorf("kafka_lag_seconds is not attributed to `ops-a`; line:\n%s", line)
 	}
 }
