@@ -205,7 +205,7 @@ func applySubtreeDefaults(
 // plain base key that only `resolveBaseRows` / `resolveDeclaredRows` could
 // serve, and that neither of them will find. (#1569 blind review.)
 func keyCanReachTheOutputPlane(cfg *ThresholdConfig, key string) bool {
-	if keyBypassesTheDeclaredSurface(key) {
+	if keyBypassesTheDeclaredSurface(cfg, key) {
 		return true
 	}
 	if declaredAnywhere(cfg, key) {
@@ -227,23 +227,62 @@ func keyCanReachTheOutputPlane(cfg *ThresholdConfig, key string) bool {
 // keyBypassesTheDeclaredSurface reports whether this key is served by a
 // resolver that reads the tenant's override map directly.
 //
-// ⚠️ `_critical` is included even though `resolveCriticalRows` does consult
-// `defaults[base]`: writing it costs nothing when the base is absent (the row
-// simply is not built, exactly as for a tenant who authored the key in its own
-// file), and refusing it would drop the common case where the base IS a root
-// default.
-func keyBypassesTheDeclaredSurface(key string) bool {
+// ⛔ THE ARMS MIRROR EACH RESOLVER'S ENTRY CONDITION, NOT ITS KEY NAMING.
+// A prefix is only safe to bypass on when the resolver ALSO keys off that
+// prefix; where it keys off a declared set instead, this asks the set. Getting
+// that wrong is #1339's shape one directory down — two mechanisms enumerating
+// one key space with different predicates — and it is what put a reader-less
+// key into a tenant map with nothing reporting it.
+//
+// ⚠️ `_critical` and dimensional keys stay unconditional even though both
+// resolvers have a further condition (`defaults[base]` must exist / the label
+// set must parse). Both WARN on their own when it fails, so the outcome is
+// loud without this gate repeating it — and refusing them here would drop the
+// common case where the base IS a root default. Measured: a `_critical` with
+// no base default produces two WARN lines, an unparseable dimensional key
+// two more; `_state_<undeclared>` and `_routing_bogus` produced none, which
+// is why only those two moved.
+func keyBypassesTheDeclaredSurface(cfg *ThresholdConfig, key string) bool {
 	switch {
 	case strings.Contains(key, "{"): // resolveDimensionalRows
 		return true
 	case strings.HasSuffix(key, criticalKeySuffix): // resolveCriticalRows
 		return true
-	case strings.HasPrefix(key, "_state_"), // ResolveStateFiltersAt
-		strings.HasPrefix(key, "_silent_"), // ResolveSilentModes
-		strings.HasPrefix(key, "_routing"), // ResolveRouting
-		key == "_severity_dedup":           // ResolveSeverityDedup
+	case strings.HasPrefix(key, "_state_"):
+		// ⛔ ASK THE CONSUMER, DO NOT PATTERN-MATCH ITS NAME.
+		// `ResolveStateFiltersAt` iterates `c.StateFilters` and looks up
+		// `"_state_"+filterName` in each tenant's map — it never walks the
+		// tenant's keys. So a `_state_` key naming a filter the platform does
+		// not declare is read by nobody, and `_state_` being a valid reserved
+		// PREFIX means `ValidateTenantKeys` does not warn either. Bypassing on
+		// the prefix wrote such a key into the tenant map with no reader and no
+		// report — the exact "silence plus a wrong number" this gate exists to
+		// prevent, one shape narrower. Measured on a tree whose root declares
+		// no `state_filters:` at all: `_state_no_such_filter: disable` landed
+		// in the tenant map, changed no resolver output, and appeared in
+		// neither the divergence report nor any WARN. (#1569 sweep B-1.)
+		_, declared := cfg.StateFilters[strings.TrimPrefix(key, "_state_")]
+		return declared
+	case key == "_silent_mode", // ResolveSilentModesAt
+		key == "_severity_dedup": // ResolveSeverityDedup
 		return true
 	}
+	// ⛔ EVERY OTHER RESERVED KEY IS DELIBERATELY ABSENT. `_routing` /
+	// `_routing_profile` / `_metadata` / `_custom_alerts` / `_namespaces` /
+	// `_profile` all need a mapping, a list or a name — none of which survives
+	// `isThresholdShaped`, so this gate never sees them. What the old
+	// `HasPrefix(key, "_routing")` arm DID admit was junk under that prefix:
+	// `_routing_bogus: 5` is threshold-shaped, `ResolveRouting` reads only the
+	// exact key `_routing`, and `_routing` is a valid reserved prefix so
+	// nothing warns. Same silent shape as `_state_` above; both were found by
+	// crossing every resolver's entry condition against every key shape this
+	// overlay can write, rather than by re-reading the predicate.
+	//
+	// The mirror-image case is `_silent_bogus`: also unreadable, but
+	// `_silent_` is NOT a reserved prefix, so `ValidateTenantKeys` already
+	// WARNs "unknown reserved key". Dropping it from the bypass makes it
+	// refused-and-reported too, which is the same verdict said twice — not a
+	// regression, just no longer relying on a warning from another subsystem.
 	return false
 }
 
