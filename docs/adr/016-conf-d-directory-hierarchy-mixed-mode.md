@@ -129,25 +129,35 @@ Directory Scanner 的設計哲學是「檔案系統即 source of truth」。
 | 面 | 階層 `conf.d/` |
 |:--|:--|
 | threshold-exporter **函式庫**（`pkg/config` 的 `ResolveEffective`；`/effective`、`describe_tenant.py` 走這裡） | ✅ 完整遞迴繼承 |
-| threshold-exporter **實際吐出的 metric** | ⛔ **仍是平面** — 見下方修正與 #1521 |
+| threshold-exporter **實際吐出的 metric** | ✅ 完整遞迴繼承（#1521 修復；在那之前是平面，見下方補記） |
 | `validate_config.py` | ✅ 已改為遞迴 |
 | 路由生成器 / 其餘平面工具 | ⚠️ **仍是平面**，但會列出被跳過的檔案並指回本節 |
 
-> ⚠️ **修正（2026-08-22）**：本表原本只有一列 `threshold-exporter（閾值）｜✅ 完整遞迴繼承`，那對**函式庫**成立、對 **exporter 真正吐出去的 metric 不成立**。
-> 遞迴掃描器（`scanDirHierarchical`）是 **opt-in**——`config_hierarchy.go` 的檔頭就寫著它「without disturbing the single-level `scanDirFileHashes` path — **callers opt in** by invoking `scanDirHierarchical` directly」，
-> 而餵給 `GetConfig()` 的兩條路（`IncrementalLoad` / `fullDirLoad`）用的都是平面的 `scanDirFileHashes`。
+> ⚠️ **補記（2026-08-22 發現 → 2026-08-24 關閉，#1521）**：本表原本只有一列
+> `threshold-exporter（閾值）｜✅ 完整遞迴繼承`，那對**函式庫**成立、對 **exporter
+> 真正吐出去的 metric 一度不成立**。紀錄保留在這裡，因為它是本 ADR 自己曾經
+> 過度宣稱的證據——刪掉等於把「文件保護缺陷」這件事也一併抹掉。
 >
-> 實測（根目錄一份合法 `_defaults.yaml` + 頂層 `top-tenant.yaml` + `sub/nested-tenant.yaml`，跑 `NewConfigManager(dir).Load()`）：
+> 當時的形狀：遞迴掃描器（`scanDirHierarchical`）是 **opt-in**，而餵給
+> `GetConfig()` 的兩條路（`IncrementalLoad` / `fullDirLoad`）用的都是平面的
+> `scanDirFileHashes`。同一份設定、兩個 reader、母體不相等：
 >
 > ```text
-> Mode()               = directory
-> GetConfig().Tenants  = [top-tenant]
-> ResolveAt tenants    = map[top-tenant:true]
+> GetConfig().Tenants  = [top-tenant]          ← 子目錄裡的租戶不在
+> Resolve("nested")    = ok=true               ← /effective 查得到
 > ```
 >
-> **子目錄裡的租戶不會出現在任何 metric 裡**，而 `/effective` 查得到它——同一份設定，兩個 reader 的母體不相等。
-> 這與 [#1469](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1469) 描述的是同一類缺陷（該票收在「一個 reader 遞迴、另一個平面，兩者的母體因此永遠不會相等」），只是那張票談的是 Python 側、這裡是 Go 側。
-> **保留「應該遞迴」這個承諾、只更正現況描述**：把承諾改寫成符合現行實作，會讓這個缺陷從「可以修」變成「被文件保護」。
+> ⇒ 租戶配了閾值，`/metrics` 沒有對應 series，**告警永遠不會觸發**，而且零訊號。
+> 這與 [#1469](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1469)
+> 是同一類缺陷（一個 reader 遞迴、另一個平面），只是那張票談 Python 側。
+>
+> **#1521 的修法**：`scanDirFileHashes` 改遞迴、map key 改為 root-relative 路徑
+> （裸檔名會讓 `a/x.yaml` 與 `x.yaml` 互撞）、副檔名比對改大小寫不敏感（實測
+> `UPPER.YAML` **放在頂層**就會重現同一個症狀），並把每個租戶的 L1..Ln 繼承值
+> 在 commit 前物化進它自己的覆寫 map——否則只修好 presence，`/effective` 與
+> series 會對同一個租戶報不同的數。⚠️ 子目錄的 `_defaults.yaml` **不進**全域
+> `Defaults`：那個 map 沒有子樹 scope，混進去會重新定價全樹每一個沒有自己覆寫
+> 的租戶。
 
 ⇒ **路由面尚未支援階層布局**：`_routing_defaults` 與租戶本體的 `_routing` 在子目錄裡
 不會被任何元件消費。要用路由就把租戶檔放在 `conf.d/` 頂層。
@@ -155,35 +165,6 @@ Directory Scanner 的設計哲學是「檔案系統即 source of truth」。
 這個「平面但出聲」的契約由 `tests/shared/test_confd_enumeration_contract.py` 強制：
 新工具若平面讀取又不出聲會被擋下來，**選擇必須是刻意的**。共用列舉層在
 `scripts/tools/_lib_confd.py`。
-
-### ⛔ #1521：上面那個「仍是平面」在平台上留下什麼訊號（2026-08-22 補記）
-
-上面的 ⚠️ 修正已經證明「目錄深度不影響 metric label」對 exporter 實際吐出的
-metric 不成立。本節只補兩件那段沒講的事：**是哪兩個掃描器**，以及 **#1526 之後
-平台會不會出聲**。
-
-| 掃描器 | 列舉方式 | 出海口 |
-|:--|:--|:--|
-| `config_hierarchy.go` `scanDirHierarchical` | `filepath.WalkDir` — **遞迴，每一層** | `hierarchy.tenantSources` → `Resolve()` → `/effective` |
-| `flat_scanner.go` `scanDirFileHashes` | `os.ReadDir` + `if IsDir() { continue }` — **只有頂層** | `m.config` → `ThresholdCollector` → `/metrics` |
-
-#1526 之前是**零信號**：沒有 ERROR、沒有 WARN、沒有 parse_failure，連
-"Config loaded" 統計行都看不出來。
-
-現況（#1526 止血後）：新增 gauge `da_config_hierarchy_divergent_tenants` 會**點名**
-受害租戶，並在受影響集合**變化**時（含冷啟動、以及歸零後復發）印一行 ERROR——
-但**沒有修好**，那些租戶仍然不產生指標。
-
-⚠️ 純平面模式（全樹沒有任何 `_defaults.yaml`）下 gauge 可能維持 `0` 直到重啟，
-**別把 0 讀成「已完整檢查」**。兩個成因由
-`TestDivergenceAudit_HotReload_FlatModeNeverDetects`
-（`components/threshold-exporter/app/config_divergence_test.go`）釘住，該測試同時
-斷言「重啟後 gauge == 1」；面向維運的描述在
-[threshold-exporter README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md)
-§3.3。
-
-⇒ 在 #1521 關閉前：**要指標，租戶檔就得放在 `conf.d/` 頂層**。
-關閉 #1521 的那支 PR 同時負責移除本節與還原上面的表格列。
 
 ## 相關
 

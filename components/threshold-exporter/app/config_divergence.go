@@ -4,37 +4,38 @@ package main
 // conf.d dual-scanner divergence audit (#1521)
 // ============================================================
 //
-// THE DEFECT THIS FILE MAKES AUDIBLE (it does NOT fix it)
+// WHAT THIS FILE GUARDS (the defect it was built for is CLOSED)
 //
-// conf.d/ is read by two independent scanners with two different
-// definitions of "which files exist":
+// conf.d/ is read by two independent scanners:
 //
-//	flat_scanner.go  scanDirFileHashes    os.ReadDir + `if IsDir() { continue }`
-//	                                      → top level ONLY
+//	flat_scanner.go  scanDirFileHashes    filepath.WalkDir, recursive
 //	                 → fullDirLoad → mergePartialConfigs → m.config
 //	                 → GetConfig() → ThresholdCollector → /metrics
 //
-//	config_hierarchy.go scanDirHierarchical  filepath.WalkDir
-//	                                      → RECURSIVE, every depth
+//	config_hierarchy.go scanDirHierarchical  filepath.WalkDir, recursive
 //	                 → m.hierarchy.tenantSources → Resolve() → /effective
 //
-// Nothing compared the two populations. A tenant file placed in a
-// sub-directory (`conf.d/db/hier-tenant.yaml`) is therefore resolvable
-// via /effective, absent from /metrics, and — before this file — emitted
-// ZERO signal: no ERROR, no WARN, no parse_failure, nothing in the
-// "Config loaded" stats line. ADR-016 §"目錄深度不影響 metric label"
+// They originally disagreed by construction: the flat one was
+// `os.ReadDir` + `if IsDir() { continue }`, so a tenant file one directory
+// down (`conf.d/db/hier-tenant.yaml`) resolved via /effective, was absent
+// from /metrics, and emitted ZERO signal — no ERROR, no WARN, no
+// parse_failure, nothing in the "Config loaded" stats line. ADR-016
+// §"目錄深度不影響 metric label"
 // (docs/adr/016-conf-d-directory-hierarchy-mixed-mode.md:115) promises the
-// opposite.
+// opposite. This file made that audible; #1521 then made the flat scanner
+// recursive, so depth is no longer a cause.
 //
-// SCOPE OF THIS FILE (deliberately narrow — issue #1521 "option C")
-//
-// Stop-the-bleeding only: compare the two populations on every config
-// commit, name the casualties in an ERROR log, and expose the size of the
-// divergence as a gauge. The nested tenants still produce no metrics
-// afterwards. Actually teaching the collector-side pipeline to see nested
-// tenant files is a separate change with a much larger blast radius
-// (merge precedence, composite-hash construction, per-file cache keys,
-// duplicate detection across depths) and is intentionally NOT done here.
+// ⛔ THE AUDIT IS NOT OBSOLETE, and the reason is not sentimental. The two
+// scanners still parse what they find SEPARATELY, so a file can be dropped
+// by one and kept by the other. The reachable cause today is a file whose
+// platform block fails the flat parse: `Defaults` is
+// `map[string]float64`, so a `defaults:` entry of the wrong shape makes
+// `parsePartialConfig` discard the WHOLE file — tenants and all — while
+// the hierarchical walker, which reads the same file for its `tenants:`
+// declarations only, still registers them. Measured: `cfg.Tenants` empty,
+// `hierarchy.tenantSources` = [t-bad]. Two enumerators over one tree is
+// the defect CLASS (#1339); recursion closed one instance of it, not the
+// class, which is why this gauge stays armed and why #1568 exists.
 //
 // ⛔ WHY THIS IS NOT FAIL-CLOSED (rejecting the load on divergence)
 //
@@ -95,13 +96,30 @@ const divergenceIssueURL = "https://github.com/vencil/Dynamic-Alerting-Integrati
 // An empty tenantSources therefore yields nil rather than "everything is
 // divergent": it means the hierarchical view has nothing to say (not
 // populated / flat-only tree), not that every tenant vanished.
-func hierarchyDivergentTenants(tenantSources map[string]string, cfg *ThresholdConfig) []string {
+// ⛔ PRESENCE IS NOT THE ONLY WAY THE TWO PLANES DISAGREE, and treating it
+// as such made this gauge worse than useless for one whole class. A tenant
+// whose subtree `_defaults.yaml` introduces a key that neither `cfg.Defaults`
+// nor `cfg.OptionalOverrides` carries IS in `cfg.Tenants` — so the presence
+// check passes — while `/effective` reports a value the collector can never
+// emit. Measured: gauge 0, no ERROR, and a threshold silently missing. That
+// is the exact "silence plus a wrong number" this ticket set out to kill,
+// surviving one layer down. (#1569 blind review.)
+//
+// unreachable is tenantID → keys in that state, from the same lock window as
+// tenantSources.
+func hierarchyDivergentTenants(
+	tenantSources map[string]string, cfg *ThresholdConfig, unreachable map[string][]string,
+) []string {
 	if len(tenantSources) == 0 || cfg == nil {
 		return nil
 	}
 	var divergent []string
 	for tid := range tenantSources {
 		if _, visible := cfg.Tenants[tid]; !visible {
+			divergent = append(divergent, tid)
+			continue
+		}
+		if len(unreachable[tid]) > 0 {
 			divergent = append(divergent, tid)
 		}
 	}
@@ -113,14 +131,23 @@ func hierarchyDivergentTenants(tenantSources map[string]string, cfg *ThresholdCo
 // auditHierarchyDivergence so a test can assert the wording (the
 // consequence sentence is the whole point of the message) without driving
 // a full load.
-func formatDivergenceLog(divergent []string, tenantSources map[string]string, root, context string) string {
+func formatDivergenceLog(
+	divergent []string, tenantSources map[string]string, unreachable map[string][]string,
+	root, context string,
+) string {
 	var b strings.Builder
 	fmt.Fprintf(&b,
-		"ERROR: conf.d scanner divergence (%s): %d tenant(s) are visible to the hierarchical scanner (/effective) "+
-			"but ABSENT from the merged config that feeds the collector — these tenants emit NO user_threshold series, "+
-			"so their alerts can never fire. Cause: the flat scanner reads only the top level of %s, so tenant files in "+
-			"sub-directories never reach /metrics (ADR-016 requires directory depth NOT to affect metric labels). "+
-			"Workaround: move the tenant file to the conf.d root. Tracking: %s. Affected:",
+		"ERROR: conf.d scanner divergence (%s): %d tenant(s) resolve through the hierarchical scanner (/effective) "+
+			"to thresholds the collector cannot emit, so those alerts can never fire. Two causes, both under %s. "+
+			"(a) The tenant is ABSENT from the merged config: its file was dropped while building that config but "+
+			"still declared it to the hierarchical walker — most often a platform block that fails to parse "+
+			"(`defaults:` takes numbers only), which discards the WHOLE file including its `tenants:`; "+
+			"look for the ERROR/WARN line naming that file earlier in this log. "+
+			"(b) The tenant is present but inherits a key that exists ONLY in a subtree `_defaults.yaml`: "+
+			"nothing iterates such a key (the collector walks the ROOT defaults and the declared surface, and a "+
+			"nested `_` file feeds neither), so /effective shows a value that never becomes a series. "+
+			"Workaround for (b): declare the key in the conf.d ROOT `_defaults.yaml` or in `optional_overrides:`. "+
+			"Tracking: %s. Affected:",
 		context, len(divergent), root, divergenceIssueURL)
 
 	shown := divergent
@@ -131,6 +158,11 @@ func formatDivergenceLog(divergent []string, tenantSources map[string]string, ro
 		sep := " "
 		if i > 0 {
 			sep = ", "
+		}
+		if keys := unreachable[tid]; len(keys) > 0 {
+			fmt.Fprintf(&b, "%s%s (%s; unreachable inherited key(s): %s)",
+				sep, tid, tenantSources[tid], strings.Join(keys, ", "))
+			continue
 		}
 		fmt.Fprintf(&b, "%s%s (%s)", sep, tid, tenantSources[tid])
 	}
@@ -193,19 +225,20 @@ func formatDivergenceLog(divergent []string, tenantSources map[string]string, ro
 // see the gauge-vs-counter note on da_config_hierarchy_divergent_tenants
 // in config_metrics.go.
 func (m *ConfigManager) auditHierarchyDivergence(
-	cfg *ThresholdConfig, tenantSources map[string]string, context string,
+	cfg *ThresholdConfig, tenantSources map[string]string,
+	unreachable map[string][]string, context string,
 ) int {
-	divergent := hierarchyDivergentTenants(tenantSources, cfg)
+	divergent := hierarchyDivergentTenants(tenantSources, cfg, unreachable)
 	// ⛔ getMetrics() BEFORE taking d.mu, never inside it: it acquires
 	// m.mu.RLock and m.mu is not reentrant, so a future edit that moved this
 	// audit inside commitConfig's lock window would self-deadlock. Taking the
 	// leaf lock last also keeps the only possible order m.mu → d.mu.
 	metrics := m.getMetrics()
 	if !m.divergence.recordAndDecide(
-		divergent, tenantSources, metrics.SetHierarchyDivergentTenants) {
+		divergent, tenantSources, unreachable, metrics.SetHierarchyDivergentTenants) {
 		return len(divergent)
 	}
-	m.getLogger().Print(formatDivergenceLog(divergent, tenantSources, m.path, context))
+	m.getLogger().Print(formatDivergenceLog(divergent, tenantSources, unreachable, m.path, context))
 	return len(divergent)
 }
 
@@ -272,18 +305,34 @@ type divergenceLogState struct {
 // a Prometheus Gauge.Set, which takes no locks of ours and calls nothing back.
 // Do not pass anything that touches m.mu here.
 func (d *divergenceLogState) recordAndDecide(
-	divergent []string, sources map[string]string, setGauge func(int),
+	divergent []string, sources map[string]string,
+	unreachable map[string][]string, setGauge func(int),
 ) bool {
 	// The key carries the SOURCE PATHS, not just the tenant IDs, because the
 	// log line names both. With IDs alone, the same tenants moving from
 	// `conf.d/db/a.yaml` to `conf.d/db/deep/a.yaml` kept the key identical,
 	// so nothing re-printed and the one line the operator had went on
 	// pointing at a path that no longer existed.
+	//
+	// ⛔ AND IT CARRIES THE UNREACHABLE KEYS FOR THE SAME REASON, one field
+	// down. The line names them too, so a tenant whose unreachable set CHANGES
+	// while its ID and path do not was suppressed as a repeat: measured with
+	// `finance/_defaults.yaml` rewritten from `redis_evicted_keys` to
+	// `kafka_lag_seconds`, the second load printed ZERO lines while the gauge
+	// correctly stayed at 1 — so the only line the operator had went on naming
+	// a key that no longer existed, and the new one was never named at all.
+	// This is the same defect the path component above was added to fix.
+	// (#1569 blind review.)
 	var b strings.Builder
 	for _, tid := range divergent {
 		b.WriteString(tid)
 		b.WriteByte(0)
 		b.WriteString(sources[tid])
+		b.WriteByte(0)
+		for _, k := range unreachable[tid] {
+			b.WriteString(k)
+			b.WriteByte(1)
+		}
 		b.WriteByte(0)
 	}
 	key := b.String()

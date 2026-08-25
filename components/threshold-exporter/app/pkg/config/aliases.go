@@ -67,6 +67,33 @@ var legacyKeyByCanonical = func() map[string]string {
 // Everything else — including typos that merely share the prefix, like
 // mysql_cpu_util — is returned unchanged (exact-match contract, see the
 // package comment's ⛔ note).
+// CanonicalKeyFor resolves a deprecated spelling to its canonical one
+// (exported for the overlay's reachability check and for testing).
+func CanonicalKeyFor(key string) (string, bool) { return canonicalKeyFor(key) }
+
+// LegacySpellingFor is CanonicalKeyFor's inverse: given a canonical key it
+// returns the retired spelling that resolves to it, across all three shapes
+// (exact, `_critical`-suffixed, dimensional).
+//
+// The overlay's reachability check needs both directions, because a root
+// `_defaults.yaml` may still carry the retired spelling while a subtree has
+// already moved to the canonical one. Exported rather than reconstructed at
+// the call site: the caller's only alternative is scanning every platform
+// default per candidate key per tenant, which is O(tenants x keys x defaults)
+// on a path that runs on every reload.
+//
+// ⛔ IT DELEGATES RATHER THAN REIMPLEMENTS, and that is the point. The first
+// version handled only the base shape, with a comment claiming `_critical` and
+// dimensional keys "never take that route — they are served by their own
+// resolvers". Measured false: five such shapes (`_state_X_critical`,
+// `_silent_X_critical`, `_routing_X{…}`, `_state_X{…}`, `_silent_X{…}`) reach
+// `declaredAnywhere`. A differential over the whole reachable key space found
+// no behaviour change today — but only because the single alias in the
+// registry has a base that carries none of those prefixes. That is an accident
+// of the current table, not a property, and the next alias would have made the
+// two predicates disagree. (#1569 blind review.)
+func LegacySpellingFor(canonical string) (string, bool) { return legacySpellingFor(canonical) }
+
 func canonicalKeyFor(key string) (string, bool) {
 	if canon, ok := deprecatedKeyAliases[key]; ok {
 		return canon, true

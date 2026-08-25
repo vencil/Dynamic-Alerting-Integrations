@@ -29,8 +29,10 @@ package main
 import (
 	"crypto/sha256"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -66,11 +68,95 @@ func loadFile(path string) (ThresholdConfig, string, error) {
 // (drives the underscore severity choice); `path` is the display path used for
 // logs and the metric basename. Shared by IncrementalLoad and fullDirLoad so
 // the flat-mode parse paths report failures identically.
+// scanKeyBase is the underscore convention's unit of judgement: the FILE NAME,
+// not the whole scan key. Keys are root-relative slash paths since #1521
+// (`nested/_defaults.yaml`), and every `_`-prefix test in this package means
+// "is this file platform-scoped" — a question the directory part cannot answer.
+// One helper so the three call sites cannot drift apart, and so
+// `parsePartialConfig`, whose own parameter is named `path`, can ask it without
+// shadowing the package.
+func scanKeyBase(key string) string { return path.Base(key) }
+
+// resolveScanRoot is the ONE derivation of "which directory is the conf.d
+// root" that every enumerator over that tree must use.
+//
+// ⛔ IT EXISTS BECAUSE HAVING TWO OF THEM IS THIS TICKET'S ENTIRE DEFECT
+// CLASS. `filepath.WalkDir` lstats its root and never follows a symlink, so
+// each scanner that starts from an unresolved `-config-dir` silently sees an
+// EMPTY tree when that path is a link. Fixing only the flat scanner produced
+// exactly the split this PR closes, one layer down: measured on a symlinked
+// root, `GetConfig()` had the tenant while `hierarchy.enabled` was false and
+// `tenantSources` was empty, so the tenant's series carried the ROOT default
+// (50) instead of the subtree's (90) — and the divergence audit reports only
+// the opposite direction, so the gauge stayed at 0. (#1569 blind review.)
+//
+// ⚠️ Falls back to the given path when resolution fails (dangling link,
+// permission), so the caller's own error handling still decides — this
+// function never turns a broken path into a different one.
+// isNestedPlatformFile reports whether a scan key names an underscore-prefixed
+// platform file BELOW the conf.d root.
+//
+// ⛔ ONE PREDICATE, TWO CALLERS, ON PURPOSE. `fullDirLoad` and
+// `IncrementalLoad` each decide which files reach the merged config, and a
+// predicate copied into both is precisely the shape of the defect this whole
+// change set exists to close: two enumerations over one tree that can drift
+// apart silently. (CodeRabbit, #1569.)
+func isNestedPlatformFile(key string) bool {
+	return strings.Contains(key, "/") && strings.HasPrefix(scanKeyBase(key), "_")
+}
+
+// absScanRoot is resolveScanRoot preceded by the absolutisation every caller
+// needs and one of them once forgot.
+//
+// ⛔ `m.path` is whatever `-config-dir` was given, frequently relative, while
+// the hierarchical scanner stores absolute paths. Comparing the two without
+// this made EVERY defaults file look like a subtree file — measured on the
+// repo's own flat golden fixtures, whose ROOT defaults keys were then copied
+// into tenant maps. That was fixed in place; this hoists the three-line
+// derivation out of the one caller that had it so a second caller cannot get
+// it subtly different. (#1569 sweep B-2.)
+func absScanRoot(dir string) string {
+	clean := filepath.Clean(dir)
+	if abs, err := filepath.Abs(dir); err == nil {
+		clean = filepath.Clean(abs)
+	}
+	return resolveScanRoot(clean)
+}
+
+func resolveScanRoot(dir string) string {
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		return resolved
+	}
+	return dir
+}
+
+// reportUnparseableNestedPlatformFile keeps a genuinely broken nested
+// `_defaults.yaml` / `_profiles.yaml` loud, even though its content is
+// deliberately excluded from the merged config.
+//
+// ⛔ THE DISTINCTION IS BETWEEN "BROKEN" AND "NOT FOR THIS PLANE", and losing
+// it was a severity downgrade. `Defaults` is `map[string]float64`, so a
+// perfectly valid subtree defaults file written in the schedule form fails to
+// decode into `ThresholdConfig` — running the full parse on files this plane
+// discards therefore logged an ERROR for healthy trees. Skipping them outright
+// then went too far the other way: a file with real syntax damage stopped
+// incrementing `parse_failure` and stopped logging at all. A syntax-only probe
+// answers the right question — the same one `ERROR:` has always meant here.
+func reportUnparseableNestedPlatformFile(fullPath string, data []byte, metrics *configMetrics, logger *log.Logger) {
+	var probe any
+	err := yaml.Unmarshal(data, &probe)
+	if err == nil {
+		return // syntactically fine; its content simply is not for this plane
+	}
+	metrics.IncParseFailure(filepath.Base(fullPath))
+	logger.Printf("ERROR: skip unparseable defaults/profiles file %s: %v (entire block dropped — fix file or remove)", fullPath, err)
+}
+
 func parsePartialConfig(name, path string, data []byte, metrics *configMetrics, logger *log.Logger) (ThresholdConfig, bool) {
 	var partial ThresholdConfig
 	if err := yaml.Unmarshal(data, &partial); err != nil {
 		metrics.IncParseFailure(filepath.Base(path))
-		if strings.HasPrefix(name, "_") {
+		if strings.HasPrefix(scanKeyBase(name), "_") {
 			logger.Printf("ERROR: skip unparseable defaults/profiles file %s: %v (entire block dropped — fix file or remove)", path, err)
 		} else {
 			logger.Printf("WARN: skip unparseable file %s: %v", path, err)
@@ -96,29 +182,95 @@ func scanDirFileHashes(dir string, oldHashes map[string]string, oldMtimes map[st
 	if logger == nil {
 		logger = log.Default()
 	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, "", nil, nil, fmt.Errorf("read config dir %s: %w", dir, err)
+	// ⛔ RECURSIVE since #1521. It was `os.ReadDir` + `if IsDir() { continue }`,
+	// which gave this scanner a SMALLER population than the hierarchical one
+	// reading the same tree: a tenant one directory down resolved through
+	// `/effective` and emitted no `user_threshold` at all, with no error and no
+	// metric to notice it by. See `config_nested_tenant_test.go`.
+	//
+	// ⛔ THE MAP KEY IS NOW A ROOT-RELATIVE SLASH PATH, not a bare filename, and
+	// that is load-bearing rather than cosmetic. With bare names `a/x.yaml` and
+	// `x.yaml` collide in `perFile`/`mtimes`/`dataCache` and one of the two
+	// tenants disappears silently — the same failure this change exists to fix.
+	// Callers already rebuild the path as `filepath.Join(m.path, name)`, which
+	// stays correct for a relative path, so the key change is invisible to them.
+	//
+	// ⚠️ WalkDir's error is NOT swallowed: a missing root has to stay a hard
+	// error (the caller treats it as "config dir unreadable"), so it is checked
+	// up front rather than left to the callback.
+	if _, serr := os.Stat(dir); serr != nil {
+		return nil, "", nil, nil, fmt.Errorf("read config dir %s: %w", dir, serr)
 	}
+	// ⛔ THE WALK ROOT IS THE RESOLVED PATH, and that is a fix rather than a
+	// tidy-up. `os.Stat` above follows symlinks, but `filepath.WalkDir` LSTATS
+	// its root and never follows one — so a `-config-dir` that is a symlink to
+	// the real directory was visited once as a non-directory, matched no
+	// `.yaml` suffix, and the walk ended with zero files and a nil error.
+	// `fullDirLoad`'s empty guard then failed the whole load with
+	// "no .yaml files found". Measured: `Load(real dir)` nil vs
+	// `Load(symlink)` "no .yaml files found", at uid 0 and uid 65534 alike.
+	// The pre-#1521 `os.ReadDir` followed the link, so this was a regression
+	// introduced by the recursion, not a pre-existing gap.
+	//
+	// ⚠️ Only the ROOT is resolved. Symlinked entries INSIDE the tree are
+	// still not followed — that is WalkDir's documented behaviour, it matches
+	// the hierarchical scanner walking the same tree, and following them would
+	// open a cycle risk that neither scanner is written to survive.
+	walkRoot := resolveScanRoot(dir)
 
 	type dirFile struct {
-		name string
+		name string      // root-relative, slash-separated
 		info os.FileInfo // from DirEntry.Info(), avoids separate os.Stat
 	}
 	var files []dirFile
-	for _, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() || strings.HasPrefix(name, ".") {
-			continue
-		}
-		if strings.HasSuffix(name, ".yaml") || strings.HasSuffix(name, ".yml") {
-			info, ierr := entry.Info()
-			if ierr != nil {
-				logger.Printf("WARN: skip unreadable entry %s: %v", name, ierr)
-				continue
+	walkErr := filepath.WalkDir(walkRoot, func(full string, entry fs.DirEntry, werr error) error {
+		if werr != nil {
+			// One unreadable subtree must not blank the whole config; the
+			// hierarchical scanner reading the same tree logs and continues too.
+			logger.Printf("WARN: skip unreadable path %s: %v", full, werr)
+			if entry != nil && entry.IsDir() {
+				return fs.SkipDir
 			}
-			files = append(files, dirFile{name: name, info: info})
+			return nil
 		}
+		name := entry.Name()
+		if entry.IsDir() {
+			// Dot-prefixed directories are pruned whole — which also covers the
+			// K8s ConfigMap symlink shims (`..data`, `..2026_04_25_…`), since a
+			// `..` name is a `.` name. Measured on a real mount layout: both
+			// scanners see the two root-level entries and nothing doubled.
+			if full != walkRoot && strings.HasPrefix(name, ".") {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if strings.HasPrefix(name, ".") {
+			return nil
+		}
+		// ⛔ CASE-INSENSITIVE since #1521, matching `config_hierarchy.go` and the
+		// loader itself. It used to be exact, so `UPPER.YAML` AT THE ROOT — no
+		// nesting involved — produced the identical symptom: found by `Resolve()`,
+		// absent from `/metrics`. Two enumerators over one tree with two
+		// different skip rules is the defect class; this closes the second half.
+		lower := strings.ToLower(name)
+		if !strings.HasSuffix(lower, ".yaml") && !strings.HasSuffix(lower, ".yml") {
+			return nil
+		}
+		info, ierr := entry.Info()
+		if ierr != nil {
+			logger.Printf("WARN: skip unreadable entry %s: %v", full, ierr)
+			return nil
+		}
+		rel, rerr := filepath.Rel(walkRoot, full)
+		if rerr != nil {
+			logger.Printf("WARN: skip path outside root %s: %v", full, rerr)
+			return nil
+		}
+		files = append(files, dirFile{name: filepath.ToSlash(rel), info: info})
+		return nil
+	})
+	if walkErr != nil {
+		return nil, "", nil, nil, fmt.Errorf("read config dir %s: %w", dir, walkErr)
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].name < files[j].name })
 
@@ -181,8 +333,13 @@ func applyBoundaryRules(name string, partial *ThresholdConfig, logger *log.Logge
 	if logger == nil {
 		logger = log.Default()
 	}
-	isDefaultsFile := strings.HasPrefix(name, "_")
-	isProfilesFile := name == "_profiles.yaml" || name == "_profiles.yml"
+	// ⛔ BASENAME, not the whole key. Keys are root-relative since #1521, so
+	// `HasPrefix(name, "_")` would read `nested/_defaults.yaml` as a TENANT file
+	// and strip its platform sections with a WARN — quietly, and for a file the
+	// convention plainly marks as platform-scoped.
+	base := scanKeyBase(name)
+	isDefaultsFile := strings.HasPrefix(base, "_")
+	isProfilesFile := base == "_profiles.yaml" || base == "_profiles.yml"
 
 	if !isDefaultsFile {
 		if len(partial.StateFilters) > 0 {

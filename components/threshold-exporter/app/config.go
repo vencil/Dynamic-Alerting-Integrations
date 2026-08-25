@@ -63,6 +63,16 @@ type hierarchyState struct {
 	mergedHashes   map[string]string         // tenantID → 16-char merged_hash
 	graph          *InheritanceGraph         // defaults↔tenants dependency map
 	parsedDefaults map[string]map[string]any // absolute Clean path → parsed defaults dict
+
+	// unreachableInherited is tenantID → sorted keys that the tenant's
+	// subtree defaults chain supplies but that NO emitter can iterate
+	// (absent from both `cfg.Defaults` and `cfg.OptionalOverrides`).
+	//
+	// ⛔ It lives HERE, next to tenantSources, so the divergence audit reads
+	// both from one lock window. Reloads are not serialised, and pairing
+	// reload N's config with reload N+1's diagnosis is exactly the failure
+	// the tenantSources snapshot exists to prevent. (#1569)
+	unreachableInherited map[string][]string
 }
 
 // debouncerState bundles the v2.7.0 Phase 3 burst-coalescing fields.
@@ -332,7 +342,7 @@ func (m *ConfigManager) commitConfig(cfg *ThresholdConfig, hash string, flatScan
 	// config + config-info land in one consistent lock window.
 	configSource, gitCommit := m.detectConfigSource()
 
-	hierTenantSources, afterUnlock := m.installConfig(
+	hierTenantSources, unreachableInherited, afterUnlock := m.installConfig(
 		cfg, hash, flatScan, configSource, gitCommit)
 	if afterUnlock != nil {
 		// Test-only seam, and it must stay the FIRST statement after the
@@ -353,7 +363,7 @@ func (m *ConfigManager) commitConfig(cfg *ThresholdConfig, hash string, flatScan
 	// installNewHierarchyState → fullDirLoad) is covered by construction
 	// rather than by remembering to add a call. Observability only: it
 	// never fails the commit — see config_divergence.go for why not.
-	m.auditHierarchyDivergence(cfg, hierTenantSources, logHeader)
+	m.auditHierarchyDivergence(cfg, hierTenantSources, unreachableInherited, logHeader)
 }
 
 // installConfig performs the atomic swap under m.mu and RETURNS the
@@ -380,7 +390,7 @@ func (m *ConfigManager) commitConfig(cfg *ThresholdConfig, hash string, flatScan
 func (m *ConfigManager) installConfig(
 	cfg *ThresholdConfig, hash string, flatScan *flatScanState,
 	configSource, gitCommit string,
-) (hierTenantSources map[string]string, afterUnlock func()) {
+) (hierTenantSources map[string]string, unreachable map[string][]string, afterUnlock func()) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.config = cfg
@@ -392,7 +402,7 @@ func (m *ConfigManager) installConfig(
 	}
 	m.configSource = configSource
 	m.gitCommit = gitCommit
-	return m.hierarchy.tenantSources, m.afterCommitUnlock
+	return m.hierarchy.tenantSources, m.hierarchy.unreachableInherited, m.afterCommitUnlock
 }
 
 // runHierarchyScanReject runs populateHierarchyState with the
@@ -458,6 +468,20 @@ func (m *ConfigManager) Load() error {
 	return nil
 }
 
+// anyNestedKey reports whether any scan key names a file below the conf.d
+// root. Keys are root-relative slash paths since #1521, so a separator IS the
+// test — no path parsing required.
+func anyNestedKey(groups ...[]string) bool {
+	for _, g := range groups {
+		for _, name := range g {
+			if strings.Contains(name, "/") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (m *ConfigManager) IncrementalLoad() error {
 	// Single-file mode or first load: fall back to full Load
 	if !m.isDir {
@@ -490,6 +514,27 @@ func (m *ConfigManager) IncrementalLoad() error {
 		return nil
 	}
 
+	// ⛔ A SCAN THAT FINDS NOTHING IS AN ERROR, NEVER AN EMPTY CONFIG.
+	// `fullDirLoad` has always treated `len(perFileHashes) == 0` as a hard
+	// error; this path did not, and the asymmetry was a silent total outage.
+	// `diffFileHashes` classifies every known file as REMOVED, the merge of
+	// nothing commits cleanly, and the watch loop logs
+	// "Config reloaded (incremental, 0 changed, 0 added, N removed)" at INFO.
+	// Measured on a symlinked `-config-dir` re-pointed at a directory holding
+	// no YAML — an ordinary step of a blue/green or `..data` swap, no race
+	// needed: `IncrementalLoad` returned nil and `GetConfig().Tenants` went
+	// from 1 to 0. Every tenant's thresholds vanish, every alert stops firing,
+	// and nothing says so. (#1569 blind review.)
+	//
+	// Returning an error keeps the PREVIOUS config live, which is the
+	// fail-safe direction: a stale threshold still protects, an absent one
+	// does not.
+	if len(newHashes) == 0 {
+		return fmt.Errorf(
+			"no .yaml files found in %s during incremental reload — refusing to "+
+				"commit an empty config (previous config kept)", m.path)
+	}
+
 	// Phase 2: diff per-file hashes → identify changed/added/removed
 	m.mu.RLock()
 	oldHashes := m.flat.hashes
@@ -497,6 +542,22 @@ func (m *ConfigManager) IncrementalLoad() error {
 	m.mu.RUnlock()
 
 	changed, added, removed := diffFileHashes(oldHashes, newHashes)
+
+	// ⛔ #1521: a change under a SUBDIRECTORY takes the full path. This one is
+	// not about the merge — it is about `m.hierarchy`, which IncrementalLoad
+	// never refreshes (measured: zero references to it in this function, and
+	// `tenantSources` has exactly two writers, neither on this path). A nested
+	// tenant added here would land in the config with no inheritance chain
+	// known for it, so `applySubtreeDefaults` could not give it the subtree
+	// values `/effective` reports — presence without the right number, which is
+	// the residual this ticket exists to close.
+	//
+	// ⚠️ Cost stated rather than hidden: nested trees lose the tenant-patch
+	// fast path entirely. Flat trees — every deployment that never nests — are
+	// unaffected, because no key contains a separator.
+	if anyNestedKey(changed, added, removed) {
+		return m.fullDirLoad()
+	}
 
 	// Copy cache for mutation — deferred until after diff to avoid
 	// unnecessary allocation when the per-file diff shows no changes
@@ -508,7 +569,23 @@ func (m *ConfigManager) IncrementalLoad() error {
 
 	// Phase 3: re-parse only changed + added files.
 	// Reuse file bytes from scan phase (dataCache) to avoid double disk read.
-	reparse := append(changed, added...)
+	// ⛔ THE COPY IS LOAD-BEARING. `append(changed, added...)` reuses
+	// `changed`'s backing array whenever it has spare capacity, and the sort
+	// below then reorders `changed` IN PLACE. `patchFiles` further down rebuilds
+	// the same list and got `[a.yaml, a.yaml]` — the changed file was never
+	// applied. Measured on one reload that both adds a file and edits another:
+	// `flat.configs["b.yaml"]` held the new value while the published config
+	// kept the old one, with no log and no divergence ERROR; a restart gave the
+	// new value. That is a K8s ConfigMap swap or a git-sync pull carrying two
+	// files, which is the ordinary case.
+	//
+	// ⚠️ IT ONLY REPRODUCES WITH OPTIMISATIONS ON. Under `-gcflags=all=-N -l`
+	// or `-race` the capacity works out differently and the alias disappears —
+	// so does adding a `Printf` anywhere nearby. That is why nine rounds of
+	// tests never saw it: it is invisible to exactly the builds a person
+	// reaches for when investigating. Found by a randomised fast-path-vs-full-
+	// load differential (9 of 300 seeds), not by reading. (#1569 blind review.)
+	reparse := append(append([]string{}, changed...), added...)
 	sort.Strings(reparse)
 	for _, name := range reparse {
 		fullPath := filepath.Join(m.path, name)
@@ -522,6 +599,39 @@ func (m *ConfigManager) IncrementalLoad() error {
 				delete(newConfigs, name)
 				continue
 			}
+		}
+		// ⛔ A nested `_` file is scanned (change detection must see it) but
+		// contributes NOTHING to the merged config. `ThresholdConfig.Defaults`
+		// is ONE global map with no subtree scope, and the merge is
+		// last-writer-wins over sorted keys — so `nested/_defaults.yaml` sorts
+		// after the root's and would re-price every tenant in the tree,
+		// including tenants in unrelated subtrees. Measured; see
+		// `TestASubtreeDefaultNeverLeaksIntoTheGlobalOnes`.
+		//
+		// ⚠️ UNREACHABLE TODAY and kept deliberately: `anyNestedKey` above
+		// redirects any change under a subdirectory to `fullDirLoad`, so no
+		// nested key reaches this loop. It stays as the second line of the
+		// same defence — if that redirect is ever narrowed, the leak it
+		// prevents is silent. Measured unreachable: a `panic` in this branch
+		// does not fire across the whole package suite.
+		//
+		// ⛔ NOT `parsePartialConfig`, BUT NOT SILENT EITHER. Running the full
+		// parse here logs `ERROR: skip unparseable defaults/profiles file …`
+		// for a tree that is entirely valid: `Defaults` is
+		// `map[string]float64`, so a subtree defaults file in the SCHEDULE
+		// form (`{default: "90", overrides: […]}`) — which the hierarchical
+		// plane accepts and `/effective` renders — cannot decode into it.
+		// Skipping outright, though, dropped the parse-failure counter and the
+		// ERROR for files that are GENUINELY broken (measured: a nested
+		// `_defaults.yaml` containing `defaults: [this is not a map` scored 0
+		// on the counter and produced no ERROR — a severity downgrade the
+		// recursion introduced). The probe below separates the two: a syntax
+		// error is still counted and still loud; content this plane simply
+		// does not want is skipped in silence. (#1569 blind review.)
+		if isNestedPlatformFile(name) {
+			reportUnparseableNestedPlatformFile(fullPath, data, m.getMetrics(), m.getLogger())
+			delete(newConfigs, name)
+			continue
 		}
 		partial, ok := parsePartialConfig(name, fullPath, data, m.getMetrics(), m.getLogger())
 		if !ok {
@@ -541,6 +651,106 @@ func (m *ConfigManager) IncrementalLoad() error {
 	// Phase 4: merge — incremental tenant patch when only tenant files changed,
 	// full rebuild when a _defaults/_profiles/_state_filters file changed.
 	var merged ThresholdConfig
+	// ⛔ #1569: THIS PATH MUST REFRESH THE REFUSED-KEY SET TOO. `m.hierarchy`
+	// is not re-scanned here (a nested change was redirected to `fullDirLoad`
+	// above), but `cfg.Defaults` CAN change on this path — a root
+	// `_defaults.yaml` edit is a flat key — and the refused set is derived
+	// from it. Leaving the field alone made the audit report a set belonging
+	// to an earlier config: measured, the gauge stayed at 1 after the tree was
+	// repaired and only a later full `Load()` cleared it.
+	//
+	// ⚠️ Latent rather than live: the production watch path reaches
+	// `fullDirLoad` via `installNewHierarchyState`, so a real deployment
+	// refreshes it. Fixed anyway — the asymmetry between the two fields
+	// `installConfig` returns is exactly the kind that becomes live later.
+	refreshRefused := func(merged *ThresholdConfig) {
+		m.mu.RLock()
+		var td map[string][]string
+		if m.hierarchy.graph != nil {
+			td = m.hierarchy.graph.TenantDefaults
+		}
+		pd := m.hierarchy.parsedDefaults
+		m.mu.RUnlock()
+		_, unreachable := applySubtreeDefaults(merged, m.path, td, pd)
+		m.mu.Lock()
+		m.hierarchy.unreachableInherited = unreachable
+		m.mu.Unlock()
+	}
+
+	// ⛔ ITS SIBLING FIELD WENT STALE THE SAME WAY, AND THAT ONE IS LIVE.
+	// The block above fixed `unreachableInherited` and named the risk —
+	// "the asymmetry between the two fields `installConfig` returns is exactly
+	// the kind that becomes live later". It already was. `tenantSources` is
+	// what `hierarchyDivergentTenants` ITERATES, so a tenant that leaves the
+	// tree lingers there, is found missing from the merged config, and is
+	// reported under cause (a): "its file was dropped while building that
+	// config ... look for the ERROR/WARN line naming that file". There is no
+	// such line, because nothing is broken — the operator deleted the tenant.
+	// Measured both ways it can leave: removing one of two root tenant files,
+	// and emptying a root file that stays on disk, each emitted a full
+	// divergence ERROR naming the departed tenant while the merged config was
+	// correct.
+	//
+	// ⛔ THE THREE CASES ARE TOLD APART BY THIS ROUND'S PARSE RESULT, NOT BY
+	// TENANT ABSENCE. Cause (a)'s TRUE positive is a file that still exists and
+	// failed to parse; pruning on "the tenant is gone from the merged config"
+	// would delete exactly that case, which is the one this audit exists for.
+	// `newHashes` says whether the file is still on disk and `newConfigs` says
+	// whether it parsed this round (upstream deletes the entry when it did
+	// not), so:
+	//
+	//	gone from disk                 → prune (operator deleted the file)
+	//	on disk, parsed, no longer declares the tenant → prune (operator deleted the tenant)
+	//	on disk, did NOT parse         → KEEP, so cause (a) still fires
+	//
+	// Additions are attributed from the flat scan rather than left blank: a
+	// tenant absent from `tenantSources` is never audited at all, which is the
+	// silent direction of the same asymmetry. Never OVERWRITES an existing
+	// attribution — where the two scanners disagree about which file owns a
+	// tenant, the hierarchical one is the authority the audit is written
+	// against.
+	refreshTenantSources := func() {
+		scanRoot := absScanRoot(m.path)
+		scanKey := func(absPath string) (string, bool) {
+			rel, err := filepath.Rel(scanRoot, filepath.Clean(absPath))
+			if err != nil {
+				return "", false
+			}
+			return filepath.ToSlash(rel), true
+		}
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		if m.hierarchy.tenantSources == nil {
+			return // the hierarchical scan never ran; nothing to keep honest
+		}
+		next := make(map[string]string, len(m.hierarchy.tenantSources))
+		for tid, src := range m.hierarchy.tenantSources {
+			key, ok := scanKey(src)
+			if !ok {
+				next[tid] = src // cannot relate it to the scan — leave it alone
+				continue
+			}
+			if _, onDisk := newHashes[key]; !onDisk {
+				continue // the file is gone
+			}
+			if partial, parsed := newConfigs[key]; parsed {
+				if _, declared := partial.Tenants[tid]; !declared {
+					continue // the file parsed and no longer names this tenant
+				}
+			}
+			next[tid] = src
+		}
+		for key, partial := range newConfigs {
+			for tid := range partial.Tenants {
+				if _, known := next[tid]; known {
+					continue
+				}
+				next[tid] = filepath.Join(scanRoot, filepath.FromSlash(key))
+			}
+		}
+		m.hierarchy.tenantSources = next
+	}
+
 	if isTenantOnlyChange(changed, added, removed) && m.config != nil {
 		// Incremental patch: copy existing merged config, patch only affected
 		// tenants. Avoids the O(N) merge for the common "1 tenant file changed"
@@ -552,8 +762,22 @@ func (m *ConfigManager) IncrementalLoad() error {
 	} else {
 		// Full rebuild: _defaults or _profiles changed, must re-merge everything
 		merged = mergePartialConfigs(newConfigs)
-		merged.ApplyProfiles()
 	}
+	// ⛔ BOTH BRANCHES, NOT JUST THE REBUILD. `ApplyProfiles` used to sit inside
+	// the else above, so the tenant-patch path published tenants exactly as
+	// their files spell them — without the profile overlay `Resolve` expects to
+	// find already merged in. Measured on a tenant whose `_profile: gold` supplies
+	// mysql_connections=95: adding an unrelated key to that tenant's own file
+	// dropped it to the platform default 80, silently, until a restart put it
+	// back. A threshold LOOSENED with no signal is this ticket's own shape.
+	//
+	// Hoisted out of the branch rather than duplicated into it: two call sites
+	// is how it drifted in the first place. Re-running is safe — ApplyProfiles
+	// is fill-in-not-overwrite, so a tenant that already carries the key keeps
+	// its own value. (#1569 blind review.)
+	merged.ApplyProfiles()
+	refreshRefused(&merged)
+	refreshTenantSources()
 
 	m.commitConfig(&merged, compositeHash, &flatScanState{
 		hashes:  newHashes,
@@ -593,7 +817,10 @@ func diffFileHashes(oldHashes, newHashes map[string]string) (changed, added, rem
 func isTenantOnlyChange(changed, added, removed []string) bool {
 	for _, group := range [][]string{changed, added, removed} {
 		for _, name := range group {
-			if strings.HasPrefix(name, "_") {
+			// basename: a nested `_defaults.yaml` is still a platform file, and
+			// routing it into the tenant-patch fast path would apply a defaults
+			// edit as if it were a tenant edit (#1521).
+			if strings.HasPrefix(scanKeyBase(name), "_") {
 				return false
 			}
 		}
@@ -619,13 +846,128 @@ func isTenantOnlyChange(changed, added, removed []string) bool {
 //     Without this guard the overwrite below adds the moved tenant and the
 //     removal loop then wrongly drops it again (issue #790).
 //
-// The "did this reload re-introduce it" test relies on the one-tenant-per-file
-// invariant (cross-file duplicate declarations are rejected upstream by the
-// hierarchical scan, issue #127): a tenant that survives the deletion of its
-// file must reappear in an added/changed file, since the file now carrying it
-// necessarily changed hash and thus lands in patchFiles. That lets the removal
-// pass consult only the just-patched tenants, keeping the fast path O(Δchanged
-// files) instead of scanning the whole surviving tree on every reload.
+// ⛔ THE PARAGRAPH THAT USED TO SIT HERE WAS FALSE, and both of its claims are
+// what #1569 measured. It said the removal pass may "consult only the
+// just-patched tenants" because "cross-file duplicate declarations are rejected
+// upstream by the hierarchical scan (issue #127)". They are rejected on a FULL
+// load; this fast path accepts them silently, so a live tree can hold one. Once
+// it does, a tenant surviving the deletion of one declaration does NOT have to
+// reappear in a changed file — the surviving file did not change. The removal
+// pass therefore scans the surviving parses (`reclaimTenantFrom`), which costs
+// O(|newConfigs|) per removed tenant rather than O(1), and removals are rare.
+//
+// ⚠️ `patchedTenants` USED TO BE BUILT HERE AND IS GONE. It recorded the
+// tenants this reload reintroduced, so the removal pass could tell a deletion
+// from a move. Once both removal loops consult the declaration index instead,
+// nothing read it — a reviewer pointed out it had no readers left, and a
+// bookkeeping set nobody reads is a claim that the code does something it does
+// not. The move case is now answered by the index, which knows every file that
+// declares the tenant, not just the ones reparsed this round.
+
+// indexTenantDeclarations maps each tenant to the sorted filenames declaring
+// it, built ONCE per reload.
+//
+// ⛔ THIS EXISTS BECAUSE THE OBVIOUS VERSION WAS QUADRATIC. `reclaimTenantFrom`
+// originally rescanned and re-sorted all of `newConfigs` per patched tenant.
+// With one tenant file changed that is invisible — which is the only case the
+// cost comment measured — but a reload that rewrites the whole tree is
+// O(tenants x files). Measured on 1000 tenant files, all changed:
+// `IncrementalLoad` went 182-195 ms against a full `Load` of 80-94 ms on the
+// same tree, i.e. the fast path became more than twice as slow as the rebuild
+// it exists to avoid. Reachable by anything that regenerates the tree:
+// `assemble_config_dir`, a `da-batchpr` sweep, a formatting migration.
+// (#1569 blind review.)
+func indexTenantDeclarations(newConfigs map[string]ThresholdConfig) tenantDeclarations {
+	names := make([]string, 0, len(newConfigs))
+	for name := range newConfigs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	idx := tenantDeclarations{single: make(map[string]string, len(newConfigs))}
+	for _, name := range names {
+		for tenant := range newConfigs[name].Tenants {
+			if _, seen := idx.single[tenant]; !seen {
+				if _, dup := idx.multi[tenant]; !dup {
+					idx.single[tenant] = name
+					continue
+				}
+			}
+			// Second or later declaration: promote to the slice form.
+			if idx.multi == nil {
+				idx.multi = map[string][]string{}
+			}
+			if first, wasSingle := idx.single[tenant]; wasSingle {
+				idx.multi[tenant] = []string{first}
+				delete(idx.single, tenant)
+			}
+			idx.multi[tenant] = append(idx.multi[tenant], name)
+		}
+	}
+	return idx
+}
+
+// tenantDeclarations answers "which files declare this tenant" without paying
+// for the answer where it is boring.
+//
+// ⛔ A `map[string][]string` COSTS A SLICE PER TENANT, and a tenant declared
+// in two files is invalid — `runHierarchyScanReject` refuses it on a full load
+// — so the slice is waste on essentially every entry. Measured at 1000 tenants:
+// the slice-per-tenant form added ~1005 allocs/op to every incremental reload
+// (16242 → 17247 on BenchmarkIncrementalLoad_1000_OneFileChanged); splitting
+// the rare case out brings it back. (#1569 blind review.)
+type tenantDeclarations struct {
+	single map[string]string   // tenant → its only declaring file
+	multi  map[string][]string // tenant → sorted files, only when >1 declares it
+}
+
+// reclaimTenantFrom returns the overrides the surviving files declare for this
+// tenant, and whether any file does. `sources` comes from
+// indexTenantDeclarations and is in `mergePartialConfigs` order.
+//
+// ⛔ "IS IT STILL DECLARED" IS HALF THE QUESTION; THE OTHER HALF IS "WHOSE
+// VALUE". An earlier version answered only the first, by consulting
+// `patchedTenants` — the tenants reintroduced by files reparsed THIS round.
+// That is "did it move in this reload", a different question again: a tenant
+// declared in two files at once (invalid, hard-rejected by
+// `runHierarchyScanReject` on a full load, but silently accepted by this fast
+// path) vanished the moment either owning file was edited, because the other
+// file did not change and so was absent from `patchedTenants`.
+//
+// ⛔ AND SIMPLY NOT DELETING IT WAS WORSE THAN DELETING IT. Measured: with
+// `a.yaml` declaring the tenant at 11 and `b.yaml` transiently at 22, dropping
+// it from `b.yaml` left the merged config holding 22 — a value NO file on disk
+// declares — where a restart gives 11, and where the previous behaviour at
+// least emitted a divergence ERROR. Loud-and-wrong became silent-and-wrong.
+//
+// ⛔ THE UNION IS PER KEY, NOT WHOLE-MAP REPLACE. `mergePartialInto` copies
+// key-by-key, so two files each contributing a different key both survive a
+// full load. Returning just the last file's map dropped the other's: measured
+// with a platform file's `tenants:` block supplying one key and the tenant's
+// own file another — a legitimate shape the loader documents — one ordinary
+// edit silently dropped the first key back to the platform default, and took
+// the tenant's `_profile` with it.
+//
+// ⚠️ THE SINGLE-SOURCE CASE RETURNS THE PARSED MAP AS-IS, no copy: that is
+// what this loop did before any of the above, it is the overwhelmingly common
+// shape, and copying it was the quadratic cost above.
+func reclaimTenantFrom(newConfigs map[string]ThresholdConfig, declaredIn tenantDeclarations, tenant string) (map[string]ScheduledValue, bool) {
+	if only, single := declaredIn.single[tenant]; single {
+		return newConfigs[only].Tenants[tenant], true
+	}
+	sources := declaredIn.multi[tenant]
+	if len(sources) == 0 {
+		return nil, false
+	}
+	overrides := make(map[string]ScheduledValue)
+	for _, name := range sources {
+		for k, v := range newConfigs[name].Tenants[tenant] {
+			overrides[k] = v // later filename wins, same as mergePartialInto
+		}
+	}
+	return overrides, true
+}
+
 func patchTenants(prev *ThresholdConfig, newConfigs, oldConfigs map[string]ThresholdConfig, changed, added, removed []string) ThresholdConfig {
 	merged := ThresholdConfig{
 		Defaults: prev.Defaults, // shared (immutable between patches)
@@ -641,22 +983,135 @@ func patchTenants(prev *ThresholdConfig, newConfigs, oldConfigs map[string]Thres
 		Tenants:           make(map[string]map[string]ScheduledValue, len(prev.Tenants)),
 	}
 	// Shallow-copy tenants map (keys only, values are immutable per-tenant maps)
+	//
+	// ⛔ "IMMUTABLE" IS AN OBLIGATION ON EVERY LATER STAGE, NOT A FACT. An
+	// untouched tenant's inner map is the SAME OBJECT as the one inside
+	// `m.config`, which `GetConfig()` has already handed to scraping
+	// goroutines — verified by pointer identity across reloads. Two stages
+	// downstream write into tenant maps in place (`ApplyProfiles`,
+	// `applySubtreeDefaults` via `refreshRefused`), and today both are
+	// idempotent fill-ins that never touch a key already present, so a steady
+	// state performs no write at all and `-race` with concurrent scrapes is
+	// clean. Anything added here that OVERWRITES rather than fills in would
+	// mutate config a scrape is reading, with no test to catch it. Either keep
+	// new overlays idempotent or copy the map first. (#1569 blind review, C-1.)
 	for k, v := range prev.Tenants {
 		merged.Tenants[k] = v
 	}
 	// Overwrite tenants from re-parsed (changed + added) files, applied as a
 	// single sorted filename sequence so precedence matches mergePartialConfigs.
-	// patchedTenants records every tenant this reload (re)introduced so the
-	// removal pass below can distinguish a real deletion from a move.
 	patchFiles := append(append([]string{}, changed...), added...)
 	sort.Strings(patchFiles)
-	patchedTenants := make(map[string]struct{})
+	declaredIn := indexTenantDeclarations(newConfigs)
 	for _, name := range patchFiles {
 		if partial, ok := newConfigs[name]; ok {
-			for tenant, overrides := range partial.Tenants {
-				merged.Tenants[tenant] = overrides
-				patchedTenants[tenant] = struct{}{}
+			for tenant := range partial.Tenants {
+				// ⛔ REBUILT FROM EVERY SOURCE, NOT FROM THIS FILE ALONE. This
+				// used to be `merged.Tenants[tenant] = overrides`, which drops
+				// whatever OTHER files contribute to the same tenant —
+				// `mergePartialInto` unions per key, so a full load keeps them.
+				// Measured on the legitimate two-source shape (a platform
+				// file's `tenants:` block supplying one key, the tenant's own
+				// file another): editing the tenant's file silently reverted
+				// the platform-supplied key to the global default AND dropped
+				// its `_profile`, which in turn made ApplyProfiles a no-op and
+				// loosened a profile-supplied threshold from 95 to 60. All of
+				// it silent. Found by the randomised fast-path-vs-full-load
+				// differential, not by reading. (#1569 blind review.)
+				//
+				// ⚠️ COST, RE-MEASURED AFTER TWO WRONG VERSIONS OF THIS NOTE.
+				// The first said "~3 allocations and ~16 KB per reload" — true
+				// for ONE patched tenant, which is the only case it measured,
+				// and badly wrong as a per-reload claim: the implementation it
+				// described rescanned every file per patched tenant, so a
+				// reload that rewrites the whole tree was O(tenants x files).
+				// Measured at 1000 tenant files all changed: `IncrementalLoad`
+				// 182-195 ms against a full `Load` of 80-94 ms on the same tree
+				// — the fast path became slower than the rebuild it exists to
+				// avoid. The declaration index fixed that; current figures on
+				// the same box:
+				//
+				//	1000 files, all changed : 23-25 ms (full Load 87 ms)
+				//	1000 files, one changed : 16246-16247 allocs/op
+				//	                          (16242 before this PR's round 10,
+				//	                           17247 with a slice per tenant)
+				//
+				// ⚠️ BYTES, WHICH BOTH EARLIER VERSIONS OF THIS NOTE OMITTED.
+				// CI's IncrementalLoad_1000_OneFileChanged rose 2.252Mi → 2.330Mi
+				// when the index landed, so the cost was attributed rather than
+				// assumed: same box, same commit, index built vs index removed from
+				// this loop, 5 runs each —
+				//
+				//	no index : 2312856-2345359 B/op, 16239-16240 allocs/op
+				//	index    : 2443019-2443879 B/op, 16246-16247 allocs/op
+				//
+				// ⇒ ~99 KB and ~7 allocs per reload: the `map[string]string` sized
+				// to len(newConfigs). Transient, freed with the patch, and paid once
+				// per debounced reload rather than once per tenant.
+				//
+				// ⚠️ NOT TAKEN, DELIBERATELY: the index could cover only the
+				// tenants named by patchFiles+removed rather than every file — ~1
+				// entry in the common single-file reload. It buys back the 99 KB and
+				// costs a SECOND SELECTION PREDICATE over the same tree, which is
+				// the defect shape this whole PR exists to close (#1339). Not worth
+				// it for a transient 99 KB; recorded here so the next reader does
+				// not rediscover it as a finding.
+				//
+				// ⚠️ It also said "the only benchmark that reaches this loop
+				// with a changed file". False: BenchmarkIncrementalLoad_100_
+				// OneFileChanged does too. ⚠️ And bytes/op on these benchmarks
+				// is bimodal (two clusters ~32 KB apart, map bucket growth) — a
+				// comment-only commit moved the CI figure — so a one-shot bytes
+				// delta is never the signal on its own; the two arms above are
+				// repeated 5x each for exactly that reason, and their ranges do not
+				// overlap.
+				// No `ok` check: `tenant` came from `partial.Tenants` and
+				// `partial` came from `newConfigs`, so the index necessarily
+				// has it. The earlier `if …; ok` branch could never be false —
+				// a guard that cannot fire reads as a handled case and is not
+				// one.
+				ov, _ := reclaimTenantFrom(newConfigs, declaredIn, tenant)
+				merged.Tenants[tenant] = ov
 			}
+		}
+	}
+	// ⛔ A TENANT CAN LEAVE WITHOUT ITS FILE LEAVING. The removal pass below
+	// keys on deleted FILES, so deleting a tenant from a file that stays on
+	// disk — or renaming one — left it live in the merged config forever:
+	// measured, `tenants: {}` in a root file kept emitting the tenant after an
+	// incremental reload while a restart dropped it, and a rename emitted BOTH
+	// names. Alerts for a tenant the operator deleted keep firing until
+	// something unrelated forces a full reload. (#1569 sweep B-2.)
+	//
+	// ⚠️ SCOPED TO FILES THAT STILL PARSE. When a changed file fails to parse
+	// it is deleted from `newConfigs` upstream, so `ok` is false and THIS
+	// file's tenants are left alone — today's fail-safe "keep the last good
+	// values". A full load drops them instead and the divergence audit shouts
+	// cause (a), so the two paths still disagree there; that difference is a
+	// deliberate behaviour question (silently keep stale values vs. stop a
+	// tenant's alerts on a typo), not something to settle inside a bug fix.
+	//
+	// ⚠️ THE FAIL-SAFE DOES NOT EXTEND TO OTHER FILES' TENANTS, measured: with
+	// a cross-file duplicate live, editing one file to drop the tenant while
+	// the OTHER file fails to parse in the same reload removes the tenant even
+	// though the unparseable file still declares it on disk. Same outcome
+	// before and after this change, and it needs the invalid duplicate state to
+	// reach, so it is recorded rather than fixed here.
+	for _, name := range changed {
+		oldPartial, hadOld := oldConfigs[name]
+		newPartial, parsed := newConfigs[name]
+		if !hadOld || !parsed {
+			continue
+		}
+		for tenant := range oldPartial.Tenants {
+			if _, stillDeclared := newPartial.Tenants[tenant]; stillDeclared {
+				continue
+			}
+			if ov, survives := reclaimTenantFrom(newConfigs, declaredIn, tenant); survives {
+				merged.Tenants[tenant] = ov
+				continue
+			}
+			delete(merged.Tenants, tenant)
 		}
 	}
 	// Remove tenants from deleted files, unless this same reload re-introduced
@@ -664,7 +1119,9 @@ func patchTenants(prev *ThresholdConfig, newConfigs, oldConfigs map[string]Thres
 	for _, name := range removed {
 		if partial, ok := oldConfigs[name]; ok {
 			for tenant := range partial.Tenants {
-				if _, moved := patchedTenants[tenant]; !moved {
+				if ov, survives := reclaimTenantFrom(newConfigs, declaredIn, tenant); survives {
+					merged.Tenants[tenant] = ov
+				} else {
 					delete(merged.Tenants, tenant)
 				}
 			}
@@ -706,6 +1163,31 @@ func (m *ConfigManager) fullDirLoad() error {
 				continue
 			}
 		}
+		// ⛔ A nested `_` file is scanned (change detection must see it) but
+		// contributes NOTHING to the merged config. `ThresholdConfig.Defaults`
+		// is ONE global map with no subtree scope, and the merge is
+		// last-writer-wins over sorted keys — so `nested/_defaults.yaml` sorts
+		// after the root's and would re-price every tenant in the tree,
+		// including tenants in unrelated subtrees. Measured; see
+		// `TestASubtreeDefaultNeverLeaksIntoTheGlobalOnes`.
+		//
+		// ⛔ NOT `parsePartialConfig`, BUT NOT SILENT EITHER. Running the full
+		// parse here logs `ERROR: skip unparseable defaults/profiles file …`
+		// for a tree that is entirely valid: `Defaults` is
+		// `map[string]float64`, so a subtree defaults file in the SCHEDULE
+		// form (`{default: "90", overrides: […]}`) — which the hierarchical
+		// plane accepts and `/effective` renders — cannot decode into it.
+		// Skipping outright, though, dropped the parse-failure counter and the
+		// ERROR for files that are GENUINELY broken (measured: a nested
+		// `_defaults.yaml` containing `defaults: [this is not a map` scored 0
+		// on the counter and produced no ERROR — a severity downgrade the
+		// recursion introduced). The probe below separates the two: a syntax
+		// error is still counted and still loud; content this plane simply
+		// does not want is skipped in silence. (#1569 blind review.)
+		if isNestedPlatformFile(name) {
+			reportUnparseableNestedPlatformFile(fullPath, data, m.getMetrics(), m.getLogger())
+			continue
+		}
 		partial, ok := parsePartialConfig(name, fullPath, data, m.getMetrics(), m.getLogger())
 		if !ok {
 			continue
@@ -723,6 +1205,30 @@ func (m *ConfigManager) fullDirLoad() error {
 	if err := m.runHierarchyScanReject("fullDirLoad"); err != nil {
 		return err
 	}
+
+	// #1521 second half: the scan above just refreshed the inheritance graph,
+	// so each tenant's L1..Ln defaults can be materialised into its own map
+	// before the commit. Read under RLock because the scan published them
+	// under its own Lock and released it.
+	m.mu.RLock()
+	var tenantDefaults map[string][]string
+	if m.hierarchy.graph != nil {
+		tenantDefaults = m.hierarchy.graph.TenantDefaults
+	}
+	parsedDefaults := m.hierarchy.parsedDefaults
+	m.mu.RUnlock()
+	n, unreachable := applySubtreeDefaults(&merged, m.path, tenantDefaults, parsedDefaults)
+	if n > 0 {
+		m.getLogger().Printf(
+			"INFO: applied %d inherited subtree default(s) to the collector config "+
+				"(conf.d subdirectories declare defaults; without this the series "+
+				"would carry the root value while /effective reports the subtree's)", n)
+	}
+	// Published before the commit so `installConfig` can hand it to the audit
+	// from the same lock window that yields tenantSources.
+	m.mu.Lock()
+	m.hierarchy.unreachableInherited = unreachable
+	m.mu.Unlock()
 
 	m.commitConfig(&merged, compositeHash, &flatScanState{
 		hashes:  perFileHashes,

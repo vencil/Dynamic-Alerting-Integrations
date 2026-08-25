@@ -125,35 +125,42 @@ State after the #1339 fix:
 | Plane | Hierarchical `conf.d/` |
 |:--|:--|
 | threshold-exporter **library** (`pkg/config`'s `ResolveEffective`; `/effective` and `describe_tenant.py` read through it) | ✅ full recursive inheritance |
-| threshold-exporter **metrics it actually emits** | ⛔ **still flat** — see the correction below and #1521 |
+| threshold-exporter **metrics it actually emits** | ✅ full recursive inheritance (fixed by #1521; flat before that — see the note below) |
 | `validate_config.py` | ✅ now recursive |
 | routing generator / remaining flat tools | ⚠️ **still flat**, but they now name the files they skip and point here |
 
-> ⚠️ **Correction (2026-08-22)**: this table used to carry a single row,
-> `threshold-exporter (thresholds) | ✅ full recursive inheritance`. That holds for
-> the **library** and does not hold for the metrics the exporter actually emits.
-> The recursive scanner (`scanDirHierarchical`) is **opt-in** — `config_hierarchy.go`'s
-> own header says it adds the recursive walk "without disturbing the single-level
-> `scanDirFileHashes` path — **callers opt in** by invoking `scanDirHierarchical`
-> directly" — and both paths that feed `GetConfig()` (`IncrementalLoad` /
-> `fullDirLoad`) call the flat `scanDirFileHashes`.
+> ⚠️ **Note (found 2026-08-22 → closed 2026-08-24, #1521)**: this table used to
+> carry a single row, `threshold-exporter (thresholds) | ✅ full recursive
+> inheritance`. That held for the **library** and, for a time, did not hold for
+> the metrics the exporter actually emits. The record stays here because it is
+> this ADR's own evidence of having overclaimed — deleting it would also delete
+> the fact that a document once protected a defect.
 >
-> Measured (a valid root `_defaults.yaml` plus `top-tenant.yaml` at the top level and
-> `sub/nested-tenant.yaml`, through `NewConfigManager(dir).Load()`):
+> The shape at the time: the recursive scanner (`scanDirHierarchical`) was
+> **opt-in**, while both paths feeding `GetConfig()` (`IncrementalLoad` /
+> `fullDirLoad`) called the flat `scanDirFileHashes`. One tree, two readers,
+> unequal populations:
 >
 > ```text
-> Mode()               = directory
-> GetConfig().Tenants  = [top-tenant]
-> ResolveAt tenants    = map[top-tenant:true]
+> GetConfig().Tenants  = [top-tenant]      ← the subdirectory tenant is absent
+> Resolve("nested")    = ok=true           ← /effective resolves it
 > ```
 >
-> **A tenant in a subdirectory reaches no metric at all**, while `/effective` resolves
-> it — one config, two readers, populations that can never be equal. Same defect class
-> as [#1469](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1469)
-> (which closes on exactly that sentence), on the Go side rather than the Python side.
-> **The "should recurse" promise is kept and only the status description is corrected**:
-> rewriting the promise to match today's implementation would promote the defect from
-> fixable to protected.
+> ⇒ a tenant declared thresholds, `/metrics` carried no matching series, **the
+> alert could never fire**, and nothing said so. Same defect class as
+> [#1469](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1469)
+> (one reader recursive, the other flat), on the Go side rather than Python's.
+>
+> **How #1521 closed it**: `scanDirFileHashes` recurses; its map key became a
+> root-relative path (bare filenames collide — `a/x.yaml` against `x.yaml`);
+> extension matching became case-insensitive (measured: `UPPER.YAML` **at the
+> top level** reproduced the same symptom with no nesting involved); and each
+> tenant's L1..Ln inherited values are materialised into its own override map
+> before the commit — without that last part only presence is fixed, and
+> `/effective` and the series report different numbers for the same tenant.
+> ⚠️ A subdirectory's `_defaults.yaml` is **not** merged into the global
+> `Defaults`: that map has no subtree scope, so admitting it would re-price
+> every tenant in the tree that carries no override of its own.
 
 ⇒ **The routing plane does not support a hierarchical layout yet**:
 `_routing_defaults` and a tenant's own `_routing` are consumed by nothing when
@@ -164,38 +171,6 @@ The "flat but loud" contract is enforced by
 `tests/shared/test_confd_enumeration_contract.py`: a new tool that reads flat and
 stays silent fails the gate, so **the choice has to be deliberate**. The shared
 enumeration layer is `scripts/tools/_lib_confd.py`.
-
-### ⛔ #1521: what signal the platform gives for that "still flat" (added 2026-08-22)
-
-The correction above already establishes that "directory depth does not affect
-metric labels" is false for the metrics the exporter actually emits. This
-section adds only the two things it does not cover: WHICH two scanners, and
-whether the platform says anything after #1526.
-
-| Scanner | Enumeration | Outlet |
-|:--|:--|:--|
-| `config_hierarchy.go` `scanDirHierarchical` | `filepath.WalkDir` — **recursive, every depth** | `hierarchy.tenantSources` → `Resolve()` → `/effective` |
-| `flat_scanner.go` `scanDirFileHashes` | `os.ReadDir` + `if IsDir() { continue }` — **top level only** | `m.config` → `ThresholdCollector` → `/metrics` |
-
-Before #1526 this was **zero signal**: no ERROR, no WARN, no parse_failure,
-nothing in the "Config loaded" stats line.
-
-State after the #1526 stopgap: a new gauge `da_config_hierarchy_divergent_tenants`
-**names** the affected tenants, and one ERROR line is written whenever that set
-CHANGES (cold start and post-recovery relapse included) — but nothing is fixed;
-those tenants still emit no metrics.
-
-⚠️ In pure flat mode (no `_defaults.yaml` anywhere in the tree) the gauge can stay
-at `0` until restart, so **do not read 0 as "fully checked"**. Both causes are
-pinned by `TestDivergenceAudit_HotReload_FlatModeNeverDetects`
-(`components/threshold-exporter/app/config_divergence_test.go`), which also
-asserts that a restart DOES report it; the operator-facing description is in the
-[threshold-exporter README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md)
-§3.3.
-
-⇒ Until #1521 is closed: **if you want metrics, the tenant file has to sit at the
-`conf.d/` top level**. The PR that closes #1521 owns removing this section and
-restoring the table row above.
 
 ## Related
 
