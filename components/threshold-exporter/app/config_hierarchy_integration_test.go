@@ -228,7 +228,7 @@ tenants:
 // reload is triggered, every ConfigManager per-tenant map entry for that
 // tenant is cleared **in the same atomic swap** — not only the visible
 // `tenantSources` / `mergedHashes` maps but also the internal
-// `hierarchyHashes` / `hierarchyMtimes` lookups and the
+// `m.hierarchy.hashes` / `m.hierarchy.mtimes` lookups and the
 // `inheritanceGraph.TenantDefaults` chain entry.
 //
 // The test is behavior-lock; no product code changes are required — the
@@ -316,10 +316,10 @@ defaults:
 		t.Errorf("mergedHashes still has tenant-b")
 	}
 	if _, stillHere := m.hierarchy.hashes["team-a/tenant-b.yaml"]; stillHere {
-		t.Errorf("hierarchyHashes still has team-a/tenant-b.yaml")
+		t.Errorf("m.hierarchy.hashes still has team-a/tenant-b.yaml")
 	}
 	if _, stillHere := m.hierarchy.mtimes["team-a/tenant-b.yaml"]; stillHere {
-		t.Errorf("hierarchyMtimes still has team-a/tenant-b.yaml")
+		t.Errorf("m.hierarchy.mtimes still has team-a/tenant-b.yaml")
 	}
 	if m.hierarchy.graph == nil {
 		t.Errorf("inheritanceGraph became nil after delete")
