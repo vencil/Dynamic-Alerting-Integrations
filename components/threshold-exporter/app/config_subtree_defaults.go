@@ -548,6 +548,17 @@ func scheduledValueFromRaw(raw any) (ScheduledValue, bool) {
 //	                   the 9 at all. Both numbers here are now from a script
 //	                   over the repo, not from memory.
 //
+// ⛔ ADR-017 IS NOW THE AUTHORITY ON THE ABOVE, and it agrees. #1516/#1555
+// rewrote it to state the same split independently: only keys inside
+// `defaults:` enter `effective`; a value that will not parse as float64
+// (mapping / list / string / bool) makes `parsePartialConfig` return ok=false
+// and the WHOLE file is dropped; and `_`-prefixed keys are consumed from the
+// `tenants:` block, not from `defaults:`. Read
+// docs/adr/017-defaults-yaml-inheritance-dual-hash.md §「已知的可達例外」
+// before changing anything here — the measurements above were taken before
+// that rewrite landed and are kept only because they are what this code was
+// built against.
+//
 // So `isThresholdShaped` is a TYPE COERCION at a plane boundary, and the value
 // domain it admits is the DESTINATION's, not the source's: what lands in
 // `cfg.Tenants[t][key]` is a `ScheduledValue`, which legitimately holds
