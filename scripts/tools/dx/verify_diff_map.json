@@ -759,7 +759,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "567a91a02a08763cb31acc8121b4b40943158940481b408d46ba47a741fc72c3",
+ "source_digest": "198fcad386b1a9a2e16e162c8affea1fdfee85038a444c60385d8220af860e7b",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1364,6 +1364,9 @@
   ],
   "components/threshold-exporter/app/config.go": [
    "tests/lint/test_check_hardcode_tenant.py"
+  ],
+  "components/threshold-exporter/app/config_golden_parity_test.go": [
+   "tests/golden/test_merge_parity.py"
   ],
   "components/threshold-exporter/app/config_metrics.go": [
    "tests/lint/test_check_scrape_reachability.py"

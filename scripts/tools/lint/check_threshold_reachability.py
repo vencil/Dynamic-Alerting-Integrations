@@ -611,11 +611,15 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 #   UP (addition) — the paired bracket test requires each floor to stay strictly
 #     ABOVE "biggest conf.d root / producer gone". A pure ADDITION raises that
 #     lower bound, so too many new keys turn the TEST red. Today: artifacts
-#     tolerate +8, generators +28. Red here means RAISE the floor.
-#     (Was "+9" for artifacts, off by one: 70 total − 19 in the biggest root
-#      = 51, and 51 + 9 = 60 is not strictly below the floor of 60.)
+#     tolerate +6, generators +28. Red here means RAISE the floor.
+#     (#1516 added the `wrapper-siblings` fixture, +2 artifact keys, so this
+#      moved 8 -> 6 and the DOWN figure below 10 -> 12. The test named at the
+#      end of this block is what forced them to move together.)
+#     (Was "+9" for artifacts, off by one against the 70-key corpus of the
+#      time: 70 total − 19 in the biggest root = 51, and 51 + 9 = 60 is not
+#      strictly below the floor of 60.)
 #   DOWN (removal) — the floor itself fires when its class drops below it, which
-#     is the floor doing its job. Today the slack is total − floor: artifacts 10
+#     is the floor doing its job. Today the slack is total − floor: artifacts 12
 #     keys, generators 22. Red here means REPAIR THE PRODUCER — and only if keys
 #     were removed on purpose (a fixture retired) does it mean LOWER the floor,
 #     in the same commit, naming what went.
@@ -665,10 +669,10 @@ _SHIPPED_CONFD_ROOTS: dict[str, tuple[int, int, str]] = {
 # ── FIFTH floor: every conf.d root, not just the shipped three (#1411) ───────
 #
 # The four floors above leave a measured gap: with the shipped roots covered by
-# the table above and the rest covered only by a GLOBAL key floor with 10 keys
-# of DOWNWARD slack (today's artifact total 70 − the floor of 60: how many keys
+# the table above and the rest covered only by a GLOBAL key floor with 12 keys
+# of DOWNWARD slack (today's artifact total 72 − the floor of 60: how many keys
 # may disappear before that floor speaks), a whole fixture tree can stop
-# yielding in silence. ⛔ Not the +8 in that floor's own HEADROOM note — that
+# yielding in silence. ⛔ Not the +6 in that floor's own HEADROOM note — that
 # one is UPWARD, measured against "biggest root gone", and asks for a HIGHER
 # floor. Same word, opposite directions, different baselines.
 #
@@ -820,7 +824,7 @@ _SHIPPED_CONFD_ROOTS: dict[str, tuple[int, int, str]] = {
 # at is how the next person stops checking.
 #
 # ⛔ Why not per-root NUMBERS for all 12 (the obvious extension of
-# `_SHIPPED_CONFD_ROOTS`): 9 of the 12 roots hold a single file, and for those the
+# `_SHIPPED_CONFD_ROOTS`): 10 of the 13 roots hold a single file, and for those the
 # bracket test that governs that table (`lo == 0` branch) collapses the pair to
 # "at least 1 artifact, at least 1 key" — literally this floor. Twelve
 # hand-maintained number pairs would buy nothing on 9 of them while adding twelve
@@ -862,6 +866,7 @@ _DEFAULTS_CONFD_ROOTS: frozenset[str] = frozenset({
     "tests/golden/fixtures/mixed-mode/conf.d",
     "tests/golden/fixtures/opt-out-null/conf.d",
     "tests/golden/fixtures/opt-out-null-threshold/conf.d",
+    "tests/golden/fixtures/wrapper-siblings/conf.d",
 })
 
 # Roots that legitimately carry zero threshold keys. ⛔ Explicit, because
@@ -2200,7 +2205,7 @@ def _assert_loader_readable_floor(
 
 # Roots that legitimately hold no loader-readable `_defaults.yaml` at all.
 #
-# ⛔ EMPTY, and measured empty: all 12 pinned roots carry one today. The list
+# ⛔ EMPTY, and measured empty: all 13 pinned roots carry one today. The list
 # exists so that a future legitimate case has somewhere to go WITH A REASON,
 # not as slack to be spent — an entry here hands back the whole of
 # `_assert_every_root_stays_loader_readable` for that root, which is the same
@@ -2225,8 +2230,8 @@ def _assert_every_root_stays_loader_readable(
     Why nothing else catches it: `_is_defaults_artifact` matches a PREFIX, so
     the renamed file is still counted — same artifact count, same key count,
     every file floor and both key floors satisfied. And the GLOBAL key floor
-    cannot see this root either: it carries 1 key out of 70 against a floor of
-    60, i.e. ten keys of slack, so its entire contribution can vanish inside
+    cannot see this root either: it carries 1 key out of 72 against a floor of
+    60, i.e. twelve keys of slack, so its entire contribution can vanish inside
     the rounding. ⚠️ That slack is itself uneven — `synthetic-v2` contributes
     12 and WOULD trip the global floor — so "the global floor protects the
     bench fixtures" is true of one of them and false of the other. Per-root is
@@ -2238,7 +2243,7 @@ def _assert_every_root_stays_loader_readable(
     ratchet-to-measured numbers (zero-slack floors teach people to treat the
     floor as adjustable). "At least one file the loader will actually open" is
     a property, not a measurement: it does not drift, it needs no table, and it
-    is exactly what a rename destroys. Measured: all 12 pinned roots satisfy it
+    is exactly what a rename destroys. Measured: all 13 pinned roots satisfy it
     today, so it ships with an empty exemption list.
     """
     offenders = []

@@ -15,8 +15,16 @@ package handler
 // shared-mutable-state surface area between tenant-api and the exporter.
 //
 // Parity: the merged_hash returned here is byte-identical to
-// describe_tenant.py's computed hash — asserted by the 8-fixture golden
-// parity test in tests/golden/ + tenant_effective_test.go.
+// describe_tenant.py's computed hash for the shapes the golden fixtures
+// cover. ⚠️ The assertion is not in this package — tenant_effective_test.go
+// pins hash stability and shape, not cross-language equality (it says so
+// itself); the byte-for-byte claim rests on threshold-exporter's
+// app/config_golden_parity_test.go, which exercises the same pkg/config this
+// handler imports. ⛔ That covers the MERGE CORE, not CHAIN DISCOVERY — the
+// golden legs are handed the defaults chain out of golden.json instead of
+// deriving it, so a Go-vs-Python divergence there is covered by nothing.
+// Measured: reversing the chain order in ResolveEffective moved the served
+// merged_hash and left every golden assertion green (#1516 follow-up).
 
 import (
 	"errors"

@@ -42,7 +42,14 @@ def _posix(p):
 def reset(scenario: str) -> Path:
     """Ensure scenario/conf.d/ exists. Does not delete existing files —
     FUSE mount on Cowork VM refuses unlink. write() will overwrite individual
-    files; unused files (if any) are checked by the parity test.
+    files. ⚠️ Leftover files are NOT checked by anything: the parity test only
+    reads the paths golden.json names, and nothing here globs the tree. A stray
+    file a builder stopped writing stays on disk and IS still read by
+    describe_tenant's recursive scan, so it can change a fixture's merge result
+    while every assertion keeps passing. Measured: an orphan sub-directory
+    carrying its own `_defaults.yaml` and an extra tenant left the suite green.
+    The `.yml`/`.yaml` pair is the sharp version — Python reads both, Go keeps
+    one. Prefer the clean-rebuild command below over trusting this function.
 
     For a clean rebuild, run this from Dev Container (NTFS side):
         docker exec -w /workspaces/vibe-k8s-lab/tests/golden vibe-dev-container \\
@@ -231,6 +238,58 @@ def s_opt_out_null_threshold():
 """)
 
 
+# -------------------------------------------------------------------------
+# Scenario 9: a `defaults:` wrapper WITH sibling top-level keys.
+#
+# `components/threshold-exporter/config/conf.d/_defaults.yaml` carries
+# `state_filters` / `optional_overrides` / `_routing_defaults` alongside
+# `defaults:`. Both merge implementations unwrap to the `defaults:` block
+# (describe_tenant.py `ddata.get("defaults", ddata)`; Go
+# `pkg/config.extractDefaultsBlock`), so those siblings reach no tenant's
+# EFFECTIVE CONFIG — which is not the same as reaching no tenant: all three
+# are consumed elsewhere (merge_tenant.go for the first two, _grar_parse.py
+# for the third), so this fixture is not evidence that they are dead.
+#
+# Before it existed, no fixture here had anything beside `defaults:`, so a
+# change to either implementation's unwrap moved nothing in this suite.
+# Measured: merging the siblings alongside the block leaves the old golden
+# green on both legs and reddens only this scenario on the new one.
+#
+# ⛔ RECORDS the behaviour, does not ENDORSE it. Whether the siblings belong
+# in the effective config is open — ADR-017's worked example annotates
+# `_routing_defaults.group_wait` as inherited, which reads the other way.
+#
+# ⚠️ NOT GUARDED: nothing asserts this fixture keeps its shape. Deleting the
+# three sibling keys leaves every leg green (measured), because source_hash
+# hashes the tenant file and merged_hash cannot move for keys that are
+# dropped before the merge. A witness for that was written and withdrawn —
+# it went through two review rounds and produced a new defect in each, and
+# its silent failure does not bring the original defect back: the fixture
+# still pins the merge, only edits TO the fixture go unnoticed. Tracked
+# separately (#1516 follow-up).
+# -------------------------------------------------------------------------
+def s_wrapper_siblings():
+    d = reset("wrapper-siblings")
+    write(d / "_defaults.yaml", """defaults:
+  mysql_connections: 80
+  container_memory: 85
+state_filters:
+  container_crashloop:
+    reasons: ["CrashLoopBackOff"]
+    severity: "critical"
+optional_overrides:
+  - oracle_process_count
+_routing_defaults:
+  receiver:
+    type: "email"
+    to: ["dba-oncall@example.com"]
+  group_wait: "30s"
+""")
+    write(d / "tenants.yaml", """tenants:
+  tenant-sib:
+    mysql_connections: "70"
+""")
+
 SCENARIOS = [
     ("flat", "tenant-a", s_flat),
     ("l0-only", "tenant-b", s_l0_only),
@@ -241,6 +300,7 @@ SCENARIOS = [
     ("opt-out-null", "tenant-optout", s_opt_out_null),
     ("opt-out-null-threshold", "tenant-null", s_opt_out_null_threshold),
     ("metadata-skipped", "tenant-meta", s_metadata_skipped),
+    ("wrapper-siblings", "tenant-sib", s_wrapper_siblings),
 ]
 
 
@@ -283,6 +343,7 @@ def main() -> int:
         "opt-out-null": "opt-out-null",
         "opt-out-null-threshold": "opt-out-null-threshold",
         "metadata-skipped": "metadata-skipped",
+        "wrapper-siblings": "wrapper-siblings",
     }
     for scenario, tenant_id, builder in SCENARIOS:
         if builder is not None and builder not in builders_seen:
