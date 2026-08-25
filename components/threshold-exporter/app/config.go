@@ -63,6 +63,16 @@ type hierarchyState struct {
 	mergedHashes   map[string]string         // tenantID → 16-char merged_hash
 	graph          *InheritanceGraph         // defaults↔tenants dependency map
 	parsedDefaults map[string]map[string]any // absolute Clean path → parsed defaults dict
+
+	// unreachableInherited is tenantID → sorted keys that the tenant's
+	// subtree defaults chain supplies but that NO emitter can iterate
+	// (absent from both `cfg.Defaults` and `cfg.OptionalOverrides`).
+	//
+	// ⛔ It lives HERE, next to tenantSources, so the divergence audit reads
+	// both from one lock window. Reloads are not serialised, and pairing
+	// reload N's config with reload N+1's diagnosis is exactly the failure
+	// the tenantSources snapshot exists to prevent. (#1569)
+	unreachableInherited map[string][]string
 }
 
 // debouncerState bundles the v2.7.0 Phase 3 burst-coalescing fields.
@@ -332,7 +342,7 @@ func (m *ConfigManager) commitConfig(cfg *ThresholdConfig, hash string, flatScan
 	// config + config-info land in one consistent lock window.
 	configSource, gitCommit := m.detectConfigSource()
 
-	hierTenantSources, afterUnlock := m.installConfig(
+	hierTenantSources, unreachableInherited, afterUnlock := m.installConfig(
 		cfg, hash, flatScan, configSource, gitCommit)
 	if afterUnlock != nil {
 		// Test-only seam, and it must stay the FIRST statement after the
@@ -353,7 +363,7 @@ func (m *ConfigManager) commitConfig(cfg *ThresholdConfig, hash string, flatScan
 	// installNewHierarchyState → fullDirLoad) is covered by construction
 	// rather than by remembering to add a call. Observability only: it
 	// never fails the commit — see config_divergence.go for why not.
-	m.auditHierarchyDivergence(cfg, hierTenantSources, logHeader)
+	m.auditHierarchyDivergence(cfg, hierTenantSources, unreachableInherited, logHeader)
 }
 
 // installConfig performs the atomic swap under m.mu and RETURNS the
@@ -380,7 +390,7 @@ func (m *ConfigManager) commitConfig(cfg *ThresholdConfig, hash string, flatScan
 func (m *ConfigManager) installConfig(
 	cfg *ThresholdConfig, hash string, flatScan *flatScanState,
 	configSource, gitCommit string,
-) (hierTenantSources map[string]string, afterUnlock func()) {
+) (hierTenantSources map[string]string, unreachable map[string][]string, afterUnlock func()) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.config = cfg
@@ -392,7 +402,7 @@ func (m *ConfigManager) installConfig(
 	}
 	m.configSource = configSource
 	m.gitCommit = gitCommit
-	return m.hierarchy.tenantSources, m.afterCommitUnlock
+	return m.hierarchy.tenantSources, m.hierarchy.unreachableInherited, m.afterCommitUnlock
 }
 
 // runHierarchyScanReject runs populateHierarchyState with the
@@ -847,12 +857,18 @@ func (m *ConfigManager) fullDirLoad() error {
 	}
 	parsedDefaults := m.hierarchy.parsedDefaults
 	m.mu.RUnlock()
-	if n := applySubtreeDefaults(&merged, m.path, tenantDefaults, parsedDefaults); n > 0 {
+	n, unreachable := applySubtreeDefaults(&merged, m.path, tenantDefaults, parsedDefaults)
+	if n > 0 {
 		m.getLogger().Printf(
 			"INFO: applied %d inherited subtree default(s) to the collector config "+
 				"(conf.d subdirectories declare defaults; without this the series "+
 				"would carry the root value while /effective reports the subtree's)", n)
 	}
+	// Published before the commit so `installConfig` can hand it to the audit
+	// from the same lock window that yields tenantSources.
+	m.mu.Lock()
+	m.hierarchy.unreachableInherited = unreachable
+	m.mu.Unlock()
 
 	m.commitConfig(&merged, compositeHash, &flatScanState{
 		hashes:  perFileHashes,

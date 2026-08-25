@@ -96,13 +96,30 @@ const divergenceIssueURL = "https://github.com/vencil/Dynamic-Alerting-Integrati
 // An empty tenantSources therefore yields nil rather than "everything is
 // divergent": it means the hierarchical view has nothing to say (not
 // populated / flat-only tree), not that every tenant vanished.
-func hierarchyDivergentTenants(tenantSources map[string]string, cfg *ThresholdConfig) []string {
+// ⛔ PRESENCE IS NOT THE ONLY WAY THE TWO PLANES DISAGREE, and treating it
+// as such made this gauge worse than useless for one whole class. A tenant
+// whose subtree `_defaults.yaml` introduces a key that neither `cfg.Defaults`
+// nor `cfg.OptionalOverrides` carries IS in `cfg.Tenants` — so the presence
+// check passes — while `/effective` reports a value the collector can never
+// emit. Measured: gauge 0, no ERROR, and a threshold silently missing. That
+// is the exact "silence plus a wrong number" this ticket set out to kill,
+// surviving one layer down. (#1569 blind review.)
+//
+// unreachable is tenantID → keys in that state, from the same lock window as
+// tenantSources.
+func hierarchyDivergentTenants(
+	tenantSources map[string]string, cfg *ThresholdConfig, unreachable map[string][]string,
+) []string {
 	if len(tenantSources) == 0 || cfg == nil {
 		return nil
 	}
 	var divergent []string
 	for tid := range tenantSources {
 		if _, visible := cfg.Tenants[tid]; !visible {
+			divergent = append(divergent, tid)
+			continue
+		}
+		if len(unreachable[tid]) > 0 {
 			divergent = append(divergent, tid)
 		}
 	}
@@ -114,15 +131,22 @@ func hierarchyDivergentTenants(tenantSources map[string]string, cfg *ThresholdCo
 // auditHierarchyDivergence so a test can assert the wording (the
 // consequence sentence is the whole point of the message) without driving
 // a full load.
-func formatDivergenceLog(divergent []string, tenantSources map[string]string, root, context string) string {
+func formatDivergenceLog(
+	divergent []string, tenantSources map[string]string, unreachable map[string][]string,
+	root, context string,
+) string {
 	var b strings.Builder
 	fmt.Fprintf(&b,
-		"ERROR: conf.d scanner divergence (%s): %d tenant(s) are visible to the hierarchical scanner (/effective) "+
-			"but ABSENT from the merged config that feeds the collector — these tenants emit NO user_threshold series, "+
-			"so their alerts can never fire. Cause: their file was dropped while building the merged config under %s but "+
-			"still declared them to the hierarchical walker — most often a platform block that fails to parse "+
-			"(`defaults:` takes numbers only), which discards the WHOLE file including its `tenants:`. "+
-			"Fix: look for the ERROR/WARN line naming that file earlier in this log and correct it. "+
+		"ERROR: conf.d scanner divergence (%s): %d tenant(s) resolve through the hierarchical scanner (/effective) "+
+			"to thresholds the collector cannot emit, so those alerts can never fire. Two causes, both under %s. "+
+			"(a) The tenant is ABSENT from the merged config: its file was dropped while building that config but "+
+			"still declared it to the hierarchical walker — most often a platform block that fails to parse "+
+			"(`defaults:` takes numbers only), which discards the WHOLE file including its `tenants:`; "+
+			"look for the ERROR/WARN line naming that file earlier in this log. "+
+			"(b) The tenant is present but inherits a key that exists ONLY in a subtree `_defaults.yaml`: "+
+			"nothing iterates such a key (the collector walks the ROOT defaults and the declared surface, and a "+
+			"nested `_` file feeds neither), so /effective shows a value that never becomes a series. "+
+			"Workaround for (b): declare the key in the conf.d ROOT `_defaults.yaml` or in `optional_overrides:`. "+
 			"Tracking: %s. Affected:",
 		context, len(divergent), root, divergenceIssueURL)
 
@@ -134,6 +158,11 @@ func formatDivergenceLog(divergent []string, tenantSources map[string]string, ro
 		sep := " "
 		if i > 0 {
 			sep = ", "
+		}
+		if keys := unreachable[tid]; len(keys) > 0 {
+			fmt.Fprintf(&b, "%s%s (%s; unreachable inherited key(s): %s)",
+				sep, tid, tenantSources[tid], strings.Join(keys, ", "))
+			continue
 		}
 		fmt.Fprintf(&b, "%s%s (%s)", sep, tid, tenantSources[tid])
 	}
@@ -196,9 +225,10 @@ func formatDivergenceLog(divergent []string, tenantSources map[string]string, ro
 // see the gauge-vs-counter note on da_config_hierarchy_divergent_tenants
 // in config_metrics.go.
 func (m *ConfigManager) auditHierarchyDivergence(
-	cfg *ThresholdConfig, tenantSources map[string]string, context string,
+	cfg *ThresholdConfig, tenantSources map[string]string,
+	unreachable map[string][]string, context string,
 ) int {
-	divergent := hierarchyDivergentTenants(tenantSources, cfg)
+	divergent := hierarchyDivergentTenants(tenantSources, cfg, unreachable)
 	// ⛔ getMetrics() BEFORE taking d.mu, never inside it: it acquires
 	// m.mu.RLock and m.mu is not reentrant, so a future edit that moved this
 	// audit inside commitConfig's lock window would self-deadlock. Taking the
@@ -208,7 +238,7 @@ func (m *ConfigManager) auditHierarchyDivergence(
 		divergent, tenantSources, metrics.SetHierarchyDivergentTenants) {
 		return len(divergent)
 	}
-	m.getLogger().Print(formatDivergenceLog(divergent, tenantSources, m.path, context))
+	m.getLogger().Print(formatDivergenceLog(divergent, tenantSources, unreachable, m.path, context))
 	return len(divergent)
 }
 

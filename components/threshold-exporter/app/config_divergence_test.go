@@ -136,7 +136,7 @@ func TestDivergenceAudit_GaugeRecoversToZero(t *testing.T) {
 
 	divergent := map[string]string{"hier-tenant": "/conf.d/db/hier-tenant.yaml"}
 	clean := &ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{}}
-	if n := m.auditHierarchyDivergence(clean, divergent, "probe"); n != 1 {
+	if n := m.auditHierarchyDivergence(clean, divergent, nil, "probe"); n != 1 {
 		t.Fatalf("setup: audit reported %d divergent tenant(s), want 1", n)
 	}
 	if got := testutil.ToFloat64(fresh.hierarchyDivergentTenants); got != 1 {
@@ -146,7 +146,7 @@ func TestDivergenceAudit_GaugeRecoversToZero(t *testing.T) {
 	reconciled := &ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{
 		"hier-tenant": {},
 	}}
-	if n := m.auditHierarchyDivergence(reconciled, divergent, "probe"); n != 0 {
+	if n := m.auditHierarchyDivergence(reconciled, divergent, nil, "probe"); n != 0 {
 		t.Errorf("audit still reports %d divergent tenant(s) after reconciliation", n)
 	}
 	if got := testutil.ToFloat64(fresh.hierarchyDivergentTenants); got != 0 {
@@ -255,7 +255,7 @@ func TestDivergenceAudit_HotReload_FlatModeNowDetects(t *testing.T) {
 // never sit at 0.
 func TestHierarchyDivergentTenants_OneDirectionOnly(t *testing.T) {
 	t.Parallel()
-	if got := hierarchyDivergentTenants(nil, &ThresholdConfig{}); got != nil {
+	if got := hierarchyDivergentTenants(nil, &ThresholdConfig{}, nil); got != nil {
 		t.Errorf("empty tenantSources must yield no divergence, got %v", got)
 	}
 
@@ -279,7 +279,7 @@ func TestHierarchyDivergentTenants_OneDirectionOnly(t *testing.T) {
 		"flat-only": "/x/flat-only.yaml",
 		"nested":    "/x/db/nested.yaml", // in the hierarchy, absent from cfg
 	}
-	got := hierarchyDivergentTenants(sources, cfg)
+	got := hierarchyDivergentTenants(sources, cfg, nil)
 	if len(got) != 1 || got[0] != "nested" {
 		t.Errorf("hierarchyDivergentTenants = %v, want [nested] only — "+
 			"`underscore-tenant` is the reverse difference and must NOT "+
@@ -308,7 +308,7 @@ func TestHierarchyDivergentTenants_IsSorted(t *testing.T) {
 	// pass by luck; repeat until the odds of a false green are gone.
 	want := []string{"alpha", "bravo", "mike", "zulu"}
 	for i := 0; i < 20; i++ {
-		got := hierarchyDivergentTenants(sources, cfg)
+		got := hierarchyDivergentTenants(sources, cfg, nil)
 		if len(got) != len(want) {
 			t.Fatalf("got %v, want %v", got, want)
 		}
@@ -327,7 +327,7 @@ func TestHierarchyDivergentTenants_IsSorted(t *testing.T) {
 func TestHierarchyDivergentTenants_NilConfigIsNotAPanic(t *testing.T) {
 	t.Parallel()
 	sources := map[string]string{"nested": "/x/db/nested.yaml"}
-	if got := hierarchyDivergentTenants(sources, nil); got != nil {
+	if got := hierarchyDivergentTenants(sources, nil, nil); got != nil {
 		t.Errorf("nil cfg must yield no divergence, got %v", got)
 	}
 }
@@ -343,7 +343,7 @@ func TestFormatDivergenceLog_CapsTheSample(t *testing.T) {
 		sources[id] = "/conf.d/db/" + id + ".yaml"
 		divergent = append(divergent, id)
 	}
-	line := formatDivergenceLog(divergent, sources, "/conf.d", "Config loaded (directory)")
+	line := formatDivergenceLog(divergent, sources, nil, "/conf.d", "Config loaded (directory)")
 	if !strings.Contains(line, "and 5 more") {
 		t.Errorf("expected truncation suffix, got:\n%s", line)
 	}
@@ -429,7 +429,7 @@ func TestDivergenceAudit_PairsOneInstant(t *testing.T) {
 		"ghost-tenant": filepath.Join(dir, "db", "ghost-tenant.yaml"),
 	}
 	logBuf.Reset()
-	got := m.auditHierarchyDivergence(m.GetConfig(), handed, "pairing-probe")
+	got := m.auditHierarchyDivergence(m.GetConfig(), handed, nil, "pairing-probe")
 
 	if got != 1 {
 		t.Errorf("audit judged something other than the handed snapshot: got %d, want 1 "+
@@ -556,7 +556,7 @@ func TestDivergenceAudit_GaugeCountsTenantsNotJustPresence(t *testing.T) {
 	}
 	empty := &ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{}}
 
-	if n := m.auditHierarchyDivergence(empty, sources, "probe"); n != 3 {
+	if n := m.auditHierarchyDivergence(empty, sources, nil, "probe"); n != 3 {
 		t.Errorf("audit returned %d, want 3", n)
 	}
 	if got := testutil.ToFloat64(fresh.hierarchyDivergentTenants); got != 3 {
@@ -599,12 +599,12 @@ func TestDivergenceAudit_RepeatsOnlyWhenTheSetChanges(t *testing.T) {
 	count := func() int { return strings.Count(logBuf.String(), "scanner divergence") }
 
 	logBuf.Reset()
-	m.auditHierarchyDivergence(cfg, one, "commit-1")
+	m.auditHierarchyDivergence(cfg, one, nil, "commit-1")
 	if count() != 1 {
 		t.Fatalf("first sighting must be logged, got %d lines", count())
 	}
-	m.auditHierarchyDivergence(cfg, one, "commit-2")
-	m.auditHierarchyDivergence(cfg, one, "commit-3")
+	m.auditHierarchyDivergence(cfg, one, nil, "commit-2")
+	m.auditHierarchyDivergence(cfg, one, nil, "commit-3")
 	if count() != 1 {
 		t.Errorf("an unchanged divergent set must not re-log: %d lines", count())
 	}
@@ -614,7 +614,7 @@ func TestDivergenceAudit_RepeatsOnlyWhenTheSetChanges(t *testing.T) {
 	}
 
 	// A CHANGED set is news.
-	m.auditHierarchyDivergence(cfg, two, "commit-4")
+	m.auditHierarchyDivergence(cfg, two, nil, "commit-4")
 	if count() != 2 {
 		t.Errorf("a changed divergent set must log again: %d lines", count())
 	}
@@ -624,11 +624,11 @@ func TestDivergenceAudit_RepeatsOnlyWhenTheSetChanges(t *testing.T) {
 
 	// Recovery clears the memory, so a relapse is loud rather than
 	// swallowed as "same as last time".
-	m.auditHierarchyDivergence(cfg, nil, "commit-5-healthy")
+	m.auditHierarchyDivergence(cfg, nil, nil, "commit-5-healthy")
 	if got := testutil.ToFloat64(fresh.hierarchyDivergentTenants); got != 0 {
 		t.Fatalf("gauge = %v, want 0 on recovery", got)
 	}
-	m.auditHierarchyDivergence(cfg, two, "commit-6-relapse")
+	m.auditHierarchyDivergence(cfg, two, nil, "commit-6-relapse")
 	if count() != 3 {
 		t.Errorf("a relapse after recovery must log again: %d lines", count())
 	}
@@ -662,8 +662,8 @@ func TestDivergenceAudit_GaugeAndMemoryCannotDisagree(t *testing.T) {
 	// Reload N sees the divergence; reload N+1 (overlapping) sees a clean
 	// tree. Whichever wins, the pair must stay consistent.
 	logBuf.Reset()
-	m.auditHierarchyDivergence(cfg, one, "reload-N")
-	m.auditHierarchyDivergence(cfg, nil, "reload-N+1-healthy")
+	m.auditHierarchyDivergence(cfg, one, nil, "reload-N")
+	m.auditHierarchyDivergence(cfg, nil, nil, "reload-N+1-healthy")
 	if got := testutil.ToFloat64(fresh.hierarchyDivergentTenants); got != 0 {
 		t.Fatalf("gauge = %v after the healthy commit, want 0", got)
 	}
@@ -671,7 +671,7 @@ func TestDivergenceAudit_GaugeAndMemoryCannotDisagree(t *testing.T) {
 	// ⛔ THE ASSERTION. A genuine recurrence must be audible. Under the old
 	// two-statement shape the memory could still hold the set here.
 	before := count()
-	m.auditHierarchyDivergence(cfg, one, "genuine-recurrence")
+	m.auditHierarchyDivergence(cfg, one, nil, "genuine-recurrence")
 	if testutil.ToFloat64(fresh.hierarchyDivergentTenants) != 1 {
 		t.Fatalf("gauge did not rise on recurrence")
 	}
@@ -754,13 +754,13 @@ func TestDivergenceAudit_ReLogsWhenTheSourcePathMoves(t *testing.T) {
 
 	logBuf.Reset()
 	m.auditHierarchyDivergence(cfg,
-		map[string]string{"nested-a": filepath.Join(dir, "db", "a.yaml")}, "c1")
+		map[string]string{"nested-a": filepath.Join(dir, "db", "a.yaml")}, nil, "c1")
 	if count() != 1 {
 		t.Fatalf("first sighting must log, got %d", count())
 	}
 	// Same tenant, DIFFERENT file.
 	m.auditHierarchyDivergence(cfg,
-		map[string]string{"nested-a": filepath.Join(dir, "db", "deep", "a.yaml")}, "c2")
+		map[string]string{"nested-a": filepath.Join(dir, "db", "deep", "a.yaml")}, nil, "c2")
 	if count() != 2 {
 		t.Errorf("a moved source path must re-log: %d lines", count())
 	}
@@ -769,7 +769,7 @@ func TestDivergenceAudit_ReLogsWhenTheSourcePathMoves(t *testing.T) {
 	}
 	// ...and an unchanged repeat still does not.
 	m.auditHierarchyDivergence(cfg,
-		map[string]string{"nested-a": filepath.Join(dir, "db", "deep", "a.yaml")}, "c3")
+		map[string]string{"nested-a": filepath.Join(dir, "db", "deep", "a.yaml")}, nil, "c3")
 	if count() != 2 {
 		t.Errorf("an unchanged repeat must stay quiet: %d lines", count())
 	}
@@ -787,6 +787,7 @@ func TestDivergenceAudit_LogNamesTheRootAndTheCommit(t *testing.T) {
 	m.auditHierarchyDivergence(
 		&ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{}},
 		map[string]string{"hier-tenant": filepath.Join(dir, "db", "hier-tenant.yaml")},
+		nil,
 		"Config loaded (directory)")
 
 	line := logBuf.String()
@@ -828,17 +829,17 @@ func TestDivergenceAudit_TheMemoryTracksTheLatestSetNotTheFirst(t *testing.T) {
 	count := func() int { return strings.Count(logBuf.String(), "scanner divergence") }
 
 	logBuf.Reset()
-	m.auditHierarchyDivergence(cfg, setA, "commit-A1")
+	m.auditHierarchyDivergence(cfg, setA, nil, "commit-A1")
 	if count() != 1 {
 		t.Fatalf("first sighting of A must log, got %d", count())
 	}
-	m.auditHierarchyDivergence(cfg, setB, "commit-B")
+	m.auditHierarchyDivergence(cfg, setB, nil, "commit-B")
 	if count() != 2 {
 		t.Fatalf("a different set must log, got %d", count())
 	}
 	// ⛔ The one that matters. B is what the memory should now hold, so A
 	// is news again. With the memory stuck on A this is silent.
-	m.auditHierarchyDivergence(cfg, setA, "commit-A2")
+	m.auditHierarchyDivergence(cfg, setA, nil, "commit-A2")
 	if got := count(); got != 3 {
 		t.Errorf("going back to a PREVIOUS divergent set must log again "+
 			"(the last line an operator has must describe the current set): "+
@@ -881,7 +882,7 @@ func TestDivergenceAudit_TheGaugeIsRepublishedEvenWhenTheLogIsSuppressed(t *test
 	count := func() int { return strings.Count(logBuf.String(), "scanner divergence") }
 
 	logBuf.Reset()
-	m.auditHierarchyDivergence(cfg, sources, "commit-1")
+	m.auditHierarchyDivergence(cfg, sources, nil, "commit-1")
 	if count() != 1 {
 		t.Fatalf("first sighting must log, got %d", count())
 	}
@@ -896,7 +897,7 @@ func TestDivergenceAudit_TheGaugeIsRepublishedEvenWhenTheLogIsSuppressed(t *test
 		t.Fatalf("a fresh metrics instance must start at 0, got %v", got)
 	}
 
-	m.auditHierarchyDivergence(cfg, sources, "commit-2")
+	m.auditHierarchyDivergence(cfg, sources, nil, "commit-2")
 	if got := count(); got != 1 {
 		t.Errorf("the unchanged set must still not re-log: %d line(s)", got)
 	}
@@ -933,10 +934,10 @@ func TestDivergenceAudit_TheReturnValueSurvivesSuppression(t *testing.T) {
 	}
 
 	logBuf.Reset()
-	if got := m.auditHierarchyDivergence(cfg, sources, "commit-1"); got != 2 {
+	if got := m.auditHierarchyDivergence(cfg, sources, nil, "commit-1"); got != 2 {
 		t.Fatalf("first sighting returned %d, want 2", got)
 	}
-	got := m.auditHierarchyDivergence(cfg, sources, "commit-2")
+	got := m.auditHierarchyDivergence(cfg, sources, nil, "commit-2")
 	if lines := strings.Count(logBuf.String(), "scanner divergence"); lines != 1 {
 		t.Fatalf("precondition: the second call must be suppressed, %d line(s)", lines)
 	}

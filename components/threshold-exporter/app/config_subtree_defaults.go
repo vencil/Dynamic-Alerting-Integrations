@@ -73,9 +73,9 @@ func applySubtreeDefaults(
 	root string,
 	tenantDefaults map[string][]string,
 	parsed map[string]map[string]any,
-) int {
+) (int, map[string][]string) {
 	if cfg == nil || len(cfg.Tenants) == 0 || len(tenantDefaults) == 0 {
-		return 0
+		return 0, nil
 	}
 	// ⛔ ABSOLUTE, because the chain is. `scanDirHierarchical` stores every
 	// defaults path under `filepath.Abs(rootPath)` + `Clean`, while `m.path`
@@ -92,9 +92,10 @@ func applySubtreeDefaults(
 		rootDir = filepath.Clean(abs)
 	}
 	rootDir = resolveScanRoot(rootDir)
-	// Keys this overlay introduced that the ROOT defaults do not carry. See
-	// declareSubtreeKeys for why they have to be declared, and what it costs.
-	subtreeOnly := map[string]struct{}{}
+	// ⛔ KEYS THIS OVERLAY CANNOT DELIVER, per tenant, reported rather than
+	// forced through. See the block above `unreachableKeys` for why writing
+	// them anyway was worse than not writing them.
+	unreachable := map[string]map[string]struct{}{}
 
 	filled := 0
 	for tenantID, overrides := range cfg.Tenants {
@@ -126,6 +127,43 @@ func applySubtreeDefaults(
 				if !ok || !isThresholdShaped(value) {
 					continue
 				}
+				// ⛔ A KEY NO EMITTER ITERATES IS NOT DELIVERED BY WRITING IT.
+				// `resolveBaseRows` walks `cfg.Defaults`; `resolveDeclaredRows`
+				// walks `cfg.OptionalOverrides`. A key that appears only in a
+				// subtree `_defaults.yaml` is in neither, because nested `_`
+				// files are deliberately excluded from the merged config so
+				// they cannot re-price the whole tree. Writing it into the
+				// tenant's map put a value where nothing reads it AND made
+				// `ValidateTenantKeys` log `unknown key` on every commit.
+				//
+				// ⛔ AND THE EARLIER FIX FOR THAT WAS WORSE. Declaring such
+				// keys in `cfg.OptionalOverrides` did make them emit, but that
+				// field is a flat global list derived, in that design, from
+				// whichever tenants happened to leave the key unset — four
+				// separate defects, each measured: a `default_foo`/`foo` pair
+				// produced a duplicate label set that fails the WHOLE
+				// Prometheus `Gather` (every family in /metrics, not one); an
+				// unrelated tenant editing its own file deleted another
+				// tenant's live series; the subtree's only tenant setting the
+				// key itself meant the key was never declared, so its OWN
+				// value stopped emitting; and an `expires:` in a subtree
+				// defaults file was charged as a validation error to every
+				// tenant under it, blocking their writes.
+				//
+				// Delivering these keys needs per-subtree scope in
+				// `ThresholdConfig`, which is #1568. Until then the honest
+				// state is "not delivered, and LOUD about it" — recorded here
+				// and reported by the divergence audit. The one thing this
+				// must never be again is silent. (#1569 blind review.)
+				if _, global := cfg.Defaults[key]; !global {
+					if !declaredIn(cfg.OptionalOverrides, key) {
+						if unreachable[tenantID] == nil {
+							unreachable[tenantID] = map[string]struct{}{}
+						}
+						unreachable[tenantID][key] = struct{}{}
+						continue
+					}
+				}
 				if overrides == nil {
 					overrides = map[string]ScheduledValue{}
 					cfg.Tenants[tenantID] = overrides
@@ -138,64 +176,41 @@ func applySubtreeDefaults(
 				}
 				inherited[key] = struct{}{}
 				overrides[key] = value
-				if _, global := cfg.Defaults[key]; !global {
-					subtreeOnly[key] = struct{}{}
-				}
 			}
 		}
 	}
-	declareSubtreeKeys(cfg, subtreeOnly)
-	return filled
+	return filled, unreachableKeys(unreachable)
 }
 
-// declareSubtreeKeys adds keys that exist ONLY in a subtree `_defaults.yaml`
-// to the platform's declared surface.
+// declaredIn reports whether the platform already recognises this key.
+func declaredIn(declared []string, key string) bool {
+	for _, d := range declared {
+		if d == key {
+			return true
+		}
+	}
+	return false
+}
+
+// unreachableKeys flattens the per-tenant sets into sorted slices.
 //
-// ⛔ WITHOUT THIS THE OVERLAY IS A NO-OP FOR SUCH KEYS, which is not obvious
-// from the write itself. Nothing iterates a tenant's override map to decide
-// what to emit: `resolveBaseRows` walks `cfg.Defaults` and `resolveDeclaredRows`
-// walks `cfg.OptionalOverrides`, and a nested `_` file contributes to neither
-// (its content is deliberately kept out of the merged config so it cannot
-// re-price the whole tree). So the value landed in a map no emitter reads.
-// Measured: tenant map held `redis_evicted_keys:100`, `/effective` reported
-// 100, and `user_threshold` had no such series — plus a
-// `WARN: unknown key "redis_evicted_keys" not in defaults` on every commit,
-// because `ValidateTenantKeys` checks the same two surfaces. (#1569 blind
-// review.)
-//
-// ⛔ `OptionalOverrides` is the right surface and not a workaround: its whole
-// definition is "the platform RECOGNISES this key but asserts no value", and
-// `resolveDeclaredRows` emits a row only when the tenant supplied one — which
-// is exactly the state the overlay just created. Adding it to `cfg.Defaults`
-// instead would give every tenant in the tree a platform value it never
-// inherited, the leak `TestASubtreeDefaultNeverLeaksIntoTheGlobalOnes` exists
-// to forbid.
-//
-// ⚠️ COST, STATED RATHER THAN HIDDEN: `OptionalOverrides` is a flat global
-// list with no subtree scope of its own, so a key introduced by
-// `finance/_defaults.yaml` becomes a key the write gate will accept from a
-// tenant OUTSIDE `finance/` too. It still emits nothing for such a tenant
-// unless that tenant supplies a value, and the file that declared it is a
-// platform-scoped `_` file either way — but the accepted-key surface is
-// genuinely wider than the directory that declared it. Narrowing it needs
-// per-subtree scope in `ThresholdConfig`, which is #1568's territory, not a
-// patch here.
-func declareSubtreeKeys(cfg *ThresholdConfig, subtreeOnly map[string]struct{}) {
-	if len(subtreeOnly) == 0 {
-		return
+// ⛔ SORTED because this feeds an operator-facing ERROR line and a gauge; Go
+// map iteration is random and a diagnostic that reorders itself every reload
+// reads as churn rather than as a stable fact.
+func unreachableKeys(byTenant map[string]map[string]struct{}) map[string][]string {
+	if len(byTenant) == 0 {
+		return nil
 	}
-	for _, existing := range cfg.OptionalOverrides {
-		delete(subtreeOnly, existing)
+	out := make(map[string][]string, len(byTenant))
+	for tenantID, keys := range byTenant {
+		list := make([]string, 0, len(keys))
+		for k := range keys {
+			list = append(list, k)
+		}
+		sort.Strings(list)
+		out[tenantID] = list
 	}
-	if len(subtreeOnly) == 0 {
-		return
-	}
-	added := make([]string, 0, len(subtreeOnly))
-	for key := range subtreeOnly {
-		added = append(added, key)
-	}
-	sort.Strings(added) // map iteration is random; the config must not be
-	cfg.OptionalOverrides = append(cfg.OptionalOverrides, added...)
+	return out
 }
 
 // scheduledValueFromRaw renders one defaults-file value exactly as a tenant

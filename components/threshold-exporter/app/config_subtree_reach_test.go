@@ -39,22 +39,31 @@ func captureLoad(t *testing.T, m *ConfigManager) string {
 	return buf.String()
 }
 
-// TestASubtreeOnlyKeyReachesTheOutputPlane covers the half of the overlay that
-// silently did nothing.
+// TestASubtreeOnlyKeyIsRefusedLoudly pins the half of #1521 this PR does NOT
+// deliver, and pins that it is not silent about it.
 //
-// ⛔ MEASURED BEFORE THE FIX: the tenant's own map held
-// `redis_evicted_keys:100` and `/effective` reported 100, while
-// `user_threshold` had NO such series — because nothing iterates a tenant's
-// map to decide what to emit (`resolveBaseRows` walks `cfg.Defaults`,
-// `resolveDeclaredRows` walks `cfg.OptionalOverrides`) and a nested `_` file
-// feeds neither. Every load also logged
-// `WARN: tenant=t1: unknown key "redis_evicted_keys" not in defaults`.
+// ⛔ WHY IT IS NOT DELIVERED. Nothing iterates a tenant's override map to
+// decide what to emit: `resolveBaseRows` walks `cfg.Defaults` and
+// `resolveDeclaredRows` walks `cfg.OptionalOverrides`. A key that appears only
+// in a subtree `_defaults.yaml` is in neither, because nested `_` files are
+// deliberately excluded from the merged config so they cannot re-price the
+// whole tree.
 //
-// ⛔ WORSE THAN THE DEFECT IT REPLACED, which is why this is a test and not a
-// ticket: the tenant IS in `GetConfig()` now, so the #1526 divergence audit
-// sees a reconciled tree and stays silent. Before the overlay the tenant was
-// absent and the gauge read 1.
-func TestASubtreeOnlyKeyReachesTheOutputPlane(t *testing.T) {
+// ⛔ AND THE OBVIOUS FIX WAS MEASURED WORSE THAN THE GAP. Declaring such keys
+// in `cfg.OptionalOverrides` made them emit and produced four defects, each
+// reproduced: a `default_foo`/`foo` pair collided into one label set and
+// failed the WHOLE Prometheus `Gather`; an unrelated tenant's edit deleted
+// another tenant's live series; the subtree's only tenant setting the key
+// itself meant it was never declared, so its OWN value stopped emitting; and
+// an `expires:` in a subtree defaults file was charged to every tenant under
+// it, blocking their writes. All four share one root cause — that field is a
+// flat global list with no subtree scope. Fixing it properly needs per-subtree
+// scope in `ThresholdConfig`, i.e. #1568.
+//
+// So the contract asserted here is: the value does NOT reach the output plane,
+// nothing is silently written anywhere, and the divergence audit NAMES the
+// tenant and the key. Silence is the one outcome this ticket forbids.
+func TestASubtreeOnlyKeyIsRefusedLoudly(t *testing.T) {
 	dir := t.TempDir()
 	writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"),
 		"defaults:\n  mysql_connections: 80\n")
@@ -64,32 +73,54 @@ func TestASubtreeOnlyKeyReachesTheOutputPlane(t *testing.T) {
 	writeTestYAML(t, filepath.Join(dir, "finance", "t1.yaml"),
 		"tenants:\n  t1: {}\n")
 
-	m := NewConfigManager(dir)
-	defer m.Close()
-	logged := captureLoad(t, m)
+	m, fresh, logBuf := newAuditedManager(t, dir)
+	if err := m.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
 
-	// Control: the key the ROOT declares was already working before this fix.
+	// The half that IS delivered: a key the ROOT declares carries the
+	// subtree's value. Without this control the test would pass with the
+	// overlay removed entirely.
 	if got, ok := seriesFor(t, m, "t1", "connections"); !ok || got != 60 {
 		t.Fatalf("control: the root-declared key should carry the subtree's 60, got %v (present=%v)", got, ok)
 	}
-	// The key only `finance/_defaults.yaml` introduces.
-	got, ok := seriesFor(t, m, "t1", "evicted_keys")
-	if !ok {
-		t.Fatalf("a key introduced by a subtree _defaults.yaml emits no user_threshold " +
-			"series; the inherited value landed in a map no emitter reads")
+
+	// The half that is NOT delivered — and must not pretend to be.
+	if _, present := seriesFor(t, m, "t1", "evicted_keys"); present {
+		t.Errorf("a subtree-only key emitted a series; either #1568 landed or the " +
+			"global declared surface was widened again")
 	}
-	if got != 100 {
-		t.Fatalf("subtree-only key emitted %v, want the inherited 100", got)
-	}
-	// And it must be emitted as a DECLARED key, not by widening the global
-	// defaults — that would re-price every tenant in the tree.
 	if _, leaked := m.GetConfig().Defaults["redis_evicted_keys"]; leaked {
-		t.Errorf("the subtree's key leaked into the global Defaults map; " +
-			"every tenant in the tree now carries a value it never inherited")
+		t.Errorf("the subtree's key leaked into the global Defaults map; every tenant " +
+			"in the tree now carries a value it never inherited")
 	}
-	if strings.Contains(logged, `unknown key "redis_evicted_keys"`) {
-		t.Errorf("the key is still not on the platform's declared surface — "+
-			"ValidateTenantKeys rejects it on every commit; log:\n%s", logged)
+	for _, declared := range m.GetConfig().OptionalOverrides {
+		if declared == "redis_evicted_keys" {
+			t.Errorf("the subtree's key was added to the global declared surface — the " +
+				"design that produced the /metrics-wide Gather failure")
+		}
+	}
+	if _, written := m.GetConfig().Tenants["t1"]["redis_evicted_keys"]; written {
+		t.Errorf("the value was written into the tenant's map where no emitter reads " +
+			"it, which also makes ValidateTenantKeys log `unknown key` every commit")
+	}
+	// ⛔ Not writing it is only acceptable BECAUSE of the next two assertions.
+	if got := testutil.ToFloat64(fresh.hierarchyDivergentTenants); got != 1 {
+		t.Errorf("da_config_hierarchy_divergent_tenants = %v, want 1 — a tenant whose "+
+			"/effective value can never become a series is a divergence, and the gauge "+
+			"reporting 0 here is the silence this ticket exists to remove", got)
+	}
+	line := logBuf.String()
+	if !strings.Contains(line, "conf.d scanner divergence") {
+		t.Fatalf("no divergence ERROR at all; log:\n%s", line)
+	}
+	for _, want := range []string{"t1", "redis_evicted_keys"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("the ERROR does not name %q, so an operator cannot act on it; log:\n%s", want, line)
+		}
+	}
+	if strings.Contains(line, `unknown key "redis_evicted_keys"`) {
+		t.Errorf("the key was still handed to ValidateTenantKeys; log:\n%s", line)
 	}
 }
 
@@ -133,17 +164,19 @@ func TestAScheduledSubtreeDefaultAgreesOnBothPlanes(t *testing.T) {
 	}
 }
 
-// TestASubtreeIsInheritedWhenTheRootDeclaresNoDefaults covers the assumption
-// that `chain[0]` is the root's defaults file.
+// TestTheShallowestDefaultsFileIsNotMistakenForTheRoot keeps the `chain[0]`
+// fix pinned now that a subtree-only key is refused rather than delivered.
 //
-// ⛔ MEASURED BEFORE THE FIX: `/effective` reported both keys and the series
-// reported NEITHER. `collectDefaultsChain` appends only the levels that
-// actually hold a defaults file, so with no file at the root `chain[0]` is
-// `finance/_defaults.yaml` — and `chain[1:]` dropped it as if it were global.
+// ⛔ `collectDefaultsChain` appends only levels that actually HAVE a defaults
+// file, so with no `_defaults.yaml` at the conf.d root, `chain[0]` is the
+// shallowest SUBTREE file. Skipping it by index treated it as the root's —
+// already-merged — when its keys are in fact in no merged surface at all.
 //
-// ⚠️ ADR-016 documents `domain/region/env`, so a tree whose top level is
-// nothing but directories is a shape real deployments take.
-func TestASubtreeIsInheritedWhenTheRootDeclaresNoDefaults(t *testing.T) {
+// With no root defaults file `cfg.Defaults` is empty, so BOTH levels' keys are
+// unreachable; the discriminating assertion is that both are NAMED. Under the
+// index-based skip the shallowest file is never examined, so only the deeper
+// key appears.
+func TestTheShallowestDefaultsFileIsNotMistakenForTheRoot(t *testing.T) {
 	dir := t.TempDir()
 	mkSub(t, dir, "finance")
 	mkSub(t, dir, filepath.Join("finance", "us"))
@@ -154,18 +187,21 @@ func TestASubtreeIsInheritedWhenTheRootDeclaresNoDefaults(t *testing.T) {
 	writeTestYAML(t, filepath.Join(dir, "finance", "us", "t1.yaml"),
 		"tenants:\n  t1: {}\n")
 
-	m := NewConfigManager(dir)
-	defer m.Close()
-	captureLoad(t, m)
-
-	// The shallowest level that HAS a defaults file is not the root, and its
-	// keys must still be inherited.
-	if got, ok := seriesFor(t, m, "t1", "connections"); !ok || got != 60 {
-		t.Errorf("the shallowest subtree defaults file was skipped as if it were the "+
-			"root's: got %v (present=%v), want 60", got, ok)
+	m, fresh, logBuf := newAuditedManager(t, dir)
+	if err := m.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
 	}
-	if got, ok := seriesFor(t, m, "t1", "evicted_keys"); !ok || got != 70 {
-		t.Errorf("deeper subtree key: got %v (present=%v), want 70", got, ok)
+
+	if got := testutil.ToFloat64(fresh.hierarchyDivergentTenants); got != 1 {
+		t.Errorf("da_config_hierarchy_divergent_tenants = %v, want 1", got)
+	}
+	line := logBuf.String()
+	if !strings.Contains(line, "mysql_connections") {
+		t.Errorf("the SHALLOWEST defaults file was skipped as if it were the root's, so "+
+			"its key is neither delivered nor reported — the worst of both; log:\n%s", line)
+	}
+	if !strings.Contains(line, "redis_evicted_keys") {
+		t.Errorf("the deeper subtree key is not reported either; log:\n%s", line)
 	}
 }
 
@@ -326,28 +362,22 @@ func mkSub(t *testing.T, dir, sub string) {
 	}
 }
 
-// TestARelativeConfigDirStillTellsTheRootApart covers a defect this round's
-// own fix introduced, found by measuring the repo's real trees rather than by
-// reading the diff.
+// TestARelativeConfigDirStillTellsTheRootApart guards the comparison that
+// decides which chain entry IS the root.
 //
-// ⛔ MEASURED: `-config-dir` is frequently RELATIVE, while the defaults chain
-// is stored absolute (`scanDirHierarchical` does `filepath.Abs` + `Clean`).
-// Comparing the two directly never matched, so the ROOT `_defaults.yaml`
-// looked like a subtree file to the overlay. On three of the repo's own
-// golden fixtures — trees with no subdirectory at all — every root defaults
-// key was copied into the tenant's map and declared: `_metadata`,
-// `alert_group`, `threshold`.
-//
-// The assertion is that a root-declared key stays OUT of the tenant's own
-// map: it is already in `cfg.Defaults` and applies to every tenant from
-// there, so a copy per tenant is pure duplication of the platform surface.
+// ⛔ The chain stores absolute paths (`scanDirHierarchical` runs
+// `filepath.Abs`+`Clean`) while `-config-dir` is frequently relative. Comparing
+// the two directly never matches, so EVERY level looks like a subtree and the
+// ROOT defaults get copied into each tenant's own map — measured on the repo's
+// own golden fixtures, where three trees with no subdirectory at all picked up
+// spurious entries.
 func TestARelativeConfigDirStillTellsTheRootApart(t *testing.T) {
 	abs := t.TempDir()
 	writeTestYAML(t, filepath.Join(abs, "_defaults.yaml"),
 		"defaults:\n  mysql_connections: 50\n")
 	mkSub(t, abs, "finance")
 	writeTestYAML(t, filepath.Join(abs, "finance", "_defaults.yaml"),
-		"defaults:\n  redis_evicted_keys: 33\n")
+		"defaults:\n  redis_evicted_keys: 44\n")
 	writeTestYAML(t, filepath.Join(abs, "finance", "t1.yaml"),
 		"tenants:\n  t1: {}\n")
 
@@ -363,62 +393,81 @@ func TestARelativeConfigDirStillTellsTheRootApart(t *testing.T) {
 		t.Skipf("relative form is still absolute (%s); nothing to test here", rel)
 	}
 
-	m := NewConfigManager(rel)
-	defer m.Close()
-	captureLoad(t, m)
+	m, _, logBuf := newAuditedManager(t, rel)
+	if err := m.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
 
+	// ⛔ THE DISCRIMINATOR IS THE ROOT KEY THE SUBTREE NEVER MENTIONS. If the
+	// root defaults file is mistaken for a subtree one it gets walked as
+	// inheritable, and `mysql_connections` — which IS in cfg.Defaults, so it
+	// passes the reachability check — is copied into the tenant's own map.
+	// Nothing else discriminates: a key the subtree also sets lands in that
+	// map either way, and a reachable key is never reported, so an assertion
+	// on the log alone cannot see this. (Measured: an earlier version of this
+	// test asserted only on the log and the mutation stayed green.)
 	overrides := m.GetConfig().Tenants["t1"]
 	if _, copied := overrides["mysql_connections"]; copied {
 		t.Errorf("the ROOT defaults key was copied into the tenant's own map through a "+
 			"relative -config-dir; the root file was mistaken for a subtree one. "+
 			"tenant map = %v", overrides)
 	}
-	// The genuine subtree key must still come through, or the test would pass
-	// simply by the overlay doing nothing at all.
-	if got, ok := seriesFor(t, m, "t1", "evicted_keys"); !ok || got != 33 {
-		t.Errorf("control: the real subtree key should still be inherited, got %v (present=%v)", got, ok)
+	if line := logBuf.String(); !strings.Contains(line, "redis_evicted_keys") {
+		t.Errorf("control: the genuine subtree-only key must still be reported, or this "+
+			"test would pass with the overlay doing nothing at all; log:\n%s", line)
 	}
 }
 
-// TestNonThresholdSubtreeKeysStayOutOfTheCollectorPlane pins the overlay's
-// scope.
+// TestNonThresholdSubtreeKeysStayOutOfTheCollectorPlane pins that the shape
+// filter runs BEFORE the reachability decision.
 //
-// ⛔ MEASURED on the repo's `full-l0-l3` golden fixture: copying a subtree's
-// non-threshold keys (`region: us-east`, `pages: [b]`, `level: L3`) into the
-// tenant's threshold map produced no series either way, but it produced
-// `WARN: invalid declared threshold "us-east" …` from inside
-// `ResolveAtWithStats` — which runs ON EVERY SCRAPE. Three junk keys, three
-// WARN lines per scrape. Leaving them undeclared just moves the noise to
-// `WARN: unknown key … not in defaults` once per commit instead.
+// ⛔ A `region: us-east` in a subtree `_defaults.yaml` is not a threshold and
+// must not appear anywhere on the collector plane — not in the tenant's map,
+// not on the declared surface, and NOT in the divergence report either.
+// Reporting it would train operators to ignore the line: the audit's whole
+// value is that everything it names is genuinely a threshold that cannot fire.
 func TestNonThresholdSubtreeKeysStayOutOfTheCollectorPlane(t *testing.T) {
 	dir := t.TempDir()
 	writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"),
 		"defaults:\n  mysql_connections: 50\n")
 	mkSub(t, dir, "finance")
 	writeTestYAML(t, filepath.Join(dir, "finance", "_defaults.yaml"),
-		"defaults:\n  region: us-east\n  redis_evicted_keys: 44\n")
+		"defaults:\n  region: us-east\n  pages:\n    - b\n  mysql_connections: 44\n")
 	writeTestYAML(t, filepath.Join(dir, "finance", "t1.yaml"),
 		"tenants:\n  t1: {}\n")
 
-	m := NewConfigManager(dir)
-	defer m.Close()
-	logged := captureLoad(t, m)
-
-	if _, carried := m.GetConfig().Tenants["t1"]["region"]; carried {
-		t.Errorf("a non-threshold subtree key entered the tenant's threshold map")
+	m, fresh, logBuf := newAuditedManager(t, dir)
+	if err := m.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
 	}
-	for _, declared := range m.GetConfig().OptionalOverrides {
-		if declared == "region" {
-			t.Errorf("a non-threshold subtree key was added to the platform's declared surface")
+	cfg := m.GetConfig()
+
+	for _, key := range []string{"region", "pages"} {
+		if _, carried := cfg.Tenants["t1"][key]; carried {
+			t.Errorf("non-threshold key %q entered the tenant's threshold map", key)
+		}
+		for _, declared := range cfg.OptionalOverrides {
+			if declared == key {
+				t.Errorf("non-threshold key %q was added to the declared surface", key)
+			}
+		}
+		if strings.Contains(logBuf.String(), key) {
+			t.Errorf("non-threshold key %q was reported as an unreachable threshold; the "+
+				"audit must only name things that genuinely cannot fire", key)
 		}
 	}
-	// Reading the collector is what surfaces the per-scrape WARN.
-	if got, ok := seriesFor(t, m, "t1", "evicted_keys"); !ok || got != 44 {
-		t.Fatalf("control: the threshold-shaped subtree key must still arrive, got %v (present=%v)", got, ok)
+	// Control: a threshold-shaped key the ROOT declares still arrives.
+	if got, ok := seriesFor(t, m, "t1", "connections"); !ok || got != 44 {
+		t.Fatalf("control: the threshold-shaped subtree value must still arrive, got %v (present=%v)", got, ok)
 	}
-	if strings.Contains(logged, "invalid declared threshold") ||
-		strings.Contains(logged, "unknown key") {
-		t.Errorf("a valid tree logs threshold-validation noise:\n%s", logged)
+	// A tree whose only oddity is non-threshold metadata is HEALTHY.
+	if got := testutil.ToFloat64(fresh.hierarchyDivergentTenants); got != 0 {
+		t.Errorf("da_config_hierarchy_divergent_tenants = %v, want 0 — non-threshold "+
+			"metadata in a subtree defaults file is not a divergence", got)
+	}
+	if logs := logBuf.String(); strings.Contains(logs, "invalid declared threshold") ||
+		strings.Contains(logs, "unknown key") {
+		t.Errorf("a valid tree logs threshold-validation noise:\n%s", logs)
 	}
 }
 
