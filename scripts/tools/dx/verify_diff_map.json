@@ -759,7 +759,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "198fcad386b1a9a2e16e162c8affea1fdfee85038a444c60385d8220af860e7b",
+ "source_digest": "bbf2b8388af52ac4eec1413f04f351d299363a4a99d03a440869736918d75e5e",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -2759,6 +2759,9 @@
   ],
   "tests/lint/test_check_scrape_reachability.py": [
    "tests/helm/test_optional_overrides_render.py"
+  ],
+  "tests/lint/test_check_threshold_registry.py": [
+   "tests/ops/test_registry_lib.py"
   ],
   "tests/lint/test_counterexample_coverage.py": [
    "tests/lint/test_check_threshold_registry.py"

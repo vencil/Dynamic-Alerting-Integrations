@@ -2327,8 +2327,9 @@ def main():
         # `apply_count_updates(check_only=args.check, dry_run=args.dry_run)` is
         # the whole of it. Getting this list wrong in either direction is a
         # defect: too small and a legitimate `--sync-counts --dry-run` is
-        # rejected (measured — it broke `test_plain_sync_counts_also_fails_on_
-        # no_source`), too large and the silent-discard hole reopens.
+        # rejected (measured — it broke
+        # `test_plain_sync_counts_also_fails_on_no_source`), too large and the
+        # silent-discard hole reopens.
         # ⛔ The question is "did the caller PASS this flag", not "does its
         # value differ from the default". Those come apart for any flag with a
         # non-empty default: `--changelog-lang` defaults to "zh", so

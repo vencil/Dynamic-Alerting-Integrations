@@ -1539,8 +1539,9 @@ _GL_ROOT_SHELL_REL = Path('.gitlab-ci.yml')
 # pipeline template still carries its own literal `stages:` block and each
 # job its own literal `stage:` — `textwrap.dedent` runs before `.format()`,
 # so a multi-line placeholder at column 0 flattens the whole template. What
-# ties them is a TEST (`test_root_shell_only_names_stages_the_pipeline_
-# declares`), not a derivation. That is a tripwire, not an invariant: it
+# ties them is a TEST
+# (`test_root_shell_only_names_stages_the_pipeline_declares`), not a
+# derivation. That is a tripwire, not an invariant: it
 # catches drift, it does not prevent it.
 _GL_STAGES = ('validate', 'apply')
 

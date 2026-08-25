@@ -39,8 +39,9 @@
 # hashes end to end, and a commit id cannot be re-pointed the way a tag can.
 # d4b8a71 is what `v3.0.8` dereferences to AND what the official release binary
 # self-reports as its revision, so this builds the release's exact source tree —
-# and that is now a TEST, not a comment (test_mtail_commit_pin_matches_the_
-# release_binary compares it against the checksum-verified upstream binary CI
+# and that is now a TEST, not a comment
+# (test_mtail_commit_pin_matches_the_release_binary compares it against the
+# checksum-verified upstream binary CI
 # installs). ⛔ MTAIL_COMMIT alone selects the source; MTAIL_VERSION only feeds
 # the ldflags banner. Bump the commit and the version together.
 #
