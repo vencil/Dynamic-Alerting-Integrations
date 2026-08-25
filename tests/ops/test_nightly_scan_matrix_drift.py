@@ -539,8 +539,9 @@ def _ref_shape_must_match() -> tuple[str, ...]:
     ``no tests ran``, and it takes down the WHOLE invocation, not just this module
     (reproduced by running this file together with another). The guard count is
     derivable (``pytest --collect-only``) and was 53 at the time, so it does not
-    belong in prose as an approximation either. `test_nothing_in_this_module_reads
-    _the_pin_table_at_import_time` is the tripwire that keeps this true.
+    belong in prose as an approximation either.
+    `test_nothing_in_this_module_reads_the_pin_table_at_import_time` is the
+    tripwire that keeps this true.
     """
     return (
         # ⛔ The real pins are IMPORTED, not transcribed. They used to be four
@@ -2626,8 +2627,9 @@ def _make_recipe(target: str) -> list[str]:
 def test_selfbuilt_matrix_covers_every_dockerfile() -> None:
     """Every Dockerfile in the tree is scanned, or carries a registered exemption.
 
-    This is the assertion #1337 was missing. `test_report_expected_counts_match_
-    matrix_sizes` below only checks the matrix against a literal it sits next to,
+    This is the assertion #1337 was missing.
+    `test_report_expected_counts_match_matrix_sizes` below only checks the
+    matrix against a literal it sits next to,
     so bumping both together passes while an image sits in neither list.
 
     ⭐ COUNTERFACTUAL (measured, not assumed — the three inventories restored whole

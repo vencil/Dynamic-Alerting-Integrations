@@ -3705,8 +3705,9 @@ def test_portal_preview_job_event_gating(tmp_path, deploy) -> None:
 def test_portal_preview_actually_varies_with_the_deploy_choice(tmp_path) -> None:
     """⛔ Anti-vacuity floor for the `deploy` axis of the three tests above.
 
-    The CLI matrix got a floor (``test_matrix_matches_the_independent_hand_
-    written_floor``); this axis did not, and it needs one for the same reason.
+    The CLI matrix got a floor
+    (``test_matrix_matches_the_independent_hand_written_floor``); this axis did
+    not, and it needs one for the same reason.
     Every preview test is parametrized over ``DEPLOY_CHOICES``, so all three
     report N cases and read like N-way coverage — but nothing checked the three
     cases were DIFFERENT. If the preview generator stops reading
@@ -4615,8 +4616,9 @@ _SUMMARY_CI_VALUES = ["github", "gitlab", "both"]
 
 @pytest.mark.parametrize("lang", sorted(_SUMMARY_MARKERS))
 # ⛔ The SHARED constant, not a third hand-copied list. This axis used to
-# spell `["github", "gitlab", "both"]` inline, so `test_summary_axes_cannot_
-# shrink_silently` pinned the sibling axis while this one could quietly lose
+# spell `["github", "gitlab", "both"]` inline, so
+# `test_summary_axes_cannot_shrink_silently` pinned the sibling axis while
+# this one could quietly lose
 # a value — and `github` is the leg with no `include:` indirection to rescue
 # it, i.e. the one that needs the subdirectory warning most.
 @pytest.mark.parametrize("ci", _SUMMARY_CI_VALUES)

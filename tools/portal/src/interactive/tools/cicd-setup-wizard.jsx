@@ -399,8 +399,9 @@ function StepReview({ config }) {
                       pipeline stops loading, strictly worse than the unwired
                       state this step exists to fix.
                       NOTE: this comment deliberately does NOT spell the folded
-                      form out. `test_every_include_snippet_we_show_a_customer_
-                      parses_as_yaml` scans this file for it, and an example
+                      form out.
+                      `test_every_include_snippet_we_show_a_customer_parses_as_yaml`
+                      scans this file for it, and an example
                       inside a warning about the example is indistinguishable
                       from the real thing — the same trap that made the nightly
                       matrix comment pull a whole module into its scan.
