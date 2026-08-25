@@ -1036,12 +1036,35 @@ func patchTenants(prev *ThresholdConfig, newConfigs, oldConfigs map[string]Thres
 				//	                          (16242 before this PR's round 10,
 				//	                           17247 with a slice per tenant)
 				//
+				// ⚠️ BYTES, WHICH BOTH EARLIER VERSIONS OF THIS NOTE OMITTED.
+				// CI's IncrementalLoad_1000_OneFileChanged rose 2.252Mi → 2.330Mi
+				// when the index landed, so the cost was attributed rather than
+				// assumed: same box, same commit, index built vs index removed from
+				// this loop, 5 runs each —
+				//
+				//	no index : 2312856-2345359 B/op, 16239-16240 allocs/op
+				//	index    : 2443019-2443879 B/op, 16246-16247 allocs/op
+				//
+				// ⇒ ~99 KB and ~7 allocs per reload: the `map[string]string` sized
+				// to len(newConfigs). Transient, freed with the patch, and paid once
+				// per debounced reload rather than once per tenant.
+				//
+				// ⚠️ NOT TAKEN, DELIBERATELY: the index could cover only the
+				// tenants named by patchFiles+removed rather than every file — ~1
+				// entry in the common single-file reload. It buys back the 99 KB and
+				// costs a SECOND SELECTION PREDICATE over the same tree, which is
+				// the defect shape this whole PR exists to close (#1339). Not worth
+				// it for a transient 99 KB; recorded here so the next reader does
+				// not rediscover it as a finding.
+				//
 				// ⚠️ It also said "the only benchmark that reaches this loop
 				// with a changed file". False: BenchmarkIncrementalLoad_100_
 				// OneFileChanged does too. ⚠️ And bytes/op on these benchmarks
-				// is bimodal (two clusters ~32 KB apart, map bucket growth) —
-				// a comment-only commit moved the CI figure — so never read a
-				// one-shot bytes delta here as a signal.
+				// is bimodal (two clusters ~32 KB apart, map bucket growth) — a
+				// comment-only commit moved the CI figure — so a one-shot bytes
+				// delta is never the signal on its own; the two arms above are
+				// repeated 5x each for exactly that reason, and their ranges do not
+				// overlap.
 				// No `ok` check: `tenant` came from `partial.Tenants` and
 				// `partial` came from `newConfigs`, so the index necessarily
 				// has it. The earlier `if …; ok` branch could never be false —
