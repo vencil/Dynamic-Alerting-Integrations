@@ -26,16 +26,45 @@ lang: zh
 
 參數為生產環境實際使用的預設值：`--threshold-pct 5.0`、`--consecutive 2`（`paired_trend_watch.py:140-141`；`bench-record.yaml:572` 的呼叫未覆寫兩者）。
 
-| benchmark | 首次 fire（live 判定） | 首次出現於哪次觀測 |
-|---|---|---|
-| `BenchmarkMergePartialConfigs_1000` | 2026-08-18 | run `32687665133`（08-24） |
-| `BenchmarkResolveSilentModes_1000` | 2026-08-24 | run `32806126050`（08-25） |
+| benchmark | 首次 fire（live 判定） | 首次出現於哪次觀測 | `reference_sha` |
+|---|---|---|---|
+| `BenchmarkMergePartialConfigs_1000` | 2026-08-18 | run `32687665133`（08-24） | ⛔ **未記錄** |
+| `BenchmarkResolveSilentModes_1000` | 2026-08-24 | run `32806126050`（08-25） | ⛔ **未記錄** |
 
 ⇒ 截至 2026-08-25，分母 = **2**。
 
-⛔ **來源與其保存期限，必須跟數字一起讀。** 這兩筆來自兩次 `paired-trend-watch` job 的**摘要輸出**，而**那份摘要不在 repo 裡**——它活在 GitHub Actions 的 job log，會過期。本節存在的唯一理由就是把它固定下來；⚠️ 在此之前，「2」這個數字在 repo 內**查無依據**，而那正是盲審抓到它的方式。
+⛔ **來源與其保存期限，必須跟數字一起讀。** 這兩筆來自兩次 `paired-trend-watch` job 的**摘要輸出**，而**那份摘要不在 repo 裡**——它活在 GitHub Actions 的 job log，會過期。本節存在的唯一理由就是把它固定下來；⚠️ 在此之前，「2」這個數字在 repo 內**查無依據**。
 
-⚠️ **不要拿它跟錨點資料集的「1」比。** 錨點 [`bench-paired-2026-08/README.md`](../bench-paired-2026-08/README.md) 在同一組參數下記 `1 fire(s): MergePartialConfigs_1000@08-17`，是因為它只涵蓋 **08-16..08-21**；`BenchmarkResolveSilentModes_1000` 的 fire 在 **08-24**，落在其外（該檔另記其 median +4.05%，在那六夜上本就不到 5% 門檻）。⛔ **不同夜集合的兩個數字，比較它沒有意義。**
+### ⛔ 這張表目前缺唯一鍵的一半
+
+ADR §待決 6 定義第三個主指標的唯一鍵是 **`(benchmark, reference_sha)`**，理由是 re-pin 之後同一支再 fire 是**另一件事**，算成同一筆會把「已接受的成本」偷偷續期。**而本表沒有 `reference_sha`，`nights.jsonl` 也沒有。**
+
+⇒ **讀者目前無法判斷這兩筆是否落在同一個 reference pin 期間內，也就是無法完整重建分母。** 這一節存在的理由是「讓分母可覆核」，而它目前只做到一半——被自己的契約點名的那一半。
+
+已知的部分：ADR §待決 5 的封存資料集其 `reference` pin 為 `3fd96b51…`（`bench-paired-2026-08/nights.json` 頂層），且觀察期內唯一一次有紀錄的跨夜比對（08-23→08-24）reference pin 為 `same`。⛔ **但那不足以推斷整段觀察期未 re-pin**，故本表據實留白而不填。
+
+**必修**：後續每次追加觀測時一併記 `reference_sha`（工具側有這個量——`paired_trend_watch.py:761-764` 的 `reference_pin_changed`），並在期末結算前補齊。**在補齊之前，第三個主指標不得結算。**
+
+### ⚠️ 與錨點資料集的「1」為什麼不同 —— 兩個夜集合是巢狀的，差異可完全歸因
+
+錨點 [`bench-paired-2026-08/README.md`](../bench-paired-2026-08/README.md) 在同一組參數下記 `1 fire(s): MergePartialConfigs_1000@08-17`。差異的原因是：
+
+- 錨點涵蓋 **08-16..08-21**，live 窗口涵蓋 **08-16..08-24**，⇒ **後者包含前者**（巢狀，非不相交）
+- `BenchmarkResolveSilentModes_1000` 滿足 k=2 的那一對相鄰夜是 **08-23 + 08-24**，落在錨點範圍之外
+
+⇒ 差異**完全可歸因於多出來的三夜**，兩個數字**可以比較、而且對得起來**。
+
+⛔ **本節前一版把理由寫成「該檔另記其 median +4.05%，在那六夜上本就不到 5% 門檻」——那是假的，已刪除。** 盲審實測錨點原始資料：
+
+```shell
+$ # BenchmarkResolveSilentModes_1000 在錨點六夜的逐夜值
+2.24  4.74  5.31  3.37  2.36  5.34      ← 08-18 與 08-21 兩夜 > 5.0
+$ python3 scripts/tools/dx/paired_trend_watch.py --dataset docs/internal/audit-reports/bench-paired-2026-08
+### Over the threshold, but not sustained
+| `BenchmarkResolveSilentModes_1000` | 2 (08-18, 08-21) | +5.34% |
+```
+
+⇒ 它在錨點六夜裡**兩夜超過門檻**，沒 fire 的真正原因是**那兩夜不相鄰**、k=2 從未滿足。⚠️ 原文用 median 去論證一條逐夜比較的規則——`fires()`（`:637-651`）從不計算 median，那個 +4.05% 出自該檔 §4 的 IQR 推導，**與 5%/2 夜規則不同軸**。把一個 near-miss 寫成 comfortable miss，反而弱化了本節的論證。
 
 ⚠️ **首次 fire 日期為 live 判定值。** 錨點把 `MergePartialConfigs_1000` 記為 **08-17**、live 記 **08-18**——正是本檔下面那節說的「同一個退化，歸因日期差一天」。
 
