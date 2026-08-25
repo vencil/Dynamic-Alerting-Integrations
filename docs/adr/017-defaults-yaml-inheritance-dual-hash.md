@@ -157,26 +157,46 @@ effective = deep_merge( defaults_block(L0), …, defaults_block(Ln), tenant_body
    `effective` / `merged_hash`。
    ⛔ **哪些鍵允許出現，見 [`platform-defaults.schema.json`](../schemas/platform-defaults.schema.json)
    ——但那是「這個檔案允許哪些頂層鍵」的清單，不是「這個鍵放在這裡就會生效」的清單。**
-   `_silent_mode` / `_profile` / `_severity_dedup` 都列在該 schema 的頂層，但它們真正被消費的
-   位置是 `_defaults.yaml` 裡的 **`tenants:` 區塊**；寫在與 `defaults:` 平級的頂層是**靜默
-   no-op**（實測：exporter 零 WARN、`merged_hash` 不變、schema lint 回 `OK`）。
+   ⛔ **判準是「有沒有東西在頂層讀它」，不是一份名單。** 目前**有**平台層頂層消費端的只有
+   兩族：`^_routing` 前綴鍵（`_grar_parse.py` 只讀頂層）與 `_custom_alerts`
+   （`custom_alerts/loader.py` 只讀頂層）。⚠️ 其餘 `_` 前綴鍵**沒有已知的平台層消費端**——它們
+   真正被消費的位置是 `_defaults.yaml` 裡的 **`tenants:` 區塊**，寫在與 `defaults:` 平級的頂層
+   是**靜默 no-op**（實測 `_silent_mode` / `_profile` / `_severity_dedup` / `_namespaces` /
+   `_metadata` / `_routing_profile` 六個，`effective` 與 `merged_hash` 皆逐位元組不動、exporter
+   零 WARN、schema lint 回 `OK`）。⛔ 這六個是**實測結果不是清單**：新增一個 `_` 前綴鍵時，
+   請用上面那條判準，不要用這六個名字反推。
    ⛔ 允許出現的鍵以那份 schema 為準，**勿在本 ADR 另立一份列舉**——上面括號裡的幾個名字是
    舉例，不是清單。
 
-2. ⛔ **不要把平級鍵縮排進 `defaults:` 想讓它們「被看見」。** 它會改變那個鍵的意義，而
-   **每個消費端的下場不同**——下表是**目前已知的，不是窮舉**（⚠️ 這份 ADR 的清單前後被證偽
-   過四次；你手上那個鍵若不在表上，**去找它的消費端再下結論**，不要當作無事）：
+2. ⛔ **不要把平級鍵縮排進 `defaults:` 想讓它們「被看見」。**
 
-   | 你縮排的鍵 | 那個消費端的下場 |
+   **先講對所有鍵都成立的那一半**（exporter 端，依**值的型別**二分，與鍵名無關）：
+   - 值**解不成 `float64`**（mapping / list / 字串 / bool）⇒ `parsePartialConfig` 回 `ok=false`、
+     **整份檔案被丟棄**並 log `ERROR: ... entire block dropped`，同檔其他平級鍵一起陪葬。
+   - 值**解得成 `float64`**（`100` / `1.5` / **`null`→0**）⇒ `ok=true`、**無 ERROR / WARN**、
+     它變成一個閾值鍵。
+
+   ⛔ **但 exporter 只是其中一個消費端，而且往往不是最痛的那個。** 下表是**有專屬消費端**的
+   鍵——**目前已知，不是窮舉**（⚠️ 這份 ADR 的清單前後被證偽過五次）。**你手上那個鍵若不在
+   表上，去找它的消費端再下結論**：exporter 那一半只告訴你「檔案有沒有被丟」，**不告訴你那個
+   鍵原本要餵的那條管線發生了什麼**。
+
+   | 你縮排的鍵 | 那個專屬消費端的下場 |
    |:--|:--|
-   | 值**解不成 `float64`** 的任何鍵（mapping / list / 字串 / bool） | exporter：`parsePartialConfig` 回 `ok=false`、**整份檔案被丟棄**並 log `ERROR: ... entire block dropped`，同檔其他平級鍵一起陪葬 |
-   | 值**解得成 `float64`** 的鍵（`100` / `1.5` / **`null`→0**） | exporter：`ok=true`、**log 是空字串**、變成一個閾值鍵。⛔ 而**那個平級鍵本身失效**——例如 `max_metrics_per_tenant` 離開頂層後 `ThresholdConfig.MaxMetricsPerTenant` 為 0，執行期 fallback 到內建 `DefaultMaxMetricsPerTenant = 500`（`resolve.go`，條件 `== 0`）⇒ 你寫的上限被換成 500；⚠️ 寫 100 是放寬 5 倍，**寫大於 500 的人是被靜默收緊、多出來的 metric 被截斷** |
-   | `_routing_defaults` | 路由：`generate_alertmanager_routes.py` 找不到它——**沒有自己 `_routing` 的租戶整條 route ＋ receiver 消失**（實測 `Found 2 tenant(s) with routing config: db-a, db-b` → `Found 1 tenant(s) with routing config: db-b`，`tenant-db-a` receiver 不見，**RC=0、零 error、零 warning**） |
-   | `_custom_alerts` | 自訂告警編譯：`custom_alerts/loader.py` 只讀**頂層**，縮排後**看到零筆、零 error**。⛔ 同一支 loader 只認檔名 `_defaults.yaml`——把檔案改名成 `_defaults.**yml**` 也會讓它看到零筆，而 exporter 與 `describe_tenant` 兩邊照常讀得到 |
+   | `_routing_defaults`、`_routing_enforced`（以及任何 `^_routing` 前綴鍵） | 路由：`_grar_parse.py` **只讀頂層**（`if "_routing_defaults" in data`）⇒ 縮排後靜默失效。實測 `_routing_defaults`：沒有自己 `_routing` 的租戶**整條 route ＋ receiver 消失**（`Found 2 tenant(s) with routing config: db-a, db-b` → `Found 1 ...: db-b`，**RC=0、零 error、零 warning**）；實測 `_routing_enforced`：**平台強制的 NOC route ＋ `platform-enforced` receiver 整段消失**，同樣零訊號 |
+   | `_custom_alerts` | 自訂告警編譯：`custom_alerts/loader.py` 只讀**頂層**，縮排後**看到零筆、零 error**（CI 閘門 `ci.yml` 照跑照綠）。⛔ 同一支 loader 只認檔名 `_defaults.yaml`——把檔案改名成 `_defaults.**yml**` 也會讓它看到零，而 exporter 與 `describe_tenant` 兩邊照常讀得到 |
    | 任何鍵（診斷面） | `effective`：**靜默接受**成一個巢狀鍵，blast-radius 因此從「無變更」變成一份 Tier B 報告。⚠️ **診斷面會正向獎勵這個動作，而它同時讓租戶失去告警** |
 
    ⛔ `check_confd_schema.py` 對上述**全部**回 `RC=0`（`defaults` 的 sub-schema 逐字宣告
    values left loose）——**沒有任何 schema 閘門擋這一步**。
+
+   ⚠️ **`max_metrics_per_tenant` 是另一回事，不要用縮排來解釋它**：在 `-config-dir`（Helm 出貨
+   用的模式）下，`mergePartialInto` 只搬 `Defaults` / `StateFilters` / `OptionalOverrides` /
+   `Profiles` / `Tenants` 五個欄位，**沒有 `MaxMetricsPerTenant`** ⇒ 不論你寫在頂層還是縮排
+   進去，`ThresholdConfig.MaxMetricsPerTenant` **都是 0**，執行期一律 fallback 到內建的
+   `DefaultMaxMetricsPerTenant = 500`（`resolve.go`，條件 `== 0`）。⛔ 也就是說**這個鍵在目錄
+   模式下從未生效**（單檔 `-config` 模式下才會）——`platform-defaults.schema.json` 的
+   `$comment` 目前把它列為平台層可讀，那句與目錄模式的實作不符。
 
 3. **改了平級鍵之後，不要拿 `merged_hash` / `/effective` / `blast_radius` 去確認它生效**
    （那三個面看不到，而且執行期會把它標成 `effect="cosmetic"`，見下方「診斷面的代價」）。
@@ -259,8 +279,8 @@ parity 套件結構上偵測不到上述任一例外** —— 不要把它的綠
 
 平台面變更對以 `effective_config` / `merged_hash` 為輸入的消費端**結構上不可見**。
 ⛔ **以下是目前已知的，不是窮舉**——這份清單第一版就漏掉了 `tenant-verify`（見下），而受影響
-的面**跨越 Go、Python、Portal 與 CI workflow**（`.github/workflows/blast-radius.yml` 就是把
-這個平面變成 PR 留言的那一層）。⚠️ **本文件不宣稱知道全部**：要在你的樹上盤點，與其搜識別字，
+的面**跨越 Go、Python、Portal 與 CI workflow**（`.github/workflows/blast-radius.yml` 是把
+這個平面變成 PR 留言的那一層，`guard-defaults-impact.yml` 是另一支）。⚠️ **本文件不宣稱知道全部**：要在你的樹上盤點，與其搜識別字，
 不如從**能力**下手——找所有呼叫 `describe_tenant` / `tenant-verify` / `blast_radius` /
 `GET .../effective` / `da-guard` 的東西，並且一起掃 `.github/workflows/**` 與 `Makefile`
 （搜 `merged_hash|MergedHash|ResolveEffective|EffectiveConfig` 會漏掉 workflow：那兩支
@@ -368,7 +388,7 @@ recompute **之後**，右運算元就是 recompute 的產物，因此**省不�
 | Metric | Type | Labels | Description |
 |:-------|:-----|:-------|:------------|
 | `da_config_scan_duration_seconds` | histogram | — | 單次 periodic scan 耗時 |
-| `da_config_reload_trigger_total` | counter | `reason` | reload 原因。**實際發射的只有四個值**：source / defaults / new / delete（全部來自 `classifyAndCount`，僅 hierarchical 模式）。⚠️ `config_metrics.go` 的宣告把 `forced` 也列進定義域，但**沒有任何 production 路徑用它當 label**：`ReloadReasonForced` 由 `detectChange()` 在 hierarchical 模式回傳（**不是**常數註解說的手動 / SIGHUP 觸發），只流進 debounce 的 `pendingReasons`（僅取長度餵 `da_config_debounce_batch`）。下方 `blast_radius` 的 `reason` 實際定義域與此**相同** |
+| `da_config_reload_trigger_total` | counter | `reason` | reload 原因。**實際發射的只有四個值**：source / defaults / new / delete（全部來自 `classifyAndCount`，僅 hierarchical 模式）。⚠️ `config_metrics.go` 的宣告把 `forced` 也列進定義域，但**沒有任何 production 路徑用它當 label**：`ReloadReasonForced` 由 `detectChange()` 在 hierarchical 模式回傳（**不是**常數註解說的手動 / SIGHUP 觸發），只流進 debounce 的 `pendingReasons`（僅取長度餵 `da_config_debounce_batch_size`）。下方 `blast_radius` 的 `reason` 實際定義域與此**相同** |
 | `da_config_defaults_change_noop_total` | counter | — | defaults 變動但 merged_hash 不變的**歸類**次數。⚠️ **不是「被省下的 rebuild」** —— rebuild 無條件執行（見 §Reload 判斷邏輯下方註記） — **v2.8.0 起語義收窄為 cosmetic-only**（見 §Amendment 2026-04-25） |
 | `da_config_defaults_shadowed_total` | counter | — | **v2.8.0 (Issue #61)** — defaults 變動但被 tenant override 擋下的次數（從 `da_config_defaults_change_noop_total` 拆出） |
 | `da_config_blast_radius_tenants_affected` | histogram | `reason / scope / effect` | **v2.8.0 (Issue #61)** — 每 tick 受影響 tenant 數的分佈 |

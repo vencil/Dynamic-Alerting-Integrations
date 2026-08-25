@@ -91,7 +91,7 @@ Inheritance order: **L0 → L1 → L2 → L3 → tenant YAML** (later overrides 
     defaults-file to defaults-file.
     ⛔ **And the inherited value and the `null` must sit in the SAME position**: a `_`-prefixed
     key written as a **sibling** of `defaults:` never enters `effective` in the wrapped shape
-    (see "three things", item 1), so there is nothing to delete — writing it is a silent no-op.
+    (see "these four things", item 1), so there is nothing to delete — writing it is a silent no-op.
     The combinations that actually work are "both inside `defaults:`" or "both at the top level
     of a wrapper-less file".
 - **⚠️ A blank value and an explicit `null` are the same thing** — listing them
@@ -168,30 +168,55 @@ implementation).
    ⛔ **Which keys may appear is defined by
    [`platform-defaults.schema.json`](../schemas/platform-defaults.schema.json) — but that is a
    list of "which top-level keys this file allows", NOT a list of "put the key here and it will
-   take effect".** `_silent_mode` / `_profile` / `_severity_dedup` are all listed at that
-   schema's top level, yet the place they are actually consumed is the **`tenants:` block**
-   inside `_defaults.yaml`; writing them at the top level, alongside `defaults:`, is a **silent
-   no-op** (measured: zero WARN from the exporter, `merged_hash` unchanged, schema lint returns
-   `OK`).
+   take effect".** 
+   ⛔ **The test is "does anything read it at the top level", not a list of names.** The only
+   families that currently **do** have a platform-level top-level consumer are `^_routing`-prefixed
+   keys (`_grar_parse.py` reads top level only) and `_custom_alerts`
+   (`custom_alerts/loader.py` reads top level only). ⚠️ Every other `_`-prefixed key has **no
+   known platform-level consumer** — the place they are actually consumed is the **`tenants:`
+   block** inside `_defaults.yaml`, and writing them at the top level alongside `defaults:` is a
+   **silent no-op** (measured for `_silent_mode` / `_profile` / `_severity_dedup` /
+   `_namespaces` / `_metadata` / `_routing_profile`: `effective` and `merged_hash` both
+   byte-identical, zero WARN from the exporter, schema lint returns `OK`). ⛔ Those six are a
+   **measurement, not a roster**: when a new `_`-prefixed key appears, apply the test above
+   rather than reasoning backwards from these names.
    ⛔ Treat that schema as the source of truth for permitted keys and **do not start a second
    enumeration in this ADR** — the names in parentheses above are examples, not a list.
 
-2. ⛔ **Do not indent sibling keys INTO `defaults:` to "make them visible".** It changes what the
-   key means, and **each consumer fails differently** — the table below is **what is currently
-   known, not an exhaustive list** (⚠️ the lists in this ADR have been falsified four times; if
-   the key you are holding is not in the table, **go find its consumer before concluding
-   anything**, do not assume it is harmless):
+2. ⛔ **Do not indent sibling keys INTO `defaults:` to "make them visible".**
 
-   | Key you indented | What that consumer does |
+   **First, the half that holds for every key** (exporter side, decided by the **value's type**,
+   independent of the key name):
+   - a value that **does not parse as `float64`** (mapping / list / string / bool) ⇒
+     `parsePartialConfig` returns `ok=false`, **the entire file is dropped**, and it logs
+     `ERROR: ... entire block dropped`, taking the file's other sibling keys with it;
+   - a value that **does parse as `float64`** (`100` / `1.5` / **`null`→0**) ⇒ `ok=true`, **no
+     ERROR/WARN**, and it becomes a threshold key.
+
+   ⛔ **But the exporter is only one consumer, and often not the painful one.** The table below
+   covers keys with a **dedicated** consumer — **currently known, not exhaustive** (⚠️ the lists
+   in this ADR have been falsified five times). **If the key you are holding is not in the
+   table, go find its consumer before concluding anything**: the exporter half only tells you
+   whether the file was dropped, **not what happened to the pipeline that key was feeding**.
+
+   | Key you indented | What its dedicated consumer does |
    |:--|:--|
-   | any key whose value **does not parse as `float64`** (mapping / list / string / bool) | exporter: `parsePartialConfig` returns `ok=false`, **the entire file is dropped**, and it logs `ERROR: ... entire block dropped`, taking the file's other sibling keys with it |
-   | a key whose value **does parse as `float64`** (`100` / `1.5` / **`null`→0**) | exporter: `ok=true`, **empty log**, it becomes a threshold key. ⛔ And **the sibling key itself stops working** — e.g. once `max_metrics_per_tenant` leaves the top level `ThresholdConfig.MaxMetricsPerTenant` is 0, and the runtime falls back to the built-in `DefaultMaxMetricsPerTenant = 500` (`resolve.go`, on `== 0`) ⇒ the cap you wrote is replaced by 500; ⚠️ 100 widens it 5×, **anyone who wrote more than 500 is silently tightened and the excess metrics are truncated** |
-   | `_routing_defaults` | routing: `generate_alertmanager_routes.py` cannot find it — **a tenant with no `_routing` of its own loses its entire route AND receiver** (measured: `Found 2 tenant(s) with routing config: db-a, db-b` → `Found 1 tenant(s) with routing config: db-b`, the `tenant-db-a` receiver gone, with **RC=0, zero errors, zero warnings**) |
-   | `_custom_alerts` | custom-alert compilation: `custom_alerts/loader.py` reads only the **top level**, so after indenting it sees **zero entries and zero errors**. ⛔ The same loader only accepts the filename `_defaults.yaml` — renaming the file to `_defaults.**yml**` also makes it see zero, while the exporter and `describe_tenant` both still read it |
+   | `_routing_defaults`, `_routing_enforced` (and any `^_routing`-prefixed key) | routing: `_grar_parse.py` reads **top level only** (`if "_routing_defaults" in data`), so indenting silently disables it. Measured for `_routing_defaults`: a tenant with no `_routing` of its own **loses its entire route AND receiver** (`Found 2 tenant(s) with routing config: db-a, db-b` → `Found 1 ...: db-b`, with **RC=0, zero errors, zero warnings**). Measured for `_routing_enforced`: the platform-enforced NOC route **and** the `platform-enforced` receiver disappear wholesale, equally without signal |
+   | `_custom_alerts` | custom-alert compilation: `custom_alerts/loader.py` reads only the **top level**, so after indenting it sees **zero entries and zero errors** (the `ci.yml` gate still runs and still passes). ⛔ The same loader only accepts the filename `_defaults.yaml` — renaming the file to `_defaults.**yml**` also makes it see zero, while the exporter and `describe_tenant` both still read it |
    | any key (diagnostic surface) | `effective`: **silently accepted** as a nested key, so blast-radius goes from "no changes" to a Tier B report. ⚠️ **The diagnostic surface rewards this action while it takes a tenant's alerting away** |
 
    ⛔ `check_confd_schema.py` returns `RC=0` for **all** of the above (the `defaults` sub-schema
    says verbatim that its values are left loose) — **no schema gate blocks this**.
+
+   ⚠️ **`max_metrics_per_tenant` is a different story — do not explain it with indenting**: under
+   `-config-dir` (the mode Helm ships), `mergePartialInto` copies only `Defaults` /
+   `StateFilters` / `OptionalOverrides` / `Profiles` / `Tenants` — **not
+   `MaxMetricsPerTenant`** ⇒ whether you write it at the top level or indent it,
+   `ThresholdConfig.MaxMetricsPerTenant` is **0** either way and the runtime always falls back
+   to the built-in `DefaultMaxMetricsPerTenant = 500` (`resolve.go`, on `== 0`). ⛔ In other
+   words **this key has never taken effect in directory mode** (only in single-file `-config`
+   mode) — the `$comment` in `platform-defaults.schema.json` currently lists it as readable at
+   the platform level, and that sentence does not match the directory-mode implementation.
 
 3. **After changing a sibling key, do not use `merged_hash` / `/effective` / `blast_radius` to
    confirm it took effect** (those three cannot see it, and the runtime labels it
@@ -292,7 +317,7 @@ Platform-level changes are structurally invisible to consumers that take `effect
 `merged_hash` as input. ⛔ **What follows is the currently-known set, not an exhaustive one** —
 the first version of this list missed `tenant-verify` (below), and the affected surface spans
 Go, Python, the Portal **and CI workflows** (`.github/workflows/blast-radius.yml` is the layer
-that turns this plane into a PR comment). ⚠️ **This document does not claim to know all of
+that turns this plane into a PR comment; `guard-defaults-impact.yml` is the other one). ⚠️ **This document does not claim to know all of
 them**: to inventory your own tree, go by **capability** rather than identifier — find whatever
 calls `describe_tenant` / `tenant-verify` / `blast_radius` / `GET .../effective` / `da-guard`,
 and sweep `.github/workflows/**` and `Makefile` too (searching
@@ -411,7 +436,7 @@ behaviour.
 | Metric | Type | Labels | Description |
 |:-------|:-----|:-------|:------------|
 | `da_config_scan_duration_seconds` | histogram | — | Single periodic scan duration |
-| `da_config_reload_trigger_total` | counter | `reason` | Reload reason. **Only four values are actually emitted**: source / defaults / new / delete (all from `classifyAndCount`, hierarchical mode only). ⚠️ `config_metrics.go` lists `forced` in the declared domain, but **no production path ever uses it as a label**: `ReloadReasonForced` is returned by `detectChange()` in hierarchical mode (**not** the manual / SIGHUP trigger its constant comment describes) and only flows into the debouncer's `pendingReasons`, whose length alone feeds `da_config_debounce_batch`. The effective domain of `blast_radius`'s `reason` below is the **same** |
+| `da_config_reload_trigger_total` | counter | `reason` | Reload reason. **Only four values are actually emitted**: source / defaults / new / delete (all from `classifyAndCount`, hierarchical mode only). ⚠️ `config_metrics.go` lists `forced` in the declared domain, but **no production path ever uses it as a label**: `ReloadReasonForced` is returned by `detectChange()` in hierarchical mode (**not** the manual / SIGHUP trigger its constant comment describes) and only flows into the debouncer's `pendingReasons`, whose length alone feeds `da_config_debounce_batch_size`. The effective domain of `blast_radius`'s `reason` below is the **same** |
 | `da_config_defaults_change_noop_total` | counter | — | **Classification** count: a defaults change whose merged_hash did not move. ⚠️ **Not "rebuilds saved"** — the rebuild runs unconditionally (see the note under §Reload decision logic) — **v2.8.0 narrows the semantics to cosmetic-only** (see Amendment 2026-04-25) |
 | `da_config_defaults_shadowed_total` | counter | — | **v2.8.0 (Issue #61)** — Defaults change blocked by tenant override (split out from `da_config_defaults_change_noop_total`) |
 | `da_config_blast_radius_tenants_affected` | histogram | `reason / scope / effect` | **v2.8.0 (Issue #61)** — Per-tick distribution of affected tenants |
