@@ -589,10 +589,23 @@ func isThresholdShaped(sv ScheduledValue) bool {
 	// two reviewers. (#1569.)
 	//
 	// ⚠️ An `overrides:`-only mapping with NO `default:` key at all is a
-	// different shape and is correctly rejected: `UnmarshalYAML` takes its
-	// arbitrary-mapping branch there, so nothing is decoded into `Overrides`
-	// and the tenant path resolves it to the platform value too. Measured
-	// both ways.
+	// different shape, and this overlay treats it the same way the tenant path
+	// does: `UnmarshalYAML` takes its arbitrary-mapping branch there, nothing
+	// is decoded into `Overrides`, and both a tenant authoring it and a subtree
+	// handing it down resolve to the platform value. Measured both ways (50,
+	// not the window's 90).
+	//
+	// ⛔ THAT IS CONSISTENT, NOT CORRECT, and an earlier version of this
+	// comment said "correctly rejected". `/effective` renders the schedule
+	// verbatim — `{"mysql_connections":{"overrides":[{"value":"90",…}]}}` —
+	// while the series carries 50, and nothing reports the gap. It is the same
+	// silent plane divergence this whole ticket is about, one shape over. It is
+	// NOT introduced here (the tenant-authored control behaves identically, so
+	// the overlay adds no divergence of its own) and fixing it means changing
+	// `ScheduledValue.UnmarshalYAML`, which is a wider blast radius than this
+	// PR. Recorded rather than fixed. (#1569, prompted by re-measuring a stale
+	// CodeRabbit note that claimed the `default: ""` + windows shape was
+	// dropped — that one is fixed and emits 90.)
 	for _, window := range sv.Overrides {
 		if thresholdScalar(window.Value) {
 			return true
