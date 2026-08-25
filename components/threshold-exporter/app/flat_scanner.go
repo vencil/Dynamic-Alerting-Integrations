@@ -105,6 +105,24 @@ func isNestedPlatformFile(key string) bool {
 	return strings.Contains(key, "/") && strings.HasPrefix(scanKeyBase(key), "_")
 }
 
+// absScanRoot is resolveScanRoot preceded by the absolutisation every caller
+// needs and one of them once forgot.
+//
+// ⛔ `m.path` is whatever `-config-dir` was given, frequently relative, while
+// the hierarchical scanner stores absolute paths. Comparing the two without
+// this made EVERY defaults file look like a subtree file — measured on the
+// repo's own flat golden fixtures, whose ROOT defaults keys were then copied
+// into tenant maps. That was fixed in place; this hoists the three-line
+// derivation out of the one caller that had it so a second caller cannot get
+// it subtly different. (#1569 sweep B-2.)
+func absScanRoot(dir string) string {
+	clean := filepath.Clean(dir)
+	if abs, err := filepath.Abs(dir); err == nil {
+		clean = filepath.Clean(abs)
+	}
+	return resolveScanRoot(clean)
+}
+
 func resolveScanRoot(dir string) string {
 	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
 		return resolved

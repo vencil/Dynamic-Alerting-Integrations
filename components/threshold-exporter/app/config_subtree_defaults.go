@@ -87,11 +87,7 @@ func applySubtreeDefaults(
 	// maps and declared (`_metadata`, `alert_group`, `threshold`).
 	// Mirrors the hierarchical scanner's own derivation exactly, including
 	// its choice NOT to resolve symlinks, so the two cannot drift.
-	rootDir := filepath.Clean(root)
-	if abs, aerr := filepath.Abs(root); aerr == nil {
-		rootDir = filepath.Clean(abs)
-	}
-	rootDir = resolveScanRoot(rootDir)
+	rootDir := absScanRoot(root)
 	// ⛔ KEYS THIS OVERLAY CANNOT DELIVER, per tenant, reported rather than
 	// forced through. See the block above `unreachableKeys` for why writing
 	// them anyway was worse than not writing them.
@@ -243,10 +239,27 @@ func keyCanReachTheOutputPlane(cfg *ThresholdConfig, key string) bool {
 // two more; `_state_<undeclared>` and `_routing_bogus` produced none, which
 // is why only those two moved.
 func keyBypassesTheDeclaredSurface(cfg *ThresholdConfig, key string) bool {
+	// ⛔ A KEY CAN MATCH TWO ARMS, AND A `switch` TAKES THE FIRST.
+	// `_state_bogus_critical` is `_critical`-shaped, `_state_bogus{env="x"}`
+	// is dimensional-shaped: both matched an unconditional arm and never
+	// reached the `_state_` arm's consumer lookup below, so the fix that arm
+	// makes was silently unreachable for them. Measured on four shapes
+	// (`_state_X_critical`, `_state_X{…}`, `_routing_X{…}`, `_silent_X{…}`),
+	// each written into the tenant map with no reader, no report and no WARN.
+	// Found by an adversarial reviewer of the arm-order-blind first version of
+	// this predicate — which is itself the lesson: the shapes a table misses
+	// are the ones where two of its rows overlap.
+	//
+	// The exclusions below are not invented here. They are copied from what
+	// `resolveDimensionalRows` and `resolveCriticalRows` THEMSELVES skip, and
+	// that is the whole point: this predicate models those two functions, so
+	// where they refuse a key it must not claim they will read it.
 	switch {
-	case strings.Contains(key, "{"): // resolveDimensionalRows
+	case strings.Contains(key, "{") && !reservedShapeWins(key): // resolveDimensionalRows
 		return true
-	case strings.HasSuffix(key, criticalKeySuffix): // resolveCriticalRows
+	case strings.HasSuffix(key, criticalKeySuffix) &&
+		!strings.HasPrefix(key, "_state_") &&
+		!strings.HasPrefix(key, "_silent_"): // resolveCriticalRows
 		return true
 	case strings.HasPrefix(key, "_state_"):
 		// ⛔ ASK THE CONSUMER, DO NOT PATTERN-MATCH ITS NAME.
@@ -291,6 +304,16 @@ const criticalKeySuffix = "_critical"
 
 // declaredAnywhere reports whether the platform recognises this exact key on
 // either surface `resolveBaseRows` / `resolveDeclaredRows` iterate.
+// reservedShapeWins mirrors the reserved-key exclusions at the top of
+// `resolveDimensionalRows`, verbatim. Kept as its own function so a change
+// there is a one-line change here rather than a condition to re-derive.
+func reservedShapeWins(key string) bool {
+	return strings.HasPrefix(key, "_state_") ||
+		strings.HasPrefix(key, "_silent_") ||
+		key == "_severity_dedup" ||
+		strings.HasPrefix(key, "_routing")
+}
+
 func declaredAnywhere(cfg *ThresholdConfig, key string) bool {
 	if _, global := cfg.Defaults[key]; global {
 		return true

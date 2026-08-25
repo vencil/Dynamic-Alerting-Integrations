@@ -109,6 +109,26 @@ func TestEveryInheritedKeyShapeIsDeliveredOrNamed(t *testing.T) {
 			"only the exact key _silent_mode has a reader"},
 		{"junk under the routing prefix", "  _routing_bogus: 5\n", "_routing_bogus", verdictRefused,
 			"ResolveRouting reads the exact key _routing, and `_routing` is a valid reserved PREFIX so nothing warns"},
+
+		// ⛔ THE OVERLAPPING SHAPES. Each of these matches TWO arms of
+		// `keyBypassesTheDeclaredSurface`, and a `switch` takes the first. The
+		// first version of that predicate put the two unconditional arms first,
+		// so every shape here reached a `return true` without ever consulting
+		// the consumer — the arm-order blind spot of the very table that was
+		// supposed to be exhaustive. All four were measured silent then:
+		// written, no reader, no report, no WARN.
+		{"a critical tier under an undeclared state filter", "  _state_bogus_critical: 5\n", "_state_bogus_critical", verdictRefused,
+			"resolveCriticalRows skips `_state_`-prefixed keys itself, so the _critical arm must not claim it will read this"},
+		{"a dimensional key under an undeclared state filter", "  _state_bogus{env=\"x\"}: 5\n", "_state_bogus{env=\"x\"}", verdictRefused,
+			"resolveDimensionalRows skips `_state_`-prefixed keys itself"},
+		{"a dimensional key under the routing prefix", "  _routing_bogus{env=\"x\"}: 5\n", "_routing_bogus{env=\"x\"}", verdictRefused,
+			"resolveDimensionalRows skips `_routing`-prefixed keys itself"},
+		{"a dimensional key under the silent prefix", "  _silent_bogus{env=\"x\"}: 5\n", "_silent_bogus{env=\"x\"}", verdictRefused,
+			"resolveDimensionalRows skips `_silent_`-prefixed keys itself"},
+		{"a critical tier under the silent prefix", "  _silent_bogus_critical: 5\n", "_silent_bogus_critical", verdictRefused,
+			"resolveCriticalRows skips `_silent_`-prefixed keys itself"},
+		{"a critical tier on the dedup key", "  _severity_dedup_critical: 5\n", "_severity_dedup_critical", verdictWarned,
+			"resolveCriticalRows does NOT exclude this one — it reads it, fails to find the base default, and WARNs; the predicate must keep matching it"},
 	}
 
 	for _, tc := range cases {

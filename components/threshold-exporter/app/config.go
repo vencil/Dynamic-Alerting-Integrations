@@ -661,6 +661,80 @@ func (m *ConfigManager) IncrementalLoad() error {
 		m.mu.Unlock()
 	}
 
+	// ⛔ ITS SIBLING FIELD WENT STALE THE SAME WAY, AND THAT ONE IS LIVE.
+	// The block above fixed `unreachableInherited` and named the risk —
+	// "the asymmetry between the two fields `installConfig` returns is exactly
+	// the kind that becomes live later". It already was. `tenantSources` is
+	// what `hierarchyDivergentTenants` ITERATES, so a tenant that leaves the
+	// tree lingers there, is found missing from the merged config, and is
+	// reported under cause (a): "its file was dropped while building that
+	// config ... look for the ERROR/WARN line naming that file". There is no
+	// such line, because nothing is broken — the operator deleted the tenant.
+	// Measured both ways it can leave: removing one of two root tenant files,
+	// and emptying a root file that stays on disk, each emitted a full
+	// divergence ERROR naming the departed tenant while the merged config was
+	// correct.
+	//
+	// ⛔ THE THREE CASES ARE TOLD APART BY THIS ROUND'S PARSE RESULT, NOT BY
+	// TENANT ABSENCE. Cause (a)'s TRUE positive is a file that still exists and
+	// failed to parse; pruning on "the tenant is gone from the merged config"
+	// would delete exactly that case, which is the one this audit exists for.
+	// `newHashes` says whether the file is still on disk and `newConfigs` says
+	// whether it parsed this round (upstream deletes the entry when it did
+	// not), so:
+	//
+	//	gone from disk                 → prune (operator deleted the file)
+	//	on disk, parsed, no longer declares the tenant → prune (operator deleted the tenant)
+	//	on disk, did NOT parse         → KEEP, so cause (a) still fires
+	//
+	// Additions are attributed from the flat scan rather than left blank: a
+	// tenant absent from `tenantSources` is never audited at all, which is the
+	// silent direction of the same asymmetry. Never OVERWRITES an existing
+	// attribution — where the two scanners disagree about which file owns a
+	// tenant, the hierarchical one is the authority the audit is written
+	// against.
+	refreshTenantSources := func() {
+		scanRoot := absScanRoot(m.path)
+		scanKey := func(absPath string) (string, bool) {
+			rel, err := filepath.Rel(scanRoot, filepath.Clean(absPath))
+			if err != nil {
+				return "", false
+			}
+			return filepath.ToSlash(rel), true
+		}
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		if m.hierarchy.tenantSources == nil {
+			return // the hierarchical scan never ran; nothing to keep honest
+		}
+		next := make(map[string]string, len(m.hierarchy.tenantSources))
+		for tid, src := range m.hierarchy.tenantSources {
+			key, ok := scanKey(src)
+			if !ok {
+				next[tid] = src // cannot relate it to the scan — leave it alone
+				continue
+			}
+			if _, onDisk := newHashes[key]; !onDisk {
+				continue // the file is gone
+			}
+			if partial, parsed := newConfigs[key]; parsed {
+				if _, declared := partial.Tenants[tid]; !declared {
+					continue // the file parsed and no longer names this tenant
+				}
+			}
+			next[tid] = src
+		}
+		for key, partial := range newConfigs {
+			for tid := range partial.Tenants {
+				if _, known := next[tid]; known {
+					continue
+				}
+				next[tid] = filepath.Join(scanRoot, filepath.FromSlash(key))
+			}
+		}
+		m.hierarchy.tenantSources = next
+	}
+
 	if isTenantOnlyChange(changed, added, removed) && m.config != nil {
 		// Incremental patch: copy existing merged config, patch only affected
 		// tenants. Avoids the O(N) merge for the common "1 tenant file changed"
@@ -675,6 +749,7 @@ func (m *ConfigManager) IncrementalLoad() error {
 		merged.ApplyProfiles()
 	}
 	refreshRefused(&merged)
+	refreshTenantSources()
 
 	m.commitConfig(&merged, compositeHash, &flatScanState{
 		hashes:  newHashes,
@@ -781,6 +856,37 @@ func patchTenants(prev *ThresholdConfig, newConfigs, oldConfigs map[string]Thres
 				merged.Tenants[tenant] = overrides
 				patchedTenants[tenant] = struct{}{}
 			}
+		}
+	}
+	// ⛔ A TENANT CAN LEAVE WITHOUT ITS FILE LEAVING. The removal pass below
+	// keys on deleted FILES, so deleting a tenant from a file that stays on
+	// disk — or renaming one — left it live in the merged config forever:
+	// measured, `tenants: {}` in a root file kept emitting the tenant after an
+	// incremental reload while a restart dropped it, and a rename emitted BOTH
+	// names. Alerts for a tenant the operator deleted keep firing until
+	// something unrelated forces a full reload. (#1569 sweep B-2.)
+	//
+	// ⚠️ SCOPED TO FILES THAT STILL PARSE. When a changed file fails to parse
+	// it is deleted from `newConfigs` upstream, so `ok` is false and its
+	// tenants are left alone — today's fail-safe "keep the last good values".
+	// A full load drops them instead and the divergence audit shouts cause (a),
+	// so the two paths still disagree there; that difference is a deliberate
+	// behaviour question (silently keep stale values vs. stop a tenant's alerts
+	// on a typo), not something to settle inside a bug fix.
+	for _, name := range changed {
+		oldPartial, hadOld := oldConfigs[name]
+		newPartial, parsed := newConfigs[name]
+		if !hadOld || !parsed {
+			continue
+		}
+		for tenant := range oldPartial.Tenants {
+			if _, stillDeclared := newPartial.Tenants[tenant]; stillDeclared {
+				continue
+			}
+			if _, moved := patchedTenants[tenant]; moved {
+				continue
+			}
+			delete(merged.Tenants, tenant)
 		}
 	}
 	// Remove tenants from deleted files, unless this same reload re-introduced
