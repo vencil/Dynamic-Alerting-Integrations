@@ -1714,8 +1714,9 @@ def test_the_gate_verdict_cannot_be_skipped() -> None:
     ANY step of the gate job, which reds `if: failure()` on a diagnostic
     upload — a step that by definition can only run when the job has already
     failed, and cannot turn it green. Constraining what a gate job may
-    contain is done in `test_gate_scripts_are_executable_the_way_github_runs
-    _them`, on the one axis that does matter: nothing may run BEFORE the
+    contain is done in
+    `test_gate_scripts_are_executable_the_way_github_runs_them`, on the one
+    axis that does matter: nothing may run BEFORE the
     verdict step, because a prior step can rewrite the verdict's environment
     through `$GITHUB_ENV`.
     """

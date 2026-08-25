@@ -884,3 +884,159 @@ def test_tenant_doc_three_population_claim_matches_the_derivation(path):
             f"{path.name}: the doc offers `{family}_*_critical` as an example "
             f"of the dormant group, but no dormant key starts with "
             f"'{family}_' (dormant={sorted(dormant)})")
+
+# The `textwrap` entry points that can emit a wrapped line. ⛔ Enumerating THESE
+# is legitimate where enumerating spellings was not: the list has an authority
+# outside this repo — it is `textwrap`'s public API — and the other two members
+# of that API (`dedent`, `indent`) cannot split anything, so admitting them
+# would only produce false reports.
+_TEXTWRAP_WRAPPING_API = ("wrap", "fill", "shorten", "TextWrapper")
+
+
+def _textwrap_wrapping_calls(tree) -> list[int]:
+    """Line of every call reaching a `textwrap` wrapping entry point, ANY spelling.
+
+    ⛔ IT MATCHES SHAPES; IT DOES NOT RESOLVE ANYTHING, and every previous
+    wording of this docstring overstated that. Four rounds of blind review each
+    added the spelling it had just walked through — the literal `textwrap.wrap`,
+    then `from textwrap import wrap`, then `import textwrap as tw`, then the
+    stdlib's own `TextWrapper(...).wrap(...)` — and the wording after each round
+    claimed a little more completeness than the round before. The last one
+    claimed there was no fifth spelling. There is.
+
+    ⚠️ MEASURED ESCAPES — all six get past THIS guard, each run with both
+    keyword arguments removed as well:
+      * binding the module to another name (`X = textwrap`, then `X.wrap(...)`)
+      * `getattr(textwrap, "wrap")(...)`
+      * `from textwrap import *`
+      * subclassing `TextWrapper` and calling `.wrap()` on the subclass
+      * `functools.partial(textwrap.wrap, ...)`
+      * `importlib.import_module("textwrap")`
+    They are latent — nothing in this module is written any of those ways — and
+    they are listed rather than chased because closing them needs real binding
+    analysis, which a test module is the wrong place for. ⇒ Treat this as a
+    tripwire for the ordinary spellings, NOT as an invariant.
+
+    ⚠️ ONE SECOND LINE OF DEFENCE, and it covers exactly one call site. Planting
+    an escape at each of the six in turn, `check_threshold_registry --ci` stays
+    green for five of them and goes RED for `render_chart_defaults_lines` —
+    that renderer is the one whose bodies carry a token the escape actually
+    splits today, so a changed wrap surfaces there as a stale generated block.
+    ⛔ Do NOT read the other five greens as "nothing is watching them"; an
+    earlier wording of this paragraph said exactly that and it was measured
+    false. Perturbing each call site's width in turn and re-running `--regen`,
+    `_entry_lines` rewrites 6 golden-compared blocks and `_counterexample_lines`
+    rewrites 5 — including the same two files this paragraph used to hand to
+    `render_chart_defaults_lines` alone. Those two sites are green because
+    their bodies happen to wrap identically, NOT because a golden comparison
+    cannot see them. The three that genuinely reach no golden surface, at 0
+    each, are `annotate_defaults_counterexamples`, `_append_wrapped_comment`
+    and `stub_counterexample_lines` — and the middle one is the very call site
+    whose docstring claims a byte-for-byte revert, so that claim has no golden
+    witness behind it either.
+    """
+    import ast
+
+    module_names = {"textwrap"}
+    from_names: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            module_names |= {a.asname or a.name
+                             for a in node.names if a.name == "textwrap"}
+        elif isinstance(node, ast.ImportFrom) and node.module == "textwrap":
+            for alias in node.names:
+                from_names[alias.asname or alias.name] = alias.name
+
+    def reaches(func) -> bool:
+        if isinstance(func, ast.Attribute):
+            if isinstance(func.value, ast.Name):
+                return (func.value.id in module_names
+                        and func.attr in _TEXTWRAP_WRAPPING_API)
+            # `TextWrapper(...).wrap(...)` — the receiver is itself a call.
+            if isinstance(func.value, ast.Call):
+                return reaches(func.value.func)
+            return False
+        if isinstance(func, ast.Name):
+            return from_names.get(func.id) in _TEXTWRAP_WRAPPING_API
+        return False
+
+    return [node.lineno for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and reaches(node.func)]
+
+
+def test_no_call_site_wraps_a_comment_on_its_own() -> None:
+    """⛔ `_wrap_comment` must stay the ONLY place that calls `textwrap`.
+
+    The two flags it passes are not style: `textwrap` breaks on hyphens AND
+    breaks long words by default, so either can cut an identifier or a path in
+    half across the two comment lines this module emits — and a reference split
+    that way is invisible to `git grep` (#1373 shipped exactly that).
+
+    ⛔ This is a SET assertion, not a spot check, because the defect it guards
+    is precisely "one call site did not get the fix". Before #1453 there were
+    six call sites: three passed `break_on_hyphens=False`, three did not, and
+    NONE passed `break_long_words=False`. Fixing the cited site would have left
+    five. Measured at the time: two shipped artifacts carried live hyphen
+    splits (`opt-in` and `lag-template` cut in half) — one of them a
+    customer-facing `_defaults.yaml`.
+    """
+    import ast
+
+    tree = ast.parse(_SCRIPT.read_text(encoding="utf-8"))
+    raw = _textwrap_wrapping_calls(tree)
+    inside = [
+        node.lineno
+        for fn in ast.walk(tree)
+        if isinstance(fn, ast.FunctionDef) and fn.name == "_wrap_comment"
+        for node in ast.walk(fn)
+        if isinstance(node, ast.Call)
+    ]
+
+    assert raw and set(raw) <= set(inside), (
+        "every textwrap call in this module must sit inside `_wrap_comment`; "
+        f"raw calls at lines {raw}, `_wrap_comment` spans {inside}. ⛔ Route the "
+        "new call through the helper — do not copy the two keyword arguments, "
+        "which is how three of the six original sites ended up with half the "
+        "rule and three with none of it.")
+
+
+def test_wrap_comment_never_splits_a_token() -> None:
+    """⛔ The two keyword arguments themselves, asked as behaviour not spelling.
+
+    `test_no_call_site_wraps_a_comment_on_its_own` proves the DECISION lives in
+    one place. It does not prove the decision is still the right one: measured,
+    deleting `break_on_hyphens=False` AND `break_long_words=False` together left
+    that test — and the whole module — green, BEFORE THIS TEST EXISTED. (Today
+    the same edit reds this test, which is the point of it; the sentence
+    describes the state it was added to fix.) The centralisation was guarded and
+    the thing centralised was not.
+
+    ⚠️ WHAT EACH HALF IS ACTUALLY WORTH, because the first version of this
+    docstring claimed both were unpinned and that was wrong. Deleting the hyphen
+    flag alone reds `tests/lint/test_check_threshold_registry.py::test_real_repo_is_green`,
+    which compares the regenerated artifact — so that half already had a witness,
+    just an indirect one in another module. Deleting the long-word flag alone
+    reds nothing but this test. The net new coverage here is the long-word half;
+    the hyphen case is kept as a direct, local witness for a rule whose only
+    other guard is a golden comparison three modules away.
+
+    ⛔ THE WIDTH IS LOAD-BEARING AND WAS WRONG. At 24 the hyphen assertion is
+    TAUTOLOGICAL — measured, `textwrap` produces byte-identical output with and
+    without the flag at that width, so the case passed for a reason unrelated to
+    what it claims to test. Only at 20 or below does the mutant split the token
+    while the shipped helper does not. Do not raise it.
+    """
+    hyphenated = "see negative-db2.yaml for the counterexample and then stop"
+    segments = lib._wrap_comment(hyphenated, 20)
+    assert len(segments) > 1, "width too generous to exercise wrapping at all"
+    assert any("negative-db2.yaml" in seg for seg in segments), (
+        "`negative-db2.yaml` came back split across segments: "
+        f"{segments}. ⛔ A reference broken that way is invisible to `git grep`, "
+        "which is the accident this helper exists to prevent.")
+
+    long_name = "test_the_index_listing_is_a_real_seam_on_both_derivations"
+    segments = lib._wrap_comment(f"pinned by {long_name} today", 24)
+    assert any(long_name in seg for seg in segments), (
+        f"a token longer than the width came back split: {segments}. ⛔ The "
+        "default breaks long words; that is the half none of the six original "
+        "call sites had.")

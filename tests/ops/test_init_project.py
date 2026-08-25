@@ -2457,8 +2457,9 @@ class TestRunInit:
             # `_print_summary`**，儘管名字與 docstring 講的都是結尾訊息的
             # 行為。實測：把子目錄的 already-wired 判斷整段換成 `if False`
             # （於是一個接線正確的 repo 又被要求加一次它已經有的那一行），
-            # 這條測試照樣綠。這正是隔壁 `test_the_subdir_remedy_is_never_a_
-            # bare_fragment` 的 docstring 才剛警告過的同一個缺陷。
+            # 這條測試照樣綠。這正是隔壁
+            # `test_the_subdir_remedy_is_never_a_bare_fragment`
+            # 的 docstring 才剛警告過的同一個缺陷。
             import contextlib
             import io
             config = {

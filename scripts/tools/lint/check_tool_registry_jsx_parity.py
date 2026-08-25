@@ -104,9 +104,10 @@ def is_internal_jsx(rel_path: str) -> bool:
 
 def main() -> int:
     # argparse with no flags — its purpose here is to enforce the
-    # repo-wide CLI contract (test_help_exits_zero / test_invalid_args
-    # _exits_nonzero in tests/shared/test_tool_exit_codes.py): `--help`
-    # exits 0; unknown flags exit 2 (argparse default behaviour).
+    # repo-wide CLI contract (test_help_exits_zero /
+    # test_invalid_args_exits_nonzero in
+    # tests/shared/test_tool_exit_codes.py): `--help` exits 0; unknown
+    # flags exit 2 (argparse default behaviour).
     parser = argparse.ArgumentParser(
         description=(
             "Validate that every tool-registry.yaml entry has a backing "
