@@ -270,9 +270,9 @@ tenants:
 
 	// Invariant #1: log line at ERROR level (not WARN).
 	logOutput := logBuf.String()
-	if !strings.Contains(logOutput, "ERROR: skip unparseable defaults/profiles file") {
-		t.Errorf("expected ERROR-level log for _defaults.yaml parse failure; got:\n%s", logOutput)
-	}
+	// ⛔ LOAD-BEARING — see the twin assertion in config_hierarchy_test.go.
+	// Naming the wrong file kept the old whole-log form green.
+	assertLogLineWith(t, logOutput, "ERROR: skip unparseable defaults/profiles file", "_defaults.yaml")
 	if strings.Contains(logOutput, "WARN: skip unparseable file") &&
 		strings.Contains(logOutput, "_defaults.yaml") {
 		t.Errorf("_defaults.yaml parse failure logged at WARN — should be ERROR; cycle-6 RCA")

@@ -544,12 +544,11 @@ func TestRecomputeMergedHash_DefaultsParseFailureEmitsErrorAndMetric(t *testing.
 	// from flat-mode (carries the chain-index + tenant-id) but starts
 	// with the same "ERROR: skip unparseable defaults/profiles file".
 	logOutput := logBuf.String()
-	if !strings.Contains(logOutput, "ERROR: skip unparseable defaults/profiles file") {
-		t.Errorf(
-			"expected ERROR-level log for unparseable defaults via recomputeMergedHash; got:\n%s",
-			logOutput,
-		)
-	}
+	// ⛔ LOAD-BEARING. The whole-log form this replaces asserted only that an
+	// ERROR of this CLASS existed, never that it named the file that failed:
+	// making the emitter print a constant other filename left the old
+	// assertion — and the entire package — green. (#1569 sweep B-5.)
+	assertLogLineWith(t, logOutput, "ERROR: skip unparseable defaults/profiles file", "_defaults.yaml")
 
 	// Invariant #2: parse-failure metric incremented for `_defaults.yaml`
 	// basename. At least once (the test fires per-tenant, so we expect

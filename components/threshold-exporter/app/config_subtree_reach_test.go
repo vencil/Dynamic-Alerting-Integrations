@@ -278,10 +278,11 @@ func TestTheDivergenceAuditRunsOnEveryCommit(t *testing.T) {
 		t.Fatalf("da_config_hierarchy_divergent_tenants = %v, want 1 — the audit did "+
 			"not run on this commit", got)
 	}
-	if !strings.Contains(logged, "conf.d scanner divergence") {
-		t.Errorf("no divergence ERROR logged; the gauge is the machine-readable half "+
-			"but the log is the half an operator reads:\n%s", logged)
-	}
+	// ⛔ LOAD-BEARING. The gauge is the machine-readable half; the log is the
+	// half an operator reads, and it has to name WHICH tenant. Measured: an
+	// audit that names a constant wrong tenant leaves the whole-log form green
+	// and reddens only this one. (#1569 sweep B-5.)
+	assertDivergenceLineNames(t, logged, "t-bad")
 	assertNoStaleRemediation(t, logged)
 }
 
@@ -705,17 +706,7 @@ func TestWhatASubtreeMayAndMayNotHandDown(t *testing.T) {
 // mutation left the assertion green with zero divergence output.
 func assertDivergenceLineNames(t *testing.T, logs, name string) {
 	t.Helper()
-	for _, line := range strings.Split(logs, "\n") {
-		if !strings.Contains(line, "conf.d scanner divergence") {
-			continue
-		}
-		if strings.Contains(line, name) {
-			return
-		}
-		t.Errorf("the divergence ERROR does not name %q; line:\n%s", name, line)
-		return
-	}
-	t.Errorf("no divergence ERROR was logged at all, so %q cannot be named in one; log:\n%s", name, logs)
+	assertLogLineWith(t, logs, divergenceAnchor, name)
 }
 
 // TestKeysServedByTheirOwnResolverAreNeverRefused covers the shapes the

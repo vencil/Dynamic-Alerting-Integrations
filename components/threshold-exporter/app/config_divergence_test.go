@@ -438,9 +438,10 @@ func TestDivergenceAudit_PairsOneInstant(t *testing.T) {
 	if gauge := testutil.ToFloat64(fresh.hierarchyDivergentTenants); gauge != 1 {
 		t.Errorf("gauge = %v, want 1 — it must follow the handed snapshot too", gauge)
 	}
-	if logs := logBuf.String(); !strings.Contains(logs, "ghost-tenant") {
-		t.Errorf("ERROR log must name the tenant from the handed snapshot, got:\n%s", logs)
-	}
+	// ⚠️ Cosmetic: the buffer is Reset immediately above and only one audit
+	// call follows, so the whole-log form this replaces could not match
+	// anything else. Measured — no mutation found that separates the two.
+	assertLogLineWith(t, logBuf.String(), divergenceAnchor, "ghost-tenant")
 }
 
 // ── what the first round of tests could not see ──────────────────────────
@@ -764,9 +765,10 @@ func TestDivergenceAudit_ReLogsWhenTheSourcePathMoves(t *testing.T) {
 	if count() != 2 {
 		t.Errorf("a moved source path must re-log: %d lines", count())
 	}
-	if !strings.Contains(logBuf.String(), filepath.Join("db", "deep", "a.yaml")) {
-		t.Errorf("the new path must appear in the log:\n%s", logBuf.String())
-	}
+	// The subject is "the line an operator sees NOW", so pin the last one.
+	// ⚠️ Cosmetic against every mutation tried: the earlier c1 line carries a
+	// different path, so the whole-log form was not actually satisfiable by it.
+	assertLastLogLineWith(t, logBuf.String(), divergenceAnchor, filepath.Join("db", "deep", "a.yaml"))
 	// ...and an unchanged repeat still does not.
 	m.auditHierarchyDivergence(cfg,
 		map[string]string{"nested-a": filepath.Join(dir, "db", "deep", "a.yaml")}, nil, "c3")
@@ -845,9 +847,8 @@ func TestDivergenceAudit_TheMemoryTracksTheLatestSetNotTheFirst(t *testing.T) {
 			"(the last line an operator has must describe the current set): "+
 			"%d line(s), want 3\nlog:\n%s", got, logBuf.String())
 	}
-	if !strings.Contains(logBuf.String(), "commit-A2") {
-		t.Errorf("the third line must be the A2 commit; log:\n%s", logBuf.String())
-	}
+	// ⚠️ Cosmetic: the context string reaches the log only through this call.
+	assertLastLogLineWith(t, logBuf.String(), divergenceAnchor, "commit-A2")
 }
 
 // TestDivergenceAudit_TheGaugeIsRepublishedEvenWhenTheLogIsSuppressed pins

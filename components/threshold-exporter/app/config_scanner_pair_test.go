@@ -191,10 +191,15 @@ func TestAnUnparseableFileKeepsItsTenantAttributed(t *testing.T) {
 		t.Fatal("t-a lost its source attribution because its file stopped parsing —\n" +
 			"that is cause (a) of the divergence audit, and dropping the attribution makes it unreportable")
 	}
-	if !strings.Contains(logBuf.String(), "conf.d scanner divergence") ||
-		!strings.Contains(logBuf.String(), "t-a") {
-		t.Fatalf("no divergence ERROR naming t-a — a tenant vanished from the collector plane in silence\n--- log ---\n%s", logBuf.String())
-	}
+	// Pinned to the divergence line rather than the whole log. ⚠️ COSMETIC
+	// HERE, stated because the first version of this comment claimed
+	// otherwise: I asserted that the fixture's parse-failure lines also name
+	// `tenant=t-a`, which would have made the two whole-log checks
+	// independently satisfiable. Measured false — mutating the audit to name a
+	// constant wrong tenant reddens this test under BOTH forms, so nothing else
+	// in this log says `t-a`. Kept because it says what the test means, not
+	// because it adds detection here. (#1569 sweep B-5.)
+	assertLogLineWith(t, logBuf.String(), divergenceAnchor, "t-a")
 
 	// The sibling assertion: a tenant whose file is GONE must be pruned, or the
 	// audit reports a deletion as a defect.
