@@ -963,6 +963,22 @@ func patchTenants(prev *ThresholdConfig, newConfigs, oldConfigs map[string]Thres
 				// loosened a profile-supplied threshold from 95 to 60. All of
 				// it silent. Found by the randomised fast-path-vs-full-load
 				// differential, not by reading. (#1569 blind review.)
+				//
+				// ⚠️ COST, MEASURED RATHER THAN ESTIMATED. Rebuilding instead
+				// of aliasing allocates one map per patched tenant and walks
+				// every parsed file. Both arms benchmarked locally at n=6 on
+				// BenchmarkIncrementalLoad_1000_OneFileChanged — the only
+				// benchmark that reaches this loop with a changed file:
+				//
+				//	with union:    16241-16243 allocs/op
+				//	whole replace: 16239-16240 allocs/op
+				//
+				// ~3 allocations and ~16 KB per reload, i.e. 0.018% of that
+				// benchmark's allocations. ⚠️ Its bytes/op is BIMODAL in both
+				// arms (two clusters ~32 KB apart, map bucket growth), so a
+				// single CI sample can land on either — do not read a one-shot
+				// bytes delta on this benchmark as a signal. Two earlier bench
+				// attributions in this PR were wrong for exactly that reason.
 				if ov, ok := reclaimTenantFrom(newConfigs, tenant); ok {
 					merged.Tenants[tenant] = ov
 				}
