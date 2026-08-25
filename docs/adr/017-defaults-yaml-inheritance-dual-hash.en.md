@@ -157,31 +157,31 @@ implementation).
 1. **Only keys inside the `defaults:` block enter `effective`** (⚠️ **there are exceptions** —
    see Known reachable exceptions 1 and 2 below;
    `rule-packs/recipes/examples/conf.d/finance/_defaults.yaml` is exception 1 in shipped form,
-   and this item alone would misjudge it as inert). The top-level keys that sit
-   **alongside** it (`state_filters` / `optional_overrides` / `profiles` /
-   `max_metrics_per_tenant` / `_routing*` and so on) **still take effect** — they just travel
-   their own pipelines: `state_filters` / `optional_overrides` are merged into `ThresholdConfig`
-   by `pkg/config` and expanded per tenant at resolve time, while `_routing_defaults` /
-   `_routing_enforced` are consumed by the four-layer merge behind
-   `generate_alertmanager_routes.py` (implemented in the `_grar_*` modules it imports). They
-   never pass through `effective` / `merged_hash`.
+   and this item alone would misjudge it as inert). The top-level keys that sit **alongside** it
+   do **not** enter `effective` / `merged_hash`; each travels a different pipeline.
+   ⛔ **Do not infer "still takes effect" from "does not enter effective".** This document
+   deliberately does **not** list which sibling keys take effect — every version of that list
+   has been wrong (this ADR has been falsified on it three times). ⚠️ Two measured
+   counterexamples show why: `max_metrics_per_tenant` has **never** taken effect under
+   `-config-dir` (see the end of item 2); `_routing` and `_routing_profile` at the top level are
+   **silent no-ops**. ⇒ **Whether the key you changed takes effect: ask the consumer in item 3's
+   table, and if it is not there, find it yourself before concluding.**
    ⛔ **Which keys may appear is defined by
    [`platform-defaults.schema.json`](../schemas/platform-defaults.schema.json) — but that is a
    list of "which top-level keys this file allows", NOT a list of "put the key here and it will
-   take effect".** 
-   ⛔ **The test is "does anything read it at the top level", not a list of names.** The only
-   families that currently **do** have a platform-level top-level consumer are `^_routing`-prefixed
-   keys (`_grar_parse.py` reads top level only) and `_custom_alerts`
-   (`custom_alerts/loader.py` reads top level only). ⚠️ Every other `_`-prefixed key has **no
-   known platform-level consumer** — the place they are actually consumed is the **`tenants:`
-   block** inside `_defaults.yaml`, and writing them at the top level alongside `defaults:` is a
-   **silent no-op** (measured for `_silent_mode` / `_profile` / `_severity_dedup` /
-   `_namespaces` / `_metadata` / `_routing_profile`: `effective` and `merged_hash` both
+   take effect".**
+   ⛔ **The test is "does anything read it at the top level" — not the prefix, and not a list of
+   names.** The only platform-level top-level consumers found today are **three named keys**:
+   `_routing_defaults` and `_routing_enforced` (`_grar_parse.py` reads top level only, and only
+   recognises those two **literal names** — the `^_routing` prefix is **not** sufficient to
+   infer: `_routing` and `_routing_profile` were measured to have no top-level consumer), plus
+   `_custom_alerts` (`custom_alerts/loader.py` reads top level only). ⚠️ Every other
+   `_`-prefixed key is actually consumed under the **`tenants:` block** of `_defaults.yaml`;
+   written at the top level it is a **silent no-op** (measured for `_silent_mode` / `_profile` /
+   `_severity_dedup` / `_namespaces` / `_metadata` / `_routing_profile`: `effective`
    byte-identical, zero WARN from the exporter, schema lint returns `OK`). ⛔ Those six are a
-   **measurement, not a roster**: when a new `_`-prefixed key appears, apply the test above
-   rather than reasoning backwards from these names.
-   ⛔ Treat that schema as the source of truth for permitted keys and **do not start a second
-   enumeration in this ADR** — the names in parentheses above are examples, not a list.
+   **measurement, not a roster**, and so are the three named keys: when any new `_`-prefixed key
+   appears, apply the test above rather than reasoning backwards from these names.
 
 2. ⛔ **Do not indent sibling keys INTO `defaults:` to "make them visible".**
 
@@ -191,7 +191,7 @@ implementation).
      `parsePartialConfig` returns `ok=false`, **the entire file is dropped**, and it logs
      `ERROR: ... entire block dropped`, taking the file's other sibling keys with it;
    - a value that **does parse as `float64`** (`100` / `1.5` / **`null`→0**) ⇒ `ok=true`, **no
-     ERROR/WARN**, and it becomes a threshold key.
+     ERROR/WARN**, and it becomes a threshold key ⇒ **every tenant gains one armed, bogus threshold series** (measured: indenting `max_metrics_per_tenant: 100` resolves to `user_threshold{component="max", metric="metrics_per_tenant"}=100`, the prefix stripped by the resolver), and this plane emits no signal.
 
    ⛔ **But the exporter is only one consumer, and often not the painful one.** The table below
    covers keys with a **dedicated** consumer — **currently known, not exhaustive** (⚠️ the lists
@@ -202,8 +202,8 @@ implementation).
    | Key you indented | What its dedicated consumer does |
    |:--|:--|
    | `_routing_defaults`, `_routing_enforced` (and any `^_routing`-prefixed key) | routing: `_grar_parse.py` reads **top level only** (`if "_routing_defaults" in data`), so indenting silently disables it. Measured for `_routing_defaults`: a tenant with no `_routing` of its own **loses its entire route AND receiver** (`Found 2 tenant(s) with routing config: db-a, db-b` → `Found 1 ...: db-b`, with **RC=0, zero errors, zero warnings**). Measured for `_routing_enforced`: the platform-enforced NOC route **and** the `platform-enforced` receiver disappear wholesale, equally without signal |
-   | `_custom_alerts` | custom-alert compilation: `custom_alerts/loader.py` reads only the **top level**, so after indenting it sees **zero entries and zero errors** (the `ci.yml` gate still runs and still passes). ⛔ The same loader only accepts the filename `_defaults.yaml` — renaming the file to `_defaults.**yml**` also makes it see zero, while the exporter and `describe_tenant` both still read it |
-   | any key (diagnostic surface) | `effective`: **silently accepted** as a nested key, so blast-radius goes from "no changes" to a Tier B report. ⚠️ **The diagnostic surface rewards this action while it takes a tenant's alerting away** |
+   | `_custom_alerts` | custom-alert compilation: `custom_alerts/loader.py` reads only the **top level**, so after indenting it sees **zero entries and zero errors**. ⛔ But `compile_custom_alerts.py --check` (present in both `ci.yml` and pre-commit) **does block** — it is a drift check (its docstring reads `1  drift detected (--check)`), exits 1 and lists the vanished rules one by one. The genuinely silent path is **re-running the compile right after indenting**: the gate turns green and the loss survives only in the pack's diff. ⛔ The same loader only accepts the filename `_defaults.yaml` — renaming the file to `_defaults.**yml**` also makes it see zero, while the exporter and `describe_tenant` both still read it |
+   | most keys (diagnostic surface) | `effective`: **silently accepted** as a nested key, so blast-radius goes from "no changes" to a report (measured: Tier B for `max_metrics_per_tenant` / `_routing_defaults`, Tier A for `_custom_alerts`). ⚠️ **The diagnostic surface rewards this action while it takes a tenant's alerting away**. ⛔ **But this is not a guarantee**: `_metadata` is skipped unconditionally by `deep_merge` (`if k == "_metadata": continue` in `describe_tenant.py`), so after indenting it `effective` is **byte-identical** and blast-radius prints "No effective tenant config changes detected" verbatim — while the exporter side has already dropped the whole file. **Silence on the diagnostic surface is not evidence that nothing happened.** |
 
    ⛔ `check_confd_schema.py` returns `RC=0` for **all** of the above (the `defaults` sub-schema
    says verbatim that its values are left loose) — **no schema gate blocks this**.

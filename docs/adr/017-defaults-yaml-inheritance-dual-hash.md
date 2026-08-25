@@ -149,24 +149,24 @@ effective = deep_merge( defaults_block(L0), …, defaults_block(Ln), tenant_body
 
 1. **只有 `defaults:` 區塊裡的鍵會進 `effective`**（⚠️ **有例外**——見下方〈已知的可達例外〉
    1 與 2；`rule-packs/recipes/examples/conf.d/finance/_defaults.yaml` 就是例外 1 的出貨形狀，
-   照本條會被誤判為 inert）。與它**平級**的頂層鍵（`state_filters` /
-   `optional_overrides` / `profiles` / `max_metrics_per_tenant` / `_routing*` 等）**照樣生效**，
-   只是各走各的管線：`state_filters` / `optional_overrides` 由 `pkg/config` 的 merge 併入
-   `ThresholdConfig` 並在 resolve 期逐租戶展開，`_routing_defaults` / `_routing_enforced` 由
-   `generate_alertmanager_routes.py`（實作在它匯入的 `_grar_*` 模組）的四層合併消費。它們不經過
-   `effective` / `merged_hash`。
+   照本條會被誤判為 inert）。與它**平級**的頂層鍵**不進 `effective` / `merged_hash`**，各自
+   走別的管線。
+   ⛔ **不要從「不進 effective」推出「照樣生效」。** 本文件**不列出**哪些平級鍵生效——那份
+   清單每次列都會錯（本 ADR 已因此被證偽三次）。⚠️ 兩個實測反例足以說明為什麼：
+   `max_metrics_per_tenant` 在 `-config-dir` 模式下**從未生效**（見條 2 末段）；`_routing` 與
+   `_routing_profile` 寫在頂層是**靜默 no-op**。⇒ **你改的那個鍵會不會生效，去問條 3 表上的
+   消費端；不在表上就自己找到它再下結論。**
    ⛔ **哪些鍵允許出現，見 [`platform-defaults.schema.json`](../schemas/platform-defaults.schema.json)
    ——但那是「這個檔案允許哪些頂層鍵」的清單，不是「這個鍵放在這裡就會生效」的清單。**
-   ⛔ **判準是「有沒有東西在頂層讀它」，不是一份名單。** 目前**有**平台層頂層消費端的只有
-   兩族：`^_routing` 前綴鍵（`_grar_parse.py` 只讀頂層）與 `_custom_alerts`
-   （`custom_alerts/loader.py` 只讀頂層）。⚠️ 其餘 `_` 前綴鍵**沒有已知的平台層消費端**——它們
-   真正被消費的位置是 `_defaults.yaml` 裡的 **`tenants:` 區塊**，寫在與 `defaults:` 平級的頂層
-   是**靜默 no-op**（實測 `_silent_mode` / `_profile` / `_severity_dedup` / `_namespaces` /
-   `_metadata` / `_routing_profile` 六個，`effective` 與 `merged_hash` 皆逐位元組不動、exporter
-   零 WARN、schema lint 回 `OK`）。⛔ 這六個是**實測結果不是清單**：新增一個 `_` 前綴鍵時，
-   請用上面那條判準，不要用這六個名字反推。
-   ⛔ 允許出現的鍵以那份 schema 為準，**勿在本 ADR 另立一份列舉**——上面括號裡的幾個名字是
-   舉例，不是清單。
+   ⛔ **判準是「有沒有東西在頂層讀它」，不是前綴、也不是一份名單。** 目前查得到的平台層頂層
+   消費端只有**三個具名鍵**：`_routing_defaults` 與 `_routing_enforced`（`_grar_parse.py` 只讀
+   頂層，且只認這兩個**字面名**——`^_routing` 前綴**不足以推論**，實測 `_routing` 與
+   `_routing_profile` 在頂層無消費端），以及 `_custom_alerts`（`custom_alerts/loader.py` 只讀
+   頂層）。⚠️ 其餘 `_` 前綴鍵真正被消費的位置是 `_defaults.yaml` 裡的 **`tenants:` 區塊**，
+   寫在平級頂層是**靜默 no-op**（實測 `_silent_mode` / `_profile` / `_severity_dedup` /
+   `_namespaces` / `_metadata` / `_routing_profile` 六個，`effective` 逐位元組不動、exporter
+   零 WARN、schema lint 回 `OK`）。⛔ 這六個是**實測結果不是清單**，那三個具名鍵也一樣：新增
+   任何 `_` 前綴鍵時請用上面那條判準，不要用這些名字反推。
 
 2. ⛔ **不要把平級鍵縮排進 `defaults:` 想讓它們「被看見」。**
 
@@ -174,7 +174,7 @@ effective = deep_merge( defaults_block(L0), …, defaults_block(Ln), tenant_body
    - 值**解不成 `float64`**（mapping / list / 字串 / bool）⇒ `parsePartialConfig` 回 `ok=false`、
      **整份檔案被丟棄**並 log `ERROR: ... entire block dropped`，同檔其他平級鍵一起陪葬。
    - 值**解得成 `float64`**（`100` / `1.5` / **`null`→0**）⇒ `ok=true`、**無 ERROR / WARN**、
-     它變成一個閾值鍵。
+     它變成一個閾值鍵 ⇒ **每個租戶都多出一條武裝好的假閾值 series**（實測 `max_metrics_per_tenant: 100` 縮排後，resolve 出 `user_threshold{component="max", metric="metrics_per_tenant"}=100`，前綴被 resolver 剝掉），而這一面零訊號。
 
    ⛔ **但 exporter 只是其中一個消費端，而且往往不是最痛的那個。** 下表是**有專屬消費端**的
    鍵——**目前已知，不是窮舉**（⚠️ 這份 ADR 的清單前後被證偽過五次）。**你手上那個鍵若不在
@@ -184,8 +184,8 @@ effective = deep_merge( defaults_block(L0), …, defaults_block(Ln), tenant_body
    | 你縮排的鍵 | 那個專屬消費端的下場 |
    |:--|:--|
    | `_routing_defaults`、`_routing_enforced`（以及任何 `^_routing` 前綴鍵） | 路由：`_grar_parse.py` **只讀頂層**（`if "_routing_defaults" in data`）⇒ 縮排後靜默失效。實測 `_routing_defaults`：沒有自己 `_routing` 的租戶**整條 route ＋ receiver 消失**（`Found 2 tenant(s) with routing config: db-a, db-b` → `Found 1 ...: db-b`，**RC=0、零 error、零 warning**）；實測 `_routing_enforced`：**平台強制的 NOC route ＋ `platform-enforced` receiver 整段消失**，同樣零訊號 |
-   | `_custom_alerts` | 自訂告警編譯：`custom_alerts/loader.py` 只讀**頂層**，縮排後**看到零筆、零 error**（CI 閘門 `ci.yml` 照跑照綠）。⛔ 同一支 loader 只認檔名 `_defaults.yaml`——把檔案改名成 `_defaults.**yml**` 也會讓它看到零，而 exporter 與 `describe_tenant` 兩邊照常讀得到 |
-   | 任何鍵（診斷面） | `effective`：**靜默接受**成一個巢狀鍵，blast-radius 因此從「無變更」變成一份 Tier B 報告。⚠️ **診斷面會正向獎勵這個動作，而它同時讓租戶失去告警** |
+   | `_custom_alerts` | 自訂告警編譯：`custom_alerts/loader.py` 只讀**頂層**，縮排後**看到零筆、零 error**。⛔ 但 `compile_custom_alerts.py --check`（`ci.yml` 與 pre-commit 都有）**會擋**——它是 drift check（docstring 逐字：`1  drift detected (--check)`），會 exit 1 並逐條列出消失的 rule。真正的靜默路徑是**縮排後順手重跑一次編譯**：閘門轉綠，損失只留在 pack 的 diff 裡。⛔ 同一支 loader 只認檔名 `_defaults.yaml`——把檔案改名成 `_defaults.**yml**` 也會讓它看到零，而 exporter 與 `describe_tenant` 兩邊照常讀得到 |
+   | 多數鍵（診斷面） | `effective`：**靜默接受**成一個巢狀鍵，blast-radius 因此從「無變更」變成一份報告（實測 `max_metrics_per_tenant` / `_routing_defaults` 為 Tier B、`_custom_alerts` 為 Tier A）。⚠️ **診斷面會正向獎勵這個動作，而它同時讓租戶失去告警**。⛔ **但這不是保證**：`_metadata` 被 `deep_merge` 無條件跳過（`describe_tenant.py` 的 `if k == "_metadata": continue`），縮排後 `effective` **逐位元組不動**、blast-radius 逐字印出「No effective tenant config changes detected」——而 exporter 那側整份檔案已被丟棄。**診斷面的沉默不是無事的證據。** |
 
    ⛔ `check_confd_schema.py` 對上述**全部**回 `RC=0`（`defaults` 的 sub-schema 逐字宣告
    values left loose）——**沒有任何 schema 閘門擋這一步**。
