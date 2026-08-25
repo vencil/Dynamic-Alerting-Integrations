@@ -47,7 +47,7 @@ lang: zh
 
 ## 為什麼 08-16 被排除（可複驗）
 
-```
+```shell
 $ git show 9599bdd:scripts/tools/dx/pair_bench_ratio.py | grep '"schema"'
         "schema": "bench-paired/v1",          ← payload 內無 status
 $ git show 60f4523:scripts/tools/dx/pair_bench_ratio.py | grep -E '"schema"|"status"'
@@ -76,4 +76,17 @@ YES                                            ← 08-16 的 head 早於 60f4523
 
 - 分母內 **8 夜**（08-17 .. 08-24），`unreadable` **0**、`not-counted` **0**
 - 分母外 **1 夜**（08-16，效度準則排除）
-- ⚠️ 08-25 的 run 已存在（`32806126050`）但**尚未被任何一次 `paired-trend-watch` 觀測到**——它會出現在 08-26 那次的窗口裡
+- ⚠️ 08-25 **那一夜**已產出（run `32806126050`）但**尚未被任何一次 `paired-trend-watch` 觀測到**——它會出現在 08-26 那次的窗口裡
+
+### ⛔ 一個 run id 有兩個身分，讀本檔前必須先分清楚
+
+`bench-record` 與 `paired-trend-watch` 是**同一個 workflow run 裡的兩個 job**（`.github/workflows/bench-record.yaml:36` 與 `:521`）。所以同一個 run id 會以兩種身分出現在本檔：
+
+| 欄位 | 該 run 的身分 | 意思 |
+|---|---|---|
+| `run_id` | **被觀測者**（`bench-record` job） | 這一夜的量測是那個 run 產出的 |
+| `observed_in` | **觀測者**（`paired-trend-watch` job） | 那個 run 的判斷引擎讀到了這一夜 |
+
+⛔ **觀測者的窗口不含自己那一夜**——它讀的是先前的 run。所以 `32806126050` 同時是「08-25 這一夜的產出 run」（尚未被任何人讀到）**與**「讀了 08-16..08-24 的觀測者」，兩者都成立、不矛盾。
+
+⚠️ 這一節是 CodeRabbit 在 [#1570](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1570) 把上述兩處讀成互相矛盾之後補的。它的**事實判斷是錯的**（沒有矛盾），但它指出的問題是真的：一份存在目的就是「讓別人日後能複驗」的紀錄，讓認真的讀者讀成矛盾，那是本檔的責任。
