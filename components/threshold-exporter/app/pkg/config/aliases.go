@@ -71,6 +71,26 @@ var legacyKeyByCanonical = func() map[string]string {
 // (exported for the overlay's reachability check and for testing).
 func CanonicalKeyFor(key string) (string, bool) { return canonicalKeyFor(key) }
 
+// LegacySpellingFor is CanonicalKeyFor's inverse for BASE keys: given a
+// canonical key, it returns the retired spelling that resolves to it.
+//
+// The overlay's reachability check needs both directions, because a root
+// `_defaults.yaml` may still carry the retired spelling while a subtree has
+// already moved to the canonical one. Exported rather than reconstructed at
+// the call site: the caller's only alternative is scanning every platform
+// default per candidate key per tenant, which is O(tenants x keys x defaults)
+// on a path that runs on every reload.
+//
+// Suffix-derived and dimensional shapes are deliberately NOT handled here.
+// The overlay reaches this only for keys that already missed the direct
+// membership checks, and `_critical` / dimensional keys never take that route
+// — they are served by their own resolvers, which the bypass predicate
+// answers first.
+func LegacySpellingFor(canonical string) (string, bool) {
+	legacy, ok := legacyKeyByCanonical[canonical]
+	return legacy, ok
+}
+
 func canonicalKeyFor(key string) (string, bool) {
 	if canon, ok := deprecatedKeyAliases[key]; ok {
 		return canon, true

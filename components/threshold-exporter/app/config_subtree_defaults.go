@@ -367,14 +367,14 @@ func declaredAnywhere(cfg *ThresholdConfig, key string) bool {
 	// reads a live `key: value` pair anywhere in the repo, comments included,
 	// and it is right to — the exemption belongs to the one test file that
 	// needs the fixture, not to prose.
-	for d := range cfg.Defaults {
-		if canon, ok := config.CanonicalKeyFor(d); ok && canon == key {
+	if legacy, aliased := config.LegacySpellingFor(key); aliased {
+		if _, global := cfg.Defaults[legacy]; global {
 			return true
 		}
-	}
-	for _, d := range cfg.OptionalOverrides {
-		if canon, ok := config.CanonicalKeyFor(d); ok && canon == key {
-			return true
+		for _, d := range cfg.OptionalOverrides {
+			if d == legacy {
+				return true
+			}
 		}
 	}
 	return false
@@ -514,6 +514,46 @@ func scheduledValueFromRaw(raw any) (ScheduledValue, bool) {
 // their own top-level config sections rather than from a tenant's threshold
 // map. Inheriting those through a subtree is a separate feature with its own
 // resolution path; it is not silently half-done here.
+// ⛔⛔ THE ADMISSION RULE IS DELIBERATELY LOOSER THAN `defaults:`'s OWN TYPE,
+// AND THIS IS THE SPEC FOR WHY.
+//
+// `defaults:` is read by two consumers with two different types, and this
+// overlay is the first thing that bridges them:
+//
+//	collector plane  — `ThresholdConfig.Defaults` is `map[string]float64`.
+//	                   A root `_defaults.yaml` whose `defaults:` block holds a
+//	                   string, a list or a nested mapping fails to parse and
+//	                   the WHOLE FILE is dropped with an ERROR. Measured on all
+//	                   three shapes.
+//	hierarchy plane  — `parseDefaultsBytes` → `extractDefaultsBlock` reads the
+//	                   same block as an arbitrary nested document and ADR-017
+//	                   deep-merges it (dict merge, array replace, null-as-delete
+//	                   for `_`-reserved keys). This is not a leak: 12 of the
+//	                   repo's 17 `_defaults.yaml` files carry exactly that —
+//	                   `threshold: {cpu: 70}`, `alert_group: baseline`,
+//	                   `receivers: [...]` — and the ADR-017 golden fixtures are
+//	                   built on it. Measured: those fixtures resolve to
+//	                   `defaults=0 rows=0` on the collector plane, by design;
+//	                   the real shipped config resolves to `defaults=8 rows=64`
+//	                   with no drops.
+//
+// So `isThresholdShaped` is a TYPE COERCION at a plane boundary, and the value
+// domain it admits is the DESTINATION's, not the source's: what lands in
+// `cfg.Tenants[t][key]` is a `ScheduledValue`, which legitimately holds
+// `"disable"`, `"70:critical"` and a schedule — none of which `map[string]float64`
+// would accept. Judging the source by the destination's domain is the whole
+// point; judging it by `map[string]float64` instead would stop `"disable"`
+// inheriting, and ADR-017 §Null names `"disable"` as the sanctioned way for a
+// threshold key to opt out of the chain.
+//
+// ⚠️ THE COST, STATED. Because the admitted domain is wider than the source
+// block's declared type, this function can admit key/value pairs that a ROOT
+// `_defaults.yaml` could not legally contain — which is why the reachability
+// gate below has to adjudicate reserved-key shapes at all. Every "silent shape"
+// found by the #1569 sweeps is downstream of this coercion, not of any one
+// predicate. Narrowing the coercion is a real option and was considered; it was
+// not taken because it would break `"disable"` inheritance and the ADR-017
+// semantics above. Anyone revisiting it should start here, not at the gate.
 func isThresholdShaped(sv ScheduledValue) bool {
 	if thresholdScalar(sv.Default) {
 		return true

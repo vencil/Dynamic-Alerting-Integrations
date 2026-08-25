@@ -825,6 +825,39 @@ func isTenantOnlyChange(changed, added, removed []string) bool {
 // necessarily changed hash and thus lands in patchFiles. That lets the removal
 // pass consult only the just-patched tenants, keeping the fast path O(Δchanged
 // files) instead of scanning the whole surviving tree on every reload.
+// stillDeclaredSomewhere reports whether any file in the current scan still
+// names this tenant.
+//
+// ⛔ `patchedTenants` ALONE IS NOT THAT QUESTION. It holds only the tenants
+// reintroduced by files reparsed THIS round, so it answers "did the tenant
+// move in this reload" and nothing else. A tenant declared in two files at
+// once — invalid, hard-rejected by `runHierarchyScanReject` on a full load,
+// but silently accepted by this fast path — then vanishes the moment either
+// owning file is edited for any reason, because the other file did not change
+// and so is absent from `patchedTenants`. Measured on both removal loops: the
+// tenant left the merged config while a file on disk still declared it, and
+// the divergence audit blamed cause (a), sending the operator to look for a
+// parse-failure line that does not exist.
+//
+// `newConfigs` carries every file's current parse, not just this round's, so
+// asking it answers the question actually being asked. `patchedTenants` is
+// still consulted first because it is the cheap hit for the common move.
+// (#1569 blind review of sweep B-2.)
+//
+// ⚠️ This does NOT make the fast path reject the duplicate the way a full load
+// would — that asymmetry is measured and recorded, not fixed here.
+func stillDeclaredSomewhere(newConfigs map[string]ThresholdConfig, patchedTenants map[string]struct{}, tenant string) bool {
+	if _, moved := patchedTenants[tenant]; moved {
+		return true
+	}
+	for _, partial := range newConfigs {
+		if _, declared := partial.Tenants[tenant]; declared {
+			return true
+		}
+	}
+	return false
+}
+
 func patchTenants(prev *ThresholdConfig, newConfigs, oldConfigs map[string]ThresholdConfig, changed, added, removed []string) ThresholdConfig {
 	merged := ThresholdConfig{
 		Defaults: prev.Defaults, // shared (immutable between patches)
@@ -883,7 +916,7 @@ func patchTenants(prev *ThresholdConfig, newConfigs, oldConfigs map[string]Thres
 			if _, stillDeclared := newPartial.Tenants[tenant]; stillDeclared {
 				continue
 			}
-			if _, moved := patchedTenants[tenant]; moved {
+			if stillDeclaredSomewhere(newConfigs, patchedTenants, tenant) {
 				continue
 			}
 			delete(merged.Tenants, tenant)
@@ -894,7 +927,7 @@ func patchTenants(prev *ThresholdConfig, newConfigs, oldConfigs map[string]Thres
 	for _, name := range removed {
 		if partial, ok := oldConfigs[name]; ok {
 			for tenant := range partial.Tenants {
-				if _, moved := patchedTenants[tenant]; !moved {
+				if !stillDeclaredSomewhere(newConfigs, patchedTenants, tenant) {
 					delete(merged.Tenants, tenant)
 				}
 			}

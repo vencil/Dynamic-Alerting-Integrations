@@ -214,6 +214,80 @@ func TestAnUnparseableFileKeepsItsTenantAttributed(t *testing.T) {
 	}
 }
 
+// TestATenantDeclaredInTwoFilesSurvivesAnEditToEitherOne guards the removal
+// loops against the question they were not actually asking.
+//
+// ⛔ `patchedTenants` ANSWERS "DID IT MOVE THIS ROUND", NOT "IS IT STILL
+// DECLARED". A tenant named by two files at once is invalid — a full load
+// hard-rejects it with DuplicateTenantError — but the incremental fast path
+// accepts it silently, so a live tree can be in that state. Once it is, both
+// removal loops deleted the tenant the moment EITHER owning file was edited
+// for any reason, because the other file did not change this round and so was
+// absent from `patchedTenants`. The tenant left the merged config while a file
+// on disk still declared it, and the divergence audit blamed cause (a) —
+// sending the operator to look for a parse-failure line that does not exist.
+//
+// Measured on both loops, before the fix: `dup present after r2=false,
+// divergenceERR=true`; after: `true / false`.
+//
+// ⚠️ WHAT THIS DOES NOT ASSERT. The fast path still ACCEPTS the duplicate that
+// a full load rejects. That asymmetry is real and recorded; it is not what
+// these loops are for, and closing it means rejecting a config on the hot
+// reload path, which is a policy decision rather than a bug fix.
+func TestATenantDeclaredInTwoFilesSurvivesAnEditToEitherOne(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name            string
+		removeWholeFile bool
+	}{
+		{"the tenant is removed from a file that stays on disk", false},
+		{"the whole file is deleted", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"), "defaults:\n  mysql_connections: 80\n")
+			writeTestYAML(t, filepath.Join(dir, "a.yaml"), "tenants:\n  dup: {}\n")
+			writeTestYAML(t, filepath.Join(dir, "b.yaml"), "tenants:\n  other: {}\n")
+
+			m, _, logBuf := newAuditedManager(t, dir)
+			if err := m.Load(); err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+
+			// The invalid-but-live state: b.yaml now names dup as well.
+			writeTestYAML(t, filepath.Join(dir, "b.yaml"), "tenants:\n  other: {}\n  dup: {}\n")
+			if err := m.IncrementalLoad(); err != nil {
+				t.Fatalf("IncrementalLoad: %v", err)
+			}
+			if _, ok := m.GetConfig().Tenants["dup"]; !ok {
+				t.Skip("the fast path no longer accepts a cross-file duplicate — this fixture's precondition is gone, and that is a better world")
+			}
+
+			// b.yaml is untouched from here on and still declares dup.
+			logBuf.Reset()
+			if tc.removeWholeFile {
+				if err := os.Remove(filepath.Join(dir, "a.yaml")); err != nil {
+					t.Fatalf("Remove: %v", err)
+				}
+			} else {
+				writeTestYAML(t, filepath.Join(dir, "a.yaml"), "tenants: {}\n")
+			}
+			if err := m.IncrementalLoad(); err != nil {
+				t.Fatalf("IncrementalLoad: %v", err)
+			}
+
+			if _, ok := m.GetConfig().Tenants["dup"]; !ok {
+				t.Fatal("dup was deleted from the merged config while b.yaml, untouched this round, still declares it — " +
+					"its alerts stop firing until something forces a full reload")
+			}
+			if strings.Contains(logBuf.String(), "conf.d scanner divergence") {
+				t.Fatalf("a divergence ERROR was emitted for a tenant that is present in both planes\n--- log ---\n%s", logBuf.String())
+			}
+		})
+	}
+}
+
 // publishedStateFingerprint renders everything a loader publishes that a
 // consumer can observe: the merged config, and the hierarchy state the
 // divergence audit reads. Paths are made root-relative so the two temp dirs

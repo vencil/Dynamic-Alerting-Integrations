@@ -141,6 +141,8 @@ func TestEveryInheritedKeyShapeIsDeliveredOrNamed(t *testing.T) {
 			"ResolveSeverityDedup reads it, cannot make sense of it, and WARNs — under the spelling `severity_dedup`, without the underscore"},
 		{"a state filter carrying a time window", "  _state_maintenance:\n    default: enable\n    overrides:\n      - window: \"00:00-23:59\"\n        value: disable\n", "_state_maintenance", verdictRefused, "",
 			"ResolveStateFiltersAt reads sv.Default and never the windows, so the schedule /effective renders would not be the one the collector applies"},
+		{"a critical tier under the routing prefix", "  _routing_bogus_critical: 5\n", "_routing_bogus_critical", verdictWarned, "",
+			"resolveCriticalRows excludes `_state_` and `_silent_` but NOT `_routing` — so this one it does read, and WARNs. Mirroring the dimensional arm's exclusions here instead would be a plausible-looking consistency edit that silently changes the verdict"},
 		{"a critical tier on the dedup key", "  _severity_dedup_critical: 5\n", "_severity_dedup_critical", verdictWarned, "",
 			"resolveCriticalRows does NOT exclude this one — it reads it, fails to find the base default, and WARNs; the predicate must keep matching it"},
 	}
