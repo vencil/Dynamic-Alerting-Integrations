@@ -51,12 +51,30 @@ func TestDeepMerge_NullOnThresholdKey_KeepsInheritedValue(t *testing.T) {
 func TestDeepMerge_NullOnReservedKey_StillDeletes(t *testing.T) {
 	t.Parallel()
 
-	// ADR-017's opt-out is kept for reserved keys. Note this branch is not
-	// reachable from a shipped _defaults.yaml — extractDefaultsBlock hands
-	// deepMerge only the `defaults:` sub-map, which holds flat metric keys
-	// and no `_`-prefixed ones — so it is defensive alignment with the ADR
-	// rather than live behaviour. Pinned so a future simplification is a
-	// deliberate choice instead of an accident.
+	// ADR-017's opt-out is kept for reserved keys.
+	//
+	// ⛔ Do NOT delete this branch as dead code. TWO SEPARATE propositions,
+	// kept separate on purpose — an earlier comment collapsed them and got the
+	// reachability claim wrong in BOTH directions:
+	//
+	//   (a) `_`-prefixed sibling keys DO reach deepMerge's override map from a
+	//       shipped _defaults.yaml. extractDefaultsBlock falls through and
+	//       returns the WHOLE document whenever the assertion on m["defaults"]
+	//       fails — no `defaults:` key at all, or one that is explicitly null.
+	//       rule-packs/recipes/examples/conf.d/finance/_defaults.yaml does this
+	//       today via `_custom_alerts` — whose value is a LIST, so it merges
+	//       normally and never reaches the delete below.
+	//
+	//   (b) This delete branch additionally requires that key's value to be an
+	//       explicit null. Measured: 0 of the 17 shipped `_defaults*.yaml` files
+	//       currently carry a `_`-prefixed key with a null value.
+	//
+	// So: the path into this branch exists in shipped data (a); the triggering
+	// value does not occur in the repo today (b). No config file exercises it,
+	// which means THIS hand-constructed test is the only thing holding the
+	// branch in place — remove the branch and this test, and nothing else in
+	// the repo goes red. That is why it is pinned here.
+	// See ADR-017 §Merge 語意, the reserved-key null rule.
 	base := map[string]any{
 		"_silent_mode":      "warning",
 		"mysql_connections": 80,
