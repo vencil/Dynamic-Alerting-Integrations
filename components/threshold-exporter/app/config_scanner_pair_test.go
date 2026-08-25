@@ -265,11 +265,16 @@ func TestATenantDeclaredInTwoFilesSurvivesAnEditToEitherOne(t *testing.T) {
 			// not see WHICH file's value survived — and a mutation that emptied
 			// the tenant's overrides entirely passed it. Distinct values make
 			// the assertion below about the number, not just the key.
-			// ⛔ A PROFILE IS PART OF THE FIXTURE. Without one this test's
-			// oracle — "the fast path lands where a restart lands" — held only
-			// because nothing in the tree exercised the profile overlay, which
-			// the fast path was skipping entirely. Adding these two lines made
-			// both surviving-declaration cases fail until that was fixed.
+			// A profile is part of the fixture so the tree exercises the
+			// overlay at all.
+			//
+			// ⚠️ AN EARLIER VERSION OF THIS COMMENT CLAIMED ADDING IT MADE
+			// BOTH SURVIVING-DECLARATION CASES FAIL UNTIL ApplyProfiles WAS
+			// HOISTED. That was asserted, not measured, and it is false:
+			// putting `ApplyProfiles` back inside the full-rebuild branch
+			// leaves all four subtests PASS. The only test that catches that
+			// defect is the randomised differential. Kept because the fixture
+			// is more realistic with it, not because it guards anything.
 			dir := t.TempDir()
 			writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"),
 				"defaults:\n  mysql_connections: 80\n  mysql_slow_queries: 5\n")
@@ -397,14 +402,14 @@ func TestReclaimTenantFromMirrorsTheFullMergePrecedence(t *testing.T) {
 		"c.yaml":    {Tenants: map[string]map[string]ScheduledValue{"dup": sv("33")}},
 		"only.yaml": {Tenants: map[string]map[string]ScheduledValue{"solo": sv("7")}},
 	}
-	if got, ok := reclaimTenantFrom(configs, "dup"); !ok || got["mysql_connections"].Default != "33" {
+	if got, ok := reclaimTenantFrom(configs, indexTenantDeclarations(configs), "dup"); !ok || got["mysql_connections"].Default != "33" {
 		t.Fatalf("dup resolved to %v (ok=%v), want c.yaml's 33 — sorted filename, LAST writer wins, "+
 			"which is what mergePartialConfigs does", got, ok)
 	}
-	if got, ok := reclaimTenantFrom(configs, "solo"); !ok || got["mysql_connections"].Default != "7" {
+	if got, ok := reclaimTenantFrom(configs, indexTenantDeclarations(configs), "solo"); !ok || got["mysql_connections"].Default != "7" {
 		t.Fatalf("solo resolved to %v (ok=%v), want 7", got, ok)
 	}
-	if _, ok := reclaimTenantFrom(configs, "nobody"); ok {
+	if _, ok := reclaimTenantFrom(configs, indexTenantDeclarations(configs), "nobody"); ok {
 		t.Fatal("a tenant no file declares must not be reported as surviving")
 	}
 }

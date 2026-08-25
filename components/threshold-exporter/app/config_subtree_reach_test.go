@@ -284,11 +284,15 @@ func TestTheDivergenceAuditRunsOnEveryCommit(t *testing.T) {
 	//
 	// ⚠️ NOT a whole-log→line win, and an earlier version of this comment
 	// claimed it was. Measured: a whole-log check that also names `t-bad`
-	// reddens under the same mutation (an audit naming a constant wrong
-	// tenant), so the added value is the tenant name, not the anchoring. That
-	// same mutation reddens 4 tests in this package, not "only this one" as
-	// this comment used to say — and how many depends on the mutation's exact
-	// shape, which is why the number is now stated with the mutation.
+	// reddens under the same mutation, so the added value is the tenant name,
+	// not the anchoring.
+	//
+	// ⚠️ NO BLAST-RADIUS NUMBER HERE ANY MORE. This said "reddens only this
+	// one", then "reddens 4 tests"; a reviewer got 11 or 3 depending on which
+	// line of `formatDivergenceLog` the constant replaced. A count is only
+	// meaningful next to the exact mutation that produced it, and this comment
+	// is not the place to pin a mutation — so the claim is dropped rather than
+	// restated with a third number.
 	assertDivergenceLineNames(t, logged, "t-bad")
 	assertNoStaleRemediation(t, logged)
 }

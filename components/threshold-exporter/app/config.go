@@ -856,21 +856,80 @@ func isTenantOnlyChange(changed, added, removed []string) bool {
 // pass therefore scans the surviving parses (`reclaimTenantFrom`), which costs
 // O(|newConfigs|) per removed tenant rather than O(1), and removals are rare.
 //
-// ⚠️ `patchedTenants` is still built and still used by nothing but the
-// bookkeeping above: every member of it comes from `newConfigs`, and removed
-// files are deleted from `newConfigs` before this runs, so it is a subset of
-// what `reclaimTenantFrom` walks anyway. Kept because it names the "moved this
-// round" case the sorted merge below depends on, not because the removal pass
-// needs it.
+// ⚠️ `patchedTenants` USED TO BE BUILT HERE AND IS GONE. It recorded the
+// tenants this reload reintroduced, so the removal pass could tell a deletion
+// from a move. Once both removal loops consult the declaration index instead,
+// nothing read it — a reviewer pointed out it had no readers left, and a
+// bookkeeping set nobody reads is a claim that the code does something it does
+// not. The move case is now answered by the index, which knows every file that
+// declares the tenant, not just the ones reparsed this round.
 
-// reclaimTenantFrom returns the overrides a surviving file still declares for
-// this tenant, and whether any file does.
+// indexTenantDeclarations maps each tenant to the sorted filenames declaring
+// it, built ONCE per reload.
+//
+// ⛔ THIS EXISTS BECAUSE THE OBVIOUS VERSION WAS QUADRATIC. `reclaimTenantFrom`
+// originally rescanned and re-sorted all of `newConfigs` per patched tenant.
+// With one tenant file changed that is invisible — which is the only case the
+// cost comment measured — but a reload that rewrites the whole tree is
+// O(tenants x files). Measured on 1000 tenant files, all changed:
+// `IncrementalLoad` went 182-195 ms against a full `Load` of 80-94 ms on the
+// same tree, i.e. the fast path became more than twice as slow as the rebuild
+// it exists to avoid. Reachable by anything that regenerates the tree:
+// `assemble_config_dir`, a `da-batchpr` sweep, a formatting migration.
+// (#1569 blind review.)
+func indexTenantDeclarations(newConfigs map[string]ThresholdConfig) tenantDeclarations {
+	names := make([]string, 0, len(newConfigs))
+	for name := range newConfigs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	idx := tenantDeclarations{single: make(map[string]string, len(newConfigs))}
+	for _, name := range names {
+		for tenant := range newConfigs[name].Tenants {
+			if _, seen := idx.single[tenant]; !seen {
+				if _, dup := idx.multi[tenant]; !dup {
+					idx.single[tenant] = name
+					continue
+				}
+			}
+			// Second or later declaration: promote to the slice form.
+			if idx.multi == nil {
+				idx.multi = map[string][]string{}
+			}
+			if first, wasSingle := idx.single[tenant]; wasSingle {
+				idx.multi[tenant] = []string{first}
+				delete(idx.single, tenant)
+			}
+			idx.multi[tenant] = append(idx.multi[tenant], name)
+		}
+	}
+	return idx
+}
+
+// tenantDeclarations answers "which files declare this tenant" without paying
+// for the answer where it is boring.
+//
+// ⛔ A `map[string][]string` COSTS A SLICE PER TENANT, and a tenant declared
+// in two files is invalid — `runHierarchyScanReject` refuses it on a full load
+// — so the slice is waste on essentially every entry. Measured at 1000 tenants:
+// the slice-per-tenant form added ~1005 allocs/op to every incremental reload
+// (16242 → 17247 on BenchmarkIncrementalLoad_1000_OneFileChanged); splitting
+// the rare case out brings it back. (#1569 blind review.)
+type tenantDeclarations struct {
+	single map[string]string   // tenant → its only declaring file
+	multi  map[string][]string // tenant → sorted files, only when >1 declares it
+}
+
+// reclaimTenantFrom returns the overrides the surviving files declare for this
+// tenant, and whether any file does. `sources` comes from
+// indexTenantDeclarations and is in `mergePartialConfigs` order.
 //
 // ⛔ "IS IT STILL DECLARED" IS HALF THE QUESTION; THE OTHER HALF IS "WHOSE
-// VALUE". An earlier version of this answered only the first, by consulting
+// VALUE". An earlier version answered only the first, by consulting
 // `patchedTenants` — the tenants reintroduced by files reparsed THIS round.
-// That is "did it move in this reload", which is a different question again: a
-// tenant declared in two files at once (invalid, hard-rejected by
+// That is "did it move in this reload", a different question again: a tenant
+// declared in two files at once (invalid, hard-rejected by
 // `runHierarchyScanReject` on a full load, but silently accepted by this fast
 // path) vanished the moment either owning file was edited, because the other
 // file did not change and so was absent from `patchedTenants`.
@@ -879,48 +938,34 @@ func isTenantOnlyChange(changed, added, removed []string) bool {
 // `a.yaml` declaring the tenant at 11 and `b.yaml` transiently at 22, dropping
 // it from `b.yaml` left the merged config holding 22 — a value NO file on disk
 // declares — where a restart gives 11, and where the previous behaviour at
-// least emitted a divergence ERROR. Loud-and-wrong became silent-and-wrong,
-// which is this ticket's own defect shape. So the removal loops re-take the
-// value instead of merely declining to delete.
+// least emitted a divergence ERROR. Loud-and-wrong became silent-and-wrong.
 //
-// The scan order mirrors `mergePartialConfigs`: sorted filename, last writer
-// wins, so the value this returns is the one a full rebuild would produce.
-// (#1569 blind review of sweep B-2, round 2.)
+// ⛔ THE UNION IS PER KEY, NOT WHOLE-MAP REPLACE. `mergePartialInto` copies
+// key-by-key, so two files each contributing a different key both survive a
+// full load. Returning just the last file's map dropped the other's: measured
+// with a platform file's `tenants:` block supplying one key and the tenant's
+// own file another — a legitimate shape the loader documents — one ordinary
+// edit silently dropped the first key back to the platform default, and took
+// the tenant's `_profile` with it.
 //
-// ⚠️ This does NOT make the fast path reject the duplicate the way a full load
-// would — that asymmetry is measured and recorded, not fixed here.
-func reclaimTenantFrom(newConfigs map[string]ThresholdConfig, tenant string) (map[string]ScheduledValue, bool) {
-	names := make([]string, 0, len(newConfigs))
-	for name := range newConfigs {
-		names = append(names, name)
+// ⚠️ THE SINGLE-SOURCE CASE RETURNS THE PARSED MAP AS-IS, no copy: that is
+// what this loop did before any of the above, it is the overwhelmingly common
+// shape, and copying it was the quadratic cost above.
+func reclaimTenantFrom(newConfigs map[string]ThresholdConfig, declaredIn tenantDeclarations, tenant string) (map[string]ScheduledValue, bool) {
+	if only, single := declaredIn.single[tenant]; single {
+		return newConfigs[only].Tenants[tenant], true
 	}
-	sort.Strings(names)
-
-	// ⛔ UNION PER KEY, NOT WHOLE-MAP REPLACE. `mergePartialInto` copies
-	// key-by-key into the tenant's map, so two files each contributing a
-	// different key both survive a full load. Returning just the last file's
-	// map dropped the other's: measured with a platform file's `tenants:` block
-	// supplying one key and the tenant's own file another — a legitimate shape
-	// the loader documents — one ordinary edit silently dropped the first key
-	// back to the platform default. The unit test that claimed to pin this
-	// precedence could not see it, because all three of its files spelled the
-	// SAME key. (#1569 blind review.)
-	var overrides map[string]ScheduledValue
-	found := false
-	for _, name := range names {
-		ov, declared := newConfigs[name].Tenants[tenant]
-		if !declared {
-			continue
-		}
-		found = true
-		if overrides == nil {
-			overrides = make(map[string]ScheduledValue, len(ov))
-		}
-		for k, v := range ov {
+	sources := declaredIn.multi[tenant]
+	if len(sources) == 0 {
+		return nil, false
+	}
+	overrides := make(map[string]ScheduledValue)
+	for _, name := range sources {
+		for k, v := range newConfigs[name].Tenants[tenant] {
 			overrides[k] = v // later filename wins, same as mergePartialInto
 		}
 	}
-	return overrides, found
+	return overrides, true
 }
 
 func patchTenants(prev *ThresholdConfig, newConfigs, oldConfigs map[string]ThresholdConfig, changed, added, removed []string) ThresholdConfig {
@@ -938,16 +983,26 @@ func patchTenants(prev *ThresholdConfig, newConfigs, oldConfigs map[string]Thres
 		Tenants:           make(map[string]map[string]ScheduledValue, len(prev.Tenants)),
 	}
 	// Shallow-copy tenants map (keys only, values are immutable per-tenant maps)
+	//
+	// ⛔ "IMMUTABLE" IS AN OBLIGATION ON EVERY LATER STAGE, NOT A FACT. An
+	// untouched tenant's inner map is the SAME OBJECT as the one inside
+	// `m.config`, which `GetConfig()` has already handed to scraping
+	// goroutines — verified by pointer identity across reloads. Two stages
+	// downstream write into tenant maps in place (`ApplyProfiles`,
+	// `applySubtreeDefaults` via `refreshRefused`), and today both are
+	// idempotent fill-ins that never touch a key already present, so a steady
+	// state performs no write at all and `-race` with concurrent scrapes is
+	// clean. Anything added here that OVERWRITES rather than fills in would
+	// mutate config a scrape is reading, with no test to catch it. Either keep
+	// new overlays idempotent or copy the map first. (#1569 blind review, C-1.)
 	for k, v := range prev.Tenants {
 		merged.Tenants[k] = v
 	}
 	// Overwrite tenants from re-parsed (changed + added) files, applied as a
 	// single sorted filename sequence so precedence matches mergePartialConfigs.
-	// patchedTenants records every tenant this reload (re)introduced so the
-	// removal pass below can distinguish a real deletion from a move.
 	patchFiles := append(append([]string{}, changed...), added...)
 	sort.Strings(patchFiles)
-	patchedTenants := make(map[string]struct{})
+	declaredIn := indexTenantDeclarations(newConfigs)
 	for _, name := range patchFiles {
 		if partial, ok := newConfigs[name]; ok {
 			for tenant := range partial.Tenants {
@@ -964,25 +1019,36 @@ func patchTenants(prev *ThresholdConfig, newConfigs, oldConfigs map[string]Thres
 				// it silent. Found by the randomised fast-path-vs-full-load
 				// differential, not by reading. (#1569 blind review.)
 				//
-				// ⚠️ COST, MEASURED RATHER THAN ESTIMATED. Rebuilding instead
-				// of aliasing allocates one map per patched tenant and walks
-				// every parsed file. Both arms benchmarked locally at n=6 on
-				// BenchmarkIncrementalLoad_1000_OneFileChanged — the only
-				// benchmark that reaches this loop with a changed file:
+				// ⚠️ COST, RE-MEASURED AFTER TWO WRONG VERSIONS OF THIS NOTE.
+				// The first said "~3 allocations and ~16 KB per reload" — true
+				// for ONE patched tenant, which is the only case it measured,
+				// and badly wrong as a per-reload claim: the implementation it
+				// described rescanned every file per patched tenant, so a
+				// reload that rewrites the whole tree was O(tenants x files).
+				// Measured at 1000 tenant files all changed: `IncrementalLoad`
+				// 182-195 ms against a full `Load` of 80-94 ms on the same tree
+				// — the fast path became slower than the rebuild it exists to
+				// avoid. The declaration index fixed that; current figures on
+				// the same box:
 				//
-				//	with union:    16241-16243 allocs/op
-				//	whole replace: 16239-16240 allocs/op
+				//	1000 files, all changed : 23-25 ms (full Load 87 ms)
+				//	1000 files, one changed : 16246-16247 allocs/op
+				//	                          (16242 before this PR's round 10,
+				//	                           17247 with a slice per tenant)
 				//
-				// ~3 allocations and ~16 KB per reload, i.e. 0.018% of that
-				// benchmark's allocations. ⚠️ Its bytes/op is BIMODAL in both
-				// arms (two clusters ~32 KB apart, map bucket growth), so a
-				// single CI sample can land on either — do not read a one-shot
-				// bytes delta on this benchmark as a signal. Two earlier bench
-				// attributions in this PR were wrong for exactly that reason.
-				if ov, ok := reclaimTenantFrom(newConfigs, tenant); ok {
-					merged.Tenants[tenant] = ov
-				}
-				patchedTenants[tenant] = struct{}{}
+				// ⚠️ It also said "the only benchmark that reaches this loop
+				// with a changed file". False: BenchmarkIncrementalLoad_100_
+				// OneFileChanged does too. ⚠️ And bytes/op on these benchmarks
+				// is bimodal (two clusters ~32 KB apart, map bucket growth) —
+				// a comment-only commit moved the CI figure — so never read a
+				// one-shot bytes delta here as a signal.
+				// No `ok` check: `tenant` came from `partial.Tenants` and
+				// `partial` came from `newConfigs`, so the index necessarily
+				// has it. The earlier `if …; ok` branch could never be false —
+				// a guard that cannot fire reads as a handled case and is not
+				// one.
+				ov, _ := reclaimTenantFrom(newConfigs, declaredIn, tenant)
+				merged.Tenants[tenant] = ov
 			}
 		}
 	}
@@ -1018,7 +1084,7 @@ func patchTenants(prev *ThresholdConfig, newConfigs, oldConfigs map[string]Thres
 			if _, stillDeclared := newPartial.Tenants[tenant]; stillDeclared {
 				continue
 			}
-			if ov, survives := reclaimTenantFrom(newConfigs, tenant); survives {
+			if ov, survives := reclaimTenantFrom(newConfigs, declaredIn, tenant); survives {
 				merged.Tenants[tenant] = ov
 				continue
 			}
@@ -1030,7 +1096,7 @@ func patchTenants(prev *ThresholdConfig, newConfigs, oldConfigs map[string]Thres
 	for _, name := range removed {
 		if partial, ok := oldConfigs[name]; ok {
 			for tenant := range partial.Tenants {
-				if ov, survives := reclaimTenantFrom(newConfigs, tenant); survives {
+				if ov, survives := reclaimTenantFrom(newConfigs, declaredIn, tenant); survives {
 					merged.Tenants[tenant] = ov
 				} else {
 					delete(merged.Tenants, tenant)

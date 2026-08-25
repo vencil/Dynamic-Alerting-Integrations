@@ -15,7 +15,27 @@ package main
 // `-gcflags=all=-N -l` or `-race` the slice capacity works out differently and
 // the alias does not form; so does adding a print statement. A hand-written
 // test would have had to guess both the file-set shape AND run optimised.
-// Randomised sequences do not have to guess: 9 of 300 seeds diverged.
+//
+// ⛔ THE FIRST VERSION OF THIS FILE WAS BARELY RANDOM AT ALL, and its own
+// comment claimed "9 of 300 seeds diverged" — measured afterwards as **1**.
+// The generator used an LCG and sampled `state % 4`; with that multiplier and
+// increment both ≡ 1 (mod 4) the low bits are a COUNTER, so all 300 seeds
+// collapsed to 4 distinct mutation scripts and only the values varied. A
+// reviewer reproduced the stream. It now mixes with splitmix64, whose low bits
+// are usable.
+//
+// ⛔ THE CATCH RATES, RE-MEASURED. Each production fix reverted one at a time,
+// counting seeds that diverge:
+//
+//	append alias reinstated                       56 / 300  (was 1 / 300)
+//	ApplyProfiles back inside the rebuild branch  298 / 300
+//	reclaim reverted to last-file-wins            270 / 300
+//	patch loop reverted to whole-map replace      270 / 300
+//	declaration index built without sorting       163 / 300  (was 0 / 300)
+//
+// The last row is why `tenantFileFor` gives `a.yaml` a key that
+// `_defaults.yaml` ALSO supplies: with disjoint keys the union's ordering is
+// unfalsifiable, and the sort was unguarded.
 //
 // The oracle is the only one that cannot drift: load the same directory from
 // scratch and compare what a scrape would see.
@@ -24,6 +44,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -48,20 +69,25 @@ func TestTheFastPathAlwaysLandsWhereAFullLoadWould(t *testing.T) {
 			writeTestYAML(t, filepath.Join(dir, "_profiles.yaml"),
 				"profiles:\n  gold:\n    mysql_threads_running: \"95\"\n")
 
-			// Deterministic pseudo-randomness: `rand` is banned in this
-			// package's fixtures, and a seed that reproduces by number is
-			// worth more than entropy anyway.
-			next := func(state *int, n int) int {
-				*state = (*state*1103515245 + 12345) & 0x7fffffff
-				return *state % n
+			// Deterministic, but actually mixed: splitmix64. A seed that
+			// reproduces by number is worth more than entropy — a stream whose
+			// low bits are a counter is worth nothing.
+			state := uint64(seed) + 0x9E3779B97F4A7C15
+			next := func(_ *int, n int) int {
+				state += 0x9E3779B97F4A7C15
+				z := state
+				z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9
+				z = (z ^ (z >> 27)) * 0x94D049BB133111EB
+				z ^= z >> 31
+				return int(z % uint64(n))
 			}
-			state := seed*2654435761 + 1
+			var unused int
 
 			files := []string{"a.yaml", "b.yaml", "c.yaml"}
 			// Round 0: a starting tree, then three reload rounds each doing an
 			// arbitrary mix of add / edit / delete across those files.
-			for _, f := range files[:1+next(&state, len(files)-1)] {
-				writeTestYAML(t, filepath.Join(dir, f), tenantFileFor(f, next(&state, 90)+10))
+			for _, f := range files[:1+next(&unused, len(files)-1)] {
+				writeTestYAML(t, filepath.Join(dir, f), tenantFileFor(f, next(&unused, 90)+10))
 			}
 			m := NewConfigManager(dir)
 			if err := m.Load(); err != nil {
@@ -85,18 +111,28 @@ func TestTheFastPathAlwaysLandsWhereAFullLoadWould(t *testing.T) {
 						}
 					}
 					if len(absent) > 0 && len(present) > 0 {
-						writeTestYAML(t, filepath.Join(dir, absent[next(&state, len(absent))]),
-							tenantFileFor(absent[0], next(&state, 90)+10))
-						edit := present[next(&state, len(present))]
-						writeTestYAML(t, filepath.Join(dir, edit), tenantFileFor(edit, next(&state, 90)+10))
+						// ⛔ ONE INDEX, USED TWICE. This picked the filename at
+						// random but built the CONTENT for `absent[0]`. It
+						// survived only because the old counter-PRNG always
+						// left exactly one absent file; with a real stream the
+						// two diverge, two files declare the same tenant, and
+						// the full-load oracle dies with DuplicateTenantError —
+						// the test then fails on its own fixture while
+						// reporting a config error, which reads as a product
+						// defect. (#1569 blind review.)
+						add := absent[next(&unused, len(absent))]
+						writeTestYAML(t, filepath.Join(dir, add),
+							tenantFileFor(add, next(&unused, 90)+10))
+						edit := present[next(&unused, len(present))]
+						writeTestYAML(t, filepath.Join(dir, edit), tenantFileFor(edit, next(&unused, 90)+10))
 						touched = true
 					}
 				}
 				for _, f := range files {
-					switch next(&state, 4) {
+					switch next(&unused, 4) {
 					case 0: // leave it alone
 					case 1, 2: // write (add or edit)
-						writeTestYAML(t, filepath.Join(dir, f), tenantFileFor(f, next(&state, 90)+10))
+						writeTestYAML(t, filepath.Join(dir, f), tenantFileFor(f, next(&unused, 90)+10))
 						touched = true
 					case 3: // delete if present
 						if err := os.Remove(filepath.Join(dir, f)); err == nil {
@@ -110,16 +146,20 @@ func TestTheFastPathAlwaysLandsWhereAFullLoadWould(t *testing.T) {
 				if err := m.IncrementalLoad(); err != nil {
 					t.Fatalf("round %d IncrementalLoad: %v", round, err)
 				}
-			}
 
-			reference := NewConfigManager(dir)
-			if err := reference.Load(); err != nil {
-				t.Fatalf("reference Load: %v", err)
-			}
-			if got, want := scrapeView(m.GetConfig()), scrapeView(reference.GetConfig()); got != want {
-				t.Fatalf("the fast path published something a restart does not reproduce\n"+
-					"--- incremental ---\n%s\n--- full load ---\n%s\n"+
-					"tree now:\n%s", got, want, listTree(t, dir))
+				// ⛔ COMPARED EVERY ROUND. Comparing only after the last one
+				// misses a divergence that appears in round 1 and is masked
+				// again in round 2 — and a fast path that self-heals is still
+				// a fast path that served wrong data in between.
+				reference := NewConfigManager(dir)
+				if err := reference.Load(); err != nil {
+					t.Fatalf("round %d reference Load: %v", round, err)
+				}
+				if got, want := scrapeView(m.GetConfig()), scrapeView(reference.GetConfig()); got != want {
+					t.Fatalf("round %d: the fast path published something a restart does not reproduce\n"+
+						"--- incremental ---\n%s\n--- full load ---\n%s\n"+
+						"tree now:\n%s", round, got, want, listTree(t, dir))
+				}
 			}
 		})
 	}
@@ -145,16 +185,63 @@ func tenantFileFor(name string, value int) string {
 	body := fmt.Sprintf("tenants:\n  %s:\n    mysql_connections: \"%d\"\n    mysql_slow_queries: \"%d\"\n",
 		own, value, value+1)
 	if name == "a.yaml" {
-		body += fmt.Sprintf("  t-shared:\n    mysql_connections: \"%d\"\n", value+2)
+		// ⛔ THE SECOND KEY IS THE ONE `_defaults.yaml` ALSO SUPPLIES, so the
+		// two sources COMPETE for it and the merge order decides the winner.
+		// Without a contested key the union's ordering is unfalsifiable:
+		// deleting the sort from indexTenantDeclarations left all 300 seeds
+		// green, because two sources contributing disjoint keys produce the
+		// same map in either order. The full-load oracle pins which one wins.
+		body += fmt.Sprintf("  t-shared:\n    mysql_connections: \"%d\"\n    mysql_slow_queries: \"%d\"\n",
+			value+2, value+4)
 	}
 	return body
 }
 
-// scrapeView renders what a Prometheus scrape would see, order-independently.
+// sortedLabelPairs renders a label map order-independently; Go map formatting
+// is sorted for string keys today, but relying on that in a differential is
+// asking for a false divergence.
+func sortedLabelPairs(m map[string]string) string {
+	if len(m) == 0 {
+		return "-"
+	}
+	pairs := make([]string, 0, len(m))
+	for k, v := range m {
+		pairs = append(pairs, k+"="+v)
+	}
+	sort.Strings(pairs)
+	return strings.Join(pairs, ",")
+}
+
+// scrapeView renders everything a consumer can observe, order-independently.
+//
+// ⛔ THE FIRST VERSION COMPARED FOUR FIELDS OF ONE RESOLVER. It dropped
+// `CustomLabels` / `RegexLabels` — so a dimensional override landing on the
+// wrong label set was invisible — and never called the state-filter, silent-
+// mode, dedup, routing or metadata resolvers at all, nor looked at
+// `OptionalOverrides`. A differential is only as wide as the face it diffs.
 func scrapeView(cfg *ThresholdConfig) string {
 	rows := make([]string, 0)
 	for _, r := range cfg.Resolve() {
-		rows = append(rows, fmt.Sprintf("%s|%s_%s|%v|%s", r.Tenant, r.Component, r.Metric, r.Value, r.Severity))
+		rows = append(rows, fmt.Sprintf("threshold|%s|%s_%s|%v|%s|custom=%v|regex=%v",
+			r.Tenant, r.Component, r.Metric, r.Value, r.Severity,
+			sortedLabelPairs(r.CustomLabels), sortedLabelPairs(r.RegexLabels)))
+	}
+	add := func(tag string, v any) {
+		rv := reflect.ValueOf(v)
+		for i := 0; i < rv.Len(); i++ {
+			rows = append(rows, fmt.Sprintf("%s|%+v", tag, rv.Index(i).Interface()))
+		}
+	}
+	add("state", cfg.ResolveStateFilters())
+	add("silent", cfg.ResolveSilentModes())
+	add("dedup", cfg.ResolveSeverityDedup())
+	add("metadata", cfg.ResolveMetadata())
+	add("routing", cfg.ResolveRouting())
+	add("declared", cfg.OptionalOverrides)
+	for tenant, ov := range cfg.Tenants {
+		for k, sv := range ov {
+			rows = append(rows, fmt.Sprintf("override|%s|%s|%+v", tenant, k, sv))
+		}
 	}
 	sort.Strings(rows)
 	return strings.Join(rows, "\n")
