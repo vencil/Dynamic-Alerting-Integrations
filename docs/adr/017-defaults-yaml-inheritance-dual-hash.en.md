@@ -111,7 +111,7 @@ defaults:
 # ↓ top-level key, a sibling of `defaults:` — NOT nested under it.
 #   `defaults:` is map[string]float64; any nested mapping inside it fails the
 #   unmarshal for the WHOLE file, so EVERY default is dropped — not just the
-#   offending key. Both consumers log an ERROR (the exporter via
+#   offending key. ⚠️ Two consumers KNOWN to log an ERROR (not exhaustive): the exporter via
 #   parsePartialConfig, which also bumps parse_failure; tenant-api via
 #   merge_tenant.go), and neither applies any defaults.
 _routing_defaults:
@@ -154,7 +154,10 @@ implementation).
 
 ### If you are editing a `_defaults.yaml`, these four things
 
-1. **Only keys inside the `defaults:` block enter `effective`.** The top-level keys that sit
+1. **Only keys inside the `defaults:` block enter `effective`** (⚠️ **there are exceptions** —
+   see Known reachable exceptions 1 and 2 below;
+   `rule-packs/recipes/examples/conf.d/finance/_defaults.yaml` is exception 1 in shipped form,
+   and this item alone would misjudge it as inert). The top-level keys that sit
    **alongside** it (`state_filters` / `optional_overrides` / `profiles` /
    `max_metrics_per_tenant` / `_routing*` and so on) **still take effect** — they just travel
    their own pipelines: `state_filters` / `optional_overrides` are merged into `ThresholdConfig`
@@ -173,66 +176,55 @@ implementation).
    ⛔ Treat that schema as the source of truth for permitted keys and **do not start a second
    enumeration in this ADR** — the names in parentheses above are examples, not a list.
 
-2. ⛔ **Do not indent sibling keys INTO `defaults:` to "make them visible". Three planes fail
-   differently, and one of them stops a customer receiving alerts**:
-   - **exporter**: the field is typed `map[string]float64` (`types.go`). A **non-scalar**
-     sibling (mapping / list) fails to unmarshal ⇒ `parsePartialConfig` returns `ok=false`,
-     **the entire file is dropped**, and it logs `ERROR: ... entire block dropped`, taking every
-     other sibling key in that file with it.
-     ⛔ **The line is not "scalar vs non-scalar" — it is "does it parse as `float64`"**:
-     measured, `100`, `1.5` and **`null` (which becomes 0)** all give `ok=true` and an **empty
-     log**, while `_profile: standard`, a quoted `"100"` and `true` — all scalars too — take the
-     loud failure path above.
-     ⛔ The real damage on the silent side is that **the sibling key itself stops working**:
-     once `max_metrics_per_tenant` leaves the top level, `ThresholdConfig.MaxMetricsPerTenant`
-     is 0 (measured) and the runtime falls back to the built-in
-     `DefaultMaxMetricsPerTenant = 500` (`resolve.go`, on `== 0`) ⇒ **the per-tenant
-     cardinality cap you wrote is silently replaced by 500**. ⚠️ The direction depends on what
-     you wrote: 100 widens it 5×; **anyone who wrote more than 500 is silently tightened, and
-     the excess metrics are truncated**.
-     ⚠️ The side effect is one extra
-     `user_threshold{component="max", metric="metrics_per_tenant"}` series per tenant. **Any
-     query that does not name `metric=` will select it** — ready examples in this repo are
-     Grafana's `count(user_threshold)`, `count by(component) (user_threshold)` and
-     `label_values(user_threshold, metric)`. ⛔ **This document deliberately does not enumerate
-     who consumes it**: that list spans rule packs, dashboards, recording rules and operator
-     manifests, and any enumeration here would drift. To find out for **your** environment, run
-     `count by(component) (user_threshold)` against the live Prometheus — an extra
-     `component="max"` bucket is it.
-   - **routing**: ⛔ once `_routing_defaults` leaves the top level,
-     `generate_alertmanager_routes.py` cannot find it — **a tenant with no `_routing` of its own
-     loses its entire route AND receiver** (measured: `Found 2 tenant(s) with routing config:
-     db-a, db-b` → `Found 1 tenant(s) with routing config: db-b`, the `tenant-db-a` receiver
-     gone, with **RC=0, zero
-     errors, zero warnings**). `check_confd_schema.py` does **not** block it either (measured:
-     `RC=0` both ways; the `defaults` sub-schema says verbatim that its values are left loose).
-   - **`effective`**: **silently accepted** as a nested key — and blast-radius therefore goes
-     from "no changes" to a Tier B report. ⚠️ **In other words: the diagnostic surface rewards
-     this action while it takes a tenant's alerting away.**
+2. ⛔ **Do not indent sibling keys INTO `defaults:` to "make them visible".** It changes what the
+   key means, and **each consumer fails differently** — the table below is **what is currently
+   known, not an exhaustive list** (⚠️ the lists in this ADR have been falsified four times; if
+   the key you are holding is not in the table, **go find its consumer before concluding
+   anything**, do not assume it is harmless):
+
+   | Key you indented | What that consumer does |
+   |:--|:--|
+   | any key whose value **does not parse as `float64`** (mapping / list / string / bool) | exporter: `parsePartialConfig` returns `ok=false`, **the entire file is dropped**, and it logs `ERROR: ... entire block dropped`, taking the file's other sibling keys with it |
+   | a key whose value **does parse as `float64`** (`100` / `1.5` / **`null`→0**) | exporter: `ok=true`, **empty log**, it becomes a threshold key. ⛔ And **the sibling key itself stops working** — e.g. once `max_metrics_per_tenant` leaves the top level `ThresholdConfig.MaxMetricsPerTenant` is 0, and the runtime falls back to the built-in `DefaultMaxMetricsPerTenant = 500` (`resolve.go`, on `== 0`) ⇒ the cap you wrote is replaced by 500; ⚠️ 100 widens it 5×, **anyone who wrote more than 500 is silently tightened and the excess metrics are truncated** |
+   | `_routing_defaults` | routing: `generate_alertmanager_routes.py` cannot find it — **a tenant with no `_routing` of its own loses its entire route AND receiver** (measured: `Found 2 tenant(s) with routing config: db-a, db-b` → `Found 1 tenant(s) with routing config: db-b`, the `tenant-db-a` receiver gone, with **RC=0, zero errors, zero warnings**) |
+   | `_custom_alerts` | custom-alert compilation: `custom_alerts/loader.py` reads only the **top level**, so after indenting it sees **zero entries and zero errors**. ⛔ The same loader only accepts the filename `_defaults.yaml` — renaming the file to `_defaults.**yml**` also makes it see zero, while the exporter and `describe_tenant` both still read it |
+   | any key (diagnostic surface) | `effective`: **silently accepted** as a nested key, so blast-radius goes from "no changes" to a Tier B report. ⚠️ **The diagnostic surface rewards this action while it takes a tenant's alerting away** |
+
+   ⛔ `check_confd_schema.py` returns `RC=0` for **all** of the above (the `defaults` sub-schema
+   says verbatim that its values are left loose) — **no schema gate blocks this**.
 
 3. **After changing a sibling key, do not use `merged_hash` / `/effective` / `blast_radius` to
    confirm it took effect** (those three cannot see it, and the runtime labels it
-   `effect="cosmetic"` — see "The diagnostic cost" below). **Ask the real consumer instead**:
-   - `state_filters` → `user_state_filter{tenant,filter,severity}` on the exporter's `/metrics`
-   - `_silent_mode` (the one under the **`tenants:` block** of `_defaults.yaml`; written at the
-     top level alongside `defaults:` it is the silent no-op from item 1) →
-     `user_silent_mode{tenant,target_severity}`
-   - `_routing_defaults` / `_routing_enforced` → `generate_alertmanager_routes.py --config-dir
-     conf.d/ --dry-run`, and **diff the full before/after output**. ⛔ The `Found N tenant(s)
-     with routing config` line and the receiver set are **not enough, and their blind spots
-     differ**:
-     - The `Found N` line counts **how many tenants parsed a routing config**, not how many
-       routes came out. Measured: dropping `_routing_defaults.receiver.type` makes db-a's route
-       AND receiver **both disappear** (`2 route(s), 2 receiver(s)` → `1, 1`) while that line
-       stays byte-identical. ⚠️ This one does emit
-       `WARN: db-a: missing required 'receiver.type', skipping` — unlike the genuinely
-       signal-free indenting in item 2; do not conflate the two.
-     - The receiver set only reacts to a receiver appearing or disappearing; it is blind to
-       **values**. Measured with `_routing_defaults.group_wait` 30s→35s, and again with
-       `receiver.to` changed to **a recipient on a different domain** — both times the full
-       output differed by that one line while the `Found N` line and the receiver set did not
-       move. ⚠️ So the blind spot covers **where the notification goes**, not just timing
-       parameters; and `group_wait` is the very key used in the inheritance example above.
+   `effect="cosmetic"` — see "The diagnostic cost" below). **Ask the consumer of the key you
+   changed** — this table is likewise **known, not exhaustive**; ⛔ **if your key is not in it,
+   this document does not know its consumer: find it before concluding "it took effect"**:
+
+   | Key you changed | Ask |
+   |:--|:--|
+   | `state_filters` | `user_state_filter{tenant,filter,severity}` on the exporter's `/metrics` |
+   | `_silent_mode` (the one under the **`tenants:` block**; at the top level alongside `defaults:` it is the silent no-op from item 1) | `user_silent_mode{tenant,target_severity}` |
+   | `_custom_alerts` | the output of `compile_custom_alerts.py --check` (⚠️ see the warning below) |
+   | `_routing_defaults` / `_routing_enforced` | `generate_alertmanager_routes.py --config-dir conf.d/ --dry-run`, and **diff the full before/after output** |
+
+   ⛔ **`compile_custom_alerts.py` writes back to this repo's
+   `rule-packs/rule-pack-custom-alerts.yaml` even when `--config-dir` points elsewhere**
+   (`out_path = repo / OUT_REL`, independent of `--config-dir`), so trying it against another
+   tree overwrites the shipped file. Use `--check`, or point `--out` somewhere else.
+
+   ⛔ For the routing row, **diff the full output only — the two signals people take as
+   shortcuts each have a blind spot**:
+   - `Found N tenant(s) with routing config` counts **how many tenants parsed a routing
+     config**, not how many routes came out. Measured: dropping
+     `_routing_defaults.receiver.type` makes db-a's route AND receiver **both disappear**
+     (`2 route(s), 2 receiver(s)` → `1, 1`) while that line stays byte-identical. ⚠️ This one
+     does emit `WARN: db-a: missing required 'receiver.type', skipping` — unlike the genuinely
+     signal-free indenting in item 2; do not conflate the two.
+   - The receiver set only reacts to a receiver appearing or disappearing; it is blind to
+     **values**. Measured with `group_wait` 30s→35s, and again with `receiver.to` changed to
+     **a recipient on a different domain** — both times the full output differed by that one
+     line while both signals stayed byte-identical. ⚠️ The blind spot covers **where the
+     notification goes**, not just timing parameters; and `group_wait` is the very key used in
+     the inheritance example above.
 
 4. **To opt out of an inherited `_`-prefixed key with an explicit `null`, the test is "after the
    unwrap, do the two land on the SAME key path".** Which keys qualify is decided by the prefix
@@ -298,9 +290,14 @@ equivalent.
 
 Platform-level changes are structurally invisible to consumers that take `effective_config` /
 `merged_hash` as input. ⛔ **What follows is the currently-known set, not an exhaustive one** —
-the first version of this list missed `tenant-verify` (below), and the set spans Go, Python and
-the Portal. To inventory it in **your** tree, search the non-test hits of
-`merged_hash|MergedHash|ResolveEffective|EffectiveConfig`. Known today: `GET /effective`,
+the first version of this list missed `tenant-verify` (below), and the affected surface spans
+Go, Python, the Portal **and CI workflows** (`.github/workflows/blast-radius.yml` is the layer
+that turns this plane into a PR comment). ⚠️ **This document does not claim to know all of
+them**: to inventory your own tree, go by **capability** rather than identifier — find whatever
+calls `describe_tenant` / `tenant-verify` / `blast_radius` / `GET .../effective` / `da-guard`,
+and sweep `.github/workflows/**` and `Makefile` too (searching
+`merged_hash|MergedHash|ResolveEffective|EffectiveConfig` misses the workflows: those two score
+0 hits on all four tokens). Known today: `GET /effective`,
 `describe_tenant`, `blast_radius`, the what-if preview (`handler_simulate.go`, Portal
 `simulate-preview.jsx`), and `da-guard`. Two of those are worse than merely blind:
 
@@ -535,7 +532,7 @@ whereas tenant-level `_routing` **is** loaded into `ThresholdConfig.Tenants` (`r
 has to skip the `_routing*` prefix explicitly precisely because it sits in that map) — but **no
 production caller consumes it**: `ResolveRouting()` is called only from tests, and `types.go`
 states verbatim that it "is currently not called by the exporter", retained as a guardrail
-reference implementation. It does have two real consumers in the repo: the four-layer merge in
+reference implementation. It does have **known** real consumers in the repo (not exhaustive): the four-layer merge in
 `generate_alertmanager_routes.py`, and `cmd/da-guard`, which reads `EffectiveConfig["_routing"]`
 to build `RoutingByTenant`.
 

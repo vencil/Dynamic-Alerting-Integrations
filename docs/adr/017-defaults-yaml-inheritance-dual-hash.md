@@ -107,7 +107,7 @@ defaults:
 # ↓ 頂層 key，與 `defaults:` 平級 —— 不是巢狀在它底下。
 #   `defaults:` 的型別是 map[string]float64，塞任何巢狀 mapping 進去會讓
 #   **整份檔案**解析失敗 ⇒ 連同所有預設值一起被丟棄，不是只丟那一個 key。
-#   兩個消費端都會 log ERROR（exporter 走 parsePartialConfig，另加
+#   ⚠️ 已知會 log ERROR 的兩個（不是窮舉）：exporter 走 parsePartialConfig，另加
 #   parse_failure metric；tenant-api 走 merge_tenant.go），但**都不會**套用
 #   任何預設值。
 _routing_defaults:
@@ -147,7 +147,9 @@ effective = deep_merge( defaults_block(L0), …, defaults_block(Ln), tenant_body
 
 ### 給要編輯 `_defaults.yaml` 的人：這四條
 
-1. **只有 `defaults:` 區塊裡的鍵會進 `effective`。** 與它**平級**的頂層鍵（`state_filters` /
+1. **只有 `defaults:` 區塊裡的鍵會進 `effective`**（⚠️ **有例外**——見下方〈已知的可達例外〉
+   1 與 2；`rule-packs/recipes/examples/conf.d/finance/_defaults.yaml` 就是例外 1 的出貨形狀，
+   照本條會被誤判為 inert）。與它**平級**的頂層鍵（`state_filters` /
    `optional_overrides` / `profiles` / `max_metrics_per_tenant` / `_routing*` 等）**照樣生效**，
    只是各走各的管線：`state_filters` / `optional_overrides` 由 `pkg/config` 的 merge 併入
    `ThresholdConfig` 並在 resolve 期逐租戶展開，`_routing_defaults` / `_routing_enforced` 由
@@ -161,53 +163,47 @@ effective = deep_merge( defaults_block(L0), …, defaults_block(Ln), tenant_body
    ⛔ 允許出現的鍵以那份 schema 為準，**勿在本 ADR 另立一份列舉**——上面括號裡的幾個名字是
    舉例，不是清單。
 
-2. ⛔ **不要把平級鍵縮排進 `defaults:` 想讓它們「被看見」。三個平面下場不同，其中一個會讓客戶
-   收不到告警**：
-   - **exporter**：欄位型別是 `map[string]float64`（`types.go`）。**非純量**的兄弟鍵
-     （mapping / list）會 unmarshal 失敗 ⇒ `parsePartialConfig` 回 `ok=false`、**整份檔案被
-     丟棄**並 log `ERROR: ... entire block dropped`，連同檔內其他平級鍵一起陪葬。
-     ⛔ **分界不是「純量 vs 非純量」，是「能不能解成 `float64`」**：實測 `100`、`1.5`、
-     以及 **`null`（變成 0）** 三者 `ok=true`、**log 是空字串**；而 `_profile: standard`、
-     加引號的 `"100"`、`true` 這些**也是純量**的值，走的是上面那條大聲失敗的路。
-     ⛔ 靜默那一格真正的損害是**那個平級鍵本身失效**：`max_metrics_per_tenant` 一旦離開
-     頂層，`ThresholdConfig.MaxMetricsPerTenant` 就是 0（實測），執行期 fallback 到內建的
-     `DefaultMaxMetricsPerTenant = 500`（`resolve.go`，條件是 `== 0`）⇒ **你寫的每租戶基數
-     上限被靜默換成 500**。⚠️ 方向取決於你原本寫什麼：寫 100 是放寬 5 倍；**寫大於 500 的人
-     會被靜默收緊，多出來的 metric 直接被截斷**。
-     ⚠️ 副作用是每個租戶各多一條 `user_threshold{component="max", metric="metrics_per_tenant"}`。
-     **任何不指名 `metric=` 的查詢都會選到它**——repo 內現成的例子是 Grafana 的
-     `count(user_threshold)`、`count by(component) (user_threshold)` 與
-     `label_values(user_threshold, metric)`。⛔ **本文件刻意不列出「誰會吃到它」的清單**：
-     那份清單橫跨 rule-pack、dashboard、recording rule 與 operator manifest，列了就會漂移。
-     要知道**你的**環境有誰吃到，在跑起來的 Prometheus 上跑
-     `count by(component) (user_threshold)` ——多出 `component="max"` 這一格就是它。
-   - **路由**：⛔ `_routing_defaults` 一旦離開頂層，`generate_alertmanager_routes.py` 就找不到
-     它——**沒有自己 `_routing` 的租戶會整條 route ＋ receiver 消失**（實測：`Found 2 tenant(s)
-     with routing config: db-a, db-b` → `Found 1 tenant(s) with routing config: db-b`，
-     `tenant-db-a` receiver 消失，
-     **RC=0、零 error、零 warning**）。`check_confd_schema.py` 也**不擋**（實測兩者皆 `RC=0`；
-     `defaults` 的 sub-schema 逐字宣告 values left loose）。
-   - **`effective`**：**靜默接受**成一個巢狀鍵，而 blast-radius 會因此從「無變更」變成一份
-     Tier B 報告。⚠️ **也就是說：診斷面會正向獎勵這個動作，而它同時讓一個租戶失去告警。**
+2. ⛔ **不要把平級鍵縮排進 `defaults:` 想讓它們「被看見」。** 它會改變那個鍵的意義，而
+   **每個消費端的下場不同**——下表是**目前已知的，不是窮舉**（⚠️ 這份 ADR 的清單前後被證偽
+   過四次；你手上那個鍵若不在表上，**去找它的消費端再下結論**，不要當作無事）：
+
+   | 你縮排的鍵 | 那個消費端的下場 |
+   |:--|:--|
+   | 值**解不成 `float64`** 的任何鍵（mapping / list / 字串 / bool） | exporter：`parsePartialConfig` 回 `ok=false`、**整份檔案被丟棄**並 log `ERROR: ... entire block dropped`，同檔其他平級鍵一起陪葬 |
+   | 值**解得成 `float64`** 的鍵（`100` / `1.5` / **`null`→0**） | exporter：`ok=true`、**log 是空字串**、變成一個閾值鍵。⛔ 而**那個平級鍵本身失效**——例如 `max_metrics_per_tenant` 離開頂層後 `ThresholdConfig.MaxMetricsPerTenant` 為 0，執行期 fallback 到內建 `DefaultMaxMetricsPerTenant = 500`（`resolve.go`，條件 `== 0`）⇒ 你寫的上限被換成 500；⚠️ 寫 100 是放寬 5 倍，**寫大於 500 的人是被靜默收緊、多出來的 metric 被截斷** |
+   | `_routing_defaults` | 路由：`generate_alertmanager_routes.py` 找不到它——**沒有自己 `_routing` 的租戶整條 route ＋ receiver 消失**（實測 `Found 2 tenant(s) with routing config: db-a, db-b` → `Found 1 tenant(s) with routing config: db-b`，`tenant-db-a` receiver 不見，**RC=0、零 error、零 warning**） |
+   | `_custom_alerts` | 自訂告警編譯：`custom_alerts/loader.py` 只讀**頂層**，縮排後**看到零筆、零 error**。⛔ 同一支 loader 只認檔名 `_defaults.yaml`——把檔案改名成 `_defaults.**yml**` 也會讓它看到零筆，而 exporter 與 `describe_tenant` 兩邊照常讀得到 |
+   | 任何鍵（診斷面） | `effective`：**靜默接受**成一個巢狀鍵，blast-radius 因此從「無變更」變成一份 Tier B 報告。⚠️ **診斷面會正向獎勵這個動作，而它同時讓租戶失去告警** |
+
+   ⛔ `check_confd_schema.py` 對上述**全部**回 `RC=0`（`defaults` 的 sub-schema 逐字宣告
+   values left loose）——**沒有任何 schema 閘門擋這一步**。
 
 3. **改了平級鍵之後，不要拿 `merged_hash` / `/effective` / `blast_radius` 去確認它生效**
    （那三個面看不到，而且執行期會把它標成 `effect="cosmetic"`，見下方「診斷面的代價」）。
-   **改去問真正的消費端**：
-   - `state_filters` → exporter `/metrics` 的 `user_state_filter{tenant,filter,severity}`
-   - `_silent_mode`（指 `_defaults.yaml` 裡 **`tenants:` 區塊**底下的那個；寫在與 `defaults:`
-     平級的頂層是第 1 條說的靜默 no-op）→ `user_silent_mode{tenant,target_severity}`
-   - `_routing_defaults` / `_routing_enforced` → `generate_alertmanager_routes.py --config-dir
-     conf.d/ --dry-run`，**diff 前後的完整輸出**。⛔ 只看 `Found N tenant(s) with routing
-     config` 那一行與 receiver 集合**不夠，而且兩者的盲區不同**：
-     - `Found N` 那一行追的是**有幾個租戶 parse 出 routing config**，不是產出了幾條 route。
-       實測拿掉 `_routing_defaults.receiver.type` ⇒ db-a 的 route 與 receiver **雙雙消失**
-       （`2 route(s), 2 receiver(s)` → `1, 1`），該行**逐位元組不動**。⚠️ 這一格另有
-       `WARN: db-a: missing required 'receiver.type', skipping`——與第 2 條那個真正零訊號的
-       縮排不同，別把兩者混為一談。
-     - receiver 集合只對 receiver 出現／消失反應，對**值**變更全盲。實測
-       `_routing_defaults.group_wait` 30s→35s，以及把 `receiver.to` 改成**另一個網域的收件人**
-       ——兩次完整輸出都只差那一行，Found 行與 receiver 集合皆逐位元組不動。⚠️ 也就是說盲區
-       包含**通知送到哪裡**，不只時間參數；而 `group_wait` 正是上方繼承圖的示範鍵。
+   **去問你改的那個鍵的消費端**——下表同樣是**已知的，不是窮舉**；⛔ **鍵不在表上時，本文件
+   不知道它的消費端，請先找到再下「已生效」的結論**：
+
+   | 你改的鍵 | 去問誰 |
+   |:--|:--|
+   | `state_filters` | exporter `/metrics` 的 `user_state_filter{tenant,filter,severity}` |
+   | `_silent_mode`（**`tenants:` 區塊**底下的那個；平級頂層是第 1 條說的靜默 no-op） | `user_silent_mode{tenant,target_severity}` |
+   | `_custom_alerts` | `compile_custom_alerts.py --check` 的輸出（⚠️ 見下方警告） |
+   | `_routing_defaults` / `_routing_enforced` | `generate_alertmanager_routes.py --config-dir conf.d/ --dry-run`，**diff 前後的完整輸出** |
+
+   ⛔ **`compile_custom_alerts.py` 即使 `--config-dir` 指向別處，仍會寫回 repo 的
+   `rule-packs/rule-pack-custom-alerts.yaml`**——拿它試跑別棵樹會覆蓋出貨檔（`out_path = repo / OUT_REL`，與 `--config-dir` 無關）。
+   用 `--check`，或用 `--out` 明確指到別處。
+
+   ⛔ 路由那格**只 diff 完整輸出，兩個常被當捷徑的訊號各有盲區**：
+   - `Found N tenant(s) with routing config` 追的是**有幾個租戶 parse 出 routing config**，
+     不是產出幾條 route。實測拿掉 `_routing_defaults.receiver.type` ⇒ db-a 的 route 與
+     receiver **雙雙消失**（`2 route(s), 2 receiver(s)` → `1, 1`），該行**逐位元組不動**。
+     ⚠️ 這一格另有 `WARN: db-a: missing required 'receiver.type', skipping`——與第 2 條那個
+     真正零訊號的縮排不同，別混為一談。
+   - receiver 集合只對 receiver 出現／消失反應，對**值**全盲。實測 `group_wait` 30s→35s、
+     以及把 `receiver.to` 改成**另一個網域的收件人**——兩次完整輸出都只差那一行，兩個訊號皆
+     逐位元組不動。⚠️ 盲區包含**通知送到哪裡**，不只時間參數；而 `group_wait` 正是上方繼承圖
+     的示範鍵。
 
 4. **想用顯式 `null` 退掉一個繼承來的 `_` 前綴鍵：判準是「unwrap 之後兩者落在同一個鍵路徑」。**
    哪些鍵適用由前綴決定（`pkg/config/hierarchy.go` 的 `deepMerge` 對 `_` 前綴鍵做
@@ -262,9 +258,13 @@ parity 套件結構上偵測不到上述任一例外** —— 不要把它的綠
 ### 診斷面的代價（刻意接受）
 
 平台面變更對以 `effective_config` / `merged_hash` 為輸入的消費端**結構上不可見**。
-⛔ **以下是目前已知的，不是窮舉**——這份清單第一版就漏掉了 `tenant-verify`（見下），而它橫跨
-Go、Python 與 Portal 三種載體。要在**你的**樹上盤點，搜
-`merged_hash|MergedHash|ResolveEffective|EffectiveConfig` 的非測試命中。已知者：
+⛔ **以下是目前已知的，不是窮舉**——這份清單第一版就漏掉了 `tenant-verify`（見下），而受影響
+的面**跨越 Go、Python、Portal 與 CI workflow**（`.github/workflows/blast-radius.yml` 就是把
+這個平面變成 PR 留言的那一層）。⚠️ **本文件不宣稱知道全部**：要在你的樹上盤點，與其搜識別字，
+不如從**能力**下手——找所有呼叫 `describe_tenant` / `tenant-verify` / `blast_radius` /
+`GET .../effective` / `da-guard` 的東西，並且一起掃 `.github/workflows/**` 與 `Makefile`
+（搜 `merged_hash|MergedHash|ResolveEffective|EffectiveConfig` 會漏掉 workflow：那兩支
+workflow 對這四個 token 各 0 命中）。已知者：
 `GET /effective`、`describe_tenant`、`blast_radius`、what-if 預覽（`handler_simulate.go`、
 Portal `simulate-preview.jsx`）、`da-guard`。以下兩格比「看不到」更危險：
 
@@ -474,8 +474,8 @@ Replace 語意更直覺，且與 Helm values merge 行為一致。
 `ThresholdConfig` 欄位、解碼即丟；租戶層 `_routing` **會**被載進 `ThresholdConfig.Tenants`
 （`resolveBaseRows` 必須明文跳過 `_routing*` 前綴正因為它在那個 map 裡），但**沒有任何
 production 呼叫端消費它**——`ResolveRouting()` 只被測試呼叫，`types.go` 逐字註明它
-「is currently not called by the exporter」，保留為 guardrail 參考實作。它在 repo 內另有兩個
-真實消費端：`generate_alertmanager_routes.py` 的四層合併，以及 `cmd/da-guard`（讀
+「is currently not called by the exporter」，保留為 guardrail 參考實作。它在 repo 內另有**已知
+的**真實消費端（非窮舉）：`generate_alertmanager_routes.py` 的四層合併、以及 `cmd/da-guard`（讀
 `EffectiveConfig["_routing"]` 建 `RoutingByTenant`）。
 
 ## 影響
