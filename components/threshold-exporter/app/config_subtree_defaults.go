@@ -151,7 +151,7 @@ func applySubtreeDefaults(
 				// state is "not delivered, and LOUD about it" — recorded here
 				// and reported by the divergence audit. The one thing this
 				// must never be again is silent. (#1569 blind review.)
-				if !keyCanReachTheOutputPlane(cfg, key) {
+				if !keyCanReachTheOutputPlane(cfg, key, value) {
 					if unreachable[tenantID] == nil {
 						unreachable[tenantID] = map[string]struct{}{}
 					}
@@ -200,8 +200,8 @@ func applySubtreeDefaults(
 // So the refusal is now narrowed to exactly the shape it was built for: a
 // plain base key that only `resolveBaseRows` / `resolveDeclaredRows` could
 // serve, and that neither of them will find. (#1569 blind review.)
-func keyCanReachTheOutputPlane(cfg *ThresholdConfig, key string) bool {
-	if keyBypassesTheDeclaredSurface(cfg, key) {
+func keyCanReachTheOutputPlane(cfg *ThresholdConfig, key string, sv ScheduledValue) bool {
+	if keyBypassesTheDeclaredSurface(cfg, key, sv) {
 		return true
 	}
 	if declaredAnywhere(cfg, key) {
@@ -238,7 +238,7 @@ func keyCanReachTheOutputPlane(cfg *ThresholdConfig, key string) bool {
 // no base default produces two WARN lines, an unparseable dimensional key
 // two more; `_state_<undeclared>` and `_routing_bogus` produced none, which
 // is why only those two moved.
-func keyBypassesTheDeclaredSurface(cfg *ThresholdConfig, key string) bool {
+func keyBypassesTheDeclaredSurface(cfg *ThresholdConfig, key string, sv ScheduledValue) bool {
 	// ⛔ A KEY CAN MATCH TWO ARMS, AND A `switch` TAKES THE FIRST.
 	// `_state_bogus_critical` is `_critical`-shaped, `_state_bogus{env="x"}`
 	// is dimensional-shaped: both matched an unconditional arm and never
@@ -274,16 +274,37 @@ func keyBypassesTheDeclaredSurface(cfg *ThresholdConfig, key string) bool {
 		// no `state_filters:` at all: `_state_no_such_filter: disable` landed
 		// in the tenant map, changed no resolver output, and appeared in
 		// neither the divergence report nor any WARN. (#1569 sweep B-1.)
-		_, declared := cfg.StateFilters[strings.TrimPrefix(key, "_state_")]
-		return declared
+		if _, declared := cfg.StateFilters[strings.TrimPrefix(key, "_state_")]; !declared {
+			return false
+		}
+		// ⛔ AND THE CONSUMER READS `Default`, NOT `ResolveValue(now)`.
+		// `ResolveStateFiltersAt` and `IsMaintenanceActive` both take
+		// `sv.Default` verbatim, so a schedule's windows are invisible to
+		// them — while `isThresholdShaped` accepts a schedule and
+		// `/effective` renders it. Measured: a subtree declaring
+		// `_state_maintenance` as `default: enable` with a window saying
+		// `disable` resolved to "disable" on the config plane and left the
+		// filter ACTIVE on the collector plane. An active maintenance filter
+		// INHIBITS the tenant's alerts, so this direction loses real pages.
+		// Refusing it makes the gap loud instead. (#1569 blind review.)
+		return len(sv.Overrides) == 0
 	case key == "_silent_mode", // ResolveSilentModesAt
 		key == "_severity_dedup": // ResolveSeverityDedup
 		return true
 	}
-	// ⛔ EVERY OTHER RESERVED KEY IS DELIBERATELY ABSENT. `_routing` /
+	// ⛔ EVERY OTHER RESERVED KEY IS DELIBERATELY ABSENT, AND THEY DO REACH
+	// HERE. An earlier version of this comment claimed `_routing` /
 	// `_routing_profile` / `_metadata` / `_custom_alerts` / `_namespaces` /
-	// `_profile` all need a mapping, a list or a name — none of which survives
-	// `isThresholdShaped`, so this gate never sees them. What the old
+	// `_profile` "need a mapping, a list or a name — none of which survives
+	// `isThresholdShaped`, so this gate never sees them". Measured false for
+	// all six: `_profile: disable` passes through `config.IsDisabled` and a
+	// numeric passes through `ParseFloat`, so each arrives here and is
+	// refused-and-named. That outcome is right — none of those keys does
+	// anything useful with a threshold-shaped value — but the reasoning was
+	// not, and a wrong reason is what the next person edits against.
+	// (#1569 blind review.)
+	//
+	// What the old
 	// `HasPrefix(key, "_routing")` arm DID admit was junk under that prefix:
 	// `_routing_bogus: 5` is threshold-shaped, `ResolveRouting` reads only the
 	// exact key `_routing`, and `_routing` is a valid reserved prefix so
@@ -320,6 +341,33 @@ func declaredAnywhere(cfg *ThresholdConfig, key string) bool {
 	}
 	for _, d := range cfg.OptionalOverrides {
 		if d == key {
+			return true
+		}
+	}
+	// ⛔ THE ALIAS RELATION IS SYMMETRIC AND THIS ONLY WALKED ONE WAY.
+	// `keyCanReachTheOutputPlane` canonicalizes the SUBTREE's key before
+	// giving up, which covers "the subtree still uses the retired spelling".
+	// It does not cover the other, more common transition state: the ROOT
+	// still uses the retired spelling and the subtree has already moved to
+	// the canonical one — the very spelling the rename NOTICE tells authors
+	// to switch to. `resolveBaseRows` walks `canonicalizeDefaults(c.Defaults)`,
+	// so the root's legacy default is already canonical by the time rows are
+	// built and the subtree's key DOES reach the plane. Measured with
+	// `mysql_cpu: 80` as the only root default: a tenant AUTHORING
+	// `mysql_threads_running: 42` emitted 42, while the identical key
+	// inherited from a subtree was refused and the tenant stayed at 80 —
+	// looser than configured, and the divergence report's own remediation
+	// ("declare the key in the ROOT _defaults.yaml") was already satisfied,
+	// under the other spelling. Its `_critical` twin inherited fine the whole
+	// time, so one metric had its critical tier following the subtree and its
+	// base tier following the root. (#1569 blind review, sweep B-1 follow-up.)
+	for d := range cfg.Defaults {
+		if canon, ok := config.CanonicalKeyFor(d); ok && canon == key {
+			return true
+		}
+	}
+	for _, d := range cfg.OptionalOverrides {
+		if canon, ok := config.CanonicalKeyFor(d); ok && canon == key {
 			return true
 		}
 	}

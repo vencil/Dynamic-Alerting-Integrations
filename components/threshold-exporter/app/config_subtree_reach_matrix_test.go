@@ -72,42 +72,51 @@ func (v reachVerdict) String() string {
 // a second default, and one state filter — the smallest root that lets every
 // shape below be exercised against a REAL entry condition rather than an
 // empty one.
-const reachMatrixRoot = "defaults:\n  mysql_connections: 80\n  redis_evicted_keys: 10\n" +
+//
+// ⚠️ `mysql_cpu` is the RETIRED spelling of `mysql_threads_running` and is
+// here on purpose: the alias relation is symmetric, and the predicate only
+// walked one way. See the "canonical spelling of a legacy root default" row.
+const reachMatrixRoot = "defaults:\n  mysql_connections: 80\n  redis_evicted_keys: 10\n  mysql_cpu: 80\n" +
 	"state_filters:\n  maintenance:\n    severity: warning\n"
 
 func TestEveryInheritedKeyShapeIsDeliveredOrNamed(t *testing.T) {
 	// Not parallel: swaps the process-global log sink (same reason
 	// main_test.go's configDir cases are sequential).
 	cases := []struct {
-		name    string
-		line    string // one `defaults:` entry in the SUBTREE _defaults.yaml
-		key     string
-		want    reachVerdict
+		name string
+		line string // one `defaults:` entry in the SUBTREE _defaults.yaml
+		key  string
+		want reachVerdict
+		// root overrides reachMatrixRoot for this case. Needed only where the
+		// shared root cannot express the fixture: the repo has exactly ONE
+		// deprecated alias, so a legacy key cannot be a platform default and a
+		// declared-only key in the same tree.
+		root    string
 		because string
 	}{
-		{"a root default", "  redis_evicted_keys: 60\n", "redis_evicted_keys", verdictDelivered,
+		{"a root default", "  redis_evicted_keys: 60\n", "redis_evicted_keys", verdictDelivered, "",
 			"resolveBaseRows walks cfg.Defaults, which carries this key"},
-		{"a key no plane declares", "  no_such_metric: 60\n", "no_such_metric", verdictRefused,
+		{"a key no plane declares", "  no_such_metric: 60\n", "no_such_metric", verdictRefused, "",
 			"in neither cfg.Defaults nor cfg.OptionalOverrides — nothing iterates it"},
-		{"a dimensional override", "  redis_evicted_keys{db=\"1\"}: 5\n", "redis_evicted_keys{db=\"1\"}", verdictDelivered,
+		{"a dimensional override", "  redis_evicted_keys{db=\"1\"}: 5\n", "redis_evicted_keys{db=\"1\"}", verdictDelivered, "",
 			"resolveDimensionalRows is tenant-only and needs no declaration"},
-		{"a dimensional key that cannot be parsed", "  redis_evicted_keys{oops: 5\n", "redis_evicted_keys{oops", verdictWarned,
+		{"a dimensional key that cannot be parsed", "  redis_evicted_keys{oops: 5\n", "redis_evicted_keys{oops", verdictWarned, "",
 			"resolveDimensionalRows logs `failed to parse dimensional key` itself"},
-		{"a critical tier over a root default", "  mysql_connections_critical: 200\n", "mysql_connections_critical", verdictDelivered,
+		{"a critical tier over a root default", "  mysql_connections_critical: 200\n", "mysql_connections_critical", verdictDelivered, "",
 			"resolveCriticalRows finds mysql_connections in defaults"},
-		{"a critical tier with no base", "  postgres_locks_critical: 200\n", "postgres_locks_critical", verdictWarned,
+		{"a critical tier with no base", "  postgres_locks_critical: 200\n", "postgres_locks_critical", verdictWarned, "",
 			"resolveCriticalRows logs `no matching default` itself"},
-		{"a state filter the platform declares", "  _state_maintenance: disable\n", "_state_maintenance", verdictDelivered,
+		{"a state filter the platform declares", "  _state_maintenance: disable\n", "_state_maintenance", verdictDelivered, "",
 			"ResolveStateFiltersAt iterates cfg.StateFilters, which has maintenance"},
-		{"a state filter the platform never declared", "  _state_no_such_filter: disable\n", "_state_no_such_filter", verdictRefused,
+		{"a state filter the platform never declared", "  _state_no_such_filter: disable\n", "_state_no_such_filter", verdictRefused, "",
 			"ResolveStateFiltersAt never looks the key up, and `_state_` is a valid reserved PREFIX so ValidateTenantKeys stays quiet too"},
-		{"severity dedup turned off", "  _severity_dedup: disable\n", "_severity_dedup", verdictDelivered,
+		{"severity dedup turned off", "  _severity_dedup: disable\n", "_severity_dedup", verdictDelivered, "",
 			"ResolveSeverityDedup reads the exact key and drops the tenant's entry"},
-		{"silent mode turned off", "  _silent_mode: disable\n", "_silent_mode", verdictInert,
+		{"silent mode turned off", "  _silent_mode: disable\n", "_silent_mode", verdictInert, "",
 			"`disable` is what absence already means — ResolveSilentModesAt emits nothing either way"},
-		{"junk under the silent prefix", "  _silent_bogus: disable\n", "_silent_bogus", verdictRefused,
+		{"junk under the silent prefix", "  _silent_bogus: disable\n", "_silent_bogus", verdictRefused, "",
 			"only the exact key _silent_mode has a reader"},
-		{"junk under the routing prefix", "  _routing_bogus: 5\n", "_routing_bogus", verdictRefused,
+		{"junk under the routing prefix", "  _routing_bogus: 5\n", "_routing_bogus", verdictRefused, "",
 			"ResolveRouting reads the exact key _routing, and `_routing` is a valid reserved PREFIX so nothing warns"},
 
 		// ⛔ THE OVERLAPPING SHAPES. Each of these matches TWO arms of
@@ -117,23 +126,36 @@ func TestEveryInheritedKeyShapeIsDeliveredOrNamed(t *testing.T) {
 		// the consumer — the arm-order blind spot of the very table that was
 		// supposed to be exhaustive. All four were measured silent then:
 		// written, no reader, no report, no WARN.
-		{"a critical tier under an undeclared state filter", "  _state_bogus_critical: 5\n", "_state_bogus_critical", verdictRefused,
+		{"a critical tier under an undeclared state filter", "  _state_bogus_critical: 5\n", "_state_bogus_critical", verdictRefused, "",
 			"resolveCriticalRows skips `_state_`-prefixed keys itself, so the _critical arm must not claim it will read this"},
-		{"a dimensional key under an undeclared state filter", "  _state_bogus{env=\"x\"}: 5\n", "_state_bogus{env=\"x\"}", verdictRefused,
+		{"a dimensional key under an undeclared state filter", "  _state_bogus{env=\"x\"}: 5\n", "_state_bogus{env=\"x\"}", verdictRefused, "",
 			"resolveDimensionalRows skips `_state_`-prefixed keys itself"},
-		{"a dimensional key under the routing prefix", "  _routing_bogus{env=\"x\"}: 5\n", "_routing_bogus{env=\"x\"}", verdictRefused,
+		{"a dimensional key under the routing prefix", "  _routing_bogus{env=\"x\"}: 5\n", "_routing_bogus{env=\"x\"}", verdictRefused, "",
 			"resolveDimensionalRows skips `_routing`-prefixed keys itself"},
-		{"a dimensional key under the silent prefix", "  _silent_bogus{env=\"x\"}: 5\n", "_silent_bogus{env=\"x\"}", verdictRefused,
+		{"a dimensional key under the silent prefix", "  _silent_bogus{env=\"x\"}: 5\n", "_silent_bogus{env=\"x\"}", verdictRefused, "",
 			"resolveDimensionalRows skips `_silent_`-prefixed keys itself"},
-		{"a critical tier under the silent prefix", "  _silent_bogus_critical: 5\n", "_silent_bogus_critical", verdictRefused,
+		{"a critical tier under the silent prefix", "  _silent_bogus_critical: 5\n", "_silent_bogus_critical", verdictRefused, "",
 			"resolveCriticalRows skips `_silent_`-prefixed keys itself"},
-		{"a critical tier on the dedup key", "  _severity_dedup_critical: 5\n", "_severity_dedup_critical", verdictWarned,
+		{"a junk value on the dedup key", "  _severity_dedup: 5\n", "_severity_dedup", verdictWarned, "",
+			"ResolveSeverityDedup reads it, cannot make sense of it, and WARNs — under the spelling `severity_dedup`, without the underscore"},
+		{"the canonical spelling of a legacy root default", "  mysql_threads_running: 42\n", "mysql_threads_running", verdictDelivered, "",
+			"resolveBaseRows walks canonicalizeDefaults(cfg.Defaults), so a root default spelled the legacy way already IS this key by the time rows are built"},
+		{"the canonical spelling of a legacy root DECLARATION", "  mysql_threads_running: 42\n", "mysql_threads_running", verdictDelivered,
+			"defaults:\n  mysql_connections: 80\n  redis_evicted_keys: 10\noptional_overrides:\n  - mysql_cpu\nstate_filters:\n  maintenance:\n    severity: warning\n",
+			"resolveDeclaredRows walks canonicalizeOptionalOverrides(cfg.OptionalOverrides) — the same symmetry, the other declaration surface"},
+		{"a state filter carrying a time window", "  _state_maintenance:\n    default: enable\n    overrides:\n      - window: \"00:00-23:59\"\n        value: disable\n", "_state_maintenance", verdictRefused, "",
+			"ResolveStateFiltersAt reads sv.Default and never the windows, so the schedule /effective renders would not be the one the collector applies"},
+		{"a critical tier on the dedup key", "  _severity_dedup_critical: 5\n", "_severity_dedup_critical", verdictWarned, "",
 			"resolveCriticalRows does NOT exclude this one — it reads it, fails to find the base default, and WARNs; the predicate must keep matching it"},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, ev := classifyInheritedKey(t, tc.line, tc.key)
+			root := tc.root
+			if root == "" {
+				root = reachMatrixRoot
+			}
+			got, ev := classifyInheritedKey(t, root, tc.line, tc.key)
 			if got != tc.want {
 				t.Fatalf("%s\nkey %q: got %v, want %v (%s)\n%s",
 					tc.name, tc.key, got, tc.want, tc.because, ev)
@@ -145,7 +167,7 @@ func TestEveryInheritedKeyShapeIsDeliveredOrNamed(t *testing.T) {
 // classifyInheritedKey builds a two-level tree carrying `line` in the subtree
 // defaults file, and reports which of the five outcomes the key produced.
 // `ev` is the evidence string, printed only on failure.
-func classifyInheritedKey(t *testing.T, line, key string) (reachVerdict, string) {
+func classifyInheritedKey(t *testing.T, root, line, key string) (reachVerdict, string) {
 	t.Helper()
 
 	var logBuf bytes.Buffer
@@ -154,16 +176,28 @@ func classifyInheritedKey(t *testing.T, line, key string) (reachVerdict, string)
 	log.SetFlags(0)
 	t.Cleanup(func() { log.SetOutput(origOut); log.SetFlags(origFlags) })
 
-	with, written, reported := loadReachTree(t, line, key)
-	without, _, _ := loadReachTree(t, "", key)
+	with, written, reported := loadReachTree(t, root, line, key)
+	without, _, _ := loadReachTree(t, root, "", key)
 	observable := resolverFingerprint(with) != resolverFingerprint(without)
 
 	// A WARN naming this key, from a consumer rather than from the divergence
 	// audit. The audit's own line is an ERROR, so a substring test on WARN
 	// lines cannot be satisfied by the report we are trying to distinguish from.
+	// ⛔ NOT EVERY WARN SPELLS THE KEY THE WAY THE CONFIG DOES.
+	// `ResolveSeverityDedup` logs `unknown severity_dedup value …` — no
+	// leading underscore — so a literal match on `_severity_dedup` reported
+	// `warned=false` while that exact WARN sat in the captured log, and the
+	// classifier called an inert-and-warned shape SILENT. Matching the
+	// underscore-stripped spelling too costs nothing here (a WARN naming
+	// `severity_dedup` is about that key either way) and removes a
+	// false SILENT verdict, which is the one verdict this file treats as a
+	// defect. (#1569 blind review.)
 	warned := false
 	for _, ln := range strings.Split(logBuf.String(), "\n") {
-		if strings.Contains(ln, "WARN") && strings.Contains(ln, key) {
+		if !strings.Contains(ln, "WARN") {
+			continue
+		}
+		if strings.Contains(ln, key) || strings.Contains(ln, strings.TrimPrefix(key, "_")) {
 			warned = true
 			break
 		}
@@ -188,10 +222,10 @@ func classifyInheritedKey(t *testing.T, line, key string) (reachVerdict, string)
 	}
 }
 
-func loadReachTree(t *testing.T, line, key string) (cfg *ThresholdConfig, written, reported bool) {
+func loadReachTree(t *testing.T, root, line, key string) (cfg *ThresholdConfig, written, reported bool) {
 	t.Helper()
 	dir := t.TempDir()
-	writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"), reachMatrixRoot)
+	writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"), root)
 	mkSub(t, dir, "finance")
 	writeTestYAML(t, filepath.Join(dir, "finance", "_defaults.yaml"),
 		"defaults:\n  mysql_connections: 60\n"+line)
