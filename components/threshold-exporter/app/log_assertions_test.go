@@ -17,9 +17,10 @@ package main
 // So: anchor on the line that identifies the producer, then assert on that
 // line. The helpers below are the shared form.
 //
-// ⛔ THE TALLY, MEASURED RATHER THAN ASSUMED. Seven whole-log assertions were
-// converted; each was then mutation-tested for a case that is green under the
-// old form and red under the new one. Three have one:
+// ⛔ THE TALLY, MEASURED RATHER THAN ASSUMED — AND IT WAS WRONG THE FIRST TIME.
+// Seven whole-log assertions were converted; each was then mutation-tested for
+// a case that is green under the old form and red under the new one. TWO have
+// one:
 //
 //	TestRecomputeMergedHash_DefaultsParseFailureEmitsErrorAndMetric
 //	TestConfigManager_LoadDir_UnparseableDefaultsErrorAndMetric
@@ -27,14 +28,25 @@ package main
 //	    green across the WHOLE package (`go test .` rc=0). Both tests claimed
 //	    to verify the ERROR names the unparseable file; both verified only
 //	    that some ERROR of that class existed.
-//	TestTheDivergenceAuditRunsOnEveryCommit
-//	  — an audit naming a constant wrong tenant left the old form green.
 //
-// The other four are COSMETIC against every mutation tried, and each call site
-// says so. That includes one where I predicted a false-green path and measured
-// myself wrong; the prediction is recorded at that call site rather than
-// deleted, because "I checked and it was not exploitable" and "I did not
-// check" have to stay distinguishable.
+// ⚠️ `TestTheDivergenceAuditRunsOnEveryCommit` was counted as a third and is
+// not one. Its old form did not mention the tenant AT ALL, so the new form
+// adds an assertion rather than narrowing an existing one — measured, a
+// whole-log check that also names `t-bad` reddens under the identical
+// mutation. The detection comes from naming the tenant, not from anchoring to
+// a line. Five of the seven are therefore COSMETIC, and each call site says so.
+//
+// That includes one where I predicted a false-green path and measured myself
+// wrong; the prediction is recorded at that call site rather than deleted,
+// because "I checked and it was not exploitable" and "I did not check" have to
+// stay distinguishable.
+//
+// ⚠️ `assertLogLineWith` takes the FIRST line matching the anchor, and one
+// conversion was anchored on a message class emitted by two different
+// components — so it pinned the wrong one and would have stayed green while
+// the component the test is named after named the wrong file. Anchors have to
+// be specific to the emitter, not to the message class. See
+// config_hierarchy_test.go.
 
 import (
 	"strings"

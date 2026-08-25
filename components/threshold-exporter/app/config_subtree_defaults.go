@@ -533,14 +533,20 @@ func scheduledValueFromRaw(raw any) (ScheduledValue, bool) {
 //	                   `threshold: {cpu: 70}`, `alert_group: baseline`,
 //	                   `receivers: [...]` — and the ADR-017 golden fixtures are
 //	                   built on it. (6 more are all-float; 2 have no `defaults:`
-//	                   block at all. An earlier version of this comment said 12,
-//	                   which is not reachable by any counting rule — a number
-//	                   asserted rather than counted, in a comment about the cost
-//	                   of asserting rather than measuring.) Measured: 7 of those
-//	                   9 resolve to `defaults=0 rows=0` on the collector plane,
-//	                   by design; `opt-out-null-threshold` and
-//	                   `wrapper-siblings` do emit, and the real shipped config
+//	                   block at all.) Those 9 files live in 6 trees, and
+//	                   measured, ALL SIX resolve to `defaults=0 rows=0` on the
+//	                   collector plane, by design; the real shipped config
 //	                   resolves to `defaults=8 rows=64` with no drops.
+//
+//	                   ⚠️ TWO EARLIER VERSIONS OF THIS PARAGRAPH WERE WRONG, in
+//	                   opposite directions, in a comment about the cost of
+//	                   asserting rather than measuring. First it said 12 of 17,
+//	                   which no counting rule reaches. The "correction" then
+//	                   said 7 of those 9 emit nothing and named
+//	                   `opt-out-null-threshold` and `wrapper-siblings` as the
+//	                   exceptions — but those two are all-float, i.e. not among
+//	                   the 9 at all. Both numbers here are now from a script
+//	                   over the repo, not from memory.
 //
 // So `isThresholdShaped` is a TYPE COERCION at a plane boundary, and the value
 // domain it admits is the DESTINATION's, not the source's: what lands in

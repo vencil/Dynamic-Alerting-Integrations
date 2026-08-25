@@ -265,9 +265,17 @@ func TestATenantDeclaredInTwoFilesSurvivesAnEditToEitherOne(t *testing.T) {
 			// not see WHICH file's value survived — and a mutation that emptied
 			// the tenant's overrides entirely passed it. Distinct values make
 			// the assertion below about the number, not just the key.
+			// ⛔ A PROFILE IS PART OF THE FIXTURE. Without one this test's
+			// oracle — "the fast path lands where a restart lands" — held only
+			// because nothing in the tree exercised the profile overlay, which
+			// the fast path was skipping entirely. Adding these two lines made
+			// both surviving-declaration cases fail until that was fixed.
 			dir := t.TempDir()
-			writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"), "defaults:\n  mysql_connections: 80\n")
-			writeTestYAML(t, filepath.Join(dir, "a.yaml"), "tenants:\n  dup:\n    mysql_connections: \"11\"\n")
+			writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"),
+				"defaults:\n  mysql_connections: 80\n  mysql_slow_queries: 5\n")
+			writeTestYAML(t, filepath.Join(dir, "_profiles.yaml"),
+				"profiles:\n  gold:\n    mysql_slow_queries: \"95\"\n")
+			writeTestYAML(t, filepath.Join(dir, "a.yaml"), "tenants:\n  dup:\n    _profile: gold\n    mysql_connections: \"11\"\n")
 			writeTestYAML(t, filepath.Join(dir, "b.yaml"), "tenants:\n  other: {}\n")
 
 			m, _, logBuf := newAuditedManager(t, dir)
@@ -276,7 +284,7 @@ func TestATenantDeclaredInTwoFilesSurvivesAnEditToEitherOne(t *testing.T) {
 			}
 
 			// The invalid-but-live state: b.yaml now names dup as well, at 22.
-			writeTestYAML(t, filepath.Join(dir, "b.yaml"), "tenants:\n  other: {}\n  dup:\n    mysql_connections: \"22\"\n")
+			writeTestYAML(t, filepath.Join(dir, "b.yaml"), "tenants:\n  other: {}\n  dup:\n    _profile: gold\n    mysql_connections: \"22\"\n")
 			if err := m.IncrementalLoad(); err != nil {
 				t.Fatalf("IncrementalLoad: %v", err)
 			}
@@ -329,13 +337,27 @@ func TestATenantDeclaredInTwoFilesSurvivesAnEditToEitherOne(t *testing.T) {
 			// believed survived and named the wrong one — the fixture edits
 			// a.yaml, so b.yaml is the survivor. A literal encodes my belief
 			// about the fixture; a full reload encodes the tree.
+			// ⛔ COPY WHAT IS THERE, NOT A LIST OF WHAT I REMEMBER PUTTING
+			// THERE. A hardcoded filename list with a `continue` on missing
+			// files is not a safeguard — it silently builds the oracle from a
+			// DIFFERENT tree, and a tree missing the file that would have
+			// exposed the bug agrees with the buggy fast path. Measured: with
+			// `_profiles.yaml` absent from the list the test passed; with it
+			// present it failed and named the real defect.
 			fullDir := t.TempDir()
-			for _, name := range []string{"_defaults.yaml", "a.yaml", "b.yaml"} {
-				body, rerr := os.ReadFile(filepath.Join(dir, name))
-				if rerr != nil {
-					continue // the removeWholeFile case really has no a.yaml
+			entries, derr := os.ReadDir(dir)
+			if derr != nil {
+				t.Fatalf("ReadDir: %v", derr)
+			}
+			for _, e := range entries {
+				if e.IsDir() {
+					t.Fatalf("fixture grew a subdirectory (%s); the oracle copies files only", e.Name())
 				}
-				writeTestYAML(t, filepath.Join(fullDir, name), string(body))
+				body, rerr := os.ReadFile(filepath.Join(dir, e.Name()))
+				if rerr != nil {
+					t.Fatalf("ReadFile %s: %v", e.Name(), rerr)
+				}
+				writeTestYAML(t, filepath.Join(fullDir, e.Name()), string(body))
 			}
 			reference := NewConfigManager(fullDir)
 			if err := reference.Load(); err != nil {

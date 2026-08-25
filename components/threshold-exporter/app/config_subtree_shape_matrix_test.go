@@ -11,8 +11,10 @@ package main
 // single-level fixture with one tenant and a root `_defaults.yaml` cannot see
 // any of those, and that was the fixture almost every test used.
 //
-// So this file enumerates the shape space and asserts ONE property over all of
-// it — the ticket's own contract, stated generically:
+// So this file enumerates the shape space — 3 depths x {root defaults, none} x
+// 4 declaration patterns x {tenant authors, does not} x {1, 2} tenants per
+// level = 96 subtests — and asserts ONE property over all of it, the ticket's
+// own contract stated generically:
 //
 //	for every tenant and every key: either the two planes agree on the value,
 //	or something NAMES the disagreement — the divergence report, or a WARN
@@ -22,9 +24,15 @@ package main
 // #1521 is. Anything this property permits is either correct or loudly
 // declared, and no individual case has to be foreseen.
 //
+// ⛔ WHAT THIS MATRIX DOES NOT COVER, stated because a reader will assume it
+// does: every shape here is a cold `Load()`. It never calls `IncrementalLoad`,
+// so no defect on the reload fast path is visible to it — reverting the
+// orphan-value fix in `patchTenants` leaves all 96 subtests green. That half
+// is `config_incremental_differential_test.go`'s job.
+//
 // ⚠️ THE WARN CHANNEL IS NOT A LOOPHOLE ADDED TO GET TO GREEN, and the order
 // matters: the property was written with the report as its only escape hatch,
-// it failed 24 of 48 shapes, and only then was each failure MEASURED. All 24
+// it failed 24 of the 96 shapes, and only then was each failure MEASURED. All 24
 // were one shape — a tree with no root `_defaults.yaml` (`cfg.Defaults` empty,
 // which is also the state a tree lands in when its root defaults file fails to
 // parse) where a tenant authors a key nothing declares. `resolveBaseRows`
@@ -137,9 +145,15 @@ func assertPlanesAgreeOrReported(
 	// The other loud channel: a WARN naming BOTH this tenant and this key.
 	// Both, deliberately — a WARN about someone else, or about another key of
 	// this tenant, must not license this disagreement.
+	//
+	// ⛔ THE TENANT MATCH IS DELIMITED, NOT A SUBSTRING. `t-L1-1` is a prefix
+	// of `t-L1-10`, so a plain Contains would let one tenant's WARN license a
+	// DIFFERENT tenant's silent disagreement the moment this matrix grows past
+	// nine tenants per level. It does not today, which is exactly why it would
+	// have gone in unnoticed and detonated for whoever widened the matrix.
 	for _, line := range strings.Split(logs, "\n") {
 		if strings.Contains(line, "WARN") &&
-			strings.Contains(line, tenant) && strings.Contains(line, key) {
+			mentionsExactly(line, tenant) && strings.Contains(line, key) {
 			return
 		}
 	}
@@ -162,6 +176,31 @@ func assertPlanesAgreeOrReported(
 			"  /effective: %v\n  series:     %v\n--- log ---\n%s",
 			tenant, key, hierValue, seriesValue, logs)
 	}
+}
+
+// mentionsExactly reports whether line names id as a whole token, so that
+// `t-L1-1` does not match inside `t-L1-10`. Log lines quote the id
+// (`tenant=t-L1-1:`, `"t-L1-1"`, `t-L1-1 (`), so the delimiter is "anything
+// that cannot continue an identifier".
+func mentionsExactly(line, id string) bool {
+	for i := 0; ; {
+		j := strings.Index(line[i:], id)
+		if j < 0 {
+			return false
+		}
+		start, end := i+j, i+j+len(id)
+		beforeOK := start == 0 || !isIdentRune(rune(line[start-1]))
+		afterOK := end == len(line) || !isIdentRune(rune(line[end]))
+		if beforeOK && afterOK {
+			return true
+		}
+		i = start + 1
+	}
+}
+
+func isIdentRune(r rune) bool {
+	return r == '-' || r == '_' ||
+		(r >= '0' && r <= '9') || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
 }
 
 func renderShapeValue(v any) string {

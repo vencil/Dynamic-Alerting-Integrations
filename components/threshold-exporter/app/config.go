@@ -569,7 +569,23 @@ func (m *ConfigManager) IncrementalLoad() error {
 
 	// Phase 3: re-parse only changed + added files.
 	// Reuse file bytes from scan phase (dataCache) to avoid double disk read.
-	reparse := append(changed, added...)
+	// ⛔ THE COPY IS LOAD-BEARING. `append(changed, added...)` reuses
+	// `changed`'s backing array whenever it has spare capacity, and the sort
+	// below then reorders `changed` IN PLACE. `patchFiles` further down rebuilds
+	// the same list and got `[a.yaml, a.yaml]` — the changed file was never
+	// applied. Measured on one reload that both adds a file and edits another:
+	// `flat.configs["b.yaml"]` held the new value while the published config
+	// kept the old one, with no log and no divergence ERROR; a restart gave the
+	// new value. That is a K8s ConfigMap swap or a git-sync pull carrying two
+	// files, which is the ordinary case.
+	//
+	// ⚠️ IT ONLY REPRODUCES WITH OPTIMISATIONS ON. Under `-gcflags=all=-N -l`
+	// or `-race` the capacity works out differently and the alias disappears —
+	// so does adding a `Printf` anywhere nearby. That is why nine rounds of
+	// tests never saw it: it is invisible to exactly the builds a person
+	// reaches for when investigating. Found by a randomised fast-path-vs-full-
+	// load differential (9 of 300 seeds), not by reading. (#1569 blind review.)
+	reparse := append(append([]string{}, changed...), added...)
 	sort.Strings(reparse)
 	for _, name := range reparse {
 		fullPath := filepath.Join(m.path, name)
@@ -746,8 +762,20 @@ func (m *ConfigManager) IncrementalLoad() error {
 	} else {
 		// Full rebuild: _defaults or _profiles changed, must re-merge everything
 		merged = mergePartialConfigs(newConfigs)
-		merged.ApplyProfiles()
 	}
+	// ⛔ BOTH BRANCHES, NOT JUST THE REBUILD. `ApplyProfiles` used to sit inside
+	// the else above, so the tenant-patch path published tenants exactly as
+	// their files spell them — without the profile overlay `Resolve` expects to
+	// find already merged in. Measured on a tenant whose `_profile: gold` supplies
+	// mysql_connections=95: adding an unrelated key to that tenant's own file
+	// dropped it to the platform default 80, silently, until a restart put it
+	// back. A threshold LOOSENED with no signal is this ticket's own shape.
+	//
+	// Hoisted out of the branch rather than duplicated into it: two call sites
+	// is how it drifted in the first place. Re-running is safe — ApplyProfiles
+	// is fill-in-not-overwrite, so a tenant that already carries the key keeps
+	// its own value. (#1569 blind review.)
+	merged.ApplyProfiles()
 	refreshRefused(&merged)
 	refreshTenantSources()
 
@@ -868,11 +896,28 @@ func reclaimTenantFrom(newConfigs map[string]ThresholdConfig, tenant string) (ma
 	}
 	sort.Strings(names)
 
+	// ⛔ UNION PER KEY, NOT WHOLE-MAP REPLACE. `mergePartialInto` copies
+	// key-by-key into the tenant's map, so two files each contributing a
+	// different key both survive a full load. Returning just the last file's
+	// map dropped the other's: measured with a platform file's `tenants:` block
+	// supplying one key and the tenant's own file another — a legitimate shape
+	// the loader documents — one ordinary edit silently dropped the first key
+	// back to the platform default. The unit test that claimed to pin this
+	// precedence could not see it, because all three of its files spelled the
+	// SAME key. (#1569 blind review.)
 	var overrides map[string]ScheduledValue
 	found := false
 	for _, name := range names {
-		if ov, declared := newConfigs[name].Tenants[tenant]; declared {
-			overrides, found = ov, true
+		ov, declared := newConfigs[name].Tenants[tenant]
+		if !declared {
+			continue
+		}
+		found = true
+		if overrides == nil {
+			overrides = make(map[string]ScheduledValue, len(ov))
+		}
+		for k, v := range ov {
+			overrides[k] = v // later filename wins, same as mergePartialInto
 		}
 	}
 	return overrides, found
@@ -905,8 +950,22 @@ func patchTenants(prev *ThresholdConfig, newConfigs, oldConfigs map[string]Thres
 	patchedTenants := make(map[string]struct{})
 	for _, name := range patchFiles {
 		if partial, ok := newConfigs[name]; ok {
-			for tenant, overrides := range partial.Tenants {
-				merged.Tenants[tenant] = overrides
+			for tenant := range partial.Tenants {
+				// ⛔ REBUILT FROM EVERY SOURCE, NOT FROM THIS FILE ALONE. This
+				// used to be `merged.Tenants[tenant] = overrides`, which drops
+				// whatever OTHER files contribute to the same tenant —
+				// `mergePartialInto` unions per key, so a full load keeps them.
+				// Measured on the legitimate two-source shape (a platform
+				// file's `tenants:` block supplying one key, the tenant's own
+				// file another): editing the tenant's file silently reverted
+				// the platform-supplied key to the global default AND dropped
+				// its `_profile`, which in turn made ApplyProfiles a no-op and
+				// loosened a profile-supplied threshold from 95 to 60. All of
+				// it silent. Found by the randomised fast-path-vs-full-load
+				// differential, not by reading. (#1569 blind review.)
+				if ov, ok := reclaimTenantFrom(newConfigs, tenant); ok {
+					merged.Tenants[tenant] = ov
+				}
 				patchedTenants[tenant] = struct{}{}
 			}
 		}

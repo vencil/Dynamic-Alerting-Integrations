@@ -278,10 +278,17 @@ func TestTheDivergenceAuditRunsOnEveryCommit(t *testing.T) {
 		t.Fatalf("da_config_hierarchy_divergent_tenants = %v, want 1 — the audit did "+
 			"not run on this commit", got)
 	}
-	// ⛔ LOAD-BEARING. The gauge is the machine-readable half; the log is the
-	// half an operator reads, and it has to name WHICH tenant. Measured: an
-	// audit that names a constant wrong tenant leaves the whole-log form green
-	// and reddens only this one. (#1569 sweep B-5.)
+	// The gauge is the machine-readable half; the log is the half an operator
+	// reads, and it has to name WHICH tenant — which the old assertion did not
+	// check at all.
+	//
+	// ⚠️ NOT a whole-log→line win, and an earlier version of this comment
+	// claimed it was. Measured: a whole-log check that also names `t-bad`
+	// reddens under the same mutation (an audit naming a constant wrong
+	// tenant), so the added value is the tenant name, not the anchoring. That
+	// same mutation reddens 4 tests in this package, not "only this one" as
+	// this comment used to say — and how many depends on the mutation's exact
+	// shape, which is why the number is now stated with the mutation.
 	assertDivergenceLineNames(t, logged, "t-bad")
 	assertNoStaleRemediation(t, logged)
 }

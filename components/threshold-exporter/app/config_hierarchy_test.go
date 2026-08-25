@@ -544,11 +544,15 @@ func TestRecomputeMergedHash_DefaultsParseFailureEmitsErrorAndMetric(t *testing.
 	// from flat-mode (carries the chain-index + tenant-id) but starts
 	// with the same "ERROR: skip unparseable defaults/profiles file".
 	logOutput := logBuf.String()
-	// ⛔ LOAD-BEARING. The whole-log form this replaces asserted only that an
-	// ERROR of this CLASS existed, never that it named the file that failed:
-	// making the emitter print a constant other filename left the old
-	// assertion — and the entire package — green. (#1569 sweep B-5.)
-	assertLogLineWith(t, logOutput, "ERROR: skip unparseable defaults/profiles file", "_defaults.yaml")
+	// ⛔ LOAD-BEARING, AND ANCHORED ON THE RIGHT EMITTER. Three lines in this
+	// log match the message class: one from `flat_scanner.go` and two from the
+	// per-tenant emitter in `config_debounce.go` that `recomputeMergedHash` —
+	// the subject of this test's name — actually drives. `assertLogLineWith`
+	// takes the FIRST match, so the first version of this assertion was
+	// checking the flat scanner's line and would have stayed green while the
+	// per-tenant emitter named the wrong file. `(chain index` appears only in
+	// the per-tenant one. (#1569 sweep B-5, corrected by blind review.)
+	assertLogLineWith(t, logOutput, "(chain index", "_defaults.yaml", "for tenant=")
 
 	// Invariant #2: parse-failure metric incremented for `_defaults.yaml`
 	// basename. At least once (the test fires per-tenant, so we expect
