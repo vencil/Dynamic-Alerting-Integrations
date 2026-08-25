@@ -98,3 +98,39 @@ func TestDeprecatedAliasTargetsAreRegistryKeys(t *testing.T) {
 		}
 	}
 }
+
+// TestLegacySpellingForIsCanonicalKeyForsInverse pins the two directions
+// against each other across all three shapes.
+//
+// ⛔ WHY IT EXISTS. The overlay's reachability check walks the alias relation
+// BOTH ways, and the exported inverse was first written to handle only the
+// base shape, with a comment claiming `_critical` and dimensional keys never
+// reach it. They do. A differential over the reachable key space found no
+// behaviour change today — only because the single alias in the registry has a
+// base carrying none of the reserved prefixes that route keys down that path.
+// That is a property of the current table, not of the code, so the next alias
+// would have broken it silently. This asserts the relation instead of the
+// accident. (#1569 blind review.)
+func TestLegacySpellingForIsCanonicalKeyForsInverse(t *testing.T) {
+	t.Parallel()
+	for legacy, canonical := range deprecatedKeyAliases {
+		for _, shape := range []struct{ name, l, c string }{
+			{"exact", legacy, canonical},
+			{"critical-suffixed", legacy + criticalSuffix, canonical + criticalSuffix},
+			{"dimensional", legacy + `{env="prod"}`, canonical + `{env="prod"}`},
+		} {
+			t.Run(shape.name+"/"+legacy, func(t *testing.T) {
+				gotCanon, wasAlias := CanonicalKeyFor(shape.l)
+				if !wasAlias || gotCanon != shape.c {
+					t.Fatalf("CanonicalKeyFor(%q) = %q,%v; want %q,true", shape.l, gotCanon, wasAlias, shape.c)
+				}
+				gotLegacy, hasLegacy := LegacySpellingFor(shape.c)
+				if !hasLegacy || gotLegacy != shape.l {
+					t.Fatalf("LegacySpellingFor(%q) = %q,%v; want %q,true — the exported inverse must "+
+						"cover every shape CanonicalKeyFor does, or a caller that walks the relation "+
+						"backwards silently misses these", shape.c, gotLegacy, hasLegacy, shape.l)
+				}
+			})
+		}
+	}
+}

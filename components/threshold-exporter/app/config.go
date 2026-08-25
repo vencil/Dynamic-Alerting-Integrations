@@ -818,44 +818,64 @@ func isTenantOnlyChange(changed, added, removed []string) bool {
 //     Without this guard the overwrite below adds the moved tenant and the
 //     removal loop then wrongly drops it again (issue #790).
 //
-// The "did this reload re-introduce it" test relies on the one-tenant-per-file
-// invariant (cross-file duplicate declarations are rejected upstream by the
-// hierarchical scan, issue #127): a tenant that survives the deletion of its
-// file must reappear in an added/changed file, since the file now carrying it
-// necessarily changed hash and thus lands in patchFiles. That lets the removal
-// pass consult only the just-patched tenants, keeping the fast path O(Δchanged
-// files) instead of scanning the whole surviving tree on every reload.
-// stillDeclaredSomewhere reports whether any file in the current scan still
-// names this tenant.
+// ⛔ THE PARAGRAPH THAT USED TO SIT HERE WAS FALSE, and both of its claims are
+// what #1569 measured. It said the removal pass may "consult only the
+// just-patched tenants" because "cross-file duplicate declarations are rejected
+// upstream by the hierarchical scan (issue #127)". They are rejected on a FULL
+// load; this fast path accepts them silently, so a live tree can hold one. Once
+// it does, a tenant surviving the deletion of one declaration does NOT have to
+// reappear in a changed file — the surviving file did not change. The removal
+// pass therefore scans the surviving parses (`reclaimTenantFrom`), which costs
+// O(|newConfigs|) per removed tenant rather than O(1), and removals are rare.
 //
-// ⛔ `patchedTenants` ALONE IS NOT THAT QUESTION. It holds only the tenants
-// reintroduced by files reparsed THIS round, so it answers "did the tenant
-// move in this reload" and nothing else. A tenant declared in two files at
-// once — invalid, hard-rejected by `runHierarchyScanReject` on a full load,
-// but silently accepted by this fast path — then vanishes the moment either
-// owning file is edited for any reason, because the other file did not change
-// and so is absent from `patchedTenants`. Measured on both removal loops: the
-// tenant left the merged config while a file on disk still declared it, and
-// the divergence audit blamed cause (a), sending the operator to look for a
-// parse-failure line that does not exist.
+// ⚠️ `patchedTenants` is still built and still used by nothing but the
+// bookkeeping above: every member of it comes from `newConfigs`, and removed
+// files are deleted from `newConfigs` before this runs, so it is a subset of
+// what `reclaimTenantFrom` walks anyway. Kept because it names the "moved this
+// round" case the sorted merge below depends on, not because the removal pass
+// needs it.
+
+// reclaimTenantFrom returns the overrides a surviving file still declares for
+// this tenant, and whether any file does.
 //
-// `newConfigs` carries every file's current parse, not just this round's, so
-// asking it answers the question actually being asked. `patchedTenants` is
-// still consulted first because it is the cheap hit for the common move.
-// (#1569 blind review of sweep B-2.)
+// ⛔ "IS IT STILL DECLARED" IS HALF THE QUESTION; THE OTHER HALF IS "WHOSE
+// VALUE". An earlier version of this answered only the first, by consulting
+// `patchedTenants` — the tenants reintroduced by files reparsed THIS round.
+// That is "did it move in this reload", which is a different question again: a
+// tenant declared in two files at once (invalid, hard-rejected by
+// `runHierarchyScanReject` on a full load, but silently accepted by this fast
+// path) vanished the moment either owning file was edited, because the other
+// file did not change and so was absent from `patchedTenants`.
+//
+// ⛔ AND SIMPLY NOT DELETING IT WAS WORSE THAN DELETING IT. Measured: with
+// `a.yaml` declaring the tenant at 11 and `b.yaml` transiently at 22, dropping
+// it from `b.yaml` left the merged config holding 22 — a value NO file on disk
+// declares — where a restart gives 11, and where the previous behaviour at
+// least emitted a divergence ERROR. Loud-and-wrong became silent-and-wrong,
+// which is this ticket's own defect shape. So the removal loops re-take the
+// value instead of merely declining to delete.
+//
+// The scan order mirrors `mergePartialConfigs`: sorted filename, last writer
+// wins, so the value this returns is the one a full rebuild would produce.
+// (#1569 blind review of sweep B-2, round 2.)
 //
 // ⚠️ This does NOT make the fast path reject the duplicate the way a full load
 // would — that asymmetry is measured and recorded, not fixed here.
-func stillDeclaredSomewhere(newConfigs map[string]ThresholdConfig, patchedTenants map[string]struct{}, tenant string) bool {
-	if _, moved := patchedTenants[tenant]; moved {
-		return true
+func reclaimTenantFrom(newConfigs map[string]ThresholdConfig, tenant string) (map[string]ScheduledValue, bool) {
+	names := make([]string, 0, len(newConfigs))
+	for name := range newConfigs {
+		names = append(names, name)
 	}
-	for _, partial := range newConfigs {
-		if _, declared := partial.Tenants[tenant]; declared {
-			return true
+	sort.Strings(names)
+
+	var overrides map[string]ScheduledValue
+	found := false
+	for _, name := range names {
+		if ov, declared := newConfigs[name].Tenants[tenant]; declared {
+			overrides, found = ov, true
 		}
 	}
-	return false
+	return overrides, found
 }
 
 func patchTenants(prev *ThresholdConfig, newConfigs, oldConfigs map[string]ThresholdConfig, changed, added, removed []string) ThresholdConfig {
@@ -900,12 +920,19 @@ func patchTenants(prev *ThresholdConfig, newConfigs, oldConfigs map[string]Thres
 	// something unrelated forces a full reload. (#1569 sweep B-2.)
 	//
 	// ⚠️ SCOPED TO FILES THAT STILL PARSE. When a changed file fails to parse
-	// it is deleted from `newConfigs` upstream, so `ok` is false and its
-	// tenants are left alone — today's fail-safe "keep the last good values".
-	// A full load drops them instead and the divergence audit shouts cause (a),
-	// so the two paths still disagree there; that difference is a deliberate
-	// behaviour question (silently keep stale values vs. stop a tenant's alerts
-	// on a typo), not something to settle inside a bug fix.
+	// it is deleted from `newConfigs` upstream, so `ok` is false and THIS
+	// file's tenants are left alone — today's fail-safe "keep the last good
+	// values". A full load drops them instead and the divergence audit shouts
+	// cause (a), so the two paths still disagree there; that difference is a
+	// deliberate behaviour question (silently keep stale values vs. stop a
+	// tenant's alerts on a typo), not something to settle inside a bug fix.
+	//
+	// ⚠️ THE FAIL-SAFE DOES NOT EXTEND TO OTHER FILES' TENANTS, measured: with
+	// a cross-file duplicate live, editing one file to drop the tenant while
+	// the OTHER file fails to parse in the same reload removes the tenant even
+	// though the unparseable file still declares it on disk. Same outcome
+	// before and after this change, and it needs the invalid duplicate state to
+	// reach, so it is recorded rather than fixed here.
 	for _, name := range changed {
 		oldPartial, hadOld := oldConfigs[name]
 		newPartial, parsed := newConfigs[name]
@@ -916,7 +943,8 @@ func patchTenants(prev *ThresholdConfig, newConfigs, oldConfigs map[string]Thres
 			if _, stillDeclared := newPartial.Tenants[tenant]; stillDeclared {
 				continue
 			}
-			if stillDeclaredSomewhere(newConfigs, patchedTenants, tenant) {
+			if ov, survives := reclaimTenantFrom(newConfigs, tenant); survives {
+				merged.Tenants[tenant] = ov
 				continue
 			}
 			delete(merged.Tenants, tenant)
@@ -927,7 +955,9 @@ func patchTenants(prev *ThresholdConfig, newConfigs, oldConfigs map[string]Thres
 	for _, name := range removed {
 		if partial, ok := oldConfigs[name]; ok {
 			for tenant := range partial.Tenants {
-				if !stillDeclaredSomewhere(newConfigs, patchedTenants, tenant) {
+				if ov, survives := reclaimTenantFrom(newConfigs, tenant); survives {
+					merged.Tenants[tenant] = ov
+				} else {
 					delete(merged.Tenants, tenant)
 				}
 			}

@@ -241,18 +241,33 @@ func TestAnUnparseableFileKeepsItsTenantAttributed(t *testing.T) {
 // reload path, which is a policy decision rather than a bug fix.
 func TestATenantDeclaredInTwoFilesSurvivesAnEditToEitherOne(t *testing.T) {
 	t.Parallel()
+	// ⛔ WHICH DECLARATION GOES AWAY IS LOAD-BEARING, and the first version of
+	// this table missed it. `mergePartialConfigs` is last-writer-wins over
+	// sorted filenames, so with a.yaml=11 and b.yaml=22 the live value is 22.
+	// Editing a.yaml removes the LOSER: "keep whatever was there" and "re-take
+	// from the survivor" both answer 22, and the mutation that keeps the orphan
+	// value — the defect this test exists for — stayed green. Removing the
+	// WINNER is the case that separates them.
 	for _, tc := range []struct {
 		name            string
+		editFile        string // the file the operator edits
 		removeWholeFile bool
 	}{
-		{"the tenant is removed from a file that stays on disk", false},
-		{"the whole file is deleted", true},
+		{"the loser declaration is removed from a file that stays", "a.yaml", false},
+		{"the WINNER declaration is removed from a file that stays", "b.yaml", false},
+		{"the winner's whole file is deleted", "b.yaml", true},
+		{"the loser's whole file is deleted", "a.yaml", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
+			// ⛔ THE TWO DECLARATIONS CARRY DIFFERENT VALUES. The first version
+			// of this fixture wrote `dup: {}` in both files, so the test could
+			// not see WHICH file's value survived — and a mutation that emptied
+			// the tenant's overrides entirely passed it. Distinct values make
+			// the assertion below about the number, not just the key.
 			dir := t.TempDir()
 			writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"), "defaults:\n  mysql_connections: 80\n")
-			writeTestYAML(t, filepath.Join(dir, "a.yaml"), "tenants:\n  dup: {}\n")
+			writeTestYAML(t, filepath.Join(dir, "a.yaml"), "tenants:\n  dup:\n    mysql_connections: \"11\"\n")
 			writeTestYAML(t, filepath.Join(dir, "b.yaml"), "tenants:\n  other: {}\n")
 
 			m, _, logBuf := newAuditedManager(t, dir)
@@ -260,36 +275,115 @@ func TestATenantDeclaredInTwoFilesSurvivesAnEditToEitherOne(t *testing.T) {
 				t.Fatalf("Load: %v", err)
 			}
 
-			// The invalid-but-live state: b.yaml now names dup as well.
-			writeTestYAML(t, filepath.Join(dir, "b.yaml"), "tenants:\n  other: {}\n  dup: {}\n")
+			// The invalid-but-live state: b.yaml now names dup as well, at 22.
+			writeTestYAML(t, filepath.Join(dir, "b.yaml"), "tenants:\n  other: {}\n  dup:\n    mysql_connections: \"22\"\n")
 			if err := m.IncrementalLoad(); err != nil {
 				t.Fatalf("IncrementalLoad: %v", err)
 			}
+			// ⛔ ASSERTED, NOT SKIPPED. This was a t.Skip whose condition was
+			// "dup left the merged config" — which is ALSO what several
+			// regressions produce, and a skipped subtest prints nothing but
+			// `ok` in CI. Worse: disabling the tenant-only fast path outright
+			// made the test PASS, i.e. report green without executing
+			// patchTenants at all. If the precondition ever stops holding
+			// because the fast path learned to reject duplicates, this fails
+			// loudly and someone deletes the test on purpose.
 			if _, ok := m.GetConfig().Tenants["dup"]; !ok {
-				t.Skip("the fast path no longer accepts a cross-file duplicate — this fixture's precondition is gone, and that is a better world")
+				t.Fatal("precondition gone: the fast path no longer accepts a cross-file duplicate. " +
+					"If that is deliberate, delete this test — do not let it skip")
+			}
+			if !isTenantOnlyChange([]string{tc.editFile}, nil, nil) {
+				t.Fatal("this fixture no longer takes the tenant-only fast path, so it exercises none of the code it names")
 			}
 
 			// b.yaml is untouched from here on and still declares dup.
 			logBuf.Reset()
 			if tc.removeWholeFile {
-				if err := os.Remove(filepath.Join(dir, "a.yaml")); err != nil {
+				if err := os.Remove(filepath.Join(dir, tc.editFile)); err != nil {
 					t.Fatalf("Remove: %v", err)
 				}
 			} else {
-				writeTestYAML(t, filepath.Join(dir, "a.yaml"), "tenants: {}\n")
+				body := "tenants: {}\n"
+				if tc.editFile == "b.yaml" {
+					body = "tenants:\n  other: {}\n" // b.yaml also owns `other`
+				}
+				writeTestYAML(t, filepath.Join(dir, tc.editFile), body)
 			}
 			if err := m.IncrementalLoad(); err != nil {
 				t.Fatalf("IncrementalLoad: %v", err)
 			}
 
-			if _, ok := m.GetConfig().Tenants["dup"]; !ok {
+			got, ok := m.GetConfig().Tenants["dup"]
+			if !ok {
 				t.Fatal("dup was deleted from the merged config while b.yaml, untouched this round, still declares it — " +
 					"its alerts stop firing until something forces a full reload")
+			}
+			// ⛔ AND IT MUST CARRY THE SURVIVING FILE'S VALUE. Merely surviving
+			// is not enough: declining to delete left the tenant holding the
+			// value of the declaration that just went away — a number no file
+			// on disk says and a restart does not reproduce. Silent-and-wrong,
+			// where the previous behaviour was at least loud-and-wrong.
+			//
+			// ⚠️ THE ORACLE IS A FULL LOAD OF THE SAME TREE, not a literal. The
+			// first version of this assertion hardcoded the value of the file I
+			// believed survived and named the wrong one — the fixture edits
+			// a.yaml, so b.yaml is the survivor. A literal encodes my belief
+			// about the fixture; a full reload encodes the tree.
+			fullDir := t.TempDir()
+			for _, name := range []string{"_defaults.yaml", "a.yaml", "b.yaml"} {
+				body, rerr := os.ReadFile(filepath.Join(dir, name))
+				if rerr != nil {
+					continue // the removeWholeFile case really has no a.yaml
+				}
+				writeTestYAML(t, filepath.Join(fullDir, name), string(body))
+			}
+			reference := NewConfigManager(fullDir)
+			if err := reference.Load(); err != nil {
+				t.Fatalf("reference Load: %v", err)
+			}
+			want := reference.GetConfig().Tenants["dup"]["mysql_connections"].Default
+			if v := got["mysql_connections"].Default; v != want {
+				t.Fatalf("dup kept %q but a full reload of the same tree gives %q — "+
+					"the fast path is holding the value of a declaration that no longer exists", v, want)
 			}
 			if strings.Contains(logBuf.String(), "conf.d scanner divergence") {
 				t.Fatalf("a divergence ERROR was emitted for a tenant that is present in both planes\n--- log ---\n%s", logBuf.String())
 			}
 		})
+	}
+}
+
+// TestReclaimTenantFromMirrorsTheFullMergePrecedence pins the ordering rule
+// that no end-to-end fixture can reach.
+//
+// `reclaimTenantFrom` must resolve a tenant the way `mergePartialConfigs`
+// does — sorted filename, last writer wins — so the fast path lands where a
+// restart would. But a tree in which TWO files still declare the tenant after
+// the edit has no "where a restart would land": a full load rejects it outright
+// with DuplicateTenantError. Measured while trying to build that fixture. So
+// the precedence is pinned here, directly, instead of being asserted through a
+// tree that cannot exist. Without this, swapping last-writer for first-writer
+// leaves the whole package green.
+func TestReclaimTenantFromMirrorsTheFullMergePrecedence(t *testing.T) {
+	t.Parallel()
+	sv := func(v string) map[string]ScheduledValue {
+		return map[string]ScheduledValue{"mysql_connections": {Default: v}}
+	}
+	configs := map[string]ThresholdConfig{
+		"b.yaml":    {Tenants: map[string]map[string]ScheduledValue{"dup": sv("22")}},
+		"a.yaml":    {Tenants: map[string]map[string]ScheduledValue{"dup": sv("11")}},
+		"c.yaml":    {Tenants: map[string]map[string]ScheduledValue{"dup": sv("33")}},
+		"only.yaml": {Tenants: map[string]map[string]ScheduledValue{"solo": sv("7")}},
+	}
+	if got, ok := reclaimTenantFrom(configs, "dup"); !ok || got["mysql_connections"].Default != "33" {
+		t.Fatalf("dup resolved to %v (ok=%v), want c.yaml's 33 — sorted filename, LAST writer wins, "+
+			"which is what mergePartialConfigs does", got, ok)
+	}
+	if got, ok := reclaimTenantFrom(configs, "solo"); !ok || got["mysql_connections"].Default != "7" {
+		t.Fatalf("solo resolved to %v (ok=%v), want 7", got, ok)
+	}
+	if _, ok := reclaimTenantFrom(configs, "nobody"); ok {
+		t.Fatal("a tenant no file declares must not be reported as surviving")
 	}
 }
 

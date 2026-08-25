@@ -528,14 +528,19 @@ func scheduledValueFromRaw(raw any) (ScheduledValue, bool) {
 //	hierarchy plane  — `parseDefaultsBytes` → `extractDefaultsBlock` reads the
 //	                   same block as an arbitrary nested document and ADR-017
 //	                   deep-merges it (dict merge, array replace, null-as-delete
-//	                   for `_`-reserved keys). This is not a leak: 12 of the
+//	                   for `_`-reserved keys). This is not a leak: 9 of the
 //	                   repo's 17 `_defaults.yaml` files carry exactly that —
 //	                   `threshold: {cpu: 70}`, `alert_group: baseline`,
 //	                   `receivers: [...]` — and the ADR-017 golden fixtures are
-//	                   built on it. Measured: those fixtures resolve to
-//	                   `defaults=0 rows=0` on the collector plane, by design;
-//	                   the real shipped config resolves to `defaults=8 rows=64`
-//	                   with no drops.
+//	                   built on it. (6 more are all-float; 2 have no `defaults:`
+//	                   block at all. An earlier version of this comment said 12,
+//	                   which is not reachable by any counting rule — a number
+//	                   asserted rather than counted, in a comment about the cost
+//	                   of asserting rather than measuring.) Measured: 7 of those
+//	                   9 resolve to `defaults=0 rows=0` on the collector plane,
+//	                   by design; `opt-out-null-threshold` and
+//	                   `wrapper-siblings` do emit, and the real shipped config
+//	                   resolves to `defaults=8 rows=64` with no drops.
 //
 // So `isThresholdShaped` is a TYPE COERCION at a plane boundary, and the value
 // domain it admits is the DESTINATION's, not the source's: what lands in
