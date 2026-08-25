@@ -73,10 +73,11 @@ func (v reachVerdict) String() string {
 // shape below be exercised against a REAL entry condition rather than an
 // empty one.
 //
-// ⚠️ `mysql_cpu` is the RETIRED spelling of `mysql_threads_running` and is
-// here on purpose: the alias relation is symmetric, and the predicate only
-// walked one way. See the "canonical spelling of a legacy root default" row.
-const reachMatrixRoot = "defaults:\n  mysql_connections: 80\n  redis_evicted_keys: 10\n  mysql_cpu: 80\n" +
+// ⚠️ The two alias rows live in `config_subtree_alias_test.go`, not here.
+// Their fixtures need the RETIRED spelling as a live value, and the #1231
+// pre-commit hook forbids that outside one named file — keeping the exemption
+// to one file is worth more than keeping the table in one place.
+const reachMatrixRoot = "defaults:\n  mysql_connections: 80\n  redis_evicted_keys: 10\n" +
 	"state_filters:\n  maintenance:\n    severity: warning\n"
 
 func TestEveryInheritedKeyShapeIsDeliveredOrNamed(t *testing.T) {
@@ -138,11 +139,6 @@ func TestEveryInheritedKeyShapeIsDeliveredOrNamed(t *testing.T) {
 			"resolveCriticalRows skips `_silent_`-prefixed keys itself"},
 		{"a junk value on the dedup key", "  _severity_dedup: 5\n", "_severity_dedup", verdictWarned, "",
 			"ResolveSeverityDedup reads it, cannot make sense of it, and WARNs — under the spelling `severity_dedup`, without the underscore"},
-		{"the canonical spelling of a legacy root default", "  mysql_threads_running: 42\n", "mysql_threads_running", verdictDelivered, "",
-			"resolveBaseRows walks canonicalizeDefaults(cfg.Defaults), so a root default spelled the legacy way already IS this key by the time rows are built"},
-		{"the canonical spelling of a legacy root DECLARATION", "  mysql_threads_running: 42\n", "mysql_threads_running", verdictDelivered,
-			"defaults:\n  mysql_connections: 80\n  redis_evicted_keys: 10\noptional_overrides:\n  - mysql_cpu\nstate_filters:\n  maintenance:\n    severity: warning\n",
-			"resolveDeclaredRows walks canonicalizeOptionalOverrides(cfg.OptionalOverrides) — the same symmetry, the other declaration surface"},
 		{"a state filter carrying a time window", "  _state_maintenance:\n    default: enable\n    overrides:\n      - window: \"00:00-23:59\"\n        value: disable\n", "_state_maintenance", verdictRefused, "",
 			"ResolveStateFiltersAt reads sv.Default and never the windows, so the schedule /effective renders would not be the one the collector applies"},
 		{"a critical tier on the dedup key", "  _severity_dedup_critical: 5\n", "_severity_dedup_critical", verdictWarned, "",

@@ -353,14 +353,20 @@ func declaredAnywhere(cfg *ThresholdConfig, key string) bool {
 	// to switch to. `resolveBaseRows` walks `canonicalizeDefaults(c.Defaults)`,
 	// so the root's legacy default is already canonical by the time rows are
 	// built and the subtree's key DOES reach the plane. Measured with
-	// `mysql_cpu: 80` as the only root default: a tenant AUTHORING
-	// `mysql_threads_running: 42` emitted 42, while the identical key
+	// the retired spelling as the only root default: a tenant AUTHORING
+	// the canonical `mysql_threads_running` at 42 emitted 42, while that key
 	// inherited from a subtree was refused and the tenant stayed at 80 —
 	// looser than configured, and the divergence report's own remediation
 	// ("declare the key in the ROOT _defaults.yaml") was already satisfied,
 	// under the other spelling. Its `_critical` twin inherited fine the whole
 	// time, so one metric had its critical tier following the subtree and its
 	// base tier following the root. (#1569 blind review, sweep B-1 follow-up.)
+	//
+	// The measurement above used the retired spelling as the tree's only root
+	// default, valued 80. Spelled out rather than shown because the #1231 hook
+	// reads a live `key: value` pair anywhere in the repo, comments included,
+	// and it is right to — the exemption belongs to the one test file that
+	// needs the fixture, not to prose.
 	for d := range cfg.Defaults {
 		if canon, ok := config.CanonicalKeyFor(d); ok && canon == key {
 			return true
