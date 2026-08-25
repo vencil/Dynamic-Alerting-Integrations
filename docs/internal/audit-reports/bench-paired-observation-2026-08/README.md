@@ -15,10 +15,29 @@ lang: zh
 
 | | |
 |---|---|
-| **收** | 逐夜的 `outcome`（`counted` / `not-counted` / `unreadable`）、`reason`、run id、head sha、兩顆對照測試的偏離、drift／digest 狀態 |
-| ⛔ **不收** | **任何比率**。比率取決於窗口，窗口取決於哪幾次 run 成功——那是會變的量；夜層級 outcome 不是 |
+| **收** | ⑴ 逐夜的 `outcome`（`counted` / `not-counted` / `unreadable`）、`reason`、run id、head sha、兩顆對照測試的偏離、drift／digest 狀態（`nights.jsonl`）<br>⑵ **序列層級的 `fired` 集合**——哪些 benchmark 觸發、首次 fire 的日曆夜、由哪一次觀測 run 報出（見下節） |
+| ⛔ **不收** | **任何比率**。比率取決於窗口，窗口取決於哪幾次 run 成功——那是會變的量；夜層級 outcome 與「哪一支 fire 了」不是 |
+
+⚠️ **⑵ 是後來補的，原本沒有。** 初版只收夜層級事實，明文寫著「⛔ 只收夜層級事實」。盲審指出：ADR §待決 6 的**第三個主指標，分母就是這個 `fired` 集合**——若本檔不收，那個指標**在建構上就無法被任何讀者覆核**。⛔ 那正是本 ADR 全線在防的病。故擴充，並保留「不收比率」這條原則不變（`fired` 是判定結果，不是比率）。
 
 ⛔ **為什麼要收**：這些事實目前只活在 GitHub job log 裡。隔壁那份 README 記過同一個理由——job log 有保留期限、artifact 只留 90 天（`retention-days: 90`），過了就再也重建不回來。
+
+## `fired` 集合（ADR §待決 6 第三個主指標的分母）
+
+參數為生產環境實際使用的預設值：`--threshold-pct 5.0`、`--consecutive 2`（`paired_trend_watch.py:140-141`；`bench-record.yaml:572` 的呼叫未覆寫兩者）。
+
+| benchmark | 首次 fire（live 判定） | 首次出現於哪次觀測 |
+|---|---|---|
+| `BenchmarkMergePartialConfigs_1000` | 2026-08-18 | run `32687665133`（08-24） |
+| `BenchmarkResolveSilentModes_1000` | 2026-08-24 | run `32806126050`（08-25） |
+
+⇒ 截至 2026-08-25，分母 = **2**。
+
+⛔ **來源與其保存期限，必須跟數字一起讀。** 這兩筆來自兩次 `paired-trend-watch` job 的**摘要輸出**，而**那份摘要不在 repo 裡**——它活在 GitHub Actions 的 job log，會過期。本節存在的唯一理由就是把它固定下來；⚠️ 在此之前，「2」這個數字在 repo 內**查無依據**，而那正是盲審抓到它的方式。
+
+⚠️ **不要拿它跟錨點資料集的「1」比。** 錨點 [`bench-paired-2026-08/README.md`](../bench-paired-2026-08/README.md) 在同一組參數下記 `1 fire(s): MergePartialConfigs_1000@08-17`，是因為它只涵蓋 **08-16..08-21**；`BenchmarkResolveSilentModes_1000` 的 fire 在 **08-24**，落在其外（該檔另記其 median +4.05%，在那六夜上本就不到 5% 門檻）。⛔ **不同夜集合的兩個數字，比較它沒有意義。**
+
+⚠️ **首次 fire 日期為 live 判定值。** 錨點把 `MergePartialConfigs_1000` 記為 **08-17**、live 記 **08-18**——正是本檔下面那節說的「同一個退化，歸因日期差一天」。
 
 ## ⚠️ 觀察期是回溯認定的（明文揭露）
 

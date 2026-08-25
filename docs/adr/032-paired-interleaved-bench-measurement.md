@@ -482,7 +482,7 @@ STATUS_FINDINGS / STATUS_CLEAR / STATUS_INCONCLUSIVE   # ← 窗口層級，不�
 
 **⭐ 為什麼要有第三個主指標。** δ₁ 這一家在現有全部證據上都接近恆零：閘門在 0.5%／1.0%／2.0% 三個門檻下**八夜零擋**，而 `unreadable` 幾乎全部來自「功能還沒上線」。**δ₁ 目前量的是「這個功能上線多久了」，不是「第二段有多常量不到」。** 同期真正在發生的是 `BenchmarkMergePartialConfigs_1000` 持續 fire、而 §待決 7 已指出這類「真的、但未必該修」的結果是**一張永遠關不掉的票**——「一個從不說話，一個永遠在叫」。那才是並行期實際暴露的失效，也是唯一在現有資料上非零的量。
 
-⚠️ **上一句的證據來源要講清楚**（盲審指出原文含混）：「持續 fire」的依據是**封存六夜資料集 6/6 夜遠超門檻**、加上兩次真跑摘要的 `fired` 清單，**不是**觀察紀錄——`bench-paired-observation-2026-08/nights.jsonl` 刻意只收夜層級事實、不含逐支 benchmark 的比值，所以**在那份資料上無法逐夜核實這一句**。
+⚠️ **上一句的證據來源要講清楚**（盲審指出原文含混）：「持續 fire」的依據是**封存六夜資料集 6/6 夜遠超門檻**、加上兩次真跑摘要的 `fired` 清單，**不是** `nights.jsonl`——後者刻意只收夜層級事實、不含逐支 benchmark 的比值，所以**在那份逐夜資料上無法核實這一句**。⭐ `fired` 清單本身已固定在同目錄的 [§`fired` 集合](../internal/audit-reports/bench-paired-observation-2026-08/README.md)（後續盲審逼出來的：第三個主指標的分母就是它，不固定下來這個指標在建構上就無法被覆核）。
 
 ###### ⛔ 第三個主指標的聚合契約（不訂死就沒有唯一算法）
 
@@ -490,7 +490,7 @@ STATUS_FINDINGS / STATUS_CLEAR / STATUS_INCONCLUSIVE   # ← 窗口層級，不�
 |---|---|
 | **計數單位** | 一支 benchmark。⛔ 不是 fire 事件、不是夜、不是 issue |
 | **唯一鍵** | `(benchmark, reference_sha)`。re-pin 是**觀察期邊界**，不是同一期內的新樣本 |
-| **跨夜去重** | **工具已經做掉了**，本文不另訂：`fires()` 對每支 benchmark 只記首次 fire 的日曆夜然後 `break`（`paired_trend_watch.py:624`），且 `bench not in fired` 使已 fire 者不再計入（`:849`）。⇒ 同一支連 fire 八夜是 **1** 筆 |
+| **跨夜去重** | **工具已經做掉了**，本文不另訂：`fires()` 回傳的是一個 **benchmark 為鍵的 dict**，且滿足 k 夜後 `out[bench] = date` 隨即 `break`（`paired_trend_watch.py:650-651`，函式自 `:624`）。⇒ 鍵唯一性本身就保證同一支連 fire 八夜是 **1** 筆 |
 | **分子** | 上述集合中，經 §待決 7 判為第三類（已歸因、已接受）者 |
 | **分母** | 上述集合全體（觀察期內曾 fire 的相異 benchmark） |
 | **期間** | 與 δ₁ 同一觀察期，但**單位不同**：δ₁ 的分母是夜、本指標的分母是 benchmark。⛔ 三者兩兩皆不得相加 |
@@ -498,7 +498,9 @@ STATUS_FINDINGS / STATUS_CLEAR / STATUS_INCONCLUSIVE   # ← 窗口層級，不�
 
 ⛔ **為什麼唯一鍵要帶 `reference_sha`**：程式自己把 reference pin 變動稱為 **absorption event**（`paired_trend_watch.py:1288`）並以 `reference_pin_changed` 追蹤（`:764`）。re-pin 之後同一支 benchmark 再 fire 是**另一件事**，把它和 re-pin 前的算成同一筆會把「已接受的成本」偷偷續期。
 
-⛔ **這個指標自己的病，一併預先寫死。** 上一個主指標的毛病是結構上必讀 0；**這一個的毛病方向相反**——截至 2026-08-25 分母只有 **2** 支（`MergePartialConfigs_1000`、`ResolveSilentModes_1000`），可能取值只有 **0、1/2、1**。⇒ **期末一律以「分子／分母」原始計數呈現，禁止只寫百分比，且分母 < 5 時不得對它設門檻。** 換一個亂跳的指標取代一個沒牙的指標，不算解決問題。
+⛔ **這個指標自己的病，一併預先寫死。** 上一個主指標的毛病是結構上必讀 0；**這一個的毛病方向相反**——截至 2026-08-25 分母只有 **2** 支（`BenchmarkMergePartialConfigs_1000`、`BenchmarkResolveSilentModes_1000`；來源與可覆核性見 [`bench-paired-observation-2026-08/` §fired 集合](../internal/audit-reports/bench-paired-observation-2026-08/README.md)），可能取值只有 **0、1/2、1**。⇒ **期末一律以「分子／分母」原始計數呈現，禁止只寫百分比，且分母 < 5 時不得對它設門檻。** 換一個亂跳的指標取代一個沒牙的指標，不算解決問題。
+
+⚠️ **這個「2」與隔壁錨點資料集的「1」不衝突，但很容易被讀成衝突**——錨點在 threshold 5%／2 夜下記 `1 fire(s): MergePartialConfigs_1000@08-17`，因為它只涵蓋 08-16..08-21；`BenchmarkResolveSilentModes_1000` 的 fire 發生在 **08-24**，落在錨點範圍之外。⛔ **兩個數字來自不同的夜集合，比較它們沒有意義。** 這一句是盲審把「2」讀成與既有資料矛盾之後補的。
 
 ##### ⛔ 預先寫死：δ₁ᵇ 讀到 0 是「量不到」，不是「通過」
 
