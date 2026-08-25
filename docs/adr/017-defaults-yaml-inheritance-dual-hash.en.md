@@ -53,7 +53,8 @@ Inheritance order: **L0 → L1 → L2 → L3 → tenant YAML** (later overrides 
 
 - **Dict/Map fields**: deep merge (child layer's new keys preserved, same keys overridden by child)
 - **Array/List fields**: **replace, not concat** (avoids ambiguity — "I overrode group_by, why are old values there?")
-  - ⚠️ **One exception: `_custom_alerts` uses UNION** (ADR-024 / #772) — a tenant's own list
+  - ⚠️ **Known exception: `_custom_alerts` uses UNION** (ADR-024 / #772; the test is "is it
+    overwritten AFTER deep_merge", not a list of key names) — a tenant's own list
     **adds to** the inherited platform/domain policy recipes rather than replacing them
     (`describe_tenant.py` overwrites that key after deep_merge). ⛔ **This is Python-only**:
     Go has no such path and still does REPLACE, so the two implementations' `effective` are
@@ -266,11 +267,12 @@ implementation).
    included. ⚠️ The schema only admits this when **every** top-level key is on the whitelist
    (`additionalProperties: false` + 15 fixed properties + `^_state_` / `^_routing`
    patternProperties), so "drop the `defaults:` wrapper and write bare threshold keys" is in
-   fact rejected by `check_confd_schema.py`. Two files in the repo lack a `defaults:` key, but
-   only `rule-packs/recipes/examples/conf.d/finance/_defaults.yaml` actually carries content
-   (its only top-level key is `_custom_alerts`); the other,
-   `rule-packs/recipes/examples/conf.d/_defaults.yaml`, is comments-only, parses to `None`, and
-   merges nothing. ⇒ This shape being invisible to the reachability gate is the subject of
+   fact rejected by `check_confd_schema.py`. The shape exists in this repo
+   (`rule-packs/recipes/examples/conf.d/finance/_defaults.yaml`, whose only top-level key is
+   `_custom_alerts`). ⛔ **This document does not state how many such files there are** — that
+   number drifts. To inventory your own tree, load every `_defaults*.y*ml` with `yaml.safe_load`
+   and keep the ones whose result **is a dict and has no `defaults` key** (⚠️ a comments-only
+   file parses to `None` — exclude it, it merges nothing, and counting it overstates the set). ⇒ This shape being invisible to the reachability gate is the subject of
    [#1552](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1552).
 
 2. **`_custom_alerts` is injected by ADR-024's UNION resolver AFTER the unwrap**
@@ -294,10 +296,13 @@ equivalent.
 
 ### The diagnostic cost (deliberately accepted)
 
-Platform-level changes are structurally invisible to every consumer that takes
-`effective_config` / `merged_hash` as input: `GET /effective`, `describe_tenant`,
-`blast_radius`, the what-if preview (`handler_simulate.go`, Portal `simulate-preview.jsx`), and
-`da-guard`. Two of those are worse than merely blind:
+Platform-level changes are structurally invisible to consumers that take `effective_config` /
+`merged_hash` as input. ⛔ **What follows is the currently-known set, not an exhaustive one** —
+the first version of this list missed `tenant-verify` (below), and the set spans Go, Python and
+the Portal. To inventory it in **your** tree, search the non-test hits of
+`merged_hash|MergedHash|ResolveEffective|EffectiveConfig`. Known today: `GET /effective`,
+`describe_tenant`, `blast_radius`, the what-if preview (`handler_simulate.go`, Portal
+`simulate-preview.jsx`), and `da-guard`. Two of those are worse than merely blind:
 
 ⛔ **At runtime the change is MISLABELLED, not just missed.** `parseDefaultsBytes` in
 `config_defaults_diff.go` goes through the same unwrap, so `classifyDefaultsNoOpEffect` never

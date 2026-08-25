@@ -58,7 +58,8 @@ conf.d/
 
 - **Dict/Map 欄位**：deep merge（子層新增的 key 會保留，相同 key 子層覆蓋父層）
 - **Array/List 欄位**：**replace，不 concat**（避免語意歧義 — "我覆蓋了 group_by，怎麼多出舊值？"）
-  - ⚠️ **唯一例外：`_custom_alerts` 走 UNION**（ADR-024 / #772）——租戶自己的清單**加到**
+  - ⚠️ **已知的例外：`_custom_alerts` 走 UNION**（ADR-024 / #772；判準是「有沒有在 deep_merge
+    **之後**被覆寫」，不是一份鍵名清單）——租戶自己的清單**加到**
     繼承來的平台 / domain policy recipe 上，不取代它們（`describe_tenant.py` 在 deep_merge
     之後覆寫該鍵）。⛔ **這是 Python-only**：Go 側沒有這條路徑、仍走 REPLACE，兩實作的
     `effective` 因此不同集（見 §已知的可達例外 2 與 #1549）。
@@ -235,10 +236,11 @@ effective = deep_merge( defaults_block(L0), …, defaults_block(Ln), tenant_body
 1. **無 `defaults:` 鍵的檔案**會把**整份文件**併進 `effective`，兄弟鍵一併進來。
    ⚠️ schema 只在**頂層鍵全部落在白名單內**時才放行（`additionalProperties: false` ＋ 15 個
    固定 properties ＋ `^_state_` / `^_routing` patternProperties），所以「省略 `defaults:`
-   直接裸寫閾值鍵」其實會被 `check_confd_schema.py` 擋下。repo 內有**兩個**檔案沒有 `defaults:`
-   鍵，但只有 `rule-packs/recipes/examples/conf.d/finance/_defaults.yaml` 真的帶內容
-   （頂層只有 `_custom_alerts`）；另一個 `rule-packs/recipes/examples/conf.d/_defaults.yaml`
-   全檔只有註解、解析成 `None`，併不進任何東西。
+   直接裸寫閾值鍵」其實會被 `check_confd_schema.py` 擋下。這個形狀 repo 內現有
+   （`rule-packs/recipes/examples/conf.d/finance/_defaults.yaml`，頂層只有 `_custom_alerts`）。
+   ⛔ **本文件不寫「有幾個這種檔案」**——那個數字會漂移。要盤點你自己的樹，把每個
+   `_defaults*.y*ml` 用 `yaml.safe_load` 載入，留下**解析結果是 dict 且沒有 `defaults` 鍵**的
+   那些（⚠️ 純註解檔解析成 `None`，要排除掉——它併不進任何東西，把它算進來會高估）。
    ⇒ 該形狀對可達性 gate 隱形是
    [#1552](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1552) 的主題。
 
@@ -259,7 +261,10 @@ parity 套件結構上偵測不到上述任一例外** —— 不要把它的綠
 
 ### 診斷面的代價（刻意接受）
 
-平台面變更對所有以 `effective_config` / `merged_hash` 為輸入的消費端**結構上不可見**：
+平台面變更對以 `effective_config` / `merged_hash` 為輸入的消費端**結構上不可見**。
+⛔ **以下是目前已知的，不是窮舉**——這份清單第一版就漏掉了 `tenant-verify`（見下），而它橫跨
+Go、Python 與 Portal 三種載體。要在**你的**樹上盤點，搜
+`merged_hash|MergedHash|ResolveEffective|EffectiveConfig` 的非測試命中。已知者：
 `GET /effective`、`describe_tenant`、`blast_radius`、what-if 預覽（`handler_simulate.go`、
 Portal `simulate-preview.jsx`）、`da-guard`。以下兩格比「看不到」更危險：
 
