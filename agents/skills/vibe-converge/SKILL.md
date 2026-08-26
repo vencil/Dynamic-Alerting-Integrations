@@ -104,6 +104,7 @@ append-only，一行一筆 JSON（沿用 `PROGRESS.jsonl` 的慣例：不重寫�
 - **`ROUND-CAP` 的預算只由有審查活動的輪次支出**——該輪至少有一筆 `subject` / `finding` / `dead-end`。只帶 `question` 的記帳列不花錢。在這之前它會花掉一輪（實測：5 個真審查輪 rc=0，同樣 5 輪加一列記帳 rc=1），於是**寫下記帳列的人被罰、不寫的人不被罰**。⛔ 換來的最便宜轉綠寫在上一條：把 finding 記成 `question`——那會讓那些 finding 失去 `status`，`UNREVIEWED-FIX` 因此看不到後續的 `fixed`（`converge_status.py` 的 `question` 分支只累加 `open_questions`）。
 - ⚠️ **`SELF-REVIEW-ZERO` 仍然在數 finding**（它是 advisory 不是停止規則），而且把 `reviewer` 從 `"self"` 改成任何別的字就會消音。**沒有動它**：見 `vibe-subagent-review`〈預設檔位〉的未解前提。
 - `LEDGER-GAP` 只檢查輪號連續，**不檢查是否從 1 開始**。從鏈中途才開帳的 scope 合法且靜默。
+- ⚠️ **`KINDS` 是往前看的：拿掉一個 kind，所有寫過它的既有帳本就永久報格式違規、rc=1**，沒有遷移路徑，也沒有「這個 kind 已撤回，予以容忍」的概念。實例：TRK-360 撤回宣告式 oracle 後，`dev/stopcond` 那本帳本裡 5 筆 `oracle` / `oracle-result` 讓**每一次執行**都 rc=1，而那與任何停止規則無關——讀報告時要先把 `-- FORMAT --` 區塊和停止規則分開看。
 - 本工具**不進 CI、不進 pre-commit**、不擋任何東西。這是刻意的：#1457 剛刪掉六支「守衛的守衛」，對 review 流程再造一支 gate 會重演同一個病。owner 分類 = 🧠 **skill-advised**（見 [`hook-vs-skill-coverage.md`](../../../docs/internal/hook-vs-skill-coverage.md)）。
 - 全部規則由**單一一條修正鏈**導出（n=1）。套到別的情境前先自己量。
 
