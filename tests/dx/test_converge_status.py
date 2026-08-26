@@ -348,14 +348,149 @@ def test_round_cap_blocks_past_the_cap_and_stays_quiet_at_it():
 
 
 def test_round_cap_counts_the_span_not_the_record_count():
-    """A ledger opened mid-chain (rounds 5..9) is 5 rounds, not 9."""
-    mid = [oracle(5)] + [subject(n, "s") for n in range(5, 10)]
+    """A ledger opened mid-chain (rounds 5..8) is 4 rounds, not 8."""
+    mid = [oracle(5)] + [subject(n, "s") for n in range(5, 9)]
     blocking, _ = cs.evaluate(rounds_of(mid))
     assert not any("ROUND-CAP" in m for m in blocking)
 
 
-def test_evaluate_on_an_empty_ledger_says_nothing():
-    assert cs.evaluate([]) == ([], [])
+def test_the_cap_boundary_with_a_pending_fix_has_a_reachable_state():
+    """Fails if ROUND-CAP stops subsuming UNREVIEWED-FIX at the boundary.
+
+    Measured before the fix: a 5-round chain that honestly recorded a fix got
+    UNREVIEWED-FIX ("open a later round"); opening round 6 got ROUND-CAP. Both
+    rc=1, no legal move, and the only rc=0 exit was relabelling the fixed
+    finding as still open -- a lie aimed at the rule meant to stop fixes
+    escaping review.
+    """
+    at_cap_with_fix = ([oracle(1)] + [subject(n, "s") for n in range(1, 6)]
+                       + [finding(5, status="fixed")])
+    blocking, _ = cs.evaluate(rounds_of(at_cap_with_fix))
+    assert any("ROUND-CAP" in m for m in blocking)
+    # exactly one verdict, and it must name the pending fix rather than
+    # instructing an action the other rule forbids
+    assert not any("UNREVIEWED-FIX" in m for m in blocking)
+    assert any("unreviewed fix" in m for m in blocking)
+
+
+def test_five_rounds_without_a_pending_fix_are_allowed():
+    """The cap is the ceiling, not the last legal round.
+
+    Guards the owner-set budget: if someone changes the comparison to `>=`
+    unconditionally, five declared rounds silently become four.
+    """
+    blocking, _ = cs.evaluate(rounds_of(
+        [oracle(1)] + [subject(n, "s") for n in range(1, 6)]))
+    assert not any("ROUND-CAP" in m for m in blocking)
+
+
+def test_an_undecidable_verdict_is_a_terminal_state_not_a_missing_oracle():
+    """Fails if the undecidable exemption is removed from Rule 0.
+
+    Section 0 says a subject whose legal and defective cases are isomorphic
+    must be dropped, not given a predicate. Demanding an oracle there asked for
+    one to be invented for a question the same ledger had certified unanswerable.
+    """
+    blocking, advisory = cs.evaluate(rounds_of([
+        rec(round=1, kind="decidability", subject="exemption",
+            question="is this exemption legitimate?",
+            evidence_set="the tree after the exemption was added",
+            verdict="undecidable", note="legal and defective are isomorphic"),
+    ]))
+    assert not any("ORACLE-MISSING" in m for m in blocking)
+    assert any("UNDECIDABLE" in m for m in advisory)
+
+
+def test_an_oracle_never_manufactures_a_round():
+    """Fails if build_rounds goes back to materialising oracle records.
+
+    The skill's template carries `"round":1`. On a ledger whose work starts at
+    round 5 that used to create a phantom Round(1), which tripped LEDGER-GAP
+    and inflated the ROUND-CAP span to 7.
+    """
+    mid = [oracle(1)] + [subject(n, "s") for n in (5, 6, 7)]
+    rounds = rounds_of(mid)
+    assert [r.number for r in rounds] == [5, 6, 7]
+    blocking, _ = cs.evaluate(rounds)
+    assert blocking == []
+
+
+def test_an_oracle_needs_no_round_at_all():
+    """It is a property of the chain, written before any round happens."""
+    rec_no_round = rec(kind="oracle", command="pytest x", falsifier="delete y")
+    rec_no_round.pop("round")
+    assert cs.check_record(dict(rec_no_round, _where="t:1")) == []
+    blocking, _ = cs.evaluate(rounds_of([rec_no_round, subject(1, "s")]))
+    assert not any("ORACLE-MISSING" in m for m in blocking)
+
+
+def test_a_bare_question_no_longer_silences_unreviewed_fix():
+    """The rule's message always said "no later round declares a subject".
+
+    Keying on "is the last Round object" let one `question` record silence it
+    while the report printed `(no subject declared)` for that round.
+    """
+    blocking, _ = cs.evaluate(rounds_of([
+        oracle(1),
+        subject(1, "s"),
+        subject(2, "s"), finding(2, status="fixed"),
+        rec(round=3, kind="question", status="open", claim="q",
+            evidence="what would close it"),
+    ]))
+    assert any("UNREVIEWED-FIX" in m for m in blocking)
+
+
+def test_a_later_round_with_a_subject_does_clear_unreviewed_fix():
+    """Paired with the above so the rule cannot drift to always-fire."""
+    blocking, _ = cs.evaluate(rounds_of([
+        oracle(1),
+        subject(1, "s"),
+        subject(2, "s"), finding(2, status="fixed"),
+        subject(3, "the fix from round 2"),
+    ]))
+    assert not any("UNREVIEWED-FIX" in m for m in blocking)
+
+
+def test_a_json_null_oracle_field_is_a_violation():
+    """`str(None).strip()` is "None" -- non-empty, so null used to pass.
+
+    null is exactly what a serializer emits for a field nobody filled in, and
+    the report printed the word "None" as the command.
+    """
+    out = cs.check_record(rec(kind="oracle", command=None, falsifier=None,
+                              _where="t:1"))
+    assert len([m for m in out if "oracle must carry" in m]) == 2
+
+
+def test_a_non_string_oracle_field_is_a_violation():
+    """A command is text you can paste, not a number or a list.
+
+    Found by mutation: an implementation that only maps null to "" passes a
+    numeric command, and `str(42)` is non-empty so the required check would
+    have nothing to say about it.
+    """
+    out = cs.check_record(rec(kind="oracle", command=42, falsifier=["a"],
+                              _where="t:1"))
+    assert len([m for m in out if "oracle must carry" in m]) == 2
+
+
+def test_an_empty_ledger_blocks_rather_than_passing():
+    """Was: "an empty ledger says nothing" -- that pinned the defect.
+
+    Silence on an empty ledger made truncating the file the cheapest way to
+    satisfy every other rule, since an honest one-round ledger with no oracle
+    exited 1 while a 0-byte one exited 0. Measured before the fix:
+    empty => rc 0, honest => rc 1.
+    """
+    blocking, _ = cs.evaluate([])
+    assert any("EMPTY-LEDGER" in m for m in blocking)
+
+
+def test_an_oracle_with_no_rounds_is_still_empty():
+    """Declaring the oracle and then never recording a round is not a chain."""
+    blocking, _ = cs.evaluate(rounds_of([oracle(1)]))
+    assert any("EMPTY-LEDGER" in m for m in blocking)
+    assert not any("ORACLE-MISSING" in m for m in blocking)
 
 
 # ============================================================
@@ -643,10 +778,27 @@ def test_main_reports_every_round_on_stdout(tmp_path, capsys):
     assert "+10/-1" in out and "+20/-2" in out
 
 
-def test_main_reports_a_ledger_with_no_rounds(tmp_path, capsys):
+def test_main_blocks_on_a_ledger_with_no_rounds(tmp_path, capsys):
     (tmp_path / cs.LEDGER_NAME).write_text("", encoding="utf-8")
-    assert cs.main(["--scope", str(tmp_path)]) == cs.EXIT_OK
-    assert "no round records" in capsys.readouterr().out
+    assert cs.main(["--scope", str(tmp_path)]) == cs.EXIT_VIOLATION
+    captured = capsys.readouterr()
+    assert "no round records" in captured.out
+    assert "EMPTY-LEDGER" in captured.err
+
+
+def test_every_blocking_message_names_its_ledger(tmp_path, capsys):
+    """Two ledgers, one verdict each -- the reader must be able to tell which.
+
+    FORMAT violations always carried path:lineno; blocking and advisory did
+    not, so a scope with several ledgers produced byte-identical messages.
+    """
+    write_ledger(tmp_path, [subject(1, "s")], subdir="a")
+    write_ledger(tmp_path, [subject(1, "s")], subdir="b")
+    cs.main(["--scope", str(tmp_path)])
+    err = capsys.readouterr().err
+    assert err.count("ORACLE-MISSING") == 2
+    assert "a" + os.sep + cs.LEDGER_NAME in err
+    assert "b" + os.sep + cs.LEDGER_NAME in err
 
 
 # ============================================================

@@ -60,10 +60,24 @@ SURFACE -- and none of them on a reported count. Each survives a round that was
 not honestly reviewed; a count-based rule does not.
 
 The cheapest way to satisfy each rule is worth stating, since a guard whose
-failure message names a cheaper bad fix gets taken apart by whoever reads it:
-ORACLE-MISSING is satisfied by writing a plausible oracle line, ROUND-CAP by
-not recording rounds. Both are lies rather than bypasses, and the ledger is
-append-only, so both leave a trace. Neither is defended against here.
+failure message names a cheaper bad fix gets taken apart by whoever reads it.
+Measured, on this tool, by a blind reviewer who built ledgers and ran them:
+
+* ORACLE-MISSING is satisfied by writing a plausible oracle line.
+* ROUND-CAP is satisfied by splitting one chain across two ledgers under the
+  same scope: each is evaluated separately, so six rounds recorded as 3+3 stay
+  quiet. Every line of that ledger is true; no lying required. The rules are
+  per-ledger by construction and this is not defended against.
+* ROUND-CAP at the boundary is also satisfied by editing a fixed finding's
+  status to claim it is still open. That one IS a lie, and it is the state the
+  rule most wants to see.
+* Deleting the ledger used to satisfy everything, because an empty one exited
+  0 while an honest one exited 1. EMPTY-LEDGER closes that specific hole; the
+  broader point stands, which is that a self-reported ledger cannot be made
+  honest by adding predicates to it.
+
+None of these is defended against. They are named because a reader who finds a
+red and has to guess will find the cheapest of them anyway.
 
 DELIBERATELY NOT A GATE
 =======================
@@ -91,10 +105,10 @@ EXIT CODES (scripts/tools/_lib_exitcodes.py)
 ============================================
   0  ledger read; nothing the caller must act on (advisory SURFACE-DEBT /
      self-review / UNDECIDABLE notes land here)
-  1  a blocking stop rule fired (ORACLE-MISSING / ROUND-CAP / CHANGE-SUBJECT /
-     UNREVIEWED-FIX) or the ledger breaks the format contract (verified claim
-     with no evidence, oracle with no command or falsifier, banned
-     ``speculative`` tier, non-integer surface counter, round numbers skipped)
+  1  a blocking stop rule fired (EMPTY-LEDGER / ORACLE-MISSING / ROUND-CAP /
+     CHANGE-SUBJECT / UNREVIEWED-FIX) or the ledger breaks the format contract
+     (verified claim with no evidence, oracle with no command or falsifier,
+     banned ``speculative`` tier, non-integer surface counter, rounds skipped)
   2  cannot do the job: scope missing, no ROUNDS.jsonl under it, or a line that
      is not readable at all (not UTF-8, not JSON, not a JSON object)
 """
@@ -223,7 +237,15 @@ def check_record(rec):
         out.append(f"{where}: unknown kind {kind!r} (expected one of "
                    f"{', '.join(sorted(KINDS))})")
         return out
-    if not isinstance(rec.get("round"), int):
+    # An oracle is a property of the CHAIN, not of a round: it is written
+    # before any round happens. Requiring a round number on it forced authors
+    # to invent one, and inventing 1 on a ledger opened mid-chain manufactured
+    # a phantom round -- which then tripped LEDGER-GAP and inflated the span.
+    if kind == "oracle":
+        if "round" in rec and not isinstance(rec.get("round"), int):
+            out.append(f"{where}: oracle 'round' is optional, but when present "
+                       f"it must be an integer, got {rec.get('round')!r}")
+    elif not isinstance(rec.get("round"), int):
         out.append(f"{where}: 'round' must be an integer, got "
                    f"{rec.get('round')!r}")
     if kind == "subject":
@@ -246,7 +268,11 @@ def check_record(rec):
         # fill in retroactively, and the one that makes the terminal condition
         # external to the review.
         for field in ("command", "falsifier"):
-            if not str(rec.get(field, "")).strip():
+            value = rec.get(field)
+            # `str(None).strip()` is "None", which is non-empty -- so a JSON
+            # null, the shape a serializer emits for a field nobody filled in,
+            # used to pass the required check and print as the word "None".
+            if not isinstance(value, str) or not value.strip():
                 out.append(
                     f"{where}: oracle must carry non-empty '{field}' "
                     "(command: what to run; falsifier: which production change "
@@ -287,6 +313,7 @@ class Round(object):
         self.open_questions = 0
         self.undecidable = []       # decidability records with verdict=undecidable
         self.oracles = []           # oracle records (command + falsifier)
+        self.is_oracle_only = False  # a holder for a ledger with no real rounds
         self.reviewers = set()
 
     @staticmethod
@@ -315,14 +342,25 @@ class Round(object):
 
 
 def build_rounds(records):
-    """Fold records into Round objects keyed by round number, ascending."""
+    """Fold records into Round objects keyed by round number, ascending.
+
+    Oracle records never CREATE a round. They are chain-level -- written before
+    any round happens -- and materialising one into a Round(1) on a ledger whose
+    work starts at round 5 invented a phantom round that then tripped LEDGER-GAP
+    and inflated the ROUND-CAP span. They are attached to the earliest real
+    round instead, or kept even when the ledger has no rounds at all.
+    """
     rounds = {}
+    oracles = []
     for rec in records:
+        kind = rec.get("kind")
+        if kind == "oracle":
+            oracles.append(rec)
+            continue
         num = rec.get("round")
         if not isinstance(num, int):
             continue
         rnd = rounds.setdefault(num, Round(num))
-        kind = rec.get("kind")
         if kind == "subject":
             rnd.subjects.append(rec)
             reviewer = rec.get("reviewer")
@@ -343,9 +381,18 @@ def build_rounds(records):
         elif kind == "decidability":
             if rec.get("verdict") == "undecidable":
                 rnd.undecidable.append(rec)
-        elif kind == "oracle":
-            rnd.oracles.append(rec)
-    return [rounds[k] for k in sorted(rounds)]
+    ordered = [rounds[k] for k in sorted(rounds)]
+    if oracles:
+        if ordered:
+            ordered[0].oracles.extend(oracles)
+        else:
+            # An oracle and nothing else: keep it visible rather than dropping
+            # it, and let EMPTY-LEDGER say what is missing.
+            holder = Round(0)
+            holder.oracles.extend(oracles)
+            holder.is_oracle_only = True
+            ordered = [holder]
+    return ordered
 
 
 def evaluate(rounds):
@@ -354,8 +401,21 @@ def evaluate(rounds):
     Returns (blocking, advisory) -- two lists of strings.
     """
     blocking, advisory = [], []
-    if not rounds:
+
+    # An empty ledger used to exit 0 while an honest one-round ledger with no
+    # oracle exited 1 -- so the cheapest way to satisfy every rule below was to
+    # truncate the file. That is the same "not looking is the cheapest green"
+    # shape these rules exist to remove, so silence on an empty ledger is a
+    # violation, not a pass.
+    work_rounds = [r for r in rounds if not r.is_oracle_only]
+    if not work_rounds:
+        blocking.append(
+            "EMPTY-LEDGER: this ledger records no rounds. An empty ledger is "
+            "not a converged chain -- it is an unrecorded one, and exiting 0 on "
+            "it would make deleting the file the cheapest way to satisfy every "
+            "other rule here. Append the round you are on, or drop the scope.")
         return blocking, advisory
+    rounds = work_rounds
 
     numbers = [r.number for r in rounds]
     expected = list(range(numbers[0], numbers[0] + len(numbers)))
@@ -367,7 +427,16 @@ def evaluate(rounds):
     # Rule 0 -- the chain never wrote down what would end it. Checked first
     # because every other rule is about HOW the chain runs; this one is about
     # whether it has an end condition at all.
-    if not any(rnd.oracles for rnd in rounds):
+    #
+    # A chain that recorded an `undecidable` verdict is EXEMPT. That verdict is
+    # the protocol's own terminal state -- section 0 says a subject whose legal
+    # and defective cases are isomorphic under the available evidence must be
+    # dropped, not given a predicate. Demanding an oracle there asked the author
+    # to invent one for a question the same ledger had just certified as having
+    # no answer, and the message's own escape hatch ("or stop the chain") had no
+    # record kind behind it.
+    if not any(rnd.oracles for rnd in rounds) \
+            and not any(rnd.undecidable for rnd in rounds):
         blocking.append(
             "ORACLE-MISSING: no round declares kind=oracle. Without one the "
             "terminal condition is 'a reviewer stopped finding things', which "
@@ -375,13 +444,38 @@ def evaluate(rounds):
             "inspection historically surfaces ~30% of defects (median, Wagner "
             "2006 survey) and 61% of reviews find none at all (Cisco, 2500 "
             "reviews) -- so 'zero findings' is the majority event. Declare what "
-            "to run and what would falsify it, or stop the chain.")
+            "to run and what would falsify it, or record the subject as "
+            "undecidable and stop.")
 
-    # Rule 1 -- the chain ran past the cap. The cap is a circuit breaker, not a
+    # Rule 1 -- the chain reached the cap. The cap is a circuit breaker, not a
     # quality judgement: it hands the decision to the owner instead of letting
     # the chain decide it has had enough of itself.
+    #
+    # It fires AT the cap, not past it, and it SUBSUMES rule 3 there. Firing
+    # past it left the boundary with no legal state at all: a round-5 chain that
+    # honestly recorded a fix got UNREVIEWED-FIX ("open a later round"), and
+    # opening round 6 got ROUND-CAP. The only exit that returned 0 was editing
+    # the fixed finding's status to claim it was not fixed -- a lie, aimed
+    # exactly at the rule that exists to stop fixes escaping review.
     span = numbers[-1] - numbers[0] + 1
-    if span > ROUND_CAP:
+    with_subject_pre = [r.number for r in rounds if r.subjects]
+    fixed_pre = [r for r in rounds if r.fixed]
+    unreviewed_fix = None
+    if fixed_pre and not any(n > fixed_pre[-1].number for n in with_subject_pre):
+        unreviewed_fix = fixed_pre[-1]
+    # ROUND_CAP rounds are ALLOWED -- the cap is the ceiling, not the last legal
+    # round. It fires past the cap, and also AT the cap when an unreviewed fix
+    # is pending, because that is the one state with no legal move: rule 3 would
+    # say "open a later round" and rule 1 would then block that round. Merging
+    # the two into one verdict keeps the instruction satisfiable (take it to the
+    # owner, which happens out of band) instead of leaving the only rc=0 exit
+    # being to edit the fixed finding's status into a lie.
+    at_cap = (span > ROUND_CAP) or (span == ROUND_CAP and unreviewed_fix)
+    if at_cap:
+        pending = (f" Round {unreviewed_fix.number} also has "
+                   f"{unreviewed_fix.fixed} unreviewed fix(es); reviewing them "
+                   "is part of what you are taking to the owner, not a round "
+                   "you may open here." if unreviewed_fix else "")
         blocking.append(
             f"ROUND-CAP: this chain is at round {numbers[-1]} ({span} rounds). "
             f"The cap is {ROUND_CAP}. Rounds past it are an owner decision, not "
@@ -390,7 +484,9 @@ def evaluate(rounds):
             "measurably make things worse (GSM8K 95.5 -> 89.0 over two "
             "self-correction rounds, arXiv:2310.01798). Take the open findings "
             "to the owner with the two numbers: how many this round, and how "
-            "many of them your own previous round created.")
+            f"many of them your own previous round created.{pending} A "
+            "continuation the owner approves belongs in a new scope with its "
+            "own ledger and its own oracle -- this one is closed.")
 
     # Rule 2 -- same subject, two dead predicates already.
     by_subject = {}
@@ -407,8 +503,16 @@ def evaluate(rounds):
                 "before #1457 changed the subject).")
 
     # Rule 3 -- the last round shipped a fix that no later round reviewed.
-    last = rounds[-1]
-    if last.fixed:
+    # Suppressed at the cap: rule 1 already says where that fix goes, and
+    # emitting both leaves the boundary with no reachable green state.
+    #
+    # "No later round" now means "no later round that declares a SUBJECT",
+    # which is what the message always said. Keying on "is the last Round
+    # object" let a single `question` record in a later round silence it --
+    # the report printed `(no subject declared)` for that round while the rule
+    # stayed quiet.
+    if unreviewed_fix and not at_cap:
+        last = unreviewed_fix
         blocking.append(
             f"UNREVIEWED-FIX: round {last.number} marks {last.fixed} finding(s) "
             "fixed and no later round declares a subject. The fix is a new "
@@ -531,8 +635,12 @@ def main(argv=None):
         print("")
         all_unparsable.extend(unparsable)
         all_violations.extend(violations)
-        all_blocking.extend(blocking)
-        all_advisory.extend(advisory)
+        # Every verdict names its ledger. FORMAT violations already carry
+        # path:lineno; blocking/advisory did not, so a scope holding several
+        # ledgers produced identical messages with no way to tell which one
+        # they were about.
+        all_blocking.extend(f"{path}: {m}" for m in blocking)
+        all_advisory.extend(f"{path}: {m}" for m in advisory)
 
     for label, items in (("advisory", all_advisory),
                          ("FORMAT", all_violations),
