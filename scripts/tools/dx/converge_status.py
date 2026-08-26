@@ -106,6 +106,15 @@ STATUSES = {"open", "fixed", "rejected", "deferred"}
 SURFACE_RATIO_LIMIT = 10
 SURFACE_INSERTIONS_FLOOR = 300
 
+# A chain may run this many rounds. Past it the tool stops advising and
+# starts blocking: the owner decides whether round N+1 happens, not the
+# chain. 5 matches the circuit breaker obra/superpowers shipped in v6.2.0
+# after hitting the same non-convergence; an empirical repair-loop
+# evaluation puts most obtainable gain in rounds 1-4 (arXiv:2607.05197 --
+# NIER, not a survey). Neither pins the boundary exactly and this repo has
+# not measured one; 5 is the more permissive of the two.
+ROUND_CAP = 5
+
 
 def find_ledgers(scope):
     """Return every ROUNDS.jsonl at or under `scope`, sorted.
@@ -322,32 +331,99 @@ def evaluate(rounds):
         for rec in rnd.dead_ends:
             by_subject.setdefault(str(rec.get("subject", "?")), []).append(rnd.number)
     for subject, where in sorted(by_subject.items()):
-        if len(where) >= 2:
-            blocking.append(
-                f"CHANGE-SUBJECT: {subject!r} has {len(where)} dead ends "
-                f"(rounds {', '.join(str(w) for w in where)}). A third predicate "
-                "on the same subject is banned -- go back to the decidability "
-                "gate and change what is being judged (#1443: v1/v2/v3 all died "
-                "before #1457 changed the subject).")
-
-    # Rule 3 -- the last round shipped a fix that no later round reviewed.
-    last = rounds[-1]
-    if last.fixed:
-        blocking.append(
-            f"UNREVIEWED-FIX: round {last.number} marks {last.fixed} finding(s) "
-            "fixed and no later round declares a subject. The fix is a new "
-            "surface, measured at 1.6x the reviewed one (#1431, 814 -> 1336 "
-            "lines, where the second pass found the chain's only Critical). "
-            "Open a round whose subject IS that fix.")
-
-    # Rule 1 -- two consecutive quiet rounds.
-    if len(rounds) >= 2 and not blocking:
-        tail = rounds[-2:]
-        if all(r.verified == 0 for r in tail):
+        if len(where) < 2:
+            continue
+        # It CLEARS when a later round declares a different subject, because
+        # that is the action the message asks for. It used to be permanent:
+        # a chain that did exactly what it said kept the identical message
+        # forever, and the ledger is append-only so the dead end could not
+        # be withdrawn -- turning the one act the protocol calls more
+        # valuable than a finding into a one-way door out of reporting done.
+        moved_on = [r.number for r in rounds
+                    if r.number > where[-1]
+                    and any(s != subject for s in r.subject_names)]
+        if moved_on:
             advisory.append(
-                f"CONVERGED: rounds {tail[0].number} and {tail[1].number} each "
-                "produced 0 verified findings. Stop -- a third confirming round "
-                "is the surface growth this protocol exists to prevent.")
+                f"CHANGE-SUBJECT cleared: {subject!r} had {len(where)} dead "
+                f"ends (rounds {', '.join(str(w) for w in where)}) and round "
+                f"{moved_on[0]} moved to a different subject. Recorded so "
+                "the graveyard stays visible.")
+            continue
+        blocking.append(
+            f"CHANGE-SUBJECT: {subject!r} has {len(where)} dead ends "
+            f"(rounds {', '.join(str(w) for w in where)}). A third predicate "
+            "on the same subject is banned -- go back to the decidability "
+            "gate and change what is being judged (#1443: v1/v2/v3 all died "
+            "before #1457 changed the subject). Declaring a different "
+            "subject in a later round clears this.")
+
+    # Rule 3 -- a fix that no later round reviewed.
+    #
+    # "No later round" means "no later round that declares a SUBJECT", which
+    # is what the message always said. Keying on "is the last Round object"
+    # let a single `question` record in a later round silence it while the
+    # report printed `(no subject declared)` for that round.
+    with_subject = [r.number for r in rounds if r.subjects]
+    fixed_rounds = [r for r in rounds if r.fixed]
+    unreviewed_fix = None
+    if fixed_rounds and not any(n > fixed_rounds[-1].number
+                                for n in with_subject):
+        unreviewed_fix = fixed_rounds[-1]
+
+    # Rule 1 -- the chain reached the cap.
+    #
+    # ROUND_CAP rounds are ALLOWED: the cap is the ceiling, not the last
+    # legal round. It fires past the cap, and also AT the cap when an
+    # unreviewed fix is pending, because that is the one state with no legal
+    # move -- rule 3 would say "open a later round" and this rule would then
+    # block it, leaving the only rc=0 exit as editing the fixed finding's
+    # status into a lie.
+    span = numbers[-1] - numbers[0] + 1
+    at_cap = (span > ROUND_CAP) or (span == ROUND_CAP
+                                    and unreviewed_fix is not None)
+    if at_cap:
+        pending = (f" Round {unreviewed_fix.number} also has "
+                   f"{unreviewed_fix.fixed} unreviewed fix(es); reviewing "
+                   "them is part of what you take to the owner, not a round "
+                   "you may open here." if unreviewed_fix else "")
+        blocking.append(
+            f"ROUND-CAP: this chain is at round {numbers[-1]} ({span} "
+            f"rounds). The cap is {ROUND_CAP}. Rounds past it are an owner "
+            "decision, not a chain decision -- most obtainable gain lands in "
+            "rounds 1-4 (arXiv:2607.05197) and without an external check "
+            "further rounds measurably make things worse (GSM8K 95.5 -> 89.0 "
+            "over two self-correction rounds, arXiv:2310.01798). Take the "
+            "open findings to the owner with the two numbers: how many this "
+            "round, and how many of them your own previous round created."
+            f"{pending} This ledger is closed. A continuation the owner "
+            "approves starts a new scope -- and note the tool CANNOT tell "
+            "that apart from splitting this chain to escape the cap, which "
+            "is its cheapest unguarded bypass. What makes it a continuation "
+            "is the owner saying so. If the owner is not reachable right "
+            "now, that is not a reason to keep going: stop here and write "
+            "the handoff -- subject, findings still open, dead ends already "
+            "paid for -- so the next hand can start from it. That exit is "
+            "named here because the rule used to say only 'take it to the "
+            "owner', which left whoever could not find one to improvise, "
+            "and the cheapest thing to improvise is the second ledger.")
+
+    if unreviewed_fix and not at_cap:
+        blocking.append(
+            f"UNREVIEWED-FIX: round {unreviewed_fix.number} marks "
+            f"{unreviewed_fix.fixed} finding(s) fixed and no later round "
+            "declares a subject. The fix is a new surface, measured at 1.6x "
+            "the reviewed one (#1431, 814 -> 1336 lines, where the second "
+            "pass found the chain's only Critical). Open a round whose "
+            "subject IS that fix.")
+
+    # REMOVED: a CONVERGED rule keyed on "two consecutive rounds reported 0
+    # verified findings". It rewarded the cheapest possible green -- not
+    # looking -- and this module's own honesty section already said a round
+    # that was never honestly reviewed is indistinguishable from one that
+    # was. NOTHING REPLACES IT: ROUND-CAP is a budget, not a verdict. This
+    # tool has no terminal condition, and format_report says so every run.
+    # Why not simply raise the threshold to three quiet rounds: the proxy is
+    # the problem, not its value. See the skill's references/derivation.md.
 
     # Advisory -- surface budget.
     for rnd in rounds:
@@ -381,8 +457,18 @@ def evaluate(rounds):
     return blocking, advisory
 
 
+# Printed on every run, unconditionally. Silence used to carry the meaning
+# "done": a round that reported nothing and a chain that had actually
+# finished produced identical output and the same exit code, which is the
+# substitution the deleted CONVERGED rule made. This tool cannot tell them
+# apart, so it says so rather than letting the quiet imply it.
+_NO_VERDICT = ("  NOTE: this tool has no terminal condition. A quiet run "
+               "means no rule fired -- NOT that the work is done.")
+
+
 def format_report(path, rounds):
     lines = [f"== {path} =="]
+    lines.append(_NO_VERDICT)
     if not rounds:
         lines.append("  (no round records)")
         return lines

@@ -3,20 +3,23 @@
 The tool is the observable half of the ``vibe-converge`` protocol: it is the
 only thing that turns a ROUNDS.jsonl ledger into a verdict, and nothing in CI
 re-derives that verdict, so a silent regression here would be invisible. The
-protocol's whole claim is that stop rules 2 and 3 fire on the SUBJECT and the
-SURFACE rather than on self-reported finding counts -- so those two rules get
-the replay test below, driven by the numbers actually measured on the
-#1411 -> #1457 chain.
+protocol's whole claim is that no rule treats a LOW finding count as a reason
+to stop -- CHANGE-SUBJECT and UNREVIEWED-FIX key on the SUBJECT and on fixes
+instead, and both get the replay test below, driven by the numbers actually
+measured on the #1411 -> #1457 chain. (SURFACE-DEBT is advisory, not a stop
+rule.)
 
 Coverage:
   - check_record: unknown kind / non-int round / bad tier / banned
     'speculative' / bad status / verified-without-evidence /
     dead-end-without-evidence / inferred needs no evidence
   - build_rounds: per-kind folding, multi-subject rounds, reviewer set
-  - evaluate: CHANGE-SUBJECT (>=2 dead ends, one subject) / UNREVIEWED-FIX
-    (last round fixed, no later subject) / LEDGER-GAP / CONVERGED (two quiet
-    rounds) / CONVERGED suppressed while blocking / SURFACE-DEBT advisory /
-    SELF-REVIEW-ZERO / UNDECIDABLE
+  - evaluate: ROUND-CAP (both sides of the boundary, the pinned constant,
+    and its merge with UNREVIEWED-FIX at the cap) / CHANGE-SUBJECT (fires,
+    and clears when a later round changes the subject) / UNREVIEWED-FIX
+    (names the round that holds the fix; a bare question does not silence
+    it) / LEDGER-GAP / SURFACE-DEBT advisory / SELF-REVIEW-ZERO /
+    UNDECIDABLE / the always-printed no-terminal-condition note
   - find_ledgers: file directly, nested dirs, none
   - parse_ledger encoding: non-UTF-8 line reported not raised, one bad line does
     not blind the rest of the ledger, BOM stripped, CRLF tolerated, unreadable
@@ -270,37 +273,114 @@ def test_ledger_opened_mid_chain_is_not_a_gap():
     assert not any("LEDGER-GAP" in m for m in blocking)
 
 
-def test_converged_needs_two_consecutive_quiet_rounds():
-    _, advisory = cs.evaluate(rounds_of([
-        subject(1, "s"), finding(1, status="rejected"),
-        subject(2, "s"),
-        subject(3, "s"),
-    ]))
-    assert any("CONVERGED" in m for m in advisory)
+# The four CONVERGED tests that stood here are deleted, not ported. Three
+# of them asserted CONVERGED was ABSENT, so removing the rule would have
+# left them green and vacuous -- an absence assertion is satisfied by
+# deleting the thing it watches. Deleting a rule means deleting the tests
+# that only said when it stays quiet.
 
 
-def test_not_converged_when_the_last_round_still_found_something():
-    _, advisory = cs.evaluate(rounds_of([
+def test_the_cap_is_five():
+    """Pinned, not derived.
+
+    The boundary tests below build their fixtures from literal round
+    numbers on purpose: a fixture built from cs.ROUND_CAP moves with the
+    constant, so raising the cap would leave every boundary test green.
+    Measured -- that was the first version of these tests, and setting
+    ROUND_CAP = 500 survived the whole file.
+    """
+    assert cs.ROUND_CAP == 5
+
+
+def test_round_cap_blocks_past_the_cap_and_stays_quiet_at_it():
+    """Both sides: at 5 rounds it must NOT fire, at 6 it must.
+
+    A one-sided version would pass an implementation that blocks every
+    chain, and the cap is a budget the owner set -- silently turning five
+    allowed rounds into four is a defect in the other direction.
+    """
+    at_cap = [subject(n, "s") for n in range(1, 6)]
+    blocking, _ = cs.evaluate(rounds_of(at_cap))
+    assert not any("ROUND-CAP" in m for m in blocking)
+
+    past = at_cap + [subject(6, "s")]
+    blocking, _ = cs.evaluate(rounds_of(past))
+    assert any("ROUND-CAP" in m for m in blocking)
+
+
+def test_round_cap_names_an_exit_for_when_the_owner_is_not_reachable():
+    """Fails if the message stops naming the handoff exit.
+
+    The rule used to say only "take it to the owner". A reader who cannot
+    find one has to improvise, and the cheapest thing to improvise is the
+    second ledger -- the tool's own cheapest unguarded bypass, which the
+    same message names two sentences earlier. A failure message naming a
+    cheaper wrong move than its right one gets the wrong one done.
+    """
+    past = [subject(n, "s") for n in range(1, 7)]
+    blocking, _ = cs.evaluate(rounds_of(past))
+    cap = [m for m in blocking if "ROUND-CAP" in m]
+    assert len(cap) == 1
+    assert "handoff" in cap[0]
+    assert "not reachable" in cap[0]
+
+
+def test_round_cap_counts_the_span_not_the_record_count():
+    """A ledger opened mid-chain (rounds 5..10) is 6 rounds, not 10."""
+    mid = [subject(n, "s") for n in range(5, 11)]
+    blocking, _ = cs.evaluate(rounds_of(mid))
+    assert any("ROUND-CAP" in m and "(6 rounds)" in m for m in blocking)
+
+
+def test_the_cap_boundary_with_a_pending_fix_has_a_reachable_state():
+    """Fails if ROUND-CAP stops subsuming UNREVIEWED-FIX at the boundary.
+
+    Measured before the merge: a 5-round chain that honestly recorded a fix
+    got UNREVIEWED-FIX ("open a later round"); opening round 6 got
+    ROUND-CAP. Both rc=1, no legal move, and the only rc=0 exit was
+    relabelling the fixed finding as still open -- a lie aimed at the rule
+    meant to stop fixes escaping review.
+    """
+    at_cap_with_fix = ([subject(n, "s") for n in range(1, 6)]
+                       + [finding(5, status="fixed")])
+    blocking, _ = cs.evaluate(rounds_of(at_cap_with_fix))
+    assert any("ROUND-CAP" in m for m in blocking)
+    assert not any("UNREVIEWED-FIX" in m for m in blocking)
+    assert any("unreviewed fix" in m for m in blocking)
+
+
+def test_a_bare_question_no_longer_silences_unreviewed_fix():
+    """The rule's message always said "no later round declares a subject".
+
+    Keying on "is the last Round object" let one `question` record silence
+    it while the report printed `(no subject declared)` for that round.
+    """
+    blocking, _ = cs.evaluate(rounds_of([
         subject(1, "s"),
-        subject(2, "s"), finding(2, status="open"),
+        subject(2, "s"), finding(2, status="fixed"),
+        rec(round=3, kind="question", status="open", claim="q",
+            evidence="what would close it"),
     ]))
-    assert not any("CONVERGED" in m for m in advisory)
+    assert any("UNREVIEWED-FIX" in m for m in blocking)
 
 
-def test_converged_is_suppressed_while_a_blocking_rule_holds():
-    """A chain sitting on a banned third predicate must not read as done."""
-    blocking, advisory = cs.evaluate(rounds_of([
-        subject(1, "pred"), dead_end(1, "pred"),
-        subject(2, "pred"), dead_end(2, "pred"),
-        subject(3, "pred"),
+def test_unreviewed_fix_names_the_round_that_actually_holds_the_fix():
+    """Fails if the rule picks the FIRST round with a fix instead of the last.
+
+    Found by mutation: fixed_rounds[-1] -> [0] survived the whole file, and
+    the message it produced said "round 2 ... and no later round declares a
+    subject" on a ledger where round 3 declares one.
+    """
+    blocking, _ = cs.evaluate(rounds_of([
+        subject(1, "s"),
+        subject(2, "s"), finding(2, status="fixed"),
+        subject(3, "the fix from round 2"),
+        subject(4, "s"), finding(4, status="fixed"),
     ]))
-    assert any("CHANGE-SUBJECT" in m for m in blocking)
-    assert not any("CONVERGED" in m for m in advisory)
-
-
-def test_single_round_never_converges():
-    _, advisory = cs.evaluate(rounds_of([subject(1, "s")]))
-    assert not any("CONVERGED" in m for m in advisory)
+    msg = [m for m in blocking if "UNREVIEWED-FIX" in m]
+    assert len(msg) == 1
+    assert "round 4" in msg[0]
+    assert "round 2" not in msg[0]
 
 
 def test_evaluate_on_an_empty_ledger_says_nothing():
@@ -553,7 +633,14 @@ def test_main_exits_violation_on_a_format_break_alone(tmp_path, capsys):
     assert "FORMAT" in capsys.readouterr().err
 
 
-def test_main_exits_ok_on_a_converged_chain(tmp_path, capsys):
+def test_main_exits_ok_on_a_quiet_chain_but_never_calls_it_done(
+        tmp_path, capsys):
+    """A quiet chain exits 0 -- and the report says that is not "done".
+
+    This replaces a test that asserted CONVERGED on the same ledger. The
+    exit code cannot carry "finished" (a chain still in progress also has
+    no violations), so the report states it in words on every run.
+    """
     write_ledger(tmp_path, [
         subject(1, "s"), finding(1, status="rejected"),
         subject(2, "s"),
@@ -561,8 +648,17 @@ def test_main_exits_ok_on_a_converged_chain(tmp_path, capsys):
     ])
     assert cs.main(["--scope", str(tmp_path)]) == cs.EXIT_OK
     captured = capsys.readouterr()
-    assert "CONVERGED" in captured.err
+    assert "CONVERGED" not in captured.err
     assert "round 3" in captured.out
+    assert "no terminal condition" in captured.out
+
+
+def test_the_no_terminal_condition_note_prints_even_on_an_empty_ledger(
+        tmp_path, capsys):
+    """Fails if the note becomes conditional on having rounds."""
+    (tmp_path / cs.LEDGER_NAME).write_text("", encoding="utf-8")
+    cs.main(["--scope", str(tmp_path)])
+    assert "no terminal condition" in capsys.readouterr().out
 
 
 def test_main_requires_scope():
@@ -618,11 +714,32 @@ def test_changing_the_subject_is_what_clears_the_chain():
     The new subject carries no dead end, so the ban lifts for it — but the old
     subject's ban is history and stays recorded.
     """
-    blocking, _ = cs.evaluate(rounds_of([
+    blocking, advisory = cs.evaluate(rounds_of([
         subject(1, "pred"), dead_end(1, "pred"),
         subject(2, "pred"), dead_end(2, "pred"),
         subject(3, "schema conformance of the defaults doc"),
         subject(4, "the fix from round 3"),
     ]))
-    assert [m for m in blocking if "CHANGE-SUBJECT" in m and "'pred'" in m]
-    assert not any("schema conformance" in m for m in blocking)
+    # the graveyard entry survives -- as a note, not as a permanent red
+    assert [m for m in advisory
+            if "CHANGE-SUBJECT cleared" in m and "'pred'" in m]
+    assert not any("CHANGE-SUBJECT" in m for m in blocking)
+    assert not any("schema conformance" in m for m in blocking + advisory)
+
+
+def test_change_subject_stays_blocking_until_the_subject_actually_changes():
+    """The other side: doing nothing must NOT clear it.
+
+    Measured before the fix: doing exactly what the message asks -- record
+    the second dead end, then declare a different subject -- left the
+    identical blocking message in place forever, and the ledger is
+    append-only so the dead end could not be withdrawn. That turned the one
+    act the protocol calls more valuable than a finding into a one-way door
+    out of ever reporting done.
+    """
+    blocking, _ = cs.evaluate(rounds_of([
+        subject(1, "pred"), dead_end(1, "pred"),
+        subject(2, "pred"), dead_end(2, "pred"),
+        subject(3, "pred"),
+    ]))
+    assert any("CHANGE-SUBJECT" in m and "'pred'" in m for m in blocking)
