@@ -525,6 +525,24 @@ def evaluate(rounds):
             "to run and what would falsify it, or record the subject as "
             "undecidable and stop.")
 
+    # An oracle-result may name the command it ran. When it does, that command
+    # has to be one this ledger actually declared -- otherwise a result from a
+    # different oracle can finish the chain. When it does NOT, the tool cannot
+    # bind the two at all; on a ledger with several oracles (this protocol's own
+    # ledger has three) any of them could be the one that passed. That gap is
+    # open and named rather than closed by guessing.
+    declared_cmds = {str(rec.get("command", "")).strip()
+                     for rnd in rounds for rec in rnd.oracles}
+    for rnd in rounds:
+        for rec in rnd.results:
+            named = str(rec.get("command", "")).strip()
+            if named and named not in declared_cmds:
+                blocking.append(
+                    f"ORACLE-RESULT-UNBOUND: round {rnd.number} records a "
+                    f"result for {named!r}, which no oracle in this ledger "
+                    "declares. A result for some other command cannot finish "
+                    "this chain.")
+
     # Rule 1 -- the chain reached the cap. The cap is a circuit breaker, not a
     # quality judgement: it hands the decision to the owner instead of letting
     # the chain decide it has had enough of itself.
@@ -673,18 +691,30 @@ def _verdict_line(rounds):
     either (0 means "no violation", which an in-progress chain also has), so it
     is stated in words and sourced from a record somebody had to write.
     """
-    passes = [(r.number, rec) for r in rounds for rec in r.results
-              if rec.get("passed") is True]
-    fails = [(r.number, rec) for r in rounds for rec in r.results
-             if rec.get("passed") is False]
-    if passes:
-        number, rec = passes[-1]
-        return (f"  VERDICT: FINISHED -- oracle recorded as passed in round "
-                f"{number} ({str(rec.get('evidence', '')).strip() or 'no evidence'})")
-    if fails:
-        number, _ = fails[-1]
-        return (f"  VERDICT: NOT FINISHED -- last oracle-result (round "
-                f"{number}) says the oracle did not pass")
+    results = [(r.number, rec) for r in rounds for rec in r.results]
+    if results:
+        # The LAST result wins, not the last passing one. An oracle-result is a
+        # temporal record in an append-only ledger: "it passed once" is not
+        # "it passes now". Measured before this: a ledger recording passed=true
+        # in round 2 and passed=false in round 3 still printed FINISHED.
+        number, rec = results[-1]
+        if rec.get("passed") is not True:
+            return (f"  VERDICT: NOT FINISHED -- the last oracle-result (round "
+                    f"{number}) says the oracle did not pass")
+        # ...and a pass does not survive work done after it. Measured: a chain
+        # that passed in round 1 and then ran two more rounds with an open
+        # verified finding still printed FINISHED.
+        after = [r for r in rounds
+                 if r.number > number and (r.subjects or r.verified or r.inferred)]
+        if after:
+            return (f"  VERDICT: NOT FINISHED -- oracle passed in round "
+                    f"{number}, but round {after[0].number} declared more work "
+                    "after it. Re-record the result for the current state")
+        named = str(rec.get("command", "")).strip()
+        which = f" for {named!r}" if named else ""
+        return (f"  VERDICT: FINISHED -- oracle recorded as passed{which} in "
+                f"round {number} "
+                f"({str(rec.get('evidence', '')).strip() or 'no evidence'})")
     return ("  VERDICT: NOT FINISHED -- no oracle-result recorded. A quiet run "
             "means no rule fired, NOT that the work is done")
 

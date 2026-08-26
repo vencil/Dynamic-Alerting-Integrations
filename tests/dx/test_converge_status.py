@@ -421,6 +421,59 @@ def test_an_oracle_result_needs_a_real_boolean_and_evidence():
                                evidence="cmd => rc=1", _where="t:1")) == []
 
 
+def test_a_later_failure_beats_an_earlier_pass(tmp_path, capsys):
+    """An oracle-result is temporal: "it passed once" is not "it passes now".
+
+    Measured before the fix: passed=true in round 2 and passed=false in round 3
+    still printed FINISHED -- because the verdict looked at the last PASSING
+    result instead of the last result.
+    """
+    write_ledger(tmp_path, [
+        oracle(1), subject(1, "s"), subject(2, "s"),
+        rec(round=2, kind="oracle-result", passed=True, evidence="cmd => rc=0"),
+        subject(3, "s"),
+        rec(round=3, kind="oracle-result", passed=False, evidence="cmd => rc=1"),
+    ])
+    cs.main(["--scope", str(tmp_path)])
+    assert "VERDICT: NOT FINISHED" in capsys.readouterr().out
+
+
+def test_a_pass_does_not_survive_work_recorded_after_it(tmp_path, capsys):
+    """Measured: passed in round 1, then two more rounds with an open finding,
+    and the report still said FINISHED."""
+    write_ledger(tmp_path, [
+        oracle(1), subject(1, "s"),
+        rec(round=1, kind="oracle-result", passed=True, evidence="cmd => rc=0"),
+        subject(2, "s"), finding(2, status="open"),
+    ])
+    cs.main(["--scope", str(tmp_path)])
+    out = capsys.readouterr().out
+    assert "VERDICT: NOT FINISHED" in out
+    assert "declared more work after it" in out
+
+
+def test_an_oracle_result_for_an_undeclared_command_blocks():
+    """A result for some other command cannot finish this chain."""
+    blocking, _ = cs.evaluate(rounds_of([
+        oracle(1, command="pytest tests/a.py"),
+        subject(1, "s"),
+        rec(round=1, kind="oracle-result", passed=True, command="echo yes",
+            evidence="echo yes => rc=0"),
+    ]))
+    assert any("ORACLE-RESULT-UNBOUND" in m for m in blocking)
+
+
+def test_an_oracle_result_naming_a_declared_command_is_fine():
+    """Paired so the check cannot drift to rejecting every named result."""
+    blocking, _ = cs.evaluate(rounds_of([
+        oracle(1, command="pytest tests/a.py"),
+        subject(1, "s"),
+        rec(round=1, kind="oracle-result", passed=True,
+            command="pytest tests/a.py", evidence="=> 3 passed, rc=0"),
+    ]))
+    assert not any("ORACLE-RESULT-UNBOUND" in m for m in blocking)
+
+
 def test_a_failed_oracle_result_does_not_read_as_finished(tmp_path, capsys):
     """Paired with the above so FINISHED cannot drift to 'any result present'."""
     write_ledger(tmp_path, [
