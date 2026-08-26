@@ -44,7 +44,7 @@ description: IaC-aware 兩階段 review — code 走 spec→quality、IaC 走 bl
 
 ⚠️ **判別語**：一條指示若讓 reviewer 依「有多嚴重／有多少條」決定閉嘴，放收件端；若讓它依「這是不是一個具體的失效」決定，放 prompt 端。
 
-⛔ **生成物不進 review 視野**（`.claude/**` 是 `agents/**` 的逐位元副本）。實測：一輪外部 review 的 7 條 finding 裡 **3 條落在生成鏡像上**——同一條 finding 被審了兩次。
+⛔ **生成物不進 review 視野**（`.claude/**` 是由 `agents/**` 產生的鏡像，內容相同但**第 1 行多一列產生物標頭**，所以不是逐位元副本）。實測：一輪外部 review 的 7 條 finding 裡 **3 條落在生成鏡像上**——同一條 finding 被審了兩次。
 
 **2. verify-before-asserting（review finding 是一個 claim）**
 - 報 finding 前先 **grep + cite 實際 code** 佐證，不照 pattern-match 的直覺報。（燒過：外部 reviewer 對合法 Workflow-DSL top-level `return` 誤報 illegal-return、對 repo 未 enforce 的 lint 規則亂標——plausible-but-wrong；take / reframe / **reject** 前先驗那條規則 repo CI 真的擋嗎。）

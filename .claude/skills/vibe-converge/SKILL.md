@@ -54,7 +54,7 @@ description: 多輪修正的收斂協議 —— decidability gate（開工前先
 
 ## ⛔ 停止條件不是「審到零 finding」——而且本協議沒有終止條件
 
-舊的規則 1（`CONVERGED`：連續 2 輪各 0 條 verified finding）**已刪除**。三條外部量測把它打死：
+舊的規則 1（`CONVERGED`：連續 2 輪各 0 條 verified finding）**已刪除**。三條外部證據把它打死（⚠️ 前兩條是量化研究，第三條是**規範性判準**不是量測——不要把三者一起當成量化依據）：
 
 - 單次 inspection 歷史上只撈到約 **30%** 的既存缺陷（跨研究中位數，Wagner 2006 綜述）
 - **61%** 的 review 一個缺陷都沒找到（Cisco，2500 reviews / 3.2M LOC）⇒ 零 finding 是**多數事件**，不具鑑別力
