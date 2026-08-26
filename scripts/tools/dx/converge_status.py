@@ -396,8 +396,11 @@ def evaluate(rounds):
                    "them is part of what you take to the owner, not a round "
                    "you may open here." if unreviewed_fix else "")
         blocking.append(
-            f"ROUND-CAP: this chain is at round {numbers[-1]} ({span} "
-            f"rounds). The cap is {ROUND_CAP}. Rounds past it are an owner "
+            f"ROUND-CAP: this chain is at round {numbers[-1]}, and {span} of "
+            "its rounds reviewed something (declared a subject, or recorded a "
+            f"finding or a dead end). The cap is {ROUND_CAP} REVIEWING rounds "
+            "-- a row carrying only questions spends nothing. Rounds past it "
+            "are an owner "
             "decision, not a chain decision -- most obtainable gain lands in "
             "rounds 1-4 (arXiv:2607.05197) and without an external check "
             "further rounds measurably make things worse (GSM8K 95.5 -> 89.0 "
@@ -406,15 +409,17 @@ def evaluate(rounds):
             "round, and how many of them your own previous round created."
             f"{pending} This ledger is closed. A continuation the owner "
             "approves starts a new scope -- and note the tool CANNOT tell "
-            "that apart from splitting this chain to escape the cap, which "
-            "is its cheapest unguarded bypass. What makes it a continuation "
-            "is the owner saying so. If the owner is not reachable right "
-            "now, that is not a reason to keep going: stop here and write "
-            "the handoff -- subject, findings still open, dead ends already "
-            "paid for -- so the next hand can start from it. That exit is "
-            "named here because the rule used to say only 'take it to the "
-            "owner', which left whoever could not find one to improvise, "
-            "and the cheapest thing to improvise is the second ledger.")
+            "that apart from several ways of escaping this cap that cost "
+            "nothing and need no lie; the ledger cannot see any of them, and "
+            "the skill's honesty section lists the ones this repo has "
+            "measured. What makes it a continuation is the owner saying so. "
+            "If the owner is not reachable right now, that is not a reason "
+            "to keep going: stop here and write the handoff -- subject, "
+            "findings still open, dead ends already paid for -- so the next "
+            "hand can start from it. That exit is named here because the "
+            "rule used to say only 'take it to the owner', which left "
+            "whoever could not find one to improvise, and every cheap thing "
+            "to improvise here is a way of not being counted.")
 
     if unreviewed_fix and not at_cap:
         blocking.append(

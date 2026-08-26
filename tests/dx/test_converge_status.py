@@ -341,10 +341,15 @@ def test_round_cap_names_an_exit_for_when_the_owner_is_not_reachable():
     """Fails if the message stops naming the handoff exit.
 
     The rule used to say only "take it to the owner". A reader who cannot
-    find one has to improvise, and the cheapest thing to improvise is the
-    second ledger -- the tool's own cheapest unguarded bypass, which the
-    same message names two sentences earlier. A failure message naming a
-    cheaper wrong move than its right one gets the wrong one done.
+    find one has to improvise, and every cheap thing to improvise here is a
+    way of not being counted. A failure message that leaves a reader with
+    only wrong moves gets a wrong one done.
+
+    This docstring used to call the second ledger "the cheapest bypass".
+    That was wrong and the message said it too: not incrementing the round
+    number is cheaper, because it does not even need a second file
+    (measured: four real rounds plus four reviews all filed under round 5
+    gives rc=0, on this branch and on main alike).
     """
     past = [subject(n, "s") for n in range(1, 7)]
     blocking, _ = cs.evaluate(rounds_of(past))
@@ -354,11 +359,22 @@ def test_round_cap_names_an_exit_for_when_the_owner_is_not_reachable():
     assert "not reachable" in cap[0]
 
 
-def test_round_cap_counts_the_span_not_the_record_count():
-    """A ledger opened mid-chain (rounds 5..10) is 6 rounds, not 10."""
+def test_round_cap_reports_what_it_counted_not_just_a_bare_number():
+    """A ledger opened mid-chain (rounds 5..10) spent 6 of the budget, not 10.
+
+    The number and the word have to move together. The message used to read
+    "at round 10 (6 rounds)" back when the count was a span of round numbers;
+    now it counts rounds that reviewed something, and a reader who sees a
+    bare "(N rounds)" beside a different round number cannot tell which of
+    the two it means.
+    """
     mid = [subject(n, "s") for n in range(5, 11)]
     blocking, _ = cs.evaluate(rounds_of(mid))
-    assert any("ROUND-CAP" in m and "(6 rounds)" in m for m in blocking)
+    cap = [m for m in blocking if "ROUND-CAP" in m]
+    assert len(cap) == 1
+    assert "at round 10" in cap[0]
+    assert "6 of its rounds reviewed something" in cap[0]
+    assert "REVIEWING rounds" in cap[0]
 
 
 def test_the_cap_boundary_with_a_pending_fix_has_a_reachable_state():
