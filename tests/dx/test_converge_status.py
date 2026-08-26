@@ -308,6 +308,23 @@ def test_round_cap_blocks_past_the_cap_and_stays_quiet_at_it():
     assert any("ROUND-CAP" in m for m in blocking)
 
 
+def test_round_cap_names_an_exit_for_when_the_owner_is_not_reachable():
+    """Fails if the message stops naming the handoff exit.
+
+    The rule used to say only "take it to the owner". A reader who cannot
+    find one has to improvise, and the cheapest thing to improvise is the
+    second ledger -- the tool's own cheapest unguarded bypass, which the
+    same message names two sentences earlier. A failure message naming a
+    cheaper wrong move than its right one gets the wrong one done.
+    """
+    past = [subject(n, "s") for n in range(1, 7)]
+    blocking, _ = cs.evaluate(rounds_of(past))
+    cap = [m for m in blocking if "ROUND-CAP" in m]
+    assert len(cap) == 1
+    assert "handoff" in cap[0]
+    assert "not reachable" in cap[0]
+
+
 def test_round_cap_counts_the_span_not_the_record_count():
     """A ledger opened mid-chain (rounds 5..10) is 6 rounds, not 10."""
     mid = [subject(n, "s") for n in range(5, 11)]

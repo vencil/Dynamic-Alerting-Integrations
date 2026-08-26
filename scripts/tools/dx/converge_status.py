@@ -399,7 +399,13 @@ def evaluate(rounds):
             "approves starts a new scope -- and note the tool CANNOT tell "
             "that apart from splitting this chain to escape the cap, which "
             "is its cheapest unguarded bypass. What makes it a continuation "
-            "is the owner saying so.")
+            "is the owner saying so. If the owner is not reachable right "
+            "now, that is not a reason to keep going: stop here and write "
+            "the handoff -- subject, findings still open, dead ends already "
+            "paid for -- so the next hand can start from it. That exit is "
+            "named here because the rule used to say only 'take it to the "
+            "owner', which left whoever could not find one to improvise, "
+            "and the cheapest thing to improvise is the second ledger.")
 
     if unreviewed_fix and not at_cap:
         blocking.append(
