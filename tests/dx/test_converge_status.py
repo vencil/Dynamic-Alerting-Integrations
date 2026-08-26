@@ -292,6 +292,35 @@ def test_the_cap_is_five():
     assert cs.ROUND_CAP == 5
 
 
+def test_a_row_that_reviewed_nothing_does_not_spend_cap_budget():
+    """Fails if the cap goes back to counting round numbers.
+
+    Measured before this: five reviewing rounds gave rc=0, and the same five
+    plus one row carrying only a question gave rc=1. The ledger has nowhere
+    else to put a record that belongs to the chain but not to any round
+    (#1574), so the person who wrote one down paid a round of budget and the
+    person who did not paid nothing.
+    """
+    five = [subject(n, "s") for n in range(1, 6)]
+    bookkeeping = rec(round=6, kind="question", status="open", claim="c",
+                      evidence="e")
+    blocking, _ = cs.evaluate(rounds_of(five + [bookkeeping]))
+    assert not any("ROUND-CAP" in m for m in blocking)
+
+
+def test_a_round_that_found_things_spends_budget_even_with_no_subject():
+    """The evasion the rule above opens, closed.
+
+    If only declared subjects counted, a sixth round could review, file its
+    findings, omit one field, and never reach the cap. Findings and dead ends
+    count too, so the only way out left is filing findings as questions --
+    which drops their status, so UNREVIEWED-FIX stops seeing the fixes.
+    """
+    five = [subject(n, "s") for n in range(1, 6)]
+    blocking, _ = cs.evaluate(rounds_of(five + [finding(6)]))
+    assert any("ROUND-CAP" in m for m in blocking)
+
+
 def test_round_cap_blocks_past_the_cap_and_stays_quiet_at_it():
     """Both sides: at 5 rounds it must NOT fire, at 6 it must.
 

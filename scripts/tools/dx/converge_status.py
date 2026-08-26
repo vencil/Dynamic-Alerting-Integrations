@@ -243,6 +243,7 @@ class Round(object):
     def __init__(self, number):
         self.number = number
         self.subjects = []          # subject records
+        self.findings = 0           # findings, any tier (incl. a bad one)
         self.verified = 0           # findings, tier=verified
         self.inferred = 0
         self.fixed = 0              # findings, status=fixed
@@ -291,6 +292,7 @@ def build_rounds(records):
             if reviewer:
                 rnd.reviewers.add(str(reviewer))
         elif kind == "finding":
+            rnd.findings += 1
             if rec.get("tier") == "verified":
                 rnd.verified += 1
             elif rec.get("tier") == "inferred":
@@ -378,7 +380,14 @@ def evaluate(rounds):
     # move -- rule 3 would say "open a later round" and this rule would then
     # block it, leaving the only rc=0 exit as editing the fixed finding's
     # status into a lie.
-    span = numbers[-1] - numbers[0] + 1
+    # The budget is spent by REVIEWING, so only rounds that reviewed something
+    # count. A row that carries nothing but questions did no review: before
+    # this, such a row spent a round of budget (measured: 5 real rounds rc=0,
+    # 5 real + 1 bookkeeping row rc=1), which taxed the person who kept an
+    # honest ledger and left the one who did not untouched. The evasion this
+    # leaves is filing a round's findings as questions -- that also drops
+    # their status, so rule 3 stops seeing the fixes, and the price is real.
+    span = sum(1 for r in rounds if r.subjects or r.findings or r.dead_ends)
     at_cap = (span > ROUND_CAP) or (span == ROUND_CAP
                                     and unreviewed_fix is not None)
     if at_cap:
