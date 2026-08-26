@@ -74,7 +74,7 @@ description: 多輪修正的收斂協議 —— decidability gate（開工前先
    - **消解方式：後續輪次宣告了不同主體**就降級為 advisory（墓碑保留）。⚠️ 它曾經**永不消解**：照訊息做完之後訊息一字不改繼續紅，而帳本 append-only、dead-end 撤不回 ⇒ 誠實記滿兩筆 dead-end 的鏈永遠回不到 rc=0，把「比 finding 更值錢」的那件事變成單向門。
 3. **UNREVIEWED-FIX** — **最後一個標了 `status=fixed` 的輪次**之後，**沒有任何輪次宣告受審主體** ⇒ 這輪不算完成，開一輪以那個修法為 `subject`。「已經審過一輪」永遠是指審過**那一版**。
    ⚠️ 不是「最後一輪」：一輪只寫一筆 `question` 曾經可以讓它消音。這仍是刻意比動機弱的述詞——帳本沒有「本輪主體就是上一輪的修法」這個欄位，工具也不比較面積（#1431 的 1.6× 是寫規則的理由，不是判定式）。
-4. **LEDGER-GAP** — 輪號不連續 ⇒ blocking。⚠️ 它不檢查是否從 1 開始，因此 **`ROUND-CAP` 數的是帳本 span 不是真實輪數**——誠實用真實輪號記帳的人拿到比「上限 5」更寬的額度。兩者是同一個設計決定的兩面。
+4. **LEDGER-GAP** — 輪號不連續 ⇒ blocking。⚠️ 它不檢查是否從 1 開始，因此 **`ROUND-CAP` 數的是帳本裡有審查活動的輪次數，不是真實輪數**——從鏈中途才開帳的人拿到比「上限 5」更寬的額度。兩者是同一個設計決定的兩面。
 
 （各門檻的依據與已知不確定性：derivation §4。）
 
@@ -100,9 +100,24 @@ append-only，一行一筆 JSON（沿用 `PROGRESS.jsonl` 的慣例：不重寫�
 
 - 帳本是**自陳的**。`make converge-status` 檢查的是**格式**——**不檢查那段 evidence 是不是真的跑過**，`"evidence": "yes"` 會過關。沒有任何機制能從離線文字證明一次執行發生過；這正是 tier 標籤只能靠紀律的原因。加內容述詞去補這個洞，本身就會撞上第 0 步（合法與捏造在離線文字下同構）。
 - **沒有任何一條規則把「finding 少」當成可以停的理由了。** ⚠️ **精確講**：`CHANGE-SUBJECT` 數 dead-end 筆數、`UNREVIEWED-FIX` 鍵在「有幾條 finding 標成 fixed」上，所以「沒有一條規則在數東西」是**假的**。差別在**方向**——少報那兩者會讓規則**更安靜**，而更安靜在那裡代表「鏈還沒完」，不代表「可以收工」。
-- **每條規則最便宜的轉綠方式**（守衛的失敗訊息若指名了更便宜更壞的修法，它就會被照做的人拆掉，所以先講）：`ROUND-CAP` ← 把一條鏈拆成同 scope 下兩支帳本（**不需說謊**，最難察覺，不防）；`ROUND-CAP` 邊界 ← 把 `status=fixed` 改寫成 `open`（說謊）；`CHANGE-SUBJECT` ← 不記那筆 dead-end；`UNREVIEWED-FIX` ← 永遠不標 `fixed`。
+- **每條規則的轉綠方式**（守衛的失敗訊息若指名了更便宜更壞的修法，它就會被照做的人拆掉，所以先講）。⛔ **這張表不排序**——本節曾把「拆帳本」標成「最便宜」，而下表第 6 條更便宜（少開一個檔）；⚠️ 而且**只有標 ✅ 的兩條實際跑過**，其餘是讀碼推導，沒有人量過它們真的能過：
+
+  | 規則 | 轉綠方式 | 要說謊嗎 | 跑過？ |
+  |---|---|---|---|
+  | `ROUND-CAP` | 把一條鏈拆成同 scope 下兩支帳本 | 否 | 未跑 |
+  | `ROUND-CAP` 邊界 | 把 `status=fixed` 改寫成 `open` | **是** | 未跑 |
+  | `CHANGE-SUBJECT` | 不記那筆 dead-end | 否 | 未跑 |
+  | `UNREVIEWED-FIX` | 不標 `fixed` | 否 | 未跑 |
+  | `ROUND-CAP` 預算 | 把一輪的 finding 全部記成 `question` | 否 | 未跑 |
+  | `ROUND-CAP` 預算 | **不遞增輪號**（多次審查記在同一個 `round`） | 否 | ✅ 實測 rc=0 |
+  | （對照）記帳列 | 只帶 `question` 的列不再花預算 | — | ✅ 實測 5+1 由 rc=1 變 rc=0 |
+
+- ⚠️ **`status` 的 `rejected` 與 `deferred` 是合法值，但沒有任何規則讀它們**（`converge_status.py` 只在 `STATUSES` 驗證集裡出現一次；會分支的只有 `fixed`）。寫它們是給人看的紀錄，不會改變任何判定。⛔ 這條寫出來是因為**已經有人被它騙過**：[#1564](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1564) 的帳本刻意用 `tier=verified, status=rejected` 來區分「沒查」與「查了沒事」，而工具對那個區分完全無感。**不要移除這兩個值**——移除詞彙會讓所有寫過它的既有帳本永久報格式違規（見下面 `KINDS` 那條）。
+- **`ROUND-CAP` 的預算只由有審查活動的輪次支出**——該輪至少有一筆 `subject` / `finding` / `dead-end`。只帶 `question` 的記帳列不花錢。在這之前它會花掉一輪（實測：5 個真審查輪 rc=0，同樣 5 輪加一列記帳 rc=1），於是**寫下記帳列的人被罰、不寫的人不被罰**。⛔ 換來的最便宜轉綠寫在上一條：把 finding 記成 `question`——那會讓那些 finding 失去 `status`，`UNREVIEWED-FIX` 因此看不到後續的 `fixed`（`converge_status.py` 的 `question` 分支只累加 `open_questions`）。另外三件同段揭露：⑴ **只記了 `decidability` 而沒宣告 `subject` 的輪次也不花錢**——這是刻意的，第 0 步判定 undecidable 而換主體正是本協議要你做的事，不該被課稅；⑵ **一輪只做一次審查是慣例，不是工具檢查的事**；⑶ ⛔ **預算不看 `tier`**——任何一筆 `kind=finding` 都讓那一輪算數，`tier` 寫壞、寫成 `speculative`、或整個沒寫都一樣。**`tier=verified` 決定的是什麼東西跨輪，不是那一輪有沒有發生。** 兩者綁在一起的話，只要把 `tier` 寫錯就能讓一輪不算數。
+- 🔴 **比「拆成兩支帳本」更便宜的繞法：不遞增輪號。** 把第 5、6、7、8 次審查全部記在 `round: 5` 底下，`ROUND-CAP` 就數不到（實測：4 個真輪 + 第 5 輪塞 4 次審查 ⇒ rc=0）。⚠️ **這在本次改動之前就存在、行為完全相同**（同一份帳本在 `origin/main` 的工具上也是 rc=0），不是新缺陷；列在這裡是因為既有揭露只寫了較貴的那個繞法，而**只揭露較貴的那一個，等於暗示較便宜的那個不存在**。
 - ⚠️ **`SELF-REVIEW-ZERO` 仍然在數 finding**（它是 advisory 不是停止規則），而且把 `reviewer` 從 `"self"` 改成任何別的字就會消音。**沒有動它**：見 `vibe-subagent-review`〈預設檔位〉的未解前提。
 - `LEDGER-GAP` 只檢查輪號連續，**不檢查是否從 1 開始**。從鏈中途才開帳的 scope 合法且靜默。
+- ⚠️ **`KINDS` 是往前看的：拿掉一個 kind，所有寫過它的既有帳本就永久報格式違規、rc=1**，沒有遷移路徑，也沒有「這個 kind 已撤回，予以容忍」的概念。實例：TRK-360 撤回宣告式 oracle 後，`dev/stopcond` 那本帳本裡 5 筆 `oracle` / `oracle-result` 讓**每一次執行**都 rc=1，而那與任何停止規則無關——讀報告時要先把 `-- FORMAT --` 區塊和停止規則分開看。
 - 本工具**不進 CI、不進 pre-commit**、不擋任何東西。這是刻意的：#1457 剛刪掉六支「守衛的守衛」，對 review 流程再造一支 gate 會重演同一個病。owner 分類 = 🧠 **skill-advised**（見 [`hook-vs-skill-coverage.md`](../../../docs/internal/hook-vs-skill-coverage.md)）。
 - 全部規則由**單一一條修正鏈**導出（n=1）。套到別的情境前先自己量。
 

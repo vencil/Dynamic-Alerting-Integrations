@@ -292,6 +292,61 @@ def test_the_cap_is_five():
     assert cs.ROUND_CAP == 5
 
 
+def test_a_row_that_reviewed_nothing_does_not_spend_cap_budget():
+    """Fails if the cap goes back to counting round numbers.
+
+    Measured before this: five reviewing rounds gave rc=0, and the same five
+    plus one row carrying only a question gave rc=1. The ledger has nowhere
+    else to put a record that belongs to the chain but not to any round
+    (#1574), so the person who wrote one down paid a round of budget and the
+    person who did not paid nothing.
+    """
+    five = [subject(n, "s") for n in range(1, 6)]
+    bookkeeping = rec(round=6, kind="question", status="open", claim="c",
+                      evidence="e")
+    blocking, _ = cs.evaluate(rounds_of(five + [bookkeeping]))
+    assert not any("ROUND-CAP" in m for m in blocking)
+
+
+def test_a_round_that_found_things_spends_budget_even_with_no_subject():
+    """The evasion the rule above opens, closed.
+
+    If only declared subjects counted, a sixth round could review, file its
+    findings, omit one field, and never reach the cap. Findings and dead ends
+    count too, so the only way out left is filing findings as questions --
+    which drops their status, so UNREVIEWED-FIX stops seeing the fixes.
+    """
+    five = [subject(n, "s") for n in range(1, 6)]
+    blocking, _ = cs.evaluate(rounds_of(five + [finding(6)]))
+    assert any("ROUND-CAP" in m for m in blocking)
+
+
+@pytest.mark.parametrize("bad", [
+    pytest.param({"tier": "bogus"}, id="unknown-tier"),
+    pytest.param({"tier": None}, id="tier-missing"),
+    pytest.param({"tier": "speculative"}, id="banned-tier"),
+])
+def test_a_finding_spends_budget_whatever_its_tier_says(bad):
+    """A malformed finding is still a round that reviewed something.
+
+    The whole reason Round.findings exists apart from Round.verified: the
+    budget must not depend on the tier parsing correctly, or a round escapes
+    the cap by mislabelling. Measured before this test existed: moving the
+    increment inside the `tier == "verified"` branch left all 78 tests
+    green, so the counter's stated purpose had nothing holding it up.
+
+    tier=verified controls what crosses rounds. It does not control whether
+    the round happened.
+    """
+    rec_kwargs = {"round": 6, "kind": "finding", "status": "open",
+                  "claim": "c", "evidence": "cmd => output"}
+    if bad["tier"] is not None:
+        rec_kwargs["tier"] = bad["tier"]
+    five = [subject(n, "s") for n in range(1, 6)]
+    blocking, _ = cs.evaluate(rounds_of(five + [rec(**rec_kwargs)]))
+    assert any("ROUND-CAP" in m for m in blocking)
+
+
 def test_round_cap_blocks_past_the_cap_and_stays_quiet_at_it():
     """Both sides: at 5 rounds it must NOT fire, at 6 it must.
 
@@ -312,10 +367,15 @@ def test_round_cap_names_an_exit_for_when_the_owner_is_not_reachable():
     """Fails if the message stops naming the handoff exit.
 
     The rule used to say only "take it to the owner". A reader who cannot
-    find one has to improvise, and the cheapest thing to improvise is the
-    second ledger -- the tool's own cheapest unguarded bypass, which the
-    same message names two sentences earlier. A failure message naming a
-    cheaper wrong move than its right one gets the wrong one done.
+    find one has to improvise, and every cheap thing to improvise here is a
+    way of not being counted. A failure message that leaves a reader with
+    only wrong moves gets a wrong one done.
+
+    This docstring used to call the second ledger "the cheapest bypass".
+    That was wrong and the message said it too: not incrementing the round
+    number is cheaper, because it does not even need a second file
+    (measured: four real rounds plus four reviews all filed under round 5
+    gives rc=0, on this branch and on main alike).
     """
     past = [subject(n, "s") for n in range(1, 7)]
     blocking, _ = cs.evaluate(rounds_of(past))
@@ -325,11 +385,22 @@ def test_round_cap_names_an_exit_for_when_the_owner_is_not_reachable():
     assert "not reachable" in cap[0]
 
 
-def test_round_cap_counts_the_span_not_the_record_count():
-    """A ledger opened mid-chain (rounds 5..10) is 6 rounds, not 10."""
+def test_round_cap_reports_what_it_counted_not_just_a_bare_number():
+    """A ledger opened mid-chain (rounds 5..10) spent 6 of the budget, not 10.
+
+    The number and the word have to move together. The message used to read
+    "at round 10 (6 rounds)" back when the count was a span of round numbers;
+    now it counts rounds that reviewed something, and a reader who sees a
+    bare "(N rounds)" beside a different round number cannot tell which of
+    the two it means.
+    """
     mid = [subject(n, "s") for n in range(5, 11)]
     blocking, _ = cs.evaluate(rounds_of(mid))
-    assert any("ROUND-CAP" in m and "(6 rounds)" in m for m in blocking)
+    cap = [m for m in blocking if "ROUND-CAP" in m]
+    assert len(cap) == 1
+    assert "at round 10" in cap[0]
+    assert "6 of its rounds reviewed something" in cap[0]
+    assert "REVIEWING rounds" in cap[0]
 
 
 def test_the_cap_boundary_with_a_pending_fix_has_a_reachable_state():
