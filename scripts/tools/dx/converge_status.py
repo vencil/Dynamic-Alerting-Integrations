@@ -27,7 +27,7 @@ adds holes as fast as it closes them. Measured on the
     evidence available at check time.
 
 This tool reads the ledger the protocol asks each round to append to, prints
-what actually happened per round, and evaluates the three stop rules.
+what actually happened per round, and evaluates the stop rules.
 
 WHAT IT CHECKS AND WHAT IT CANNOT
 =================================
@@ -38,9 +38,10 @@ known ``kind``.
 It CANNOT check that the evidence is real. Nothing offline can prove a command
 was executed; the tier label is a discipline, not a measurement. This is the
 same boundary caveman states for its own labels ("offline never says
-verified"), and it is why stop rules 2 and 3 key on the SUBJECT and the SURFACE
-rather than on the reported finding count -- those two survive a round that was
-not honestly reviewed, and rule 1 does not.
+verified"), and it is why CHANGE-SUBJECT and UNREVIEWED-FIX key on the SUBJECT
+and the SURFACE rather than on the reported finding count: those two survive a
+round that was not honestly reviewed. The rule that did not survive it was
+CONVERGED, and #1573 deleted it rather than repair it.
 
 DELIBERATELY NOT A GATE
 =======================
@@ -66,11 +67,13 @@ the defective one -- the exact move the protocol this tool serves exists to ban:
 
 EXIT CODES (scripts/tools/_lib_exitcodes.py)
 ============================================
-  0  ledger read; nothing the caller must act on (CONVERGED and advisory
-     SURFACE-DEBT / self-review notes land here)
-  1  a blocking stop rule fired (CHANGE-SUBJECT / UNREVIEWED-FIX) or the ledger
-     breaks the format contract (verified claim with no evidence, banned
-     ``speculative`` tier, non-integer surface counter, round numbers skipped)
+  0  ledger read; no stop rule fired (advisory SURFACE-DEBT / self-review
+     notes land here). NOT a statement that the work is done -- this tool has
+     no terminal condition and format_report says so on every run.
+  1  a blocking stop rule fired (ROUND-CAP / CHANGE-SUBJECT / UNREVIEWED-FIX
+     / LEDGER-GAP), or the ledger breaks the format contract (verified claim
+     with no evidence, banned ``speculative`` tier, non-integer surface
+     counter, round numbers skipped, unknown kind)
   2  cannot do the job: scope missing, no ROUNDS.jsonl under it, or a line that
      is not readable at all (not UTF-8, not JSON, not a JSON object)
 """
@@ -311,7 +314,7 @@ def build_rounds(records):
 
 
 def evaluate(rounds):
-    """Apply the three stop rules plus the advisory notes.
+    """Apply the stop rules plus the advisory notes.
 
     Returns (blocking, advisory) -- two lists of strings.
     """
@@ -326,8 +329,10 @@ def evaluate(rounds):
             f"LEDGER-GAP: round numbers {numbers} skip -- a missing round is a "
             "round whose findings never crossed into the next one")
 
-    # Rule 2 -- same subject, two dead predicates already. Checked before rule 1
-    # so a chain cannot report CONVERGED while sitting on a banned third version.
+    # CHANGE-SUBJECT -- same subject, two dead predicates already. The order
+    # here is no longer load-bearing: it used to run before CONVERGED so a
+    # chain could not report convergence while sitting on a banned third
+    # version, and #1573 deleted that rule.
     by_subject = {}
     for rnd in rounds:
         for rec in rnd.dead_ends:
@@ -380,13 +385,16 @@ def evaluate(rounds):
     # move -- rule 3 would say "open a later round" and this rule would then
     # block it, leaving the only rc=0 exit as editing the fixed finding's
     # status into a lie.
-    # The budget is spent by REVIEWING, so only rounds that reviewed something
-    # count. A row that carries nothing but questions did no review: before
-    # this, such a row spent a round of budget (measured: 5 real rounds rc=0,
-    # 5 real + 1 bookkeeping row rc=1), which taxed the person who kept an
-    # honest ledger and left the one who did not untouched. The evasion this
-    # leaves is filing a round's findings as questions -- that also drops
-    # their status, so rule 3 stops seeing the fixes, and the price is real.
+    # The budget is spent by REVIEWING, so a round counts only if it recorded
+    # a subject, a finding, or a dead end. Anything else is a row that did no
+    # review, and before this it still spent a round (measured: 5 real rounds
+    # rc=0; the same 5 plus one bookkeeping row rc=1), which taxed whoever
+    # kept an honest ledger and left whoever did not untouched.
+    #
+    # Deliberately the predicate and not a list of what a non-reviewing row
+    # looks like: a question-only row and a decidability-only row both reach
+    # here, and any list of shapes goes stale the next time a kind is added.
+    # The evasions this leaves are in the skill's honesty section.
     span = sum(1 for r in rounds if r.subjects or r.findings or r.dead_ends)
     at_cap = (span > ROUND_CAP) or (span == ROUND_CAP
                                     and unreviewed_fix is not None)
@@ -399,8 +407,8 @@ def evaluate(rounds):
             f"ROUND-CAP: this chain is at round {numbers[-1]}, and {span} of "
             "its rounds reviewed something (declared a subject, or recorded a "
             f"finding or a dead end). The cap is {ROUND_CAP} REVIEWING rounds "
-            "-- a row carrying only questions spends nothing. Rounds past it "
-            "are an owner "
+            "-- a round with none of those three spends nothing. Rounds past "
+            "it are an owner "
             "decision, not a chain decision -- most obtainable gain lands in "
             "rounds 1-4 (arXiv:2607.05197) and without an external check "
             "further rounds measurably make things worse (GSM8K 95.5 -> 89.0 "
@@ -411,8 +419,9 @@ def evaluate(rounds):
             "approves starts a new scope -- and note the tool CANNOT tell "
             "that apart from several ways of escaping this cap that cost "
             "nothing and need no lie; the ledger cannot see any of them, and "
-            "the skill's honesty section lists the ones this repo has "
-            "measured. What makes it a continuation is the owner saying so. "
+            "the skill's honesty section lists the ones this repo knows "
+            "about, marking which were actually run and which are only "
+            "argued. What makes it a continuation is the owner saying so. "
             "If the owner is not reachable right now, that is not a reason "
             "to keep going: stop here and write the handoff -- subject, "
             "findings still open, dead ends already paid for -- so the next "
