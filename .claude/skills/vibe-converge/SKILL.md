@@ -75,7 +75,7 @@ description: 多輪修正的收斂協議 —— 觸發時先寫一條可跑的 o
 
 ## 停止規則（`make converge-status` 會替你判）
 
-**這條鏈結束，是因為 oracle 過了，不是因為 reviewer 沒話說了。** 以下**五條**都是 blocking，且**沒有一條把「finding 少」當成可以停的理由**（不是「都不數東西」，見〈誠實邊界〉）。
+**這條鏈結束，是因為 oracle 過了，不是因為 reviewer 沒話說了。** 以下**六條**都是 blocking（含 `LEDGER-GAP`，見下），且**沒有一條把「finding 少」當成可以停的理由**（不是「都不數東西」，見〈誠實邊界〉）。
 
 1. **EMPTY-LEDGER** — 帳本存在但零筆輪次紀錄 ⇒ ⛔ blocking。**空帳本不是收斂的鏈，是沒記錄的鏈**；若它安靜，「把檔案清掉」就會是滿足以下每一條規則最便宜的方式（實測過：空帳本 rc=0，而誠實記了一輪、只是還沒宣告 oracle 的帳本 rc=1）。
 2. **ORACLE-MISSING** — 整條鏈沒有任何一筆 `kind=oracle` ⇒ ⛔ blocking。理由見上一節。
@@ -83,7 +83,7 @@ description: 多輪修正的收斂協議 —— 觸發時先寫一條可跑的 o
    - ⛔ **例外為什麼要窄**：第一版寫成整條鏈永久豁免，盲審實測那是**全工具最便宜的綠**——第 1 輪對一個**不相干主體**記一筆 `undecidable`，之後五輪照跑、帶著 open finding、完全沒有 oracle，仍然 rc=0。而且它**不必說謊**：「我判不出來」在離線文字下不可證偽，**比它要取代的那個假 oracle 還便宜**。
    - `undecidable` 那一筆現在必須帶滿 `subject` / `question` / `evidence_set` / `note` 四個欄位。第一版可以只寫 `{"kind":"decidability","round":1,"verdict":"undecidable"}` 就關掉整支工具，**而報告同時印著「no stated terminal condition」**——報告與 exit code 直接相反。
 3. **ROUND-CAP** — 輪數上限 **5**（**5 輪是允許的**，上限是天花板不是最後一輪）。開下一輪的條件是 **oracle 仍然沒過**，不是「reviewer 還有話說」。超過上限 ⇒ 停下來帶**兩個數字**去找 owner：這一輪幾條、其中幾條是**我上一輪修出來的**。
-   - ⚠️ **正好在第 5 輪且有未審修法時它也會響，並吸收掉規則 5（UNREVIEWED-FIX）**。原本兩條會同時響而互相矛盾：UNREVIEWED-FIX 說「開下一輪去審那個修法」，而開下一輪就撞 ROUND-CAP ⇒ **唯一 rc=0 的出路是把 `status=fixed` 改寫成 `open`**，也就是對「不讓修法逃過審查」這條規則本身說謊。合併成一條之後指令是可執行的（找 owner，發生在工具之外）。
+   - ⚠️ **正好在第 5 輪且有未審修法時它也會響，並吸收掉 `UNREVIEWED-FIX`**。原本兩條會同時響而互相矛盾：UNREVIEWED-FIX 說「開下一輪去審那個修法」，而開下一輪就撞 ROUND-CAP ⇒ **唯一 rc=0 的出路是把 `status=fixed` 改寫成 `open`**，也就是對「不讓修法逃過審查」這條規則本身說謊。合併成一條之後指令是可執行的（找 owner，發生在工具之外）。
    - ⚠️ **響了就不會再消**，這是設計而非缺陷：這條鏈已經關閉。owner 批准的續作放進**新的 scope、新的帳本、新的 oracle**。
    - 5 這個數字的來源：obra/superpowers 撞到同一個不收斂問題後在 v6.2.0 裝的 five-round circuit breaker；一份 repair-loop 的實證評估把多數可得增益放在第 1–4 輪（arXiv:2607.05197，NIER，不是綜述）。**兩個來源都沒有精確釘住界線，本 repo 也沒有量過**，5 是兩者中較寬鬆的那個。
    - 為什麼要有上限：沒有外部 oracle 時多輪自省**會變差**（GSM8K 95.5% → 91.5% → 89.0%，arXiv:2310.01798），而 5 輪迭代後 critical 漏洞增加 37.6%（IEEE-ISTAS 2025）。
@@ -104,11 +104,14 @@ append-only，一行一筆 JSON（沿用 `PROGRESS.jsonl` 的慣例：不重寫�
 {"ts":"...","round":1,"kind":"finding","id":"F1","tier":"verified","status":"open","claim":"<一句話>","evidence":"<指令 => 實際輸出>"}
 {"ts":"...","round":1,"kind":"dead-end","subject":"<同上>","claim":"<這版判準是什麼>","evidence":"<怎麼死的，實測>"}
 {"ts":"...","round":1,"kind":"question","status":"open","claim":"<問題>","evidence":"<要什麼證據才能收掉>"}
+{"ts":"...","round":3,"kind":"oracle-result","passed":true,"evidence":"<指令 => 實際輸出與 rc>"}
 ```
 
 `kind=finding` 且 `tier=verified`、以及 `kind=dead-end`，**`evidence` 不得為空**；`kind=oracle` 的 `command` 與 `falsifier` **都不得為空**；`subject` 的 `insertions` / `deletions` 若寫了就必須是非負整數。
 
-觀測：`make converge-status SCOPE=dev/<scope>`。**oracle 無條件印在報告最上面**——一條鏈的終止條件不該是只有違規時才看得到的東西。
+觀測：`make converge-status SCOPE=dev/<scope>`（host 無 `make` 時直接跑 `py scripts/tools/dx/converge_status.py --scope dev/<scope>`）。
+
+⚠️ **`kind=oracle-result` 是唯一能讓這條鏈被報告成「完成」的記錄。** 報告**每次**都印一行 `VERDICT: FINISHED` / `NOT FINISHED`——因為在這一行存在之前，**一輪什麼都沒找到的鷹審與一條真的跑完 oracle 的鏈，輸出與 exit code 逐字相同**（實測）——那正是被刪掉的 CONVERGED 在做的代換，只是往上一層。`passed` 必須是真的 boolean，`evidence` 不得為空。
 
 ## ⚠️ 誠實邊界（本協議守不到的）
 
@@ -121,7 +124,7 @@ append-only，一行一筆 JSON（沿用 `PROGRESS.jsonl` 的慣例：不重寫�
   - 舊的：把帳本清空。`EMPTY-LEDGER` 關掉了這一格，但**更廣的那點仍然成立——自陳的帳本不會因為多加述詞而變誠實**。
 - ⚠️ **`SELF-REVIEW-ZERO` 仍然在數 finding**（它是 advisory 不是停止規則），而且把 `reviewer` 從 `"self"` 改成任何別的字就會消音。**沒有動它**：它建立在 #1457「作者自審 0 條」上，而那筆量測與當前模型的官方指引相反、兩邊都還沒在當前模型上量過（見 `vibe-subagent-review`〈預設檔位〉的未解前提）。
 - ⚠️ **同一輪記兩條 `dead-end` 會讓 `CHANGE-SUBJECT` 嚴格來說誤觸**（訊息印出 `(rounds 1, 1)`，讀起來也不通）。既有行為，本次**不改**：一輪內寫兩版述詞並且兩版都死，與「禁止第 3 版」想擋的東西離得夠近，而改它要新的判準。
-- `LEDGER-GAP` 只檢查輪號連續，**不檢查是否從 1 開始**。從鏈中途才開帳的 scope 合法且靜默。
+- ⚠️ `LEDGER-GAP` 是第六條 blocking 規則（輪號不連續就紅），但它**不檢查是否從 1 開始**。從鏈中途才開帳的 scope 合法且靜默——連帶影響：**`ROUND-CAP` 數的是帳本裡的 span，不是鏈的真實輪數**，所以誰實用真實輪號記帳（例如 3..7）拿到的上限比從 1 重編的人寬。兩者都沒說謊，本協議**不防**。
 - 本工具**不進 CI、不進 pre-commit**、不擋任何東西。這是刻意的：#1457 剛刪掉六支「守衛的守衛」，對 review 流程再造一支 gate 會重演同一個病。owner 分類 = 🧠 **skill-advised**（見 [`hook-vs-skill-coverage.md`](../../../docs/internal/hook-vs-skill-coverage.md)）。
 - 全部規則由**單一一條修正鏈**導出（n=1）。套到別的情境前先自己量。
 

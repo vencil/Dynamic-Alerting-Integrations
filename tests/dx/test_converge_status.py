@@ -3,20 +3,23 @@
 The tool is the observable half of the ``vibe-converge`` protocol: it is the
 only thing that turns a ROUNDS.jsonl ledger into a verdict, and nothing in CI
 re-derives that verdict, so a silent regression here would be invisible. The
-protocol's whole claim is that stop rules 2 and 3 fire on the SUBJECT and the
-SURFACE rather than on self-reported finding counts -- so those two rules get
-the replay test below, driven by the numbers actually measured on the
-#1411 -> #1457 chain.
+protocol's whole claim is that no rule treats a LOW finding count as a reason
+to stop -- CHANGE-SUBJECT and UNREVIEWED-FIX key on the SUBJECT and on fixes
+instead, and both get the replay test below, driven by the numbers actually
+measured on the #1411 -> #1457 chain. (SURFACE-DEBT is advisory, not a stop
+rule.)
 
 Coverage:
   - check_record: unknown kind / non-int round / bad tier / banned
     'speculative' / bad status / verified-without-evidence /
     dead-end-without-evidence / inferred needs no evidence
   - build_rounds: per-kind folding, multi-subject rounds, reviewer set
-  - evaluate: CHANGE-SUBJECT (>=2 dead ends, one subject) / UNREVIEWED-FIX
-    (last round fixed, no later subject) / LEDGER-GAP / CONVERGED (two quiet
-    rounds) / CONVERGED suppressed while blocking / SURFACE-DEBT advisory /
-    SELF-REVIEW-ZERO / UNDECIDABLE
+  - evaluate: EMPTY-LEDGER / ORACLE-MISSING (+ the narrow undecidable
+    exemption and its same-round boundary) / ROUND-CAP (both sides of the
+    boundary, and its merge with UNREVIEWED-FIX at the cap) / CHANGE-SUBJECT
+    (fires, and clears when a later round changes the subject) /
+    UNREVIEWED-FIX / LEDGER-GAP / SURFACE-DEBT advisory / SELF-REVIEW-ZERO /
+    UNDECIDABLE / the always-printed FINISHED-or-not verdict line
   - find_ledgers: file directly, nested dirs, none
   - parse_ledger encoding: non-UTF-8 line reported not raised, one bad line does
     not blind the rest of the ledger, BOM stripped, CRLF tolerated, unreadable
@@ -299,7 +302,8 @@ def test_ledger_opened_mid_chain_is_not_a_gap():
     assert not any("LEDGER-GAP" in m for m in blocking)
 
 
-# The four CONVERGED tests that stood here are deleted, not ported. Three of
+# The five CONVERGED tests are deleted, not ported (four stood here, the
+# fifth was in the CLI section). Three of
 # them asserted CONVERGED was ABSENT, so removing the rule left them green and
 # vacuous -- the exact shape this repo keeps burning on: an absence assertion is
 # satisfied by deleting the thing it watches. Deleting a rule means deleting the
@@ -385,6 +389,49 @@ def test_round_cap_is_silent_at_a_five_round_span_opened_mid_chain():
     assert not any("ROUND-CAP" in m for m in blocking)
 
 
+def test_the_report_always_states_whether_the_chain_is_finished(tmp_path, capsys):
+    """A quiet run and a finished chain must not look the same.
+
+    Measured before this line existed: a blind round reporting zero findings
+    produced a silent report and exit 0 -- byte-identical to a chain that had
+    actually passed its oracle. That is the substitution CONVERGED was deleted
+    for, one level up: silence carrying the meaning "done".
+    """
+    write_ledger(tmp_path, [oracle(1), subject(1, "s")], subdir="quiet")
+    cs.main(["--scope", str(tmp_path)])
+    assert "VERDICT: NOT FINISHED" in capsys.readouterr().out
+
+    write_ledger(tmp_path, [
+        oracle(1), subject(1, "s"),
+        rec(round=1, kind="oracle-result", passed=True,
+            evidence="py -m pytest tests/dx/test_x.py => 12 passed, rc=0"),
+    ], subdir="done")
+    cs.main(["--scope", str(tmp_path) + os.sep + "done"])
+    out = capsys.readouterr().out
+    assert "VERDICT: FINISHED" in out
+    assert "12 passed" in out
+
+
+def test_an_oracle_result_needs_a_real_boolean_and_evidence():
+    """`passed: "yes"` is a string; it must not read as a pass."""
+    out = cs.check_record(rec(kind="oracle-result", passed="yes", _where="t:1"))
+    assert any("'passed' as a real boolean" in m for m in out)
+    assert any("non-empty 'evidence'" in m for m in out)
+    assert cs.check_record(rec(kind="oracle-result", passed=False,
+                               evidence="cmd => rc=1", _where="t:1")) == []
+
+
+def test_a_failed_oracle_result_does_not_read_as_finished(tmp_path, capsys):
+    """Paired with the above so FINISHED cannot drift to 'any result present'."""
+    write_ledger(tmp_path, [
+        oracle(1), subject(1, "s"),
+        rec(round=1, kind="oracle-result", passed=False,
+            evidence="py -m pytest ... => 1 failed, rc=1"),
+    ])
+    cs.main(["--scope", str(tmp_path)])
+    assert "VERDICT: NOT FINISHED" in capsys.readouterr().out
+
+
 def test_a_bare_undecidable_record_is_a_violation():
     """The exemption is load-bearing, so the record cannot be a one-liner.
 
@@ -423,6 +470,24 @@ def test_the_undecidable_exemption_needs_the_chain_to_have_stopped():
     stopped = [subject(1, "the real work"), dict(undec, round=2)]
     blocking, _ = cs.evaluate(rounds_of(stopped))
     assert not any("ORACLE-MISSING" in m for m in blocking)
+
+
+def test_a_subject_in_the_same_round_as_the_verdict_is_still_working():
+    """The boundary: `>=`, not `>`.
+
+    Measured with the strict comparison, and missed by the test above because
+    its fixture put the verdict in a round with no subject: moving the
+    undecidable line to the LAST round restored the entire bypass -- five
+    rounds, an open verified finding, no oracle, exit 0. A chain that declared
+    a subject in the same round it claimed to be unable to decide was still
+    working when it said it had stopped.
+    """
+    undec = rec(round=5, kind="decidability", subject="a side question",
+                question="q", evidence_set="e", verdict="undecidable",
+                note="isomorphic")
+    same_round = [subject(n, "the real work") for n in range(1, 6)] + [undec]
+    blocking, _ = cs.evaluate(rounds_of(same_round))
+    assert any("ORACLE-MISSING" in m for m in blocking)
 
 
 def test_the_report_names_the_undecidable_verdict_as_the_terminal_condition(
@@ -949,11 +1014,32 @@ def test_changing_the_subject_is_what_clears_the_chain():
     The new subject carries no dead end, so the ban lifts for it — but the old
     subject's ban is history and stays recorded.
     """
-    blocking, _ = cs.evaluate(rounds_of([
+    blocking, advisory = cs.evaluate(rounds_of([
+        oracle(1),
         subject(1, "pred"), dead_end(1, "pred"),
         subject(2, "pred"), dead_end(2, "pred"),
         subject(3, "schema conformance of the defaults doc"),
         subject(4, "the fix from round 3"),
     ]))
-    assert [m for m in blocking if "CHANGE-SUBJECT" in m and "'pred'" in m]
-    assert not any("schema conformance" in m for m in blocking)
+    # the graveyard entry survives -- as a note, not as a permanent red
+    assert [m for m in advisory if "CHANGE-SUBJECT cleared" in m and "'pred'" in m]
+    assert not any("CHANGE-SUBJECT" in m for m in blocking)
+    assert not any("schema conformance" in m for m in blocking + advisory)
+
+
+def test_change_subject_stays_blocking_until_the_subject_actually_changes():
+    """The other side: doing nothing must NOT clear it.
+
+    Measured before the fix: doing exactly what the message asks -- record the
+    second dead end, then declare a different subject -- left the identical
+    blocking message in place forever, and the ledger is append-only so the
+    dead end could not be withdrawn. That turned the one act the protocol calls
+    more valuable than a finding into a one-way door out of reporting done.
+    """
+    blocking, _ = cs.evaluate(rounds_of([
+        oracle(1),
+        subject(1, "pred"), dead_end(1, "pred"),
+        subject(2, "pred"), dead_end(2, "pred"),
+        subject(3, "pred"),
+    ]))
+    assert any("CHANGE-SUBJECT" in m and "'pred'" in m for m in blocking)

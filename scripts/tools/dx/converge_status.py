@@ -155,7 +155,8 @@ from _lib_exitcodes import (  # noqa: E402
 
 LEDGER_NAME = "ROUNDS.jsonl"
 
-KINDS = {"subject", "decidability", "finding", "dead-end", "question", "oracle"}
+KINDS = {"subject", "decidability", "finding", "dead-end", "question",
+         "oracle", "oracle-result"}
 TIERS = {"verified", "inferred"}
 BANNED_TIERS = {"speculative"}
 STATUSES = {"open", "fixed", "rejected", "deferred"}
@@ -270,6 +271,17 @@ def check_record(rec):
     elif not isinstance(rec.get("round"), int):
         out.append(f"{where}: 'round' must be an integer, got "
                    f"{rec.get('round')!r}")
+    if kind == "oracle-result":
+        # Without this record, "the chain finished" had no carrier at all: a
+        # round that reported nothing and a chain that actually passed its
+        # oracle produced byte-identical output and the same exit code. That is
+        # the shape CONVERGED was deleted for, one level up.
+        if not isinstance(rec.get("passed"), bool):
+            out.append(f"{where}: oracle-result needs 'passed' as a real "
+                       f"boolean (true/false), got {rec.get('passed')!r}")
+        if not str(rec.get("evidence", "")).strip():
+            out.append(f"{where}: oracle-result must carry non-empty "
+                       "'evidence' (the command and what it actually printed)")
     if kind == "decidability":
         # An `undecidable` verdict exempts the chain from ORACLE-MISSING, so it
         # is now load-bearing and cannot be a bare one-liner. Measured before
@@ -352,6 +364,7 @@ class Round(object):
         self.open_questions = 0
         self.undecidable = []       # decidability records with verdict=undecidable
         self.oracles = []           # oracle records (command + falsifier)
+        self.results = []           # oracle-result records (passed + evidence)
         self.is_oracle_only = False  # a holder for a ledger with no real rounds
         self.reviewers = set()
 
@@ -406,7 +419,9 @@ def build_rounds(records):
         if not isinstance(num, int):
             continue
         rnd = rounds.setdefault(num, Round(num))
-        if kind == "subject":
+        if kind == "oracle-result":
+            rnd.results.append(rec)
+        elif kind == "subject":
             rnd.subjects.append(rec)
             reviewer = rec.get("reviewer")
             if reviewer:
@@ -492,8 +507,13 @@ def evaluate(rounds):
     # the chain has to actually be over, which is the case section 0 describes.
     with_subject_all = [r.number for r in rounds if r.subjects]
     undecidable_rounds = [r.number for r in rounds if r.undecidable]
+    # `>=`, not `>`: a subject declared in the SAME round as the verdict means
+    # the chain was still working when it claimed to be unable to decide.
+    # Measured with `>`: moving the undecidable line from round 1 to round 5
+    # restored the whole bypass -- five rounds, an open verified finding, no
+    # oracle, exit 0 -- and the mutation that closes it survived the suite.
     stopped_undecidable = bool(undecidable_rounds) and not any(
-        n > undecidable_rounds[-1] for n in with_subject_all)
+        n >= undecidable_rounds[-1] for n in with_subject_all)
     if not any(rnd.oracles for rnd in rounds) and not stopped_undecidable:
         blocking.append(
             "ORACLE-MISSING: no round declares kind=oracle. Without one the "
@@ -546,18 +566,39 @@ def evaluate(rounds):
             "recorded here as a question before the new scope opens.")
 
     # Rule 2 -- same subject, two dead predicates already.
+    #
+    # It CLEARS when a later round declares a different subject, because that is
+    # the action the message asks for. It used to be permanent: a chain that did
+    # exactly what it said -- recorded the second dead end, then changed the
+    # subject -- kept the identical message forever, and the ledger is
+    # append-only so the dead end could not be withdrawn. That made the one
+    # action the protocol calls "more valuable than a finding" (recording a dead
+    # end) into a one-way door out of ever reporting done.
     by_subject = {}
     for rnd in rounds:
         for rec in rnd.dead_ends:
             by_subject.setdefault(str(rec.get("subject", "?")), []).append(rnd.number)
     for subject, where in sorted(by_subject.items()):
-        if len(where) >= 2:
-            blocking.append(
-                f"CHANGE-SUBJECT: {subject!r} has {len(where)} dead ends "
-                f"(rounds {', '.join(str(w) for w in where)}). A third predicate "
-                "on the same subject is banned -- go back to the decidability "
-                "gate and change what is being judged (#1443: v1/v2/v3 all died "
-                "before #1457 changed the subject).")
+        if len(where) < 2:
+            continue
+        moved_on = [r.number for r in rounds
+                    if r.number > where[-1]
+                    and any(s != subject for s in r.subject_names)]
+        if moved_on:
+            advisory.append(
+                f"CHANGE-SUBJECT cleared: {subject!r} had {len(where)} dead ends "
+                f"(rounds {', '.join(str(w) for w in where)}) and round "
+                f"{moved_on[0]} moved to a different subject. Recorded so the "
+                "graveyard stays visible -- it is the negative knowledge base "
+                "the protocol says outlives the findings.")
+            continue
+        blocking.append(
+            f"CHANGE-SUBJECT: {subject!r} has {len(where)} dead ends "
+            f"(rounds {', '.join(str(w) for w in where)}). A third predicate "
+            "on the same subject is banned -- go back to the decidability "
+            "gate and change what is being judged (#1443: v1/v2/v3 all died "
+            "before #1457 changed the subject). Declaring a different subject "
+            "in a later round clears this.")
 
     # Rule 3 -- the last round shipped a fix that no later round reviewed.
     # Suppressed at the cap: rule 1 already says where that fix goes, and
@@ -622,11 +663,39 @@ def evaluate(rounds):
     return blocking, advisory
 
 
+def _verdict_line(rounds):
+    """One line, always printed, saying whether this chain is finished.
+
+    Silence used to carry that meaning: a round that reported nothing and a
+    chain that had actually passed its oracle produced identical output and the
+    same exit code, so "nobody found anything" read as "done" -- the exact
+    substitution the deleted CONVERGED rule made. Exit code cannot carry it
+    either (0 means "no violation", which an in-progress chain also has), so it
+    is stated in words and sourced from a record somebody had to write.
+    """
+    passes = [(r.number, rec) for r in rounds for rec in r.results
+              if rec.get("passed") is True]
+    fails = [(r.number, rec) for r in rounds for rec in r.results
+             if rec.get("passed") is False]
+    if passes:
+        number, rec = passes[-1]
+        return (f"  VERDICT: FINISHED -- oracle recorded as passed in round "
+                f"{number} ({str(rec.get('evidence', '')).strip() or 'no evidence'})")
+    if fails:
+        number, _ = fails[-1]
+        return (f"  VERDICT: NOT FINISHED -- last oracle-result (round "
+                f"{number}) says the oracle did not pass")
+    return ("  VERDICT: NOT FINISHED -- no oracle-result recorded. A quiet run "
+            "means no rule fired, NOT that the work is done")
+
+
 def format_report(path, rounds):
     lines = [f"== {path} =="]
     if not rounds:
         lines.append("  (no round records)")
+        lines.append(_verdict_line(rounds))
         return lines
+    lines.append(_verdict_line(rounds))
     # The oracle prints unconditionally, above the per-round detail. It is the
     # only line here that says what would END this chain; leaving it to fire
     # only on violation would make the chain's terminal condition the one thing
