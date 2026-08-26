@@ -124,6 +124,8 @@ description: IaC-aware 兩階段 review — code 走 spec→quality、IaC 走 bl
 
 「換 context」不必然等於多 agent harness：另開一個**不帶本輪對話**的 reviewer（新 session / 新 subagent / 另一個模型皆可），只餵**受審 diff 本身**與 [`vibe-converge`](../vibe-converge/SKILL.md) 的跨輪交接三件組（verified claim / open question / 已打死方向表）。⛔ **不要餵上一輪的完整 commit body 與修法敘事**——那正是讓下一棒繼承上一棒盲區的東西。
 
+📋 **可照抄的 prompt 骨架**：[`references/scoped-re-review.md`](references/scoped-re-review.md)（借 superpowers `re-review-prompt.md`，與原版的三處分歧已在該檔標出）。⛔ **骨架裡承重的那一格在收件端不在 prompt 端**：reviewer 照報所有東西（音量軸不下 prompt），但落在修法 diff 之外的寫進〈範圍外觀察〉，**不擋本輪、不開下一輪**，收下時記成 `kind=question`——`converge_status.py` 對 `question` 只計數不判定，所以不會經由 `UNREVIEWED-FIX` 把迴圈拉長。⚠️ 這一格在本 repo **從未存在過**（本協議自己那條鏈的 20 條 finding 每一條都餵進了下一輪），效果**未量**：第一次用完把「本輪幾條 / 其中幾條落進範圍外」記進帳本。
+
 多輪情境的停止時機、什麼時候該**換受審主體**而不是再修一版，走 [`vibe-converge`](../vibe-converge/SKILL.md)（`make converge-status`）。
 
 ⛔ **輪數上限 5，而且停止條件不是「審到零 finding」**——那條規則已刪除，理由（單次 inspection 中位只撈到 30%、61% 的 review 找到零缺陷、Fagan/Cisco/NASA 的 exit criteria 是「已知缺陷已修且已驗證」）見 vibe-converge 與其 `references/derivation.md` §4.1。⚠️ 上限是**預算不是判準**：它說「你用完了」，不說「你做完了」。
