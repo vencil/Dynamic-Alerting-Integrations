@@ -756,6 +756,21 @@ def test_main_exits_ok_on_a_chain_that_declared_an_oracle(tmp_path, capsys):
     assert "revert the width flag" in captured.out
 
 
+def test_the_report_never_invents_a_round_for_a_round_less_oracle(tmp_path, capsys):
+    """Fails if the label goes back to the Round object's synthetic number.
+
+    An oracle carries no round; filing it under a holder and printing that
+    holder's number put back the phantom "round 0" the chain never had.
+    """
+    o = oracle(command="pytest x", falsifier="delete y")
+    o.pop("round")
+    write_ledger(tmp_path, [o])
+    cs.main(["--scope", str(tmp_path)])
+    out = capsys.readouterr().out
+    assert "oracle: pytest x" in out
+    assert "round 0" not in out
+
+
 def test_report_says_so_when_no_oracle_was_declared(tmp_path, capsys):
     """Absence has to be visible in the report, not only in the verdict."""
     write_ledger(tmp_path, [subject(1, "s")])

@@ -27,15 +27,22 @@ description: IaC-aware 兩階段 review — code 走 spec→quality、IaC 走 bl
 
 上表 domain checklist 決定**查什麼**；這節決定**怎麼報、怎麼驗**——把對抗式 review 紀律 codify 進「觸發時就會讀到」的地方（源自 2026-07 security-audit 方法論萃取）。
 
-**1. 只報站得住的（concrete > theoretical）**
+**1. 報什麼、以及過濾該放哪一端**
+
+⛔ **分界是「內容判準」與「音量判準」，不是「有沒有過濾」。** 兩份官方文件在這件事上初看相反，實際切在不同軸上：
+
+| 判準的軸 | 放哪一端 | 出處逐字 |
+|---|---|---|
+| **內容**：只報影響 correctness 或**已宣告需求**的 gap | ✅ **可以**下在 reviewer 的 prompt 裡 | `Tell the reviewer to flag only gaps that affect correctness or the stated requirements, and treat the rest as optional.` |
+| **音量／嚴重度**：「只報 high-severity」「保守一點」 | ⛔ **不要**下在 prompt 裡 | `If your review prompt says "only report high-severity issues" or "be conservative," the model may follow that instruction literally and report less; ask it to report everything and filter in a separate pass instead.` |
+
+⚠️ 舊版這裡寫「3 個真問題 > 10 個 style 意見」，那是**音量判準**（叫它少報），已移除。以下三條是**內容判準**，留在 reviewer 端是官方明文支持的：
+
 - 每個 finding = **具體 failure scenario**：什麼 input / state → 什麼壞輸出 / break，附 `file:line`。不是「這樣比較漂亮」「理論上可能」「建議考慮」。
 - **designed-behavior**（有 rationale 的刻意設計）不是 bug——先分辨再報。
 - **coverage-honesty**：講清楚**沒 review 到**哪些檔 / 路徑；絕不在沒看的地方 imply clean（空 ≠ 安全）。
 
-⛔ **但過濾要放在收的那一端，不要放在 reviewer 的 prompt 裡。** 官方逐字警告：
-> `If your review prompt says "only report high-severity issues" or "be conservative," the model may follow that instruction literally and report less; ask it to report everything and filter in a separate pass instead.`
-
-⇒ **reviewer 全報；篩選是你在下一節做的一道獨立 pass。** 舊版這裡寫「3 個真問題 > 10 個 style 意見」——那句話下在 reviewer 身上，會讓它連該報的一起吞掉。它現在是**收 review 那端的判準**，不是發 review 的指示。
+⚠️ **判別語**：一條指示若讓 reviewer 依「有多嚴重／有多少條」決定閉嘴，放收件端；若讓它依「這是不是一個具體的失效」決定，放 prompt 端。**寫下任何 reviewer 指示前先問它切在哪個軸上。**
 
 **2. verify-before-asserting（review finding 是一個 claim）**
 - 報 finding 前先 **grep + cite 實際 code** 佐證，不照 pattern-match 的直覺報。（燒過：外部 reviewer 對合法 Workflow-DSL top-level `return` 誤報 illegal-return、對 repo 未 enforce 的 lint 規則亂標——plausible-but-wrong；take / reframe / **reject** 前先驗那條規則 repo CI 真的擋嗎。）
@@ -68,7 +75,7 @@ reviewer 全報（見上節），所以**這裡是唯一的過濾點**。判準�
 
 ⛔ **「它是真的」不構成必修的理由。** 當前模型的 review 精度高，`its additional findings are mostly real issues rather than false positives`（官方逐字）——所以真假不再是有用的篩子，**重要性才是**。官方對追每一條的後果同樣是逐字的：`Chasing every finding leads to over-engineering: extra abstraction layers, defensive code, and tests for cases that can't happen`。
 
-⚠️ **這是知情接受的漏報，不是被解決的問題**：真缺陷會被丟掉，而且丟掉的那些不會有人回頭發現。買到的是「不再用開票把 finding 埋起來」——2026-08 一個月開 171 張、關 47 張，其中仍 OPEN 的 133 張有 ≥59% 可追溯到某支 PR 的 review（量在 `bf16d303`）。
+⚠️ **這是知情接受的漏報，不是被解決的問題**：真缺陷會被丟掉，而且丟掉的那些不會有人回頭發現。買到的是「不再用開票把 finding 埋起來」——2026-08 一個月開 171 張、關 47 張，其中仍 OPEN 的 133 張有 ≥59% 可追溯到某支 PR 的 review。⚠️ 這一組是 GitHub 即時狀態，**綁查詢日期（2026-08-26）不綁任何 SHA**，且該月未完；`≥59%` 的兩把鍵與交集見 CHANGELOG 同筆。
 
 ⛔ **這張表沒有安全／資料損壞的例外行，而那是 owner 明示選過的**（2026-08-26 提供三個選項，owner 選「硬：只修影響 oracle 或已宣告需求的」，未選「再加一類安全與資料損壞必修」）。⚠️ **裸露面說清楚**：判準的軸從「真假」換成「有沒有落在 oracle 內」，而**選 oracle 的人就是被審的人**——把 oracle 寫窄，落在它之外的每一條（含驗過屬實的安全問題）依本表即為「預設不修、不開票」。對照：Greptile 公開的抑制機制對 security / memory leak 是 `Never Gets Suppressed`。這條 repo 另有 secret-scan 四層防線與 `vibe-security-audit` 在管那一面，但**它們與這張表沒有接線**。要改回三類必修，是 owner 的一句話。
 

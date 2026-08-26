@@ -29,9 +29,9 @@ adds holes as fast as it closes them. Measured on the
 This tool reads the ledger the protocol asks each round to append to, prints
 what actually happened per round, and evaluates the stop rules.
 
-NONE OF THE STOP RULES COUNTS FINDINGS
-======================================
-They used to. A rule named CONVERGED fired when two consecutive rounds each
+NO RULE TREATS A LOW FINDING COUNT AS A REASON TO STOP
+======================================================
+One used to. A rule named CONVERGED fired when two consecutive rounds each
 reported zero verified findings, and it was removed here because "zero
 findings" is a property of the reviewer, not of the work:
 
@@ -39,10 +39,11 @@ findings" is a property of the reviewer, not of the work:
     (median across studies, Wagner 2006 survey of defect-detection techniques);
   * 61% of reviews find no defect at all (Cisco, 2500 reviews / 3.2M LOC) -- so
     zero findings is the MAJORITY event and cannot discriminate;
-  * the classical exit criteria this protocol descends from (Fagan, and the
-    Cisco and NASA processes built on it) are "known defects fixed and
-    verified", never "no new defects found". Those two read alike and are
-    opposites.
+  * the classical exit criteria this protocol descends from are "known
+    defects fixed and verified", never "no new defects found". Those two read
+    alike and are opposites. SOURCING: the Cisco case study and the NASA
+    guidebook are first-hand; Fagan 1976 itself could not be retrieved (three
+    PDF locations all failed), so that half is second-hand.
 
 What replaced it: declare an oracle (Rule 0) and cap the rounds (Rule 1).
 
@@ -54,16 +55,26 @@ rounds do not skip numbers, that every record names a known ``kind``.
 
 It CANNOT check that the evidence is real, and it cannot check that the oracle
 was run. Nothing offline can prove a command was executed; the tier label is a
-discipline, not a measurement. That is why every stop rule keys on something
-structural -- the presence of an oracle, the round number, the SUBJECT, the
-SURFACE -- and none of them on a reported count. Each survives a round that was
-not honestly reviewed; a count-based rule does not.
+discipline, not a measurement.
+
+What changed is narrower than "no rule counts anything", which would be false:
+CHANGE-SUBJECT counts dead-end records and UNREVIEWED-FIX keys on how many
+findings a round marked ``fixed``. The precise claim is that **no rule treats a
+LOW finding count as a reason to stop** -- the direction that a round nobody
+honestly reviewed satisfies for free. Counting dead ends or fixes runs the other
+way: under-reporting them makes those rules quieter, but quieter there means the
+chain keeps going, not that it is finished.
+
+(SURFACE-DEBT is advisory, not a stop rule; it exits 0.)
 
 The cheapest way to satisfy each rule is worth stating, since a guard whose
 failure message names a cheaper bad fix gets taken apart by whoever reads it.
 Measured, on this tool, by a blind reviewer who built ledgers and ran them:
 
 * ORACLE-MISSING is satisfied by writing a plausible oracle line.
+* CHANGE-SUBJECT is satisfied by not recording the dead end -- and the skill
+  calls the dead-end table the most valuable thing that crosses rounds.
+* UNREVIEWED-FIX is satisfied by never marking a finding ``status=fixed``.
 * ROUND-CAP is satisfied by splitting one chain across two ledgers under the
   same scope: each is evaluated separately, so six rounds recorded as 3+3 stay
   quiet. Every line of that ledger is true; no lying required. The rules are
@@ -141,8 +152,8 @@ STATUSES = {"open", "fixed", "rejected", "deferred"}
 # A chain may run this many rounds before the tool stops advising and starts
 # blocking. Past it the owner decides whether round N+1 happens, not the chain.
 # 5 matches the circuit breaker obra/superpowers shipped in v6.2.0 after hitting
-# the same non-convergence; the repair-loop survey puts most obtainable gain in
-# rounds 1-4 (arXiv:2607.05197). Neither source pins the boundary exactly, and
+# the same non-convergence; an empirical repair-loop evaluation puts most
+# obtainable gain in rounds 1-4 (arXiv:2607.05197 -- NIER, not a survey). Neither source pins the boundary exactly, and
 # this repo has no measurement that does -- 5 is the more permissive of the two.
 ROUND_CAP = 5
 
@@ -574,10 +585,15 @@ def format_report(path, rounds):
     # only line here that says what would END this chain; leaving it to fire
     # only on violation would make the chain's terminal condition the one thing
     # the report does not routinely show.
-    declared = [(rnd.number, rec) for rnd in rounds for rec in rnd.oracles]
+    # The label comes from the record's OWN round field, not from the Round it
+    # was filed under: an oracle is chain-level, and printing the holder's
+    # synthetic number claimed a "round 0" that never happened.
+    declared = [rec for rnd in rounds for rec in rnd.oracles]
     if declared:
-        for number, rec in declared:
-            lines.append(f"  oracle (round {number}): "
+        for rec in declared:
+            num = rec.get("round")
+            where = f" (round {num})" if isinstance(num, int) else ""
+            lines.append(f"  oracle{where}: "
                          f"{str(rec.get('command', '')).strip() or '(none)'}")
             lines.append(f"    falsified by: "
                          f"{str(rec.get('falsifier', '')).strip() or '(none)'}")
@@ -585,6 +601,11 @@ def format_report(path, rounds):
         lines.append("  oracle: NONE DECLARED -- this chain has no stated "
                      "terminal condition")
     for rnd in rounds:
+        if rnd.is_oracle_only:
+            # The holder exists so a round-less oracle stays visible; printing
+            # it as "round 0" would put back the phantom round that attaching
+            # oracles to rounds created in the first place.
+            continue
         subj = ", ".join(rnd.subject_names) or "(no subject declared)"
         reviewer = "/".join(sorted(rnd.reviewers)) or "?"
         lines.append(f"  round {rnd.number}: {subj}  [reviewer={reviewer}]")
