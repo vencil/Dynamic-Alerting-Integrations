@@ -759,7 +759,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "9b133244ff7caef70bf65d3c28c98bd28f17c716d536781711237bb3ea1a9971",
+ "source_digest": "d5c1835e4263dbb52e6234827456e1f05e4f26ba33ebeaa40138e17feecff6b9",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",

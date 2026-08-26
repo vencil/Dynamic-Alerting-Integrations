@@ -321,6 +321,32 @@ def test_a_round_that_found_things_spends_budget_even_with_no_subject():
     assert any("ROUND-CAP" in m for m in blocking)
 
 
+@pytest.mark.parametrize("bad", [
+    pytest.param({"tier": "bogus"}, id="unknown-tier"),
+    pytest.param({"tier": None}, id="tier-missing"),
+    pytest.param({"tier": "speculative"}, id="banned-tier"),
+])
+def test_a_finding_spends_budget_whatever_its_tier_says(bad):
+    """A malformed finding is still a round that reviewed something.
+
+    The whole reason Round.findings exists apart from Round.verified: the
+    budget must not depend on the tier parsing correctly, or a round escapes
+    the cap by mislabelling. Measured before this test existed: moving the
+    increment inside the `tier == "verified"` branch left all 78 tests
+    green, so the counter's stated purpose had nothing holding it up.
+
+    tier=verified controls what crosses rounds. It does not control whether
+    the round happened.
+    """
+    rec_kwargs = {"round": 6, "kind": "finding", "status": "open",
+                  "claim": "c", "evidence": "cmd => output"}
+    if bad["tier"] is not None:
+        rec_kwargs["tier"] = bad["tier"]
+    five = [subject(n, "s") for n in range(1, 6)]
+    blocking, _ = cs.evaluate(rounds_of(five + [rec(**rec_kwargs)]))
+    assert any("ROUND-CAP" in m for m in blocking)
+
+
 def test_round_cap_blocks_past_the_cap_and_stays_quiet_at_it():
     """Both sides: at 5 rounds it must NOT fire, at 6 it must.
 
