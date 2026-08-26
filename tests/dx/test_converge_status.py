@@ -83,6 +83,12 @@ def finding(round_no, tier="verified", status="open", evidence="cmd => output"):
                claim="c", evidence=evidence)
 
 
+def oracle(round_no=1, command="pytest tests/x.py -q",
+           falsifier="delete the guard body"):
+    return rec(round=round_no, kind="oracle", command=command,
+               falsifier=falsifier)
+
+
 # ============================================================
 # check_record — the format contract
 # ============================================================
@@ -98,6 +104,29 @@ def test_non_integer_round_is_a_violation():
     out = cs.check_record(rec(round="1", tier="inferred", status="open",
                               _where="t:1"))
     assert any("must be an integer" in m for m in out)
+
+
+def test_oracle_without_a_command_is_a_violation():
+    out = cs.check_record(rec(kind="oracle", falsifier="f", _where="t:1"))
+    assert any("'command'" in m for m in out)
+
+
+def test_oracle_without_a_falsifier_is_a_violation():
+    """The falsifier is the half that cannot be filled in retroactively."""
+    out = cs.check_record(rec(kind="oracle", command="c", _where="t:1"))
+    assert any("'falsifier'" in m for m in out)
+
+
+def test_oracle_with_whitespace_only_fields_is_a_violation():
+    out = cs.check_record(rec(kind="oracle", command="  ", falsifier="\t",
+                              _where="t:1"))
+    assert len([m for m in out if "oracle must carry" in m]) == 2
+
+
+def test_a_complete_oracle_passes():
+    """Paired with the three above so the check cannot drift to always-reject."""
+    assert cs.check_record(rec(kind="oracle", command="make x",
+                               falsifier="delete the assert", _where="t:1")) == []
 
 
 def test_speculative_tier_is_banned_by_name():
@@ -270,37 +299,59 @@ def test_ledger_opened_mid_chain_is_not_a_gap():
     assert not any("LEDGER-GAP" in m for m in blocking)
 
 
-def test_converged_needs_two_consecutive_quiet_rounds():
-    _, advisory = cs.evaluate(rounds_of([
-        subject(1, "s"), finding(1, status="rejected"),
-        subject(2, "s"),
-        subject(3, "s"),
-    ]))
-    assert any("CONVERGED" in m for m in advisory)
+# The four CONVERGED tests that stood here are deleted, not ported. Three of
+# them asserted CONVERGED was ABSENT, so removing the rule left them green and
+# vacuous -- the exact shape this repo keeps burning on: an absence assertion is
+# satisfied by deleting the thing it watches. Deleting a rule means deleting the
+# tests that only said when it stays quiet.
 
 
-def test_not_converged_when_the_last_round_still_found_something():
-    _, advisory = cs.evaluate(rounds_of([
+def test_a_chain_with_no_oracle_blocks():
+    """The production change this catches: dropping Rule 0 from evaluate()."""
+    blocking, _ = cs.evaluate(rounds_of([subject(1, "s"), subject(2, "s")]))
+    assert any("ORACLE-MISSING" in m for m in blocking)
+
+
+def test_one_oracle_anywhere_in_the_chain_satisfies_rule_zero():
+    """Declared once, not once per round -- and a later round still counts."""
+    blocking, _ = cs.evaluate(rounds_of([
         subject(1, "s"),
-        subject(2, "s"), finding(2, status="open"),
+        subject(2, "s"), oracle(2),
     ]))
-    assert not any("CONVERGED" in m for m in advisory)
+    assert not any("ORACLE-MISSING" in m for m in blocking)
 
 
-def test_converged_is_suppressed_while_a_blocking_rule_holds():
-    """A chain sitting on a banned third predicate must not read as done."""
-    blocking, advisory = cs.evaluate(rounds_of([
-        subject(1, "pred"), dead_end(1, "pred"),
-        subject(2, "pred"), dead_end(2, "pred"),
-        subject(3, "pred"),
-    ]))
-    assert any("CHANGE-SUBJECT" in m for m in blocking)
-    assert not any("CONVERGED" in m for m in advisory)
+def test_the_cap_is_five():
+    """Pinned, not derived.
+
+    The boundary tests below build their fixtures from literal round numbers on
+    purpose: a fixture built from cs.ROUND_CAP moves with the constant, so
+    raising the cap would leave every boundary test green. Measured -- that was
+    the first version of these tests, and setting ROUND_CAP = 500 survived the
+    whole file. This pin is what makes changing the cap a reviewed act.
+    """
+    assert cs.ROUND_CAP == 5
 
 
-def test_single_round_never_converges():
-    _, advisory = cs.evaluate(rounds_of([subject(1, "s")]))
-    assert not any("CONVERGED" in m for m in advisory)
+def test_round_cap_blocks_past_the_cap_and_stays_quiet_at_it():
+    """Both sides: at 5 rounds it must NOT fire, at 6 it must.
+
+    A one-sided version would pass an implementation that blocks every chain.
+    """
+    at_cap = [oracle(1)] + [subject(n, "s") for n in range(1, 6)]
+    blocking, _ = cs.evaluate(rounds_of(at_cap))
+    assert not any("ROUND-CAP" in m for m in blocking)
+
+    past = at_cap + [subject(6, "s")]
+    blocking, _ = cs.evaluate(rounds_of(past))
+    assert any("ROUND-CAP" in m for m in blocking)
+
+
+def test_round_cap_counts_the_span_not_the_record_count():
+    """A ledger opened mid-chain (rounds 5..9) is 5 rounds, not 9."""
+    mid = [oracle(5)] + [subject(n, "s") for n in range(5, 10)]
+    blocking, _ = cs.evaluate(rounds_of(mid))
+    assert not any("ROUND-CAP" in m for m in blocking)
 
 
 def test_evaluate_on_an_empty_ledger_says_nothing():
@@ -330,6 +381,7 @@ def test_surface_debt_is_silent_when_deletions_keep_the_ratio_down():
 
 def test_surface_debt_never_blocks():
     blocking, advisory = cs.evaluate(rounds_of([
+        oracle(1),
         subject(1, "s", ins=2882, dels=67),
         subject(2, "s", ins=1018, dels=19),
     ]))
@@ -553,16 +605,27 @@ def test_main_exits_violation_on_a_format_break_alone(tmp_path, capsys):
     assert "FORMAT" in capsys.readouterr().err
 
 
-def test_main_exits_ok_on_a_converged_chain(tmp_path, capsys):
+def test_main_exits_ok_on_a_chain_that_declared_an_oracle(tmp_path, capsys):
     write_ledger(tmp_path, [
+        oracle(1, command="pytest tests/ops/test_x.py -q",
+               falsifier="revert the width flag"),
         subject(1, "s"), finding(1, status="rejected"),
         subject(2, "s"),
         subject(3, "s"),
     ])
     assert cs.main(["--scope", str(tmp_path)]) == cs.EXIT_OK
     captured = capsys.readouterr()
-    assert "CONVERGED" in captured.err
     assert "round 3" in captured.out
+    # the oracle prints unconditionally, on a clean chain too
+    assert "pytest tests/ops/test_x.py -q" in captured.out
+    assert "revert the width flag" in captured.out
+
+
+def test_report_says_so_when_no_oracle_was_declared(tmp_path, capsys):
+    """Absence has to be visible in the report, not only in the verdict."""
+    write_ledger(tmp_path, [subject(1, "s")])
+    cs.main(["--scope", str(tmp_path)])
+    assert "NONE DECLARED" in capsys.readouterr().out
 
 
 def test_main_requires_scope():

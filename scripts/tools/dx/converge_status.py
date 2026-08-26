@@ -27,20 +27,43 @@ adds holes as fast as it closes them. Measured on the
     evidence available at check time.
 
 This tool reads the ledger the protocol asks each round to append to, prints
-what actually happened per round, and evaluates the three stop rules.
+what actually happened per round, and evaluates the stop rules.
+
+NONE OF THE STOP RULES COUNTS FINDINGS
+======================================
+They used to. A rule named CONVERGED fired when two consecutive rounds each
+reported zero verified findings, and it was removed here because "zero
+findings" is a property of the reviewer, not of the work:
+
+  * a single inspection historically surfaces about 30% of the defects present
+    (median across studies, Wagner 2006 survey of defect-detection techniques);
+  * 61% of reviews find no defect at all (Cisco, 2500 reviews / 3.2M LOC) -- so
+    zero findings is the MAJORITY event and cannot discriminate;
+  * the classical exit criteria this protocol descends from (Fagan, and the
+    Cisco and NASA processes built on it) are "known defects fixed and
+    verified", never "no new defects found". Those two read alike and are
+    opposites.
+
+What replaced it: declare an oracle (Rule 0) and cap the rounds (Rule 1).
 
 WHAT IT CHECKS AND WHAT IT CANNOT
 =================================
 It checks the SHAPE of the ledger: that a claim labelled ``verified`` carries an
-``evidence`` field, that rounds do not skip numbers, that every record names a
-known ``kind``.
+``evidence`` field, that an ``oracle`` names a command and a falsifier, that
+rounds do not skip numbers, that every record names a known ``kind``.
 
-It CANNOT check that the evidence is real. Nothing offline can prove a command
-was executed; the tier label is a discipline, not a measurement. This is the
-same boundary caveman states for its own labels ("offline never says
-verified"), and it is why stop rules 2 and 3 key on the SUBJECT and the SURFACE
-rather than on the reported finding count -- those two survive a round that was
-not honestly reviewed, and rule 1 does not.
+It CANNOT check that the evidence is real, and it cannot check that the oracle
+was run. Nothing offline can prove a command was executed; the tier label is a
+discipline, not a measurement. That is why every stop rule keys on something
+structural -- the presence of an oracle, the round number, the SUBJECT, the
+SURFACE -- and none of them on a reported count. Each survives a round that was
+not honestly reviewed; a count-based rule does not.
+
+The cheapest way to satisfy each rule is worth stating, since a guard whose
+failure message names a cheaper bad fix gets taken apart by whoever reads it:
+ORACLE-MISSING is satisfied by writing a plausible oracle line, ROUND-CAP by
+not recording rounds. Both are lies rather than bypasses, and the ledger is
+append-only, so both leave a trace. Neither is defended against here.
 
 DELIBERATELY NOT A GATE
 =======================
@@ -66,10 +89,11 @@ the defective one -- the exact move the protocol this tool serves exists to ban:
 
 EXIT CODES (scripts/tools/_lib_exitcodes.py)
 ============================================
-  0  ledger read; nothing the caller must act on (CONVERGED and advisory
-     SURFACE-DEBT / self-review notes land here)
-  1  a blocking stop rule fired (CHANGE-SUBJECT / UNREVIEWED-FIX) or the ledger
-     breaks the format contract (verified claim with no evidence, banned
+  0  ledger read; nothing the caller must act on (advisory SURFACE-DEBT /
+     self-review / UNDECIDABLE notes land here)
+  1  a blocking stop rule fired (ORACLE-MISSING / ROUND-CAP / CHANGE-SUBJECT /
+     UNREVIEWED-FIX) or the ledger breaks the format contract (verified claim
+     with no evidence, oracle with no command or falsifier, banned
      ``speculative`` tier, non-integer surface counter, round numbers skipped)
   2  cannot do the job: scope missing, no ROUNDS.jsonl under it, or a line that
      is not readable at all (not UTF-8, not JSON, not a JSON object)
@@ -95,10 +119,18 @@ from _lib_exitcodes import (  # noqa: E402
 
 LEDGER_NAME = "ROUNDS.jsonl"
 
-KINDS = {"subject", "decidability", "finding", "dead-end", "question"}
+KINDS = {"subject", "decidability", "finding", "dead-end", "question", "oracle"}
 TIERS = {"verified", "inferred"}
 BANNED_TIERS = {"speculative"}
 STATUSES = {"open", "fixed", "rejected", "deferred"}
+
+# A chain may run this many rounds before the tool stops advising and starts
+# blocking. Past it the owner decides whether round N+1 happens, not the chain.
+# 5 matches the circuit breaker obra/superpowers shipped in v6.2.0 after hitting
+# the same non-convergence; the repair-loop survey puts most obtainable gain in
+# rounds 1-4 (arXiv:2607.05197). Neither source pins the boundary exactly, and
+# this repo has no measurement that does -- 5 is the more permissive of the two.
+ROUND_CAP = 5
 
 # A round whose reviewed surface grows this much without deleting anything is
 # adding predicate versions, not replacing them. Advisory only -- a round that
@@ -207,6 +239,20 @@ def check_record(rec):
             else:
                 out.append(f"{where}: subject '{field}' must not be negative, "
                            f"got {value!r}")
+    if kind == "oracle":
+        # Shape only, same boundary as 'evidence' below: this cannot tell a real
+        # command from a plausible string. What it CAN tell is that the author
+        # wrote down what would falsify the work -- the field that is hardest to
+        # fill in retroactively, and the one that makes the terminal condition
+        # external to the review.
+        for field in ("command", "falsifier"):
+            if not str(rec.get(field, "")).strip():
+                out.append(
+                    f"{where}: oracle must carry non-empty '{field}' "
+                    "(command: what to run; falsifier: which production change "
+                    "would make it fail). Cannot name a falsifier => there is "
+                    "no oracle, and the chain has no terminal condition except "
+                    "a reviewer running out of things to say")
     tier = rec.get("tier")
     if kind == "finding":
         if tier in BANNED_TIERS:
@@ -240,6 +286,7 @@ class Round(object):
         self.dead_ends = []         # dead-end records
         self.open_questions = 0
         self.undecidable = []       # decidability records with verdict=undecidable
+        self.oracles = []           # oracle records (command + falsifier)
         self.reviewers = set()
 
     @staticmethod
@@ -296,11 +343,13 @@ def build_rounds(records):
         elif kind == "decidability":
             if rec.get("verdict") == "undecidable":
                 rnd.undecidable.append(rec)
+        elif kind == "oracle":
+            rnd.oracles.append(rec)
     return [rounds[k] for k in sorted(rounds)]
 
 
 def evaluate(rounds):
-    """Apply the three stop rules plus the advisory notes.
+    """Apply the stop rules plus the advisory notes.
 
     Returns (blocking, advisory) -- two lists of strings.
     """
@@ -315,8 +364,35 @@ def evaluate(rounds):
             f"LEDGER-GAP: round numbers {numbers} skip -- a missing round is a "
             "round whose findings never crossed into the next one")
 
-    # Rule 2 -- same subject, two dead predicates already. Checked before rule 1
-    # so a chain cannot report CONVERGED while sitting on a banned third version.
+    # Rule 0 -- the chain never wrote down what would end it. Checked first
+    # because every other rule is about HOW the chain runs; this one is about
+    # whether it has an end condition at all.
+    if not any(rnd.oracles for rnd in rounds):
+        blocking.append(
+            "ORACLE-MISSING: no round declares kind=oracle. Without one the "
+            "terminal condition is 'a reviewer stopped finding things', which "
+            "is a property of the reviewer, not of the work: a single "
+            "inspection historically surfaces ~30% of defects (median, Wagner "
+            "2006 survey) and 61% of reviews find none at all (Cisco, 2500 "
+            "reviews) -- so 'zero findings' is the majority event. Declare what "
+            "to run and what would falsify it, or stop the chain.")
+
+    # Rule 1 -- the chain ran past the cap. The cap is a circuit breaker, not a
+    # quality judgement: it hands the decision to the owner instead of letting
+    # the chain decide it has had enough of itself.
+    span = numbers[-1] - numbers[0] + 1
+    if span > ROUND_CAP:
+        blocking.append(
+            f"ROUND-CAP: this chain is at round {numbers[-1]} ({span} rounds). "
+            f"The cap is {ROUND_CAP}. Rounds past it are an owner decision, not "
+            "a chain decision -- most obtainable gain lands in rounds 1-4 "
+            "(arXiv:2607.05197) and without an external oracle further rounds "
+            "measurably make things worse (GSM8K 95.5 -> 89.0 over two "
+            "self-correction rounds, arXiv:2310.01798). Take the open findings "
+            "to the owner with the two numbers: how many this round, and how "
+            "many of them your own previous round created.")
+
+    # Rule 2 -- same subject, two dead predicates already.
     by_subject = {}
     for rnd in rounds:
         for rec in rnd.dead_ends:
@@ -340,14 +416,14 @@ def evaluate(rounds):
             "lines, where the second pass found the chain's only Critical). "
             "Open a round whose subject IS that fix.")
 
-    # Rule 1 -- two consecutive quiet rounds.
-    if len(rounds) >= 2 and not blocking:
-        tail = rounds[-2:]
-        if all(r.verified == 0 for r in tail):
-            advisory.append(
-                f"CONVERGED: rounds {tail[0].number} and {tail[1].number} each "
-                "produced 0 verified findings. Stop -- a third confirming round "
-                "is the surface growth this protocol exists to prevent.")
+    # REMOVED: a CONVERGED rule keyed on "two consecutive rounds reported 0
+    # verified findings". It rewarded the cheapest possible green -- not
+    # looking -- and this module's own honesty section already said a round that
+    # was never honestly reviewed is indistinguishable from one that was. The
+    # replacement is Rule 0 (declare an oracle) plus Rule 1 (cap the rounds):
+    # the chain now ends because a named check passes, not because a reviewer
+    # went quiet. Deleted rather than reworded: see the skill's stop-rule
+    # section for the measurements that killed it.
 
     # Advisory -- surface budget.
     for rnd in rounds:
@@ -366,7 +442,11 @@ def evaluate(rounds):
                 f"SELF-REVIEW-ZERO: round {rnd.number} was self-reviewed and "
                 "reported 0 verified findings. Measured yield of author "
                 "self-review on this repo is 0 (#1457: 8 blind reviewers, 59+ "
-                "findings, author self-review 0). Treat as not-yet-reviewed.")
+                "findings, author self-review 0). Treat as not-yet-reviewed. "
+                "UNRESOLVED: that measurement predates the current model, whose "
+                "own guidance says to remove harness scaffolding that adds "
+                "separate verification steps. Neither side has been measured on "
+                "the current model; this note is kept, not acted on.")
 
     # Advisory -- an undecidable verdict is the thing that should have stopped
     # the chain; surface it even when the round continued anyway.
@@ -386,6 +466,20 @@ def format_report(path, rounds):
     if not rounds:
         lines.append("  (no round records)")
         return lines
+    # The oracle prints unconditionally, above the per-round detail. It is the
+    # only line here that says what would END this chain; leaving it to fire
+    # only on violation would make the chain's terminal condition the one thing
+    # the report does not routinely show.
+    declared = [(rnd.number, rec) for rnd in rounds for rec in rnd.oracles]
+    if declared:
+        for number, rec in declared:
+            lines.append(f"  oracle (round {number}): "
+                         f"{str(rec.get('command', '')).strip() or '(none)'}")
+            lines.append(f"    falsified by: "
+                         f"{str(rec.get('falsifier', '')).strip() or '(none)'}")
+    else:
+        lines.append("  oracle: NONE DECLARED -- this chain has no stated "
+                     "terminal condition")
     for rnd in rounds:
         subj = ", ".join(rnd.subject_names) or "(no subject declared)"
         reviewer = "/".join(sorted(rnd.reviewers)) or "?"

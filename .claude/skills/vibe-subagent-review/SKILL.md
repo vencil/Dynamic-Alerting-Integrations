@@ -30,8 +30,13 @@ description: IaC-aware 兩階段 review — code 走 spec→quality、IaC 走 bl
 
 **1. 只報站得住的（concrete > theoretical）**
 - 每個 finding = **具體 failure scenario**：什麼 input / state → 什麼壞輸出 / break，附 `file:line`。不是「這樣比較漂亮」「理論上可能」「建議考慮」。
-- **3 個真問題 > 10 個 style 意見**；別用 nit 灌厚度。**designed-behavior**（有 rationale 的刻意設計）不是 bug——先分辨再報。
+- **designed-behavior**（有 rationale 的刻意設計）不是 bug——先分辨再報。
 - **coverage-honesty**：講清楚**沒 review 到**哪些檔 / 路徑；絕不在沒看的地方 imply clean（空 ≠ 安全）。
+
+⛔ **但過濾要放在收的那一端，不要放在 reviewer 的 prompt 裡。** 官方逐字警告：
+> `If your review prompt says "only report high-severity issues" or "be conservative," the model may follow that instruction literally and report less; ask it to report everything and filter in a separate pass instead.`
+
+⇒ **reviewer 全報；篩選是你在下一節做的一道獨立 pass。** 舊版這裡寫「3 個真問題 > 10 個 style 意見」——那句話下在 reviewer 身上，會讓它連該報的一起吞掉。它現在是**收 review 那端的判準**，不是發 review 的指示。
 
 **2. verify-before-asserting（review finding 是一個 claim）**
 - 報 finding 前先 **grep + cite 實際 code** 佐證，不照 pattern-match 的直覺報。（燒過：外部 reviewer 對合法 Workflow-DSL top-level `return` 誤報 illegal-return、對 repo 未 enforce 的 lint 規則亂標——plausible-but-wrong；take / reframe / **reject** 前先驗那條規則 repo CI 真的擋嗎。）
@@ -45,11 +50,28 @@ description: IaC-aware 兩階段 review — code 走 spec→quality、IaC 走 bl
 - 這是 harness 的**單 agent 便宜版**；要**升級到多 agent** 見下節。
 - ⚠️ **第 2 輪起，只有「自審 pass 算完整驗證」這一條不算數**——降級為 pre-check，改走〈預設檔位〉的換 context 盲審。本節其餘各條（只報站得住的、verify-before-asserting、FIX 可能移除附帶防護、防 fix-masking）**照常適用，且對盲審一樣適用**。
 
+> ⚠️ **本節整體有一個未解的前提，寫在這裡而不是靜靜照舊（2026-08-26）。** 當前模型的官方 prompting 指引逐字說：`Claude Opus 5 verifies its own work without being told to. If your prompt contains explicit verification instructions … remove them: instructions like these cause over-verification`，並且 `The same applies to legacy harness scaffolding that adds separate verification steps`；其建議的 delegation 條款含 `do not use subagents to verify or double-check your own work`。
+> 本節就是那種鷹架。與它相反的本 repo 實證（#1457「合計 8 位、59+ 條 finding，作者自審 0 條」）是在**更早的模型世代**上量的。
+> ⇒ **兩邊都沒有在當前模型上被量過，所以本次不動這一節。** 關掉它的方式是側量，不是選邊：同一支 PR、同一顆 SHA，自審一次並記下 finding 集合，再派**一位**盲審審同一顆 SHA，比兩個集合的差集。在那之前，把本節讀成「尚未驗證的既有做法」，不是「已證實的必要步驟」。
+
 ## 收 review：拿到 finding 之後（借 superpowers `receiving-code-review`）
 
 上面各節管**怎麼發**；這節管**怎麼收**。兩者不對稱：發的時候你在找問題，收的時候你在被說服，而被說服比找問題容易得多。
 
-**1. 每條 finding 先分流，再動手**——`take` / `reframe` / `reject`，逐條給理由：
+**0. ⛔ 先過「重不重要」這一關，再進 take/reframe/reject。**
+
+reviewer 全報（見上節），所以**這裡是唯一的過濾點**。判準只有一條，兩類必修、其餘一律 optional：
+
+| | 處置 |
+|---|---|
+| 影響 **oracle 判定**，或影響**已宣告的需求** | **必修** |
+| 其餘（包含**驗過屬實**的） | **預設不修、不開票**，在帳本記一行就丟 |
+
+⛔ **「它是真的」不構成必修的理由。** 當前模型的 review 精度高，`its additional findings are mostly real issues rather than false positives`（官方逐字）——所以真假不再是有用的篩子，**重要性才是**。官方對追每一條的後果同樣是逐字的：`Chasing every finding leads to over-engineering: extra abstraction layers, defensive code, and tests for cases that can't happen`。
+
+⚠️ **這是知情接受的漏報，不是被解決的問題**：真缺陷會被丟掉，而且丟掉的那些不會有人回頭發現。買到的是「不再用開票把 finding 埋起來」——2026-08 一個月開 171 張、關 47 張，其中仍 OPEN 的 133 張有 ≥59% 可追溯到某支 PR 的 review（量在 `bf16d303`）。
+
+**1. 必修的那些先分流，再動手**——`take` / `reframe` / `reject`，逐條給理由：
 
 - **take**：驗過屬實、在本 PR 範圍內 ⇒ 修。
 - **reframe**：症狀對、診斷錯 ⇒ 修真正的那個，並說明差在哪。
@@ -77,6 +99,26 @@ description: IaC-aware 兩階段 review — code 走 spec→quality、IaC 走 bl
 
 ⇒ 只 resolve 你**真的處置過**的：三種處置都必須先有那一則回覆。沒修、也沒寫理由就順手清掉，等於用 resolve 把 finding 埋掉。
 
+## 鷹架准入：兩道門，缺一不可
+
+修 finding 最常見的產物是**一支新測試或一支新守衛**，而那正是本 repo 缺陷密度最高的地方。動手寫之前過兩道門：
+
+**門 1（寫測試 body 之前）** — 借 superpowers `writing-good-tests.md` 逐字：
+> `BEFORE writing the test body: Name the production change that would make this test fail. Cannot name one → redesign around an observable behavior`
+
+同一份檔案列的 warning signs 裡，這三條**逐字命中本 repo 的既有形狀**，看到就停：
+> `The test greps source text, or asserts a removed symbol stays removed`
+> `The test exists for coverage, checking no side effect or outcome`
+> `Setup and assertion share the same object, guaranteeing equality`
+
+**門 2（守衛值不值得留）** — 本 repo 已拍板過三次的判準：
+> **守衛值得留，當且僅當它的靜默失效會讓「原始缺陷」回來。**
+不會 ⇒ 那是**揭露級**不是守衛級：原地寫「⚠️ NOT GUARDED：<實測到的存活事實>」＋量測，不要寫「已涵蓋」。
+
+⚠️ **刪掉一條規則時，把只斷言它「不出現」的測試一起刪掉。** 那種測試在規則消失後會變成**恆真**而全綠——本次刪 CONVERGED 時實際發生：5 支相關測試只有 2 支轉紅，另外 3 支因為斷言的是 `not any("CONVERGED" in m …)` 而靜默變成永遠通過。
+
+⚠️ **新守衛要對自己跑變異，而且要跑兩個方向。** 本次實測：把 `ROUND_CAP` 從 5 改成 **500** 時測試全綠——因為 fixture 是**從 `cs.ROUND_CAP` 建的**，常數一改 fixture 跟著改，斷言恆真。改成字面量 + 一支 `assert cs.ROUND_CAP == 5` 的 pin 之後，500 與 4 兩個方向都轉紅。**「下限不可取自它要保護的東西」在測試 fixture 上同樣成立。**
+
 ## 預設檔位（第 1 輪 vs 第 2 輪起）
 
 同一個缺陷的**第幾輪**修正，決定上節自審夠不夠：
@@ -89,6 +131,8 @@ description: IaC-aware 兩階段 review — code 走 spec→quality、IaC 走 bl
 「換 context」不必然等於多 agent harness：另開一個**不帶本輪對話**的 reviewer（新 session / 新 subagent / 另一個模型皆可），只餵**受審 diff 本身**與 [`vibe-converge`](../vibe-converge/SKILL.md) 的跨輪交接三件組（verified claim / open question / 已打死方向表）。⛔ **不要餵上一輪的完整 commit body 與修法敘事**——那正是讓下一棒繼承上一棒盲區的東西。
 
 多輪情境的停止時機、什麼時候該**換受審主體**而不是再修一版，走 [`vibe-converge`](../vibe-converge/SKILL.md)（`make converge-status`）。
+
+⛔ **輪數上限 5，而且開下一輪的條件是「oracle 仍然沒過」，不是「reviewer 還有話說」。** 停止條件**不是**「審到零 finding」——那條規則已刪除，理由（單次 inspection 中位只撈到 30%、61% 的 review 找到零缺陷、Fagan/Cisco/NASA 的 exit criteria 是「已知缺陷已修且已驗證」）在 vibe-converge 與其 `references/derivation.md` §4.1。
 
 ## 升級到多 agent harness（大 / 高風險 review；defer-with-trigger）
 

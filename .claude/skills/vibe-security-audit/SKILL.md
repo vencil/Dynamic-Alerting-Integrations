@@ -53,5 +53,6 @@ description: 全 component 週期性深度安全稽核 — Recon→平行 Hunt(V
 ## 反模式(別做)
 
 - 把稽核跑在主樹而非隔離 worktree(同時段並行編輯會污染 read)。
-- 把「沒 finding」當「安全」證明——single run 只找約一半,是 additive;深稽核要 ≥2 run 並讀前次結果。
+- 把「沒 finding」當「安全」證明——single run 只找約一半,是 additive;深稽核要 ≥2 run 並讀前次結果。（外部數字與這一致:單次 inspection 跨研究中位只撈到約 30% 的既存缺陷,Wagner 2006 綜述。）
+  ⚠️ **這條與 `vibe-converge` 的輪數上限 5 不衝突,因為受審主體不同**:那邊管的是「同一個缺陷的修正鏈」,鏈要有終點;這裡管的是「對一個攻擊面的週期性稽核」,它本來就沒有終點,只有覆蓋率。⛔ 兩者都**不以「零 finding」當結論**——那邊換成 oracle 過不過,這裡換成講清楚**掃了哪些面、沒掃哪些**。
 - 用一堆 LOW 灌報告厚度;或把 designed behavior(如 ADR-022 contained dev-bypass)當 bug 報。
