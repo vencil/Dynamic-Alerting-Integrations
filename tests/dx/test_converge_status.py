@@ -348,10 +348,10 @@ def test_round_cap_blocks_past_the_cap_and_stays_quiet_at_it():
 
 
 def test_round_cap_counts_the_span_not_the_record_count():
-    """A ledger opened mid-chain (rounds 5..8) is 4 rounds, not 8."""
-    mid = [oracle(5)] + [subject(n, "s") for n in range(5, 9)]
+    """A ledger opened mid-chain (rounds 5..10) is 6 rounds, not 10."""
+    mid = [oracle(5)] + [subject(n, "s") for n in range(5, 11)]
     blocking, _ = cs.evaluate(rounds_of(mid))
-    assert not any("ROUND-CAP" in m for m in blocking)
+    assert any("ROUND-CAP" in m and "(6 rounds)" in m for m in blocking)
 
 
 def test_the_cap_boundary_with_a_pending_fix_has_a_reachable_state():
@@ -373,15 +373,74 @@ def test_the_cap_boundary_with_a_pending_fix_has_a_reachable_state():
     assert any("unreviewed fix" in m for m in blocking)
 
 
-def test_five_rounds_without_a_pending_fix_are_allowed():
-    """The cap is the ceiling, not the last legal round.
+def test_round_cap_is_silent_at_a_five_round_span_opened_mid_chain():
+    """Rounds 5..9 is a span of 5 -- exactly the cap, and legal.
 
-    Guards the owner-set budget: if someone changes the comparison to `>=`
-    unconditionally, five declared rounds silently become four.
+    Deliberately sits ON the boundary. An earlier version of this test used
+    5..8 (span 4), which moved it off the boundary for no reason and gave up
+    the coverage.
     """
-    blocking, _ = cs.evaluate(rounds_of(
-        [oracle(1)] + [subject(n, "s") for n in range(1, 6)]))
+    mid = [oracle(5)] + [subject(n, "s") for n in range(5, 10)]
+    blocking, _ = cs.evaluate(rounds_of(mid))
     assert not any("ROUND-CAP" in m for m in blocking)
+
+
+def test_a_bare_undecidable_record_is_a_violation():
+    """The exemption is load-bearing, so the record cannot be a one-liner.
+
+    Measured before this check: {"kind":"decidability","round":1,
+    "verdict":"undecidable"} -- no subject, question, evidence or note --
+    returned 0 for the entire run while the report printed "no stated terminal
+    condition". Cheaper than the fabricated oracle it was meant to replace.
+    """
+    out = cs.check_record(rec(kind="decidability", verdict="undecidable",
+                              _where="t:1"))
+    for field in ("subject", "question", "evidence_set", "note"):
+        assert any(f"'{field}'" in m for m in out), field
+
+
+def test_a_decidable_verdict_needs_none_of_those_fields():
+    """Paired with the above so the check cannot drift to always-reject."""
+    assert cs.check_record(rec(kind="decidability", verdict="decidable",
+                               _where="t:1")) == []
+
+
+def test_the_undecidable_exemption_needs_the_chain_to_have_stopped():
+    """Fails if the exemption goes back to being chain-wide.
+
+    Measured: one undecidable record about an unrelated subject in round 1 let
+    five further rounds run with an open finding and no oracle at all, exit 0 --
+    the cheapest green in the tool, and one that needs no lie because a claim of
+    undecidability is not falsifiable offline.
+    """
+    undec = rec(round=1, kind="decidability", subject="a side question",
+                question="q", evidence_set="e", verdict="undecidable",
+                note="isomorphic")
+    still_running = [undec] + [subject(n, "the real work") for n in range(1, 6)]
+    blocking, _ = cs.evaluate(rounds_of(still_running))
+    assert any("ORACLE-MISSING" in m for m in blocking)
+
+    stopped = [subject(1, "the real work"), dict(undec, round=2)]
+    blocking, _ = cs.evaluate(rounds_of(stopped))
+    assert not any("ORACLE-MISSING" in m for m in blocking)
+
+
+def test_the_report_names_the_undecidable_verdict_as_the_terminal_condition(
+        tmp_path, capsys):
+    """Report and exit code must not contradict each other.
+
+    Before: a chain exempted by an undecidable verdict exited 0 while the
+    report said "no stated terminal condition".
+    """
+    write_ledger(tmp_path, [
+        subject(1, "s"),
+        rec(round=2, kind="decidability", subject="the exemption",
+            question="q", evidence_set="e", verdict="undecidable", note="iso"),
+    ])
+    assert cs.main(["--scope", str(tmp_path)]) == cs.EXIT_OK
+    out = capsys.readouterr().out
+    assert "NONE DECLARED" not in out
+    assert "UNDECIDABLE verdict on the exemption" in out
 
 
 def test_an_undecidable_verdict_is_a_terminal_state_not_a_missing_oracle():
@@ -438,6 +497,48 @@ def test_a_bare_question_no_longer_silences_unreviewed_fix():
             evidence="what would close it"),
     ]))
     assert any("UNREVIEWED-FIX" in m for m in blocking)
+
+
+def test_unreviewed_fix_names_the_round_that_actually_holds_the_fix():
+    """Fails if the rule picks the FIRST round with a fix instead of the last.
+
+    Found by mutation: `fixed_pre[-1]` -> `fixed_pre[0]` survived the whole
+    file, and the message it produced said "round 2 ... and no later round
+    declares a subject" on a ledger where round 3 declares one.
+    """
+    blocking, _ = cs.evaluate(rounds_of([
+        oracle(1),
+        subject(1, "s"),
+        subject(2, "s"), finding(2, status="fixed"),
+        subject(3, "the fix from round 2"),
+        subject(4, "s"), finding(4, status="fixed"),
+    ]))
+    msg = [m for m in blocking if "UNREVIEWED-FIX" in m]
+    assert len(msg) == 1
+    assert "round 4" in msg[0]
+    assert "round 2" not in msg[0]
+
+
+def test_advisory_messages_name_their_ledger_too(tmp_path, capsys):
+    """Found by mutation: the path prefix was only tested on blocking."""
+    write_ledger(tmp_path, [oracle(1), subject(1, "s", reviewer="self")],
+                 subdir="only")
+    cs.main(["--scope", str(tmp_path)])
+    err = capsys.readouterr().err
+    assert "SELF-REVIEW-ZERO" in err
+    assert "only" + os.sep + cs.LEDGER_NAME in err
+
+
+def test_an_oracle_round_that_is_present_but_not_an_integer_is_a_violation():
+    """Found by mutation: deleting the oracle round check survived.
+
+    `round` is optional on an oracle, but a present-and-wrong one would be
+    silently ignored, and the report would then print no round where the
+    author thought they had given one.
+    """
+    out = cs.check_record(rec(kind="oracle", round="1", command="c",
+                              falsifier="f", _where="t:1"))
+    assert any("oracle 'round' is optional" in m for m in out)
 
 
 def test_a_later_round_with_a_subject_does_clear_unreviewed_fix():
