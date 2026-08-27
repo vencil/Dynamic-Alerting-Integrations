@@ -993,10 +993,19 @@ def test_predicate_only_fires_when_the_write_would_leave_nothing():
     # The predicate is the whole guard, so pin all four quadrants directly. Losing
     # SOME rules is ordinary work and must NOT fire — gating on any shrink would
     # fail-red on a tenant retiring one recipe, and the guard would get removed.
-    assert cc._erases_committed_rules({}, {"a": "1"}) is True
-    assert cc._erases_committed_rules({}, {}) is False           # nothing to protect
-    assert cc._erases_committed_rules({"a": "1"}, {"a": "1"}) is False
-    assert cc._erases_committed_rules({"a": "1"}, {"a": "1", "b": "2"}) is False  # partial loss
+    # ⛔ Truthiness, not identity: `is False` would also fail for the equivalent
+    # `return committed and not produced`, which returns the empty dict. That is a
+    # refactor anyone may make and the annotation already promises a bool — pinning
+    # the `bool()` call pins the implementation, not the behaviour.
+    assert cc._erases_committed_rules({}, {"a": "1"})
+    assert not cc._erases_committed_rules({}, {})                 # nothing to protect
+    assert not cc._erases_committed_rules({"a": "1"}, {"a": "1"})
+    assert not cc._erases_committed_rules({"a": "1"}, {"a": "1", "b": "2"})  # partial loss
+
+    # The disclosure quantity is the same subtraction the message reports.
+    assert cc._rules_regenerating_would_drop({}, {"a": "1"}) == {"a"}
+    assert cc._rules_regenerating_would_drop({"a": "1"}, {"a": "1", "b": "2"}) == {"b"}
+    assert cc._rules_regenerating_would_drop({"a": "1", "b": "2"}, {"a": "1"}) == set()
 
 
 def test_write_refuses_to_erase_and_leaves_the_pack_byte_identical(tmp_path, monkeypatch):
@@ -1063,7 +1072,11 @@ def test_check_does_not_name_the_destructive_remedy_when_source_compiles_to_noth
     assert cc.main() == cc.EXIT_VIOLATION
     err = capsys.readouterr().err
     assert "make custom-alerts-compile" not in err
-    assert "Do not regenerate" in err
+    # ⛔ Assert the diagnostic the reader NEEDS, not the wording it happens to use.
+    # Pinning a phrase makes a rewrite — or the house rule that user-facing prose is
+    # Traditional Chinese — into a red build for no behavioural reason.
+    assert str(src) in err, "the message must say which tree the compiler read"
+    assert "--allow-empty" in err, "the legitimate way through must be reachable from here"
 
 
 def test_check_still_names_the_remedy_on_ordinary_drift(tmp_path, monkeypatch, capsys):
@@ -1081,4 +1094,134 @@ def test_check_still_names_the_remedy_on_ordinary_drift(tmp_path, monkeypatch, c
     assert cc.main() == cc.EXIT_VIOLATION
     err = capsys.readouterr().err
     assert "make custom-alerts-compile" in err
-    assert "Do not regenerate" not in err
+    assert "--allow-empty" not in err
+
+
+# --- G. the three shapes the erase guard does NOT stop, and what is said instead ---
+def test_partial_loss_names_the_rules_regenerating_would_remove(tmp_path, monkeypatch, capsys):
+    # Measured on the live tree: three tenants, rename one file, and this is the
+    # branch you land in — rc=1 with "just regenerate", and following it drops that
+    # tenant's alerts from the pack, the ConfigMaps and the CRD, every gate green.
+    # The write is still allowed (retiring one recipe is ordinary work); what must
+    # not happen is being told to regenerate without being told what that removes.
+    src, out = tmp_path / "src", tmp_path / "pack.yaml"
+    _write_tree(src, {
+        "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
+                  '      - {recipe: threshold, name: a_hot, metric: a_m, op: ">",'
+                  ' window: 5m, threshold: "80:warning"}\n',
+        "b.yaml": 'tenants:\n  tb:\n    _custom_alerts:\n'
+                  '      - {recipe: threshold, name: b_hot, metric: b_m, op: ">",'
+                  ' window: 5m, threshold: "80:warning"}\n',
+    })
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
+    capsys.readouterr()
+
+    (src / "b.yaml").rename(src / "b.yml")   # byte-identical, just invisible now
+    monkeypatch.setattr(sys, "argv", ["compile", "--check",
+                                      "--config-dir", str(src), "--out", str(out)])
+    assert cc.main() == cc.EXIT_VIOLATION
+    err = capsys.readouterr().err
+    assert "make custom-alerts-compile" in err       # still the right remedy here
+    # …but not without the casualties. Rule identities are recipe_id slugs, so the
+    # metric is what appears in them — NOT the tenant's `name:` for the recipe.
+    assert "REMOVES" in err and "b_m" in err
+
+    # Positive control: drift with NOTHING dropped must not grow a casualty list.
+    capsys.readouterr()
+    (src / "b.yml").rename(src / "b.yaml")
+    (src / "c.yaml").write_text(
+        'tenants:\n  tc:\n    _custom_alerts:\n'
+        '      - {recipe: threshold, name: c_hot, metric: c_m, op: ">",'
+        ' window: 5m, threshold: "80:warning"}\n', encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["compile", "--check",
+                                      "--config-dir", str(src), "--out", str(out)])
+    assert cc.main() == cc.EXIT_VIOLATION
+    err = capsys.readouterr().err
+    assert "REMOVES" not in err
+
+
+def test_an_empty_compile_never_reports_success_with_a_tick(tmp_path, monkeypatch, capsys):
+    # The guard cannot fire when there is no pack to compare against, so a greenfield
+    # tree whose declarations the loader cannot see compiles to nothing on day one and
+    # every downstream gate agrees. `✅ Compiled 0 shape(s)` + rc=0 is the exact
+    # signature of the incident this whole change exists for.
+    src, out = tmp_path / "src", tmp_path / "absent.yaml"
+    _write_tree(src, _EMPTY_SOURCE)
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
+    cap = capsys.readouterr()
+    assert "✅" not in cap.out
+    assert "0 shape(s)" in cap.out and str(src) in cap.err
+
+    # Positive control: a compile that DID produce rules still gets its tick.
+    _write_tree(src, _ONE_RECIPE_SOURCE)
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
+    assert "✅" in capsys.readouterr().out
+
+
+def test_quarantine_is_diagnosed_as_itself_and_the_flag_is_refused(tmp_path, monkeypatch, capsys):
+    # #1008 fail-soft drops an invalid recipe and compiles the rest, so one mistyped
+    # `window:` in the only tenant that declares anything empties `produced` while the
+    # source still declares it. Answering that with "--allow-empty" would delete every
+    # committed rule to work around a one-character typo.
+    src, out = tmp_path / "src", tmp_path / "pack.yaml"
+    _write_tree(src, _ONE_RECIPE_SOURCE)
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
+    before = out.read_bytes()
+    capsys.readouterr()
+
+    (src / "a.yaml").write_text(
+        _ONE_RECIPE_SOURCE["a.yaml"].replace("window: 5m", "window: 5x"), encoding="utf-8")
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_VIOLATION
+    err = capsys.readouterr().err
+    assert "QUARANTINED" in err
+    assert "renamed" not in err, "a quarantine must not send the reader hunting for a rename"
+    # ⛔ The first version of this fix told the reader NOT to use --allow-empty and
+    # then printed a runnable command containing it three lines down — the defect
+    # this whole change is about, reproduced inside the fix for it. Assert the
+    # command is absent, not merely that a warning is present.
+    assert "compile_custom_alerts.py --config-dir" not in err
+    # …and the same must hold for the --check side, which shares the offer helper.
+    monkeypatch.setattr(sys, "argv", ["compile", "--check",
+                                      "--config-dir", str(src), "--out", str(out)])
+    assert cc.main() == cc.EXIT_VIOLATION
+    check_err = capsys.readouterr().err
+    assert "QUARANTINED" in check_err
+    assert "compile_custom_alerts.py --config-dir" not in check_err
+
+    # …and the flag itself is refused in this state, not merely discouraged.
+    assert _compile_into(src, out, monkeypatch, extra=("--allow-empty",)) == cc.EXIT_VIOLATION
+    assert out.read_bytes() == before
+
+    # Positive control: with the typo fixed, the same flag writes as before.
+    capsys.readouterr()
+    _write_tree(src, _EMPTY_SOURCE)
+    (src / "a.yaml").write_text(_EMPTY_SOURCE["a.yaml"], encoding="utf-8")
+    assert _compile_into(src, out, monkeypatch, extra=("--allow-empty",)) == cc.EXIT_OK
+
+
+def test_refusal_prints_a_command_the_reader_can_actually_run(tmp_path, monkeypatch, capsys):
+    # The documented entry point is `make custom-alerts-compile`, whose recipe takes
+    # no arguments — so naming a bare flag leaves the reader to reconstruct the whole
+    # invocation, or to hard-wire the flag into the Makefile and disarm the guard.
+    src, out = tmp_path / "src", tmp_path / "pack.yaml"
+    _write_tree(src, _ONE_RECIPE_SOURCE)
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
+    capsys.readouterr()
+
+    (src / "a.yaml").write_text(_EMPTY_SOURCE["a.yaml"], encoding="utf-8")
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_VIOLATION
+    err = capsys.readouterr().err
+    assert f"--config-dir {src}" in err
+    assert f"--out {out}" in err
+    assert "--allow-empty" in err
+
+
+def test_a_missing_config_dir_is_a_caller_error_not_a_success(tmp_path, monkeypatch, capsys):
+    # Pre-existing branch, unpinned until now: `main()` grew a second non-zero exit
+    # in this change and only that one was asserted, which reads as if the exit-code
+    # contract were covered. Measured: returning EXIT_OK here survived the suite.
+    monkeypatch.setattr(sys, "argv", ["compile", "--config-dir", str(tmp_path / "nope"),
+                                      "--out", str(tmp_path / "pack.yaml")])
+    assert cc.main() == cc.EXIT_CALLER_ERROR
+    assert "config dir not found" in capsys.readouterr().err
+    assert not (tmp_path / "pack.yaml").exists()

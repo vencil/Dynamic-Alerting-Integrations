@@ -21,10 +21,22 @@ tree (`rule-packs/recipes/examples/conf.d/`) stays reachable via `--config-dir`.
 pack (via check_rulepack_sync), so a stale / hand-edited pack is a hard failure.
 
 ⛔ A compile that produces NOTHING will not overwrite a pack that has rules
-(`--allow-empty` to override). A source file the compiler stops seeing — renamed,
-moved, or a name its discovery does not match — is indistinguishable from "the
-last recipe was removed" at this layer, and the write is irreversible in the
-working tree. See `_erases_committed_rules`.
+(`--allow-empty` to override, refused while recipes are quarantined). A source
+file the compiler stops seeing — renamed, moved, or a name its discovery does not
+match — is indistinguishable from "the last recipe was removed" at this layer, and
+the write is irreversible in the working tree. See `_erases_committed_rules`.
+
+⚠️ What that guard does NOT cover, measured rather than assumed:
+  * **Partial loss.** Three tenants, rename one file: rc=0 and that tenant's rules
+    are simply absent. `--check` still catches it as drift, and now names what
+    regenerating would remove (`_rules_regenerating_would_drop`) — but nothing
+    refuses the write.
+  * **No pack, no baseline.** The comparison is against the pack on disk, so a
+    first compile — a greenfield tree, a fresh `--out`, a deleted pack — has
+    nothing to compare and writes whatever it got. Only the zero-shape warning
+    speaks up there.
+  * **The library entry point.** `build_pack()` has no guard at all; callers that
+    import this module and render themselves bypass everything here.
 
 Exit codes:
     0  wrote file (default) / in sync (--check)
@@ -287,10 +299,95 @@ def _erases_committed_rules(produced: dict, committed: dict) -> bool:
     readily as a genuine "the last recipe is gone".
 
     ⚠️ NOT GUARDED, on purpose and measured: partial loss. Renaming one of three
-    tenant files still drops that tenant's alerts silently through this path. The
-    `--check` gate reports it as drift; this function does not look at it.
+    tenant files still drops that tenant's alerts silently through this path
+    (measured: rc=0, `Compiled 2 shape(s)`, that tenant's rules simply absent).
+    `_rules_regenerating_would_drop` is what makes that visible in the message;
+    this predicate deliberately does not fire on it.
+
+    ⚠️ NOT GUARDED, and this one is structural: *committed* is read from the pack
+    on disk, so when there is no pack there is no baseline and nothing fires. A
+    first compile of a tree whose declarations the loader cannot see writes an
+    empty pack and every downstream gate agrees with it. `_render_write_summary`
+    is the only thing that speaks up in that case, and it only warns.
     """
     return bool(committed) and not produced
+
+
+def _rules_regenerating_would_drop(produced: dict, committed: dict) -> set:
+    """Rule identities the committed pack has that this compile did NOT produce.
+
+    ⛔ THIS IS A DISCLOSURE, NOT A GATE, and the difference is the whole design.
+    Regenerating is the right answer to ordinary drift, so a message that forbade
+    it whenever anything disappeared would be wrong far more often than right —
+    an edited recipe legitimately retires its old rule identity. What is NOT
+    acceptable is telling someone to regenerate without saying what regenerating
+    removes: measured on a three-tenant tree, renaming one file made `--check` red
+    with the plain "run the compiler" remedy, and following it dropped that
+    tenant's alerts from the pack, the ConfigMaps and the CRD with rc=0 and every
+    gate green. Naming the casualties costs nothing and is always true.
+    """
+    return set(committed) - set(produced)
+
+
+def _rerun_command(args) -> str:
+    """A command the reader can paste, carrying the arguments THEY used.
+
+    ⛔ NAMING A BARE FLAG IS NOT AN ESCAPE HATCH. The documented way to run this
+    compiler is `make custom-alerts-compile`, whose recipe takes no arguments — so
+    "re-run with --allow-empty" is not something the person who hit this can do.
+    Either they abandon the documented path and reconstruct the invocation from
+    memory, or they hard-wire the flag into the Makefile target, which turns the
+    guard off for everyone. Printing the whole command removes that fork.
+    """
+    parts = ["python scripts/tools/dx/compile_custom_alerts.py"]
+    if args.config_dir:
+        parts.append(f"--config-dir {args.config_dir}")
+    if args.out:
+        parts.append(f"--out {args.out}")
+    if args.max_custom_recipes != _loader.MAX_CUSTOM_RECIPES_DEFAULT:
+        parts.append(f"--max-custom-recipes {args.max_custom_recipes}")
+    parts.append("--allow-empty")
+    return " ".join(parts)
+
+
+def _deliberate_empty_offer(args, quarantined: int) -> str:
+    """The paste-able way to write an empty pack on purpose — withheld while quarantined.
+
+    ⛔ THIS FUNCTION EXISTS BECAUSE THE FIRST VERSION CONTRADICTED ITSELF. The
+    quarantine branch said "Do NOT pass --allow-empty here" and three lines later
+    printed a command containing `--allow-empty`, i.e. the same defect this whole
+    change is about — a message naming the cheaper, destructive move — reproduced
+    one layer down, inside the fix for it. A reader who skims takes the command.
+    """
+    if quarantined:
+        return ""
+    return (f"\n   Once you know which of those it is, and only if the declarations really "
+            f"are gone, write the empty pack deliberately with\n"
+            f"     {_rerun_command(args)}")
+
+
+def _nothing_compiled_diagnosis(config_dir: Path, quarantined: int) -> str:
+    """Why this compile produced no rules — ordered by what to check first.
+
+    ⛔ THE QUARANTINE BRANCH IS NOT A NICETY. #1008 fail-soft drops an invalid
+    recipe and compiles the rest, so a single mistyped `window: 5x` in the only
+    tenant that declares anything makes `produced` empty while the source still
+    declares that recipe. Measured: the first version of this message sent that
+    reader looking for a renamed file and offered them the flag that erases the
+    pack — a one-character fix answered with a destructive one. The compiler is
+    holding `skipped` two dozen lines further up; it can simply say so.
+    """
+    if quarantined:
+        return (f"   {quarantined} recipe(s) were QUARANTINED above — the source still declares "
+                f"them, they just failed to compile.\n"
+                f"   ⛔ Fix those declarations. Do NOT pass --allow-empty here: the source is not "
+                f"empty, and writing an empty pack would drop rules that are still declared.")
+    return (f"   The compiler read: {config_dir}\n"
+            f"   Check, in this order:\n"
+            f"     1. a declaration the compiler stopped seeing — a renamed, moved or deleted\n"
+            f"        source file, or a filename its discovery does not match;\n"
+            f"     2. a source file whose contents no longer parse (it would be quarantined above);\n"
+            f"     3. the last declaration really was removed — that is a legitimate end state.")
 
 
 def main() -> int:
@@ -385,24 +482,35 @@ def main() -> int:
             for f in findings:
                 print(f"       {f}")
             # ⛔ THE REMEDY LINE IS BRANCHED, AND THAT IS THE POINT. "Regenerate" is
-            # the right answer to ordinary drift and the WRONG answer to this shape:
-            # when the source compiled to nothing, regenerating is what deletes the
-            # pack. Measured: renaming one tenant file to `.yml` turns this gate red,
-            # and following the instruction this line used to print unconditionally
+            # the right answer to ordinary drift and the WRONG answer when the source
+            # compiled to nothing — regenerating is then what deletes the pack.
+            # Measured: renaming one tenant file to `.yml` turns this gate red, and
+            # following the instruction this line used to print unconditionally
             # emptied the shipped pack (7016 -> 447 bytes) and turned the gate green.
+            dropped = _rules_regenerating_would_drop(produced, committed)
             if _erases_committed_rules(produced, committed):
                 print(f"\n❌ custom-alerts rule pack out of sync — and the source now "
                       f"compiles to NOTHING while the committed pack has "
                       f"{len(committed)} rule(s).\n"
-                      f"   The compiler read: {config_dir}\n"
                       f"   ⛔ Do not regenerate to clear this. Regenerating here deletes "
                       f"every custom alert in the pack.\n"
-                      f"   Find the declarations the compiler stopped seeing first "
-                      f"(renamed / moved file, or a filename its discovery does not match).",
-                      file=sys.stderr)
+                      f"{_nothing_compiled_diagnosis(config_dir, len(skipped))}"
+                      f"{_deliberate_empty_offer(args, len(skipped))}", file=sys.stderr)
             else:
+                # ⛔ THE CASUALTY LIST IS THE HALF THAT WAS MISSING. This branch used
+                # to say "regenerate" and nothing else, including for partial loss —
+                # the same defect one size down. Measured on three tenants: renaming
+                # one file landed HERE, and following this line dropped that tenant's
+                # alerts from pack, ConfigMaps and CRD at rc=0 with every gate green.
                 print(f"\n❌ custom-alerts rule pack out of sync. "
                       f"Run `make custom-alerts-compile` to regenerate.", file=sys.stderr)
+                if dropped:
+                    print(f"   ⚠ Regenerating REMOVES {len(dropped)} rule(s) the committed pack "
+                          f"has and this compile did not produce:", file=sys.stderr)
+                    for ident in sorted(dropped):
+                        print(f"       {ident}", file=sys.stderr)
+                    print(f"   If you did not mean to retire those, find out why the compiler "
+                          f"no longer produces them before regenerating.", file=sys.stderr)
             return EXIT_VIOLATION
         print(f"✅ custom-alerts rule pack matches source "
               f"({meta['shapes']} shape(s)).")
@@ -427,17 +535,35 @@ def main() -> int:
               f"{shown} currently has {len(committed)}.\n"
               f"   Writing would remove every custom alert from the pack, and the "
               f"working-tree copy is gone once it is written.\n"
-              f"   The compiler read: {config_dir}\n"
-              f"   Check first whether a declaration stopped being visible to it — a "
-              f"renamed, moved or deleted source file, or a filename its discovery "
-              f"does not match — because that is indistinguishable from an intended "
-              f"removal at this layer.\n"
-              f"   If removing the last recipe is what you meant, re-run with "
-              f"--allow-empty.", file=sys.stderr)
+              f"{_nothing_compiled_diagnosis(config_dir, len(skipped))}"
+              f"{_deliberate_empty_offer(args, len(skipped))}", file=sys.stderr)
+        return EXIT_VIOLATION
+
+    # ⛔ THE FLAG IS NOT A UNIVERSAL OVERRIDE. `--allow-empty` says "I mean to ship a
+    # pack with no rules"; quarantined recipes say "the source still declares rules,
+    # they just did not compile". Those two cannot both be true, and honouring the
+    # flag here would answer a mistyped `window:` by deleting every rule in the pack.
+    if args.allow_empty and skipped and not produced:
+        print(f"❌ refusing to write: --allow-empty says the source has no declarations, "
+              f"but {len(skipped)} recipe(s) were quarantined above — the source declares "
+              f"them and they failed to compile.\n"
+              f"   Fix or remove those declarations; the flag is for a source that is "
+              f"genuinely empty.", file=sys.stderr)
         return EXIT_VIOLATION
 
     out_path.write_text(_render(groups), encoding="utf-8", newline="\n")
-    print(f"✅ Compiled {meta['shapes']} shape(s) → {shown}")
+    if meta["shapes"]:
+        print(f"✅ Compiled {meta['shapes']} shape(s) → {shown}")
+    else:
+        # ⛔ AN EMPTY COMPILE NEVER GETS A TICK. `✅ Compiled 0 shape(s)` with rc=0 is
+        # the exact signature of the incident this guard exists for, and the guard
+        # itself cannot fire when there is no pack to compare against — a greenfield
+        # tree whose declarations the loader cannot see compiles to nothing on day one
+        # and every downstream gate agrees (measured). This line is all that stands
+        # between that and silence, so it says what happened rather than congratulating.
+        print(f"⚠ Compiled 0 shape(s) → {shown} — the pack now contains no rules.")
+        print(f"   Source: {config_dir}. If you expected custom alerts here, the compiler "
+              f"did not see their declarations.", file=sys.stderr)
     if meta["per_tenant_counts"]:
         worst = max(meta["per_tenant_counts"].values())
         print(f"   per-tenant EFFECTIVE recipe counts (own + inherited): "
