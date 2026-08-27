@@ -20,9 +20,15 @@ tree (`rule-packs/recipes/examples/conf.d/`) stays reachable via `--config-dir`.
 `--check` regenerates in memory and SEMANTICALLY compares against the committed
 pack (via check_rulepack_sync), so a stale / hand-edited pack is a hard failure.
 
+⛔ A compile that produces NOTHING will not overwrite a pack that has rules
+(`--allow-empty` to override). A source file the compiler stops seeing — renamed,
+moved, or a name its discovery does not match — is indistinguishable from "the
+last recipe was removed" at this layer, and the write is irreversible in the
+working tree. See `_erases_committed_rules`.
+
 Exit codes:
     0  wrote file (default) / in sync (--check)
-    1  drift detected (--check)
+    1  drift detected (--check) / refused to erase the committed pack (write)
     2  error (invalid declaration tree, missing source, …)
 """
 from __future__ import annotations
@@ -253,6 +259,40 @@ def _render(groups: List[dict]) -> str:
     return header + body
 
 
+def _committed_rules(out_path: Path) -> dict:
+    """Rules already in the pack at *out_path*, in the same identity form `--check` uses.
+
+    ⚠️ An unreadable / malformed pack answers {} ON PURPOSE, not by accident. This
+    function exists to protect content that is there; a pack that cannot be parsed
+    has no content to protect, and regenerating it is the repair. Raising here would
+    turn "your committed pack is corrupt" into "the compiler no longer runs", i.e. it
+    would take away the only way out.
+    """
+    if not out_path.exists():
+        return {}
+    try:
+        return sync._extract(sync._groups_from_rulepack(out_path))
+    except Exception:
+        return {}
+
+
+def _erases_committed_rules(produced: dict, committed: dict) -> bool:
+    """True when writing *produced* would leave the pack with none of its rules.
+
+    ⛔ THE PREDICATE IS "PRODUCED NOTHING", NOT "PRODUCED FEWER". Losing SOME rules
+    is a legitimate everyday edit (a tenant retires one recipe), so gating on any
+    shrink would fail-red on ordinary work and the guard would be removed. Losing
+    ALL of them is the shape that means the compiler saw an empty source — which a
+    rename, a move, or a filename its discovery does not match produces just as
+    readily as a genuine "the last recipe is gone".
+
+    ⚠️ NOT GUARDED, on purpose and measured: partial loss. Renaming one of three
+    tenant files still drops that tenant's alerts silently through this path. The
+    `--check` gate reports it as drift; this function does not look at it.
+    """
+    return bool(committed) and not produced
+
+
 def main() -> int:
     try_utf8_stdout()
     parser = argparse.ArgumentParser(description="Compile custom-alert recipes → rule pack")
@@ -266,6 +306,9 @@ def main() -> int:
                         default=_loader.MAX_CUSTOM_RECIPES_DEFAULT,
                         help=f"per-tenant cap on OWN recipes (default: "
                              f"{_loader.MAX_CUSTOM_RECIPES_DEFAULT}; inherited policy uncapped)")
+    parser.add_argument("--allow-empty", action="store_true",
+                        help="write a pack with no rules over one that has rules "
+                             "(refused by default; only when removing the last recipe is intended)")
     args = parser.parse_args()
 
     repo = _repo_root()
@@ -332,31 +375,68 @@ def main() -> int:
               "it → 0). Per-CONTAINER, not per-PVC. Verify the live flow with `byo_check.py "
               "prometheus` after a representative load test.", file=sys.stderr)
 
+    produced = sync._extract(groups)
+    committed = _committed_rules(out_path)
+
     if args.check:
-        gen_map = sync._extract(groups)
-        committed = sync._extract(sync._groups_from_rulepack(out_path)) if out_path.exists() else {}
-        findings = sync._diff_maps(gen_map, committed)
+        findings = sync._diff_maps(produced, committed)
         if findings:
             print(f"  ❌ {OUT_REL} drifted from custom-alert source:")
             for f in findings:
                 print(f"       {f}")
-            print(f"\n❌ custom-alerts rule pack out of sync. "
-                  f"Run `make custom-alerts-compile` to regenerate.", file=sys.stderr)
+            # ⛔ THE REMEDY LINE IS BRANCHED, AND THAT IS THE POINT. "Regenerate" is
+            # the right answer to ordinary drift and the WRONG answer to this shape:
+            # when the source compiled to nothing, regenerating is what deletes the
+            # pack. Measured: renaming one tenant file to `.yml` turns this gate red,
+            # and following the instruction this line used to print unconditionally
+            # emptied the shipped pack (7016 -> 447 bytes) and turned the gate green.
+            if _erases_committed_rules(produced, committed):
+                print(f"\n❌ custom-alerts rule pack out of sync — and the source now "
+                      f"compiles to NOTHING while the committed pack has "
+                      f"{len(committed)} rule(s).\n"
+                      f"   The compiler read: {config_dir}\n"
+                      f"   ⛔ Do not regenerate to clear this. Regenerating here deletes "
+                      f"every custom alert in the pack.\n"
+                      f"   Find the declarations the compiler stopped seeing first "
+                      f"(renamed / moved file, or a filename its discovery does not match).",
+                      file=sys.stderr)
+            else:
+                print(f"\n❌ custom-alerts rule pack out of sync. "
+                      f"Run `make custom-alerts-compile` to regenerate.", file=sys.stderr)
             return EXIT_VIOLATION
         print(f"✅ custom-alerts rule pack matches source "
               f"({meta['shapes']} shape(s)).")
         return EXIT_OK
 
-    out_path.write_text(_render(groups), encoding="utf-8", newline="\n")
     # Display repo-relative when the out path is inside the repo, else show it as
     # given. `relative_to` raises ValueError for an --out outside the repo (or on a
     # different drive on Windows) — without this guard the success line would crash
     # AFTER the file was already written, turning a successful compile into a
     # traceback + nonzero exit (false failure).
+    #
+    # ⛔ COMPUTED BEFORE THE WRITE, so the refusal below names the pack the same way
+    # the success line does. A refusal that prints an absolute path while every other
+    # line prints a repo-relative one reads like it is talking about a different file.
     try:
         shown = out_path.relative_to(repo)
     except ValueError:
         shown = out_path
+
+    if _erases_committed_rules(produced, committed) and not args.allow_empty:
+        print(f"❌ refusing to write: this compile produced no rules, and "
+              f"{shown} currently has {len(committed)}.\n"
+              f"   Writing would remove every custom alert from the pack, and the "
+              f"working-tree copy is gone once it is written.\n"
+              f"   The compiler read: {config_dir}\n"
+              f"   Check first whether a declaration stopped being visible to it — a "
+              f"renamed, moved or deleted source file, or a filename its discovery "
+              f"does not match — because that is indistinguishable from an intended "
+              f"removal at this layer.\n"
+              f"   If removing the last recipe is what you meant, re-run with "
+              f"--allow-empty.", file=sys.stderr)
+        return EXIT_VIOLATION
+
+    out_path.write_text(_render(groups), encoding="utf-8", newline="\n")
     print(f"✅ Compiled {meta['shapes']} shape(s) → {shown}")
     if meta["per_tenant_counts"]:
         worst = max(meta["per_tenant_counts"].values())

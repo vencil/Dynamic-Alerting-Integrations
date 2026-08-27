@@ -966,3 +966,119 @@ def test_cli_default_config_dir_matches_canonical_callers():
     for rel in ("Makefile", ".pre-commit-config.yaml", ".github/workflows/ci.yml"):
         callers = set(pat.findall((_REPO / rel).read_text(encoding="utf-8")))
         assert callers == {canonical}, f"{rel} scans {callers}, CLI default is {canonical}"
+
+
+# --- F. a compile that produces nothing must not erase a pack that has rules ---
+# Measured chain this closes: rename ONE tenant file so the loader stops matching it
+# (`db-b.yaml` -> `db-b.yml`, content byte-identical) -> `--check` goes red and told
+# the operator to regenerate -> regenerating compiled 0 shapes and wrote them over the
+# shipped pack (7016 -> 447 bytes) -> `--check` went GREEN again with every custom
+# alert gone. Both halves are pinned here: the write refuses, and the drift message
+# stops naming the destructive remedy.
+_EMPTY_SOURCE = {"a.yaml": "tenants:\n  ta: {}\n"}
+_ONE_RECIPE_SOURCE = {
+    "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
+              '      - {recipe: threshold, name: cpu_hot, metric: node_cpu, op: ">",'
+              ' window: 5m, threshold: "80:warning"}\n',
+}
+
+
+def _compile_into(src: Path, out: Path, monkeypatch, *, extra=()) -> int:
+    monkeypatch.setattr(sys, "argv",
+                        ["compile", "--config-dir", str(src), "--out", str(out), *extra])
+    return cc.main()
+
+
+def test_predicate_only_fires_when_the_write_would_leave_nothing():
+    # The predicate is the whole guard, so pin all four quadrants directly. Losing
+    # SOME rules is ordinary work and must NOT fire — gating on any shrink would
+    # fail-red on a tenant retiring one recipe, and the guard would get removed.
+    assert cc._erases_committed_rules({}, {"a": "1"}) is True
+    assert cc._erases_committed_rules({}, {}) is False           # nothing to protect
+    assert cc._erases_committed_rules({"a": "1"}, {"a": "1"}) is False
+    assert cc._erases_committed_rules({"a": "1"}, {"a": "1", "b": "2"}) is False  # partial loss
+
+
+def test_write_refuses_to_erase_and_leaves_the_pack_byte_identical(tmp_path, monkeypatch):
+    src, out = tmp_path / "src", tmp_path / "pack.yaml"
+    _write_tree(src, _ONE_RECIPE_SOURCE)
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
+    before = out.read_bytes()
+    assert cc._committed_rules(out), "fixture precondition: the pack must have rules to protect"
+
+    _write_tree(src, _EMPTY_SOURCE)
+    (src / "a.yaml").write_text(_EMPTY_SOURCE["a.yaml"], encoding="utf-8")
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_VIOLATION
+    assert out.read_bytes() == before, "refusal must not touch the file at all"
+
+
+def test_allow_empty_is_the_way_through(tmp_path, monkeypatch, capsys):
+    src, out = tmp_path / "src", tmp_path / "pack.yaml"
+    _write_tree(src, _ONE_RECIPE_SOURCE)
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
+    capsys.readouterr()
+
+    (src / "a.yaml").write_text(_EMPTY_SOURCE["a.yaml"], encoding="utf-8")
+    assert _compile_into(src, out, monkeypatch, extra=("--allow-empty",)) == cc.EXIT_OK
+    assert cc._committed_rules(out) == {}
+
+
+def test_empty_source_writes_freely_when_there_is_nothing_to_protect(tmp_path, monkeypatch):
+    # Two shapes that must stay writable, or a first compile / an already-empty pack
+    # would need a flag nobody would know to pass.
+    src = tmp_path / "src"
+    _write_tree(src, _EMPTY_SOURCE)
+
+    absent = tmp_path / "absent.yaml"
+    assert _compile_into(src, absent, monkeypatch) == cc.EXIT_OK
+    assert absent.exists()
+
+    empty = tmp_path / "empty.yaml"
+    empty.write_text("groups: []\n", encoding="utf-8")
+    assert _compile_into(src, empty, monkeypatch) == cc.EXIT_OK
+
+
+def test_unreadable_committed_pack_does_not_block_the_repair(tmp_path, monkeypatch):
+    # A pack that cannot be parsed has no content to protect, and regenerating it IS
+    # the repair. Raising here would turn "your pack is corrupt" into "the compiler
+    # no longer runs" — taking away the only way out.
+    src, out = tmp_path / "src", tmp_path / "pack.yaml"
+    _write_tree(src, _ONE_RECIPE_SOURCE)
+    out.write_text("groups: [ this is not: valid: yaml\n", encoding="utf-8")
+    assert cc._committed_rules(out) == {}
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
+    assert cc._committed_rules(out), "the repair must leave a readable pack"
+
+
+def test_check_does_not_name_the_destructive_remedy_when_source_compiles_to_nothing(
+        tmp_path, monkeypatch, capsys):
+    src, out = tmp_path / "src", tmp_path / "pack.yaml"
+    _write_tree(src, _ONE_RECIPE_SOURCE)
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
+    capsys.readouterr()
+
+    (src / "a.yaml").write_text(_EMPTY_SOURCE["a.yaml"], encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["compile", "--check",
+                                      "--config-dir", str(src), "--out", str(out)])
+    assert cc.main() == cc.EXIT_VIOLATION
+    err = capsys.readouterr().err
+    assert "make custom-alerts-compile" not in err
+    assert "Do not regenerate" in err
+
+
+def test_check_still_names_the_remedy_on_ordinary_drift(tmp_path, monkeypatch, capsys):
+    # Positive control for the test above: same gate, same red, and the ONLY thing
+    # that changed is whether the source still compiles to something. Without this,
+    # deleting the remedy line altogether would keep that test green.
+    src, out = tmp_path / "src", tmp_path / "pack.yaml"
+    _write_tree(src, _ONE_RECIPE_SOURCE)
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
+    capsys.readouterr()
+
+    out.write_text("groups: []\n", encoding="utf-8")  # stale pack, source unchanged
+    monkeypatch.setattr(sys, "argv", ["compile", "--check",
+                                      "--config-dir", str(src), "--out", str(out)])
+    assert cc.main() == cc.EXIT_VIOLATION
+    err = capsys.readouterr().err
+    assert "make custom-alerts-compile" in err
+    assert "Do not regenerate" not in err
