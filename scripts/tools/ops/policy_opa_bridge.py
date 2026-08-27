@@ -240,7 +240,7 @@ def call_opa_binary(
         )
 
         if result.returncode != 0:
-            print(f"ERROR: OPA eval failed: {result.stderr}", file=sys.stderr)
+            print(f"ERROR: OPA eval failed: {safe_label(result.stderr)}", file=sys.stderr)
             return []
 
         response_data = json.loads(result.stdout)

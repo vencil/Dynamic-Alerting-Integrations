@@ -355,7 +355,8 @@ KNOWN_UNMEASURABLE: dict[str, str] = {
     "da_assembler.py": "missing dependency: kubernetes Python client",
     # Requires a live `--target-url` (and `--output-dir`) — a soak runner, not
     # a reporter; there is nothing to point it at in a unit test.
-    "run_chaos_soak.py": "argparse: required --target-url / --output-dir",
+    "run_chaos_soak.py":
+        "argparse: the following arguments are required: --target-url, --output-dir",
     # ⛔ `diagnose.py` used to sit here. It does not belong: see EXTRA_ARGS.
     # Removing it turned up a live line-start forgery. Treat this list as a
     # standing invitation to check whether an entry is really unmeasurable or
@@ -378,8 +379,16 @@ def test_the_unmeasurable_set_is_named(variant: str, hostile_dirs, tmp_path):
         except Unmeasurable as exc:
             measured_unmeasurable[tool.name] = exc.args[0]
 
-    assert set(measured_unmeasurable) == set(KNOWN_UNMEASURABLE), (
-        f"[{variant}] the set of tools that cannot be measured changed.\n"
+    # ⛔ Whole-dict comparison, not just the key sets. Pinning only WHICH tools
+    # are unmeasurable lets a tool silently swap one classifiable failure for
+    # another while the recorded reason rots — and the reason is the entire
+    # point of this list, since it is what tells a reader whether the entry is
+    # really unmeasurable or merely un-invoked (which is how `diagnose.py` hid a
+    # live defect here). The values are therefore the CLASSIFIER's exact output,
+    # not hand-written prose. Raised in #1538 review.
+    assert measured_unmeasurable == KNOWN_UNMEASURABLE, (
+        f"[{variant}] the set of tools that cannot be measured, or the reason "
+        f"one of them cannot be, changed.\n"
         f"  now unmeasurable : {sorted(measured_unmeasurable)}\n"
         f"  expected         : {sorted(KNOWN_UNMEASURABLE)}\n"
         f"  reasons observed : {measured_unmeasurable}\n"

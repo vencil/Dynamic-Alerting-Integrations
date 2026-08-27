@@ -163,8 +163,12 @@ def _safe_log(value) -> str:
     This function WAS the rule — added for #1008 so a malformed tenant id /
     origin / exception text could not inject forged log lines or terminal
     escapes into a quarantine line. #1538 found the same defect in 18 more
-    tools and promoted this implementation, character class unchanged, to the
-    shared output layer. The name is kept because callers and
+    tools and promoted this implementation to the shared output layer.
+
+    ⚠️ The character class DID change in the promotion, and an earlier wording
+    here said it did not: the shared rule adds **C1** (``\\x80``–``\\x9f``), so a
+    value that reaches this function with ``\\x85`` now becomes ``?`` where the
+    pre-#1538 body passed it through. Behaviour change, deliberate, disclosed. The name is kept because callers and
     ``tests/dx/test_compile_custom_alerts.py`` reference it; the body is now a
     delegate so there is exactly ONE definition of the escaping rule in the
     repo rather than a copy per tool.

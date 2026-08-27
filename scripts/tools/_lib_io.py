@@ -270,10 +270,21 @@ def safe_label(value: Any) -> str:
     This is an OUTPUT-layer helper, not a validator: it must not be used to
     sanitise a value on its way *into* a config, a filename, or a subprocess
     argument. It lives beside :func:`format_json_report` because they are the two
-    halves of the same decision — ``--json`` output is already safe (``json.dumps``
-    escapes control characters unconditionally), and this is the plain-text
-    branch's equivalent. ⛔ Never apply it to data destined for the ``--json``
-    branch: that would corrupt machine-readable output that was never vulnerable.
+    halves of the same decision — ``--json`` carries its own escaping and this is
+    the plain-text branch's equivalent. ⛔ Never apply it to data destined for the
+    ``--json`` branch: that would corrupt machine-readable output.
+
+    ⚠️ **``--json`` is NOT unconditionally safe, and an earlier wording here said
+    it was.** ``json.dumps`` is only required to escape ``"``, ``\\`` and
+    ``U+0000``–``U+001F``; under ``ensure_ascii=False`` (this repo's default, see
+    :func:`format_json_report`) the **C1** range passes through verbatim —
+    measured, ``json.dumps("a\\x85b", ensure_ascii=False)`` keeps the raw byte
+    while ``"a\\x0ab"`` becomes ``\\n``. So a ``--json`` payload piped straight to
+    a terminal that interprets C1 is still forgeable. That is EXISTING behaviour,
+    deliberately not changed here: the byte-for-byte stability of ``--json`` is
+    the mechanism guarantee this escaping rests on, and rewriting the serialized
+    output would trade a measured guarantee for an unmeasured one. Tracked
+    separately; do not read this paragraph as "handled".
 
     ⛔ Apply it to the FIELD, never to a whole rendered multi-line report — the
     report's own ``\\n`` separators are control characters too and would become
@@ -283,7 +294,9 @@ def safe_label(value: Any) -> str:
         value: Any value; coerced with ``str()``.
 
     Returns:
-        *value* as text with every C0/DEL character replaced by ``?``.
+        *value* as text with every C0, DEL **and C1** character replaced by
+        ``?`` — the class is ``[\\x00-\\x1f\\x7f-\\x9f]``. C1 is in because
+        ``\\x85`` (NEL) forges a line exactly like ``\\n`` does.
     """
     return _CONTROL_CHARS_RE.sub("?", str(value))
 

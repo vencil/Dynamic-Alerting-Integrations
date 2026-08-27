@@ -840,7 +840,7 @@ def write_crds(
         kustomize_dict = build_kustomization(crd_files, namespace)
         kustomize_path = output_dir / "kustomization.yaml"
         write_yaml_crd(kustomize_path, kustomize_dict, gitops=gitops)
-        print(f"Generated: {kustomize_path}", file=sys.stderr)
+        print(f"Generated: {safe_label(kustomize_path)}", file=sys.stderr)
         json_kustomization = kustomize_dict
 
     json_crds: list = []
