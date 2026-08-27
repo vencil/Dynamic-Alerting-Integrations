@@ -260,11 +260,9 @@ A count that survives here is ANCHORED to the commit or ticket it was taken on
 because it was never about now. A count about now belongs in an assertion,
 where it goes red instead of going quietly wrong. Where an old number was worth
 keeping, the fix applied on #1404 was to re-anchor it, not to delete it; where
-it was decorative, it went. ⚠️ The deleted ones are not lost: every one of them
-is in the history of this file, and `git log -S<the number>` on the paragraph
-that used to carry it is the way back. `(see COUNTS)` in this module means "a
-number stood here and was removed on purpose" — it does not mean the number is
-repeated below, and nothing below repeats it.
+it was decorative, it went. ⚠️ The deleted ones are not lost: `git log -S<the
+number>` on the paragraph that used to carry it is the way back. `(see COUNTS)`
+here means "a number stood at this spot and was removed on purpose".
 
 ⛔ The sibling module reached this rule first and for the same reason — see its
 `Deliberately NO counts here` note, whose three numbers all drifted within two
@@ -285,17 +283,12 @@ the rarest of the three rather than the largest — but it is the only one no
 re-measurement can fix, because a count over file CONTENTS in this repo is not
 a property of the commit at all.
 
-⛔ AND THE SWEEP THAT PRODUCED THIS PARAGRAPH MISSED INSTANCES — twice, in two
-different ways, so do not read the module as cleared. It keyed on digits
-describing quantities of tree objects, which is blind to (a) numbers written as
-words and (b) present-tense claims that carry no number at all ("the suite
-stays green", "all three floors below cleared") — both were sitting here and
-both were false or stale. Worse, and worth the irony: the sweep read the file
-LINE BY LINE, so a claim whose own text wrapped across a line break was
-invisible to it — a `grep` for the offending phrase returned clean while the
-phrase was right there. That is #1373 exactly, one level up, inside the tooling
-built to audit the guard against it. Rejoin continuations before scanning this
-file for anything, including prose.
+⛔ THIS MODULE IS NOT CLEARED OF THEM. Every sweep for this class so far has
+missed instances — the misses and how each sweep was blind are recorded in the
+commit messages on #1404, which is where that archaeology belongs. What matters
+here is the scanning rule it cost: REJOIN COMMENT CONTINUATIONS BEFORE SCANNING
+THIS FILE FOR ANYTHING, PROSE INCLUDED. A line-by-line grep cannot see a claim
+whose own text wraps, which is this guard's subject applied to its own audit.
 
 ⚠️ So do not restore a count to "complete" a sentence that reads vague. The
 vagueness is the fix. If the number is load-bearing, put it in an assertion —
@@ -433,15 +426,13 @@ LINE_PREFIX = re.compile(r"^[ \t]*(?:#|//|\*|--|;)?[ \t]*")
 # ⚠️ That is not the same as "measured to earn their place". Relaxing any one of
 # them — or all three at once — does not change what this guard reports: zero on
 # #1452's head, and the same two references on its merge base, where those two
-# were still live. ⛔ An earlier wording said "on this branch"; it is re-anchored
-# here for the reason COUNTS gives, and note that a `grep` for that phrase does
-# NOT find this line, because the phrase itself wraps. They keep generic names
-# out of the scan, and that value is prospective, not demonstrated.
+# were still live. ⛔ Re-anchored on #1404 for the reason COUNTS gives. They keep
+# generic names out of the scan, and that value is prospective, not demonstrated.
 _MIN_BARE_NAME = 12
 
 # Coverage floors — they answer "did the scan run at all?", nothing finer.
 # ⛔ Do NOT read them as protecting the token model: blind review cut
-# `_extensions()` down to a SINGLE extension and all three floors still passed —
+# `_extensions()` down to a SINGLE extension and every floor still passed —
 # the token floor sits an order of magnitude below what this tree produces, so
 # it has nothing to say about the model. (The multiplier that used to stand here
 # had drifted; see COUNTS.) What holds the
@@ -714,11 +705,13 @@ def _decoded_shortfall(read_chars: int, on_disk: int) -> str | None:
     `_decode_whole` asserts `len(raw) == st_size`, which is an assertion about
     its INPUT — moving the truncation one line later (`raw.decode(...)[:4096]`)
     satisfies it and still drops most of the corpus. That is what this tripwire
-    exists for. ⚠️ Blind review measured that edit BEFORE this tripwire existed:
-    every path survived, the floors that existed then all cleared, the run got
-    2.7x faster, and a wrapped reference injected past the cut went unseen. Read
-    that as the argument for the check, not as today's behaviour — today the
-    same edit is caught here, and there are four floors, not three.
+    exists for. ⚠️ Blind review measured that edit on #1402, BEFORE this tripwire
+    existed: every path survived, the floors that existed then all cleared, the
+    run got 2.7x faster, and a wrapped reference injected past the cut went
+    unseen. That is the argument FOR this tripwire, not a description of today.
+    ⛔ Its margin is not asserted anywhere and it narrows as the tree gains small
+    files, so re-measure rather than assume — that is the finding, not a number
+    to write down here.
 
     The bound is arithmetic, not a tuned constant: UTF-8 uses at most 4 bytes
     per code point, so decoding N bytes yields at least N/4 characters. Any
@@ -796,12 +789,10 @@ def _decode_whole(raw: bytes, size: int, path: str) -> str:
     the slice cuts in; decoded characters answer a different question. An
     earlier wording gave both as absolute counts, and also gave a share of "the
     path-like tokens" that NEITHER reading of that phrase reproduces (see
-    COUNTS). ⚠️ Measured BEFORE this check existed: a wrapped reference injected
-    past the cut was invisible while the suite stayed green, and the run got
-    2.4x faster, which is what makes the edit attractive. Today that edit is
-    caught — by this function and by `_decoded_shortfall` — so read the
-    paragraph as the argument for the check rather than as a live hole. It was
-    still written in the present tense one revision after the check landed.
+    COUNTS). ⚠️ Measured on #1402, before this check existed: a wrapped reference
+    injected past the cut was invisible while the suite stayed green, and the run
+    got 2.4x faster, which is what makes the edit attractive. That is the
+    argument FOR the assertion below, not a description of a live hole.
 
     Pure, so `test_partial_read_is_refused` can hand it a short buffer — an
     inline check over real files can never fail and so can never be shown to
@@ -1110,14 +1101,12 @@ def test_the_reported_line_is_the_line_of_the_break() -> None:
     the test went red saying the line number was wrong when in fact the fixture
     had simply gone away — the exact message shape
     `test_each_tripwire_fires_on_degenerate_input` warns about, where the
-    cheapest way to believe it is to loosen the detector. Its three siblings all
-    carry this guard; this one shipped without it.
+    cheapest way to believe it is to loosen the detector. Its siblings all carry
+    this guard; this one shipped without it.
 
-    ⚠️ The script is named on the ticket and NOT here on purpose: `verify_diff`
-    builds its map from the paths a file mentions, so writing the path into this
-    docstring re-created the very coupling the fix removed — every future editor
-    of that script would be sent to run this guard. Verified by re-reading the
-    regenerated map, not by trusting the edit.
+    ⚠️ That script is named on #1566 and not here: `verify_diff` maps a file to
+    the tests that MENTION its path, so naming it here would keep sending its
+    editors to this guard after the dependency is gone.
     """
     target = "tests/ops/test_wrapped_path_references.py"
     assert target in _tracked(), f"{target} moved; re-point this fixture"
@@ -1323,7 +1312,7 @@ def test_each_tripwire_fires_on_degenerate_input() -> None:
     three survived until they were given a case that can tell the difference.
     """
     target = "tests/ops/test_wrapped_path_references.py"
-    # ⛔ The same premise guard its three siblings carry. Without it, renaming
+    # ⛔ The same premise guard its siblings carry. Without it, renaming
     # this module makes the assertion below report that the DETECTOR is broken,
     # and the cheapest way to believe that message is to loosen the detector.
     assert target in _tracked(), "this module moved; re-point the fixture"
