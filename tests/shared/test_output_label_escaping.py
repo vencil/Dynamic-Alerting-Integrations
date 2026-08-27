@@ -30,11 +30,21 @@ downgrade from "clean" to "skipped".
   printed an untrusted name is now reported as a SKIP rather than a pass (see
   the vacuity check in the parametrized test).
 
-* ⛔ **Seven of the nineteen tools patched for #1538 are NOT covered by this
+* ⛔ **Seven of the twenty tools patched for #1538 are NOT covered by this
   file at all.** Neither fixture drives them to a site that renders an
   untrusted name, which was established by counterfactual: short-circuiting
-  ``safe_label`` to the identity function reddens twelve tools and leaves these
-  seven green —
+  ``safe_label`` to the identity function reddens thirteen tools and leaves
+  these seven green —
+
+  ⚠️ TWENTY, not the nineteen the owner's ruling scoped (see the note above
+  `_LATENT_SITES_OUTSIDE_THE_RULING`): `diagnose.py` is a twentieth, added by
+  the blind review that found it was parked in `KNOWN_UNMEASURABLE` while
+  live. The counts here are the MEASURED sets — 13 reddened + 7 green = 20 —
+  and they said nineteen/twelve for one round after `diagnose.py` landed,
+  because the same commit that patched it did not re-derive this paragraph.
+  Re-derive rather than adjust: `grep -l '"--config-dir"' scripts/tools/{ops,
+  lint,dx}/*.py | xargs grep -l safe_label | wc -l` is the twenty, and the
+  distinct tools in `MEASURED` are the thirteen.
 
       analyze_rule_pack_gaps.py   backtest_threshold.py
       maintenance_scheduler.py    notification_tester.py
