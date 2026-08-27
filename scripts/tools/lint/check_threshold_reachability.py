@@ -522,20 +522,28 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 # above, one level down.
 #
 # Measured today — generators 102 (chart 8 / scaffold 42 / init 51 / onboard 1),
-# artifacts 70 (exporter conf.d 19 / try-local 4 / recipes 0 / e2e-bench 13 /
-# golden fixtures 34). Each floor sits below its class's value; what it would
-# read if a whole group stopped yielding:
+# artifacts 59 COUNTED (exporter conf.d 19 / try-local 4 / recipes 0 / golden
+# fixtures 36) plus 13 read but NOT counted by the key floor (e2e-bench, see
+# `_ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS`) — 72 scanned in all. Each floor sits
+# below its class's value; what it would read if a whole group stopped yielding:
 #
 #   generators   chart 94 / scaffold 60 / init 51 / onboard 101
-#   artifacts    exporter 51 / golden 36 / e2e-bench 57 / try-local 66 / recipes 70
+#   artifacts    exporter 40 / golden 23 / try-local 55 / recipes 59 /
+#                e2e-bench 59 (unchanged — it was never in the total)
+#
+# ⚠️ The e2e-bench row is kept rather than deleted, so the row count stays nine
+# and so the reader can see that this floor has NOTHING to say about that group
+# in either direction. Its owner is the fifth floor, below.
 #
 # ⚠️ Stated honestly, BOTH ways — an earlier revision claimed each floor sits
 # "above what that class would read if a whole group stopped yielding", and that
-# claim FAILS on FOUR of the nine rows above: TWO under each of the two floors.
-# The four are named below rather than counted, because this line said "two of
-# the nine rows" while inviting the reader to redo the arithmetic — and doing it
-# yields four, so the sentence refuted itself. "Two" was the PER-FLOOR count
-# wearing the whole grid's denominator.
+# claim FAILS on FIVE of the nine rows above: TWO under the generator floor and
+# THREE under the artifact one. They are named below rather than counted,
+# because this line said "two of the nine rows" while inviting the reader to
+# redo the arithmetic — and doing it yielded four, so the sentence refuted
+# itself. "Two" was the PER-FLOOR count wearing the whole grid's denominator.
+# (Four became five at #1544: e2e-bench left the artifact denominator, so its
+# row went from "caught, 57 < 60" to "unreachable, the total does not move".)
 #
 # ⛔ Which grouping produced these nine rows matters as much as the count, and
 # it is not the grouping any other figure in this file uses: generators are one
@@ -566,9 +574,10 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 #     at exactly zero — so what this floor uniquely watches is a producer that
 #     SHRANK without emptying ("init dropped 40 of its 51 keys"), which nothing
 #     else sees.
-#   * artifact floor 60 does NOT catch try-local (66) or the recipes roots (70,
-#     they carry no keys) — 2 of its 5 rows. Those two are covered by
-#     `_SHIPPED_CONFD_ROOTS`.
+#   * artifact floor 47 does NOT catch try-local (55) or the recipes roots (59,
+#     they carry no keys) — and cannot catch e2e-bench (59) at all, its keys
+#     being outside the denominator. 3 of its 5 rows. The first two are covered
+#     by `_SHIPPED_CONFD_ROOTS`; e2e-bench is covered by the fifth floor.
 # The two mechanisms are complements, not belt-and-braces; neither covers the
 # whole grid, and pretending otherwise is how the next person stops checking.
 #
@@ -615,6 +624,13 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 #     (#1516 added the `wrapper-siblings` fixture, +2 artifact keys, so this
 #      moved 8 -> 6 and the DOWN figure below 10 -> 12. The test named at the
 #      end of this block is what forced them to move together.)
+#     (#1544 took the two e2e-bench trees OUT of the artifact denominator — see
+#      `_ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS` below — so the artifact total went
+#      72 -> 59 and the floor 60 -> 47 in the same commit. Both artifact figures
+#      here are UNCHANGED by that move (+6 / 12), on purpose: the point of the
+#      pairing was to remove bench's influence on the boundary, not to retune
+#      the boundary. A commit that changes the denominator AND the slack is two
+#      changes wearing one constant.)
 #     (Was "+9" for artifacts, off by one against the 70-key corpus of the
 #      time: 70 total − 19 in the biggest root = 51, and 51 + 9 = 60 is not
 #      strictly below the floor of 60.)
@@ -628,7 +644,43 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 # slacks are not comparable and must never be subtracted from one another: UP is
 # measured against "biggest group gone", DOWN against the floor.
 _DEFAULTS_GENERATOR_KEYS_FLOOR = 80
-_DEFAULTS_ARTIFACT_KEYS_FLOOR = 60
+_DEFAULTS_ARTIFACT_KEYS_FLOOR = 47
+
+# ── the artifact floor's DENOMINATOR, and why it is smaller than the scan ────
+#
+# ⛔ These roots are still SCANNED, still placement-checked, and still judged by
+# every other floor — including the fifth (`_DEFAULTS_CONFD_ROOTS`), which is
+# what makes "the bench tree stopped yielding" a red at all. What they are out
+# of is one arithmetic: the global artifact KEY total this floor compares
+# against `_DEFAULTS_ARTIFACT_KEYS_FLOOR`.
+#
+# WHY (#1544): `tests/e2e-bench/fixture/synthetic-v*/conf.d` are benchmark
+# fixtures, sized by whatever the current bench scenario needs. They contributed
+# 13 of 72 artifact keys, so a bench resize moved a GLOBAL floor that is
+# supposed to be a statement about the platform's real defaults surface — either
+# masking erosion elsewhere (bench grows, the total absorbs a real loss) or
+# demanding a floor edit for a change that means nothing about the product.
+#
+# ⛔ WHY HERE AND NOT IN THE SCAN. Counterfactual, measured: deleting
+# `tests/e2e-bench/fixture/synthetic-v2/conf.d` from the tree and running the
+# real gate exits 1 out of `_assert_every_root_contributes` — "conf.d root(s)
+# [...] contributed no artifact at all". Excluding these trees from
+# `_tracked_defaults_artifacts` / `_defaults_artifacts` instead would take that
+# report away with it, i.e. would fix an arithmetic by deleting a guard. The
+# exclusion therefore lives at the one place that owns the arithmetic and
+# nothing else: the artifact half of `_assert_keys_floor`, via
+# `_artifact_floor_faces` below.
+#
+# ⚠️ Adding a root here COSTS detection: every key under it becomes invisible to
+# this floor for good. The bar is "this tree's size is not a fact about the
+# product", not "this tree is under tests/" — the seven golden-fixture roots are
+# also fixtures and they stay IN, because they are the placement corpus the
+# defaults reader is specified against and their size only moves when that
+# specification does.
+_ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS: frozenset[str] = frozenset({
+    "tests/e2e-bench/fixture/synthetic-v1/conf.d",
+    "tests/e2e-bench/fixture/synthetic-v2/conf.d",
+})
 
 # ⛔ And a FOURTH, on a different axis: the floors above are global, so one class
 # can hold them up while another disappears entirely. Measured: removing every
@@ -670,11 +722,18 @@ _SHIPPED_CONFD_ROOTS: dict[str, tuple[int, int, str]] = {
 #
 # The four floors above leave a measured gap: with the shipped roots covered by
 # the table above and the rest covered only by a GLOBAL key floor with 12 keys
-# of DOWNWARD slack (today's artifact total 72 − the floor of 60: how many keys
-# may disappear before that floor speaks), a whole fixture tree can stop
-# yielding in silence. ⛔ Not the +6 in that floor's own HEADROOM note — that
-# one is UPWARD, measured against "biggest root gone", and asks for a HIGHER
-# floor. Same word, opposite directions, different baselines.
+# of DOWNWARD slack (today's COUNTED artifact total 59 − the floor of 47: how
+# many keys may disappear before that floor speaks), a whole fixture tree can
+# stop yielding in silence. ⛔ Not the +6 in that floor's own HEADROOM note —
+# that one is UPWARD, measured against "biggest root gone", and asks for a
+# HIGHER floor. Same word, opposite directions, different baselines.
+#
+# ⛔ COUNTED, and for the two e2e-bench roots the gap above is not a gap but a
+# TOTAL blind spot: `_ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS` (#1544) takes them out
+# of that 59, so no amount of erosion under them will ever reach the key floor.
+# This floor is the only one that speaks for them, which is why the exclusion
+# was written as a change to the key floor's denominator and NOT as a change to
+# the scan — a scan-level exclusion removes them from this floor too.
 #
 # ⚠️ TWO FROZEN HISTORICAL MEASUREMENTS, both of the four-floor subset as it ran
 # at `72fdaf56` — the commit before this floor existed. They are kept BECAUSE
@@ -2597,6 +2656,32 @@ def _assert_every_root_contributes(
     # them against this.
 
 
+def _artifact_floor_faces(
+    artifacts: dict[str, dict[str, KeyInfo]],
+) -> dict[str, dict[str, KeyInfo]]:
+    """`artifacts` minus the faces `_ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS` names.
+
+    ⛔ ONE implementation, and every artifact-side figure in the floor's message
+    is taken from its output — the key total, the face count and the empty-face
+    count. A message that counted 18 faces while the total counted 16 of them
+    would hand the reader an average that is true of nothing.
+
+    ⛔ A label that is not one of ours (`_artifact_rel` returns None) is KEPT.
+    A hermetic caller passing `{"an artifact": ...}` is stating its own
+    denominator, and silently dropping it would make this floor untestable by
+    exactly the probes that are supposed to hold it.
+    """
+    return {face: keys for face, keys in artifacts.items()
+            if _artifact_root_of_face(face)
+            not in _ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS}
+
+
+def _artifact_root_of_face(face: str) -> str | None:
+    """The conf.d root behind an artifact face label, else None."""
+    rel = _artifact_rel(face)
+    return conf_d_root(rel) if rel is not None else None
+
+
 def _assert_keys_floor(generators: dict[str, dict[str, KeyInfo]],
                        artifacts: dict[str, dict[str, KeyInfo]]) -> None:
     """The only non-vacuity signal that moves when a reader silently stops reading.
@@ -2624,7 +2709,12 @@ def _assert_keys_floor(generators: dict[str, dict[str, KeyInfo]],
             "got smaller, re-measure and update the floor in the same commit, "
             "saying what shrank and why. (TRK-344 / #1392)")
 
-    n_art = sum(len(v) for v in artifacts.values())
+    # ⛔ The DENOMINATOR, not the scan (see `_ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS`).
+    # Every face here was still read, still placement-checked and still judged by
+    # the four floors that ran before this one; what the excluded roots are out
+    # of is this comparison alone.
+    counted = _artifact_floor_faces(artifacts)
+    n_art = sum(len(v) for v in counted.values())
     if n_art < _DEFAULTS_ARTIFACT_KEYS_FLOOR:
         # ⛔ Do not assert what did or did not change. The previous wording said
         # "The face COUNT is therefore not what changed", and blind review hit it
@@ -2632,10 +2722,14 @@ def _assert_keys_floor(generators: dict[str, dict[str, KeyInfo]],
         # what changed. Print both numbers and let the reader see it.
         raise _GateViolation(
             f"the defaults-tier ARTIFACT faces yielded {n_art} key(s) across "
-            f"{len(artifacts)} face(s), below the floor of "
+            f"{len(counted)} counted face(s), below the floor of "
             f"{_DEFAULTS_ARTIFACT_KEYS_FLOOR} "
             f"({len(_DEFAULTS_ARTIFACT_EXEMPT)} exempted, "
-            f"{sum(1 for v in artifacts.values() if not v)} face(s) empty).\n"
+            f"{sum(1 for v in counted.values() if not v)} counted face(s) "
+            f"empty; {len(artifacts) - len(counted)} face(s) under "
+            f"{sorted(_ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS)} are outside this "
+            "floor's denominator by design and were NOT counted — they are "
+            "still scanned and still guarded by the per-root floors).\n"
             "  If the face count is UNCHANGED: a `defaults:` section was renamed "
             "or re-nested and that file is now a blind spot — empty is legal for "
             "an artifact, so EMPTY-FACE will not say so. Repair the reader or the "
