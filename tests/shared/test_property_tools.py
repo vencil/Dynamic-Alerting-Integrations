@@ -865,6 +865,83 @@ class TestIterYamlFilesProperties:
         assert names == {"tenant.yaml"}
 
 
+# The exact class safe_label promises to neutralise: C0 plus DEL. Spelled out
+# here from codepoints rather than reusing the module's own regex, so the test
+# cannot agree with a broken implementation by sharing its bug.
+_C0_AND_DEL = frozenset(chr(c) for c in range(0x00, 0x20)) | frozenset("\x7f")
+
+
+class TestSafeLabelProperties:
+    """`safe_label` — #1538's output-layer escape for untrusted names.
+
+    The function's whole job is a safety INVARIANT ("no control character
+    survives"), which is what a property test is for: an example test can only
+    show that the handful of payloads someone thought of are defused.
+    """
+
+    @given(st.text(max_size=120))
+    @PILOT_SETTINGS
+    def test_output_never_contains_a_c0_or_del_character(self, s):
+        # THE safety property. A newline would forge a report line and an ESC
+        # would start an ANSI sequence; neither may survive for ANY input.
+        out = lio.safe_label(s)
+        assert not any(c in out for c in _C0_AND_DEL), (
+            f"control char survived: {out!r}"
+        )
+
+    @given(st.text(max_size=120))
+    @PILOT_SETTINGS
+    def test_length_is_preserved(self, s):
+        # Substitution, not deletion — one `?` per control char. Deleting them
+        # would hide from the operator that the name was odd at all, and would
+        # also let two different names render identically.
+        assert len(lio.safe_label(s)) == len(s)
+
+    @given(st.text(alphabet=st.characters(blacklist_categories=("Cc",)), max_size=120))
+    @PILOT_SETTINGS
+    def test_control_free_text_is_returned_unchanged(self, s):
+        # No collateral damage: a normal filename must survive byte-for-byte,
+        # so escaping cannot silently corrupt ordinary reports.
+        assume("\x7f" not in s)
+        assert lio.safe_label(s) == s
+
+    @given(st.text(max_size=120))
+    @PILOT_SETTINGS
+    def test_idempotent(self, s):
+        # Escaping twice equals escaping once. Load-bearing because a value can
+        # pass through both a shared chokepoint (e.g. _grar_parse's warning
+        # print) and a caller's own field escaping.
+        once = lio.safe_label(s)
+        assert lio.safe_label(once) == once
+
+    @given(st.text(max_size=60), st.text(max_size=60))
+    @PILOT_SETTINGS
+    def test_distributes_over_concatenation(self, a, b):
+        # Per-character substitution, so escaping a joined string equals
+        # joining the escaped parts. This is why escaping a whole preformatted
+        # line and escaping each field give the same result for the C0 class.
+        assert lio.safe_label(a + b) == lio.safe_label(a) + lio.safe_label(b)
+
+    def test_the_two_payloads_from_the_issue(self):
+        # The concrete #1538 reproductions, kept as examples alongside the
+        # properties: a forged verdict line, and a colour escape.
+        assert lio.safe_label("evil\n[PASS] FORGED\nx.yaml") == \
+            "evil?[PASS] FORGED?x.yaml"
+        assert lio.safe_label("\x1b[31mred\x1b[0m.yaml") == "?[31mred?[0m.yaml"
+
+    def test_documented_gaps_are_really_gaps(self):
+        # ⛔ The docstring says C1 and bidi are NOT covered. Pinning that here
+        # so the limitation is a measured fact rather than a claim, and so
+        # widening the class later is a deliberate, visible change.
+        assert lio.safe_label("a\x85b") == "a\x85b"          # C1 NEL
+        assert lio.safe_label("a‮b") == "a‮b"      # bidi override
+
+    def test_non_str_input_is_coerced(self):
+        # Callers pass exceptions and Path objects, not just str.
+        assert lio.safe_label(123) == "123"
+        assert lio.safe_label(ValueError("bad\nthing")) == "bad?thing"
+
+
 class TestFormatJsonReportProperties:
 
     @given(st.dictionaries(
