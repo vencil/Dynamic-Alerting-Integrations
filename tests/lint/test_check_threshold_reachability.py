@@ -3533,14 +3533,78 @@ def test_the_two_artifact_groupings_are_one_partition():
 
 # ── the exclusion set needs an owner, and the GATE has to say so ─────────────
 
+def _the_excluded_set_with_one_live_root_dropped() -> frozenset[str]:
+    """The real exclusion set, minus one root that is genuinely in it TODAY.
+
+    ⛔ DERIVED, and it names no fixture. The first version of the `set-narrowed`
+    tamper hardcoded `tests/e2e-bench/fixture/synthetic-v2/conf.d`, which put
+    back — one layer over — the very coupling this ticket removed from the
+    production constant. Measured on a LEGITIMATE retirement of that fixture
+    (`git rm -r` plus its removal from `_ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS`
+    and `_DEFAULTS_CONFD_ROOTS`): `--ci` rc=0, so pre-commit passes, and pytest
+    rc=1 — a CI-only red. And the red was worse than a stale number: the
+    hardcoded name is no longer pinned after a retirement, so the tamper landed
+    on clause 3 (`not pinned`) instead of the clause 5 it is named for, and the
+    failure output said only that one message substring was not in another.
+    Nothing told the maintainer their retirement had invalidated the case.
+
+    ⛔ WHY THIS SHAPE CAN ONLY REACH CLAUSE 5, which is the property the
+    hardcoded one lost. The result is a strict SUBSET of the live set, and
+    clauses 1-4 iterate over the tampered set alone. Every member of a subset
+    of the live set is a member of the live set, and the live set satisfies all
+    four clauses on every green run — that is what `--ci` rc=0 means today — so
+    no subset of it can trip them. Clause 5 is the only one that reads anything
+    else: it compares the roots SCANNED under the tree against the set, and the
+    dropped root is scanned (it was taken from the scan) and under the tree
+    (clause 2 holds for it on the green run), so it lands in `unlisted`.
+
+    ⚠️ The intersection with the scan is load-bearing, not defensive: a set
+    member that is pinned but contributes no artifact is absent from
+    `scanned_under_tree`, so dropping THAT one would leave clause 5 silent and
+    the case would fail with `DID NOT RAISE`.
+    """
+    _generators, artifacts = gate._defaults_faces()
+    scanned = {gate._artifact_root_of_face(face) for face in artifacts}
+    live = sorted(gate._ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS & scanned)
+    assert live, (
+        "no root is BOTH excluded from the artifact key floor and present in "
+        "today's scan, so there is nothing to narrow and this case cannot say "
+        "anything about clause 5.\n"
+        "  If the whole benchmark tree has been retired, that is the real "
+        "finding: `_ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS`, "
+        "`_ARTIFACT_KEYS_FLOOR_EXCLUDED_TREE` and this case should be retired "
+        "together, and `_DEFAULTS_ARTIFACT_KEYS_FLOOR` re-measured against the "
+        "scan-wide total it goes back to.\n"
+        f"  excluded={sorted(gate._ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS)}\n"
+        f"  scanned under the tree="
+        f"{sorted(r for r in scanned if r and r.startswith(gate._ARTIFACT_KEYS_FLOOR_EXCLUDED_TREE))}")
+    return frozenset(gate._ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS - {live[0]})
+
+
+
 # (tamper, fragment of the message it must produce). ⛔ Each case is a DIFFERENT
 # clause of `_assert_excluded_roots_still_have_an_owner`; a single case would
 # leave the other four free to be deleted, which is exactly how this set shipped
 # for a round with no invariant at all.
+# ⚠️ TWO OF THE FOUR STILL HOLD A PATH LITERAL, and that is the correct split,
+# not an oversight. `shipped` and `set-narrowed` need their root to BE something
+# in a live table (shipped / excluded-and-scanned), so a literal there rots the
+# day that tree is retired — both are derived. `unrelated-fixture` and
+# `unpinned` need the opposite: a path that is NOT under the tree, and one that
+# is NOT pinned. Neither has to exist on disk or in any table for its clause to
+# fire, so retiring the tree they happen to name changes nothing about them.
+# ⛔ Do not "finish the job" by deriving these two — there is nothing live to
+# derive them from, and inventing one would make them depend on state their
+# assertions do not use.
 _EXCLUSION_TAMPERS = [
     # (a) from the round-1 review: a SHIPPED root, which used to be free.
+    #     ⛔ Taken from the live table for the same reason `set-narrowed` is
+    #     derived: a hardcoded shipped root goes stale the day that tree is
+    #     retired, and the case would then slide onto clause 2 with a message
+    #     about the bench tree. `sorted()[0]` only needs SOME shipped root to
+    #     exist, which `_SHIPPED_CONFD_ROOTS` being non-empty already is.
     ("shipped", lambda: frozenset(gate._ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS
-                                  | {"try-local/seed/conf.d"}),
+                                  | {sorted(gate._SHIPPED_CONFD_ROOTS)[0]}),
      "is SHIPPED"),
     # (b) from the round-1 review: an unrelated fixture root. The gate's stdout
     #     was measured BYTE-IDENTICAL on this one before the invariant existed.
@@ -3553,9 +3617,10 @@ _EXCLUSION_TAMPERS = [
     ("unpinned", lambda: frozenset(gate._ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS
                                    | {"tests/e2e-bench/fixture/customer-anon"}),
      "not pinned in _DEFAULTS_CONFD_ROOTS"),
-    # the set shrinks: the tree and the set stop agreeing.
-    ("set-narrowed",
-     lambda: frozenset({"tests/e2e-bench/fixture/synthetic-v2/conf.d"}),
+    # the set shrinks: the tree and the set stop agreeing. ⛔ DERIVED — see
+    # `_the_excluded_set_with_one_live_root_dropped` for why naming a fixture
+    # here re-created, in the suite, the coupling #1544 removed from the gate.
+    ("set-narrowed", _the_excluded_set_with_one_live_root_dropped,
      "but are NOT in _ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS"),
 ]
 
@@ -3569,10 +3634,14 @@ def test_a_root_leaves_the_key_floors_denominator_only_with_another_owner(
     ⛔ Through `_defaults_faces()` and not by calling the assertion directly:
     the invariant is only worth anything if the floor actually reaches it, and
     a direct call would keep passing after the call site was deleted. The
-    `may-be-empty` clause has no case here ON PURPOSE — the only root on that
-    list is `rule-packs/recipes/examples/conf.d`, which is shipped, so the
-    tamper that would reach clause 4 is answered by clause 1 (SHIPPED) first
-    and a case for it would be asserting a message nobody can produce. That clause is a guard against
+    `may-be-empty` clause has no case here ON PURPOSE, and the reason is
+    written out in that clause's own disclosure rather than summarised here:
+    NEITHER way of reaching it from the constants gets there, and the two are
+    stopped by two different mechanisms (clause 1 on one path,
+    `_assert_every_root_contributes` on the other). ⛔ Not because the message
+    is unproducible — it is, by adding a new zero-key fixture root under the
+    tree, which is a change to the repo's contents and outside what this table
+    tampers with. That clause is a guard against
     a future combination, and this comment is its disclosure rather than a test
     that cannot be written honestly today.
     """

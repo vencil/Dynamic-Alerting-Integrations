@@ -2742,12 +2742,34 @@ def _assert_excluded_roots_still_have_an_owner(
       4. NOT in `_DEFAULTS_ROOTS_MAY_BE_EMPTY` — that list stands the fifth
          floor's KEY watch down for a root. A root on both lists is watched by
          nobody in either direction, which is the one combination this whole
-         mechanism must not be able to produce. ⚠️ UNREACHABLE TODAY and
-         disclosed rather than quietly shipped: the only entry on that list is
-         `rule-packs/recipes/examples/conf.d`, which is shipped, so clause 1
-         answers first and no honest tamper reaches this one. It guards a
-         future combination; the parametrised test says the same thing in the
-         same words rather than asserting a message nobody can produce.
+         mechanism must not be able to produce. ⚠️ NOT REACHABLE BY EDITING
+         THE CONSTANTS, and the two ways of trying are stopped by two
+         DIFFERENT things. Both measured, because the first wording here
+         checked ONE path and then concluded over ALL of them — the exact
+         shape ("a comment asserts a specific cause; one measurement refutes
+         it") this file keeps paying for:
+           * putting a root that is ALREADY on `_DEFAULTS_ROOTS_MAY_BE_EMPTY`
+             into the exclusion set — that list holds only
+             `rule-packs/recipes/examples/conf.d` today, which is SHIPPED, so
+             clause 1 answers first. This is the path the old wording checked,
+             and for it the old wording was right.
+           * putting an ALREADY-EXCLUDED root onto
+             `_DEFAULTS_ROOTS_MAY_BE_EMPTY` — clause 1 has nothing to say here
+             and never runs: `_assert_every_root_contributes` answers first,
+             from a different rule entirely (that list must be EARNED, and a
+             root carrying keys is refused with "contributes N threshold
+             key(s) today"). Measured on `synthetic-v1`, which is non-shipped,
+             under the tree and pinned, i.e. clean on clauses 1-3.
+         ⛔ AND "unreachable" IS ABOUT THE CONSTANTS, not about the message.
+         An earlier wording said the suite would be "asserting a message
+         nobody can produce"; that is false and was measured false — creating
+         a NEW zero-key fixture root under the tree and registering it in all
+         three tables reaches this clause and prints it. That is a change to
+         the repo's CONTENTS rather than to a table, which is precisely the
+         future combination this clause exists for. It is therefore covered by
+         that measurement and deliberately not by a test: a test would have to
+         manufacture the fixture, and the parametrised table next to it stays
+         a statement about tampering with constants.
       5. every SCANNED root under the tree is in the set — otherwise the tree
          and the set drift into disagreeing, and the tree constant degrades
          into decoration. A new bench fixture with a `conf.d` therefore
