@@ -20,6 +20,7 @@ from pathlib import Path
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
+from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_python import (  # noqa: E402
     format_json_report,
     http_get_json,
@@ -39,7 +40,7 @@ def query_prometheus_targets(prom_url):
     url = f"{prom_url}/api/v1/targets?state=active"
     data, err = http_get_json(url)
     if err:
-        print(f"WARN: Cannot reach Prometheus: {err}", file=sys.stderr)
+        print(f"WARN: Cannot reach Prometheus: {safe_label(err)}", file=sys.stderr)
         return []
 
     if data.get("status") != "success":
@@ -183,10 +184,10 @@ def render_report(results):
         lines.append("BLIND SPOTS (cluster instances with no tenant monitoring):")
         lines.append("")
         for r in blind_spots:
-            lines.append(f"  ⚠ {r['db_type']}: {r['live_count']} instance(s) in cluster, "
+            lines.append(f"  ⚠ {safe_label(r['db_type'])}: {r['live_count']} instance(s) in cluster, "
                          "0 tenants monitoring")
             for inst in r["live_instances"][:5]:
-                lines.append(f"      - {inst}")
+                lines.append(f"      - {safe_label(inst)}")
             if r["live_count"] > 5:
                 lines.append(f"      ... and {r['live_count'] - 5} more")
         lines.append("")
@@ -195,9 +196,9 @@ def render_report(results):
         lines.append("COVERED (instances with active tenant monitoring):")
         lines.append("")
         for r in covered:
-            lines.append(f"  ✓ {r['db_type']}: {r['live_count']} instance(s), "
+            lines.append(f"  ✓ {safe_label(r['db_type'])}: {r['live_count']} instance(s), "
                          f"{r['monitored_count']} tenant(s) "
-                         f"({', '.join(r['monitored_tenants'])})")
+                         f"({safe_label(', '.join(r['monitored_tenants']))})")
         lines.append("")
 
     if unknown:

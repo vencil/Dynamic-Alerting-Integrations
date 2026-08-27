@@ -40,6 +40,7 @@ from _lib_io import (  # noqa: F401
     write_onboard_hints,
     read_onboard_hints,
     format_json_report,
+    safe_label,
     add_config_dir_arg,
     add_json_arg,
     add_ci_arg,

@@ -50,6 +50,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 
 # ---------------------------------------------------------------------------
 # Repo-layout import compatibility
@@ -194,10 +195,10 @@ def call_opa_rest(
                 return result
             return []
     except URLError as e:
-        print(f"ERROR: OPA API call failed: {e}", file=sys.stderr)
+        print(f"ERROR: OPA API call failed: {safe_label(e)}", file=sys.stderr)
         return []
     except json.JSONDecodeError as e:
-        print(f"ERROR: OPA response parsing failed: {e}", file=sys.stderr)
+        print(f"ERROR: OPA response parsing failed: {safe_label(e)}", file=sys.stderr)
         return []
 
 
@@ -254,7 +255,7 @@ def call_opa_binary(
         print("ERROR: OPA eval timeout", file=sys.stderr)
         return []
     except json.JSONDecodeError as e:
-        print(f"ERROR: OPA output parsing failed: {e}", file=sys.stderr)
+        print(f"ERROR: OPA output parsing failed: {safe_label(e)}", file=sys.stderr)
         return []
 
 
@@ -331,10 +332,11 @@ def generate_text_report(result: PolicyResult, lang: str = "en") -> str:
         by_tenant.setdefault(v.tenant, []).append(v)
 
     for tenant in sorted(by_tenant):
-        lines.append(f"[{tenant}]")
+        lines.append(f"[{safe_label(tenant)}]")
         for v in by_tenant[tenant]:
             icon = "✗" if v.level == "ERROR" else "⚠"
-            lines.append(f"  {icon} [{v.level}] {v.field}: {v.message}")
+            lines.append(f"  {icon} [{safe_label(v.level)}] "
+                         f"{safe_label(v.field)}: {safe_label(v.message)}")
         lines.append("")
 
     status = "FAIL" if not result.passed else "PASS"

@@ -36,6 +36,7 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_VIOLATION  # noqa: E402
 from _lib_confd import warn_nested  # noqa: E402
+from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 
 
 def find_config_file(tenant, config_dir):
@@ -66,7 +67,7 @@ def load_all_configs(config_dir):
                 data = yaml.safe_load(f) or {}
             configs[filename] = {"path": str(entry), "data": data}
         except (OSError, yaml.YAMLError) as e:
-            print(f"  ⚠️  無法讀取 {filename}: {e}")
+            print(f"  ⚠️  無法讀取 {safe_label(filename)}: {safe_label(e)}")
     return configs
 
 
@@ -98,28 +99,29 @@ def run_precheck(tenant, config_dir):
     issues = []
 
     report.append(f"{'='*60}")
-    report.append(f"🔍 Tenant 下架 Pre-check: {tenant}")
+    report.append(f"🔍 Tenant 下架 Pre-check: {safe_label(tenant)}")
     report.append(f"{'='*60}\n")
 
     # 1. 檔案存在性
     config_file = find_config_file(tenant, config_dir)
     if config_file:
-        report.append(f"✅ 設定檔案: {config_file}")
+        report.append(f"✅ 設定檔案: {safe_label(config_file)}")
     else:
-        report.append(f"❌ 找不到設定檔案: {tenant}.yaml")
+        report.append(f"❌ 找不到設定檔案: {safe_label(tenant)}.yaml")
         issues.append("設定檔案不存在")
 
     # 2. 載入所有 configs
     configs = load_all_configs(config_dir)
-    report.append(f"\n📂 掃描目錄: {config_dir} ({len(configs)} 個檔案)\n")
+    report.append(f"\n📂 掃描目錄: {safe_label(config_dir)} "
+                  f"({len(configs)} 個檔案)\n")
 
     # 3. Cross-reference check
     refs = check_cross_references(tenant, configs)
     if refs:
         report.append(f"⚠️  發現跨檔案引用 (請手動確認):")
         for ref in refs:
-            report.append(f"   → {ref}")
-        issues.append(f"跨檔案引用: {', '.join(refs)}")
+            report.append(f"   → {safe_label(ref)}")
+        issues.append(f"跨檔案引用: {safe_label(', '.join(refs))}")
     else:
         report.append(f"✅ 無跨檔案引用")
 
@@ -128,7 +130,7 @@ def run_precheck(tenant, config_dir):
     if metrics:
         report.append(f"\n📊 此 tenant 的已設定指標 ({len(metrics)} 個):")
         for key, val in metrics.items():
-            report.append(f"   • {key}: {val}")
+            report.append(f"   • {safe_label(key)}: {safe_label(val)}")
     else:
         # ⛔ 不寫「全部使用平台預設值」（#1321）：`_defaults.yaml` 的
         # `optional_overrides:` 宣告層只有 key 名、沒有值，那些 key 沒被租戶設定
@@ -156,20 +158,22 @@ def execute_offboard(tenant, config_dir):
     """執行下架: 刪除 tenant 設定檔案。"""
     config_file = find_config_file(tenant, config_dir)
     if not config_file:
-        print(f"❌ 找不到 {tenant} 的設定檔案", file=sys.stderr)
+        print(f"❌ 找不到 {safe_label(tenant)} 的設定檔案", file=sys.stderr)
         return False
 
     try:
         os.remove(config_file)
-        print(f"🗑️  已刪除: {config_file}")
+        print(f"🗑️  已刪除: {safe_label(config_file)}")
         print(f"\n📋 後續步驟:")
-        print(f"  1. threshold-exporter 將在下次 reload (30s) 時自動清除 {tenant} 的閾值")
-        print(f"  2. Prometheus 下次 scrape 時，{tenant} 的向量將消失")
+        print(f"  1. threshold-exporter 將在下次 reload (30s) 時自動清除 "
+              f"{safe_label(tenant)} 的閾值")
+        print(f"  2. Prometheus 下次 scrape 時，{safe_label(tenant)} 的向量將消失")
         print(f"  3. 所有相關 Alert 將自動解除")
-        print(f"  4. 請記得一併清理 Alertmanager 中 tenant={tenant} 的 routing 設定")
+        print(f"  4. 請記得一併清理 Alertmanager 中 "
+              f"tenant={safe_label(tenant)} 的 routing 設定")
         return True
     except (ValueError, TypeError, IndexError) as e:
-        print(f"❌ 刪除失敗: {e}", file=sys.stderr)
+        print(f"❌ 刪除失敗: {safe_label(e)}", file=sys.stderr)
         return False
 
 

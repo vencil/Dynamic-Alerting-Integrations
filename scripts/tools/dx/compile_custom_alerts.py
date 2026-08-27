@@ -41,6 +41,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, "..", "lint"))
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 import check_rulepack_sync as sync  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 
 try:
     from _lib_compat import try_utf8_stdout  # noqa: E402
@@ -157,11 +158,18 @@ def _assert_annotations_template_safe(groups: List[dict]) -> None:
 
 
 def _safe_log(value) -> str:
-    """Strip control chars (incl newline / ANSI ESC) from a tenant-controlled value before
-    printing a quarantine line to the CI log — a malformed tenant id / origin / exception
-    text must not inject forged log lines or terminal escapes (#1008 fail-soft observability).
-    PyYAML already rejects most control chars at parse, but newline/tab pass through."""
-    return re.sub(r"[\x00-\x1f\x7f]", "?", str(value))
+    """Deprecated alias for :func:`_lib_io.safe_label` (#1538).
+
+    This function WAS the rule — added for #1008 so a malformed tenant id /
+    origin / exception text could not inject forged log lines or terminal
+    escapes into a quarantine line. #1538 found the same defect in 18 more
+    tools and promoted this implementation, character class unchanged, to the
+    shared output layer. The name is kept because callers and
+    ``tests/dx/test_compile_custom_alerts.py`` reference it; the body is now a
+    delegate so there is exactly ONE definition of the escaping rule in the
+    repo rather than a copy per tool.
+    """
+    return safe_label(value)
 
 
 def build_pack(config_dir: Path,
