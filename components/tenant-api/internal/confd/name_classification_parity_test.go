@@ -134,7 +134,9 @@ func TestNameMatrixStillCarriesTheShapesItExistsFor(t *testing.T) {
 		if r.DefaultsFile != wantDef {
 			t.Errorf("%s: defaults_file column says %v, the name says %v", r.Name, r.DefaultsFile, wantDef)
 		}
-		if r.DefaultsFile && !(r.ReservedPrefix && r.YAMLExtension) {
+		// De Morgan'd rather than `!(a && b)` — staticcheck QF1001 rejects the
+		// latter, and the implication is what the message states either way.
+		if r.DefaultsFile && (!r.ReservedPrefix || !r.YAMLExtension) {
 			t.Errorf("%s: defaults_file must imply reserved_prefix AND yaml_extension", r.Name)
 		}
 
