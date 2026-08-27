@@ -1414,6 +1414,18 @@ The tool implements all four AM matcher combinations (not just `alertname=`):
 
 A silence matches an alert iff **all matchers** match the alert's label set. Label set includes the implicit `alertname=<name>` plus the rule's `labels:` block. **Absent labels are treated as empty strings** (AM convention).
 
+**Match coverage reporting**
+
+A silence fails in two opposite directions: an orphan matches nothing and suppresses nothing; an over-broad matcher (a dropped label, a `.*` left in) matches far more than intended and suppresses alerts nobody meant to silence. Orphan detection only sees the first, so the report also lists what each silence actually matches:
+
+| Output | Content |
+|--------|---------|
+| Text "Match coverage" section | Rules matched per in-scope silence, widest first; the name preview shows at most 3 and spells out `+N more` |
+| `coverage[]` under `--json` | Per in-scope silence: `matched_rules` (rule definitions) and the deduped `matched_alertnames` (**not truncated**) |
+| Summary line / `counts.widest_match` | The largest match count across in-scope silences |
+
+⚠️ `matched_rules` counts rule definitions in the rule source, NOT alerts currently firing — the latter needs live Prometheus / Alertmanager state, which this tool deliberately does not reach for.
+
 **Exit codes**
 
 | Code | Meaning |
@@ -1437,6 +1449,8 @@ da-tools silencer-drift-check --silences-file silences.json --rule-source rule-p
 # Automation-friendly JSON
 da-tools silencer-drift-check --silences-file silences.json --rule-source rule-packs/ --json
 ```
+
+⛔ **Do not wire `--ci` over a live silence dump** (the CI-gate example above targets a dump captured by hand at cutover). Measured 2026-08-27: all 122 alerts in `rule-packs/` carry a templated `tenant:` label (122 templated / 0 literal), while every silence `maintenance_scheduler.py` creates carries a literal `tenant=<id>` matcher ⇒ this platform's own scheduler-created silences all land in the existing templated-label false positive (see the tool's Known limitations), and the gate would fail on **every scheduled maintenance window**.
 
 ---
 

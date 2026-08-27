@@ -1309,6 +1309,18 @@ da-tools silencer-drift-check --silences-file <silences.json> --rule-source <pat
 
 Silence 命中 alert 的條件：**所有 matchers 都對該 alert 的 label set 命中**。Label set 包含 implicit `alertname=<name>` + rule 的 `labels:` block。**Absent label 視為空字串**（AM 慣例）。
 
+**命中面回報**
+
+silence 有兩個相反的失效方向：orphan 命中零條、什麼都壓不到；而過寬的 matcher（掉了一個 label、留了一個 `.*`）命中遠超預期、壓掉沒人打算靜音的告警。orphan 偵測只看得見前者，所以報告同時列出每條 silence 實際命中的面：
+
+| 輸出 | 內容 |
+|------|------|
+| 文字「Match coverage」段落 | 每條 in-scope silence 命中幾條規則，依命中數由多到少排序；名單預覽上限 3 個並明寫 `+N more` |
+| `--json` 的 `coverage[]` | 每條 in-scope silence 的 `matched_rules`（rule 定義數）與去重後的 `matched_alertnames`（**不截斷**） |
+| 摘要行 / `counts.widest_match` | 所有 in-scope silence 中最大的命中數 |
+
+⚠️ `matched_rules` 是「rule 定義數」而非「當下 firing 的 alert 數」——後者需要 live Prometheus / Alertmanager 狀態，本工具刻意 offline-first。
+
 **Exit codes**
 
 | Code | 含義 |
@@ -1332,6 +1344,8 @@ da-tools silencer-drift-check --silences-file silences.json --rule-source rule-p
 # 自動化讀取
 da-tools silencer-drift-check --silences-file silences.json --rule-source rule-packs/ --json
 ```
+
+⛔ **不要把 `--ci` 接到線上 silence dump 上**（上面的 CI gate 用法針對的是 cutover 時人工抓下來的那一份）。實測 2026-08-27：`rule-packs/` 的 122 條 alert **全部帶 `tenant:` label 且全為 templated（0 個字面值）**，而 `maintenance_scheduler.py` 建立的每條 silence 都帶字面 `tenant=<id>` matcher ⇒ 平台自己排程建立的 silence 全部落在既有的 templated-label 假陽性裡（見工具 docstring 的 Known limitations），那道閘門會對**每一個排程維護窗**轉紅。
 
 ---
 
