@@ -1421,7 +1421,7 @@ A silence fails in two opposite directions: an orphan matches nothing and suppre
 | Output | Content |
 |--------|---------|
 | Text "Match coverage" section | Rules matched per in-scope silence, widest first; the name preview shows at most 3 and spells out `+N more` |
-| `coverage[]` under `--json` | Per in-scope silence: `matched_rules` (rule definitions) and the deduped `matched_alertnames` (**not truncated**) |
+| `coverage[]` under `--json` | One entry per in-scope silence, four fields: `silence_id`; `matchers`, echoed verbatim so a consumer can see what produced the count without re-reading the input file; `matched_rules` (rule definitions); and the deduped `matched_alertnames` (**not truncated**) |
 | Summary line / `counts.widest_match` | The largest match count across in-scope silences |
 
 ⚠️ `matched_rules` counts rule definitions in the rule source, NOT alerts currently firing — the latter needs live Prometheus / Alertmanager state, which this tool deliberately does not reach for.

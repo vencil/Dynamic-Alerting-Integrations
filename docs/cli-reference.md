@@ -1316,7 +1316,7 @@ silence 有兩個相反的失效方向：orphan 命中零條、什麼都壓不�
 | 輸出 | 內容 |
 |------|------|
 | 文字「Match coverage」段落 | 每條 in-scope silence 命中幾條規則，依命中數由多到少排序；名單預覽上限 3 個並明寫 `+N more` |
-| `--json` 的 `coverage[]` | 每條 in-scope silence 的 `matched_rules`（rule 定義數）與去重後的 `matched_alertnames`（**不截斷**） |
+| `--json` 的 `coverage[]` | 每條 in-scope silence 一筆，四個欄位：`silence_id`、原樣帶出的 `matchers`（判定依據，不必回頭比對輸入檔）、`matched_rules`（rule 定義數）、去重後的 `matched_alertnames`（**不截斷**） |
 | 摘要行 / `counts.widest_match` | 所有 in-scope silence 中最大的命中數 |
 
 ⚠️ `matched_rules` 是「rule 定義數」而非「當下 firing 的 alert 數」——後者需要 live Prometheus / Alertmanager 狀態，本工具刻意 offline-first。
