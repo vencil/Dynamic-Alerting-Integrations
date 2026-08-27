@@ -36,9 +36,8 @@ invisible here, because the quotes sit between the halves and break the token �
     "# app/pkg/config/resolve.go）。",
 
 That is `scripts/tools/ops/_registry_lib.py`, which GENERATES the comment blocks
-spliced into `rule-packs/*.yaml`. This guard saw the generated outputs — six of
-them at the time, nine today — and not their source, so fixing only the outputs
-was silently reverted by
+spliced into `rule-packs/*.yaml`. This guard saw the generated outputs and not
+their source, so fixing only the outputs was silently reverted by
 `check_threshold_registry.py --regen` — the repo's own staleness gate is what
 caught it. If you are unwrapping a path and the gate keeps coming back, look
 for a generator.
@@ -49,8 +48,10 @@ ends in a quote and the second starts with one, splice them — ⚠️ stripping
 second literal's own comment marker, without which the token stays broken and
 the sweep reports a clean tree it never actually looked at — and ask the same
 question this guard asks. It found 7 in #1383; all 7 were fixed. Re-run for
-#1452 — same answer on the merge base and on this branch, so it is a property
-of the tree and not of one commit — **2**, one of them live —
+#1452 — same answer on that PR's merge base and on its head, so it is a
+property of the tree and not of one commit — **2**, one of them live. ⚠️ That
+was #1452's tree; NOTHING re-checks it, so treat the two below as the shapes to
+look for rather than as today's inventory —
 
   * `tests/ops/test_generated_ci_artifacts.py` splits
     `tools/portal/…/cicd-setup-wizard/utils/generators.js` across two string
@@ -80,29 +81,31 @@ sentence-shape #1452 exists to punish, fifteen lines above the one it punished.
 What is deliberately NOT modelled (under-detection, the safe direction):
   * a token split across two string literals — see the gap above;
   * a token split across THREE or more lines — the window is two lines.
-    Measured: a three-line window adds 0 reports on this tree, so the gap is
-    structural and currently empty, not a backlog;
+    Measured when this bullet was written, and nothing re-checks it: a
+    three-line window added no reports, so the gap was structural and empty
+    rather than a backlog;
   * a reference assembled from variables, or reached through a glob;
   * a comment marker outside the five `LINE_PREFIX` knows (`>` blockquote,
     `::`/`REM`, `%`, `!`) — blind review demonstrated every one of them.
-    Measured the same way: teaching `LINE_PREFIX` all five adds 0 reports;
+    Measured the same way, and equally unchecked since: teaching `LINE_PREFIX`
+    all five added no reports;
   * a PREFIXED spelling — relative (`./x`, `../x`), anchored (`/x`, `~/x`) or
     partial (`pkg/config/x`) — whose basename does not clear the bare-name
     bounds three lines down. Since #1452 the basename is asked when the whole
     token resolves to nothing, so `../check_pint.py` is caught; `./__init__.py`
     (under `_MIN_BARE_NAME`), `./.claudeignore` (no separator) and
-    `./_defaults.yaml` (16 tracked paths, so not unique) are not. ⚠️ Measured,
-    because the first wording of this bullet named only non-uniqueness and used
-    `./utils.py` as its example — and `utils.py` names no file in this repo at
-    all, so it was excluded for a different reason than the one given: of the
-    1970 repo-unique basenames, 132 are excluded by the separator bound alone
-    and 22 by the length bound alone;
+    `./_defaults.yaml` (not repo-unique) are not. ⚠️ Measured, because the first
+    wording of this bullet named only non-uniqueness and used `./utils.py` as
+    its example — and `utils.py` names no file in this repo at all, so it was
+    excluded for a different reason than the one given. EACH of the two bounds
+    excludes repo-unique names on its own, the separator bound the larger share
+    (see COUNTS);
   * one of OUR paths cited with EXTRA leading segments — the
     `https://github.com/vencil/…/blob/main/<our path>` form, and `../blob/main/…`
     beside it. The basename fallback requires a SUFFIX-compatible spelling, and
-    a URL is longer than the path it ends with, so it stays silent: 120 distinct
-    such tokens on this branch (118 on the merge base), none of them wrapped on
-    either. ⛔ Accepting the other direction (token longer, ending in our whole
+    a URL is longer than the path it ends with, so it stays silent. Measured
+    when #1452 landed: many such tokens, none of them wrapped (see COUNTS).
+    ⛔ Accepting the other direction (token longer, ending in our whole
     path) is not a free fix — it re-admits `/src/.pre-commit-config.yaml`, the
     CUSTOMER's copy at pre-commit's docker mount, for every single-segment path
     of ours;
@@ -116,9 +119,9 @@ What is deliberately NOT modelled (under-detection, the safe direction):
     either: reflowing a citation of somebody else's file buys this repo
     nothing;
   * a bare filename that is not repo-unique, shorter than `_MIN_BARE_NAME`, or
-    containing neither `_` nor `-` — that last condition alone excludes 132
-    otherwise-unique names, and all three are here to keep generic ones out of
-    the scan: `README.md` names 37 tracked files and `values.yaml` 11, while
+    containing neither `_` nor `-` — that last condition excludes otherwise-
+    unique names on its own, and all three are here to keep generic ones out of
+    the scan: `README.md` and `values.yaml` each name many tracked files, while
     `index.md` and `resolve.go` are unique but fall under the floor. ⚠️ Pick
     those examples from the tree: two earlier wordings of this bullet named
     `utils.py` and then `config.py`, and NEITHER names a file in this repo, so
@@ -145,8 +148,11 @@ red — and the cheapest way back to green is to rename your own function, which
 leaves a clean diff, passes review, and records nothing about why the name got
 worse. A guard that rewards that edit is worse than no guard.
 
-Three predicates were tried, each measured, each failed differently, and the
-counts and the reproductions are on #1453 rather than here:
+Three predicates were tried, each measured, each failed differently. The counts,
+the definitions they were measured under, and the nine latent names are on #1453
+rather than here. ⚠️ That ticket carries NO runnable command — an earlier
+wording of this sentence promised "reproductions", and a re-attempt in fact
+starts by rebuilding the scan from those written definitions:
   * also accepting any name that occurs contiguously in the tree reaches the
     non-Python definition side and finds 8 further REAL references there — but
     it is self-contaminating: writing prose about the guard changes what the
@@ -247,6 +253,35 @@ construction. ci.yml's `python` filter now carries `**`, pinned by
 `test_python_tests_run_cannot_be_path_skipped`; the enumerated entries stay
 beside it and stay machine-checked, because the guard asks its coverage
 questions against the enumerated view only.
+
+⛔ COUNTS. This module does not say how many of anything the tree holds TODAY.
+A count that survives here is ANCHORED to the commit or ticket it was taken on
+("counted then", "measured on #1499") — a sentence about the past cannot rot,
+because it was never about now. A count about now belongs in an assertion,
+where it goes red instead of going quietly wrong. Where an old number was worth
+keeping, the fix applied on #1404 was to re-anchor it, not to delete it; where
+it was decorative, it went.
+
+⛔ The sibling module reached this rule first and for the same reason — see its
+`Deliberately NO counts here` note, whose three numbers all drifted within two
+days. This paragraph is that decision arriving here, not a new one.
+
+Three findings from #1404 are why. First, being RIGHT is not evidence of being
+guarded: an AST sweep of every assert in this module finds only structural
+floors and synthetic-corpus constants, so NOT ONE prose count here had an
+assertion behind it — including those that still happened to be correct, which
+had simply not moved yet. Second, most had already rotted, and one — a share of
+"the path-like tokens" — is not reproduced by ANY reading of the phrase it
+used, so these are not merely stale. Third, and worst: one of them was never
+well defined. How many files a 4096-byte slice truncates differs between two
+checkouts of the SAME commit, because `.gitattributes` puts the visual
+snapshots behind Git LFS and an unsmudged pointer fits inside the slice while
+the real PNG does not. A count over file CONTENTS in this repo is not a
+property of the commit at all.
+
+⚠️ So do not restore a count to "complete" a sentence that reads vague. The
+vagueness is the fix. If the number is load-bearing, put it in an assertion —
+and if you cannot write that assertion, that is the finding, not the number.
 """
 from __future__ import annotations
 
@@ -308,9 +343,9 @@ def _extension_token() -> re.Pattern[str]:
 def _extensionless_token() -> re.Pattern[str]:
     """The tracked paths an extension-anchored pattern can never produce.
 
-    ⛔ `Makefile`, `Dockerfile` ×9, `LICENSE`, every `.gitignore`-family file,
+    ⛔ `Makefile`, every `Dockerfile`, `LICENSE`, every `.gitignore`-family file,
     `components/da-tools/app/VERSION`, `scripts/hooks/commit-msg`,
-    `tests/rulepacks/vm_engine_version` — 43 tracked files whose basename has no
+    `tests/rulepacks/vm_engine_version` — the tracked files whose basename has no
     usable extension. The first version required `.<ext>`, so none of them was
     ever a token: not "the resolver let it through", but "the tokeniser never
     saw it". A live violation was sitting in `ci.yml` the whole time
@@ -335,7 +370,7 @@ def _extensionless_token() -> re.Pattern[str]:
         # extensionless spelling before the resolver ever saw it: blind review
         # measured `wrong/dir/vm_engine_version` producing no token at all while
         # the bare name produced one — so #1452's whole class stayed open for
-        # the 43 tracked files with no usable extension, including the very file
+        # every tracked file with no usable extension, including the very file
         # this docstring cites as the live violation. The name still has to be
         # in the alternation, so this widens the SPELLING, not the inventory.
         r"(?<![A-Za-z0-9_.\-/])(?:[A-Za-z0-9_.\-]+/)*(?:"
@@ -353,15 +388,16 @@ def _tokens(text: str) -> set[str]:
 # comment without one is just indentation, which the `?` allows.
 # ⚠️ Five markers only. `>` (Markdown blockquote), `::`/`REM` (batch), `%`, `!`
 # are NOT modelled — a path wrapped inside one of those is invisible. Blind
-# review demonstrated all of them; none occurs in the 46 wraps this change
-# fixed, but the gap is real, so it is named rather than implied.
+# review demonstrated all of them; none occurred in the 46 wraps #1383
+# flattened, but the gap is real, so it is named rather than implied.
 LINE_PREFIX = re.compile(r"^[ \t]*(?:#|//|\*|--|;)?[ \t]*")
 
 # A bare filename counts as a reference only if it is unambiguous, at least this
 # long, and carries a separator. What each bound EXCLUDES is measured over the
-# tree: uniqueness drops `README.md` (37 tracked paths), `_defaults.yaml` (16)
-# and `values.yaml` (11); the length/separator floor drops a further 264
-# otherwise-unique basenames, `index.md` and `resolve.go` among them.
+# tree: uniqueness drops `README.md`, `_defaults.yaml` and `values.yaml`, each
+# of which names many tracked paths; the length/separator floor drops a further
+# set of otherwise-unique basenames, `index.md` and `resolve.go` among them.
+# (Counts omitted deliberately — see COUNTS in the module docstring.)
 # ⚠️ That is not the same as "measured to earn their place". Relaxing any one of
 # them — or all three at once — does not change what this guard reports: zero on
 # this branch, and the same two references on the merge base, where those two
@@ -485,18 +521,20 @@ def _names_a_file_through_its_basename(token: str, raw: str) -> str | None:
     keeps the class the ticket is about: `../x.md` and `docs/x.md` still
     resolve, because they are spellings of our file.
 
-    ⚠️ WHAT THAT FILTER COSTS AND BUYS. Occurrences, over every tracked file,
-    and the corpus is named for each number because they are not all from the
-    same one. ON THE MERGE BASE (where the two live defects still sat): as
-    shipped the filter removes ZERO reports — nothing wrapped there
-    misattributes — and its effect is only visible once `base not in raw` is
-    removed as well, where it takes 322 reports down to 20. The material is real
-    even though none of it is wrapped: ON THIS BRANCH 276 distinct prefixed
-    tokens carry one of our basenames without being a spelling of our path (269
-    on the merge base), of which 156 name something else (151) and 120 are our
-    own file cited with EXTRA leading segments (118) — `…/blob/main/<our path>`,
-    which this filter silences too. That half is a gap and it is in the gap
-    list.
+    ⚠️ WHAT THAT FILTER COSTS AND BUYS. Occurrences, over every tracked file.
+    ⛔ These are a HISTORICAL measurement, taken on #1499 — its merge base (where
+    the two live defects still sat) and its head — and they are labelled that way
+    on purpose: an earlier wording said "on this branch", which stopped naming
+    anything the day that branch merged. Do not re-measure them into the present
+    tense; see COUNTS. On #1499's merge base, as shipped the filter removes ZERO
+    reports — nothing wrapped there misattributes — and its effect is only
+    visible once `base not in raw` is removed as well, where it takes 322 reports
+    down to 20. The material is real even though none of it is wrapped: on
+    #1499's head, 276 distinct prefixed tokens carry one of our basenames without
+    being a spelling of our path (269 on its merge base), of which 156 name
+    something else (151) and 120 are our own file cited with EXTRA leading
+    segments (118) — `…/blob/main/<our path>`, which this filter silences too.
+    That half is a gap and it is in the gap list.
 
     ⛔ HOW A CANDIDATE IS CLASSIFIED, because the counts above are not
     reproducible without it. A candidate is a token that appears in the rejoined
@@ -509,8 +547,8 @@ def _names_a_file_through_its_basename(token: str, raw: str) -> str | None:
 
     ⛔ `base not in raw` IS THE WHOLE POINT, not a nicety. When the basename
     already appears contiguously somewhere in the two-line window, `git grep`
-    finds it and the break hides nothing. Dropping it costs 18 extra reports:
-    2 → 20 on the merge base, 0 → 18 on this branch. Seventeen of those 18 are
+    finds it and the break hides nothing. Measured on #1499, dropping it costs 18
+    extra reports: 2 → 20 on its merge base, 0 → 18 on its head. Seventeen of the 18 are
     joins like `//git_shell.go` and `/tenant_custom_alerts.go`, where a comment
     marker or a bare slash is all that was glued on; the eighteenth is a real
     partial path, correctly let through because its basename is right there in
@@ -520,8 +558,8 @@ def _names_a_file_through_its_basename(token: str, raw: str) -> str | None:
     if base == token:
         # ⛔ Equivalent to falling through ONLY because the sole caller asks
         # `_resolves` first, and a bare token that resolves is reported there.
-        # Measured over a full scan: 1181 invocations, 593 of them bare, and
-        # removing this line changes NOTHING — every bare token that gets here
+        # Measured over a full scan on #1499 (1181 invocations, 593 of them
+        # bare), removing this line changed NOTHING — every bare token that gets here
         # has already failed `_resolves`, so its basename does not resolve
         # either and the lookup below would return None anyway. A second caller
         # that does not ask `_resolves` first would break that, and no test
@@ -713,11 +751,13 @@ def _decode_whole(raw: bytes, size: int, path: str) -> str:
 
     ⛔ Every other guard here pins the PATH SET — `_unread_drift`, the
     independent `git ls-files` cross-check, the no-slicing check. None of them
-    sees content: `read_bytes()[:4096]` keeps all 2315 paths, satisfies all
-    three, and still truncates 1636 files, dropping ~76% of the corpus and
-    ~58% of the path-like tokens. ⚠️ Count files by BYTES here, which is the
-    unit that slice cuts in; counting decoded characters gives 1608 and is the
-    wrong question. Measured: a wrapped reference injected past
+    sees content: `read_bytes()[:4096]` keeps EVERY path and satisfies all
+    three, while truncating most files in the tree and dropping most of the
+    corpus with them. ⚠️ If you re-measure that, count files by BYTES — the unit
+    the slice cuts in; decoded characters answer a different question. An
+    earlier wording gave both as absolute counts, and also gave a share of "the
+    path-like tokens" that NEITHER reading of that phrase reproduces (see
+    COUNTS). Measured: a wrapped reference injected past
     the cut is invisible while the suite stays green (and the run gets 2.4x
     faster, which is what makes the edit attractive).
 
@@ -842,8 +882,8 @@ def test_a_prefixed_token_is_resolved_through_its_basename() -> None:
 
     # MUST NOT REPORT: the basename ALSO appears contiguously in the window —
     # `git grep <base>` finds it, so the break hides nothing. This half is what
-    # keeps the guard off the ~320 innocent wraps in this tree; without it the
-    # cheapest way to go green is deleting the guard.
+    # keeps the guard off the great majority of innocent wraps in this tree
+    # (see COUNTS); without it the cheapest way to go green is deleting the guard.
     grepable = ("# see " + base + " at ops/" + head
                 + "\n# " + tail + " for the rule\n")
     assert _wrapped_references(grepable) == [], (
@@ -977,9 +1017,12 @@ def test_extensions_are_derived_and_longest_first() -> None:
 def test_extensionless_paths_are_tokenised_too() -> None:
     """The class the first version could not see at all.
 
-    43 tracked files have no usable extension (`Makefile`, nine `Dockerfile`s,
-    `LICENSE`, the `.gitignore` family, `components/da-tools/app/VERSION`,
-    `tests/rulepacks/vm_engine_version`, …). An extension-anchored pattern never
+    More than twenty tracked files have no usable extension (`Makefile`, the
+    `Dockerfile`s, `LICENSE`, the `.gitignore` family,
+    `components/da-tools/app/VERSION`, `tests/rulepacks/vm_engine_version`, …) —
+    stated as the bound the assertion below actually pins rather than as an
+    exact count, which nothing here would keep honest (see COUNTS). An
+    extension-anchored pattern never
     produces them as tokens, so a wrapped reference to one was not "let through
     by the resolver" — it was never looked at. One was live in `ci.yml`.
     """
@@ -1101,10 +1144,9 @@ def test_partial_read_is_refused() -> None:
 
 
 def test_tracked_set_matches_an_independent_git_listing() -> None:
-    """⛔ The floor has ~1300 files of headroom, so it cannot see a narrowing
-    that stays above it — blind review dropped every `.md` (309 files, the
-    exact surface this scan exists for: CHANGELOG.md alone carries 631 distinct
-    resolvable references) and the whole module stayed green, because
+    """⛔ The floor sits far below the size of the real tree, so it cannot see a
+    narrowing that stays above it — blind review dropped every `.md`, the exact
+    surface this scan exists for, and the whole module stayed green, because
     `_unread_drift` compares the scan against the SAME narrowed sequence and
     so agrees with itself.
 
@@ -1196,7 +1238,7 @@ def test_each_tripwire_fires_on_degenerate_input() -> None:
     # every floor fires for free (`0 <= 0`), so the empty case cannot tell a
     # floor of 1500 from a floor of 0 — blind review set all three to zero and
     # the whole module stayed green. 200 files carrying one resolvable
-    # reference between them is still degenerate against a tree of 2315, so
+    # reference between them is still degenerate against a tree this size, so
     # every floor must still speak.
     degenerate = [(f"f{i}.py", "see " + target + " for the rule\n")
                   for i in range(200)]
