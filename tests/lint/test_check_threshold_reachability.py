@@ -1496,9 +1496,27 @@ def test_the_floor_probe_asks_the_real_floors_rather_than_modelling_them(
 
     quiet = gate._roots_only_the_fifth_floor_notices(generators, read_pairs)
     assert quiet, "no blind-spot root to probe with"
-    victim = quiet[0]
+    # ⛔ The victim has to be a root the ARTIFACT KEY FLOOR COUNTS (#1544), and
+    # `quiet[0]` is not: the list is sorted and the two `tests/e2e-bench/` roots
+    # sort first, and those are exactly the ones outside this floor's
+    # denominator. Move 1) below rebases that floor to "just above victim gone"
+    # and then expects the zeroed input to trip it — on an excluded victim the
+    # total does not move, so the move measures nothing and the whole test
+    # would be reporting on a floor it never made speak.
+    countable = [r for r in quiet
+                 if r not in gate._ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS]
+    assert countable, (
+        "every blind-spot root is outside the key floor's denominator, so move "
+        "1) below cannot be set up at all — pick the probe root differently, or "
+        "shorten `_ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS`", quiet)
+    victim = countable[0]
     lost = sum(len(k) for rel, k in read_pairs if gate.conf_d_root(rel) == victim)
-    total = sum(len(k) for _rel, k in read_pairs)
+    # ⛔ …and the baseline `total` is the floor's own denominator, for the same
+    # reason: `total - lost + 1` has to be a floor the UNMODIFIED tree clears
+    # ("baseline dirty" below), and the scan-wide 72 sets it 13 too high.
+    total = sum(len(k) for _rel, k in read_pairs
+                if gate.conf_d_root(_rel)
+                not in gate._ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS)
     assert lost, victim
 
     # 1) raise the REAL artifact key floor to just above "victim gone" — still
@@ -1579,8 +1597,15 @@ def test_the_floor_probe_asks_the_real_floors_rather_than_modelling_them(
     # ⛔ and the same through the BEFORE/AFTER path, which is what `main()`'s
     # figure is actually built from: a fake that fires only once the victim's
     # keys are gone must be credited to the victim.
+    # ⛔ This fake measures what it is HANDED, so its baseline is the handed
+    # total (every scanned face), not `total` above — that one is the real
+    # floor's narrower denominator and using it here would make the fake silent
+    # on the zeroed input too, i.e. would test nothing while reading as a pass.
+    handed_total = sum(len(k) for _rel, k in read_pairs)
+    assert handed_total > total, (handed_total, total)
+
     def _below_today(_gens, artifacts):
-        if sum(len(v) for v in artifacts.values()) < total:
+        if sum(len(v) for v in artifacts.values()) < handed_total:
             raise gate._GateViolation("probe: keys dropped")
 
     monkeypatch.setattr(gate, "_assert_keys_floor", _below_today)
@@ -3018,14 +3043,19 @@ def _trip_artifact_key_floor(monkeypatch):
     # measured: putting the artifact branch back on a bare `RuntimeError` left
     # the suite green, and that branch is the one ordinary maintenance (retiring
     # a fixture) actually trips.
+    # ⛔ …and the victim is `_VANISHED_GROUP`, NOT `tests/e2e-bench/` (#1544):
+    # the two bench roots are outside this floor's denominator now, so removing
+    # them changes its total by zero and this case would pass on the fifth
+    # floor's message with the artifact branch never reached — the same silent
+    # retirement the paragraph below records.
     kept = [rel for rel in gate._tracked_defaults_artifacts()
-            if not rel.startswith("tests/e2e-bench/")]
+            if not rel.startswith(_VANISHED_GROUP)]
     monkeypatch.setattr(gate, "_tracked_defaults_artifacts", lambda: kept)
     monkeypatch.setattr(gate, "_defaults_artifacts",
                         lambda: [gate.PROJECT_ROOT / r for r in kept])
     # ⛔ …and the fifth floor (#1411) has to be stood down, or this case stops
-    # being about the artifact key floor at all. Dropping `tests/e2e-bench/`
-    # empties two PINNED roots, so `_assert_every_root_contributes`' `missing`
+    # being about the artifact key floor at all. Dropping the victim group
+    # empties a PINNED root, so `_assert_every_root_contributes`' `missing`
     # arm raises first and the parametrised assertion passes on ITS message.
     # Measured: with the artifact key floor deleted outright, and again with it
     # put back on a bare `RuntimeError`, this case still passed — it had
@@ -3438,6 +3468,27 @@ def _artifact_groups(artifacts: dict[str, dict[str, int]]) -> dict[str, int]:
     return groups
 
 
+def _counted_artifact_groups(
+        artifacts: dict[str, dict[str, int]]) -> dict[str, int]:
+    """`_artifact_groups` over the faces the ARTIFACT KEY FLOOR actually counts.
+
+    ⛔ The filter is the gate's own `_artifact_floor_faces` (#1544), not a
+    second copy of the exclusion set spelled out here. Every bracket and
+    headroom figure below is a statement about that floor's arithmetic, and a
+    local copy would go on answering after the gate's denominator changed —
+    the same "a probe that models the thing it measures" failure
+    `test_the_probe_and_the_gate_bucket_through_the_same_implementation`
+    exists for one layer down.
+
+    ⚠️ NOT a replacement for `_artifact_groups`, which still has a caller:
+    `test_the_two_artifact_groupings_are_one_partition` compares the two
+    spellings of "which root is this" over EVERY scanned artifact, and
+    narrowing it to the counted ones would stop it seeing a divergence under
+    the excluded trees.
+    """
+    return _artifact_groups(gate._artifact_floor_faces(artifacts))
+
+
 def test_the_two_artifact_groupings_are_one_partition():
     """⛔ `_artifact_groups` (rsplit on `/conf.d`) and `conf_d_root` must agree.
 
@@ -3480,6 +3531,199 @@ def test_the_two_artifact_groupings_are_one_partition():
     assert 1 < len(by_gate) < len(artifacts), (len(by_gate), len(artifacts))
 
 
+# ── the exclusion set needs an owner, and the GATE has to say so ─────────────
+
+def _the_excluded_set_with_one_live_root_dropped() -> frozenset[str]:
+    """The real exclusion set, minus one root that is genuinely in it TODAY.
+
+    ⛔ DERIVED, and it names no fixture. The first version of the `set-narrowed`
+    tamper hardcoded `tests/e2e-bench/fixture/synthetic-v2/conf.d`, which put
+    back — one layer over — the very coupling this ticket removed from the
+    production constant. Measured on a LEGITIMATE retirement of that fixture
+    (`git rm -r` plus its removal from `_ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS`
+    and `_DEFAULTS_CONFD_ROOTS`): `--ci` rc=0, so pre-commit passes, and pytest
+    rc=1 — a CI-only red. And the red was worse than a stale number: the
+    hardcoded name is no longer pinned after a retirement, so the tamper landed
+    on clause 3 (`not pinned`) instead of the clause 5 it is named for, and the
+    failure output said only that one message substring was not in another.
+    Nothing told the maintainer their retirement had invalidated the case.
+
+    ⛔ WHY THIS SHAPE CAN ONLY REACH CLAUSE 5, which is the property the
+    hardcoded one lost. The result is a strict SUBSET of the live set, and
+    clauses 1-4 iterate over the tampered set alone. Every member of a subset
+    of the live set is a member of the live set, and the live set satisfies all
+    four clauses on every green run — that is what `--ci` rc=0 means today — so
+    no subset of it can trip them. Clause 5 is the only one that reads anything
+    else: it compares the roots SCANNED under the tree against the set, and the
+    dropped root is scanned (it was taken from the scan) and under the tree
+    (clause 2 holds for it on the green run), so it lands in `unlisted`.
+
+    ⚠️ The intersection with the scan is load-bearing, not defensive: a set
+    member that is pinned but contributes no artifact is absent from
+    `scanned_under_tree`, so dropping THAT one would leave clause 5 silent and
+    the case would fail with `DID NOT RAISE`.
+    """
+    _generators, artifacts = gate._defaults_faces()
+    scanned = {gate._artifact_root_of_face(face) for face in artifacts}
+    live = sorted(gate._ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS & scanned)
+    assert live, (
+        "no root is BOTH excluded from the artifact key floor and present in "
+        "today's scan, so there is nothing to narrow and this case cannot say "
+        "anything about clause 5.\n"
+        "  If the whole benchmark tree has been retired, that is the real "
+        "finding: `_ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS`, "
+        "`_ARTIFACT_KEYS_FLOOR_EXCLUDED_TREE` and this case should be retired "
+        "together, and `_DEFAULTS_ARTIFACT_KEYS_FLOOR` re-measured against the "
+        "scan-wide total it goes back to.\n"
+        f"  excluded={sorted(gate._ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS)}\n"
+        f"  scanned under the tree="
+        f"{sorted(r for r in scanned if r and r.startswith(gate._ARTIFACT_KEYS_FLOOR_EXCLUDED_TREE))}")
+    return frozenset(gate._ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS - {live[0]})
+
+
+
+# (tamper, fragment of the message it must produce). ⛔ Each case is a DIFFERENT
+# clause of `_assert_excluded_roots_still_have_an_owner`; a single case would
+# leave the other four free to be deleted, which is exactly how this set shipped
+# for a round with no invariant at all.
+# ⚠️ TWO OF THE FOUR STILL HOLD A PATH LITERAL, and that is the correct split,
+# not an oversight. `shipped` and `set-narrowed` need their root to BE something
+# in a live table (shipped / excluded-and-scanned), so a literal there rots the
+# day that tree is retired — both are derived. `unrelated-fixture` and
+# `unpinned` need the opposite: a path that is NOT under the tree, and one that
+# is NOT pinned. Neither has to exist on disk or in any table for its clause to
+# fire, so retiring the tree they happen to name changes nothing about them.
+# ⛔ Do not "finish the job" by deriving these two — there is nothing live to
+# derive them from, and inventing one would make them depend on state their
+# assertions do not use.
+_EXCLUSION_TAMPERS = [
+    # (a) from the round-1 review: a SHIPPED root, which used to be free.
+    #     ⛔ Taken from the live table for the same reason `set-narrowed` is
+    #     derived: a hardcoded shipped root goes stale the day that tree is
+    #     retired, and the case would then slide onto clause 2 with a message
+    #     about the bench tree. `sorted()[0]` only needs SOME shipped root to
+    #     exist, which `_SHIPPED_CONFD_ROOTS` being non-empty already is.
+    ("shipped", lambda: frozenset(gate._ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS
+                                  | {sorted(gate._SHIPPED_CONFD_ROOTS)[0]}),
+     "is SHIPPED"),
+    # (b) from the round-1 review: an unrelated fixture root. The gate's stdout
+    #     was measured BYTE-IDENTICAL on this one before the invariant existed.
+    ("unrelated-fixture",
+     lambda: frozenset(gate._ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS
+                       | {"tests/golden/fixtures/mixed-mode/conf.d"}),
+     "does not live under _ARTIFACT_KEYS_FLOOR_EXCLUDED_TREE"),
+    # a root nobody pins: the fifth floor never looks at it, so excluding it
+    # leaves it watched by nothing.
+    ("unpinned", lambda: frozenset(gate._ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS
+                                   | {"tests/e2e-bench/fixture/customer-anon"}),
+     "not pinned in _DEFAULTS_CONFD_ROOTS"),
+    # the set shrinks: the tree and the set stop agreeing. ⛔ DERIVED — see
+    # `_the_excluded_set_with_one_live_root_dropped` for why naming a fixture
+    # here re-created, in the suite, the coupling #1544 removed from the gate.
+    ("set-narrowed", _the_excluded_set_with_one_live_root_dropped,
+     "but are NOT in _ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS"),
+]
+
+
+@pytest.mark.parametrize("name,tamper,expected", _EXCLUSION_TAMPERS,
+                         ids=[c[0] for c in _EXCLUSION_TAMPERS])
+def test_a_root_leaves_the_key_floors_denominator_only_with_another_owner(
+        monkeypatch, name, tamper, expected):
+    """Every clause of the exclusion invariant, through the real entry point.
+
+    ⛔ Through `_defaults_faces()` and not by calling the assertion directly:
+    the invariant is only worth anything if the floor actually reaches it, and
+    a direct call would keep passing after the call site was deleted. The
+    `may-be-empty` clause has no case here ON PURPOSE, and the reason is
+    written out in that clause's own disclosure rather than summarised here:
+    NEITHER way of reaching it from the constants gets there, and the two are
+    stopped by two different mechanisms (clause 1 on one path,
+    `_assert_every_root_contributes` on the other). ⛔ Not because the message
+    is unproducible — it is, by adding a new zero-key fixture root under the
+    tree, which is a change to the repo's contents and outside what this table
+    tampers with. That clause is a guard against
+    a future combination, and this comment is its disclosure rather than a test
+    that cannot be written honestly today.
+    """
+    monkeypatch.setattr(gate, "_ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS", tamper())
+    with pytest.raises(gate._GateViolation) as exc:
+        gate._defaults_faces()
+    assert expected in str(exc.value), (name, str(exc.value))
+
+
+def test_the_exclusion_invariant_fires_on_the_ci_path_not_only_in_the_suite(
+        monkeypatch, capsys):
+    """⛔ THE POINT OF THE WHOLE CLAUSE SET, and the reason it is not a test.
+
+    `.pre-commit-config.yaml` runs this module as
+    `check_threshold_reachability.py --ci`. It does NOT run pytest. So an
+    invariant that lives only in this file is an invariant a local commit never
+    meets — measured on the build before this one: adding an unrelated 2-key
+    fixture root to the exclusion set left `--ci` at rc=0 with stdout
+    byte-identical to a clean run, and the single red was one hardcoded pair in
+    `test_the_headroom_note_states_both_directions_and_both_are_current`, i.e.
+    a CI-only signal for a change that reaches `main` through a green local
+    commit.
+
+    This asserts the exit code and the message on the same path the hook takes.
+    """
+    monkeypatch.setattr(
+        gate, "_ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS",
+        frozenset(gate._ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS
+                  | {"tests/golden/fixtures/mixed-mode/conf.d"}))
+    rc = gate.main(["--ci"])
+    out = capsys.readouterr()
+    blob = out.out + out.err
+    assert rc == 1, (rc, blob[-2000:])
+    assert "_ARTIFACT_KEYS_FLOOR_EXCLUDED_TREE" in blob, blob[-2000:]
+    # …and non-vacuously: the same call on the untampered set is rc=0, so the
+    # assertion above is about the tamper and not about `--ci` being red today.
+    monkeypatch.undo()
+    capsys.readouterr()
+    assert gate.main(["--ci"]) == 0
+
+
+def test_the_excluded_tree_and_the_excluded_set_are_both_load_bearing():
+    """Neither spelling may be decoration — the invariant reads BOTH.
+
+    ⛔ Mutation is what this is for. A clause set that only walked the set would
+    leave `_ARTIFACT_KEYS_FLOOR_EXCLUDED_TREE` free to be edited to anything at
+    all, and a check that only compared against the tree would let the set be
+    emptied. Both are asserted as REACHED, by making each one wrong on its own.
+    """
+    _generators, artifacts = gate._defaults_faces()
+    assert gate._ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS, "nothing is excluded"
+    assert all(r.startswith(gate._ARTIFACT_KEYS_FLOOR_EXCLUDED_TREE + "/")
+               for r in gate._ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS)
+    # the real pair is accepted…
+    gate._assert_excluded_roots_still_have_an_owner(artifacts)
+
+    # …and each spelling on its own is READ. ⛔ These two probes are the
+    # docstring's claim; without them the paragraph above described a test that
+    # did not exist, which is the exact shape (`a comment asserts what the code
+    # does not do`) this module keeps paying for. Caught by review on #1544.
+    with pytest.MonkeyPatch.context() as mp:
+        # Point the tree elsewhere: the set's members stop sitting under it.
+        mp.setattr(gate, "_ARTIFACT_KEYS_FLOOR_EXCLUDED_TREE", "tests/nowhere")
+        with pytest.raises(gate._GateViolation, match="does not live under"):
+            gate._assert_excluded_roots_still_have_an_owner(artifacts)
+    with pytest.MonkeyPatch.context() as mp:
+        # Empty the set: the scanned roots under the tree stop being listed.
+        mp.setattr(gate, "_ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS", frozenset())
+        with pytest.raises(gate._GateViolation,
+                           match="NOT in _ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS"):
+            gate._assert_excluded_roots_still_have_an_owner(artifacts)
+
+
+# The group both end-to-end "a whole group vanished" probes remove. ⛔ ONE
+# spelling: they assert two different things about the same input (which floor
+# is heard first, and that a breach is a violation rather than a crash), and a
+# victim that drifted between them would leave one of the two measuring a
+# scenario nobody chose. Kept as a path PREFIX, the shape both probes filter
+# with — `tests/golden/fixtures/full-l0-l3/conf.d` is the conf.d root inside it.
+_VANISHED_GROUP = "tests/golden/fixtures/full-l0-l3/"
+
+
 def test_the_artifact_key_floor_backstops_a_vanished_group(monkeypatch):
     """End-to-end, on the real tree, with the FILE count still above both file
     floors — which is the case those two floors structurally cannot see.
@@ -3491,16 +3735,33 @@ def test_the_artifact_key_floor_backstops_a_vanished_group(monkeypatch):
     has not had since #1411 — the same claim the bracket test's lower bound was
     written from. What this floor owns is asserted separately, in
     `test_the_artifact_key_floor_owns_erosion_that_empties_no_root`; this one
-    keeps the older behaviour from rotting away behind the newer floor."""
+    keeps the older behaviour from rotting away behind the newer floor.
+
+    ⛔ THE VICTIM GROUP IS NOT `tests/e2e-bench/` ANY MORE (#1544). Those two
+    roots left the key floor's denominator, so removing them now moves this
+    floor's total by exactly zero — the probe would have gone on passing on the
+    FIFTH floor's message alone while the branch it is named for was never
+    reached, which is the precise defect `_trip_artifact_key_floor`'s comment
+    records having had to fix once already. The replacement is the largest
+    group still IN the denominator that is not shipped: `full-l0-l3`, 13 keys
+    of the counted 59, taking the total to 46 against a floor of 47.
+
+    ⚠️ That leaves ONE key of margin, on purpose and not by luck — 47 is the
+    lowest floor at which dropping the biggest counted non-shipped group still
+    speaks, and the bracket test's message is what tells you to raise it if the
+    margin ever goes negative. `_VANISHED_GROUP` is shared with
+    `_trip_artifact_key_floor` so the two probes cannot drift onto different
+    victims."""
     tracked = gate._tracked_defaults_artifacts()
-    kept = [rel for rel in tracked if not rel.startswith("tests/e2e-bench/")]
+    kept = [rel for rel in tracked if not rel.startswith(_VANISHED_GROUP)]
     assert len(kept) >= gate._DEFAULTS_ARTIFACT_FLOOR, kept
+    assert len(kept) < len(tracked), "the victim group is not in the scan"
 
     monkeypatch.setattr(gate, "_tracked_defaults_artifacts", lambda: kept)
     monkeypatch.setattr(gate, "_defaults_artifacts",
                         lambda: [gate.PROJECT_ROOT / rel for rel in kept])
-    # ⛔ The fifth floor (#1411) now fires FIRST on this input — it names the two
-    # e2e-bench roots outright, which is strictly better for the reader. But
+    # ⛔ The fifth floor (#1411) fires FIRST on this input — it names the
+    # emptied root outright, which is strictly better for the reader. But
     # letting that stand here would silently retire this test: the key floor's
     # ability to see a group stop yielding would no longer be exercised by
     # anything, and the next person to touch that floor would get a green suite.
@@ -3524,7 +3785,14 @@ def _erosion_plan(need: int) -> dict[str, int]:
     floor X owns is worthless if floor Y answers first.
 
       * no conf.d root may reach zero      → the fifth floor would answer;
-      * shipped roots are left alone       → the fourth floor would answer.
+      * shipped roots are left alone       → the fourth floor would answer;
+      * roots outside the key floor's own denominator are left alone
+        (`gate._ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS`, #1544) → NOBODY would
+        answer: keys taken from there do not move the total this floor
+        compares, so the plan would report a supply it did not deliver and the
+        caller's `pytest.raises` would fail with the mutation blamed. Before
+        the exclusion existed this constraint was vacuous and the plan drew
+        from `synthetic-v2` routinely.
 
     ⛔ It used to return a shortfall as well, so the caller could tell "the
     mutation did not actually happen" from "it happened and nothing noticed".
@@ -3562,7 +3830,8 @@ def _erosion_plan(need: int) -> dict[str, int]:
         # ⛔ An earlier wording here pointed at "the tenant-stub test", which
         # was a parametrize case in a test deleted one commit earlier — the
         # pointer was dangling the moment it was written.
-        if root is None or root in gate._SHIPPED_CONFD_ROOTS:
+        if (root is None or root in gate._SHIPPED_CONFD_ROOTS
+                or root in gate._ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS):
             continue
         per_root.setdefault(root, []).append((rel, len(real(path))))
 
@@ -3608,7 +3877,13 @@ def test_the_artifact_key_floor_owns_erosion_that_empties_no_root(monkeypatch):
     no number from that comment is copied here.
     """
     _generators, artifacts = gate._defaults_faces()
-    groups = _artifact_groups(artifacts)
+    # ⛔ The floor's own denominator (#1544): `band` is what this floor is blind
+    # to, so it has to be measured in the keys this floor adds up. Taken from
+    # the scan-wide total instead, `band` comes out 25 on this tree and step 3
+    # would then be asking the non-shipped roots for 26 keys of erosion — more
+    # than they hold — turning a statement about the floor into a red about the
+    # plan.
+    groups = _counted_artifact_groups(artifacts)
     total = sum(groups.values())
     band = total - gate._DEFAULTS_ARTIFACT_KEYS_FLOOR
     biggest_root = max(groups, key=lambda root: groups[root])
@@ -3724,6 +3999,14 @@ def test_each_key_floor_is_bracketed_by_what_it_has_to_catch():
         empties — still trips it. That is the reachable reading, and it is
         pinned by, rather than left as prose in front of,
         `test_the_artifact_key_floor_owns_erosion_that_empties_no_root`.
+
+    ⛔ AND THE ARTIFACT TOTAL IS THE FLOOR'S OWN DENOMINATOR, not the scan's
+    (#1544). `_counted_artifact_groups` drops the roots in
+    `gate._ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS`, because bracketing a floor
+    against keys that floor never adds up is bracketing nothing: measured on
+    this tree, the scan-wide total (72, biggest root 19) puts the lower bound
+    at 53 while the floor arithmetic runs on 59, so every legal floor would
+    have read as too low.
     """
     generators, artifacts = gate._defaults_faces()
 
@@ -3734,7 +4017,7 @@ def test_each_key_floor_is_bracketed_by_what_it_has_to_catch():
         f"between {g_total - g_biggest} (the biggest producer, {g_biggest} keys, "
         f"going silent) and today's {g_total}")
 
-    groups = _artifact_groups(artifacts)
+    groups = _counted_artifact_groups(artifacts)
     a_total = sum(groups.values())
     a_biggest = max(groups.values())
     assert a_total - a_biggest < gate._DEFAULTS_ARTIFACT_KEYS_FLOOR < a_total, (
@@ -3776,11 +4059,18 @@ def test_the_headroom_note_states_both_directions_and_both_are_current():
       DOWN — against the floor itself; a removal turns the GATE red, and the
              remedy is repairing the producer (or, for a deliberate retirement,
              a LOWER floor).
+
+    ⛔ BOTH ARTIFACT FIGURES ARE MEASURED ON THE FLOOR'S DENOMINATOR (#1544),
+    which is why they did not move when the denominator did: total 72 / floor
+    60 and total 59 / floor 47 give the same (+6, 12). That equality is the
+    evidence the pairing was a re-basing and not a retune — it is NOT a claim
+    that the two are interchangeable, and re-deriving these from the scan-wide
+    total would give (-7, 25) here.
     """
     generators, artifacts = gate._defaults_faces()
     g_total = sum(len(v) for v in generators.values())
     g_biggest = max(len(v) for v in generators.values())
-    groups = _artifact_groups(artifacts)
+    groups = _counted_artifact_groups(artifacts)
     a_total, a_biggest = sum(groups.values()), max(groups.values())
 
     # UP: the largest pure addition that keeps `total - biggest < floor` true.

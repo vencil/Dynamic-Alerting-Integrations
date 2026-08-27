@@ -761,7 +761,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "3312b11e738c823eb15bcdf5988ba3e4845d7edd9c40283fa33eea506fae386d",
+ "source_digest": "557c8f3d3574041d26b11a017ad5605cb57f1c9d89e25281651c10c02b4cdd82",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -2263,6 +2263,9 @@
    "tests/dx/test_inject_waveform.py",
    "tests/dx/test_waveform_score.py"
   ],
+  "scripts/tools/dx/pair_bench_ratio.py": [
+   "tests/dx/test_paired_trend_watch.py"
+  ],
   "scripts/tools/dx/paired_trend_watch.py": [
    "tests/dx/test_paired_trend_watch.py"
   ],
@@ -2673,10 +2676,16 @@
   "tests/e2e-bench/driver/driver.py": [
    "tests/e2e-bench/driver/test_driver.py"
   ],
+  "tests/e2e-bench/fixture/customer-anon": [
+   "tests/lint/test_check_threshold_reachability.py"
+  ],
   "tests/e2e-bench/fixture/synthetic-v1": [
    "tests/lint/test_check_threshold_reachability.py"
   ],
   "tests/e2e-bench/fixture/synthetic-v1/conf.d": [
+   "tests/lint/test_check_threshold_reachability.py"
+  ],
+  "tests/e2e-bench/fixture/synthetic-v2/conf.d": [
    "tests/lint/test_check_threshold_reachability.py"
   ],
   "tests/e2e-bench/receiver/Dockerfile": [
@@ -2710,6 +2719,9 @@
   "tests/golden/build_and_capture.py": [
    "tests/golden/test_merge_parity.py"
   ],
+  "tests/golden/fixtures/full-l0-l3": [
+   "tests/lint/test_check_threshold_reachability.py"
+  ],
   "tests/golden/fixtures/full-l0-l3/conf.d": [
    "tests/lint/test_check_threshold_reachability.py"
   ],
@@ -2723,6 +2735,9 @@
    "tests/lint/test_check_threshold_reachability.py"
   ],
   "tests/golden/fixtures/l0-only/conf.d/_defaults.yaml": [
+   "tests/lint/test_check_threshold_reachability.py"
+  ],
+  "tests/golden/fixtures/mixed-mode/conf.d": [
    "tests/lint/test_check_threshold_reachability.py"
   ],
   "tests/helm": [
@@ -2759,6 +2774,9 @@
   ],
   "tests/lint/test_check_hub_badge_drift.py": [
    "tests/dx/test_verify_diff.py"
+  ],
+  "tests/lint/test_check_image_pin_capability.py": [
+   "tests/dx/test_paired_trend_watch.py"
   ],
   "tests/lint/test_check_scrape_reachability.py": [
    "tests/helm/test_optional_overrides_render.py"
