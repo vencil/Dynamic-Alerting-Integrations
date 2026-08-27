@@ -2403,18 +2403,40 @@ def test_the_page_never_spells_an_ordinal_outside_key_label():
                 the same as owning the alphabet — the same over-claim this
                 module keeps producing, this time inside its own guard.
 
-    ⇒ the invariant is stated over the ALPHABET instead: no string literal in
-    the module's code, outside `key_label`, may contain `?#`. Concatenation,
-    `%`, `.format`, `in`, `==`, slicing, `startswith` — every one of them needs
-    those two characters somewhere, so every one of them is caught, and the
-    check no longer has to predict how the next mistake will be spelled.
+    ⇒ this check is stated over the ALPHABET instead: no string literal in the
+    module's code, outside `key_label`, may contain `?#`.
+
+    ⛔ AND CUT 3 — this one — OVER-CLAIMED TOO, which is why the wording below
+    is this careful. It used to end "Concatenation, `%`, `.format`, `in`, `==`,
+    slicing, `startswith` — every one of them needs those two characters
+    somewhere, so every one of them is caught." A fifth-round reviewer split
+    the literal and measured that sentence false:
+
+            marker = "?" + "#"      # two Constants, neither contains `?#`
+
+        ⇒ invisible here, and `Concatenation` was named as covered.
+
+    ⇒ WHAT THIS CHECK ACTUALLY OWNS: the two characters INSIDE ONE STRING
+    LITERAL. A marker assembled from pieces — `"?" + "#"`, `chr(63) + chr(35)`,
+    `"".join(...)` — escapes it, and no AST scan closes that without running
+    the code. Enumerating one more shape (constant-folding `BinOp`) would just
+    be cut 4 of the same mistake, so it is deliberately not done.
+
+    ⇒ WHAT COVERS THE REST: `test_no_second_site_can_put_an_ordinal_on_the_page`
+    below neuters `key_label` and asserts `?#` cannot reach the rendered page
+    at all. It does not care how a rogue marker is spelled — but it only sees
+    code that `render()` actually executes.
+
+    ⚠️ SO NEITHER IS COMPLETE, AND THE HOLES ARE DIFFERENT ONES: this check
+    reaches code nothing calls but only single literals; that one reaches any
+    spelling but only live paths. Both are stated so a reader can tell which
+    half is measured — the pair is a tripwire, not a proof.
 
     ⚠️ Docstrings are exempt and MUST be: half this module's prose quotes the
     defects it is documenting. Comments never reach the AST at all.
 
     ⚠️ Which is why `render`'s disclosure paragraph builds its two example
-    labels by CALLING `key_label` rather than typing `?#1`, `?#2`. That is what
-    makes an invariant this strict statable at all.
+    labels by CALLING `key_label` rather than typing `?#1`, `?#2`.
     """
     tree = ast.parse(Path(ptw.__file__).read_text(encoding="utf-8"))
 
@@ -2473,3 +2495,31 @@ def test_a_date_shaped_like_an_ordinal_costs_a_label_but_never_a_reading():
     assert "1 of 1 calendar night(s)" in body        # one dated night
     assert "3 of 3 run(s) counted" in body           # all three readings kept
     assert "| `BenchmarkAlpha` | 1 (?#1) + 2 undated run(s) (?#1, ?#2) |" in body
+
+
+def test_no_second_site_can_put_an_ordinal_on_the_page(monkeypatch):
+    """The behavioural half of the pair above: spelling-independent, path-bound.
+
+    ⛔ Written because the static scan owns only the two characters inside one
+    string literal, and round 5 measured a live way past it (`"?" + "#"`). This
+    asks the question the scan cannot: with `key_label` NEUTERED, can `?#`
+    still reach the page? If it can, something other than `key_label` put it
+    there — and it does not matter whether that something used an f-string,
+    concatenation, `%`, `.format`, or `chr(63)`.
+
+    ⚠️ ITS OWN HOLE, stated so the pair is not read as a proof: it only sees
+    code `render()` actually executes. A rogue formatter nothing calls is
+    invisible HERE and visible to the static scan. That is the whole reason
+    both exist; neither is sufficient and they fail in opposite directions.
+    """
+    nights = [_run("2026-08-20", 1, 9.0), _run(None, 2, 12.0),
+              _run(None, 3, 20.0)]
+
+    # ⛔ Positive control FIRST. Without it a scenario that never renders a
+    # single ordinal would pass this test by carrying nothing to find.
+    assert "?#" in ptw.render(ptw.decide(copy.deepcopy(nights), k=99))
+
+    monkeypatch.setattr(ptw, "key_label", lambda key: "<LBL>")
+    body = ptw.render(ptw.decide(copy.deepcopy(nights), k=99))
+    assert "<LBL>" in body, "the patch never took effect — vacuous otherwise"
+    assert "?#" not in body, body
