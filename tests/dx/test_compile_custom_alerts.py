@@ -1325,3 +1325,86 @@ def test_the_printed_command_survives_a_path_with_a_space(tmp_path, monkeypatch,
     # and every caller in this repo spells it "python3".
     assert argv[0].strip('"') == sys.executable
     assert argv[1].strip('"') == str(Path(cc.__file__).resolve())
+
+
+# --- I. one mechanical sweep over the whole message space ----------------------
+# ⛔ WHY A SWEEP AND NOT ANOTHER CASE. Every defect this guard shipped was the same
+# species: ONE branch's message either contradicted itself (forbidding a flag and
+# then printing a command containing it) or blamed the wrong cause. Three review
+# rounds each caught one instance and each fix created the next, because a per-case
+# assertion only ever looks at the branch someone thought of. These invariants hold
+# for every branch by construction, so a new branch cannot quietly opt out.
+_STATES = [
+    # (label, source files, seed the pack first?, extra flags, run --check?)
+    ("empty-source-vs-pack", _EMPTY_SOURCE, True, (), False),
+    ("empty-source-vs-pack-check", _EMPTY_SOURCE, True, (), True),
+    ("quarantined-vs-pack", None, True, (), False),
+    ("quarantined-vs-pack-check", None, True, (), True),
+    ("quarantined-plus-allow-empty", None, True, ("--allow-empty",), False),
+    ("greenfield-empty", _EMPTY_SOURCE, False, (), False),
+    ("greenfield-quarantined", None, False, (), False),
+    ("partial-loss-check", None, True, (), True),
+]
+_TYPO_SOURCE = {"a.yaml": _ONE_RECIPE_SOURCE["a.yaml"].replace("window: 5m", "window: 5x")}
+
+
+@pytest.mark.parametrize("label,files,seed,extra,check", _STATES)
+def test_no_message_forbids_and_offers_the_same_thing(
+        label, files, seed, extra, check, tmp_path, monkeypatch, capsys):
+    src, out = tmp_path / "src", tmp_path / "pack.yaml"
+    if seed:
+        _write_tree(src, _ONE_RECIPE_SOURCE)
+        assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
+        capsys.readouterr()
+    _write_tree(src, files or _TYPO_SOURCE)
+    (src / "a.yaml").write_text((files or _TYPO_SOURCE)["a.yaml"], encoding="utf-8")
+
+    argv = ["compile", "--config-dir", str(src), "--out", str(out), *extra]
+    if check:
+        argv.insert(1, "--check")
+    monkeypatch.setattr(sys, "argv", argv)
+    cc.main()
+    cap = capsys.readouterr()
+    _assert_message_invariants(cap.out + cap.err, str(src), label)
+
+
+def _assert_message_invariants(text: str, tree: str, label: str) -> None:
+    """The invariants themselves, so the sweep and its control run the SAME code.
+
+    ⛔ A sweep that only ever sees healthy input proves nothing — it is satisfied
+    just as well by looking at less. `test_the_sweep_would_notice` feeds this the
+    exact shapes the three review rounds actually shipped.
+    """
+    offers_command = Path(cc.__file__).name in text
+    # 1. A prohibition and the thing it prohibits never appear together.
+    if cc.DO_NOT_ALLOW_EMPTY in text:
+        assert not offers_command, f"{label}: forbids --allow-empty and then hands it over"
+    if cc.DO_NOT_REGENERATE in text:
+        assert "make custom-alerts-compile" not in text, f"{label}: forbids and prescribes"
+    # 2. Whenever the tool explains an empty compile, it says whose tree it read.
+    if "Check, in this order" in text or "were QUARANTINED above" in text:
+        assert tree in text, f"{label}: explained the emptiness without naming the tree"
+    # 3. It never blames invisibility for recipes it quarantined itself.
+    if "QUARANTINED (fail-soft" in text:
+        assert "Check, in this order" not in text, f"{label}: quarantine blamed on discovery"
+
+
+def test_the_sweep_would_notice():
+    # Positive control: each of these is a shape that was really shipped and really
+    # reviewed out. If the sweep stops failing on them it has stopped looking.
+    assert cc.DO_NOT_ALLOW_EMPTY and cc.DO_NOT_REGENERATE, "empty constants make it vacuous"
+    tool = Path(cc.__file__).name
+    for label, text in [
+        ("forbids-then-offers",
+         cc.DO_NOT_ALLOW_EMPTY + "\n     " + tool + " --config-dir /t --allow-empty"),
+        ("forbids-then-prescribes",
+         cc.DO_NOT_REGENERATE + "\n   Run `make custom-alerts-compile` to regenerate."),
+        ("explains-without-naming-the-tree",
+         "   Check, in this order:\n     1. a declaration the compiler stopped seeing"),
+        ("quarantine-blamed-on-discovery",
+         "  QUARANTINED (fail-soft, #1008)\n   Check, in this order:\n/t"),
+    ]:
+        with pytest.raises(AssertionError):
+            _assert_message_invariants(text, "/t", label)
+    # …and it must pass on a healthy message, or it would "catch" everything.
+    _assert_message_invariants("   The compiler read: /t\n   Check, in this order:\n", "/t", "ok")

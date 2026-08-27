@@ -386,6 +386,14 @@ def _rerun_command(args) -> str:
 DO_NOT_REGENERATE = ("⛔ Do not regenerate to clear this. Regenerating here deletes "
                      "every custom alert in the pack.")
 
+# The other prohibition. Both are constants for the same reason: every defect this
+# guard has shipped so far was one branch's message contradicting itself or blaming
+# the wrong cause, and a test can only pair a prohibition with the offer it forbids
+# if both have names. See `test_no_message_forbids_and_offers_the_same_thing`.
+DO_NOT_ALLOW_EMPTY = ("⛔ Fix those declarations first. Do NOT pass --allow-empty here: "
+                      "the source is not empty, and writing an empty pack would drop "
+                      "rules that are still declared.")
+
 
 def _shell_quote(value) -> str:
     """Quote a path for pasting back into a shell — only when it needs it.
@@ -437,9 +445,7 @@ def _nothing_compiled_diagnosis(config_dir: Path, quarantined: int) -> str:
         return (f"{head}"
                 f"   {quarantined} recipe(s) were QUARANTINED above — the source still declares "
                 f"them, they just failed to compile.\n"
-                f"   ⛔ Fix those declarations first. Do NOT pass --allow-empty here: the source "
-                f"is not empty, and writing an empty pack would drop rules that are still "
-                f"declared.\n"
+                f"   {DO_NOT_ALLOW_EMPTY}\n"
                 f"   ⚠ Fixing them may still leave fewer rules than the pack has — check the "
                 f"count after recompiling.")
     return (f"{head}"
