@@ -543,6 +543,199 @@ def test_drift_multi_matcher_label_drift():
     assert r["counts"]["orphans"] == 1
 
 
+# ─── match coverage ───────────────────────────────────────────────────
+
+
+def _alert(name: str, *, source: str = "x", group: str = "g", **labels) -> dict:
+    """Build one alert entry in the shape load_alerts() produces."""
+    effective = {"alertname": name}
+    effective.update({k: str(v) for k, v in labels.items()})
+    return {"name": name, "labels": effective, "source": source, "group": group}
+
+
+def test_coverage_reports_match_count_and_names():
+    """A severity-wide silence must report HOW MANY rules it covers.
+
+    Fails if the match set is collapsed back to a boolean (the shape
+    this section exists to prevent).
+    """
+    alerts = [
+        _alert("FooAlert", severity="critical"),
+        _alert("BarAlert", severity="critical"),
+        _alert("BazAlert", severity="warning"),
+    ]
+    silences = [
+        _silence(
+            matchers=[
+                {"name": "severity", "value": "critical", "isEqual": True, "isRegex": False}
+            ]
+        )
+    ]
+    r = sdc.check_drift(silences, alerts)
+    assert r["counts"]["orphans"] == 0
+    assert len(r["coverage"]) == 1
+    entry = r["coverage"][0]
+    assert entry["matched_rules"] == 2
+    assert entry["matched_alertnames"] == ["BarAlert", "FooAlert"]
+
+
+def test_coverage_includes_orphans_as_zero():
+    """Orphans belong in coverage too — a reader scanning the list must
+    not have to cross-reference the orphan section to find the zeros."""
+    alerts = [_alert("FooAlert")]
+    silences = [
+        _silence(
+            id_="orph",
+            matchers=[
+                {
+                    "name": "alertname",
+                    "value": "GoneAlert",
+                    "isEqual": True,
+                    "isRegex": False,
+                }
+            ],
+        )
+    ]
+    r = sdc.check_drift(silences, alerts)
+    assert r["counts"]["orphans"] == 1
+    assert r["coverage"] == [
+        {
+            "silence_id": "orph",
+            "matchers": silences[0]["matchers"],
+            "matched_rules": 0,
+            "matched_alertnames": [],
+        }
+    ]
+
+
+def test_coverage_counts_rule_definitions_not_unique_names():
+    """`matched_rules` counts rule definitions; `matched_alertnames` is
+    the deduped name list. Pins the distinction the docstring claims —
+    fails if matched_rules is ever "simplified" to len(set(names))."""
+    alerts = [
+        _alert("FooAlert", source="pack-a.yaml"),
+        _alert("FooAlert", source="pack-b.yaml"),
+    ]
+    r = sdc.check_drift([_silence()], alerts)
+    entry = r["coverage"][0]
+    assert entry["matched_rules"] == 2
+    assert entry["matched_alertnames"] == ["FooAlert"]
+
+
+def test_widest_match_reports_the_broadest_silence():
+    """counts.widest_match is the max across silences, not the first or
+    the min — that number is the over-broad-matcher signal."""
+    alerts = [_alert("A", severity="critical"), _alert("B", severity="critical")]
+    silences = [
+        _silence(
+            id_="narrow",
+            matchers=[
+                {"name": "alertname", "value": "A", "isEqual": True, "isRegex": False}
+            ],
+        ),
+        _silence(
+            id_="broad",
+            matchers=[
+                {"name": "severity", "value": "critical", "isEqual": True, "isRegex": False}
+            ],
+        ),
+    ]
+    r = sdc.check_drift(silences, alerts)
+    assert r["counts"]["widest_match"] == 2
+
+
+def test_widest_match_is_zero_when_nothing_in_scope():
+    """No in-scope silences must not blow up the max()."""
+    r = sdc.check_drift([], [_alert("A")])
+    assert r["coverage"] == []
+    assert r["counts"]["widest_match"] == 0
+
+
+def test_coverage_excludes_malformed_and_inactive_silences():
+    """Coverage covers exactly the checked set. A malformed or expired
+    silence appearing here would overstate what is actually audited."""
+    alerts = [_alert("FooAlert")]
+    silences = [
+        _silence(id_="ok"),
+        _silence(id_="bad", matchers=[]),
+        _silence(id_="old", state="expired"),
+    ]
+    r = sdc.check_drift(silences, alerts)
+    assert [c["silence_id"] for c in r["coverage"]] == ["ok"]
+    assert r["counts"]["malformed"] == 1
+    assert r["counts"]["inactive_skipped"] == 1
+
+
+def test_alertnames_preview_states_the_overflow():
+    """The text preview must say what it elided. A silent trim reads as
+    a complete list, which is the exact failure mode being reported."""
+    names = [f"Alert{i}" for i in range(7)]
+    out = sdc._alertnames_preview(names)
+    assert "Alert0, Alert1, Alert2" in out
+    assert "+4 more" in out
+
+
+def test_alertnames_preview_no_overflow_marker_when_short():
+    assert sdc._alertnames_preview(["A", "B"]) == "A, B"
+    assert "more" not in sdc._alertnames_preview(["A", "B"])
+
+
+def test_alertnames_preview_explains_the_empty_case():
+    """An orphan's empty name list must render an explanation, not an
+    empty string — otherwise the line degrades to a dangling dash and
+    the reader cannot tell zero-match from a rendering bug."""
+    out = sdc._alertnames_preview([])
+    assert out.strip() != ""
+    assert "orphan" in out
+
+
+def test_render_coverage_prints_rule_count_not_deduped_name_count(capsys):
+    """The text line must print `matched_rules`, NOT the length of the
+    deduped name list. The two coincide whenever every matched rule has
+    a distinct alertname, so a renderer that used the name-list length
+    would pass every other text test — this is the one case that tells
+    them apart (same alertname defined in two packs, e.g. a base pack
+    plus a tenant override)."""
+    report = {
+        "coverage": [
+            {
+                "silence_id": "dup",
+                "matchers": [],
+                "matched_rules": 2,
+                "matched_alertnames": ["OnlyOneName"],
+            }
+        ]
+    }
+    sdc.render_coverage(report)
+    out = capsys.readouterr().out
+    assert "silence dup: 2 rule(s)" in out
+    assert "1 rule(s)" not in out
+
+
+def test_render_coverage_orders_widest_first(capsys):
+    """The broadest silence is the one worth reading first."""
+    report = {
+        "coverage": [
+            {
+                "silence_id": "narrow",
+                "matchers": [],
+                "matched_rules": 1,
+                "matched_alertnames": ["A"],
+            },
+            {
+                "silence_id": "broad",
+                "matchers": [],
+                "matched_rules": 9,
+                "matched_alertnames": ["B"],
+            },
+        ]
+    }
+    sdc.render_coverage(report)
+    out = capsys.readouterr().out
+    assert "Match coverage" in out
+    assert out.index("broad") < out.index("narrow")
+
+
 # ─── compute_exit_code ────────────────────────────────────────────────
 
 
@@ -647,6 +840,85 @@ def test_main_json_output(silences_file, rule_pack_file, capsys):
     assert report["counts"]["orphans"] == 0
     assert report["silences_file"] == str(silences_file)
     assert report["rule_source"] == str(rule_pack_file)
+
+
+def test_main_text_output_shows_match_coverage(tmp_path, capsys):
+    """End-to-end: the count reaches the human-readable output."""
+    silences = tmp_path / "s.json"
+    silences.write_text(
+        json.dumps(
+            [
+                _silence(
+                    id_="wide",
+                    matchers=[
+                        {
+                            "name": "severity",
+                            "value": "critical",
+                            "isEqual": True,
+                            "isRegex": False,
+                        }
+                    ],
+                )
+            ]
+        ),
+        encoding="utf-8",
+    )
+    rules = _write(tmp_path / "p.yaml", """
+        groups:
+          - name: g
+            rules:
+              - alert: OneAlert
+                expr: up
+                labels: {severity: critical}
+              - alert: TwoAlert
+                expr: up
+                labels: {severity: critical}
+    """)
+    rc = sdc.main(["--silences-file", str(silences), "--rule-source", str(rules)])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "Match coverage" in out
+    assert "silence wide: 2 rule(s)" in out
+    assert "widest silence matches 2 rule(s)" in out
+
+
+def test_main_json_coverage_name_list_is_not_truncated(tmp_path, capsys):
+    """The text preview caps at 3 names; --json must carry all of them,
+    otherwise the machine-readable path loses the very data this adds."""
+    silences = tmp_path / "s.json"
+    silences.write_text(
+        json.dumps(
+            [
+                _silence(
+                    matchers=[
+                        {
+                            "name": "severity",
+                            "value": "critical",
+                            "isEqual": True,
+                            "isRegex": False,
+                        }
+                    ]
+                )
+            ]
+        ),
+        encoding="utf-8",
+    )
+    rule_lines = "\n".join(
+        f"      - alert: Alert{i}\n        expr: up\n        labels: {{severity: critical}}"
+        for i in range(5)
+    )
+    rules = tmp_path / "p.yaml"
+    rules.write_text(
+        "groups:\n  - name: g\n    rules:\n" + rule_lines + "\n", encoding="utf-8"
+    )
+    rc = sdc.main(
+        ["--silences-file", str(silences), "--rule-source", str(rules), "--json"]
+    )
+    assert rc == 0
+    report = json.loads(capsys.readouterr().out)
+    entry = report["coverage"][0]
+    assert entry["matched_rules"] == 5
+    assert entry["matched_alertnames"] == [f"Alert{i}" for i in range(5)]
 
 
 def test_main_missing_silences_file(rule_pack_file, tmp_path):

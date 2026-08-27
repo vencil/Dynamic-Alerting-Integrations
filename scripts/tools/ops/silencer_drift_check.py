@@ -32,6 +32,21 @@ Matcher semantics (Alertmanager / amtool):
     label set. The label set of an alert includes the implicit
     `alertname=<alert>` label plus any `labels:` block on the rule.
 
+Coverage reporting:
+    The matcher engine has to compute each silence's full match set to
+    decide orphan-hood. That set is reported (`coverage[]` in --json, a
+    "Match coverage" section in text) instead of being collapsed to a
+    boolean, because it answers the question that precedes drift: how
+    much would this silence actually suppress?
+
+    A silence fails in two opposite directions. An orphan matches
+    nothing and suppresses nothing — the alert storm case above. An
+    over-broad matcher (a dropped label, a `.*` left in) matches far
+    more than intended and suppresses alerts nobody meant to silence.
+    Orphan detection only sees the first. `counts.widest_match` and the
+    per-silence `matched_rules` make the second visible before it is
+    exercised in production.
+
 Usage:
     amtool silence query -o json --alertmanager.url=... > silences.json
     da-tools silencer-drift-check --silences-file silences.json \\
@@ -69,10 +84,37 @@ Known limitations (out of MVP scope, document for follow-up):
       literally, which means a silence using a specific tenant value
       won't match the templated rule — false positive orphan. Workaround:
       audit by group, not literal value, for templated alerts.
+      ⚠️ Measured 2026-08-27 by loading `rule-packs/` through this
+      tool's own `load_alerts()`: all 122 alerts carry a `tenant:`
+      label and all 122 are templated (0 literal). Every silence
+      `maintenance_scheduler.py` creates carries a literal
+      `tenant=<id>` matcher. So this platform's own scheduler-created
+      silences ALL land in this false-positive case — they report
+      `matched_rules: 0` and are classified orphan. Do not wire `--ci`
+      over a live silence dump until that is resolved; the gate would
+      fail on every scheduled maintenance window.
+      (Counting method matters here: a `grep` for the double-quoted
+      form misses `rule-pack-custom-alerts.yaml`'s single-quoted
+      `tenant: '{{ ... }}'` lines — and that pack, tenant self-service
+      Custom Alerts, is the one most likely to grow a literal tenant
+      value. Re-measure through `load_alerts()`, not a regex.)
     - Runtime semantics not modeled: a silence whose matchers DO match
       an alert in the rule source is classified non-orphan, even if the
       alert never actually fires (e.g. its `expr:` always returns
       empty). This tool is a static analyzer over the rule source.
+    - `matched_rules` inherits that limitation and must be read as
+      "rule definitions in the rule source", NOT "alerts currently
+      firing": a non-zero count says those rules exist and the matchers
+      select them, never that anything is firing right now. Answering
+      the firing-set question needs live Prometheus/Alertmanager state,
+      which this tool deliberately does not reach for (offline-first,
+      see Design choices above).
+    - ⚠️ Against a templated rule source the two limitations compound
+      rather than offset: a silence naming a concrete tenant does not
+      under-count, it collapses to zero and is reported as an orphan
+      (see the measurement above). Read a `0` on a tenant-scoped
+      silence as "this tool cannot see templated labels", not as
+      "the rule source has nothing for that tenant".
 """
 from __future__ import annotations
 
@@ -360,8 +402,20 @@ def check_drift(
             skipped_inactive += 1
 
     orphans: list[dict] = []
+    coverage: list[dict] = []
     for silence in in_scope:
         matching_alerts = [a for a in alerts if silence_matches_alert(silence, a)]
+        # The match set is the answer to "what would this silence actually
+        # suppress" — report it, don't collapse it to a boolean. See the
+        # `coverage` note in the module docstring for why.
+        coverage.append(
+            {
+                "silence_id": silence.get("id", "<unknown>"),
+                "matchers": silence.get("matchers", []),
+                "matched_rules": len(matching_alerts),
+                "matched_alertnames": sorted({a["name"] for a in matching_alerts}),
+            }
+        )
         if not matching_alerts:
             orphans.append(
                 {
@@ -382,6 +436,7 @@ def check_drift(
         "alerts_total": len(alerts),
         "orphans": orphans,
         "malformed_silences": malformed,
+        "coverage": coverage,
         "counts": {
             "silences_total": len(silences),
             "in_scope": len(in_scope),
@@ -389,6 +444,7 @@ def check_drift(
             "malformed": len(malformed),
             "alerts": len(alerts),
             "orphans": len(orphans),
+            "widest_match": max((c["matched_rules"] for c in coverage), default=0),
         },
     }
 
@@ -428,7 +484,8 @@ def render_text(
     )
     print(
         f"         {c['alerts']} alerts loaded / "
-        f"{c['orphans']} orphaned (no alert matches all matchers)"
+        f"{c['orphans']} orphaned (no alert matches all matchers) / "
+        f"widest silence matches {c.get('widest_match', 0)} rule(s)"
     )
     print()
 
@@ -462,6 +519,45 @@ def render_text(
         print()
     else:
         print("✓ No orphaned silences detected.")
+
+    render_coverage(report)
+
+
+_COVERAGE_NAMES_SHOWN = 3
+
+
+def _alertnames_preview(names: list[str]) -> str:
+    """Render up to _COVERAGE_NAMES_SHOWN names, stating what was elided.
+
+    The overflow is spelled out ("+N more") rather than trimmed silently:
+    a truncated list that reads as complete is the same failure this
+    section exists to expose. The full list is always in --json.
+    """
+    if not names:
+        return "(none — orphan, see above)"
+    shown = ", ".join(names[:_COVERAGE_NAMES_SHOWN])
+    extra = len(names) - _COVERAGE_NAMES_SHOWN
+    return f"{shown} +{extra} more" if extra > 0 else shown
+
+
+def render_coverage(report: dict) -> None:
+    """Print what each in-scope silence actually matches, widest first.
+
+    Orphan detection answers "does this silence still hit anything?".
+    This answers the question that comes before it: "how much does it
+    hit?" — the signal that catches an over-broad matcher, which fails
+    the opposite way from an orphan and is otherwise invisible.
+    """
+    coverage = report.get("coverage") or []
+    if not coverage:
+        return
+    print()
+    print("Match coverage (rule-pack alerts each in-scope silence matches):")
+    for c in sorted(
+        coverage, key=lambda x: (-x["matched_rules"], str(x["silence_id"]))
+    ):
+        names = _alertnames_preview(c["matched_alertnames"])
+        print(f"    silence {c['silence_id']}: {c['matched_rules']} rule(s) — {names}")
 
 
 def compute_exit_code(report: dict, *, ci: bool) -> int:
