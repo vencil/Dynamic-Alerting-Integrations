@@ -1514,6 +1514,68 @@ def test_two_runs_of_one_night_are_one_night_for_the_consecutive_rule():
     assert ptw.decide(nights, k=2)["fired"] == {"BenchmarkAlpha": "2026-08-11"}
 
 
+def test_an_undated_run_never_completes_a_k_consecutive_sequence():
+    """⛔ The mirror of the test above, and the same disease with sides swapped.
+
+    That one pins "two runs of ONE occasion are not two nights". This one pins
+    "ZERO known occasions are not one night" — a run whose date nobody knows
+    used to become a calendar night of its own (`None` is a valid dict key), sit
+    beside the real nights, and COMPLETE the run.
+
+    ⚠️ The positive control is the whole test. Asserting only that the pair does
+    not fire proves nothing: a single dated night does not fire at k=2 either,
+    so the assertion passes with the guard removed AND with the rule broken in
+    the other direction. The two halves below differ by exactly one thing —
+    whether the second night has a date — and they must disagree.
+    """
+    dated_only = [_run("2026-08-20", 102, 9.0)]
+    with_undated = [_run(None, 101, 9.0), _run("2026-08-20", 102, 9.0)]
+    two_dated = [_run("2026-08-19", 101, 9.0), _run("2026-08-20", 102, 9.0)]
+
+    # ⛔ The un-dated run must buy NOTHING: same verdict as the lone night.
+    assert ptw.decide(with_undated, k=2)["fired"] == {}
+    assert ptw.decide(with_undated, k=2)["status"] == \
+        ptw.decide(dated_only, k=2)["status"]
+    # ⭐ Positive control: give that second night a real date and it DOES fire.
+    # Without this the assertions above are satisfied by a rule that never fires.
+    assert ptw.decide(two_dated, k=2)["fired"] == {"BenchmarkAlpha": "2026-08-20"}
+
+
+def test_a_series_of_only_undated_runs_is_inconclusive_never_clear():
+    """⛔ The guard above must not become a new way to render silence as CLEAR.
+
+    Excluding un-dated runs from the calendar-night rule means a series of
+    nothing but un-dated runs produces no groups at all. `judgeable()` has to
+    read that as "the rule could not run", not as "the rule ran and found
+    nothing" — the single distinction this whole module exists to preserve.
+    """
+    result = ptw.decide([_run(None, 101, 9.0), _run(None, 102, 9.0)], k=2)
+    assert result["status"] == ptw.STATUS_INCONCLUSIVE
+    assert result["status"] != ptw.STATUS_CLEAR
+    assert result["fired"] == {}
+
+
+def test_excluding_undated_runs_from_the_rule_does_not_hide_them():
+    """⛔ Excluded from the RULE, not dropped from the PAGE.
+
+    A night that vanishes from the report is the failure this module refuses;
+    the guard would trade one silence for another if these rows disappeared.
+    """
+    body = ptw.render(ptw.decide([_run(None, 101, 9.0),
+                                  _run("2026-08-20", 102, 9.0)], k=2))
+    header, rows = _nights_table_rows(body)
+    assert len(rows) == 2, rows                      # both listed
+    assert "| ? |" in rows[0]                        # the un-dated one, labelled
+    assert "1 of 1 calendar night(s)" in body        # calendar ratio excludes it
+    assert "2 of 2 run(s) counted" in body           # run total still carries it
+    assert "1 run(s) carry no usable date" in body   # and it is named
+    # ⛔ And its READING survives too, under `?`. This assertion is why the test
+    # exists at all: writing it found a THIRD site of the same None-in-sorted()
+    # defect (`over_not_sustained` keyed by the raw date), which took the whole
+    # page down with a TypeError before this run reached the table.
+    assert "| `BenchmarkAlpha` | 2 (08-20, ?) |" in body
+
+
 def test_a_reading_over_the_threshold_is_never_silently_omitted():
     """Not a finding, but a reading the page never mentions is
     indistinguishable from a reading that never happened."""

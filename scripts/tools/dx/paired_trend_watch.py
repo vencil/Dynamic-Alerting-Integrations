@@ -417,6 +417,17 @@ def _night_label(night):
     return night.night_utc if _dated(night) else "?"
 
 
+def _short_night(label):
+    """`2026-08-20` -> `08-20`; `?` stays `?`.
+
+    ⛔ Written because the year-stripping used to be a bare `label[5:]`, which
+    turns `?` into an EMPTY STRING — and an empty cell in a Markdown table is
+    indistinguishable from a rendering bug, which is the one thing every label
+    in this module is supposed to prevent.
+    """
+    return label[5:] if len(label) == 10 else label
+
+
 def _finite_pct(value):
     """Return a percent reading, or None if the input is not a usable number.
 
@@ -680,9 +691,42 @@ def calendar_nights(nights):
     rendered `**FINDINGS** over 2 counted night(s) ... (2026-08-20 ..
     2026-08-20)`. The span printed the same date twice and nothing flagged it.
     The rule's entire purpose is to not fire on a single occasion.
+
+    ⛔ AND THE MIRROR OF THAT BUG, fixed here: a run with NO date used to become
+    a calendar night of its own. `None` is a perfectly good dict key, so every
+    un-dated run collapsed into one group — and that group then sat in the list
+    beside the real nights, where it could COMPLETE a K-consecutive run. Measured
+    on this branch before the guard below:
+
+        one dated night at +9%, k=2                 -> INCONCLUSIVE, no fire
+        the same night PLUS one un-dated run        -> FINDINGS, fires
+
+    ⇒ a run whose night nobody knows manufactured the second night. That is the
+    same disease as the original bug with the sides swapped: there, two runs of
+    ONE occasion counted as two nights; here, ZERO known occasions counted as
+    one. Both let the rule fire on evidence it does not have.
+
+    ⚠️ It also contradicted this module's own page: `render()` already excludes
+    un-dated runs from the calendar ratio and says in as many words that nothing
+    here knows whether they share a night — while the rule underneath was
+    treating them as a night that definitely happened.
+
+    ⛔ The guard is HERE and not in `fires()` on purpose. `fires()` must stay
+    bit-identical to the archived `analyze_paired.py::fires()` or the frozen
+    dataset stops being a cross-check between two independently written
+    implementations and becomes this one restating itself. This helper is not
+    part of that contract.
+
+    ⚠️ Excluding them is not the same as dropping them: they stay in the Nights
+    table under `?`, stay in the run totals, and are named in the disclosure. A
+    series of nothing BUT un-dated runs therefore yields no groups at all, which
+    `judgeable()` reads as INCONCLUSIVE — never CLEAR. That case is asserted, so
+    the fix cannot become a new way to render silence as an all-clear.
     """
     groups = {}
     for night in nights:
+        if not _dated(night):
+            continue
         groups.setdefault(night.night_utc, []).append(night)
     return [(date, runs) for date, runs in groups.items()]
 
@@ -944,9 +988,17 @@ def decide(nights, *, threshold_pct=DEFAULT_THRESHOLD_PCT,
     for night in counted:
         for bench, value in night.ratios_pct.items():
             if value > threshold_pct and bench not in fired:
+                # ⛔ Keyed by the LABEL, not the raw date. An un-dated run
+                # carries real readings and must appear here — this section
+                # exists because a reading the page never mentions is
+                # indistinguishable from one that never happened — but keying
+                # on the raw `None` put it into a `sorted()` beside strings and
+                # took the whole page down with a TypeError. Third call site of
+                # that same defect on this branch.
                 per_night = seen_over.setdefault(bench, {})
-                if value > per_night.get(night.night_utc, float("-inf")):
-                    per_night[night.night_utc] = value
+                label = _night_label(night)
+                if value > per_night.get(label, float("-inf")):
+                    per_night[label] = value
 
     if not counted or not benches or not any(can_judge.values()):
         # ⛔ Not CLEAR. No benchmark was in a position to be judged, so the
@@ -1465,7 +1517,7 @@ def render(result):
         lines.append("|---|---|---|")
         for bench, hits in sorted(result["over_not_sustained"].items()):
             worst = max(hits.values())
-            dates = ", ".join(d[5:] for d in sorted(hits))
+            dates = ", ".join(_short_night(d) for d in sorted(hits))
             lines.append(f"| `{bench}` | {len(hits)} ({dates}) | {_pct(worst)} |")
         lines.append("")
         lines.append("⚠️ These did not meet the consecutive-nights rule, so they "
