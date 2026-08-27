@@ -160,6 +160,15 @@ NO_DECLARED_DEFAULTS_HINT = (
     "_defaults.yaml if the tree has none, or restore the block that "
     "was emptied.")
 
+# #1556: shown when --policy / --rule-packs was supplied but is unusable. The
+# generic per-check hints point at tenant YAML, which is the wrong place for a
+# problem that lives entirely in the operator's argv.
+_POLICY_INPUT_HINT = (
+    "Point --policy at a policy YAML holding an `allowed_domains:` list "
+    "(see docs/cli-reference.md § validate-config). ⛔ Dropping the "
+    "flag makes this row PASS again by switching the webhook domain "
+    "allowlist off — that is the failure this check exists to stop.")
+
 
 def _no_declared_defaults_hint(config_dir: str) -> str | None:
     """Replacement hint for when the platform declares no defaults at all.
@@ -438,10 +447,19 @@ def check_routes(
 
     routing, dedup, _sw, enforced_routing, _mc = gen.load_tenant_configs(config_dir)
 
-    # Load allowed_domains from policy
+    # Load allowed_domains from policy (#1556: unusable value is a caller
+    # error, not "no policy" — see check_policy)
     allowed_domains = None
     if policy_file:
-        allowed_domains = gen.load_policy(policy_file)
+        try:
+            allowed_domains = gen.load_policy(policy_file)
+        except gen.PolicyInputError as exc:
+            # ⛔ hint= is not decoration here. Without it this row inherits the
+            # generic routes advice ("check _routing for invalid receiver
+            # types…"), which sends the operator to look at tenant YAML for a
+            # problem that is entirely in their own argv.
+            return _make_result("routes", FAIL, [str(exc)],
+                                caller_error=True, hint=_POLICY_INPUT_HINT)
 
     # Capture stderr for warnings
     import io
@@ -477,8 +495,16 @@ def check_routes(
 # Check 4: Policy (webhook domain allowlist)
 # ============================================================
 def check_policy(config_dir: str, policy_file: str | None) -> dict[str, object]:
-    """Check webhook URLs against domain allowlist."""
-    if not policy_file or not os.path.isfile(policy_file):
+    """Check webhook URLs against domain allowlist.
+
+    ⛔ #1556: the previous single condition collapsed "operator did not ask
+    for a policy" and "operator asked but the value is unusable" into one
+    ``PASS … skipped`` row at exit 0. The documented example passes a
+    comma-separated domain list, which is not a file, so every customer who
+    copied it read ``[PASS] policy`` while the allowlist was off. Only the
+    first of those two is a legitimate skip.
+    """
+    if not policy_file:
         return _make_result("policy", PASS, ["No policy file — skipped"])
 
     tools_dir = os.path.dirname(os.path.abspath(__file__))
@@ -486,7 +512,11 @@ def check_policy(config_dir: str, policy_file: str | None) -> dict[str, object]:
         sys.path.insert(0, tools_dir)
     import generate_alertmanager_routes as gen
 
-    allowed_domains = gen.load_policy(policy_file)
+    try:
+        allowed_domains = gen.load_policy(policy_file)
+    except gen.PolicyInputError as exc:
+        return _make_result("policy", FAIL, [str(exc)],
+                            caller_error=True, hint=_POLICY_INPUT_HINT)
     if not allowed_domains:
         return _make_result("policy", PASS,
                             ["No allowed_domains in policy — no restrictions"])
@@ -521,14 +551,30 @@ def check_policy(config_dir: str, policy_file: str | None) -> dict[str, object]:
 def check_custom_rules(
     rule_packs_dir: str | None, policy_file: str | None = None
 ) -> dict[str, object]:
-    """Run lint_custom_rules.py on rule packs directory."""
-    if not rule_packs_dir or not os.path.isdir(rule_packs_dir):
+    """Run lint_custom_rules.py on rule packs directory.
+
+    ⛔ #1556, same shape as check_policy: ``--rule-packs`` pointing at a path
+    that is not a directory used to produce the same ``PASS … skipped`` row as
+    omitting it, so a typo or a renamed directory silently removed the custom
+    rule lint from the run.
+    """
+    if not rule_packs_dir:
         return _make_result("custom_rules", PASS,
                             ["No rule-packs dir — skipped"])
+    if not os.path.isdir(rule_packs_dir):
+        return _make_result(
+            "custom_rules", FAIL,
+            [f"--rule-packs: not a directory: {rule_packs_dir}",
+             "  ⛔ Do not drop the flag to clear this — that removes the "
+             "custom rule lint from the run, which is what this error stops."],
+            caller_error=True)
 
     cmd = [sys.executable, str(_THIS_DIR / "lint_custom_rules.py"),
            rule_packs_dir, "--ci"]
-    if policy_file and os.path.isfile(policy_file):
+    # #1556: pass the value through even when it is not a file. Dropping it
+    # here made `validate-config --policy <typo>` lint with the built-in
+    # policy while reporting success; lint_custom_rules now exits 2 on it.
+    if policy_file:
         cmd.extend(["--policy", policy_file])
 
     try:

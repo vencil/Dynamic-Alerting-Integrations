@@ -1658,7 +1658,7 @@ da-tools generate-routes --config-dir <path> [options]
 | `--validate` | 僅驗證，不輸出 | false |
 | `--apply` | 直接套用至 Kubernetes（需 kubectl） | false |
 | `--yes` | 搭配 --apply 跳過確認提示 | false |
-| `--policy <DOMAINS>` | webhook 域名白名單（逗號分隔；空=無限制） | （無限制） |
+| `--policy <FILE>` | 策略 YAML 的**路徑**，內含 `allowed_domains:` 清單（省略＝不限制）。⚠️ 這裡吃的是檔案路徑，不是逗號分隔的域名；供了但讀不到會 exit 2（#1556） | （不限制） |
 
 **輸出**
 
@@ -1876,7 +1876,7 @@ da-tools validate-config --config-dir <path> [options]
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--policy <DOMAINS>` | webhook 域名白名單 | （無限制） |
+| `--policy <FILE>` | 策略 YAML 的**路徑**，內含 `allowed_domains:` 清單（省略＝不限制）。⚠️ 供了但不是檔案 → exit 2，不再靜默略過（#1556） | （不限制） |
 
 **檢查項目**
 
@@ -1894,7 +1894,7 @@ da-tools validate-config --config-dir <path> [options]
 
 ```bash
 da-tools validate-config --config-dir ./conf.d
-da-tools validate-config --config-dir ./conf.d --policy "webhook.company.com,slack.com"
+da-tools validate-config --config-dir ./conf.d --policy ./policy.yaml
 ```
 
 **結束碼**

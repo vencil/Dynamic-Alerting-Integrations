@@ -21,6 +21,7 @@ from generate_alertmanager_routes import (
     validate_receiver_domains,
     load_policy,
     generate_routes,
+    PolicyInputError,
 )
 
 
@@ -155,12 +156,25 @@ class TestLoadPolicy:
         domains = load_policy(path)
         assert domains == []
 
-    def test_nonexistent_policy(self):
-        """不存在的 policy 檔案回傳空 list。"""
-        assert load_policy("/nonexistent/policy.yaml") == []
+    def test_nonexistent_policy_raises(self):
+        """供了 --policy 但那不是檔案 → 必須拋，不可回空 list。
+
+        ⛔ 這條原本斷言 `== []`，docstring 寫「不存在的 policy 檔案回傳空
+        list」——只複述行為、沒有理由，於是把 #1556 的缺陷釘成契約：客戶照
+        文件傳 `--policy "webhook.company.com,slack.com"`（域名清單、不是
+        路徑）⇒ 空 allowlist ⇒ webhook 網域白名單整條沒跑，而輸出是
+        `[PASS] policy`、rc=0。
+        """
+        with pytest.raises(PolicyInputError):
+            load_policy("/nonexistent/policy.yaml")
+
+    def test_comma_separated_domains_raise(self):
+        """文件教的那個逐字值必須被擋（#1556 的原始重現）。"""
+        with pytest.raises(PolicyInputError):
+            load_policy("webhook.company.com,slack.com")
 
     def test_none_path(self):
-        """None path 回傳空 list。"""
+        """沒有供 --policy 回傳空 list —— 「不要求限制」與「判不出來」不同。"""
         assert load_policy(None) == []
 
     def test_policy_without_allowed_domains_key(self, config_dir):

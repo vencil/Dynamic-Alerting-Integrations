@@ -172,13 +172,21 @@ class TestReportOutput:
 class TestPolicyCheck:
     """Check 4: Webhook domain allowlist."""
 
-    def test_no_policy_file_skips(self):
-        """Missing policy file should skip with PASS."""
+    def test_supplied_but_missing_policy_file_is_caller_error(self):
+        """A policy path that is not a file is a caller error, not a skip.
+
+        ⛔ Renamed from `test_no_policy_file_skips`, which asserted PASS +
+        "skipped" (#1556). That row is exactly what a customer copying the
+        documented `--policy "webhook.company.com,slack.com"` example saw:
+        `[PASS] policy — No policy file — skipped`, exit 0, and the webhook
+        domain allowlist never ran. Omitting the flag is still a legitimate
+        skip — `test_none_policy_skips` below is the other half of the
+        distinction this check now draws.
+        """
         with tempfile.TemporaryDirectory() as d:
             result = vc.check_policy(d, "/nonexistent/policy.yaml")
-            assert result["status"] == vc.PASS
-            assert any("skipped" in detail.lower()
-                       for detail in result["details"])
+            assert result["status"] == vc.FAIL
+            assert result["caller_error"] is True
 
     def test_none_policy_skips(self):
         """None policy should skip with PASS."""
@@ -217,10 +225,17 @@ class TestCustomRulesCheck:
         assert any("skipped" in detail.lower()
                    for detail in result["details"])
 
-    def test_nonexistent_dir_skips(self):
-        """Nonexistent dir should skip with PASS."""
+    def test_supplied_but_nonexistent_dir_is_caller_error(self):
+        """A --rule-packs path that is not a directory is a caller error.
+
+        ⛔ Renamed from `test_nonexistent_dir_skips` (#1556): asserting PASS
+        here meant a typo or a renamed directory removed the custom rule lint
+        from the run and still reported success. `test_no_dir_skips` above
+        keeps the legitimate case (flag omitted).
+        """
         result = vc.check_custom_rules("/nonexistent/rule-packs")
-        assert result["status"] == vc.PASS
+        assert result["status"] == vc.FAIL
+        assert result["caller_error"] is True
 
     def test_real_rule_packs_runs(self):
         """Real rule-packs/ directory should run lint without crash.

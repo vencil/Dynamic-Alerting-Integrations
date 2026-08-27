@@ -8,6 +8,8 @@ Functions:
   _extract_host(value)          → hostname (lowercase) or None
   validate_receiver_domains(...) → SSRF-prevention domain allowlist check
   load_policy(path)             → list of allowed_domains from policy YAML
+                                  (raises PolicyInputError when a path IS
+                                  supplied but cannot serve as a policy)
   validate_tenant_keys(...)      → schema-key typo / unknown-key warnings
   _validate_profile_refs(parsed) → ADR-007 profile-reference existence check
   check_domain_policies(...)    → ADR-007 domain-policy constraint validation
@@ -637,15 +639,54 @@ def assert_platform_alerts_not_tenant_silenceable(
         "match while platform alerts are excluded), or narrow the target.")
 
 
+class PolicyInputError(ValueError):
+    """`--policy` was supplied but the value cannot serve as a policy.
+
+    A dedicated subclass rather than a bare ``ValueError`` because two callers
+    in validate_config.py already wrap unrelated regions in ``except
+    ValueError``; a bare raise here would be swallowed by whichever of those
+    happens to grow to enclose the call.
+    """
+
+
 def load_policy(policy_path: str | None) -> list[str]:
-    """Load policy YAML and return allowed_domains list (may be empty)."""
-    if not policy_path or not Path(policy_path).is_file():
+    """Load policy YAML and return allowed_domains list (may be empty).
+
+    ⛔ Omitting ``--policy`` and supplying an unusable one are DIFFERENT
+    outcomes. Until #1556 both returned ``[]``, so a customer following the
+    documented example — ``--policy "webhook.company.com,slack.com"``, which
+    names domains rather than a file — got the webhook domain allowlist
+    silently switched off while the run printed ``[PASS] policy`` and exited 0.
+    dev-rules #13 puts "檔案/路徑不存在" and "malformed 輸入" in
+    EXIT_CALLER_ERROR, so a supplied-but-unusable value now raises and the
+    callers turn that into exit 2.
+
+    ⚠️ The empty-list return survives for exactly two inputs, and both mean
+    "the operator asked for no constraint", not "the tool could not tell":
+    no ``--policy`` at all, and a well-formed policy whose ``allowed_domains``
+    is an empty list.
+    """
+    if not policy_path:
         return []
+    if not Path(policy_path).is_file():
+        raise PolicyInputError(
+            f"--policy: not a file: {policy_path}\n"
+            "  --policy takes a PATH to a policy YAML holding an "
+            "`allowed_domains:` list.\n"
+            "  ⛔ Do not drop the flag to clear this error — that turns the "
+            "webhook domain allowlist off, which is what this error exists "
+            "to stop.")
     with open(policy_path, encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
+    if not isinstance(data, dict):
+        raise PolicyInputError(
+            f"--policy: top level of {policy_path} is "
+            f"{type(data).__name__}, expected a mapping with `allowed_domains:`")
     domains = data.get("allowed_domains", [])
     if not isinstance(domains, list):
-        return []
+        raise PolicyInputError(
+            f"--policy: `allowed_domains` in {policy_path} is "
+            f"{type(domains).__name__}, expected a list")
     return [d for d in domains if isinstance(d, str)]
 
 

@@ -1765,7 +1765,7 @@ docker run --rm \
 | `--validate` | Validate only, don't output | false |
 | `--apply` | Apply directly to Kubernetes (requires kubectl) | false |
 | `--yes` | Skip confirmation prompt with --apply | false |
-| `--policy <DOMAINS>` | Webhook domain allowlist (comma-separated; empty=unrestricted) | (unrestricted) |
+| `--policy <FILE>` | **Path** to a policy YAML holding an `allowed_domains:` list (omit for no constraint). ⚠️ This takes a file path, not a comma-separated domain list; a value that cannot be read exits 2 (#1556) | (unrestricted) |
 
 **Output**
 
@@ -2077,7 +2077,7 @@ docker run --rm \
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--policy <DOMAINS>` | Webhook domain allowlist | (unrestricted) |
+| `--policy <FILE>` | **Path** to a policy YAML holding an `allowed_domains:` list (omit for no constraint). ⚠️ A supplied value that is not a file now exits 2 instead of being skipped (#1556) | (unrestricted) |
 
 **Checks Performed**
 
@@ -2105,7 +2105,7 @@ docker run --rm \
   -v $(pwd)/conf.d:/etc/config:ro \
   ghcr.io/vencil/da-tools:v2.9.0 \
   validate-config --config-dir /etc/config \
-    --policy "webhook.company.com,slack.com"
+    --policy ./policy.yaml
 ```
 
 **Exit Codes**

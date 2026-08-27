@@ -326,10 +326,18 @@ def test_load_policy_custom_policy_overrides():
     finally:
         os.unlink(fpath)
 
-def test_load_policy_invalid_policy_falls_back():
-    """測試無效政策回退到預設值。"""
-    policy = lint_custom_rules.load_policy("/nonexistent/policy.yaml")
-    assert policy == lint_custom_rules.DEFAULT_POLICY
+def test_load_policy_unreadable_policy_is_caller_error():
+    """讀不到的 --policy 必須 exit 2，不可回退到內建預設。
+
+    ⛔ 這條原本叫 `test_load_policy_invalid_policy_falls_back`，斷言
+    `== DEFAULT_POLICY`（#1556）。「回退」的實際後果是：`lint --policy <打錯的路徑>`
+    拿內建規則去 lint、印一行沒人在 CI 裡讀的 stderr 警告、然後 exit 0——
+    操作者以為自己的政策生效了。dev-rules #13 把「檔案/路徑不存在」歸在
+    EXIT_CALLER_ERROR。
+    """
+    with pytest.raises(SystemExit) as exc:
+        lint_custom_rules.load_policy("/nonexistent/policy.yaml")
+    assert exc.value.code == 2
 
 
 def test_group_interval_exceeds_max():
