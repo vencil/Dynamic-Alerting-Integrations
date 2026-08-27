@@ -971,3 +971,204 @@ def test_main_empty_silences_clean(rule_pack_file, tmp_path, capsys):
     assert rc == 0
     out = capsys.readouterr().out
     assert "No orphaned silences" in out
+
+
+# ─── control-character escaping in text rendering ─────────────────────
+#
+# Every string this tool prints in text mode is read out of a file it does
+# not own: a rule pack under whatever path --rule-source names, or an
+# amtool dump. A raw ESC/CR in one of them rewrites the operator's line,
+# so a name can be made to *display* as a different name — the one thing a
+# report whose job is naming things must not allow.
+
+_EVIL = "Evil\x1b[2K\rSAFE\x1b[32m"
+_EVIL_ESCAPED = "Evil\\x1b[2K\\x0dSAFE\\x1b[32m"
+
+
+def test_safe_text_escapes_ansi_and_carriage_return():
+    assert sdc._safe_text(_EVIL) == _EVIL_ESCAPED
+
+
+def test_safe_text_escapes_bidi_override_beyond_latin1():
+    """U+202E (Cf) is a display-reordering attack and needs the \\uNNNN form,
+    not the two-digit \\xNN one."""
+    assert sdc._safe_text("a\u202eb") == "a\\u202eb"
+
+
+def test_safe_text_escapes_unicode_line_separator():
+    """U+2028 is Zl, not Cc/Cf — a category check alone would let it through,
+    and a terminal breaks the line on it exactly like a newline."""
+    assert sdc._safe_text("a\u2028b") == "a\\u2028b"
+
+
+def test_safe_text_leaves_printable_text_alone():
+    """Escaping that mangles ordinary output would make the report worse,
+    not safer — CJK, the em-dash the renderer itself prints, and percent
+    signs all have to survive verbatim."""
+    benign = "FooAlert — 告警 100%"
+    assert sdc._safe_text(benign) == benign
+
+
+def test_render_coverage_escapes_control_chars_in_alertnames(capsys):
+    sdc.render_coverage(
+        {
+            "coverage": [
+                {
+                    "silence_id": "s1",
+                    "matchers": [],
+                    "matched_rules": 1,
+                    "matched_alertnames": [_EVIL],
+                }
+            ]
+        }
+    )
+    out = capsys.readouterr().out
+    assert "\x1b" not in out and "\r" not in out
+    assert _EVIL_ESCAPED in out
+
+
+def test_render_coverage_escapes_control_chars_in_silence_id(capsys):
+    sdc.render_coverage(
+        {
+            "coverage": [
+                {
+                    "silence_id": _EVIL,
+                    "matchers": [],
+                    "matched_rules": 0,
+                    "matched_alertnames": [],
+                }
+            ]
+        }
+    )
+    out = capsys.readouterr().out
+    assert "\x1b" not in out and "\r" not in out
+    assert _EVIL_ESCAPED in out
+
+
+def test_matcher_to_str_escapes_name_and_value():
+    rendered = sdc._matcher_to_str(
+        {"name": _EVIL, "value": _EVIL, "isEqual": True, "isRegex": False}
+    )
+    assert "\x1b" not in rendered and "\r" not in rendered
+    assert rendered == f'{_EVIL_ESCAPED}="{_EVIL_ESCAPED}"'
+
+
+def test_render_text_escapes_every_orphan_field(capsys):
+    """silence_id, matcher value, comment and author are four separate
+    print sites — escaping any three of them still leaks."""
+    sdc.render_text(
+        {
+            "counts": {
+                "silences_total": 1,
+                "in_scope": 1,
+                "inactive_skipped": 0,
+                "malformed": 0,
+                "alerts": 0,
+                "orphans": 1,
+                "widest_match": 0,
+            },
+            "orphans": [
+                {
+                    "silence_id": f"id{_EVIL}",
+                    "matchers": [
+                        {
+                            "name": "alertname",
+                            "value": f"val{_EVIL}",
+                            "isEqual": True,
+                            "isRegex": False,
+                        }
+                    ],
+                    "comment": f"cmt{_EVIL}",
+                    "created_by": f"who{_EVIL}",
+                    "ends_at": f"end{_EVIL}",
+                }
+            ],
+            "coverage": [],
+        },
+        silences_path="s.json",
+        rule_source="r/",
+        errors=[],
+    )
+    out = capsys.readouterr().out
+    assert "\x1b" not in out and "\r" not in out
+    for prefix in ("id", "val", "cmt", "who", "end"):
+        assert f"{prefix}{_EVIL_ESCAPED}" in out
+
+
+def test_render_text_escapes_malformed_and_error_lines(capsys):
+    sdc.render_text(
+        {
+            "counts": {
+                "silences_total": 1,
+                "in_scope": 0,
+                "inactive_skipped": 0,
+                "malformed": 1,
+                "alerts": 0,
+                "orphans": 0,
+                "widest_match": 0,
+            },
+            "orphans": [],
+            "malformed_silences": [
+                {"silence_id": f"id{_EVIL}", "reason": f"why{_EVIL}"}
+            ],
+            "coverage": [],
+        },
+        silences_path="s.json",
+        rule_source="r/",
+        errors=[f"err{_EVIL}"],
+    )
+    out = capsys.readouterr().out
+    assert "\x1b" not in out and "\r" not in out
+    for prefix in ("id", "why", "err"):
+        assert f"{prefix}{_EVIL_ESCAPED}" in out
+
+
+def test_json_output_keeps_alertname_byte_faithful(tmp_path, capsys):
+    """The escaping must live in the renderer, not the report. json.dumps
+    already escapes control characters losslessly; escaping upstream would
+    corrupt the machine-readable copy a caller round-trips."""
+    pack = tmp_path / "pack.yaml"
+    pack.write_text(
+        json.dumps(
+            {
+                "groups": [
+                    {
+                        "name": "g",
+                        "rules": [
+                            {
+                                "alert": _EVIL,
+                                "expr": "up",
+                                "labels": {"severity": "critical"},
+                            }
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    silences = tmp_path / "s.json"
+    silences.write_text(
+        json.dumps(
+            [
+                _silence(
+                    matchers=[
+                        {
+                            "name": "severity",
+                            "value": "critical",
+                            "isEqual": True,
+                            "isRegex": False,
+                        }
+                    ]
+                )
+            ]
+        ),
+        encoding="utf-8",
+    )
+    rc = sdc.main(
+        ["--silences-file", str(silences), "--rule-source", str(pack), "--json"]
+    )
+    assert rc == 0
+    raw = capsys.readouterr().out
+    assert "\x1b" not in raw  # serialized as an escape sequence, never live
+    assert json.loads(raw)["coverage"][0]["matched_alertnames"] == [_EVIL]

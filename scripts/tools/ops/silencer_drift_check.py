@@ -123,6 +123,7 @@ import json
 import os
 import re
 import sys
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -452,10 +453,43 @@ def check_drift(
 # ─── Rendering ────────────────────────────────────────────────────────
 
 
+# Zl/Zp line separators: not control characters by Unicode category, but a
+# terminal breaks the line on them exactly as it would on a raw newline.
+_TEXT_SAFE_EXTRA = frozenset("\u2028\u2029")
+
+
+def _safe_text(value: object) -> str:
+    """Render an untrusted string with control characters made visible.
+
+    Alert names, silence ids, matcher values, comments and authors all
+    come from files this tool does not own — a rule pack under whatever
+    path `--rule-source` names (tenant Custom Alerts among them), and an
+    `amtool` dump whose silences anyone with Alertmanager write access
+    created. A raw ESC or CR in any of those rewrites the line an
+    operator, or a CI log, is reading: a name can be made to *display*
+    as a different name, which defeats the point of a report whose whole
+    job is to name things accurately.
+
+    Escaped here, at the text renderer, and deliberately NOT in the
+    report dict: `--json` goes through `json.dumps`, which already
+    escapes control characters losslessly (`\\u001b`), and pre-mangling
+    the payload would corrupt the machine-readable copy that this
+    escaping exists to keep faithful. See the `--json` fidelity test.
+    """
+    out = []
+    for ch in str(value):
+        if ch in _TEXT_SAFE_EXTRA or unicodedata.category(ch) in ("Cc", "Cf"):
+            cp = ord(ch)
+            out.append(f"\\x{cp:02x}" if cp < 0x100 else f"\\u{cp:04x}")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
 def _matcher_to_str(m: dict) -> str:
     """Pretty-print one matcher in PromQL-ish form for human output."""
-    name = m.get("name", "<noname>")
-    value = m.get("value", "")
+    name = _safe_text(m.get("name", "<noname>"))
+    value = _safe_text(m.get("value", ""))
     is_eq = bool(m.get("isEqual", True))
     is_re = bool(m.get("isRegex", False))
     op = {
@@ -492,7 +526,7 @@ def render_text(
     if errors:
         print("⚠️  Errors loading rule source:")
         for e in errors:
-            print(f"    {e}")
+            print(f"    {_safe_text(e)}")
         print()
 
     if report.get("malformed_silences"):
@@ -501,21 +535,24 @@ def render_text(
             "JSON likely hand-edited or corrupted):"
         )
         for m in report["malformed_silences"]:
-            print(f"    silence {m['silence_id']}: {m['reason']}")
+            print(
+                f"    silence {_safe_text(m['silence_id'])}: "
+                f"{_safe_text(m['reason'])}"
+            )
         print()
 
     if report["orphans"]:
         print("⚠️  Orphaned silences (will silently fail to suppress in v2):")
         for o in report["orphans"]:
             matchers_str = ", ".join(_matcher_to_str(m) for m in o["matchers"])
-            print(f"    silence {o['silence_id']}")
+            print(f"    silence {_safe_text(o['silence_id'])}")
             print(f"        matchers: {{{matchers_str}}}")
             if o["comment"]:
-                print(f"        comment:  {o['comment']}")
+                print(f"        comment:  {_safe_text(o['comment'])}")
             if o["created_by"]:
-                print(f"        author:   {o['created_by']}")
+                print(f"        author:   {_safe_text(o['created_by'])}")
             if o["ends_at"]:
-                print(f"        endsAt:   {o['ends_at']}")
+                print(f"        endsAt:   {_safe_text(o['ends_at'])}")
         print()
     else:
         print("✓ No orphaned silences detected.")
@@ -535,7 +572,7 @@ def _alertnames_preview(names: list[str]) -> str:
     """
     if not names:
         return "(none — orphan, see above)"
-    shown = ", ".join(names[:_COVERAGE_NAMES_SHOWN])
+    shown = ", ".join(_safe_text(n) for n in names[:_COVERAGE_NAMES_SHOWN])
     extra = len(names) - _COVERAGE_NAMES_SHOWN
     return f"{shown} +{extra} more" if extra > 0 else shown
 
@@ -557,7 +594,10 @@ def render_coverage(report: dict) -> None:
         coverage, key=lambda x: (-x["matched_rules"], str(x["silence_id"]))
     ):
         names = _alertnames_preview(c["matched_alertnames"])
-        print(f"    silence {c['silence_id']}: {c['matched_rules']} rule(s) — {names}")
+        print(
+            f"    silence {_safe_text(c['silence_id'])}: "
+            f"{c['matched_rules']} rule(s) — {names}"
+        )
 
 
 def compute_exit_code(report: dict, *, ci: bool) -> int:

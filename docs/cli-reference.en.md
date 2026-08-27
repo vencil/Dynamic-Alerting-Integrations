@@ -1426,6 +1426,8 @@ A silence fails in two opposite directions: an orphan matches nothing and suppre
 
 ⚠️ `matched_rules` counts rule definitions in the rule source, NOT alerts currently firing — the latter needs live Prometheus / Alertmanager state, which this tool deliberately does not reach for.
 
+Every file-sourced string in the text output (alertname, silence id, matcher value, comment, author) has its control characters escaped to `\x1b` / `\u202e` form before printing. The rule pack comes from whatever path `--rule-source` names (tenant self-service Custom Alerts included) and the silence dump from anyone with Alertmanager write access; a raw ESC or CR in either rewrites the line on a terminal or in a CI log, making one name *display* as a different one. The escaping happens in the text renderer only — `--json` keeps the original strings, since `json.dumps` already escapes control characters losslessly and the machine-readable copy must stay faithful.
+
 **Exit codes**
 
 | Code | Meaning |

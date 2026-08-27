@@ -1321,6 +1321,8 @@ silence 有兩個相反的失效方向：orphan 命中零條、什麼都壓不�
 
 ⚠️ `matched_rules` 是「rule 定義數」而非「當下 firing 的 alert 數」——後者需要 live Prometheus / Alertmanager 狀態，本工具刻意 offline-first。
 
+文字輸出中所有取自檔案的字串（alertname、silence id、matcher 值、comment、author）都會把控制字元轉義成 `\x1b` / `\u202e` 形式再印。rule pack 路徑由 `--rule-source` 指定（可含租戶自助 Custom Alerts）、silence dump 來自任何有 Alertmanager 寫入權的人，內含裸 ESC / CR 就能改寫終端機或 CI log 上那一行、讓某個名字**顯示成另一個名字**。轉義只發生在文字 renderer；`--json` 保持原字串（`json.dumps` 本來就會無損轉義），機器可讀的那份不被動過。
+
 **Exit codes**
 
 | Code | 含義 |
