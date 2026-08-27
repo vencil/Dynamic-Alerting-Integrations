@@ -1375,6 +1375,62 @@ class TestBilingualNumbersHasSomeoneWatchingIt:
         assert self._corpus(tmp_path, monkeypatch, zh, en) == [], (
             "%s is being read as a count again" % shape)
 
+    def test_a_number_inside_a_code_fence_is_not_a_count(self, tmp_path,
+                                                          monkeypatch):
+        """⛔ Must-not-fire: the reachable false positive blind review revived.
+
+        `docs/design/config-driven.{md,en.md}` carry `# Part 3 Alert Rule`
+        inside a ```yaml block. Renumbering it to `Part 4` in one language —
+        an ordinary edit to a YAML comment — produced a bilingual mismatch
+        that no correct edit could clear, because the "drift" is a section
+        number. Fences are stripped before comparison for this reason.
+        """
+        fence = "```yaml\n# Part %s Alert Rule\n- record: x\n```\n"
+        found = self._corpus(tmp_path, monkeypatch,
+                             "共 161 個 alert。\n" + fence % "3",
+                             "161 alerts in total.\n" + fence % "4")
+        assert found == [], (
+            "a section number inside a code fence is being read as an alert "
+            "count: %s" % found)
+
+    def test_fence_stripping_keeps_line_numbers(self):
+        """⚠️ The stripper must not shift anything below it.
+
+        Blanking a fence by deleting it would move every later line, which is
+        how a repair keyed to `issue.line` starts editing the wrong row.
+        """
+        text = "a\n```\nx\ny\n```\nb\n"
+        out = mod._strip_fenced_code(text)
+        assert out.splitlines()[-1] == "b", out
+        assert len(out.splitlines()) == len(text.splitlines()), (out, text)
+        assert "x" not in out, out
+
+    def test_a_promql_selector_is_not_a_count(self, tmp_path, monkeypatch):
+        """⛔ Must-not-fire: `ALERTS{}` is a metric name, not a quantity.
+
+        The second revived false positive — a table row mentioning
+        `Phase 3 ALERTS{}` on one side only. `alerts` immediately followed by
+        `{` is a selector, and a selector is never a count.
+        """
+        found = self._corpus(tmp_path, monkeypatch,
+                             "跑 ALERTS{} 抓 Phase 3 ALERTS{} cardinality\n",
+                             "Phase 2 ALERTS{} cardinality\n")
+        assert found == [], (
+            "a PromQL selector is being read as an alert count: %s" % found)
+
+    def test_a_real_count_next_to_a_selector_still_counts(
+            self, tmp_path, monkeypatch):
+        """⚠️ Paired control: the selector guard must not swallow real counts.
+
+        Without this, `(?!\\s*\\{)` could be widened until it silenced ordinary
+        sentences that merely sit near PromQL.
+        """
+        found = self._corpus(
+            tmp_path, monkeypatch,
+            "跑 ALERTS{} 之後共 161 個 alert。\n",
+            "After ALERTS{}, 160 alerts in total.\n")
+        assert [i.check for i in found] == ["bilingual-numbers"], found
+
     def test_a_multi_group_pattern_yields_strings_not_tuples(self):
         """⛔ `re.findall` returns tuples once a pattern has >1 group.
 
@@ -1493,9 +1549,12 @@ class TestTheHookFiresOnEverythingTheGateReads:
     are outside it, and deliberately so: a tool count moving is already the
     business of `tool-map-check`, and matching every Python file here would
     turn this into a hook that runs on every commit in the repository.
-    (b) A pattern widened all the way to `.*` would satisfy this test. That is
-    not guarded, because an over-wide trigger costs time and nothing else,
-    whereas the failure this exists for is silent.
+    (b) A coverage assertion is satisfied by any pattern wide enough, so
+    `test_the_coverage_check_can_actually_fail` pins one path the pattern must
+    NOT match. Measured: `files: .*` turns that test red. What is left
+    unguarded is the band in between — a pattern wider than it needs to be but
+    still not matching an unrelated tool — because an over-wide trigger costs
+    time and nothing else, whereas the failure this exists for is silent.
     """
 
     @staticmethod
@@ -1545,6 +1604,28 @@ class TestTheHookFiresOnEverythingTheGateReads:
         assert "scripts/tools/lint/validate_docs_versions.py" in modules, modules
         assert "scripts/tools/lint/_version_patterns.py" in modules, modules
 
+        # ⛔ A count floor measures how much came back, not whether the walk
+        # still reaches. Blind review demonstrated the difference: turning the
+        # gate's `rglob` into `glob` collapses its corpus from 382 files to 51
+        # — every one of the five names above survives, `len(opened)` stays
+        # over 100, and all four tests in this class stay green while the
+        # coverage claim below is being made about a third of the tree.
+        #
+        # Nesting is the property that dies, so nesting is what is asserted.
+        # Measured on `5b7f6c35`: 402 of the recorded inputs sit two or more
+        # directories down and 43 distinct directories are represented; a
+        # flat walk leaves single digits of both.
+        nested = [p for p in opened if p.count("/") >= 2]
+        directories = {p.rsplit("/", 1)[0] for p in opened if "/" in p}
+        assert len(nested) >= 100, (
+            "only %d of %d recorded inputs are nested — the gate has stopped "
+            "walking into subdirectories, and a coverage assertion made over "
+            "what is left would be true of a fraction of the tree"
+            % (len(nested), len(opened)))
+        assert len(directories) >= 20, (
+            "inputs come from only %d directories: %s"
+            % (len(directories), sorted(directories)))
+
     def test_every_file_the_gate_opens_can_trigger_it(self, tmp_path):
         """⛔ Must-fire: the pattern has to cover the measured input set."""
         pattern = self._hook_pattern()
@@ -1559,18 +1640,34 @@ class TestTheHookFiresOnEverythingTheGateReads:
             "%s" % uncovered)
 
     def test_editing_the_gate_itself_can_trigger_it(self, tmp_path):
-        """⛔ #1480 was introduced by an edit, and the edit got no signal.
+        """⛔ Editing the reader changes what the gate decides.
 
-        The reader that silently stopped matching for five releases was
-        changed by a commit that touched no `.md` at all. The module closure
-        is measured from `sys.modules`, so a helper split out of the gate
-        later is covered on the day it lands.
+        Without this, the commit that edits the reader never runs it once
+        before landing. The closure is measured from `sys.modules`, so a
+        helper split out of the gate is covered on the day it lands.
+
+        ⚠️ This is a smoke test, not the enforcement: the gate's own tests run
+        in CI on every PR (`ci.yml`'s `python` filter opens with a catch-all
+        `**`). What is missing without it is the LOCAL run.
+
+        ⛔ ERRATA — an earlier revision of this docstring said the reader
+        "was changed by a commit that touched no `.md` at all", citing #1480.
+        False: `abe27478` touched 11 `.md` files and never touched the reader.
+        #1480 was a fail-open (source re-spelled, two consumers skipped in
+        silence behind `if "platform" in versions`), repaired by #1493.
         """
         pattern = self._hook_pattern()
         modules = self._measure(tmp_path)["modules"]
         uncovered = sorted(p for p in modules if not pattern.search(p))
         assert uncovered == [], (
-            "editing these changes what the gate does, yet does not run it:\n"
+            "the gate imports these, so editing them changes what it decides "
+            "— yet none of them makes it run.\n"
+            "⛔ Add the path to `files:` in .pre-commit-config.yaml. Do NOT "
+            "move the helper back into a covered file, and do NOT stop "
+            "importing it: both make the pattern true by shrinking the gate.\n"
+            "⚠️ Known shape: the `_lib_.*` branch only reaches "
+            "`scripts/tools/` itself, so a helper under `scripts/tools/lint/` "
+            "needs its own path here even if it is named `_lib_*`.\n"
             "%s" % uncovered)
 
     def test_the_coverage_check_can_actually_fail(self):
@@ -1615,12 +1712,14 @@ class TestToolCountReadsBothLanguages:
         monkeypatch.setattr(mod, "TOOL_COUNT_CHECK_FILES", names)
         return names
 
+    # The declared scope, spelled exactly as the shipped sentences spell it.
+    SCOPE = "`scripts/tools/{ops,dx,lint}`"
+
     def test_the_english_sentence_is_read_at_all(self, tmp_path, monkeypatch):
         """⛔ Must-fire on the defect, in the exact shipped phrasing."""
         self._tree(tmp_path, monkeypatch, tools=3, docs=[
             ("README.en.md",
-             "| Shell entrypoints + 999 Python tools under "
-             "`scripts/tools/{ops,dx,lint}` |\n")])
+             f"| Shell entrypoints + 999 Python tools under {self.SCOPE} |\n")])
         found = mod.check_tool_count_in_docs()
         assert [i.check for i in found] == ["tool-count"], (
             "the English count sentence is still unread: %s" % found)
@@ -1635,7 +1734,7 @@ class TestToolCountReadsBothLanguages:
         nobody would ever enumerate.
         """
         for prep in ("under", "in", "(", "across", "beneath", "zzqx"):
-            body = f"+ 999 Python tools {prep} `scripts/tools/x`\n"
+            body = f"+ 999 Python tools {prep} {self.SCOPE}\n"
             names = self._tree(tmp_path, monkeypatch, tools=3,
                                docs=[("README.en.md", body)])
             assert mod.check_tool_count_in_docs(), (
@@ -1647,16 +1746,68 @@ class TestToolCountReadsBothLanguages:
     def test_the_chinese_half_still_works(self, tmp_path, monkeypatch):
         """⚠️ Control: the language that already worked must keep working."""
         self._tree(tmp_path, monkeypatch, tools=3, docs=[
-            ("README.md", "`scripts/tools/{ops,dx,lint}` 下 999 個 Python 工具\n")])
+            ("README.md", f"{self.SCOPE} 下 999 個 Python 工具\n")])
         assert [i.check for i in mod.check_tool_count_in_docs()] == ["tool-count"]
 
     def test_a_correct_count_is_not_flagged_in_either_language(
             self, tmp_path, monkeypatch):
         """⚠️ Must-not-fire control against a check that just always fires."""
         self._tree(tmp_path, monkeypatch, tools=3, docs=[
-            ("README.md", "`scripts/tools/{ops,dx,lint}` 下 3 個 Python 工具\n"),
-            ("README.en.md", "+ 3 Python tools under `scripts/tools/x`\n")])
+            ("README.md", f"{self.SCOPE} 下 3 個 Python 工具\n"),
+            ("README.en.md", f"+ 3 Python tools under {self.SCOPE}\n")])
         assert mod.check_tool_count_in_docs() == []
+
+    @pytest.mark.parametrize("lang,body", [
+        ("en", "The try-local/ showcase bundle ships 2 Python tools of its own.\n"),
+        ("zh", "try-local 另外附 2 個 Python 工具。\n"),
+    ])
+    def test_a_count_about_another_scope_is_none_of_its_business(
+            self, tmp_path, monkeypatch, lang, body):
+        """⛔ Must-not-fire: a true sentence about a DIFFERENT scope.
+
+        Blind review measured what happens without the scope anchor: this
+        exact sentence produced `found 2, actual is 221`, `--fix` rewrote it
+        to `ships 221 Python tools of its own`, and the run finished with
+        `✅ All version references and counts are consistent.` A repair that
+        turns a true sentence false, reporting success.
+
+        ⚠️ Both languages, because the Chinese half had the same hazard on
+        `origin/main` — the anchor is what closes it, not the English repair.
+        """
+        name = "README.en.md" if lang == "en" else "README.md"
+        good = (f"+ 3 Python tools under {self.SCOPE}\n" if lang == "en"
+                else f"{self.SCOPE} 下 3 個 Python 工具\n")
+        names = self._tree(tmp_path, monkeypatch, tools=3,
+                           docs=[(name, good + body)])
+        assert mod.check_tool_count_in_docs() == [], (
+            "a sentence that never names the counted scope was read as this "
+            "count")
+        mod._auto_fix([mod.Issue("tool-count", "warn", name, 1, "x")],
+                      96, {"pack_count": 16, "alert": 161})
+        assert body.strip() in names[0].read_text(encoding="utf-8"), (
+            "the repair rewrote a sentence about another scope")
+
+    def test_the_repair_cannot_reach_past_the_line_it_was_given(
+            self, tmp_path, monkeypatch):
+        """⛔ Whole-file `re.sub` + `\\s*` matching a newline = invisible lies.
+
+        Measured before the repair was keyed to the finding: a wrapped
+        sentence (`removed 40\\nPython tools that had no callers`) was
+        rewritten to `removed 221\\n…` while the per-line checker never
+        reported it — before or after. The falsehood lands under a green
+        light and no future run can find it.
+        """
+        wrapped = "During the v2.6 cleanup we removed 40\nPython tools.\n"
+        names = self._tree(tmp_path, monkeypatch, tools=3, docs=[
+            ("README.en.md",
+             f"+ 999 Python tools under {self.SCOPE}\n" + wrapped)])
+        found = mod.check_tool_count_in_docs()
+        assert len(found) == 1 and found[0].line == 1, found
+        mod._auto_fix(found, 96, {"pack_count": 16, "alert": 161})
+        text = names[0].read_text(encoding="utf-8")
+        assert f"+ 3 Python tools under {self.SCOPE}" in text, text
+        assert "removed 40\nPython tools." in text, (
+            "the repair reached a wrapped occurrence the checker cannot see")
 
     def test_the_repair_reaches_the_english_half_too(self, tmp_path,
                                                      monkeypatch):
@@ -1668,7 +1819,7 @@ class TestToolCountReadsBothLanguages:
         disagreeing produces a warning no tool can satisfy.
         """
         names = self._tree(tmp_path, monkeypatch, tools=3, docs=[
-            ("README.en.md", "+ 999 Python tools under `scripts/tools/x`\n")])
+            ("README.en.md", f"+ 999 Python tools under {self.SCOPE}\n")])
         issue = mod.Issue("tool-count", "warn", "README.en.md", 1, "x")
         assert mod._auto_fix([issue], 96, {"pack_count": 16, "alert": 161}) == [issue]
         assert "3 Python tools under" in names[0].read_text(encoding="utf-8")
@@ -1683,12 +1834,68 @@ class TestToolCountReadsBothLanguages:
         touch it, and the finding would stand forever.
         """
         names = self._tree(tmp_path, monkeypatch, tools=3, docs=[
-            ("README.en.md", "+ 999 python tools under `scripts/tools/x`\n")])
+            ("README.en.md", f"+ 999 python tools under {self.SCOPE}\n")])
         assert mod.check_tool_count_in_docs(), "checker missed the lowercase form"
         mod._auto_fix([mod.Issue("tool-count", "warn", "README.en.md", 1, "x")],
                       96, {"pack_count": 16, "alert": 161})
         assert "3 python tools under" in names[0].read_text(encoding="utf-8"), (
             "the repair is stricter than its checker — an unclearable warning")
+
+    def test_both_readers_are_alive_on_the_shipped_files(self):
+        """⛔ The one assertion here that touches the files this is about.
+
+        #1540's defect was that the English pattern scored ZERO hits on the
+        SHIPPED files while looking perfectly reasonable. Every other test in
+        this class builds a synthetic tree and monkeypatches
+        `TOOL_COUNT_CHECK_FILES`, so none of them can see that failure return
+        — measured: setting that list to `[]` leaves the whole module green
+        at 111 passed while the checker reads nothing at all.
+
+        ⚠️ Deliberately asserts that each pattern READS something, not what
+        the number is. A drifted count is already `bump_docs
+        --sync-counts --check`'s red and this check's warning; a dead reader
+        is silent everywhere, and that is what this is for.
+        """
+        alive = {}
+        for fpath in mod.TOOL_COUNT_CHECK_FILES:
+            if not fpath.exists():
+                continue
+            for line in fpath.read_text(encoding="utf-8").splitlines():
+                if mod.TOOL_COUNT_SCOPE_ANCHOR not in line:
+                    continue
+                for pat, desc in mod.TOOL_COUNT_PATTERNS:
+                    if re.search(pat, line, re.IGNORECASE):
+                        alive.setdefault(desc, set()).add(fpath.name)
+        assert set(alive) == {d for _, d in mod.TOOL_COUNT_PATTERNS}, (
+            "a tool-count pattern reads nothing in any shipped file — that is "
+            "the #1540 failure itself, and it is silent everywhere else.\n"
+            "alive: %s" % {k: sorted(v) for k, v in alive.items()})
+
+    def test_the_checker_is_looser_than_the_writer_on_purpose(self):
+        """⚠️ Pins an asymmetry blind review flagged, as intentional.
+
+        The checker tolerates any preposition; `bump_docs`' writer rule pins
+        `Python tools under` verbatim. Measured: changing `under` to `across`
+        in README.en.md leaves `validate_docs_versions --ci` silent (the
+        number is still right) and turns `bump_docs --sync-counts --check`
+        rc=1 with a DEAD diagnosis naming the pattern to fix.
+
+        That is the correct split — a rewrite rule has to know exactly what to
+        replace, a checker has to see every phrasing — and it is pinned here
+        so nobody "fixes" the asymmetry by narrowing the checker back down.
+        ⚠️ It also means a rephrasing is caught only by the writer's gate,
+        which is CI-only (`validate.yaml`'s `version-check`), not local.
+        """
+        import bump_docs  # noqa: E402  (path via conftest)
+        rule = {r["id"]: r for r in bump_docs._build_count_rules()}[
+            "readme-en-python-tools"]
+        assert "Python tools under" in rule["pattern"], (
+            "the writer rule no longer pins the preposition; if that is "
+            "deliberate, this test and its rationale need rewriting: %s"
+            % rule["pattern"])
+        assert not any("under" in pat for pat, _ in mod.TOOL_COUNT_PATTERNS), (
+            "the checker has grown a preposition requirement — that is the "
+            "#1540 defect returning: %s" % mod.TOOL_COUNT_PATTERNS)
 
 
 class TestFixDoesNotSwitchOffJson:

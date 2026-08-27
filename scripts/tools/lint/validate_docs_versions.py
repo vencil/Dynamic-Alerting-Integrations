@@ -54,6 +54,8 @@ from _version_patterns import (
     SCENARIO_COUNT_PATTERNS,
     BILINGUAL_PAIR_PATTERN,
     BILINGUAL_NUMBER_PATTERNS,
+    BILINGUAL_FENCE_PATTERN,
+    TOOL_COUNT_SCOPE_ANCHOR,
     DA_TOOLS_VERSION_PATTERN,
     EXPORTER_VERSION_PATTERN,
     MKDOCS_EXTRA_CHECKS,
@@ -663,6 +665,20 @@ def check_roadmap_changelog_overlap() -> List[Issue]:
     return issues
 
 
+def _strip_fenced_code(text: str) -> str:
+    """Blank out fenced code blocks, keeping the line count intact.
+
+    ⛔ #1505: a number inside a code example is not a claim about how many of
+    something the platform has. Measured — renumbering `# Part 3 Alert Rule`
+    to `Part 4` in one language only, an ordinary edit to a YAML comment
+    inside a fence, produced a bilingual mismatch that no correct edit could
+    clear. Newlines survive so any line-based reporting keeps its coordinates.
+    """
+    return re.sub(BILINGUAL_FENCE_PATTERN,
+                  lambda m: "\n" * m.group(0).count("\n"),
+                  text, flags=re.S | re.M)
+
+
 def _bilingual_numbers(pattern: str, content: str) -> List[str]:
     """The distinct numbers *pattern* claims in *content*, sorted.
 
@@ -753,8 +769,8 @@ def check_bilingual_number_consistency() -> List[Issue]:
 
     for zh_file, en_file in pairs:
         try:
-            zh_content = zh_file.read_text(encoding="utf-8")
-            en_content = en_file.read_text(encoding="utf-8")
+            zh_content = _strip_fenced_code(zh_file.read_text(encoding="utf-8"))
+            en_content = _strip_fenced_code(en_file.read_text(encoding="utf-8"))
         except (FileNotFoundError, OSError):
             continue  # phantom mount or missing file — skip pair
 
@@ -921,6 +937,13 @@ def check_tool_count_in_docs() -> List[Issue]:
     rather than right; which scope those two files should declare is a
     documentation decision, tracked in #1540 rather than settled here.
 
+    ⚠️ "Deferred" is not "harmless": both of those files say **73**, and no
+    reading of the tree produces that — `{ops,dx,lint}` is 221, the whole
+    tree 238. The number has not moved since v2.1.0 (`827ee07e`), no
+    `bump_docs` rule points at either file, and nothing checks them. This
+    check staying out of their way is a decision about SCOPE, not a statement
+    that they are currently right.
+
     ⚠️ `CLAUDE.md` carries no matching sentence today, so it contributes no
     findings. It is kept in the list because it is one of the files whose
     tool-count sentence would declare this scope if it regained one — an
@@ -939,6 +962,13 @@ def check_tool_count_in_docs() -> List[Issue]:
         rel = str(fpath.relative_to(REPO_ROOT))
 
         for i, line in enumerate(content.splitlines(), 1):
+            # ⛔ The scope is the anchor; the number is the payload. A line
+            # that says "N Python tools" WITHOUT naming this scope is a claim
+            # about something else, and reading it as this count is how a true
+            # sentence gets rewritten into a false one — see
+            # TOOL_COUNT_SCOPE_ANCHOR for the measured case.
+            if TOOL_COUNT_SCOPE_ANCHOR not in line:
+                continue
             for pat, desc in TOOL_COUNT_PATTERNS:
                 for m in re.finditer(pat, line, re.IGNORECASE):
                     found = int(m.group(1))
@@ -1107,16 +1137,30 @@ def _auto_fix(issues: List[Issue], bilingual_pairs: int,
             new_content = re.sub(pattern, replacement, new_content)
 
         elif issue.check == "tool-count":
-            # Fix the counted sentence in either language.
+            # Fix the counted sentence in either language — ON THE LINE THE
+            # CHECKER NAMED, and only if that line still carries the scope.
+            #
+            # ⛔ This used to `re.sub` the whole file, and `\s*` matches a
+            # newline, so it rewrote occurrences the checker never reported
+            # and never could: measured, a wrapped sentence
+            # (`removed 40\nPython tools that had no callers`) became
+            # `removed 221\n…` while the per-line checker stayed silent about
+            # it before AND after — a falsehood written under a green light.
+            # A repair keyed to the finding cannot reach past it.
             #
             # ⚠️ `re.IGNORECASE` on purpose, matching `check_tool_count_in_docs`:
             # a repair that is stricter than its checker reports a form it
             # cannot rewrite, which is a warning no tool can clear (#1504).
             actual_count = _count_python_tools()
-            for pat, repl_template in AUTO_FIX_PATTERNS["tool-count"]["patterns"]:
-                new_content = re.sub(pat,
-                                     repl_template.format(value=actual_count),
-                                     new_content, flags=re.IGNORECASE)
+            lines = new_content.splitlines(keepends=True)
+            idx = issue.line - 1
+            if 0 <= idx < len(lines) and TOOL_COUNT_SCOPE_ANCHOR in lines[idx]:
+                fixed = lines[idx]
+                for pat, repl in AUTO_FIX_PATTERNS["tool-count"]["patterns"]:
+                    fixed = re.sub(pat, repl.format(value=actual_count),
+                                   fixed, flags=re.IGNORECASE)
+                lines[idx] = fixed
+                new_content = "".join(lines)
 
         elif issue.check == "doc-file-count":
             # Fix "XX 個文件" count from doc-map.md row count

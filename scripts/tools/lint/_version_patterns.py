@@ -94,6 +94,28 @@ RULE_PACK_COUNT_PATTERNS: List[Tuple[str, Any, Any, str]] = [
      "Rule Pack total row"),
 ]
 
+# The scope the counted sentence states, verbatim and in both languages.
+#
+# ⛔ #1540: this is the anchor, and the number is only the payload. A tool
+# count is a claim ABOUT A SCOPE; `check_tool_count_in_docs` therefore only
+# reads lines that carry this string, and `_auto_fix` only rewrites the line
+# the checker named.
+#
+# Blind review earned this the hard way. Without the anchor, the checker asks
+# "is there an `N Python tools` on this line", which is true of sentences that
+# are about something else entirely — measured on this tree, adding the true
+# sentence `The try-local/ showcase bundle ships 2 Python tools of its own.`
+# to README.en.md produced `found 2, actual is 221`, and `--fix` rewrote it to
+# `ships 221 Python tools of its own` and then printed
+# `✅ All version references and counts are consistent.` A repair that turns a
+# true sentence into a false one, and reports success.
+#
+# ⚠️ That hazard is older than the English half: the Chinese pattern has
+# always been noun-anchored, and the same probe in Chinese
+# (`另外附 2 個 Python 工具`) was rewritten to 221 on `origin/main` too. The
+# anchor closes both, plus the whole-file/per-line split below.
+TOOL_COUNT_SCOPE_ANCHOR = "`scripts/tools/{ops,dx,lint}`"
+
 # Tool count patterns: (regex, description)
 #
 # ⛔ #1540: the English half used to be two patterns that each demanded a
@@ -102,12 +124,13 @@ RULE_PACK_COUNT_PATTERNS: List[Tuple[str, Any, Any, str]] = [
 # so both matched nothing. Measured on `5b7f6c35`: each scored 0 hits across
 # all three of TOOL_COUNT_CHECK_FILES, while `bump_docs` kept writing that
 # number via its own rule — so rewriting the English number to 999 produced 0
-# `tool-count` findings and rc=0. A writer with no reader.
+# `tool-count` findings. (⚠️ rc stayed 0 either way: `tool-count` is a
+# warning, so the exit code was never the signal here.)
 #
 # ⛔ The repair is NOT a third spelling with `under` in it; the next
-# preposition would drift out the same way. The preposition was never
-# load-bearing — what identifies the claim is the noun it counts — so the
-# requirement is dropped and English gets one pattern, like Chinese.
+# preposition would drift out the same way. A preposition carries no counting
+# information, so it cannot be what identifies the claim — the SCOPE is, and
+# that is now matched separately by TOOL_COUNT_SCOPE_ANCHOR.
 #
 # ⚠️ `check_tool_count_in_docs` matches these case-insensitively, and
 # `AUTO_FIX_PATTERNS["tool-count"]` has to stay in step in both spelling and
@@ -139,18 +162,34 @@ BILINGUAL_PAIR_PATTERN = r"bilingual-(\d+)%20pairs"
 # Bilingual number consistency patterns: (regex, description)
 #
 # ⚠️ These are matched with `re.IGNORECASE` against whole documents. The three
-# badge patterns anchor on a URL fragment and are exact; the three prose ones
-# are heuristics, and their false-positive rates were measured over the 94
-# zh/en pairs on `5b7f6c35`:
+# badge patterns anchor on a URL fragment, so they are far tighter than the
+# prose ones — though `bilingual-(\d+)` and `alerts-(\d+)-` are not literally
+# exact (neither pins the `%20pairs` / badge suffix), so "tight" is the honest
+# word, not "exact".
 #
-#     Rule Pack count       53 spans, 12 false  (`v2 rule pack`, `§4.4 Rule Pack`)
+# The three prose patterns are heuristics. Their false-positive rates, all
+# measured on `5b7f6c35` over the SAME corpus — the 94 zh/en pairs this check
+# actually compares, which includes the root README pair:
+#
+#     Rule Pack count       59 spans, 12 false  (`v2 rule pack`, `§4.4 Rule Pack`)
 #     Recording rule count   6 spans,  5 false  (`Part 2 Recording`)
 #     Alert rule count      59 spans, 45 false  ← repaired below (#1505)
 #
-# The first two report nothing today only because their false matches happen
-# to land identically in both languages; that is luck, not a property. They
-# are left alone here because widening or narrowing them changes what a live
-# gate reports, and #1505 is about the one that was actually firing.
+# ⛔ An earlier revision of this table wrote 53 for the first row. That number
+# is real but comes from a different corpus (the 93 docs-only pairs, no root
+# README), and blind review caught the mix. Three cells, three corpora, no
+# corpus stated — the shape this whole module is about.
+# ⚠️ Both figures move with the platform: `docs/README-root.md` is a symlink,
+# so a Windows checkout with `core.symlinks=false` reads it as a 15-byte stub
+# and measures 6 spans fewer than Linux CI does.
+#
+# Neither of the first two reports anything today, and there are TWO reasons,
+# not one: their false matches usually land identically in both languages
+# (luck, not a property) — and where they do NOT, `_bilingual_verdict` drops
+# the pair on the floor, which is the disclosed fail-open, not silence earned.
+# Measured: 2 of Recording's 6 spans are in that second category. Both are
+# left alone here because widening or narrowing them changes what a live gate
+# reports, and #1505 is about the one that was actually firing.
 #
 # ⛔ #1505: `(\d+)\s*Alert(?:\s+rule)?` with IGNORECASE matched any digit
 # followed by the letters "alert" — the whole of the gate's standing warning
@@ -171,30 +210,61 @@ BILINGUAL_PAIR_PATTERN = r"bilingual-(\d+)%20pairs"
 #     `\balerts?\b` only          1 standing report  (false)       1/7
 #     + no dotted-number prefix   1 standing report  (false)       1/7
 #     THIS                        0 standing reports              5/7
-#     + zh measure-word tolerance 3 standing reports (all false)   7/7
+#     + zh measure-word GAP       3 standing reports (all false)   7/7
 #
-# The last row is why the tolerance is not here: `(\d+)\s*[個條].{0,4}?告警`
-# reaches 7/7 but re-creates the disease, matching `6 個月 alert 歷史` and
-# collecting a different subset of numbers on each side of two pairs.
+# ⛔ The seven injections are not reproducible from this comment alone, so the
+# `N/7` column is a relative reading of ONE fixed set, not a portable score.
+# The set is listed in `TestBilingualNumbersHasSomeoneWatchingIt`, which is
+# also where it goes red if the corpus moves under it. The invariant these
+# rows are for is the ORDER, not the values: the shipped spelling catches
+# least, and the narrowing #1505 proposed catches nothing at all.
 #
-# ⚠️ Residual false positives, disclosed rather than papered over: 4 of the 22
-# surviving spans are `# Part 3 Alert Rule` (×2, inside code fences) and
-# `Phase 2 ALERTS{}` (×2, a PromQL selector). All four appear identically in
-# both languages, so they report nothing — the same kind of luck as above, and
-# it is written down here so the next reader does not rediscover it as a bug.
-# ⛔ Stripping code fences before matching was measured and rejected: it saves
-# 2 of those spans, changes no verdict, and makes `Rule Pack count` report a
-# new one-sided pair.
+# The last row is the one that decided the design. It is NOT "let Chinese have
+# more measure words" — measured, widening the class to `[個條筆則項]` changes
+# nothing at all on this corpus (18 spans, 0 reports, 5/7, identical for every
+# variant), because the only `筆` uses live in a skipped file. It is allowing a
+# GAP between the measure word and the noun: `(\d+)\s*[個條].{0,4}?(?:alert|告警)`
+# reaches 7/7 and re-creates the disease, matching `6 個月 alert 歷史` and
+# collecting a different subset of numbers on each side of three pairs.
+# ⚠️ An earlier revision of this comment quoted that regex WITHOUT the `alert`
+# alternation, i.e. a version that does not match its own example.
+#
+# ⛔ Why English drops the preposition while Chinese keeps the measure word —
+# they are not the same enumeration. A preposition carries no counting
+# information and its set is open (`under` / `across` / `beneath` / anything).
+# A Chinese measure word IS the counting marker, and the classifiers that can
+# quantify 告警 are a small closed lexical class; `筆` and `則` are included
+# for that reason even though they are inert on today's corpus.
+#
+# ⛔ ERRATA — code fences ARE stripped, and the earlier decision not to strip
+# them was reached with the wrong question. That revision asked "does stripping
+# change a verdict today" (it does not) instead of "does it remove the
+# REACHABLE false positives" (it does). Blind review demonstrated the
+# difference with two ordinary edits, each of which revived a standing warning
+# nobody could clear:
+#
+#     renumber `# Part 3 Alert Rule` → `Part 4` in the English file only
+#         → mismatch `zh=['3'] vs en=['4']`, and no correct edit removes it
+#     mention `Phase 3 ALERTS{}` on one side of a table
+#         → mismatch on a PromQL selector
+#
+# Fences kill the first; `(?!\s*\{)` — "a metric selector is not a count" —
+# kills the second; standing reports stay 0 with both. The residual spans are
+# now 18 and the four reachable false shapes are gone.
 BILINGUAL_NUMBER_PATTERNS: List[Tuple[str, str]] = [
     (r"(\d+)\s*個?\s*Rule\s*Pack", "Rule Pack count"),
     (r"(\d+)\s*Recording", "Recording rule count"),
-    (r"(?<![\d.])(\d+)\s+alerts\b"
+    (r"(?<![\d.])(\d+)\s+alerts\b(?!\s*\{)"
      r"|(?<![\d.])(\d+)\s+alert\s+(?:rules?|meanings?|definitions?)\b"
-     r"|(?<![\d.])(\d+)\s*[個條]\s*(?:alert|告警)", "Alert rule count"),
+     r"|(?<![\d.])(\d+)\s*[個條筆則項]\s*(?:alert|告警)", "Alert rule count"),
     (r"rule%20packs-(\d+)-", "Rule Pack badge"),
     (r"alerts-(\d+)-", "Alert badge"),
     (r"bilingual-(\d+)", "Bilingual badge"),
 ]
+
+# Fenced code blocks are removed before the bilingual comparison; see the
+# ERRATA above. Newlines are preserved so any line-based reporting stays put.
+BILINGUAL_FENCE_PATTERN = r"^\s*(```|~~~).*?^\s*\1"
 
 # ============================================================================
 # Source-of-truth pattern extraction

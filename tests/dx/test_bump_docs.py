@@ -1510,38 +1510,59 @@ class TestCountSourceUnreadable:
 
     @staticmethod
     def _user_facing_strings():
-        """Every string literal bump_docs can print, minus docstrings.
+        """Every string literal bump_docs can print, minus documentation.
 
         Derived rather than listed: any new message is covered on the day it
-        lands. Docstrings are excluded by node identity, not by heuristics on
-        their content, so moving the explanation INTO a docstring is the
-        supported way to keep writing about retirement.
+        lands.
+
+        ⛔ "Documentation" is *any bare string expression statement*, not just
+        the first one in a module/class/function. PEP 258 attribute
+        docstrings — a string sitting under an assignment — are how you
+        document a constant, and an earlier revision excluded only the four
+        canonical positions, so the assertion below fired on the very form its
+        own failure message tells you to use.
         """
         import ast as _ast
         src = (Path(bump_docs.__file__)).read_text(encoding="utf-8")
         tree = _ast.parse(src)
-        docstrings = set()
+        documentation = set()
         for node in _ast.walk(tree):
-            if isinstance(node, (_ast.Module, _ast.ClassDef,
-                                 _ast.FunctionDef, _ast.AsyncFunctionDef)):
-                body = getattr(node, "body", None)
-                if (body and isinstance(body[0], _ast.Expr)
-                        and isinstance(body[0].value, _ast.Constant)
-                        and isinstance(body[0].value.value, str)):
-                    docstrings.add(id(body[0].value))
+            for field in ("body", "orelse", "finalbody"):
+                stmts = getattr(node, field, None)
+                # ⚠️ `body` is not always a statement list: on `IfExp` and
+                # `Lambda` it is a single expression, so iterating it blindly
+                # raises (`'JoinedStr' object is not iterable`, caught the
+                # first time this ran over the real module).
+                if not isinstance(stmts, list):
+                    continue
+                for stmt in stmts:
+                    if (isinstance(stmt, _ast.Expr)
+                            and isinstance(stmt.value, _ast.Constant)
+                            and isinstance(stmt.value.value, str)):
+                        documentation.add(id(stmt.value))
         return [n.value for n in _ast.walk(tree)
                 if isinstance(n, _ast.Constant) and isinstance(n.value, str)
-                and id(n) not in docstrings]
+                and id(n) not in documentation]
 
     def test_no_diagnostic_message_names_the_rule_set_constant(self):
-        """⛔ Must-fire: no printable string may name `COUNT_RULE_IDS`."""
+        """⛔ Must-fire: no printable string may name `COUNT_RULE_IDS`.
+
+        ⚠️ The predicate is "names the constant", not "recommends retirement":
+        the guard cannot read intent, and a message that merely mentions the
+        constant still hands a reader racing to green the identifier to grep
+        for. Documentation is where that belongs — this test excludes every
+        bare string statement, including PEP 258 attribute docstrings.
+        """
         offenders = [s for s in self._user_facing_strings()
                      if "COUNT_RULE_IDS" in s]
         assert offenders == [], (
-            "a user-facing message names COUNT_RULE_IDS, i.e. it tells the "
-            "reader how to delete the rule that is complaining. Measured: "
-            "doing that leaves every guard green. Put the retirement path in "
-            "a docstring instead.\n  " + "\n  ".join(repr(s) for s in offenders))
+            "a printable message names COUNT_RULE_IDS. Measured on "
+            "`5b7f6c35`: deleting a count rule together with its entry in "
+            "that constant leaves every guard green, so a message naming it "
+            "is a route to the cheaper, worse repair. Put it in a docstring "
+            "(including an attribute docstring under the constant) — those "
+            "are not flagged.\n  "
+            + "\n  ".join(repr(s) for s in offenders))
 
     def test_the_scanner_would_notice_such_a_message(self, tmp_path,
                                                      monkeypatch):
@@ -1549,10 +1570,15 @@ class TestCountSourceUnreadable:
 
         Without this, deleting the walk, mis-parsing the module, or excluding
         one node type too many all look exactly like "the messages are clean".
+        The attribute-docstring case is here because excluding it was the
+        repair, so it needs a control of its own: exclude too much and the
+        printed message stops being seen.
         """
         probe = tmp_path / "probe.py"
         probe.write_text(
-            '"""COUNT_RULE_IDS in a docstring must NOT count."""\n'
+            '"""COUNT_RULE_IDS in a module docstring must NOT count."""\n'
+            'X = (1, 2)\n'
+            '"""COUNT_RULE_IDS in an attribute docstring must NOT count."""\n'
             'def f():\n'
             '    """COUNT_RULE_IDS here either."""\n'
             '    print("retire it with its COUNT_RULE_IDS entry")\n',

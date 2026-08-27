@@ -389,15 +389,35 @@ repos:
         # misses gives no local signal at all. It used to be
         # `\.(md|yaml|jsx|html)$`, which missed 25 of the files the tool
         # actually opens (measured with an audit hook on `5b7f6c35`: 469 data
-        # inputs, of which `.json` 16, `.yml` 8, and `VERSION` 1 did not
-        # match). Two of those are sources of truth, and one — `.yml` — is
-        # only missed because `mkdocs.yml` is not spelled `.yaml`.
-        # `tests/e2e/package.json` is the single file this gate has ever
-        # caught real damage in (#1480).
-        # The `.py` clause covers the gate's own module closure: editing the
-        # reader is how #1480 happened, and that commit got no signal either.
+        # inputs, of which `.json` 16, `.yml` 8 and `VERSION` 1 did not
+        # match). One of the 25 is a source of truth
+        # (`components/da-tools/app/VERSION`); `mkdocs.yml` is missed only
+        # because it is not spelled `.yaml`; and `tests/e2e/package.json` is
+        # where #1480 found real drift once the gate could see again.
+        #
+        # The `.py` clause covers the gate's own module closure, for the
+        # ordinary reason rather than a historical one: editing the reader
+        # changes what the gate decides, and without this clause the commit
+        # that edits it never runs it even once before landing.
+        # ⛔ ERRATA — an earlier revision justified this clause with "editing
+        # the reader is how #1480 happened". That is false. `abe27478` touched
+        # 11 `.md` files — it is the commit that rewrote `## 專案概覽 (v2.6.0)`
+        # into a bare heading, i.e. it changed the SOURCE — and it never
+        # touched `validate_docs_versions.py` or `_version_patterns.py`;
+        # `git log -S PLATFORM_VERSION_PATTERN` lists only that pattern's own
+        # creation and the #1480 repair. That commit DID fire this hook, and
+        # the hook went green anyway, because the two consumers sat behind
+        # `if "platform" in versions` and were skipped in silence. The
+        # fail-open is what #1480 was; #1493 is what fixed it.
+        # ⚠️ Known gap, deliberately not closed here: the `_lib_.*` branch
+        # only reaches `scripts/tools/` itself, so a helper split out into
+        # `scripts/tools/lint/` does not match — not even named `_lib_*`.
+        # `test_editing_the_gate_itself_can_trigger_it` names the exact file
+        # when that happens, and widening to all of `lint/` was declined as a
+        # bigger trigger surface than a local smoke test is worth.
+        #
         # Kept honest by `TestTheHookFiresOnEverythingTheGateReads`, which
-        # re-measures the closure and compares it to THIS pattern.
+        # re-measures both sets and compares them to THIS pattern.
         files: (\.(md|ya?ml|jsx|json|html)$)|((^|/)VERSION$)|(^scripts/tools/(_lib_.*|lint/(validate_docs_versions|_version_patterns))\.py$)
         additional_dependencies: ['pyyaml']
 
