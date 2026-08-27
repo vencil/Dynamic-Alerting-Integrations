@@ -3698,6 +3698,22 @@ def test_the_excluded_tree_and_the_excluded_set_are_both_load_bearing():
     # the real pair is accepted…
     gate._assert_excluded_roots_still_have_an_owner(artifacts)
 
+    # …and each spelling on its own is READ. ⛔ These two probes are the
+    # docstring's claim; without them the paragraph above described a test that
+    # did not exist, which is the exact shape (`a comment asserts what the code
+    # does not do`) this module keeps paying for. Caught by review on #1544.
+    with pytest.MonkeyPatch.context() as mp:
+        # Point the tree elsewhere: the set's members stop sitting under it.
+        mp.setattr(gate, "_ARTIFACT_KEYS_FLOOR_EXCLUDED_TREE", "tests/nowhere")
+        with pytest.raises(gate._GateViolation, match="does not live under"):
+            gate._assert_excluded_roots_still_have_an_owner(artifacts)
+    with pytest.MonkeyPatch.context() as mp:
+        # Empty the set: the scanned roots under the tree stop being listed.
+        mp.setattr(gate, "_ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS", frozenset())
+        with pytest.raises(gate._GateViolation,
+                           match="NOT in _ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS"):
+            gate._assert_excluded_roots_still_have_an_owner(artifacts)
+
 
 # The group both end-to-end "a whole group vanished" probes remove. ⛔ ONE
 # spelling: they assert two different things about the same input (which floor
