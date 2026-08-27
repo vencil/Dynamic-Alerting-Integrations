@@ -188,7 +188,33 @@ GATING_CANARIES = frozenset({"BenchmarkControlCanaryCPU"})
 # 2026-08-23 is v1, so rejecting it would leave the engine with no real series
 # to run on for two weeks. What v1 does NOT have is `workload_digest`, and that
 # absence is carried as DIGEST_ABSENT rather than quietly treated as "no move".
+#
+# ⛔ BUT `bench-paired/v1` NAMES TWO INCOMPATIBLE PAYLOADS, and this tuple alone
+# cannot say so. #1455 (`60f4523`, 2026-08-16) added three top-level fields to
+# the v1 payload — `status`, `reference_sha`, `workload_drift` — and left the
+# schema string untouched. `status` is REQUIRED here, so the shape written
+# before that commit passes this membership test and is then rejected two
+# guards later. Accepting a string whose meaning changed under it is what the
+# rejection message below calls refusing to interpret unknown fields; the split
+# is the mirror case — fields this tool DOES know, under a version number that
+# stopped identifying them. So the boundary is declared rather than implied,
+# and `SCHEMA_V1_PRE_STATUS_KEYS` is what the older producer actually wrote.
+# ⚠️ The reverse pairing is what shows no rule was in force: `c7d0586` bumped
+# v1→v2 for one OPTIONAL field while `60f4523` added a REQUIRED one for free.
+# ⛔ There is still no such rule as of this commit — writing one, plus a gate
+# on `pair_bench_ratio.py`'s key set, is tracked in #1571 and lands separately.
+# Pointing at a rule that does not exist yet is the failure this ADR line keeps
+# hitting from the other side, so it is named as absent rather than cited.
 SUPPORTED_SCHEMAS = ("bench-paired/v1", "bench-paired/v2")
+SCHEMA_V1 = "bench-paired/v1"
+SCHEMA_V1_STATUS_COMMIT = "60f4523"
+SCHEMA_V1_STATUS_PR = "#1455"
+SCHEMA_V1_STATUS_DATE = "2026-08-16"
+# The exact top-level key set of `pair_bench_ratio.py`'s payload at
+# `60f4523^`. `tests/dx/test_paired_trend_watch.py` pins this against that
+# commit's own source via `git show`, so it cannot drift into a guess.
+SCHEMA_V1_PRE_STATUS_KEYS = frozenset({
+    "schema", "reference_tag", "cpu", "evaluated", "inconclusive"})
 
 # The tri-state vocabulary `pair_bench_ratio.py` writes. Anything outside it is
 # an input we do not understand, and an input we do not understand is unreadable
@@ -243,7 +269,8 @@ class Night:
     window, which is the same false-all-clear in a different costume.
     """
 
-    __slots__ = ("night_utc", "run_id", "schema", "cpu", "reference_sha",
+    __slots__ = ("night_utc", "run_id", "night_key", "head_sha", "schema", "cpu",
+                 "reference_sha",
                  "ratios_pct", "canary_pct", "inconclusive",
                  "drift_status", "drift_files", "drift_count",
                  "digest_status", "digest_sides", "digest_n_files",
@@ -252,6 +279,17 @@ class Night:
     def __init__(self, night_utc, run_id):
         self.night_utc = night_utc
         self.run_id = run_id
+        # Assigned by `assign_night_keys()`, not derived on demand. See there
+        # for why a run's OWN attributes cannot supply this identity.
+        self.night_key = None
+        # The commit the NIGHTLY ran, not the reference it measured against —
+        # `reference_sha` below is the other one, and confusing them would
+        # attribute a night to the wrong side of the comparison. `gh run list`
+        # has always returned it (`analyze_bench_history.py`'s `--json` asks
+        # for `headSha`); until #1571 this consumer downloaded it and dropped
+        # it on the floor, which is why a v1 night's rejection could only
+        # describe its shape and never its provenance.
+        self.head_sha = None
         self.schema = None
         self.cpu = None
         self.reference_sha = None
@@ -359,6 +397,150 @@ class Night:
                 if b not in GATING_CANARIES}
 
 
+def _dated(night):
+    """Does this night sit on a calendar night at all?
+
+    ⛔ ONE predicate, used by every place that has to answer it — the span, the
+    Nights table, the calendar ratio and the disclosure beside it. Review found
+    the first cut using `night.night_utc or '?'` in two of those and this
+    `isinstance` test in the others: a truthy non-string (`20260816`) was then
+    classified as un-dated by one and printed verbatim by the others, so the
+    page said a run appears as `?` while showing a night label nobody wrote.
+    ⚠️ Both production loaders already reject that shape — `nights_from_dataset`
+    raises on it and `nights_from_gh` only ever produces `str` or `None` — so
+    this is unreachable from CI today. It is unified anyway for the reason
+    `_ordering_key` gives for its own defence in depth: Nights are also built by
+    hand, by tests and by future adapters, and the disagreement was real.
+    """
+    return isinstance(night.night_utc, str) and bool(night.night_utc)
+
+
+KEY_DATED = 0
+KEY_UNDATED = 1
+
+
+def key_is_dated(key):
+    """Does this night key stand for a known calendar night?
+
+    ⛔ ASK THE KEY, NEVER THE STRING. `render()` used to answer this question
+    with `str(k).startswith("?#")`, and blind review measured what that costs:
+    a night whose `night_utc` is literally `"?#7"` passes `_dated()` — the
+    loaders type-check `night_utc` but do not format-check it — and was then
+    counted as an un-dated RUN two sections lower. One page, two numbers, and
+    the contradiction between them was manufactured by the fix that was
+    supposed to end exactly that contradiction.
+    """
+    return key[0] == KEY_DATED
+
+
+def key_label(key):
+    """What a night key prints as. The ONLY place `?#` is spelled."""
+    return key[1] if key_is_dated(key) else f"?#{key[1]}"
+
+
+def _night_label(night):
+    """What to print where a night's date goes. `?` means the date is unknown."""
+    if _dated(night):
+        return night.night_utc
+    return key_label(night.night_key) if night.night_key else "?"
+
+
+def assign_night_keys(nights):
+    """Give every night the identity its per-night facts are COLLECTED under.
+
+    ⛔ NOT the same question as "what should this print". Two DATED runs of one
+    night must share this key — merging them is the entire point of the
+    calendar-night rule. Two UN-DATED runs must NOT, because nothing here knows
+    whether they share a night, and one key asserts exactly what every
+    disclosure on this page says it cannot.
+
+    ⛔ THE IDENTITY CANNOT COME FROM THE RUN ITSELF, and a previous round's fix
+    assumed it could. It keyed un-dated runs on `f"?#{run_id}"`, which review
+    then measured collapsing in two separate ways:
+
+        run_id is None      both loaders allow it (`nights_from_dataset` passes
+                            `run_id is None` explicitly, `databaseId` can be
+                            absent) -> every such run keyed `?#None` -> the
+                            readings merged and the smaller one left the page
+        int 101 vs "101"    both types are allowed through the same loader ->
+                            both format to `?#101` -> same silent merge
+
+    ⇒ the key is an ORDINAL over the series instead: position is the only thing
+    an un-dated run reliably has. It is assigned once, over the sorted list, so
+    every collection site in `decide()` sees the same identity for the same run.
+
+    ⚠️ Idempotent by construction — re-running it over the same list produces
+    the same keys — but the ordinals are relative to the LIST PASSED IN. Call it
+    on the whole series, not a filtered subset, or two subsets will disagree.
+
+    ⛔ THE KEY IS A TUPLE, NOT `f"?#{n}"`, and the string form was this round's
+    finding. `(KEY_DATED, night_utc)` / `(KEY_UNDATED, ordinal)` buys three
+    things a formatted string cannot:
+
+        classification  `key_is_dated(key)`, not `str(k).startswith("?#")`.
+                        A night whose `night_utc` IS `"?#7"` is dated by
+                        `_dated()` and was counted as an un-dated run by the
+                        string test — the two halves of one page disagreeing.
+        ordering        `sorted()` compares ordinals as INTEGERS. Under the
+                        string form eleven un-dated runs printed
+                        `?#1, ?#10, ?#11, ?#2, …`.
+        no collision    that same `"?#7"` night and the 7th un-dated run
+                        formatted to one key and MERGED — the identical silent
+                        drop this function exists to prevent, re-entering
+                        through the display alphabet. Tuples cannot collide:
+                        the first element separates the namespaces.
+
+    ⚠️ So a key is never printed raw. `key_label()` is the only place `?#` is
+    spelled, and `_night_label()` / `render()` go through it.
+
+    ⛔ AND THE NO-COLLISION CLAIM IS ABOUT KEYS, NOT ABOUT LABELS. Blind review
+    measured the residue: a night whose `night_utc` is `"?#1"` keeps its own
+    key — nothing merges, no reading is lost, every count stays right — and
+    still PRINTS `?#1`, the same text the first un-dated run prints:
+
+        | `BenchmarkAlpha` | 1 (?#1) + 2 undated run(s) (?#1, ?#2) | +20.00% |
+
+    ⇒ two meanings, one string, and the reader cannot tell them apart.
+
+    ⚠️ AND IT IS LEFT THAT WAY ON PURPOSE. Every fix available here is worse
+    than the defect: making `key_label` escape a date that "looks like an
+    ordinal", or making `_dated()` format-check `night_utc`, both decide what a
+    value IS from the shape of its text — the exact inference this whole scope
+    exists to remove, and the source of the finding one round earlier. The
+    honest position is that a `night_utc` of `"?#1"` is garbage input no
+    alphabet can disambiguate, that neither production loader can produce it
+    (`nights_from_gh` slices `createdAt`, `nights_from_dataset` raises on a
+    non-`str`), and that the guarantee stated above covers identity only.
+    """
+    undated = 0
+    for night in nights:
+        if _dated(night):
+            night.night_key = (KEY_DATED, night.night_utc)
+        else:
+            undated += 1
+            night.night_key = (KEY_UNDATED, undated)
+    return nights
+
+
+def _short_night(label):
+    """`2026-08-20` -> `08-20`; anything that is not an ISO date is left alone.
+
+    ⛔ Written because the year-stripping used to be a bare `label[5:]`, which
+    turns `?` into an EMPTY STRING — and an empty cell in a Markdown table is
+    indistinguishable from a rendering bug, which is the one thing every label
+    in this module is supposed to prevent.
+
+    ⛔ AND THE FIRST VERSION OF THAT FIX tested `len(label) == 10`, which is a
+    guess about dates rather than a check for one. Review measured what it cost:
+    `?#12345678` is ten characters, so it rendered as `45678` — the `?` gone,
+    the id truncated, a label nobody wrote, produced by the very helper whose
+    docstring above says it exists to stop exactly that. The predicate now asks
+    whether the label IS a date, in the two positions that decide it.
+    """
+    return (label[5:] if len(label) == 10 and label[4] == "-" and label[7] == "-"
+            else label)
+
+
 def _finite_pct(value):
     """Return a percent reading, or None if the input is not a usable number.
 
@@ -428,6 +610,39 @@ def load_night(payload, *, night_utc, run_id):
 
     night.cpu = payload.get("cpu")
     night.reference_sha = payload.get("reference_sha")
+
+    # ⛔ The split-version branch comes BEFORE the generic status check, and
+    # only because the generic message named the symptom. A real night from
+    # before #1455 was rejected as `unknown night status None`, which reads as
+    # a corrupt payload; it is a perfectly well-formed v1 that this consumer
+    # cannot read, and the difference decides whether an operator goes looking
+    # for a broken producer or recognises a version boundary.
+    #
+    # ⚠️ WHAT THIS BRANCH DOES AND DOES NOT ESTABLISH. It reads the PAYLOAD's
+    # shape. It does NOT prove the run predates `60f4523` — that is provenance,
+    # and provenance lives in `head_sha`, rendered beside the night. So the
+    # message says the shape matches, not that the run is old. Stating the
+    # stronger thing would be the same over-claim this ADR line has had to
+    # correct before: an inference dressed as a measurement.
+    if night.schema == SCHEMA_V1 and "status" not in payload:
+        if frozenset(payload) == SCHEMA_V1_PRE_STATUS_KEYS:
+            return night.unreadable(
+                f"schema {SCHEMA_V1} written before {SCHEMA_V1_STATUS_PR} "
+                f"({SCHEMA_V1_STATUS_COMMIT}, {SCHEMA_V1_STATUS_DATE}) — that "
+                "commit added the required `status` field WITHOUT bumping the "
+                "schema string, so this string names two incompatible "
+                "payloads. This one carries the older key set exactly, and "
+                "that producer never wrote `status`: a legal v1 this consumer "
+                "cannot read, not a corrupt payload. ⚠️ Read off the payload's "
+                "shape; the run's own provenance is its head sha")
+        return night.unreadable(
+            f"schema {SCHEMA_V1} without the required `status` field, and its "
+            f"keys ({', '.join(sorted(payload))}) are neither the pre-"
+            f"{SCHEMA_V1_STATUS_PR} v1 key set nor a payload carrying "
+            "`status`. ⛔ Named separately from the known older shape on "
+            "purpose: that one is a version boundary, this one is unaccounted "
+            "for, and collapsing them would let a truncated payload borrow an "
+            "explanation that was measured for something else")
 
     status = payload.get("status")
     if status not in ("OK", "INCONCLUSIVE"):
@@ -589,9 +804,42 @@ def calendar_nights(nights):
     rendered `**FINDINGS** over 2 counted night(s) ... (2026-08-20 ..
     2026-08-20)`. The span printed the same date twice and nothing flagged it.
     The rule's entire purpose is to not fire on a single occasion.
+
+    ⛔ AND THE MIRROR OF THAT BUG, fixed here: a run with NO date used to become
+    a calendar night of its own. `None` is a perfectly good dict key, so every
+    un-dated run collapsed into one group — and that group then sat in the list
+    beside the real nights, where it could COMPLETE a K-consecutive run. Measured
+    on this branch before the guard below:
+
+        one dated night at +9%, k=2                 -> INCONCLUSIVE, no fire
+        the same night PLUS one un-dated run        -> FINDINGS, fires
+
+    ⇒ a run whose night nobody knows manufactured the second night. That is the
+    same disease as the original bug with the sides swapped: there, two runs of
+    ONE occasion counted as two nights; here, ZERO known occasions counted as
+    one. Both let the rule fire on evidence it does not have.
+
+    ⚠️ It also contradicted this module's own page: `render()` already excludes
+    un-dated runs from the calendar ratio and says in as many words that nothing
+    here knows whether they share a night — while the rule underneath was
+    treating them as a night that definitely happened.
+
+    ⛔ The guard is HERE and not in `fires()` on purpose. `fires()` must stay
+    bit-identical to the archived `analyze_paired.py::fires()` or the frozen
+    dataset stops being a cross-check between two independently written
+    implementations and becomes this one restating itself. This helper is not
+    part of that contract.
+
+    ⚠️ Excluding them is not the same as dropping them: they stay in the Nights
+    table under `?`, stay in the run totals, and are named in the disclosure. A
+    series of nothing BUT un-dated runs therefore yields no groups at all, which
+    `judgeable()` reads as INCONCLUSIVE — never CLEAR. That case is asserted, so
+    the fix cannot become a new way to render silence as an all-clear.
     """
     groups = {}
     for night in nights:
+        if not _dated(night):
+            continue
         groups.setdefault(night.night_utc, []).append(night)
     return [(date, runs) for date, runs in groups.items()]
 
@@ -724,13 +972,34 @@ def digest_transitions(nights):
     # `2026-08-20 → 2026-08-20` transition row. The night's LAST readable run
     # is the one carried, matching "what the work definition was by the end of
     # that night".
+    #
+    # ⚠️ THAT SENTENCE IS NOW NARROWER THAN IT READS, and review measured it:
+    # a dated run plus a same-night re-run that LOST its date renders
+    # `2026-08-20 -> ?#1`, which is a same-night transition wearing two
+    # different labels. The guarantee holds only while both runs are dated.
+    # ⛔ Un-dated rows also carry no known ORDER: `_ordering_key` sorts them
+    # ahead of every dated night, so `from -> to` across a `?#` endpoint is
+    # ordinal, not chronological. The table says so beneath itself rather
+    # than this comment claiming a property the code does not deliver.
+    assign_night_keys(nights)
     per_night = {}
     for night in nights:
         if night.readable:
-            per_night[night.night_utc] = night
+            # ⛔ `_night_key`, not the raw date. Three un-dated nights whose
+            # work-definition digest changed twice used to collapse onto the
+            # single key `None` and report ZERO transitions — two MOVES gone
+            # from the page, in the one table whose job is to say the two
+            # sides stopped doing the same thing.
+            per_night[night.night_key] = night
     usable = list(per_night.values())
     for prev, cur in zip(usable, usable[1:]):
-        rec = {"from": prev.night_utc, "to": cur.night_utc, "sides": {}}
+        # ⛔ Labelled through the shared predicate, like the span and the
+        # Nights table. Found by the test that unified the other three: this
+        # was a FOURTH call site printing the raw value, so a night the ratio
+        # had already classified as un-dated still appeared here under a label
+        # nobody wrote.
+        rec = {"from": key_label(prev.night_key),
+               "to": key_label(cur.night_key), "sides": {}}
         for side in ("reference", "main"):
             if (prev.digest_status != "checked" or cur.digest_status != "checked"
                     or side not in prev.digest_sides or side not in cur.digest_sides):
@@ -805,6 +1074,10 @@ def decide(nights, *, threshold_pct=DEFAULT_THRESHOLD_PCT,
     exactly the same code.
     """
     nights = sorted(nights, key=_ordering_key)
+    # ⛔ After the sort, before anything collects per-night facts: the un-dated
+    # ordinals are positions in THIS series, so every site below must see the
+    # same assignment. Assigning lazily per call site is how they drift apart.
+    assign_night_keys(nights)
     for night in nights:
         apply_gate(night, gate_pct)
 
@@ -826,12 +1099,12 @@ def decide(nights, *, threshold_pct=DEFAULT_THRESHOLD_PCT,
     inconclusive = {}
     for night in counted:
         for bench, reason in night.inconclusive.items():
-            inconclusive.setdefault(bench, {})[night.night_utc] = reason
+            inconclusive.setdefault(bench, {})[night.night_key] = reason
     for night in counted:
         for bench in benches:
             if bench in night.ratios_pct or bench in night.inconclusive:
                 continue
-            inconclusive.setdefault(bench, {})[night.night_utc] = (
+            inconclusive.setdefault(bench, {})[night.night_key] = (
                 "absent-from-payload — the night carried neither a ratio nor a "
                 "reason for this benchmark")
 
@@ -848,9 +1121,17 @@ def decide(nights, *, threshold_pct=DEFAULT_THRESHOLD_PCT,
     for night in counted:
         for bench, value in night.ratios_pct.items():
             if value > threshold_pct and bench not in fired:
+                # ⛔ Keyed by `night_key`, not the raw date. An un-dated run
+                # carries real readings and must appear here — this section
+                # exists because a reading the page never mentions is
+                # indistinguishable from one that never happened — but keying
+                # on the raw `None` put it into a `sorted()` beside strings and
+                # took the whole page down with a TypeError. Third call site of
+                # that same defect on this branch.
                 per_night = seen_over.setdefault(bench, {})
-                if value > per_night.get(night.night_utc, float("-inf")):
-                    per_night[night.night_utc] = value
+                key = night.night_key
+                if value > per_night.get(key, float("-inf")):
+                    per_night[key] = value
 
     if not counted or not benches or not any(can_judge.values()):
         # ⛔ Not CLEAR. No benchmark was in a position to be judged, so the
@@ -1059,18 +1340,55 @@ def nights_from_gh(workflow, limit, cache_dir):
 
     ready = [p for p in pairs if isinstance(p, tuple)]
     failed = [p for p in pairs if not isinstance(p, tuple)]
-    return nights_from_paths(ready) + failed
+    out = nights_from_paths(ready) + failed
+
+    # ⛔ Stamped after loading, by run id, rather than threaded through
+    # `nights_from_paths` as a fourth positional element. Two reasons, and the
+    # second is the one that matters: the offline path has no `gh` run record
+    # to carry, and a night that failed to download — the case with the least
+    # to go on — gets its provenance here too, which a loader-only parameter
+    # would have skipped.
+    # ⛔ Runs without a `databaseId` are LEFT OUT of the map rather than keyed
+    # on None. A dict comprehension is last-one-wins, so two such records would
+    # share the key None and every unidentifiable night would be stamped with
+    # whichever head happened to come last — a wrong sha rendering as an
+    # ordinary one, in the column whose entire job is attribution. Dropping
+    # them makes an unidentifiable run render "—", which is the true answer.
+    head_by_run = {run["databaseId"]: run.get("headSha") for run in runs
+                   if run.get("databaseId") is not None}
+    for night in out:
+        if night.run_id is not None:
+            night.head_sha = head_by_run.get(night.run_id)
+    return out
 
 
 # ── Rendering ─────────────────────────────────────────────────────────────
 #
 # English, like every sibling under `scripts/tools/dx/` and like the existing
-# `bench-record` step summary this appends to (owner ruling on #1496).
+# `bench-record` step summary this appends to.
+#
+# ⛔ CITATION CORRECTED. This line used to read "(owner ruling on #1496)". That
+# is the WRONG PR: #1496's body and both of its comments contain no such ruling
+# — they are a CodeRabbit walkthrough and a coverage bot. The ruling is real and
+# is on #1244, where the owner rejected the same "translate this string to
+# Traditional Chinese" finding three times, writing:
+#
+#   「CLAUDE.md 的繁中規範規範的是 user-facing prose（AI 回應與文件），不是
+#     覆寫既有工具輸出的語言慣例；若要統一改語言，那是獨立的一致性工作」
+#     — #1244 discussion_r3652358781
+#
+# Found because CodeRabbit raised the same finding on #1571 and the reply had to
+# produce the authority. A citation nobody can follow is worth less than no
+# citation: it reads as settled while resting on nothing. That is this module's
+# own disease — asserting more than the evidence carries — in its own comment.
+#
+# ⚠️ What is still NOT written down anywhere: whether that rule covers a repo
+# tool's rendered output at all. Both readings survive the ruling above, so the
+# finding will recur on every PR that touches an operator-visible string until
+# `dev-rules.md` states the boundary and `.coderabbit.yaml` is aligned to it.
 
 def _pct(value):
     return f"{value:+.2f}%"
-
-
 def counterfactual_thresholds(nights, benches, gap):
     """What each candidate threshold WOULD have opened, on this same series.
 
@@ -1112,6 +1430,23 @@ def counterfactual_gates(nights):
     more than 0.12%, so every candidate gate keeps every night — which is itself
     the finding: the gate is not what suppresses the outliers, and nobody should
     expect it to.
+
+    ⛔ PRE-EXISTING CRASH, fixed here rather than ticketed (owner ruling on
+    #1571). The set below used to hold `night_utc` raw, so ONE readable night
+    without a date put `None` in it and `sorted()` — or the `', '.join()` in the
+    renderer — raised `TypeError`. The whole page then died with exit 1: the
+    code this module reserves and documents as NEVER USED, precisely so a
+    non-zero exit can never be read as "found a regression". Worse, it took the
+    0.5%–1.0% canary band down with it, which the DEFAULT gate counts. It
+    reproduces identically on `origin/main`, so it is not this change's doing —
+    it is fixed here because this change made the page promise a rendering the
+    crash prevents, and because the label helper it needs now exists.
+
+    Un-dated nights are kept OUT of the distinct-calendar-night set and counted
+    beside it, which is what the headline already does. ⛔ Folding them in as
+    one `?` would be worse than the crash was: two different un-dated nights
+    would silently become one rejection, understating the very count this table
+    exists to feed.
     """
     rows = []
     readable = [n for n in nights if n.readable]
@@ -1119,9 +1454,10 @@ def counterfactual_gates(nights):
         # ⛔ Distinct calendar nights, same reason as above — this table is the
         # data ADR-032 §待決 5 says will pick the real threshold, so a re-run
         # inflating its rejection count biases the decision it exists to feed.
-        rejected = sorted({n.night_utc for n in readable
-                           if not gate_verdict(n, gate)[0]})
-        rows.append((gate, rejected))
+        turned_down = [n for n in readable if not gate_verdict(n, gate)[0]]
+        rejected = sorted({n.night_utc for n in turned_down if _dated(n)})
+        rows.append((gate, rejected,
+                     len([n for n in turned_down if not _dated(n)])))
     return rows
 
 
@@ -1130,15 +1466,89 @@ def render(result):
     nights = result["nights"]
     counted = result["counted"]
     lines = []
-    span = (f"{nights[0].night_utc} .. {nights[-1].night_utc}" if nights else "empty series")
+    # ⚠️ PRE-EXISTING, not introduced here, and it is fixed only because this
+    # change made it contradict its neighbour: an un-dated night rendered the
+    # span as `None .. 2026-08-20` — a night label nobody wrote, of exactly the
+    # kind `nights_from_dataset()` raises over — while the new disclosure line
+    # below says those runs appear as `?`. `?` is what the Nights table already
+    # prints for the same fact, so all three now agree.
+    span = (f"{_night_label(nights[0])} .. {_night_label(nights[-1])}"
+            if nights else "empty series")
 
     lines.append("## Paired trend watch — SUMMARY ONLY (ADR-032 phase 2, PR-B1)")
     lines.append("")
-    n_calendar = len({n.night_utc for n in counted})
-    lines.append(f"**{result['status']}** over {n_calendar} counted calendar "
-                 f"night(s) ({len(counted)} run(s)) of {len(nights)} in the "
-                 f"series ({span}).")
-    if n_calendar != len(counted):
+    # ⛔ Two ratios, each with both halves in the SAME unit. The previous line
+    # read "N counted calendar night(s) (M run(s)) of {len(nights)}" — and that
+    # trailing denominator is a RUN count, so the headline "N of X" mixed
+    # calendar nights with runs. Every night has carried exactly one run so far,
+    # which is precisely why it could sit there unnoticed; one
+    # `workflow_dispatch` re-run is enough to make the number unreadable.
+    # ⚠️ Narrower than #1571 §7 proposed. That entry read as though the whole
+    # line were undisclosed; the caveat below it already discloses the
+    # multi-run case. What was NOT disclosed is this denominator, so only it
+    # changes.
+    # ⛔ A run with no usable date is on NO calendar night, so it is kept out
+    # of the calendar ratio and named below instead. Review caught the first
+    # cut folding them together: `nights_from_gh` writes
+    # `night_utc = created[:10] or None`, so every dateless run collapses onto
+    # the single key None and three distinct runs rendered as "1 of 2 calendar
+    # night(s)". Counting them as one is a fabricated number and counting them
+    # as N is a different claim — nobody knows whether they share a night. The
+    # ratio therefore answers only for runs that HAVE a date, and the rest are
+    # reported as a count that cannot be placed. ⚠️ The un-dated group is most
+    # likely to be exactly the download-failure rows, which is the group least
+    # able to survive being silently merged.
+    dated_counted = [n for n in counted if _dated(n)]
+    undated = [n for n in nights if not _dated(n)]
+    n_calendar = len({n.night_utc for n in dated_counted})
+    n_calendar_all = len({n.night_utc for n in nights if _dated(n)})
+    lines.append(f"**{result['status']}** over {n_calendar} of "
+                 f"{n_calendar_all} calendar night(s) in the series ({span}) "
+                 f"— {len(counted)} of {len(nights)} run(s) counted.")
+    if undated:
+        n_undated_counted = len([n for n in undated
+                                 if n.outcome == NIGHT_COUNTED])
+        lines.append("")
+        # ⛔ This sentence says only what is true in every case. Its first
+        # draft read "(the run ratio still counts them)" — false whenever an
+        # un-dated night is UNREADABLE, which the motivating fixture is: the
+        # headline then says "1 of 3 run(s) counted" while the aside said they
+        # were counted anyway. Worse, `counted` is this module's own term for
+        # passing the canary gate, so the wrong reading was also the trained
+        # one. Review caught it — prose written while fixing a precision
+        # defect, carrying a precision defect.
+        #
+        # ⛔ CORRECTION, and it is the same disease a second time. That fix's
+        # own comment justified itself with "an un-dated night is most often a
+        # download failure". Nothing measured "most often", and a later review
+        # showed the causal half is FALSE outright: `nights_from_gh` derives
+        # `night_utc` from `createdAt` BEFORE it attempts the download, so a
+        # download failure keeps its date. Missing-date and unreadable are
+        # independent axes; the fixture that motivated this happens to set
+        # both, which is what made the invented link look obvious. The claim
+        # this line actually needs is the weak one: an un-dated night CAN be
+        # un-counted, so the sentence must not assume either way.
+        lines.append(
+            f"⚠️ {len(undated)} run(s) carry no usable date and are on NO "
+            "calendar night, so they are excluded from the calendar ratio "
+            "above — nothing here knows whether they share a night. They "
+            f"remain in the run TOTAL ({len(nights)}), and "
+            f"{n_undated_counted} of them {'is' if n_undated_counted == 1 else 'are'} "
+            # ⛔ The two example labels are BUILT by `key_label`, not typed out.
+            # Not decoration: it makes `key_label` the only place in this file
+            # where the two characters `?#` appear in code at all, which is
+            # what lets the structural test below state a checkable invariant
+            # instead of a list of syntax it happens to recognise.
+            "counted. They are listed in the Nights table — and referred to "
+            f"elsewhere on this page — as `{key_label((KEY_UNDATED, 1))}`, "
+            f"`{key_label((KEY_UNDATED, 2))}` … , numbered by their "
+            "position in this series. ⛔ That number is an ORDINAL, not a date "
+            "and not a run id: it exists only so two un-dated runs can be told "
+            "apart, and it says nothing about which night either one was.")
+    # ⛔ Compared against DATED counted runs, not all of them: otherwise a
+    # single un-dated run makes the two numbers differ and prints a claim about
+    # `workflow_dispatch` re-runs that nothing measured.
+    if n_calendar != len(dated_counted):
         lines.append("")
         lines.append("⚠️ Some calendar nights carry more than one run "
                      "(a `workflow_dispatch` or a re-run). The K-consecutive "
@@ -1185,9 +1595,14 @@ def render(result):
     # AND a false justification in the same stroke, since "still displayed" was
     # the stated reason for keeping the reading at all. Caught in self-review
     # before it reached a reviewer, which is not the same as it never happening.
-    lines.append("| night | run | outcome | canary (gating) | canary (info) "
-                 "| drift | digest |")
-    lines.append("|---|---|---|---|---|---|---|")
+    #
+    # `head` is the nightly's own commit. It is the only column that answers
+    # "which producer wrote this payload", which is what a v1 rejection needs
+    # and could not say while the field was downloaded and discarded. ⛔ It is
+    # NOT the reference — that is pinned per series, not per night.
+    lines.append("| night | run | head | outcome | canary (gating) "
+                 "| canary (info) | drift | digest |")
+    lines.append("|---|---|---|---|---|---|---|---|")
     for night in nights:
         deviation = night.canary_deviation_pct
         canary = _pct(deviation) if deviation is not None else "—"
@@ -1200,8 +1615,13 @@ def render(result):
             count = "?" if night.drift_count is None else night.drift_count
             named = "" if night.drift_files else ", names not archived"
             drift = f"checked, {count} file(s){named}"
+        # ⛔ Absent renders as "—", never as an empty cell: a blank column in a
+        # Markdown table is indistinguishable from a rendering bug, and this is
+        # the column whose whole job is to say what is and is not known.
+        head = f"`{night.head_sha[:7]}`" if isinstance(night.head_sha, str) \
+            and night.head_sha else "—"
         lines.append(
-            f"| {night.night_utc or '?'} | `{night.run_id or '?'}` | "
+            f"| {_night_label(night)} | `{night.run_id or '?'}` | {head} | "
             f"{night.outcome}{note} | {canary} | {info_cell} | {drift} "
             f"| {night.digest_status} |")
     lines.append("")
@@ -1240,8 +1660,24 @@ def render(result):
         lines.append("|---|---|---|")
         for bench, hits in sorted(result["over_not_sustained"].items()):
             worst = max(hits.values())
-            dates = ", ".join(d[5:] for d in sorted(hits))
-            lines.append(f"| `{bench}` | {len(hits)} ({dates}) | {_pct(worst)} |")
+            # ⛔ NIGHTS are counted; un-dated runs are named beside the count,
+            # never added into it. Review caught the previous cut claiming `4`
+            # on a page whose own headline two lines up said `1 of 1 calendar
+            # night(s)` — three of those four were runs nobody can place on a
+            # night, and one of them may well BE the dated night. The gate table
+            # below already solved this exact presentation with `+ N undated
+            # run(s)`; this is the same shape, not a second invention.
+            # ⛔ `key_is_dated`, not a `?#` prefix test on the printed form, and
+            # `sorted()` over the KEYS so ordinals compare as integers. Both
+            # halves of that were findings — see `assign_night_keys`.
+            dated = sorted(k for k in hits if key_is_dated(k))
+            undated = sorted(k for k in hits if not key_is_dated(k))
+            shown = ", ".join(_short_night(key_label(k)) for k in dated) or "—"
+            extra = (f" + {len(undated)} undated run(s) "
+                     f"({', '.join(key_label(k) for k in undated)})"
+                     if undated else "")
+            lines.append(
+                f"| `{bench}` | {len(dated)} ({shown}){extra} | {_pct(worst)} |")
         lines.append("")
         lines.append("⚠️ These did not meet the consecutive-nights rule, so they "
                      "are not findings. They are shown because a reading the "
@@ -1253,7 +1689,11 @@ def render(result):
         lines.append("### Inconclusive benchmarks — NOT clean, NOT judged")
         lines.append("")
         for bench, per_night in sorted(result["inconclusive"].items()):
-            reasons = ", ".join(f"{d}: {r}" for d, r in sorted(per_night.items()))
+            # ⛔ Sorted by KEY, printed through `key_label`. The same section
+            # used to sort the printed form, which put `?#10` between `?#1` and
+            # `?#2` — the ordinal is a number and the page has to read like one.
+            reasons = ", ".join(f"{key_label(k)}: {r}"
+                                for k, r in sorted(per_night.items()))
             lines.append(f"- `{bench}` — {reasons}")
         lines.append("")
         lines.append("⛔ These have no denominator on the nights listed "
@@ -1327,10 +1767,16 @@ def render(result):
     lines.append("")
     lines.append("| gate | nights rejected |")
     lines.append("|---|---|")
-    for gate, rejected in counterfactual_gates(nights):
+    for gate, rejected, n_undated in counterfactual_gates(nights):
         marker = " ← provisional default" if gate == result["gate_pct"] else ""
+        # ⛔ The un-dated rejections are named as their own term rather than
+        # added in. They are rejections, so hiding them would understate the
+        # gate; they are not calendar nights, so adding them to the count would
+        # claim a distinctness nothing here can establish.
+        extra = f" + {n_undated} undated run(s)" if n_undated else ""
         lines.append(f"| {gate:.1f}%{marker} | "
-                     f"{len(rejected)}{' (' + ', '.join(rejected) + ')' if rejected else ''} |")
+                     f"{len(rejected)}{' (' + ', '.join(rejected) + ')' if rejected else ''}"
+                     f"{extra} |")
     lines.append("")
     lines.append("⚠️ The gate threshold is **provisional** — ADR-032 §待決 5 left "
                  "it to two-to-four weeks of real distribution and no value has "

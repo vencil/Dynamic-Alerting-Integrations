@@ -759,7 +759,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "5ed582b809c71d88aaf7f6aaab6fb0d730a99e9790092a3725f97190033b2919",
+ "source_digest": "c691763870f8b88309fa519c8cb92e132d5cb81ec3d3ea80872b21448f86907e",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -2260,6 +2260,9 @@
    "tests/dx/test_inject_waveform.py",
    "tests/dx/test_waveform_score.py"
   ],
+  "scripts/tools/dx/pair_bench_ratio.py": [
+   "tests/dx/test_paired_trend_watch.py"
+  ],
   "scripts/tools/dx/paired_trend_watch.py": [
    "tests/dx/test_paired_trend_watch.py"
   ],
@@ -2756,6 +2759,9 @@
   ],
   "tests/lint/test_check_hub_badge_drift.py": [
    "tests/dx/test_verify_diff.py"
+  ],
+  "tests/lint/test_check_image_pin_capability.py": [
+   "tests/dx/test_paired_trend_watch.py"
   ],
   "tests/lint/test_check_scrape_reachability.py": [
    "tests/helm/test_optional_overrides_render.py"

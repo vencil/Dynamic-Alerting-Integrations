@@ -24,8 +24,20 @@ Three groups, and each pins something different:
    verified" — the same conflation the module exists to refuse.
 
 2. THE INPUT BOUNDARY (`test_guard_*`). One case per malformed input, each
-   built by mutating a REAL-SHAPED v2 payload, and each checked against the
-   UN-GUARDED behaviour first (counterfactual output is in the PR body).
+   checked against the UN-GUARDED behaviour first (counterfactual output is in
+   the PR body). Most are built by mutating a REAL-SHAPED v2 payload.
+
+   ⛔ The `bench-paired/v1` cases are NOT, and the correction is worth stating
+   because this docstring's earlier "each built by mutating a v2 payload" is
+   how the hole got in. `bench-paired/v1` names TWO incompatible payloads —
+   #1455 (`60f4523`) added the required `status` field without bumping the
+   schema string — and a v1 derived from v2 by deleting a key KEEPS `status`,
+   so it is a shape no producer ever wrote. The only v1 production actually
+   rejected was therefore the only one no test held. Both v1 fixtures are now
+   built up from the older producer and pinned to those two commits by
+   `test_the_v1_fixtures_match_the_producer_source_at_those_commits`, which
+   reads `pair_bench_ratio.py` at each revision instead of trusting a dict
+   somebody typed. See #1571 / TRK-367.
 
    ⛔ CORRECTION — an earlier draft of this docstring claimed "none of them
    crash without the guard, all of them produce a confident wrong answer".
@@ -130,6 +142,51 @@ def _night(night_utc="2026-08-23", run_id=1, **over):
     return ptw.load_night(_payload(**over), night_utc=night_utc, run_id=run_id)
 
 
+# ── the two shapes that share the string `bench-paired/v1` ────────────────
+#
+# ⛔ Built up from the older producer, NOT down from the v2 fixture. Deriving a
+# v1 by deleting keys from v2 is what let the real v1 go untested: the
+# subtraction kept `status`, which the pre-#1455 producer never wrote, so the
+# only shape production ever rejected was the one shape no test held.
+
+def _v1_pre_status_payload(**over):
+    """`pair_bench_ratio.py`'s payload at `60f4523^` — five keys, no `status`."""
+    base = {
+        "schema": "bench-paired/v1",
+        "reference_tag": "exporter/v2.9.0",
+        "cpu": "AMD EPYC 7763 64-Core Processor",
+        "evaluated": {
+            "BenchmarkAlpha": {"ratio": 1.10, "main_ns": 110.0,
+                               "reference_ns": 100.0, "n_main": 6,
+                               "n_reference": 6},
+            "BenchmarkControlCanaryCPU": {"ratio": 1.0002, "main_ns": 100.02,
+                                          "reference_ns": 100.0, "n_main": 6,
+                                          "n_reference": 6},
+            "BenchmarkControlCanarySleep": {"ratio": 1.0000, "main_ns": 100.0,
+                                            "reference_ns": 100.0, "n_main": 6,
+                                            "n_reference": 6},
+        },
+        "inconclusive": {},
+    }
+    base.update(over)
+    return base
+
+
+def _v1_post_status_payload(**over):
+    """The same schema string at `60f4523` — `status` and two more fields.
+
+    Still v1, still no `workload_digest` (that is what `c7d0586` bumped to v2
+    for), and this one IS readable. Both facts have to hold at once, which is
+    the whole reason the string is ambiguous.
+    """
+    base = dict(_v1_pre_status_payload())
+    base["status"] = "OK"
+    base["reference_sha"] = "3fd96b51f52e61566bb12c4c3fa23fed7e34dfa0"
+    base["workload_drift"] = {"status": "checked", "files": ["config_test.go"]}
+    base.update(over)
+    return base
+
+
 # ── 1. THE ANCHOR ─────────────────────────────────────────────────────────
 #
 # Quoted from `bench-paired-2026-08/README.md` §1, which quotes
@@ -220,15 +277,103 @@ def test_guard_unknown_schema_is_unreadable_not_clean():
     assert "bench-paired/v3" in night.reason
 
 
-def test_guard_schema_v1_is_readable_but_has_no_digest():
-    """v1 nights must still be usable — rejecting them empties the series."""
-    payload = _payload()
-    payload["schema"] = "bench-paired/v1"
-    del payload["workload_digest"]
-    night = ptw.load_night(payload, night_utc="2026-08-20", run_id=1)
-    assert night.readable
+def test_guard_schema_v1_after_the_status_commit_is_counted_and_has_no_digest():
+    """v1 nights must still be usable — rejecting them empties the series.
+
+    ⛔ REPLACES a test that built its v1 by deleting `workload_digest` from the
+    v2 fixture and leaving `status` in place. That subtraction produced a shape
+    no producer ever wrote, so it asserted `readable` about a payload that does
+    not exist while the one that DOES exist — the pre-#1455 v1, which carries no
+    `status` — was covered by nothing. Second time in this file that a fixture
+    resembling nothing real hid a whole case; the first is recorded in
+    `_payload()`'s own comment. Both fixtures below are built from what
+    `pair_bench_ratio.py` actually emitted, and pinned to those commits by
+    `test_the_v1_fixtures_match_the_producer_source_at_those_commits`.
+    """
+    night = ptw.load_night(_v1_post_status_payload(),
+                           night_utc="2026-08-20", run_id=1)
+    assert night.outcome == ptw.NIGHT_COUNTED
     assert night.digest_status == ptw.DIGEST_ABSENT
     assert night.digest_sides == {}
+
+
+def test_guard_schema_v1_before_the_status_commit_names_the_version_boundary():
+    """⛔ The shape production actually rejected, which had NO test at all.
+
+    ⚠️ COUNTERFACTUAL, stated plainly because most of this test buys nothing
+    new: `unreadable` was ALREADY true before this change — a payload with no
+    `status` key reaches `payload.get("status") -> None`, which is not in
+    ("OK", "INCONCLUSIVE"). Delete the whole split-version branch from the
+    module and the first assertion below still passes. The detection this test
+    adds is confined to the reason: the old message was
+    `unknown night status None`, which names a symptom and reads like a corrupt
+    payload. So the assertions that can fail are the ones about WHAT IT SAYS,
+    and the intentional-break evidence in the PR body breaks exactly those.
+    """
+    night = ptw.load_night(_v1_pre_status_payload(),
+                           night_utc="2026-08-16", run_id=1)
+    assert night.outcome == ptw.NIGHT_UNREADABLE
+    # The named cause, not the symptom.
+    assert "unknown night status" not in night.reason
+    assert ptw.SCHEMA_V1_STATUS_COMMIT in night.reason
+    assert ptw.SCHEMA_V1_STATUS_PR in night.reason
+    # ⛔ And it must NOT claim to know the run is old — that is provenance, and
+    # this branch only ever read the payload. Over-claiming here would be the
+    # same inference-dressed-as-measurement this ADR line has corrected before.
+    assert "shape" in night.reason
+
+
+def test_guard_v1_missing_status_with_an_unknown_key_set_is_named_separately():
+    """A truncated payload must not borrow the version boundary's explanation.
+
+    Same rejection, deliberately different reason: one is a known producer
+    version, the other is unaccounted for. Collapsing them would put a
+    measured-and-explained label on something nobody measured.
+    """
+    payload = _v1_pre_status_payload()
+    del payload["cpu"]
+    night = ptw.load_night(payload, night_utc="2026-08-16", run_id=1)
+    assert night.outcome == ptw.NIGHT_UNREADABLE
+    assert "neither the pre-" in night.reason
+    assert ptw.SCHEMA_V1_STATUS_COMMIT not in night.reason
+
+
+def test_the_v1_fixtures_match_the_producer_source_at_those_commits():
+    """⛔ Pins both v1 fixtures — and the module's key constant — to history.
+
+    Without this the fixtures are just two dicts somebody typed, which is the
+    failure mode they exist to end. Read from `pair_bench_ratio.py` at the two
+    commits by AST, so a reformat does not move it and a comment cannot fake it.
+
+    ⚠️ FAIL-CLOSED, NOT SKIPPED. A shallow clone makes this error rather than
+    quietly pass; `ci.yml`'s Python job takes `fetch-depth: 0` for exactly this
+    reason and `tests/lint/test_check_image_pin_capability.py` already relies on
+    it. A test that skips itself when its evidence is missing reports the same
+    green as one that checked — the conflation this whole file refuses.
+    """
+    def payload_keys(rev):
+        src = subprocess.run(
+            ["git", "show", f"{rev}:scripts/tools/dx/pair_bench_ratio.py"],
+            capture_output=True, text=True, encoding="utf-8",
+            cwd=str(_REPO), timeout=60)
+        assert src.returncode == 0, (
+            f"cannot read pair_bench_ratio.py at {rev}: {src.stderr}")
+        found = [node.value for node in ast.walk(ast.parse(src.stdout))
+                 if isinstance(node, ast.Assign)
+                 and any(isinstance(t, ast.Name) and t.id == "payload"
+                         for t in node.targets)
+                 and isinstance(node.value, ast.Dict)]
+        assert len(found) == 1, f"expected one `payload = {{...}}` at {rev}"
+        return frozenset(k.value for k in found[0].keys)
+
+    pre = payload_keys(f"{ptw.SCHEMA_V1_STATUS_COMMIT}^")
+    post = payload_keys(ptw.SCHEMA_V1_STATUS_COMMIT)
+    assert pre == ptw.SCHEMA_V1_PRE_STATUS_KEYS
+    assert pre == frozenset(_v1_pre_status_payload())
+    assert post == frozenset(_v1_post_status_payload())
+    # The split itself, asserted rather than described: same schema string,
+    # and `status` required by this consumer arrives without a bump.
+    assert "status" not in pre and "status" in post
 
 
 def test_guard_nightly_inconclusive_is_unreadable_and_keeps_its_reason():
@@ -634,7 +779,7 @@ def test_benchmark_missing_from_the_reference_is_reported_never_clean():
     result = ptw.decide([night])
     assert "BenchmarkBrandNew" in result["inconclusive"]
     assert "missing-in-reference" in result["inconclusive"]["BenchmarkBrandNew"][
-        "2026-08-23"]
+        (ptw.KEY_DATED, "2026-08-23")]
 
 
 # ── Digest transitions ────────────────────────────────────────────────────
@@ -820,9 +965,15 @@ if mode == "auth-fail":
     raise SystemExit(4)
 if argv[:2] == ["run", "list"]:
     limit = int(argv[argv.index("--limit") + 1])
+    # A DISTINCT head per run, on purpose: a shared literal would pass a
+    # consumer that stamped every night with whichever sha it saw last.
+    # ⛔ The digits must differ in the FIRST SEVEN characters — the renderer
+    # abbreviates, so trailing-digit variation would compare equal on screen
+    # and this stub would stop being able to tell the two cases apart.
     runs = [{"databaseId": 900 + i,
              "createdAt": "2026-08-%02dT03:35:00Z" % (20 + i),
-             "headSha": "deadbeef", "conclusion": "success"}
+             "headSha": ("%x" % (0xC0FFEE0 + i)).ljust(40, "0"),
+             "conclusion": "success"}
             for i in range(min(limit, int(os.environ["STUB_RUNS"])))]
     print(json.dumps(runs))
     raise SystemExit(0)
@@ -950,8 +1101,262 @@ def test_from_gh_two_runs_on_one_calendar_night_do_not_satisfy_k_of_2(tmp_path):
          "--from-gh", "--limit", "3", "--cache-dir", str(tmp_path / "cache")],
         capture_output=True, text=True, encoding="utf-8", env=env, timeout=120)
     assert proc.returncode == ptw.EXIT_OK, proc.stderr
-    assert "1 counted calendar night(s) (2 run(s))" in proc.stdout
+    # ⚠️ The assertion changed shape with #1571 §7 and is now STRICTLY
+    # stronger. It used to read `1 counted calendar night(s) (2 run(s))`, whose
+    # trailing `of {len(nights)}` was a RUN count sitting in a
+    # calendar-night sentence. Both halves of both ratios are pinned here, so
+    # the units cannot silently swap back.
+    assert "1 of 1 calendar night(s)" in proc.stdout
+    assert "2 of 2 run(s) counted" in proc.stdout
     assert "**FINDINGS**" not in proc.stdout
+
+
+# ── head sha: the provenance that was downloaded and discarded ────────────
+
+def _stub_head(i):
+    """The head sha `_GH_STUB` reports for run `i`. Restated, not imported —
+    the stub runs in another process, so the two have to be read side by side.
+    """
+    return ("%x" % (0xC0FFEE0 + i)).ljust(40, "0")
+
+
+def _nights_table_rows(body):
+    """The rows of the `### Nights` table ONLY.
+
+    ⛔ Written because the first version of the test below matched every line
+    starting `| 2026-08-`, which also catches the digest-transition table and
+    compared its `**UNKNOWN**` cell against this table's head column. A row
+    filter that spans tables silently reads the wrong column.
+    """
+    lines = body.splitlines()
+    start = next(i for i, line in enumerate(lines)
+                 if line.startswith("| night |"))
+    rows = []
+    for line in lines[start + 2:]:
+        if not line.startswith("|"):
+            break
+        rows.append(line)
+    return lines[start], rows
+
+
+def test_from_gh_stamps_each_night_with_its_own_head_sha(gh_stub):
+    """⛔ Per-night, not per-series. `list_recent_runs` has always asked `gh`
+    for `headSha` and this consumer dropped it, so a v1 rejection could describe
+    the payload's shape and never the producer that wrote it.
+
+    The stub gives every run a DIFFERENT head on purpose: a consumer that
+    stamped all nights with whichever sha it read last would satisfy a
+    "head_sha is not None" assertion and fail this one.
+    """
+    proc = gh_stub("ok", runs=2)
+    assert proc.returncode == ptw.EXIT_OK, proc.stderr
+    assert _stub_head(0)[:7] != _stub_head(1)[:7], "stub heads collide"
+    _, rows = _nights_table_rows(proc.stdout)
+    heads = [row.split("|")[3].strip().strip("`") for row in rows]
+    assert heads == [_stub_head(0)[:7], _stub_head(1)[:7]]
+
+
+def test_from_gh_records_the_head_sha_even_when_the_artifact_never_arrives(
+        gh_stub):
+    """⛔ The night with the LEAST to go on is the one that needs it most.
+
+    This is why the stamp happens after loading rather than being threaded into
+    the loader: a download failure never reaches `load_night`, so a
+    loader-parameter design would have left exactly these rows blank.
+    """
+    proc = gh_stub("no-artifact", runs=2)
+    assert proc.returncode == ptw.EXIT_OK, proc.stderr
+    _, rows = _nights_table_rows(proc.stdout)
+    assert rows and all("unreadable" in row for row in rows)
+    heads = {row.split("|")[3].strip().strip("`") for row in rows}
+    assert heads == {_stub_head(0)[:7], _stub_head(1)[:7]}
+
+
+def test_render_writes_a_dash_for_an_unknown_head_not_an_empty_cell():
+    """The archival replay path has no run record, so its head is unknown.
+
+    ⛔ An empty Markdown cell is indistinguishable from a broken renderer, and
+    this is the column whose entire job is to say what is and is not known —
+    the same could-not-measure/measured conflation, one column wide.
+    """
+    body = ptw.render(ptw.decide(ptw.nights_from_dataset(DATASET)))
+    header, rows = _nights_table_rows(body)
+    assert "| head |" in header
+    assert len(rows) == 6, rows
+    assert {row.split("|")[3].strip() for row in rows} == {"—"}
+
+
+def test_headline_never_folds_undated_runs_into_one_calendar_night():
+    """⛔ Both blind reviewers of this change found this, independently.
+
+    `nights_from_gh` writes `night_utc = created[:10] or None`, so every run
+    `gh` reports without a usable `createdAt` collapses onto the single key
+    None. The first cut of the unit fix deduplicated ALL nights by date, which
+    turned three distinct dateless runs into "1 calendar night" — a night
+    nobody measured, printed as a known quantity, in the very line the fix was
+    meant to make honest. ⚠️ The un-dated group is also the one most likely to
+    be the download failures, i.e. the rows with the least left to say.
+
+    Counting them as N would be a different fabrication (nothing knows whether
+    they share a night), so they leave the calendar ratio entirely and are
+    reported as a count that cannot be placed.
+    """
+    # ⚠️ These two are un-dated AND unreadable, but those are INDEPENDENT
+    # axes and this fixture must not be read as a causal pair: `nights_from_gh`
+    # derives `night_utc` from `createdAt` before it tries the download, so a
+    # download failure keeps its date. An earlier comment on this change
+    # asserted the link and was wrong; the sibling test below covers the
+    # un-dated-and-counted quadrant so neither case can be assumed.
+    nights = [ptw.Night(None, 101).unreadable("artifact download failed"),
+              ptw.Night(None, 102).unreadable("artifact download failed"),
+              _run("2026-08-20", 103, alpha=1.0)]
+    body = ptw.render(ptw.decide(nights))
+    headline = [line for line in body.splitlines() if line.startswith("**")][0]
+    # 1 dated calendar night, and the run half still accounts for all three.
+    assert "1 of 1 calendar night(s)" in headline
+    assert "1 of 3 run(s) counted" in headline
+    assert "2 of 2" not in headline and "1 of 2 calendar" not in headline
+    # ⛔ And they must not simply vanish: excluded from the ratio, named below.
+    assert "2 run(s) carry no usable date" in body
+    # ⛔ The disclosure must not contradict the headline it sits under. Its
+    # first draft said "(the run ratio still counts them)" while the headline
+    # said "1 of 3 run(s) counted" — and these two are UNREADABLE, so they are
+    # not counted at all. Found by review of the fix round, which is the round
+    # this repo's own history says is most likely to carry a new defect.
+    assert "0 of them are counted" in body
+    assert "still counts them" not in body
+    # And the span must not print a night label nobody wrote (pre-existing,
+    # fixed here because the line above now promises `?`).
+    assert "None .." not in body and "?#1 .. 2026-08-20" in body
+
+
+def test_undated_runs_do_not_manufacture_a_multi_run_night_warning():
+    """The `workflow_dispatch` caveat is a claim about re-runs; nothing here
+    measured one. Comparing calendar nights against ALL counted runs made a
+    single undated counted run print it anyway."""
+    night = ptw.Night(None, 101)
+    night.canary_pct["BenchmarkControlCanaryCPU"] = 0.02
+    night.canary_pct["BenchmarkControlCanarySleep"] = 0.0
+    night.ratios_pct["BenchmarkAlpha"] = 1.0
+    body = ptw.render(ptw.decide([night, _run("2026-08-20", 102, alpha=1.0)]))
+    assert "carry no usable date" in body
+    assert "more than one run" not in body
+    # ⛔ The positive control for the assertion above: here the undated run IS
+    # counted, so the disclosure must say so rather than reusing one phrasing
+    # for both cases. Without this pair, "0 of them are counted" could be
+    # hard-coded and nothing would notice.
+    assert "1 of them is counted" in body
+
+
+@pytest.mark.parametrize("canary_pct, expect_counted", [
+    # ⛔ The first row is the dangerous one and the reason this is parametrised.
+    # 0.8% PASSES the default 1.0% gate — the night is COUNTED — and still fails
+    # the 0.5% candidate, so the counterfactual table alone was enough to kill
+    # the page for a night the engine had just accepted.
+    (0.8, True),
+    (4.0, False),
+])
+def test_an_undated_night_never_takes_the_whole_page_down(canary_pct,
+                                                          expect_counted):
+    """⛔ PRE-EXISTING crash, verified against `origin/main` before fixing.
+
+    `counterfactual_gates` put `night.night_utc` in a set and sorted it, so one
+    readable night without a date mixed `None` with `str` and raised TypeError.
+    render() died with exit 1 — the code this module documents as NEVER USED so
+    that a non-zero exit cannot be read as "found a regression".
+
+    Reproduction on a clean worktree at `origin/main` (5b7f6c3):
+
+        CRASH TypeError sequence item 0: expected str instance, NoneType found
+
+    ⇒ this test's counterfactual is NOT zero: it fails on unpatched main, which
+    is the strongest form of evidence available here and the reason this case is
+    in the suite rather than in a follow-up ticket.
+    """
+    undated = ptw.Night(None, 101)
+    undated.canary_pct["BenchmarkControlCanaryCPU"] = canary_pct
+    undated.canary_pct["BenchmarkControlCanarySleep"] = 0.0
+    undated.ratios_pct["BenchmarkAlpha"] = 1.0
+    result = ptw.decide([undated, _run("2026-08-20", 102, alpha=1.0)])
+    assert (undated.outcome == ptw.NIGHT_COUNTED) is expect_counted
+    body = ptw.render(result)          # ⛔ this is the assertion: it must return
+    # Named as its own term, never folded into the calendar-night count — two
+    # different undated nights must not collapse into one rejection.
+    assert "+ 1 undated run(s)" in body
+    assert "| 0.5% | 0 + 1 undated run(s) |" in body
+
+
+def test_one_predicate_decides_a_nights_label_everywhere_it_is_printed():
+    """⛔ The span, the Nights table and the calendar ratio must agree.
+
+    Review found them disagreeing: two used `night_utc or '?'` and one used an
+    `isinstance` test, so a truthy non-string date was classified as un-dated by
+    the ratio while the span and the table printed it verbatim — the page
+    saying a run appears as `?` while showing a night label nobody wrote.
+
+    ⚠️ HONEST REACHABILITY. Both production loaders reject this shape already
+    (`nights_from_dataset` raises, `nights_from_gh` only makes `str` or `None`),
+    so this test's counterfactual detection against CI inputs is ZERO. It is
+    here for the reason `_ordering_key` documents for its own guard: Nights are
+    also built by hand, and the disagreement between the three call sites was
+    real regardless of who could reach it.
+    """
+    hand_built = ptw.Night(20260816, 1)
+    hand_built.canary_pct["BenchmarkControlCanaryCPU"] = 0.02
+    hand_built.canary_pct["BenchmarkControlCanarySleep"] = 0.0
+    hand_built.ratios_pct["BenchmarkAlpha"] = 1.0
+    body = ptw.render(ptw.decide([hand_built, _run("2026-08-20", 2, alpha=1.0)]))
+    assert "20260816" not in body, "a night label nobody wrote reached the page"
+    assert "carry no usable date" in body
+    _, rows = _nights_table_rows(body)
+    assert "| ?#1 |" in rows[0]
+
+
+def test_from_gh_never_borrows_a_head_sha_for_an_unidentifiable_run(tmp_path):
+    """⛔ Found by blind review: `{run["databaseId"]: ...}` is last-one-wins.
+
+    Two runs reported without a `databaseId` would share the key None, so every
+    night whose run id is also None would be stamped with whichever head came
+    last — a wrong sha that renders exactly like a right one, in the column
+    that exists to attribute payloads to producers.
+    """
+    binhome = tmp_path / "bin"
+    binhome.mkdir()
+    stub = binhome / "gh"
+    stub.write_text(_GH_STUB.replace('"databaseId": 900 + i,',
+                                     '"databaseId": None,'),
+                    encoding="utf-8")
+    stub.chmod(0o755)
+    env = dict(os.environ, PATH=f"{binhome}{os.pathsep}{os.environ['PATH']}",
+               STUB_MODE="ok", STUB_RUNS="2")
+    proc = subprocess.run(
+        [sys.executable, str(_TOOLS_DIR / "paired_trend_watch.py"),
+         "--from-gh", "--limit", "3", "--cache-dir", str(tmp_path / "cache")],
+        capture_output=True, text=True, encoding="utf-8", env=env, timeout=120)
+    assert proc.returncode == ptw.EXIT_OK, proc.stderr
+    _, rows = _nights_table_rows(proc.stdout)
+    assert rows, "no night rows rendered"
+    assert {row.split("|")[3].strip() for row in rows} == {"—"}
+    for i in (0, 1):
+        assert _stub_head(i)[:7] not in proc.stdout
+
+
+def test_summary_headline_keeps_both_halves_of_each_ratio_in_one_unit():
+    """#1571 §7, as a property rather than a fixed string.
+
+    ⚠️ NARROWER THAN THE TICKET. #1571 §7 reads as though the whole headline
+    were undisclosed; it is not — `render()` already appends a caveat when a
+    calendar night carries more than one run. The undisclosed part was the
+    denominator `of {len(nights)}`, a run count in a calendar-night sentence.
+    Only that changed, and the ticket's framing is corrected in the PR body
+    rather than quietly satisfied.
+    """
+    body = ptw.render(ptw.decide(ptw.nights_from_dataset(DATASET)))
+    headline = [line for line in body.splitlines() if line.startswith("**")][0]
+    assert re.search(r"\b6 of 6 calendar night\(s\)", headline)
+    assert re.search(r"\b6 of 6 run\(s\) counted", headline)
+    # ⛔ The old mixed form must not come back under a different wording.
+    assert "counted calendar night(s) (" not in headline
 
 
 def _run(date, run_id, alpha=None):
@@ -1109,6 +1514,221 @@ def test_two_runs_of_one_night_are_one_night_for_the_consecutive_rule():
     assert ptw.decide(nights, k=2)["fired"] == {"BenchmarkAlpha": "2026-08-11"}
 
 
+def test_an_undated_run_never_completes_a_k_consecutive_sequence():
+    """⛔ The mirror of the test above, and the same disease with sides swapped.
+
+    That one pins "two runs of ONE occasion are not two nights". This one pins
+    "ZERO known occasions are not one night" — a run whose date nobody knows
+    used to become a calendar night of its own (`None` is a valid dict key), sit
+    beside the real nights, and COMPLETE the run.
+
+    ⚠️ The positive control is the whole test. Asserting only that the pair does
+    not fire proves nothing: a single dated night does not fire at k=2 either,
+    so the assertion passes with the guard removed AND with the rule broken in
+    the other direction. The two halves below differ by exactly one thing —
+    whether the second night has a date — and they must disagree.
+    """
+    dated_only = [_run("2026-08-20", 102, 9.0)]
+    with_undated = [_run(None, 101, 9.0), _run("2026-08-20", 102, 9.0)]
+    two_dated = [_run("2026-08-19", 101, 9.0), _run("2026-08-20", 102, 9.0)]
+
+    # ⛔ The un-dated run must buy NOTHING: same verdict as the lone night.
+    assert ptw.decide(with_undated, k=2)["fired"] == {}
+    assert ptw.decide(with_undated, k=2)["status"] == \
+        ptw.decide(dated_only, k=2)["status"]
+    # ⭐ Positive control: give that second night a real date and it DOES fire.
+    # Without this the assertions above are satisfied by a rule that never fires.
+    assert ptw.decide(two_dated, k=2)["fired"] == {"BenchmarkAlpha": "2026-08-20"}
+
+
+def test_a_series_of_only_undated_runs_is_inconclusive_never_clear():
+    """⛔ The guard above must not become a new way to render silence as CLEAR.
+
+    Excluding un-dated runs from the calendar-night rule means a series of
+    nothing but un-dated runs produces no groups at all. `judgeable()` has to
+    read that as "the rule could not run", not as "the rule ran and found
+    nothing" — the single distinction this whole module exists to preserve.
+    """
+    result = ptw.decide([_run(None, 101, 9.0), _run(None, 102, 9.0)], k=2)
+    assert result["status"] == ptw.STATUS_INCONCLUSIVE
+    assert result["status"] != ptw.STATUS_CLEAR
+    assert result["fired"] == {}
+
+
+def test_excluding_undated_runs_from_the_rule_does_not_hide_them():
+    """⛔ Excluded from the RULE, not dropped from the PAGE.
+
+    A night that vanishes from the report is the failure this module refuses;
+    the guard would trade one silence for another if these rows disappeared.
+    """
+    body = ptw.render(ptw.decide([_run(None, 101, 9.0),
+                                  _run("2026-08-20", 102, 9.0)], k=2))
+    header, rows = _nights_table_rows(body)
+    assert len(rows) == 2, rows                      # both listed
+    assert "| ?#1 |" in rows[0]                        # the un-dated one, labelled
+    assert "1 of 1 calendar night(s)" in body        # calendar ratio excludes it
+    assert "2 of 2 run(s) counted" in body           # run total still carries it
+    assert "1 run(s) carry no usable date" in body   # and it is named
+    # ⛔ And its READING survives too. This assertion is why the test exists at
+    # all: writing it found a further site of the same defect family
+    # (`over_not_sustained` keyed by the raw date), which took the whole page
+    # down with a TypeError before this run reached the table.
+    # ⚠️ The label is `?#101`, not a bare `?`: a later round found that a shared
+    # `?` merged distinct un-dated runs and dropped a reading, so the key now
+    # carries the run id. See `_night_key`.
+    assert "| `BenchmarkAlpha` | 1 (08-20) + 1 undated run(s) (?#1) |" in body
+
+
+def test_two_undated_runs_are_two_readings_not_one():
+    """⛔ The defect the PREVIOUS round's own fix introduced.
+
+    That round keyed `over_not_sustained` on `_night_label()`, which returns a
+    bare `?` for every un-dated run. Two distinct un-dated runs over the
+    threshold therefore shared one dict key: the smaller reading was overwritten
+    and left the page entirely, while the disclosure two lines above said both
+    runs were counted. The docstring justifying that same fix asserted
+    "excluded is not dropped" — and dropped one.
+
+    ⚠️ The one-reading-only assertion is the point. Asserting `len == 2` alone
+    would pass on a rule that merges nothing anywhere; asserting the smaller
+    value is PRESENT is what pins the merge.
+    """
+    result = ptw.decide([_run(None, 1, 9.0), _run(None, 2, 12.0)], k=5)
+    hits = result["over_not_sustained"]["BenchmarkAlpha"]
+    assert len(hits) == 2, hits
+    assert sorted(hits.values()) == [9.0, 12.0]      # ⛔ neither reading lost
+    body = ptw.render(result)
+    assert "| `BenchmarkAlpha` | 0 (—) + 2 undated run(s) (?#1, ?#2) |" in body
+
+
+def test_inconclusive_reasons_from_an_undated_night_do_not_kill_the_page():
+    """⛔ PRE-EXISTING, reproduced on `origin/main` before fixing.
+
+    `inconclusive` was keyed on the raw `night_utc`, so an un-dated COUNTED
+    night missing a reading put `None` in a dict beside a date string, and
+    `render()`'s `sorted(per_night.items())` raised TypeError — the whole page,
+    Nights table included, replaced by a traceback and exit 1.
+
+        origin/main 7fe8515f, same probe:
+        TypeError: '<' not supported between instances of 'str' and 'NoneType'
+
+    ⚠️ The previous round's prose called `over_not_sustained` the "third call
+    site", which read as "all of them". This was the fourth.
+    """
+    result = ptw.decide([_run("2026-08-18", 1, 9.0),
+                         _run("2026-08-20", 2),      # dated, no reading
+                         _run(None, 3)], k=2)        # un-dated, no reading
+    body = ptw.render(result)                        # ⛔ must not raise
+    keys = result["inconclusive"]["BenchmarkAlpha"]
+    # ⛔ Tuples, not `?#1`: a later round made the key structured so that a
+    # night whose date IS the string `?#1` cannot collide with the first
+    # un-dated run. `key_label` is what the page prints.
+    assert set(keys) == {(ptw.KEY_UNDATED, 1),
+                         (ptw.KEY_DATED, "2026-08-20")}, keys
+    assert "?#1" in body
+
+    # ⛔ BOTH assignment sites, because `inconclusive` is populated twice and a
+    # first cut of this test only reached one. `decide()` fills it from
+    # `night.inconclusive` (a reason the payload itself carried) AND from the
+    # union pass for benchmarks a night mentioned nowhere. The break harness
+    # said so: reverting the first site turned nothing red.
+    carried = _run(None, 4)
+    carried.inconclusive["BenchmarkAlpha"] = "unreadable-ratio (nan)"
+    result = ptw.decide([_run("2026-08-18", 1, 9.0), carried], k=2)
+    keys = result["inconclusive"]["BenchmarkAlpha"]
+    assert set(keys) == {(ptw.KEY_UNDATED, 1)}, keys
+    assert "?#1" in ptw.render(result)
+
+
+def test_undated_nights_do_not_swallow_a_work_definition_move():
+    """⛔ The site review did NOT report — found by enumerating every key/sort.
+
+    `digest_transitions` kept one entry per `night_utc`, so N un-dated nights
+    collapsed onto the single key `None` and only the last survived. Three
+    un-dated nights whose work-definition digest changed twice reported ZERO
+    transitions: two MOVES gone, from the one table whose entire job is to say
+    the two sides stopped measuring the same thing.
+
+    ⚠️ That is worse than a wrong number. ADR-032 §工作定義漂移 rests on this
+    table — a ratio only means anything while both sides do the same work.
+    """
+    sha = {"a": "a" * 64, "b": "b" * 64, "c": "c" * 64}
+
+    def digested(run_id, which):
+        night = _run(None, run_id, 1.0)
+        night.digest_status = "checked"
+        night.digest_sides = {"reference": sha[which], "main": sha[which]}
+        return night
+
+    transitions = ptw.digest_transitions(
+        [digested(1, "a"), digested(2, "b"), digested(3, "c")])
+    assert len(transitions) == 2, transitions
+    assert [t["from"] for t in transitions] == ["?#1", "?#2"]
+    assert all(t["sides"]["reference"] is True for t in transitions)  # MOVED
+
+
+@pytest.mark.parametrize("ids", [
+    (None, None),        # ⛔ both loaders allow a null run_id
+    (101, "101"),        # ⛔ and both allow int AND str for the same value
+])
+def test_undated_runs_stay_distinct_even_when_their_run_ids_are_not(ids):
+    """⛔ The previous round keyed un-dated runs on `f"?#{run_id}"`.
+
+    `run_id` is not an identity. `nights_from_dataset` passes `run_id is None`
+    through explicitly and accepts int OR str; `databaseId` can be absent from a
+    `gh` record. Both cases formatted to the SAME key — `?#None`, or `?#101` for
+    an int and a string of the same digits — and the readings merged, dropping
+    the smaller one. That is the exact defect the key was introduced to end,
+    surviving inside the fix for it.
+
+    ⇒ the key is an ordinal over the series now. Position is the only thing an
+    un-dated run reliably has.
+    """
+    left, right = ids
+    result = ptw.decide([_run(None, left, 9.0), _run(None, right, 12.0)], k=5)
+    hits = result["over_not_sustained"]["BenchmarkAlpha"]
+    assert sorted(hits.values()) == [9.0, 12.0], hits   # ⛔ neither lost
+    assert set(hits) == {(ptw.KEY_UNDATED, 1), (ptw.KEY_UNDATED, 2)}, hits
+
+
+def test_a_run_id_ten_characters_long_is_not_mistaken_for_a_date():
+    """⛔ `_short_night` used to strip a year from anything of length 10.
+
+    `?#12345678` is ten characters, so it rendered as `45678`: the `?` gone, the
+    id truncated, a label nobody wrote — produced by the one helper whose whole
+    job is to stop that. Length is a guess about dates; this asks whether the
+    label IS one.
+
+    ⚠️ Reachable through `nights_from_dataset`, which accepts a string run_id of
+    any length. The `gh` path happens to produce 11-digit ids, which is luck,
+    not a guard.
+    """
+    assert ptw._short_night("?#12345678") == "?#12345678"
+    assert ptw._short_night("2026-08-20") == "08-20"
+    assert ptw._short_night("?#1") == "?#1"
+
+
+def test_the_not_sustained_table_counts_nights_not_undated_runs():
+    """⛔ Two numbers on one page must not contradict each other.
+
+    Giving each un-dated run its own key fixed the dropped reading and then
+    counted those runs as NIGHTS: a page whose headline said `1 of 1 calendar
+    night(s)` carried a row claiming `4`. Three of those four are runs nobody
+    can place, and one of them may BE the dated night.
+
+    The gate table already answers this with `+ N undated run(s)`; the same
+    shape is used here rather than a second invention.
+    """
+    result = ptw.decide([_run("2026-08-20", 1, 9.7), _run(None, 2, 9.0),
+                         _run(None, 3, 9.1), _run(None, 4, 9.2)], k=5)
+    body = ptw.render(result)
+    assert "**INCONCLUSIVE** over 1 of 1 calendar night(s)" in body
+    assert ("| `BenchmarkAlpha` | 1 (08-20) + 3 undated run(s) "
+            "(?#1, ?#2, ?#3) |") in body
+    # ⛔ The old form claimed four nights. It must not come back in any wording.
+    assert "| 4 (" not in body
+
+
 def test_a_reading_over_the_threshold_is_never_silently_omitted():
     """Not a finding, but a reading the page never mentions is
     indistinguishable from a reading that never happened."""
@@ -1182,7 +1802,7 @@ def test_a_benchmark_missing_from_one_nights_payload_is_disclosed():
     result = ptw.decide(nights, k=2)
     assert "BenchmarkAlpha" in result["inconclusive"]
     assert "absent-from-payload" in result["inconclusive"]["BenchmarkAlpha"][
-        "2026-08-11"]
+        (ptw.KEY_DATED, "2026-08-11")]
     assert "BenchmarkAlpha" in ptw.render(result)
 
 
@@ -1223,8 +1843,9 @@ def test_the_gate_counterfactual_uses_the_same_predicate_as_the_verdict():
     result = ptw.decide([good, half])
     assert [n.outcome for n in result["nights"]] == [
         ptw.NIGHT_COUNTED, ptw.NIGHT_NOT_COUNTED]
-    for _gate, rejected in ptw.counterfactual_gates(result["nights"]):
+    for _gate, rejected, n_undated in ptw.counterfactual_gates(result["nights"]):
         assert rejected == ["2026-08-21"]
+        assert n_undated == 0
     body = ptw.render(result)
     assert "| 0.5% | 1 (2026-08-21) |" in body
 
@@ -1328,7 +1949,8 @@ def test_a_window_of_undecidable_nights_is_inconclusive_not_clear():
 def test_over_not_sustained_counts_calendar_nights_not_runs():
     nights = [_run("2026-08-20", 1, 9.1), _run("2026-08-20", 2, 9.2)]
     result = ptw.decide(nights, k=2)
-    assert result["over_not_sustained"]["BenchmarkAlpha"] == {"2026-08-20": 9.2}
+    assert result["over_not_sustained"]["BenchmarkAlpha"] == {
+        (ptw.KEY_DATED, "2026-08-20"): 9.2}
     row = [l for l in ptw.render(result).splitlines()
            if "`BenchmarkAlpha` |" in l][0]
     assert "1 (08-20)" in row
@@ -1343,8 +1965,9 @@ def test_the_gate_counterfactual_counts_calendar_nights_not_runs():
     for night in nights:
         night.canary_pct["BenchmarkControlCanaryCPU"] = 4.0
     result = ptw.decide(nights)
-    for _gate, rejected in ptw.counterfactual_gates(result["nights"]):
+    for _gate, rejected, n_undated in ptw.counterfactual_gates(result["nights"]):
         assert rejected == ["2026-08-21"]
+        assert n_undated == 0
     assert "2026-08-21, 2026-08-21" not in ptw.render(result)
 
 
@@ -1677,3 +2300,226 @@ def test_the_pinned_defaults_still_produce_the_anchor_verdict():
     assert "**FINDINGS**" in proc.stdout
     assert "`MergePartialConfigs_1000`@08-17" in proc.stdout
 
+
+
+def test_a_night_whose_date_looks_like_an_ordinal_is_still_a_night():
+    """⛔ Blind review, round 3 of the key scope. My OWN fix introduced this.
+
+    `render()` classified the not-sustained table by `str(k).startswith("?#")`
+    — inferring identity from the printed form, one round after the lesson that
+    identity cannot be inferred from the run. A night whose `night_utc` is
+    literally `"?#7"` is DATED (`_dated()` type-checks; neither loader
+    format-checks) and was counted as an un-dated RUN, so the headline and the
+    row below it disagreed about the same series. Measured on `0ec854a2`:
+
+        _dated(weird) = True
+        **INCONCLUSIVE** over 2 of 2 calendar night(s) … 2 of 2 run(s) counted.
+        | `BenchmarkAlpha` | 1 (08-19) + 1 undated run(s) (?#7) | +12.00% |
+
+    ⚠️ Not reachable from the CI loaders today, for the same reason `_dated`
+    and `_ordering_key` document their own defence in depth: Nights are also
+    built by hand, by tests, and by future adapters.
+    """
+    weird = _run("?#7", 2, 12.0)
+    assert ptw._dated(weird) is True                # premise of the finding
+    result = ptw.decide([_run("2026-08-19", 1, 9.0), weird], k=5)
+    body = ptw.render(result)
+    assert "2 of 2 calendar night(s)" in body
+    # ⛔ Two dated nights, zero un-dated runs. The row must agree with that.
+    assert "| `BenchmarkAlpha` | 2 (08-19, ?#7) | +12.00% |" in body
+    assert "undated run(s)" not in body
+
+
+def test_a_night_whose_date_looks_like_an_ordinal_does_not_merge_with_one():
+    """⛔ The same input, one section deeper — and a DROPPED READING, not just a
+    miscount.
+
+    Under the string key both `night_utc == "?#1"` and the first un-dated run
+    formatted to the key `"?#1"`, so the two collapsed into one entry in
+    `over_not_sustained` and the smaller reading left the page. That is the
+    identical silent merge `assign_night_keys` was written to end, re-entering
+    through the display alphabet. Structured keys cannot collide.
+    """
+    result = ptw.decide([_run("?#1", 1, 9.0), _run(None, 2, 12.0)], k=5)
+    hits = result["over_not_sustained"]["BenchmarkAlpha"]
+    assert sorted(hits.values()) == [9.0, 12.0], hits    # ⛔ neither lost
+    assert set(hits) == {(ptw.KEY_DATED, "?#1"), (ptw.KEY_UNDATED, 1)}, hits
+
+
+def test_undated_runs_are_ordered_as_numbers_not_as_text():
+    """The ordinal is a number. Sorting its printed form put `?#10` between
+    `?#1` and `?#2`:
+
+        | `BenchmarkAlpha` | 0 (—) + 11 undated run(s) (?#1, ?#10, ?#11, ?#2,
+        ?#3, ?#4, ?#5, ?#6, ?#7, ?#8, ?#9) | +9.10% |
+
+    Display only — no reading is lost — but the ordinal's ONLY meaning is
+    position in the series, and a page that scrambles it is asserting an order
+    nobody measured.
+    """
+    result = ptw.decide([_run(None, i, 9.0 + i / 100) for i in range(1, 12)],
+                        k=99)
+    body = ptw.render(result)
+    assert ("+ 11 undated run(s) (?#1, ?#2, ?#3, ?#4, ?#5, ?#6, ?#7, ?#8, "
+            "?#9, ?#10, ?#11)") in body
+
+
+def test_the_inconclusive_section_orders_ordinals_the_same_way():
+    """The not-sustained table and the inconclusive list read the same keys, and
+    only the first one was checked. This sorts by key rather than by text there
+    too — the same defect, one section apart.
+    """
+    nights = [_run(None, i) for i in range(1, 12)]      # no reading at all
+    nights[0].ratios_pct["BenchmarkAlpha"] = 9.0        # give the bench a name
+    body = ptw.render(ptw.decide(nights, k=99))
+    # ⛔ The reasons line, not the `unjudgeable` bullet above it — both start
+    # `- \`BenchmarkAlpha\``, and a first cut of this test read the wrong one.
+    line = next(ln for ln in body.splitlines()
+                if ln.startswith("- `BenchmarkAlpha` — "))
+    assert re.findall(r"\?#\d+", line) == [f"?#{i}" for i in range(2, 12)], line
+
+
+def test_the_page_never_spells_an_ordinal_outside_key_label():
+    """`key_label` is the ONLY code in the module that contains `?#` at all.
+
+    ⛔ THE FIRST TWO CUTS OF THIS TEST BOTH CLAIMED MORE THAN THEY CHECKED, and
+    the second was caught by blind review rather than by me:
+
+        cut 1   a substring scan of the file. The docstrings recording WHY the
+                string key was wrong quote `f"?#{run_id}"` and
+                `startswith("?#")` verbatim, so prose counted as live call
+                sites (measured 3, not 1) and the test failed on the very
+                comment explaining the fix.
+        cut 2   an AST scan for two SHAPES — an f-string interpolating after
+                `?#`, and a call to `.startswith("?#")`. Review appended two
+                functions that reintroduce exactly the defects this test names,
+                written differently, and measured it still passing:
+
+                    def _rogue_format(n):    return "?#" + str(n)
+                    def _rogue_classify(k):  return "?#" not in str(k)
+
+                ⇒ its docstring said "one place can be wrong about it" while
+                the code recognised a list of syntax. Naming two shapes is not
+                the same as owning the alphabet — the same over-claim this
+                module keeps producing, this time inside its own guard.
+
+    ⇒ this check is stated over the ALPHABET instead: no string literal in the
+    module's code, outside `key_label`, may contain `?#`.
+
+    ⛔ AND CUT 3 — this one — OVER-CLAIMED TOO, which is why the wording below
+    is this careful. It used to end "Concatenation, `%`, `.format`, `in`, `==`,
+    slicing, `startswith` — every one of them needs those two characters
+    somewhere, so every one of them is caught." A fifth-round reviewer split
+    the literal and measured that sentence false:
+
+            marker = "?" + "#"      # two Constants, neither contains `?#`
+
+        ⇒ invisible here, and `Concatenation` was named as covered.
+
+    ⇒ WHAT THIS CHECK ACTUALLY OWNS: the two characters INSIDE ONE STRING
+    LITERAL. A marker assembled from pieces — `"?" + "#"`, `chr(63) + chr(35)`,
+    `"".join(...)` — escapes it, and no AST scan closes that without running
+    the code. Enumerating one more shape (constant-folding `BinOp`) would just
+    be cut 4 of the same mistake, so it is deliberately not done.
+
+    ⇒ WHAT COVERS THE REST: `test_no_second_site_can_put_an_ordinal_on_the_page`
+    below neuters `key_label` and asserts `?#` cannot reach the rendered page
+    at all. It does not care how a rogue marker is spelled — but it only sees
+    code that `render()` actually executes.
+
+    ⚠️ SO NEITHER IS COMPLETE, AND THE HOLES ARE DIFFERENT ONES: this check
+    reaches code nothing calls but only single literals; that one reaches any
+    spelling but only live paths. Both are stated so a reader can tell which
+    half is measured — the pair is a tripwire, not a proof.
+
+    ⚠️ Docstrings are exempt and MUST be: half this module's prose quotes the
+    defects it is documenting. Comments never reach the AST at all.
+
+    ⚠️ Which is why `render`'s disclosure paragraph builds its two example
+    labels by CALLING `key_label` rather than typing `?#1`, `?#2`.
+    """
+    tree = ast.parse(Path(ptw.__file__).read_text(encoding="utf-8"))
+
+    docstrings = set()
+    for node in ast.walk(tree):
+        body = getattr(node, "body", None)
+        if not isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef,
+                                 ast.AsyncFunctionDef)) or not body:
+            continue
+        first = body[0]
+        if (isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant)
+                and isinstance(first.value.value, str)):
+            docstrings.add(id(first.value))
+
+    owner = {}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for inner in ast.walk(node):
+                owner.setdefault(id(inner), node.name)
+
+    spots = sorted({owner.get(id(n), "<module>") for n in ast.walk(tree)
+                    if isinstance(n, ast.Constant) and isinstance(n.value, str)
+                    and "?#" in n.value and id(n) not in docstrings})
+    assert spots == ["key_label"], spots
+
+
+def test_a_date_shaped_like_an_ordinal_costs_a_label_but_never_a_reading():
+    """⛔ Blind review, round 4: the no-collision claim covers KEYS, not LABELS.
+
+    A night whose `night_utc` is `"?#1"` keeps its own key — nothing merges —
+    and still PRINTS `?#1`, the same text the first un-dated run prints:
+
+        | `BenchmarkAlpha` | 1 (?#1) + 2 undated run(s) (?#1, ?#2) | +20.00% |
+
+    ⚠️ THIS TEST PINS THE ACCEPTED STATE, not a bug waiting to be fixed. Every
+    repair available here decides what a value IS from the shape of its text —
+    `key_label` escaping a "date that looks like an ordinal", or `_dated()`
+    format-checking `night_utc` — and that inference is the defect the round
+    before this one existed to remove. A `night_utc` of `"?#1"` is garbage no
+    alphabet disambiguates, and neither production loader can emit one.
+
+    ⇒ what must never regress is the half that IS decidable: no reading lost,
+    every count right. That is what is asserted; the ambiguous label is
+    asserted as PRESENT so that removing it by inference has to argue with
+    this docstring first.
+    """
+    result = ptw.decide([_run("?#1", 1, 9.0), _run(None, 2, 12.0),
+                         _run(None, 3, 20.0)], k=99)
+    hits = result["over_not_sustained"]["BenchmarkAlpha"]
+    # ⛔ Three distinct keys, three distinct readings — nothing merged.
+    assert sorted(hits.values()) == [9.0, 12.0, 20.0], hits
+    assert set(hits) == {(ptw.KEY_DATED, "?#1"), (ptw.KEY_UNDATED, 1),
+                         (ptw.KEY_UNDATED, 2)}, hits
+
+    body = ptw.render(result)
+    assert "1 of 1 calendar night(s)" in body        # one dated night
+    assert "3 of 3 run(s) counted" in body           # all three readings kept
+    assert "| `BenchmarkAlpha` | 1 (?#1) + 2 undated run(s) (?#1, ?#2) |" in body
+
+
+def test_no_second_site_can_put_an_ordinal_on_the_page(monkeypatch):
+    """The behavioural half of the pair above: spelling-independent, path-bound.
+
+    ⛔ Written because the static scan owns only the two characters inside one
+    string literal, and round 5 measured a live way past it (`"?" + "#"`). This
+    asks the question the scan cannot: with `key_label` NEUTERED, can `?#`
+    still reach the page? If it can, something other than `key_label` put it
+    there — and it does not matter whether that something used an f-string,
+    concatenation, `%`, `.format`, or `chr(63)`.
+
+    ⚠️ ITS OWN HOLE, stated so the pair is not read as a proof: it only sees
+    code `render()` actually executes. A rogue formatter nothing calls is
+    invisible HERE and visible to the static scan. That is the whole reason
+    both exist; neither is sufficient and they fail in opposite directions.
+    """
+    nights = [_run("2026-08-20", 1, 9.0), _run(None, 2, 12.0),
+              _run(None, 3, 20.0)]
+
+    # ⛔ Positive control FIRST. Without it a scenario that never renders a
+    # single ordinal would pass this test by carrying nothing to find.
+    assert "?#" in ptw.render(ptw.decide(copy.deepcopy(nights), k=99))
+
+    monkeypatch.setattr(ptw, "key_label", lambda key: "<LBL>")
+    body = ptw.render(ptw.decide(copy.deepcopy(nights), k=99))
+    assert "<LBL>" in body, "the patch never took effect — vacuous otherwise"
+    assert "?#" not in body, body
