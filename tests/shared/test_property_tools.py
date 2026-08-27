@@ -865,10 +865,11 @@ class TestIterYamlFilesProperties:
         assert names == {"tenant.yaml"}
 
 
-# The exact class safe_label promises to neutralise: C0 plus DEL. Spelled out
+# The exact class safe_label promises to neutralise: C0, DEL and C1. Spelled out
 # here from codepoints rather than reusing the module's own regex, so the test
 # cannot agree with a broken implementation by sharing its bug.
-_C0_AND_DEL = frozenset(chr(c) for c in range(0x00, 0x20)) | frozenset("\x7f")
+_C0_DEL_C1 = (frozenset(chr(c) for c in range(0x00, 0x20))
+              | frozenset(chr(c) for c in range(0x7f, 0xa0)))
 
 
 class TestSafeLabelProperties:
@@ -881,11 +882,11 @@ class TestSafeLabelProperties:
 
     @given(st.text(max_size=120))
     @PILOT_SETTINGS
-    def test_output_never_contains_a_c0_or_del_character(self, s):
+    def test_output_never_contains_a_control_character(self, s):
         # THE safety property. A newline would forge a report line and an ESC
         # would start an ANSI sequence; neither may survive for ANY input.
         out = lio.safe_label(s)
-        assert not any(c in out for c in _C0_AND_DEL), (
+        assert not any(c in out for c in _C0_DEL_C1), (
             f"control char survived: {out!r}"
         )
 
@@ -929,12 +930,28 @@ class TestSafeLabelProperties:
             "evil?[PASS] FORGED?x.yaml"
         assert lio.safe_label("\x1b[31mred\x1b[0m.yaml") == "?[31mred?[0m.yaml"
 
-    def test_documented_gaps_are_really_gaps(self):
-        # ⛔ The docstring says C1 and bidi are NOT covered. Pinning that here
-        # so the limitation is a measured fact rather than a claim, and so
-        # widening the class later is a deliberate, visible change.
-        assert lio.safe_label("a\x85b") == "a\x85b"          # C1 NEL
-        assert lio.safe_label("a‮b") == "a‮b"      # bidi override
+    def test_c1_is_covered_because_nel_forges_a_line(self):
+        # #1538 review round: U+0085 (NEL) is decoded as a LINE BREAK by
+        # terminals that honour C1, so leaving it raw forges a report line the
+        # same way a bare "\n" does — the exact thing this function exists to
+        # stop. An adversarial review measured it passing through ten already-
+        # fixed tools, which is why the class widened from [C0+DEL] to
+        # [C0+DEL+C1].
+        # ⚠️ What was measured is BYTE passthrough, not terminal rendering.
+        assert lio.safe_label("a\x85b") == "a?b"        # NEL
+        assert lio.safe_label("a\x9bb") == "a?b"        # CSI
+
+    def test_bidi_is_still_a_documented_gap(self):
+        # ⛔ Deliberately NOT covered, and pinned so that changing it is a
+        # visible decision rather than a drift. A bidi override reorders a line
+        # VISUALLY without breaking it — a different attack class from forging
+        # a line. Folding it in would blur what safe_label promises.
+        assert lio.safe_label("a‮b") == "a‮b"
+
+    def test_non_ascii_names_are_not_collateral_damage(self):
+        # Widening to C1 must not touch ordinary non-ASCII filenames — this
+        # repo's configs and docs are Chinese-first.
+        assert lio.safe_label("中文租戶.yaml") == "中文租戶.yaml"
 
     def test_non_str_input_is_coerced(self):
         # Callers pass exceptions and Path objects, not just str.
