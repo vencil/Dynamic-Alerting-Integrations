@@ -260,7 +260,11 @@ A count that survives here is ANCHORED to the commit or ticket it was taken on
 because it was never about now. A count about now belongs in an assertion,
 where it goes red instead of going quietly wrong. Where an old number was worth
 keeping, the fix applied on #1404 was to re-anchor it, not to delete it; where
-it was decorative, it went.
+it was decorative, it went. ⚠️ The deleted ones are not lost: every one of them
+is in the history of this file, and `git log -S<the number>` on the paragraph
+that used to carry it is the way back. `(see COUNTS)` in this module means "a
+number stood here and was removed on purpose" — it does not mean the number is
+repeated below, and nothing below repeats it.
 
 ⛔ The sibling module reached this rule first and for the same reason — see its
 `Deliberately NO counts here` note, whose three numbers all drifted within two
@@ -272,12 +276,26 @@ floors and synthetic-corpus constants, so NOT ONE prose count here had an
 assertion behind it — including those that still happened to be correct, which
 had simply not moved yet. Second, most had already rotted, and one — a share of
 "the path-like tokens" — is not reproduced by ANY reading of the phrase it
-used, so these are not merely stale. Third, and worst: one of them was never
-well defined. How many files a 4096-byte slice truncates differs between two
+used, so these are not merely stale. Third: one of them was never well defined
+at all. How many files a 4096-byte slice truncates differs between two
 checkouts of the SAME commit, because `.gitattributes` puts the visual
 snapshots behind Git LFS and an unsmudged pointer fits inside the slice while
-the real PNG does not. A count over file CONTENTS in this repo is not a
-property of the commit at all.
+the real PNG does not. The difference is only a handful of files, so this is
+the rarest of the three rather than the largest — but it is the only one no
+re-measurement can fix, because a count over file CONTENTS in this repo is not
+a property of the commit at all.
+
+⛔ AND THE SWEEP THAT PRODUCED THIS PARAGRAPH MISSED INSTANCES — twice, in two
+different ways, so do not read the module as cleared. It keyed on digits
+describing quantities of tree objects, which is blind to (a) numbers written as
+words and (b) present-tense claims that carry no number at all ("the suite
+stays green", "all three floors below cleared") — both were sitting here and
+both were false or stale. Worse, and worth the irony: the sweep read the file
+LINE BY LINE, so a claim whose own text wrapped across a line break was
+invisible to it — a `grep` for the offending phrase returned clean while the
+phrase was right there. That is #1373 exactly, one level up, inside the tooling
+built to audit the guard against it. Rejoin continuations before scanning this
+file for anything, including prose.
 
 ⚠️ So do not restore a count to "complete" a sentence that reads vague. The
 vagueness is the fix. If the number is load-bearing, put it in an assertion —
@@ -414,15 +432,19 @@ LINE_PREFIX = re.compile(r"^[ \t]*(?:#|//|\*|--|;)?[ \t]*")
 # (Counts omitted deliberately — see COUNTS in the module docstring.)
 # ⚠️ That is not the same as "measured to earn their place". Relaxing any one of
 # them — or all three at once — does not change what this guard reports: zero on
-# this branch, and the same two references on the merge base, where those two
-# were still live (#1452). They keep generic names out of the scan, and on
-# today's corpus that value is prospective, not demonstrated.
+# #1452's head, and the same two references on its merge base, where those two
+# were still live. ⛔ An earlier wording said "on this branch"; it is re-anchored
+# here for the reason COUNTS gives, and note that a `grep` for that phrase does
+# NOT find this line, because the phrase itself wraps. They keep generic names
+# out of the scan, and that value is prospective, not demonstrated.
 _MIN_BARE_NAME = 12
 
 # Coverage floors — they answer "did the scan run at all?", nothing finer.
 # ⛔ Do NOT read them as protecting the token model: blind review cut
-# `_extensions()` down to a SINGLE extension and all three floors still passed
-# (the token floor alone carries 11.2× slack as shipped). What holds the
+# `_extensions()` down to a SINGLE extension and all three floors still passed —
+# the token floor sits an order of magnitude below what this tree produces, so
+# it has nothing to say about the model. (The multiplier that used to stand here
+# had drifted; see COUNTS.) What holds the
 # model honest is
 # `test_extensions_are_derived_and_longest_first`. `_MIN_FILES` is weaker
 # still — `_unread_drift` runs first and demands every tracked file, so by the
@@ -691,9 +713,12 @@ def _decoded_shortfall(read_chars: int, on_disk: int) -> str | None:
 
     `_decode_whole` asserts `len(raw) == st_size`, which is an assertion about
     its INPUT — moving the truncation one line later (`raw.decode(...)[:4096]`)
-    satisfies it and still drops most of the corpus. Blind review measured that
-    edit: every path survived, all three floors below cleared, the run got 2.7x
-    faster, and a wrapped reference injected past the cut went unseen.
+    satisfies it and still drops most of the corpus. That is what this tripwire
+    exists for. ⚠️ Blind review measured that edit BEFORE this tripwire existed:
+    every path survived, the floors that existed then all cleared, the run got
+    2.7x faster, and a wrapped reference injected past the cut went unseen. Read
+    that as the argument for the check, not as today's behaviour — today the
+    same edit is caught here, and there are four floors, not three.
 
     The bound is arithmetic, not a tuned constant: UTF-8 uses at most 4 bytes
     per code point, so decoding N bytes yields at least N/4 characters. Any
@@ -771,9 +796,12 @@ def _decode_whole(raw: bytes, size: int, path: str) -> str:
     the slice cuts in; decoded characters answer a different question. An
     earlier wording gave both as absolute counts, and also gave a share of "the
     path-like tokens" that NEITHER reading of that phrase reproduces (see
-    COUNTS). Measured: a wrapped reference injected past
-    the cut is invisible while the suite stays green (and the run gets 2.4x
-    faster, which is what makes the edit attractive).
+    COUNTS). ⚠️ Measured BEFORE this check existed: a wrapped reference injected
+    past the cut was invisible while the suite stayed green, and the run got
+    2.4x faster, which is what makes the edit attractive. Today that edit is
+    caught — by this function and by `_decoded_shortfall` — so read the
+    paragraph as the argument for the check rather than as a live hole. It was
+    still written in the present tense one revision after the check landed.
 
     Pure, so `test_partial_read_is_refused` can hand it a short buffer — an
     inline check over real files can never fail and so can never be shown to
@@ -1004,8 +1032,8 @@ def test_extensions_are_derived_and_longest_first() -> None:
     """Two properties, both of which failed in earlier versions of this module.
 
     Derived: the set must cover what the tree actually contains — the first
-    version hand-listed 16 extensions and omitted `png`, which the tree
-    contains three tracked files of.
+    version hand-listed 16 extensions and omitted `png`, which the tree does
+    contain tracked files of.
     Longest-first: Python's `|` is first-match, so `js` before `jsx` makes
     `.jsx` unreachable and the scan reports the truncated name, which is often
     a real build artefact. Sorting by length removes the failure mode instead
@@ -1037,8 +1065,13 @@ def test_extensions_are_derived_and_longest_first() -> None:
     # Set equality against a SYNTHETIC tree is what no constant can satisfy:
     # neither extension below names anything in this repo, and the repeat proves
     # the set de-duplicates. ⚠️ `_tracked` is read from module globals at call
-    # time, so swapping it here is enough; the caches must be cleared on BOTH
-    # sides, or the fake set leaks into every later test in the session.
+    # time, so swapping it here is enough. The cache_clear BEFORE the swap is
+    # load-bearing — dropping it turns this assertion red. The three AFTER it
+    # are not: blind review deleted all three and the module stayed green,
+    # because `_extension_token` has already cached the real pattern by the time
+    # the swap happens and nothing else calls `_extensions()` again. They are
+    # kept as defence for the next caller, and this note says which half is
+    # measured rather than claiming both are.
     fake_tree = ("zfake/one.zzzq", "zfake/two.qqq",
                  "zfake/three.qqq", "zfake/Makefile")
     real_tracked = globals()["_tracked"]
@@ -1070,16 +1103,32 @@ def test_the_reported_line_is_the_line_of_the_break() -> None:
     ⚠️ The expected number is CONSTRUCTED from the fixture — the break sits on
     the line after the padding — and not copied from what the function returned,
     which would only re-state today's behaviour including its bugs.
+
+    ⛔ The subject is this module, and the premise guard below is not
+    decoration. The first version of this test borrowed an unrelated tracked
+    script as its subject (#1566 names it); blind review moved that script, and
+    the test went red saying the line number was wrong when in fact the fixture
+    had simply gone away — the exact message shape
+    `test_each_tripwire_fires_on_degenerate_input` warns about, where the
+    cheapest way to believe it is to loosen the detector. Its three siblings all
+    carry this guard; this one shipped without it.
+
+    ⚠️ The script is named on the ticket and NOT here on purpose: `verify_diff`
+    builds its map from the paths a file mentions, so writing the path into this
+    docstring re-created the very coupling the fix removed — every future editor
+    of that script would be sent to run this guard. Verified by re-reading the
+    regenerated map, not by trusting the edit.
     """
-    target = "scripts/ops/win_git_escape.bat"
+    target = "tests/ops/test_wrapped_path_references.py"
+    assert target in _tracked(), f"{target} moved; re-point this fixture"
     head, tail = target[:20], target[20:]
 
     for lead in (0, 4):
         text = "\n".join(["# padding"] * lead + [f"# see {head}", f"# {tail}", ""])
-        assert _wrapped_references(text) == [(lead + 1, target)], (
+        hits = _wrapped_references(text)
+        assert hits == [(lead + 1, target)], (
             f"with {lead} line(s) of padding the break is on line {lead + 1}, "
-            f"so that is the line the contributor must be sent to; got "
-            f"{_wrapped_references(text)}")
+            f"so that is the line the contributor must be sent to; got {hits}")
 
 
 def test_extensionless_paths_are_tokenised_too() -> None:
