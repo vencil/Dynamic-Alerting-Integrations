@@ -759,7 +759,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "166adbae10143647873cf2fe3143c3ce50ad9c50d33ad32ae7f084d2dbbccc17",
+ "source_digest": "1577169dc2aec9004950d5e0b4de4de06b4a9d0ae7b44656961a965284819b4d",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -2111,7 +2111,8 @@
   ],
   "scripts/ops/win_git_escape.bat": [
    "tests/dx/test_bat_label_integrity.py",
-   "tests/dx/test_preflight_bash.py"
+   "tests/dx/test_preflight_bash.py",
+   "tests/ops/test_wrapped_path_references.py"
   ],
   "scripts/session-guards": [
    "tests/dx/test_line_ending_policy.py"

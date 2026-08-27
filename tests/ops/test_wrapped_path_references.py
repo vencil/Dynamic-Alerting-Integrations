@@ -297,12 +297,26 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 
 # Longest extension worth treating as one. What the cap EXCLUDES is measured
-# rather than guessed: ten tails in this tree are longer (`gitattributes`,
-# `trufflehogignore`, `dockerignore`, `doclinkignore`, `claudeignore`,
-# `helmignore`, `gitignore`, `nojekyll`, `gitkeep`, `example`), and every one of
-# them is a REAL extension — not the dotted version fragment an earlier wording
-# claimed. Nothing is lost: a path the extension pattern cannot fullmatch is
-# exactly what `_extensionless_token` takes, so those files are tokenised there.
+# rather than guessed: the tails longer than it are the dotfile family
+# (`gitattributes`, `trufflehogignore`, `dockerignore`, `doclinkignore`,
+# `claudeignore`, `helmignore`, `gitignore`, `nojekyll`, `gitkeep`, `example`),
+# and every one of them is a REAL extension — not the dotted version fragment an
+# earlier wording claimed. Nothing is lost: a path the extension pattern cannot
+# fullmatch is exactly what `_extensionless_token` takes, so those files are
+# tokenised there.
+#
+# ⛔ THIS BOUND IS NOT GUARDED, deliberately, and that is measured rather than
+# assumed. #1566 lists it as one of three unguarded properties, having shown
+# that raising it to 20 leaves the whole module green. Asked the other way —
+# what does raising it actually DO — the answer is nothing this guard can see:
+# the dotfile family moves out of `_extensionless_token` and into the extension
+# pattern, and the set of tokens the scan RESOLVES over the whole tree is
+# identical either way. A bound with no detection consequence has nothing to
+# assert about, and an assertion pinning its VALUE would only pin today's
+# choice. ⚠️ If you change it, re-run that comparison rather than trusting this
+# note. The other two properties #1566 names DID buy something and are pinned,
+# by `test_extensions_are_derived_and_longest_first` and
+# `test_the_reported_line_is_the_line_of_the_break`.
 _MAX_EXTENSION = 6
 
 
@@ -1012,6 +1026,60 @@ def test_extensions_are_derived_and_longest_first() -> None:
                  "tests/e2e/visual.spec.ts-snapshots/a-really-long-shot.png"):
         assert _extension_token().findall(name) == [name], (
             f"{name} was truncated by the extension alternation")
+
+    # ⛔ AND THE HALF THE NAME PROMISES BUT THE ABOVE CANNOT SHOW. Everything so
+    # far is satisfied by a frozen tuple of today's extensions: the ordering
+    # holds, the required members are all in it, and the spellings above still
+    # match. #1566 measured exactly that — `return <today's tuple>` left this
+    # module green — which is how a derivation quietly becomes a hand-list, the
+    # failure the docstring above says it exists to prevent.
+    #
+    # Set equality against a SYNTHETIC tree is what no constant can satisfy:
+    # neither extension below names anything in this repo, and the repeat proves
+    # the set de-duplicates. ⚠️ `_tracked` is read from module globals at call
+    # time, so swapping it here is enough; the caches must be cleared on BOTH
+    # sides, or the fake set leaks into every later test in the session.
+    fake_tree = ("zfake/one.zzzq", "zfake/two.qqq",
+                 "zfake/three.qqq", "zfake/Makefile")
+    real_tracked = globals()["_tracked"]
+    _extensions.cache_clear()
+    globals()["_tracked"] = lambda: fake_tree
+    try:
+        assert set(_extensions()) == {"zzzq", "qqq"}, (
+            "_extensions() must be DERIVED from the tree it is given — it "
+            "returned something other than the extensions of the synthetic "
+            "listing, so it is not reading the tree at all")
+    finally:
+        globals()["_tracked"] = real_tracked
+        _extensions.cache_clear()
+        _extension_token.cache_clear()
+        _extensionless_token.cache_clear()
+
+
+def test_the_reported_line_is_the_line_of_the_break() -> None:
+    """`_offenders` renders this as `line {line} → {token}`, and that string is
+    the ONLY locating information a blocked contributor gets.
+
+    ⛔ Nothing pinned it. Every other assertion over `_wrapped_references` in
+    this module reads `[t for _, t in hits]` or compares against `[]`, so the
+    first element of the tuple is discarded six times over and never checked
+    once; #1566 measured the consequence — reporting `index + 2` instead of
+    `index + 1` left the module fully green. An off-by-one here sends somebody
+    to a line with nothing wrong on it while the suite says everything is fine.
+
+    ⚠️ The expected number is CONSTRUCTED from the fixture — the break sits on
+    the line after the padding — and not copied from what the function returned,
+    which would only re-state today's behaviour including its bugs.
+    """
+    target = "scripts/ops/win_git_escape.bat"
+    head, tail = target[:20], target[20:]
+
+    for lead in (0, 4):
+        text = "\n".join(["# padding"] * lead + [f"# see {head}", f"# {tail}", ""])
+        assert _wrapped_references(text) == [(lead + 1, target)], (
+            f"with {lead} line(s) of padding the break is on line {lead + 1}, "
+            f"so that is the line the contributor must be sent to; got "
+            f"{_wrapped_references(text)}")
 
 
 def test_extensionless_paths_are_tokenised_too() -> None:
