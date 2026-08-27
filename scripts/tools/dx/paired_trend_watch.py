@@ -1217,7 +1217,14 @@ def render(result):
     nights = result["nights"]
     counted = result["counted"]
     lines = []
-    span = (f"{nights[0].night_utc} .. {nights[-1].night_utc}" if nights else "empty series")
+    # ⚠️ PRE-EXISTING, not introduced here, and it is fixed only because this
+    # change made it contradict its neighbour: an un-dated night rendered the
+    # span as `None .. 2026-08-20` — a night label nobody wrote, of exactly the
+    # kind `nights_from_dataset()` raises over — while the new disclosure line
+    # below says those runs appear as `?`. `?` is what the Nights table already
+    # prints for the same fact, so all three now agree.
+    span = (f"{nights[0].night_utc or '?'} .. {nights[-1].night_utc or '?'}"
+            if nights else "empty series")
 
     lines.append("## Paired trend watch — SUMMARY ONLY (ADR-032 phase 2, PR-B1)")
     lines.append("")
@@ -1253,13 +1260,24 @@ def render(result):
                  f"{n_calendar_all} calendar night(s) in the series ({span}) "
                  f"— {len(counted)} of {len(nights)} run(s) counted.")
     if undated:
+        n_undated_counted = len([n for n in undated
+                                 if n.outcome == NIGHT_COUNTED])
         lines.append("")
+        # ⛔ This sentence says only what is true in every case. Its first
+        # draft read "(the run ratio still counts them)" — false in the very
+        # case the disclosure exists for: an un-dated night is most often a
+        # download failure, which is UNREADABLE, so the headline says "1 of 3
+        # run(s) counted" and the aside said they were counted anyway. Worse,
+        # `counted` is this module's own term for passing the canary gate, so
+        # the wrong reading was also the trained one. Review caught it — prose
+        # written while fixing a precision defect, carrying a precision defect.
         lines.append(
             f"⚠️ {len(undated)} run(s) carry no usable date and are on NO "
-            "calendar night — they are excluded from the calendar ratio above "
-            "(the run ratio still counts them) because nothing here knows "
-            "whether they share a night. They are listed in the Nights table "
-            "under `?`.")
+            "calendar night, so they are excluded from the calendar ratio "
+            "above — nothing here knows whether they share a night. They "
+            f"remain in the run TOTAL ({len(nights)}), and "
+            f"{n_undated_counted} of them {'is' if n_undated_counted == 1 else 'are'} "
+            "counted. They are listed in the Nights table under `?`.")
     # ⛔ Compared against DATED counted runs, not all of them: otherwise a
     # single un-dated run makes the two numbers differ and prints a claim about
     # `workflow_dispatch` re-runs that nothing measured.

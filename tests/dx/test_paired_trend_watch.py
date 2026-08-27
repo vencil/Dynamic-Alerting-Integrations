@@ -1212,6 +1212,16 @@ def test_headline_never_folds_undated_runs_into_one_calendar_night():
     assert "2 of 2" not in headline and "1 of 2 calendar" not in headline
     # ⛔ And they must not simply vanish: excluded from the ratio, named below.
     assert "2 run(s) carry no usable date" in body
+    # ⛔ The disclosure must not contradict the headline it sits under. Its
+    # first draft said "(the run ratio still counts them)" while the headline
+    # said "1 of 3 run(s) counted" — and these two are UNREADABLE, so they are
+    # not counted at all. Found by review of the fix round, which is the round
+    # this repo's own history says is most likely to carry a new defect.
+    assert "0 of them are counted" in body
+    assert "still counts them" not in body
+    # And the span must not print a night label nobody wrote (pre-existing,
+    # fixed here because the line above now promises `?`).
+    assert "None .." not in body and "? .. 2026-08-20" in body
 
 
 def test_undated_runs_do_not_manufacture_a_multi_run_night_warning():
@@ -1225,6 +1235,11 @@ def test_undated_runs_do_not_manufacture_a_multi_run_night_warning():
     body = ptw.render(ptw.decide([night, _run("2026-08-20", 102, alpha=1.0)]))
     assert "carry no usable date" in body
     assert "more than one run" not in body
+    # ⛔ The positive control for the assertion above: here the undated run IS
+    # counted, so the disclosure must say so rather than reusing one phrasing
+    # for both cases. Without this pair, "0 of them are counted" could be
+    # hard-coded and nothing would notice.
+    assert "1 of them is counted" in body
 
 
 def test_from_gh_never_borrows_a_head_sha_for_an_unidentifiable_run(tmp_path):
