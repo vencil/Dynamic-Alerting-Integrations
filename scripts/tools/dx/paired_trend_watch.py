@@ -492,6 +492,25 @@ def assign_night_keys(nights):
 
     ⚠️ So a key is never printed raw. `key_label()` is the only place `?#` is
     spelled, and `_night_label()` / `render()` go through it.
+
+    ⛔ AND THE NO-COLLISION CLAIM IS ABOUT KEYS, NOT ABOUT LABELS. Blind review
+    measured the residue: a night whose `night_utc` is `"?#1"` keeps its own
+    key — nothing merges, no reading is lost, every count stays right — and
+    still PRINTS `?#1`, the same text the first un-dated run prints:
+
+        | `BenchmarkAlpha` | 1 (?#1) + 2 undated run(s) (?#1, ?#2) | +20.00% |
+
+    ⇒ two meanings, one string, and the reader cannot tell them apart.
+
+    ⚠️ AND IT IS LEFT THAT WAY ON PURPOSE. Every fix available here is worse
+    than the defect: making `key_label` escape a date that "looks like an
+    ordinal", or making `_dated()` format-check `night_utc`, both decide what a
+    value IS from the shape of its text — the exact inference this whole scope
+    exists to remove, and the source of the finding one round earlier. The
+    honest position is that a `night_utc` of `"?#1"` is garbage input no
+    alphabet can disambiguate, that neither production loader can produce it
+    (`nights_from_gh` slices `createdAt`, `nights_from_dataset` raises on a
+    non-`str`), and that the guarantee stated above covers identity only.
     """
     undated = 0
     for night in nights:
@@ -1515,8 +1534,14 @@ def render(result):
             "above — nothing here knows whether they share a night. They "
             f"remain in the run TOTAL ({len(nights)}), and "
             f"{n_undated_counted} of them {'is' if n_undated_counted == 1 else 'are'} "
+            # ⛔ The two example labels are BUILT by `key_label`, not typed out.
+            # Not decoration: it makes `key_label` the only place in this file
+            # where the two characters `?#` appear in code at all, which is
+            # what lets the structural test below state a checkable invariant
+            # instead of a list of syntax it happens to recognise.
             "counted. They are listed in the Nights table — and referred to "
-            "elsewhere on this page — as `?#1`, `?#2` … , numbered by their "
+            f"elsewhere on this page — as `{key_label((KEY_UNDATED, 1))}`, "
+            f"`{key_label((KEY_UNDATED, 2))}` … , numbered by their "
             "position in this series. ⛔ That number is an ORDINAL, not a date "
             "and not a run id: it exists only so two un-dated runs can be told "
             "apart, and it says nothing about which night either one was.")

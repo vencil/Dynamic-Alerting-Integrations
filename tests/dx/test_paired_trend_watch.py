@@ -2380,44 +2380,96 @@ def test_the_inconclusive_section_orders_ordinals_the_same_way():
 
 
 def test_the_page_never_spells_an_ordinal_outside_key_label():
-    """One place formats `?#`, so one place can be wrong about it.
+    """`key_label` is the ONLY code in the module that contains `?#` at all.
 
-    ⚠️ A structural check, not a behavioural one: it is the thing that keeps
-    the three tests above from being re-broken by a fourth site inventing its
-    own `f"?#{...}"`.
+    ⛔ THE FIRST TWO CUTS OF THIS TEST BOTH CLAIMED MORE THAN THEY CHECKED, and
+    the second was caught by blind review rather than by me:
+
+        cut 1   a substring scan of the file. The docstrings recording WHY the
+                string key was wrong quote `f"?#{run_id}"` and
+                `startswith("?#")` verbatim, so prose counted as live call
+                sites (measured 3, not 1) and the test failed on the very
+                comment explaining the fix.
+        cut 2   an AST scan for two SHAPES — an f-string interpolating after
+                `?#`, and a call to `.startswith("?#")`. Review appended two
+                functions that reintroduce exactly the defects this test names,
+                written differently, and measured it still passing:
+
+                    def _rogue_format(n):    return "?#" + str(n)
+                    def _rogue_classify(k):  return "?#" not in str(k)
+
+                ⇒ its docstring said "one place can be wrong about it" while
+                the code recognised a list of syntax. Naming two shapes is not
+                the same as owning the alphabet — the same over-claim this
+                module keeps producing, this time inside its own guard.
+
+    ⇒ the invariant is stated over the ALPHABET instead: no string literal in
+    the module's code, outside `key_label`, may contain `?#`. Concatenation,
+    `%`, `.format`, `in`, `==`, slicing, `startswith` — every one of them needs
+    those two characters somewhere, so every one of them is caught, and the
+    check no longer has to predict how the next mistake will be spelled.
+
+    ⚠️ Docstrings are exempt and MUST be: half this module's prose quotes the
+    defects it is documenting. Comments never reach the AST at all.
+
+    ⚠️ Which is why `render`'s disclosure paragraph builds its two example
+    labels by CALLING `key_label` rather than typing `?#1`, `?#2`. That is what
+    makes an invariant this strict statable at all.
     """
-    src = Path(ptw.__file__).read_text(encoding="utf-8")
-    # ⛔ Over the AST, not over the text: the docstrings that record WHY the
-    # string key was wrong quote `f"?#{run_id}"`, and a plain substring count
-    # read those as live call sites (measured: 3, not 1).
-    tree = ast.parse(src)
-    spots = []
+    tree = ast.parse(Path(ptw.__file__).read_text(encoding="utf-8"))
+
+    docstrings = set()
     for node in ast.walk(tree):
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        body = getattr(node, "body", None)
+        if not isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef,
+                                 ast.AsyncFunctionDef)) or not body:
             continue
-        for inner in ast.walk(node):
-            if not isinstance(inner, ast.JoinedStr):
-                continue
-            # ⛔ A `?#` INTERPOLATION — a literal ending in `?#` followed by a
-            # substituted value — not merely the characters `?#` in an
-            # f-string. `render`'s disclosure paragraph says the words "as
-            # `?#1`, `?#2` …" and is prose, not a second formatter.
-            for left, right in zip(inner.values, inner.values[1:]):
-                if (isinstance(left, ast.Constant)
-                        and isinstance(left.value, str)
-                        and left.value.endswith("?#")
-                        and isinstance(right, ast.FormattedValue)):
-                    spots.append(node.name)
+        first = body[0]
+        if (isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant)
+                and isinstance(first.value.value, str)):
+            docstrings.add(id(first.value))
+
+    owner = {}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for inner in ast.walk(node):
+                owner.setdefault(id(inner), node.name)
+
+    spots = sorted({owner.get(id(n), "<module>") for n in ast.walk(tree)
+                    if isinstance(n, ast.Constant) and isinstance(n.value, str)
+                    and "?#" in n.value and id(n) not in docstrings})
     assert spots == ["key_label"], spots
 
-    # ⛔ And no site classifies a key by the shape of its printed form — the
-    # round-3 finding itself. Over the AST for the same reason: the docstring
-    # that records the finding quotes `startswith("?#")` verbatim, so a
-    # substring scan fails on the very comment explaining the fix.
-    sniffers = [n for n in ast.walk(tree)
-                if isinstance(n, ast.Call)
-                and isinstance(n.func, ast.Attribute)
-                and n.func.attr == "startswith"
-                and any(isinstance(a, ast.Constant) and isinstance(a.value, str)
-                        and "?#" in a.value for a in n.args)]
-    assert sniffers == [], [ast.dump(n) for n in sniffers]
+
+def test_a_date_shaped_like_an_ordinal_costs_a_label_but_never_a_reading():
+    """⛔ Blind review, round 4: the no-collision claim covers KEYS, not LABELS.
+
+    A night whose `night_utc` is `"?#1"` keeps its own key — nothing merges —
+    and still PRINTS `?#1`, the same text the first un-dated run prints:
+
+        | `BenchmarkAlpha` | 1 (?#1) + 2 undated run(s) (?#1, ?#2) | +20.00% |
+
+    ⚠️ THIS TEST PINS THE ACCEPTED STATE, not a bug waiting to be fixed. Every
+    repair available here decides what a value IS from the shape of its text —
+    `key_label` escaping a "date that looks like an ordinal", or `_dated()`
+    format-checking `night_utc` — and that inference is the defect the round
+    before this one existed to remove. A `night_utc` of `"?#1"` is garbage no
+    alphabet disambiguates, and neither production loader can emit one.
+
+    ⇒ what must never regress is the half that IS decidable: no reading lost,
+    every count right. That is what is asserted; the ambiguous label is
+    asserted as PRESENT so that removing it by inference has to argue with
+    this docstring first.
+    """
+    result = ptw.decide([_run("?#1", 1, 9.0), _run(None, 2, 12.0),
+                         _run(None, 3, 20.0)], k=99)
+    hits = result["over_not_sustained"]["BenchmarkAlpha"]
+    # ⛔ Three distinct keys, three distinct readings — nothing merged.
+    assert sorted(hits.values()) == [9.0, 12.0, 20.0], hits
+    assert set(hits) == {(ptw.KEY_DATED, "?#1"), (ptw.KEY_UNDATED, 1),
+                         (ptw.KEY_UNDATED, 2)}, hits
+
+    body = ptw.render(result)
+    assert "1 of 1 calendar night(s)" in body        # one dated night
+    assert "3 of 3 run(s) counted" in body           # all three readings kept
+    assert "| `BenchmarkAlpha` | 1 (?#1) + 2 undated run(s) (?#1, ?#2) |" in body
