@@ -1180,7 +1180,27 @@ def nights_from_gh(workflow, limit, cache_dir):
 # ── Rendering ─────────────────────────────────────────────────────────────
 #
 # English, like every sibling under `scripts/tools/dx/` and like the existing
-# `bench-record` step summary this appends to (owner ruling on #1496).
+# `bench-record` step summary this appends to.
+#
+# ⛔ CITATION CORRECTED. This line used to read "(owner ruling on #1496)". That
+# is the WRONG PR: #1496's body and both of its comments contain no such ruling
+# — they are a CodeRabbit walkthrough and a coverage bot. The ruling is real and
+# is on #1244, where the owner rejected the same "translate this string to
+# Traditional Chinese" finding three times, writing:
+#
+#   「CLAUDE.md 的繁中規範規範的是 user-facing prose（AI 回應與文件），不是
+#     覆寫既有工具輸出的語言慣例；若要統一改語言，那是獨立的一致性工作」
+#     — #1244 discussion_r3652358781
+#
+# Found because CodeRabbit raised the same finding on #1571 and the reply had to
+# produce the authority. A citation nobody can follow is worth less than no
+# citation: it reads as settled while resting on nothing. That is this module's
+# own disease — asserting more than the evidence carries — in its own comment.
+#
+# ⚠️ What is still NOT written down anywhere: whether that rule covers a repo
+# tool's rendered output at all. Both readings survive the ruling above, so the
+# finding will recur on every PR that touches an operator-visible string until
+# `dev-rules.md` states the boundary and `.coderabbit.yaml` is aligned to it.
 
 def _pct(value):
     return f"{value:+.2f}%"
