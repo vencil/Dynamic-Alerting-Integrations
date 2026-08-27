@@ -188,7 +188,33 @@ GATING_CANARIES = frozenset({"BenchmarkControlCanaryCPU"})
 # 2026-08-23 is v1, so rejecting it would leave the engine with no real series
 # to run on for two weeks. What v1 does NOT have is `workload_digest`, and that
 # absence is carried as DIGEST_ABSENT rather than quietly treated as "no move".
+#
+# ⛔ BUT `bench-paired/v1` NAMES TWO INCOMPATIBLE PAYLOADS, and this tuple alone
+# cannot say so. #1455 (`60f4523`, 2026-08-16) added three top-level fields to
+# the v1 payload — `status`, `reference_sha`, `workload_drift` — and left the
+# schema string untouched. `status` is REQUIRED here, so the shape written
+# before that commit passes this membership test and is then rejected two
+# guards later. Accepting a string whose meaning changed under it is what the
+# rejection message below calls refusing to interpret unknown fields; the split
+# is the mirror case — fields this tool DOES know, under a version number that
+# stopped identifying them. So the boundary is declared rather than implied,
+# and `SCHEMA_V1_PRE_STATUS_KEYS` is what the older producer actually wrote.
+# ⚠️ The reverse pairing is what shows no rule was in force: `c7d0586` bumped
+# v1→v2 for one OPTIONAL field while `60f4523` added a REQUIRED one for free.
+# ⛔ There is still no such rule as of this commit — writing one, plus a gate
+# on `pair_bench_ratio.py`'s key set, is tracked in #1571 and lands separately.
+# Pointing at a rule that does not exist yet is the failure this ADR line keeps
+# hitting from the other side, so it is named as absent rather than cited.
 SUPPORTED_SCHEMAS = ("bench-paired/v1", "bench-paired/v2")
+SCHEMA_V1 = "bench-paired/v1"
+SCHEMA_V1_STATUS_COMMIT = "60f4523"
+SCHEMA_V1_STATUS_PR = "#1455"
+SCHEMA_V1_STATUS_DATE = "2026-08-16"
+# The exact top-level key set of `pair_bench_ratio.py`'s payload at
+# `60f4523^`. `tests/dx/test_paired_trend_watch.py` pins this against that
+# commit's own source via `git show`, so it cannot drift into a guess.
+SCHEMA_V1_PRE_STATUS_KEYS = frozenset({
+    "schema", "reference_tag", "cpu", "evaluated", "inconclusive"})
 
 # The tri-state vocabulary `pair_bench_ratio.py` writes. Anything outside it is
 # an input we do not understand, and an input we do not understand is unreadable
@@ -243,7 +269,8 @@ class Night:
     window, which is the same false-all-clear in a different costume.
     """
 
-    __slots__ = ("night_utc", "run_id", "schema", "cpu", "reference_sha",
+    __slots__ = ("night_utc", "run_id", "head_sha", "schema", "cpu",
+                 "reference_sha",
                  "ratios_pct", "canary_pct", "inconclusive",
                  "drift_status", "drift_files", "drift_count",
                  "digest_status", "digest_sides", "digest_n_files",
@@ -252,6 +279,14 @@ class Night:
     def __init__(self, night_utc, run_id):
         self.night_utc = night_utc
         self.run_id = run_id
+        # The commit the NIGHTLY ran, not the reference it measured against —
+        # `reference_sha` below is the other one, and confusing them would
+        # attribute a night to the wrong side of the comparison. `gh run list`
+        # has always returned it (`analyze_bench_history.py`'s `--json` asks
+        # for `headSha`); until #1571 this consumer downloaded it and dropped
+        # it on the floor, which is why a v1 night's rejection could only
+        # describe its shape and never its provenance.
+        self.head_sha = None
         self.schema = None
         self.cpu = None
         self.reference_sha = None
@@ -428,6 +463,39 @@ def load_night(payload, *, night_utc, run_id):
 
     night.cpu = payload.get("cpu")
     night.reference_sha = payload.get("reference_sha")
+
+    # ⛔ The split-version branch comes BEFORE the generic status check, and
+    # only because the generic message named the symptom. A real night from
+    # before #1455 was rejected as `unknown night status None`, which reads as
+    # a corrupt payload; it is a perfectly well-formed v1 that this consumer
+    # cannot read, and the difference decides whether an operator goes looking
+    # for a broken producer or recognises a version boundary.
+    #
+    # ⚠️ WHAT THIS BRANCH DOES AND DOES NOT ESTABLISH. It reads the PAYLOAD's
+    # shape. It does NOT prove the run predates `60f4523` — that is provenance,
+    # and provenance lives in `head_sha`, rendered beside the night. So the
+    # message says the shape matches, not that the run is old. Stating the
+    # stronger thing would be the same over-claim this ADR line has had to
+    # correct before: an inference dressed as a measurement.
+    if night.schema == SCHEMA_V1 and "status" not in payload:
+        if frozenset(payload) == SCHEMA_V1_PRE_STATUS_KEYS:
+            return night.unreadable(
+                f"schema {SCHEMA_V1} written before {SCHEMA_V1_STATUS_PR} "
+                f"({SCHEMA_V1_STATUS_COMMIT}, {SCHEMA_V1_STATUS_DATE}) — that "
+                "commit added the required `status` field WITHOUT bumping the "
+                "schema string, so this string names two incompatible "
+                "payloads. This one carries the older key set exactly, and "
+                "that producer never wrote `status`: a legal v1 this consumer "
+                "cannot read, not a corrupt payload. ⚠️ Read off the payload's "
+                "shape; the run's own provenance is its head sha")
+        return night.unreadable(
+            f"schema {SCHEMA_V1} without the required `status` field, and its "
+            f"keys ({', '.join(sorted(payload))}) are neither the pre-"
+            f"{SCHEMA_V1_STATUS_PR} v1 key set nor a payload carrying "
+            "`status`. ⛔ Named separately from the known older shape on "
+            "purpose: that one is a version boundary, this one is unaccounted "
+            "for, and collapsing them would let a truncated payload borrow an "
+            "explanation that was measured for something else")
 
     status = payload.get("status")
     if status not in ("OK", "INCONCLUSIVE"):
@@ -1059,7 +1127,26 @@ def nights_from_gh(workflow, limit, cache_dir):
 
     ready = [p for p in pairs if isinstance(p, tuple)]
     failed = [p for p in pairs if not isinstance(p, tuple)]
-    return nights_from_paths(ready) + failed
+    out = nights_from_paths(ready) + failed
+
+    # ⛔ Stamped after loading, by run id, rather than threaded through
+    # `nights_from_paths` as a fourth positional element. Two reasons, and the
+    # second is the one that matters: the offline path has no `gh` run record
+    # to carry, and a night that failed to download — the case with the least
+    # to go on — gets its provenance here too, which a loader-only parameter
+    # would have skipped.
+    # ⛔ Runs without a `databaseId` are LEFT OUT of the map rather than keyed
+    # on None. A dict comprehension is last-one-wins, so two such records would
+    # share the key None and every unidentifiable night would be stamped with
+    # whichever head happened to come last — a wrong sha rendering as an
+    # ordinary one, in the column whose entire job is attribution. Dropping
+    # them makes an unidentifiable run render "—", which is the true answer.
+    head_by_run = {run["databaseId"]: run.get("headSha") for run in runs
+                   if run.get("databaseId") is not None}
+    for night in out:
+        if night.run_id is not None:
+            night.head_sha = head_by_run.get(night.run_id)
+    return out
 
 
 # ── Rendering ─────────────────────────────────────────────────────────────
@@ -1134,11 +1221,49 @@ def render(result):
 
     lines.append("## Paired trend watch — SUMMARY ONLY (ADR-032 phase 2, PR-B1)")
     lines.append("")
-    n_calendar = len({n.night_utc for n in counted})
-    lines.append(f"**{result['status']}** over {n_calendar} counted calendar "
-                 f"night(s) ({len(counted)} run(s)) of {len(nights)} in the "
-                 f"series ({span}).")
-    if n_calendar != len(counted):
+    # ⛔ Two ratios, each with both halves in the SAME unit. The previous line
+    # read "N counted calendar night(s) (M run(s)) of {len(nights)}" — and that
+    # trailing denominator is a RUN count, so the headline "N of X" mixed
+    # calendar nights with runs. Every night has carried exactly one run so far,
+    # which is precisely why it could sit there unnoticed; one
+    # `workflow_dispatch` re-run is enough to make the number unreadable.
+    # ⚠️ Narrower than #1571 §7 proposed. That entry read as though the whole
+    # line were undisclosed; the caveat below it already discloses the
+    # multi-run case. What was NOT disclosed is this denominator, so only it
+    # changes.
+    # ⛔ A run with no usable date is on NO calendar night, so it is kept out
+    # of the calendar ratio and named below instead. Review caught the first
+    # cut folding them together: `nights_from_gh` writes
+    # `night_utc = created[:10] or None`, so every dateless run collapses onto
+    # the single key None and three distinct runs rendered as "1 of 2 calendar
+    # night(s)". Counting them as one is a fabricated number and counting them
+    # as N is a different claim — nobody knows whether they share a night. The
+    # ratio therefore answers only for runs that HAVE a date, and the rest are
+    # reported as a count that cannot be placed. ⚠️ The un-dated group is most
+    # likely to be exactly the download-failure rows, which is the group least
+    # able to survive being silently merged.
+    def _dated(night):
+        return isinstance(night.night_utc, str) and bool(night.night_utc)
+
+    dated_counted = [n for n in counted if _dated(n)]
+    undated = [n for n in nights if not _dated(n)]
+    n_calendar = len({n.night_utc for n in dated_counted})
+    n_calendar_all = len({n.night_utc for n in nights if _dated(n)})
+    lines.append(f"**{result['status']}** over {n_calendar} of "
+                 f"{n_calendar_all} calendar night(s) in the series ({span}) "
+                 f"— {len(counted)} of {len(nights)} run(s) counted.")
+    if undated:
+        lines.append("")
+        lines.append(
+            f"⚠️ {len(undated)} run(s) carry no usable date and are on NO "
+            "calendar night — they are excluded from the calendar ratio above "
+            "(the run ratio still counts them) because nothing here knows "
+            "whether they share a night. They are listed in the Nights table "
+            "under `?`.")
+    # ⛔ Compared against DATED counted runs, not all of them: otherwise a
+    # single un-dated run makes the two numbers differ and prints a claim about
+    # `workflow_dispatch` re-runs that nothing measured.
+    if n_calendar != len(dated_counted):
         lines.append("")
         lines.append("⚠️ Some calendar nights carry more than one run "
                      "(a `workflow_dispatch` or a re-run). The K-consecutive "
@@ -1185,9 +1310,14 @@ def render(result):
     # AND a false justification in the same stroke, since "still displayed" was
     # the stated reason for keeping the reading at all. Caught in self-review
     # before it reached a reviewer, which is not the same as it never happening.
-    lines.append("| night | run | outcome | canary (gating) | canary (info) "
-                 "| drift | digest |")
-    lines.append("|---|---|---|---|---|---|---|")
+    #
+    # `head` is the nightly's own commit. It is the only column that answers
+    # "which producer wrote this payload", which is what a v1 rejection needs
+    # and could not say while the field was downloaded and discarded. ⛔ It is
+    # NOT the reference — that is pinned per series, not per night.
+    lines.append("| night | run | head | outcome | canary (gating) "
+                 "| canary (info) | drift | digest |")
+    lines.append("|---|---|---|---|---|---|---|---|")
     for night in nights:
         deviation = night.canary_deviation_pct
         canary = _pct(deviation) if deviation is not None else "—"
@@ -1200,8 +1330,13 @@ def render(result):
             count = "?" if night.drift_count is None else night.drift_count
             named = "" if night.drift_files else ", names not archived"
             drift = f"checked, {count} file(s){named}"
+        # ⛔ Absent renders as "—", never as an empty cell: a blank column in a
+        # Markdown table is indistinguishable from a rendering bug, and this is
+        # the column whose whole job is to say what is and is not known.
+        head = f"`{night.head_sha[:7]}`" if isinstance(night.head_sha, str) \
+            and night.head_sha else "—"
         lines.append(
-            f"| {night.night_utc or '?'} | `{night.run_id or '?'}` | "
+            f"| {night.night_utc or '?'} | `{night.run_id or '?'}` | {head} | "
             f"{night.outcome}{note} | {canary} | {info_cell} | {drift} "
             f"| {night.digest_status} |")
     lines.append("")

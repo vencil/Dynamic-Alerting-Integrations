@@ -24,8 +24,20 @@ Three groups, and each pins something different:
    verified" — the same conflation the module exists to refuse.
 
 2. THE INPUT BOUNDARY (`test_guard_*`). One case per malformed input, each
-   built by mutating a REAL-SHAPED v2 payload, and each checked against the
-   UN-GUARDED behaviour first (counterfactual output is in the PR body).
+   checked against the UN-GUARDED behaviour first (counterfactual output is in
+   the PR body). Most are built by mutating a REAL-SHAPED v2 payload.
+
+   ⛔ The `bench-paired/v1` cases are NOT, and the correction is worth stating
+   because this docstring's earlier "each built by mutating a v2 payload" is
+   how the hole got in. `bench-paired/v1` names TWO incompatible payloads —
+   #1455 (`60f4523`) added the required `status` field without bumping the
+   schema string — and a v1 derived from v2 by deleting a key KEEPS `status`,
+   so it is a shape no producer ever wrote. The only v1 production actually
+   rejected was therefore the only one no test held. Both v1 fixtures are now
+   built up from the older producer and pinned to those two commits by
+   `test_the_v1_fixtures_match_the_producer_source_at_those_commits`, which
+   reads `pair_bench_ratio.py` at each revision instead of trusting a dict
+   somebody typed. See #1571 / TRK-367.
 
    ⛔ CORRECTION — an earlier draft of this docstring claimed "none of them
    crash without the guard, all of them produce a confident wrong answer".
@@ -130,6 +142,51 @@ def _night(night_utc="2026-08-23", run_id=1, **over):
     return ptw.load_night(_payload(**over), night_utc=night_utc, run_id=run_id)
 
 
+# ── the two shapes that share the string `bench-paired/v1` ────────────────
+#
+# ⛔ Built up from the older producer, NOT down from the v2 fixture. Deriving a
+# v1 by deleting keys from v2 is what let the real v1 go untested: the
+# subtraction kept `status`, which the pre-#1455 producer never wrote, so the
+# only shape production ever rejected was the one shape no test held.
+
+def _v1_pre_status_payload(**over):
+    """`pair_bench_ratio.py`'s payload at `60f4523^` — five keys, no `status`."""
+    base = {
+        "schema": "bench-paired/v1",
+        "reference_tag": "exporter/v2.9.0",
+        "cpu": "AMD EPYC 7763 64-Core Processor",
+        "evaluated": {
+            "BenchmarkAlpha": {"ratio": 1.10, "main_ns": 110.0,
+                               "reference_ns": 100.0, "n_main": 6,
+                               "n_reference": 6},
+            "BenchmarkControlCanaryCPU": {"ratio": 1.0002, "main_ns": 100.02,
+                                          "reference_ns": 100.0, "n_main": 6,
+                                          "n_reference": 6},
+            "BenchmarkControlCanarySleep": {"ratio": 1.0000, "main_ns": 100.0,
+                                            "reference_ns": 100.0, "n_main": 6,
+                                            "n_reference": 6},
+        },
+        "inconclusive": {},
+    }
+    base.update(over)
+    return base
+
+
+def _v1_post_status_payload(**over):
+    """The same schema string at `60f4523` — `status` and two more fields.
+
+    Still v1, still no `workload_digest` (that is what `c7d0586` bumped to v2
+    for), and this one IS readable. Both facts have to hold at once, which is
+    the whole reason the string is ambiguous.
+    """
+    base = dict(_v1_pre_status_payload())
+    base["status"] = "OK"
+    base["reference_sha"] = "3fd96b51f52e61566bb12c4c3fa23fed7e34dfa0"
+    base["workload_drift"] = {"status": "checked", "files": ["config_test.go"]}
+    base.update(over)
+    return base
+
+
 # ── 1. THE ANCHOR ─────────────────────────────────────────────────────────
 #
 # Quoted from `bench-paired-2026-08/README.md` §1, which quotes
@@ -220,15 +277,103 @@ def test_guard_unknown_schema_is_unreadable_not_clean():
     assert "bench-paired/v3" in night.reason
 
 
-def test_guard_schema_v1_is_readable_but_has_no_digest():
-    """v1 nights must still be usable — rejecting them empties the series."""
-    payload = _payload()
-    payload["schema"] = "bench-paired/v1"
-    del payload["workload_digest"]
-    night = ptw.load_night(payload, night_utc="2026-08-20", run_id=1)
-    assert night.readable
+def test_guard_schema_v1_after_the_status_commit_is_counted_and_has_no_digest():
+    """v1 nights must still be usable — rejecting them empties the series.
+
+    ⛔ REPLACES a test that built its v1 by deleting `workload_digest` from the
+    v2 fixture and leaving `status` in place. That subtraction produced a shape
+    no producer ever wrote, so it asserted `readable` about a payload that does
+    not exist while the one that DOES exist — the pre-#1455 v1, which carries no
+    `status` — was covered by nothing. Second time in this file that a fixture
+    resembling nothing real hid a whole case; the first is recorded in
+    `_payload()`'s own comment. Both fixtures below are built from what
+    `pair_bench_ratio.py` actually emitted, and pinned to those commits by
+    `test_the_v1_fixtures_match_the_producer_source_at_those_commits`.
+    """
+    night = ptw.load_night(_v1_post_status_payload(),
+                           night_utc="2026-08-20", run_id=1)
+    assert night.outcome == ptw.NIGHT_COUNTED
     assert night.digest_status == ptw.DIGEST_ABSENT
     assert night.digest_sides == {}
+
+
+def test_guard_schema_v1_before_the_status_commit_names_the_version_boundary():
+    """⛔ The shape production actually rejected, which had NO test at all.
+
+    ⚠️ COUNTERFACTUAL, stated plainly because most of this test buys nothing
+    new: `unreadable` was ALREADY true before this change — a payload with no
+    `status` key reaches `payload.get("status") -> None`, which is not in
+    ("OK", "INCONCLUSIVE"). Delete the whole split-version branch from the
+    module and the first assertion below still passes. The detection this test
+    adds is confined to the reason: the old message was
+    `unknown night status None`, which names a symptom and reads like a corrupt
+    payload. So the assertions that can fail are the ones about WHAT IT SAYS,
+    and the intentional-break evidence in the PR body breaks exactly those.
+    """
+    night = ptw.load_night(_v1_pre_status_payload(),
+                           night_utc="2026-08-16", run_id=1)
+    assert night.outcome == ptw.NIGHT_UNREADABLE
+    # The named cause, not the symptom.
+    assert "unknown night status" not in night.reason
+    assert ptw.SCHEMA_V1_STATUS_COMMIT in night.reason
+    assert ptw.SCHEMA_V1_STATUS_PR in night.reason
+    # ⛔ And it must NOT claim to know the run is old — that is provenance, and
+    # this branch only ever read the payload. Over-claiming here would be the
+    # same inference-dressed-as-measurement this ADR line has corrected before.
+    assert "shape" in night.reason
+
+
+def test_guard_v1_missing_status_with_an_unknown_key_set_is_named_separately():
+    """A truncated payload must not borrow the version boundary's explanation.
+
+    Same rejection, deliberately different reason: one is a known producer
+    version, the other is unaccounted for. Collapsing them would put a
+    measured-and-explained label on something nobody measured.
+    """
+    payload = _v1_pre_status_payload()
+    del payload["cpu"]
+    night = ptw.load_night(payload, night_utc="2026-08-16", run_id=1)
+    assert night.outcome == ptw.NIGHT_UNREADABLE
+    assert "neither the pre-" in night.reason
+    assert ptw.SCHEMA_V1_STATUS_COMMIT not in night.reason
+
+
+def test_the_v1_fixtures_match_the_producer_source_at_those_commits():
+    """⛔ Pins both v1 fixtures — and the module's key constant — to history.
+
+    Without this the fixtures are just two dicts somebody typed, which is the
+    failure mode they exist to end. Read from `pair_bench_ratio.py` at the two
+    commits by AST, so a reformat does not move it and a comment cannot fake it.
+
+    ⚠️ FAIL-CLOSED, NOT SKIPPED. A shallow clone makes this error rather than
+    quietly pass; `ci.yml`'s Python job takes `fetch-depth: 0` for exactly this
+    reason and `tests/lint/test_check_image_pin_capability.py` already relies on
+    it. A test that skips itself when its evidence is missing reports the same
+    green as one that checked — the conflation this whole file refuses.
+    """
+    def payload_keys(rev):
+        src = subprocess.run(
+            ["git", "show", f"{rev}:scripts/tools/dx/pair_bench_ratio.py"],
+            capture_output=True, text=True, encoding="utf-8",
+            cwd=str(_REPO), timeout=60)
+        assert src.returncode == 0, (
+            f"cannot read pair_bench_ratio.py at {rev}: {src.stderr}")
+        found = [node.value for node in ast.walk(ast.parse(src.stdout))
+                 if isinstance(node, ast.Assign)
+                 and any(isinstance(t, ast.Name) and t.id == "payload"
+                         for t in node.targets)
+                 and isinstance(node.value, ast.Dict)]
+        assert len(found) == 1, f"expected one `payload = {{...}}` at {rev}"
+        return frozenset(k.value for k in found[0].keys)
+
+    pre = payload_keys(f"{ptw.SCHEMA_V1_STATUS_COMMIT}^")
+    post = payload_keys(ptw.SCHEMA_V1_STATUS_COMMIT)
+    assert pre == ptw.SCHEMA_V1_PRE_STATUS_KEYS
+    assert pre == frozenset(_v1_pre_status_payload())
+    assert post == frozenset(_v1_post_status_payload())
+    # The split itself, asserted rather than described: same schema string,
+    # and `status` required by this consumer arrives without a bump.
+    assert "status" not in pre and "status" in post
 
 
 def test_guard_nightly_inconclusive_is_unreadable_and_keeps_its_reason():
@@ -820,9 +965,15 @@ if mode == "auth-fail":
     raise SystemExit(4)
 if argv[:2] == ["run", "list"]:
     limit = int(argv[argv.index("--limit") + 1])
+    # A DISTINCT head per run, on purpose: a shared literal would pass a
+    # consumer that stamped every night with whichever sha it saw last.
+    # ⛔ The digits must differ in the FIRST SEVEN characters — the renderer
+    # abbreviates, so trailing-digit variation would compare equal on screen
+    # and this stub would stop being able to tell the two cases apart.
     runs = [{"databaseId": 900 + i,
              "createdAt": "2026-08-%02dT03:35:00Z" % (20 + i),
-             "headSha": "deadbeef", "conclusion": "success"}
+             "headSha": ("%x" % (0xC0FFEE0 + i)).ljust(40, "0"),
+             "conclusion": "success"}
             for i in range(min(limit, int(os.environ["STUB_RUNS"])))]
     print(json.dumps(runs))
     raise SystemExit(0)
@@ -950,8 +1101,177 @@ def test_from_gh_two_runs_on_one_calendar_night_do_not_satisfy_k_of_2(tmp_path):
          "--from-gh", "--limit", "3", "--cache-dir", str(tmp_path / "cache")],
         capture_output=True, text=True, encoding="utf-8", env=env, timeout=120)
     assert proc.returncode == ptw.EXIT_OK, proc.stderr
-    assert "1 counted calendar night(s) (2 run(s))" in proc.stdout
+    # ⚠️ The assertion changed shape with #1571 §7 and is now STRICTLY
+    # stronger. It used to read `1 counted calendar night(s) (2 run(s))`, whose
+    # trailing `of {len(nights)}` was a RUN count sitting in a
+    # calendar-night sentence. Both halves of both ratios are pinned here, so
+    # the units cannot silently swap back.
+    assert "1 of 1 calendar night(s)" in proc.stdout
+    assert "2 of 2 run(s) counted" in proc.stdout
     assert "**FINDINGS**" not in proc.stdout
+
+
+# ── head sha: the provenance that was downloaded and discarded ────────────
+
+def _stub_head(i):
+    """The head sha `_GH_STUB` reports for run `i`. Restated, not imported —
+    the stub runs in another process, so the two have to be read side by side.
+    """
+    return ("%x" % (0xC0FFEE0 + i)).ljust(40, "0")
+
+
+def _nights_table_rows(body):
+    """The rows of the `### Nights` table ONLY.
+
+    ⛔ Written because the first version of the test below matched every line
+    starting `| 2026-08-`, which also catches the digest-transition table and
+    compared its `**UNKNOWN**` cell against this table's head column. A row
+    filter that spans tables silently reads the wrong column.
+    """
+    lines = body.splitlines()
+    start = next(i for i, line in enumerate(lines)
+                 if line.startswith("| night |"))
+    rows = []
+    for line in lines[start + 2:]:
+        if not line.startswith("|"):
+            break
+        rows.append(line)
+    return lines[start], rows
+
+
+def test_from_gh_stamps_each_night_with_its_own_head_sha(gh_stub):
+    """⛔ Per-night, not per-series. `list_recent_runs` has always asked `gh`
+    for `headSha` and this consumer dropped it, so a v1 rejection could describe
+    the payload's shape and never the producer that wrote it.
+
+    The stub gives every run a DIFFERENT head on purpose: a consumer that
+    stamped all nights with whichever sha it read last would satisfy a
+    "head_sha is not None" assertion and fail this one.
+    """
+    proc = gh_stub("ok", runs=2)
+    assert proc.returncode == ptw.EXIT_OK, proc.stderr
+    assert _stub_head(0)[:7] != _stub_head(1)[:7], "stub heads collide"
+    _, rows = _nights_table_rows(proc.stdout)
+    heads = [row.split("|")[3].strip().strip("`") for row in rows]
+    assert heads == [_stub_head(0)[:7], _stub_head(1)[:7]]
+
+
+def test_from_gh_records_the_head_sha_even_when_the_artifact_never_arrives(
+        gh_stub):
+    """⛔ The night with the LEAST to go on is the one that needs it most.
+
+    This is why the stamp happens after loading rather than being threaded into
+    the loader: a download failure never reaches `load_night`, so a
+    loader-parameter design would have left exactly these rows blank.
+    """
+    proc = gh_stub("no-artifact", runs=2)
+    assert proc.returncode == ptw.EXIT_OK, proc.stderr
+    _, rows = _nights_table_rows(proc.stdout)
+    assert rows and all("unreadable" in row for row in rows)
+    heads = {row.split("|")[3].strip().strip("`") for row in rows}
+    assert heads == {_stub_head(0)[:7], _stub_head(1)[:7]}
+
+
+def test_render_writes_a_dash_for_an_unknown_head_not_an_empty_cell():
+    """The archival replay path has no run record, so its head is unknown.
+
+    ⛔ An empty Markdown cell is indistinguishable from a broken renderer, and
+    this is the column whose entire job is to say what is and is not known —
+    the same could-not-measure/measured conflation, one column wide.
+    """
+    body = ptw.render(ptw.decide(ptw.nights_from_dataset(DATASET)))
+    header, rows = _nights_table_rows(body)
+    assert "| head |" in header
+    assert len(rows) == 6, rows
+    assert {row.split("|")[3].strip() for row in rows} == {"—"}
+
+
+def test_headline_never_folds_undated_runs_into_one_calendar_night():
+    """⛔ Both blind reviewers of this change found this, independently.
+
+    `nights_from_gh` writes `night_utc = created[:10] or None`, so every run
+    `gh` reports without a usable `createdAt` collapses onto the single key
+    None. The first cut of the unit fix deduplicated ALL nights by date, which
+    turned three distinct dateless runs into "1 calendar night" — a night
+    nobody measured, printed as a known quantity, in the very line the fix was
+    meant to make honest. ⚠️ The un-dated group is also the one most likely to
+    be the download failures, i.e. the rows with the least left to say.
+
+    Counting them as N would be a different fabrication (nothing knows whether
+    they share a night), so they leave the calendar ratio entirely and are
+    reported as a count that cannot be placed.
+    """
+    nights = [ptw.Night(None, 101).unreadable("artifact download failed"),
+              ptw.Night(None, 102).unreadable("artifact download failed"),
+              _run("2026-08-20", 103, alpha=1.0)]
+    body = ptw.render(ptw.decide(nights))
+    headline = [line for line in body.splitlines() if line.startswith("**")][0]
+    # 1 dated calendar night, and the run half still accounts for all three.
+    assert "1 of 1 calendar night(s)" in headline
+    assert "1 of 3 run(s) counted" in headline
+    assert "2 of 2" not in headline and "1 of 2 calendar" not in headline
+    # ⛔ And they must not simply vanish: excluded from the ratio, named below.
+    assert "2 run(s) carry no usable date" in body
+
+
+def test_undated_runs_do_not_manufacture_a_multi_run_night_warning():
+    """The `workflow_dispatch` caveat is a claim about re-runs; nothing here
+    measured one. Comparing calendar nights against ALL counted runs made a
+    single undated counted run print it anyway."""
+    night = ptw.Night(None, 101)
+    night.canary_pct["BenchmarkControlCanaryCPU"] = 0.02
+    night.canary_pct["BenchmarkControlCanarySleep"] = 0.0
+    night.ratios_pct["BenchmarkAlpha"] = 1.0
+    body = ptw.render(ptw.decide([night, _run("2026-08-20", 102, alpha=1.0)]))
+    assert "carry no usable date" in body
+    assert "more than one run" not in body
+
+
+def test_from_gh_never_borrows_a_head_sha_for_an_unidentifiable_run(tmp_path):
+    """⛔ Found by blind review: `{run["databaseId"]: ...}` is last-one-wins.
+
+    Two runs reported without a `databaseId` would share the key None, so every
+    night whose run id is also None would be stamped with whichever head came
+    last — a wrong sha that renders exactly like a right one, in the column
+    that exists to attribute payloads to producers.
+    """
+    binhome = tmp_path / "bin"
+    binhome.mkdir()
+    stub = binhome / "gh"
+    stub.write_text(_GH_STUB.replace('"databaseId": 900 + i,',
+                                     '"databaseId": None,'),
+                    encoding="utf-8")
+    stub.chmod(0o755)
+    env = dict(os.environ, PATH=f"{binhome}{os.pathsep}{os.environ['PATH']}",
+               STUB_MODE="ok", STUB_RUNS="2")
+    proc = subprocess.run(
+        [sys.executable, str(_TOOLS_DIR / "paired_trend_watch.py"),
+         "--from-gh", "--limit", "3", "--cache-dir", str(tmp_path / "cache")],
+        capture_output=True, text=True, encoding="utf-8", env=env, timeout=120)
+    assert proc.returncode == ptw.EXIT_OK, proc.stderr
+    _, rows = _nights_table_rows(proc.stdout)
+    assert rows, "no night rows rendered"
+    assert {row.split("|")[3].strip() for row in rows} == {"—"}
+    for i in (0, 1):
+        assert _stub_head(i)[:7] not in proc.stdout
+
+
+def test_summary_headline_keeps_both_halves_of_each_ratio_in_one_unit():
+    """#1571 §7, as a property rather than a fixed string.
+
+    ⚠️ NARROWER THAN THE TICKET. #1571 §7 reads as though the whole headline
+    were undisclosed; it is not — `render()` already appends a caveat when a
+    calendar night carries more than one run. The undisclosed part was the
+    denominator `of {len(nights)}`, a run count in a calendar-night sentence.
+    Only that changed, and the ticket's framing is corrected in the PR body
+    rather than quietly satisfied.
+    """
+    body = ptw.render(ptw.decide(ptw.nights_from_dataset(DATASET)))
+    headline = [line for line in body.splitlines() if line.startswith("**")][0]
+    assert re.search(r"\b6 of 6 calendar night\(s\)", headline)
+    assert re.search(r"\b6 of 6 run\(s\) counted", headline)
+    # ⛔ The old mixed form must not come back under a different wording.
+    assert "counted calendar night(s) (" not in headline
 
 
 def _run(date, run_id, alpha=None):
