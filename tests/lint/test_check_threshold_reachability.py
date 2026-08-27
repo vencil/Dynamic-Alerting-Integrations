@@ -3531,6 +3531,105 @@ def test_the_two_artifact_groupings_are_one_partition():
     assert 1 < len(by_gate) < len(artifacts), (len(by_gate), len(artifacts))
 
 
+# ── the exclusion set needs an owner, and the GATE has to say so ─────────────
+
+# (tamper, fragment of the message it must produce). ⛔ Each case is a DIFFERENT
+# clause of `_assert_excluded_roots_still_have_an_owner`; a single case would
+# leave the other four free to be deleted, which is exactly how this set shipped
+# for a round with no invariant at all.
+_EXCLUSION_TAMPERS = [
+    # (a) from the round-1 review: a SHIPPED root, which used to be free.
+    ("shipped", lambda: frozenset(gate._ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS
+                                  | {"try-local/seed/conf.d"}),
+     "is SHIPPED"),
+    # (b) from the round-1 review: an unrelated fixture root. The gate's stdout
+    #     was measured BYTE-IDENTICAL on this one before the invariant existed.
+    ("unrelated-fixture",
+     lambda: frozenset(gate._ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS
+                       | {"tests/golden/fixtures/mixed-mode/conf.d"}),
+     "does not live under _ARTIFACT_KEYS_FLOOR_EXCLUDED_TREE"),
+    # a root nobody pins: the fifth floor never looks at it, so excluding it
+    # leaves it watched by nothing.
+    ("unpinned", lambda: frozenset(gate._ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS
+                                   | {"tests/e2e-bench/fixture/customer-anon"}),
+     "not pinned in _DEFAULTS_CONFD_ROOTS"),
+    # the set shrinks: the tree and the set stop agreeing.
+    ("set-narrowed",
+     lambda: frozenset({"tests/e2e-bench/fixture/synthetic-v2/conf.d"}),
+     "but are NOT in _ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS"),
+]
+
+
+@pytest.mark.parametrize("name,tamper,expected", _EXCLUSION_TAMPERS,
+                         ids=[c[0] for c in _EXCLUSION_TAMPERS])
+def test_a_root_leaves_the_key_floors_denominator_only_with_another_owner(
+        monkeypatch, name, tamper, expected):
+    """Every clause of the exclusion invariant, through the real entry point.
+
+    ⛔ Through `_defaults_faces()` and not by calling the assertion directly:
+    the invariant is only worth anything if the floor actually reaches it, and
+    a direct call would keep passing after the call site was deleted. The
+    `may-be-empty` clause has no case here ON PURPOSE — the only root on that
+    list is `rule-packs/recipes/examples/conf.d`, which is shipped, so the
+    tamper that would reach clause 4 is answered by clause 1 (SHIPPED) first
+    and a case for it would be asserting a message nobody can produce. That clause is a guard against
+    a future combination, and this comment is its disclosure rather than a test
+    that cannot be written honestly today.
+    """
+    monkeypatch.setattr(gate, "_ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS", tamper())
+    with pytest.raises(gate._GateViolation) as exc:
+        gate._defaults_faces()
+    assert expected in str(exc.value), (name, str(exc.value))
+
+
+def test_the_exclusion_invariant_fires_on_the_ci_path_not_only_in_the_suite(
+        monkeypatch, capsys):
+    """⛔ THE POINT OF THE WHOLE CLAUSE SET, and the reason it is not a test.
+
+    `.pre-commit-config.yaml` runs this module as
+    `check_threshold_reachability.py --ci`. It does NOT run pytest. So an
+    invariant that lives only in this file is an invariant a local commit never
+    meets — measured on the build before this one: adding an unrelated 2-key
+    fixture root to the exclusion set left `--ci` at rc=0 with stdout
+    byte-identical to a clean run, and the single red was one hardcoded pair in
+    `test_the_headroom_note_states_both_directions_and_both_are_current`, i.e.
+    a CI-only signal for a change that reaches `main` through a green local
+    commit.
+
+    This asserts the exit code and the message on the same path the hook takes.
+    """
+    monkeypatch.setattr(
+        gate, "_ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS",
+        frozenset(gate._ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS
+                  | {"tests/golden/fixtures/mixed-mode/conf.d"}))
+    rc = gate.main(["--ci"])
+    out = capsys.readouterr()
+    blob = out.out + out.err
+    assert rc == 1, (rc, blob[-2000:])
+    assert "_ARTIFACT_KEYS_FLOOR_EXCLUDED_TREE" in blob, blob[-2000:]
+    # …and non-vacuously: the same call on the untampered set is rc=0, so the
+    # assertion above is about the tamper and not about `--ci` being red today.
+    monkeypatch.undo()
+    capsys.readouterr()
+    assert gate.main(["--ci"]) == 0
+
+
+def test_the_excluded_tree_and_the_excluded_set_are_both_load_bearing():
+    """Neither spelling may be decoration — the invariant reads BOTH.
+
+    ⛔ Mutation is what this is for. A clause set that only walked the set would
+    leave `_ARTIFACT_KEYS_FLOOR_EXCLUDED_TREE` free to be edited to anything at
+    all, and a check that only compared against the tree would let the set be
+    emptied. Both are asserted as REACHED, by making each one wrong on its own.
+    """
+    _generators, artifacts = gate._defaults_faces()
+    assert gate._ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS, "nothing is excluded"
+    assert all(r.startswith(gate._ARTIFACT_KEYS_FLOOR_EXCLUDED_TREE + "/")
+               for r in gate._ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS)
+    # the real pair is accepted…
+    gate._assert_excluded_roots_still_have_an_owner(artifacts)
+
+
 # The group both end-to-end "a whole group vanished" probes remove. ⛔ ONE
 # spelling: they assert two different things about the same input (which floor
 # is heard first, and that a breach is a violation rather than a crash), and a
