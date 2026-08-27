@@ -779,7 +779,7 @@ def test_benchmark_missing_from_the_reference_is_reported_never_clean():
     result = ptw.decide([night])
     assert "BenchmarkBrandNew" in result["inconclusive"]
     assert "missing-in-reference" in result["inconclusive"]["BenchmarkBrandNew"][
-        "2026-08-23"]
+        (ptw.KEY_DATED, "2026-08-23")]
 
 
 # ── Digest transitions ────────────────────────────────────────────────────
@@ -1620,7 +1620,11 @@ def test_inconclusive_reasons_from_an_undated_night_do_not_kill_the_page():
                          _run(None, 3)], k=2)        # un-dated, no reading
     body = ptw.render(result)                        # ⛔ must not raise
     keys = result["inconclusive"]["BenchmarkAlpha"]
-    assert set(keys) == {"?#1", "2026-08-20"}, keys  # both kept, neither None
+    # ⛔ Tuples, not `?#1`: a later round made the key structured so that a
+    # night whose date IS the string `?#1` cannot collide with the first
+    # un-dated run. `key_label` is what the page prints.
+    assert set(keys) == {(ptw.KEY_UNDATED, 1),
+                         (ptw.KEY_DATED, "2026-08-20")}, keys
     assert "?#1" in body
 
     # ⛔ BOTH assignment sites, because `inconclusive` is populated twice and a
@@ -1632,7 +1636,7 @@ def test_inconclusive_reasons_from_an_undated_night_do_not_kill_the_page():
     carried.inconclusive["BenchmarkAlpha"] = "unreadable-ratio (nan)"
     result = ptw.decide([_run("2026-08-18", 1, 9.0), carried], k=2)
     keys = result["inconclusive"]["BenchmarkAlpha"]
-    assert set(keys) == {"?#1"}, keys
+    assert set(keys) == {(ptw.KEY_UNDATED, 1)}, keys
     assert "?#1" in ptw.render(result)
 
 
@@ -1684,7 +1688,7 @@ def test_undated_runs_stay_distinct_even_when_their_run_ids_are_not(ids):
     result = ptw.decide([_run(None, left, 9.0), _run(None, right, 12.0)], k=5)
     hits = result["over_not_sustained"]["BenchmarkAlpha"]
     assert sorted(hits.values()) == [9.0, 12.0], hits   # ⛔ neither lost
-    assert set(hits) == {"?#1", "?#2"}, hits
+    assert set(hits) == {(ptw.KEY_UNDATED, 1), (ptw.KEY_UNDATED, 2)}, hits
 
 
 def test_a_run_id_ten_characters_long_is_not_mistaken_for_a_date():
@@ -1798,7 +1802,7 @@ def test_a_benchmark_missing_from_one_nights_payload_is_disclosed():
     result = ptw.decide(nights, k=2)
     assert "BenchmarkAlpha" in result["inconclusive"]
     assert "absent-from-payload" in result["inconclusive"]["BenchmarkAlpha"][
-        "2026-08-11"]
+        (ptw.KEY_DATED, "2026-08-11")]
     assert "BenchmarkAlpha" in ptw.render(result)
 
 
@@ -1945,7 +1949,8 @@ def test_a_window_of_undecidable_nights_is_inconclusive_not_clear():
 def test_over_not_sustained_counts_calendar_nights_not_runs():
     nights = [_run("2026-08-20", 1, 9.1), _run("2026-08-20", 2, 9.2)]
     result = ptw.decide(nights, k=2)
-    assert result["over_not_sustained"]["BenchmarkAlpha"] == {"2026-08-20": 9.2}
+    assert result["over_not_sustained"]["BenchmarkAlpha"] == {
+        (ptw.KEY_DATED, "2026-08-20"): 9.2}
     row = [l for l in ptw.render(result).splitlines()
            if "`BenchmarkAlpha` |" in l][0]
     assert "1 (08-20)" in row
@@ -2295,3 +2300,124 @@ def test_the_pinned_defaults_still_produce_the_anchor_verdict():
     assert "**FINDINGS**" in proc.stdout
     assert "`MergePartialConfigs_1000`@08-17" in proc.stdout
 
+
+
+def test_a_night_whose_date_looks_like_an_ordinal_is_still_a_night():
+    """⛔ Blind review, round 3 of the key scope. My OWN fix introduced this.
+
+    `render()` classified the not-sustained table by `str(k).startswith("?#")`
+    — inferring identity from the printed form, one round after the lesson that
+    identity cannot be inferred from the run. A night whose `night_utc` is
+    literally `"?#7"` is DATED (`_dated()` type-checks; neither loader
+    format-checks) and was counted as an un-dated RUN, so the headline and the
+    row below it disagreed about the same series. Measured on `0ec854a2`:
+
+        _dated(weird) = True
+        **INCONCLUSIVE** over 2 of 2 calendar night(s) … 2 of 2 run(s) counted.
+        | `BenchmarkAlpha` | 1 (08-19) + 1 undated run(s) (?#7) | +12.00% |
+
+    ⚠️ Not reachable from the CI loaders today, for the same reason `_dated`
+    and `_ordering_key` document their own defence in depth: Nights are also
+    built by hand, by tests, and by future adapters.
+    """
+    weird = _run("?#7", 2, 12.0)
+    assert ptw._dated(weird) is True                # premise of the finding
+    result = ptw.decide([_run("2026-08-19", 1, 9.0), weird], k=5)
+    body = ptw.render(result)
+    assert "2 of 2 calendar night(s)" in body
+    # ⛔ Two dated nights, zero un-dated runs. The row must agree with that.
+    assert "| `BenchmarkAlpha` | 2 (08-19, ?#7) | +12.00% |" in body
+    assert "undated run(s)" not in body
+
+
+def test_a_night_whose_date_looks_like_an_ordinal_does_not_merge_with_one():
+    """⛔ The same input, one section deeper — and a DROPPED READING, not just a
+    miscount.
+
+    Under the string key both `night_utc == "?#1"` and the first un-dated run
+    formatted to the key `"?#1"`, so the two collapsed into one entry in
+    `over_not_sustained` and the smaller reading left the page. That is the
+    identical silent merge `assign_night_keys` was written to end, re-entering
+    through the display alphabet. Structured keys cannot collide.
+    """
+    result = ptw.decide([_run("?#1", 1, 9.0), _run(None, 2, 12.0)], k=5)
+    hits = result["over_not_sustained"]["BenchmarkAlpha"]
+    assert sorted(hits.values()) == [9.0, 12.0], hits    # ⛔ neither lost
+    assert set(hits) == {(ptw.KEY_DATED, "?#1"), (ptw.KEY_UNDATED, 1)}, hits
+
+
+def test_undated_runs_are_ordered_as_numbers_not_as_text():
+    """The ordinal is a number. Sorting its printed form put `?#10` between
+    `?#1` and `?#2`:
+
+        | `BenchmarkAlpha` | 0 (—) + 11 undated run(s) (?#1, ?#10, ?#11, ?#2,
+        ?#3, ?#4, ?#5, ?#6, ?#7, ?#8, ?#9) | +9.10% |
+
+    Display only — no reading is lost — but the ordinal's ONLY meaning is
+    position in the series, and a page that scrambles it is asserting an order
+    nobody measured.
+    """
+    result = ptw.decide([_run(None, i, 9.0 + i / 100) for i in range(1, 12)],
+                        k=99)
+    body = ptw.render(result)
+    assert ("+ 11 undated run(s) (?#1, ?#2, ?#3, ?#4, ?#5, ?#6, ?#7, ?#8, "
+            "?#9, ?#10, ?#11)") in body
+
+
+def test_the_inconclusive_section_orders_ordinals_the_same_way():
+    """The not-sustained table and the inconclusive list read the same keys, and
+    only the first one was checked. This sorts by key rather than by text there
+    too — the same defect, one section apart.
+    """
+    nights = [_run(None, i) for i in range(1, 12)]      # no reading at all
+    nights[0].ratios_pct["BenchmarkAlpha"] = 9.0        # give the bench a name
+    body = ptw.render(ptw.decide(nights, k=99))
+    # ⛔ The reasons line, not the `unjudgeable` bullet above it — both start
+    # `- \`BenchmarkAlpha\``, and a first cut of this test read the wrong one.
+    line = next(ln for ln in body.splitlines()
+                if ln.startswith("- `BenchmarkAlpha` — "))
+    assert re.findall(r"\?#\d+", line) == [f"?#{i}" for i in range(2, 12)], line
+
+
+def test_the_page_never_spells_an_ordinal_outside_key_label():
+    """One place formats `?#`, so one place can be wrong about it.
+
+    ⚠️ A structural check, not a behavioural one: it is the thing that keeps
+    the three tests above from being re-broken by a fourth site inventing its
+    own `f"?#{...}"`.
+    """
+    src = Path(ptw.__file__).read_text(encoding="utf-8")
+    # ⛔ Over the AST, not over the text: the docstrings that record WHY the
+    # string key was wrong quote `f"?#{run_id}"`, and a plain substring count
+    # read those as live call sites (measured: 3, not 1).
+    tree = ast.parse(src)
+    spots = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for inner in ast.walk(node):
+            if not isinstance(inner, ast.JoinedStr):
+                continue
+            # ⛔ A `?#` INTERPOLATION — a literal ending in `?#` followed by a
+            # substituted value — not merely the characters `?#` in an
+            # f-string. `render`'s disclosure paragraph says the words "as
+            # `?#1`, `?#2` …" and is prose, not a second formatter.
+            for left, right in zip(inner.values, inner.values[1:]):
+                if (isinstance(left, ast.Constant)
+                        and isinstance(left.value, str)
+                        and left.value.endswith("?#")
+                        and isinstance(right, ast.FormattedValue)):
+                    spots.append(node.name)
+    assert spots == ["key_label"], spots
+
+    # ⛔ And no site classifies a key by the shape of its printed form — the
+    # round-3 finding itself. Over the AST for the same reason: the docstring
+    # that records the finding quotes `startswith("?#")` verbatim, so a
+    # substring scan fails on the very comment explaining the fix.
+    sniffers = [n for n in ast.walk(tree)
+                if isinstance(n, ast.Call)
+                and isinstance(n.func, ast.Attribute)
+                and n.func.attr == "startswith"
+                and any(isinstance(a, ast.Constant) and isinstance(a.value, str)
+                        and "?#" in a.value for a in n.args)]
+    assert sniffers == [], [ast.dump(n) for n in sniffers]

@@ -415,9 +415,34 @@ def _dated(night):
     return isinstance(night.night_utc, str) and bool(night.night_utc)
 
 
+KEY_DATED = 0
+KEY_UNDATED = 1
+
+
+def key_is_dated(key):
+    """Does this night key stand for a known calendar night?
+
+    ⛔ ASK THE KEY, NEVER THE STRING. `render()` used to answer this question
+    with `str(k).startswith("?#")`, and blind review measured what that costs:
+    a night whose `night_utc` is literally `"?#7"` passes `_dated()` — the
+    loaders type-check `night_utc` but do not format-check it — and was then
+    counted as an un-dated RUN two sections lower. One page, two numbers, and
+    the contradiction between them was manufactured by the fix that was
+    supposed to end exactly that contradiction.
+    """
+    return key[0] == KEY_DATED
+
+
+def key_label(key):
+    """What a night key prints as. The ONLY place `?#` is spelled."""
+    return key[1] if key_is_dated(key) else f"?#{key[1]}"
+
+
 def _night_label(night):
     """What to print where a night's date goes. `?` means the date is unknown."""
-    return night.night_utc if _dated(night) else (night.night_key or "?")
+    if _dated(night):
+        return night.night_utc
+    return key_label(night.night_key) if night.night_key else "?"
 
 
 def assign_night_keys(nights):
@@ -447,14 +472,34 @@ def assign_night_keys(nights):
     ⚠️ Idempotent by construction — re-running it over the same list produces
     the same keys — but the ordinals are relative to the LIST PASSED IN. Call it
     on the whole series, not a filtered subset, or two subsets will disagree.
+
+    ⛔ THE KEY IS A TUPLE, NOT `f"?#{n}"`, and the string form was this round's
+    finding. `(KEY_DATED, night_utc)` / `(KEY_UNDATED, ordinal)` buys three
+    things a formatted string cannot:
+
+        classification  `key_is_dated(key)`, not `str(k).startswith("?#")`.
+                        A night whose `night_utc` IS `"?#7"` is dated by
+                        `_dated()` and was counted as an un-dated run by the
+                        string test — the two halves of one page disagreeing.
+        ordering        `sorted()` compares ordinals as INTEGERS. Under the
+                        string form eleven un-dated runs printed
+                        `?#1, ?#10, ?#11, ?#2, …`.
+        no collision    that same `"?#7"` night and the 7th un-dated run
+                        formatted to one key and MERGED — the identical silent
+                        drop this function exists to prevent, re-entering
+                        through the display alphabet. Tuples cannot collide:
+                        the first element separates the namespaces.
+
+    ⚠️ So a key is never printed raw. `key_label()` is the only place `?#` is
+    spelled, and `_night_label()` / `render()` go through it.
     """
     undated = 0
     for night in nights:
         if _dated(night):
-            night.night_key = night.night_utc
+            night.night_key = (KEY_DATED, night.night_utc)
         else:
             undated += 1
-            night.night_key = f"?#{undated}"
+            night.night_key = (KEY_UNDATED, undated)
     return nights
 
 
@@ -934,7 +979,8 @@ def digest_transitions(nights):
         # was a FOURTH call site printing the raw value, so a night the ratio
         # had already classified as un-dated still appeared here under a label
         # nobody wrote.
-        rec = {"from": prev.night_key, "to": cur.night_key, "sides": {}}
+        rec = {"from": key_label(prev.night_key),
+               "to": key_label(cur.night_key), "sides": {}}
         for side in ("reference", "main"):
             if (prev.digest_status != "checked" or cur.digest_status != "checked"
                     or side not in prev.digest_sides or side not in cur.digest_sides):
@@ -1056,7 +1102,7 @@ def decide(nights, *, threshold_pct=DEFAULT_THRESHOLD_PCT,
     for night in counted:
         for bench, value in night.ratios_pct.items():
             if value > threshold_pct and bench not in fired:
-                # ⛔ Keyed by the LABEL, not the raw date. An un-dated run
+                # ⛔ Keyed by `night_key`, not the raw date. An un-dated run
                 # carries real readings and must appear here — this section
                 # exists because a reading the page never mentions is
                 # indistinguishable from one that never happened — but keying
@@ -1596,10 +1642,14 @@ def render(result):
             # night, and one of them may well BE the dated night. The gate table
             # below already solved this exact presentation with `+ N undated
             # run(s)`; this is the same shape, not a second invention.
-            dated = sorted(d for d in hits if not str(d).startswith("?#"))
-            undated = sorted(d for d in hits if str(d).startswith("?#"))
-            shown = ", ".join(_short_night(d) for d in dated) or "—"
-            extra = (f" + {len(undated)} undated run(s) ({', '.join(undated)})"
+            # ⛔ `key_is_dated`, not a `?#` prefix test on the printed form, and
+            # `sorted()` over the KEYS so ordinals compare as integers. Both
+            # halves of that were findings — see `assign_night_keys`.
+            dated = sorted(k for k in hits if key_is_dated(k))
+            undated = sorted(k for k in hits if not key_is_dated(k))
+            shown = ", ".join(_short_night(key_label(k)) for k in dated) or "—"
+            extra = (f" + {len(undated)} undated run(s) "
+                     f"({', '.join(key_label(k) for k in undated)})"
                      if undated else "")
             lines.append(
                 f"| `{bench}` | {len(dated)} ({shown}){extra} | {_pct(worst)} |")
@@ -1614,7 +1664,11 @@ def render(result):
         lines.append("### Inconclusive benchmarks — NOT clean, NOT judged")
         lines.append("")
         for bench, per_night in sorted(result["inconclusive"].items()):
-            reasons = ", ".join(f"{d}: {r}" for d, r in sorted(per_night.items()))
+            # ⛔ Sorted by KEY, printed through `key_label`. The same section
+            # used to sort the printed form, which put `?#10` between `?#1` and
+            # `?#2` — the ordinal is a number and the page has to read like one.
+            reasons = ", ".join(f"{key_label(k)}: {r}"
+                                for k, r in sorted(per_night.items()))
             lines.append(f"- `{bench}` — {reasons}")
         lines.append("")
         lines.append("⛔ These have no denominator on the nights listed "
