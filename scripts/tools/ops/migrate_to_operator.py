@@ -33,6 +33,7 @@ except ImportError:
 
 from _lib_python import detect_cli_lang, format_json_report, i18n_text  # noqa: E402
 from _lib_io import load_yaml_file, write_text_secure  # noqa: E402
+from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_yaml import _dict_to_yaml, write_yaml_crd  # noqa: E402
 from _lib_confd import warn_nested  # noqa: E402
 
@@ -105,8 +106,9 @@ def discover_tenant_configs(config_dir: Path) -> List[str]:
             else:
                 print(
                     i18n_text(
-                        f"WARNING: 略過無效的租戶名稱 '{tenant}'（不符合 RFC 1123）",
-                        f"WARNING: Skipping invalid tenant name '{tenant}' (not RFC 1123 compliant)",
+                        f"WARNING: 略過無效的租戶名稱 '{safe_label(tenant)}'（不符合 RFC 1123）",
+                        f"WARNING: Skipping invalid tenant name '{safe_label(tenant)}' "
+                        f"(not RFC 1123 compliant)",
                     ),
                     file=sys.stderr,
                 )
@@ -181,8 +183,9 @@ def parse_configmap_rules(source_dir: Path) -> List[dict]:
         except Exception as exc:
             print(
                 i18n_text(
-                    f"WARNING: 解析 {yaml_file.name} 失敗: {exc}",
-                    f"WARNING: Failed to parse {yaml_file.name}: {exc}",
+                    f"WARNING: 解析 {safe_label(yaml_file.name)} 失敗: {safe_label(exc)}",
+                    f"WARNING: Failed to parse {safe_label(yaml_file.name)}: "
+                    f"{safe_label(exc)}",
                 ),
                 file=sys.stderr,
             )
@@ -895,7 +898,7 @@ def main():
 
     if analysis["issues"]:
         for issue in analysis["issues"]:
-            print(f"WARNING: {issue}", file=sys.stderr)
+            print(f"WARNING: {safe_label(issue)}", file=sys.stderr)
 
     # Generate migration if not checklist-only
     if args.checklist_only:
@@ -939,19 +942,19 @@ def main():
             name = crd["metadata"]["name"]
             output_path = output_dir / f"{name}.yaml"
             write_yaml_crd(output_path, crd, gitops=False)
-            print(f"Generated: {output_path}", file=sys.stderr)
+            print(f"Generated: {safe_label(output_path)}", file=sys.stderr)
 
         for item in result["alertmanager_configs"]:
             crd = item["crd"]
             name = crd["metadata"]["name"]
             output_path = output_dir / f"{name}.yaml"
             write_yaml_crd(output_path, crd, gitops=False)
-            print(f"Generated: {output_path}", file=sys.stderr)
+            print(f"Generated: {safe_label(output_path)}", file=sys.stderr)
 
         # Write checklist
         checklist_path = output_dir / "MIGRATION-CHECKLIST.md"
         write_text_secure(str(checklist_path), checklist)
-        print(f"Generated: {checklist_path}", file=sys.stderr)
+        print(f"Generated: {safe_label(checklist_path)}", file=sys.stderr)
 
     # stdout: the whole 8-combo (checklist_only × dry_run × json) matrix is
     # decided in plan_stdout() — main() only prints. See plan_stdout() for the

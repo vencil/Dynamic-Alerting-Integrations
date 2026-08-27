@@ -49,6 +49,7 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import load_yaml_file, is_disabled, http_get_json, query_prometheus_range, write_json_secure, write_text_secure, add_prometheus_arg  # noqa: E402
 from _lib_python import format_json_report  # noqa: E402
+from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_confd import warn_nested  # noqa: E402
 
@@ -597,9 +598,10 @@ def print_text_report(report):
         marker = "!!!" if risk == "HIGH" else " ! " if risk == "MEDIUM" else "   "
         old_v = change["old_value"] or "(none)"
         new_v = change["new_value"] or "(none)"
-        print(f"  {marker} [{risk:6s}] {change['tenant']}/{change['metric']}: "
+        print(f"  {marker} [{risk:6s}] {safe_label(change['tenant'])}/"
+              f"{safe_label(change['metric'])}: "
               f"{old_v} -> {new_v}")
-        print(f"           {change['message']}")
+        print(f"           {safe_label(change['message'])}")
 
     print()
 

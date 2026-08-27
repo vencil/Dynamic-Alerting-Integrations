@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any, Optional
@@ -212,6 +213,65 @@ def read_onboard_hints(path: Optional[str]) -> Optional[dict[str, Any]]:
         return None
     with open(path, encoding="utf-8") as f:
         return json.load(f)
+
+
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def safe_label(value: Any) -> str:
+    """Neutralise control characters in an untrusted value before it is PRINTED.
+
+    #1538. A tenant config *filename* is untrusted input — ``tenants/onboarding``
+    and the tenant self-service flow both create files whose names the platform
+    never chose. Every plain-text report in ``scripts/tools/`` interpolates those
+    names (and the exception text derived from them) straight into ``print()``.
+    Two things ride in on that:
+
+    * **a newline** ends the current report line and starts a new one, so a file
+      named ``evil\\n[PASS] all good\\nx.yaml`` prints ``[PASS] all good`` at
+      column 0 — indistinguishable, to a human or to a ``grep '^\\[PASS\\]'``, from
+      a verdict the tool actually emitted;
+    * **an ESC (``\\x1b``)** starts an ANSI sequence, so the same channel can
+      recolour the terminal, move the cursor, or clear the screen.
+
+    Replacing each control char with ``?`` defuses both while keeping the payload
+    visible (``\\x1b[2J`` prints as ``?[2J``) — the operator still sees that
+    something odd is in the name, which deleting the characters would hide.
+
+    ⛔ **Scope, stated so nobody over-reads it.** This covers the C0 range
+    ``\\x00-\\x1f`` plus DEL ``\\x7f`` — exactly the two mechanisms above, and
+    exactly the class ``compile_custom_alerts._safe_log`` has used since #1008
+    (this function is that one, promoted; the character class is deliberately
+    byte-identical so promoting it changed no existing behaviour). It does NOT
+    cover, and was not measured against:
+
+    * C1 controls ``U+0080-U+009F`` (some terminals decode these as control codes),
+    * bidi overrides ``U+202A-U+202E`` / ``U+2066-U+2069`` (can visually reorder a
+      line without any control char),
+    * homoglyph or zero-width confusables.
+
+    Those remain open. Do not read "went through ``safe_label``" as "is safe to
+    render in an arbitrary terminal".
+
+    This is an OUTPUT-layer helper, not a validator: it must not be used to
+    sanitise a value on its way *into* a config, a filename, or a subprocess
+    argument. It lives beside :func:`format_json_report` because they are the two
+    halves of the same decision — ``--json`` output is already safe (``json.dumps``
+    escapes control characters unconditionally), and this is the plain-text
+    branch's equivalent. ⛔ Never apply it to data destined for the ``--json``
+    branch: that would corrupt machine-readable output that was never vulnerable.
+
+    ⛔ Apply it to the FIELD, never to a whole rendered multi-line report — the
+    report's own ``\\n`` separators are control characters too and would become
+    ``?``, collapsing the layout.
+
+    Args:
+        value: Any value; coerced with ``str()``.
+
+    Returns:
+        *value* as text with every C0/DEL character replaced by ``?``.
+    """
+    return _CONTROL_CHARS_RE.sub("?", str(value))
 
 
 def format_json_report(data: Any, **kwargs: Any) -> str:

@@ -36,6 +36,7 @@ from generate_alertmanager_routes import (  # noqa: E402
     merge_routing_with_defaults,
 )
 from _lib_python import detect_cli_lang, format_json_report  # noqa: E402
+from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
 
 
@@ -158,8 +159,11 @@ def _fmt_yaml(data: dict | list, indent: int = 2) -> str:
 def format_explanation(explanation: dict, *, lang: str = "en") -> str:
     """Format a tenant routing explanation as human-readable text."""
     lines: list[str] = []
-    t = explanation["tenant"]
-    ref = explanation["profile_ref"]
+    # #1538: tenant names and layer sources are tenant-controlled. Escaped in the
+    # TEXT renderer only — format_json_report() gets the same dict unescaped.
+    t = safe_label(explanation["tenant"])
+    ref = safe_label(explanation["profile_ref"]) if explanation["profile_ref"] else \
+        explanation["profile_ref"]
 
     if lang == "zh":
         lines.append(f"╔══ 租戶: {t} ══╗")
@@ -173,8 +177,8 @@ def format_explanation(explanation: dict, *, lang: str = "en") -> str:
     lines.append("")
 
     for layer in explanation["layers"]:
-        lines.append(f"── {layer['name']} ──")
-        lines.append(f"   Source: {layer['source']}")
+        lines.append(f"── {safe_label(layer['name'])} ──")
+        lines.append(f"   Source: {safe_label(layer['source'])}")
         cfg = layer["config"]
         if cfg:
             for line in _fmt_yaml(cfg).splitlines():
@@ -200,9 +204,9 @@ def format_profile_expansion(expansion: dict, *, lang: str = "en") -> str:
     lines.append("")
 
     for name, info in sorted(expansion.items()):
-        lines.append(f"── Profile: {name} ──")
+        lines.append(f"── Profile: {safe_label(name)} ──")
         if info.get("error"):
-            lines.append(f"   ⚠ {info['error']}")
+            lines.append(f"   ⚠ {safe_label(info['error'])}")
         if info["config"]:
             for line in _fmt_yaml(info["config"]).splitlines():
                 lines.append(f"   {line}")
@@ -212,7 +216,7 @@ def format_profile_expansion(expansion: dict, *, lang: str = "en") -> str:
         refs = info.get("referenced_by", [])
         ref_label = "引用者:" if lang == "zh" else "Referenced by:"
         if refs:
-            lines.append(f"   {ref_label} {', '.join(refs)}")
+            lines.append(f"   {ref_label} {safe_label(', '.join(refs))}")
         else:
             orphan = "（無引用 — 孤立設定檔）" if lang == "zh" else "(no references — orphan profile)"
             lines.append(f"   {ref_label} {orphan}")
@@ -386,9 +390,9 @@ def trace_alert_routing(
 def format_trace(trace: dict, *, lang: str = "en") -> str:
     """Format a route trace as human-readable text."""
     lines: list[str] = []
-    t = trace["tenant"]
-    a = trace["alertname"]
-    s = trace["severity"]
+    t = safe_label(trace["tenant"])
+    a = safe_label(trace["alertname"])
+    s = safe_label(trace["severity"])
 
     if lang == "zh":
         lines.append(f"╔══ 路由追蹤: {a} (租戶={t}, 嚴重度={s}) ══╗")
@@ -499,7 +503,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if not Path(args.config_dir).is_dir():
-        print(f"ERROR: config directory not found: {args.config_dir}",
+        print(f"ERROR: config directory not found: {safe_label(args.config_dir)}",
               file=sys.stderr)
         return EXIT_CALLER_ERROR
 
@@ -514,7 +518,7 @@ def main(argv: list[str] | None = None) -> int:
         traces = []
         for t in args.tenants:
             if t not in all_tenants:
-                print(f"  WARN: tenant '{t}' not found", file=sys.stderr)
+                print(f"  WARN: tenant '{safe_label(t)}' not found", file=sys.stderr)
                 continue
             trace = trace_alert_routing(
                 parsed, t, args.alertname, args.severity)
@@ -543,11 +547,11 @@ def main(argv: list[str] | None = None) -> int:
     results = []
     for t in target_tenants:
         if t not in all_tenants:
-            print(f"  WARN: tenant '{t}' not found in config-dir",
+            print(f"  WARN: tenant '{safe_label(t)}' not found in config-dir",
                   file=sys.stderr)
             continue
         if t in disabled:
-            print(f"  INFO: tenant '{t}' has routing disabled, skipping",
+            print(f"  INFO: tenant '{safe_label(t)}' has routing disabled, skipping",
                   file=sys.stderr)
             continue
         explanation = explain_tenant_routing(parsed, t)

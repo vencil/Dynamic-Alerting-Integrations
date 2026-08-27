@@ -63,6 +63,7 @@ from _lib_python import (  # noqa: E402
 # Aliased: the local format_json_report() below (domain report builder,
 # exercised directly by tests) delegates its final dump to the shared helper.
 from _lib_python import format_json_report as _dump_json  # noqa: E402
+from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_exitcodes import EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 _LANG = detect_cli_lang()
@@ -642,7 +643,7 @@ def format_text_report(reports: list[TenantTestReport]) -> str:
     lines: list[str] = []
 
     for report in reports:
-        lines.append(f"\nTenant: {report.tenant}")
+        lines.append(f"\nTenant: {safe_label(report.tenant)}")
         lines.append(f"{'─' * 72}")
         header = f"  {'Receiver':<25s} {'Type':<12s} {'Status':<20s} {'Latency':<10s}"
         lines.append(header)
@@ -653,10 +654,11 @@ def format_text_report(reports: list[TenantTestReport]) -> str:
             latency = f"{r.latency_ms}ms" if r.latency_ms > 0 else "—"
             status_str = f"{symbol} {r.status}"
             lines.append(
-                f"  {r.receiver_name:<25s} {r.receiver_type:<12s} {status_str:<20s} {latency:<10s}"
+                f"  {safe_label(r.receiver_name):<25s} "
+                f"{safe_label(r.receiver_type):<12s} {status_str:<20s} {latency:<10s}"
             )
             if r.detail and r.status not in (STATUS_OK, STATUS_DRY_RUN):
-                lines.append(f"    └─ {r.detail}")
+                lines.append(f"    └─ {safe_label(r.detail)}")
 
         total = len(report.receivers)
         lines.append(f"  ({report.passed} passed, {report.failed} failed, {report.skipped} skipped / {total} total)")

@@ -42,6 +42,7 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import load_yaml_file as _lib_load_yaml  # noqa: E402
 from _lib_python import write_text_secure  # noqa: E402
+from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_confd import warn_nested  # noqa: E402
 
@@ -60,7 +61,7 @@ def load_yaml_file(path):
             return {}
         return result
     except (OSError, yaml.YAMLError) as e:
-        print(f"  ⚠️  無法讀取 {path}: {e}")
+        print(f"  ⚠️  無法讀取 {safe_label(path)}: {safe_label(e)}")
         return None
 
 
@@ -260,7 +261,8 @@ def main():
             print(f"  📂 發現 {sum(len(f['occurrences']) for f in findings)} 處引用:")
             for f in findings:
                 for section, key, val in f["occurrences"]:
-                    print(f"     • {f['filename']} → [{section}] {key}: {val}")
+                    print(f"     • {safe_label(f['filename'])} → "
+                          f"[{safe_label(section)}] {safe_label(key)}: {safe_label(val)}")
         else:
             print(f"  ✅ 未發現任何引用")
 
@@ -268,7 +270,7 @@ def main():
         print(f"\n  Step 1: _defaults.yaml")
         ok, msg = disable_in_defaults(metric, args.config_dir, execute=args.execute)
         icon = "✅" if ok else "❌"
-        print(f"  {icon} {msg}")
+        print(f"  {icon} {safe_label(msg)}")
 
         # Step 3: 從 tenant configs 移除
         print(f"\n  Step 2: Tenant configs")
@@ -276,7 +278,8 @@ def main():
         if removed:
             for filename, tenant, key, val in removed:
                 action = "已移除" if args.execute else "將移除"
-                print(f"  🗑️  {action}: {filename} → {tenant}.{key} (值: {val})")
+                print(f"  🗑️  {action}: {safe_label(filename)} → "
+                      f"{safe_label(tenant)}.{safe_label(key)} (值: {safe_label(val)})")
         else:
             print(f"  ✅ 無需清理 tenant configs")
 

@@ -35,6 +35,7 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
+from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_python import (  # noqa: E402
     load_tenant_configs,
     http_request_with_retry,
@@ -101,7 +102,8 @@ def load_recurring_schedules(config_dir):
             cron = entry.get("cron", "").strip()
             duration = entry.get("duration", "").strip()
             if not cron or not duration:
-                print(f"  WARN: {tenant}: recurring entry missing cron/duration, skipping",
+                print(f"  WARN: {safe_label(tenant)}: recurring entry missing "
+                      f"cron/duration, skipping",
                       file=sys.stderr)
                 continue
             valid.append({
@@ -245,7 +247,8 @@ def create_silence(alertmanager_url, tenant, reason, ends_at, dry_run=False):
     }
 
     if dry_run:
-        print(f"  DRY-RUN: would create silence for {tenant} until {ends_at.isoformat()}",
+        print(f"  DRY-RUN: would create silence for {safe_label(tenant)} "
+              f"until {ends_at.isoformat()}",
               file=sys.stderr)
         return None
 
@@ -253,11 +256,13 @@ def create_silence(alertmanager_url, tenant, reason, ends_at, dry_run=False):
     try:
         result = _api_request(url, method="POST", payload=payload)
         silence_id = result.get("silenceID", "unknown")
-        print(f"  Created silence {silence_id} for {tenant} until {ends_at.isoformat()}",
+        print(f"  Created silence {safe_label(silence_id)} for {safe_label(tenant)} "
+              f"until {ends_at.isoformat()}",
               file=sys.stderr)
         return silence_id
     except (urllib.error.URLError, urllib.error.HTTPError, OSError, ValueError) as e:
-        print(f"  ERROR: failed to create silence for {tenant}: {e}", file=sys.stderr)
+        print(f"  ERROR: failed to create silence for {safe_label(tenant)}: "
+              f"{safe_label(e)}", file=sys.stderr)
         return None
 
 
@@ -291,7 +296,8 @@ def extend_silence(alertmanager_url, silence_id, tenant, reason, ends_at,
               file=sys.stderr)
         return new_id
     except (urllib.error.URLError, urllib.error.HTTPError, OSError, ValueError) as e:
-        print(f"  ERROR: failed to extend silence {silence_id} for {tenant}: {e}",
+        print(f"  ERROR: failed to extend silence {safe_label(silence_id)} for "
+              f"{safe_label(tenant)}: {safe_label(e)}",
               file=sys.stderr)
         return None
 
@@ -353,7 +359,8 @@ def evaluate_and_apply(config_dir, alertmanager_url, dry_run=False, now=None):
                     else:
                         errors += 1
                 else:
-                    print(f"  SKIP: {tenant} — silence already active for '{reason}'",
+                    print(f"  SKIP: {safe_label(tenant)} — silence already active "
+                          f"for '{safe_label(reason)}'",
                           file=sys.stderr)
                     skipped += 1
                 continue
@@ -366,7 +373,8 @@ def evaluate_and_apply(config_dir, alertmanager_url, dry_run=False, now=None):
                 else:
                     errors += 1
             else:
-                print(f"  ACTIVE: {tenant} — {reason} (window {start} → {end})",
+                print(f"  ACTIVE: {safe_label(tenant)} — {safe_label(reason)} "
+                      f"(window {safe_label(start)} → {safe_label(end)})",
                       file=sys.stderr)
                 created += 1
 

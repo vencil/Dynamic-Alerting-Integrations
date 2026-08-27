@@ -41,6 +41,7 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 
 # ── Re-exports from _lib_python (kept for test backward-compat) ─────
+from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_python import (  # noqa: E402, F401
     write_text_secure,
     PLATFORM_DEFAULTS,
@@ -247,9 +248,9 @@ def _print_config_summary(routing_configs: dict, dedup_configs: dict, enforced_r
         print("Platform enforced routing: ENABLED")
     if routing_configs:
         print(f"Found {len(routing_configs)} tenant(s) with routing config: "
-              f"{', '.join(sorted(routing_configs.keys()))}")
+              f"{safe_label(', '.join(sorted(routing_configs.keys())))}")
     print(f"Found {len(dedup_configs)} tenant(s) for severity dedup: "
-          f"{', '.join(sorted(dedup_configs.keys()))}")
+          f"{safe_label(', '.join(sorted(dedup_configs.keys())))}")
 
 
 def main() -> None:
@@ -325,7 +326,9 @@ def main() -> None:
     # Collect all warnings
     all_warnings = schema_warnings + route_warnings + dedup_warnings
     for w in all_warnings:
-        print(w, file=sys.stderr)
+        # #1538: escape here, not in `all_warnings` — the same list is handed
+        # to --validate / --json consumers, which must stay raw.
+        print(safe_label(w), file=sys.stderr)
 
     if not routes and not inhibit_rules:
         print("No valid routes or inhibit rules generated.")
