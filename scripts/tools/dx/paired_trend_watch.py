@@ -394,6 +394,29 @@ class Night:
                 if b not in GATING_CANARIES}
 
 
+def _dated(night):
+    """Does this night sit on a calendar night at all?
+
+    ⛔ ONE predicate, used by every place that has to answer it — the span, the
+    Nights table, the calendar ratio and the disclosure beside it. Review found
+    the first cut using `night.night_utc or '?'` in two of those and this
+    `isinstance` test in the others: a truthy non-string (`20260816`) was then
+    classified as un-dated by one and printed verbatim by the others, so the
+    page said a run appears as `?` while showing a night label nobody wrote.
+    ⚠️ Both production loaders already reject that shape — `nights_from_dataset`
+    raises on it and `nights_from_gh` only ever produces `str` or `None` — so
+    this is unreachable from CI today. It is unified anyway for the reason
+    `_ordering_key` gives for its own defence in depth: Nights are also built by
+    hand, by tests and by future adapters, and the disagreement was real.
+    """
+    return isinstance(night.night_utc, str) and bool(night.night_utc)
+
+
+def _night_label(night):
+    """What to print where a night's date goes. `?` means the date is unknown."""
+    return night.night_utc if _dated(night) else "?"
+
+
 def _finite_pct(value):
     """Return a percent reading, or None if the input is not a usable number.
 
@@ -798,7 +821,12 @@ def digest_transitions(nights):
             per_night[night.night_utc] = night
     usable = list(per_night.values())
     for prev, cur in zip(usable, usable[1:]):
-        rec = {"from": prev.night_utc, "to": cur.night_utc, "sides": {}}
+        # ⛔ Labelled through the shared predicate, like the span and the
+        # Nights table. Found by the test that unified the other three: this
+        # was a FOURTH call site printing the raw value, so a night the ratio
+        # had already classified as un-dated still appeared here under a label
+        # nobody wrote.
+        rec = {"from": _night_label(prev), "to": _night_label(cur), "sides": {}}
         for side in ("reference", "main"):
             if (prev.digest_status != "checked" or cur.digest_status != "checked"
                     or side not in prev.digest_sides or side not in cur.digest_sides):
@@ -1156,8 +1184,6 @@ def nights_from_gh(workflow, limit, cache_dir):
 
 def _pct(value):
     return f"{value:+.2f}%"
-
-
 def counterfactual_thresholds(nights, benches, gap):
     """What each candidate threshold WOULD have opened, on this same series.
 
@@ -1223,7 +1249,7 @@ def render(result):
     # kind `nights_from_dataset()` raises over — while the new disclosure line
     # below says those runs appear as `?`. `?` is what the Nights table already
     # prints for the same fact, so all three now agree.
-    span = (f"{nights[0].night_utc or '?'} .. {nights[-1].night_utc or '?'}"
+    span = (f"{_night_label(nights[0])} .. {_night_label(nights[-1])}"
             if nights else "empty series")
 
     lines.append("## Paired trend watch — SUMMARY ONLY (ADR-032 phase 2, PR-B1)")
@@ -1249,9 +1275,6 @@ def render(result):
     # reported as a count that cannot be placed. ⚠️ The un-dated group is most
     # likely to be exactly the download-failure rows, which is the group least
     # able to survive being silently merged.
-    def _dated(night):
-        return isinstance(night.night_utc, str) and bool(night.night_utc)
-
     dated_counted = [n for n in counted if _dated(n)]
     undated = [n for n in nights if not _dated(n)]
     n_calendar = len({n.night_utc for n in dated_counted})
@@ -1264,13 +1287,24 @@ def render(result):
                                  if n.outcome == NIGHT_COUNTED])
         lines.append("")
         # ⛔ This sentence says only what is true in every case. Its first
-        # draft read "(the run ratio still counts them)" — false in the very
-        # case the disclosure exists for: an un-dated night is most often a
-        # download failure, which is UNREADABLE, so the headline says "1 of 3
-        # run(s) counted" and the aside said they were counted anyway. Worse,
-        # `counted` is this module's own term for passing the canary gate, so
-        # the wrong reading was also the trained one. Review caught it — prose
-        # written while fixing a precision defect, carrying a precision defect.
+        # draft read "(the run ratio still counts them)" — false whenever an
+        # un-dated night is UNREADABLE, which the motivating fixture is: the
+        # headline then says "1 of 3 run(s) counted" while the aside said they
+        # were counted anyway. Worse, `counted` is this module's own term for
+        # passing the canary gate, so the wrong reading was also the trained
+        # one. Review caught it — prose written while fixing a precision
+        # defect, carrying a precision defect.
+        #
+        # ⛔ CORRECTION, and it is the same disease a second time. That fix's
+        # own comment justified itself with "an un-dated night is most often a
+        # download failure". Nothing measured "most often", and a later review
+        # showed the causal half is FALSE outright: `nights_from_gh` derives
+        # `night_utc` from `createdAt` BEFORE it attempts the download, so a
+        # download failure keeps its date. Missing-date and unreadable are
+        # independent axes; the fixture that motivated this happens to set
+        # both, which is what made the invented link look obvious. The claim
+        # this line actually needs is the weak one: an un-dated night CAN be
+        # un-counted, so the sentence must not assume either way.
         lines.append(
             f"⚠️ {len(undated)} run(s) carry no usable date and are on NO "
             "calendar night, so they are excluded from the calendar ratio "
@@ -1354,7 +1388,7 @@ def render(result):
         head = f"`{night.head_sha[:7]}`" if isinstance(night.head_sha, str) \
             and night.head_sha else "—"
         lines.append(
-            f"| {night.night_utc or '?'} | `{night.run_id or '?'}` | {head} | "
+            f"| {_night_label(night)} | `{night.run_id or '?'}` | {head} | "
             f"{night.outcome}{note} | {canary} | {info_cell} | {drift} "
             f"| {night.digest_status} |")
     lines.append("")

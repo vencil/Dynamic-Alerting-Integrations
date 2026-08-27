@@ -1201,6 +1201,12 @@ def test_headline_never_folds_undated_runs_into_one_calendar_night():
     they share a night), so they leave the calendar ratio entirely and are
     reported as a count that cannot be placed.
     """
+    # ⚠️ These two are un-dated AND unreadable, but those are INDEPENDENT
+    # axes and this fixture must not be read as a causal pair: `nights_from_gh`
+    # derives `night_utc` from `createdAt` before it tries the download, so a
+    # download failure keeps its date. An earlier comment on this change
+    # asserted the link and was wrong; the sibling test below covers the
+    # un-dated-and-counted quadrant so neither case can be assumed.
     nights = [ptw.Night(None, 101).unreadable("artifact download failed"),
               ptw.Night(None, 102).unreadable("artifact download failed"),
               _run("2026-08-20", 103, alpha=1.0)]
@@ -1240,6 +1246,32 @@ def test_undated_runs_do_not_manufacture_a_multi_run_night_warning():
     # for both cases. Without this pair, "0 of them are counted" could be
     # hard-coded and nothing would notice.
     assert "1 of them is counted" in body
+
+
+def test_one_predicate_decides_a_nights_label_everywhere_it_is_printed():
+    """⛔ The span, the Nights table and the calendar ratio must agree.
+
+    Review found them disagreeing: two used `night_utc or '?'` and one used an
+    `isinstance` test, so a truthy non-string date was classified as un-dated by
+    the ratio while the span and the table printed it verbatim — the page
+    saying a run appears as `?` while showing a night label nobody wrote.
+
+    ⚠️ HONEST REACHABILITY. Both production loaders reject this shape already
+    (`nights_from_dataset` raises, `nights_from_gh` only makes `str` or `None`),
+    so this test's counterfactual detection against CI inputs is ZERO. It is
+    here for the reason `_ordering_key` documents for its own guard: Nights are
+    also built by hand, and the disagreement between the three call sites was
+    real regardless of who could reach it.
+    """
+    hand_built = ptw.Night(20260816, 1)
+    hand_built.canary_pct["BenchmarkControlCanaryCPU"] = 0.02
+    hand_built.canary_pct["BenchmarkControlCanarySleep"] = 0.0
+    hand_built.ratios_pct["BenchmarkAlpha"] = 1.0
+    body = ptw.render(ptw.decide([hand_built, _run("2026-08-20", 2, alpha=1.0)]))
+    assert "20260816" not in body, "a night label nobody wrote reached the page"
+    assert "carry no usable date" in body
+    _, rows = _nights_table_rows(body)
+    assert "| ? |" in rows[0]
 
 
 def test_from_gh_never_borrows_a_head_sha_for_an_unidentifiable_run(tmp_path):
