@@ -139,10 +139,7 @@ lang: zh
 
 **為什麼鎖 ZH primary**：v2.5.0 評估文 §7 原推薦切換 EN SSOT，premise 是「open-source community 慣例 EN」；但實際客戶與 contributor 社群均為中文母語，premise 未驗證 → 切換 = 解決不存在的問題。詳細 audit 見 [`testing-playbook.md`](testing-playbook.md) §LL §12a Q4（premise validation）。
 
-**Phase 1 pilot 工具狀態（v2.7.0 完成的，現 dormant）**：
-
-- `migrate_ssot_language.py` — 單向 ZH→EN 遷移腳本，保留作 future-option（trigger 觸發後可用）
-- `check_bilingual_structure.py` / `check_bilingual_content.py` — 雙模式 lint，自動偵測檔案命名；保留以支援未來若選擇遷移
+**Phase 1 pilot 產出（v2.7.0，現 dormant）**：`migrate_ssot_language.py`（單向 ZH→EN 遷移）+ `check_bilingual_structure.py` / `check_bilingual_content.py`（雙模式 lint，自動偵測檔案命名）保留作 future-option，trigger 觸發後可用。**評估文件**（status: superseded by S#101）：`ssot-language-evaluation.md` + `ssot-migration-pilot-report.md` 全文已歸檔於 closed issue [#145](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/145#issuecomment-4587136920)（依「決策報告住 issue」原則移出 repo）
 
 **Trigger conditions for re-evaluation**（觸發後 reopen closed issue [#145](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/145#issuecomment-4587136920)，內有完整評估報告全文）：
 
@@ -152,7 +149,11 @@ lang: zh
 
 未觸發前：新文件沿用「中主英副」；不討論未出現的英文主體客戶。
 
-**評估文件**（status: superseded by S#101）：`ssot-language-evaluation.md` + `ssot-migration-pilot-report.md` 全文已歸檔於 closed issue [#145](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/145#issuecomment-4587136920)（依「決策報告住 issue」原則移出 repo）
+### 9c. 語言邊界：AI 回應 vs 工具渲染輸出（TRK-369）
+
+**規則**：繁中規範管的是 **AI 對人的輸出**（agent 回應、PR / issue 留言、commit 訊息、`docs/**`）；**repo 內工具印給 operator 的字串沿用該工具既有慣例**（`scripts/tools/**` 目前為英文），改既有字串時⛔**不得只翻被改到的那幾行**。依據：owner 在 [#1244](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1244#discussion_r3652358781) 對同類 finding 連續三次駁回（「會造成單一檔案內混語⋯若要統一改語言，那是獨立的一致性工作」）。該裁決解決了「不要只翻一半」卻沒寫下**涵蓋範圍** ⇒ 同一條 finding 在每支動到 operator-visible 字串的 PR 上復發（最近 [#1580](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1580)）；本條補上那一半。
+
+**⚠️ 機械強制不完整，本條不宣稱能單獨終結它**：觸發該 finding 的 path instruction 在 **CodeRabbit UI 側**（`.coderabbit.yaml` **沒有任何** path instruction，`inheritance: true` 讓 UI 值續用）⇒ repo 側改不到那個 glob；本條靠 `CLAUDE.md` #1 與 `AGENTS.md` #2 的措辭生效——**那兩處才是 CodeRabbit 引用的原文**。仍復發需 owner 到 UI 調整。⚠️ 本條**不擋 i18n**（獨立決定）；CLI `--help` 的 `detect_cli_lang()`（§9）不受影響。
 
 ### 10. 雙語政策：internal docs 不需英文版
 

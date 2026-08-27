@@ -195,6 +195,7 @@ SOT 在 [`dx-tooling-backlog.md`](dx-tooling-backlog.md)。
 | TRK-360 | [#1478](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1478) | 多輪修正收斂協議 —— `vibe-converge` skill + `dev/<scope>/ROUNDS.jsonl` 帳本 + `make converge-status`（decidability gate / 跨輪交接契約 / 面積預算 / 輪數上限 5；⚠️ **2026-08-26 修訂**：`CONVERGED` 已刪除且無替代，見 `references/derivation.md` §4.1／§4.2；由 #1411→#1457 六輪鏈的實測導出：三版述詞對同一個資訊上不可判的問題全掛、每輪插入:刪除 43:1〜53:1、作者自審 0 條）（**無 issue，直接以 PR 落地**） | — |
 | TRK-361 | [#1481](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1481) | 跨 AI agent 中性 SSOT — `agents/{skills,roles}/` + `AGENTS.md`（AAIF 標準）成為單一真相源，`.claude/**` 降為 `gen_agent_adapters.py` 的生成物 + drift gate；用複製而非 symlink（Windows host 實測 symlink 壞，#1457）（**無 issue，直接以 PR 落地**） | — |
 | TRK-362 | [#1485](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1485) | 吸收 superpowers 兩項缺口能力 —— 完成宣稱鐵律升為 always-on 規則（`AGENTS.md` / `CLAUDE.md`）、收 review 紀律進 `vibe-subagent-review`（take/reframe/reject + 修→回覆→resolve 三件套）；刻意不新增第 9 支 skill（**無 issue，直接以 PR 落地**） | — |
+| TRK-369 | [#1593](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1593) | 語言邊界：繁中規範管的是 AI 對人的輸出，repo 工具印給 operator 的字串沿用該工具既有慣例（`dev-rules.md` §9c + `CLAUDE.md` / `AGENTS.md` 措辭對齊）——#1244 的裁決解決了「不要只翻一半」卻沒寫下涵蓋範圍，於是同一條 finding 在每支動到 operator-visible 字串的 PR 上復發（最近一次 #1580）；⚠️ 觸發它的 path instruction 在 CodeRabbit **UI** 側，repo 改不到，故本條不宣稱能單獨終結（**無 issue，直接以 PR 落地**） | — |
 
 ## 不在 mapping 範圍
 

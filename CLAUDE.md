@@ -22,7 +22,7 @@ Session 起手式 codified 為 **PreToolUse hook** (v2.8.0；#824 改經 `run-ho
 
 被燒過 ≥2 次或高頻的規則，從 lazy-load feedback 升為 always-on（不靠 keyword 觸發）：
 
-1. **回應語言** — user-facing prose 一律**繁體中文**（非日文 / 英文）
+1. **回應語言** — user-facing prose 一律**繁體中文**（非日文 / 英文）。⚠️ 指的是 **AI 對人的輸出**（本則回應、PR / issue 留言、commit 訊息、`docs/**`）；**repo 內工具印給 operator 的字串不在此列**，沿用該工具既有語言慣例（`scripts/tools/**` 目前為英文），改既有字串時不得只翻被改到的那幾行。詳 [`dev-rules.md` §9c](docs/internal/dev-rules.md)
 2. **Commit trailer block** — 所有 trailer 行（`Refs:` / `Self-Review-Pass-2:` / `Co-authored-by:`）須為**最底部單一連續段落、全 `Key: value` 格式**；夾空行或無冒號裸行會劈裂 block → git 丟棄上方行 → CI gate fail（燒過 #515/#522/#543）。多項目 / 純文件 commit 依 [`dev-rules.md` §P1](docs/internal/dev-rules.md) 改在 body prose 列 ID，**不寫 `Resolves` 裸行**
 3. **Worktree edit path** — 在 git worktree 內編輯須 anchor worktree 路徑；main repo 同時 checked out，用 main-repo 路徑會悄悄落到 main（燒過 #562）
 4. **`git add` 括號 glob** — bash `[01]` 只配 `0`/`1` 不配 `2`；任何括號 glob 後必跑 `git diff --cached --stat` 驗 staged set（燒過 #485 ~2h）
