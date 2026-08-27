@@ -417,6 +417,36 @@ def _night_label(night):
     return night.night_utc if _dated(night) else "?"
 
 
+def _night_key(night):
+    """The identity under which per-night facts are COLLECTED into a dict.
+
+    ⛔ NOT the same question as `_night_label()`, which asks what to PRINT.
+    Two dated runs of one night must share a key — merging them is the entire
+    point of the calendar-night rule. Two UN-dated runs must NOT, because
+    nothing here knows whether they share a night, and giving them one key
+    asserts exactly what every disclosure on this page says it cannot.
+
+    ⛔ THREE call sites collapsed on `None` (or on a shared `"?"`) before this
+    existed, and all three lost information rather than announcing it:
+
+        over_not_sustained   two un-dated runs over the threshold rendered as
+                             ONE row; the smaller reading left the page entirely
+        inconclusive         `None` beside a date string in the same dict, then
+                             `sorted()` -> TypeError, killing the whole render
+        digest_transitions   three un-dated nights whose work-definition digest
+                             changed twice reported ZERO transitions
+
+    ⚠️ The third was NOT reported by review. It came out of enumerating every
+    site that keys or sorts on a night, which is the check that should have run
+    the first time — the previous round's prose claimed "third call site" and
+    that phrasing read as "all of them". It was not.
+
+    ⭐ The un-dated key carries `run_id` because that is the only identity such a
+    run has, and the Nights table already prints it next to the `?`.
+    """
+    return night.night_utc if _dated(night) else f"?#{night.run_id}"
+
+
 def _short_night(label):
     """`2026-08-20` -> `08-20`; `?` stays `?`.
 
@@ -862,7 +892,12 @@ def digest_transitions(nights):
     per_night = {}
     for night in nights:
         if night.readable:
-            per_night[night.night_utc] = night
+            # ⛔ `_night_key`, not the raw date. Three un-dated nights whose
+            # work-definition digest changed twice used to collapse onto the
+            # single key `None` and report ZERO transitions — two MOVES gone
+            # from the page, in the one table whose job is to say the two
+            # sides stopped doing the same thing.
+            per_night[_night_key(night)] = night
     usable = list(per_night.values())
     for prev, cur in zip(usable, usable[1:]):
         # ⛔ Labelled through the shared predicate, like the span and the
@@ -870,7 +905,7 @@ def digest_transitions(nights):
         # was a FOURTH call site printing the raw value, so a night the ratio
         # had already classified as un-dated still appeared here under a label
         # nobody wrote.
-        rec = {"from": _night_label(prev), "to": _night_label(cur), "sides": {}}
+        rec = {"from": _night_key(prev), "to": _night_key(cur), "sides": {}}
         for side in ("reference", "main"):
             if (prev.digest_status != "checked" or cur.digest_status != "checked"
                     or side not in prev.digest_sides or side not in cur.digest_sides):
@@ -966,12 +1001,12 @@ def decide(nights, *, threshold_pct=DEFAULT_THRESHOLD_PCT,
     inconclusive = {}
     for night in counted:
         for bench, reason in night.inconclusive.items():
-            inconclusive.setdefault(bench, {})[night.night_utc] = reason
+            inconclusive.setdefault(bench, {})[_night_key(night)] = reason
     for night in counted:
         for bench in benches:
             if bench in night.ratios_pct or bench in night.inconclusive:
                 continue
-            inconclusive.setdefault(bench, {})[night.night_utc] = (
+            inconclusive.setdefault(bench, {})[_night_key(night)] = (
                 "absent-from-payload — the night carried neither a ratio nor a "
                 "reason for this benchmark")
 
@@ -996,9 +1031,9 @@ def decide(nights, *, threshold_pct=DEFAULT_THRESHOLD_PCT,
                 # took the whole page down with a TypeError. Third call site of
                 # that same defect on this branch.
                 per_night = seen_over.setdefault(bench, {})
-                label = _night_label(night)
-                if value > per_night.get(label, float("-inf")):
-                    per_night[label] = value
+                key = _night_key(night)
+                if value > per_night.get(key, float("-inf")):
+                    per_night[key] = value
 
     if not counted or not benches or not any(can_judge.values()):
         # ⛔ Not CLEAR. No benchmark was in a position to be judged, so the

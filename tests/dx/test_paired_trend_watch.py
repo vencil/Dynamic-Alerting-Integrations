@@ -1569,11 +1569,98 @@ def test_excluding_undated_runs_from_the_rule_does_not_hide_them():
     assert "1 of 1 calendar night(s)" in body        # calendar ratio excludes it
     assert "2 of 2 run(s) counted" in body           # run total still carries it
     assert "1 run(s) carry no usable date" in body   # and it is named
-    # ⛔ And its READING survives too, under `?`. This assertion is why the test
-    # exists at all: writing it found a THIRD site of the same None-in-sorted()
-    # defect (`over_not_sustained` keyed by the raw date), which took the whole
-    # page down with a TypeError before this run reached the table.
-    assert "| `BenchmarkAlpha` | 2 (08-20, ?) |" in body
+    # ⛔ And its READING survives too. This assertion is why the test exists at
+    # all: writing it found a further site of the same defect family
+    # (`over_not_sustained` keyed by the raw date), which took the whole page
+    # down with a TypeError before this run reached the table.
+    # ⚠️ The label is `?#101`, not a bare `?`: a later round found that a shared
+    # `?` merged distinct un-dated runs and dropped a reading, so the key now
+    # carries the run id. See `_night_key`.
+    assert "| `BenchmarkAlpha` | 2 (08-20, ?#101) |" in body
+
+
+def test_two_undated_runs_are_two_readings_not_one():
+    """⛔ The defect the PREVIOUS round's own fix introduced.
+
+    That round keyed `over_not_sustained` on `_night_label()`, which returns a
+    bare `?` for every un-dated run. Two distinct un-dated runs over the
+    threshold therefore shared one dict key: the smaller reading was overwritten
+    and left the page entirely, while the disclosure two lines above said both
+    runs were counted. The docstring justifying that same fix asserted
+    "excluded is not dropped" — and dropped one.
+
+    ⚠️ The one-reading-only assertion is the point. Asserting `len == 2` alone
+    would pass on a rule that merges nothing anywhere; asserting the smaller
+    value is PRESENT is what pins the merge.
+    """
+    result = ptw.decide([_run(None, 1, 9.0), _run(None, 2, 12.0)], k=5)
+    hits = result["over_not_sustained"]["BenchmarkAlpha"]
+    assert len(hits) == 2, hits
+    assert sorted(hits.values()) == [9.0, 12.0]      # ⛔ neither reading lost
+    body = ptw.render(result)
+    assert "| `BenchmarkAlpha` | 2 (?#1, ?#2) |" in body
+
+
+def test_inconclusive_reasons_from_an_undated_night_do_not_kill_the_page():
+    """⛔ PRE-EXISTING, reproduced on `origin/main` before fixing.
+
+    `inconclusive` was keyed on the raw `night_utc`, so an un-dated COUNTED
+    night missing a reading put `None` in a dict beside a date string, and
+    `render()`'s `sorted(per_night.items())` raised TypeError — the whole page,
+    Nights table included, replaced by a traceback and exit 1.
+
+        origin/main 7fe8515f, same probe:
+        TypeError: '<' not supported between instances of 'str' and 'NoneType'
+
+    ⚠️ The previous round's prose called `over_not_sustained` the "third call
+    site", which read as "all of them". This was the fourth.
+    """
+    result = ptw.decide([_run("2026-08-18", 1, 9.0),
+                         _run("2026-08-20", 2),      # dated, no reading
+                         _run(None, 3)], k=2)        # un-dated, no reading
+    body = ptw.render(result)                        # ⛔ must not raise
+    keys = result["inconclusive"]["BenchmarkAlpha"]
+    assert set(keys) == {"?#3", "2026-08-20"}, keys  # both kept, neither None
+    assert "?#3" in body
+
+    # ⛔ BOTH assignment sites, because `inconclusive` is populated twice and a
+    # first cut of this test only reached one. `decide()` fills it from
+    # `night.inconclusive` (a reason the payload itself carried) AND from the
+    # union pass for benchmarks a night mentioned nowhere. The break harness
+    # said so: reverting the first site turned nothing red.
+    carried = _run(None, 4)
+    carried.inconclusive["BenchmarkAlpha"] = "unreadable-ratio (nan)"
+    result = ptw.decide([_run("2026-08-18", 1, 9.0), carried], k=2)
+    keys = result["inconclusive"]["BenchmarkAlpha"]
+    assert set(keys) == {"?#4"}, keys
+    assert "?#4" in ptw.render(result)
+
+
+def test_undated_nights_do_not_swallow_a_work_definition_move():
+    """⛔ The site review did NOT report — found by enumerating every key/sort.
+
+    `digest_transitions` kept one entry per `night_utc`, so N un-dated nights
+    collapsed onto the single key `None` and only the last survived. Three
+    un-dated nights whose work-definition digest changed twice reported ZERO
+    transitions: two MOVES gone, from the one table whose entire job is to say
+    the two sides stopped measuring the same thing.
+
+    ⚠️ That is worse than a wrong number. ADR-032 §工作定義漂移 rests on this
+    table — a ratio only means anything while both sides do the same work.
+    """
+    sha = {"a": "a" * 64, "b": "b" * 64, "c": "c" * 64}
+
+    def digested(run_id, which):
+        night = _run(None, run_id, 1.0)
+        night.digest_status = "checked"
+        night.digest_sides = {"reference": sha[which], "main": sha[which]}
+        return night
+
+    transitions = ptw.digest_transitions(
+        [digested(1, "a"), digested(2, "b"), digested(3, "c")])
+    assert len(transitions) == 2, transitions
+    assert [t["from"] for t in transitions] == ["?#1", "?#2"]
+    assert all(t["sides"]["reference"] is True for t in transitions)  # MOVED
 
 
 def test_a_reading_over_the_threshold_is_never_silently_omitted():
