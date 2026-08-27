@@ -81,6 +81,7 @@ from _lib_python import (  # noqa: E402
 # Aliased: the local format_json_report() below (domain report builder,
 # exercised directly by tests) delegates its final dump to the shared helper.
 from _lib_python import format_json_report as _dump_json  # noqa: E402
+from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_prometheus import _validate_url_scheme  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION  # noqa: E402
 
@@ -752,7 +753,8 @@ def format_text_report(
             f"⚠ {len(ung)} threshold(s) ungoverned (unclassified lower-bound `<`, "
             "manual review — #916):"
         )
-        return ["", "-" * 78, head] + [f"    {u.tenant} / {u.key}" for u in ung]
+        return ["", "-" * 78, head] + [
+            f"    {safe_label(u.tenant)} / {safe_label(u.key)}" for u in ung]
 
     def _force_manual_lines() -> list[str]:
         fm = force_manual or []
@@ -773,7 +775,8 @@ def format_text_report(
         body = []
         for k in fm:
             d = f" ({k.delta_pct:+.1f}% miss)" if k.delta_pct is not None else ""
-            body.append(f"    {k.tenant} / {k.key}: {k.guardrail_reason}{d}")
+            body.append(f"    {safe_label(k.tenant)} / {safe_label(k.key)}: "
+                        f"{safe_label(k.guardrail_reason)}{d}")
         return ["", "-" * 78, head] + body
 
     def _not_applicable_lines() -> list[str]:
@@ -819,7 +822,8 @@ def format_text_report(
         return "\n".join(lines)
 
     for plan in plans:
-        lines.append(f"\nTenant: {plan.tenant} ({len(plan.changes)} change(s))")
+        lines.append(f"\nTenant: {safe_label(plan.tenant)} "
+                     f"({len(plan.changes)} change(s))")
         lines.append(f"  {'Key':<26s} {'Current':>10s} {'→':^3s} {'Recommend':>10s} {'Delta':>13s} {'Conf':<8s}")
         lines.append(f"  {'-' * 26} {'-' * 10} {'-' * 3} {'-' * 10} {'-' * 13} {'-' * 8}")
         for c in plan.changes:
@@ -846,7 +850,7 @@ def format_text_report(
                 "error": "✗ error",
             }.get(o.status, o.status)
             detail = o.pr_url or o.message
-            lines.append(f"  [{tag}] {o.tenant}: {detail}")
+            lines.append(f"  [{tag}] {safe_label(o.tenant)}: {safe_label(detail)}")
 
     # Blind-spot / manual-review detail goes ABOVE the bottom line so Summary
     # stays the last line a reader scanning the tail expects (CLI bottom-line

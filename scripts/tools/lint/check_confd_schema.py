@@ -45,6 +45,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 
 # Repo-root-relative default: lint -> tools -> scripts -> <root>/docs/schemas/...
 _DEFAULT_SCHEMA = os.path.normpath(
@@ -197,21 +198,24 @@ def main() -> int:
 
     for config_dir in args.config_dir:
         if not os.path.isdir(config_dir):
-            print(f"ERROR: config-dir not found: {config_dir}", file=sys.stderr)
+            print(f"ERROR: config-dir not found: {safe_label(config_dir)}",
+                  file=sys.stderr)
             return EXIT_CALLER_ERROR
 
     try:
         with open(args.schema, encoding="utf-8") as fh:
             schema = json.load(fh)
     except (OSError, json.JSONDecodeError) as exc:
-        print(f"ERROR: cannot load schema {args.schema}: {exc}", file=sys.stderr)
+        print(f"ERROR: cannot load schema {safe_label(args.schema)}: "
+              f"{safe_label(exc)}", file=sys.stderr)
         return EXIT_CALLER_ERROR
 
     try:
         with open(args.platform_schema, encoding="utf-8") as fh:
             platform_schema = json.load(fh)
     except (OSError, json.JSONDecodeError) as exc:
-        print(f"ERROR: cannot load platform schema {args.platform_schema}: {exc}",
+        print(f"ERROR: cannot load platform schema "
+              f"{safe_label(args.platform_schema)}: {safe_label(exc)}",
               file=sys.stderr)
         return EXIT_CALLER_ERROR
 
@@ -237,7 +241,7 @@ def main() -> int:
             d_checked, d_violations, d_skipped = validate_dir(
                 config_dir, schema, jsonschema, platform_schema)
         except _CallerError as exc:
-            print(f"ERROR: {exc}", file=sys.stderr)
+            print(f"ERROR: {safe_label(exc)}", file=sys.stderr)
             return EXIT_CALLER_ERROR
         prefix = f"{config_dir.replace(os.sep, '/')}/" if multi else ""
         checked += d_checked
@@ -246,10 +250,11 @@ def main() -> int:
 
     if skipped:
         print(f"skipped {len(skipped)} meta-file(s) not modelled by the tenant-config "
-              f"or platform-defaults schema (own shape/validator): {', '.join(skipped)}")
+              f"or platform-defaults schema (own shape/validator): "
+              f"{safe_label(', '.join(skipped))}")
     if violations:
         for msg in violations:
-            print(msg, file=sys.stderr)
+            print(safe_label(msg), file=sys.stderr)
         print(f"\n{len(violations)} schema violation(s) across {checked} conf.d file(s). "
               f"Fix the conf.d YAML, or the schema (docs/schemas/tenant-config.schema.json "
               f"/ platform-defaults.schema.json) if the schema is wrong.", file=sys.stderr)

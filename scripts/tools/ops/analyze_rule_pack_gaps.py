@@ -32,6 +32,7 @@ import yaml
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
+from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_python import (  # noqa: E402
     format_json_report,
     load_tenant_configs as _load_tenant_configs_dir,
@@ -282,12 +283,13 @@ def print_report(results):
         by_pack.setdefault(pack, []).append(r)
 
     for pack, items in sorted(by_pack.items()):
-        print(f"  [{pack}]")
+        print(f"  [{safe_label(pack)}]")
         for item in items:
             conf = item["confidence"]
             mt = item["match_type"]
-            print(f"    {item['custom_metric']} -> {item.get('golden_name', '?')} "
-                  f"({mt}, {conf:.0%})")
+            print(f"    {safe_label(item['custom_metric'])} -> "
+                  f"{safe_label(item.get('golden_name', '?'))} "
+                  f"({safe_label(mt)}, {conf:.0%})")
         print()
 
     # Actionable recommendations

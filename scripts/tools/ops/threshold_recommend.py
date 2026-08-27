@@ -71,6 +71,7 @@ from _lib_python import (  # noqa: E402
 # Aliased: the local format_json_report() below (domain report builder,
 # exercised directly by tests) delegates its final dump to the shared helper.
 from _lib_python import format_json_report as _dump_json  # noqa: E402
+from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 import _observed_map_lib as observed_map_lib  # noqa: E402
 
@@ -897,7 +898,8 @@ def format_text_report(reports: list[TenantRecommendation]) -> str:
 
     lines: list[str] = []
     for report in reports:
-        lines.append(f"\nTenant: {report.tenant} ({report.recommended_changes}/{report.total_keys} changes recommended)")
+        lines.append(f"\nTenant: {safe_label(report.tenant)} "
+                     f"({report.recommended_changes}/{report.total_keys} changes recommended)")
         lines.append(f"{'─' * 90}")
         header = f"  {'Key':<22s} {'Current':>8s} {'P95':>8s} {'Recommend':>10s} {'Delta':>8s} {'Confidence':<10s}"
         lines.append(header)
@@ -912,7 +914,7 @@ def format_text_report(reports: list[TenantRecommendation]) -> str:
                 f"  {r.key:<22s} {current:>8s} {p95:>8s} {rec:>10s} {delta:>8s} {r.confidence:<10s}"
             )
             if r.reason and ("no change" not in r.reason):
-                lines.append(f"    └─ {r.reason}")
+                lines.append(f"    └─ {safe_label(r.reason)}")
 
     total_changes = sum(r.recommended_changes for r in reports)
     total_keys = sum(r.total_keys for r in reports)

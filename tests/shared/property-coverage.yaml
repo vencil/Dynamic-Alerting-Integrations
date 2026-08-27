@@ -57,6 +57,7 @@ modules:
       - load_yaml_file
       - iter_yaml_files
       - format_json_report
+      - safe_label
     excluded:
       load_tenant_configs: "Orchestrator over iter_yaml_files + load_yaml_file (both covered); composite contract is exercised by integration tests"
       write_text_secure: "Side-effecting I/O; SAST guard ensures chmod pairing"

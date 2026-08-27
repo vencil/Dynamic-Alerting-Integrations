@@ -24,6 +24,7 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import is_disabled as _is_disabled  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_confd import (  # noqa: E402
     iter_config_files,
     unusable_config_paths,
@@ -129,7 +130,11 @@ def _drop_unusable_policy(fname: str, reason: str, remedy: str, result: dict,
         # hand-built result dict.
         result.setdefault("policy_file_errors", []).append(
             detail.replace("\n", " "))
-    print(warning or f"  WARN: skip {fname}: {reason}", file=sys.stderr)
+    # #1538: escape at the PRINT, not in `detail` above — `detail` lands in
+    # result["policy_file_errors"] -> schema_warnings -> validate-config
+    # --json, whose bytes must not change (json.dumps already escapes).
+    print(safe_label(warning or f"  WARN: skip {fname}: {reason}"),
+          file=sys.stderr)
 
 
 def _parse_platform_config(data: dict, fname: str, result: dict) -> None:
@@ -140,6 +145,9 @@ def _parse_platform_config(data: dict, fname: str, result: dict) -> None:
     Mutates *result* in place.
     """
     is_defaults_file = os.path.basename(fname).startswith("_")
+    # #1538: display-only alias. `fname` itself stays raw — it is used for
+    # lookups (_POLICY_FILENAMES) and stored into `result`, which feeds --json.
+    _f = safe_label(fname)
 
     # Collect defaults keys for schema validation
     if isinstance(data.get("defaults"), dict):
@@ -165,17 +173,17 @@ def _parse_platform_config(data: dict, fname: str, result: dict) -> None:
                 # green on the config that empties the write plane.
                 bad = [k for k in raw if not isinstance(k, str)]
                 if bad:
-                    print(f"  WARN: optional_overrides in {fname} has "
+                    print(f"  WARN: optional_overrides in {_f} has "
                           f"{len(bad)} non-string entr{'y' if len(bad) == 1 else 'ies'} "
                           f"({bad!r}) — ignored here, but the Go exporter fails "
                           "the whole file on them", file=sys.stderr)
                 result["optional_override_keys"].update(
                     k for k in raw if isinstance(k, str))
             elif raw is not None:
-                print(f"  WARN: optional_overrides in {fname} must be a list, "
+                print(f"  WARN: optional_overrides in {_f} must be a list, "
                       "ignoring", file=sys.stderr)
         else:
-            print(f"  WARN: optional_overrides in {fname} ignored "
+            print(f"  WARN: optional_overrides in {_f} ignored "
                   "(platform-scoped; only allowed in _ prefixed files)",
                   file=sys.stderr)
 
@@ -184,7 +192,7 @@ def _parse_platform_config(data: dict, fname: str, result: dict) -> None:
         if is_defaults_file:
             result["routing_defaults"] = data["_routing_defaults"]
         else:
-            print(f"  WARN: _routing_defaults in {fname} ignored "
+            print(f"  WARN: _routing_defaults in {_f} ignored "
                   "(only allowed in _ prefixed files)", file=sys.stderr)
 
     # v1.7.0: Extract _routing_enforced (only from _ prefixed files)
@@ -196,10 +204,10 @@ def _parse_platform_config(data: dict, fname: str, result: dict) -> None:
             elif isinstance(raw, dict) and not raw.get("enabled", False):
                 pass  # explicitly disabled → None
             else:
-                print(f"  WARN: _routing_enforced in {fname} must be a dict "
+                print(f"  WARN: _routing_enforced in {_f} must be a dict "
                       "with 'enabled: true', ignoring", file=sys.stderr)
         else:
-            print(f"  WARN: _routing_enforced in {fname} ignored "
+            print(f"  WARN: _routing_enforced in {_f} ignored "
                   "(only allowed in _ prefixed files)", file=sys.stderr)
 
     # v2.1.0 ADR-007: Extract routing_profiles (only from _routing_profiles.yaml)
@@ -210,10 +218,10 @@ def _parse_platform_config(data: dict, fname: str, result: dict) -> None:
             if isinstance(profiles, dict):
                 result["routing_profiles"].update(profiles)
             else:
-                print(f"  WARN: routing_profiles in {fname} must be a dict, ignoring",
+                print(f"  WARN: routing_profiles in {_f} must be a dict, ignoring",
                       file=sys.stderr)
         else:
-            print(f"  WARN: routing_profiles in {fname} ignored "
+            print(f"  WARN: routing_profiles in {_f} ignored "
                   "(only allowed in _routing_profiles.yaml)", file=sys.stderr)
 
     # v2.1.0 ADR-007: Extract domain_policies (only from _domain_policy.yaml)
@@ -237,12 +245,12 @@ def _parse_platform_config(data: dict, fname: str, result: dict) -> None:
                     f"indent each domain under `domain_policies:` in "
                     f"{dp_fname}",
                     result,
-                    warning=f"  WARN: domain_policies in {fname} must be a "
+                    warning=f"  WARN: domain_policies in {_f} must be a "
                             f"dict, ignoring")
         else:
             # setdefault: tests may call this helper with a hand-built dict.
             result.setdefault("policy_misplacements", []).append(fname)
-            print(f"  WARN: domain_policies in {fname} ignored "
+            print(f"  WARN: domain_policies in {_f} ignored "
                   "(only allowed in _domain_policy.yaml)", file=sys.stderr)
 
 
@@ -480,7 +488,7 @@ def _parse_config_files(config_dir: str) -> dict:
             # it" produce byte-identical files, and the sibling branch
             # below already warns for a wrong-shaped `tenants:`. Before
             # this, only the null spelling was silent.
-            print(f"  WARN: {fname}: 'tenants:' is declared but empty — no "
+            print(f"  WARN: {safe_label(fname)}: 'tenants:' is declared but empty — no "
                   f"tenant is loaded from this file", file=sys.stderr)
             continue
         tenants = raw_tenants
@@ -498,7 +506,7 @@ def _parse_config_files(config_dir: str) -> dict:
             # about, and this branch used to be a crash rather than a skip,
             # so the quiet version is new. Say it in the warning until the
             # two readers agree on a verdict.
-            print(f"  WARN: {fname}: 'tenants' must be a mapping, got "
+            print(f"  WARN: {safe_label(fname)}: 'tenants' must be a mapping, got "
                   f"{type(tenants).__name__} — no tenant in this file is "
                   f"loaded here, and the Go exporter drops the WHOLE file "
                   f"on it (including its `defaults:`)", file=sys.stderr)
