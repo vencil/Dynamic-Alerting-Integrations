@@ -215,7 +215,7 @@ def read_onboard_hints(path: Optional[str]) -> Optional[dict[str, Any]]:
         return json.load(f)
 
 
-_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
 
 def safe_label(value: Any) -> str:
@@ -238,20 +238,34 @@ def safe_label(value: Any) -> str:
     visible (``\\x1b[2J`` prints as ``?[2J``) — the operator still sees that
     something odd is in the name, which deleting the characters would hide.
 
-    ⛔ **Scope, stated so nobody over-reads it.** This covers the C0 range
-    ``\\x00-\\x1f`` plus DEL ``\\x7f`` — exactly the two mechanisms above, and
-    exactly the class ``compile_custom_alerts._safe_log`` has used since #1008
-    (this function is that one, promoted; the character class is deliberately
-    byte-identical so promoting it changed no existing behaviour). It does NOT
-    cover, and was not measured against:
+    ⛔ **Scope, stated so nobody over-reads it.** This covers C0
+    ``\x00-\x1f``, DEL ``\x7f``, and the C1 range ``\x80-\x9f``.
 
-    * C1 controls ``U+0080-U+009F`` (some terminals decode these as control codes),
-    * bidi overrides ``U+202A-U+202E`` / ``U+2066-U+2069`` (can visually reorder a
-      line without any control char),
+    C1 was added in the #1538 review round, and not as widening for its own
+    sake: ``U+0085`` (NEL) is *the same attack as the newline* — terminals that
+    decode C1 treat it as a line break, so an unescaped NEL forges a report line
+    exactly as ``\n`` does, which is the one thing this function exists to stop.
+    An adversarial review measured it passing through ten already-fixed tools.
+
+    ⚠️ Honest boundary on that evidence: what was measured is **byte
+    passthrough**, not rendering. Nobody drove a real terminal to confirm NEL
+    breaks the line there. C1 is covered because it belongs to the same attack
+    class, not because the terminal behaviour was demonstrated.
+
+    ⛔ This also means the class is NO LONGER byte-identical to the one
+    ``compile_custom_alerts._safe_log`` carried from #1008 until this change: a
+    C1 character that used to survive that tool's quarantine line now renders as
+    ``?``. A deliberate behaviour change, not a refactoring accident.
+
+    Still NOT covered, deliberately:
+
+    * bidi overrides ``U+202A-U+202E`` / ``U+2066-U+2069``. They reorder a line
+      **visually** without breaking it — a different attack class from forging a
+      line, and folding it in here would blur what this function promises.
     * homoglyph or zero-width confusables.
 
     Those remain open. Do not read "went through ``safe_label``" as "is safe to
-    render in an arbitrary terminal".
+    render in an arbitrary terminal."
 
     This is an OUTPUT-layer helper, not a validator: it must not be used to
     sanitise a value on its way *into* a config, a filename, or a subprocess
