@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import sys
 from pathlib import Path
 
@@ -1072,6 +1073,7 @@ def test_check_does_not_name_the_destructive_remedy_when_source_compiles_to_noth
     assert cc.main() == cc.EXIT_VIOLATION
     err = capsys.readouterr().err
     assert "make custom-alerts-compile" not in err
+    assert cc.DO_NOT_REGENERATE in err
     # ⛔ Assert the diagnostic the reader NEEDS, not the wording it happens to use.
     # Pinning a phrase makes a rewrite — or the house rule that user-facing prose is
     # Traditional Chinese — into a red build for no behavioural reason.
@@ -1095,6 +1097,8 @@ def test_check_still_names_the_remedy_on_ordinary_drift(tmp_path, monkeypatch, c
     err = capsys.readouterr().err
     assert "make custom-alerts-compile" in err
     assert "--allow-empty" not in err
+    assert cc.DO_NOT_REGENERATE, "an empty constant would make the next line vacuous"
+    assert cc.DO_NOT_REGENERATE not in err
 
 
 # --- G. the three shapes the erase guard does NOT stop, and what is said instead ---
@@ -1124,7 +1128,8 @@ def test_partial_loss_names_the_rules_regenerating_would_remove(tmp_path, monkey
     assert "make custom-alerts-compile" in err       # still the right remedy here
     # …but not without the casualties. Rule identities are recipe_id slugs, so the
     # metric is what appears in them — NOT the tenant's `name:` for the recipe.
-    assert "REMOVES" in err and "b_m" in err
+    assert "−" in err and "b_m" in err
+    assert "net loss of coverage" in err, "nothing replaced the dropped rules; say so"
 
     # Positive control: drift with NOTHING dropped must not grow a casualty list.
     capsys.readouterr()
@@ -1137,7 +1142,8 @@ def test_partial_loss_names_the_rules_regenerating_would_remove(tmp_path, monkey
                                       "--config-dir", str(src), "--out", str(out)])
     assert cc.main() == cc.EXIT_VIOLATION
     err = capsys.readouterr().err
-    assert "REMOVES" not in err
+    assert "net loss of coverage" not in err
+    assert "−custom-alerts" not in err
 
 
 def test_an_empty_compile_never_reports_success_with_a_tick(tmp_path, monkeypatch, capsys):
@@ -1179,14 +1185,14 @@ def test_quarantine_is_diagnosed_as_itself_and_the_flag_is_refused(tmp_path, mon
     # then printed a runnable command containing it three lines down — the defect
     # this whole change is about, reproduced inside the fix for it. Assert the
     # command is absent, not merely that a warning is present.
-    assert "compile_custom_alerts.py --config-dir" not in err
+    assert "compile_custom_alerts.py" not in err
     # …and the same must hold for the --check side, which shares the offer helper.
     monkeypatch.setattr(sys, "argv", ["compile", "--check",
                                       "--config-dir", str(src), "--out", str(out)])
     assert cc.main() == cc.EXIT_VIOLATION
     check_err = capsys.readouterr().err
     assert "QUARANTINED" in check_err
-    assert "compile_custom_alerts.py --config-dir" not in check_err
+    assert "compile_custom_alerts.py" not in check_err
 
     # …and the flag itself is refused in this state, not merely discouraged.
     assert _compile_into(src, out, monkeypatch, extra=("--allow-empty",)) == cc.EXIT_VIOLATION
@@ -1211,8 +1217,7 @@ def test_refusal_prints_a_command_the_reader_can_actually_run(tmp_path, monkeypa
     (src / "a.yaml").write_text(_EMPTY_SOURCE["a.yaml"], encoding="utf-8")
     assert _compile_into(src, out, monkeypatch) == cc.EXIT_VIOLATION
     err = capsys.readouterr().err
-    assert f"--config-dir {src}" in err
-    assert f"--out {out}" in err
+    assert str(src) in err and str(out) in err
     assert "--allow-empty" in err
 
 
@@ -1225,3 +1230,98 @@ def test_a_missing_config_dir_is_a_caller_error_not_a_success(tmp_path, monkeypa
     assert cc.main() == cc.EXIT_CALLER_ERROR
     assert "config dir not found" in capsys.readouterr().err
     assert not (tmp_path / "pack.yaml").exists()
+
+
+# --- H. the message must stay true when two causes are true at once ------------
+_TWO_TENANTS = {
+    "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
+              '      - {recipe: threshold, name: a_hot, metric: a_m, op: ">",'
+              ' window: 5m, threshold: "80:warning"}\n',
+    "b.yaml": 'tenants:\n  tb:\n    _custom_alerts:\n'
+              '      - {recipe: threshold, name: b_hot, metric: b_m, op: ">",'
+              ' window: 5m, threshold: "80:warning"}\n',
+}
+
+
+def test_quarantine_never_swallows_which_tree_was_read(tmp_path, monkeypatch, capsys):
+    # A rename and a typo can both be true. The first version of the quarantine note
+    # early-returned and took "The compiler read: <dir>" with it — a line the version
+    # BEFORE it printed unconditionally, so that fix was a net loss of disclosure.
+    src, out = tmp_path / "src", tmp_path / "pack.yaml"
+    _write_tree(src, _TWO_TENANTS)
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
+    capsys.readouterr()
+
+    (src / "a.yaml").rename(src / "a.yml")                        # invisible
+    (src / "b.yaml").write_text(                                   # …and quarantined
+        _TWO_TENANTS["b.yaml"].replace("window: 5m", "window: 5x"), encoding="utf-8")
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_VIOLATION
+    err = capsys.readouterr().err
+    assert "QUARANTINED" in err
+    assert str(src) in err, "which tree was read must survive the quarantine branch"
+
+
+def test_an_empty_compile_blames_quarantine_when_that_is_what_happened(
+        tmp_path, monkeypatch, capsys):
+    # No pack on disk means the erase guard has no baseline, so this warning is the
+    # only thing said at all — and "the compiler did not see their declarations" is
+    # false when the compiler saw them and threw them out itself.
+    src, out = tmp_path / "src", tmp_path / "greenfield.yaml"
+    _write_tree(src, {
+        "a.yaml": _ONE_RECIPE_SOURCE["a.yaml"].replace("window: 5m", "window: 5x")})
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
+    assert "were QUARANTINED above" in capsys.readouterr().err
+
+    # Positive control: a genuinely empty source gets the discovery checklist instead.
+    _write_tree(src, _EMPTY_SOURCE)
+    (src / "a.yaml").write_text(_EMPTY_SOURCE["a.yaml"], encoding="utf-8")
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
+    err2 = capsys.readouterr().err
+    assert "were QUARANTINED above" not in err2
+    assert "Check, in this order" in err2
+
+
+def test_the_write_that_drops_rules_says_so_too(tmp_path, monkeypatch, capsys):
+    # The casualty note used to live only on --check, i.e. on the branch that changes
+    # nothing, while the write that actually removed the rules printed a tick.
+    src, out = tmp_path / "src", tmp_path / "pack.yaml"
+    _write_tree(src, _TWO_TENANTS)
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
+    capsys.readouterr()
+
+    (src / "b.yaml").rename(src / "b.yml")
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK    # still allowed
+    cap = capsys.readouterr()
+    assert "✅" in cap.out                                        # …it did compile something
+    assert "net loss of coverage" in cap.err and "b_m" in cap.err
+
+    # Positive control: a compile that drops nothing stays quiet.
+    capsys.readouterr()
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
+    assert "net loss of coverage" not in capsys.readouterr().err
+
+
+def test_the_printed_command_survives_a_path_with_a_space(tmp_path, monkeypatch, capsys):
+    # Measured on an unquoted version: argparse answered `unrecognized arguments:
+    # conf.d` (rc=2) for a --config-dir under "…/my conf.d". `C:/Users/First Last/…`
+    # and `OneDrive - Company/…` are ordinary on the hosts this runs on.
+    src, out = tmp_path / "my src", tmp_path / "my pack.yaml"
+    _write_tree(src, _ONE_RECIPE_SOURCE)
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
+    capsys.readouterr()
+
+    (src / "a.yaml").write_text(_EMPTY_SOURCE["a.yaml"], encoding="utf-8")
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_VIOLATION
+    offer = [ln for ln in capsys.readouterr().err.splitlines()
+             if "--allow-empty" in ln and "Do NOT" not in ln]
+    assert len(offer) == 1, "exactly one paste-able command"
+    argv = shlex.split(offer[0].strip(), posix=False)
+    # The quoting must survive a round-trip: each path lands as ONE argument.
+    assert argv[argv.index("--config-dir") + 1].strip('"') == str(src)
+    assert argv[argv.index("--out") + 1].strip('"') == str(out)
+    assert cc._shell_quote("no_spaces") == "no_spaces"
+    # ⛔ …and it must invoke THIS interpreter, not the word "python": on a stock
+    # Windows host that resolves to the Microsoft Store stub (exit 49, no output),
+    # and every caller in this repo spells it "python3".
+    assert argv[0].strip('"') == sys.executable
+    assert argv[1].strip('"') == str(Path(cc.__file__).resolve())

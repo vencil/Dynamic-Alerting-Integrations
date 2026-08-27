@@ -329,6 +329,30 @@ def _rules_regenerating_would_drop(produced: dict, committed: dict) -> set:
     return set(committed) - set(produced)
 
 
+def _net_rule_change_note(produced: dict, committed: dict) -> str:
+    """What regenerating changes, as −removed / +added — empty when nothing goes.
+
+    ⛔ THE `+ADDED` HALF IS WHAT MAKES THIS READABLE INSTEAD OF NOISE. A rule identity
+    encodes the window, the metric and the operator, so an ordinary `window: 5m -> 10m`
+    retires four identities and creates four — and a note that reported only the four
+    removals was, measured, WORD-FOR-WORD IDENTICAL to the note for a tenant whose file
+    had genuinely vanished. A disclosure that cannot tell the everyday case from the
+    one that matters gets skimmed past, and then it is not a disclosure. −4 / +4 and
+    −4 / +0 are distinguishable at a glance.
+    """
+    dropped = _rules_regenerating_would_drop(produced, committed)
+    if not dropped:
+        return ""
+    added = set(produced) - set(committed)
+    lines = [f"   ⚠ Regenerating: −{len(dropped)} rule(s) the pack has, +{len(added)} it does not.\n"]
+    if not added:
+        lines.append("     Nothing replaces them — this is a net loss of coverage.\n")
+    lines.extend(f"       −{ident}\n" for ident in sorted(dropped))
+    lines.append("     If you did not mean to retire those, find out why the compiler no "
+                 "longer produces them before regenerating.\n")
+    return "".join(lines)
+
+
 def _rerun_command(args) -> str:
     """A command the reader can paste, carrying the arguments THEY used.
 
@@ -339,15 +363,39 @@ def _rerun_command(args) -> str:
     memory, or they hard-wire the flag into the Makefile target, which turns the
     guard off for everyone. Printing the whole command removes that fork.
     """
-    parts = ["python scripts/tools/dx/compile_custom_alerts.py"]
+    # ⛔ THE INTERPRETER AND THE SCRIPT ARE RESOLVED, NOT SPELLED. `python` is the
+    # Microsoft Store stub on a stock Windows host (exit 49, no output), every caller
+    # in this repo says `python3`, and a repo-relative script path only works from the
+    # repo root. Measured on all three: the printed line failed rc=2 or 49.
+    parts = [_shell_quote(sys.executable), _shell_quote(Path(__file__).resolve())]
     if args.config_dir:
-        parts.append(f"--config-dir {args.config_dir}")
+        parts.append(f"--config-dir {_shell_quote(args.config_dir)}")
     if args.out:
-        parts.append(f"--out {args.out}")
+        parts.append(f"--out {_shell_quote(args.out)}")
     if args.max_custom_recipes != _loader.MAX_CUSTOM_RECIPES_DEFAULT:
         parts.append(f"--max-custom-recipes {args.max_custom_recipes}")
     parts.append("--allow-empty")
     return " ".join(parts)
+
+
+# ⛔ ONE STRING, TWO POLARITIES. The erasing branch must carry this and the ordinary
+# drift branch must not; a test that spells the sentence out instead pins the wording,
+# so rewording it — or writing it in Chinese, which is this repo's house style for
+# user-facing prose — would turn a build red for no behavioural reason. Naming the
+# constant lets the tests assert the polarity and lets the prose move freely.
+DO_NOT_REGENERATE = ("⛔ Do not regenerate to clear this. Regenerating here deletes "
+                     "every custom alert in the pack.")
+
+
+def _shell_quote(value) -> str:
+    """Quote a path for pasting back into a shell — only when it needs it.
+
+    ⚠️ Measured: a `--config-dir` under `C:/…/my conf.d` produced a line that argparse
+    rejected with `unrecognized arguments: conf.d` (rc=2). Fail-loud rather than
+    destructive, but the whole point of printing the command was that it runs.
+    """
+    text = str(value)
+    return f'"{text}"' if any(c.isspace() for c in text) else text
 
 
 def _deliberate_empty_offer(args, quarantined: int) -> str:
@@ -376,13 +424,25 @@ def _nothing_compiled_diagnosis(config_dir: Path, quarantined: int) -> str:
     reader looking for a renamed file and offered them the flag that erases the
     pack — a one-character fix answered with a destructive one. The compiler is
     holding `skipped` two dozen lines further up; it can simply say so.
+
+    ⛔ THE QUARANTINE NOTE IS ADDITIVE, NOT A REPLACEMENT, and getting that wrong was
+    a regression of its own. The first version early-returned, which swallowed "the
+    compiler read: <dir>" — a line the version before it printed unconditionally. A
+    rename and a typo can be true at the same time, and the reader who is told only
+    about the typo fixes it, recompiles, and lands in the partial-loss path with a
+    tick and rc=0. Whose tree was read is never the wrong thing to say.
     """
+    head = f"   The compiler read: {config_dir}\n"
     if quarantined:
-        return (f"   {quarantined} recipe(s) were QUARANTINED above — the source still declares "
+        return (f"{head}"
+                f"   {quarantined} recipe(s) were QUARANTINED above — the source still declares "
                 f"them, they just failed to compile.\n"
-                f"   ⛔ Fix those declarations. Do NOT pass --allow-empty here: the source is not "
-                f"empty, and writing an empty pack would drop rules that are still declared.")
-    return (f"   The compiler read: {config_dir}\n"
+                f"   ⛔ Fix those declarations first. Do NOT pass --allow-empty here: the source "
+                f"is not empty, and writing an empty pack would drop rules that are still "
+                f"declared.\n"
+                f"   ⚠ Fixing them may still leave fewer rules than the pack has — check the "
+                f"count after recompiling.")
+    return (f"{head}"
             f"   Check, in this order:\n"
             f"     1. a declaration the compiler stopped seeing — a renamed, moved or deleted\n"
             f"        source file, or a filename its discovery does not match;\n"
@@ -492,8 +552,7 @@ def main() -> int:
                 print(f"\n❌ custom-alerts rule pack out of sync — and the source now "
                       f"compiles to NOTHING while the committed pack has "
                       f"{len(committed)} rule(s).\n"
-                      f"   ⛔ Do not regenerate to clear this. Regenerating here deletes "
-                      f"every custom alert in the pack.\n"
+                      f"   {DO_NOT_REGENERATE}\n"
                       f"{_nothing_compiled_diagnosis(config_dir, len(skipped))}"
                       f"{_deliberate_empty_offer(args, len(skipped))}", file=sys.stderr)
             else:
@@ -504,13 +563,7 @@ def main() -> int:
                 # alerts from pack, ConfigMaps and CRD at rc=0 with every gate green.
                 print(f"\n❌ custom-alerts rule pack out of sync. "
                       f"Run `make custom-alerts-compile` to regenerate.", file=sys.stderr)
-                if dropped:
-                    print(f"   ⚠ Regenerating REMOVES {len(dropped)} rule(s) the committed pack "
-                          f"has and this compile did not produce:", file=sys.stderr)
-                    for ident in sorted(dropped):
-                        print(f"       {ident}", file=sys.stderr)
-                    print(f"   If you did not mean to retire those, find out why the compiler "
-                          f"no longer produces them before regenerating.", file=sys.stderr)
+                print(_net_rule_change_note(produced, committed), end="", file=sys.stderr)
             return EXIT_VIOLATION
         print(f"✅ custom-alerts rule pack matches source "
               f"({meta['shapes']} shape(s)).")
@@ -561,9 +614,18 @@ def main() -> int:
         # tree whose declarations the loader cannot see compiles to nothing on day one
         # and every downstream gate agrees (measured). This line is all that stands
         # between that and silence, so it says what happened rather than congratulating.
+        #
+        # ⛔ AND IT REUSES THE DIAGNOSIS RATHER THAN GUESSING. Saying "the compiler did
+        # not see their declarations" is false when the compiler saw them and threw
+        # them out itself — the same misattribution this change already fixed once, one
+        # branch over. `skipped` is in hand here too.
         print(f"⚠ Compiled 0 shape(s) → {shown} — the pack now contains no rules.")
-        print(f"   Source: {config_dir}. If you expected custom alerts here, the compiler "
-              f"did not see their declarations.", file=sys.stderr)
+        print(_nothing_compiled_diagnosis(config_dir, len(skipped)), file=sys.stderr)
+    # ⛔ THE CASUALTY NOTE BELONGS ON THE PATH THAT ACTUALLY DELETES, TOO. It was on
+    # `--check` only, i.e. on the branch that changes nothing — while the write that
+    # really drops the rules said `✅ Compiled N shape(s)` and named none of them.
+    if meta["shapes"]:
+        print(_net_rule_change_note(produced, committed), end="", file=sys.stderr)
     if meta["per_tenant_counts"]:
         worst = max(meta["per_tenant_counts"].values())
         print(f"   per-tenant EFFECTIVE recipe counts (own + inherited): "
