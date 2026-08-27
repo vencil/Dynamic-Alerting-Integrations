@@ -75,7 +75,39 @@ def _is_hidden(name: str) -> bool:
 
 
 def _is_config(name: str) -> bool:
-    return name.endswith(CONFIG_SUFFIXES) and not _is_hidden(name)
+    """Mirror of the exporter's extension rule — DERIVED, not an allowlist.
+
+    CASE-INSENSITIVE, and that is the whole content of this docstring's
+    existence. The oracle is the exporter's scanner: `config_hierarchy.go`
+    (production hot-reload), `flat_scanner.go`, `pkg/config/hierarchy.go`
+    and `pkg/config/scope.go` all lowercase the entry name before testing
+    the `.yaml` / `.yml` suffix, so the exporter READS `upper.YAML` and
+    merges it into the effective config it serves.
+
+    Testing the suffix exactly — as this did until #1537 — made such a file
+    invisible to every Python reader: measured, `iter_config_files` did not
+    yield `upper.YAML` AND `unusable_config_paths` did not name it either,
+    so nothing in the report so much as mentioned a file the exporter was
+    acting on. That is #1339's shape with the *extension* as the divergence
+    axis instead of directory depth, and it is the one parity claim in this
+    module that was, until now, written down nowhere.
+
+    Note this predicate answers TWO of the three name properties: extension
+    (here) and hidden (`_is_hidden`). It deliberately does NOT filter the
+    `_` prefix — reserved control files ARE part of "what is in a conf.d
+    directory"; callers that want tenant carriers only (`_lib_io`,
+    tenant-api) apply that third property themselves.
+
+    ⛔ Nothing here greps the Go source. This repo measured (#1448 blind
+    review) that a Python guard asserting things about Go source text goes
+    red on legitimate Go refactors and states the opposite of the truth
+    when it does. What keeps this honest instead is the shared name
+    classification matrix under `tests/shared/` — the exporter's scanner,
+    tenant-api's filename→id mapping, `_lib_io.iter_yaml_files` and this
+    predicate each assert THAT table, so their agreement is transitive
+    rather than claimed, and a rule change turns the owning side red first.
+    """
+    return name.lower().endswith(CONFIG_SUFFIXES) and not _is_hidden(name)
 
 
 def iter_config_files(config_dir: str | os.PathLike[str], *, recursive: bool = True):

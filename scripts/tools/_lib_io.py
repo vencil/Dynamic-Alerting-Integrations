@@ -43,10 +43,27 @@ def iter_yaml_files(
 ) -> list[tuple[str, str]]:
     """List YAML files in *config_dir*, sorted deterministically.
 
+    The extension test is CASE-INSENSITIVE (#1537): the exporter lowercases
+    the entry name before testing ``.yaml`` / ``.yml``, so it reads
+    ``upper.YAML`` and merges it into the config it serves. An exact-suffix
+    test here made that file invisible — not reported, simply absent — which
+    is #1339's divergence with the extension as the axis rather than
+    directory depth. Nothing here greps the Go source (#1448 measured that a
+    Python guard asserting things about Go source text goes red on
+    legitimate Go refactors while stating the opposite of the truth); the
+    shared conf.d name classification matrix under ``tests/shared/`` is what
+    keeps this side and the exporter's side pinned to one rule.
+
     Args:
         config_dir: Path to the configuration directory.
         skip_reserved: If ``True`` (default), skip files whose names
                        start with ``_`` or ``.`` (reserved / dotfiles).
+                       ⚠️ It gates BOTH prefixes, so ``skip_reserved=False``
+                       also stops hiding dotfiles — measured, ``.hidden.yaml``
+                       comes back. That differs from ``_lib_confd``, whose
+                       hidden filter is unconditional; a caller that wants
+                       "reserved control files too, but still no dotfiles"
+                       has to filter for itself.
 
     Returns:
         List of ``(filename, full_path)`` tuples, sorted by filename.
@@ -64,7 +81,8 @@ def iter_yaml_files(
     result: list[tuple[str, str]] = []
     for entry in sorted(base.iterdir(), key=lambda p: p.name):
         fname = entry.name
-        if not (fname.endswith(".yaml") or fname.endswith(".yml")):
+        lower = fname.lower()
+        if not (lower.endswith(".yaml") or lower.endswith(".yml")):
             continue
         if skip_reserved and (fname.startswith("_") or fname.startswith(".")):
             continue

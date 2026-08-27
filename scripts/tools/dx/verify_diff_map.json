@@ -25,6 +25,7 @@
   ],
   "scripts/tools/_lib_confd.py": [
    "tests/ops/test_confd_unusable_signal.py",
+   "tests/shared/test_confd_name_classification_parity.py",
    "tests/shared/test_lib_confd.py"
   ],
   "scripts/tools/_lib_constants.py": [
@@ -74,6 +75,7 @@
   "scripts/tools/_lib_io.py": [
    "tests/dx/test_line_ending_policy.py",
    "tests/ops/test_policy_opa_bridge.py",
+   "tests/shared/test_confd_name_classification_parity.py",
    "tests/shared/test_property_tools.py"
   ],
   "scripts/tools/_lib_prometheus.py": [
@@ -759,7 +761,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "f42b7b9ab70d2a5e80f8db137c910135e6592f0928172a3e6b05328f4d598548",
+ "source_digest": "05ea7e3b29f4bc0fd22cc119473509b600908b29e31456144059068d07065d02",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1047,6 +1049,7 @@
   "tests/shared/test_bilingual_help_contract.py",
   "tests/shared/test_ci_flag_contract.py",
   "tests/shared/test_confd_enumeration_contract.py",
+  "tests/shared/test_confd_name_classification_parity.py",
   "tests/shared/test_console_encoding_resilience.py",
   "tests/shared/test_dispatch_contract.py",
   "tests/shared/test_dry_run_no_write.py",
@@ -2878,6 +2881,9 @@
    "tests/ops/test_nightly_scan_matrix_drift.py",
    "tests/shared/test_mutation_catalog.py",
    "tests/shared/test_property_tools.py"
+  ],
+  "tests/shared/confd_name_classification_matrix.json": [
+   "tests/shared/test_confd_name_classification_parity.py"
   ],
   "tests/shared/docs_yaml_split_matrix.json": [
    "tests/lint/test_docs_yaml_split_parity.py"
