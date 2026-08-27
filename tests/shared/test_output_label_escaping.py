@@ -40,6 +40,7 @@ downgrade from "clean" to "skipped".
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import subprocess
@@ -325,18 +326,80 @@ def test_uncaught_traceback_channel_is_a_known_gap(hostile_dirs, tmp_path):
     )
 
 
+def _sweep_every_tool(hostile_dirs, tmp_path) -> None:
+    """Run every tool against both fixtures. Shared by the two containment tests."""
+    for variant in ("malformed", "valid"):
+        for tool in ALL_TOOLS:
+            try:
+                _run(tool, hostile_dirs[variant], tmp_path / f"{variant}_{tool.stem}")
+            except Unmeasurable:
+                pass
+
+
+def _repo_anchored_artifact_digests() -> dict[str, str]:
+    """Digest the artifacts a tool can reach WITHOUT cwd containment.
+
+    `compile_custom_alerts` resolves its default output from ``__file__``
+    (``repo / "rule-packs/rule-pack-custom-alerts.yaml"``), so running it from a
+    tmp cwd does NOT stop it rewriting the shipped pack — measured: it did, on
+    every run, until REPO_ANCHORED_OUTPUT redirected it.
+
+    Named paths, not a tree scan, so this is safe under ``pytest -n auto``:
+    nothing else in the suite writes these files, and a concurrent worker's
+    unrelated scratch file cannot make it fire.
+    """
+    out = {}
+    for rel in ("rule-packs/rule-pack-custom-alerts.yaml",):
+        f = REPO_ROOT / rel
+        out[rel] = hashlib.sha256(f.read_bytes()).hexdigest() if f.is_file() else "<absent>"
+    return out
+
+
+def test_repo_anchored_artifacts_are_untouched(hostile_dirs, tmp_path):
+    """The narrow containment guarantee — and the only one that holds under xdist.
+
+    Catches the regression this suite actually caused (dogfooded: dropping the
+    ``--out`` redirect turns this red with the shipped rule-pack modified).
+    """
+    before = _repo_anchored_artifact_digests()
+    _sweep_every_tool(hostile_dirs, tmp_path)
+    after = _repo_anchored_artifact_digests()
+
+    changed = [k for k in before if before[k] != after[k]]
+    assert not changed, (
+        f"running the --config-dir tools rewrote shipped repo artifact(s): {changed}. "
+        f"A tool's default output path is anchored to the repo via __file__, so "
+        f"cwd isolation does not contain it — add it to REPO_ANCHORED_OUTPUT with "
+        f"an explicit redirect."
+    )
+
+
+@pytest.mark.skipif(
+    os.environ.get("PYTEST_XDIST_WORKER") is not None,
+    reason=(
+        "NOT MEASURED under pytest-xdist: this assertion reads the WHOLE working "
+        "tree, which is shared mutable state across workers. CI runs "
+        "`pytest tests/ ... -n auto -x` (ci.yml), so a concurrent worker's "
+        "transient file would surface here as a false failure and -x would redden "
+        "the run. tests/lint/test_check_orphan_lint.py records the same hazard in "
+        "the other direction. The narrow, path-scoped guarantee still runs in "
+        "parallel: see test_repo_anchored_artifacts_are_untouched."
+    ),
+)
 def test_the_suite_does_not_write_to_the_repo(hostile_dirs, tmp_path):
-    """⛔ Running these tools must not touch tracked or untracked repo files.
+    """⛔ Serial-only backstop: these tools must not touch ANY repo file.
 
-    Several of them write generated artifacts to a DEFAULT path when none is
-    given: `operator_generate` -> ``operator-manifests/``, `migrate_to_operator`
-    -> ``migration-output/`` (both cwd-relative, contained by ``cwd=sandbox``),
-    and `compile_custom_alerts` -> ``rule-packs/rule-pack-custom-alerts.yaml``
-    resolved from ``__file__``, which cwd does NOT contain — hence
-    ``REPO_ANCHORED_OUTPUT``. Measured: without that redirect this suite
-    rewrote the shipped rule-pack on every run.
+    Broader than the digest test — it catches a tool whose default output path
+    nobody has thought of yet, including a future one, rather than only the
+    artifacts named today. That breadth is exactly why it cannot run in
+    parallel: "did the tree change" is a question about shared state, and under
+    `-n auto` another worker is free to change it for unrelated reasons.
 
-    This is the backstop for any tool the map misses, including future ones.
+    Known default outputs today: `operator_generate` -> ``operator-manifests/``
+    and `migrate_to_operator` -> ``migration-output/`` (both cwd-relative, so
+    ``cwd=sandbox`` contains them); `compile_custom_alerts` ->
+    ``rule-packs/rule-pack-custom-alerts.yaml`` resolved from ``__file__``,
+    which cwd does NOT contain — hence ``REPO_ANCHORED_OUTPUT``.
     """
     def status() -> list[str]:
         r = subprocess.run(["git", "status", "--porcelain"], cwd=str(REPO_ROOT),
@@ -345,12 +408,7 @@ def test_the_suite_does_not_write_to_the_repo(hostile_dirs, tmp_path):
         return sorted(l for l in r.stdout.splitlines() if l.strip())
 
     before = status()
-    for variant in ("malformed", "valid"):
-        for tool in ALL_TOOLS:
-            try:
-                _run(tool, hostile_dirs[variant], tmp_path / f"{variant}_{tool.stem}")
-            except Unmeasurable:
-                pass
+    _sweep_every_tool(hostile_dirs, tmp_path)
     after = status()
 
     assert after == before, (
