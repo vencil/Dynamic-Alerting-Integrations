@@ -1225,6 +1225,23 @@ def counterfactual_gates(nights):
     more than 0.12%, so every candidate gate keeps every night — which is itself
     the finding: the gate is not what suppresses the outliers, and nobody should
     expect it to.
+
+    ⛔ PRE-EXISTING CRASH, fixed here rather than ticketed (owner ruling on
+    #1571). The set below used to hold `night_utc` raw, so ONE readable night
+    without a date put `None` in it and `sorted()` — or the `', '.join()` in the
+    renderer — raised `TypeError`. The whole page then died with exit 1: the
+    code this module reserves and documents as NEVER USED, precisely so a
+    non-zero exit can never be read as "found a regression". Worse, it took the
+    0.5%–1.0% canary band down with it, which the DEFAULT gate counts. It
+    reproduces identically on `origin/main`, so it is not this change's doing —
+    it is fixed here because this change made the page promise a rendering the
+    crash prevents, and because the label helper it needs now exists.
+
+    Un-dated nights are kept OUT of the distinct-calendar-night set and counted
+    beside it, which is what the headline already does. ⛔ Folding them in as
+    one `?` would be worse than the crash was: two different un-dated nights
+    would silently become one rejection, understating the very count this table
+    exists to feed.
     """
     rows = []
     readable = [n for n in nights if n.readable]
@@ -1232,9 +1249,10 @@ def counterfactual_gates(nights):
         # ⛔ Distinct calendar nights, same reason as above — this table is the
         # data ADR-032 §待決 5 says will pick the real threshold, so a re-run
         # inflating its rejection count biases the decision it exists to feed.
-        rejected = sorted({n.night_utc for n in readable
-                           if not gate_verdict(n, gate)[0]})
-        rows.append((gate, rejected))
+        turned_down = [n for n in readable if not gate_verdict(n, gate)[0]]
+        rejected = sorted({n.night_utc for n in turned_down if _dated(n)})
+        rows.append((gate, rejected,
+                     len([n for n in turned_down if not _dated(n)])))
     return rows
 
 
@@ -1514,10 +1532,16 @@ def render(result):
     lines.append("")
     lines.append("| gate | nights rejected |")
     lines.append("|---|---|")
-    for gate, rejected in counterfactual_gates(nights):
+    for gate, rejected, n_undated in counterfactual_gates(nights):
         marker = " ← provisional default" if gate == result["gate_pct"] else ""
+        # ⛔ The un-dated rejections are named as their own term rather than
+        # added in. They are rejections, so hiding them would understate the
+        # gate; they are not calendar nights, so adding them to the count would
+        # claim a distinctness nothing here can establish.
+        extra = f" + {n_undated} undated run(s)" if n_undated else ""
         lines.append(f"| {gate:.1f}%{marker} | "
-                     f"{len(rejected)}{' (' + ', '.join(rejected) + ')' if rejected else ''} |")
+                     f"{len(rejected)}{' (' + ', '.join(rejected) + ')' if rejected else ''}"
+                     f"{extra} |")
     lines.append("")
     lines.append("⚠️ The gate threshold is **provisional** — ADR-032 §待決 5 left "
                  "it to two-to-four weeks of real distribution and no value has "

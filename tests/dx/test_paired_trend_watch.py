@@ -1248,6 +1248,44 @@ def test_undated_runs_do_not_manufacture_a_multi_run_night_warning():
     assert "1 of them is counted" in body
 
 
+@pytest.mark.parametrize("canary_pct, expect_counted", [
+    # ⛔ The first row is the dangerous one and the reason this is parametrised.
+    # 0.8% PASSES the default 1.0% gate — the night is COUNTED — and still fails
+    # the 0.5% candidate, so the counterfactual table alone was enough to kill
+    # the page for a night the engine had just accepted.
+    (0.8, True),
+    (4.0, False),
+])
+def test_an_undated_night_never_takes_the_whole_page_down(canary_pct,
+                                                          expect_counted):
+    """⛔ PRE-EXISTING crash, verified against `origin/main` before fixing.
+
+    `counterfactual_gates` put `night.night_utc` in a set and sorted it, so one
+    readable night without a date mixed `None` with `str` and raised TypeError.
+    render() died with exit 1 — the code this module documents as NEVER USED so
+    that a non-zero exit cannot be read as "found a regression".
+
+    Reproduction on a clean worktree at `origin/main` (5b7f6c3):
+
+        CRASH TypeError sequence item 0: expected str instance, NoneType found
+
+    ⇒ this test's counterfactual is NOT zero: it fails on unpatched main, which
+    is the strongest form of evidence available here and the reason this case is
+    in the suite rather than in a follow-up ticket.
+    """
+    undated = ptw.Night(None, 101)
+    undated.canary_pct["BenchmarkControlCanaryCPU"] = canary_pct
+    undated.canary_pct["BenchmarkControlCanarySleep"] = 0.0
+    undated.ratios_pct["BenchmarkAlpha"] = 1.0
+    result = ptw.decide([undated, _run("2026-08-20", 102, alpha=1.0)])
+    assert (undated.outcome == ptw.NIGHT_COUNTED) is expect_counted
+    body = ptw.render(result)          # ⛔ this is the assertion: it must return
+    # Named as its own term, never folded into the calendar-night count — two
+    # different undated nights must not collapse into one rejection.
+    assert "+ 1 undated run(s)" in body
+    assert "| 0.5% | 0 + 1 undated run(s) |" in body
+
+
 def test_one_predicate_decides_a_nights_label_everywhere_it_is_printed():
     """⛔ The span, the Nights table and the calendar ratio must agree.
 
@@ -1590,8 +1628,9 @@ def test_the_gate_counterfactual_uses_the_same_predicate_as_the_verdict():
     result = ptw.decide([good, half])
     assert [n.outcome for n in result["nights"]] == [
         ptw.NIGHT_COUNTED, ptw.NIGHT_NOT_COUNTED]
-    for _gate, rejected in ptw.counterfactual_gates(result["nights"]):
+    for _gate, rejected, n_undated in ptw.counterfactual_gates(result["nights"]):
         assert rejected == ["2026-08-21"]
+        assert n_undated == 0
     body = ptw.render(result)
     assert "| 0.5% | 1 (2026-08-21) |" in body
 
@@ -1710,8 +1749,9 @@ def test_the_gate_counterfactual_counts_calendar_nights_not_runs():
     for night in nights:
         night.canary_pct["BenchmarkControlCanaryCPU"] = 4.0
     result = ptw.decide(nights)
-    for _gate, rejected in ptw.counterfactual_gates(result["nights"]):
+    for _gate, rejected, n_undated in ptw.counterfactual_gates(result["nights"]):
         assert rejected == ["2026-08-21"]
+        assert n_undated == 0
     assert "2026-08-21, 2026-08-21" not in ptw.render(result)
 
 
