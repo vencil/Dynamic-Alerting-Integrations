@@ -283,12 +283,16 @@ the rarest of the three rather than the largest — but it is the only one no
 re-measurement can fix, because a count over file CONTENTS in this repo is not
 a property of the commit at all.
 
-⛔ THIS MODULE IS NOT CLEARED OF THEM. Every sweep for this class so far has
-missed instances — the misses and how each sweep was blind are recorded in the
-commit messages on #1404, which is where that archaeology belongs. What matters
-here is the scanning rule it cost: REJOIN COMMENT CONTINUATIONS BEFORE SCANNING
-THIS FILE FOR ANYTHING, PROSE INCLUDED. A line-by-line grep cannot see a claim
-whose own text wraps, which is this guard's subject applied to its own audit.
+⛔ THIS MODULE IS NOT CLEARED OF THEM, and the class is not only digits: a
+present-tense claim carrying no number at all ("the suite stays green") rots the
+same way and is harder to find, because nothing about it looks like a count.
+Every sweep for this class so far has missed instances — the misses and how each
+sweep was blind are recorded in the commit messages on #1404, which is where
+that archaeology belongs. What matters here is the scanning rule it cost: REJOIN
+ADJACENT LINES BEFORE SCANNING THIS FILE FOR ANYTHING, PROSE INCLUDED —
+docstrings as much as comments, and most of this module's prose is docstring. A
+line-by-line grep cannot see a claim whose own text wraps, which is this guard's
+subject applied to its own audit.
 
 ⚠️ So do not restore a count to "complete" a sentence that reads vague. The
 vagueness is the fix. If the number is load-bearing, put it in an assertion —
@@ -426,7 +430,8 @@ LINE_PREFIX = re.compile(r"^[ \t]*(?:#|//|\*|--|;)?[ \t]*")
 # ⚠️ That is not the same as "measured to earn their place". Relaxing any one of
 # them — or all three at once — does not change what this guard reports: zero on
 # #1452's head, and the same two references on its merge base, where those two
-# were still live. ⛔ Re-anchored on #1404 for the reason COUNTS gives. They keep
+# were still live. ⛔ Those MEASUREMENTS were re-anchored on #1404 for the reason
+# COUNTS gives; the bound itself came from #1383 and has never moved. They keep
 # generic names out of the scan, and that value is prospective, not demonstrated.
 _MIN_BARE_NAME = 12
 
@@ -1101,8 +1106,9 @@ def test_the_reported_line_is_the_line_of_the_break() -> None:
     the test went red saying the line number was wrong when in fact the fixture
     had simply gone away — the exact message shape
     `test_each_tripwire_fires_on_degenerate_input` warns about, where the
-    cheapest way to believe it is to loosen the detector. Its siblings all carry
-    this guard; this one shipped without it.
+    cheapest way to believe it is to loosen the detector. Every other test here
+    whose subject is a tracked path carries this guard; this one shipped
+    without it.
 
     ⚠️ That script is named on #1566 and not here: `verify_diff` maps a file to
     the tests that MENTION its path, so naming it here would keep sending its
@@ -1312,9 +1318,10 @@ def test_each_tripwire_fires_on_degenerate_input() -> None:
     three survived until they were given a case that can tell the difference.
     """
     target = "tests/ops/test_wrapped_path_references.py"
-    # ⛔ The same premise guard its siblings carry. Without it, renaming
-    # this module makes the assertion below report that the DETECTOR is broken,
-    # and the cheapest way to believe that message is to loosen the detector.
+    # ⛔ The same premise guard every tracked-path subject here carries. Without
+    # it, renaming this module makes the assertion below report that the
+    # DETECTOR is broken, and the cheapest way to believe that message is to
+    # loosen the detector.
     assert target in _tracked(), "this module moved; re-point the fixture"
     head, tail = target[:24], target[24:]
     wrapped = f"# see {head}\n# {tail} for the rule\n"
