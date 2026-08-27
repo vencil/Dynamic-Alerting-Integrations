@@ -384,7 +384,21 @@ repos:
         entry: python3 -X utf8 scripts/tools/lint/validate_docs_versions.py --ci
         language: python
         pass_filenames: false
-        files: \.(md|yaml|jsx|html)$
+        # ⛔ #1508: `pass_filenames: false` means this pattern decides whether
+        # the gate RUNS, not what it scans — so anything it reads that this
+        # misses gives no local signal at all. It used to be
+        # `\.(md|yaml|jsx|html)$`, which missed 25 of the files the tool
+        # actually opens (measured with an audit hook on `5b7f6c35`: 469 data
+        # inputs, of which `.json` 16, `.yml` 8, and `VERSION` 1 did not
+        # match). Two of those are sources of truth, and one — `.yml` — is
+        # only missed because `mkdocs.yml` is not spelled `.yaml`.
+        # `tests/e2e/package.json` is the single file this gate has ever
+        # caught real damage in (#1480).
+        # The `.py` clause covers the gate's own module closure: editing the
+        # reader is how #1480 happened, and that commit got no signal either.
+        # Kept honest by `TestTheHookFiresOnEverythingTheGateReads`, which
+        # re-measures the closure and compares it to THIS pattern.
+        files: (\.(md|ya?ml|jsx|json|html)$)|((^|/)VERSION$)|(^scripts/tools/(_lib_.*|lint/(validate_docs_versions|_version_patterns))\.py$)
         additional_dependencies: ['pyyaml']
 
       - id: doc-k8s-refs

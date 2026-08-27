@@ -663,11 +663,73 @@ def check_roadmap_changelog_overlap() -> List[Issue]:
     return issues
 
 
+def _bilingual_numbers(pattern: str, content: str) -> List[str]:
+    """The distinct numbers *pattern* claims in *content*, sorted.
+
+    ⛔ `finditer` rather than `findall`: a pattern with alternation carries
+    more than one group, and `re.findall` then yields a TUPLE per match
+    ('40', '', '') instead of a string. Comparing those still "works" — both
+    sides are shaped the same — but the mismatch message would print tuples,
+    and any future single-group pattern would compare unequal to a
+    multi-group one for purely structural reasons.
+    """
+    found = []
+    for match in re.finditer(pattern, content, re.IGNORECASE):
+        value = next((g for g in match.groups() if g), None)
+        if value:
+            found.append(value)
+    return sorted(set(found))
+
+
+def _bilingual_verdict(zh_nums: List[str], en_nums: List[str]) -> str:
+    """`mismatch` / `match` / `one-sided` / `silent` for one pattern on one pair.
+
+    ⛔ `one-sided` — exactly one language matched — is DELIBERATELY not
+    reported, and that is a fail-open, so here is the measurement behind it
+    rather than an `and` that reads like an accident.
+    #1505 measured every one-sided combination the six patterns produce on
+    `5b7f6c35` after the Alert-count repair. There are five, and **all five
+    are artefacts of the patterns, not defects in the documents**:
+
+        arch-and-design      Recording  zh=[]        en=['139']
+        arch-and-design      Alert      zh=['99']    en=[]
+            one errata sentence, quoted in both files; zh writes
+            「139 個 Recording」 and en writes "139 Recording", so the
+            Recording pattern sees only en and the Alert pattern only zh.
+        federation-integr.   Recording  zh=[]        en=['2']
+            "Part 2 recording rules" — a section number.
+        byo-alertmanager     Alert      zh=[]        en=['37', '40']
+        troubleshooting      Alert      zh=[]        en=['40']
+            en writes "40 alerts"; zh writes 「40 條平台告警」, which puts a
+            noun between the measure word and the noun being counted.
+
+    So switching this branch on today would replace three warnings nobody can
+    clear with five warnings nobody can clear. The cause is structural: one
+    regex is applied to two languages that phrase counts differently, and the
+    fix is per-language patterns, which is a bigger change than #1505 and is
+    tracked separately.
+
+    ⚠️ What that costs: a drift that only one language states in a form the
+    pattern recognises is invisible. Of the seven injected drifts #1505 used,
+    one is in exactly that position (`40 alerts` → `39 alerts` in
+    `troubleshooting.en.md`), which is why the measured catch rate is 5/7 and
+    not 6/7.
+    """
+    if zh_nums and en_nums:
+        return "mismatch" if zh_nums != en_nums else "match"
+    if zh_nums or en_nums:
+        return "one-sided"
+    return "silent"
+
+
 def check_bilingual_number_consistency() -> List[Issue]:
     """Check that zh and en doc pairs have matching technical numbers.
 
     Compares numeric values in paired zh/en documents to detect
     translation drift (e.g. zh says 15 Rule Packs but en says 13).
+
+    ⚠️ Only `mismatch` verdicts are reported; see `_bilingual_verdict` for
+    what happens to the one-sided ones and why.
     """
     issues = []
 
@@ -697,9 +759,9 @@ def check_bilingual_number_consistency() -> List[Issue]:
             continue  # phantom mount or missing file — skip pair
 
         for pat, desc in BILINGUAL_NUMBER_PATTERNS:
-            zh_nums = sorted(set(re.findall(pat, zh_content, re.IGNORECASE)))
-            en_nums = sorted(set(re.findall(pat, en_content, re.IGNORECASE)))
-            if zh_nums and en_nums and zh_nums != en_nums:
+            zh_nums = _bilingual_numbers(pat, zh_content)
+            en_nums = _bilingual_numbers(pat, en_content)
+            if _bilingual_verdict(zh_nums, en_nums) == "mismatch":
                 rel_zh = str(zh_file.relative_to(REPO_ROOT))
                 rel_en = str(en_file.relative_to(REPO_ROOT))
                 issues.append(Issue(
@@ -846,8 +908,24 @@ def check_tool_count_in_docs() -> List[Issue]:
     """Check that CLAUDE.md and README tool counts match actual scripts/tools/*.py.
 
     Compares the "XX 個 Python 工具" / "XX Python tools" counts in CLAUDE.md
-    and README files against the actual number of .py files in scripts/tools/
-    (excluding _lib_*, __init__, __pycache__).
+    and README files against `count_scope` — the tools under
+    `scripts/tools/{ops,dx,lint}`.
+
+    ⛔ TOOL_COUNT_CHECK_FILES is a list of files whose tool-count sentence
+    declares THAT scope. It is not "every file that mentions a tool count",
+    and the difference is load-bearing: `docs/README.{md,en.md}` also carry a
+    Python-tool number, and they are deliberately absent, because their
+    sentence declares a different scope — ``scripts/tools/`` whole-tree,
+    "in total" in the English half. Comparing a `{ops,dx,lint}` number
+    against a whole-tree claim would make the sentence wrong in a new way
+    rather than right; which scope those two files should declare is a
+    documentation decision, tracked in #1540 rather than settled here.
+
+    ⚠️ `CLAUDE.md` carries no matching sentence today, so it contributes no
+    findings. It is kept in the list because it is one of the files whose
+    tool-count sentence would declare this scope if it regained one — an
+    unmatched FILE costs one read, unlike an unmatched RULE, which would be a
+    defect (see `bump_docs.apply_count_updates`'s DEAD diagnosis).
     """
     issues = []
     if not (REPO_ROOT / "scripts" / "tools").exists():
@@ -987,8 +1065,15 @@ def check_scenario_count_in_docs() -> List[Issue]:
 
 
 def _auto_fix(issues: List[Issue], bilingual_pairs: int,
-              rule_counts: dict) -> List[Issue]:
+              rule_counts: dict, quiet: bool = False) -> List[Issue]:
     """Repair what can be repaired; return the issues actually repaired.
+
+    *quiet* suppresses the per-repair prose line. ⛔ It exists because this
+    function writes to the same stdout the `--json` document goes to (#1506):
+    one `🔧 Fixed …` line ahead of the document is enough to make the whole
+    output unparseable, and the repair itself is reported in the document's
+    `repaired` key instead. It does NOT suppress anything else — a failure
+    to write still raises.
 
     ⛔ Returns the issues, not a count. #1483's first attempt decided the exit
     code from "is this check id in a list of fixable ids", which is a proxy
@@ -1022,11 +1107,16 @@ def _auto_fix(issues: List[Issue], bilingual_pairs: int,
             new_content = re.sub(pattern, replacement, new_content)
 
         elif issue.check == "tool-count":
-            # Fix "XX 個 Python 工具" count
+            # Fix the counted sentence in either language.
+            #
+            # ⚠️ `re.IGNORECASE` on purpose, matching `check_tool_count_in_docs`:
+            # a repair that is stricter than its checker reports a form it
+            # cannot rewrite, which is a warning no tool can clear (#1504).
             actual_count = _count_python_tools()
-            pattern = AUTO_FIX_PATTERNS["tool-count"]["pattern"]
-            replacement = AUTO_FIX_PATTERNS["tool-count"]["replacement_template"].format(value=actual_count)
-            new_content = re.sub(pattern, replacement, new_content)
+            for pat, repl_template in AUTO_FIX_PATTERNS["tool-count"]["patterns"]:
+                new_content = re.sub(pat,
+                                     repl_template.format(value=actual_count),
+                                     new_content, flags=re.IGNORECASE)
 
         elif issue.check == "doc-file-count":
             # Fix "XX 個文件" count from doc-map.md row count
@@ -1062,7 +1152,8 @@ def _auto_fix(issues: List[Issue], bilingual_pairs: int,
             os.chmod(fpath,
                      stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP
                      | stat.S_IROTH)
-            print(f"  🔧 Fixed {issue.check} in {issue.file}")
+            if not quiet:
+                print(f"  🔧 Fixed {issue.check} in {issue.file}")
             repaired.append(issue)
 
     return repaired
@@ -1364,40 +1455,36 @@ def main():
     if "platform" in versions:
         all_issues.extend(check_e2e_and_jsx_versions(versions["platform"]))
 
-    # --fix mode: auto-fix fixable issues
+    # --fix mode: auto-fix fixable issues.
+    #
+    # ⛔ #1506: this used to be its own exit — repair, print, `return` —
+    # sitting BEFORE the report block, which is the only place `args.json` is
+    # ever read. So `--json` was silently inert whenever `--fix` was passed
+    # too: a caller asking for JSON got `🔧 Fixed …` prose and a parse error
+    # on line 1. #1483 had already repaired the other half of the same early
+    # return (the exit code); the format half outlived it because the two
+    # halves are decided in two different places. Repair now feeds the SAME
+    # report path as every other run, so there is one exit and exactly one
+    # place that knows what `--json` means.
+    repaired: List[Issue] = []
     if args.fix and all_issues:
-        repaired = _auto_fix(all_issues, bilingual_pairs, rule_counts)
-        if repaired:
-            print(f"Auto-fixed {len(repaired)} issue(s). Re-run to verify.")
-        else:
-            print("No auto-fixable issues found.")
+        repaired = _auto_fix(all_issues, bilingual_pairs, rule_counts,
+                             quiet=args.json)
+        if not args.json:
+            if repaired:
+                print(f"Auto-fixed {len(repaired)} issue(s). Re-run to verify.")
+            else:
+                print("No auto-fixable issues found.")
 
-        # The exit-code decision, from what was ACTUALLY repaired.
-        #
-        # #1483: returning here meant `--ci --fix` exited 0 while real errors
-        # stood, and printed nothing about them. The first attempt at this
-        # decided from "is the check id in a list of fixable ids" — a proxy
-        # that is not the same question, because a repair can decline to
-        # touch a particular occurrence (a `rule-pack-count` in prose rather
-        # than in a badge). Asking `_auto_fix` what it repaired removes the
-        # proxy, and with it a list that had to be kept in step with the
-        # repairs by hand.
-        remaining = [i for i in all_issues if i not in repaired]
-        remaining_errors = [i for i in remaining if i.severity == "error"]
-        if remaining:
-            print()
-            print(f"  {len(remaining)} issue(s) still standing after --fix "
-                  f"({len(remaining_errors)} error(s)):")
-            for issue in remaining:
-                icon = "[E]" if issue.severity == "error" else "[W]"
-                print(f"    {icon} [{issue.check}] {issue.file}:{issue.line} "
-                      f"— {issue.message}")
-        if args.ci and remaining_errors:
-            sys.exit(EXIT_VIOLATION)
-        return
-
-    errors = [i for i in all_issues if i.severity == "error"]
-    warnings = [i for i in all_issues if i.severity == "warn"]
+    # What the report and the exit code are both about.
+    #
+    # ⛔ `not in` here is an IDENTITY test on purpose: `Issue` defines no
+    # `__eq__`, and `_auto_fix` hands back the very objects it repaired. Two
+    # issues that merely look alike (one check id on two lines of one file)
+    # must not cancel each other out.
+    standing = [i for i in all_issues if i not in repaired]
+    errors = [i for i in standing if i.severity == "error"]
+    warnings = [i for i in standing if i.severity == "warn"]
 
     if args.json:
         result = {
@@ -1408,16 +1495,26 @@ def main():
                 "rule_packs": rule_counts,
                 "bilingual_pairs": bilingual_pairs,
             },
-            "issues": [i.to_dict() for i in all_issues],
+            # Post-repair state, so `issues` and `summary` describe the tree as
+            # it stands when the process exits — the same thing the exit code
+            # describes. What `--fix` changed is reported in its own key rather
+            # than by making `issues` mean two things depending on a flag.
+            "issues": [i.to_dict() for i in standing],
+            "repaired": [i.to_dict() for i in repaired],
             "summary": {
                 "errors": len(errors),
                 "warnings": len(warnings),
+                "repaired": len(repaired),
             },
         }
         print(json.dumps(result, indent=2, ensure_ascii=False))
     else:
-        if all_issues:
-            for issue in all_issues:
+        if standing:
+            if repaired:
+                print()
+                print(f"  {len(standing)} issue(s) still standing after --fix "
+                      f"({len(errors)} error(s)):")
+            for issue in standing:
                 icon = "❌" if issue.severity == "error" else "⚠️"
                 print(f"  {icon} [{issue.check}] {issue.file}:{issue.line} "
                       f"— {issue.message}")

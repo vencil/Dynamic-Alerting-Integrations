@@ -95,10 +95,27 @@ RULE_PACK_COUNT_PATTERNS: List[Tuple[str, Any, Any, str]] = [
 ]
 
 # Tool count patterns: (regex, description)
+#
+# ⛔ #1540: the English half used to be two patterns that each demanded a
+# particular word right after the noun — `tools(` and `tools in`.
+# `README.en.md` says "221 Python tools **under** `scripts/tools/{ops,dx,lint}`",
+# so both matched nothing. Measured on `5b7f6c35`: each scored 0 hits across
+# all three of TOOL_COUNT_CHECK_FILES, while `bump_docs` kept writing that
+# number via its own rule — so rewriting the English number to 999 produced 0
+# `tool-count` findings and rc=0. A writer with no reader.
+#
+# ⛔ The repair is NOT a third spelling with `under` in it; the next
+# preposition would drift out the same way. The preposition was never
+# load-bearing — what identifies the claim is the noun it counts — so the
+# requirement is dropped and English gets one pattern, like Chinese.
+#
+# ⚠️ `check_tool_count_in_docs` matches these case-insensitively, and
+# `AUTO_FIX_PATTERNS["tool-count"]` has to stay in step in both spelling and
+# flags: a form the checker sees but the repair cannot rewrite is a warning
+# nobody can clear (#1504).
 TOOL_COUNT_PATTERNS: List[Tuple[str, str]] = [
     (r"(\d+)\s*個\s*Python\s*工具", "Python tool count (zh)"),
-    (r"(\d+)\s*Python\s*tools?(?:\s*[\(（])", "Python tool count (en)"),
-    (r"(\d+)\s*Python\s*tools?(?:\s*in)", "Python tool count (en-in)"),
+    (r"(\d+)\s*Python\s*tools?\b", "Python tool count (en)"),
 ]
 
 # ADR count pattern
@@ -120,10 +137,60 @@ SCENARIO_COUNT_PATTERNS: List[Tuple[str, str]] = [
 BILINGUAL_PAIR_PATTERN = r"bilingual-(\d+)%20pairs"
 
 # Bilingual number consistency patterns: (regex, description)
+#
+# ⚠️ These are matched with `re.IGNORECASE` against whole documents. The three
+# badge patterns anchor on a URL fragment and are exact; the three prose ones
+# are heuristics, and their false-positive rates were measured over the 94
+# zh/en pairs on `5b7f6c35`:
+#
+#     Rule Pack count       53 spans, 12 false  (`v2 rule pack`, `§4.4 Rule Pack`)
+#     Recording rule count   6 spans,  5 false  (`Part 2 Recording`)
+#     Alert rule count      59 spans, 45 false  ← repaired below (#1505)
+#
+# The first two report nothing today only because their false matches happen
+# to land identically in both languages; that is luck, not a property. They
+# are left alone here because widening or narrowing them changes what a live
+# gate reports, and #1505 is about the one that was actually firing.
+#
+# ⛔ #1505: `(\d+)\s*Alert(?:\s+rule)?` with IGNORECASE matched any digit
+# followed by the letters "alert" — the whole of the gate's standing warning
+# output was three of these, and all three were false: a port
+# (`:9093 alertname=`), an ADR number (`ADR-025 Alerting-Plane`) and section
+# numbers (`### 1.2 Alert 不 fire`). A check that prints three warnings nobody
+# can ever clear teaches its readers to skip the output.
+#
+# ⛔ The repair is not "narrow it until the three stop firing": measured, the
+# obvious narrowing — `(\d+)\s*Alert\s+rules?` without IGNORECASE — matches
+# **0 spans in the entire corpus**, i.e. it trades three false positives for
+# total blindness. The counterfactual is what chose this spelling. Seven real
+# drifts were injected one at a time (a count changed on one side of a pair)
+# and the reported SET compared before and after — not its length, which
+# cannot see an already-one-sided pair change value:
+#
+#     shipped                     3 standing reports (all false)   1/7 caught
+#     `\balerts?\b` only          1 standing report  (false)       1/7
+#     + no dotted-number prefix   1 standing report  (false)       1/7
+#     THIS                        0 standing reports              5/7
+#     + zh measure-word tolerance 3 standing reports (all false)   7/7
+#
+# The last row is why the tolerance is not here: `(\d+)\s*[個條].{0,4}?告警`
+# reaches 7/7 but re-creates the disease, matching `6 個月 alert 歷史` and
+# collecting a different subset of numbers on each side of two pairs.
+#
+# ⚠️ Residual false positives, disclosed rather than papered over: 4 of the 22
+# surviving spans are `# Part 3 Alert Rule` (×2, inside code fences) and
+# `Phase 2 ALERTS{}` (×2, a PromQL selector). All four appear identically in
+# both languages, so they report nothing — the same kind of luck as above, and
+# it is written down here so the next reader does not rediscover it as a bug.
+# ⛔ Stripping code fences before matching was measured and rejected: it saves
+# 2 of those spans, changes no verdict, and makes `Rule Pack count` report a
+# new one-sided pair.
 BILINGUAL_NUMBER_PATTERNS: List[Tuple[str, str]] = [
     (r"(\d+)\s*個?\s*Rule\s*Pack", "Rule Pack count"),
     (r"(\d+)\s*Recording", "Recording rule count"),
-    (r"(\d+)\s*Alert(?:\s+rule)?", "Alert rule count"),
+    (r"(?<![\d.])(\d+)\s+alerts\b"
+     r"|(?<![\d.])(\d+)\s+alert\s+(?:rules?|meanings?|definitions?)\b"
+     r"|(?<![\d.])(\d+)\s*[個條]\s*(?:alert|告警)", "Alert rule count"),
     (r"rule%20packs-(\d+)-", "Rule Pack badge"),
     (r"alerts-(\d+)-", "Alert badge"),
     (r"bilingual-(\d+)", "Bilingual badge"),
@@ -260,9 +327,16 @@ AUTO_FIX_PATTERNS: Dict[str, Dict[str, Any]] = {
         "pattern": r"bilingual-\d+%20pairs",
         "replacement_template": "bilingual-{value}%20pairs",
     },
+    # ⛔ #1540: one entry per TOOL_COUNT_PATTERNS entry. The English half had
+    # no repair at all, so even once the checker could see a drifted English
+    # number, `--fix` could not rewrite it: the file would be reported every
+    # run and repaired never. Both sides are matched case-insensitively, the
+    # same way the checker matches them.
     "tool-count": {
-        "pattern": r"(\d+)(\s*個\s*Python\s*工具)",
-        "replacement_template": "{value}\\2",
+        "patterns": [
+            (r"(\d+)(\s*個\s*Python\s*工具)", "{value}\\2"),
+            (r"(\d+)(\s*Python\s*tools?\b)", "{value}\\2"),
+        ],
     },
     "doc-file-count": {
         "pattern": r"(\d+)(\s*個文件)",
