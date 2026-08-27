@@ -759,7 +759,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "c691763870f8b88309fa519c8cb92e132d5cb81ec3d3ea80872b21448f86907e",
+ "source_digest": "d95b1ed62e24b8e6241f6b155a08b1f801bf5cda052e87d83b1db3ca0b951a2b",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -2673,10 +2673,16 @@
   "tests/e2e-bench/driver/driver.py": [
    "tests/e2e-bench/driver/test_driver.py"
   ],
+  "tests/e2e-bench/fixture/customer-anon": [
+   "tests/lint/test_check_threshold_reachability.py"
+  ],
   "tests/e2e-bench/fixture/synthetic-v1": [
    "tests/lint/test_check_threshold_reachability.py"
   ],
   "tests/e2e-bench/fixture/synthetic-v1/conf.d": [
+   "tests/lint/test_check_threshold_reachability.py"
+  ],
+  "tests/e2e-bench/fixture/synthetic-v2/conf.d": [
    "tests/lint/test_check_threshold_reachability.py"
   ],
   "tests/e2e-bench/receiver/Dockerfile": [
@@ -2710,6 +2716,9 @@
   "tests/golden/build_and_capture.py": [
    "tests/golden/test_merge_parity.py"
   ],
+  "tests/golden/fixtures/full-l0-l3": [
+   "tests/lint/test_check_threshold_reachability.py"
+  ],
   "tests/golden/fixtures/full-l0-l3/conf.d": [
    "tests/lint/test_check_threshold_reachability.py"
   ],
@@ -2723,6 +2732,9 @@
    "tests/lint/test_check_threshold_reachability.py"
   ],
   "tests/golden/fixtures/l0-only/conf.d/_defaults.yaml": [
+   "tests/lint/test_check_threshold_reachability.py"
+  ],
+  "tests/golden/fixtures/mixed-mode/conf.d": [
    "tests/lint/test_check_threshold_reachability.py"
   ],
   "tests/helm": [
