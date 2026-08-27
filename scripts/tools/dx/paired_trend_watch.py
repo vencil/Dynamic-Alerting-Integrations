@@ -269,7 +269,7 @@ class Night:
     window, which is the same false-all-clear in a different costume.
     """
 
-    __slots__ = ("night_utc", "run_id", "head_sha", "schema", "cpu",
+    __slots__ = ("night_utc", "run_id", "night_key", "head_sha", "schema", "cpu",
                  "reference_sha",
                  "ratios_pct", "canary_pct", "inconclusive",
                  "drift_status", "drift_files", "drift_count",
@@ -279,6 +279,9 @@ class Night:
     def __init__(self, night_utc, run_id):
         self.night_utc = night_utc
         self.run_id = run_id
+        # Assigned by `assign_night_keys()`, not derived on demand. See there
+        # for why a run's OWN attributes cannot supply this identity.
+        self.night_key = None
         # The commit the NIGHTLY ran, not the reference it measured against —
         # `reference_sha` below is the other one, and confusing them would
         # attribute a night to the wrong side of the comparison. `gh run list`
@@ -414,48 +417,64 @@ def _dated(night):
 
 def _night_label(night):
     """What to print where a night's date goes. `?` means the date is unknown."""
-    return night.night_utc if _dated(night) else "?"
+    return night.night_utc if _dated(night) else (night.night_key or "?")
 
 
-def _night_key(night):
-    """The identity under which per-night facts are COLLECTED into a dict.
+def assign_night_keys(nights):
+    """Give every night the identity its per-night facts are COLLECTED under.
 
-    ⛔ NOT the same question as `_night_label()`, which asks what to PRINT.
-    Two dated runs of one night must share a key — merging them is the entire
-    point of the calendar-night rule. Two UN-dated runs must NOT, because
-    nothing here knows whether they share a night, and giving them one key
-    asserts exactly what every disclosure on this page says it cannot.
+    ⛔ NOT the same question as "what should this print". Two DATED runs of one
+    night must share this key — merging them is the entire point of the
+    calendar-night rule. Two UN-DATED runs must NOT, because nothing here knows
+    whether they share a night, and one key asserts exactly what every
+    disclosure on this page says it cannot.
 
-    ⛔ THREE call sites collapsed on `None` (or on a shared `"?"`) before this
-    existed, and all three lost information rather than announcing it:
+    ⛔ THE IDENTITY CANNOT COME FROM THE RUN ITSELF, and a previous round's fix
+    assumed it could. It keyed un-dated runs on `f"?#{run_id}"`, which review
+    then measured collapsing in two separate ways:
 
-        over_not_sustained   two un-dated runs over the threshold rendered as
-                             ONE row; the smaller reading left the page entirely
-        inconclusive         `None` beside a date string in the same dict, then
-                             `sorted()` -> TypeError, killing the whole render
-        digest_transitions   three un-dated nights whose work-definition digest
-                             changed twice reported ZERO transitions
+        run_id is None      both loaders allow it (`nights_from_dataset` passes
+                            `run_id is None` explicitly, `databaseId` can be
+                            absent) -> every such run keyed `?#None` -> the
+                            readings merged and the smaller one left the page
+        int 101 vs "101"    both types are allowed through the same loader ->
+                            both format to `?#101` -> same silent merge
 
-    ⚠️ The third was NOT reported by review. It came out of enumerating every
-    site that keys or sorts on a night, which is the check that should have run
-    the first time — the previous round's prose claimed "third call site" and
-    that phrasing read as "all of them". It was not.
+    ⇒ the key is an ORDINAL over the series instead: position is the only thing
+    an un-dated run reliably has. It is assigned once, over the sorted list, so
+    every collection site in `decide()` sees the same identity for the same run.
 
-    ⭐ The un-dated key carries `run_id` because that is the only identity such a
-    run has, and the Nights table already prints it next to the `?`.
+    ⚠️ Idempotent by construction — re-running it over the same list produces
+    the same keys — but the ordinals are relative to the LIST PASSED IN. Call it
+    on the whole series, not a filtered subset, or two subsets will disagree.
     """
-    return night.night_utc if _dated(night) else f"?#{night.run_id}"
+    undated = 0
+    for night in nights:
+        if _dated(night):
+            night.night_key = night.night_utc
+        else:
+            undated += 1
+            night.night_key = f"?#{undated}"
+    return nights
 
 
 def _short_night(label):
-    """`2026-08-20` -> `08-20`; `?` stays `?`.
+    """`2026-08-20` -> `08-20`; anything that is not an ISO date is left alone.
 
     ⛔ Written because the year-stripping used to be a bare `label[5:]`, which
     turns `?` into an EMPTY STRING — and an empty cell in a Markdown table is
     indistinguishable from a rendering bug, which is the one thing every label
     in this module is supposed to prevent.
+
+    ⛔ AND THE FIRST VERSION OF THAT FIX tested `len(label) == 10`, which is a
+    guess about dates rather than a check for one. Review measured what it cost:
+    `?#12345678` is ten characters, so it rendered as `45678` — the `?` gone,
+    the id truncated, a label nobody wrote, produced by the very helper whose
+    docstring above says it exists to stop exactly that. The predicate now asks
+    whether the label IS a date, in the two positions that decide it.
     """
-    return label[5:] if len(label) == 10 else label
+    return (label[5:] if len(label) == 10 and label[4] == "-" and label[7] == "-"
+            else label)
 
 
 def _finite_pct(value):
@@ -889,6 +908,16 @@ def digest_transitions(nights):
     # `2026-08-20 → 2026-08-20` transition row. The night's LAST readable run
     # is the one carried, matching "what the work definition was by the end of
     # that night".
+    #
+    # ⚠️ THAT SENTENCE IS NOW NARROWER THAN IT READS, and review measured it:
+    # a dated run plus a same-night re-run that LOST its date renders
+    # `2026-08-20 -> ?#1`, which is a same-night transition wearing two
+    # different labels. The guarantee holds only while both runs are dated.
+    # ⛔ Un-dated rows also carry no known ORDER: `_ordering_key` sorts them
+    # ahead of every dated night, so `from -> to` across a `?#` endpoint is
+    # ordinal, not chronological. The table says so beneath itself rather
+    # than this comment claiming a property the code does not deliver.
+    assign_night_keys(nights)
     per_night = {}
     for night in nights:
         if night.readable:
@@ -897,7 +926,7 @@ def digest_transitions(nights):
             # single key `None` and report ZERO transitions — two MOVES gone
             # from the page, in the one table whose job is to say the two
             # sides stopped doing the same thing.
-            per_night[_night_key(night)] = night
+            per_night[night.night_key] = night
     usable = list(per_night.values())
     for prev, cur in zip(usable, usable[1:]):
         # ⛔ Labelled through the shared predicate, like the span and the
@@ -905,7 +934,7 @@ def digest_transitions(nights):
         # was a FOURTH call site printing the raw value, so a night the ratio
         # had already classified as un-dated still appeared here under a label
         # nobody wrote.
-        rec = {"from": _night_key(prev), "to": _night_key(cur), "sides": {}}
+        rec = {"from": prev.night_key, "to": cur.night_key, "sides": {}}
         for side in ("reference", "main"):
             if (prev.digest_status != "checked" or cur.digest_status != "checked"
                     or side not in prev.digest_sides or side not in cur.digest_sides):
@@ -980,6 +1009,10 @@ def decide(nights, *, threshold_pct=DEFAULT_THRESHOLD_PCT,
     exactly the same code.
     """
     nights = sorted(nights, key=_ordering_key)
+    # ⛔ After the sort, before anything collects per-night facts: the un-dated
+    # ordinals are positions in THIS series, so every site below must see the
+    # same assignment. Assigning lazily per call site is how they drift apart.
+    assign_night_keys(nights)
     for night in nights:
         apply_gate(night, gate_pct)
 
@@ -1001,12 +1034,12 @@ def decide(nights, *, threshold_pct=DEFAULT_THRESHOLD_PCT,
     inconclusive = {}
     for night in counted:
         for bench, reason in night.inconclusive.items():
-            inconclusive.setdefault(bench, {})[_night_key(night)] = reason
+            inconclusive.setdefault(bench, {})[night.night_key] = reason
     for night in counted:
         for bench in benches:
             if bench in night.ratios_pct or bench in night.inconclusive:
                 continue
-            inconclusive.setdefault(bench, {})[_night_key(night)] = (
+            inconclusive.setdefault(bench, {})[night.night_key] = (
                 "absent-from-payload — the night carried neither a ratio nor a "
                 "reason for this benchmark")
 
@@ -1031,7 +1064,7 @@ def decide(nights, *, threshold_pct=DEFAULT_THRESHOLD_PCT,
                 # took the whole page down with a TypeError. Third call site of
                 # that same defect on this branch.
                 per_night = seen_over.setdefault(bench, {})
-                key = _night_key(night)
+                key = night.night_key
                 if value > per_night.get(key, float("-inf")):
                     per_night[key] = value
 
@@ -1436,7 +1469,11 @@ def render(result):
             "above — nothing here knows whether they share a night. They "
             f"remain in the run TOTAL ({len(nights)}), and "
             f"{n_undated_counted} of them {'is' if n_undated_counted == 1 else 'are'} "
-            "counted. They are listed in the Nights table under `?`.")
+            "counted. They are listed in the Nights table — and referred to "
+            "elsewhere on this page — as `?#1`, `?#2` … , numbered by their "
+            "position in this series. ⛔ That number is an ORDINAL, not a date "
+            "and not a run id: it exists only so two un-dated runs can be told "
+            "apart, and it says nothing about which night either one was.")
     # ⛔ Compared against DATED counted runs, not all of them: otherwise a
     # single un-dated run makes the two numbers differ and prints a claim about
     # `workflow_dispatch` re-runs that nothing measured.
@@ -1552,8 +1589,20 @@ def render(result):
         lines.append("|---|---|---|")
         for bench, hits in sorted(result["over_not_sustained"].items()):
             worst = max(hits.values())
-            dates = ", ".join(_short_night(d) for d in sorted(hits))
-            lines.append(f"| `{bench}` | {len(hits)} ({dates}) | {_pct(worst)} |")
+            # ⛔ NIGHTS are counted; un-dated runs are named beside the count,
+            # never added into it. Review caught the previous cut claiming `4`
+            # on a page whose own headline two lines up said `1 of 1 calendar
+            # night(s)` — three of those four were runs nobody can place on a
+            # night, and one of them may well BE the dated night. The gate table
+            # below already solved this exact presentation with `+ N undated
+            # run(s)`; this is the same shape, not a second invention.
+            dated = sorted(d for d in hits if not str(d).startswith("?#"))
+            undated = sorted(d for d in hits if str(d).startswith("?#"))
+            shown = ", ".join(_short_night(d) for d in dated) or "—"
+            extra = (f" + {len(undated)} undated run(s) ({', '.join(undated)})"
+                     if undated else "")
+            lines.append(
+                f"| `{bench}` | {len(dated)} ({shown}){extra} | {_pct(worst)} |")
         lines.append("")
         lines.append("⚠️ These did not meet the consecutive-nights rule, so they "
                      "are not findings. They are shown because a reading the "

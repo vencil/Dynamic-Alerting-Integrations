@@ -1227,7 +1227,7 @@ def test_headline_never_folds_undated_runs_into_one_calendar_night():
     assert "still counts them" not in body
     # And the span must not print a night label nobody wrote (pre-existing,
     # fixed here because the line above now promises `?`).
-    assert "None .." not in body and "? .. 2026-08-20" in body
+    assert "None .." not in body and "?#1 .. 2026-08-20" in body
 
 
 def test_undated_runs_do_not_manufacture_a_multi_run_night_warning():
@@ -1309,7 +1309,7 @@ def test_one_predicate_decides_a_nights_label_everywhere_it_is_printed():
     assert "20260816" not in body, "a night label nobody wrote reached the page"
     assert "carry no usable date" in body
     _, rows = _nights_table_rows(body)
-    assert "| ? |" in rows[0]
+    assert "| ?#1 |" in rows[0]
 
 
 def test_from_gh_never_borrows_a_head_sha_for_an_unidentifiable_run(tmp_path):
@@ -1565,7 +1565,7 @@ def test_excluding_undated_runs_from_the_rule_does_not_hide_them():
                                   _run("2026-08-20", 102, 9.0)], k=2))
     header, rows = _nights_table_rows(body)
     assert len(rows) == 2, rows                      # both listed
-    assert "| ? |" in rows[0]                        # the un-dated one, labelled
+    assert "| ?#1 |" in rows[0]                        # the un-dated one, labelled
     assert "1 of 1 calendar night(s)" in body        # calendar ratio excludes it
     assert "2 of 2 run(s) counted" in body           # run total still carries it
     assert "1 run(s) carry no usable date" in body   # and it is named
@@ -1576,7 +1576,7 @@ def test_excluding_undated_runs_from_the_rule_does_not_hide_them():
     # ⚠️ The label is `?#101`, not a bare `?`: a later round found that a shared
     # `?` merged distinct un-dated runs and dropped a reading, so the key now
     # carries the run id. See `_night_key`.
-    assert "| `BenchmarkAlpha` | 2 (08-20, ?#101) |" in body
+    assert "| `BenchmarkAlpha` | 1 (08-20) + 1 undated run(s) (?#1) |" in body
 
 
 def test_two_undated_runs_are_two_readings_not_one():
@@ -1598,7 +1598,7 @@ def test_two_undated_runs_are_two_readings_not_one():
     assert len(hits) == 2, hits
     assert sorted(hits.values()) == [9.0, 12.0]      # ⛔ neither reading lost
     body = ptw.render(result)
-    assert "| `BenchmarkAlpha` | 2 (?#1, ?#2) |" in body
+    assert "| `BenchmarkAlpha` | 0 (—) + 2 undated run(s) (?#1, ?#2) |" in body
 
 
 def test_inconclusive_reasons_from_an_undated_night_do_not_kill_the_page():
@@ -1620,8 +1620,8 @@ def test_inconclusive_reasons_from_an_undated_night_do_not_kill_the_page():
                          _run(None, 3)], k=2)        # un-dated, no reading
     body = ptw.render(result)                        # ⛔ must not raise
     keys = result["inconclusive"]["BenchmarkAlpha"]
-    assert set(keys) == {"?#3", "2026-08-20"}, keys  # both kept, neither None
-    assert "?#3" in body
+    assert set(keys) == {"?#1", "2026-08-20"}, keys  # both kept, neither None
+    assert "?#1" in body
 
     # ⛔ BOTH assignment sites, because `inconclusive` is populated twice and a
     # first cut of this test only reached one. `decide()` fills it from
@@ -1632,8 +1632,8 @@ def test_inconclusive_reasons_from_an_undated_night_do_not_kill_the_page():
     carried.inconclusive["BenchmarkAlpha"] = "unreadable-ratio (nan)"
     result = ptw.decide([_run("2026-08-18", 1, 9.0), carried], k=2)
     keys = result["inconclusive"]["BenchmarkAlpha"]
-    assert set(keys) == {"?#4"}, keys
-    assert "?#4" in ptw.render(result)
+    assert set(keys) == {"?#1"}, keys
+    assert "?#1" in ptw.render(result)
 
 
 def test_undated_nights_do_not_swallow_a_work_definition_move():
@@ -1661,6 +1661,68 @@ def test_undated_nights_do_not_swallow_a_work_definition_move():
     assert len(transitions) == 2, transitions
     assert [t["from"] for t in transitions] == ["?#1", "?#2"]
     assert all(t["sides"]["reference"] is True for t in transitions)  # MOVED
+
+
+@pytest.mark.parametrize("ids", [
+    (None, None),        # ⛔ both loaders allow a null run_id
+    (101, "101"),        # ⛔ and both allow int AND str for the same value
+])
+def test_undated_runs_stay_distinct_even_when_their_run_ids_are_not(ids):
+    """⛔ The previous round keyed un-dated runs on `f"?#{run_id}"`.
+
+    `run_id` is not an identity. `nights_from_dataset` passes `run_id is None`
+    through explicitly and accepts int OR str; `databaseId` can be absent from a
+    `gh` record. Both cases formatted to the SAME key — `?#None`, or `?#101` for
+    an int and a string of the same digits — and the readings merged, dropping
+    the smaller one. That is the exact defect the key was introduced to end,
+    surviving inside the fix for it.
+
+    ⇒ the key is an ordinal over the series now. Position is the only thing an
+    un-dated run reliably has.
+    """
+    left, right = ids
+    result = ptw.decide([_run(None, left, 9.0), _run(None, right, 12.0)], k=5)
+    hits = result["over_not_sustained"]["BenchmarkAlpha"]
+    assert sorted(hits.values()) == [9.0, 12.0], hits   # ⛔ neither lost
+    assert set(hits) == {"?#1", "?#2"}, hits
+
+
+def test_a_run_id_ten_characters_long_is_not_mistaken_for_a_date():
+    """⛔ `_short_night` used to strip a year from anything of length 10.
+
+    `?#12345678` is ten characters, so it rendered as `45678`: the `?` gone, the
+    id truncated, a label nobody wrote — produced by the one helper whose whole
+    job is to stop that. Length is a guess about dates; this asks whether the
+    label IS one.
+
+    ⚠️ Reachable through `nights_from_dataset`, which accepts a string run_id of
+    any length. The `gh` path happens to produce 11-digit ids, which is luck,
+    not a guard.
+    """
+    assert ptw._short_night("?#12345678") == "?#12345678"
+    assert ptw._short_night("2026-08-20") == "08-20"
+    assert ptw._short_night("?#1") == "?#1"
+
+
+def test_the_not_sustained_table_counts_nights_not_undated_runs():
+    """⛔ Two numbers on one page must not contradict each other.
+
+    Giving each un-dated run its own key fixed the dropped reading and then
+    counted those runs as NIGHTS: a page whose headline said `1 of 1 calendar
+    night(s)` carried a row claiming `4`. Three of those four are runs nobody
+    can place, and one of them may BE the dated night.
+
+    The gate table already answers this with `+ N undated run(s)`; the same
+    shape is used here rather than a second invention.
+    """
+    result = ptw.decide([_run("2026-08-20", 1, 9.7), _run(None, 2, 9.0),
+                         _run(None, 3, 9.1), _run(None, 4, 9.2)], k=5)
+    body = ptw.render(result)
+    assert "**INCONCLUSIVE** over 1 of 1 calendar night(s)" in body
+    assert ("| `BenchmarkAlpha` | 1 (08-20) + 3 undated run(s) "
+            "(?#1, ?#2, ?#3) |") in body
+    # ⛔ The old form claimed four nights. It must not come back in any wording.
+    assert "| 4 (" not in body
 
 
 def test_a_reading_over_the_threshold_is_never_silently_omitted():
