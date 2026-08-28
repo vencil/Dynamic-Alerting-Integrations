@@ -29,11 +29,18 @@ many wrapped references exist" were produced while scoping this (16 / 28 / 35 /
 A number that needs its definition restated to mean anything is not a baseline.
 Since the tree is now at zero, the definition below IS the number.
 
-⛔ KNOWN GAP, hit while writing this: a path split across two STRING LITERALS is
-invisible here, because the quotes sit between the halves and break the token —
+⛔ A path split across two STRING LITERALS is invisible to the rejoin above,
+because the quotes sit between the halves and break the token —
 
     "# ... （components/threshold-exporter/",
     "# app/pkg/config/resolve.go）。",
+
+⚠️ HALF of that class is now guarded, and which half matters. When the two
+literals are IMPLICITLY CONCATENATED — one string written across lines, no comma
+— `test_no_reference_is_split_across_implicit_concatenation` catches it, because
+Python's parser has already joined them. The illustration just above is the
+OTHER half: comma-separated, so it is two strings and stays silent. It is still
+here, still a real tracked path, and still makes the point.
 
 That is `scripts/tools/ops/_registry_lib.py`, which GENERATES the comment blocks
 spliced into `rule-packs/*.yaml`. This guard saw the generated outputs and not
@@ -59,9 +66,9 @@ look for rather than as today's inventory —
     contiguous mention and NOT at the split one, so a rename sweep working from
     `grep -n` fixes one and leaves the other. #1373 verbatim.
   * the KNOWN GAP illustration in this very docstring — it uses a REAL tracked
-    path and escapes its own guard only because this class is unmodelled.
-    Contrast the top-of-file illustration, which uses a path that does not exist
-    for exactly this reason.
+    path and stays silent because it is COMMA-SEPARATED, which is two strings
+    rather than one written across lines. Contrast the top-of-file illustration,
+    which uses a path that does not exist for exactly this reason.
   ⚠️ Both were cited by absolute line number until #1453. Measured at that
   point: two of the three numbers had rotted and the third still happened to be
   right. ⛔ The corrected values are deliberately NOT repeated here, because the
@@ -72,14 +79,17 @@ look for rather than as today's inventory —
   A line number that is correct today is not a different KIND of thing from one
   that has already rotted; it is the same thing earlier.
 
-Neither is fixed here: the mechanism is the TOKENISER (quotes break the token
-before the resolver is reached), not the resolver that #1452 is about, and it
-already has a ticket — #1394. What is fixed here is this paragraph, which
-asserted zero while two counter-examples sat in the tree. That is the same
-sentence-shape #1452 exists to punish, fifteen lines above the one it punished.
+The mechanism is the TOKENISER (quotes break the token before the resolver is
+reached), not the resolver that #1452 is about. The implicit-concatenation half
+is now guarded (#1394); the first of the two above was a live defect and is
+reflowed. What was fixed EARLIER in this paragraph is the sentence that asserted
+zero while two counter-examples sat in the tree — the same sentence-shape #1452
+exists to punish, a few lines above the one it punished.
 
 What is deliberately NOT modelled (under-detection, the safe direction):
-  * a token split across two string literals — see the gap above;
+  * a token split across two COMMA-SEPARATED string literals — that is two
+    strings, not one written across lines, and joining them is what arms a
+    check over every list of paths in the repo (measured on #1394);
   * a token split across THREE or more lines — the window is two lines.
     Measured when this bullet was written, and nothing re-checks it: a
     three-line window added no reports, so the gap was structural and empty
@@ -454,6 +464,18 @@ _MIN_FILES = 1500
 _MIN_TOKENS = 2000
 _MIN_RESOLVING = 300
 
+# ⛔ Anti-vacuity for the #1394 half, and it is NOT a file count — a file count
+# does not move when the check stops working. Chosen by running plausible
+# narrowings against the judged population rather than by picking a round
+# number; the counts are on #1394, measured there, and deliberately not restated
+# here (see COUNTS). Two of those narrowings take it far below this value and
+# one takes it to zero.
+# ⚠️ A third — skipping constants inside f-strings — barely moves it, so no
+# floor can tell that edit apart from ordinary drift. It is pinned by a
+# synthetic case instead: a floor is not a substitute for a case, and the one
+# live instance of this class was inside an f-string.
+_MIN_CONCAT_JUDGED = 500
+
 # ⛔ NOTHING is skipped: every tracked file is decoded with `errors="replace"`.
 #
 # The first version instead pinned the exact set of files that fail to decode as
@@ -664,6 +686,85 @@ def _wrapped_references(text: str) -> list[tuple[int, str]]:
                 continue
             found.append((index + 1, token))
     return found
+
+
+def _implicit_concat_references(text: str) -> list[tuple[int, str]]:
+    """The sibling class `_wrapped_references` cannot see: a path split across
+    IMPLICIT STRING CONCATENATION (#1394).
+
+    ⛔ The quotes sit between the halves, so the two-line rejoin above produces a
+    broken token and the reference is invisible to it AND to `git grep`. That is
+    not hypothetical: the one live instance was an assert message split for line
+    width, and a rename sweep found this same file's OTHER, contiguous mention
+    and left the split one pointing at nothing.
+
+    DERIVED, and that is the whole reason this is tractable. Python's parser
+    already joins implicitly concatenated literals into ONE `ast.Constant`, so
+    the question is asked of the constant's VALUE and compared against the raw
+    source of its own span. Nothing here guesses at quote, comma or
+    continuation shapes.
+
+    ⚠️ THE AXIS WAS CHOSEN BY MEASUREMENT, not taste. Asking the same question
+    with a line-pair rule — first line ends in a quote, next starts with one, as
+    #1394 proposed — joins every adjacent pair of string literals, i.e. every
+    list of paths, and arms over a thousand tokens that nobody wrote. Narrowing
+    THAT by carrier (both halves carry a comment marker) drops the armed set to
+    single digits but also drops the real defect, keeping only a decorative
+    example: narrowing the false positives was narrowing the coverage. Narrowing
+    by token shape barely moves it, because the noise is genuinely deep paths.
+    The counts are on #1394; what belongs here is the shape of the answer.
+
+    ⚠️ Deliberately NOT modelled, both measured rather than assumed:
+      * a comma-separated list of literals — that is not one string, and the
+        illustration in this module's own KNOWN GAP paragraph is exactly that
+        shape, which is why it is still there and still silent;
+      * the basename fallback `_wrapped_references` applies. Adding it here
+        changes nothing on this tree — same reports, same armed set — so the
+        narrower predicate is kept and this note records that it was tried;
+      * non-Python carriers. Go and JS concatenate with `+`, and this reads the
+        Python AST. #1394's own inventory was entirely Python, but the gap is
+        real and named rather than implied.
+    """
+    # ⛔ FAIL-CLOSED. Every tracked `.py` in this repo parses today (measured), so
+    # a SyntaxError means the corpus changed shape, not that this file is
+    # uninteresting. Skipping it would let a whole file leave the scan silently —
+    # the failure this module exists to make impossible.
+    tree = ast.parse(text)
+    lines = text.split("\n")
+    found: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
+            continue
+        if node.end_lineno == node.lineno:
+            continue                      # nothing was joined; no break to hide
+        raw = "\n".join(lines[node.lineno - 1:node.end_lineno])
+        for token in sorted(_tokens(node.value)):
+            if token in raw or "/" not in token:
+                continue
+            if _resolves(token):
+                found.append((node.lineno, token))
+    return found
+
+
+def _concat_tokens_examined(files: list[tuple[str, str]]) -> int:
+    """How many resolving path tokens the check above actually got to judge.
+
+    ⛔ NOT "how many files were parsed". The floor has to sit on the number that
+    MOVES when the check stops working, and file count does not: pointing
+    `ast.walk` at `tree.body` leaves every file parsed and every verdict gone.
+    Measured against that and two other narrowings — see the test that uses it.
+    """
+    total = 0
+    for _, text in files:
+        tree = ast.parse(text)
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
+                continue
+            if node.end_lineno == node.lineno:
+                continue
+            total += sum(1 for t in _tokens(node.value)
+                         if "/" in t and _resolves(t))
+    return total
 
 
 # ⛔ THE TRIPWIRES BELOW ARE PURE FUNCTIONS, and that shape is the whole point.
@@ -1375,3 +1476,85 @@ def test_each_tripwire_fires_on_degenerate_input() -> None:
     # thing these floors are too crude to have. 200 is an independent constant,
     # deliberately NOT derived from `_tracked()`, because a floor taken from
     # the thing it protects is not a floor.
+
+
+def test_no_reference_is_split_across_implicit_concatenation() -> None:
+    """The #1394 half. Same question, different join.
+
+    ⛔ THE FLOOR CANNOT REPLACE THE CASES BELOW, and that was measured rather
+    than assumed. Plausible ways to break this check were run against the number
+    the floor watches (counts on #1394, not restated here — see COUNTS):
+
+        `ast.walk` -> `tree.body`          judged population to zero  -> floor
+        stop scanning `tests/`             far below the floor        -> floor
+        skip constants inside an f-string  barely moves it            -> NO floor
+
+    The last one is not hypothetical: the only live instance of this class was
+    inside an f-string. A count that barely moves cannot be told from a tree
+    that grew, so the f-string case is pinned as a SYNTHETIC input instead.
+    ⚠️ Verified by which assertion fires, not by "the test went red" — the
+    first attempt to check that matched the assertion's own source text in the
+    traceback and would have agreed with any outcome.
+    """
+    files = [(p, t) for p, t in _read_tracked() if p.endswith(".py")]
+
+    judged = _concat_tokens_examined(files)
+    assert judged >= _MIN_CONCAT_JUDGED, (
+        f"only {judged} resolving path token(s) inside multi-line string "
+        f"constants — the check below judges that population, so if it "
+        f"collapsed the green result means nothing. Do not lower this floor to "
+        f"make a scan-narrowing edit pass; widen the scan back.")
+
+    subject = "tests/ops/test_wrapped_path_references.py"
+    assert subject in _tracked(), f"{subject} moved; re-point this fixture"
+    head, tail = subject[:24], subject[24:]
+
+    # MUST REPORT: plain implicit concatenation.
+    plain = 'x = (\n    "see %s"\n    "%s here"\n)\n' % (head, tail)
+    assert _implicit_concat_references(plain) == [(2, subject)], (
+        f"a path split across implicit concatenation must be reported; "
+        f"got {_implicit_concat_references(plain)}")
+
+    # MUST REPORT: the same split INSIDE an f-string — the carrier of the only
+    # live instance, and the one the floor above provably cannot see.
+    fstring = 'x = (\n    f"{v} see %s"\n    "%s here"\n)\n' % (head, tail)
+    assert [t for _, t in _implicit_concat_references(fstring)] == [subject], (
+        "the live instance of this class was an f-string assert message; a "
+        "check that only reads plain literals would have missed it and the "
+        "floor above would not have moved: "
+        + repr(_implicit_concat_references(fstring)))
+
+    # MUST NOT REPORT: contiguous. Nothing is hidden, so there is nothing to fix.
+    whole = 'x = (\n    "see %s"\n    " here"\n)\n' % subject
+    assert _implicit_concat_references(whole) == [], (
+        "the path is contiguous in the source, so grep finds it: "
+        + repr(_implicit_concat_references(whole)))
+
+    # MUST NOT REPORT: a comma-separated list. Two literals are two strings, not
+    # one written across lines — this is the documented boundary, and the
+    # illustration in this module's KNOWN GAP paragraph has exactly this shape.
+    listed = 'x = [\n    "see %s",\n    "%s here",\n]\n' % (head, tail)
+    assert _implicit_concat_references(listed) == [], (
+        "a comma-separated list is not implicit concatenation; reporting it "
+        "would arm this check over every list of paths in the repo: "
+        + repr(_implicit_concat_references(listed)))
+
+    # ⛔ FAIL-CLOSED on unparseable input, so a file cannot leave the scan quietly.
+    with pytest.raises(SyntaxError):
+        _implicit_concat_references("def (\n")
+
+    offenders: dict[str, list[str]] = {}
+    for path, text in files:
+        for line, token in _implicit_concat_references(text):
+            offenders.setdefault(path, []).append(f"line {line} -> {token}")
+    assert not offenders, (
+        "a path is split across implicitly concatenated string literals, so "
+        "`git grep` on the whole path does not return this site and a rename "
+        "sweep will report the tree clean (#1394). Move the whole path into "
+        "ONE literal — the runtime string does not change, only where the "
+        "source breaks.\n"
+        "⛔ Do NOT silence this by splitting the literals with a comma: that "
+        "changes what the code means and leaves the reference just as "
+        "invisible.\n"
+        + "\n".join(f"  {p}:\n    " + "\n    ".join(v)
+                    for p, v in sorted(offenders.items())))
