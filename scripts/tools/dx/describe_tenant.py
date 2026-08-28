@@ -29,6 +29,11 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout, PROJECT_ROOT_MARKERS  # noqa: E402
+from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
+    has_yaml_extension,
+    is_defaults_name,
+    is_reserved_name,
+)
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 try:
@@ -115,6 +120,21 @@ def _canonical_hash(data: dict) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
 
+def _iter_confd_yaml(root, suffixes):
+    """conf.d files carrying one of `suffixes`, CASE-INSENSITIVELY.
+
+    ⚠️ Recursion is unchanged — `rglob("*")` walks exactly what
+    `rglob("*.yaml")` walked, hidden directories included. Only the
+    name test moved to the shared predicate (#1588); widening this
+    reader's suffix set would be a separate behaviour change and is
+    deliberately not bundled here.
+    """
+    return sorted(
+        p for p in root.rglob("*")
+        if p.is_file() and has_yaml_extension(p.name, suffixes)
+    )
+
+
 class ConfDScanner:
     """Scan a conf.d/ directory and build the inheritance graph."""
 
@@ -164,15 +184,17 @@ class ConfDScanner:
         """Recursively scan conf.d/ and build tenant + defaults maps."""
         # Collect all _defaults.yaml files
         defaults_files: dict[str, dict] = {}
-        for dp in self.conf_d.rglob("_defaults.yaml"):
-            defaults_files[str(dp.resolve())] = _load_yaml(dp)
-        for dp in self.conf_d.rglob("_defaults.yml"):
-            defaults_files[str(dp.resolve())] = _load_yaml(dp)
+        # #1588: matched by the shared predicate, not by two literal names.
+        # `_DEFAULTS.YAML` measured as invisible here while the exporter
+        # merged it into every downstream tenant.
+        for dp in self.conf_d.rglob("*"):
+            if dp.is_file() and is_defaults_name(dp.name):
+                defaults_files[str(dp.resolve())] = _load_yaml(dp)
         self.defaults_data = defaults_files
 
         # Collect all tenant files
-        for fp in self.conf_d.rglob("*.yaml"):
-            if fp.name.startswith("_"):
+        for fp in _iter_confd_yaml(self.conf_d, (".yaml",)):
+            if is_reserved_name(fp.name):
                 continue
             data = _load_yaml(fp)
             if not isinstance(data, dict):
@@ -185,8 +207,8 @@ class ConfDScanner:
                 self.tenant_files[tid] = fp.resolve()
                 self.defaults_chain[tid] = self._resolve_defaults_chain(fp)
 
-        for fp in self.conf_d.rglob("*.yml"):
-            if fp.name.startswith("_"):
+        for fp in _iter_confd_yaml(self.conf_d, (".yml",)):
+            if is_reserved_name(fp.name):
                 continue
             data = _load_yaml(fp)
             if not isinstance(data, dict):
@@ -207,9 +229,16 @@ class ConfDScanner:
         root = self.conf_d
 
         while True:
-            for name in ("_defaults.yaml", "_defaults.yml"):
-                dp = current / name
-                if dp.exists():
+            # #1588: shared predicate, not two literal names. A level
+            # carrying `_DEFAULTS.YAML` used to contribute nothing to the
+            # chain while the exporter merged it — so `effective_config`
+            # here answered a question about a config nobody runs.
+            try:
+                level = sorted(current.iterdir())
+            except OSError:
+                level = []
+            for dp in level:
+                if dp.is_file() and is_defaults_name(dp.name):
                     chain.append(dp.resolve())
             if current == root or current == current.parent:
                 break

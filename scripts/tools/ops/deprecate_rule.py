@@ -44,7 +44,23 @@ from _lib_python import load_yaml_file as _lib_load_yaml  # noqa: E402
 from _lib_python import write_text_secure  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
-from _lib_confd import warn_nested  # noqa: E402
+from _lib_confd import has_yaml_extension, is_defaults_name, warn_nested  # noqa: E402
+
+
+def _resolve_defaults_file(base: Path) -> Path:
+    """`_defaults.{yaml,yml}` in ANY casing under `base`.
+
+    Falls back to the canonical name so the caller's "does not
+    exist" branch still fires with a name an operator can act on.
+    Sorted, so two spellings resolve deterministically.
+    """
+    try:
+        for entry in sorted(base.iterdir()):
+            if entry.is_file() and is_defaults_name(entry.name):
+                return entry
+    except OSError:
+        pass
+    return base / "_defaults.yaml"
 
 
 def load_yaml_file(path):
@@ -92,7 +108,10 @@ def scan_for_metric(metric_key, config_dir):
     # #1339: flat by design here — but a hierarchical conf.d must not
     # look like an empty one. Name the files this scan cannot see.
     warn_nested(config_base, tool="deprecate_rule")
-    for entry in sorted(list(config_base.glob("*.yaml")) + list(config_base.glob("*.yml"))):
+    for entry in sorted(
+        p for p in config_base.iterdir()
+        if p.is_file() and has_yaml_extension(p.name)
+    ):
         filename = entry.name
         path = str(entry)
         if filename.startswith('.'):
@@ -135,7 +154,7 @@ def scan_for_metric(metric_key, config_dir):
 
 def disable_in_defaults(metric_key, config_dir, execute=False):
     """在 _defaults.yaml 中將 metric 設為 "disable"。"""
-    defaults_path = str(Path(config_dir) / "_defaults.yaml")
+    defaults_path = str(_resolve_defaults_file(Path(config_dir)))
     if not Path(defaults_path).exists():
         return False, "_defaults.yaml 不存在"
 
@@ -183,7 +202,10 @@ def remove_from_tenants(metric_key, config_dir, execute=False):
     # #1339: second scan site — the guard must live where the scan does,
     # otherwise a hierarchical conf.d is silently empty on THIS path.
     warn_nested(config_base, tool="deprecate_rule")
-    for entry in sorted(list(config_base.glob("*.yaml")) + list(config_base.glob("*.yml"))):
+    for entry in sorted(
+        p for p in config_base.iterdir()
+        if p.is_file() and has_yaml_extension(p.name)
+    ):
         filename = entry.name
         path = str(entry)
         if filename.startswith('_') or filename.startswith('.'):

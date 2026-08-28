@@ -35,18 +35,29 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_VIOLATION  # noqa: E402
-from _lib_confd import warn_nested  # noqa: E402
+from _lib_confd import config_stem, has_yaml_extension, warn_nested  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 
 
 def find_config_file(tenant, config_dir):
     """尋找 tenant 的設定檔案。"""
-    # 嘗試 <tenant>.yaml 和 <tenant>.yml
+    # #1588: the carrier is found by comparing STEMS, not by pasting an
+    # extension onto the tenant id. `alpha.YAML` exists on disk but
+    # `base / "alpha.yaml"` does not, and the caller reads that miss as
+    # "this tenant has no config" — measured: offboarding pre-check
+    # reported ✅ 通過 for a tenant whose entire config it could not see.
+    #
+    # ⛔ The comparison is exact, not case-folded: `config_stem` preserves
+    # the original case (`Upper.YAML` -> `Upper`), and folding here would
+    # let `--tenant alpha` offboard a DIFFERENT tenant named `Alpha`.
     base = Path(config_dir)
-    for ext in ('.yaml', '.yml'):
-        candidate = base / f"{tenant}{ext}"
-        if candidate.exists():
-            return str(candidate)
+    try:
+        entries = sorted(base.iterdir())
+    except OSError:
+        return None
+    for entry in entries:
+        if entry.is_file() and config_stem(entry.name) == tenant:
+            return str(entry)
     return None
 
 
@@ -57,7 +68,10 @@ def load_all_configs(config_dir):
     # #1339: flat by design here — but a hierarchical conf.d must not
     # look like an empty one. Name the files this scan cannot see.
     warn_nested(base, tool="offboard_tenant")
-    yaml_paths = sorted(base.glob("*.yaml")) + sorted(base.glob("*.yml"))
+    yaml_paths = sorted(
+        p for p in base.iterdir()
+        if p.is_file() and has_yaml_extension(p.name)
+    )
     for entry in yaml_paths:
         filename = entry.name
         if filename.startswith('.'):

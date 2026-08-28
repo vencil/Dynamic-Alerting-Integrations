@@ -38,7 +38,7 @@ from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import load_yaml_file  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_yaml import _dict_to_yaml, write_yaml_crd  # noqa: E402
-from _lib_confd import warn_nested  # noqa: E402
+from _lib_confd import has_yaml_extension, warn_nested  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Constants and Help Text
@@ -508,7 +508,10 @@ def discover_tenant_configs(config_dir: Path) -> List[str]:
     # #1339: flat by design here — but a hierarchical conf.d must not
     # look like an empty one. Name the files this scan cannot see.
     warn_nested(config_dir, tool="operator_generate")
-    for yaml_file in config_dir.glob("*.yaml"):
+    for yaml_file in (
+        p for p in sorted(config_dir.iterdir())
+        if p.is_file() and has_yaml_extension(p.name, (".yaml",))
+    ):
         if not yaml_file.name.startswith("_"):
             tenant = yaml_file.stem
             if validate_tenant_name(tenant):

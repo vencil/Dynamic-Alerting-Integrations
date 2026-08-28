@@ -45,6 +45,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_OK  # noqa: E402
+from _lib_confd import has_yaml_extension  # noqa: E402  (#1588 shared name predicate)
 
 # Conservative allowlist of strings that carry environment semantics when
 # they appear as a directory segment. Keep narrow to avoid false positives
@@ -80,7 +81,10 @@ def find_repo_root() -> Path:
 
 
 def iter_tenant_files(config_dir: Path) -> Iterable[Path]:
-    for path in sorted(config_dir.rglob("*.yaml")):
+    for path in sorted(
+        p for p in config_dir.rglob("*")
+        if p.is_file() and has_yaml_extension(p.name, (".yaml",))
+    ):
         if path.name.startswith("_"):
             continue
         yield path

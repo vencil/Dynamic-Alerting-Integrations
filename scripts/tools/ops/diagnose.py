@@ -42,6 +42,7 @@ from _lib_python import format_json_report  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_confd import (  # noqa: E402
+    is_defaults_name,
     iter_config_files,
     unusable_config_paths,
     unusable_reason,
@@ -74,6 +75,28 @@ _HELP = {
         'en': 'Show detailed three-layer inheritance chain resolution (requires --config-dir)'
     }
 }
+
+def _resolve_defaults_file(base):
+    """`<base>/_defaults.{yaml,yml}` in ANY casing, or the canonical path.
+
+    Returns the canonical `_defaults.yaml` when nothing matches so the
+    caller's `FileNotFoundError` branch — which treats an absent
+    defaults file as a LEGAL config, not a read failure — still fires
+    unchanged.
+
+    ⛔ Sorted, so a tree carrying two spellings resolves
+    deterministically rather than by directory order. Two spellings in
+    one directory is already a misconfiguration; picking
+    nondeterministically would make it an intermittent one.
+    """
+    try:
+        for entry in sorted(base.iterdir()):
+            if entry.is_file() and is_defaults_name(entry.name):
+                return entry
+    except OSError:
+        pass
+    return base / "_defaults.yaml"
+
 
 def _h(key: str) -> str:
     """Get help text in detected language."""
@@ -278,7 +301,16 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
         _skip(label, f"{e.__class__.__name__}: {' '.join(str(e).split())}")
 
     # Layer 1: Global defaults
-    defaults_path = base / "_defaults.yaml"
+    # #1588: resolved by the shared predicate, not by the literal name.
+    # ⚠️ FLAT and deliberately still flat — this reader has always looked
+    # only at `<config-dir>/_defaults.*` (the docstring above says so),
+    # and making it recurse is a different change with its own blast
+    # radius. Only the case axis moved.
+    defaults_path = _resolve_defaults_file(base)
+    # ⛔ Report the name actually read, not the canonical spelling. A
+    # chain that says `_defaults.yaml` while `_DEFAULTS.YAML` supplied
+    # the values sends the operator to edit a file that does not exist.
+    defaults_source = defaults_path.name
     defaults_raw = {}
     declared = []
     try:
@@ -380,7 +412,7 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
     # Layer 1: defaults
     default_only = {k: v for k, v in defaults_raw.items() if not k.startswith("_")}
     if default_only:
-        chain.append({"layer": "defaults", "source": "_defaults.yaml",
+        chain.append({"layer": "defaults", "source": defaults_source,
                        "keys": default_only})
 
     # Layer 2: profile (fill-in — keys NOT in tenant override)

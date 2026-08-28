@@ -34,7 +34,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
-from _lib_confd import warn_nested  # noqa: E402
+from _lib_confd import has_yaml_extension, warn_nested  # noqa: E402
 
 try:
     import yaml
@@ -92,7 +92,7 @@ def plan_migration(conf_d: Path) -> list[dict]:
             })
             continue
 
-        if not fp.suffix in (".yaml", ".yml"):
+        if not has_yaml_extension(fp.name):
             continue
 
         if fp.name.startswith("_"):

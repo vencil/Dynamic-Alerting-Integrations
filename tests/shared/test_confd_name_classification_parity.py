@@ -51,7 +51,15 @@ sys.path.insert(0, str(REPO / "scripts" / "tools"))
 
 MATRIX = REPO / "tests" / "shared" / "confd_name_classification_matrix.json"
 
-from _lib_confd import _is_config, iter_config_files  # noqa: E402
+from _lib_confd import (  # noqa: E402
+    _is_config,
+    config_stem,
+    has_yaml_extension,
+    is_defaults_name,
+    is_hidden_name,
+    is_reserved_name,
+    iter_config_files,
+)
 from _lib_io import iter_yaml_files  # noqa: E402
 
 ROWS = json.loads(MATRIX.read_text(encoding="utf-8"))["rows"]
@@ -166,6 +174,62 @@ def test_is_config_matches_the_matrix(row: dict) -> None:
         f"{row['name']}: _lib_confd._is_config returned {got}, matrix says {want}\n"
         f"  why this row exists: {row['why']}"
     )
+
+
+@pytest.mark.parametrize("row", ROWS, ids=[r["name"] for r in ROWS])
+def test_public_predicates_match_the_matrix(row: dict) -> None:
+    """The four public predicates ARE the matrix's four boolean columns.
+
+    ⛔ Why this test rather than trusting the callers: #1588 measured nine
+    tools that each hand-wrote this classification and disagreed with the
+    exporter about `upper.YAML`. The remedy was to give them something to
+    call (`_lib_confd.has_yaml_extension` and friends). That only helps if
+    the shared answer is itself pinned to the same table the exporter's
+    scanner, tenant-api's `TenantIDFromFile` and `_lib_io.iter_yaml_files`
+    assert — otherwise the tools would agree with each other and, together,
+    be wrong.
+
+    One assertion per column, so a failure names WHICH property drifted
+    rather than reporting an opaque tuple mismatch.
+    """
+    name = row["name"]
+    why = f"\n  why this row exists: {row['why']}"
+    assert has_yaml_extension(name) == row["yaml_extension"], (
+        f"{name}: has_yaml_extension -> {has_yaml_extension(name)}, "
+        f"matrix yaml_extension={row['yaml_extension']}{why}"
+    )
+    assert is_reserved_name(name) == row["reserved_prefix"], (
+        f"{name}: is_reserved_name -> {is_reserved_name(name)}, "
+        f"matrix reserved_prefix={row['reserved_prefix']}{why}"
+    )
+    assert is_hidden_name(name) == row["hidden"], (
+        f"{name}: is_hidden_name -> {is_hidden_name(name)}, "
+        f"matrix hidden={row['hidden']}{why}"
+    )
+    assert is_defaults_name(name) == row["defaults_file"], (
+        f"{name}: is_defaults_name -> {is_defaults_name(name)}, "
+        f"matrix defaults_file={row['defaults_file']}{why}"
+    )
+    assert config_stem(name) == row["stem"], (
+        f"{name}: config_stem -> {config_stem(name)!r}, "
+        f"matrix stem={row['stem']!r}{why}"
+    )
+
+
+def test_public_predicates_compose_into_is_config() -> None:
+    """`_is_config` must stay derivable from the public pair.
+
+    Otherwise the module ends up with two extension rules — one public and
+    one private — which is the hand-copy shape this whole line is about,
+    reproduced inside the file that exists to prevent it.
+    """
+    for row in ROWS:
+        name = row["name"]
+        composed = has_yaml_extension(name) and not is_hidden_name(name)
+        assert _is_config(name) == composed, (
+            f"{name}: _is_config disagrees with "
+            f"has_yaml_extension AND NOT is_hidden_name"
+        )
 
 
 def _fs_is_case_insensitive(tmp_path: pathlib.Path) -> bool:

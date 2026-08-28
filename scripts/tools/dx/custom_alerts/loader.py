@@ -16,11 +16,18 @@ union (which per-severity branches to emit).
 from __future__ import annotations
 
 import os
+import sys
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Tuple
 
 import yaml
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
+    has_yaml_extension,
+    is_defaults_name,
+)
 
 from . import shape as _shape
 
@@ -59,8 +66,13 @@ def _dir_defaults_alerts(config_dir: Path, file_errors: List[dict]) -> Dict[Path
     not raised."""
     out: Dict[Path, List[dict]] = {}
     for root, _dirs, files in os.walk(config_dir):
-        if "_defaults.yaml" in files:
-            p = Path(root) / "_defaults.yaml"
+        # #1588: the carrier is matched by the shared predicate, not by a
+        # literal name. `_DEFAULTS.YAML` used to be invisible here, so a
+        # platform-level `_custom_alerts` list declared in it vanished for
+        # EVERY tenant below it — silently, at rc=0, on the shipped tenant
+        # self-service path.
+        for _name in sorted(n for n in files if is_defaults_name(n)):
+            p = Path(root) / _name
             try:
                 data = _load_yaml(p)
             except Exception as exc:  # noqa: BLE001 — malformed file quarantined, not fatal
@@ -109,8 +121,11 @@ def collect_instances(config_dir: Path) -> Tuple[List[Tuple[str, dict, str, bool
     dir_alerts = _dir_defaults_alerts(config_dir, file_errors)
     triples: List[Tuple[str, dict, str, bool]] = []
 
-    for path in sorted(config_dir.rglob("*.yaml")):
-        if path.name == "_defaults.yaml":
+    for path in sorted(
+        p for p in config_dir.rglob("*")
+        if p.is_file() and has_yaml_extension(p.name, (".yaml",))
+    ):
+        if is_defaults_name(path.name):
             continue
         try:
             data = _load_yaml(path)

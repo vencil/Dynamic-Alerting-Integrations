@@ -46,6 +46,11 @@ sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
+from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
+    has_yaml_extension,
+    is_defaults_name,
+    is_hidden_name,
+)
 
 # Repo-root-relative default: lint -> tools -> scripts -> <root>/docs/schemas/...
 _DEFAULT_SCHEMA = os.path.normpath(
@@ -64,7 +69,7 @@ def _is_defaults_file(basename: str) -> bool:
     (top-level keys guarded by platform-defaults.schema.json). Other `_*` files
     (`_routing_profiles`, `_domain_policy`, `_instance_mapping`, `_rbac` …) have
     their own shapes/validators and remain skipped."""
-    return basename.startswith("_defaults") and basename.endswith((".yaml", ".yml"))
+    return is_defaults_name(basename)
 
 
 class _CallerError(Exception):
@@ -113,7 +118,7 @@ def _iter_yaml_files(config_dir: str) -> list[str]:
     out: list[str] = []
     for root, _dirs, files in os.walk(config_dir):
         for fn in files:
-            if fn.endswith((".yaml", ".yml")) and not fn.startswith("."):
+            if has_yaml_extension(fn) and not is_hidden_name(fn):
                 out.append(os.path.join(root, fn))
     return sorted(out)
 

@@ -49,6 +49,11 @@ from pathlib import Path
 
 __all__ = [
     "CONFIG_SUFFIXES",
+    "config_stem",
+    "has_yaml_extension",
+    "is_defaults_name",
+    "is_hidden_name",
+    "is_reserved_name",
     "iter_config_files",
     "nested_yaml_files",
     "nested_yaml_warning",
@@ -108,6 +113,119 @@ def _is_config(name: str) -> bool:
     rather than claimed, and a rule change turns the owning side red first.
     """
     return name.lower().endswith(CONFIG_SUFFIXES) and not _is_hidden(name)
+
+
+# ── public name predicates ────────────────────────────────────────────
+#
+# ⛔ These are PREDICATES, not enumerators, and that distinction is the
+# whole reason they exist (#1588).
+#
+# Nine tools were measured reading a conf.d and disagreeing with the
+# exporter about `upper.YAML`, each having hand-written its own
+# `endswith(".yaml")`. The obvious remedy — "call `iter_config_files`
+# instead" — is NOT a case fix: those tools are flat or `rglob`, so
+# switching enumerators silently changes their RECURSION behaviour too,
+# and every one of them then needs its own blast-radius argument. That is
+# a different change, and bundling it here would hide a behaviour change
+# inside a bug fix.
+#
+# So the extension axis gets shared while the recursion axis stays where
+# each caller put it. A tool keeps its own `for f in os.listdir(...)` and
+# asks these functions the name questions.
+#
+# The four booleans are ORTHOGONAL and deliberately mirror the columns of
+# `tests/shared/confd_name_classification_matrix.json`
+# (`yaml_extension` / `reserved_prefix` / `hidden` / `defaults_file`, plus
+# `stem`). Because the exporter's production scanner, tenant-api's
+# filename→id mapping and `_lib_io.iter_yaml_files` all assert that same
+# table, a caller composing these predicates agrees with the exporter
+# TRANSITIVELY — nothing here claims agreement, and no guard greps anyone
+# else's source (#1448).
+
+
+def has_yaml_extension(
+    name: str, suffixes: tuple[str, ...] = CONFIG_SUFFIXES
+) -> bool:
+    """Does this basename carry a YAML extension? CASE-INSENSITIVE.
+
+    The extension axis ALONE — it says nothing about hidden files or the
+    `_` prefix. Composing is the caller's job precisely because the four
+    live enumerators want four different combinations (see the projection
+    table in PR #1590), so a single "is this a config file" answer would
+    be wrong for three of them.
+
+    ⚠️ `suffixes` exists so a case fix does not smuggle in a SECOND
+    behaviour change. Measured on today's tree, four readers
+    (`operator_generate`, `generate_tenant_metadata`,
+    `check_path_metadata_consistency`, `custom_alerts/loader`) glob
+    `*.yaml` and therefore do not see `db-b.yml` AT ALL, while the
+    exporter reads both spellings. That is a real divergence on the
+    extension-SPELLING axis and it is filed separately — but widening
+    those four here would land it inside a commit whose stated subject is
+    case folding, where no reviewer is looking for it. Callers pass the
+    set they already accept; the default is both.
+
+    ⛔ Do not "simplify" this by dropping the parameter and folding every
+    caller to `CONFIG_SUFFIXES`. That is the behaviour change, spelled as
+    a cleanup.
+    """
+    lowered = name.lower()
+    return any(lowered.endswith(s) for s in suffixes)
+
+
+def is_hidden_name(name: str) -> bool:
+    """Dot-prefixed, i.e. skipped by the exporter's walker."""
+    return _is_hidden(name)
+
+
+def is_reserved_name(name: str) -> bool:
+    """`_`-prefixed control file — reserved, never a tenant carrier.
+
+    ⚠️ ASCII `_` only, and that is not laziness: the reserved prefix is a
+    single ASCII byte with no case, so unlike the extension there is
+    nothing here to fold. tenant-api's `isReservedName` makes the same
+    call and the shared matrix pins both.
+    """
+    return name.startswith("_")
+
+
+def is_defaults_name(name: str) -> bool:
+    """The platform-defaults carrier — `_defaults.yaml` in ANY casing.
+
+    ⛔ `_DEFAULTS.YAML` measured as `False` under the hand-written copy in
+    `check_confd_schema`, so a broken platform-defaults file skipped the
+    schema gate entirely (`rc=0`, "0 tenant conf.d file(s) valid") while
+    the exporter merged it into EVERY downstream tenant's effective
+    config. Both halves have to fold, which is why this is one function
+    rather than two comparisons at each call site.
+    """
+    lowered = name.lower()
+    return lowered.startswith("_defaults") and has_yaml_extension(name)
+
+
+def config_stem(name: str) -> str:
+    """Tenant id carried by a filename, or `""` if it carries none.
+
+    ⛔ The stem keeps the ORIGINAL case: `Upper.YAML` -> `Upper`, never
+    `upper`. Returning the folded stem would rename a tenant on the write
+    plane only — `GET /tenants`, federation account backfill and both
+    orphan scans key on it, while the exporter's tenant id comes from the
+    `tenants:` mapping inside the file and never from the name. That is
+    the first divergence's own shape, rebuilt worse.
+
+    Reserved and hidden names carry no tenant id and return `""`.
+    """
+    if is_reserved_name(name) or is_hidden_name(name):
+        return ""
+    lowered = name.lower()
+    for suffix in CONFIG_SUFFIXES:
+        if lowered.endswith(suffix):
+            # Slice by the CONSTANT's length, never `len(lowered)`:
+            # `str.lower()` can shrink byte length (`İ` is 2 -> 1), so an
+            # offset taken from the folded copy can cut the original in
+            # the wrong place.
+            return name[: len(name) - len(suffix)]
+    return ""
 
 
 def iter_config_files(config_dir: str | os.PathLike[str], *, recursive: bool = True):
