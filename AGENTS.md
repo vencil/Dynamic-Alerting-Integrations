@@ -25,7 +25,7 @@ make pr-preflight                # ⛔ PR merge 前必跑
 這七條是被實際燒過 ≥2 次才升為 always-on 的，其餘規範在下一節索引：
 
 1. **⛔ 禁止直推 `main`** — 一律開 branch → PR → owner 同意後 merge。pre-push hook 會擋。
-2. **回應語言** — 面向使用者的散文一律**繁體中文**。
+2. **回應語言** — 面向使用者的散文一律**繁體中文**。指 AI 對人的輸出（回應、PR / issue 留言、commit 訊息、`docs/**`）；repo 內工具印給 operator 的字串不在此列，沿用該工具既有語言慣例（`scripts/tools/**` 目前為英文）。見 `docs/internal/dev-rules.md` §9c。
 3. **Commit trailer block** — 所有 trailer（`Refs:` / `Resolves:` / `Co-authored-by:`）須為**最底部單一連續段落、全部 `Key: value` 格式**。夾空行或無冒號的裸行會劈裂 block，git 丟棄上方行，CI gate 轉紅。
 4. **禁止對掛載路徑用 `sed -i`** — 會截斷缺少 EOF 換行的檔案。用讀取 + 改寫，或 pipe。
 5. **`git add` 用括號 glob 後必驗** — bash 的 `[01]` 只配 `0`/`1` 不配 `2`；跑 `git diff --cached --stat` 確認 staged set。
