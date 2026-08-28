@@ -196,6 +196,7 @@ ENGLISH_ONLY: dict[str, str] = {
     "check_bilingual_content.py": _R_LINT,
     "check_changelog_no_tbd.py": _R_LINT,
     "check_cli_coverage.py": _R_LINT,
+    "check_cli_default_drift.py": _R_LINT,
     "check_codename_gate.py": _R_LINT,
     "check_codename_leak.py": _R_LINT,
     "check_commit_scope_doc.py": _R_LINT,
@@ -457,8 +458,17 @@ def test_allowlists_shrink_only_count_pin():
     # them — the second only renders when that section is non-empty, which the
     # frozen dataset never triggers.)
     # Only `--help` is this gate's jurisdiction, and that is English.
-    assert len(ENGLISH_ONLY) <= 142, (
-        f"ENGLISH_ONLY grew to {len(ENGLISH_ONLY)} (pin=142). Adding an "
+    # pin 143: bumped from 142 for check_cli_default_drift.py (#1556), the
+    # cli-reference default-column ↔ argparse-defaults gate. Same class as the
+    # `_R_LINT` siblings it sits beside: a lint wired to the `Drift Detection`
+    # required check and to `make lint-docs`, never invoked by a customer.
+    # ⛔ A choice, not a default — `scripts/tools/lint/` is English-only across
+    # the board, so wiring detect_cli_lang() here would make it the lone
+    # exception in its own directory rather than the start of a trend. Its
+    # output is `[DRIFT] <file>:<line> <cmd> <flag>` plus a five-bucket count
+    # line: identifiers and numbers.
+    assert len(ENGLISH_ONLY) <= 143, (
+        f"ENGLISH_ONLY grew to {len(ENGLISH_ONLY)} (pin=143). Adding an "
         "English-only tool is allowed but must be an explicit, reviewed "
         "decision — bump this pin in the same commit and justify it."
     )

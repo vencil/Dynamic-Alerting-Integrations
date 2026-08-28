@@ -81,6 +81,7 @@ TOOLS = [
     ("html_doc_links", "lint/lint_html_doc_links.py", ["--ci"], "Raw HTML doc-link validation (MkDocs-aware)"),
     ("head_blob_hygiene", "lint/check_head_blob_hygiene.py", ["--ci"], "HEAD blob hygiene (NUL bytes / truncated EOF)"),
     ("cli_coverage", "lint/check_cli_coverage.py", ["--ci"], "CLI command coverage (entrypoint ↔ docs)"),
+    ("cli_default_drift", "lint/check_cli_default_drift.py", ["--ci"], "cli-reference default column ↔ argparse defaults (#1556)"),
     ("bilingual_content", "lint/check_bilingual_content.py", ["--ci"], "Bilingual content CJK ratio check"),
     ("frontmatter_versions", "lint/check_frontmatter_versions.py", ["--ci"], "Frontmatter version global scan"),
     ("path_metadata", "lint/check_path_metadata_consistency.py", ["--ci"], "conf.d path vs _metadata consistency (warning-only)"),
@@ -172,7 +173,7 @@ def _format_time(elapsed: float) -> str:
 WATCH_TRIGGERS: Dict[str, List[str]] = {
     "docs/": ["links", "translation", "freshness", "includes", "versions",
               "doc_map", "tool_consistency", "bilingual_content",
-              "frontmatter_versions", "byo_rulepack_table"],
+              "frontmatter_versions", "byo_rulepack_table", "cli_default_drift"],
     "docs/assets/": ["platform_data", "tool_consistency"],
     # ⚠️ byo_rulepack_table 的主要來源其實是 k8s/03-monitoring/deployment-prometheus.yaml，
     # 而本 dict 沒有 k8s/ 這個 key（rule_pack_stats 也有同樣的既有缺口）。watch 模式因此
@@ -180,7 +181,10 @@ WATCH_TRIGGERS: Dict[str, List[str]] = {
     # 故強制力未流失，僅 watch 便利性打折。
     "rule-packs/": ["alerts", "rule_packs", "rule_pack_stats", "byo_rulepack_table", "versions",
                     "platform_data"],
-    "scripts/tools/": ["tool_map", "cli_coverage"],
+    # ⛔ cli_default_drift 兩側都要掛：它比對「文件的預設值欄」與「argparse 的
+    # 真實 default」，任一側改動都會造成漂移。只掛 docs/ 會讓「改了 argparse
+    # 預設值、沒動文件」這個方向在 watch/smart 模式下完全沒有偵測。
+    "scripts/tools/": ["tool_map", "cli_coverage", "cli_default_drift"],
     "CLAUDE.md": ["versions", "doc_map"],
     "CHANGELOG.md": ["changelog"],
     "CHANGELOG.en.md": ["changelog"],

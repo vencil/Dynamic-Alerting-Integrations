@@ -24,7 +24,7 @@ da-tools 命令速查表。完整文件見 [cli-reference.md](cli-reference.md)�
 | `cutover` | Shadow Monitoring 一鍵切換：停止舊規則、啟用新規則、驗證健康 | --tenant <NAME>, --readiness-json <FILE>, --dry-run | `da-tools cutover --help` |
 | `blind-spot` | 掃描 Prometheus 叢集的活躍 targets，與 tenant 配置交叉比對，找出盲區（有... | --config-dir <PATH>, --exclude-jobs <LIST>, --json-output | `da-tools blind-spot --help` |
 | `maintenance-scheduler` | 評估排程式維護窗口，自動建立 Alertmanager silence | --config-dir <PATH>, --output <FILE>, --timezone <TZ> | `da-tools maintenance-scheduler --help` |
-| `backtest` | 執行 PR 中 threshold 變更的歷史回測 | --lookback <DAYS>, --output <FILE> | `da-tools backtest --help` |
+| `backtest` | 執行 PR 中 threshold 變更的歷史回測 | --lookback <DURATION>, --output <FILE> | `da-tools backtest --help` |
 | `shadow-verify` | Shadow Monitoring 就緒度與收斂性三階段驗證 | --mapping <FILE>, --report-csv <FILE>, --readiness-json <FILE> | `da-tools shadow-verify --help` |
 | `byo-check` | 自動化 BYO Prometheus & Alertmanager 整合驗證（取代手動 curl +... | --prometheus <URL>, --alertmanager <URL>, --json | `da-tools byo-check --help` |
 | `federation-check` | 多叢集 Federation 整合驗證（自動化 federation-integration | --prometheus <URL>, --edge-urls <URLS>, --json | `da-tools federation-check --help` |

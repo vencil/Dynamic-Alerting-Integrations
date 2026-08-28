@@ -764,7 +764,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "b36443ce6f90b962f4502937e4be8b9e557a7adeba4d456cbd0752e181b0c181",
+ "source_digest": "aff2820d1bc97486c95ece9709461640266dcf8c3aebe457f6ca9a6dc31f9c94",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -857,6 +857,7 @@
   "tests/lint/test_check_build_completeness.py",
   "tests/lint/test_check_changelog_no_tbd.py",
   "tests/lint/test_check_cli_coverage.py",
+  "tests/lint/test_check_cli_default_drift.py",
   "tests/lint/test_check_codename_gate.py",
   "tests/lint/test_check_codename_leak.py",
   "tests/lint/test_check_commit_scope_doc.py",
@@ -1137,7 +1138,8 @@
    "tests/ops/test_generated_ci_artifacts.py",
    "tests/ops/test_init_project.py",
    "tests/ops/test_nightly_race_issue_policy.py",
-   "tests/shared/test_actionlint_pin_parity.py"
+   "tests/shared/test_actionlint_pin_parity.py",
+   "tests/shared/test_validate_all.py"
   ],
   ".github/workflows/bench-record.yaml": [
    "tests/dx/test_pair_bench_ratio.py",
@@ -1174,6 +1176,9 @@
    "tests/ops/test_ci_baseline_substitution.py",
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/ops/test_generated_ci_artifacts.py"
+  ],
+  ".github/workflows/docs-ci.yaml": [
+   "tests/shared/test_validate_all.py"
   ],
   ".github/workflows/guard-defaults-impact.yml": [
    "tests/ops/test_ci_baseline_substitution.py",
@@ -1263,7 +1268,8 @@
    "tests/ops/test_nightly_scan_matrix_drift.py",
    "tests/ops/test_validate_config.py",
    "tests/ops/test_wrapped_path_references.py",
-   "tests/rulepacks/test_vm_alert_parity.py"
+   "tests/rulepacks/test_vm_alert_parity.py",
+   "tests/shared/test_validate_all.py"
   ],
   "README.en.md": [
    "tests/lint/test_check_bilingual_structure.py",
@@ -2344,6 +2350,9 @@
   ],
   "scripts/tools/lint/check_build_completeness.py": [
    "tests/lint/test_check_build_completeness.py"
+  ],
+  "scripts/tools/lint/check_cli_default_drift.py": [
+   "tests/lint/test_check_cli_default_drift.py"
   ],
   "scripts/tools/lint/check_codename_gate.py": [
    "tests/lint/test_check_codename_gate.py"
