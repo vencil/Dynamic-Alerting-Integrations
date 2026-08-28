@@ -508,6 +508,17 @@ def discover_tenant_configs(config_dir: Path) -> List[str]:
     # #1339: flat by design here — but a hierarchical conf.d must not
     # look like an empty one. Name the files this scan cannot see.
     warn_nested(config_dir, tool="operator_generate")
+    # ⚠️ `is_file()` is a THIRD axis, beyond the extension axis this change
+    # is about and the recursion axis it deliberately leaves alone. The old
+    # `glob("*.yaml")` yielded a DIRECTORY named `notes.yaml/` (an
+    # interrupted mkdir, a ConfigMap projection) and a broken symlink;
+    # `is_file()` drops both. Measured on such a tree: 20 CRDs before, 19
+    # after — the AlertmanagerConfig for the directory-shaped entry is gone.
+    #
+    # ⛔ The new behaviour is better but it is SILENT, and `_lib_confd`'s
+    # `unusable_config_paths` exists precisely so an unreadable entry is
+    # named rather than skipped. Voicing it here is filed separately rather
+    # than folded into a case-folding change. See issue #1607.
     for yaml_file in (
         p for p in sorted(config_dir.iterdir())
         if p.is_file() and has_yaml_extension(p.name, (".yaml",))

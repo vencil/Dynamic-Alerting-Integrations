@@ -127,6 +127,13 @@ def collect_instances(config_dir: Path) -> Tuple[List[Tuple[str, dict, str, bool
     dir_alerts = _dir_defaults_alerts(config_dir, file_errors)
     triples: List[Tuple[str, dict, str, bool]] = []
 
+    # ⚠️ Same third axis as `operator_generate`, and here it is louder:
+    # this function's whole contract is that an unreadable file lands in
+    # `file_errors` rather than vanishing (#1008 Part B). Measured on a tree
+    # with a directory named `beta.yaml/` and a broken symlink `broken.yaml`,
+    # `file_errors` went from two named records to EMPTY — those entries no
+    # longer reach the `except` below because `is_file()` filters them first.
+    # ⛔ Silent, on the shipped tenant self-service path. See issue #1607.
     for path in sorted(
         p for p in config_dir.rglob("*")
         if p.is_file() and has_yaml_extension(p.name, (".yaml",))
