@@ -28,7 +28,7 @@ updated_at: 2026-08-22
   1. ⛔ **不建**機器面靜音入口（見「被打穿的提案」整節）。
   2. **身分對照**是唯一真正缺、而且**擋住其他所有想法**的東西——但只能做成 **advisory**，不可餵給任何自動靜音。
   3. **`runbook_url` 指向唯讀診斷任務**——零程式碼，是部署約定。
-- **順帶查出兩個 DAI 面的實際缺陷**（見最後一節）：rule pack 指定的補救途徑實際上走不通；以及「計畫性作業會打中哪些告警」的資訊分散且不完整。
+- **順帶查出兩個 DAI 面的實際缺陷**（見最後一節）：rule pack 指定的補救途徑**機器面走不通、人面走得通，但告警本身沒給走法**（⚠️ 該條初版寫成「沒有人走得到」，2026-08-28 更正）；以及「計畫性作業會打中哪些告警」的資訊分散且不完整。
 - **不動搖**：[ADR-026](026-node-maintenance-liveness-suppression.md)「不建維護抑制子系統」、[ADR-008](008-operator-native-integration-path.md)「不建 controller」。
 
 ## 先驗方向：三個假設，全部不成立
@@ -133,7 +133,30 @@ DAI 的租戶是 conf.d 裡一個刻意不透明的 id（dev-rules #2 要求 ten
 
 這兩個與協同無關，是查證過程的副產品，各自值得獨立處理：
 
-1. **rule pack 指定的補救途徑實際上走不通。** `MariaDBReplicaIOThreadDown` / `SQLThreadDown` / `MariaDBClusterDown` 的註解都把計畫性作業導向 **Alertmanager Silence API**，但：(a) NetworkPolicy 只放行兩種 pod 到 9093；(b) `maintenance_scheduler.py` 的 CLI 只有 `--config-dir` / `--alertmanager` / `--pushgateway` / `--dry-run` / `--json-output`，`extend_silence()` 是內部函式、唯一呼叫點在同檔排程迴圈，**沒有 ad-hoc 入口**；(c) 要建那個入口的 [#870](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/870) §4 已 closed as `not_planned`。**指引指向一條沒有人走得到的路，而實際可用的是文件沒提的 `patch-config _silent_mode`。** 這是文件與現實不符，不是缺功能。
+1. **rule pack 指定的補救途徑：機器面走不通、人面走得通，而指引沒給走法。**
+
+   ⚠️ **本條於 2026-08-28 更正。** 初版寫成「指引指向一條**沒有人**走得到的路」——那是錯的，理由見下方 ⛔ 段。初版同時把載體與告警對錯了，一併更正。
+
+   **實際載體與告警**（`grep -n "Alertmanager Silence API" rule-packs/` 的全部命中）：
+
+   | 告警 | 承載這段指引的欄位 | 值班人看得到 |
+   |---|---|:---:|
+   | `MariaDBClusterDown`（`rule-pack-mariadb.yaml:197`） | `description` / `description_zh`（`:207-208`） | ✅ |
+   | `MongoDBClusterDown`（`rule-pack-mongodb.yaml:136`） | `description` / `description_zh`（`:146-147`） | ✅ |
+   | `MariaDBReplicaIOThreadDown`（`:349`） | 其上方 YAML 註解（`:340`，塊範圍 `304-348`） | ❌ |
+   | `MariaDBReplicaSQLThreadDown`（`:367`） | 兩種載體皆無此文字（其 description 指向 `Last_SQL_Error`） | — |
+
+   ⇒ 初版把三者一律稱為「註解」。實際上走註解的只有 `MariaDBReplicaIOThreadDown`；兩個 `*ClusterDown` 走的是 **`description`**——值班人**會**看到的那一種。兩者不可互換。`SQLThreadDown` 沒有這段文字，`MongoDBClusterDown` 則是初版盤點漏掉的。
+
+   **機器面確實走不通**：(a) `allow-alertmanager-ingress` 只放行 `app: prometheus` 與 `component: maintenance-scheduler` 兩種 pod 到 9093；(b) `maintenance_scheduler.py` 的 CLI 只有 `--config-dir` / `--alertmanager` / `--pushgateway` / `--dry-run` / `--json-output`，`extend_silence()` 是內部函式、唯一呼叫點在同檔排程迴圈，**沒有 ad-hoc 入口**；(c) 要建那個入口的 [#870](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/870) §4 已 closed as `not_planned`。**⛔ 但這三點就是 R1 的內容**，不是一個獨立於 R1 的缺陷。
+
+   ⛔ **人面走得通，初版把 (a)(b)(c) 誤讀成「沒有人走得到」。** (a) 約束的是 **pod 網路 ingress**；(b)(c) 談的是**機器呼叫端**。拿著 kubectl 的值班人用本 repo 已記載的三條路都到得了，其中第一條完全不受 (a) 約束——pod 內 loopback 不經過 pod 網路：
+
+   - `docs/troubleshooting.md:110-112` — `kubectl exec -n monitoring deploy/alertmanager -- amtool ... --alertmanager.url=http://localhost:9093`
+   - `docs/cli-reference.md:1338` — `amtool silence query --alertmanager.url=http://<am>:9093`
+   - `CLAUDE.md:122` — `port-forward` + `localhost:9093`
+
+   **更正後仍然成立的缺陷（窄，但是真的）**：`description` 點名了一個 API，卻沒有給到達它的路；那三條路分散在三份不同文件，**沒有一條從告警本身連得過去**。⇒ 這正是決策 3 那個欄位（`runbook_url`）的用途，而目前沒有任何 rule pack 用它承載這件事。
 2. **「計畫性作業會打中哪些告警、哪些可 opt-out」沒有單一出處。** 上面那張表是逐檔 grep 兩個 rule pack 拼出來的。維運者要自己拼，而拼漏一條（例如 `MariaDBSemiSyncReplicasGone`）的後果就是維護窗開了照樣被 page。
 
 ## 考慮過但 reject 的替代方案
