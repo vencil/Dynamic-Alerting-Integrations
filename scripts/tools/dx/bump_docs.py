@@ -1239,20 +1239,18 @@ COUNT_RULE_IDS = (
     "readme-python-tools",
     "readme-en-python-tools",
 )
-"""The count rules that must exist, pinned in three places on purpose.
-
-Adding or retiring one means editing all three in the same commit:
-`COUNT_RULE_IDS` here, the matching `rules.append({...})` in
-`_build_count_rules()`, and `PINNED_COUNT_RULE_IDS` in
-`tests/dx/test_bump_docs.py`. The third is the only copy outside this
-module, and it is what makes the edit visible; the first two satisfy each
-other by construction.
-
-⚠️ This identifier is deliberately absent from every message the tool
-prints — see the comment above and
-`TestCountSourceUnreadable::test_no_diagnostic_message_names_the_rule_set_constant`.
-It lives here so it is still greppable from the code.
-"""
+# ⛔ Retiring one of those means editing THREE places in the same commit:
+# COUNT_RULE_IDS above, the matching `rules.append({...})` in
+# `_build_count_rules()`, and `PINNED_COUNT_RULE_IDS` in
+# `tests/dx/test_bump_docs.py`. The third is the only copy outside this
+# module, and it is what puts the edit in front of a reviewer; the first two
+# satisfy each other by construction.
+#
+# ⚠️ The constant's name is deliberately absent from every message this tool
+# prints (`test_no_diagnostic_message_names_the_rule_set_constant`), so this
+# comment is where it stays greppable. A `#` comment and not a PEP 258
+# attribute docstring on purpose — that guard reads string LITERALS, and an
+# attribute docstring is one.
 
 
 def _build_count_rules():

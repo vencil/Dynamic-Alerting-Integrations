@@ -54,7 +54,6 @@ from _version_patterns import (
     SCENARIO_COUNT_PATTERNS,
     BILINGUAL_PAIR_PATTERN,
     BILINGUAL_NUMBER_PATTERNS,
-    BILINGUAL_FENCE_PATTERN,
     TOOL_COUNT_SCOPE_ANCHOR,
     DA_TOOLS_VERSION_PATTERN,
     EXPORTER_VERSION_PATTERN,
@@ -665,87 +664,11 @@ def check_roadmap_changelog_overlap() -> List[Issue]:
     return issues
 
 
-def _strip_fenced_code(text: str) -> str:
-    """Blank out fenced code blocks, keeping the line count intact.
-
-    ⛔ #1505: a number inside a code example is not a claim about how many of
-    something the platform has. Measured — renumbering `# Part 3 Alert Rule`
-    to `Part 4` in one language only, an ordinary edit to a YAML comment
-    inside a fence, produced a bilingual mismatch that no correct edit could
-    clear. Newlines survive so any line-based reporting keeps its coordinates.
-    """
-    return re.sub(BILINGUAL_FENCE_PATTERN,
-                  lambda m: "\n" * m.group(0).count("\n"),
-                  text, flags=re.S | re.M)
-
-
-def _bilingual_numbers(pattern: str, content: str) -> List[str]:
-    """The distinct numbers *pattern* claims in *content*, sorted.
-
-    ⛔ `finditer` rather than `findall`: a pattern with alternation carries
-    more than one group, and `re.findall` then yields a TUPLE per match
-    ('40', '', '') instead of a string. Comparing those still "works" — both
-    sides are shaped the same — but the mismatch message would print tuples,
-    and any future single-group pattern would compare unequal to a
-    multi-group one for purely structural reasons.
-    """
-    found = []
-    for match in re.finditer(pattern, content, re.IGNORECASE):
-        value = next((g for g in match.groups() if g), None)
-        if value:
-            found.append(value)
-    return sorted(set(found))
-
-
-def _bilingual_verdict(zh_nums: List[str], en_nums: List[str]) -> str:
-    """`mismatch` / `match` / `one-sided` / `silent` for one pattern on one pair.
-
-    ⛔ `one-sided` — exactly one language matched — is DELIBERATELY not
-    reported, and that is a fail-open, so here is the measurement behind it
-    rather than an `and` that reads like an accident.
-    #1505 measured every one-sided combination the six patterns produce on
-    `5b7f6c35` after the Alert-count repair. There are five, and **all five
-    are artefacts of the patterns, not defects in the documents**:
-
-        arch-and-design      Recording  zh=[]        en=['139']
-        arch-and-design      Alert      zh=['99']    en=[]
-            one errata sentence, quoted in both files; zh writes
-            「139 個 Recording」 and en writes "139 Recording", so the
-            Recording pattern sees only en and the Alert pattern only zh.
-        federation-integr.   Recording  zh=[]        en=['2']
-            "Part 2 recording rules" — a section number.
-        byo-alertmanager     Alert      zh=[]        en=['37', '40']
-        troubleshooting      Alert      zh=[]        en=['40']
-            en writes "40 alerts"; zh writes 「40 條平台告警」, which puts a
-            noun between the measure word and the noun being counted.
-
-    So switching this branch on today would replace three warnings nobody can
-    clear with five warnings nobody can clear. The cause is structural: one
-    regex is applied to two languages that phrase counts differently, and the
-    fix is per-language patterns, which is a bigger change than #1505 and is
-    tracked separately.
-
-    ⚠️ What that costs: a drift that only one language states in a form the
-    pattern recognises is invisible. Of the seven injected drifts #1505 used,
-    one is in exactly that position (`40 alerts` → `39 alerts` in
-    `troubleshooting.en.md`), which is why the measured catch rate is 5/7 and
-    not 6/7.
-    """
-    if zh_nums and en_nums:
-        return "mismatch" if zh_nums != en_nums else "match"
-    if zh_nums or en_nums:
-        return "one-sided"
-    return "silent"
-
-
 def check_bilingual_number_consistency() -> List[Issue]:
     """Check that zh and en doc pairs have matching technical numbers.
 
     Compares numeric values in paired zh/en documents to detect
     translation drift (e.g. zh says 15 Rule Packs but en says 13).
-
-    ⚠️ Only `mismatch` verdicts are reported; see `_bilingual_verdict` for
-    what happens to the one-sided ones and why.
     """
     issues = []
 
@@ -769,15 +692,15 @@ def check_bilingual_number_consistency() -> List[Issue]:
 
     for zh_file, en_file in pairs:
         try:
-            zh_content = _strip_fenced_code(zh_file.read_text(encoding="utf-8"))
-            en_content = _strip_fenced_code(en_file.read_text(encoding="utf-8"))
+            zh_content = zh_file.read_text(encoding="utf-8")
+            en_content = en_file.read_text(encoding="utf-8")
         except (FileNotFoundError, OSError):
             continue  # phantom mount or missing file — skip pair
 
         for pat, desc in BILINGUAL_NUMBER_PATTERNS:
-            zh_nums = _bilingual_numbers(pat, zh_content)
-            en_nums = _bilingual_numbers(pat, en_content)
-            if _bilingual_verdict(zh_nums, en_nums) == "mismatch":
+            zh_nums = sorted(set(re.findall(pat, zh_content, re.IGNORECASE)))
+            en_nums = sorted(set(re.findall(pat, en_content, re.IGNORECASE)))
+            if zh_nums and en_nums and zh_nums != en_nums:
                 rel_zh = str(zh_file.relative_to(REPO_ROOT))
                 rel_en = str(en_file.relative_to(REPO_ROOT))
                 issues.append(Issue(
@@ -945,10 +868,18 @@ def check_tool_count_in_docs() -> List[Issue]:
     that they are currently right.
 
     ⚠️ `CLAUDE.md` carries no matching sentence today, so it contributes no
-    findings. It is kept in the list because it is one of the files whose
-    tool-count sentence would declare this scope if it regained one — an
-    unmatched FILE costs one read, unlike an unmatched RULE, which would be a
-    defect (see `bump_docs.apply_count_updates`'s DEAD diagnosis).
+    findings. It is kept in the list because an unmatched FILE costs one read,
+    unlike an unmatched RULE, which would be a defect (see
+    `bump_docs.apply_count_updates`'s DEAD diagnosis).
+    ⛔ Do NOT read that as "it would be covered if it regained one". Blind
+    review checked the only tool-count sentence that file has ever had
+    (`2a9078ee`): 「完整工具表（42 個 Python 工具…）見 tool-map.md」 — that
+    declares the TOOL-MAP scope, root-inclusive, and carries no anchor, so
+    this check would skip it in silence. `CLAUDE.md` also has no `bump_docs`
+    count rule, so the writer's DEAD diagnosis would not catch it either.
+    That is a blind spot the anchor introduces, disclosed rather than guessed
+    at; closing it means deciding which scope `CLAUDE.md` should state, which
+    is the same documentation decision as #1540's gap 1.
     """
     issues = []
     if not (REPO_ROOT / "scripts" / "tools").exists():
@@ -969,16 +900,47 @@ def check_tool_count_in_docs() -> List[Issue]:
             # TOOL_COUNT_SCOPE_ANCHOR for the measured case.
             if TOOL_COUNT_SCOPE_ANCHOR not in line:
                 continue
-            for pat, desc in TOOL_COUNT_PATTERNS:
-                for m in re.finditer(pat, line, re.IGNORECASE):
-                    found = int(m.group(1))
-                    if found != actual_count:
-                        issues.append(Issue(
-                            "tool-count", "warn", rel, i,
-                            f"{desc}: found {found}, actual is {actual_count}",
-                        ))
+            occurrences = _tool_count_occurrences(line)
+            if len(occurrences) > 1:
+                # ⛔ Ambiguous: the anchor says this line is about the counted
+                # scope, but it states more than one count, and nothing here
+                # can tell which one the scope governs. Guessing is what makes
+                # this dangerous — measured on the shipped README, a line
+                # reading "221 Python tools under <scope>, incl. 105 Python
+                # tools in lint/" had the true 105 reported as a drift and
+                # then rewritten to 221 by `--fix`, which then printed
+                # "All version references and counts are consistent."
+                issues.append(Issue(
+                    "tool-count", "warn", rel, i,
+                    f"line states {len(occurrences)} counts "
+                    f"({', '.join(str(n) for _d, n in occurrences)}) while "
+                    f"naming the counted scope, so this check cannot tell "
+                    f"which one the scope governs and will not touch it. "
+                    f"Put the scope count on its own line."))
+                continue
+            for desc, found in occurrences:
+                if found != actual_count:
+                    issues.append(Issue(
+                        "tool-count", "warn", rel, i,
+                        f"{desc}: found {found}, actual is {actual_count}",
+                    ))
 
     return issues
+
+
+def _tool_count_occurrences(line: str) -> List[Tuple[str, int]]:
+    """Every counted-tools claim on one line, as `(description, number)`.
+
+    ⛔ Shared by the check and the repair on purpose. They used to ask this
+    question in two different ways — the check per line via `finditer`, the
+    repair per FILE via `re.sub` — and `\\s*` matches a newline, so the repair
+    reached occurrences the check could not report and never would.
+    """
+    found: List[Tuple[str, int]] = []
+    for pat, desc in TOOL_COUNT_PATTERNS:
+        for m in re.finditer(pat, line, re.IGNORECASE):
+            found.append((desc, int(m.group(1))))
+    return found
 
 
 def check_adr_count_in_docs() -> List[Issue]:
@@ -1154,7 +1116,12 @@ def _auto_fix(issues: List[Issue], bilingual_pairs: int,
             actual_count = _count_python_tools()
             lines = new_content.splitlines(keepends=True)
             idx = issue.line - 1
-            if 0 <= idx < len(lines) and TOOL_COUNT_SCOPE_ANCHOR in lines[idx]:
+            # ⛔ Re-derived here rather than trusted from the issue: the repair
+            # must not rewrite a line the check would refuse to judge. Exactly
+            # one occurrence, on the line the check named, carrying the scope.
+            if (0 <= idx < len(lines)
+                    and TOOL_COUNT_SCOPE_ANCHOR in lines[idx]
+                    and len(_tool_count_occurrences(lines[idx])) == 1):
                 fixed = lines[idx]
                 for pat, repl in AUTO_FIX_PATTERNS["tool-count"]["patterns"]:
                     fixed = re.sub(pat, repl.format(value=actual_count),

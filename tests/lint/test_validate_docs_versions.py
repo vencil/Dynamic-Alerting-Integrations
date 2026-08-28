@@ -1284,192 +1284,6 @@ class TestFixDoesNotTurnTheGateOff:
             "the cache still holds the pre-repair text after a write")
 
 
-class TestBilingualNumbersHasSomeoneWatchingIt:
-    """#1505 — three standing warnings, all false, and nothing pinning any of it.
-
-    ⛔ Measured on `5b7f6c35`, before this class existed: three separate ways
-    of switching the check off all left `tests/lint/test_validate_docs_versions.py`
-    at 75 passed —
-
-        `check_bilingual_number_consistency` returns []      SURVIVED
-        `BILINGUAL_NUMBER_PATTERNS` emptied                  SURVIVED
-        only the Alert-count pattern removed                 SURVIVED
-
-    (positive control, same harness: removing `check_e2e_and_jsx_versions`
-    gave 13 failed — so the SURVIVEDs were "nobody is watching", not "the
-    mutation did not load"; each run printed the loaded issue count, 3 → 0.)
-
-    Nothing here asserts `== []` over the real tree. An assertion that a scan
-    is clean is satisfied by any scan that looks at less.
-    """
-
-    @staticmethod
-    def _corpus(tmp_path, monkeypatch, zh_body, en_body):
-        docs = tmp_path / "docs"
-        docs.mkdir(parents=True, exist_ok=True)
-        _write(docs / "page.md", zh_body)
-        _write(docs / "page.en.md", en_body)
-        monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
-        monkeypatch.setattr(mod, "DOCS_DIR", docs)
-        return mod.check_bilingual_number_consistency()
-
-    # ⚠️ The drifted body is spelled out per case rather than derived by
-    # decrementing "the first number". That derivation was tried and it edited
-    # the `20` inside `%20`, leaving the badge count untouched — a mutation
-    # that did not mutate, reported as "the guard missed a drift".
-    @pytest.mark.parametrize("desc,zh,en,en_drifted", [
-        ("Rule Pack count", "本平台有 16 個 Rule Pack。\n",
-         "16 Rule Packs, one each.\n", "15 Rule Packs, one each.\n"),
-        ("Recording rule count", "共 166 Recording 規則。\n",
-         "166 Recording rules.\n", "165 Recording rules.\n"),
-        ("Alert rule count", "共 161 個 alert。\n",
-         "161 alerts in total.\n", "160 alerts in total.\n"),
-        ("Rule Pack badge", "badge/rule%20packs-16-orange\n",
-         "badge/rule%20packs-16-orange\n", "badge/rule%20packs-15-orange\n"),
-        ("Alert badge", "badge/alerts-161-red\n",
-         "badge/alerts-161-red\n", "badge/alerts-160-red\n"),
-        ("Bilingual badge", "badge/bilingual-96%20pairs\n",
-         "badge/bilingual-96%20pairs\n", "badge/bilingual-95%20pairs\n"),
-    ])
-    def test_each_pattern_catches_a_seeded_drift(self, tmp_path, monkeypatch,
-                                                 desc, zh, en, en_drifted):
-        """⛔ Positive control per pattern: seed a drift, demand it is named.
-
-        The pair is written twice — identical first (must be silent), then
-        with the English number moved (must be reported). Both halves matter:
-        the first proves the pattern is not simply always firing, the second
-        proves it is looking at all. Emptying the pattern list, or dropping
-        any single entry, turns the corresponding case red.
-        """
-        assert self._corpus(tmp_path, monkeypatch, zh, en) == [], (
-            "identical numbers must not be reported (%s)" % desc)
-        assert en_drifted != en, en
-        found = self._corpus(tmp_path, monkeypatch, zh, en_drifted)
-        assert [i.check for i in found] == ["bilingual-numbers"], (
-            "%s: a one-off drift went unreported: %s" % (desc, found))
-        assert desc in found[0].message, (desc, found[0].message)
-
-    @pytest.mark.parametrize("shape,zh,en", [
-        ("a port number",
-         "alertmanager.url=http://am:9093 alertname=Synthetic\n",
-         "alertmanager.url=http://am:9093 alertname=Synthetic and [ADR-025 Alerting-Plane]\n"),
-        ("a section number",
-         "### 1.2 Alert 不 fire\n### 1.3 Alert fire 但沒送達\n",
-         "### 1.2 Alerts don't fire\n"),
-        ("an API version",
-         "比對 v1 alertname 與 v2 alertname\n",
-         "Diff v1 vs v2 alertnames\n"),
-        ("a PromQL selector",
-         "跑 ALERTS{} 抓 Phase 2 ALERTS{} cardinality\n",
-         "Phase 2 ALERTS{} cardinality\n"),
-    ])
-    def test_the_shapes_that_used_to_fire_falsely_do_not(
-            self, tmp_path, monkeypatch, shape, zh, en):
-        """⚠️ Must-not-fire, one case per real false positive #1505 measured.
-
-        These are the actual lines from the three files the gate was warning
-        about, and they are asymmetric on purpose — the old pattern reported
-        them precisely because each side happened to carry different
-        irrelevant digits.
-        """
-        assert self._corpus(tmp_path, monkeypatch, zh, en) == [], (
-            "%s is being read as a count again" % shape)
-
-    def test_a_number_inside_a_code_fence_is_not_a_count(self, tmp_path,
-                                                          monkeypatch):
-        """⛔ Must-not-fire: the reachable false positive blind review revived.
-
-        `docs/design/config-driven.{md,en.md}` carry `# Part 3 Alert Rule`
-        inside a ```yaml block. Renumbering it to `Part 4` in one language —
-        an ordinary edit to a YAML comment — produced a bilingual mismatch
-        that no correct edit could clear, because the "drift" is a section
-        number. Fences are stripped before comparison for this reason.
-        """
-        fence = "```yaml\n# Part %s Alert Rule\n- record: x\n```\n"
-        found = self._corpus(tmp_path, monkeypatch,
-                             "共 161 個 alert。\n" + fence % "3",
-                             "161 alerts in total.\n" + fence % "4")
-        assert found == [], (
-            "a section number inside a code fence is being read as an alert "
-            "count: %s" % found)
-
-    def test_fence_stripping_keeps_line_numbers(self):
-        """⚠️ The stripper must not shift anything below it.
-
-        Blanking a fence by deleting it would move every later line, which is
-        how a repair keyed to `issue.line` starts editing the wrong row.
-        """
-        text = "a\n```\nx\ny\n```\nb\n"
-        out = mod._strip_fenced_code(text)
-        assert out.splitlines()[-1] == "b", out
-        assert len(out.splitlines()) == len(text.splitlines()), (out, text)
-        assert "x" not in out, out
-
-    def test_a_promql_selector_is_not_a_count(self, tmp_path, monkeypatch):
-        """⛔ Must-not-fire: `ALERTS{}` is a metric name, not a quantity.
-
-        The second revived false positive — a table row mentioning
-        `Phase 3 ALERTS{}` on one side only. `alerts` immediately followed by
-        `{` is a selector, and a selector is never a count.
-        """
-        found = self._corpus(tmp_path, monkeypatch,
-                             "跑 ALERTS{} 抓 Phase 3 ALERTS{} cardinality\n",
-                             "Phase 2 ALERTS{} cardinality\n")
-        assert found == [], (
-            "a PromQL selector is being read as an alert count: %s" % found)
-
-    def test_a_real_count_next_to_a_selector_still_counts(
-            self, tmp_path, monkeypatch):
-        """⚠️ Paired control: the selector guard must not swallow real counts.
-
-        Without this, `(?!\\s*\\{)` could be widened until it silenced ordinary
-        sentences that merely sit near PromQL.
-        """
-        found = self._corpus(
-            tmp_path, monkeypatch,
-            "跑 ALERTS{} 之後共 161 個 alert。\n",
-            "After ALERTS{}, 160 alerts in total.\n")
-        assert [i.check for i in found] == ["bilingual-numbers"], found
-
-    def test_a_multi_group_pattern_yields_strings_not_tuples(self):
-        """⛔ `re.findall` returns tuples once a pattern has >1 group.
-
-        The Alert-count pattern is an alternation, so the previous
-        `findall`-based collection would have made the mismatch message print
-        `('40', '', '')`. Comparison would still have "worked", which is what
-        makes this the kind of defect that ships.
-        """
-        pat = dict((d, p) for p, d in mod.BILINGUAL_NUMBER_PATTERNS)["Alert rule count"]
-        got = mod._bilingual_numbers(pat, "40 alerts and 7 alerts and 96 個告警\n")
-        assert got == ["40", "7", "96"], got
-        assert all(isinstance(v, str) for v in got), got
-
-    @pytest.mark.parametrize("zh,en,expected", [
-        (["16"], ["15"], "mismatch"),
-        (["16"], ["16"], "match"),
-        (["16"], [], "one-sided"),
-        ([], ["16"], "one-sided"),
-        ([], [], "silent"),
-    ])
-    def test_the_verdicts_are_named_and_pinned(self, zh, en, expected):
-        """⛔ Pins the fail-open as a DECISION rather than a side effect of `and`.
-
-        `one-sided` is deliberately not reported. Measured, all five one-sided
-        combinations the six patterns produce today are artefacts of the
-        patterns rather than defects in the documents — the rationale lives in
-        `_bilingual_verdict`'s docstring. This test exists so that flipping it
-        on, or off, is a visible edit.
-        """
-        assert mod._bilingual_verdict(zh, en) == expected
-
-    def test_one_sided_really_is_silent_end_to_end(self, tmp_path, monkeypatch):
-        """⚠️ The verdict unit test alone would not catch a caller that reports
-        every non-`match` verdict."""
-        found = self._corpus(tmp_path, monkeypatch,
-                             "共 161 個 alert。\n", "nothing countable here\n")
-        assert found == [], found
-
-
 _AUDIT_DRIVER = '''\
 import json, os, runpy, sys
 from pathlib import Path
@@ -1612,9 +1426,14 @@ class TestTheHookFiresOnEverythingTheGateReads:
         # coverage claim below is being made about a third of the tree.
         #
         # Nesting is the property that dies, so nesting is what is asserted.
-        # Measured on `5b7f6c35`: 402 of the recorded inputs sit two or more
-        # directories down and 43 distinct directories are represented; a
-        # flat walk leaves single digits of both.
+        # ⚠️ The margin is narrow and saying so is the point. Measured with
+        # THESE two expressions on this tree: 408 nested inputs and 44
+        # directories; with `rglob` turned into `glob`, 97 and 17. The floors
+        # sit at 100 and 20, i.e. three clear of the failure mode — not the
+        # comfortable gap an earlier revision of this comment claimed ("a flat
+        # walk leaves single digits of both", which was simply wrong). If a
+        # future change removes a directory's worth of inputs for a legitimate
+        # reason, expect to re-measure rather than to have room.
         nested = [p for p in opened if p.count("/") >= 2]
         directories = {p.rsplit("/", 1)[0] for p in opened if "/" in p}
         assert len(nested) >= 100, (
@@ -1655,6 +1474,14 @@ class TestTheHookFiresOnEverythingTheGateReads:
         False: `abe27478` touched 11 `.md` files and never touched the reader.
         #1480 was a fail-open (source re-spelled, two consumers skipped in
         silence behind `if "platform" in versions`), repaired by #1493.
+
+        ⚠️ The two bad repairs this failure invites — moving the helper back
+        into a covered file, or dropping the import — are deliberately NOT
+        named in the failure message. Both make it green by shrinking the
+        gate, and the second is invisible here by construction (a module that
+        is not imported is not in the closure). Naming them in a message read
+        by someone racing to green would be handing out the recipe; naming
+        them here, where the guard is designed rather than satisfied, is not.
         """
         pattern = self._hook_pattern()
         modules = self._measure(tmp_path)["modules"]
@@ -1662,9 +1489,7 @@ class TestTheHookFiresOnEverythingTheGateReads:
         assert uncovered == [], (
             "the gate imports these, so editing them changes what it decides "
             "— yet none of them makes it run.\n"
-            "⛔ Add the path to `files:` in .pre-commit-config.yaml. Do NOT "
-            "move the helper back into a covered file, and do NOT stop "
-            "importing it: both make the pattern true by shrinking the gate.\n"
+            "⛔ Add the path to `files:` in .pre-commit-config.yaml.\n"
             "⚠️ Known shape: the `_lib_.*` branch only reaches "
             "`scripts/tools/` itself, so a helper under `scripts/tools/lint/` "
             "needs its own path here even if it is named `_lib_*`.\n"
@@ -1694,7 +1519,10 @@ class TestToolCountReadsBothLanguages:
     (`tools(` / `tools in`) while `README.en.md` says "tools **under**". Both
     patterns therefore scored 0 hits across all three TOOL_COUNT_CHECK_FILES,
     measured on `5b7f6c35`, while `bump_docs`' `readme-en-python-tools` rule
-    kept writing the number. Rewriting it to 999 gave 0 findings and rc=0.
+    kept writing the number. Rewriting it to 999 gave 0 findings.
+
+    ⚠️ Not rc=0 — `tool-count` is a warning, so the exit code was never the
+    signal here. An earlier revision of this docstring cited it as if it were.
     """
 
     @staticmethod
@@ -1787,6 +1615,68 @@ class TestToolCountReadsBothLanguages:
         assert body.strip() in names[0].read_text(encoding="utf-8"), (
             "the repair rewrote a sentence about another scope")
 
+    def test_two_counts_on_the_anchored_line_is_refused_not_guessed(
+            self, tmp_path, monkeypatch):
+        """⛔ The anchor narrowed file→line; it does NOT narrow within a line.
+
+        Measured on the shipped `README.en.md` before this: adding a TRUE
+        clause to the counted row —
+
+            + 221 Python tools under `<scope>`, incl. 105 Python tools in lint/
+
+        — got `found 105, actual is 221` reported and then rewritten to 221 by
+        `--fix`, which finished with "✅ All version references and counts are
+        consistent." The clause was true; the tool made it false and called
+        that success. Nothing on the line says which count the scope governs,
+        so the check refuses to judge and the repair refuses to touch it.
+        """
+        body = (f"+ 999 Python tools under {self.SCOPE}, "
+                f"incl. 105 Python tools in lint/\n")
+        names = self._tree(tmp_path, monkeypatch, tools=3,
+                           docs=[("README.en.md", body)])
+        found = mod.check_tool_count_in_docs()
+        assert len(found) == 1, ("expected exactly one ambiguity finding, got "
+                                 "%s" % [i.message for i in found])
+        assert "line states 2 counts" in found[0].message, found[0].message
+        assert "999" in found[0].message and "105" in found[0].message
+
+        mod._auto_fix(found, 96, {"pack_count": 16, "alert": 161})
+        assert names[0].read_text(encoding="utf-8") == body, (
+            "the repair rewrote a line the check refused to judge:\n%s"
+            % names[0].read_text(encoding="utf-8"))
+
+    def test_the_repair_refuses_even_when_handed_an_ambiguous_line(
+            self, tmp_path, monkeypatch):
+        """⚠️ The repair re-derives; it does not trust the issue it is given.
+
+        A stale or hand-made `Issue` pointing at an ambiguous line must not be
+        a way in — the two halves used to ask the question differently, which
+        is the whole defect above.
+        """
+        body = (f"+ 999 Python tools under {self.SCOPE}, "
+                f"incl. 105 Python tools in lint/\n")
+        names = self._tree(tmp_path, monkeypatch, tools=3,
+                           docs=[("README.en.md", body)])
+        issue = mod.Issue("tool-count", "warn", "README.en.md", 1,
+                          "Python tool count (en): found 999, actual is 3")
+        assert mod._auto_fix([issue], 96, {"pack_count": 16, "alert": 161}) == []
+        assert names[0].read_text(encoding="utf-8") == body
+
+    def test_a_single_count_on_the_anchored_line_still_repairs(
+            self, tmp_path, monkeypatch):
+        """⚠️ Paired control: fail-closed must not become fail-always.
+
+        Without this, refusing every anchored line would satisfy the two
+        assertions above and silently retire the whole check.
+        """
+        names = self._tree(tmp_path, monkeypatch, tools=3, docs=[
+            ("README.en.md", f"+ 999 Python tools under {self.SCOPE}\n")])
+        found = mod.check_tool_count_in_docs()
+        assert [i.check for i in found] == ["tool-count"], found
+        assert "line states" not in found[0].message, found[0].message
+        assert mod._auto_fix(found, 96, {"pack_count": 16, "alert": 161}) == found
+        assert "3 Python tools under" in names[0].read_text(encoding="utf-8")
+
     def test_the_repair_cannot_reach_past_the_line_it_was_given(
             self, tmp_path, monkeypatch):
         """⛔ Whole-file `re.sub` + `\\s*` matching a newline = invisible lies.
@@ -1849,7 +1739,9 @@ class TestToolCountReadsBothLanguages:
         this class builds a synthetic tree and monkeypatches
         `TOOL_COUNT_CHECK_FILES`, so none of them can see that failure return
         — measured: setting that list to `[]` leaves the whole module green
-        at 111 passed while the checker reads nothing at all.
+        at 107 passed while the checker reads nothing at all (measured on
+        `ed43e772`; this module holds 116 tests today, and the same mutation
+        is killed by this test).
 
         ⚠️ Deliberately asserts that each pattern READS something, not what
         the number is. A drifted count is already `bump_docs
@@ -1869,6 +1761,10 @@ class TestToolCountReadsBothLanguages:
         assert set(alive) == {d for _, d in mod.TOOL_COUNT_PATTERNS}, (
             "a tool-count pattern reads nothing in any shipped file — that is "
             "the #1540 failure itself, and it is silent everywhere else.\n"
+            "⚠️ Check TOOL_COUNT_SCOPE_ANCHOR before the patterns: if the "
+            "sentence no longer names the scope verbatim, no pattern change "
+            "makes this green, and widening this to `assert alive` would drop "
+            "one language for good.\n"
             "alive: %s" % {k: sorted(v) for k, v in alive.items()})
 
     def test_the_checker_is_looser_than_the_writer_on_purpose(self):

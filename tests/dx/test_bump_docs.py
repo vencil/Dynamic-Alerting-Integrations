@@ -1515,34 +1515,35 @@ class TestCountSourceUnreadable:
         Derived rather than listed: any new message is covered on the day it
         lands.
 
-        ⛔ "Documentation" is *any bare string expression statement*, not just
-        the first one in a module/class/function. PEP 258 attribute
-        docstrings — a string sitting under an assignment — are how you
-        document a constant, and an earlier revision excluded only the four
-        canonical positions, so the assertion below fired on the very form its
-        own failure message tells you to use.
+        ⛔ Honest boundary: the name says "message", the body says "string
+        literal outside a docstring", and the second is broader. A PEP 258
+        attribute docstring, or an entry in `__all__`, would be flagged even
+        though neither can reach a reader. Nothing in the module needs either
+        today; when something does, widen this — do NOT obfuscate the literal
+        to get past it, because being greppable from the code is the whole
+        point of writing the identifier down anywhere.
+
+        ⚠️ An intermediate revision widened the exemption to *any* bare string
+        statement, and blind review pointed out that the only thing it
+        exempted was documentation the same commit had just added. Reverted:
+        that documentation is a `#` comment now, which the guard never sees,
+        and the exemption stays as narrow as its evidence.
         """
         import ast as _ast
         src = (Path(bump_docs.__file__)).read_text(encoding="utf-8")
         tree = _ast.parse(src)
-        documentation = set()
+        docstrings = set()
         for node in _ast.walk(tree):
-            for field in ("body", "orelse", "finalbody"):
-                stmts = getattr(node, field, None)
-                # ⚠️ `body` is not always a statement list: on `IfExp` and
-                # `Lambda` it is a single expression, so iterating it blindly
-                # raises (`'JoinedStr' object is not iterable`, caught the
-                # first time this ran over the real module).
-                if not isinstance(stmts, list):
-                    continue
-                for stmt in stmts:
-                    if (isinstance(stmt, _ast.Expr)
-                            and isinstance(stmt.value, _ast.Constant)
-                            and isinstance(stmt.value.value, str)):
-                        documentation.add(id(stmt.value))
+            if isinstance(node, (_ast.Module, _ast.ClassDef,
+                                 _ast.FunctionDef, _ast.AsyncFunctionDef)):
+                body = getattr(node, "body", None)
+                if (body and isinstance(body[0], _ast.Expr)
+                        and isinstance(body[0].value, _ast.Constant)
+                        and isinstance(body[0].value.value, str)):
+                    docstrings.add(id(body[0].value))
         return [n.value for n in _ast.walk(tree)
                 if isinstance(n, _ast.Constant) and isinstance(n.value, str)
-                and id(n) not in documentation]
+                and id(n) not in docstrings]
 
     def test_no_diagnostic_message_names_the_rule_set_constant(self):
         """⛔ Must-fire: no printable string may name `COUNT_RULE_IDS`.
@@ -1577,8 +1578,7 @@ class TestCountSourceUnreadable:
         probe = tmp_path / "probe.py"
         probe.write_text(
             '"""COUNT_RULE_IDS in a module docstring must NOT count."""\n'
-            'X = (1, 2)\n'
-            '"""COUNT_RULE_IDS in an attribute docstring must NOT count."""\n'
+            '# COUNT_RULE_IDS in a comment is invisible to AST at all.\n'
             'def f():\n'
             '    """COUNT_RULE_IDS here either."""\n'
             '    print("retire it with its COUNT_RULE_IDS entry")\n',

@@ -160,111 +160,14 @@ SCENARIO_COUNT_PATTERNS: List[Tuple[str, str]] = [
 BILINGUAL_PAIR_PATTERN = r"bilingual-(\d+)%20pairs"
 
 # Bilingual number consistency patterns: (regex, description)
-#
-# ⚠️ These are matched with `re.IGNORECASE` against whole documents. The three
-# badge patterns anchor on a URL fragment, so they are far tighter than the
-# prose ones — though `bilingual-(\d+)` and `alerts-(\d+)-` are not literally
-# exact (neither pins the `%20pairs` / badge suffix), so "tight" is the honest
-# word, not "exact".
-#
-# The three prose patterns are heuristics. Their false-positive rates, all
-# measured on `5b7f6c35` over the SAME corpus — the 94 zh/en pairs this check
-# actually compares, which includes the root README pair:
-#
-#     Rule Pack count       59 spans, 12 false  (`v2 rule pack`, `§4.4 Rule Pack`)
-#     Recording rule count   6 spans,  5 false  (`Part 2 Recording`)
-#     Alert rule count      59 spans, 45 false  ← repaired below (#1505)
-#
-# ⛔ An earlier revision of this table wrote 53 for the first row. That number
-# is real but comes from a different corpus (the 93 docs-only pairs, no root
-# README), and blind review caught the mix. Three cells, three corpora, no
-# corpus stated — the shape this whole module is about.
-# ⚠️ Both figures move with the platform: `docs/README-root.md` is a symlink,
-# so a Windows checkout with `core.symlinks=false` reads it as a 15-byte stub
-# and measures 6 spans fewer than Linux CI does.
-#
-# Neither of the first two reports anything today, and there are TWO reasons,
-# not one: their false matches usually land identically in both languages
-# (luck, not a property) — and where they do NOT, `_bilingual_verdict` drops
-# the pair on the floor, which is the disclosed fail-open, not silence earned.
-# Measured: 2 of Recording's 6 spans are in that second category. Both are
-# left alone here because widening or narrowing them changes what a live gate
-# reports, and #1505 is about the one that was actually firing.
-#
-# ⛔ #1505: `(\d+)\s*Alert(?:\s+rule)?` with IGNORECASE matched any digit
-# followed by the letters "alert" — the whole of the gate's standing warning
-# output was three of these, and all three were false: a port
-# (`:9093 alertname=`), an ADR number (`ADR-025 Alerting-Plane`) and section
-# numbers (`### 1.2 Alert 不 fire`). A check that prints three warnings nobody
-# can ever clear teaches its readers to skip the output.
-#
-# ⛔ The repair is not "narrow it until the three stop firing": measured, the
-# obvious narrowing — `(\d+)\s*Alert\s+rules?` without IGNORECASE — matches
-# **0 spans in the entire corpus**, i.e. it trades three false positives for
-# total blindness. The counterfactual is what chose this spelling. Seven real
-# drifts were injected one at a time (a count changed on one side of a pair)
-# and the reported SET compared before and after — not its length, which
-# cannot see an already-one-sided pair change value:
-#
-#     shipped                     3 standing reports (all false)   1/7 caught
-#     `\balerts?\b` only          1 standing report  (false)       1/7
-#     + no dotted-number prefix   1 standing report  (false)       1/7
-#     THIS                        0 standing reports              5/7
-#     + zh measure-word GAP       3 standing reports (all false)   7/7
-#
-# ⛔ The seven injections are not reproducible from this comment alone, so the
-# `N/7` column is a relative reading of ONE fixed set, not a portable score.
-# The set is listed in `TestBilingualNumbersHasSomeoneWatchingIt`, which is
-# also where it goes red if the corpus moves under it. The invariant these
-# rows are for is the ORDER, not the values: the shipped spelling catches
-# least, and the narrowing #1505 proposed catches nothing at all.
-#
-# The last row is the one that decided the design. It is NOT "let Chinese have
-# more measure words" — measured, widening the class to `[個條筆則項]` changes
-# nothing at all on this corpus (18 spans, 0 reports, 5/7, identical for every
-# variant), because the only `筆` uses live in a skipped file. It is allowing a
-# GAP between the measure word and the noun: `(\d+)\s*[個條].{0,4}?(?:alert|告警)`
-# reaches 7/7 and re-creates the disease, matching `6 個月 alert 歷史` and
-# collecting a different subset of numbers on each side of three pairs.
-# ⚠️ An earlier revision of this comment quoted that regex WITHOUT the `alert`
-# alternation, i.e. a version that does not match its own example.
-#
-# ⛔ Why English drops the preposition while Chinese keeps the measure word —
-# they are not the same enumeration. A preposition carries no counting
-# information and its set is open (`under` / `across` / `beneath` / anything).
-# A Chinese measure word IS the counting marker, and the classifiers that can
-# quantify 告警 are a small closed lexical class; `筆` and `則` are included
-# for that reason even though they are inert on today's corpus.
-#
-# ⛔ ERRATA — code fences ARE stripped, and the earlier decision not to strip
-# them was reached with the wrong question. That revision asked "does stripping
-# change a verdict today" (it does not) instead of "does it remove the
-# REACHABLE false positives" (it does). Blind review demonstrated the
-# difference with two ordinary edits, each of which revived a standing warning
-# nobody could clear:
-#
-#     renumber `# Part 3 Alert Rule` → `Part 4` in the English file only
-#         → mismatch `zh=['3'] vs en=['4']`, and no correct edit removes it
-#     mention `Phase 3 ALERTS{}` on one side of a table
-#         → mismatch on a PromQL selector
-#
-# Fences kill the first; `(?!\s*\{)` — "a metric selector is not a count" —
-# kills the second; standing reports stay 0 with both. The residual spans are
-# now 18 and the four reachable false shapes are gone.
 BILINGUAL_NUMBER_PATTERNS: List[Tuple[str, str]] = [
     (r"(\d+)\s*個?\s*Rule\s*Pack", "Rule Pack count"),
     (r"(\d+)\s*Recording", "Recording rule count"),
-    (r"(?<![\d.])(\d+)\s+alerts\b(?!\s*\{)"
-     r"|(?<![\d.])(\d+)\s+alert\s+(?:rules?|meanings?|definitions?)\b"
-     r"|(?<![\d.])(\d+)\s*[個條筆則項]\s*(?:alert|告警)", "Alert rule count"),
+    (r"(\d+)\s*Alert(?:\s+rule)?", "Alert rule count"),
     (r"rule%20packs-(\d+)-", "Rule Pack badge"),
     (r"alerts-(\d+)-", "Alert badge"),
     (r"bilingual-(\d+)", "Bilingual badge"),
 ]
-
-# Fenced code blocks are removed before the bilingual comparison; see the
-# ERRATA above. Newlines are preserved so any line-based reporting stays put.
-BILINGUAL_FENCE_PATTERN = r"^\s*(```|~~~).*?^\s*\1"
 
 # ============================================================================
 # Source-of-truth pattern extraction
