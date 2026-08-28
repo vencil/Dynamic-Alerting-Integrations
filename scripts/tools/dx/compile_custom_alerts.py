@@ -48,6 +48,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import shlex
 import sys
 from pathlib import Path
 from typing import List
@@ -396,14 +397,38 @@ DO_NOT_ALLOW_EMPTY = ("⛔ Fix those declarations first. Do NOT pass --allow-emp
 
 
 def _shell_quote(value) -> str:
-    """Quote a path for pasting back into a shell — only when it needs it.
+    """Quote a path for pasting back into the shell this process is running under.
 
-    ⚠️ Measured: a `--config-dir` under `C:/…/my conf.d` produced a line that argparse
-    rejected with `unrecognized arguments: conf.d` (rc=2). Fail-loud rather than
-    destructive, but the whole point of printing the command was that it runs.
+    ⚠️ Measured on the whitespace-only version this replaced: `--config-dir` under
+    `C:/…/my conf.d` produced a line argparse rejected with `unrecognized arguments:
+    conf.d` (rc=2). Loud, at least.
+
+    ⛔ WHITESPACE IS NOT THE ONLY THING THAT NEEDS QUOTING. Measured with Python's
+    own POSIX tokenizer (`shlex.split(..., posix=True)`), which is the parser a
+    pasted line meets: of five sample values, the whitespace-only rule round-tripped
+    three and raised `ValueError` on the two containing a quote character — i.e. it
+    emitted a command line that does not parse. `shlex.quote` round-tripped all five.
+    (CodeRabbit, #1591.)
+
+    ⛔ WHAT A REAL SHELL DOES WITH A PASTED LINE IS NOT MEASURED HERE, and three
+    attempts to measure it from a scripted harness each produced a wrong answer
+    before a must-fire control caught them (`bash -c` through MSYS argv; a `.sh`
+    file that came back rc=127 for every case including the trivial one; a
+    PowerShell run that passed the quoted text as a VARIABLE, which is not the
+    thing being tested — a shell only interprets quotes while parsing a command
+    line). So the sh prediction that a double-quoted `a$b` would additionally be
+    parameter-expanded — pointing the command at a DIFFERENT tree at rc=0 — stays a
+    prediction. The tokenizer result above stands on its own.
+
+    ⚠️ One form, not a platform branch, and the reason is that `os.name` answers the
+    wrong question: it is `nt` for Git Bash and PowerShell alike, so branching on it
+    would hand the cmd.exe form to this repo's Windows developers, who use neither.
+    `'…'` is literal in sh/bash/zsh and (by its documented rules, not measured here)
+    in PowerShell; cmd.exe does not treat it as quoting at all — a path with a
+    special character pasted there needs its own quoting, and this does not provide
+    it.
     """
-    text = str(value)
-    return f'"{text}"' if any(c.isspace() for c in text) else text
+    return shlex.quote(str(value))
 
 
 def _deliberate_empty_offer(args, quarantined: int) -> str:

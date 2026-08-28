@@ -1315,16 +1315,30 @@ def test_the_printed_command_survives_a_path_with_a_space(tmp_path, monkeypatch,
     offer = [ln for ln in capsys.readouterr().err.splitlines()
              if "--allow-empty" in ln and "Do NOT" not in ln]
     assert len(offer) == 1, "exactly one paste-able command"
-    argv = shlex.split(offer[0].strip(), posix=False)
-    # The quoting must survive a round-trip: each path lands as ONE argument.
-    assert argv[argv.index("--config-dir") + 1].strip('"') == str(src)
-    assert argv[argv.index("--out") + 1].strip('"') == str(out)
-    assert cc._shell_quote("no_spaces") == "no_spaces"
+    # ⛔ posix=True, and no `.strip('"')`. This is the parser a pasted line meets,
+    # and stripping quotes by hand hides the failure it exists to catch: the earlier
+    # whitespace-only quoting produced a line this same call REFUSES to tokenize.
+    argv = shlex.split(offer[0].strip(), posix=True)
+    assert argv[argv.index("--config-dir") + 1] == str(src)
+    assert argv[argv.index("--out") + 1] == str(out)
     # ⛔ …and it must invoke THIS interpreter, not the word "python": on a stock
     # Windows host that resolves to the Microsoft Store stub (exit 49, no output),
     # and every caller in this repo spells it "python3".
-    assert argv[0].strip('"') == sys.executable
-    assert argv[1].strip('"') == str(Path(cc.__file__).resolve())
+    assert argv[0] == sys.executable
+    assert argv[1] == str(Path(cc.__file__).resolve())
+
+
+@pytest.mark.parametrize("value", ["plain", "a b", 'a"b', "a'b", "a$b"])
+def test_quoting_round_trips_through_the_parser_a_pasted_line_meets(value):
+    # Measured, not asserted by eye: the whitespace-only rule this replaced round-
+    # tripped three of these five and raised ValueError on the two carrying a quote
+    # character — it emitted a command line that does not parse. (CodeRabbit, #1591.)
+    #
+    # ⚠️ `shlex.split` tokenizes but does not EXPAND, so this cannot demonstrate the
+    # `a$b` case, where a double-quoted value would also be substituted by sh. That
+    # half stays a prediction; driving a real shell from the dev host produced two
+    # broken harnesses in a row (a must-fire control came back rc=127).
+    assert shlex.split(cc._shell_quote(value), posix=True) == [value]
 
 
 # --- I. one mechanical sweep over the whole message space ----------------------
@@ -1334,30 +1348,56 @@ def test_the_printed_command_survives_a_path_with_a_space(tmp_path, monkeypatch,
 # rounds each caught one instance and each fix created the next, because a per-case
 # assertion only ever looks at the branch someone thought of. These invariants hold
 # for every branch by construction, so a new branch cannot quietly opt out.
-_STATES = [
-    # (label, source files, seed the pack first?, extra flags, run --check?)
-    ("empty-source-vs-pack", _EMPTY_SOURCE, True, (), False),
-    ("empty-source-vs-pack-check", _EMPTY_SOURCE, True, (), True),
-    ("quarantined-vs-pack", None, True, (), False),
-    ("quarantined-vs-pack-check", None, True, (), True),
-    ("quarantined-plus-allow-empty", None, True, ("--allow-empty",), False),
-    ("greenfield-empty", _EMPTY_SOURCE, False, (), False),
-    ("greenfield-quarantined", None, False, (), False),
-    ("partial-loss-check", None, True, (), True),
-]
 _TYPO_SOURCE = {"a.yaml": _ONE_RECIPE_SOURCE["a.yaml"].replace("window: 5m", "window: 5x")}
 
+# ⛔ THE SEED SOURCE IS A COLUMN BECAUSE IT HAD TO BE. With the seed hard-wired
+# to `_ONE_RECIPE_SOURCE`, the row labelled `partial-loss-check` was byte-for-byte
+# identical to `quarantined-vs-pack-check` in every field but its name: it seeded
+# one rule and then presented a source that compiles to zero, which is total loss.
+# The sweep advertised eight states and exercised seven, and the missing one was
+# the state the label named. (CodeRabbit, #1591.) Partial loss needs a seed with
+# TWO tenants and a follow-up that presents only one of them.
+_STATES = [
+    # (label, seed source, source files, seed the pack first?, extra flags, --check?)
+    ("empty-source-vs-pack", _ONE_RECIPE_SOURCE, _EMPTY_SOURCE, True, (), False),
+    ("empty-source-vs-pack-check", _ONE_RECIPE_SOURCE, _EMPTY_SOURCE, True, (), True),
+    ("quarantined-vs-pack", _ONE_RECIPE_SOURCE, None, True, (), False),
+    ("quarantined-vs-pack-check", _ONE_RECIPE_SOURCE, None, True, (), True),
+    ("quarantined-plus-allow-empty", _ONE_RECIPE_SOURCE, None, True, ("--allow-empty",), False),
+    ("greenfield-empty", _ONE_RECIPE_SOURCE, _EMPTY_SOURCE, False, (), False),
+    ("greenfield-quarantined", _ONE_RECIPE_SOURCE, None, False, (), False),
+    ("partial-loss-check", _TWO_TENANTS, {"a.yaml": _TWO_TENANTS["a.yaml"]}, True, (), True),
+    ("partial-loss-write", _TWO_TENANTS, {"a.yaml": _TWO_TENANTS["a.yaml"]}, True, (), False),
+]
 
-@pytest.mark.parametrize("label,files,seed,extra,check", _STATES)
+
+def test_the_sweep_states_are_all_distinct():
+    # The sweep's value is the number of DIFFERENT states it drives main() through.
+    # Two rows that differ only in their label make the count a claim rather than a
+    # measurement — which is what happened, and the duplicate row was the one whose
+    # name promised the state nobody was testing.
+    keys = [(id(seed), id(files), pre, extra, chk) for _, seed, files, pre, extra, chk in _STATES]
+    dupes = {k for k in keys if keys.count(k) > 1}
+    assert not dupes, f"{len(dupes)} sweep state(s) appear twice under different labels"
+    assert len(keys) == len(_STATES)
+
+
+@pytest.mark.parametrize("label,seed_files,files,seed,extra,check", _STATES)
 def test_no_message_forbids_and_offers_the_same_thing(
-        label, files, seed, extra, check, tmp_path, monkeypatch, capsys):
+        label, seed_files, files, seed, extra, check, tmp_path, monkeypatch, capsys):
     src, out = tmp_path / "src", tmp_path / "pack.yaml"
     if seed:
-        _write_tree(src, _ONE_RECIPE_SOURCE)
+        _write_tree(src, seed_files)
         assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
         capsys.readouterr()
-    _write_tree(src, files or _TYPO_SOURCE)
-    (src / "a.yaml").write_text((files or _TYPO_SOURCE)["a.yaml"], encoding="utf-8")
+    present = files or _TYPO_SOURCE
+    # ⛔ Remove what the seed left behind. `_write_tree` only overwrites the files it
+    # is handed, so without this the seed's `b.yaml` stays visible and the row that
+    # exists to drop a tenant drops nothing. (CodeRabbit, #1591.)
+    for stale in list(src.glob("*.yaml")) + list(src.glob("*.yml")):
+        if stale.name not in present:
+            stale.unlink()
+    _write_tree(src, present)
 
     argv = ["compile", "--config-dir", str(src), "--out", str(out), *extra]
     if check:
