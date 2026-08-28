@@ -80,7 +80,13 @@ def _dir_defaults_alerts(config_dir: Path, file_errors: List[dict]) -> Dict[Path
                 continue
             alerts = data.get("_custom_alerts") or []
             if alerts:
-                out[Path(root).resolve()] = list(alerts)
+                # EXTEND, not assign. The loop above replaced a single
+                # literal-name lookup, and leaving the assignment made the
+                # LAST carrier in a directory silently discard the first --
+                # blind review measured a `critical` platform rule declared
+                # in `_defaults.yaml` vanishing because `_defaults.yml` sat
+                # beside it. Ordering matches `_resolve_defaults_chain`.
+                out.setdefault(Path(root).resolve(), []).extend(alerts)
     return out
 
 

@@ -68,8 +68,19 @@ def _is_defaults_file(basename: str) -> bool:
     """`_defaults.yaml` / `_defaults-multidb.yaml` … — the platform default files
     (top-level keys guarded by platform-defaults.schema.json). Other `_*` files
     (`_routing_profiles`, `_domain_policy`, `_instance_mapping`, `_rbac` …) have
-    their own shapes/validators and remain skipped."""
-    return is_defaults_name(basename)
+    their own shapes/validators and remain skipped.
+
+    ⛔ PREFIX, and deliberately NOT `_lib_confd.is_defaults_name`. That
+    predicate answers a different question — "is this the chain carrier the
+    exporter merges", an EXACT match — while `_defaults-multidb.yaml` is a
+    platform-defaults document this gate must validate and the exporter
+    never merges. #1588 briefly collapsed the two and blind review measured
+    the damage on the read AND write planes. The fix here is the CASE fold
+    this function was missing (`_DEFAULTS.YAML` returned False, so a broken
+    platform-defaults file skipped the schema gate entirely at rc=0), not a
+    change of shape.
+    """
+    return has_yaml_extension(basename) and basename.lower().startswith("_defaults")
 
 
 class _CallerError(Exception):

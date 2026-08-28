@@ -174,6 +174,15 @@
       "why": "Mixed case across BOTH halves of the defaults name, and the .yml spelling of it — the combination that survives a fix applied to one branch only."
     },
     {
+      "name": "_defaults-multidb.yaml",
+      "yaml_extension": true,
+      "reserved_prefix": true,
+      "hidden": false,
+      "defaults_file": false,
+      "stem": "",
+      "why": "a REAL file in this repo (conf.d/examples/) that starts with '_defaults' but is NOT the chain carrier: the exporter compares the lowercased name against the two literals exactly, so it never merges this into a tenant's chain. Without this row a PREFIX implementation of defaults_file passes every consumer - measured, it shipped briefly in #1588 and made describe_tenant reproduce the exporter's merged_hash on only 3 of 5 shipped tenants, and made deprecate_rule --execute write to this file."
+    },
+    {
       "name": "_rbac.yaml",
       "yaml_extension": true,
       "reserved_prefix": true,

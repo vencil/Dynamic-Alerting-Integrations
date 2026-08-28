@@ -191,17 +191,30 @@ def is_reserved_name(name: str) -> bool:
 
 
 def is_defaults_name(name: str) -> bool:
-    """The platform-defaults carrier — `_defaults.yaml` in ANY casing.
+    """The defaults CHAIN CARRIER — exactly `_defaults.yaml`/`.yml`, any casing.
 
-    ⛔ `_DEFAULTS.YAML` measured as `False` under the hand-written copy in
-    `check_confd_schema`, so a broken platform-defaults file skipped the
-    schema gate entirely (`rc=0`, "0 tenant conf.d file(s) valid") while
-    the exporter merged it into EVERY downstream tenant's effective
-    config. Both halves have to fold, which is why this is one function
-    rather than two comparisons at each call site.
+    ⛔ EXACT, not a prefix, and the difference is load-bearing. The
+    oracle is `config_hierarchy.go:216`, which compares the lowercased name
+    against the two literals; this table's own contract says the same in
+    words ("name lowercased is exactly ..."). And
+    `conf.d/examples/_defaults-multidb.yaml` EXISTS in this repo, while the
+    exporter never merges it into any tenant's chain.
+
+    ⚠️ A prefix version shipped briefly during #1588 and blind review
+    measured what it did: `describe_tenant` went from reproducing the
+    exporter's `merged_hash` on 5/5 shipped tenants to 3/5 WRONG, and
+    `deprecate_rule --execute` wrote "disable" into `_defaults-multidb.yaml`
+    while printing 下架完成 — leaving the tenant's own override deleted and
+    its threshold silently RELAXED back to the platform value. Fixing a
+    divergence by inventing a worse one is the exact failure this line of
+    work exists to stop.
+
+    ⛔ Do NOT reuse this for "is this a platform-defaults DOCUMENT to
+    schema-validate". That is a prefix question and keeps its own predicate
+    in `check_confd_schema`. Two questions that share a word are not one
+    predicate.
     """
-    lowered = name.lower()
-    return lowered.startswith("_defaults") and has_yaml_extension(name)
+    return name.lower() in ("_defaults.yaml", "_defaults.yml")
 
 
 def config_stem(name: str) -> str:
