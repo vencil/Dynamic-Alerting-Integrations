@@ -44,12 +44,14 @@ and this is what stops "shared" from meaning "equally silent".
 from __future__ import annotations
 
 import os
+from typing import Iterable
 import sys
 from pathlib import Path
 
 __all__ = [
     "CONFIG_SUFFIXES",
     "config_stem",
+    "defaults_files_in",
     "has_yaml_extension",
     "is_defaults_name",
     "is_hidden_name",
@@ -240,6 +242,29 @@ def config_stem(name: str) -> str:
             # the wrong place.
             return name[: len(name) - len(suffix)]
     return ""
+
+
+def defaults_files_in(root: str | os.PathLike[str],
+                      names: "Iterable[str]") -> list[Path]:
+    """The defaults carriers among ALREADY-LISTED `names`, sorted.
+
+    ⛔ Takes the names instead of listing the directory, and that is not a
+    style choice. The first version called `root.iterdir()` and
+    `test_confd_enumeration_contract` correctly reddened `_lib_confd.py`
+    itself: a sentinel flat scan with nothing said about nested content.
+    Its docstring argued the callers were already recursive — which was
+    true, and which is exactly why listing again was wrong. Both callers
+    (`loader._dir_defaults_alerts` walking with `os.walk`,
+    `describe_tenant._scan` with `rglob`) already hold the names.
+
+    ⚠️ Ordering is `sorted(names)`, so a directory carrying both
+    spellings contributes deterministically. Two spellings is already a
+    misconfiguration; resolving it by directory order would make it an
+    intermittent one.
+    """
+    base = Path(root)
+    return [base / n for n in sorted(names) if is_defaults_name(n)]
+
 
 
 def resolve_defaults_file(

@@ -153,10 +153,24 @@ REPO_ANCHORED_OUTPUT: dict[str, str] = {
     "compile_custom_alerts.py": "--out",
 }
 
-# The three fixture names, and the mapping used to normalise them away.
-_PAIRS = (("_DEFAULTS.YAML", "_defaults.yaml"),
-          ("alpha.YAML", "alpha.yaml"),
-          ("beta.YML", "beta.yml"))
+# The fixture names, mapped to NEUTRAL sentinels rather than to each
+# other's lower-case spelling.
+#
+# ⛔ Folding upper -> lower was the first version and blind review measured
+# what it cost: a fix whose whole point is "report the name you actually
+# read" becomes invisible, because both spellings collapse to the same
+# string before comparison. `diagnose`'s `defaults_source` change — the one
+# carrying a ⛔ comment about sending an operator to edit a file that does
+# not exist — was a SECOND silently-green dogfood cell for exactly this
+# reason, and the file's own disclosure said there was only one.
+#
+# A sentinel keeps the two runs comparable (the names legitimately differ)
+# while preserving the distinction between "printed the carrier" and
+# "printed a hardcoded canonical name".
+_SENTINELS = (("_DEFAULTS.YAML", "<DEFAULTS>"), ("_defaults.yaml", "<DEFAULTS>"),
+              ("_DEFAULTS.YML", "<DEFAULTS2>"), ("_defaults.yml", "<DEFAULTS2>"),
+              ("alpha.YAML", "<ALPHA>"), ("alpha.yaml", "<ALPHA>"),
+              ("beta.YML", "<BETA>"), ("beta.yml", "<BETA>"))
 
 
 # ── fixtures ──────────────────────────────────────────────────────────
@@ -166,8 +180,21 @@ def _write_tree(root: pathlib.Path, *, upper: bool, tenants: bool) -> None:
     names = {"defaults": "_DEFAULTS.YAML" if upper else "_defaults.yaml",
              "alpha": "alpha.YAML" if upper else "alpha.yaml",
              "beta": "beta.YML" if upper else "beta.yml"}
+    # ⛔ `_policies` is here because its absence made a real divergence
+    # invisible. `validate_config` resolves the policy document by name,
+    # and with a defaults file carrying no `_policies` block BOTH runs
+    # printed "No _policies defined — skipped" and the tool was counted
+    # as agreeing. Blind review measured the truth: lower `[FAIL]
+    # policy_dsl`, upper `[PASS] ... skipped`. Same empty-vs-empty shape
+    # as the loader fixture before it grew `_custom_alerts`.
     (root / names["defaults"]).write_text(
-        "defaults:\n  pg_connections: 80\n", encoding="utf-8")
+        "defaults:\n"
+        "  pg_connections: 80\n"
+        "_policies:\n"
+        "  - name: p1\n"
+        "    when: \"tenant.pg_connections > 100\"\n"
+        "    then: deny\n",
+        encoding="utf-8")
     if tenants:
         (root / names["alpha"]).write_text(
             "tenants:\n  alpha:\n    pg_connections: 90\n", encoding="utf-8")
@@ -235,8 +262,8 @@ def _normalise(text: str, config_dir: pathlib.Path,
     """
     out = text.replace(str(config_dir), "<CONFDIR>")
     out = out.replace(str(sandbox), "<SANDBOX>")
-    for upper, lower in _PAIRS:
-        out = out.replace(upper, lower)
+    for name, sentinel in _SENTINELS:
+        out = out.replace(name, sentinel)
     out = _TIMESTAMP.sub("<T>", out)
     return _DURATION.sub("<D>", out)
 
@@ -263,14 +290,22 @@ def _why_unmeasurable(stdout: str, stderr: str) -> str | None:
 
 
 class _Outcome:
-    __slots__ = ("skip_reason", "insensitive", "lower", "upper")
+    __slots__ = ("skip_reason", "insensitive", "lower", "upper", "upper_raw")
 
     def __init__(self, skip_reason=None, insensitive=False,
-                 lower="", upper=""):
+                 lower="", upper="", upper_raw=""):
         self.skip_reason = skip_reason
         self.insensitive = insensitive
         self.lower = lower
         self.upper = upper
+        # ⛔ PRE-normalisation. `_normalise` must collapse the two spellings
+        # to make the runs comparable at all, which structurally erases
+        # "did the tool print the name it actually read?" — blind review
+        # measured a second silently-green dogfood cell for exactly that
+        # reason. That property therefore needs its own assertion against
+        # the raw bytes, below; no amount of cleverness in `_normalise`
+        # can recover it.
+        self.upper_raw = upper_raw
 
 
 def _observe(tool: pathlib.Path, flag: str,
@@ -302,7 +337,9 @@ def _observe(tool: pathlib.Path, flag: str,
                 f"with the tenant files REMOVED, so comparing the two "
                 f"casings here proves nothing about this tool"),
         )
-    return _Outcome(lower=norm["lower"], upper=norm["upper"])
+    (so_u, se_u, _), _ = runs["upper"]
+    return _Outcome(lower=norm["lower"], upper=norm["upper"],
+                    upper_raw=so_u + se_u)
 
 
 # ── the parity assertion ──────────────────────────────────────────────
@@ -325,6 +362,77 @@ def test_tool_reads_upper_case_names_the_same(
         f"instead of comparing the extension in this tool. ⛔ Keep the "
         f"tool's own recursion and its own suffix set — changing those "
         f"is a separate behaviour change. See issue #1588."
+    )
+
+
+# Tools measured printing a canonical name they did not read. ⛔ Pinned
+# with reasons rather than fixed here, and the check above asserts each
+# entry is still WRONG — a stale exemption fails instead of rotting.
+#
+# Both need a path plumbed into a function that does not have one today,
+# and both hardcode their string on `18f18a0` as well, so neither is a
+# regression from this change; `diagnose`'s only became reachable because
+# this change let it read the tree at all. Filed separately rather than
+# widened into a case-folding PR.
+KNOWN_HARDCODED_NAMES: dict[str, str] = {
+    # diagnose.py:408 builds the tenant layer's source as
+    # f"{tenant}.yaml" from the tenant id. The carrier path is known one
+    # function earlier (the `iter_config_files` loop) but is not carried
+    # into `tenant_overrides`.
+    "diagnose.py": "tenant layer source is built from the tenant id, not the carrier",
+    # explain_route.py:63,103 hardcode "_defaults.yaml / _routing_defaults
+    # key". `explain_tenant_routing(parsed, tenant)` receives no config dir
+    # at all, so resolving the real carrier is a signature change.
+    "explain_route.py": "routing layer sources are literal strings; the function takes no config dir",
+}
+
+_LOWER_ONLY_NAMES = ("_defaults.yaml", "_defaults.yml",
+                     "alpha.yaml", "beta.yml")
+
+
+@pytest.mark.parametrize(
+    "tool,flag", ALL_TOOLS, ids=[p.name for p, _ in ALL_TOOLS])
+def test_tool_does_not_name_a_file_that_is_not_there(
+        tool: pathlib.Path, flag: str, trees, tmp_path: pathlib.Path) -> None:
+    """On the upper-case tree, no lower-case fixture name may be printed.
+
+    ⛔ This is the class the A/B comparison structurally cannot see. Both
+    runs are normalised before comparison — they have to be, the filenames
+    legitimately differ — so a tool that reads `_DEFAULTS.YAML` and then
+    prints the hardcoded string `_defaults.yaml` compares EQUAL to the
+    lower-case run and passes. Blind review found `diagnose`'s
+    `defaults_source` fix sitting in exactly that blind spot, green,
+    while the file claimed only one cell was.
+
+    The property is easy to state against raw bytes: that tree contains no
+    lower-case file, so naming one sends the operator to edit something
+    that does not exist.
+    """
+    outcome = _observe(tool, flag, trees, tmp_path)
+    if outcome.skip_reason:
+        pytest.skip(f"NOT MEASURED — {outcome.skip_reason}")
+    # ⛔ Whole path components, not substrings. The first version matched
+    # `alpha.yaml` inside `da-tenant-alpha.yaml` — a manifest
+    # `operator_generate` had just written, named after the tenant id and
+    # nothing to do with a conf.d carrier. A gate that cries wolf gets
+    # muted, so the token boundary is load-bearing.
+    tokens = set(re.split(r"[^0-9A-Za-z._-]+", outcome.upper_raw))
+    named = sorted(tokens & set(_LOWER_ONLY_NAMES))
+    if tool.name in KNOWN_HARDCODED_NAMES:
+        assert named, (
+            f"{tool.name} is pinned in KNOWN_HARDCODED_NAMES but printed no "
+            f"canonical name — the defect was fixed, so DELETE its entry "
+            f"rather than leaving a stale exemption behind."
+        )
+        pytest.skip(f"KNOWN — {KNOWN_HARDCODED_NAMES[tool.name]}")
+    assert not named, (
+        f"{tool.relative_to(REPO).as_posix()} printed {named} while reading "
+        f"a conf.d that contains no such file — the carriers there are "
+        f"spelled `.YAML`/`.YML`.\n"
+        f"An operator following that output edits a file that does not "
+        f"exist, and the tool's own answer came from a different one.\n"
+        f"Report the name actually read (`path.name`) instead of a "
+        f"hardcoded canonical spelling. See issue #1588."
     )
 
 
@@ -438,10 +546,25 @@ KNOWN_INSENSITIVE: set[str] = {
     "maintenance_scheduler.py",
     "notification_tester.py",
     "operator_check.py",
-    "policy_engine.py",
     "tenant_verify.py",
     "threshold_govern.py",
 }
+
+# ⛔ `policy_engine.py` and `policy_opa_bridge.py` used to sit in the
+# set above and do NOT belong. Both left the moment the fixture's
+# defaults carrier grew a `_policies` block: they were always
+# sensitive to the conf.d, the fixture just never gave them anything
+# to be sensitive ABOUT, so `lower == notenants` and they were filed
+# as having no discriminating power. `policy_engine` then turned out
+# to be genuinely DIVERGENT and needed fixing; `policy_opa_bridge`
+# measured clean. Blind review found the same emptiness hiding a real
+# `validate_config` divergence, and this file had already been caught
+# by it once with `custom_alerts/loader`.
+#
+# ⚠️ Read this list as a list of QUESTIONS TO RE-ASK, not answers. An
+# entry means "this fixture cannot see the tool", never "the tool is
+# fine" — three of them have already moved out by enriching the
+# fixture rather than by changing any tool.
 
 
 @pytest.fixture(scope="session")

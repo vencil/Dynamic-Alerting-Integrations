@@ -27,6 +27,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
     has_yaml_extension,
     is_defaults_name,
+    defaults_files_in,
 )
 
 from . import shape as _shape
@@ -71,8 +72,7 @@ def _dir_defaults_alerts(config_dir: Path, file_errors: List[dict]) -> Dict[Path
         # platform-level `_custom_alerts` list declared in it vanished for
         # EVERY tenant below it — silently, at rc=0, on the shipped tenant
         # self-service path.
-        for _name in sorted(n for n in files if is_defaults_name(n)):
-            p = Path(root) / _name
+        for p in defaults_files_in(root, files):
             try:
                 data = _load_yaml(p)
             except Exception as exc:  # noqa: BLE001 — malformed file quarantined, not fatal

@@ -145,11 +145,11 @@ def disable_in_defaults(metric_key, config_dir, execute=False):
     """在 _defaults.yaml 中將 metric 設為 "disable"。"""
     defaults_path = str(resolve_defaults_file(Path(config_dir)))
     if not Path(defaults_path).exists():
-        return False, "_defaults.yaml 不存在"
+        return False, f"{Path(defaults_path).name} 不存在"
 
     data = load_yaml_file(defaults_path)
     if data is None:
-        return False, "無法讀取 _defaults.yaml"
+        return False, f"無法讀取 {Path(defaults_path).name}"
 
     defaults = data.get("defaults", {})
     current_val = defaults.get(metric_key)
@@ -278,7 +278,8 @@ def main():
             print(f"  ✅ 未發現任何引用")
 
         # Step 2: 在 defaults 中設為 disable
-        print(f"\n  Step 1: _defaults.yaml")
+        print(f"\n  Step 1: "
+              f"{resolve_defaults_file(Path(args.config_dir)).name}")
         ok, msg = disable_in_defaults(metric, args.config_dir, execute=args.execute)
         icon = "✅" if ok else "❌"
         print(f"  {icon} {safe_label(msg)}")
