@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import sys
 from pathlib import Path
 
@@ -966,3 +967,484 @@ def test_cli_default_config_dir_matches_canonical_callers():
     for rel in ("Makefile", ".pre-commit-config.yaml", ".github/workflows/ci.yml"):
         callers = set(pat.findall((_REPO / rel).read_text(encoding="utf-8")))
         assert callers == {canonical}, f"{rel} scans {callers}, CLI default is {canonical}"
+
+
+# --- F. a compile that produces nothing must not erase a pack that has rules ---
+# Measured chain this closes: rename ONE tenant file so the loader stops matching it
+# (`db-b.yaml` -> `db-b.yml`, content byte-identical) -> `--check` goes red and told
+# the operator to regenerate -> regenerating compiled 0 shapes and wrote them over the
+# shipped pack (7016 -> 447 bytes) -> `--check` went GREEN again with every custom
+# alert gone. Both halves are pinned here: the write refuses, and the drift message
+# stops naming the destructive remedy.
+_EMPTY_SOURCE = {"a.yaml": "tenants:\n  ta: {}\n"}
+_ONE_RECIPE_SOURCE = {
+    "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
+              '      - {recipe: threshold, name: cpu_hot, metric: node_cpu, op: ">",'
+              ' window: 5m, threshold: "80:warning"}\n',
+}
+
+
+def _compile_into(src: Path, out: Path, monkeypatch, *, extra=()) -> int:
+    monkeypatch.setattr(sys, "argv",
+                        ["compile", "--config-dir", str(src), "--out", str(out), *extra])
+    return cc.main()
+
+
+def test_predicate_only_fires_when_the_write_would_leave_nothing():
+    # The predicate is the whole guard, so pin all four quadrants directly. Losing
+    # SOME rules is ordinary work and must NOT fire — gating on any shrink would
+    # fail-red on a tenant retiring one recipe, and the guard would get removed.
+    # ⛔ Truthiness, not identity: `is False` would also fail for the equivalent
+    # `return committed and not produced`, which returns the empty dict. That is a
+    # refactor anyone may make and the annotation already promises a bool — pinning
+    # the `bool()` call pins the implementation, not the behaviour.
+    assert cc._erases_committed_rules({}, {"a": "1"})
+    assert not cc._erases_committed_rules({}, {})                 # nothing to protect
+    assert not cc._erases_committed_rules({"a": "1"}, {"a": "1"})
+    assert not cc._erases_committed_rules({"a": "1"}, {"a": "1", "b": "2"})  # partial loss
+
+    # The disclosure quantity is the same subtraction the message reports.
+    assert cc._rules_regenerating_would_drop({}, {"a": "1"}) == {"a"}
+    assert cc._rules_regenerating_would_drop({"a": "1"}, {"a": "1", "b": "2"}) == {"b"}
+    assert cc._rules_regenerating_would_drop({"a": "1", "b": "2"}, {"a": "1"}) == set()
+
+
+def test_write_refuses_to_erase_and_leaves_the_pack_byte_identical(tmp_path, monkeypatch):
+    src, out = tmp_path / "src", tmp_path / "pack.yaml"
+    _write_tree(src, _ONE_RECIPE_SOURCE)
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
+    before = out.read_bytes()
+    assert cc._committed_rules(out), "fixture precondition: the pack must have rules to protect"
+
+    _write_tree(src, _EMPTY_SOURCE)
+    (src / "a.yaml").write_text(_EMPTY_SOURCE["a.yaml"], encoding="utf-8")
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_VIOLATION
+    assert out.read_bytes() == before, "refusal must not touch the file at all"
+
+
+def test_allow_empty_is_the_way_through(tmp_path, monkeypatch, capsys):
+    src, out = tmp_path / "src", tmp_path / "pack.yaml"
+    _write_tree(src, _ONE_RECIPE_SOURCE)
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
+    capsys.readouterr()
+
+    (src / "a.yaml").write_text(_EMPTY_SOURCE["a.yaml"], encoding="utf-8")
+    assert _compile_into(src, out, monkeypatch, extra=("--allow-empty",)) == cc.EXIT_OK
+    assert cc._committed_rules(out) == {}
+
+
+def test_empty_source_writes_freely_when_there_is_nothing_to_protect(tmp_path, monkeypatch):
+    # Two shapes that must stay writable, or a first compile / an already-empty pack
+    # would need a flag nobody would know to pass.
+    src = tmp_path / "src"
+    _write_tree(src, _EMPTY_SOURCE)
+
+    absent = tmp_path / "absent.yaml"
+    assert _compile_into(src, absent, monkeypatch) == cc.EXIT_OK
+    assert absent.exists()
+
+    empty = tmp_path / "empty.yaml"
+    empty.write_text("groups: []\n", encoding="utf-8")
+    assert _compile_into(src, empty, monkeypatch) == cc.EXIT_OK
+
+
+def test_unreadable_committed_pack_does_not_block_the_repair(tmp_path, monkeypatch):
+    # A pack that cannot be parsed has no content to protect, and regenerating it IS
+    # the repair. Raising here would turn "your pack is corrupt" into "the compiler
+    # no longer runs" — taking away the only way out.
+    src, out = tmp_path / "src", tmp_path / "pack.yaml"
+    _write_tree(src, _ONE_RECIPE_SOURCE)
+    out.write_text("groups: [ this is not: valid: yaml\n", encoding="utf-8")
+    assert cc._committed_rules(out) == {}
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
+    assert cc._committed_rules(out), "the repair must leave a readable pack"
+
+
+def test_check_does_not_name_the_destructive_remedy_when_source_compiles_to_nothing(
+        tmp_path, monkeypatch, capsys):
+    src, out = tmp_path / "src", tmp_path / "pack.yaml"
+    _write_tree(src, _ONE_RECIPE_SOURCE)
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
+    capsys.readouterr()
+
+    (src / "a.yaml").write_text(_EMPTY_SOURCE["a.yaml"], encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["compile", "--check",
+                                      "--config-dir", str(src), "--out", str(out)])
+    assert cc.main() == cc.EXIT_VIOLATION
+    err = capsys.readouterr().err
+    assert "make custom-alerts-compile" not in err
+    assert cc.DO_NOT_REGENERATE in err
+    # ⛔ Assert the diagnostic the reader NEEDS, not the wording it happens to use.
+    # Pinning a phrase makes a rewrite — or the house rule that user-facing prose is
+    # Traditional Chinese — into a red build for no behavioural reason.
+    assert str(src) in err, "the message must say which tree the compiler read"
+    assert "--allow-empty" in err, "the legitimate way through must be reachable from here"
+
+
+def test_check_still_names_the_remedy_on_ordinary_drift(tmp_path, monkeypatch, capsys):
+    # Positive control for the test above: same gate, same red, and the ONLY thing
+    # that changed is whether the source still compiles to something. Without this,
+    # deleting the remedy line altogether would keep that test green.
+    src, out = tmp_path / "src", tmp_path / "pack.yaml"
+    _write_tree(src, _ONE_RECIPE_SOURCE)
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
+    capsys.readouterr()
+
+    out.write_text("groups: []\n", encoding="utf-8")  # stale pack, source unchanged
+    monkeypatch.setattr(sys, "argv", ["compile", "--check",
+                                      "--config-dir", str(src), "--out", str(out)])
+    assert cc.main() == cc.EXIT_VIOLATION
+    err = capsys.readouterr().err
+    assert "make custom-alerts-compile" in err
+    assert "--allow-empty" not in err
+    assert cc.DO_NOT_REGENERATE, "an empty constant would make the next line vacuous"
+    assert cc.DO_NOT_REGENERATE not in err
+
+
+# --- G. the three shapes the erase guard does NOT stop, and what is said instead ---
+def test_partial_loss_names_the_rules_regenerating_would_remove(tmp_path, monkeypatch, capsys):
+    # Measured on the live tree: three tenants, rename one file, and this is the
+    # branch you land in — rc=1 with "just regenerate", and following it drops that
+    # tenant's alerts from the pack, the ConfigMaps and the CRD, every gate green.
+    # The write is still allowed (retiring one recipe is ordinary work); what must
+    # not happen is being told to regenerate without being told what that removes.
+    src, out = tmp_path / "src", tmp_path / "pack.yaml"
+    _write_tree(src, {
+        "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
+                  '      - {recipe: threshold, name: a_hot, metric: a_m, op: ">",'
+                  ' window: 5m, threshold: "80:warning"}\n',
+        "b.yaml": 'tenants:\n  tb:\n    _custom_alerts:\n'
+                  '      - {recipe: threshold, name: b_hot, metric: b_m, op: ">",'
+                  ' window: 5m, threshold: "80:warning"}\n',
+    })
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
+    capsys.readouterr()
+
+    (src / "b.yaml").rename(src / "b.yml")   # byte-identical, just invisible now
+    monkeypatch.setattr(sys, "argv", ["compile", "--check",
+                                      "--config-dir", str(src), "--out", str(out)])
+    assert cc.main() == cc.EXIT_VIOLATION
+    err = capsys.readouterr().err
+    assert "make custom-alerts-compile" in err       # still the right remedy here
+    # …but not without the casualties. Rule identities are recipe_id slugs, so the
+    # metric is what appears in them — NOT the tenant's `name:` for the recipe.
+    assert "−" in err and "b_m" in err
+    assert "net loss of coverage" in err, "nothing replaced the dropped rules; say so"
+
+    # Positive control: drift with NOTHING dropped must not grow a casualty list.
+    capsys.readouterr()
+    (src / "b.yml").rename(src / "b.yaml")
+    (src / "c.yaml").write_text(
+        'tenants:\n  tc:\n    _custom_alerts:\n'
+        '      - {recipe: threshold, name: c_hot, metric: c_m, op: ">",'
+        ' window: 5m, threshold: "80:warning"}\n', encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["compile", "--check",
+                                      "--config-dir", str(src), "--out", str(out)])
+    assert cc.main() == cc.EXIT_VIOLATION
+    err = capsys.readouterr().err
+    assert "net loss of coverage" not in err
+    assert "−custom-alerts" not in err
+
+
+def test_an_empty_compile_never_reports_success_with_a_tick(tmp_path, monkeypatch, capsys):
+    # The guard cannot fire when there is no pack to compare against, so a greenfield
+    # tree whose declarations the loader cannot see compiles to nothing on day one and
+    # every downstream gate agrees. `✅ Compiled 0 shape(s)` + rc=0 is the exact
+    # signature of the incident this whole change exists for.
+    src, out = tmp_path / "src", tmp_path / "absent.yaml"
+    _write_tree(src, _EMPTY_SOURCE)
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
+    cap = capsys.readouterr()
+    assert "✅" not in cap.out
+    assert "0 shape(s)" in cap.out and str(src) in cap.err
+
+    # Positive control: a compile that DID produce rules still gets its tick.
+    _write_tree(src, _ONE_RECIPE_SOURCE)
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
+    assert "✅" in capsys.readouterr().out
+
+
+def test_quarantine_is_diagnosed_as_itself_and_the_flag_is_refused(tmp_path, monkeypatch, capsys):
+    # #1008 fail-soft drops an invalid recipe and compiles the rest, so one mistyped
+    # `window:` in the only tenant that declares anything empties `produced` while the
+    # source still declares it. Answering that with "--allow-empty" would delete every
+    # committed rule to work around a one-character typo.
+    src, out = tmp_path / "src", tmp_path / "pack.yaml"
+    _write_tree(src, _ONE_RECIPE_SOURCE)
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
+    before = out.read_bytes()
+    capsys.readouterr()
+
+    (src / "a.yaml").write_text(
+        _ONE_RECIPE_SOURCE["a.yaml"].replace("window: 5m", "window: 5x"), encoding="utf-8")
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_VIOLATION
+    err = capsys.readouterr().err
+    assert "QUARANTINED" in err
+    assert "renamed" not in err, "a quarantine must not send the reader hunting for a rename"
+    # ⛔ The first version of this fix told the reader NOT to use --allow-empty and
+    # then printed a runnable command containing it three lines down — the defect
+    # this whole change is about, reproduced inside the fix for it. Assert the
+    # command is absent, not merely that a warning is present.
+    assert "compile_custom_alerts.py" not in err
+    # …and the same must hold for the --check side, which shares the offer helper.
+    monkeypatch.setattr(sys, "argv", ["compile", "--check",
+                                      "--config-dir", str(src), "--out", str(out)])
+    assert cc.main() == cc.EXIT_VIOLATION
+    check_err = capsys.readouterr().err
+    assert "QUARANTINED" in check_err
+    assert "compile_custom_alerts.py" not in check_err
+
+    # …and the flag itself is refused in this state, not merely discouraged.
+    assert _compile_into(src, out, monkeypatch, extra=("--allow-empty",)) == cc.EXIT_VIOLATION
+    assert out.read_bytes() == before
+
+    # Positive control: with the typo fixed, the same flag writes as before.
+    capsys.readouterr()
+    _write_tree(src, _EMPTY_SOURCE)
+    (src / "a.yaml").write_text(_EMPTY_SOURCE["a.yaml"], encoding="utf-8")
+    assert _compile_into(src, out, monkeypatch, extra=("--allow-empty",)) == cc.EXIT_OK
+
+
+def test_refusal_prints_a_command_the_reader_can_actually_run(tmp_path, monkeypatch, capsys):
+    # The documented entry point is `make custom-alerts-compile`, whose recipe takes
+    # no arguments — so naming a bare flag leaves the reader to reconstruct the whole
+    # invocation, or to hard-wire the flag into the Makefile and disarm the guard.
+    src, out = tmp_path / "src", tmp_path / "pack.yaml"
+    _write_tree(src, _ONE_RECIPE_SOURCE)
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
+    capsys.readouterr()
+
+    (src / "a.yaml").write_text(_EMPTY_SOURCE["a.yaml"], encoding="utf-8")
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_VIOLATION
+    err = capsys.readouterr().err
+    assert str(src) in err and str(out) in err
+    assert "--allow-empty" in err
+
+
+def test_a_missing_config_dir_is_a_caller_error_not_a_success(tmp_path, monkeypatch, capsys):
+    # Pre-existing branch, unpinned until now: `main()` grew a second non-zero exit
+    # in this change and only that one was asserted, which reads as if the exit-code
+    # contract were covered. Measured: returning EXIT_OK here survived the suite.
+    monkeypatch.setattr(sys, "argv", ["compile", "--config-dir", str(tmp_path / "nope"),
+                                      "--out", str(tmp_path / "pack.yaml")])
+    assert cc.main() == cc.EXIT_CALLER_ERROR
+    assert "config dir not found" in capsys.readouterr().err
+    assert not (tmp_path / "pack.yaml").exists()
+
+
+# --- H. the message must stay true when two causes are true at once ------------
+_TWO_TENANTS = {
+    "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
+              '      - {recipe: threshold, name: a_hot, metric: a_m, op: ">",'
+              ' window: 5m, threshold: "80:warning"}\n',
+    "b.yaml": 'tenants:\n  tb:\n    _custom_alerts:\n'
+              '      - {recipe: threshold, name: b_hot, metric: b_m, op: ">",'
+              ' window: 5m, threshold: "80:warning"}\n',
+}
+
+
+def test_quarantine_never_swallows_which_tree_was_read(tmp_path, monkeypatch, capsys):
+    # A rename and a typo can both be true. The first version of the quarantine note
+    # early-returned and took "The compiler read: <dir>" with it — a line the version
+    # BEFORE it printed unconditionally, so that fix was a net loss of disclosure.
+    src, out = tmp_path / "src", tmp_path / "pack.yaml"
+    _write_tree(src, _TWO_TENANTS)
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
+    capsys.readouterr()
+
+    (src / "a.yaml").rename(src / "a.yml")                        # invisible
+    (src / "b.yaml").write_text(                                   # …and quarantined
+        _TWO_TENANTS["b.yaml"].replace("window: 5m", "window: 5x"), encoding="utf-8")
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_VIOLATION
+    err = capsys.readouterr().err
+    assert "QUARANTINED" in err
+    assert str(src) in err, "which tree was read must survive the quarantine branch"
+
+
+def test_an_empty_compile_blames_quarantine_when_that_is_what_happened(
+        tmp_path, monkeypatch, capsys):
+    # No pack on disk means the erase guard has no baseline, so this warning is the
+    # only thing said at all — and "the compiler did not see their declarations" is
+    # false when the compiler saw them and threw them out itself.
+    src, out = tmp_path / "src", tmp_path / "greenfield.yaml"
+    _write_tree(src, {
+        "a.yaml": _ONE_RECIPE_SOURCE["a.yaml"].replace("window: 5m", "window: 5x")})
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
+    assert "were QUARANTINED above" in capsys.readouterr().err
+
+    # Positive control: a genuinely empty source gets the discovery checklist instead.
+    _write_tree(src, _EMPTY_SOURCE)
+    (src / "a.yaml").write_text(_EMPTY_SOURCE["a.yaml"], encoding="utf-8")
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
+    err2 = capsys.readouterr().err
+    assert "were QUARANTINED above" not in err2
+    assert "Check, in this order" in err2
+
+
+def test_the_write_that_drops_rules_says_so_too(tmp_path, monkeypatch, capsys):
+    # The casualty note used to live only on --check, i.e. on the branch that changes
+    # nothing, while the write that actually removed the rules printed a tick.
+    src, out = tmp_path / "src", tmp_path / "pack.yaml"
+    _write_tree(src, _TWO_TENANTS)
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
+    capsys.readouterr()
+
+    (src / "b.yaml").rename(src / "b.yml")
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK    # still allowed
+    cap = capsys.readouterr()
+    assert "✅" in cap.out                                        # …it did compile something
+    assert "net loss of coverage" in cap.err and "b_m" in cap.err
+
+    # Positive control: a compile that drops nothing stays quiet.
+    capsys.readouterr()
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
+    assert "net loss of coverage" not in capsys.readouterr().err
+
+
+def test_the_printed_command_survives_a_path_with_a_space(tmp_path, monkeypatch, capsys):
+    # Measured on an unquoted version: argparse answered `unrecognized arguments:
+    # conf.d` (rc=2) for a --config-dir under "…/my conf.d". `C:/Users/First Last/…`
+    # and `OneDrive - Company/…` are ordinary on the hosts this runs on.
+    src, out = tmp_path / "my src", tmp_path / "my pack.yaml"
+    _write_tree(src, _ONE_RECIPE_SOURCE)
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
+    capsys.readouterr()
+
+    (src / "a.yaml").write_text(_EMPTY_SOURCE["a.yaml"], encoding="utf-8")
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_VIOLATION
+    offer = [ln for ln in capsys.readouterr().err.splitlines()
+             if "--allow-empty" in ln and "Do NOT" not in ln]
+    assert len(offer) == 1, "exactly one paste-able command"
+    # ⛔ posix=True, and no `.strip('"')`. This is the parser a pasted line meets,
+    # and stripping quotes by hand hides the failure it exists to catch: the earlier
+    # whitespace-only quoting produced a line this same call REFUSES to tokenize.
+    argv = shlex.split(offer[0].strip(), posix=True)
+    assert argv[argv.index("--config-dir") + 1] == str(src)
+    assert argv[argv.index("--out") + 1] == str(out)
+    # ⛔ …and it must invoke THIS interpreter, not the word "python": on a stock
+    # Windows host that resolves to the Microsoft Store stub (exit 49, no output),
+    # and every caller in this repo spells it "python3".
+    assert argv[0] == sys.executable
+    assert argv[1] == str(Path(cc.__file__).resolve())
+
+
+@pytest.mark.parametrize("value", ["plain", "a b", 'a"b', "a'b", "a$b"])
+def test_quoting_round_trips_through_the_parser_a_pasted_line_meets(value):
+    # Measured, not asserted by eye: the whitespace-only rule this replaced round-
+    # tripped three of these five and raised ValueError on the two carrying a quote
+    # character — it emitted a command line that does not parse. (CodeRabbit, #1591.)
+    #
+    # ⚠️ `shlex.split` tokenizes but does not EXPAND, so this cannot demonstrate the
+    # `a$b` case, where a double-quoted value would also be substituted by sh. That
+    # half stays a prediction; driving a real shell from the dev host produced two
+    # broken harnesses in a row (a must-fire control came back rc=127).
+    assert shlex.split(cc._shell_quote(value), posix=True) == [value]
+
+
+# --- I. one mechanical sweep over the whole message space ----------------------
+# ⛔ WHY A SWEEP AND NOT ANOTHER CASE. Every defect this guard shipped was the same
+# species: ONE branch's message either contradicted itself (forbidding a flag and
+# then printing a command containing it) or blamed the wrong cause. Three review
+# rounds each caught one instance and each fix created the next, because a per-case
+# assertion only ever looks at the branch someone thought of. These invariants hold
+# for every branch by construction, so a new branch cannot quietly opt out.
+_TYPO_SOURCE = {"a.yaml": _ONE_RECIPE_SOURCE["a.yaml"].replace("window: 5m", "window: 5x")}
+
+# ⛔ THE SEED SOURCE IS A COLUMN BECAUSE IT HAD TO BE. With the seed hard-wired
+# to `_ONE_RECIPE_SOURCE`, the row labelled `partial-loss-check` was byte-for-byte
+# identical to `quarantined-vs-pack-check` in every field but its name: it seeded
+# one rule and then presented a source that compiles to zero, which is total loss.
+# The sweep advertised eight states and exercised seven, and the missing one was
+# the state the label named. (CodeRabbit, #1591.) Partial loss needs a seed with
+# TWO tenants and a follow-up that presents only one of them.
+_STATES = [
+    # (label, seed source, source files, seed the pack first?, extra flags, --check?)
+    ("empty-source-vs-pack", _ONE_RECIPE_SOURCE, _EMPTY_SOURCE, True, (), False),
+    ("empty-source-vs-pack-check", _ONE_RECIPE_SOURCE, _EMPTY_SOURCE, True, (), True),
+    ("quarantined-vs-pack", _ONE_RECIPE_SOURCE, None, True, (), False),
+    ("quarantined-vs-pack-check", _ONE_RECIPE_SOURCE, None, True, (), True),
+    ("quarantined-plus-allow-empty", _ONE_RECIPE_SOURCE, None, True, ("--allow-empty",), False),
+    ("greenfield-empty", _ONE_RECIPE_SOURCE, _EMPTY_SOURCE, False, (), False),
+    ("greenfield-quarantined", _ONE_RECIPE_SOURCE, None, False, (), False),
+    ("partial-loss-check", _TWO_TENANTS, {"a.yaml": _TWO_TENANTS["a.yaml"]}, True, (), True),
+    ("partial-loss-write", _TWO_TENANTS, {"a.yaml": _TWO_TENANTS["a.yaml"]}, True, (), False),
+]
+
+
+def test_the_sweep_states_are_all_distinct():
+    # The sweep's value is the number of DIFFERENT states it drives main() through.
+    # Two rows that differ only in their label make the count a claim rather than a
+    # measurement — which is what happened, and the duplicate row was the one whose
+    # name promised the state nobody was testing.
+    keys = [(id(seed), id(files), pre, extra, chk) for _, seed, files, pre, extra, chk in _STATES]
+    dupes = {k for k in keys if keys.count(k) > 1}
+    assert not dupes, f"{len(dupes)} sweep state(s) appear twice under different labels"
+    assert len(keys) == len(_STATES)
+
+
+@pytest.mark.parametrize("label,seed_files,files,seed,extra,check", _STATES)
+def test_no_message_forbids_and_offers_the_same_thing(
+        label, seed_files, files, seed, extra, check, tmp_path, monkeypatch, capsys):
+    src, out = tmp_path / "src", tmp_path / "pack.yaml"
+    if seed:
+        _write_tree(src, seed_files)
+        assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
+        capsys.readouterr()
+    present = files or _TYPO_SOURCE
+    # ⛔ Remove what the seed left behind. `_write_tree` only overwrites the files it
+    # is handed, so without this the seed's `b.yaml` stays visible and the row that
+    # exists to drop a tenant drops nothing. (CodeRabbit, #1591.)
+    for stale in list(src.glob("*.yaml")) + list(src.glob("*.yml")):
+        if stale.name not in present:
+            stale.unlink()
+    _write_tree(src, present)
+
+    argv = ["compile", "--config-dir", str(src), "--out", str(out), *extra]
+    if check:
+        argv.insert(1, "--check")
+    monkeypatch.setattr(sys, "argv", argv)
+    cc.main()
+    cap = capsys.readouterr()
+    _assert_message_invariants(cap.out + cap.err, str(src), label)
+
+
+def _assert_message_invariants(text: str, tree: str, label: str) -> None:
+    """The invariants themselves, so the sweep and its control run the SAME code.
+
+    ⛔ A sweep that only ever sees healthy input proves nothing — it is satisfied
+    just as well by looking at less. `test_the_sweep_would_notice` feeds this the
+    exact shapes the three review rounds actually shipped.
+    """
+    offers_command = Path(cc.__file__).name in text
+    # 1. A prohibition and the thing it prohibits never appear together.
+    if cc.DO_NOT_ALLOW_EMPTY in text:
+        assert not offers_command, f"{label}: forbids --allow-empty and then hands it over"
+    if cc.DO_NOT_REGENERATE in text:
+        assert "make custom-alerts-compile" not in text, f"{label}: forbids and prescribes"
+    # 2. Whenever the tool explains an empty compile, it says whose tree it read.
+    if "Check, in this order" in text or "were QUARANTINED above" in text:
+        assert tree in text, f"{label}: explained the emptiness without naming the tree"
+    # 3. It never blames invisibility for recipes it quarantined itself.
+    if "QUARANTINED (fail-soft" in text:
+        assert "Check, in this order" not in text, f"{label}: quarantine blamed on discovery"
+
+
+def test_the_sweep_would_notice():
+    # Positive control: each of these is a shape that was really shipped and really
+    # reviewed out. If the sweep stops failing on them it has stopped looking.
+    assert cc.DO_NOT_ALLOW_EMPTY and cc.DO_NOT_REGENERATE, "empty constants make it vacuous"
+    tool = Path(cc.__file__).name
+    for label, text in [
+        ("forbids-then-offers",
+         cc.DO_NOT_ALLOW_EMPTY + "\n     " + tool + " --config-dir /t --allow-empty"),
+        ("forbids-then-prescribes",
+         cc.DO_NOT_REGENERATE + "\n   Run `make custom-alerts-compile` to regenerate."),
+        ("explains-without-naming-the-tree",
+         "   Check, in this order:\n     1. a declaration the compiler stopped seeing"),
+        ("quarantine-blamed-on-discovery",
+         "  QUARANTINED (fail-soft, #1008)\n   Check, in this order:\n/t"),
+    ]:
+        with pytest.raises(AssertionError):
+            _assert_message_invariants(text, "/t", label)
+    # …and it must pass on a healthy message, or it would "catch" everything.
+    _assert_message_invariants("   The compiler read: /t\n   Check, in this order:\n", "/t", "ok")
