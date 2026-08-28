@@ -586,8 +586,19 @@ def test_the_suite_does_not_write_to_the_repo(hostile_dirs, tmp_path):
     which cwd does NOT contain — hence ``REPO_ANCHORED_OUTPUT``.
     """
     def status() -> list[str]:
+        # A ceiling, not a budget: `git status` here answers in well under a
+        # second, and the number matches `_run`'s so this file states one
+        # timeout policy rather than two. It exists because a stuck index.lock
+        # or a wedged FUSE mount is a real failure mode on this repo's dev
+        # hosts, and without it that hangs the suite instead of failing it.
+        #
+        # ⚠️ A timeout here deliberately does NOT become `Unmeasurable`: that
+        # word is for a TOOL UNDER TEST producing no observation, and this call
+        # is the measuring apparatus reading the repo's own state. The comment
+        # at the top of this file records what happened the last time
+        # `Unmeasurable` was stretched — it hid a real hole.
         r = subprocess.run(["git", "status", "--porcelain"], cwd=str(REPO_ROOT),
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, timeout=120)
         assert r.returncode == 0, r.stderr
         return sorted(l for l in r.stdout.splitlines() if l.strip())
 
