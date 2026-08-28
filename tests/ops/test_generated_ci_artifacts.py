@@ -3738,9 +3738,12 @@ def test_portal_preview_actually_varies_with_the_deploy_choice(tmp_path) -> None
         f"{collisions} — the wizard stopped reading `config.deploy`, so every "
         "preview test above is now running the same case N times while "
         "reporting N-way coverage. Check "
-        "tools/portal/src/interactive/tools/cicd-setup-wizard/utils/"
-        "generators.js (cicdGenerateGitHubActionsPreview) and rebuild "
-        "docs/assets/dist/."
+        # ⛔ The path stays in ONE literal. Split across the implicit-concatenation
+        # boundary it was invisible to `git grep <the whole path>` (#1394), so a
+        # rename sweep found the other, contiguous mention in this same file and
+        # left this one pointing at a file that no longer existed. #1373 verbatim.
+        "tools/portal/src/interactive/tools/cicd-setup-wizard/utils/generators.js"
+        " (cicdGenerateGitHubActionsPreview) and rebuild docs/assets/dist/."
     )
 
 

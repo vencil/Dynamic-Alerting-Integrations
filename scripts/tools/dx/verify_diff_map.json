@@ -759,7 +759,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "31586025e942fba0bdc6b84e413be6f7937e00a84b62ac6e1b7f45444600953c",
+ "source_digest": "4c99c17af72336740de6d0ccd2d5a030709e7746c1a3a88f48b52e9be32c1d05",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -3004,9 +3004,6 @@
    "tests/lint/test_counterexample_coverage.py"
   ],
   "tools/portal/src/interactive/tools/cicd-setup-wizard.jsx": [
-   "tests/ops/test_generated_ci_artifacts.py"
-  ],
-  "tools/portal/src/interactive/tools/cicd-setup-wizard/utils": [
    "tests/ops/test_generated_ci_artifacts.py"
   ],
   "tools/portal/src/interactive/tools/cicd-setup-wizard/utils/generators.js": [
