@@ -60,11 +60,13 @@ updated_at: 2026-08-22
 
 ### ❌ 假設 2：「replica-thread critical 沒有 opt-out 是漏掉的」→ 撤回
 
-該告警上方有 12 行註解明寫這是刻意的：
+該告警（`MariaDBReplicaIOThreadDown`，`rule-pack-mariadb.yaml:349`）上方有一整塊 **45 行**的 YAML 註解（`:304-348`）在交代設計取捨，其中直接處理 opt-out 的是 `:336-342` 這 7 行，明寫這是刻意的：
 
 > `NO maintenance opt-out (matches ClusterDown/NoPrimary/ReplicasGone): a stopped replication thread = ... async durability erosion ... Planned STOP SLAVE → Alertmanager Silence API (same guidance as MariaDBClusterDown); a tenant's silent-critical sentinel still suppresses notification.`
 
 ⚠️ 注意最後那半句——它在草稿階段被引用了卻沒被讀懂，而它正是打穿下一個假設的關鍵。
+
+⚠️ **2026-08-28 更正**：本句初版寫「12 行」。實測連續註解區塊為 `:304-348` 共 45 行（從告警行往上取連續 `#` 行；空行 `:303` 不計入）。更正方向對本節論證有利——註解比初版所稱的更長，「這是刻意的」這個結論只被加強。改成帶行號區間是為了讓後人能重新推導，而不是再信一個裸數字。
 
 ### ❌ 假設 3：「即時靜音這條路沒有 client，所以要補一個」→ **不成立**
 
