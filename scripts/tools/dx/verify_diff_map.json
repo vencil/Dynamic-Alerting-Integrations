@@ -761,7 +761,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "a9842b1c9078177d30b624d551fd0a96d3b770a6fe13817dbc377a8f5727c346",
+ "source_digest": "fb6561c5aee36152a6500f53dec84050a1f806855f2cfa27378ae2d2b9e2dc7c",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1048,6 +1048,7 @@
   "tests/shared/test_actionlint_pin_parity.py",
   "tests/shared/test_bilingual_help_contract.py",
   "tests/shared/test_ci_flag_contract.py",
+  "tests/shared/test_confd_case_parity_across_tools.py",
   "tests/shared/test_confd_enumeration_contract.py",
   "tests/shared/test_confd_name_classification_parity.py",
   "tests/shared/test_console_encoding_resilience.py",
@@ -2155,6 +2156,7 @@
    "tests/ops/test_printed_paths_are_reachable.py",
    "tests/ops/test_property_based.py",
    "tests/shared/test_bilingual_help_contract.py",
+   "tests/shared/test_confd_case_parity_across_tools.py",
    "tests/shared/test_dispatch_contract.py",
    "tests/shared/test_entrypoint.py",
    "tests/shared/test_json_stdout_contract.py",
