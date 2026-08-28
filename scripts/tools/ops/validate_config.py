@@ -64,6 +64,7 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, str(_THIS_DIR))  # Docker flat layout
 sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
 from _lib_python import detect_cli_lang  # noqa: E402
+from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_confd import (  # noqa: E402
     iter_config_files,
@@ -985,9 +986,13 @@ def print_report(results: list[dict[str, object]], as_json: bool = False) -> Non
         icon = status_icon[r["status"]]
         print(f"\n[{icon}] {r['check']}")
         for detail in r.get("details", []):
-            print(f"       {detail}")
+            # #1538: `details` carries tenant-controlled filenames and the
+            # exception text derived from them. Escaped HERE, not in the result
+            # dict, because the --json branch above returns before this loop and
+            # its bytes must not change (json.dumps already escapes).
+            print(f"       {safe_label(detail)}")
         if caveat and _caveat_applies(r):
-            print(f"       {caveat}")
+            print(f"       {safe_label(caveat)}")
 
         # v2.5.0 Phase C: Show suggested action for non-passing checks
         if r["status"] != PASS:

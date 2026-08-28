@@ -40,6 +40,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import detect_cli_lang, http_get_json, query_prometheus_instant, add_prometheus_arg  # noqa: E402
 from _lib_python import format_json_report  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_confd import (  # noqa: E402
     iter_config_files,
     unusable_config_paths,
@@ -225,7 +226,12 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
             skipped.append(label)
         if (label, reason) not in _said:
             _said.add((label, reason))
-            print(f"  WARN: skip {label}: {reason}", file=sys.stderr)
+            # #1538: `label` is a tenant-controlled FILENAME and `reason` is the
+            # exception text derived from it. Escaped at the print, not in
+            # `skipped` above — that list is emitted under --json, whose bytes
+            # must not change (json.dumps already escapes control chars).
+            print(f"  WARN: skip {safe_label(label)}: {safe_label(reason)}",
+                  file=sys.stderr)
 
     # #1469: same selection predicate as `validate-config` and the routing
     # parser — `_lib_confd`, not a fourth hand-rolled copy. The paired

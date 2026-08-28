@@ -24,6 +24,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
 from _lib_python import detect_cli_lang, load_yaml_file  # noqa: E402
+from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_confd import warn_nested  # noqa: E402
 
@@ -155,7 +156,8 @@ def main() -> None:
     args = parser.parse_args()
 
     if not os.path.isdir(args.config_dir):
-        print(f"ERROR: config-dir not found: {args.config_dir}", file=sys.stderr)
+        print(f"ERROR: config-dir not found: {safe_label(args.config_dir)}",
+              file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
     data = _collect_data(args.config_dir)
@@ -170,7 +172,7 @@ def main() -> None:
         sys.exit(EXIT_OK)
 
     for msg in messages:
-        print(msg, file=sys.stderr)
+        print(safe_label(msg), file=sys.stderr)
 
     has_errors = any(m.startswith("ERROR") for m in messages)
     has_warns = any(m.startswith("WARN") for m in messages)

@@ -36,6 +36,7 @@ except ImportError:
 from _lib_python import detect_cli_lang, format_json_report, i18n_text  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import load_yaml_file  # noqa: E402
+from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_yaml import _dict_to_yaml, write_yaml_crd  # noqa: E402
 from _lib_confd import warn_nested  # noqa: E402
 
@@ -515,8 +516,9 @@ def discover_tenant_configs(config_dir: Path) -> List[str]:
             else:
                 print(
                     i18n_text(
-                        f"WARNING: 略過無效的租戶名稱 '{tenant}'（不符合 RFC 1123）",
-                        f"WARNING: Skipping invalid tenant name '{tenant}' (not RFC 1123 compliant)",
+                        f"WARNING: 略過無效的租戶名稱 '{safe_label(tenant)}'（不符合 RFC 1123）",
+                        f"WARNING: Skipping invalid tenant name '{safe_label(tenant)}' "
+                        f"(not RFC 1123 compliant)",
                     ),
                     file=sys.stderr,
                 )
@@ -579,13 +581,15 @@ def generate_crds(
                 except Exception as exc:
                     print(
                         i18n_text(
-                            f"WARNING: 載入 {rule_pack_file.name} 失敗: {exc}",
-                            f"WARNING: Failed to load {rule_pack_file.name}: {exc}",
+                            f"WARNING: 載入 {safe_label(rule_pack_file.name)} 失敗: "
+                            f"{safe_label(exc)}",
+                            f"WARNING: Failed to load {safe_label(rule_pack_file.name)}: "
+                            f"{safe_label(exc)}",
                         ),
                         file=sys.stderr,
                     )
         except FileNotFoundError as exc:
-            print(f"WARNING: {exc}", file=sys.stderr)
+            print(f"WARNING: {safe_label(exc)}", file=sys.stderr)
 
     # AlertmanagerConfig CRDs
     if components in ("all", "alertmanager"):
@@ -602,7 +606,7 @@ def generate_crds(
                     "crd": crd,
                 })
         except FileNotFoundError as exc:
-            print(f"WARNING: {exc}", file=sys.stderr)
+            print(f"WARNING: {safe_label(exc)}", file=sys.stderr)
 
     # ServiceMonitor CRD
     if components in ("all", "servicemonitor"):
@@ -811,7 +815,7 @@ def write_crds(
         name = crd["metadata"]["name"]
         output_path = output_dir / f"{name}.yaml"
         write_yaml_crd(output_path, crd, gitops=gitops)
-        print(f"Generated: {output_path}", file=sys.stderr)
+        print(f"Generated: {safe_label(output_path)}", file=sys.stderr)
         crd_files.append(f"{name}.yaml")
 
     for item in result["alertmanager_configs"]:
@@ -819,7 +823,7 @@ def write_crds(
         name = crd["metadata"]["name"]
         output_path = output_dir / f"{name}.yaml"
         write_yaml_crd(output_path, crd, gitops=gitops)
-        print(f"Generated: {output_path}", file=sys.stderr)
+        print(f"Generated: {safe_label(output_path)}", file=sys.stderr)
         crd_files.append(f"{name}.yaml")
 
     if result["service_monitor"]:
@@ -827,7 +831,7 @@ def write_crds(
         name = crd["metadata"]["name"]
         output_path = output_dir / f"{name}.yaml"
         write_yaml_crd(output_path, crd, gitops=gitops)
-        print(f"Generated: {output_path}", file=sys.stderr)
+        print(f"Generated: {safe_label(output_path)}", file=sys.stderr)
         crd_files.append(f"{name}.yaml")
 
     # Write kustomization.yaml if requested
@@ -836,7 +840,7 @@ def write_crds(
         kustomize_dict = build_kustomization(crd_files, namespace)
         kustomize_path = output_dir / "kustomization.yaml"
         write_yaml_crd(kustomize_path, kustomize_dict, gitops=gitops)
-        print(f"Generated: {kustomize_path}", file=sys.stderr)
+        print(f"Generated: {safe_label(kustomize_path)}", file=sys.stderr)
         json_kustomization = kustomize_dict
 
     json_crds: list = []
@@ -943,7 +947,7 @@ def main():
             secret_key=args.secret_key,
         )
     except Exception as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
+        print(f"ERROR: {safe_label(exc)}", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
     # Emit CRDs. dry-run prints YAML to stdout; the write path writes files and

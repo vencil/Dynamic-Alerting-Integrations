@@ -761,7 +761,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "557c8f3d3574041d26b11a017ad5605cb57f1c9d89e25281651c10c02b4cdd82",
+ "source_digest": "1b5a2c54c628c7c1b009c0bc8021982faa1080df6d8668fd6060a0350466b677",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1069,6 +1069,7 @@
   "tests/shared/test_mutation_catalog.py",
   "tests/shared/test_mutation_guards.py",
   "tests/shared/test_nginx_proxy.py",
+  "tests/shared/test_output_label_escaping.py",
   "tests/shared/test_pipeline_integration.py",
   "tests/shared/test_probe_health.py",
   "tests/shared/test_projection_gate_exposer.py",
@@ -2006,7 +2007,8 @@
    "tests/lint/test_check_threshold_reachability.py"
   ],
   "rule-packs/rule-pack-custom-alerts.yaml": [
-   "tests/ops/test_lint_custom_rules.py"
+   "tests/ops/test_lint_custom_rules.py",
+   "tests/shared/test_output_label_escaping.py"
   ],
   "rule-packs/rule-pack-db2.yaml": [
    "tests/rulepacks/test_reference_validation_sync.py"
@@ -2157,6 +2159,7 @@
    "tests/shared/test_entrypoint.py",
    "tests/shared/test_json_stdout_contract.py",
    "tests/shared/test_lib_toolcount.py",
+   "tests/shared/test_output_label_escaping.py",
    "tests/shared/test_prometheus_url_fallback_guard.py",
    "tests/shared/test_property_tools.py",
    "tests/shared/test_sast.py",
@@ -2180,7 +2183,8 @@
   ],
   "scripts/tools/_lib_io.py": [
    "tests/dx/test_verify_diff.py",
-   "tests/ops/test_ci_baseline_substitution.py"
+   "tests/ops/test_ci_baseline_substitution.py",
+   "tests/shared/test_output_label_escaping.py"
   ],
   "scripts/tools/_lib_python.py": [
    "tests/lint/test_check_structure.py"
@@ -2777,6 +2781,9 @@
   ],
   "tests/lint/test_check_image_pin_capability.py": [
    "tests/dx/test_paired_trend_watch.py"
+  ],
+  "tests/lint/test_check_orphan_lint.py": [
+   "tests/shared/test_output_label_escaping.py"
   ],
   "tests/lint/test_check_scrape_reachability.py": [
    "tests/helm/test_optional_overrides_render.py"

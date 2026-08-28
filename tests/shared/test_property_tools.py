@@ -865,6 +865,100 @@ class TestIterYamlFilesProperties:
         assert names == {"tenant.yaml"}
 
 
+# The exact class safe_label promises to neutralise: C0, DEL and C1. Spelled out
+# here from codepoints rather than reusing the module's own regex, so the test
+# cannot agree with a broken implementation by sharing its bug.
+_C0_DEL_C1 = (frozenset(chr(c) for c in range(0x00, 0x20))
+              | frozenset(chr(c) for c in range(0x7f, 0xa0)))
+
+
+class TestSafeLabelProperties:
+    """`safe_label` — #1538's output-layer escape for untrusted names.
+
+    The function's whole job is a safety INVARIANT ("no control character
+    survives"), which is what a property test is for: an example test can only
+    show that the handful of payloads someone thought of are defused.
+    """
+
+    @given(st.text(max_size=120))
+    @PILOT_SETTINGS
+    def test_output_never_contains_a_control_character(self, s):
+        # THE safety property. A newline would forge a report line and an ESC
+        # would start an ANSI sequence; neither may survive for ANY input.
+        out = lio.safe_label(s)
+        assert not any(c in out for c in _C0_DEL_C1), (
+            f"control char survived: {out!r}"
+        )
+
+    @given(st.text(max_size=120))
+    @PILOT_SETTINGS
+    def test_length_is_preserved(self, s):
+        # Substitution, not deletion — one `?` per control char. Deleting them
+        # would hide from the operator that the name was odd at all, and would
+        # also let two different names render identically.
+        assert len(lio.safe_label(s)) == len(s)
+
+    @given(st.text(alphabet=st.characters(blacklist_categories=("Cc",)), max_size=120))
+    @PILOT_SETTINGS
+    def test_control_free_text_is_returned_unchanged(self, s):
+        # No collateral damage: a normal filename must survive byte-for-byte,
+        # so escaping cannot silently corrupt ordinary reports.
+        assume("\x7f" not in s)
+        assert lio.safe_label(s) == s
+
+    @given(st.text(max_size=120))
+    @PILOT_SETTINGS
+    def test_idempotent(self, s):
+        # Escaping twice equals escaping once. Load-bearing because a value can
+        # pass through both a shared chokepoint (e.g. _grar_parse's warning
+        # print) and a caller's own field escaping.
+        once = lio.safe_label(s)
+        assert lio.safe_label(once) == once
+
+    @given(st.text(max_size=60), st.text(max_size=60))
+    @PILOT_SETTINGS
+    def test_distributes_over_concatenation(self, a, b):
+        # Per-character substitution, so escaping a joined string equals
+        # joining the escaped parts. This is why escaping a whole preformatted
+        # line and escaping each field give the same result for the C0 class.
+        assert lio.safe_label(a + b) == lio.safe_label(a) + lio.safe_label(b)
+
+    def test_the_two_payloads_from_the_issue(self):
+        # The concrete #1538 reproductions, kept as examples alongside the
+        # properties: a forged verdict line, and a colour escape.
+        assert lio.safe_label("evil\n[PASS] FORGED\nx.yaml") == \
+            "evil?[PASS] FORGED?x.yaml"
+        assert lio.safe_label("\x1b[31mred\x1b[0m.yaml") == "?[31mred?[0m.yaml"
+
+    def test_c1_is_covered_because_nel_forges_a_line(self):
+        # #1538 review round: U+0085 (NEL) is decoded as a LINE BREAK by
+        # terminals that honour C1, so leaving it raw forges a report line the
+        # same way a bare "\n" does — the exact thing this function exists to
+        # stop. An adversarial review measured it passing through ten already-
+        # fixed tools, which is why the class widened from [C0+DEL] to
+        # [C0+DEL+C1].
+        # ⚠️ What was measured is BYTE passthrough, not terminal rendering.
+        assert lio.safe_label("a\x85b") == "a?b"        # NEL
+        assert lio.safe_label("a\x9bb") == "a?b"        # CSI
+
+    def test_bidi_is_still_a_documented_gap(self):
+        # ⛔ Deliberately NOT covered, and pinned so that changing it is a
+        # visible decision rather than a drift. A bidi override reorders a line
+        # VISUALLY without breaking it — a different attack class from forging
+        # a line. Folding it in would blur what safe_label promises.
+        assert lio.safe_label("a‮b") == "a‮b"
+
+    def test_non_ascii_names_are_not_collateral_damage(self):
+        # Widening to C1 must not touch ordinary non-ASCII filenames — this
+        # repo's configs and docs are Chinese-first.
+        assert lio.safe_label("中文租戶.yaml") == "中文租戶.yaml"
+
+    def test_non_str_input_is_coerced(self):
+        # Callers pass exceptions and Path objects, not just str.
+        assert lio.safe_label(123) == "123"
+        assert lio.safe_label(ValueError("bad\nthing")) == "bad?thing"
+
+
 class TestFormatJsonReportProperties:
 
     @given(st.dictionaries(

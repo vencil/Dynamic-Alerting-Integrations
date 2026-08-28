@@ -29,6 +29,7 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_confd import warn_nested  # noqa: E402
+from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -271,7 +272,8 @@ def build_tenant_metadata(config_dir: Path) -> dict[str, Any]:
             if data and "tenants" in data and isinstance(data["tenants"], dict):
                 tenant_configs.update(data["tenants"])
         except Exception as e:
-            print(f"WARNING: {yaml_file.name}: {e}", file=sys.stderr)
+            print(f"WARNING: {safe_label(yaml_file.name)}: {safe_label(e)}",
+                  file=sys.stderr)
 
     # Process each tenant
     for tenant_name, tenant_config in sorted(tenant_configs.items()):
@@ -363,7 +365,8 @@ def _load_custom_groups(config_dir: Path) -> dict:
             return result
         return {}
     except Exception as exc:  # noqa: BLE001
-        print(f"WARN: failed to parse _groups.yaml: {exc}", file=sys.stderr)
+        print(f"WARN: failed to parse _groups.yaml: {safe_label(exc)}",
+              file=sys.stderr)
         return {}
 
 
