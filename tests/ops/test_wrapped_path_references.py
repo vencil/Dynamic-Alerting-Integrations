@@ -464,17 +464,23 @@ _MIN_FILES = 1500
 _MIN_TOKENS = 2000
 _MIN_RESOLVING = 300
 
-# ⛔ Anti-vacuity for the #1394 half, and it is NOT a file count — a file count
-# does not move when the check stops working. Chosen by running plausible
-# narrowings against the judged population rather than by picking a round
-# number; the counts are on #1394, measured there, and deliberately not restated
-# here (see COUNTS). Two of those narrowings take it far below this value and
-# one takes it to zero.
-# ⚠️ A third — skipping constants inside f-strings — barely moves it, so no
-# floor can tell that edit apart from ordinary drift. It is pinned by a
-# synthetic case instead: a floor is not a substitute for a case, and the one
-# live instance of this class was inside an f-string.
-_MIN_CONCAT_JUDGED = 500
+# ⛔ THERE IS NO ANTI-VACUITY FLOOR FOR THE #1394 HALF, and that is measured
+# rather than conceded. A first version counted "resolving path tokens inside
+# multi-line constants" and floored it. Blind review took it apart:
+#   * the counter was a PARALLEL rewrite of the check, not the check — neutering
+#     the check's verdict left the counter's reading completely unmoved, so
+#     deleting the synthetic cases AND blinding the check passed;
+#   * the counter omitted the `token in raw` gate, so it counted paths that are
+#     written perfectly well. The population the check can actually judge is
+#     single digits, and no floor is meaningful over that.
+# A floor that cannot fall when the thing it guards stops working is not a
+# floor, so it was removed rather than tuned. What holds this check honest is
+# the synthetic cases in the test — each pins a property, and each property is one
+# a single-line edit was measured to be able to silence.
+# ⚠️ WHAT THIS LEAVES UNGUARDED, named rather than implied: narrowing the corpus
+# at the use site (the comprehension that selects `.py` files). The module's
+# `test_tracked_is_never_narrowed_at_a_use_site` only models subscripting
+# `_tracked()`, and says so itself.
 
 # ⛔ NOTHING is skipped: every tracked file is decoded with `errors="replace"`.
 #
@@ -688,7 +694,7 @@ def _wrapped_references(text: str) -> list[tuple[int, str]]:
     return found
 
 
-def _implicit_concat_references(text: str) -> list[tuple[int, str]]:
+def _implicit_concat_references(text: str, path: str = "<synthetic>") -> list[tuple[int, str]]:
     """The sibling class `_wrapped_references` cannot see: a path split across
     IMPLICIT STRING CONCATENATION (#1394).
 
@@ -714,10 +720,14 @@ def _implicit_concat_references(text: str) -> list[tuple[int, str]]:
     by token shape barely moves it, because the noise is genuinely deep paths.
     The counts are on #1394; what belongs here is the shape of the answer.
 
-    ⚠️ Deliberately NOT modelled, both measured rather than assumed:
+    ⚠️ Deliberately NOT modelled, each measured rather than assumed:
       * a comma-separated list of literals — that is not one string, and the
         illustration in this module's own KNOWN GAP paragraph is exactly that
         shape, which is why it is still there and still silent;
+      * implicit concatenation that fits on ONE line (`"tests/ops/" "x.py"`).
+        It is joined and it is ungreppable, so this is a real gap and not, as
+        an earlier comment in the body claimed, a case where nothing was
+        joined. Measured: modelling it adds no reports on this tree;
       * the basename fallback `_wrapped_references` applies. Adding it here
         changes nothing on this tree — same reports, same armed set — so the
         narrower predicate is kept and this note records that it was tried;
@@ -725,20 +735,31 @@ def _implicit_concat_references(text: str) -> list[tuple[int, str]]:
         Python AST. #1394's own inventory was entirely Python, but the gap is
         real and named rather than implied.
     """
-    # ⛔ FAIL-CLOSED. Every tracked `.py` in this repo parses today (measured), so
-    # a SyntaxError means the corpus changed shape, not that this file is
-    # uninteresting. Skipping it would let a whole file leave the scan silently —
-    # the failure this module exists to make impossible.
-    tree = ast.parse(text)
+    # ⛔ FAIL-CLOSED, and `filename` is not decoration: without it every parse
+    # error reads `<unknown>, line 1` and the contributor is told a file broke
+    # without being told WHICH — blind review measured the consequence, which is
+    # that the cheapest way back to green is to wrap the CALL SITE in
+    # `except SyntaxError: continue`. That is why there is exactly one call site
+    # (`_implicit_concat_offenders`) and why the control drives THAT rather than
+    # this function: a control that only proves this raises says nothing about
+    # whether anybody still listens.
+    tree = ast.parse(text, filename=path)
     lines = text.split("\n")
     found: list[tuple[int, str]] = []
     for node in ast.walk(tree):
         if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
             continue
         if node.end_lineno == node.lineno:
-            continue                      # nothing was joined; no break to hide
+            # ⚠️ A real gap, not "nothing was joined" — see the NOT-modelled
+            # bullet on same-line concatenation in this function's docstring.
+            continue
         raw = "\n".join(lines[node.lineno - 1:node.end_lineno])
         for token in sorted(_tokens(node.value)):
+            # ⛔ `raw` is the constant's OWN span, never the whole file. Blind
+            # review measured what file-global costs: the live instance had a
+            # contiguous mention of the same path elsewhere in the same file, so
+            # `token in text` silences it — which is #1373's shape exactly, and
+            # is the property `a split whose token appears elsewhere` pins.
             if token in raw or "/" not in token:
                 continue
             if _resolves(token):
@@ -746,25 +767,20 @@ def _implicit_concat_references(text: str) -> list[tuple[int, str]]:
     return found
 
 
-def _concat_tokens_examined(files: list[tuple[str, str]]) -> int:
-    """How many resolving path tokens the check above actually got to judge.
+def _implicit_concat_offenders(files: list[tuple[str, str]]) -> dict[str, list[str]]:
+    """path -> hits, for every file with a path split across concatenation.
 
-    ⛔ NOT "how many files were parsed". The floor has to sit on the number that
-    MOVES when the check stops working, and file count does not: pointing
-    `ast.walk` at `tree.body` leaves every file parsed and every verdict gone.
-    Measured against that and two other narrowings — see the test that uses it.
+    ⛔ THE ONLY call site of the check above, on purpose. Iterating the corpus
+    inline in the test put the parse behind a `for` loop a hurried contributor
+    can wrap in `except SyntaxError: continue` — and the control at the time
+    asserted only that the CHECK raises, so it stayed green through exactly that
+    edit. Production and control now call the same name.
     """
-    total = 0
-    for _, text in files:
-        tree = ast.parse(text)
-        for node in ast.walk(tree):
-            if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
-                continue
-            if node.end_lineno == node.lineno:
-                continue
-            total += sum(1 for t in _tokens(node.value)
-                         if "/" in t and _resolves(t))
-    return total
+    found: dict[str, list[str]] = {}
+    for path, text in files:
+        for line, token in _implicit_concat_references(text, path):
+            found.setdefault(path, []).append(f"line {line} -> {token}")
+    return found
 
 
 # ⛔ THE TRIPWIRES BELOW ARE PURE FUNCTIONS, and that shape is the whole point.
@@ -1481,29 +1497,25 @@ def test_each_tripwire_fires_on_degenerate_input() -> None:
 def test_no_reference_is_split_across_implicit_concatenation() -> None:
     """The #1394 half. Same question, different join.
 
-    ⛔ THE FLOOR CANNOT REPLACE THE CASES BELOW, and that was measured rather
-    than assumed. Plausible ways to break this check were run against the number
-    the floor watches (counts on #1394, not restated here — see COUNTS):
+    ⛔ EVERY CASE BELOW PINS A PROPERTY A ONE-LINE EDIT WAS MEASURED TO SILENCE,
+    and the live instance is what measured them: blind review weakened the check
+    one clause at a time and re-asked whether it still saw that instance.
 
-        `ast.walk` -> `tree.body`          judged population to zero  -> floor
-        stop scanning `tests/`             far below the floor        -> floor
-        skip constants inside an f-string  barely moves it            -> NO floor
+        `token in raw` -> `token in text`   defect silenced   -> "elsewhere" case
+        token predicate narrowed to `.py`   defect silenced   -> non-`.py` case
+        skip constants inside an f-string   defect silenced   -> f-string case
+        `ast.walk` -> `tree.body`           all verdicts gone -> plain case
+        swallow SyntaxError at the CALL SITE                  -> corpus case
 
-    The last one is not hypothetical: the only live instance of this class was
-    inside an f-string. A count that barely moves cannot be told from a tree
-    that grew, so the f-string case is pinned as a SYNTHETIC input instead.
-    ⚠️ Verified by which assertion fires, not by "the test went red" — the
-    first attempt to check that matched the assertion's own source text in the
-    traceback and would have agreed with any outcome.
+    The last two are why there is no counting floor here: the counter a first
+    version used did not move at all when the check's verdict went to zero, and
+    a control that only proved the CHECK raises stayed green while the caller
+    swallowed it. The note next to the other floors says why this half has none.
+    ⚠️ Which assertion fires was read from the failing LINE NUMBER. The first
+    attempt matched the assertion's own source text in the traceback, which
+    `--tb=long` prints, and would have agreed with any outcome.
     """
     files = [(p, t) for p, t in _read_tracked() if p.endswith(".py")]
-
-    judged = _concat_tokens_examined(files)
-    assert judged >= _MIN_CONCAT_JUDGED, (
-        f"only {judged} resolving path token(s) inside multi-line string "
-        f"constants — the check below judges that population, so if it "
-        f"collapsed the green result means nothing. Do not lower this floor to "
-        f"make a scan-narrowing edit pass; widen the scan back.")
 
     subject = "tests/ops/test_wrapped_path_references.py"
     assert subject in _tracked(), f"{subject} moved; re-point this fixture"
@@ -1515,14 +1527,35 @@ def test_no_reference_is_split_across_implicit_concatenation() -> None:
         f"a path split across implicit concatenation must be reported; "
         f"got {_implicit_concat_references(plain)}")
 
-    # MUST REPORT: the same split INSIDE an f-string — the carrier of the only
-    # live instance, and the one the floor above provably cannot see.
+    # MUST REPORT: the same split INSIDE an f-string — the carrier of the live
+    # instance. Reading only plain literals silences that instance.
     fstring = 'x = (\n    f"{v} see %s"\n    "%s here"\n)\n' % (head, tail)
     assert [t for _, t in _implicit_concat_references(fstring)] == [subject], (
         "the live instance of this class was an f-string assert message; a "
-        "check that only reads plain literals would have missed it and the "
-        "floor above would not have moved: "
+        "check that only reads plain literals would have missed it: "
         + repr(_implicit_concat_references(fstring)))
+
+    # MUST REPORT: a path that is NOT `.py`. The live instance was a `.js` path
+    # while the other report-cases here use `.py`, so narrowing the predicate to it
+    # silenced it and nothing noticed.
+    other = "docs/internal/dev-rules.md"
+    assert other in _tracked(), f"{other} moved; re-point this fixture"
+    mixed = 'x = (\n    "see %s"\n    "%s here"\n)\n' % (other[:18], other[18:])
+    assert [t for _, t in _implicit_concat_references(mixed)] == [other], (
+        "the extension must not narrow the predicate — the live instance was a "
+        "`.js` path: " + repr(_implicit_concat_references(mixed)))
+
+    # MUST REPORT: a split whose token ALSO appears contiguously ELSEWHERE in
+    # the same file. Comparing against the whole file instead of the constant's
+    # own span silences exactly this, and the live instance had precisely that
+    # shape — the same path written contiguously earlier in the same file, which
+    # is why the rename sweep fixed one site and left the other. #1373.
+    elsewhere = ('OTHER = "%s"\nx = (\n    "see %s"\n    "%s here"\n)\n'
+                 % (subject, head, tail))
+    assert [t for _, t in _implicit_concat_references(elsewhere)] == [subject], (
+        "a contiguous mention elsewhere in the file does not make the split one "
+        "greppable; comparing against the file instead of the constant's span "
+        "reproduces #1373: " + repr(_implicit_concat_references(elsewhere)))
 
     # MUST NOT REPORT: contiguous. Nothing is hidden, so there is nothing to fix.
     whole = 'x = (\n    "see %s"\n    " here"\n)\n' % subject
@@ -1539,22 +1572,44 @@ def test_no_reference_is_split_across_implicit_concatenation() -> None:
         "would arm this check over every list of paths in the repo: "
         + repr(_implicit_concat_references(listed)))
 
-    # ⛔ FAIL-CLOSED on unparseable input, so a file cannot leave the scan quietly.
-    with pytest.raises(SyntaxError):
-        _implicit_concat_references("def (\n")
+    # ⛔ FAIL-CLOSED, driven through the SAME function production uses. Asserting
+    # only that the check raises left the caller free to swallow it: blind review
+    # wrapped the call sites in `except SyntaxError: continue` and the whole
+    # module stayed green while an unparseable file left the scan silently.
+    with pytest.raises(SyntaxError) as parse_failure:
+        _implicit_concat_offenders([("zfake/broken.py", "def (\n")])
+    assert "zfake/broken.py" in str(parse_failure.value), (
+        "the error must name the file. Without it the report is "
+        "`<unknown>, line 1` over hundreds of files, and the cheapest way back "
+        "to green is to stop parsing rather than to fix the file: "
+        + str(parse_failure.value))
 
-    offenders: dict[str, list[str]] = {}
-    for path, text in files:
-        for line, token in _implicit_concat_references(text):
-            offenders.setdefault(path, []).append(f"line {line} -> {token}")
+    # ⛔ MUST SCAN EVERY FILE IT IS GIVEN. Truncating the corpus — `files[:1]`,
+    # a filter, an `islice` — is invisible to any count of FINDINGS, because
+    # that count is zero either way; blind review made exactly that edit and
+    # nothing moved. A synthetic corpus where every entry must be reported is
+    # the only thing that can tell "scanned and clean" from "never looked".
+    twins = [(f"zfake/twin{i}.py", plain) for i in range(3)]
+    assert sorted(_implicit_concat_offenders(twins)) == [
+        "zfake/twin0.py", "zfake/twin1.py", "zfake/twin2.py"], (
+        "the scan dropped entries from the corpus it was handed: "
+        + repr(sorted(_implicit_concat_offenders(twins))))
+
+    offenders = _implicit_concat_offenders(files)
     assert not offenders, (
-        "a path is split across implicitly concatenated string literals, so "
-        "`git grep` on the whole path does not return this site and a rename "
-        "sweep will report the tree clean (#1394). Move the whole path into "
-        "ONE literal — the runtime string does not change, only where the "
-        "source breaks.\n"
-        "⛔ Do NOT silence this by splitting the literals with a comma: that "
-        "changes what the code means and leaves the reference just as "
-        "invisible.\n"
+        "a path is broken apart in the SOURCE — implicit concatenation, a "
+        "backslash continuation, or an escape — while the runtime string is "
+        "whole. `git grep` on the path does not return this site, so a rename "
+        "sweep reports the tree clean (#1394).\n"
+        "⚠️ FIRST DECIDE WHICH ONE YOU HAVE, because this check cannot. If the "
+        "thing named below is NOT a reference to one of our files — a fixture "
+        "holding somebody else's config, a string that merely happens to read "
+        "like a path — then there is nothing to fix and the report is wrong. "
+        "That is a defect in THIS CHECK, not in your change: there is no "
+        "per-line exemption here either, so raise it against the check.\n"
+        "⛔ If it IS a reference: put the whole path in ONE literal. The runtime "
+        "string does not change, only where the source breaks. Do NOT split the "
+        "literals with a comma — that changes what the code means and leaves "
+        "the reference just as invisible.\n"
         + "\n".join(f"  {p}:\n    " + "\n    ".join(v)
                     for p, v in sorted(offenders.items())))
