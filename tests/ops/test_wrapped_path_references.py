@@ -464,23 +464,22 @@ _MIN_FILES = 1500
 _MIN_TOKENS = 2000
 _MIN_RESOLVING = 300
 
-# ⛔ THERE IS NO ANTI-VACUITY FLOOR FOR THE #1394 HALF, and that is measured
-# rather than conceded. A first version counted "resolving path tokens inside
-# multi-line constants" and floored it. Blind review took it apart:
-#   * the counter was a PARALLEL rewrite of the check, not the check — neutering
-#     the check's verdict left the counter's reading completely unmoved, so
-#     deleting the synthetic cases AND blinding the check passed;
-#   * the counter omitted the `token in raw` gate, so it counted paths that are
-#     written perfectly well. The population the check can actually judge is
-#     single digits, and no floor is meaningful over that.
-# A floor that cannot fall when the thing it guards stops working is not a
-# floor, so it was removed rather than tuned. What holds this check honest is
-# the synthetic cases in the test — each pins a property, and each property is one
-# a single-line edit was measured to be able to silence.
-# ⚠️ WHAT THIS LEAVES UNGUARDED, named rather than implied: narrowing the corpus
-# at the use site (the comprehension that selects `.py` files). The module's
-# `test_tracked_is_never_narrowed_at_a_use_site` only models subscripting
-# `_tracked()`, and says so itself.
+# ⛔ THE #1394 HALF FLOORS ITS CORPUS, NOT ITS VERDICT, and the difference is
+# what a first version got wrong. That version counted "resolving path tokens
+# inside multi-line constants" — a PARALLEL rewrite of the check rather than the
+# check — so neutering the check's verdict left its reading completely unmoved,
+# and deleting the synthetic cases AND blinding the check passed. It also
+# omitted the `token in raw` gate, counting paths that are written perfectly
+# well: the population the check can actually judge is single digits.
+#
+# ⚠️ It was then deleted outright, and THAT was an over-correction. Blind review
+# measured what the deletion cost: dropping `tests/` from the corpus made the
+# old floor fire and the deleted version stay silent. The floor was guarding the
+# CORPUS axis honestly the whole time; only its verdict-shaped reasoning was
+# wrong. So the axis it actually guarded is restored here, counting the files
+# handed in — a number that owes nothing to the check and falls the moment the
+# corpus is narrowed. Chosen against the measured narrowings, not rounded.
+_MIN_CONCAT_FILES = 450
 
 # ⛔ NOTHING is skipped: every tracked file is decoded with `errors="replace"`.
 #
@@ -770,7 +769,7 @@ def _implicit_concat_references(text: str, path: str = "<synthetic>") -> list[tu
 def _implicit_concat_offenders(files: list[tuple[str, str]]) -> dict[str, list[str]]:
     """path -> hits, for every file with a path split across concatenation.
 
-    ⛔ THE ONLY call site of the check above, on purpose. Iterating the corpus
+    ⛔ The only call site of the check above that walks the corpus, on purpose. Iterating the corpus
     inline in the test put the parse behind a `for` loop a hurried contributor
     can wrap in `except SyntaxError: continue` — and the control at the time
     asserted only that the CHECK raises, so it stayed green through exactly that
@@ -1505,17 +1504,26 @@ def test_no_reference_is_split_across_implicit_concatenation() -> None:
         token predicate narrowed to `.py`   defect silenced   -> non-`.py` case
         skip constants inside an f-string   defect silenced   -> f-string case
         `ast.walk` -> `tree.body`           all verdicts gone -> plain case
-        swallow SyntaxError at the CALL SITE                  -> corpus case
+        swallow SyntaxError inside the scan  file leaves silently -> corpus case
+        drop entries from the corpus         nothing to find      -> twins case
+        narrow the corpus at the use site    nothing to find      -> file floor
 
-    The last two are why there is no counting floor here: the counter a first
-    version used did not move at all when the check's verdict went to zero, and
-    a control that only proved the CHECK raises stayed green while the caller
-    swallowed it. The note next to the other floors says why this half has none.
+    ⛔ WHAT IS STILL NOT GUARDED, measured rather than implied. Wrapping the
+    call to the scan BELOW in `except SyntaxError: continue` passes: the
+    `pytest.raises` case proves the function raises, which says nothing about
+    whether this line still listens. The refactor to one call site moved that
+    hole out a level, it did not close it — the same shape
+    `test_tracked_is_never_narrowed_at_a_use_site` names for its own subject.
     ⚠️ Which assertion fires was read from the failing LINE NUMBER. The first
     attempt matched the assertion's own source text in the traceback, which
     `--tb=long` prints, and would have agreed with any outcome.
     """
     files = [(p, t) for p, t in _read_tracked() if p.endswith(".py")]
+    assert len(files) >= _MIN_CONCAT_FILES, (
+        f"only {len(files)} Python file(s) reached this scan — the cases below "
+        f"stay green on any corpus, so a narrowed one makes them mean nothing. "
+        f"⛔ Do not lower this floor to let a narrowing through; widen the "
+        f"corpus back.")
 
     subject = "tests/ops/test_wrapped_path_references.py"
     assert subject in _tracked(), f"{subject} moved; re-point this fixture"
@@ -1538,24 +1546,33 @@ def test_no_reference_is_split_across_implicit_concatenation() -> None:
     # MUST REPORT: a path that is NOT `.py`. The live instance was a `.js` path
     # while the other report-cases here use `.py`, so narrowing the predicate to it
     # silenced it and nothing noticed.
+    # ⛔ It also spans THREE lines and carries TWO paths in one constant. Every
+    # other case here is exactly two lines with one token, so "only judge a
+    # two-line span" and "only judge the first token" were both silent — two
+    # more one-line edits that reached the live instance.
     other = "docs/internal/dev-rules.md"
     assert other in _tracked(), f"{other} moved; re-point this fixture"
-    mixed = 'x = (\n    "see %s"\n    "%s here"\n)\n' % (other[:18], other[18:])
-    assert [t for _, t in _implicit_concat_references(mixed)] == [other], (
-        "the extension must not narrow the predicate — the live instance was a "
-        "`.js` path: " + repr(_implicit_concat_references(mixed)))
+    mixed = ('x = (\n    "see %s"\n    "%s and also %s"\n    "%s here"\n)\n'
+             % (other[:18], other[18:], subject[:24], subject[24:]))
+    assert sorted(t for _, t in _implicit_concat_references(mixed)) == sorted(
+        [other, subject]), (
+        "the extension must not narrow the predicate (the live instance was a "
+        "`.js` path), and neither the span nor the token index may: "
+        + repr(_implicit_concat_references(mixed)))
 
     # MUST REPORT: a split whose token ALSO appears contiguously ELSEWHERE in
     # the same file. Comparing against the whole file instead of the constant's
     # own span silences exactly this, and the live instance had precisely that
     # shape — the same path written contiguously earlier in the same file, which
-    # is why the rename sweep fixed one site and left the other. #1373.
+    # is why the rename sweep fixed one site and left the other. ⚠️ Same
+    # SYMPTOM as #1373, different mechanism (that one wrapped an identifier).
     elsewhere = ('OTHER = "%s"\nx = (\n    "see %s"\n    "%s here"\n)\n'
                  % (subject, head, tail))
     assert [t for _, t in _implicit_concat_references(elsewhere)] == [subject], (
         "a contiguous mention elsewhere in the file does not make the split one "
         "greppable; comparing against the file instead of the constant's span "
-        "reproduces #1373: " + repr(_implicit_concat_references(elsewhere)))
+        "is how a rename sweep reports a clean tree: "
+        + repr(_implicit_concat_references(elsewhere)))
 
     # MUST NOT REPORT: contiguous. Nothing is hidden, so there is nothing to fix.
     whole = 'x = (\n    "see %s"\n    " here"\n)\n' % subject
@@ -1585,13 +1602,15 @@ def test_no_reference_is_split_across_implicit_concatenation() -> None:
         + str(parse_failure.value))
 
     # ⛔ MUST SCAN EVERY FILE IT IS GIVEN. Truncating the corpus — `files[:1]`,
-    # a filter, an `islice` — is invisible to any count of FINDINGS, because
-    # that count is zero either way; blind review made exactly that edit and
-    # nothing moved. A synthetic corpus where every entry must be reported is
-    # the only thing that can tell "scanned and clean" from "never looked".
-    twins = [(f"zfake/twin{i}.py", plain) for i in range(3)]
+    # an `islice` — is invisible to any count of FINDINGS, because that count
+    # is zero either way; blind review made exactly that edit and nothing
+    # moved. ⚠️ These names sit under `tests/ops/` on purpose: an earlier
+    # version used `zfake/…`, which a filter keyed on a REAL directory walks
+    # straight past — so the case claimed to cover filters and did not.
+    twins = [(f"tests/ops/zfake_twin{i}.py", plain) for i in range(3)]
     assert sorted(_implicit_concat_offenders(twins)) == [
-        "zfake/twin0.py", "zfake/twin1.py", "zfake/twin2.py"], (
+        "tests/ops/zfake_twin0.py", "tests/ops/zfake_twin1.py",
+        "tests/ops/zfake_twin2.py"], (
         "the scan dropped entries from the corpus it was handed: "
         + repr(sorted(_implicit_concat_offenders(twins))))
 
