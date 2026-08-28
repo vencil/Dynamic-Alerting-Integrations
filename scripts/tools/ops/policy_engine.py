@@ -690,7 +690,12 @@ def main(argv: Optional[list[str]] = None) -> int:
             print("未找到策略規則。在 _defaults.yaml 新增 _policies 或指定 --policy。",
                   file=sys.stderr)
         else:
-            print("No policy rules found. Add _policies to _defaults.yaml or specify --policy.",
+            # #1588 review: name the carrier this run actually resolved.
+            # Telling an operator to edit `_defaults.yaml` on a tree whose
+            # carrier is `_DEFAULTS.YAML` sends them to a file that is not
+            # there.
+            print(f"No policy rules found. Add _policies to "
+                  f"{Path(defaults_path).name} or specify --policy.",
                   file=sys.stderr)
         if args.json_output:
             print(format_json_report(_empty_report("no_policies", "no_policy_rules_found")))

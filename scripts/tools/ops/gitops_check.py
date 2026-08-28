@@ -233,9 +233,15 @@ def check_local(dir_path: str) -> CheckResult:
         return CheckResult(
             check="local",
             status="fail",
+            # #1588 review: name the file this tool actually looked for.
+            # `resolve_defaults_file` falls back to the canonical spelling
+            # when nothing matched, so on a truly empty tree the message is
+            # unchanged — but on a tree carrying `_DEFAULTS.YAML` it now
+            # names that, instead of sending the operator to a file that
+            # does not exist.
             message=_h(
-                "缺少 _defaults.yaml（必需）",
-                "Missing _defaults.yaml (required)"
+                f"缺少 {Path(defaults_path).name}（必需）",
+                f"Missing {Path(defaults_path).name} (required)"
             ),
             details=details,
         )
@@ -248,9 +254,13 @@ def check_local(dir_path: str) -> CheckResult:
         return CheckResult(
             check="local",
             status="fail",
+            # ⛔ The old literal made this message contradict ITSELF: it
+            # said `_defaults.yaml is invalid` while the parser error it
+            # embeds quoted the path of `_DEFAULTS.YAML`. One line, two
+            # different files.
             message=_h(
-                f"_defaults.yaml 無效: {e}",
-                f"_defaults.yaml is invalid: {e}"
+                f"{Path(defaults_path).name} 無效: {e}",
+                f"{Path(defaults_path).name} is invalid: {e}"
             ),
             details=details,
         )

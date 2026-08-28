@@ -761,7 +761,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "db71617e3d5f9ce88324decabde5a4db6c9d6bbe39f327396f633920fa2b37c7",
+ "source_digest": "8e925cf2ef3ad0898b86a31951cfc23a097d2d3e95b9d9282bbffa6dc7233ffb",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -2556,6 +2556,9 @@
   ],
   "scripts/tools/ops/patch_config.py": [
    "tests/ops/test_printed_paths_are_reachable.py"
+  ],
+  "scripts/tools/ops/policy_engine.py": [
+   "tests/shared/test_confd_case_parity_across_tools.py"
   ],
   "scripts/tools/ops/scaffold_tenant.py": [
    "tests/lint/test_check_structure.py",

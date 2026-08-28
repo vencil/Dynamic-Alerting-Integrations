@@ -722,6 +722,87 @@ def test_custom_alerts_loader_sees_both_casings(
     )
 
 
+def _upper_only_tree(root: pathlib.Path, *, defaults_body: str,
+                     with_tenant: bool = True) -> None:
+    """A conf.d whose carriers are ONLY spelled `.YAML` / `.YML`."""
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "_DEFAULTS.YAML").write_text(defaults_body, encoding="utf-8")
+    if with_tenant:
+        (root / "alpha.YAML").write_text(
+            "tenants:\n  alpha:\n    pg_connections: 90\n", encoding="utf-8")
+
+
+def test_error_messages_name_the_carrier_they_resolved(
+        tmp_path: pathlib.Path) -> None:
+    """Branches the A/B sweep cannot reach, asserted directly.
+
+    ⛔ Three separate blind spots put these messages beyond
+    `test_tool_does_not_name_a_file_that_is_not_there`, and each is worth
+    stating because the same shapes will recur:
+
+    1. `gitops_check` takes no CLI flag, so it is not in `ALL_TOOLS` at
+       all — only the direct-call test below covers it, and that one
+       compares lower against upper. Both runs printed the SAME wrong name,
+       so they agreed and it passed.
+    2. `policy_engine` IS in the sweep, but the shared fixture's defaults
+       carrier grew a `_policies` block (added so `validate_config`'s real
+       divergence would stop being invisible) — which makes its
+       "no policy rules found" branch unreachable. ⚠️ Enriching a fixture
+       to expose one defect hid another.
+    3. The invalid-YAML branch needs a malformed body the sweep never
+       writes.
+
+    External review found all three; this test is what would have.
+    """
+    from ops import gitops_check  # noqa: PLC0415
+
+    # (1) invalid defaults: the message used to say `_defaults.yaml is
+    #     invalid` while the parser error it embeds quoted the path of
+    #     `_DEFAULTS.YAML` — one line naming two different files.
+    bad = tmp_path / "bad"
+    _upper_only_tree(bad, defaults_body="defaults: [unclosed\n")
+    res = gitops_check.check_local(str(bad))
+    assert res.status == "fail" and "_DEFAULTS.YAML" in res.message, (
+        f"gitops_check must name the carrier it parsed; got {res.message!r}"
+    )
+    assert "_defaults.yaml is invalid" not in res.message, (
+        "the message still names the canonical spelling for a file that is "
+        "not in this tree"
+    )
+
+    # (2) missing defaults: with NOTHING to resolve, falling back to the
+    #     canonical name is correct — the operator needs a name they can
+    #     create. This pins that the fix did not overshoot.
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    res2 = gitops_check.check_local(str(empty))
+    assert "_defaults.yaml" in res2.message, (
+        f"on an empty tree the canonical name is the useful one; "
+        f"got {res2.message!r}"
+    )
+
+
+def test_policy_engine_no_policy_hint_names_the_carrier(
+        tmp_path: pathlib.Path) -> None:
+    """The `_policies`-less branch the shared fixture can no longer reach."""
+    tree = tmp_path / "nopolicies"
+    _upper_only_tree(tree, defaults_body="defaults:\n  pg_connections: 80\n")
+    tool = TOOLS_DIR / "ops" / "policy_engine.py"
+    r = subprocess.run(
+        [sys.executable, "-X", "utf8", str(tool), "--config-dir", str(tree)],
+        capture_output=True, timeout=120, cwd=str(tmp_path),
+        env=dict(os.environ, PYTHONIOENCODING="utf-8"))
+    out = r.stdout.decode("utf-8", "replace") + r.stderr.decode("utf-8",
+                                                                "replace")
+    assert "No policy rules found" in out, (
+        f"fixture did not reach the no-policy branch — the assertion below "
+        f"would be vacuous. Output:\n{out[:400]}"
+    )
+    assert "_DEFAULTS.YAML" in out, (
+        f"the hint must name the carrier this run resolved; got:\n{out[:400]}"
+    )
+
+
 def test_gitops_check_local_sees_both_casings(tmp_path: pathlib.Path) -> None:
     from ops import gitops_check  # noqa: PLC0415
 
