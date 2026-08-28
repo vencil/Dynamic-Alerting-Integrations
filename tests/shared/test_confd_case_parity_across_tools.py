@@ -89,8 +89,15 @@ def _confd_flag(path: pathlib.Path) -> str | None:
     search, because the two are not the same question: `"--config-dir"`
     appears in help text, comments and docstrings of tools that never
     accept it, and a tool that accepts `--conf-d` (`describe_tenant`)
-    contains neither spelling of the other. Reading the declaration is
-    what makes tool #32 covered on the day it lands.
+    contains neither spelling of the other.
+
+    ⚠️ It reads LITERAL declarations only. A tool that passes the flag
+    name as a variable, an f-string or `*flags` is invisible to this walk
+    — blind review measured that with a real fake tool, and the earlier
+    wording here ("what makes tool #32 covered on the day it lands")
+    claimed a guarantee this does not provide. That hole is now closed by
+    `test_no_tool_declares_flags_the_population_walk_cannot_read`, which
+    is what actually makes the claim true; this function alone does not.
     """
     try:
         tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
@@ -333,6 +340,65 @@ def test_population_discovery_did_not_collapse() -> None:
         f"only {len(ALL_TOOLS)} conf.d tools discovered — check that "
         f"_confd_flag still recognises how tools declare their config-dir "
         f"argument"
+    )
+
+
+def test_no_tool_declares_flags_the_population_walk_cannot_read() -> None:
+    """No `add_argument` may hide its flag name behind a non-literal.
+
+    ⛔ This is the hole blind review found, closed at its root rather than
+    patched per-tool. `_confd_flag` reads `add_argument("--config-dir")`;
+    it cannot read `add_argument(FLAG)`, `add_argument(f"--{x}")` or
+    `add_argument(*flags)`. A tool written that way does not land in a
+    skip set where the pinned tables above would notice — it never enters
+    `ALL_TOOLS` at all, so nothing here parametrizes over it and the
+    floor below stays satisfied. Measured: a real conf.d reader declaring
+    `p.add_argument(CONFD_FLAG)` produced a test run byte-identical to
+    the baseline.
+
+    ⛔ Deliberately NOT a text search for the flag names. That variant was
+    measured first and reddens `check_doc_datools_cmds.py`, which merely
+    discusses `--conf-d` in three comments — a gate that cries wolf gets
+    muted. This asks the derivable question instead ("is any flag name
+    unreadable by a static walk?"), whose answer today is: none, in any
+    of the 3 tool directories.
+    """
+    offenders: list[str] = []
+    for sub in ("ops", "dx", "lint"):
+        d = TOOLS_DIR / sub
+        if not d.is_dir():
+            continue
+        for path in sorted(d.glob("*.py")):
+            if path.name.startswith("_") or path.name == "__init__.py":
+                continue
+            try:
+                tree = ast.parse(path.read_text(encoding="utf-8",
+                                                errors="replace"))
+            except SyntaxError:
+                continue
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                fn = node.func
+                if not (isinstance(fn, ast.Attribute)
+                        and fn.attr == "add_argument"):
+                    continue
+                for arg in node.args:
+                    if not (isinstance(arg, ast.Constant)
+                            and isinstance(arg.value, str)):
+                        offenders.append(
+                            f"{path.relative_to(REPO).as_posix()}:"
+                            f"{node.lineno} ({type(arg).__name__})")
+    assert not offenders, (
+        f"these `add_argument` calls name their flag with something this "
+        f"file's population walk cannot read statically:\n"
+        f"  " + "\n  ".join(offenders) + "\n"
+        f"⛔ A conf.d reader declared this way is invisible to "
+        f"`collect_confd_tools`, and invisible is worse than skipped: the "
+        f"pinned skip sets below only notice tools that ARE in the "
+        f"population. Either spell the flag as a literal, or extend "
+        f"`_confd_flag` to resolve this form and delete the entry here. "
+        f"See issue #1588."
     )
 
 

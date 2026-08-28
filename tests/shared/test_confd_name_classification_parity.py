@@ -130,6 +130,20 @@ def test_matrix_still_carries_the_shapes_it_exists_for() -> None:
         "the .yml branch — a fix applied to one branch only escapes otherwise)":
             lambda r: (_carrier(r) and r["name"].lower().endswith(".yml")
                        and r["stem"] != r["stem"].lower()),
+        # ⛔ Row-level, not category-level, and that distinction is the
+        # finding. Blind review measured that `İ.yaml` is the ONLY row in
+        # this table whose `str.lower()` changes character length, and
+        # that renaming it away left every test — Python and both Go
+        # sides — green. Yet that row is the entire reason the
+        # `config_stem` dogfood reddens at all: taking the slice offset
+        # from `len(name.lower())` instead of the constant cuts one
+        # position too far right, and with only same-length rows here
+        # nothing sees it. Without this check the row survives on the
+        # table's spare capacity rather than on a stated requirement.
+        "a name whose str.lower() CHANGES character length (pins the "
+        "config_stem offset dogfood — 'İ'.lower() is two characters, so an "
+        "offset read off the folded copy slices the original wrongly)":
+            lambda r: len(r["name"]) != len(r["name"].lower()),
     }
     missing = [why for why, pred in checks.items() if not has(pred)]
     assert not missing, (
