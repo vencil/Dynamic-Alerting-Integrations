@@ -44,23 +44,12 @@ from _lib_python import load_yaml_file as _lib_load_yaml  # noqa: E402
 from _lib_python import write_text_secure  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
-from _lib_confd import has_yaml_extension, is_defaults_name, warn_nested  # noqa: E402
+from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
+    has_yaml_extension,
+    resolve_defaults_file,
+    warn_nested,
+)
 
-
-def _resolve_defaults_file(base: Path) -> Path:
-    """`_defaults.{yaml,yml}` in ANY casing under `base`.
-
-    Falls back to the canonical name so the caller's "does not
-    exist" branch still fires with a name an operator can act on.
-    Sorted, so two spellings resolve deterministically.
-    """
-    try:
-        for entry in sorted(base.iterdir()):
-            if entry.is_file() and is_defaults_name(entry.name):
-                return entry
-    except OSError:
-        pass
-    return base / "_defaults.yaml"
 
 
 def load_yaml_file(path):
@@ -154,7 +143,7 @@ def scan_for_metric(metric_key, config_dir):
 
 def disable_in_defaults(metric_key, config_dir, execute=False):
     """在 _defaults.yaml 中將 metric 設為 "disable"。"""
-    defaults_path = str(_resolve_defaults_file(Path(config_dir)))
+    defaults_path = str(resolve_defaults_file(Path(config_dir)))
     if not Path(defaults_path).exists():
         return False, "_defaults.yaml 不存在"
 

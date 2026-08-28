@@ -43,8 +43,8 @@ from _lib_python import detect_cli_lang, format_json_report  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
     has_yaml_extension,
-    is_defaults_name,
     is_reserved_name,
+    resolve_defaults_file,
 )
 
 # ---------------------------------------------------------------------------
@@ -52,21 +52,6 @@ from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
 # ---------------------------------------------------------------------------
 _LANG = detect_cli_lang()
 
-
-def _resolve_defaults_file(base: Path) -> Path:
-    """`_defaults.{yaml,yml}` under `base` in ANY casing.
-
-    Falls back to the canonical name so the caller's "missing"
-    branch still names a file the operator can create. Sorted, so a
-    tree carrying two spellings resolves deterministically.
-    """
-    try:
-        for entry in sorted(base.iterdir()):
-            if entry.is_file() and is_defaults_name(entry.name):
-                return entry
-    except OSError:
-        pass
-    return base / "_defaults.yaml"
 
 
 def _h(zh: str, en: str) -> str:
@@ -243,7 +228,7 @@ def check_local(dir_path: str) -> CheckResult:
     # name made a tree carrying `_DEFAULTS.YAML` report
     # "Missing _defaults.yaml (required)" while the exporter was
     # merging that very file into every downstream tenant.
-    defaults_path = str(_resolve_defaults_file(base))
+    defaults_path = str(resolve_defaults_file(base))
     if not Path(defaults_path).is_file():
         return CheckResult(
             check="local",

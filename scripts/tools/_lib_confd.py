@@ -55,6 +55,7 @@ __all__ = [
     "is_hidden_name",
     "is_reserved_name",
     "iter_config_files",
+    "resolve_defaults_file",
     "nested_yaml_files",
     "nested_yaml_warning",
     "reset_warned_for_test",
@@ -226,6 +227,42 @@ def config_stem(name: str) -> str:
             # the wrong place.
             return name[: len(name) - len(suffix)]
     return ""
+
+
+def resolve_defaults_file(
+    base: str | os.PathLike[str], *, tool: str | None = None
+) -> Path:
+    """The platform-defaults carrier directly in `base`, in ANY casing.
+
+    Returns the canonical `_defaults.yaml` path when nothing matches, so a
+    caller's "this file does not exist" branch still names something an
+    operator can create.
+
+    ⛔ ONE implementation, deliberately. Three tools grew a private copy of
+    this while #1588 was being fixed, which is the same "one rule, many
+    hand-copies" shape #1339 is made of — reproduced inside the fix for it.
+
+    ⚠️ This read is FLAT and therefore calls `warn_nested` itself: on a
+    hierarchical conf.d the exporter also merges `sub/_defaults.yaml`,
+    which this function does not return. `warn_nested` prints at most once
+    per directory per process and prints NOTHING for a flat tree, so the
+    common case is unchanged. `tool` is left to `nested_yaml_warning`'s
+    own default so the message names the command the operator ran rather
+    than this helper.
+
+    Sorted, so a directory carrying two spellings resolves
+    deterministically — two spellings is already a misconfiguration, and
+    resolving it by directory order would make it an intermittent one.
+    """
+    root = Path(base)
+    warn_nested(root, tool=tool)
+    try:
+        for entry in sorted(root.iterdir()):
+            if entry.is_file() and is_defaults_name(entry.name):
+                return entry
+    except OSError:
+        pass
+    return root / "_defaults.yaml"
 
 
 def iter_config_files(config_dir: str | os.PathLike[str], *, recursive: bool = True):

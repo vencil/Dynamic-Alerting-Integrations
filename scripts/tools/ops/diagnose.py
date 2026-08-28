@@ -42,8 +42,8 @@ from _lib_python import format_json_report  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_confd import (  # noqa: E402
-    is_defaults_name,
     iter_config_files,
+    resolve_defaults_file,
     unusable_config_paths,
     unusable_reason,
     warn_nested,
@@ -75,27 +75,6 @@ _HELP = {
         'en': 'Show detailed three-layer inheritance chain resolution (requires --config-dir)'
     }
 }
-
-def _resolve_defaults_file(base):
-    """`<base>/_defaults.{yaml,yml}` in ANY casing, or the canonical path.
-
-    Returns the canonical `_defaults.yaml` when nothing matches so the
-    caller's `FileNotFoundError` branch — which treats an absent
-    defaults file as a LEGAL config, not a read failure — still fires
-    unchanged.
-
-    ⛔ Sorted, so a tree carrying two spellings resolves
-    deterministically rather than by directory order. Two spellings in
-    one directory is already a misconfiguration; picking
-    nondeterministically would make it an intermittent one.
-    """
-    try:
-        for entry in sorted(base.iterdir()):
-            if entry.is_file() and is_defaults_name(entry.name):
-                return entry
-    except OSError:
-        pass
-    return base / "_defaults.yaml"
 
 
 def _h(key: str) -> str:
@@ -306,7 +285,7 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
     # only at `<config-dir>/_defaults.*` (the docstring above says so),
     # and making it recurse is a different change with its own blast
     # radius. Only the case axis moved.
-    defaults_path = _resolve_defaults_file(base)
+    defaults_path = resolve_defaults_file(base)
     # ⛔ Report the name actually read, not the canonical spelling. A
     # chain that says `_defaults.yaml` while `_DEFAULTS.YAML` supplied
     # the values sends the operator to edit a file that does not exist.

@@ -51,6 +51,13 @@ def find_config_file(tenant, config_dir):
     # the original case (`Upper.YAML` -> `Upper`), and folding here would
     # let `--tenant alpha` offboard a DIFFERENT tenant named `Alpha`.
     base = Path(config_dir)
+    # ⚠️ FLAT, and this now says so. The exporter reads the tree
+    # recursively, so a tenant whose carrier lives in a subdirectory is
+    # invisible here — and this is the OFFBOARD pre-check, where
+    # "no config found" reads as "safe to remove". `warn_nested`
+    # prints at most once per directory and nothing at all on a flat
+    # tree, so the common case is unchanged.
+    warn_nested(base)
     try:
         entries = sorted(base.iterdir())
     except OSError:

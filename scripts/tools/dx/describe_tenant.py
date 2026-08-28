@@ -187,9 +187,15 @@ class ConfDScanner:
         # #1588: matched by the shared predicate, not by two literal names.
         # `_DEFAULTS.YAML` measured as invisible here while the exporter
         # merged it into every downstream tenant.
+        by_dir: dict[Path, list[Path]] = {}
         for dp in self.conf_d.rglob("*"):
             if dp.is_file() and is_defaults_name(dp.name):
-                defaults_files[str(dp.resolve())] = _load_yaml(dp)
+                resolved = dp.resolve()
+                defaults_files[str(resolved)] = _load_yaml(dp)
+                by_dir.setdefault(resolved.parent, []).append(resolved)
+        for paths in by_dir.values():
+            paths.sort()  # two spellings in one dir resolve deterministically
+        self._defaults_by_dir = by_dir
         self.defaults_data = defaults_files
 
         # Collect all tenant files
@@ -229,17 +235,14 @@ class ConfDScanner:
         root = self.conf_d
 
         while True:
-            # #1588: shared predicate, not two literal names. A level
-            # carrying `_DEFAULTS.YAML` used to contribute nothing to the
-            # chain while the exporter merged it — so `effective_config`
-            # here answered a question about a config nobody runs.
-            try:
-                level = sorted(current.iterdir())
-            except OSError:
-                level = []
-            for dp in level:
-                if dp.is_file() and is_defaults_name(dp.name):
-                    chain.append(dp.resolve())
+            # #1588: looked up in the map `_scan` already built by
+            # walking the tree, rather than re-listing this directory.
+            # ⛔ Re-listing would have made this function a FLAT read of a
+            # config dir — which `test_confd_enumeration_contract.py`
+            # correctly rejects — even though the chain walk around it is
+            # what makes the reader hierarchical. Reusing the recursive
+            # scan's own result is both cheaper and honest.
+            chain.extend(self._defaults_by_dir.get(current.resolve(), []))
             if current == root or current == current.parent:
                 break
             current = current.parent
