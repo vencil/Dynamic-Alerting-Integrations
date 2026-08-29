@@ -214,6 +214,58 @@ def extract_changes_from_git_diff():
             and not c["metric"].startswith("_")]
 
 
+def _confd_entries(root: Path) -> list:
+    """List `root` once — naming it, never raising, never silently empty.
+
+    ⛔ Written because the #1588 fix below broke this and blind review
+    measured it. Swapping `glob("*.yaml")` for `iterdir()` looks like a
+    pure case fix, but the two disagree on an UNREADABLE directory:
+    `glob` swallows the scandir failure and yields nothing, `iterdir()`
+    raises straight through this module's callers. Measured on a
+    `chmod 000` conf.d as a non-root uid, same fixture both sides:
+
+        05d3136 (glob)     rc=2, "ERROR: Prometheus not reachable ..."
+        the fix (iterdir)  rc=1, PermissionError traceback out of main()
+
+    ⚠️ `is_dir()` does NOT guard this: it returns True for a directory
+    that cannot be read (and raises on its own when the PARENT is not
+    traversable), so the guard it replaced covered only the missing case.
+
+    `_lib_confd.unusable_config_paths` already settled what the right
+    answer is, in the same words: raising kills callers that iterate
+    outside a `try`, and returning `[]` is "a green light for a directory
+    nothing ever read" — so name the root instead. This is that answer at
+    the one call site that cannot use that function (it needs the ENTRIES,
+    not the unusable ones).
+    """
+    # ⛔ The #1339 guard lives HERE, not at the two call sites, and
+    # `test_confd_enumeration_contract` is what moved it: a flat scan and
+    # the warning that a hierarchical conf.d is not empty must be in the
+    # same scope, or a refactor can carry the scan away from its guard.
+    # This function is now the only place this tool lists a conf.d, so
+    # both sites are covered by construction rather than by remembering.
+    warn_nested(root, tool="backtest_threshold")
+    try:
+        return sorted(root.iterdir())
+    except (FileNotFoundError, NotADirectoryError):
+        # Both were empty results under `glob`, and a missing --config-dir
+        # is already reported by the caller's own emptiness. Unchanged.
+        return []
+    except OSError as exc:
+        # ⛔ The caught errno, NOT `_lib_confd.unusable_reason`. That
+        # function answers "why is `p` unusable as a config FILE", and the
+        # conf.d root is not one — asked about the root it re-probes with
+        # `os.walk` and can answer "is a directory, not a config file",
+        # which is both a non-sequitur (of course it is a directory) and a
+        # SECOND probe that may disagree with the failure actually caught
+        # here (a FUSE mount going away, a transient EIO). Reporting what
+        # was caught cannot drift from what happened.
+        print(f"WARNING: {safe_label(str(root))}: could not be listed — "
+              f"{type(exc).__name__}: {exc.strerror or exc} — the config "
+              f"files inside it were NOT scanned", file=sys.stderr)
+        return []
+
+
 def extract_changes_from_dirs(config_dir, baseline_dir):
     """Compare two config directories to find threshold changes.
 
@@ -223,9 +275,6 @@ def extract_changes_from_dirs(config_dir, baseline_dir):
 
     config_base = Path(config_dir)
     baseline_base = Path(baseline_dir)
-    # #1339: flat by design here — but a hierarchical conf.d must not
-    # look like an empty one. Name the files this scan cannot see.
-    warn_nested(config_base, tool="backtest_threshold")
     # #1588 site 2 of 4. `glob("*.yaml")` is case-SENSITIVE on Linux, so a
     # `DB-A.YAML` carrier produced 0 changes where the identical body under
     # `db-a.yaml` produced 1 — a backtest that reports "no threshold changes"
@@ -233,10 +282,10 @@ def extract_changes_from_dirs(config_dir, baseline_dir):
     # yields the SAME set as the glob did (directories included, exactly as
     # `glob` returned them), only case-folded: adding an `is_file()` filter
     # here would be the #1607 axis, which is not this commit's subject.
-    # ⚠️ `is_dir()` guard: `glob` on a missing directory yields nothing,
-    # `iterdir()` raises. Turning a missing --config-dir into a traceback
-    # would be a second behaviour change wearing this one's clothes.
-    _entries = sorted(config_base.iterdir()) if config_base.is_dir() else []
+    # ⚠️ The listing goes through `_confd_entries`, not a bare `iterdir()`:
+    # see its docstring for the unreadable-directory regression that a
+    # plain `is_dir()` guard does NOT cover.
+    _entries = _confd_entries(config_base)
     for path in (p for p in _entries
                  if has_yaml_extension(p.name, (".yaml",))):
         basename = path.name
@@ -731,13 +780,11 @@ def main():
     if args.git_diff:
         parsed_conf = load_conf_files(changed_conf_files())
     elif args.config_dir:
-        # #1339: second scan site — the guard must live where the scan does,
-        # otherwise a hierarchical conf.d is silently empty on THIS path.
-        warn_nested(Path(args.config_dir), tool="backtest_threshold")
-        # #1588 site 4 of 4. Same `is_dir()` reasoning as the scan above:
-        # a missing --config-dir stayed an empty result, not a traceback.
-        _cd = Path(args.config_dir)
-        _entries = sorted(_cd.iterdir()) if _cd.is_dir() else []
+        # #1588 site 4 of 4. Same listing helper as the scan above — the
+        # unreadable-directory case reached main() FIRST, before the
+        # Prometheus availability check, so `--skip-if-unavailable` could
+        # not contain it and the `--json` contract lost its one document.
+        _entries = _confd_entries(Path(args.config_dir))
         parsed_conf = load_conf_files(
             [str(p) for p in _entries
              if has_yaml_extension(p.name, (".yaml",))]

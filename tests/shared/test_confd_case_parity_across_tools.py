@@ -1348,11 +1348,33 @@ def test_unit_sanity_gate_reads_both_casings(tmp_path: pathlib.Path) -> None:
         confd = root / "components/threshold-exporter/config/conf.d"
         confd.mkdir(parents=True)
         (confd / fname).write_text(body, encoding="utf-8")
+        # ⛔ NEIGHBOURS, and they are what makes this test able to fail in
+        # both directions. Blind review measured the first version: with
+        # only the one carrier in the directory, deleting the extension
+        # filter OUTRIGHT left this test green, because "accept everything"
+        # and "accept the right thing" produce the same output on a
+        # directory holding exactly one file.
+        #   `neighbour.txt`  MUST NOT be read (it is not a config carrier)
+        #   `db-c.yml`       MUST be read — this gate's declared set is
+        #                    BOTH spellings, so dropping `.yml` is also a
+        #                    regression and gets its own direction here.
+        (confd / "neighbour.txt").write_text(body, encoding="utf-8")
+        (confd / "db-c.yml").write_text(body, encoding="utf-8")
         errs = gate.run_check(registry=registry, root=str(root))["errors"]
         counts[arm] = errs
     assert counts["lower"], (
         "fixture is vacuous: the lower arm produced no violation, so the "
         "comparison below would pass for a gate that reads nothing")
+    for arm in ("lower", "UPPER"):
+        named = sorted(e.split(":")[1].strip().rsplit("/", 1)[-1]
+                       for e in counts[arm])
+        assert len(counts[arm]) == 2, (
+            f"[{arm}] expected exactly the two YAML carriers to be read "
+            f"(the tenant file and `db-c.yml`), got {len(counts[arm])}: "
+            f"{named}. Three means the extension filter stopped filtering; "
+            f"one means `.yml` stopped being read.\n{counts[arm]}")
+        assert "neighbour.txt" not in named, (
+            f"[{arm}] the gate read a non-config file: {named}")
     assert len(counts["UPPER"]) == len(counts["lower"]), (
         f"the gate saw {len(counts['lower'])} violation(s) under "
         f"`db-a.yaml` and {len(counts['UPPER'])} under `DB-A.YAML`; the "
@@ -1371,8 +1393,22 @@ def test_batch_diagnose_discovers_tenants_from_either_casing(
     mod = _import_tool("ops", "batch_diagnose")
     found = {}
     for arm, fname in _CASE_ARMS:
+        # ⛔ Three neighbours, one per filter this loop applies, so that
+        # deleting any of them turns this test red rather than leaving it
+        # green on a one-key ConfigMap (blind review measured that hole):
+        #   `_defaults.yaml`  reserved — never a tenant
+        #   `README.md`       not a config carrier at all
+        #   `db-c.yml`        the SPELLING axis: `.yaml`-only is this
+        #                     tool's declared set (widening it is #1603),
+        #                     and `config_stem` internally accepts BOTH
+        #                     spellings — so if the outer filter is ever
+        #                     dropped, a `.yml` key silently becomes a
+        #                     tenant. That is pinned here, not assumed.
         payload = _json.dumps(
-            {"data": {fname: _TENANT_BODY, "_defaults.yaml": "d: {}\n"}})
+            {"data": {fname: _TENANT_BODY,
+                      "_defaults.yaml": "d: {}\n",
+                      "README.md": "# notes\n",
+                      "db-c.yml": _TENANT_BODY}})
 
         class _Result:
             returncode = 0
@@ -1407,12 +1443,25 @@ def test_backtest_sees_threshold_changes_under_either_casing(
         cur, old = tmp_path / arm / "cur", tmp_path / arm / "old"
         cur.mkdir(parents=True)
         old.mkdir(parents=True)
-        (old / fname).write_text("tenants:\n  acme:\n    cpu_usage: 80\n",
-                                 encoding="utf-8")
-        (cur / fname).write_text("tenants:\n  acme:\n    cpu_usage: 95\n",
-                                 encoding="utf-8")
+        # ⛔ Every neighbour carries the SAME edit, so anything that stops
+        # filtering shows up as an extra change rather than as nothing —
+        # the one-file fixture this replaced went green when the extension
+        # filter was deleted outright (blind review measured it).
+        for where, value in ((old, 80), (cur, 95)):
+            body = f"tenants:\n  acme:\n    cpu_usage: {value}\n"
+            (where / fname).write_text(body, encoding="utf-8")
+            (where / "neighbour.txt").write_text(body, encoding="utf-8")
+            (where / "db-c.yml").write_text(body, encoding="utf-8")
+            (where / "_defaults.yaml").write_text(
+                f"defaults:\n  cpu_usage: {value}\n", encoding="utf-8")
         seen[arm] = mod.extract_changes_from_dirs(str(cur), str(old))
     assert seen["lower"], "fixture is vacuous — the lower arm found no change"
+    for arm in ("lower", "UPPER"):
+        tenants = sorted({c["tenant"] for c in seen[arm]})
+        assert len(tenants) == 1, (
+            f"[{arm}] exactly one carrier is a tenant here; the `.txt`, the "
+            f"`.yml` (spelling axis is #1603) and the reserved "
+            f"`_defaults.yaml` must all be skipped. Got {tenants}")
     assert len(seen["UPPER"]) == len(seen["lower"]), (
         f"upper-cased carrier yielded {len(seen['UPPER'])} change(s) against "
         f"{len(seen['lower'])} for the same edit")
@@ -1436,11 +1485,89 @@ def test_chaos_soak_perturbs_a_carrier_under_either_casing(
         confd.mkdir(parents=True)
         carrier = confd / fname
         carrier.write_text(_TENANT_BODY, encoding="utf-8")
+        # ⛔ Neighbours that MUST NOT be the file this perturbs. Asserting
+        # only "something fired" cannot tell the right carrier from the
+        # wrong one, and `trigger_reload` writes to whichever entry it
+        # matches FIRST — so a filter that stopped filtering would edit an
+        # operator's `neighbour.txt` and still report success.
+        others = {}
+        for name, body in (("neighbour.txt", "not a config\n"),
+                           ("db-c.yml", _TENANT_BODY),
+                           ("_defaults.yaml", "defaults:\n  cpu_usage: 80\n")):
+            (confd / name).write_text(body, encoding="utf-8")
+            others[name] = body
         fired[arm] = (mod.trigger_reload(confd),
                       "# soak-toggle" in carrier.read_text(encoding="utf-8"))
+        untouched = {n: (confd / n).read_text(encoding="utf-8") == b
+                     for n, b in others.items()}
+        assert all(untouched.values()), (
+            f"[{arm}] the soak perturbed a file that is not its tenant "
+            f"carrier: {sorted(n for n, ok in untouched.items() if not ok)}")
     assert fired["lower"] == (True, True), (
         f"fixture is vacuous — the lower arm did not perturb anything: "
         f"{fired['lower']}")
     assert fired["UPPER"] == fired["lower"], (
         f"upper-cased carrier: {fired['UPPER']} against {fired['lower']} "
         f"(fired, carrier_actually_written)")
+
+
+def test_backtest_names_an_unreadable_config_dir_instead_of_raising(
+        tmp_path: pathlib.Path, monkeypatch) -> None:
+    """⛔ The case fix above swapped `glob("*.yaml")` for `iterdir()`, and
+    the two disagree on a directory that cannot be READ — not one that is
+    missing. `glob` swallows the scandir failure and yields nothing;
+    `iterdir()` raises straight out of `main()`, before the Prometheus
+    availability check, so `--skip-if-unavailable` cannot contain it and
+    the `--json` contract loses its one document. Measured as a non-root
+    uid on a `chmod 000` conf.d: `05d3136` exited 2 with "Prometheus not
+    reachable", the first version of the fix exited 1 with a
+    `PermissionError` traceback.
+
+    ⚠️ `is_dir()` is NOT the guard for this: it answers True for an
+    unreadable directory. The right answer is already settled in
+    `_lib_confd.unusable_config_paths` — raising kills callers that
+    iterate outside a `try`, `[]` is "a green light for a directory
+    nothing ever read", so NAME it.
+
+    ⚠️ Monkeypatched rather than `chmod`-driven, for the reason
+    `test_lib_confd.py` gives for the same scenario: this suite runs as
+    root in the dev container, where the permission bits do not apply.
+    """
+    mod = _import_tool("ops", "backtest_threshold")
+    confd = tmp_path / "conf.d"
+    confd.mkdir()
+    (confd / "db-a.yaml").write_text(_TENANT_BODY, encoding="utf-8")
+    baseline = tmp_path / "baseline"
+    baseline.mkdir()
+
+    real_iterdir = pathlib.Path.iterdir
+
+    def deny(self):
+        if os.fspath(self) == os.fspath(confd):
+            raise PermissionError(13, "Permission denied", str(self))
+        return real_iterdir(self)
+
+    monkeypatch.setattr(pathlib.Path, "iterdir", deny)
+
+    captured: list[str] = []
+    monkeypatch.setattr(
+        mod, "warn_nested", lambda *a, **k: False)  # its own walk, not ours
+    import io  # noqa: PLC0415
+    import contextlib  # noqa: PLC0415
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        changes = mod.extract_changes_from_dirs(str(confd), str(baseline))
+    captured.append(err.getvalue())
+
+    assert changes == [], (
+        f"an unreadable config dir must not invent changes; got {changes}")
+    assert str(confd) in captured[0], (
+        f"the unreadable directory was skipped SILENTLY — that is the "
+        f"green light this whole line of work exists to remove.\n"
+        f"stderr was: {captured[0]!r}")
+    assert "PermissionError" in captured[0], (
+        f"the warning must name the errno that was actually caught, not a "
+        f"re-probed guess; got {captured[0]!r}")
+    assert "were NOT scanned" in captured[0], (
+        f"the warning must say the report that follows is INCOMPLETE; "
+        f"got {captured[0]!r}")
