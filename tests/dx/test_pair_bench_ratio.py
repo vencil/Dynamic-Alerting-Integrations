@@ -649,7 +649,9 @@ def test_non_utf8_digest_file_is_unreadable_not_a_crash(tmp_path: Path):
 # ⚠️ That is not a rule being forgotten. It is a rule that did not exist —
 # and nothing in the suite noticed, because the happy-path test asserts
 # INDIVIDUAL KEYS and never the key SET, so a new required field turns nothing
-# red. These three tests are the rule.
+# red. These five tests are the rule — and note that TWO of them are the
+# rule while the other three are legibility; each docstring says which it is,
+# because getting that backwards is itself a blind-review finding here.
 
 _REPO = Path(__file__).resolve().parents[2]
 _WORKFLOW = _REPO / ".github/workflows/bench-record.yaml"
@@ -793,6 +795,12 @@ def _producer_keys_at(rev: str) -> frozenset:
     return _payload_keys(_git("show", f"{rev}:scripts/tools/dx/pair_bench_ratio.py"))
 
 
+def _workflow_keys_at(rev: str) -> frozenset:
+    return frozenset(_parse_printf_payload(
+        _git("show", f"{rev}:.github/workflows/bench-record.yaml"),
+        f"bench-record.yaml@{rev[:8]}"))
+
+
 def test_the_key_set_may_only_move_in_the_commit_that_moves_the_schema(tmp_path: Path):
     """⛔ THE RULE ITSELF, and the first cut of this gate did NOT enforce it.
 
@@ -856,13 +864,53 @@ def test_ok_payload_key_set_is_pinned_to_its_schema_version(tmp_path: Path):
     assert payload["schema"] == _SCHEMA
 
 
-def test_the_workflow_fallback_payload_is_pinned_the_same_way():
-    """The second producer. Pinning only the Python one leaves the gate blind
-    to half the surface — and 'two writers, one drifted' is the shape of the
-    original defect."""
+def test_the_workflow_key_set_may_only_move_in_the_commit_that_moves_the_schema():
+    """⛔ THE RULE, second producer — and its ABSENCE was a blind-review finding.
+
+    Round 3 measured the hole, and it was the ROUND 1 hole still standing on
+    the half of the surface that never got anchored: add a required key to the
+    workflow's `printf` payload, then add that key to `_INCONCLUSIVE_KEYS` —
+    the edit the failure message itself points you at — and 65 passed with the
+    defect committed and the schema string never moved. Two files, two lines,
+    no trickery. The test next door claimed "same rule as above"; it was not
+    the same rule, it was the literal-vs-literal check already rejected once.
+
+    ⚠️ WEAKER THAN THE PYTHON SIDE, and pretending otherwise is exactly how
+    this got missed: a GitHub Actions step cannot be run from a test, so there
+    is no output to read and this compares TEXT — a model of the producer, and
+    a model is the thing that got fooled twice. What it has instead is a model
+    that refuses to guess: `_parse_printf_payload` fails closed on zero or 2+
+    blocks, in the historical revision as well as the working tree.
+    """
+    payload = _workflow_fallback_payload()
+    schema = payload["schema"]
+    intro = _commit_that_introduced(schema, ".github/workflows/bench-record.yaml")
+    if intro is None:
+        return  # schema being introduced right now; same as the Python side
+    assert frozenset(payload) == _workflow_keys_at(intro), (
+        f"the workflow's INCONCLUSIVE payload key set changed since "
+        f"{intro[:8]}, the commit that introduced {schema!r}, without the "
+        "schema string moving with it. ⛔ Adding the key to _INCONCLUSIVE_KEYS "
+        "silences the sibling test but not this one: bump the schema in BOTH "
+        "producers, or revert the key change."
+    )
+
+
+def test_workflow_payload_key_set_is_pinned_to_its_schema_version():
+    """The second producer's readable shape. 'Two writers, one drifted' is the
+    shape of the original defect, so both get named here.
+
+    ⚠️ LEGIBILITY, NOT THE RULE — same standing as its Python counterpart, and
+    for the same reason: `_INCONCLUSIVE_KEYS` is a literal in this file, so an
+    author who edits both sides silences it. The rule is enforced by
+    `test_the_workflow_key_set_may_only_move_in_the_commit_that_moves_the
+    _schema`. This one earns its place by failing FIRST with a message that
+    says what to do."""
     payload = _workflow_fallback_payload()
     assert set(payload) == set(_INCONCLUSIVE_KEYS), (
-        "the workflow's INCONCLUSIVE payload keys moved; same rule as above."
+        "the workflow's INCONCLUSIVE payload keys moved. If that is intended, "
+        "bump the schema string in BOTH producers and update _INCONCLUSIVE_KEYS"
+        "/_SCHEMA here — and note that updating them is NOT enough on its own."
     )
     assert payload["schema"] == _SCHEMA
     assert payload["status"] == "INCONCLUSIVE"
