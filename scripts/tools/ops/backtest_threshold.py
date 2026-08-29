@@ -155,7 +155,9 @@ def extract_changes_from_git_diff():
             fname = line[6:]
             # Extract tenant from filename (conf.d/db-a.yaml → db-a)
             basename = Path(fname).name
-            # #1588 site 1 of 4 in this file. `.yaml` ONLY is preserved on
+            # #1588 site 1 of 6 in this file (the first version counted 4 and the
+            # two it missed were `_flat_keys_at_head1` — which was still
+            # broken — and `load_conf_files`, which needed no change). `.yaml` ONLY is preserved on
             # purpose — the spelling axis is #1603 — but the case folding
             # and the stem both move to the shared predicates. Hand-slicing
             # the stem is what `config_stem` exists to stop: `str.lower()`
@@ -275,7 +277,7 @@ def extract_changes_from_dirs(config_dir, baseline_dir):
 
     config_base = Path(config_dir)
     baseline_base = Path(baseline_dir)
-    # #1588 site 2 of 4. `glob("*.yaml")` is case-SENSITIVE on Linux, so a
+    # #1588 site 2 of 6. `glob("*.yaml")` is case-SENSITIVE on Linux, so a
     # `DB-A.YAML` carrier produced 0 changes where the identical body under
     # `db-a.yaml` produced 1 — a backtest that reports "no threshold changes"
     # for a change that is really there. `iterdir()` + the shared predicate
@@ -297,6 +299,20 @@ def extract_changes_from_dirs(config_dir, baseline_dir):
         # produced a report naming a tenant called `DB-A.YAML` — the fix
         # for a silent miss turned into a loud wrong answer. Measured.
         tenant = config_stem(basename)
+        if not tenant:
+            # ⛔ `config_stem` answers "" for a `.`-prefixed name, and the
+            # first version of this fix used the answer WITHOUT checking
+            # it: blind review measured `.foo.yaml` producing a change
+            # whose tenant was the empty string, where `05d3136` at least
+            # said `.foo`. A silent miss turned into a loud wrong answer —
+            # and an empty id flows on into the report and into
+            # `_flat_keys_at_head1("")`.
+            #
+            # Skipped, not warned: hidden entries are skipped by every
+            # reader in this repo and by the exporter's own scanner, so
+            # naming one here would report a loss that did not happen
+            # (the #1607 round settled that wording).
+            continue
         new_data = load_yaml_file(str(path), default={})
         baseline_path = str(baseline_base / basename)
         old_data = load_yaml_file(baseline_path, default={})
@@ -351,7 +367,7 @@ def changed_conf_files():
             return []
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return []
-    # #1588 site 3 of 4. Same rule, third hand-written copy in one file.
+    # #1588 site 3 of 6. Same rule, third hand-written copy in one file.
     return [f"conf.d/{Path(ln.strip()).name}" for ln in result.stdout.splitlines()
             if has_yaml_extension(ln.strip(), (".yaml",))]
 
@@ -395,6 +411,36 @@ def find_custom_alert_tenants(parsed):
     return sorted(set(found))
 
 
+def _carrier_at_head1(tenant):
+    """The HEAD~1 `conf.d/` path whose stem IS `tenant`, or None.
+
+    ⚠️ `.yaml` ONLY, matching every other site in this file: the spelling
+    axis is #1603 and widening it here would let a `.yml` carrier answer
+    for a tenant this tool otherwise cannot see.
+
+    The comparison is `config_stem(name) == tenant` — the SAME predicate
+    that produced the tenant id in the first place, so the two cannot
+    disagree the way a re-spelled filename did.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "ls-tree", "--name-only", "HEAD~1", "./conf.d/"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode != 0:
+            return None
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return None
+    for line in result.stdout.splitlines():
+        entry = line.strip()
+        if not entry:
+            continue
+        name = Path(entry).name
+        if has_yaml_extension(name, (".yaml",)) and config_stem(name) == tenant:
+            return f"./conf.d/{name}"
+    return None
+
+
 def _flat_keys_at_head1(tenant):
     """Top-level scalar threshold keys for `tenant` as of HEAD~1.
 
@@ -410,7 +456,36 @@ def _flat_keys_at_head1(tenant):
             capture_output=True, text=True, timeout=15,
         )
         if result.returncode != 0:
-            return set()
+            # ⛔ #1588 site 5 of 6, and the one the first version MISSED —
+            # it counted "of 4" and this was not among them. Re-spelling
+            # the carrier from the tenant id is the family's own defect in
+            # miniature: `config_stem` preserves the carrier's case (it
+            # must — folding it renames the tenant on the write plane), so
+            # a `DB-A.YAML` carrier gives tenant `DB-A`, and this line then
+            # asked git for `conf.d/DB-A.yaml`, which does not exist.
+            # Measured end to end on two git repos with byte-identical
+            # bodies, HEAD~1 holding a threshold that HEAD removes:
+            #
+            #   lower  raw=1 change   KEPT=1     (the removal is reported)
+            #   UPPER  raw=1 change   KEPT=0     (silently dropped)
+            #
+            # ⇒ the operator saw "No threshold changes found." for a
+            # threshold that really was removed — the DISABLE direction —
+            # and saw exactly that on `05d3136` too, so the earlier fix
+            # bought nothing on this path.
+            #
+            # The name is resolved by ASKING GIT WHAT IS THERE rather than
+            # by spelling it again. Kept as a fallback so the guessed path
+            # stays the fast path and nothing changes when it is right.
+            resolved = _carrier_at_head1(tenant)
+            if resolved is None:
+                return set()
+            result = subprocess.run(
+                ["git", "show", f"HEAD~1:{resolved}"],
+                capture_output=True, text=True, timeout=15,
+            )
+            if result.returncode != 0:
+                return set()
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return set()
     import yaml
@@ -780,7 +855,7 @@ def main():
     if args.git_diff:
         parsed_conf = load_conf_files(changed_conf_files())
     elif args.config_dir:
-        # #1588 site 4 of 4. Same listing helper as the scan above — the
+        # #1588 site 4 of 6. Same listing helper as the scan above — the
         # unreadable-directory case reached main() FIRST, before the
         # Prometheus availability check, so `--skip-if-unavailable` could
         # not contain it and the `--json` contract lost its one document.

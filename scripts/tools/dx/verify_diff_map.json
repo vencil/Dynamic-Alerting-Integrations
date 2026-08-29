@@ -767,7 +767,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "59c1187f5082daa5736139b92671317713846d7bf616becc3e49b3afab835b9d",
+ "source_digest": "2d4559f6c99b58b37065df8a13e47731e6f31f1c9d09beb9ed0751d17ad92b2a",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -2534,6 +2534,9 @@
   ],
   "scripts/tools/ops/alert_quality.py": [
    "tests/shared/test_help_contract.py"
+  ],
+  "scripts/tools/ops/backtest_threshold.py": [
+   "tests/shared/test_confd_case_parity_across_tools.py"
   ],
   "scripts/tools/ops/bench-canary/canary_test.go": [
    "tests/dx/test_analyze_bench_history.py",

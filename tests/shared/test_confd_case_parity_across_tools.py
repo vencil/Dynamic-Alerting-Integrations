@@ -1452,6 +1452,12 @@ def test_backtest_sees_threshold_changes_under_either_casing(
             (where / fname).write_text(body, encoding="utf-8")
             (where / "neighbour.txt").write_text(body, encoding="utf-8")
             (where / "db-c.yml").write_text(body, encoding="utf-8")
+            # ⛔ A `.`-prefixed carrier: `config_stem` answers "" for it,
+            # and the first version USED that answer without checking, so
+            # this file produced a change whose tenant was the empty
+            # string — worse than `05d3136`, which at least said `.foo`.
+            # A surviving mutant until this neighbour existed.
+            (where / ".hidden.yaml").write_text(body, encoding="utf-8")
             (where / "_defaults.yaml").write_text(
                 f"defaults:\n  cpu_usage: {value}\n", encoding="utf-8")
         seen[arm] = mod.extract_changes_from_dirs(str(cur), str(old))
@@ -1571,3 +1577,137 @@ def test_backtest_names_an_unreadable_config_dir_instead_of_raising(
     assert "were NOT scanned" in captured[0], (
         f"the warning must say the report that follows is INCOMPLETE; "
         f"got {captured[0]!r}")
+
+
+# ── the sites the first counterfactual did not reach ──────────────────
+#
+# ⛔ Blind review measured this: the fix touched SIX filename sites in
+# `backtest_threshold.py`, the commit counted "of 4", and reverting three
+# of them left the whole suite green. The one that was not counted was
+# also the one still broken. The four tests above cover exactly one of
+# those sites (`extract_changes_from_dirs`); these cover the rest.
+
+def _git_conf_d_repo(root: pathlib.Path, carrier: str,
+                     before: str, after: str) -> pathlib.Path:
+    """A git repo whose `conf.d/<carrier>` changes between HEAD~1 and HEAD."""
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "conf.d").mkdir()
+    run = lambda *a: subprocess.run(  # noqa: E731
+        a, cwd=root, capture_output=True, timeout=60)
+    run("git", "init", "-q")
+    run("git", "config", "user.email", "t@example.invalid")
+    run("git", "config", "user.name", "t")
+    (root / "conf.d" / carrier).write_text(before, encoding="utf-8")
+    run("git", "add", "-A")
+    run("git", "commit", "-qm", "before")
+    (root / "conf.d" / carrier).write_text(after, encoding="utf-8")
+    run("git", "add", "-A")
+    run("git", "commit", "-qm", "after")
+    return root
+
+
+_BEFORE = "tenants:\n  acme:\n    cpu_usage: 80\n    mem_usage: 70\n"
+_AFTER_REMOVED = "tenants:\n  acme:\n    mem_usage: 70\n"
+
+
+def test_git_diff_path_reports_a_removal_under_either_casing(
+        tmp_path: pathlib.Path, monkeypatch) -> None:
+    """⛔ The REMOVAL direction — a threshold being taken away, i.e. an
+    alert being disabled — through the `--git-diff` mode CI actually runs.
+
+    Three sites at once: `changed_conf_files`, the diff parser's tenant
+    extraction, and the HEAD~1 lookup that classifies a removal. The last
+    one re-SPELLED the carrier from the tenant id (`{tenant}.yaml`), and
+    because `config_stem` preserves case on purpose, an upper-cased
+    carrier made `git show` fail and the removal was dropped. Measured:
+    the operator saw "No threshold changes found." for a removal that was
+    really there — on `05d3136` AND on the first version of the fix.
+    """
+    mod = _import_tool("ops", "backtest_threshold")
+    kept = {}
+    for arm, carrier in (("lower", "db-a.yaml"), ("UPPER", "DB-A.YAML")):
+        repo = _git_conf_d_repo(tmp_path / arm, carrier,
+                                _BEFORE, _AFTER_REMOVED)
+        monkeypatch.chdir(repo)
+        files = mod.changed_conf_files()
+        parsed = mod.load_conf_files(files)
+        raw = mod.extract_changes_from_git_diff()
+        kept[arm] = (files, sorted(parsed),
+                     [(c["tenant"], c["metric"]) for c in
+                      mod.keep_flat_threshold_changes(raw, parsed)])
+    assert kept["lower"][2] == [("db-a", "cpu_usage")], (
+        f"fixture is vacuous — the lower arm reported {kept['lower']}")
+    # ⛔ Assert the three sites SEPARATELY. Asserting only the final
+    # `kept` list left `changed_conf_files` uncovered: a removal is
+    # classified against HEAD~1, not against `parsed`, so reverting that
+    # site to a case-sensitive test made the file list empty and the end
+    # result was still right. Measured — it was a surviving mutant.
+    for arm, carrier, tid in (("lower", "db-a.yaml", "db-a"),
+                              ("UPPER", "DB-A.YAML", "DB-A")):
+        assert kept[arm][0] == [f"conf.d/{carrier}"], (
+            f"[{arm}] `changed_conf_files` did not see the carrier git "
+            f"itself reported as changed; got {kept[arm][0]}")
+        assert kept[arm][1] == [tid], (
+            f"[{arm}] the changed file did not parse into its tenant; "
+            f"got {kept[arm][1]}")
+    assert len(kept["UPPER"][2]) == len(kept["lower"][2]), (
+        f"the removal survived under `db-a.yaml` and was dropped under "
+        f"`DB-A.YAML`.\nlower: {kept['lower']}\nUPPER: {kept['UPPER']}")
+    assert kept["UPPER"][2] == [("DB-A", "cpu_usage")], (
+        f"tenant id must keep the carrier's case; got {kept['UPPER'][2]}")
+
+
+def test_config_dir_recipe_scan_sees_either_casing(
+        tmp_path: pathlib.Path) -> None:
+    """The fourth site: `main()`'s own `--config-dir` scan, which feeds the
+    custom-alert notice. It is a SEPARATE listing from
+    `extract_changes_from_dirs`, so the tests above cannot reach it — and
+    reverting it alone left the suite green.
+
+    Driven through the CLI because that is the only way this site runs.
+    """
+    bodies = ("tenants:\n  acme:\n    cpu_usage: 80\n"
+              "    _custom_alerts:\n      - recipe: threshold\n")
+    seen = {}
+    for arm, carrier in (("lower", "db-a.yaml"), ("UPPER", "DB-A.YAML")):
+        cur, base = tmp_path / arm / "cur", tmp_path / arm / "base"
+        cur.mkdir(parents=True)
+        base.mkdir(parents=True)
+        (cur / carrier).write_text(bodies, encoding="utf-8")
+        (base / carrier).write_text(bodies, encoding="utf-8")
+        r = subprocess.run(
+            [sys.executable, "-X", "utf8",
+             str(TOOLS_DIR / "ops" / "backtest_threshold.py"),
+             "--config-dir", str(cur), "--baseline", str(base),
+             "--skip-if-unavailable", "--json"],
+            capture_output=True, timeout=180, cwd=str(tmp_path),
+            env=dict(os.environ, PYTHONIOENCODING="utf-8"))
+        seen[arm] = r.stderr.decode("utf-8", "replace")
+    assert "_custom_alerts" in seen["lower"], (
+        f"fixture is vacuous — the lower arm printed no recipe notice:\n"
+        f"{seen['lower'][:400]}")
+    for arm in ("lower", "UPPER"):
+        assert "acme" in seen[arm], (
+            f"[{arm}] the recipe-bearing tenant was not seen by the "
+            f"--config-dir scan:\n{seen[arm][:400]}")
+
+
+def test_config_dir_scan_still_lists_a_config_named_directory(
+        tmp_path: pathlib.Path) -> None:
+    """⛔ The `is_file()` axis (#1607) must stay OUT of this change, and
+    saying so in a comment is not a guard: blind review added an
+    `is_file()` filter to both scan sites and the whole suite stayed
+    green. `glob("*.yaml")` returned a directory named `notes.yaml/`, so
+    the replacement must too — whatever happens to it downstream is
+    #1607's question, not this one's.
+    """
+    mod = _import_tool("ops", "backtest_threshold")
+    tree = tmp_path / "conf.d"
+    tree.mkdir()
+    (tree / "notes.yaml").mkdir()
+    (tree / "db-a.yaml").write_text(_BEFORE, encoding="utf-8")
+    listed = [p.name for p in mod._confd_entries(tree)]
+    assert "notes.yaml" in listed, (
+        f"a config-named DIRECTORY dropped out of the listing; that is the "
+        f"#1607 axis smuggled into a case fix. Listed: {listed}")
+    assert "db-a.yaml" in listed, f"fixture is vacuous: {listed}"
