@@ -933,6 +933,62 @@ def check_versions() -> dict[str, object]:
 # ============================================================
 # Check 9: Tenant declaration uniqueness (#1577)
 # ============================================================
+class _ExporterKeyLoader(yaml.SafeLoader):
+    """``SafeLoader``, except a mapping key is the scalar's RAW TEXT.
+
+    ⛔ THIS IS NOT A STYLE CHOICE. ``yaml.safe_load`` and the exporter's
+    ``gopkg.in/yaml.v3`` disagree about what a tenant id *is*, silently and in
+    both directions, because PyYAML implements YAML **1.1** implicit typing
+    while yaml.v3 keys a ``map[string]...`` on the scalar's text. Measured on
+    ``tenants:`` blocks holding ``on / yes / true / True / on2 / 010 / null``:
+
+    ======================  ==========================================
+    Go (the oracle)         6 ids: ``010 True on on2 true yes``
+    ``yaml.safe_load``      4 ids: ``on2 8 None True``
+    raw scalar text         7 ids: the above plus ``null``
+    ======================  ==========================================
+
+    So ``safe_load`` folds four *different* tenants (``on``/``yes``/``true``/
+    ``True``) into one id, and renames ``010`` to ``8`` — and both directions
+    of that were reproduced end to end before this class existed:
+
+    * **missed**: ``no:`` in one file and ``"no":`` in another is one id to the
+      exporter (it rejects the whole dir) and two to ``safe_load`` → PASS;
+    * **false red**: ``yes:`` and ``true:`` are two ids to the exporter and one
+      to ``safe_load`` → FAIL, naming a tenant ``"True"`` that appears in
+      neither file, so the operator cannot even grep for it.
+
+    Two behaviours are kept rather than reimplemented, both measured against Go
+    on this host (the snippet is in ``TestTenantIdParity``'s docstring so the
+    table can be re-derived rather than trusted):
+
+    * ``<<:`` merge keys are expanded — Go expands them too (measured: a
+      ``tenants:`` block merging an anchor yields the anchor's ids, not ``<<``),
+      which is why this subclasses the constructor instead of walking
+      ``yaml.compose``: compose would report a tenant literally named ``<<``.
+    * a ``null`` / ``~`` key is dropped — measured: Go drops it as well.
+
+    ⚠️ One measured residual, deliberately not closed here: Go **rejects** a
+    file that repeats the ``tenants:`` key (``mapping key "tenants" already
+    defined``) while PyYAML takes the last block. That is a whole-file parse
+    verdict, so it belongs to ``yaml_syntax``, not to this check — recorded so
+    the next reader does not have to re-measure it to find out it is known.
+    """
+
+    def construct_mapping(self, node, deep=False):  # noqa: D102 — see class
+        self.flatten_mapping(node)
+        mapping = {}
+        for key_node, value_node in node.value:
+            if isinstance(key_node, yaml.ScalarNode):
+                if key_node.tag == "tag:yaml.org,2002:null":
+                    continue
+                key = key_node.value
+            else:
+                key = str(self.construct_object(key_node, deep=deep))
+            mapping[key] = self.construct_object(value_node, deep=deep)
+        return mapping
+
+
 def check_tenant_uniqueness(config_dir: str) -> dict[str, object]:
     """One tenant declared by two files makes the exporter refuse the WHOLE tree.
 
@@ -989,7 +1045,7 @@ def check_tenant_uniqueness(config_dir: str) -> dict[str, object]:
             label = path.name
         try:
             with open(path, encoding="utf-8") as fh:
-                data = yaml.safe_load(fh)
+                data = yaml.load(fh, Loader=_ExporterKeyLoader)  # noqa: S506 — see class
         except Exception:  # noqa: BLE001 — `yaml_syntax` owns naming the reason
             unreadable.append(label)
             continue
@@ -999,7 +1055,7 @@ def check_tenant_uniqueness(config_dir: str) -> dict[str, object]:
         if not isinstance(tenants, dict):
             continue
         for tenant_id in tenants:
-            declared.setdefault(str(tenant_id), set()).add(label)
+            declared.setdefault(tenant_id, set()).add(label)
 
     duplicates = {tid: sorted(paths)
                   for tid, paths in declared.items() if len(paths) > 1}
@@ -1021,12 +1077,20 @@ def check_tenant_uniqueness(config_dir: str) -> dict[str, object]:
         return _make_result("tenant_uniqueness", FAIL, details)
 
     if unreadable:
+        # ⛔ Its own hint, not the check-level one. `_CHECK_HINTS` is keyed by
+        # check NAME, so the FAIL advice ("decide which single file owns each
+        # tenant listed above") also printed under this row — where nothing is
+        # listed above, because this row just said there is no duplicate.
+        # Blind review read it as an instruction to act on an empty list.
         return _make_result("tenant_uniqueness", WARN, [
             f"no duplicate declaration among the {len(declared)} tenant(s) in "
             f"the files that could be read, but {len(unreadable)} file(s) "
             f"could not be read and were not examined: "
             f"{', '.join(sorted(unreadable))} — this is a limit on what was "
-            f"checked, not a clean result"])
+            f"checked, not a clean result"],
+            hint="Fix the unreadable file(s) named above (yaml_syntax says why) "
+                 "and re-run: a second declaration of an existing tenant can be "
+                 "sitting in a file this check could not open.")
 
     return _make_result("tenant_uniqueness", PASS, [
         f"{len(declared)} tenant(s), each declared in exactly one file"])
