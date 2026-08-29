@@ -21,6 +21,7 @@ half it exists to catch — two writers, one drifting. See §P5 in dev-rules.
 """
 from __future__ import annotations
 
+import ast
 import json
 import re
 import subprocess
@@ -650,7 +651,8 @@ def test_non_utf8_digest_file_is_unreadable_not_a_crash(tmp_path: Path):
 # INDIVIDUAL KEYS and never the key SET, so a new required field turns nothing
 # red. These three tests are the rule.
 
-_WORKFLOW = Path(__file__).resolve().parents[2] / ".github/workflows/bench-record.yaml"
+_REPO = Path(__file__).resolve().parents[2]
+_WORKFLOW = _REPO / ".github/workflows/bench-record.yaml"
 
 # The exact top-level shape each producer writes today. Changing either set is
 # allowed — changing it WITHOUT moving the schema string is what is not.
@@ -665,32 +667,150 @@ _INCONCLUSIVE_KEYS = frozenset({
 _SCHEMA = "bench-paired/v2"
 
 
-def _workflow_fallback_payload() -> dict:
-    """Extract the INCONCLUSIVE payload the workflow writes with `printf`.
+_PRINTF_PAYLOAD = r"printf '(\{\\n.*?\})\\n' \\"
 
-    ⛔ FAIL-CLOSED. If the anchor stops matching — someone reformats the
-    `printf`, switches to a heredoc, splits it across lines — this raises
-    instead of returning nothing. A shape gate that silently finds nothing to
-    check is worse than no gate: it reports green for a surface it stopped
-    reading. That failure mode is the whole reason this ticket exists.
+
+def _parse_printf_payload(text: str, where: str) -> dict:
+    """Pull the `printf`-written JSON payload out of a workflow file.
+
+    ⛔ FAIL-CLOSED IN BOTH DIRECTIONS, and the second one was a blind-review
+    finding against the first cut of this helper:
+
+      no match    someone reformatted the `printf` — split it, switched to a
+                  heredoc. A shape gate that silently finds nothing to check is
+                  worse than no gate: it reports green for a surface it stopped
+                  reading.
+      two matches the first cut used `re.search`, which takes the FIRST hit in
+                  the file and says nothing. Review inserted a decoy
+                  `printf '{...}' \\` block ahead of the real one and the
+                  extractor read the decoy. ⚠️ Measured: it is POSITION
+                  dependent — a decoy placed after the real block is ignored,
+                  so the failure is silent exactly half the time. Requiring
+                  exactly one match removes the coin flip.
     """
-    text = _WORKFLOW.read_text(encoding="utf-8")
-    match = re.search(r"printf '(\{\\n.*?\})\\n' \\", text, re.S)
-    assert match, (
-        "the bench-record.yaml INCONCLUSIVE `printf` payload anchor no longer "
-        "matches. The payload did not necessarily change — the way it is "
-        "WRITTEN did. Re-point this extractor at it; do not delete this test."
+    hits = re.findall(_PRINTF_PAYLOAD, text, re.S)
+    assert len(hits) == 1, (
+        f"expected exactly one `printf` JSON payload in {where}, found "
+        f"{len(hits)}. Zero means the payload did not necessarily change — the "
+        "way it is WRITTEN did; re-point this extractor and do not delete this "
+        "test. Two or more means this extractor can no longer tell which block "
+        "it is reading, and picking one silently is how a gate starts lying."
     )
     # `\n` is for the shell, `%s` are runtime substitutions. Neither affects
     # the key set or the schema string, which is all this gate reads.
-    raw = match.group(1).replace("\\n", "\n").replace("%s", "PLACEHOLDER")
-    return json.loads(raw)
+    return json.loads(hits[0].replace("\\n", "\n").replace("%s", "PLACEHOLDER"))
+
+
+def _workflow_fallback_payload() -> dict:
+    return _parse_printf_payload(_WORKFLOW.read_text(encoding="utf-8"),
+                                 "bench-record.yaml")
+
+
+def _git(*args: str) -> str:
+    """Run git in the repo, failing closed rather than degrading to a skip."""
+    proc = subprocess.run(("git", "-C", str(_REPO)) + args,
+                          capture_output=True, text=True, timeout=30)
+    assert proc.returncode == 0, f"git {' '.join(args)} failed: {proc.stderr}"
+    return proc.stdout
+
+
+def _commit_that_introduced(schema: str, path: str) -> str | None:
+    """The newest commit whose diff to `path` added or removed `schema`.
+
+    `None` means the string is not in this file's history yet — i.e. it is
+    being introduced in the working tree right now, which is precisely the
+    legitimate bump this rule asks for.
+    """
+    out = _git("log", "-S", f'"{schema}"', "--format=%H", "--", path).split()
+    return out[0] if out else None
+
+
+def _payload_keys(source: str) -> frozenset:
+    """Top-level keys of the `payload = {...}` literal in `source`, via AST."""
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Assign)
+                and any(isinstance(t, ast.Name) and t.id == "payload"
+                        for t in node.targets)
+                and isinstance(node.value, ast.Dict)):
+            return frozenset(k.value for k in node.value.keys)
+    raise AssertionError("no `payload = {...}` literal found")
+
+
+def _producer_keys_now() -> frozenset:
+    """⛔ THE WORKING TREE, not `git show HEAD`. The first cut of this gate read
+    HEAD and was therefore blind to the change being made — measured: the
+    review's silencing edit still passed 65/65, because the edit was not
+    committed yet and HEAD still held the old shape. A pre-commit gate that can
+    only see what is already committed cannot stop anything."""
+    return _payload_keys(Path(pbr.__file__).read_text(encoding="utf-8"))
+
+
+def _producer_keys_at(rev: str) -> frozenset:
+    return _payload_keys(_git("show", f"{rev}:scripts/tools/dx/pair_bench_ratio.py"))
+
+
+def test_the_key_set_may_only_move_in_the_commit_that_moves_the_schema():
+    """⛔ THE RULE ITSELF, and the first cut of this gate did NOT enforce it.
+
+    Blind review measured the hole: commit the required-field addition, then
+    add that key to `_OK_KEYS` below and everything goes green again — the
+    original defect committed in full, schema string never moved, 64 passed.
+    ⇒ pinning against a literal in this file only enforces that the literal
+    and the code agree. It is the author editing both, in one sitting.
+
+    ⇒ the anchor is GIT HISTORY instead: the key set must equal the key set as
+    of the commit that introduced the schema string the producer names today.
+    Editing `_OK_KEYS` cannot satisfy that; only bumping the schema can, which
+    is the rule stated as an assertion.
+
+    ⚠️ When the schema string is NOT yet in this file's history, that means it
+    is being introduced in the working tree right now — the legitimate bump —
+    and this passes. That is not a hole: the next commit puts it in history and
+    every later key change is measured against it.
+
+    ⚠️ Needs full history. `ci.yml` checks out with `fetch-depth: 0`, and the
+    `git show`-pinned fixtures in `test_paired_trend_watch.py` already depend
+    on it and pass in CI — measured precedent, not an assumption.
+    """
+    schema = pbr_payload_schema()
+    intro = _commit_that_introduced(schema, "scripts/tools/dx/pair_bench_ratio.py")
+    if intro is None:
+        return  # schema being introduced right now; see docstring
+    assert _producer_keys_now() == _producer_keys_at(intro), (
+        f"the payload key set changed since {intro[:8]}, the commit that "
+        f"introduced {schema!r}, without the schema string moving with it. "
+        "That is TRK-367 verbatim: `60f4523` added a REQUIRED field under an "
+        "unchanged schema and every older artifact became unreadable. Bump the "
+        "schema in BOTH producers, or revert the key change."
+    )
+
+
+def pbr_payload_schema() -> str:
+    """The schema string the Python producer writes, read from source."""
+    tree = ast.parse(Path(pbr.__file__).read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Assign)
+                and any(isinstance(t, ast.Name) and t.id == "payload"
+                        for t in node.targets)
+                and isinstance(node.value, ast.Dict)):
+            for k, v in zip(node.value.keys, node.value.values):
+                if k.value == "schema":
+                    return v.value
+    raise AssertionError("no `schema` key in the payload literal")
 
 
 def test_ok_payload_key_set_is_pinned_to_its_schema_version(tmp_path: Path):
-    """⛔ The key SET, not individual keys. `test_happy_path_writes_the_expected
+    """The key SET, not individual keys. `test_happy_path_writes_the_expected
     _payload` asserts five keys by name and would stay green if a sixth
-    REQUIRED one appeared — which is exactly what `60f4523` did."""
+    REQUIRED one appeared — which is exactly what `60f4523` did.
+
+    ⚠️ THIS ONE IS LEGIBILITY, NOT THE RULE. `_OK_KEYS` is a literal in this
+    file, so an author who edits both sides silences it. The rule is enforced
+    by `test_the_key_set_may_only_move_in_the_commit_that_moves_the_schema`,
+    which anchors on git history instead. This test earns its place by naming
+    today's shape in one readable place and by failing first, with a message
+    that says what to do."""
     r = run(tmp_path,
             side([("BenchmarkA", 100.0)]),
             side([("BenchmarkA", 105.0)]))
