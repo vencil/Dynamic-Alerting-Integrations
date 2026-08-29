@@ -116,7 +116,8 @@
    "tests/dx/test_add_frontmatter.py"
   ],
   "scripts/tools/dx/analyze_bench_history.py": [
-   "tests/dx/test_analyze_bench_history.py"
+   "tests/dx/test_analyze_bench_history.py",
+   "tests/dx/test_paired_trend_watch.py"
   ],
   "scripts/tools/dx/axe_lite_static.py": [
    "tests/dx/test_axe_lite_static.py",
@@ -763,7 +764,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "cda8139ea5299dd101414aaa74d8f9d56e56cd14fd2ae91fea080a30c89d3efa",
+ "source_digest": "b36443ce6f90b962f4502937e4be8b9e557a7adeba4d456cbd0752e181b0c181",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -2212,9 +2213,6 @@
   "scripts/tools/dx/_atomic_write.py": [
    "tests/dx/test_atomic_write.py",
    "tests/dx/test_verify_diff.py"
-  ],
-  "scripts/tools/dx/analyze_bench_history.py": [
-   "tests/dx/test_paired_trend_watch.py"
   ],
   "scripts/tools/dx/axe_lite_static.py": [
    "tests/dx/test_axe_lite_static.py"

@@ -965,17 +965,36 @@ if mode == "auth-fail":
     raise SystemExit(4)
 if argv[:2] == ["run", "list"]:
     limit = int(argv[argv.index("--limit") + 1])
+    status = argv[argv.index("--status") + 1]
+    argv_log = os.environ.get("STUB_ARGV_LOG")
+    if argv_log:
+        pathlib.Path(argv_log).write_text(json.dumps(argv), encoding="utf-8")
     # A DISTINCT head per run, on purpose: a shared literal would pass a
     # consumer that stamped every night with whichever sha it saw last.
     # ⛔ The digits must differ in the FIRST SEVEN characters — the renderer
     # abbreviates, so trailing-digit variation would compare equal on screen
     # and this stub would stop being able to tell the two cases apart.
+    failed = {int(x) for x in os.environ.get("STUB_FAILED", "").split(",") if x}
     runs = [{"databaseId": 900 + i,
              "createdAt": "2026-08-%02dT03:35:00Z" % (20 + i),
              "headSha": ("%x" % (0xC0FFEE0 + i)).ljust(40, "0"),
-             "conclusion": "success"}
-            for i in range(min(limit, int(os.environ["STUB_RUNS"])))]
-    print(json.dumps(runs))
+             "conclusion": "failure" if i in failed else "success"}
+            for i in range(int(os.environ["STUB_RUNS"]))]
+    # Filter then limit, mirroring `gh`: it asks GitHub for `limit` runs ALREADY
+    # matching the status, so a filtered-out night does not merely vanish -- the
+    # window reaches one night further back and still reports N.
+    # ⚠️ NO ASSERTION IN THIS FILE DEPENDS ON THAT ORDER, and an earlier comment
+    # here claimed it was "the order that matters". It is not, for these tests:
+    # the tool under test only ever asks `completed`, under which both orders
+    # produce the same list -- reversing them leaves all 171 green, measured. It
+    # is written this way so the stub does not teach a wrong mental model of the
+    # real API, not because anything here checks it.
+    if status == "success":
+        runs = [r for r in runs if r["conclusion"] == "success"]
+    elif status != "completed":
+        sys.stderr.write("stub: unsupported --status %r\n" % status)
+        raise SystemExit(9)
+    print(json.dumps(runs[:limit]))
     raise SystemExit(0)
 if argv[:2] == ["run", "download"]:
     run_id = argv[2]
@@ -1015,10 +1034,13 @@ def gh_stub(tmp_path):
     stub.write_text(_GH_STUB, encoding="utf-8")
     stub.chmod(0o755)
 
-    def run(mode, runs=2, extra=()):
+    def run(mode, runs=2, extra=(), failed=(), argv_log=None):
         env = dict(os.environ,
                    PATH=f"{binhome}{os.pathsep}{os.environ['PATH']}",
-                   STUB_MODE=mode, STUB_RUNS=str(runs))
+                   STUB_MODE=mode, STUB_RUNS=str(runs),
+                   STUB_FAILED=",".join(str(i) for i in failed))
+        if argv_log is not None:
+            env["STUB_ARGV_LOG"] = str(argv_log)
         return subprocess.run(
             [sys.executable, str(_TOOLS_DIR / "paired_trend_watch.py"),
              "--from-gh", "--limit", "3",
@@ -1075,6 +1097,125 @@ def test_from_gh_degrades_to_unreadable_never_to_clean(gh_stub, mode):
     assert "**INCONCLUSIVE**" in proc.stdout
     assert "**CLEAR**" not in proc.stdout
     assert "unreadable" in proc.stdout
+
+
+# ── 4b. THE WINDOW PREDICATE — "the run finished", not "every job passed" ──
+
+
+def test_from_gh_keeps_a_night_whose_run_finished_red(gh_stub, tmp_path):
+    """⛔ A consumer job's crash must not delete the producer's artifact.
+
+    Both watchdogs found prior nights with `gh run list --status success`, which
+    keys on the WORKFLOW RUN's conclusion — and one failed job fails the run. So
+    a crash in `trend-watch`, a job this module does not own and whose output it
+    never reads, took that night's `bench-paired.json` out of THIS window too. A
+    K-of-N rule over a window the operator believes is 14 nights but is quietly
+    13 fires later than advertised.
+
+    ⚠️ WHAT THIS TEST DOES AND DOES NOT PROVE, because the distinction is the
+    one this file keeps having to make. The stub MODELS GitHub's `--status`
+    filter; it does not consult GitHub. So this proves our side: we ask for
+    `completed`, and a run that came back with `conclusion: failure` is loaded,
+    counted on its artifact's own merits, and labelled. That `--status success`
+    would really have hidden it upstream rests on GitHub's documented behaviour
+    for that parameter, which no test here can execute.
+    """
+    proc = gh_stub("ok", runs=2, failed=(0,))
+    assert proc.returncode == ptw.EXIT_OK, proc.stderr
+    # ⛔ PER ROW, not "both strings appear somewhere on the page". The first cut
+    # of this test asserted `"`900`" in stdout` and `"failure" in stdout`
+    # separately, which a stamping bug that SWAPS the two runs' conclusions
+    # satisfies exactly as well — measured, 171 passed with them swapped. A
+    # conclusion on the wrong night is the quiet wrongness the column exists to
+    # prevent, so the assertion has to bind the label to the row.
+    assert re.search(r"`900`\s*\|[^|]*\|\s*failure\s*\|", proc.stdout), proc.stdout
+    assert re.search(r"`901`\s*\|[^|]*\|\s*success\s*\|", proc.stdout), proc.stdout
+    # Both nights, so the window is 2 — the red one was admitted, not replaced.
+    assert "2 of 2 calendar night(s)" in proc.stdout
+
+
+def _spy_effective_status(monkeypatch, abh, seen):
+    """Replace `list_recent_runs` with a spy that records the EFFECTIVE status.
+
+    ⛔ The spy must NOT carry a default of its own. An earlier cut wrote
+    `def spy(workflow, limit, status="success")`, which made
+    `test_the_old_watchdogs_window_still_asks_only_for_successful_runs`
+    tautological: the caller passes nothing, the SPY's literal supplies
+    "success", and the assertion holds no matter what the real module says.
+    Measured — flipping `list_recent_runs`' own default to "completed" left that
+    test GREEN. So the default is read off the real signature at spy time, and
+    "what the caller ends up with" is what gets recorded.
+    """
+    import inspect
+    real_default = inspect.signature(
+        abh.list_recent_runs).parameters["status"].default
+    unset = object()
+
+    # ⛔ The parameter is named, not swallowed by `**kwargs`. An earlier cut took
+    # `*args, **kwargs`, which meant a caller that MISSPELLED the keyword —
+    # `staatus="completed"` — recorded `real_default` and passed, while the real
+    # `list_recent_runs` would raise TypeError on that same call. A spy that
+    # absorbs a crash the production signature would raise is not recording the
+    # effective status, which is the one thing this helper claims to do.
+    def spy(workflow, limit, status=unset):
+        seen.append(real_default if status is unset else status)
+        return []
+
+    monkeypatch.setattr(abh, "list_recent_runs", spy)
+
+
+def test_the_window_asks_for_completed_runs_not_only_successful_ones(
+        monkeypatch, tmp_path):
+    """The predicate itself, captured from the call rather than read off source.
+
+    ⛔ Deliberately NOT a grep of the module text: a source-reading check passes
+    on a decoy literal and on a line that no longer executes, and this file has
+    been burned by exactly that twice (see `_produced_payload`'s siblings in
+    `test_pair_bench_ratio.py`). Spying on the real call is what the caller
+    actually does.
+    """
+    import analyze_bench_history as abh
+    seen = []
+    _spy_effective_status(monkeypatch, abh, seen)
+    ptw.nights_from_gh("bench-record.yaml", 14, str(tmp_path))
+    assert seen == ["completed"]
+
+
+def test_the_old_watchdogs_window_still_asks_only_for_successful_runs(
+        monkeypatch, tmp_path):
+    """⛔ The asymmetry is deliberate, so it is pinned rather than left to drift.
+
+    ⚠️ AND THIS TEST DID NOT PIN IT UNTIL THE SPY WAS FIXED. Its first cut gave
+    the spy its own `status="success"` default, so the assertion was true by
+    construction and stayed GREEN while the real default was flipped to
+    `completed` — a test whose name promised more than it checked, which is the
+    exact defect class this file exists to refuse. Recorded rather than quietly
+    corrected.
+
+    `bench-paired.json` can say whether it is whole — JSON parse, schema string,
+    required keys — so admitting a red run there costs nothing. `bench-baseline
+    .txt` cannot: it is a `cp` of a text file with no row count and no trailer,
+    `night_records_from_gh` applies no sample floor (`statistics.median` of a
+    one-element list is that element), and `upload-artifact` runs `if: always()`
+    so a run that died mid-benchmark still uploads what exists. Flipping that
+    side would feed single-sample "medians" into the rule that opens
+    `perf-trend` issues.
+
+    ⚠️ This test pins WHICH predicate each consumer asks for. It does not claim
+    the asymmetry is the end state — `bench-baseline.txt` carrying its own
+    completeness marker would let both sides ask `completed`, and until that
+    exists the old watchdog keeps losing a night whenever any job in the run
+    fails, its own crash included. Stated as an open gap, not a solved one.
+    """
+    import analyze_bench_history as abh
+    seen = []
+    _spy_effective_status(monkeypatch, abh, seen)
+    abh.night_records_from_gh("bench-record.yaml", 14, tmp_path)
+    # The EFFECTIVE status, so BOTH ways of breaking this are caught: the call
+    # site starting to pass `completed`, and the module's own default being
+    # flipped under a call site that passes nothing. The second one is what the
+    # first cut of this test could not see.
+    assert seen == ["success"]
 
 
 def test_from_gh_two_runs_on_one_calendar_night_do_not_satisfy_k_of_2(tmp_path):
@@ -1897,14 +2038,21 @@ def test_a_v2_payload_can_carry_a_null_reference_sha():
 
 
 def test_the_new_job_cannot_take_the_nights_data_down_with_it():
-    """⛔ Both watchdogs find prior nights with `--status success`, which keys on
-    the RUN's conclusion, and one failed job fails the run.
+    """⛔ A watchdog that asks `--status success` keys its window on the RUN's
+    conclusion, and one failed job fails the run.
 
-    So an exit-2 from this unproven reporter would delete that night's
-    `bench-paired.json` and `bench-baseline.txt` from BOTH watchdogs' future
-    windows — silently shortening a window the operator believes is 14 nights.
-    `continue-on-error` is what makes the "does not entangle" claim in the
-    workflow comment actually true.
+    So an exit-2 from this unproven reporter would delete that night's artifact
+    from such a window — silently shortening a window the operator believes is
+    14 nights. `continue-on-error` is what makes the "does not entangle" claim
+    in the workflow comment actually true.
+
+    ⛔ NARROWED, and the old wording is kept here as the thing being corrected:
+    this docstring used to say "BOTH watchdogs" and name `bench-paired.json`
+    beside `bench-baseline.txt`. `paired_trend_watch.py` now asks for
+    `completed` and judges the artifact itself, so ITS window already survives a
+    red run. The line below is load-bearing for the other one only —
+    `analyze_bench_history.py` still asks `success` — which is why the assertion
+    is on that module's default rather than on a literal shared by both.
     """
     yaml = pytest.importorskip("yaml")
     workflow = yaml.safe_load(
@@ -1915,10 +2063,14 @@ def test_the_new_job_cannot_take_the_nights_data_down_with_it():
     # failure IS the nightly failing. Pinning the asymmetry so a future edit
     # cannot quietly make this reporter load-bearing, or that watchdog silent.
     assert "continue-on-error" not in workflow["jobs"]["trend-watch"]
-    # The window query this depends on, pinned at its source.
-    watchdog = (_REPO / "scripts" / "tools" / "dx"
-                / "analyze_bench_history.py").read_text(encoding="utf-8")
-    assert '"--status", "success"' in watchdog
+    # The window query this depends on, pinned at the real object rather than
+    # at the file's text: a literal search passes on a decoy and on a line that
+    # no longer executes, and the flag is now a parameter, not a constant.
+    import inspect
+
+    import analyze_bench_history as abh
+    assert inspect.signature(
+        abh.list_recent_runs).parameters["status"].default == "success"
 
 
 # ── 7. FIXES FOR THE FIFTH REVIEW ROUND ───────────────────────────────────

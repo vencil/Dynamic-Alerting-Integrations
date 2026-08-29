@@ -239,8 +239,36 @@ def _gh(cmd: list[str], capture: bool = True) -> str:
     return proc.stdout
 
 
-def list_recent_runs(workflow: str, limit: int) -> list[dict]:
-    """List the N most recent successful workflow runs.
+def list_recent_runs(workflow: str, limit: int,
+                     status: str = "success") -> list[dict]:
+    """List the N most recent workflow runs matching ``status``.
+
+    ``status`` is passed to `gh run list --status` verbatim. That flag matches
+    a run's STATUS **or** its CONCLUSION (GitHub's own API parameter is
+    documented that way), so `"success"` means "every job in the run passed"
+    and `"completed"` means "the run finished, pass or fail".
+
+    ⛔ WHY THE DEFAULT IS STILL `"success"`, and it is not inertia. Keying the
+    window on the RUN's conclusion conflates two questions — "did the producer
+    write a usable artifact?" and "did every other job in the run pass?" — so a
+    failing CONSUMER job (this module's own `trend-watch`, say) deletes that
+    night's artifacts from every future window, its own included. The fix is to
+    ask `"completed"` and let the loader judge the artifact. That is safe only
+    where the artifact can say whether it is whole:
+
+      * `bench-paired.json` can — JSON parse, schema string, required keys.
+        `paired_trend_watch.py` therefore asks for `"completed"`.
+      * `bench-baseline.txt` CANNOT. It is a `cp` of a text file with no row
+        count, no trailer, no marker, and `night_records_from_gh` applies no
+        sample floor (`statistics.median` of a one-element list is that
+        element). A run that died mid-benchmark still uploads what exists
+        (`upload-artifact` runs `if: always()`), so admitting non-success runs
+        here would feed single-sample "medians" — and possibly a `cpu:` header
+        lost to truncation, which #1396 exists to prevent — straight into the
+        rule that opens `perf-trend` issues.
+
+    So this module keeps `"success"` until `bench-baseline.txt` carries its own
+    completeness marker. Stated as an open gap rather than a solved one.
 
     Raises ``RuntimeError`` with a friendly message if ``gh`` is unauthenticated
     or the workflow doesn't exist.
@@ -251,7 +279,7 @@ def list_recent_runs(workflow: str, limit: int) -> list[dict]:
             "--workflow", workflow,
             "--repo", REPO,
             "--limit", str(limit),
-            "--status", "success",
+            "--status", status,
             "--json", "databaseId,createdAt,headSha,conclusion",
         ])
     except subprocess.CalledProcessError as exc:
