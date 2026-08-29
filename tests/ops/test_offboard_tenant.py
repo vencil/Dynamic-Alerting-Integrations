@@ -261,3 +261,89 @@ class TestMainCLI:
         with pytest.raises(SystemExit) as exc_info:
             ot.main()
         assert exc_info.value.code == 1
+
+
+# ---------------------------------------------------------------------------
+# #1607 — unusable-entry reporting, called IN-PROCESS
+# ---------------------------------------------------------------------------
+#
+# ⛔ The cross-tool harness drives this tool through `subprocess`, which is
+# right for asserting operator-visible output but leaves these branches
+# unmeasured: `[tool.coverage.run]` sets no `concurrency` /
+# `COVERAGE_PROCESS_START`, so a child process is not counted. Measured on the
+# PR that added the harness: this file went -2.2%. These call the functions
+# directly, so the branches are both asserted and measured.
+
+
+def _confd_with_unusable(tmp_path):
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    (root / "_defaults.yaml").write_text(
+        "defaults:\n  pg_connections: 80\n", encoding="utf-8")
+    (root / "alpha.yaml").write_text(
+        "tenants:\n  alpha:\n    pg_connections: 90\n", encoding="utf-8")
+    (root / "notes.yaml").mkdir()
+    (root / "broken.yaml").symlink_to(root / "gone.yaml")
+    return root
+
+
+def test_load_all_configs_names_unusable_entries(tmp_path, capsys):
+    root = _confd_with_unusable(tmp_path)
+
+    configs = ot.load_all_configs(str(root))
+
+    assert set(configs) == {"_defaults.yaml", "alpha.yaml"}, (
+        f"unusable entries must not be loaded as configs; got {set(configs)}")
+    out = capsys.readouterr().out
+    assert "notes.yaml" in out and "broken.yaml" in out
+    assert "is a directory, not a config file" in out
+    assert "is a broken symlink" in out
+
+
+def test_load_all_configs_is_quiet_on_a_clean_tree(tmp_path, capsys):
+    """⛔ Blast radius: a healthy conf.d must gain no new output."""
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    (root / "alpha.yaml").write_text(
+        "tenants:\n  alpha: {}\n", encoding="utf-8")
+
+    ot.load_all_configs(str(root))
+
+    assert capsys.readouterr().out == ""
+
+
+def test_find_config_file_returns_none_for_a_directory_shaped_carrier(
+        tmp_path):
+    """`notes.yaml/` is not a config file, so the carrier lookup must miss —
+    the pre-check's job is then to explain why, not to imply nothing exists."""
+    root = _confd_with_unusable(tmp_path)
+
+    assert ot.find_config_file("notes", str(root)) is None
+    assert ot.find_config_file("alpha", str(root)) == str(root / "alpha.yaml")
+
+
+def test_find_config_file_survives_a_config_dir_that_cannot_be_listed(
+        tmp_path):
+    """⛔ The `except OSError` branch. A path that is a FILE raises
+    NotADirectoryError from `iterdir()`; the tool must answer "not found"
+    rather than die with a traceback in the middle of an offboard pre-check."""
+    not_a_dir = tmp_path / "conf.d"
+    not_a_dir.write_text("i am a file\n", encoding="utf-8")
+
+    assert ot.find_config_file("alpha", str(not_a_dir)) is None
+
+
+def test_precheck_explains_a_tenant_whose_carrier_is_unusable(
+        tmp_path, capsys):
+    """The report says "找不到設定檔案"; the run must also say WHY, or an
+    operator reads it as "there is nothing here to remove"."""
+    root = _confd_with_unusable(tmp_path)
+
+    can_proceed, report = ot.run_precheck("notes", str(root))
+    printed = capsys.readouterr().out
+    text = "\n".join(report) + printed
+
+    assert can_proceed is False
+    assert "找不到設定檔案" in text
+    assert "is a directory, not a config file" in text, (
+        f"the pre-check refused without saying why.\n{text}")

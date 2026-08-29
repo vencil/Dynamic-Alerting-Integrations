@@ -763,7 +763,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "844dd0bef0e14aa0b0336fc5e84aee93828a82c83b0aa0e3eb45e64f143f5904",
+ "source_digest": "8913504f9d4c8017e2b64b06a358c80501bc51adff651a57644b49f2344777d5",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -2930,6 +2930,9 @@
   ],
   "tests/shared/property-coverage.yaml": [
    "tests/lint/test_check_property_coverage.py"
+  ],
+  "tests/shared/test_confd_case_parity_across_tools.py": [
+   "tests/ops/test_operator_generate_v2.py"
   ],
   "tests/shared/test_confd_enumeration_contract.py": [
    "tests/ops/test_confd_unusable_signal.py"

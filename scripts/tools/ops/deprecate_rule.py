@@ -292,12 +292,17 @@ def main():
     # file" does nothing for the code path that gives the wrong answer. It
     # dedups per directory per process, so `scan_for_metric`'s call below
     # stays silent rather than repeating this one.
+    #
+    # ⛔ NO `try/except OSError` here, deliberately. The first version had one
+    # and it was false robustness: `scan_for_metric` lists the same directory
+    # two lines later with no guard of its own (and did so before #1607), so
+    # swallowing the error here bought nothing except the impression that an
+    # unlistable conf.d is handled. Measured — injecting EIO on this directory
+    # made the run die inside `scan_for_metric` anyway, with the guard in
+    # place. One failure mode, reported once, at the place that owns it.
     _base = Path(args.config_dir)
     warn_nested(_base, tool="deprecate_rule")
-    try:
-        _entries = sorted(_base.iterdir())
-    except OSError:
-        _entries = []
+    _entries = sorted(_base.iterdir())
     for bad in unusable_config_entries(_entries):
         print(f"  ⚠️  略過 {safe_label(bad.name)}——{unusable_reason(bad)}",
               file=sys.stderr)
