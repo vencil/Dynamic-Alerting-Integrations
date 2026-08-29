@@ -761,7 +761,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "262302ff13647720ee8b6fe48224e0b68e40f293f1342d47a5f205e10cacb553",
+ "source_digest": "edd0c49ecc476be56fd4d5e10c7a72f6daa2c1bdf6a79cb102745eba662e25e5",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -2269,7 +2269,6 @@
    "tests/dx/test_waveform_score.py"
   ],
   "scripts/tools/dx/pair_bench_ratio.py": [
-   "tests/dx/test_pair_bench_ratio.py",
    "tests/dx/test_paired_trend_watch.py"
   ],
   "scripts/tools/dx/paired_trend_watch.py": [

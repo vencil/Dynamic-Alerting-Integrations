@@ -21,7 +21,6 @@ half it exists to catch — two writers, one drifting. See §P5 in dev-rules.
 """
 from __future__ import annotations
 
-import ast
 import json
 import re
 import subprocess
@@ -649,9 +648,31 @@ def test_non_utf8_digest_file_is_unreadable_not_a_crash(tmp_path: Path):
 # ⚠️ That is not a rule being forgotten. It is a rule that did not exist —
 # and nothing in the suite noticed, because the happy-path test asserts
 # INDIVIDUAL KEYS and never the key SET, so a new required field turns nothing
-# red. These five tests are the rule — and note that TWO of them are the
-# rule while the other three are legibility; each docstring says which it is,
-# because getting that backwards is itself a blind-review finding here.
+# red. These three tests are the whole of it.
+#
+# ⛔ WHAT THIS GATE DOES AND DOES NOT BUY, stated once so no docstring below
+# has to over-claim it again. It pins the key SET of both producers next to the
+# schema string they name, and it reads the OK payload by RUNNING the producer,
+# so no model of the source can be desynchronised from what is written. That
+# stops the accident — which is the thing that actually happened: `60f4523` was
+# nobody silencing anything, it was a field added without the question being
+# asked. It does NOT stop an author who sees the red and edits `_OK_KEYS`
+# instead of thinking. Nothing repo-resident can: the gate lives in the tree it
+# guards. What it buys is that the mistake cannot be made by ACCIDENT and that
+# silencing it deliberately leaves a self-incriminating diff.
+#
+# ⛔ AND A REVERSAL, recorded rather than quietly dropped. An earlier cut of
+# this block anchored the key set on git history — the commit that introduced
+# today's schema string, via `git log --follow -S` — precisely so that editing
+# `_OK_KEYS` could not satisfy it. Five blind-review rounds took that apart:
+# `--follow`'s rename detection is a SIMILARITY HEURISTIC, so an ordinary
+# rename-plus-reformat left the pickaxe answering with the attack commit itself
+# (self-anchored, vacuously green, both producers), while a rename round-trip
+# made the same string enter history three times and tripped the ambiguity
+# guard on a change that moved no key at all — red forever, on nothing.
+# ⚠️ A gate that cries wolf gets deleted, which is a false negative with extra
+# steps. The anchor was removed because its added strength was partly illusory
+# and its false positives were not.
 
 _REPO = Path(__file__).resolve().parents[2]
 _WORKFLOW = _REPO / ".github/workflows/bench-record.yaml"
@@ -708,111 +729,6 @@ def _workflow_fallback_payload() -> dict:
                                  "bench-record.yaml")
 
 
-def _git(*args: str) -> str:
-    """Run git in the repo, failing closed rather than degrading to a skip."""
-    proc = subprocess.run(("git", "-C", str(_REPO)) + args,
-                          capture_output=True, text=True, timeout=30)
-    assert proc.returncode == 0, f"git {' '.join(args)} failed: {proc.stderr}"
-    return proc.stdout
-
-
-def _commit_that_introduced(schema: str, path: str) -> str | None:
-    """The newest commit whose diff to `path` added or removed `schema`.
-
-    `None` means the string is not in this file's history yet — i.e. it is
-    being introduced in the working tree right now, which is precisely the
-    legitimate bump this rule asks for.
-    """
-    # ⛔ `--follow`, and its absence was a blind-review finding. Without it the
-    # pathspec-limited log only sees commits that touched THIS path, so a commit
-    # that renames the file registers the string as going 0→1 there and becomes
-    # the answer — the commit under test anchoring itself, and any key added in
-    # that same commit compares equal to itself. ⚠️ Measured in a throwaway repo:
-    # rename + sneak a required key in one commit ⇒ plain pickaxe returns that
-    # commit, `--follow` returns the real introduction. On this repo's real
-    # history `--follow` changes no answer at all (v2 ⇒ c7d05869, v1 ⇒ still the
-    # two commits that make it ambiguous, v99 ⇒ still none).
-    out = _git("log", "--follow", "-S", f'"{schema}"',
-               "--format=%H", "--", path).split()
-    # ⛔ AMBIGUOUS HISTORY FAILS CLOSED, and this was a blind-review finding.
-    # The first cut took `out[0]` — the NEWEST match — which a bump-and-revert
-    # turns into the revert commit, whose key set already carries the added
-    # field, so the comparison holds vacuously. ⚠️ Measured against real
-    # history, not a hypothetical: `git log -S '"bench-paired/v1"'` returns TWO
-    # commits (9599bdd5 introduced it, c7d05869 removed it), and `out[0]` is
-    # the removal. When a string has been introduced more than once there is no
-    # single baseline to measure against, and picking one silently is how a
-    # gate starts lying.
-    assert len(out) <= 1, (
-        f"{schema!r} enters and leaves this file\'s history {len(out)} times "
-        f"({', '.join(h[:8] for h in out)}), so there is no single commit that "
-        "establishes what shape that version names. A human has to say which "
-        "one is the baseline — this gate will not guess."
-    )
-    return out[0] if out else None
-
-
-def _path_at(rev: str, path: str) -> str:
-    """What `path` was called at `rev`, following renames.
-
-    Fixing the anchor is only half of it: `git show <intro>:<today's path>` dies
-    when the file has been renamed since, which is fail-closed but stickily so —
-    the gate would stay red until the next schema bump. So ask git for the name
-    it had in the commit we are about to read.
-    """
-    out = _git("log", "--follow", "--format=%x00%H", "--name-only", "--", path)
-    sha, names = None, {}
-    for line in out.splitlines():
-        if line.startswith("\0"):
-            sha = line[1:].strip()
-        elif line.strip() and sha and sha not in names:
-            names[sha] = line.strip()
-    full = next((h for h in names if h.startswith(rev) or rev.startswith(h)), None)
-    assert full is not None, (
-        f"{path!r} has no name recorded at {rev[:8]} in its own --follow history. "
-        "That should be impossible for a commit this function was handed; a human "
-        "has to look, because guessing a filename is how a gate starts lying."
-    )
-    return names[full]
-
-
-def _payload_keys(source: str) -> frozenset:
-    """Top-level keys of the `payload = {...}` literal in `source`, via AST.
-
-    ⛔ EXACTLY ONE, and that too was a blind-review finding. The first cut
-    returned the first `ast.walk` hit — and `ast.walk` is breadth-first, so a
-    decoy `payload = {...}` at module scope is visited BEFORE the real one
-    inside `main()`. Review added a nine-key decoy, added a tenth required key
-    to the real payload, and this read the decoy: 65 passed with the defect
-    committed. A second literal means this function cannot tell which one it is
-    reading; that is not a tie to break, it is a question to refuse.
-    """
-    found = []
-    for n in ast.walk(ast.parse(source)):
-        # ⚠️ BOTH forms, and missing the second one was a blind-review finding:
-        # `payload: dict = {...}` parses as AnnAssign, not Assign, so an ordinary
-        # type annotation made this return zero. Fail-closed, but the wrong way —
-        # a legitimate no-op edit turning the gate red, and stickily so once it
-        # lands in the anchor commit. A gate that cries wolf gets deleted.
-        if isinstance(n, ast.Assign):
-            targets = n.targets
-        elif isinstance(n, ast.AnnAssign):
-            targets = [n.target]
-        else:
-            continue
-        if (any(isinstance(t, ast.Name) and t.id == "payload" for t in targets)
-                and isinstance(n.value, ast.Dict)):
-            found.append(n.value)
-    assert len(found) == 1, (
-        f"expected exactly one `payload = {{...}}` literal, found {len(found)}. "
-        "Zero means the payload stopped being a literal (built by `.update()`, "
-        "a comprehension, conditional keys — an annotated assignment used to "
-        "land here too, which was a false positive, not a catch) and this "
-        "extractor can no longer read it. Two or more means it cannot tell which is the real one."
-    )
-    return frozenset(k.value for k in found[0].keys)
-
-
 def _produced_payload(tmp_path: Path) -> dict:
     """⛔ GROUND TRUTH: run the producer and read what it actually wrote.
 
@@ -827,8 +743,10 @@ def _produced_payload(tmp_path: Path) -> dict:
                         `ast.walk` reaches first. 65 passed with the defect in.
 
     ⭐ Both failures are the same shape: a MODEL of the producer can be fooled;
-    its OUTPUT cannot. So the current side runs the script, and source parsing
-    survives only where running is not available — the historical side.
+    its OUTPUT cannot. So this reads the output. ⚠️ The workflow producer gets
+    no equivalent — an Actions step cannot be run from a test, so that side
+    compares TEXT and its extractor fails closed instead. Saying the two sides
+    are equally strong is how the last four rounds each went wrong.
     """
     r = run(tmp_path,
             side([("BenchmarkA", 100.0)]),
@@ -837,136 +755,44 @@ def _produced_payload(tmp_path: Path) -> dict:
     return json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
 
 
-_PY_PRODUCER = "scripts/tools/dx/pair_bench_ratio.py"
-_WORKFLOW_PATH = ".github/workflows/bench-record.yaml"
-
-
-def _producer_keys_at(rev: str) -> frozenset:
-    return _payload_keys(_git("show", f"{rev}:{_path_at(rev, _PY_PRODUCER)}"))
-
-
-def _workflow_keys_at(rev: str) -> frozenset:
-    return frozenset(_parse_printf_payload(
-        _git("show", f"{rev}:{_path_at(rev, _WORKFLOW_PATH)}"),
-        f"bench-record.yaml@{rev[:8]}"))
-
-
-def test_the_key_set_may_only_move_in_the_commit_that_moves_the_schema(tmp_path: Path):
-    """⛔ THE RULE ITSELF, and the first cut of this gate did NOT enforce it.
-
-    Blind review measured the hole: commit the required-field addition, then
-    add that key to `_OK_KEYS` below and everything goes green again — the
-    original defect committed in full, schema string never moved, 64 passed.
-    ⇒ pinning against a literal in this file only enforces that the literal
-    and the code agree. It is the author editing both, in one sitting.
-
-    ⇒ the anchor is GIT HISTORY instead: the key set must equal the key set as
-    of the commit that introduced the schema string the producer names today.
-    Editing `_OK_KEYS` cannot satisfy that; only bumping the schema can, which
-    is the rule stated as an assertion.
-
-    ⚠️ When the schema string is NOT yet in this file's history, that means it
-    is being introduced in the working tree right now — the legitimate bump —
-    and this passes. That is not a hole: the next commit puts it in history and
-    every later key change is measured against it.
-
-    ⚠️ Needs full history. `ci.yml` checks out with `fetch-depth: 0`, and the
-    `git show`-pinned fixtures in `test_paired_trend_watch.py` already depend
-    on it and pass in CI — measured precedent, not an assumption.
-    """
-    produced = _produced_payload(tmp_path)
-    schema = produced["schema"]
-    intro = _commit_that_introduced(schema, _PY_PRODUCER)
-    if intro is None:
-        return  # schema being introduced right now; see docstring
-    assert frozenset(produced) == _producer_keys_at(intro), (
-        f"the payload key set changed since {intro[:8]}, the commit that "
-        f"introduced {schema!r}, without the schema string moving with it. "
-        "That is TRK-367 verbatim: `60f4523` added a REQUIRED field under an "
-        "unchanged schema and every older artifact became unreadable. Bump the "
-        "schema in BOTH producers, or revert the key change."
-    )
-
-
-
 def test_ok_payload_key_set_is_pinned_to_its_schema_version(tmp_path: Path):
     """The key SET, not individual keys. `test_happy_path_writes_the_expected
     _payload` asserts five keys by name and would stay green if a sixth
     REQUIRED one appeared — which is exactly what `60f4523` did.
 
-    ⚠️ THIS ONE IS LEGIBILITY, NOT THE RULE. `_OK_KEYS` is a literal in this
-    file, so an author who edits both sides silences it. The rule is enforced
-    by `test_the_key_set_may_only_move_in_the_commit_that_moves_the_schema`,
-    which anchors on git history instead. It earns its place by naming today's
-    shape in one readable place, right next to the constant a reader has to
-    trust.
+    ⚠️ `_OK_KEYS` is a literal in this file, so an author who edits both sides
+    silences it. That is stated plainly in the block header rather than papered
+    over here — an earlier cut of this docstring pointed at a history-anchored
+    "real rule" that has since been removed for being weaker than it read and
+    for going red on changes that broke nothing.
 
-    ⚠️ An earlier cut of this docstring also claimed it "fails first", so the
-    reader would meet the friendly message before the history-anchored one.
-    Blind review measured that and it is FALSE — pytest reports in definition
-    order and the rule test is defined above this one. Claiming an ordering at
-    all was the mistake: it rests on plugin config nobody here pins."""
-    r = run(tmp_path,
-            side([("BenchmarkA", 100.0)]),
-            side([("BenchmarkA", 105.0)]))
-    assert r.returncode == 0, r.stderr
-    payload = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
+    The payload is read by RUNNING the producer, not by parsing it: a decoy
+    literal and a stale `git show` each defeated a source-reading cut of this."""
+    payload = _produced_payload(tmp_path)
     assert set(payload) == set(_OK_KEYS), (
         "the OK payload's top-level keys moved. If that is intended, bump the "
-        "schema string in BOTH producers and update _OK_KEYS/_SCHEMA here — "
-        "a required-field change under an unchanged schema string is the "
-        "defect this gate exists to stop (TRK-367)."
+        "schema string in BOTH producers and update _OK_KEYS/_SCHEMA here. "
+        "⛔ Updating the constant WITHOUT bumping the schema is the defect this "
+        "gate exists to stop (TRK-367), not the way to green."
     )
     assert payload["schema"] == _SCHEMA
-
-
-def test_the_workflow_key_set_may_only_move_in_the_commit_that_moves_the_schema():
-    """⛔ THE RULE, second producer — and its ABSENCE was a blind-review finding.
-
-    Round 3 measured the hole, and it was the ROUND 1 hole still standing on
-    the half of the surface that never got anchored: add a required key to the
-    workflow's `printf` payload, then add that key to `_INCONCLUSIVE_KEYS` —
-    the edit the failure message itself points you at — and 65 passed with the
-    defect committed and the schema string never moved. Two files, two lines,
-    no trickery. The test next door claimed "same rule as above"; it was not
-    the same rule, it was the literal-vs-literal check already rejected once.
-
-    ⚠️ WEAKER THAN THE PYTHON SIDE, and pretending otherwise is exactly how
-    this got missed: a GitHub Actions step cannot be run from a test, so there
-    is no output to read and this compares TEXT — a model of the producer, and
-    a model is the thing that got fooled twice. What it has instead is a model
-    that refuses to guess: `_parse_printf_payload` fails closed on zero or 2+
-    blocks, in the historical revision as well as the working tree.
-    """
-    payload = _workflow_fallback_payload()
-    schema = payload["schema"]
-    intro = _commit_that_introduced(schema, _WORKFLOW_PATH)
-    if intro is None:
-        return  # schema being introduced right now; same as the Python side
-    assert frozenset(payload) == _workflow_keys_at(intro), (
-        f"the workflow's INCONCLUSIVE payload key set changed since "
-        f"{intro[:8]}, the commit that introduced {schema!r}, without the "
-        "schema string moving with it. ⛔ Adding the key to _INCONCLUSIVE_KEYS "
-        "silences the sibling test but not this one: bump the schema in BOTH "
-        "producers, or revert the key change."
-    )
 
 
 def test_workflow_payload_key_set_is_pinned_to_its_schema_version():
     """The second producer's readable shape. 'Two writers, one drifted' is the
     shape of the original defect, so both get named here.
 
-    ⚠️ LEGIBILITY, NOT THE RULE — same standing as its Python counterpart, and
-    for the same reason: `_INCONCLUSIVE_KEYS` is a literal in this file, so an
-    author who edits both sides silences it. The rule is enforced by
-    `test_the_workflow_key_set_may_only_move_in_the_commit_that_moves_the
-    _schema`. It earns its place by naming today's shape in one readable place;
-    it does NOT fail before the rule test — see the note on its twin above."""
+    ⚠️ WEAKER THAN ITS PYTHON TWIN, and pretending otherwise is the specific
+    mistake four review rounds kept catching: a GitHub Actions step cannot be
+    run from a test, so there is no output to read and this compares the TEXT
+    of the `printf` format string. `_parse_printf_payload` pays for that by
+    refusing to guess — zero or 2+ blocks is a failure, not a tie to break."""
     payload = _workflow_fallback_payload()
     assert set(payload) == set(_INCONCLUSIVE_KEYS), (
         "the workflow's INCONCLUSIVE payload keys moved. If that is intended, "
         "bump the schema string in BOTH producers and update _INCONCLUSIVE_KEYS"
-        "/_SCHEMA here — and note that updating them is NOT enough on its own."
+        "/_SCHEMA here. ⛔ Updating the constant WITHOUT bumping the schema is "
+        "the defect this gate exists to stop (TRK-367), not the way to green."
     )
     assert payload["schema"] == _SCHEMA
     assert payload["status"] == "INCONCLUSIVE"
