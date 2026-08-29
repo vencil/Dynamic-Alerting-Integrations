@@ -12,10 +12,17 @@ are what these tests actually pin down:
      disagree that assumption is broken and the ratio is meaningless.
 
 OUT OF SCOPE: the workflow wiring (bench-record.yaml) — that is CI-only.
+
+⛔ ONE EXCEPTION TO THAT, added by TRK-367 / #1571: this file pins the SHAPE of
+the `bench-paired` payload, and `bench-record.yaml` is the SECOND place that
+writes one (the INCONCLUSIVE fallback, a hand-written `printf` JSON literal).
+Pinning only the Python producer would leave the gate blind to exactly the
+half it exists to catch — two writers, one drifting. See §P5 in dev-rules.
 """
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -627,3 +634,184 @@ def test_non_utf8_digest_file_is_unreadable_not_a_crash(tmp_path: Path):
     dg, r = _run_digest_path(tmp_path, p)
     assert dg["status"] == "unreadable"
     assert r.returncode == 0
+
+
+# ── §P5 gate: a required-key change must move the schema string ───────────
+#
+# ⛔ WHY THIS EXISTS (TRK-367 / #1571). `60f4523` added three top-level fields
+# to `bench-paired/v1` — including `status`, which the consumer REQUIRES — and
+# left the schema string untouched. Every legitimate artifact written before
+# that commit then passed the `SUPPORTED_SCHEMAS` check and was killed one step
+# later. Meanwhile `c7d0586` bumped v1→v2 for a single OPTIONAL field. The
+# compatibility-breaking change did not bump; the harmless one did.
+#
+# ⚠️ That is not a rule being forgotten. It is a rule that did not exist —
+# and nothing in the suite noticed, because the happy-path test asserts
+# INDIVIDUAL KEYS and never the key SET, so a new required field turns nothing
+# red. These three tests are the whole of it.
+#
+# ⛔ WHAT THIS GATE DOES AND DOES NOT BUY, stated once so no docstring below
+# has to over-claim it again. It pins the key SET of both producers next to the
+# schema string they name, and it reads the OK payload by RUNNING the producer,
+# so no model of the source can be desynchronised from what is written. That
+# stops the accident — which is the thing that actually happened: `60f4523` was
+# nobody silencing anything, it was a field added without the question being
+# asked. It does NOT stop an author who sees the red and edits `_OK_KEYS`
+# instead of thinking. Nothing repo-resident can: the gate lives in the tree it
+# guards. What it buys is that the mistake cannot be made by ACCIDENT and that
+# silencing it deliberately leaves a self-incriminating diff.
+#
+# ⛔ AND A REVERSAL, recorded rather than quietly dropped. An earlier cut of
+# this block anchored the key set on git history — the commit that introduced
+# today's schema string, via `git log --follow -S` — precisely so that editing
+# `_OK_KEYS` could not satisfy it. Five blind-review rounds took that apart:
+# `--follow`'s rename detection is a SIMILARITY HEURISTIC, so an ordinary
+# rename-plus-reformat left the pickaxe answering with the attack commit itself
+# (self-anchored, vacuously green, both producers), while a rename round-trip
+# made the same string enter history three times and tripped the ambiguity
+# guard on a change that moved no key at all — red forever, on nothing.
+# ⚠️ A gate that cries wolf gets deleted, which is a false negative with extra
+# steps. The anchor was removed because its added strength was partly illusory
+# and its false positives were not.
+
+_REPO = Path(__file__).resolve().parents[2]
+_WORKFLOW = _REPO / ".github/workflows/bench-record.yaml"
+
+# The exact top-level shape each producer writes today. Changing either set is
+# allowed — changing it WITHOUT moving the schema string is what is not.
+_OK_KEYS = frozenset({
+    "schema", "status", "reference_tag", "reference_sha",
+    "cpu", "evaluated", "inconclusive", "workload_drift", "workload_digest",
+})
+_INCONCLUSIVE_KEYS = frozenset({
+    "schema", "status", "reference_tag", "reference_sha",
+    "reason", "workload_drift", "workload_digest",
+})
+_SCHEMA = "bench-paired/v2"
+
+
+_PRINTF_PAYLOAD = r"printf '(\{\\n.*?\})\\n' \\"
+
+
+def _parse_printf_payload(text: str, where: str) -> dict:
+    """Pull the `printf`-written JSON payload out of a workflow file.
+
+    ⛔ FAIL-CLOSED IN BOTH DIRECTIONS, and the second one was a blind-review
+    finding against the first cut of this helper:
+
+      no match    someone reformatted the `printf` — split it, switched to a
+                  heredoc. A shape gate that silently finds nothing to check is
+                  worse than no gate: it reports green for a surface it stopped
+                  reading.
+      two matches the first cut used `re.search`, which takes the FIRST hit in
+                  the file and says nothing. Review inserted a decoy
+                  `printf '{...}' \\` block ahead of the real one and the
+                  extractor read the decoy. ⚠️ Measured: it is POSITION
+                  dependent — a decoy placed after the real block is ignored,
+                  so the failure is silent exactly half the time. Requiring
+                  exactly one match removes the coin flip.
+    """
+    hits = re.findall(_PRINTF_PAYLOAD, text, re.S)
+    assert len(hits) == 1, (
+        f"expected exactly one `printf` JSON payload in {where}, found "
+        f"{len(hits)}. Zero means the payload did not necessarily change — the "
+        "way it is WRITTEN did; re-point this extractor and do not delete this "
+        "test. Two or more means this extractor can no longer tell which block "
+        "it is reading, and picking one silently is how a gate starts lying."
+    )
+    # `\n` is for the shell, `%s` are runtime substitutions. Neither affects
+    # the key set or the schema string, which is all this gate reads.
+    return json.loads(hits[0].replace("\\n", "\n").replace("%s", "PLACEHOLDER"))
+
+
+def _workflow_fallback_payload() -> dict:
+    return _parse_printf_payload(_WORKFLOW.read_text(encoding="utf-8"),
+                                 "bench-record.yaml")
+
+
+def _produced_payload(tmp_path: Path) -> dict:
+    """⛔ GROUND TRUTH: run the producer and read what it actually wrote.
+
+    Two earlier cuts of this gate read the current shape out of SOURCE, and
+    both were defeated:
+
+      `git show HEAD`   blind to the change being made — the edit is in the
+                        working tree, not HEAD, so it compared old against old
+                        and passed 65/65. A pre-commit gate that can only see
+                        what is already committed cannot stop anything.
+      AST of the file   a decoy `payload = {...}` at module scope is what
+                        `ast.walk` reaches first. 65 passed with the defect in.
+
+    ⭐ Both failures are the same shape: a MODEL of the producer can be fooled;
+    its OUTPUT cannot. So this reads the output. ⚠️ The workflow producer gets
+    no equivalent — an Actions step cannot be run from a test, so that side
+    compares TEXT and its extractor fails closed instead. Saying the two sides
+    are equally strong is how the last four rounds each went wrong.
+    """
+    r = run(tmp_path,
+            side([("BenchmarkA", 100.0)]),
+            side([("BenchmarkA", 105.0)]))
+    assert r.returncode == 0, r.stderr
+    return json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
+
+
+def test_ok_payload_key_set_is_pinned_to_its_schema_version(tmp_path: Path):
+    """The key SET, not individual keys. `test_happy_path_writes_the_expected
+    _payload` asserts five keys by name and would stay green if a sixth
+    REQUIRED one appeared — which is exactly what `60f4523` did.
+
+    ⚠️ `_OK_KEYS` is a literal in this file, so an author who edits both sides
+    silences it. That is stated plainly in the block header rather than papered
+    over here — an earlier cut of this docstring pointed at a history-anchored
+    "real rule" that has since been removed for being weaker than it read and
+    for going red on changes that broke nothing.
+
+    The payload is read by RUNNING the producer, not by parsing it: a decoy
+    literal and a stale `git show` each defeated a source-reading cut of this."""
+    payload = _produced_payload(tmp_path)
+    assert set(payload) == set(_OK_KEYS), (
+        "the OK payload's top-level keys moved. If that is intended, bump the "
+        "schema string in BOTH producers and update _OK_KEYS/_SCHEMA here. "
+        "⛔ Updating the constant WITHOUT bumping the schema is the defect this "
+        "gate exists to stop (TRK-367), not the way to green."
+    )
+    assert payload["schema"] == _SCHEMA
+
+
+def test_workflow_payload_key_set_is_pinned_to_its_schema_version():
+    """The second producer's readable shape. 'Two writers, one drifted' is the
+    shape of the original defect, so both get named here.
+
+    ⚠️ WEAKER THAN ITS PYTHON TWIN, and pretending otherwise is the specific
+    mistake four review rounds kept catching: a GitHub Actions step cannot be
+    run from a test, so there is no output to read and this compares the TEXT
+    of the `printf` format string. `_parse_printf_payload` pays for that by
+    refusing to guess — zero or 2+ blocks is a failure, not a tie to break."""
+    payload = _workflow_fallback_payload()
+    assert set(payload) == set(_INCONCLUSIVE_KEYS), (
+        "the workflow's INCONCLUSIVE payload keys moved. If that is intended, "
+        "bump the schema string in BOTH producers and update _INCONCLUSIVE_KEYS"
+        "/_SCHEMA here. ⛔ Updating the constant WITHOUT bumping the schema is "
+        "the defect this gate exists to stop (TRK-367), not the way to green."
+    )
+    assert payload["schema"] == _SCHEMA
+    assert payload["status"] == "INCONCLUSIVE"
+
+
+def test_both_producers_declare_the_same_schema_version(tmp_path: Path):
+    """⛔ The cross-check, and the one a single-producer gate cannot make.
+
+    Two files hardcode the schema string independently. Bumping one and not
+    the other publishes two payload shapes under two different version labels
+    from the same night's pipeline — a worse state than the bug this ticket
+    started from, because the consumer would then be right to trust the label.
+    """
+    r = run(tmp_path, side([("BenchmarkA", 100.0)]), side([("BenchmarkA", 100.0)]))
+    assert r.returncode == 0, r.stderr
+    python_schema = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))["schema"]
+    workflow_schema = _workflow_fallback_payload()["schema"]
+    assert python_schema == workflow_schema, (
+        f"schema strings disagree: pair_bench_ratio.py says {python_schema!r}, "
+        f"bench-record.yaml says {workflow_schema!r}. Both producers feed the "
+        "same consumer; bump them together."
+    )
