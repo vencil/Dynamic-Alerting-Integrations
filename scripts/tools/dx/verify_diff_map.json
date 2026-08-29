@@ -304,6 +304,9 @@
    "tests/lint/test_check_doc_links.py",
    "tests/ops/test_generate_routes_orchestration.py"
   ],
+  "scripts/tools/lint/check_env_bool_parsers.py": [
+   "tests/lint/test_check_env_bool_parsers.py"
+  ],
   "scripts/tools/lint/check_flaky_registry.py": [
    "tests/shared/test_property_tools.py"
   ],
@@ -764,7 +767,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "aff2820d1bc97486c95ece9709461640266dcf8c3aebe457f6ca9a6dc31f9c94",
+ "source_digest": "039e64a94c0c354fb59775163b9caf966946fd5efabe11acafe6114458f578d4",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -873,6 +876,7 @@
   "tests/lint/test_check_doc_k8s_refs.py",
   "tests/lint/test_check_doc_links.py",
   "tests/lint/test_check_engagement_disclosure.py",
+  "tests/lint/test_check_env_bool_parsers.py",
   "tests/lint/test_check_flaky_registry.py",
   "tests/lint/test_check_frontmatter_versions.py",
   "tests/lint/test_check_ha_threshold_aggregation.py",
@@ -1360,6 +1364,12 @@
   "components/tenant-api/Dockerfile": [
    "tests/dx/test_bump_docs.py"
   ],
+  "components/tenant-api/cmd/server/envbool_test.go": [
+   "tests/lint/test_check_env_bool_parsers.py"
+  ],
+  "components/tenant-api/cmd/server/main.go": [
+   "tests/lint/test_check_env_bool_parsers.py"
+  ],
   "components/tenant-api/internal/federation/token/manager.go": [
    "tests/ops/test_revoked_set_contract.py"
   ],
@@ -1456,6 +1466,9 @@
   ],
   "docs/adr/020-tenant-federation.md": [
    "tests/dx/test_generate_planning_index.py"
+  ],
+  "docs/adr/034-legal-value-as-fallback.md": [
+   "tests/lint/test_check_env_bool_parsers.py"
   ],
   "docs/adr/README.md": [
    "tests/ops/test_validate_config.py"

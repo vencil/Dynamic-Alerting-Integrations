@@ -212,6 +212,7 @@ ENGLISH_ONLY: dict[str, str] = {
     "check_doc_links.py": _R_LINT,
     "check_doc_reading_time.py": _R_LINT_RT,
     "check_doc_template.py": _R_LINT_RT,
+    "check_env_bool_parsers.py": _R_LINT,
     "check_flaky_registry.py": _R_LINT,
     "check_frontmatter_versions.py": _R_LINT,
     "check_glossary_coverage.py": _R_LINT,
@@ -467,8 +468,19 @@ def test_allowlists_shrink_only_count_pin():
     # exception in its own directory rather than the start of a trend. Its
     # output is `[DRIFT] <file>:<line> <cmd> <flag>` plus a five-bucket count
     # line: identifiers and numbers.
-    assert len(ENGLISH_ONLY) <= 143, (
-        f"ENGLISH_ONLY grew to {len(ENGLISH_ONLY)} (pin=143). Adding an "
+    # pin 144: bumped from 143 for check_env_bool_parsers.py (ADR-034), the
+    # gate that stops a hand-rolled env-to-bool parser from coming back after
+    # #1624 removed the last one in the repo. Same class as the `_R_LINT`
+    # siblings it sits beside: a pre-commit/CI gate, never invoked by a
+    # customer, and its whole output is a file:line, the offending literals,
+    # and a pointer to strconv.ParseBool.
+    # ⛔ A choice, not a default — `scripts/tools/lint/` is English-only across
+    # the board, so wiring detect_cli_lang() here would make it the lone
+    # exception in its own directory rather than the start of a trend. The same
+    # reasoning the check_workload_closure_drift.py and check_cli_default_drift.py
+    # entries already record.
+    assert len(ENGLISH_ONLY) <= 144, (
+        f"ENGLISH_ONLY grew to {len(ENGLISH_ONLY)} (pin=144). Adding an "
         "English-only tool is allowed but must be an explicit, reviewed "
         "decision — bump this pin in the same commit and justify it."
     )
