@@ -197,6 +197,24 @@ repos:
         pass_filenames: false
         files: '^helm/.*\.ya?ml$|^k8s/.*\.ya?ml$|^operator-manifests/.*\.ya?ml$|^scripts/tools/lint/check_dev_bypass_manifest\.py$'
 
+      # --- ADR-034 mechanical enforcement: no hand-rolled env-to-bool parsers ---
+      # ADR-034 forbids a legal value from doubling as the fallback for an
+      # unrecognized one WHEN that value decides whether a check runs. Its
+      # second case study is envBool (#1599 / #1624): a homegrown truthy switch
+      # that made a typo byte-identical to a deliberate opt-out on three
+      # authorization/audit switches. This keeps that shape from coming back.
+      # (b) class per lint-policy.md: diff-only scan, PR-body bypass tag.
+      # ⚠️ Narrow by construction — it matches two single-line shapes, not every
+      # possible hand-rolled parser; ADR-034 records that limit rather than
+      # claiming the rule is now mechanically guaranteed. Baseline at
+      # introduction: ZERO matches (#1624 removed the only one), so its
+      # self-test carries an anti-noop witness.
+      - id: env-bool-parser-guard
+        name: "ADR-034: forbid hand-rolled env-to-bool parsers in Go"
+        entry: python3 -X utf8 scripts/tools/lint/check_env_bool_parsers.py --ci
+        language: python
+        files: '\.go$'
+
       # --- Container/k8s IaC SAST Layer 4 (#448 / TRK-314) ---
       # Raw k8s manifest security: `kube-linter lint k8s/` (no helm render —
       # the files are concrete objects). Reuses L2's kube-linter engine +
