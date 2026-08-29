@@ -743,7 +743,6 @@ def _implicit_concat_references(text: str, path: str = "<synthetic>") -> list[tu
     # this function: a control that only proves this raises says nothing about
     # whether anybody still listens.
     tree = ast.parse(text, filename=path)
-    lines = text.split("\n")
     found: list[tuple[int, str]] = []
     for node in ast.walk(tree):
         if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
@@ -752,7 +751,20 @@ def _implicit_concat_references(text: str, path: str = "<synthetic>") -> list[tu
             # ⚠️ A real gap, not "nothing was joined" — see the NOT-modelled
             # bullet on same-line concatenation in this function's docstring.
             continue
-        raw = "\n".join(lines[node.lineno - 1:node.end_lineno])
+        # ⛔ The constant's EXACT source span, which is not the same thing as the
+        # lines it sits on. Joining whole boundary lines let anything else
+        # written on the opening or closing line answer for the constant: a
+        # contiguous mention of the same path on either one silenced the split
+        # inside it. Measured on both sides, and the comment below already
+        # CLAIMED "own span" while the code read whole lines (#1608 review).
+        # ⚠️ `get_source_segment` returns None only for a node carrying no
+        # position information, which a parsed tree never produces — this raise
+        # is a belt, not a guarded property. It names the file for the same
+        # reason `ast.parse` above does.
+        raw = ast.get_source_segment(text, node)
+        if raw is None:
+            raise AssertionError(
+                f"{path}: no source segment for the constant at line {node.lineno}")
         for token in sorted(_tokens(node.value)):
             # ⛔ `raw` is the constant's OWN span, never the whole file. Blind
             # review measured what file-global costs: the live instance had a
@@ -1501,6 +1513,7 @@ def test_no_reference_is_split_across_implicit_concatenation() -> None:
     one clause at a time and re-asked whether it still saw that instance.
 
         `token in raw` -> `token in text`   defect silenced   -> "elsewhere" case
+        span -> the lines the span sits on  defect silenced   -> boundary cases
         token predicate narrowed to `.py`   defect silenced   -> non-`.py` case
         skip constants inside an f-string   defect silenced   -> f-string case
         `ast.walk` -> `tree.body`           all verdicts gone -> plain case
@@ -1573,6 +1586,26 @@ def test_no_reference_is_split_across_implicit_concatenation() -> None:
         "greppable; comparing against the file instead of the constant's span "
         "is how a rename sweep reports a clean tree: "
         + repr(_implicit_concat_references(elsewhere)))
+
+    # MUST REPORT: the same contiguous mention, moved onto a BOUNDARY LINE of
+    # the constant — the line it opens on, and the line it closes on. Reading
+    # those lines WHOLE instead of the constant's own span lets a neighbour
+    # answer for the constant, and both sides were measured silent before the
+    # span was made exact. ⚠️ The first attempt at the opening-line case put the
+    # neighbour on the line ABOVE, which the line-join never read either, so it
+    # reported nothing about this defect — the neighbour has to SHARE a line.
+    opens_with = 'x = ["%s", "see %s"\n    "%s here"]\n' % (subject, head, tail)
+    assert [t for _, t in _implicit_concat_references(opens_with)] == [subject], (
+        "a contiguous mention on the line the constant OPENS on is not part of "
+        "the constant; judging the whole line hides the split inside it: "
+        + repr(_implicit_concat_references(opens_with)))
+
+    closes_with = ('x = (\n    "see %s"\n    "%s here"), "%s"\n'
+                   % (head, tail, subject))
+    assert [t for _, t in _implicit_concat_references(closes_with)] == [subject], (
+        "the same on the line the constant CLOSES on — one span, two boundary "
+        "lines, and a check that reads either whole is blind on that side: "
+        + repr(_implicit_concat_references(closes_with)))
 
     # MUST NOT REPORT: contiguous. Nothing is hidden, so there is nothing to fix.
     whole = 'x = (\n    "see %s"\n    " here"\n)\n' % subject
