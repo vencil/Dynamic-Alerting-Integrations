@@ -441,33 +441,18 @@ def _carrier_at_head1(tenant):
     The comparison is `config_stem(name) == tenant` — the SAME predicate
     that produced the tenant id in the first place, so the two cannot
     disagree the way a re-spelled filename did.
-
-    ⛔ `-z`, and NOT `.splitlines()` on the default output. With
-    `core.quotepath` at its default, git wraps any path holding a
-    non-ASCII byte in double quotes and octal-escapes it, so a real
-    carrier arrives as `"conf.d/\\304\\260STANBUL.YAML"` and
-    `Path(entry).name` yields the garbage `\\304\\260STANBUL.YAML"`, whose
-    trailing quote makes `has_yaml_extension` answer False. Measured — the
-    lookup returned None for a carrier that was right there, so the
-    removal was silently dropped: the very failure this function was
-    added to stop, arriving on a new axis (quoting instead of casing).
-    `-z` is NUL-separated and never quoted, so it also survives the
-    filename-with-a-newline case that `splitlines()` cannot.
-
-    ⚠️ Not a hypothetical alphabet: the shared classification matrix
-    carries an `İ.yaml` row precisely because this repo has been bitten by
-    that character's byte-length behaviour before.
     """
     try:
         result = subprocess.run(
-            ["git", "ls-tree", "--name-only", "-z", "HEAD~1", "./conf.d/"],
+            ["git", "ls-tree", "--name-only", "HEAD~1", "./conf.d/"],
             capture_output=True, text=True, timeout=15,
         )
         if result.returncode != 0:
             return None
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return None
-    for entry in result.stdout.split("\0"):
+    for line in result.stdout.splitlines():
+        entry = line.strip()
         if not entry:
             continue
         name = Path(entry).name
