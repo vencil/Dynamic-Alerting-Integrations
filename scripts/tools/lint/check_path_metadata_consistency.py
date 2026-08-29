@@ -47,6 +47,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_OK  # noqa: E402
 from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
     has_yaml_extension,
+    is_reserved_name,
     unusable_config_entries,
     unusable_reason,
 )
@@ -84,13 +85,23 @@ def find_repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
-def iter_tenant_files(config_dir: Path) -> Iterable[Path]:
+def iter_tenant_files(config_dir: Path,
+                      entries: Iterable[Path] | None = None) -> Iterable[Path]:
+    """Tenant files under `config_dir`, optionally from an existing listing.
+
+    ⛔ `entries` exists so `main` can walk the tree ONCE and still get this
+    selection from the one place that defines it. Inlining the three
+    conditions at the call site instead — which the first version of the
+    #1607 fix did — is the "one rule, several hand-copies" shape #1339 is
+    about, reproduced inside its own fix. Same reason `defaults_files_in`
+    and `unusable_config_entries` take already-listed input.
+    """
     # #1607: the `is_file()` filter is a THIRD axis and it is silent here.
     # ⛔ The report for what it drops lives in `main`, NOT in this generator:
-    # one run consumes this twice (once through `scan`, once to count
-    # `files_scanned`), so naming them here would print every finding twice.
+    # `scan` also consumes it, so naming them here would print twice.
+    listing = config_dir.rglob("*") if entries is None else entries
     for path in sorted(
-        p for p in config_dir.rglob("*")
+        p for p in listing
         if p.is_file() and has_yaml_extension(p.name, (".yaml",))
     ):
         if path.name.startswith("_"):
@@ -264,14 +275,34 @@ def main() -> int:
     # A config-named directory or broken symlink is a tenant file this lint
     # did NOT check, so the "N tenant file(s)" tail below would otherwise
     # read as coverage it does not have.
+    #
+    # ⛔ `_`-prefixed entries are excluded, because `iter_tenant_files` drops
+    # them whatever their shape — they are defaults/policies/profiles, never
+    # tenant files. Without this the lint prints a machine-parseable
+    # `path:0: warning:` line about a file it was never going to check, which
+    # a CI annotation consumer cannot act on. Same reasoning as `suffixes`,
+    # one axis over.
+    #
+    # ⛔ ONE walk for all three answers. `main` previously called
+    # `iter_tenant_files` twice (once through `scan`, once to count) and the
+    # first version of this report added a third `rglob`. Beyond the wasted
+    # I/O, separate walks let the warnings, the findings and the "N tenant
+    # file(s)" tail describe three different trees if anything changes under
+    # `conf.d` mid-run. `scan`/`scan_file` stay as they are — they are the
+    # tested entry points; only `main` stops re-walking.
+    entries = sorted(config_dir.rglob("*"))
     for bad in unusable_config_entries(
-        sorted(config_dir.rglob("*")), suffixes=(".yaml",)
+        [p for p in entries if not is_reserved_name(p.name)],
+        suffixes=(".yaml",),
     ):
         print(f"{bad}:0: warning: not checked — {unusable_reason(bad)}",
               file=sys.stderr)
 
-    mismatches = scan(config_dir)
-    files_scanned = sum(1 for _ in iter_tenant_files(config_dir))
+    tenant_files = list(iter_tenant_files(config_dir, entries))
+    mismatches: list[Mismatch] = []
+    for filepath in tenant_files:
+        mismatches.extend(scan_file(filepath, config_dir))
+    files_scanned = len(tenant_files)
 
     if args.ci:
         for m in mismatches:

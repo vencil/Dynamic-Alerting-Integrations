@@ -54,6 +54,18 @@ def _load_yaml(path: Path) -> dict:
     return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
 
 
+def _is_dir(p: Path) -> bool:
+    """`Path.is_dir()` that answers False instead of raising.
+
+    Mirrors `os.walk`'s dirs/files split, which is what the caller is asking
+    about. An entry that cannot even be stat'ed is not in `dirs`, so False is
+    the answer that keeps this pass and `_dir_defaults_alerts` disjoint."""
+    try:
+        return p.is_dir()
+    except OSError:
+        return False
+
+
 def _file_record(origin: str, reason: str) -> dict:
     """The `file_errors` record shape, in ONE place.
 
@@ -148,8 +160,14 @@ def collect_instances(config_dir: Path) -> Tuple[List[Tuple[str, dict, str, bool
     # this function's whole contract is that an unreadable file lands in
     # `file_errors` rather than vanishing (#1008 Part B). Measured on a tree
     # with a directory named `beta.yaml/` and a broken symlink `broken.yaml`,
-    # `file_errors` went from four named records to EMPTY once `is_file()`
+    # `file_errors` went from TWO named records to EMPTY once `is_file()`
     # filtered them out before the `except` below could see them (#1607).
+    #
+    # ⚠️ That number said "four" until blind review re-ran it: four was the
+    # count on a RICHER tree that also had two unusable entries under
+    # `_custom_alerts/`. The description was trimmed to two shapes and the
+    # number was not. Measured on the tree as described here: 774a699 → 2,
+    # a821645 → 0, bccb39a → 2.
     #
     # ⛔ Reported through `unusable_reason`, NOT by dropping the filter and
     # letting `_load_yaml` raise. Both put a record in `file_errors`, but the
@@ -159,20 +177,23 @@ def collect_instances(config_dir: Path) -> Tuple[List[Tuple[str, dict, str, bool
     # the two passes cannot walk two different trees.
     entries = sorted(config_dir.rglob("*"))
     for bad in unusable_config_entries(entries, suffixes=(".yaml",)):
-        # ⛔ Defaults carriers belong to `_dir_defaults_alerts`, and this skip
-        # is what keeps the two lists DISJOINT. A broken symlink named
-        # `_defaults.yaml` is in `os.walk`'s `files`, so that function already
-        # quarantines it — without this, one path would produce two
-        # `file_errors` records and the caveat line would say "2" for one
-        # file, the exact double-count `unusable_config_paths` was narrowed
-        # twice to avoid.
+        # ⛔ Defaults carriers are skipped ONLY when `_dir_defaults_alerts`
+        # can see them, and the dividing line is exactly `os.walk`'s: it
+        # classifies by `is_dir()`, putting a directory in `dirs` and
+        # everything else — a broken symlink included — in `files`.
         #
-        # ⚠️ A DIRECTORY named `_defaults.yaml/` is therefore still silent
-        # here: `os.walk` puts it in `dirs`, not `files`, so nobody names it.
-        # That silence predates this change — `_dir_defaults_alerts` read
-        # `if "_defaults.yaml" in files` before #1588 and missed it too — so
-        # it is not what #1607 is about and is not fixed by pretending it is.
-        if is_defaults_name(bad.name):
+        # So a broken symlink named `_defaults.yaml` IS quarantined there and
+        # must be skipped here, or one path yields two `file_errors` records
+        # and the caveat line says "2" for one file — the exact double-count
+        # `unusable_config_paths` was narrowed twice to avoid. A DIRECTORY
+        # named `_defaults.yaml/` is NOT in `files`, so nobody else names it
+        # and this pass must.
+        #
+        # ⚠️ The first version skipped both and left the directory case
+        # silent, arguing the silence predated #1588. Blind review measured
+        # it: true, and irrelevant — the commit claimed every reader names
+        # what it drops, and this was the one path where that was false.
+        if is_defaults_name(bad.name) and not _is_dir(bad):
             continue
         file_errors.append(_file_record(
             str(bad.relative_to(config_dir)), unusable_reason(bad)))

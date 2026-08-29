@@ -443,6 +443,16 @@ def unusable_config_entries(
     the separate `.yml` blind spot, #1603; this parameter keeps THIS report
     honest about the tool printing it rather than quietly widening it.)
 
+    ⛔ Hidden entries are skipped, by the SAME `_is_hidden` the exporter's
+    skip rule is mirrored from. Without it this function and
+    `unusable_config_paths` returned two different answers for one tree — a
+    directory named `.hidden.yaml/` was in this list and not in that one —
+    which is the "one question, two answers" shape #1339 is made of,
+    reproduced between two functions written for the same question. Blind
+    review measured it. Downstream it was a false finding too: every reader
+    skips `.`-prefixed entries whatever their shape, so naming one reports a
+    loss that did not happen.
+
     ⚠️ DISJOINT from what the caller then reads, by SHARING
     `_is_regular_file` rather than by two conditions agreeing — the same
     reason `unusable_config_paths` gives at length. So an unreadable
@@ -459,7 +469,9 @@ def unusable_config_entries(
     """
     return sorted(
         (p for p in entries
-         if has_yaml_extension(p.name, suffixes) and not _is_regular_file(p)),
+         if has_yaml_extension(p.name, suffixes)
+         and not _is_hidden(p.name)
+         and not _is_regular_file(p)),
         key=lambda q: q.as_posix(),
     )
 

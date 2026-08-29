@@ -679,11 +679,19 @@ def test_entries_agrees_with_paths_on_the_same_flat_tree(with_unusable):
     with its own `iterdir()` reports different unusable files than one going
     through `iter_config_files`, which is the #1339 shape.
     """
+    # ⛔ The hidden entry is what makes this test bite. Without it the two
+    # functions agreed by accident: `unusable_config_paths` skips hidden and
+    # `unusable_config_entries` did not, and blind review measured
+    # `.hidden.yaml/` in one list and not the other while this stayed green.
+    (with_unusable / ".hidden.yaml").mkdir()
     listed = {p.name for p in unusable_config_paths(with_unusable,
                                                     recursive=False)}
     given = {p.name for p in
              unusable_config_entries(sorted(with_unusable.iterdir()))}
     assert listed == given == {"beta.yaml", "gamma.yaml"}
+    assert ".hidden.yaml" not in given, (
+        "hidden entries are skipped by every reader whatever their shape, so "
+        "naming one is a finding the operator cannot act on")
 
 
 def test_entries_honours_the_callers_suffix_set(with_unusable):
@@ -745,14 +753,24 @@ def test_entries_does_not_list_the_directory_itself(tmp_path, capsys):
 
 
 def test_entries_returns_posix_path_order_not_basename_order(tmp_path):
-    """Recursive callers pass paths from several directories."""
+    """Recursive callers pass paths from several directories.
+
+    ⛔ The basenames are deliberately in the OPPOSITE order to the paths, and
+    the input is deliberately UNSORTED. The first version of this test used
+    two entries both named `same.yaml` and passed them pre-sorted: with a
+    stable sort, basename ordering and no sorting at all both produced the
+    expected list, so blind review broke the key three ways and the test
+    stayed green. A test that cannot fail is not a test.
+    """
     root = tmp_path / "conf.d"
-    (root / "b").mkdir(parents=True)
     (root / "a").mkdir(parents=True)
-    (root / "b" / "same.yaml").mkdir()
-    (root / "a" / "same.yaml").mkdir()
+    (root / "b").mkdir(parents=True)
+    (root / "a" / "zzz.yaml").mkdir()
+    (root / "b" / "aaa.yaml").mkdir()
+    unsorted = [root / "b" / "aaa.yaml", root / "a" / "zzz.yaml"]
     got = [str(p.relative_to(root)) for p in
-           unusable_config_entries(sorted(root.rglob("*")))]
-    assert got == ["a/same.yaml", "b/same.yaml"], (
-        "sorting by basename would make two same-named entries in different "
-        "directories order arbitrarily")
+           unusable_config_entries(unsorted)]
+    assert got == ["a/zzz.yaml", "b/aaa.yaml"], (
+        f"expected POSIX path order; basename order would give "
+        f"['b/aaa.yaml', 'a/zzz.yaml'] and no sort would echo the input. "
+        f"got {got}")

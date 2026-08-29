@@ -30,6 +30,7 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_confd import (  # noqa: E402
     has_yaml_extension,
+    is_reserved_name,
     unusable_config_entries,
     unusable_reason,
     warn_nested,
@@ -274,7 +275,12 @@ def build_tenant_metadata(config_dir: Path) -> dict[str, Any]:
     # feeds the portal's tenant list, so an entry it drops is a tenant that
     # does not appear — the same shape as the `.YAML` bug above, one axis
     # over. Same stderr channel as the parse failure below.
-    for bad in unusable_config_entries(entries, suffixes=(".yaml",)):
+    # ⛔ `_`-prefixed entries excluded — the loop below skips them whatever
+    # their shape, so naming one would report a loss that did not happen.
+    for bad in unusable_config_entries(
+        [p for p in entries if not is_reserved_name(p.name)],
+        suffixes=(".yaml",),
+    ):
         print(f"WARNING: {safe_label(bad.name)}: {unusable_reason(bad)}",
               file=sys.stderr)
     for yaml_file in (

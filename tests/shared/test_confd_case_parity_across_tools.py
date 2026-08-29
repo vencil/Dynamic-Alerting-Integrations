@@ -885,22 +885,41 @@ def _argv_for(tool_rel: str, tree: pathlib.Path,
     }[tool_rel]
 
 
-@pytest.mark.parametrize("tool_rel", [
-    "ops/operator_generate.py",
-    "ops/deprecate_rule.py",
-    "ops/offboard_tenant.py",
-    "dx/generate_tenant_metadata.py",
-    "dx/describe_tenant.py",
-    "lint/check_path_metadata_consistency.py",
-])
+# tool -> (stream the warning belongs on, a landmark proving the tool still
+# did its real work after warning). ⛔ The channel is part of the contract,
+# not an implementation detail: five of these have a machine-readable stdout
+# (`--json`, or the lint's `path:0: warning:` annotations) that a warning on
+# stdout makes unparseable. `offboard_tenant`'s stdout IS its human report —
+# same channel as its own "無法讀取" warning — so stdout is correct there.
+_WARNING_CONTRACT = {
+    "ops/operator_generate.py": ("stderr", "CRDs"),
+    "ops/deprecate_rule.py": ("stderr", "Processing:"),
+    "ops/offboard_tenant.py": ("stdout", "Pre-check"),
+    "dx/generate_tenant_metadata.py": ("stderr", "alpha"),
+    "dx/describe_tenant.py": ("stderr", "alpha"),
+    "lint/check_path_metadata_consistency.py": ("stderr", "tenant file(s)"),
+}
+
+
+@pytest.mark.parametrize("tool_rel", sorted(_WARNING_CONTRACT))
 def test_reader_names_the_entries_it_could_not_read(
         tool_rel: str, tmp_path: pathlib.Path) -> None:
-    """Every reader that filters on `is_file()` says what it filtered.
+    """Every reader that filters on `is_file()` says what it filtered — on
+    the right stream, with rc unchanged, and having still done its job.
 
     ⚠️ Asserts the NAME appears, not the exact sentence: the wording comes
     from the shared `unusable_reason`, and pinning it here would make this
     test a second copy of that function rather than a check on the reader.
+
+    ⛔ The rc and landmark assertions exist because blind review broke
+    `deprecate_rule` into warn-and-ABORT (rc=1, not one metric processed)
+    and 9148 tests stayed green: the first version asserted only that the
+    name was printed, which promoted a diagnostic into the whole contract
+    and left "warn, then carry on serving" unguarded. The stream assertion
+    exists because the same review moved a warning to stdout and made the
+    `--json` output unparseable with every test still green.
     """
+    stream, landmark = _WARNING_CONTRACT[tool_rel]
     tree = _unusable_tree(tmp_path / "conf.d")
     out = tmp_path / "out"
     tool = TOOLS_DIR / tool_rel
@@ -909,14 +928,34 @@ def test_reader_names_the_entries_it_could_not_read(
                                                              out)],
         capture_output=True, timeout=180, cwd=str(tmp_path),
         env=dict(os.environ, PYTHONIOENCODING="utf-8"))
-    text = (r.stdout.decode("utf-8", "replace")
-            + r.stderr.decode("utf-8", "replace"))
-    missing = [n for n in _UNUSABLE_NAMES if n not in text]
+    stdout = r.stdout.decode("utf-8", "replace")
+    stderr = r.stderr.decode("utf-8", "replace")
+    both = stdout + stderr
+    named, forbidden = (stderr, stdout) if stream == "stderr" else (stdout,
+                                                                   stderr)
+
+    missing = [n for n in _UNUSABLE_NAMES if n not in both]
     assert not missing, (
         f"{tool_rel} silently dropped {missing} — an entry the operator "
         f"named like configuration disappeared with nothing said (#1607).\n"
-        f"rc={r.returncode}\n{text[:800]}"
+        f"rc={r.returncode}\n{both[:800]}"
     )
+    off_stream = [n for n in _UNUSABLE_NAMES if n not in named]
+    assert not off_stream, (
+        f"{tool_rel} must warn on {stream}; {off_stream} went to the other "
+        f"stream.\nstdout={stdout[:400]}\nstderr={stderr[:400]}")
+    leaked = [n for n in _UNUSABLE_NAMES if n in forbidden]
+    assert not leaked, (
+        f"{tool_rel} leaked {leaked} onto the stream that carries its "
+        f"machine-readable output.\nstdout={stdout[:400]}")
+    assert r.returncode == 0, (
+        f"{tool_rel} changed its exit code to {r.returncode}. The contract "
+        f"is warn-and-continue: an unusable entry is a diagnostic, not a "
+        f"reason to refuse service.\n{both[:800]}")
+    assert landmark in both, (
+        f"{tool_rel} warned but did not finish its real work "
+        f"({landmark!r} missing) — warn-and-abort, not warn-and-continue.\n"
+        f"{both[:800]}")
 
 
 def test_the_unusable_tree_is_not_vacuous(tmp_path: pathlib.Path) -> None:
@@ -955,6 +994,17 @@ def test_custom_alerts_loader_quarantines_unusable_entries(
         f"{dupes} recorded twice — the unusable-entry pass and the "
         f"malformed-YAML quarantine overlap, the double-count that "
         f"`unusable_config_paths` was narrowed twice to avoid")
+    # ⛔ The SHAPE, not just the origin. `compile_custom_alerts` prints these
+    # with `s['tenant']` / `s['name']` (its #1008 fail-soft quarantine line),
+    # so a record missing a key crashes the shared compile gate on any tree
+    # containing a bad file — the exact cross-tenant block fail-soft exists
+    # to prevent. Blind review deleted two keys and 191 tests stayed green
+    # because every existing consumer test reads only `origin`.
+    required = {"tenant", "origin", "name", "reason"}
+    for rec in file_errors:
+        assert required <= set(rec), (
+            f"file_errors record is missing {sorted(required - set(rec))}; "
+            f"`compile_custom_alerts` indexes all four. got {rec}")
 
 
 def test_defaults_carrier_is_reported_once_not_twice(
@@ -1042,3 +1092,189 @@ def test_each_reader_names_an_unusable_entry_exactly_once(
             assert hits == 1, (
                 f"{tool_rel} named {name} {hits} time(s); expected exactly "
                 f"once per invocation.\n{text[:800]}")
+
+
+# ---------------------------------------------------------------------------
+# #1607 round 2 — findings from adversarial blind review of the first fix
+# ---------------------------------------------------------------------------
+
+def _reserved_unusable_tree(root: pathlib.Path) -> pathlib.Path:
+    """`_unusable_tree` plus a DIRECTORY-shaped `_defaults.yaml/`.
+
+    The reserved prefix is a second axis on which a reader's report can be
+    wrong, and it splits the tools two ways: those that never read `_*` at
+    all, and those (the defaults chain) that do.
+    """
+    _unusable_tree(root)
+    (root / "_defaults.yaml").unlink()
+    (root / "_defaults.yaml").mkdir()
+    return root
+
+
+@pytest.mark.parametrize("tool_rel", [
+    "ops/operator_generate.py",
+    "dx/generate_tenant_metadata.py",
+    "lint/check_path_metadata_consistency.py",
+])
+def test_reader_does_not_name_a_reserved_entry_it_never_reads(
+        tool_rel: str, tmp_path: pathlib.Path) -> None:
+    """⛔ The mirror image of the `suffixes` rule, on the reserved-name axis.
+
+    These three drop every `_`-prefixed entry BEFORE looking at its shape, so
+    a warning about a directory-shaped `_defaults.yaml/` tells the operator
+    about a loss that did not happen in this tool. `check_path_metadata_
+    consistency` is the sharpest case: it prints a machine-parseable
+    `path:0: warning:` line, which a CI annotation consumer would surface as
+    a finding about a file the lint never checks.
+    """
+    tree = _reserved_unusable_tree(tmp_path / "conf.d")
+    out = tmp_path / "out"
+    r = subprocess.run(
+        [sys.executable, "-X", "utf8", str(TOOLS_DIR / tool_rel),
+         *_argv_for(tool_rel, tree, out)],
+        capture_output=True, timeout=180, cwd=str(tmp_path),
+        env=dict(os.environ, PYTHONIOENCODING="utf-8"))
+    text = (r.stdout.decode("utf-8", "replace")
+            + r.stderr.decode("utf-8", "replace"))
+    assert "_defaults.yaml" not in text, (
+        f"{tool_rel} reported `_defaults.yaml`, which it never reads whatever "
+        f"its shape — a finding the operator cannot act on from this tool.\n"
+        f"{text[:800]}")
+    # ⛔ Vacuity guard: the run must still name the NON-reserved unusable
+    # entries, or this assertion would pass on a tool that reports nothing.
+    for name in _UNUSABLE_NAMES:
+        assert name in text, (
+            f"{tool_rel} stopped naming {name}; the assertion above would be "
+            f"vacuous.\n{text[:800]}")
+
+
+def test_describe_tenant_does_name_an_unusable_defaults_carrier(
+        tmp_path: pathlib.Path) -> None:
+    """The other half: a reader that DOES read `_defaults*` must still say so.
+
+    Pins that the reserved-name exclusion above was applied per-caller and
+    not blanket — `describe_tenant` resolves the defaults chain, so a
+    directory-shaped carrier is a real loss for it.
+    """
+    tree = _reserved_unusable_tree(tmp_path / "conf.d")
+    r = subprocess.run(
+        [sys.executable, "-X", "utf8",
+         str(TOOLS_DIR / "dx" / "describe_tenant.py"), "--all",
+         "--conf-d", str(tree)],
+        capture_output=True, timeout=180, cwd=str(tmp_path),
+        env=dict(os.environ, PYTHONIOENCODING="utf-8"))
+    text = (r.stdout.decode("utf-8", "replace")
+            + r.stderr.decode("utf-8", "replace"))
+    assert "_defaults.yaml" in text, (
+        f"describe_tenant reads the defaults chain, so an unusable carrier is "
+        f"a real loss it must name.\n{text[:800]}")
+
+
+def test_loader_names_a_directory_shaped_defaults_carrier(
+        tmp_path: pathlib.Path) -> None:
+    """⛔ The one path where "every reader names what it drops" was false.
+
+    `_dir_defaults_alerts` walks with `os.walk`, which classifies by
+    `is_dir()`: a broken symlink lands in `files` and is quarantined there, a
+    DIRECTORY lands in `dirs` and is invisible to it. The skip in
+    `collect_instances` must therefore follow the same line, not skip every
+    defaults-named entry.
+    """
+    from custom_alerts import loader  # noqa: PLC0415
+
+    tree = _reserved_unusable_tree(tmp_path / "conf.d")
+    _, file_errors = loader.collect_instances(tree)
+    origins = [r["origin"] for r in file_errors]
+    assert "_defaults.yaml" in origins, (
+        f"a directory-shaped defaults carrier vanished from file_errors; "
+        f"got {origins}")
+    dupes = sorted({o for o in origins if origins.count(o) > 1})
+    assert not dupes, (
+        f"{dupes} recorded twice — the disjointness with "
+        f"`_dir_defaults_alerts` broke while closing the directory case")
+
+
+def test_the_reserved_unusable_tree_is_not_vacuous(
+        tmp_path: pathlib.Path) -> None:
+    """⛔ Guard on the guard: the directory-shaped carrier must really exist."""
+    tree = _reserved_unusable_tree(tmp_path / "conf.d")
+    assert (tree / "_defaults.yaml").is_dir()
+    assert not (tree / "_defaults.yaml").is_file()
+
+
+@pytest.mark.parametrize("module_rel,call", [
+    ("lint/check_path_metadata_consistency.py", "main"),
+    ("dx/describe_tenant.py", "scanner"),
+])
+def test_reader_walks_the_tree_once(module_rel: str, call: str,
+                                    tmp_path: pathlib.Path,
+                                    monkeypatch) -> None:
+    """⛔ Two walks can describe two DIFFERENT trees.
+
+    Not only wasted I/O: if anything changes under `conf.d` between the
+    passes, the warnings, the findings and the "N tenant file(s)" tail stop
+    agreeing. `collect_instances` lists once and says so; blind review found
+    these two doing otherwise.
+    """
+    tree = _unusable_tree(tmp_path / "conf.d")
+    calls: list[str] = []
+    real_rglob = pathlib.Path.rglob
+
+    def counting_rglob(self, pattern, *a, **kw):
+        calls.append(pattern)
+        return real_rglob(self, pattern, *a, **kw)
+
+    monkeypatch.setattr(pathlib.Path, "rglob", counting_rglob)
+    monkeypatch.chdir(tmp_path)
+
+    if call == "main":
+        sys.path.insert(0, str(TOOLS_DIR / "lint"))
+        import importlib  # noqa: PLC0415
+        mod = importlib.import_module("check_path_metadata_consistency")
+        monkeypatch.setattr(sys, "argv",
+                            ["x", "--config-dir", str(tree)])
+        mod.main()
+    else:
+        sys.path.insert(0, str(TOOLS_DIR / "dx"))
+        import importlib  # noqa: PLC0415
+        mod = importlib.import_module("describe_tenant")
+        # ⛔ The compiler resolver is a DIFFERENT module with its own walk;
+        # counting it here would make this test about `custom_alerts.loader`
+        # rather than about this scanner. Disabled so the count is `_scan`'s.
+        monkeypatch.setattr(mod, "_ca_loader", None)
+        mod.ConfDScanner(tree)
+
+    whole_tree = [p for p in calls if p == "*"]
+    assert len(whole_tree) == 1, (
+        f"{module_rel} walked the whole tree {len(whole_tree)} times "
+        f"(patterns: {calls}); one listing must serve every pass")
+
+
+def test_offboard_precheck_explains_a_tenant_whose_config_is_unusable(
+        tmp_path: pathlib.Path) -> None:
+    """⛔ The scenario `find_config_file` calls the worst place to be silent.
+
+    Offboarding `notes` when `notes.yaml/` is a DIRECTORY: the carrier lookup
+    returns None and the pre-check prints "❌ 找不到設定檔案", which reads as
+    "there is nothing here to remove". The explanation must be in the same
+    run — and it must be the shared `unusable_reason` wording, not merely the
+    file name: "找不到設定檔案: notes.yaml" already contains the name, so a
+    substring check on the name alone cannot tell the two apart. Blind review
+    found the whole scenario uncovered and that assertion shape unable to
+    cover it.
+    """
+    tree = _unusable_tree(tmp_path / "conf.d")
+    r = subprocess.run(
+        [sys.executable, "-X", "utf8",
+         str(TOOLS_DIR / "ops" / "offboard_tenant.py"),
+         "notes", "--config-dir", str(tree)],
+        capture_output=True, timeout=180, cwd=str(tmp_path),
+        env=dict(os.environ, PYTHONIOENCODING="utf-8"))
+    text = (r.stdout.decode("utf-8", "replace")
+            + r.stderr.decode("utf-8", "replace"))
+    assert "is a directory, not a config file" in text, (
+        f"the pre-check said the config was not found without saying WHY; an "
+        f"operator reads that as 'nothing to remove'.\n{text[:800]}")
+    assert "找不到設定檔案" in text, (
+        f"fixture did not reach the not-found branch, so the assertion above "
+        f"would be vacuous.\n{text[:800]}")

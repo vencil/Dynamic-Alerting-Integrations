@@ -147,7 +147,8 @@
   ],
   "scripts/tools/dx/describe_tenant.py": [
    "tests/dx/test_describe_tenant.py",
-   "tests/ops/test_blast_radius.py"
+   "tests/ops/test_blast_radius.py",
+   "tests/shared/test_confd_case_parity_across_tools.py"
   ],
   "scripts/tools/dx/diag_pr_ci.py": [
    "tests/dx/test_diag_pr_ci.py"
@@ -367,7 +368,8 @@
    "tests/lint/test_check_orphan_recordings.py"
   ],
   "scripts/tools/lint/check_path_metadata_consistency.py": [
-   "tests/lint/test_check_path_metadata_consistency.py"
+   "tests/lint/test_check_path_metadata_consistency.py",
+   "tests/shared/test_confd_case_parity_across_tools.py"
   ],
   "scripts/tools/lint/check_pint.py": [
    "tests/lint/test_fallback_image_digest_pin.py"
@@ -761,7 +763,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "95a80cec898c503e811fe8704177e4ac20735caf94fd08e65012074464b33c47",
+ "source_digest": "844dd0bef0e14aa0b0336fc5e84aee93828a82c83b0aa0e3eb45e64f143f5904",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -2232,7 +2234,8 @@
    "tests/dx/test_describe_tenant.py",
    "tests/golden/test_merge_parity.py",
    "tests/ops/test_ci_baseline_substitution.py",
-   "tests/ops/test_property_based.py"
+   "tests/ops/test_property_based.py",
+   "tests/shared/test_confd_case_parity_across_tools.py"
   ],
   "scripts/tools/dx/gen_agent_adapters.py": [
    "tests/dx/test_gen_agent_adapters.py"
@@ -2547,6 +2550,9 @@
   ],
   "scripts/tools/ops/metric_observed_map.yaml": [
    "tests/shared/test_json_stdout_contract.py"
+  ],
+  "scripts/tools/ops/offboard_tenant.py": [
+   "tests/shared/test_confd_case_parity_across_tools.py"
   ],
   "scripts/tools/ops/onboard_platform.py": [
    "tests/lint/test_check_threshold_reachability.py"

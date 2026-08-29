@@ -40,6 +40,7 @@ from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_yaml import _dict_to_yaml, write_yaml_crd  # noqa: E402
 from _lib_confd import (  # noqa: E402
     has_yaml_extension,
+    is_reserved_name,
     unusable_config_entries,
     unusable_reason,
     warn_nested,
@@ -525,8 +526,17 @@ def discover_tenant_configs(config_dir: Path) -> List[str]:
     # from a directory and a dangling link; after, 18 and silence. Dropping
     # the filter would restore the phantom tenants, so the filter STAYS and
     # the entries it drops are named here instead.
+    #
+    # ⛔ `_`-prefixed entries are excluded: the loop below drops them whatever
+    # their shape, so naming an unusable one would report a loss that did not
+    # happen here — the same false finding `suffixes` exists to prevent, one
+    # axis over. Blind review caught the first version warning about a
+    # directory-shaped `_defaults.yaml/` that this function never reads.
     entries = sorted(config_dir.iterdir())
-    for bad in unusable_config_entries(entries, suffixes=(".yaml",)):
+    for bad in unusable_config_entries(
+        [p for p in entries if not is_reserved_name(p.name)],
+        suffixes=(".yaml",),
+    ):
         print(
             i18n_text(
                 f"WARNING: 略過 '{safe_label(bad.name)}'——{unusable_reason(bad)}",
