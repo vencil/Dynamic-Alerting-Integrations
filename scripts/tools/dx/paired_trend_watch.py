@@ -206,7 +206,11 @@ GATING_CANARIES = frozenset({"BenchmarkControlCanaryCPU"})
 # `pair_bench_ratio.py`'s key set, is tracked in #1571 and lands separately."
 # #1615 landed both, so the sentence went false in main while still reading as
 # current guidance. The rule is `docs/internal/dev-rules.md` §P5, whose body is
-# the three key-set assertions in `tests/dx/test_pair_bench_ratio.py`.
+# three assertions in `tests/dx/test_pair_bench_ratio.py`: one key-set pin per
+# producer, plus one cross-producer check that both declare the SAME schema
+# string. ⚠️ Counted that way on purpose — the third is not a key-set pin, and
+# calling all three "key-set assertions" is a miscount review already caught
+# once on #1615, in prose that said the same thing.
 # ⚠️ Cited at §P5's MEASURED strength, not its headline. Adding a required key
 # to either producer without moving the schema string turns those tests red.
 # An author who edits the pinned key set in the SAME commit still gets green —
