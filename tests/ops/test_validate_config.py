@@ -1893,6 +1893,11 @@ class TestTheJsonDocumentCarriesNoInternalBookkeeping:
             "profiles",
             "routes",
             "schema",
+            # #1577. It reads `--config-dir` and skips what it cannot parse,
+            # so the caveat belongs on its row for the same reason as the
+            # four above: without it the row asserts "no duplicate
+            # declaration" about a tree it did not finish reading.
+            "tenant_uniqueness",
         }, sorted(carriers)
         assert all(r["skipped_unusable_files"] == ["db-b.yaml"]
                    for r in rows if r["check"] in carriers), rows
@@ -2046,3 +2051,132 @@ class TestTheSchemaRowDoesNotAdviseDeletingKeysItNeverReported:
         assert "unknown key" in out, out
         assert _generic_schema_hint() in out, out
         assert vc.POLICY_ONLY_SCHEMA_HINT not in out, out
+
+
+class TestTenantUniqueness:
+    """Check 9 (#1577): one tenant id declared by two files.
+
+    The exporter answers this with a hard reject of the WHOLE config dir
+    (``DuplicateTenantError`` -> ``config rejected (mixed-mode duplicate
+    tenant)``), so a tree in this state loses alerting for every tenant, not
+    just the duplicated one. Before this check the same tree came out of this
+    command as ``Result: PASS`` / exit 0, naming neither file.
+
+    ⚠️ Every PASS assertion below is paired with a case where the same helper
+    reports, so "no findings" cannot be satisfied by the check quietly
+    scanning less: ``test_one_file_per_tenant_passes`` is only meaningful
+    beside ``test_two_spellings_of_one_stem`` and
+    ``test_nested_directories_are_walked``.
+    """
+
+    _A = "tenants:\n  shared:\n    mysql_connections: 11\n"
+    _B = "tenants:\n  shared:\n    mysql_connections: 99\n"
+
+    @staticmethod
+    def _tree(tmp_path, files):
+        d = tmp_path / "conf.d"
+        d.mkdir()
+        (d / "_defaults.yaml").write_text(
+            "defaults:\n  mysql_connections: 70\n", encoding="utf-8")
+        for name, body in files.items():
+            p = d / name
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(body, encoding="utf-8")
+        return str(d)
+
+    def test_one_file_per_tenant_passes(self, tmp_path):
+        d = self._tree(tmp_path, {
+            "a.yaml": self._A,
+            "b.yaml": "tenants:\n  other:\n    mysql_connections: 33\n"})
+        r = vc.check_tenant_uniqueness(d)
+        assert r["status"] == vc.PASS, r
+        assert "2 tenant(s)" in " ".join(r["details"]), r
+
+    def test_two_spellings_of_one_stem(self, tmp_path):
+        """The accident this shipped as: an editor leaving a ``.yml`` behind."""
+        d = self._tree(tmp_path, {"same.yaml": self._A, "same.yml": self._B})
+        # The fixture really produced two files. Windows folds CASE, not the
+        # extension, so this stays a two-file tree on every platform.
+        assert len(list(pathlib.Path(d).glob("same.*"))) == 2
+        r = vc.check_tenant_uniqueness(d)
+        assert r["status"] == vc.FAIL, r
+        detail = " ".join(r["details"])
+        assert "same.yaml" in detail and "same.yml" in detail, detail
+        assert "shared" in detail, detail
+
+    def test_nested_directories_are_walked(self, tmp_path):
+        """⛔ Also the predicate test: no extension is involved here, and the
+        exporter rejects this tree exactly as hard. A version of this check
+        keyed on ``.yaml`` vs ``.yml`` would call it clean."""
+        d = self._tree(tmp_path, {"x.yaml": self._A, "archive/y.yaml": self._B})
+        r = vc.check_tenant_uniqueness(d)
+        assert r["status"] == vc.FAIL, r
+        assert "archive/y.yaml" in " ".join(r["details"]), r
+
+    def test_uppercase_extension_counts(self, tmp_path):
+        """Selection is case-insensitive because the exporter's walker is."""
+        d = self._tree(tmp_path, {"lower.yaml": self._A, "upper.YAML": self._B})
+        names = sorted(p.name for p in pathlib.Path(d).iterdir() if p.is_file())
+        assert "upper.YAML" in names, names
+        r = vc.check_tenant_uniqueness(d)
+        assert r["status"] == vc.FAIL, r
+
+    def test_a_lone_yml_tenant_is_seen(self, tmp_path):
+        """Discriminating control for the both-spellings selection: if ``.yml``
+        were invisible here this would report zero tenants and still say
+        PASS."""
+        d = self._tree(tmp_path, {"solo.yml": self._A})
+        r = vc.check_tenant_uniqueness(d)
+        assert r["status"] == vc.PASS, r
+        assert "1 tenant(s)" in " ".join(r["details"]), r
+
+    def test_reserved_files_do_not_declare_tenants(self, tmp_path):
+        """False-positive guard mirroring the walker's ``_``-prefix gate: it
+        returns before parsing ``tenants:`` in a reserved file at all."""
+        d = self._tree(tmp_path, {
+            "t.yaml": self._A,
+            "_profiles.yaml": "tenants:\n  shared:\n    mysql_connections: 1\n"})
+        r = vc.check_tenant_uniqueness(d)
+        assert r["status"] == vc.PASS, r
+
+    def test_hidden_files_do_not_declare_tenants(self, tmp_path):
+        """Same shape for the dot-prefix skip — an editor backup beside a
+        tenant file must not turn a valid tree red."""
+        d = self._tree(tmp_path, {"a.yaml": self._A, ".a.backup.yaml": self._B})
+        r = vc.check_tenant_uniqueness(d)
+        assert r["status"] == vc.PASS, r
+
+    def test_unreadable_file_is_a_coverage_limit_not_a_pass(self, tmp_path):
+        """"Could not examine" and "examined, found nothing" are different
+        answers, and the second declaration can be hiding in the file that
+        will not parse."""
+        d = self._tree(tmp_path, {
+            "a.yaml": self._A, "bad.yaml": "tenants:\n  x: [unclosed\n"})
+        r = vc.check_tenant_uniqueness(d)
+        assert r["status"] == vc.WARN, r
+        detail = " ".join(r["details"])
+        assert "bad.yaml" in detail, detail
+        assert "not a clean result" in detail, detail
+
+    def test_message_does_not_prescribe_deleting_a_file(self, tmp_path):
+        """The cheapest way to a green run is to delete one of the two files
+        at random, which silently drops whatever only that file declared. The
+        row must not name that as the move — a guard whose message recommends
+        the worse fix gets dismantled by the people who follow it."""
+        d = self._tree(tmp_path, {"same.yaml": self._A, "same.yml": self._B})
+        detail = " ".join(vc.check_tenant_uniqueness(d)["details"]).lower()
+        assert "delete" not in detail, detail
+        assert "decision this tool cannot make" in detail, detail
+
+    def test_end_to_end_exits_1_and_prints_both_files(self, tmp_path, capsys,
+                                                      cli_argv):
+        """Wired into ``main()``, not merely importable: the defect this closes
+        is that the command printed PASS on exactly this tree."""
+        d = self._tree(tmp_path, {"same.yaml": self._A, "same.yml": self._B})
+        cli_argv("validate_config", "--config-dir", d)
+        with pytest.raises(SystemExit) as exc:
+            vc.main()
+        out = capsys.readouterr().out
+        assert exc.value.code == 1, out
+        assert "tenant_uniqueness" in out, out
+        assert "same.yml" in out, out

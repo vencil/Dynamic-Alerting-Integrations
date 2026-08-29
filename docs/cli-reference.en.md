@@ -2091,6 +2091,7 @@ docker run --rm \
 - Routing rule validation (group_wait/group_interval/repeat_interval in allowed range)
 - Policy checks (webhook domains)
 - Tenant name consistency
+- **Tenant declaration uniqueness**: FAIL when one tenant id is declared by **two files**. ⚠️ The exporter answers that state by **rejecting the entire config dir** (`DuplicateTenantError`), so the consequence is not "that one tenant loses alerting" — **every tenant in the tree does**, at deploy or restart time, after CI has passed. The usual cause is an editor leaving a `db-a.yml` beside `db-a.yaml`, but the predicate is "one id, two files": `archive/db-a.yaml` is caught the same way (#1577). ⚠️ **Not present in the v2.9.0 image**: the same tree reports `Result: PASS` / exit 0 there
 
 **Output**
 
