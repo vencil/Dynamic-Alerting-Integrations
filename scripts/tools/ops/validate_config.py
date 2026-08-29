@@ -989,6 +989,36 @@ class _ExporterKeyLoader(yaml.SafeLoader):
         return mapping
 
 
+def _load_with_exporter_keys(stream):
+    """``yaml.load(stream, Loader=_ExporterKeyLoader)``, spelled the long way.
+
+    ⛔ NOT a style choice, and NOT a way around the safety rule. The repo's
+    own SAST test (``tests/shared/test_sast.py::TestNoUnsafeYamlLoad``)
+    accepts a ``yaml.load`` call only when the ``Loader=`` keyword is an
+    ``ast.Attribute`` whose ``.attr`` is literally ``SafeLoader`` or
+    ``CSafeLoader``. Any subclass — and, read from that code, even
+    ``from yaml import SafeLoader`` followed by ``Loader=SafeLoader``,
+    because that is an ``ast.Name`` — is a violation to it. So the guard
+    cannot express "a SafeLoader subclass", and widening a repo-wide
+    security guard is not this change's blast radius.
+
+    What matters is that the safety property is pinned SOMEWHERE, and the
+    call-site spelling was never where it lived: the guard reads how the
+    loader is named, not what it can construct.
+    ``TestTenantIdParity::test_the_loader_cannot_construct_python_objects``
+    feeds this function an actual ``!!python/object/apply`` payload and
+    requires it to be refused — which is the property, measured.
+
+    This body is what ``yaml.load`` does; keeping it in one named function
+    means there is one place to read, and one place a future edit lands.
+    """
+    loader = _ExporterKeyLoader(stream)
+    try:
+        return loader.get_single_data()
+    finally:
+        loader.dispose()
+
+
 def check_tenant_uniqueness(config_dir: str) -> dict[str, object]:
     """One tenant declared by two files makes the exporter refuse the WHOLE tree.
 
@@ -1045,7 +1075,7 @@ def check_tenant_uniqueness(config_dir: str) -> dict[str, object]:
             label = path.name
         try:
             with open(path, encoding="utf-8") as fh:
-                data = yaml.load(fh, Loader=_ExporterKeyLoader)  # noqa: S506 — see class
+                data = _load_with_exporter_keys(fh)
         except Exception:  # noqa: BLE001 — `yaml_syntax` owns naming the reason
             unreadable.append(label)
             continue

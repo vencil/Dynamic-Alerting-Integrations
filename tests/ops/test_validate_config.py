@@ -2301,6 +2301,27 @@ class TestTenantIdParity:
         r = vc.check_tenant_uniqueness(d)
         assert r["status"] == vc.PASS, r
 
+    def test_the_loader_cannot_construct_python_objects(self):
+        """⛔ The safety property, measured — not the spelling of the call.
+
+        The custom loader exists to change how mapping KEYS are read; it must
+        not have widened what YAML is allowed to construct.
+        ``tests/shared/test_sast.py::TestNoUnsafeYamlLoad`` cannot answer that:
+        it accepts a ``yaml.load`` call only when ``Loader=`` is written as
+        ``<something>.SafeLoader``, so a subclass is indistinguishable to it
+        from ``yaml.UnsafeLoader``. This feeds the real payload instead."""
+        import io
+
+        assert issubclass(vc._ExporterKeyLoader, yaml.SafeLoader)
+        payload = "tenants:\n  t: !!python/object/apply:os.system ['echo pwned']\n"
+        with pytest.raises(yaml.YAMLError):
+            vc._load_with_exporter_keys(io.StringIO(payload))
+        # Must-still-work control: an ordinary document still loads, so the
+        # assertion above cannot be satisfied by a loader that refuses
+        # everything.
+        ok = vc._load_with_exporter_keys(io.StringIO("tenants:\n  t: {a: 1}\n"))
+        assert ok == {"tenants": {"t": {"a": 1}}}, ok
+
     def test_a_defaults_carrier_declaring_a_tenant_is_still_not_a_declaration(
             self, tmp_path):
         """The reserved-name rule stated on the shape the docstring names.
