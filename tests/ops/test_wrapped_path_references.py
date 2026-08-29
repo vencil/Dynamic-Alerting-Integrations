@@ -752,6 +752,7 @@ def _implicit_concat_references(text: str, path: str = "<synthetic>") -> list[tu
         tree = ast.parse(text, filename=path)
     except SyntaxError as exc:
         raise SyntaxError(f"{path}: {exc}") from exc
+    lines = text.split("\n")
     found: list[tuple[int, str]] = []
     for node in ast.walk(tree):
         if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
@@ -760,26 +761,31 @@ def _implicit_concat_references(text: str, path: str = "<synthetic>") -> list[tu
             # ⚠️ A real gap, not "nothing was joined" — see the NOT-modelled
             # bullet on same-line concatenation in this function's docstring.
             continue
-        # ⛔ The constant's EXACT source span, which is not the same thing as the
-        # lines it sits on. Joining whole boundary lines let anything else
-        # written on the opening or closing line answer for the constant: a
-        # contiguous mention of the same path on either one silenced the split
-        # inside it. Measured on both sides, and the comment below already
-        # CLAIMED "own span" while the code read whole lines (#1608 review).
-        # ⚠️ `get_source_segment` returns None only for a node carrying no
-        # position information, which a parsed tree never produces — this raise
-        # is a belt, not a guarded property. It names the file for the same
-        # reason `ast.parse` above does.
-        raw = ast.get_source_segment(text, node)
-        if raw is None:
-            raise AssertionError(
-                f"{path}: no source segment for the constant at line {node.lineno}")
+        # ⛔ THE LINES THE CONSTANT SITS ON — deliberately NOT its exact source
+        # span, and the granularity IS the predicate. The question this guard
+        # asks is not "is the token inside this constant"; it is "does
+        # `git grep <path>` return this site", because that is what a rename
+        # sweep works from. Grep answers per LINE. A contiguous mention anywhere
+        # on a line this constant occupies therefore hands the sweep a line that
+        # also carries a half of the split, and nothing is hidden.
+        # ⚠️ NARROWING THIS TO `ast.get_source_segment` WAS TRIED AND REVERTED
+        # (#1608). A constant's boundary lines are by definition the lines
+        # carrying the split's halves, so a neighbour on one of them always
+        # shares a line with the break — the narrowed version cannot be right on
+        # this axis. Measured on a shipped idiom (an assert message repeating the
+        # value it compares, wrapped at the column): it reported a site that
+        # `git grep -n` returns ON THE REPORTED LINE, and the cheapest way back
+        # to green was to delete the repeated path from the diagnostic. Zero
+        # reports bought on the tree, a class of false ones armed.
+        raw = "\n".join(lines[node.lineno - 1:node.end_lineno])
         for token in sorted(_tokens(node.value)):
-            # ⛔ `raw` is the constant's OWN span, never the whole file. Blind
+            # ⛔ `raw` is this constant's OWN lines, never the whole file. Blind
             # review measured what file-global costs: the live instance had a
             # contiguous mention of the same path elsewhere in the same file, so
             # `token in text` silences it — which is #1373's shape exactly, and
-            # is the property `a split whose token appears elsewhere` pins.
+            # is the property `a split whose token appears elsewhere` pins. That
+            # mention sits on a DIFFERENT line, which is exactly why grep sends
+            # the sweep somewhere else and the split stays hidden.
             if token in raw or "/" not in token:
                 continue
             if _resolves(token):
@@ -1522,7 +1528,7 @@ def test_no_reference_is_split_across_implicit_concatenation() -> None:
     one clause at a time and re-asked whether it still saw that instance.
 
         `token in raw` -> `token in text`   defect silenced   -> "elsewhere" case
-        span -> the lines the span sits on  defect silenced   -> boundary cases
+        the lines -> the AST span           FALSE REDS armed  -> boundary cases
         token predicate narrowed to `.py`   defect silenced   -> non-`.py` case
         skip constants inside an f-string   defect silenced   -> f-string case
         `ast.walk` -> `tree.body`           all verdicts gone -> plain case
@@ -1597,24 +1603,31 @@ def test_no_reference_is_split_across_implicit_concatenation() -> None:
         "is how a rename sweep reports a clean tree: "
         + repr(_implicit_concat_references(elsewhere)))
 
-    # MUST REPORT: the same contiguous mention, moved onto a BOUNDARY LINE of
-    # the constant — the line it opens on, and the line it closes on. Reading
-    # those lines WHOLE instead of the constant's own span lets a neighbour
-    # answer for the constant, and both sides were measured silent before the
-    # span was made exact. ⚠️ The first attempt at the opening-line case put the
-    # neighbour on the line ABOVE, which the line-join never read either, so it
-    # reported nothing about this defect — the neighbour has to SHARE a line.
+    # ⛔ MUST NOT REPORT: the same contiguous mention moved onto a BOUNDARY LINE
+    # of the constant. This is the witness for the granularity, and it exists
+    # because the opposite was shipped and reverted (#1608): a review asked for
+    # the constant's exact `ast` span instead of the lines it sits on, the
+    # request reads correct, and the two cases below are the reason it is not.
+    # A constant's boundary lines ARE the lines carrying the split's halves, so
+    # `git grep -n <path>` returns a line that carries the break — the sweep is
+    # looking straight at it and nothing is hidden. Reporting it would be a
+    # false red whose cheapest cure is deleting the repeated path from a
+    # diagnostic, i.e. making the message worse.
+    # ⚠️ Read this against the `elsewhere` case above, which MUST report: there
+    # the contiguous mention is on a DIFFERENT line, so grep sends the sweep
+    # somewhere else. Same shape, opposite verdict, and the deciding fact is
+    # which LINE the mention is on — not whether it is inside the constant.
     opens_with = 'x = ["%s", "see %s"\n    "%s here"]\n' % (subject, head, tail)
-    assert [t for _, t in _implicit_concat_references(opens_with)] == [subject], (
-        "a contiguous mention on the line the constant OPENS on is not part of "
-        "the constant; judging the whole line hides the split inside it: "
+    assert _implicit_concat_references(opens_with) == [], (
+        "a contiguous mention on the line the constant OPENS on shares a line "
+        "with the split, so grep returns it and there is nothing to fix: "
         + repr(_implicit_concat_references(opens_with)))
 
     closes_with = ('x = (\n    "see %s"\n    "%s here"), "%s"\n'
                    % (head, tail, subject))
-    assert [t for _, t in _implicit_concat_references(closes_with)] == [subject], (
-        "the same on the line the constant CLOSES on — one span, two boundary "
-        "lines, and a check that reads either whole is blind on that side: "
+    assert _implicit_concat_references(closes_with) == [], (
+        "same on the line the constant CLOSES on — narrowing `raw` to the AST "
+        "span reports this, and it is greppable: "
         + repr(_implicit_concat_references(closes_with)))
 
     # MUST NOT REPORT: contiguous. Nothing is hidden, so there is nothing to fix.
