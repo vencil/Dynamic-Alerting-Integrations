@@ -742,16 +742,27 @@ def _implicit_concat_references(text: str, path: str = "<synthetic>") -> list[tu
     # (`_implicit_concat_offenders`) and why the control drives THAT rather than
     # this function: a control that only proves this raises says nothing about
     # whether anybody still listens.
-    # ⛔ `filename=` alone does NOT put the path in front of the reader, and the
-    # difference is CPython's, not a style choice: `str(SyntaxError)` renders
-    # only the BASENAME on 3.13 and the whole path on 3.14. That is exactly the
-    # host-green / CI-red split this case was written to prevent, so the path is
-    # put in the MESSAGE, which is the thing the contributor actually reads.
+    # ⛔ `filename=` ALONE does not put the path in front of the reader, and the
+    # axis is the PLATFORM, not the interpreter: `SyntaxError.__str__` trims the
+    # filename at the platform separator (`\` on Windows, `/` on POSIX), so the
+    # very same `zfake/broken.py` renders whole on a Windows box and as bare
+    # `broken.py` on the Linux runner. Measured on one machine, both ways:
+    #     3.14.3 and 3.13.12, `zfake/broken.py`  -> whole path (identical)
+    #     3.14.3 and 3.13.12, `zfake\broken.py`  -> `broken.py`
+    # ⚠️ An earlier version of this comment blamed the interpreter version. It
+    # was wrong: host and runner differed in BOTH OS and version, and it named
+    # the one that does not matter. Anyone reading it on Linux + 3.14 would have
+    # expected containment to work, and it does not.
+    # ⛔ So the path goes in the MESSAGE. It is written by MUTATING `msg` rather
+    # than by constructing a new exception, because a fresh `SyntaxError(str)`
+    # drops `filename`, `lineno`, `offset` and `text` to None — the structured
+    # diagnostics this whole paragraph exists to protect.
     # ⚠️ Re-raising is not swallowing — the ban above is on `continue`.
     try:
         tree = ast.parse(text, filename=path)
     except SyntaxError as exc:
-        raise SyntaxError(f"{path}: {exc}") from exc
+        exc.msg = f"{path}: {exc.msg}"
+        raise
     lines = text.split("\n")
     found: list[tuple[int, str]] = []
     for node in ast.walk(tree):
@@ -1649,21 +1660,36 @@ def test_no_reference_is_split_across_implicit_concatenation() -> None:
     # only that the check raises left the caller free to swallow it: blind review
     # wrapped the call sites in `except SyntaxError: continue` and the whole
     # module stayed green while an unparseable file left the scan silently.
-    # ⚠️ The PREFIX is pinned, not mere containment, and that is what makes this
-    # case portable. `str(SyntaxError)` renders only the BASENAME on 3.13 and
-    # the whole path on 3.14, so `"zfake/broken.py" in str(...)` was green on a
-    # 3.14 host and red on the 3.13 runner — a check whose verdict depended on
-    # the interpreter rather than on the code. Requiring the message to START
-    # with the path pins the re-raise that puts it there, and is therefore red
-    # on BOTH versions if that re-raise is removed.
+    # ⚠️ THE PREFIX IS PINNED, not mere containment, and that is what makes this
+    # case portable. `SyntaxError.__str__` trims the filename at the PLATFORM
+    # separator, so `"zfake/broken.py" in str(...)` passed on a Windows host and
+    # failed on the Linux runner — the verdict depended on where it ran, not on
+    # the code. ⛔ Not on the interpreter VERSION: 3.13 and 3.14 were measured on
+    # one machine and render identically. Requiring the message to START with
+    # the path pins the mutation that puts it there, on every platform.
+    # ⛔ THE OTHER THREE ASSERTIONS ARE NOT DECORATION. Blind review weakened
+    # each layer of the first version of this fix one at a time and the module
+    # stayed green for all three: dropping `filename=` from `ast.parse`, cutting
+    # the message down to just the path, and losing the exception chain. Each is
+    # pinned below, so this case now fails if ANY of them goes.
     with pytest.raises(SyntaxError) as parse_failure:
         _implicit_concat_offenders([("zfake/broken.py", "def (\n")])
-    assert str(parse_failure.value).startswith("zfake/broken.py: "), (
+    failure = parse_failure.value
+    assert str(failure).startswith("zfake/broken.py: "), (
         "the error must name the file, and name it the same way on every "
-        "Python. Without that the report is a bare `line 1` over hundreds of "
+        "platform. Without that the report is a bare `line 1` over hundreds of "
         "files, and the cheapest way back to green is to stop parsing rather "
         "than to fix the file: "
-        + str(parse_failure.value))
+        + str(failure))
+    assert failure.filename == "zfake/broken.py" and failure.lineno == 1, (
+        "the structured fields must survive. Building a NEW SyntaxError from a "
+        "string drops filename/lineno/offset/text to None, which is what an "
+        "editor and a traceback read: "
+        + repr((failure.filename, failure.lineno, failure.offset)))
+    assert "invalid syntax" in str(failure), (
+        "the prefix must not replace the diagnosis — a message that names the "
+        "file but not what is wrong with it sends the reader back to square "
+        "one: " + str(failure))
 
     # ⛔ MUST SCAN EVERY FILE IT IS GIVEN. Truncating the corpus — `files[:1]`,
     # an `islice` — is invisible to any count of FINDINGS, because that count
