@@ -1278,3 +1278,169 @@ def test_offboard_precheck_explains_a_tenant_whose_config_is_unusable(
     assert "找不到設定檔案" in text, (
         f"fixture did not reach the not-found branch, so the assertion above "
         f"would be vacuous.\n{text[:800]}")
+
+
+# ── the readers the population walk could never reach ─────────────────
+#
+# ⛔ #1588's body listed five tools as "same shape, NOT individually
+# reproduced". Re-measured on `05d3136` — after the fix for the six that
+# WERE reproduced had shipped — four of the five were still divergent, and
+# each had escaped this file by a DIFFERENT route:
+#
+#   check_threshold_unit_sanity  not in ALL_TOOLS: exposes no conf.d flag,
+#                                so `collect_confd_tools` cannot see it. Its
+#                                root is a `run_check(root=)` argument.
+#   batch_diagnose               not in ALL_TOOLS for the same reason, and
+#                                its carrier is a ConfigMap KEY rather than
+#                                a directory entry — the same
+#                                filename->tenant question on another
+#                                surface, which no filesystem fixture
+#                                reaches.
+#   backtest_threshold           IN the population but parked in
+#                                KNOWN_INSENSITIVE: the CLI needs
+#                                `--baseline` as well, and without it the
+#                                A/B produced identical output in both arms
+#                                and the tool was filed as having no
+#                                discriminating power.
+#   run_chaos_soak               IN the population but parked in
+#                                KNOWN_UNMEASURABLE: argparse demands
+#                                `--target-url` / `--output-dir`.
+#
+# ⚠️ Two of those four skip sets are still correct AS STATEMENTS ABOUT THE
+# CLI — this section does not empty them, it stops them from being the
+# only thing that was asked. `KNOWN_INSENSITIVE`'s own comment already
+# said "this is not a clean bill of health"; the hole it declared went
+# four commits without anybody re-asking, which is the part worth pinning.
+#
+# Each test below asserts BOTH arms and then asserts the lower arm was
+# non-empty, because an A/B whose lower arm produces nothing reports
+# parity for a fixture with no discriminating power — the exact way the
+# first measurement of `check_threshold_unit_sanity` came back clean.
+
+_CASE_ARMS = (("lower", "db-a.yaml"), ("UPPER", "DB-A.YAML"))
+_TENANT_BODY = "tenants:\n  acme:\n    cpu_usage: 80\n"
+
+
+def _import_tool(subdir: str, module: str):
+    """Import a tool module by name, with its own sys.path expectations."""
+    import importlib  # noqa: PLC0415
+    for extra in (str(TOOLS_DIR / subdir), str(TOOLS_DIR)):
+        if extra not in sys.path:
+            sys.path.insert(0, extra)
+    return importlib.import_module(module)
+
+
+def test_unit_sanity_gate_reads_both_casings(tmp_path: pathlib.Path) -> None:
+    """⛔ A lint gate that returns green because the carrier was upper-cased
+    is worse than no gate: it reports a clean bill for a file it never
+    opened. Measured before the fix: `_defaults.yaml` -> 1 OUT-OF-DOMAIN
+    error, `_DEFAULTS.YAML` -> 0, same body.
+    """
+    import yaml as _yaml  # noqa: PLC0415
+    gate = _import_tool("lint", "check_threshold_unit_sanity")
+    registry = {"version": 1,
+                "packs": {"t": {"k": {"value": 50, "unit": "%",
+                                      "tier": "defaults"}}}}
+    body = _yaml.safe_dump({"defaults": {"k": 300}}, allow_unicode=True)
+    counts = {}
+    for arm, fname in _CASE_ARMS:
+        root = tmp_path / arm
+        confd = root / "components/threshold-exporter/config/conf.d"
+        confd.mkdir(parents=True)
+        (confd / fname).write_text(body, encoding="utf-8")
+        errs = gate.run_check(registry=registry, root=str(root))["errors"]
+        counts[arm] = errs
+    assert counts["lower"], (
+        "fixture is vacuous: the lower arm produced no violation, so the "
+        "comparison below would pass for a gate that reads nothing")
+    assert len(counts["UPPER"]) == len(counts["lower"]), (
+        f"the gate saw {len(counts['lower'])} violation(s) under "
+        f"`db-a.yaml` and {len(counts['UPPER'])} under `DB-A.YAML`; the "
+        f"bodies are identical.\nlower: {counts['lower']}\n"
+        f"UPPER: {counts['UPPER']}")
+
+
+def test_batch_diagnose_discovers_tenants_from_either_casing(
+        monkeypatch) -> None:
+    """The carrier is a ConfigMap KEY, and the keys ARE the conf.d
+    filenames — so the exporter's filename->tenant rule applies to them.
+    Measured before the fix: `db-a.yaml` -> ['db-a'], `DB-A.YAML` -> [],
+    i.e. every tenant vanished from the report and the run still exited 0.
+    """
+    import json as _json  # noqa: PLC0415
+    mod = _import_tool("ops", "batch_diagnose")
+    found = {}
+    for arm, fname in _CASE_ARMS:
+        payload = _json.dumps(
+            {"data": {fname: _TENANT_BODY, "_defaults.yaml": "d: {}\n"}})
+
+        class _Result:
+            returncode = 0
+            stdout = payload
+            stderr = ""
+
+        monkeypatch.setattr(mod.subprocess, "run",
+                            lambda *a, **k: _Result())
+        found[arm] = mod.discover_tenants()
+    assert found["lower"] == ["db-a"], (
+        f"fixture is vacuous — the lower arm found {found['lower']}")
+    # ⛔ Compare the SHAPE, not the strings: `config_stem` preserves the
+    # carrier's case on purpose (folding it would rename the tenant on the
+    # write plane only), so the two arms legitimately carry different ids.
+    assert len(found["UPPER"]) == len(found["lower"]), (
+        f"upper-cased ConfigMap keys yielded {found['UPPER']} against "
+        f"{found['lower']} for the identical body")
+    assert found["UPPER"] == ["DB-A"], (
+        f"the tenant id must keep the key's original case; got "
+        f"{found['UPPER']}")
+
+
+def test_backtest_sees_threshold_changes_under_either_casing(
+        tmp_path: pathlib.Path) -> None:
+    """⛔ This one fails in the direction that reads as good news: a
+    backtest reporting "no threshold changes" for a change that IS there.
+    Measured before the fix: 1 change vs 0.
+    """
+    mod = _import_tool("ops", "backtest_threshold")
+    seen = {}
+    for arm, fname in _CASE_ARMS:
+        cur, old = tmp_path / arm / "cur", tmp_path / arm / "old"
+        cur.mkdir(parents=True)
+        old.mkdir(parents=True)
+        (old / fname).write_text("tenants:\n  acme:\n    cpu_usage: 80\n",
+                                 encoding="utf-8")
+        (cur / fname).write_text("tenants:\n  acme:\n    cpu_usage: 95\n",
+                                 encoding="utf-8")
+        seen[arm] = mod.extract_changes_from_dirs(str(cur), str(old))
+    assert seen["lower"], "fixture is vacuous — the lower arm found no change"
+    assert len(seen["UPPER"]) == len(seen["lower"]), (
+        f"upper-cased carrier yielded {len(seen['UPPER'])} change(s) against "
+        f"{len(seen['lower'])} for the same edit")
+    # The stem must be stripped in both arms: a report naming a tenant
+    # called `DB-A.YAML` is the silent miss turned into a loud wrong answer.
+    assert {c["tenant"] for c in seen["UPPER"]} == {"DB-A"}, (
+        f"tenant id kept its extension: "
+        f"{sorted(c['tenant'] for c in seen['UPPER'])}")
+
+
+def test_chaos_soak_perturbs_a_carrier_under_either_casing(
+        tmp_path: pathlib.Path) -> None:
+    """A soak that never fires a reload still writes a full run report, so
+    the exercise reads as "hot-reload survived N hours" having never
+    reloaded once. Measured before the fix: True vs False.
+    """
+    mod = _import_tool("dx", "run_chaos_soak")
+    fired = {}
+    for arm, fname in _CASE_ARMS:
+        confd = tmp_path / arm / "conf.d"
+        confd.mkdir(parents=True)
+        carrier = confd / fname
+        carrier.write_text(_TENANT_BODY, encoding="utf-8")
+        fired[arm] = (mod.trigger_reload(confd),
+                      "# soak-toggle" in carrier.read_text(encoding="utf-8"))
+    assert fired["lower"] == (True, True), (
+        f"fixture is vacuous — the lower arm did not perturb anything: "
+        f"{fired['lower']}")
+    assert fired["UPPER"] == fired["lower"], (
+        f"upper-cased carrier: {fired['UPPER']} against {fired['lower']} "
+        f"(fired, carrier_actually_written)")

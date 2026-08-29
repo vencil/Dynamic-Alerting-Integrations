@@ -77,6 +77,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_validation import i18n_text  # noqa: E402
+from _lib_confd import has_yaml_extension  # noqa: E402
 
 # ---------------------------------------------------------------- dimensions
 
@@ -268,7 +269,19 @@ def _iter_yaml_files(root: str):
         base = os.path.join(root, d)
         for dirpath, _dirs, files in os.walk(base):
             for f in sorted(files):
-                if f.endswith((".yaml", ".yml")):
+                # #1588: was `f.endswith((".yaml", ".yml"))`, i.e. a 12th
+                # hand-written copy of the extension rule — and a
+                # case-SENSITIVE one. Measured on this gate before the fix,
+                # with the same body under two spellings of the same name:
+                # `_defaults.yaml` -> 1 OUT-OF-DOMAIN error, `_DEFAULTS.YAML`
+                # -> 0. A unit-sanity gate that returns green because the
+                # carrier was upper-cased is worse than no gate: it reports
+                # a clean bill for a file it never opened.
+                #
+                # The accepted SET is unchanged (both spellings, as before);
+                # only the case folding moves, and it moves into the shared
+                # predicate rather than into a 13th copy.
+                if has_yaml_extension(f):
                     p = os.path.join(dirpath, f)
                     yield os.path.relpath(p, root).replace(os.sep, "/"), p
 

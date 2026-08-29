@@ -767,7 +767,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "039e64a94c0c354fb59775163b9caf966946fd5efabe11acafe6114458f578d4",
+ "source_digest": "81cbf2cbfd0db6617c20fd61ffd6a291f4bae6ee11523faeea9e4f9ddb2bf5f4",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1427,7 +1427,8 @@
    "tests/dx/test_compile_custom_alerts.py",
    "tests/lint/test_check_threshold_reachability.py",
    "tests/ops/test_ci_baseline_substitution.py",
-   "tests/ops/test_guard_defaults_scopes.py"
+   "tests/ops/test_guard_defaults_scopes.py",
+   "tests/shared/test_confd_case_parity_across_tools.py"
   ],
   "components/threshold-exporter/config/conf.d/_defaults.yaml": [
    "tests/lint/test_check_threshold_reachability.py",

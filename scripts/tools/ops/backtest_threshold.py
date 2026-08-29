@@ -51,7 +51,12 @@ from _lib_python import load_yaml_file, is_disabled, http_get_json, query_promet
 from _lib_python import format_json_report  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
-from _lib_confd import warn_nested  # noqa: E402
+from _lib_confd import (  # noqa: E402
+    config_stem,
+    has_yaml_extension,
+    is_reserved_name,
+    warn_nested,
+)
 
 # ---------------------------------------------------------------------------
 # Default settings
@@ -150,8 +155,20 @@ def extract_changes_from_git_diff():
             fname = line[6:]
             # Extract tenant from filename (conf.d/db-a.yaml → db-a)
             basename = Path(fname).name
-            if basename.endswith(".yaml") and not basename.startswith("_"):
-                current_file = basename.removesuffix(".yaml")
+            # #1588 site 1 of 4 in this file. `.yaml` ONLY is preserved on
+            # purpose — the spelling axis is #1603 — but the case folding
+            # and the stem both move to the shared predicates. Hand-slicing
+            # the stem is what `config_stem` exists to stop: `str.lower()`
+            # can shrink byte length, so an offset taken from the folded
+            # copy cuts the original in the wrong place.
+            # ⚠️ `config_stem` also declines `.`-prefixed names, so a diff
+            # touching `conf.d/.foo.yaml` no longer yields a tenant called
+            # `.foo`. The exporter's scanner skips hidden entries, so that
+            # agrees with the oracle — but it is a second-order change and
+            # is recorded here rather than left for someone to discover.
+            if has_yaml_extension(basename, (".yaml",)) \
+                    and not is_reserved_name(basename):
+                current_file = config_stem(basename) or None
             else:
                 current_file = None
             continue
@@ -209,12 +226,28 @@ def extract_changes_from_dirs(config_dir, baseline_dir):
     # #1339: flat by design here — but a hierarchical conf.d must not
     # look like an empty one. Name the files this scan cannot see.
     warn_nested(config_base, tool="backtest_threshold")
-    for path in sorted(config_base.glob("*.yaml")):
+    # #1588 site 2 of 4. `glob("*.yaml")` is case-SENSITIVE on Linux, so a
+    # `DB-A.YAML` carrier produced 0 changes where the identical body under
+    # `db-a.yaml` produced 1 — a backtest that reports "no threshold changes"
+    # for a change that is really there. `iterdir()` + the shared predicate
+    # yields the SAME set as the glob did (directories included, exactly as
+    # `glob` returned them), only case-folded: adding an `is_file()` filter
+    # here would be the #1607 axis, which is not this commit's subject.
+    # ⚠️ `is_dir()` guard: `glob` on a missing directory yields nothing,
+    # `iterdir()` raises. Turning a missing --config-dir into a traceback
+    # would be a second behaviour change wearing this one's clothes.
+    _entries = sorted(config_base.iterdir()) if config_base.is_dir() else []
+    for path in (p for p in _entries
+                 if has_yaml_extension(p.name, (".yaml",))):
         basename = path.name
-        if basename.startswith("_"):
+        if is_reserved_name(basename):
             continue
 
-        tenant = basename.removesuffix(".yaml")
+        # ⛔ `removesuffix(".yaml")` is case-sensitive too, and letting the
+        # scan above see `DB-A.YAML` while this line failed to strip it
+        # produced a report naming a tenant called `DB-A.YAML` — the fix
+        # for a silent miss turned into a loud wrong answer. Measured.
+        tenant = config_stem(basename)
         new_data = load_yaml_file(str(path), default={})
         baseline_path = str(baseline_base / basename)
         old_data = load_yaml_file(baseline_path, default={})
@@ -269,8 +302,9 @@ def changed_conf_files():
             return []
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return []
+    # #1588 site 3 of 4. Same rule, third hand-written copy in one file.
     return [f"conf.d/{Path(ln.strip()).name}" for ln in result.stdout.splitlines()
-            if ln.strip().endswith(".yaml")]
+            if has_yaml_extension(ln.strip(), (".yaml",))]
 
 
 def load_conf_files(paths):
@@ -700,8 +734,13 @@ def main():
         # #1339: second scan site — the guard must live where the scan does,
         # otherwise a hierarchical conf.d is silently empty on THIS path.
         warn_nested(Path(args.config_dir), tool="backtest_threshold")
+        # #1588 site 4 of 4. Same `is_dir()` reasoning as the scan above:
+        # a missing --config-dir stayed an empty result, not a traceback.
+        _cd = Path(args.config_dir)
+        _entries = sorted(_cd.iterdir()) if _cd.is_dir() else []
         parsed_conf = load_conf_files(
-            [str(p) for p in sorted(Path(args.config_dir).glob("*.yaml"))]
+            [str(p) for p in _entries
+             if has_yaml_extension(p.name, (".yaml",))]
         )
     else:
         parsed_conf = {}

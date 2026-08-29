@@ -90,6 +90,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_confd import has_yaml_extension, is_reserved_name  # noqa: E402
 
 # Metrics we extract from /metrics (Prometheus text format).
 # Adding new ones here automatically extends the timeseries CSV.
@@ -181,12 +182,25 @@ def trigger_reload(config_dir: Path) -> bool:
     """
     if not config_dir.exists():
         return False
-    yaml_files = list(config_dir.rglob("*.yaml"))
+    # #1588: `rglob("*.yaml")` is case-SENSITIVE, so a soak run against a
+    # tree whose carriers are `.YAML` found nothing to perturb and
+    # `trigger_reload` returned False on every pass — measured True (lower)
+    # vs False (UPPER) on the identical body. A soak that never fires a
+    # reload still produces a full run report, so the whole exercise reads
+    # as "hot-reload survived N hours" having never reloaded once.
+    #
+    # ⚠️ `.yaml` ONLY is preserved (the spelling axis is #1603), and the
+    # relative order of `rglob("*")` matches what `rglob("*.yaml")` yielded
+    # — MEASURED on a nested tree whose entries were created in shuffled
+    # order, not assumed — so "the first non-`_` file" still picks the same
+    # carrier and the soak keeps perturbing what it used to perturb.
+    yaml_files = [p for p in config_dir.rglob("*")
+                  if has_yaml_extension(p.name, (".yaml",))]
     if not yaml_files:
         return False
     # Pick the first non-_defaults file to perturb (keeps platform invariants stable)
     for yf in yaml_files:
-        if yf.name.startswith("_"):
+        if is_reserved_name(yf.name):
             continue
         try:
             content = yf.read_text(encoding="utf-8")
