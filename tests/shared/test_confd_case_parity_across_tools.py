@@ -1390,8 +1390,10 @@ def test_batch_diagnose_discovers_tenants_from_either_casing(
     i.e. every tenant vanished from the report and the run still exited 0.
     """
     import json as _json  # noqa: PLC0415
+    import contextlib  # noqa: PLC0415
+    import io  # noqa: PLC0415
     mod = _import_tool("ops", "batch_diagnose")
-    found = {}
+    found, noise = {}, {}
     for arm, fname in _CASE_ARMS:
         # ⛔ Three neighbours, one per filter this loop applies, so that
         # deleting any of them turns this test red rather than leaving it
@@ -1417,7 +1419,10 @@ def test_batch_diagnose_discovers_tenants_from_either_casing(
 
         monkeypatch.setattr(mod.subprocess, "run",
                             lambda *a, **k: _Result())
-        found[arm] = mod.discover_tenants()
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            found[arm] = mod.discover_tenants()
+        noise[arm] = err.getvalue()
     assert found["lower"] == ["db-a"], (
         f"fixture is vacuous — the lower arm found {found['lower']}")
     # ⛔ Compare the SHAPE, not the strings: `config_stem` preserves the
@@ -1429,6 +1434,17 @@ def test_batch_diagnose_discovers_tenants_from_either_casing(
     assert found["UPPER"] == ["DB-A"], (
         f"the tenant id must keep the key's original case; got "
         f"{found['UPPER']}")
+    # ⛔ The `_defaults.yaml` neighbour above does NOT pin the reserved
+    # filter through the RETURN VALUE — `config_stem` answers "" for it
+    # either way, so deleting `is_reserved_name` leaves the list identical.
+    # Blind review measured what it does change: a spurious
+    # "carries no tenant id" warning for the platform defaults key, on
+    # every run. That is what this assertion pins.
+    for arm in ("lower", "UPPER"):
+        assert noise[arm] == "", (
+            f"[{arm}] discover_tenants wrote to stderr on a ConfigMap whose "
+            f"keys are all legitimate; a reserved key is expected, not a "
+            f"finding: {noise[arm]!r}")
 
 
 def test_backtest_sees_threshold_changes_under_either_casing(
@@ -1597,10 +1613,16 @@ def _git_conf_d_repo(root: pathlib.Path, carrier: str,
     run("git", "init", "-q")
     run("git", "config", "user.email", "t@example.invalid")
     run("git", "config", "user.name", "t")
-    (root / "conf.d" / carrier).write_text(before, encoding="utf-8")
+    # ⛔ A `.yml` neighbour carrying the SAME edit. `.yaml`-only is what
+    # every site in this tool accepts (the spelling axis is #1603), and
+    # blind review measured that claim unguarded at sites 1, 3 and 5:
+    # widening any of them left the whole suite green.
+    for name, body in ((carrier, before), ("db-c.yml", before)):
+        (root / "conf.d" / name).write_text(body, encoding="utf-8")
     run("git", "add", "-A")
     run("git", "commit", "-qm", "before")
-    (root / "conf.d" / carrier).write_text(after, encoding="utf-8")
+    for name, body in ((carrier, after), ("db-c.yml", after)):
+        (root / "conf.d" / name).write_text(body, encoding="utf-8")
     run("git", "add", "-A")
     run("git", "commit", "-qm", "after")
     return root
@@ -1634,7 +1656,8 @@ def test_git_diff_path_reports_a_removal_under_either_casing(
         raw = mod.extract_changes_from_git_diff()
         kept[arm] = (files, sorted(parsed),
                      [(c["tenant"], c["metric"]) for c in
-                      mod.keep_flat_threshold_changes(raw, parsed)])
+                      mod.keep_flat_threshold_changes(raw, parsed)],
+                     sorted({c["tenant"] for c in raw}))
     assert kept["lower"][2] == [("db-a", "cpu_usage")], (
         f"fixture is vacuous — the lower arm reported {kept['lower']}")
     # ⛔ Assert the three sites SEPARATELY. Asserting only the final
@@ -1650,6 +1673,15 @@ def test_git_diff_path_reports_a_removal_under_either_casing(
         assert kept[arm][1] == [tid], (
             f"[{arm}] the changed file did not parse into its tenant; "
             f"got {kept[arm][1]}")
+        # ⛔ The PARSER's own output, separately. Widening site 1's
+        # spelling set is invisible in `kept` — the `.yml` neighbour's
+        # removal is dropped later anyway, by sites 3 and 5, which still
+        # accept `.yaml` only. A surviving mutant until this assertion
+        # existed; the axis has to be pinned where it is decided.
+        assert kept[arm][3] == [tid], (
+            f"[{arm}] the git-diff parser attributed changes to "
+            f"{kept[arm][3]}; the `.yml` neighbour carries the same edit "
+            f"and this site accepts `.yaml` only (#1603)")
     assert len(kept["UPPER"][2]) == len(kept["lower"][2]), (
         f"the removal survived under `db-a.yaml` and was dropped under "
         f"`DB-A.YAML`.\nlower: {kept['lower']}\nUPPER: {kept['UPPER']}")
@@ -1666,8 +1698,11 @@ def test_config_dir_recipe_scan_sees_either_casing(
 
     Driven through the CLI because that is the only way this site runs.
     """
-    bodies = ("tenants:\n  acme:\n    cpu_usage: 80\n"
-              "    _custom_alerts:\n      - recipe: threshold\n")
+    def _recipe_body(tenant: str) -> str:
+        return (f"tenants:\n  {tenant}:\n    cpu_usage: 80\n"
+                f"    _custom_alerts:\n      - recipe: threshold\n")
+
+    bodies = _recipe_body("acme")
     seen = {}
     for arm, carrier in (("lower", "db-a.yaml"), ("UPPER", "DB-A.YAML")):
         cur, base = tmp_path / arm / "cur", tmp_path / arm / "base"
@@ -1675,6 +1710,17 @@ def test_config_dir_recipe_scan_sees_either_casing(
         base.mkdir(parents=True)
         (cur / carrier).write_text(bodies, encoding="utf-8")
         (base / carrier).write_text(bodies, encoding="utf-8")
+        # ⛔ Three neighbours whose tenants must NOT reach the notice, one
+        # per filter this site applies. Blind review deleted this site's
+        # extension filter outright and the suite stayed green while a
+        # `.txt` file put a tenant called `ghost` in front of the operator;
+        # and it measured this tool answering the HIDDEN axis one way here
+        # and another way in `extract_changes_from_dirs`.
+        for name, tenant in (("neighbour.txt", "ghost_txt"),
+                             (".hidden.yaml", "ghost_hidden"),
+                             ("db-c.yml", "ghost_yml")):
+            (cur / name).write_text(_recipe_body(tenant), encoding="utf-8")
+            (base / name).write_text(_recipe_body(tenant), encoding="utf-8")
         r = subprocess.run(
             [sys.executable, "-X", "utf8",
              str(TOOLS_DIR / "ops" / "backtest_threshold.py"),
@@ -1690,16 +1736,30 @@ def test_config_dir_recipe_scan_sees_either_casing(
         assert "acme" in seen[arm], (
             f"[{arm}] the recipe-bearing tenant was not seen by the "
             f"--config-dir scan:\n{seen[arm][:400]}")
+        assert "1 tenant(s)" in seen[arm], (
+            f"[{arm}] exactly one carrier here is a tenant; a `.txt`, a "
+            f"`.`-prefixed and a `.yml` neighbour must all be skipped by "
+            f"THIS site, the same way the comparison scan skips them.\n"
+            f"{seen[arm][:400]}")
+        for ghost in ("ghost_txt", "ghost_hidden", "ghost_yml"):
+            assert ghost not in seen[arm], (
+                f"[{arm}] `{ghost}` reached the operator-facing notice from "
+                f"a carrier this site must not read:\n{seen[arm][:400]}")
 
 
 def test_config_dir_scan_still_lists_a_config_named_directory(
         tmp_path: pathlib.Path) -> None:
-    """⛔ The `is_file()` axis (#1607) must stay OUT of this change, and
-    saying so in a comment is not a guard: blind review added an
-    `is_file()` filter to both scan sites and the whole suite stayed
-    green. `glob("*.yaml")` returned a directory named `notes.yaml/`, so
-    the replacement must too — whatever happens to it downstream is
-    #1607's question, not this one's.
+    """⛔ The `is_file()` axis (#1607) must stay OUT of this change.
+
+    ⚠️ SCOPE, stated exactly, because the first version of this docstring
+    overstated it: this pins the LISTING HELPER, not the two call sites.
+    Blind review added `is_file()` at both call sites and the suite stayed
+    green — and then measured that the mutant is behaviourally EQUIVALENT
+    in this tool today, because `load_yaml_file` and `load_conf_files`
+    each apply their own `is_file()` downstream. So there is nothing to
+    observe at the call sites; the guard belongs where the axis is
+    decided, and that is here. `glob("*.yaml")` returned a directory named
+    `notes.yaml/`, so the replacement must too.
     """
     mod = _import_tool("ops", "backtest_threshold")
     tree = tmp_path / "conf.d"
@@ -1711,3 +1771,76 @@ def test_config_dir_scan_still_lists_a_config_named_directory(
         f"a config-named DIRECTORY dropped out of the listing; that is the "
         f"#1607 axis smuggled into a case fix. Listed: {listed}")
     assert "db-a.yaml" in listed, f"fixture is vacuous: {listed}"
+
+
+def test_backtest_names_an_unreadable_config_dir_once_per_run(
+        tmp_path: pathlib.Path, monkeypatch) -> None:
+    """⛔ Said once per RUN, not once per scan.
+
+    `--config-dir` lists the tree TWICE (the recipe scan in `main`, the
+    comparison in `extract_changes_from_dirs`), and the first version of
+    the unreadable-directory warning printed on both. Measured through the
+    CLI as a non-root uid against a `chmod 000` conf.d: two identical
+    lines. This file already states the rule for every other reader —
+    "A repeated warning trains the operator to skim past it, which costs
+    the signal the report exists to give."
+    """
+    mod = _import_tool("ops", "backtest_threshold")
+    mod.reset_unlistable_warnings_for_test()
+    confd = tmp_path / "conf.d"
+    confd.mkdir()
+    real_iterdir = pathlib.Path.iterdir
+
+    def deny(self):
+        if os.fspath(self) == os.fspath(confd):
+            raise PermissionError(13, "Permission denied", str(self))
+        return real_iterdir(self)
+
+    monkeypatch.setattr(pathlib.Path, "iterdir", deny)
+    monkeypatch.setattr(mod, "warn_nested", lambda *a, **k: False)
+
+    import contextlib  # noqa: PLC0415
+    import io  # noqa: PLC0415
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        mod._confd_entries(confd)
+        mod._confd_entries(confd)
+    hits = err.getvalue().count("could not be listed")
+    assert hits == 1, (
+        f"the unreadable root was named {hits} time(s) across two scans of "
+        f"the same run; the contract is once.\n{err.getvalue()!r}")
+
+
+def test_head1_carrier_lookup_keeps_the_yaml_only_spelling(
+        tmp_path: pathlib.Path, monkeypatch) -> None:
+    """⛔ The spelling axis (#1603) at the HEAD~1 carrier lookup.
+
+    `_carrier_at_head1` resolves a tenant id back to the file git actually
+    holds. Its docstring says `.yaml` ONLY — widening it would let a
+    `.yml` carrier answer for a tenant this tool otherwise cannot see, i.e.
+    it would make the removal path report a change from a file no other
+    site in this tool reads. Blind review measured that claim to have no
+    guard: widening it left the whole suite green.
+    """
+    mod = _import_tool("ops", "backtest_threshold")
+    repo = _git_conf_d_repo(tmp_path / "yml-only", "db-a.yml",
+                            _BEFORE, _AFTER_REMOVED)
+    monkeypatch.chdir(repo)
+    assert mod._carrier_at_head1("db-a") is None, (
+        "a `.yml` carrier answered for the tenant; that is the spelling "
+        "axis (#1603) widened inside a case fix")
+    # ...and the control: the same lookup DOES find the spelling it accepts,
+    # so the assertion above is not passing for want of any carrier at all.
+    repo2 = _git_conf_d_repo(tmp_path / "yaml", "DB-A.YAML",
+                             _BEFORE, _AFTER_REMOVED)
+    monkeypatch.chdir(repo2)
+    assert mod._carrier_at_head1("DB-A") == "./conf.d/DB-A.YAML", (
+        "fixture is vacuous — the accepted spelling was not found either")
+    # ⛔ And the comparison is EXACT, not case-folded. `config_stem` keeps
+    # the carrier's case on purpose, so a folded compare here would hand
+    # back a DIFFERENT tenant's file — the write-plane rename this whole
+    # line of work exists to prevent, arriving through the back door.
+    # Blind review measured the folded version passing the suite.
+    assert mod._carrier_at_head1("db-a") is None, (
+        "`db-a` resolved to a carrier whose stem is `DB-A`; the stem "
+        "comparison must be exact, not case-folded")

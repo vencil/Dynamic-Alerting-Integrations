@@ -269,8 +269,8 @@ def _iter_yaml_files(root: str):
         base = os.path.join(root, d)
         for dirpath, _dirs, files in os.walk(base):
             for f in sorted(files):
-                # #1588: was `f.endswith((".yaml", ".yml"))`, i.e. a 12th
-                # hand-written copy of the extension rule — and a
+                # #1588: was `f.endswith((".yaml", ".yml"))`, i.e. yet
+                # another hand-written copy of the extension rule — and a
                 # case-SENSITIVE one. Measured on this gate before the fix,
                 # with the same body under two spellings of the same name:
                 # `_defaults.yaml` -> 1 OUT-OF-DOMAIN error, `_DEFAULTS.YAML`
@@ -280,7 +280,14 @@ def _iter_yaml_files(root: str):
                 #
                 # The accepted SET is unchanged (both spellings, as before);
                 # only the case folding moves, and it moves into the shared
-                # predicate rather than into a 13th copy.
+                # predicate rather than into one more copy.
+                #
+                # ⚠️ The ordinals are gone on purpose: two sites in this
+                # same change each called themselves "the 12th copy",
+                # which cannot both be true. A count nobody recomputes
+                # is a number that goes stale the moment it is written —
+                # `grep -rl has_yaml_extension scripts/tools/` answers it
+                # correctly forever.
                 if has_yaml_extension(f):
                     p = os.path.join(dirpath, f)
                     yield os.path.relpath(p, root).replace(os.sep, "/"), p

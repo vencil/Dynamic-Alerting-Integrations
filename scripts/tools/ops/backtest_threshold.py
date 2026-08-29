@@ -216,6 +216,15 @@ def extract_changes_from_git_diff():
             and not c["metric"].startswith("_")]
 
 
+# Roots already named as unlistable, so the warning is said once per run.
+_WARNED_UNLISTABLE: set = set()
+
+
+def reset_unlistable_warnings_for_test() -> None:
+    """Clear the once-per-run dedup so a test can drive the branch twice."""
+    _WARNED_UNLISTABLE.clear()
+
+
 def _confd_entries(root: Path) -> list:
     """List `root` once — naming it, never raising, never silently empty.
 
@@ -262,9 +271,20 @@ def _confd_entries(root: Path) -> list:
         # SECOND probe that may disagree with the failure actually caught
         # here (a FUSE mount going away, a transient EIO). Reporting what
         # was caught cannot drift from what happened.
-        print(f"WARNING: {safe_label(str(root))}: could not be listed — "
-              f"{type(exc).__name__}: {exc.strerror or exc} — the config "
-              f"files inside it were NOT scanned", file=sys.stderr)
+        # ⛔ Once per RUN, not once per scan. `--config-dir` calls this
+        # helper twice (`main` for the recipe scan, `extract_changes_from_dirs`
+        # for the comparison) and the first version printed the same line
+        # twice — measured. This file's own
+        # `test_each_reader_names_an_unusable_entry_exactly_once` states the
+        # rule for every other reader: "A repeated warning trains the
+        # operator to skim past it, which costs the signal the report exists
+        # to give." `warn_nested` already dedupes; this now does too.
+        key = os.path.abspath(str(root))
+        if key not in _WARNED_UNLISTABLE:
+            _WARNED_UNLISTABLE.add(key)
+            print(f"WARNING: {safe_label(str(root))}: could not be listed — "
+                  f"{type(exc).__name__}: {exc.strerror or exc} — the config "
+                  f"files inside it were NOT scanned", file=sys.stderr)
         return []
 
 
@@ -466,13 +486,18 @@ def _flat_keys_at_head1(tenant):
             # Measured end to end on two git repos with byte-identical
             # bodies, HEAD~1 holding a threshold that HEAD removes:
             #
-            #   lower  raw=1 change   KEPT=1     (the removal is reported)
-            #   UPPER  raw=1 change   KEPT=0     (silently dropped)
+            #   lower              raw=1 change   KEPT=1  (reported)
+            #   UPPER, this file    raw=1 change   KEPT=0  (dropped here)
+            #   UPPER, on 05d3136   raw=0 change   KEPT=0  (dropped earlier,
+            #                                              by sites 1 and 3)
             #
-            # ⇒ the operator saw "No threshold changes found." for a
-            # threshold that really was removed — the DISABLE direction —
-            # and saw exactly that on `05d3136` too, so the earlier fix
-            # bought nothing on this path.
+            # ⚠️ Those three rows are the CORRECTED table. The first version
+            # of this comment printed `05d3136` as `raw=1 KEPT=0`, which is
+            # this file's own intermediate state, not the base — blind review
+            # re-ran it and got `raw=0`. The operator-visible symptom really
+            # is identical on both ("No threshold changes found." for a
+            # removal that happened), which is what matters, but a number
+            # labelled "measured" has to be the number that was measured.
             #
             # The name is resolved by ASKING GIT WHAT IS THERE rather than
             # by spelling it again. Kept as a fallback so the guessed path
@@ -859,10 +884,22 @@ def main():
         # unreadable-directory case reached main() FIRST, before the
         # Prometheus availability check, so `--skip-if-unavailable` could
         # not contain it and the `--json` contract lost its one document.
+        #
+        # ⛔ `config_stem(...)` truthiness, not just the extension, and that
+        # is not tidiness. Blind review measured this tool answering the
+        # HIDDEN axis two different ways after the first fix: the scan above
+        # skipped `.hidden.yaml` (its `config_stem` is "") while this site
+        # still loaded it, so ONE TOOL disagreed with itself about which
+        # carriers exist. `05d3136` was at least consistent (both said
+        # `.hidden`). Producing that split inside the change that exists to
+        # remove exactly that split is the sharpest way to get this wrong;
+        # both sites now defer to the same predicate, which is also what the
+        # exporter's scanner does.
         _entries = _confd_entries(Path(args.config_dir))
         parsed_conf = load_conf_files(
             [str(p) for p in _entries
-             if has_yaml_extension(p.name, (".yaml",))]
+             if has_yaml_extension(p.name, (".yaml",))
+             and config_stem(p.name)]
         )
     else:
         parsed_conf = {}

@@ -78,8 +78,8 @@ def discover_tenants(namespace="monitoring", configmap="threshold-config"):
     # #1588: the carrier here is a ConfigMap KEY, not a directory entry —
     # but the key names ARE the conf.d filenames, so this is the same
     # filename->tenant-id question the exporter's scanner answers, asked on
-    # a different carrier. It was answered with a 12th hand-written copy of
-    # the rule, and a case-SENSITIVE one: measured with a synthetic
+    # a different carrier. It was answered with yet another hand-written
+    # copy of the rule, and a case-SENSITIVE one: measured with a synthetic
     # ConfigMap holding one tenant key, `db-a.yaml` -> ['db-a'] while
     # `DB-A.YAML` -> [], i.e. every tenant in the report vanished and the
     # run still exited 0.
