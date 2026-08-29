@@ -201,10 +201,23 @@ GATING_CANARIES = frozenset({"BenchmarkControlCanaryCPU"})
 # and `SCHEMA_V1_PRE_STATUS_KEYS` is what the older producer actually wrote.
 # ⚠️ The reverse pairing is what shows no rule was in force: `c7d0586` bumped
 # v1→v2 for one OPTIONAL field while `60f4523` added a REQUIRED one for free.
-# ⛔ There is still no such rule as of this commit — writing one, plus a gate
-# on `pair_bench_ratio.py`'s key set, is tracked in #1571 and lands separately.
-# Pointing at a rule that does not exist yet is the failure this ADR line keeps
-# hitting from the other side, so it is named as absent rather than cited.
+# ⛔ CORRECTION — these four lines used to deny that such a rule existed:
+# "There is still no such rule as of this commit — writing one, plus a gate on
+# `pair_bench_ratio.py`'s key set, is tracked in #1571 and lands separately."
+# #1615 landed both, so the sentence went false in main while still reading as
+# current guidance. The rule is `docs/internal/dev-rules.md` §P5, whose body is
+# three assertions in `tests/dx/test_pair_bench_ratio.py`: one key-set pin per
+# producer, plus one cross-producer check that both declare the SAME schema
+# string. ⚠️ Counted that way on purpose — the third is not a key-set pin, and
+# calling all three "key-set assertions" is a miscount review already caught
+# once on #1615, in prose that said the same thing.
+# ⚠️ Cited at §P5's MEASURED strength, not its headline. Adding a required key
+# to either producer without moving the schema string turns those tests red.
+# An author who edits the pinned key set in the SAME commit still gets green —
+# also measured. It makes the accident impossible, not the intent.
+# ⛔ And nothing mechanical caught this staleness: the gate that would have —
+# "a comment citing §PN must resolve to a real heading" — points the other way,
+# at a rule cited before it exists. This one denied a rule that had arrived.
 SUPPORTED_SCHEMAS = ("bench-paired/v1", "bench-paired/v2")
 SCHEMA_V1 = "bench-paired/v1"
 SCHEMA_V1_STATUS_COMMIT = "60f4523"
