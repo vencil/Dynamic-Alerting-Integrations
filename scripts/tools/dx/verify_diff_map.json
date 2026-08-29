@@ -761,7 +761,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "6fd9251a7825148b628ecdcaadbad8ac7748e4c2f1e9aed29f0a6a3ba33d7a07",
+ "source_digest": "e6946a278b1fba7dec566a623f0f647614ab829b9bedc5e99efb05f1c6316a91",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1134,6 +1134,7 @@
    "tests/shared/test_actionlint_pin_parity.py"
   ],
   ".github/workflows/bench-record.yaml": [
+   "tests/dx/test_pair_bench_ratio.py",
    "tests/dx/test_paired_trend_watch.py"
   ],
   ".github/workflows/bench-workload-effect.yaml": [

@@ -435,6 +435,10 @@ tools:
 
 **規則**：PR 宣稱的數字（token / 行數 / coverage / 節省）須附**可重現量測指令**（`wc` / `git diff --stat` / recall subagent）；新機制的 PR body 須含「**怎麼證明它有效**」（harness run / CI job / recall test）。無量測佐證的數字 claim = 杜撰（#570 燒過：110 行 / 138 peak / ~1000 token 省全是估值，實測 CLAUDE.md token 反而 +19%；line count 等 proxy 會誤導）。
 
+### P5. Artifact payload 的必需鍵集合變更必須同時 bump schema 字串（TRK-367 / #1571）
+
+**規則**：本條無文字敘述——由 `tests/dx/test_pair_bench_ratio.py` 的三條鍵集合釘子強制（比照 P2「規則本體即為 hook 程式碼」）。⛔ 由來：`60f4523` 替 `bench-paired/v1` 加了含**必需** `status` 在內的三個頂層欄位卻沒 bump，於是每一份合法舊 artifact 都通過 schema 檢查後在下一關被判死；而 `c7d0586` 為一個**選填**欄位 bump 了 v1→v2 ⇒ 破壞相容的沒 bump、不破壞的 bump 了，**規範不存在**而非被疏忽。⚠️ 該 payload 有**兩個** producer（`pair_bench_ratio.py` 與 `bench-record.yaml` 的 `printf` fallback），釘子含兩者的交叉一致性檢查。
+
 ## §A 產出物治理（Planning Artifact Policy，v2.8.0 Phase .a 新增）
 
 §S 管程式碼風格、§T 管工具生命週期、§P 管 commit 紀律；§A 管**產出物（plan / decomposition / scope-discovery 等中繼文件）的歸屬與生命週期**。原始脈絡：v2.8.0 Session #06c maintainer FYI「中繼文件不應該長期在 repo」。

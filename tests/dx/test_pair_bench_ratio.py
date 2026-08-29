@@ -12,10 +12,17 @@ are what these tests actually pin down:
      disagree that assumption is broken and the ratio is meaningless.
 
 OUT OF SCOPE: the workflow wiring (bench-record.yaml) — that is CI-only.
+
+⛔ ONE EXCEPTION TO THAT, added by TRK-367 / #1571: this file pins the SHAPE of
+the `bench-paired` payload, and `bench-record.yaml` is the SECOND place that
+writes one (the INCONCLUSIVE fallback, a hand-written `printf` JSON literal).
+Pinning only the Python producer would leave the gate blind to exactly the
+half it exists to catch — two writers, one drifting. See §P5 in dev-rules.
 """
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -627,3 +634,103 @@ def test_non_utf8_digest_file_is_unreadable_not_a_crash(tmp_path: Path):
     dg, r = _run_digest_path(tmp_path, p)
     assert dg["status"] == "unreadable"
     assert r.returncode == 0
+
+
+# ── §P5 gate: a required-key change must move the schema string ───────────
+#
+# ⛔ WHY THIS EXISTS (TRK-367 / #1571). `60f4523` added three top-level fields
+# to `bench-paired/v1` — including `status`, which the consumer REQUIRES — and
+# left the schema string untouched. Every legitimate artifact written before
+# that commit then passed the `SUPPORTED_SCHEMAS` check and was killed one step
+# later. Meanwhile `c7d0586` bumped v1→v2 for a single OPTIONAL field. The
+# compatibility-breaking change did not bump; the harmless one did.
+#
+# ⚠️ That is not a rule being forgotten. It is a rule that did not exist —
+# and nothing in the suite noticed, because the happy-path test asserts
+# INDIVIDUAL KEYS and never the key SET, so a new required field turns nothing
+# red. These three tests are the rule.
+
+_WORKFLOW = Path(__file__).resolve().parents[2] / ".github/workflows/bench-record.yaml"
+
+# The exact top-level shape each producer writes today. Changing either set is
+# allowed — changing it WITHOUT moving the schema string is what is not.
+_OK_KEYS = frozenset({
+    "schema", "status", "reference_tag", "reference_sha",
+    "cpu", "evaluated", "inconclusive", "workload_drift", "workload_digest",
+})
+_INCONCLUSIVE_KEYS = frozenset({
+    "schema", "status", "reference_tag", "reference_sha",
+    "reason", "workload_drift", "workload_digest",
+})
+_SCHEMA = "bench-paired/v2"
+
+
+def _workflow_fallback_payload() -> dict:
+    """Extract the INCONCLUSIVE payload the workflow writes with `printf`.
+
+    ⛔ FAIL-CLOSED. If the anchor stops matching — someone reformats the
+    `printf`, switches to a heredoc, splits it across lines — this raises
+    instead of returning nothing. A shape gate that silently finds nothing to
+    check is worse than no gate: it reports green for a surface it stopped
+    reading. That failure mode is the whole reason this ticket exists.
+    """
+    text = _WORKFLOW.read_text(encoding="utf-8")
+    match = re.search(r"printf '(\{\\n.*?\})\\n' \\", text, re.S)
+    assert match, (
+        "the bench-record.yaml INCONCLUSIVE `printf` payload anchor no longer "
+        "matches. The payload did not necessarily change — the way it is "
+        "WRITTEN did. Re-point this extractor at it; do not delete this test."
+    )
+    # `\n` is for the shell, `%s` are runtime substitutions. Neither affects
+    # the key set or the schema string, which is all this gate reads.
+    raw = match.group(1).replace("\\n", "\n").replace("%s", "PLACEHOLDER")
+    return json.loads(raw)
+
+
+def test_ok_payload_key_set_is_pinned_to_its_schema_version(tmp_path: Path):
+    """⛔ The key SET, not individual keys. `test_happy_path_writes_the_expected
+    _payload` asserts five keys by name and would stay green if a sixth
+    REQUIRED one appeared — which is exactly what `60f4523` did."""
+    r = run(tmp_path,
+            side([("BenchmarkA", 100.0)]),
+            side([("BenchmarkA", 105.0)]))
+    assert r.returncode == 0, r.stderr
+    payload = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
+    assert set(payload) == set(_OK_KEYS), (
+        "the OK payload's top-level keys moved. If that is intended, bump the "
+        "schema string in BOTH producers and update _OK_KEYS/_SCHEMA here — "
+        "a required-field change under an unchanged schema string is the "
+        "defect this gate exists to stop (TRK-367)."
+    )
+    assert payload["schema"] == _SCHEMA
+
+
+def test_the_workflow_fallback_payload_is_pinned_the_same_way():
+    """The second producer. Pinning only the Python one leaves the gate blind
+    to half the surface — and 'two writers, one drifted' is the shape of the
+    original defect."""
+    payload = _workflow_fallback_payload()
+    assert set(payload) == set(_INCONCLUSIVE_KEYS), (
+        "the workflow's INCONCLUSIVE payload keys moved; same rule as above."
+    )
+    assert payload["schema"] == _SCHEMA
+    assert payload["status"] == "INCONCLUSIVE"
+
+
+def test_both_producers_declare_the_same_schema_version(tmp_path: Path):
+    """⛔ The cross-check, and the one a single-producer gate cannot make.
+
+    Two files hardcode the schema string independently. Bumping one and not
+    the other publishes two payload shapes under two different version labels
+    from the same night's pipeline — a worse state than the bug this ticket
+    started from, because the consumer would then be right to trust the label.
+    """
+    r = run(tmp_path, side([("BenchmarkA", 100.0)]), side([("BenchmarkA", 100.0)]))
+    assert r.returncode == 0, r.stderr
+    python_schema = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))["schema"]
+    workflow_schema = _workflow_fallback_payload()["schema"]
+    assert python_schema == workflow_schema, (
+        f"schema strings disagree: pair_bench_ratio.py says {python_schema!r}, "
+        f"bench-record.yaml says {workflow_schema!r}. Both producers feed the "
+        "same consumer; bump them together."
+    )
