@@ -53,8 +53,8 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E
 #   凍結規範集。合取規則是語意的、linter 判不了，故 L4 指標無可再 promote。
 # v2.10.0：540 → 545。新增 §P5 payload 必需鍵集合 ↔ schema 字串連動——與上一次
 #   （§E）同形，且 Promote 做得更徹底：規則本體**完全**是 code（
-#   test_pair_bench_ratio.py 的三條鍵集合釘子，含兩個 producer 的交叉一致性
-#   檢查），dev-rules 內只留 4 行指標（標題+空行+內容+空行＝一個區塊的數學
+#   test_pair_bench_ratio.py 的三條釘子＝兩個 producer 各一條鍵集合斷言，
+#   外加一條交叉斷言兩者 schema 字串相同），dev-rules 內只留 4 行指標（標題+空行+內容+空行＝一個區塊的數學
 #   下限，實測 540→544）。放寬的真正原因與 §E 相同且更極端：本檔動工前是
 #   540/540 ＝ **100% 滿**，headroom 為零，任何新規範連指標都塞不進去。
 #   ⚠️ 放到 545 而非剛好 544 是刻意留 1 行 headroom——上一次（#1593 §9c）
