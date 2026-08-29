@@ -437,7 +437,7 @@ tools:
 
 ### P5. Artifact payload 的必需鍵集合變更必須同時 bump schema 字串（TRK-367 / #1571）
 
-**規則**：本條無文字敘述——由 `tests/dx/test_pair_bench_ratio.py` 強制（比照 P2「規則本體即為 hook 程式碼」）。⛔ **承重的是 git-history 那條**：payload 鍵集合必須等於「引入當前 schema 字串那顆 commit」當時的鍵集合 ⇒ 改鍵只能與 bump 同一顆 commit 發生。⚠️ 其餘釘子（兩個 producer 的鍵集合字面值、schema 交叉一致）是**可讀性與先失敗的訊息**，不是規則本體——它們釘在本檔的字面常數上，作者同時改兩邊就能消音（盲審實測過）。⛔ 由來：`60f4523` 替 `bench-paired/v1` 加了含**必需** `status` 在內的三個頂層欄位卻沒 bump，於是每一份合法舊 artifact 都通過 schema 檢查後在下一關被判死；而 `c7d0586` 為一個**選填**欄位 bump 了 v1→v2 ⇒ 破壞相容的沒 bump、不破壞的 bump 了，**規範不存在**而非被疏忽。⚠️ 該 payload 有**兩個** producer（`pair_bench_ratio.py` 與 `bench-record.yaml` 的 `printf` fallback），釘子含兩者的交叉一致性檢查。
+**規則**：本條無文字敘述——由 `tests/dx/test_pair_bench_ratio.py` 強制（比照 P2「規則本體即為 hook 程式碼」）。承重的是「**跑 producer 讀真實輸出**，與『引入當前 schema 字串那顆 commit』的鍵集合比對」⇒ 改鍵只能與 bump 同一顆 commit 發生。⛔ **本條不宣稱不可繞過**：任何寫在 repo 裡的 gate，改 gate 就能消音。它保證的是**不可能不小心犯**，且**刻意消音會留下一段自我指證的 diff**。⚠️ 兩輪盲審各繞過一次（改字面常數／module-scope decoy 騙過 AST），修法分別是改讀輸出而非原始碼、以及歧義一律 fail closed。⛔ 由來：`60f4523` 替 `bench-paired/v1` 加了含**必需** `status` 在內的三個頂層欄位卻沒 bump，於是每一份合法舊 artifact 都通過 schema 檢查後在下一關被判死；而 `c7d0586` 為一個**選填**欄位 bump 了 v1→v2 ⇒ 破壞相容的沒 bump、不破壞的 bump 了，**規範不存在**而非被疏忽。⚠️ 該 payload 有**兩個** producer（`pair_bench_ratio.py` 與 `bench-record.yaml` 的 `printf` fallback），釘子含兩者的交叉一致性檢查。
 
 ## §A 產出物治理（Planning Artifact Policy，v2.8.0 Phase .a 新增）
 

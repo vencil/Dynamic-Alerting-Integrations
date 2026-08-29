@@ -722,35 +722,78 @@ def _commit_that_introduced(schema: str, path: str) -> str | None:
     legitimate bump this rule asks for.
     """
     out = _git("log", "-S", f'"{schema}"', "--format=%H", "--", path).split()
+    # ⛔ AMBIGUOUS HISTORY FAILS CLOSED, and this was a blind-review finding.
+    # The first cut took `out[0]` — the NEWEST match — which a bump-and-revert
+    # turns into the revert commit, whose key set already carries the added
+    # field, so the comparison holds vacuously. ⚠️ Measured against real
+    # history, not a hypothetical: `git log -S '"bench-paired/v1"'` returns TWO
+    # commits (9599bdd5 introduced it, c7d05869 removed it), and `out[0]` is
+    # the removal. When a string has been introduced more than once there is no
+    # single baseline to measure against, and picking one silently is how a
+    # gate starts lying.
+    assert len(out) <= 1, (
+        f"{schema!r} enters and leaves this file\'s history {len(out)} times "
+        f"({', '.join(h[:8] for h in out)}), so there is no single commit that "
+        "establishes what shape that version names. A human has to say which "
+        "one is the baseline — this gate will not guess."
+    )
     return out[0] if out else None
 
 
 def _payload_keys(source: str) -> frozenset:
-    """Top-level keys of the `payload = {...}` literal in `source`, via AST."""
-    tree = ast.parse(source)
-    for node in ast.walk(tree):
-        if (isinstance(node, ast.Assign)
-                and any(isinstance(t, ast.Name) and t.id == "payload"
-                        for t in node.targets)
-                and isinstance(node.value, ast.Dict)):
-            return frozenset(k.value for k in node.value.keys)
-    raise AssertionError("no `payload = {...}` literal found")
+    """Top-level keys of the `payload = {...}` literal in `source`, via AST.
+
+    ⛔ EXACTLY ONE, and that too was a blind-review finding. The first cut
+    returned the first `ast.walk` hit — and `ast.walk` is breadth-first, so a
+    decoy `payload = {...}` at module scope is visited BEFORE the real one
+    inside `main()`. Review added a nine-key decoy, added a tenth required key
+    to the real payload, and this read the decoy: 65 passed with the defect
+    committed. A second literal means this function cannot tell which one it is
+    reading; that is not a tie to break, it is a question to refuse.
+    """
+    found = [n.value for n in ast.walk(ast.parse(source))
+             if isinstance(n, ast.Assign)
+             and any(isinstance(t, ast.Name) and t.id == "payload"
+                     for t in n.targets)
+             and isinstance(n.value, ast.Dict)]
+    assert len(found) == 1, (
+        f"expected exactly one `payload = {{...}}` literal, found {len(found)}. "
+        "Zero means the payload stopped being a literal (built by `.update()`, "
+        "a comprehension, conditional keys) and this extractor can no longer "
+        "read it. Two or more means it cannot tell which is the real one."
+    )
+    return frozenset(k.value for k in found[0].keys)
 
 
-def _producer_keys_now() -> frozenset:
-    """⛔ THE WORKING TREE, not `git show HEAD`. The first cut of this gate read
-    HEAD and was therefore blind to the change being made — measured: the
-    review's silencing edit still passed 65/65, because the edit was not
-    committed yet and HEAD still held the old shape. A pre-commit gate that can
-    only see what is already committed cannot stop anything."""
-    return _payload_keys(Path(pbr.__file__).read_text(encoding="utf-8"))
+def _produced_payload(tmp_path: Path) -> dict:
+    """⛔ GROUND TRUTH: run the producer and read what it actually wrote.
+
+    Two earlier cuts of this gate read the current shape out of SOURCE, and
+    both were defeated:
+
+      `git show HEAD`   blind to the change being made — the edit is in the
+                        working tree, not HEAD, so it compared old against old
+                        and passed 65/65. A pre-commit gate that can only see
+                        what is already committed cannot stop anything.
+      AST of the file   a decoy `payload = {...}` at module scope is what
+                        `ast.walk` reaches first. 65 passed with the defect in.
+
+    ⭐ Both failures are the same shape: a MODEL of the producer can be fooled;
+    its OUTPUT cannot. So the current side runs the script, and source parsing
+    survives only where running is not available — the historical side.
+    """
+    r = run(tmp_path,
+            side([("BenchmarkA", 100.0)]),
+            side([("BenchmarkA", 105.0)]))
+    assert r.returncode == 0, r.stderr
+    return json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
 
 
 def _producer_keys_at(rev: str) -> frozenset:
     return _payload_keys(_git("show", f"{rev}:scripts/tools/dx/pair_bench_ratio.py"))
 
 
-def test_the_key_set_may_only_move_in_the_commit_that_moves_the_schema():
+def test_the_key_set_may_only_move_in_the_commit_that_moves_the_schema(tmp_path: Path):
     """⛔ THE RULE ITSELF, and the first cut of this gate did NOT enforce it.
 
     Blind review measured the hole: commit the required-field addition, then
@@ -773,11 +816,12 @@ def test_the_key_set_may_only_move_in_the_commit_that_moves_the_schema():
     `git show`-pinned fixtures in `test_paired_trend_watch.py` already depend
     on it and pass in CI — measured precedent, not an assumption.
     """
-    schema = pbr_payload_schema()
+    produced = _produced_payload(tmp_path)
+    schema = produced["schema"]
     intro = _commit_that_introduced(schema, "scripts/tools/dx/pair_bench_ratio.py")
     if intro is None:
         return  # schema being introduced right now; see docstring
-    assert _producer_keys_now() == _producer_keys_at(intro), (
+    assert frozenset(produced) == _producer_keys_at(intro), (
         f"the payload key set changed since {intro[:8]}, the commit that "
         f"introduced {schema!r}, without the schema string moving with it. "
         "That is TRK-367 verbatim: `60f4523` added a REQUIRED field under an "
@@ -785,19 +829,6 @@ def test_the_key_set_may_only_move_in_the_commit_that_moves_the_schema():
         "schema in BOTH producers, or revert the key change."
     )
 
-
-def pbr_payload_schema() -> str:
-    """The schema string the Python producer writes, read from source."""
-    tree = ast.parse(Path(pbr.__file__).read_text(encoding="utf-8"))
-    for node in ast.walk(tree):
-        if (isinstance(node, ast.Assign)
-                and any(isinstance(t, ast.Name) and t.id == "payload"
-                        for t in node.targets)
-                and isinstance(node.value, ast.Dict)):
-            for k, v in zip(node.value.keys, node.value.values):
-                if k.value == "schema":
-                    return v.value
-    raise AssertionError("no `schema` key in the payload literal")
 
 
 def test_ok_payload_key_set_is_pinned_to_its_schema_version(tmp_path: Path):
