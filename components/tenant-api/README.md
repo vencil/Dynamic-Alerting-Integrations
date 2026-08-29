@@ -207,6 +207,8 @@ data: {"type":"config_change","tenant_id":"db-a-prod","timestamp":"2026-05-03T10
 | `TA_FEDERATION_NAMESPACE` | (空 = pod 自身 namespace) | 上述 ConfigMap 所在 namespace |
 | `TA_FEDERATION_TOKEN_TTL` | `4h` | 聯邦 token 效期 |
 
+布林開關(`TA_RBAC_EMPTY_OPEN` / `TA_RBAC_METADATA_SCOPE_ENFORCE` / `TA_RBAC_ORG_SCOPE_ENFORCE` / `TA_DEV_BYPASS_AUTH` / `TA_MACHINE_IDENTITY_AUDIT`)另立一格:它們是同名 flag 的**預設值**,一律以 `strconv.ParseBool` 解讀——與命令列走的是同一支解析器。接受 `1` / `t` / `T` / `TRUE` / `true` / `True` / `0` / `f` / `F` / `FALSE` / `false` / `False`;未設或只有空白 = 維持該 flag 自己的預設;**其餘任何值一律啟動失敗**,不會靜默退成 false——這幾支開關決定某道檢查跑不跑,打錯字若退成 false 就與「刻意關掉」無法區分([#1599](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1599))。⚠️ **`yes` / `on` 在 #1599 之前被當成 true,現已改為啟動失敗**;`t` / `T` 則相反,過去被靜默當成 false,現在是 true。
+
 ### RBAC YAML
 
 ```yaml

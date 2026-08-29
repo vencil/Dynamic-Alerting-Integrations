@@ -17,6 +17,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"log"
 	"log/slog"
@@ -25,6 +26,7 @@ import (
 	"os"
 	"os/signal"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -729,14 +731,60 @@ func envOrDefault(key, def string) string {
 	return def
 }
 
-// envBool returns true when the env var is a truthy string ("true"/"1"/"yes",
-// case-insensitive). Used for the --dev-bypass-auth flag default.
-func envBool(key string) bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
-	case "true", "1", "yes", "on":
-		return true
+// errEnvBoolUnparseable carries the operator-facing reason a TA_* boolean env
+// var was rejected. Split out from envBool so the parse contract is testable
+// without the process-exit that the real call site needs (#1599).
+var errEnvBoolUnparseable = errors.New("not a boolean")
+
+// parseEnvBool interprets one raw env-var value as a flag default.
+//
+// Unset — or whitespace only, which is what a YAML scalar carrying nothing but
+// layout produces — means "operator said nothing", so the flag keeps its own
+// default. Everything else goes through strconv.ParseBool, which is the exact
+// parser flag.Bool uses for the command line: a value the command line would
+// reject is rejected here too, instead of being silently downgraded.
+//
+// ADR-034: these switches decide whether a check RUNS (RBAC metadata/org scope
+// enforcement, machine-identity audit), so "false" must not double as the
+// value an unrecognized input lands on — a typo would then be byte-identical
+// to a deliberate opt-out. Two shapes the pre-#1599 parser accepted are gone
+// on purpose: "yes"/"on" (the command line never took them either) and
+// mixed case like "tRuE" (ParseBool already accepts true/True/TRUE).
+//
+// The one deliberate divergence from flag.Bool is the surrounding TrimSpace:
+// a flag value is passed through the shell verbatim, while an env var is
+// routinely produced by YAML or Compose, where trailing whitespace is carrier
+// noise rather than operator intent. Trimming cannot turn an unrecognized
+// value into a legal one — " ture " is still rejected — so it does not
+// reopen the gap ADR-034 closes.
+func parseEnvBool(raw string) (bool, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return false, nil
 	}
-	return false
+	v, err := strconv.ParseBool(trimmed)
+	if err != nil {
+		return false, errEnvBoolUnparseable
+	}
+	return v, nil
+}
+
+// envBool resolves a TA_* boolean env var into a flag default, and refuses to
+// start on a value it cannot parse.
+//
+// ⚠️ It is called while flags are being DEFINED, so it fires before
+// flag.Parse: an unparseable env var is fatal even when the operator also
+// passes the matching command-line flag explicitly. That is intended — the
+// broken value is still a statement of intent nobody can act on — but it
+// means the process cannot reach --help either.
+func envBool(key string) bool {
+	v, err := parseEnvBool(os.Getenv(key))
+	if err != nil {
+		log.Fatalf("FATAL: %s=%q is %v — accepted: 1, t, T, TRUE, true, True, 0, f, F, FALSE, false, False "+
+			"(and unset for the flag default). Refusing to start rather than silently treating it as false, "+
+			"because this switch decides whether a check runs (ADR-034).", key, os.Getenv(key), err)
+	}
+	return v
 }
 
 // pathExists reports whether a filesystem path exists (used by the
