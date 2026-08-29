@@ -744,6 +744,10 @@ def _implicit_concat_references(text: str, path: str = "<synthetic>") -> list[tu
     # (`_implicit_concat_offenders`) and why the control drives THAT rather than
     # this function: a control that only proves this raises says nothing about
     # whether anybody still listens.
+    # ⚠️ There is no per-file isolation: ONE unparseable tracked `.py` aborts the
+    # whole scan. Today the tree has zero of those, but a deliberately broken
+    # fixture and a BOM-prefixed file are both legal inputs, and every route
+    # back to green from that traceback disarms something — #1632.
     # ⛔ `filename=` ALONE does not put the path in front of the reader, and the
     # axis is the PLATFORM, not the interpreter: `SyntaxError.__str__` trims the
     # filename at the platform separator (`\` on Windows, `/` on POSIX), so the
@@ -806,7 +810,8 @@ def _implicit_concat_references(text: str, path: str = "<synthetic>") -> list[tu
         # is above it, and this check is silent. The exact predicate above is
         # implementable (~25 lines, `tokenize` + fragment/value mapping) and was
         # prototyped; it needs its own handling for f-strings, so it is deferred
-        # rather than half-built here.
+        # rather than half-built here — #1633 carries the prototype, the four
+        # scored cases, and the three questions to settle before starting.
         raw = "\n".join(lines[node.lineno - 1:node.end_lineno])
         for token in sorted(_tokens(node.value)):
             # ⛔ `raw` is this constant's OWN lines, never the whole file. Blind
