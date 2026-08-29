@@ -742,7 +742,16 @@ def _implicit_concat_references(text: str, path: str = "<synthetic>") -> list[tu
     # (`_implicit_concat_offenders`) and why the control drives THAT rather than
     # this function: a control that only proves this raises says nothing about
     # whether anybody still listens.
-    tree = ast.parse(text, filename=path)
+    # ⛔ `filename=` alone does NOT put the path in front of the reader, and the
+    # difference is CPython's, not a style choice: `str(SyntaxError)` renders
+    # only the BASENAME on 3.13 and the whole path on 3.14. That is exactly the
+    # host-green / CI-red split this case was written to prevent, so the path is
+    # put in the MESSAGE, which is the thing the contributor actually reads.
+    # ⚠️ Re-raising is not swallowing — the ban above is on `continue`.
+    try:
+        tree = ast.parse(text, filename=path)
+    except SyntaxError as exc:
+        raise SyntaxError(f"{path}: {exc}") from exc
     found: list[tuple[int, str]] = []
     for node in ast.walk(tree):
         if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
@@ -1518,6 +1527,7 @@ def test_no_reference_is_split_across_implicit_concatenation() -> None:
         skip constants inside an f-string   defect silenced   -> f-string case
         `ast.walk` -> `tree.body`           all verdicts gone -> plain case
         swallow SyntaxError inside the scan  file leaves silently -> corpus case
+        drop the path from the message       reader loses the file -> fail-closed case
         drop entries from the corpus         nothing to find      -> twins case
         narrow the corpus at the use site    nothing to find      -> file floor
 
@@ -1626,12 +1636,20 @@ def test_no_reference_is_split_across_implicit_concatenation() -> None:
     # only that the check raises left the caller free to swallow it: blind review
     # wrapped the call sites in `except SyntaxError: continue` and the whole
     # module stayed green while an unparseable file left the scan silently.
+    # ⚠️ The PREFIX is pinned, not mere containment, and that is what makes this
+    # case portable. `str(SyntaxError)` renders only the BASENAME on 3.13 and
+    # the whole path on 3.14, so `"zfake/broken.py" in str(...)` was green on a
+    # 3.14 host and red on the 3.13 runner — a check whose verdict depended on
+    # the interpreter rather than on the code. Requiring the message to START
+    # with the path pins the re-raise that puts it there, and is therefore red
+    # on BOTH versions if that re-raise is removed.
     with pytest.raises(SyntaxError) as parse_failure:
         _implicit_concat_offenders([("zfake/broken.py", "def (\n")])
-    assert "zfake/broken.py" in str(parse_failure.value), (
-        "the error must name the file. Without it the report is "
-        "`<unknown>, line 1` over hundreds of files, and the cheapest way back "
-        "to green is to stop parsing rather than to fix the file: "
+    assert str(parse_failure.value).startswith("zfake/broken.py: "), (
+        "the error must name the file, and name it the same way on every "
+        "Python. Without that the report is a bare `line 1` over hundreds of "
+        "files, and the cheapest way back to green is to stop parsing rather "
+        "than to fix the file: "
         + str(parse_failure.value))
 
     # ⛔ MUST SCAN EVERY FILE IT IS GIVEN. Truncating the corpus — `files[:1]`,
