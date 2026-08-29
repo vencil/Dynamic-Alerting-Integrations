@@ -1568,6 +1568,13 @@ class TestToolCountReadsBothLanguages:
             body = f"+ 999 Python tools {prep} {self.SCOPE}\n"
             names = self._tree(tmp_path, monkeypatch, tools=3,
                                docs=[("README.en.md", body)])
+            # ⛔ `_read_cached` keys `_CONTENT_CACHE` by Path and never
+            # invalidates on write, and every iteration writes the SAME
+            # path. Without this, iterations 2-6 read the body written by
+            # iteration 1 and only `under` is ever exercised -- measured:
+            # a predicate narrowed back to enumerating `under` left this
+            # test green.
+            mod._CONTENT_CACHE.clear()
             assert mod.check_tool_count_in_docs(), (
                 "not caught with preposition %r — the check is enumerating "
                 "spellings again: %s" % (prep, body))
