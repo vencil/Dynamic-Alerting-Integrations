@@ -372,8 +372,8 @@ da-tools baseline --tenant <name> [options]
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--duration <SEC>` | Observation duration in seconds | `300` |
-| `--interval <SEC>` | Sampling interval in seconds | `30` |
+| `--duration <SEC>` | Observation duration in seconds | `600` |
+| `--interval <SEC>` | Sampling interval in seconds | `15` |
 | `--metrics <LIST>` | Comma-separated metric list (empty=all) | (all) |
 | `--output <FILE>` | Output to CSV file | stdout |
 | `--dry-run` | Only show metrics to observe, don't sample | false |
@@ -434,8 +434,8 @@ Choose one mode:
 |--------|-------------|---------|
 | `--watch` | Continuous monitoring mode (compare every N seconds) | false |
 | `--interval <SEC>` | Monitoring interval in seconds | `60` |
-| `--rounds <N>` | Number of monitoring rounds (0 = infinite) | `0` |
-| `--tolerance <PCT>` | Allowed deviation percentage | `5` |
+| `--rounds <N>` | Number of monitoring rounds. ⚠️ `0` is not infinite — it runs **no rounds at all** (`for i in range(rounds)`) | `10` |
+| `--tolerance <RATIO>` | Allowed deviation as a **ratio**, not a percentage: `0.01` = 1% | `0.001` |
 | `--auto-detect-convergence` | Auto-detect convergence and output readiness JSON | false |
 | `--output <FILE>` | Output to CSV or JSON file | stdout |
 
@@ -712,7 +712,7 @@ Choose one mode:
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--lookback <DAYS>` | Historical lookback in days | `7` |
+| `--lookback <DURATION>` | Historical lookback window, `<number><d\|h\|m>` (e.g. `7d` / `24h`). ⛔ **Anything that does not match that shape is silently treated as `7d`** — `7`, `banana` and the empty string all measured 604800 seconds, with no error | `7d` |
 | `--output <FILE>` | Output to JSON or CSV | stdout |
 
 **Output**
@@ -1052,8 +1052,8 @@ Analyze Alertmanager alerts using time-window clustering, compute correlation sc
 **Usage**
 
 ```bash
-da-tools alert-correlate --prometheus <URL> [--window <MINUTES>] [--lookback <DURATION>] [--min-score <FLOAT>] [--json] [--markdown] [--ci]
-da-tools alert-correlate --input <FILE> [--window <MINUTES>] [--min-score <FLOAT>] [--json]
+da-tools alert-correlate --prometheus <URL> [--window <DURATION>] [--lookback <DURATION>] [--min-score <FLOAT>] [--json] [--markdown] [--ci]
+da-tools alert-correlate --input <FILE> [--window <DURATION>] [--min-score <FLOAT>] [--json]
 ```
 
 **Arguments**
@@ -1062,8 +1062,8 @@ da-tools alert-correlate --input <FILE> [--window <MINUTES>] [--min-score <FLOAT
 |----------|-------------|---------|
 | `--prometheus <URL>` | Prometheus endpoint (online mode) | `$PROMETHEUS_URL` |
 | `--input <FILE>` | Alertmanager JSON file (offline mode) | — |
-| `--window <MINUTES>` | Time window size in minutes | `10` |
-| `--lookback <DURATION>` | Lookback duration | `1h` |
+| `--window <DURATION>` | Time window size (Prometheus duration, e.g. `5m`). ⚠️ A bare number does **not** parse (`10` → `None`); the unit is required | `5m` |
+| `--lookback <DURATION>` | Lookback duration | `24h` |
 | `--min-score <FLOAT>` | Minimum correlation score threshold | `0.3` |
 | `--json` | JSON output | — |
 | `--markdown` | Markdown report output | — |
@@ -2150,7 +2150,8 @@ docker run --rm \
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--config-dir <PATH>` | Tenant config directory | `./conf.d` |
+| `--config-dir <PATH>` | Tenant config directory. ⚠️ The default points at a repo-internal path that does not exist in the image — pass it explicitly | `components/threshold-exporter/config/conf.d` |
+| `--execute` | **Actually perform the change** (default is pre-check / preview only, nothing is written) | false |
 | `--backup <DIR>` | Backup directory | `./offboarded/` |
 | `--cleanup-rules` | Remove associated Alert rules | false |
 | `--dry-run` | Preview items to delete | false |
@@ -2162,19 +2163,18 @@ Backup tenant config; optionally remove associated Recording/Alert rules.
 **Examples**
 
 ```bash
-# Preview offboard actions
+# Pre-check only (the default; nothing is written)
 docker run --rm \
   -v $(pwd)/conf.d:/etc/config:ro \
   ghcr.io/vencil/da-tools:v2.9.0 \
-  offboard db-old --dry-run
+  offboard db-old --config-dir /etc/config
 
-# Execute offboard with backup
+# Actually offboard
 docker run --rm \
   --user $(id -u):$(id -g) \
   -v $(pwd)/conf.d:/etc/config:rw \
-  -v $(pwd)/backup:/data/backup \
   ghcr.io/vencil/da-tools:v2.9.0 \
-  offboard db-old --backup /data/backup
+  offboard db-old --config-dir /etc/config --execute
 ```
 
 **Exit Codes**
@@ -2211,7 +2211,8 @@ docker run --rm \
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--config-dir <PATH>` | Tenant config directory | `./conf.d` |
+| `--config-dir <PATH>` | Tenant config directory. ⚠️ The default points at a repo-internal path that does not exist in the image — pass it explicitly | `components/threshold-exporter/config/conf.d` |
+| `--execute` | **Actually perform the change** (default is pre-check / preview only, nothing is written) | false |
 | `--reason <TEXT>` | Deprecation reason (annotation) | (none) |
 | `--dry-run` | Preview changes | false |
 
@@ -2229,7 +2230,7 @@ docker run --rm \
   ghcr.io/vencil/da-tools:v2.9.0 \
   deprecate old_metric_1 old_metric_2 \
     --config-dir /etc/config \
-    --reason "Replaced by new_metric; migration complete"
+    --execute
 ```
 
 **Exit Codes**

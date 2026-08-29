@@ -1087,3 +1087,103 @@ class TestMainExtended:
         assert exc.value.code == 1
         out = capsys.readouterr().out
         assert "fix error" in out or "Auto-fixing" in out
+
+
+class TestOnlyListsInAutomaticCallers:
+    """Every name the automatic callers pass to `--only` must exist in TOOLS.
+
+    ⛔ `--only` drops unknown names SILENTLY (`if n in only_set`). Measured by
+    blind review: misspelling ONE name in the CI list, with a real drift
+    planted, gave `Result: 11/11 passed` and rc=0 — the job runs, reports
+    green, and the check it was meant to run never executed. `WATCH_TRIGGERS`
+    already had a ⊆-TOOLS pin; the two `--only` strings did not, and they are
+    the ones wired to a required status check.
+    """
+
+    # ⛔ `--only=X` and a backslash-continued list are both legal and both were
+    # invisible to the first cut of this regex (`--only\s+([A-Za-z0-9_,]+)`).
+    # That matters: the CI string is already 118 characters, so a line break is
+    # the most likely next edit to it, and `validate_all --only=name` runs fine.
+    # A scanner narrower than the thing it guards is the defect it guards
+    # against, wearing the guard's name.
+    _ONLY_RE = r"--only[= \t]+((?:[A-Za-z0-9_,]|,\s*\\\s*\n\s*|\\\s*\n\s*)+)"
+
+    @classmethod
+    def _only_names(cls, text):
+        import re
+        out = []
+        for m in re.finditer(cls._ONLY_RE, text):
+            raw = re.sub(r"\\\s*\n\s*", "", m.group(1))
+            out.append([n for n in raw.split(",") if n.strip()])
+        return out
+
+    @staticmethod
+    def _callers():
+        """Every file that invokes validate_all, found rather than listed.
+
+        ⛔ The first cut hard-coded two paths, so a third automatic caller
+        would have been outside the scan surface entirely — measured: adding a
+        second `--only=...TYPO` invocation to docs-ci.yaml left the suite green.
+        """
+        from pathlib import Path
+        root = Path(va.__file__).resolve().parents[2]
+        hits = []
+        for pat in ("Makefile", ".github/workflows/*.yml",
+                    ".github/workflows/*.yaml", "scripts/**/*.sh",
+                    "*.mk", "Makefile.*"):
+            for p in root.glob(pat):
+                if p.is_file() and "validate_all" in p.read_text(
+                        encoding="utf-8", errors="replace"):
+                    hits.append(p)
+        return root, sorted(set(hits))
+
+    def test_every_only_name_is_a_registered_tool(self):
+        root, callers = self._callers()
+        assert callers, "no validate_all caller found; this pin is now vacuous"
+        known = {name for name, _, _, _ in TOOLS}
+        seen_any = False
+        for p in callers:
+            for names in self._only_names(p.read_text(encoding="utf-8")):
+                seen_any = True
+                unknown = [n for n in names if n not in known]
+                assert not unknown, (
+                    f"{p.relative_to(root)} passes --only {unknown}, which "
+                    f"validate_all drops silently — that leg reports success "
+                    f"having run nothing.")
+        assert seen_any, (
+            "found validate_all callers but parsed no --only list out of any "
+            "of them; the regex has stopped matching.")
+
+    @pytest.mark.parametrize("rel,name", [
+        ("Makefile", "cli_default_drift"),
+        (".github/workflows/docs-ci.yaml", "cli_default_drift"),
+    ])
+    def test_the_gate_is_actually_selected(self, rel, name):
+        """⛔ ⊆-TOOLS is not enough: DELETING a name from both lists leaves it
+        registered-but-never-run, which is #1492's shape and the thing this PR
+        spends a paragraph describing. Measured: removing `cli_default_drift`
+        from both lists kept 129 tests green and `check_orphan_lint --ci` at
+        `✓ All 93 executable lints are wired to a runner`.
+        """
+        from pathlib import Path
+        root = Path(va.__file__).resolve().parents[2]
+        lists = self._only_names((root / rel).read_text(encoding="utf-8"))
+        assert any(name in names for names in lists), (
+            f"{rel} no longer selects `{name}`. It stays in TOOLS, every "
+            f"existing assertion stays green, and it never runs again.")
+
+    @pytest.mark.parametrize("text,expected", [
+        ("--only versions,cli_default_drift_typo",
+         [["versions", "cli_default_drift_typo"]]),
+        ("--only=versions,cli_default_drift_typo",
+         [["versions", "cli_default_drift_typo"]]),
+        ("--only versions,\\\n  cli_default_drift_typo",
+         [["versions", "cli_default_drift_typo"]]),
+    ], ids=["space", "equals", "continuation"])
+    def test_the_pin_would_catch_a_typo(self, text, expected):
+        """Control: without this, the tests above are satisfied by an
+        `_only_names` that has stopped matching anything."""
+        known = {name for name, _, _, _ in TOOLS}
+        assert self._only_names(text) == expected
+        assert [n for n in expected[0] if n not in known] == \
+            ["cli_default_drift_typo"]

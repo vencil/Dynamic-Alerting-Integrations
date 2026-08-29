@@ -409,12 +409,32 @@ jobs:
 
       - name: Install Python dependencies
         run: |
-          pip install pyyaml -c requirements/ci-constraints.txt
+          # cli_default_drift below loads every da-tools subcommand to capture
+          # its real ArgumentParser, so this leg needs whatever those imports
+          # need. Measured under a meta_path finder that blocks site-packages
+          # selectively:
+          #   * pyyaml is the ONLY hard requirement — block it and a large
+          #     share of the 51 commands land in `blind`, which is a hard error
+          #     and turns this step red. ⚠️ No count is quoted here on purpose:
+          #     three independent runs of that experiment produced three
+          #     different numbers (20 / 30 / 47) because the answer depends on
+          #     what the measuring process had already imported. The direction
+          #     is robust; the magnitude is an artefact.
+          #   * promql-parser and croniter are DEFENSIVE, not required —
+          #     `migrate_rule.py:54-58` guards promql_parser with
+          #     try/except ImportError, and with both removed the captured
+          #     defaults are byte-identical and blind stays 0. They are here so
+          #     a future unguarded import cannot turn a required check red on an
+          #     unrelated PR; both are pinned in the same constraints file.
+          # (An earlier revision called promql-parser required and cited a
+          # measurement — that measurement showed it was LOADED, which is not
+          # the same as needed.)
+          pip install pyyaml promql-parser croniter -c requirements/ci-constraints.txt
 
-      - name: Run drift checks (versions, tool-map, doc-map, rule-pack-stats, rule-pack-readme)
+      - name: Run drift checks (versions, tool-map, doc-map, rule-pack-stats, rule-pack-readme, cli-defaults)
         run: |
           python scripts/tools/validate_all.py \
-            --only versions,tool_map,doc_map,rule_pack_stats,byo_rulepack_table,rule_packs,changelog,glossary,includes,repo_name,alerts \
+            --only versions,tool_map,doc_map,rule_pack_stats,byo_rulepack_table,rule_packs,changelog,glossary,includes,repo_name,alerts,cli_default_drift \
             --ci
 
   i4-runbook-smoke-test:

@@ -358,8 +358,8 @@ da-tools baseline --tenant <name> [options]
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--duration <SEC>` | 觀測時長（秒） | `300` |
-| `--interval <SEC>` | 採樣間隔（秒） | `30` |
+| `--duration <SEC>` | 觀測時長（秒） | `600` |
+| `--interval <SEC>` | 採樣間隔（秒） | `15` |
 | `--metrics <LIST>` | 逗號分隔指標清單（空=全部） | （全部） |
 | `--output <FILE>` | 輸出至 CSV 檔案 | stdout |
 | `--dry-run` | 僅顯示要觀測的指標，不實際採樣 | false |
@@ -416,8 +416,8 @@ da-tools validate [--mapping <file> | --old <query> --new <query>] [options]
 |------|------|--------|
 | `--watch` | 持續監控模式（每 N 秒比對一次） | false |
 | `--interval <SEC>` | 監控間隔（秒） | `60` |
-| `--rounds <N>` | 監控輪數（0 = 無限） | `0` |
-| `--tolerance <PCT>` | 容許誤差百分比 | `5` |
+| `--rounds <N>` | 監控輪數。⚠️ `0` 不是無限，是**一輪都不跑**（`for i in range(rounds)`） | `10` |
+| `--tolerance <RATIO>` | 容許誤差**比值**（不是百分比）：`0.01` = 1% | `0.001` |
 | `--auto-detect-convergence` | 自動偵測收斂並產出 readiness JSON | false |
 | `--output <FILE>` | 輸出至 CSV 或 JSON 檔案 | stdout |
 
@@ -619,7 +619,7 @@ da-tools backtest [--git-diff | --config-dir <dir> --baseline <dir>] [options]
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--lookback <DAYS>` | 歷史回測天數 | `7` |
+| `--lookback <DURATION>` | 歷史回測期間，格式為 `<數字><d\|h\|m>`（如 `7d`／`24h`）。⛔ **不符合這個格式的值會被靜默當成 `7d`**——`7`、`banana`、空字串實測全都得到 604800 秒，不會有任何錯誤訊息 | `7d` |
 | `--output <FILE>` | 輸出至 JSON 或 CSV | stdout |
 
 **輸出**
@@ -947,8 +947,8 @@ da-tools alert-quality --prometheus http://prometheus:9090 --ci --min-score 60
 **用法**
 
 ```bash
-da-tools alert-correlate --prometheus <URL> [--window <MINUTES>] [--lookback <DURATION>] [--min-score <FLOAT>] [--json] [--markdown] [--ci]
-da-tools alert-correlate --input <FILE> [--window <MINUTES>] [--min-score <FLOAT>] [--json]
+da-tools alert-correlate --prometheus <URL> [--window <DURATION>] [--lookback <DURATION>] [--min-score <FLOAT>] [--json] [--markdown] [--ci]
+da-tools alert-correlate --input <FILE> [--window <DURATION>] [--min-score <FLOAT>] [--json]
 ```
 
 **參數**
@@ -957,8 +957,8 @@ da-tools alert-correlate --input <FILE> [--window <MINUTES>] [--min-score <FLOAT
 |------|------|--------|
 | `--prometheus <URL>` | Prometheus 端點（線上模式） | `$PROMETHEUS_URL` |
 | `--input <FILE>` | Alertmanager JSON 檔案（離線模式） | — |
-| `--window <MINUTES>` | 時間窗口大小（分鐘） | `10` |
-| `--lookback <DURATION>` | 回溯時間範圍 | `1h` |
+| `--window <DURATION>` | 時間窗口大小（Prometheus duration，如 `5m`）。⚠️ 純數字**解不出來**（`10` → `None`），必須帶單位 | `5m` |
+| `--lookback <DURATION>` | 回溯時間範圍 | `24h` |
 | `--min-score <FLOAT>` | 最低關聯分數閾值 | `0.3` |
 | `--json` | JSON 輸出 | — |
 | `--markdown` | Markdown 報告輸出 | — |
@@ -1934,7 +1934,8 @@ da-tools offboard <tenant> [options]
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--config-dir <PATH>` | 租戶配置目錄 | `./conf.d` |
+| `--config-dir <PATH>` | 租戶配置目錄。⚠️ 預設指向 repo 內部路徑，映像裡不存在——請明確指定 | `components/threshold-exporter/config/conf.d` |
+| `--execute` | **實際執行**（預設只做 Pre-check／預覽，不寫入） | false |
 | `--backup <DIR>` | 備份目錄 | `./offboarded/` |
 | `--cleanup-rules` | 移除相關 Alert 規則 | false |
 | `--dry-run` | 預覽將刪除的項目 | false |
@@ -1946,8 +1947,10 @@ da-tools offboard <tenant> [options]
 **範例**
 
 ```bash
-da-tools offboard db-old --dry-run
-da-tools offboard db-old --backup ./backup/
+# 預設只做 Pre-check（不寫入）
+da-tools offboard db-old --config-dir ./conf.d
+# 實際執行下架
+da-tools offboard db-old --config-dir ./conf.d --execute
 ```
 
 **結束碼**
@@ -1981,7 +1984,8 @@ da-tools deprecate <metric_keys...> [options]
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--config-dir <PATH>` | 租戶配置目錄 | `./conf.d` |
+| `--config-dir <PATH>` | 租戶配置目錄。⚠️ 預設指向 repo 內部路徑，映像裡不存在——請明確指定 | `components/threshold-exporter/config/conf.d` |
+| `--execute` | **實際執行**（預設只做 Pre-check／預覽，不寫入） | false |
 | `--reason <TEXT>` | 棄用原因（註釋） | （無） |
 | `--dry-run` | 預覽變更 | false |
 
@@ -1999,7 +2003,7 @@ docker run --rm \
   ghcr.io/vencil/da-tools:v2.9.0 \
   deprecate old_metric_1 old_metric_2 \
     --config-dir /etc/config \
-    --reason "Replaced by new_metric; migration complete"
+    --execute
 ```
 
 **結束碼**
