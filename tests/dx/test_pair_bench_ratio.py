@@ -723,7 +723,17 @@ def _commit_that_introduced(schema: str, path: str) -> str | None:
     being introduced in the working tree right now, which is precisely the
     legitimate bump this rule asks for.
     """
-    out = _git("log", "-S", f'"{schema}"', "--format=%H", "--", path).split()
+    # ⛔ `--follow`, and its absence was a blind-review finding. Without it the
+    # pathspec-limited log only sees commits that touched THIS path, so a commit
+    # that renames the file registers the string as going 0→1 there and becomes
+    # the answer — the commit under test anchoring itself, and any key added in
+    # that same commit compares equal to itself. ⚠️ Measured in a throwaway repo:
+    # rename + sneak a required key in one commit ⇒ plain pickaxe returns that
+    # commit, `--follow` returns the real introduction. On this repo's real
+    # history `--follow` changes no answer at all (v2 ⇒ c7d05869, v1 ⇒ still the
+    # two commits that make it ambiguous, v99 ⇒ still none).
+    out = _git("log", "--follow", "-S", f'"{schema}"',
+               "--format=%H", "--", path).split()
     # ⛔ AMBIGUOUS HISTORY FAILS CLOSED, and this was a blind-review finding.
     # The first cut took `out[0]` — the NEWEST match — which a bump-and-revert
     # turns into the revert commit, whose key set already carries the added
@@ -742,6 +752,30 @@ def _commit_that_introduced(schema: str, path: str) -> str | None:
     return out[0] if out else None
 
 
+def _path_at(rev: str, path: str) -> str:
+    """What `path` was called at `rev`, following renames.
+
+    Fixing the anchor is only half of it: `git show <intro>:<today's path>` dies
+    when the file has been renamed since, which is fail-closed but stickily so —
+    the gate would stay red until the next schema bump. So ask git for the name
+    it had in the commit we are about to read.
+    """
+    out = _git("log", "--follow", "--format=%x00%H", "--name-only", "--", path)
+    sha, names = None, {}
+    for line in out.splitlines():
+        if line.startswith("\0"):
+            sha = line[1:].strip()
+        elif line.strip() and sha and sha not in names:
+            names[sha] = line.strip()
+    full = next((h for h in names if h.startswith(rev) or rev.startswith(h)), None)
+    assert full is not None, (
+        f"{path!r} has no name recorded at {rev[:8]} in its own --follow history. "
+        "That should be impossible for a commit this function was handed; a human "
+        "has to look, because guessing a filename is how a gate starts lying."
+    )
+    return names[full]
+
+
 def _payload_keys(source: str) -> frozenset:
     """Top-level keys of the `payload = {...}` literal in `source`, via AST.
 
@@ -753,16 +787,28 @@ def _payload_keys(source: str) -> frozenset:
     committed. A second literal means this function cannot tell which one it is
     reading; that is not a tie to break, it is a question to refuse.
     """
-    found = [n.value for n in ast.walk(ast.parse(source))
-             if isinstance(n, ast.Assign)
-             and any(isinstance(t, ast.Name) and t.id == "payload"
-                     for t in n.targets)
-             and isinstance(n.value, ast.Dict)]
+    found = []
+    for n in ast.walk(ast.parse(source)):
+        # ⚠️ BOTH forms, and missing the second one was a blind-review finding:
+        # `payload: dict = {...}` parses as AnnAssign, not Assign, so an ordinary
+        # type annotation made this return zero. Fail-closed, but the wrong way —
+        # a legitimate no-op edit turning the gate red, and stickily so once it
+        # lands in the anchor commit. A gate that cries wolf gets deleted.
+        if isinstance(n, ast.Assign):
+            targets = n.targets
+        elif isinstance(n, ast.AnnAssign):
+            targets = [n.target]
+        else:
+            continue
+        if (any(isinstance(t, ast.Name) and t.id == "payload" for t in targets)
+                and isinstance(n.value, ast.Dict)):
+            found.append(n.value)
     assert len(found) == 1, (
         f"expected exactly one `payload = {{...}}` literal, found {len(found)}. "
         "Zero means the payload stopped being a literal (built by `.update()`, "
-        "a comprehension, conditional keys) and this extractor can no longer "
-        "read it. Two or more means it cannot tell which is the real one."
+        "a comprehension, conditional keys — an annotated assignment used to "
+        "land here too, which was a false positive, not a catch) and this "
+        "extractor can no longer read it. Two or more means it cannot tell which is the real one."
     )
     return frozenset(k.value for k in found[0].keys)
 
@@ -791,13 +837,17 @@ def _produced_payload(tmp_path: Path) -> dict:
     return json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
 
 
+_PY_PRODUCER = "scripts/tools/dx/pair_bench_ratio.py"
+_WORKFLOW_PATH = ".github/workflows/bench-record.yaml"
+
+
 def _producer_keys_at(rev: str) -> frozenset:
-    return _payload_keys(_git("show", f"{rev}:scripts/tools/dx/pair_bench_ratio.py"))
+    return _payload_keys(_git("show", f"{rev}:{_path_at(rev, _PY_PRODUCER)}"))
 
 
 def _workflow_keys_at(rev: str) -> frozenset:
     return frozenset(_parse_printf_payload(
-        _git("show", f"{rev}:.github/workflows/bench-record.yaml"),
+        _git("show", f"{rev}:{_path_at(rev, _WORKFLOW_PATH)}"),
         f"bench-record.yaml@{rev[:8]}"))
 
 
@@ -826,7 +876,7 @@ def test_the_key_set_may_only_move_in_the_commit_that_moves_the_schema(tmp_path:
     """
     produced = _produced_payload(tmp_path)
     schema = produced["schema"]
-    intro = _commit_that_introduced(schema, "scripts/tools/dx/pair_bench_ratio.py")
+    intro = _commit_that_introduced(schema, _PY_PRODUCER)
     if intro is None:
         return  # schema being introduced right now; see docstring
     assert frozenset(produced) == _producer_keys_at(intro), (
@@ -847,9 +897,15 @@ def test_ok_payload_key_set_is_pinned_to_its_schema_version(tmp_path: Path):
     ⚠️ THIS ONE IS LEGIBILITY, NOT THE RULE. `_OK_KEYS` is a literal in this
     file, so an author who edits both sides silences it. The rule is enforced
     by `test_the_key_set_may_only_move_in_the_commit_that_moves_the_schema`,
-    which anchors on git history instead. This test earns its place by naming
-    today's shape in one readable place and by failing first, with a message
-    that says what to do."""
+    which anchors on git history instead. It earns its place by naming today's
+    shape in one readable place, right next to the constant a reader has to
+    trust.
+
+    ⚠️ An earlier cut of this docstring also claimed it "fails first", so the
+    reader would meet the friendly message before the history-anchored one.
+    Blind review measured that and it is FALSE — pytest reports in definition
+    order and the rule test is defined above this one. Claiming an ordering at
+    all was the mistake: it rests on plugin config nobody here pins."""
     r = run(tmp_path,
             side([("BenchmarkA", 100.0)]),
             side([("BenchmarkA", 105.0)]))
@@ -884,7 +940,7 @@ def test_the_workflow_key_set_may_only_move_in_the_commit_that_moves_the_schema(
     """
     payload = _workflow_fallback_payload()
     schema = payload["schema"]
-    intro = _commit_that_introduced(schema, ".github/workflows/bench-record.yaml")
+    intro = _commit_that_introduced(schema, _WORKFLOW_PATH)
     if intro is None:
         return  # schema being introduced right now; same as the Python side
     assert frozenset(payload) == _workflow_keys_at(intro), (
@@ -904,8 +960,8 @@ def test_workflow_payload_key_set_is_pinned_to_its_schema_version():
     for the same reason: `_INCONCLUSIVE_KEYS` is a literal in this file, so an
     author who edits both sides silences it. The rule is enforced by
     `test_the_workflow_key_set_may_only_move_in_the_commit_that_moves_the
-    _schema`. This one earns its place by failing FIRST with a message that
-    says what to do."""
+    _schema`. It earns its place by naming today's shape in one readable place;
+    it does NOT fail before the rule test — see the note on its twin above."""
     payload = _workflow_fallback_payload()
     assert set(payload) == set(_INCONCLUSIVE_KEYS), (
         "the workflow's INCONCLUSIVE payload keys moved. If that is intended, "
