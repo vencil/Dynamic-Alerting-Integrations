@@ -676,8 +676,24 @@ def load_policy(policy_path: str | None) -> list[str]:
             "  ⛔ Do not drop the flag to clear this error — that turns the "
             "webhook domain allowlist off, which is what this error exists "
             "to stop.")
-    with open(policy_path, encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
+    # ⛔ "Supplied but unusable" is not only "not a file". A file that exists
+    # but cannot be decoded or parsed is the same operator error, and the first
+    # cut of this function left all three of those escaping as tracebacks with
+    # rc=1 — measured, in the PR whose whole subject is that this class must be
+    # exit 2. dev-rules #13 files "malformed 輸入" under EXIT_CALLER_ERROR
+    # alongside "檔案/路徑不存在"; nothing here may distinguish them.
+    try:
+        with open(policy_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    except UnicodeDecodeError as exc:
+        raise PolicyInputError(
+            f"--policy: {policy_path} is not valid UTF-8: {exc}") from exc
+    except yaml.YAMLError as exc:
+        raise PolicyInputError(
+            f"--policy: {policy_path} is not valid YAML: {exc}") from exc
+    except OSError as exc:
+        raise PolicyInputError(
+            f"--policy: cannot read {policy_path}: {exc}") from exc
     if not isinstance(data, dict):
         raise PolicyInputError(
             f"--policy: top level of {policy_path} is "

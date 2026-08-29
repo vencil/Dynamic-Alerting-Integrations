@@ -414,6 +414,10 @@ def load_policy(policy_path):
             f"--policy: cannot read {policy_path}: {e}\n"
             "  ⛔ Do not drop the flag to clear this — that silently lints "
             "against the built-in policy instead of yours.")
+    except UnicodeDecodeError as e:
+        # ⛔ NOT an OSError — it is a ValueError, so the handler above does not
+        # see it and a non-UTF-8 policy file escaped as a traceback with rc=1.
+        die_caller_error(f"--policy: {policy_path} is not valid UTF-8: {e}")
     except yaml.YAMLError as e:
         die_caller_error(f"--policy: {policy_path} is not valid YAML: {e}")
     if not isinstance(custom, dict):

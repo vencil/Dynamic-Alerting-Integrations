@@ -163,11 +163,36 @@ NO_DECLARED_DEFAULTS_HINT = (
 # #1556: shown when --policy / --rule-packs was supplied but is unusable. The
 # generic per-check hints point at tenant YAML, which is the wrong place for a
 # problem that lives entirely in the operator's argv.
+# #1556 / CodeRabbit: the sibling of _POLICY_INPUT_HINT. Without it this row
+# inherits the generic custom_rules advice ("validate rule pack YAML syntax,
+# run rule-pack-split --check") — advice about a tree the tool never opened,
+# for a mistake that is entirely in the operator's argv.
+_RULE_PACKS_INPUT_HINT = (
+    "Point --rule-packs at an existing rule-packs/ directory. ⛔ Dropping "
+    "the flag makes this row PASS again by removing the custom rule lint "
+    "from the run — that is the failure this check exists to stop.")
+
 _POLICY_INPUT_HINT = (
     "Point --policy at a policy YAML holding an `allowed_domains:` list "
     "(see docs/cli-reference.md § validate-config). ⛔ Dropping the "
     "flag makes this row PASS again by switching the webhook domain "
     "allowlist off — that is the failure this check exists to stop.")
+
+
+def _argv_error_row(name: str, detail: str, hint: str) -> dict[str, object]:
+    """A FAIL caused by the operator's argv, not by anything under --config-dir.
+
+    ⛔ `reads_config_dir=False` is the load-bearing part. The exit-code rule
+    downgrades a caller error to exit 1 when the config tree had an unreadable
+    file AND the failing check reads that tree — which is right for a check
+    that could not do its job because of the tree, and wrong for one that never
+    got that far because a path on the command line was unusable. Measured
+    before this existed: an unreadable tenant file silently turned
+    `--policy <bad>` from exit 2 into exit 1.
+    """
+    row = _make_result(name, FAIL, [detail], caller_error=True, hint=hint)
+    row["reads_config_dir"] = False
+    return row
 
 
 def _no_declared_defaults_hint(config_dir: str) -> str | None:
@@ -458,8 +483,7 @@ def check_routes(
             # generic routes advice ("check _routing for invalid receiver
             # types…"), which sends the operator to look at tenant YAML for a
             # problem that is entirely in their own argv.
-            return _make_result("routes", FAIL, [str(exc)],
-                                caller_error=True, hint=_POLICY_INPUT_HINT)
+            return _argv_error_row("routes", str(exc), _POLICY_INPUT_HINT)
 
     # Capture stderr for warnings
     import io
@@ -515,8 +539,7 @@ def check_policy(config_dir: str, policy_file: str | None) -> dict[str, object]:
     try:
         allowed_domains = gen.load_policy(policy_file)
     except gen.PolicyInputError as exc:
-        return _make_result("policy", FAIL, [str(exc)],
-                            caller_error=True, hint=_POLICY_INPUT_HINT)
+        return _argv_error_row("policy", str(exc), _POLICY_INPUT_HINT)
     if not allowed_domains:
         return _make_result("policy", PASS,
                             ["No allowed_domains in policy — no restrictions"])
@@ -562,12 +585,14 @@ def check_custom_rules(
         return _make_result("custom_rules", PASS,
                             ["No rule-packs dir — skipped"])
     if not os.path.isdir(rule_packs_dir):
-        return _make_result(
+        result = _make_result(
             "custom_rules", FAIL,
             [f"--rule-packs: not a directory: {rule_packs_dir}",
              "  ⛔ Do not drop the flag to clear this — that removes the "
              "custom rule lint from the run, which is what this error stops."],
-            caller_error=True)
+            caller_error=True, hint=_RULE_PACKS_INPUT_HINT)
+        result["reads_config_dir"] = False
+        return result
 
     cmd = [sys.executable, str(_THIS_DIR / "lint_custom_rules.py"),
            rule_packs_dir, "--ci"]
@@ -1170,8 +1195,14 @@ def _run_check(name: str, fn, *args, _config_dir: str | None = None,
     """
     try:
         row = fn(*args, **kwargs)
-        row["reads_config_dir"] = _reads_config_dir(
-            _config_dir, args, kwargs)
+        # ⛔ setdefault, not assignment: a check that already knows its failure
+        # is an argv error rather than a config-tree finding says so itself.
+        # Overwriting it re-attributed `--policy`/`--rule-packs` mistakes to
+        # the customer's conf.d, and the exit-code downgrade below then turned
+        # a caller error into exit 1 whenever any tenant file happened to be
+        # unreadable — measured before this line changed.
+        row.setdefault("reads_config_dir",
+                       _reads_config_dir(_config_dir, args, kwargs))
         return row
     except _INPUT_ERRORS as exc:
         detail = " ".join(str(exc).split())
@@ -1191,8 +1222,14 @@ def _run_check(name: str, fn, *args, _config_dir: str | None = None,
              "This check never reached its own logic. If no file is named "
              "above, the fault is in one of the paths you passed on the "
              "command line — check each one's encoding and syntax."])
-        row["reads_config_dir"] = _reads_config_dir(
-            _config_dir, args, kwargs)
+        # ⛔ setdefault, not assignment: a check that already knows its failure
+        # is an argv error rather than a config-tree finding says so itself.
+        # Overwriting it re-attributed `--policy`/`--rule-packs` mistakes to
+        # the customer's conf.d, and the exit-code downgrade below then turned
+        # a caller error into exit 1 whenever any tenant file happened to be
+        # unreadable — measured before this line changed.
+        row.setdefault("reads_config_dir",
+                       _reads_config_dir(_config_dir, args, kwargs))
         return row
     except SystemExit as exc:
         # ⛔ `SystemExit` is not an `Exception`, so the clause below does not
@@ -1233,8 +1270,14 @@ def _run_check(name: str, fn, *args, _config_dir: str | None = None,
              "If every file listed above is readable, this is a defect in "
              "this tool — please report it with the traceback."],
             caller_error=True)
-        row["reads_config_dir"] = _reads_config_dir(
-            _config_dir, args, kwargs)
+        # ⛔ setdefault, not assignment: a check that already knows its failure
+        # is an argv error rather than a config-tree finding says so itself.
+        # Overwriting it re-attributed `--policy`/`--rule-packs` mistakes to
+        # the customer's conf.d, and the exit-code downgrade below then turned
+        # a caller error into exit 1 whenever any tenant file happened to be
+        # unreadable — measured before this line changed.
+        row.setdefault("reads_config_dir",
+                       _reads_config_dir(_config_dir, args, kwargs))
         return row
 
 

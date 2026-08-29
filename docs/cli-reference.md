@@ -1683,7 +1683,7 @@ da-tools generate-routes --config-dir ./conf.d --apply --yes
 |------|------|
 | `0` | 成功 |
 | `1` | 配置驗證失敗 |
-| `2` | kubectl 操作失敗（--apply 模式） |
+| `2` | 呼叫端錯誤：kubectl 操作失敗（`--apply` 模式），或 `--policy` 供了但讀不到／不是合法 YAML（#1556） |
 
 ---
 
@@ -1902,7 +1902,7 @@ da-tools validate-config --config-dir ./conf.d --policy ./policy.yaml
 | 代碼 | 說明 |
 |------|------|
 | `0` | 所有驗證通過 |
-| `1` | 驗證失敗（一項或多項），或有檔案讀不到 |
+| `1` | 驗證失敗（一項或多項），或 `--config-dir` 底下有檔案讀不到。⚠️ 命令列上的路徑（`--policy` / `--rule-packs`）讀不到算 `2`，不算這一碼 |
 | `2` | 呼叫端錯誤（參數、路徑、環境），不是你的設定有問題。⚠️ v2.9.0 映像不區分這一碼 |
 
 ---

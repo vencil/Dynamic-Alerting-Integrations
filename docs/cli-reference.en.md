@@ -1826,7 +1826,7 @@ docker run --rm --kubeconfig=$HOME/.kube/config \
 |------|-------------|
 | `0` | Success |
 | `1` | Config validation failed |
-| `2` | kubectl operation failed (--apply mode) |
+| `2` | Caller error: kubectl operation failed (`--apply` mode), or `--policy` was supplied but is unreadable / not valid YAML (#1556) |
 
 ---
 
@@ -2103,9 +2103,10 @@ docker run --rm \
 # Check webhook domain allowlist
 docker run --rm \
   -v $(pwd)/conf.d:/etc/config:ro \
+  -v $(pwd)/policy.yaml:/etc/policy.yaml:ro \
   ghcr.io/vencil/da-tools:v2.9.0 \
   validate-config --config-dir /etc/config \
-    --policy ./policy.yaml
+    --policy /etc/policy.yaml
 ```
 
 **Exit Codes**
@@ -2113,7 +2114,7 @@ docker run --rm \
 | Code | Description |
 |------|-------------|
 | `0` | All validations pass |
-| `1` | Validation failed (one or more checks), or a file could not be read |
+| `1` | Validation failed (one or more checks), or a file under `--config-dir` could not be read. ⚠️ An unreadable path passed on the command line (`--policy` / `--rule-packs`) is `2`, not this code |
 | `2` | Caller error (arguments, paths, environment) — not a problem with your config. ⚠️ The v2.9.0 image does not distinguish this code |
 
 ---

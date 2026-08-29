@@ -185,6 +185,108 @@ class TestSuppliedButUnusableIsCallerError:
 
 
 # ---------------------------------------------------------------------------
+# "Not a file" was only one third of the class (CodeRabbit, round 1 on #1592).
+# ---------------------------------------------------------------------------
+class TestUnusableIsMoreThanMissing:
+    """A file that exists but cannot be decoded or parsed is the same error.
+
+    ⛔ Measured before these landed, each with a control: a malformed policy
+    YAML and a non-UTF-8 policy file both escaped as an uncaught traceback with
+    rc=1 — from the three tools whose entire subject in this PR is that this
+    class must be exit 2. Fixing "not a file" and stopping there is the
+    cited-instance-instead-of-the-class mistake, made inside the fix for it.
+    """
+
+    @pytest.fixture(scope="class")
+    def policies(self, tmp_path_factory):
+        d = tmp_path_factory.mktemp("policies")
+        (d / "malformed.yaml").write_text("allowed_domains: [\n  - broken\n",
+                                          encoding="utf-8")
+        (d / "nonutf8.yaml").write_bytes(
+            bytes([0xFF, 0xFE, 0x00]) + b"allowed_domains" + bytes([0x0A]))
+        (d / "scalar.yaml").write_text("just-a-string\n", encoding="utf-8")
+        (d / "good.yaml").write_text(
+            'allowed_domains:\n  - "*.example.com"\n', encoding="utf-8")
+        return {p.stem: p for p in d.iterdir()}
+
+    @pytest.mark.parametrize("script,base", [
+        ("validate_config.py", lambda c: ["--config-dir", str(c)]),
+        ("generate_alertmanager_routes.py", lambda c: ["--config-dir", str(c)]),
+        ("lint_custom_rules.py", lambda c: [str(c), "--ci"]),
+    ], ids=["validate-config", "generate-routes", "lint"])
+    @pytest.mark.parametrize("kind", ["malformed", "nonutf8", "scalar"])
+    def test_unreadable_or_unparseable_policy_is_caller_error(
+            self, script, base, kind, policies, conf_d):
+        r = _run(script, [*base(conf_d), "--policy", str(policies[kind])])
+        assert r.returncode == EXIT_CALLER_ERROR, (
+            f"{script} with a {kind} --policy exited {r.returncode}. "
+            f"dev-rules #13 files 'malformed 輸入' under EXIT_CALLER_ERROR "
+            f"next to '檔案/路徑不存在'; nothing may distinguish them.\n"
+            f"stderr: {r.stderr.decode('utf-8', 'replace')[-400:]}")
+        assert b"Traceback" not in r.stderr, (
+            f"{script} reached exit {r.returncode} via an uncaught exception. "
+            f"A traceback is not a diagnostic — it names a Python frame, not "
+            f"the argument the operator got wrong.")
+
+    @pytest.mark.parametrize("script,base", [
+        ("validate_config.py", lambda c: ["--config-dir", str(c)]),
+        ("generate_alertmanager_routes.py", lambda c: ["--config-dir", str(c)]),
+        ("lint_custom_rules.py", lambda c: [str(c), "--ci"]),
+    ], ids=["validate-config", "generate-routes", "lint"])
+    def test_control_a_well_formed_policy_still_runs(
+            self, script, base, policies, conf_d):
+        """Without this, the assertion above is satisfiable by a tool that
+        exits 2 on every --policy value it is handed."""
+        r = _run(script, [*base(conf_d), "--policy", str(policies["good"])])
+        assert r.returncode != EXIT_CALLER_ERROR, (
+            f"{script} rejects a valid policy file, so the checks above prove "
+            f"nothing.\nstderr: {r.stderr.decode('utf-8', 'replace')[:400]}")
+
+
+class TestArgvErrorIsNotDownstreamOfTheConfigTree:
+    """An unreadable tenant file must not downgrade an argv error to exit 1.
+
+    ⛔ Measured: with one non-UTF-8 file in conf.d/, `--policy <missing>` exited
+    1 instead of 2. validate_config downgrades a caller error when the failing
+    check reads a tree that had unreadable files — right for a check that could
+    not do its job because of the tree, wrong for one that never got that far
+    because a path in argv was unusable.
+    """
+
+    @pytest.fixture(scope="class")
+    def dirty_tree(self, tmp_path_factory):
+        d = tmp_path_factory.mktemp("dirty-conf.d")
+        (d / "db-a.yaml").write_text(
+            "thresholds:\n  mysql_connections:\n    warning: 100\n"
+            "    critical: 200\n", encoding="utf-8")
+        (d / "db-bad.yaml").write_bytes(
+            bytes([0xFF, 0xFE, 0x00]) + b"broken" + bytes([0x0A]))
+        return d
+
+    def test_control_unreadable_config_alone_is_a_finding(self, dirty_tree):
+        """Exit 1 here is correct and must stay — the fix must not widen."""
+        r = _run("validate_config.py", ["--config-dir", str(dirty_tree)])
+        assert r.returncode == 1, (
+            f"an unreadable tenant file alone exited {r.returncode}; that is a "
+            f"finding about the customer's tree, not a caller error.")
+
+    def test_control_clean_tree_plus_bad_policy_is_caller_error(self, conf_d):
+        r = _run("validate_config.py",
+                 ["--config-dir", str(conf_d), "--policy", _MISSING])
+        assert r.returncode == EXIT_CALLER_ERROR
+
+    @pytest.mark.parametrize("flag", ["--policy", "--rule-packs"])
+    def test_argv_error_survives_an_unreadable_tenant_file(
+            self, flag, dirty_tree):
+        r = _run("validate_config.py",
+                 ["--config-dir", str(dirty_tree), flag, _MISSING])
+        assert r.returncode == EXIT_CALLER_ERROR, (
+            f"{flag} was unusable but the run exited {r.returncode}. An "
+            f"unrelated unreadable tenant file silently re-attributed an argv "
+            f"mistake to the customer's config tree.")
+
+
+# ---------------------------------------------------------------------------
 # Structural scan: the defect shape itself, not the four instances above.
 # ---------------------------------------------------------------------------
 _FS_PREDICATES = ("is_file", "is_dir", "exists", "isfile", "isdir")
@@ -225,17 +327,22 @@ def _scanned_files() -> list[str]:
     return [p.relative_to(REPO_ROOT).as_posix() for p in TOOLS.rglob("*.py")]
 
 
-def _collapsed_sites() -> set[tuple[str, str]]:
+def _collapsed_sites(files: list[str] | None = None) -> set[tuple[str, str]]:
     """Every `if not X or <filesystem predicate>: return <benign>`.
 
     Derived from the STRUCTURE of the defect (two distinct outcomes OR-ed into
     one branch), not from a list of path-ish argument names — a name list would
     have to grow every time somebody adds a flag, and would miss the first one
     it did not anticipate.
+
+    ``files`` is injectable so the detector can be pointed at planted defects.
+    ⛔ Without that, "the repo is clean" is the only assertion available, and it
+    is satisfied by a detector that has stopped detecting: measured, narrowing
+    the operand match back to bare `ast.Name` left all 44 tests green.
     """
     found: set[tuple[str, str]] = set()
-    for rel in _scanned_files():
-        path = REPO_ROOT / rel
+    for rel in (files if files is not None else _scanned_files()):
+        path = Path(rel) if Path(rel).is_absolute() else REPO_ROOT / rel
         try:
             tree = ast.parse(path.read_text(encoding="utf-8"))
         except (OSError, SyntaxError):
@@ -246,9 +353,16 @@ def _collapsed_sites() -> set[tuple[str, str]]:
             if not isinstance(node.test.op, ast.Or):
                 continue
             operands = node.test.values
+            # ⛔ Name AND Attribute. Restricting to bare names made the
+            # detector blind to `if not args.policy or not
+            # os.path.isfile(args.policy)` — which is how this defect is
+            # actually written, because argparse hands values back as
+            # attributes on a Namespace. The scan reported clean for the
+            # single most likely shape of the thing it exists to find.
             absent = any(
                 isinstance(v, ast.UnaryOp) and isinstance(v.op, ast.Not)
-                and isinstance(v.operand, ast.Name) for v in operands)
+                and isinstance(v.operand, (ast.Name, ast.Attribute))
+                for v in operands)
             unusable = any(
                 any(p in ast.unparse(v) for p in _FS_PREDICATES) for v in operands)
             if not (absent and unusable) or len(node.body) != 1:
@@ -259,9 +373,59 @@ def _collapsed_sites() -> set[tuple[str, str]]:
             value = ast.unparse(stmt.value) if stmt.value is not None else "None"
             if value.strip() not in _BENIGN_RETURNS:
                 continue
-            rel = path.relative_to(REPO_ROOT).as_posix()
+            try:
+                rel = path.relative_to(REPO_ROOT).as_posix()
+            except ValueError:
+                rel = path.as_posix()   # planted file outside the repo
             found.add((rel, _enclosing_function(tree, node.lineno)))
     return found
+
+
+class TestTheDetectorDetects:
+    """Planted defects, in both the shapes this collapse is written in.
+
+    ⛔ `assert scan() == known` says nothing about whether the scanner still
+    works. Measured: narrowing the operand match back to bare `ast.Name` — the
+    exact regression this guards — left every other test in this file green.
+    """
+
+    _NAME_FORM = (
+        "def load(policy):\n"
+        "    if not policy or not Path(policy).is_file():\n"
+        "        return []\n"
+        "    return [1]\n")
+    # How argparse values are actually spelled at the call site.
+    _ATTRIBUTE_FORM = (
+        "def load(args):\n"
+        "    if not args.policy or not os.path.isfile(args.policy):\n"
+        "        return []\n"
+        "    return [1]\n")
+    _INNOCENT = (
+        "def load(args):\n"
+        "    if not args.policy:\n"
+        "        return []\n"
+        "    if not os.path.isfile(args.policy):\n"
+        "        raise ValueError('unusable')\n"
+        "    return [1]\n")
+
+    @pytest.mark.parametrize("src,name", [(_NAME_FORM, "bare name"),
+                                          (_ATTRIBUTE_FORM, "attribute")])
+    def test_a_planted_collapse_is_found(self, tmp_path, src, name):
+        f = tmp_path / "planted.py"
+        f.write_text(src, encoding="utf-8")
+        found = _collapsed_sites([str(f)])
+        assert {fn for _f, fn in found} == {"load"}, (
+            f"the {name} form of the collapse was not detected. This is the "
+            f"shape the scan exists to find; a scan that cannot see it reports "
+            f"the repo clean for the same reason an unplugged detector does.")
+
+    def test_the_split_form_is_not_reported(self, tmp_path):
+        """The correct code must not be flagged, or the scan gets narrowed."""
+        f = tmp_path / "innocent.py"
+        f.write_text(self._INNOCENT, encoding="utf-8")
+        assert _collapsed_sites([str(f)]) == set(), (
+            "code that separates 'absent' from 'unusable' — exactly what this "
+            "PR changed four call sites to do — was reported as a defect.")
 
 
 class TestNoCollapsedSuppliedVsAbsent:
@@ -321,9 +485,15 @@ class TestNoCollapsedSuppliedVsAbsent:
             except (OSError, SyntaxError):
                 continue
             for node in ast.walk(tree):
-                if (isinstance(node, ast.Call)
-                        and isinstance(node.func, ast.Name)
-                        and node.func.id == "read_onboard_hints"):
+                # Same blind spot on the exemption's own premise: a second
+                # caller written `_lib_io.read_onboard_hints(...)` would not be
+                # counted, so this assertion would keep passing after the
+                # premise it guards stopped being true.
+                if isinstance(node, ast.Call) and (
+                        (isinstance(node.func, ast.Name)
+                         and node.func.id == "read_onboard_hints")
+                        or (isinstance(node.func, ast.Attribute)
+                            and node.func.attr == "read_onboard_hints")):
                     callers.append(
                         f"{path.relative_to(REPO_ROOT).as_posix()}:{node.lineno}")
         assert len(callers) == 1, (
