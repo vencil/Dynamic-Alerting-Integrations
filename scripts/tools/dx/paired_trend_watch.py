@@ -282,7 +282,8 @@ class Night:
     window, which is the same false-all-clear in a different costume.
     """
 
-    __slots__ = ("night_utc", "run_id", "night_key", "head_sha", "schema", "cpu",
+    __slots__ = ("night_utc", "run_id", "night_key", "head_sha",
+                 "run_conclusion", "schema", "cpu",
                  "reference_sha",
                  "ratios_pct", "canary_pct", "inconclusive",
                  "drift_status", "drift_files", "drift_count",
@@ -303,6 +304,12 @@ class Night:
         # it on the floor, which is why a v1 night's rejection could only
         # describe its shape and never its provenance.
         self.head_sha = None
+        # The WORKFLOW RUN's own conclusion, carried because this consumer no
+        # longer asks GitHub to filter on it. A night from a run that did not
+        # finish green is admitted and LABELLED, never quietly equal to a clean
+        # one — the difference the window predicate used to express by dropping
+        # the night entirely, which is silence, not safety.
+        self.run_conclusion = None
         self.schema = None
         self.cpu = None
         self.reference_sha = None
@@ -1330,7 +1337,19 @@ def nights_from_gh(workflow, limit, cache_dir):
     """
     from analyze_bench_history import download_artifact, list_recent_runs
 
-    runs = list_recent_runs(workflow, limit)
+    # ⛔ `"completed"`, not `"success"`. `--status success` keys the window on
+    # the RUN's conclusion, and one failed job fails the run — so a crash in
+    # `trend-watch`, a job this module does not own and whose output it does not
+    # read, used to delete that night's `bench-paired.json` from THIS window.
+    # A K-of-N rule over a window the operator believes is 14 nights but is
+    # quietly 13 fires later than advertised: the same silent-window-shortening
+    # `load_night` refuses to do, arriving instead through the workflow graph.
+    # ⚠️ SAFE HERE FOR A REASON THAT DOES NOT GENERALISE: `bench-paired.json`
+    # can say whether it is whole (JSON parse, schema string, required keys),
+    # so a truncated or half-written payload comes back `unreadable` and named.
+    # `analyze_bench_history.py`'s own `bench-baseline.txt` cannot say that, and
+    # keeps asking `"success"` — see `list_recent_runs`' docstring.
+    runs = list_recent_runs(workflow, limit, status="completed")
     pairs = []
     for run in runs:
         run_id = run.get("databaseId")
@@ -1367,11 +1386,13 @@ def nights_from_gh(workflow, limit, cache_dir):
     # whichever head happened to come last — a wrong sha rendering as an
     # ordinary one, in the column whose entire job is attribution. Dropping
     # them makes an unidentifiable run render "—", which is the true answer.
-    head_by_run = {run["databaseId"]: run.get("headSha") for run in runs
-                   if run.get("databaseId") is not None}
+    by_run = {run["databaseId"]: run for run in runs
+              if run.get("databaseId") is not None}
     for night in out:
         if night.run_id is not None:
-            night.head_sha = head_by_run.get(night.run_id)
+            run = by_run.get(night.run_id) or {}
+            night.head_sha = run.get("headSha")
+            night.run_conclusion = run.get("conclusion")
     return out
 
 
@@ -1613,9 +1634,13 @@ def render(result):
     # "which producer wrote this payload", which is what a v1 rejection needs
     # and could not say while the field was downloaded and discarded. ⛔ It is
     # NOT the reference — that is pinned per series, not per night.
-    lines.append("| night | run | head | outcome | canary (gating) "
+    # `run result` is the WORKFLOW RUN's conclusion, not this night's outcome.
+    # They answer different questions and a night can be `counted` under a run
+    # that finished red — that combination is exactly what the window predicate
+    # now admits, so it has to be legible rather than inferable.
+    lines.append("| night | run | head | run result | outcome | canary (gating) "
                  "| canary (info) | drift | digest |")
-    lines.append("|---|---|---|---|---|---|---|---|")
+    lines.append("|---|---|---|---|---|---|---|---|---|")
     for night in nights:
         deviation = night.canary_deviation_pct
         canary = _pct(deviation) if deviation is not None else "—"
@@ -1633,8 +1658,12 @@ def render(result):
         # the column whose whole job is to say what is and is not known.
         head = f"`{night.head_sha[:7]}`" if isinstance(night.head_sha, str) \
             and night.head_sha else "—"
+        # Same "—" discipline as `head`: unknown is a value, not a blank cell.
+        run_result = night.run_conclusion if isinstance(
+            night.run_conclusion, str) and night.run_conclusion else "—"
         lines.append(
-            f"| {_night_label(night)} | `{night.run_id or '?'}` | {head} | "
+            f"| {_night_label(night)} | `{night.run_id or '?'}` | {head} "
+            f"| {run_result} | "
             f"{night.outcome}{note} | {canary} | {info_cell} | {drift} "
             f"| {night.digest_status} |")
     lines.append("")
