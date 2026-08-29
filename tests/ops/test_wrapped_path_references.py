@@ -472,14 +472,16 @@ _MIN_RESOLVING = 300
 # omitted the `token in raw` gate, counting paths that are written perfectly
 # well: the population the check can actually judge is single digits.
 #
-# ⚠️ It was then deleted outright, and THAT was an over-correction. Blind review
-# measured what the deletion cost: dropping `tests/` from the corpus made the
-# old floor fire and the deleted version stay silent. The floor was guarding the
-# CORPUS axis honestly the whole time; only its verdict-shaped reasoning was
-# wrong. So the axis it actually guarded is restored here, counting the files
-# handed in — a number that owes nothing to the check and falls the moment the
-# corpus is narrowed. Chosen against the measured narrowings, not rounded.
-_MIN_CONCAT_FILES = 450
+# ⚠️ It was then deleted outright, and THAT was an over-correction: the
+# deleted version stayed silent when the corpus was narrowed, so the floor had
+# been guarding the CORPUS axis honestly the whole time and only its
+# verdict-shaped reasoning was wrong. It came back as a count of the files
+# handed in, and blind review then took THAT apart too: at 450 against a corpus
+# of 610 it let `tests/ops/` be dropped and `[:450]` truncate, both green.
+# ⇒ A count cannot express the axis. The use site now asserts SET EQUALITY
+# against the tracked Python set, so there is no constant here any more and no
+# number to calibrate; see `test_no_reference_is_split_across_implicit_
+# concatenation`.
 
 # ⛔ NOTHING is skipped: every tracked file is decoded with `errors="replace"`.
 #
@@ -706,7 +708,7 @@ def _implicit_concat_references(text: str, path: str = "<synthetic>") -> list[tu
     DERIVED, and that is the whole reason this is tractable. Python's parser
     already joins implicitly concatenated literals into ONE `ast.Constant`, so
     the question is asked of the constant's VALUE and compared against the raw
-    source of its own span. Nothing here guesses at quote, comma or
+    source of the LINES it sits on. Nothing here guesses at quote, comma or
     continuation shapes.
 
     ⚠️ THE AXIS WAS CHOSEN BY MEASUREMENT, not taste. Asking the same question
@@ -776,18 +778,35 @@ def _implicit_concat_references(text: str, path: str = "<synthetic>") -> list[tu
         # span, and the granularity IS the predicate. The question this guard
         # asks is not "is the token inside this constant"; it is "does
         # `git grep <path>` return this site", because that is what a rename
-        # sweep works from. Grep answers per LINE. A contiguous mention anywhere
-        # on a line this constant occupies therefore hands the sweep a line that
-        # also carries a half of the split, and nothing is hidden.
-        # ⚠️ NARROWING THIS TO `ast.get_source_segment` WAS TRIED AND REVERTED
-        # (#1608). A constant's boundary lines are by definition the lines
-        # carrying the split's halves, so a neighbour on one of them always
-        # shares a line with the break — the narrowed version cannot be right on
-        # this axis. Measured on a shipped idiom (an assert message repeating the
-        # value it compares, wrapped at the column): it reported a site that
-        # `git grep -n` returns ON THE REPORTED LINE, and the cheapest way back
-        # to green was to delete the repeated path from the diagnostic. Zero
-        # reports bought on the tree, a class of false ones armed.
+        # sweep works from. Grep answers per LINE.
+        #
+        # ⛔ THIS IS AN APPROXIMATION OF THAT QUESTION, AND SO IS THE OBVIOUS
+        # ALTERNATIVE. Both were measured against the exact criterion — a site
+        # is hidden iff NO line grep returns is a line carrying one of the
+        # fragments the token is split across, computed with `tokenize` rather
+        # than guessed:
+        #
+        #   case                                    hidden  these lines  AST span
+        #   3 fragments, neighbour on closing line    yes     silent✗     report✓
+        #   2 fragments, neighbour on closing line    no      silent✓     report✗
+        #   2 fragments, neighbour on opening line    no      silent✓     report✗
+        #   plain split, no neighbour                 yes     report✓     report✓
+        #
+        # Narrowing to `ast.get_source_segment` was tried and reverted (#1608):
+        # it is right on the first row and wrong on the next two, and its error
+        # direction is a FALSE RED on a shipped idiom (an assert message
+        # repeating the value it compares, wrapped at the column) whose cheapest
+        # cure is deleting the repeated path from the diagnostic. This version's
+        # error direction is a MISS. Both report ZERO over the 610 tracked `.py`
+        # files today, so the choice was made on error direction, not on yield.
+        # ⚠️ WHAT THIS LEAVES UNGUARDED, and it is the cost of that choice, not
+        # a pre-existing limitation: a constant of THREE or more fragments whose
+        # closing line carries a contiguous mention while the split sits in
+        # earlier fragments. Grep sends the sweep to the closing line, the break
+        # is above it, and this check is silent. The exact predicate above is
+        # implementable (~25 lines, `tokenize` + fragment/value mapping) and was
+        # prototyped; it needs its own handling for f-strings, so it is deferred
+        # rather than half-built here.
         raw = "\n".join(lines[node.lineno - 1:node.end_lineno])
         for token in sorted(_tokens(node.value)):
             # ⛔ `raw` is this constant's OWN lines, never the whole file. Blind
@@ -1546,7 +1565,7 @@ def test_no_reference_is_split_across_implicit_concatenation() -> None:
         swallow SyntaxError inside the scan  file leaves silently -> corpus case
         drop the path from the message       reader loses the file -> fail-closed case
         drop entries from the corpus         nothing to find      -> twins case
-        narrow the corpus at the use site    nothing to find      -> file floor
+        narrow the corpus at the use site    nothing to find      -> corpus set
 
     ⛔ WHAT IS STILL NOT GUARDED, measured rather than implied. Wrapping the
     call to the scan BELOW in `except SyntaxError: continue` passes: the
@@ -1559,11 +1578,29 @@ def test_no_reference_is_split_across_implicit_concatenation() -> None:
     `--tb=long` prints, and would have agreed with any outcome.
     """
     files = [(p, t) for p, t in _read_tracked() if p.endswith(".py")]
-    assert len(files) >= _MIN_CONCAT_FILES, (
-        f"only {len(files)} Python file(s) reached this scan — the cases below "
-        f"stay green on any corpus, so a narrowed one makes them mean nothing. "
-        f"⛔ Do not lower this floor to let a narrowing through; widen the "
-        f"corpus back.")
+    # ⛔ SET EQUALITY, NOT A COUNT FLOOR, and the difference was measured rather
+    # than assumed. The floor this replaces was `>= 450` against a corpus of
+    # 610: blind review dropped `tests/ops/` (508 left) and truncated with
+    # `[:450]` — the very attack the twins case below names — and both stayed
+    # GREEN. A floor calibrated against the one narrowing anybody happened to
+    # measure only catches that narrowing.
+    # ⛔ The right-hand side is NOT a second copy of the line above: it comes
+    # from `_tracked()`, whose contents `test_tracked_set_matches_an_independent
+    # _git_listing` checks against a `git ls-files` this module issues itself,
+    # and whose emptiness `_MIN_TRACKED_FILES` refuses. That is what keeps this
+    # from passing vacuously when both sides go to zero together.
+    # ⚠️ NOT GUARDED, measured: this pins WHICH files arrive, not what is in
+    # them. Handing the scan 610 entries with empty contents, or the same file
+    # 610 times, both stay green. Closing that needs a second reading of the
+    # bytes and is not in this change.
+    expected = {p for p in _tracked() if p.endswith(".py")}
+    assert {p for p, _ in files} == expected, (
+        f"the corpus handed to this scan is not the tracked Python set: "
+        f"{len(files)} file(s) arrived, {len(expected)} are tracked; "
+        f"missing={sorted(expected - {p for p, _ in files})[:5]}. The cases "
+        f"below stay green on any corpus, so a narrowed one makes them mean "
+        f"nothing. ⛔ Do not narrow this comparison to let a filter through; "
+        f"widen the corpus back.")
 
     subject = "tests/ops/test_wrapped_path_references.py"
     assert subject in _tracked(), f"{subject} moved; re-point this fixture"
@@ -1602,7 +1639,7 @@ def test_no_reference_is_split_across_implicit_concatenation() -> None:
 
     # MUST REPORT: a split whose token ALSO appears contiguously ELSEWHERE in
     # the same file. Comparing against the whole file instead of the constant's
-    # own span silences exactly this, and the live instance had precisely that
+    # own lines silences exactly this, and the live instance had precisely that
     # shape — the same path written contiguously earlier in the same file, which
     # is why the rename sweep fixed one site and left the other. ⚠️ Same
     # SYMPTOM as #1373, different mechanism (that one wrapped an identifier).
@@ -1610,7 +1647,7 @@ def test_no_reference_is_split_across_implicit_concatenation() -> None:
                  % (subject, head, tail))
     assert [t for _, t in _implicit_concat_references(elsewhere)] == [subject], (
         "a contiguous mention elsewhere in the file does not make the split one "
-        "greppable; comparing against the file instead of the constant's span "
+        "greppable; comparing against the file instead of the constant's lines "
         "is how a rename sweep reports a clean tree: "
         + repr(_implicit_concat_references(elsewhere)))
 
@@ -1667,11 +1704,19 @@ def test_no_reference_is_split_across_implicit_concatenation() -> None:
     # the code. ⛔ Not on the interpreter VERSION: 3.13 and 3.14 were measured on
     # one machine and render identically. Requiring the message to START with
     # the path pins the mutation that puts it there, on every platform.
-    # ⛔ THE OTHER THREE ASSERTIONS ARE NOT DECORATION. Blind review weakened
-    # each layer of the first version of this fix one at a time and the module
-    # stayed green for all three: dropping `filename=` from `ast.parse`, cutting
-    # the message down to just the path, and losing the exception chain. Each is
-    # pinned below, so this case now fails if ANY of them goes.
+    # ⛔ THE TWO ASSERTIONS AFTER IT ARE NOT DECORATION. Blind review weakened
+    # each layer of the first version of this fix one at a time; three of those
+    # weakenings left the module green, and two are pinned here — dropping
+    # `filename=` from `ast.parse` (the structured-field assertion catches it)
+    # and replacing the diagnosis while keeping the prefix (the last one does).
+    # Cutting the message down to the bare path is caught by the FIRST
+    # assertion, not by a new one.
+    # ⚠️ The third, losing the exception chain, is NOT pinned, and this note is
+    # the disclosure rather than a claim: nothing in this file asserts on
+    # `__cause__` or `__context__` (measured, zero references). The in-place
+    # `msg` mutation below re-raises the ORIGINAL object, so today there is no
+    # chain to lose — but an edit that goes back to constructing a new exception
+    # WITH the full argument tuple keeps the fields, drops the chain, and passes.
     with pytest.raises(SyntaxError) as parse_failure:
         _implicit_concat_offenders([("zfake/broken.py", "def (\n")])
     failure = parse_failure.value
@@ -1681,11 +1726,15 @@ def test_no_reference_is_split_across_implicit_concatenation() -> None:
         "files, and the cheapest way back to green is to stop parsing rather "
         "than to fix the file: "
         + str(failure))
+    # ⚠️ `filename` and `lineno` only. `offset` and `text` are NOT pinned —
+    # nulling them was measured to leave this module green — so they are not
+    # claimed here either; naming a field the assertion does not check is how a
+    # message becomes a promise nothing keeps.
     assert failure.filename == "zfake/broken.py" and failure.lineno == 1, (
-        "the structured fields must survive. Building a NEW SyntaxError from a "
-        "string drops filename/lineno/offset/text to None, which is what an "
-        "editor and a traceback read: "
-        + repr((failure.filename, failure.lineno, failure.offset)))
+        "filename and lineno must survive. Building a NEW SyntaxError from a "
+        "bare string drops them, and they are what an editor and a traceback "
+        "read: "
+        + repr((failure.filename, failure.lineno)))
     assert "invalid syntax" in str(failure), (
         "the prefix must not replace the diagnosis — a message that names the "
         "file but not what is wrong with it sends the reader back to square "
