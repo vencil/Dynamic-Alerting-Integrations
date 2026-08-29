@@ -68,6 +68,7 @@ from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_confd import (  # noqa: E402
     iter_config_files,
+    resolve_defaults_file,
     unusable_config_paths,
     unusable_reason,
 )
@@ -587,7 +588,7 @@ def check_profiles(config_dir: str) -> dict[str, object]:
     profiles = profiles_raw.get("profiles", {}) if isinstance(profiles_raw, dict) else {}
 
     # Load defaults for cross-referencing
-    defaults_path = str(cfg / "_defaults.yaml")
+    defaults_path = str(resolve_defaults_file(cfg))
     defaults_raw = load_yaml_file(defaults_path, default={})
     known_defaults = set()
     if isinstance(defaults_raw, dict):
@@ -683,7 +684,7 @@ def check_policy_dsl(config_dir: str, policy_dsl_file: str | None = None) -> dic
     rules = []
 
     # From _defaults.yaml
-    defaults_path = str(Path(config_dir) / "_defaults.yaml")
+    defaults_path = str(resolve_defaults_file(Path(config_dir)))
     if os.path.isfile(defaults_path):
         rules.extend(pe.load_policies(defaults_path))
 

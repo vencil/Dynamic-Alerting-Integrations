@@ -16,11 +16,21 @@ union (which per-severity branches to emit).
 from __future__ import annotations
 
 import os
+import sys
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Tuple
 
 import yaml
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
+    has_yaml_extension,
+    is_defaults_name,
+    defaults_files_in,
+    unusable_config_entries,
+    unusable_reason,
+)
 
 from . import shape as _shape
 
@@ -44,13 +54,40 @@ def _load_yaml(path: Path) -> dict:
     return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
 
 
+def _is_dir(p: Path) -> bool:
+    """`Path.is_dir()` that answers False instead of raising.
+
+    Mirrors `os.walk`'s dirs/files split, which is what the caller is asking
+    about. An entry that cannot even be stat'ed is not in `dirs`, so False is
+    the answer that keeps this pass and `_dir_defaults_alerts` disjoint."""
+    try:
+        return p.is_dir()
+    except OSError:
+        return False
+
+
+def _file_record(origin: str, reason: str) -> dict:
+    """The `file_errors` record shape, in ONE place.
+
+    ⛔ Two callers now build these — the malformed-YAML quarantine below and
+    the unusable-entry report in `collect_instances` (#1607). A second hand
+    written literal is how a consumer ends up switching on a key one of them
+    forgot, which is the #1339 shape reproduced inside its own fix.
+
+    ⚠️ NOT `_skip_record`, which this was first called: that name is already
+    taken further down for one quarantined RECIPE (tenant + instance), a
+    different shape. Python took the later definition and every `_file_skip`
+    call started raising `TypeError` — caught immediately, but the near miss
+    is why the two record builders are named for what they record."""
+    return {"tenant": None, "origin": origin, "name": None, "reason": reason}
+
+
 def _file_skip(origin: str, exc: Exception) -> dict:
     """Skip record for a conf.d FILE that could not be loaded (malformed YAML / control
     chars / bad encoding). Quarantined fail-soft (#1008 Part B): the YAML load happens
     OUTSIDE the per-recipe try, so without this one bad file (incl. a schema-check-skipped
     meta file) would crash the whole shared compile → block every tenant's PR."""
-    return {"tenant": None, "origin": origin, "name": None,
-            "reason": f"{type(exc).__name__}: {exc}"}
+    return _file_record(origin, f"{type(exc).__name__}: {exc}")
 
 
 def _dir_defaults_alerts(config_dir: Path, file_errors: List[dict]) -> Dict[Path, List[dict]]:
@@ -59,8 +96,12 @@ def _dir_defaults_alerts(config_dir: Path, file_errors: List[dict]) -> Dict[Path
     not raised."""
     out: Dict[Path, List[dict]] = {}
     for root, _dirs, files in os.walk(config_dir):
-        if "_defaults.yaml" in files:
-            p = Path(root) / "_defaults.yaml"
+        # #1588: the carrier is matched by the shared predicate, not by a
+        # literal name. `_DEFAULTS.YAML` used to be invisible here, so a
+        # platform-level `_custom_alerts` list declared in it vanished for
+        # EVERY tenant below it — silently, at rc=0, on the shipped tenant
+        # self-service path.
+        for p in defaults_files_in(root, files):
             try:
                 data = _load_yaml(p)
             except Exception as exc:  # noqa: BLE001 — malformed file quarantined, not fatal
@@ -68,7 +109,13 @@ def _dir_defaults_alerts(config_dir: Path, file_errors: List[dict]) -> Dict[Path
                 continue
             alerts = data.get("_custom_alerts") or []
             if alerts:
-                out[Path(root).resolve()] = list(alerts)
+                # EXTEND, not assign. The loop above replaced a single
+                # literal-name lookup, and leaving the assignment made the
+                # LAST carrier in a directory silently discard the first --
+                # blind review measured a `critical` platform rule declared
+                # in `_defaults.yaml` vanishing because `_defaults.yml` sat
+                # beside it. Ordering matches `_resolve_defaults_chain`.
+                out.setdefault(Path(root).resolve(), []).extend(alerts)
     return out
 
 
@@ -109,8 +156,52 @@ def collect_instances(config_dir: Path) -> Tuple[List[Tuple[str, dict, str, bool
     dir_alerts = _dir_defaults_alerts(config_dir, file_errors)
     triples: List[Tuple[str, dict, str, bool]] = []
 
-    for path in sorted(config_dir.rglob("*.yaml")):
-        if path.name == "_defaults.yaml":
+    # ⚠️ Same third axis as `operator_generate`, and here it is louder:
+    # this function's whole contract is that an unreadable file lands in
+    # `file_errors` rather than vanishing (#1008 Part B). Measured on a tree
+    # with a directory named `beta.yaml/` and a broken symlink `broken.yaml`,
+    # `file_errors` went from TWO named records to EMPTY once `is_file()`
+    # filtered them out before the `except` below could see them (#1607).
+    #
+    # ⚠️ That number said "four" until blind review re-ran it: four was the
+    # count on a RICHER tree that also had two unusable entries under
+    # `_custom_alerts/`. The description was trimmed to two shapes and the
+    # number was not. Measured on the tree as described here: 774a699 → 2,
+    # a821645 → 0, bccb39a → 2.
+    #
+    # ⛔ Reported through `unusable_reason`, NOT by dropping the filter and
+    # letting `_load_yaml` raise. Both put a record in `file_errors`, but the
+    # errno phrasing ("IsADirectoryError: [Errno 21] ...") is this reader's
+    # own invention of an answer every other reader words differently — the
+    # divergence `unusable_reason` exists to end. `entries` is listed ONCE so
+    # the two passes cannot walk two different trees.
+    entries = sorted(config_dir.rglob("*"))
+    for bad in unusable_config_entries(entries, suffixes=(".yaml",)):
+        # ⛔ Defaults carriers are skipped ONLY when `_dir_defaults_alerts`
+        # can see them, and the dividing line is exactly `os.walk`'s: it
+        # classifies by `is_dir()`, putting a directory in `dirs` and
+        # everything else — a broken symlink included — in `files`.
+        #
+        # So a broken symlink named `_defaults.yaml` IS quarantined there and
+        # must be skipped here, or one path yields two `file_errors` records
+        # and the caveat line says "2" for one file — the exact double-count
+        # `unusable_config_paths` was narrowed twice to avoid. A DIRECTORY
+        # named `_defaults.yaml/` is NOT in `files`, so nobody else names it
+        # and this pass must.
+        #
+        # ⚠️ The first version skipped both and left the directory case
+        # silent, arguing the silence predated #1588. Blind review measured
+        # it: true, and irrelevant — the commit claimed every reader names
+        # what it drops, and this was the one path where that was false.
+        if is_defaults_name(bad.name) and not _is_dir(bad):
+            continue
+        file_errors.append(_file_record(
+            str(bad.relative_to(config_dir)), unusable_reason(bad)))
+    for path in (
+        p for p in entries
+        if p.is_file() and has_yaml_extension(p.name, (".yaml",))
+    ):
+        if is_defaults_name(path.name):
             continue
         try:
             data = _load_yaml(path)

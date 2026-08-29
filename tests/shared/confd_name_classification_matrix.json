@@ -138,6 +138,15 @@
       "why": "⛔ THE SECOND HALF OF THE ID PIN, and it is here because the dogfood run needed it: with a mixed-case stem only on the .yml row, corrupting the .yaml branch of the id derivation ALONE went undetected — every .yaml row happened to have an all-lowercase stem. Each extension branch needs its own mixed-stem row, and the anti-truncation floors demand both. Title-case extension is also the spelling an editor or a Windows tool produces by itself."
     },
     {
+      "name": "İ.yaml",
+      "yaml_extension": true,
+      "reserved_prefix": false,
+      "hidden": false,
+      "defaults_file": false,
+      "stem": "İ",
+      "why": "stem offset must come from the CONSTANT's length, never from the folded copy: 'İ'.lower() is TWO characters (i + combining dot), so len(name.lower()) - len('.yaml') slices this name one position too far right and yields 'İ.'. Measured: with only same-length rows in this table that bug was invisible — every consumer stayed green."
+    },
+    {
       "name": "_defaults.yaml",
       "yaml_extension": true,
       "reserved_prefix": true,
@@ -163,6 +172,15 @@
       "defaults_file": true,
       "stem": "",
       "why": "Mixed case across BOTH halves of the defaults name, and the .yml spelling of it — the combination that survives a fix applied to one branch only."
+    },
+    {
+      "name": "_defaults-multidb.yaml",
+      "yaml_extension": true,
+      "reserved_prefix": true,
+      "hidden": false,
+      "defaults_file": false,
+      "stem": "",
+      "why": "a REAL file in this repo (conf.d/examples/) that starts with '_defaults' but is NOT the chain carrier: the exporter compares the lowercased name against the two literals exactly, so it never merges this into a tenant's chain. Without this row a PREFIX implementation of defaults_file passes every consumer - measured, it shipped briefly in #1588 and made describe_tenant reproduce the exporter's merged_hash on only 3 of 5 shipped tenants, and made deprecate_rule --execute write to this file."
     },
     {
       "name": "_rbac.yaml",

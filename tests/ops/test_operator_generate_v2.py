@@ -497,3 +497,77 @@ class TestMainJsonSingleDocument:
         assert doc["summary"]["kustomization"] == 1
         assert doc["summary"]["total"] == 4
         assert len(doc["crds"]) == 3
+
+
+# ---------------------------------------------------------------------------
+# #1607 — unusable-entry reporting, called IN-PROCESS
+# ---------------------------------------------------------------------------
+#
+# ⛔ The cross-tool harness in `tests/shared/test_confd_case_parity_across_tools.py`
+# drives these tools through `subprocess`, which is right for asserting what an
+# operator sees on their terminal but leaves the branches uncovered: this repo's
+# `[tool.coverage.run]` sets no `concurrency`/`COVERAGE_PROCESS_START`, so a
+# child process is not measured. Measured on the PR that added the harness:
+# `operator_generate` -0.3%, `deprecate_rule` -2.6%, `offboard_tenant` -2.2%,
+# while `custom_alerts/loader` — the one exercised in-process — went UP 2.0%.
+# These tests call the functions directly, so the same branches are both
+# asserted and measured.
+
+
+def _unusable_confd(root: Path) -> Path:
+    """conf.d with one real tenant and three entries no reader can read."""
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "_defaults.yaml").write_text(
+        "defaults:\n  pg_connections: 80\n", encoding="utf-8")
+    (root / "alpha.yaml").write_text(
+        "tenants:\n  alpha:\n    pg_connections: 90\n", encoding="utf-8")
+    (root / "notes.yaml").mkdir()                       # directory-shaped
+    (root / "broken.yaml").symlink_to(root / "gone.yaml")   # dangling
+    return root
+
+
+def test_discover_tenant_configs_names_unusable_entries(tmp_path, capsys):
+    """The discovery site never opens a file — it takes the stem as a tenant
+    name — so an unusable entry cannot fall into any `except`. Dropping it is
+    the correctness half; naming it is the half that keeps the signal."""
+    tree = _unusable_confd(tmp_path / "conf.d")
+
+    tenants = og.discover_tenant_configs(tree)
+
+    assert tenants == ["alpha"], (
+        f"a directory and a dangling symlink must not become tenants; "
+        f"got {tenants}")
+    err = capsys.readouterr().err
+    assert "notes.yaml" in err and "broken.yaml" in err, (
+        f"both unusable entries must be named on stderr; got {err!r}")
+    assert "is a directory, not a config file" in err
+    assert "is a broken symlink" in err
+
+
+def test_discover_tenant_configs_is_silent_about_reserved_entries(
+        tmp_path, capsys):
+    """`_`-prefixed entries are dropped whatever their shape, so naming an
+    unusable one would report a loss that did not happen in this tool."""
+    tree = _unusable_confd(tmp_path / "conf.d")
+    (tree / "_defaults.yaml").unlink()
+    (tree / "_defaults.yaml").mkdir()
+
+    og.discover_tenant_configs(tree)
+
+    err = capsys.readouterr().err
+    assert "_defaults.yaml" not in err, (
+        f"reported a reserved entry this function never reads; got {err!r}")
+    assert "notes.yaml" in err, "non-reserved entries must still be named"
+
+
+def test_discover_tenant_configs_is_quiet_on_a_clean_tree(tmp_path, capsys):
+    """⛔ Blast radius: a healthy conf.d must gain no new output."""
+    tree = tmp_path / "conf.d"
+    tree.mkdir()
+    (tree / "_defaults.yaml").write_text("defaults: {}\n", encoding="utf-8")
+    (tree / "alpha.yaml").write_text(
+        "tenants:\n  alpha: {}\n", encoding="utf-8")
+
+    assert og.discover_tenant_configs(tree) == ["alpha"]
+    captured = capsys.readouterr()
+    assert captured.err == "" and captured.out == ""

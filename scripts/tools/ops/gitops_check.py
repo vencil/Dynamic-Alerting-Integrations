@@ -41,11 +41,17 @@ import yaml
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from _lib_python import detect_cli_lang, format_json_report  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
+    has_yaml_extension,
+    is_reserved_name,
+    resolve_defaults_file,
+)
 
 # ---------------------------------------------------------------------------
 # Initialization
 # ---------------------------------------------------------------------------
 _LANG = detect_cli_lang()
+
 
 
 def _h(zh: str, en: str) -> str:
@@ -218,14 +224,24 @@ def check_local(dir_path: str) -> CheckResult:
         )
 
     # Check _defaults.yaml exists
-    defaults_path = str(base / "_defaults.yaml")
+    # #1588: resolved by the shared predicate. Looking for the literal
+    # name made a tree carrying `_DEFAULTS.YAML` report
+    # "Missing _defaults.yaml (required)" while the exporter was
+    # merging that very file into every downstream tenant.
+    defaults_path = str(resolve_defaults_file(base))
     if not Path(defaults_path).is_file():
         return CheckResult(
             check="local",
             status="fail",
+            # #1588 review: name the file this tool actually looked for.
+            # `resolve_defaults_file` falls back to the canonical spelling
+            # when nothing matched, so on a truly empty tree the message is
+            # unchanged — but on a tree carrying `_DEFAULTS.YAML` it now
+            # names that, instead of sending the operator to a file that
+            # does not exist.
             message=_h(
-                "缺少 _defaults.yaml（必需）",
-                "Missing _defaults.yaml (required)"
+                f"缺少 {Path(defaults_path).name}（必需）",
+                f"Missing {Path(defaults_path).name} (required)"
             ),
             details=details,
         )
@@ -238,9 +254,13 @@ def check_local(dir_path: str) -> CheckResult:
         return CheckResult(
             check="local",
             status="fail",
+            # ⛔ The old literal made this message contradict ITSELF: it
+            # said `_defaults.yaml is invalid` while the parser error it
+            # embeds quoted the path of `_DEFAULTS.YAML`. One line, two
+            # different files.
             message=_h(
-                f"_defaults.yaml 無效: {e}",
-                f"_defaults.yaml is invalid: {e}"
+                f"{Path(defaults_path).name} 無效: {e}",
+                f"{Path(defaults_path).name} is invalid: {e}"
             ),
             details=details,
         )
@@ -253,7 +273,7 @@ def check_local(dir_path: str) -> CheckResult:
     try:
         for entry in sorted(base.iterdir(), key=lambda p: p.name):
             filename = entry.name
-            if not filename.endswith(".yaml") or filename.startswith("_"):
+            if not has_yaml_extension(filename, (".yaml",)) or is_reserved_name(filename):
                 continue
 
             file_path = str(entry)

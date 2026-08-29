@@ -44,15 +44,24 @@ and this is what stops "shared" from meaning "equally silent".
 from __future__ import annotations
 
 import os
+from typing import Iterable
 import sys
 from pathlib import Path
 
 __all__ = [
     "CONFIG_SUFFIXES",
+    "config_stem",
+    "defaults_files_in",
+    "has_yaml_extension",
+    "is_defaults_name",
+    "is_hidden_name",
+    "is_reserved_name",
     "iter_config_files",
+    "resolve_defaults_file",
     "nested_yaml_files",
     "nested_yaml_warning",
     "reset_warned_for_test",
+    "unusable_config_entries",
     "unusable_config_paths",
     "unusable_reason",
     "warn_nested",
@@ -108,6 +117,191 @@ def _is_config(name: str) -> bool:
     rather than claimed, and a rule change turns the owning side red first.
     """
     return name.lower().endswith(CONFIG_SUFFIXES) and not _is_hidden(name)
+
+
+# ── public name predicates ────────────────────────────────────────────
+#
+# ⛔ These are PREDICATES, not enumerators, and that distinction is the
+# whole reason they exist (#1588).
+#
+# Nine tools were measured reading a conf.d and disagreeing with the
+# exporter about `upper.YAML`, each having hand-written its own
+# `endswith(".yaml")`. The obvious remedy — "call `iter_config_files`
+# instead" — is NOT a case fix: those tools are flat or `rglob`, so
+# switching enumerators silently changes their RECURSION behaviour too,
+# and every one of them then needs its own blast-radius argument. That is
+# a different change, and bundling it here would hide a behaviour change
+# inside a bug fix.
+#
+# So the extension axis gets shared while the recursion axis stays where
+# each caller put it. A tool keeps its own `for f in os.listdir(...)` and
+# asks these functions the name questions.
+#
+# The four booleans are ORTHOGONAL and deliberately mirror the columns of
+# `tests/shared/confd_name_classification_matrix.json`
+# (`yaml_extension` / `reserved_prefix` / `hidden` / `defaults_file`, plus
+# `stem`). Because the exporter's production scanner, tenant-api's
+# filename→id mapping and `_lib_io.iter_yaml_files` all assert that same
+# table, a caller composing these predicates agrees with the exporter
+# TRANSITIVELY — nothing here claims agreement, and no guard greps anyone
+# else's source (#1448).
+
+
+def has_yaml_extension(
+    name: str, suffixes: tuple[str, ...] = CONFIG_SUFFIXES
+) -> bool:
+    """Does this basename carry a YAML extension? CASE-INSENSITIVE.
+
+    The extension axis ALONE — it says nothing about hidden files or the
+    `_` prefix. Composing is the caller's job precisely because the four
+    live enumerators want four different combinations (see the projection
+    table in PR #1590), so a single "is this a config file" answer would
+    be wrong for three of them.
+
+    ⚠️ `suffixes` exists so a case fix does not smuggle in a SECOND
+    behaviour change. Measured on today's tree, four readers
+    (`operator_generate`, `generate_tenant_metadata`,
+    `check_path_metadata_consistency`, `custom_alerts/loader`) glob
+    `*.yaml` and therefore do not see `db-b.yml` AT ALL, while the
+    exporter reads both spellings. That is a real divergence on the
+    extension-SPELLING axis and it is filed separately — but widening
+    those four here would land it inside a commit whose stated subject is
+    case folding, where no reviewer is looking for it. Callers pass the
+    set they already accept; the default is both.
+
+    ⛔ Do not "simplify" this by dropping the parameter and folding every
+    caller to `CONFIG_SUFFIXES`. That is the behaviour change, spelled as
+    a cleanup.
+    """
+    lowered = name.lower()
+    return any(lowered.endswith(s) for s in suffixes)
+
+
+def is_hidden_name(name: str) -> bool:
+    """Dot-prefixed, i.e. skipped by the exporter's walker."""
+    return _is_hidden(name)
+
+
+def is_reserved_name(name: str) -> bool:
+    """`_`-prefixed control file — reserved, never a tenant carrier.
+
+    ⚠️ ASCII `_` only, and that is not laziness: the reserved prefix is a
+    single ASCII byte with no case, so unlike the extension there is
+    nothing here to fold. tenant-api's `isReservedName` makes the same
+    call and the shared matrix pins both.
+    """
+    return name.startswith("_")
+
+
+def is_defaults_name(name: str) -> bool:
+    """The defaults CHAIN CARRIER — exactly `_defaults.yaml`/`.yml`, any casing.
+
+    ⛔ EXACT, not a prefix, and the difference is load-bearing. The
+    oracle is `config_hierarchy.go:216`, which compares the lowercased name
+    against the two literals; this table's own contract says the same in
+    words ("name lowercased is exactly ..."). And
+    `conf.d/examples/_defaults-multidb.yaml` EXISTS in this repo, while the
+    exporter never merges it into any tenant's chain.
+
+    ⚠️ A prefix version shipped briefly during #1588 and blind review
+    measured what it did: `describe_tenant` went from reproducing the
+    exporter's `merged_hash` on 5/5 shipped tenants to 3/5 WRONG, and
+    `deprecate_rule --execute` wrote "disable" into `_defaults-multidb.yaml`
+    while printing 下架完成 — leaving the tenant's own override deleted and
+    its threshold silently RELAXED back to the platform value. Fixing a
+    divergence by inventing a worse one is the exact failure this line of
+    work exists to stop.
+
+    ⛔ Do NOT reuse this for "is this a platform-defaults DOCUMENT to
+    schema-validate". That is a prefix question and keeps its own predicate
+    in `check_confd_schema`. Two questions that share a word are not one
+    predicate.
+    """
+    return name.lower() in ("_defaults.yaml", "_defaults.yml")
+
+
+def config_stem(name: str) -> str:
+    """Tenant id carried by a filename, or `""` if it carries none.
+
+    ⛔ The stem keeps the ORIGINAL case: `Upper.YAML` -> `Upper`, never
+    `upper`. Returning the folded stem would rename a tenant on the write
+    plane only — `GET /tenants`, federation account backfill and both
+    orphan scans key on it, while the exporter's tenant id comes from the
+    `tenants:` mapping inside the file and never from the name. That is
+    the first divergence's own shape, rebuilt worse.
+
+    Reserved and hidden names carry no tenant id and return `""`.
+    """
+    if is_reserved_name(name) or is_hidden_name(name):
+        return ""
+    lowered = name.lower()
+    for suffix in CONFIG_SUFFIXES:
+        if lowered.endswith(suffix):
+            # Slice by the CONSTANT's length, never `len(lowered)`:
+            # `str.lower()` can shrink byte length (`İ` is 2 -> 1), so an
+            # offset taken from the folded copy can cut the original in
+            # the wrong place.
+            return name[: len(name) - len(suffix)]
+    return ""
+
+
+def defaults_files_in(root: str | os.PathLike[str],
+                      names: "Iterable[str]") -> list[Path]:
+    """The defaults carriers among ALREADY-LISTED `names`, sorted.
+
+    ⛔ Takes the names instead of listing the directory, and that is not a
+    style choice. The first version called `root.iterdir()` and
+    `test_confd_enumeration_contract` correctly reddened `_lib_confd.py`
+    itself: a sentinel flat scan with nothing said about nested content.
+    Its docstring argued the callers were already recursive — which was
+    true, and which is exactly why listing again was wrong. Both callers
+    (`loader._dir_defaults_alerts` walking with `os.walk`,
+    `describe_tenant._scan` with `rglob`) already hold the names.
+
+    ⚠️ Ordering is `sorted(names)`, so a directory carrying both
+    spellings contributes deterministically. Two spellings is already a
+    misconfiguration; resolving it by directory order would make it an
+    intermittent one.
+    """
+    base = Path(root)
+    return [base / n for n in sorted(names) if is_defaults_name(n)]
+
+
+
+def resolve_defaults_file(
+    base: str | os.PathLike[str], *, tool: str | None = None
+) -> Path:
+    """The platform-defaults carrier directly in `base`, in ANY casing.
+
+    Returns the canonical `_defaults.yaml` path when nothing matches, so a
+    caller's "this file does not exist" branch still names something an
+    operator can create.
+
+    ⛔ ONE implementation, deliberately. Three tools grew a private copy of
+    this while #1588 was being fixed, which is the same "one rule, many
+    hand-copies" shape #1339 is made of — reproduced inside the fix for it.
+
+    ⚠️ This read is FLAT and therefore calls `warn_nested` itself: on a
+    hierarchical conf.d the exporter also merges `sub/_defaults.yaml`,
+    which this function does not return. `warn_nested` prints at most once
+    per directory per process and prints NOTHING for a flat tree, so the
+    common case is unchanged. `tool` is left to `nested_yaml_warning`'s
+    own default so the message names the command the operator ran rather
+    than this helper.
+
+    Sorted, so a directory carrying two spellings resolves
+    deterministically — two spellings is already a misconfiguration, and
+    resolving it by directory order would make it an intermittent one.
+    """
+    root = Path(base)
+    warn_nested(root, tool=tool)
+    try:
+        for entry in sorted(root.iterdir()):
+            if entry.is_file() and is_defaults_name(entry.name):
+                return entry
+    except OSError:
+        pass
+    return root / "_defaults.yaml"
 
 
 def iter_config_files(config_dir: str | os.PathLike[str], *, recursive: bool = True):
@@ -217,6 +411,69 @@ def unusable_reason(p: Path) -> str:
     except OSError as e:  # noqa: BLE001 — surfacing the errno IS the answer
         return f"could not be stat'ed — {e.__class__.__name__}: {e.strerror}"
     return "is not a readable file"
+
+
+def unusable_config_entries(
+    entries: "Iterable[Path]", *, suffixes: "tuple[str, ...]" = CONFIG_SUFFIXES,
+) -> list[Path]:
+    """The config-named entries among ALREADY-LISTED `entries` that a reader
+    named them for cannot read, sorted by POSIX path.
+
+    Sorted by the whole path, not the basename, so a RECURSIVE caller's two
+    `beta.yaml` under different parents keep a stable, distinguishable order
+    — the same promise `unusable_config_paths` makes for the tree it lists.
+
+    Sibling of `unusable_config_paths` for callers that already hold the
+    listing — the readers that walk a conf.d with their own `iterdir()` /
+    `os.walk()` rather than through `iter_config_files`. Same question,
+    same predicate, no second listing.
+
+    ⛔ Takes the entries instead of listing, for the reason `defaults_files_in`
+    does: a helper that lists is a flat scan with nothing said about nested
+    content, and `test_confd_enumeration_contract` reddens `_lib_confd.py`
+    itself for it. The caller has already listed and has already called
+    `warn_nested`; doing either again here would either duplicate the
+    warning or hide a scan from the gate that exists to find them.
+
+    ⛔ `suffixes` mirrors what the CALLER reads, and defaults to both
+    spellings only because that is `iter_config_files`'s answer. A reader
+    that takes `(".yaml",)` must pass it, or this would name a `db-b.yml/`
+    directory the caller was never going to read — a finding the operator
+    cannot act on from that tool. (That the narrow readers exist at all is
+    the separate `.yml` blind spot, #1603; this parameter keeps THIS report
+    honest about the tool printing it rather than quietly widening it.)
+
+    ⛔ Hidden entries are skipped, by the SAME `_is_hidden` the exporter's
+    skip rule is mirrored from. Without it this function and
+    `unusable_config_paths` returned two different answers for one tree — a
+    directory named `.hidden.yaml/` was in this list and not in that one —
+    which is the "one question, two answers" shape #1339 is made of,
+    reproduced between two functions written for the same question. Blind
+    review measured it. Downstream it was a false finding too: every reader
+    skips `.`-prefixed entries whatever their shape, so naming one reports a
+    loss that did not happen.
+
+    ⚠️ DISJOINT from what the caller then reads, by SHARING
+    `_is_regular_file` rather than by two conditions agreeing — the same
+    reason `unusable_config_paths` gives at length. So an unreadable
+    REGULAR file is deliberately NOT here: it is a file, the caller will
+    `open()` it, and that failure carries the real errno.
+
+    Measured (#1607): `operator_generate` on a tree with a directory
+    `notes.yaml/` and a broken symlink `broken.yaml` emitted 20 CRDs before
+    the `is_file()` filter existed — two of them AlertmanagerConfigs for
+    tenants `notes` and `broken` invented from a directory and a dangling
+    link — 18 after, with nothing said. Neither number is right on its own:
+    the filter is the correctness half, this function is the half that
+    keeps the signal.
+    """
+    return sorted(
+        (p for p in entries
+         if has_yaml_extension(p.name, suffixes)
+         and not _is_hidden(p.name)
+         and not _is_regular_file(p)),
+        key=lambda q: q.as_posix(),
+    )
 
 
 def unusable_config_paths(

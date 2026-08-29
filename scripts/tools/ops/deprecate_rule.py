@@ -44,7 +44,14 @@ from _lib_python import load_yaml_file as _lib_load_yaml  # noqa: E402
 from _lib_python import write_text_secure  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
-from _lib_confd import warn_nested  # noqa: E402
+from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
+    has_yaml_extension,
+    resolve_defaults_file,
+    unusable_config_entries,
+    unusable_reason,
+    warn_nested,
+)
+
 
 
 def load_yaml_file(path):
@@ -92,7 +99,23 @@ def scan_for_metric(metric_key, config_dir):
     # #1339: flat by design here — but a hierarchical conf.d must not
     # look like an empty one. Name the files this scan cannot see.
     warn_nested(config_base, tool="deprecate_rule")
-    for entry in sorted(list(config_base.glob("*.yaml")) + list(config_base.glob("*.yml"))):
+    entries = sorted(config_base.iterdir())
+    # #1607: the `is_file()` filter below is a THIRD axis (neither the
+    # extension axis of #1588 nor the recursion axis left alone above), and
+    # it was silent. A directory named `notes.yaml/` or a broken symlink is
+    # something the operator called configuration — reporting "✅ 未發現任何
+    # 引用" for a tree containing one is the same false all-clear this tool
+    # already gave on `.YAML`.
+    #
+    # ⛔ The naming is in `main`, NOT here. This function runs once PER
+    # METRIC and one invocation takes several: measured, `deprecate_rule a b
+    # c` printed the same two warnings three times. `warn_nested` above gets
+    # away with sitting here only because it dedups per directory per
+    # process internally.
+    for entry in (
+        p for p in entries
+        if p.is_file() and has_yaml_extension(p.name)
+    ):
         filename = entry.name
         path = str(entry)
         if filename.startswith('.'):
@@ -135,13 +158,13 @@ def scan_for_metric(metric_key, config_dir):
 
 def disable_in_defaults(metric_key, config_dir, execute=False):
     """在 _defaults.yaml 中將 metric 設為 "disable"。"""
-    defaults_path = str(Path(config_dir) / "_defaults.yaml")
+    defaults_path = str(resolve_defaults_file(Path(config_dir)))
     if not Path(defaults_path).exists():
-        return False, "_defaults.yaml 不存在"
+        return False, f"{Path(defaults_path).name} 不存在"
 
     data = load_yaml_file(defaults_path)
     if data is None:
-        return False, "無法讀取 _defaults.yaml"
+        return False, f"無法讀取 {Path(defaults_path).name}"
 
     defaults = data.get("defaults", {})
     current_val = defaults.get(metric_key)
@@ -183,7 +206,15 @@ def remove_from_tenants(metric_key, config_dir, execute=False):
     # #1339: second scan site — the guard must live where the scan does,
     # otherwise a hierarchical conf.d is silently empty on THIS path.
     warn_nested(config_base, tool="deprecate_rule")
-    for entry in sorted(list(config_base.glob("*.yaml")) + list(config_base.glob("*.yml"))):
+    # #1607: same `is_file()` third axis as the reference scan, deliberately
+    # NOT re-reported. `scan_for_metric` walks this identical directory and
+    # always runs first in the CLI flow, so naming the same dropped entries
+    # again would print each one twice per metric — and this tool is run
+    # across several metrics in one invocation.
+    for entry in sorted(
+        p for p in config_base.iterdir()
+        if p.is_file() and has_yaml_extension(p.name)
+    ):
         filename = entry.name
         path = str(entry)
         if filename.startswith('_') or filename.startswith('.'):
@@ -250,6 +281,32 @@ def main():
     print(f"目標 Metrics: {', '.join(args.metrics)}")
     print(f"Config 目錄: {args.config_dir}\n")
 
+    # #1607: named ONCE per invocation, before the per-metric loop — see
+    # `scan_for_metric`, which is where the entries are actually dropped and
+    # which runs once per metric.
+    #
+    # ⛔ `warn_nested` belongs HERE and not only in the scanning functions:
+    # this line is itself a FLAT enumeration of the conf.d, and
+    # `test_confd_enumeration_contract` reddened for exactly that — the guard
+    # must live in the same scope as the scan, because "the import is in the
+    # file" does nothing for the code path that gives the wrong answer. It
+    # dedups per directory per process, so `scan_for_metric`'s call below
+    # stays silent rather than repeating this one.
+    #
+    # ⛔ NO `try/except OSError` here, deliberately. The first version had one
+    # and it was false robustness: `scan_for_metric` lists the same directory
+    # two lines later with no guard of its own (and did so before #1607), so
+    # swallowing the error here bought nothing except the impression that an
+    # unlistable conf.d is handled. Measured — injecting EIO on this directory
+    # made the run die inside `scan_for_metric` anyway, with the guard in
+    # place. One failure mode, reported once, at the place that owns it.
+    _base = Path(args.config_dir)
+    warn_nested(_base, tool="deprecate_rule")
+    _entries = sorted(_base.iterdir())
+    for bad in unusable_config_entries(_entries):
+        print(f"  ⚠️  略過 {safe_label(bad.name)}——{unusable_reason(bad)}",
+              file=sys.stderr)
+
     for metric in args.metrics:
         print(f"\n{'─'*40}")
         print(f"📌 Processing: {metric}")
@@ -267,7 +324,8 @@ def main():
             print(f"  ✅ 未發現任何引用")
 
         # Step 2: 在 defaults 中設為 disable
-        print(f"\n  Step 1: _defaults.yaml")
+        print(f"\n  Step 1: "
+              f"{resolve_defaults_file(Path(args.config_dir)).name}")
         ok, msg = disable_in_defaults(metric, args.config_dir, execute=args.execute)
         icon = "✅" if ok else "❌"
         print(f"  {icon} {safe_label(msg)}")

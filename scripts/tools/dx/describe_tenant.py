@@ -29,6 +29,13 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout, PROJECT_ROOT_MARKERS  # noqa: E402
+from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
+    has_yaml_extension,
+    is_defaults_name,
+    is_reserved_name,
+    unusable_config_entries,
+    unusable_reason,
+)
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 try:
@@ -115,6 +122,29 @@ def _canonical_hash(data: dict) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
 
+def _iter_confd_yaml(root, suffixes, entries=None):
+    """conf.d files carrying one of `suffixes`, CASE-INSENSITIVELY.
+
+    ⚠️ Recursion is unchanged — `rglob("*")` walks exactly what
+    `rglob("*.yaml")` walked, hidden directories included. Only the
+    name test moved to the shared predicate (#1588); widening this
+    reader's suffix set would be a separate behaviour change and is
+    deliberately not bundled here.
+
+    ⛔ `entries` lets `_scan` walk ONCE and still get this selection from the
+    one place that defines it. `_scan` calls this twice (`.yaml`, then
+    `.yml`) beside its own defaults pass, so it was walking the tree three
+    times and the three passes could describe three different trees if
+    anything changed under `conf.d` mid-run. Same reason `defaults_files_in`
+    and `unusable_config_entries` take already-listed input.
+    """
+    listing = root.rglob("*") if entries is None else entries
+    return sorted(
+        p for p in listing
+        if p.is_file() and has_yaml_extension(p.name, suffixes)
+    )
+
+
 class ConfDScanner:
     """Scan a conf.d/ directory and build the inheritance graph."""
 
@@ -162,17 +192,51 @@ class ConfDScanner:
 
     def _scan(self) -> None:
         """Recursively scan conf.d/ and build tenant + defaults maps."""
+        # #1607: the `is_file()` tests in this scanner (here and in
+        # `_yaml_files`) are a THIRD axis and were silent. This tool's whole
+        # job is to answer "what config does the exporter see for this
+        # tenant", so an entry it drops without a word is the same class of
+        # wrong answer as the `.YAML` blindness above. ⛔ Named ONCE here:
+        # `_scan` runs a single time, from `__init__`, whereas `_yaml_files`
+        # is called per lookup.
+        #
+        # ⛔ ONE listing for both passes, not two `rglob("*")` calls. Blind
+        # review caught the first version walking the tree twice here: that
+        # is not only an extra scan, it lets the report and the defaults
+        # collection below describe two DIFFERENT trees if anything changes
+        # under `conf.d` mid-run — the exact reason `collect_instances` lists
+        # once and says so.
+        entries = sorted(self.conf_d.rglob("*"))
+        # ⛔ `_`-prefixed entries other than the defaults carriers are NOT read
+        # by this scanner at all, so naming an unusable one would report a
+        # loss that did not happen — the same false finding the `suffixes`
+        # parameter exists to prevent, one axis over. Defaults carriers stay
+        # in: this scanner really does read them.
+        for bad in unusable_config_entries(
+            [p for p in entries
+             if is_defaults_name(p.name) or not is_reserved_name(p.name)]
+        ):
+            print(f"WARNING: skipped {bad} — {unusable_reason(bad)}",
+                  file=sys.stderr)
         # Collect all _defaults.yaml files
         defaults_files: dict[str, dict] = {}
-        for dp in self.conf_d.rglob("_defaults.yaml"):
-            defaults_files[str(dp.resolve())] = _load_yaml(dp)
-        for dp in self.conf_d.rglob("_defaults.yml"):
-            defaults_files[str(dp.resolve())] = _load_yaml(dp)
+        # #1588: matched by the shared predicate, not by two literal names.
+        # `_DEFAULTS.YAML` measured as invisible here while the exporter
+        # merged it into every downstream tenant.
+        by_dir: dict[Path, list[Path]] = {}
+        for dp in entries:
+            if dp.is_file() and is_defaults_name(dp.name):
+                resolved = dp.resolve()
+                defaults_files[str(resolved)] = _load_yaml(dp)
+                by_dir.setdefault(resolved.parent, []).append(resolved)
+        for paths in by_dir.values():
+            paths.sort()  # two spellings in one dir resolve deterministically
+        self._defaults_by_dir = by_dir
         self.defaults_data = defaults_files
 
         # Collect all tenant files
-        for fp in self.conf_d.rglob("*.yaml"):
-            if fp.name.startswith("_"):
+        for fp in _iter_confd_yaml(self.conf_d, (".yaml",), entries):
+            if is_reserved_name(fp.name):
                 continue
             data = _load_yaml(fp)
             if not isinstance(data, dict):
@@ -185,8 +249,8 @@ class ConfDScanner:
                 self.tenant_files[tid] = fp.resolve()
                 self.defaults_chain[tid] = self._resolve_defaults_chain(fp)
 
-        for fp in self.conf_d.rglob("*.yml"):
-            if fp.name.startswith("_"):
+        for fp in _iter_confd_yaml(self.conf_d, (".yml",), entries):
+            if is_reserved_name(fp.name):
                 continue
             data = _load_yaml(fp)
             if not isinstance(data, dict):
@@ -207,10 +271,14 @@ class ConfDScanner:
         root = self.conf_d
 
         while True:
-            for name in ("_defaults.yaml", "_defaults.yml"):
-                dp = current / name
-                if dp.exists():
-                    chain.append(dp.resolve())
+            # #1588: looked up in the map `_scan` already built by
+            # walking the tree, rather than re-listing this directory.
+            # ⛔ Re-listing would have made this function a FLAT read of a
+            # config dir — which `test_confd_enumeration_contract.py`
+            # correctly rejects — even though the chain walk around it is
+            # what makes the reader hierarchical. Reusing the recursive
+            # scan's own result is both cheaper and honest.
+            chain.extend(self._defaults_by_dir.get(current.resolve(), []))
             if current == root or current == current.parent:
                 break
             current = current.parent

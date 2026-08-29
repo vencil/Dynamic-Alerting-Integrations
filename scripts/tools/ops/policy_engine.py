@@ -41,6 +41,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION  # noqa: E402
+from _lib_confd import resolve_defaults_file  # noqa: E402  (#1588)
 
 # ---------------------------------------------------------------------------
 # Repo-layout import compatibility (stripped in Docker build)
@@ -660,7 +661,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     rules: list[PolicyRule] = []
 
     # From _defaults.yaml in config-dir
-    defaults_path = str(Path(args.config_dir) / "_defaults.yaml")
+    defaults_path = str(resolve_defaults_file(Path(args.config_dir)))
     if Path(defaults_path).is_file():
         rules.extend(load_policies(defaults_path))
 
@@ -689,7 +690,12 @@ def main(argv: Optional[list[str]] = None) -> int:
             print("未找到策略規則。在 _defaults.yaml 新增 _policies 或指定 --policy。",
                   file=sys.stderr)
         else:
-            print("No policy rules found. Add _policies to _defaults.yaml or specify --policy.",
+            # #1588 review: name the carrier this run actually resolved.
+            # Telling an operator to edit `_defaults.yaml` on a tree whose
+            # carrier is `_DEFAULTS.YAML` sends them to a file that is not
+            # there.
+            print(f"No policy rules found. Add _policies to "
+                  f"{Path(defaults_path).name} or specify --policy.",
                   file=sys.stderr)
         if args.json_output:
             print(format_json_report(_empty_report("no_policies", "no_policy_rules_found")))

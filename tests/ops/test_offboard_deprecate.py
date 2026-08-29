@@ -7,6 +7,7 @@ introduced in v0.6.0.
 
 import os
 import tempfile
+from pathlib import Path
 
 import pytest
 import yaml
@@ -399,3 +400,117 @@ def test_compare_vectors_multi_tenant():
     statuses = {d["tenant"]: d["status"] for d in diffs}
     assert statuses["db-a"] == "match"
     assert statuses["db-b"] == "mismatch"
+
+
+# ---------------------------------------------------------------------------
+# #1607 — deprecate_rule's unusable-entry reporting, called IN-PROCESS
+# ---------------------------------------------------------------------------
+#
+# ⛔ The cross-tool harness drives this tool through `subprocess`, which is
+# right for asserting operator-visible output but leaves these branches
+# unmeasured: `[tool.coverage.run]` sets no `concurrency` /
+# `COVERAGE_PROCESS_START`, so a child process is not counted. Measured on the
+# PR that added the harness: this file went -2.6%, the largest of the three.
+
+
+def _confd_with_unusable(tmp_path):
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    (root / "_defaults.yaml").write_text(
+        "defaults:\n  pg_connections: 80\n", encoding="utf-8")
+    (root / "alpha.yaml").write_text(
+        "tenants:\n  alpha:\n    pg_connections: 90\n", encoding="utf-8")
+    (root / "notes.yaml").mkdir()
+    (root / "broken.yaml").symlink_to(root / "gone.yaml")
+    return root
+
+
+def _run_main(monkeypatch, argv):
+    monkeypatch.setattr(deprecate_rule.sys, "argv", ["deprecate_rule", *argv])
+    return deprecate_rule.main()
+
+
+def test_main_names_unusable_entries_once_per_invocation(
+        tmp_path, capsys, monkeypatch):
+    """⛔ ONCE per run, not once per metric. `scan_for_metric` runs per metric
+    and one invocation takes several; the report therefore lives in `main`."""
+    root = _confd_with_unusable(tmp_path)
+
+    _run_main(monkeypatch,
+              ["pg_connections", "mysql_connections", "redis_memory",
+               "--config-dir", str(root)])
+
+    cap = capsys.readouterr()
+    text = cap.out + cap.err
+    for name in ("notes.yaml", "broken.yaml"):
+        assert text.count(name) == 1, (
+            f"{name} named {text.count(name)} time(s) for three metrics; "
+            f"expected once per invocation.\n{text}")
+    assert "is a directory, not a config file" in text
+    # ⛔ warn-and-CONTINUE: the tool must still have processed every metric.
+    assert text.count("Processing:") == 3, (
+        f"warned but stopped serving; got:\n{text}")
+
+
+def test_main_is_quiet_on_a_clean_tree(tmp_path, capsys, monkeypatch):
+    """⛔ Blast radius: a healthy conf.d gains no unusable-entry output."""
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    (root / "_defaults.yaml").write_text(
+        "defaults:\n  pg_connections: 80\n", encoding="utf-8")
+    (root / "alpha.yaml").write_text(
+        "tenants:\n  alpha:\n    pg_connections: 90\n", encoding="utf-8")
+
+    _run_main(monkeypatch, ["pg_connections", "--config-dir", str(root)])
+
+    cap = capsys.readouterr()
+    assert "略過" not in (cap.out + cap.err)
+
+
+def test_an_unlistable_config_dir_fails_the_same_way_it_always_did(
+        tmp_path, capsys, monkeypatch):
+    """An unlistable conf.d is fatal, and stays fatal.
+
+    Pins the CONTRACT — permission, EIO, a FUSE mount going away, the
+    directory removed mid-scan all surface as an error — so that a future
+    change which starts swallowing it here reddens.
+
+    ⚠️ It does NOT pin the removal of the `except OSError` that the first
+    version of the #1607 report had around its own listing, and cannot:
+    `scan_for_metric` lists the same directory two lines later with no guard
+    of its own, so the two versions are behaviourally IDENTICAL — measured,
+    this test stays green with the guard put back. The guard was removed
+    because it bought nothing while suggesting the case was handled; that is
+    a readability change, and no test can hold it. Saying so here rather than
+    letting the docstring imply coverage this test does not have.
+
+    ⚠️ Injected rather than produced with mode bits: the environment runs as
+    root, so `chmod 000` does not deny anything. `main` also rejects a path
+    that is a FILE with its own `is_dir()` guard, so that route cannot reach
+    the listing at all.
+    """
+    root = _confd_with_unusable(tmp_path)
+    real_iterdir = Path.iterdir
+
+    def exploding_iterdir(self):
+        if self.resolve() == root.resolve():
+            raise OSError(5, "Input/output error")
+        return real_iterdir(self)
+
+    monkeypatch.setattr(Path, "iterdir", exploding_iterdir)
+
+    with pytest.raises(OSError):
+        _run_main(monkeypatch, ["pg_connections", "--config-dir", str(root)])
+
+
+def test_scan_for_metric_skips_unusable_entries(tmp_path):
+    """The scan itself must not try to read a directory as a tenant file."""
+    root = _confd_with_unusable(tmp_path)
+
+    findings = deprecate_rule.scan_for_metric("pg_connections", str(root))
+
+    files = {f["filename"] for f in findings}
+    assert "notes.yaml" not in files and "broken.yaml" not in files
+    assert "_defaults.yaml" in files, (
+        f"fixture produced no reference at all, so the assertion above would "
+        f"be vacuous; got {files}")

@@ -28,7 +28,13 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
-from _lib_confd import warn_nested  # noqa: E402
+from _lib_confd import (  # noqa: E402
+    has_yaml_extension,
+    is_reserved_name,
+    unusable_config_entries,
+    unusable_reason,
+    warn_nested,
+)
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 
 # ---------------------------------------------------------------------------
@@ -264,7 +270,23 @@ def build_tenant_metadata(config_dir: Path) -> dict[str, Any]:
     # #1339: flat by design here — but a hierarchical conf.d must not
     # look like an empty one. Name the files this scan cannot see.
     warn_nested(config_dir, tool="generate_tenant_metadata")
-    for yaml_file in sorted(config_dir.glob("*.yaml")):
+    entries = sorted(config_dir.iterdir())
+    # #1607: `is_file()` below is a THIRD axis and it was silent. This tool
+    # feeds the portal's tenant list, so an entry it drops is a tenant that
+    # does not appear — the same shape as the `.YAML` bug above, one axis
+    # over. Same stderr channel as the parse failure below.
+    # ⛔ `_`-prefixed entries excluded — the loop below skips them whatever
+    # their shape, so naming one would report a loss that did not happen.
+    for bad in unusable_config_entries(
+        [p for p in entries if not is_reserved_name(p.name)],
+        suffixes=(".yaml",),
+    ):
+        print(f"WARNING: {safe_label(bad.name)}: {unusable_reason(bad)}",
+              file=sys.stderr)
+    for yaml_file in (
+        p for p in entries
+        if p.is_file() and has_yaml_extension(p.name, (".yaml",))
+    ):
         if yaml_file.name.startswith("_"):
             continue
         try:

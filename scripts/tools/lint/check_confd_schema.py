@@ -46,6 +46,11 @@ sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
+from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
+    has_yaml_extension,
+    is_defaults_name,
+    is_hidden_name,
+)
 
 # Repo-root-relative default: lint -> tools -> scripts -> <root>/docs/schemas/...
 _DEFAULT_SCHEMA = os.path.normpath(
@@ -63,8 +68,19 @@ def _is_defaults_file(basename: str) -> bool:
     """`_defaults.yaml` / `_defaults-multidb.yaml` … — the platform default files
     (top-level keys guarded by platform-defaults.schema.json). Other `_*` files
     (`_routing_profiles`, `_domain_policy`, `_instance_mapping`, `_rbac` …) have
-    their own shapes/validators and remain skipped."""
-    return basename.startswith("_defaults") and basename.endswith((".yaml", ".yml"))
+    their own shapes/validators and remain skipped.
+
+    ⛔ PREFIX, and deliberately NOT `_lib_confd.is_defaults_name`. That
+    predicate answers a different question — "is this the chain carrier the
+    exporter merges", an EXACT match — while `_defaults-multidb.yaml` is a
+    platform-defaults document this gate must validate and the exporter
+    never merges. #1588 briefly collapsed the two and blind review measured
+    the damage on the read AND write planes. The fix here is the CASE fold
+    this function was missing (`_DEFAULTS.YAML` returned False, so a broken
+    platform-defaults file skipped the schema gate entirely at rc=0), not a
+    change of shape.
+    """
+    return has_yaml_extension(basename) and basename.lower().startswith("_defaults")
 
 
 class _CallerError(Exception):
@@ -113,7 +129,7 @@ def _iter_yaml_files(config_dir: str) -> list[str]:
     out: list[str] = []
     for root, _dirs, files in os.walk(config_dir):
         for fn in files:
-            if fn.endswith((".yaml", ".yml")) and not fn.startswith("."):
+            if has_yaml_extension(fn) and not is_hidden_name(fn):
                 out.append(os.path.join(root, fn))
     return sorted(out)
 

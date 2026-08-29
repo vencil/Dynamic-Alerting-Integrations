@@ -34,7 +34,11 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
-from _lib_confd import warn_nested  # noqa: E402
+from _lib_confd import (  # noqa: E402
+    has_yaml_extension,
+    is_hidden_name,
+    warn_nested,
+)
 
 try:
     import yaml
@@ -92,7 +96,13 @@ def plan_migration(conf_d: Path) -> list[dict]:
             })
             continue
 
-        if not fp.suffix in (".yaml", ".yml"):
+        # is_hidden_name is NOT redundant. base used `fp.suffix`, and
+        # `Path(".yaml").suffix` is the empty string, so a degenerate
+        # name that is ALL extension was skipped for free. The shared
+        # predicate answers only the extension axis, so dropping the
+        # hidden axis here would widen what this tool `git mv`s — the
+        # exporter's walker skips dot-prefixed entries outright.
+        if not has_yaml_extension(fp.name) or is_hidden_name(fp.name):
             continue
 
         if fp.name.startswith("_"):
