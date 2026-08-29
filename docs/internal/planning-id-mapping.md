@@ -196,6 +196,7 @@ SOT 在 [`dx-tooling-backlog.md`](dx-tooling-backlog.md)。
 | TRK-361 | [#1481](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1481) | 跨 AI agent 中性 SSOT — `agents/{skills,roles}/` + `AGENTS.md`（AAIF 標準）成為單一真相源，`.claude/**` 降為 `gen_agent_adapters.py` 的生成物 + drift gate；用複製而非 symlink（Windows host 實測 symlink 壞，#1457）（**無 issue，直接以 PR 落地**） | — |
 | TRK-362 | [#1485](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1485) | 吸收 superpowers 兩項缺口能力 —— 完成宣稱鐵律升為 always-on 規則（`AGENTS.md` / `CLAUDE.md`）、收 review 紀律進 `vibe-subagent-review`（take/reframe/reject + 修→回覆→resolve 三件套）；刻意不新增第 9 支 skill（**無 issue，直接以 PR 落地**） | — |
 | TRK-369 | [#1593](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1593) | 語言邊界：繁中規範管的是 AI 對人的輸出，repo 工具印給 operator 的字串沿用該工具既有慣例（`dev-rules.md` §9c + `CLAUDE.md` / `AGENTS.md` 措辭對齊）——#1244 的裁決解決了「不要只翻一半」卻沒寫下涵蓋範圍，於是同一條 finding 在每支動到 operator-visible 字串的 PR 上復發（最近一次 #1580）；⚠️ 觸發它的 path instruction 在 CodeRabbit **UI** 側，repo 改不到，故本條不宣稱能單獨終結（**無 issue，直接以 PR 落地**） | — |
+| TRK-370 | [#1379](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1379) | 客戶文件 ↔ da-tools CLI 契約閘門：產給客戶與教客戶抄的命令，沒有任何機制在驗它們符不符合 da-tools 自己的 argparse 宣告（旗標存在性、預設值、結束碼）。子票 #1380 / #1381 / #1513 / #1619 為內容修正，本條是守衛。⚠️ 本票標題原本掛 `TRK-359`，而那個號碼屬 ADR-032 夜跑對交錯量測（#1439）——本列即為改正 | — |
 
 ## 不在 mapping 範圍
 
