@@ -1420,20 +1420,23 @@ class TestTheHookFiresOnEverythingTheGateReads:
 
         # ⛔ A count floor measures how much came back, not whether the walk
         # still reaches. Blind review demonstrated the difference: turning the
-        # gate's `rglob` into `glob` collapses its corpus from 382 files to 51
-        # — every one of the five names above survives, `len(opened)` stays
-        # over 100, and all four tests in this class stay green while the
-        # coverage claim below is being made about a third of the tree.
+        # gate's `rglob` into `glob` leaves every one of the five names above
+        # in place and `len(opened)` still over 100, while the corpus behind
+        # the coverage claim below collapses to a fraction of the tree.
         #
         # Nesting is the property that dies, so nesting is what is asserted.
-        # ⚠️ The margin is narrow and saying so is the point. Measured with
-        # THESE two expressions on this tree: 408 nested inputs and 44
-        # directories; with `rglob` turned into `glob`, 97 and 17. The floors
-        # sit at 100 and 20, i.e. three clear of the failure mode — not the
-        # comfortable gap an earlier revision of this comment claimed ("a flat
-        # walk leaves single digits of both", which was simply wrong). If a
-        # future change removes a directory's worth of inputs for a legitimate
-        # reason, expect to re-measure rather than to have room.
+        #
+        # ⛔ No absolute counts in this comment, on purpose. Two earlier
+        # revisions carried them and both went stale within days — once
+        # because a number was mis-transcribed, once because a reader read two
+        # DIFFERENT populations (this driver's `opened`, which records every
+        # file the tool opens, and `_collect_scannable_files()`, which is
+        # extension-filtered) as a contradiction because they sat next to each
+        # other unlabelled. The floors were picked against a measured
+        # flat-walk baseline, and both assertion messages print the live
+        # numbers when they fire — so the current values are always one
+        # failing run away and never rot here. ⚠️ The margin is not generous;
+        # re-measure before assuming there is room.
         nested = [p for p in opened if p.count("/") >= 2]
         directories = {p.rsplit("/", 1)[0] for p in opened if "/" in p}
         assert len(nested) >= 100, (
@@ -1766,6 +1769,41 @@ class TestToolCountReadsBothLanguages:
             "makes this green, and widening this to `assert alive` would drop "
             "one language for good.\n"
             "alive: %s" % {k: sorted(v) for k, v in alive.items()})
+
+    def test_the_sibling_doc_file_count_repair_is_line_scoped_too(
+            self, tmp_path, monkeypatch):
+        """⛔ The class, not the cited instance.
+
+        `doc-file-count` shipped the same shape this change set fixed for
+        `tool-count`: a per-line check, a whole-file `re.sub` repair, and a
+        pattern whose `\\s*` matches a newline. Blind review measured it on
+        this branch — a true sentence about another directory rewritten to the
+        doc-map count and reported as fixed, plus a wrapped occurrence the
+        check can never report rewritten alongside it.
+
+        ⚠️ There is no scope anchor for `個文件`, so this pins only the
+        line-scoping half; the residual is disclosed in `_auto_fix`.
+        """
+        claude = tmp_path / "CLAUDE.md"
+        wrapped = "這批草稿共 4\n個文件，散落在兩個目錄。\n"
+        claude.write_text("完整文件對照表（7 個文件）。\n" + wrapped,
+                          encoding="utf-8")
+        doc_map = tmp_path / "docs" / "internal" / "doc-map.md"
+        doc_map.parent.mkdir(parents=True)
+        doc_map.write_text("|a|\n|-|\n" + "|r|\n" * 3, encoding="utf-8")
+        monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+        mod._CONTENT_CACHE.clear()
+
+        found = mod.check_doc_file_count_in_docs()
+        assert [i.line for i in found] == [1], (
+            "expected only the single-line occurrence to be reported: %s"
+            % [(i.line, i.message) for i in found])
+        mod._auto_fix(found, 96, {"pack_count": 16, "alert": 161})
+        text = claude.read_text(encoding="utf-8")
+        assert "（3 個文件）" in text, text
+        assert "共 4\n個文件" in text, (
+            "the repair reached a wrapped occurrence the check cannot see:\n%s"
+            % text)
 
     def test_the_checker_is_looser_than_the_writer_on_purpose(self):
         """⚠️ Pins an asymmetry blind review flagged, as intentional.

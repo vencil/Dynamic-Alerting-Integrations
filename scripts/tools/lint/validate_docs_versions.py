@@ -1130,7 +1130,24 @@ def _auto_fix(issues: List[Issue], bilingual_pairs: int,
                 new_content = "".join(lines)
 
         elif issue.check == "doc-file-count":
-            # Fix "XX 個文件" count from doc-map.md row count
+            # Fix "XX 個文件" count from doc-map.md row count.
+            #
+            # ⛔ Line-scoped for the same reason `tool-count` is: the check is
+            # per line (`finditer`), this repair was per FILE (`re.sub`), and
+            # `(\d+)(\s*個文件)`'s `\s*` matches a newline. Measured on this
+            # branch by blind review, before this: a true sentence about a
+            # different directory was rewritten to the doc-map count and
+            # reported as fixed, and a WRAPPED occurrence the per-line check
+            # can never report was rewritten too.
+            #
+            # ⚠️ Unlike `tool-count` there is no scope anchor to lean on —
+            # `個文件` names no scope — so the guard here is only "the line the
+            # check named". A second `個文件` on that same line would still be
+            # rewritten; `check_doc_file_count_in_docs` has no ambiguity
+            # refusal because it has no anchor to hang one on. Disclosed, not
+            # fixed: CLAUDE.md carries no `個文件` sentence at all today, so
+            # this whole branch is dormant, and giving it an anchor is the
+            # same documentation decision as #1540's gap 1.
             doc_map = REPO_ROOT / "docs" / "internal" / "doc-map.md"
             if doc_map.exists():
                 map_text = doc_map.read_text(encoding="utf-8")
@@ -1139,7 +1156,11 @@ def _auto_fix(issues: List[Issue], bilingual_pairs: int,
                 doc_count = max(0, rows - 2)
                 pattern = AUTO_FIX_PATTERNS["doc-file-count"]["pattern"]
                 replacement = AUTO_FIX_PATTERNS["doc-file-count"]["replacement_template"].format(value=doc_count)
-                new_content = re.sub(pattern, replacement, new_content)
+                lines = new_content.splitlines(keepends=True)
+                idx = issue.line - 1
+                if 0 <= idx < len(lines):
+                    lines[idx] = re.sub(pattern, replacement, lines[idx])
+                    new_content = "".join(lines)
 
         elif issue.check == "rule-pack-count":
             # These are trickier — only fix clear badge patterns
