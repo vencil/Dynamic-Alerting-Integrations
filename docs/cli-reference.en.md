@@ -2089,9 +2089,14 @@ docker run --rm \
 - YAML file usability (parses, decodes as UTF-8, mapping at top level). ⚠️ **The last two landed after v2.9.0**: on the image you have, a non-UTF-8 file or a non-mapping top level raises a traceback with zero bytes on stdout
 - Schema validation (required keys, correct types)
 - Routing rule validation (group_wait/group_interval/repeat_interval in allowed range)
-- Policy checks (webhook domains)
-- Tenant name consistency
+- Policy checks (webhook domains) — **this row only appears when `--policy` is given**
+- Custom rule lint (deny-list over `rule-packs/`) — **only when `--rule-packs` is given**
+- Profile references (does a tenant's `_profile` name a profile that exists)
+- Version consistency — **only when `--version-check` is given**
+- Policy-as-Code DSL evaluation (`_policies` in `_defaults.yaml`, or `--policy-dsl`)
 - **Tenant declaration uniqueness**: FAIL when one tenant id is declared by **two files**. ⚠️ The exporter answers that state by **rejecting the entire config dir** (`DuplicateTenantError`), so the consequence is not "that one tenant loses alerting" — **every tenant in the tree does**, at deploy or restart time, after CI has passed. The usual cause is an editor leaving a `db-a.yml` beside `db-a.yaml`, but the predicate is "one id, two files": `archive/db-a.yaml` is caught the same way (#1577). ⚠️ **Not present in the v2.9.0 image**: the same tree reports `Result: PASS` / exit 0 there
+
+⛔ **The report's own rows are authoritative** (the `Total: N checks` line). This list previously carried an item called "Tenant name consistency" and **no check does that** — measured: a file named `hotel.yaml` declaring tenant `totally-different` passes all six rows at exit 0 — while four checks that do run were missing from it. The conditional rows above do not silently pass when their flag is omitted: the row is absent.
 
 **Output**
 

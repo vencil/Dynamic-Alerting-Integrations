@@ -1888,9 +1888,14 @@ da-tools validate-config --config-dir <path> [options]
 - YAML 檔案可用性（可解析、UTF-8 編碼、頂層是 mapping）。⚠️ **後兩項是 v2.9.0 之後才加的**：你手上這顆映像遇到非 UTF-8 或頂層非 mapping 的檔案是丟 traceback、stdout 零位元組
 - Schema 驗證（必需的 key、類型正確）
 - 路由規則驗證（group_wait/group_interval/repeat_interval 在允許範圍）
-- Policy 檢查（webhook 域名）
-- Tenant 名稱一致性
+- Policy 檢查（webhook 域名）——**只在給了 `--policy` 時才會出現這一列**
+- 自訂規則 lint（`rule-packs/` 的 deny-list）——**只在給了 `--rule-packs` 時**
+- Profile 參照（租戶的 `_profile` 指向的 profile 有沒有定義）
+- 版號一致性——**只在給了 `--version-check` 時**
+- Policy-as-Code DSL 評估（`_defaults.yaml` 的 `_policies`，或 `--policy-dsl`）
 - **租戶宣告唯一性**：同一個租戶 id 被**兩個檔案**同時宣告時 FAIL。⚠️ exporter 對這個狀態的回應是**拒載整個 config dir**（`DuplicateTenantError`），所以後果不是「那一個租戶失去告警」，而是**這棵樹裡每一個租戶都失去告警**，而且發生在部署／重啟當下、CI 通過之後。最常見的成因是編輯器在 `db-a.yaml` 旁邊留下一份 `db-a.yml`，但判準是「一個 id、兩個檔」——換成 `archive/db-a.yaml` 一樣會擋（#1577）。⚠️ **v2.9.0 映像沒有這一項**：同一棵樹在那顆映像上回報 `Result: PASS`、exit 0
+
+⛔ **以報表實際印出的列為準**（`Total: N checks` 那一段）。這份清單先前列著一個叫「Tenant 名稱一致性」的項目，而**沒有任何檢查在做那件事**——實測檔名 `hotel.yaml` 宣告租戶 `totally-different`，六項全 PASS、exit 0；同時它漏掉了四個真的會跑的檢查。條件式的那幾項省略對應旗標時**整列不會出現**，不是靜默通過。
 
 **輸出**
 
