@@ -154,7 +154,7 @@ DAI 的租戶是 conf.d 裡一個刻意不透明的 id（dev-rules #2 要求 ten
 
    ⛔ **人面走得通，初版把 (a)(b)(c) 誤讀成「沒有人走得到」。** (a) 約束的是 **pod 網路 ingress**；(b)(c) 談的是**機器呼叫端**。拿著 kubectl 的值班人用本 repo 已記載的三條路都到得了，其中第一條完全不受 (a) 約束——pod 內 loopback 不經過 pod 網路：
 
-   - `docs/troubleshooting.md:110-112` — `kubectl exec -n monitoring deploy/alertmanager -- amtool ... --alertmanager.url=http://localhost:9093`
+   - `docs/troubleshooting.md:112-113` — `kubectl exec -n monitoring deploy/alertmanager -- amtool ... --alertmanager.url=http://localhost:9093`
    - `docs/cli-reference.md:1338` — `amtool silence query --alertmanager.url=http://<am>:9093`
    - `CLAUDE.md:122` — `port-forward` + `localhost:9093`
 
