@@ -661,10 +661,33 @@ def load_policy(policy_path: str | None) -> list[str]:
     EXIT_CALLER_ERROR, so a supplied-but-unusable value now raises and the
     callers turn that into exit 2.
 
-    ⚠️ The empty-list return survives for exactly two inputs, and both mean
-    "the operator asked for no constraint", not "the tool could not tell":
-    no ``--policy`` at all, and a well-formed policy whose ``allowed_domains``
-    is an empty list.
+    ⛔⛔ NOT CLOSED, and an earlier revision of this docstring said it was.
+    It claimed the empty-list return "survives for exactly two inputs, and both
+    mean the operator asked for no constraint" — a sentence written in the
+    function whose entire purpose is to stop that class. Measured, NINE inputs
+    reach ``return []``:
+
+        asked for no constraint (3)   no --policy at all
+                                      allowed_domains: []
+                                      allowed_domains:        (empty value)
+        could not tell (6)            a 0-byte file
+                                      a space/newline-only file (⚠️ NOT one
+                                        holding a TAB — the YAML scanner
+                                        rejects tabs, so that one raises.
+                                        Measured; "whitespace-only" was too
+                                        wide a word for what was tested.)
+                                      a comment-only file
+                                      the key absent entirely
+                                      the key misspelled (allowed_domain:)
+                                      a list whose entries are all non-strings
+
+    The six below the line are the #1556 danger class arriving through a
+    different door: the operator supplied a policy, the SSRF domain allowlist
+    is off, and the report says ``[PASS] policy``. A truncated ``kubectl cp``, an
+    empty ConfigMap key and one missing ``s`` all land there. What this function
+    closes is the *path* axis (a value that is not a usable file); the *content*
+    axis is open, tracked separately, and must not be read as covered because
+    the path axis now raises.
     """
     if not policy_path:
         return []
@@ -699,10 +722,22 @@ def load_policy(policy_path: str | None) -> list[str]:
             f"--policy: top level of {policy_path} is "
             f"{type(data).__name__}, expected a mapping with `allowed_domains:`")
     domains = data.get("allowed_domains", [])
+    # ⛔ `allowed_domains:` with nothing under it is YAML for an empty value,
+    # and it means the same thing as `allowed_domains: []` and as omitting the
+    # key: no constraint. An earlier cut of this function raised on it — a
+    # REGRESSION against origin/main, and reproducible on this repo's own
+    # `.github/custom-rule-policy.yaml` by commenting the entries out during a
+    # migration. Worse, the cheapest way to clear that red was to delete the
+    # `allowed_domains:` line too, which lands exactly on the silent-off state
+    # #1556 exists to abolish. Only a value that is neither a list nor empty
+    # is a caller error, because that one cannot be read as "no constraint".
+    if domains is None:
+        domains = []
     if not isinstance(domains, list):
         raise PolicyInputError(
             f"--policy: `allowed_domains` in {policy_path} is "
-            f"{type(domains).__name__}, expected a list")
+            f"{type(domains).__name__}, expected a list (or empty for "
+            f"no constraint)")
     return [d for d in domains if isinstance(d, str)]
 
 

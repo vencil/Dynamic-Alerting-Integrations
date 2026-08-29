@@ -183,6 +183,33 @@ class TestLoadPolicy:
         domains = load_policy(path)
         assert domains == []
 
+    def test_allowed_domains_with_an_empty_value_is_no_restriction(
+            self, config_dir):
+        """`allowed_domains:`（key 在、值為空）≡ `allowed_domains: []` ≡ 不設限。
+
+        ⛔ 這條釘的是**我在這支 PR 裡造成、又在下一顆 commit 修掉的回歸**。
+        收窄 `load_policy` 時我讓空值走 raise，於是本 repo 自己的
+        `.github/custom-rule-policy.yaml` 只要把域名條目註解掉就 rc=2——而最
+        便宜的轉綠是連 key 一起刪，正好回到 #1556 要消滅的靜默關閉狀態。該檔
+        自己就寫著「空清單 = 不限制（向後相容）」。
+
+        ⛔ 盲審實測：拿掉 `_grar_validate.py` 那兩行 `if domains is None`，
+        464 個測試全綠——一條已經發生過一次的回歸，唯一防線是散文註解。
+        """
+        path = write_yaml(config_dir, "policy.yaml", "allowed_domains:\n")
+        assert load_policy(path) == []
+
+    def test_allowed_domains_of_the_wrong_type_still_raises(self, config_dir):
+        """對照組：放寬「空值」不得把「型別真的錯」一起放過。
+
+        沒有這一格，上面那條會被「`allowed_domains` 一律回 `[]`」滿足——而那
+        正是 #1556 的缺陷形狀本身。
+        """
+        for bad in ("allowed_domains: ''\n", "allowed_domains: {}\n"):
+            path = write_yaml(config_dir, "policy_bad.yaml", bad)
+            with pytest.raises(PolicyInputError):
+                load_policy(path)
+
 
 # ── generate_routes + policy integration ─────────────────────
 

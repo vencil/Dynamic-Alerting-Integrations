@@ -2077,7 +2077,12 @@ docker run --rm \
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--policy <FILE>` | **Path** to a policy YAML holding an `allowed_domains:` list (omit for no constraint). ⚠️ A supplied value that is not a file now exits 2 instead of being skipped (#1556) | (unrestricted) |
+| `--policy <FILE>` | **Path** to a policy YAML holding an `allowed_domains:` list (omit for no constraint). ⚠️ A supplied value that cannot be used now exits 2 instead of being skipped — not a file, unreadable, not UTF-8, not valid YAML, or not a mapping at the top level (#1556). ⚠️ The v2.9.0 image still has the old behaviour | (unrestricted) |
+| `--rule-packs <PATH>` | Path to the `rule-packs/` directory for the custom rule lint. ⚠️ A supplied value that cannot be used exits 2; **omitting it removes the `custom_rules` row from the report entirely** (#1556) | (check not run) |
+| `--policy-dsl <FILE>` | Path to a standalone Policy-as-Code DSL file (top-level `policies:` key). ⚠️ A supplied value that cannot be used exits 2 (same five shapes as `--policy`); before the fix its output was byte-identical to passing no flag at all (#1556) | (only `_policies` in `_defaults.yaml`) |
+| `--version-check` | Also run the version consistency check | false |
+| `--json` | Output results as JSON (for CI consumption) | false |
+| `--strict` | Escalate domain-policy (ADR-007) violations from WARN to FAIL (matches CI `generate-routes --strict`) | false |
 
 **Checks Performed**
 
@@ -2290,9 +2295,9 @@ docker run --rm \
 
 | Code | Description |
 |------|-------------|
-| `0` | All pass |
-| `1` | Violations found (warning level) |
-| `2` | Violations found (error level; --strict mode) |
+| `0` | No ERROR-level violations. ⚠️ **Without `--ci`, ERROR-level violations still exit `0`**; WARN level never affects the exit code |
+| `1` | ERROR-level violations found, in `--ci` mode |
+| `2` | Caller error: `--policy` was supplied but is unusable (not a file / unreadable / not valid YAML / top level not a mapping). ⛔ Do not go green by dropping `--policy` — that silently lints against the built-in policy instead |
 
 ---
 

@@ -260,17 +260,25 @@ Validate: `da-tools generate-routes --config-dir conf.d/ --validate` (covers `_r
 
 ### Setting Up Webhook Domain Allowlist
 
-Restrict webhook receiver target domains:
+Restrict webhook receiver target domains. `--policy` takes **a path to a policy YAML**, not a domain:
+
+```yaml
+# policy.yaml
+allowed_domains:
+  - "*.example.com"
+  - "hooks.slack.com"
+```
 
 ```bash
 python3 scripts/tools/ops/generate_alertmanager_routes.py \
   --config-dir conf.d/ \
-  --policy "*.example.com" \
-  --policy "hooks.slack.com" \
+  --policy policy.yaml \
   --validate
 ```
 
-fnmatch patterns support wildcards. ⚠️ Empty list means no restriction — **production environments should always configure an allowlist** to prevent tenants from routing alerts to unauthorized external endpoints.
+Entries under `allowed_domains` are fnmatch patterns and support wildcards. ⚠️ An empty list (or omitting `--policy`) means no restriction — **production environments should always configure an allowlist** to prevent tenants from routing alerts to unauthorized external endpoints.
+
+⛔ **The command in this section was wrong before v2.9.0**: it passed domains as the value of `--policy`, which takes a path. The old form is read as "that file does not exist", and before #1556 the tool exited **0** on that silently — the allowlist never ran, while the output still said `OK: all configs valid`. Since the fix, the same form exits **2**. ⛔ Do not go green by dropping `--policy`; that switches the check off.
 
 ## Validation Tools
 
@@ -400,7 +408,7 @@ This project's `deployment-grafana.yaml` uses `admin:admin` as initial password,
 
 ### Webhook Domain Allowlist
 
-An empty `--policy` list in `generate_alertmanager_routes.py` means no restriction. **Production environments should always configure an allowlist** to prevent tenants from routing alert notifications to unauthorized external endpoints.
+An empty `allowed_domains:` list in the policy YAML that `generate_alertmanager_routes.py --policy <policy.yaml>` points at (or omitting `--policy`) means no restriction. **Production environments should always configure an allowlist** to prevent tenants from routing alert notifications to unauthorized external endpoints.
 
 ### Port-forward Security
 
@@ -631,7 +639,7 @@ A: Create a new YAML file in `rule-packs/` directory and mount the corresponding
 A: Set `_routing_enforced` in `_defaults.yaml`. Notifications go to the NOC channel and each tenant's receiver independently.
 
 **Q: Why does the webhook allowlist reject my domain?**
-A: Check if your webhook URL matches the fnmatch pattern using `--policy`. For example, `*.example.com` won't match `webhook.internal.example.com` (multi-level subdomain).
+A: Check whether your webhook URL matches an fnmatch pattern under `allowed_domains:` in the policy YAML that `--policy` points at. For example, `*.example.com` won't match `webhook.internal.example.com` (multi-level subdomain).
 
 **Q: How do I validate that a new tenant's config won't cause alert noise?**
 A: First use `validate_config.py` to check syntax and schema, then `config_diff.py` to see blast radius, finally test in a shadow monitoring environment (see shadow-monitoring-sop.md).

@@ -475,14 +475,39 @@ class TestPolicyDSL:
             result = vc.check_policy_dsl(d)
             assert result["status"] == vc.PASS
 
-    def test_with_standalone_dsl_file(self):
-        """Standalone policy DSL file should be loaded."""
+    def test_missing_standalone_dsl_file_is_caller_error(self):
+        """A --policy-dsl path that is not a file is a caller error.
+
+        ⛔ Renamed from `test_with_standalone_dsl_file`, whose NAME said the
+        file "should be loaded" while its BODY asserted PASS for a file that
+        does not exist, under the comment "The policy DSL file might not
+        exist" (#1556). Measured before this changed: `--policy-dsl <typo>`
+        produced output BYTE-IDENTICAL to passing no flag at all, at exit 0 —
+        the operator asked for a Policy-as-Code file and the whole check left
+        the run silently, reported as `[PASS] policy_dsl`.
+        """
         with tempfile.TemporaryDirectory() as d:
             with open(os.path.join(d, "_defaults.yaml"), "w") as f:
                 yaml.dump({"defaults": {"mysql_connections": 80}}, f)
-            # The policy DSL file might not exist
             result = vc.check_policy_dsl(d, "/nonexistent/policy.yaml")
-            assert result["status"] == vc.PASS
+            assert result["status"] == vc.FAIL
+            assert result["caller_error"] is True
+
+    def test_standalone_dsl_file_that_exists_is_loaded(self):
+        """The case the old NAME claimed to cover, which nothing covered."""
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "_defaults.yaml"), "w") as f:
+                yaml.dump({"defaults": {"mysql_connections": 80}}, f)
+            dsl = os.path.join(d, "policies.yaml")
+            with open(dsl, "w", encoding="utf-8") as f:
+                yaml.dump({"policies": [
+                    {"name": "p1",
+                     "rule": "thresholds.mysql_connections.warning < 1",
+                     "severity": "error"}]}, f)
+            result = vc.check_policy_dsl(d, dsl)
+            assert result["details"], (
+                "a real DSL file produced no detail lines at all, so nothing "
+                "here shows the file was actually read")
 
 
 class TestProfilesExtended:

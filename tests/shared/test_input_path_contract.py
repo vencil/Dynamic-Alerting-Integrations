@@ -9,35 +9,45 @@ to customers —
     omitting a flag  and  supplying a value the tool cannot use
     were collapsed into the same branch, so the second silently became the first.
 
-Measured before the fix (each with a working control):
+Measured on ``origin/main`` before the fix, each with a working control
+(rc column is what the operator got; every one of them also printed a report
+that said the run was fine):
 
-===================================  ===========  =========================
-invocation                            rc (before)  what the operator saw
-===================================  ===========  =========================
-validate-config --policy <not-file>   0            ``[PASS] policy — No
-                                                   policy file — skipped``
-validate-config --rule-packs <bad>    0            ``[PASS] custom_rules``
-generate-routes --policy <not-file>   0            routes generated with the
-                                                   SSRF domain check off
-lint --policy <not-file> --ci         0            linted against the
-                                                   built-in policy instead
-===================================  ===========  =========================
+===================================  ===  =========================
+invocation                            rc   what the operator saw
+===================================  ===  =========================
+validate-config --policy <not-file>    0   ``[PASS] policy — No
+                                           policy file — skipped``
+validate-config --rule-packs <bad>     0   ``[PASS] custom_rules``
+generate-routes --policy <not-file>    0   routes written, allowlist off
+lint --policy <not-file> --ci          0   linted, built-in policy used
+validate-config --policy-dsl <bad>     0   output BYTE-IDENTICAL to
+                                           passing no flag at all
+===================================  ===  =========================
 
-The documented example is what makes this ship: ``docs/cli-reference.md:1881``
-tells the operator to run ``--policy "webhook.company.com,slack.com"``. That is
-a domain list, not a path, so every customer who copied it read ``[PASS]``
-while the webhook allowlist never ran.
+What made it ship is that the docs taught it: before this PR,
+``docs/cli-reference.md`` line 1897 read
+``da-tools validate-config --config-dir ./conf.d --policy "webhook.company.com,slack.com"``
+— a comma-separated domain list where the flag takes a path. That line is
+rewritten in this PR, so the citation is to the pre-fix file, not to today's.
 
-⚠️ Scope, stated so nobody reads more into a green run than it earns: this
-gate covers the four (tool, flag) pairs below plus the structural scan in
-``TestNoCollapsedSuppliedVsAbsent``. It does NOT establish that every
-path-shaped argument in the CLI is fail-closed — that would need a classifier
-for "which arguments name an input", and a wrong classifier here is worse than
-none (it would read as a rule while being false for the arguments it missed).
+⚠️ Scope, stated so nobody reads more into a green run than it earns:
+
+  COVERED    the five (tool, flag) pairs in ``_CASES`` and the shapes in
+             ``TestUnusableIsMoreThanMissing`` — i.e. the PATH axis: a value
+             that cannot serve as the file it names.
+  NOT COVERED  the CONTENT axis. Nine inputs still reach an empty allowlist
+             through ``load_policy``, six of which mean "the tool could not
+             tell" (see its docstring). A 0-byte file and one missing ``s`` in
+             ``allowed_domains`` both switch the SSRF check off at exit 0.
+  NOT COVERED  every other path-shaped argument in the CLI. Establishing that
+             would need a classifier for "which arguments name an input", and
+             a wrong classifier reads as a rule while being false for whatever
+             it missed.
 """
 from __future__ import annotations
 
-import ast
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -46,7 +56,6 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 OPS = REPO_ROOT / "scripts" / "tools" / "ops"
-TOOLS = REPO_ROOT / "scripts" / "tools"
 
 EXIT_CALLER_ERROR = 2
 _TIMEOUT = 120
@@ -102,6 +111,15 @@ _CASES = [
      "lint_custom_rules.py",
      lambda c: [str(c), "--ci"],
      ["--policy", _MISSING]),
+    # ⛔ The fifth carrier had NO case here for a whole round. Measured:
+    # rewriting `if not os.path.isfile(policy_dsl_file)` to `if True` — so that
+    # a perfectly good DSL file is rejected as "not a file" — left all 464
+    # tests green. The commit that added the flag's fix claimed in CHANGELOG
+    # that every row carried both controls; this row carried neither.
+    ("validate-config --policy-dsl",
+     "validate_config.py",
+     lambda c: ["--config-dir", str(c)],
+     ["--policy-dsl", _MISSING]),
 ]
 
 
@@ -112,6 +130,7 @@ _EXPECTED_FAIL_ROWS = {
     "validate-config --policy": ("routes", "policy"),
     "validate-config --policy missing-file": ("routes", "policy"),
     "validate-config --rule-packs": ("custom_rules",),
+    "validate-config --policy-dsl": ("policy_dsl",),
 }
 
 
@@ -165,11 +184,11 @@ class TestSuppliedButUnusableIsCallerError:
             self, case_id, script, base, bad, conf_d):
         """Exit code alone cannot say WHICH check caught it.
 
-        ⛔ Measured: reverting `check_policy` to its #1556 behaviour left this
-        module 24/24 green, because `check_routes` loads the same policy and
-        was still failing — one aggregate rc, two independent producers, so
-        each producer's assertion was individually vacuous. This asserts the
-        row by name.
+        ⛔ Measured: reverting `check_policy` to its #1556 behaviour left
+        every test in this module green, because `check_routes` loads the
+        same policy and was still failing — one aggregate rc, two independent
+        producers, so each producer's assertion was individually vacuous.
+        (No test count here: it moved three times while this PR was open.)
         """
         expected_rows = _EXPECTED_FAIL_ROWS.get(case_id)
         if expected_rows is None:
@@ -242,6 +261,53 @@ class TestUnusableIsMoreThanMissing:
             f"{script} rejects a valid policy file, so the checks above prove "
             f"nothing.\nstderr: {r.stderr.decode('utf-8', 'replace')[:400]}")
 
+    # -- the same four shapes for the fifth carrier ------------------------
+    # ⛔ `--policy-dsl` shipped with only "not a file" closed, which is the
+    # 1-of-5 that external review had already caught on `--policy` one round
+    # earlier. Measured before this landed: `--policy-dsl <malformed>` and
+    # `<non-UTF-8>` both exited 1 with the row reading "could not read the
+    # config … If no file is named above, the fault is in one of the paths you
+    # passed" — while naming the file three lines above, and attributing an
+    # argv mistake to the customer's tree.
+
+    @pytest.fixture(scope="class")
+    def dsl_files(self, tmp_path_factory):
+        d = tmp_path_factory.mktemp("dsl")
+        (d / "malformed.yaml").write_text("policies:\n  - name: [\n",
+                                          encoding="utf-8")
+        (d / "nonutf8.yaml").write_bytes(
+            bytes([0xFF, 0xFE, 0x00]) + b"policies" + bytes([0x0A]))
+        (d / "sequence.yaml").write_text("- not-a-mapping\n", encoding="utf-8")
+        (d / "good.yaml").write_text("policies: []\n", encoding="utf-8")
+        return {p.stem: p for p in d.iterdir()}
+
+    @pytest.mark.parametrize("kind", ["malformed", "nonutf8", "sequence"])
+    def test_unusable_policy_dsl_is_caller_error(self, kind, dsl_files, conf_d):
+        r = _run("validate_config.py",
+                 ["--config-dir", str(conf_d), "--policy-dsl",
+                  str(dsl_files[kind])])
+        out = r.stdout.decode("utf-8", "replace")
+        assert r.returncode == EXIT_CALLER_ERROR, (
+            f"--policy-dsl with a {kind} file exited {r.returncode}. "
+            f"'not a file' is one of five shapes of unusable, not the class.\n"
+            f"stdout: {out[:500]}")
+        assert b"Traceback" not in r.stderr
+        assert "[FAIL] policy_dsl" in out, (
+            f"the failing row is not policy_dsl — an argv mistake was "
+            f"attributed elsewhere.\nstdout: {out[:500]}")
+
+    def test_control_a_well_formed_policy_dsl_still_runs(
+            self, dsl_files, conf_d):
+        """Without this, the assertion above is satisfied by a --policy-dsl
+        that rejects every value it is handed — measured: rewriting the
+        is_file() guard to `if True` left the whole suite green."""
+        r = _run("validate_config.py",
+                 ["--config-dir", str(conf_d), "--policy-dsl",
+                  str(dsl_files["good"])])
+        assert r.returncode != EXIT_CALLER_ERROR, (
+            f"a valid policy DSL file was rejected, so the checks above prove "
+            f"nothing.\nstdout: {r.stdout.decode('utf-8', 'replace')[:400]}")
+
 
 class TestArgvErrorIsNotDownstreamOfTheConfigTree:
     """An unreadable tenant file must not downgrade an argv error to exit 1.
@@ -286,226 +352,168 @@ class TestArgvErrorIsNotDownstreamOfTheConfigTree:
             f"mistake to the customer's config tree.")
 
 
+
+
 # ---------------------------------------------------------------------------
-# Structural scan: the defect shape itself, not the four instances above.
+# ⛔ NOT GUARDED: writing a NEW collapse anywhere in scripts/tools/
 # ---------------------------------------------------------------------------
-_FS_PREDICATES = ("is_file", "is_dir", "exists", "isfile", "isdir")
-_BENIGN_RETURNS = {"[]", "{}", "None", "False", "''", '""', "()",
-                   "set()", "list()", "dict()"}
+# An AST scan for `if not X or <fs predicate>: return <benign>` lived here and
+# was WITHDRAWN. What follows is what was measured, not a summary of an
+# argument — a future reader deciding to rebuild it should start from these
+# numbers rather than from the idea.
+#
+# Two-sided mutation battery, same nine mutations against the tree with the
+# scan present and with it removed:
+#
+#     mutation                                       with scan   without
+#     V1 load_policy stops raising on "not a file"   KILLED      KILLED
+#     V2 lint drops `except UnicodeDecodeError`      KILLED      KILLED
+#     V3 check_policy back to PASS-on-skip           KILLED      KILLED
+#     V4 check_custom_rules back to PASS             KILLED      KILLED
+#     V5 --policy-dsl back to the collapsed form     KILLED      KILLED
+#     V6 _argv_error_row stops clearing the flag     KILLED      KILLED
+#     V7 a NEW not/or collapse planted               KILLED      SURVIVED
+#     V8 a NEW attribute-form collapse planted       KILLED      SURVIVED
+#     V9 a second, non-compensating caller planted   KILLED      SURVIVED
+#
+# So removal costs exactly V7/V8/V9 — "somebody writes a new one" — and costs
+# nothing on "#1556 comes back", which the contract tests above pin directly.
+#
+# Why it was not worth those three cells, all measured by blind review:
+#   * Detection: fed 10 behaviourally equivalent spellings of the same defect,
+#     the scan caught 2. It missed `p is None or ...`, `p == '' or ...`, a body
+#     with one extra statement, `return 0`, a nested if, a ternary,
+#     `os.access(p, os.R_OK)`, and `try: open(p) / except OSError: return []`.
+#     Its own docstring criticised "a list of names that would miss the first
+#     one it did not anticipate" while being three such lists.
+#   * A live in-tree instance it reported CLEAN. `_grar_render.load_base_config`
+#     is byte-for-byte the shape the scan hunts —
+#     `if not path or not Path(path).is_file():` — and `--base-config <typo>`
+#     silently substitutes the built-in Alertmanager `global:` for the
+#     operator's, at exit 0, into a ConfigMap meant for `kubectl apply`. The
+#     scan skipped it because the body returns `dict(_DEFAULT_BASE_CONFIG)`, a
+#     Call rather than a benign literal. Re-measured after the withdrawal with
+#     the detector restored from git and a passing control on `_lib_io`: an
+#     11th spelling, and the only one of the eleven that was a real defect
+#     standing in the tree it was scanning. Filed as #1616.
+#   * False reds: the `and`-positive mirror rule — the obvious way to cover the
+#     forms above — was never committed, so its count cannot be re-derived from
+#     this repo. ⛔ An earlier revision of this comment said "6 sites"; blind
+#     review's faithful reconstruction found 10 (11 before de-duplicating by
+#     enclosing function), and 6 is not reachable under any rule either of us
+#     could write. What DID reproduce, on both counts, is the shape of the
+#     result: exactly 1 of them was a real defect, and 2 of the others were the
+#     CORRECT split being flagged.
+#   * Its exemption's premise held for 1 of 3 unusable inputs
+#     (`scaffold --from-onboard` exits 2 on a missing file, but raises an
+#     uncaught traceback at rc=1 on malformed JSON and on non-UTF-8).
+#   * Its anti-vacuity witness punished FIXING the defect it exempted: after a
+#     correct split of `_lib_io.read_onboard_hints`, the assertion went red
+#     with a message forbidding the only correct response.
+#
+# ⚠️ `_lib_io.read_onboard_hints` still collapses the two cases. Its one call
+# site (`scaffold_tenant.run_from_onboard`) turns a falsy return into exit 2,
+# which is why the missing-file path is fine and the malformed/non-UTF-8 paths
+# are not. Nothing here watches either fact.
+#
+# ⛔ Nor the call-site count itself. `test_known_site_still_has_exactly_one_
+# caller` went out with the scan, and it did NOT depend on the scan: it pinned
+# that a second, non-compensating caller cannot appear (V9 above). Re-measured
+# by hand today — still exactly one, `scaffold_tenant.py` inside
+# `run_from_onboard`. That is a snapshot, not a guard; the withdrawal traded
+# this assertion away and the first version of this block failed to say so.
+#
+# ⚠️ And the compensation is itself of the family: `scaffold --from-onboard`
+# on a readable file whose content is `{}` also exits 2 saying "Cannot read
+# onboard hints". A falsy return cannot distinguish "unreadable" from "read
+# fine, empty".
+# ---------------------------------------------------------------------------
 
-# ⛔ Known and deliberately unchanged. `_lib_io.read_onboard_hints` collapses
-# the two cases, but its ONE call site compensates
-# (`scaffold_tenant.run_from_onboard`, which exits 2 on a falsy return — the
-# `# #452` comment there shows that was deliberate). Measured:
-# `scaffold --from-onboard <missing>` already exits 2. It stays on this list
-# rather than being "fixed" because changing a shared helper with a working
-# caller buys nothing and risks its round-trip tests; the call-site count is
-# asserted below so a SECOND caller cannot inherit the collapse silently.
-_KNOWN_COLLAPSED = {("scripts/tools/_lib_io.py", "read_onboard_hints")}
 
+def _fail_row_actions(stdout: str) -> dict[str, str]:
+    """Map each `[FAIL] <row>` to the `Suggested action` text under it.
 
-def _enclosing_function(tree: ast.AST, lineno: int) -> str:
-    best = None
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            end = getattr(node, "end_lineno", node.lineno)
-            if node.lineno <= lineno <= end:
-                if best is None or node.lineno > best[0]:
-                    best = (node.lineno, node.name)
-    return best[1] if best else "<module>"
-
-
-def _scanned_files() -> list[str]:
-    """The scan surface, exposed so it can be asserted separately.
-
-    ⛔ Measured: with only the `_KNOWN_COLLAPSED` witness, swapping `rglob`
-    for `glob` SURVIVED the whole battery — because the witness happens to sit
-    at the top level of scripts/tools/, so a change that stops visiting
-    ops/, dx/ and lint/ entirely does not move it. An anti-vacuity floor
-    anchored on something that cannot move measures the wrong thing.
+    ⛔ Per row, not joined. The first cut of the test below searched the whole
+    report for the flag name and SURVIVED the mutation it existed to catch:
+    `validate-config --policy` fails TWO rows, so `check_routes` keeping its
+    hint satisfied the assertion while `check_policy` lost hers. That is the
+    same aggregate-vacuity CodeRabbit found in the exit-code assertion one
+    round earlier, rebuilt by hand in the fix for it.
     """
-    return [p.relative_to(REPO_ROOT).as_posix() for p in TOOLS.rglob("*.py")]
+    actions: dict[str, str] = {}
+    current: str | None = None
+    for line in stdout.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("[FAIL] "):
+            current = stripped[len("[FAIL] "):].strip()
+        elif stripped.startswith("[") and "]" in stripped:
+            current = None          # any other row closes the previous one
+        elif current and "Suggested action" in stripped:
+            actions[current] = stripped
+    return actions
 
 
-def _collapsed_sites(files: list[str] | None = None) -> set[tuple[str, str]]:
-    """Every `if not X or <filesystem predicate>: return <benign>`.
+@pytest.mark.parametrize("argv,marker,rows", [
+    (["--policy", _MISSING], "--policy", ("policy", "routes")),
+    (["--rule-packs", _MISSING], "--rule-packs", ("custom_rules",)),
+    (["--policy-dsl", _MISSING], "--policy-dsl", ("policy_dsl",)),
+], ids=["policy", "rule-packs", "policy-dsl"])
+def test_each_argv_error_row_carries_its_own_remediation(
+        argv, marker, rows, conf_d):
+    """EVERY failing row must name the flag the operator actually got wrong.
 
-    Derived from the STRUCTURE of the defect (two distinct outcomes OR-ed into
-    one branch), not from a list of path-ish argument names — a name list would
-    have to grow every time somebody adds a flag, and would miss the first one
-    it did not anticipate.
-
-    ``files`` is injectable so the detector can be pointed at planted defects.
-    ⛔ Without that, "the repo is clean" is the only assertion available, and it
-    is satisfied by a detector that has stopped detecting: measured, narrowing
-    the operand match back to bare `ast.Name` left all 44 tests green.
+    ⛔ Blind review measured that two of these three fixes had NO test at all:
+    deleting `hint=_RULE_PACKS_INPUT_HINT` and deleting
+    `hint=_POLICY_DSL_INPUT_HINT` both left the suite green, while the commit
+    message claimed every fix carried a reverting mutation. Without a hint the
+    row inherits the generic per-check advice, which sends the operator to read
+    tenant YAML for a mistake that is entirely in their own argv — measured for
+    --rule-packs: "Validate rule pack YAML syntax … run rule-pack-split
+    --check", about a tree the tool never opened.
     """
-    found: set[tuple[str, str]] = set()
-    for rel in (files if files is not None else _scanned_files()):
-        path = Path(rel) if Path(rel).is_absolute() else REPO_ROOT / rel
-        try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-        except (OSError, SyntaxError):
-            continue
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.If) or not isinstance(node.test, ast.BoolOp):
-                continue
-            if not isinstance(node.test.op, ast.Or):
-                continue
-            operands = node.test.values
-            # ⛔ Name AND Attribute. Restricting to bare names made the
-            # detector blind to `if not args.policy or not
-            # os.path.isfile(args.policy)` — which is how this defect is
-            # actually written, because argparse hands values back as
-            # attributes on a Namespace. The scan reported clean for the
-            # single most likely shape of the thing it exists to find.
-            absent = any(
-                isinstance(v, ast.UnaryOp) and isinstance(v.op, ast.Not)
-                and isinstance(v.operand, (ast.Name, ast.Attribute))
-                for v in operands)
-            unusable = any(
-                any(p in ast.unparse(v) for p in _FS_PREDICATES) for v in operands)
-            if not (absent and unusable) or len(node.body) != 1:
-                continue
-            stmt = node.body[0]
-            if not isinstance(stmt, ast.Return):
-                continue
-            value = ast.unparse(stmt.value) if stmt.value is not None else "None"
-            if value.strip() not in _BENIGN_RETURNS:
-                continue
-            try:
-                rel = path.relative_to(REPO_ROOT).as_posix()
-            except ValueError:
-                rel = path.as_posix()   # planted file outside the repo
-            found.add((rel, _enclosing_function(tree, node.lineno)))
-    return found
+    r = _run("validate_config.py", ["--config-dir", str(conf_d), *argv])
+    out = r.stdout.decode("utf-8", "replace")
+    assert r.returncode == EXIT_CALLER_ERROR, out[:400]
+    actions = _fail_row_actions(out)
+    for row in rows:
+        assert row in actions, (
+            f"{marker}: row [FAIL] {row} carried no suggested action at all "
+            f"(rows seen: {sorted(actions)})")
+        # ⛔ Whole token, not substring. `marker in actions[row]` was the first
+        # cut and it is satisfied by the WRONG flag: `"--policy"` is a
+        # substring of `"--policy-dsl"`, so swapping the policy row's hint for
+        # the policy-dsl one left this green — measured, with the control
+        # (swapping in the --rule-packs hint, which shares no prefix) going red
+        # as it should. The failure mode this test exists to catch is exactly
+        # "the hint names a neighbouring artefact", and the neighbour whose
+        # name starts with this one's is the likeliest neighbour of all.
+        assert re.search(rf"(?<![\w-]){re.escape(marker)}(?![\w-])",
+                         actions[row]), (
+            f"{marker}: the remediation on row [FAIL] {row} never names the "
+            f"flag as a whole token — it reads {actions[row][:200]!r}. A hint "
+            f"that points at the wrong artefact is worse than none: it sends "
+            f"the operator to edit files that are not the problem.")
 
 
-class TestTheDetectorDetects:
-    """Planted defects, in both the shapes this collapse is written in.
+def test_every_measured_carrier_has_a_case():
+    """The parametrize list is the quantifier; an empty one passes silently.
 
-    ⛔ `assert scan() == known` says nothing about whether the scanner still
-    works. Measured: narrowing the operand match back to bare `ast.Name` — the
-    exact regression this guards — left every other test in this file green.
+    ⛔ Count CARRIERS, not rows. The first version asserted ``len(_CASES) >= 5``
+    while `_CASES` held five rows covering only FOUR (tool, flag) pairs —
+    `validate-config --policy` appeared twice — and the fifth carrier #1556
+    actually shipped a fix for, `--policy-dsl`, had no case at all. A count
+    that can be satisfied by duplicating an existing row is not a quantifier
+    over the thing being claimed.
     """
-
-    _NAME_FORM = (
-        "def load(policy):\n"
-        "    if not policy or not Path(policy).is_file():\n"
-        "        return []\n"
-        "    return [1]\n")
-    # How argparse values are actually spelled at the call site.
-    _ATTRIBUTE_FORM = (
-        "def load(args):\n"
-        "    if not args.policy or not os.path.isfile(args.policy):\n"
-        "        return []\n"
-        "    return [1]\n")
-    _INNOCENT = (
-        "def load(args):\n"
-        "    if not args.policy:\n"
-        "        return []\n"
-        "    if not os.path.isfile(args.policy):\n"
-        "        raise ValueError('unusable')\n"
-        "    return [1]\n")
-
-    @pytest.mark.parametrize("src,name", [(_NAME_FORM, "bare name"),
-                                          (_ATTRIBUTE_FORM, "attribute")])
-    def test_a_planted_collapse_is_found(self, tmp_path, src, name):
-        f = tmp_path / "planted.py"
-        f.write_text(src, encoding="utf-8")
-        found = _collapsed_sites([str(f)])
-        assert {fn for _f, fn in found} == {"load"}, (
-            f"the {name} form of the collapse was not detected. This is the "
-            f"shape the scan exists to find; a scan that cannot see it reports "
-            f"the repo clean for the same reason an unplugged detector does.")
-
-    def test_the_split_form_is_not_reported(self, tmp_path):
-        """The correct code must not be flagged, or the scan gets narrowed."""
-        f = tmp_path / "innocent.py"
-        f.write_text(self._INNOCENT, encoding="utf-8")
-        assert _collapsed_sites([str(f)]) == set(), (
-            "code that separates 'absent' from 'unusable' — exactly what this "
-            "PR changed four call sites to do — was reported as a defect.")
-
-
-class TestNoCollapsedSuppliedVsAbsent:
-
-    def test_scan_surface_covers_the_tool_subdirectories(self):
-        """The scan must actually visit ops/, dx/ and lint/, not just the root."""
-        scanned = _scanned_files()
-        for sub in ("scripts/tools/ops/", "scripts/tools/dx/",
-                    "scripts/tools/lint/"):
-            assert any(f.startswith(sub) for f in scanned), (
-                f"the structural scan visits no file under {sub}. Every tool "
-                "that could grow this defect lives in those directories; a "
-                "surface that only covers the shared-lib root reports clean "
-                "for the same reason an unplugged detector does.")
-        assert len(scanned) >= 100, (
-            f"scan surface collapsed to {len(scanned)} files.")
-
-    def test_scan_finds_the_known_site(self):
-        """Anti-vacuity: the scanner must still be able to see anything.
-
-        ⛔ A bare `assert scan() == set()` would be satisfied by a scanner that
-        stopped matching — which is how this class survived in the first place.
-        The known site is the witness that the detector is alive.
-        """
-        assert _KNOWN_COLLAPSED <= _collapsed_sites(), (
-            "the structural scan no longer finds the site it is known to "
-            "find, so it is not detecting anything. Fix the scanner, do not "
-            "shrink _KNOWN_COLLAPSED.")
-
-    def test_no_new_collapsed_sites(self):
-        new = _collapsed_sites() - _KNOWN_COLLAPSED
-        assert not new, (
-            f"new supplied-vs-absent collapse: {sorted(new)}\n"
-            "⛔ `if not x or not <path check>: return <empty>` makes 'you gave "
-            "me an unusable value' indistinguishable from 'you gave me "
-            "nothing'. Split the branch: absent is a skip, unusable is "
-            "EXIT_CALLER_ERROR (dev-rules #13).\n"
-            "⛔ Do not add the new site to _KNOWN_COLLAPSED to clear this — "
-            "that list exists for one site whose single caller compensates, "
-            "and that compensation is asserted separately.")
-
-    def test_known_site_still_has_exactly_one_caller(self):
-        """The exemption's premise, as an assertion rather than a sentence.
-
-        ⛔ `_lib_io.read_onboard_hints` is tolerated only because its one
-        caller turns the falsy return into exit 2. A second caller would
-        inherit the collapse with nothing checking it, so the premise is
-        pinned here — see feedback: an exemption's reachability argument has
-        to be executable, because prose has no reader.
-        """
-        callers = []
-        for path in sorted(TOOLS.rglob("*.py")):
-            if path.name == "_lib_io.py":
-                continue
-            try:
-                tree = ast.parse(path.read_text(encoding="utf-8"))
-            except (OSError, SyntaxError):
-                continue
-            for node in ast.walk(tree):
-                # Same blind spot on the exemption's own premise: a second
-                # caller written `_lib_io.read_onboard_hints(...)` would not be
-                # counted, so this assertion would keep passing after the
-                # premise it guards stopped being true.
-                if isinstance(node, ast.Call) and (
-                        (isinstance(node.func, ast.Name)
-                         and node.func.id == "read_onboard_hints")
-                        or (isinstance(node.func, ast.Attribute)
-                            and node.func.attr == "read_onboard_hints")):
-                    callers.append(
-                        f"{path.relative_to(REPO_ROOT).as_posix()}:{node.lineno}")
-        assert len(callers) == 1, (
-            f"read_onboard_hints now has {len(callers)} call sites "
-            f"({callers}). The exemption in _KNOWN_COLLAPSED rests on the "
-            "single caller checking the falsy return itself; a second caller "
-            "must either do the same or the helper must stop collapsing.")
-
-
-def test_case_list_is_not_empty():
-    """The parametrize list is the quantifier; an empty one passes silently."""
-    assert len(_CASES) >= 5, (
-        "the contract case list shrank below the set #1556 measured; "
-        "removing a case removes the only thing asserting that flag's value "
-        "is honoured.")
+    carriers = {(script, tuple(bad[:1])) for _, script, _, bad in _CASES}
+    measured = {
+        ("validate_config.py", ("--policy",)),
+        ("validate_config.py", ("--rule-packs",)),
+        ("validate_config.py", ("--policy-dsl",)),
+        ("generate_alertmanager_routes.py", ("--policy",)),
+        ("lint_custom_rules.py", ("--policy",)),
+    }
+    assert measured <= carriers, (
+        f"a (tool, flag) carrier #1556 measured and fixed has no case here: "
+        f"{sorted(measured - carriers)}. Removing a carrier removes the only "
+        f"thing asserting that flag's value is honoured.")

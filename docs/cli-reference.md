@@ -1876,7 +1876,12 @@ da-tools validate-config --config-dir <path> [options]
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--policy <FILE>` | 策略 YAML 的**路徑**，內含 `allowed_domains:` 清單（省略＝不限制）。⚠️ 供了但不是檔案 → exit 2，不再靜默略過（#1556） | （不限制） |
+| `--policy <FILE>` | 策略 YAML 的**路徑**，內含 `allowed_domains:` 清單（省略＝不限制）。⚠️ 供了但用不了 → exit 2（不是檔案、讀不到、非 UTF-8、不是合法 YAML、頂層不是 mapping），不再靜默略過（#1556）。⚠️ v2.9.0 映像仍是舊行為 | （不限制） |
+| `--rule-packs <PATH>` | `rule-packs/` 目錄的路徑，供自訂規則 lint 使用。⚠️ 供了但用不了 → exit 2；**省略時整個 `custom_rules` 檢查列不會出現**（#1556） | （不跑此檢查） |
+| `--policy-dsl <FILE>` | 獨立 Policy-as-Code DSL 檔的路徑（頂層 `policies:` key）。⚠️ 供了但用不了 → exit 2（五種形狀同 `--policy`）；修前的輸出與**完全不給旗標逐字相同**（#1556） | （只讀 `_defaults.yaml` 的 `_policies`） |
+| `--version-check` | 一併跑版號一致性檢查 | false |
+| `--json` | 以 JSON 輸出結果（供 CI 消費） | false |
+| `--strict` | 把 domain-policy（ADR-007）違規從 WARN 升為 FAIL（對齊 CI 的 `generate-routes --strict`） | false |
 
 **檢查項目**
 
@@ -2048,9 +2053,9 @@ da-tools lint ./rule-packs --strict
 
 | 代碼 | 說明 |
 |------|------|
-| `0` | 全部通過 |
-| `1` | 發現違規（警告級） |
-| `2` | 發現違規（錯誤級；--strict 模式） |
+| `0` | 沒有 ERROR 級違規。⚠️ **未加 `--ci` 時，即使有 ERROR 級違規也是 `0`**；WARN 級從不影響結束碼 |
+| `1` | `--ci` 模式下發現 ERROR 級違規 |
+| `2` | 呼叫端錯誤：`--policy` 供了但不可用（不是檔案／讀不到／不是合法 YAML／頂層不是 mapping）。⛔ 不要靠拿掉 `--policy` 轉綠——那等於改用內建政策 lint |
 
 ---
 
