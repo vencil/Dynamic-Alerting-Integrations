@@ -1844,3 +1844,38 @@ def test_head1_carrier_lookup_keeps_the_yaml_only_spelling(
     assert mod._carrier_at_head1("db-a") is None, (
         "`db-a` resolved to a carrier whose stem is `DB-A`; the stem "
         "comparison must be exact, not case-folded")
+
+
+def test_head1_carrier_lookup_survives_a_non_ascii_name(
+        tmp_path: pathlib.Path, monkeypatch) -> None:
+    """⛔ git QUOTES a path holding a non-ASCII byte, by default.
+
+    `core.quotepath` defaults to true, so `git ls-tree --name-only` emits
+    `"conf.d/\\304\\260STANBUL.YAML"` — quotes and octal escapes included —
+    and splitting that on newlines yields a name whose trailing `"` makes
+    the extension test answer False. Measured: the lookup returned None
+    for a carrier that was right there, so the removal was dropped in
+    silence. That is the same failure the lookup was added to stop,
+    arriving on a new axis (quoting rather than casing).
+
+    ⚠️ Not a hypothetical alphabet — the shared classification matrix
+    carries an `İ.yaml` row because this repo has been bitten by that
+    character before (`str.lower()` shrinks its byte length).
+    """
+    mod = _import_tool("ops", "backtest_threshold")
+    carrier = "İSTANBUL.YAML"
+    repo = _git_conf_d_repo(tmp_path / "nonascii", carrier,
+                            _BEFORE, _AFTER_REMOVED)
+    monkeypatch.chdir(repo)
+    raw = subprocess.run(["git", "ls-tree", "--name-only", "HEAD~1",
+                          "./conf.d/"], capture_output=True, timeout=60,
+                         cwd=str(repo)).stdout.decode("utf-8", "replace")
+    assert '\\304\\260' in raw, (
+        f"fixture is vacuous — this git did not quote the non-ASCII path, "
+        f"so the comparison below proves nothing: {raw!r}")
+    assert mod._carrier_at_head1("İSTANBUL") == f"./conf.d/{carrier}", (
+        f"the carrier git is holding was not found; got "
+        f"{mod._carrier_at_head1('İSTANBUL')!r}")
+    assert mod._flat_keys_at_head1("İSTANBUL") == {"cpu_usage", "mem_usage"}, (
+        f"the removal classifier saw no keys at HEAD~1, so a real removal "
+        f"would be dropped: {sorted(mod._flat_keys_at_head1('İSTANBUL'))}")
