@@ -6,17 +6,17 @@ version: v2.9.0
 lang: zh
 id: ADR-033
 tracking_kind: adr
-status: proposed
+status: accepted
 domain: integration
 created_at: 2026-08-22
-updated_at: 2026-08-22
+updated_at: 2026-08-29
 ---
 
 # ADR-033: 與運維執行平面的協同介面 — MariaDB 計畫性作業
 
 ## 狀態
 
-🟡 **Proposed**（2026-08-22）。owner 核可後昇格 Accepted。
+✅ **Accepted**（2026-08-22 起草，2026-08-29 由 owner 核可）。
 
 > 依語言政策（自 ADR-019 起預設 ZH-only；ADR-024 / ADR-025 為保留 `.en.md` sibling 的例外），本 ADR 不另製 `.en.md`。
 
