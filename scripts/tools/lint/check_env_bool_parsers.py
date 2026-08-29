@@ -31,7 +31,8 @@ oversight. It matches two single-line shapes:
 It does NOT catch a parser split across lines in a shape neither rule sees,
 nor one written in Python, nor one that spells its literals differently. It
 is a tripwire for the known shape, not proof that no hand-rolled parser
-exists. ADR-034 §"這條規則沒有機械執行機制" states this limit.
+exists. ADR-034 §"機械執行機制：補上了一個窄的 tripwire，不是完整保證" states
+this limit.
 
 `_test.go` files are excluded: test helpers legitimately compare env vars to
 string literals for subprocess re-exec sentinels (see
