@@ -45,7 +45,11 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_OK  # noqa: E402
-from _lib_confd import has_yaml_extension  # noqa: E402  (#1588 shared name predicate)
+from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
+    has_yaml_extension,
+    unusable_config_entries,
+    unusable_reason,
+)
 
 # Conservative allowlist of strings that carry environment semantics when
 # they appear as a directory segment. Keep narrow to avoid false positives
@@ -81,6 +85,10 @@ def find_repo_root() -> Path:
 
 
 def iter_tenant_files(config_dir: Path) -> Iterable[Path]:
+    # #1607: the `is_file()` filter is a THIRD axis and it is silent here.
+    # ⛔ The report for what it drops lives in `main`, NOT in this generator:
+    # one run consumes this twice (once through `scan`, once to count
+    # `files_scanned`), so naming them here would print every finding twice.
     for path in sorted(
         p for p in config_dir.rglob("*")
         if p.is_file() and has_yaml_extension(p.name, (".yaml",))
@@ -251,6 +259,16 @@ def main() -> int:
             file=sys.stderr,
         )
         return EXIT_OK
+
+    # #1607: named once, here, for the reason `iter_tenant_files` states.
+    # A config-named directory or broken symlink is a tenant file this lint
+    # did NOT check, so the "N tenant file(s)" tail below would otherwise
+    # read as coverage it does not have.
+    for bad in unusable_config_entries(
+        sorted(config_dir.rglob("*")), suffixes=(".yaml",)
+    ):
+        print(f"{bad}:0: warning: not checked — {unusable_reason(bad)}",
+              file=sys.stderr)
 
     mismatches = scan(config_dir)
     files_scanned = sum(1 for _ in iter_tenant_files(config_dir))

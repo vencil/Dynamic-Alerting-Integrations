@@ -28,6 +28,8 @@ from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
     has_yaml_extension,
     is_defaults_name,
     defaults_files_in,
+    unusable_config_entries,
+    unusable_reason,
 )
 
 from . import shape as _shape
@@ -52,13 +54,28 @@ def _load_yaml(path: Path) -> dict:
     return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
 
 
+def _file_record(origin: str, reason: str) -> dict:
+    """The `file_errors` record shape, in ONE place.
+
+    ⛔ Two callers now build these — the malformed-YAML quarantine below and
+    the unusable-entry report in `collect_instances` (#1607). A second hand
+    written literal is how a consumer ends up switching on a key one of them
+    forgot, which is the #1339 shape reproduced inside its own fix.
+
+    ⚠️ NOT `_skip_record`, which this was first called: that name is already
+    taken further down for one quarantined RECIPE (tenant + instance), a
+    different shape. Python took the later definition and every `_file_skip`
+    call started raising `TypeError` — caught immediately, but the near miss
+    is why the two record builders are named for what they record."""
+    return {"tenant": None, "origin": origin, "name": None, "reason": reason}
+
+
 def _file_skip(origin: str, exc: Exception) -> dict:
     """Skip record for a conf.d FILE that could not be loaded (malformed YAML / control
     chars / bad encoding). Quarantined fail-soft (#1008 Part B): the YAML load happens
     OUTSIDE the per-recipe try, so without this one bad file (incl. a schema-check-skipped
     meta file) would crash the whole shared compile → block every tenant's PR."""
-    return {"tenant": None, "origin": origin, "name": None,
-            "reason": f"{type(exc).__name__}: {exc}"}
+    return _file_record(origin, f"{type(exc).__name__}: {exc}")
 
 
 def _dir_defaults_alerts(config_dir: Path, file_errors: List[dict]) -> Dict[Path, List[dict]]:
@@ -131,11 +148,36 @@ def collect_instances(config_dir: Path) -> Tuple[List[Tuple[str, dict, str, bool
     # this function's whole contract is that an unreadable file lands in
     # `file_errors` rather than vanishing (#1008 Part B). Measured on a tree
     # with a directory named `beta.yaml/` and a broken symlink `broken.yaml`,
-    # `file_errors` went from two named records to EMPTY — those entries no
-    # longer reach the `except` below because `is_file()` filters them first.
-    # ⛔ Silent, on the shipped tenant self-service path. See issue #1607.
-    for path in sorted(
-        p for p in config_dir.rglob("*")
+    # `file_errors` went from four named records to EMPTY once `is_file()`
+    # filtered them out before the `except` below could see them (#1607).
+    #
+    # ⛔ Reported through `unusable_reason`, NOT by dropping the filter and
+    # letting `_load_yaml` raise. Both put a record in `file_errors`, but the
+    # errno phrasing ("IsADirectoryError: [Errno 21] ...") is this reader's
+    # own invention of an answer every other reader words differently — the
+    # divergence `unusable_reason` exists to end. `entries` is listed ONCE so
+    # the two passes cannot walk two different trees.
+    entries = sorted(config_dir.rglob("*"))
+    for bad in unusable_config_entries(entries, suffixes=(".yaml",)):
+        # ⛔ Defaults carriers belong to `_dir_defaults_alerts`, and this skip
+        # is what keeps the two lists DISJOINT. A broken symlink named
+        # `_defaults.yaml` is in `os.walk`'s `files`, so that function already
+        # quarantines it — without this, one path would produce two
+        # `file_errors` records and the caveat line would say "2" for one
+        # file, the exact double-count `unusable_config_paths` was narrowed
+        # twice to avoid.
+        #
+        # ⚠️ A DIRECTORY named `_defaults.yaml/` is therefore still silent
+        # here: `os.walk` puts it in `dirs`, not `files`, so nobody names it.
+        # That silence predates this change — `_dir_defaults_alerts` read
+        # `if "_defaults.yaml" in files` before #1588 and missed it too — so
+        # it is not what #1607 is about and is not fixed by pretending it is.
+        if is_defaults_name(bad.name):
+            continue
+        file_errors.append(_file_record(
+            str(bad.relative_to(config_dir)), unusable_reason(bad)))
+    for path in (
+        p for p in entries
         if p.is_file() and has_yaml_extension(p.name, (".yaml",))
     ):
         if is_defaults_name(path.name):

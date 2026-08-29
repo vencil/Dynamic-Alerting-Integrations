@@ -831,3 +831,214 @@ def test_gitops_check_local_sees_both_casings(tmp_path: pathlib.Path) -> None:
         "fixture produced no tenant files for gitops_check; the comparison "
         "would be vacuous"
     )
+
+
+# ---------------------------------------------------------------------------
+# #1607 — the THIRD axis: what `is_file()` drops must be NAMED
+# ---------------------------------------------------------------------------
+#
+# ⛔ This axis is neither the extension axis #1588 is about nor the recursion
+# axis it deliberately leaves alone. It appeared because `glob("*.yaml")` is
+# case-sensitive on Linux and had to become `iterdir()` + a shared predicate —
+# and `iterdir()` yields directories, so a filter was needed. The filter is
+# the CORRECTNESS half; these tests are the half that keeps the signal.
+#
+# Measured before the filter existed: `operator_generate` emitted 20 CRDs on
+# the tree below, two of them AlertmanagerConfigs for tenants `notes` and
+# `broken` invented from a directory and a dangling symlink. So CodeRabbit's
+# prescribed fix — "remove the filter and let the existing error handling
+# record them" — is wrong at that site: `discover_tenant_configs` never opens
+# the file, so there IS no error handling for the entry to fall into. The
+# right answer is asymmetric, and these tests pin the half that is shared:
+# every reader must NAME both entries.
+
+_UNUSABLE_NAMES = ("broken.yaml", "notes.yaml")
+
+
+def _unusable_tree(root: pathlib.Path) -> pathlib.Path:
+    """A conf.d with two entries the operator called configuration and that
+    no reader can read: a DIRECTORY named `notes.yaml/` (an interrupted
+    mkdir, a ConfigMap projected as a dir) and a broken symlink."""
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "_defaults.yaml").write_text(
+        "defaults:\n  pg_connections: 80\n", encoding="utf-8")
+    (root / "alpha.yaml").write_text(
+        "tenants:\n  alpha:\n    pg_connections: 90\n", encoding="utf-8")
+    (root / "notes.yaml").mkdir()
+    (root / "broken.yaml").symlink_to(root / "no-such-target.yaml")
+    return root
+
+
+def _argv_for(tool_rel: str, tree: pathlib.Path,
+              out: pathlib.Path) -> list[str]:
+    """Each tool's own way of being pointed at a conf.d."""
+    return {
+        "ops/operator_generate.py": ["--config-dir", str(tree),
+                                     "--output-dir", str(out)],
+        "ops/deprecate_rule.py": ["pg_connections", "--config-dir", str(tree)],
+        "ops/offboard_tenant.py": ["alpha", "--config-dir", str(tree)],
+        "dx/generate_tenant_metadata.py": ["--config-dir", str(tree),
+                                           "--dry-run"],
+        "dx/describe_tenant.py": ["--all", "--conf-d", str(tree)],
+        "lint/check_path_metadata_consistency.py": ["--config-dir",
+                                                    str(tree)],
+    }[tool_rel]
+
+
+@pytest.mark.parametrize("tool_rel", [
+    "ops/operator_generate.py",
+    "ops/deprecate_rule.py",
+    "ops/offboard_tenant.py",
+    "dx/generate_tenant_metadata.py",
+    "dx/describe_tenant.py",
+    "lint/check_path_metadata_consistency.py",
+])
+def test_reader_names_the_entries_it_could_not_read(
+        tool_rel: str, tmp_path: pathlib.Path) -> None:
+    """Every reader that filters on `is_file()` says what it filtered.
+
+    ⚠️ Asserts the NAME appears, not the exact sentence: the wording comes
+    from the shared `unusable_reason`, and pinning it here would make this
+    test a second copy of that function rather than a check on the reader.
+    """
+    tree = _unusable_tree(tmp_path / "conf.d")
+    out = tmp_path / "out"
+    tool = TOOLS_DIR / tool_rel
+    r = subprocess.run(
+        [sys.executable, "-X", "utf8", str(tool), *_argv_for(tool_rel, tree,
+                                                             out)],
+        capture_output=True, timeout=180, cwd=str(tmp_path),
+        env=dict(os.environ, PYTHONIOENCODING="utf-8"))
+    text = (r.stdout.decode("utf-8", "replace")
+            + r.stderr.decode("utf-8", "replace"))
+    missing = [n for n in _UNUSABLE_NAMES if n not in text]
+    assert not missing, (
+        f"{tool_rel} silently dropped {missing} — an entry the operator "
+        f"named like configuration disappeared with nothing said (#1607).\n"
+        f"rc={r.returncode}\n{text[:800]}"
+    )
+
+
+def test_the_unusable_tree_is_not_vacuous(tmp_path: pathlib.Path) -> None:
+    """⛔ The guard on the guard: the fixture must really carry both shapes.
+
+    A `symlink_to` that silently no-ops, or a filesystem that refuses the
+    directory, would make every assertion above pass by describing nothing.
+    """
+    tree = _unusable_tree(tmp_path / "conf.d")
+    assert (tree / "notes.yaml").is_dir(), "fixture lost the directory shape"
+    assert (tree / "broken.yaml").is_symlink(), "fixture lost the symlink"
+    assert not (tree / "broken.yaml").exists(), "the symlink is not broken"
+    assert not (tree / "notes.yaml").is_file()
+    assert not (tree / "broken.yaml").is_file()
+
+
+def test_custom_alerts_loader_quarantines_unusable_entries(
+        tmp_path: pathlib.Path) -> None:
+    """The loader's contract is `file_errors`, not stderr (#1008 Part B).
+
+    ⭐ Measured regression this pins: `file_errors` went from four named
+    records to EMPTY when `is_file()` began filtering the entries out before
+    the `except` could see them — on the SHIPPED tenant self-service path.
+    """
+    from custom_alerts import loader  # noqa: PLC0415
+
+    tree = _unusable_tree(tmp_path / "conf.d")
+    _, file_errors = loader.collect_instances(tree)
+    origins = [rec["origin"] for rec in file_errors]
+    for name in _UNUSABLE_NAMES:
+        assert name in origins, (
+            f"{name} vanished from file_errors instead of being quarantined; "
+            f"got {origins}")
+    dupes = sorted({o for o in origins if origins.count(o) > 1})
+    assert not dupes, (
+        f"{dupes} recorded twice — the unusable-entry pass and the "
+        f"malformed-YAML quarantine overlap, the double-count that "
+        f"`unusable_config_paths` was narrowed twice to avoid")
+
+
+def test_defaults_carrier_is_reported_once_not_twice(
+        tmp_path: pathlib.Path) -> None:
+    """⛔ Disjointness, where it is easiest to get wrong.
+
+    A BROKEN SYMLINK named `_defaults.yaml` is in `os.walk`'s `files`, so
+    `_dir_defaults_alerts` already quarantines it. Without the
+    `is_defaults_name` skip in `collect_instances`, one path would produce
+    two `file_errors` records and the caveat line would say "2" for one file.
+    """
+    from custom_alerts import loader  # noqa: PLC0415
+
+    tree = _unusable_tree(tmp_path / "conf.d")
+    (tree / "_defaults.yaml").unlink()
+    (tree / "_defaults.yaml").symlink_to(tree / "no-such-defaults.yaml")
+    _, file_errors = loader.collect_instances(tree)
+    hits = [r for r in file_errors if r["origin"] == "_defaults.yaml"]
+    assert len(hits) == 1, (
+        f"expected exactly one record for the broken defaults carrier, "
+        f"got {len(hits)}: {hits}")
+
+
+def test_operator_generate_does_not_invent_tenants_from_unusable_entries(
+        tmp_path: pathlib.Path) -> None:
+    """⛔ Why CodeRabbit's prescribed fix is wrong at THIS site.
+
+    `discover_tenant_configs` takes the STEM as a tenant name and never
+    opens the file, so dropping the `is_file()` filter would not "let the
+    existing error handling record them" — there is none. It would emit an
+    AlertmanagerConfig for a tenant named after a directory and one named
+    after a dangling symlink. Measured: 20 CRDs before the filter, 18 after.
+    """
+    tree = _unusable_tree(tmp_path / "conf.d")
+    out = tmp_path / "out"
+    tool = TOOLS_DIR / "ops" / "operator_generate.py"
+    r = subprocess.run(
+        [sys.executable, "-X", "utf8", str(tool), "--config-dir", str(tree),
+         "--output-dir", str(out)],
+        capture_output=True, timeout=180, cwd=str(tmp_path),
+        env=dict(os.environ, PYTHONIOENCODING="utf-8"))
+    assert r.returncode == 0, r.stderr.decode("utf-8", "replace")[:600]
+    produced = sorted(p.name for p in out.rglob("*.yaml"))
+    phantom = [n for n in produced if "notes" in n or "broken" in n]
+    assert not phantom, (
+        f"generated CRDs for tenants invented from unusable entries: "
+        f"{phantom}")
+    assert any("alpha" in n for n in produced), (
+        f"fixture produced no real tenant CRD, so the assertion above is "
+        f"vacuous; got {produced}")
+
+
+def test_each_reader_names_an_unusable_entry_exactly_once(
+        tmp_path: pathlib.Path) -> None:
+    """⛔ Said once per run, not once per scan.
+
+    Every one of these tools walks its conf.d more than once — `deprecate_rule`
+    scans per metric and again to clean tenants, `offboard_tenant` looks for
+    the carrier and then loads everything, `check_path_metadata_consistency`
+    consumes its own generator twice (once to scan, once to count). Measured
+    before this was pinned: `deprecate_rule a b c` printed the same two
+    warnings THREE times. A repeated warning trains the operator to skim past
+    it, which costs the signal the report exists to give.
+    """
+    tree = _unusable_tree(tmp_path / "conf.d")
+    out = tmp_path / "out"
+    # three metrics, so a per-metric reporter would show up as three
+    argv = {"ops/deprecate_rule.py": ["pg_connections", "mysql_connections",
+                                      "redis_memory", "--config-dir",
+                                      str(tree)]}
+    for tool_rel in ("ops/operator_generate.py", "ops/deprecate_rule.py",
+                     "ops/offboard_tenant.py",
+                     "dx/generate_tenant_metadata.py",
+                     "dx/describe_tenant.py",
+                     "lint/check_path_metadata_consistency.py"):
+        r = subprocess.run(
+            [sys.executable, "-X", "utf8", str(TOOLS_DIR / tool_rel),
+             *argv.get(tool_rel, _argv_for(tool_rel, tree, out))],
+            capture_output=True, timeout=180, cwd=str(tmp_path),
+            env=dict(os.environ, PYTHONIOENCODING="utf-8"))
+        text = (r.stdout.decode("utf-8", "replace")
+                + r.stderr.decode("utf-8", "replace"))
+        for name in _UNUSABLE_NAMES:
+            hits = text.count(name)
+            assert hits == 1, (
+                f"{tool_rel} named {name} {hits} time(s); expected exactly "
+                f"once per invocation.\n{text[:800]}")

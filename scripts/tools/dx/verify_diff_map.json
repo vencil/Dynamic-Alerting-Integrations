@@ -761,7 +761,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "b1165af131461ab33488fe4ea56f52cd72988b6ef3b94c6e788fd387aa02796d",
+ "source_digest": "95a80cec898c503e811fe8704177e4ac20735caf94fd08e65012074464b33c47",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -2552,6 +2552,7 @@
    "tests/lint/test_check_threshold_reachability.py"
   ],
   "scripts/tools/ops/operator_generate.py": [
+   "tests/shared/test_confd_case_parity_across_tools.py",
    "tests/shared/test_help_contract.py"
   ],
   "scripts/tools/ops/patch_config.py": [

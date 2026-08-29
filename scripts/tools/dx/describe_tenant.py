@@ -33,6 +33,8 @@ from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
     has_yaml_extension,
     is_defaults_name,
     is_reserved_name,
+    unusable_config_entries,
+    unusable_reason,
 )
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
@@ -182,6 +184,16 @@ class ConfDScanner:
 
     def _scan(self) -> None:
         """Recursively scan conf.d/ and build tenant + defaults maps."""
+        # #1607: the `is_file()` tests in this scanner (here and in
+        # `_yaml_files`) are a THIRD axis and were silent. This tool's whole
+        # job is to answer "what config does the exporter see for this
+        # tenant", so an entry it drops without a word is the same class of
+        # wrong answer as the `.YAML` blindness above. ⛔ Named ONCE here:
+        # `_scan` runs a single time, from `__init__`, whereas `_yaml_files`
+        # is called per lookup.
+        for bad in unusable_config_entries(sorted(self.conf_d.rglob("*"))):
+            print(f"WARNING: skipped {bad} — {unusable_reason(bad)}",
+                  file=sys.stderr)
         # Collect all _defaults.yaml files
         defaults_files: dict[str, dict] = {}
         # #1588: matched by the shared predicate, not by two literal names.

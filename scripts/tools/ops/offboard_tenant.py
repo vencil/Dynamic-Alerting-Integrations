@@ -35,7 +35,13 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_VIOLATION  # noqa: E402
-from _lib_confd import config_stem, has_yaml_extension, warn_nested  # noqa: E402
+from _lib_confd import (  # noqa: E402
+    config_stem,
+    has_yaml_extension,
+    unusable_config_entries,
+    unusable_reason,
+    warn_nested,
+)
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 
 
@@ -62,6 +68,13 @@ def find_config_file(tenant, config_dir):
         entries = sorted(base.iterdir())
     except OSError:
         return None
+    # #1607: `is_file()` here is the THIRD axis, and this is the worst place
+    # for it to be silent — a DIRECTORY named `<tenant>.yaml/` makes this
+    # return None and the pre-check print "❌ 找不到設定檔案", which reads as
+    # "nothing to remove". ⛔ The naming is done ONCE in `load_all_configs`,
+    # which always runs a few lines later in the same pre-check and does not
+    # run twice; this function is called twice per invocation (pre-check and
+    # execute), so reporting here would say everything twice.
     for entry in entries:
         if entry.is_file() and config_stem(entry.name) == tenant:
             return str(entry)
@@ -75,10 +88,17 @@ def load_all_configs(config_dir):
     # #1339: flat by design here — but a hierarchical conf.d must not
     # look like an empty one. Name the files this scan cannot see.
     warn_nested(base, tool="offboard_tenant")
-    yaml_paths = sorted(
-        p for p in base.iterdir()
+    entries = sorted(base.iterdir())
+    # #1607: the single naming point for what `is_file()` drops in this tool
+    # — see `find_config_file`. Same channel as the unreadable-file warning
+    # below, because it is the same fact for the operator: this entry looks
+    # like configuration and was NOT taken into account by the pre-check.
+    for bad in unusable_config_entries(entries):
+        print(f"  ⚠️  略過 {safe_label(bad.name)}: {unusable_reason(bad)}")
+    yaml_paths = [
+        p for p in entries
         if p.is_file() and has_yaml_extension(p.name)
-    )
+    ]
     for entry in yaml_paths:
         filename = entry.name
         if filename.startswith('.'):

@@ -16,6 +16,7 @@ from _lib_confd import (  # noqa: E402
     nested_yaml_files,
     nested_yaml_warning,
     reset_warned_for_test,
+    unusable_config_entries,
     unusable_config_paths,
     unusable_reason,
     warn_nested,
@@ -663,3 +664,95 @@ def test_a_config_named_directory_that_is_also_unscannable_is_listed_once(
     # failure is scoped to `beta.yaml`: the other reader still sees the
     # tree, so a red above is the overlap and not a broken fixture.
     assert [p.name for p in iter_config_files(root)] == ["top.yaml"]
+
+
+# ---------------------------------------------------------------------------
+# unusable_config_entries — the already-listed sibling (#1607)
+# ---------------------------------------------------------------------------
+
+def test_entries_agrees_with_paths_on_the_same_flat_tree(with_unusable):
+    """⛔ The two must not become two answers.
+
+    `unusable_config_paths` LISTS the directory; `unusable_config_entries`
+    takes a listing the caller already made. Same question, so on the same
+    flat tree they must return the same set — otherwise a reader that walks
+    with its own `iterdir()` reports different unusable files than one going
+    through `iter_config_files`, which is the #1339 shape.
+    """
+    listed = {p.name for p in unusable_config_paths(with_unusable,
+                                                    recursive=False)}
+    given = {p.name for p in
+             unusable_config_entries(sorted(with_unusable.iterdir()))}
+    assert listed == given == {"beta.yaml", "gamma.yaml"}
+
+
+def test_entries_honours_the_callers_suffix_set(with_unusable):
+    """A reader that only reads `*.yaml` must not be handed a `.yml` finding.
+
+    It could not have read the file either way, so naming it would put a
+    finding in front of the operator that the tool printing it cannot act
+    on. (That such narrow readers exist at all is #1603.)
+    """
+    (with_unusable / "delta.yml").mkdir()
+    both = {p.name for p in
+            unusable_config_entries(sorted(with_unusable.iterdir()))}
+    narrow = {p.name for p in
+              unusable_config_entries(sorted(with_unusable.iterdir()),
+                                      suffixes=(".yaml",))}
+    assert "delta.yml" in both, "default must mirror iter_config_files"
+    assert "delta.yml" not in narrow
+    assert {"beta.yaml", "gamma.yaml"} <= narrow
+
+
+def test_entries_excludes_readable_and_non_config_names(with_unusable):
+    got = {p.name for p in
+           unusable_config_entries(sorted(with_unusable.iterdir()))}
+    assert "acme.yaml" not in got and "_defaults.yaml" not in got
+    assert "notes.txt" not in got
+
+
+def test_entries_is_case_insensitive_like_every_other_predicate(tmp_path):
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    (root / "UPPER.YAML").mkdir()
+    got = [p.name for p in unusable_config_entries(sorted(root.iterdir()))]
+    assert got == ["UPPER.YAML"], (
+        "a directory named like an UPPERCASE config file is exactly the "
+        "shape #1588 taught this module to see")
+
+
+def test_entries_does_not_list_the_directory_itself(tmp_path, capsys):
+    """⛔ It must make NO filesystem listing of its own.
+
+    `defaults_files_in` takes names for this reason and
+    `test_confd_enumeration_contract` reddens `_lib_confd.py` for a sentinel
+    flat scan. Passing entries from a DIFFERENT directory than the one the
+    paths live in would still work if the function only inspects what it is
+    given — and would silently re-scan if it did not.
+    """
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    (root / "ghost.yaml").mkdir()
+    (root / "real.yaml").write_text("tenants: {}\n", encoding="utf-8")
+    entries = sorted(root.iterdir())
+    for p in root.iterdir():
+        if p.is_dir():
+            p.rmdir()
+    # `ghost.yaml` no longer exists; a function that re-listed would return
+    # nothing, one that inspects the given entries still calls it unusable.
+    got = [p.name for p in unusable_config_entries(entries)]
+    assert got == ["ghost.yaml"]
+
+
+def test_entries_returns_posix_path_order_not_basename_order(tmp_path):
+    """Recursive callers pass paths from several directories."""
+    root = tmp_path / "conf.d"
+    (root / "b").mkdir(parents=True)
+    (root / "a").mkdir(parents=True)
+    (root / "b" / "same.yaml").mkdir()
+    (root / "a" / "same.yaml").mkdir()
+    got = [str(p.relative_to(root)) for p in
+           unusable_config_entries(sorted(root.rglob("*")))]
+    assert got == ["a/same.yaml", "b/same.yaml"], (
+        "sorting by basename would make two same-named entries in different "
+        "directories order arbitrarily")

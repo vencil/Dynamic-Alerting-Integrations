@@ -38,7 +38,12 @@ from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import load_yaml_file  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_yaml import _dict_to_yaml, write_yaml_crd  # noqa: E402
-from _lib_confd import has_yaml_extension, warn_nested  # noqa: E402
+from _lib_confd import (  # noqa: E402
+    has_yaml_extension,
+    unusable_config_entries,
+    unusable_reason,
+    warn_nested,
+)
 
 # ---------------------------------------------------------------------------
 # Constants and Help Text
@@ -511,16 +516,27 @@ def discover_tenant_configs(config_dir: Path) -> List[str]:
     # ⚠️ `is_file()` is a THIRD axis, beyond the extension axis this change
     # is about and the recursion axis it deliberately leaves alone. The old
     # `glob("*.yaml")` yielded a DIRECTORY named `notes.yaml/` (an
-    # interrupted mkdir, a ConfigMap projection) and a broken symlink;
-    # `is_file()` drops both. Measured on such a tree: 20 CRDs before, 19
-    # after — the AlertmanagerConfig for the directory-shaped entry is gone.
+    # interrupted mkdir, a ConfigMap projection) and a broken symlink.
     #
-    # ⛔ The new behaviour is better but it is SILENT, and `_lib_confd`'s
-    # `unusable_config_paths` exists precisely so an unreadable entry is
-    # named rather than skipped. Voicing it here is filed separately rather
-    # than folded into a case-folding change. See issue #1607.
+    # ⛔ This site NEVER OPENS the file — it takes the stem as a tenant name
+    # — so there is no `except` here for an unusable entry to fall into.
+    # Measured (#1607): before the filter, such a tree emitted 20 CRDs, two
+    # of them AlertmanagerConfigs for tenants `notes` and `broken` invented
+    # from a directory and a dangling link; after, 18 and silence. Dropping
+    # the filter would restore the phantom tenants, so the filter STAYS and
+    # the entries it drops are named here instead.
+    entries = sorted(config_dir.iterdir())
+    for bad in unusable_config_entries(entries, suffixes=(".yaml",)):
+        print(
+            i18n_text(
+                f"WARNING: 略過 '{safe_label(bad.name)}'——{unusable_reason(bad)}",
+                f"WARNING: Skipping '{safe_label(bad.name)}' — "
+                f"{unusable_reason(bad)}",
+            ),
+            file=sys.stderr,
+        )
     for yaml_file in (
-        p for p in sorted(config_dir.iterdir())
+        p for p in entries
         if p.is_file() and has_yaml_extension(p.name, (".yaml",))
     ):
         if not yaml_file.name.startswith("_"):

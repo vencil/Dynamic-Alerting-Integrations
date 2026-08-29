@@ -61,6 +61,7 @@ __all__ = [
     "nested_yaml_files",
     "nested_yaml_warning",
     "reset_warned_for_test",
+    "unusable_config_entries",
     "unusable_config_paths",
     "unusable_reason",
     "warn_nested",
@@ -410,6 +411,57 @@ def unusable_reason(p: Path) -> str:
     except OSError as e:  # noqa: BLE001 — surfacing the errno IS the answer
         return f"could not be stat'ed — {e.__class__.__name__}: {e.strerror}"
     return "is not a readable file"
+
+
+def unusable_config_entries(
+    entries: "Iterable[Path]", *, suffixes: "tuple[str, ...]" = CONFIG_SUFFIXES,
+) -> list[Path]:
+    """The config-named entries among ALREADY-LISTED `entries` that a reader
+    named them for cannot read, sorted by POSIX path.
+
+    Sorted by the whole path, not the basename, so a RECURSIVE caller's two
+    `beta.yaml` under different parents keep a stable, distinguishable order
+    — the same promise `unusable_config_paths` makes for the tree it lists.
+
+    Sibling of `unusable_config_paths` for callers that already hold the
+    listing — the readers that walk a conf.d with their own `iterdir()` /
+    `os.walk()` rather than through `iter_config_files`. Same question,
+    same predicate, no second listing.
+
+    ⛔ Takes the entries instead of listing, for the reason `defaults_files_in`
+    does: a helper that lists is a flat scan with nothing said about nested
+    content, and `test_confd_enumeration_contract` reddens `_lib_confd.py`
+    itself for it. The caller has already listed and has already called
+    `warn_nested`; doing either again here would either duplicate the
+    warning or hide a scan from the gate that exists to find them.
+
+    ⛔ `suffixes` mirrors what the CALLER reads, and defaults to both
+    spellings only because that is `iter_config_files`'s answer. A reader
+    that takes `(".yaml",)` must pass it, or this would name a `db-b.yml/`
+    directory the caller was never going to read — a finding the operator
+    cannot act on from that tool. (That the narrow readers exist at all is
+    the separate `.yml` blind spot, #1603; this parameter keeps THIS report
+    honest about the tool printing it rather than quietly widening it.)
+
+    ⚠️ DISJOINT from what the caller then reads, by SHARING
+    `_is_regular_file` rather than by two conditions agreeing — the same
+    reason `unusable_config_paths` gives at length. So an unreadable
+    REGULAR file is deliberately NOT here: it is a file, the caller will
+    `open()` it, and that failure carries the real errno.
+
+    Measured (#1607): `operator_generate` on a tree with a directory
+    `notes.yaml/` and a broken symlink `broken.yaml` emitted 20 CRDs before
+    the `is_file()` filter existed — two of them AlertmanagerConfigs for
+    tenants `notes` and `broken` invented from a directory and a dangling
+    link — 18 after, with nothing said. Neither number is right on its own:
+    the filter is the correctness half, this function is the half that
+    keeps the signal.
+    """
+    return sorted(
+        (p for p in entries
+         if has_yaml_extension(p.name, suffixes) and not _is_regular_file(p)),
+        key=lambda q: q.as_posix(),
+    )
 
 
 def unusable_config_paths(
