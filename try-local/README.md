@@ -8,7 +8,7 @@ cp .env.example .env
 docker compose up -d
 ```
 
-> ℹ️ 首次啟動會從原始碼 **build tenant-api**（~1 分鐘）—— 它依賴的 `--dev-bypass-auth`（讓瀏覽器免 oauth2-proxy 也能登入）尚未發佈成 published image。之後的啟動會重用已 build 的 image；改了 tenant-api 原始碼後用 `docker compose up -d --build` 重建。其餘 3 個 component 用 published image。
+> ℹ️ 首次啟動會從原始碼 **build tenant-api**（~1 分鐘）。⛔ 這裡原本寫的理由「它依賴的 `--dev-bypass-auth`（讓瀏覽器免 oauth2-proxy 也能登入）尚未發佈成 published image」**已經不成立**——該 flag 自 `tenant-api/v2.9.7` 起就在 published image 裡（[#1337](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1337) 更正了 `docker-compose.yaml` 裡的同一句，漏掉這裡）。仍從原始碼 build 的**真正**理由是：換成 published image 會改變這個 demo 實際跑的東西（auth 路徑、架構、首啟時間），刻意不與 pin 一起動。之後的啟動會重用已 build 的 image；改了 tenant-api 原始碼後用 `docker compose up -d --build` 重建。其餘 3 個 component 用 published image。
 
 > ⏱️ **TTV：< 1 分鐘**（核心雙星 ~10 秒起）· 🟢 **摩擦：只需 Docker**（Windows 需 WSL2 + Docker Desktop）。
 

@@ -378,7 +378,7 @@ git push origin "tenant-api/v<VERSION>"
 
 `try-local/.env.example` 用 **per-component tag**（非單一 `IMAGE_TAG`）：`EXPORTER_TAG` / `PORTAL_TAG` / `TOOLS_TAG`，預設指向最新 release。發版後把這三個預設改成新版號（如 `v2.8.0`→`v2.9.0`）。
 
-> ⚠️ **tenant-api 例外**：try-local 的 tenant-api **從原始碼 build**（`docker-compose.yaml` 的 `build:`），**不吃 `TENANT_API_TAG`** —— 因為它依賴的 `--dev-bypass-auth`（#619 / [ADR-022](../adr/022-dev-auth-bypass-four-layer-containment.md)）尚未進任何 published image（v2.8.0 早於它）。**一旦某個 release 的 tenant-api image 內含 dev-bypass**，就把 `docker-compose.yaml` 的 tenant-api 從 `build:` 換回 `image: ghcr.io/vencil/tenant-api:${TENANT_API_TAG:-vX.Y.Z}`，並把 `.env.example` 的 `TENANT_API_TAG` 設為該版（移除 build-from-source 的 ~1min 首啟成本）。
+> ⚠️ **tenant-api 例外**：try-local 的 tenant-api **從原始碼 build**（`docker-compose.yaml` 的 `build:`），**不吃 `TENANT_API_TAG`**。⛔ 這裡原本寫的理由是「它依賴的 `--dev-bypass-auth`（#619 / [ADR-022](../adr/022-dev-auth-bypass-four-layer-containment.md)）尚未進任何 published image」，並要你「**一旦某個 release 的 tenant-api image 內含 dev-bypass**」再切換 —— **那個條件早就滿足了**：該 flag 自 `tenant-api/v2.9.7` 起就在 published image 裡，[#1337](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1337) 已更正 `docker-compose.yaml` 裡的同一句，漏掉本處。⇒ 切換**現在就做得到**，但**刻意不做**：它會改變 try-local 實際跑的東西（auth 路徑、架構、首啟時間），不與 pin 一起動。真要切，是把 tenant-api 從 `build:` 換成 `image: ghcr.io/vencil/tenant-api:${TENANT_API_TAG:-v2.9.8}`，並把 `.env.example` 的 `TENANT_API_TAG` 從 `v2.8.0` 改成含該 flag 的版本 —— **`v2.8.0` 早於該 flag，照現值切會起出一個沒有 `--dev-bypass-auth` 的 stack**。
 
 ### 2. 驗證 multi-arch image（#463）
 
