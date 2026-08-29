@@ -273,7 +273,11 @@ def list_recent_runs(workflow: str, limit: int,
 
       * TONIGHT's header missing → `analyze_trend()` sets
         `STRATA_TONIGHT_UNKNOWN` and the night is INCONCLUSIVE, not judged and
-        never fired — the branch's own comment says exactly that.
+        never fired. ⭐ Not read off the code: `test_analyze_bench_history.py`'s
+        `test_single_unreadable_night_does_not_open_a_30_percent_ticket` builds
+        exactly this window — tonight unlabelled, the rest labelled, a textbook
+        +30.8% underneath — and asserts no findings, INCONCLUSIVE, and
+        `min_settled` never relaxed. The case was already PINNED.
       * A HISTORICAL night's missing → it fails `n.cpu_model == today_cpu` and
         drops out of the stratified series.
 
