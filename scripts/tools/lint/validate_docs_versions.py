@@ -861,8 +861,22 @@ def check_tool_count_in_docs() -> List[Issue]:
     documentation decision, tracked in #1540 rather than settled here.
 
     ⚠️ "Deferred" is not "harmless": both of those files say **73**, and no
-    reading of the tree produces that — `{ops,dx,lint}` is 221, the whole
-    tree 238. The number has not moved since v2.1.0 (`827ee07e`), no
+    reading of the tree produces that, and no plausible future one will:
+    73 is roughly a third of the tree. Measured on `05d31362` with
+    `_lib_toolcount`'s `is_tool_file` — the predicate this check actually
+    counts with — `{ops,dx,lint}` is 221 and the whole tree is 225. Those
+    two move whenever a tool lands, and they move often: between writing
+    this sentence and landing it, `main` took the first from 221 to 223.
+    So treat them as a reading taken at that SHA, not as invariants; the
+    invariant is that no scope this module can compute lands anywhere near
+    73.
+    ⛔ Do NOT quote 238 beside those two, as an earlier revision of this
+    docstring did. 238 is a bare `rglob("*.py")`: it counts the 12 `_lib*`
+    modules and one package `__init__` as tools, so it answers a different
+    question than the 221 next to it, and putting the two in one sentence
+    invites the reader to subtract them. Two counts only compare when they
+    share a predicate.
+    The number has not moved since v2.1.0 (`827ee07e`), no
     `bump_docs` rule points at either file, and nothing checks them. This
     check staying out of their way is a decision about SCOPE, not a statement
     that they are currently right.
