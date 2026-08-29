@@ -94,7 +94,8 @@ Dynamic Alerting 平台的完整文件導覽。根據你的角色快速找到所
 
 ## 工具速查
 
-da-tools 容器封裝 23 個 CLI 命令，涵蓋租戶生命週期、日常運維、品質治理三大面向。`scripts/tools/` 下另有 73 個 Python 工具（含 DX 自動化與 lint）。
+<!-- ⛔ 刻意不寫數量。這兩個計數沒有寫入端也沒有檢查端（#1540 缺口 1）：原本的 73 與 23 分別腐爛了五個月與整整一個大版本，而正確值由下一行連到的 tool-map / cli-reference 生成表提供。要加數字前先為它接上寫入端與檢查端。 -->
+da-tools 容器封裝一整套 CLI 子命令，涵蓋租戶生命週期、日常運維、品質治理三大面向；`scripts/tools/` 下另有一批 Python 工具（含 DX 自動化與 lint）。兩者的逐項清單與當前數量，以下方連結的生成表為準。
 
 完整參考：[da-tools CLI](cli-reference.md) · [工具總表](internal/tool-map.md) · [速查表](cheat-sheet.md) · [互動工具索引](interactive-tools.md)
 
