@@ -980,11 +980,15 @@ if argv[:2] == ["run", "list"]:
              "headSha": ("%x" % (0xC0FFEE0 + i)).ljust(40, "0"),
              "conclusion": "failure" if i in failed else "success"}
             for i in range(int(os.environ["STUB_RUNS"]))]
-    # ⛔ FILTER THEN LIMIT, which is the order that matters: `gh` asks GitHub
-    # for `limit` runs ALREADY matching the status, so a filtered-out night
-    # does not merely vanish -- the window reaches one night further back and
-    # still reports N. Limiting first would model a shortening window instead,
-    # and hide exactly the behaviour these tests exist to pin.
+    # Filter then limit, mirroring `gh`: it asks GitHub for `limit` runs ALREADY
+    # matching the status, so a filtered-out night does not merely vanish -- the
+    # window reaches one night further back and still reports N.
+    # ⚠️ NO ASSERTION IN THIS FILE DEPENDS ON THAT ORDER, and an earlier comment
+    # here claimed it was "the order that matters". It is not, for these tests:
+    # the tool under test only ever asks `completed`, under which both orders
+    # produce the same list -- reversing them leaves all 171 green, measured. It
+    # is written this way so the stub does not teach a wrong mental model of the
+    # real API, not because anything here checks it.
     if status == "success":
         runs = [r for r in runs if r["conclusion"] == "success"]
     elif status != "completed":
@@ -1118,14 +1122,44 @@ def test_from_gh_keeps_a_night_whose_run_finished_red(gh_stub, tmp_path):
     """
     proc = gh_stub("ok", runs=2, failed=(0,))
     assert proc.returncode == ptw.EXIT_OK, proc.stderr
-    # The red run's night is present at all — under `success` it never arrives.
-    assert "`900`" in proc.stdout
-    # …and it is LABELLED, not silently equal to the green night beside it.
-    assert "failure" in proc.stdout
-    # ⛔ Both nights, so the window is 2 and not "2 because the stub only had 2
-    # to give". The green sibling must still render its own conclusion.
-    assert "`901`" in proc.stdout
+    # ⛔ PER ROW, not "both strings appear somewhere on the page". The first cut
+    # of this test asserted `"`900`" in stdout` and `"failure" in stdout`
+    # separately, which a stamping bug that SWAPS the two runs' conclusions
+    # satisfies exactly as well — measured, 171 passed with them swapped. A
+    # conclusion on the wrong night is the quiet wrongness the column exists to
+    # prevent, so the assertion has to bind the label to the row.
+    assert re.search(r"`900`\s*\|[^|]*\|\s*failure\s*\|", proc.stdout), proc.stdout
+    assert re.search(r"`901`\s*\|[^|]*\|\s*success\s*\|", proc.stdout), proc.stdout
+    # Both nights, so the window is 2 — the red one was admitted, not replaced.
     assert "2 of 2 calendar night(s)" in proc.stdout
+
+
+def _spy_effective_status(monkeypatch, abh, seen):
+    """Replace `list_recent_runs` with a spy that records the EFFECTIVE status.
+
+    ⛔ The spy must NOT carry a default of its own. An earlier cut wrote
+    `def spy(workflow, limit, status="success")`, which made
+    `test_the_old_watchdogs_window_still_asks_only_for_successful_runs`
+    tautological: the caller passes nothing, the SPY's literal supplies
+    "success", and the assertion holds no matter what the real module says.
+    Measured — flipping `list_recent_runs`' own default to "completed" left that
+    test GREEN. So the default is read off the real signature at spy time, and
+    "what the caller ends up with" is what gets recorded.
+    """
+    import inspect
+    real_default = inspect.signature(
+        abh.list_recent_runs).parameters["status"].default
+
+    def spy(workflow, limit, *args, **kwargs):
+        if "status" in kwargs:
+            seen.append(kwargs["status"])
+        elif args:
+            seen.append(args[0])
+        else:
+            seen.append(real_default)
+        return []
+
+    monkeypatch.setattr(abh, "list_recent_runs", spy)
 
 
 def test_the_window_asks_for_completed_runs_not_only_successful_ones(
@@ -1139,20 +1173,22 @@ def test_the_window_asks_for_completed_runs_not_only_successful_ones(
     actually does.
     """
     import analyze_bench_history as abh
-    seen = {}
-
-    def spy(workflow, limit, status="success"):
-        seen["status"] = status
-        return []
-
-    monkeypatch.setattr(abh, "list_recent_runs", spy)
+    seen = []
+    _spy_effective_status(monkeypatch, abh, seen)
     ptw.nights_from_gh("bench-record.yaml", 14, str(tmp_path))
-    assert seen["status"] == "completed"
+    assert seen == ["completed"]
 
 
 def test_the_old_watchdogs_window_still_asks_only_for_successful_runs(
         monkeypatch, tmp_path):
     """⛔ The asymmetry is deliberate, so it is pinned rather than left to drift.
+
+    ⚠️ AND THIS TEST DID NOT PIN IT UNTIL THE SPY WAS FIXED. Its first cut gave
+    the spy its own `status="success"` default, so the assertion was true by
+    construction and stayed GREEN while the real default was flipped to
+    `completed` — a test whose name promised more than it checked, which is the
+    exact defect class this file exists to refuse. Recorded rather than quietly
+    corrected.
 
     `bench-paired.json` can say whether it is whole — JSON parse, schema string,
     required keys — so admitting a red run there costs nothing. `bench-baseline
@@ -1171,17 +1207,12 @@ def test_the_old_watchdogs_window_still_asks_only_for_successful_runs(
     """
     import analyze_bench_history as abh
     seen = []
-    real = abh.list_recent_runs
-
-    def spy(workflow, limit, status="success"):
-        seen.append(status)
-        return []
-
-    monkeypatch.setattr(abh, "list_recent_runs", spy)
-    try:
-        abh.night_records_from_gh("bench-record.yaml", 14, tmp_path)
-    finally:
-        monkeypatch.setattr(abh, "list_recent_runs", real)
+    _spy_effective_status(monkeypatch, abh, seen)
+    abh.night_records_from_gh("bench-record.yaml", 14, tmp_path)
+    # The EFFECTIVE status, so BOTH ways of breaking this are caught: the call
+    # site starting to pass `completed`, and the module's own default being
+    # flipped under a call site that passes nothing. The second one is what the
+    # first cut of this test could not see.
     assert seen == ["success"]
 
 
