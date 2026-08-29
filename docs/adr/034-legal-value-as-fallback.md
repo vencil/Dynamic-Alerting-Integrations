@@ -6,17 +6,17 @@ version: v2.9.0
 lang: zh
 id: ADR-034
 tracking_kind: adr
-status: proposed
+status: accepted
 domain: platform
 created_at: 2026-08-23
-updated_at: 2026-08-23
+updated_at: 2026-08-29
 ---
 
 # ADR-034: 合法值不得同時當作無法辨識時的 fallback
 
 ## 狀態
 
-🟡 **Proposed**（2026-08-23）。owner 核可後昇格 Accepted；在那之前本規則不對任何人生效。
+✅ **Accepted**（2026-08-23 起草，2026-08-29 由 owner 核可）。本規則自核可起生效。
 
 > 依語言政策（自 ADR-019 起預設 ZH-only；ADR-024 / ADR-025 為保留 `.en.md` sibling 的例外），本 ADR 不另製 `.en.md`。
 
@@ -25,7 +25,7 @@ updated_at: 2026-08-23
 - **問題**：當一個設定的合法值**同時**被拿來當「認不得就用這個」的 fallback，打錯字的輸入就與那個合法值**完全不可區分**。
 - 如果那個設定決定了某道檢查跑不跑，後果是**檢查被關掉，而啟動當下沒有可辨別的訊號**。
 - **決定**：這類設定必須先對照合法值集合驗證，驗不過就報錯，不得落到 fallback。
-- 本 ADR **不修任何東西**；一個已量到的案例只用來示範，另外開票。
+- 本 ADR 本身**不修任何東西**，兩個已量到的案例各自開票：`--write-mode`（[#1559](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1559)，**仍未修**）與 `envBool`（[#1599](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1599)，**已修於 [#1624](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1624)**）。後者同時觸發了本 ADR 自訂的修訂條件，機械檢查已隨該輪補上——見末節。
 
 ## 問題
 
@@ -93,7 +93,7 @@ default:                  → 直接 commit
 
 ⚠️ 這條規則**不主張**其他靜默 fallback 都是好的。它只主張：在這個交集裡，靜默 fallback 一定是錯的。交集之外，本 ADR 沒有意見。
 
-## 案例：`--write-mode`
+## 案例一：`--write-mode`（未修）
 
 即上一節。逐條套規則：
 
@@ -107,6 +107,31 @@ default:                  → 直接 commit
 **最小修法**：解讀前先比對合法值集合，不在集合內就啟動失敗。追蹤於 [#1559](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1559)，七個輸入的實測輸出在該票。
 
 ⚠️ **終態必須是報錯**——「先出一版只警告」等於仍舊落到合法值上再多印一行 log，而本文的論證正是那行 log 不可靠。過渡要怎麼排（要不要先警告一版、警告多久）是那張票的 rollout 決定，但不改變終態。
+
+## 案例二：`envBool`（已修，並觸發本 ADR 的修訂條件）
+
+`components/tenant-api/cmd/server/main.go` 的 `envBool` 是一支自己寫的 6 行 switch，接受 `true`/`1`/`yes`/`on`，**其餘一律回 `false`，不報錯也不記錄**。它被當成五個 `flag.Bool` 的預設值用。
+
+| 條件 | 判定 |
+|:--|:--|
+| 列舉型？ | 是——布林的合法字面值集合有限且明確，`strconv.ParseBool` 就是它的定義（`1`/`t`/`T`/`TRUE`/`true`/`True`/`0`/`f`/`F`/`FALSE`/`false`/`False`） |
+| 決定檢查跑不跑？ | 是——五個消費端裡**三個**是：`TA_RBAC_METADATA_SCOPE_ENFORCE` 與 `TA_RBAC_ORG_SCOPE_ENFORCE` 決定 RBAC scope 走 SHADOW 還是 fail-closed，`TA_MACHINE_IDENTITY_AUDIT` 決定機器身分稽核跑不跑 |
+| 有合法值當 fallback 嗎？ | 有——`false` 既是合法輸入，又是所有無法辨識輸入的落點 |
+| **結論** | **適用，必須驗證** |
+
+**它比案例一更尖銳的地方**：同一個打錯字走命令列會**當場 parse error 停下來**（`flag.Bool` 用的就是 `strconv.ParseBool`），走環境變數則靜默降級。差別只在中間多了那支自製解析器——所以這不是「還沒做驗證」，是**繞過了標準庫已經做好的驗證**。
+
+⚠️ **適用範圍與修法範圍不重合，這裡說清楚**：五個消費端裡另外兩個（`TA_RBAC_EMPTY_OPEN` 是 MED-8 的 rollback 逃生門、`TA_DEV_BYPASS_AUTH` 是 local-dev 身分注入）嚴格說不完全落在本規則的交集內，而且它們打錯字的方向是**較安全**的（維持 fail-closed）。修法仍一次涵蓋五個，理由是它們共用同一支解析器——留一半不改，等於留下本規則要禁的東西的縮小版，下一個消費端接上去時分歧會再出現。**這是修法者的判斷，不是本規則的主張。**
+
+**修法**（[#1624](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1624)）：未設或只有空白維持該 flag 自己的預設；其餘一律交給 `strconv.ParseBool`；解析不了就 `log.Fatalf`。
+
+**修的時候量到三件 [#1599](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1599) 沒寫、而且會改變修法形狀的事**（go1.24.7 三路對照探針，22 個輸入）：
+
+1. **裸 `ParseBool` 會炸掉所有沒設 env var 的部署**——空字串在 `ParseBool` 下是 parse error。照票面建議案字面實作，五個 flag 會全部在啟動時 fatal。必須先判空。
+2. **`yes` / `on` 過去是合法的 `true`，改後啟動失敗**——這不是「打錯字才失敗」，是現行合法輸入斷裂，需要 release note 而不只是修 bug 的說明。
+3. **`t` / `T` 是行為反轉而非報錯**——過去被靜默當成 `false`，改後是 `true`。這是五種輸入裡唯一朝「更開」翻的方向。
+
+⇒ 這三件也回頭印證了本 ADR §後果 那句「**會多出啟動期失敗**……目前沒有盤點過實際有幾個這種部署」：⑵ 與 ⑶ 說明未盤點的不只是「帶著打錯字的部署」，還有**帶著過去合法、現在不合法的值**的部署。⚠️ 該格仍未盤點——只量到 repo 內：官方 helm chart 走 `args:` bare flag、`env:` 區段不含這五個 `TA_*`，所以 **k8s 部署路徑根本不經過 `envBool`**；repo 內也找不到任何以 `yes`/`on` 為值的部署設定。repo 外的現場仍是未知數。
 
 ## 考慮過的其他做法
 
@@ -124,17 +149,27 @@ default:                  → 直接 commit
 - 新增一個「決定檢查跑不跑」的列舉型設定時，要多寫一段驗證。
 - **會多出啟動期失敗**：案例修掉之後，**如果**現存部署裡有寫錯的值，那些部署會開不起來。這是刻意的——它們本來就沒有在做自己以為在做的事。⚠️ 目前沒有盤點過實際有幾個這種部署。
 - ⛔ **不涵蓋**非列舉型的值，以及不決定檢查跑不跑的值。
-- 案例另外開票；本 ADR 只提供判準與證據。
+- 案例另外開票；本 ADR 只提供判準與證據。**案例二已於 2026-08-29 修掉**（[#1624](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1624)），所以上一項對它已不是假設：帶著 `yes`/`on` 或打錯字的部署，升級後會開不起來。
+- **多出一個窄的機械檢查**（見末節）：導入時基線零命中，只擋已知的兩種單行形狀，**不改變「本規則主要仍靠 code review」這個事實**。
 
-## 這條規則沒有機械執行機制
+## 機械執行機制：補上了一個窄的 tripwire，不是完整保證
 
-它靠 code review。這是已知的弱點，不假裝不是——尤其這條規則的立論本身就是「人不會注意到某件事沒有發生」。
+**起草時沒有。** 本 ADR 原本只靠 code review，並自陳這是弱點——尤其這條規則的立論本身就是「人不會注意到某件事沒有發生」。
 
-**修訂觸發條件**：下一次出現**同型缺陷**（合法值兼任 fallback、且該值決定檢查跑不跑）的票，就回頭補一個機械檢查並修訂本 ADR。
+**修訂觸發條件已於 2026-08-29 觸發並履行。** 條件原文是「下一次出現**同型缺陷**（合法值兼任 fallback、且該值決定檢查跑不跑）的票，就回頭補一個機械檢查並修訂本 ADR」——[#1599](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1599) 命中（見案例二），於是依約補上：
 
-⚠️ 刻意不寫成「如果發現 review 抓不住就修訂」——那個條件不會產生任何訊號，修訂永遠不觸發。
+`scripts/tools/lint/check_env_bool_parsers.py`（pre-commit hook `env-bool-parser-guard`；依 [`lint-policy.md`](../internal/lint-policy.md) 屬 **(b) class**：diff-only 掃描、auto-stage、hard block、PR body bypass tag）。它禁止 Go **生產**程式碼出現自製的「truthy 字串轉 bool」解析器，比對兩種**單行**形狀：
 
-⚠️ 但也要說清楚這個觸發條件目前的極限：它需要有人開票、有人認出是同型、有人在比對票流，而**本 ADR 沒有指定 label 也沒有指定 owner**。所以它是「可觀測的」，不是「保證會被觀測到」。真正被 review 漏掉又沒人開票的那些，依本文自己的邏輯不會產生訊號。要補齊，需要一個固定 label 與一位具名負責人——那超出本 ADR 能單方面決定的範圍。
+- 一個 `case` 臂列出**兩個以上**布林字面值（`case "true", "1", "yes", "on":`）。合法的列舉 switch（`case "pr", "pr-github":`）不會命中，因為那些字面值不是布林字面值；單一個 `case "true":` 也不命中——一個字面值不足以區分 truthy 解析器與一般列舉，這是刻意選的精確度／召回率取捨
+- 同一行既讀 env var 又拿它跟布林字面值比較（`strings.ToLower(os.Getenv(k)) == "true"`）
+
+⛔ **它是窄的，而且窄是刻意的。** 它抓的是**已知形狀**，不是「證明不存在自製解析器」：跨行寫成別的樣子、改用 Python、或把字面值換個拼法，它都抓不到；`_test.go` 也在範圍外（測試會合法地拿 env var 比對字串當 subprocess 哨兵）。⇒ **本節標題因此從「這條規則沒有機械執行機制」改成「補上了一個窄的 tripwire」，不是改成「已解決」。**
+
+⚠️ **導入時的基線是零命中**——[#1624](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1624) 修掉了 repo 裡唯一一個。所以它現在是純粹的防迴歸 tripwire，抓不到任何現存的東西。這正是「一個靜默找不到東西可檢查的 shape gate，比沒有 gate 更糟」的形狀，因此它的 self-test 帶**反空轉見證**：把 #1624 之前 `envBool` 的**真實原始碼**餵進去，必須命中；抓不到就轉紅。
+
+⚠️ 觸發條件刻意不寫成「如果發現 review 抓不住就修訂」——那個條件不會產生任何訊號，修訂永遠不觸發。
+
+⚠️ **原本那個「靠人開票」的觸發條件並沒有被這支 lint 取代，它的極限依然成立**：它需要有人開票、有人認出是同型、有人在比對票流，而**本 ADR 沒有指定 label 也沒有指定 owner**。所以它是「可觀測的」，不是「保證會被觀測到」。新增的 lint 只縮小了其中**一種形狀**的漏接面，沒有改變這個結構。要補齊，仍需要一個固定 label 與一位具名負責人——那超出本 ADR 能單方面決定的範圍。
 
 ## 證據與限制
 
@@ -149,6 +184,15 @@ default:                  → 直接 commit
 - **（本輪補測）** 直接呼叫 `wirePRBackend` 餵七個輸入（六個錯的 + `direct`），全部回傳 `mode="direct"` 且 `slog` 輸出逐字相同——見 [#1559](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1559)
 - **（本輪補測）** `--write-mode` 從 flag 到 `prBackendFlags.Mode` 全程沒有 `TrimSpace`，所以前導／尾隨空白確實會落到 `default`
 - **（本輪補測）** 合法的 PR 值在缺 token 時走 `log.Fatalf`——**這個元件已經會在啟動期硬失敗，只有 `default` 那條沒有**
+
+**（2026-08-29 補測，隨案例二與本次昇格）**：
+
+- go1.24.7 三路對照探針（複製當時的 `envBool` + `strconv.ParseBool` + `flag.Bool`，22 個輸入）逐格比對，量出未設值、`yes`/`on`、`t`/`T` 三處差異——三者都會改變修法形狀
+- `envBool` 五個消費端的 fail 方向逐一開檔核對，與 [#1599](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1599) 的方向表一致
+- helm chart 的 tenant-api container 走 `args:` bare flag，其 `env:` 區段不含那五個 `TA_*` ⇒ **官方 k8s 部署路徑不經過 `envBool`**
+- 新增的 lint 在導入時對整個 repo 零命中，其 self-test 以 #1624 前 `envBool` 的真實原始碼作反空轉見證
+
+**⚠️ 仍未量到的**：repo 外的現場部署有幾個帶著上述輸入——這與起草時 §後果 列的是同一格，兩輪都沒能量到。
 
 **⚠️ 沒有實際重現的**：
 

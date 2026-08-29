@@ -175,6 +175,7 @@ lang: zh
 | `check_doc_reading_time.py` | 文件閱讀時間檢查工具。 |
 | `check_doc_template.py` | 文件模板合規性檢查工具。 |
 | `check_engagement_disclosure.py` | Engagement-disclosure gate — block "active engagement" assertions in the PUBLIC repo. |
+| `check_env_bool_parsers.py` | ADR-034 mechanical enforcement (narrow). |
 | `check_flaky_registry.py` | Validate `flaky-tests.yaml` schema + expire_at. |
 | `check_frontmatter_versions.py` | Frontmatter version global scan |
 | `check_glossary_coverage.py` | 術語表覆蓋率檢查 |

@@ -90,7 +90,7 @@ Vibe 專案內建 **八個本地 skills**，在對應情境自動觸發。
 
 ## Pre-commit 品質閘門
 
-104 auto-run + 13 manual-stage + 3 pre-push hooks，清單見 [`.pre-commit-config.yaml`](.pre-commit-config.yaml)。手動觸發：`pre-commit run --all-files`（auto）/ `pre-commit run --hook-stage manual --all-files`（manual）。**hook ↔ skill 職責邊界**（哪些機械強制 / 哪些 AI 須自覺 / 漏接）見 [`hook-vs-skill-coverage.md`](docs/internal/hook-vs-skill-coverage.md)（TRK-304）。
+105 auto-run + 13 manual-stage + 3 pre-push hooks，清單見 [`.pre-commit-config.yaml`](.pre-commit-config.yaml)。手動觸發：`pre-commit run --all-files`（auto）/ `pre-commit run --hook-stage manual --all-files`（manual）。**hook ↔ skill 職責邊界**（哪些機械強制 / 哪些 AI 須自覺 / 漏接）見 [`hook-vs-skill-coverage.md`](docs/internal/hook-vs-skill-coverage.md)（TRK-304）。
 
 ## 文件 / 工具 / Makefile
 
