@@ -1658,7 +1658,7 @@ da-tools generate-routes --config-dir <path> [options]
 | `--validate` | 僅驗證，不輸出 | false |
 | `--apply` | 直接套用至 Kubernetes（需 kubectl） | false |
 | `--yes` | 搭配 --apply 跳過確認提示 | false |
-| `--policy <DOMAINS>` | webhook 域名白名單（逗號分隔；空=無限制） | （無限制） |
+| `--policy <FILE>` | 策略 YAML 的**路徑**，內含 `allowed_domains:` 清單（省略＝不限制）。⚠️ 這裡吃的是檔案路徑，不是逗號分隔的域名；供了但讀不到會 exit 2（#1556） | （不限制） |
 
 **輸出**
 
@@ -1683,7 +1683,7 @@ da-tools generate-routes --config-dir ./conf.d --apply --yes
 |------|------|
 | `0` | 成功 |
 | `1` | 配置驗證失敗 |
-| `2` | kubectl 操作失敗（--apply 模式） |
+| `2` | 呼叫端錯誤：kubectl 操作失敗（`--apply` 模式），或 `--policy` 供了但讀不到／不是合法 YAML（#1556） |
 
 ---
 
@@ -1876,7 +1876,12 @@ da-tools validate-config --config-dir <path> [options]
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--policy <DOMAINS>` | webhook 域名白名單 | （無限制） |
+| `--policy <FILE>` | 策略 YAML 的**路徑**，內含 `allowed_domains:` 清單（省略＝不限制）。⚠️ 供了但用不了 → exit 2（不是檔案、讀不到、非 UTF-8、不是合法 YAML、頂層不是 mapping），不再靜默略過（#1556）。⚠️ v2.9.0 映像仍是舊行為 | （不限制） |
+| `--rule-packs <PATH>` | `rule-packs/` 目錄的路徑，供自訂規則 lint 使用。⚠️ 供了但用不了 → exit 2；**省略時整個 `custom_rules` 檢查列不會出現**（#1556） | （不跑此檢查） |
+| `--policy-dsl <FILE>` | 獨立 Policy-as-Code DSL 檔的路徑（頂層 `policies:` key）。⚠️ 供了但用不了 → exit 2（五種形狀同 `--policy`）；修前的輸出與**完全不給旗標逐字相同**（#1556） | （只讀 `_defaults.yaml` 的 `_policies`） |
+| `--version-check` | 一併跑版號一致性檢查 | false |
+| `--json` | 以 JSON 輸出結果（供 CI 消費） | false |
+| `--strict` | 把 domain-policy（ADR-007）違規從 WARN 升為 FAIL（對齊 CI 的 `generate-routes --strict`） | false |
 
 **檢查項目**
 
@@ -1894,7 +1899,7 @@ da-tools validate-config --config-dir <path> [options]
 
 ```bash
 da-tools validate-config --config-dir ./conf.d
-da-tools validate-config --config-dir ./conf.d --policy "webhook.company.com,slack.com"
+da-tools validate-config --config-dir ./conf.d --policy ./policy.yaml
 ```
 
 **結束碼**
@@ -1902,7 +1907,7 @@ da-tools validate-config --config-dir ./conf.d --policy "webhook.company.com,sla
 | 代碼 | 說明 |
 |------|------|
 | `0` | 所有驗證通過 |
-| `1` | 驗證失敗（一項或多項），或有檔案讀不到 |
+| `1` | 驗證失敗（一項或多項），或 `--config-dir` 底下有檔案讀不到。⚠️ 命令列上的路徑（`--policy` / `--rule-packs`）讀不到算 `2`，不算這一碼 |
 | `2` | 呼叫端錯誤（參數、路徑、環境），不是你的設定有問題。⚠️ v2.9.0 映像不區分這一碼 |
 
 ---
@@ -2048,9 +2053,9 @@ da-tools lint ./rule-packs --strict
 
 | 代碼 | 說明 |
 |------|------|
-| `0` | 全部通過 |
-| `1` | 發現違規（警告級） |
-| `2` | 發現違規（錯誤級；--strict 模式） |
+| `0` | 沒有 ERROR 級違規。⚠️ **未加 `--ci` 時，即使有 ERROR 級違規也是 `0`**；WARN 級從不影響結束碼 |
+| `1` | `--ci` 模式下發現 ERROR 級違規 |
+| `2` | 呼叫端錯誤：`--policy` 供了但不可用（不是檔案／讀不到／不是合法 YAML／頂層不是 mapping）。⛔ 不要靠拿掉 `--policy` 轉綠——那等於改用內建政策 lint |
 
 ---
 

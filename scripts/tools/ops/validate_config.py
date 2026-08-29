@@ -160,6 +160,64 @@ NO_DECLARED_DEFAULTS_HINT = (
     "_defaults.yaml if the tree has none, or restore the block that "
     "was emptied.")
 
+# #1556: the three hints below are shown when --policy / --rule-packs /
+# --policy-dsl was supplied but is unusable. Without them the row inherits
+# the generic per-check advice, which points at tenant YAML — the wrong place
+# for a mistake that lives entirely in the operator's argv. Measured for
+# --rule-packs: the row read "Validate rule pack YAML syntax … run
+# rule-pack-split --check", about a tree the tool had never opened.
+_RULE_PACKS_INPUT_HINT = (
+    "Point --rule-packs at an existing rule-packs/ directory. ⛔ Dropping "
+    "the flag does not make this row pass — the row DISAPPEARS (it is only "
+    "appended when --rule-packs is given) and the exit code goes back to 0 "
+    "with the custom rule lint no longer part of the run.")
+
+# ⛔ The third sibling. Two rounds running, this PR added a hint for one row
+# and left the identically-shaped one next to it on the generic advice; this
+# constant exists so the third does not repeat it.
+_POLICY_DSL_INPUT_HINT = (
+    "Point --policy-dsl at a policy DSL file (top-level `policies:` key). "
+    "⛔ Dropping the flag does not restore anything — it means the run "
+    "evaluates only the `_policies` block in _defaults.yaml, which is what "
+    "you already had before you passed the flag.")
+
+# ⛔ TWO constants, because `--policy` fails two rows whose "what happens if I
+# just drop the flag" answers are OPPOSITE, and one shared sentence was wrong
+# on one of them. Measured: `validate-config --config-dir <ok>` reports five
+# rows (yaml_syntax / schema / routes / profiles / policy_dsl); adding a valid
+# `--policy` makes it six. So `routes` survives the flag being dropped and does
+# go back to PASS, while `policy` DISAPPEARS — the sibling `--rule-packs` hint
+# had already been corrected to say exactly that, three lines up, and this one
+# was left behind saying "makes this row PASS again" for both.
+_POLICY_ROUTES_ROW_HINT = (
+    "Point --policy at a policy YAML holding an `allowed_domains:` list "
+    "(see docs/cli-reference.md § validate-config). ⛔ Dropping the "
+    "flag makes this row PASS again by switching the webhook domain "
+    "allowlist off — that is the failure this check exists to stop.")
+
+_POLICY_ROW_HINT = (
+    "Point --policy at a policy YAML holding an `allowed_domains:` list "
+    "(see docs/cli-reference.md § validate-config). ⛔ Dropping the flag "
+    "does not make this row pass — the row DISAPPEARS (it is only appended "
+    "when --policy is given) and the webhook domain allowlist is not checked "
+    "at all, which is the failure this check exists to stop.")
+
+
+def _argv_error_row(name: str, detail: str, hint: str) -> dict[str, object]:
+    """A FAIL caused by the operator's argv, not by anything under --config-dir.
+
+    ⛔ `reads_config_dir=False` is the load-bearing part. The exit-code rule
+    downgrades a caller error to exit 1 when the config tree had an unreadable
+    file AND the failing check reads that tree — which is right for a check
+    that could not do its job because of the tree, and wrong for one that never
+    got that far because a path on the command line was unusable. Measured
+    before this existed: an unreadable tenant file silently turned
+    `--policy <bad>` from exit 2 into exit 1.
+    """
+    row = _make_result(name, FAIL, [detail], caller_error=True, hint=hint)
+    row["reads_config_dir"] = False
+    return row
+
 
 def _no_declared_defaults_hint(config_dir: str) -> str | None:
     """Replacement hint for when the platform declares no defaults at all.
@@ -438,10 +496,19 @@ def check_routes(
 
     routing, dedup, _sw, enforced_routing, _mc = gen.load_tenant_configs(config_dir)
 
-    # Load allowed_domains from policy
+    # Load allowed_domains from policy (#1556: unusable value is a caller
+    # error, not "no policy" — see check_policy)
     allowed_domains = None
     if policy_file:
-        allowed_domains = gen.load_policy(policy_file)
+        try:
+            allowed_domains = gen.load_policy(policy_file)
+        except gen.PolicyInputError as exc:
+            # ⛔ hint= is not decoration here. Without it this row inherits the
+            # generic routes advice ("check _routing for invalid receiver
+            # types…"), which sends the operator to look at tenant YAML for a
+            # problem that is entirely in their own argv.
+            return _argv_error_row("routes", str(exc),
+                                   _POLICY_ROUTES_ROW_HINT)
 
     # Capture stderr for warnings
     import io
@@ -477,8 +544,16 @@ def check_routes(
 # Check 4: Policy (webhook domain allowlist)
 # ============================================================
 def check_policy(config_dir: str, policy_file: str | None) -> dict[str, object]:
-    """Check webhook URLs against domain allowlist."""
-    if not policy_file or not os.path.isfile(policy_file):
+    """Check webhook URLs against domain allowlist.
+
+    ⛔ #1556: the previous single condition collapsed "operator did not ask
+    for a policy" and "operator asked but the value is unusable" into one
+    ``PASS … skipped`` row at exit 0. The documented example passes a
+    comma-separated domain list, which is not a file, so every customer who
+    copied it read ``[PASS] policy`` while the allowlist was off. Only the
+    first of those two is a legitimate skip.
+    """
+    if not policy_file:
         return _make_result("policy", PASS, ["No policy file — skipped"])
 
     tools_dir = os.path.dirname(os.path.abspath(__file__))
@@ -486,7 +561,10 @@ def check_policy(config_dir: str, policy_file: str | None) -> dict[str, object]:
         sys.path.insert(0, tools_dir)
     import generate_alertmanager_routes as gen
 
-    allowed_domains = gen.load_policy(policy_file)
+    try:
+        allowed_domains = gen.load_policy(policy_file)
+    except gen.PolicyInputError as exc:
+        return _argv_error_row("policy", str(exc), _POLICY_ROW_HINT)
     if not allowed_domains:
         return _make_result("policy", PASS,
                             ["No allowed_domains in policy — no restrictions"])
@@ -521,14 +599,32 @@ def check_policy(config_dir: str, policy_file: str | None) -> dict[str, object]:
 def check_custom_rules(
     rule_packs_dir: str | None, policy_file: str | None = None
 ) -> dict[str, object]:
-    """Run lint_custom_rules.py on rule packs directory."""
-    if not rule_packs_dir or not os.path.isdir(rule_packs_dir):
+    """Run lint_custom_rules.py on rule packs directory.
+
+    ⛔ #1556, same shape as check_policy: ``--rule-packs`` pointing at a path
+    that is not a directory used to produce the same ``PASS … skipped`` row as
+    omitting it, so a typo or a renamed directory silently removed the custom
+    rule lint from the run.
+    """
+    if not rule_packs_dir:
         return _make_result("custom_rules", PASS,
                             ["No rule-packs dir — skipped"])
+    if not os.path.isdir(rule_packs_dir):
+        result = _make_result(
+            "custom_rules", FAIL,
+            [f"--rule-packs: not a directory: {rule_packs_dir}",
+             "  ⛔ Do not drop the flag to clear this — that removes the "
+             "custom rule lint from the run, which is what this error stops."],
+            caller_error=True, hint=_RULE_PACKS_INPUT_HINT)
+        result["reads_config_dir"] = False
+        return result
 
     cmd = [sys.executable, str(_THIS_DIR / "lint_custom_rules.py"),
            rule_packs_dir, "--ci"]
-    if policy_file and os.path.isfile(policy_file):
+    # #1556: pass the value through even when it is not a file. Dropping it
+    # here made `validate-config --policy <typo>` lint with the built-in
+    # policy while reporting success; lint_custom_rules now exits 2 on it.
+    if policy_file:
         cmd.extend(["--policy", policy_file])
 
     try:
@@ -688,8 +784,47 @@ def check_policy_dsl(config_dir: str, policy_dsl_file: str | None = None) -> dic
     if os.path.isfile(defaults_path):
         rules.extend(pe.load_policies(defaults_path))
 
-    # From standalone policy DSL file
-    if policy_dsl_file and os.path.isfile(policy_dsl_file):
+    # From standalone policy DSL file.
+    # ⛔ The same collapse as --policy, written in the mirror form
+    # (`x and is_file(x)` rather than `not x or not is_file(x)`), which is why
+    # the structural scan did not see it. Measured before this split:
+    # `--policy-dsl <missing>` produced output BYTE-IDENTICAL to passing no
+    # flag at all, at exit 0 — the operator asked for a policy file and was
+    # told "No _policies defined — skipped".
+    if policy_dsl_file:
+        if not os.path.isfile(policy_dsl_file):
+            return _argv_error_row(
+                "policy_dsl",
+                f"--policy-dsl: not a file: {policy_dsl_file}",
+                _POLICY_DSL_INPUT_HINT)
+        # ⛔ "not a file" is ONE of the five shapes of "supplied but unusable",
+        # and the first cut of this split closed only that one — the same 1-of-5
+        # that external review had already caught on `--policy` one round
+        # earlier, rebuilt here by hand. Blind review measured the other four
+        # falling through to `_run_check`, which attributes them to the config
+        # tree: `--policy-dsl <non-UTF-8>` exited 1 saying "could not read the
+        # config … If no file is named above, the fault is in one of the paths
+        # you passed" — while naming the file, three lines up.
+        #
+        # The read below is the operator's argv. The `_defaults.yaml` read
+        # above is the customer's tree and stays a tree finding on purpose.
+        try:
+            dsl_data = pe.load_yaml_file(policy_dsl_file)
+        except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+            return _argv_error_row(
+                "policy_dsl",
+                f"--policy-dsl: unusable file: {policy_dsl_file}: {exc}",
+                _POLICY_DSL_INPUT_HINT)
+        if dsl_data is not None and not isinstance(dsl_data, dict):
+            return _argv_error_row(
+                "policy_dsl",
+                f"--policy-dsl: top level is {type(dsl_data).__name__}, "
+                f"expected a mapping with a `policies:` key: {policy_dsl_file}",
+                _POLICY_DSL_INPUT_HINT)
+        # ⚠️ An empty file, or a mapping with neither `policies:` nor
+        # `_policies:`, still reaches "No _policies defined — skipped" at
+        # exit 0. That is the CONTENT axis, which this PR does not close for
+        # any of the three flags; see the NOT COVERED list in _grar_validate.
         rules.extend(pe.load_policies(policy_dsl_file))
 
     if not rules:
@@ -1124,8 +1259,16 @@ def _run_check(name: str, fn, *args, _config_dir: str | None = None,
     """
     try:
         row = fn(*args, **kwargs)
-        row["reads_config_dir"] = _reads_config_dir(
-            _config_dir, args, kwargs)
+        # ⛔ setdefault, not assignment — and THIS is the one site where the
+        # distinction is load-bearing, because `row` came from the check
+        # itself: a check that already knows its failure is an argv error
+        # rather than a config-tree finding says so itself (see
+        # _argv_error_row). Overwriting it re-attributed
+        # `--policy`/`--rule-packs` mistakes to the customer's conf.d, and the
+        # exit-code downgrade below then turned a caller error into exit 1
+        # whenever any tenant file happened to be unreadable — measured.
+        row.setdefault("reads_config_dir",
+                       _reads_config_dir(_config_dir, args, kwargs))
         return row
     except _INPUT_ERRORS as exc:
         detail = " ".join(str(exc).split())
@@ -1145,8 +1288,16 @@ def _run_check(name: str, fn, *args, _config_dir: str | None = None,
              "This check never reached its own logic. If no file is named "
              "above, the fault is in one of the paths you passed on the "
              "command line — check each one's encoding and syntax."])
-        row["reads_config_dir"] = _reads_config_dir(
-            _config_dir, args, kwargs)
+        # ⚠️ setdefault here only for uniformity with the try branch above,
+        # where it IS load-bearing. In this branch it is equivalent to plain
+        # assignment: `row` was built three lines up by `_make_result`, which
+        # never sets `reads_config_dir` (measured — its keys are caller_error /
+        # check / details / hint / status / unusable_files). An earlier
+        # revision copied the try branch's causal sentence into all three
+        # sites; in this one it described a re-attribution that cannot happen,
+        # because there is nothing here to overwrite.
+        row.setdefault("reads_config_dir",
+                       _reads_config_dir(_config_dir, args, kwargs))
         return row
     except SystemExit as exc:
         # ⛔ `SystemExit` is not an `Exception`, so the clause below does not
@@ -1187,8 +1338,16 @@ def _run_check(name: str, fn, *args, _config_dir: str | None = None,
              "If every file listed above is readable, this is a defect in "
              "this tool — please report it with the traceback."],
             caller_error=True)
-        row["reads_config_dir"] = _reads_config_dir(
-            _config_dir, args, kwargs)
+        # ⚠️ setdefault here only for uniformity with the try branch above,
+        # where it IS load-bearing. In this branch it is equivalent to plain
+        # assignment: `row` was built three lines up by `_make_result`, which
+        # never sets `reads_config_dir` (measured — its keys are caller_error /
+        # check / details / hint / status / unusable_files). An earlier
+        # revision copied the try branch's causal sentence into all three
+        # sites; in this one it described a re-attribution that cannot happen,
+        # because there is nothing here to overwrite.
+        row.setdefault("reads_config_dir",
+                       _reads_config_dir(_config_dir, args, kwargs))
         return row
 
 

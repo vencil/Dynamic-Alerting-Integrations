@@ -34,7 +34,7 @@ da-tools 命令速查表。完整文件見 [cli-reference.md](cli-reference.md)�
 | `patch-config` | ConfigMap 局部更新工具，支援 preview（--diff）和直接應用 | --namespace <NS>, --configmap <CM>, --dry-run | `da-tools patch-config --help` |
 | `scaffold` | 產生新 tenant 配置（互動式或非互動式） | --non-interactive, --tenant <NAME>, --db <LIST> | `da-tools scaffold --help` |
 | `migrate` | 將傳統 Prometheus 規則轉換為動態格式（AST 引擎） | --output <DIR>, --dry-run, --triage | `da-tools migrate --help` |
-| `validate-config` | 一站式配置驗證：YAML 格式、schema、routing、policy、版本一致性 | --config-dir <PATH>, --policy <DOMAINS>, --ci | `da-tools validate-config --help` |
+| `validate-config` | 一站式配置驗證：YAML 格式、schema、routing、policy、版本一致性 | --config-dir <PATH>, --policy <FILE>, --ci | `da-tools validate-config --help` |
 | `offboard` | 下架 tenant 配置與相關資源 | --config-dir <PATH>, --backup <DIR>, --cleanup-rules | `da-tools offboard --help` |
 | `deprecate` | 標記指標為 disabled，防止誤用 | --config-dir <PATH>, --reason <TEXT>, --dry-run | `da-tools deprecate --help` |
 | `lint` | 檢查 Custom Rule 的治理合規性（根據 `custom_` 前綴規則） | --strict, --json-output | `da-tools lint --help` |

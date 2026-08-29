@@ -46,11 +46,12 @@ from _lib_python import (  # noqa: E402, F401
     write_text_secure,
     PLATFORM_DEFAULTS,
 )
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, die_caller_error  # noqa: E402
 
 # ── Re-exports from _grar_validate ─────────────────────────────────
 from _grar_validate import (  # noqa: E402, F401
     POLICY_ERROR_PREFIX,
+    PolicyInputError,
     _extract_host,
     _validate_profile_refs,
     assert_equal_labels_gated,
@@ -297,8 +298,15 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    # Load policy (webhook domain allowlist)
-    allowed_domains = load_policy(args.policy)
+    # Load policy (webhook domain allowlist).
+    # #1556: a supplied-but-unusable --policy is a caller error, not "no
+    # policy". Exiting 2 here rather than proceeding with an empty allowlist
+    # is the whole point — the previous behaviour generated routes with SSRF
+    # domain checking off and said nothing.
+    try:
+        allowed_domains = load_policy(args.policy)
+    except PolicyInputError as exc:
+        die_caller_error(str(exc))
     if allowed_domains:
         print(f"Policy: {len(allowed_domains)} allowed domain pattern(s) loaded")
 

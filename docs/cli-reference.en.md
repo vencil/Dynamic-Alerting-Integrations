@@ -1765,7 +1765,7 @@ docker run --rm \
 | `--validate` | Validate only, don't output | false |
 | `--apply` | Apply directly to Kubernetes (requires kubectl) | false |
 | `--yes` | Skip confirmation prompt with --apply | false |
-| `--policy <DOMAINS>` | Webhook domain allowlist (comma-separated; empty=unrestricted) | (unrestricted) |
+| `--policy <FILE>` | **Path** to a policy YAML holding an `allowed_domains:` list (omit for no constraint). ⚠️ This takes a file path, not a comma-separated domain list; a value that cannot be read exits 2 (#1556) | (unrestricted) |
 
 **Output**
 
@@ -1826,7 +1826,7 @@ docker run --rm --kubeconfig=$HOME/.kube/config \
 |------|-------------|
 | `0` | Success |
 | `1` | Config validation failed |
-| `2` | kubectl operation failed (--apply mode) |
+| `2` | Caller error: kubectl operation failed (`--apply` mode), or `--policy` was supplied but is unreadable / not valid YAML (#1556) |
 
 ---
 
@@ -2077,7 +2077,12 @@ docker run --rm \
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--policy <DOMAINS>` | Webhook domain allowlist | (unrestricted) |
+| `--policy <FILE>` | **Path** to a policy YAML holding an `allowed_domains:` list (omit for no constraint). ⚠️ A supplied value that cannot be used now exits 2 instead of being skipped — not a file, unreadable, not UTF-8, not valid YAML, or not a mapping at the top level (#1556). ⚠️ The v2.9.0 image still has the old behaviour | (unrestricted) |
+| `--rule-packs <PATH>` | Path to the `rule-packs/` directory for the custom rule lint. ⚠️ A supplied value that cannot be used exits 2; **omitting it removes the `custom_rules` row from the report entirely** (#1556) | (check not run) |
+| `--policy-dsl <FILE>` | Path to a standalone Policy-as-Code DSL file (top-level `policies:` key). ⚠️ A supplied value that cannot be used exits 2 (same five shapes as `--policy`); before the fix its output was byte-identical to passing no flag at all (#1556) | (only `_policies` in `_defaults.yaml`) |
+| `--version-check` | Also run the version consistency check | false |
+| `--json` | Output results as JSON (for CI consumption) | false |
+| `--strict` | Escalate domain-policy (ADR-007) violations from WARN to FAIL (matches CI `generate-routes --strict`) | false |
 
 **Checks Performed**
 
@@ -2103,9 +2108,10 @@ docker run --rm \
 # Check webhook domain allowlist
 docker run --rm \
   -v $(pwd)/conf.d:/etc/config:ro \
+  -v $(pwd)/policy.yaml:/etc/policy.yaml:ro \
   ghcr.io/vencil/da-tools:v2.9.0 \
   validate-config --config-dir /etc/config \
-    --policy "webhook.company.com,slack.com"
+    --policy /etc/policy.yaml
 ```
 
 **Exit Codes**
@@ -2113,7 +2119,7 @@ docker run --rm \
 | Code | Description |
 |------|-------------|
 | `0` | All validations pass |
-| `1` | Validation failed (one or more checks), or a file could not be read |
+| `1` | Validation failed (one or more checks), or a file under `--config-dir` could not be read. ⚠️ An unreadable path passed on the command line (`--policy` / `--rule-packs`) is `2`, not this code |
 | `2` | Caller error (arguments, paths, environment) — not a problem with your config. ⚠️ The v2.9.0 image does not distinguish this code |
 
 ---
@@ -2289,9 +2295,9 @@ docker run --rm \
 
 | Code | Description |
 |------|-------------|
-| `0` | All pass |
-| `1` | Violations found (warning level) |
-| `2` | Violations found (error level; --strict mode) |
+| `0` | No ERROR-level violations. ⚠️ **Without `--ci`, ERROR-level violations still exit `0`**; WARN level never affects the exit code |
+| `1` | ERROR-level violations found, in `--ci` mode |
+| `2` | Caller error: `--policy` was supplied but is unusable (not a file / unreadable / not valid YAML / top level not a mapping). ⛔ Do not go green by dropping `--policy` — that silently lints against the built-in policy instead |
 
 ---
 

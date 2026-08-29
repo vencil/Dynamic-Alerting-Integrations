@@ -763,7 +763,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "bb202619f7c1edf1dd65448d658cb6c9d1ca7fe547e97f7c769faf0cb0b3c397",
+ "source_digest": "cda8139ea5299dd101414aaa74d8f9d56e56cd14fd2ae91fea080a30c89d3efa",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1062,6 +1062,7 @@
   "tests/shared/test_helm_chart_log_aggregation.py",
   "tests/shared/test_helm_portal.py",
   "tests/shared/test_help_contract.py",
+  "tests/shared/test_input_path_contract.py",
   "tests/shared/test_json_stdout_contract.py",
   "tests/shared/test_lang_detection_guard.py",
   "tests/shared/test_lib_confd.py",
@@ -1123,6 +1124,7 @@
    "tests/shared/test_bilingual_help_contract.py"
   ],
   ".github/custom-rule-policy.yaml": [
+   "tests/ops/test_domain_policy.py",
    "tests/ops/test_lint_custom_rules.py"
   ],
   ".github/workflows": [
@@ -1494,7 +1496,8 @@
   ],
   "docs/cli-reference.md": [
    "tests/ops/test_generate_routes_orchestration.py",
-   "tests/ops/test_generated_ci_artifacts.py"
+   "tests/ops/test_generated_ci_artifacts.py",
+   "tests/shared/test_input_path_contract.py"
   ],
   "docs/getting-started/for-platform-engineers.md": [
    "tests/helm/test_federation_store_namespace_guard.py"
@@ -2162,6 +2165,7 @@
    "tests/shared/test_confd_case_parity_across_tools.py",
    "tests/shared/test_dispatch_contract.py",
    "tests/shared/test_entrypoint.py",
+   "tests/shared/test_input_path_contract.py",
    "tests/shared/test_json_stdout_contract.py",
    "tests/shared/test_lib_toolcount.py",
    "tests/shared/test_output_label_escaping.py",
@@ -2845,6 +2849,9 @@
    "tests/lint/test_e2e_spec_lint.py",
    "tests/ops/test_ci_aggregate_gate_contract.py",
    "tests/ops/test_wrapped_path_references.py"
+  ],
+  "tests/ops/test_domain_policy.py": [
+   "tests/ops/test_generate_alertmanager_routes.py"
   ],
   "tests/ops/test_federation_revocation_reconciler.py": [
    "tests/helm/test_federation_store_sentinel_guard.py"

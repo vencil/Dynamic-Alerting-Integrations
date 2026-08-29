@@ -42,6 +42,7 @@ from generate_alertmanager_routes import (  # noqa: E402
     load_tenant_configs,
     _extract_host,
     load_policy,
+    PolicyInputError,
     PLATFORM_DEFAULTS,
 )
 
@@ -248,9 +249,15 @@ class TestValidateReceiverDomains:
         domains = load_policy(path)
         assert domains == ["*.example.com", "hooks.slack.com"]
 
-    def test_load_policy_missing_file(self):
-        """Policy 檔案不存在時返回空列表。"""
-        assert load_policy("/nonexistent/policy.yaml") == []
+    def test_load_policy_missing_file_raises(self):
+        """供了 --policy 但檔案不存在 → 拋，不可回空列表。
+
+        ⛔ 這條原本斷言 `== []`（#1556）。空 allowlist 與「沒有要求限制」
+        在型別上同形，於是打錯路徑＝SSRF 網域檢查靜默關閉且 rc=0。
+        姊妹條在 tests/ops/test_domain_policy.py。
+        """
+        with pytest.raises(PolicyInputError):
+            load_policy("/nonexistent/policy.yaml")
 
     def test_load_policy_no_key(self, config_dir):
         """Policy 檔案缺少 allowed_domains 鍵。"""

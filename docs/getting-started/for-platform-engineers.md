@@ -261,17 +261,25 @@ domain_policies:
 
 ### 設定 Webhook Domain Allowlist
 
-限制 webhook receiver 的目標域名：
+限制 webhook receiver 的目標域名。`--policy` 吃的是**一個政策 YAML 的路徑**，不是域名本身：
+
+```yaml
+# policy.yaml
+allowed_domains:
+  - "*.example.com"
+  - "hooks.slack.com"
+```
 
 ```bash
 python3 scripts/tools/ops/generate_alertmanager_routes.py \
   --config-dir conf.d/ \
-  --policy "*.example.com" \
-  --policy "hooks.slack.com" \
+  --policy policy.yaml \
   --validate
 ```
 
-fnmatch 模式支援萬用字元。⚠️ 空清單表示不限制 — **生產環境強烈建議設定白名單**，避免 tenant 將告警發送到未授權的外部端點。
+`allowed_domains` 的項目是 fnmatch 模式，支援萬用字元。⚠️ 空清單（或省略 `--policy`）表示不限制 — **生產環境強烈建議設定白名單**，避免 tenant 將告警發送到未授權的外部端點。
+
+⛔ **本節的指令在 v2.9.0 之前是錯的**：它把域名直接當成 `--policy` 的值，而該旗標吃路徑。舊寫法會被當成「找不到這個檔案」，**而工具在 #1556 修好之前對此靜默 exit 0**——白名單整條沒跑，輸出仍是 `OK: all configs valid`。修好之後同一個寫法會 **exit 2**。⛔ 不要靠拿掉 `--policy` 轉綠，那等於把這個檢查關掉。
 
 ## 驗證工具
 
@@ -445,7 +453,7 @@ spec:
 
 ### Webhook Domain Allowlist
 
-`generate_alertmanager_routes.py --policy` 的空清單表示不限制。**生產環境強烈建議設定白名單**。
+`generate_alertmanager_routes.py --policy <policy.yaml>` 所指政策檔裡的 `allowed_domains:` 為空清單（或不給 `--policy`）表示不限制。**生產環境強烈建議設定白名單**。
 
 ### TLS 加密通訊指南
 
@@ -481,7 +489,7 @@ A: 新 Rule Pack 需在 `rule-packs/` 目錄新增 YAML 檔案，並在 Promethe
 A: 在 `_defaults.yaml` 中設定 `_routing_enforced`。通知會發送給 NOC 的 channel 和各 tenant 的 receiver，獨立進行。
 
 **Q: Webhook allowlist 為何拒絕我的 domain？**
-A: 用 `--policy` 檢查你的 webhook URL 是否符合 fnmatch 模式。例如 `*.example.com` 不會匹配 `webhook.internal.example.com`（多層子域名）。
+A: 檢查你的 webhook URL 是否符合 `--policy` 所指政策檔裡 `allowed_domains:` 的 fnmatch 模式。例如 `*.example.com` 不會匹配 `webhook.internal.example.com`（多層子域名）。
 
 **Q: 如何驗證新 tenant 的配置不會造成 alert noise？**
 A: 先用 `validate_config.py` 檢查語法和 schema，再用 `config_diff.py` 看 blast radius，最後在 shadow monitoring 環境中測試（參考 shadow-monitoring-sop.md）。

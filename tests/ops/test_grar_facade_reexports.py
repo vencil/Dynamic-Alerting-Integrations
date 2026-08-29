@@ -47,6 +47,7 @@ EXPECTED_REEXPORTS: dict[str, tuple[str, ...]] = {
     ),
     "_grar_validate": (
         "POLICY_ERROR_PREFIX",  # ADR-007 --strict blocking-prefix SSOT
+        "PolicyInputError",  # #1556 supplied-but-unusable --policy
         "_extract_host",
         "_validate_profile_refs",
         "assert_equal_labels_gated",  # #1132 equal-label-gated invariant

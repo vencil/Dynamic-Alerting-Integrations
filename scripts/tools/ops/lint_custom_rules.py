@@ -47,7 +47,7 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import parse_duration_seconds  # noqa: E402
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, die_caller_error  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Defaults (used when no policy file is provided)
@@ -395,20 +395,39 @@ def resolve_file_policy(filepath, content, policy):
 
 
 def load_policy(policy_path):
-    """Load policy from YAML file, falling back to defaults."""
+    """Load policy from YAML file; the built-in policy is the DEFAULT, not a
+    fallback for a broken ``--policy``.
+
+    ⛔ #1556: the previous version warned on stderr and carried on with the
+    built-in policy, so `lint --policy <typo>` linted against different rules
+    than the operator asked for and still exited 0. A warning nobody reads in
+    CI is not a control. dev-rules #13 files "檔案/路徑不存在" and
+    "malformed 輸入" under EXIT_CALLER_ERROR.
+    """
     if not policy_path:
         return DEFAULT_POLICY.copy()
     try:
         with open(policy_path, 'r', encoding='utf-8') as f:
             custom = yaml.safe_load(f) or {}
-        # Merge: custom overrides defaults
-        merged = DEFAULT_POLICY.copy()
-        merged.update(custom)
-        return merged
-    except (OSError, yaml.YAMLError) as e:
-        print(f"⚠️  Cannot load policy file {policy_path}: {e}", file=sys.stderr)
-        print("    Falling back to built-in defaults.", file=sys.stderr)
-        return DEFAULT_POLICY.copy()
+    except OSError as e:
+        die_caller_error(
+            f"--policy: cannot read {policy_path}: {e}\n"
+            "  ⛔ Do not drop the flag to clear this — that silently lints "
+            "against the built-in policy instead of yours.")
+    except UnicodeDecodeError as e:
+        # ⛔ NOT an OSError — it is a ValueError, so the handler above does not
+        # see it and a non-UTF-8 policy file escaped as a traceback with rc=1.
+        die_caller_error(f"--policy: {policy_path} is not valid UTF-8: {e}")
+    except yaml.YAMLError as e:
+        die_caller_error(f"--policy: {policy_path} is not valid YAML: {e}")
+    if not isinstance(custom, dict):
+        die_caller_error(
+            f"--policy: top level of {policy_path} is "
+            f"{type(custom).__name__}, expected a mapping")
+    # Merge: custom overrides defaults
+    merged = DEFAULT_POLICY.copy()
+    merged.update(custom)
+    return merged
 
 
 # ---------------------------------------------------------------------------

@@ -21,6 +21,7 @@ from generate_alertmanager_routes import (
     validate_receiver_domains,
     load_policy,
     generate_routes,
+    PolicyInputError,
 )
 
 
@@ -155,12 +156,25 @@ class TestLoadPolicy:
         domains = load_policy(path)
         assert domains == []
 
-    def test_nonexistent_policy(self):
-        """不存在的 policy 檔案回傳空 list。"""
-        assert load_policy("/nonexistent/policy.yaml") == []
+    def test_nonexistent_policy_raises(self):
+        """供了 --policy 但那不是檔案 → 必須拋，不可回空 list。
+
+        ⛔ 這條原本斷言 `== []`，docstring 寫「不存在的 policy 檔案回傳空
+        list」——只複述行為、沒有理由，於是把 #1556 的缺陷釘成契約：客戶照
+        文件傳 `--policy "webhook.company.com,slack.com"`（域名清單、不是
+        路徑）⇒ 空 allowlist ⇒ webhook 網域白名單整條沒跑，而輸出是
+        `[PASS] policy`、rc=0。
+        """
+        with pytest.raises(PolicyInputError):
+            load_policy("/nonexistent/policy.yaml")
+
+    def test_comma_separated_domains_raise(self):
+        """文件教的那個逐字值必須被擋（#1556 的原始重現）。"""
+        with pytest.raises(PolicyInputError):
+            load_policy("webhook.company.com,slack.com")
 
     def test_none_path(self):
-        """None path 回傳空 list。"""
+        """沒有供 --policy 回傳空 list —— 「不要求限制」與「判不出來」不同。"""
         assert load_policy(None) == []
 
     def test_policy_without_allowed_domains_key(self, config_dir):
@@ -168,6 +182,33 @@ class TestLoadPolicy:
         path = write_yaml(config_dir, "policy.yaml", yaml.dump({"other_key": "value"}))
         domains = load_policy(path)
         assert domains == []
+
+    def test_allowed_domains_with_an_empty_value_is_no_restriction(
+            self, config_dir):
+        """`allowed_domains:`（key 在、值為空）≡ `allowed_domains: []` ≡ 不設限。
+
+        ⛔ 這條釘的是**我在這支 PR 裡造成、又在下一顆 commit 修掉的回歸**。
+        收窄 `load_policy` 時我讓空值走 raise，於是本 repo 自己的
+        `.github/custom-rule-policy.yaml` 只要把域名條目註解掉就 rc=2——而最
+        便宜的轉綠是連 key 一起刪，正好回到 #1556 要消滅的靜默關閉狀態。該檔
+        自己就寫著「空清單 = 不限制（向後相容）」。
+
+        ⛔ 盲審實測：拿掉 `_grar_validate.py` 那兩行 `if domains is None`，
+        464 個測試全綠——一條已經發生過一次的回歸，唯一防線是散文註解。
+        """
+        path = write_yaml(config_dir, "policy.yaml", "allowed_domains:\n")
+        assert load_policy(path) == []
+
+    def test_allowed_domains_of_the_wrong_type_still_raises(self, config_dir):
+        """對照組：放寬「空值」不得把「型別真的錯」一起放過。
+
+        沒有這一格，上面那條會被「`allowed_domains` 一律回 `[]`」滿足——而那
+        正是 #1556 的缺陷形狀本身。
+        """
+        for bad in ("allowed_domains: ''\n", "allowed_domains: {}\n"):
+            path = write_yaml(config_dir, "policy_bad.yaml", bad)
+            with pytest.raises(PolicyInputError):
+                load_policy(path)
 
 
 # ── generate_routes + policy integration ─────────────────────

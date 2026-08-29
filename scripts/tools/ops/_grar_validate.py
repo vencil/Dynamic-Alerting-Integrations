@@ -8,6 +8,8 @@ Functions:
   _extract_host(value)          → hostname (lowercase) or None
   validate_receiver_domains(...) → SSRF-prevention domain allowlist check
   load_policy(path)             → list of allowed_domains from policy YAML
+                                  (raises PolicyInputError when a path IS
+                                  supplied but cannot serve as a policy)
   validate_tenant_keys(...)      → schema-key typo / unknown-key warnings
   _validate_profile_refs(parsed) → ADR-007 profile-reference existence check
   check_domain_policies(...)    → ADR-007 domain-policy constraint validation
@@ -637,15 +639,105 @@ def assert_platform_alerts_not_tenant_silenceable(
         "match while platform alerts are excluded), or narrow the target.")
 
 
+class PolicyInputError(ValueError):
+    """`--policy` was supplied but the value cannot serve as a policy.
+
+    A dedicated subclass rather than a bare ``ValueError`` because two callers
+    in validate_config.py already wrap unrelated regions in ``except
+    ValueError``; a bare raise here would be swallowed by whichever of those
+    happens to grow to enclose the call.
+    """
+
+
 def load_policy(policy_path: str | None) -> list[str]:
-    """Load policy YAML and return allowed_domains list (may be empty)."""
-    if not policy_path or not Path(policy_path).is_file():
+    """Load policy YAML and return allowed_domains list (may be empty).
+
+    ⛔ Omitting ``--policy`` and supplying an unusable one are DIFFERENT
+    outcomes. Until #1556 both returned ``[]``, so a customer following the
+    documented example — ``--policy "webhook.company.com,slack.com"``, which
+    names domains rather than a file — got the webhook domain allowlist
+    silently switched off while the run printed ``[PASS] policy`` and exited 0.
+    dev-rules #13 puts "檔案/路徑不存在" and "malformed 輸入" in
+    EXIT_CALLER_ERROR, so a supplied-but-unusable value now raises and the
+    callers turn that into exit 2.
+
+    ⛔⛔ NOT CLOSED, and an earlier revision of this docstring said it was.
+    It claimed the empty-list return "survives for exactly two inputs, and both
+    mean the operator asked for no constraint" — a sentence written in the
+    function whose entire purpose is to stop that class. Measured, NINE inputs
+    reach ``return []``:
+
+        asked for no constraint (3)   no --policy at all
+                                      allowed_domains: []
+                                      allowed_domains:        (empty value)
+        could not tell (6)            a 0-byte file
+                                      a space/newline-only file (⚠️ NOT one
+                                        holding a TAB — the YAML scanner
+                                        rejects tabs, so that one raises.
+                                        Measured; "whitespace-only" was too
+                                        wide a word for what was tested.)
+                                      a comment-only file
+                                      the key absent entirely
+                                      the key misspelled (allowed_domain:)
+                                      a list whose entries are all non-strings
+
+    The six below the line are the #1556 danger class arriving through a
+    different door: the operator supplied a policy, the SSRF domain allowlist
+    is off, and the report says ``[PASS] policy``. A truncated ``kubectl cp``, an
+    empty ConfigMap key and one missing ``s`` all land there. What this function
+    closes is the *path* axis (a value that is not a usable file); the *content*
+    axis is open, tracked separately, and must not be read as covered because
+    the path axis now raises.
+    """
+    if not policy_path:
         return []
-    with open(policy_path, encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
+    if not Path(policy_path).is_file():
+        raise PolicyInputError(
+            f"--policy: not a file: {policy_path}\n"
+            "  --policy takes a PATH to a policy YAML holding an "
+            "`allowed_domains:` list.\n"
+            "  ⛔ Do not drop the flag to clear this error — that turns the "
+            "webhook domain allowlist off, which is what this error exists "
+            "to stop.")
+    # ⛔ "Supplied but unusable" is not only "not a file". A file that exists
+    # but cannot be decoded or parsed is the same operator error, and the first
+    # cut of this function left all three of those escaping as tracebacks with
+    # rc=1 — measured, in the PR whose whole subject is that this class must be
+    # exit 2. dev-rules #13 files "malformed 輸入" under EXIT_CALLER_ERROR
+    # alongside "檔案/路徑不存在"; nothing here may distinguish them.
+    try:
+        with open(policy_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    except UnicodeDecodeError as exc:
+        raise PolicyInputError(
+            f"--policy: {policy_path} is not valid UTF-8: {exc}") from exc
+    except yaml.YAMLError as exc:
+        raise PolicyInputError(
+            f"--policy: {policy_path} is not valid YAML: {exc}") from exc
+    except OSError as exc:
+        raise PolicyInputError(
+            f"--policy: cannot read {policy_path}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise PolicyInputError(
+            f"--policy: top level of {policy_path} is "
+            f"{type(data).__name__}, expected a mapping with `allowed_domains:`")
     domains = data.get("allowed_domains", [])
+    # ⛔ `allowed_domains:` with nothing under it is YAML for an empty value,
+    # and it means the same thing as `allowed_domains: []` and as omitting the
+    # key: no constraint. An earlier cut of this function raised on it — a
+    # REGRESSION against origin/main, and reproducible on this repo's own
+    # `.github/custom-rule-policy.yaml` by commenting the entries out during a
+    # migration. Worse, the cheapest way to clear that red was to delete the
+    # `allowed_domains:` line too, which lands exactly on the silent-off state
+    # #1556 exists to abolish. Only a value that is neither a list nor empty
+    # is a caller error, because that one cannot be read as "no constraint".
+    if domains is None:
+        domains = []
     if not isinstance(domains, list):
-        return []
+        raise PolicyInputError(
+            f"--policy: `allowed_domains` in {policy_path} is "
+            f"{type(domains).__name__}, expected a list (or empty for "
+            f"no constraint)")
     return [d for d in domains if isinstance(d, str)]
 
 
