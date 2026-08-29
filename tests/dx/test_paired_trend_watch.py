@@ -1149,14 +1149,16 @@ def _spy_effective_status(monkeypatch, abh, seen):
     import inspect
     real_default = inspect.signature(
         abh.list_recent_runs).parameters["status"].default
+    unset = object()
 
-    def spy(workflow, limit, *args, **kwargs):
-        if "status" in kwargs:
-            seen.append(kwargs["status"])
-        elif args:
-            seen.append(args[0])
-        else:
-            seen.append(real_default)
+    # ⛔ The parameter is named, not swallowed by `**kwargs`. An earlier cut took
+    # `*args, **kwargs`, which meant a caller that MISSPELLED the keyword —
+    # `staatus="completed"` — recorded `real_default` and passed, while the real
+    # `list_recent_runs` would raise TypeError on that same call. A spy that
+    # absorbs a crash the production signature would raise is not recording the
+    # effective status, which is the one thing this helper claims to do.
+    def spy(workflow, limit, status=unset):
+        seen.append(real_default if status is unset else status)
         return []
 
     monkeypatch.setattr(abh, "list_recent_runs", spy)
