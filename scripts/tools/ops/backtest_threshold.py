@@ -132,28 +132,172 @@ def count_threshold_breaches(values, threshold, direction="above"):
     return count
 
 
+# Paths this tool could not parse, so each is named once per run rather than
+# once per diff line (same reason as `_WARNED_UNLISTABLE` below: a warning
+# repeated per line trains the operator to skip it).
+_WARNED_DROPPED_CARRIER: set = set()
+
+
+def _fsdecode(raw):
+    r"""Decode a path git handed us the way `os.listdir` decodes one.
+
+    `surrogateescape` is not decoration. A conf.d entry name is not required
+    to be valid UTF-8, and `os.listdir` answers `'legacy-\udcff.yaml'` for one
+    that is not (measured). Decoding git's answer the same way is what lets a
+    name that came from the TREE compare equal to a name that came from the
+    DIRECTORY -- and it round-trips back into git's argv, because `subprocess`
+    encodes argv with `os.fsencode` (measured: `git show` on the surrogate
+    form of that name returns rc=0, for all three of an ASCII, a non-ASCII
+    and an invalid-UTF-8 carrier).
+    """
+    return raw.decode(sys.getfilesystemencoding(), "surrogateescape")
+
+
+def _git_bytes(args, quotepath_off=False):
+    r"""Run git and return raw stdout BYTES, or None if the call failed.
+
+    ⛔ #1634. Every path-carrying git call in this file used `text=True`, and
+    the fix has TWO halves that do not substitute for each other. Both
+    directions measured on one fixture:
+
+      * bytes alone does not undo quoting. `core.quotepath` defaults to TRUE,
+        so `git diff --name-only` answers `b'"conf.d/legacy-\377.yaml"'` --
+        the octal escape is in the bytes too, and the extension test fails on
+        the trailing quote exactly as it did on the str.
+      * turning quoting off alone does not survive `text=True`: git then emits
+        the real bytes and strict UTF-8 decoding raises `UnicodeDecodeError`
+        from INSIDE `subprocess.run`, which is not in this file's
+        `except (TimeoutExpired, FileNotFoundError)`. That is #1634's dead
+        end B in a different spelling -- a case that WORKED becomes a crash.
+
+    ⚠️ `-z` and `quotepath_off` are not interchangeable either: `-z` suppresses
+    quoting for `--name-only` and `ls-tree`, and has NO effect on the `+++`
+    header of a unified diff (measured -- with and without `-z` that header is
+    byte-identical). Each caller below says which one it needs and why.
+    """
+    cmd = ["git"]
+    if quotepath_off:
+        cmd += ["-c", "core.quotepath=false"]
+    try:
+        result = subprocess.run(cmd + list(args), capture_output=True, timeout=15)
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout
+
+
+def _ascii_safe(text):
+    r"""A form of `text` that is safe to print on a strict-UTF-8 stream.
+
+    ⛔ A name decoded with `surrogateescape` cannot be encoded back to UTF-8,
+    so printing one raises `UnicodeEncodeError` -- i.e. the warning about a
+    dropped carrier would itself be the crash. `backslashreplace` renders the
+    lone surrogate as `\udcff` instead.
+    """
+    return text.encode("utf-8", "backslashreplace").decode("ascii", "replace")
+
+
+def _warn_dropped_carrier(shown, reason):
+    """Say once that a carrier was dropped, and why.
+
+    ⛔ The charge in #1634 is that a REMOVED threshold vanished silently. The
+    shapes below still vanish -- they are not all fixable here -- but they no
+    longer do it quietly, which is the whole difference the family turns on.
+    """
+    shown = _ascii_safe(shown)
+    if shown in _WARNED_DROPPED_CARRIER:
+        return
+    _WARNED_DROPPED_CARRIER.add(shown)
+    print(f"WARNING: dropped {shown} ({reason}); its threshold changes are NOT "
+          f"in this report", file=sys.stderr)
+
+
+def reset_dropped_carrier_warnings_for_test() -> None:
+    """Clear the once-per-run dedup so a test can drive the branch twice."""
+    _WARNED_DROPPED_CARRIER.clear()
+
+
+def tenant_is_queryable(tenant):
+    r"""Whether `tenant` survives the trip into a PromQL query string.
+
+    ⛔ #1634, and this one is load-bearing for the fix above rather than
+    optional. A conf.d carrier name is not required to be valid UTF-8, and
+    every path in this file now decodes with `surrogateescape` so the name
+    round-trips back into git -- which is exactly what makes such a carrier
+    REACHABLE for the first time. A PromQL label value cannot make the same
+    trip: it goes through `urllib.parse.urlencode`, which encodes strict
+    UTF-8 and raises `UnicodeEncodeError` on a lone surrogate.
+
+    Measured, one fixture, carrier `legacy-\xff.yaml`:
+
+      --git-diff    on 05be065b : silent "No threshold changes found."
+                    with only the sites above fixed : UnicodeEncodeError
+      --config-dir  on 05be065b : UnicodeEncodeError  (pre-existing, its
+                    tenant ids come straight from `os.listdir`)
+
+    ⚠️ The crash is raised AFTER the Prometheus reachability check, so
+    `--skip-if-unavailable` does not contain it, and rc=1 is indistinguishable
+    from `EXIT_VIOLATION`.
+
+    ⛔ Filtering at ONE point, for all three change sources, is deliberate.
+    Guarding only the `--git-diff` path would leave the two enumerators
+    answering differently about the same carrier -- which is the #1339 shape
+    this whole chain exists to remove, and which this chain has already
+    produced three times by fixing one path of a pair. The `--config-dir`
+    half therefore changes behaviour too: crash becomes a named skip. That is
+    a deliberate, named change, not a drive-by.
+    """
+    try:
+        tenant.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
 def extract_changes_from_git_diff():
     """Parse git diff of conf.d/ to find threshold changes.
 
     Returns list of dicts: [{tenant, metric, old_value, new_value}, ...]
     """
-    try:
-        result = subprocess.run(
-            ["git", "diff", "HEAD~1", "--unified=0", "--", "conf.d/"],
-            capture_output=True, text=True, timeout=15,
-        )
-        if result.returncode != 0:
-            return []
-    except (subprocess.TimeoutExpired, FileNotFoundError):
+    # ⚠️ `quotepath_off`, NOT `-z`: `-z` changes nothing in a unified diff's
+    # `+++` header. Parsing then stays on bytes all the way down -- see
+    # `_git_bytes` for why those two are inseparable.
+    raw = _git_bytes(["diff", "HEAD~1", "--unified=0", "--", "conf.d/"],
+                     quotepath_off=True)
+    if raw is None:
         return []
 
     changes = []
     current_file = None
 
-    for line in result.stdout.splitlines():
+    for line in raw.splitlines():
         # Track current file
-        if line.startswith("+++ b/"):
-            fname = line[6:]
+        if line.startswith(b'+++ "'):
+            # ⛔ #1634 decision A1: with quoting off, git still quotes a path
+            # holding a newline, a double quote or a backslash. Un-escaping
+            # those is a parser of its own, and for a NEWLINE it cannot work
+            # here at all -- the `+++` header is split across two lines, so a
+            # line-oriented scan has already lost it. Left unfixed ON PURPOSE
+            # and named in the ticket; what changes is that it is now audible.
+            _warn_dropped_carrier(_fsdecode(line[4:]),
+                                  "git quoted it: the name holds a newline, a "
+                                  "quote or a backslash")
+            current_file = None
+            continue
+        if line.startswith(b"+++ b/"):
+            fname = _fsdecode(line[6:])
+            if fname.endswith("\t"):
+                # ⛔ Also #1634 and also NOT fixed: a diff header pads a path
+                # containing a space with a trailing TAB, which this slice
+                # takes to be part of the name. Stripping it would start
+                # admitting space-named carriers -- a behaviour change on a
+                # different axis, so it is named rather than smuggled in.
+                _warn_dropped_carrier(fname.rstrip("\t"),
+                                      "the diff header padded a space in the "
+                                      "name with a tab")
+                current_file = None
+                continue
             # Extract tenant from filename (conf.d/db-a.yaml → db-a)
             basename = Path(fname).name
             # #1588 site 1 of 6 in this file (the first version counted 4 and the
@@ -186,12 +330,16 @@ def extract_changes_from_git_diff():
 
         # Parse YAML key: value changes
         # Lines starting with - (removed) or + (added) in diff
-        old_match = re.match(r"^-\s+(\w+):\s+(.+)$", line)
-        new_match = re.match(r"^\+\s+(\w+):\s+(.+)$", line)
+        # ⚠️ BYTES patterns, because the whole scan is on bytes now (#1634).
+        # `\w` in bytes mode matches ASCII only -- which is what a metric key
+        # already is, so the class does not narrow in practice (measured: the
+        # same three hunk lines match, key=b'cpu_usage' val=b'80').
+        old_match = re.match(rb"^-\s+(\w+):\s+(.+)$", line)
+        new_match = re.match(rb"^\+\s+(\w+):\s+(.+)$", line)
 
         if old_match:
-            metric = old_match.group(1)
-            old_val = old_match.group(2).strip().strip("'\"")
+            metric = _fsdecode(old_match.group(1))
+            old_val = _fsdecode(old_match.group(2)).strip().strip("'\"")
             # Look for corresponding + line
             changes.append({
                 "tenant": current_file,
@@ -200,8 +348,8 @@ def extract_changes_from_git_diff():
                 "new_value": None,  # will be filled by + line
             })
         elif new_match:
-            metric = new_match.group(1)
-            new_val = new_match.group(2).strip().strip("'\"")
+            metric = _fsdecode(new_match.group(1))
+            new_val = _fsdecode(new_match.group(2)).strip().strip("'\"")
             # Try to match with previous - entry
             matched = False
             for c in reversed(changes):
@@ -384,14 +532,13 @@ def changed_conf_files():
     conf.d sits at the repo root (customer convention) or under a subtree
     (this repo). (#657)
     """
-    try:
-        result = subprocess.run(
-            ["git", "diff", "--name-only", "HEAD~1", "--", "conf.d/"],
-            capture_output=True, text=True, timeout=15,
-        )
-        if result.returncode != 0:
-            return []
-    except (subprocess.TimeoutExpired, FileNotFoundError):
+    # ⚠️ `-z` here rather than `quotepath_off` (#1634): for `--name-only` the
+    # NUL-delimited form is git's own contract for "never quote anything", and
+    # unlike the unified-diff header it also carries a name holding a NEWLINE
+    # intact. `-z` is not a substitute for `quotepath_off` in the other
+    # direction -- see `extract_changes_from_git_diff`, where it does nothing.
+    raw = _git_bytes(["diff", "-z", "--name-only", "HEAD~1", "--", "conf.d/"])
+    if raw is None:
         return []
     # #1588 site 3 of 6. Same rule, third hand-written copy in one file.
     #
@@ -417,9 +564,13 @@ def changed_conf_files():
     # reserved names, and swapping to it silently dropped `_defaults.yaml`
     # from this list — a SECOND axis moving inside a hidden-axis fix.
     # `test_changed_conf_files_reduces_repo_root_to_cwd_relative` caught it.
-    return [f"conf.d/{Path(ln.strip()).name}" for ln in result.stdout.splitlines()
-            if has_yaml_extension(ln.strip(), (".yaml",))
-            and not is_hidden_name(Path(ln.strip()).name)]
+    # ⚠️ No `.strip()` any more: with `-z` the delimiter is exact, and a name
+    # is allowed to begin or end with a space. Stripping was load-bearing only
+    # while the records were newline-delimited.
+    names = [_fsdecode(b) for b in raw.split(b"\0") if b]
+    return [f"conf.d/{Path(n).name}" for n in names
+            if has_yaml_extension(n, (".yaml",))
+            and not is_hidden_name(Path(n).name)]
 
 
 def load_conf_files(paths):
@@ -483,22 +634,27 @@ def _carrier_at_head1(tenant):
     that produced the tenant id in the first place, so the two cannot
     disagree the way a re-spelled filename did.
     """
-    try:
-        result = subprocess.run(
-            ["git", "ls-tree", "--name-only", "HEAD~1", "./conf.d/"],
-            capture_output=True, text=True, timeout=15,
-        )
-        if result.returncode != 0:
-            return None
-    except (subprocess.TimeoutExpired, FileNotFoundError):
+    # ⚠️ `-r` (#1634): without it `ls-tree` lists only the TOP level, so a
+    # nested carrier shows up as a bare tree name with no extension and is
+    # dropped by the extension test -- while `git diff -- conf.d/` upstream IS
+    # recursive. That asymmetry meant a tenant parsed from a nested carrier
+    # could never be resolved here, and the ADD direction accepted it anyway
+    # (`parsed.get(tenant) is None` keeps it): one carrier, two answers.
+    # `-z` for the same reason as in `changed_conf_files`.
+    raw = _git_bytes(["ls-tree", "-r", "-z", "--name-only", "HEAD~1", "./conf.d/"])
+    if raw is None:
         return None
-    for line in result.stdout.splitlines():
-        entry = line.strip()
-        if not entry:
-            continue
+    for entry in (_fsdecode(b) for b in raw.split(b"\0") if b):
         name = Path(entry).name
         if has_yaml_extension(name, (".yaml",)) and config_stem(name) == tenant:
-            return f"./conf.d/{name}"
+            # ⚠️ The FULL relative path, not `./conf.d/` + basename: with `-r`
+            # the entry can be nested, and rebuilding from the basename hands
+            # `git show` a path that is not in the tree. The `./` prefix is
+            # required, not decoration -- measured: `git show HEAD~1:./conf.d/x`
+            # rc=0 while `HEAD~1:conf.d/x` rc=128, because `ls-tree` answers
+            # CWD-relative while `git diff --name-only` answers
+            # repo-root-relative. The two are not interchangeable.
+            return f"./{entry}"
     return None
 
 
@@ -512,9 +668,25 @@ def _flat_keys_at_head1(tenant):
     (then the removal is conservatively dropped, the prior behaviour). (#657)
     """
     try:
+        # ⛔ #1634 decision B2 -- bytes, and the `try` shape is kept ON PURPOSE
+        # rather than moved onto `_git_bytes`: this call's stdout is file
+        # CONTENT, not a path, so folding "rc != 0" and "git missing" into one
+        # None would send the latter through the resolver for no reason.
+        # What forces bytes here is the fix ABOVE, not this line: until now a
+        # carrier whose NAME held invalid UTF-8 was dropped upstream and never
+        # reached this call; with the sites above fixed it arrives for the
+        # first time, and `text=True` raises `UnicodeDecodeError` on a body
+        # holding one bad byte (measured -- and that exception is not in the
+        # `except` below). Shipping the upstream fix without this one would
+        # mean shipping a crash that only my own fix made reachable.
+        # ⚠️ `yaml.safe_load` on bytes rejects an invalid-UTF-8 body with
+        # `ReaderError`, a `YAMLError` subclass, so it lands in the existing
+        # handler and the key set comes back empty -- same as for a body that
+        # will not parse. Crash becomes the pre-existing silent skip; making
+        # THAT audible is a different axis and is not smuggled in here.
         result = subprocess.run(
             ["git", "show", f"HEAD~1:./conf.d/{tenant}.yaml"],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True, timeout=15,
         )
         if result.returncode != 0:
             # ⛔ #1588 site 5 of 6, and the one the first version MISSED —
@@ -546,9 +718,12 @@ def _flat_keys_at_head1(tenant):
             resolved = _carrier_at_head1(tenant)
             if resolved is None:
                 return set()
+            # `resolved` now carries the FULL cwd-relative path with its `./`
+            # prefix (see `_carrier_at_head1`), so this spec stays correct for
+            # a nested carrier as well. Bytes for the same reason as above.
             result = subprocess.run(
                 ["git", "show", f"HEAD~1:{resolved}"],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True, timeout=15,
             )
             if result.returncode != 0:
                 return set()
@@ -1000,6 +1175,19 @@ def main():
     else:
         print("ERROR: Specify --git-diff, --config-dir, or --tenant", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
+
+    # ⛔ #1634: one filter, all three sources — see `tenant_is_queryable` for
+    # why this is not per-path. A carrier whose name is not valid UTF-8 cannot
+    # be backtested (Prometheus cannot be asked about it), so it is dropped —
+    # but NAMED, because "the tenant quietly disappeared from the report" is
+    # the symptom this whole family is about.
+    for change in changes:
+        if not tenant_is_queryable(change["tenant"]):
+            _warn_dropped_carrier(
+                change["tenant"],
+                "the carrier name is not valid UTF-8, so it cannot be a "
+                "PromQL label value")
+    changes = [c for c in changes if tenant_is_queryable(c["tenant"])]
 
     if not changes:
         print("No threshold changes found.", file=sys.stderr)
