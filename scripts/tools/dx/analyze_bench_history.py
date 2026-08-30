@@ -263,9 +263,30 @@ def list_recent_runs(workflow: str, limit: int,
         sample floor (`statistics.median` of a one-element list is that
         element). A run that died mid-benchmark still uploads what exists
         (`upload-artifact` runs `if: always()`), so admitting non-success runs
-        here would feed single-sample "medians" — and possibly a `cpu:` header
-        lost to truncation, which #1396 exists to prevent — straight into the
-        rule that opens `perf-trend` issues.
+        here would feed single-sample "medians" straight into the rule that
+        opens `perf-trend` issues.
+
+    ⛔ CORRECTION, and it narrows the paragraph above. That sentence used to
+    read "single-sample medians — and possibly a `cpu:` header lost to
+    truncation, which #1396 exists to prevent — straight into the rule". The
+    `cpu:` half is FALSE, and reading the code says so in both directions:
+
+      * TONIGHT's header missing → `analyze_trend()` sets
+        `STRATA_TONIGHT_UNKNOWN` and the night is INCONCLUSIVE, not judged and
+        never fired. ⭐ Not read off the code: `test_analyze_bench_history.py`'s
+        `test_single_unreadable_night_does_not_open_a_30_percent_ticket` builds
+        exactly this window — tonight unlabelled, the rest labelled, a textbook
+        +30.8% underneath — and asserts no findings, INCONCLUSIVE, and
+        `min_settled` never relaxed. The case was already PINNED.
+      * A HISTORICAL night's missing → it fails `n.cpu_model == today_cpu` and
+        drops out of the stratified series.
+
+    So #1396's protections already cover that case; citing them as an UNMET
+    risk read the opposite of the code they describe. ⚠️ The absent sample
+    floor is the half that stands, and it stands alone — a file truncated
+    AFTER its header lands in the right stratum with fewer rows, and nothing
+    counts them. Whether that is enough to flip a CLEAR verdict is NOT
+    measured. Tracked with the fix in #1635.
 
     So this module keeps `"success"` until `bench-baseline.txt` carries its own
     completeness marker. Stated as an open gap rather than a solved one.
