@@ -384,7 +384,47 @@ repos:
         entry: python3 -X utf8 scripts/tools/lint/validate_docs_versions.py --ci
         language: python
         pass_filenames: false
-        files: \.(md|yaml|jsx|html)$
+        # ⛔ #1508: `pass_filenames: false` means this pattern decides whether
+        # the gate RUNS, not what it scans — so anything it reads that this
+        # misses gives no local signal at all. It used to be
+        # `\.(md|yaml|jsx|html)$`, which missed 25 of the files the tool
+        # actually opens (measured with an audit hook on `5b7f6c35`: 469 data
+        # inputs, of which `.json` 16, `.yml` 8 and `VERSION` 1 did not
+        # match). One of the 25 is a source of truth
+        # (`components/da-tools/app/VERSION`); `mkdocs.yml` is missed only
+        # because it is not spelled `.yaml`; and `tests/e2e/package.json` is
+        # where #1480 found real drift once the gate could see again.
+        #
+        # The `.py` clause covers the gate's own module closure, for one
+        # narrow reason: editing the reader changes what the gate decides, and
+        # without this clause that edit gets no LOCAL signal.
+        # ⚠️ It is NOT the enforcement. CI's `lint` job runs
+        # `pre-commit run version-consistency --all-files` with no `if:`, no
+        # `needs:` and no path filter, so `--all-files` overrides this pattern
+        # entirely — every commit hits the gate on CI regardless of what is
+        # written here. Measured marginal cost of the whole widening: replaying
+        # both patterns over the 300 commits before this one, 2 would newly
+        # trigger it.
+        # ⛔ ERRATA — an earlier revision justified this clause with "editing
+        # the reader is how #1480 happened", and a second revision said the
+        # editing commit "never runs it even once before landing". Both are
+        # false. `abe27478` touched 11 `.md` files — it is the commit that
+        # rewrote `## 專案概覽 (v2.6.0)` into a bare heading, i.e. it changed
+        # the SOURCE — and it never touched `validate_docs_versions.py` or
+        # `_version_patterns.py`. That commit DID fire this hook, and the hook
+        # went green anyway, because the two consumers sat behind
+        # `if "platform" in versions` and were skipped in silence. The
+        # fail-open is what #1480 was; #1493 is what fixed it.
+        # ⚠️ Known gap, deliberately not closed here: the `_lib_.*` branch
+        # only reaches `scripts/tools/` itself, so a helper split out into
+        # `scripts/tools/lint/` does not match — not even named `_lib_*`.
+        # `test_editing_the_gate_itself_can_trigger_it` names the exact file
+        # when that happens, and widening to all of `lint/` was declined as a
+        # bigger trigger surface than a local smoke test is worth.
+        #
+        # Kept honest by `TestTheHookFiresOnEverythingTheGateReads`, which
+        # re-measures both sets and compares them to THIS pattern.
+        files: (\.(md|ya?ml|jsx|json|html)$)|((^|/)VERSION$)|(^scripts/tools/(_lib_.*|lint/(validate_docs_versions|_version_patterns))\.py$)
         additional_dependencies: ['pyyaml']
 
       - id: doc-k8s-refs

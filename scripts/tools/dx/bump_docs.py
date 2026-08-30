@@ -1209,10 +1209,29 @@ def _count_precommit_hook_stages():
 # .github/workflows/validate.yaml) exits 0 while docs/internal/dev-rules.md
 # keeps a stale number and nothing anywhere says so.
 #
-# `>= 3` — the old test's floor — cannot see one of five disappear. The IDs
-# below are pinned by test_count_rule_ids_are_pinned; the rules are now built
-# UNCONDITIONALLY and an unreadable source becomes a NO-SOURCE diagnosis
-# instead of a vanished rule.
+# `>= 3` — the old test's floor — cannot see one of five disappear. The rules
+# are now built UNCONDITIONALLY and an unreadable source becomes a NO-SOURCE
+# diagnosis instead of a vanished rule.
+#
+# ⛔ #1540: retiring a count rule means deleting it here AND from
+# `_build_count_rules()` AND from the literal in
+# `tests/dx/test_bump_docs.py::TestCountRulesAreLive`. That third copy is the
+# only one that is not in this module, and it is deliberate. Measured on
+# `5b7f6c35` before it existed: deleting the `readme-en-python-tools` rule
+# together with this entry — the two-site edit the NO-SOURCE message used to
+# recommend by name — and then breaking README.en.md's number left
+# `--sync-counts --check`, `bump_docs --check`, `validate_docs_versions --ci`
+# and both test modules (288 tests) fully green. With the rule in place the
+# same edit to README.en.md turns two of them red. The self-check below
+# compares what got built against this tuple, and both live here, so a
+# coordinated edit satisfies it by construction — that is what the third copy
+# is for, and why the NO-SOURCE message no longer names retirement as an
+# option: a message read by someone racing to green should not name the
+# cheaper, worse repair.
+#
+# ⚠️ Honest boundary: that third copy is a pytest assertion. The pre-commit
+# hook and `--sync-counts --check` cannot see it, so the signal arrives from
+# the Python Tests job, not locally.
 COUNT_RULE_IDS = (
     "precommit-hook-breakdown",
     "dev-rules-jsx-tools",
@@ -1220,6 +1239,18 @@ COUNT_RULE_IDS = (
     "readme-python-tools",
     "readme-en-python-tools",
 )
+# ⛔ Retiring one of those means editing THREE places in the same commit:
+# COUNT_RULE_IDS above, the matching `rules.append({...})` in
+# `_build_count_rules()`, and `PINNED_COUNT_RULE_IDS` in
+# `tests/dx/test_bump_docs.py`. The third is the only copy outside this
+# module, and it is what puts the edit in front of a reviewer; the first two
+# satisfy each other by construction.
+#
+# ⚠️ The constant's name is deliberately absent from every message this tool
+# prints (`test_no_diagnostic_message_names_the_rule_set_constant`), so this
+# comment is where it stays greppable. A `#` comment and not a PEP 258
+# attribute docstring on purpose — that guard reads string LITERALS, and an
+# attribute docstring is one.
 
 
 def _build_count_rules():
@@ -1359,9 +1390,11 @@ def _build_count_rules():
     if built != COUNT_RULE_IDS:
         raise AssertionError(
             f"_build_count_rules() produced {built}, expected {COUNT_RULE_IDS}. "
-            f"Adding or removing a count rule means updating COUNT_RULE_IDS in "
-            f"the same edit — the pinned set is what makes a vanished rule a "
-            f"failure instead of silence.")
+            f"Adding or removing a count rule means updating the pinned "
+            f"expectation in the same edit — the pin is what makes a vanished "
+            f"rule a failure instead of silence. ⚠️ There are three copies on "
+            f"purpose; see the comment above the constant for why, and what "
+            f"goes silent if the third is skipped.")
 
     return rules
 
@@ -1391,8 +1424,7 @@ def apply_count_updates(check_only=False, dry_run=False, verbose=False):
                 "NO-SOURCE", rule["desc"],
                 f"count source unreadable: {rule['source']} — this rule has "
                 f"no number to sync, so {rule['file']} keeps whatever it "
-                f"says today. Restore the source, or delete the rule (and its "
-                f"COUNT_RULE_IDS entry) if the count is retired."))
+                f"says today. Restore the source."))
             continue
 
         fpath = REPO_ROOT / rule["file"]
@@ -2419,8 +2451,7 @@ def main():
         if no_source_counts:
             print(f"\n❌ {no_source_counts} count rule(s) could not READ their "
                   f"count source (NO-SOURCE). The rule still exists but has "
-                  f"no number to sync — restore the source file, or retire "
-                  f"the rule together with its COUNT_RULE_IDS entry.")
+                  f"no number to sync — restore the source file.")
         if missing_counts:
             print(f"\n❌ {missing_counts} count rule(s) point at a file that "
                   f"does not exist (MISSING). Fix the \"file\" path in "
