@@ -773,7 +773,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "be4f7d7bc7eadafd39582d01658408e3a65916e3db1ab54a2719ee941e7a9675",
+ "source_digest": "0da536152ec5812025087dc7b3954aa8e7c9b803861d4e528cae8fde6958699e",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -2043,6 +2043,7 @@
    "tests/dx/test_recipe_lifecycle.py"
   ],
   "rule-packs/recipes/examples/conf.d": [
+   "tests/dx/test_compile_custom_alerts.py",
    "tests/lint/test_check_threshold_reachability.py",
    "tests/ops/test_guard_defaults_scopes.py"
   ],
@@ -2054,6 +2055,7 @@
    "tests/lint/test_check_threshold_reachability.py"
   ],
   "rule-packs/rule-pack-custom-alerts.yaml": [
+   "tests/dx/test_compile_custom_alerts.py",
    "tests/ops/test_lint_custom_rules.py",
    "tests/shared/test_output_label_escaping.py"
   ],

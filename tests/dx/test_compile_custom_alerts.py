@@ -963,10 +963,19 @@ def test_cli_default_config_dir_matches_canonical_callers():
     assert (_REPO / canonical).is_dir()
     # Every repo caller pins the canonical tree explicitly; if the tree ever
     # moves, this forces the CLI default to move in the same PR.
-    pat = re.compile(r"compile_custom_alerts\.py[^\n]*?--config-dir\s+(\S+)")
+    #
+    # ⛔ SHARES `_tool_invocations` WITH THE `--out` CALLER TEST, and that is a fix,
+    # not tidying. This assertion used to run its own line-anchored regex over the raw
+    # file, which had both defects that regex shape has: a ⛔-comment mentioning
+    # `--config-dir` (the kind this repo writes to warn about #1582) was read as a
+    # caller and reddened the build, and a shell continuation hid a real flag.
+    # Measured: adding one such comment to the Makefile turned this test red while the
+    # invocations were untouched. Extracting from each file's grammar drops comments
+    # by construction.
     for rel in ("Makefile", ".pre-commit-config.yaml", ".github/workflows/ci.yml"):
-        callers = set(pat.findall((_REPO / rel).read_text(encoding="utf-8")))
-        assert callers == {canonical}, f"{rel} scans {callers}, CLI default is {canonical}"
+        scanned = {tok.split()[0] for inv in _tool_invocations(rel)
+                   for tok in [inv.split("--config-dir", 1)[1].strip()]}
+        assert scanned == {canonical}, f"{rel} scans {scanned}, CLI default is {canonical}"
 
 
 # --- F. a compile that produces nothing must not erase a pack that has rules ---
@@ -1448,3 +1457,225 @@ def test_the_sweep_would_notice():
             _assert_message_invariants(text, "/t", label)
     # …and it must pass on a healthy message, or it would "catch" everything.
     _assert_message_invariants("   The compiler read: /t\n   Check, in this order:\n", "/t", "ok")
+
+
+# --- L. a write must name its target (#1582) --------------------------------
+# Measured chain this closes, on `rule-packs/recipes/examples/conf.d` — a tree the
+# module docstring says stays reachable via `--config-dir`, i.e. an invocation the
+# tool itself advertises: compiling it with no `--out` wrote it over the SHIPPED
+# pack (7016 -> 42302 bytes, 11 rules -> 65) at rc=0 — loud (the casualty note names
+# all 8 removed rules) but advisory, which is why rc=0 is the problem. Running from
+# outside the repo did not help — the default is `__file__`-anchored, so `cwd`
+# isolation cannot reach it, which is why "just run it in a tmpdir" is not the fix.
+def test_a_write_without_out_is_refused(tmp_path, monkeypatch, capsys):
+    # ⛔ `_repo_root` IS REDIRECTED, AND THAT IS NOT COSMETIC. This is the one test
+    # that exercises the unguarded path, so the default `out_path` it computes is the
+    # SHIPPED pack. Measured: during mutation verification, the two mutants that
+    # remove the guard turned this very test into a writer and it overwrote
+    # `rule-packs/rule-pack-custom-alerts.yaml` with this fixture's single recipe —
+    # the exact defect #1582 is about, produced by its own regression test. Pointing
+    # the root at tmp keeps the blast radius inside tmp no matter what main() does.
+    src, fake_repo = tmp_path / "src", tmp_path / "repo"
+    (fake_repo / Path(cc.OUT_REL).parent).mkdir(parents=True)
+    monkeypatch.setattr(cc, "_repo_root", lambda: fake_repo)
+    _write_tree(src, _ONE_RECIPE_SOURCE)
+    monkeypatch.setattr(sys, "argv", ["compile", "--config-dir", str(src)])
+
+    assert cc.main() == cc.EXIT_CALLER_ERROR
+    # ⛔ The load-bearing assertion is that NOTHING was written — a message check
+    # alone is satisfied by a main() that prints the refusal and writes anyway.
+    assert not (fake_repo / cc.OUT_REL).exists(), "a refused write must not write"
+    err = capsys.readouterr().err
+    assert cc.OUT_REQUIRED in err
+    # It must also name the pack that was at risk; refusing without saying which file
+    # the default would have hit leaves the reader unable to tell what was in danger.
+    assert cc.OUT_REL in err
+
+
+def test_the_same_source_writes_when_out_is_named(tmp_path, monkeypatch):
+    # ⛔ MUST-FIRE CONTROL for the test above: it is what stops the gate from drifting
+    # into "refuse writes generally".
+    # ⚠️ An earlier version of this comment claimed the control was what catches an
+    # unconditional `return EXIT_CALLER_ERROR` at the top of main(). Blind review
+    # measured that: the refusal test catches that mutant on its own, at
+    # `assert cc.OUT_REQUIRED in err` (stderr is empty). The control is still worth
+    # keeping — it is the only thing asserting a named `--out` still WRITES — but not
+    # for the reason that was written here.
+    src, out = tmp_path / "src", tmp_path / "pack.yaml"
+    _write_tree(src, _ONE_RECIPE_SOURCE)
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
+    # ⛔ NOT `"cpu_hot" in out.read_text()`. ADR-024 rules are VECTORISED — one rule
+    # per shape, with the recipe name arriving at runtime through `group_left` on
+    # `user_threshold` — so the declaration's name is deliberately absent from the
+    # pack. Asserting on it passes only by accident and fails for the right code.
+    assert cc._committed_rules(out), "a named --out must actually receive rules"
+
+
+def test_check_is_not_blocked_by_the_out_requirement(tmp_path, monkeypatch, capsys):
+    # `--check` compares against the default pack and writes nothing, and all three
+    # read-only callers in this repo omit `--out`. Both runs below return
+    # EXIT_CALLER_ERROR, so the exit code cannot tell them apart — the discriminator
+    # is WHICH refusal fired, which is what the named constant is for.
+    missing = tmp_path / "no-such-tree"
+
+    monkeypatch.setattr(sys, "argv", ["compile", "--check", "--config-dir", str(missing)])
+    assert cc.main() == cc.EXIT_CALLER_ERROR
+    assert cc.OUT_REQUIRED not in capsys.readouterr().err, "--check must reach the tree"
+
+    # Same argv without `--check`: now the gate is the one that answers.
+    monkeypatch.setattr(sys, "argv", ["compile", "--config-dir", str(missing)])
+    assert cc.main() == cc.EXIT_CALLER_ERROR
+    assert cc.OUT_REQUIRED in capsys.readouterr().err
+
+
+class _Args:
+    """Whatever `_rerun_command` reads. Built here so the three cases can be reached
+    without a CLI run that would have to be steered past two other guards first."""
+    def __init__(self, config_dir=None, out=None):
+        self.config_dir = config_dir
+        self.out = out
+        self.max_custom_recipes = None  # set by the caller below
+
+
+@pytest.mark.parametrize("config_dir,out,expect", [
+    (None, "/tmp/mine.yaml", "echoes the reader's own target"),
+    (None, None, "echoes the repo default"),
+    ("/tmp/other-tree", None, "offers NOTHING"),
+    ("/tmp/other-tree", "/tmp/mine.yaml", "echoes the reader's own target"),
+])
+def test_the_offer_echoes_a_target_and_never_invents_one(config_dir, out, expect):
+    # ⛔ THE THIRD ROW IS THE ONE THAT WAS MEASURED DESTROYING THE SHIPPED PACK, and it
+    # was destroyed by an earlier version of THIS change. That version filled the
+    # missing `--out` in with the repo default "so the reader can see which pack they
+    # are about to empty"; blind review pasted the resulting line verbatim and got
+    # rc=0 with `rule-packs/rule-pack-custom-alerts.yaml` at 447 bytes, down from 7016.
+    # Before that version the line carried no `--out` and the write gate refused it —
+    # so naming the default converted a BLOCKED command into a working destructive one.
+    #
+    # Row 2 is not the same shape: with no `--config-dir` the pack `--check` compared
+    # against IS the repo default, so echoing it is the legitimate "the last recipe
+    # really was removed" flow, and row 2 is what keeps row 3's fix from being
+    # "print nothing, ever".
+    a = _Args(config_dir, out)
+    a.max_custom_recipes = cc._loader.MAX_CUSTOM_RECIPES_DEFAULT
+    cmd = cc._rerun_command(a)
+    if expect == "offers NOTHING":
+        assert cmd == "", "a redirected --config-dir with no --out must get no command"
+        return
+    argv = shlex.split(cmd, posix=True)
+    assert "--allow-empty" in argv
+    target = argv[argv.index("--out") + 1]
+    assert target == (out if out else str(_REPO / cc.OUT_REL))
+    if out:
+        assert target != str(_REPO / cc.OUT_REL), "must not silently retarget the reader"
+
+
+def test_a_withheld_offer_says_why_instead_of_going_quiet(tmp_path, monkeypatch, capsys):
+    # End-to-end on the reachable path: `--check` against another tree with no `--out`.
+    # ⛔ Two things must hold together — no paste-able command AND an explanation.
+    # Returning "" from the offer builder without this branch would leave a message
+    # that stops mid-sentence, which reads as a bug rather than a decision.
+    src, out = tmp_path / "src", tmp_path / "pack.yaml"
+    _write_tree(src, _ONE_RECIPE_SOURCE)
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
+    capsys.readouterr()
+
+    (src / "a.yaml").write_text(_EMPTY_SOURCE["a.yaml"], encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["compile", "--check", "--config-dir", str(src)])
+    assert cc.main() == cc.EXIT_VIOLATION
+    err = capsys.readouterr().err
+    offer = [ln for ln in err.splitlines() if "--allow-empty" in ln and "Do NOT" not in ln]
+    assert offer == [], "no paste-able command may be offered here"
+    assert "--out" in err and "--config-dir" in err, "it must say what to do instead"
+
+
+def _tool_invocations(rel: str) -> list[str]:
+    """Executable invocations of the compiler in one caller file.
+
+    ⛔ EXTRACTED FROM EACH FILE'S GRAMMAR, NOT BY LOOKING AT LINES. Two failures of
+    the line-based version this replaces, both measured by blind review:
+
+    * **Line-bounded.** `[^\\n]*` cannot see a flag on a shell continuation, so
+      wrapping the (156-character) Makefile recipe made the invocation *look* like it
+      had no `--out` — a red build with a message that was factually false — and,
+      worse, made it invisible to the count, which let the real evasion through.
+    * **Comment-blind only by luck.** The claim that anchoring on `--config-dir`
+      excludes prose held only for prose that omits `--config-dir`; a ⛔-comment
+      warning about this very hazard was misread as a writing invocation.
+
+    So: fold shell continuations for the Makefile and take only TAB-indented recipe
+    lines; for the YAML callers parse the document and walk string values, which drops
+    comments by construction rather than by pattern.
+    """
+    text = (_REPO / rel).read_text(encoding="utf-8")
+    if rel.endswith((".yaml", ".yml")):
+        found: list[str] = []
+
+        def walk(node):
+            if isinstance(node, str):
+                if "compile_custom_alerts.py" in node:
+                    found.append(" ".join(node.split()))
+            elif isinstance(node, dict):
+                for v in node.values():
+                    walk(v)
+            elif isinstance(node, list):
+                for v in node:
+                    walk(v)
+
+        walk(yaml.safe_load(text))
+        return found
+    folded = text.replace("\\\n", " ")
+    return [" ".join(ln.split()) for ln in folded.splitlines()
+            if ln.startswith("\t") and "compile_custom_alerts.py" in ln]
+
+
+def test_every_repo_caller_that_writes_names_its_out():
+    # Derived, not enumerated: for EVERY executable invocation, either it is a
+    # `--check` (writes nothing, `--out` optional) or it must carry `--out`. A new
+    # writing caller that forgets it fails here rather than at rc=2 in someone's
+    # terminal.
+    expected = {"Makefile": 2, ".pre-commit-config.yaml": 1, ".github/workflows/ci.yml": 1}
+    for rel, n in expected.items():
+        calls = _tool_invocations(rel)
+        # ⛔ EQUALITY, NOT A FLOOR. The floor this replaces was `total >= 3` while the
+        # real total was 4 — one whole invocation of slack, and blind review used
+        # exactly that slack: wrap the guarded Makefile recipe (hiding it from the
+        # pattern) AND drop its `--out`, and the suite stayed green with the write
+        # target unguarded. A count that can absorb a disappearance is not
+        # anti-vacuity. Per file, because a global total lets one file's loss be
+        # masked by another's gain.
+        assert len(calls) == n, (
+            f"{rel}: expected {n} invocation(s), extracted {len(calls)}: {calls}. "
+            f"If a caller was deliberately added or removed, update this number.")
+        for invocation in calls:
+            assert "--check" in invocation or "--out" in invocation, (
+                f"{rel}: a writing invocation with no --out will exit 2: {invocation}")
+
+
+def test_the_gate_does_not_depend_on_config_dir(tmp_path, monkeypatch, capsys):
+    """⛔ The central design decision, pinned — it was unpinned until blind review.
+
+    Three places in this change argue the gate must be on `--out` and NOT on "did
+    they redirect `--config-dir`". Nothing tested it: adding `and args.config_dir is
+    not None` to the condition left all tests green, and the measured cost of that
+    one clause is this pair — with it, the default-config-dir `--allow-empty` path
+    writes the shipped pack; without it, that path is refused. The `--allow-empty`
+    remedy is reachable from the DEFAULT config-dir, which is exactly why gating on
+    the input cannot stand in for gating on the output.
+
+    `_repo_root` is redirected for the same reason as in the refusal test: this is a
+    write path with no `--out`, so an unguarded main() would target the real pack.
+    """
+    fake_repo = tmp_path / "repo"
+    (fake_repo / Path(cc.OUT_REL).parent).mkdir(parents=True)
+    monkeypatch.setattr(cc, "_repo_root", lambda: fake_repo)
+
+    # No --config-dir at all, and --allow-empty: the most "surely this one is fine"
+    # invocation there is. It must still be refused, and refused for THIS reason —
+    # the exit code alone cannot discriminate, because the config-dir check that a
+    # gated-on-input variant would fall through to returns the same code. That is
+    # what `OUT_REQUIRED` is named for.
+    monkeypatch.setattr(sys, "argv", ["compile", "--allow-empty"])
+    assert cc.main() == cc.EXIT_CALLER_ERROR
+    assert not (fake_repo / cc.OUT_REL).exists()
+    assert cc.OUT_REQUIRED in capsys.readouterr().err
