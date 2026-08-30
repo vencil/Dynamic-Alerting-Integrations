@@ -200,7 +200,7 @@ func EmitProposals(input EmissionInput) (*EmissionOutput, error) {
 	// only so a collision warning can NAME the document it displaced — a
 	// warning that says "these two collided" without saying whose thresholds
 	// just vanished sends the operator back to guessing.
-	carrierOwners := make(map[string]string)
+	carrierOwners := make(map[string]carrierOrigin)
 
 	// Decisions filter (PR-4). When Decisions is nil, emitIdx is
 	// every proposal index — backward-compatible behaviour. When
@@ -256,7 +256,7 @@ func EmitProposals(input EmissionInput) (*EmissionOutput, error) {
 // whole batch.
 func emitOneProposal(
 	files map[string][]byte,
-	owners map[string]string,
+	owners map[string]carrierOrigin,
 	rootPrefix, dir string,
 	prop ExtractionProposal,
 	ruleIndex map[string]parser.ParsedRule,
@@ -304,6 +304,19 @@ func emitOneProposal(
 	return warnings
 }
 
+// carrierOrigin is what putTenantCarrier remembers about a document it wrote,
+// so a later collision can say whose work it displaced. The source rule id is
+// the part that matters: "these two collided" without it sends the operator
+// back to guessing which threshold vanished.
+type carrierOrigin struct {
+	TenantID     string
+	SourceRuleID string
+}
+
+func (o carrierOrigin) String() string {
+	return fmt.Sprintf("tenant %q (%s)", o.TenantID, o.SourceRuleID)
+}
+
 // putTenantCarrier writes tenant `tenantID`'s override carrier into `files`
 // and reports every way that write is not the plain thing it looks like.
 //
@@ -324,28 +337,29 @@ func emitOneProposal(
 //     (`tenantIDForRule`), i.e. arbitrary strings — nothing upstream
 //     constrains them to round-trip through a filename.
 //
-// ⛔ THE TWO COLLISIONS ARE HANDLED DIFFERENTLY, AND THE ASYMMETRY IS THE
-// POINT — a blind reviewer measured that treating them alike was a behaviour
-// change far outside this defect's blast radius:
+// ⛔ THE CHAIN-CARRIER REFUSAL IS NOT GATED ON THE SLOT BEING TAKEN, and that
+// is the whole point of where it sits. An earlier version asked "is this path
+// already occupied, and if so is it the defaults name" — a byte-exact map
+// lookup guarding a CASE-FOLDING predicate. Measured: tenant `_DEFAULTS`
+// emits `_DEFAULTS.yaml`, which collides with `_defaults.yaml` on no byte at
+// all, so the refusal never fired — and yet `confdname.IsDefaults` says true,
+// the allocator routes it into the Base PR as a defaults carrier, and the
+// exporter (`config_hierarchy.go`, which lowercases before comparing) merges
+// it into EVERY tenant's chain in that directory. One reader comparing bytes
+// beside another comparing folded case is this family's whole shape, and the
+// first version of this guard had it inside itself.
 //
-//   - Colliding with a name this emitter OWNS (`_defaults.yaml`,
-//     `PROPOSAL.md`) → REFUSE the tenant's write. Those documents are of a
-//     different kind: the chain carrier is merged into every tenant in the
-//     directory, so letting one tenant's `tenants:` block land there does not
-//     lose one document, it corrupts all of them.
-//
-//   - Colliding with ANOTHER TENANT's carrier → keep the historical
-//     last-write-wins and only say so. Making this one keep-first flipped
-//     which of two duplicate member rules survives, and measured against
-//     `cefb565` that changed the ALERTING THRESHOLDS emitted for a wholly
-//     ordinary corpus (tenants `db-a`/`db-b` across two regions, no exotic
-//     ids: `0.85`→`0.70`, `0.90`→`0.60`). Neither survivor is more correct
-//     than the other, so the defect worth fixing is the silence, not the
-//     choice — and silently renumbering a customer's proposed thresholds on
-//     upgrade is not a thing this ticket is allowed to do.
+// ⛔ TENANT-VS-TENANT COLLISIONS KEEP THE HISTORICAL LAST-WRITE-WINS and only
+// say so. Making them keep-first flipped which of two duplicate member rules
+// survives, and measured against `cefb565` that changed the ALERTING
+// THRESHOLDS emitted for a wholly ordinary corpus (tenants `db-a`/`db-b`
+// across two regions, no exotic ids: `0.85`->`0.70`, `0.90`->`0.60`). Neither
+// survivor is more correct than the other, so the defect worth fixing is the
+// silence, not the choice — and silently renumbering a customer's proposed
+// thresholds on upgrade is not a thing this ticket is allowed to do.
 func putTenantCarrier(
 	files map[string][]byte,
-	owners map[string]string,
+	owners map[string]carrierOrigin,
 	pathFor func(string) string,
 	tenantID string,
 	sourceRuleID string,
@@ -366,30 +380,43 @@ func putTenantCarrier(
 			propIdx, pathLabel, tenantID, name, got, ok, tenantID))
 	}
 
-	if _, taken := files[key]; taken {
-		if confdname.IsDefaults(name) || name == emitterProposalDoc {
+	if confdname.IsDefaults(name) {
+		return append(warnings, fmt.Sprintf(
+			"proposal[%d]: %stenant %q would be written as %q, which every reader of "+
+				"this tree treats as the inheritance-chain carrier rather than as a "+
+				"tenant carrier; refused, because writing it would merge one tenant's "+
+				"overrides into every tenant in this directory",
+			propIdx, pathLabel, tenantID, key))
+	}
+
+	if prev, taken := owners[key]; taken {
+		switch {
+		case prev.TenantID == tenantID:
 			warnings = append(warnings, fmt.Sprintf(
-				"proposal[%d]: %stenant %q would overwrite %q, which is this "+
-					"emitter's own shared document, not another tenant's carrier; "+
-					"kept the shared document and skipped this tenant",
-				propIdx, pathLabel, tenantID, key))
-			return warnings
+				"proposal[%d]: %stenant %q has more than one member rule in this "+
+					"proposal; %s overwrites the document %s wrote at %q, and only the "+
+					"last one survives",
+				propIdx, pathLabel, tenantID, sourceRuleID, prev.SourceRuleID, key))
+		default:
+			warnings = append(warnings, fmt.Sprintf(
+				"proposal[%d]: %stenants %q and %q share the one carrier name %q; %s "+
+					"overwrites the document %s wrote there, and only the last one "+
+					"survives",
+				propIdx, pathLabel, prev.TenantID, tenantID, key,
+				sourceRuleID, prev.SourceRuleID))
 		}
+	} else if _, occupied := files[key]; occupied {
 		warnings = append(warnings, fmt.Sprintf(
-			"proposal[%d]: %stenant %q (%s) overwrites %q, which already held %s; "+
-				"two tenants share one carrier name and only the last one survives",
-			propIdx, pathLabel, tenantID, sourceRuleID, key, owners[key]))
+			"proposal[%d]: %stenant %q (%s) overwrites %q, which this emitter had "+
+				"already written for something other than a tenant; only the last "+
+				"one survives",
+			propIdx, pathLabel, tenantID, sourceRuleID, key))
 	}
 
 	files[key] = body
-	owners[key] = fmt.Sprintf("tenant %q (%s)", tenantID, sourceRuleID)
+	owners[key] = carrierOrigin{TenantID: tenantID, SourceRuleID: sourceRuleID}
 	return warnings
 }
-
-// emitterProposalDoc is the human-readable summary this emitter writes beside
-// the shared defaults. Named so putTenantCarrier can recognise a tenant whose
-// id collides with it.
-const emitterProposalDoc = "PROPOSAL.md"
 
 // emitIntermediateProposal writes the PR-2 intermediate artifact shape for one
 // proposal: _defaults.yaml (shared structure), one override file per member
@@ -397,7 +424,7 @@ const emitterProposalDoc = "PROPOSAL.md"
 // Extracted from emitOneProposal (the non-translated / fallback path).
 func emitIntermediateProposal(
 	files map[string][]byte,
-	owners map[string]string,
+	owners map[string]carrierOrigin,
 	pathFor func(string) string,
 	prop ExtractionProposal,
 	ruleIndex map[string]parser.ParsedRule,
@@ -489,7 +516,7 @@ func membersForProposal(prop ExtractionProposal, ruleIndex map[string]parser.Par
 //     summarises the cluster for reviewers.
 func emitTranslatedProposal(
 	files map[string][]byte,
-	owners map[string]string,
+	owners map[string]carrierOrigin,
 	pathFor func(string) string,
 	prop ExtractionProposal,
 	translation *ProposalTranslation,

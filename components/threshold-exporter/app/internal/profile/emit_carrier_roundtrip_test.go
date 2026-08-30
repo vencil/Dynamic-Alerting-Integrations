@@ -210,10 +210,9 @@ func TestEmit_ATenantNamedDefaultsDoesNotDestroyTheChainCarrier(t *testing.T) {
 			"proposal's shared structure is gone and one tenant's overrides are "+
 			"now cascading to all of them.\n  content was:\n%s", "_defaults", defaults)
 	}
-	if w := warningNaming(out.Warnings, "_defaults", "kept the shared document"); w == "" {
-		t.Errorf("tenant %q collides with the emitter's own chain-carrier filename "+
-			"and NO warning says the shared document was kept and this tenant "+
-			"skipped.\n  warnings: %v", "_defaults", out.Warnings)
+	if w := warningNaming(out.Warnings, "_defaults", "refused"); w == "" {
+		t.Errorf("tenant %q is written under the chain-carrier name and NO warning "+
+			"says the write was refused.\n  warnings: %v", "_defaults", out.Warnings)
 	}
 }
 
@@ -241,5 +240,71 @@ func TestEmit_ACarrierNameThatDoesNotReadBackAsItsTenantSaysSo(t *testing.T) {
 	}
 	if w := warningNaming(out.Warnings, "plain"); w != "" {
 		t.Errorf("a well-named tenant drew a warning it should not have: %q", w)
+	}
+}
+
+// TestEmit_ACaseVariantOfTheChainCarrierNameIsRefusedToo closes a hole a blind
+// reviewer measured in the FIRST version of the refusal above.
+//
+// ⛔ That version asked "is this path already occupied, and if so is it the
+// defaults name" — a byte-exact map lookup guarding a case-FOLDING predicate.
+// Tenant `_DEFAULTS` emits `_DEFAULTS.yaml`, which collides with
+// `_defaults.yaml` on no byte at all, so the refusal never fired: the file was
+// written, with a `tenants:` block, and `confdname.IsDefaults` says true — so
+// the allocator routes it into the Base PR as a defaults carrier and the
+// exporter, which lowercases before comparing, merges it into EVERY tenant's
+// chain in that directory.
+//
+// One reader comparing bytes beside another comparing folded case is this
+// family's entire shape, and the guard against it had it inside itself.
+func TestEmit_ACaseVariantOfTheChainCarrierNameIsRefusedToo(t *testing.T) {
+	t.Parallel()
+	ps, rules := twoTenantProposal("_DEFAULTS", "ordinary")
+	out := emitOneProposalFor(t, ps, rules)
+
+	if body, ok := out.Files["conf.d/dom/_DEFAULTS.yaml"]; ok {
+		t.Errorf("tenant %q was written to %q, a name every reader of this tree "+
+			"classifies as the inheritance-chain carrier (it differs from "+
+			"`_defaults.yaml` in case only, and every classifier here folds case).\n"+
+			"  ⛔ it collides with nothing byte-for-byte, so an occupancy check "+
+			"cannot see it — the refusal has to be on the NAME.\n"+
+			"  the exporter would merge this into every tenant's chain in the "+
+			"directory. Content was:\n%s", "_DEFAULTS", "_DEFAULTS.yaml", string(body))
+	}
+	if w := warningNaming(out.Warnings, "_DEFAULTS", "refused"); w == "" {
+		t.Errorf("tenant %q was not written under the chain-carrier name and NO "+
+			"warning says why.\n  warnings: %v", "_DEFAULTS", out.Warnings)
+	}
+	// The ordinary tenant must be untouched.
+	if _, ok := out.Files["conf.d/dom/ordinary.yaml"]; !ok {
+		t.Errorf("the well-named tenant lost its carrier; files: %v",
+			sortedCarrierKeys(out.Files))
+	}
+}
+
+// TestEmit_OneTenantWithTwoRulesIsNotReportedAsTwoTenants pins that the
+// collision warning states the RIGHT CAUSE.
+//
+// ⛔ A blind reviewer measured the first version saying "two tenants share one
+// carrier name" for the case the change's own A/B had used as its headline
+// example: ONE tenant with two member rules in a proposal (clustering keys on
+// expr+for+dialect, so duplicates of one tenant land together). An operator
+// reading that goes looking for a second tenant that does not exist. The
+// emitter has both ids in hand and no excuse for the wrong sentence.
+func TestEmit_OneTenantWithTwoRulesIsNotReportedAsTwoTenants(t *testing.T) {
+	t.Parallel()
+	ps, rules := twoTenantProposal("db-a", "db-a")
+	out := emitOneProposalFor(t, ps, rules)
+
+	w := warningNaming(out.Warnings, "db-a", "s.yaml#g[0].r[0]", "s.yaml#g[0].r[1]")
+	if w == "" {
+		t.Fatalf("one tenant's two member rules collided and no warning names both "+
+			"rules.\n  warnings: %v", out.Warnings)
+	}
+	if strings.Contains(w, "tenants ") || strings.Contains(w, "two tenants") {
+		t.Errorf("the collision warning blames two tenants, but this fixture has "+
+			"ONE tenant with two member rules:\n  %s\n"+
+			"  an operator reading that goes hunting for a second tenant that does "+
+			"not exist — and the emitter has both ids in hand.", w)
 	}
 }
