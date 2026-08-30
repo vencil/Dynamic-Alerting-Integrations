@@ -221,6 +221,45 @@ def test_invalid_utf8_carrier_is_dropped_but_says_so(tmp_path, prom_url):
         f"the dropped carrier was not named: {result.stderr!r}")
 
 
+def test_an_unusable_carrier_is_named_once_not_once_per_metric(
+        tmp_path, prom_url):
+    """⛔ The drop is decided per CHANGE, so one carrier losing two metrics
+    would say the same thing twice without the once-per-run dedup.
+
+    This file's neighbour gate already settled the principle — a warning
+    repeated per row trains the operator to skip it, and then the report's
+    reason for existing goes with it. The dedup was written for that, but
+    the mutation battery found it had no guard: deleting it left every gate
+    file green, because every other fixture here drops exactly one metric.
+    """
+    repo = tmp_path / "twice"
+    (repo / "conf.d").mkdir(parents=True)
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "t@example.invalid")
+    _git(repo, "config", "user.name", "t")
+    _git(repo, "config", "core.quotepath", "true")
+    path = os.fsencode(str(repo)) + b"/conf.d/" + INVALID_UTF8_CARRIER
+    # TWO thresholds removed, so the filter sees two changes for one carrier.
+    with open(path, "wb") as handle:
+        handle.write(_BEFORE % b"acme")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "before")
+    with open(path, "wb") as handle:
+        handle.write(b"tenants:\n  acme:\n    other_key: 1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "after")
+
+    result = _run_cli(repo, prom_url)
+    assert result.returncode == 0, result.stderr
+    said = result.stderr.count("not valid UTF-8")
+    # ⛔ VACUITY GUARD: if the fixture only produced one change, this test
+    # would pass with or without the dedup and prove nothing.
+    assert said >= 1, f"the carrier was not named at all: {result.stderr!r}"
+    assert said == 1, (
+        f"the same carrier was named {said} times — once per metric rather "
+        f"than once per run: {result.stderr!r}")
+
+
 @pytest.mark.parametrize("carrier,needle", [
     pytest.param(b"has\nnewline.yaml", "git quoted it", id="newline"),
     pytest.param(b'has"quote.yaml', "git quoted it", id="quote"),
