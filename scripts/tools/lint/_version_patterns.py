@@ -160,10 +160,44 @@ SCENARIO_COUNT_PATTERNS: List[Tuple[str, str]] = [
 BILINGUAL_PAIR_PATTERN = r"bilingual-(\d+)%20pairs"
 
 # Bilingual number consistency patterns: (regex, description)
+#
+# ⛔ These are matched with `re.IGNORECASE` against WHOLE FILES, so a pattern
+# that is merely "reasonable" collects section numbers, version numbers and
+# PromQL identifiers as if they were counts. Measured on `a807a41c` over the
+# 94 bilingual pairs (564 cells), the `Alert rule count` entry below used to
+# read `(\d+)\s*Alert(?:\s+rule)?` and produced:
+#
+#   MISMATCH 4  — every one of them noise: `:9093 alertname=`, `ADR-025
+#                 Alerting-Plane`, `### 1.2 Alert`, `v2 alert` vs `122 alerts`.
+#                 Four permanent warnings nobody could ever clear.
+#   AGREE    5  — of which exactly ONE was a real count comparison
+#                 (`docs/design/rule-packs.md`: 4 / 8 / 9 alerts). The other
+#                 four agreed by coincidence on section numbers (`2.9 Alert
+#                 Routing`, `2.3 Alertmanager`) and version numbers
+#                 (`v2.9.0 alert-quality`, `v2 alertname`).
+#
+# The narrowed form keeps that one real comparison and drops all four false
+# warnings, adding no new ones. Each element earns its place by measurement:
+#   * PLURAL noun — `alerts`, never bare `Alert`. Kills the section headings,
+#     `alertname`, and `v2.9.0 alert-quality` in one move.
+#   * `(?!\s*\{)` — the PromQL series selector `ALERTS{...}` is an identifier,
+#     not a count. Without this exception one MISMATCH survives, so it is load
+#     bearing, and it must apply to BOTH halves: an earlier attempt hung it on
+#     the English side only and manufactured a regression.
+#   * `(?<![\d.])` — refuses the `2` in `### 1.2 Alerts don't fire`, i.e. an
+#     English heading whose noun happens to be plural.
+#
+# ⚠️ Honest boundary, measured rather than assumed: this check only speaks when
+# BOTH halves match, so a count that exists in one language and not the other
+# stays silent. The old pattern appeared to catch some of those, but only
+# because its own false positives kept the other side non-empty — that is
+# noise, not detection. Turning one-sided reporting on is NOT the fix either:
+# even narrowed, English plural headings still match one-sidedly, so it would
+# trade four false warnings for a different set.
 BILINGUAL_NUMBER_PATTERNS: List[Tuple[str, str]] = [
     (r"(\d+)\s*個?\s*Rule\s*Pack", "Rule Pack count"),
     (r"(\d+)\s*Recording", "Recording rule count"),
-    (r"(\d+)\s*Alert(?:\s+rule)?", "Alert rule count"),
+    (r"(?<![\d.])(\d+)\s+alert(?:\s+rule)?s\b(?!\s*\{)", "Alert rule count"),
     (r"rule%20packs-(\d+)-", "Rule Pack badge"),
     (r"alerts-(\d+)-", "Alert badge"),
     (r"bilingual-(\d+)", "Bilingual badge"),
