@@ -185,12 +185,14 @@ default:                  → 直接 commit
 
 **跑過指令、看過輸出的**：
 
-- `--write-mode` 的 switch 只有三條臂、第四個合法值 `direct` 即 `default` 分支
-- 合法值集合定義在 `internal/handler/deps.go`，且沒有任何地方把輸入與它比對
-- `default` 分支印的就是 `slog.Info("direct write mode (commit-on-write)")` 那一行本身——所以與合法 `direct` 的輸出必然相同
+⛔ **以下前三條描述的是修法前的 `wirePRBackend`，不是現行程式碼**——案例一已於 2026-08-30 修正，這些是本 ADR 據以成立的原始觀察，保留為證據而非現況。想知道現在長什麼樣，讀 `parseWriteMode` 與其 doc comment。
+
+- （修法前）`--write-mode` 的 switch 只有三條臂、第四個合法值 `direct` 即 `default` 分支
+- （修法前）合法值集合定義在 `internal/handler/deps.go`，且沒有任何地方把輸入與它比對
+- （修法前）`default` 分支印的就是 `slog.Info("direct write mode (commit-on-write)")` 那一行本身——所以與合法 `direct` 的輸出必然相同
 - `dev-rules.md` 內「不得靜默 X」語氣的規則共四處，且各自綁定場景
 - **（本輪補測）** 直接呼叫 `wirePRBackend` 餵七個輸入（六個錯的 + `direct`），全部回傳 `mode="direct"` 且 `slog` 輸出逐字相同——見 [#1559](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1559)
-- **（本輪補測）** `--write-mode` 從 flag 到 `prBackendFlags.Mode` 全程沒有 `TrimSpace`，所以前導／尾隨空白確實會落到 `default`
+- **（本輪補測，修法前）** `--write-mode` 從 flag 到 `prBackendFlags.Mode` 全程沒有 `TrimSpace`，所以前導／尾隨空白確實會落到 `default`。⚠️ 修法**改變了這一條**：`parseWriteMode` 現在 trim 前後空白，所以 `" pr"` 會被接受並正規化為 `pr`，而不是拒絕——判準與理由見案例一
 - **（本輪補測）** 合法的 PR 值在缺 token 時走 `log.Fatalf`——**這個元件已經會在啟動期硬失敗，只有 `default` 那條沒有**
 
 **（2026-08-29 補測，隨案例二與本次昇格）**：
