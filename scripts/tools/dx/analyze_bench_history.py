@@ -811,7 +811,22 @@ def read_completeness_marker(run_dir: Path) -> tuple[dict | None, str | None]:
         if not sep:
             return None, (f"{REFUSE_MARKER_UNREADABLE}: {MARKER_FILE} has a line "
                           f"with no `key: value` separator ({line!r})")
-        fields[key.strip()] = value.strip()
+        key = key.strip()
+        # ⛔ A repeated key is a marker that CONTRADICTS ITSELF, and letting the
+        # last one win picks a winner instead of reporting the contradiction:
+        # `rows: 1` followed by `rows: 3` was admitted as `marker-verified`
+        # against a 3-row artifact. Verified before fixing.
+        # ⚠️ RECORDED BECAUSE OF HOW IT WAS FOUND. Review flagged this exact
+        # defect one round earlier in `parse_marker`, the TEST-side mirror of
+        # this loop, and only the mirror was fixed — nobody asked whether the
+        # original had it too. It did. When a finding lands on a copy of
+        # production logic, the copy is not the interesting half.
+        if key in fields:
+            return None, (f"{REFUSE_MARKER_UNREADABLE}: {MARKER_FILE} declares "
+                          f"{key!r} more than once ({fields[key]!r} then "
+                          f"{value.strip()!r}) — a marker that contradicts "
+                          "itself vouches for nothing")
+        fields[key] = value.strip()
 
     missing = MARKER_REQUIRED_KEYS - set(fields)
     if missing:

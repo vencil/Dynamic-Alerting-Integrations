@@ -4968,3 +4968,55 @@ class TestNightRecordsFromGhAdmission:
         assert got is not None, "a cache-file failure must not lose the artifact"
         assert not (tmp_path / f"run-{run_id}" / ab.DOWNLOAD_SENTINEL).exists()
         assert "could not write" in capsys.readouterr().err
+
+
+class TestMarkerDuplicateKeys:
+    """⛔ A marker that contradicts itself must be REFUSED, not silently
+    resolved by last-write-wins.
+
+    ⚠️ RECORDED FOR HOW IT WAS FOUND. Review flagged this defect one round
+    earlier in `parse_marker` — the TEST-side mirror of
+    `read_completeness_marker`'s parse loop — and only the mirror was fixed.
+    The production original had the same bug for another whole round. The
+    lesson generalises: when a finding lands on a copy of production logic,
+    the copy is not the interesting half.
+    """
+
+    def test_a_self_contradicting_marker_is_refused(self, tmp_path):
+        """`rows: 1` then `rows: 3` used to parse as `rows: 3` and be admitted
+        as `marker-verified` against a 3-row artifact — the later value was
+        picked as the winner instead of the contradiction being reported.
+
+        A specific break that reddens this: delete the `if key in fields`
+        guard from `read_completeness_marker`.
+        """
+        (tmp_path / ab.MARKER_FILE).write_text(
+            "schema: bench-baseline-rows/v1\nrows: 1\nrows: 3\n",
+            encoding="utf-8", newline="\n")
+        fields, err = ab.read_completeness_marker(tmp_path)
+        assert fields is None
+        assert err.startswith(ab.REFUSE_MARKER_UNREADABLE)
+        assert "more than once" in err
+        # Both values named, so the operator sees the contradiction itself.
+        assert "'1'" in err and "'3'" in err
+
+    def test_a_duplicated_schema_key_is_refused_too(self, tmp_path):
+        """Not special-cased to `rows`: any repeated key is a contradiction."""
+        (tmp_path / ab.MARKER_FILE).write_text(
+            "schema: bench-baseline-rows/v1\nschema: bench-baseline-rows/v1\nrows: 3\n",
+            encoding="utf-8", newline="\n")
+        fields, err = ab.read_completeness_marker(tmp_path)
+        assert fields is None
+        assert "schema" in err
+
+    def test_the_refusal_reaches_the_admission_decision(self, tmp_path):
+        """⛔ The counterfactual that matters: the refusal must actually stop
+        the night, not merely be returned. Before the fix this exact input
+        produced `(True, 'marker-verified')`."""
+        (tmp_path / ab.MARKER_FILE).write_text(
+            "schema: bench-baseline-rows/v1\nrows: 1\nrows: 3\n",
+            encoding="utf-8", newline="\n")
+        fields, err = ab.read_completeness_marker(tmp_path)
+        admit, why = ab.judge_night_completeness(fields, err, "failure", 3)
+        assert admit is False
+        assert why.startswith(ab.REFUSE_MARKER_UNREADABLE)

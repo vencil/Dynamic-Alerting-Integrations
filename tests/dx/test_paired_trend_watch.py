@@ -2049,18 +2049,26 @@ def test_the_new_job_cannot_take_the_nights_data_down_with_it():
     `analyze_bench_history.py` only, "which still asks `success`".
 
     ⚠️ (2) IS NOW FALSE TOO, and the consequence is worth stating rather than
-    quietly editing: since TRK-371 / #1635 both watchdogs ask `completed` and
-    admission is decided by the artifact's completeness marker, so a red
-    `paired-trend-watch` no longer removes that night from anyone's window.
-    `continue-on-error` is therefore NO LONGER what protects the window on a
-    marked night — the marker is.
+    quietly editing: since TRK-371 / #1635 the old watchdog's TREND-WATCH
+    window asks `completed` and admission is decided by the artifact's
+    completeness marker, so a red `paired-trend-watch` no longer removes that
+    night from that window. `continue-on-error` is therefore NO LONGER what
+    protects a marked night — the marker is.
+
+    ⛔ (3) AND A THIRD CORRECTION, because the draft of (2) over-generalised it
+    to "both watchdogs ask `completed`". Only `night_records_from_gh` opts in;
+    `list_recent_runs` keeps the conservative `success` DEFAULT so that
+    `analyze_bench_history.main()`'s aggregation path — which has no
+    completeness check — cannot inherit the widening. Flipping that default was
+    a regression this PR introduced and review caught.
 
     ⛔ It is still asserted, for two reasons that survive: during the ~14-night
     roll-in the window still holds pre-marker nights, and those ARE admitted on
     their run's `success` conclusion, so for them the old mechanism is still
     load-bearing; and removing it would let an unproven reporter redden the
-    nightly. The `list_recent_runs` assertion below now pins `completed` — the
-    predicate this job's protection used to substitute for.
+    nightly. The `list_recent_runs` assertion below pins the conservative
+    `success` DEFAULT; the trend-watch window's opt-in to `completed` is pinned
+    in `test_analyze_bench_history.py`, not here.
     """
     yaml = pytest.importorskip("yaml")
     workflow = yaml.safe_load(
