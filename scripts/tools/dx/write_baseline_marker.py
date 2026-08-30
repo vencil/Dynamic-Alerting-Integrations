@@ -91,11 +91,20 @@ def main(argv: list[str] | None = None) -> int:
               "refusing to write a completeness marker", file=sys.stderr)
         return 1
 
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    # newline="\n": the marker is compared byte-for-byte against what the
-    # consumer re-derives, and `.gitattributes` pins `* text=auto eol=lf`. An
-    # unpinned write emits CRLF on a Windows host and LF in CI.
-    args.out.write_text(render_marker(rows), encoding="utf-8", newline="\n")
+    try:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        # newline="\n": the marker is compared byte-for-byte against what the
+        # consumer re-derives, and `.gitattributes` pins `* text=auto eol=lf`.
+        # An unpinned write emits CRLF on a Windows host and LF in CI.
+        args.out.write_text(render_marker(rows), encoding="utf-8", newline="\n")
+    except OSError as exc:
+        # `--out` naming an existing directory used to raise a raw
+        # IsADirectoryError traceback. It already failed safe (non-zero, no
+        # marker written), but a stack trace in the nightly's log reads like the
+        # benchmark crashed rather than like a mis-set path.
+        print(f"::error::cannot write the marker to {args.out} ({exc})",
+              file=sys.stderr)
+        return 1
     print(f"baseline rows: {rows} (marker: {args.out})")
     return 0
 

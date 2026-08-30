@@ -131,11 +131,40 @@ def test_consumer_required_keys_match_what_the_producer_writes(tmp_path: Path):
     assert abh.MARKER_REQUIRED_KEYS == set(parse_marker(marker)) == _MARKER_KEYS
 
 
-def test_producer_and_consumer_share_one_compiled_row_regex():
-    """⛔ Identity, not equality. A future author who COPIES the pattern into
-    the producer rather than importing it re-creates the definitional drift
-    this design removed, and equality would not notice."""
-    assert wbm._BENCH_RE is abh._BENCH_RE
+@pytest.mark.parametrize("text,why", [
+    (baseline(rows=3), "plain three rows"),
+    (baseline(rows=3, trailing_partial=True), "row truncated after its name"),
+    ("cpu: X\nBenchmarkA-4\t10\t1 ns/op\r\nBenchmarkB-4\t10\t2 ns/op\r\n", "CRLF"),
+    ("cpu: X\nBenchmarkNoSuffix\t10\t1 ns/op\n", "missing -<cpus> suffix"),
+    ("cpu: X\nBenchmarkA-4\t10\t1.5 ns/op\n", "fractional ns/op"),
+    ("cpu: X\nBenchmarkA-4\t10\t1 ms/op\n", "wrong unit"),
+    ("cpu: X\n  BenchmarkA-4\t10\t1 ns/op\n", "leading whitespace"),
+    ("", "empty file"),
+])
+def test_producer_and_consumer_count_the_same_rows(text: str, why: str):
+    """The producer's count must equal what the CONSUMER's parser yields.
+
+    ⛔ THIS REPLACES AN ASSERTION THAT COULD NOT FAIL, and the replacement is
+    recorded because the original is the defect class this change is about. It
+    was `assert wbm._BENCH_RE is abh._BENCH_RE`, with a docstring claiming it
+    caught "a future author who COPIES the pattern instead of importing it".
+    It cannot: `re.compile` maintains an internal cache keyed on the pattern
+    string, so compiling an identical pattern returns the IDENTICAL object.
+    Verified — `re.compile(p) is re.compile(p)` → True — and the intentional
+    break (replace the import with a verbatim copy) left it GREEN (1 passed).
+
+    ⚠️ It was also the wrong PROPERTY. A verbatim copy is harmless; what harms
+    is the two definitions DIVERGING. So this asserts the observable thing:
+    over inputs chosen to sit on the regex's edges, the producer's count and
+    the consumer's parser agree. A forked-and-edited pattern separates them.
+    """
+    src = Path(__import__("tempfile").mkdtemp()) / "bench-baseline.txt"
+    src.write_text(text, encoding="utf-8", newline="")
+    consumer_rows = len(list(abh.parse_bench_file(src, run_id=1)))
+    assert wbm.count_rows(text) == consumer_rows, (
+        f"producer and consumer disagree on {why!r}: "
+        f"{wbm.count_rows(text)} vs {consumer_rows}"
+    )
 
 
 # ── 2. the workflow's two call sites (text-only half) ────────────────────
@@ -260,3 +289,27 @@ def test_row_count_is_exact_not_approximate(tmp_path: Path, rows: int):
     proc, marker = run_producer(tmp_path, baseline(rows=rows))
     assert proc.returncode == 0, proc.stderr
     assert parse_marker(marker)["rows"] == str(rows)
+
+
+def test_out_pointing_at_a_directory_is_a_controlled_error(tmp_path: Path):
+    """⛔ Blind-review nit. It already failed safe (non-zero, no marker), but
+    via a raw `IsADirectoryError` traceback — and a stack trace in the nightly's
+    log reads like the benchmark crashed rather than like a mis-set path.
+
+    A specific break that reddens this: remove the `except OSError` around the
+    write in `write_baseline_marker.main`.
+    """
+    outdir = tmp_path / "iam_a_dir"
+    outdir.mkdir()
+    src = tmp_path / "bench-baseline.txt"
+    src.write_text(baseline(rows=2), encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, str(_SCRIPT), "--baseline", str(src), "--out", str(outdir)],
+        capture_output=True, text=True, encoding="utf-8", timeout=60,
+    )
+    assert proc.returncode != 0
+    assert "Traceback" not in proc.stderr, (
+        f"uncaught exception instead of a controlled refusal:\n{proc.stderr}"
+    )
+    assert "::error::" in proc.stderr
+    assert outdir.is_dir(), "the directory must be left alone"

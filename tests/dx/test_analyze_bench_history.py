@@ -4650,12 +4650,215 @@ class TestWindowPredicate:
             "consumer job still deletes that night from its own future windows"
         )
 
-    def test_the_run_conclusion_is_still_requested_from_gh(self):
+    def test_the_run_conclusion_is_still_requested_from_gh(self, monkeypatch):
         """The grandfather branch reads `conclusion`; if the `--json` field
-        list ever drops it, every pre-marker night silently becomes a refusal.
+        list ever drops it, every pre-marker night silently becomes a refusal
+        (`run.get("conclusion")` → None → `pre-marker-run-not-success`) and the
+        window quietly shrinks every night until the marker has rolled in.
 
-        A specific break that reddens this: remove `conclusion` from the
-        `--json` list in `list_recent_runs`."""
-        src = (Path(ab.__file__)).read_text(encoding="utf-8")
-        body = src.split("def list_recent_runs", 1)[1].split("\ndef ", 1)[0]
-        assert "conclusion" in body
+        ⛔ THE FIRST CUT OF THIS TEST WAS VACUOUS, recorded rather than quietly
+        corrected because it is the very defect this change is about. It read
+        the function's SOURCE and asserted `"conclusion" in body` — but `body`
+        included the docstring, which says "conclusion" three times. Removing
+        the field from the `--json` list, the exact break the old docstring
+        named, left it GREEN (2 passed). A test that greps a function's own
+        prose is measuring the prose.
+
+        ⇒ Now asserts on BEHAVIOUR: spy the `gh` argv the function actually
+        builds and read the `--json` value out of it. Prose cannot satisfy it.
+        """
+        seen = {}
+
+        def fake_gh(cmd):
+            seen["cmd"] = list(cmd)
+            return "[]"
+
+        monkeypatch.setattr(ab, "_gh", fake_gh)
+        ab.list_recent_runs("bench-record.yaml", 14)
+
+        cmd = seen["cmd"]
+        json_fields = cmd[cmd.index("--json") + 1].split(",")
+        assert "conclusion" in json_fields, (
+            f"`gh run list --json` asks for {json_fields}; without `conclusion` "
+            "every pre-marker night is refused instead of grandfathered"
+        )
+
+
+class TestNightRecordsFromGhAdmission:
+    """⛔ THE LOOP BODY WAS SHIPPED WITH ZERO COVERAGE, and blind review proved
+    it: inverting `if not admit:` — which makes the window keep every REFUSED
+    night and drop every admitted one — left the whole suite green (2741
+    passed). Every other test either monkeypatched this function away or drove
+    it with an empty run list, so the marker integration it exists to perform
+    never executed.
+
+    These drive the REAL function against a pre-populated cache directory, so
+    `download_artifact`, `read_completeness_marker`, `judge_night_completeness`
+    and the grandfather counter all run for real.
+    """
+
+    SCHEMA = "bench-baseline-rows/v1"
+
+    def _cache(self, tmp_path, run_id, rows, *, marker_rows=None, complete=True):
+        """Populate a run dir the way a finished `gh run download` leaves it."""
+        d = tmp_path / f"run-{run_id}"
+        d.mkdir(parents=True, exist_ok=True)
+        body = "cpu: TestCPU\n" + "".join(
+            f"BenchmarkThing{i}-4   \t   10\t  {100 + i} ns/op\n" for i in range(rows))
+        (d / ab.ARTIFACT_FILE).write_text(body, encoding="utf-8", newline="\n")
+        if marker_rows is not None:
+            (d / ab.MARKER_FILE).write_text(
+                f"schema: {self.SCHEMA}\nrows: {marker_rows}\n",
+                encoding="utf-8", newline="\n")
+        if complete:
+            (d / ab.DOWNLOAD_SENTINEL).write_text("", encoding="utf-8", newline="\n")
+        return d
+
+    def _run(self, monkeypatch, tmp_path, runs):
+        monkeypatch.setattr(ab, "list_recent_runs", lambda w, l: list(runs))
+        return ab.night_records_from_gh("bench-record.yaml", len(runs), tmp_path)
+
+    @staticmethod
+    def _run_dict(run_id, day, conclusion):
+        return {"databaseId": run_id, "createdAt": f"2026-08-{day:02d}T03:00:00Z",
+                "conclusion": conclusion}
+
+    def test_a_refused_night_is_excluded_and_an_admitted_one_is_kept(
+            self, monkeypatch, tmp_path):
+        """⛔ The break that motivated this class: invert `if not admit:`.
+
+        Run 900 is marker-verified (admit). Run 901 has no marker and its run
+        failed (refuse). Asserting on the ADMITTED IDS — not on the count —
+        means swapping the branch cannot pass by coincidence of arity.
+        """
+        self._cache(tmp_path, 900, rows=3, marker_rows=3)
+        self._cache(tmp_path, 901, rows=3, marker_rows=None)
+        nights = self._run(monkeypatch, tmp_path, [
+            self._run_dict(900, 20, "success"),
+            self._run_dict(901, 19, "failure"),
+        ])
+        assert [n.run_id for n in nights] == [900], (
+            "expected only the marker-verified night in the window; got "
+            f"{[n.run_id for n in nights]}"
+        )
+
+    def test_a_marked_night_whose_run_failed_stays_in_the_window(
+            self, monkeypatch, tmp_path):
+        """The self-eating loop, end to end rather than at the pure function."""
+        self._cache(tmp_path, 902, rows=4, marker_rows=4)
+        nights = self._run(monkeypatch, tmp_path,
+                           [self._run_dict(902, 21, "failure")])
+        assert [n.run_id for n in nights] == [902]
+
+    def test_a_row_count_mismatch_drops_the_night(self, monkeypatch, tmp_path):
+        """⛔ Catches an off-by-one in what is fed to the row comparison: the
+        marker vouches for 5, the artifact holds 3."""
+        self._cache(tmp_path, 903, rows=3, marker_rows=5)
+        nights = self._run(monkeypatch, tmp_path,
+                           [self._run_dict(903, 22, "success")])
+        assert nights == []
+
+    def test_an_exact_row_count_is_admitted_so_the_check_is_not_always_refusing(
+            self, monkeypatch, tmp_path):
+        """The counterfactual to the test above — without this one, a
+        `judge_night_completeness` that refused EVERYTHING would still pass."""
+        self._cache(tmp_path, 904, rows=6, marker_rows=6)
+        nights = self._run(monkeypatch, tmp_path,
+                           [self._run_dict(904, 23, "success")])
+        assert [n.run_id for n in nights] == [904]
+
+    def test_the_grandfather_count_and_its_denominator_are_reported(
+            self, monkeypatch, tmp_path, capsys):
+        """⛔ The roll-in status line. Pins the NUMERATOR and the DENOMINATOR
+        separately: 1 grandfathered of 2 ADMITTED (not of 3 listed) — a night
+        that was refused must not inflate the denominator, or the operator
+        reads the roll-in as further along than it is."""
+        self._cache(tmp_path, 905, rows=3, marker_rows=3)      # marked
+        self._cache(tmp_path, 906, rows=3, marker_rows=None)   # grandfathered
+        self._cache(tmp_path, 907, rows=3, marker_rows=None)   # refused
+        nights = self._run(monkeypatch, tmp_path, [
+            self._run_dict(905, 24, "success"),
+            self._run_dict(906, 23, "success"),
+            self._run_dict(907, 22, "failure"),
+        ])
+        assert sorted(n.run_id for n in nights) == [905, 906]
+        err = capsys.readouterr().err
+        assert "1 of 2 admitted night(s) carry no" in err, err
+
+    def test_no_grandfather_line_when_every_night_is_marked(
+            self, monkeypatch, tmp_path, capsys):
+        """Silence is the signal that the roll-in is complete."""
+        self._cache(tmp_path, 908, rows=3, marker_rows=3)
+        self._run(monkeypatch, tmp_path, [self._run_dict(908, 25, "success")])
+        assert "admitted night(s) carry no" not in capsys.readouterr().err
+
+    def test_a_partial_cache_is_refetched_rather_than_read_as_pre_marker(
+            self, monkeypatch, tmp_path):
+        """⛔ The blind-review finding. A run dir holding `bench-baseline.txt`
+        but no completion sentinel is an INTERRUPTED download, not a night that
+        predates the marker — but the old cache check could not tell them apart
+        and handed the second story to the first situation.
+
+        Here the cached dir has no sentinel, so `gh` must be called again; the
+        refetch supplies the marker and the night is marker-verified rather
+        than grandfathered. A specific break that reddens this: drop the
+        `DOWNLOAD_SENTINEL` term from the cache condition.
+        """
+        d = self._cache(tmp_path, 909, rows=2, marker_rows=None, complete=False)
+        calls = []
+
+        def fake_gh(cmd):
+            calls.append(cmd)
+            (d / ab.MARKER_FILE).write_text(
+                f"schema: {self.SCHEMA}\nrows: 2\n", encoding="utf-8", newline="\n")
+            return ""
+
+        monkeypatch.setattr(ab, "_gh", fake_gh)
+        nights = self._run(monkeypatch, tmp_path,
+                           [self._run_dict(909, 26, "failure")])
+        assert len(calls) == 1, "the partial cache was served instead of refetched"
+        assert [n.run_id for n in nights] == [909]
+
+    def test_a_complete_cache_is_not_refetched(self, monkeypatch, tmp_path):
+        """The counterfactual: the sentinel must still SAVE a download, or the
+        fix above would just be 'always re-download' wearing a sentinel."""
+        self._cache(tmp_path, 910, rows=2, marker_rows=2)
+        calls = []
+        monkeypatch.setattr(ab, "_gh", lambda cmd: calls.append(cmd) or "")
+        nights = self._run(monkeypatch, tmp_path,
+                           [self._run_dict(910, 27, "success")])
+        assert calls == [], "a complete cache was re-downloaded"
+        assert [n.run_id for n in nights] == [910]
+
+    def test_a_fresh_download_writes_the_sentinel_so_the_next_call_is_cached(
+            self, monkeypatch, tmp_path):
+        """⛔ The last break the suite could not see. Both cache tests above
+        pre-seed the sentinel, so neither notices if `download_artifact` stops
+        WRITING one — the tool would then re-download every run of every night,
+        forever, and nothing would go red.
+
+        A specific break that reddens this: delete the
+        `(target / DOWNLOAD_SENTINEL).write_text(...)` line.
+        """
+        run_id = 911
+        calls = []
+
+        def fake_gh(cmd):
+            calls.append(cmd)
+            d = tmp_path / f"run-{run_id}"
+            d.mkdir(parents=True, exist_ok=True)
+            (d / ab.ARTIFACT_FILE).write_text(
+                "cpu: TestCPU\nBenchmarkThing0-4   \t   10\t  100 ns/op\n",
+                encoding="utf-8", newline="\n")
+            return ""
+
+        monkeypatch.setattr(ab, "_gh", fake_gh)
+        first = ab.download_artifact(run_id, tmp_path)
+        assert first is not None and len(calls) == 1
+        assert (tmp_path / f"run-{run_id}" / ab.DOWNLOAD_SENTINEL).exists(), (
+            "a complete download left no sentinel, so every later call "
+            "re-downloads and an absent marker can never be trusted as the "
+            "version boundary"
+        )
+        ab.download_artifact(run_id, tmp_path)
+        assert len(calls) == 1, "the second call re-downloaded despite a complete fetch"

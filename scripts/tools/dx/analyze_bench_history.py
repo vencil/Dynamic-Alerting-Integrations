@@ -102,6 +102,9 @@ ARTIFACT_FILE = "bench-baseline.txt"
 # — that cross-assertion IS the §P5 gate for this artifact, and it is the only
 # thing standing between the two constants and a silent drift.
 MARKER_FILE = "bench-baseline.rows"
+# Written by `download_artifact` only after a COMPLETE fetch. Without it an
+# interrupted download is indistinguishable from a run that predates the marker.
+DOWNLOAD_SENTINEL = ".download-complete"
 SUPPORTED_MARKER_SCHEMAS = ("bench-baseline-rows/v1",)
 MARKER_REQUIRED_KEYS = frozenset({"schema", "rows"})
 
@@ -344,7 +347,18 @@ def download_artifact(run_id: int, dest_dir: Path) -> Path | None:
     """Download the run's bench-baseline artifact zip; return path to bench-baseline.txt or None."""
     target = dest_dir / f"run-{run_id}"
     txt = target / ARTIFACT_FILE
-    if txt.exists():
+    # ⛔ THE CACHE HIT REQUIRES THE SENTINEL, NOT JUST THE .txt (TRK-371).
+    # Keying it on `bench-baseline.txt` alone conflates "this run was fully
+    # downloaded" with "a .txt is lying around here". A directory populated by
+    # an interrupted `gh run download`, or one cached before the artifact
+    # carried a marker, then serves a .txt with no `bench-baseline.rows` — and
+    # `judge_night_completeness` reads that as the VERSION BOUNDARY and
+    # grandfathers the night on its run's `success` conclusion. The grandfather
+    # clause is justified only for runs that predate the marker; a truncated
+    # cache borrowing that explanation is the exact substitution this change
+    # exists to stop. Caches written before this sentinel simply re-download
+    # once, which is self-healing.
+    if txt.exists() and (target / DOWNLOAD_SENTINEL).exists():
         return txt  # cached
     target.mkdir(parents=True, exist_ok=True)
     artifact_name = f"bench-baseline-{run_id}"
@@ -361,6 +375,10 @@ def download_artifact(run_id: int, dest_dir: Path) -> Path | None:
     if not txt.exists():
         print(f"  ⚠️  run {run_id}: artifact missing {ARTIFACT_FILE}", file=sys.stderr)
         return None
+    # Written only after `gh` returned 0 AND the .txt landed, so its presence
+    # means "everything this artifact had is here" — which is what lets an
+    # ABSENT marker be read as the version boundary rather than a partial fetch.
+    (target / DOWNLOAD_SENTINEL).write_text("", encoding="utf-8", newline="\n")
     return txt
 
 
