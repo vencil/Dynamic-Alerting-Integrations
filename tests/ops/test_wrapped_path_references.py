@@ -547,8 +547,7 @@ def _resolves(token: str) -> bool:
     return token in set(_tracked()) or token in _unique_basenames()
 
 
-def _names_a_file_through_its_basename(token: str, raw: str,
-                                       rejoined: str) -> str | None:
+def _names_a_file_through_its_basename(token: str, raw: str) -> str | None:
     """The tracked file a PREFIXED token names, when the prefix resolves to nothing.
 
     ⛔ THE GAP THIS CLOSES IS ONE THE MODULE ALREADY CLAIMED TO HAVE CLOSED.
@@ -595,45 +594,42 @@ def _names_a_file_through_its_basename(token: str, raw: str,
     reproducible without it. A candidate is a token that appears in the rejoined
     window and NOT in the raw one; it is then sorted by the FIRST of these that
     applies, in this order: `_resolves` as a whole (the pre-#1452 class) → no
-    prefix at all → basename fails the bare-name bounds → not a spelling of our
-    path → basename appears contiguously in the window AND the rejoined window
-    does not spell our real path → reported here. Reordering those tests
-    redistributes the same population into different buckets, so a bucket count
-    without this order attached means nothing.
-    ⚠️ The last two swapped places in #1579; the counts above were taken under
-    the old order and are labelled historical for that reason too.
+    prefix at all → basename fails the bare-name bounds → basename appears
+    contiguously in the window → not a spelling of our path → reported here.
+    Reordering those tests redistributes the same population into different
+    buckets, so a bucket count without this order attached means nothing.
 
-    ⛔ `base not in raw` IS THE WHOLE POINT — for every candidate EXCEPT one.
-    When the basename already appears contiguously somewhere in the two-line
-    window, a sweep that greps the basename still finds it and the break hides
-    nothing. Measured on #1499, dropping it wholesale costs 18 extra reports:
-    2 → 20 on its merge base, 0 → 18 on its head (re-measured on 2026-08-29 as
-    23 across 14 files, same shape). Seventeen of the 18 are joins like
-    `//git_shell.go` and `/tenant_custom_alerts.go`, where a comment marker or a
-    bare slash is all that was glued on; the eighteenth is a real partial path,
-    correctly let through because its basename is right there in the window.
+    ⛔ `base not in raw` IS THE WHOLE POINT, not a nicety. When the basename
+    already appears contiguously somewhere in the two-line window, `git grep`
+    finds it and the break hides nothing. Measured on #1499, dropping it costs 18
+    extra reports: 2 → 20 on its merge base, 0 → 18 on its head. Seventeen of the 18 are
+    joins like `//git_shell.go` and `/tenant_custom_alerts.go`, where a comment
+    marker or a bare slash is all that was glued on; the eighteenth is a real
+    partial path, correctly let through because its basename is right there in
+    the window.
 
-    ⛔ THE ONE EXCEPTION, and why it is not the same question (#1579). The two
-    halves of this guard answer DIFFERENT queries, and that is the whole reason
-    they can hold different gates without contradicting each other:
+    ⚠️ THIS GATE HAS A REAL GAP AND IT WAS DELIBERATELY LEFT OPEN (#1579).
+    A RELATIVE spelling of our own path — `../<tracked path>`, and equally
+    `./`, `../../`, `/`, `//` — is not itself a tracked path, so it arrives
+    here rather than at `_resolves`; but it CONTAINS the real path, so when the
+    break falls inside it a full-path `git grep` loses the site while the
+    basename stays greppable and this gate stays silent. The gap is real.
 
-        `_resolves`      the rejoined token IS a tracked path  → a FULL-PATH
-                         query is what the break can take away
-        this fallback    the rejoined token is a partial or foreign spelling →
-                         a full-path query never had anything here, so only a
-                         BASENAME query can be taken away
-
-    ⇒ silence when the basename is contiguous is right for the second row. But
-    a RELATIVE spelling of our own path (`../scripts/…`, `./scripts/…`) sits in
-    the second row while containing the real path as a substring, so the break
-    takes a full-path query away after all and the basename gate silenced it.
-    Measured 2026-08-29: 97 contiguous sites are spelled that way today
-    (`../` 39, `./` 58, boundary-anchored so `../x` is not counted twice), and
-    closing this adds ZERO reports on today's tree — a structural blind spot
-    removed, not a live defect found, exactly as the CR strip above.
-    ⚠️ The ticket asked whether a sweep greps the full path or the basename.
-    That question is about a person and nothing can measure it; this one is
-    `does the break take a query away`, and that is decidable per candidate.
+    ⛔ Closing it was implemented, measured and WITHDRAWN. Yielding the gate
+    when the rejoined window spells the real path reports zero extra sites on
+    this tree, and arms a false-positive surface of 545 contiguous occurrences
+    across 189 tracked files (`../../../` 225, `../../` 121, `./` 84, `../` 79,
+    `/` 30, plus deeper forms), concentrated in `docs/`, `README` and
+    `Makefile` — the prose that gets reflowed most. It fires on two adjacent
+    Markdown list items (a directory, then a file), which is the SECOND false
+    positive class this module's own docstring already lists; and the cheapest
+    ways back to green are one-character edits — change the bullet marker, add
+    a backtick, add a trailing space — each of which also silences a real
+    defect. A gate that teaches that edit is worse than the gap it closes.
+    ⚠️ Do not re-derive the armed surface from `../` and `./` alone: the first
+    attempt did, reported 97, and was wrong by more than fourfold because
+    `_is_a_spelling_of` drops EVERY `.`/`..`/empty segment, so every deeper
+    spelling is admitted too.
     """
     base = token.rsplit("/", 1)[-1]
     if base == token:
@@ -646,15 +642,12 @@ def _names_a_file_through_its_basename(token: str, raw: str,
         # that does not ask `_resolves` first would break that, and no test
         # would notice.
         return None            # no prefix — `_resolves` has already had its say
+    if base in raw:
+        return None            # grep still finds it; the line break hides nothing
     real = _unique_basenames().get(base)
-    if real is None or not _is_a_spelling_of(token, real):
+    if real is None:
         return None
-    if base not in raw:
-        return real
-    # ⛔ The basename is contiguous, so a basename sweep is fine — unless the
-    # REJOINED window spells our real path and the raw one does not, which is a
-    # full-path query the break really did take away. See THE ONE EXCEPTION.
-    return real if (real in rejoined and real not in raw) else None
+    return real if _is_a_spelling_of(token, real) else None
 
 
 def _is_a_spelling_of(token: str, real: str) -> bool:
@@ -712,8 +705,7 @@ def _wrapped_references(text: str) -> list[tuple[int, str]]:
             if token in raw:
                 continue
             if not (_resolves(token)
-                    or _names_a_file_through_its_basename(token, raw,
-                                                          rejoined)):
+                    or _names_a_file_through_its_basename(token, raw)):
                 continue
             found.append((index + 1, token))
     return found
@@ -1189,33 +1181,6 @@ def test_a_prefixed_token_is_resolved_through_its_basename() -> None:
     assert _wrapped_references(
         "# see wrong/dir/" + amb[:split] + "\n# " + amb[split:] + " here\n") == [], (
         "a prefixed token whose basename is ambiguous must NOT be reported")
-
-    # MUST REPORT: a RELATIVE spelling of our OWN path, basename contiguous —
-    # the #1579 cell, and the ONE place the gate above has to yield.
-    # ⛔ Read it against the `grepable` case two blocks up, which is the same
-    # shape MINUS the deciding property and must stay silent. Both are prefixed
-    # spellings whose basename is right there in the window; the difference is
-    # that the REJOINED window here spells the real tracked path and the raw one
-    # does not, so a full-path sweep loses this site to the break while a
-    # basename sweep does not. Pinning both is what keeps the exception an
-    # exception instead of a licence to drop the gate — dropping it wholesale
-    # was measured at +23 reports over 14 files, 21 of them joins like
-    # `//git_shell.go`.
-    parent_dir = target.rsplit("/", 1)[0]
-    for dots in ("../", "./"):
-        relative = dots + target
-        assert relative not in _tracked(), (
-            relative + " became a tracked path; `_resolves` would answer for it "
-            "and this case would stop exercising the fallback")
-        window = "# see " + dots + parent_dir + "/\n# " + base + " for the rule\n"
-        assert base in window and target not in window, (
-            "the fixture must leave the basename greppable and the full path "
-            "not, or it is testing something else")
-        got = [t for _, t in _wrapped_references(window)]
-        assert got == [relative], (
-            "a relative spelling of our own path is a full-path query that the "
-            "break takes away, even though the basename stayed greppable: "
-            + repr(got))
 
 
 def test_a_wrapped_reference_is_seen_in_a_crlf_file() -> None:
