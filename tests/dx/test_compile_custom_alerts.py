@@ -1112,9 +1112,12 @@ def test_check_still_names_the_remedy_on_ordinary_drift(tmp_path, monkeypatch, c
 
 # --- G. the three shapes the erase guard does NOT stop, and what is said instead ---
 def test_partial_loss_names_the_rules_regenerating_would_remove(tmp_path, monkeypatch, capsys):
-    # Measured on the live tree: three tenants, rename one file, and this is the
-    # branch you land in — rc=1 with "just regenerate", and following it drops that
-    # tenant's alerts from the pack, the ConfigMaps and the CRD, every gate green.
+    # The incident this was measured on: three tenants on the live tree, one file
+    # renamed to `.yml`, and this is the branch you land in — rc=1 with "just
+    # regenerate", and following it drops that tenant's alerts from the pack, the
+    # ConfigMaps and the CRD, every gate green. ⚠️ The TEST no longer reproduces it
+    # that way (see the note at the deletion below); the branch is the same either
+    # way, and the loss must be built by something #1603 will not take away.
     # The write is still allowed (retiring one recipe is ordinary work); what must
     # not happen is being told to regenerate without being told what that removes.
     src, out = tmp_path / "src", tmp_path / "pack.yaml"
@@ -1129,7 +1132,13 @@ def test_partial_loss_names_the_rules_regenerating_would_remove(tmp_path, monkey
     assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
     capsys.readouterr()
 
-    (src / "b.yaml").rename(src / "b.yml")   # byte-identical, just invisible now
+    # ⛔ DELETED, NOT RENAMED TO `.yml` (#1603). The original of this line renamed the
+    # file so the loader stopped matching it — which made the test depend on the very
+    # defect #1603 exists to remove. Measured: widening the loader to accept `.yml`
+    # turns this test and two siblings red (`assert 0 == 1`), so the loss they build
+    # would have vanished. Deletion is a real tenant offboarding and is independent of
+    # any extension the loader does or does not accept.
+    (src / "b.yaml").unlink()
     monkeypatch.setattr(sys, "argv", ["compile", "--check",
                                       "--config-dir", str(src), "--out", str(out)])
     assert cc.main() == cc.EXIT_VIOLATION
@@ -1141,8 +1150,16 @@ def test_partial_loss_names_the_rules_regenerating_would_remove(tmp_path, monkey
     assert "net loss of coverage" in err, "nothing replaced the dropped rules; say so"
 
     # Positive control: drift with NOTHING dropped must not grow a casualty list.
+    # ⛔ Restored by REWRITING, not by renaming back — the loss above is now a delete,
+    # so there is no `b.yml` to move. (This line is why converting the three
+    # loss-creating renames was not a one-line change: the restore direction spells
+    # the same operation the other way round, and a scan keyed on the loss direction
+    # does not see it.)
     capsys.readouterr()
-    (src / "b.yml").rename(src / "b.yaml")
+    (src / "b.yaml").write_text(
+        'tenants:\n  tb:\n    _custom_alerts:\n'
+        '      - {recipe: threshold, name: b_hot, metric: b_m, op: ">",'
+        ' window: 5m, threshold: "80:warning"}\n', encoding="utf-8")
     (src / "c.yaml").write_text(
         'tenants:\n  tc:\n    _custom_alerts:\n'
         '      - {recipe: threshold, name: c_hot, metric: c_m, op: ">",'
@@ -1261,7 +1278,7 @@ def test_quarantine_never_swallows_which_tree_was_read(tmp_path, monkeypatch, ca
     assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
     capsys.readouterr()
 
-    (src / "a.yaml").rename(src / "a.yml")                        # invisible
+    (src / "a.yaml").unlink()                       # gone (see #1603 note above)
     (src / "b.yaml").write_text(                                   # …and quarantined
         _TWO_TENANTS["b.yaml"].replace("window: 5m", "window: 5x"), encoding="utf-8")
     assert _compile_into(src, out, monkeypatch) == cc.EXIT_VIOLATION
@@ -1298,7 +1315,7 @@ def test_the_write_that_drops_rules_says_so_too(tmp_path, monkeypatch, capsys):
     assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
     capsys.readouterr()
 
-    (src / "b.yaml").rename(src / "b.yml")
+    (src / "b.yaml").unlink()                       # gone (see #1603 note above)
     assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK    # still allowed
     cap = capsys.readouterr()
     assert "✅" in cap.out                                        # …it did compile something
@@ -1679,3 +1696,155 @@ def test_the_gate_does_not_depend_on_config_dir(tmp_path, monkeypatch, capsys):
     assert cc.main() == cc.EXIT_CALLER_ERROR
     assert not (fake_repo / cc.OUT_REL).exists()
     assert cc.OUT_REQUIRED in capsys.readouterr().err
+
+
+# --- M. the extension a tenant happens to type is not a filter (#1603) -------
+# The exporter's scanner (`config_hierarchy.go`) accepts BOTH `.yaml` and `.yml` as
+# tenant carriers. This compiler accepted only `.yaml`, so a tenant declared in
+# `db-b.yml` had no custom alerts at all while the exporter was serving that tenant —
+# ADR-024 Capability B, shipped in v2.9.0. Measured on the two trees below before the
+# fix: `.yaml` -> 1 shape / 6 rules, `.yml` -> 0 shapes / 0 rules, rc=0 both times.
+_RECIPE_BODY = ('tenants:\n  db-b:\n    _custom_alerts:\n'
+                '      - {recipe: threshold, name: cpu_hot, metric: node_cpu, op: ">",'
+                ' window: 5m, threshold: "80:warning"}\n')
+
+
+def test_the_extension_a_tenant_typed_does_not_change_what_compiles(
+        tmp_path, monkeypatch):
+    """⛔ PARITY, not spelling. Asserting "`.yml` is accepted" would be satisfied by a
+    reader that accepts `.yml` and nothing else; asserting the two trees produce the
+    SAME pack cannot be, and it keeps saying the right thing if a third spelling is
+    ever added to the exporter's set.
+    """
+    a, b = tmp_path / "A", tmp_path / "B"
+    _write_tree(a, {"_defaults.yaml": "defaults:\n  mysql_threads_running: 80\n",
+                    "db-b.yaml": _RECIPE_BODY})
+    _write_tree(b, {"_defaults.yaml": "defaults:\n  mysql_threads_running: 80\n",
+                    "db-b.yml": _RECIPE_BODY})
+    # The only difference between the trees is the four characters of the extension.
+    assert (a / "db-b.yaml").read_bytes() == (b / "db-b.yml").read_bytes()
+
+    pa, pb = tmp_path / "a.yaml", tmp_path / "b.yaml"
+    assert _compile_into(a, pa, monkeypatch) == cc.EXIT_OK
+    assert _compile_into(b, pb, monkeypatch) == cc.EXIT_OK
+
+    rules_a, rules_b = cc._committed_rules(pa), cc._committed_rules(pb)
+    # ⛔ Anti-vacuity: two EMPTY packs are also "equal". The `.yaml` side is the
+    # control — if it stops producing rules this assertion means nothing, and that is
+    # exactly how a widened-but-broken reader would look.
+    assert rules_a, "the .yaml control produced nothing — the comparison is vacuous"
+    assert rules_a == rules_b
+
+
+def test_an_unreadable_yml_carrier_is_named_not_skipped(tmp_path):
+    """The OTHER call site in this module, which is a different promise (#1603).
+
+    `unusable_config_entries` answers "which config-NAMED things could this reader not
+    read", and the loader turns each into a `file_errors` record. Narrowed to `.yaml`
+    it did not consider `.yml` config-named at all, so an unreadable `.yml` carrier was
+    not quarantined and not reported — it was simply absent, which is the shape ADR-024
+    already promises against ("a broken file is quarantined, not disappeared").
+
+    ⛔ The unreadable thing here is a DIRECTORY wearing a config name. That case needs
+    no symlink privilege and no permission bits, so it reproduces on every host this
+    suite runs on — unlike the broken-symlink and chmod cases in `test_lib_confd.py`,
+    which are exactly the ones that fail on a stock Windows checkout.
+
+    ⛔ Measured before the widening: this mutant survives every other test in this
+    file, which is why it is here — reverting only the `unusable_config_entries` call
+    left the whole suite green.
+    """
+    (tmp_path / "db-c.yml").mkdir()                      # config-named, unreadable
+    (tmp_path / "db-b.yaml").write_text(_RECIPE_BODY, encoding="utf-8")
+
+    _triples, file_errors = ld.collect_instances(tmp_path)
+    named = [e for e in file_errors if "db-c.yml" in str(e)]
+    assert named, f"an unreadable .yml carrier must be named, got {file_errors}"
+
+    # Must-fire control: the same shape spelled `.yaml` was already named before this
+    # change, so if THIS stops being reported the assertion above is meaningless.
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / "db-c.yaml").mkdir()
+    (other / "db-b.yaml").write_text(_RECIPE_BODY, encoding="utf-8")
+    _t2, fe2 = ld.collect_instances(other)
+    assert [e for e in fe2 if "db-c.yaml" in str(e)], "the .yaml control stopped firing"
+
+
+def test_a_defaults_carrier_is_read_under_either_extension(tmp_path, monkeypatch):
+    """⚠️ CONTRACT PIN, NOT NEW DETECTION — counterfactual measured.
+
+    #1606 already widened `_dir_defaults_alerts` (it passes no `suffixes`), so this
+    test was green BEFORE this change too: neither of the two mutants that revert this
+    change kills it. It is kept because the platform-policy path is the one whose
+    silent loss is hardest to notice, not because it buys detection here.
+    """
+    # The same axis one level up: a platform-policy recipe lives in `_defaults.*`, and
+    # `_dir_defaults_alerts` selected it by extension too. A tenant that declares
+    # nothing must still inherit it from `_defaults.yml`.
+    policy = ('defaults:\n  mysql_threads_running: 80\n'
+              '_custom_alerts:\n'
+              '  - {recipe: threshold, name: plat, metric: plat_m, op: ">",'
+              ' window: 5m, threshold: "80:warning"}\n')
+    a, b = tmp_path / "A", tmp_path / "B"
+    _write_tree(a, {"_defaults.yaml": policy, "t.yaml": "tenants:\n  t1: {}\n"})
+    _write_tree(b, {"_defaults.yml": policy, "t.yaml": "tenants:\n  t1: {}\n"})
+
+    pa, pb = tmp_path / "a.yaml", tmp_path / "b.yaml"
+    assert _compile_into(a, pa, monkeypatch) == cc.EXIT_OK
+    assert _compile_into(b, pb, monkeypatch) == cc.EXIT_OK
+    rules_a, rules_b = cc._committed_rules(pa), cc._committed_rules(pb)
+    assert rules_a, "the .yaml control produced nothing — the comparison is vacuous"
+    assert rules_a == rules_b
+
+
+def test_a_carrier_the_exporter_does_not_serve_is_not_a_tenant_here(tmp_path):
+    """⛔ The CEILING. Everything above pins the floor — this reader must not be
+    NARROWER than the exporter's set — and blind review measured that the other
+    direction was unwatched: widening either call site to
+    `(".yaml", ".yml", ".json")` is a one-token edit that left all 151 tests green
+    while the compiler read `db-j.json` as a tenant it would then emit alerts for,
+    and named a `.json` directory as a config it could not read. Both are answers
+    this tool has no business giving: `config_hierarchy.go` does not serve either.
+    `has_yaml_extension`'s own docstring says out loud that this parameter gets
+    edited, so "nobody would do that" is not the guard.
+
+    ⛔ Behavioural, not a re-spelling of the call sites. Asserting that the two
+    calls pass no `suffixes=` would go green for a reader that then ignores the
+    result; this asks what the reader DOES with a carrier the exporter does not
+    serve, so it survives `CONFIG_SUFFIXES` itself changing for a reason.
+
+    ⛔ THE TENANT ID COMES FROM THE FILE'S CONTENT, NOT ITS NAME. The first
+    version of this test gave the `.json` file the same body as the control and
+    asserted no tenant named after the file appeared — an assertion that cannot
+    fire, because reading `db-j.json` yields a second `db-b`. Measured: the
+    site-2 mutant stayed green through it. So the extra carrier declares a
+    tenant only IT can introduce.
+
+    ⚠️ THE NAME OVERSTATES WHAT THIS PINS: only the EXTENSION axis. There is a
+    carrier the exporter does not serve that this reader does — a hidden one.
+    `scanDirHierarchical` prunes `.`-prefixed dirs and skips `.`-prefixed files
+    (`config_hierarchy.go:181,190`); this reader reads both. Measured on the
+    tree BEFORE #1603 widened anything: `.hidden.yaml` and `.draft/db.yaml`
+    already produced tenants, so that divergence is pre-existing and #1603 only
+    extends it to the second spelling. Closing it removes tenants that compile
+    today, which is its own behaviour change — the hidden-path axis of #1339,
+    filed separately. Do not read a green run here as "the two planes agree".
+    """
+    json_only = _RECIPE_BODY.replace("db-b:", "db-json-only:")
+    assert "db-json-only:" in json_only, "the fixture rewrite missed — test is vacuous"
+
+    (tmp_path / "db-b.yml").write_text(_RECIPE_BODY, encoding="utf-8")
+    (tmp_path / "db-j.json").write_text(json_only, encoding="utf-8")
+    (tmp_path / "bad.json").mkdir()          # unreadable, but still not ours to name
+
+    triples, file_errors = ld.collect_instances(tmp_path)
+
+    # ⛔ Control FIRST. Both negatives below are satisfied by a reader that read
+    # nothing at all, which is precisely the failure the floor tests exist for.
+    assert [t for t in triples if t[0] == "db-b"], \
+        "the .yml control produced no tenant — the two negatives below are vacuous"
+    assert not [t for t in triples if t[0] == "db-json-only"], \
+        f"a .json carrier introduced a tenant the exporter does not serve: {triples}"
+    assert not [e for e in file_errors if ".json" in str(e)], \
+        f"a .json entry was named as an unreadable config: {file_errors}"

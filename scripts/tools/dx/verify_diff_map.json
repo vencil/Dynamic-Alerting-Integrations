@@ -773,7 +773,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "a9c574f16678eacec111289c0898c714ff4444bee132db12507d363f074dc663",
+ "source_digest": "9fbba92c75639ea96dccbbfe7590b59568510cd3c1dba0bb002018786ad71970",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -2703,6 +2703,9 @@
   "tests/dx/test_bump_docs.py": [
    "tests/dx/test_verify_diff.py",
    "tests/shared/test_dry_run_no_write.py"
+  ],
+  "tests/dx/test_compile_custom_alerts.py": [
+   "tests/shared/test_confd_case_parity_across_tools.py"
   ],
   "tests/dx/test_coverage_delta.py": [
    "tests/dx/test_dx_json_stdout_contract.py"
