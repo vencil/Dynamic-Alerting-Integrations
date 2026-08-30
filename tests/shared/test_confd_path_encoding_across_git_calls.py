@@ -266,6 +266,19 @@ def test_an_unusable_carrier_is_named_once_not_once_per_metric(
         cwd=str(repo), capture_output=True, timeout=60).stdout
     changed = [ln for ln in diff.splitlines()
                if re.match(rb"^[-+]\s+\w+:\s+.+$", ln)]
+    # ⛔ Counting diff LINES equals counting the tool's CHANGES only while the
+    # edit is a pure removal. A metric whose value merely changes produces two
+    # lines (`-` and `+`) that the parser folds into ONE change — measured:
+    #
+    #   pure removal   guard 2 lines / tool 2 changes   agree
+    #   value change   guard 2 lines / tool 1 change    diverge
+    #
+    # So the precondition is asserted, not described: swapping this fixture to
+    # "change a value" to make up the count — the natural next edit — trips
+    # this line instead of quietly making the guard above wrong.
+    assert changed and all(ln.startswith(b"-") for ln in changed), (
+        f"this fixture is no longer a pure removal, so counting diff lines "
+        f"no longer counts the tool's changes: {changed!r}")
     assert len(changed) >= 2, (
         f"this tree yields {len(changed)} change line(s); with fewer than two "
         f"the dedup cannot be observed at all: {changed!r}")
