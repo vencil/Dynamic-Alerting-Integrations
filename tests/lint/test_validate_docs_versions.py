@@ -1746,12 +1746,21 @@ class TestToolCountReadsBothLanguages:
 
         #1540's defect was that the English pattern scored ZERO hits on the
         SHIPPED files while looking perfectly reasonable. Every other test in
-        this class builds a synthetic tree and monkeypatches
-        `TOOL_COUNT_CHECK_FILES`, so none of them can see that failure return
+        this class that calls this checker goes through `_tree`, which
+        monkeypatches BOTH `REPO_ROOT` and `TOOL_COUNT_CHECK_FILES`, so none
+        of them can see that failure return
+        (⚠️ an earlier revision said "every other test in this class", which
+        is not true: `test_the_sibling_doc_file_count_repair_is_line_scoped_too`
+        and `test_the_checker_is_looser_than_the_writer_on_purpose` build no
+        tree — measured, neither of them calls `check_tool_count_in_docs` at
+        all, so they are not exceptions to the blindness, they are outside it)
         — measured: setting that list to `[]` leaves the whole module green
-        at 107 passed while the checker reads nothing at all (measured on
-        `ed43e772`; this module holds 116 tests today, and the same mutation
-        is killed by this test).
+        while the checker reads nothing at all (measured on `ed43e772`,
+        where the run was 107 passed), and the same mutation is killed by
+        this test. ⚠️ Do not re-quote a module test count here: an earlier
+        revision said "116 tests today" when the module collected 99. The
+        claim that carries weight is the SHAPE — the mutation survives
+        everywhere else and dies here — not the tally.
 
         ⚠️ Deliberately asserts that each pattern READS something, not what
         the number is. A drifted count is already `bump_docs

@@ -126,6 +126,7 @@
   "scripts/tools/dx/bump_docs.py": [
    "tests/dx/test_bump_docs.py",
    "tests/dx/test_line_ending_policy.py",
+   "tests/lint/test_validate_docs_versions.py",
    "tests/shared/test_entrypoint.py"
   ],
   "scripts/tools/dx/bump_playbook_versions.py": [
@@ -767,7 +768,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "14a3117c43856b823ddf5192699b061acea03bdf643c842287162ec4bd5688d1",
+ "source_digest": "ce78aa0d0626b541b3614c87b123a1bc1b3fd548aa66001f41ca534ca6f556f0",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1231,6 +1232,7 @@
    "tests/lint/test_check_threshold_reachability.py",
    "tests/lint/test_counterexample_coverage.py",
    "tests/lint/test_e2e_spec_lint.py",
+   "tests/lint/test_validate_docs_versions.py",
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/ops/test_generated_ci_artifacts.py",
    "tests/ops/test_wrapped_path_references.py",
@@ -1334,6 +1336,7 @@
    "tests/lint/test_check_doc_datools_cmds.py"
   ],
   "components/da-tools/app/VERSION": [
+   "tests/lint/test_validate_docs_versions.py",
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/ops/test_wrapped_path_references.py"
   ],
@@ -1608,7 +1611,8 @@
    "tests/dx/test_generate_doc_map.py"
   ],
   "docs/internal/doc-map.md": [
-   "tests/dx/test_generate_doc_map.py"
+   "tests/dx/test_generate_doc_map.py",
+   "tests/lint/test_validate_docs_versions.py"
   ],
   "docs/internal/iac-lint-baseline.md": [
    "tests/ops/test_ci_aggregate_gate_contract.py"
@@ -1853,6 +1857,9 @@
    "tests/lint/test_check_scrape_reachability.py",
    "tests/ops/test_operator_generate_v2.py"
   ],
+  "helm/threshold-exporter/Chart.yaml": [
+   "tests/lint/test_validate_docs_versions.py"
+  ],
   "helm/threshold-exporter/templates/configmap.yaml": [
    "tests/helm/test_optional_overrides_render.py"
   ],
@@ -2008,6 +2015,7 @@
   "mkdocs.yml": [
    "tests/lint/test_check_head_blob_hygiene.py",
    "tests/lint/test_mkdocs_strict_check.py",
+   "tests/lint/test_validate_docs_versions.py",
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/ops/test_validate_config.py"
   ],
@@ -2347,6 +2355,7 @@
    "tests/lint/test_check_cross_ns_url_consistency.py",
    "tests/lint/test_check_lint_toolchain_fit.py",
    "tests/lint/test_check_threshold_reachability.py",
+   "tests/lint/test_validate_docs_versions.py",
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/ops/test_image_flat_layout.py",
    "tests/shared/test_bilingual_help_contract.py",
@@ -2355,6 +2364,9 @@
   "scripts/tools/lint/_rule_tree.py": [
    "tests/lint/test_check_pint.py",
    "tests/ops/test_generate_routes_orchestration.py"
+  ],
+  "scripts/tools/lint/_version_patterns.py": [
+   "tests/lint/test_validate_docs_versions.py"
   ],
   "scripts/tools/lint/check_admin_config_schema.py": [
    "tests/lint/test_check_admin_config_schema.py"
@@ -2598,6 +2610,7 @@
   ],
   "scripts/tools/ops/scaffold_tenant.py": [
    "tests/lint/test_check_structure.py",
+   "tests/lint/test_validate_docs_versions.py",
    "tests/shared/test_help_contract.py",
    "tests/shared/test_pipeline_integration.py"
   ],

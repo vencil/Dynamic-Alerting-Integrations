@@ -851,14 +851,21 @@ def check_tool_count_in_docs() -> List[Issue]:
     `scripts/tools/{ops,dx,lint}`.
 
     ⛔ TOOL_COUNT_CHECK_FILES is a list of files whose tool-count sentence
-    declares THAT scope. It is not "every file that mentions a tool count",
-    and the difference is load-bearing: `docs/README.{md,en.md}` also carry a
-    Python-tool number, and they are deliberately absent, because their
-    sentence declares a different scope — ``scripts/tools/`` whole-tree,
-    "in total" in the English half. Comparing a `{ops,dx,lint}` number
-    against a whole-tree claim would make the sentence wrong in a new way
-    rather than right; which scope those two files should declare is a
-    documentation decision, tracked in #1540 rather than settled here.
+    declares THAT scope. It is not "every file that mentions a tool count".
+    ⚠️ But do NOT read the list itself as a guard. Measured: appending
+    `docs/README.{md,en.md}` to it produces byte-identical output, because
+    what declines to read a foreign scope is the TOOL_COUNT_SCOPE_ANCHOR
+    test at the top of the per-line loop (and its twin in `_auto_fix`), not
+    the list. The list decides what gets OPENED; the anchor decides what
+    gets COMPARED, and only the second one carries weight.
+    ⚠️ Historical note, kept because it is what gave the anchor its shape:
+    `docs/README.{md,en.md}` carried their own Python-tool number (`73`)
+    under a WIDER scope — ``scripts/tools/`` whole-tree, spelled "in total"
+    in the English half — while this check counts `{ops,dx,lint}`. Reading
+    one against the other would have made a true sentence false rather than
+    right. #1540 gap 1 resolves that by REMOVING those two numbers instead
+    of refilling them (#1637), so do not re-derive the anchor's purpose
+    from whatever those two files happen to say today.
 
     ⚠️ "Deferred" is not "harmless": both of those files say **73**, and no
     reading of the tree produces that, and no plausible future one will:
@@ -871,11 +878,24 @@ def check_tool_count_in_docs() -> List[Issue]:
     invariant is that no scope this module can compute lands anywhere near
     73.
     ⛔ Do NOT quote 238 beside those two, as an earlier revision of this
-    docstring did. 238 is a bare `rglob("*.py")`: it counts the 12 `_lib*`
-    modules and one package `__init__` as tools, so it answers a different
-    question than the 221 next to it, and putting the two in one sentence
-    invites the reader to subtract them. Two counts only compare when they
-    share a predicate.
+    docstring did. On `05d31362` a bare `rglob("*.py")` gives 238, and the
+    gap from it to each number above is a DIFFERENT gap:
+
+      238 - 225 = 13  PREDICATE: 12 `_lib*` modules + one package `__init__`.
+      238 - 221 = 17  that same 13, PLUS 4 more excluded by SCOPE rather
+                      than by predicate — `validate_all.py` at the tools
+                      root and the three `dx/custom_alerts/` package
+                      modules, which `count_scope` never sees because it
+                      globs one level deep instead of recursing.
+
+    ⚠️ An earlier revision of this paragraph gave the 13 as if it explained
+    the gap to 221; it does not, and a reader who checked would have got 17
+    and reasonably concluded the whole measurement was invented.
+    ⛔ So "they share a predicate" is NOT the rule. 221 and 225 share
+    `is_tool_file` and are still not comparable — they differ by scope. Two
+    counts compare only when they share BOTH the predicate and the scope,
+    and subtracting any two of these three without saying which axis moved
+    produces a number that means nothing.
     The number has not moved since v2.1.0 (`827ee07e`), no
     `bump_docs` rule points at either file, and nothing checks them. This
     check staying out of their way is a decision about SCOPE, not a statement
@@ -885,15 +905,25 @@ def check_tool_count_in_docs() -> List[Issue]:
     findings. It is kept in the list because an unmatched FILE costs one read,
     unlike an unmatched RULE, which would be a defect (see
     `bump_docs.apply_count_updates`'s DEAD diagnosis).
-    ⛔ Do NOT read that as "it would be covered if it regained one". Blind
-    review checked the only tool-count sentence that file has ever had
-    (`2a9078ee`): 「完整工具表（42 個 Python 工具…）見 tool-map.md」 — that
-    declares the TOOL-MAP scope, root-inclusive, and carries no anchor, so
-    this check would skip it in silence. `CLAUDE.md` also has no `bump_docs`
-    count rule, so the writer's DEAD diagnosis would not catch it either.
-    That is a blind spot the anchor introduces, disclosed rather than guessed
-    at; closing it means deciding which scope `CLAUDE.md` should state, which
-    is the same documentation decision as #1540's gap 1.
+    ⛔ Do NOT read that as "it would be covered if it regained one" — and do
+    not read the REASON off a single sample, as an earlier revision of this
+    docstring did. Measured over all 199 revisions of `CLAUDE.md` (with
+    Python `re`; `grep -E` matches bytes, so a CJK pattern reports zero hits
+    for every revision and looks exactly like "no such sentence"): 57 of them
+    carry a tool-count sentence, in 7 distinct shapes. The one quoted as "the
+    only tool-count sentence that file has ever had" (`2a9078ee`:
+    「完整工具表（42 個 Python 工具…）見 tool-map.md」) accounts for 4 of those
+    57, and two other shapes declare THIS check's scope outright — e.g.
+    `e32e768a`: 「96 個 Python 工具（不含共用函式庫，ops+dx+lint=96）」. The file
+    has stated this scope before; inferring a different one from one sample
+    was not measurement.
+    ⭐ What survives the correction is the half that matters: the scope anchor
+    appears in 0 of those 199 revisions, so a sentence this file regained
+    would be skipped in silence unless it also named the scope. `CLAUDE.md`
+    has no `bump_docs` count rule either, so the writer's DEAD diagnosis would
+    not catch it. That blind spot is disclosed, not guessed at; closing it
+    means deciding what `CLAUDE.md` should state — the same documentation
+    decision as #1540's gap 1.
     """
     issues = []
     if not (REPO_ROOT / "scripts" / "tools").exists():
@@ -919,11 +949,14 @@ def check_tool_count_in_docs() -> List[Issue]:
                 # ⛔ Ambiguous: the anchor says this line is about the counted
                 # scope, but it states more than one count, and nothing here
                 # can tell which one the scope governs. Guessing is what makes
-                # this dangerous — measured on the shipped README, a line
-                # reading "221 Python tools under <scope>, incl. 105 Python
-                # tools in lint/" had the true 105 reported as a drift and
-                # then rewritten to 221 by `--fix`, which then printed
-                # "All version references and counts are consistent."
+                # this dangerous — measured on `5cff2359`, where the tree
+                # held 221 tools under the scope and 105 under `lint/`: a
+                # line reading "221 Python tools under <scope>, incl. 105
+                # Python tools in lint/" had the true 105 reported as a
+                # drift and then rewritten to 221 by `--fix`, which then
+                # printed "All version references and counts are
+                # consistent." ⚠️ Both numbers have since moved; they are
+                # quoted as the reading at that SHA, not as current values.
                 issues.append(Issue(
                     "tool-count", "warn", rel, i,
                     f"line states {len(occurrences)} counts "
