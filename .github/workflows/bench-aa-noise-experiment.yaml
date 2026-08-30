@@ -301,6 +301,22 @@ jobs:
           fi
           echo "emitting ${#files[@]} file(s), ${emitted} encoded bytes"
           cat "$rec"
+          # ⛔ 下面這段**不取代**上面的 base64 —— 那是位元組精確的救援路徑，留著。
+          #    多印一份緊湊摘要，理由是實測出來的成本：base64 一次要來回數十 KB
+          #    （12 輪 x 2 側 x 1 支 bench 約 13 KB，4 支的場次更大），而驅動本
+          #    實驗的分析環境只能整段取 log 的**尾巴**。同樣的數字寫成一行一檔
+          #    約 2 KB，且**印在最後**，所以取一個小 tail 就拿得到全部。
+          # ⚠️ 摘要只有 `N:ns/op`，沒有 goos / goarch / pkg / cpu 那幾行，也沒有
+          #    digest。要逐位元還原、或要知道跑在哪顆 CPU 上，仍然只能走上面那條。
+          for f in "${files[@]}"; do
+            awk -v n="$(basename "$f" .txt)" '
+              /^Benchmark/ {
+                name = $1; sub(/-[0-9]+$/, "", name)
+                a[name] = a[name] " " $2 ":" $3
+              }
+              END { for (k in a) printf "AAROW %s %s%s\n", n, k, a[k] }
+            ' "$f"
+          done
 
       - name: Summarize
         if: always()
