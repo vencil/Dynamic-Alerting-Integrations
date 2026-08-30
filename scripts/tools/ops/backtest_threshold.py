@@ -187,25 +187,28 @@ def _git_bytes(args, quotepath_off=False):
     return result.stdout
 
 
-def _ascii_safe(text):
-    r"""A form of `text` that is safe to print on a strict-UTF-8 stream.
-
-    ⛔ A name decoded with `surrogateescape` cannot be encoded back to UTF-8,
-    so printing one raises `UnicodeEncodeError` -- i.e. the warning about a
-    dropped carrier would itself be the crash. `backslashreplace` renders the
-    lone surrogate as `\udcff` instead.
-    """
-    return text.encode("utf-8", "backslashreplace").decode("ascii", "replace")
-
-
 def _warn_dropped_carrier(shown, reason):
-    """Say once that a carrier was dropped, and why.
+    r"""Say once that a carrier was dropped, and why.
 
     ⛔ The charge in #1634 is that a REMOVED threshold vanished silently. The
     shapes below still vanish -- they are not all fixable here -- but they no
     longer do it quietly, which is the whole difference the family turns on.
+
+    ⚠️ `shown` may hold a lone surrogate (a name that is not valid UTF-8,
+    decoded by `_fsdecode`). Printing it needs no escaping of our own: the
+    first version of this function ran it through `backslashreplace` first,
+    on the stated grounds that "printing a surrogate raises
+    UnicodeEncodeError, so the warning would itself be the crash". ⛔ That
+    was reasoned, not measured, and it is FALSE -- Python gives `sys.stderr`
+    `errors='backslashreplace'`, so the surrogate prints as `\udcff` on its
+    own. Measured, both defaults and `PYTHONIOENCODING=utf-8:strict`:
+
+        print('legacy-\udcff', file=sys.stderr)   rc=0, prints legacy-\udcff
+
+    The helper bought nothing, had no guard of its own, and its docstring
+    asserted a crash that does not happen -- exactly the shape this whole
+    change exists to remove. It was deleted rather than re-justified.
     """
-    shown = _ascii_safe(shown)
     if shown in _WARNED_DROPPED_CARRIER:
         return
     _WARNED_DROPPED_CARRIER.add(shown)
@@ -567,6 +570,32 @@ def changed_conf_files():
     # ⚠️ No `.strip()` any more: with `-z` the delimiter is exact, and a name
     # is allowed to begin or end with a space. Stripping was load-bearing only
     # while the records were newline-delimited.
+    #
+    # ⛔ A KNOWN, NAMED DISAGREEMENT WITH `extract_changes_from_git_diff`.
+    # This listing sees carriers that the diff parser above drops (it drops a
+    # quoted or tab-padded header and says so). So the tool can answer "that
+    # carrier changed" here while answering "it has no threshold change"
+    # there — the #1339 shape, in one process, about one file.
+    #
+    # Measured on both trees, one carrier per arm:
+    #
+    #   has space.yaml   base ['conf.d/has space.yaml'] / diff [] )  identical
+    #                    here ['conf.d/has space.yaml'] / diff [] )  to base
+    #   has"quote.yaml   base []                        / diff []
+    #                    here ['conf.d/has"quote.yaml'] / diff []  <- widened
+    #
+    # So the disagreement is PRE-EXISTING (the space row shows it byte for
+    # byte on base) and `-z` widens it by one row. Closing it would mean
+    # hand-writing git's quoting rules a second time, here in the listing, to
+    # predict what the diff parser will refuse — a second copy of a rule,
+    # which is the family's own charge. Deliberately left open and named.
+    #
+    # ⛔ And deliberately NOT pinned by a test: any assertion of the current
+    # split would go red the day someone legitimately closes it, i.e. a guard
+    # that says the opposite of what it means (#1448). The consequence is
+    # bounded — the extra carriers only widen `find_custom_alert_tenants`
+    # coverage; they cannot become a change, because the parser that builds
+    # changes is the half that drops them.
     names = [_fsdecode(b) for b in raw.split(b"\0") if b]
     return [f"conf.d/{Path(n).name}" for n in names
             if has_yaml_extension(n, (".yaml",))

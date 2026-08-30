@@ -250,6 +250,94 @@ def test_a_name_this_parser_cannot_read_is_named_not_swallowed(
         f"{result.stderr!r}")
 
 
+@pytest.mark.parametrize("dirty_rel", [
+    pytest.param(b"db-a.yaml", id="fast_path"),
+    pytest.param(b"sub/db-a.yaml", id="fallback"),
+])
+def test_a_head1_body_that_is_not_utf8_does_not_take_the_run_down(
+        tmp_path, prom_url, dirty_rel):
+    """⛔ The two `git show` calls read file CONTENT, not a path — and this
+    case is REACHABLE only because the sites above were fixed.
+
+    Before, a carrier whose body held an invalid byte was dropped upstream
+    (or its tenant never resolved), so `git show` was never reached with
+    one. Now a removal routes straight into `_flat_keys_at_head1`, and with
+    `text=True` that call raises `UnicodeDecodeError` from inside
+    `subprocess.run` — which is NOT in the tool's
+    `except (TimeoutExpired, FileNotFoundError)`.
+
+    ⛔ This test exists because the mutation battery found the gap: putting
+    `text=True` back on either `git show` left every other gate file green.
+    A fix whose only evidence is the fixer's own reasoning is not covered.
+
+    The carrier NAME here is deliberately plain ASCII, so nothing but the
+    body encoding can be what this pins.
+
+    ⛔ THE BAD BYTE IS IN HEAD~1 ONLY, and that placement is the test.
+    The first version of this fixture put it in BOTH commits, so the WORKING
+    TREE held it too — and `load_conf_files` reads the working tree through
+    `load_yaml_file`, which opens in text mode and dies there first. Measured:
+    that arm raises the identical `UnicodeDecodeError` on base and on this
+    tree, from `_lib_io.py`, i.e. it is a PRE-EXISTING defect on a different
+    axis (a conf.d body that is not UTF-8 at all) and it masked the call this
+    test is for — the same "the upstream dies before the thing under test is
+    reached" shape this file's header describes. That axis is not fixed here.
+
+    With the byte only in HEAD~1 the arms separate cleanly (measured):
+
+        base  rc=1  UnicodeDecodeError
+        here  rc=0  no traceback
+
+    The removal on the dirty carrier is still DROPPED — `yaml.safe_load` on
+    bytes answers `ReaderError`, a `YAMLError`, which the pre-existing handler
+    turns into an empty key set. Crash became the pre-existing silent skip,
+    which is exactly what this change claims and no more.
+    """
+    repo = tmp_path / "badbody"
+    (repo / "conf.d").mkdir(parents=True)
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "t@example.invalid")
+    _git(repo, "config", "user.name", "t")
+    _git(repo, "config", "core.quotepath", "true")
+    # ⛔ BOTH `git show` call sites, and they need different fixtures. The
+    # fast path spells the carrier from the tenant id; only when that spelling
+    # MISSES does the fallback (resolve the real path, then show it) run. A
+    # top-level carrier never reaches the fallback, so pinning the fast path
+    # alone leaves the second call unguarded — measured: with only the
+    # top-level arm, putting `text=True` back on the fallback left this file
+    # green. The nested arm makes the fast-path spelling
+    # (`conf.d/db-a.yaml`) miss, so the fallback runs.
+    dirty = repo / "conf.d" / os.fsdecode(dirty_rel)
+    dirty.parent.mkdir(parents=True, exist_ok=True)
+    # ⛔ VACUITY GUARD, and it has to be a whole second carrier: with only the
+    # dirty one present, a run that classified NO removal at all would also
+    # produce "no traceback, rc=0" and the test would pass without ever
+    # reaching `git show`. The clean neighbour proves the removal machinery
+    # ran, and that only the dirty carrier was dropped.
+    clean = repo / "conf.d" / "db-b.yaml"
+    dirty.write_bytes(b"# legacy \xff marker\n" + (_BEFORE % b"acme"))
+    clean.write_bytes(_BEFORE % b"other")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "before")
+    dirty.write_bytes(b"# clean marker\n" + (_AFTER_REMOVED % b"acme"))
+    clean.write_bytes(_AFTER_REMOVED % b"other")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "after")
+
+    result = _run_cli(repo, prom_url)
+    assert "Traceback" not in result.stderr, (
+        f"an undecodable HEAD~1 body took the run down: {result.stderr!r}")
+    assert result.returncode == 0, result.stderr
+    assert _analyzed(result.stdout) == "0/1", (
+        f"expected exactly the clean carrier's removal to survive; the "
+        f"machinery may not have run at all: {result.stdout!r}")
+    assert "db-b/cpu_usage" in result.stdout, (
+        f"the clean neighbour's removal is missing, so this fixture is not "
+        f"discriminating: {result.stdout!r}")
+    assert "db-a/cpu_usage" not in result.stdout, (
+        f"the undecodable HEAD~1 body was parsed anyway: {result.stdout!r}")
+
+
 def test_z_does_not_unquote_a_unified_diff_header(tmp_path):
     """⛔ Pins the measurement that decides `quotepath_off` vs `-z`.
 
