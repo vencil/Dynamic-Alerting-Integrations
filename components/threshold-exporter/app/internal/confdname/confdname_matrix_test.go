@@ -224,6 +224,22 @@ func TestMatrixStillCoversWhatThesePredicatesCanGetWrong(t *testing.T) {
 			match: func(r matrixRow) bool { return r.Hidden && r.YAMLExtension },
 		},
 		{
+			why: "a name where a YAML extension appears as a NON-TRAILING substring " +
+				"(e.g. an editor backup `*.yaml.bak`) — the row that separates " +
+				"`ends with` from `contains`. A reviewer measured that dropping it " +
+				"left every floor green while a contains-not-suffix implementation " +
+				"accepted such a file as a live tenant carrier",
+			match: func(r matrixRow) bool {
+				low := strings.ToLower(r.Name)
+				for _, ext := range []string{".yaml", ".yml"} {
+					if i := strings.Index(low, ext); i >= 0 && i+len(ext) != len(low) {
+						return true
+					}
+				}
+				return false
+			},
+		},
+		{
 			why:   "a name with no YAML extension at all",
 			match: func(r matrixRow) bool { return !r.YAMLExtension },
 		},

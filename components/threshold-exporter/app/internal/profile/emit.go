@@ -313,10 +313,6 @@ type carrierOrigin struct {
 	SourceRuleID string
 }
 
-func (o carrierOrigin) String() string {
-	return fmt.Sprintf("tenant %q (%s)", o.TenantID, o.SourceRuleID)
-}
-
 // putTenantCarrier writes tenant `tenantID`'s override carrier into `files`
 // and reports every way that write is not the plain thing it looks like.
 //
@@ -405,13 +401,18 @@ func putTenantCarrier(
 				propIdx, pathLabel, prev.TenantID, tenantID, key,
 				sourceRuleID, prev.SourceRuleID))
 		}
-	} else if _, occupied := files[key]; occupied {
-		warnings = append(warnings, fmt.Sprintf(
-			"proposal[%d]: %stenant %q (%s) overwrites %q, which this emitter had "+
-				"already written for something other than a tenant; only the last "+
-				"one survives",
-			propIdx, pathLabel, tenantID, sourceRuleID, key))
 	}
+
+	// ⛔ There is deliberately NO "occupied by something this emitter wrote that
+	// is not a tenant carrier" arm. Measured: it cannot be reached. Every
+	// putTenantCarrier write also records `owners[key]`, so a path a previous
+	// tenant took is caught above; the only other paths this emitter writes are
+	// `_defaults.yaml` (pre-empted unconditionally by the refusal above) and
+	// `PROPOSAL.md` / the root `proposal-decisions.yaml` scaffold, whose
+	// extensions `safeFilename(id)+".yaml"` cannot produce. An earlier version
+	// carried such an arm, complete with a warning string no input could ever
+	// print — the same dead-end shape (#1634) this family has now paid for
+	// several times, so it is named here rather than left as code.
 
 	files[key] = body
 	owners[key] = carrierOrigin{TenantID: tenantID, SourceRuleID: sourceRuleID}

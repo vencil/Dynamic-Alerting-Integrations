@@ -129,11 +129,18 @@ func loadMatrixForE2E(t *testing.T) []e2eRow {
 	return doc.Rows
 }
 
-// requireCaseSensitiveFS fails the test rather than letting it pass on a
-// filesystem that cannot hold `_defaults.yaml` and `_DEFAULTS.YAML` as two
-// files. ⛔ Without this the fixture would silently lose rows and the run
-// would be green having measured fewer cases than it claims — the shape the
-// exporter half guards with its own `_case_probe_lower` check.
+// requireCaseSensitiveFS SKIPS the test on a filesystem that cannot hold
+// `_defaults.yaml` and `_DEFAULTS.YAML` as two files, rather than letting it
+// pass having measured fewer names than it claims.
+//
+// ⛔ Skip, not fail, and the distinction is the repo's rule rather than a
+// convenience: on such a filesystem this pin CANNOT be evaluated, and "could
+// not measure" must stay distinguishable from "measured and found nothing". A
+// reader must not take a green run here as proof the case rows were checked —
+// look for the skip line. (Contrast `requireTranslatedAndReached` in
+// internal/profile, which Fatals: there the fixture is under our control, so a
+// fixture that stops reaching the code under test is a defect, not an
+// environment.)
 func requireCaseSensitiveFS(t *testing.T, dir string) {
 	t.Helper()
 	lower := filepath.Join(dir, "_case_probe_lower")

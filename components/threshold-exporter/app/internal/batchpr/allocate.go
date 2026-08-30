@@ -181,9 +181,13 @@ func bucketForPath(p string, baseIdx int, tenantToIdx map[string]int) (int, stri
 				"the exporter derives no tenant from it", base)
 	}
 
-	if stem == "" {
-		return -1, "empty filename before the YAML extension"
-	}
+	// ⛔ No `stem == ""` arm. On the base commit there was one — `.yaml` hit a
+	// bare `HasSuffix` and produced an empty tenant id — but `SplitCarrier`
+	// returns an empty stem only when the whole basename IS the extension, and
+	// every such name starts with `.`, so the hidden drop above answers first.
+	// Measured: the branch became unreachable, and an unreachable arm
+	// advertising a fourth drop reason the operator can never see is the shape
+	// this family keeps paying for.
 	idx, ok := tenantToIdx[stem]
 	if !ok {
 		return -1, fmt.Sprintf("tenant ID %q not in any Plan chunk", stem)

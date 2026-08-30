@@ -38,9 +38,25 @@ var yamlSuffixes = [...]string{".yaml", ".yml"}
 //
 // ⛔ The fold is done on the last few ASCII bytes with EqualFold, NOT by
 // lowercasing `base` and slicing that. `strings.ToLower` is not
-// length-preserving — measured in this family: `"İSTANBUL"` lowercases to
-// `"i̇stanbul"` (U+0130 becomes `i` + U+0307), one rune longer — so an offset
-// computed against a lowercased copy indexes the wrong bytes of the original.
+// length-preserving, so an offset computed against a lowercased copy indexes
+// the wrong bytes of the original. Measured in Go, on this toolchain:
+//
+//	strings.ToLower("İSTANBUL") == "istanbul"   // 9 bytes -> 8
+//	strings.ToLower("İ")        == "i"          // 2 bytes -> 1
+//
+// and the failure that follows from slicing on that offset:
+//
+//	base := "İ.yaml"; lower := strings.ToLower(base)
+//	base[:len(lower)-len(".yaml")]  ==  "\xc4"   // a truncated half-rune,
+//	                                             // not valid UTF-8
+//
+// ⛔ AN EARLIER VERSION OF THIS COMMENT GOT THE MECHANISM BACKWARDS AND SAID SO
+// UNDER THE WORD "MEASURED": it claimed `İSTANBUL` lowercases to `i̇stanbul`,
+// one rune LONGER, with U+0130 becoming `i` + U+0307. That is Python's result
+// (`str.lower` applies full case mapping); Go's `strings.ToLower` uses simple
+// case mapping and the string gets SHORTER. The design conclusion survived, by
+// the opposite mechanism — which is precisely why a claim carrying the word
+// "measured" has to be measured in the language it is written in.
 //
 // ⛔ And the stem keeps its case. `MiXeD.YmL` is tenant `MiXeD`; deriving the
 // id from a lowercased copy would rename that tenant on the write plane while
