@@ -24,6 +24,7 @@ import json
 import re as _re
 import math
 import subprocess
+import sys
 import types
 from pathlib import Path
 
@@ -4638,16 +4639,72 @@ class TestJudgeNightCompleteness:
 
 
 class TestWindowPredicate:
-    def test_the_window_predicate_is_completed_not_success(self):
-        """⛔ The one-line change the whole PR is scaffolding for. A night is
-        now judged by its artifact, not by whether every job in its run passed.
+    def test_the_default_predicate_stays_conservative(self):
+        """⛔ THE DEFAULT MUST STAY `success`, and this test is here because the
+        first cut of #1635 flipped it — which silently widened `main()`'s
+        AGGREGATION path, a caller with no completeness check at all. That path
+        loops `download_artifact` → `parse_bench_file` straight into
+        `all_samples`; flipping the default put truncated artifacts one
+        function away from the stats, re-creating the very defect this change
+        removes. Found in review, recorded rather than quietly corrected.
 
-        A specific break that reddens this: revert the default to "success"."""
+        A specific break that reddens this: set the default to "completed".
+        """
         import inspect
         default = inspect.signature(ab.list_recent_runs).parameters["status"].default
-        assert default == "completed", (
-            "the window still keys on the RUN's conclusion, so a failing "
-            "consumer job still deletes that night from its own future windows"
+        assert default == "success", (
+            "a caller that says nothing now inherits the PERMISSIVE predicate; "
+            "the widening must be opt-in at call sites that check completeness"
+        )
+
+    def test_the_trend_watch_window_opts_in_to_completed(self, monkeypatch, tmp_path):
+        """The widening, asserted where it actually happens.
+
+        A specific break that reddens this: drop the explicit
+        `status="completed"` from `night_records_from_gh`.
+        """
+        seen = {}
+
+        def fake_gh(cmd):
+            seen["cmd"] = list(cmd)
+            return "[]"
+
+        monkeypatch.setattr(ab, "_gh", fake_gh)
+        ab.night_records_from_gh("bench-record.yaml", 14, tmp_path)
+        cmd = seen["cmd"]
+        assert cmd[cmd.index("--status") + 1] == "completed"
+
+    def test_the_aggregation_path_does_not_inherit_the_widening(self, monkeypatch):
+        """⛔ THE OTHER HALF, and the one the first cut got wrong. `main()`'s
+        aggregate mode must still ask `success`, because nothing between its
+        `download_artifact` and its statistics judges whether the artifact is
+        whole.
+
+        Driven through the REAL `main()` rather than by reading the call site:
+        a source-level check passes on a decoy and on a line that no longer
+        executes. `_gh` returns an empty list, so main bails right after the
+        listing — which is exactly the point where the predicate is observable.
+
+        A specific break that reddens this: pass `status="completed"` at the
+        aggregation call site, or flip the module default back.
+        """
+        seen = {}
+
+        def fake_gh(cmd):
+            seen["cmd"] = list(cmd)
+            return "[]"
+
+        monkeypatch.setattr(ab, "_gh", fake_gh)
+        # main() probes for the real binary before it ever calls `_gh`; this
+        # container has no `gh`, and the probe is not what is under test here.
+        monkeypatch.setattr(ab.shutil, "which", lambda _name: "/usr/bin/gh")
+        monkeypatch.setattr(sys, "argv", ["analyze_bench_history.py", "--limit", "28"])
+        ab.main()
+
+        cmd = seen["cmd"]
+        assert cmd[cmd.index("--status") + 1] == "success", (
+            "the aggregation path widened to non-success runs, but it has no "
+            "completeness check — a truncated artifact would reach the stats"
         )
 
     def test_the_run_conclusion_is_still_requested_from_gh(self, monkeypatch):
@@ -4715,7 +4772,19 @@ class TestNightRecordsFromGhAdmission:
         return d
 
     def _run(self, monkeypatch, tmp_path, runs):
-        monkeypatch.setattr(ab, "list_recent_runs", lambda w, l: list(runs))
+        """⛔ The spy takes `status` as a NAMED parameter with no default, so a
+        call site that stops passing it fails loudly here instead of being
+        absorbed. `**kwargs` on a spy is how the previous line let a misspelled
+        keyword look like 'equivalent to not passing it' (see the TRK-370
+        entry); this asserts the opt-in rather than swallowing it."""
+        def spy(workflow, limit, status):
+            assert status == "completed", (
+                f"the trend-watch window asked for {status!r}; the widening is "
+                "opt-in and this is the caller that must opt in"
+            )
+            return list(runs)
+
+        monkeypatch.setattr(ab, "list_recent_runs", spy)
         return ab.night_records_from_gh("bench-record.yaml", len(runs), tmp_path)
 
     @staticmethod

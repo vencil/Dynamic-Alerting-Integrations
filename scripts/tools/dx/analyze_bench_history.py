@@ -254,7 +254,7 @@ def _gh(cmd: list[str], capture: bool = True) -> str:
 
 
 def list_recent_runs(workflow: str, limit: int,
-                     status: str = "completed") -> list[dict]:
+                     status: str = "success") -> list[dict]:
     """List the N most recent workflow runs matching ``status``.
 
     ``status`` is passed to `gh run list --status` verbatim. That flag matches
@@ -262,8 +262,23 @@ def list_recent_runs(workflow: str, limit: int,
     documented that way), so `"success"` means "every job in the run passed"
     and `"completed"` means "the run finished, pass or fail".
 
-    ⛔ THE DEFAULT WAS `"success"` UNTIL TRK-371 / #1635, and this paragraph
-    used to argue for keeping it. Keying the window on the RUN's conclusion
+    ⛔ THE DEFAULT STAYS `"success"`, AND THE WIDENING IS OPT-IN PER CALL SITE.
+    The first cut of #1635 flipped this default to `"completed"` instead, which
+    silently widened a caller that has no completeness check at all: `main()`'s
+    aggregation path (`:2404`) loops `download_artifact` → `parse_bench_file`
+    straight into `all_samples`, and reads `--limit 28` runs with nothing
+    between a truncated artifact and the stats. Only the TREND-WATCH window
+    goes through `judge_night_completeness`. So the flip re-created, one
+    function away, the exact defect this change exists to remove — and it also
+    made two of that path's own messages false ("listing last N SUCCESSFUL
+    runs"). Caught by review; recorded rather than quietly corrected.
+
+    ⇒ Conservative by default, widened explicitly where the marker makes it
+    safe: `night_records_from_gh` passes `status="completed"`, exactly as
+    `paired_trend_watch.py` has since #1626. A future caller that says nothing
+    inherits the SAFE predicate, not the permissive one.
+
+    Keying the window on the RUN's conclusion
     conflates two questions — "did the producer write a usable artifact?" and
     "did every other job in the run pass?" — so a failing CONSUMER job (this
     module's own `trend-watch`, say) deleted that night's artifacts from every
@@ -280,8 +295,10 @@ def list_recent_runs(workflow: str, limit: int,
         still uploads what exists (`upload-artifact` runs `if: always()`).
       * ⭐ So #1635 gave it a SIDECAR that can: `bench-baseline.rows`, written
         by `write_baseline_marker.py` as the last action of the baseline step.
-        Admission is now decided per night by `judge_night_completeness`, not
-        by the run's conclusion, and this predicate is `"completed"`.
+        Admission is decided per night by `judge_night_completeness` —
+        ⚠️ IN THE TREND-WATCH WINDOW ONLY. `main()`'s aggregation path has no
+        such check, which is why it keeps this function's `"success"` default
+        rather than opting in.
 
     ⛔ WHAT THIS DOES NOT YET ESTABLISH, and the ticket says so explicitly. The
     marker only exists on nights produced after it shipped, while the window is
@@ -855,8 +872,13 @@ def night_records_from_gh(workflow: str, limit: int, cache_dir: Path) -> list[Ni
     ⚠️ The window predicate is `completed`, not `success` (TRK-371 / #1635), so
     a night survives its own consumer jobs failing. Admission is decided by
     `judge_night_completeness` per night, NOT by the run's conclusion alone.
+
+    ⛔ Passed EXPLICITLY, never inherited from the default. `list_recent_runs`
+    stays conservative (`"success"`) precisely so the one caller that HAS a
+    completeness check must ask for the widening by name — see that function's
+    docstring for the review finding that made this the rule.
     """
-    runs = list_recent_runs(workflow, limit)
+    runs = list_recent_runs(workflow, limit, status="completed")
     # gh returns newest-first, but sort explicitly so the series is deterministic.
     runs.sort(key=lambda r: r["createdAt"], reverse=True)
     nights: list[NightRecord] = []

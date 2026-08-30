@@ -78,11 +78,22 @@ def run_producer(tmp_path: Path, text: str | None,
 
 
 def parse_marker(path: Path) -> dict[str, str]:
-    fields = {}
+    """Parse the marker, REFUSING duplicate keys.
+
+    ⛔ The refusal is the point, and it came from review. Letting a later `rows:`
+    overwrite an earlier one means a producer that emitted the key twice would
+    still show a parsed key set of {schema, rows} — so
+    `test_marker_key_set_is_pinned_to_its_schema_version` would pass on a
+    malformed serialization. The §P5 gate has to observe the marker AS WRITTEN,
+    not a dict that has already normalised the defect away.
+    """
+    fields: dict[str, str] = {}
     for line in path.read_text(encoding="utf-8").splitlines():
         if line.strip():
             k, _, v = line.partition(":")
-            fields[k.strip()] = v.strip()
+            key = k.strip()
+            assert key not in fields, f"duplicate marker key: {key!r}"
+            fields[key] = v.strip()
     return fields
 
 
@@ -333,3 +344,22 @@ def test_out_pointing_at_a_directory_is_a_controlled_error(tmp_path: Path):
     )
     assert "::error::" in proc.stderr
     assert outdir.is_dir(), "the directory must be left alone"
+
+
+def test_parse_marker_refuses_duplicate_keys(tmp_path: Path):
+    """⛔ Pins the review fix itself, so it cannot be quietly reverted.
+
+    Without the refusal, a producer emitting `rows:` twice still yields a
+    parsed key set of {schema, rows} — so the §P5 key-set assertion would go
+    green on a malformed serialization. The gate has to see the marker as
+    WRITTEN, not a dict that already normalised the defect away.
+
+    A specific break that reddens this: delete the `assert key not in fields`
+    line from `parse_marker`.
+    """
+    marker = tmp_path / "bench-baseline.rows"
+    marker.write_text(
+        f"schema: {_MARKER_SCHEMA}\nrows: 3\nrows: 9\n",
+        encoding="utf-8", newline="\n")
+    with pytest.raises(AssertionError, match="duplicate marker key"):
+        parse_marker(marker)

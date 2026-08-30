@@ -2077,8 +2077,13 @@ def test_the_new_job_cannot_take_the_nights_data_down_with_it():
     import inspect
 
     import analyze_bench_history as abh
+    # ⚠️ Back to `success`, and NOT a revert of #1635. The default is the
+    # CONSERVATIVE value on purpose: `analyze_bench_history.main()`'s
+    # aggregation path has no completeness check, so it must inherit the safe
+    # predicate. The trend-watch window opts in explicitly with
+    # `status="completed"` — pinned in test_analyze_bench_history.py, not here.
     assert inspect.signature(
-        abh.list_recent_runs).parameters["status"].default == "completed"
+        abh.list_recent_runs).parameters["status"].default == "success"
 
 
 # ── 7. FIXES FOR THE FIFTH REVIEW ROUND ───────────────────────────────────
