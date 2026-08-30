@@ -202,8 +202,18 @@ BILINGUAL_PAIR_PATTERN = r"bilingual-(\d+)%20pairs"
 #     not a count. Without this exception one MISMATCH survives, so it is load
 #     bearing, and it must apply to BOTH halves: an earlier attempt hung it on
 #     the English side only and manufactured a regression.
-#   * `(?<![\d.])` — refuses the `2` in `### 1.2 Alerts don't fire`, i.e. an
-#     English heading whose noun happens to be plural.
+#   * `(?<![\d.])` — refuses the `2` in `### 1.2 Alerts don't fire`: the digit
+#     is preceded by a `.`, so a DOTTED section number cannot be read as a
+#     count.
+#     ⛔ It does NOT refuse an INTEGER heading. `## 1 Alerts` matches, because
+#     the `1` is preceded by a space — measured, and reported by review after
+#     an earlier revision of this line described the guard as refusing
+#     "headings", which is wider than what it does. A pair such as
+#     `## 1 Alerts` / `## 2 Alerts` would produce a false mismatch.
+#     ⚠️ Left open deliberately: the corpus has ZERO integer headings of that
+#     shape today, and closing it means teaching the CONSUMER to skip heading
+#     lines (it currently matches against whole files), which is a bigger
+#     change than the false positive it would prevent. Disclosed, not fixed.
 #
 #   * the `[個條支]` branch — Chinese states the same count as `N 條 alert` /
 #     `N 個 告警`, mirroring the `個?` the sister `Rule Pack count` pattern
