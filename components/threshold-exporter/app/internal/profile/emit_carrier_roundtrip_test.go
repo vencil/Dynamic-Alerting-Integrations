@@ -106,25 +106,26 @@ func warningNaming(warnings []string, needles ...string) string {
 	return ""
 }
 
-// TestEmit_TwoTenantsCollidingOnOneCarrierNameKeepsBothOrSaysSo is the
+// TestEmit_TwoTenantsCollidingOnOneCarrierNameSayWhoWasDisplaced is the
 // injectivity case. `a/b` and `a-b` are two different tenants that
 // `safeFilename` maps onto one name.
 //
-// ⛔ THIS TEST ASSERTS ON THE EMITTED DOCUMENT, NOT ON WARNING PROSE, and the
-// reason is a measured near-miss: the first version of it asked only "does some
-// warning mention `a/b`", which a blind reviewer showed was satisfied by the
-// UNRELATED round-trip warning — that one fires for `a/b` whether or not the
-// collision guard exists. With the guard deleted the test stayed GREEN while
-// last-write-wins silently dropped a tenant, i.e. the test named for this bug
-// did not detect this bug. Worse, its own failure message said "no warning names
-// the tenant that LOST its file" while asserting on `a/b`, the tenant that KEPT
-// its file — the report and the action disagreeing, which is the very shape this
-// family exists to kill.
+// ⛔ THE SPEC HERE IS "SAY SO", NOT "KEEP THE FIRST ONE", and that is a
+// measured decision rather than a default. An earlier version of this change
+// made tenant-vs-tenant collisions keep-first; a blind reviewer measured that
+// against `cefb565` and found it changed the ALERTING THRESHOLDS emitted for a
+// wholly ordinary corpus (`db-a`/`db-b` across two regions, no exotic ids:
+// 0.85 -> 0.70 and 0.90 -> 0.60), because two member rules for one tenant in
+// one proposal collide too and base kept the LAST. Neither survivor is more
+// correct, so the defect worth fixing is the silence.
 //
-// The emitter walks `prop.MemberRuleIDs` in slice order, so `a/b` is written
-// first and `a-b` is the one that must be refused. Pinning WHICH document
-// survives is what makes the assertion sensitive to keep-first.
-func TestEmit_TwoTenantsCollidingOnOneCarrierNameKeepsBothOrSaysSo(t *testing.T) {
+// ⛔ AND THE ASSERTION IS ON THE DISPLACED DOCUMENT BEING NAMED, not on any
+// warning merely mentioning a tenant. The first version of this test asked only
+// "does some warning mention `a/b`", which a blind reviewer showed was satisfied
+// by the UNRELATED round-trip warning — that one fires for `a/b` whether or not
+// the collision is reported at all, so the test named for this bug did not
+// detect this bug.
+func TestEmit_TwoTenantsCollidingOnOneCarrierNameSayWhoWasDisplaced(t *testing.T) {
 	t.Parallel()
 	const first, second = "a/b", "a-b"
 	ps, rules := twoTenantProposal(first, second)
@@ -137,30 +138,55 @@ func TestEmit_TwoTenantsCollidingOnOneCarrierNameKeepsBothOrSaysSo(t *testing.T)
 		}
 	}
 	if len(carriers) == 2 {
-		return // both tenants got their own carrier; nothing was lost
+		return // both tenants got their own carrier; nothing was displaced
 	}
 
-	// One file for two tenants. The surviving document must be the FIRST
-	// writer's — anything else means a later write silently replaced an
-	// earlier tenant's proposal.
-	body := string(out.Files["conf.d/dom/a-b.yaml"])
-	if !strings.Contains(body, first+":") {
-		t.Errorf("tenants %q and %q collapse onto one carrier and the surviving "+
-			"document belongs to %q, not to the tenant written first (%q).\n"+
-			"  last-write-wins here means one tenant's proposed thresholds are "+
-			"simply gone while the report says the proposal was emitted.\n"+
-			"  conf.d/dom/a-b.yaml was:\n%s", first, second, second, first, body)
-	}
-
-	// And the refusal must be named — specifically the refusal, not the
-	// round-trip warning that fires for `a/b` regardless.
-	if w := warningNaming(out.Warnings, second, "overwrite"); w == "" {
-		t.Errorf("tenant %q lost its carrier to a name collision and NO warning "+
-			"names both that tenant and the overwrite it was refused.\n"+
+	// One file for two tenants. The warning must name the tenant that was
+	// displaced AND the rule its document came from — without the source
+	// rule id the operator cannot tell which threshold vanished.
+	//
+	// ⛔ `first` alone is not enough to satisfy this: the round-trip warning
+	// already names it. Requiring the SOURCE RULE ID of the displaced
+	// document is what makes this assertion specific to the collision.
+	displacedRule := "s.yaml#g[0].r[0]" // `first` is written first, so it loses
+	if w := warningNaming(out.Warnings, second, displacedRule); w == "" {
+		t.Errorf("tenants %q and %q collapse onto one carrier and NO single warning "+
+			"names both the surviving tenant %q and the rule %s whose document it "+
+			"displaced.\n"+
 			"  ⛔ a warning that merely mentions %q does not count: the round-trip "+
-			"warning says that whether or not this collision was handled.\n"+
+			"warning says that whether or not the collision was reported.\n"+
+			"  a proposal that drops one of two tenants' thresholds while the report "+
+			"says it was emitted is exactly the #1339 shape.\n"+
 			"  emitted: %v\n  warnings: %v",
-			second, first, sortedCarrierKeys(out.Files), out.Warnings)
+			first, second, second, displacedRule, first,
+			sortedCarrierKeys(out.Files), out.Warnings)
+	}
+}
+
+// TestEmit_AReservedTenantIdIsNamedEvenWithoutACollision closes a blind spot a
+// mutation reviewer measured: with `_defaults` as the only reserved-id case,
+// deleting the reserved-prefix rule from `confdname.TenantNamedBy` left the
+// whole suite GREEN, because the `_defaults` fixture's OVERWRITE warning also
+// contains the string `_defaults` and the assertion could not tell the two
+// warnings apart. `_rbac` is reserved, is a legal Prometheus label value, and
+// collides with nothing — so only the round-trip warning can satisfy it.
+func TestEmit_AReservedTenantIdIsNamedEvenWithoutACollision(t *testing.T) {
+	t.Parallel()
+	ps, rules := twoTenantProposal("_rbac", "plain")
+	out := emitOneProposalFor(t, ps, rules)
+
+	if _, ok := out.Files["conf.d/dom/_rbac.yaml"]; !ok {
+		t.Fatalf("expected the reserved-name carrier to still be emitted; files: %v",
+			sortedCarrierKeys(out.Files))
+	}
+	if w := warningNaming(out.Warnings, "_rbac", "will not reach"); w == "" {
+		t.Errorf("tenant %q emits carrier %q, which the exporter never reads as a "+
+			"tenant carrier at all (reserved `_` prefix) — so the batch-PR allocator "+
+			"drops it and that tenant gets no PR — and NO warning says so.\n"+
+			"  ⛔ this case must not collide with anything: a collision warning that "+
+			"happens to contain the same substring would mask the round-trip rule "+
+			"going missing.\n  warnings: %v",
+			"_rbac", "_rbac.yaml", out.Warnings)
 	}
 }
 
@@ -184,9 +210,10 @@ func TestEmit_ATenantNamedDefaultsDoesNotDestroyTheChainCarrier(t *testing.T) {
 			"proposal's shared structure is gone and one tenant's overrides are "+
 			"now cascading to all of them.\n  content was:\n%s", "_defaults", defaults)
 	}
-	if w := warningNaming(out.Warnings, "_defaults"); w == "" {
+	if w := warningNaming(out.Warnings, "_defaults", "kept the shared document"); w == "" {
 		t.Errorf("tenant %q collides with the emitter's own chain-carrier filename "+
-			"and NO warning names it.\n  warnings: %v", "_defaults", out.Warnings)
+			"and NO warning says the shared document was kept and this tenant "+
+			"skipped.\n  warnings: %v", "_defaults", out.Warnings)
 	}
 }
 

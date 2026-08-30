@@ -195,6 +195,13 @@ func EmitProposals(input EmissionInput) (*EmissionOutput, error) {
 		Files: make(map[string][]byte),
 	}
 
+	// carrierOwners records, per emitted path, which tenant + source rule the
+	// document currently there came from. Only putTenantCarrier writes it, and
+	// only so a collision warning can NAME the document it displaced — a
+	// warning that says "these two collided" without saying whose thresholds
+	// just vanished sends the operator back to guessing.
+	carrierOwners := make(map[string]string)
+
 	// Decisions filter (PR-4). When Decisions is nil, emitIdx is
 	// every proposal index — backward-compatible behaviour. When
 	// non-nil, only the accepted (and policy-permitted-pending) set
@@ -218,7 +225,7 @@ func EmitProposals(input EmissionInput) (*EmissionOutput, error) {
 					i, len(prop.MemberRuleIDs)))
 			continue
 		}
-		warnings := emitOneProposal(out.Files, rootPrefix, dir, prop, ruleIndex, i, input.Translate)
+		warnings := emitOneProposal(out.Files, carrierOwners, rootPrefix, dir, prop, ruleIndex, i, input.Translate)
 		out.Warnings = append(out.Warnings, warnings...)
 	}
 
@@ -249,6 +256,7 @@ func EmitProposals(input EmissionInput) (*EmissionOutput, error) {
 // whole batch.
 func emitOneProposal(
 	files map[string][]byte,
+	owners map[string]string,
 	rootPrefix, dir string,
 	prop ExtractionProposal,
 	ruleIndex map[string]parser.ParsedRule,
@@ -275,7 +283,7 @@ func emitOneProposal(
 				"proposal[%d]: translator hard-error: %v (falling back to intermediate emission)",
 				propIdx, terr))
 		} else if translation.Status != TranslationSkipped {
-			tw := emitTranslatedProposal(files, pathFor, prop, translation, ruleIndex, tenantKey, propIdx)
+			tw := emitTranslatedProposal(files, owners, pathFor, prop, translation, ruleIndex, tenantKey, propIdx)
 			warnings = append(warnings, tw...)
 			return warnings
 		} else {
@@ -292,7 +300,7 @@ func emitOneProposal(
 	// Intermediate (PR-2) shape: _defaults.yaml + per-tenant overrides +
 	// PROPOSAL.md. Used directly when translation is off, and as the fallback
 	// when a cluster can't be translated.
-	warnings = append(warnings, emitIntermediateProposal(files, pathFor, prop, ruleIndex, tenantKey, propIdx)...)
+	warnings = append(warnings, emitIntermediateProposal(files, owners, pathFor, prop, ruleIndex, tenantKey, propIdx)...)
 	return warnings
 }
 
@@ -316,15 +324,31 @@ func emitOneProposal(
 //     (`tenantIDForRule`), i.e. arbitrary strings — nothing upstream
 //     constrains them to round-trip through a filename.
 //
-// ⛔ Deliberately keep-first rather than last-write-wins: the chain carrier is
-// written before the per-tenant loop, so refusing the overwrite is what keeps
-// `_defaults.yaml` from being destroyed. The refusal is NAMED either way — this
-// family's whole point is that a dropped document the operator is not told
-// about is worse than a loud one.
+// ⛔ THE TWO COLLISIONS ARE HANDLED DIFFERENTLY, AND THE ASYMMETRY IS THE
+// POINT — a blind reviewer measured that treating them alike was a behaviour
+// change far outside this defect's blast radius:
+//
+//   - Colliding with a name this emitter OWNS (`_defaults.yaml`,
+//     `PROPOSAL.md`) → REFUSE the tenant's write. Those documents are of a
+//     different kind: the chain carrier is merged into every tenant in the
+//     directory, so letting one tenant's `tenants:` block land there does not
+//     lose one document, it corrupts all of them.
+//
+//   - Colliding with ANOTHER TENANT's carrier → keep the historical
+//     last-write-wins and only say so. Making this one keep-first flipped
+//     which of two duplicate member rules survives, and measured against
+//     `cefb565` that changed the ALERTING THRESHOLDS emitted for a wholly
+//     ordinary corpus (tenants `db-a`/`db-b` across two regions, no exotic
+//     ids: `0.85`→`0.70`, `0.90`→`0.60`). Neither survivor is more correct
+//     than the other, so the defect worth fixing is the silence, not the
+//     choice — and silently renumbering a customer's proposed thresholds on
+//     upgrade is not a thing this ticket is allowed to do.
 func putTenantCarrier(
 	files map[string][]byte,
+	owners map[string]string,
 	pathFor func(string) string,
 	tenantID string,
+	sourceRuleID string,
 	body []byte,
 	propIdx int,
 	pathLabel string,
@@ -341,16 +365,31 @@ func putTenantCarrier(
 				"tenant %q's PR",
 			propIdx, pathLabel, tenantID, name, got, ok, tenantID))
 	}
+
 	if _, taken := files[key]; taken {
+		if confdname.IsDefaults(name) || name == emitterProposalDoc {
+			warnings = append(warnings, fmt.Sprintf(
+				"proposal[%d]: %stenant %q would overwrite %q, which is this "+
+					"emitter's own shared document, not another tenant's carrier; "+
+					"kept the shared document and skipped this tenant",
+				propIdx, pathLabel, tenantID, key))
+			return warnings
+		}
 		warnings = append(warnings, fmt.Sprintf(
-			"proposal[%d]: %stenant %q would overwrite the already-emitted %q; kept "+
-				"the first document and skipped this one",
-			propIdx, pathLabel, tenantID, key))
-		return warnings
+			"proposal[%d]: %stenant %q (%s) overwrites %q, which already held %s; "+
+				"two tenants share one carrier name and only the last one survives",
+			propIdx, pathLabel, tenantID, sourceRuleID, key, owners[key]))
 	}
+
 	files[key] = body
+	owners[key] = fmt.Sprintf("tenant %q (%s)", tenantID, sourceRuleID)
 	return warnings
 }
+
+// emitterProposalDoc is the human-readable summary this emitter writes beside
+// the shared defaults. Named so putTenantCarrier can recognise a tenant whose
+// id collides with it.
+const emitterProposalDoc = "PROPOSAL.md"
 
 // emitIntermediateProposal writes the PR-2 intermediate artifact shape for one
 // proposal: _defaults.yaml (shared structure), one override file per member
@@ -358,6 +397,7 @@ func putTenantCarrier(
 // Extracted from emitOneProposal (the non-translated / fallback path).
 func emitIntermediateProposal(
 	files map[string][]byte,
+	owners map[string]string,
 	pathFor func(string) string,
 	prop ExtractionProposal,
 	ruleIndex map[string]parser.ParsedRule,
@@ -411,8 +451,8 @@ func emitIntermediateProposal(
 					"proposal[%d]: failed to marshal tenant %q file: %v", propIdx, tenantID, err))
 				continue
 			}
-			warnings = append(warnings,
-				putTenantCarrier(files, pathFor, tenantID, tenantBytes, propIdx, "")...)
+			warnings = append(warnings, putTenantCarrier(
+				files, owners, pathFor, tenantID, rid, tenantBytes, propIdx, "")...)
 		}
 	}
 
@@ -449,6 +489,7 @@ func membersForProposal(prop ExtractionProposal, ruleIndex map[string]parser.Par
 //     summarises the cluster for reviewers.
 func emitTranslatedProposal(
 	files map[string][]byte,
+	owners map[string]string,
 	pathFor func(string) string,
 	prop ExtractionProposal,
 	translation *ProposalTranslation,
@@ -513,7 +554,8 @@ func emitTranslatedProposal(
 			}
 			if tenantBytes, err := yamlMarshalCanonical(tenantDoc); err == nil {
 				warnings = append(warnings, putTenantCarrier(
-					files, pathFor, tenantID, tenantBytes, propIdx, "translated emit — ")...)
+					files, owners, pathFor, tenantID, rid, tenantBytes, propIdx,
+					"translated emit — ")...)
 			} else {
 				warnings = append(warnings, fmt.Sprintf(
 					"proposal[%d]: translated emit — failed to marshal tenant %q: %v",

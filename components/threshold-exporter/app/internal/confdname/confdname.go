@@ -46,9 +46,17 @@ var yamlSuffixes = [...]string{".yaml", ".yml"}
 // id from a lowercased copy would rename that tenant on the write plane while
 // the exporter keeps serving it under whatever its `tenants:` key says — a
 // second divergence built by the fix for the first.
+// ⛔ The length test is `>=`, not `>`. A file literally named `.yaml` DOES
+// carry a YAML extension — the shared matrix says so (`yaml_extension: true`)
+// — and it is excluded from being a tenant carrier by being HIDDEN, not by
+// pretending it has no extension. Measured: with `>` this predicate was the
+// one cell out of twenty-three where this package disagreed with the matrix,
+// and the routing-level test could not see it because the name still ended up
+// dropped, just with a reason that told the operator their `.yaml` file has no
+// YAML extension.
 func SplitCarrier(base string) (stem string, ok bool) {
 	for _, ext := range yamlSuffixes {
-		if len(base) > len(ext) && strings.EqualFold(base[len(base)-len(ext):], ext) {
+		if len(base) >= len(ext) && strings.EqualFold(base[len(base)-len(ext):], ext) {
 			return base[:len(base)-len(ext)], true
 		}
 	}
