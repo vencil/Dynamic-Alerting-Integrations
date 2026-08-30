@@ -53,6 +53,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/vencil/threshold-exporter/internal/confdname"
 	"github.com/vencil/threshold-exporter/internal/parser"
 )
 
@@ -295,6 +296,62 @@ func emitOneProposal(
 	return warnings
 }
 
+// putTenantCarrier writes tenant `tenantID`'s override carrier into `files`
+// and reports every way that write is not the plain thing it looks like.
+//
+// ⛔ TWO SILENT FAILURES THIS REPLACES, both measured (#1605):
+//
+//  1. `safeFilename` is not the identity. It maps `/` and `\\` to `-` and
+//     strips leading dots, so tenant `a/b` emits `a-b.yaml`. The batch-PR
+//     allocator recovers a tenant id from the FILENAME, so that carrier is
+//     attributed to a tenant called `a-b` — and if no chunk claims that id, it
+//     reaches no PR at all. Measured before this guard: no warning.
+//
+//  2. `safeFilename` is not injective, and its range overlaps this emitter's
+//     own fixed filenames. Two distinct tenants `a/b` and `a-b` produced ONE
+//     file and one proposal was lost; a tenant whose Prometheus label value is
+//     `_defaults` OVERWROTE the shared inheritance-chain document with its own
+//     `tenants:` block, destroying the proposal's shared structure. Both with
+//     `warnings: []`. Tenant ids here are Prometheus label VALUES
+//     (`tenantIDForRule`), i.e. arbitrary strings — nothing upstream
+//     constrains them to round-trip through a filename.
+//
+// ⛔ Deliberately keep-first rather than last-write-wins: the chain carrier is
+// written before the per-tenant loop, so refusing the overwrite is what keeps
+// `_defaults.yaml` from being destroyed. The refusal is NAMED either way — this
+// family's whole point is that a dropped document the operator is not told
+// about is worse than a loud one.
+func putTenantCarrier(
+	files map[string][]byte,
+	pathFor func(string) string,
+	tenantID string,
+	body []byte,
+	propIdx int,
+	pathLabel string,
+) []string {
+	name := safeFilename(tenantID) + ".yaml"
+	key := pathFor(name)
+	var warnings []string
+
+	if got, ok := confdname.TenantOf(name); !ok || got != tenantID {
+		warnings = append(warnings, fmt.Sprintf(
+			"proposal[%d]: %stenant %q emits carrier %q, which reads back as tenant "+
+				"%q (a tenant carrier at all: %t) — the batch-PR allocator recovers "+
+				"the tenant id from the filename, so this carrier will not reach "+
+				"tenant %q's PR",
+			propIdx, pathLabel, tenantID, name, got, ok, tenantID))
+	}
+	if _, taken := files[key]; taken {
+		warnings = append(warnings, fmt.Sprintf(
+			"proposal[%d]: %stenant %q would overwrite the already-emitted %q; kept "+
+				"the first document and skipped this one",
+			propIdx, pathLabel, tenantID, key))
+		return warnings
+	}
+	files[key] = body
+	return warnings
+}
+
 // emitIntermediateProposal writes the PR-2 intermediate artifact shape for one
 // proposal: _defaults.yaml (shared structure), one override file per member
 // tenant, and a human-readable PROPOSAL.md. Returns per-proposal warnings.
@@ -354,7 +411,8 @@ func emitIntermediateProposal(
 					"proposal[%d]: failed to marshal tenant %q file: %v", propIdx, tenantID, err))
 				continue
 			}
-			files[pathFor(safeFilename(tenantID)+".yaml")] = tenantBytes
+			warnings = append(warnings,
+				putTenantCarrier(files, pathFor, tenantID, tenantBytes, propIdx, "")...)
 		}
 	}
 
@@ -454,7 +512,8 @@ func emitTranslatedProposal(
 				},
 			}
 			if tenantBytes, err := yamlMarshalCanonical(tenantDoc); err == nil {
-				files[pathFor(safeFilename(tenantID)+".yaml")] = tenantBytes
+				warnings = append(warnings, putTenantCarrier(
+					files, pathFor, tenantID, tenantBytes, propIdx, "translated emit — ")...)
 			} else {
 				warnings = append(warnings, fmt.Sprintf(
 					"proposal[%d]: translated emit — failed to marshal tenant %q: %v",

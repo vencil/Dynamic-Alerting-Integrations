@@ -48,7 +48,8 @@ package batchpr
 import (
 	"fmt"
 	"path"
-	"strings"
+
+	"github.com/vencil/threshold-exporter/internal/confdname"
 )
 
 // AllocateFiles distributes the global emit Files map into per-
@@ -110,34 +111,6 @@ func AllocateFiles(plan *Plan, files map[string][]byte) (map[int]map[string][]by
 	return out, warnings
 }
 
-// confdYAMLSuffixes are the two carrier spellings the exporter's walker
-// accepts. Both ship (`conf.d/db-b.yml` next to `conf.d/db-a.yaml`), and the
-// walker compares case-insensitively, so this allocator has to as well —
-// otherwise a carrier production merges gets no PR to travel in.
-var confdYAMLSuffixes = [...]string{".yaml", ".yml"}
-
-// splitCarrierName reports whether `base` carries a YAML extension the
-// exporter would accept, and returns the stem with its ORIGINAL case intact.
-//
-// ⛔ The fold is done on the last few ASCII bytes with EqualFold, NOT by
-// lowercasing `base` and slicing that. `strings.ToLower` is not
-// length-preserving — measured in this family: `"İSTANBUL"` lowercases to
-// `"i̇stanbul"` (U+0130 becomes `i` + U+0307), one rune longer — so an offset
-// computed against a lowercased copy indexes the wrong bytes of the original.
-//
-// ⛔ And the stem must keep its case. `MiXeD.YmL` is tenant `MiXeD`; deriving
-// the id from a lowercased copy would rename that tenant to `mixed` on the
-// write plane while the exporter keeps serving it under the name its
-// `tenants:` key says — a second divergence built by the fix for the first.
-func splitCarrierName(base string) (stem string, ok bool) {
-	for _, ext := range confdYAMLSuffixes {
-		if len(base) > len(ext) && strings.EqualFold(base[len(base)-len(ext):], ext) {
-			return base[:len(base)-len(ext)], true
-		}
-	}
-	return "", false
-}
-
 // bucketForPath picks the right Plan.Items index for `p`, or
 // returns (-1, reason) when the path doesn't fit any bucket.
 //
@@ -170,7 +143,7 @@ func bucketForPath(p string, baseIdx int, tenantToIdx map[string]int) (int, stri
 		return baseIdx, ""
 	}
 
-	stem, isCarrier := splitCarrierName(base)
+	stem, isCarrier := confdname.SplitCarrier(base)
 	if !isCarrier {
 		return -1, fmt.Sprintf(
 			"unrecognised file shape %q (only PROPOSAL.md and conf.d carriers "+
@@ -181,7 +154,7 @@ func bucketForPath(p string, baseIdx int, tenantToIdx map[string]int) (int, stri
 	// name against these two literals exactly, so `_defaults-multidb.yaml`
 	// is deliberately NOT one of them — it falls through to the reserved
 	// drop below, exactly as the exporter refuses to merge it into a chain.
-	if strings.EqualFold(base, "_defaults.yaml") || strings.EqualFold(base, "_defaults.yml") {
+	if confdname.IsDefaults(base) {
 		if baseIdx < 0 {
 			return -1, "no Base PR in plan"
 		}
@@ -194,7 +167,7 @@ func bucketForPath(p string, baseIdx int, tenantToIdx map[string]int) (int, stri
 	// (ProposalRef.MemberTenantIDs), which may legally be `.hidden`, and
 	// before this branch existed such an id routed the file into a chunk
 	// with no warning at all.
-	if strings.HasPrefix(base, ".") {
+	if confdname.IsHidden(base) {
 		return -1, fmt.Sprintf(
 			"%q is hidden (dot-prefixed); the exporter's walker skips it, so "+
 				"no PR may carry it as a tenant carrier", base)
@@ -202,7 +175,7 @@ func bucketForPath(p string, baseIdx int, tenantToIdx map[string]int) (int, stri
 
 	// Reserved-prefix names that are not the defaults carrier: the exporter
 	// hashes them for change detection but derives no tenant from them.
-	if strings.HasPrefix(base, "_") {
+	if confdname.IsReserved(base) {
 		return -1, fmt.Sprintf(
 			"%q uses the reserved `_` prefix but is not the defaults carrier; "+
 				"the exporter derives no tenant from it", base)
