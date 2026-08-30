@@ -10,7 +10,11 @@ Closes the audit gap (P1-5 / 444 LOC tool was 0% covered). Targets the spine:
   - render_markdown_table (table shape + threshold line)
 
 OUT OF SCOPE here (require gh CLI auth / live network):
-  - _gh, list_recent_runs, download_artifact
+  - _gh, download_artifact
+  - list_recent_runs' NETWORK behaviour. ⚠️ Narrowed by TRK-371 / #1635: this
+    file now also pins that function's `status` DEFAULT and the `--json` field
+    list, both by introspection with no network. The call itself is still
+    untested here.
   - main() end-to-end (involves the gh-CLI chain)
 """
 from __future__ import annotations
@@ -20,6 +24,7 @@ import json
 import re as _re
 import math
 import subprocess
+import sys
 import types
 from pathlib import Path
 
@@ -4492,3 +4497,526 @@ class TestCanariesAreNeverJudgedAsProductBenchmarks:
                                    src, _re.M))
         assert declared == set(ab.CANARY_BENCHES)
 
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# TRK-371 / #1635 — the completeness marker for bench-baseline.txt
+#
+# The artifact could not say whether it was whole, so the window predicate had
+# to be `--status success`, so a failing CONSUMER job deleted that night from
+# its own future windows. These pin the loader half: the marker reader, the
+# admission judgment, and the widened predicate.
+#
+# ⚠️ SCOPE. Every test below drives PURE functions with hand-built inputs. None
+# of them proves the CI wiring works — that half lives in
+# `test_write_baseline_marker.py`, and even there it is a text assertion. What
+# is genuinely established here is the DECISION TABLE, nothing wider.
+# ══════════════════════════════════════════════════════════════════════════
+
+MARKER_OK = "schema: bench-baseline-rows/v1\nrows: 12\n"
+
+
+def _write_marker(d: Path, body: str) -> Path:
+    d.mkdir(parents=True, exist_ok=True)
+    (d / ab.MARKER_FILE).write_text(body, encoding="utf-8")
+    return d
+
+
+class TestReadCompletenessMarker:
+    def test_absent_marker_is_absent_not_an_error(self, tmp_path: Path):
+        """⛔ (None, None) and (None, reason) are different answers. Absent is a
+        version boundary; malformed is unaccounted for. Collapsing them lets a
+        corrupt artifact borrow an explanation measured for something else."""
+        fields, err = ab.read_completeness_marker(tmp_path)
+        assert fields is None
+        assert err is None
+
+    def test_well_formed_marker_is_returned(self, tmp_path: Path):
+        fields, err = ab.read_completeness_marker(_write_marker(tmp_path, MARKER_OK))
+        assert err is None
+        assert fields == {"schema": "bench-baseline-rows/v1", "rows": "12"}
+
+    def test_unknown_schema_is_refused_by_name(self, tmp_path: Path):
+        body = "schema: bench-baseline-rows/v99\nrows: 12\n"
+        fields, err = ab.read_completeness_marker(_write_marker(tmp_path, body))
+        assert fields is None
+        assert err.startswith(ab.REFUSE_MARKER_UNREADABLE)
+        assert "bench-baseline-rows/v99" in err
+
+    def test_missing_required_key_is_refused(self, tmp_path: Path):
+        fields, err = ab.read_completeness_marker(
+            _write_marker(tmp_path, "schema: bench-baseline-rows/v1\n"))
+        assert fields is None
+        assert "rows" in err
+
+    def test_line_without_a_separator_is_refused(self, tmp_path: Path):
+        body = "schema: bench-baseline-rows/v1\nrows 12\n"
+        fields, err = ab.read_completeness_marker(_write_marker(tmp_path, body))
+        assert fields is None
+        assert err.startswith(ab.REFUSE_MARKER_UNREADABLE)
+
+    def test_non_integer_row_count_is_refused(self, tmp_path: Path):
+        body = "schema: bench-baseline-rows/v1\nrows: twelve\n"
+        fields, err = ab.read_completeness_marker(_write_marker(tmp_path, body))
+        assert fields is None
+        assert "not an integer" in err
+
+    def test_blank_lines_are_tolerated(self, tmp_path: Path):
+        body = "schema: bench-baseline-rows/v1\n\nrows: 12\n\n"
+        fields, err = ab.read_completeness_marker(_write_marker(tmp_path, body))
+        assert err is None
+        assert fields["rows"] == "12"
+
+
+class TestJudgeNightCompleteness:
+    """The decision table. One test per cell, each naming its own cause."""
+
+    def test_marker_present_and_matching_is_admitted(self):
+        admit, why = ab.judge_night_completeness(
+            {"schema": "bench-baseline-rows/v1", "rows": "12"}, None, "success", 12)
+        assert admit is True
+        assert why == "marker-verified"
+
+    def test_a_marked_night_survives_its_run_failing(self):
+        """⛔ THIS IS THE DEFECT #1635 EXISTS TO CLOSE. The run concluded
+        `failure` — because a CONSUMER job (trend-watch itself) died — but the
+        baseline step finished and vouched for its file. Admitting it is what
+        breaks the self-eating loop.
+
+        A specific break that reddens this: make the admission depend on
+        `conclusion == "success"` regardless of the marker."""
+        admit, why = ab.judge_night_completeness(
+            {"schema": "bench-baseline-rows/v1", "rows": "12"}, None, "failure", 12)
+        assert admit is True, (
+            "a night whose producer finished was dropped because an unrelated "
+            "consumer job failed — that is the self-eating loop, unfixed"
+        )
+        assert why == "marker-verified"
+
+    def test_row_mismatch_is_refused_with_both_numbers(self):
+        admit, why = ab.judge_night_completeness(
+            {"schema": "bench-baseline-rows/v1", "rows": "12"}, None, "success", 9)
+        assert admit is False
+        assert why.startswith(ab.REFUSE_MARKER_ROW_MISMATCH)
+        assert "12" in why and "9" in why
+
+    def test_pre_marker_night_from_a_successful_run_is_grandfathered(self):
+        """The rolling-window clause. Admitted because the OLD predicate is
+        exactly the guarantee the marker replaces — every job passed, so the
+        baseline step passed — NOT because old nights are probably fine."""
+        admit, why = ab.judge_night_completeness(None, None, "success", 12)
+        assert admit is True
+        assert why == ab.ADMIT_PRE_MARKER_SUCCESS
+
+    @pytest.mark.parametrize("conclusion", ["failure", "cancelled", "timed_out", None])
+    def test_pre_marker_night_from_a_non_successful_run_is_refused(self, conclusion):
+        """⛔ Without a marker AND without the success predicate there is no
+        evidence at all — truncation and a short night are isomorphic."""
+        admit, why = ab.judge_night_completeness(None, None, conclusion, 12)
+        assert admit is False
+        assert why.startswith(ab.REFUSE_PRE_MARKER_NONSUCCESS)
+        assert repr(conclusion) in why
+
+    def test_a_malformed_marker_is_refused_even_on_a_successful_run(self):
+        """⛔ ORDER. The malformed branch is settled before the grandfather one.
+        If it were not, a corrupt marker on a `success` run would be waved
+        through by a clause written for nights that have no marker at all.
+
+        A specific break that reddens this: move the `marker_error` check below
+        the `marker is None` check."""
+        admit, why = ab.judge_night_completeness(
+            None, f"{ab.REFUSE_MARKER_UNREADABLE}: mangled", "success", 12)
+        assert admit is False
+        assert why.startswith(ab.REFUSE_MARKER_UNREADABLE)
+
+    def test_the_three_refusal_causes_are_distinct_strings(self):
+        """Named separately on purpose (#1571 判準 1): an operator reading
+        'pre-marker' goes to the calendar, one reading 'row-mismatch' goes to
+        the upload path, and one reading 'unreadable' goes to the producer."""
+        causes = {ab.REFUSE_MARKER_UNREADABLE, ab.REFUSE_MARKER_ROW_MISMATCH,
+                  ab.REFUSE_PRE_MARKER_NONSUCCESS, ab.ADMIT_PRE_MARKER_SUCCESS}
+        assert len(causes) == 4
+
+
+class TestWindowPredicate:
+    def test_the_default_predicate_stays_conservative(self):
+        """⛔ THE DEFAULT MUST STAY `success`, and this test is here because the
+        first cut of #1635 flipped it — which silently widened `main()`'s
+        AGGREGATION path, a caller with no completeness check at all. That path
+        loops `download_artifact` → `parse_bench_file` straight into
+        `all_samples`; flipping the default put truncated artifacts one
+        function away from the stats, re-creating the very defect this change
+        removes. Found in review, recorded rather than quietly corrected.
+
+        A specific break that reddens this: set the default to "completed".
+        """
+        import inspect
+        default = inspect.signature(ab.list_recent_runs).parameters["status"].default
+        assert default == "success", (
+            "a caller that says nothing now inherits the PERMISSIVE predicate; "
+            "the widening must be opt-in at call sites that check completeness"
+        )
+
+    def test_the_trend_watch_window_opts_in_to_completed(self, monkeypatch, tmp_path):
+        """The widening, asserted where it actually happens.
+
+        A specific break that reddens this: drop the explicit
+        `status="completed"` from `night_records_from_gh`.
+        """
+        seen = {}
+
+        def fake_gh(cmd):
+            seen["cmd"] = list(cmd)
+            return "[]"
+
+        monkeypatch.setattr(ab, "_gh", fake_gh)
+        ab.night_records_from_gh("bench-record.yaml", 14, tmp_path)
+        cmd = seen["cmd"]
+        assert cmd[cmd.index("--status") + 1] == "completed"
+
+    def test_the_aggregation_path_does_not_inherit_the_widening(self, monkeypatch):
+        """⛔ THE OTHER HALF, and the one the first cut got wrong. `main()`'s
+        aggregate mode must still ask `success`, because nothing between its
+        `download_artifact` and its statistics judges whether the artifact is
+        whole.
+
+        Driven through the REAL `main()` rather than by reading the call site:
+        a source-level check passes on a decoy and on a line that no longer
+        executes. `_gh` returns an empty list, so main bails right after the
+        listing — which is exactly the point where the predicate is observable.
+
+        A specific break that reddens this: pass `status="completed"` at the
+        aggregation call site, or flip the module default back.
+        """
+        seen = {}
+
+        def fake_gh(cmd):
+            seen["cmd"] = list(cmd)
+            return "[]"
+
+        monkeypatch.setattr(ab, "_gh", fake_gh)
+        # main() probes for the real binary before it ever calls `_gh`; this
+        # container has no `gh`, and the probe is not what is under test here.
+        monkeypatch.setattr(ab.shutil, "which", lambda _name: "/usr/bin/gh")
+        monkeypatch.setattr(sys, "argv", ["analyze_bench_history.py", "--limit", "28"])
+        ab.main()
+
+        cmd = seen["cmd"]
+        assert cmd[cmd.index("--status") + 1] == "success", (
+            "the aggregation path widened to non-success runs, but it has no "
+            "completeness check — a truncated artifact would reach the stats"
+        )
+
+    def test_the_run_conclusion_is_still_requested_from_gh(self, monkeypatch):
+        """The grandfather branch reads `conclusion`; if the `--json` field
+        list ever drops it, every pre-marker night silently becomes a refusal
+        (`run.get("conclusion")` → None → `pre-marker-run-not-success`) and the
+        window quietly shrinks every night until the marker has rolled in.
+
+        ⛔ THE FIRST CUT OF THIS TEST WAS VACUOUS, recorded rather than quietly
+        corrected because it is the very defect this change is about. It read
+        the function's SOURCE and asserted `"conclusion" in body` — but `body`
+        included the docstring, which says "conclusion" three times. Removing
+        the field from the `--json` list, the exact break the old docstring
+        named, left it GREEN (2 passed). A test that greps a function's own
+        prose is measuring the prose.
+
+        ⇒ Now asserts on BEHAVIOUR: spy the `gh` argv the function actually
+        builds and read the `--json` value out of it. Prose cannot satisfy it.
+        """
+        seen = {}
+
+        def fake_gh(cmd):
+            seen["cmd"] = list(cmd)
+            return "[]"
+
+        monkeypatch.setattr(ab, "_gh", fake_gh)
+        ab.list_recent_runs("bench-record.yaml", 14)
+
+        cmd = seen["cmd"]
+        json_fields = cmd[cmd.index("--json") + 1].split(",")
+        assert "conclusion" in json_fields, (
+            f"`gh run list --json` asks for {json_fields}; without `conclusion` "
+            "every pre-marker night is refused instead of grandfathered"
+        )
+
+
+class TestNightRecordsFromGhAdmission:
+    """⛔ THE LOOP BODY WAS SHIPPED WITH ZERO COVERAGE, and blind review proved
+    it: inverting `if not admit:` — which makes the window keep every REFUSED
+    night and drop every admitted one — left the whole suite green (2741
+    passed). Every other test either monkeypatched this function away or drove
+    it with an empty run list, so the marker integration it exists to perform
+    never executed.
+
+    These drive the REAL function against a pre-populated cache directory, so
+    `download_artifact`, `read_completeness_marker`, `judge_night_completeness`
+    and the grandfather counter all run for real.
+    """
+
+    SCHEMA = "bench-baseline-rows/v1"
+
+    def _cache(self, tmp_path, run_id, rows, *, marker_rows=None, complete=True):
+        """Populate a run dir the way a finished `gh run download` leaves it."""
+        d = tmp_path / f"run-{run_id}"
+        d.mkdir(parents=True, exist_ok=True)
+        body = "cpu: TestCPU\n" + "".join(
+            f"BenchmarkThing{i}-4   \t   10\t  {100 + i} ns/op\n" for i in range(rows))
+        (d / ab.ARTIFACT_FILE).write_text(body, encoding="utf-8", newline="\n")
+        if marker_rows is not None:
+            (d / ab.MARKER_FILE).write_text(
+                f"schema: {self.SCHEMA}\nrows: {marker_rows}\n",
+                encoding="utf-8", newline="\n")
+        if complete:
+            (d / ab.DOWNLOAD_SENTINEL).write_text("", encoding="utf-8", newline="\n")
+        return d
+
+    def _run(self, monkeypatch, tmp_path, runs):
+        """⛔ The spy takes `status` as a NAMED parameter with no default, so a
+        call site that stops passing it fails loudly here instead of being
+        absorbed. `**kwargs` on a spy is how the previous line let a misspelled
+        keyword look like 'equivalent to not passing it' (see the TRK-370
+        entry); this asserts the opt-in rather than swallowing it."""
+        def spy(workflow, limit, status):
+            assert status == "completed", (
+                f"the trend-watch window asked for {status!r}; the widening is "
+                "opt-in and this is the caller that must opt in"
+            )
+            return list(runs)
+
+        monkeypatch.setattr(ab, "list_recent_runs", spy)
+        return ab.night_records_from_gh("bench-record.yaml", len(runs), tmp_path)
+
+    @staticmethod
+    def _run_dict(run_id, day, conclusion):
+        return {"databaseId": run_id, "createdAt": f"2026-08-{day:02d}T03:00:00Z",
+                "conclusion": conclusion}
+
+    def test_a_refused_night_is_excluded_and_an_admitted_one_is_kept(
+            self, monkeypatch, tmp_path):
+        """⛔ The break that motivated this class: invert `if not admit:`.
+
+        Run 900 is marker-verified (admit). Run 901 has no marker and its run
+        failed (refuse). Asserting on the ADMITTED IDS — not on the count —
+        means swapping the branch cannot pass by coincidence of arity.
+        """
+        self._cache(tmp_path, 900, rows=3, marker_rows=3)
+        self._cache(tmp_path, 901, rows=3, marker_rows=None)
+        nights = self._run(monkeypatch, tmp_path, [
+            self._run_dict(900, 20, "success"),
+            self._run_dict(901, 19, "failure"),
+        ])
+        assert [n.run_id for n in nights] == [900], (
+            "expected only the marker-verified night in the window; got "
+            f"{[n.run_id for n in nights]}"
+        )
+
+    def test_a_marked_night_whose_run_failed_stays_in_the_window(
+            self, monkeypatch, tmp_path):
+        """The self-eating loop, end to end rather than at the pure function."""
+        self._cache(tmp_path, 902, rows=4, marker_rows=4)
+        nights = self._run(monkeypatch, tmp_path,
+                           [self._run_dict(902, 21, "failure")])
+        assert [n.run_id for n in nights] == [902]
+
+    def test_a_row_count_mismatch_drops_the_night(self, monkeypatch, tmp_path):
+        """⛔ Catches an off-by-one in what is fed to the row comparison: the
+        marker vouches for 5, the artifact holds 3."""
+        self._cache(tmp_path, 903, rows=3, marker_rows=5)
+        nights = self._run(monkeypatch, tmp_path,
+                           [self._run_dict(903, 22, "success")])
+        assert nights == []
+
+    def test_an_exact_row_count_is_admitted_so_the_check_is_not_always_refusing(
+            self, monkeypatch, tmp_path):
+        """The counterfactual to the test above — without this one, a
+        `judge_night_completeness` that refused EVERYTHING would still pass."""
+        self._cache(tmp_path, 904, rows=6, marker_rows=6)
+        nights = self._run(monkeypatch, tmp_path,
+                           [self._run_dict(904, 23, "success")])
+        assert [n.run_id for n in nights] == [904]
+
+    def test_the_grandfather_count_and_its_denominator_are_reported(
+            self, monkeypatch, tmp_path, capsys):
+        """⛔ The roll-in status line. Pins the NUMERATOR and the DENOMINATOR
+        separately: 1 grandfathered of 2 ADMITTED (not of 3 listed) — a night
+        that was refused must not inflate the denominator, or the operator
+        reads the roll-in as further along than it is."""
+        self._cache(tmp_path, 905, rows=3, marker_rows=3)      # marked
+        self._cache(tmp_path, 906, rows=3, marker_rows=None)   # grandfathered
+        self._cache(tmp_path, 907, rows=3, marker_rows=None)   # refused
+        nights = self._run(monkeypatch, tmp_path, [
+            self._run_dict(905, 24, "success"),
+            self._run_dict(906, 23, "success"),
+            self._run_dict(907, 22, "failure"),
+        ])
+        assert sorted(n.run_id for n in nights) == [905, 906]
+        err = capsys.readouterr().err
+        assert "1 of 2 admitted night(s) carry no" in err, err
+
+    def test_no_grandfather_line_when_every_night_is_marked(
+            self, monkeypatch, tmp_path, capsys):
+        """Silence is the signal that the roll-in is complete."""
+        self._cache(tmp_path, 908, rows=3, marker_rows=3)
+        self._run(monkeypatch, tmp_path, [self._run_dict(908, 25, "success")])
+        assert "admitted night(s) carry no" not in capsys.readouterr().err
+
+    def test_a_partial_cache_is_refetched_rather_than_read_as_pre_marker(
+            self, monkeypatch, tmp_path):
+        """⛔ The blind-review finding. A run dir holding `bench-baseline.txt`
+        but no completion sentinel is an INTERRUPTED download, not a night that
+        predates the marker — but the old cache check could not tell them apart
+        and handed the second story to the first situation.
+
+        Here the cached dir has no sentinel, so `gh` must be called again; the
+        refetch supplies the marker and the night is marker-verified rather
+        than grandfathered. A specific break that reddens this: drop the
+        `DOWNLOAD_SENTINEL` term from the cache condition.
+        """
+        d = self._cache(tmp_path, 909, rows=2, marker_rows=None, complete=False)
+        calls = []
+
+        def fake_gh(cmd):
+            calls.append(cmd)
+            (d / ab.MARKER_FILE).write_text(
+                f"schema: {self.SCHEMA}\nrows: 2\n", encoding="utf-8", newline="\n")
+            return ""
+
+        monkeypatch.setattr(ab, "_gh", fake_gh)
+        nights = self._run(monkeypatch, tmp_path,
+                           [self._run_dict(909, 26, "failure")])
+        assert len(calls) == 1, "the partial cache was served instead of refetched"
+        assert [n.run_id for n in nights] == [909]
+
+    def test_a_complete_cache_is_not_refetched(self, monkeypatch, tmp_path):
+        """The counterfactual: the sentinel must still SAVE a download, or the
+        fix above would just be 'always re-download' wearing a sentinel."""
+        self._cache(tmp_path, 910, rows=2, marker_rows=2)
+        calls = []
+        monkeypatch.setattr(ab, "_gh", lambda cmd: calls.append(cmd) or "")
+        nights = self._run(monkeypatch, tmp_path,
+                           [self._run_dict(910, 27, "success")])
+        assert calls == [], "a complete cache was re-downloaded"
+        assert [n.run_id for n in nights] == [910]
+
+    def test_a_fresh_download_writes_the_sentinel_so_the_next_call_is_cached(
+            self, monkeypatch, tmp_path):
+        """⛔ The last break the suite could not see. Both cache tests above
+        pre-seed the sentinel, so neither notices if `download_artifact` stops
+        WRITING one — the tool would then re-download every run of every night,
+        forever, and nothing would go red.
+
+        A specific break that reddens this: delete the
+        `(target / DOWNLOAD_SENTINEL).write_text(...)` line.
+        """
+        run_id = 911
+        calls = []
+
+        def fake_gh(cmd):
+            calls.append(cmd)
+            d = tmp_path / f"run-{run_id}"
+            d.mkdir(parents=True, exist_ok=True)
+            (d / ab.ARTIFACT_FILE).write_text(
+                "cpu: TestCPU\nBenchmarkThing0-4   \t   10\t  100 ns/op\n",
+                encoding="utf-8", newline="\n")
+            return ""
+
+        monkeypatch.setattr(ab, "_gh", fake_gh)
+        first = ab.download_artifact(run_id, tmp_path)
+        assert first is not None and len(calls) == 1
+        assert (tmp_path / f"run-{run_id}" / ab.DOWNLOAD_SENTINEL).exists(), (
+            "a complete download left no sentinel, so every later call "
+            "re-downloads and an absent marker can never be trusted as the "
+            "version boundary"
+        )
+        ab.download_artifact(run_id, tmp_path)
+        assert len(calls) == 1, "the second call re-downloaded despite a complete fetch"
+
+    def test_a_failed_sentinel_write_degrades_instead_of_crashing(
+            self, monkeypatch, tmp_path, capsys):
+        """⛔ Blind-review finding, and the irony is the point: the SAME commit
+        wrapped the producer's marker write in `except OSError` and left this
+        one bare. A full disk here raised an uncaught OSError straight out of
+        `night_records_from_gh`, killing the night's verdict over a cache file.
+
+        Degrading to "not cached" costs one re-download. Crashing costs the run.
+
+        A specific break that reddens this: remove the `except OSError` around
+        the sentinel write in `download_artifact`.
+        """
+        run_id = 912
+        real_write = Path.write_text
+
+        def flaky_write(self, *a, **kw):
+            if self.name == ab.DOWNLOAD_SENTINEL:
+                raise OSError(28, "No space left on device")
+            return real_write(self, *a, **kw)
+
+        def fake_gh(cmd):
+            d = tmp_path / f"run-{run_id}"
+            d.mkdir(parents=True, exist_ok=True)
+            real_write(d / ab.ARTIFACT_FILE,
+                       "cpu: TestCPU\nBenchmarkThing0-4   \t   10\t  100 ns/op\n",
+                       encoding="utf-8", newline="\n")
+            return ""
+
+        monkeypatch.setattr(ab, "_gh", fake_gh)
+        monkeypatch.setattr(Path, "write_text", flaky_write)
+
+        got = ab.download_artifact(run_id, tmp_path)
+
+        assert got is not None, "a cache-file failure must not lose the artifact"
+        assert not (tmp_path / f"run-{run_id}" / ab.DOWNLOAD_SENTINEL).exists()
+        assert "could not write" in capsys.readouterr().err
+
+
+class TestMarkerDuplicateKeys:
+    """⛔ A marker that contradicts itself must be REFUSED, not silently
+    resolved by last-write-wins.
+
+    ⚠️ RECORDED FOR HOW IT WAS FOUND. Review flagged this defect one round
+    earlier in `parse_marker` — the TEST-side mirror of
+    `read_completeness_marker`'s parse loop — and only the mirror was fixed.
+    The production original had the same bug for another whole round. The
+    lesson generalises: when a finding lands on a copy of production logic,
+    the copy is not the interesting half.
+    """
+
+    def test_a_self_contradicting_marker_is_refused(self, tmp_path):
+        """`rows: 1` then `rows: 3` used to parse as `rows: 3` and be admitted
+        as `marker-verified` against a 3-row artifact — the later value was
+        picked as the winner instead of the contradiction being reported.
+
+        A specific break that reddens this: delete the `if key in fields`
+        guard from `read_completeness_marker`.
+        """
+        (tmp_path / ab.MARKER_FILE).write_text(
+            "schema: bench-baseline-rows/v1\nrows: 1\nrows: 3\n",
+            encoding="utf-8", newline="\n")
+        fields, err = ab.read_completeness_marker(tmp_path)
+        assert fields is None
+        assert err.startswith(ab.REFUSE_MARKER_UNREADABLE)
+        assert "more than once" in err
+        # Both values named, so the operator sees the contradiction itself.
+        assert "'1'" in err and "'3'" in err
+
+    def test_a_duplicated_schema_key_is_refused_too(self, tmp_path):
+        """Not special-cased to `rows`: any repeated key is a contradiction."""
+        (tmp_path / ab.MARKER_FILE).write_text(
+            "schema: bench-baseline-rows/v1\nschema: bench-baseline-rows/v1\nrows: 3\n",
+            encoding="utf-8", newline="\n")
+        fields, err = ab.read_completeness_marker(tmp_path)
+        assert fields is None
+        assert "schema" in err
+
+    def test_the_refusal_reaches_the_admission_decision(self, tmp_path):
+        """⛔ The counterfactual that matters: the refusal must actually stop
+        the night, not merely be returned. Before the fix this exact input
+        produced `(True, 'marker-verified')`."""
+        (tmp_path / ab.MARKER_FILE).write_text(
+            "schema: bench-baseline-rows/v1\nrows: 1\nrows: 3\n",
+            encoding="utf-8", newline="\n")
+        fields, err = ab.read_completeness_marker(tmp_path)
+        admit, why = ab.judge_night_completeness(fields, err, "failure", 3)
+        assert admit is False
+        assert why.startswith(ab.REFUSE_MARKER_UNREADABLE)

@@ -94,6 +94,20 @@ REPO = "vencil/Dynamic-Alerting-Integrations"
 WORKFLOW_FILE = "bench-record.yaml"
 ARTIFACT_FILE = "bench-baseline.txt"
 
+# The completeness marker `bench-baseline.txt` cannot carry itself (TRK-371 /
+# #1635), written by `write_baseline_marker.py` as the last action of the
+# baseline step. ⛔ Declared here rather than imported: the producer imports
+# THIS module for `_BENCH_RE`, so importing it back would be circular. The two
+# declarations are cross-asserted in `tests/dx/test_write_baseline_marker.py`
+# — that cross-assertion IS the §P5 gate for this artifact, and it is the only
+# thing standing between the two constants and a silent drift.
+MARKER_FILE = "bench-baseline.rows"
+# Written by `download_artifact` only after a COMPLETE fetch. Without it an
+# interrupted download is indistinguishable from a run that predates the marker.
+DOWNLOAD_SENTINEL = ".download-complete"
+SUPPORTED_MARKER_SCHEMAS = ("bench-baseline-rows/v1",)
+MARKER_REQUIRED_KEYS = frozenset({"schema", "rows"})
+
 # Gate thresholds (issue #67 §Acceptance gate)
 CV_THRESHOLD = 0.25       # coefficient of variation
 RATIO_THRESHOLD = 1.30    # max/min
@@ -248,23 +262,51 @@ def list_recent_runs(workflow: str, limit: int,
     documented that way), so `"success"` means "every job in the run passed"
     and `"completed"` means "the run finished, pass or fail".
 
-    ⛔ WHY THE DEFAULT IS STILL `"success"`, and it is not inertia. Keying the
-    window on the RUN's conclusion conflates two questions — "did the producer
-    write a usable artifact?" and "did every other job in the run pass?" — so a
-    failing CONSUMER job (this module's own `trend-watch`, say) deletes that
-    night's artifacts from every future window, its own included. The fix is to
-    ask `"completed"` and let the loader judge the artifact. That is safe only
-    where the artifact can say whether it is whole:
+    ⛔ THE DEFAULT STAYS `"success"`, AND THE WIDENING IS OPT-IN PER CALL SITE.
+    The first cut of #1635 flipped this default to `"completed"` instead, which
+    silently widened a caller that has no completeness check at all: `main()`'s
+    aggregation path (`:2404`) loops `download_artifact` → `parse_bench_file`
+    straight into `all_samples`, and reads `--limit 28` runs with nothing
+    between a truncated artifact and the stats. Only the TREND-WATCH window
+    goes through `judge_night_completeness`. So the flip re-created, one
+    function away, the exact defect this change exists to remove — and it also
+    made two of that path's own messages false ("listing last N SUCCESSFUL
+    runs"). Caught by review; recorded rather than quietly corrected.
+
+    ⇒ Conservative by default, widened explicitly where the marker makes it
+    safe: `night_records_from_gh` passes `status="completed"`, exactly as
+    `paired_trend_watch.py` has since #1626. A future caller that says nothing
+    inherits the SAFE predicate, not the permissive one.
+
+    Keying the window on the RUN's conclusion
+    conflates two questions — "did the producer write a usable artifact?" and
+    "did every other job in the run pass?" — so a failing CONSUMER job (this
+    module's own `trend-watch`, say) deleted that night's artifacts from every
+    future window, its own included. The fix is to ask `"completed"` and let the
+    loader judge the artifact, which is safe only where the artifact can say
+    whether it is whole:
 
       * `bench-paired.json` can — JSON parse, schema string, required keys.
-        `paired_trend_watch.py` therefore asks for `"completed"`.
-      * `bench-baseline.txt` CANNOT. It is a `cp` of a text file with no row
-        count, no trailer, no marker, and `night_records_from_gh` applies no
-        sample floor (`statistics.median` of a one-element list is that
-        element). A run that died mid-benchmark still uploads what exists
-        (`upload-artifact` runs `if: always()`), so admitting non-success runs
-        here would feed single-sample "medians" straight into the rule that
-        opens `perf-trend` issues.
+        `paired_trend_watch.py` has asked for `"completed"` since #1626.
+      * `bench-baseline.txt` still cannot, on its own. It is a `cp` of a text
+        file with no row count, no trailer and no checksum, and
+        `night_records_from_gh` applies no sample floor (`statistics.median` of
+        a one-element list is that element). A run that died mid-benchmark
+        still uploads what exists (`upload-artifact` runs `if: always()`).
+      * ⭐ So #1635 gave it a SIDECAR that can: `bench-baseline.rows`, written
+        by `write_baseline_marker.py` as the last action of the baseline step.
+        Admission is decided per night by `judge_night_completeness` —
+        ⚠️ IN THE TREND-WATCH WINDOW ONLY. `main()`'s aggregation path has no
+        such check, which is why it keeps this function's `"success"` default
+        rather than opting in.
+
+    ⛔ WHAT THIS DOES NOT YET ESTABLISH, and the ticket says so explicitly. The
+    marker only exists on nights produced after it shipped, while the window is
+    14 nights deep. Until it covers the whole window, pre-marker nights are
+    admitted on their run's `success` conclusion (the grandfather branch), so
+    for that stretch the old predicate is still doing part of the work and the
+    self-eating loop is NOT closed for those nights. `night_records_from_gh`
+    prints the count each run so the roll-in is observable rather than assumed.
 
     ⛔ CORRECTION, and it narrows the paragraph above. That sentence used to
     read "single-sample medians — and possibly a `cpu:` header lost to
@@ -288,8 +330,11 @@ def list_recent_runs(workflow: str, limit: int,
     counts them. Whether that is enough to flip a CLEAR verdict is NOT
     measured. Tracked with the fix in #1635.
 
-    So this module keeps `"success"` until `bench-baseline.txt` carries its own
-    completeness marker. Stated as an open gap rather than a solved one.
+    ⚠️ #1635 CLOSED THE FIRST HALF ONLY. The sidecar establishes that the file
+    the consumer reads is the file the producer wrote; it establishes nothing
+    about whether the surviving row count is a large enough sample. There is
+    still no floor, and whether a thin night can flip a CLEAR verdict is still
+    NOT measured — the sentence above stands unchanged, on purpose.
 
     Raises ``RuntimeError`` with a friendly message if ``gh`` is unauthenticated
     or the workflow doesn't exist.
@@ -319,7 +364,18 @@ def download_artifact(run_id: int, dest_dir: Path) -> Path | None:
     """Download the run's bench-baseline artifact zip; return path to bench-baseline.txt or None."""
     target = dest_dir / f"run-{run_id}"
     txt = target / ARTIFACT_FILE
-    if txt.exists():
+    # ⛔ THE CACHE HIT REQUIRES THE SENTINEL, NOT JUST THE .txt (TRK-371).
+    # Keying it on `bench-baseline.txt` alone conflates "this run was fully
+    # downloaded" with "a .txt is lying around here". A directory populated by
+    # an interrupted `gh run download`, or one cached before the artifact
+    # carried a marker, then serves a .txt with no `bench-baseline.rows` — and
+    # `judge_night_completeness` reads that as the VERSION BOUNDARY and
+    # grandfathers the night on its run's `success` conclusion. The grandfather
+    # clause is justified only for runs that predate the marker; a truncated
+    # cache borrowing that explanation is the exact substitution this change
+    # exists to stop. Caches written before this sentinel simply re-download
+    # once, which is self-healing.
+    if txt.exists() and (target / DOWNLOAD_SENTINEL).exists():
         return txt  # cached
     target.mkdir(parents=True, exist_ok=True)
     artifact_name = f"bench-baseline-{run_id}"
@@ -336,6 +392,26 @@ def download_artifact(run_id: int, dest_dir: Path) -> Path | None:
     if not txt.exists():
         print(f"  ⚠️  run {run_id}: artifact missing {ARTIFACT_FILE}", file=sys.stderr)
         return None
+    # Written only after `gh` returned 0 AND the .txt landed.
+    #
+    # ⚠️ WHAT IT ESTABLISHES, narrowly: this process completed a download that
+    # `gh` reported as successful. The first draft of this comment said its
+    # presence means "everything this artifact had is here" — blind review
+    # showed that is wider than the evidence, because a `gh` that exits 0 while
+    # leaving a truncated `.txt` still gets a sentinel. That residual case is
+    # what the ROW COUNT in the marker is for; the sentinel only separates
+    # "fetch finished" from "fetch was interrupted".
+    #
+    # ⛔ A failure here must not kill the run. Without this guard a full disk
+    # raises an uncaught OSError out of `night_records_from_gh` — the exact
+    # shape fixed in `write_baseline_marker.main` and missed here in the same
+    # commit. Degrading to "not cached" costs one re-download; crashing costs
+    # the night's verdict.
+    try:
+        (target / DOWNLOAD_SENTINEL).write_text("", encoding="utf-8", newline="\n")
+    except OSError as exc:
+        print(f"  ⚠️  run {run_id}: could not write {DOWNLOAD_SENTINEL} ({exc}) — "
+              "this run will be re-downloaded next time", file=sys.stderr)
     return txt
 
 
@@ -691,28 +767,173 @@ def _cpu_class_counts(nights: list[NightRecord]) -> dict[str, int]:
     return counts
 
 
+# WHY a night was refused by the completeness check (TRK-371 / #1635). Each is
+# a DIFFERENT cause and they are named separately on purpose — collapsing them
+# is the mistake #1571 判準 1 was written about, where a perfectly legal older
+# artifact was reported with a message that read like a corrupt payload and sent
+# the operator hunting for a broken producer.
+REFUSE_MARKER_UNREADABLE = "marker-unreadable"
+REFUSE_MARKER_ROW_MISMATCH = "marker-row-mismatch"
+REFUSE_PRE_MARKER_NONSUCCESS = "pre-marker-run-not-success"
+# NOT a refusal — the rolling-window grandfather clause. Counted and reported so
+# an operator can see where the window sits in the roll-in (see §Rolling period
+# in `--help`/docs), because the marker only covers nights produced AFTER it
+# shipped and the window is 14 nights deep.
+ADMIT_PRE_MARKER_SUCCESS = "pre-marker-run-success"
+
+
+def read_completeness_marker(run_dir: Path) -> tuple[dict | None, str | None]:
+    """Read `bench-baseline.rows` from a downloaded run directory.
+
+    Returns ``(fields, None)`` when a well-formed marker of a supported schema
+    is present, ``(None, None)`` when the file is simply ABSENT, and
+    ``(None, reason)`` when it is present but cannot be trusted.
+
+    ⛔ Absent and malformed are deliberately different returns. Absent is the
+    version boundary (this run predates the marker, or its baseline step never
+    finished); malformed is an unaccounted-for state. Giving the second one the
+    first one's explanation would let a corrupt artifact borrow a story that was
+    measured for something else.
+    """
+    path = run_dir / MARKER_FILE
+    if not path.is_file():
+        return None, None
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        return None, f"{REFUSE_MARKER_UNREADABLE}: cannot read {MARKER_FILE} ({exc})"
+
+    fields: dict[str, str] = {}
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        key, sep, value = line.partition(":")
+        if not sep:
+            return None, (f"{REFUSE_MARKER_UNREADABLE}: {MARKER_FILE} has a line "
+                          f"with no `key: value` separator ({line!r})")
+        key = key.strip()
+        # ⛔ A repeated key is a marker that CONTRADICTS ITSELF, and letting the
+        # last one win picks a winner instead of reporting the contradiction:
+        # `rows: 1` followed by `rows: 3` was admitted as `marker-verified`
+        # against a 3-row artifact. Verified before fixing.
+        # ⚠️ RECORDED BECAUSE OF HOW IT WAS FOUND. Review flagged this exact
+        # defect one round earlier in `parse_marker`, the TEST-side mirror of
+        # this loop, and only the mirror was fixed — nobody asked whether the
+        # original had it too. It did. When a finding lands on a copy of
+        # production logic, the copy is not the interesting half.
+        if key in fields:
+            return None, (f"{REFUSE_MARKER_UNREADABLE}: {MARKER_FILE} declares "
+                          f"{key!r} more than once ({fields[key]!r} then "
+                          f"{value.strip()!r}) — a marker that contradicts "
+                          "itself vouches for nothing")
+        fields[key] = value.strip()
+
+    missing = MARKER_REQUIRED_KEYS - set(fields)
+    if missing:
+        return None, (f"{REFUSE_MARKER_UNREADABLE}: {MARKER_FILE} is missing "
+                      f"required key(s) {', '.join(sorted(missing))}")
+    if fields["schema"] not in SUPPORTED_MARKER_SCHEMAS:
+        return None, (f"{REFUSE_MARKER_UNREADABLE}: unsupported marker schema "
+                      f"{fields['schema']!r} (known: "
+                      f"{', '.join(SUPPORTED_MARKER_SCHEMAS)}) — refusing to "
+                      "interpret fields whose meaning this tool does not know")
+    try:
+        int(fields["rows"])
+    except ValueError:
+        return None, (f"{REFUSE_MARKER_UNREADABLE}: `rows` is {fields['rows']!r}, "
+                      "not an integer")
+    return fields, None
+
+
+def judge_night_completeness(marker: dict | None, marker_error: str | None,
+                             conclusion: str | None, actual_rows: int,
+                             ) -> tuple[bool, str]:
+    """Decide whether one night may enter the window. Returns (admit, why).
+
+    ⛔ THE ORDER MATTERS, for the same reason it does in `paired_trend_watch.
+    load_night`: the named version-boundary case is settled BEFORE the generic
+    ones, so a night that simply predates the marker never inherits a message
+    written for a broken one.
+
+    ⚠️ WHAT THE GRANDFATHER BRANCH RESTS ON, stated narrowly. A pre-marker night
+    whose RUN concluded `success` is admitted because the OLD predicate
+    (`--status success`) is exactly the guarantee that used to stand in for the
+    marker: every job passed, so the baseline step passed, so the file is whole.
+    It is not admitted because "old nights are probably fine".
+    """
+    if marker_error is not None:
+        return False, marker_error
+    if marker is None:
+        if conclusion == "success":
+            return True, ADMIT_PRE_MARKER_SUCCESS
+        return False, (
+            f"{REFUSE_PRE_MARKER_NONSUCCESS}: no {MARKER_FILE} and the run "
+            f"concluded {conclusion!r}, not 'success'. With neither the marker "
+            "nor the success predicate, a truncated file and a genuinely short "
+            "night are indistinguishable in this evidence")
+    claimed = int(marker["rows"])
+    if claimed != actual_rows:
+        return False, (
+            f"{REFUSE_MARKER_ROW_MISMATCH}: {MARKER_FILE} vouches for {claimed} "
+            f"benchmark row(s), the artifact holds {actual_rows}. The producer "
+            "and this consumer count with the SAME compiled regex, so a "
+            "difference means the bytes changed after the marker was written")
+    return True, "marker-verified"
+
+
 def night_records_from_gh(workflow: str, limit: int, cache_dir: Path) -> list[NightRecord]:
-    """Fetch the last `limit` nightly runs and reduce each to per-bench medians."""
-    runs = list_recent_runs(workflow, limit)
+    """Fetch the last `limit` nightly runs and reduce each to per-bench medians.
+
+    ⚠️ The window predicate is `completed`, not `success` (TRK-371 / #1635), so
+    a night survives its own consumer jobs failing. Admission is decided by
+    `judge_night_completeness` per night, NOT by the run's conclusion alone.
+
+    ⛔ Passed EXPLICITLY, never inherited from the default. `list_recent_runs`
+    stays conservative (`"success"`) precisely so the one caller that HAS a
+    completeness check must ask for the widening by name — see that function's
+    docstring for the review finding that made this the rule.
+    """
+    runs = list_recent_runs(workflow, limit, status="completed")
     # gh returns newest-first, but sort explicitly so the series is deterministic.
     runs.sort(key=lambda r: r["createdAt"], reverse=True)
     nights: list[NightRecord] = []
+    grandfathered = 0
     for run in runs:
         run_id = run["databaseId"]
         txt = download_artifact(run_id, cache_dir)
         if txt is None:
             continue
         by_bench: dict[str, list[float]] = {}
+        actual_rows = 0
         for s in parse_bench_file(txt, run_id):
             by_bench.setdefault(s.bench, []).append(s.ns_per_op)
+            actual_rows += 1
         if not by_bench:
             continue
+        marker, marker_error = read_completeness_marker(txt.parent)
+        admit, why = judge_night_completeness(
+            marker, marker_error, run.get("conclusion"), actual_rows)
+        if not admit:
+            print(f"  ⚠️  run {run_id}: dropped from the window — {why}",
+                  file=sys.stderr)
+            continue
+        if why == ADMIT_PRE_MARKER_SUCCESS:
+            grandfathered += 1
         nights.append(NightRecord(
             run_id=run_id,
             created_at=run["createdAt"],
             medians={b: statistics.median(v) for b, v in by_bench.items()},
             cpu_model=parse_cpu_model(txt),
         ))
+    if grandfathered:
+        # ⛔ This line is the roll-in status, and it is why "the old watchdog's
+        # self-eating loop is fixed" is NOT yet a true sentence: while it prints
+        # a non-zero count, part of the window is still resting on the old
+        # success predicate rather than on a marker.
+        print(f"  ℹ️  {grandfathered} of {len(nights)} admitted night(s) carry no "
+              f"{MARKER_FILE} and were admitted on their run's `success` "
+              "conclusion (pre-#1635 nights still inside the window)",
+              file=sys.stderr)
     return nights
 
 

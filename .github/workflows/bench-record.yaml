@@ -311,7 +311,21 @@ jobs:
           # no change, and running the paired night costs 2x rather than 3x.
           cp .build/paired/bench-pr.txt .build/bench-baseline.txt
           cp .build/paired/bench.err.log .build/bench.err.log || true
-          echo "baseline rows: $(grep -c '^Benchmark' .build/bench-baseline.txt || echo 0)"
+          # ⛔ LAST ACTION OF THE STEP, and that placement is the whole design
+          # (TRK-371 / #1635). The marker's ABSENCE is the signal: a step that
+          # died mid-benchmark never reaches this line, so the artifact ships
+          # without a claim that it is whole. `upload-artifact` runs
+          # `if: always()`, so the half-written .txt still ships — it just no
+          # longer gets to look identical to a complete one.
+          # ⚠️ This REPLACES the old `grep -c '^Benchmark'` echo rather than
+          # joining it: that grep counts every line starting with "Benchmark",
+          # while the consumer additionally requires the `-<cpus>` suffix, the
+          # iteration count and `ns/op`. The two disagree on exactly the input
+          # the marker exists to catch, so printing both would publish two
+          # different "row counts" for one file.
+          python3 scripts/tools/dx/write_baseline_marker.py \
+            --baseline .build/bench-baseline.txt \
+            --out .build/bench-baseline.rows
 
       # Only reached when the reference side is unusable. Reproduces exactly what
       # this job did before ADR-032, so a bad reference never costs us a night.
@@ -324,6 +338,16 @@ jobs:
             go test -bench='ControlCanary' -benchmem -run='^$' -count=6 -benchtime=1s . ) \
             >> .build/bench-baseline.txt 2>>.build/bench.err.log || \
             echo "::warning::canary append failed — trend watchdog will fall back to the fixed floor"
+          # Same marker, same producer, same last-action placement as the main
+          # path above. ⚠️ A FAILED CANARY APPEND STILL GETS A MARKER, and that
+          # is correct: the marker vouches that the file the consumer reads is
+          # the file this step wrote, not that the canary rows are present. A
+          # missing canary is a documented, handled degradation (the watchdog
+          # falls back to the fixed floor, per the warning above); truncation is
+          # not. Conflating them would make the marker mean two things.
+          python3 scripts/tools/dx/write_baseline_marker.py \
+            --baseline .build/bench-baseline.txt \
+            --out .build/bench-baseline.rows
 
       # ⛔ Must not abort the job. `pair_bench_ratio.py` exits 2 on inputs that
       # are not a valid pair (no `cpu:` header, mismatched CPUs, an empty side)
@@ -437,6 +461,7 @@ jobs:
           name: bench-baseline-${{ github.run_id }}
           path: |
             .build/bench-baseline.txt
+            .build/bench-baseline.rows
             .build/bench.raw.jsonl
             .build/bench.err.log
             .build/bench-paired.json

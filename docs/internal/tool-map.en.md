@@ -137,6 +137,7 @@ lang: en
 | `verify_diff.py` | diff-scoped Python test selector (rule mapping + fail-closed; testing-ROI W6-E MVP) |
 | `waveform_compile.py` | fault-waveform pack 驗證 / 回讀 / 物化編譯器（ADR-030 決策層驗證 PR-1） |
 | `waveform_score.py` | temporal-match + episode 對帳 + catch-rate 報告器（ADR-030 PR-3） |
+| `write_baseline_marker.py` | Write the completeness marker that `bench-baseline.txt` cannot carry itself. |
 
 ## Documentation Lint / CI Tools
 
