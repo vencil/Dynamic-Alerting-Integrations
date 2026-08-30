@@ -821,7 +821,7 @@ rulepack-pint: ## pint 規則靜態檢查（alerts/template label-flow gate；CI
 
 .PHONY: custom-alerts-compile
 custom-alerts-compile: ## 從 LIVE conf.d 的 _custom_alerts 編譯部署 pack（ADR-024 能力 B，#741 S3b；source 必須是 exporter 服務的同一 conf.d，否則 recipe_id 對不上 emit）
-	@python3 ./scripts/tools/dx/compile_custom_alerts.py --config-dir components/threshold-exporter/config/conf.d
+	@python3 ./scripts/tools/dx/compile_custom_alerts.py --config-dir components/threshold-exporter/config/conf.d --out $(CURDIR)/rule-packs/rule-pack-custom-alerts.yaml
 
 .PHONY: custom-alerts-compile-check
 custom-alerts-compile-check: ## 驗證 committed rule-pack-custom-alerts.yaml 與 LIVE conf.d 源同步（#741 S3b drift gate）
