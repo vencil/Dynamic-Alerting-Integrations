@@ -2126,8 +2126,16 @@ class TestBilingualNumbersReadsRealCounts:
     def test_section_numbers_are_not_counts(self, tmp_path, monkeypatch):
         """`### 1.2 Alerts don't fire` — an English heading with a plural noun.
 
-        Shipped text: `docs/integration/troubleshooting-checklist.en.md`.
-        Before the narrowing this pair was a MISMATCH nobody could clear.
+        Shipped text: the troubleshooting-checklist bilingual pair.
+        ⚠️ Named without a full path on purpose: `verify_diff --write-map`
+        scans docstrings for paths, and one here would make editing that
+        document select this ~100-second module, which never reads it.
+        ⚠️ That pair WAS a MISMATCH before the narrowing, but not because
+        of the heading: `### 1.2 Alert(s)` matched both halves and
+        cancelled out. The zh-only `v1 alertname` drove it. Measured,
+        removing this lookbehind alone clears no warning at all — it turns
+        one SILENT cell into a ONESIDED one, which is equally silent. This
+        guard buys precision, not a red light.
         """
         # ⛔ The two halves carry DIFFERENT section numbers on purpose.
         # With matching numbers the cell would be AGREE, and AGREE is as
@@ -2197,13 +2205,49 @@ class TestBilingualNumbersReadsRealCounts:
         assert self._checks(mod.check_bilingual_number_consistency()) == [
             "bilingual-numbers"]
 
+    def test_a_chinese_measure_word_count_is_read(self, tmp_path, monkeypatch):
+        """The Chinese half writes `N 條 alert`; that is the same claim.
+
+        ⛔ Without the `[個條支]` branch the Chinese side is the EMPTY set on
+        every such line, and a check that needs BOTH halves cannot speak.
+        Measured on the shipped tree: injecting a real drift into the Chinese
+        half of the cli-reference pair produced zero warnings under both the
+        old pattern and the narrowed one. The sister `Rule Pack count`
+        pattern has carried the same `個?` since long before this.
+        """
+        self._pair(tmp_path, monkeypatch,
+                   "`rule-packs/` 的 122 條 alert 全都帶 label\n",
+                   "all 130 alerts in `rule-packs/` carry the label\n")
+        assert self._checks(mod.check_bilingual_number_consistency()) == [
+            "bilingual-numbers"], "the Chinese measure-word count was not read"
+
+    def test_the_measure_word_is_required_not_optional(
+            self, tmp_path, monkeypatch):
+        """⛔ Pins WHY that branch demands a measure word.
+
+        Making `[個條支]` optional would re-admit bare `N alert`, and the
+        shipped corpus is full of `v2 alert` / `v2.9.0 alert-quality`.
+        Different version numbers on the two halves would then be reported
+        as a count drift — exactly the noise this narrowing removed.
+        """
+        self._pair(tmp_path, monkeypatch,
+                   "確認 v2 alert 也在清單上\n",
+                   "confirm the v3 alert is on the list\n")
+        assert mod.check_bilingual_number_consistency() == []
+
     def test_one_sided_counts_stay_silent(self, tmp_path, monkeypatch):
         """⚠️ Disclosed boundary, pinned so it cannot change by accident.
 
-        A count present in one language only is NOT reported. This is not an
-        oversight — measured on `a807a41c`, four such cells exist today and
-        every one of them is a real asymmetry in the prose, not a drift.
-        Changing this is a product decision, not a refactor.
+        A count present in one language only is NOT reported.
+        ⛔ An earlier revision of this docstring justified that by claiming
+        the four one-sided cells were "a real asymmetry in the prose".
+        Blind review disproved it: every one of those Chinese halves stated
+        the same number with a measure word (`122 條 alert`), which the
+        pattern could not read. The measure-word branch now covers two of
+        them; the other two put a modifier between the measure word and the
+        noun and stay silent by choice, not by accident.
+        ⚠️ So this pins the CONSUMER's contract — one half matching is not a
+        comparison — and must not be read as "nothing there to find".
         """
         self._pair(tmp_path, monkeypatch,
                    "這一節沒有計數。\n", "Measured: all 122 alerts in rule-packs/.\n")

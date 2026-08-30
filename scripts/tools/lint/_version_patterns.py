@@ -166,10 +166,28 @@ BILINGUAL_PAIR_PATTERN = r"bilingual-(\d+)%20pairs"
 # PromQL identifiers as if they were counts. Measured on `a807a41c` over the
 # 94 bilingual pairs (564 cells), the `Alert rule count` entry below used to
 # read `(\d+)\s*Alert(?:\s+rule)?` and produced:
+# ⚠️ Cell totals below are quoted only for the Alert pattern. The
+#    whole-table figures an earlier revision also quoted (519 SILENT /
+#    30 AGREE) are a WINDOWS reading: `docs/README-root.{md,en.md}` are
+#    mode-120000 symlinks, so a checkout without symlink support sees a
+#    path string with no numbers in it and four cells read SILENT that
+#    read AGREE on Linux/CI (515/34 there). The numbers this comment
+#    actually rests on — 94 pairs, 564 cells, MISMATCH 4, AGREE 5 — are
+#    identical under both.
 #
-#   MISMATCH 4  — every one of them noise: `:9093 alertname=`, `ADR-025
-#                 Alerting-Plane`, `### 1.2 Alert`, `v2 alert` vs `122 alerts`.
-#                 Four permanent warnings nobody could ever clear.
+#   MISMATCH 4  — four permanent warnings nobody could clear. What made
+#                 each cell DIFFER, measured per cell rather than listed
+#                 from memory (an earlier revision of this comment named
+#                 four fragments that map onto only three of them):
+#                   cli-reference          zh `v2 alert` vs en `122 alerts`
+#                   synthetic-probe        en-only `ADR-025 Alerting-Plane`
+#                   troubleshooting-check  zh-only `v1 alertname`
+#                   multi-system-playbook  en-only `7 alerts`
+#                 ⚠️ `### 1.2 Alert` matched BOTH halves and so drove no
+#                 warning at all; and the last cell's `7 alerts` is a REAL
+#                 count — what was noise there was the Chinese half's
+#                 `Phase 2 ALERTS{}`, which is why the lookahead below is
+#                 load bearing.
 #   AGREE    5  — of which exactly ONE was a real count comparison
 #                 (`docs/design/rule-packs.md`: 4 / 8 / 9 alerts). The other
 #                 four agreed by coincidence on section numbers (`2.9 Alert
@@ -187,17 +205,43 @@ BILINGUAL_PAIR_PATTERN = r"bilingual-(\d+)%20pairs"
 #   * `(?<![\d.])` — refuses the `2` in `### 1.2 Alerts don't fire`, i.e. an
 #     English heading whose noun happens to be plural.
 #
-# ⚠️ Honest boundary, measured rather than assumed: this check only speaks when
-# BOTH halves match, so a count that exists in one language and not the other
-# stays silent. The old pattern appeared to catch some of those, but only
-# because its own false positives kept the other side non-empty — that is
-# noise, not detection. Turning one-sided reporting on is NOT the fix either:
-# even narrowed, English plural headings still match one-sidedly, so it would
-# trade four false warnings for a different set.
+#   * the `[個條支]` branch — Chinese states the same count as `N 條 alert` /
+#     `N 個 告警`, mirroring the `個?` the sister `Rule Pack count` pattern
+#     above has carried for far longer. Without it the Chinese half is the
+#     empty set on every such line, and a check that needs BOTH halves cannot
+#     speak. Measured: it takes the live comparisons from 1 to 3 (adding
+#     `cli-reference` 122 and `multi-system-migration-playbook` 7) with zero
+#     new mismatches. ⛔ The measure word is REQUIRED on that branch — making
+#     it optional pulls `v2 alert` back in.
+#     ⛔ A `告警` (the Chinese noun) branch was implemented and then
+#     REMOVED. Measured over the whole corpus it added exactly ONE hit,
+#     and that hit was an ORDINAL: `第 4 條告警 FederationRevo…` in
+#     `docs/adr/028-…` names the 4th rule, it does not count four of
+#     them. There is no test for that branch that is not also a test for
+#     that false positive — which is the same shape as the `[個條筆則項]`
+#     widening rejected earlier on this ticket.
+#
+# ⚠️ Honest boundary, measured rather than assumed. This check only speaks when
+# BOTH halves match, so a count only one half states stays silent.
+# ⛔ An earlier revision of this comment said the four one-sided cells were
+# "a real asymmetry in the prose, not a drift", and called fixing them a
+# product decision. That was FALSE and it is worth recording why, because the
+# wording talked the next reader out of the actual fix: all four Chinese halves
+# DID state the same number, as `122 條 alert`, `7 條 alert`, `其餘 40 條`,
+# `40 條平台告警裡有 37 條`. The prose was symmetric; the PATTERN was not.
+# Measured at the time: injecting a real drift into the Chinese half of any of
+# those four produced zero warnings under BOTH the old and the new pattern.
+# ⚠️ Two of the four are still silent after the branch above, and deliberately
+# so: `其餘 **40 條**落在…` and `40 條平台告警` put a modifier between the
+# measure word and the noun, and widening far enough to cross that is how the
+# false positives this narrowing removed would come back. That is a disclosed
+# gap, not a settled question.
 BILINGUAL_NUMBER_PATTERNS: List[Tuple[str, str]] = [
     (r"(\d+)\s*個?\s*Rule\s*Pack", "Rule Pack count"),
     (r"(\d+)\s*Recording", "Recording rule count"),
-    (r"(?<![\d.])(\d+)\s+alert(?:\s+rule)?s\b(?!\s*\{)", "Alert rule count"),
+    (r"(?<![\d.])(\d+)(?:\s+alert(?:\s+rule)?s"
+     r"|\s*[個條支]\s*alert(?:\s+rule)?s?"
+     r")\b(?!\s*\{)", "Alert rule count"),
     (r"rule%20packs-(\d+)-", "Rule Pack badge"),
     (r"alerts-(\d+)-", "Alert badge"),
     (r"bilingual-(\d+)", "Bilingual badge"),
