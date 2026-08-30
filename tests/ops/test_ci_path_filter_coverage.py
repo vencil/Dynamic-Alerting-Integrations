@@ -146,8 +146,8 @@ TEST_SUFFIXES = {".ts", ".tsx", ".js", ".jsx"}
 
 @lru_cache(maxsize=None)
 def _load_workflow(path: Path) -> dict:
-    """Parse a workflow once. ci.yml is ~1700 lines and every scanner below
-    wants it per job; without this the module re-parsed it a dozen times."""
+    """Parse a workflow once. `ci.yml` is long and every scanner below wants
+    it per job; without this the module re-parsed it once per scanner."""
     return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
@@ -739,12 +739,18 @@ def _module_repo_paths_with(tree: ast.AST, roots: set[str],
 # ⚠️ That original crash is no longer the reason: `_is_tracked_file` now catches
 # OSError itself, so an over-long candidate would just be judged "not a path".
 # These bounds are kept because they are the only throttle on shape B's
-# breadth, and they carry real volume — over the ~8.4k unique string
-# literals in admitted modules, the length bound drops ~250
-# slash-containing candidates, the prefix bound ~135, the whitespace bound
-# ~670. ⚠️ Approximate on purpose: this module's own literals are part of
-# the corpus, so an exact figure here is falsified by the next edit to this
-# file — which happened twice while it was being written.
+# breadth, and each of the three drops a material share of the slash-containing
+# candidates. ⛔ The counts that used to sit here have been removed rather
+# than refreshed, and the reason is NOT that they were unreproducible — an
+# earlier version of this note said that and was wrong. "Admitted" has a
+# definition, written in this file: `_parsed_test_modules` harvests
+# `tests/**/test_*.py`, and `_module_repo_paths` returns nothing for a module
+# with no recognised repo-root name. Under that definition the old figures
+# reproduce at the commit that wrote them and have roughly doubled since,
+# because the admitted set keeps growing. They are removed because they are
+# re-measured on every edit to the corpus — this module's own literals
+# included. If a future change needs them, restate the population in the same
+# sentence (#1404).
 #
 # The bounds are cheap and they keep the filesystem out of the hot path.
 _MAX_PATH_LEN = 200
@@ -2066,8 +2072,9 @@ TRACED_INDIRECT_INPUTS = {
     ("validate.yaml", "validate", "CHANGELOG.md"),
     ("validate.yaml", "validate", "components/da-portal/QUICKSTART.md"),
     # A representative of the portal tree: `tools/portal/**` was added for the
-    # ~113 JSX/JS files the version gate reads, and a tree with no tracked
-    # member is the same dead line.
+    # JSX/JS files the version gate reads, and a tree with no tracked member is
+    # the same dead line. ⚠️ No count here on purpose — it drifts with every
+    # portal commit and nothing asserts it (#1404).
     ("validate.yaml", "validate",
      "tools/portal/src/interactive/tools/glossary.jsx"),
     ("validate.yaml", "validate", "README.md"),
