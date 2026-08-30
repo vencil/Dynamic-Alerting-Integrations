@@ -94,7 +94,8 @@ In-depth discussions on specific technical domains.
 
 ## Tool Quick Reference
 
-The da-tools container packages 23 CLI commands covering tenant lifecycle, day-to-day operations, and quality governance. `scripts/tools/` contains 73 Python tools in total (including DX automation and linting).
+<!-- ⛔ Counts are deliberately omitted. Neither number had a writer or a checker (#1540 gap 1); the previous 73 and 23 had been stale for months. The generated tables linked on the next line carry the current values. Do not re-add a number here without wiring up both ends first. -->
+The da-tools container packages a full set of CLI subcommands covering tenant lifecycle, day-to-day operations, and quality governance; `scripts/tools/` also ships a range of Python tools (including DX automation and linting). The generated tables linked below carry the per-item lists and the current counts.
 
 Full reference: [da-tools CLI](cli-reference.en.md) · [Tool Map](internal/tool-map.md) · [Cheat Sheet](cheat-sheet.en.md)
 

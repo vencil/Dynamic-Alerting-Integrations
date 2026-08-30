@@ -16,7 +16,7 @@
 - **Input** — Prometheus HTTP API（可攜式工具）、`conf.d/` YAML（檔案系統工具）、CSV/JSON spec（規則 / mapping 等）；透過 `docker run -v` 掛載
 - **Output** — stdout 表格 / Markdown 報告 / JSON（`--json` 結構化）；部分工具寫檔（route fragment、ConfigMap、scaffold 結果）
 - **Why container-bundled** — 1) 客戶現場常無 Python ≥3.12，**避開 dependency hell**；2) 整合 Go binary（`da-guard` / `da-batchpr` / `da-parser`），air-gapped 環境一顆 image 就夠；3) `tools/v*` tag 與平台版號脫鉤，工具迭代不影響 helm chart
-- **Why one CLI, 50 subcommands** — 客戶旅程是連續的（discover → onboard → validate → cutover → operate → tune → migrate），分散成 50 個獨立 binary 反而難記；統一 `da-tools <cmd>` 入口配 `--help` 自我描述
+- **Why one CLI, not a pile of binaries** — 客戶旅程是連續的（discover → onboard → validate → cutover → operate → tune → migrate），分散成幾十個獨立 binary 反而難記；統一 `da-tools <cmd>` 入口配 `--help` 自我描述
 - **不做的事** — 不執行 PromQL 查詢以外的 alerting reconcile（交給 `threshold-exporter`）；不 hot-reload（短命 CLI，每次 fresh state）；不持久化（除非 `-o` 明確指定輸出檔）；不 silent fail（CI 模式預設 exit 1 on any issue）
 
 ---
@@ -81,7 +81,8 @@ docker run --rm \
 
 ## 4. Command Reference
 
-`da-tools` 共 50 個子命令。按 **客戶旅程** 分類；每個命令一行用途，完整 flag 用 `da-tools <cmd> --help`。
+<!-- ⛔ 刻意不寫子命令**數量**。緊接其下的表就是清單，而該表已由 `check_cli_coverage.py --ci` 對 `entrypoint.py` 的 `COMMAND_MAP` 逐命令對帳（pre-commit hook）；散文裡再寫一個數字只是同一份資訊的副本，而副本沒有閘門看著——它上一次就停在 50 而真值是 51。要加數字前先為它接上寫入端與檢查端。 -->
+下表按 **客戶旅程** 分類，涵蓋 `da-tools` 的每個子命令；每個命令一行用途，完整 flag 用 `da-tools <cmd> --help`。
 
 > **讀表須知**：`✨vX.Y.Z` = 該版新增；範例中的 `db-a` 等是**佔位 tenant id**（換成你的）；`validate`（Shadow Monitoring 雙軌比對，§4.4）與 `validate-config`（離線一站式配置驗證，§4.3）是**兩個不同命令**。
 
