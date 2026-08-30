@@ -54,6 +54,7 @@ from _version_patterns import (
     SCENARIO_COUNT_PATTERNS,
     BILINGUAL_PAIR_PATTERN,
     BILINGUAL_NUMBER_PATTERNS,
+    TOOL_COUNT_SCOPE_ANCHOR,
     DA_TOOLS_VERSION_PATTERN,
     EXPORTER_VERSION_PATTERN,
     MKDOCS_EXTRA_CHECKS,
@@ -846,8 +847,83 @@ def check_tool_count_in_docs() -> List[Issue]:
     """Check that CLAUDE.md and README tool counts match actual scripts/tools/*.py.
 
     Compares the "XX 個 Python 工具" / "XX Python tools" counts in CLAUDE.md
-    and README files against the actual number of .py files in scripts/tools/
-    (excluding _lib_*, __init__, __pycache__).
+    and README files against `count_scope` — the tools under
+    `scripts/tools/{ops,dx,lint}`.
+
+    ⛔ TOOL_COUNT_CHECK_FILES is a list of files whose tool-count sentence
+    declares THAT scope. It is not "every file that mentions a tool count".
+    ⚠️ But do NOT read the list itself as a guard. Measured: appending
+    `docs/README.{md,en.md}` to it produces byte-identical output, because
+    what declines to read a foreign scope is the TOOL_COUNT_SCOPE_ANCHOR
+    test at the top of the per-line loop (and its twin in `_auto_fix`), not
+    the list. The list decides what gets OPENED; the anchor decides what
+    gets COMPARED, and only the second one carries weight.
+    ⚠️ Historical note, kept because it is what gave the anchor its shape:
+    `docs/README.{md,en.md}` carried their own Python-tool number (`73`)
+    under a WIDER scope — ``scripts/tools/`` whole-tree, spelled "in total"
+    in the English half — while this check counts `{ops,dx,lint}`. Reading
+    one against the other would have made a true sentence false rather than
+    right. #1540 gap 1 resolves that by REMOVING those two numbers instead
+    of refilling them (#1637), so do not re-derive the anchor's purpose
+    from whatever those two files happen to say today.
+
+    ⚠️ "Deferred" is not "harmless": both of those files say **73**, and no
+    reading of the tree produces that, and no plausible future one will:
+    73 is roughly a third of the tree. Measured on `05d31362` with
+    `_lib_toolcount`'s `is_tool_file` — the predicate this check actually
+    counts with — `{ops,dx,lint}` is 221 and the whole tree is 225. Those
+    two move whenever a tool lands, and they move often: between writing
+    this sentence and landing it, `main` took the first from 221 to 223.
+    So treat them as a reading taken at that SHA, not as invariants; the
+    invariant is that no scope this module can compute lands anywhere near
+    73.
+    ⛔ Do NOT quote 238 beside those two, as an earlier revision of this
+    docstring did. On `05d31362` a bare `rglob("*.py")` gives 238, and the
+    gap from it to each number above is a DIFFERENT gap:
+
+      238 - 225 = 13  PREDICATE: 12 `_lib*` modules + one package `__init__`.
+      238 - 221 = 17  that same 13, PLUS 4 more excluded by SCOPE rather
+                      than by predicate — `validate_all.py` at the tools
+                      root and the three `dx/custom_alerts/` package
+                      modules, which `count_scope` never sees because it
+                      globs one level deep instead of recursing.
+
+    ⚠️ An earlier revision of this paragraph gave the 13 as if it explained
+    the gap to 221; it does not, and a reader who checked would have got 17
+    and reasonably concluded the whole measurement was invented.
+    ⛔ So "they share a predicate" is NOT the rule. 221 and 225 share
+    `is_tool_file` and are still not comparable — they differ by scope. Two
+    counts compare only when they share BOTH the predicate and the scope,
+    and subtracting any two of these three without saying which axis moved
+    produces a number that means nothing.
+    The number has not moved since v2.1.0 (`827ee07e`), no
+    `bump_docs` rule points at either file, and nothing checks them. This
+    check staying out of their way is a decision about SCOPE, not a statement
+    that they are currently right.
+
+    ⚠️ `CLAUDE.md` carries no matching sentence today, so it contributes no
+    findings. It is kept in the list because an unmatched FILE costs one read,
+    unlike an unmatched RULE, which would be a defect (see
+    `bump_docs.apply_count_updates`'s DEAD diagnosis).
+    ⛔ Do NOT read that as "it would be covered if it regained one" — and do
+    not read the REASON off a single sample, as an earlier revision of this
+    docstring did. Measured over all 199 revisions of `CLAUDE.md` (with
+    Python `re`; `grep -E` matches bytes, so a CJK pattern reports zero hits
+    for every revision and looks exactly like "no such sentence"): 57 of them
+    carry a tool-count sentence, in 7 distinct shapes. The one quoted as "the
+    only tool-count sentence that file has ever had" (`2a9078ee`:
+    「完整工具表（42 個 Python 工具…）見 tool-map.md」) accounts for 4 of those
+    57, and two other shapes declare THIS check's scope outright — e.g.
+    `e32e768a`: 「96 個 Python 工具（不含共用函式庫，ops+dx+lint=96）」. The file
+    has stated this scope before; inferring a different one from one sample
+    was not measurement.
+    ⭐ What survives the correction is the half that matters: the scope anchor
+    appears in 0 of those 199 revisions, so a sentence this file regained
+    would be skipped in silence unless it also named the scope. `CLAUDE.md`
+    has no `bump_docs` count rule either, so the writer's DEAD diagnosis would
+    not catch it. That blind spot is disclosed, not guessed at; closing it
+    means deciding what `CLAUDE.md` should state — the same documentation
+    decision as #1540's gap 1.
     """
     issues = []
     if not (REPO_ROOT / "scripts" / "tools").exists():
@@ -861,16 +937,57 @@ def check_tool_count_in_docs() -> List[Issue]:
         rel = str(fpath.relative_to(REPO_ROOT))
 
         for i, line in enumerate(content.splitlines(), 1):
-            for pat, desc in TOOL_COUNT_PATTERNS:
-                for m in re.finditer(pat, line, re.IGNORECASE):
-                    found = int(m.group(1))
-                    if found != actual_count:
-                        issues.append(Issue(
-                            "tool-count", "warn", rel, i,
-                            f"{desc}: found {found}, actual is {actual_count}",
-                        ))
+            # ⛔ The scope is the anchor; the number is the payload. A line
+            # that says "N Python tools" WITHOUT naming this scope is a claim
+            # about something else, and reading it as this count is how a true
+            # sentence gets rewritten into a false one — see
+            # TOOL_COUNT_SCOPE_ANCHOR for the measured case.
+            if TOOL_COUNT_SCOPE_ANCHOR not in line:
+                continue
+            occurrences = _tool_count_occurrences(line)
+            if len(occurrences) > 1:
+                # ⛔ Ambiguous: the anchor says this line is about the counted
+                # scope, but it states more than one count, and nothing here
+                # can tell which one the scope governs. Guessing is what makes
+                # this dangerous — measured on `5cff2359`, where the tree
+                # held 221 tools under the scope and 105 under `lint/`: a
+                # line reading "221 Python tools under <scope>, incl. 105
+                # Python tools in lint/" had the true 105 reported as a
+                # drift and then rewritten to 221 by `--fix`, which then
+                # printed "All version references and counts are
+                # consistent." ⚠️ Both numbers have since moved; they are
+                # quoted as the reading at that SHA, not as current values.
+                issues.append(Issue(
+                    "tool-count", "warn", rel, i,
+                    f"line states {len(occurrences)} counts "
+                    f"({', '.join(str(n) for _d, n in occurrences)}) while "
+                    f"naming the counted scope, so this check cannot tell "
+                    f"which one the scope governs and will not touch it. "
+                    f"Put the scope count on its own line."))
+                continue
+            for desc, found in occurrences:
+                if found != actual_count:
+                    issues.append(Issue(
+                        "tool-count", "warn", rel, i,
+                        f"{desc}: found {found}, actual is {actual_count}",
+                    ))
 
     return issues
+
+
+def _tool_count_occurrences(line: str) -> List[Tuple[str, int]]:
+    """Every counted-tools claim on one line, as `(description, number)`.
+
+    ⛔ Shared by the check and the repair on purpose. They used to ask this
+    question in two different ways — the check per line via `finditer`, the
+    repair per FILE via `re.sub` — and `\\s*` matches a newline, so the repair
+    reached occurrences the check could not report and never would.
+    """
+    found: List[Tuple[str, int]] = []
+    for pat, desc in TOOL_COUNT_PATTERNS:
+        for m in re.finditer(pat, line, re.IGNORECASE):
+            found.append((desc, int(m.group(1))))
+    return found
 
 
 def check_adr_count_in_docs() -> List[Issue]:
@@ -987,8 +1104,15 @@ def check_scenario_count_in_docs() -> List[Issue]:
 
 
 def _auto_fix(issues: List[Issue], bilingual_pairs: int,
-              rule_counts: dict) -> List[Issue]:
+              rule_counts: dict, quiet: bool = False) -> List[Issue]:
     """Repair what can be repaired; return the issues actually repaired.
+
+    *quiet* suppresses the per-repair prose line. ⛔ It exists because this
+    function writes to the same stdout the `--json` document goes to (#1506):
+    one `🔧 Fixed …` line ahead of the document is enough to make the whole
+    output unparseable, and the repair itself is reported in the document's
+    `repaired` key instead. It does NOT suppress anything else — a failure
+    to write still raises.
 
     ⛔ Returns the issues, not a count. #1483's first attempt decided the exit
     code from "is this check id in a list of fixable ids", which is a proxy
@@ -1022,14 +1146,55 @@ def _auto_fix(issues: List[Issue], bilingual_pairs: int,
             new_content = re.sub(pattern, replacement, new_content)
 
         elif issue.check == "tool-count":
-            # Fix "XX 個 Python 工具" count
+            # Fix the counted sentence in either language — ON THE LINE THE
+            # CHECKER NAMED, and only if that line still carries the scope.
+            #
+            # ⛔ This used to `re.sub` the whole file, and `\s*` matches a
+            # newline, so it rewrote occurrences the checker never reported
+            # and never could: measured, a wrapped sentence
+            # (`removed 40\nPython tools that had no callers`) became
+            # `removed 221\n…` while the per-line checker stayed silent about
+            # it before AND after — a falsehood written under a green light.
+            # A repair keyed to the finding cannot reach past it.
+            #
+            # ⚠️ `re.IGNORECASE` on purpose, matching `check_tool_count_in_docs`:
+            # a repair that is stricter than its checker reports a form it
+            # cannot rewrite, which is a warning no tool can clear (#1504).
             actual_count = _count_python_tools()
-            pattern = AUTO_FIX_PATTERNS["tool-count"]["pattern"]
-            replacement = AUTO_FIX_PATTERNS["tool-count"]["replacement_template"].format(value=actual_count)
-            new_content = re.sub(pattern, replacement, new_content)
+            lines = new_content.splitlines(keepends=True)
+            idx = issue.line - 1
+            # ⛔ Re-derived here rather than trusted from the issue: the repair
+            # must not rewrite a line the check would refuse to judge. Exactly
+            # one occurrence, on the line the check named, carrying the scope.
+            if (0 <= idx < len(lines)
+                    and TOOL_COUNT_SCOPE_ANCHOR in lines[idx]
+                    and len(_tool_count_occurrences(lines[idx])) == 1):
+                fixed = lines[idx]
+                for pat, repl in AUTO_FIX_PATTERNS["tool-count"]["patterns"]:
+                    fixed = re.sub(pat, repl.format(value=actual_count),
+                                   fixed, flags=re.IGNORECASE)
+                lines[idx] = fixed
+                new_content = "".join(lines)
 
         elif issue.check == "doc-file-count":
-            # Fix "XX 個文件" count from doc-map.md row count
+            # Fix "XX 個文件" count from doc-map.md row count.
+            #
+            # ⛔ Line-scoped for the same reason `tool-count` is: the check is
+            # per line (`finditer`), this repair was per FILE (`re.sub`), and
+            # `(\d+)(\s*個文件)`'s `\s*` matches a newline. Measured on this
+            # branch by blind review, before this: a true sentence about a
+            # different directory was rewritten to the doc-map count and
+            # reported as fixed, and a WRAPPED occurrence the per-line check
+            # can never report was rewritten too.
+            #
+            # ⚠️ Unlike `tool-count` there is no scope anchor to lean on —
+            # `個文件` names no scope — so the guard here is only "the line the
+            # check named". A second `個文件` on that same line would still be
+            # rewritten; `check_doc_file_count_in_docs` has no ambiguity
+            # refusal because it has no anchor to hang one on. Disclosed, not
+            # fixed: CLAUDE.md carries no `個文件` sentence at all today, so
+            # this whole branch is dormant, and giving it an anchor is the
+            # same documentation decision as #1540's gap 1.
             doc_map = REPO_ROOT / "docs" / "internal" / "doc-map.md"
             if doc_map.exists():
                 map_text = doc_map.read_text(encoding="utf-8")
@@ -1038,7 +1203,11 @@ def _auto_fix(issues: List[Issue], bilingual_pairs: int,
                 doc_count = max(0, rows - 2)
                 pattern = AUTO_FIX_PATTERNS["doc-file-count"]["pattern"]
                 replacement = AUTO_FIX_PATTERNS["doc-file-count"]["replacement_template"].format(value=doc_count)
-                new_content = re.sub(pattern, replacement, new_content)
+                lines = new_content.splitlines(keepends=True)
+                idx = issue.line - 1
+                if 0 <= idx < len(lines):
+                    lines[idx] = re.sub(pattern, replacement, lines[idx])
+                    new_content = "".join(lines)
 
         elif issue.check == "rule-pack-count":
             # These are trickier — only fix clear badge patterns
@@ -1062,7 +1231,8 @@ def _auto_fix(issues: List[Issue], bilingual_pairs: int,
             os.chmod(fpath,
                      stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP
                      | stat.S_IROTH)
-            print(f"  🔧 Fixed {issue.check} in {issue.file}")
+            if not quiet:
+                print(f"  🔧 Fixed {issue.check} in {issue.file}")
             repaired.append(issue)
 
     return repaired
@@ -1364,40 +1534,36 @@ def main():
     if "platform" in versions:
         all_issues.extend(check_e2e_and_jsx_versions(versions["platform"]))
 
-    # --fix mode: auto-fix fixable issues
+    # --fix mode: auto-fix fixable issues.
+    #
+    # ⛔ #1506: this used to be its own exit — repair, print, `return` —
+    # sitting BEFORE the report block, which is the only place `args.json` is
+    # ever read. So `--json` was silently inert whenever `--fix` was passed
+    # too: a caller asking for JSON got `🔧 Fixed …` prose and a parse error
+    # on line 1. #1483 had already repaired the other half of the same early
+    # return (the exit code); the format half outlived it because the two
+    # halves are decided in two different places. Repair now feeds the SAME
+    # report path as every other run, so there is one exit and exactly one
+    # place that knows what `--json` means.
+    repaired: List[Issue] = []
     if args.fix and all_issues:
-        repaired = _auto_fix(all_issues, bilingual_pairs, rule_counts)
-        if repaired:
-            print(f"Auto-fixed {len(repaired)} issue(s). Re-run to verify.")
-        else:
-            print("No auto-fixable issues found.")
+        repaired = _auto_fix(all_issues, bilingual_pairs, rule_counts,
+                             quiet=args.json)
+        if not args.json:
+            if repaired:
+                print(f"Auto-fixed {len(repaired)} issue(s). Re-run to verify.")
+            else:
+                print("No auto-fixable issues found.")
 
-        # The exit-code decision, from what was ACTUALLY repaired.
-        #
-        # #1483: returning here meant `--ci --fix` exited 0 while real errors
-        # stood, and printed nothing about them. The first attempt at this
-        # decided from "is the check id in a list of fixable ids" — a proxy
-        # that is not the same question, because a repair can decline to
-        # touch a particular occurrence (a `rule-pack-count` in prose rather
-        # than in a badge). Asking `_auto_fix` what it repaired removes the
-        # proxy, and with it a list that had to be kept in step with the
-        # repairs by hand.
-        remaining = [i for i in all_issues if i not in repaired]
-        remaining_errors = [i for i in remaining if i.severity == "error"]
-        if remaining:
-            print()
-            print(f"  {len(remaining)} issue(s) still standing after --fix "
-                  f"({len(remaining_errors)} error(s)):")
-            for issue in remaining:
-                icon = "[E]" if issue.severity == "error" else "[W]"
-                print(f"    {icon} [{issue.check}] {issue.file}:{issue.line} "
-                      f"— {issue.message}")
-        if args.ci and remaining_errors:
-            sys.exit(EXIT_VIOLATION)
-        return
-
-    errors = [i for i in all_issues if i.severity == "error"]
-    warnings = [i for i in all_issues if i.severity == "warn"]
+    # What the report and the exit code are both about.
+    #
+    # ⛔ `not in` here is an IDENTITY test on purpose: `Issue` defines no
+    # `__eq__`, and `_auto_fix` hands back the very objects it repaired. Two
+    # issues that merely look alike (one check id on two lines of one file)
+    # must not cancel each other out.
+    standing = [i for i in all_issues if i not in repaired]
+    errors = [i for i in standing if i.severity == "error"]
+    warnings = [i for i in standing if i.severity == "warn"]
 
     if args.json:
         result = {
@@ -1408,16 +1574,26 @@ def main():
                 "rule_packs": rule_counts,
                 "bilingual_pairs": bilingual_pairs,
             },
-            "issues": [i.to_dict() for i in all_issues],
+            # Post-repair state, so `issues` and `summary` describe the tree as
+            # it stands when the process exits — the same thing the exit code
+            # describes. What `--fix` changed is reported in its own key rather
+            # than by making `issues` mean two things depending on a flag.
+            "issues": [i.to_dict() for i in standing],
+            "repaired": [i.to_dict() for i in repaired],
             "summary": {
                 "errors": len(errors),
                 "warnings": len(warnings),
+                "repaired": len(repaired),
             },
         }
         print(json.dumps(result, indent=2, ensure_ascii=False))
     else:
-        if all_issues:
-            for issue in all_issues:
+        if standing:
+            if repaired:
+                print()
+                print(f"  {len(standing)} issue(s) still standing after --fix "
+                      f"({len(errors)} error(s)):")
+            for issue in standing:
                 icon = "❌" if issue.severity == "error" else "⚠️"
                 print(f"  {icon} [{issue.check}] {issue.file}:{issue.line} "
                       f"— {issue.message}")

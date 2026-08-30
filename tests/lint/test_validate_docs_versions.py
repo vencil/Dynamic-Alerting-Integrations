@@ -30,6 +30,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -1280,6 +1282,686 @@ class TestFixDoesNotTurnTheGateOff:
             96, {"pack_count": 16, "alert": 161})
         assert "bilingual-96%20pairs" in mod._read_cached(f), (
             "the cache still holds the pre-repair text after a write")
+
+
+_AUDIT_DRIVER = '''\
+import json, os, runpy, sys
+from pathlib import Path
+
+ROOT = Path(sys.argv[1]).resolve()
+GATE = ROOT / "scripts" / "tools" / "lint" / "validate_docs_versions.py"
+OUT = Path(sys.argv[2])
+SKIP = ("__pycache__/", ".venv/", "node_modules/", "site-packages/")
+
+opened = set()
+
+
+def _hook(event, args):
+    if event != "open" or not args:
+        return
+    target = args[0]
+    if not isinstance(target, (str, bytes, os.PathLike)):
+        return
+    try:
+        rel = Path(os.fsdecode(target)).resolve().relative_to(ROOT).as_posix()
+    except (ValueError, OSError):
+        return
+    if not any(part in rel for part in SKIP):
+        opened.add(rel)
+
+
+sys.addaudithook(_hook)
+# What `python scripts/tools/lint/validate_docs_versions.py` gives it: the
+# script's own directory as sys.path[0]. runpy does not do that for us, and
+# without it the gate cannot import `_version_patterns`.
+sys.path.insert(0, str(GATE.parent))
+sys.argv = [str(GATE), "--ci"]
+_stdout = sys.stdout
+sys.stdout = open(os.devnull, "w", encoding="utf-8")
+try:
+    runpy.run_path(str(GATE), run_name="__main__")
+except SystemExit:
+    pass
+finally:
+    sys.stdout.close()
+    sys.stdout = _stdout
+
+modules = set()
+for _mod in list(sys.modules.values()):
+    origin = getattr(_mod, "__file__", None)
+    if not origin:
+        continue
+    try:
+        rel = Path(origin).resolve().relative_to(ROOT).as_posix()
+    except (ValueError, OSError):
+        continue
+    if not any(part in rel for part in SKIP):
+        modules.add(rel)
+modules.add(GATE.relative_to(ROOT).as_posix())
+
+OUT.write_text(json.dumps({"opened": sorted(opened),
+                           "modules": sorted(modules)}), encoding="utf-8")
+'''
+
+
+class TestTheHookFiresOnEverythingTheGateReads:
+    """#1508 — `files:` decides whether this gate runs at all.
+
+    With `pass_filenames: false` the pattern is not a scan scope; it is the
+    trigger. Anything the tool reads that the pattern does not match gives a
+    commit touching only that file no local signal whatsoever.
+
+    ⛔ The input set is MEASURED, not listed: an audit hook records what the
+    process really opens, and `sys.modules` records what it really imported.
+    A hand-written list here would be a second declaration of the same thing
+    and would drift out the same way the pattern did — measured on
+    `5b7f6c35`, the shipped pattern missed 25 data inputs (`.json` 16,
+    `.yml` 8, `VERSION` 1) plus all 6 of its own modules.
+
+    ⚠️ Honest boundaries. (a) This sees files the gate OPENS. Inputs it only
+    stats or globs by name — `scripts/tools/**/*.py`, counted but never read —
+    are outside it, and deliberately so: a tool count moving is already the
+    business of `tool-map-check`, and matching every Python file here would
+    turn this into a hook that runs on every commit in the repository.
+    (b) A coverage assertion is satisfied by any pattern wide enough, so
+    `test_the_coverage_check_can_actually_fail` pins one path the pattern must
+    NOT match. Measured: `files: .*` turns that test red. What is left
+    unguarded is the band in between — a pattern wider than it needs to be but
+    still not matching an unrelated tool — because an over-wide trigger costs
+    time and nothing else, whereas the failure this exists for is silent.
+    """
+
+    @staticmethod
+    def _hook_pattern():
+        import yaml
+        cfg = yaml.safe_load(
+            (REPO_ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8"))
+        hooks = [h for repo in cfg["repos"] for h in repo["hooks"]
+                 if h["id"] == "version-consistency"]
+        assert len(hooks) == 1, "hook id moved or was duplicated"
+        assert hooks[0].get("pass_filenames") is False, (
+            "this test assumes `files:` is a trigger, not a scan scope")
+        return re.compile(hooks[0]["files"])
+
+    @staticmethod
+    def _measure(tmp_path):
+        driver = tmp_path / "audit_driver.py"
+        driver.write_text(_AUDIT_DRIVER, encoding="utf-8")
+        out = tmp_path / "inputs.json"
+        proc = subprocess.run(
+            [sys.executable, "-X", "utf8", str(driver), str(REPO_ROOT), str(out)],
+            capture_output=True, timeout=600)
+        assert out.exists(), (
+            "the audit driver produced nothing — measure the measurer before "
+            "believing an empty result:\n%s"
+            % proc.stderr.decode("utf-8", "replace")[-2000:])
+        return json.loads(out.read_text(encoding="utf-8"))
+
+    def test_the_measurement_itself_is_not_empty(self, tmp_path):
+        """⛔ Positive control. A broken driver reports nothing to cover.
+
+        Without this, deleting the audit hook, resolving paths wrongly, or
+        having `runpy` fail early all look identical to "the pattern already
+        covers everything".
+        """
+        measured = self._measure(tmp_path)
+        opened, modules = measured["opened"], measured["modules"]
+        assert len(opened) >= 100, (
+            "only %d files recorded — the driver, not the tree, is the "
+            "likely explanation: %s" % (len(opened), opened[:20]))
+        for expected in ("CLAUDE.md",
+                         "components/da-tools/app/VERSION",
+                         "helm/threshold-exporter/Chart.yaml",
+                         "mkdocs.yml",
+                         "tests/e2e/package.json"):
+            assert expected in opened, (expected, len(opened))
+        assert "scripts/tools/lint/validate_docs_versions.py" in modules, modules
+        assert "scripts/tools/lint/_version_patterns.py" in modules, modules
+
+        # ⛔ A count floor measures how much came back, not whether the walk
+        # still reaches. Blind review demonstrated the difference: turning the
+        # gate's `rglob` into `glob` leaves every one of the five names above
+        # in place and `len(opened)` still over 100, while the corpus behind
+        # the coverage claim below collapses to a fraction of the tree.
+        #
+        # Nesting is the property that dies, so nesting is what is asserted.
+        #
+        # ⛔ No absolute counts in this comment, on purpose. Two earlier
+        # revisions carried them and both went stale within days — once
+        # because a number was mis-transcribed, once because a reader read two
+        # DIFFERENT populations (this driver's `opened`, which records every
+        # file the tool opens, and `_collect_scannable_files()`, which is
+        # extension-filtered) as a contradiction because they sat next to each
+        # other unlabelled. The floors were picked against a measured
+        # flat-walk baseline, and both assertion messages print the live
+        # numbers when they fire — so the current values are always one
+        # failing run away and never rot here. ⚠️ The margin is not generous;
+        # re-measure before assuming there is room.
+        nested = [p for p in opened if p.count("/") >= 2]
+        directories = {p.rsplit("/", 1)[0] for p in opened if "/" in p}
+        assert len(nested) >= 100, (
+            "only %d of %d recorded inputs are nested — the gate has stopped "
+            "walking into subdirectories, and a coverage assertion made over "
+            "what is left would be true of a fraction of the tree"
+            % (len(nested), len(opened)))
+        assert len(directories) >= 20, (
+            "inputs come from only %d directories: %s"
+            % (len(directories), sorted(directories)))
+
+    def test_every_file_the_gate_opens_can_trigger_it(self, tmp_path):
+        """⛔ Must-fire: the pattern has to cover the measured input set."""
+        pattern = self._hook_pattern()
+        measured = self._measure(tmp_path)
+        uncovered = sorted(p for p in measured["opened"]
+                           if not pattern.search(p))
+        assert uncovered == [], (
+            "version-consistency reads these but its `files:` pattern does "
+            "not fire on them, so a commit touching only one of them skips "
+            "the gate entirely.\n⛔ Widen `files:` — do NOT make the tool "
+            "stop reading them; those reads are what the gate is for.\n"
+            "%s" % uncovered)
+
+    def test_editing_the_gate_itself_can_trigger_it(self, tmp_path):
+        """⛔ Editing the reader changes what the gate decides.
+
+        Without this, the commit that edits the reader never runs it once
+        before landing. The closure is measured from `sys.modules`, so a
+        helper split out of the gate is covered on the day it lands.
+
+        ⚠️ This is a smoke test, not the enforcement: the gate's own tests run
+        in CI on every PR (`ci.yml`'s `python` filter opens with a catch-all
+        `**`). What is missing without it is the LOCAL run.
+
+        ⛔ ERRATA — an earlier revision of this docstring said the reader
+        "was changed by a commit that touched no `.md` at all", citing #1480.
+        False: `abe27478` touched 11 `.md` files and never touched the reader.
+        #1480 was a fail-open (source re-spelled, two consumers skipped in
+        silence behind `if "platform" in versions`), repaired by #1493.
+
+        ⚠️ The two bad repairs this failure invites — moving the helper back
+        into a covered file, or dropping the import — are deliberately NOT
+        named in the failure message. Both make it green by shrinking the
+        gate, and the second is invisible here by construction (a module that
+        is not imported is not in the closure). Naming them in a message read
+        by someone racing to green would be handing out the recipe; naming
+        them here, where the guard is designed rather than satisfied, is not.
+        """
+        pattern = self._hook_pattern()
+        modules = self._measure(tmp_path)["modules"]
+        uncovered = sorted(p for p in modules if not pattern.search(p))
+        assert uncovered == [], (
+            "the gate imports these, so editing them changes what it decides "
+            "— yet none of them makes it run.\n"
+            "⛔ Add the path to `files:` in .pre-commit-config.yaml.\n"
+            "⚠️ Known shape: the `_lib_.*` branch only reaches "
+            "`scripts/tools/` itself, so a helper under `scripts/tools/lint/` "
+            "needs its own path here even if it is named `_lib_*`.\n"
+            "%s" % uncovered)
+
+    def test_the_coverage_check_can_actually_fail(self):
+        """⛔ Positive control for the comparison, not for the measurement.
+
+        `uncovered == []` is satisfied by any pattern-plus-input pair where
+        the pattern is wide enough — including a pattern that is wide because
+        the input list is empty. This feeds the SHIPPED pattern a file it must
+        not match, so the assertion above is known to have teeth.
+        """
+        pattern = self._hook_pattern()
+        assert not pattern.search("scripts/tools/ops/scaffold_tenant.py"), (
+            "the pattern matches an unrelated tool — it has been widened past "
+            "the point where the coverage assertion means anything")
+        assert pattern.search("components/da-tools/app/VERSION")
+        assert pattern.search("mkdocs.yml")
+        assert pattern.search("tests/e2e/package.json")
+
+
+class TestToolCountReadsBothLanguages:
+    """#1540 — the English half had a writer and no reader.
+
+    `TOOL_COUNT_PATTERNS` demanded a particular word right after the noun
+    (`tools(` / `tools in`) while `README.en.md` says "tools **under**". Both
+    patterns therefore scored 0 hits across all three TOOL_COUNT_CHECK_FILES,
+    measured on `5b7f6c35`, while `bump_docs`' `readme-en-python-tools` rule
+    kept writing the number. Rewriting it to 999 gave 0 findings.
+
+    ⚠️ Not rc=0 — `tool-count` is a warning, so the exit code was never the
+    signal here. An earlier revision of this docstring cited it as if it were.
+    """
+
+    @staticmethod
+    def _tree(tmp_path, monkeypatch, tools=3, docs=()):
+        """A repo with *tools* countable tools and the given doc bodies."""
+        for i in range(tools):
+            d = tmp_path / "scripts" / "tools" / "ops"
+            d.mkdir(parents=True, exist_ok=True)
+            _write(d / f"t{i}.py", "")
+        names = []
+        for name, body in docs:
+            _write(tmp_path / name, body)
+            names.append(tmp_path / name)
+        monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(mod, "TOOL_COUNT_CHECK_FILES", names)
+        return names
+
+    # The declared scope, spelled exactly as the shipped sentences spell it.
+    SCOPE = "`scripts/tools/{ops,dx,lint}`"
+
+    def test_the_english_sentence_is_read_at_all(self, tmp_path, monkeypatch):
+        """⛔ Must-fire on the defect, in the exact shipped phrasing."""
+        self._tree(tmp_path, monkeypatch, tools=3, docs=[
+            ("README.en.md",
+             f"| Shell entrypoints + 999 Python tools under {self.SCOPE} |\n")])
+        found = mod.check_tool_count_in_docs()
+        assert [i.check for i in found] == ["tool-count"], (
+            "the English count sentence is still unread: %s" % found)
+        assert "999" in found[0].message and "3" in found[0].message
+
+    def test_any_preposition_at_all(self, tmp_path, monkeypatch):
+        """⛔ The property is preposition-INDEPENDENCE, not a longer list.
+
+        One of these words is deliberately absurd. A repair that merely added
+        `under` to the two existing spellings would pass the shipped phrasing
+        and fail here — which is the whole point of including a preposition
+        nobody would ever enumerate.
+        """
+        for prep in ("under", "in", "(", "across", "beneath", "zzqx"):
+            body = f"+ 999 Python tools {prep} {self.SCOPE}\n"
+            names = self._tree(tmp_path, monkeypatch, tools=3,
+                               docs=[("README.en.md", body)])
+            # ⛔ `_read_cached` keys `_CONTENT_CACHE` by Path and never
+            # invalidates on write, and every iteration writes the SAME
+            # path. Without this, iterations 2-6 read the body written by
+            # iteration 1 and only `under` is ever exercised -- measured:
+            # a predicate narrowed back to enumerating `under` left this
+            # test green.
+            mod._CONTENT_CACHE.clear()
+            assert mod.check_tool_count_in_docs(), (
+                "not caught with preposition %r — the check is enumerating "
+                "spellings again: %s" % (prep, body))
+            for p in names:
+                p.unlink()
+
+    def test_the_chinese_half_still_works(self, tmp_path, monkeypatch):
+        """⚠️ Control: the language that already worked must keep working."""
+        self._tree(tmp_path, monkeypatch, tools=3, docs=[
+            ("README.md", f"{self.SCOPE} 下 999 個 Python 工具\n")])
+        assert [i.check for i in mod.check_tool_count_in_docs()] == ["tool-count"]
+
+    def test_a_correct_count_is_not_flagged_in_either_language(
+            self, tmp_path, monkeypatch):
+        """⚠️ Must-not-fire control against a check that just always fires."""
+        self._tree(tmp_path, monkeypatch, tools=3, docs=[
+            ("README.md", f"{self.SCOPE} 下 3 個 Python 工具\n"),
+            ("README.en.md", f"+ 3 Python tools under {self.SCOPE}\n")])
+        assert mod.check_tool_count_in_docs() == []
+
+    @pytest.mark.parametrize("lang,body", [
+        ("en", "The try-local/ showcase bundle ships 2 Python tools of its own.\n"),
+        ("zh", "try-local 另外附 2 個 Python 工具。\n"),
+    ])
+    def test_a_count_about_another_scope_is_none_of_its_business(
+            self, tmp_path, monkeypatch, lang, body):
+        """⛔ Must-not-fire: a true sentence about a DIFFERENT scope.
+
+        Blind review measured what happens without the scope anchor: this
+        exact sentence produced `found 2, actual is 221`, `--fix` rewrote it
+        to `ships 221 Python tools of its own`, and the run finished with
+        `✅ All version references and counts are consistent.` A repair that
+        turns a true sentence false, reporting success.
+
+        ⚠️ Both languages, because the Chinese half had the same hazard on
+        `origin/main` — the anchor is what closes it, not the English repair.
+        """
+        name = "README.en.md" if lang == "en" else "README.md"
+        good = (f"+ 3 Python tools under {self.SCOPE}\n" if lang == "en"
+                else f"{self.SCOPE} 下 3 個 Python 工具\n")
+        names = self._tree(tmp_path, monkeypatch, tools=3,
+                           docs=[(name, good + body)])
+        assert mod.check_tool_count_in_docs() == [], (
+            "a sentence that never names the counted scope was read as this "
+            "count")
+        mod._auto_fix([mod.Issue("tool-count", "warn", name, 1, "x")],
+                      96, {"pack_count": 16, "alert": 161})
+        assert body.strip() in names[0].read_text(encoding="utf-8"), (
+            "the repair rewrote a sentence about another scope")
+
+    def test_two_counts_on_the_anchored_line_is_refused_not_guessed(
+            self, tmp_path, monkeypatch):
+        """⛔ The anchor narrowed file→line; it does NOT narrow within a line.
+
+        Measured on the shipped `README.en.md` before this: adding a TRUE
+        clause to the counted row —
+
+            + 221 Python tools under `<scope>`, incl. 105 Python tools in lint/
+
+        — got `found 105, actual is 221` reported and then rewritten to 221 by
+        `--fix`, which finished with "✅ All version references and counts are
+        consistent." The clause was true; the tool made it false and called
+        that success. Nothing on the line says which count the scope governs,
+        so the check refuses to judge and the repair refuses to touch it.
+        """
+        body = (f"+ 999 Python tools under {self.SCOPE}, "
+                f"incl. 105 Python tools in lint/\n")
+        names = self._tree(tmp_path, monkeypatch, tools=3,
+                           docs=[("README.en.md", body)])
+        found = mod.check_tool_count_in_docs()
+        assert len(found) == 1, ("expected exactly one ambiguity finding, got "
+                                 "%s" % [i.message for i in found])
+        assert "line states 2 counts" in found[0].message, found[0].message
+        assert "999" in found[0].message and "105" in found[0].message
+
+        mod._auto_fix(found, 96, {"pack_count": 16, "alert": 161})
+        assert names[0].read_text(encoding="utf-8") == body, (
+            "the repair rewrote a line the check refused to judge:\n%s"
+            % names[0].read_text(encoding="utf-8"))
+
+    def test_the_repair_refuses_even_when_handed_an_ambiguous_line(
+            self, tmp_path, monkeypatch):
+        """⚠️ The repair re-derives; it does not trust the issue it is given.
+
+        A stale or hand-made `Issue` pointing at an ambiguous line must not be
+        a way in — the two halves used to ask the question differently, which
+        is the whole defect above.
+        """
+        body = (f"+ 999 Python tools under {self.SCOPE}, "
+                f"incl. 105 Python tools in lint/\n")
+        names = self._tree(tmp_path, monkeypatch, tools=3,
+                           docs=[("README.en.md", body)])
+        issue = mod.Issue("tool-count", "warn", "README.en.md", 1,
+                          "Python tool count (en): found 999, actual is 3")
+        assert mod._auto_fix([issue], 96, {"pack_count": 16, "alert": 161}) == []
+        assert names[0].read_text(encoding="utf-8") == body
+
+    def test_a_single_count_on_the_anchored_line_still_repairs(
+            self, tmp_path, monkeypatch):
+        """⚠️ Paired control: fail-closed must not become fail-always.
+
+        Without this, refusing every anchored line would satisfy the two
+        assertions above and silently retire the whole check.
+        """
+        names = self._tree(tmp_path, monkeypatch, tools=3, docs=[
+            ("README.en.md", f"+ 999 Python tools under {self.SCOPE}\n")])
+        found = mod.check_tool_count_in_docs()
+        assert [i.check for i in found] == ["tool-count"], found
+        assert "line states" not in found[0].message, found[0].message
+        assert mod._auto_fix(found, 96, {"pack_count": 16, "alert": 161}) == found
+        assert "3 Python tools under" in names[0].read_text(encoding="utf-8")
+
+    def test_the_repair_cannot_reach_past_the_line_it_was_given(
+            self, tmp_path, monkeypatch):
+        """⛔ Whole-file `re.sub` + `\\s*` matching a newline = invisible lies.
+
+        Measured before the repair was keyed to the finding: a wrapped
+        sentence (`removed 40\\nPython tools that had no callers`) was
+        rewritten to `removed 221\\n…` while the per-line checker never
+        reported it — before or after. The falsehood lands under a green
+        light and no future run can find it.
+        """
+        wrapped = "During the v2.6 cleanup we removed 40\nPython tools.\n"
+        names = self._tree(tmp_path, monkeypatch, tools=3, docs=[
+            ("README.en.md",
+             f"+ 999 Python tools under {self.SCOPE}\n" + wrapped)])
+        found = mod.check_tool_count_in_docs()
+        assert len(found) == 1 and found[0].line == 1, found
+        mod._auto_fix(found, 96, {"pack_count": 16, "alert": 161})
+        text = names[0].read_text(encoding="utf-8")
+        assert f"+ 3 Python tools under {self.SCOPE}" in text, text
+        assert "removed 40\nPython tools." in text, (
+            "the repair reached a wrapped occurrence the checker cannot see")
+
+    def test_the_repair_reaches_the_english_half_too(self, tmp_path,
+                                                     monkeypatch):
+        """⛔ A reader without a writer is a finding that can never be cleared.
+
+        `AUTO_FIX_PATTERNS["tool-count"]` was Chinese-only, so once the
+        English number became visible it would have been reported every run
+        and repaired never — the shape #1504 named: checker and repair
+        disagreeing produces a warning no tool can satisfy.
+        """
+        names = self._tree(tmp_path, monkeypatch, tools=3, docs=[
+            ("README.en.md", f"+ 999 Python tools under {self.SCOPE}\n")])
+        issue = mod.Issue("tool-count", "warn", "README.en.md", 1, "x")
+        assert mod._auto_fix([issue], 96, {"pack_count": 16, "alert": 161}) == [issue]
+        assert "3 Python tools under" in names[0].read_text(encoding="utf-8")
+        assert mod.check_tool_count_in_docs() == [], (
+            "repaired, yet the checker still reports it")
+
+    def test_checker_and_repair_agree_on_case(self, tmp_path, monkeypatch):
+        """⛔ The checker matches case-insensitively; the repair must too.
+
+        Mutation target: dropping `flags=re.IGNORECASE` from the repair. The
+        checker would still report `python tools`, the repair would decline to
+        touch it, and the finding would stand forever.
+        """
+        names = self._tree(tmp_path, monkeypatch, tools=3, docs=[
+            ("README.en.md", f"+ 999 python tools under {self.SCOPE}\n")])
+        assert mod.check_tool_count_in_docs(), "checker missed the lowercase form"
+        mod._auto_fix([mod.Issue("tool-count", "warn", "README.en.md", 1, "x")],
+                      96, {"pack_count": 16, "alert": 161})
+        assert "3 python tools under" in names[0].read_text(encoding="utf-8"), (
+            "the repair is stricter than its checker — an unclearable warning")
+
+    def test_both_readers_are_alive_on_the_shipped_files(self):
+        """⛔ The one assertion here that touches the files this is about.
+
+        #1540's defect was that the English pattern scored ZERO hits on the
+        SHIPPED files while looking perfectly reasonable. Every other test in
+        this class that calls this checker goes through `_tree`, which
+        monkeypatches BOTH `REPO_ROOT` and `TOOL_COUNT_CHECK_FILES`, so none
+        of them can see that failure return
+        (⚠️ an earlier revision said "every other test in this class", which
+        is not true: `test_the_sibling_doc_file_count_repair_is_line_scoped_too`
+        and `test_the_checker_is_looser_than_the_writer_on_purpose` build no
+        tree — measured, neither of them calls `check_tool_count_in_docs` at
+        all, so they are not exceptions to the blindness, they are outside it)
+        — measured: setting that list to `[]` leaves the whole module green
+        while the checker reads nothing at all (measured on `ed43e772`,
+        where the run was 107 passed), and the same mutation is killed by
+        this test. ⚠️ Do not re-quote a module test count here: an earlier
+        revision said "116 tests today" when the module collected 99. The
+        claim that carries weight is the SHAPE — the mutation survives
+        everywhere else and dies here — not the tally.
+
+        ⚠️ Deliberately asserts that each pattern READS something, not what
+        the number is. A drifted count is already `bump_docs
+        --sync-counts --check`'s red and this check's warning; a dead reader
+        is silent everywhere, and that is what this is for.
+        """
+        alive = {}
+        for fpath in mod.TOOL_COUNT_CHECK_FILES:
+            if not fpath.exists():
+                continue
+            for line in fpath.read_text(encoding="utf-8").splitlines():
+                if mod.TOOL_COUNT_SCOPE_ANCHOR not in line:
+                    continue
+                for pat, desc in mod.TOOL_COUNT_PATTERNS:
+                    if re.search(pat, line, re.IGNORECASE):
+                        alive.setdefault(desc, set()).add(fpath.name)
+        assert set(alive) == {d for _, d in mod.TOOL_COUNT_PATTERNS}, (
+            "a tool-count pattern reads nothing in any shipped file — that is "
+            "the #1540 failure itself, and it is silent everywhere else.\n"
+            "⚠️ Check TOOL_COUNT_SCOPE_ANCHOR before the patterns: if the "
+            "sentence no longer names the scope verbatim, no pattern change "
+            "makes this green, and widening this to `assert alive` would drop "
+            "one language for good.\n"
+            "alive: %s" % {k: sorted(v) for k, v in alive.items()})
+
+    def test_the_sibling_doc_file_count_repair_is_line_scoped_too(
+            self, tmp_path, monkeypatch):
+        """⛔ The class, not the cited instance.
+
+        `doc-file-count` shipped the same shape this change set fixed for
+        `tool-count`: a per-line check, a whole-file `re.sub` repair, and a
+        pattern whose `\\s*` matches a newline. Blind review measured it on
+        this branch — a true sentence about another directory rewritten to the
+        doc-map count and reported as fixed, plus a wrapped occurrence the
+        check can never report rewritten alongside it.
+
+        ⚠️ There is no scope anchor for `個文件`, so this pins only the
+        line-scoping half; the residual is disclosed in `_auto_fix`.
+        """
+        claude = tmp_path / "CLAUDE.md"
+        wrapped = "這批草稿共 4\n個文件，散落在兩個目錄。\n"
+        claude.write_text("完整文件對照表（7 個文件）。\n" + wrapped,
+                          encoding="utf-8")
+        doc_map = tmp_path / "docs" / "internal" / "doc-map.md"
+        doc_map.parent.mkdir(parents=True)
+        doc_map.write_text("|a|\n|-|\n" + "|r|\n" * 3, encoding="utf-8")
+        monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+        mod._CONTENT_CACHE.clear()
+
+        found = mod.check_doc_file_count_in_docs()
+        assert [i.line for i in found] == [1], (
+            "expected only the single-line occurrence to be reported: %s"
+            % [(i.line, i.message) for i in found])
+        mod._auto_fix(found, 96, {"pack_count": 16, "alert": 161})
+        text = claude.read_text(encoding="utf-8")
+        assert "（3 個文件）" in text, text
+        assert "共 4\n個文件" in text, (
+            "the repair reached a wrapped occurrence the check cannot see:\n%s"
+            % text)
+
+    def test_the_checker_is_looser_than_the_writer_on_purpose(self):
+        """⚠️ Pins an asymmetry blind review flagged, as intentional.
+
+        The checker tolerates any preposition; `bump_docs`' writer rule pins
+        `Python tools under` verbatim. Measured: changing `under` to `across`
+        in README.en.md leaves `validate_docs_versions --ci` silent (the
+        number is still right) and turns `bump_docs --sync-counts --check`
+        rc=1 with a DEAD diagnosis naming the pattern to fix.
+
+        That is the correct split — a rewrite rule has to know exactly what to
+        replace, a checker has to see every phrasing — and it is pinned here
+        so nobody "fixes" the asymmetry by narrowing the checker back down.
+        ⚠️ It also means a rephrasing is caught only by the writer's gate,
+        which is CI-only (`validate.yaml`'s `version-check`), not local.
+        """
+        import bump_docs  # noqa: E402  (path via conftest)
+        rule = {r["id"]: r for r in bump_docs._build_count_rules()}[
+            "readme-en-python-tools"]
+        assert "Python tools under" in rule["pattern"], (
+            "the writer rule no longer pins the preposition; if that is "
+            "deliberate, this test and its rationale need rewriting: %s"
+            % rule["pattern"])
+        assert not any("under" in pat for pat, _ in mod.TOOL_COUNT_PATTERNS), (
+            "the checker has grown a preposition requirement — that is the "
+            "#1540 defect returning: %s" % mod.TOOL_COUNT_PATTERNS)
+
+
+class TestFixDoesNotSwitchOffJson:
+    """#1506 — `--fix` used to make `--json` inert.
+
+    The repair branch was its own exit (repair, print, `return`) sitting ahead
+    of the only block that reads `args.json`, so `--ci --fix --json` printed
+    `🔧 Fixed …` prose and a caller parsing it got a decode error on line 1.
+    #1483 repaired the exit-code half of that same early return; the format
+    half survived because the two halves are decided in two different places.
+
+    ⚠️ These drive the real `main()` and assert on `json.loads`, so a
+    reintroduced early return fails them regardless of how it is spelled —
+    the assertion is about the output being a document, not about control
+    flow. The check functions are stubbed so no repository file is written.
+    """
+
+    @staticmethod
+    def _run(monkeypatch, capsys, argv, issues, repaired):
+        """Drive `main()` with a fixed issue set; return (exit_code, stdout)."""
+        monkeypatch.setattr(mod, "_auto_fix", lambda *a, **k: list(repaired))
+        monkeypatch.setattr(mod, "check_e2e_and_jsx_versions",
+                            lambda *a, **k: list(issues))
+        for name in ("check_bilingual_badge", "check_bilingual_number_consistency",
+                     "check_rule_pack_counts", "check_tool_count_in_docs",
+                     "check_roadmap_changelog_overlap", "check_doc_map_coverage",
+                     "check_tool_map_coverage", "check_adr_count_in_docs",
+                     "check_doc_file_count_in_docs", "check_scenario_count_in_docs",
+                     "check_image_tag_v_prefix", "check_mkdocs_extra_versions",
+                     "check_da_tools_version", "check_exporter_version",
+                     "check_release_tag_currency", "check_platform_version"):
+            monkeypatch.setattr(mod, name, lambda *a, **k: [])
+        monkeypatch.setattr(sys, "argv", ["validate_docs_versions", *argv])
+        code = 0
+        try:
+            mod.main()
+        except SystemExit as exc:
+            code = exc.code
+        return code, capsys.readouterr().out
+
+    def test_fix_and_json_together_still_emit_one_json_document(
+            self, monkeypatch, capsys):
+        """⛔ Must-fire on the defect: the whole of stdout has to parse."""
+        repaired = [mod.Issue("bilingual-count", "warn", "README.md", 0, "x")]
+        code, out = self._run(monkeypatch, capsys,
+                              ["--ci", "--fix", "--json"], repaired, repaired)
+        doc = json.loads(out)  # the regression: this raised before #1506
+        assert code == 0, out
+        assert [i["check"] for i in doc["repaired"]] == ["bilingual-count"], doc
+        assert doc["issues"] == [], (
+            "a repaired issue must not also be reported as standing: %s" % doc)
+        assert doc["summary"]["repaired"] == 1, doc
+
+    def test_json_survives_the_failing_path_too(self, monkeypatch, capsys):
+        """⛔ The path most likely to regress: `--fix` leaves a real error.
+
+        An unrepaired error has to keep the exit code non-zero AND still be
+        described by a parseable document — a fix that emitted JSON only on
+        the happy path would leave every failing CI run unparseable.
+        """
+        standing = [mod.Issue("e2e-package-version", "error",
+                              "tests/e2e/package.json", 0, "frozen at 2.6.0")]
+        code, out = self._run(monkeypatch, capsys,
+                              ["--ci", "--fix", "--json"], standing, [])
+        doc = json.loads(out)
+        assert code != 0, out
+        assert doc["summary"]["errors"] == 1, doc
+        assert [i["check"] for i in doc["issues"]] == ["e2e-package-version"]
+
+    def test_fix_without_json_still_speaks_prose(self, monkeypatch, capsys):
+        """⚠️ Must-not-fire control against over-correcting into silence.
+
+        The obvious way to make `--json` clean is to stop printing during
+        repair. Without this, `--fix` alone could go mute and every assertion
+        above would still pass.
+        """
+        standing = [mod.Issue("e2e-package-version", "error",
+                              "tests/e2e/package.json", 0, "frozen at 2.6.0")]
+        repaired = [mod.Issue("bilingual-count", "warn", "README.md", 0, "x")]
+        code, out = self._run(monkeypatch, capsys, ["--ci", "--fix"],
+                              standing + repaired, repaired)
+        assert code != 0, out
+        assert "Auto-fixed 1 issue(s)" in out, out
+        assert "still standing" in out, out
+        assert "e2e-package-version" in out, out
+
+    def test_auto_fix_quiet_writes_the_file_but_prints_nothing(
+            self, tmp_path, monkeypatch, capsys):
+        """⛔ `quiet` must suppress only the prose, never the repair itself.
+
+        A `quiet` that also skipped the write would make the JSON document
+        describe a repair that did not happen.
+        """
+        f = tmp_path / "README.md"
+        _write(f, "badge bilingual-1%20pairs here\n")
+        monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+        issue = mod.Issue("bilingual-count", "warn", "README.md", 0, "x")
+        got = mod._auto_fix([issue], 96, {"pack_count": 16, "alert": 161},
+                            quiet=True)
+        assert got == [issue]
+        assert "bilingual-96%20pairs" in f.read_text(encoding="utf-8"), (
+            "quiet suppressed the repair, not just the message")
+        assert capsys.readouterr().out == "", (
+            "quiet must print nothing; anything ahead of the JSON document "
+            "makes it unparseable")
+
+    def test_not_quiet_still_prints_the_repair_line(
+            self, tmp_path, monkeypatch, capsys):
+        """⚠️ Paired control: the default must keep the human-facing line."""
+        f = tmp_path / "README.md"
+        _write(f, "badge bilingual-1%20pairs here\n")
+        monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+        mod._auto_fix([mod.Issue("bilingual-count", "warn", "README.md", 0, "x")],
+                      96, {"pack_count": 16, "alert": 161})
+        assert "Fixed bilingual-count" in capsys.readouterr().out
+
 
 class TestCheckReleaseTagCurrency:
     """Pins the release-tag currency check added after #141 Track B / TB-F1:

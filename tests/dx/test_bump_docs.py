@@ -26,6 +26,41 @@ import pytest
 import bump_docs  # noqa: E402
 
 
+# ⛔ #1540: the expected count-rule set lives HERE, as a literal, and is not
+# read back from `bump_docs.COUNT_RULE_IDS`.
+#
+# The module's own self-check compares `_build_count_rules()` against
+# `COUNT_RULE_IDS`, and both of those live in `bump_docs.py` — so the single
+# edit that removes a count rule from one and from the other satisfies it by
+# construction. That two-site edit is precisely what the NO-SOURCE message
+# used to recommend by name ("retire the rule together with its
+# COUNT_RULE_IDS entry"). Measured on `5b7f6c35`, following it and then
+# breaking README.en.md's tool count:
+#
+#   machinery intact, number broken  → 2 guards red
+#                                      (`--sync-counts --check` rc=1,
+#                                       `test_sync_counts_is_green_today`)
+#   rule + entry deleted, same break → 0 guards red: 288 tests across both
+#                                      test modules green, plus
+#                                      `bump_docs --check` and
+#                                      `validate_docs_versions --ci`
+#
+# A third copy is the point, not an oversight. Retiring a published number is
+# a decision; this is what puts it in front of a reviewer rather than letting
+# it happen in silence.
+#
+# ⚠️ Honest boundary: this is a pytest assertion. Neither the pre-commit hook
+# nor `--sync-counts --check` can see it, so the signal arrives from the
+# Python Tests job, not locally.
+PINNED_COUNT_RULE_IDS = (
+    "precommit-hook-breakdown",
+    "dev-rules-jsx-tools",
+    "readme-rule-pack-badge",
+    "readme-python-tools",
+    "readme-en-python-tools",
+)
+
+
 class TestBuildRules:
     """測試 _build_rules() 規則結構。"""
 
@@ -1002,16 +1037,34 @@ class TestCountRulesAreLive:
         `>= 3` 這種下限看不見五條掉一條：把 tool-registry.yaml 搬走時，
         JSX 那條規則整條消失，剩四條仍然 >= 3，`--sync-counts --check`
         exit 0，而 dev-rules.md 的數字繼續錯著（#1407 F2）。
+
+        ⛔ 三方比對，不是兩方：built vs 模組常數 vs **本檔的字面值**。少了第三方，
+        「規則與常數一起刪」這個編輯會自我滿足（#1540 已量測，見上方註解）。
         """
         ids = tuple(r["id"] for r in bump_docs._build_count_rules())
-        assert ids == bump_docs.COUNT_RULE_IDS, (
-            f"count 規則集與 COUNT_RULE_IDS 不符：{ids}。"
-            f"增刪 count 規則時兩邊要同一筆改動一起改。")
+        assert ids == PINNED_COUNT_RULE_IDS, (
+            f"count 規則集與本檔釘住的期望值不符：built={ids}\n"
+            f"pinned={PINNED_COUNT_RULE_IDS}\n"
+            f"⚠️ 少一條 = 那份文件的數字從此不再同步，而所有其他閘門都會是綠的。"
+            f"若這是刻意退役，請在同一顆 commit 說明哪個數字不再被維護。")
+        assert bump_docs.COUNT_RULE_IDS == PINNED_COUNT_RULE_IDS, (
+            f"bump_docs.COUNT_RULE_IDS={bump_docs.COUNT_RULE_IDS} "
+            f"與本檔釘住的 {PINNED_COUNT_RULE_IDS} 不符。")
 
     def test_every_count_rule_file_exists_and_pattern_matches(self):
+        """每一條**釘住的**規則都要指得到檔案、撈得到句子。
+
+        ⛔ 迭代的是釘住的 id，不是 `_build_count_rules()` 的產出——迭代產出時，
+        一條規則被刪掉只會讓迴圈少跑一圈（空轉通過），而那正是要抓的事。
+        """
         import re as _re
-        dead, missing = [], []
-        for rule in bump_docs._build_count_rules():
+        built = {r["id"]: r for r in bump_docs._build_count_rules()}
+        dead, missing, absent = [], [], []
+        for rule_id in PINNED_COUNT_RULE_IDS:
+            rule = built.get(rule_id)
+            if rule is None:
+                absent.append(rule_id)
+                continue
             fpath = bump_docs.REPO_ROOT / rule["file"]
             if not fpath.exists():
                 missing.append(f"{rule['file']} ({rule['desc']})")
@@ -1020,6 +1073,8 @@ class TestCountRulesAreLive:
             if not _re.findall(rule["pattern"], content, _re.MULTILINE):
                 dead.append(f"{rule['file']} ({rule['desc']}): {rule['pattern']}")
 
+        assert not absent, (
+            f"{len(absent)} 條釘住的計數規則根本沒被建出來：{absent}")
         assert not missing, (
             f"{len(missing)} 條計數規則指向不存在的檔案：\n  " + "\n  ".join(missing))
         assert not dead, (
@@ -1434,10 +1489,123 @@ class TestCountSourceUnreadable:
         """tool-registry.yaml 不在 → JSX 規則仍在，只是 source_ok=False。"""
         monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
         rules = {r["id"]: r for r in bump_docs._build_count_rules()}
-        assert tuple(rules) == bump_docs.COUNT_RULE_IDS, (
+        assert tuple(rules) == PINNED_COUNT_RULE_IDS, (
             "來源讀不到時規則整條消失了——這正是 --sync-counts --check 會對著"
             "一個過期數字 exit 0 的原因。")
         assert rules["dev-rules-jsx-tools"]["source_ok"] is False
+
+    # ── the message is part of the guard, and it used to hand out the bypass ──
+    #
+    # ⛔ #1540: NO-SOURCE printed "restore the source file, or retire the rule
+    # together with its COUNT_RULE_IDS entry". The second half is a working
+    # recipe for switching the rule off: measured on `5b7f6c35`, following it
+    # and then breaking README.en.md's number left every guard green (0 red),
+    # where the same break with the rule in place turns 2 red.
+    #
+    # Two ways to say what a repair is are not equivalent when the reader is
+    # someone racing to green: a message may name the honest repair, and must
+    # not name the cheaper one that removes coverage. The retirement path is
+    # documented next to `COUNT_RULE_IDS` instead, where it is read by someone
+    # designing the rule set.
+
+    @staticmethod
+    def _user_facing_strings():
+        """Every string literal bump_docs can print, minus documentation.
+
+        Derived rather than listed: any new message is covered on the day it
+        lands.
+
+        ⛔ Honest boundary: the name says "message", the body says "string
+        literal outside a docstring", and the second is broader. A PEP 258
+        attribute docstring, or an entry in `__all__`, would be flagged even
+        though neither can reach a reader. Nothing in the module needs either
+        today; when something does, widen this — do NOT obfuscate the literal
+        to get past it, because being greppable from the code is the whole
+        point of writing the identifier down anywhere.
+
+        ⚠️ An intermediate revision widened the exemption to *any* bare string
+        statement, and blind review pointed out that the only thing it
+        exempted was documentation the same commit had just added. Reverted:
+        that documentation is a `#` comment now, which the guard never sees,
+        and the exemption stays as narrow as its evidence.
+        """
+        import ast as _ast
+        src = (Path(bump_docs.__file__)).read_text(encoding="utf-8")
+        tree = _ast.parse(src)
+        docstrings = set()
+        for node in _ast.walk(tree):
+            if isinstance(node, (_ast.Module, _ast.ClassDef,
+                                 _ast.FunctionDef, _ast.AsyncFunctionDef)):
+                body = getattr(node, "body", None)
+                if (body and isinstance(body[0], _ast.Expr)
+                        and isinstance(body[0].value, _ast.Constant)
+                        and isinstance(body[0].value.value, str)):
+                    docstrings.add(id(body[0].value))
+        return [n.value for n in _ast.walk(tree)
+                if isinstance(n, _ast.Constant) and isinstance(n.value, str)
+                and id(n) not in docstrings]
+
+    def test_no_diagnostic_message_names_the_rule_set_constant(self):
+        """⛔ Must-fire: no printable string may name `COUNT_RULE_IDS`.
+
+        ⚠️ The predicate is "names the constant", not "recommends retirement":
+        the guard cannot read intent, and a message that merely mentions the
+        constant still hands a reader racing to green the identifier to grep
+        for. Documentation is where that belongs — this test excludes every
+        bare string statement, including PEP 258 attribute docstrings.
+        """
+        offenders = [s for s in self._user_facing_strings()
+                     if "COUNT_RULE_IDS" in s]
+        assert offenders == [], (
+            "a printable message names COUNT_RULE_IDS. Measured on "
+            "`5b7f6c35`: deleting a count rule together with its entry in "
+            "that constant leaves every guard green, so a message naming it "
+            "is a route to the cheaper, worse repair. Put it in a docstring "
+            "(including an attribute docstring under the constant) — those "
+            "are not flagged.\n  "
+            + "\n  ".join(repr(s) for s in offenders))
+
+    def test_the_scanner_would_notice_such_a_message(self, tmp_path,
+                                                     monkeypatch):
+        """⚠️ Positive control — a scanner that reads nothing also reports [].
+
+        Without this, deleting the walk, mis-parsing the module, or excluding
+        one node type too many all look exactly like "the messages are clean".
+        The attribute-docstring case is here because excluding it was the
+        repair, so it needs a control of its own: exclude too much and the
+        printed message stops being seen.
+        """
+        probe = tmp_path / "probe.py"
+        probe.write_text(
+            '"""COUNT_RULE_IDS in a module docstring must NOT count."""\n'
+            '# COUNT_RULE_IDS in a comment is invisible to AST at all.\n'
+            'def f():\n'
+            '    """COUNT_RULE_IDS here either."""\n'
+            '    print("retire it with its COUNT_RULE_IDS entry")\n',
+            encoding="utf-8")
+        monkeypatch.setattr(bump_docs, "__file__", str(probe))
+        found = [s for s in self._user_facing_strings()
+                 if "COUNT_RULE_IDS" in s]
+        assert found == ["retire it with its COUNT_RULE_IDS entry"], found
+
+    def test_no_source_still_says_what_to_do(self, tmp_path, monkeypatch):
+        """⚠️ Paired control against over-correcting into an empty message.
+
+        Removing the bypass must not remove the instruction; a diagnosis that
+        names no repair is its own defect.
+        """
+        (tmp_path / "doc.md").write_text("專案有 **9 個 JSX 互動工具**\n",
+                                         encoding="utf-8")
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(bump_docs, "_build_count_rules", lambda: [{
+            "id": "probe", "file": "doc.md", "desc": "probe",
+            "pattern": r"\d+ 個", "replacement": lambda _: "3 個",
+            "is_count": True, "source": "docs/assets/tool-registry.yaml",
+            "source_ok": False,
+        }])
+        detail = bump_docs.apply_count_updates(check_only=True)[0][2]
+        assert "Restore the source" in detail, detail
+        assert "COUNT_RULE_IDS" not in detail, detail
 
     def test_unreadable_source_is_reported_as_no_source(self, tmp_path,
                                                         monkeypatch):

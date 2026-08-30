@@ -94,11 +94,51 @@ RULE_PACK_COUNT_PATTERNS: List[Tuple[str, Any, Any, str]] = [
      "Rule Pack total row"),
 ]
 
+# The scope the counted sentence states, verbatim and in both languages.
+#
+# ⛔ #1540: this is the anchor, and the number is only the payload. A tool
+# count is a claim ABOUT A SCOPE; `check_tool_count_in_docs` therefore only
+# reads lines that carry this string, and `_auto_fix` only rewrites the line
+# the checker named.
+#
+# Blind review earned this the hard way. Without the anchor, the checker asks
+# "is there an `N Python tools` on this line", which is true of sentences that
+# are about something else entirely — measured on this tree, adding the true
+# sentence `The try-local/ showcase bundle ships 2 Python tools of its own.`
+# to README.en.md produced `found 2, actual is 221`, and `--fix` rewrote it to
+# `ships 221 Python tools of its own` and then printed
+# `✅ All version references and counts are consistent.` A repair that turns a
+# true sentence into a false one, and reports success.
+#
+# ⚠️ That hazard is older than the English half: the Chinese pattern has
+# always been noun-anchored, and the same probe in Chinese
+# (`另外附 2 個 Python 工具`) was rewritten to 221 on `origin/main` too. The
+# anchor closes both, plus the whole-file/per-line split below.
+TOOL_COUNT_SCOPE_ANCHOR = "`scripts/tools/{ops,dx,lint}`"
+
 # Tool count patterns: (regex, description)
+#
+# ⛔ #1540: the English half used to be two patterns that each demanded a
+# particular word right after the noun — `tools(` and `tools in`.
+# `README.en.md` says "221 Python tools **under** `scripts/tools/{ops,dx,lint}`",
+# so both matched nothing. Measured on `5b7f6c35`: each scored 0 hits across
+# all three of TOOL_COUNT_CHECK_FILES, while `bump_docs` kept writing that
+# number via its own rule — so rewriting the English number to 999 produced 0
+# `tool-count` findings. (⚠️ rc stayed 0 either way: `tool-count` is a
+# warning, so the exit code was never the signal here.)
+#
+# ⛔ The repair is NOT a third spelling with `under` in it; the next
+# preposition would drift out the same way. A preposition carries no counting
+# information, so it cannot be what identifies the claim — the SCOPE is, and
+# that is now matched separately by TOOL_COUNT_SCOPE_ANCHOR.
+#
+# ⚠️ `check_tool_count_in_docs` matches these case-insensitively, and
+# `AUTO_FIX_PATTERNS["tool-count"]` has to stay in step in both spelling and
+# flags: a form the checker sees but the repair cannot rewrite is a warning
+# nobody can clear (#1504).
 TOOL_COUNT_PATTERNS: List[Tuple[str, str]] = [
     (r"(\d+)\s*個\s*Python\s*工具", "Python tool count (zh)"),
-    (r"(\d+)\s*Python\s*tools?(?:\s*[\(（])", "Python tool count (en)"),
-    (r"(\d+)\s*Python\s*tools?(?:\s*in)", "Python tool count (en-in)"),
+    (r"(\d+)\s*Python\s*tools?\b", "Python tool count (en)"),
 ]
 
 # ADR count pattern
@@ -260,9 +300,16 @@ AUTO_FIX_PATTERNS: Dict[str, Dict[str, Any]] = {
         "pattern": r"bilingual-\d+%20pairs",
         "replacement_template": "bilingual-{value}%20pairs",
     },
+    # ⛔ #1540: one entry per TOOL_COUNT_PATTERNS entry. The English half had
+    # no repair at all, so even once the checker could see a drifted English
+    # number, `--fix` could not rewrite it: the file would be reported every
+    # run and repaired never. Both sides are matched case-insensitively, the
+    # same way the checker matches them.
     "tool-count": {
-        "pattern": r"(\d+)(\s*個\s*Python\s*工具)",
-        "replacement_template": "{value}\\2",
+        "patterns": [
+            (r"(\d+)(\s*個\s*Python\s*工具)", "{value}\\2"),
+            (r"(\d+)(\s*Python\s*tools?\b)", "{value}\\2"),
+        ],
     },
     "doc-file-count": {
         "pattern": r"(\d+)(\s*個文件)",
