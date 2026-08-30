@@ -32,8 +32,11 @@ threshold-exporter (hot-reload)
 | 模式 | 環境變數 | 適用場景 |
 |------|---------|----------|
 | `direct` | `TA_WRITE_MODE=direct` | 開發環境、單人操作、不需審核 |
+| `pr` | `TA_WRITE_MODE=pr` | `pr-github` 的別名（v2.6.0 起保留） |
 | `pr-github` | `TA_WRITE_MODE=pr-github` | GitHub.com 或 GitHub Enterprise Server |
 | `pr-gitlab` | `TA_WRITE_MODE=pr-gitlab` | GitLab.com 或自託管 GitLab |
+
+⛔ **這四個值是完整清單，且大小寫敏感。** 不在清單內的值（打錯字、`DIRECT` 這類大小寫變體、明確傳入的空值）會讓 tenant-api **拒絕啟動**，而不是退回 `direct`——因為退回 `direct` 與「刻意選了 `direct`」在執行路徑與啟動日誌上完全相同，一個以為所有寫入都經過審核的部署將收不到任何訊號。判準見 [ADR-034](adr/034-legal-value-as-fallback.md)。前後空白會被 trim（YAML 常見的載體雜訊），但那不會把非法值變成合法值。
 
 ## GitHub 整合
 
