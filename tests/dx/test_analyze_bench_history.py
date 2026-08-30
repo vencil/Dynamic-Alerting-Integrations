@@ -4862,3 +4862,40 @@ class TestNightRecordsFromGhAdmission:
         )
         ab.download_artifact(run_id, tmp_path)
         assert len(calls) == 1, "the second call re-downloaded despite a complete fetch"
+
+    def test_a_failed_sentinel_write_degrades_instead_of_crashing(
+            self, monkeypatch, tmp_path, capsys):
+        """⛔ Blind-review finding, and the irony is the point: the SAME commit
+        wrapped the producer's marker write in `except OSError` and left this
+        one bare. A full disk here raised an uncaught OSError straight out of
+        `night_records_from_gh`, killing the night's verdict over a cache file.
+
+        Degrading to "not cached" costs one re-download. Crashing costs the run.
+
+        A specific break that reddens this: remove the `except OSError` around
+        the sentinel write in `download_artifact`.
+        """
+        run_id = 912
+        real_write = Path.write_text
+
+        def flaky_write(self, *a, **kw):
+            if self.name == ab.DOWNLOAD_SENTINEL:
+                raise OSError(28, "No space left on device")
+            return real_write(self, *a, **kw)
+
+        def fake_gh(cmd):
+            d = tmp_path / f"run-{run_id}"
+            d.mkdir(parents=True, exist_ok=True)
+            real_write(d / ab.ARTIFACT_FILE,
+                       "cpu: TestCPU\nBenchmarkThing0-4   \t   10\t  100 ns/op\n",
+                       encoding="utf-8", newline="\n")
+            return ""
+
+        monkeypatch.setattr(ab, "_gh", fake_gh)
+        monkeypatch.setattr(Path, "write_text", flaky_write)
+
+        got = ab.download_artifact(run_id, tmp_path)
+
+        assert got is not None, "a cache-file failure must not lose the artifact"
+        assert not (tmp_path / f"run-{run_id}" / ab.DOWNLOAD_SENTINEL).exists()
+        assert "could not write" in capsys.readouterr().err

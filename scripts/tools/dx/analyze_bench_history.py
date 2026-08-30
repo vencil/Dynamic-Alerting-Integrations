@@ -375,10 +375,26 @@ def download_artifact(run_id: int, dest_dir: Path) -> Path | None:
     if not txt.exists():
         print(f"  ⚠️  run {run_id}: artifact missing {ARTIFACT_FILE}", file=sys.stderr)
         return None
-    # Written only after `gh` returned 0 AND the .txt landed, so its presence
-    # means "everything this artifact had is here" — which is what lets an
-    # ABSENT marker be read as the version boundary rather than a partial fetch.
-    (target / DOWNLOAD_SENTINEL).write_text("", encoding="utf-8", newline="\n")
+    # Written only after `gh` returned 0 AND the .txt landed.
+    #
+    # ⚠️ WHAT IT ESTABLISHES, narrowly: this process completed a download that
+    # `gh` reported as successful. The first draft of this comment said its
+    # presence means "everything this artifact had is here" — blind review
+    # showed that is wider than the evidence, because a `gh` that exits 0 while
+    # leaving a truncated `.txt` still gets a sentinel. That residual case is
+    # what the ROW COUNT in the marker is for; the sentinel only separates
+    # "fetch finished" from "fetch was interrupted".
+    #
+    # ⛔ A failure here must not kill the run. Without this guard a full disk
+    # raises an uncaught OSError out of `night_records_from_gh` — the exact
+    # shape fixed in `write_baseline_marker.main` and missed here in the same
+    # commit. Degrading to "not cached" costs one re-download; crashing costs
+    # the night's verdict.
+    try:
+        (target / DOWNLOAD_SENTINEL).write_text("", encoding="utf-8", newline="\n")
+    except OSError as exc:
+        print(f"  ⚠️  run {run_id}: could not write {DOWNLOAD_SENTINEL} ({exc}) — "
+              "this run will be re-downloaded next time", file=sys.stderr)
     return txt
 
 

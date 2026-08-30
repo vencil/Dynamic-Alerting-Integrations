@@ -140,6 +140,16 @@ def test_consumer_required_keys_match_what_the_producer_writes(tmp_path: Path):
     ("cpu: X\nBenchmarkA-4\t10\t1 ms/op\n", "wrong unit"),
     ("cpu: X\n  BenchmarkA-4\t10\t1 ns/op\n", "leading whitespace"),
     ("", "empty file"),
+    # ── added after a blind review showed the corpus above missed a
+    # one-character fork (`\d+` → `\d*` on the iteration count) that changes
+    # behaviour on a real `go test` shape. Each entry below separates the
+    # current pattern from a specific plausible edit.
+    ("cpu: X\nBenchmarkA-4\t\t1 ns/op\n", "no iteration count (separates \\d+ from \\d*)"),
+    ("cpu: X\nBenchmarkFoo/size=10-4\t10\t1 ns/op\n", "subtest name (separates \\w from [^\\s])"),
+    ("cpu: X\nbenchmarkfoo-4\t10\t1 ns/op\n", "lowercase (separates case-sensitive from IGNORECASE)"),
+    ("cpu: X\nBenchmarkFoo.Bar-4\t10\t1 ns/op\n", "dotted name (separates the char class)"),
+    ("cpu: X\nBenchmarkA-4\t10\t1 ns/opX\n", "trailing junk (separates \\b from no boundary)"),
+    ("cpu: X\nBenchmarkA-4\t10\t1ns/op\n", "no space before unit (separates \\s+ from \\s*)"),
 ])
 def test_producer_and_consumer_count_the_same_rows(text: str, why: str):
     """The producer's count must equal what the CONSUMER's parser yields.
@@ -156,7 +166,17 @@ def test_producer_and_consumer_count_the_same_rows(text: str, why: str):
     ⚠️ It was also the wrong PROPERTY. A verbatim copy is harmless; what harms
     is the two definitions DIVERGING. So this asserts the observable thing:
     over inputs chosen to sit on the regex's edges, the producer's count and
-    the consumer's parser agree. A forked-and-edited pattern separates them.
+    the consumer's parser agree.
+
+    ⛔ AND THE SCOPE IS NARROWER THAN THE FIRST DRAFT SAID. That draft claimed
+    "a forked-and-edited pattern separates them" — an unbounded claim no finite
+    corpus can support, and blind review broke it with a ONE-CHARACTER fork
+    (`\\d+` → `\\d*` on the iteration count) that passed all 23 tests while
+    genuinely diverging on `BenchmarkA-4\\t\\t100 ns/op`. What this test
+    actually delivers: each corpus entry separates the current pattern from ONE
+    named plausible edit, listed beside it. A fork that agrees with the current
+    pattern on every entry below still passes. That is a coverage statement,
+    not a proof of non-divergence.
     """
     src = Path(__import__("tempfile").mkdtemp()) / "bench-baseline.txt"
     src.write_text(text, encoding="utf-8", newline="")
