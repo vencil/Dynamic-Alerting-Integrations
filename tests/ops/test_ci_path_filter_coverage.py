@@ -741,11 +741,16 @@ def _module_repo_paths_with(tree: ast.AST, roots: set[str],
 # These bounds are kept because they are the only throttle on shape B's
 # breadth, and each of the three drops a material share of the slash-containing
 # candidates. ⛔ The counts that used to sit here have been removed rather
-# than refreshed: they depended on an unwritten definition of "admitted
-# modules", and re-deriving them under the obvious one (every tracked `.py`)
-# gave a figure several times larger — so the numbers were not stale, they were
-# unreproducible. If a future change needs them, state the population in the
-# same sentence (#1404).
+# than refreshed, and the reason is NOT that they were unreproducible — an
+# earlier version of this note said that and was wrong. "Admitted" has a
+# definition, written in this file: `_parsed_test_modules` harvests
+# `tests/**/test_*.py`, and `_module_repo_paths` returns nothing for a module
+# with no recognised repo-root name. Under that definition the old figures
+# reproduce at the commit that wrote them and have roughly doubled since,
+# because the admitted set keeps growing. They are removed because they are
+# re-measured on every edit to the corpus — this module's own literals
+# included. If a future change needs them, restate the population in the same
+# sentence (#1404).
 #
 # The bounds are cheap and they keep the filesystem out of the hot path.
 _MAX_PATH_LEN = 200
