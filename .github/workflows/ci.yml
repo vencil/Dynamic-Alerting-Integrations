@@ -959,7 +959,7 @@ jobs:
 
   iac-helm-sast:
     # Container/k8s SAST Layers 2 + 4 (#448 / TRK-312 + TRK-314).
-    #   L2 (Helm template): renders 10 charts via helm + kube-linter (~1-2 min).
+    #   L2 (Helm template): renders every chart via helm + kube-linter (~1-2 min).
     #   L4 (raw k8s): kube-linter on k8s/ raw manifests (no render, ~3-5s).
     # Both run in this one job because they share the kube-linter engine setup
     # below; dedicated (not folded into Lint) so the slow render doesn't gate
@@ -1086,7 +1086,7 @@ jobs:
       # tests are `skipif`-gated on the binary, so a broken Install step would
       # turn the whole behaviour gate into a green no-op.
       VIBE_REQUIRE_VECTOR: "1"
-      # Same again for helm: 13 test files gate on `shutil.which("helm")`, and
+      # Same again for helm: many test files gate on `shutil.which("helm")`, and
       # every rendered-manifest assertion in them (values.schema.json rejection,
       # netpol consumer set, egress allowlist, the VRL render tests) skips
       # silently without it. setup-helm failing open would hide all of them.

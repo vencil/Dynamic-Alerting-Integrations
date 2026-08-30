@@ -73,7 +73,7 @@ def test_vector_present_when_required() -> None:
 
 
 def test_helm_present_when_required() -> None:
-    """Same fail-closed guard for helm. 13 test files gate on
+    """Same fail-closed guard for helm. Many test files gate on
     ``shutil.which("helm")``; every rendered-manifest assertion in them
     (values.schema.json rejection, the NetworkPolicy consumer set, the egress
     allowlist, and every render test in this file) skips silently without it, so
