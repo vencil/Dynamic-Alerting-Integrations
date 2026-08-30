@@ -472,16 +472,25 @@ _MIN_RESOLVING = 300
 # omitted the `token in raw` gate, counting paths that are written perfectly
 # well: the population the check can actually judge is single digits.
 #
-# ⚠️ It was then deleted outright, and THAT was an over-correction: the
-# deleted version stayed silent when the corpus was narrowed, so the floor had
-# been guarding the CORPUS axis honestly the whole time and only its
-# verdict-shaped reasoning was wrong. It came back as a count of the files
-# handed in, and blind review then took THAT apart too: at 450 against a corpus
-# of 610 it let `tests/ops/` be dropped and `[:450]` truncate, both green.
-# ⇒ A count cannot express the axis. The use site now asserts SET EQUALITY
-# against the tracked Python set, so there is no constant here any more and no
-# number to calibrate; see `test_no_reference_is_split_across_implicit_
-# concatenation`.
+# ⚠️ It was then deleted outright, and THAT was an over-correction: the deleted
+# version stayed silent when the corpus was narrowed, so the floor had been
+# guarding the CORPUS axis honestly the whole time and only its verdict-shaped
+# reasoning was wrong. It came back as a count of the files handed in, and blind
+# review took THAT apart too: at 450 against a corpus of 610 it let `tests/ops/`
+# be dropped (508 left) and `[:450]` truncate, both green — 160 files, 26% of
+# the corpus, can leave without it noticing.
+# ⚠️ The narrowings it DOES catch were measured when 450 was chosen (dropping
+# `tests/` leaves 268, dropping `scripts/` leaves 352, both below it). What it
+# misses are the narrowings nobody measured — so the fault is that a count
+# cannot express "the whole corpus arrived", not that this particular number was
+# calibrated carelessly.
+# ⇒ ⛔ THE FLOOR IS NOT ENOUGH AND IT IS ALSO NOT REDUNDANT. The use site pairs
+# it with a SET EQUALITY against the tracked Python set: the equality catches
+# every narrowing this cannot see, and this catches the one thing an equality
+# structurally cannot — both sides going to zero together. Deleting either was
+# tried and measured to lose real detection. See the guards next to the scan in
+# `test_no_reference_is_split_across_implicit_concatenation`.
+_MIN_CONCAT_FILES = 450
 
 # ⛔ NOTHING is skipped: every tracked file is decoded with `errors="replace"`.
 #
@@ -1570,7 +1579,9 @@ def test_no_reference_is_split_across_implicit_concatenation() -> None:
         swallow SyntaxError inside the scan  file leaves silently -> corpus case
         drop the path from the message       reader loses the file -> fail-closed case
         drop entries from the corpus         nothing to find      -> twins case
-        narrow the corpus at the use site    nothing to find      -> corpus set
+        narrow the corpus at the use site    nothing to find      -> both corpus
+                                                                    guards, which
+                                                                    sit AT it
 
     ⛔ WHAT IS STILL NOT GUARDED, measured rather than implied. Wrapping the
     call to the scan BELOW in `except SyntaxError: continue` passes: the
@@ -1583,29 +1594,6 @@ def test_no_reference_is_split_across_implicit_concatenation() -> None:
     `--tb=long` prints, and would have agreed with any outcome.
     """
     files = [(p, t) for p, t in _read_tracked() if p.endswith(".py")]
-    # ⛔ SET EQUALITY, NOT A COUNT FLOOR, and the difference was measured rather
-    # than assumed. The floor this replaces was `>= 450` against a corpus of
-    # 610: blind review dropped `tests/ops/` (508 left) and truncated with
-    # `[:450]` — the very attack the twins case below names — and both stayed
-    # GREEN. A floor calibrated against the one narrowing anybody happened to
-    # measure only catches that narrowing.
-    # ⛔ The right-hand side is NOT a second copy of the line above: it comes
-    # from `_tracked()`, whose contents `test_tracked_set_matches_an_independent
-    # _git_listing` checks against a `git ls-files` this module issues itself,
-    # and whose emptiness `_MIN_TRACKED_FILES` refuses. That is what keeps this
-    # from passing vacuously when both sides go to zero together.
-    # ⚠️ NOT GUARDED, measured: this pins WHICH files arrive, not what is in
-    # them. Handing the scan 610 entries with empty contents, or the same file
-    # 610 times, both stay green. Closing that needs a second reading of the
-    # bytes and is not in this change.
-    expected = {p for p in _tracked() if p.endswith(".py")}
-    assert {p for p, _ in files} == expected, (
-        f"the corpus handed to this scan is not the tracked Python set: "
-        f"{len(files)} file(s) arrived, {len(expected)} are tracked; "
-        f"missing={sorted(expected - {p for p, _ in files})[:5]}. The cases "
-        f"below stay green on any corpus, so a narrowed one makes them mean "
-        f"nothing. ⛔ Do not narrow this comparison to let a filter through; "
-        f"widen the corpus back.")
 
     subject = "tests/ops/test_wrapped_path_references.py"
     assert subject in _tracked(), f"{subject} moved; re-point this fixture"
@@ -1710,18 +1698,22 @@ def test_no_reference_is_split_across_implicit_concatenation() -> None:
     # one machine and render identically. Requiring the message to START with
     # the path pins the mutation that puts it there, on every platform.
     # ⛔ THE TWO ASSERTIONS AFTER IT ARE NOT DECORATION. Blind review weakened
-    # each layer of the first version of this fix one at a time; three of those
-    # weakenings left the module green, and two are pinned here — dropping
-    # `filename=` from `ast.parse` (the structured-field assertion catches it)
-    # and replacing the diagnosis while keeping the prefix (the last one does).
-    # Cutting the message down to the bare path is caught by the FIRST
-    # assertion, not by a new one.
-    # ⚠️ The third, losing the exception chain, is NOT pinned, and this note is
-    # the disclosure rather than a claim: nothing in this file asserts on
-    # `__cause__` or `__context__` (measured, zero references). The in-place
-    # `msg` mutation below re-raises the ORIGINAL object, so today there is no
-    # chain to lose — but an edit that goes back to constructing a new exception
-    # WITH the full argument tuple keeps the fields, drops the chain, and passes.
+    # the first version of this fix one layer at a time and each of the four
+    # weakenings below left the module green; three are pinned now, and the
+    # measured mapping is one-to-one rather than the tidy story it first read as:
+    #
+    #   cut the message to the bare path      -> caught by the FIRST assertion
+    #   drop `filename=` from `ast.parse`     -> caught by the structured fields
+    #   replace the diagnosis, keep the prefix-> caught by the LAST assertion
+    #   rebuild the exception from the tuple  -> NOT caught (see below)
+    #
+    # ⚠️ That last one is a disclosure, not a claim, and the reason is narrower
+    # than an earlier version of this comment said. Nothing in this file asserts
+    # on `__cause__` or `__context__` (measured, zero assertions). But rebuilding
+    # the exception inside an `except` block does NOT lose the chain: implicit
+    # chaining still sets `__context__` to the original, so the traceback still
+    # prints it. What such an edit loses is nothing measurable here — which is
+    # exactly why it is unpinned and why saying "it drops the chain" was wrong.
     with pytest.raises(SyntaxError) as parse_failure:
         _implicit_concat_offenders([("zfake/broken.py", "def (\n")])
     failure = parse_failure.value
@@ -1757,6 +1749,50 @@ def test_no_reference_is_split_across_implicit_concatenation() -> None:
         "tests/ops/zfake_twin2.py"], (
         "the scan dropped entries from the corpus it was handed: "
         + repr(sorted(_implicit_concat_offenders(twins))))
+
+    # ⛔ BOTH GUARDS SIT HERE, ADJACENT TO THE CALL THEY PROTECT, and that
+    # placement is a measured fix rather than tidiness. They used to sit beside
+    # the binding 150 lines up, and blind review narrowed `files` in between —
+    # every statement of that window was unguarded. Standing here closes the
+    # window: a rebinding anywhere above is now caught (measured).
+    # ⚠️ WHAT IT DOES NOT CLOSE, measured rather than assumed: a narrowing
+    # written INSIDE the call expression itself — `_implicit_concat_offenders(
+    # files[:1])` — still passes, because these guards judge the name and the
+    # call slices it afterwards. No placement of a guard on a NAME can close
+    # that; it is the same shape this module already discloses one level up for
+    # `except SyntaxError` at the call site. Moving the guards bought the
+    # window, not the call.
+    # ⛔ AND THEY ARE BOTH NEEDED. Set equality catches the fine narrowings a
+    # count cannot see (`[:609]`, a directory filter); the floor catches what
+    # set equality structurally cannot — BOTH SIDES going to zero together.
+    # Measured: changing the suffix on this line alone is caught by the
+    # equality, changing it on this line AND in `expected` was GREEN before the
+    # floor came back, with zero files scanned. Equality is the stronger check
+    # and it does not contain anti-vacuity; they are complementary, and an
+    # earlier version of this delta deleted the floor and lost exactly that.
+    # ⚠️ NOT GUARDED, and this is the honest half: nothing makes the DELETION of
+    # the equality visible — `assert expected == expected`, or an `expected`
+    # rebound to a copy of the left-hand side, both leave the module green
+    # (measured). Closing that means extracting this into a pure function driven
+    # by `test_each_tripwire_fires_on_degenerate_input`, which is what the
+    # tripwires below already do; it is not in this change.
+    # ⚠️ ALSO NOT GUARDED: this pins WHICH files arrive, not what is in them.
+    # 610 entries with empty contents stays green. (Handing it the same
+    # (path, text) pair 610 times does NOT — the left-hand set collapses to one
+    # element and the equality fires. An earlier comment here claimed otherwise.)
+    expected = {p for p in _tracked() if p.endswith(".py")}
+    arrived = {p for p, _ in files}
+    assert len(files) >= _MIN_CONCAT_FILES, (
+        f"only {len(files)} Python file(s) reached this scan. The cases above "
+        f"stay green on any corpus, so a narrowed one makes them mean nothing. "
+        f"⛔ Do not lower this floor to let a narrowing through; widen the "
+        f"corpus back.")
+    assert arrived == expected, (
+        f"the corpus handed to this scan is not the tracked Python set: "
+        f"{len(files)} entr(ies) arrived, {len(expected)} tracked `.py` files "
+        f"exist; missing={sorted(expected - arrived)[:5]} "
+        f"extra={sorted(arrived - expected)[:5]}. ⛔ Do not narrow this "
+        f"comparison to let a filter through; widen the corpus back.")
 
     offenders = _implicit_concat_offenders(files)
     assert not offenders, (
