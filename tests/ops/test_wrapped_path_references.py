@@ -607,6 +607,29 @@ def _names_a_file_through_its_basename(token: str, raw: str) -> str | None:
     marker or a bare slash is all that was glued on; the eighteenth is a real
     partial path, correctly let through because its basename is right there in
     the window.
+
+    ⚠️ THIS GATE HAS A REAL GAP AND IT WAS DELIBERATELY LEFT OPEN (#1579).
+    A RELATIVE spelling of our own path — `../<tracked path>`, and equally
+    `./`, `../../`, `/`, `//` — is not itself a tracked path, so it arrives
+    here rather than at `_resolves`; but it CONTAINS the real path, so when the
+    break falls inside it a full-path `git grep` loses the site while the
+    basename stays greppable and this gate stays silent. The gap is real.
+
+    ⛔ Closing it was implemented, measured and WITHDRAWN. Yielding the gate
+    when the rejoined window spells the real path reports zero extra sites on
+    this tree, and arms a false-positive surface of 545 contiguous occurrences
+    across 189 tracked files (`../../../` 225, `../../` 121, `./` 84, `../` 79,
+    `/` 30, plus deeper forms), concentrated in `docs/`, `README` and
+    `Makefile` — the prose that gets reflowed most. It fires on two adjacent
+    Markdown list items (a directory, then a file), which is the SECOND false
+    positive class this module's own docstring already lists; and the cheapest
+    ways back to green are one-character edits — change the bullet marker, add
+    a backtick, add a trailing space — each of which also silences a real
+    defect. A gate that teaches that edit is worse than the gap it closes.
+    ⚠️ Do not re-derive the armed surface from `../` and `./` alone: the first
+    attempt did, reported 97, and was wrong by more than fourfold because
+    `_is_a_spelling_of` drops EVERY `.`/`..`/empty segment, so every deeper
+    spelling is admitted too.
     """
     base = token.rsplit("/", 1)[-1]
     if base == token:
