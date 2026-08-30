@@ -308,6 +308,49 @@ def test_an_unusable_carrier_is_named_once_not_once_per_metric(
         f"than once per run: {result.stderr!r}")
 
 
+def test_the_dedup_is_process_wide_and_the_reset_clears_it(capsys):
+    """⛔ The one thing the end-to-end arm structurally CANNOT see.
+
+    The test above proves the tool names a carrier once per RUN. It cannot
+    prove anything about the dedup's carrier being a module-level set,
+    because every CLI invocation is a fresh process where that set starts
+    empty — "said twice" and "said once then reset" are indistinguishable
+    from outside. This drives both in-process.
+
+    ⚠️ It does NOT replace the end-to-end arm: that one is the evidence the
+    operator actually hears about a dropped carrier, through the real CLI.
+    This one covers the process-internal half.
+
+    ⛔ It also exists because `reset_dropped_carrier_warnings_for_test` had
+    ZERO callers — a test-only setter nobody calls is dead code by this
+    repo's own self-review rule, and its neighbour
+    (`reset_unlistable_warnings_for_test`) does have one. The coverage bot
+    is what surfaced it: every branch this file guards runs in a SUBPROCESS,
+    and coverage cannot see into one, so the whole group reads as uncovered
+    no matter how thoroughly the CLI exercises it.
+    """
+    bt = _import_backtest()
+    bt.reset_dropped_carrier_warnings_for_test()
+    try:
+        bt._warn_dropped_carrier("carrier-x", "a reason")
+        bt._warn_dropped_carrier("carrier-x", "a reason")
+        said_twice = capsys.readouterr().err
+        assert said_twice.count("carrier-x") == 1, (
+            f"the second call was not suppressed: {said_twice!r}")
+
+        bt.reset_dropped_carrier_warnings_for_test()
+        bt._warn_dropped_carrier("carrier-x", "a reason")
+        after_reset = capsys.readouterr().err
+        assert after_reset.count("carrier-x") == 1, (
+            f"the reset did not clear the dedup, so a test cannot drive this "
+            f"branch twice: {after_reset!r}")
+    finally:
+        # ⚠️ Idempotent reset, not save-and-restore: this set is process
+        # global, and leaving an entry behind would silence a warning a later
+        # test is asserting on.
+        bt.reset_dropped_carrier_warnings_for_test()
+
+
 @pytest.mark.parametrize("carrier,needle", [
     pytest.param(b"has\nnewline.yaml", "git quoted it", id="newline"),
     pytest.param(b'has"quote.yaml', "git quoted it", id="quote"),
