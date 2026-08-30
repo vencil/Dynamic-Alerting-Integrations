@@ -21,6 +21,22 @@
 # compiled binary, so the true effect is exactly 0% and every deviation is
 # measurement error. That is the point: it calibrates the instrument.
 #
+# WHICH BENCHMARKS (bench_re, added 2026-08-30)
+# =============================================
+# The selected set used to be hardcoded. It is now the `bench_re` dispatch
+# input, whose DEFAULT is byte-identical to that hardcoded regex, so a run that
+# does not pass it reproduces the historical sessions exactly.
+#
+# It was made selectable for one named question: #1497 reports that
+# `BenchmarkIncrementalLoad_1000_OneFileChanged` reads a 26-percentage-point
+# spread within a single day, while every control stays clean. That bench is NOT
+# in the original set, so the one control that would settle it — running it A/A,
+# where the true ratio is 1.000 by construction — could not be run at all.
+# ⚠️ A clean canary does NOT stand in for that: the canary is a pure CPU loop
+# (#1497 and the 2026-08-20 note on #1439 both measured a clean canary on nights
+# when this bench moved double digits), so it bounds the machine term, not this
+# benchmark's own dispersion.
+#
 # WHY workflow_dispatch ONLY
 # ==========================
 # One-off calibration, not a gate. No schedule, no push/PR trigger, no branch
@@ -57,6 +73,10 @@ on:
         description: "-test.benchtime"
         required: false
         default: "1s"
+      bench_re:
+        description: "Go -test.bench regex (RE2). The default is the four-benchmark calibration set this experiment shipped with — leave it alone to reproduce the historical sessions. Empty is REJECTED (rc=2): a run that measures nothing must not be green."
+        required: false
+        default: '^(BenchmarkResolveSilentModes_1000|BenchmarkScanDirFileHashes_1000|BenchmarkIncrementalLoad_1000_NoChange|BenchmarkFullDirLoad_1000)$'
 
 permissions:
   contents: read
@@ -111,6 +131,7 @@ jobs:
           ROUNDS: ${{ inputs.rounds }}
           COUNT: ${{ inputs.count }}
           BENCHTIME: ${{ inputs.benchtime }}
+          BENCH_RE: ${{ inputs.bench_re }}
         run: |
           set -euo pipefail
           # Validate BEFORE anything is created, both directions.
@@ -156,9 +177,38 @@ jobs:
           fi
           OUT="${RUNNER_TEMP}/aa/raw"
           mkdir -p "$OUT"
-          RE='^(BenchmarkResolveSilentModes_1000|BenchmarkScanDirFileHashes_1000|BenchmarkIncrementalLoad_1000_NoChange|BenchmarkFullDirLoad_1000)$'
+          # ⛔ 空的 bench_re 直接擋，不落回任何預設集合。「安靜地量了你沒要求的
+          #    東西」與「什麼都沒量卻是綠的」是同一類失敗,而上面 rounds 下界那段
+          #    註解已經說明過這支 workflow 特別怕後者。
+          if [ -z "${BENCH_RE:-}" ]; then
+            echo "::error::bench_re is empty — name what you want measured. The default is the four-benchmark calibration set this experiment shipped with."
+            exit 2
+          fi
+          # ⛔ `-test.list` 的**失敗**與「regex 選不到東西」必須分開報 —— 理由與
+          #    bench-workload-effect.yaml 的 cost guard 相同:兩者都收斂成 0 的話,
+          #    一個壞掉的測試執行檔會被報成「你的 regex 選不到 benchmark」,把人
+          #    送去改 regex,而真正的問題在別處。
+          if ! list_out=$( "${RUNNER_TEMP}/aa.test" -test.list="$BENCH_RE" 2>&1 ); then
+            echo "::error::-test.list failed — this is a regex-syntax or test-binary problem, NOT 'the regex selected nothing'. Verbatim output:"
+            printf '%s\n' "$list_out" | tail -20
+            exit 2
+          fi
+          NBENCH=$( printf '%s\n' "$list_out" | grep -c '^Benchmark' || true )
+          if [ "${NBENCH:-0}" -eq 0 ]; then
+            echo "::error::bench_re='${BENCH_RE}' selected 0 benchmarks — both sides would write empty files, and an empty measurement under a green job is exactly what this workflow must not produce."
+            exit 2
+          fi
+          echo "bench_re='${BENCH_RE}' selects ${NBENCH} benchmark(s)"
+          RE="$BENCH_RE"
           echo "start $(date -u +%FT%TZ) rounds=$ROUNDS count=$COUNT benchtime=$BENCHTIME" \
             > "${RUNNER_TEMP}/aa/timeline.txt"
+          # ⛔ 預算閘門用**實測投影**,不用模型。Go 的 N 探索每一步都重跑 benchmark
+          #    的 setup,所以 `rounds x 2 x count x benchtime` 這種樸素估算會低估:
+          #    本機實測 2 支 x count=4 x benchtime=3s 樸素下界 24s、實際 72.6s(3.0x)。
+          #    第一組 A+B 跑完就有真值,投影超預算即早停 —— 留下的是「跑了一組而且
+          #    說明白為什麼停」,而不是 60 分鐘 timeout 砍在中間、只剩半套資料。
+          BUDGET_S=3000
+          LOOP_T0=$SECONDS
           for r in $(seq 1 "$ROUNDS"); do
             for side in A B; do
               t0=$SECONDS
@@ -167,6 +217,17 @@ jobs:
               echo "round=$r side=$side wall=$((SECONDS-t0))s at=$(date -u +%FT%TZ)" \
                 >> "${RUNNER_TEMP}/aa/timeline.txt"
             done
+            if [ "$r" -eq 1 ]; then
+              PAIR_S=$(( SECONDS - LOOP_T0 ))
+              PROJ_S=$(( PAIR_S * ROUNDS ))
+              echo "round 1 (A+B) measured ${PAIR_S}s => projected ${ROUNDS} rounds ~= ${PROJ_S}s (budget ${BUDGET_S}s)"
+              echo "projected_total_s=${PROJ_S} budget_s=${BUDGET_S} measured_pair_s=${PAIR_S}" \
+                >> "${RUNNER_TEMP}/aa/timeline.txt"
+              if [ "$PROJ_S" -gt "$BUDGET_S" ]; then
+                echo "::error::projected ${PROJ_S}s > budget ${BUDGET_S}s. Round 1 is on disk and in the log; the rest is skipped. Lower rounds / count / benchtime, or narrow bench_re."
+                exit 2
+              fi
+            fi
           done
           echo "done $(date -u +%FT%TZ)" >> "${RUNNER_TEMP}/aa/timeline.txt"
           tail -5 "${RUNNER_TEMP}/aa/timeline.txt"
