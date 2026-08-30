@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: platform
 created_at: 2026-08-23
-updated_at: 2026-08-29
+updated_at: 2026-08-30
 ---
 
 # ADR-034: 合法值不得同時當作無法辨識時的 fallback
@@ -25,7 +25,7 @@ updated_at: 2026-08-29
 - **問題**：當一個設定的合法值**同時**被拿來當「認不得就用這個」的 fallback，打錯字的輸入就與那個合法值**完全不可區分**。
 - 如果那個設定決定了某道檢查跑不跑，後果是**檢查被關掉，而啟動當下沒有可辨別的訊號**。
 - **決定**：這類設定必須先對照合法值集合驗證，驗不過就報錯，不得落到 fallback。
-- 本 ADR 本身**不修任何東西**，兩個已量到的案例各自開票：`--write-mode`（[#1559](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1559)，**仍未修**）與 `envBool`（[#1599](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1599)，**已修於 [#1624](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1624)**）。後者同時觸發了本 ADR 自訂的修訂條件，機械檢查已隨該輪補上——見末節。
+- 本 ADR 本身**不修任何東西**，兩個已量到的案例各自開票，兩張都已修：`envBool`（[#1599](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1599)，**已修於 [#1624](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1624)**）與 `--write-mode`（[#1559](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1559)，**已修於本規則昇格 `accepted` 之後**）。前者同時觸發了本 ADR 自訂的修訂條件，機械檢查已隨該輪補上——見末節。⚠️ 那支檢查抓不到案例一：它掃的是 Go 生產碼裡自製的 truthy-string 解析器，而 `--write-mode` 的缺陷是「一個 `switch` 沒有對照合法值集合」，形狀不同。**兩個已知實例都修完了，不代表這條規則現在有機械保證**。
 
 ## 問題
 
@@ -93,7 +93,7 @@ default:                  → 直接 commit
 
 ⚠️ 這條規則**不主張**其他靜默 fallback 都是好的。它只主張：在這個交集裡，靜默 fallback 一定是錯的。交集之外，本 ADR 沒有意見。
 
-## 案例一：`--write-mode`（未修）
+## 案例一：`--write-mode`（已修）
 
 即上一節。逐條套規則：
 
@@ -107,6 +107,14 @@ default:                  → 直接 commit
 **最小修法**：解讀前先比對合法值集合，不在集合內就啟動失敗。追蹤於 [#1559](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1559)，七個輸入的實測輸出在該票。
 
 ⚠️ **終態必須是報錯**——「先出一版只警告」等於仍舊落到合法值上再多印一行 log，而本文的論證正是那行 log 不可靠。過渡要怎麼排（要不要先警告一版、警告多久）是那張票的 rollout 決定，但不改變終態。
+
+**已於本規則生效後修正**（`parseWriteMode` + `wirePRBackend`）。三件值得記下的，因為它們是「套用本規則」在真實程式碼上的具體形狀：
+
+- **`default:` 分支不再是任何合法值的家。** `direct` 升為具名 `case`，`default:` 改成 `log.Fatalf("BUG: ...")`。這一步不是為了擋使用者輸入（那由 `parseWriteMode` 擋掉了），而是擋**下一次的自己**：往合法值集合加第五個模式卻忘了配線，會 fail-loud，而不是無聲落回 direct commit-on-write——那正是本 ADR 講的同一個形狀，只是往上挪了一層。
+- **空白 trim，大小寫不 trim。** 兩者看似對稱，判準卻不同：trim 空白不會把無法辨識的值變成合法值（`" pr-guthub "` 照樣被拒），這條界線是案例二的 doc comment 先寫下的，這裡沿用；折疊大小寫則會（`PR` → `pr`），而且沒有標準庫的既有契約可繼承——那是程式在猜意圖。⇒ `PR` / `DIRECT` 一律拒絕。
+- ⚠️ **這件事有代價，且它不在原票的預期內**：一個今天寫 `TA_WRITE_MODE=DIRECT` 的部署，現在拿到的**就是**它想要的 direct，修法後會直接開不起來。它不是「帶著打錯字在跑」——原票的 rollout 段只設想了後者。
+
+**rollout**：repo 內量到的面積是零，所以沒有出警告過渡版。逐項見 §證據與限制。
 
 ## 案例二：`envBool`（已修，並觸發本 ADR 的修訂條件）
 
@@ -177,12 +185,14 @@ default:                  → 直接 commit
 
 **跑過指令、看過輸出的**：
 
-- `--write-mode` 的 switch 只有三條臂、第四個合法值 `direct` 即 `default` 分支
-- 合法值集合定義在 `internal/handler/deps.go`，且沒有任何地方把輸入與它比對
-- `default` 分支印的就是 `slog.Info("direct write mode (commit-on-write)")` 那一行本身——所以與合法 `direct` 的輸出必然相同
+⛔ **以下前三條描述的是修法前的 `wirePRBackend`，不是現行程式碼**——案例一已於 2026-08-30 修正，這些是本 ADR 據以成立的原始觀察，保留為證據而非現況。想知道現在長什麼樣，讀 `parseWriteMode` 與其 doc comment。
+
+- （修法前）`--write-mode` 的 switch 只有三條臂、第四個合法值 `direct` 即 `default` 分支
+- （修法前）合法值集合定義在 `internal/handler/deps.go`，且沒有任何地方把輸入與它比對
+- （修法前）`default` 分支印的就是 `slog.Info("direct write mode (commit-on-write)")` 那一行本身——所以與合法 `direct` 的輸出必然相同
 - `dev-rules.md` 內「不得靜默 X」語氣的規則共四處，且各自綁定場景
 - **（本輪補測）** 直接呼叫 `wirePRBackend` 餵七個輸入（六個錯的 + `direct`），全部回傳 `mode="direct"` 且 `slog` 輸出逐字相同——見 [#1559](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1559)
-- **（本輪補測）** `--write-mode` 從 flag 到 `prBackendFlags.Mode` 全程沒有 `TrimSpace`，所以前導／尾隨空白確實會落到 `default`
+- **（本輪補測，修法前）** `--write-mode` 從 flag 到 `prBackendFlags.Mode` 全程沒有 `TrimSpace`，所以前導／尾隨空白確實會落到 `default`。⚠️ 修法**改變了這一條**：`parseWriteMode` 現在 trim 前後空白，所以 `" pr"` 會被接受並正規化為 `pr`，而不是拒絕——判準與理由見案例一
 - **（本輪補測）** 合法的 PR 值在缺 token 時走 `log.Fatalf`——**這個元件已經會在啟動期硬失敗，只有 `default` 那條沒有**
 
 **（2026-08-29 補測，隨案例二與本次昇格）**：
@@ -192,11 +202,18 @@ default:                  → 直接 commit
 - helm chart 的 tenant-api container 走 `args:` bare flag，其 `env:` 區段不含那五個 `TA_*` ⇒ **官方 k8s 部署路徑不經過 `envBool`**
 - 新增的 lint 在導入時對整個 repo 零命中，其 self-test 以 #1624 前 `envBool` 的真實原始碼作反空轉見證
 
-**⚠️ 仍未量到的**：repo 外的現場部署有幾個帶著上述輸入——這與起草時 §後果 列的是同一格，兩輪都沒能量到。
+**（2026-08-30 補測，隨案例一修正）**：
+
+- **（修法前的基線，不是修法後的行為）** 動工前先重跑案例一的實測，在**本機 go1.26.4** 上直接呼叫當時尚未修改的真實 `wirePRBackend`（非複製邏輯），十個輸入（原票七個 + `Direct` / `DIRECT` / `pr-gitlab-x`）**全部**回傳 `mode="direct"`，`slog` 輸出逐字相同——起草時記的形狀成立，這是修法要消滅的那個狀態。⚠️ **修法後同一組輸入的結果完全不同**：`direct` 仍是 `direct`，`" pr"` / `"pr "` 經 trim 後成為 `pr`，其餘七個一律拒絕啟動——釘在 `cmd/server/writemode_test.go` 的契約表
+- ⭐ 其中 `Direct` / `DIRECT` 是原票沒列的一類：它們的使用者**要的就是 direct、而且拿到了**，修法後會從「正常運作」變成「開不起來」。原票 rollout 段只設想了「帶著打錯字在跑」的部署
+- **rollout 面積盤點**：helm chart 的 tenant-api container 既不傳 `--write-mode`，`env:` 區段也不含 `TA_WRITE_MODE`，且全 chart 無 `extraEnv` / `extraArgs` 逃生門（`grep` rc=1）⇒ **官方 helm 部署路徑沒有任何方式能設出一個非法值**。repo 內其餘實際值只有 try-local compose 的 `TA_WRITE_MODE: direct` 與文件範例，全部是合法小寫值 ⇒ **repo 內面積為零，因此不出警告過渡版**
+- 修法的 mutation 驗證：把 `parseWriteMode` 還原成 pre-#1559 的靜默 fallback，三個測試轉紅（`rc=1`）——見 [#1559](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1559)
+
+**⚠️ 仍未量到的**：repo 外的現場部署有幾個帶著上述輸入——這與起草時 §後果 列的是同一格，**三輪都沒能量到**。案例一的 rollout 決定因此是建立在「repo 內為零」之上，不是「現場為零」。
 
 **⚠️ 沒有實際重現的**：
 
-- **沒有真的啟動整個服務程序**。上述實測是直接呼叫 `wirePRBackend` 這個函式，涵蓋了「輸入如何被解讀」與「印出什麼日誌」，但沒有跑完整個 `main()` 的啟動流程。
+- **沒有真的啟動整個服務程序**。上述實測是直接呼叫 `wirePRBackend` 這個函式，涵蓋了「輸入如何被解讀」與「印出什麼日誌」，但沒有跑完整個 `main()` 的啟動流程。案例一的修正沿用同一個邊界：fatal 路徑是用 subprocess 跑該測試自身、斷言 exit code 非零，不是啟動 tenant-api。
 
 ## 盤點時另外發現的缺陷（**不是本規則的實例**）
 

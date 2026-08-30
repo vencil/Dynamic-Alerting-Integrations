@@ -15,6 +15,7 @@ package main
 // middle.
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"log/slog"
@@ -44,21 +45,80 @@ type prBackendFlags struct {
 	ReloadInterval time.Duration // tracker poll cadence
 }
 
+// errWriteModeUnknown carries the operator-facing reason a --write-mode /
+// TA_WRITE_MODE value was rejected. Split out from wirePRBackend so the
+// parse contract is testable without the process-exit the real call site
+// needs (#1559), the same split parseEnvBool/envBool uses in main.go.
+var errWriteModeUnknown = errors.New("not one of the four write-back modes")
+
+// writeModeLegalValues is the set --write-mode is checked against. The four
+// values already existed as constants in internal/handler; what was missing
+// was any code comparing the input to them.
+var writeModeLegalValues = []handler.WriteMode{
+	handler.WriteModeDirect,
+	handler.WriteModePR,
+	handler.WriteModePRGitHub,
+	handler.WriteModePRGitLab,
+}
+
+// parseWriteMode resolves one raw --write-mode / TA_WRITE_MODE value against
+// the legal-value set.
+//
+// ADR-034: `direct` is both a legal value and — before #1559 — the `default:`
+// arm every unrecognized input landed on, running the same code and printing
+// the same startup line as a deliberate `--write-mode=direct`. A deployment
+// that believed every write went through review had no signal at startup that
+// it did not. So an input outside the set must be rejected, not resolved.
+//
+// Two deliberate calls about what counts as "outside the set":
+//
+//   - Surrounding whitespace is trimmed, matching parseEnvBool in main.go and
+//     for the same reason: env vars are routinely produced by YAML or Compose,
+//     where trailing whitespace is carrier noise rather than operator intent.
+//     Trimming cannot turn an unrecognized value into a legal one — " pr-guthub "
+//     is still rejected — so it does not reopen the gap ADR-034 closes.
+//   - Case is NOT folded. "PR" and "DIRECT" are rejected. Unlike the bool path,
+//     where strconv.ParseBool's own contract already accepts TRUE/True, there is
+//     no standard-library parser here whose case handling to inherit, and every
+//     legal value in the chart, the README and the flag's own usage string is
+//     lowercase. Folding case would be this code guessing at intent, which is
+//     the habit ADR-034 argues against.
+//
+// An empty value is rejected too. It cannot mean "operator said nothing" at
+// this point: main.go resolves the flag default through envOrDefault, so an
+// unset or empty TA_WRITE_MODE has already become "direct" before it gets
+// here. Empty here means someone passed --write-mode= explicitly.
+func parseWriteMode(raw string) (handler.WriteMode, error) {
+	wm := handler.WriteMode(strings.TrimSpace(raw))
+	for _, legal := range writeModeLegalValues {
+		if wm == legal {
+			return wm, nil
+		}
+	}
+	return "", errWriteModeUnknown
+}
+
 // wirePRBackend resolves the PR-mode variant, builds the
 // corresponding platform.Client + platform.Tracker, and returns the
 // normalized WriteMode. Direct mode returns (nil, nil, WriteModeDirect).
 //
-// On missing required env vars / flags the helper calls log.Fatalf —
-// matching pre-PR-5 behavior. Token-validation failures are logged at
-// WARN (the deployment may have a deferred secret rotation; PR ops
-// will surface the auth failure when actually invoked).
+// On an unrecognized write mode, or missing required env vars / flags, the
+// helper calls log.Fatalf — matching pre-PR-5 behavior. Token-validation
+// failures are logged at WARN (the deployment may have a deferred secret
+// rotation; PR ops will surface the auth failure when actually invoked).
 func wirePRBackend(f prBackendFlags) (platform.Client, platform.Tracker, handler.WriteMode) {
-	wm := handler.WriteMode(f.Mode)
+	wm, err := parseWriteMode(f.Mode)
+	if err != nil {
+		log.Fatalf("FATAL: --write-mode (or TA_WRITE_MODE) = %q is %v — accepted: direct, pr, pr-github, pr-gitlab. "+
+			"Refusing to start rather than falling back to direct commit-on-write, because that fallback is "+
+			"indistinguishable from a deliberate --write-mode=direct, down to the startup log line (ADR-034).",
+			f.Mode, err)
+	}
 	switch wm {
 	case handler.WriteModePR, handler.WriteModePRGitHub:
-		// Normalize "pr" alias → "pr-github" so downstream comparisons
-		// don't have to handle both. This was the v2.6.0 behavior;
-		// preserving it.
+		// Normalize the "pr-github" spelling → "pr" so downstream
+		// comparisons don't have to handle both. This was the v2.6.0
+		// behavior; preserving it.
 		wm = handler.WriteModePR
 		ghToken := os.Getenv("TA_GITHUB_TOKEN")
 		if ghToken == "" {
@@ -101,8 +161,17 @@ func wirePRBackend(f prBackendFlags) (platform.Client, platform.Tracker, handler
 		slog.Info("gitlab MR write-back mode enabled", "project", f.GitLabProject, "target", f.GitLabBranch)
 		return glClient, gl.NewTracker(glClient, f.ReloadInterval), wm
 
-	default:
+	case handler.WriteModeDirect:
 		slog.Info("direct write mode (commit-on-write)")
+		return nil, nil, handler.WriteModeDirect
+
+	default:
+		// Unreachable while writeModeLegalValues and these cases agree.
+		// It stops them silently disagreeing: a fifth mode added to the
+		// legal-value set but not given an arm here would otherwise land
+		// on direct commit-on-write — the exact ADR-034 shape #1559 is
+		// about, reintroduced one level up.
+		log.Fatalf("BUG: write-mode %q passed validation but has no wiring arm (ADR-034)", wm)
 		return nil, nil, handler.WriteModeDirect
 	}
 }
