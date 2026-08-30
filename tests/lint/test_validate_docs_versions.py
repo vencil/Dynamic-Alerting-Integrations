@@ -2235,6 +2235,22 @@ class TestBilingualNumbersReadsRealCounts:
                    "confirm the v3 alert is on the list\n")
         assert mod.check_bilingual_number_consistency() == []
 
+    def test_the_root_readme_alias_is_not_compared_twice(self):
+        """`docs/README-root.*` are symlinks to the root READMEs.
+
+        ⛔ The checker adds the root README pair explicitly, so without this
+        skip the same document is compared twice — and the second comparison
+        is platform-dependent: a checkout without symlink support reads a
+        12-byte path string, CI reads the real file. Nine other places in the
+        repo already treat these two as aliases; this loop was the one reader
+        that never learned it.
+        ⚠️ Asserts membership rather than a cell count: the census differs by
+        platform, which is precisely the thing being removed.
+        """
+        assert "README-root.md" in mod.SKIP_BILINGUAL_NUMBER_FILES, (
+            "the root-README alias would be compared twice, and the second "
+            "comparison reads different bytes on Windows than on CI")
+
     def test_one_sided_counts_stay_silent(self, tmp_path, monkeypatch):
         """⚠️ Disclosed boundary, pinned so it cannot change by accident.
 

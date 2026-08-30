@@ -284,7 +284,18 @@ SKIP_RULE_PACK_FILES = {"CHANGELOG.md", "CHANGELOG.en.md", "benchmarks.md",
                         "benchmarks.en.md"}
 
 # Bilingual number consistency skips these
-SKIP_BILINGUAL_NUMBER_FILES = {"benchmarks.md", "CHANGELOG.md"}
+# ⛔ `README-root.md` is an ALIAS, not a document: `docs/README-root.{md,en.md}`
+# are mode-120000 symlinks to the root READMEs, which this checker already adds
+# as a pair on its own. Without the skip the root README is compared TWICE, and
+# the census becomes platform-dependent — a checkout without symlink support
+# reads a 12-byte path string (all SILENT) where CI reads the real file (four
+# cells AGREE). Nine other places already treat these two as aliases
+# (`check_bilingual_structure` skips symlinks, `check_doc_links` resolve()s
+# them, `DOC_MAP_SKIP_NAMES` lists it, `.pre-commit-config.yaml` excludes it);
+# this loop was the one reader that never learned it.
+# ⚠️ Measured when added: warnings change by ZERO. What goes away is the
+# duplicate comparison, not a detection.
+SKIP_BILINGUAL_NUMBER_FILES = {"benchmarks.md", "CHANGELOG.md", "README-root.md"}
 
 # doc-map coverage check skips these directories and files.
 #
