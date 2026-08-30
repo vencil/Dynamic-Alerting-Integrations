@@ -159,6 +159,30 @@ func TestMatrixStillCoversWhatThesePredicatesCanGetWrong(t *testing.T) {
 			},
 		},
 		{
+			why: "a mixed-case STEM on the `.yaml` branch specifically — the two " +
+				"extension branches are separate code paths in every classifier " +
+				"here, and a reviewer measured that with only ONE mixed-stem row " +
+				"the floors stayed green while a fold applied to just the other " +
+				"branch silently renamed a tenant on the write plane",
+			match: func(r matrixRow) bool {
+				return r.YAMLExtension && !r.ReservedPrefix && !r.Hidden &&
+					strings.HasSuffix(strings.ToLower(r.Name), ".yaml") &&
+					r.Stem != strings.ToLower(r.Stem)
+			},
+		},
+		{
+			why: "a mixed-case STEM on the `.yml` branch specifically — the two " +
+				"extension branches are separate code paths in every classifier " +
+				"here, and a reviewer measured that with only ONE mixed-stem row " +
+				"the floors stayed green while a fold applied to just the other " +
+				"branch silently renamed a tenant on the write plane",
+			match: func(r matrixRow) bool {
+				return r.YAMLExtension && !r.ReservedPrefix && !r.Hidden &&
+					strings.HasSuffix(strings.ToLower(r.Name), ".yml") &&
+					r.Stem != strings.ToLower(r.Stem)
+			},
+		},
+		{
 			why: "a name that IS exactly a YAML extension (`.yaml`) — it carries the " +
 				"extension and is excluded by being hidden, which is the one row that " +
 				"separates `has an extension` from `is a tenant carrier`",

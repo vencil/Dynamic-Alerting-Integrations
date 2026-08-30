@@ -148,6 +148,21 @@ func TestEmit_TwoTenantsCollidingOnOneCarrierNameSayWhoWasDisplaced(t *testing.T
 	// ⛔ `first` alone is not enough to satisfy this: the round-trip warning
 	// already names it. Requiring the SOURCE RULE ID of the displaced
 	// document is what makes this assertion specific to the collision.
+	// ⛔ FIRST, assert on the surviving BYTES. A mutation reviewer measured that
+	// asserting only on the warning text let a keep-first regression through:
+	// the message embeds the PREVIOUS owner's descriptor either way, so it
+	// still read "only the last one survives" while the file on disk held the
+	// FIRST writer's document. A guard that says the opposite of the truth is
+	// worse than no guard, and an operator reading that message stops looking.
+	body := string(out.Files["conf.d/dom/a-b.yaml"])
+	if !strings.Contains(body, second+":") {
+		t.Errorf("the surviving document at %q does not belong to %q, the tenant "+
+			"written last.\n"+
+			"  the warning this test also checks says only the last one survives; if "+
+			"the bytes say otherwise the operator is being told the opposite of the "+
+			"truth.\n  content was:\n%s", "conf.d/dom/a-b.yaml", second, body)
+	}
+
 	displacedRule := "s.yaml#g[0].r[0]" // `first` is written first, so it loses
 	if w := warningNaming(out.Warnings, second, displacedRule); w == "" {
 		t.Errorf("tenants %q and %q collapse onto one carrier and NO single warning "+
@@ -306,5 +321,183 @@ func TestEmit_OneTenantWithTwoRulesIsNotReportedAsTwoTenants(t *testing.T) {
 			"ONE tenant with two member rules:\n  %s\n"+
 			"  an operator reading that goes hunting for a second tenant that does "+
 			"not exist — and the emitter has both ids in hand.", w)
+	}
+}
+
+// oddOneOutProposal builds a THREE-member proposal in which two ordinary
+// tenants share a threshold and `odd` differs.
+//
+// ⛔ THE SHAPE MATTERS AND IT WAS MEASURED THE HARD WAY. The translated
+// emission writes a per-tenant carrier only for tenants whose threshold
+// DIFFERS from the cluster default (`PerTenantOverrides`; matching tenants
+// fall through to `_defaults.yaml` — the ADR-018 §1 anti-pattern fix). A
+// two-member fixture makes the first member's value the default, so the very
+// tenant under test gets no carrier and the guard is never reached: the first
+// version of the tests below failed for that reason, not because the guard was
+// missing. That is "verified in a place the input cannot reach", the dead end
+// this family has now paid for four times.
+func oddOneOutProposal(odd string) (*ProposalSet, []parser.ParsedRule) {
+	mk := func(id, rid, thr string) parser.ParsedRule {
+		return parser.ParsedRule{
+			SourceRuleID: rid,
+			Alert:        "HighCPU",
+			Expr:         `avg(rate(node_cpu_seconds_total{tenant="` + id + `"}[5m])) > ` + thr,
+			For:          "5m",
+			Labels:       map[string]string{"tenant": id, "severity": "warning"},
+			Dialect:      parser.DialectProm,
+		}
+	}
+	rules := []parser.ParsedRule{
+		mk("common-one", "s.yaml#g[0].r[0]", "0.50"),
+		mk("common-two", "s.yaml#g[0].r[1]", "0.50"),
+		mk(odd, "s.yaml#g[0].r[2]", "0.97"),
+	}
+	ps := &ProposalSet{Proposals: []ExtractionProposal{{
+		MemberRuleIDs: []string{
+			"s.yaml#g[0].r[0]", "s.yaml#g[0].r[1]", "s.yaml#g[0].r[2]",
+		},
+		SharedExprTemplate: `avg(rate(node_cpu_seconds_total{tenant="<STR>"}[<NUM>m]))><NUM>`,
+		SharedFor:          "5m",
+		SharedLabels:       map[string]string{"severity": "warning"},
+		VaryingLabelKeys:   []string{"tenant"},
+		Dialect:            string(parser.DialectProm),
+		Confidence:         ConfidenceHigh,
+		Reason:             "three members sharing one template",
+	}}}
+	return ps, rules
+}
+
+func emitTranslatedFor(t *testing.T, ps *ProposalSet, rules []parser.ParsedRule) *EmissionOutput {
+	t.Helper()
+	out, err := EmitProposals(EmissionInput{
+		ProposalSet: ps,
+		AllRules:    rules,
+		Layout:      EmissionLayout{ProposalDirs: []string{"dom"}, RootPrefix: "conf.d/"},
+		Translate:   true,
+	})
+	if err != nil {
+		t.Fatalf("EmitProposals(Translate): %v", err)
+	}
+	return out
+}
+
+// requireTranslatedAndReached fails rather than skips when the fixture did not
+// actually exercise the translated per-tenant write. ⛔ A silent skip here
+// would leave a green test that measured nothing — the translator falls back
+// to the intermediate shape per proposal, and a tenant matching the default
+// gets no carrier at all.
+func requireTranslatedAndReached(t *testing.T, out *EmissionOutput) {
+	t.Helper()
+	defaults := string(out.Files["conf.d/dom/_defaults.yaml"])
+	if !strings.Contains(defaults, "defaults:") {
+		t.Fatalf("the translator fell back to the intermediate shape, so the "+
+			"translated per-tenant path was never taken and this case measured "+
+			"nothing.\n  _defaults.yaml was:\n%s", defaults)
+	}
+	// At least one ordinary per-tenant override must have been written, or the
+	// per-tenant loop produced nothing and the guard could not have run.
+	if _, ok := out.Files["conf.d/dom/common-one.yaml"]; ok {
+		t.Fatalf("fixture drift: %q was expected to MATCH the cluster default and "+
+			"so get no carrier; the odd-one-out shape no longer holds and this "+
+			"case is measuring something else.\n  files: %v",
+			"common-one", sortedCarrierKeys(out.Files))
+	}
+}
+
+// TestEmit_TranslatedPathCarriesTheSameGuards closes a blind spot a mutation
+// reviewer measured: `emitTranslatedProposal` calls putTenantCarrier too, but
+// EVERY other case here leaves `Translate` at its zero value, and every
+// existing `Translate: true` test uses ordinary non-colliding ids. Ripping the
+// guard out of the translated call site entirely produced zero failures.
+//
+// ⛔ That is the path most likely to matter going forward — it is the
+// conf.d-ready shape (ADR-018 / PR-3), taken whenever the translator can lift
+// a numeric threshold out of the member rules. A customer on that path with a
+// mangled or colliding tenant id would hit the exact pre-fix defect class this
+// whole change exists to close, silently.
+func TestEmit_TranslatedPathCarriesTheSameGuards(t *testing.T) {
+	t.Parallel()
+
+	t.Run("round trip", func(t *testing.T) {
+		t.Parallel()
+		ps, rules := oddOneOutProposal("a/b")
+		out := emitTranslatedFor(t, ps, rules)
+		requireTranslatedAndReached(t, out)
+
+		if _, ok := out.Files["conf.d/dom/a-b.yaml"]; !ok {
+			t.Fatalf("the odd-one-out tenant got no carrier on the translated path, "+
+				"so the guard was never reached; files: %v", sortedCarrierKeys(out.Files))
+		}
+		if w := warningNaming(out.Warnings, "a/b", "a-b.yaml"); w == "" {
+			t.Errorf("on the TRANSLATED path, tenant %q emits carrier %q and no "+
+				"warning names both — the guard is wired to the intermediate path "+
+				"only.\n  warnings: %v", "a/b", "a-b.yaml", out.Warnings)
+		}
+	})
+
+	t.Run("chain carrier refusal", func(t *testing.T) {
+		t.Parallel()
+		ps, rules := oddOneOutProposal("_defaults")
+		out := emitTranslatedFor(t, ps, rules)
+		requireTranslatedAndReached(t, out)
+
+		defaults := string(out.Files["conf.d/dom/_defaults.yaml"])
+		if strings.Contains(defaults, "tenants:") {
+			t.Errorf("on the TRANSLATED path the chain carrier holds a per-tenant "+
+				"override block — tenant %q's document overwrote the shared "+
+				"structure.\n  content was:\n%s", "_defaults", defaults)
+		}
+		if w := warningNaming(out.Warnings, "_defaults", "refused"); w == "" {
+			t.Errorf("on the TRANSLATED path the chain-carrier write was not refused "+
+				"with a named warning.\n  warnings: %v", out.Warnings)
+		}
+	})
+}
+
+// TestEmit_AThreeWayCollisionNamesTheDocumentItActuallyDisplaced locks in that
+// the owners map is updated on EVERY write, not just the first.
+//
+// ⛔ A mutation reviewer measured that making it first-write-only left the
+// suite green while the warning for the THIRD write blamed the first writer —
+// naming a document that was already gone rather than the one it destroyed.
+// `a/b`, `a-b` and `a\b` all map to the same carrier name.
+func TestEmit_AThreeWayCollisionNamesTheDocumentItActuallyDisplaced(t *testing.T) {
+	t.Parallel()
+	mk := func(id, rid, thr string) parser.ParsedRule {
+		return parser.ParsedRule{
+			SourceRuleID: rid,
+			Alert:        "HighCPU",
+			Expr:         `avg(rate(node_cpu_seconds_total{tenant="` + id + `"}[5m])) > ` + thr,
+			For:          "5m",
+			Labels:       map[string]string{"tenant": id, "severity": "warning"},
+			Dialect:      parser.DialectProm,
+		}
+	}
+	rules := []parser.ParsedRule{
+		mk("a/b", "s.yaml#g[0].r[0]", "0.11"),
+		mk("a-b", "s.yaml#g[0].r[1]", "0.22"),
+		mk(`a\b`, "s.yaml#g[0].r[2]", "0.33"),
+	}
+	ps := &ProposalSet{Proposals: []ExtractionProposal{{
+		MemberRuleIDs: []string{
+			"s.yaml#g[0].r[0]", "s.yaml#g[0].r[1]", "s.yaml#g[0].r[2]",
+		},
+		SharedExprTemplate: `avg(rate(node_cpu_seconds_total{tenant="<STR>"}[<NUM>m]))><NUM>`,
+		SharedFor:          "5m",
+		SharedLabels:       map[string]string{"severity": "warning"},
+		VaryingLabelKeys:   []string{"tenant"},
+		Dialect:            string(parser.DialectProm),
+		Confidence:         ConfidenceHigh,
+		Reason:             "three members sharing one template",
+	}}}
+	out := emitOneProposalFor(t, ps, rules)
+
+	// The third write must blame the SECOND writer's rule, not the first's.
+	if w := warningNaming(out.Warnings, "s.yaml#g[0].r[2]", "s.yaml#g[0].r[1]"); w == "" {
+		t.Errorf("the third colliding write does not name the document it actually "+
+			"displaced (%s, written by the second writer).\n"+
+			"  ⛔ naming the FIRST writer instead points the operator at a document "+
+			"that was already gone.\n  warnings: %v",
+			"s.yaml#g[0].r[1]", out.Warnings)
 	}
 }
