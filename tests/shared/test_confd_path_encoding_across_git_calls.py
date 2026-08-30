@@ -50,6 +50,7 @@ import http.server
 import json
 import os
 import pathlib
+import re
 import socketserver
 import subprocess
 import sys
@@ -239,22 +240,39 @@ def test_an_unusable_carrier_is_named_once_not_once_per_metric(
     _git(repo, "config", "user.name", "t")
     _git(repo, "config", "core.quotepath", "true")
     path = os.fsencode(str(repo)) + b"/conf.d/" + INVALID_UTF8_CARRIER
-    # TWO thresholds removed, so the filter sees two changes for one carrier.
+    # Two thresholds removed and NOTHING added: an added key is a change too,
+    # so an `after` body that introduces one makes the count 3 rather than 2.
+    # ⚠️ The first version of this fixture wrote `other_key: 1` here and the
+    # comment claimed "two changes"; blind review measured 3. The number was
+    # asserted, not counted — the very habit the rest of this change exists to
+    # correct. The count is now pinned below rather than described.
     with open(path, "wb") as handle:
         handle.write(_BEFORE % b"acme")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", "before")
     with open(path, "wb") as handle:
-        handle.write(b"tenants:\n  acme:\n    other_key: 1\n")
+        handle.write(b"tenants:\n  acme:\n")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", "after")
+
+    # ⛔ THE DISCRIMINATION GUARD, and it deliberately does NOT go through the
+    # warning count. The warning count is the thing the dedup suppresses, so
+    # using it to prove the fixture can discriminate would be proving the
+    # premise with the conclusion: if this tree ever yields ONE change,
+    # `said == 1` passes with the dedup and without it, and the test decays
+    # into a vacuous one silently. Count the changes at the source instead.
+    diff = subprocess.run(
+        ("git", "diff", "HEAD~1", "--unified=0", "--", "conf.d/"),
+        cwd=str(repo), capture_output=True, timeout=60).stdout
+    changed = [ln for ln in diff.splitlines()
+               if re.match(rb"^[-+]\s+\w+:\s+.+$", ln)]
+    assert len(changed) >= 2, (
+        f"this tree yields {len(changed)} change line(s); with fewer than two "
+        f"the dedup cannot be observed at all: {changed!r}")
 
     result = _run_cli(repo, prom_url)
     assert result.returncode == 0, result.stderr
     said = result.stderr.count("not valid UTF-8")
-    # ⛔ VACUITY GUARD: if the fixture only produced one change, this test
-    # would pass with or without the dedup and prove nothing.
-    assert said >= 1, f"the carrier was not named at all: {result.stderr!r}"
     assert said == 1, (
         f"the same carrier was named {said} times — once per metric rather "
         f"than once per run: {result.stderr!r}")
