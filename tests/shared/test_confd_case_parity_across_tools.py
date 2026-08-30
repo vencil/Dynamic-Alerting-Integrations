@@ -1278,3 +1278,693 @@ def test_offboard_precheck_explains_a_tenant_whose_config_is_unusable(
     assert "找不到設定檔案" in text, (
         f"fixture did not reach the not-found branch, so the assertion above "
         f"would be vacuous.\n{text[:800]}")
+
+
+# ── the readers the population walk could never reach ─────────────────
+#
+# ⛔ #1588's body listed five tools as "same shape, NOT individually
+# reproduced". Re-measured on `05d3136` — after the fix for the six that
+# WERE reproduced had shipped — four of the five were still divergent, and
+# each had escaped this file by a DIFFERENT route:
+#
+#   check_threshold_unit_sanity  not in ALL_TOOLS: exposes no conf.d flag,
+#                                so `collect_confd_tools` cannot see it. Its
+#                                root is a `run_check(root=)` argument.
+#   batch_diagnose               not in ALL_TOOLS for the same reason, and
+#                                its carrier is a ConfigMap KEY rather than
+#                                a directory entry — the same
+#                                filename->tenant question on another
+#                                surface, which no filesystem fixture
+#                                reaches.
+#   backtest_threshold           IN the population but parked in
+#                                KNOWN_INSENSITIVE: the CLI needs
+#                                `--baseline` as well, and without it the
+#                                A/B produced identical output in both arms
+#                                and the tool was filed as having no
+#                                discriminating power.
+#   run_chaos_soak               IN the population but parked in
+#                                KNOWN_UNMEASURABLE: argparse demands
+#                                `--target-url` / `--output-dir`.
+#
+# ⚠️ Two of those four skip sets are still correct AS STATEMENTS ABOUT THE
+# CLI — this section does not empty them, it stops them from being the
+# only thing that was asked. `KNOWN_INSENSITIVE`'s own comment already
+# said "this is not a clean bill of health"; the hole it declared went
+# four commits without anybody re-asking, which is the part worth pinning.
+#
+# Each test below asserts BOTH arms and then asserts the lower arm was
+# non-empty, because an A/B whose lower arm produces nothing reports
+# parity for a fixture with no discriminating power — the exact way the
+# first measurement of `check_threshold_unit_sanity` came back clean.
+
+_CASE_ARMS = (("lower", "db-a.yaml"), ("UPPER", "DB-A.YAML"))
+_TENANT_BODY = "tenants:\n  acme:\n    cpu_usage: 80\n"
+
+
+def _import_tool(subdir: str, module: str):
+    """Import a tool module by name, with its own sys.path expectations."""
+    import importlib  # noqa: PLC0415
+    for extra in (str(TOOLS_DIR / subdir), str(TOOLS_DIR)):
+        if extra not in sys.path:
+            sys.path.insert(0, extra)
+    return importlib.import_module(module)
+
+
+def test_unit_sanity_gate_reads_both_casings(tmp_path: pathlib.Path) -> None:
+    """⛔ A lint gate that returns green because the carrier was upper-cased
+    is worse than no gate: it reports a clean bill for a file it never
+    opened. Measured before the fix: `_defaults.yaml` -> 1 OUT-OF-DOMAIN
+    error, `_DEFAULTS.YAML` -> 0, same body.
+    """
+    import yaml as _yaml  # noqa: PLC0415
+    gate = _import_tool("lint", "check_threshold_unit_sanity")
+    registry = {"version": 1,
+                "packs": {"t": {"k": {"value": 50, "unit": "%",
+                                      "tier": "defaults"}}}}
+    body = _yaml.safe_dump({"defaults": {"k": 300}}, allow_unicode=True)
+    counts = {}
+    for arm, fname in _CASE_ARMS:
+        root = tmp_path / arm
+        confd = root / "components/threshold-exporter/config/conf.d"
+        confd.mkdir(parents=True)
+        (confd / fname).write_text(body, encoding="utf-8")
+        # ⛔ NEIGHBOURS, and they are what makes this test able to fail in
+        # both directions. Blind review measured the first version: with
+        # only the one carrier in the directory, deleting the extension
+        # filter OUTRIGHT left this test green, because "accept everything"
+        # and "accept the right thing" produce the same output on a
+        # directory holding exactly one file.
+        #   `neighbour.txt`  MUST NOT be read (it is not a config carrier)
+        #   `db-c.yml`       MUST be read — this gate's declared set is
+        #                    BOTH spellings, so dropping `.yml` is also a
+        #                    regression and gets its own direction here.
+        (confd / "neighbour.txt").write_text(body, encoding="utf-8")
+        (confd / "db-c.yml").write_text(body, encoding="utf-8")
+        errs = gate.run_check(registry=registry, root=str(root))["errors"]
+        counts[arm] = errs
+    assert counts["lower"], (
+        "fixture is vacuous: the lower arm produced no violation, so the "
+        "comparison below would pass for a gate that reads nothing")
+    for arm in ("lower", "UPPER"):
+        named = sorted(e.split(":")[1].strip().rsplit("/", 1)[-1]
+                       for e in counts[arm])
+        assert len(counts[arm]) == 2, (
+            f"[{arm}] expected exactly the two YAML carriers to be read "
+            f"(the tenant file and `db-c.yml`), got {len(counts[arm])}: "
+            f"{named}. Three means the extension filter stopped filtering; "
+            f"one means `.yml` stopped being read.\n{counts[arm]}")
+        assert "neighbour.txt" not in named, (
+            f"[{arm}] the gate read a non-config file: {named}")
+    assert len(counts["UPPER"]) == len(counts["lower"]), (
+        f"the gate saw {len(counts['lower'])} violation(s) under "
+        f"`db-a.yaml` and {len(counts['UPPER'])} under `DB-A.YAML`; the "
+        f"bodies are identical.\nlower: {counts['lower']}\n"
+        f"UPPER: {counts['UPPER']}")
+
+
+def test_batch_diagnose_discovers_tenants_from_either_casing(
+        monkeypatch) -> None:
+    """The carrier is a ConfigMap KEY, and the keys ARE the conf.d
+    filenames — so the exporter's filename->tenant rule applies to them.
+    Measured before the fix: `db-a.yaml` -> ['db-a'], `DB-A.YAML` -> [],
+    i.e. every tenant vanished from the report and the run still exited 0.
+    """
+    import json as _json  # noqa: PLC0415
+    import contextlib  # noqa: PLC0415
+    import io  # noqa: PLC0415
+    mod = _import_tool("ops", "batch_diagnose")
+    found, noise = {}, {}
+    for arm, fname in _CASE_ARMS:
+        # ⛔ Three neighbours, one per filter this loop applies, so that
+        # deleting any of them turns this test red rather than leaving it
+        # green on a one-key ConfigMap (blind review measured that hole):
+        #   `_defaults.yaml`  reserved — never a tenant
+        #   `README.md`       not a config carrier at all
+        #   `db-c.yml`        the SPELLING axis: `.yaml`-only is this
+        #                     tool's declared set (widening it is #1603),
+        #                     and `config_stem` internally accepts BOTH
+        #                     spellings — so if the outer filter is ever
+        #                     dropped, a `.yml` key silently becomes a
+        #                     tenant. That is pinned here, not assumed.
+        payload = _json.dumps(
+            {"data": {fname: _TENANT_BODY,
+                      "_defaults.yaml": "d: {}\n",
+                      "README.md": "# notes\n",
+                      "db-c.yml": _TENANT_BODY}})
+
+        class _Result:
+            returncode = 0
+            stdout = payload
+            stderr = ""
+
+        monkeypatch.setattr(mod.subprocess, "run",
+                            lambda *a, **k: _Result())
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            found[arm] = mod.discover_tenants()
+        noise[arm] = err.getvalue()
+    assert found["lower"] == ["db-a"], (
+        f"fixture is vacuous — the lower arm found {found['lower']}")
+    # ⛔ Compare the SHAPE, not the strings: `config_stem` preserves the
+    # carrier's case on purpose (folding it would rename the tenant on the
+    # write plane only), so the two arms legitimately carry different ids.
+    assert len(found["UPPER"]) == len(found["lower"]), (
+        f"upper-cased ConfigMap keys yielded {found['UPPER']} against "
+        f"{found['lower']} for the identical body")
+    assert found["UPPER"] == ["DB-A"], (
+        f"the tenant id must keep the key's original case; got "
+        f"{found['UPPER']}")
+    # ⛔ The `_defaults.yaml` neighbour above does NOT pin the reserved
+    # filter through the RETURN VALUE — `config_stem` answers "" for it
+    # either way, so deleting `is_reserved_name` leaves the list identical.
+    # Blind review measured what it does change: a spurious
+    # "carries no tenant id" warning for the platform defaults key, on
+    # every run. That is what this assertion pins.
+    for arm in ("lower", "UPPER"):
+        assert noise[arm] == "", (
+            f"[{arm}] discover_tenants wrote to stderr on a ConfigMap whose "
+            f"keys are all legitimate; a reserved key is expected, not a "
+            f"finding: {noise[arm]!r}")
+
+
+def test_backtest_sees_threshold_changes_under_either_casing(
+        tmp_path: pathlib.Path) -> None:
+    """⛔ This one fails in the direction that reads as good news: a
+    backtest reporting "no threshold changes" for a change that IS there.
+    Measured before the fix: 1 change vs 0.
+    """
+    mod = _import_tool("ops", "backtest_threshold")
+    seen = {}
+    for arm, fname in _CASE_ARMS:
+        cur, old = tmp_path / arm / "cur", tmp_path / arm / "old"
+        cur.mkdir(parents=True)
+        old.mkdir(parents=True)
+        # ⛔ Every neighbour carries the SAME edit, so anything that stops
+        # filtering shows up as an extra change rather than as nothing —
+        # the one-file fixture this replaced went green when the extension
+        # filter was deleted outright (blind review measured it).
+        for where, value in ((old, 80), (cur, 95)):
+            body = f"tenants:\n  acme:\n    cpu_usage: {value}\n"
+            (where / fname).write_text(body, encoding="utf-8")
+            (where / "neighbour.txt").write_text(body, encoding="utf-8")
+            (where / "db-c.yml").write_text(body, encoding="utf-8")
+            # ⛔ A `.`-prefixed carrier: `config_stem` answers "" for it,
+            # and the first version USED that answer without checking, so
+            # this file produced a change whose tenant was the empty
+            # string — worse than `05d3136`, which at least said `.foo`.
+            # A surviving mutant until this neighbour existed.
+            (where / ".hidden.yaml").write_text(body, encoding="utf-8")
+            (where / "_defaults.yaml").write_text(
+                f"defaults:\n  cpu_usage: {value}\n", encoding="utf-8")
+        seen[arm] = mod.extract_changes_from_dirs(str(cur), str(old))
+    assert seen["lower"], "fixture is vacuous — the lower arm found no change"
+    for arm in ("lower", "UPPER"):
+        tenants = sorted({c["tenant"] for c in seen[arm]})
+        assert len(tenants) == 1, (
+            f"[{arm}] exactly one carrier is a tenant here; the `.txt`, the "
+            f"`.yml` (spelling axis is #1603) and the reserved "
+            f"`_defaults.yaml` must all be skipped. Got {tenants}")
+    assert len(seen["UPPER"]) == len(seen["lower"]), (
+        f"upper-cased carrier yielded {len(seen['UPPER'])} change(s) against "
+        f"{len(seen['lower'])} for the same edit")
+    # The stem must be stripped in both arms: a report naming a tenant
+    # called `DB-A.YAML` is the silent miss turned into a loud wrong answer.
+    assert {c["tenant"] for c in seen["UPPER"]} == {"DB-A"}, (
+        f"tenant id kept its extension: "
+        f"{sorted(c['tenant'] for c in seen['UPPER'])}")
+
+
+def test_chaos_soak_perturbs_a_carrier_under_either_casing(
+        tmp_path: pathlib.Path) -> None:
+    """A soak that never fires a reload still writes a full run report, so
+    the exercise reads as "hot-reload survived N hours" having never
+    reloaded once. Measured before the fix: True vs False.
+    """
+    mod = _import_tool("dx", "run_chaos_soak")
+    fired = {}
+    for arm, fname in _CASE_ARMS:
+        confd = tmp_path / arm / "conf.d"
+        confd.mkdir(parents=True)
+        carrier = confd / fname
+        carrier.write_text(_TENANT_BODY, encoding="utf-8")
+        # ⛔ Neighbours that MUST NOT be the file this perturbs. Asserting
+        # only "something fired" cannot tell the right carrier from the
+        # wrong one, and `trigger_reload` writes to whichever entry it
+        # matches FIRST — so a filter that stopped filtering would edit an
+        # operator's `neighbour.txt` and still report success.
+        others = {}
+        for name, body in (("neighbour.txt", "not a config\n"),
+                           ("db-c.yml", _TENANT_BODY),
+                           ("_defaults.yaml", "defaults:\n  cpu_usage: 80\n")):
+            (confd / name).write_text(body, encoding="utf-8")
+            others[name] = body
+        fired[arm] = (mod.trigger_reload(confd),
+                      "# soak-toggle" in carrier.read_text(encoding="utf-8"))
+        untouched = {n: (confd / n).read_text(encoding="utf-8") == b
+                     for n, b in others.items()}
+        assert all(untouched.values()), (
+            f"[{arm}] the soak perturbed a file that is not its tenant "
+            f"carrier: {sorted(n for n, ok in untouched.items() if not ok)}")
+    assert fired["lower"] == (True, True), (
+        f"fixture is vacuous — the lower arm did not perturb anything: "
+        f"{fired['lower']}")
+    assert fired["UPPER"] == fired["lower"], (
+        f"upper-cased carrier: {fired['UPPER']} against {fired['lower']} "
+        f"(fired, carrier_actually_written)")
+
+
+def test_backtest_names_an_unreadable_config_dir_instead_of_raising(
+        tmp_path: pathlib.Path, monkeypatch) -> None:
+    """⛔ The case fix above swapped `glob("*.yaml")` for `iterdir()`, and
+    the two disagree on a directory that cannot be READ — not one that is
+    missing. `glob` swallows the scandir failure and yields nothing;
+    `iterdir()` raises straight out of `main()`, before the Prometheus
+    availability check, so `--skip-if-unavailable` cannot contain it and
+    the `--json` contract loses its one document. Measured as a non-root
+    uid on a `chmod 000` conf.d: `05d3136` exited 2 with "Prometheus not
+    reachable", the first version of the fix exited 1 with a
+    `PermissionError` traceback.
+
+    ⚠️ `is_dir()` is NOT the guard for this: it answers True for an
+    unreadable directory. The right answer is already settled in
+    `_lib_confd.unusable_config_paths` — raising kills callers that
+    iterate outside a `try`, `[]` is "a green light for a directory
+    nothing ever read", so NAME it.
+
+    ⚠️ Monkeypatched rather than `chmod`-driven, for the reason
+    `test_lib_confd.py` gives for the same scenario: this suite runs as
+    root in the dev container, where the permission bits do not apply.
+    """
+    mod = _import_tool("ops", "backtest_threshold")
+    confd = tmp_path / "conf.d"
+    confd.mkdir()
+    (confd / "db-a.yaml").write_text(_TENANT_BODY, encoding="utf-8")
+    baseline = tmp_path / "baseline"
+    baseline.mkdir()
+
+    real_iterdir = pathlib.Path.iterdir
+
+    def deny(self):
+        if os.fspath(self) == os.fspath(confd):
+            raise PermissionError(13, "Permission denied", str(self))
+        return real_iterdir(self)
+
+    monkeypatch.setattr(pathlib.Path, "iterdir", deny)
+
+    captured: list[str] = []
+    monkeypatch.setattr(
+        mod, "warn_nested", lambda *a, **k: False)  # its own walk, not ours
+    import io  # noqa: PLC0415
+    import contextlib  # noqa: PLC0415
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        changes = mod.extract_changes_from_dirs(str(confd), str(baseline))
+    captured.append(err.getvalue())
+
+    assert changes == [], (
+        f"an unreadable config dir must not invent changes; got {changes}")
+    assert str(confd) in captured[0], (
+        f"the unreadable directory was skipped SILENTLY — that is the "
+        f"green light this whole line of work exists to remove.\n"
+        f"stderr was: {captured[0]!r}")
+    assert "PermissionError" in captured[0], (
+        f"the warning must name the errno that was actually caught, not a "
+        f"re-probed guess; got {captured[0]!r}")
+    assert "were NOT scanned" in captured[0], (
+        f"the warning must say the report that follows is INCOMPLETE; "
+        f"got {captured[0]!r}")
+
+
+# ── the sites the first counterfactual did not reach ──────────────────
+#
+# ⛔ Blind review measured this: the fix touched SIX filename sites in
+# `backtest_threshold.py`, the commit counted "of 4", and reverting three
+# of them left the whole suite green. The one that was not counted was
+# also the one still broken. The four tests above cover exactly one of
+# those sites (`extract_changes_from_dirs`); these cover the rest.
+
+def _git_conf_d_repo(root: pathlib.Path, carrier: str,
+                     before: str, after: str) -> pathlib.Path:
+    """A git repo whose `conf.d/<carrier>` changes between HEAD~1 and HEAD."""
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "conf.d").mkdir()
+    run = lambda *a: subprocess.run(  # noqa: E731
+        a, cwd=root, capture_output=True, timeout=60)
+    run("git", "init", "-q")
+    run("git", "config", "user.email", "t@example.invalid")
+    run("git", "config", "user.name", "t")
+    # ⛔ Two neighbours carrying the SAME edit, one per axis this path must
+    # not confuse with the tenant carrier:
+    #   `db-c.yml`       the spelling axis (#1603) — `.yaml`-only is what
+    #                    every site here accepts, and blind review measured
+    #                    that claim unguarded at sites 1, 3 and 5.
+    #   `.hidden.yaml`   the hidden axis — the exporter's scanner skips
+    #                    `.`-prefixed entries, and this chain SPLIT this
+    #                    path against itself by aligning the diff parser
+    #                    without aligning the listing beside it. With the
+    #                    split present, `changed_conf_files` below returns
+    #                    two entries and the assertions go red.
+    for name, body in ((carrier, before), ("db-c.yml", before),
+                       (".hidden.yaml", before)):
+        (root / "conf.d" / name).write_text(body, encoding="utf-8")
+    run("git", "add", "-A")
+    run("git", "commit", "-qm", "before")
+    for name, body in ((carrier, after), ("db-c.yml", after),
+                       (".hidden.yaml", after)):
+        (root / "conf.d" / name).write_text(body, encoding="utf-8")
+    run("git", "add", "-A")
+    run("git", "commit", "-qm", "after")
+    return root
+
+
+_BEFORE = "tenants:\n  acme:\n    cpu_usage: 80\n    mem_usage: 70\n"
+_AFTER_REMOVED = "tenants:\n  acme:\n    mem_usage: 70\n"
+
+
+def test_git_diff_path_reports_a_removal_under_either_casing(
+        tmp_path: pathlib.Path, monkeypatch) -> None:
+    """⛔ The REMOVAL direction — a threshold being taken away, i.e. an
+    alert being disabled — through the `--git-diff` mode CI actually runs.
+
+    Three sites at once: `changed_conf_files`, the diff parser's tenant
+    extraction, and the HEAD~1 lookup that classifies a removal. The last
+    one re-SPELLED the carrier from the tenant id (`{tenant}.yaml`), and
+    because `config_stem` preserves case on purpose, an upper-cased
+    carrier made `git show` fail and the removal was dropped. Measured:
+    the operator saw "No threshold changes found." for a removal that was
+    really there — on `05d3136` AND on the first version of the fix.
+    """
+    mod = _import_tool("ops", "backtest_threshold")
+    kept = {}
+    for arm, carrier in (("lower", "db-a.yaml"), ("UPPER", "DB-A.YAML")):
+        repo = _git_conf_d_repo(tmp_path / arm, carrier,
+                                _BEFORE, _AFTER_REMOVED)
+        monkeypatch.chdir(repo)
+        files = mod.changed_conf_files()
+        parsed = mod.load_conf_files(files)
+        raw = mod.extract_changes_from_git_diff()
+        kept[arm] = (files, sorted(parsed),
+                     [(c["tenant"], c["metric"]) for c in
+                      mod.keep_flat_threshold_changes(raw, parsed)],
+                     sorted({c["tenant"] for c in raw}))
+    assert kept["lower"][2] == [("db-a", "cpu_usage")], (
+        f"fixture is vacuous — the lower arm reported {kept['lower']}")
+    # ⛔ Assert the three sites SEPARATELY. Asserting only the final
+    # `kept` list left `changed_conf_files` uncovered: a removal is
+    # classified against HEAD~1, not against `parsed`, so reverting that
+    # site to a case-sensitive test made the file list empty and the end
+    # result was still right. Measured — it was a surviving mutant.
+    for arm, carrier, tid in (("lower", "db-a.yaml", "db-a"),
+                              ("UPPER", "DB-A.YAML", "DB-A")):
+        assert kept[arm][0] == [f"conf.d/{carrier}"], (
+            f"[{arm}] `changed_conf_files` did not see the carrier git "
+            f"itself reported as changed; got {kept[arm][0]}")
+        assert kept[arm][1] == [tid], (
+            f"[{arm}] the changed file did not parse into its tenant; "
+            f"got {kept[arm][1]}")
+        # ⛔ The PARSER's own output, separately. Widening site 1's
+        # spelling set is invisible in `kept` — the `.yml` neighbour's
+        # removal is dropped later anyway, by sites 3 and 5, which still
+        # accept `.yaml` only. A surviving mutant until this assertion
+        # existed; the axis has to be pinned where it is decided.
+        assert kept[arm][3] == [tid], (
+            f"[{arm}] the git-diff parser attributed changes to "
+            f"{kept[arm][3]}; the `.yml` neighbour carries the same edit "
+            f"and this site accepts `.yaml` only (#1603)")
+    assert len(kept["UPPER"][2]) == len(kept["lower"][2]), (
+        f"the removal survived under `db-a.yaml` and was dropped under "
+        f"`DB-A.YAML`.\nlower: {kept['lower']}\nUPPER: {kept['UPPER']}")
+    assert kept["UPPER"][2] == [("DB-A", "cpu_usage")], (
+        f"tenant id must keep the carrier's case; got {kept['UPPER'][2]}")
+
+
+def test_config_dir_recipe_scan_sees_either_casing(
+        tmp_path: pathlib.Path) -> None:
+    """The fourth site: `main()`'s own `--config-dir` scan, which feeds the
+    custom-alert notice. It is a SEPARATE listing from
+    `extract_changes_from_dirs`, so the tests above cannot reach it — and
+    reverting it alone left the suite green.
+
+    Driven through the CLI because that is the only way this site runs.
+    """
+    def _recipe_body(tenant: str) -> str:
+        return (f"tenants:\n  {tenant}:\n    cpu_usage: 80\n"
+                f"    _custom_alerts:\n      - recipe: threshold\n")
+
+    bodies = _recipe_body("acme")
+    seen = {}
+    for arm, carrier in (("lower", "db-a.yaml"), ("UPPER", "DB-A.YAML")):
+        cur, base = tmp_path / arm / "cur", tmp_path / arm / "base"
+        cur.mkdir(parents=True)
+        base.mkdir(parents=True)
+        (cur / carrier).write_text(bodies, encoding="utf-8")
+        (base / carrier).write_text(bodies, encoding="utf-8")
+        # ⛔ Three neighbours whose tenants must NOT reach the notice, one
+        # per filter this site applies. Blind review deleted this site's
+        # extension filter outright and the suite stayed green while a
+        # `.txt` file put a tenant called `ghost` in front of the operator;
+        # and it measured this tool answering the HIDDEN axis one way here
+        # and another way in `extract_changes_from_dirs`.
+        # `_defaults.yaml` carries a `tenants:` block on purpose: that is
+        # the only shape in which the reserved rule is OBSERVABLE here (a
+        # defaults carrier without one contributes no tenant either way,
+        # so dropping the rule would be an equivalent mutant and the
+        # neighbour would pin nothing). Measured as a surviving mutant
+        # until this shape was used.
+        for name, tenant in (("neighbour.txt", "ghost_txt"),
+                             (".hidden.yaml", "ghost_hidden"),
+                             ("db-c.yml", "ghost_yml"),
+                             ("_defaults.yaml", "ghost_reserved")):
+            (cur / name).write_text(_recipe_body(tenant), encoding="utf-8")
+            (base / name).write_text(_recipe_body(tenant), encoding="utf-8")
+        r = subprocess.run(
+            [sys.executable, "-X", "utf8",
+             str(TOOLS_DIR / "ops" / "backtest_threshold.py"),
+             "--config-dir", str(cur), "--baseline", str(base),
+             "--skip-if-unavailable", "--json"],
+            capture_output=True, timeout=180, cwd=str(tmp_path),
+            env=dict(os.environ, PYTHONIOENCODING="utf-8"))
+        seen[arm] = r.stderr.decode("utf-8", "replace")
+    assert "_custom_alerts" in seen["lower"], (
+        f"fixture is vacuous — the lower arm printed no recipe notice:\n"
+        f"{seen['lower'][:400]}")
+    for arm in ("lower", "UPPER"):
+        assert "acme" in seen[arm], (
+            f"[{arm}] the recipe-bearing tenant was not seen by the "
+            f"--config-dir scan:\n{seen[arm][:400]}")
+        assert "1 tenant(s)" in seen[arm], (
+            f"[{arm}] exactly one carrier here is a tenant; a `.txt`, a "
+            f"`.`-prefixed, a `.yml` and a reserved `_defaults.yaml` "
+            f"neighbour must all be skipped by THIS site, the same way the "
+            f"comparison scan skips them.\n"
+            f"{seen[arm][:400]}")
+        for ghost in ("ghost_txt", "ghost_hidden", "ghost_yml",
+                      "ghost_reserved"):
+            assert ghost not in seen[arm], (
+                f"[{arm}] `{ghost}` reached the operator-facing notice from "
+                f"a carrier this site must not read:\n{seen[arm][:400]}")
+
+
+def test_config_dir_scan_still_lists_a_config_named_directory(
+        tmp_path: pathlib.Path) -> None:
+    """⛔ The `is_file()` axis (#1607) must stay OUT of this change.
+
+    ⚠️ SCOPE, stated exactly, because the first version of this docstring
+    overstated it: this pins the LISTING HELPER, not the two call sites.
+    Blind review added `is_file()` at both call sites and the suite stayed
+    green — and then measured that the mutant is behaviourally EQUIVALENT
+    in this tool today, because `load_yaml_file` and `load_conf_files`
+    each apply their own `is_file()` downstream. So there is nothing to
+    observe at the call sites; the guard belongs where the axis is
+    decided, and that is here. `glob("*.yaml")` returned a directory named
+    `notes.yaml/`, so the replacement must too.
+    """
+    mod = _import_tool("ops", "backtest_threshold")
+    tree = tmp_path / "conf.d"
+    tree.mkdir()
+    (tree / "notes.yaml").mkdir()
+    (tree / "db-a.yaml").write_text(_BEFORE, encoding="utf-8")
+    listed = [p.name for p in mod._confd_entries(tree)]
+    assert "notes.yaml" in listed, (
+        f"a config-named DIRECTORY dropped out of the listing; that is the "
+        f"#1607 axis smuggled into a case fix. Listed: {listed}")
+    assert "db-a.yaml" in listed, f"fixture is vacuous: {listed}"
+
+
+def test_backtest_names_an_unreadable_config_dir_once_per_run(
+        tmp_path: pathlib.Path, monkeypatch) -> None:
+    """⛔ Said once per RUN, not once per scan.
+
+    `--config-dir` lists the tree TWICE (the recipe scan in `main`, the
+    comparison in `extract_changes_from_dirs`), and the first version of
+    the unreadable-directory warning printed on both. Measured through the
+    CLI as a non-root uid against a `chmod 000` conf.d: two identical
+    lines. This file already states the rule for every other reader —
+    "A repeated warning trains the operator to skim past it, which costs
+    the signal the report exists to give."
+    """
+    mod = _import_tool("ops", "backtest_threshold")
+    mod.reset_unlistable_warnings_for_test()
+    confd = tmp_path / "conf.d"
+    confd.mkdir()
+    real_iterdir = pathlib.Path.iterdir
+
+    def deny(self):
+        if os.fspath(self) == os.fspath(confd):
+            raise PermissionError(13, "Permission denied", str(self))
+        return real_iterdir(self)
+
+    monkeypatch.setattr(pathlib.Path, "iterdir", deny)
+    monkeypatch.setattr(mod, "warn_nested", lambda *a, **k: False)
+
+    import contextlib  # noqa: PLC0415
+    import io  # noqa: PLC0415
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        mod._confd_entries(confd)
+        mod._confd_entries(confd)
+    hits = err.getvalue().count("could not be listed")
+    assert hits == 1, (
+        f"the unreadable root was named {hits} time(s) across two scans of "
+        f"the same run; the contract is once.\n{err.getvalue()!r}")
+
+
+def test_head1_carrier_lookup_keeps_the_yaml_only_spelling(
+        tmp_path: pathlib.Path, monkeypatch) -> None:
+    """⛔ The spelling axis (#1603) at the HEAD~1 carrier lookup.
+
+    `_carrier_at_head1` resolves a tenant id back to the file git actually
+    holds. Its docstring says `.yaml` ONLY — widening it would let a
+    `.yml` carrier answer for a tenant this tool otherwise cannot see, i.e.
+    it would make the removal path report a change from a file no other
+    site in this tool reads. Blind review measured that claim to have no
+    guard: widening it left the whole suite green.
+    """
+    mod = _import_tool("ops", "backtest_threshold")
+    repo = _git_conf_d_repo(tmp_path / "yml-only", "db-a.yml",
+                            _BEFORE, _AFTER_REMOVED)
+    monkeypatch.chdir(repo)
+    assert mod._carrier_at_head1("db-a") is None, (
+        "a `.yml` carrier answered for the tenant; that is the spelling "
+        "axis (#1603) widened inside a case fix")
+    # ...and the control: the same lookup DOES find the spelling it accepts,
+    # so the assertion above is not passing for want of any carrier at all.
+    repo2 = _git_conf_d_repo(tmp_path / "yaml", "DB-A.YAML",
+                             _BEFORE, _AFTER_REMOVED)
+    monkeypatch.chdir(repo2)
+    assert mod._carrier_at_head1("DB-A") == "./conf.d/DB-A.YAML", (
+        "fixture is vacuous — the accepted spelling was not found either")
+    # ⛔ And the comparison is EXACT, not case-folded. `config_stem` keeps
+    # the carrier's case on purpose, so a folded compare here would hand
+    # back a DIFFERENT tenant's file — the write-plane rename this whole
+    # line of work exists to prevent, arriving through the back door.
+    # Blind review measured the folded version passing the suite.
+    assert mod._carrier_at_head1("db-a") is None, (
+        "`db-a` resolved to a carrier whose stem is `DB-A`; the stem "
+        "comparison must be exact, not case-folded")
+
+
+def test_git_diff_path_gives_one_answer_about_a_hidden_carrier(
+        tmp_path: pathlib.Path, monkeypatch) -> None:
+    """⛔ One process, one file, one answer.
+
+    This chain aligned `extract_changes_from_git_diff` on the hidden axis
+    and left the two listings beside it alone, so the tool contradicted
+    ITSELF inside a single run — `changed_conf_files` and
+    `load_conf_files` both reported `.hidden`, while the parser had
+    stopped producing changes for it. Measured against `05d3136`, which
+    was consistent the other way (it kept the carrier everywhere):
+
+        05d3136   KEPT = [('.hidden','cpu_usage'), ('real','cpu_usage')]
+        the split KEPT = [('real','cpu_usage')]
+                  changed_conf_files = ['conf.d/.hidden.yaml',
+                                        'conf.d/real.yaml']
+
+    Producing that split inside the change whose whole subject is "one
+    tree, one answer" is the sharpest way to get this wrong, and blind
+    review had already caught the identical split one code path over.
+    """
+    mod = _import_tool("ops", "backtest_threshold")
+    repo = tmp_path / "hidden"
+    (repo / "conf.d").mkdir(parents=True)
+    run = lambda *a: subprocess.run(  # noqa: E731
+        a, cwd=repo, capture_output=True, timeout=60)
+    run("git", "init", "-q")
+    run("git", "config", "user.email", "t@example.invalid")
+    run("git", "config", "user.name", "t")
+    for value in (80, 95):
+        (repo / "conf.d" / ".hidden.yaml").write_text(
+            f"tenants:\n  ghost:\n    cpu_usage: {value}\n", encoding="utf-8")
+        (repo / "conf.d" / "real.yaml").write_text(
+            f"tenants:\n  real:\n    cpu_usage: {value}\n", encoding="utf-8")
+        run("git", "add", "-A")
+        run("git", "commit", "-qm", str(value))
+    monkeypatch.chdir(repo)
+
+    files = mod.changed_conf_files()
+    parsed = mod.load_conf_files(files)
+    kept = mod.keep_flat_threshold_changes(
+        mod.extract_changes_from_git_diff(), parsed)
+    tenants = sorted({c["tenant"] for c in kept})
+
+    assert tenants == ["real"], (
+        f"fixture is vacuous or the visible tenant vanished; got {tenants}")
+    assert files == ["conf.d/real.yaml"], (
+        f"the listing still names a hidden carrier the parser will not "
+        f"produce changes for: {files}")
+    assert sorted(parsed) == ["real"], (
+        f"the loader still keys a hidden carrier: {sorted(parsed)}")
+    # ⛔ And `load_conf_files` INDEPENDENTLY. Asserting it only through the
+    # list `changed_conf_files` hands it cannot see the loader's own rule:
+    # once the listing filters hidden carriers out, reverting the loader
+    # changes nothing and the mutant survives. Measured — it did.
+    direct = mod.load_conf_files([
+        str(repo / "conf.d" / ".hidden.yaml"),
+        str(repo / "conf.d" / "real.yaml"),
+    ])
+    assert sorted(direct) == ["real"], (
+        f"`load_conf_files` keyed a hidden carrier it was handed directly: "
+        f"{sorted(direct)}")
+
+
+def test_batch_diagnose_names_a_configmap_key_that_carries_no_tenant(
+        monkeypatch) -> None:
+    """⛔ The branch that DROPS a key must be walked by a test.
+
+    `discover_tenants` skips a key whose `config_stem` is empty and says so
+    on stderr. Nothing exercised that branch: the parity test above hands it
+    only legitimate keys and asserts stderr stays CLEAN, so the `if not
+    tenant:` arm was an `if` with no test walking it — the repo's own
+    self-review checklist calls that hidden dead code, and the coverage bot
+    measured it as a 100.0% -> 98.7% regression on this file.
+
+    Why the branch has to stay: the symptom of the bug this whole change is
+    about was a tenant quietly missing from the report, so a dropped key is
+    exactly the thing that must not be silent.
+    """
+    import contextlib  # noqa: PLC0415
+    import io  # noqa: PLC0415
+    import json as _json  # noqa: PLC0415
+    mod = _import_tool("ops", "batch_diagnose")
+    payload = _json.dumps({"data": {"db-a.yaml": _TENANT_BODY,
+                                    ".hidden.yaml": _TENANT_BODY}})
+
+    class _Result:
+        returncode = 0
+        stdout = payload
+        stderr = ""
+
+    monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: _Result())
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        found = mod.discover_tenants()
+    noise = err.getvalue()
+
+    assert found == ["db-a"], (
+        f"the hidden key became a tenant, or the visible one vanished: "
+        f"{found}")
+    assert ".hidden.yaml" in noise, (
+        f"the dropped key was skipped SILENTLY; the whole point of this "
+        f"change is that a vanished tenant must be audible.\n{noise!r}")
+    assert "carries no tenant id" in noise, (
+        f"the warning must say WHY the key was dropped; got {noise!r}")

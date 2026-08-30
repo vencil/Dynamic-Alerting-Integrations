@@ -43,6 +43,11 @@ from diagnose import check as diagnose_check  # noqa: E402
 from diagnose import query_prometheus  # noqa: E402
 from _lib_python import format_json_report, write_json_secure, add_prometheus_arg  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_confd import (  # noqa: E402
+    config_stem,
+    has_yaml_extension,
+    is_reserved_name,
+)
 
 
 def discover_tenants(namespace="monitoring", configmap="threshold-config"):
@@ -70,11 +75,36 @@ def discover_tenants(namespace="monitoring", configmap="threshold-config"):
         print(f"ERROR: {exc}", file=sys.stderr)
         return []
 
+    # #1588: the carrier here is a ConfigMap KEY, not a directory entry —
+    # but the key names ARE the conf.d filenames, so this is the same
+    # filename->tenant-id question the exporter's scanner answers, asked on
+    # a different carrier. It was answered with yet another hand-written
+    # copy of the rule, and a case-SENSITIVE one: measured with a synthetic
+    # ConfigMap holding one tenant key, `db-a.yaml` -> ['db-a'] while
+    # `DB-A.YAML` -> [], i.e. every tenant in the report vanished and the
+    # run still exited 0.
+    #
+    # ⚠️ The accepted spelling stays `.yaml` ONLY. The ConfigMap projection
+    # is not the conf.d tree and nobody has measured what it does with a
+    # `.yml` carrier; widening it here would be the extension-SPELLING axis
+    # (#1603) smuggled into a case fix.
     data_keys = list(cm_data.get("data", {}).keys())
     tenants = []
     for key in data_keys:
-        if key.endswith(".yaml") and not key.startswith("_"):
-            tenants.append(key.removesuffix(".yaml"))
+        if not has_yaml_extension(key, (".yaml",)) or is_reserved_name(key):
+            continue
+        tenant = config_stem(key)
+        if not tenant:
+            # `config_stem` also declines `.`-prefixed names, which the old
+            # `startswith("_")` test let through as a tenant called
+            # `.hidden`. The exporter's scanner skips hidden entries too, so
+            # agreeing with it is right — but a dropped key must not be
+            # silent, because the symptom of the bug above was exactly a
+            # tenant quietly missing from the report.
+            print(f"WARNING: ConfigMap key {key!r} carries no tenant id — "
+                  f"skipped", file=sys.stderr)
+            continue
+        tenants.append(tenant)
     return sorted(tenants)
 
 

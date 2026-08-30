@@ -767,7 +767,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "039e64a94c0c354fb59775163b9caf966946fd5efabe11acafe6114458f578d4",
+ "source_digest": "14a3117c43856b823ddf5192699b061acea03bdf643c842287162ec4bd5688d1",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1427,7 +1427,8 @@
    "tests/dx/test_compile_custom_alerts.py",
    "tests/lint/test_check_threshold_reachability.py",
    "tests/ops/test_ci_baseline_substitution.py",
-   "tests/ops/test_guard_defaults_scopes.py"
+   "tests/ops/test_guard_defaults_scopes.py",
+   "tests/shared/test_confd_case_parity_across_tools.py"
   ],
   "components/threshold-exporter/config/conf.d/_defaults.yaml": [
    "tests/lint/test_check_threshold_reachability.py",
@@ -2533,6 +2534,9 @@
   ],
   "scripts/tools/ops/alert_quality.py": [
    "tests/shared/test_help_contract.py"
+  ],
+  "scripts/tools/ops/backtest_threshold.py": [
+   "tests/shared/test_confd_case_parity_across_tools.py"
   ],
   "scripts/tools/ops/bench-canary/canary_test.go": [
    "tests/dx/test_analyze_bench_history.py",

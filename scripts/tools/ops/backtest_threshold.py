@@ -51,7 +51,13 @@ from _lib_python import load_yaml_file, is_disabled, http_get_json, query_promet
 from _lib_python import format_json_report  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
-from _lib_confd import warn_nested  # noqa: E402
+from _lib_confd import (  # noqa: E402
+    config_stem,
+    has_yaml_extension,
+    is_hidden_name,
+    is_reserved_name,
+    warn_nested,
+)
 
 # ---------------------------------------------------------------------------
 # Default settings
@@ -150,8 +156,27 @@ def extract_changes_from_git_diff():
             fname = line[6:]
             # Extract tenant from filename (conf.d/db-a.yaml → db-a)
             basename = Path(fname).name
-            if basename.endswith(".yaml") and not basename.startswith("_"):
-                current_file = basename.removesuffix(".yaml")
+            # #1588 site 1 of 6 in this file (the first version counted 4 and the
+            # two it missed were `_flat_keys_at_head1` — which was still
+            # broken — and `load_conf_files`, which needed no change). `.yaml` ONLY is preserved on
+            # purpose — the spelling axis is #1603 — but the case folding
+            # and the stem both move to the shared predicates. Hand-slicing
+            # the stem is what `config_stem` exists to stop: `str.lower()`
+            # can shrink byte length, so an offset taken from the folded
+            # copy cuts the original in the wrong place.
+            # ⚠️ `config_stem` also declines `.`-prefixed names, so a diff
+            # touching `conf.d/.foo.yaml` no longer yields a tenant called
+            # `.foo`. The exporter's scanner skips hidden entries, so that
+            # agrees with the oracle — but it is a second-order change and
+            # is recorded here rather than left for someone to discover.
+            if has_yaml_extension(basename, (".yaml",)) \
+                    and not is_reserved_name(basename):
+                # `config_stem` answers "" for a hidden name and the
+                # `if not current_file` below already treats that as
+                # "no tenant", so an `or None` here would be a third
+                # spelling of the same decision. Mutation confirms the
+                # two forms are equivalent.
+                current_file = config_stem(basename)
             else:
                 current_file = None
             continue
@@ -197,6 +222,78 @@ def extract_changes_from_git_diff():
             and not c["metric"].startswith("_")]
 
 
+# Roots already named as unlistable, so the warning is said once per run.
+_WARNED_UNLISTABLE: set = set()
+
+
+def reset_unlistable_warnings_for_test() -> None:
+    """Clear the once-per-run dedup so a test can drive the branch twice."""
+    _WARNED_UNLISTABLE.clear()
+
+
+def _confd_entries(root: Path) -> list:
+    """List `root` once — naming it, never raising, never silently empty.
+
+    ⛔ Written because the #1588 fix below broke this and blind review
+    measured it. Swapping `glob("*.yaml")` for `iterdir()` looks like a
+    pure case fix, but the two disagree on an UNREADABLE directory:
+    `glob` swallows the scandir failure and yields nothing, `iterdir()`
+    raises straight through this module's callers. Measured on a
+    `chmod 000` conf.d as a non-root uid, same fixture both sides:
+
+        05d3136 (glob)     rc=2, "ERROR: Prometheus not reachable ..."
+        the fix (iterdir)  rc=1, PermissionError traceback out of main()
+
+    ⚠️ `is_dir()` does NOT guard this: it returns True for a directory
+    that cannot be read (and raises on its own when the PARENT is not
+    traversable), so the guard it replaced covered only the missing case.
+
+    `_lib_confd.unusable_config_paths` already settled what the right
+    answer is, in the same words: raising kills callers that iterate
+    outside a `try`, and returning `[]` is "a green light for a directory
+    nothing ever read" — so name the root instead. This is that answer at
+    the one call site that cannot use that function (it needs the ENTRIES,
+    not the unusable ones).
+    """
+    # ⛔ The #1339 guard lives HERE, not at the two call sites, and
+    # `test_confd_enumeration_contract` is what moved it: a flat scan and
+    # the warning that a hierarchical conf.d is not empty must be in the
+    # same scope, or a refactor can carry the scan away from its guard.
+    # This function is now the only place this tool lists a conf.d, so
+    # both sites are covered by construction rather than by remembering.
+    warn_nested(root, tool="backtest_threshold")
+    try:
+        return sorted(root.iterdir())
+    except (FileNotFoundError, NotADirectoryError):
+        # Both were empty results under `glob`, and a missing --config-dir
+        # is already reported by the caller's own emptiness. Unchanged.
+        return []
+    except OSError as exc:
+        # ⛔ The caught errno, NOT `_lib_confd.unusable_reason`. That
+        # function answers "why is `p` unusable as a config FILE", and the
+        # conf.d root is not one — asked about the root it re-probes with
+        # `os.walk` and can answer "is a directory, not a config file",
+        # which is both a non-sequitur (of course it is a directory) and a
+        # SECOND probe that may disagree with the failure actually caught
+        # here (a FUSE mount going away, a transient EIO). Reporting what
+        # was caught cannot drift from what happened.
+        # ⛔ Once per RUN, not once per scan. `--config-dir` calls this
+        # helper twice (`main` for the recipe scan, `extract_changes_from_dirs`
+        # for the comparison) and the first version printed the same line
+        # twice — measured. This file's own
+        # `test_each_reader_names_an_unusable_entry_exactly_once` states the
+        # rule for every other reader: "A repeated warning trains the
+        # operator to skim past it, which costs the signal the report exists
+        # to give." `warn_nested` already dedupes; this now does too.
+        key = os.path.abspath(str(root))
+        if key not in _WARNED_UNLISTABLE:
+            _WARNED_UNLISTABLE.add(key)
+            print(f"WARNING: {safe_label(str(root))}: could not be listed — "
+                  f"{type(exc).__name__}: {exc.strerror or exc} — the config "
+                  f"files inside it were NOT scanned", file=sys.stderr)
+        return []
+
+
 def extract_changes_from_dirs(config_dir, baseline_dir):
     """Compare two config directories to find threshold changes.
 
@@ -206,15 +303,42 @@ def extract_changes_from_dirs(config_dir, baseline_dir):
 
     config_base = Path(config_dir)
     baseline_base = Path(baseline_dir)
-    # #1339: flat by design here — but a hierarchical conf.d must not
-    # look like an empty one. Name the files this scan cannot see.
-    warn_nested(config_base, tool="backtest_threshold")
-    for path in sorted(config_base.glob("*.yaml")):
+    # #1588 site 2 of 6. `glob("*.yaml")` is case-SENSITIVE on Linux, so a
+    # `DB-A.YAML` carrier produced 0 changes where the identical body under
+    # `db-a.yaml` produced 1 — a backtest that reports "no threshold changes"
+    # for a change that is really there. `iterdir()` + the shared predicate
+    # yields the SAME set as the glob did (directories included, exactly as
+    # `glob` returned them), only case-folded: adding an `is_file()` filter
+    # here would be the #1607 axis, which is not this commit's subject.
+    # ⚠️ The listing goes through `_confd_entries`, not a bare `iterdir()`:
+    # see its docstring for the unreadable-directory regression that a
+    # plain `is_dir()` guard does NOT cover.
+    _entries = _confd_entries(config_base)
+    for path in (p for p in _entries
+                 if has_yaml_extension(p.name, (".yaml",))):
         basename = path.name
-        if basename.startswith("_"):
+        if is_reserved_name(basename):
             continue
 
-        tenant = basename.removesuffix(".yaml")
+        # ⛔ `removesuffix(".yaml")` is case-sensitive too, and letting the
+        # scan above see `DB-A.YAML` while this line failed to strip it
+        # produced a report naming a tenant called `DB-A.YAML` — the fix
+        # for a silent miss turned into a loud wrong answer. Measured.
+        tenant = config_stem(basename)
+        if not tenant:
+            # ⛔ `config_stem` answers "" for a `.`-prefixed name, and the
+            # first version of this fix used the answer WITHOUT checking
+            # it: blind review measured `.foo.yaml` producing a change
+            # whose tenant was the empty string, where `05d3136` at least
+            # said `.foo`. A silent miss turned into a loud wrong answer —
+            # and an empty id flows on into the report and into
+            # `_flat_keys_at_head1("")`.
+            #
+            # Skipped, not warned: hidden entries are skipped by every
+            # reader in this repo and by the exporter's own scanner, so
+            # naming one here would report a loss that did not happen
+            # (the #1607 round settled that wording).
+            continue
         new_data = load_yaml_file(str(path), default={})
         baseline_path = str(baseline_base / basename)
         old_data = load_yaml_file(baseline_path, default={})
@@ -269,8 +393,33 @@ def changed_conf_files():
             return []
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return []
+    # #1588 site 3 of 6. Same rule, third hand-written copy in one file.
+    #
+    # ⛔ `is_hidden_name` as well, and this is a fix for a split THIS CHAIN
+    # INTRODUCED. Aligning `extract_changes_from_git_diff` on the
+    # hidden axis (its `config_stem(basename) or None`) without aligning
+    # this listing left the tool contradicting itself inside one run:
+    # measured on a tree holding `.hidden.yaml` and `real.yaml`, both
+    # changed —
+    #
+    #   05d3136   KEPT = [('.hidden','cpu_usage'), ('real','cpu_usage')]
+    #   the split KEPT = [('real','cpu_usage')]
+    #             while this function still answered
+    #             ['conf.d/.hidden.yaml', 'conf.d/real.yaml']
+    #
+    # — i.e. "that carrier exists" and "its change does not", from the same
+    # process, about the same file. That is the #1339 shape produced inside
+    # the change that exists to remove it, and blind review had already
+    # caught the identical split one code path over (`--config-dir`); this
+    # is the sibling path that fix did not reach.
+    #
+    # ⚠️ `is_hidden_name`, NOT `config_stem`: the latter also declines
+    # reserved names, and swapping to it silently dropped `_defaults.yaml`
+    # from this list — a SECOND axis moving inside a hidden-axis fix.
+    # `test_changed_conf_files_reduces_repo_root_to_cwd_relative` caught it.
     return [f"conf.d/{Path(ln.strip()).name}" for ln in result.stdout.splitlines()
-            if ln.strip().endswith(".yaml")]
+            if has_yaml_extension(ln.strip(), (".yaml",))
+            and not is_hidden_name(Path(ln.strip()).name)]
 
 
 def load_conf_files(paths):
@@ -283,7 +432,18 @@ def load_conf_files(paths):
     parsed = {}
     for p in paths:
         path = Path(p)
-        if path.name.startswith("_") or not path.is_file():
+        # ⛔ `is_hidden_name` added, and ONLY that. `startswith("_")`
+        # answered the reserved axis but nothing answered the hidden one,
+        # so this function kept saying `.hidden` exists while the diff
+        # parser beside it had stopped producing changes for that carrier —
+        # one process, one file, two answers.
+        # ⚠️ Deliberately NOT `config_stem` here: that predicate also
+        # declines reserved names, and swapping to it silently dropped
+        # `_defaults.yaml` from `changed_conf_files` — a SECOND axis moving
+        # inside a hidden-axis fix. `test_changed_conf_files_reduces_repo_
+        # root_to_cwd_relative` caught it; the narrow predicate is the fix.
+        if (path.name.startswith("_") or is_hidden_name(path.name)
+                or not path.is_file()):
             continue
         data = load_yaml_file(str(path), default={})
         if isinstance(data, dict):
@@ -312,6 +472,36 @@ def find_custom_alert_tenants(parsed):
     return sorted(set(found))
 
 
+def _carrier_at_head1(tenant):
+    """The HEAD~1 `conf.d/` path whose stem IS `tenant`, or None.
+
+    ⚠️ `.yaml` ONLY, matching every other site in this file: the spelling
+    axis is #1603 and widening it here would let a `.yml` carrier answer
+    for a tenant this tool otherwise cannot see.
+
+    The comparison is `config_stem(name) == tenant` — the SAME predicate
+    that produced the tenant id in the first place, so the two cannot
+    disagree the way a re-spelled filename did.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "ls-tree", "--name-only", "HEAD~1", "./conf.d/"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode != 0:
+            return None
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return None
+    for line in result.stdout.splitlines():
+        entry = line.strip()
+        if not entry:
+            continue
+        name = Path(entry).name
+        if has_yaml_extension(name, (".yaml",)) and config_stem(name) == tenant:
+            return f"./conf.d/{name}"
+    return None
+
+
 def _flat_keys_at_head1(tenant):
     """Top-level scalar threshold keys for `tenant` as of HEAD~1.
 
@@ -327,7 +517,41 @@ def _flat_keys_at_head1(tenant):
             capture_output=True, text=True, timeout=15,
         )
         if result.returncode != 0:
-            return set()
+            # ⛔ #1588 site 5 of 6, and the one the first version MISSED —
+            # it counted "of 4" and this was not among them. Re-spelling
+            # the carrier from the tenant id is the family's own defect in
+            # miniature: `config_stem` preserves the carrier's case (it
+            # must — folding it renames the tenant on the write plane), so
+            # a `DB-A.YAML` carrier gives tenant `DB-A`, and this line then
+            # asked git for `conf.d/DB-A.yaml`, which does not exist.
+            # Measured end to end on two git repos with byte-identical
+            # bodies, HEAD~1 holding a threshold that HEAD removes:
+            #
+            #   lower              raw=1 change   KEPT=1  (reported)
+            #   UPPER, this file    raw=1 change   KEPT=0  (dropped here)
+            #   UPPER, on 05d3136   raw=0 change   KEPT=0  (dropped earlier,
+            #                                              by sites 1 and 3)
+            #
+            # ⚠️ Those three rows are the CORRECTED table. The first version
+            # of this comment printed `05d3136` as `raw=1 KEPT=0`, which is
+            # this file's own intermediate state, not the base — blind review
+            # re-ran it and got `raw=0`. The operator-visible symptom really
+            # is identical on both ("No threshold changes found." for a
+            # removal that happened), which is what matters, but a number
+            # labelled "measured" has to be the number that was measured.
+            #
+            # The name is resolved by ASKING GIT WHAT IS THERE rather than
+            # by spelling it again. Kept as a fallback so the guessed path
+            # stays the fast path and nothing changes when it is right.
+            resolved = _carrier_at_head1(tenant)
+            if resolved is None:
+                return set()
+            result = subprocess.run(
+                ["git", "show", f"HEAD~1:{resolved}"],
+                capture_output=True, text=True, timeout=15,
+            )
+            if result.returncode != 0:
+                return set()
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return set()
     import yaml
@@ -697,11 +921,40 @@ def main():
     if args.git_diff:
         parsed_conf = load_conf_files(changed_conf_files())
     elif args.config_dir:
-        # #1339: second scan site — the guard must live where the scan does,
-        # otherwise a hierarchical conf.d is silently empty on THIS path.
-        warn_nested(Path(args.config_dir), tool="backtest_threshold")
+        # #1588 site 4 of 6. Same listing helper as the scan above — the
+        # unreadable-directory case reached main() FIRST, before the
+        # Prometheus availability check, so `--skip-if-unavailable` could
+        # not contain it and the `--json` contract lost its one document.
+        #
+        # ⛔ `config_stem(...)` truthiness, not just the extension, and that
+        # is not tidiness. Blind review measured this tool answering the
+        # HIDDEN axis two different ways after the first fix: the scan above
+        # skipped `.hidden.yaml` (its `config_stem` is "") while this site
+        # still loaded it, so ONE TOOL disagreed with itself about which
+        # carriers exist. `05d3136` was at least consistent (both said
+        # `.hidden`). Producing that split inside the change that exists to
+        # remove exactly that split is the sharpest way to get this wrong;
+        # both sites now defer to the same predicate, which is also what the
+        # exporter's scanner does.
+        # ⛔ No filter here any more. `load_conf_files` applies the reserved
+        # and hidden rules itself (it must — the `--git-diff` path feeds it
+        # too), so a copy of them at this call site was a SECOND place the
+        # answer could drift. Mutation measured that copy as equivalent,
+        # which is exactly what a redundant predicate looks like right up
+        # until someone edits one of the two.
+        # ⚠️ The extension rule is NOT redundant and stays here. Removing it
+        # was tried and measured: `load_conf_files` checks reserved, hidden
+        # and `is_file` but NOT the extension (it is also fed
+        # `conf.d/<basename>` strings by the `--git-diff` path, where the
+        # extension was already decided upstream), so a `notes.txt` and a
+        # `db-c.yml` went straight through and the operator-facing recipe
+        # notice grew two tenants that do not exist:
+        #   NOTE: 3 tenant(s) ... acme, ghost_txt, ghost_yml
+        # `_confd_entries` lists, this line decides the extension,
+        # `load_conf_files` decides reserved/hidden. One rule, one place.
         parsed_conf = load_conf_files(
-            [str(p) for p in sorted(Path(args.config_dir).glob("*.yaml"))]
+            [str(p) for p in _confd_entries(Path(args.config_dir))
+             if has_yaml_extension(p.name, (".yaml",))]
         )
     else:
         parsed_conf = {}
