@@ -9,13 +9,18 @@ package batchpr
 //
 // Allocation rules (Profile-as-Directory-Default — ADR-018 §1):
 //
-//   1. Any path matching `_defaults.yaml` (basename) → Base PR.
-//      The Base Infrastructure PR carries every cascading defaults
-//      change in the Plan (PR-1 §C-10 chunking strategy).
+//   1. Any path the exporter would merge into the inheritance
+//      chain — `_defaults.yaml` or `_defaults.yml`, in any case —
+//      → Base PR. The Base Infrastructure PR carries every
+//      cascading defaults change in the Plan (PR-1 §C-10 chunking
+//      strategy).
 //
-//   2. Any path matching `<tenant-id>.yaml` where <tenant-id>
-//      appears in some Plan.Items[i].TenantIDs (i.e. a tenant
-//      chunk) → that chunk's PR.
+//   2. Any path the exporter would read as `<tenant-id>`'s carrier
+//      — a `.yaml` / `.yml` basename in any case, neither
+//      `_`-reserved nor `.`-hidden — where <tenant-id> appears in
+//      some Plan.Items[i].TenantIDs (i.e. a tenant chunk) → that
+//      chunk's PR. ⛔ The extension is folded; the tenant id keeps
+//      the basename's case, because the exporter does.
 //
 //   3. PROPOSAL.md → Base PR (mirrors the convention C-9 PR-2's
 //      emit_translated already implies — the proposal-level
@@ -23,8 +28,17 @@ package batchpr
 //
 //   4. Anything else → Warning + skipped. Common cases that hit
 //      this branch: stale files left over in the EmissionOutput
-//      from a partial / debug run, or a tenant ID present in a
-//      file path but absent from any Plan chunk (caller bug).
+//      from a partial / debug run, a tenant ID present in a file
+//      path but absent from any Plan chunk (caller bug), or a name
+//      the exporter's walker classifies as neither a defaults nor a
+//      tenant carrier (reserved `_` prefix, hidden `.` prefix, or
+//      no YAML extension) — committing one of those proposes
+//      configuration production will never read.
+//
+// ⛔ Rules 1, 2 and 4 are pinned against the shared conf.d name
+// matrix by confd_name_classification_parity_test.go (#1605); see
+// that file's header for why this write-plane component is held to
+// the exporter's reading of a name.
 //
 // Empty-input contract:
 //   - `plan == nil` or `len(plan.Items) == 0` → returns (nil, [
@@ -96,36 +110,110 @@ func AllocateFiles(plan *Plan, files map[string][]byte) (map[int]map[string][]by
 	return out, warnings
 }
 
+// confdYAMLSuffixes are the two carrier spellings the exporter's walker
+// accepts. Both ship (`conf.d/db-b.yml` next to `conf.d/db-a.yaml`), and the
+// walker compares case-insensitively, so this allocator has to as well —
+// otherwise a carrier production merges gets no PR to travel in.
+var confdYAMLSuffixes = [...]string{".yaml", ".yml"}
+
+// splitCarrierName reports whether `base` carries a YAML extension the
+// exporter would accept, and returns the stem with its ORIGINAL case intact.
+//
+// ⛔ The fold is done on the last few ASCII bytes with EqualFold, NOT by
+// lowercasing `base` and slicing that. `strings.ToLower` is not
+// length-preserving — measured in this family: `"İSTANBUL"` lowercases to
+// `"i̇stanbul"` (U+0130 becomes `i` + U+0307), one rune longer — so an offset
+// computed against a lowercased copy indexes the wrong bytes of the original.
+//
+// ⛔ And the stem must keep its case. `MiXeD.YmL` is tenant `MiXeD`; deriving
+// the id from a lowercased copy would rename that tenant to `mixed` on the
+// write plane while the exporter keeps serving it under the name its
+// `tenants:` key says — a second divergence built by the fix for the first.
+func splitCarrierName(base string) (stem string, ok bool) {
+	for _, ext := range confdYAMLSuffixes {
+		if len(base) > len(ext) && strings.EqualFold(base[len(base)-len(ext):], ext) {
+			return base[:len(base)-len(ext)], true
+		}
+	}
+	return "", false
+}
+
 // bucketForPath picks the right Plan.Items index for `p`, or
 // returns (-1, reason) when the path doesn't fit any bucket.
 //
 // Single source of truth for the allocation rules; AllocateFiles
 // loops over files and calls this per path.
+//
+// ⛔ The classification below is pinned against the shared conf.d name matrix
+// (`tests/shared/confd_name_classification_matrix.json`) by
+// confd_name_classification_parity_test.go, the write-plane half of the
+// cross-language pin the exporter and tenant-api already carry (#1605, the
+// #1339 family). The files routed here are PROPOSED CONF.D CARRIERS, so every
+// branch has to answer the way the exporter's walker would answer for the same
+// name — a carrier it merges must reach a PR, and one it never reads must
+// reach none. Measured before that pin existed: eleven of the matrix's
+// twenty-three names disagreed, four of them silently.
+//
+// Branch order is load-bearing: the defaults carriers are `_`-prefixed, so
+// they have to be recognised before the reserved-prefix drop.
 func bucketForPath(p string, baseIdx int, tenantToIdx map[string]int) (int, string) {
 	base := path.Base(p)
-	switch {
-	case base == "_defaults.yaml":
-		if baseIdx < 0 {
-			return -1, "no Base PR in plan"
-		}
-		return baseIdx, ""
-	case base == "PROPOSAL.md":
+
+	// PROPOSAL.md is not a conf.d carrier at all — it is the human-readable
+	// summary that rides along in the Base PR (rule 3 above). Deliberately
+	// still an exact match: it is this pipeline's own artifact name, not
+	// something the exporter classifies, so it is out of the matrix's scope.
+	if base == "PROPOSAL.md" {
 		if baseIdx < 0 {
 			return -1, "no Base PR in plan to absorb PROPOSAL.md"
 		}
 		return baseIdx, ""
-	case strings.HasSuffix(base, ".yaml"):
-		// Strip `.yaml` to recover the tenant ID candidate.
-		tid := strings.TrimSuffix(base, ".yaml")
-		if tid == "" {
-			return -1, "empty filename before .yaml"
-		}
-		idx, ok := tenantToIdx[tid]
-		if !ok {
-			return -1, fmt.Sprintf("tenant ID %q not in any Plan chunk", tid)
-		}
-		return idx, ""
-	default:
-		return -1, fmt.Sprintf("unrecognised file shape %q (only _defaults.yaml / PROPOSAL.md / <tenant>.yaml supported)", base)
 	}
+
+	stem, isCarrier := splitCarrierName(base)
+	if !isCarrier {
+		return -1, fmt.Sprintf(
+			"unrecognised file shape %q (only PROPOSAL.md and conf.d carriers "+
+				"ending .yaml / .yml, any case, are routable)", base)
+	}
+
+	// The inheritance-chain carrier. The exporter compares the LOWERCASED
+	// name against these two literals exactly, so `_defaults-multidb.yaml`
+	// is deliberately NOT one of them — it falls through to the reserved
+	// drop below, exactly as the exporter refuses to merge it into a chain.
+	if strings.EqualFold(base, "_defaults.yaml") || strings.EqualFold(base, "_defaults.yml") {
+		if baseIdx < 0 {
+			return -1, "no Base PR in plan"
+		}
+		return baseIdx, ""
+	}
+
+	// Dot-prefixed names: the exporter's walker skips them outright, so no
+	// PR may carry one. ⛔ This drop is not reachable through `tenantToIdx`
+	// misses — a plan's tenant ids come from Prometheus label VALUES
+	// (ProposalRef.MemberTenantIDs), which may legally be `.hidden`, and
+	// before this branch existed such an id routed the file into a chunk
+	// with no warning at all.
+	if strings.HasPrefix(base, ".") {
+		return -1, fmt.Sprintf(
+			"%q is hidden (dot-prefixed); the exporter's walker skips it, so "+
+				"no PR may carry it as a tenant carrier", base)
+	}
+
+	// Reserved-prefix names that are not the defaults carrier: the exporter
+	// hashes them for change detection but derives no tenant from them.
+	if strings.HasPrefix(base, "_") {
+		return -1, fmt.Sprintf(
+			"%q uses the reserved `_` prefix but is not the defaults carrier; "+
+				"the exporter derives no tenant from it", base)
+	}
+
+	if stem == "" {
+		return -1, "empty filename before the YAML extension"
+	}
+	idx, ok := tenantToIdx[stem]
+	if !ok {
+		return -1, fmt.Sprintf("tenant ID %q not in any Plan chunk", stem)
+	}
+	return idx, ""
 }
