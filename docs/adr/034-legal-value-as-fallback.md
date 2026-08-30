@@ -204,7 +204,7 @@ default:                  → 直接 commit
 
 **（2026-08-30 補測，隨案例一修正）**：
 
-- 重跑案例一的實測，這次是在**本機 go1.26.4** 上直接呼叫真實的 `wirePRBackend`（非複製邏輯），十個輸入（原票七個 + `Direct` / `DIRECT` / `pr-gitlab-x`）**全部**回傳 `mode="direct"`，`slog` 輸出逐字相同——起草時記的形狀成立
+- **（修法前的基線，不是修法後的行為）** 動工前先重跑案例一的實測，在**本機 go1.26.4** 上直接呼叫當時尚未修改的真實 `wirePRBackend`（非複製邏輯），十個輸入（原票七個 + `Direct` / `DIRECT` / `pr-gitlab-x`）**全部**回傳 `mode="direct"`，`slog` 輸出逐字相同——起草時記的形狀成立，這是修法要消滅的那個狀態。⚠️ **修法後同一組輸入的結果完全不同**：`direct` 仍是 `direct`，`" pr"` / `"pr "` 經 trim 後成為 `pr`，其餘七個一律拒絕啟動——釘在 `cmd/server/writemode_test.go` 的契約表
 - ⭐ 其中 `Direct` / `DIRECT` 是原票沒列的一類：它們的使用者**要的就是 direct、而且拿到了**，修法後會從「正常運作」變成「開不起來」。原票 rollout 段只設想了「帶著打錯字在跑」的部署
 - **rollout 面積盤點**：helm chart 的 tenant-api container 既不傳 `--write-mode`，`env:` 區段也不含 `TA_WRITE_MODE`，且全 chart 無 `extraEnv` / `extraArgs` 逃生門（`grep` rc=1）⇒ **官方 helm 部署路徑沒有任何方式能設出一個非法值**。repo 內其餘實際值只有 try-local compose 的 `TA_WRITE_MODE: direct` 與文件範例，全部是合法小寫值 ⇒ **repo 內面積為零，因此不出警告過渡版**
 - 修法的 mutation 驗證：把 `parseWriteMode` 還原成 pre-#1559 的靜默 fallback，三個測試轉紅（`rc=1`）——見 [#1559](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1559)

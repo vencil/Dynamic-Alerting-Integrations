@@ -36,7 +36,9 @@ threshold-exporter (hot-reload)
 | `pr-github` | `TA_WRITE_MODE=pr-github` | GitHub.com 或 GitHub Enterprise Server |
 | `pr-gitlab` | `TA_WRITE_MODE=pr-gitlab` | GitLab.com 或自託管 GitLab |
 
-⛔ **這四個值是完整清單，且大小寫敏感。** 不在清單內的值（打錯字、`DIRECT` 這類大小寫變體、明確傳入的空值）會讓 tenant-api **拒絕啟動**，而不是退回 `direct`——因為退回 `direct` 與「刻意選了 `direct`」在執行路徑與啟動日誌上完全相同，一個以為所有寫入都經過審核的部署將收不到任何訊號。判準見 [ADR-034](adr/034-legal-value-as-fallback.md)。前後空白會被 trim（YAML 常見的載體雜訊），但那不會把非法值變成合法值。
+⛔ **這四個值是完整清單，且大小寫敏感。** 不在清單內的值（打錯字、`DIRECT` 這類大小寫變體、明確傳入的空值）會讓 tenant-api **拒絕啟動**，而不是退回 `direct`——因為退回 `direct` 與「刻意選了 `direct`」在執行路徑與啟動日誌上完全相同，一個以為所有寫入都經過審核的部署將收不到任何訊號。判準見 [ADR-034](adr/034-legal-value-as-fallback.md)。
+
+前後空白會**先被 trim**（YAML 常見的載體雜訊），trim 之後的結果仍必須逐字等於上表四個值之一——`" pr "` 因此被接受並視為 `pr`，`" pr-guthub "` 則照樣拒絕。⇒ trim 只吸收載體雜訊，不放寬合法值集合本身。
 
 ## GitHub 整合
 

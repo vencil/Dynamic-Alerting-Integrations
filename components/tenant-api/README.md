@@ -198,7 +198,7 @@ data: {"type":"config_change","tenant_id":"db-a-prod","timestamp":"2026-05-03T10
 | `TA_MAX_BODY_BYTES` | `1048576` | request body 上限(bytes) |
 | `TA_READ_TIMEOUT` / `TA_WRITE_TIMEOUT` / `TA_IDLE_TIMEOUT` | `15s` / `30s` / `60s` | HTTP server timeout(大批次 + 慢 git push 時可調高 write timeout) |
 | `TA_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
-| `TA_WRITE_MODE` | `direct` | `direct` / `pr` / `pr-github` / `pr-gitlab`。⛔ 大小寫敏感,不在這四個之內(含 `DIRECT`、打錯字、`--write-mode=` 空值)一律**拒絕啟動**,不會退回 `direct`([ADR-034](../../docs/adr/034-legal-value-as-fallback.md)) |
+| `TA_WRITE_MODE` | `direct` | `direct` / `pr` / `pr-github` / `pr-gitlab`。⛔ 前後空白先 trim,trim 後須逐字等於這四個之一;大小寫敏感,不符者(含 `DIRECT`、打錯字、`--write-mode=` 空值)一律**拒絕啟動**,不會退回 `direct`([ADR-034](../../docs/adr/034-legal-value-as-fallback.md)) |
 | `TA_GITHUB_TOKEN` / `TA_GITHUB_REPO` / `TA_GITHUB_BASE_BRANCH` / `TA_GITHUB_API_URL` | (空) | GitHub PR 模式;repo 為 `owner/repo`,API URL 供 Enterprise |
 | `TA_GITLAB_TOKEN` / `TA_GITLAB_PROJECT` / `TA_GITLAB_TARGET_BRANCH` / `TA_GITLAB_API_URL` | (空) | GitLab MR 模式;project 為 `group/project` 或數字 ID,API URL 供自託管 |
 | `GIT_COMMITTER_NAME` / `GIT_COMMITTER_EMAIL` | (空) | service account 身分;空時 fallback 到 author |
