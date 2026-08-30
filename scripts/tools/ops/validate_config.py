@@ -1002,12 +1002,25 @@ def _load_with_exporter_keys(stream):
     cannot express "a SafeLoader subclass", and widening a repo-wide
     security guard is not this change's blast radius.
 
+    ⚠️ Be exact about what that costs, because the paragraph above reads as
+    "the guard still checks this, only under a spelling it rejects". It does
+    not. This body never calls ``yaml.load``, and the guard's predicate
+    matches ONLY ``yaml.load(...)`` — so this function is not a rejected
+    spelling, it is OUTSIDE the predicate. Measured by AST over the guard's
+    own corpus (``scripts/tools/**``, 240 files) at ``2ac818ab``: zero
+    ``yaml.load(`` sites and zero direct-Loader constructions, so this is
+    the repo's FIRST site of a shape that guard cannot see, and someone
+    copying the shape with ``yaml.UnsafeLoader`` gets no red. That is a cost
+    this change introduces, not a hole it inherited.
+
     What matters is that the safety property is pinned SOMEWHERE, and the
     call-site spelling was never where it lived: the guard reads how the
     loader is named, not what it can construct.
     ``TestTenantIdParity::test_the_loader_cannot_construct_python_objects``
     feeds this function an actual ``!!python/object/apply`` payload and
     requires it to be refused — which is the property, measured.
+    ⚠️ NOT GUARDED: that test pins THIS loader only. Nothing pins a future
+    copy, and this change deliberately does not widen the repo-wide guard.
 
     This body is what ``yaml.load`` does; keeping it in one named function
     means there is one place to read, and one place a future edit lands.
