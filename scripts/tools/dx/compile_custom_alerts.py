@@ -17,6 +17,14 @@ the tree the committed pack is compiled from since S3b. The source MUST be the
 conf.d the exporter serves, or recipe_id will not match emit. The docs example
 tree (`rule-packs/recipes/examples/conf.d/`) stays reachable via `--config-dir`.
 
+Destination (`--out`): **required to write** (#1582). It is NOT derived from
+`--config-dir` — the default below is anchored on the repository — so a compile of
+some other tree used to land on this repo's shipped pack. Measured on the example
+tree named above: 7016 -> 42302 bytes, 11 rules -> 65, at rc=0. It is not silent —
+the write prints `_net_rule_change_note`, which names all 8 rules it removed — but
+nothing about it is blocking, and `cwd` isolation does not help either because the
+default is `__file__`-anchored. `--check` still defaults: it compares, not writes.
+
 `--check` regenerates in memory and SEMANTICALLY compares against the committed
 pack (via check_rulepack_sync), so a stale / hand-edited pack is a hard failure.
 
@@ -39,9 +47,9 @@ the write is irreversible in the working tree. See `_erases_committed_rules`.
     import this module and render themselves bypass everything here.
 
 Exit codes:
-    0  wrote file (default) / in sync (--check)
+    0  wrote file / in sync (--check)
     1  drift detected (--check) / refused to erase the committed pack (write)
-    2  error (invalid declaration tree, missing source, …)
+    2  error (no --out on a write, invalid declaration tree, missing source, …)
 """
 from __future__ import annotations
 
@@ -371,8 +379,31 @@ def _rerun_command(args) -> str:
     parts = [_shell_quote(sys.executable), _shell_quote(Path(__file__).resolve())]
     if args.config_dir:
         parts.append(f"--config-dir {_shell_quote(args.config_dir)}")
+    # ⛔ THE TARGET IS ECHOED, NEVER INVENTED (#1582). Three cases, and the third is
+    # the one that made this function dangerous:
+    #
+    #   --out given                  -> echo it. The reader chose the target.
+    #   --out absent, --config-dir absent -> echo the repo default. That IS the pack
+    #                                   `--check` just compared against, and emptying
+    #                                   it is the legitimate "the last recipe really
+    #                                   was removed" flow.
+    #   --out absent, --config-dir GIVEN  -> ⛔ NAME NOTHING. `--check` compared the
+    #                                   tree they named against THIS repo's shipped
+    #                                   pack, so "write the empty pack" is not a
+    #                                   remedy for anything they did.
+    #
+    # ⚠️ Measured, and it is why this branch exists: an earlier version of this change
+    # filled the third case in with the repo default "so the reader can see which pack
+    # they are about to empty". Blind review pasted the resulting line verbatim —
+    # rc=0, shipped pack 7016 -> 447 bytes. Before that version the line carried no
+    # `--out` at all and the new write gate refused it; naming the default converted a
+    # command the gate would have BLOCKED into one that works and destroys.
     if args.out:
         parts.append(f"--out {_shell_quote(args.out)}")
+    elif not args.config_dir:
+        parts.append(f"--out {_shell_quote(_repo_root() / OUT_REL)}")
+    else:
+        return ""  # no offer: see the third case above
     if args.max_custom_recipes != _loader.MAX_CUSTOM_RECIPES_DEFAULT:
         parts.append(f"--max-custom-recipes {args.max_custom_recipes}")
     parts.append("--allow-empty")
@@ -394,6 +425,13 @@ DO_NOT_REGENERATE = ("⛔ Do not regenerate to clear this. Regenerating here del
 DO_NOT_ALLOW_EMPTY = ("⛔ Fix those declarations first. Do NOT pass --allow-empty here: "
                       "the source is not empty, and writing an empty pack would drop "
                       "rules that are still declared.")
+
+# The third one, named for the same reason (#1582). main() has THREE refusals that all
+# return EXIT_CALLER_ERROR — a missing --out, a missing config dir, and an invalid
+# declaration tree (the `Exit codes:` block at the top of this module lists all three)
+# — so a test that wants to say WHICH one fired cannot use the exit code. A constant
+# does that without pinning the sentence.
+OUT_REQUIRED = "--out is required to write"
 
 
 def _shell_quote(value) -> str:
@@ -442,9 +480,22 @@ def _deliberate_empty_offer(args, quarantined: int) -> str:
     """
     if quarantined:
         return ""
+    command = _rerun_command(args)
+    if not command:
+        # ⛔ NO TARGET, NO OFFER (#1582). `_rerun_command` withholds a command when the
+        # reader redirected `--config-dir` and named no `--out`: what they compared
+        # against was THIS repo's shipped pack, not an output of the tree they named,
+        # so there is no empty pack for them to write on purpose. Saying that is the
+        # honest answer; printing a command that fills the target in for them was
+        # measured writing 447 bytes over a 7016-byte shipped pack at rc=0.
+        return ("\n   ⚠ No paste-able command here, on purpose: --config-dir pointed at "
+                "another tree while --out did not, so this comparison was against THIS "
+                "repo's pack. If you meant to compile that tree, name where it goes with "
+                "--out; if you meant to empty this repo's pack, run it without "
+                "--config-dir.")
     return (f"\n   Once you know which of those it is, and only if the declarations really "
             f"are gone, write the empty pack deliberately with\n"
-            f"     {_rerun_command(args)}")
+            f"     {command}")
 
 
 def _nothing_compiled_diagnosis(config_dir: Path, quarantined: int) -> str:
@@ -489,7 +540,8 @@ def main() -> int:
     parser.add_argument("--config-dir", default=None,
                         help=f"conf.d tree with _custom_alerts (default: {DEFAULT_CONFIG_REL})")
     parser.add_argument("--out", default=None,
-                        help=f"output rule pack path (default: {OUT_REL})")
+                        help=f"output rule pack path — REQUIRED to write. Optional "
+                             f"for --check, which compares against {OUT_REL} (#1582)")
     parser.add_argument("--max-custom-recipes", type=int,
                         default=_loader.MAX_CUSTOM_RECIPES_DEFAULT,
                         help=f"per-tenant cap on OWN recipes (default: "
@@ -502,6 +554,34 @@ def main() -> int:
     repo = _repo_root()
     config_dir = Path(args.config_dir) if args.config_dir else repo / DEFAULT_CONFIG_REL
     out_path = Path(args.out) if args.out else repo / OUT_REL
+
+    # ⛔ A WRITE MUST NAME ITS TARGET (#1582). `out_path` above is anchored on the
+    # REPO, not on `config_dir` — so pointing `--config-dir` at another tree and
+    # omitting `--out` compiles THAT tree over THIS repo's shipped pack. Measured on
+    # `rule-packs/recipes/examples/conf.d`, a tree this module's own docstring says
+    # stays reachable via `--config-dir`: 7016 -> 42302 bytes, 11 rules -> 65, at
+    # rc=0. ⚠️ NOT silent — the casualty note below names all 8 removed rules — but
+    # advisory only, which is the whole problem. Running from outside the repo does
+    # not help either: the default is `__file__`-anchored, so `cwd` cannot reach it.
+    #
+    # ⛔ THE GATE IS ON `--out`, NOT ON "IS `--config-dir` THE DEFAULT". Gating on
+    # "did they redirect the input" was the other candidate and it is weaker in one
+    # specific way: the `--allow-empty` remedy this module prints (see
+    # `_rerun_command`) is reachable from the DEFAULT config-dir too, and that gate
+    # would wave it through. "Name where it goes" is the same sentence in both cases.
+    #
+    # `--check` writes nothing, so it keeps the default — there the path is the
+    # comparison target, not an output. All three read-only callers in this repo
+    # (Makefile, pre-commit, ci.yml) pass no `--out` and must keep working.
+    if not args.check and args.out is None:
+        print(f"ERROR: {OUT_REQUIRED}. The default output "
+              f"({OUT_REL}) is anchored on the repository, NOT on --config-dir, so "
+              f"omitting it while --config-dir points elsewhere overwrites this "
+              f"repo's shipped pack with a compile of that other tree (#1582).\n"
+              f"   To regenerate this repo's pack:  make custom-alerts-compile\n"
+              f"   To compile another tree:         --out <path>\n"
+              f"   To compare without writing:      --check", file=sys.stderr)
+        return EXIT_CALLER_ERROR
 
     if not config_dir.exists():
         print(f"ERROR: config dir not found: {config_dir}", file=sys.stderr)

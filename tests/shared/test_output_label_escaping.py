@@ -131,10 +131,17 @@ SOURCE_DIR_TOOLS = {"migrate_to_operator.py"}
 
 # Tools whose DEFAULT output path is anchored to the repo via `__file__` rather
 # than to the cwd, so running them from a tmp cwd is not enough to contain the
-# write. Each needs an explicit redirect. ⛔ Load-bearing: without this,
-# `compile_custom_alerts` rewrites the shipped rule-pack on every CI run.
+# write. Each needs an explicit redirect.
 # `test_the_suite_does_not_write_to_the_repo` is the backstop that catches any
 # tool this map misses.
+#
+# ⚠️ This comment used to end "⛔ Load-bearing: without this, `compile_custom_alerts`
+# rewrites the shipped rule-pack on every CI run." That stopped being true at #1582:
+# that tool now REFUSES to write without `--out` (exit 2), so dropping its entry here
+# fails loudly instead of silently rewriting `rule-packs/rule-pack-custom-alerts.yaml`.
+# The map is still required — it is what supplies the `--out` — and it is still the
+# right home for any tool that has NOT been through #1582, for which the original
+# sentence remains exactly true.
 REPO_ANCHORED_OUTPUT: dict[str, str] = {
     "compile_custom_alerts.py": "--out",
 }

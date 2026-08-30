@@ -231,10 +231,14 @@ implementation).
    | `_custom_alerts` | the output of `compile_custom_alerts.py --check` (⚠️ see the warning below) |
    | `_routing_defaults` / `_routing_enforced` | `generate_alertmanager_routes.py --config-dir conf.d/ --dry-run`, and **diff the full before/after output** |
 
-   ⛔ **`compile_custom_alerts.py` writes back to this repo's
-   `rule-packs/rule-pack-custom-alerts.yaml` even when `--config-dir` points elsewhere**
-   (`out_path = repo / OUT_REL`, independent of `--config-dir`), so trying it against another
-   tree overwrites the shipped file. Use `--check`, or point `--out` somewhere else.
+   ⚠️ **`compile_custom_alerts.py`'s output path does not follow `--config-dir`**
+   (`out_path = repo / OUT_REL`, anchored on the repository). This used to continue "so
+   trying it against another tree overwrites the shipped file" — **that consequence no
+   longer happens as of
+   [#1582](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1582)**: a write
+   now **requires an explicit `--out`** and exits 2 without one. `--check` writes nothing,
+   so it may still be omitted there.
+   ⇒ Verify this row with `--check`; to compile another tree, point `--out` at it.
 
    ⛔ For the routing row, **diff the full output only — the two signals people take as
    shortcuts each have a blind spot**:

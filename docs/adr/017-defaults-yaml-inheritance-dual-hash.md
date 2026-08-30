@@ -210,9 +210,11 @@ effective = deep_merge( defaults_block(L0), …, defaults_block(Ln), tenant_body
    | `_custom_alerts` | `compile_custom_alerts.py --check` 的輸出（⚠️ 見下方警告） |
    | `_routing_defaults` / `_routing_enforced` | `generate_alertmanager_routes.py --config-dir conf.d/ --dry-run`，**diff 前後的完整輸出** |
 
-   ⛔ **`compile_custom_alerts.py` 即使 `--config-dir` 指向別處，仍會寫回 repo 的
-   `rule-packs/rule-pack-custom-alerts.yaml`**——拿它試跑別棵樹會覆蓋出貨檔（`out_path = repo / OUT_REL`，與 `--config-dir` 無關）。
-   用 `--check`，或用 `--out` 明確指到別處。
+   ⚠️ **`compile_custom_alerts.py` 的輸出路徑不跟著 `--config-dir` 走**（`out_path = repo / OUT_REL`，
+   錨在 repo 上）。這句話原本接的是「所以拿它試跑別棵樹會覆蓋出貨檔」——**該後果自
+   [#1582](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1582) 起已不再發生**：
+   寫入模式**必須明傳 `--out`**，沒傳就 `exit 2` 拒絕。`--check` 不寫檔，所以照舊可以省略。
+   ⇒ 驗這一格用 `--check`；真要編別棵樹就 `--out` 指到別處。
 
    ⛔ 路由那格**只 diff 完整輸出，兩個常被當捷徑的訊號各有盲區**：
    - `Found N tenant(s) with routing config` 追的是**有幾個租戶 parse 出 routing config**，
