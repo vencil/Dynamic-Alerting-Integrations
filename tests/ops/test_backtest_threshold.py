@@ -321,10 +321,15 @@ class TestExtractChangesFromGitDiff:
 
     def test_normal_diff(self, monkeypatch):
         """正常 diff 解析出閾值變更。"""
+        # ⚠️ BYTES since #1634: every path-carrying git call in the tool runs
+        # without `text=True`, because a conf.d name is not required to be
+        # valid UTF-8 and strict decoding raised inside `subprocess.run`,
+        # outside the tool's own `except`. A fake that still answers `str`
+        # describes an interface the tool no longer has.
         diff_output = (
-            "+++ b/conf.d/db-a.yaml\n"
-            "-  mysql_connections: 70\n"
-            "+  mysql_connections: 50\n"
+            b"+++ b/conf.d/db-a.yaml\n"
+            b"-  mysql_connections: 70\n"
+            b"+  mysql_connections: 50\n"
         )
         def mock_run(*args, **kwargs):
             m = type("R", (), {"returncode": 0, "stdout": diff_output})()
@@ -339,9 +344,9 @@ class TestExtractChangesFromGitDiff:
     def test_underscore_keys_filtered(self, monkeypatch):
         """_ 前綴 key 被過濾。"""
         diff_output = (
-            "+++ b/conf.d/db-a.yaml\n"
-            "-  _silent_mode: normal\n"
-            "+  _silent_mode: warning\n"
+            b"+++ b/conf.d/db-a.yaml\n"
+            b"-  _silent_mode: normal\n"
+            b"+  _silent_mode: warning\n"
         )
         def mock_run(*args, **kwargs):
             return type("R", (), {"returncode": 0, "stdout": diff_output})()
@@ -368,8 +373,8 @@ class TestExtractChangesFromGitDiff:
     def test_new_key_only(self, monkeypatch):
         """只有新增 key（無對應 old）。"""
         diff_output = (
-            "+++ b/conf.d/db-a.yaml\n"
-            "+  mysql_connections: 50\n"
+            b"+++ b/conf.d/db-a.yaml\n"
+            b"+  mysql_connections: 50\n"
         )
         def mock_run(*args, **kwargs):
             return type("R", (), {"returncode": 0, "stdout": diff_output})()
@@ -595,16 +600,24 @@ class TestCustomAlertDetection:
 
     def test_changed_conf_files_reduces_repo_root_to_cwd_relative(self, monkeypatch):
         """git diff 的 repo-root 路徑被縮成 conf.d/<basename>（CI 在子目錄跑也載得到）。"""
-        out = ("components/threshold-exporter/config/conf.d/db-b.yaml\n"
-               "components/threshold-exporter/config/conf.d/_defaults.yaml\n")
+        # ⚠️ NUL-delimited BYTES since #1634: this call now passes `-z`, which
+        # is git's own contract for "never quote anything" and is what carries
+        # a non-ASCII (or newline-bearing) name through intact. A newline-
+        # delimited `str` fake describes the pre-#1634 interface.
+        out = (b"components/threshold-exporter/config/conf.d/db-b.yaml\0"
+               b"components/threshold-exporter/config/conf.d/_defaults.yaml\0")
         monkeypatch.setattr(subprocess, "run",
                             lambda *a, **k: type("R", (), {"returncode": 0, "stdout": out})())
         assert bt.changed_conf_files() == ["conf.d/db-b.yaml", "conf.d/_defaults.yaml"]
 
     def test_flat_keys_at_head1_parses_tenants_wrapper(self, monkeypatch):
         """從 HEAD~1 的 tenants-wrapper 抽 top-level 純量閾值 key（排除 _ 與 recipe 區塊）。"""
-        yaml_text = ("tenants:\n  db-b:\n    mysql_connections: '100'\n    mysql_threads_running: '60'\n"
-                     "    _silent_mode: warning\n    _custom_alerts:\n      - recipe: threshold\n")
+        # ⚠️ BYTES since #1634. This one was GREEN with a `str` fake even after
+        # the tool switched, because `yaml.safe_load` accepts both — i.e. the
+        # fake described an interface the tool no longer had and nothing said
+        # so. Pinned to bytes so the fake cannot drift away from the call again.
+        yaml_text = (b"tenants:\n  db-b:\n    mysql_connections: '100'\n    mysql_threads_running: '60'\n"
+                     b"    _silent_mode: warning\n    _custom_alerts:\n      - recipe: threshold\n")
         monkeypatch.setattr(subprocess, "run",
                             lambda *a, **k: type("R", (), {"returncode": 0, "stdout": yaml_text})())
         assert bt._flat_keys_at_head1("db-b") == {"mysql_connections", "mysql_threads_running"}

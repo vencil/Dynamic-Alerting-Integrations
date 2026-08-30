@@ -521,7 +521,8 @@
    "tests/ops/test_assemble_config_dir.py"
   ],
   "scripts/tools/ops/backtest_threshold.py": [
-   "tests/ops/test_backtest_threshold.py"
+   "tests/ops/test_backtest_threshold.py",
+   "tests/shared/test_confd_path_encoding_across_git_calls.py"
   ],
   "scripts/tools/ops/baseline_discovery.py": [
    "tests/ops/test_baseline_discovery.py"
@@ -772,7 +773,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "de8c239ab423b7339ac47ce51199357040e72a91d70d51102e7af383bb1258e4",
+ "source_digest": "be4f7d7bc7eadafd39582d01658408e3a65916e3db1ab54a2719ee941e7a9675",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1065,6 +1066,7 @@
   "tests/shared/test_confd_case_parity_across_tools.py",
   "tests/shared/test_confd_enumeration_contract.py",
   "tests/shared/test_confd_name_classification_parity.py",
+  "tests/shared/test_confd_path_encoding_across_git_calls.py",
   "tests/shared/test_console_encoding_resilience.py",
   "tests/shared/test_dispatch_contract.py",
   "tests/shared/test_dry_run_no_write.py",
@@ -1438,7 +1440,8 @@
    "tests/lint/test_check_threshold_reachability.py",
    "tests/ops/test_ci_baseline_substitution.py",
    "tests/ops/test_guard_defaults_scopes.py",
-   "tests/shared/test_confd_case_parity_across_tools.py"
+   "tests/shared/test_confd_case_parity_across_tools.py",
+   "tests/shared/test_confd_path_encoding_across_git_calls.py"
   ],
   "components/threshold-exporter/config/conf.d/_defaults.yaml": [
    "tests/lint/test_check_threshold_reachability.py",
@@ -2559,7 +2562,8 @@
    "tests/shared/test_help_contract.py"
   ],
   "scripts/tools/ops/backtest_threshold.py": [
-   "tests/shared/test_confd_case_parity_across_tools.py"
+   "tests/shared/test_confd_case_parity_across_tools.py",
+   "tests/shared/test_confd_path_encoding_across_git_calls.py"
   ],
   "scripts/tools/ops/bench-canary/canary_test.go": [
    "tests/dx/test_analyze_bench_history.py",
