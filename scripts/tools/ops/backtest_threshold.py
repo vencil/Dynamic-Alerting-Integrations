@@ -54,6 +54,7 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E
 from _lib_confd import (  # noqa: E402
     config_stem,
     has_yaml_extension,
+    is_hidden_name,
     is_reserved_name,
     warn_nested,
 )
@@ -170,7 +171,12 @@ def extract_changes_from_git_diff():
             # is recorded here rather than left for someone to discover.
             if has_yaml_extension(basename, (".yaml",)) \
                     and not is_reserved_name(basename):
-                current_file = config_stem(basename) or None
+                # `config_stem` answers "" for a hidden name and the
+                # `if not current_file` below already treats that as
+                # "no tenant", so an `or None` here would be a third
+                # spelling of the same decision. Mutation confirms the
+                # two forms are equivalent.
+                current_file = config_stem(basename)
             else:
                 current_file = None
             continue
@@ -388,8 +394,32 @@ def changed_conf_files():
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return []
     # #1588 site 3 of 6. Same rule, third hand-written copy in one file.
+    #
+    # ⛔ `is_hidden_name` as well, and this is a fix for a split THIS CHAIN
+    # INTRODUCED. Aligning `extract_changes_from_git_diff` on the
+    # hidden axis (its `config_stem(basename) or None`) without aligning
+    # this listing left the tool contradicting itself inside one run:
+    # measured on a tree holding `.hidden.yaml` and `real.yaml`, both
+    # changed —
+    #
+    #   05d3136   KEPT = [('.hidden','cpu_usage'), ('real','cpu_usage')]
+    #   the split KEPT = [('real','cpu_usage')]
+    #             while this function still answered
+    #             ['conf.d/.hidden.yaml', 'conf.d/real.yaml']
+    #
+    # — i.e. "that carrier exists" and "its change does not", from the same
+    # process, about the same file. That is the #1339 shape produced inside
+    # the change that exists to remove it, and blind review had already
+    # caught the identical split one code path over (`--config-dir`); this
+    # is the sibling path that fix did not reach.
+    #
+    # ⚠️ `is_hidden_name`, NOT `config_stem`: the latter also declines
+    # reserved names, and swapping to it silently dropped `_defaults.yaml`
+    # from this list — a SECOND axis moving inside a hidden-axis fix.
+    # `test_changed_conf_files_reduces_repo_root_to_cwd_relative` caught it.
     return [f"conf.d/{Path(ln.strip()).name}" for ln in result.stdout.splitlines()
-            if has_yaml_extension(ln.strip(), (".yaml",))]
+            if has_yaml_extension(ln.strip(), (".yaml",))
+            and not is_hidden_name(Path(ln.strip()).name)]
 
 
 def load_conf_files(paths):
@@ -402,7 +432,18 @@ def load_conf_files(paths):
     parsed = {}
     for p in paths:
         path = Path(p)
-        if path.name.startswith("_") or not path.is_file():
+        # ⛔ `is_hidden_name` added, and ONLY that. `startswith("_")`
+        # answered the reserved axis but nothing answered the hidden one,
+        # so this function kept saying `.hidden` exists while the diff
+        # parser beside it had stopped producing changes for that carrier —
+        # one process, one file, two answers.
+        # ⚠️ Deliberately NOT `config_stem` here: that predicate also
+        # declines reserved names, and swapping to it silently dropped
+        # `_defaults.yaml` from `changed_conf_files` — a SECOND axis moving
+        # inside a hidden-axis fix. `test_changed_conf_files_reduces_repo_
+        # root_to_cwd_relative` caught it; the narrow predicate is the fix.
+        if (path.name.startswith("_") or is_hidden_name(path.name)
+                or not path.is_file()):
             continue
         data = load_yaml_file(str(path), default={})
         if isinstance(data, dict):
@@ -895,11 +936,25 @@ def main():
         # remove exactly that split is the sharpest way to get this wrong;
         # both sites now defer to the same predicate, which is also what the
         # exporter's scanner does.
-        _entries = _confd_entries(Path(args.config_dir))
+        # ⛔ No filter here any more. `load_conf_files` applies the reserved
+        # and hidden rules itself (it must — the `--git-diff` path feeds it
+        # too), so a copy of them at this call site was a SECOND place the
+        # answer could drift. Mutation measured that copy as equivalent,
+        # which is exactly what a redundant predicate looks like right up
+        # until someone edits one of the two.
+        # ⚠️ The extension rule is NOT redundant and stays here. Removing it
+        # was tried and measured: `load_conf_files` checks reserved, hidden
+        # and `is_file` but NOT the extension (it is also fed
+        # `conf.d/<basename>` strings by the `--git-diff` path, where the
+        # extension was already decided upstream), so a `notes.txt` and a
+        # `db-c.yml` went straight through and the operator-facing recipe
+        # notice grew two tenants that do not exist:
+        #   NOTE: 3 tenant(s) ... acme, ghost_txt, ghost_yml
+        # `_confd_entries` lists, this line decides the extension,
+        # `load_conf_files` decides reserved/hidden. One rule, one place.
         parsed_conf = load_conf_files(
-            [str(p) for p in _entries
-             if has_yaml_extension(p.name, (".yaml",))
-             and config_stem(p.name)]
+            [str(p) for p in _confd_entries(Path(args.config_dir))
+             if has_yaml_extension(p.name, (".yaml",))]
         )
     else:
         parsed_conf = {}

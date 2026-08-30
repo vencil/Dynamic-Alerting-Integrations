@@ -1613,15 +1613,24 @@ def _git_conf_d_repo(root: pathlib.Path, carrier: str,
     run("git", "init", "-q")
     run("git", "config", "user.email", "t@example.invalid")
     run("git", "config", "user.name", "t")
-    # ⛔ A `.yml` neighbour carrying the SAME edit. `.yaml`-only is what
-    # every site in this tool accepts (the spelling axis is #1603), and
-    # blind review measured that claim unguarded at sites 1, 3 and 5:
-    # widening any of them left the whole suite green.
-    for name, body in ((carrier, before), ("db-c.yml", before)):
+    # ⛔ Two neighbours carrying the SAME edit, one per axis this path must
+    # not confuse with the tenant carrier:
+    #   `db-c.yml`       the spelling axis (#1603) — `.yaml`-only is what
+    #                    every site here accepts, and blind review measured
+    #                    that claim unguarded at sites 1, 3 and 5.
+    #   `.hidden.yaml`   the hidden axis — the exporter's scanner skips
+    #                    `.`-prefixed entries, and this chain SPLIT this
+    #                    path against itself by aligning the diff parser
+    #                    without aligning the listing beside it. With the
+    #                    split present, `changed_conf_files` below returns
+    #                    two entries and the assertions go red.
+    for name, body in ((carrier, before), ("db-c.yml", before),
+                       (".hidden.yaml", before)):
         (root / "conf.d" / name).write_text(body, encoding="utf-8")
     run("git", "add", "-A")
     run("git", "commit", "-qm", "before")
-    for name, body in ((carrier, after), ("db-c.yml", after)):
+    for name, body in ((carrier, after), ("db-c.yml", after),
+                       (".hidden.yaml", after)):
         (root / "conf.d" / name).write_text(body, encoding="utf-8")
     run("git", "add", "-A")
     run("git", "commit", "-qm", "after")
@@ -1716,9 +1725,16 @@ def test_config_dir_recipe_scan_sees_either_casing(
         # `.txt` file put a tenant called `ghost` in front of the operator;
         # and it measured this tool answering the HIDDEN axis one way here
         # and another way in `extract_changes_from_dirs`.
+        # `_defaults.yaml` carries a `tenants:` block on purpose: that is
+        # the only shape in which the reserved rule is OBSERVABLE here (a
+        # defaults carrier without one contributes no tenant either way,
+        # so dropping the rule would be an equivalent mutant and the
+        # neighbour would pin nothing). Measured as a surviving mutant
+        # until this shape was used.
         for name, tenant in (("neighbour.txt", "ghost_txt"),
                              (".hidden.yaml", "ghost_hidden"),
-                             ("db-c.yml", "ghost_yml")):
+                             ("db-c.yml", "ghost_yml"),
+                             ("_defaults.yaml", "ghost_reserved")):
             (cur / name).write_text(_recipe_body(tenant), encoding="utf-8")
             (base / name).write_text(_recipe_body(tenant), encoding="utf-8")
         r = subprocess.run(
@@ -1738,10 +1754,12 @@ def test_config_dir_recipe_scan_sees_either_casing(
             f"--config-dir scan:\n{seen[arm][:400]}")
         assert "1 tenant(s)" in seen[arm], (
             f"[{arm}] exactly one carrier here is a tenant; a `.txt`, a "
-            f"`.`-prefixed and a `.yml` neighbour must all be skipped by "
-            f"THIS site, the same way the comparison scan skips them.\n"
+            f"`.`-prefixed, a `.yml` and a reserved `_defaults.yaml` "
+            f"neighbour must all be skipped by THIS site, the same way the "
+            f"comparison scan skips them.\n"
             f"{seen[arm][:400]}")
-        for ghost in ("ghost_txt", "ghost_hidden", "ghost_yml"):
+        for ghost in ("ghost_txt", "ghost_hidden", "ghost_yml",
+                      "ghost_reserved"):
             assert ghost not in seen[arm], (
                 f"[{arm}] `{ghost}` reached the operator-facing notice from "
                 f"a carrier this site must not read:\n{seen[arm][:400]}")
@@ -1844,3 +1862,66 @@ def test_head1_carrier_lookup_keeps_the_yaml_only_spelling(
     assert mod._carrier_at_head1("db-a") is None, (
         "`db-a` resolved to a carrier whose stem is `DB-A`; the stem "
         "comparison must be exact, not case-folded")
+
+
+def test_git_diff_path_gives_one_answer_about_a_hidden_carrier(
+        tmp_path: pathlib.Path, monkeypatch) -> None:
+    """⛔ One process, one file, one answer.
+
+    This chain aligned `extract_changes_from_git_diff` on the hidden axis
+    and left the two listings beside it alone, so the tool contradicted
+    ITSELF inside a single run — `changed_conf_files` and
+    `load_conf_files` both reported `.hidden`, while the parser had
+    stopped producing changes for it. Measured against `05d3136`, which
+    was consistent the other way (it kept the carrier everywhere):
+
+        05d3136   KEPT = [('.hidden','cpu_usage'), ('real','cpu_usage')]
+        the split KEPT = [('real','cpu_usage')]
+                  changed_conf_files = ['conf.d/.hidden.yaml',
+                                        'conf.d/real.yaml']
+
+    Producing that split inside the change whose whole subject is "one
+    tree, one answer" is the sharpest way to get this wrong, and blind
+    review had already caught the identical split one code path over.
+    """
+    mod = _import_tool("ops", "backtest_threshold")
+    repo = tmp_path / "hidden"
+    (repo / "conf.d").mkdir(parents=True)
+    run = lambda *a: subprocess.run(  # noqa: E731
+        a, cwd=repo, capture_output=True, timeout=60)
+    run("git", "init", "-q")
+    run("git", "config", "user.email", "t@example.invalid")
+    run("git", "config", "user.name", "t")
+    for value in (80, 95):
+        (repo / "conf.d" / ".hidden.yaml").write_text(
+            f"tenants:\n  ghost:\n    cpu_usage: {value}\n", encoding="utf-8")
+        (repo / "conf.d" / "real.yaml").write_text(
+            f"tenants:\n  real:\n    cpu_usage: {value}\n", encoding="utf-8")
+        run("git", "add", "-A")
+        run("git", "commit", "-qm", str(value))
+    monkeypatch.chdir(repo)
+
+    files = mod.changed_conf_files()
+    parsed = mod.load_conf_files(files)
+    kept = mod.keep_flat_threshold_changes(
+        mod.extract_changes_from_git_diff(), parsed)
+    tenants = sorted({c["tenant"] for c in kept})
+
+    assert tenants == ["real"], (
+        f"fixture is vacuous or the visible tenant vanished; got {tenants}")
+    assert files == ["conf.d/real.yaml"], (
+        f"the listing still names a hidden carrier the parser will not "
+        f"produce changes for: {files}")
+    assert sorted(parsed) == ["real"], (
+        f"the loader still keys a hidden carrier: {sorted(parsed)}")
+    # ⛔ And `load_conf_files` INDEPENDENTLY. Asserting it only through the
+    # list `changed_conf_files` hands it cannot see the loader's own rule:
+    # once the listing filters hidden carriers out, reverting the loader
+    # changes nothing and the mutant survives. Measured — it did.
+    direct = mod.load_conf_files([
+        str(repo / "conf.d" / ".hidden.yaml"),
+        str(repo / "conf.d" / "real.yaml"),
+    ])
+    assert sorted(direct) == ["real"], (
+        f"`load_conf_files` keyed a hidden carrier it was handed directly: "
+        f"{sorted(direct)}")
