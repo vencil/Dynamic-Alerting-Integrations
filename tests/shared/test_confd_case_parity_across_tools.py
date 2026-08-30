@@ -1925,3 +1925,46 @@ def test_git_diff_path_gives_one_answer_about_a_hidden_carrier(
     assert sorted(direct) == ["real"], (
         f"`load_conf_files` keyed a hidden carrier it was handed directly: "
         f"{sorted(direct)}")
+
+
+def test_batch_diagnose_names_a_configmap_key_that_carries_no_tenant(
+        monkeypatch) -> None:
+    """⛔ The branch that DROPS a key must be walked by a test.
+
+    `discover_tenants` skips a key whose `config_stem` is empty and says so
+    on stderr. Nothing exercised that branch: the parity test above hands it
+    only legitimate keys and asserts stderr stays CLEAN, so the `if not
+    tenant:` arm was an `if` with no test walking it — the repo's own
+    self-review checklist calls that hidden dead code, and the coverage bot
+    measured it as a 100.0% -> 98.7% regression on this file.
+
+    Why the branch has to stay: the symptom of the bug this whole change is
+    about was a tenant quietly missing from the report, so a dropped key is
+    exactly the thing that must not be silent.
+    """
+    import contextlib  # noqa: PLC0415
+    import io  # noqa: PLC0415
+    import json as _json  # noqa: PLC0415
+    mod = _import_tool("ops", "batch_diagnose")
+    payload = _json.dumps({"data": {"db-a.yaml": _TENANT_BODY,
+                                    ".hidden.yaml": _TENANT_BODY}})
+
+    class _Result:
+        returncode = 0
+        stdout = payload
+        stderr = ""
+
+    monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: _Result())
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        found = mod.discover_tenants()
+    noise = err.getvalue()
+
+    assert found == ["db-a"], (
+        f"the hidden key became a tenant, or the visible one vanished: "
+        f"{found}")
+    assert ".hidden.yaml" in noise, (
+        f"the dropped key was skipped SILENTLY; the whole point of this "
+        f"change is that a vanished tenant must be audible.\n{noise!r}")
+    assert "carries no tenant id" in noise, (
+        f"the warning must say WHY the key was dropped; got {noise!r}")
