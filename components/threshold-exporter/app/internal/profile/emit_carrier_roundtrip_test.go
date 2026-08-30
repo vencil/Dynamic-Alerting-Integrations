@@ -109,32 +109,58 @@ func warningNaming(warnings []string, needles ...string) string {
 // TestEmit_TwoTenantsCollidingOnOneCarrierNameKeepsBothOrSaysSo is the
 // injectivity case. `a/b` and `a-b` are two different tenants that
 // `safeFilename` maps onto one name.
+//
+// ⛔ THIS TEST ASSERTS ON THE EMITTED DOCUMENT, NOT ON WARNING PROSE, and the
+// reason is a measured near-miss: the first version of it asked only "does some
+// warning mention `a/b`", which a blind reviewer showed was satisfied by the
+// UNRELATED round-trip warning — that one fires for `a/b` whether or not the
+// collision guard exists. With the guard deleted the test stayed GREEN while
+// last-write-wins silently dropped a tenant, i.e. the test named for this bug
+// did not detect this bug. Worse, its own failure message said "no warning names
+// the tenant that LOST its file" while asserting on `a/b`, the tenant that KEPT
+// its file — the report and the action disagreeing, which is the very shape this
+// family exists to kill.
+//
+// The emitter walks `prop.MemberRuleIDs` in slice order, so `a/b` is written
+// first and `a-b` is the one that must be refused. Pinning WHICH document
+// survives is what makes the assertion sensitive to keep-first.
 func TestEmit_TwoTenantsCollidingOnOneCarrierNameKeepsBothOrSaysSo(t *testing.T) {
 	t.Parallel()
-	ps, rules := twoTenantProposal("a/b", "a-b")
+	const first, second = "a/b", "a-b"
+	ps, rules := twoTenantProposal(first, second)
 	out := emitOneProposalFor(t, ps, rules)
 
-	// Whatever the emitter chooses to do, it must not lose a tenant in
-	// silence. Either both tenants get a carrier, or the operator is told
-	// by name which one did not.
-	bodies := map[string]bool{}
-	for k, v := range out.Files {
+	carriers := map[string]bool{}
+	for k := range out.Files {
 		if strings.HasSuffix(k, ".yaml") && !strings.HasSuffix(k, "_defaults.yaml") {
-			bodies[k] = true
-			_ = v
+			carriers[k] = true
 		}
 	}
-	if len(bodies) == 2 {
-		return // both carriers exist; nothing was lost
+	if len(carriers) == 2 {
+		return // both tenants got their own carrier; nothing was lost
 	}
-	if w := warningNaming(out.Warnings, "a/b"); w == "" {
-		t.Errorf("tenants %q and %q collapse onto one carrier name and NO warning "+
-			"names the tenant that lost its file.\n"+
-			"  a proposal that silently drops one of two tenants is exactly the "+
-			"#1339 shape: the report says the proposal was emitted, and one "+
-			"tenant's thresholds are simply not in it.\n"+
+
+	// One file for two tenants. The surviving document must be the FIRST
+	// writer's — anything else means a later write silently replaced an
+	// earlier tenant's proposal.
+	body := string(out.Files["conf.d/dom/a-b.yaml"])
+	if !strings.Contains(body, first+":") {
+		t.Errorf("tenants %q and %q collapse onto one carrier and the surviving "+
+			"document belongs to %q, not to the tenant written first (%q).\n"+
+			"  last-write-wins here means one tenant's proposed thresholds are "+
+			"simply gone while the report says the proposal was emitted.\n"+
+			"  conf.d/dom/a-b.yaml was:\n%s", first, second, second, first, body)
+	}
+
+	// And the refusal must be named — specifically the refusal, not the
+	// round-trip warning that fires for `a/b` regardless.
+	if w := warningNaming(out.Warnings, second, "overwrite"); w == "" {
+		t.Errorf("tenant %q lost its carrier to a name collision and NO warning "+
+			"names both that tenant and the overwrite it was refused.\n"+
+			"  ⛔ a warning that merely mentions %q does not count: the round-trip "+
+			"warning says that whether or not this collision was handled.\n"+
 			"  emitted: %v\n  warnings: %v",
-			"a/b", "a-b", sortedCarrierKeys(out.Files), out.Warnings)
+			second, first, sortedCarrierKeys(out.Files), out.Warnings)
 	}
 }
 

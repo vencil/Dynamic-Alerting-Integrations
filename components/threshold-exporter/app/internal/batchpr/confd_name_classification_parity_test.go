@@ -33,6 +33,14 @@ package batchpr
 //	                    (and only into the chunk that owns the row's `stem`)
 //	dropped+warned   == everything else
 //
+// ⛔ `stem` here is the tenant a carrier is NAMED FOR, which is a write-plane
+// convention (the emitter writes `safeFilename(id)+".yaml"`, this allocator
+// reads the id back out). It is NOT "the tenant the exporter serves out of
+// this file" — measured, the exporter takes identity from the `tenants:` keys
+// inside the document and never from a filename. What the exporter's name
+// rules decide, and all this test holds the allocator to, is CLASSIFICATION:
+// is the file read at all, and is it the chain carrier.
+//
 // ⛔ THE PLAN THIS TEST BUILDS IS DELIBERATELY ADVERSARIAL. A plan's tenant
 // ids do NOT come from conf.d stems — `ProposalRef.MemberTenantIDs` is
 // documented (types.go) as computed by the caller "from the underlying
@@ -296,9 +304,10 @@ func TestAllocateFilesMatchesNameMatrix(t *testing.T) {
 			case r.isTenantCarrier():
 				if landed[r.Name] != tenantIdx {
 					t.Errorf("tenant carrier %q went to bucket %d, want the tenant chunk (%d).\n"+
-						"  the exporter serves tenant %q out of this file, and the chunk "+
-						"claims that id — dropping it means the threshold change reaches "+
-						"no PR at all while the report says the proposal was applied.\n"+
+						"  the exporter READS this file, the write plane NAMES it for tenant "+
+						"%q, and the chunk claims that id — dropping it means the threshold "+
+						"change reaches no PR at all while the report says the proposal was "+
+						"applied.\n"+
 						"  matrix why: %s",
 						r.Name, landed[r.Name], tenantIdx, r.Stem, r.Why)
 				}

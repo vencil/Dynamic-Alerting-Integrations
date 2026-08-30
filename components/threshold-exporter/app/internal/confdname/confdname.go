@@ -11,9 +11,12 @@
 // tenant it is for), writing them out a second time would have been the family
 // reproducing itself inside one binary. So the rule lives here once.
 //
-// The authority is `components/threshold-exporter/app/config_hierarchy.go` —
-// the production hot-reload scanner, which decides what /metrics actually
-// serves. This package restates its name rules; the agreement is pinned
+// The authority for the NAME rules is
+// `components/threshold-exporter/app/config_hierarchy.go` — the production
+// hot-reload scanner, which decides which files are read at all. ⛔ Its name
+// rules are the only thing restated here: that scanner takes tenant IDENTITY
+// from the `tenants:` keys inside each document, never from a filename, so
+// nothing in this package answers "who is being served". The agreement is pinned
 // against `tests/shared/confd_name_classification_matrix.json` by
 // internal/batchpr/confd_name_classification_parity_test.go, which drives the
 // allocator that these predicates back.
@@ -71,12 +74,26 @@ func IsHidden(base string) bool { return strings.HasPrefix(base, ".") }
 // one reserved sub-case that carries meaning.
 func IsReserved(base string) bool { return strings.HasPrefix(base, "_") }
 
-// TenantOf returns the tenant id the exporter would serve out of a carrier
-// named `base`, and whether `base` is a tenant carrier at all.
+// TenantNamedBy returns the tenant id a carrier named `base` is NAMED FOR, and
+// whether `base` is a tenant carrier at all.
 //
-// This is the `tenants` projection of the shared matrix restated:
+// The predicate half is the `tenants` projection of the shared matrix restated:
 // yaml_extension AND NOT reserved_prefix AND NOT hidden.
-func TenantOf(base string) (tenant string, ok bool) {
+//
+// ⛔ THIS IS NOT "WHO THE EXPORTER SERVES OUT OF THIS FILE", and must never be
+// used to answer that. The exporter takes tenant IDENTITY from the `tenants:`
+// keys INSIDE the document (`config_hierarchy.go`: `for tid := range
+// doc.Tenants`) — measured, there is no place in the exporter that derives a
+// tenant id from a filename. A basename only decides CLASSIFICATION: is this
+// file read at all, and is it the chain carrier.
+//
+// What this function answers is the WRITE PLANE's naming convention: the
+// proposal emitter names each tenant's carrier `safeFilename(id)+".yaml"` and
+// the batch-PR allocator recovers the id back out of that name. Those two are
+// the round trip that needs checking, and this is the rule they share. A
+// carrier whose filename and whose `tenants:` key disagree is legal on disk and
+// the exporter will happily serve the key — it is the PR routing that loses it.
+func TenantNamedBy(base string) (tenant string, ok bool) {
 	stem, isYAML := SplitCarrier(base)
 	if !isYAML || stem == "" || IsHidden(base) || IsReserved(base) {
 		return "", false

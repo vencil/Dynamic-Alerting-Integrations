@@ -333,7 +333,7 @@ func putTenantCarrier(
 	key := pathFor(name)
 	var warnings []string
 
-	if got, ok := confdname.TenantOf(name); !ok || got != tenantID {
+	if got, ok := confdname.TenantNamedBy(name); !ok || got != tenantID {
 		warnings = append(warnings, fmt.Sprintf(
 			"proposal[%d]: %stenant %q emits carrier %q, which reads back as tenant "+
 				"%q (a tenant carrier at all: %t) — the batch-PR allocator recovers "+

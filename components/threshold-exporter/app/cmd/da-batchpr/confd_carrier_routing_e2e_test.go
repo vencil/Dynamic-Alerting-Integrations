@@ -276,9 +276,10 @@ func TestApply_ConfdCarriersReachThePRTheExporterWouldAgreeWith(t *testing.T) {
 			case r.isTenantCarrier():
 				if landedIn[r.Name] != chunkTitle {
 					t.Errorf("tenant carrier %q reached PR %q, want the tenant chunk %q.\n"+
-						"  the exporter serves tenant %q out of this file; a carrier that "+
-						"reaches no PR is a threshold change the operator was told was "+
-						"applied and that production never sees.\n  matrix why: %s",
+						"  the exporter READS this file and the write plane NAMES it for "+
+						"tenant %q; a carrier that reaches no PR is a threshold change the "+
+						"operator was told was applied and that production never sees.\n"+
+						"  matrix why: %s",
 						r.Name, landedIn[r.Name], chunkTitle, r.Stem, r.Why)
 				}
 			default:
