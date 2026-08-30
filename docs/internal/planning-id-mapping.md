@@ -197,6 +197,7 @@ SOT 在 [`dx-tooling-backlog.md`](dx-tooling-backlog.md)。
 | TRK-362 | [#1485](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1485) | 吸收 superpowers 兩項缺口能力 —— 完成宣稱鐵律升為 always-on 規則（`AGENTS.md` / `CLAUDE.md`）、收 review 紀律進 `vibe-subagent-review`（take/reframe/reject + 修→回覆→resolve 三件套）；刻意不新增第 9 支 skill（**無 issue，直接以 PR 落地**） | — |
 | TRK-369 | [#1593](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1593) | 語言邊界：繁中規範管的是 AI 對人的輸出，repo 工具印給 operator 的字串沿用該工具既有慣例（`dev-rules.md` §9c + `CLAUDE.md` / `AGENTS.md` 措辭對齊）——#1244 的裁決解決了「不要只翻一半」卻沒寫下涵蓋範圍，於是同一條 finding 在每支動到 operator-visible 字串的 PR 上復發（最近一次 #1580）；⚠️ 觸發它的 path instruction 在 CodeRabbit **UI** 側，repo 改不到，故本條不宣稱能單獨終結（**無 issue，直接以 PR 落地**） | — |
 | TRK-370 | [#1379](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1379) | 客戶文件 ↔ da-tools CLI 契約閘門：產給客戶與教客戶抄的命令，沒有任何機制在驗它們符不符合 da-tools 自己的 argparse 宣告（旗標存在性、預設值、結束碼）。子票 #1380 / #1381 / #1513 / #1619 為內容修正，本條是守衛。⚠️ 本票標題原本掛 `TRK-359`，而那個號碼屬 ADR-032 夜跑對交錯量測（#1439）——本列即為改正 | — |
+| TRK-371 | [#1635](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1635) | `bench-baseline.txt` 說不出自己完不完整，所以舊 watchdog 仍會因任何 job 失敗丟掉那一夜（ADR-032 / TRK-359 線；#1626 明白留下的 open gap）。⚠️ **本列是補登**：#1635 開票時把 ID 標為「Proposed，待 maintainer 對 planning SSOT 確認」，而該確認一直沒發生 —— 於是編號只活在 issue body 與交接文件裡，登記表最高停在 TRK-370。⛔ **並更正一處**：#1635 票面（與其後的交接文件）寫「TRK-370 = #1623」，但本表的 TRK-370 屬 #1379（由 #1636 前一顆 commit 落定）；#1623 至今**沒有** TRK 編號。TRK-371 本身未被佔用，故 #1635 沿用該號無誤，錯的是它引述的鄰號 | — |
 
 ## 不在 mapping 範圍
 

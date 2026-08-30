@@ -10,7 +10,11 @@ Closes the audit gap (P1-5 / 444 LOC tool was 0% covered). Targets the spine:
   - render_markdown_table (table shape + threshold line)
 
 OUT OF SCOPE here (require gh CLI auth / live network):
-  - _gh, list_recent_runs, download_artifact
+  - _gh, download_artifact
+  - list_recent_runs' NETWORK behaviour. ⚠️ Narrowed by TRK-371 / #1635: this
+    file now also pins that function's `status` DEFAULT and the `--json` field
+    list, both by introspection with no network. The call itself is still
+    untested here.
   - main() end-to-end (involves the gh-CLI chain)
 """
 from __future__ import annotations
@@ -4492,3 +4496,166 @@ class TestCanariesAreNeverJudgedAsProductBenchmarks:
                                    src, _re.M))
         assert declared == set(ab.CANARY_BENCHES)
 
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# TRK-371 / #1635 — the completeness marker for bench-baseline.txt
+#
+# The artifact could not say whether it was whole, so the window predicate had
+# to be `--status success`, so a failing CONSUMER job deleted that night from
+# its own future windows. These pin the loader half: the marker reader, the
+# admission judgment, and the widened predicate.
+#
+# ⚠️ SCOPE. Every test below drives PURE functions with hand-built inputs. None
+# of them proves the CI wiring works — that half lives in
+# `test_write_baseline_marker.py`, and even there it is a text assertion. What
+# is genuinely established here is the DECISION TABLE, nothing wider.
+# ══════════════════════════════════════════════════════════════════════════
+
+MARKER_OK = "schema: bench-baseline-rows/v1\nrows: 12\n"
+
+
+def _write_marker(d: Path, body: str) -> Path:
+    d.mkdir(parents=True, exist_ok=True)
+    (d / ab.MARKER_FILE).write_text(body, encoding="utf-8")
+    return d
+
+
+class TestReadCompletenessMarker:
+    def test_absent_marker_is_absent_not_an_error(self, tmp_path: Path):
+        """⛔ (None, None) and (None, reason) are different answers. Absent is a
+        version boundary; malformed is unaccounted for. Collapsing them lets a
+        corrupt artifact borrow an explanation measured for something else."""
+        fields, err = ab.read_completeness_marker(tmp_path)
+        assert fields is None
+        assert err is None
+
+    def test_well_formed_marker_is_returned(self, tmp_path: Path):
+        fields, err = ab.read_completeness_marker(_write_marker(tmp_path, MARKER_OK))
+        assert err is None
+        assert fields == {"schema": "bench-baseline-rows/v1", "rows": "12"}
+
+    def test_unknown_schema_is_refused_by_name(self, tmp_path: Path):
+        body = "schema: bench-baseline-rows/v99\nrows: 12\n"
+        fields, err = ab.read_completeness_marker(_write_marker(tmp_path, body))
+        assert fields is None
+        assert err.startswith(ab.REFUSE_MARKER_UNREADABLE)
+        assert "bench-baseline-rows/v99" in err
+
+    def test_missing_required_key_is_refused(self, tmp_path: Path):
+        fields, err = ab.read_completeness_marker(
+            _write_marker(tmp_path, "schema: bench-baseline-rows/v1\n"))
+        assert fields is None
+        assert "rows" in err
+
+    def test_line_without_a_separator_is_refused(self, tmp_path: Path):
+        body = "schema: bench-baseline-rows/v1\nrows 12\n"
+        fields, err = ab.read_completeness_marker(_write_marker(tmp_path, body))
+        assert fields is None
+        assert err.startswith(ab.REFUSE_MARKER_UNREADABLE)
+
+    def test_non_integer_row_count_is_refused(self, tmp_path: Path):
+        body = "schema: bench-baseline-rows/v1\nrows: twelve\n"
+        fields, err = ab.read_completeness_marker(_write_marker(tmp_path, body))
+        assert fields is None
+        assert "not an integer" in err
+
+    def test_blank_lines_are_tolerated(self, tmp_path: Path):
+        body = "schema: bench-baseline-rows/v1\n\nrows: 12\n\n"
+        fields, err = ab.read_completeness_marker(_write_marker(tmp_path, body))
+        assert err is None
+        assert fields["rows"] == "12"
+
+
+class TestJudgeNightCompleteness:
+    """The decision table. One test per cell, each naming its own cause."""
+
+    def test_marker_present_and_matching_is_admitted(self):
+        admit, why = ab.judge_night_completeness(
+            {"schema": "bench-baseline-rows/v1", "rows": "12"}, None, "success", 12)
+        assert admit is True
+        assert why == "marker-verified"
+
+    def test_a_marked_night_survives_its_run_failing(self):
+        """⛔ THIS IS THE DEFECT #1635 EXISTS TO CLOSE. The run concluded
+        `failure` — because a CONSUMER job (trend-watch itself) died — but the
+        baseline step finished and vouched for its file. Admitting it is what
+        breaks the self-eating loop.
+
+        A specific break that reddens this: make the admission depend on
+        `conclusion == "success"` regardless of the marker."""
+        admit, why = ab.judge_night_completeness(
+            {"schema": "bench-baseline-rows/v1", "rows": "12"}, None, "failure", 12)
+        assert admit is True, (
+            "a night whose producer finished was dropped because an unrelated "
+            "consumer job failed — that is the self-eating loop, unfixed"
+        )
+        assert why == "marker-verified"
+
+    def test_row_mismatch_is_refused_with_both_numbers(self):
+        admit, why = ab.judge_night_completeness(
+            {"schema": "bench-baseline-rows/v1", "rows": "12"}, None, "success", 9)
+        assert admit is False
+        assert why.startswith(ab.REFUSE_MARKER_ROW_MISMATCH)
+        assert "12" in why and "9" in why
+
+    def test_pre_marker_night_from_a_successful_run_is_grandfathered(self):
+        """The rolling-window clause. Admitted because the OLD predicate is
+        exactly the guarantee the marker replaces — every job passed, so the
+        baseline step passed — NOT because old nights are probably fine."""
+        admit, why = ab.judge_night_completeness(None, None, "success", 12)
+        assert admit is True
+        assert why == ab.ADMIT_PRE_MARKER_SUCCESS
+
+    @pytest.mark.parametrize("conclusion", ["failure", "cancelled", "timed_out", None])
+    def test_pre_marker_night_from_a_non_successful_run_is_refused(self, conclusion):
+        """⛔ Without a marker AND without the success predicate there is no
+        evidence at all — truncation and a short night are isomorphic."""
+        admit, why = ab.judge_night_completeness(None, None, conclusion, 12)
+        assert admit is False
+        assert why.startswith(ab.REFUSE_PRE_MARKER_NONSUCCESS)
+        assert repr(conclusion) in why
+
+    def test_a_malformed_marker_is_refused_even_on_a_successful_run(self):
+        """⛔ ORDER. The malformed branch is settled before the grandfather one.
+        If it were not, a corrupt marker on a `success` run would be waved
+        through by a clause written for nights that have no marker at all.
+
+        A specific break that reddens this: move the `marker_error` check below
+        the `marker is None` check."""
+        admit, why = ab.judge_night_completeness(
+            None, f"{ab.REFUSE_MARKER_UNREADABLE}: mangled", "success", 12)
+        assert admit is False
+        assert why.startswith(ab.REFUSE_MARKER_UNREADABLE)
+
+    def test_the_three_refusal_causes_are_distinct_strings(self):
+        """Named separately on purpose (#1571 判準 1): an operator reading
+        'pre-marker' goes to the calendar, one reading 'row-mismatch' goes to
+        the upload path, and one reading 'unreadable' goes to the producer."""
+        causes = {ab.REFUSE_MARKER_UNREADABLE, ab.REFUSE_MARKER_ROW_MISMATCH,
+                  ab.REFUSE_PRE_MARKER_NONSUCCESS, ab.ADMIT_PRE_MARKER_SUCCESS}
+        assert len(causes) == 4
+
+
+class TestWindowPredicate:
+    def test_the_window_predicate_is_completed_not_success(self):
+        """⛔ The one-line change the whole PR is scaffolding for. A night is
+        now judged by its artifact, not by whether every job in its run passed.
+
+        A specific break that reddens this: revert the default to "success"."""
+        import inspect
+        default = inspect.signature(ab.list_recent_runs).parameters["status"].default
+        assert default == "completed", (
+            "the window still keys on the RUN's conclusion, so a failing "
+            "consumer job still deletes that night from its own future windows"
+        )
+
+    def test_the_run_conclusion_is_still_requested_from_gh(self):
+        """The grandfather branch reads `conclusion`; if the `--json` field
+        list ever drops it, every pre-marker night silently becomes a refusal.
+
+        A specific break that reddens this: remove `conclusion` from the
+        `--json` list in `list_recent_runs`."""
+        src = (Path(ab.__file__)).read_text(encoding="utf-8")
+        body = src.split("def list_recent_runs", 1)[1].split("\ndef ", 1)[0]
+        assert "conclusion" in body

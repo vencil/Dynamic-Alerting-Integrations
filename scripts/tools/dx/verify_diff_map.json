@@ -117,7 +117,8 @@
   ],
   "scripts/tools/dx/analyze_bench_history.py": [
    "tests/dx/test_analyze_bench_history.py",
-   "tests/dx/test_paired_trend_watch.py"
+   "tests/dx/test_paired_trend_watch.py",
+   "tests/dx/test_write_baseline_marker.py"
   ],
   "scripts/tools/dx/axe_lite_static.py": [
    "tests/dx/test_axe_lite_static.py",
@@ -235,6 +236,9 @@
   ],
   "scripts/tools/dx/waveform_score.py": [
    "tests/dx/test_waveform_score.py"
+  ],
+  "scripts/tools/dx/write_baseline_marker.py": [
+   "tests/dx/test_write_baseline_marker.py"
   ],
   "scripts/tools/lint/_lint_helpers.py": [
    "tests/lint/test_check_build_completeness.py",
@@ -767,7 +771,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "14a3117c43856b823ddf5192699b061acea03bdf643c842287162ec4bd5688d1",
+ "source_digest": "52c848f198713cc18994f36cf082c84d5ce72ffe648e97791cc2646b7fff3896",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -833,6 +837,7 @@
   "tests/dx/test_verify_release.py",
   "tests/dx/test_waveform_compile.py",
   "tests/dx/test_waveform_score.py",
+  "tests/dx/test_write_baseline_marker.py",
   "tests/e2e-bench/driver/test_driver.py",
   "tests/e2e-bench/test_aggregate.py",
   "tests/golden/test_merge_parity.py",
@@ -1147,7 +1152,8 @@
   ],
   ".github/workflows/bench-record.yaml": [
    "tests/dx/test_pair_bench_ratio.py",
-   "tests/dx/test_paired_trend_watch.py"
+   "tests/dx/test_paired_trend_watch.py",
+   "tests/dx/test_write_baseline_marker.py"
   ],
   ".github/workflows/bench-workload-effect.yaml": [
    "tests/lint/test_check_workload_closure_drift.py"
@@ -2341,6 +2347,9 @@
   ],
   "scripts/tools/dx/waveform_score.py": [
    "tests/dx/test_waveform_score.py"
+  ],
+  "scripts/tools/dx/write_baseline_marker.py": [
+   "tests/dx/test_write_baseline_marker.py"
   ],
   "scripts/tools/lint": [
    "tests/dx/test_line_ending_policy.py",

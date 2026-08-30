@@ -1181,41 +1181,37 @@ def test_the_window_asks_for_completed_runs_not_only_successful_ones(
     assert seen == ["completed"]
 
 
-def test_the_old_watchdogs_window_still_asks_only_for_successful_runs(
-        monkeypatch, tmp_path):
-    """⛔ The asymmetry is deliberate, so it is pinned rather than left to drift.
+def test_both_watchdogs_now_ask_for_completed_runs(monkeypatch, tmp_path):
+    """⛔ THE ASYMMETRY THIS TEST USED TO PIN IS GONE (TRK-371 / #1635).
 
-    ⚠️ AND THIS TEST DID NOT PIN IT UNTIL THE SPY WAS FIXED. Its first cut gave
-    the spy its own `status="success"` default, so the assertion was true by
-    construction and stayed GREEN while the real default was flipped to
-    `completed` — a test whose name promised more than it checked, which is the
-    exact defect class this file exists to refuse. Recorded rather than quietly
-    corrected.
+    It was named `test_the_old_watchdogs_window_still_asks_only_for_successful_
+    runs` and asserted `seen == ["success"]`. That was correct for exactly the
+    reason its own last paragraph gave, and that paragraph named its own exit
+    condition: "`bench-baseline.txt` carrying its own completeness marker would
+    let both sides ask `completed`". #1635 shipped the marker
+    (`bench-baseline.rows`, written by `write_baseline_marker.py`), so the
+    predicate moved and this test moved with it. Renamed rather than deleted:
+    the pin is still worth having, it just points the other way now.
 
-    `bench-paired.json` can say whether it is whole — JSON parse, schema string,
-    required keys — so admitting a red run there costs nothing. `bench-baseline
-    .txt` cannot: it is a `cp` of a text file with no row count and no trailer,
-    `night_records_from_gh` applies no sample floor (`statistics.median` of a
-    one-element list is that element), and `upload-artifact` runs `if: always()`
-    so a run that died mid-benchmark still uploads what exists. Flipping that
-    side would feed single-sample "medians" into the rule that opens
-    `perf-trend` issues.
+    ⚠️ AND THE SPY HISTORY IS KEPT, because it is why this assertion is worth
+    anything. The first cut gave the spy its own `status="success"` default, so
+    the assertion was true by construction and stayed GREEN while the real
+    default was flipped — a test whose name promised more than it checked.
+    `_spy_effective_status` reads the default off the real signature instead, so
+    both break directions are still caught here: a call site that starts passing
+    something else, and the module default being flipped under a call site that
+    passes nothing.
 
-    ⚠️ This test pins WHICH predicate each consumer asks for. It does not claim
-    the asymmetry is the end state — `bench-baseline.txt` carrying its own
-    completeness marker would let both sides ask `completed`, and until that
-    exists the old watchdog keeps losing a night whenever any job in the run
-    fails, its own crash included. Stated as an open gap, not a solved one.
+    ⛔ WHAT MAKES THE WIDENING SAFE IS NOT THIS PREDICATE. It is
+    `judge_night_completeness`, which refuses a night whose marker is absent on
+    a non-success run and one whose row count disagrees with its marker. Those
+    are pinned in `test_analyze_bench_history.py`, not here.
     """
     import analyze_bench_history as abh
     seen = []
     _spy_effective_status(monkeypatch, abh, seen)
     abh.night_records_from_gh("bench-record.yaml", 14, tmp_path)
-    # The EFFECTIVE status, so BOTH ways of breaking this are caught: the call
-    # site starting to pass `completed`, and the module's own default being
-    # flipped under a call site that passes nothing. The second one is what the
-    # first cut of this test could not see.
-    assert seen == ["success"]
+    assert seen == ["completed"]
 
 
 def test_from_gh_two_runs_on_one_calendar_night_do_not_satisfy_k_of_2(tmp_path):
@@ -2046,13 +2042,25 @@ def test_the_new_job_cannot_take_the_nights_data_down_with_it():
     14 nights. `continue-on-error` is what makes the "does not entangle" claim
     in the workflow comment actually true.
 
-    ⛔ NARROWED, and the old wording is kept here as the thing being corrected:
-    this docstring used to say "BOTH watchdogs" and name `bench-paired.json`
-    beside `bench-baseline.txt`. `paired_trend_watch.py` now asks for
-    `completed` and judges the artifact itself, so ITS window already survives a
-    red run. The line below is load-bearing for the other one only —
-    `analyze_bench_history.py` still asks `success` — which is why the assertion
-    is on that module's default rather than on a literal shared by both.
+    ⛔ NARROWED ONCE, THEN SUPERSEDED. Both prior wordings are kept because each
+    was the reason for a decision. (1) It first said "BOTH watchdogs" and named
+    `bench-paired.json` beside `bench-baseline.txt`; #1626 made that false for
+    the paired side. (2) It then said the line below is load-bearing for
+    `analyze_bench_history.py` only, "which still asks `success`".
+
+    ⚠️ (2) IS NOW FALSE TOO, and the consequence is worth stating rather than
+    quietly editing: since TRK-371 / #1635 both watchdogs ask `completed` and
+    admission is decided by the artifact's completeness marker, so a red
+    `paired-trend-watch` no longer removes that night from anyone's window.
+    `continue-on-error` is therefore NO LONGER what protects the window on a
+    marked night — the marker is.
+
+    ⛔ It is still asserted, for two reasons that survive: during the ~14-night
+    roll-in the window still holds pre-marker nights, and those ARE admitted on
+    their run's `success` conclusion, so for them the old mechanism is still
+    load-bearing; and removing it would let an unproven reporter redden the
+    nightly. The `list_recent_runs` assertion below now pins `completed` — the
+    predicate this job's protection used to substitute for.
     """
     yaml = pytest.importorskip("yaml")
     workflow = yaml.safe_load(
@@ -2070,7 +2078,7 @@ def test_the_new_job_cannot_take_the_nights_data_down_with_it():
 
     import analyze_bench_history as abh
     assert inspect.signature(
-        abh.list_recent_runs).parameters["status"].default == "success"
+        abh.list_recent_runs).parameters["status"].default == "completed"
 
 
 # ── 7. FIXES FOR THE FIFTH REVIEW ROUND ───────────────────────────────────
