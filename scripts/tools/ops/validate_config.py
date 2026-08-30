@@ -503,7 +503,7 @@ def check_routes(
     # Load allowed_domains from policy (#1556: unusable value is a caller
     # error, not "no policy" — see check_policy)
     allowed_domains = None
-    if policy_file:
+    if policy_file is not None:   # ⛔ not truthiness: "" is supplied (#1616)
         try:
             allowed_domains = gen.load_policy(policy_file)
         except gen.PolicyInputError as exc:
@@ -557,7 +557,7 @@ def check_policy(config_dir: str, policy_file: str | None) -> dict[str, object]:
     copied it read ``[PASS] policy`` while the allowlist was off. Only the
     first of those two is a legitimate skip.
     """
-    if not policy_file:
+    if policy_file is None:   # ⛔ not truthiness: "" is supplied (#1616)
         return _make_result("policy", PASS, ["No policy file — skipped"])
 
     tools_dir = os.path.dirname(os.path.abspath(__file__))
@@ -610,13 +610,18 @@ def check_custom_rules(
     omitting it, so a typo or a renamed directory silently removed the custom
     rule lint from the run.
     """
-    if not rule_packs_dir:
+    # ⛔ `is None`, not `not rule_packs_dir`. An empty string is SUPPLIED — it is
+    # what an unset shell variable expands to — and the falsy test routed it
+    # into the skipped branch, removing the custom rule lint from the run at
+    # exit 0. The flag's argparse default is None, so nothing else reaches this
+    # branch. Same split as #1616's --base-config.
+    if rule_packs_dir is None:
         return _make_result("custom_rules", PASS,
                             ["No rule-packs dir — skipped"])
     if not os.path.isdir(rule_packs_dir):
         result = _make_result(
             "custom_rules", FAIL,
-            [f"--rule-packs: not a directory: {rule_packs_dir}",
+            [f"--rule-packs: not a directory: {rule_packs_dir!r}",
              "  ⛔ Do not drop the flag to clear this — that removes the "
              "custom rule lint from the run, which is what this error stops."],
             caller_error=True, hint=_RULE_PACKS_INPUT_HINT)
@@ -628,7 +633,7 @@ def check_custom_rules(
     # #1556: pass the value through even when it is not a file. Dropping it
     # here made `validate-config --policy <typo>` lint with the built-in
     # policy while reporting success; lint_custom_rules now exits 2 on it.
-    if policy_file:
+    if policy_file is not None:   # ⛔ not truthiness: "" is supplied (#1616)
         cmd.extend(["--policy", policy_file])
 
     try:
@@ -795,11 +800,17 @@ def check_policy_dsl(config_dir: str, policy_dsl_file: str | None = None) -> dic
     # `--policy-dsl <missing>` produced output BYTE-IDENTICAL to passing no
     # flag at all, at exit 0 — the operator asked for a policy file and was
     # told "No _policies defined — skipped".
-    if policy_dsl_file:
+    #
+    # ⛔ `is not None`, not truthiness. An empty string is SUPPLIED — it is what
+    # an unset shell variable expands to — and the truthy test routed it back
+    # into the same skipped row this split exists to abolish. The flag's
+    # argparse default is None, so nothing else reaches the else side. Same
+    # split as #1616's --base-config.
+    if policy_dsl_file is not None:
         if not os.path.isfile(policy_dsl_file):
             return _argv_error_row(
                 "policy_dsl",
-                f"--policy-dsl: not a file: {policy_dsl_file}",
+                f"--policy-dsl: not a file: {policy_dsl_file!r}",
                 _POLICY_DSL_INPUT_HINT)
         # ⛔ "not a file" is ONE of the five shapes of "supplied but unusable",
         # and the first cut of this split closed only that one — the same 1-of-5
@@ -817,13 +828,13 @@ def check_policy_dsl(config_dir: str, policy_dsl_file: str | None = None) -> dic
         except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
             return _argv_error_row(
                 "policy_dsl",
-                f"--policy-dsl: unusable file: {policy_dsl_file}: {exc}",
+                f"--policy-dsl: unusable file: {policy_dsl_file!r}: {exc}",
                 _POLICY_DSL_INPUT_HINT)
         if dsl_data is not None and not isinstance(dsl_data, dict):
             return _argv_error_row(
                 "policy_dsl",
                 f"--policy-dsl: top level is {type(dsl_data).__name__}, "
-                f"expected a mapping with a `policies:` key: {policy_dsl_file}",
+                f"expected a mapping with a `policies:` key: {policy_dsl_file!r}",
                 _POLICY_DSL_INPUT_HINT)
         # ⚠️ An empty file, or a mapping with neither `policies:` nor
         # `_policies:`, still reaches "No _policies defined — skipped" at
@@ -1625,12 +1636,28 @@ def main() -> None:
                               args.policy, _config_dir=args.config_dir))
 
     # 4. Policy check (if policy provided)
-    if args.policy:
+    # ⛔ `is not None`, not truthiness. The flags' argparse defaults are None,
+    # so only an explicitly supplied empty string reaches the falsy branch.
+    #
+    # ⚠️ What THIS line (`--policy`) controls is the REPORT, not the verdict:
+    # `check_routes` above takes `args.policy` unconditionally, so `--policy ""`
+    # exits 2 from that row even with this line reverted to truthiness — what
+    # gets lost is the `[FAIL] policy` row itself. MEASURED both ways.
+    # ⛔ Do NOT generalise that to the `--rule-packs` dispatcher below: see the
+    # comment there. Two earlier revisions of this comment were wrong in
+    # opposite directions, and the second one was wrong because it stated a
+    # result measured on `--policy` as if it covered both flags.
+    if args.policy is not None:
         results.append(_run_check("policy", check_policy, args.config_dir,
                                   args.policy, _config_dir=args.config_dir))
 
     # 5. Custom rule lint (if rule-packs dir provided)
-    if args.rule_packs:
+    # ⛔ Unlike the `--policy` line above, THIS dispatcher IS the verdict site.
+    # `check_custom_rules` has exactly one call site — this one — so there is no
+    # unconditional second path to catch an unusable value. MEASURED: reverting
+    # this line to truthiness takes `--rule-packs ""` from rc=2 to rc=0 with the
+    # whole report reading PASS, verdict and row gone together.
+    if args.rule_packs is not None:
         results.append(_run_check("custom_rules", check_custom_rules,
                                   args.rule_packs, args.policy, _config_dir=args.config_dir))
 
