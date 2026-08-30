@@ -385,9 +385,15 @@ func putTenantCarrier(
 			propIdx, pathLabel, tenantID, key))
 	}
 
+	// ⛔ The two arms say different things on purpose. The common shape is ONE
+	// tenant with several member rules in a proposal (clustering keys on
+	// expr+for+dialect, so duplicates of one tenant land together); reporting
+	// that as "two tenants" sends the operator hunting for a second tenant that
+	// does not exist. Both ids are in hand, so there is no excuse for the wrong
+	// sentence.
 	if prev, taken := owners[key]; taken {
-		switch {
-		case prev.TenantID == tenantID:
+		switch prev.TenantID {
+		case tenantID:
 			warnings = append(warnings, fmt.Sprintf(
 				"proposal[%d]: %stenant %q has more than one member rule in this "+
 					"proposal; %s overwrites the document %s wrote at %q, and only the "+
