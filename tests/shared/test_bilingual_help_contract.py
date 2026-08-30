@@ -187,6 +187,7 @@ ENGLISH_ONLY: dict[str, str] = {
     "sync_schema.py": _R_DX,
     "sync_tool_registry.py": _R_DX,
     "tenant_verify.py": _R_DX,
+    "write_baseline_marker.py": _R_DX,
     # ── scripts/tools/lint ─────────────────────────────────────────────
     "check_account_registry_monotonic.py": _R_LINT,
     "check_ad_hoc_git_scripts.py": _R_LINT,
@@ -479,8 +480,25 @@ def test_allowlists_shrink_only_count_pin():
     # exception in its own directory rather than the start of a trend. The same
     # reasoning the check_workload_closure_drift.py and check_cli_default_drift.py
     # entries already record.
-    assert len(ENGLISH_ONLY) <= 144, (
-        f"ENGLISH_ONLY grew to {len(ENGLISH_ONLY)} (pin=144). Adding an "
+    # pin 145: bumped from 144 for write_baseline_marker.py (TRK-371 / #1635),
+    # which writes the `bench-baseline.rows` completeness marker. Same class as
+    # the three ADR-032 siblings already here — pair_bench_ratio.py,
+    # analyze_bench_history.py and paired_trend_watch.py: a dx CLI invoked from
+    # bench-record.yaml's two baseline steps and nowhere else, never by a
+    # customer. Its entire output is one `baseline rows: N (marker: <path>)`
+    # line and `::error::` refusals addressed to an Actions log.
+    # ⛔ Recorded as a decision, not a default. `scripts/tools/dx/` is
+    # overwhelmingly English-only and the three tools this one is wired
+    # between are all in this list, so wiring detect_cli_lang() here would make
+    # it the lone bilingual exception inside its own ADR-032 tool family. Same
+    # reasoning the paired_trend_watch.py and check_workload_closure_drift.py
+    # entries already record.
+    # ⚠️ Worth recording HOW this entry got here: not by design review but by
+    # this gate turning the PR red. The tool was written without anyone asking
+    # the bilingual question, and the ratchet is what forced the question to be
+    # answered explicitly — which is the behaviour the ratchet exists for.
+    assert len(ENGLISH_ONLY) <= 145, (
+        f"ENGLISH_ONLY grew to {len(ENGLISH_ONLY)} (pin=145). Adding an "
         "English-only tool is allowed but must be an explicit, reviewed "
         "decision — bump this pin in the same commit and justify it."
     )

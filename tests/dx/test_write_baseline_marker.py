@@ -2,11 +2,11 @@
 `bench-baseline.txt` (TRK-371 / #1635).
 
 ⛔ THIS FILE CARRIES THE §P5 GATE FOR THE BASELINE-SIDE ARTIFACT, and it exists
-because §P5's existing body did NOT cover this artifact at all. `test_pair_
-bench_ratio.py` pins the `bench-paired.json` key set against `bench-paired/v2`;
-`grep -c baseline` over that file returns 0. So when #1635 added a required
-field to the baseline side, nothing mechanical would have fired. That gap is
-the reason this file is in the same PR as the field.
+because §P5's existing body did NOT cover this artifact at all.
+`test_pair_bench_ratio.py` pins the `bench-paired.json` key set against
+`bench-paired/v2`; `grep -c baseline` over that file returns 0. So when #1635
+added a required field to the baseline side, nothing mechanical would have
+fired. That gap is the reason this file is in the same PR as the field.
 
 WHAT IS PINNED, and how strong each half actually is — stated separately
 because the two are NOT equally strong, the same asymmetry §P5 concedes:

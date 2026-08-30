@@ -33,12 +33,28 @@ has had to correct twice already.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
+# Same two sys.path inserts as the sibling ADR-032 tools: parent
+# (`scripts/tools/`) for the repo layout where `_lib_compat.py` lives one
+# directory up, self-dir for the Docker flat layout. This tool is not bundled
+# into the image, so only the parent insert is functionally required.
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
+# ⛔ Module-level, and not merely inherited. `analyze_bench_history` imports
+# this too, so the hardening would be reachable transitively — but
+# `test_every_cli_entrypoint_imports_a_hardening_carrier` requires every
+# argparse+`__main__` entrypoint to carry it DIRECTLY, because a transitive
+# import is one refactor away from disappearing and the failure it prevents
+# (a `--help` crash on a cp950 console) shows up only on a legacy host.
+from _lib_compat import try_utf8_stdout  # noqa: E402
+
 # ⛔ Import, do not restate. See the module docstring: a copied regex is the
 # one way this design can silently start counting a different thing.
-from analyze_bench_history import _BENCH_RE
+from analyze_bench_history import _BENCH_RE  # noqa: E402
 
 MARKER_FILE = "bench-baseline.rows"
 
@@ -60,6 +76,10 @@ def render_marker(rows: int) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # ⛔ Called, not merely imported. The gate only checks the import, but an
+    # import with no call hardens nothing — satisfying the check while
+    # delivering none of what it exists for.
+    try_utf8_stdout()
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--baseline", required=True, type=Path,
                     help="Path to bench-baseline.txt (the file being vouched for).")
