@@ -61,46 +61,61 @@ rule-packs/                          @<org>/dba-team
 
 ### API RBAC (v2.5.0+)
 
-tenant-api 透過 `conf.d/_rbac.yaml` 控制 API 層級的讀寫權限。RBAC Manager 使用 `atomic.Value` 熱更新，檔案變更後無需重啟。
+tenant-api 透過 `_rbac.yaml` 控制 API 層級的讀寫權限。RBAC Manager 使用 `atomic.Value` 熱更新，檔案變更後無需重啟（輪詢間隔為 `reloadInterval`，預設 `30s`）。
 
-安全預設行為：若 `_rbac.yaml` 不存在或為空，系統進入 **open-read mode**（所有已認證使用者可讀，無人可寫）。
+⛔ **`_rbac.yaml` 的位置隨部署姿態而異，出貨預設不在 `conf.d/`**：
+
+| 部署姿態 | `--rbac` / `TA_RBAC_PATH` | 實際來源 |
+|---------|---------------------------|---------|
+| k8s raw manifest | `/etc/rbac/_rbac.yaml` | ConfigMap `rbac-config` |
+| Helm chart | `/etc/rbac/_rbac.yaml` | ConfigMap `rbac-config`（內容來自 values 的 `rbac._rbacYaml`） |
+| try-local / QUICKSTART | `/conf.d/_rbac.yaml` | `conf.d` 目錄本身 |
+
+**空設定的行為是 fail-closed，不是 open-read**：只要指定了 `--rbac` 路徑（上表三種姿態皆是），檔案不存在或群組為空即 **一律拒絕，含讀取**。只有兩種情況會進入 open-read mode（所有已認證使用者可讀、無人可寫）：完全不指定 `--rbac`，或明示 `--rbac-empty-open` / `TA_RBAC_EMPTY_OPEN=true`——出貨資產均未設定後者。
 
 ### RBAC 救援 SOP（Break-Glass Procedure）
 
-當管理員不慎修改 `_rbac.yaml` 導致所有人（包括自己）喪失 API 寫入權限時，依照以下步驟恢復：
+當管理員不慎修改 `_rbac.yaml` 導致所有人（包括自己）喪失 API 寫入權限時，依照以下步驟恢復。
 
-**情境 A：有 Git 寫入權限（推薦）**
+**步驟 0（必做）：先確認你的 `_rbac.yaml` 從哪裡來**
 
 ```bash
-# 1. 直接在 Git repo 中編輯 _rbac.yaml，恢復 admin 群組
+kubectl -n <namespace> get deploy tenant-api -o yaml | grep -- '--rbac='
+```
+
+⚠️ 出貨的 k8s / Helm 部署讀的是 **ConfigMap `rbac-config`**，不是 git repo 裡的 `conf.d/_rbac.yaml`。對這兩種姿態，編輯 git 的 `conf.d/_rbac.yaml` 不會有任何效果——走情境 A。
+
+**情境 A：來源是 ConfigMap（k8s / Helm 出貨預設）**
+
+```bash
+# Helm 部署：改 values 再 upgrade（留下可回溯的變更，優先採用）
+vi values.yaml   # rbac._rbacYaml：加回 admin 群組的 write/admin 權限
+helm upgrade <release> <chart> -n <namespace> -f values.yaml
+
+# 或直接編輯 ConfigMap（僅限緊急情況，事後須回寫 values / Git）
+kubectl edit configmap rbac-config -n <namespace>
+```
+
+ConfigMap 更新後**不是即時生效**：kubelet 需先把新內容同步到掛載的 volume，tenant-api 進程內的 config watcher 才會在下一個輪詢週期（`reloadInterval`，預設 `30s`）載入。兩段延遲相加。
+
+**情境 B：來源是 git 管理的 `conf.d`（try-local / QUICKSTART）**
+
+```bash
 git clone <repo-url> && cd <repo>
 vi conf.d/_rbac.yaml   # 加回 admin 群組的 write/admin 權限
-
-# 2. 提交並推送
 git add conf.d/_rbac.yaml
 git commit -m "fix: restore admin RBAC permissions (break-glass)"
 git push
-
-# 3. tenant-api 會透過 SHA-256 hot-reload 自動載入新配置（無需重啟）
 ```
 
-**情境 B：無 Git 權限但有 K8s 存取**
+**⛔ 不要刪除 `_rbac.yaml`**
 
-```bash
-# 直接編輯 ConfigMap（僅限緊急情況，事後須回寫 Git）
-kubectl edit configmap tenant-config -n <namespace>
-# 在 _rbac.yaml 段落中恢復 admin 群組
-# 儲存後 tenant-api sidecar 自動 reload
-```
+本節早期版本曾建議「刪掉 `_rbac.yaml` 回到 open-read mode 恢復可見性」。實際行為與此相反，且兩種姿態各自不同：
 
-**情境 C：完全刪除 `_rbac.yaml`**
+- **ConfigMap 來源**：刪掉 git 裡的 `conf.d/_rbac.yaml` 是 no-op——RBAC 不讀那個路徑，權限完全不變。
+- **`conf.d` 來源**：檔案消失即空群組集，fail-closed 生效 → **全站 403（含讀取）**，比原本的狀態更糟。
 
-```bash
-# 刪除 _rbac.yaml 讓系統回到 open-read mode
-# 所有已認證使用者可讀取，但無人可寫入
-# 這是安全的「停損」操作——先恢復可見性，再重建權限
-git rm conf.d/_rbac.yaml && git commit -m "emergency: remove RBAC to restore read access" && git push
-```
+要縮小權限請改內容，不要刪檔。
 
 **預防措施**：建議在 CI 中加入 `_rbac.yaml` 的 pre-merge 檢查——確認至少一個群組擁有 admin 權限，防止意外提交空權限配置。
 

@@ -61,46 +61,61 @@ See [GitOps Deployment Guide](integration/gitops-deployment.en.md) for tenant se
 
 ### API RBAC (v2.5.0+)
 
-tenant-api enforces API-level read/write permissions via `conf.d/_rbac.yaml`. RBAC Manager uses `atomic.Value` for hot-reload — no restart required after file changes.
+tenant-api enforces API-level read/write permissions via `_rbac.yaml`. RBAC Manager uses `atomic.Value` for hot-reload — no restart required after file changes (poll interval `reloadInterval`, default `30s`).
 
-Safe default: if `_rbac.yaml` is missing or empty, the system enters **open-read mode** (all authenticated users can read, no one can write).
+⛔ **Where `_rbac.yaml` lives depends on the deployment posture — the shipped default is NOT `conf.d/`**:
+
+| Posture | `--rbac` / `TA_RBAC_PATH` | Actual source |
+|---------|---------------------------|---------------|
+| k8s raw manifest | `/etc/rbac/_rbac.yaml` | ConfigMap `rbac-config` |
+| Helm chart | `/etc/rbac/_rbac.yaml` | ConfigMap `rbac-config` (content from the `rbac._rbacYaml` value) |
+| try-local / QUICKSTART | `/conf.d/_rbac.yaml` | the `conf.d` directory itself |
+
+**Empty config fails closed — it is not open-read**: whenever a `--rbac` path is set (all three postures above), a missing file or an empty group set **denies everything, reads included**. Only two situations enter open-read mode (all authenticated users can read, no one can write): no `--rbac` path at all, or an explicit `--rbac-empty-open` / `TA_RBAC_EMPTY_OPEN=true` — which no shipped asset sets.
 
 ### RBAC Rescue SOP (Break-Glass Procedure)
 
-If an administrator accidentally modifies `_rbac.yaml` and locks everyone (including themselves) out of API write access, follow these steps:
+If an administrator accidentally modifies `_rbac.yaml` and locks everyone (including themselves) out of API write access, recover as follows.
 
-**Scenario A: Have Git write access (recommended)**
+**Step 0 (always): find out where your `_rbac.yaml` actually comes from**
 
 ```bash
-# 1. Edit _rbac.yaml directly in the Git repo to restore admin group
+kubectl -n <namespace> get deploy tenant-api -o yaml | grep -- '--rbac='
+```
+
+⚠️ The shipped k8s / Helm deployments read ConfigMap **`rbac-config`**, not `conf.d/_rbac.yaml` in the Git repo. For those two postures, editing the Git copy has no effect — use Scenario A.
+
+**Scenario A: source is a ConfigMap (shipped k8s / Helm default)**
+
+```bash
+# Helm: change values and upgrade (leaves an auditable trail — prefer this)
+vi values.yaml   # rbac._rbacYaml: re-add the admin group with write/admin permissions
+helm upgrade <release> <chart> -n <namespace> -f values.yaml
+
+# Or edit the ConfigMap directly (emergency only — sync back to values / Git afterwards)
+kubectl edit configmap rbac-config -n <namespace>
+```
+
+A ConfigMap update does **not** take effect immediately: kubelet must first sync the new content into the mounted volume, and only then does tenant-api's in-process config watcher pick it up on its next poll (`reloadInterval`, default `30s`). Both delays add up.
+
+**Scenario B: source is a Git-managed `conf.d` (try-local / QUICKSTART)**
+
+```bash
 git clone <repo-url> && cd <repo>
 vi conf.d/_rbac.yaml   # Re-add admin group with write/admin permissions
-
-# 2. Commit and push
 git add conf.d/_rbac.yaml
 git commit -m "fix: restore admin RBAC permissions (break-glass)"
 git push
-
-# 3. tenant-api auto-reloads via SHA-256 hot-reload (no restart needed)
 ```
 
-**Scenario B: No Git access but have K8s access**
+**⛔ Do NOT delete `_rbac.yaml`**
 
-```bash
-# Edit ConfigMap directly (emergency only — must be synced back to Git afterwards)
-kubectl edit configmap tenant-config -n <namespace>
-# Restore admin group in the _rbac.yaml section
-# tenant-api sidecar auto-reloads on save
-```
+An earlier version of this section advised deleting `_rbac.yaml` to "return to open-read mode and restore visibility". The real behaviour is the opposite, and differs by posture:
 
-**Scenario C: Delete `_rbac.yaml` entirely**
+- **ConfigMap source**: deleting `conf.d/_rbac.yaml` in Git is a no-op — RBAC never reads that path, so permissions are unchanged.
+- **`conf.d` source**: the file disappearing means an empty group set, fail-closed applies → **403 for everything, reads included** — strictly worse than the state you started from.
 
-```bash
-# Remove _rbac.yaml to return to open-read mode
-# All authenticated users regain read access, but no one can write
-# This is a safe "stop the bleeding" operation — restore visibility first, rebuild permissions later
-git rm conf.d/_rbac.yaml && git commit -m "emergency: remove RBAC to restore read access" && git push
-```
+To narrow permissions, edit the content; never delete the file.
 
 **Prevention**: Add a CI pre-merge check for `_rbac.yaml` — verify at least one group has admin permission, preventing accidental empty-permission commits.
 
