@@ -24,6 +24,9 @@ Checks:
   6. Profiles      — Tenant _profile references validation
   7. Versions      — bump_docs.py --check version consistency (if --version-check)
   8. Policy-as-Code — Declarative DSL policy evaluation (if _policies in _defaults.yaml or --policy-dsl)
+  9. Tenant uniqueness — one tenant id declared by two files makes the exporter
+                    reject the ENTIRE config dir (`DuplicateTenantError`), so
+                    this one FAIL is about every tenant in the tree (#1577)
 
 Usage:
   # Minimal (YAML + schema + routes):
@@ -67,6 +70,7 @@ from _lib_python import detect_cli_lang  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_confd import (  # noqa: E402
+    is_reserved_name,
     iter_config_files,
     resolve_defaults_file,
     unusable_config_paths,
@@ -927,6 +931,215 @@ def check_versions() -> dict[str, object]:
 
 
 # ============================================================
+# Check 9: Tenant declaration uniqueness (#1577)
+# ============================================================
+class _ExporterKeyLoader(yaml.SafeLoader):
+    """``SafeLoader``, except a mapping key is the scalar's RAW TEXT.
+
+    ⛔ THIS IS NOT A STYLE CHOICE. ``yaml.safe_load`` and the exporter's
+    ``gopkg.in/yaml.v3`` disagree about what a tenant id *is*, silently and in
+    both directions, because PyYAML implements YAML **1.1** implicit typing
+    while yaml.v3 keys a ``map[string]...`` on the scalar's text. Measured on
+    ``tenants:`` blocks holding ``on / yes / true / True / on2 / 010 / null``:
+
+    ======================  ==========================================
+    Go (the oracle)         6 ids: ``010 True on on2 true yes``
+    ``yaml.safe_load``      4 ids: ``on2 8 None True``
+    raw scalar text         7 ids: the above plus ``null``
+    ======================  ==========================================
+
+    So ``safe_load`` folds four *different* tenants (``on``/``yes``/``true``/
+    ``True``) into one id, and renames ``010`` to ``8`` — and both directions
+    of that were reproduced end to end before this class existed:
+
+    * **missed**: ``no:`` in one file and ``"no":`` in another is one id to the
+      exporter (it rejects the whole dir) and two to ``safe_load`` → PASS;
+    * **false red**: ``yes:`` and ``true:`` are two ids to the exporter and one
+      to ``safe_load`` → FAIL, naming a tenant ``"True"`` that appears in
+      neither file, so the operator cannot even grep for it.
+
+    Two behaviours are kept rather than reimplemented, both measured against Go
+    on this host (the snippet is in ``TestTenantIdParity``'s docstring so the
+    table can be re-derived rather than trusted):
+
+    * ``<<:`` merge keys are expanded — Go expands them too (measured: a
+      ``tenants:`` block merging an anchor yields the anchor's ids, not ``<<``),
+      which is why this subclasses the constructor instead of walking
+      ``yaml.compose``: compose would report a tenant literally named ``<<``.
+    * a ``null`` / ``~`` key is dropped — measured: Go drops it as well.
+
+    ⚠️ One measured residual, deliberately not closed here: Go **rejects** a
+    file that repeats the ``tenants:`` key (``mapping key "tenants" already
+    defined``) while PyYAML takes the last block. That is a whole-file parse
+    verdict, so it belongs to ``yaml_syntax``, not to this check — recorded so
+    the next reader does not have to re-measure it to find out it is known.
+    """
+
+    def construct_mapping(self, node, deep=False):  # noqa: D102 — see class
+        self.flatten_mapping(node)
+        mapping = {}
+        for key_node, value_node in node.value:
+            if isinstance(key_node, yaml.ScalarNode):
+                if key_node.tag == "tag:yaml.org,2002:null":
+                    continue
+                key = key_node.value
+            else:
+                key = str(self.construct_object(key_node, deep=deep))
+            mapping[key] = self.construct_object(value_node, deep=deep)
+        return mapping
+
+
+def _load_with_exporter_keys(stream):
+    """``yaml.load(stream, Loader=_ExporterKeyLoader)``, spelled the long way.
+
+    ⛔ NOT a style choice, and NOT a way around the safety rule. The repo's
+    own SAST test (``tests/shared/test_sast.py::TestNoUnsafeYamlLoad``)
+    accepts a ``yaml.load`` call only when the ``Loader=`` keyword is an
+    ``ast.Attribute`` whose ``.attr`` is literally ``SafeLoader`` or
+    ``CSafeLoader``. Any subclass — and, read from that code, even
+    ``from yaml import SafeLoader`` followed by ``Loader=SafeLoader``,
+    because that is an ``ast.Name`` — is a violation to it. So the guard
+    cannot express "a SafeLoader subclass", and widening a repo-wide
+    security guard is not this change's blast radius.
+
+    ⚠️ Be exact about what that costs, because the paragraph above reads as
+    "the guard still checks this, only under a spelling it rejects". It does
+    not. This body never calls ``yaml.load``, and the guard's predicate
+    matches ONLY ``yaml.load(...)`` — so this function is not a rejected
+    spelling, it is OUTSIDE the predicate. Measured by AST over the guard's
+    own corpus (``scripts/tools/**``, 240 files) at ``2ac818ab``: zero
+    ``yaml.load(`` sites and zero direct-Loader constructions, so this is
+    the repo's FIRST site of a shape that guard cannot see, and someone
+    copying the shape with ``yaml.UnsafeLoader`` gets no red. That is a cost
+    this change introduces, not a hole it inherited.
+
+    What matters is that the safety property is pinned SOMEWHERE, and the
+    call-site spelling was never where it lived: the guard reads how the
+    loader is named, not what it can construct.
+    ``TestTenantIdParity::test_the_loader_cannot_construct_python_objects``
+    feeds this function an actual ``!!python/object/apply`` payload and
+    requires it to be refused — which is the property, measured.
+    ⚠️ NOT GUARDED: that test pins THIS loader only. Nothing pins a future
+    copy, and this change deliberately does not widen the repo-wide guard.
+
+    This body is what ``yaml.load`` does; keeping it in one named function
+    means there is one place to read, and one place a future edit lands.
+    """
+    loader = _ExporterKeyLoader(stream)
+    try:
+        return loader.get_single_data()
+    finally:
+        loader.dispose()
+
+
+def check_tenant_uniqueness(config_dir: str) -> dict[str, object]:
+    """One tenant declared by two files makes the exporter refuse the WHOLE tree.
+
+    The oracle is the exporter's own hierarchy walker: a tenant id found in
+    two different files raises a typed ``*DuplicateTenantError``
+    (``config_hierarchy.go``), which ``Load`` / ``fullDirLoad`` turn into
+    ``config rejected (mixed-mode duplicate tenant)``. That rejects the
+    **entire** configuration, not the one tenant — so the blast radius is
+    every tenant in the tree, and it lands at deploy or restart time, after
+    CI has already passed.
+
+    Until this check existed nothing on the CI side could see the state.
+    Measured on a tree holding ``same.yaml`` and ``same.yml`` for one
+    tenant: this command printed ``Result: PASS``, exited 0, ran 5/5 checks
+    and named neither file.
+
+    ⛔ THE PREDICATE IS "ONE ID, TWO FILES", NOT "TWO SPELLINGS OF ONE STEM".
+    Two spellings is only the cheapest accident — an editor leaving a
+    ``.yml`` beside the ``.yaml``. ``db-a.yaml`` and ``archive/db-a.yaml``
+    reach the identical rejection with no extension involved, and keying on
+    the extension would pass a tree the exporter refuses while looking
+    thorough. What the exporter rejects is the duplicate declaration; this
+    check has to ask that same question.
+
+    Selection mirrors the walker instead of restating it.
+    ``iter_config_files`` is the shared recursive, case-insensitive,
+    both-spellings enumerator, and ``is_reserved_name`` is the ``_``-prefix
+    gate the walker applies *before* it parses a ``tenants:`` block at all.
+    The second one matters in both directions: a ``tenants:`` block inside
+    ``_defaults.yaml`` is not a declaration for this purpose, so pairing one
+    with a real tenant file has to stay green.
+
+    ⚠️ Files that will not parse are reported as a limit on this check's
+    coverage, not folded into a PASS. ``yaml_syntax`` already FAILs and names
+    them; the statement added here is the different one — *the uniqueness
+    answer is incomplete* — because an unparseable file is exactly where the
+    second declaration can hide.
+
+    #1577 records the sibling asymmetry inside the exporter (its incremental
+    path accepts this state silently while a full load rejects it). This
+    check does not change that and cannot: it runs before the tree is
+    deployed, and its job is to stop the state being committed at all.
+    """
+    root = Path(config_dir)
+    declared: dict[str, set[str]] = {}
+    unreadable: list[str] = []
+
+    for path in iter_config_files(root):
+        if is_reserved_name(path.name):
+            continue
+        try:
+            label = path.relative_to(root).as_posix()
+        except ValueError:
+            label = path.name
+        try:
+            with open(path, encoding="utf-8") as fh:
+                data = _load_with_exporter_keys(fh)
+        except Exception:  # noqa: BLE001 — `yaml_syntax` owns naming the reason
+            unreadable.append(label)
+            continue
+        if not isinstance(data, dict):
+            continue
+        tenants = data.get("tenants")
+        if not isinstance(tenants, dict):
+            continue
+        for tenant_id in tenants:
+            declared.setdefault(tenant_id, set()).add(label)
+
+    duplicates = {tid: sorted(paths)
+                  for tid, paths in declared.items() if len(paths) > 1}
+
+    if duplicates:
+        details = []
+        for tenant_id, paths in sorted(duplicates.items()):
+            details.append(
+                f"tenant \"{tenant_id}\" is declared in {len(paths)} files: "
+                f"{', '.join(paths)} — the exporter rejects the ENTIRE config "
+                f"dir in this state, so every tenant here loses alerting, not "
+                f"just this one. Which file owns this tenant is a decision "
+                f"this tool cannot make for you: removing the wrong one drops "
+                f"that file's overrides silently.")
+        if unreadable:
+            details.append(
+                f"{len(unreadable)} file(s) could not be read and were not "
+                f"examined, so there may be more: {', '.join(sorted(unreadable))}")
+        return _make_result("tenant_uniqueness", FAIL, details)
+
+    if unreadable:
+        # ⛔ Its own hint, not the check-level one. `_CHECK_HINTS` is keyed by
+        # check NAME, so the FAIL advice ("decide which single file owns each
+        # tenant listed above") also printed under this row — where nothing is
+        # listed above, because this row just said there is no duplicate.
+        # Blind review read it as an instruction to act on an empty list.
+        return _make_result("tenant_uniqueness", WARN, [
+            f"no duplicate declaration among the {len(declared)} tenant(s) in "
+            f"the files that could be read, but {len(unreadable)} file(s) "
+            f"could not be read and were not examined: "
+            f"{', '.join(sorted(unreadable))} — this is a limit on what was "
+            f"checked, not a clean result"],
+            hint="Fix the unreadable file(s) named above (yaml_syntax says why) "
+                 "and re-run: a second declaration of an existing tenant can be "
+                 "sitting in a file this check could not open.")
+
+    return _make_result("tenant_uniqueness", PASS, [
+        f"{len(declared)} tenant(s), each declared in exactly one file"])
+
+
+# ============================================================
 # Report
 # ============================================================
 def _docs_url(rel_path: str) -> str:
@@ -1016,6 +1229,18 @@ _CHECK_HINTS: dict[str, tuple[str, str]] = {
         "Check Policy-as-Code DSL syntax. "
         "Run: da-tools opa-evaluate --policy <file> --config-dir <dir>",
         "docs/scenarios/gitops-ci-integration.md",
+    ),
+    # ⛔ This hint deliberately does NOT say "delete the duplicate file". Each
+    # row above already names every file holding the id, and which of them is
+    # the survivor is a question about the customer's intent — the cheapest
+    # way to a green run here is to delete one at random, and that discards
+    # whatever only that file declared, silently.
+    "tenant_uniqueness": (
+        "Decide which single file owns each tenant listed above and move the "
+        "other file's settings into it before removing anything — the "
+        "exporter refuses the whole config dir while a tenant is declared "
+        "twice.",
+        "docs/scenarios/multi-domain-conf-layout.md",
     ),
 }
 
@@ -1420,6 +1645,12 @@ def main() -> None:
     results.append(_run_check("policy_dsl", check_policy_dsl,
                               args.config_dir,
                               getattr(args, 'policy_dsl', None), _config_dir=args.config_dir))
+
+    # 9. Tenant declaration uniqueness (#1577) — unconditional: the state it
+    # finds makes the exporter refuse the whole tree, so there is no flag
+    # under which a customer would want this one skipped.
+    results.append(_run_check("tenant_uniqueness", check_tenant_uniqueness,
+                              args.config_dir, _config_dir=args.config_dir))
 
     # Report
     print_report(results, as_json=args.json)

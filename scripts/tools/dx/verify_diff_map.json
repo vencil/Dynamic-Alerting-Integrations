@@ -772,7 +772,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "d0a9f45a6d6236155f399947ce58f09692e1b655929b8e07aaf4a94bf02f909a",
+ "source_digest": "99475835d37594352a15adbed220f4722f15321ceab8d7d489d8e61ef6c5f330",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1393,6 +1393,7 @@
    "tests/ops/test_ci_path_filter_coverage.py"
   ],
   "components/threshold-exporter/app": [
+   "tests/ops/test_validate_config.py",
    "tests/ops/test_wrapped_path_references.py"
   ],
   "components/threshold-exporter/app/collector.go": [
@@ -3024,6 +3025,9 @@
   ],
   "tests/shared/test_reserved_key_py_go_parity.py": [
    "tests/dx/test_sync_schema.py"
+  ],
+  "tests/shared/test_sast.py": [
+   "tests/ops/test_validate_config.py"
   ],
   "tests/shared/test_tool_exit_codes.py": [
    "tests/dx/test_dx_json_stdout_contract.py",
