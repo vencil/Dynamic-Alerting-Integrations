@@ -50,7 +50,6 @@ import http.server
 import json
 import os
 import pathlib
-import re
 import socketserver
 import subprocess
 import sys
@@ -104,6 +103,19 @@ def prom_url():
     finally:
         httpd.shutdown()
         httpd.server_close()
+
+
+def _import_backtest():
+    """Import the tool in-process, the way the neighbouring gate file does.
+
+    Only one test needs this — see its comment for why the CLI cannot answer
+    the question it asks.
+    """
+    import importlib  # noqa: PLC0415
+    for extra in (str(TOOLS_DIR / "ops"), str(TOOLS_DIR)):
+        if extra not in sys.path:
+            sys.path.insert(0, extra)
+    return importlib.import_module("backtest_threshold")
 
 
 def _git(root: pathlib.Path, *args: str):
@@ -223,7 +235,7 @@ def test_invalid_utf8_carrier_is_dropped_but_says_so(tmp_path, prom_url):
 
 
 def test_an_unusable_carrier_is_named_once_not_once_per_metric(
-        tmp_path, prom_url):
+        tmp_path, prom_url, monkeypatch):
     """⛔ The drop is decided per CHANGE, so one carrier losing two metrics
     would say the same thing twice without the once-per-run dedup.
 
@@ -261,27 +273,32 @@ def test_an_unusable_carrier_is_named_once_not_once_per_metric(
     # premise with the conclusion: if this tree ever yields ONE change,
     # `said == 1` passes with the dedup and without it, and the test decays
     # into a vacuous one silently. Count the changes at the source instead.
-    diff = subprocess.run(
-        ("git", "diff", "HEAD~1", "--unified=0", "--", "conf.d/"),
-        cwd=str(repo), capture_output=True, timeout=60).stdout
-    changed = [ln for ln in diff.splitlines()
-               if re.match(rb"^[-+]\s+\w+:\s+.+$", ln)]
-    # ⛔ Counting diff LINES equals counting the tool's CHANGES only while the
-    # edit is a pure removal. A metric whose value merely changes produces two
-    # lines (`-` and `+`) that the parser folds into ONE change — measured:
+    # ⛔ ASK THE TOOL how many changes this tree yields. Counting diff lines
+    # instead was tried and is wrong twice over, both measured:
     #
-    #   pure removal   guard 2 lines / tool 2 changes   agree
-    #   value change   guard 2 lines / tool 1 change    diverge
+    #   pure removal, plain keys   2 lines / 2 changes   agree
+    #   a value merely CHANGED     2 lines / 1 change    `-` and `+` fold into one
+    #   pure removal of a `_` key  2 lines / 1 change    the tool drops `_` metrics
+    #   remove two, add one        3 lines / 3 changes   agree, but a
+    #                                                    "pure removal" guard
+    #                                                    rejects it anyway
     #
-    # So the precondition is asserted, not described: swapping this fixture to
-    # "change a value" to make up the count — the natural next edit — trips
-    # this line instead of quietly making the guard above wrong.
-    assert changed and all(ln.startswith(b"-") for ln in changed), (
-        f"this fixture is no longer a pure removal, so counting diff lines "
-        f"no longer counts the tool's changes: {changed!r}")
-    assert len(changed) >= 2, (
-        f"this tree yields {len(changed)} change line(s); with fewer than two "
-        f"the dedup cannot be observed at all: {changed!r}")
+    # Pinning "must be a pure removal" fixed the second row and still let the
+    # THIRD through — and closing that one would mean copying the tool's
+    # `_`-prefix rule into this file, i.e. a second hand-written copy of a
+    # predicate, which is the exact defect family this whole test file is
+    # about. Asking the parser removes every one of those rows at once.
+    #
+    # ⚠️ In-process on purpose, unlike the rest of this file: the CLI's report
+    # cannot answer this, because the carrier under test is DROPPED before the
+    # report is built — being dropped is the subject. This call is upstream of
+    # the dedup being guarded, so it is an independent source, not the
+    # conclusion restated.
+    monkeypatch.chdir(repo)
+    yielded = len(_import_backtest().extract_changes_from_git_diff())
+    assert yielded >= 2, (
+        f"this tree yields {yielded} change(s); with fewer than two the dedup "
+        f"cannot be observed at all and this test would pass either way")
 
     result = _run_cli(repo, prom_url)
     assert result.returncode == 0, result.stderr

@@ -521,7 +521,8 @@
    "tests/ops/test_assemble_config_dir.py"
   ],
   "scripts/tools/ops/backtest_threshold.py": [
-   "tests/ops/test_backtest_threshold.py"
+   "tests/ops/test_backtest_threshold.py",
+   "tests/shared/test_confd_path_encoding_across_git_calls.py"
   ],
   "scripts/tools/ops/baseline_discovery.py": [
    "tests/ops/test_baseline_discovery.py"
@@ -772,7 +773,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "165afd00fb44039e6b919fd467074a2a385dc4d67f0557af7b1a170f55002d70",
+ "source_digest": "e62fca80003a42eb9c06ff74870bdc6a1facafd4216e1d3746023bfd92e9cc33",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
