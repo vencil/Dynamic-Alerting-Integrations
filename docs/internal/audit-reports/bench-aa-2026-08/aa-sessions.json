@@ -1139,6 +1139,740 @@
    "benchtime": "600x",
    "rounds": 12,
    "note": "⚠️ 只取回 r3_B..r9_B（13 筆／6 輪完整）——其餘仍在該 job log 裡，是未取回不是不存在"
+  },
+  {
+   "run_id": 33342875971,
+   "job_id": 99341554316,
+   "benchtime": "3s",
+   "rounds": 12,
+   "cpu": "AMD EPYC 7763 64-Core Processor",
+   "bench_re": "^BenchmarkIncrementalLoad_1000_OneFileChanged$",
+   "count": 5,
+   "head_sha": "b45f7bd4",
+   "files": {
+    "r10_A": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 303,
+       "ns_op": 10443249.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 295,
+       "ns_op": 10497830.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 300,
+       "ns_op": 10548354.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 298,
+       "ns_op": 10714281.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 296,
+       "ns_op": 10683875.0
+      }
+     ]
+    },
+    "r10_B": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 298,
+       "ns_op": 10518732.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 301,
+       "ns_op": 10557328.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 291,
+       "ns_op": 10479750.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 296,
+       "ns_op": 10535354.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 297,
+       "ns_op": 10584081.0
+      }
+     ]
+    },
+    "r11_A": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 295,
+       "ns_op": 10650518.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 298,
+       "ns_op": 10622718.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 298,
+       "ns_op": 10509693.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 290,
+       "ns_op": 10519590.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 295,
+       "ns_op": 10434563.0
+      }
+     ]
+    },
+    "r11_B": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 301,
+       "ns_op": 10561380.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 302,
+       "ns_op": 10405806.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 300,
+       "ns_op": 10447560.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 295,
+       "ns_op": 10630148.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 298,
+       "ns_op": 10479415.0
+      }
+     ]
+    },
+    "r12_A": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 302,
+       "ns_op": 10474257.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 297,
+       "ns_op": 10583708.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 301,
+       "ns_op": 10527430.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 301,
+       "ns_op": 10442117.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 301,
+       "ns_op": 10512614.0
+      }
+     ]
+    },
+    "r12_B": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 292,
+       "ns_op": 10589420.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 295,
+       "ns_op": 10700566.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 296,
+       "ns_op": 10550406.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 295,
+       "ns_op": 10540227.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 301,
+       "ns_op": 10598571.0
+      }
+     ]
+    },
+    "r1_A": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 279,
+       "ns_op": 11013545.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 294,
+       "ns_op": 10574088.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 300,
+       "ns_op": 10478411.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 300,
+       "ns_op": 10612987.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 294,
+       "ns_op": 10548983.0
+      }
+     ]
+    },
+    "r1_B": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 300,
+       "ns_op": 10431843.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 297,
+       "ns_op": 10453650.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 298,
+       "ns_op": 10615859.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 298,
+       "ns_op": 10531914.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 300,
+       "ns_op": 10582078.0
+      }
+     ]
+    },
+    "r2_A": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 298,
+       "ns_op": 10600555.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 300,
+       "ns_op": 10458702.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 298,
+       "ns_op": 10440040.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 295,
+       "ns_op": 10522152.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 302,
+       "ns_op": 10641505.0
+      }
+     ]
+    },
+    "r2_B": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 297,
+       "ns_op": 10697053.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 301,
+       "ns_op": 10497342.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 297,
+       "ns_op": 10420823.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 295,
+       "ns_op": 10560405.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 302,
+       "ns_op": 10579776.0
+      }
+     ]
+    },
+    "r3_A": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 298,
+       "ns_op": 10471073.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 297,
+       "ns_op": 10587559.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 289,
+       "ns_op": 10713268.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 297,
+       "ns_op": 10498683.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 301,
+       "ns_op": 10413529.0
+      }
+     ]
+    },
+    "r3_B": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 291,
+       "ns_op": 10531674.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 301,
+       "ns_op": 10452638.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 298,
+       "ns_op": 10577187.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 296,
+       "ns_op": 10516526.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 298,
+       "ns_op": 10681555.0
+      }
+     ]
+    },
+    "r4_A": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 300,
+       "ns_op": 10400564.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 297,
+       "ns_op": 10524232.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 298,
+       "ns_op": 10399044.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 295,
+       "ns_op": 10538908.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 300,
+       "ns_op": 10540305.0
+      }
+     ]
+    },
+    "r4_B": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 297,
+       "ns_op": 10529330.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 296,
+       "ns_op": 10520304.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 290,
+       "ns_op": 10700735.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 298,
+       "ns_op": 10593329.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 292,
+       "ns_op": 10683486.0
+      }
+     ]
+    },
+    "r5_A": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 291,
+       "ns_op": 10810591.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 297,
+       "ns_op": 10709094.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 291,
+       "ns_op": 10514734.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 295,
+       "ns_op": 10546230.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 292,
+       "ns_op": 10590576.0
+      }
+     ]
+    },
+    "r5_B": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 301,
+       "ns_op": 10496184.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 297,
+       "ns_op": 10604130.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 301,
+       "ns_op": 10466030.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 301,
+       "ns_op": 10447603.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 301,
+       "ns_op": 10489774.0
+      }
+     ]
+    },
+    "r6_A": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 302,
+       "ns_op": 10516198.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 295,
+       "ns_op": 10685234.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 301,
+       "ns_op": 10408919.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 300,
+       "ns_op": 10509880.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 302,
+       "ns_op": 10405000.0
+      }
+     ]
+    },
+    "r6_B": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 300,
+       "ns_op": 10408218.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 301,
+       "ns_op": 10425848.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 300,
+       "ns_op": 10556848.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 300,
+       "ns_op": 10555560.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 302,
+       "ns_op": 10442584.0
+      }
+     ]
+    },
+    "r7_A": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 295,
+       "ns_op": 10499316.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 289,
+       "ns_op": 10667799.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 298,
+       "ns_op": 10536496.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 297,
+       "ns_op": 10552628.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 301,
+       "ns_op": 10488748.0
+      }
+     ]
+    },
+    "r7_B": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 290,
+       "ns_op": 10730237.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 296,
+       "ns_op": 10512916.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 295,
+       "ns_op": 10592408.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 298,
+       "ns_op": 10400100.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 301,
+       "ns_op": 10571463.0
+      }
+     ]
+    },
+    "r8_A": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 301,
+       "ns_op": 10518739.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 295,
+       "ns_op": 10493017.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 292,
+       "ns_op": 10658384.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 296,
+       "ns_op": 10544738.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 296,
+       "ns_op": 10489186.0
+      }
+     ]
+    },
+    "r8_B": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 297,
+       "ns_op": 10447721.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 297,
+       "ns_op": 10472301.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 301,
+       "ns_op": 10482797.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 300,
+       "ns_op": 10568959.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 289,
+       "ns_op": 10715224.0
+      }
+     ]
+    },
+    "r9_A": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 289,
+       "ns_op": 10672532.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 288,
+       "ns_op": 10699842.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 291,
+       "ns_op": 10609913.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 303,
+       "ns_op": 10396493.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 301,
+       "ns_op": 10512266.0
+      }
+     ]
+    },
+    "r9_B": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 301,
+       "ns_op": 10399372.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 298,
+       "ns_op": 10542165.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 296,
+       "ns_op": 10537706.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 297,
+       "ns_op": 10492760.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 300,
+       "ns_op": 10695241.0
+      }
+     ]
+    }
+   },
+   "note": "獨立複製；資料經 AAROW 緊湊摘要取回（本 PR 新增的輸出），故本場逐筆無 sha256——digest 只存在於同一份 log 的 base64 記錄裡"
   }
- ]
+ ],
+ "note_on_sha256": "sha256 為 null 者，其資料取自 AAROW 摘要而非 base64 記錄；base64 原件仍在該 job 的 log 中，可依 README 末節還原並驗證"
 }
