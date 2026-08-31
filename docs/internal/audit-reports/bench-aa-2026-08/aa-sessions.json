@@ -1,0 +1,1878 @@
+{
+ "schema": "bench-aa/v1",
+ "what": "A/A（兩側同一份編譯出的執行檔，真值恆為 1.000）逐輪原始樣本",
+ "workflow": ".github/workflows/bench-aa-noise-experiment.yaml",
+ "recovered_from": "job log 的 base64 RAW 記錄；每筆的 sha256 已逐筆驗過",
+ "sessions": [
+  {
+   "cpu": "Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz",
+   "bench_re": "^BenchmarkIncrementalLoad_1000_OneFileChanged$",
+   "count": 5,
+   "head_sha": "53883134",
+   "files": {
+    "r4_A": {
+     "sha256": "c5bf5edf064cc36f9c2260c7355d1ed1828ab7017e48c75d6f5a93ea1c0f2d3b",
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 433,
+       "ns_op": 7542304.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 423,
+       "ns_op": 7641110.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 432,
+       "ns_op": 7624807.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 426,
+       "ns_op": 7602110.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 434,
+       "ns_op": 7617151.0
+      }
+     ]
+    },
+    "r4_B": {
+     "sha256": "04c52316ce98740a00a6948a2a5ac974e3a64ffc85ba362458f0619fb3b50749",
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 433,
+       "ns_op": 7499232.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 435,
+       "ns_op": 7578861.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 436,
+       "ns_op": 7439691.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 436,
+       "ns_op": 7485034.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 435,
+       "ns_op": 7469313.0
+      }
+     ]
+    },
+    "r5_A": {
+     "sha256": "a58efdfbd33b89eae1e41934e47f1162283b5b75e36c917416b3a57e05a7dea2",
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 435,
+       "ns_op": 7520142.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 439,
+       "ns_op": 7490731.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 436,
+       "ns_op": 7485789.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 438,
+       "ns_op": 7575622.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 438,
+       "ns_op": 7480811.0
+      }
+     ]
+    },
+    "r5_B": {
+     "sha256": "f7dd1a14ce828948f0a69b291fa025eeaf0550c442668adc2850f54459405375",
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 434,
+       "ns_op": 7508809.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 430,
+       "ns_op": 7543450.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 435,
+       "ns_op": 7483591.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 436,
+       "ns_op": 7516717.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 436,
+       "ns_op": 7555271.0
+      }
+     ]
+    },
+    "r6_A": {
+     "sha256": "22e8770e84d044b0f74f8b69d04965297aab85bcbc9753851be783cd4c873359",
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 434,
+       "ns_op": 7563930.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 433,
+       "ns_op": 7534225.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 438,
+       "ns_op": 7516038.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 428,
+       "ns_op": 7588189.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 428,
+       "ns_op": 7653640.0
+      }
+     ]
+    },
+    "r6_B": {
+     "sha256": "193d3dc73daf6fc0c586ac7125018749c67e34be1871f593e1bd5b8c6d1291c9",
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 420,
+       "ns_op": 7741864.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 421,
+       "ns_op": 7719086.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 422,
+       "ns_op": 7762395.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 420,
+       "ns_op": 7734293.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 416,
+       "ns_op": 7690827.0
+      }
+     ]
+    },
+    "r7_A": {
+     "sha256": "467855ba5c686387aaa84fe79bfb223f088163e58f6e2549757615bece137951",
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 426,
+       "ns_op": 7729047.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 429,
+       "ns_op": 7513141.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 435,
+       "ns_op": 7609104.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 429,
+       "ns_op": 7615194.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 423,
+       "ns_op": 7657170.0
+      }
+     ]
+    },
+    "r7_B": {
+     "sha256": "0531f40620418e9cb548f381fd1bd57d98e701215734b6b2a64df1e475fb676e",
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 426,
+       "ns_op": 7650394.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 432,
+       "ns_op": 7591119.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 434,
+       "ns_op": 7657486.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 430,
+       "ns_op": 7600245.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 432,
+       "ns_op": 7529871.0
+      }
+     ]
+    },
+    "r8_A": {
+     "sha256": "0aa5464288236c6e734aa0efcf9d5aaa2c453255c39dfa0cfd0715c7f4ca2b85",
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 429,
+       "ns_op": 7590498.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 432,
+       "ns_op": 7502849.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 432,
+       "ns_op": 7509533.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 435,
+       "ns_op": 7456780.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 434,
+       "ns_op": 7652330.0
+      }
+     ]
+    },
+    "r8_B": {
+     "sha256": "18ed468d7aa97debda57bdc2e2bc7e17be957292451596d53894735bdbcc74cc",
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 423,
+       "ns_op": 7729784.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 418,
+       "ns_op": 7711378.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 427,
+       "ns_op": 7644762.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 429,
+       "ns_op": 7602455.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 432,
+       "ns_op": 7543460.0
+      }
+     ]
+    },
+    "r9_A": {
+     "sha256": "c84290b0c7a58a66db0ccb66bc76a0a778a9971a68f32cb08cb16602ea832ca5",
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 427,
+       "ns_op": 7631883.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 430,
+       "ns_op": 7596163.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 428,
+       "ns_op": 7614195.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 432,
+       "ns_op": 7544456.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 440,
+       "ns_op": 7468369.0
+      }
+     ]
+    },
+    "r9_B": {
+     "sha256": "cb4625eb121dabfa60b1eaed5d6a9c8e2312a65dbc07e890094f70506b03ecea",
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 438,
+       "ns_op": 7471677.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 433,
+       "ns_op": 7577091.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 435,
+       "ns_op": 7514667.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 432,
+       "ns_op": 7606367.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 438,
+       "ns_op": 7567347.0
+      }
+     ]
+    },
+    "r10_A": {
+     "sha256": "37ee126f795d66bd1f4c57010458af8e56305ee46c81656b39e93344bb4716a0",
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 438,
+       "ns_op": 7454354.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 435,
+       "ns_op": 7448129.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 441,
+       "ns_op": 7442464.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 439,
+       "ns_op": 7482414.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 435,
+       "ns_op": 7423605.0
+      }
+     ]
+    },
+    "r10_B": {
+     "sha256": "0ad67795853e3787a319d29e3fb107b51e08bd3e5167fe4de3c9724bba925a5f",
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 430,
+       "ns_op": 7544612.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 432,
+       "ns_op": 7537854.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 435,
+       "ns_op": 7572213.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 434,
+       "ns_op": 7527769.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 432,
+       "ns_op": 7522418.0
+      }
+     ]
+    },
+    "r11_A": {
+     "sha256": "8b4eeaa78cc8ec3ee5ffdceada01ae9039144144028e470fd74d7c4d1c697778",
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 436,
+       "ns_op": 7578322.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 434,
+       "ns_op": 7588405.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 426,
+       "ns_op": 7616745.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 434,
+       "ns_op": 7559795.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 435,
+       "ns_op": 7530037.0
+      }
+     ]
+    },
+    "r11_B": {
+     "sha256": "2082e9266c600cc8f6a59c8b3281cd7c21a1782da5f4134cc5f96f0f768e598d",
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 434,
+       "ns_op": 7519037.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 432,
+       "ns_op": 7571042.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 430,
+       "ns_op": 7543591.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 435,
+       "ns_op": 7538623.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 434,
+       "ns_op": 7453976.0
+      }
+     ]
+    },
+    "r12_A": {
+     "sha256": "fafa5b7badb8e6aceb26b1fad8ab17fbb731e36b3e8fdc95d8be7dce3a6486b2",
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 436,
+       "ns_op": 7496787.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 432,
+       "ns_op": 7541320.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 433,
+       "ns_op": 7638037.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 427,
+       "ns_op": 7584011.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 439,
+       "ns_op": 7489851.0
+      }
+     ]
+    },
+    "r12_B": {
+     "sha256": "dac7fca45e23c36e4063d6821eb3bfd191576af4f001a8ce226f549fd6d7edc8",
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 435,
+       "ns_op": 7509064.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 435,
+       "ns_op": 7543336.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 438,
+       "ns_op": 7473843.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 434,
+       "ns_op": 7488770.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 436,
+       "ns_op": 7502696.0
+      }
+     ]
+    },
+    "r1_A": {
+     "sha256": "a6ccb3c0b16e05ff6c0fac95bbae6535210960dbb3d75cbd30bf7a81acbfaac1",
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 320,
+       "ns_op": 9460781.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 426,
+       "ns_op": 7569686.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 428,
+       "ns_op": 7586856.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 430,
+       "ns_op": 7656567.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 432,
+       "ns_op": 7580207.0
+      }
+     ]
+    },
+    "r1_B": {
+     "sha256": "20e5e7ce0f5792cf061b301a125e5ce85a4b25442f7c2c3df4c06d2f6ed3a214",
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 430,
+       "ns_op": 7600278.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 430,
+       "ns_op": 7701483.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 438,
+       "ns_op": 7478794.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 434,
+       "ns_op": 7534806.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 432,
+       "ns_op": 7501535.0
+      }
+     ]
+    },
+    "r2_A": {
+     "sha256": "d7874f020d16c84857512709d8e9cfec4bb7f4c8b38cf65977ed564d3b0d26dc",
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 434,
+       "ns_op": 7601605.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 418,
+       "ns_op": 7566668.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 436,
+       "ns_op": 7497307.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 432,
+       "ns_op": 7555933.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 438,
+       "ns_op": 7495075.0
+      }
+     ]
+    },
+    "r2_B": {
+     "sha256": "8ac087bd9c89a0b9ca80d3dc0fcc47b6b030170402baf4b399ded521e1f762d9",
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 420,
+       "ns_op": 7693996.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 426,
+       "ns_op": 7643156.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 424,
+       "ns_op": 7636504.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 432,
+       "ns_op": 7802011.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 432,
+       "ns_op": 7611135.0
+      }
+     ]
+    },
+    "r3_A": {
+     "sha256": "c91ad721a624a602459315f6259992cc20d2763ed2816b13bae5bf5c1b819c3c",
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 429,
+       "ns_op": 7660828.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 433,
+       "ns_op": 7557166.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 432,
+       "ns_op": 7639939.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 426,
+       "ns_op": 7602100.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 436,
+       "ns_op": 7604876.0
+      }
+     ]
+    },
+    "r3_B": {
+     "sha256": "ce9ae8933eca5578e9be5a74c80c36f0b770b321eb7b4dd54a2f2abd60da90d8",
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 426,
+       "ns_op": 7594932.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 433,
+       "ns_op": 7499072.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 435,
+       "ns_op": 7532488.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 436,
+       "ns_op": 7508236.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 432,
+       "ns_op": 7520721.0
+      }
+     ]
+    }
+   },
+   "run_id": 33341834761,
+   "job_id": 99338747769,
+   "benchtime": "3s",
+   "rounds": 12,
+   "note": "12 輪全數取回"
+  },
+  {
+   "cpu": "AMD EPYC 7763 64-Core Processor",
+   "bench_re": "^BenchmarkIncrementalLoad_1000_OneFileChanged$",
+   "count": 5,
+   "head_sha": "53883134",
+   "files": {
+    "r3_B": {
+     "sha256": "b12e8f97d20a55bf36d6189a4827cb37de9831f6b957d35455eca9ce34272985",
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8606837.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8645508.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 9096797.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 9021371.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 9021077.0
+      }
+     ]
+    },
+    "r4_A": {
+     "sha256": "56d7cd3181bb5d008d4f8b919ae4e565cc14e1a6c54817276fa9975d6b039359",
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8954121.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8853495.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8829500.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8729824.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8870141.0
+      }
+     ]
+    },
+    "r4_B": {
+     "sha256": "85b2cadd9a7365963139a96a49d9ce0471f83808b8a8f55fc0f106efaae4f7a9",
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8580003.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8564692.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8560858.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8691694.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8584588.0
+      }
+     ]
+    },
+    "r5_A": {
+     "sha256": "096049a72995268044c089dbb549446e35b0227c5384871bcc1e70a116992c61",
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8680849.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8691870.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8654674.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8770326.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8764373.0
+      }
+     ]
+    },
+    "r5_B": {
+     "sha256": "ae2bc6281eb787e0fe4373cfced84fc807dc39ca307de64b499c6e6e6a5f8385",
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8639863.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8640528.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8619674.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8687962.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8653980.0
+      }
+     ]
+    },
+    "r6_A": {
+     "sha256": "3a4b81b7da18d49264a4ca4837d1b0b69f39043dbb1b9a07be646dd5cd8d6c32",
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8594735.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8604517.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8592165.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8590341.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8628840.0
+      }
+     ]
+    },
+    "r6_B": {
+     "sha256": "9aca402a6b1e77c338d11e7d2cb375d9615c48f439b59d47405233ceb92d6bd9",
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8618918.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8567357.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8651779.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8603044.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8604659.0
+      }
+     ]
+    },
+    "r7_A": {
+     "sha256": "f29ff1658d56ff39d5117e63bcc293c27ab2ba7af6d99a318d4d49fa50bef6b6",
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8604882.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8571240.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8586324.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8574194.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8607804.0
+      }
+     ]
+    },
+    "r7_B": {
+     "sha256": "5310013f831dc3d447778b489f3a61f88e40b99dd20b2a94d82753af34324ef3",
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8531365.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8665419.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8766363.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8635903.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8704253.0
+      }
+     ]
+    },
+    "r8_A": {
+     "sha256": "e9014a3fe311250be9f2790ea8037e04082555f6bb7eb473e0232434fee3f4e2",
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8576364.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8645380.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8537384.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8555491.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8534153.0
+      }
+     ]
+    },
+    "r8_B": {
+     "sha256": "9c3003584ba9c0bd32bd38f35a99ce4d503abfb3821c2c8bc3c1255055ad28d3",
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8563445.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8524622.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8772173.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8565132.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8584559.0
+      }
+     ]
+    },
+    "r9_A": {
+     "sha256": "9c6b977644b888a405d31fa68e7995e17d89cedd166d5061961e2d0099a57dc3",
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8677686.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8681200.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8621943.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8614435.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8549798.0
+      }
+     ]
+    },
+    "r9_B": {
+     "sha256": "8460e600cee2c57d0e7caedd196be9fac0a8b06b08d366bc3fa6d5e1121b540a",
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8540613.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8647142.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8650086.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8628938.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 600,
+       "ns_op": 8603919.0
+      }
+     ]
+    }
+   },
+   "run_id": 33341837679,
+   "job_id": 99338756938,
+   "benchtime": "600x",
+   "rounds": 12,
+   "note": "⚠️ 只取回 r3_B..r9_B（13 筆／6 輪完整）——其餘仍在該 job log 裡，是未取回不是不存在"
+  },
+  {
+   "run_id": 33342875971,
+   "job_id": 99341554316,
+   "benchtime": "3s",
+   "rounds": 12,
+   "cpu": "AMD EPYC 7763 64-Core Processor",
+   "bench_re": "^BenchmarkIncrementalLoad_1000_OneFileChanged$",
+   "count": 5,
+   "head_sha": "b45f7bd4",
+   "files": {
+    "r10_A": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 303,
+       "ns_op": 10443249.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 295,
+       "ns_op": 10497830.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 300,
+       "ns_op": 10548354.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 298,
+       "ns_op": 10714281.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 296,
+       "ns_op": 10683875.0
+      }
+     ]
+    },
+    "r10_B": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 298,
+       "ns_op": 10518732.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 301,
+       "ns_op": 10557328.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 291,
+       "ns_op": 10479750.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 296,
+       "ns_op": 10535354.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 297,
+       "ns_op": 10584081.0
+      }
+     ]
+    },
+    "r11_A": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 295,
+       "ns_op": 10650518.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 298,
+       "ns_op": 10622718.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 298,
+       "ns_op": 10509693.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 290,
+       "ns_op": 10519590.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 295,
+       "ns_op": 10434563.0
+      }
+     ]
+    },
+    "r11_B": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 301,
+       "ns_op": 10561380.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 302,
+       "ns_op": 10405806.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 300,
+       "ns_op": 10447560.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 295,
+       "ns_op": 10630148.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 298,
+       "ns_op": 10479415.0
+      }
+     ]
+    },
+    "r12_A": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 302,
+       "ns_op": 10474257.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 297,
+       "ns_op": 10583708.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 301,
+       "ns_op": 10527430.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 301,
+       "ns_op": 10442117.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 301,
+       "ns_op": 10512614.0
+      }
+     ]
+    },
+    "r12_B": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 292,
+       "ns_op": 10589420.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 295,
+       "ns_op": 10700566.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 296,
+       "ns_op": 10550406.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 295,
+       "ns_op": 10540227.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 301,
+       "ns_op": 10598571.0
+      }
+     ]
+    },
+    "r1_A": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 279,
+       "ns_op": 11013545.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 294,
+       "ns_op": 10574088.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 300,
+       "ns_op": 10478411.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 300,
+       "ns_op": 10612987.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 294,
+       "ns_op": 10548983.0
+      }
+     ]
+    },
+    "r1_B": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 300,
+       "ns_op": 10431843.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 297,
+       "ns_op": 10453650.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 298,
+       "ns_op": 10615859.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 298,
+       "ns_op": 10531914.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 300,
+       "ns_op": 10582078.0
+      }
+     ]
+    },
+    "r2_A": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 298,
+       "ns_op": 10600555.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 300,
+       "ns_op": 10458702.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 298,
+       "ns_op": 10440040.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 295,
+       "ns_op": 10522152.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 302,
+       "ns_op": 10641505.0
+      }
+     ]
+    },
+    "r2_B": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 297,
+       "ns_op": 10697053.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 301,
+       "ns_op": 10497342.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 297,
+       "ns_op": 10420823.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 295,
+       "ns_op": 10560405.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 302,
+       "ns_op": 10579776.0
+      }
+     ]
+    },
+    "r3_A": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 298,
+       "ns_op": 10471073.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 297,
+       "ns_op": 10587559.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 289,
+       "ns_op": 10713268.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 297,
+       "ns_op": 10498683.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 301,
+       "ns_op": 10413529.0
+      }
+     ]
+    },
+    "r3_B": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 291,
+       "ns_op": 10531674.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 301,
+       "ns_op": 10452638.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 298,
+       "ns_op": 10577187.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 296,
+       "ns_op": 10516526.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 298,
+       "ns_op": 10681555.0
+      }
+     ]
+    },
+    "r4_A": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 300,
+       "ns_op": 10400564.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 297,
+       "ns_op": 10524232.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 298,
+       "ns_op": 10399044.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 295,
+       "ns_op": 10538908.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 300,
+       "ns_op": 10540305.0
+      }
+     ]
+    },
+    "r4_B": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 297,
+       "ns_op": 10529330.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 296,
+       "ns_op": 10520304.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 290,
+       "ns_op": 10700735.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 298,
+       "ns_op": 10593329.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 292,
+       "ns_op": 10683486.0
+      }
+     ]
+    },
+    "r5_A": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 291,
+       "ns_op": 10810591.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 297,
+       "ns_op": 10709094.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 291,
+       "ns_op": 10514734.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 295,
+       "ns_op": 10546230.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 292,
+       "ns_op": 10590576.0
+      }
+     ]
+    },
+    "r5_B": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 301,
+       "ns_op": 10496184.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 297,
+       "ns_op": 10604130.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 301,
+       "ns_op": 10466030.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 301,
+       "ns_op": 10447603.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 301,
+       "ns_op": 10489774.0
+      }
+     ]
+    },
+    "r6_A": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 302,
+       "ns_op": 10516198.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 295,
+       "ns_op": 10685234.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 301,
+       "ns_op": 10408919.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 300,
+       "ns_op": 10509880.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 302,
+       "ns_op": 10405000.0
+      }
+     ]
+    },
+    "r6_B": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 300,
+       "ns_op": 10408218.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 301,
+       "ns_op": 10425848.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 300,
+       "ns_op": 10556848.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 300,
+       "ns_op": 10555560.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 302,
+       "ns_op": 10442584.0
+      }
+     ]
+    },
+    "r7_A": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 295,
+       "ns_op": 10499316.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 289,
+       "ns_op": 10667799.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 298,
+       "ns_op": 10536496.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 297,
+       "ns_op": 10552628.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 301,
+       "ns_op": 10488748.0
+      }
+     ]
+    },
+    "r7_B": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 290,
+       "ns_op": 10730237.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 296,
+       "ns_op": 10512916.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 295,
+       "ns_op": 10592408.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 298,
+       "ns_op": 10400100.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 301,
+       "ns_op": 10571463.0
+      }
+     ]
+    },
+    "r8_A": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 301,
+       "ns_op": 10518739.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 295,
+       "ns_op": 10493017.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 292,
+       "ns_op": 10658384.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 296,
+       "ns_op": 10544738.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 296,
+       "ns_op": 10489186.0
+      }
+     ]
+    },
+    "r8_B": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 297,
+       "ns_op": 10447721.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 297,
+       "ns_op": 10472301.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 301,
+       "ns_op": 10482797.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 300,
+       "ns_op": 10568959.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 289,
+       "ns_op": 10715224.0
+      }
+     ]
+    },
+    "r9_A": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 289,
+       "ns_op": 10672532.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 288,
+       "ns_op": 10699842.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 291,
+       "ns_op": 10609913.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 303,
+       "ns_op": 10396493.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 301,
+       "ns_op": 10512266.0
+      }
+     ]
+    },
+    "r9_B": {
+     "sha256": null,
+     "samples": [
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 301,
+       "ns_op": 10399372.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 298,
+       "ns_op": 10542165.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 296,
+       "ns_op": 10537706.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 297,
+       "ns_op": 10492760.0
+      },
+      {
+       "bench": "BenchmarkIncrementalLoad_1000_OneFileChanged",
+       "n": 300,
+       "ns_op": 10695241.0
+      }
+     ]
+    }
+   },
+   "note": "獨立複製；資料經 AAROW 緊湊摘要取回（本 PR 新增的輸出），故本場逐筆無 sha256——digest 只存在於同一份 log 的 base64 記錄裡"
+  }
+ ],
+ "note_on_sha256": "sha256 為 null 者，其資料取自 AAROW 摘要而非 base64 記錄；base64 原件仍在該 job 的 log 中，可依 README 末節還原並驗證"
+}

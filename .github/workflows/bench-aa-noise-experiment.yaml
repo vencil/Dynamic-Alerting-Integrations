@@ -21,6 +21,22 @@
 # compiled binary, so the true effect is exactly 0% and every deviation is
 # measurement error. That is the point: it calibrates the instrument.
 #
+# WHICH BENCHMARKS (bench_re, added 2026-08-30)
+# =============================================
+# The selected set used to be hardcoded. It is now the `bench_re` dispatch
+# input, whose DEFAULT is byte-identical to that hardcoded regex, so a run that
+# does not pass it reproduces the historical sessions exactly.
+#
+# It was made selectable for one named question: #1497 reports that
+# `BenchmarkIncrementalLoad_1000_OneFileChanged` reads a 26-percentage-point
+# spread within a single day, while every control stays clean. That bench is NOT
+# in the original set, so the one control that would settle it — running it A/A,
+# where the true ratio is 1.000 by construction — could not be run at all.
+# ⚠️ A clean canary does NOT stand in for that: the canary is a pure CPU loop
+# (#1497 and the 2026-08-20 note on #1439 both measured a clean canary on nights
+# when this bench moved double digits), so it bounds the machine term, not this
+# benchmark's own dispersion.
+#
 # WHY workflow_dispatch ONLY
 # ==========================
 # One-off calibration, not a gate. No schedule, no push/PR trigger, no branch
@@ -57,6 +73,10 @@ on:
         description: "-test.benchtime"
         required: false
         default: "1s"
+      bench_re:
+        description: "Go -test.bench regex (RE2). The default is the four-benchmark calibration set this experiment shipped with — leave it alone to reproduce the historical sessions. Empty is REJECTED (rc=2): a run that measures nothing must not be green."
+        required: false
+        default: '^(BenchmarkResolveSilentModes_1000|BenchmarkScanDirFileHashes_1000|BenchmarkIncrementalLoad_1000_NoChange|BenchmarkFullDirLoad_1000)$'
 
 permissions:
   contents: read
@@ -111,6 +131,7 @@ jobs:
           ROUNDS: ${{ inputs.rounds }}
           COUNT: ${{ inputs.count }}
           BENCHTIME: ${{ inputs.benchtime }}
+          BENCH_RE: ${{ inputs.bench_re }}
         run: |
           set -euo pipefail
           # Validate BEFORE anything is created, both directions.
@@ -156,9 +177,69 @@ jobs:
           fi
           OUT="${RUNNER_TEMP}/aa/raw"
           mkdir -p "$OUT"
-          RE='^(BenchmarkResolveSilentModes_1000|BenchmarkScanDirFileHashes_1000|BenchmarkIncrementalLoad_1000_NoChange|BenchmarkFullDirLoad_1000)$'
+          # ⛔ 空的 bench_re 直接擋，不落回任何預設集合。「安靜地量了你沒要求的
+          #    東西」與「什麼都沒量卻是綠的」是同一類失敗,而上面 rounds 下界那段
+          #    註解已經說明過這支 workflow 特別怕後者。
+          if [ -z "${BENCH_RE:-}" ]; then
+            echo "::error::bench_re is empty — name what you want measured. The default is the four-benchmark calibration set this experiment shipped with."
+            exit 2
+          fi
+          # ⛔ `-test.list` 的**失敗**與「regex 選不到東西」必須分開報 —— 理由與
+          #    bench-workload-effect.yaml 的 cost guard 相同:兩者都收斂成 0 的話,
+          #    一個壞掉的測試執行檔會被報成「你的 regex 選不到 benchmark」,把人
+          #    送去改 regex,而真正的問題在別處。
+          if ! list_out=$( "${RUNNER_TEMP}/aa.test" -test.list="$BENCH_RE" 2>&1 ); then
+            echo "::error::-test.list failed — this is a regex-syntax or test-binary problem, NOT 'the regex selected nothing'. Verbatim output:"
+            printf '%s\n' "$list_out" | tail -20
+            exit 2
+          fi
+          NBENCH=$( printf '%s\n' "$list_out" | grep -c '^Benchmark' || true )
+          if [ "${NBENCH:-0}" -eq 0 ]; then
+            echo "::error::bench_re='${BENCH_RE}' selected 0 benchmarks — both sides would write empty files, and an empty measurement under a green job is exactly what this workflow must not produce."
+            exit 2
+          fi
+          echo "bench_re='${BENCH_RE}' selects ${NBENCH} benchmark(s)"
+          RE="$BENCH_RE"
+          # ⛔ 第二道閘門，而且刻意是**下界**不是估算。下面那道投影閘門在第一組
+          #    A+B 跑完之後才判 —— 所以「第一輪本身就跑不完」這個情形它結構上
+          #    永遠攔不到。實例（CodeRabbit 在 PR #1662 指出，本輪算術覆核過）：
+          #    預設四支 x count=20 x benchtime=60s ⇒ 光 side A 就
+          #    4 x 20 x 60 = 4800s，已超過 timeout-minutes: 60 的 3600s，
+          #    job 會先被砍掉，投影那行一次都不會執行。
+          # ⇒ 這裡先算一個**下界**（Go 每支每次至少跑滿 benchtime，setup 與 N
+          #    探索只會讓它更久），下界都超預算就直接擋，不必先燒掉一輪。
+          # ⚠️ 該下界有一個前提，寫出來免得它被讀成無條件成立：Go 在 `b.N` 觸及
+          #    1e9 時會**提前停**，所以快於 `benchtime / 1e9` 的 benchmark 會打破
+          #    它（`benchtime=60s` ⇒ 約 60 ns/op）。本選擇集目前離那條線很遠——
+          #    歸檔對照資料裡最快的是 `ResolveSilentModes_1000` 的 123 µs/op，
+          #    餘裕約 2000 倍（`benchtime=3s` 下約 41000 倍）。⛔ 但這是**當下這組
+          #    benchmark 的性質，不是這道閘門的保證**：日後若加進奈秒級的
+          #    microbenchmark，這個下界對它就不再是下界。
+          BUDGET_S=3000
+          case "$BT_UNIT" in
+            s)  BT_MS=$(( BT_NUM * 1000 )) ;;
+            ms) BT_MS="$BT_NUM" ;;
+            *)  BT_MS="" ;;
+          esac
+          if [ -n "$BT_MS" ]; then
+            MIN_MS=$(( ROUNDS * 2 * COUNT * NBENCH * BT_MS ))
+            echo "preflight lower bound: ${ROUNDS} rounds x 2 sides x ${COUNT} count x ${NBENCH} bench x ${BT_MS}ms = $(( MIN_MS / 1000 ))s (budget ${BUDGET_S}s)"
+            if [ "$MIN_MS" -gt $(( BUDGET_S * 1000 )) ]; then
+              echo "::error::the MINIMUM possible measurement time is $(( MIN_MS / 1000 ))s > budget ${BUDGET_S}s — this configuration cannot finish, and it would blow the job timeout before the post-round-1 projection ever runs. Lower rounds / count / benchtime, or narrow bench_re."
+              exit 2
+            fi
+          else
+            # ⚠️ 三態：「量不到」與「量了沒事」必須可區分。
+            echo "::warning::benchtime='${BENCHTIME}' is an iteration count, so NO time lower bound is computable before running — this is 'not measurable', not 'measured and fine'. The only remaining protection is the post-round-1 projection below, which by construction cannot catch a first round that alone exceeds the job timeout."
+          fi
           echo "start $(date -u +%FT%TZ) rounds=$ROUNDS count=$COUNT benchtime=$BENCHTIME" \
             > "${RUNNER_TEMP}/aa/timeline.txt"
+          # ⛔ 預算閘門用**實測投影**,不用模型。Go 的 N 探索每一步都重跑 benchmark
+          #    的 setup,所以 `rounds x 2 x count x benchtime` 這種樸素估算會低估:
+          #    本機實測 2 支 x count=4 x benchtime=3s 樸素下界 24s、實際 72.6s(3.0x)。
+          #    第一組 A+B 跑完就有真值,投影超預算即早停 —— 留下的是「跑了一組而且
+          #    說明白為什麼停」,而不是 60 分鐘 timeout 砍在中間、只剩半套資料。
+          LOOP_T0=$SECONDS
           for r in $(seq 1 "$ROUNDS"); do
             for side in A B; do
               t0=$SECONDS
@@ -167,6 +248,17 @@ jobs:
               echo "round=$r side=$side wall=$((SECONDS-t0))s at=$(date -u +%FT%TZ)" \
                 >> "${RUNNER_TEMP}/aa/timeline.txt"
             done
+            if [ "$r" -eq 1 ]; then
+              PAIR_S=$(( SECONDS - LOOP_T0 ))
+              PROJ_S=$(( PAIR_S * ROUNDS ))
+              echo "round 1 (A+B) measured ${PAIR_S}s => projected ${ROUNDS} rounds ~= ${PROJ_S}s (budget ${BUDGET_S}s)"
+              echo "projected_total_s=${PROJ_S} budget_s=${BUDGET_S} measured_pair_s=${PAIR_S}" \
+                >> "${RUNNER_TEMP}/aa/timeline.txt"
+              if [ "$PROJ_S" -gt "$BUDGET_S" ]; then
+                echo "::error::projected ${PROJ_S}s > budget ${BUDGET_S}s. Round 1 is on disk and in the log; the rest is skipped. Lower rounds / count / benchtime, or narrow bench_re."
+                exit 2
+              fi
+            fi
           done
           echo "done $(date -u +%FT%TZ)" >> "${RUNNER_TEMP}/aa/timeline.txt"
           tail -5 "${RUNNER_TEMP}/aa/timeline.txt"
@@ -240,6 +332,24 @@ jobs:
           fi
           echo "emitting ${#files[@]} file(s), ${emitted} encoded bytes"
           cat "$rec"
+          # ⛔ 下面這段**不取代**上面的 base64 —— 那是位元組精確的救援路徑，留著。
+          #    多印一份緊湊摘要，理由是實測出來的成本：base64 一次要來回數十 KB
+          #    —— 12 輪 x 2 側 x 1 支 bench 實測 **17,934 bytes**（run 33341834761
+          #    的本步驟自報），4 支的場次更大；⚠️ 本行初版寫「約 13 KB」，那是動工
+          #    前的估算被寫成了實測，差約 35%，已改為自報值。而驅動本實驗的分析
+          #    環境只能整段取 log 的**尾巴**。同樣的數字寫成一行一檔約 2 KB，且
+          #    **印在最後**，所以取一個小 tail 就拿得到全部。
+          # ⚠️ 摘要只有 `N:ns/op`，沒有 goos / goarch / pkg / cpu 那幾行，也沒有
+          #    digest。要逐位元還原、或要知道跑在哪顆 CPU 上，仍然只能走上面那條。
+          for f in "${files[@]}"; do
+            awk -v n="$(basename "$f" .txt)" '
+              /^Benchmark/ {
+                name = $1; sub(/-[0-9]+$/, "", name)
+                a[name] = a[name] " " $2 ":" $3
+              }
+              END { for (k in a) printf "AAROW %s %s%s\n", n, k, a[k] }
+            ' "$f"
+          done
 
       - name: Summarize
         if: always()

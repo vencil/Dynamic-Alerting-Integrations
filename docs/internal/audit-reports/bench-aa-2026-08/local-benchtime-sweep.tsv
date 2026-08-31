@@ -1,0 +1,41 @@
+# 本機 `-benchtime=Nx` 固定迭代數 sweep（零程式碼改動的迭代層級量測）
+# 受測物識別特徵：commit 5c980e2、go1.26.4 linux/amd64、Intel(R) Xeon(R) @ 2.10GHz、4 vCPU
+# ⛔ 絕對值不可與 CI（EPYC 7763 / Xeon 8370C）對比；本檔用來看**形狀**（肘點位置）與**比值**。
+# variant: baseline = main 現況；backdated = 暫時在 OneFileChanged 加 backdateFiles(b,dir)（#1545 分支的修法），量完即還原
+bench	variant	n_iters	ns_op_ms
+IncrementalLoad_1000_OneFileChanged	baseline	1	14.331599
+IncrementalLoad_1000_OneFileChanged	baseline	2	12.417792
+IncrementalLoad_1000_OneFileChanged	baseline	5	13.210522
+IncrementalLoad_1000_OneFileChanged	baseline	10	11.660492
+IncrementalLoad_1000_OneFileChanged	baseline	20	11.393242
+IncrementalLoad_1000_OneFileChanged	baseline	50	11.371327
+IncrementalLoad_1000_OneFileChanged	baseline	100	11.506179
+IncrementalLoad_1000_OneFileChanged	baseline	200	10.007637
+IncrementalLoad_1000_OneFileChanged	baseline	400	7.803572
+IncrementalLoad_1000_OneFileChanged	baseline	800	6.764240
+IncrementalLoad_1000_OneFileChanged	baseline	1600	6.285734
+IncrementalLoad_1000_OneFileChanged	baseline	3200	5.963104
+IncrementalLoad_1000_NoChange	baseline	1	9.637311
+IncrementalLoad_1000_NoChange	baseline	5	8.283404
+IncrementalLoad_1000_NoChange	baseline	20	8.615680
+IncrementalLoad_1000_NoChange	baseline	50	8.086745
+IncrementalLoad_1000_NoChange	baseline	100	8.214420
+IncrementalLoad_1000_NoChange	baseline	200	7.993764
+IncrementalLoad_1000_NoChange	baseline	300	6.600319
+IncrementalLoad_1000_NoChange	baseline	500	4.933475
+IncrementalLoad_1000_NoChange	baseline	800	4.086476
+IncrementalLoad_1000_NoChange	baseline	1600	3.357793
+IncrementalLoad_1000_NoChange	baseline	3200	3.039548
+IncrementalLoad_1000_OneFileChanged	backdated	20	7.383944
+IncrementalLoad_1000_OneFileChanged	backdated	100	5.899831
+IncrementalLoad_1000_OneFileChanged	backdated	200	5.742823
+IncrementalLoad_1000_OneFileChanged	backdated	400	5.801854
+IncrementalLoad_1000_OneFileChanged	backdated	800	5.753633
+IncrementalLoad_1000_OneFileChanged	backdated	3200	5.965713
+# 下面四列不是 Nx sweep，而是**同一台本機**在 `-benchtime=3s -count=4` 下
+# Go 自己選出來的 b.N 與對應 ns/op。收它的唯一理由是散文引用了「b.N 是連續
+# 散佈不是離散分層」這個觀察與它的 3.5%，而那個數字先前只活在散文裡。
+IncrementalLoad_1000_OneFileChanged	observed-at-3s	428	7.682368
+IncrementalLoad_1000_OneFileChanged	observed-at-3s	422	7.650836
+IncrementalLoad_1000_OneFileChanged	observed-at-3s	436	7.788998
+IncrementalLoad_1000_OneFileChanged	observed-at-3s	421	7.912782

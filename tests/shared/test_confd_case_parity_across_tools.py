@@ -48,13 +48,15 @@ downgrade.
 
 ⚠️ SCOPE, so nobody over-reads a green run:
 
-* Only the CASE axis. Four readers (`operator_generate`,
-  `generate_tenant_metadata`, `check_path_metadata_consistency`,
-  `custom_alerts/loader`) accept `*.yaml` and not `*.yml`, so they do not
-  see `db-b.yml` at all while the exporter does. That is a real
-  divergence on the extension-SPELLING axis; it is deliberately NOT fixed
-  here (widening them is a behaviour change that must not ride along
-  inside a case fix) and is filed separately.
+* Only the CASE axis. Readers that glob `*.yaml` accept it and not
+  `*.yml`, so they do not see `db-b.yml` at all while the exporter does.
+  That is a real divergence on the extension-SPELLING axis; it is
+  deliberately NOT fixed here (widening them is a behaviour change that
+  must not ride along inside a case fix) and is filed separately (#1603).
+  `custom_alerts/loader` was on that list when this file was written and
+  no longer is — #1603 widened it, and the parity it now has is pinned by
+  `tests/dx/test_compile_custom_alerts.py`, not by this file. Ask
+  `_lib_confd` for the current set rather than trusting a count here.
 * Only tools reachable through a conf.d CLI flag, plus the two
   library-shaped readers covered by direct calls at the bottom of this
   file.
