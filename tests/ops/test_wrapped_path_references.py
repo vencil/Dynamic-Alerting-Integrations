@@ -615,19 +615,32 @@ def _names_a_file_through_its_basename(token: str, raw: str) -> str | None:
     break falls inside it a full-path `git grep` loses the site while the
     basename stays greppable and this gate stays silent. The gap is real.
 
-    ⛔ Closing it was implemented, measured and WITHDRAWN. Yielding the gate
-    when the rejoined window spells the real path reports zero extra sites on
-    this tree, and arms a false-positive surface of 545 contiguous occurrences
-    across 189 tracked files (`../../../` 225, `../../` 121, `./` 84, `../` 79,
-    `/` 30, plus deeper forms), concentrated in `docs/`, `README` and
+    ⛔ Closing it was implemented, measured and WITHDRAWN (#1579, PR #1644).
+    Yielding the gate when the rejoined window spells the real path reports
+    zero extra sites on this tree, and arms a false-positive surface of several
+    hundred contiguous occurrences, concentrated in `docs/`, `README` and
     `Makefile` — the prose that gets reflowed most. It fires on two adjacent
     Markdown list items (a directory, then a file), which is the SECOND false
     positive class this module's own docstring already lists; and the cheapest
     ways back to green are one-character edits — change the bullet marker, add
     a backtick, add a trailing space — each of which also silences a real
     defect. A gate that teaches that edit is worse than the gap it closes.
-    ⚠️ Do not re-derive the armed surface from `../` and `./` alone: the first
-    attempt did, reported 97, and was wrong by more than fourfold because
+
+    ⛔ THE SIZE OF THAT SURFACE HAS NO MEANING WITHOUT ITS DEFINITION, so the
+    definition travels with it. Counting contiguous tokens whose `.`/`..`/empty
+    segments strip to a tracked path OF AT LEAST TWO SEGMENTS gives 551
+    occurrences / 329 distinct tokens / 187 files (`cefb5652`; byte-identical
+    on `b9f13937` and `d4135983`, so this surface is not moving). Seven other
+    plausible readings of "the same" surface give, ON THAT SAME TREE: 393, 624,
+    627, 2237 and 3213 occurrences (dropping the two-segment bound; restricting
+    to extension-anchored tokens; going through `_unique_basenames` rather than
+    the tracked set; accepting a SUFFIX rather than the whole path), plus 465
+    LINES and 500 (file, token) PAIRS — ⚠️ different units, listed here so the
+    range is visible, NOT so the numbers can be compared with each other.
+    ⚠️ An earlier wording gave 545 / 326 / 189 with no definition attached;
+    none of the eight readings above reproduces it, and the nearest is 1.1%
+    away. ⛔ So do not re-derive this from `../` and `./` alone either: the
+    first attempt did, reported 97, and was low by more than fourfold because
     `_is_a_spelling_of` drops EVERY `.`/`..`/empty segment, so every deeper
     spelling is admitted too.
     """
