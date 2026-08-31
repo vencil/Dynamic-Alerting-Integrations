@@ -206,8 +206,15 @@ jobs:
           #    預設四支 x count=20 x benchtime=60s ⇒ 光 side A 就
           #    4 x 20 x 60 = 4800s，已超過 timeout-minutes: 60 的 3600s，
           #    job 會先被砍掉，投影那行一次都不會執行。
-          # ⇒ 這裡先算一個**嚴格下界**（Go 每支每次至少跑滿 benchtime，setup 與
-          #    N 探索只會讓它更久），下界都超預算就直接擋，不必先燒掉一輪。
+          # ⇒ 這裡先算一個**下界**（Go 每支每次至少跑滿 benchtime，setup 與 N
+          #    探索只會讓它更久），下界都超預算就直接擋，不必先燒掉一輪。
+          # ⚠️ 該下界有一個前提，寫出來免得它被讀成無條件成立：Go 在 `b.N` 觸及
+          #    1e9 時會**提前停**，所以快於 `benchtime / 1e9` 的 benchmark 會打破
+          #    它（`benchtime=60s` ⇒ 約 60 ns/op）。本選擇集目前離那條線很遠——
+          #    歸檔對照資料裡最快的是 `ResolveSilentModes_1000` 的 123 µs/op，
+          #    餘裕約 2000 倍（`benchtime=3s` 下約 41000 倍）。⛔ 但這是**當下這組
+          #    benchmark 的性質，不是這道閘門的保證**：日後若加進奈秒級的
+          #    microbenchmark，這個下界對它就不再是下界。
           BUDGET_S=3000
           case "$BT_UNIT" in
             s)  BT_MS=$(( BT_NUM * 1000 )) ;;

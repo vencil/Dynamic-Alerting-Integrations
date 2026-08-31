@@ -58,6 +58,12 @@ def main():
         print(f"  rounds with |ratio-1|>5%: {sum(1 for x in v if abs(x) > 5)}/{len(v)}")
         spread = 100 * (max(ns) - min(ns)) / st.mean(ns)
         print(f"  b.N range: {min(ns)}..{max(ns)} (relative spread {spread:.1f}%)")
+        # round(e, 2) is deliberate and is the ONE place where the
+        # Chinese->English rewrite changed printed output: the previous version
+        # printed the raw float (24.754291585655054) here while every other
+        # figure in this file is 2dp. Disclosed because the rewrite's commit
+        # message claimed "every printed number is identical" - it was identical
+        # in 235 of 236 numbers, not all 236.
         big = [(n, round(e, 2)) for n, e in first if abs(e) > 5]
         print(f"  first sample vs median of the rest: invocations with |excess|>5%: "
               f"{len(big)}/{len(first)}" + (f" -> {big}" if big else ""))
