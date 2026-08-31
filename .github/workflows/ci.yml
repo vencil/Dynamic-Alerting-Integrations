@@ -165,24 +165,37 @@ jobs:
               # state it replaced; `test_python_tests_run_cannot_be_path_skipped`
               # reds if it goes.
               #
-              # Why a catch-all rather than 101 more entries: an enumeration
-              # is only as complete as the scanner deriving it, and
+              # Why a catch-all rather than enumerating the rest: an
+              # enumeration is only as complete as the scanner deriving it, and
               # `test_wrapped_path_references` reads the WHOLE tracked tree —
               # no filter narrower than everything can express its input set.
-              # 101 tracked files sat outside the enumerated list, and 9 of
-              # the last 400 commits touched nothing else. The rejected
-              # alternative (repo-wide guards in an ungated job) costs ~17x
-              # more COMPUTE, though ⚠️ LESS wall — reject it on compute and
-              # on its hand-maintained list, not on wall.
+              # Measured on #1383 (`4fd49561`), against the filter as it stood
+              # BEFORE the catch-all: 101 tracked files sat outside the
+              # enumerated list, and (#1402, `17a05bb5`) 9 of the 400 commits
+              # before it touched nothing else. The rejected alternative
+              # (repo-wide guards in an ungated job) cost ~17x more COMPUTE
+              # there, though ⚠️ LESS wall — reject it on compute and on its
+              # hand-maintained list, not on wall.
               #
-              # ⚠️ The entries below are NOT uniformly enforced: 19 of 23 are
-              # pinned (deleting any one reds the guard); the 4 that delete
-              # GREEN are `operator-manifests/**`, `pyproject.toml`,
-              # `.github/custom-rule-policy.yaml`, `flaky-tests.yaml`. Being
-              # outside PYTHON_ENTRIES_THIS_SCANNER_JUSTIFIES is NOT the
-              # criterion — 7 sit outside it and 3 of those are still pinned.
+              # ⚠️ The entries below are NOT uniformly enforced, and the two
+              # counts here are taken over DIFFERENT sets — subtracting one
+              # from the other is meaningless, so each names its own:
+              #   * of the 23 entries EXCLUDING the catch-all, 19 are pinned
+              #     (deleting any one reds this guard); the 4 that delete GREEN
+              #     are `operator-manifests/**`, `pyproject.toml`,
+              #     `.github/custom-rule-policy.yaml`, `flaky-tests.yaml`.
+              #   * of all 24 entries INCLUDING the catch-all, 7 sit outside
+              #     PYTHON_ENTRIES_THIS_SCANNER_JUSTIFIES and 3 of those are
+              #     still pinned — so being outside it is NOT the criterion.
+              # ⛔ Neither count has an assertion behind it: they come from
+              # deleting each entry in turn and running this guard (24 cells,
+              # `cefb5652`, baseline green, "delete every entry" reds as the
+              # must-fire control). Asserting them would mean running that
+              # module once PER ENTRY on every CI run, and its silent failure
+              # would not bring back the defect this list exists for — so the
+              # counts are measured and dated here, not asserted.
               # The guard IGNORES the catch-all when asking coverage
-              # questions, so the list stays machine-checked.
+              # questions, so the list itself stays machine-checked.
               - "**"
               - "**/*.py"
               - "tests/**"
@@ -255,9 +268,11 @@ jobs:
               # `python`, and skipped the half written to catch exactly that —
               # and the always-run aggregate turned that skip into a PASS on
               # the required check. ⚠️ NOT every entry above is enforced by
-              # tests/ops/test_ci_path_filter_coverage.py: 19 of 23 are, and
-              # the four that are not are named in the catch-all comment at
-              # the top of this filter.
+              # tests/ops/test_ci_path_filter_coverage.py — the count, the set
+              # that count is taken over, and the entries that delete GREEN are
+              # all in the catch-all comment at the top of this filter. ⛔ Kept
+              # as a pointer rather than a second copy of the number: two
+              # copies drift, and this one has no room for the set it counts.
               - "tools/portal/src/**"
               # ⛔ The file that DEFINES which files above are Vitests. The
               # coverage guard hard-codes `tools/portal/tests` as the tree it
@@ -640,7 +655,8 @@ jobs:
           # each one covers). Auto-stage in the config, so contributors also get
           # it on commit; this line is what makes it a REQUIRED check rather than
           # something only a local hook run would catch. Baseline measured at 0
-          # across the 60 shell files before enabling.
+          # across the 60 shell files tracked at the time (#1365, `edc865b0`),
+          # before enabling.
           pre-commit run shellcheck --all-files
 
   lint-rule-packs:
