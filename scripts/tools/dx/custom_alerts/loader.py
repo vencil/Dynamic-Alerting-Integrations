@@ -175,8 +175,21 @@ def collect_instances(config_dir: Path) -> Tuple[List[Tuple[str, dict, str, bool
     # own invention of an answer every other reader words differently — the
     # divergence `unusable_reason` exists to end. `entries` is listed ONCE so
     # the two passes cannot walk two different trees.
+    # ⛔ `.yml` IS A TENANT CARRIER HERE NOW (#1603). Both call sites in this module
+    # used to pass `suffixes=(".yaml",)`, so a tenant declared in `db-b.yml` was
+    # invisible to the custom-alert compiler while the exporter was serving it —
+    # `config_hierarchy.go` accepts both spellings. Measured on two trees whose
+    # contents are byte-identical and differ only in the extension:
+    #
+    #     db-b.yaml  ->  1 shape, 6 rules, rc=0
+    #     db-b.yml   ->  0 shapes, 0 rules, rc=0        <- before this change
+    #     db-b.yml   ->  1 shape, 6 rules, rc=0         <- after
+    #
+    # rc=0 in every row: the tenant's self-service alerts (ADR-024 Capability B,
+    # shipped in v2.9.0) simply did not exist for this reader, and nothing said so.
+    # Omitting the argument takes `CONFIG_SUFFIXES`, which is the exporter's set.
     entries = sorted(config_dir.rglob("*"))
-    for bad in unusable_config_entries(entries, suffixes=(".yaml",)):
+    for bad in unusable_config_entries(entries):
         # ⛔ Defaults carriers are skipped ONLY when `_dir_defaults_alerts`
         # can see them, and the dividing line is exactly `os.walk`'s: it
         # classifies by `is_dir()`, putting a directory in `dirs` and
@@ -199,7 +212,7 @@ def collect_instances(config_dir: Path) -> Tuple[List[Tuple[str, dict, str, bool
             str(bad.relative_to(config_dir)), unusable_reason(bad)))
     for path in (
         p for p in entries
-        if p.is_file() and has_yaml_extension(p.name, (".yaml",))
+        if p.is_file() and has_yaml_extension(p.name)   # both spellings (#1603)
     ):
         if is_defaults_name(path.name):
             continue
@@ -427,9 +440,17 @@ def build_shapes(config_dir: Path,
             # Cost guardrail (S4): cap TENANT-OWN recipes (inherited policy is vectorized,
             # O(1) in tenant count → uncapped). Enforced per-recipe — the OWN recipes
             # BEYOND the cap are quarantined instead of aborting the whole compile. The
-            # survivor set is deterministic: the FIRST `cap` own recipes in file-path +
-            # in-file declaration order (triples come from sorted(rglob) + list order), so
-            # `--check` stays stable. ADR-024 §Custom Alerts cost guardrail.
+            # survivor set is deterministic — triples come from sorted(rglob) + in-file
+            # list order, so `--check` stays stable. ADR-024 §Custom Alerts cost guardrail.
+            #
+            # ⚠️ Deterministic, but NOT "the first `cap` recipes", which is what this
+            # comment used to say. A refused recipe does not increment the counter, so
+            # this is greedy first-FIT, and since ADR-031 the costs are unequal — a
+            # LATER cheap recipe can take room an EARLIER expensive one was refused.
+            # Measured (cap=3; declared s1=slo 2u, s2=slo 2u, t3=threshold 1u): s1 and
+            # t3 compile, s2 is quarantined. At cap=1 over s1(2u), t2(1u): s1 refused,
+            # t2 compiles. The prefix reading is exact only when every recipe costs 1
+            # (cap=2 over a,b,c keeps a,b) — which is why the old wording survived.
             # An slo_burn_rate declaration costs len(sevs)=2 cap units (it IS two alert
             # rules — ADR-031 guardrail #1: distinct (tenant, recipe_id, severity)
             # counting, no special case); for every other recipe len(sevs)=1 keeps

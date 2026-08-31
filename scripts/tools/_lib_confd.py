@@ -159,15 +159,19 @@ def has_yaml_extension(
     be wrong for three of them.
 
     ⚠️ `suffixes` exists so a case fix does not smuggle in a SECOND
-    behaviour change. Measured on today's tree, four readers
+    behaviour change. Measured on the tree at PR #1590, four readers
     (`operator_generate`, `generate_tenant_metadata`,
-    `check_path_metadata_consistency`, `custom_alerts/loader`) glob
-    `*.yaml` and therefore do not see `db-b.yml` AT ALL, while the
+    `check_path_metadata_consistency`, `custom_alerts/loader`) globbed
+    `*.yaml` and therefore did not see `db-b.yml` AT ALL, while the
     exporter reads both spellings. That is a real divergence on the
-    extension-SPELLING axis and it is filed separately — but widening
-    those four here would land it inside a commit whose stated subject is
-    case folding, where no reviewer is looking for it. Callers pass the
-    set they already accept; the default is both.
+    extension-SPELLING axis and it is filed separately (#1603) — but
+    widening them here would land it inside a commit whose stated subject
+    is case folding, where no reviewer is looking for it. Callers pass
+    the set they already accept; the default is both.
+
+    ⚠️ That list is a SNAPSHOT, not an invariant: #1603 widened
+    `custom_alerts/loader`, so the narrow set is smaller than four now.
+    Do not quote the number from here — grep the call sites.
 
     ⛔ Do not "simplify" this by dropping the parameter and folding every
     caller to `CONFIG_SUFFIXES`. That is the behaviour change, spelled as
