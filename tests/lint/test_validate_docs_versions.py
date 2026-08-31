@@ -446,6 +446,50 @@ class TestCountBilingualPairs:
         mod._RGLOB_CACHE.clear()
         assert mod.count_bilingual_pairs() == 4
 
+    def test_the_root_readme_alias_is_not_counted_twice(
+            self, tmp_path, monkeypatch):
+        """⛔ `docs/README-root.en.md` is a symlink to the root `README.en.md`.
+
+        The function adds the root README explicitly, so counting the docs/
+        tree naively sees the same document twice. On the real repo that was
+        96 against 95 distinct documents — and 96 is the number `--fix` writes
+        into the README badge, so the inflated count ships.
+
+        The alias is created here as a plain file on purpose: the guard is
+        name-based, because a checkout without symlink support materialises
+        these as 12-byte path stubs and `is_symlink()` would answer
+        differently per platform.
+        """
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        _write(docs / "guide.en.md", "")
+        _write(docs / "README-root.en.md", "")   # the alias
+        _write(tmp_path / "README.en.md", "")    # what it points at
+        monkeypatch.setattr(mod, "DOCS_DIR", docs)
+        monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+        mod._RGLOB_CACHE.clear()
+        assert mod.count_bilingual_pairs() == 2, (
+            "guide + root README = 2 distinct pairs; the alias must not add "
+            "a third")
+
+    def test_a_document_merely_named_like_a_doc_is_still_counted(
+            self, tmp_path, monkeypatch):
+        """Positive control for the skip above.
+
+        Without this, narrowing the alias set until it swallowed the whole
+        docs/ tree would leave the previous test green — "counts fewer" always
+        satisfies an assertion that something is not double-counted.
+        """
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        _write(docs / "README.en.md", "")          # NOT the alias name
+        _write(docs / "CHANGELOG-notes.en.md", "")  # NOT the alias name
+        monkeypatch.setattr(mod, "DOCS_DIR", docs)
+        monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+        mod._RGLOB_CACHE.clear()
+        assert mod.count_bilingual_pairs() == 2, (
+            "the skip is keyed on the exact alias names, not a prefix")
+
 
 # ============================================================
 # check_da_tools_version (representative check_*)

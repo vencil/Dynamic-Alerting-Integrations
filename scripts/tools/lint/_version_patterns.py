@@ -293,19 +293,34 @@ SKIP_CI_INTERPOLATION_FILES = {"release.yaml"}
 SKIP_RULE_PACK_FILES = {"CHANGELOG.md", "CHANGELOG.en.md", "benchmarks.md",
                         "benchmarks.en.md"}
 
-# Bilingual number consistency skips these
-# ⛔ `README-root.md` is an ALIAS, not a document: `docs/README-root.{md,en.md}`
-# are mode-120000 symlinks to the root READMEs, which this checker already adds
-# as a pair on its own. Without the skip the root README is compared TWICE, and
-# the census becomes platform-dependent — a checkout without symlink support
-# reads a 12-byte path string (all SILENT) where CI reads the real file (four
-# cells AGREE). Nine other places already treat these two as aliases
-# (`check_bilingual_structure` skips symlinks, `check_doc_links` resolve()s
-# them, `DOC_MAP_SKIP_NAMES` lists it, `.pre-commit-config.yaml` excludes it);
-# this loop was the one reader that never learned it.
-# ⚠️ Measured when added: warnings change by ZERO. What goes away is the
-# duplicate comparison, not a detection.
-SKIP_BILINGUAL_NUMBER_FILES = {"benchmarks.md", "CHANGELOG.md", "README-root.md"}
+# ⛔ These three `docs/` entries are mode-120000 symlinks to files OUTSIDE
+# `docs/` (`git ls-files -s docs/` shows the modes). They are ALIASES, not
+# documents. Any reader that COUNTS or PAIRS documents must skip them or the
+# same document is seen twice; readers that merely scan text (links,
+# frontmatter, templates, reading time) are unaffected and must NOT use this
+# set — narrowing their scan would remove real coverage.
+#
+# ⚠️ Deliberately a literal set rather than `Path.is_symlink()`: a checkout
+# without symlink support materialises these as 12-byte path stubs, so the
+# derived test answers differently per platform — which is the exact platform
+# dependence this set exists to remove (a Windows census read all-SILENT where
+# CI read four AGREE cells).
+#
+# ⚠️ `DOC_MAP_SKIP_NAMES` below lists `README-root.md` but NOT
+# `README-root.en.md`. Measured: `check_doc_map_coverage` reports 0 issues
+# either way today, so that asymmetry is latent, not active — left alone
+# rather than "tidied", because adding a name there narrows a scan with no
+# measured defect behind it.
+DOCS_TREE_SYMLINK_ALIASES = {"CHANGELOG.md", "README-root.md",
+                             "README-root.en.md"}
+
+# Bilingual number consistency skips the aliases (see above) plus
+# `benchmarks.md`, which is skipped for an unrelated reason: it is a table of
+# raw measurements where the two halves legitimately carry different numbers.
+# ⚠️ Measured: folding in the alias set is inert for this check —
+# `README-root.en.md` is never a zh-side file, so the scanned set is 92 zh
+# documents either way. The point is to stop spelling the alias list twice.
+SKIP_BILINGUAL_NUMBER_FILES = {"benchmarks.md"} | DOCS_TREE_SYMLINK_ALIASES
 
 # doc-map coverage check skips these directories and files.
 #
