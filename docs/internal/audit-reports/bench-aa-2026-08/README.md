@@ -19,7 +19,7 @@
 python3 docs/internal/audit-reports/bench-aa-2026-08/analyze_aa.py
 ```
 
-不連網、不重跑 benchmark，只從本目錄兩個資料檔重算。它回答的是「README 的數字能不能從收進來的資料重算出來」，**不是**「今天重跑會得到什麼」。
+不連網、不重跑 benchmark，只從本目錄的資料檔重算——`aa-sessions.json` 與 `local-benchtime-sweep.tsv` 是必需的，`aa-multibench-control.tsv` 存在時額外輸出對照那一節。它回答的是「README 的數字能不能從收進來的資料重算出來」，**不是**「今天重跑會得到什麼」。
 
 ## 量到什麼
 
