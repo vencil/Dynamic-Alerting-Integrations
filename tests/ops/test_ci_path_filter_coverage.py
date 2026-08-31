@@ -618,8 +618,8 @@ def _python_filter_patterns() -> list[str]:
 def _parsed_test_modules() -> tuple[tuple[str, ast.AST], ...]:
     """Every `tests/**/test_*.py` parsed once, as (repo-relative path, tree).
 
-    Two independent scans walked and re-parsed the whole tree separately; on a
-    ~300-module suite that traversal, not the analysis, was the cost. Nothing
+    Two independent scans walked and re-parsed the whole tree separately; at
+    this suite's size the traversal, not the analysis, was the cost. Nothing
     mutates the trees, so one parse serves both.
     """
     parsed = []
@@ -837,9 +837,9 @@ def _div_literals(node: ast.AST, roots: set[str]) -> list[str]:
     ⛔ The marker must survive nested flattening. The previous version stripped
     it inside the recursion, so for a THREE-operand join the outer call saw no
     marker and returned `[]` — i.e. only the two-operand form worked, silently.
-    Measured cost of that: 97 tracked files reached by a `ROOT / "a" / "b"`
-    join yielded nothing, against 38 total detections (blind review). Strip the
-    marker once, at the top.
+    Measured cost of that on #1368 (`cd8e1289`): 97 tracked files reached by a
+    `ROOT / "a" / "b"` join yielded nothing, against 38 total detections (blind
+    review). Strip the marker once, at the top.
     """
     parts = _flatten_div(node, roots)
     return parts[1:] if parts[:1] == [_ROOT_MARK] else []
@@ -927,8 +927,10 @@ def test_python_tests_run_cannot_be_path_skipped() -> None:
     Stronger than the other assertions, which are bounded by what the scanner
     can SEE. Quantified over EVERY tracked file and every job gated on
     `python`, on every event ci.yml declares, so a new leg or spelling inherits
-    it without an edit here. 101 tracked files sat outside the enumerated list
-    and 9 of the previous 400 commits touched nothing else. ⚠️ SCOPE: the
+    it without an edit here. Measured against the filter as it stood BEFORE the
+    catch-all: 101 tracked files sat outside the enumerated list (#1383,
+    `4fd49561`) and 9 of the 400 commits before #1402 (`17a05bb5`) touched
+    nothing else. ⚠️ SCOPE: the
     JOB-level `if:` only; step-level switches are refused by `_job_step_files`
     and the push-event half by
     `test_detect_outputs_are_forced_true_off_a_pull_request`.
@@ -1155,9 +1157,10 @@ def test_paths_filter_action_stays_on_the_verified_major() -> None:
 # blind, and it is the only formulation that scales. Anchors pin whatever axis
 # you thought of: the shape anchors did not notice a whole NAMESPACE going
 # dark, and adding namespace anchors would just be a second enumeration to
-# forget to extend. Measured before this existed: blinding `helm/`, `k8s/`,
-# `environments/` and `try-local/` cost 22 detections and every test stayed
-# green, with the floor's headroom absorbing the loss — the entire namespace
+# forget to extend. Measured before this existed (#1368, `cd8e1289`):
+# blinding `helm/`, `k8s/`, `environments/` and `try-local/` cost 22
+# detections and every test stayed green, with the floor's headroom
+# absorbing the loss — the entire namespace
 # axis sat within a couple of detections of being unguarded, by luck rather
 # than by assertion.
 # (The floor is no longer what guards that axis — this exact-set assertion is,
@@ -1287,8 +1290,9 @@ def test_python_scanner_actually_finds_something() -> None:
         ".devcontainer/install-vector.sh",
         # ⛔ A third axis: shape B walks the WHOLE tree, so a literal inside a
         # function body counts. Nothing pinned that — restricting shape B to
-        # module level dropped ~13% of detections with every test still green,
-        # while a comment claimed the restriction "reds two tests".
+        # module level dropped ~13% of detections with every test still green
+        # (#1368, `cd8e1289`), while a comment claimed the restriction
+        # "reds two tests".
         #
         # ⛔ And the FIRST anchor chosen for it did not work either, for a
         # reason worth keeping: `helm/federation-gateway/values.yaml` is a
@@ -2016,7 +2020,8 @@ PINNED_STEP_INPUTS = {
     # ⛔ At least one SCRIPT pin per workflow, not just `-c` pins. docs-ci and
     # validate were anchored solely by the constraints file, so deleting
     # `python`/`python3`/`node`/… from INTERPRETERS dropped 10 script files
-    # across 7 legs in those two workflows. That WAS green when the anchors
+    # across 7 legs in those two workflows (#1368, `cd8e1289`).
+    # That WAS green when the anchors
     # were added; it is not any more (the exact-set accounting above now
     # catches it), so the pins are belt-and-braces rather than the only net —
     # kept because they name WHICH dependency went blind, which the set
@@ -3267,8 +3272,9 @@ def test_this_guard_is_not_itself_path_skippable() -> None:
         *(p.relative_to(ROOT).as_posix() for p in _paths_filter_workflows()),
         # ⛔ DELIBERATELY absent: the tracked SET itself. The honest entry is
         # "all of them", which cannot be written — this list is checked against
-        # the catch-all-STRIPPED view and would red on the same 101 paths by
-        # construction. That dependency is covered by ci.yml's catch-all,
+        # the catch-all-STRIPPED view and would red on the same paths as the
+        # measurement quoted in `test_python_tests_run_cannot_be_path_skipped`,
+        # by construction. That dependency is covered by ci.yml's catch-all,
         # pinned by `test_python_tests_run_cannot_be_path_skipped`.
     ]
     uncovered = [
@@ -3353,12 +3359,13 @@ def test_gated_scanner_still_justifies_every_filter_entry_it_used_to() -> None:
 
     Pinning legs and vacuous-legs as exact sets still let individual (leg,
     file) pairs vanish: of 28 extracted pairs only 9 were pinned, so 19 could
-    disappear with everything green (blind review). Pinning all 28 would be a
-    third enumeration; asking "does each filter entry still have a reason"
-    survives legs being renamed and steps being rewritten.
+    disappear with everything green (blind review on #1368, `cd8e1289`).
+    Pinning all of them would be a third enumeration; asking "does each filter
+    entry still have a reason" survives legs being renamed and steps being
+    rewritten.
 
-    ⛔ Honest residue: this reduces the losable pairs from 19 to 17 of 28, not
-    to zero — any pair whose pattern is co-justified by a sibling can still go
+    ⛔ Honest residue: this NARROWS the set of losable pairs, it does not empty
+    it — any pair whose pattern is co-justified by a sibling can still go
     silently, and that includes `mkdocs-build → mkdocs_strict_check.sh`, the
     leg this whole change cites as the only pre-merge doc build. A realistic
     loss vector is a step rewritten into one of the documented `_command_verb`
