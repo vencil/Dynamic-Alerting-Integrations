@@ -5,7 +5,7 @@
 
 ## 一句話
 
-**A/A 是乾淨的。** 兩側跑同一份編譯出的執行檔（真值恆為 1.000）時，這支 benchmark 的逐輪比值在**三場、合計 30 輪、跨兩種 CPU 型號**下 rSD 落在 **0.53–1.28pp**、**0/30** 超過 5%、最大偏離 **+2.25%** —— #1497 報的 26 個百分點**沒有被重現**。
+**A/A 是乾淨的。** 兩側跑同一份編譯出的執行檔（真值恆為 1.000）時，這支 benchmark 的逐輪比值在**三場、合計 30 輪、跨兩種 CPU 型號**下 rSD 落在 **0.53–1.28pp**、**0/30** 超過 5%、**絕對偏離最大 3.09%**（`benchtime=600x` 第 4 輪的 −3.09%；正向最大 +2.25%）—— #1497 報的 26 個百分點**沒有被重現**。
 
 ⛔ **這不等於回答了 #1497 的「benchmark 缺陷 vs 產品特性」。** 它只關掉一條岔路：「這支 benchmark 在成對 harness 下本來就很吵」不成立。那個擺盪需要**兩側是不同的樹**才會出現。
 
@@ -31,9 +31,27 @@ python3 docs/internal/audit-reports/bench-aa-2026-08/analyze_aa.py
 | `benchtime=600x`、6 輪 | 33341837679 | AMD EPYC 7763 | −3.09%…+0.92% | 1.28pp | 4.01pp | **0/6** | 600（散佈 **0.0%**） |
 | `benchtime=3s`、12 輪（**獨立複製**） | 33342875971 | AMD EPYC 7763 | −0.95%…+0.73% | 0.53pp | 1.68pp | **0/12** | 279–303（散佈 8.1%） |
 
-三場皆 `-test.count=5`、取每次 invocation 的中位數。**合計 30 輪、跨兩種 CPU 型號、兩種 `benchtime` 設定：`|ratio−1|>5%` 共 0/30，最大偏離 +2.25%。**
+三場皆 `-test.count=5`、取每次 invocation 的中位數。**合計 30 輪、跨兩種 CPU 型號、兩種 `benchtime` 設定：`|ratio−1|>5%` 共 0/30，絕對偏離最大 3.09%。**
+
+⛔ **一則更正**：本文初版三處都寫「最大偏離 **+2.25%**」，那是**正向**最大值，漏掉了同一張表上就列著的 −3.09% —— 把噪音上界低報 37%，而且錯在「讓儀器看起來比實測更準」的方向。`analyze_aa.py` 現在直接印出這個統計量（`[全部場次合計]` 那段），不再靠人去掃表格。
 
 ⚠️ 第三場的資料取自本 PR 新增的 `AAROW` 緊湊摘要，**故該場逐筆沒有 sha256**；前兩場的每筆記錄都有並已逐筆驗過。第三場的 base64 原件仍在該 job 的 log 裡，可依本文末節還原並驗證。
+
+### 一之二、對照：預設四支在同一天的 A/A（⛔ 不同集合，不池化）
+
+一個立刻會被問的問題：**1.17pp 是這支 bench 特有的，還是 CI 上 A/A 的一般水準？** 同一天用**預設 `bench_re`**（原本寫死的四支）跑了一場（[run 33343193382](https://github.com/vencil/Dynamic-Alerting-Integrations/actions/runs/33343193382)、`benchtime=3s`、`-test.count=5`）：
+
+| benchmark | n | rSD | \|偏離\|最大 |
+|---|---|---|---|
+| `FullDirLoad_1000` | 4 | 1.46pp | 2.37% |
+| `IncrementalLoad_1000_NoChange` | 4 | 0.65pp | 1.17% |
+| `ResolveSilentModes_1000` | 4 | 1.38pp | 2.19% |
+| `ScanDirFileHashes_1000` | 4 | 0.92pp | 2.02% |
+| **四支合計** | **16** | **1.26pp** | **2.37%**（`>5%` 共 0/16） |
+
+⇒ **`OneFileChanged` 的 1.17pp 不特別** —— 它就落在同一天其他四支的水準裡。這一格同時也是本 PR 的**行為保存檢查**：不傳 `bench_re` 時仍然選中原本那四支、產出 14 個檔。
+
+⛔ **這組數字不可與上一節池化**：不同的 benchmark 集合。⚠️ 只有 rounds 3–6 四輪完整（r1、r2_A **未取回**，仍在該 job 的 log 裡），且資料經 `AAROW` 摘要取回**故無 sha256**。
 
 ### 二、迭代層級的工作量確實在變（`local-benchtime-sweep.tsv`）
 
@@ -71,7 +89,8 @@ python3 docs/internal/audit-reports/bench-aa-2026-08/analyze_aa.py
 |---|---|
 | `aa-sessions.json` | 兩場 A/A 的逐輪逐側原始樣本（`b.N` 與 `ns/op`），附 run id / job id / CPU / 每筆的 sha256 |
 | `local-benchtime-sweep.tsv` | 本機 `-benchtime=Nx` 三條曲線（兩支 baseline + `backdated` 對照），含受測物識別特徵 |
-| `analyze_aa.py` | 從上面兩個檔重算本文所有數字 |
+| `aa-multibench-control.tsv` | 預設四支的 A/A 對照（⛔ 不同 benchmark 集合，不與 `aa-sessions.json` 池化） |
+| `analyze_aa.py` | 從上面三個資料檔重算本文所有數字 |
 
 ## 從 job log 還原原始記錄
 

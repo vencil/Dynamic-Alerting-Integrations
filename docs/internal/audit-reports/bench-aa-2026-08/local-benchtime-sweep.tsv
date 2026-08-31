@@ -32,3 +32,10 @@ IncrementalLoad_1000_OneFileChanged	backdated	200	5.742823
 IncrementalLoad_1000_OneFileChanged	backdated	400	5.801854
 IncrementalLoad_1000_OneFileChanged	backdated	800	5.753633
 IncrementalLoad_1000_OneFileChanged	backdated	3200	5.965713
+# 下面四列不是 Nx sweep，而是**同一台本機**在 `-benchtime=3s -count=4` 下
+# Go 自己選出來的 b.N 與對應 ns/op。收它的唯一理由是散文引用了「b.N 是連續
+# 散佈不是離散分層」這個觀察與它的 3.5%，而那個數字先前只活在散文裡。
+IncrementalLoad_1000_OneFileChanged	observed-at-3s	428	7.682368
+IncrementalLoad_1000_OneFileChanged	observed-at-3s	422	7.650836
+IncrementalLoad_1000_OneFileChanged	observed-at-3s	436	7.788998
+IncrementalLoad_1000_OneFileChanged	observed-at-3s	421	7.912782
