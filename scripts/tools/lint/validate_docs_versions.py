@@ -61,6 +61,7 @@ from _version_patterns import (
     SKIP_CI_INTERPOLATION_FILES,
     SKIP_RULE_PACK_FILES,
     SKIP_BILINGUAL_NUMBER_FILES,
+    DOCS_TREE_SYMLINK_ALIASES,
     DOC_MAP_SKIP_DIRS,
     DOC_MAP_SKIP_NAMES,
     DOC_MAP_SKIP_NAME_PATTERNS,
@@ -225,11 +226,22 @@ def count_rule_packs() -> Dict[str, object]:
 
 
 def count_bilingual_pairs() -> int:
-    """Count .en.md files across the repo (each is one bilingual pair)."""
+    """Count DISTINCT bilingual pairs: one per `.en.md` document.
+
+    ⛔ `docs/README-root.en.md` is a mode-120000 symlink to the root
+    `README.en.md`, which this function also adds explicitly below. Counting
+    the docs/ tree naively therefore reports the root pair TWICE — measured
+    96 where 95 distinct documents exist, and that 96 is what `--fix` writes
+    into the README badge, so the inflated number ships.
+
+    ⚠️ This was the SECOND reader in this file to miss the alias convention;
+    the bilingual-number pair loop was the first. Both are fixed by
+    `DOCS_TREE_SYMLINK_ALIASES`. Readers that only scan text are unaffected.
+    """
     count = 0
-    # docs/ tree
+    # docs/ tree — aliases excluded, they are counted at their real location
     for f in _cached_rglob(DOCS_DIR,"*.en.md"):
-        if f.is_file():
+        if f.is_file() and f.name not in DOCS_TREE_SYMLINK_ALIASES:
             count += 1
     # rule-packs/ tree
     for f in (REPO_ROOT / "rule-packs").rglob("*.en.md"):

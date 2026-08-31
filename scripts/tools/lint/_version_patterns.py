@@ -160,10 +160,104 @@ SCENARIO_COUNT_PATTERNS: List[Tuple[str, str]] = [
 BILINGUAL_PAIR_PATTERN = r"bilingual-(\d+)%20pairs"
 
 # Bilingual number consistency patterns: (regex, description)
+#
+# ⛔ These are matched with `re.IGNORECASE` against WHOLE FILES, so a pattern
+# that is merely "reasonable" collects section numbers, version numbers and
+# PromQL identifiers as if they were counts. Measured on `a807a41c` over the
+# 94 bilingual pairs (564 cells), the `Alert rule count` entry below used to
+# read `(\d+)\s*Alert(?:\s+rule)?` and produced:
+# ⚠️ Cell totals below are quoted only for the Alert pattern. The
+#    whole-table figures an earlier revision also quoted (519 SILENT /
+#    30 AGREE) are a WINDOWS reading: `docs/README-root.{md,en.md}` are
+#    mode-120000 symlinks, so a checkout without symlink support sees a
+#    path string with no numbers in it and four cells read SILENT that
+#    read AGREE on Linux/CI (515/34 there). The numbers this comment
+#    actually rests on — 94 pairs, 564 cells, MISMATCH 4, AGREE 5 — are
+#    identical under both.
+# ⚠️ 94 pairs / 564 cells is the population AS MEASURED ON `a807a41c`, not
+#    the population today: this same change adds `README-root.md` to
+#    SKIP_BILINGUAL_NUMBER_FILES, so the loop now walks 92 pairs (552
+#    cells). The number is left as measured and anchored rather than
+#    rewritten — rewriting it would silently re-date a measurement nobody
+#    re-ran.
+#
+#   MISMATCH 4  — four permanent warnings nobody could clear. What made
+#                 each cell DIFFER, measured per cell rather than listed
+#                 from memory (an earlier revision of this comment named
+#                 four fragments that map onto only three of them):
+#                   cli-reference          zh `v2 alert` vs en `122 alerts`
+#                   synthetic-probe        en-only `ADR-025 Alerting-Plane`
+#                   troubleshooting-check  zh-only `v1 alertname`
+#                   multi-system-playbook  en-only `7 alerts`
+#                 ⚠️ `### 1.2 Alert` matched BOTH halves and so drove no
+#                 warning at all; and the last cell's `7 alerts` is a REAL
+#                 count — what was noise there was the Chinese half's
+#                 `Phase 2 ALERTS{}`, which is why the lookahead below is
+#                 load bearing.
+#   AGREE    5  — of which exactly ONE was a real count comparison
+#                 (`docs/design/rule-packs.md`: 4 / 8 / 9 alerts). The other
+#                 four agreed by coincidence on section numbers (`2.9 Alert
+#                 Routing`, `2.3 Alertmanager`) and version numbers
+#                 (`v2.9.0 alert-quality`, `v2 alertname`).
+#
+# The narrowed form keeps that one real comparison and drops all four false
+# warnings, adding no new ones. Each element earns its place by measurement:
+#   * PLURAL noun — `alerts`, never bare `Alert`. Kills the section headings,
+#     `alertname`, and `v2.9.0 alert-quality` in one move.
+#   * `(?!\s*\{)` — the PromQL series selector `ALERTS{...}` is an identifier,
+#     not a count. Without this exception one MISMATCH survives, so it is load
+#     bearing, and it must apply to BOTH halves: an earlier attempt hung it on
+#     the English side only and manufactured a regression.
+#   * `(?<![\d.])` — refuses the `2` in `### 1.2 Alerts don't fire`: the digit
+#     is preceded by a `.`, so a DOTTED section number cannot be read as a
+#     count.
+#     ⛔ It does NOT refuse an INTEGER heading. `## 1 Alerts` matches, because
+#     the `1` is preceded by a space — measured, and reported by review after
+#     an earlier revision of this line described the guard as refusing
+#     "headings", which is wider than what it does. A pair such as
+#     `## 1 Alerts` / `## 2 Alerts` would produce a false mismatch.
+#     ⚠️ Left open deliberately: the corpus has ZERO integer headings of that
+#     shape today, and closing it means teaching the CONSUMER to skip heading
+#     lines (it currently matches against whole files), which is a bigger
+#     change than the false positive it would prevent. Disclosed, not fixed.
+#
+#   * the `[個條支]` branch — Chinese states the same count as `N 條 alert` /
+#     `N 個 告警`, mirroring the `個?` the sister `Rule Pack count` pattern
+#     above has carried for far longer. Without it the Chinese half is the
+#     empty set on every such line, and a check that needs BOTH halves cannot
+#     speak. Measured: it takes the live comparisons from 1 to 3 (adding
+#     `cli-reference` 122 and `multi-system-migration-playbook` 7) with zero
+#     new mismatches. ⛔ The measure word is REQUIRED on that branch — making
+#     it optional pulls `v2 alert` back in.
+#     ⛔ A `告警` (the Chinese noun) branch was implemented and then
+#     REMOVED. Measured over the whole corpus it added exactly ONE hit,
+#     and that hit was an ORDINAL: `第 4 條告警 FederationRevo…` in
+#     `docs/adr/028-…` names the 4th rule, it does not count four of
+#     them. There is no test for that branch that is not also a test for
+#     that false positive — which is the same shape as the `[個條筆則項]`
+#     widening rejected earlier on this ticket.
+#
+# ⚠️ Honest boundary, measured rather than assumed. This check only speaks when
+# BOTH halves match, so a count only one half states stays silent.
+# ⛔ An earlier revision of this comment said the four one-sided cells were
+# "a real asymmetry in the prose, not a drift", and called fixing them a
+# product decision. That was FALSE and it is worth recording why, because the
+# wording talked the next reader out of the actual fix: all four Chinese halves
+# DID state the same number, as `122 條 alert`, `7 條 alert`, `其餘 40 條`,
+# `40 條平台告警裡有 37 條`. The prose was symmetric; the PATTERN was not.
+# Measured at the time: injecting a real drift into the Chinese half of any of
+# those four produced zero warnings under BOTH the old and the new pattern.
+# ⚠️ Two of the four are still silent after the branch above, and deliberately
+# so: `其餘 **40 條**落在…` and `40 條平台告警` put a modifier between the
+# measure word and the noun, and widening far enough to cross that is how the
+# false positives this narrowing removed would come back. That is a disclosed
+# gap, not a settled question.
 BILINGUAL_NUMBER_PATTERNS: List[Tuple[str, str]] = [
     (r"(\d+)\s*個?\s*Rule\s*Pack", "Rule Pack count"),
     (r"(\d+)\s*Recording", "Recording rule count"),
-    (r"(\d+)\s*Alert(?:\s+rule)?", "Alert rule count"),
+    (r"(?<![\d.])(\d+)(?:\s+alert(?:\s+rule)?s"
+     r"|\s*[個條支]\s*alert(?:\s+rule)?s?"
+     r")\b(?!\s*\{)", "Alert rule count"),
     (r"rule%20packs-(\d+)-", "Rule Pack badge"),
     (r"alerts-(\d+)-", "Alert badge"),
     (r"bilingual-(\d+)", "Bilingual badge"),
@@ -205,8 +299,34 @@ SKIP_CI_INTERPOLATION_FILES = {"release.yaml"}
 SKIP_RULE_PACK_FILES = {"CHANGELOG.md", "CHANGELOG.en.md", "benchmarks.md",
                         "benchmarks.en.md"}
 
-# Bilingual number consistency skips these
-SKIP_BILINGUAL_NUMBER_FILES = {"benchmarks.md", "CHANGELOG.md"}
+# ⛔ These three `docs/` entries are mode-120000 symlinks to files OUTSIDE
+# `docs/` (`git ls-files -s docs/` shows the modes). They are ALIASES, not
+# documents. Any reader that COUNTS or PAIRS documents must skip them or the
+# same document is seen twice; readers that merely scan text (links,
+# frontmatter, templates, reading time) are unaffected and must NOT use this
+# set — narrowing their scan would remove real coverage.
+#
+# ⚠️ Deliberately a literal set rather than `Path.is_symlink()`: a checkout
+# without symlink support materialises these as 12-byte path stubs, so the
+# derived test answers differently per platform — which is the exact platform
+# dependence this set exists to remove (a Windows census read all-SILENT where
+# CI read four AGREE cells).
+#
+# ⚠️ `DOC_MAP_SKIP_NAMES` below lists `README-root.md` but NOT
+# `README-root.en.md`. Measured: `check_doc_map_coverage` reports 0 issues
+# either way today, so that asymmetry is latent, not active — left alone
+# rather than "tidied", because adding a name there narrows a scan with no
+# measured defect behind it.
+DOCS_TREE_SYMLINK_ALIASES = {"CHANGELOG.md", "README-root.md",
+                             "README-root.en.md"}
+
+# Bilingual number consistency skips the aliases (see above) plus
+# `benchmarks.md`, which is skipped for an unrelated reason: it is a table of
+# raw measurements where the two halves legitimately carry different numbers.
+# ⚠️ Measured: folding in the alias set is inert for this check —
+# `README-root.en.md` is never a zh-side file, so the scanned set is 92 zh
+# documents either way. The point is to stop spelling the alias list twice.
+SKIP_BILINGUAL_NUMBER_FILES = {"benchmarks.md"} | DOCS_TREE_SYMLINK_ALIASES
 
 # doc-map coverage check skips these directories and files.
 #

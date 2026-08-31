@@ -446,6 +446,50 @@ class TestCountBilingualPairs:
         mod._RGLOB_CACHE.clear()
         assert mod.count_bilingual_pairs() == 4
 
+    def test_the_root_readme_alias_is_not_counted_twice(
+            self, tmp_path, monkeypatch):
+        """⛔ `docs/README-root.en.md` is a symlink to the root `README.en.md`.
+
+        The function adds the root README explicitly, so counting the docs/
+        tree naively sees the same document twice. On the real repo that was
+        96 against 95 distinct documents — and 96 is the number `--fix` writes
+        into the README badge, so the inflated count ships.
+
+        The alias is created here as a plain file on purpose: the guard is
+        name-based, because a checkout without symlink support materialises
+        these as 12-byte path stubs and `is_symlink()` would answer
+        differently per platform.
+        """
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        _write(docs / "guide.en.md", "")
+        _write(docs / "README-root.en.md", "")   # the alias
+        _write(tmp_path / "README.en.md", "")    # what it points at
+        monkeypatch.setattr(mod, "DOCS_DIR", docs)
+        monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+        mod._RGLOB_CACHE.clear()
+        assert mod.count_bilingual_pairs() == 2, (
+            "guide + root README = 2 distinct pairs; the alias must not add "
+            "a third")
+
+    def test_a_document_merely_named_like_a_doc_is_still_counted(
+            self, tmp_path, monkeypatch):
+        """Positive control for the skip above.
+
+        Without this, narrowing the alias set until it swallowed the whole
+        docs/ tree would leave the previous test green — "counts fewer" always
+        satisfies an assertion that something is not double-counted.
+        """
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        _write(docs / "README.en.md", "")          # NOT the alias name
+        _write(docs / "CHANGELOG-notes.en.md", "")  # NOT the alias name
+        monkeypatch.setattr(mod, "DOCS_DIR", docs)
+        monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+        mod._RGLOB_CACHE.clear()
+        assert mod.count_bilingual_pairs() == 2, (
+            "the skip is keyed on the exact alias names, not a prefix")
+
 
 # ============================================================
 # check_da_tools_version (representative check_*)
@@ -2060,3 +2104,211 @@ class TestCheckImageTagVPrefix:
         # OCI *chart* refs legitimately use bare SemVer (no v-prefix).
         body = "helm pull oci://ghcr.io/vencil/charts/da-portal:2.8.0\n"
         assert self._scan(tmp_path, monkeypatch, body) == []
+
+
+class TestBilingualNumbersReadsRealCounts:
+    """#1505 — this detector had ZERO tests, and the mutation proved it.
+
+    ⛔ Measured on `a807a41c` before this class existed: replacing the whole
+    body of `check_bilingual_number_consistency` with `return []` left the
+    module at **99 passed**. Nothing looked at its output, so the four
+    permanent false warnings it emitted could neither be fixed nor removed
+    without the change being invisible to CI.
+
+    ⚠️ The tests below assert BEHAVIOUR, not the regex text. A test that
+    pinned the pattern string would go green for any rewrite that kept the
+    characters and red for any that kept the meaning.
+    """
+
+    @staticmethod
+    def _pair(tmp_path, monkeypatch, zh_body, en_body, name="doc.md"):
+        """One synthetic bilingual pair, with the module pointed at it."""
+        docs = tmp_path / "docs"
+        docs.mkdir(parents=True, exist_ok=True)
+        (docs / name).write_text(zh_body, encoding="utf-8")
+        (docs / name.replace(".md", ".en.md")).write_text(en_body, encoding="utf-8")
+        monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(mod, "DOCS_DIR", docs)
+        mod._RGLOB_CACHE.clear()
+        mod._CONTENT_CACHE.clear()
+        return docs
+
+    @staticmethod
+    def _checks(issues):
+        return [i.check for i in issues]
+
+    def test_the_detector_reports_something_at_all(self, tmp_path, monkeypatch):
+        """⛔ Anti-noop. `return []` in the checker must turn this red.
+
+        Every other test here asserts that some particular text does NOT
+        fire; all of them are satisfied by a detector that never fires. This
+        one is the reason the rest mean anything.
+        """
+        self._pair(tmp_path, monkeypatch,
+                   "本 pack 提供 8 alerts。\n", "This pack ships 9 alerts.\n")
+        assert self._checks(mod.check_bilingual_number_consistency()) == [
+            "bilingual-numbers"], "the detector is silent on a real drift"
+
+    def test_a_real_alert_count_drift_is_caught(self, tmp_path, monkeypatch):
+        """The property the check exists for: same sentence, different count."""
+        self._pair(tmp_path, monkeypatch,
+                   "MariaDB（8 alerts）、PostgreSQL（9 alerts）\n",
+                   "`rule-pack-mariadb.yaml` — 8 alerts\n"
+                   "`rule-pack-postgresql.yaml` — 11 alerts\n")
+        found = mod.check_bilingual_number_consistency()
+        assert [i.check for i in found] == ["bilingual-numbers"]
+        assert "9" in found[0].message and "11" in found[0].message
+
+    def test_matching_counts_do_not_fire(self, tmp_path, monkeypatch):
+        """⚠️ Must-not-fire control against a check that always fires."""
+        self._pair(tmp_path, monkeypatch,
+                   "MariaDB（8 alerts）\n", "mariadb — 8 alerts\n")
+        assert mod.check_bilingual_number_consistency() == []
+
+    # -- the three narrowings, each with the shipped text that motivated it --
+
+    def test_section_numbers_are_not_counts(self, tmp_path, monkeypatch):
+        """`### 1.2 Alerts don't fire` — an English heading with a plural noun.
+
+        Shipped text: the troubleshooting-checklist bilingual pair.
+        ⚠️ Named without a full path on purpose: `verify_diff --write-map`
+        scans docstrings for paths, and one here would make editing that
+        document select this ~100-second module, which never reads it.
+        ⚠️ That pair WAS a MISMATCH before the narrowing, but not because
+        of the heading: `### 1.2 Alert(s)` matched both halves and
+        cancelled out. The zh-only `v1 alertname` drove it. Measured,
+        removing this lookbehind alone clears no warning at all — it turns
+        one SILENT cell into a ONESIDED one, which is equally silent. This
+        guard buys precision, not a red light.
+        """
+        # ⛔ The two halves carry DIFFERENT section numbers on purpose.
+        # With matching numbers the cell would be AGREE, and AGREE is as
+        # silent as SILENT -- the assertion would hold whether or not the
+        # guard existed, which is exactly what the mutation battery caught
+        # it doing. Measured: with `(?<![\\d.])` removed this pair reports
+        # zh=['2'] vs en=['3'].
+        self._pair(tmp_path, monkeypatch,
+                   "### 1.2 Alerts \u6c92 fire\\n",
+                   "### 1.3 Alerts don't fire\\n")
+        assert mod.check_bilingual_number_consistency() == []
+
+    def test_promql_alerts_selector_is_not_a_count(self, tmp_path, monkeypatch):
+        """`ALERTS{}` is a series selector.
+
+        Shipped text: `docs/scenarios/multi-system-migration-playbook.*`.
+        ⛔ The exception must hold on BOTH halves — an earlier attempt hung it
+        on the English side only and manufactured a one-sided regression.
+        """
+        self._pair(tmp_path, monkeypatch,
+                   "忘 Phase 2 ALERTS{} cardinality\n",
+                   "forgot Phase 2 ALERTS{} cardinality; 7 alerts fire\n")
+        assert mod.check_bilingual_number_consistency() == []
+
+    def test_version_and_identifier_shapes_are_not_counts(self, tmp_path, monkeypatch):
+        """`v2 alertname`, `v2.9.0 alert-quality`, `:9093 alertname=`.
+
+        Shipped text: `staged-adoption-guide`, `shadow-monitoring-cutover`,
+        `synthetic-probe-interop`. All three were AGREE-by-coincidence or
+        MISMATCH cells before the narrowing.
+        """
+        self._pair(tmp_path, monkeypatch,
+                   "確認 v2 alertname 也在清單上\n"
+                   "da-tools:v2.9.0 alert-quality\n"
+                   "alertmanager>:9093 alertname=SyntheticProbe\n",
+                   "confirm the v2 alertname is on the list\n"
+                   "da-tools:v2.9.0 alert-quality\n"
+                   "ADR-025 Alerting-Plane; :9093 alertname=SyntheticProbe\n")
+        assert mod.check_bilingual_number_consistency() == []
+
+    def test_the_plural_noun_requirement_is_what_does_the_work(
+            self, tmp_path, monkeypatch):
+        """⛔ Pins the narrowing itself, not the spelling.
+
+        A singular `Alert` next to a number is prose, not a count. If someone
+        widens the noun back to bare `Alert`, the shipped section headings
+        start firing again and this turns red.
+        """
+        # ⛔ Different part numbers on the two halves, for the same reason
+        # as the section-number test: an identical pair is AGREE, which is
+        # silent, so the assertion would survive the noun being widened.
+        # Measured: widened to `alerts?` this pair reports zh=['3'] vs
+        # en=['4'].
+        self._pair(tmp_path, monkeypatch,
+                   "# Part 3 Alert Rule\uff08\u53ea\u6bd4\u8f03\u5169\u7d44\uff09\\n",
+                   "# Part 4 Alert Rule (compares two vectors)\\n")
+        assert mod.check_bilingual_number_consistency() == []
+
+    def test_alert_rules_spelling_still_counts(self, tmp_path, monkeypatch):
+        """`N alert rules` is the same claim as `N alerts` and must be read.
+
+        ⚠️ Guards against narrowing to `alerts` alone: the shipped phrasing
+        varies and the check should not depend on which one an author picked.
+        """
+        self._pair(tmp_path, monkeypatch,
+                   "本版出貨 40 alert rules。\n", "This release ships 41 alert rules.\n")
+        assert self._checks(mod.check_bilingual_number_consistency()) == [
+            "bilingual-numbers"]
+
+    def test_a_chinese_measure_word_count_is_read(self, tmp_path, monkeypatch):
+        """The Chinese half writes `N 條 alert`; that is the same claim.
+
+        ⛔ Without the `[個條支]` branch the Chinese side is the EMPTY set on
+        every such line, and a check that needs BOTH halves cannot speak.
+        Measured on the shipped tree: injecting a real drift into the Chinese
+        half of the cli-reference pair produced zero warnings under both the
+        old pattern and the narrowed one. The sister `Rule Pack count`
+        pattern has carried the same `個?` since long before this.
+        """
+        self._pair(tmp_path, monkeypatch,
+                   "`rule-packs/` 的 122 條 alert 全都帶 label\n",
+                   "all 130 alerts in `rule-packs/` carry the label\n")
+        assert self._checks(mod.check_bilingual_number_consistency()) == [
+            "bilingual-numbers"], "the Chinese measure-word count was not read"
+
+    def test_the_measure_word_is_required_not_optional(
+            self, tmp_path, monkeypatch):
+        """⛔ Pins WHY that branch demands a measure word.
+
+        Making `[個條支]` optional would re-admit bare `N alert`, and the
+        shipped corpus is full of `v2 alert` / `v2.9.0 alert-quality`.
+        Different version numbers on the two halves would then be reported
+        as a count drift — exactly the noise this narrowing removed.
+        """
+        self._pair(tmp_path, monkeypatch,
+                   "確認 v2 alert 也在清單上\n",
+                   "confirm the v3 alert is on the list\n")
+        assert mod.check_bilingual_number_consistency() == []
+
+    def test_the_root_readme_alias_is_not_compared_twice(self):
+        """`docs/README-root.*` are symlinks to the root READMEs.
+
+        ⛔ The checker adds the root README pair explicitly, so without this
+        skip the same document is compared twice — and the second comparison
+        is platform-dependent: a checkout without symlink support reads a
+        12-byte path string, CI reads the real file. Nine other places in the
+        repo already treat these two as aliases; this loop was the one reader
+        that never learned it.
+        ⚠️ Asserts membership rather than a cell count: the census differs by
+        platform, which is precisely the thing being removed.
+        """
+        assert "README-root.md" in mod.SKIP_BILINGUAL_NUMBER_FILES, (
+            "the root-README alias would be compared twice, and the second "
+            "comparison reads different bytes on Windows than on CI")
+
+    def test_one_sided_counts_stay_silent(self, tmp_path, monkeypatch):
+        """⚠️ Disclosed boundary, pinned so it cannot change by accident.
+
+        A count present in one language only is NOT reported.
+        ⛔ An earlier revision of this docstring justified that by claiming
+        the four one-sided cells were "a real asymmetry in the prose".
+        Blind review disproved it: every one of those Chinese halves stated
+        the same number with a measure word (`122 條 alert`), which the
+        pattern could not read. The measure-word branch now covers two of
+        them; the other two put a modifier between the measure word and the
+        noun and stay silent by choice, not by accident.
+        ⚠️ So this pins the CONSUMER's contract — one half matching is not a
+        comparison — and must not be read as "nothing there to find".
+        """
+        self._pair(tmp_path, monkeypatch,
+                   "這一節沒有計數。\n", "Measured: all 122 alerts in rule-packs/.\n")
+        assert mod.check_bilingual_number_consistency() == []
