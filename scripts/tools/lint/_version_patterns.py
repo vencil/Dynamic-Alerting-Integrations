@@ -174,6 +174,12 @@ BILINGUAL_PAIR_PATTERN = r"bilingual-(\d+)%20pairs"
 #    read AGREE on Linux/CI (515/34 there). The numbers this comment
 #    actually rests on — 94 pairs, 564 cells, MISMATCH 4, AGREE 5 — are
 #    identical under both.
+# ⚠️ 94 pairs / 564 cells is the population AS MEASURED ON `a807a41c`, not
+#    the population today: this same change adds `README-root.md` to
+#    SKIP_BILINGUAL_NUMBER_FILES, so the loop now walks 92 pairs (552
+#    cells). The number is left as measured and anchored rather than
+#    rewritten — rewriting it would silently re-date a measurement nobody
+#    re-ran.
 #
 #   MISMATCH 4  — four permanent warnings nobody could clear. What made
 #                 each cell DIFFER, measured per cell rather than listed
