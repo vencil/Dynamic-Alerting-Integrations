@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // This file is the second half of the package's promise. confd.go answers
@@ -44,7 +45,38 @@ var (
 	// *DuplicateTenantError rather than choosing; refusing here keeps the two
 	// planes agreeing instead of adding a third stance.
 	ErrAmbiguousTenantFile = errors.New("confd: more than one config file for tenant")
+
+	// ErrUnsafeTenantID reports a tenant id that is not a bare filename —
+	// it carries a path separator, a ".." segment, or otherwise does not
+	// survive filepath.Base unchanged.
+	//
+	// Why the check lives HERE, at the point the path is built, rather than
+	// only in handler.ValidateTenantID: guardTenantID's own contract is to
+	// hold "even if a future caller forgets to validate first", but it gates
+	// on the reserved-NAME predicate alone, which `foo/../../etc/passwd`
+	// satisfies (it neither starts with "_"/"." nor lacks a .yaml suffix) —
+	// measured, not assumed. Every path this package hands back is joined
+	// onto configDir, so refusing the shape at the join is the only place
+	// that covers every caller. handler.ValidateTenantID stays the
+	// first-line, user-facing rejection with its own messages; this is the
+	// sink-side backstop, deliberately the same predicate.
+	ErrUnsafeTenantID = errors.New("confd: tenant id is not a bare filename")
 )
+
+// guardBareTenantID rejects an id that must never be joined onto configDir.
+func guardBareTenantID(tenantID string) error {
+	switch {
+	case tenantID == "":
+		return fmt.Errorf("%w: empty", ErrUnsafeTenantID)
+	case strings.ContainsAny(tenantID, `/\`):
+		return fmt.Errorf("%w: %q contains a path separator", ErrUnsafeTenantID, tenantID)
+	case strings.Contains(tenantID, ".."):
+		return fmt.Errorf("%w: %q contains %q", ErrUnsafeTenantID, tenantID, "..")
+	case filepath.Base(tenantID) != tenantID:
+		return fmt.Errorf("%w: %q is not a simple filename", ErrUnsafeTenantID, tenantID)
+	}
+	return nil
+}
 
 // DefaultTenantFileName is the name a NEW tenant's config file gets. It is the
 // only place the `.yaml` spelling is chosen; every other site resolves an
@@ -85,6 +117,9 @@ func matchTenantFiles(configDir, tenantID string) ([]string, error) {
 // namespace has always been case-sensitive, so folding here would let
 // GET /tenants/{upper} reach a tenant that no writer could ever address.
 func ResolveTenantFile(configDir, tenantID string) (string, error) {
+	if err := guardBareTenantID(tenantID); err != nil {
+		return "", err
+	}
 	names, err := matchTenantFiles(configDir, tenantID)
 	if err != nil {
 		return "", err
@@ -108,6 +143,9 @@ func ResolveTenantFile(configDir, tenantID string) (string, error) {
 // leave the original file behind as a second source of truth. An ambiguous
 // tenant is refused here too — writing to either file makes the other stale.
 func TenantFilePathForWrite(configDir, tenantID string) (string, error) {
+	// ResolveTenantFile guards the id; the ErrTenantFileNotFound arm below is
+	// reached only for an id already proven to be a bare filename, so the
+	// DefaultTenantFileName join cannot escape configDir.
 	path, err := ResolveTenantFile(configDir, tenantID)
 	switch {
 	case err == nil:

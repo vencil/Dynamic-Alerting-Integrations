@@ -135,3 +135,50 @@ func TestTenantFilePathForWrite(t *testing.T) {
 		}
 	})
 }
+
+// The sink-side backstop (CodeQL "uncontrolled data used in path expression",
+// PR #1682): an id that is not a bare filename must never be joined onto
+// configDir. Measured before the guard existed: `foo/../../etc/passwd`
+// escaped the directory AND satisfied IsTenantConfigFile, so guardTenantID —
+// which gates on the reserved-NAME predicate alone — let it through.
+func TestTenantIDMustBeABareFilename(t *testing.T) {
+	t.Parallel()
+	unsafe := []string{
+		"",
+		"../../etc/passwd",
+		"foo/../../etc/passwd", // the one guardTenantID does NOT catch
+		"sub/nested",
+		`windows\path`,
+		"..",
+		"a/..",
+	}
+	for _, id := range unsafe {
+		t.Run(id, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+
+			if _, err := ResolveTenantFile(dir, id); !errors.Is(err, ErrUnsafeTenantID) {
+				t.Errorf("ResolveTenantFile(%q) err = %v, want ErrUnsafeTenantID", id, err)
+			}
+			got, err := TenantFilePathForWrite(dir, id)
+			if !errors.Is(err, ErrUnsafeTenantID) {
+				t.Fatalf("TenantFilePathForWrite(%q) err = %v, want ErrUnsafeTenantID", id, err)
+			}
+			if got != "" {
+				t.Errorf("TenantFilePathForWrite(%q) leaked a path on rejection: %q", id, got)
+			}
+		})
+	}
+}
+
+// A plain id keeps working — the guard must not narrow the accepted namespace.
+func TestBareFilenameIDsStillResolve(t *testing.T) {
+	t.Parallel()
+	dir := mkdir(t, "db-a.yaml")
+	if _, err := ResolveTenantFile(dir, "db-a"); err != nil {
+		t.Fatalf("ResolveTenantFile: %v", err)
+	}
+	if _, err := TenantFilePathForWrite(dir, "db-a"); err != nil {
+		t.Fatalf("TenantFilePathForWrite: %v", err)
+	}
+}
