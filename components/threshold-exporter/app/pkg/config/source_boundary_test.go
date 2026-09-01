@@ -50,6 +50,12 @@ func TestRelToRootRequiresADirectoryBoundary(t *testing.T) {
 		{"relative root, dotted key", "./a.yaml", ".", "a.yaml", true},
 		{"relative root, hidden below", ".git/c.yaml", ".", ".git/c.yaml", true},
 		{"absolute key is not under a relative root", "/abs/a.yaml", ".", "", false},
+		// ⛔ A cleaned relative path that escapes the root keeps a leading `..`.
+		// A walker rooted at `.` never emits one, so it is not inside — and the
+		// classifier must not be left relying on `..` reading as "hidden".
+		{"escapes a relative root", "../evil.yaml", ".", "", false},
+		{"escapes a relative root twice", "../../deep.yaml", ".", "", false},
+		{"the parent itself", "..", ".", "", false},
 		// The not-inside arms must all agree on their rel: empty. Otherwise a
 		// caller that reads rel before checking inside gets a usable-looking
 		// value for a path that is not there.
@@ -288,6 +294,49 @@ func TestProductionSourceShapeScansAtBareRoots(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestYAMLFilesDoesNotHandOutPathsAboveItsRoot pins the enumerator half of the
+// boundary at a bare relative root, where a key can escape upward.
+//
+// ⛔ WHY IT IS NOT ENOUGH THAT THE SCAN COMES OUT RIGHT. Before this was fixed,
+// `YAMLFiles(".")` returned `../evil.yaml` to its caller and
+// `ScanFromConfigSource` still dropped it — but only because `..` begins with a
+// dot and therefore reads as HIDDEN. The right answer arrived through the wrong
+// predicate, so the scan-level assertions could not see the defect at all.
+// This asserts on what the public method actually hands back.
+func TestYAMLFilesDoesNotHandOutPathsAboveItsRoot(t *testing.T) {
+	t.Parallel()
+
+	src := NewInMemoryConfigSource(map[string][]byte{
+		"a.yaml":          []byte("tenants:\n  a:\n    x: 1\n"),
+		"sub/b.yaml":      []byte("tenants:\n  b:\n    x: 2\n"),
+		"../evil.yaml":    []byte("tenants:\n  evil:\n    x: 9\n"),
+		"../../deep.yaml": []byte("tenants:\n  deep:\n    x: 9\n"),
+	})
+	out, err := src.YAMLFiles(".")
+	if err != nil {
+		t.Fatalf("YAMLFiles: %v", err)
+	}
+	for _, escaped := range []string{"../evil.yaml", "../../deep.yaml"} {
+		if _, ok := out[escaped]; ok {
+			t.Errorf("YAMLFiles(\".\") handed back %q, which is above its root", escaped)
+		}
+	}
+	for _, want := range []string{"a.yaml", "sub/b.yaml"} {
+		if _, ok := out[want]; !ok {
+			t.Errorf("%q missing — the escape guard must not reject the tree itself (got %v)",
+				want, keysOfBytes(out))
+		}
+	}
+}
+
+func keysOfBytes(m map[string][]byte) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }
 
 // TestHasHiddenSegmentChecksEverySegment pins the depth half: the walker prunes

@@ -195,6 +195,17 @@ func relToRoot(p, root string) (rel string, inside bool) {
 		return p[1:], true
 	case ".":
 		// Both `path.Clean("")` and `path.Clean(".")` land here.
+		//
+		// ⛔ A cleaned relative path that ESCAPES the root keeps a leading `..`
+		// segment, and a walker rooted at `.` never emits one — so it is not
+		// inside. Without this arm `YAMLFiles(".")` returned `../evil.yaml` to
+		// its caller. `ScanFromConfigSource` still dropped it, but only because
+		// `..` begins with a dot and so reads as hidden: two contradictory
+		// reasons arriving at the right answer, which is the arrangement this
+		// file exists to remove.
+		if p == ".." || strings.HasPrefix(p, "../") {
+			return "", false
+		}
 		if strings.HasPrefix(p, "./") {
 			return p[2:], true
 		}
