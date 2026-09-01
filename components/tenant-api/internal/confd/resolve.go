@@ -128,7 +128,11 @@ func ResolveTenantFile(configDir, tenantID string) (string, error) {
 	case 0:
 		return "", fmt.Errorf("%w: %q", ErrTenantFileNotFound, tenantID)
 	case 1:
-		return filepath.Join(configDir, names[0]), nil
+		// filepath.Base is a no-op on a directory entry name (os.ReadDir never
+		// yields a name containing a separator), but applying the
+		// transformation rather than relying on that invariant keeps EVERY
+		// join in this file provably escape-free at the join itself.
+		return filepath.Join(configDir, filepath.Base(names[0])), nil
 	default:
 		return "", fmt.Errorf("%w: %q is claimed by %v", ErrAmbiguousTenantFile, tenantID, names)
 	}
@@ -151,7 +155,14 @@ func TenantFilePathForWrite(configDir, tenantID string) (string, error) {
 	case err == nil:
 		return path, nil
 	case errors.Is(err, ErrTenantFileNotFound):
-		return filepath.Join(configDir, DefaultTenantFileName(tenantID)), nil
+		// guardBareTenantID already proved filepath.Base(tenantID) == tenantID,
+		// so this Base is semantically a no-op (TestBaseAtTheJoinIsANoOp pins
+		// that). It is applied anyway because a REJECTION is a control-flow
+		// property a reader — and a taint-tracking analyser — has to reason
+		// about, whereas a TRANSFORMATION at the join is local and evident.
+		// CodeQL's Go path-injection query flagged both os.ReadFile sinks
+		// downstream of this join while only the assertion was present.
+		return filepath.Join(configDir, DefaultTenantFileName(filepath.Base(tenantID))), nil
 	default:
 		return "", err
 	}

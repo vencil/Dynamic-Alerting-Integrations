@@ -182,3 +182,29 @@ func TestBareFilenameIDsStillResolve(t *testing.T) {
 		t.Fatalf("TenantFilePathForWrite: %v", err)
 	}
 }
+
+// The filepath.Base applied at the join must not change any accepted id — the
+// guard already rejects every id for which Base would differ, so the two must
+// agree on the whole accepted namespace.
+func TestBaseAtTheJoinIsANoOp(t *testing.T) {
+	t.Parallel()
+	for _, id := range []string{"db-a", "db-a-1", "Upper", "a.b", "x_y-1", "tenant.with.dots"} {
+		t.Run(id, func(t *testing.T) {
+			t.Parallel()
+			if err := guardBareTenantID(id); err != nil {
+				t.Fatalf("guard rejected a legitimate id %q: %v", id, err)
+			}
+			if filepath.Base(id) != id {
+				t.Fatalf("filepath.Base(%q) = %q — the guard let through an id it changes", id, filepath.Base(id))
+			}
+			dir := mkdir(t)
+			got, err := TenantFilePathForWrite(dir, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != filepath.Join(dir, id+".yaml") {
+				t.Errorf("TenantFilePathForWrite(%q) = %q, want the unchanged default path", id, got)
+			}
+		})
+	}
+}
