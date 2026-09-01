@@ -300,10 +300,18 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 	if err := guardTenantID(tenantID); err != nil {
 		return nil, err
 	}
+	// #1673: resolve the tenant's file first — validate's eol guard reads it,
+	// and the commit below must land on the same one. An ambiguous tenant is
+	// refused here with a typed error, so callers can map it to 409 instead of
+	// the 400 a validation string would produce.
+	filePath, err := w.tenantFilePath(tenantID)
+	if err != nil {
+		return nil, err
+	}
 	// Step 1: validate schema before touching disk (and before taking an
 	// admission slot — validation is cheap, CPU-only, and must not consume the
 	// single-writer token).
-	errs, notices := validate(w.configDir, tenantID, yamlContent)
+	errs, notices := validate(w.configDir, tenantID, filePath, yamlContent)
 	if len(errs) > 0 {
 		return nil, fmt.Errorf("%w: %s", ErrValidation, strings.Join(errs, "; "))
 	}
@@ -316,8 +324,6 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
-
-	filePath := filepath.Join(w.configDir, tenantID+".yaml")
 
 	// Optimistic concurrency, under the lock and immediately before the write:
 	// anything that lands between here and commitFileChange would have to hold
@@ -366,8 +372,21 @@ type MergeFunc func(existing []byte) (string, error)
 // key-loss this path exists to prevent). The raw existing bytes are returned so
 // the caller can detect a byte-identical (no-op) merge. notices is validate()'s
 // advisory deprecation channel (#1231 1b), meaningful only when err is nil.
-func (w *Writer) readMergeValidate(tenantID string, merge MergeFunc) (content string, existing []byte, notices []string, err error) {
-	existing, rerr := os.ReadFile(filepath.Join(w.configDir, tenantID+".yaml"))
+// tenantFilePath is the writer-side answer to "which file does this tenant's
+// config live in" (#1673). It returns the tenant's EXISTING file whatever its
+// spelling, and DefaultTenantFileName only for a tenant that has none — so a
+// write to a tenant stored as `<id>.yml` updates that file instead of creating
+// a second `<id>.yaml` beside it. An ambiguous tenant (both spellings on disk)
+// is refused rather than silently resolved; see confd.ErrAmbiguousTenantFile.
+//
+// Callers that both READ the existing file and WRITE it back must resolve ONCE
+// and pass the path down, so the two halves of one flow cannot disagree.
+func (w *Writer) tenantFilePath(tenantID string) (string, error) {
+	return confd.TenantFilePathForWrite(w.configDir, tenantID)
+}
+
+func (w *Writer) readMergeValidate(tenantID, filePath string, merge MergeFunc) (content string, existing []byte, notices []string, err error) {
+	existing, rerr := os.ReadFile(filePath)
 	if rerr != nil && !os.IsNotExist(rerr) {
 		return "", nil, nil, fmt.Errorf("read current tenant file for %s: %w", tenantID, rerr)
 	}
@@ -375,7 +394,7 @@ func (w *Writer) readMergeValidate(tenantID string, merge MergeFunc) (content st
 	if merr != nil {
 		return "", existing, nil, fmt.Errorf("merge tenant config for %s: %w", tenantID, merr)
 	}
-	errs, notices := validate(w.configDir, tenantID, content)
+	errs, notices := validate(w.configDir, tenantID, filePath, content)
 	if len(errs) > 0 {
 		return "", existing, nil, fmt.Errorf("%w for %s: %s", ErrValidation, tenantID, strings.Join(errs, "; "))
 	}
@@ -412,7 +431,13 @@ func (w *Writer) WriteMerged(ctx context.Context, tenantID, authorEmail string, 
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	content, existing, notices, err := w.readMergeValidate(tenantID, merge)
+	// #1673: one resolution for the whole flow — the file we read below and the
+	// file we commit at the end must be the same one.
+	filePath, err := w.tenantFilePath(tenantID)
+	if err != nil {
+		return nil, err
+	}
+	content, existing, notices, err := w.readMergeValidate(tenantID, filePath, merge)
 	if err != nil {
 		return nil, err
 	}
@@ -428,7 +453,7 @@ func (w *Writer) WriteMerged(ctx context.Context, tenantID, authorEmail string, 
 		return notices, nil
 	}
 	if err := w.commitFileChange(
-		filepath.Join(w.configDir, tenantID+".yaml"),
+		filePath,
 		tenantID,
 		authorEmail,
 		[]byte(content),
@@ -441,7 +466,10 @@ func (w *Writer) WriteMerged(ctx context.Context, tenantID, authorEmail string, 
 // Diff returns the unified diff between the current file and proposed content.
 // Returns empty string if files are identical or no current file exists.
 func (w *Writer) Diff(tenantID, proposedContent string) (string, error) {
-	filePath := filepath.Join(w.configDir, tenantID+".yaml")
+	filePath, err := w.tenantFilePath(tenantID)
+	if err != nil {
+		return "", err
+	}
 
 	existing, err := os.ReadFile(filePath)
 	if os.IsNotExist(err) {
@@ -733,7 +761,7 @@ func (w *Writer) gitCommit(filePath, tenantID, authorEmail string, trailer ...st
 // sees the migration signal on the write path itself, not only via GET /
 // POST /validate. Structural failures (bad YAML / root keys / missing tenant
 // section) return nil notices: key validation never ran.
-func validate(configDir, tenantID, yamlContent string) (errs, notices []string) {
+func validate(configDir, tenantID, tenantFilePath, yamlContent string) (errs, notices []string) {
 	var tcfg cfg.ThresholdConfig
 	if err := yaml.Unmarshal([]byte(yamlContent), &tcfg); err != nil {
 		return []string{"invalid YAML: " + err.Error()}, nil
@@ -764,13 +792,6 @@ func validate(configDir, tenantID, yamlContent string) (errs, notices []string) 
 	// only walks the ROOT map; a second `tenants.<other>` block passes it, and
 	// both remaining gates (RequireOrgWrite, Policy.CheckWrite via
 	// extractPatchKeys) read the URL id alone and never see it (#1681).
-	//
-	// DELTA, not absolute: a flat conf.d file may legitimately declare several
-	// tenants and the exporter serves them, so sections already in the file
-	// stay editable and only sections this write ADDS are refused. Every form
-	// of the attack is an addition. Residual, deliberately accepted: whoever
-	// already has a file naming another tenant keeps that reach — reaching that
-	// state needs an operator, not a request.
 	// This function joins tenantID into a path below, and it is reachable from
 	// callers that have not run the id past guardTenantID (WriteMerged's merge
 	// step, and any future one). Re-asserting it here costs a string compare and
@@ -779,14 +800,25 @@ func validate(configDir, tenantID, yamlContent string) (errs, notices []string) 
 		return []string{err.Error()}, nil
 	}
 	// Read the file this write replaces ONCE. Two stateful checks need it — the
-	// added-section gate here and the eol-expansion guard at the end — and on a
+	// added-section gate below and the eol-expansion guard at the end — and on a
 	// large flat conf.d file a second full read+parse doubles a validate() that
 	// runs before the single-writer token is taken.
+	//
+	// ⛔ The path comes from the caller (#1673), never from tenantID + ".yaml":
+	// a tenant whose file is spelled `.yml` would otherwise get an empty
+	// baseline here, and since the baseline fails closed that would refuse
+	// every write to a flat file it had legitimately been sharing.
 	var baseRaw []byte
 	var baseErr error
 	if configDir != "" {
-		baseRaw, baseErr = os.ReadFile(filepath.Join(configDir, tenantID+".yaml"))
+		baseRaw, baseErr = os.ReadFile(tenantFilePath)
 	}
+	// DELTA, not absolute: a flat conf.d file may legitimately declare several
+	// tenants and the exporter serves them, so sections already in the file
+	// stay editable and only sections this write ADDS are refused. Every form
+	// of the attack is an addition. Residual, deliberately accepted: whoever
+	// already has a file naming another tenant keeps that reach — reaching that
+	// state needs an operator, not a request.
 	if added := addedTenantKeys(baseRaw, tcfg, tenantID); len(added) > 0 {
 		return []string{fmt.Sprintf(
 			"YAML adds tenant section(s) %v this file does not already declare — a "+
@@ -828,6 +860,12 @@ func validate(configDir, tenantID, yamlContent string) (errs, notices []string) 
 	// alerts"; any other read error or a parse failure errors out rather than
 	// silently skipping the guard (matches the handler's extraction fail-closed).
 	if configDir != "" {
+		// #1673: the path is resolved ONCE by the caller and handed down, so
+		// the guard reads the same file the write will land on — and so an
+		// ambiguous tenant is refused by the caller with a typed error rather
+		// than being flattened into a validation string here. That read now
+		// happens once at the top of this function and both stateful checks
+		// share it (#1681).
 		oldRaw, rerr := baseRaw, baseErr
 		switch {
 		case rerr == nil:

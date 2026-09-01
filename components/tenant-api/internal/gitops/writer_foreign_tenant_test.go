@@ -178,7 +178,7 @@ func TestAddedTenantKeysFailsClosedWithoutABaseFile(t *testing.T) {
 	}
 	// validate() is the caller that turns "no configDir" into nil baseRaw, so
 	// assert that end of the wiring too rather than assuming it.
-	if errs, _ := validate("", "db-a", smuggled); len(errs) != 1 ||
+	if errs, _ := validate("", "db-a", "", smuggled); len(errs) != 1 ||
 		!strings.Contains(errs[0], "adds tenant section") {
 		t.Errorf("validate with no configDir must still refuse an added section, got %v", errs)
 	}
@@ -330,7 +330,7 @@ func TestValidateRefusesAnIDThatWouldLeaveConfigDir(t *testing.T) {
 		// with the containment guard deleted — measured: the first version of
 		// this test survived both mutants below.
 		body := "tenants:\n  " + id + ":\n    _silent_mode: \"warning\"\n"
-		errs, _ := validate(dir, id, body)
+		errs, _ := validate(dir, id, filepath.Join(dir, id+".yaml"), body)
 		if len(errs) == 0 {
 			t.Errorf("validate accepted id %q", id)
 			continue
@@ -339,10 +339,36 @@ func TestValidateRefusesAnIDThatWouldLeaveConfigDir(t *testing.T) {
 			t.Errorf("id %q rejected for the wrong reason: %v", id, errs)
 		}
 	}
-	if errs, _ := validate(dir, "", ownOnly); len(errs) == 0 {
+	if errs, _ := validate(dir, "", filepath.Join(dir, ".yaml"), ownOnly); len(errs) == 0 {
 		t.Error("validate accepted an empty id")
 	}
-	if errs, _ := validate(dir, "db-a", ownOnly); len(errs) != 0 {
+	if errs, _ := validate(dir, "db-a", filepath.Join(dir, "db-a.yaml"), ownOnly); len(errs) != 0 {
 		t.Errorf("containment check rejected a legitimate id: %v", errs)
+	}
+}
+
+// TestGrandfatheredSectionSurvivesAYmlSpelling is the #1673 × #1681 seam: the
+// added-section baseline must be read from the file the write will actually
+// land on, not from a synthesised `<id>.yaml`. A tenant whose file is spelled
+// `.yml` would otherwise get an EMPTY baseline, and since the baseline fails
+// closed that turns every edit of a flat file it legitimately shares into a
+// refusal — the gate would lock the tenant out of its own config.
+func TestGrandfatheredSectionSurvivesAYmlSpelling(t *testing.T) {
+	for _, spelling := range []string{"db-a.yaml", "db-a.yml"} {
+		t.Run(spelling, func(t *testing.T) {
+			dir := initRepoOnMain(t)
+			seedBase(t, dir, spelling, grandfathered)
+
+			if _, err := newW(dir).Write(context.Background(), "db-a", "a@example.com", smuggled); err != nil {
+				t.Fatalf("gate refused an edit to a section %s already declared: %v", spelling, err)
+			}
+			raw, err := os.ReadFile(filepath.Join(dir, spelling))
+			if err != nil {
+				t.Fatalf("write did not land on %s: %v", spelling, err)
+			}
+			if !strings.Contains(string(raw), "warning") {
+				t.Errorf("%s did not receive the write: %q", spelling, raw)
+			}
+		})
 	}
 }

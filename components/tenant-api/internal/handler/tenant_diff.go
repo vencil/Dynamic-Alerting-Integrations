@@ -2,10 +2,13 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+
+	"github.com/vencil/tenant-api/internal/confd"
 )
 
 // DiffRequest is the body for POST /api/v1/tenants/{id}/diff.
@@ -34,6 +37,7 @@ type DiffResponse struct {
 // @Param       body  body     DiffRequest true "Proposed YAML"
 // @Success     200   {object} DiffResponse
 // @Failure     400   {object} ErrorResponse
+// @Failure     409   {object} ErrorResponse
 // @Failure     500   {object} ErrorResponse
 // @Router      /api/v1/tenants/{id}/diff [post]
 func DiffTenant(d *Deps) http.HandlerFunc {
@@ -63,6 +67,12 @@ func DiffTenant(d *Deps) http.HandlerFunc {
 
 		diff, err := d.Writer.Diff(tenantID, proposed)
 		if err != nil {
+			// #1673: two files claim this tenant, so there is no single
+			// "current file" to diff against. Server state, not a bad request.
+			if errors.Is(err, confd.ErrAmbiguousTenantFile) {
+				WriteJSONError(rw, r, http.StatusConflict, err.Error())
+				return
+			}
 			WriteJSONError(rw, r, http.StatusInternalServerError, err.Error())
 			return
 		}

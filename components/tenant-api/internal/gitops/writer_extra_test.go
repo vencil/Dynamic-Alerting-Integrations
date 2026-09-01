@@ -17,7 +17,7 @@ import (
 func TestValidate_ValidConfig(t *testing.T) {
 	t.Parallel()
 	yaml := "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n"
-	errs, _ := validate("", "db-a", yaml)
+	errs, _ := validate("", "db-a", "", yaml)
 	if len(errs) != 0 {
 		t.Errorf("expected no errors, got: %v", errs)
 	}
@@ -34,10 +34,10 @@ func TestValidate_MultipleTenants(t *testing.T) {
 	t.Parallel()
 	yamlBody := "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n  db-b:\n    _silent_mode: \"critical\"\n"
 
-	// No baseline (unit-test shape): both sections are additions for whichever
-	// id is being written, so both are refused.
+	// No baseline (unit-test shape, and no resolved file path): both sections
+	// are additions for whichever id is being written, so both are refused.
 	for _, id := range []string{"db-a", "db-b"} {
-		errs, _ := validate("", id, yamlBody)
+		errs, _ := validate("", id, "", yamlBody)
 		if len(errs) != 1 || !strings.Contains(errs[0], "adds tenant section") {
 			t.Errorf("expected the added-section refusal for %s, got: %v", id, errs)
 		}
@@ -46,16 +46,17 @@ func TestValidate_MultipleTenants(t *testing.T) {
 	// With a base file that already declares both, the same body is an edit of
 	// sections that are already there — the flat-file shape the exporter serves.
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "db-a.yaml"), []byte(yamlBody), 0o644); err != nil {
+	base := filepath.Join(dir, "db-a.yaml")
+	if err := os.WriteFile(base, []byte(yamlBody), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if errs, _ := validate(dir, "db-a", yamlBody); len(errs) != 0 {
+	if errs, _ := validate(dir, "db-a", base, yamlBody); len(errs) != 0 {
 		t.Errorf("expected no errors editing a grandfathered file, got: %v", errs)
 	}
 }
 
 func TestValidate_InvalidYAML(t *testing.T) {
-	errs, _ := validate("", "db-a", "{{not yaml")
+	errs, _ := validate("", "db-a", "", "{{not yaml")
 	if len(errs) == 0 {
 		t.Error("expected errors for invalid YAML")
 	}
@@ -67,7 +68,7 @@ func TestValidate_InvalidYAML(t *testing.T) {
 func TestValidate_MissingTenantSection(t *testing.T) {
 	t.Parallel()
 	yaml := "tenants:\n  db-b:\n    cpu: \"80\"\n"
-	errs, _ := validate("", "db-a", yaml)
+	errs, _ := validate("", "db-a", "", yaml)
 	if len(errs) == 0 {
 		t.Error("expected error for missing tenant section")
 	}
@@ -78,7 +79,7 @@ func TestValidate_MissingTenantSection(t *testing.T) {
 
 func TestValidate_EmptyContent(t *testing.T) {
 	t.Parallel()
-	errs, _ := validate("", "db-a", "")
+	errs, _ := validate("", "db-a", "", "")
 	if len(errs) == 0 {
 		t.Error("expected error for empty content")
 	}
@@ -87,7 +88,7 @@ func TestValidate_EmptyContent(t *testing.T) {
 func TestValidate_NoTenantsKey(t *testing.T) {
 	t.Parallel()
 	yaml := "defaults:\n  cpu: 80\n"
-	errs, _ := validate("", "db-a", yaml)
+	errs, _ := validate("", "db-a", "", yaml)
 	if len(errs) == 0 {
 		t.Error("expected error when tenants key is missing")
 	}
@@ -472,7 +473,7 @@ func TestValidate_CustomAlerts_ValidRecipe(t *testing.T) {
 	t.Parallel()
 	yaml := "tenants:\n  db-a:\n    _custom_alerts:\n" +
 		"      - {recipe: threshold, name: q, metric: qd, op: \">\", window: 5m, threshold: \"1:warning\"}\n"
-	if errs, _ := validate("", "db-a", yaml); len(errs) != 0 {
+	if errs, _ := validate("", "db-a", "", yaml); len(errs) != 0 {
 		t.Errorf("valid custom alert should pass preflight, got: %v", errs)
 	}
 }
@@ -482,7 +483,7 @@ func TestValidate_CustomAlerts_BadRecipeRejected(t *testing.T) {
 	// unknown recipe → preflight violation (→ Write returns "validation failed" → HTTP 400)
 	yaml := "tenants:\n  db-a:\n    _custom_alerts:\n" +
 		"      - {recipe: bogus, name: x, metric: m, op: \">\", window: 5m, threshold: \"1:warning\"}\n"
-	errs, _ := validate("", "db-a", yaml)
+	errs, _ := validate("", "db-a", "", yaml)
 	if len(errs) == 0 || !strings.Contains(strings.Join(errs, ";"), "_custom_alerts[0]") {
 		t.Errorf("bad recipe should be rejected at preflight with an indexed violation, got: %v", errs)
 	}
@@ -493,7 +494,7 @@ func TestValidate_CustomAlerts_BadForRejected(t *testing.T) {
 	// non-enum `for` (TRK-326) → preflight violation
 	yaml := "tenants:\n  db-a:\n    _custom_alerts:\n" +
 		"      - {recipe: threshold, name: x, metric: m, op: \">\", window: 5m, threshold: \"1:warning\", for: 2m}\n"
-	if errs, _ := validate("", "db-a", yaml); len(errs) == 0 {
+	if errs, _ := validate("", "db-a", "", yaml); len(errs) == 0 {
 		t.Errorf("non-enum for should be rejected at preflight, got no errors")
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"gopkg.in/yaml.v3"
@@ -160,6 +161,12 @@ func PutTenant(d *Deps) http.HandlerFunc {
 				return
 			}
 			if errors.Is(err, gitops.ErrConflict) {
+				WriteJSONError(rw, r, http.StatusConflict, err.Error())
+				return
+			}
+			// #1673: two files claim this tenant. The request is well-formed;
+			// the on-disk state is ambiguous — 409, not the 400 fallback.
+			if errors.Is(err, confd.ErrAmbiguousTenantFile) {
 				WriteJSONError(rw, r, http.StatusConflict, err.Error())
 				return
 			}
