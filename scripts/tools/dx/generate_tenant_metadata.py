@@ -277,15 +277,28 @@ def build_tenant_metadata(config_dir: Path) -> dict[str, Any]:
     # over. Same stderr channel as the parse failure below.
     # ⛔ `_`-prefixed entries excluded — the loop below skips them whatever
     # their shape, so naming one would report a loss that did not happen.
+    # ⛔ `.yml` IS A TENANT CARRIER HERE NOW (#1603). Both sites below used to
+    # pass `(".yaml",)`, so a tenant declared in `db-a.yml` produced NO entry
+    # in `tenant_metadata` and NO line on stderr — and this file feeds
+    # `generate_platform_data`, i.e. the portal's tenant list. Measured on two
+    # trees whose contents are byte-identical and differ only in the
+    # extension:
+    #
+    #     db-a.yaml -> 1 tenant,  rc=0, stderr 0 bytes   <- control
+    #     db-a.yml  -> 0 tenants, rc=0, stderr 0 bytes   <- before
+    #     db-a.yml  -> 1 tenant,  rc=0, stderr 0 bytes   <- after
+    #
+    # The exporter (`config_hierarchy.go:195`) lowercases the entry name and
+    # accepts both spellings, so it was serving a tenant the portal could not
+    # name. Omitting the argument takes `CONFIG_SUFFIXES`, the exporter's set.
     for bad in unusable_config_entries(
         [p for p in entries if not is_reserved_name(p.name)],
-        suffixes=(".yaml",),
     ):
         print(f"WARNING: {safe_label(bad.name)}: {unusable_reason(bad)}",
               file=sys.stderr)
     for yaml_file in (
         p for p in entries
-        if p.is_file() and has_yaml_extension(p.name, (".yaml",))
+        if p.is_file() and has_yaml_extension(p.name)   # both spellings (#1603)
     ):
         if yaml_file.name.startswith("_"):
             continue
