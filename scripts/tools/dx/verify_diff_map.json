@@ -773,7 +773,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "4e17a0a074fc11f439e41772f982228c491dc74ddaa116f4e0c19be5e3348f8f",
+ "source_digest": "99917440986269bd905f9f158a70330414ee7629fb9c41c7c5f980a509eca4e2",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1568,7 +1568,8 @@
   ],
   "docs/integration/gitops-deployment.md": [
    "tests/ops/test_config_diff.py",
-   "tests/ops/test_generated_ci_artifacts.py"
+   "tests/ops/test_generated_ci_artifacts.py",
+   "tests/shared/test_input_path_contract.py"
   ],
   "docs/integration/troubleshooting-checklist.md": [
    "tests/ops/test_generate_routes_orchestration.py"
@@ -2552,8 +2553,12 @@
    "tests/helm/test_federation_store_sentinel_guard.py",
    "tests/ops/test_revoked_set_contract.py"
   ],
+  "scripts/tools/ops/_grar_render.py": [
+   "tests/shared/test_input_path_contract.py"
+  ],
   "scripts/tools/ops/_grar_validate.py": [
-   "tests/lint/test_check_threshold_registry.py"
+   "tests/lint/test_check_threshold_registry.py",
+   "tests/shared/test_input_path_contract.py"
   ],
   "scripts/tools/ops/_registry_lib.py": [
    "tests/lint/test_check_threshold_reachability.py",
@@ -2595,7 +2600,8 @@
   ],
   "scripts/tools/ops/generate_alertmanager_routes.py": [
    "tests/ops/test_ci_path_filter_coverage.py",
-   "tests/ops/test_generate_alertmanager_routes.py"
+   "tests/ops/test_generate_alertmanager_routes.py",
+   "tests/ops/test_generate_routes_orchestration.py"
   ],
   "scripts/tools/ops/generate_rule_pack_split.py": [
    "tests/ops/test_rule_pack_split_real_packs.py",
@@ -2637,6 +2643,7 @@
   "scripts/tools/ops/validate_config.py": [
    "tests/ops/test_validate_config.py",
    "tests/shared/test_help_contract.py",
+   "tests/shared/test_input_path_contract.py",
    "tests/shared/test_pipeline_integration.py"
   ],
   "scripts/tools/validate_all.py": [

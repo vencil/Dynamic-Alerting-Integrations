@@ -686,14 +686,22 @@ def load_policy(policy_path: str | None) -> list[str]:
     is off, and the report says ``[PASS] policy``. A truncated ``kubectl cp``, an
     empty ConfigMap key and one missing ``s`` all land there. What this function
     closes is the *path* axis (a value that is not a usable file); the *content*
-    axis is open, tracked separately, and must not be read as covered because
+    axis is open (#1649 — and until that ticket existed this docstring said
+    "tracked separately" while nothing tracked it), and must not be read as
+    covered because
     the path axis now raises.
     """
-    if not policy_path:
+    # ⛔ `is None`, not `not policy_path`. An empty string is SUPPLIED — it is
+    # what an unset shell variable expands to — and the falsy test routed it
+    # into the omitted branch, switching the webhook domain allowlist off at
+    # exit 0. Measured on the shipped tree: `--policy ""` produced output
+    # byte-identical to omitting the flag. The flag's argparse default is None,
+    # so nothing else reaches this branch. Same split as #1616's --base-config.
+    if policy_path is None:
         return []
     if not Path(policy_path).is_file():
         raise PolicyInputError(
-            f"--policy: not a file: {policy_path}\n"
+            f"--policy: not a file: {policy_path!r}\n"
             "  --policy takes a PATH to a policy YAML holding an "
             "`allowed_domains:` list.\n"
             "  ⛔ Do not drop the flag to clear this error — that turns the "
@@ -710,16 +718,16 @@ def load_policy(policy_path: str | None) -> list[str]:
             data = yaml.safe_load(f) or {}
     except UnicodeDecodeError as exc:
         raise PolicyInputError(
-            f"--policy: {policy_path} is not valid UTF-8: {exc}") from exc
+            f"--policy: {policy_path!r} is not valid UTF-8: {exc}") from exc
     except yaml.YAMLError as exc:
         raise PolicyInputError(
-            f"--policy: {policy_path} is not valid YAML: {exc}") from exc
+            f"--policy: {policy_path!r} is not valid YAML: {exc}") from exc
     except OSError as exc:
         raise PolicyInputError(
-            f"--policy: cannot read {policy_path}: {exc}") from exc
+            f"--policy: cannot read {policy_path!r}: {exc}") from exc
     if not isinstance(data, dict):
         raise PolicyInputError(
-            f"--policy: top level of {policy_path} is "
+            f"--policy: top level of {policy_path!r} is "
             f"{type(data).__name__}, expected a mapping with `allowed_domains:`")
     domains = data.get("allowed_domains", [])
     # ⛔ `allowed_domains:` with nothing under it is YAML for an empty value,
@@ -735,7 +743,7 @@ def load_policy(policy_path: str | None) -> list[str]:
         domains = []
     if not isinstance(domains, list):
         raise PolicyInputError(
-            f"--policy: `allowed_domains` in {policy_path} is "
+            f"--policy: `allowed_domains` in {policy_path!r} is "
             f"{type(domains).__name__}, expected a list (or empty for "
             f"no constraint)")
     return [d for d in domains if isinstance(d, str)]

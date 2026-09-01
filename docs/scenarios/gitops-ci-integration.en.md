@@ -42,9 +42,14 @@ This guide explains how to integrate the Dynamic Alerting platform into your exi
 does not fix**: the §2.3 shape `generate-routes ... -o .output/xxx.yaml
 --validate` prints `OK: all configs valid` and exits 0 while the file named by
 `-o` never appears — `--validate` finishes before `-o` is used; drop
-`--validate` and it fails with `FileNotFoundError` because the tool does not
-create `.output/`. To actually get the file, `mkdir -p .output` first and do
-not pass `--validate` in the same run. Tracked as
+`--validate` and it fails because the tool does not create `.output/` — **from
+v2.10.0 that is exit 2 with a line naming `-o`**, where it used to be an
+uncaught `FileNotFoundError` traceback at exit 1
+([#1617](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1617)).
+⚠️ If your CI greps the log for `FileNotFoundError` to detect this case, that
+string no longer appears. The tool still does not create the directory: to
+actually get the file, `mkdir -p .output` first and do not pass `--validate` in
+the same run. Tracked as
 [#1423](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1423).
 
 ## 1. Quick Init

@@ -147,6 +147,13 @@ The resulting YAML can be directly `kubectl apply` or auto-synced by ArgoCD/Flux
 
 When `--base-config` is not provided, built-in defaults are used. If you need custom `global` settings (e.g., SMTP settings), default receiver, or base inhibit_rules, it's recommended to maintain a `base-alertmanager.yaml` as input. See [BYO Alertmanager Integration Guide Step 5](byo-alertmanager-integration.md#step-5-merge-into-alertmanager-configmap).
 
+⚠️ **The failure mode of this step changed in v2.10.0 (BREAKING, [#1616](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1616) / [#1617](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1617))**. Both `--base-config` and `-o` above are relative paths; when they are mistyped, or the directory does not exist in your CI workdir:
+
+- **Old behaviour**: a wrong `--base-config` path exited **0**, and the emitted ConfigMap was **byte-for-byte identical** to one produced with no `--base-config` at all. Your `global:` (SMTP smarthost, Slack webhook) was replaced by the platform placeholder and then applied by `kubectl` / synced by ArgoCD — **notifications go nowhere while the pipeline stays green**.
+- **New behaviour**: exit **2**, naming the flag. An `-o` path whose parent is missing or unwritable is also exit 2 (it used to be an uncaught Python traceback at exit 1 — and 1 means "your config violates something" in this tool).
+
+⛔ **The fix is to correct the path, not to drop `--base-config`** — dropping it reproduces the old broken outcome (the platform's built-in `global:` instead of yours).
+
 ## 4. ArgoCD Example
 
 ```yaml

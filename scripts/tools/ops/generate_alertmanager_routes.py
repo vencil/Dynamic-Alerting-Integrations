@@ -46,7 +46,8 @@ from _lib_python import (  # noqa: E402, F401
     write_text_secure,
     PLATFORM_DEFAULTS,
 )
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, die_caller_error  # noqa: E402
+from _lib_exitcodes import (  # noqa: E402
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, die_caller_error)
 
 # ── Re-exports from _grar_validate ─────────────────────────────────
 from _grar_validate import (  # noqa: E402, F401
@@ -106,6 +107,7 @@ from _grar_routes import (  # noqa: E402, F401
 
 # ── Re-exports from _grar_render ───────────────────────────────────
 from _grar_render import (  # noqa: E402, F401
+    BaseConfigInputError,
     _apply_merged_configmap,
     _merge_routes_receivers_inhibits,
     _read_existing_configmap,
@@ -165,6 +167,32 @@ def _validate_mode(routes: list[dict], receivers: list[dict], inhibit_rules: lis
     sys.exit(EXIT_OK)
 
 
+def _write_output_or_die(output: str, content: str, label: str) -> None:
+    """Write *content* to the operator-supplied ``-o`` path, or exit 2.
+
+    A bare ``write_text_secure`` lets OSError escape as a traceback at rc=1,
+    and rc=1 in this repo is EXIT_VIOLATION — "your CONFIG is wrong" — for what
+    is a mistyped path.
+
+    ⚠️ NOT THE WHOLE CLASS. Most ``write_text_secure`` call sites across
+    ``scripts/**`` still have no enclosing handler that can catch OSError, and
+    most of the owning tools take their output path from argv. This closes the
+    sites in THIS tool only; the class, and the argument that the fix belongs
+    in the shared helper rather than at each call site, is #1641.
+    ⛔ Do not read this helper's existence as the class having been handled —
+    and do not quote a count from here: it was already wrong once, because this
+    very change moved it.
+    """
+    try:
+        write_text_secure(output, content)
+    except OSError as exc:
+        die_caller_error(
+            f"-o: cannot write {label} to {output}: {exc}\n"
+            "  ⛔ This is an OUTPUT PATH problem, not a routing violation. "
+            "Check the parent directory exists and is writable; do not read "
+            "this as 'the generated routes are invalid'.")
+
+
 def _apply_mode(routes: list[dict], receivers: list[dict], inhibit_rules: list[dict],
                 namespace: str, configmap_name: str, yes_flag: bool, strict: bool = False) -> None:
     """Handle --apply mode: merge into ConfigMap and reload."""
@@ -174,19 +202,64 @@ def _apply_mode(routes: list[dict], receivers: list[dict], inhibit_rules: list[d
           f"{inhibit_count} inhibit rule(s)")
     print(f"Target: {namespace}/{configmap_name}")
     if not yes_flag:
-        confirm = input("Proceed? [y/N] ").strip().lower()
+        # #1617: `input()` with no readable stdin raises EOFError, uncaught,
+        # rc=1 — and it happens BEFORE anything touches the cluster, so the
+        # traceback reads as "cluster unreachable". A subprocess with no stdin
+        # to read lands here, which is what CI and cron look like.
+        #
+        # ⛔ The predicate is "reading a line failed", not `sys.stdin.isatty()`
+        # (which is what #1617 proposed). Measured across non-interactive
+        # shapes: `input()` fails in all of them, while `isatty()` reports True
+        # — i.e. would NOT have fired — for the NUL/`/dev/null` device on this
+        # host.
+        #
+        # ⛔ And "reading failed" is more than one exception. MEASURED: with
+        # stdin fully CLOSED (`0<&-`, which is what a daemon or a service
+        # manager hands a child) `sys.stdin is None` and `input()` raises
+        # RuntimeError, not EOFError — so an EOFError-only handler left exactly
+        # the traceback-at-rc-1 that #1617 exists to remove. Catch the failure
+        # by its effect, not by one of its spellings, and put the type in the
+        # message so the next unanticipated one is still diagnosable.
+        try:
+            confirm = input("Proceed? [y/N] ").strip().lower()
+        except (EOFError, RuntimeError, OSError) as exc:
+            die_caller_error(
+                f"\n--apply needs an interactive confirmation, but stdin could "
+                f"not be read ({type(exc).__name__}: {exc}). CI, cron, a pipe, "
+                f"a redirect, or a closed stdin all land here.\n"
+                "  Pass --yes to confirm non-interactively.\n"
+                "  ⛔ Do not drop --apply to clear this — that stops applying "
+                "anything to the cluster, which is not what you asked for.")
         if confirm not in ("y", "yes"):
             print("Aborted.")
             sys.exit(EXIT_OK)
     success = apply_to_configmap(routes, receivers, inhibit_rules, namespace, configmap_name, strict=strict)
-    sys.exit(EXIT_OK if success else EXIT_VIOLATION)
+    # #1617: this was EXIT_VIOLATION (1) while docs/cli-reference.{md,en.md}
+    # documented 2 — the code and the shipped table said opposite things.
+    # `_lib_exitcodes` settles it: "cannot reach Prometheus / API" is
+    # EXIT_CALLER_ERROR. Nothing that makes `apply_to_configmap` return False
+    # is a CONFIG violation — the failures are the cluster being unreachable
+    # or its ConfigMap being unusable — so the CODE was wrong, not the table.
+    # ⛔ Two earlier versions of this comment were more specific and wrong.
+    # It is NOT true that `/-/reload` is one of those paths
+    # (`_reload_alertmanager` returns True on both branches; a failed reload
+    # is deliberately warning-level, #1243), and it is NOT true that every
+    # such path is a kubectl invocation failing: with kubectl returning 0,
+    # a ConfigMap missing `alertmanager.yml` — or holding a value that is
+    # not a mapping — also returns False. Measured; each of those now emits
+    # a diagnostic (see `_read_existing_configmap`).
+    sys.exit(EXIT_OK if success else EXIT_CALLER_ERROR)
 
 
 def _output_configmap_mode(routes: list[dict], receivers: list[dict], inhibit_rules: list[dict],
-                           base_config: str | None, namespace: str, configmap_name: str,
+                           base: dict, namespace: str, configmap_name: str,
                            dry_run: bool, output: str | None, strict: bool = False) -> None:
-    """Handle --output-configmap mode: produce complete ConfigMap YAML."""
-    base = load_base_config(base_config)
+    """Handle --output-configmap mode: produce complete ConfigMap YAML.
+
+    Takes the ALREADY-LOADED base config, not a path: #1616 requires the
+    supplied-but-unusable check to happen before the tenant scan, and a
+    parameter that cannot be a path is the structural way to keep it there.
+    """
     cm_yaml = assemble_configmap(
         base, routes, receivers, inhibit_rules,
         namespace=namespace, configmap_name=configmap_name, strict=strict)
@@ -202,7 +275,7 @@ def _output_configmap_mode(routes: list[dict], receivers: list[dict], inhibit_ru
         return
 
     if output:
-        write_text_secure(output, cm_yaml)
+        _write_output_or_die(output, cm_yaml, "the ConfigMap")
         print(f"Written to {output} ({route_count} routes, "
               f"{len(receivers)} receivers, {inhibit_count} inhibit rules)")
     else:
@@ -236,7 +309,7 @@ def _render_output_mode(routes: list[dict], receivers: list[dict], inhibit_rules
         return
 
     if output:
-        write_text_secure(output, content)
+        _write_output_or_die(output, content, "the routing fragment")
         print(f"Written to {output} ({route_count} routes, {len(receivers)} receivers, "
               f"{inhibit_count} inhibit rules)")
     else:
@@ -298,6 +371,50 @@ def main() -> None:
 
     args = parser.parse_args()
 
+    # #1616, third CARRIER-OF-THE-FLAG (the sixth carrier of the #1556 class):
+    # --base-config is read ONLY on the ConfigMap-assembly path.
+    # In every other mode it was accepted and then never looked at — measured:
+    # a VALID base config in plain render mode produced output byte-identical
+    # to omitting the flag, with no warning. "Supplied but not honoured" is the
+    # same class as "supplied but unusable"; the operator believes their
+    # `global:` is in play and it is not. This must be checked BEFORE any work
+    # so the failure is about the invocation, not about a half-finished run.
+    # The base config is read on exactly one path — the one that assembles the
+    # ConfigMap — so it is honoured iff this run reaches that path. `--validate`
+    # returns from `_validate_mode()` before it, which is why the predicate is
+    # not simply "did you pass --output-configmap".
+    #
+    # ⛔ The remedy has to be derived from the same predicate, not written once
+    # for every mode. MEASURED: an earlier version told every non-configmap
+    # mode to "Add --output-configmap". Under `--apply` that flag is forbidden
+    # by argparse; under `--validate` it is ACCEPTED and the run is still
+    # byte-identical to omitting `--base-config` — i.e. following the advice
+    # silently reproduces #1616 instead of fixing it. A message that routes the
+    # operator into the defect is worse than no message.
+    honours_base_config = args.output_configmap and not args.validate
+    if args.base_config is not None and not honours_base_config:
+        if args.apply:
+            why, remedy = (
+                "--apply merges into the ConfigMap already in the cluster, so "
+                "a base file has no effect",
+                "  Drop --base-config. (--output-configmap, which does read "
+                "it, cannot be combined with --apply.)")
+        elif args.validate:
+            why, remedy = (
+                "--validate returns before the ConfigMap is assembled, so the "
+                "base file is never read — adding --output-configmap does NOT "
+                "change that",
+                "  Drop --base-config, or drop --validate if you meant to "
+                "produce a ConfigMap.")
+        else:
+            why, remedy = (
+                "only --output-configmap assembles a ConfigMap, and that is "
+                "the only thing that reads a base file",
+                "  Add --output-configmap, or drop --base-config.\n"
+                "  ⛔ Dropping it is only correct if you did not mean to "
+                "supply a base config — it does NOT make this mode honour one.")
+        die_caller_error(f"--base-config is not read in this mode: {why}.\n{remedy}")
+
     # Load policy (webhook domain allowlist).
     # #1556: a supplied-but-unusable --policy is a caller error, not "no
     # policy". Exiting 2 here rather than proceeding with an empty allowlist
@@ -309,6 +426,21 @@ def main() -> None:
         die_caller_error(str(exc))
     if allowed_domains:
         print(f"Policy: {len(allowed_domains)} allowed domain pattern(s) loaded")
+
+    # #1616: load the base config HERE, not inside _output_configmap_mode.
+    # ⛔ Measured with the load left at its original site (after the tenant
+    # scan): a typo'd --base-config against a tree that yields no routes still
+    # exited 0 in silence, because main() returns at "No tenants found in
+    # config directory." before anything looks at the flag. The original defect
+    # survived the fix in a narrower shape, and it was a NEW test that caught
+    # it, not review. "Supplied but unusable" is a property of the INVOCATION,
+    # so it has to be decided before any work — exactly like --policy above.
+    base_config: dict | None = None
+    if args.output_configmap:
+        try:
+            base_config = load_base_config(args.base_config)
+        except BaseConfigInputError as exc:
+            die_caller_error(str(exc))
 
     # Load tenant configs (routing + dedup + schema warnings + enforced routing + metadata)
     routing_configs, dedup_configs, schema_warnings, enforced_routing, metadata_configs = \
@@ -364,7 +496,7 @@ def main() -> None:
 
     # Output-configmap mode
     if args.output_configmap:
-        _output_configmap_mode(routes, receivers, inhibit_rules, args.base_config,
+        _output_configmap_mode(routes, receivers, inhibit_rules, base_config,
                               args.namespace, args.configmap, args.dry_run, args.output,
                               strict=args.strict)
         return
