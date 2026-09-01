@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -106,6 +107,20 @@ var ErrReservedTenantID = errors.New("reserved tenant id: names a conf.d control
 // the handler's ValidateTenantID uses — so no tenant write method can overwrite
 // a reserved control file even if a future caller forgets to validate first
 // (single-choke-point fragility is the exact bug class this change closes).
+// foreignTenantKeys returns the sorted `tenants:` keys a body declares that are
+// not the id being written. Separate from validate so the rule has one copy and
+// a direct test; validate already proved tenantID itself is present.
+func foreignTenantKeys(tcfg cfg.ThresholdConfig, tenantID string) []string {
+	var foreign []string
+	for id := range tcfg.Tenants {
+		if id != tenantID {
+			foreign = append(foreign, id)
+		}
+	}
+	sort.Strings(foreign)
+	return foreign
+}
+
 func guardTenantID(tenantID string) error {
 	if !confd.IsTenantConfigFile(tenantID + ".yaml") {
 		return fmt.Errorf("%w: %q", ErrReservedTenantID, tenantID)
@@ -682,6 +697,17 @@ func validate(configDir, tenantID, yamlContent string) (errs, notices []string) 
 	}
 	if _, ok := tcfg.Tenants[tenantID]; !ok {
 		return []string{fmt.Sprintf("YAML must contain tenants.%s section", tenantID)}, nil
+	}
+	// The write plane addresses a file by tenant id, but the exporter takes
+	// tenant ids from the file's `tenants:` KEYS — so without this the two
+	// planes disagree about who the file declares. CheckTenantRootKeys above
+	// only walks the ROOT map; a second `tenants.<other>` block passes it, and
+	// both remaining gates (RequireOrgWrite, Policy.CheckWrite via
+	// extractPatchKeys) read the URL id alone and never see it (#1681).
+	if foreign := foreignTenantKeys(tcfg, tenantID); len(foreign) > 0 {
+		return []string{fmt.Sprintf(
+			"YAML declares tenant section(s) %v — a tenant config may only declare "+
+				"tenants.%s; write them through their own endpoint", foreign, tenantID)}, nil
 	}
 	// #1231 c2: the write gate consumes KeyValidation.Errors ONLY — Notices
 	// (deprecated-key alias advisories) must never block a write; they ride
