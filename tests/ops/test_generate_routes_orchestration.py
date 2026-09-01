@@ -11,7 +11,9 @@ the suffix change captures the actual concern instead of a generic "extended".
 The two files stay split because the combined LOC (~2200) is too large for a
 single comprehensive test file.
 """
+import builtins
 import codecs
+import copy
 import functools
 import hashlib
 import json
@@ -112,6 +114,21 @@ class TestRenderOutput:
 # ============================================================
 # load_base_config
 # ============================================================
+# The unusable-but-parseable shapes, at module scope so a quantifier can count
+# them (emptying an inline parametrize list was measured to be free). `cause` is
+# the substring that branch must contribute: the three raise branches were
+# interchangeable until each had to name its own.
+_NOT_A_MAPPING_SHAPES = [
+    ("empty", b"", "NoneType"),
+    ("comment_only", b"# nothing but a comment\n", "NoneType"),
+    ("scalar", b"just a string\n", "str"),
+    ("sequence", b"- a\n- b\n", "list"),
+    ("invalid_yaml", b"global: [unclosed\n  bad: : :\n", "not valid YAML"),
+    ("not_utf8", "global:\n  smtp_smarthost: 中文\n".encode("cp950"),
+     "not valid UTF-8"),
+]
+
+
 class TestLoadBaseConfig:
     """load_base_config() tests."""
 
@@ -122,9 +139,186 @@ class TestLoadBaseConfig:
         assert "receivers" in base
         assert "inhibit_rules" in base
 
-    def test_nonexistent_path_returns_defaults(self):
-        base = load_base_config("/nonexistent/path.yaml")
-        assert "global" in base
+    # ⛔ RENAMED, and the rename is the point. This was
+    # `test_nonexistent_path_returns_defaults`, and it asserted the #1616
+    # DEFECT as if it were the specification: a `--base-config` path that does
+    # not exist quietly became the built-in defaults. Nothing in its name or
+    # body said why that would be desirable, so every reviewer who read it read
+    # it as intent. Measured on origin/main before the fix: the ConfigMap
+    # emitted for a typo'd path was BYTE-FOR-BYTE identical to the one emitted
+    # with the flag omitted, at exit 0 with an empty stderr — i.e. the customer
+    # `global:` (SMTP smarthost, Slack webhook) was replaced by a placeholder
+    # inside a document that GitOps then applies.
+    #
+    # ⇒ If you are here because this test is in your way: the behaviour it now
+    # pins is deliberate. Omission still returns defaults
+    # (`test_no_path_returns_defaults`, directly above); only a SUPPLIED value
+    # that cannot serve as a base config raises.
+    @pytest.mark.parametrize("shape", ["missing", "directory"])
+    def test_a_supplied_path_that_is_not_a_file_is_a_caller_error(
+            self, tmp_path, shape):
+        if shape == "missing":
+            target = tmp_path / "nonexistent.yaml"
+        else:
+            # A directory NAMED like a config file: `is_file()` is False, and
+            # before #1616 that took the same silent branch as a typo.
+            target = tmp_path / "base.yaml"
+            target.mkdir()
+        with pytest.raises(gar.BaseConfigInputError) as exc:
+            load_base_config(str(target))
+        assert "--base-config" in str(exc.value), (
+            "the message must name the flag, or the operator has to guess "
+            "which argument was wrong")
+
+    # The six remaining unusable shapes reduce to ONE predicate — the file must
+    # parse to a mapping — so this is parametrised over the shapes rather than
+    # written as six branches. Two of them (`empty`, `comment_only`) were
+    # SILENT before the fix and are what a truncated copy or an emptied
+    # ConfigMap key actually looks like; the other four crashed with an
+    # uncaught traceback at rc=1, which in this repo means EXIT_VIOLATION
+    # ("your config is wrong") rather than EXIT_CALLER_ERROR.
+    @pytest.mark.parametrize("shape,payload,cause", _NOT_A_MAPPING_SHAPES,
+                             ids=[s[0] for s in _NOT_A_MAPPING_SHAPES])
+    def test_a_supplied_file_that_is_not_a_mapping_is_a_caller_error(
+            self, tmp_path, shape, payload, cause):
+        p = tmp_path / "base.yaml"
+        p.write_bytes(payload)
+        with pytest.raises(gar.BaseConfigInputError) as exc:
+            load_base_config(str(p))
+        msg = str(exc.value)
+        assert msg.startswith("--base-config:"), (
+            f"the line identifying the error must name the flag; got:\n{msg}")
+        # ⛔ `"--base-config" in msg` was satisfiable by the remediation
+        # paragraph further down, so removing the flag name from the
+        # identification line was invisible — hence startswith, above. And the
+        # three raise branches were interchangeable: swapping "not valid UTF-8"
+        # for "not valid YAML" changed nothing, so each branch now has to name
+        # its own cause.
+        assert cause in msg, (
+            f"the {shape} branch must say why it failed (expected {cause!r}); "
+            f"got:\n{msg}")
+
+    def test_the_not_a_mapping_message_carries_no_remedy(self, tmp_path):
+        """⛔ This branch must NOT tell the operator to drop the flag.
+
+        It fires both for an empty file — where omitting `--base-config` is
+        right — and for one holding a top-level list or scalar, where omitting
+        it substitutes the platform placeholder `global:` for the operator's,
+        i.e. reproduces #1616. `load_policy`'s equivalent branch states the type
+        and stops for the same reason. A shared remedy sentence that is wrong
+        for one of two rows is a mistake this repo has already made twice
+        (see the comment above `_RULE_PACKS_INPUT_HINT` in validate_config.py).
+        """
+        p = tmp_path / "base.yaml"
+        p.write_bytes(b"- a\n- b\n")
+        with pytest.raises(gar.BaseConfigInputError) as exc:
+            load_base_config(str(p))
+        msg = str(exc.value)
+        assert "omit --base-config" not in msg.lower(), (
+            f"a remedy that is wrong for a list/scalar file:\n{msg}")
+        assert "drop the flag" not in msg.lower(), msg
+
+    def test_every_not_a_mapping_shape_is_still_covered(self):
+        """⛔ Anti-vacuity. Emptying the parametrize list above removed six shapes
+        from the run while the suite stayed green. The sibling `_CASES` list in
+        test_input_path_contract.py has such a quantifier; this one did not.
+        ⛔ No pass-count here on purpose: it is a number nobody recomputes, and
+        this diff already moved it once."""
+        shapes = {s for s, _, _ in _NOT_A_MAPPING_SHAPES}
+        assert shapes >= {"empty", "comment_only", "scalar", "sequence",
+                          "invalid_yaml", "not_utf8"}, (
+            f"a measured shape lost its case: missing {sorted({'empty', 'comment_only', 'scalar', 'sequence', 'invalid_yaml', 'not_utf8'} - shapes)}")
+
+    def test_the_error_type_is_distinguishable_from_a_config_violation(self):
+        """⛔ Aliasing `BaseConfigInputError = ValueError` left the whole suite green.
+
+        The class exists because the `assert_*` guards this module calls raise
+        plain `ValueError` for a config-invariant violation, which means exit 1,
+        while this means exit 2. Nothing asserted that, so the entire stated
+        reason for the subclass was free to delete.
+        """
+        assert gar.BaseConfigInputError is not ValueError
+        assert issubclass(gar.BaseConfigInputError, ValueError)
+        # A plain ValueError must NOT be caught as this error, or the caller
+        # cannot keep exit 1 and exit 2 apart.
+        with pytest.raises(ValueError):
+            try:
+                raise ValueError("a config-invariant violation")
+            except gar.BaseConfigInputError:  # pragma: no cover - must not fire
+                raise AssertionError("a plain ValueError was caught as a "
+                                     "caller error; exit 1 and exit 2 are no "
+                                     "longer distinguishable")
+
+    def test_an_unreadable_file_is_a_caller_error(self, tmp_path, monkeypatch):
+        """The OSError branch had no test input at all — reverting it to a
+        silent default was free."""
+        p = tmp_path / "base.yaml"
+        p.write_text("global: {}\n", encoding="utf-8")
+        real_open = builtins.open
+
+        def boom(file, *a, **k):
+            if str(file) == str(p):
+                raise OSError(5, "Input/output error")
+            return real_open(file, *a, **k)
+
+        monkeypatch.setattr(builtins, "open", boom)
+        with pytest.raises(gar.BaseConfigInputError) as exc:
+            load_base_config(str(p))
+        assert "cannot read" in str(exc.value)
+
+    def test_the_result_does_not_alias_the_module_default(self, tmp_path):
+        """⛔ `dict(...)` is shallow and the missing-key fill assigned the SAME
+        list objects, so a caller appending to a returned `receivers` poisoned
+        `_DEFAULT_BASE_CONFIG` for every later call in the process."""
+        import _grar_render as render
+        before = copy.deepcopy(render._DEFAULT_BASE_CONFIG)
+        a = load_base_config(None)
+        a["receivers"].append({"name": "POISON"})
+        a["route"]["receiver"] = "POISON"
+        # and via the partial-file fill branch, which is a second copy site
+        p = tmp_path / "partial.yaml"
+        p.write_text("global: {}\n", encoding="utf-8")
+        b = load_base_config(str(p))
+        b["receivers"].append({"name": "POISON2"})
+        assert render._DEFAULT_BASE_CONFIG == before, (
+            "load_base_config handed out objects that alias the module default")
+        assert not any(r.get("name", "").startswith("POISON")
+                       for r in load_base_config(None)["receivers"])
+
+    def test_control_a_well_formed_base_config_still_loads(self, tmp_path):
+        """⛔ Without this, every assertion above is satisfied by a
+        `load_base_config` that raises on everything."""
+        p = tmp_path / "base.yaml"
+        p.write_text(
+            yaml.dump({"global": {"smtp_smarthost": "mail.example:587"}}),
+            encoding="utf-8")
+        base = load_base_config(str(p))
+        assert base["global"]["smtp_smarthost"] == "mail.example:587"
+        assert "route" in base and "receivers" in base
+
+    # ⛔ Only `""`. A whitespace-only value is TRUTHY, so it never took the
+    # omitted branch and asserting it here would have looked like coverage of
+    # the falsy-predicate defect while testing "a space is not a filename".
+    def test_an_empty_value_is_supplied_not_omitted(self):
+        """⛔ `path is None`, not `not path`.
+
+        An empty string is a SUPPLIED value — it is what an unset shell
+        variable expands to — and the falsy test routed it into the omitted
+        branch. Measured before the fix: `--base-config ""` with
+        `--output-configmap` produced a ConfigMap byte-identical to omitting
+        the flag, at exit 0 with an empty stderr, i.e. the whole of #1616 alive
+        through one spelling. Changing the predicate was as invisible as the
+        defect until this test existed.
+        """
+        with pytest.raises(gar.BaseConfigInputError) as exc:
+            load_base_config("")
+        assert str(exc.value).startswith("--base-config:")
+
+    def test_control_none_still_means_omitted(self):
+        """⛔ Pairs with the test above: `None` must keep returning defaults, or
+        "empty is an error" is satisfied by a function that rejects everything.
+        """
+        base = load_base_config(None)
         assert base["route"]["receiver"] == "default"
 
     def test_valid_file(self, tmp_path):
@@ -152,6 +346,626 @@ class TestLoadBaseConfig:
         assert base["global"]["resolve_timeout"] == "3m"
         assert "route" in base
         assert "receivers" in base
+
+
+# ============================================================
+# #1617 — exit codes on the OUTPUT / INTERACTION / CLUSTER axes
+# ============================================================
+_GAR = (Path(__file__).resolve().parents[2] / "scripts" / "tools" / "ops"
+        / "generate_alertmanager_routes.py")
+EXIT_CALLER_ERROR = 2
+
+
+def _gar(argv, stdin=b""):
+    return subprocess.run(
+        [sys.executable, "-s", str(_GAR), *argv],
+        input=stdin, capture_output=True, timeout=180)
+
+
+# At module scope so the anti-vacuity quantifiers below can count them:
+# emptying an inline parametrize list was measured to remove cases while the
+# suite stayed green.
+_UNWRITABLE_SHAPES = ["missing_parent", "is_a_directory"]
+# Modes that do NOT honour --base-config, under the predicate in main()
+# ("--output-configmap AND NOT --validate"). ⛔ NOT an exhaustive enumeration
+# of that complement — `--dry-run`, `--validate --apply` and other
+# combinations also fall in it and are not listed. These are the four that
+# were measured; `validate+output-configmap` is here because `--validate`
+# returns before the ConfigMap is assembled, so passing both is ACCEPTED and
+# still ignores the file — the one shape where following the old advice
+# silently reproduced the defect.
+_UNHONOURED_MODES = [
+    ("render", []),
+    ("apply", ["--apply", "--yes"]),
+    ("validate", ["--validate"]),
+    ("validate+output-configmap", ["--validate", "--output-configmap"]),
+]
+# Both writers. #1617 named one; the file had two, and the `label` that tells
+# them apart was asserted by neither until this pair existed.
+_WRITER_MODES = [[], ["--output-configmap"]]
+
+
+@pytest.fixture(scope="module")
+def _tenant_dir(tmp_path_factory):
+    """A tree that actually PRODUCES routes.
+
+    ⛔ The first version wrote a thresholds-only tenant and every test here
+    failed with `No tenants found in config directory.` — the tool exits 0
+    before reaching any output path, so a control asserting "this writes a
+    file" would have been asserting nothing. The fixture has to make the
+    behaviour under test reachable.
+    """
+    d = tmp_path_factory.mktemp("conf.d")
+    (d / "db-a.yaml").write_text(
+        make_tenant_yaml("db-a", keys={"mysql_connections": "70"},
+                         routing=make_routing_config("db-a")),
+        encoding="utf-8")
+    return d
+
+
+class TestOutputAndClusterExitCodes:
+    """#1617: three paths whose exit code contradicted the shipped docs.
+
+    ⛔ Every assertion here checks the MESSAGE, not just the code. After this
+    fix `generate-routes` reaches exit 2 for several unrelated reasons — an
+    unusable `--base-config`, an unwritable `-o`, no confirmation available,
+    an unreachable cluster — so `rc == 2` alone is satisfied by any of them.
+    That is exactly the shape filed as #1642 (an exit-code assertion whose
+    green can come from a cause it never meant to test).
+    """
+
+    def test_control_a_writable_output_path_succeeds(self, _tenant_dir, tmp_path):
+        """⛔ Without this, everything below is satisfied by a tool that
+        exits 2 on every invocation."""
+        r = _gar(["--config-dir", str(_tenant_dir), "-o", str(tmp_path / "out.yaml")])
+        assert r.returncode == 0, r.stderr.decode("utf-8", "replace")[:400]
+        assert (tmp_path / "out.yaml").is_file()
+
+    @pytest.mark.parametrize("shape", _UNWRITABLE_SHAPES)
+    @pytest.mark.parametrize("mode", _WRITER_MODES,
+                             ids=["render", "output-configmap"])
+    def test_an_unwritable_output_path_is_a_caller_error(
+            self, _tenant_dir, tmp_path, shape, mode):
+        """Both writers, because #1617 named one and the file had two.
+
+        Measured on origin/main: `FileNotFoundError` / `PermissionError`
+        escaped as an uncaught traceback at rc=1 — and rc=1 here is
+        EXIT_VIOLATION, so a customer CI read "you mistyped -o" as "your
+        routing is invalid".
+        """
+        if shape == "missing_parent":
+            target = tmp_path / "no" / "such" / "dir" / "out.yaml"
+        else:
+            target = tmp_path / "adir"
+            target.mkdir()
+        r = _gar(["--config-dir", str(_tenant_dir), *mode, "-o", str(target)])
+        err = (r.stdout + r.stderr).decode("utf-8", "replace")
+        assert r.returncode == EXIT_CALLER_ERROR, f"rc={r.returncode}\n{err[:500]}"
+        assert "Traceback" not in err, (
+            "the operator gets a Python traceback instead of a diagnostic")
+        # ⛔ `"-o" in err` was VACUOUS and measured so: pytest's own temp path
+        # contains `pytest-of-<user>`, whose `-of` holds the substring, so the
+        # assertion passed with the flag name removed from the diagnostic
+        # entirely. Anchor on the START of the line instead — that is the part
+        # a shortened message would lose.
+        lines = r.stderr.decode("utf-8", "replace").splitlines()
+        assert any(ln.startswith("-o:") for ln in lines), (
+            f"no line IDENTIFIES the flag. `\"-o\" in err` used to pass here "
+            f"because pytest's own temp path contains `pytest-of-<user>`, so "
+            f"the substring was present with the flag name deleted from the "
+            f"diagnostic entirely; a line-start anchor cannot be satisfied "
+            f"that way.\nstderr:\n" + "\n".join(lines[-6:]))
+        assert "OUTPUT PATH" in err, (
+            f"exit 2 is right but the message does not say it is the output "
+            f"path:\n{err[:500]}")
+        # The two writers must stay distinguishable: `label` is the only thing
+        # telling the operator whether the ConfigMap or the routing fragment
+        # failed to write, and swapping the two arguments was invisible.
+        expected_label = ("the ConfigMap" if "--output-configmap" in mode
+                          else "the routing fragment")
+        assert expected_label in err, (
+            f"the message must name WHICH artefact could not be written; "
+            f"expected {expected_label!r} for mode={mode}:\n{err[:500]}")
+
+    def test_apply_without_a_readable_stdin_names_the_yes_flag(self, _tenant_dir):
+        """⛔ The predicate is "reading a line failed", not `isatty()`.
+
+        #1617 proposed gating on `sys.stdin.isatty()`. Measured: `isatty()` is
+        True — i.e. would not fire — for the NUL/`/dev/null` device, so it is a
+        proxy that is wrong in one direction on at least one platform. ⚠️ It is
+        NOT wrong everywhere: for a pipe, a redirect from a file, and a
+        subprocess with empty stdin, `isatty()` is False and would have fired.
+        An earlier revision of this docstring said the gate was "green exactly
+        where the defect fires"; that overstated it.
+
+        This case feeds an EMPTY stdin (what CI/cron/pipes do). The CLOSED-stdin
+        case is separate, below, because it raises a different exception.
+        """
+        r = _gar(["--config-dir", str(_tenant_dir), "--apply"], stdin=b"")
+        err = (r.stdout + r.stderr).decode("utf-8", "replace")
+        assert r.returncode == EXIT_CALLER_ERROR, f"rc={r.returncode}\n{err[:500]}"
+        assert "Traceback" not in err
+        assert "--yes" in err, (
+            f"exit 2 is right but the operator is not told which flag "
+            f"unblocks them:\n{err[:500]}")
+
+    def test_apply_with_stdin_closed_entirely_is_also_a_caller_error(
+            self, _tenant_dir, monkeypatch):
+        """⛔ A second spelling of "cannot read a line", and an EOFError-only
+        handler missed it.
+
+        With stdin fully closed — `0<&-`, which is what a daemon or a service
+        manager hands a child — `sys.stdin is None` and `input()` raises
+        RuntimeError, not EOFError. Measured before this fix: uncaught
+        traceback at rc=1, i.e. exactly the failure #1617 exists to remove,
+        alive in the mode the fix was written for.
+
+        Driven in-process by setting `sys.stdin = None`: reproducing `0<&-`
+        through subprocess is shell- and platform-specific, and the property
+        under test is the handler, not the shell.
+        """
+        monkeypatch.setattr(sys, "stdin", None)
+        with pytest.raises(SystemExit) as exc:
+            gar._apply_mode([], [], [], "monitoring", "am-config", yes_flag=False)
+        assert exc.value.code == EXIT_CALLER_ERROR
+
+    # Every way apply_to_configmap can fail with kubectl itself SUCCEEDING.
+    # ⛔ Two of these returned False in total silence — the operator got exit 2
+    # and not one byte of output — which is the same "exit code with no
+    # diagnostic" this file refuses to ship for `-o`, a few functions away.
+    # `stdout` is the fake kubectl's output verbatim, so the shape of the WHOLE
+    # document is testable — not just the `data` block. ⛔ The first version
+    # varied only `data`, and the shapes where the document itself is not an
+    # object escaped as an uncaught AttributeError on `.get` — a traceback at
+    # rc=1 — out of the one function this change hardened.
+    _APPLY_FAILURES = [
+        ("no_key", json.dumps({"data": {"other": "x"}}),
+         "no 'alertmanager.yml' key"),
+        ("comment_only", json.dumps({"data": {"alertmanager.yml": "# nothing\n"}}),
+         "parses to NoneType"),
+        ("whitespace_only", json.dumps({"data": {"alertmanager.yml": "   \n"}}),
+         "parses to NoneType"),
+        ("not_a_mapping", json.dumps({"data": {"alertmanager.yml": "- a\n- b\n"}}),
+         "parses to list"),
+        ("bad_yaml", json.dumps({"data": {"alertmanager.yml": "a: [unclosed\n"}}),
+         "not valid YAML"),
+        ("not_json", "this is not json", "not JSON"),
+        ("json_null", "null", "not an object"),
+        ("json_list", "[1, 2]", "not an object"),
+        ("json_string", '"x"', "not an object"),
+        # ⛔ `data` ABSENT and `data: null` are different cluster states and must
+        # not share a message: the first is a ConfigMap created without
+        # --from-file, the second is one whose block was emptied. An earlier
+        # version collapsed both into "(NoneType)".
+        ("data_absent", json.dumps({"metadata": {}}), "no `data` block at all"),
+        ("data_null", json.dumps({"data": None}), "`data` is NoneType"),
+        ("data_list", json.dumps({"data": [1, 2]}), "`data` is list"),
+        # ⛔ `yaml.safe_load` treats a non-str as a STREAM and calls `.read()`
+        # on it, so these left an uncaught AttributeError at rc=1 — the same
+        # zero-diagnostic picture the guards above exist to remove, one layer
+        # further in. Not reachable through a real cluster (the K8s API forces
+        # `data` values to strings) but exactly as reachable as `json_list`.
+        ("leaf_int", json.dumps({"data": {"alertmanager.yml": 42}}),
+         "'alertmanager.yml' is int"),
+        ("leaf_list", json.dumps({"data": {"alertmanager.yml": [1]}}),
+         "'alertmanager.yml' is list"),
+        # ⛔ The two above are TRUTHY, and that is why they passed against a
+        # `data.get(key, "")` + `if not existing_yml` version that reported
+        # every FALSY leaf as "no 'alertmanager.yml' key". The shapes below are
+        # the same two types with a falsy value, plus the empty string an
+        # operator actually produces by emptying the key. Without them the
+        # table certifies a guard it never reaches.
+        ("leaf_zero", json.dumps({"data": {"alertmanager.yml": 0}}),
+         "'alertmanager.yml' is int"),
+        ("leaf_false", json.dumps({"data": {"alertmanager.yml": False}}),
+         "'alertmanager.yml' is bool"),
+        ("leaf_empty_list", json.dumps({"data": {"alertmanager.yml": []}}),
+         "'alertmanager.yml' is list"),
+        ("leaf_empty_string", json.dumps({"data": {"alertmanager.yml": ""}}),
+         "parses to NoneType"),
+    ]
+
+    @pytest.mark.parametrize("case,stdout,expected", _APPLY_FAILURES,
+                             ids=[c[0] for c in _APPLY_FAILURES])
+    def test_every_apply_failure_says_something(self, monkeypatch, capsys,
+                                                case, stdout, expected):
+        import _grar_render as render
+
+        def fake(argv, *, timeout, stdin_text=None):
+            out = stdout if argv[:2] == ["kubectl", "get"] else ""
+            return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
+
+        monkeypatch.setattr(render, "_run_binary", fake)
+        assert render.apply_to_configmap([], [], [], "monitoring", "cm") is False
+        err = capsys.readouterr().err
+        assert expected in err, (
+            f"[{case}] apply_to_configmap failed while kubectl returned 0, and "
+            f"the operator was told: {err!r}")
+
+    def test_control_a_usable_configmap_still_applies(self, monkeypatch):
+        """⛔ Without this, "every failure says something" is satisfied by an
+        implementation that fails on everything."""
+        import _grar_render as render
+
+        def fake(argv, *, timeout, stdin_text=None):
+            out = json.dumps({"data": {"alertmanager.yml":
+                                       "global: {}\nroute: {receiver: d}\n"
+                                       "receivers: [{name: d}]\n"}}) \
+                if argv[:2] == ["kubectl", "get"] else ""
+            return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
+
+        monkeypatch.setattr(render, "_run_binary", fake)
+        assert render.apply_to_configmap([], [], [], "monitoring", "cm") is True
+
+    def test_every_apply_failure_shape_is_still_covered(self):
+        """⛔ Anti-vacuity for the list above."""
+        assert {c[0] for c in self._APPLY_FAILURES} >= {
+            "no_key", "comment_only", "whitespace_only", "not_a_mapping",
+            "bad_yaml", "not_json", "json_null", "json_list", "json_string",
+            "data_absent", "data_null", "data_list", "leaf_int", "leaf_list",
+            "leaf_zero", "leaf_false", "leaf_empty_list", "leaf_empty_string"}
+
+    def test_a_present_but_empty_key_is_not_reported_as_a_missing_key(
+            self, monkeypatch, capsys):
+        """⛔ "The key is not there" and "the key is there and empty" are
+        different cluster states and must not share a message.
+
+        `data.get("alertmanager.yml", "")` followed by `if not existing_yml`
+        made them identical: an operator who emptied the key was sent looking
+        for a key that is present. Asserting only "some diagnostic appears"
+        cannot see this — both states produce one — so this pins the CONTENT,
+        and pins the two against each other rather than against a literal.
+        """
+        import _grar_render as render
+
+        def run(payload):
+            def fake(argv, *, timeout, stdin_text=None):
+                out = json.dumps(payload) if argv[:2] == ["kubectl", "get"] else ""
+                return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
+            monkeypatch.setattr(render, "_run_binary", fake)
+            assert render.apply_to_configmap([], [], [], "monitoring", "cm") is False
+            return capsys.readouterr().err
+
+        absent = run({"data": {"other.yml": "a: 1\n"}})
+        empty = run({"data": {"alertmanager.yml": ""}})
+
+        assert "no 'alertmanager.yml' key" in absent, absent
+        assert "no 'alertmanager.yml' key" not in empty, (
+            "an empty value was reported as a missing key: " + empty)
+        assert "the key exists but holds nothing usable" in empty, empty
+
+    def test_no_failure_path_leaves_the_reader_without_a_diagnostic(
+            self, monkeypatch, capsys):
+        """⛔ The claim is "every failure exit says something", so assert it over
+        the whole table rather than trusting the sentence.
+
+        Twice now a version of that sentence was written while a whole class of
+        input did not reach a `return None` at all and escaped as a traceback
+        instead — first the document shape, then the leaf value.
+        """
+        import _grar_render as render
+        for case, stdout, _expected in self._APPLY_FAILURES:
+            def fake(argv, *, timeout, stdin_text=None, _o=stdout):
+                out = _o if argv[:2] == ["kubectl", "get"] else ""
+                return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
+            monkeypatch.setattr(render, "_run_binary", fake)
+            assert render.apply_to_configmap([], [], [], "monitoring", "cm") is False
+            assert capsys.readouterr().err.strip(), (
+                f"[{case}] returned False with an empty stderr — exit 2 and "
+                f"nothing to act on")
+
+    def test_the_not_a_mapping_hint_only_fires_for_an_empty_value(
+            self, monkeypatch, capsys):
+        """⛔ "(comments or whitespace only?)" is a GUESS, and it was appended
+        unconditionally — including for a value that is a list, a string or a
+        number, where the key does hold something and the guess is simply
+        wrong. Same defect as a shared remedy sentence that is right for one
+        row and wrong for another, which `load_base_config` a few functions
+        away carries a comment about."""
+        import _grar_render as render
+        HINT = "comments or whitespace only"
+
+        def run(value):
+            def fake(argv, *, timeout, stdin_text=None):
+                out = json.dumps({"data": {"alertmanager.yml": value}}) \
+                    if argv[:2] == ["kubectl", "get"] else ""
+                return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
+            monkeypatch.setattr(render, "_run_binary", fake)
+            render.apply_to_configmap([], [], [], "monitoring", "cm")
+            return capsys.readouterr().err
+
+        for value, kind in [("# nothing\n", "comment-only"), ("   \n", "blank")]:
+            assert HINT in run(value), (
+                f"the {kind} case must keep its explanation, or this test is "
+                f"satisfied by deleting the hint entirely")
+        # ⛔ These four are why the predicate reads the TEXT rather than the
+        # parse result. They all `yaml.safe_load` to None while the key plainly
+        # holds something, so a `parsed is None` gate keeps the wrong guess —
+        # and MEASURED: with only the list/str/int rows below, reverting the
+        # predicate to `existing is None` was free.
+        for value, kind in [("null\n", "null"), ("~\n", "tilde"),
+                            ("---\n", "doc-start"), ("Null\n", "Null")]:
+            assert HINT not in run(value), (
+                f"a {kind} value is not comments-or-whitespace, and the "
+                f"message offered that as the explanation")
+        for value, kind in [("- a\n- b\n", "list"), ("just text\n", "str"),
+                            ("42\n", "int")]:
+            assert HINT not in run(value), (
+                f"a {kind} value is not comments-or-whitespace, and the "
+                f"message offered that as the explanation")
+
+    def test_the_stdin_handler_also_covers_oserror(self, monkeypatch):
+        """⛔ The handler catches three exception types; two had a case.
+
+        Its own comment says to catch the failure "by its effect, not by one of
+        its spellings" — so each spelling it lists needs to be reachable in a
+        test, or the next cleanup drops the unexercised one.
+        """
+        def boom_input(*_a, **_k):
+            raise OSError(9, "Bad file descriptor")
+
+        monkeypatch.setattr("builtins.input", boom_input)
+        with pytest.raises(SystemExit) as exc:
+            gar._apply_mode([], [], [], "monitoring", "am-config", yes_flag=False)
+        assert exc.value.code == EXIT_CALLER_ERROR
+
+    def test_control_a_readable_stdin_is_not_a_caller_error(self, _tenant_dir):
+        """⛔ Pairs with both tests above: a stdin that CAN be read must not be
+        treated as unreadable, or "cannot read → exit 2" is satisfied by a
+        handler that fires unconditionally."""
+        r = _gar(["--config-dir", str(_tenant_dir), "--apply"], stdin=b"n\n")
+        assert r.returncode == 0, (r.stdout + r.stderr).decode("utf-8", "replace")[:400]
+
+    def test_both_writers_and_both_shapes_are_still_covered(self):
+        """⛔ Anti-vacuity for the two lists above."""
+        assert set(_UNWRITABLE_SHAPES) == {"missing_parent", "is_a_directory"}
+        assert _WRITER_MODES == [[], ["--output-configmap"]], (
+            "dropping a writer mode removes the only thing asserting that the "
+            "ConfigMap writer and the fragment writer report different labels")
+
+    def test_a_missing_kubectl_is_a_caller_error_not_a_violation(self, _tenant_dir):
+        """⛔ The doc row this PR rewrote says kubectl failures exit 2.
+
+        It was false for one shape: with `kubectl` absent from PATH,
+        `subprocess.run` raised `FileNotFoundError` uncaught and the tool exited
+        1 — EXIT_VIOLATION, i.e. "your routing is invalid" — for an image that
+        simply does not ship kubectl. Measured before the fix by reducing PATH
+        to the interpreter directory, which is what this test does.
+        """
+        env = dict(os.environ, PATH=str(Path(sys.executable).parent))
+        r = subprocess.run(
+            [sys.executable, "-s", str(_GAR), "--config-dir", str(_tenant_dir),
+             "--apply", "--yes"],
+            input=b"", capture_output=True, timeout=180, env=env)
+        err = (r.stdout + r.stderr).decode("utf-8", "replace")
+        assert r.returncode == EXIT_CALLER_ERROR, f"rc={r.returncode}\n{err[:500]}"
+        assert "Traceback" not in err, err[:500]
+        assert "kubectl" in err, (
+            f"the message must name the binary that could not be run:\n{err[:400]}")
+
+    def test_a_hung_binary_is_a_caller_error_not_a_traceback(self, monkeypatch):
+        """⛔ `_run_binary` passes `timeout=`, so a cluster that accepts the
+        connection and never answers raises `subprocess.TimeoutExpired`.
+
+        That is **not** an `OSError` (`SubprocessError` → `Exception`), so the
+        helper's `except OSError` did not see it and the traceback at rc=1 the
+        helper exists to remove came back for the hung case. The sibling test
+        above covers only the absent-binary family; catching one family and
+        assuming the other is the shape of defect this file records twice
+        (`EOFError` is not an `OSError` either), so both are pinned.
+        """
+        import _grar_render as render
+
+        assert not issubclass(subprocess.TimeoutExpired, OSError), (
+            "this test exists because TimeoutExpired is outside the OSError "
+            "tree; if that ever changes the guard it pins is redundant")
+
+        def hang(argv, *a, **kw):
+            raise subprocess.TimeoutExpired(cmd=argv, timeout=kw.get("timeout"))
+
+        monkeypatch.setattr(subprocess, "run", hang)
+        result = render._run_binary(["kubectl", "get", "cm"], timeout=60)
+
+        assert result.returncode != 0, "a timeout must not read as success"
+        assert result.returncode != 127, (
+            "127 already means 'not runnable here'; a binary that ran and hung "
+            "is a different environment failure and must stay tellable apart")
+        assert "kubectl" in result.stderr, (
+            f"the message must name the binary that hung: {result.stderr!r}")
+
+    def test_control_a_declined_confirmation_is_still_a_clean_exit(self, _tenant_dir):
+        """⛔ Answering "n" must NOT become a caller error — otherwise the
+        guard above is satisfied by a tool that rejects every --apply."""
+        r = _gar(["--config-dir", str(_tenant_dir), "--apply"], stdin=b"n\n")
+        assert r.returncode == 0, (r.stdout + r.stderr).decode("utf-8", "replace")[:400]
+        assert b"Aborted." in r.stdout
+
+    # ── the cluster axis ────────────────────────────────────────────────
+    # Driven in-process rather than through a fake `kubectl` on PATH: an
+    # extensionless shell stub is not executable on Windows, so a PATH stub
+    # silently falls through to the real binary and the test measures nothing.
+    # `apply_to_configmap` returns False from exactly three places — kubectl
+    # get failed, kubectl apply failed, /-/reload failed — so its boolean is
+    # the whole cluster axis, and this pins the mapping that changed.
+    @pytest.mark.parametrize("succeeded,expected", [(False, 2), (True, 0)])
+    def test_cluster_outcome_maps_to_the_documented_exit_code(
+            self, monkeypatch, succeeded, expected):
+        """#1617: this was EXIT_VIOLATION (1) while cli-reference.{md,en.md}
+        documented 2 — code and shipped table said opposite things.
+        `_lib_exitcodes` settles it: "cannot reach Prometheus / API" is
+        EXIT_CALLER_ERROR, so the CODE was wrong, not the table.
+
+        Both rows are load-bearing: without the True row, "always exit 2"
+        passes; without the False row, the regression is free.
+        """
+        monkeypatch.setattr(gar, "apply_to_configmap", lambda *a, **k: succeeded)
+        with pytest.raises(SystemExit) as exc:
+            gar._apply_mode([], [], [], "monitoring", "alertmanager-config",
+                            yes_flag=True)
+        assert exc.value.code == expected
+
+
+class TestBaseConfigIsOnlyReadByOneMode:
+    """#1616, the flag's third failure mode: accepted where nothing reads it.
+
+    Measured on origin/main: a VALID `--base-config` in plain render mode
+    produced output byte-identical to omitting it, with no warning — the
+    operator believes their `global:` is in play and it is not. Same class as
+    "supplied but unusable", different door.
+    """
+
+    def test_control_the_mode_that_reads_it_still_works(self, _tenant_dir, tmp_path):
+        p = tmp_path / "base.yaml"
+        p.write_text(yaml.dump({"global": {"smtp_smarthost": "mail.example:587"}}),
+                     encoding="utf-8")
+        r = _gar(["--config-dir", str(_tenant_dir), "--output-configmap",
+                  "--base-config", str(p)])
+        assert r.returncode == 0, r.stderr.decode("utf-8", "replace")[:400]
+        assert b"mail.example:587" in r.stdout, (
+            "the control must prove the flag is actually honoured here, or "
+            "the assertions below are about a flag nobody reads anywhere")
+
+    def test_an_unusable_value_is_caught_even_when_no_routes_are_produced(
+            self, tmp_path):
+        """⛔ The check must run BEFORE the tenant scan, not inside the mode.
+
+        This is a hole the FIRST version of the #1616 fix still had, and a test
+        found it, not review: `load_base_config` was called inside
+        `_output_configmap_mode`, so `main()` returned at "No tenants found in
+        config directory." (exit 0) without ever looking at the flag. Measured
+        with that version: a typo'd path against a thresholds-only tree gave
+        rc=0 and an empty stderr — the original defect, alive in a narrower
+        shape.
+
+        Moving the load into `main()` is what this pins. Putting it back is
+        invisible to every other test here, because their fixture DOES produce
+        routes.
+        """
+        conf_d = tmp_path / "conf.d"
+        conf_d.mkdir()
+        # Parses fine, declares thresholds, produces no routing whatsoever.
+        (conf_d / "db-a.yaml").write_text(
+            "thresholds:\n  mysql_connections:\n    warning: 100\n",
+            encoding="utf-8")
+        r = _gar(["--config-dir", str(conf_d), "--output-configmap",
+                  "--base-config", str(tmp_path / "definitely-not-here.yaml")])
+        err = (r.stdout + r.stderr).decode("utf-8", "replace")
+        assert r.returncode == EXIT_CALLER_ERROR, (
+            f"rc={r.returncode}: the flag was never checked because the run "
+            f"ended early.\n{err[:500]}")
+        assert "--base-config" in err
+
+    def test_control_no_routes_and_a_good_flag_is_still_a_clean_exit(self, tmp_path):
+        """⛔ Pairs with the test above: an empty result set must stay exit 0,
+        or that assertion is satisfied by "this tree always exits 2"."""
+        conf_d = tmp_path / "conf.d"
+        conf_d.mkdir()
+        (conf_d / "db-a.yaml").write_text(
+            "thresholds:\n  mysql_connections:\n    warning: 100\n",
+            encoding="utf-8")
+        good = tmp_path / "base.yaml"
+        good.write_text(yaml.dump({"global": {"resolve_timeout": "9m"}}),
+                        encoding="utf-8")
+        r = _gar(["--config-dir", str(conf_d), "--output-configmap",
+                  "--base-config", str(good)])
+        assert r.returncode == 0, (r.stdout + r.stderr).decode("utf-8", "replace")[:400]
+
+    @pytest.mark.parametrize("mode", _UNHONOURED_MODES, ids=[m[0] for m in _UNHONOURED_MODES])
+    def test_the_guard_runs_before_the_tenant_scan(self, tmp_path, mode):
+        """⛔ Position, not just presence.
+
+        Its sibling — the `load_base_config` call in `main()` — has a dedicated
+        before-the-scan test. This guard had none, so it could be relocated
+        behind the `No tenants found → exit 0` early return for free, which
+        resurrects the silent-ignore defect for any tree that yields no routes.
+        Every other test of this guard uses a fixture that DOES produce routes,
+        so none of them can see the move.
+        """
+        conf_d = tmp_path / "conf.d"
+        conf_d.mkdir()
+        (conf_d / "db-a.yaml").write_text(
+            "thresholds:\n  mysql_connections:\n    warning: 100\n",
+            encoding="utf-8")
+        p = tmp_path / "base.yaml"
+        p.write_text(yaml.dump({"global": {}}), encoding="utf-8")
+        _mode_id, argv = mode
+        r = _gar(["--config-dir", str(conf_d), *argv,
+                  "--base-config", str(p)], stdin=b"")
+        err = (r.stdout + r.stderr).decode("utf-8", "replace")
+        assert r.returncode == EXIT_CALLER_ERROR, (
+            f"rc={r.returncode}: the run ended before the guard was reached.\n"
+            f"{err[:500]}")
+
+    @pytest.mark.parametrize("mode", _UNHONOURED_MODES, ids=[m[0] for m in _UNHONOURED_MODES])
+    def test_the_message_does_not_prescribe_an_impossible_remedy(
+            self, _tenant_dir, tmp_path, mode):
+        """⛔ The remedy must be reachable AND effective in the mode it is given in.
+
+        Two ways it was not, both measured:
+        * under `--apply`, "Add --output-configmap" hits `error: argument
+          --output-configmap: not allowed with argument --apply` — unreachable;
+        * under `--validate`, the same advice is ACCEPTED and the run is still
+          byte-identical to omitting `--base-config`, because `--validate`
+          returns before the ConfigMap is assembled — reachable but it silently
+          reproduces #1616, which is worse than unreachable.
+
+        Only the render/dry-run modes may be told to add the flag.
+        """
+        p = tmp_path / "base.yaml"
+        p.write_text(yaml.dump({"global": {}}), encoding="utf-8")
+        mode_id, argv = mode
+        r = _gar(["--config-dir", str(_tenant_dir), *argv,
+                  "--base-config", str(p)], stdin=b"")
+        err = (r.stdout + r.stderr).decode("utf-8", "replace")
+        if mode_id == "render":
+            assert "Add --output-configmap" in err, err[:400]
+        else:
+            assert "Add --output-configmap" not in err, (
+                f"[{mode_id}] prescribes a remedy that is either forbidden by "
+                f"argparse or silently ineffective in this mode:\n{err[:400]}")
+            assert "Drop --base-config" in err, err[:400]
+
+    def test_control_the_remedy_the_render_message_gives_actually_works(
+            self, _tenant_dir, tmp_path):
+        """⛔ The point of the assertions above is not the wording — it is that
+        following the advice fixes the problem. So follow it once, and check the
+        base config is HONOURED, not merely that the run stops complaining."""
+        p = tmp_path / "base.yaml"
+        p.write_text(yaml.dump({"global": {"smtp_smarthost": "mail.example:587"}}),
+                     encoding="utf-8")
+        r = _gar(["--config-dir", str(_tenant_dir), "--output-configmap",
+                  "--base-config", str(p)])
+        assert r.returncode == 0, r.stderr.decode("utf-8", "replace")[:400]
+        assert b"mail.example:587" in r.stdout, (
+            "adding --output-configmap silenced the error without the base "
+            "config taking effect — that is the defect, not the fix")
+
+    @pytest.mark.parametrize("mode", _UNHONOURED_MODES, ids=[m[0] for m in _UNHONOURED_MODES])
+    def test_supplying_it_where_it_is_ignored_is_a_caller_error(
+            self, _tenant_dir, tmp_path, mode):
+        p = tmp_path / "base.yaml"
+        p.write_text(yaml.dump({"global": {"smtp_smarthost": "mail.example:587"}}),
+                     encoding="utf-8")
+        mode_id, argv = mode
+        r = _gar(["--config-dir", str(_tenant_dir), *argv,
+                  "--base-config", str(p)], stdin=b"")
+        err = (r.stdout + r.stderr).decode("utf-8", "replace")
+        assert r.returncode == EXIT_CALLER_ERROR, f"rc={r.returncode}\n{err[:500]}"
+        assert "--base-config" in err, (
+            f"[{mode_id}] the message must name the flag it is refusing:\n"
+            f"{err[:500]}")
+
+    def test_every_unhonoured_mode_is_still_covered(self):
+        """⛔ Anti-vacuity, and the reason is specific.
+
+        `--validate` was missing from this list for a whole round while the
+        message's own text already mentioned it, so the mode that reproduces
+        the defect when you follow the advice was the one mode never tested.
+        """
+        ids = {m[0] for m in _UNHONOURED_MODES}
+        assert ids >= {"render", "apply", "validate", "validate+output-configmap"}, (
+            f"a mode that does not honour --base-config lost its case: "
+            f"missing {sorted({'render', 'apply', 'validate', 'validate+output-configmap'} - ids)}")
 
 
 # ============================================================

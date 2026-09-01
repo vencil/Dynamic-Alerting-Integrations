@@ -95,6 +95,7 @@ EXPECTED_REEXPORTS: dict[str, tuple[str, ...]] = {
         "generate_routes",
     ),
     "_grar_render": (
+        "BaseConfigInputError",  # #1616 supplied-but-unusable --base-config
         "_apply_merged_configmap",
         "_merge_routes_receivers_inhibits",
         "_read_existing_configmap",

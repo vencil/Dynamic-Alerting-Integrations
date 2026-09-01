@@ -120,6 +120,23 @@ _CASES = [
      "validate_config.py",
      lambda c: ["--config-dir", str(c)],
      ["--policy-dsl", _MISSING]),
+    # #1616: the SIXTH carrier. `--base-config` feeds the ConfigMap that
+    # docs/integration/gitops-deployment.md Method C tells customers to
+    # `kubectl apply` / let ArgoCD sync, and a typo'd path produced output
+    # BYTE-FOR-BYTE identical to omitting the flag (measured with `cmp -s`) at
+    # exit 0 with an empty stderr — so the operator's `global:` (SMTP
+    # smarthost, Slack webhook) was silently replaced by a built-in
+    # placeholder and notifications went nowhere. `--output-configmap` is in
+    # the base argv because it is the only mode that reads the flag.
+    # ⚠️ NOT "the only carrier whose artifact reaches a cluster" — an earlier
+    # revision said that and it is false: `generate-routes --policy` changes
+    # the same emitted ConfigMap (measured, 1871 vs 1915 bytes), and its old
+    # behaviour was worse in kind — a receiver that should have been rejected
+    # is admitted, rather than a value being replaced.
+    ("generate-routes --base-config",
+     "generate_alertmanager_routes.py",
+     lambda c: ["--config-dir", str(c), "--output-configmap"],
+     ["--base-config", _MISSING]),
 ]
 
 
@@ -387,15 +404,19 @@ class TestArgvErrorIsNotDownstreamOfTheConfigTree:
 #     Its own docstring criticised "a list of names that would miss the first
 #     one it did not anticipate" while being three such lists.
 #   * A live in-tree instance it reported CLEAN. `_grar_render.load_base_config`
-#     is byte-for-byte the shape the scan hunts —
+#     WAS byte-for-byte the shape the scan hunts —
 #     `if not path or not Path(path).is_file():` — and `--base-config <typo>`
-#     silently substitutes the built-in Alertmanager `global:` for the
+#     silently substituted the built-in Alertmanager `global:` for the
 #     operator's, at exit 0, into a ConfigMap meant for `kubectl apply`. The
-#     scan skipped it because the body returns `dict(_DEFAULT_BASE_CONFIG)`, a
+#     scan skipped it because the body returned `dict(_DEFAULT_BASE_CONFIG)`, a
 #     Call rather than a benign literal. Re-measured after the withdrawal with
 #     the detector restored from git and a passing control on `_lib_io`: an
 #     11th spelling, and the only one of the eleven that was a real defect
-#     standing in the tree it was scanning. Filed as #1616.
+#     standing in the tree it was scanning.
+#     ⇒ ✅ FIXED in #1616; that carrier now has a row in `_CASES` above, so the
+#     evidence for the withdrawal no longer doubles as an open defect. ⚠️ The
+#     three cells the withdrawal costs (V7/V8/V9 — "somebody writes a NEW
+#     collapse") are unchanged: nothing here detects a fresh one.
 #   * False reds: the `and`-positive mirror rule — the obvious way to cover the
 #     forms above — was never committed, so its count cannot be re-derived from
 #     this repo. ⛔ An earlier revision of this comment said "6 sites"; blind
@@ -512,8 +533,137 @@ def test_every_measured_carrier_has_a_case():
         ("validate_config.py", ("--policy-dsl",)),
         ("generate_alertmanager_routes.py", ("--policy",)),
         ("lint_custom_rules.py", ("--policy",)),
+        # #1616 — sixth carrier.
+        ("generate_alertmanager_routes.py", ("--base-config",)),
     }
     assert measured <= carriers, (
-        f"a (tool, flag) carrier #1556 measured and fixed has no case here: "
-        f"{sorted(measured - carriers)}. Removing a carrier removes the only "
-        f"thing asserting that flag's value is honoured.")
+        f"a (tool, flag) carrier #1556/#1616 measured and fixed has no case "
+        f"here: {sorted(measured - carriers)}. Removing a carrier removes the "
+        f"only thing asserting that flag's value is honoured.")
+
+
+# ---------------------------------------------------------------------------
+# The EMPTY STRING, which is a supplied value and was read as an omitted one.
+# ---------------------------------------------------------------------------
+# ⛔ This axis existed for a whole release and no test could see it. The reason
+# is structural and worth naming: `test_every_measured_carrier_has_a_case`
+# above quantifies over CARRIERS — (tool, flag) pairs — and nothing quantified
+# over SHAPES of unusable value. `_CASES` only ever fed `_MISSING` (a path that
+# does not exist) and a comma-separated domain list, so adding a carrier was
+# guarded while adding a shape was not, and `""` was never in the vocabulary.
+#
+# Measured before the fix, on every carrier below: the tool took the
+# flag-omitted branch. For `generate-routes --base-config` the emitted ConfigMap
+# was byte-identical to omitting the flag at exit 0 with an empty stderr; for
+# `--policy` the webhook domain allowlist was simply off.
+#
+# `--base-config "$BASE_CFG"` with the variable unset is exactly this.
+_EMPTY_CARRIERS = [
+    ("validate-config --policy", "validate_config.py",
+     lambda c: ["--config-dir", str(c)], "--policy"),
+    ("validate-config --rule-packs", "validate_config.py",
+     lambda c: ["--config-dir", str(c)], "--rule-packs"),
+    ("validate-config --policy-dsl", "validate_config.py",
+     lambda c: ["--config-dir", str(c)], "--policy-dsl"),
+    ("generate-routes --policy", "generate_alertmanager_routes.py",
+     lambda c: ["--config-dir", str(c)], "--policy"),
+    ("generate-routes --base-config", "generate_alertmanager_routes.py",
+     lambda c: ["--config-dir", str(c), "--output-configmap"], "--base-config"),
+    ("lint --policy", "lint_custom_rules.py",
+     lambda c: [str(c), "--ci"], "--policy"),
+]
+
+
+@pytest.mark.parametrize("case_id,script,base,flag", _EMPTY_CARRIERS,
+                         ids=[c[0] for c in _EMPTY_CARRIERS])
+def test_an_empty_value_is_supplied_not_omitted(case_id, script, base, flag, conf_d):
+    r = _run(script, [*base(conf_d), flag, ""])
+    out = (r.stdout + r.stderr).decode("utf-8", "replace")
+    assert r.returncode == EXIT_CALLER_ERROR, (
+        f"{case_id}: `{flag} \"\"` exited {r.returncode}, not "
+        f"{EXIT_CALLER_ERROR}. An empty string is a SUPPLIED value — it is what "
+        f"an unset shell variable expands to — and treating it as omitted is "
+        f"the #1556/#1616 collapse arriving through a falsy test.\n"
+        f"⛔ Do not fix this by dropping the case.\nstdout: {out[:400]}")
+    assert flag in out, (
+        f"{case_id}: exit 2 is right but the output never names {flag}.")
+    # ⛔ And the VALUE has to be visible. Without `!r` the diagnostic for an
+    # empty value stops after the colon — `--rule-packs: not a directory: ` —
+    # which is the one shape this axis exists to test. Measured: removing the
+    # `!r` was free until this line existed.
+    assert "''" in out, (
+        f"{case_id}: the message does not show the offending value, so an "
+        f"empty one is indistinguishable from a truncated message.\n{out[:400]}")
+
+
+@pytest.mark.parametrize("case_id,script,base,flag", _EMPTY_CARRIERS,
+                         ids=[c[0] for c in _EMPTY_CARRIERS])
+def test_control_omitting_the_flag_entirely_is_not_a_caller_error(
+        case_id, script, base, flag, conf_d):
+    """⛔ Pairs with the test above. Without it, "" going red is satisfied by a
+    tool that rejects the flag unconditionally — which would break every
+    legitimate omission."""
+    r = _run(script, base(conf_d))
+    assert r.returncode != EXIT_CALLER_ERROR, (
+        f"{case_id}: omitting {flag} must stay a legitimate invocation.\n"
+        f"stderr: {r.stderr.decode('utf-8', 'replace')[:400]}")
+
+
+def test_every_path_interpolation_in_the_loaders_shows_the_value():
+    """⛔ Structural, because the per-branch messages are not all reachable.
+
+    The empty-value cases above pin `!r` on exactly one branch — "not a file" —
+    because an empty path fails `is_file()` before any other branch can run. So
+    the UTF-8 / YAML / OSError / not-a-mapping messages had `!r` that no test
+    could reach, and dropping it was measured to be free.
+
+    The property is "every message that shows this path shows it quoted", which
+    is checkable on the source without reaching each branch. It is the same
+    reason the value has to be quoted at all: a bare interpolation of `''`
+    renders as a message that stops after the colon.
+    """
+    import ast as _ast
+    targets = [
+        ("scripts/tools/ops/_grar_render.py", "load_base_config", "path"),
+        ("scripts/tools/ops/_grar_validate.py", "load_policy", "policy_path"),
+        ("scripts/tools/ops/validate_config.py", "check_policy_dsl",
+         "policy_dsl_file"),
+    ]
+    offenders = []
+    for rel, fname, var in targets:
+        src = (REPO_ROOT / rel).read_text(encoding="utf-8")
+        tree = _ast.parse(src, filename=rel)
+        fn = next(n for n in _ast.walk(tree)
+                  if isinstance(n, _ast.FunctionDef) and n.name == fname)
+        for node in _ast.walk(fn):
+            if not isinstance(node, _ast.FormattedValue):
+                continue
+            inner = node.value
+            if isinstance(inner, _ast.Name) and inner.id == var:
+                # conversion: -1 none, 114 == ord('r')
+                if node.conversion != 114:
+                    offenders.append(f"{rel}::{fname} line {node.lineno}")
+    assert not offenders, (
+        f"these messages interpolate the supplied path without !r, so an empty "
+        f"value renders as nothing at all: {offenders}")
+
+
+def test_every_carrier_is_measured_on_both_unusable_shapes():
+    """The shape axis needs its own quantifier, for the reason above.
+
+    ⛔ Compare with `test_every_measured_carrier_has_a_case`: that one asserts
+    each carrier appears SOMEWHERE. This one asserts each carrier is exercised
+    on BOTH shapes — a non-existent path and an empty string. Deleting either
+    parametrize list, or letting a new carrier land in only one of them,
+    reproduces exactly how `""` stayed invisible.
+    """
+    missing_axis = {(script, bad[0]) for _, script, _, bad in _CASES}
+    empty_axis = {(script, flag) for _, script, _, flag in _EMPTY_CARRIERS}
+    only_one = missing_axis ^ empty_axis
+    assert not only_one, (
+        f"these (tool, flag) carriers are exercised on one unusable shape but "
+        f"not the other: {sorted(only_one)}. Both lists must cover the same "
+        f"carriers, or a shape can silently stop being tested.")
+    assert len(empty_axis) >= 6, (
+        f"the empty-string axis covers {len(empty_axis)} carriers; emptying "
+        f"this list must not pass silently.")

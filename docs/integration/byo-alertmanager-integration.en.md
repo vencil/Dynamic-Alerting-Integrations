@@ -183,6 +183,8 @@ git add deploy/alertmanager-configmap.yaml && git commit -m "update AM routes"
 
 Best for: Formal GitOps workflow. The generated ConfigMap YAML is in complete `kubectl apply` format, no manual merge needed. When `--base-config` is not provided, built-in defaults are used (`resolve_timeout: 5m`, `group_by: [alertname, tenant]`, default receiver).
 
+⚠️ **From v2.10.0, "supplied but unusable" is no longer the same as "not supplied" (BREAKING, [#1616](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1616))**. The `--base-config` above is a relative path. Old behaviour: a mistyped path, a directory, an empty file, or a comment-only file all exited **0** and quietly substituted the built-in defaults — the emitted ConfigMap was **byte-for-byte identical** to one produced with no `--base-config` at all, so your `global:` (SMTP smarthost, Slack webhook) was replaced and then synced into the cluster by ArgoCD/Flux. New behaviour: **exit 2, naming the flag**. ⛔ The fix is to correct the path, not to drop `--base-config` — dropping it reproduces the old broken outcome. Also, only `--output-configmap` reads the flag (`--validate` returns before the ConfigMap is assembled), so passing it in another mode is now exit 2 rather than a silent no-op.
+
 **Mode Comparison:**
 
 | | `--apply` | `--output-configmap` |
