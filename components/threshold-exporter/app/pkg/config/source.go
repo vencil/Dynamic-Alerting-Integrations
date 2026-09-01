@@ -337,10 +337,20 @@ func ScanFromConfigSource(src ConfigSource, rootPath string) (
 		// not. So adopting the shared predicate here would move this scanner
 		// off the walker it is defined as reproducing — buying one fewer copy
 		// by creating a fresh silent divergence, in the file whose job is to
-		// not do that. The copy stays until the shared predicate and the
-		// walker are reconciled; that reconciliation changes the write plane
-		// (`internal/batchpr`, `internal/profile`) and is not this change's
-		// blast radius.
+		// not do that.
+		//
+		// ⛔ AND THIS IS NOT TWO DEFENSIBLE DESIGNS. `internal/confdname`'s own
+		// header names `tests/shared/confd_name_classification_matrix.json` as
+		// its contract, and that file defines the field as "name LOWERCASED is
+		// exactly '_defaults.yaml' or '_defaults.yml'" — ToLower semantics, the
+		// walker's. `IsDefaults` implements EqualFold, so it does not satisfy
+		// the contract it cites, and the matrix's 23 rows cannot see it (its
+		// only non-ASCII name, `İ.yaml`, is on the extension axis). Filed as
+		// issue #1670. The copy here stays until that is settled — not because
+		// two readings are equally valid, but because one of them is a known
+		// defect and this scanner must not adopt it. Reconciling it changes the
+		// write plane (`internal/batchpr`, `internal/profile`) and is not this
+		// change's blast radius.
 		lower := strings.ToLower(name)
 		if strings.HasPrefix(name, "_") {
 			if lower == "_defaults.yaml" || lower == "_defaults.yml" {
