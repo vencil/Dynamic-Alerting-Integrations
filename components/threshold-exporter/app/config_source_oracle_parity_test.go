@@ -78,6 +78,21 @@ var hiddenAxisCorpus = map[string]string{
 	// because the walker never descends there at all.
 	"sub/_defaults.yaml":    "defaults:\n  cpu_usage: 81\n",
 	".cache/_defaults.yaml": "defaults:\n  cpu_usage: 82\n",
+
+	// ⛔ A case-variant chain carrier, covering a cell where the walker is
+	// KNOWN TO BE WRONG (issue #1674). The walker's classifier folds case and
+	// files this into its `defaults` set under its original-case path, while
+	// `collectDefaultsChain` probes only the two lowercase literals — so it is
+	// a carrier that reaches nobody's chain. `ResolveEffective`,
+	// `describe_tenant.py` and `flat_scanner.go` all include it; the walker is
+	// the only excluder of four readers.
+	//
+	// It is here BECAUSE the cousin reproduces that fault faithfully, which is
+	// what parity means and is exactly what this file must keep true: when
+	// #1674 is fixed, a fix applied to only one of the two turns this test red.
+	// ⛔ Its presence is not an endorsement — the corpus comment above says
+	// plainly that this cell is a known defect on both sides.
+	"sub/_DEFAULTS.YML": "defaults:\n  mem_usage: 70\n",
 }
 
 // materializeOnDisk writes the corpus under a fresh temp dir and returns it.
@@ -164,10 +179,26 @@ func sortedTenantIDs(m map[string]string) []string {
 }
 
 // TestScanFromConfigSourceMatchesOracleOnHiddenPaths is the parity assertion.
-// It deliberately states no expected answer of its own: whatever the production
-// walker does with these six names IS the contract, and the in-memory cousin
-// has to reproduce it. Hard-coding the expectation here would let both sides
-// drift together and still pass.
+// It deliberately states no expected answer of its own: it asserts that the
+// in-memory cousin reproduces whatever the production walker does with this
+// corpus. Hard-coding an expectation here would let one side be edited to match
+// a wrong idea of the answer and still pass.
+//
+// ⛔ "REPRODUCES THE WALKER" IS NOT "IS CORRECT", and an earlier version of this
+// comment blurred the two by calling the walker's behaviour "the contract". It
+// is the contract *for this cousin* — the cousin exists to be the walker's
+// in-memory twin — but the walker is not thereby right. Measured since:
+// `scanDirHierarchical` contradicts itself on a case-variant carrier
+// (`sub/_DEFAULTS.YML` enters its `defaults` set and no tenant's chain, because
+// `collectDefaultsChain` probes the two lowercase literals), and on that cell
+// `ResolveEffective`, `describe_tenant.py` and `flat_scanner.go` all disagree
+// with it — the walker is one of four readers and the only excluder. Filed as
+// issue #1674.
+//
+// ⇒ This test's job is to stop the cousin from drifting away from the walker.
+// It is NOT evidence that the walker is right, and it must not be cited as
+// such. Where the walker is wrong, the fix is a joint one — both sides move
+// together, and this test correctly stays green through that.
 func TestScanFromConfigSourceMatchesOracleOnHiddenPaths(t *testing.T) {
 	t.Parallel()
 
