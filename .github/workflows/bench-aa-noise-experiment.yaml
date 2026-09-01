@@ -31,11 +31,19 @@
 # ~1.7pp", never as "the VM was proven to be the cause" or "pairing improved
 # by 4.4×".
 #
-# The archived per-round data, the estimator and a negative validation are in
-# docs/internal/audit-reports/bench-aa-realrunner-2026-08/ — recovered from that
-# job's log before the 90-day retention expires, digest-verified per file.
-# Until 2026-09-01 the real-runner figure lived only in prose; see that
-# README's 「1.61% 對不上」 section for what the earlier quoted number was.
+# The per-round data, the estimator and a negative validation are archived on
+# PR #1669, NOT in this tree — the owner ruled that one-off, date-scoped audit
+# data does not earn a permanent directory:
+#
+#   data    https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1669#issuecomment-5495600985
+#   method  https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1669#issuecomment-5495613772
+#
+# Recovered from that job's log before the 90-day retention expires (job logs
+# die 2026-11-13; the artifact's 30-day window already closed and its host is
+# proxy-blocked here), digest-verified per file against the digests the RUNNER
+# printed. ⚠️ After 2026-11-13 those two comments are the ONLY copy.
+# Until 2026-09-01 the real-runner figure lived only in prose; the method
+# comment's 「1.61% 對不上」 section says what the earlier quoted number was.
 #
 # ⚠️ It measures nothing about this repo's code. Both sides run the SAME
 # compiled binary, so the true effect is exactly 0% and every deviation is

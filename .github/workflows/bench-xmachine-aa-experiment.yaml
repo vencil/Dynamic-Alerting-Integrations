@@ -13,8 +13,9 @@
 # The earlier run 31864272536 cannot be ruled out as the source — its per-round
 # data predates the emit-to-log step and its artifact is unreachable — so this
 # is a correction of an unsourceable number, not a proven arithmetic error.
-# Data, estimator and negative validation:
-# docs/internal/audit-reports/bench-aa-realrunner-2026-08/
+# Data, estimator and negative validation are on PR #1669, not in this tree:
+#   data    https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1669#issuecomment-5495600985
+#   method  https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1669#issuecomment-5495613772
 #
 # But that workflow CANNOT answer the question ADR-032 actually rests on, and
 # not by oversight: with both sides on the same machine, the machine-identity
