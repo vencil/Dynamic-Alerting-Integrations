@@ -101,9 +101,22 @@ func (w *Writer) WritePR(ctx context.Context, tenantID, authorEmail, yamlContent
 		return nil, fmt.Errorf("create branch: %w", err)
 	}
 
-	// Step 4: write file — filePath was resolved up front (#1673): the
-	// tenant's existing file, whatever its spelling, never a second file
-	// beside it.
+	// Step 3b: RE-resolve the tenant's file now that the feature branch is
+	// checked out (#1673). The path resolved at Step 1 describes the tree as
+	// it was BEFORE checkoutBaseClean + resolveFreshBaseRef; if the fresh base
+	// carries a rename (`db-a.yml` → `db-a.yaml`, or the reverse), writing the
+	// pre-checkout path would recreate the old spelling beside the new one —
+	// the exact duplicate this change exists to prevent. WritePRBatch already
+	// resolves inside its post-checkout loop; this brings the single-tenant
+	// path in line.
+	filePath, err = w.tenantFilePath(tenantID)
+	if err != nil {
+		w.abortFeatureBranch(base, branchName)
+		return nil, err
+	}
+
+	// Step 4: write file — the tenant's existing file on THIS branch, whatever
+	// its spelling, never a second file beside it.
 	if err := os.WriteFile(filePath, []byte(yamlContent), 0644); err != nil {
 		// Rollback: force back to a clean base (the file we just wrote is now a
 		// dirty tracked change) + drop the branch.

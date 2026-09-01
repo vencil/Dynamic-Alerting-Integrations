@@ -88,3 +88,59 @@ func TestDiff_ReadsTheTenantsActualFile(t *testing.T) {
 		t.Fatalf("Diff did not read the tenant's .yml file — the old value is absent, so this is a new-file diff, not a modification. diff=%q", diff)
 	}
 }
+
+// CodeRabbit finding on PR #1682: WritePR resolved the tenant's file BEFORE
+// checkoutBaseClean + resolveFreshBaseRef, then wrote that pre-checkout path
+// after the branch was cut. When the fresh base carries a rename, the write
+// recreates the OLD spelling beside the new one — the exact duplicate #1673
+// exists to prevent, reintroduced by the very change that fixes it.
+//
+// Scenario: the tenant ships as `db-a.yml`; upstream renames it to
+// `db-a.yaml` and merges; the writer's long-lived clone is still on the stale
+// base when the PR is opened.
+func TestWritePR_ReResolvesAfterFreshBaseRename(t *testing.T) {
+	remoteDir := initBareRemoteOnMain(t)
+
+	authorDir := t.TempDir()
+	gitClone(t, remoteDir, authorDir)
+	gitRun(t, authorDir, "config", "user.email", "a@a.com")
+	gitRun(t, authorDir, "config", "user.name", "A")
+	writeFileInDir(t, authorDir, "db-a.yml", validTenantYAML)
+	gitRun(t, authorDir, "add", "-A")
+	gitRun(t, authorDir, "commit", "-m", "seed db-a as .yml")
+	gitRun(t, authorDir, "push", "origin", "main")
+
+	// The writer's clone: fetched once, then goes stale.
+	dir := t.TempDir()
+	gitClone(t, remoteDir, dir)
+	gitRun(t, dir, "config", "user.email", "t@t.com")
+	gitRun(t, dir, "config", "user.name", "T")
+
+	// Upstream renames the tenant's file and merges. The writer's local base
+	// still has the OLD spelling.
+	gitRun(t, authorDir, "mv", "db-a.yml", "db-a.yaml")
+	gitRun(t, authorDir, "commit", "-m", "rename db-a.yml -> db-a.yaml")
+	gitRun(t, authorDir, "push", "origin", "main")
+
+	w := NewWriter(dir, dir)
+	res, err := w.WritePR(context.Background(), "db-a", "bob@example.com",
+		"tenants:\n  db-a:\n    _silent_mode: \"critical\"\n")
+	if err != nil {
+		t.Fatalf("WritePR: %v", err)
+	}
+
+	// The branch must carry ONE file for this tenant — the fresh base's
+	// spelling — and must not have resurrected the pre-rename name.
+	files := gitOut(t, dir, "ls-tree", "--name-only", "refs/remotes/origin/"+res.BranchName)
+	if !strings.Contains(files, "db-a.yaml") {
+		t.Errorf("branch does not contain db-a.yaml; tree = %q", files)
+	}
+	if strings.Contains(files, "db-a.yml\n") || strings.HasSuffix(files, "db-a.yml") {
+		t.Errorf("branch resurrected the pre-rename db-a.yml — WritePR wrote a stale path; tree = %q", files)
+	}
+	// And the only delta vs the fresh base is that one file.
+	diff := gitOut(t, dir, "diff", "--name-only", "origin/main", "refs/remotes/origin/"+res.BranchName)
+	if diff != "db-a.yaml" {
+		t.Errorf("branch vs origin/main changed files = %q, want only db-a.yaml", diff)
+	}
+}

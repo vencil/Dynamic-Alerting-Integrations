@@ -126,3 +126,38 @@ func TestGetTenant_UppercaseExtensionIsReachable(t *testing.T) {
 		t.Errorf("GetTenant did not return the .YAML file's content; body=%s", w.Body.String())
 	}
 }
+
+// The duplicate claim must be made on the FILENAME, before the file is read or
+// parsed. A malformed `<id>.yaml` used to hit the yaml.Unmarshal `continue`
+// without ever reserving its id, so the valid `<id>.yml` beside it was listed
+// as a perfectly ordinary tenant — while confd.ResolveTenantFile, which matches
+// names and never contents, answered 409 for that same tenant. That is exactly
+// the two-planes-disagree defect #1673 exists to close, reintroduced through
+// the back door.
+func TestTenantFileSpelling_BrokenSiblingStillClaimsTheID(t *testing.T) {
+	t.Parallel()
+	dir := setupConfigDir(t, map[string]string{
+		spellingTenant + ".yaml": "tenants: [this is not: valid yaml\n",
+		spellingTenant + ".yml":  spellingBody("FROM-YML"),
+	})
+
+	t.Run("listing refuses instead of silently returning the readable one", func(t *testing.T) {
+		got, err := loadAllTenants(dir)
+		if err == nil {
+			t.Fatalf("loadAllTenants returned %+v and no error; the broken sibling must still claim %q", got, spellingTenant)
+		}
+		if !strings.Contains(err.Error(), spellingTenant) {
+			t.Errorf("error does not name the tenant: %v", err)
+		}
+	})
+
+	t.Run("read-by-id agrees with the listing", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		GetTenant(&Deps{ConfigDir: dir})(w,
+			newRequestWithChiParam("GET", "/api/v1/tenants/"+spellingTenant, "id", spellingTenant, nil))
+
+		if w.Code != http.StatusConflict {
+			t.Fatalf("GetTenant status = %d, want 409; body=%s", w.Code, w.Body.String())
+		}
+	})
+}
