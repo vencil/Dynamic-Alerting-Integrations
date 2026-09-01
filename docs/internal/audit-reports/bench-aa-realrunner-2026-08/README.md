@@ -76,7 +76,7 @@ python3 docs/internal/audit-reports/bench-aa-realrunner-2026-08/selftest.py
 
 ## ⚠️ 1.61% 對不上，而對不上的方式是有意義的
 
-**四支池化是 1.67pp，不是 1.61pp。** 為了確認差異不是我這條管線算錯，先做一件事：同一個檔案在量測迴圈的 `Alternate which side goes first` 註解裡，還對**這個 run** 具名下了幾個宣稱（順序偏差）。用 log 形式估計量重算，三個宣稱**逐位對上**：
+**四支池化是 1.67pp，不是 1.61pp。** 為了確認差異不是我這條管線算錯，先做一件事：同一個檔案在量測迴圈的 `Alternate which side goes first` 註解裡，還對**這個 run** 具名下了幾個宣稱（順序偏差）。用 log 形式估計量重算，下表**五項逐位對上**（`reproduce.py` 逐項印出，任何一項不符即 `exit 3`）：
 
 | 檔頭宣稱 | 本目錄重算 |
 |---|---|

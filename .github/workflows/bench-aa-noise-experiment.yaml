@@ -24,10 +24,12 @@
 #   pooled paired residual rSD 1.67pp over n=48   (worst single bench 2.40pp)
 #   1 of those 48 comparisons exceeded the 5% floor, at 6.32%
 #
-# So the local VM WAS the limiting factor: ~7.4% there, 1.67pp here.
-# ⚠️ Same experiment, but NOT a controlled comparison of the two: machine,
-# count and benchtime all differ, so read it as "on a real runner the residual
-# is ~1.7pp", not as "pairing improved by 4.4×".
+# This is CONSISTENT WITH the local VM having been the limiting factor
+# (~7.4% there, 1.67pp here) but does not establish it: same experiment, yet
+# NOT a controlled comparison — machine, count and benchtime all differ, so
+# three things moved at once. Read it as "on a real runner the residual is
+# ~1.7pp", never as "the VM was proven to be the cause" or "pairing improved
+# by 4.4×".
 #
 # The archived per-round data, the estimator and a negative validation are in
 # docs/internal/audit-reports/bench-aa-realrunner-2026-08/ — recovered from that

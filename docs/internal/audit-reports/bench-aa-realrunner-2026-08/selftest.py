@@ -47,7 +47,12 @@ def scaled(per, factor):
 
 
 def main():
-    per, _ = rep.load()
+    # Verify the SHIPPED archive before loading it. Case 4 below only proves
+    # the gate rejects a separately corrupted COPY; without this line a tamper
+    # to the real raw/ would leave every case passing, because Cases 1-3 are
+    # relative to whatever bytes happen to be there.
+    names = rep.verify()
+    per, _ = rep.load(names)
 
     print("Case 1 -- plant a known +8% effect on side B; the estimator must find it.")
     print("         Checked as a SHIFT off the measured baseline, not against +8.00%")
@@ -109,6 +114,35 @@ def main():
                               capture_output=True, text=True)
         check("missing file -> exit 2", proc.returncode == 2,
               f"exit {proc.returncode} (want 2)")
+
+        # An UNLISTED file is the direction that is easy to forget, and it was
+        # measured to slip through an earlier version of verify(): 25 files
+        # parsed, a 13th round in the output, "all SHA-256 verified" printed,
+        # exit 0. Reported by CodeRabbit on PR #1669 and reproduced before fixing.
+        shutil.copytree(HERE, dst + "3", ignore=shutil.ignore_patterns("__pycache__"))
+        shutil.copy(os.path.join(dst + "3", "raw", "r1_A.txt"),
+                    os.path.join(dst + "3", "raw", "r13_A.txt"))
+        proc = subprocess.run([sys.executable, os.path.join(dst + "3", "reproduce.py")],
+                              capture_output=True, text=True)
+        check("file not in the manifest -> exit 2", proc.returncode == 2,
+              f"exit {proc.returncode} (want 2)")
+        check("unlisted file -> named in the error", "r13_A.txt" in proc.stderr,
+              "stderr names r13_A.txt" if "r13_A.txt" in proc.stderr
+              else "stderr does not name it")
+        check("unlisted file -> no 13th round reported",
+              "1..13" not in proc.stdout,
+              "no 1..13 in stdout" if "1..13" not in proc.stdout
+              else "stdout reported a 13th round")
+
+        # A cross-check that DIFFs must fail loudly, not print DIFF and exit 0:
+        # the section is the archive's identity proof.
+        shutil.copytree(HERE, dst + "4", ignore=shutil.ignore_patterns("__pycache__"))
+        rp = os.path.join(dst + "4", "reproduce.py")
+        src = open(rp, encoding="utf-8").read().replace('"0.395"', '"9.999"')
+        open(rp, "w", encoding="utf-8").write(src)
+        proc = subprocess.run([sys.executable, rp], capture_output=True, text=True)
+        check("cross-check difference -> non-zero exit", proc.returncode == 3,
+              f"exit {proc.returncode} (want 3)")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

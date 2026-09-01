@@ -42,7 +42,18 @@ ESTIMATORS = {
 
 
 def verify():
-    """Digest-check every raw file against the digest the runner printed."""
+    """Digest-check the archive against the digests the runner printed.
+
+    The manifest is AUTHORITATIVE in both directions, and the second direction
+    is the one that is easy to leave out: checking only that every listed file
+    verifies leaves a file that is present in raw/ but absent from the manifest
+    completely unchecked -- and load() would still read it into the statistics.
+    An unlisted r13_A.txt was measured to do exactly that: 25 files parsed, a
+    13th round in the output, and "all SHA-256 verified" printed above it, exit
+    0. So an extra file is a hard error, not a warning.
+
+    Returns the verified file names; load() reads only those.
+    """
     want = {}
     with open(os.path.join(HERE, "raw_digests.csv"), encoding="utf-8") as fh:
         for row in csv.DictReader(fh):
@@ -51,23 +62,31 @@ def verify():
     for name, digest in sorted(want.items()):
         path = os.path.join(HERE, "raw", name)
         if not os.path.exists(path):
-            bad.append((name, "MISSING"))
+            bad.append((name, "MISSING", digest))
             continue
         got = hashlib.sha256(open(path, "rb").read()).hexdigest()
         if got != digest:
-            bad.append((name, got))
+            bad.append((name, got, digest))
+    on_disk = {n for n in os.listdir(os.path.join(HERE, "raw")) if n.endswith(".txt")}
+    for name in sorted(on_disk - set(want)):
+        bad.append((name, "NOT IN MANIFEST", "-"))
     if bad:
-        print(f"DIGEST MISMATCH in {len(bad)} file(s):", file=sys.stderr)
-        for name, got in bad:
-            print(f"  {name}: got {got} want {want[name]}", file=sys.stderr)
+        print(f"ARCHIVE VERIFICATION FAILED for {len(bad)} file(s):", file=sys.stderr)
+        for name, got, digest in bad:
+            print(f"  {name}: got {got} want {digest}", file=sys.stderr)
         sys.exit(2)
-    return len(want)
+    return sorted(want)
 
 
-def load():
-    """-> {(bench, round): {side: [ns_op, ...]}}, plus the identity headers."""
+def load(names=None):
+    """-> {(bench, round): {side: [ns_op, ...]}}, plus the identity headers.
+
+    `names` is the verified list from verify(). Defaulting it to a directory
+    listing would reopen the hole verify() closes, so the default re-verifies
+    rather than globbing.
+    """
     per, ident = {}, {}
-    for name in sorted(os.listdir(os.path.join(HERE, "raw"))):
+    for name in (verify() if names is None else names):
         stem = name[:-4]
         rnd, side = re.match(r"r(\d+)_([AB])$", stem).groups()
         text = open(os.path.join(HERE, "raw", name), encoding="utf-8").read()
@@ -98,8 +117,9 @@ def paired(per, form):
 
 
 def main():
-    n = verify()
-    per, ident = load()
+    names = verify()
+    per, ident = load(names)
+    n = len(names)
 
     # Print what is under test BEFORE any comparison, so a number computed on
     # the wrong tree is visible as such rather than inferred to be right.
@@ -161,19 +181,32 @@ def main():
         ("|t| = 1.59", f"{tstat:.2f}", "1.59"),
         ("sign split 23/48", f"{sum(1 for x in pooled if x > 0)}/48", "23/48"),
     ]
-    for label, got, want in checks:
-        print(f"  {'OK ' if got == want else 'DIFF'}  {label:<38} "
-              f"computed {got:>7}  quoted {want}")
     lean = {b: st.mean([v for (bb, _), v in paired(per, "log").items() if bb == b])
             for b in benches}
     same = len({x > 0 for x in lean.values()}) == 1
-    print(f"  {'OK ' if same else 'DIFF'}  {'all four benches leaned the same way':<38} "
-          f"computed {'yes' if same else 'no':>7}  quoted yes")
+    checks.append(("all four benches leaned the same way",
+                   "yes" if same else "no", "yes"))
+    differing = []
+    for label, got, want in checks:
+        ok = got == want
+        if not ok:
+            differing.append(label)
+        print(f"  {'OK ' if ok else 'DIFF'}  {label:<38} "
+              f"computed {got:>7}  quoted {want}")
+    # Printing DIFF and exiting 0 would make this section decorative: a caller
+    # (or CI) reading only the exit code would treat "this archive is NOT that
+    # run's data" as success. The cross-check is the archive's identity proof,
+    # so a difference is a hard failure.
+    if differing:
+        print(f"\nCROSS-CHECK FAILED for {len(differing)} claim(s): "
+              f"{', '.join(differing)}", file=sys.stderr)
+        print("This archive does not reproduce the figures the workflow header "
+              "attributes to this run.", file=sys.stderr)
+        sys.exit(3)
 
 
 def emit_csv():
-    verify()
-    per, _ = load()
+    per, _ = load(verify())
     out = csv.writer(sys.stdout)
     out.writerow(["bench", "round", "side", "sample_index", "ns_per_op"])
     for (bench, rnd) in sorted(per):
