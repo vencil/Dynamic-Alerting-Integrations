@@ -19,7 +19,10 @@ package config
 // production change that would break it: reverting `relToRoot` to a bare
 // prefix trim, or dropping the `!inRoot` arm at the call site.
 
-import "testing"
+import (
+	"strconv"
+	"testing"
+)
 
 func TestRelToRootRequiresADirectoryBoundary(t *testing.T) {
 	t.Parallel()
@@ -47,6 +50,19 @@ func TestRelToRootRequiresADirectoryBoundary(t *testing.T) {
 		{"root is slash", "/.git/a.yaml", "/", ".git/a.yaml", true},
 		{"root is slash, plain file", "/a.yaml", "/", "a.yaml", true},
 
+		// ⛔ `.` is the second bare root. path.Clean maps both "" and "." to it,
+		// and a walker rooted there emits keys with no "./" prefix at all
+		// (filepath.Join(".", x) == x), so a bare relative key IS under it.
+		{"relative root, bare key", "a.yaml", ".", "a.yaml", true},
+		{"relative root, nested key", "sub/b.yaml", ".", "sub/b.yaml", true},
+		{"relative root, dotted key", "./a.yaml", ".", "a.yaml", true},
+		{"relative root, hidden below", ".git/c.yaml", ".", ".git/c.yaml", true},
+		{"absolute key is not under a relative root", "/abs/a.yaml", ".", "", false},
+		// The not-inside arms must all agree on their rel: empty. Otherwise a
+		// caller that reads rel before checking inside gets a usable-looking
+		// value for a path that is not there.
+		{"relative key is not under the filesystem root", "rel/a.yaml", "/", "", false},
+
 		// ⛔ The root's OWN dot segments must not leak into `rel`. The walker
 		// never prunes its own starting point, so a source rooted at
 		// `.config/conf.d` must yield its whole tree — see
@@ -63,7 +79,11 @@ func TestRelToRootRequiresADirectoryBoundary(t *testing.T) {
 			if inside != tc.wantInside {
 				t.Fatalf("relToRoot(%q, %q) inside = %v, want %v", tc.p, tc.root, inside, tc.wantInside)
 			}
-			if inside && rel != tc.wantRel {
+			// ⛔ Compared unconditionally, including when inside is false. Every
+			// not-inside arm must return an EMPTY rel: a caller that reads rel
+			// before checking inside would otherwise get a usable-looking
+			// relative path for a file that is not under the root at all.
+			if rel != tc.wantRel {
 				t.Errorf("relToRoot(%q, %q) rel = %q, want %q", tc.p, tc.root, rel, tc.wantRel)
 			}
 		})
@@ -179,6 +199,43 @@ func TestDotPrefixedRootYieldsItsWholeTree(t *testing.T) {
 	if _, ok := defaults[dotRoot+"/_defaults.yaml"]; !ok {
 		t.Errorf("the chain carrier under a dot-prefixed root was not classified as "+
 			"defaults (got %v)", defaults)
+	}
+}
+
+// TestRelativeRootStillScansItsTree pins the second bare root end-to-end.
+//
+// ⛔ This case is a REGRESSION GUARD, not a new capability: before the boundary
+// check existed, `root="."` with relative keys classified correctly, and adding
+// the boundary check broke it — silently, with err=nil and an empty result.
+// `path.Clean("")` also lands on `"."`, so a caller that simply omits rootPath
+// reaches this path.
+func TestRelativeRootStillScansItsTree(t *testing.T) {
+	t.Parallel()
+
+	for _, root := range []string{".", ""} {
+		t.Run("root="+strconv.Quote(root), func(t *testing.T) {
+			t.Parallel()
+			src := offRootSource{
+				"a.yaml":      []byte("tenants:\n  a:\n    x: 1\n"),
+				"sub/b.yaml":  []byte("tenants:\n  b:\n    x: 2\n"),
+				".git/c.yaml": []byte("tenants:\n  c:\n    x: 3\n"),
+			}
+			tenants, _, _, _, err := ScanFromConfigSource(src, root)
+			if err != nil {
+				t.Fatalf("ScanFromConfigSource(src, %q): %v", root, err)
+			}
+			for _, want := range []string{"a", "b"} {
+				if _, ok := tenants[want]; !ok {
+					t.Errorf("tenant %q missing under root %q — a walker rooted there "+
+						"emits keys with no \"./\" prefix and would have found it (got %v)",
+						want, root, tenants)
+				}
+			}
+			if p, ok := tenants["c"]; ok {
+				t.Errorf("tenant \"c\" registered from %q — `.git` is hidden below the "+
+					"root and must still be pruned", p)
+			}
+		})
 	}
 }
 

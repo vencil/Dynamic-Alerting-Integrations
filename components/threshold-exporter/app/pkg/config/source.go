@@ -168,13 +168,40 @@ func hasHiddenSegment(rel string) bool {
 // "future disk-backed source"). A predicate that returns a confident wrong
 // answer off its domain is the seed this whole family grows from, so the check
 // lives here too rather than being assumed.
+// ⛔ `"/"` IS NOT THE ONLY ROOT THAT CONTRIBUTES NO LEADING SEGMENT. `path.Clean`
+// maps BOTH `""` and `"."` to `"."`, and a walker rooted there emits keys with no
+// `./` prefix at all (`filepath.Join(".", x) == x`). An earlier version of this
+// function special-cased `"/"` and let `"."` fall through to the `root+"/"` arm,
+// which rejected every relative key — measured, on a corpus the previous
+// implementation classified CORRECTLY:
+//
+//	root="."  before: tenants=map[a:a.yaml b:sub/b.yaml]   (matches a walker rooted there)
+//	root="."  after:  tenants=map[]  hashes=0  err=<nil>   (a silent empty scan)
+//
+// ⛔ Silent is the operative word: no error, just nothing. Adding a boundary
+// check to stop one confident wrong answer had produced a different confident
+// wrong answer one root-shape over — which is the family reproducing inside its
+// own fix, so the bare-root cases are enumerated rather than pattern-matched.
 func relToRoot(p, root string) (rel string, inside bool) {
 	if p == root {
 		return "", true
 	}
-	if root == "/" {
-		// path.Clean leaves "/" as the one root with a trailing separator.
-		return strings.TrimPrefix(p, "/"), strings.HasPrefix(p, "/")
+	switch root {
+	case "/":
+		if !strings.HasPrefix(p, "/") {
+			return "", false
+		}
+		return p[1:], true
+	case ".":
+		// Both `path.Clean("")` and `path.Clean(".")` land here.
+		if strings.HasPrefix(p, "./") {
+			return p[2:], true
+		}
+		// An absolute key is not under a relative root.
+		if strings.HasPrefix(p, "/") {
+			return "", false
+		}
+		return p, true
 	}
 	if !strings.HasPrefix(p, root+"/") {
 		return "", false
