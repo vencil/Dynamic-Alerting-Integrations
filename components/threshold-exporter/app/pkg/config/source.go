@@ -103,7 +103,29 @@ func (s *InMemoryConfigSource) YAMLFiles(rootPath string) (map[string][]byte, er
 	out := make(map[string][]byte, len(s.files))
 	for p, b := range s.files {
 		clean := path.Clean(p)
-		if clean != root && !strings.HasPrefix(clean, root+"/") {
+		// ⛔ ONE copy of the root-boundary rule, shared with the classifier in
+		// ScanFromConfigSource. This filter used to be a second hand-written
+		// copy (`clean != root && !strings.HasPrefix(clean, root+"/")`) and the
+		// two diverged exactly where a fix had been applied to only one of
+		// them: at the bare roots. Measured, with the boundary fix in
+		// `relToRoot` and this line still hand-written:
+		//
+		//	root="."  YAMLFiles=0 files -> tenants=map[] hashes=0 err=<nil>
+		//	root=""   (path.Clean -> ".")  same
+		//	root="/"  same
+		//
+		// — a silent empty scan through the ONLY production source shape,
+		// while the same corpus through a non-filtering source classified
+		// correctly. `root+"/"` is `"//"` for the filesystem root and never
+		// matches; for `"."` the keys have already had their `./` stripped by
+		// path.Clean, so it never matches either.
+		//
+		// ⛔ Only the BOUNDARY half is shared. This method deliberately still
+		// returns hidden files — `TestInMemoryConfigSource_FiltersByRoot` pins
+		// that, and the scan layer is where dot-pruning belongs (it mirrors
+		// WalkDir yielding the entry and the visitor filtering it). That is why
+		// `relToRoot` and `hasHiddenSegment` are two functions and not one.
+		if _, inside := relToRoot(clean, root); !inside {
 			continue
 		}
 		lower := strings.ToLower(path.Base(clean))
@@ -141,22 +163,12 @@ func (s *InMemoryConfigSource) YAMLFiles(rootPath string) (map[string][]byte, er
 // deliberately does not import it; see the note on the defaults comparison in
 // ScanFromConfigSource for why that shared predicate is not a drop-in here.
 func hasHiddenSegment(rel string) bool {
-	if rel == "" {
-		// `rel` is the root itself. The walker would be looking at its own
-		// starting point, which it never prunes.
-		//
-		// ⛔ THIS BRANCH IS NOT LOAD-BEARING — it states intent, it does not
-		// enforce it. Measured in Go: `strings.Split("", "/")` returns
-		// `[]string{""}` (length 1, not an empty slice), and
-		// `strings.HasPrefix("", ".")` is false, so deleting this branch
-		// produces the identical answer by falling through the loop. A
-		// mutation pass found exactly that: removing it is the one mutant of
-		// nineteen that survives, and it survives because it is EQUIVALENT,
-		// not because a guard is missing. Said out loud because a comment
-		// that lets a reader believe an inert branch is holding something up
-		// is the same defect class this file exists to fix.
-		return false
-	}
+	// `rel == ""` (the root itself, which the walker never prunes) needs no
+	// branch: `strings.Split("", "/")` is `[]string{""}`, and `""` is not
+	// dot-prefixed, so it falls through to false. An explicit early return
+	// here was measured to be an equivalent mutant — inert code that reads
+	// like a guard is the defect class this file exists to fix, so it is gone
+	// rather than annotated.
 	for _, seg := range strings.Split(rel, "/") {
 		if strings.HasPrefix(seg, ".") {
 			return true
@@ -177,14 +189,19 @@ func hasHiddenSegment(rel string) bool {
 //	p="/other/.git/a.yaml"  root="/sim"  -> "hidden" (true)   // not even under root
 //	p="/simulate/a.yaml"    root="/sim"  -> rel "ulate/a.yaml" // a fabricated segment
 //
-// ⛔ Nothing in-tree could reach either case, because
-// `InMemoryConfigSource.YAMLFiles` already filters on `clean == root ||
-// HasPrefix(clean, root+"/")`. That is exactly the problem: the classifier's
-// correctness rested on a caller doing the check, while `ConfigSource` is a
-// PUBLIC interface whose doc does not require it (it even anticipates a
-// "future disk-backed source"). A predicate that returns a confident wrong
-// answer off its domain is the seed this whole family grows from, so the check
-// lives here too rather than being assumed.
+// ⛔ THIS FUNCTION IS THE ONLY COPY OF THE BOUNDARY RULE, and it took a fourth
+// round of review to get there. `InMemoryConfigSource.YAMLFiles` used to
+// hand-write the same judgement as `clean == root || HasPrefix(clean,
+// root+"/")`. Two copies, and the fix for the bare roots landed in this one
+// only — so the production source shape (`NewInMemoryConfigSource` +
+// `ScanFromConfigSource`) went on returning `tenants=map[] err=<nil>` at
+// `root="."`, `""` and `"/"` while the fix was reported as done. The tests
+// written for that fix all drove a non-filtering source and so never touched
+// the copy that still had the bug.
+//
+// ⇒ One tree, two hand-written rules, one of them fixed, silently disagreeing,
+// with the test pinned to the wrong path. That is #1339 itself, produced inside
+// a change whose subject is #1339. `YAMLFiles` now calls this function.
 // ⛔ `"/"` IS NOT THE ONLY ROOT THAT CONTRIBUTES NO LEADING SEGMENT. `path.Clean`
 // maps BOTH `""` and `"."` to `"."`, and a walker rooted there emits keys with no
 // `./` prefix at all (`filepath.Join(".", x) == x`). An earlier version of this

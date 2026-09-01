@@ -169,15 +169,10 @@ func TestScanRejectsOffRootPathsFromASourceThatDoesNotFilter(t *testing.T) {
 // cannot see it; only driving the public entry point with a dot-prefixed root
 // can.
 //
-// ⛔ EXACTLY WHAT WAS MEASURED, because an earlier version of this comment
-// overstated it. Substituting `p` for `rel` and changing NOTHING else does not
-// compile — `rel` becomes declared-and-not-used (`go build ./...` rc=1). The
-// variant that survives silently needs a second edit that discards `rel`
-// (`_, inRoot :=`, or `_ = rel`). With that variant the entire suite stayed
-// green (`go test ./... -count=1` rc=0) while this scenario returned an empty
-// tenant map. So the compiler catches the one-character version; it is the
-// tidy-up-the-unused-variable version that this test exists for. Recorded at
-// this length because "measured" has to name the thing actually run.
+// ⛔ Substituting `p` for `rel` and changing nothing else does not compile
+// (`rel` becomes declared-and-not-used). The variant this test exists for is
+// the one that tidies the now-unused variable away — measured, that one left
+// the whole suite green while this scenario returned an empty tenant map.
 func TestDotPrefixedRootYieldsItsWholeTree(t *testing.T) {
 	t.Parallel()
 
@@ -242,6 +237,78 @@ func TestRelativeRootStillScansItsTree(t *testing.T) {
 			if p, ok := tenants["c"]; ok {
 				t.Errorf("tenant \"c\" registered from %q — `.git` is hidden below the "+
 					"root and must still be pruned", p)
+			}
+		})
+	}
+}
+
+// TestProductionSourceShapeScansAtBareRoots drives the combination that
+// actually ships — `NewInMemoryConfigSource` (which filters by root) fed to
+// `ScanFromConfigSource` — rather than the non-filtering test double.
+//
+// ⛔ WHY IT EXISTS, AND WHY ITS ABSENCE WAS THE WHOLE PROBLEM. The bare-root
+// bug was first fixed in `relToRoot` alone, while `YAMLFiles` still carried its
+// own hand-written copy of the boundary rule. Every test written for that fix
+// used `offRootSource`, which bypasses `YAMLFiles` entirely — so they all went
+// green over a production path that was still returning an empty scan:
+//
+//	root="."  YAMLFiles=0 files -> tenants=map[] hashes=0 err=<nil>
+//
+// A test that exercises the fix through a shape production never takes is not
+// a guard, and this repo has paid for that lesson before under the name "only
+// verifying the helper". This one goes through both copies at once, so it can
+// only pass if they agree.
+func TestProductionSourceShapeScansAtBareRoots(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		root  string
+		files map[string][]byte
+	}{
+		{".", map[string][]byte{
+			"a.yaml":      []byte("tenants:\n  a:\n    x: 1\n"),
+			"sub/b.yaml":  []byte("tenants:\n  b:\n    x: 2\n"),
+			".git/c.yaml": []byte("tenants:\n  c:\n    x: 3\n"),
+		}},
+		{"", map[string][]byte{
+			"a.yaml":     []byte("tenants:\n  a:\n    x: 1\n"),
+			"sub/b.yaml": []byte("tenants:\n  b:\n    x: 2\n"),
+		}},
+		{"/", map[string][]byte{
+			"/a.yaml":     []byte("tenants:\n  a:\n    x: 1\n"),
+			"/sub/b.yaml": []byte("tenants:\n  b:\n    x: 2\n"),
+		}},
+	}
+
+	for _, tc := range cases {
+		t.Run("root="+strconv.Quote(tc.root), func(t *testing.T) {
+			t.Parallel()
+			src := NewInMemoryConfigSource(tc.files)
+
+			enumerated, err := src.YAMLFiles(tc.root)
+			if err != nil {
+				t.Fatalf("YAMLFiles(%q): %v", tc.root, err)
+			}
+			if len(enumerated) != len(tc.files) {
+				t.Errorf("YAMLFiles(%q) enumerated %d of %d files — the root filter is "+
+					"dropping files that ARE under this root", tc.root, len(enumerated), len(tc.files))
+			}
+
+			tenants, _, _, _, err := ScanFromConfigSource(src, tc.root)
+			if err != nil {
+				t.Fatalf("ScanFromConfigSource(src, %q): %v", tc.root, err)
+			}
+			for _, want := range []string{"a", "b"} {
+				if _, ok := tenants[want]; !ok {
+					t.Errorf("tenant %q missing at root %q through the production source "+
+						"shape (got %v) — a silent empty scan is how this defect presented "+
+						"the first time", want, tc.root, tenants)
+				}
+			}
+			if p, ok := tenants["c"]; ok {
+				t.Errorf("tenant \"c\" registered from %q — hidden segments must still be "+
+					"pruned; sharing the boundary rule must not drag hidden-pruning into "+
+					"YAMLFiles", p)
 			}
 		})
 	}
