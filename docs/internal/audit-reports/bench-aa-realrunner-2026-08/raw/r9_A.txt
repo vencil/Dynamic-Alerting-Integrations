@@ -1,0 +1,25 @@
+goos: linux
+goarch: amd64
+pkg: github.com/vencil/threshold-exporter
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkResolveSilentModes_1000-4         	   10000	    112292 ns/op
+BenchmarkResolveSilentModes_1000-4         	   10000	    113468 ns/op
+BenchmarkResolveSilentModes_1000-4         	   10000	    111958 ns/op
+BenchmarkResolveSilentModes_1000-4         	   10000	    112727 ns/op
+BenchmarkResolveSilentModes_1000-4         	   10000	    113103 ns/op
+BenchmarkFullDirLoad_1000-4                	       6	 180666446 ns/op
+BenchmarkFullDirLoad_1000-4                	       6	 182450577 ns/op
+BenchmarkFullDirLoad_1000-4                	       6	 187846342 ns/op
+BenchmarkFullDirLoad_1000-4                	       6	 188683356 ns/op
+BenchmarkFullDirLoad_1000-4                	       6	 184210812 ns/op
+BenchmarkIncrementalLoad_1000_NoChange-4   	      69	  16888227 ns/op
+BenchmarkIncrementalLoad_1000_NoChange-4   	      69	  16862073 ns/op
+BenchmarkIncrementalLoad_1000_NoChange-4   	      70	  16559405 ns/op
+BenchmarkIncrementalLoad_1000_NoChange-4   	      69	  16557268 ns/op
+BenchmarkIncrementalLoad_1000_NoChange-4   	      70	  16761229 ns/op
+BenchmarkScanDirFileHashes_1000-4          	      67	  16346023 ns/op
+BenchmarkScanDirFileHashes_1000-4          	      63	  16117687 ns/op
+BenchmarkScanDirFileHashes_1000-4          	      62	  16349532 ns/op
+BenchmarkScanDirFileHashes_1000-4          	      73	  16148641 ns/op
+BenchmarkScanDirFileHashes_1000-4          	      63	  15899937 ns/op
+PASS
