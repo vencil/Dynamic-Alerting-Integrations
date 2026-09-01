@@ -25,6 +25,7 @@
   ],
   "scripts/tools/_lib_confd.py": [
    "tests/ops/test_confd_unusable_signal.py",
+   "tests/ops/test_gitops_check.py",
    "tests/shared/test_confd_name_classification_parity.py",
    "tests/shared/test_lib_confd.py"
   ],
@@ -773,7 +774,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "99917440986269bd905f9f158a70330414ee7629fb9c41c7c5f980a509eca4e2",
+ "source_digest": "b3c5c6768554b320b753a182e5a7f58e91e06aa49e9559ced5188579f8083621",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -2933,6 +2934,9 @@
    "tests/ops/test_wrapped_path_references.py",
    "tests/shared/test_actionlint_pin_parity.py"
   ],
+  "tests/ops/test_gitops_check.py": [
+   "tests/shared/test_confd_case_parity_across_tools.py"
+  ],
   "tests/ops/test_guard_defaults_scopes.py": [
    "tests/lint/test_check_threshold_reachability.py",
    "tests/ops/test_ci_aggregate_gate_contract.py"
@@ -2996,6 +3000,7 @@
    "tests/shared/test_property_tools.py"
   ],
   "tests/shared/confd_name_classification_matrix.json": [
+   "tests/ops/test_gitops_check.py",
    "tests/shared/test_confd_name_classification_parity.py"
   ],
   "tests/shared/docs_yaml_split_matrix.json": [
@@ -3012,6 +3017,9 @@
   ],
   "tests/shared/test_confd_enumeration_contract.py": [
    "tests/ops/test_confd_unusable_signal.py"
+  ],
+  "tests/shared/test_confd_name_classification_parity.py": [
+   "tests/ops/test_gitops_check.py"
   ],
   "tests/shared/test_dry_run_no_write.py": [
    "tests/dx/test_bump_docs.py",
