@@ -40,6 +40,7 @@ import (
 	"strconv"
 
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/policy"
@@ -331,14 +332,19 @@ func WriteOverloaded(w http.ResponseWriter, r *http.Request) {
 // write paths shared this dispatch verbatim; callers keep their own
 // path-specific generic 500 message for the unrecognized case (returns false).
 //
-//   - gitops.ErrWriteOverloaded → 503 + Retry-After (admission queue full, TRK-320)
-//   - gitops.ErrForgeDegraded   → 503 + Retry-After (in-lock base fetch timeout, TRK-318)
+//   - gitops.ErrWriteOverloaded    → 503 + Retry-After (admission queue full, TRK-320)
+//   - gitops.ErrForgeDegraded      → 503 + Retry-After (in-lock base fetch timeout, TRK-318)
+//   - confd.ErrAmbiguousTenantFile → 409 (#1673: two files claim one tenant, so
+//     the server cannot know which one the write should land on — the REQUEST is
+//     fine, the on-disk state is not, which is why this is not a 400)
 func writeWriteFlowError(w http.ResponseWriter, r *http.Request, err error) bool {
 	switch {
 	case errors.Is(err, gitops.ErrWriteOverloaded):
 		WriteOverloaded(w, r)
 	case errors.Is(err, gitops.ErrForgeDegraded):
 		writeForgeDegraded(w, r)
+	case errors.Is(err, confd.ErrAmbiguousTenantFile):
+		WriteJSONError(w, r, http.StatusConflict, err.Error())
 	default:
 		return false
 	}

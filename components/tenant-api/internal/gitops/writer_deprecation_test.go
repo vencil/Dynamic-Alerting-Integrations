@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/vencil/tenant-api/internal/confd"
 )
 
 // newNameDefaultsDir is the post-rename twin of pilotDefaultsDir: the platform
@@ -104,7 +106,12 @@ func TestValidate_DeprecatedKeyNotices(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			errs, notices := validate(tt.dir(t), "db-a", tt.body)
+			dir := tt.dir(t)
+			path, perr := confd.TenantFilePathForWrite(dir, "db-a")
+			if perr != nil {
+				t.Fatalf("resolve tenant file: %v", perr)
+			}
+			errs, notices := validate(dir, "db-a", path, tt.body)
 			if tt.wantErrs != (len(errs) > 0) {
 				t.Fatalf("errs = %v, wantErrs=%v", errs, tt.wantErrs)
 			}

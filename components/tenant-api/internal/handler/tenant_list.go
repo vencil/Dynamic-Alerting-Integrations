@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -92,6 +93,7 @@ func loadAllTenants(configDir string) ([]TenantSummary, error) {
 	}
 
 	summaries := []TenantSummary{}
+	seen := make(map[string]string, len(entries)) // tenant id → the file that claimed it
 
 	for _, e := range entries {
 		name := e.Name()
@@ -102,6 +104,24 @@ func loadAllTenants(configDir string) ([]TenantSummary, error) {
 		if !ok {
 			continue
 		}
+
+		// #1673: claim the id on the FILENAME alone, before any read or parse.
+		// An unreadable or malformed sibling used to be skipped by the
+		// `continue`s below without ever reserving its id, so a valid
+		// `<id>.yml` beside a broken `<id>.yaml` was listed here while
+		// confd.ResolveTenantFile — which matches names, not contents —
+		// answered 409 for the same tenant. Name-based claiming keeps the two
+		// planes agreeing, which is the whole point of this change.
+		//
+		// Refusing the whole listing rather than returning the tenant twice:
+		// the two files can disagree on `_metadata` (so on env/domain scope)
+		// and on thresholds, and a whole-file PUT silently drops whichever one
+		// loses. threshold-exporter already hard-rejects this shape with a
+		// typed *DuplicateTenantError.
+		if prev, dup := seen[tenantID]; dup {
+			return nil, fmt.Errorf("conf.d holds more than one config file for tenant %q: %s and %s", tenantID, prev, name)
+		}
+		seen[tenantID] = name
 
 		data, err := os.ReadFile(filepath.Join(configDir, name))
 		if err != nil {
