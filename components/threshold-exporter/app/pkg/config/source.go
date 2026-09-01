@@ -134,12 +134,10 @@ func (s *InMemoryConfigSource) YAMLFiles(rootPath string) (map[string][]byte, er
 // `internal/confdname.IsHidden` is the same byte-prefix test, but this package
 // deliberately does not import it; see the note on the defaults comparison in
 // ScanFromConfigSource for why that shared predicate is not a drop-in here.
-func hiddenSegmentBelowRoot(p, root string) bool {
-	rel := strings.TrimPrefix(p, root)
-	rel = strings.TrimPrefix(rel, "/")
+func hasHiddenSegment(rel string) bool {
 	if rel == "" {
-		// `p` IS the root (YAMLFiles admits that case). The walker would be
-		// looking at its own starting point, which it never prunes.
+		// `rel` is the root itself. The walker would be looking at its own
+		// starting point, which it never prunes.
 		return false
 	}
 	for _, seg := range strings.Split(rel, "/") {
@@ -148,6 +146,40 @@ func hiddenSegmentBelowRoot(p, root string) bool {
 		}
 	}
 	return false
+}
+
+// relToRoot returns `p` expressed relative to `root`, and whether `p` is inside
+// `root` AT A DIRECTORY BOUNDARY.
+//
+// ⛔ The boundary is the separator, not the byte prefix. `/sim-backup/x.yaml`
+// shares the five bytes `/sim` with root `/sim` and is NOT inside it. An
+// earlier version of the hidden test here computed `strings.TrimPrefix(p,
+// root)` with no boundary check, which answered confidently about paths it had
+// no business answering about — measured on that version:
+//
+//	p="/other/.git/a.yaml"  root="/sim"  -> "hidden" (true)   // not even under root
+//	p="/simulate/a.yaml"    root="/sim"  -> rel "ulate/a.yaml" // a fabricated segment
+//
+// ⛔ Nothing in-tree could reach either case, because
+// `InMemoryConfigSource.YAMLFiles` already filters on `clean == root ||
+// HasPrefix(clean, root+"/")`. That is exactly the problem: the classifier's
+// correctness rested on a caller doing the check, while `ConfigSource` is a
+// PUBLIC interface whose doc does not require it (it even anticipates a
+// "future disk-backed source"). A predicate that returns a confident wrong
+// answer off its domain is the seed this whole family grows from, so the check
+// lives here too rather than being assumed.
+func relToRoot(p, root string) (rel string, inside bool) {
+	if p == root {
+		return "", true
+	}
+	if root == "/" {
+		// path.Clean leaves "/" as the one root with a trailing separator.
+		return strings.TrimPrefix(p, "/"), strings.HasPrefix(p, "/")
+	}
+	if !strings.HasPrefix(p, root+"/") {
+		return "", false
+	}
+	return p[len(root)+1:], true
 }
 
 // ScanFromConfigSource is the in-memory cousin of scanDirHierarchical:
@@ -202,7 +234,8 @@ func ScanFromConfigSource(src ConfigSource, rootPath string) (
 		// ⛔ The comment previously here said "match scanDirHierarchical"
 		// while doing the opposite. That sentence is why the divergence
 		// survived: every reader who checked took the claim for the check.
-		if hiddenSegmentBelowRoot(p, absRoot) {
+		rel, inRoot := relToRoot(p, absRoot)
+		if !inRoot || hasHiddenSegment(rel) {
 			continue
 		}
 		// path.Base (POSIX) not filepath.Base — the loop variable was

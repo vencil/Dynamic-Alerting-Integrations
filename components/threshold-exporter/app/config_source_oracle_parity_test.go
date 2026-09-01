@@ -71,6 +71,18 @@ var hiddenAxisCorpus = map[string]string{
 }
 
 // materializeOnDisk writes the corpus under a fresh temp dir and returns it.
+//
+// ⛔ It then counts what actually landed. `_defaultſ.yaml` and `_defaults.yaml`
+// are distinct byte sequences and distinct files on a case-sensitive
+// filesystem, but a case-FOLDING one (macOS APFS/HFS+ in its default
+// configuration, Windows NTFS) may fold U+017F onto `s` and collapse the two
+// fixture entries into a single file. That would not announce itself: the
+// oracle would simply see one fewer file and the parity assertions below would
+// fail with a mismatch that reads like a code defect. Counting turns that into
+// a named cause. ⚠️ NOT MEASURED on either of those filesystems — this
+// container is Linux-only, and the repo's supported path is a Linux dev
+// container. The guard exists so the first person who runs this natively on a
+// Mac gets a sentence instead of a puzzle.
 func materializeOnDisk(t *testing.T, corpus map[string]string) string {
 	t.Helper()
 	root := t.TempDir()
@@ -82,6 +94,24 @@ func materializeOnDisk(t *testing.T, corpus map[string]string) string {
 		if err := os.WriteFile(abs, []byte(body), 0o644); err != nil {
 			t.Fatalf("write %s: %v", rel, err)
 		}
+	}
+	var landed int
+	if err := filepath.WalkDir(root, func(_ string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() {
+			landed++
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("walk %s: %v", root, err)
+	}
+	if landed != len(corpus) {
+		t.Fatalf("fixture did not materialize: wrote %d entries, %d files landed under %s. "+
+			"On a case-folding filesystem (macOS APFS/HFS+, Windows NTFS) `_defaultſ.yaml` "+
+			"(U+017F) can collapse onto `_defaults.yaml`. This test needs a case-sensitive "+
+			"filesystem — the repo's dev container is one.", len(corpus), landed, root)
 	}
 	return root
 }
