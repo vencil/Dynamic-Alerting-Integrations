@@ -3,19 +3,47 @@
 # QUESTION IT ANSWERS
 # ===================
 # ADR-032 proposes moving the nightly perf watchdog from "tonight vs an older
-# night" to "two builds measured on the SAME runner, compare the ratio". Its
-# premise (machine identity is the dominant noise term) is measured; its
-# BENEFIT is not. Two local attempts on a 4-core shared cloud VM failed to
-# detect any benefit:
+# night" to "two builds measured on the SAME runner, compare the ratio". This
+# workflow measures how much noise is left once the machine is held fixed.
+#
+# It was built to settle a negative local result. Two attempts on a 4-core
+# shared cloud VM failed to detect any benefit:
 #
 #   count=1 : paired residual rSD 7.99%, SEPARATED/PAIRED bias ratio 0.9×
 #   count=5 : paired residual rSD 7.39%, SEPARATED/PAIRED bias ratio 1.1×
 #
 # Raising count 5× barely moved the residual, which REFUTED the "single-sample
-# sampling noise" explanation. The remaining candidate is that the local VM is
+# sampling noise" explanation. The remaining candidate was that the local VM is
 # simply too noisy to resolve the effect: its residual (~7.4%) is ~14× the
-# within-night jitter measured on real nightly artifacts (0.52%). This workflow
-# repeats the identical experiment on the machine that actually matters.
+# within-night jitter measured on real nightly artifacts (0.52%).
+#
+# THAT QUESTION IS ANSWERED, and this header used to stop before saying so.
+# Run 31869902576 ran this workflow on a real runner (EPYC 9V74, GOMAXPROCS=4,
+# 12 rounds × 4 benchmarks, count=5, benchtime=1s):
+#
+#   pooled paired residual rSD 1.67pp over n=48   (worst single bench 2.40pp)
+#   1 of those 48 comparisons exceeded the 5% floor, at 6.32%
+#
+# This is CONSISTENT WITH the local VM having been the limiting factor
+# (~7.4% there, 1.67pp here) but does not establish it: same experiment, yet
+# NOT a controlled comparison — machine, count and benchtime all differ, so
+# three things moved at once. Read it as "on a real runner the residual is
+# ~1.7pp", never as "the VM was proven to be the cause" or "pairing improved
+# by 4.4×".
+#
+# The per-round data, the estimator and a negative validation are archived on
+# PR #1669, NOT in this tree — the owner ruled that one-off, date-scoped audit
+# data does not earn a permanent directory:
+#
+#   data    https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1669#issuecomment-5495600985
+#   method  https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1669#issuecomment-5495613772
+#
+# Recovered from that job's log before the 90-day retention expires (job logs
+# die 2026-11-13; the artifact's 30-day window already closed and its host is
+# proxy-blocked here), digest-verified per file against the digests the RUNNER
+# printed. ⚠️ After 2026-11-13 those two comments are the ONLY copy.
+# Until 2026-09-01 the real-runner figure lived only in prose; the method
+# comment's 「1.61% 對不上」 section says what the earlier quoted number was.
 #
 # ⚠️ It measures nothing about this repo's code. Both sides run the SAME
 # compiled binary, so the true effect is exactly 0% and every deviation is

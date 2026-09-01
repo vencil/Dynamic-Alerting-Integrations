@@ -29,6 +29,7 @@ policy 的 `file_overrides` 取得逐檔豁免（例如 forecast recipe 的 pred
 """
 
 import argparse
+import copy
 import os
 import re
 import sys
@@ -404,28 +405,40 @@ def load_policy(policy_path):
     CI is not a control. dev-rules #13 files "檔案/路徑不存在" and
     "malformed 輸入" under EXIT_CALLER_ERROR.
     """
-    if not policy_path:
-        return DEFAULT_POLICY.copy()
+    # ⛔ `is None`, not `not policy_path`. An empty string is SUPPLIED — it is
+    # what an unset shell variable expands to — and the falsy test routed it
+    # into the omitted branch, silently linting against the built-in policy
+    # instead of the operator's. The flag's argparse default is None, so
+    # nothing else reaches this branch. Same split as #1616's --base-config.
+    if policy_path is None:
+        # ⛔ deepcopy, not `.copy()`: the latter is shallow, so a caller
+        # appending to one of the nested lists reaches into the module default
+        # and changes what every later call in the process returns. Same shape
+        # as #1616's load_base_config fix; fixed here for symmetry rather than
+        # because a mutating caller exists today.
+        return copy.deepcopy(DEFAULT_POLICY)
     try:
         with open(policy_path, 'r', encoding='utf-8') as f:
             custom = yaml.safe_load(f) or {}
     except OSError as e:
+        # ⛔ `!r` so an empty value is visible as '' rather than as a message
+        # that stops after the colon.
         die_caller_error(
-            f"--policy: cannot read {policy_path}: {e}\n"
+            f"--policy: cannot read {policy_path!r}: {e}\n"
             "  ⛔ Do not drop the flag to clear this — that silently lints "
             "against the built-in policy instead of yours.")
     except UnicodeDecodeError as e:
         # ⛔ NOT an OSError — it is a ValueError, so the handler above does not
         # see it and a non-UTF-8 policy file escaped as a traceback with rc=1.
-        die_caller_error(f"--policy: {policy_path} is not valid UTF-8: {e}")
+        die_caller_error(f"--policy: {policy_path!r} is not valid UTF-8: {e}")
     except yaml.YAMLError as e:
-        die_caller_error(f"--policy: {policy_path} is not valid YAML: {e}")
+        die_caller_error(f"--policy: {policy_path!r} is not valid YAML: {e}")
     if not isinstance(custom, dict):
         die_caller_error(
-            f"--policy: top level of {policy_path} is "
+            f"--policy: top level of {policy_path!r} is "
             f"{type(custom).__name__}, expected a mapping")
     # Merge: custom overrides defaults
-    merged = DEFAULT_POLICY.copy()
+    merged = copy.deepcopy(DEFAULT_POLICY)
     merged.update(custom)
     return merged
 

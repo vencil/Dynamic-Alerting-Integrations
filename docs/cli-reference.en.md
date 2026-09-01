@@ -1760,7 +1760,7 @@ docker run --rm \
 |--------|-------------|---------|
 | `--output <FILE>` | Output to file | stdout |
 | `--output-configmap` | Output complete Kubernetes ConfigMap YAML | false |
-| `--base-config <FILE>` | Custom Alertmanager base config (for --output-configmap) | built-in default |
+| `--base-config <FILE>` | Custom Alertmanager base config. **Only `--output-configmap` reads it**; supplying it in any other mode is a caller error (exit 2), not a silent no-op | built-in default (**only when the flag is omitted**; a supplied value that is unreadable / not valid YAML / not a mapping exits 2 rather than falling back) |
 | `--dry-run` | Show preview without writing | false |
 | `--validate` | Validate only, don't output | false |
 | `--apply` | Apply directly to Kubernetes (requires kubectl) | false |
@@ -1826,7 +1826,7 @@ docker run --rm --kubeconfig=$HOME/.kube/config \
 |------|-------------|
 | `0` | Success |
 | `1` | Config validation failed |
-| `2` | Caller error: kubectl operation failed (`--apply` mode), or `--policy` was supplied but is unreadable / not valid YAML (#1556) |
+| `2` | Caller error: **the tool could not do its job because of how it was invoked or its environment** — not because your config violates something. Reaching it today (non-exhaustive): `--policy` / `--base-config` supplied but unusable (not a file, unreadable, not valid YAML, top level not a mapping); `--base-config` used in a mode other than `--output-configmap`; the `-o` output path cannot be written; `--apply` without `--yes` where stdin cannot be read; and kubectl / cluster operations failing (#1556, #1616, #1617). ⚠️ **This row is the v2.10.0 contract**; the `v2.9.0` image pinned at the top of this page returns 0 or 1 for most of them |
 
 ---
 

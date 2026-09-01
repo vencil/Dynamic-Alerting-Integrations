@@ -3,12 +3,24 @@
 # WHY THIS EXISTS (and why the sibling workflow could not answer it)
 # =================================================================
 # bench-aa-noise-experiment.yaml runs both sides on ONE runner. That design
-# answers "once the machine is held fixed, how much noise is left?" — measured,
-# 1.61% residual rSD on a real runner. But it CANNOT answer the question
-# ADR-032 actually rests on, and not by oversight: with both sides on the same
-# machine, the machine-identity term is identically ZERO by construction. The
-# thing the ADR proposes to eliminate is invisible to the instrument built to
-# test it.
+# answers "once the machine is held fixed, how much noise is left?" — measured
+# on run 31869902576: pooled paired residual rSD 1.67pp over n=48, worst single
+# benchmark 2.40pp, and 1 of the 48 comparisons over the 5% floor at 6.32%.
+# ⚠️ This line used to read "1.61% residual rSD on a real runner" with no
+# dataset, no run id and no reproduction path. 1.61pp is one of the four
+# benchmarks (IncrementalLoad_1000_NoChange, n=12), not the pooled residual;
+# of 108 aggregations of that run's data it is the only one that lands on it.
+# The earlier run 31864272536 cannot be ruled out as the source — its per-round
+# data predates the emit-to-log step and its artifact is unreachable — so this
+# is a correction of an unsourceable number, not a proven arithmetic error.
+# Data, estimator and negative validation are on PR #1669, not in this tree:
+#   data    https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1669#issuecomment-5495600985
+#   method  https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1669#issuecomment-5495613772
+#
+# But that workflow CANNOT answer the question ADR-032 actually rests on, and
+# not by oversight: with both sides on the same machine, the machine-identity
+# term is identically ZERO by construction. The thing the ADR proposes to
+# eliminate is invisible to the instrument built to test it.
 #
 # The 10.82% cross-CPU-class figure quoted in ADR-032 comes from the nightly
 # series — observational data, where machine identity is confounded with 30

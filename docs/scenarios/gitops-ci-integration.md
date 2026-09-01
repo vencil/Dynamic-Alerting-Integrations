@@ -38,8 +38,11 @@ lang: zh
 
 ⚠️ **有一件事不是掛載造成的，換掛法也不會好**：§2.3 那類 `generate-routes ... -o .output/xxx.yaml
 --validate` 會印 `OK: all configs valid` 並 exit 0，而 `-o` 指定的檔案**不會出現**——`--validate`
-在用到 `-o` 之前就結束了；拿掉 `--validate` 則會因為 `.output/` 目錄不存在而 `FileNotFoundError`
-（工具不會自己建目錄）。要拿到檔案就先 `mkdir -p .output` 並且不要同時給 `--validate`。這條追蹤在
+在用到 `-o` 之前就結束了；拿掉 `--validate` 則會因為 `.output/` 目錄不存在而失敗——**v2.10.0 起是
+結束碼 2 加一行指名 `-o` 的訊息**，在那之前是未攔的 `FileNotFoundError` traceback 加結束碼 1
+（[#1617](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1617)）。⚠️ 若你的 CI 靠
+grep `FileNotFoundError` 判斷這一格，那個字串不會再出現。工具仍然不會自己建目錄：要拿到檔案就先
+`mkdir -p .output` 並且不要同時給 `--validate`。這條追蹤在
 [#1423](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1423)。
 
 ## 1. 快速初始化

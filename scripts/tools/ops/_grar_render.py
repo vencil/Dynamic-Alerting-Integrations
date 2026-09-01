@@ -7,7 +7,9 @@ from generate_alertmanager_routes for backwards-compatible test imports.
 Functions:
   Output rendering:
     render_output(...)           → fragment YAML (route + receivers + inhibit_rules)
-    load_base_config(path)       → base AM YAML or _DEFAULT_BASE_CONFIG fallback
+    load_base_config(path)       → base AM YAML; defaults ONLY when the flag was
+                                   omitted — a supplied-but-unusable value
+                                   raises BaseConfigInputError (#1616)
     assemble_configmap(...)      → full K8s ConfigMap YAML for GitOps PR
 
   ConfigMap operations (--apply mode, K8s cluster deploy):
@@ -19,6 +21,7 @@ Functions:
 """
 from __future__ import annotations
 
+import copy
 import json
 import os
 import re
@@ -207,20 +210,83 @@ _DEFAULT_BASE_CONFIG = {
 }
 
 
-def load_base_config(path: str | None) -> dict:
-    """Load base Alertmanager config from YAML file.
+class BaseConfigInputError(ValueError):
+    """`--base-config` was supplied but the value cannot serve as a base config.
 
-    Returns dict with global, route, receivers, inhibit_rules.
-    Falls back to _DEFAULT_BASE_CONFIG on any error.
+    A dedicated subclass rather than a bare ``ValueError`` because the
+    ``assert_*`` guards this module calls raise plain ``ValueError`` for a
+    config-invariant violation. The two mean opposite things — a violation is
+    the operator's CONFIG being wrong (exit 1), this is their INVOCATION being
+    wrong (exit 2) — so a caller that caught ``ValueError`` could not tell them
+    apart. Same reasoning as ``PolicyInputError`` in ``_grar_validate``.
+
+    Pinned by ``test_the_error_type_is_distinguishable_from_a_config_violation``;
+    aliasing this to ``ValueError`` must go red.
     """
-    if not path or not Path(path).is_file():
-        return dict(_DEFAULT_BASE_CONFIG)
-    with open(path, encoding="utf-8") as fh:
-        data = yaml.safe_load(fh) or {}
-    # Ensure required keys exist
+
+
+def load_base_config(path: str | None) -> dict:
+    """Load the base Alertmanager config that generated routes merge into.
+
+    Two outcomes, and they must stay distinguishable (#1616):
+
+    * the flag was OMITTED — ``path is None`` — the built-in defaults apply;
+    * the flag was SUPPLIED with a value that cannot serve as a base config —
+      raise, and the caller exits 2 (dev-rules #13 / ``_lib_exitcodes``).
+
+    ⛔ "Supplied" is ``path is None``, NOT ``not path``. An empty string is
+    supplied — it is what an unset shell variable expands to — and a falsy test
+    routes it into the omitted branch, which is the whole defect.
+
+    Everything past the omitted branch reduces to two re-derivable predicates —
+    *the value names a file*, and *that file parses to a mapping* — so no shape
+    is enumerated and an unanticipated spelling lands on an existing branch.
+
+    ⚠️ NOT closed: the CONTENT axis, as ``load_policy``'s docstring records for
+    ``--policy``. A file that IS a mapping but whose ``global:`` is empty or
+    wrong still merges silently. Partial files are legitimate (absent top-level
+    keys fall back per key, pinned by ``test_partial_file_fills_defaults``), so
+    "is a mapping" is as far as the path axis reaches.
+    """
+    if path is None:
+        return copy.deepcopy(_DEFAULT_BASE_CONFIG)
+    if not Path(path).is_file():
+        raise BaseConfigInputError(
+            f"--base-config: not a file: {path!r}\n"
+            "  --base-config takes a PATH to a base Alertmanager YAML "
+            "(global / route / receivers / inhibit_rules).\n"
+            "  ⛔ Do not drop the flag to clear this error — that substitutes "
+            "the built-in placeholder `global:` for yours, which is the exact "
+            "silent failure this error exists to stop.")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = yaml.safe_load(fh)
+    except UnicodeDecodeError as exc:
+        raise BaseConfigInputError(
+            f"--base-config: {path!r} is not valid UTF-8: {exc}") from exc
+    except yaml.YAMLError as exc:
+        raise BaseConfigInputError(
+            f"--base-config: {path!r} is not valid YAML: {exc}") from exc
+    except OSError as exc:
+        raise BaseConfigInputError(
+            f"--base-config: cannot read {path!r}: {exc}") from exc
+    if not isinstance(data, dict):
+        # ⛔ No remedy sentence here, deliberately. This branch fires for an
+        # empty file AND for one holding a top-level list or scalar, and "omit
+        # --base-config" is right for the first and reproduces #1616 for the
+        # second. ``load_policy``'s equivalent branch states the type and stops
+        # for the same reason; ``validate_config`` carries a comment about the
+        # third time a shared remedy sentence was wrong for one of its rows.
+        raise BaseConfigInputError(
+            f"--base-config: top level of {path!r} is {type(data).__name__}, "
+            "expected a mapping with `global:` / `route:` / `receivers:` / "
+            "`inhibit_rules:` (any subset; absent keys fall back).")
+    # Ensure required keys exist. deepcopy so a caller mutating the result
+    # cannot reach into _DEFAULT_BASE_CONFIG's nested lists and change what
+    # every later call in this process returns.
     for key in ("global", "route", "receivers", "inhibit_rules"):
         if key not in data:
-            data[key] = _DEFAULT_BASE_CONFIG[key]
+            data[key] = copy.deepcopy(_DEFAULT_BASE_CONFIG[key])
     return data
 
 
@@ -306,27 +372,137 @@ def assemble_configmap(base: dict, routes: list[dict], receivers: list[dict], in
 # ConfigMap Operations (K8s cluster deployment)
 # ============================================================
 
+def _run_binary(argv: list[str], *, timeout: int,
+                stdin_text: str | None = None) -> subprocess.CompletedProcess:
+    """Run *argv*, turning "that binary is not runnable here" into a result.
+
+    ⛔ ``subprocess.run`` raises ``OSError`` when the binary is absent, and that
+    escaped uncaught: an image without ``kubectl`` produced a traceback at rc=1,
+    which in this repo means EXIT_VIOLATION — "your config is wrong" — for what
+    is an environment problem. Measured with ``PATH`` reduced to the interpreter
+    directory before this helper existed.
+
+    Returns a CompletedProcess so every caller's existing ``returncode != 0``
+    branch reports it, with 127 (the shell's "command not found") rather than a
+    code that could be confused with the binary's own exit statuses.
+
+    ⛔ ``timeout=`` is passed here, so the OTHER way this call fails is
+    ``subprocess.TimeoutExpired`` — which is **not** an ``OSError``
+    (``SubprocessError`` → ``Exception``), so the handler below does not see it.
+    A cluster that accepts the connection and never answers therefore produced
+    the same uncaught traceback at rc=1 that this helper exists to remove. Both
+    families must be named; catching one and assuming the other is the shape of
+    defect this file's own history records twice (``EOFError`` is not an
+    ``OSError`` either). 124 is what ``timeout(1)`` reports, kept distinct from
+    127 so the two environment failures stay tellable apart.
+    """
+    try:
+        return subprocess.run(argv, input=stdin_text, capture_output=True,
+                              text=True, timeout=timeout, encoding="utf-8")
+    except subprocess.TimeoutExpired as exc:
+        return subprocess.CompletedProcess(
+            argv, returncode=124, stdout="",
+            stderr=f"{argv[0]!r} did not finish within {exc.timeout}s")
+    except OSError as exc:
+        return subprocess.CompletedProcess(
+            argv, returncode=127, stdout="",
+            stderr=f"cannot run {argv[0]!r}: {exc}")
+
+
 def _read_existing_configmap(namespace: str, configmap_name: str) -> tuple[dict | None, list[str]]:
     """Read existing Alertmanager ConfigMap from K8s cluster.
 
     Returns (config_dict, warnings) — config_dict is None if read failed.
     """
     warnings = []
-    result = subprocess.run(
+    result = _run_binary(
         ["kubectl", "get", "configmap", configmap_name, "-n", namespace, "-o", "json"],
-        capture_output=True, text=True, timeout=60, encoding='utf-8',
-    )
+        timeout=60)
     if result.returncode != 0:
         warnings.append(f"ERROR: Failed to read ConfigMap {configmap_name}: {result.stderr}")
         return None, warnings
 
-    cm = json.loads(result.stdout)
-    existing_yml = cm.get("data", {}).get("alertmanager.yml", "")
-    if not existing_yml:
+    # ⛔ This function must not hand the caller a `None` it cannot explain:
+    # every failure exit below appends a warning first, and `apply_to_configmap`
+    # prints them. Measured before that rule was applied: two paths returned
+    # None silently (an `alertmanager.yml` value that is comment-only, and one
+    # that is whitespace-only), so the caller exited 2 with zero output — the
+    # same "exit code with no diagnostic" this module refuses to ship for `-o`.
+    #
+    # ⛔ "Every return None appends a warning" was ALSO once written here while
+    # a whole class did not reach a `return None` at all: a `cm` that parses to
+    # something other than a mapping went out as an uncaught AttributeError on
+    # `.get`, i.e. a traceback at rc=1. Guarding the shape of `cm` is what makes
+    # the sentence true, not the sentence.
+    try:
+        cm = json.loads(result.stdout)
+    except ValueError as exc:
+        warnings.append(
+            f"ERROR: kubectl returned output that is not JSON: {exc}")
+        return None, warnings
+    if not isinstance(cm, dict):
+        warnings.append(
+            f"ERROR: kubectl returned JSON that is not an object "
+            f"({type(cm).__name__}); expected a ConfigMap resource")
+        return None, warnings
+    if "data" not in cm:
+        warnings.append("ERROR: ConfigMap has no `data` block at all")
+        return None, warnings
+    data = cm["data"]
+    if not isinstance(data, dict):
+        warnings.append(
+            f"ERROR: ConfigMap `data` is {type(data).__name__}, expected a "
+            f"mapping of keys to strings")
+        return None, warnings
+    # ⛔ Membership, not truthiness — the same distinction the two guards above
+    # draw for `data`. `data.get(key, "")` collapsed "the cluster has no such
+    # key" into "the key is there and empty", and the message named the first:
+    # an operator who emptied `alertmanager.yml` was sent looking for a missing
+    # key that is present. It also swallowed every falsy non-string (`0`,
+    # `false`, `[]`) before the type guard below could name its type. An empty
+    # string now flows on and is diagnosed by the mapping guard further down,
+    # which reads the raw TEXT and says the key holds nothing usable.
+    if "alertmanager.yml" not in data:
         warnings.append("ERROR: ConfigMap has no 'alertmanager.yml' key")
         return None, warnings
+    existing_yml = data["alertmanager.yml"]
+    if not isinstance(existing_yml, str):
+        # ⛔ `yaml.safe_load` treats a non-str argument as a STREAM and calls
+        # `.read()` on it, so a non-string value left here as an uncaught
+        # AttributeError at rc=1 with no diagnostic — the exact picture the
+        # guards above were added to remove, one layer further in. The
+        # Kubernetes API forces `data` values to be strings, so this is not
+        # operator-reachable through a real cluster; it is guarded because it
+        # is exactly as reachable as the two shapes just above it, and a
+        # sentence claiming "every failure exit appends a warning" has to be
+        # true for the whole function or it is not worth writing.
+        warnings.append(
+            f"ERROR: ConfigMap key 'alertmanager.yml' is "
+            f"{type(existing_yml).__name__}, expected a string")
+        return None, warnings
 
-    existing = yaml.safe_load(existing_yml)
+    try:
+        existing = yaml.safe_load(existing_yml)
+    except yaml.YAMLError as exc:
+        warnings.append(
+            f"ERROR: ConfigMap key 'alertmanager.yml' is not valid YAML: {exc}")
+        return None, warnings
+    if not isinstance(existing, dict):
+        # ⛔ The parenthetical is a GUESS, so it is gated on evidence rather
+        # than on the parse result. An unconditional version was measured
+        # firing for list / str / int values, where the key holds something and
+        # the guess is wrong. Gating on `existing is None` was still too wide:
+        # `null`, `~`, `---` and `Null` also parse to None while the key does
+        # hold text. The predicate below reads the TEXT — blank, or nothing but
+        # comments — which is the thing the sentence actually claims.
+        stripped = [ln.strip() for ln in existing_yml.splitlines()]
+        looks_empty = all(not ln or ln.startswith("#") for ln in stripped)
+        hint = (" — the key exists but holds nothing usable (comments or "
+                "whitespace only)") if looks_empty else ""
+        warnings.append(
+            f"ERROR: ConfigMap key 'alertmanager.yml' parses to "
+            f"{type(existing).__name__}, expected a mapping{hint}")
+        return None, warnings
     return existing, warnings
 
 
@@ -392,20 +568,18 @@ def _apply_merged_configmap(merged_yml: str, namespace: str, configmap_name: str
 
     Returns True if successful, False otherwise.
     """
-    apply_result = subprocess.run(
+    apply_result = _run_binary(
         ["kubectl", "create", "configmap", configmap_name,
          f"--from-literal=alertmanager.yml={merged_yml}",
          "-n", namespace, "--dry-run=client", "-o", "yaml"],
-        capture_output=True, text=True, timeout=60, encoding='utf-8',
-    )
+        timeout=60)
     if apply_result.returncode != 0:
         print(f"ERROR: Failed to generate ConfigMap: {apply_result.stderr}", file=sys.stderr)
         return False
 
-    pipe_result = subprocess.run(
+    pipe_result = _run_binary(
         ["kubectl", "apply", "-f", "-"],
-        input=apply_result.stdout, capture_output=True, text=True, timeout=120, encoding='utf-8',
-    )
+        timeout=120, stdin_text=apply_result.stdout)
     if pipe_result.returncode != 0:
         print(f"ERROR: kubectl apply failed: {pipe_result.stderr}", file=sys.stderr)
         return False
@@ -420,10 +594,9 @@ def _reload_alertmanager(namespace: str) -> bool:
     Returns True on success (or if warning-level failure), False on critical error.
     """
     svc_url = f"http://alertmanager.{namespace}.svc.cluster.local:9093"
-    reload_result = subprocess.run(
+    reload_result = _run_binary(
         ["curl", "-sf", "-X", "POST", f"{svc_url}/-/reload"],
-        capture_output=True, text=True, timeout=60, encoding='utf-8',
-    )
+        timeout=60)
     if reload_result.returncode != 0:
         # NOT a missing flag: Alertmanager's /-/reload is unconditional (it has no
         # --web.enable-lifecycle — that is Prometheus'). A failure here is network
