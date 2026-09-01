@@ -46,6 +46,14 @@ func TestRelToRootRequiresADirectoryBoundary(t *testing.T) {
 		// ends in a separator, so the `root+"/"` form would be "//".
 		{"root is slash", "/.git/a.yaml", "/", ".git/a.yaml", true},
 		{"root is slash, plain file", "/a.yaml", "/", "a.yaml", true},
+
+		// ⛔ The root's OWN dot segments must not leak into `rel`. The walker
+		// never prunes its own starting point, so a source rooted at
+		// `.config/conf.d` must yield its whole tree — see
+		// TestDotPrefixedRootYieldsItsWholeTree for the end-to-end half.
+		{"dot-prefixed root", "/.config/conf.d/t.yaml", "/.config/conf.d", "t.yaml", true},
+		{"dot-prefixed root, nested", "/.config/conf.d/x/t.yaml", "/.config/conf.d", "x/t.yaml", true},
+		{"dot segment BELOW a dot root", "/.config/conf.d/.git/t.yaml", "/.config/conf.d", ".git/t.yaml", true},
 	}
 
 	for _, tc := range cases {
@@ -124,6 +132,53 @@ func TestScanRejectsOffRootPathsFromASourceThatDoesNotFilter(t *testing.T) {
 		if _, inside := relToRoot(p, "/sim"); !inside {
 			t.Errorf("hashed %q, which is outside /sim", p)
 		}
+	}
+}
+
+// TestDotPrefixedRootYieldsItsWholeTree pins the half of the invariant that
+// `hasHiddenSegment`'s own doc comment promises in words — "The root is never
+// tested … so a caller scanning `.config/conf.d` gets its whole tree, not
+// nothing" — and that nothing was checking.
+//
+// ⛔ WHY IT IS A SEPARATE TEST AND NOT ANOTHER TABLE ROW. The promise is
+// load-bearing on the CALL SITE passing `rel` rather than `p`. Both are
+// in-scope strings of the same type one line apart, so `hasHiddenSegment(p)` is
+// an ordinary slip — and it is invisible to every other fixture in this repo,
+// because every root used anywhere in the suite is `/sim` or `/`, neither of
+// which has a dot segment for `p` to contribute over `rel`. Measured: with that
+// substitution the entire suite stayed green (`go test ./... -count=1`, rc=0)
+// while this scenario returned an empty tenant map. A test that exercises the
+// helper alone cannot see it; only driving the public entry point with a
+// dot-prefixed root can.
+func TestDotPrefixedRootYieldsItsWholeTree(t *testing.T) {
+	t.Parallel()
+
+	const dotRoot = "/.config/conf.d"
+	src := offRootSource{
+		dotRoot + "/_defaults.yaml": []byte("defaults:\n  cpu_usage: 80\n"),
+		dotRoot + "/tenant.yaml":    []byte("tenants:\n  t1:\n    x: 1\n"),
+		dotRoot + "/sub/deep.yaml":  []byte("tenants:\n  t2:\n    x: 2\n"),
+		// Still pruned: this one's dot segment is BELOW the root, not part of it.
+		dotRoot + "/.git/leak.yaml": []byte("tenants:\n  leaked:\n    x: 3\n"),
+	}
+	tenants, defaults, _, _, err := ScanFromConfigSource(src, dotRoot)
+	if err != nil {
+		t.Fatalf("ScanFromConfigSource: %v", err)
+	}
+	for _, want := range []string{"t1", "t2"} {
+		if _, ok := tenants[want]; !ok {
+			t.Errorf("tenant %q missing under a dot-prefixed root — the root's own "+
+				"dot segment is being treated as pruning, which the walker never does "+
+				"(got %v)", want, tenants)
+		}
+	}
+	if p, ok := tenants["leaked"]; ok {
+		t.Errorf("tenant \"leaked\" registered from %q — `.git` is BELOW the root and "+
+			"must still be pruned; the fix must not swing the other way", p)
+	}
+	if _, ok := defaults[dotRoot+"/_defaults.yaml"]; !ok {
+		t.Errorf("the chain carrier under a dot-prefixed root was not classified as "+
+			"defaults (got %v)", defaults)
 	}
 }
 
