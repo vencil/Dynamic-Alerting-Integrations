@@ -774,19 +774,17 @@ def _implicit_concat_references(text: str, path: str = "<synthetic>") -> list[tu
     # this function: a control that only proves this raises says nothing about
     # whether anybody still listens.
     # ⚠️ There is no per-file isolation: ONE unparseable tracked `.py` aborts the
-    # whole scan, and WHICH files still get judged depends on where the bad one
-    # sorts in `git ls-files`. Measured on `daf747fb` (616 tracked `.py`, zero of
-    # them unparseable today) by counting the files that sort before it:
-    #     `.github/…`            0 / 616 judged   (100% of the corpus never judged)
-    #     `scripts/…`          271 / 616          ( 56%)
-    #     `tests/ops/testdata/…`  562 / 616          (  8.8%)
-    # ⛔ That is not merely a bigger red: a REAL offender sitting behind the
-    # abort is never reported. Measured end-to-end, one variable at a time —
-    # an unparseable file at `.github/` plus a genuine split reference under
-    # `tests/ops/testdata/` gives a SyntaxError and ZERO mentions of the
-    # offender; delete only the unparseable file and the same offender is
-    # reported. The guard goes red for the wrong reason and hides the defect it
-    # exists to find.
+    # whole scan, so HOW MUCH of the corpus still gets judged is decided by where
+    # that file happens to sort in `git ls-files` — anywhere from all of it to
+    # none of it. On `daf747fb` (616 tracked `.py`, zero of them unparseable) a
+    # dotfile directory sorts ahead of everything, so nothing is judged; a path
+    # sorting last costs nothing.
+    # ⛔ That is not merely a bigger red: a REAL offender sitting behind the abort
+    # is never reported. Measured end-to-end, one variable at a time — an
+    # unparseable file that sorts first plus a genuine split reference that sorts
+    # later gives a SyntaxError and ZERO mentions of the offender; delete only the
+    # unparseable file and the same offender is reported. The guard goes red for
+    # the wrong reason and hides the defect it exists to find.
     # ⚠️ A deliberately broken fixture is still a legal input with no route back
     # to green — that half is the open policy question in #1632. A BOM-prefixed
     # file is NOT: see the strip below, that was this guard being wrong.
@@ -836,9 +834,17 @@ def _implicit_concat_references(text: str, path: str = "<synthetic>") -> list[tu
     #     lstrip              1 OK / 2 OK       <- ACCEPTS A FILE THAT DOES NOT RUN
     # Reusing that helper would trade this false red for a false GREEN. It is no
     # defect there — its callers anchor word starts, where arity cannot matter.
-    # `utf-8-sig` is equally faithful but belongs at the READ, and `_decode_whole`
-    # is shared with the path-token scan whose byte-for-byte size assertion is
-    # load-bearing, so the strip goes here rather than there.
+    # ⛔ WHY HERE AND NOT AT THE READ. `utf-8-sig` in `_decode_whole` is equally
+    # faithful for files that arrive through the corpus — but this is a PURE
+    # FUNCTION, and every synthetic case below calls it with text that never
+    # passes through `_decode_whole` at all. A strip that lives only at the read
+    # leaves those callers, and any future one, unprotected.
+    # ⚠️ An earlier version of this comment gave a different reason: that
+    # `_decode_whole`'s byte-for-byte size assertion made the read untouchable.
+    # That was FALSE and blind review caught it — the assertion compares
+    # `len(raw) == size` over BYTES, before any decode, so swapping the codec
+    # cannot disturb it (measured: swap it and the module is still 14 passed).
+    # The real constraint is the pure function, not the size check.
     try:
         tree = ast.parse(text.removeprefix("\ufeff"), filename=path)
     except SyntaxError as exc:
@@ -1717,12 +1723,12 @@ def test_no_reference_is_split_across_implicit_concatenation() -> None:
     # by the skipping edit — the cheaper of the two, and the one that silently
     # costs coverage. So this asserts the HIT, not the absence of a crash.
     bom = "\ufeff" + plain
-    assert _implicit_concat_references(bom) == [(2, subject)], (
+    assert _implicit_concat_references(bom, "zfake/one_bom.py") == [(2, subject)], (
         "a BOM-prefixed source must be SCANNED, not refused: the interpreter "
         "strips one leading U+FEFF when it compiles from bytes, so such a file "
         "runs normally and a split reference in it hides from `git grep` just "
         "the same. Refusing it is a false red; skipping it drops the file from "
-        "the corpus: " + repr(_implicit_concat_references(bom)))
+        "the corpus: " + repr(_implicit_concat_references(bom, "zfake/one_bom.py")))
 
     # ⛔ THE OTHER SIDE OF THE SAME CHOICE: TWO leading BOMs must STILL raise.
     # The interpreter rejects that file (measured: `compile(bytes)` is OK at one
@@ -1732,8 +1738,41 @@ def test_no_reference_is_split_across_implicit_concatenation() -> None:
     # `_lint_helpers._strip_bom`, which is one — would do, and the case above
     # passes either way, so without this one the widening is SILENT.
     two = "\ufeff\ufeff" + plain
-    with pytest.raises(SyntaxError):
+    try:
         _implicit_concat_references(two, "zfake/two_boms.py")
+    except SyntaxError:
+        pass
+    else:
+        # ⛔ A bare `pytest.raises` here would print only "DID NOT RAISE
+        # SyntaxError", and the cheapest way back to green from that is to delete
+        # these lines. The sibling control 90 lines below carries a note that its
+        # own message-less version was weakened four times in blind review before
+        # anyone noticed; this says what it wants instead.
+        raise AssertionError(
+            "two leading BOMs must still raise. The interpreter accepts ONE "
+            "(its tokeniser drops one when compiling from bytes) and rejects "
+            "two, so a scan that accepts two is more permissive than the thing "
+            "it defers to and will pass a file that does not run. If you got "
+            "here by simplifying the strip to an `lstrip` (or to "
+            "`_lint_helpers._strip_bom`, which is one), that is the widening "
+            "this case exists to catch — keep it stripping exactly one.")
+
+    # ⛔ AND THE ARITY IS A PIPELINE PROPERTY, NOT A FUNCTION ONE. Both cases
+    # above call this function directly, so they only ever see ONE strip. Add a
+    # second one at the READ and the pair goes quiet while the guard turns more
+    # permissive than the interpreter — measured: `utf-8-sig` in `_decode_whole`
+    # with the strip above still in place accepts a two-BOM tracked file, whole
+    # module green. So pin the other half: the read PRESERVES, this function
+    # strips, total exactly one.
+    # ⚠️ Stated as a property of the returned VALUE, not as a ban on spellings —
+    # `utf-8-sig`, `lstrip`, `removeprefix` and a `replace` all strip, and any
+    # list of those is a list somebody adds a sixth entry to.
+    bommed = "\ufeff" + "x = 1\n"
+    raw_bommed = bommed.encode("utf-8")
+    assert _decode_whole(raw_bommed, len(raw_bommed), "zfake/read.py") == bommed, (
+        "the corpus read must hand this scan the file's text UNCHANGED, BOM and "
+        "all. If it strips one too, a two-BOM file — which the interpreter "
+        "rejects — parses here and the scan accepts a file that does not run.")
 
     # MUST REPORT: a split whose token ALSO appears contiguously ELSEWHERE in
     # the same file. Comparing against the whole file instead of the constant's
@@ -1873,7 +1912,8 @@ def test_no_reference_is_split_across_implicit_concatenation() -> None:
     #
     # ⛔ AND THE PAIR ACTIVELY MISLED. Adding a legitimately unparseable `.py`
     # (a fixture for a linter's error path — a BOM'd file no longer qualifies;
-    # see the strip in `_implicit_concat_references`) makes the scan below raise. The honest fix is to exclude that one file; the
+    # see the strip in `_implicit_concat_references`) makes the scan below raise.
+    # The honest fix is to exclude that one file; the
     # equality's message said "⛔ Do not narrow this comparison ... widen the
     # corpus back", which is not a route back to green — so the next move it left
     # was to write the filter INSIDE the call expression, where neither guard can
