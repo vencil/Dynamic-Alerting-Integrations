@@ -115,6 +115,41 @@ func (s *InMemoryConfigSource) YAMLFiles(rootPath string) (map[string][]byte, er
 	return out, nil
 }
 
+// hiddenSegmentBelowRoot reports whether any path segment of `p` STRICTLY
+// BELOW `root` is dot-prefixed. It is the flat-map equivalent of the disk
+// walker's `fs.SkipDir` pruning: that walker never descends into a hidden
+// directory, so every file beneath one is invisible to it no matter what the
+// file itself is called.
+//
+// ⛔ The root is never tested. The walker is explicit about this — "Never
+// prune the root itself even if rootPath happens to start with '.'" — so a
+// caller scanning `.config/conf.d` gets its whole tree, not nothing.
+//
+// ⛔ Every segment is tested, not just the file's immediate parent. The
+// walker prunes the entire subtree, so `<root>/.cache/deep/x.yaml` is dropped
+// by `.cache` even though `deep` and `x.yaml` are both plain.
+//
+// ⛔ This is a byte-prefix test on `.` — no case folding, nothing Unicode —
+// which is exactly what the walker does (`strings.HasPrefix(name, ".")`).
+// `internal/confdname.IsHidden` is the same byte-prefix test, but this package
+// deliberately does not import it; see the note on the defaults comparison in
+// ScanFromConfigSource for why that shared predicate is not a drop-in here.
+func hiddenSegmentBelowRoot(p, root string) bool {
+	rel := strings.TrimPrefix(p, root)
+	rel = strings.TrimPrefix(rel, "/")
+	if rel == "" {
+		// `p` IS the root (YAMLFiles admits that case). The walker would be
+		// looking at its own starting point, which it never prunes.
+		return false
+	}
+	for _, seg := range strings.Split(rel, "/") {
+		if strings.HasPrefix(seg, ".") {
+			return true
+		}
+	}
+	return false
+}
+
 // ScanFromConfigSource is the in-memory cousin of scanDirHierarchical:
 // it takes a corpus from a ConfigSource and produces the same outputs
 // (tenants map, defaults set, per-file hashes, InheritanceGraph) using
@@ -154,17 +189,49 @@ func ScanFromConfigSource(src ConfigSource, rootPath string) (
 	var decls []tenantDecl
 
 	for p, data := range corpus {
+		// ⛔ The hidden test is on the whole PATH below the root, not on
+		// the basename (#1589). The disk walker prunes hidden DIRECTORIES
+		// with `fs.SkipDir`, so it never visits `<root>/.git/inside.yaml`
+		// at all. This loop sees a flat map, where that path's basename is
+		// `inside.yaml` — not dot-prefixed, so a basename test admitted it
+		// and registered whatever `tenants:` key it declared. Measured, on
+		// the corpus in config_source_oracle_parity_test.go: this scanner
+		// answered `[fromcache fromgit nested plain]` where the walker
+		// answered `[nested plain]`, at arbitrary depth (`.cache/deep/`).
+		//
+		// ⛔ The comment previously here said "match scanDirHierarchical"
+		// while doing the opposite. That sentence is why the divergence
+		// survived: every reader who checked took the claim for the check.
+		if hiddenSegmentBelowRoot(p, absRoot) {
+			continue
+		}
 		// path.Base (POSIX) not filepath.Base — the loop variable was
 		// renamed from `path` to `p` to avoid shadowing the `path`
 		// package; same Windows-host fix family as YAMLFiles +
 		// CollectDefaultsChainPOSIX above.
 		name := path.Base(p)
-		// Hidden files skipped — match scanDirHierarchical.
-		if strings.HasPrefix(name, ".") {
-			continue
-		}
 		hashes[p] = fmt.Sprintf("%x", sha256.Sum256(data))
 
+		// ⛔ DELIBERATELY NOT `internal/confdname.IsDefaults`, even though
+		// this is the fourth hand-written copy of the rule and collapsing
+		// copies is the whole point of the #1339 family. That predicate uses
+		// `strings.EqualFold`; the walker this scanner must agree with uses
+		// `strings.ToLower(name) == "_defaults.yaml"`. MEASURED IN GO on this
+		// toolchain (not reasoned about, and not measured in another language
+		// — that mistake has its own scar in confdname's header):
+		//
+		//	name := "_defaultſ.yaml"                       // U+017F LATIN SMALL LETTER LONG S
+		//	strings.ToLower(name) == "_defaults.yaml"      // false  ← the walker
+		//	strings.EqualFold(name, "_defaults.yaml")      // true   ← confdname
+		//
+		// `unicode.SimpleFold` connects U+017F ↔ 'S' ↔ 's', and ToLower does
+		// not. So adopting the shared predicate here would move this scanner
+		// off the walker it is defined as reproducing — buying one fewer copy
+		// by creating a fresh silent divergence, in the file whose job is to
+		// not do that. The copy stays until the shared predicate and the
+		// walker are reconciled; that reconciliation changes the write plane
+		// (`internal/batchpr`, `internal/profile`) and is not this change's
+		// blast radius.
 		lower := strings.ToLower(name)
 		if strings.HasPrefix(name, "_") {
 			if lower == "_defaults.yaml" || lower == "_defaults.yml" {
