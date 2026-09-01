@@ -127,6 +127,11 @@ func TestAddedTenantKeys(t *testing.T) {
 		want []string
 	}{
 		{"own id only", "", ownOnly, nil},
+		// A body with no foreign key has the same answer whatever the base
+		// says, so the baseline must not be consulted at all — pinned here as
+		// behavior (an unparseable base cannot change the answer) rather than
+		// as a timing assertion.
+		{"own id only, unparseable base", "{{not yaml", ownOnly, nil},
 		{"no baseline → foreign counts as added", "", smuggled, []string{"other"}},
 		{"baseline declares it → grandfathered", grandfathered, smuggled, nil},
 		{"baseline declares it, body adds one more", grandfathered, plusThird, []string{"third"}},
@@ -143,7 +148,8 @@ func TestAddedTenantKeys(t *testing.T) {
 			if err := yaml.Unmarshal([]byte(tc.body), &tcfg); err != nil {
 				t.Fatal(err)
 			}
-			got := addedTenantKeys(dir, tcfg, "db-a")
+			baseRaw, _ := os.ReadFile(filepath.Join(dir, "db-a.yaml"))
+			got := addedTenantKeys(baseRaw, tcfg, "db-a")
 			if len(got) != len(tc.want) {
 				t.Fatalf("got %v want %v", got, tc.want)
 			}
@@ -156,16 +162,25 @@ func TestAddedTenantKeys(t *testing.T) {
 	}
 }
 
-// TestAddedTenantKeysFailsClosedWithoutAConfigDir pins the unit-test shape
-// (configDir "") separately: it has no file to read, and must not be the one
-// path where the gate silently stops applying.
-func TestAddedTenantKeysFailsClosedWithoutAConfigDir(t *testing.T) {
+// TestAddedTenantKeysFailsClosedWithoutABaseFile pins the shapes that produce
+// no baseline bytes — no configDir (the unit-test shape) and an unreadable or
+// missing file both arrive as nil. Neither may be the one path where the gate
+// silently stops applying.
+func TestAddedTenantKeysFailsClosedWithoutABaseFile(t *testing.T) {
 	var tcfg cfg.ThresholdConfig
 	if err := yaml.Unmarshal([]byte(smuggled), &tcfg); err != nil {
 		t.Fatal(err)
 	}
-	if got := addedTenantKeys("", tcfg, "db-a"); len(got) != 1 || got[0] != "other" {
-		t.Errorf("configDir \"\" must yield an empty baseline, got %v", got)
+	for _, baseRaw := range [][]byte{nil, {}} {
+		if got := addedTenantKeys(baseRaw, tcfg, "db-a"); len(got) != 1 || got[0] != "other" {
+			t.Errorf("baseRaw %v must yield an empty baseline, got %v", baseRaw, got)
+		}
+	}
+	// validate() is the caller that turns "no configDir" into nil baseRaw, so
+	// assert that end of the wiring too rather than assuming it.
+	if errs, _ := validate("", "db-a", smuggled); len(errs) != 1 ||
+		!strings.Contains(errs[0], "adds tenant section") {
+		t.Errorf("validate with no configDir must still refuse an added section, got %v", errs)
 	}
 }
 
@@ -225,3 +240,79 @@ func contains(hay []string, needle string) bool {
 }
 
 func newW(dir string) *Writer { return NewWriter(dir, dir) }
+
+// --- multi-document bodies (#1681, found blind-reviewing the gate above) ---
+
+const (
+	// smuggledDoc2 hides the section in a SECOND document: yaml.Unmarshal reads
+	// only the first and reports no error, while the write path commits the
+	// body verbatim.
+	smuggledDoc2 = "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n---\ntenants:\n  other:\n    _silent_mode: \"true\"\n"
+	// rootKeyDoc2 is the same trick carrying a ROOT key, which the added-keys
+	// gate cannot see even if it unioned every document's tenant keys.
+	rootKeyDoc2 = "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n---\ndefaults:\n  cpu_critical: 1\n"
+)
+
+func TestWriteRefusesContentAfterTheFirstDocument(t *testing.T) {
+	for _, tc := range []struct{ name, body string }{
+		{"second document declares a tenant", smuggledDoc2},
+		{"second document declares a root key", rootKeyDoc2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := initRepoOnMain(t)
+			_, err := newW(dir).Write(context.Background(), "db-a", "a@example.com", tc.body)
+			if err == nil {
+				t.Fatal("Write committed a document nothing validated")
+			}
+			if !errors.Is(err, ErrValidation) {
+				t.Errorf("want ErrValidation, got %v", err)
+			}
+			if _, serr := os.Stat(filepath.Join(dir, "db-a.yaml")); !os.IsNotExist(serr) {
+				raw, _ := os.ReadFile(filepath.Join(dir, "db-a.yaml"))
+				t.Errorf("rejected write still reached disk: %q", raw)
+			}
+		})
+	}
+}
+
+func TestWritePRRefusesContentAfterTheFirstDocument(t *testing.T) {
+	dir := initRepoOnMain(t)
+	if _, err := newW(dir).WritePR(context.Background(), "db-a", "a@example.com", smuggledDoc2); err == nil {
+		t.Fatal("WritePR committed a document nothing validated")
+	} else if !errors.Is(err, ErrValidation) {
+		t.Errorf("want ErrValidation, got %v", err)
+	}
+}
+
+// An empty trailer is not a smuggling channel, and refusing it would reject
+// bodies a YAML emitter may legitimately produce.
+func TestExtraDocumentsWithContent(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		want int
+	}{
+		{"single document", ownOnly, 0},
+		{"leading marker", "---\n" + ownOnly, 0},
+		{"trailing marker, no content", ownOnly + "---\n", 0},
+		{"trailing end-of-document marker", ownOnly + "...\n", 0},
+		{"trailing comment-only document", ownOnly + "---\n# nothing here\n", 0},
+		{"second document with a tenant", smuggledDoc2, 1},
+		{"second document with a root key", rootKeyDoc2, 1},
+		{"two extra documents", smuggledDoc2 + "---\ndefaults:\n  cpu_critical: 1\n", 2},
+		{"invalid YAML is the earlier check's business", "{{not yaml", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := extraDocumentsWithContent(tc.body); got != tc.want {
+				t.Errorf("got %d want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestWriteStillAcceptsAnEmptyTrailingDocument(t *testing.T) {
+	dir := initRepoOnMain(t)
+	if _, err := newW(dir).Write(context.Background(), "db-a", "a@example.com", ownOnly+"---\n"); err != nil {
+		t.Fatalf("gate rejected an empty trailing document: %v", err)
+	}
+}
