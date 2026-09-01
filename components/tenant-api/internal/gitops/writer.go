@@ -169,7 +169,7 @@ func addedTenantKeys(baseRaw []byte, tcfg cfg.ThresholdConfig, tenantID string) 
 }
 
 func guardTenantID(tenantID string) error {
-	if !confd.IsTenantConfigFile(tenantID + ".yaml") {
+	if !confd.IsAddressableTenantID(tenantID) {
 		return fmt.Errorf("%w: %q", ErrReservedTenantID, tenantID)
 	}
 	return nil
@@ -771,6 +771,13 @@ func validate(configDir, tenantID, yamlContent string) (errs, notices []string) 
 	// of the attack is an addition. Residual, deliberately accepted: whoever
 	// already has a file naming another tenant keeps that reach — reaching that
 	// state needs an operator, not a request.
+	// This function joins tenantID into a path below, and it is reachable from
+	// callers that have not run the id past guardTenantID (WriteMerged's merge
+	// step, and any future one). Re-asserting it here costs a string compare and
+	// keeps the containment check in the same function as the path it protects.
+	if err := guardTenantID(tenantID); err != nil {
+		return []string{err.Error()}, nil
+	}
 	// Read the file this write replaces ONCE. Two stateful checks need it — the
 	// added-section gate here and the eol-expansion guard at the end — and on a
 	// large flat conf.d file a second full read+parse doubles a validate() that

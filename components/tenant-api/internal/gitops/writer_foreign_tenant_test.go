@@ -316,3 +316,33 @@ func TestWriteStillAcceptsAnEmptyTrailingDocument(t *testing.T) {
 		t.Fatalf("gate rejected an empty trailing document: %v", err)
 	}
 }
+
+// TestValidateRefusesAnIDThatWouldLeaveConfigDir pins the containment check in
+// the same function as the path it protects: validate joins tenantID into a
+// path, and is reachable from callers that have not run the id past the
+// handler's own validator (#1681, CodeQL "uncontrolled data in path
+// expression"). IsTenantConfigFile alone says yes to every id below.
+func TestValidateRefusesAnIDThatWouldLeaveConfigDir(t *testing.T) {
+	dir := initRepoOnMain(t)
+	for _, id := range []string{"a/b", `a\b`, "a/../../b", "/abs", "..", "../x"} {
+		// ⛔ The body must DECLARE this id. With any other body the earlier
+		// "must contain tenants.<id>" check rejects it and the test passes even
+		// with the containment guard deleted — measured: the first version of
+		// this test survived both mutants below.
+		body := "tenants:\n  " + id + ":\n    _silent_mode: \"warning\"\n"
+		errs, _ := validate(dir, id, body)
+		if len(errs) == 0 {
+			t.Errorf("validate accepted id %q", id)
+			continue
+		}
+		if !strings.Contains(errs[0], "reserved tenant id") {
+			t.Errorf("id %q rejected for the wrong reason: %v", id, errs)
+		}
+	}
+	if errs, _ := validate(dir, "", ownOnly); len(errs) == 0 {
+		t.Error("validate accepted an empty id")
+	}
+	if errs, _ := validate(dir, "db-a", ownOnly); len(errs) != 0 {
+		t.Errorf("containment check rejected a legitimate id: %v", errs)
+	}
+}
