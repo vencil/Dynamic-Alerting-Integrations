@@ -1,16 +1,17 @@
 package handler
 
 import (
+	"errors"
 	"log/slog"
 	"net/http"
 	"os"
-	"path/filepath"
 	"time"
 
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/customalerts"
 )
 
@@ -48,6 +49,7 @@ type TenantDetail struct {
 // @Success     200  {object} TenantDetail
 // @Failure     400  {object} ErrorResponse
 // @Failure     404  {object} ErrorResponse
+// @Failure     409  {object} ErrorResponse
 // @Failure     500  {object} ErrorResponse
 // @Router      /api/v1/tenants/{id} [get]
 func GetTenant(d *Deps) http.HandlerFunc {
@@ -58,9 +60,24 @@ func GetTenant(d *Deps) http.HandlerFunc {
 			return
 		}
 
-		filePath := filepath.Join(d.ConfigDir, tenantID+".yaml")
+		// #1673: resolve the tenant's ACTUAL file rather than assuming the
+		// `.yaml` spelling. A tenant stored as `<id>.yml` is listed by
+		// GET /tenants (the enumerator accepts both) but used to 404 here.
+		filePath, err := confd.ResolveTenantFile(d.ConfigDir, tenantID)
+		switch {
+		case errors.Is(err, confd.ErrTenantFileNotFound):
+			WriteJSONError(w, r, http.StatusNotFound, "tenant not found: "+tenantID)
+			return
+		case errors.Is(err, confd.ErrAmbiguousTenantFile):
+			WriteJSONError(w, r, http.StatusConflict, err.Error())
+			return
+		case err != nil:
+			WriteJSONError(w, r, http.StatusInternalServerError, err.Error())
+			return
+		}
 		data, err := os.ReadFile(filePath)
 		if os.IsNotExist(err) {
+			// Lost a race with a delete between resolve and read.
 			WriteJSONError(w, r, http.StatusNotFound, "tenant not found: "+tenantID)
 			return
 		}

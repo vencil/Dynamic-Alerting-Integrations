@@ -6,7 +6,20 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/vencil/tenant-api/internal/confd"
 )
+
+// tenantPathFor resolves a tenant's config file the way the writer does
+// (#1673) so tests exercise validate() against the same path production does.
+func tenantPathFor(t *testing.T, dir, tenantID string) string {
+	t.Helper()
+	p, err := confd.TenantFilePathForWrite(dir, tenantID)
+	if err != nil {
+		t.Fatalf("resolve tenant file: %v", err)
+	}
+	return p
+}
 
 func TestValidate(t *testing.T) {
 	t.Parallel()
@@ -41,7 +54,7 @@ func TestValidate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			errs, _ := validate("", tt.tenantID, tt.yaml)
+			errs, _ := validate("", tt.tenantID, "", tt.yaml)
 			if (len(errs) > 0) != (tt.wantErrs > 0) {
 				t.Errorf("validate(%q, ...) returned %d errors %v, want %d",
 					tt.tenantID, len(errs), errs, tt.wantErrs)
@@ -97,7 +110,7 @@ func TestValidateVersionThreshold(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			y := "tenants:\n  db-a:\n    " + tt.key + ": \"60\"\n"
-			errs, _ := validate(dir, "db-a", y)
+			errs, _ := validate(dir, "db-a", tenantPathFor(t, dir, "db-a"), y)
 			if tt.wantOK {
 				if len(errs) != 0 {
 					t.Fatalf("validate(%q) = %v, want no errors", tt.key, errs)
@@ -125,7 +138,7 @@ func TestValidateMultiVersionCoexistence(t *testing.T) {
 	y := "tenants:\n  db-a:\n" +
 		"    container_cpu{version=\"v1\"}: \"80\"\n" +
 		"    container_cpu{version=\"v2\"}: \"60\"\n"
-	if errs, _ := validate(dir, "db-a", y); len(errs) != 0 {
+	if errs, _ := validate(dir, "db-a", tenantPathFor(t, dir, "db-a"), y); len(errs) != 0 {
 		t.Fatalf("coexisting v1+v2 thresholds should validate, got: %v", errs)
 	}
 }
@@ -142,14 +155,14 @@ func TestValidate_TenantOnlyMetricBody(t *testing.T) {
 
 	// Mirrors conf.d/db-a.yaml: tenants block only, plain metric keys.
 	ok := "tenants:\n  db-a:\n    mysql_threads_running: \"70\"\n    container_cpu: \"70\"\n"
-	if errs, _ := validate(dir, "db-a", ok); len(errs) != 0 {
+	if errs, _ := validate(dir, "db-a", tenantPathFor(t, dir, "db-a"), ok); len(errs) != 0 {
 		t.Fatalf("tenant-only metric body should validate against merged defaults, got: %v", errs)
 	}
 
 	// Negative: validation is NOT neutered — a genuinely unknown metric key
 	// (absent from _defaults.yaml, not a reserved key) still warns.
 	bad := "tenants:\n  db-a:\n    not_a_real_metric: \"70\"\n"
-	errs, _ := validate(dir, "db-a", bad)
+	errs, _ := validate(dir, "db-a", tenantPathFor(t, dir, "db-a"), bad)
 	if len(errs) == 0 {
 		t.Fatal("an unknown metric key must still warn after the defaults merge")
 	}
@@ -177,7 +190,7 @@ func TestValidate_RejectsNonTenantRootKeys(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			errs, _ := validate(dir, "db-a", tt.yaml)
+			errs, _ := validate(dir, "db-a", tenantPathFor(t, dir, "db-a"), tt.yaml)
 			if len(errs) == 0 {
 				t.Fatalf("validate(%q) returned no errors, want a root-key rejection", tt.yaml)
 			}
@@ -202,7 +215,7 @@ func TestValidate_RejectsFlatKV(t *testing.T) {
 	t.Parallel()
 	dir := pilotDefaultsDir(t)
 	flat := "container_cpu: \"80\"\nmysql_threads_running: \"70\"\n" // no tenants: wrapper
-	errs, _ := validate(dir, "db-a", flat)
+	errs, _ := validate(dir, "db-a", tenantPathFor(t, dir, "db-a"), flat)
 	if len(errs) == 0 {
 		t.Fatal("flat key-value body must be rejected on the write path, got no errors")
 	}

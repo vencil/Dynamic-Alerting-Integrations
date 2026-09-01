@@ -22,12 +22,12 @@ import (
 	"errors"
 	"net/http"
 	"os"
-	"path/filepath"
 
 	"github.com/go-chi/chi/v5"
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
 	"gopkg.in/yaml.v3"
 
+	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/customalerts"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/rbac"
@@ -146,8 +146,20 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 		}
 
 		// Load the current tenant file (must exist — recipes are authored
-		// against an existing tenant).
-		filePath := filepath.Join(d.ConfigDir, tenantID+".yaml")
+		// against an existing tenant). #1673: resolve the tenant's actual
+		// file instead of assuming the `.yaml` spelling.
+		filePath, err := confd.ResolveTenantFile(d.ConfigDir, tenantID)
+		switch {
+		case errors.Is(err, confd.ErrTenantFileNotFound):
+			WriteJSONError(w, r, http.StatusNotFound, "tenant not found: "+tenantID)
+			return
+		case errors.Is(err, confd.ErrAmbiguousTenantFile):
+			WriteJSONError(w, r, http.StatusConflict, err.Error())
+			return
+		case err != nil:
+			WriteJSONError(w, r, http.StatusInternalServerError, err.Error())
+			return
+		}
 		raw, err := os.ReadFile(filePath)
 		if os.IsNotExist(err) {
 			WriteJSONError(w, r, http.StatusNotFound, "tenant not found: "+tenantID)

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -92,6 +93,7 @@ func loadAllTenants(configDir string) ([]TenantSummary, error) {
 	}
 
 	summaries := []TenantSummary{}
+	seen := make(map[string]string, len(entries)) // tenant id → the file that claimed it
 
 	for _, e := range entries {
 		name := e.Name()
@@ -112,6 +114,19 @@ func loadAllTenants(configDir string) ([]TenantSummary, error) {
 		if err := yaml.Unmarshal(data, &partial); err != nil {
 			continue
 		}
+
+		if prev, dup := seen[tenantID]; dup {
+			// #1673: two files claim one tenant (e.g. `<id>.yaml` and
+			// `<id>.yml`). Refuse the whole listing rather than return the
+			// tenant twice with two different sets of metadata — the two
+			// files can disagree on `_metadata` (so on env/domain scope) and
+			// on thresholds, and a whole-file PUT silently drops whichever
+			// one loses. threshold-exporter already hard-rejects this shape
+			// (*DuplicateTenantError); failing here keeps the two planes
+			// agreeing instead of one serving a tenant the other refuses.
+			return nil, fmt.Errorf("conf.d holds more than one config file for tenant %q: %s and %s", tenantID, prev, name)
+		}
+		seen[tenantID] = name
 
 		summary := TenantSummary{ID: tenantID}
 		if overrides, ok := partial.Tenants[tenantID]; ok {

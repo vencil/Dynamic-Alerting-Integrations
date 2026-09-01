@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 )
@@ -57,7 +56,11 @@ func (w *Writer) WritePR(ctx context.Context, tenantID, authorEmail, yamlContent
 	// Step 1: validate schema before anything. notices (the non-blocking
 	// deprecation channel, #1231 1b) ride the result so the handler can
 	// surface them in its 200 response.
-	errs, notices := validate(w.configDir, tenantID, yamlContent)
+	filePath, err := w.tenantFilePath(tenantID)
+	if err != nil {
+		return nil, err
+	}
+	errs, notices := validate(w.configDir, tenantID, filePath, yamlContent)
 	if len(errs) > 0 {
 		return nil, fmt.Errorf("%w: %s", ErrValidation, strings.Join(errs, "; "))
 	}
@@ -98,8 +101,9 @@ func (w *Writer) WritePR(ctx context.Context, tenantID, authorEmail, yamlContent
 		return nil, fmt.Errorf("create branch: %w", err)
 	}
 
-	// Step 4: write file
-	filePath := filepath.Join(w.configDir, tenantID+".yaml")
+	// Step 4: write file — filePath was resolved up front (#1673): the
+	// tenant's existing file, whatever its spelling, never a second file
+	// beside it.
 	if err := os.WriteFile(filePath, []byte(yamlContent), 0644); err != nil {
 		// Rollback: force back to a clean base (the file we just wrote is now a
 		// dirty tracked change) + drop the branch.
@@ -206,7 +210,11 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 		// Pre-flight notices are discarded — the authoritative in-lock merge
 		// below re-runs validate against the fresh base and collects them
 		// exactly once (no duplicates in the aggregated result).
-		if _, _, _, err := w.readMergeValidate(op.TenantID, op.Merge); err != nil {
+		opPath, err := w.tenantFilePath(op.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		if _, _, _, err := w.readMergeValidate(op.TenantID, opPath, op.Merge); err != nil {
 			return nil, err
 		}
 	}
@@ -243,7 +251,14 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 	changed := false
 	var notices []string
 	for _, op := range ops {
-		content, existing, opNotices, err := w.readMergeValidate(op.TenantID, op.Merge)
+		// #1673: one resolution per op — the file read by readMergeValidate and
+		// the file written below must be the same one.
+		filePath, err := w.tenantFilePath(op.TenantID)
+		if err != nil {
+			w.abortFeatureBranch(base, branchName)
+			return nil, err
+		}
+		content, existing, opNotices, err := w.readMergeValidate(op.TenantID, filePath, op.Merge)
 		if err != nil {
 			w.abortFeatureBranch(base, branchName)
 			return nil, err
@@ -252,7 +267,6 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 		if existing != nil && string(existing) == content {
 			continue // no-op for this tenant — nothing to write or commit
 		}
-		filePath := filepath.Join(w.configDir, op.TenantID+".yaml")
 		if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
 			w.abortFeatureBranch(base, branchName)
 			return nil, fmt.Errorf("write file for %s: %w", op.TenantID, err)
