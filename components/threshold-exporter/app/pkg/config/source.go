@@ -138,6 +138,17 @@ func hasHiddenSegment(rel string) bool {
 	if rel == "" {
 		// `rel` is the root itself. The walker would be looking at its own
 		// starting point, which it never prunes.
+		//
+		// ⛔ THIS BRANCH IS NOT LOAD-BEARING — it states intent, it does not
+		// enforce it. Measured in Go: `strings.Split("", "/")` returns
+		// `[]string{""}` (length 1, not an empty slice), and
+		// `strings.HasPrefix("", ".")` is false, so deleting this branch
+		// produces the identical answer by falling through the loop. A
+		// mutation pass found exactly that: removing it is the one mutant of
+		// nineteen that survives, and it survives because it is EQUIVALENT,
+		// not because a guard is missing. Said out loud because a comment
+		// that lets a reader believe an inert branch is holding something up
+		// is the same defect class this file exists to fix.
 		return false
 	}
 	for _, seg := range strings.Split(rel, "/") {
