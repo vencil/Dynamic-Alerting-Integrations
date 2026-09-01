@@ -68,6 +68,15 @@ var hiddenAxisCorpus = map[string]string{
 	".hidden.yaml":       "tenants:\n  fromhiddenfile:\n    cpu_usage: 2\n",
 	".git/inside.yaml":   "tenants:\n  fromgit:\n    cpu_usage: 3\n",
 	".cache/deep/x.yaml": "tenants:\n  fromcache:\n    cpu_usage: 5\n",
+
+	// Chain depth. Without a nested carrier every tenant's chain is one entry
+	// long and the chain assertion is nearly vacuous — it would agree even if
+	// one side collected the chain in the wrong ORDER, since a single-element
+	// list has no order to get wrong. `sub/_defaults.yaml` gives `nested` an
+	// L0..L1 chain; the one under `.cache/` must appear in NOBODY's chain,
+	// because the walker never descends there at all.
+	"sub/_defaults.yaml":    "defaults:\n  cpu_usage: 81\n",
+	".cache/_defaults.yaml": "defaults:\n  cpu_usage: 82\n",
 }
 
 // materializeOnDisk writes the corpus under a fresh temp dir and returns it.
@@ -164,13 +173,13 @@ func TestScanFromConfigSourceMatchesOracleOnHiddenPaths(t *testing.T) {
 	fresh, _ := freshMetrics(t)
 	diskRoot := materializeOnDisk(t, hiddenAxisCorpus)
 
-	oracleTenants, oracleDefaults, oracleHashes, _, _, err := scanDirHierarchicalWithMetrics(diskRoot, nil, fresh, nil)
+	oracleTenants, oracleDefaults, oracleHashes, _, oracleGraph, err := scanDirHierarchicalWithMetrics(diskRoot, nil, fresh, nil)
 	if err != nil {
 		t.Fatalf("scanDirHierarchical: %v", err)
 	}
 
 	src := config.NewInMemoryConfigSource(materializeInMemory(hiddenAxisCorpus))
-	memTenants, memDefaults, memHashes, _, err := config.ScanFromConfigSource(src, simParityRoot)
+	memTenants, memDefaults, memHashes, memGraph, err := config.ScanFromConfigSource(src, simParityRoot)
 	if err != nil {
 		t.Fatalf("ScanFromConfigSource: %v", err)
 	}
@@ -211,6 +220,40 @@ func TestScanFromConfigSourceMatchesOracleOnHiddenPaths(t *testing.T) {
 	if got, want := relKeys(t, memHashes, simParityRoot), relKeys(t, oracleHashes, diskRoot); !equalStrings(got, want) {
 		t.Errorf("hashed file set diverges:\n  oracle: %v\n  cousin: %v", want, got)
 	}
+
+	// ⛔ THE CHAIN, which this harness used to discard on both sides while the
+	// function it pins advertises "identical classification + dedup + CHAIN
+	// RULES". Comparing three of the four return values and dropping the fourth
+	// left a quarter of the documented contract with nothing behind it — a
+	// promise with no guard, which is the defect this whole file exists to
+	// catch. Today both sides reach the chain through the same
+	// `collectDefaultsChain` parameterised by `pathOps`, so this is expected to
+	// agree; that is the reason to pin it, not a reason to skip it. It stops
+	// agreeing the day `posixPathOps` and `nativePathOps` diverge at some
+	// boundary, and nothing else would notice.
+	for _, tid := range sortedTenantIDs(oracleTenants) {
+		oracleChain := relPathList(t, oracleGraph.TenantDefaults[tid], diskRoot)
+		memChain := relPathList(t, memGraph.TenantDefaults[tid], simParityRoot)
+		if !equalStrings(oracleChain, memChain) {
+			t.Errorf("defaults chain for tenant %q diverges (order is L0..Ln and matters):\n"+
+				"  oracle: %v\n  cousin: %v", tid, oracleChain, memChain)
+		}
+	}
+}
+
+// relPathList normalizes an ORDERED chain to root-relative POSIX paths. Unlike
+// relKeys it must not sort: the chain's order is the inheritance precedence.
+func relPathList(t *testing.T, paths []string, root string) []string {
+	t.Helper()
+	out := make([]string, 0, len(paths))
+	for _, p := range paths {
+		rel, err := filepath.Rel(root, filepath.FromSlash(p))
+		if err != nil {
+			t.Fatalf("Rel(%q, %q): %v", root, p, err)
+		}
+		out = append(out, filepath.ToSlash(rel))
+	}
+	return out
 }
 
 func equalStrings(a, b []string) bool {

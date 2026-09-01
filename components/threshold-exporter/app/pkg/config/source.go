@@ -159,9 +159,24 @@ func (s *InMemoryConfigSource) YAMLFiles(rootPath string) (map[string][]byte, er
 //
 // ⛔ This is a byte-prefix test on `.` — no case folding, nothing Unicode —
 // which is exactly what the walker does (`strings.HasPrefix(name, ".")`).
-// `internal/confdname.IsHidden` is the same byte-prefix test, but this package
-// deliberately does not import it; see the note on the defaults comparison in
-// ScanFromConfigSource for why that shared predicate is not a drop-in here.
+//
+// ⛔ AND THAT MEANS THIS IS AN UNRESOLVED DUPLICATE, not a justified one. An
+// earlier version of this comment pointed at the defaults-comparison note
+// below for why `internal/confdname.IsHidden` is "not a drop-in here". That
+// reason is wrong for THIS predicate: the note is about `EqualFold` versus
+// `ToLower`, and `IsHidden` does no folding at all — it is
+// `strings.HasPrefix(base, ".")`, byte-identical to the test below. Nor is
+// visibility the obstacle: measured by compiling, `pkg/config` can import
+// `internal/confdname` (`internal/batchpr` already does, same module tree).
+//
+// The real reason is a judgement nobody has made yet: `pkg/config` is the
+// public library surface and has no `internal/` dependency today, so importing
+// one to share two `HasPrefix` calls buys one fewer copy at the cost of the
+// first `pkg/` → `internal/` edge. That is a trade to decide, not a measured
+// constraint — and stating it as a measured constraint was the same defect
+// class this file exists to fix, one level up: a claim that sounds settled
+// standing in for a decision. Tracked with the rest of the predicate-sharing
+// question; do not read this comment as a reason to leave it alone.
 func hasHiddenSegment(rel string) bool {
 	// `rel == ""` (the root itself, which the walker never prunes) needs no
 	// branch: `strings.Split("", "/")` is `[]string{""}`, and `""` is not
