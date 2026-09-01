@@ -779,7 +779,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "5d093841864976af1a3e599ffb209ff5cc357676b08369cce20ac72a9b0ee11d",
+ "source_digest": "f383ba182f8ec849dbe25f2ce2968eb92bf90918de676fb75a6874e4464426cc",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1036,6 +1036,7 @@
   "tests/ops/test_performance.py",
   "tests/ops/test_policy_engine.py",
   "tests/ops/test_policy_opa_bridge.py",
+  "tests/ops/test_prepush_hook_wiring.py",
   "tests/ops/test_printed_paths_are_reachable.py",
   "tests/ops/test_property_based.py",
   "tests/ops/test_registry_lib.py",
@@ -1235,6 +1236,7 @@
    "tests/dx/test_bump_docs.py",
    "tests/dx/test_compile_custom_alerts.py",
    "tests/dx/test_line_ending_policy.py",
+   "tests/dx/test_preflight_marker.py",
    "tests/dx/test_recover_index.py",
    "tests/dx/test_scaffold_lint.py",
    "tests/helm/test_environments_overlay_sync.py",
@@ -1251,6 +1253,7 @@
    "tests/lint/test_validate_docs_versions.py",
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/ops/test_generated_ci_artifacts.py",
+   "tests/ops/test_prepush_hook_wiring.py",
    "tests/ops/test_wrapped_path_references.py",
    "tests/shared/test_actionlint_pin_parity.py"
   ],
@@ -2119,6 +2122,9 @@
    "tests/ops/test_nightly_scan_matrix_drift.py",
    "tests/ops/test_printed_paths_are_reachable.py"
   ],
+  "scripts/ops/_prepush_refs.sh": [
+   "tests/ops/test_prepush_hook_wiring.py"
+  ],
   "scripts/ops/_verify_download.sh": [
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/ops/test_verify_download.py",
@@ -2160,7 +2166,11 @@
    "tests/ops/test_nightly_race_issue_policy.py",
    "tests/ops/test_parse_go_test_json.py"
   ],
+  "scripts/ops/pre_push_mkdocs_strict.sh": [
+   "tests/ops/test_prepush_hook_wiring.py"
+  ],
   "scripts/ops/protect_main_push.sh": [
+   "tests/ops/test_prepush_hook_wiring.py",
    "tests/ops/test_wrapped_path_references.py"
   ],
   "scripts/ops/recover_index.sh": [
@@ -2168,7 +2178,8 @@
   ],
   "scripts/ops/require_preflight_pass.sh": [
    "tests/dx/test_preflight_marker.py",
-   "tests/dx/test_preflight_pass_gate.py"
+   "tests/dx/test_preflight_pass_gate.py",
+   "tests/ops/test_prepush_hook_wiring.py"
   ],
   "scripts/ops/verify_release_digest.sh": [
    "tests/helm/test_image_tag_derivation.py"
@@ -2741,6 +2752,12 @@
   "tests/dx/test_pr_preflight_checks.py": [
    "tests/ops/test_generated_ci_artifacts.py"
   ],
+  "tests/dx/test_preflight_marker.py": [
+   "tests/ops/test_prepush_hook_wiring.py"
+  ],
+  "tests/dx/test_preflight_pass_gate.py": [
+   "tests/ops/test_prepush_hook_wiring.py"
+  ],
   "tests/dx/test_tenant_log_query_dashboard.py": [
    "tests/dx/test_federation_revocation_dashboard.py"
   ],
@@ -2955,6 +2972,9 @@
    "tests/ops/test_ci_aggregate_gate_contract.py",
    "tests/ops/test_generated_ci_artifacts.py",
    "tests/ops/test_nightly_race_issue_policy.py"
+  ],
+  "tests/ops/test_prepush_hook_wiring.py": [
+   "tests/dx/test_preflight_marker.py"
   ],
   "tests/ops/test_registry_lib.py": [
    "tests/ops/test_ci_path_filter_coverage.py"

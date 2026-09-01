@@ -1134,6 +1134,16 @@ jobs:
       # VIBE_REQUIRE_NODE applies: absent means the image regressed, not that
       # the evidence became optional.
       VIBE_REQUIRE_SHELL_TOOLS: "1"
+      # tests/ops/test_prepush_hook_wiring.py drives a real `pre-commit install
+      # --hook-type pre-push` plus a real `git push --dry-run`. It is the only
+      # thing in the repo checking that the pre-push guards RECEIVE a refspec
+      # — the half with no coverage while both of them sat inert for four and a
+      # half months (#1664). `require_preflight_pass.sh` had 23 tests that
+      # invoke it, and every one hand-feeds the stdin production never
+      # delivers; `protect_main_push.sh` had none at all. pre-commit comes from this job's pip
+      # step below; without this var a regressed install turns the whole file
+      # into skips, which is the failure mode it exists to detect.
+      VIBE_REQUIRE_PRE_COMMIT: "1"
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -1305,7 +1315,13 @@ jobs:
         # .gitlab-ci.yml against (#1347). It installs a CLI, and the test finds
         # it via shutil.which — VIBE_REQUIRE_CHECK_JSONSCHEMA above makes a
         # missing CLI fail instead of skipping.
-        run: pip install pyyaml croniter pytest pytest-cov pytest-timeout pytest-xdist promql-parser hypothesis pathspec jsonschema check-jsonschema -c requirements/ci-constraints.txt
+        # pre-commit: tests/ops/test_prepush_hook_wiring.py runs it as the hook
+        # runner (`pre-commit install --hook-type pre-push`) to check the
+        # pre-push guards actually receive a refspec — the Lint job already
+        # installs it, but this job did not, and the wiring assertions live
+        # here. VIBE_REQUIRE_PRE_COMMIT above makes its absence a failure
+        # rather than a silent skip.
+        run: pip install pyyaml croniter pytest pytest-cov pytest-timeout pytest-xdist promql-parser hypothesis pathspec jsonschema check-jsonschema pre-commit -c requirements/ci-constraints.txt
 
       - name: Collect tests
         # CI skips 3 slow/benchmark test suites for speed:
