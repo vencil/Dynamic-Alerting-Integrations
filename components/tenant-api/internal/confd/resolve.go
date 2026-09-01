@@ -155,14 +155,27 @@ func TenantFilePathForWrite(configDir, tenantID string) (string, error) {
 	case err == nil:
 		return path, nil
 	case errors.Is(err, ErrTenantFileNotFound):
-		// guardBareTenantID already proved filepath.Base(tenantID) == tenantID,
-		// so this Base is semantically a no-op (TestBaseAtTheJoinIsANoOp pins
-		// that). It is applied anyway because a REJECTION is a control-flow
-		// property a reader — and a taint-tracking analyser — has to reason
-		// about, whereas a TRANSFORMATION at the join is local and evident.
-		// CodeQL's Go path-injection query flagged both os.ReadFile sinks
-		// downstream of this join while only the assertion was present.
-		return filepath.Join(configDir, DefaultTenantFileName(filepath.Base(tenantID))), nil
+		// This join is the ONLY place a caller-supplied id becomes a path.
+		// guardBareTenantID has already proved the id is a bare filename, but
+		// that proof lives in ANOTHER function, and a taint-tracking analyser
+		// reasons about a check where it can see it. CodeQL's Go
+		// path-injection query models `!strings.Contains(x, "..")` and
+		// `filepath.IsLocal(x)` as barriers, and does NOT model filepath.Base
+		// as a sanitizer at all (its TaintedPathCustomizations.qll lists only
+		// filepath.Clean("/"+e), mux.Vars, numeric/boolean nodes and a
+		// ".."-ReplaceAll) — which is why the earlier attempt to satisfy it by
+		// applying Base right here could not have worked, and did not. So
+		// restate the predicate INLINE, on the same value that reaches the
+		// join.
+		//
+		// Unreachable by construction, and deliberately so: guardBareTenantID
+		// rejects both shapes first, and is strictly the stronger predicate
+		// (IsLocal admits `a/b`, which the guard does not). This narrows
+		// nothing and replaces nothing — it is a barrier at the sink.
+		if strings.Contains(tenantID, "..") || !filepath.IsLocal(tenantID) {
+			return "", fmt.Errorf("%w: %q", ErrUnsafeTenantID, tenantID)
+		}
+		return filepath.Join(configDir, DefaultTenantFileName(tenantID)), nil
 	default:
 		return "", err
 	}

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -183,10 +184,12 @@ func TestBareFilenameIDsStillResolve(t *testing.T) {
 	}
 }
 
-// The filepath.Base applied at the join must not change any accepted id — the
-// guard already rejects every id for which Base would differ, so the two must
-// agree on the whole accepted namespace.
-func TestBaseAtTheJoinIsANoOp(t *testing.T) {
+// The sink-side barrier inside TenantFilePathForWrite is a RESTATEMENT of
+// guardBareTenantID, not a second rule: every id the guard accepts must reach
+// the join and produce the unchanged default path. If the two ever disagree,
+// a legitimate tenant starts failing with ErrUnsafeTenantID — so pin the
+// direction that can break users, on the whole accepted namespace.
+func TestLegalIDsResolveToTheUnchangedDefaultPath(t *testing.T) {
 	t.Parallel()
 	for _, id := range []string{"db-a", "db-a-1", "Upper", "a.b", "x_y-1", "tenant.with.dots"} {
 		t.Run(id, func(t *testing.T) {
@@ -194,8 +197,8 @@ func TestBaseAtTheJoinIsANoOp(t *testing.T) {
 			if err := guardBareTenantID(id); err != nil {
 				t.Fatalf("guard rejected a legitimate id %q: %v", id, err)
 			}
-			if filepath.Base(id) != id {
-				t.Fatalf("filepath.Base(%q) = %q — the guard let through an id it changes", id, filepath.Base(id))
+			if strings.Contains(id, "..") || !filepath.IsLocal(id) {
+				t.Fatalf("the sink-side barrier rejects %q, which the guard accepts", id)
 			}
 			dir := mkdir(t)
 			got, err := TenantFilePathForWrite(dir, id)
