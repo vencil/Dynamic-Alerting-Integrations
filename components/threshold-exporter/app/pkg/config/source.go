@@ -115,15 +115,21 @@ func (s *InMemoryConfigSource) YAMLFiles(rootPath string) (map[string][]byte, er
 	return out, nil
 }
 
-// hiddenSegmentBelowRoot reports whether any path segment of `p` STRICTLY
-// BELOW `root` is dot-prefixed. It is the flat-map equivalent of the disk
+// hasHiddenSegment reports whether any segment of the ALREADY-ROOT-RELATIVE
+// path `rel` is dot-prefixed. It is half of the flat-map equivalent of the disk
 // walker's `fs.SkipDir` pruning: that walker never descends into a hidden
 // directory, so every file beneath one is invisible to it no matter what the
 // file itself is called.
 //
-// ⛔ The root is never tested. The walker is explicit about this — "Never
-// prune the root itself even if rootPath happens to start with '.'" — so a
-// caller scanning `.config/conf.d` gets its whole tree, not nothing.
+// ⛔ IT TAKES `rel`, NOT A FULL PATH, AND THAT IS LOAD-BEARING. Stripping the
+// root is `relToRoot`'s job, and the walker never prunes its own starting
+// point — "Never prune the root itself even if rootPath happens to start with
+// '.'" — so a source rooted at `.config/conf.d` must get its whole tree, not
+// nothing. Hand this function the full path instead and the root's own dot
+// segment prunes everything. Measured: that substitution left the entire suite
+// green until `TestDotPrefixedRootYieldsItsWholeTree` was added, because every
+// root in the corpus was `/sim` or `/`. The promise lives at the CALL SITE;
+// this doc describes it only because that is where a reader looks for it.
 //
 // ⛔ Every segment is tested, not just the file's immediate parent. The
 // walker prunes the entire subtree, so `<root>/.cache/deep/x.yaml` is dropped

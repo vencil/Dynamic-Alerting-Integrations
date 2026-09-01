@@ -162,14 +162,22 @@ func TestScanRejectsOffRootPathsFromASourceThatDoesNotFilter(t *testing.T) {
 //
 // ⛔ WHY IT IS A SEPARATE TEST AND NOT ANOTHER TABLE ROW. The promise is
 // load-bearing on the CALL SITE passing `rel` rather than `p`. Both are
-// in-scope strings of the same type one line apart, so `hasHiddenSegment(p)` is
-// an ordinary slip — and it is invisible to every other fixture in this repo,
-// because every root used anywhere in the suite is `/sim` or `/`, neither of
-// which has a dot segment for `p` to contribute over `rel`. Measured: with that
-// substitution the entire suite stayed green (`go test ./... -count=1`, rc=0)
-// while this scenario returned an empty tenant map. A test that exercises the
-// helper alone cannot see it; only driving the public entry point with a
-// dot-prefixed root can.
+// in-scope strings of the same type one line apart — and the substitution is
+// invisible to every other fixture in this repo, because every root used
+// anywhere in the suite is `/sim` or `/`, neither of which has a dot segment
+// for `p` to contribute over `rel`. A test that exercises the helper alone
+// cannot see it; only driving the public entry point with a dot-prefixed root
+// can.
+//
+// ⛔ EXACTLY WHAT WAS MEASURED, because an earlier version of this comment
+// overstated it. Substituting `p` for `rel` and changing NOTHING else does not
+// compile — `rel` becomes declared-and-not-used (`go build ./...` rc=1). The
+// variant that survives silently needs a second edit that discards `rel`
+// (`_, inRoot :=`, or `_ = rel`). With that variant the entire suite stayed
+// green (`go test ./... -count=1` rc=0) while this scenario returned an empty
+// tenant map. So the compiler catches the one-character version; it is the
+// tidy-up-the-unused-variable version that this test exists for. Recorded at
+// this length because "measured" has to name the thing actually run.
 func TestDotPrefixedRootYieldsItsWholeTree(t *testing.T) {
 	t.Parallel()
 
