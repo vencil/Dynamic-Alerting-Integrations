@@ -80,7 +80,11 @@ func TestDiff_ReadsTheTenantsActualFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Diff: %v", err)
 	}
-	if diff == "" {
-		t.Fatal("Diff was empty — it read a nonexistent <id>.yaml instead of the tenant's .yml file")
+	// A non-empty diff is NOT enough: when Diff reads a nonexistent <id>.yaml it
+	// reports the whole proposal as a new file (all `+` lines), which is also
+	// non-empty. The discriminating evidence is the OLD value — it can only
+	// appear if the tenant's real .yml file was read.
+	if !strings.Contains(diff, "70") {
+		t.Fatalf("Diff did not read the tenant's .yml file — the old value is absent, so this is a new-file diff, not a modification. diff=%q", diff)
 	}
 }
