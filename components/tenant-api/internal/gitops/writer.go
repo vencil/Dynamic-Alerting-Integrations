@@ -107,18 +107,38 @@ var ErrReservedTenantID = errors.New("reserved tenant id: names a conf.d control
 // the handler's ValidateTenantID uses — so no tenant write method can overwrite
 // a reserved control file even if a future caller forgets to validate first
 // (single-choke-point fragility is the exact bug class this change closes).
-// foreignTenantKeys returns the sorted `tenants:` keys a body declares that are
-// not the id being written. Separate from validate so the rule has one copy and
-// a direct test; validate already proved tenantID itself is present.
-func foreignTenantKeys(tcfg cfg.ThresholdConfig, tenantID string) []string {
-	var foreign []string
-	for id := range tcfg.Tenants {
-		if id != tenantID {
-			foreign = append(foreign, id)
+// addedTenantKeys returns the sorted `tenants:` keys a body declares that are
+// neither the id being written nor already declared by the file this write
+// replaces. Separate from validate so the rule has one copy and a direct test.
+//
+// FAIL CLOSED on every path that yields no baseline — configDir unset (the
+// unit-test shape), a missing file (a brand-new tenant), an unreadable or
+// unparseable one: each leaves the baseline empty, so every foreign key counts
+// as added. Only a base file that actually parses can grandfather anything.
+func addedTenantKeys(configDir string, tcfg cfg.ThresholdConfig, tenantID string) []string {
+	baseline := map[string]struct{}{}
+	if configDir != "" {
+		if raw, err := os.ReadFile(filepath.Join(configDir, tenantID+".yaml")); err == nil {
+			var base cfg.ThresholdConfig
+			if yaml.Unmarshal(raw, &base) == nil {
+				for id := range base.Tenants {
+					baseline[id] = struct{}{}
+				}
+			}
 		}
 	}
-	sort.Strings(foreign)
-	return foreign
+	var added []string
+	for id := range tcfg.Tenants {
+		if id == tenantID {
+			continue
+		}
+		if _, grandfathered := baseline[id]; grandfathered {
+			continue
+		}
+		added = append(added, id)
+	}
+	sort.Strings(added)
+	return added
 }
 
 func guardTenantID(tenantID string) error {
@@ -704,10 +724,18 @@ func validate(configDir, tenantID, yamlContent string) (errs, notices []string) 
 	// only walks the ROOT map; a second `tenants.<other>` block passes it, and
 	// both remaining gates (RequireOrgWrite, Policy.CheckWrite via
 	// extractPatchKeys) read the URL id alone and never see it (#1681).
-	if foreign := foreignTenantKeys(tcfg, tenantID); len(foreign) > 0 {
+	//
+	// DELTA, not absolute: a flat conf.d file may legitimately declare several
+	// tenants and the exporter serves them, so sections already in the file
+	// stay editable and only sections this write ADDS are refused. Every form
+	// of the attack is an addition. Residual, deliberately accepted: whoever
+	// already has a file naming another tenant keeps that reach — reaching that
+	// state needs an operator, not a request.
+	if added := addedTenantKeys(configDir, tcfg, tenantID); len(added) > 0 {
 		return []string{fmt.Sprintf(
-			"YAML declares tenant section(s) %v — a tenant config may only declare "+
-				"tenants.%s; write them through their own endpoint", foreign, tenantID)}, nil
+			"YAML adds tenant section(s) %v this file does not already declare — a "+
+				"tenant config may only add tenants.%s; write the others through "+
+				"their own endpoint", added, tenantID)}, nil
 	}
 	// #1231 c2: the write gate consumes KeyValidation.Errors ONLY — Notices
 	// (deprecated-key alias advisories) must never block a write; they ride
