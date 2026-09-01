@@ -222,7 +222,7 @@ jobs:
           - name: victoria-logs # helm/victorialogs/values.yaml
             ref: "victoriametrics/victoria-logs:v1.52.0@sha256:47b820890d64c4575a2a0a46415dcd8a4fd59a0f1fcd6a377693d7aea639442e"
           - name: chargeback-python # helm/chargeback-aggregator/values.yaml
-            ref: "python:3.14-slim@sha256:cea0e6040540fb2b965b6e7fb5ffa00871e632eef63719f0ea54bca189ce14a6"
+            ref: "python:3.14-slim@sha256:ce40764625a4ff50df3548277632e7f96c4e77fe75fa848aae9885476e7df5a4"
           - name: envoy # helm/federation-gateway/values.yaml
             ref: "envoyproxy/envoy:distroless-v1.38.0@sha256:a7a56545102f7a682e0cafea2c9b8448af1b09ebb710eab688dfb931e3ec7ff6"
           - name: oauth2-proxy # helm/da-portal + helm/tenant-api values.yaml
@@ -233,15 +233,15 @@ jobs:
           - name: prom-label-proxy # helm/federation-proxy/values.yaml
             ref: "prometheuscommunity/prom-label-proxy:v0.15.0@sha256:b6fc0bba6669fcb7eebe527e57de6b94eb85a6a3441b1a0546227a822fd8ea7b"
           - name: mariadb # helm/mariadb-instance/values.yaml
-            ref: "mariadb:11.8.8@sha256:efb4959ef2c835cd735dbc388eb9ad6aab0c78dd64febcd51bc17481111890c4"
+            ref: "mariadb:11.8.8@sha256:d9f7eb2637296652f24b484afd5d246f759f49f5babcadc6a9e344c9acb75fbf"
           - name: mysqld-exporter # helm/mariadb-instance/values.yaml
-            ref: "prom/mysqld-exporter:v0.19.0@sha256:eacb4b18e2ec1e0abdf2d64851b68526c964f6d9cb3e9458fb5d5f5062ea94c1"
+            ref: "prom/mysqld-exporter:v0.20.0@sha256:abed8dac117b4ae5b70757f988e44795935b9a72c3b58d720c67ba688f8cb79e"
           - name: grafana # k8s/03-monitoring/deployment-grafana.yaml
-            ref: "grafana/grafana:12.4.6@sha256:c2cd7057f6116f708b6ab11dc36089f4b34bcf5065c4457ca6b55daa42a9eb8c"
+            ref: "grafana/grafana:12.4.8@sha256:7753ad493720e33560077e8bc5e05fbce4ade777f1387b19ab5050b6777111dd"
           - name: prometheus # k8s/03-monitoring/deployment-prometheus.yaml
             ref: "prom/prometheus:v3.13.2@sha256:508729e0e2d18e11fd742a5a5ca70e557b940a93948c3c95fd0123a6fd538b69"
           - name: alertmanager # k8s/03-monitoring/deployment-alertmanager.yaml
-            ref: "prom/alertmanager:v0.33.1@sha256:9e082985f56f4c8c9f724e18f2288c6708f472e56a5286b8863d080434ea065d"
+            ref: "prom/alertmanager:v0.34.0@sha256:690c7b525f4367aa91f73e2f91c632206d32e97c6384bdbf2fb7a861b420340d"
           - name: kube-state-metrics # k8s/03-monitoring/deployment-kube-state-metrics.yaml
             ref: "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.19.1@sha256:85108987d044b18a098126732f98602df408888c0f7d456241f5abefb9744bc1"
           # Replaced ghcr.io/jimmidyson/configmap-reload (#1243): its last release is
@@ -252,7 +252,7 @@ jobs:
           # (routing config, #1243) and deployment-prometheus.yaml (Rule Packs, #1246).
           # A digest refresh MUST update both or they drift silently.
           - name: config-reloader # k8s/03-monitoring/deployment-{alertmanager,prometheus}.yaml (sidecars)
-            ref: "quay.io/prometheus-operator/prometheus-config-reloader:v0.93.0@sha256:0ccb22ca9f3f6fd9f76ce95585d18bd2e363d421c534dde710be4bd13caa551d"
+            ref: "quay.io/prometheus-operator/prometheus-config-reloader:v0.93.1@sha256:428f088fe6fe07ab138bda92113664b04848a1dc408e4d3680a60ecdb55d1a65"
           # NOTE: alpine/git's VERSION tags are mutable — upstream's Sunday cron
           # re-pushes v<X.Y.Z> from a fresh `apk add` (alpine-docker/git build.yml), so
           # the same tag silently gains OS fixes. Only the digest pins it; a digest-only
@@ -267,9 +267,9 @@ jobs:
           # (e.g. a deliberate `gh label create … || true`) are then reported as
           # offenders by the guards below.
           - name: busybox # helm/federation-{gateway,reconciler}/values.yaml (preflight init)
-            ref: "busybox:1.36@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662"
+            ref: "busybox:1.38@sha256:dc2d74b28e4cf8984fa52af1f39bc7c3d9c73760b41a74d629f5d11b1ab28616"
           - name: alpine-git # k8s/04-tenant-api/deployment.yaml (gitops sidecar)
-            ref: "alpine/git:v2.54.0@sha256:729da2347ce652f30476b064198577fe12e1147e58499be9f343039343ef2cee"
+            ref: "alpine/git:v2.54.0@sha256:a299a963fbe31628ab481ca42907bcf0691d004f86734c02638abdf513691d42"
     steps:
       # Authenticated Docker Hub pulls (rate-limit headroom); guarded no-op without creds.
       - name: Docker Hub login (no-op without creds)
