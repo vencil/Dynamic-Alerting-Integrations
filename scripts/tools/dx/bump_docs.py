@@ -66,9 +66,15 @@ from pathlib import Path, PurePosixPath
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
+# `../lint` for DOCS_TREE_SYMLINK_ALIASES — the same cross-package shape
+# compile_custom_alerts.py and generate_rulepack_configmaps.py already use.
+# Importing the constant rather than re-spelling those three names keeps this
+# module from becoming a fourth, independently-rotting copy of the set.
+sys.path.insert(0, os.path.join(str(_THIS_DIR), "..", "lint"))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_toolcount import count_by_subdir, count_scope  # noqa: E402
+from _version_patterns import DOCS_TREE_SYMLINK_ALIASES  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Repo root detection
@@ -1142,16 +1148,62 @@ def _count_jsx_tools():
 
 
 def _count_docs():
-    """Count documentation files in docs/ directory.
+    """Count DISTINCT ``*.md`` documents under ``docs/``.
 
-    Returns count of *.md files.
+    ⛔ Nothing consumes this. `--sync-counts` prints it once as a diagnostic
+    inside the "Current counts detected" block and it feeds no COUNT rule —
+    unlike every other number in that block. That is why the print labels it
+    informational: a reader who assumes `--sync-counts` maintains this number
+    would be wrong, and #1665 removed the README sentence that made the same
+    assumption in the other direction.
+
+    ``DOCS_TREE_SYMLINK_ALIASES`` is applied because three entries under
+    ``docs/`` are mode-120000 symlinks to files that are also counted at
+    their real location, so counting both spellings inflated this by 3
+    (measured on ``daf747fb``: 265 with the aliases, 262 without).
+
+    Census of readers whose ANSWER depends on that fact. The criterion is
+    "does ignoring the aliases change this reader's result", NOT "does it
+    mention them" — the two give very different answers, and the second one
+    sweeps in dozens of per-file scanners that visit an alias twice with no
+    consequence. Five readers meet the first criterion:
+      1. ``validate_docs_versions.count_bilingual_pairs``  — applies the set
+      2. ``validate_docs_versions.check_bilingual_number_consistency``
+         — applies it via ``SKIP_BILINGUAL_NUMBER_FILES``
+      3. ``dx/doc_coverage.py`` — its OWN literal copy of the same three names
+         (``EXCLUDE_RELATIVE_PATHS``). ⚠️ NOT merely a duplicate spelling: it
+         keys on ``file_path.resolve().relative_to(repo_root)``, and
+         ``resolve()`` follows symlinks. Here the aliases are materialised as
+         regular stubs so nothing is followed and the exclusion matches
+         (measured: denominator 259, all three excluded). On a checkout where
+         they really are symlinks the keys become ``CHANGELOG.md`` /
+         ``README.en.md`` at repo root, which are not in that set, and the
+         exclusion stops working. Latent here, real elsewhere.
+      4. ``dx/generate_doc_map.py`` — a THIRD literal copy (``SKIP_FILES``).
+         It keys on ``relative_to(REPO_ROOT)`` with no ``resolve()``, so it has
+         no such platform dependence; a plain duplicate.
+      5. this function — handled it nowhere, which is what is fixed here.
+    (``DOC_MAP_SKIP_NAMES`` carries a fourth, partial copy — ``README-root.md``
+    but not ``README-root.en.md``; the constant's own header records that as
+    latent-not-active.) Collapsing 3 and 4 is #1665 follow-up work, not this
+    change: one feeds a coverage percentage and the other a generated catalogue.
+
+    The membership test is by NAME rather than ``Path.is_symlink()`` on
+    purpose — see the constant's own header: a checkout without symlink support
+    materialises those entries as small path stubs (12–15 bytes: the blob is
+    just the target path, ``../README.md`` being the 12), so an is_symlink()
+    test answers differently per platform, which is the exact platform
+    dependence the set exists to remove.
     """
     docs_dir = REPO_ROOT / "docs"
     if not docs_dir.exists():
         return 0
 
-    count = len(list(docs_dir.glob("**/*.md")))
-    return count
+    return sum(
+        1
+        for p in docs_dir.glob("**/*.md")
+        if p.is_file() and p.name not in DOCS_TREE_SYMLINK_ALIASES
+    )
 
 
 def _count_precommit_hooks():
@@ -2427,7 +2479,10 @@ def main():
             print(f"    - {_subdir}/: {_count}")
         print(f"  Rule Packs: {rule_packs}")
         print(f"  JSX tools: {jsx_tools}")
-        print(f"  Documentation files: {docs}")
+        # ⛔ #1665: labelled, because this one is the odd entry in the block —
+        # every other line here corresponds to a COUNT rule that --sync-counts
+        # writes somewhere. This one has no writer and no checker.
+        print(f"  Documentation files: {docs}  (informational — not synced)")
         print(f"  Pre-commit hooks: {hooks}")
         print()
 
