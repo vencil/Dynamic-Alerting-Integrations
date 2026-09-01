@@ -1,36 +1,18 @@
 package main
 
 // config_source_oracle_parity_test.go — pins `pkg/config.ScanFromConfigSource`
-// against the production walker (`scanDirHierarchical`, this package) on the
-// axis #1589 measured: PATH vs BASENAME.
+// against the production walker (`scanDirHierarchical`, this package).
 //
-// ⛔ WHY THIS FILE EXISTS, AND WHY HERE. `ScanFromConfigSource` documents
-// itself as "the in-memory cousin of scanDirHierarchical … using identical
-// classification + dedup + chain rules", and `source.go` carried the comment
-// `// Hidden files skipped — match scanDirHierarchical.` on a test that only
-// looked at `path.Base(p)`. The oracle prunes hidden DIRECTORIES with
-// `fs.SkipDir`, so `<root>/.git/inside.yaml` is never visited; the in-memory
-// cousin walks a flat map, and `path.Base` of that path is `inside.yaml`,
-// which is not dot-prefixed. The two answered differently and nothing said so
-// — the #1339 family's shape (one tree, several enumerators, different
-// selection conditions, silent divergence), this time between an implementation
-// and the comment claiming it matched.
+// The cousin documents itself as producing "identical classification + dedup +
+// chain rules", and carried `// Hidden files skipped — match
+// scanDirHierarchical.` over a test that only looked at `path.Base(p)`. Nothing
+// checked the claim; #1589 is what that cost.
 //
 // It lives in `package main` because that is the only package that can call
-// BOTH sides: the oracle is unexported here, and `pkg/config` cannot import
-// `main`. Measured before writing this file: `pkg/config`'s three enumerators
-// (`hierarchy.go`, `scope.go`, `source.go`) had NO parity test against the
-// oracle at all — `grep -rn scanDirHierarchical pkg/` returned comments only,
-// zero calls. `flat_scanner.go` has `config_scanner_pair_test.go`; these three
-// had nothing. This closes that gap for `source.go` only; `hierarchy.go` and
-// `scope.go` remain unpinned (that is "not measured", not "measured fine").
-//
-// ⛔ SCOPE HONESTY. `SimulateEffective` — the only production caller — builds
-// its own synthetic corpus (`/sim`, `/sim/lvl1/…`, `tenant.yaml`) and can never
-// hand a hidden path to the scanner. So this is NOT a live /simulate incident.
-// What diverged is a public library API in `pkg/config` plus a comment stating
-// the opposite of the truth. The family's whole claim is that such divergence
-// is the defect, discovered later at a worse moment.
+// BOTH sides — the oracle is unexported here and `pkg/config` cannot import
+// `main`. Measured when it was written: `pkg/config`'s three enumerators had NO
+// oracle parity test at all. This closes the gap for `source.go` only;
+// `hierarchy.go` and `scope.go` remain unpinned — not measured, not fine.
 
 import (
 	"os"
@@ -44,23 +26,14 @@ import (
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
-// hiddenAxisCorpus is one logical tree, expressed root-relative with POSIX
-// separators. Bodies are distinct so a misattributed tenant is visible by name
-// rather than by count.
+// hiddenAxisCorpus is one logical tree, root-relative, POSIX separators.
+// Bodies differ so a misattributed tenant shows up by name, not by count.
 //
-// The three hidden-path shapes are deliberately different from each other:
-// a dot FILE at the root, a dot DIRECTORY one level down, and a dot DIRECTORY
-// with a further plain level beneath it. The middle one is the cell #1589
-// reported; the last one is there because the oracle's `fs.SkipDir` prunes the
-// whole subtree, and a fix that only tested the file's immediate parent would
-// pass the middle cell and still miss this one.
-// The `_defaultſ.yaml` entry (U+017F LATIN SMALL LETTER LONG S) is not part of
-// the hidden axis. It pins the OTHER trap found while fixing this one: the
-// walker classifies defaults with `strings.ToLower(name) == "_defaults.yaml"`
-// while `internal/confdname.IsDefaults` uses `strings.EqualFold`, and those two
-// disagree on exactly this name (measured in Go: false vs true). Swapping the
-// scanner onto the shared predicate — the obvious "collapse the copies" move —
-// therefore turns this cell red here. That is the point of keeping it.
+// The hidden shapes are deliberately three: a dot FILE, a dot DIRECTORY, and a
+// dot directory with a PLAIN level under it — a fix that only tested the file's
+// immediate parent passes the first two and still misses the third.
+// `_defaultſ.yaml` (U+017F) is a different axis: it is the one name where the
+// walker's ToLower rule and `confdname`'s EqualFold disagree (#1670).
 var hiddenAxisCorpus = map[string]string{
 	"_defaults.yaml":     "defaults:\n  cpu_usage: 80\n",
 	"_defaultſ.yaml":     "defaults:\n  cpu_usage: 99\n",
@@ -79,19 +52,13 @@ var hiddenAxisCorpus = map[string]string{
 	"sub/_defaults.yaml":    "defaults:\n  cpu_usage: 81\n",
 	".cache/_defaults.yaml": "defaults:\n  cpu_usage: 82\n",
 
-	// ⛔ A case-variant chain carrier, covering a cell where the walker is
-	// KNOWN TO BE WRONG (issue #1674). The walker's classifier folds case and
-	// files this into its `defaults` set under its original-case path, while
-	// `collectDefaultsChain` probes only the two lowercase literals — so it is
-	// a carrier that reaches nobody's chain. `ResolveEffective`,
-	// `describe_tenant.py` and `flat_scanner.go` all include it; the walker is
-	// the only excluder of four readers.
-	//
-	// It is here BECAUSE the cousin reproduces that fault faithfully, which is
-	// what parity means and is exactly what this file must keep true: when
-	// #1674 is fixed, a fix applied to only one of the two turns this test red.
-	// ⛔ Its presence is not an endorsement — the corpus comment above says
-	// plainly that this cell is a known defect on both sides.
+	// ⛔ A cell where the WALKER ITSELF is wrong (#1674): its classifier folds
+	// case and files this into `defaults`, while `collectDefaultsChain` probes
+	// only the two lowercase literals — a carrier that reaches nobody's chain.
+	// `ResolveEffective`, `describe_tenant.py` and `flat_scanner.go` all include
+	// it; the walker is the only excluder of four readers. It is here because the
+	// cousin reproduces the fault faithfully, which is what parity means: a fix
+	// applied to only one of the two turns this test red. Not an endorsement.
 	"sub/_DEFAULTS.YML": "defaults:\n  mem_usage: 70\n",
 }
 
@@ -178,27 +145,18 @@ func sortedTenantIDs(m map[string]string) []string {
 	return out
 }
 
-// TestScanFromConfigSourceMatchesOracleOnHiddenPaths is the parity assertion.
-// It deliberately states no expected answer of its own: it asserts that the
-// in-memory cousin reproduces whatever the production walker does with this
-// corpus. Hard-coding an expectation here would let one side be edited to match
-// a wrong idea of the answer and still pass.
+// TestScanFromConfigSourceMatchesOracleOnHiddenPaths asserts that the cousin
+// reproduces whatever the walker does with this corpus. It states no expected
+// answer of its own: hard-coding one would let a side be edited to match a
+// wrong idea of the answer and still pass.
 //
-// ⛔ "REPRODUCES THE WALKER" IS NOT "IS CORRECT", and an earlier version of this
-// comment blurred the two by calling the walker's behaviour "the contract". It
-// is the contract *for this cousin* — the cousin exists to be the walker's
-// in-memory twin — but the walker is not thereby right. Measured since:
-// `scanDirHierarchical` contradicts itself on a case-variant carrier
-// (`sub/_DEFAULTS.YML` enters its `defaults` set and no tenant's chain, because
-// `collectDefaultsChain` probes the two lowercase literals), and on that cell
-// `ResolveEffective`, `describe_tenant.py` and `flat_scanner.go` all disagree
-// with it — the walker is one of four readers and the only excluder. Filed as
-// issue #1674.
-//
-// ⇒ This test's job is to stop the cousin from drifting away from the walker.
-// It is NOT evidence that the walker is right, and it must not be cited as
-// such. Where the walker is wrong, the fix is a joint one — both sides move
-// together, and this test correctly stays green through that.
+// ⛔ "REPRODUCES THE WALKER" IS NOT "IS CORRECT". The walker is the contract
+// for this cousin — the cousin exists to be its in-memory twin — but the walker
+// is not thereby right: it contradicts itself on a case-variant carrier and
+// three other readers disagree with it there (#1674). This test stops the
+// cousin drifting from the walker. It is not evidence the walker is right and
+// must not be cited as such; where the walker is wrong the fix moves both
+// sides together, and this test correctly stays green through that.
 func TestScanFromConfigSourceMatchesOracleOnHiddenPaths(t *testing.T) {
 	t.Parallel()
 

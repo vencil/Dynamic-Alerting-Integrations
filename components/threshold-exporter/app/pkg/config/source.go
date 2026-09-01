@@ -104,27 +104,14 @@ func (s *InMemoryConfigSource) YAMLFiles(rootPath string) (map[string][]byte, er
 	for p, b := range s.files {
 		clean := path.Clean(p)
 		// ⛔ ONE copy of the root-boundary rule, shared with the classifier in
-		// ScanFromConfigSource. This filter used to be a second hand-written
-		// copy (`clean != root && !strings.HasPrefix(clean, root+"/")`) and the
-		// two diverged exactly where a fix had been applied to only one of
-		// them: at the bare roots. Measured, with the boundary fix in
-		// `relToRoot` and this line still hand-written:
+		// ScanFromConfigSource. A second hand-written copy lived here and the
+		// two diverged at the bare roots — `root+"/"` is `"//"` for `/`, and for
+		// `"."` path.Clean has already stripped the keys' `./` — so the only
+		// production source shape returned a silent empty scan. See relToRoot.
 		//
-		//	root="."  YAMLFiles=0 files -> tenants=map[] hashes=0 err=<nil>
-		//	root=""   (path.Clean -> ".")  same
-		//	root="/"  same
-		//
-		// — a silent empty scan through the ONLY production source shape,
-		// while the same corpus through a non-filtering source classified
-		// correctly. `root+"/"` is `"//"` for the filesystem root and never
-		// matches; for `"."` the keys have already had their `./` stripped by
-		// path.Clean, so it never matches either.
-		//
-		// ⛔ Only the BOUNDARY half is shared. This method deliberately still
-		// returns hidden files — `TestInMemoryConfigSource_FiltersByRoot` pins
-		// that, and the scan layer is where dot-pruning belongs (it mirrors
-		// WalkDir yielding the entry and the visitor filtering it). That is why
-		// `relToRoot` and `hasHiddenSegment` are two functions and not one.
+		// ⛔ Only the BOUNDARY half is shared: this method deliberately still
+		// returns hidden files (TestInMemoryConfigSource_FiltersByRoot pins it;
+		// dot-pruning belongs to the scan layer). Hence two functions, not one.
 		if _, inside := relToRoot(clean, root); !inside {
 			continue
 		}
@@ -143,40 +130,21 @@ func (s *InMemoryConfigSource) YAMLFiles(rootPath string) (map[string][]byte, er
 // directory, so every file beneath one is invisible to it no matter what the
 // file itself is called.
 //
-// ⛔ IT TAKES `rel`, NOT A FULL PATH, AND THAT IS LOAD-BEARING. Stripping the
-// root is `relToRoot`'s job, and the walker never prunes its own starting
-// point — "Never prune the root itself even if rootPath happens to start with
-// '.'" — so a source rooted at `.config/conf.d` must get its whole tree, not
-// nothing. Hand this function the full path instead and the root's own dot
-// segment prunes everything. Measured: that substitution left the entire suite
-// green until `TestDotPrefixedRootYieldsItsWholeTree` was added, because every
-// root in the corpus was `/sim` or `/`. The promise lives at the CALL SITE;
-// this doc describes it only because that is where a reader looks for it.
+// ⛔ IT TAKES `rel`, NOT A FULL PATH. The walker never prunes its own starting
+// point, so a source rooted at `.config/conf.d` must get its whole tree; hand
+// this function the full path and the root's own dot segment prunes
+// everything. Pinned by TestDotPrefixedRootYieldsItsWholeTree — nothing else
+// in the suite sees it, because every other root in the corpus is `/sim`.
 //
-// ⛔ Every segment is tested, not just the file's immediate parent. The
-// walker prunes the entire subtree, so `<root>/.cache/deep/x.yaml` is dropped
-// by `.cache` even though `deep` and `x.yaml` are both plain.
+// ⛔ EVERY segment, not just the file's immediate parent: the walker prunes
+// the whole subtree, so `<root>/.cache/deep/x.yaml` goes by `.cache`.
 //
-// ⛔ This is a byte-prefix test on `.` — no case folding, nothing Unicode —
-// which is exactly what the walker does (`strings.HasPrefix(name, ".")`).
-//
-// ⛔ AND THAT MEANS THIS IS AN UNRESOLVED DUPLICATE, not a justified one. An
-// earlier version of this comment pointed at the defaults-comparison note
-// below for why `internal/confdname.IsHidden` is "not a drop-in here". That
-// reason is wrong for THIS predicate: the note is about `EqualFold` versus
-// `ToLower`, and `IsHidden` does no folding at all — it is
-// `strings.HasPrefix(base, ".")`, byte-identical to the test below. Nor is
-// visibility the obstacle: measured by compiling, `pkg/config` can import
-// `internal/confdname` (`internal/batchpr` already does, same module tree).
-//
-// The real reason is a judgement nobody has made yet: `pkg/config` is the
-// public library surface and has no `internal/` dependency today, so importing
-// one to share two `HasPrefix` calls buys one fewer copy at the cost of the
-// first `pkg/` → `internal/` edge. That is a trade to decide, not a measured
-// constraint — and stating it as a measured constraint was the same defect
-// class this file exists to fix, one level up: a claim that sounds settled
-// standing in for a decision. Tracked with the rest of the predicate-sharing
-// question; do not read this comment as a reason to leave it alone.
+// ⛔ Byte-prefix on `.`, no folding — what the walker does. `confdname.IsHidden`
+// is byte-identical and importable here (measured: `pkg/config` compiles
+// against `internal/confdname`; `internal/batchpr` already imports it), so this
+// IS an unresolved duplicate. What is unresolved is a trade nobody has made:
+// `pkg/` has no `internal/` dependency today, and one edge for two `HasPrefix`
+// calls may not be worth it. Do not read this as a settled reason to leave it.
 func hasHiddenSegment(rel string) bool {
 	// `rel == ""` (the root itself, which the walker never prunes) needs no
 	// branch: `strings.Split("", "/")` is `[]string{""}`, and `""` is not
@@ -195,42 +163,26 @@ func hasHiddenSegment(rel string) bool {
 // relToRoot returns `p` expressed relative to `root`, and whether `p` is inside
 // `root` AT A DIRECTORY BOUNDARY.
 //
-// ⛔ The boundary is the separator, not the byte prefix. `/sim-backup/x.yaml`
-// shares the five bytes `/sim` with root `/sim` and is NOT inside it. An
-// earlier version of the hidden test here computed `strings.TrimPrefix(p,
-// root)` with no boundary check, which answered confidently about paths it had
-// no business answering about — measured on that version:
+// ⛔ THE ONLY COPY OF THE BOUNDARY RULE. `YAMLFiles` calls this too; do not
+// re-hand-write it there. Both of the traps below were live at some point with
+// two copies in the tree, and each was fixed in one copy only.
 //
-//	p="/other/.git/a.yaml"  root="/sim"  -> "hidden" (true)   // not even under root
-//	p="/simulate/a.yaml"    root="/sim"  -> rel "ulate/a.yaml" // a fabricated segment
+// ⛔ The boundary is the separator, not the byte prefix — `/sim-backup/x.yaml`
+// shares `/sim` as bytes and is not inside it. A bare `TrimPrefix` answers
+// confidently about paths it has no business answering about:
 //
-// ⛔ THIS FUNCTION IS THE ONLY COPY OF THE BOUNDARY RULE, and it took a fourth
-// round of review to get there. `InMemoryConfigSource.YAMLFiles` used to
-// hand-write the same judgement as `clean == root || HasPrefix(clean,
-// root+"/")`. Two copies, and the fix for the bare roots landed in this one
-// only — so the production source shape (`NewInMemoryConfigSource` +
-// `ScanFromConfigSource`) went on returning `tenants=map[] err=<nil>` at
-// `root="."`, `""` and `"/"` while the fix was reported as done. The tests
-// written for that fix all drove a non-filtering source and so never touched
-// the copy that still had the bug.
+//	p="/other/.git/a.yaml"  root="/sim"  -> "hidden"            // not under root at all
+//	p="/simulate/a.yaml"    root="/sim"  -> rel "ulate/a.yaml"  // a fabricated segment
 //
-// ⇒ One tree, two hand-written rules, one of them fixed, silently disagreeing,
-// with the test pinned to the wrong path. That is #1339 itself, produced inside
-// a change whose subject is #1339. `YAMLFiles` now calls this function.
-// ⛔ `"/"` IS NOT THE ONLY ROOT THAT CONTRIBUTES NO LEADING SEGMENT. `path.Clean`
-// maps BOTH `""` and `"."` to `"."`, and a walker rooted there emits keys with no
-// `./` prefix at all (`filepath.Join(".", x) == x`). An earlier version of this
-// function special-cased `"/"` and let `"."` fall through to the `root+"/"` arm,
-// which rejected every relative key — measured, on a corpus the previous
-// implementation classified CORRECTLY:
+// ⛔ `"/"` is not the only root contributing no leading segment: `path.Clean`
+// maps BOTH `""` and `"."` to `"."`, and a walker rooted there emits keys with
+// no `./` prefix (`filepath.Join(".", x) == x`). Letting `"."` fall through to
+// the `root+"/"` arm rejects every relative key — `tenants=map[]` with
+// `err=<nil>`, a silent empty scan where the previous code was correct. So the
+// bare roots are enumerated, not pattern-matched.
 //
-//	root="."  before: tenants=map[a:a.yaml b:sub/b.yaml]   (matches a walker rooted there)
-//	root="."  after:  tenants=map[]  hashes=0  err=<nil>   (a silent empty scan)
-//
-// ⛔ Silent is the operative word: no error, just nothing. Adding a boundary
-// check to stop one confident wrong answer had produced a different confident
-// wrong answer one root-shape over — which is the family reproducing inside its
-// own fix, so the bare-root cases are enumerated rather than pattern-matched.
+// Both traps are pinned by TestRelToRootRequiresADirectoryBoundary and
+// TestProductionSourceShapeScansAtBareRoots.
 func relToRoot(p, root string) (rel string, inside bool) {
 	if p == root {
 		return "", true
@@ -322,35 +274,21 @@ func ScanFromConfigSource(src ConfigSource, rootPath string) (
 		hashes[p] = fmt.Sprintf("%x", sha256.Sum256(data))
 
 		// ⛔ DELIBERATELY NOT `internal/confdname.IsDefaults`, even though
-		// this is the fourth hand-written copy of the rule and collapsing
-		// copies is the whole point of the #1339 family. That predicate uses
-		// `strings.EqualFold`; the walker this scanner must agree with uses
-		// `strings.ToLower(name) == "_defaults.yaml"`. MEASURED IN GO on this
-		// toolchain (not reasoned about, and not measured in another language
-		// — that mistake has its own scar in confdname's header):
+		// collapsing copies is the point of the #1339 family. That predicate
+		// uses `strings.EqualFold`; the walker this scanner must reproduce uses
+		// `strings.ToLower(name) == "_defaults.yaml"`. Measured in Go:
 		//
-		//	name := "_defaultſ.yaml"                       // U+017F LATIN SMALL LETTER LONG S
+		//	name := "_defaultſ.yaml"                       // U+017F LONG S
 		//	strings.ToLower(name) == "_defaults.yaml"      // false  ← the walker
 		//	strings.EqualFold(name, "_defaults.yaml")      // true   ← confdname
 		//
-		// `unicode.SimpleFold` connects U+017F ↔ 'S' ↔ 's', and ToLower does
-		// not. So adopting the shared predicate here would move this scanner
-		// off the walker it is defined as reproducing — buying one fewer copy
-		// by creating a fresh silent divergence, in the file whose job is to
-		// not do that.
-		//
-		// ⛔ AND THIS IS NOT TWO DEFENSIBLE DESIGNS. `internal/confdname`'s own
-		// header names `tests/shared/confd_name_classification_matrix.json` as
-		// its contract, and that file defines the field as "name LOWERCASED is
-		// exactly '_defaults.yaml' or '_defaults.yml'" — ToLower semantics, the
-		// walker's. `IsDefaults` implements EqualFold, so it does not satisfy
-		// the contract it cites, and the matrix's 23 rows cannot see it (its
-		// only non-ASCII name, `İ.yaml`, is on the extension axis). Filed as
-		// issue #1670. The copy here stays until that is settled — not because
-		// two readings are equally valid, but because one of them is a known
-		// defect and this scanner must not adopt it. Reconciling it changes the
-		// write plane (`internal/batchpr`, `internal/profile`) and is not this
-		// change's blast radius.
+		// ⛔ And this is not two defensible designs: confdname cites
+		// `tests/shared/confd_name_classification_matrix.json` as its contract,
+		// and that file defines the field as "name LOWERCASED is exactly …" —
+		// the walker's semantics. So `IsDefaults` does not satisfy the contract
+		// it cites (issue #1670). Adopting it here would buy one fewer copy by
+		// importing a known defect. Pinned by
+		// TestSharedDefaultsPredicateStillDisagreesWithTheWalker.
 		lower := strings.ToLower(name)
 		if strings.HasPrefix(name, "_") {
 			if lower == "_defaults.yaml" || lower == "_defaults.yml" {

@@ -3,21 +3,13 @@ package config
 // source_boundary_test.go — pins the DIRECTORY-BOUNDARY half of the hidden-path
 // classification in ScanFromConfigSource.
 //
-// ⛔ WHY A UNIT TEST HERE, when the behaviour already has an end-to-end parity
-// test (`config_source_oracle_parity_test.go`, package main). Because that test
-// cannot reach this code path: it drives the scanner through
-// `InMemoryConfigSource.YAMLFiles`, which filters the corpus to `clean == root
-// || HasPrefix(clean, root+"/")` before the classifier ever sees it. Every
-// off-root path is gone by then. The classifier's handling of off-root input is
-// therefore unobservable end-to-end — and that is exactly what made the earlier
-// `strings.TrimPrefix(p, root)` version survive: it answered confidently about
-// paths it had no business answering about, and nothing could see it.
-//
-// ⛔ This is NOT the "test the helper instead of the behaviour" shortcut this
-// repo has paid for. The behaviour is pinned end-to-end by the parity test;
-// this pins the one input class that pinning cannot reach, and it names the
-// production change that would break it: reverting `relToRoot` to a bare
-// prefix trim, or dropping the `!inRoot` arm at the call site.
+// ⛔ WHY UNIT TESTS HERE when the behaviour has an end-to-end parity test:
+// that test drives the scanner through `InMemoryConfigSource.YAMLFiles`, which
+// filters off-root paths out before the classifier sees them. The classifier's
+// handling of off-root input is therefore unobservable end-to-end — which is
+// exactly what let a bare `TrimPrefix` survive there, answering confidently
+// about paths it had no business answering about. This pins the one input class
+// that pinning cannot reach; the behaviour itself stays pinned end-to-end.
 
 import (
 	"strconv"
@@ -155,24 +147,15 @@ func TestScanRejectsOffRootPathsFromASourceThatDoesNotFilter(t *testing.T) {
 	}
 }
 
-// TestDotPrefixedRootYieldsItsWholeTree pins the half of the invariant that
-// `hasHiddenSegment`'s own doc comment promises in words — "The root is never
-// tested … so a caller scanning `.config/conf.d` gets its whole tree, not
-// nothing" — and that nothing was checking.
+// TestDotPrefixedRootYieldsItsWholeTree pins what `hasHiddenSegment`'s doc
+// promises in words and nothing was checking: the root is never tested, so a
+// source rooted at `.config/conf.d` gets its whole tree.
 //
-// ⛔ WHY IT IS A SEPARATE TEST AND NOT ANOTHER TABLE ROW. The promise is
-// load-bearing on the CALL SITE passing `rel` rather than `p`. Both are
-// in-scope strings of the same type one line apart — and the substitution is
-// invisible to every other fixture in this repo, because every root used
-// anywhere in the suite is `/sim` or `/`, neither of which has a dot segment
-// for `p` to contribute over `rel`. A test that exercises the helper alone
-// cannot see it; only driving the public entry point with a dot-prefixed root
-// can.
-//
-// ⛔ Substituting `p` for `rel` and changing nothing else does not compile
-// (`rel` becomes declared-and-not-used). The variant this test exists for is
-// the one that tidies the now-unused variable away — measured, that one left
-// the whole suite green while this scenario returned an empty tenant map.
+// ⛔ The promise is load-bearing on the CALL SITE passing `rel`, not `p` — two
+// same-typed locals one line apart. Substituting them (and tidying the now-
+// unused variable, which is what makes it compile) left the whole suite green
+// while this scenario returned an empty tenant map: every other root in the
+// corpus is `/sim` or `/`, with no dot segment for `p` to contribute.
 func TestDotPrefixedRootYieldsItsWholeTree(t *testing.T) {
 	t.Parallel()
 
@@ -242,22 +225,15 @@ func TestRelativeRootStillScansItsTree(t *testing.T) {
 	}
 }
 
-// TestProductionSourceShapeScansAtBareRoots drives the combination that
-// actually ships — `NewInMemoryConfigSource` (which filters by root) fed to
-// `ScanFromConfigSource` — rather than the non-filtering test double.
+// TestProductionSourceShapeScansAtBareRoots drives the combination that ships —
+// `NewInMemoryConfigSource` (which filters by root) into `ScanFromConfigSource`
+// — rather than the non-filtering test double.
 //
-// ⛔ WHY IT EXISTS, AND WHY ITS ABSENCE WAS THE WHOLE PROBLEM. The bare-root
-// bug was first fixed in `relToRoot` alone, while `YAMLFiles` still carried its
-// own hand-written copy of the boundary rule. Every test written for that fix
-// used `offRootSource`, which bypasses `YAMLFiles` entirely — so they all went
-// green over a production path that was still returning an empty scan:
-//
-//	root="."  YAMLFiles=0 files -> tenants=map[] hashes=0 err=<nil>
-//
-// A test that exercises the fix through a shape production never takes is not
-// a guard, and this repo has paid for that lesson before under the name "only
-// verifying the helper". This one goes through both copies at once, so it can
-// only pass if they agree.
+// ⛔ Its absence WAS the bug. The bare-root fix first landed in `relToRoot`
+// only, while `YAMLFiles` kept its own copy of the boundary rule; every test
+// written for that fix used `offRootSource` and so went green over a production
+// path still returning `tenants=map[] err=<nil>`. This one goes through both
+// copies at once, so it can only pass if they agree.
 func TestProductionSourceShapeScansAtBareRoots(t *testing.T) {
 	t.Parallel()
 
