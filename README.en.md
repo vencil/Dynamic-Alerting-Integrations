@@ -98,6 +98,27 @@ Full comparison with Alertmanager routing examples: [Config-Driven Design](docs/
 
 ## Repository Map
 
+<!-- ⛔ The `docs/` row deliberately carries no count (#1665). The previous
+     "203 public documents (92 bilingual pairs)" had neither a writer nor a
+     checker: `grep 公開文件|public document` hits 0 under scripts/ and tests/,
+     and no definition reproduces 203 or 204. Measured on `daf747fb`, the four
+     steps are CUMULATIVE: `docs/**/*.md` is 265 in total → 262 without the
+     three symlink aliases → 169 once `.en.md` is dropped too → 113 once
+     internal is dropped as well (without the alias step those last two are
+     171 / 115). The two halves even disagreed by one. The 92 was not "pairs in
+     this repo" either: it is the size of
+     `check_bilingual_number_consistency`'s scan set, which also skips
+     benchmarks.md. Pairs under docs/ that resolve to a zh side: 93 — that is
+     94 `.en.md` files minus the alias, with 0 orphans.
+     The per-document list comes from the generated doc-map linked below.
+     ⚠️ The other numbers in this table are NOT in the same position, so do not
+     read them together: the 224 Python tools have a bump_docs writer and a
+     validate_docs_versions checker on both halves, but the 16 rule packs do
+     NOT have either FOR THIS TABLE — measured, none of the four relevant cells
+     matches any RULE_PACK_COUNT_PATTERNS; what is guarded is the README badge
+     and the "16 個 Rule Pack …" sentences elsewhere. Wire up both ends and
+     define the population before re-adding a number to this row. -->
+
 | Directory | Contents | When to visit |
 |-----------|----------|---------------|
 | [`components/`](components/) | Component sources: `threshold-exporter` (Go), `tenant-api` (Go), `da-tools` (Python CLI), `da-portal` (frontend container) | Application logic changes |
@@ -108,7 +129,7 @@ Full comparison with Alertmanager routing examples: [Config-Driven Design](docs/
 | [`environments/`](environments/) | CI / local environment profiles | Cross-environment config |
 | [`scripts/`](scripts/) | Shell entrypoints + 224 Python tools under `scripts/tools/{ops,dx,lint}` | Run tools, linting, DX |
 | [`tests/`](tests/) | Python pytest (`test_*.py`), shell scenarios (`scenario-*.sh`), `e2e/` Playwright, `snapshots/` | Run / add tests |
-| [`docs/`](docs/) | 203 public documents (92 bilingual pairs). Lookup table: [doc-map](docs/internal/doc-map.en.md) | Design / integration / ops docs |
+| [`docs/`](docs/) | Public documents and their zh/en bilingual pairs. Per-document lookup table: [doc-map](docs/internal/doc-map.en.md) | Design / integration / ops docs |
 | [`operator-manifests/`](operator-manifests/) | `operator_generate.py` output samples (16 PrometheusRule rule-packs) | Reference output for operator mode |
 | [`CLAUDE.md`](CLAUDE.md) | AI Agent bootstrap + task-routing table | Required before starting an agent session |
 | [`docs/internal/`](docs/internal/) | Internal playbooks (testing / benchmark / windows-mcp / github-release) and maps | Debugging, releases, benchmarks |
