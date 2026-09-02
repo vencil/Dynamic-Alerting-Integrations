@@ -144,7 +144,7 @@ da-tools validate-config --config-dir conf.d/ --json
 
 | # | 規則 | 偵測方式 | 嚴重度 |
 |---|------|---------|--------|
-| 1 | `open()` 必須帶 `encoding="utf-8"` | AST 掃描 open() call，排除二進位模式 | High |
+| 1 | `open()` 必須帶 `encoding="utf-8"`；原始碼不得以 UTF-8 BOM 開頭 | AST 掃描 open() call，排除二進位模式；BOM 讀 bytes 前綴判定 | High |
 | 2 | `subprocess` 禁止 `shell=True` | AST 掃描 subprocess.run/call/Popen keywords | Critical |
 | 3 | 寫入檔案需搭配 `os.chmod(0o600)` | 同函式內 write-open + chmod 配對（advisory） | Medium |
 | 4 | 禁止 `yaml.load()`，強制 `yaml.safe_load()` | AST 掃描 yaml.load 缺少 SafeLoader | Critical |

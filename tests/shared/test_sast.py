@@ -2,7 +2,7 @@
 """test_sast.py — 集中式 SAST (Static Application Security Testing) 合規掃描。
 
 掃描所有 Python 工具程式碼，確保符合專案安全規範：
-  1. open() 呼叫必須帶 encoding="utf-8"（或 utf-8-sig）
+  1. open() 呼叫必須帶 encoding="utf-8"（或 utf-8-sig），且原始碼不得以 BOM 開頭
   2. subprocess 呼叫禁止 shell=True
   3. 檔案寫入需搭配 os.chmod(path, 0o600) 限制權限
 
@@ -34,9 +34,27 @@ assert len(_PY_FILES) >= 40, (
 
 
 def _read_source(path):
-    """讀取並回傳檔案原始碼。"""
+    """讀取並回傳檔案原始碼，剝掉一個前導 BOM。
+
+    ⛔ 剝除是必要的，而且它不是在放行 BOM——放行的是**這支檔案原本的行為**。
+    `open(encoding="utf-8")` 會把 BOM 當成 U+FEFF 留在字串裡，而 `ast.parse`
+    對它拋 SyntaxError，於是下面每一條規則都走進 `pytest.skip`。實測（同一份
+    位元組只差開頭 3 bytes，且該檔 `python <file>` **rc=0 跑得起來**）：
+
+        plain  1 failed / 1694 passed      ← 蓄意違規被抓到
+        BOM    1689 passed / 6 skipped     ← rc=0，六條規則全部靜默
+
+    六條裡有三條是 `governance-security.md` 標 Critical 的（`shell=True`、
+    `yaml.load`、`eval/exec/pickle`）。⚠️ CI 那行沒有 `-rs`，所以
+    FAILED→SKIPPED 只反映在一個數字上，沒有人會看見。
+    ⚠️ 而 skip 訊息說「語法錯誤」——那句話對 BOM 檔是**假的**，它照樣編得過。
+    ⛔ 剝掉之後 BOM 本身仍然要被擋，那是下面 `test_source_has_no_bom` 的事：
+    這裡負責「看得見」，那裡負責「不准有」。兩件事分開，缺一個就是靜默。
+    ⚠️ 剝掉**恰好一個**，與直譯器一致：`compile(bytes)` 對一個 BOM 是 OK、
+    對兩個是 SyntaxError，所以兩個 BOM 的檔仍應該走到下面的 skip。
+    """
     with open(path, encoding="utf-8") as f:
-        return f.read()
+        return f.read().removeprefix("\ufeff")
 
 
 def _short_path(path):
@@ -62,6 +80,34 @@ _BINARY_MODE_RE = re.compile(r'["\'][rwax]+b["\']')
 
 class TestOpenEncoding:
     """掃描所有 open() 呼叫，確認帶有 encoding 參數。"""
+
+    @pytest.mark.parametrize("py_file", _PY_FILES, ids=_short_path)
+    def test_source_has_no_bom(self, py_file):
+        """原始碼不得以 UTF-8 BOM 開頭。
+
+        ⛔ 這條規則本來就寫在 `docs/internal/dev-rules.md` 的 SAST 第 1 條
+        （「encoding 檢查（強制 UTF-8 without BOM）」），只是一直沒有實作；
+        補上它之前，全 repo 唯一會對帶 BOM 的 `.py` 有反應的東西是一支關於
+        折行路徑引用的守衛，而它是以**裸 traceback** 反應的（#1632）。
+        ⚠️ Windows 主機加上 PowerShell 的 `Out-File` / `>` 預設就寫 BOM，
+        所以這不是理論風險；`CLAUDE.md` 自己記著這一條。
+
+        ⛔ 為什麼獨立成一條、而不是靠 parse 失敗來擋：帶 BOM 的檔**跑得起來**
+        （`compile(bytes)` 會剝掉一個前導 U+FEFF，實測 `python <file>` rc=0），
+        所以它不會在任何執行路徑上出聲；而上面 `_read_source` 現在會剝掉它，
+        正是為了讓其餘規則看得見那個檔。少了這一條，BOM 就完全沒有人管。
+        ⭐ 這條有一條真正回到綠的路，一句話說得完：把檔案存成不帶 BOM 的
+        UTF-8。那是它與被它取代的那個裸 traceback 最大的差別。
+        """
+        with open(py_file, "rb") as handle:
+            head = handle.read(3)
+        assert head != b"\xef\xbb\xbf", (
+            f"{_short_path(py_file)} 以 UTF-8 BOM 開頭。這個檔案跑得起來"
+            "（直譯器編譯 bytes 時會剝掉一個前導 U+FEFF），所以不會有任何"
+            "執行期症狀；但本模組其餘規則、`check_open_encoding` 與 "
+            "`check_subprocess_timeout` 讀到的是帶 U+FEFF 的字串，實測會"
+            "**靜默跳過**這個檔（#1632）。修法：把它存成不帶 BOM 的 UTF-8。"
+        )
 
     @pytest.mark.parametrize("py_file", _PY_FILES, ids=_short_path)
     def test_open_has_encoding(self, py_file):

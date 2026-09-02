@@ -818,8 +818,20 @@ def _implicit_concat_references(text: str, path: str = "<synthetic>") -> list[tu
     # ⚠️ Positions are unaffected: line numbers do not move, and the one-column
     # shift on line 1 cannot surface because nothing in this module reads
     # `col_offset` (zero occurrences).
-    # ⛔ This decides NO BOM POLICY — whether a tracked `.py` may carry one is
-    # #1632's separate direction. The repo already settled the same question the
+    # ⛔ TOLERATING A BOM HERE IS NOT PERMITTING ONE. Whether a `.py` may carry
+    # one is decided elsewhere, and as of this change it IS decided: SAST rule 1
+    # (`tests/shared/test_sast.py::test_source_has_no_bom`) rejects a leading BOM
+    # outright, which is the rule `dev-rules.md` had written down all along with
+    # no implementation behind it. This scan's job is only to not CRASH on one.
+    # ⚠️ Those two must both exist. Blind review measured what happens with only
+    # the first: before that guard landed, this module was the only thing in the
+    # repo that reacted to a BOM'd `.py` at all — so fixing the false red here,
+    # alone, would have made such a file invisible to a FATAL pre-commit hook and
+    # to six SAST rules that skipped it in silence (three of them Critical).
+    # ⚠️ Residue, stated rather than implied: SAST rule 1's scope is
+    # `scripts/tools/**`, so a BOM elsewhere in the tree — including on THIS file
+    # — is still unguarded. That is on the ticket, not covered here.
+    # The repo already settled the same question the
     # same way for a sibling scan: `check_build_completeness.py` reads tool
     # sources with `utf-8-sig`, its comment reaching this identical conclusion
     # ("a BOM is invisible to Python's own import machinery but makes
@@ -1551,7 +1563,20 @@ def test_tracked_is_never_narrowed_at_a_use_site() -> None:
     local bound from the call, and a wrapper call are recognised; `islice`
     and filtering comprehensions are not.
     """
-    tree = ast.parse(Path(__file__).resolve().read_text(encoding="utf-8"))
+    # ⛔ `utf-8-sig` and a `filename=`, for the same reason the tree scan above
+    # carries them — and this site is the one that had NEITHER. Blind review
+    # measured it: prepend a BOM to THIS module (it still runs; `compile(bytes)`
+    # drops one leading U+FEFF) and the tree scan sails through while this line
+    # dies with a bare `SyntaxError ... File "<unknown>", line 1` — no path, no
+    # ticket — in the file whose neighbouring twenty lines exist to defend that
+    # exact diagnostic. Two planes in one module, opposite answers, same bytes.
+    # ⚠️ `utf-8-sig` rather than the tree scan's `removeprefix`: this reads its
+    # OWN file directly, one read and one strip, so there is no second stripper
+    # to collide with. The same choice `check_build_completeness.py` made.
+    # ⚠️ Four sibling modules self-parse the same way and are still bare; that
+    # is a separate ticket, not silence.
+    source = Path(__file__).resolve().read_text(encoding="utf-8-sig")
+    tree = ast.parse(source, filename=__file__)
 
     def _is_call(node: ast.AST) -> bool:
         return (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
