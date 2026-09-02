@@ -99,6 +99,17 @@ func PutTenant(d *Deps) http.HandlerFunc {
 			return
 		}
 
+		// #1597 follow-up: the gate above authorized against the tenant's
+		// metadata AS IT IS ON DISK. This is a whole-file replace, and
+		// `_metadata` lives inside the file being replaced, so the body can
+		// move the tenant into an environment/domain the caller does not
+		// administer. Authorize the PROPOSED state too — same predicate, same
+		// flag, so shadow mode is unaffected and the gap closes exactly when
+		// the axis is enforced.
+		if !RequireOrgWriteProposed(rw, r, d, tenantID, rbac.PermWrite, string(body)) {
+			return
+		}
+
 		// v2.5.0: Domain policy enforcement before write
 		if d.Policy != nil {
 			patch := extractPatchKeys(body, tenantID)

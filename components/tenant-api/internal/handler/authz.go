@@ -121,22 +121,67 @@ func OrgAllowedRead(rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager,
 // neither the tenant's org list nor any principal claim value (principal.go
 // logging discipline — the org names are an enumeration oracle).
 func RequireOrgWrite(w http.ResponseWriter, r *http.Request, d *Deps, tenantID string, want rbac.Permission) bool {
+	return requireOrgWriteWithMeta(w, r, d, tenantID, want, WriteScopeMeta(d.ConfigDir),
+		"insufficient permissions for tenant "+tenantID+
+			" (permission and organization-scope checks, ADR-027)")
+}
+
+// RequireOrgWriteProposed is the POST-STATE half of the write gate (#1597
+// follow-up). RequireOrgWrite authorizes against the tenant's metadata as it is
+// ON DISK; that is the right question to ask before reading the body, but it is
+// not the only one, because `_metadata` lives INSIDE the file a whole-file PUT
+// replaces. A caller authorized for environment=production could therefore
+// submit a body setting environment=dev and have it committed — the write would
+// be checked against production and land in dev, planting configuration in a
+// scope the caller does not administer (and removing the tenant from their own
+// reach).
+//
+// This is specific to the metadata axis. The org axis cannot be attacked this
+// way: org membership lives in the admin-only `_tenant_orgs.yaml`, a separate
+// file this path cannot write. Nor can the batch path reach it — it refuses to
+// overwrite a structured key like `_metadata` with a scalar patch value
+// (tenant_batch.go). Whole-file PUT is the exposed shape.
+//
+// The check runs the SAME predicate against the PROPOSED metadata, so it
+// inherits the axis's flag: in shadow it changes nothing, and it closes the gap
+// exactly when --rbac-metadata-write-scope-enforce is flipped. Call it AFTER
+// the body is read and BEFORE any write; RequireOrgWrite still runs first so a
+// denied caller learns nothing from a body it was never allowed to submit.
+func RequireOrgWriteProposed(w http.ResponseWriter, r *http.Request, d *Deps,
+	tenantID string, want rbac.Permission, proposedYAML string) bool {
+	return requireOrgWriteWithMeta(w, r, d, tenantID, want, proposedScopeMeta(proposedYAML),
+		"insufficient permissions for the tenant metadata this write proposes"+
+			" — the environment/domain in the body places tenant "+tenantID+
+			" outside your scope (#1597)")
+}
+
+// proposedScopeMeta reads environment/domain from the content the caller is
+// proposing to write, rather than from disk. Same extractor the list plane
+// uses, so a body and a stored file are read identically.
+func proposedScopeMeta(yamlContent string) ScopeMetaFunc {
+	return func(tenantID string) (string, string) {
+		var summary TenantSummary
+		extractMetadata(&summary, []byte(yamlContent), tenantID)
+		return summary.Environment, summary.Domain
+	}
+}
+
+func requireOrgWriteWithMeta(w http.ResponseWriter, r *http.Request, d *Deps,
+	tenantID string, want rbac.Permission, meta ScopeMetaFunc, denyMsg string) bool {
 	// A Deps literal without an RBAC manager is a TEST-ONLY state (nil-safe
 	// contract, mirroring TenantOrg above): main.go always wires a non-nil
 	// manager — even open mode is a non-nil Manager — and the route-level
 	// RBAC middleware dereferences the same manager, so a nil here can never
 	// be reached by a routed production request. Treating it as "no RBAC
-	// layer configured" preserves the pre-P4b behavior of the handlers this
-	// wrapper now guards, which performed no in-handler permission check.
+	// layer configured" preserves the pre-P4b behavior of the handlers these
+	// wrappers guard, which performed no in-handler permission check.
 	if d.RBAC == nil {
 		return true
 	}
-	if OrgAllowed(d.RBAC, d.TenantOrg, rbac.RequestPrincipal(r), tenantID, want, WriteScopeMeta(d.ConfigDir)) {
+	if OrgAllowed(d.RBAC, d.TenantOrg, rbac.RequestPrincipal(r), tenantID, want, meta) {
 		return true
 	}
-	WriteJSONErrorWithCode(w, r, http.StatusForbidden, CodeForbidden,
-		"insufficient permissions for tenant "+tenantID+
-			" (permission and organization-scope checks, ADR-027)")
+	WriteJSONErrorWithCode(w, r, http.StatusForbidden, CodeForbidden, denyMsg)
 	return false
 }
 
