@@ -214,7 +214,11 @@ func writeError(w http.ResponseWriter, r *http.Request, status int, msg string) 
 func (m *Manager) writeForbidden(w http.ResponseWriter, r *http.Request, tenantID string, want Permission) {
 	action := "Check your _rbac.yaml group rules. Ensure your IdP group has '" + string(want) +
 		"' permission for tenant '" + tenantID + "'"
-	if m.metadataWriteScopeEnforce {
+	// ...and only on a plane the axis can actually deny. writeForbidden also
+	// serves PermRead denials (the middleware's read-by-id and list gates),
+	// where the metadata axis is not live — naming a knob that cannot change
+	// that outcome is the same failure this conditional exists to fix.
+	if want != PermRead && m.metadataWriteScopeEnforce {
 		action += ", and that environments[]/domains[] constraints match the tenant metadata"
 	}
 	writeEnvelope(w, r, http.StatusForbidden, errorEnvelope{

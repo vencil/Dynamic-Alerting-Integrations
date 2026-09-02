@@ -33,7 +33,7 @@ tenant_api_identity_audit_total{result="unknown_issuer"} 0
 tenant_api_identity_audit_total{result="unknown_workload"} 0
 tenant_api_identity_audit_total{result="verified"} 0
 tenant_api_identity_audit_total{result="verify_failed"} 0
-# HELP tenant_api_scope_would_deny_total Scope-filter would-deny observations by axis: an unlabeled subject that shadow mode allows but enforce mode would deny (ADR-027; monotonic counter — watch its rate/increase reach 0 over the soak window, not its absolute value, before flipping enforce).
+# HELP tenant_api_scope_would_deny_total Scope-filter would-deny observations by axis: a grant that shadow mode allows but enforce mode would deny — an unlabeled subject on a restricted field, or (axis=metadata_write) a labelled value outside the rule's allow-list (ADR-027, #1597; monotonic counter — watch its rate/increase reach 0 over the soak window, not its absolute value, before flipping enforce).
 # TYPE tenant_api_scope_would_deny_total counter
 tenant_api_scope_would_deny_total{axis="metadata"} 0
 tenant_api_scope_would_deny_total{axis="metadata_write"} 0

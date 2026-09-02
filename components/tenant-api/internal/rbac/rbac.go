@@ -785,10 +785,21 @@ func (m *Manager) allowedScopedOnAxes(p *VerifiedPrincipal, tenantID string, wan
 	// vs enforce outcome. A grant is a would-deny for an axis iff flipping that
 	// axis ALONE from shadow→enforce takes it away — which is what makes each
 	// axis's soak counter a usable flip criterion on its own.
-	m.recordScopeShadowGap(
-		visAt(passSS, passSE, passES, passEE, false, orgFlag), // metadata=shadow
-		visAt(passSS, passSE, passES, passEE, true, orgFlag),  // metadata=enforce
-		metaAxis)
+	// Only record the metadata gap on a plane where the axis actually
+	// participates. A plane with metaAxisLive=false (read-by-id) is fed the
+	// unlabeled pair and can never be denied by metadata — but the lattice
+	// still shows a shadow/enforce difference for any rule carrying
+	// environments/domains, so recording unconditionally made every read-by-id
+	// increment {axis="metadata"}: the LIST plane's soak series, whose
+	// increase()==0 gates the unrelated --rbac-metadata-scope-enforce flip.
+	// Measured: one AllowedInOrgRead against an environments-scoped rule moved
+	// that counter to 1.
+	if metaAxisLive {
+		m.recordScopeShadowGap(
+			visAt(passSS, passSE, passES, passEE, false, orgFlag), // metadata=shadow
+			visAt(passSS, passSE, passES, passEE, true, orgFlag),  // metadata=enforce
+			metaAxis)
+	}
 	m.recordScopeShadowGap(
 		visAt(passSS, passSE, passES, passEE, metaFlag, false), // org=shadow
 		visAt(passSS, passSE, passES, passEE, metaFlag, true),  // org=enforce

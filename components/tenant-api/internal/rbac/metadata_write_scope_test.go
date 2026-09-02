@@ -122,3 +122,29 @@ func TestAllowedStaysBlindOnBothAxes(t *testing.T) {
 		t.Errorf("Allowed recorded would-deny observations %v; it must record none", rec.counts)
 	}
 }
+
+// A plane where the metadata axis is NOT live must not touch the metadata soak
+// series. AllowedInOrgRead passes metaAxisLive=false and the unlabeled pair, so
+// the lattice still shows a shadow/enforce difference for any rule carrying
+// environments — recording that difference made every read-by-id increment
+// {axis="metadata"}, the LIST plane's series, whose increase()==0 gates the
+// unrelated --rbac-metadata-scope-enforce flip. Measured before the fix: one
+// AllowedInOrgRead moved that counter to 1, so a deployment with a single
+// environments-scoped rule could never satisfy its own flip criterion.
+func TestReadPlaneDoesNotTouchTheMetadataSoakSeries(t *testing.T) {
+	t.Parallel()
+	rec := newFakeScopeRecorder()
+	m := NewForTest(metaWriteCfg())
+	m.SetScopeAuditor(rec)
+
+	if !m.AllowedInOrgRead(metaWritePrincipal(), "db-a", PermRead, nil) {
+		t.Fatal("precondition: the rule grants read")
+	}
+	if n := rec.counts[scopeAxisMetadata]; n != 0 {
+		t.Errorf("a read-by-id incremented %q to %d — that is the LIST plane's soak series and the read plane cannot be denied by metadata",
+			scopeAxisMetadata, n)
+	}
+	if n := rec.counts[scopeAxisMetadataWrite]; n != 0 {
+		t.Errorf("a read-by-id incremented the write axis %q to %d", scopeAxisMetadataWrite, n)
+	}
+}

@@ -118,7 +118,7 @@ func writeScopeWouldDenyMetrics(w io.Writer) {
 	if m := activeScopeWouldDeny.Load(); m != nil {
 		snap = m.Snapshot()
 	}
-	_, _ = fmt.Fprintf(w, "# HELP tenant_api_scope_would_deny_total Scope-filter would-deny observations by axis: an unlabeled subject that shadow mode allows but enforce mode would deny (ADR-027; monotonic counter — watch its rate/increase reach 0 over the soak window, not its absolute value, before flipping enforce).\n")
+	_, _ = fmt.Fprintf(w, "# HELP tenant_api_scope_would_deny_total Scope-filter would-deny observations by axis: a grant that shadow mode allows but enforce mode would deny — an unlabeled subject on a restricted field, or (axis=metadata_write) a labelled value outside the rule's allow-list (ADR-027, #1597; monotonic counter — watch its rate/increase reach 0 over the soak window, not its absolute value, before flipping enforce).\n")
 	_, _ = fmt.Fprintf(w, "# TYPE tenant_api_scope_would_deny_total counter\n")
 	// Deterministic order for stable exposition / golden tests.
 	axes := make([]string, len(scopeWouldDenyAxes))
