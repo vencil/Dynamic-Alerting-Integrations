@@ -372,3 +372,40 @@ func TestGrandfatheredSectionSurvivesAYmlSpelling(t *testing.T) {
 		})
 	}
 }
+
+// An empty configDir must not open the added-section gate. The path resolver
+// still returns a NON-EMPTY relative name ("db-a.yaml") in that case, so an
+// unconditional baseline read would resolve it against the process CWD and
+// could grandfather foreign sections open. main.go:349 feeds configDir straight
+// from `--config-dir`, which has no emptiness guard, so this pairing is
+// reachable by misconfiguration rather than test-only.
+//
+// Counterfactual (measured, not asserted from reading): deleting the
+// `if configDir != ""` guard in validate() flips this test from reject to
+// accept.
+func TestValidateFailsClosedWhenConfigDirIsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	// A real file that DOES grandfather `other` — so the only thing that can
+	// keep the gate shut is refusing to read a baseline at all.
+	path := filepath.Join(dir, "db-a.yaml")
+	if err := os.WriteFile(path, []byte("tenants:\n  db-a:\n    _silent_mode: \"warning\"\n  other:\n    _silent_mode: \"warning\"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	body := "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n  other:\n    _silent_mode: \"all\"\n"
+
+	// Control: with a real configDir the baseline IS read and `other` is
+	// legitimately grandfathered, so this same body is accepted. Without this
+	// arm the test could pass because the body is bad rather than because the
+	// guard held.
+	if errs, _ := validate(dir, "db-a", path, body); len(errs) != 0 {
+		t.Fatalf("control arm: grandfathered body should be accepted with a real configDir, got %v", errs)
+	}
+
+	errs, _ := validate("", "db-a", path, body)
+	if len(errs) == 0 {
+		t.Fatal("configDir=\"\" accepted a body adding a foreign tenant section — the baseline read was not skipped, so the gate failed OPEN")
+	}
+	if !strings.Contains(errs[0], "adds tenant section") {
+		t.Fatalf("rejected for the wrong reason: %v", errs)
+	}
+}

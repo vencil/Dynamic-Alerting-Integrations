@@ -59,6 +59,14 @@ func TestIsAddressableTenantIDRejectsSeparators(t *testing.T) {
 		{"..", false},
 		{"../x", false},
 		{"a/../../b", false},
+		// ⛔ ".." with NO separator. The separator check does not catch these,
+		// so they are the only inputs the ".." clause decides on its own —
+		// measured: deleting that clause turned nothing red until these rows
+		// existed. They are rejected to keep this predicate's accept set
+		// identical to handler.ValidateTenantID's, which has always refused
+		// them (#1339 family: two planes, one namespace).
+		{"a..b", false},
+		{"..a", false},
 		{"/abs", false},
 		{"_defaults", false},
 		{".hidden", false},

@@ -99,3 +99,42 @@ func TestValidateTenantID_AcceptedIDsAreTenantFiles(t *testing.T) {
 		t.Errorf("property violated — an accepted id does not map to a tenant file: %v", err)
 	}
 }
+
+// TestValidateTenantIDAgreesWithTheSharedPredicate replaces a delegation that
+// used to sit at the end of ValidateTenantID as a belt. Measured over this
+// corpus it never fired — an unreachable branch, not a guard — so the property
+// it was reaching for is asserted here instead: whatever this function accepts,
+// the predicate the write plane gates on must accept too, and vice versa. A
+// divergence in EITHER direction means the write-accepted id namespace and the
+// scanned-file namespace have come apart, which is the #1339 family shape.
+func TestValidateTenantIDAgreesWithTheSharedPredicate(t *testing.T) {
+	corpus := []string{
+		"", "db-a", "Upper", "a/b", `a\b`, "..", "../x", "a/../b", "a..b", "...",
+		"/abs", "_defaults", ".hidden", "x.yaml", "x.yml", " ", "a b", "日本語",
+		"a.", ".", "..a", "a..", "UPPER.YAML", "x/", "/", `\`, "a-b_c.d",
+	}
+	agreed := 0
+	for _, id := range corpus {
+		accepted := ValidateTenantID(id) == nil
+		predicate := confd.IsAddressableTenantID(id)
+		if accepted != predicate {
+			t.Errorf("id %q: ValidateTenantID accepts=%v but IsAddressableTenantID=%v",
+				id, accepted, predicate)
+			continue
+		}
+		agreed++
+	}
+	if agreed != len(corpus) {
+		t.Errorf("agreed on %d of %d inputs", agreed, len(corpus))
+	}
+	// Anti-vacuity: a corpus that only contains rejects would agree trivially.
+	accepts := 0
+	for _, id := range corpus {
+		if ValidateTenantID(id) == nil {
+			accepts++
+		}
+	}
+	if accepts < 3 {
+		t.Fatalf("corpus has only %d accepted ids — it cannot show agreement on the accept side", accepts)
+	}
+}

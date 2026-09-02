@@ -148,13 +148,12 @@ func addedTenantKeys(baseRaw []byte, tcfg cfg.ThresholdConfig, tenantID string) 
 	if len(foreign) == 0 {
 		return nil
 	}
+	// No length guard: Unmarshal of nil succeeds with an empty Tenants map.
 	baseline := map[string]struct{}{}
-	if len(baseRaw) > 0 {
-		var base cfg.ThresholdConfig
-		if yaml.Unmarshal(baseRaw, &base) == nil {
-			for id := range base.Tenants {
-				baseline[id] = struct{}{}
-			}
+	var base cfg.ThresholdConfig
+	if yaml.Unmarshal(baseRaw, &base) == nil {
+		for id := range base.Tenants {
+			baseline[id] = struct{}{}
 		}
 	}
 	var added []string
@@ -808,6 +807,10 @@ func validate(configDir, tenantID, tenantFilePath, yamlContent string) (errs, no
 	// a tenant whose file is spelled `.yml` would otherwise get an empty
 	// baseline here, and since the baseline fails closed that would refuse
 	// every write to a flat file it had legitimately been sharing.
+	// ⛔ Guarded on configDir, NOT on tenantFilePath: with configDir="" the
+	// resolver still yields a non-empty relative path, so an unconditional read
+	// would take a baseline from the CWD and grandfather foreign sections open.
+	// Pinned by TestValidateFailsClosedWhenConfigDirIsEmpty.
 	var baseRaw []byte
 	var baseErr error
 	if configDir != "" {

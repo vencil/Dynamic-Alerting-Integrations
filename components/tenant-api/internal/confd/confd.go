@@ -101,14 +101,8 @@ func IsTenantConfigFile(name string) bool {
 // directories), so a second, weaker hand-written copy at a write site is the
 // exact shape this package exists to prevent (#1339 family, #1681).
 func IsAddressableTenantID(id string) bool {
-	if id == "" {
-		return false
-	}
-	// `\` is rejected on every GOOS, not just where filepath treats it as a
-	// separator, so no id reaching the last line can differ from its own
-	// filepath.Base. A Base check here was measured to be an equivalent mutant
-	// — deleting it turned nothing red — so it is deliberately absent rather
-	// than forgotten.
+	// An empty-id guard and a filepath.Base guard both used to sit here; each
+	// was measured unkillable (the last line already answers the same way).
 	if strings.ContainsAny(id, `/\`) || strings.Contains(id, "..") {
 		return false
 	}
