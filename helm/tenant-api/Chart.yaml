@@ -20,7 +20,13 @@ type: application
 #          tell "my volume resolved this object" from "I mounted an empty directory".
 #          store.json / revoked.txt are still never templated; verified on a real
 #          cluster that upgrade, `--reuse-values` and rollback all leave them intact.
-version: 2.9.20
+# 2.9.21 — ADR-027 / #1597: opt-in rbac.metadataWriteScopeEnforce (the env/domain
+#          metadata axis on the WRITE plane, shadow->enforce). Deliberately a
+#          SEPARATE value from rbac.metadataScopeEnforce: that one flips an axis the
+#          list plane already binds, this one binds writes for the first time, so
+#          sharing it would tighten writes the moment a list-plane-soaked deployment
+#          upgrades. Default shadow = no-op.
+version: 2.9.21
 # appVersion: Go binary 版本
 # ⚠ appVersion pins the image tag. The --human-socket binary flag ships in a NEW
 # tenant-api image; humanSocket.enabled=true REQUIRES that image (NOTES + values
