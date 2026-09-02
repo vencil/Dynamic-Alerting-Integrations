@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -106,8 +107,69 @@ var ErrReservedTenantID = errors.New("reserved tenant id: names a conf.d control
 // the handler's ValidateTenantID uses — so no tenant write method can overwrite
 // a reserved control file even if a future caller forgets to validate first
 // (single-choke-point fragility is the exact bug class this change closes).
+// extraDocumentsWithContent counts the YAML documents after the first that
+// decode to something non-nil. A body whose YAML is invalid returns 0 — that is
+// the caller's earlier Unmarshal check to report, not this one's.
+func extraDocumentsWithContent(yamlContent string) int {
+	dec := yaml.NewDecoder(strings.NewReader(yamlContent))
+	extra := 0
+	for i := 0; ; i++ {
+		var doc any
+		if err := dec.Decode(&doc); err != nil {
+			return extra // io.EOF, or a parse error the Unmarshal above already owns
+		}
+		if i > 0 && doc != nil {
+			extra++
+		}
+	}
+}
+
+// addedTenantKeys returns the sorted `tenants:` keys a body declares that are
+// neither the id being written nor already declared by the file this write
+// replaces. Separate from validate so the rule has one copy and a direct test.
+//
+// FAIL CLOSED on every path that yields no baseline — no configDir (the
+// unit-test shape), a missing file (a brand-new tenant), an unreadable or
+// unparseable one: each arrives here as nil or unparseable baseRaw and leaves
+// the baseline empty, so every foreign key counts as added. Only a base file
+// that actually parses can grandfather anything.
+func addedTenantKeys(baseRaw []byte, tcfg cfg.ThresholdConfig, tenantID string) []string {
+	var foreign []string
+	for id := range tcfg.Tenants {
+		if id != tenantID {
+			foreign = append(foreign, id)
+		}
+	}
+	// The baseline only ever REMOVES entries, so a body that declares nothing
+	// but its own id has the same answer whatever the base file says. Returning
+	// here keeps the ordinary single-tenant write from paying a second full
+	// parse of a file that may hold thousands of sections — measured at roughly
+	// 2x the whole of validate() on a 10k-section base.
+	if len(foreign) == 0 {
+		return nil
+	}
+	baseline := map[string]struct{}{}
+	if len(baseRaw) > 0 {
+		var base cfg.ThresholdConfig
+		if yaml.Unmarshal(baseRaw, &base) == nil {
+			for id := range base.Tenants {
+				baseline[id] = struct{}{}
+			}
+		}
+	}
+	var added []string
+	for _, id := range foreign {
+		if _, grandfathered := baseline[id]; grandfathered {
+			continue
+		}
+		added = append(added, id)
+	}
+	sort.Strings(added)
+	return added
+}
+
 func guardTenantID(tenantID string) error {
-	if !confd.IsTenantConfigFile(tenantID + ".yaml") {
+	if !confd.IsAddressableTenantID(tenantID) {
 		return fmt.Errorf("%w: %q", ErrReservedTenantID, tenantID)
 	}
 	return nil
@@ -711,6 +773,58 @@ func validate(configDir, tenantID, tenantFilePath, yamlContent string) (errs, no
 	if _, ok := tcfg.Tenants[tenantID]; !ok {
 		return []string{fmt.Sprintf("YAML must contain tenants.%s section", tenantID)}, nil
 	}
+	// Everything after the first YAML document is bytes that nothing here reads:
+	// Unmarshal above and CheckTenantRootKeys both decode ONE document and
+	// report no error for the rest, while the write path commits yamlContent
+	// VERBATIM — so a second document carries any `tenants:` section or root key
+	// straight into git, past every gate in this function (#1681). An empty
+	// trailer (a bare `---`, a comment-only document) carries nothing and stays
+	// legal, so this counts content rather than documents.
+	if extra := extraDocumentsWithContent(yamlContent); extra > 0 {
+		return []string{fmt.Sprintf(
+			"YAML has %d document(s) with content after the first — a tenant config "+
+				"is a single document; anything after it would be written but never "+
+				"validated", extra)}, nil
+	}
+	// The write plane addresses a file by tenant id, but the exporter takes
+	// tenant ids from the file's `tenants:` KEYS — so without this the two
+	// planes disagree about who the file declares. CheckTenantRootKeys above
+	// only walks the ROOT map; a second `tenants.<other>` block passes it, and
+	// both remaining gates (RequireOrgWrite, Policy.CheckWrite via
+	// extractPatchKeys) read the URL id alone and never see it (#1681).
+	// This function joins tenantID into a path below, and it is reachable from
+	// callers that have not run the id past guardTenantID (WriteMerged's merge
+	// step, and any future one). Re-asserting it here costs a string compare and
+	// keeps the containment check in the same function as the path it protects.
+	if err := guardTenantID(tenantID); err != nil {
+		return []string{err.Error()}, nil
+	}
+	// Read the file this write replaces ONCE. Two stateful checks need it — the
+	// added-section gate below and the eol-expansion guard at the end — and on a
+	// large flat conf.d file a second full read+parse doubles a validate() that
+	// runs before the single-writer token is taken.
+	//
+	// ⛔ The path comes from the caller (#1673), never from tenantID + ".yaml":
+	// a tenant whose file is spelled `.yml` would otherwise get an empty
+	// baseline here, and since the baseline fails closed that would refuse
+	// every write to a flat file it had legitimately been sharing.
+	var baseRaw []byte
+	var baseErr error
+	if configDir != "" {
+		baseRaw, baseErr = os.ReadFile(tenantFilePath)
+	}
+	// DELTA, not absolute: a flat conf.d file may legitimately declare several
+	// tenants and the exporter serves them, so sections already in the file
+	// stay editable and only sections this write ADDS are refused. Every form
+	// of the attack is an addition. Residual, deliberately accepted: whoever
+	// already has a file naming another tenant keeps that reach — reaching that
+	// state needs an operator, not a request.
+	if added := addedTenantKeys(baseRaw, tcfg, tenantID); len(added) > 0 {
+		return []string{fmt.Sprintf(
+			"YAML adds tenant section(s) %v this file does not already declare — a "+
+				"tenant config may only add tenants.%s; write the others through "+
+				"their own endpoint", added, tenantID)}, nil
+	}
 	// #1231 c2: the write gate consumes KeyValidation.Errors ONLY — Notices
 	// (deprecated-key alias advisories) must never block a write; they ride
 	// the second return value instead (1b author-facing wiring).
@@ -749,8 +863,10 @@ func validate(configDir, tenantID, tenantFilePath, yamlContent string) (errs, no
 		// #1673: the path is resolved ONCE by the caller and handed down, so
 		// the guard reads the same file the write will land on — and so an
 		// ambiguous tenant is refused by the caller with a typed error rather
-		// than being flattened into a validation string here.
-		oldRaw, rerr := os.ReadFile(tenantFilePath)
+		// than being flattened into a validation string here. That read now
+		// happens once at the top of this function and both stateful checks
+		// share it (#1681).
+		oldRaw, rerr := baseRaw, baseErr
 		switch {
 		case rerr == nil:
 			oldAlerts, err := customalerts.Extract(string(oldRaw), tenantID)
