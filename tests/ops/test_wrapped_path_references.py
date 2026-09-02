@@ -820,17 +820,22 @@ def _implicit_concat_references(text: str, path: str = "<synthetic>") -> list[tu
     # `col_offset` (zero occurrences).
     # ⛔ TOLERATING A BOM HERE IS NOT PERMITTING ONE. Whether a `.py` may carry
     # one is decided elsewhere, and as of this change it IS decided: SAST rule 1
-    # (`tests/shared/test_sast.py::test_source_has_no_bom`) rejects a leading BOM
+    # (`test_sast.py::TestOpenEncoding::test_source_has_no_bom`) rejects a BOM
     # outright, which is the rule `dev-rules.md` had written down all along with
     # no implementation behind it. This scan's job is only to not CRASH on one.
     # ⚠️ Those two must both exist. Blind review measured what happens with only
-    # the first: before that guard landed, this module was the only thing in the
-    # repo that reacted to a BOM'd `.py` at all — so fixing the false red here,
-    # alone, would have made such a file invisible to a FATAL pre-commit hook and
-    # to six SAST rules that skipped it in silence (three of them Critical).
-    # ⚠️ Residue, stated rather than implied: SAST rule 1's scope is
-    # `scripts/tools/**`, so a BOM elsewhere in the tree — including on THIS file
-    # — is still unguarded. That is on the ticket, not covered here.
+    # the first: before that guard landed, nothing reacted to ANOTHER file's BOM
+    # except this scan — so fixing the false red here, alone, would have made such
+    # a file invisible to a FATAL pre-commit hook and to six SAST rules that
+    # skipped it in silence (three of them Critical).
+    # ⚠️ That sentence needs its qualifier: a handful of modules `ast.parse`
+    # THEMSELVES, so they do react to a BOM on their own file — measured on
+    # `tests/lint/test_e2e_spec_lint.py`. What nothing reacted to was a BOM on
+    # somebody else's file.
+    # ⚠️ Residue, stated rather than implied: the BOM guard reads every tracked
+    # `.py` (measured cost: 0.05s), so this file is covered too — but four
+    # sibling modules still self-parse with no BOM handling and no `filename=`.
+    # That half is on the ticket, not covered here.
     # The repo already settled the same question the
     # same way for a sibling scan: `check_build_completeness.py` reads tool
     # sources with `utf-8-sig`, its comment reaching this identical conclusion
