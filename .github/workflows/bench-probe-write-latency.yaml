@@ -1,0 +1,219 @@
+name: Bench Probe — write vs load latency (#1497 mechanism 1)
+
+# #1497 機制 1 的量測工具 —— 回答「一輪跑慢的時候，超出的時間在寫入還是在載入」。
+#
+# 為什麼需要它
+# ============
+# #1497 列了兩個候選機制。**機制 2**（同 mtime tick 讓 `IncrementalLoad` 走到
+# 不同分支）已被逐迭代分支計數打死：目標檔每次迭代都被重寫，`flat_scanner.go`
+# 的 `age > 2*time.Second` 永遠先失敗，`cur == prev` 對它從未被求值，穩態是
+# **恰好 1 個檔案走慢路徑、285/285 零變異**。
+# **機制 1**（寫入路徑的 writeback flush 偶發拖長）則**完全沒有被量過**——它是
+# 目前唯一還沒碰的候選，而本 workflow 就是那個量測。
+#
+# 量什麼
+# ======
+# `BenchmarkProbeWriteLatency` 把 `BenchmarkIncrementalLoad_1000_OneFileChanged`
+# 的迴圈拆成兩半，逐迭代記 `os.WriteFile` 與 `IncrementalLoad` 各自的延遲，
+# 每輪印一列分位數（`PROBEROW`）與最慢的十次迭代（`PROBETAIL`）。
+# 每一輪都**重建整棵 config 樹**，所以一輪 ≡ 一次完整的 benchmark 呼叫（含
+# 前約 135 迭代的暖機期）——否則只有第 0 輪付暖機成本，各輪不可比。
+#
+# ⛔ 它報告，不判定
+# =================
+# 檔案裡沒有門檻、沒有 pass/fail，本 job 也不開票、不留言、不寫任何跨次執行的
+# 狀態。**一次全都不慢的執行是合法結果，意思是這次沒抓到 episode，不是「沒有
+# episode」**——#1497 的同日三次 dispatch 只有一次讀到 +30.38%。所以：
+#   - 先看跨輪的散佈有沒有重現（`spread`），沒重現就別讀歸因；
+#   - 有重現才問 `write_sum` 與 `load_sum` 哪一個跟著動。
+# 「量不到」與「量了沒事」在 summary 裡是**兩行不同的字**，不要讀成同一件事。
+#
+# ⚠️ 已知界線（讀結果前必讀）
+# ===========================
+# 1. **本 job 只跑一台 runner、一個 job**。#1497 的擺盪是跨 dispatch 觀察到的，
+#    跨輪散佈與跨 dispatch 散佈**不是同一個量**。本 job 能證明的上限是「在單一
+#    job 內，慢輪的超額落在哪一半」。
+# 2. **探針不是被探測那支 benchmark 的逐位複本**：多兩次 `time.Now()`、
+#    `os.WriteFile` 的錯誤有檢查。兩者都寫在 `probe_write_latency_test.go` 的
+#    檔頭，量級也寫了（~0.002%）。
+# 3. `PROBETAIL` 只取每輪最慢的十次。若某輪的超額是**均勻**攤在四百次迭代上
+#    （而不是幾次尖峰），tail 會看起來很正常——那種形狀要看 `*_sum` 與 p50，
+#    不是看 tail。summary 兩者都印。
+#
+# 成本：一輪 ≈ 400 迭代 × ~7.5 ms + 建樹 ≈ 4–5 秒。預設 30 輪約 3 分鐘。
+
+on:
+  workflow_dispatch:
+    inputs:
+      rounds:
+        description: "Probe rounds (each round rebuilds the 1000-tenant tree and runs `iters` iterations). Passed to Go as -test.benchtime=<rounds>x."
+        required: false
+        default: "30"
+      iters:
+        description: "Iterations per round (PROBE_ITERS). The nightly's b.N for this benchmark was measured at 279..441, so 400 sits inside the real operating range."
+        required: false
+        default: "400"
+
+  # SELF-TEST。⛔ `workflow_dispatch` 的 workflow 必須先在 default branch 上，
+  # 按鈕才會出現 —— 也就是說它在 merge 之前沒有任何辦法被跑到，第一次執行就會是
+  # 正式判讀那一次。同 `bench-workload-effect.yaml` 的理由，掛一個只匹配本檔
+  # 與被它執行的探針檔的 pull_request 觸發。
+  pull_request:
+    paths:
+      - '.github/workflows/bench-probe-write-latency.yaml'
+      - 'components/threshold-exporter/app/probe_write_latency_test.go'
+
+# 只讀。本 job 不開票、不留言、不寫 label。
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Write vs load latency probe
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # ⛔ 三元式一律寫成 `是不是 self-test && '字面值' || 使用者輸入`，理由與
+    #    `bench-workload-effect.yaml` 相同：`使用者輸入 || '預設值'` 在使用者
+    #    刻意留空時會悄悄把預設值塞回去。
+    env:
+      ROUNDS: ${{ github.event_name == 'pull_request' && '3' || inputs.rounds }}
+      ITERS: ${{ github.event_name == 'pull_request' && '60' || inputs.iters }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+
+      # 受測物識別特徵。⛔ 這一條線已經燒過四次「數字跑在錯的樹上」，其中一次
+      # 就是把 PATH 上那支 `go` 的版本寫成實際跑的版本（go.mod 是 1.26.4、
+      # GOTOOLCHAIN=auto，模組內會切）。所以 Go 版本以**模組內**問到的為準，
+      # 而探針自己也會印一行 `PROBEENV`（來自 `runtime.Version()`）。
+      - name: Record runner identity
+        run: |
+          set -euo pipefail
+          echo "runner_os=${RUNNER_OS}"
+          echo "nproc=$(nproc)"
+          grep -m1 'model name' /proc/cpuinfo || true
+          echo "go_on_path=$(go version)"
+          ( cd components/threshold-exporter/app && echo "go_in_module=$(go version)" )
+          echo "head_sha=${GITHUB_SHA}"
+
+      - name: Run the probe
+        working-directory: components/threshold-exporter/app
+        run: |
+          set -euo pipefail
+          # ⛔ 兩個方向都驗，而且在跑任何東西之前。rounds=0 會讓 Go 一輪都不跑
+          # 卻仍然綠燈交出一份沒有量測的報告；非數字會被 Go 當成錯誤的
+          # benchtime 語法，訊息不會提到是這裡填錯的。
+          case "$ROUNDS" in ''|*[!0-9]*) echo "::error::rounds must be a positive integer (got '$ROUNDS')"; exit 2 ;; esac
+          case "$ITERS"  in ''|*[!0-9]*) echo "::error::iters must be a positive integer (got '$ITERS')";  exit 2 ;; esac
+          [ "$ROUNDS" -ge 2 ] || { echo "::error::rounds must be >= 2 — one round has no spread to report"; exit 2; }
+          [ "$ITERS"  -ge 10 ] || { echo "::error::iters must be >= 10"; exit 2; }
+
+          # 先編一次再跑，與 bench_interleave.sh 同理由：`go test -bench` 每次
+          # 呼叫都會重編，而編譯器本身是 CPU 重載，會在量測正前方注入熱尖峰。
+          go test -c -o "${RUNNER_TEMP}/probe.test" .
+          PROBE_ITERS="$ITERS" "${RUNNER_TEMP}/probe.test" \
+            -test.run '^$' -test.bench '^BenchmarkProbeWriteLatency$' \
+            -test.benchtime="${ROUNDS}x" -test.timeout=25m \
+            | tee "${RUNNER_TEMP}/probe.out"
+
+          # ⛔ 上面接了管線，`$?` 讀到的是 tee 的 rc。這一行才是探針自己的。
+          rc="${PIPESTATUS[0]}"
+          [ "$rc" -eq 0 ] || { echo "::error::probe exited $rc"; exit "$rc"; }
+
+      - name: Summarize
+        run: |
+          set -euo pipefail
+          python3 - "${RUNNER_TEMP}/probe.out" <<'PY' | tee -a "${GITHUB_STEP_SUMMARY}"
+          import re, statistics as st, sys
+
+          # ⛔ 記錄可能不在行首。`go test` 會在每次 invocation 的第一行輸出前面
+          # 貼上 `BenchmarkProbeWriteLatency-4   \t`，實測就把第二個 PROBEENV
+          # 推離行首了（`-benchtime=5x` 會先跑一次 b.N=1 校準，所以一定有兩次
+          # invocation）。錨在**記錄本身**而不是行首，與本 repo 從 job log 還原
+          # RAW 記錄用的 `grep -oE` 同一個理由。
+          REC = re.compile(r"\bPROBE(ROW|ENV) (.*)$")
+
+          rows, env = [], []
+          for line in open(sys.argv[1]):
+              m = REC.search(line)
+              if not m:
+                  continue
+              if m.group(1) == "ENV":
+                  env.append("PROBEENV " + m.group(2).strip())
+                  continue
+              d = dict(kv.split("=", 1) for kv in m.group(2).split())
+              rows.append({k: int(v) for k, v in d.items()})
+          # ⛔ 丟掉校準輪。`-benchtime=Nx` 之下 Go 仍會先用 b.N==1 跑一次本體來
+          # 校準，所以 rounds=3 會產出 4 列，而那多出來的一列是**行程啟動後的第
+          # 一趟**——冷快取、first-touch page fault 都算在裡面。把它池進來，等於
+          # 讓一支「輸出就是散佈」的工具把自己的暖機報成量測噪音（同一個冷啟動
+          # 效應在 `audit-reports/bench-aa-2026-08/README.md` §三 量到 ~+24.8%）。
+          # ⚠️ 但只在「確實存在 b.N>1 的列」時才丟：有人手動用 `-benchtime=1x`
+          # 跑時所有列都是 1，那時候丟光就等於把整份資料刪掉還印一份空報告。
+          calib = [r for r in rows if r.get("bench_n") == 1]
+          if calib and any(r.get("bench_n", 1) > 1 for r in rows):
+              rows = [r for r in rows if r.get("bench_n", 1) > 1]
+              dropped = f"（已排除 {len(calib)} 個 b.N==1 的校準輪）"
+          elif calib:
+              dropped = f"⚠️ 全部 {len(calib)} 列都是 b.N==1，無法區分校準輪，全數保留"
+          else:
+              dropped = ""
+
+          if len(rows) < 2:
+              print(f"::error::expected >=2 measurement PROBEROW records, parsed {len(rows)}"
+                    f" (calibration rows seen: {len(calib)})")
+              sys.exit(2)
+
+          if not env:
+              print("::error::no PROBEENV record — cannot identify what was measured")
+              sys.exit(2)
+          print("## Probe: write vs load latency (#1497 mechanism 1)\n")
+          print("```")
+          for e in env:
+              print(e)
+          print(f"rounds parsed: {len(rows)} {dropped}".rstrip())
+          print("```\n")
+
+          tot = [r["write_sum"] + r["load_sum"] for r in rows]
+          w = [r["write_sum"] for r in rows]
+          l = [r["load_sum"] for r in rows]
+          med = st.median(tot)
+          spread = 100 * (max(tot) - min(tot)) / med
+          wshare = 100 * sum(w) / sum(tot)
+
+          print("| quantity | value |")
+          print("|---|---|")
+          print(f"| round total, median | {med/1e6:.1f} ms |")
+          print(f"| round total, spread (max-min)/median | **{spread:.1f}%** |")
+          print(f"| write share of all time | **{wshare:.3f}%** |")
+          print(f"| write_sum spread | {100*(max(w)-min(w))/st.median(w):.1f}% |")
+          print(f"| load_sum spread | {100*(max(l)-min(l))/st.median(l):.1f}% |")
+
+          # 歸因只在散佈真的出現時才有意義。門檻寫死在這裡是刻意的：它不是
+          # 判定器，只是決定要印哪一段字，好讓「沒抓到」與「抓到且乾淨」不會
+          # 長成同一句話。
+          worst = max(rows, key=lambda r: r["write_sum"] + r["load_sum"])
+          base = st.median(tot)
+          excess = worst["write_sum"] + worst["load_sum"] - base
+          print(f"\n最慢的一輪：round={worst['round']}，比中位多 "
+                f"{excess/1e6:.1f} ms（{100*excess/base:+.1f}%）。")
+          if excess > 0:
+              dw = worst["write_sum"] - st.median(w)
+              dl = worst["load_sum"] - st.median(l)
+              print(f"其中寫入貢獻 {dw/1e6:+.1f} ms、載入貢獻 {dl/1e6:+.1f} ms "
+                    f"⇒ 超額有 **{100*dw/excess:.1f}%** 落在寫入路徑。")
+          print(f"\n該輪的寫入尾端：p99={worst['write_p99']/1000:.1f} µs、"
+                f"max={worst['write_max']/1000:.1f} µs；"
+                f"載入 p99={worst['load_p99']/1e6:.2f} ms、max={worst['load_max']/1e6:.2f} ms。")
+
+          print("\n> ⛔ 判讀限制：本 job 只跑一台 runner、一個 job，跨輪散佈與 #1497 "
+                "觀察到的**跨 dispatch** 散佈不是同一個量。若上面的 spread 沒有重現 "
+                "#1497 的量級，那是**這次沒抓到**，不是「沒有」。")
+          PY
