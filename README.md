@@ -98,6 +98,20 @@ graph TD
 
 ## 專案結構導覽
 
+<!-- ⛔ `docs/` 這一列刻意不寫數量（#1665）。原本的「204 份公開文件（92 雙語 pair）」
+     沒有寫入端也沒有檢查端：`grep 公開文件|public document` 在 scripts/ 與 tests/ 命中 0，
+     而 204 / 203 用任何一種定義都重現不出來。量於 `daf747fb`，四階是**累積**的：
+     `docs/**/*.md` 全部 265 → 去三個 symlink 別名 262 → 再去 `.en.md` 169 → 再去
+     internal 113（不先去別名的話後兩階是 171 / 115）。中英兩半自己還差 1。
+     92 也不是「repo 有幾對雙語文件」，而是 `check_bilingual_number_consistency` 的掃描集
+     大小（它另外跳過 benchmarks.md）；docs/ 內真正湊得出 zh 側的 pair 是 93——那是
+     94 個 `.en.md` 去掉別名之後的 93，落單者 0。
+     逐份清單由下方連到的 doc-map 生成表提供。
+     ⚠️ 同表其餘數字的處境也各不相同，不要一起讀：Python 工具 224 兩半都有 bump_docs
+     寫入端與 validate_docs_versions 檢查端；而 rule-pack 16 在**這張表裡**沒有——實測
+     四個相關儲存格沒有一個匹配得到 RULE_PACK_COUNT_PATTERNS，被守著的是 README badge
+     與別處的「16 個 Rule Pack …」句子。要在這一列加數字前，先為它接上兩端並定義母體。 -->
+
 | 目錄 | 內容 | 何時會來這裡 |
 |------|------|--------------|
 | [`components/`](components/) | 各元件程式碼：`threshold-exporter`（Go）、`tenant-api`（Go）、`da-tools`（Python CLI）、`da-portal`（前端容器） | 改應用程式邏輯 |
@@ -108,7 +122,7 @@ graph TD
 | [`environments/`](environments/) | CI / local 環境 profile | 跨環境差異配置 |
 | [`scripts/`](scripts/) | Shell 進入點 + `scripts/tools/{ops,dx,lint}` 下 224 個 Python 工具 | 跑工具、lint、開發者體驗 |
 | [`tests/`](tests/) | Python pytest（`test_*.py`）、shell scenario（`scenario-*.sh`）、`e2e/` Playwright、`snapshots/` | 跑測試、加測試 |
-| [`docs/`](docs/) | 204 份公開文件（92 雙語 pair），對照表見 [doc-map](docs/internal/doc-map.md)；另有 internal playbook/planning 文件不入 catalog | 讀設計/整合/運維文件 |
+| [`docs/`](docs/) | 公開文件與其中英雙語 pair，逐份對照表見 [doc-map](docs/internal/doc-map.md)；另有 internal playbook/planning 文件不入 catalog | 讀設計/整合/運維文件 |
 | [`operator-manifests/`](operator-manifests/) | `operator_generate.py` 產出的 PrometheusRule 範例（16 個 rule-pack） | 參考 operator 模式的輸出樣板 |
 | [`CLAUDE.md`](CLAUDE.md) | AI Agent 起手式與任務分流表 | agent session 開始前必讀 |
 | [`docs/internal/`](docs/internal/) | 內部 playbook（testing / benchmark / windows-mcp / github-release）與 maps | 排錯、release、跑 benchmark |

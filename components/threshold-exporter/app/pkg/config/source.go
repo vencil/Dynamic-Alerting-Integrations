@@ -103,7 +103,16 @@ func (s *InMemoryConfigSource) YAMLFiles(rootPath string) (map[string][]byte, er
 	out := make(map[string][]byte, len(s.files))
 	for p, b := range s.files {
 		clean := path.Clean(p)
-		if clean != root && !strings.HasPrefix(clean, root+"/") {
+		// ⛔ ONE copy of the root-boundary rule, shared with the classifier in
+		// ScanFromConfigSource. A second hand-written copy lived here and the
+		// two diverged at the bare roots — `root+"/"` is `"//"` for `/`, and for
+		// `"."` path.Clean has already stripped the keys' `./` — so the only
+		// production source shape returned a silent empty scan. See relToRoot.
+		//
+		// ⛔ Only the BOUNDARY half is shared: this method deliberately still
+		// returns hidden files (TestInMemoryConfigSource_FiltersByRoot pins it;
+		// dot-pruning belongs to the scan layer). Hence two functions, not one.
+		if _, inside := relToRoot(clean, root); !inside {
 			continue
 		}
 		lower := strings.ToLower(path.Base(clean))
@@ -113,6 +122,103 @@ func (s *InMemoryConfigSource) YAMLFiles(rootPath string) (map[string][]byte, er
 		out[clean] = b
 	}
 	return out, nil
+}
+
+// hasHiddenSegment reports whether any segment of the ALREADY-ROOT-RELATIVE
+// path `rel` is dot-prefixed. It is half of the flat-map equivalent of the disk
+// walker's `fs.SkipDir` pruning: that walker never descends into a hidden
+// directory, so every file beneath one is invisible to it no matter what the
+// file itself is called.
+//
+// ⛔ IT TAKES `rel`, NOT A FULL PATH. The walker never prunes its own starting
+// point, so a source rooted at `.config/conf.d` must get its whole tree; hand
+// this function the full path and the root's own dot segment prunes
+// everything. Pinned by TestDotPrefixedRootYieldsItsWholeTree — nothing else
+// in the suite sees it, because every other root in the corpus is `/sim`.
+//
+// ⛔ EVERY segment, not just the file's immediate parent: the walker prunes
+// the whole subtree, so `<root>/.cache/deep/x.yaml` goes by `.cache`.
+//
+// ⛔ Byte-prefix on `.`, no folding — what the walker does. `confdname.IsHidden`
+// is byte-identical and importable here (measured: `pkg/config` compiles
+// against `internal/confdname`; `internal/batchpr` already imports it), so this
+// IS an unresolved duplicate. What is unresolved is a trade nobody has made:
+// `pkg/` has no `internal/` dependency today, and one edge for two `HasPrefix`
+// calls may not be worth it. Do not read this as a settled reason to leave it.
+func hasHiddenSegment(rel string) bool {
+	// `rel == ""` (the root itself, which the walker never prunes) needs no
+	// branch: `strings.Split("", "/")` is `[]string{""}`, and `""` is not
+	// dot-prefixed, so it falls through to false. An explicit early return
+	// here was measured to be an equivalent mutant — inert code that reads
+	// like a guard is the defect class this file exists to fix, so it is gone
+	// rather than annotated.
+	for _, seg := range strings.Split(rel, "/") {
+		if strings.HasPrefix(seg, ".") {
+			return true
+		}
+	}
+	return false
+}
+
+// relToRoot returns `p` expressed relative to `root`, and whether `p` is inside
+// `root` AT A DIRECTORY BOUNDARY.
+//
+// ⛔ THE ONLY COPY OF THE BOUNDARY RULE. `YAMLFiles` calls this too; do not
+// re-hand-write it there. Both of the traps below were live at some point with
+// two copies in the tree, and each was fixed in one copy only.
+//
+// ⛔ The boundary is the separator, not the byte prefix — `/sim-backup/x.yaml`
+// shares `/sim` as bytes and is not inside it. A bare `TrimPrefix` answers
+// confidently about paths it has no business answering about:
+//
+//	p="/other/.git/a.yaml"  root="/sim"  -> "hidden"            // not under root at all
+//	p="/simulate/a.yaml"    root="/sim"  -> rel "ulate/a.yaml"  // a fabricated segment
+//
+// ⛔ `"/"` is not the only root contributing no leading segment: `path.Clean`
+// maps BOTH `""` and `"."` to `"."`, and a walker rooted there emits keys with
+// no `./` prefix (`filepath.Join(".", x) == x`). Letting `"."` fall through to
+// the `root+"/"` arm rejects every relative key — `tenants=map[]` with
+// `err=<nil>`, a silent empty scan where the previous code was correct. So the
+// bare roots are enumerated, not pattern-matched.
+//
+// Both traps are pinned by TestRelToRootRequiresADirectoryBoundary and
+// TestProductionSourceShapeScansAtBareRoots.
+func relToRoot(p, root string) (rel string, inside bool) {
+	if p == root {
+		return "", true
+	}
+	switch root {
+	case "/":
+		if !strings.HasPrefix(p, "/") {
+			return "", false
+		}
+		return p[1:], true
+	case ".":
+		// Both `path.Clean("")` and `path.Clean(".")` land here.
+		//
+		// ⛔ A cleaned relative path that ESCAPES the root keeps a leading `..`
+		// segment, and a walker rooted at `.` never emits one — so it is not
+		// inside. Without this arm `YAMLFiles(".")` returned `../evil.yaml` to
+		// its caller. `ScanFromConfigSource` still dropped it, but only because
+		// `..` begins with a dot and so reads as hidden: two contradictory
+		// reasons arriving at the right answer, which is the arrangement this
+		// file exists to remove.
+		if p == ".." || strings.HasPrefix(p, "../") {
+			return "", false
+		}
+		if strings.HasPrefix(p, "./") {
+			return p[2:], true
+		}
+		// An absolute key is not under a relative root.
+		if strings.HasPrefix(p, "/") {
+			return "", false
+		}
+		return p, true
+	}
+	if !strings.HasPrefix(p, root+"/") {
+		return "", false
+	}
+	return p[len(root)+1:], true
 }
 
 // ScanFromConfigSource is the in-memory cousin of scanDirHierarchical:
@@ -154,17 +260,46 @@ func ScanFromConfigSource(src ConfigSource, rootPath string) (
 	var decls []tenantDecl
 
 	for p, data := range corpus {
+		// ⛔ The hidden test is on the whole PATH below the root, not on
+		// the basename (#1589). The disk walker prunes hidden DIRECTORIES
+		// with `fs.SkipDir`, so it never visits `<root>/.git/inside.yaml`
+		// at all. This loop sees a flat map, where that path's basename is
+		// `inside.yaml` — not dot-prefixed, so a basename test admitted it
+		// and registered whatever `tenants:` key it declared. Measured, on
+		// the corpus in config_source_oracle_parity_test.go: this scanner
+		// answered `[fromcache fromgit nested plain]` where the walker
+		// answered `[nested plain]`, at arbitrary depth (`.cache/deep/`).
+		//
+		// ⛔ The comment previously here said "match scanDirHierarchical"
+		// while doing the opposite. That sentence is why the divergence
+		// survived: every reader who checked took the claim for the check.
+		rel, inRoot := relToRoot(p, absRoot)
+		if !inRoot || hasHiddenSegment(rel) {
+			continue
+		}
 		// path.Base (POSIX) not filepath.Base — the loop variable was
 		// renamed from `path` to `p` to avoid shadowing the `path`
 		// package; same Windows-host fix family as YAMLFiles +
 		// CollectDefaultsChainPOSIX above.
 		name := path.Base(p)
-		// Hidden files skipped — match scanDirHierarchical.
-		if strings.HasPrefix(name, ".") {
-			continue
-		}
 		hashes[p] = fmt.Sprintf("%x", sha256.Sum256(data))
 
+		// ⛔ DELIBERATELY NOT `internal/confdname.IsDefaults`, even though
+		// collapsing copies is the point of the #1339 family. That predicate
+		// uses `strings.EqualFold`; the walker this scanner must reproduce uses
+		// `strings.ToLower(name) == "_defaults.yaml"`. Measured in Go:
+		//
+		//	name := "_defaultſ.yaml"                       // U+017F LONG S
+		//	strings.ToLower(name) == "_defaults.yaml"      // false  ← the walker
+		//	strings.EqualFold(name, "_defaults.yaml")      // true   ← confdname
+		//
+		// ⛔ And this is not two defensible designs: confdname cites
+		// `tests/shared/confd_name_classification_matrix.json` as its contract,
+		// and that file defines the field as "name LOWERCASED is exactly …" —
+		// the walker's semantics. So `IsDefaults` does not satisfy the contract
+		// it cites (issue #1670). Adopting it here would buy one fewer copy by
+		// importing a known defect. Pinned by
+		// TestSharedDefaultsPredicateStillDisagreesWithTheWalker.
 		lower := strings.ToLower(name)
 		if strings.HasPrefix(name, "_") {
 			if lower == "_defaults.yaml" || lower == "_defaults.yml" {
