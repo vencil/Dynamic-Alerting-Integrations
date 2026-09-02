@@ -118,6 +118,19 @@ spec:
             # tenant, mirroring the machineIdentity audit→enforce discipline.
             - --rbac-metadata-scope-enforce
             {{- end }}
+            {{- if .Values.rbac.metadataWriteScopeEnforce }}
+            # ADR-027 / #1597: bind the env/domain metadata axis to the WRITE
+            # plane too (before #1597 it constrained list visibility only, so a
+            # rule scoped to one environment could still PUT a tenant in
+            # another). Its OWN flag, not metadataScopeEnforce: that one flips an
+            # already-bound axis, this one binds writes for the first time, so
+            # sharing would tighten a list-plane-soaked deployment on upgrade
+            # with no soak window. Flip ONLY after
+            # increase(tenant_api_scope_would_deny_total{axis="metadata_write"}[soak])
+            # has stayed 0 over the window — a non-zero rate names the real
+            # writes this flip starts rejecting.
+            - --rbac-metadata-write-scope-enforce
+            {{- end }}
             {{- if .Values.rbac.orgScopeEnforce }}
             # ADR-027 / LD-6 P4: flip the org scope axis from SHADOW (default) to
             # fail-closed — ONE flag atomically enforces list visibility, write

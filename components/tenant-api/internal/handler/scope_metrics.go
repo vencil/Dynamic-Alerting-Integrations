@@ -31,23 +31,32 @@ import (
 // forces a compile step: the array literal below rejects more elements than the
 // size, so a new axis must bump numScopeAxes (which grows counters in lockstep)
 // AND add its rbac.scopeAxis* constant. Bump all three together.
-const numScopeAxes = 3
+const numScopeAxes = 4
 
 // scopeWouldDenyAxes is the fixed, known label set for
 // tenant_api_scope_would_deny_total{axis}. Fixing it means every series is
 // emitted from process start (value 0) so a dashboard/alert never sees a
 // missing series, and it bounds cardinality (no user-controlled label values).
-// Order must match the rbac.scopeAxis* string constants. P1 = metadata;
-// org = read/visibility plane (ScopeAllowed list P4a + AllowedInOrgRead
-// read-by-id/collection P4c); org_write = write plane (AllowedInOrg P4b). The
-// org enforce-flip soak criterion requires increase()==0 on BOTH the org and
-// org_write series — they share one flag but observe the read vs the write
-// plane, so read call volume can never mask a write-plane would-deny (or vice
-// versa).
+// Order must match the rbac.scopeAxis* string constants. P1 = metadata (list
+// plane, ScopeAllowed); org = read/visibility plane (ScopeAllowed list P4a +
+// AllowedInOrgRead read-by-id/collection P4c); org_write = write plane
+// (AllowedInOrg P4b). The org enforce-flip soak criterion requires
+// increase()==0 on BOTH the org and org_write series — they share one flag but
+// observe the read vs the write plane, so read call volume can never mask a
+// write-plane would-deny (or vice versa).
+//
+// metadata_write (#1597) is the write plane's metadata axis. It has its OWN
+// flag (--rbac-metadata-write-scope-enforce), so unlike the org pair it is NOT
+// co-gated with the metadata series: `metadata` measures the list plane's
+// unlabeled-tenant leniency, while `metadata_write` measures writes that a
+// rule's environments[]/domains[] would start rejecting — an axis that did not
+// bind writes at all before #1597. A non-zero rate on metadata_write therefore
+// names real writes that would break, not unlabeled data.
 var scopeWouldDenyAxes = [numScopeAxes]string{
 	"metadata",
 	"org",
 	"org_write",
+	"metadata_write",
 }
 
 // ScopeWouldDenyMetrics holds the per-axis would-deny counters. It satisfies
@@ -109,7 +118,7 @@ func writeScopeWouldDenyMetrics(w io.Writer) {
 	if m := activeScopeWouldDeny.Load(); m != nil {
 		snap = m.Snapshot()
 	}
-	_, _ = fmt.Fprintf(w, "# HELP tenant_api_scope_would_deny_total Scope-filter would-deny observations by axis: an unlabeled subject that shadow mode allows but enforce mode would deny (ADR-027; monotonic counter — watch its rate/increase reach 0 over the soak window, not its absolute value, before flipping enforce).\n")
+	_, _ = fmt.Fprintf(w, "# HELP tenant_api_scope_would_deny_total Scope-filter would-deny observations by axis: a grant that shadow mode allows but enforce mode would deny — an unlabeled subject on a restricted field, or (axis=metadata_write) a labelled value outside the rule's allow-list (ADR-027, #1597; monotonic counter — watch its rate/increase reach 0 over the soak window, not its absolute value, before flipping enforce).\n")
 	_, _ = fmt.Fprintf(w, "# TYPE tenant_api_scope_would_deny_total counter\n")
 	// Deterministic order for stable exposition / golden tests.
 	axes := make([]string, len(scopeWouldDenyAxes))

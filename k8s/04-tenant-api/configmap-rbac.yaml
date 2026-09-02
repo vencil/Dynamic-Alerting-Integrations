@@ -22,6 +22,16 @@ data:
         permissions: [read, write, admin]
         # No environments/domains restriction — full access
 
+      # environments/domains restrict LIST VISIBILITY (GET /tenants). As of
+      # #1597 they can also restrict WRITES, but that is behind its own flag
+      # while it soaks: until --rbac-metadata-write-scope-enforce is set, this
+      # group's writes reach every tenant matched by tenants:[...]. Watch
+      # tenant_api_scope_would_deny_total{axis="metadata_write"} — a non-zero
+      # rate names the writes the flip will start rejecting — then flip.
+      #
+      # ⚠️ They do NOT restrict read-by-id (GET /tenants/{id}): that plane is
+      # metadata-blind and closing it is a separate migration. Do not rely on
+      # these fields for read isolation.
       - name: db-operators
         tenants: ["db-a-*", "db-b-*"]
         permissions: [read, write]

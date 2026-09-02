@@ -184,6 +184,25 @@ rbac:
   # machineIdentity/humanSocket.
   metadataScopeEnforce: false
 
+  # ADR-027 / #1597 — the SAME env/domain metadata axis, on the WRITE plane.
+  # Before #1597 a rule's environments[]/domains[] constrained list visibility
+  # only: a rule scoped to environments: [dev] could still PUT a prod tenant it
+  # could not see. This binds that axis to writes too.
+  # false (default) = SHADOW: writes are allowed exactly as before, but a write
+  # that enforce mode would reject is counted in
+  # tenant_api_scope_would_deny_total{axis="metadata_write"}.
+  # ⚠ NOT co-gated with metadataScopeEnforce, deliberately. That flag flips an
+  # axis the list plane has bound all along (only the UNLABELED arm is still
+  # migrating); this one binds the write plane for the FIRST time. Sharing one
+  # flag would tighten writes the instant a deployment that already soaked and
+  # flipped the list plane upgrades — no soak window at all. Same reasoning
+  # ADR-027 D4 used to give the org axis its own flag.
+  # Flip criterion: increase(...{axis="metadata_write"}[soak])==0 across the soak
+  # window. Unlike axis="metadata" (which measures UNLABELED tenants), a non-zero
+  # rate here names real writes that would start being rejected — read it as a
+  # blast-radius list, not a labeling backlog.
+  metadataWriteScopeEnforce: false
+
   # ADR-027 / LD-6 P4 — org (tenant→organization) scope axis fail-mode.
   # false (default) = SHADOW: a tenant with no orgs in _tenant_orgs.yaml still
   # passes org-scoped rules, but is counted in

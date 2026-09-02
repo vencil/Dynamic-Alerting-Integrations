@@ -99,6 +99,8 @@ func main() {
 		"MED-8 escape hatch: allow open-read when a --rbac path parses to zero groups (default false = fail closed)")
 	rbacMetadataScopeEnforce := flag.Bool("rbac-metadata-scope-enforce", envBool("TA_RBAC_METADATA_SCOPE_ENFORCE"),
 		"ADR-027/LD-6 P1: DENY an unlabeled tenant on an env/domain-restricted rule (fail-closed). Default false = shadow (still allow, but count tenant_api_scope_would_deny_total{axis=\"metadata\"}); flip only after that counter stops incrementing over the soak window (increase()==0 — it is a monotonic counter, not a gauge)")
+	rbacMetadataWriteScopeEnforce := flag.Bool("rbac-metadata-write-scope-enforce", envBool("TA_RBAC_METADATA_WRITE_SCOPE_ENFORCE"),
+		"#1597: bind a rule's environments[]/domains[] on the WRITE plane. Before this the fields constrained only list visibility, so a rule reading environments:[production] still permitted writes to every tenant it matched. Default false = shadow (writes still allowed, but counted as tenant_api_scope_would_deny_total{axis=\"metadata_write\"}); flip only after that counter shows increase()==0 over the soak window. SEPARATE from --rbac-metadata-scope-enforce on purpose: that flag governs an axis the list plane already binds, so reusing it would tighten writes the moment a list-plane-soaked deployment upgraded.")
 	rbacOrgScopeEnforce := flag.Bool("rbac-org-scope-enforce", envBool("TA_RBAC_ORG_SCOPE_ENFORCE"),
 		"ADR-027/LD-6 P4: fail-closed org-scope axis — an org-scoped rule DENIES an unlabeled tenant (no orgs in _tenant_orgs.yaml) instead of shadow-allowing it. ONE flag flips both list visibility (ScopeAllowed) and write authorization (AllowedInOrg) atomically. Default false = shadow (allow, but count tenant_api_scope_would_deny_total{axis=\"org\"} and {axis=\"org_write\"}); flip only after BOTH axes show increase()==0 over the soak window")
 	identityClaimHeaders := flag.String("identity-claim-headers", envOrDefault("TA_IDENTITY_CLAIM_HEADERS", ""),
@@ -304,6 +306,15 @@ func main() {
 		log.Printf("INFO: --rbac-metadata-scope-enforce set: unlabeled tenants on env/domain-restricted rules are DENIED (metadata scope fail-closed)")
 	} else {
 		log.Printf("INFO: metadata scope filter in SHADOW mode: unlabeled tenants still pass; watch increase(tenant_api_scope_would_deny_total{axis=\"metadata\"}[<soak-window>]) and flip --rbac-metadata-scope-enforce once it stays 0 across the window (monotonic counter — its rate, not its value, is the signal)")
+	}
+
+	// #1597: the WRITE plane's metadata axis. Its own flag, its own soak series
+	// — see the flag's help text for why it is not --rbac-metadata-scope-enforce.
+	if *rbacMetadataWriteScopeEnforce {
+		rbacMgr.EnableMetadataWriteScopeEnforce()
+		log.Printf("INFO: --rbac-metadata-write-scope-enforce set: a rule's environments[]/domains[] now DENY writes to tenants outside them (previously these fields constrained list visibility only)")
+	} else {
+		log.Printf("INFO: metadata scope axis on the WRITE plane in SHADOW mode: environments[]/domains[] do not yet restrict writes; watch increase(tenant_api_scope_would_deny_total{axis=\"metadata_write\"}[<soak-window>]) — a non-zero rate names exactly the writes this flip would start rejecting — and flip --rbac-metadata-write-scope-enforce once it stays 0 across the window")
 	}
 
 	// ADR-027 / LD-6 P4: org-scope axis fail-mode. ONE flag governs the

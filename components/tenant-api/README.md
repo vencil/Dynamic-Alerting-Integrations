@@ -208,7 +208,7 @@ data: {"type":"config_change","tenant_id":"db-a-prod","timestamp":"2026-05-03T10
 | `TA_FEDERATION_NAMESPACE` | (空 = pod 自身 namespace) | 上述 ConfigMap 所在 namespace |
 | `TA_FEDERATION_TOKEN_TTL` | `4h` | 聯邦 token 效期 |
 
-布林開關(`TA_RBAC_EMPTY_OPEN` / `TA_RBAC_METADATA_SCOPE_ENFORCE` / `TA_RBAC_ORG_SCOPE_ENFORCE` / `TA_DEV_BYPASS_AUTH` / `TA_MACHINE_IDENTITY_AUDIT`)另立一格:它們是同名 flag 的**預設值**,一律以 `strconv.ParseBool` 解讀——與命令列走的是同一支解析器。接受 `1` / `t` / `T` / `TRUE` / `true` / `True` / `0` / `f` / `F` / `FALSE` / `false` / `False`;未設或只有空白 = 維持該 flag 自己的預設;**其餘任何值一律啟動失敗**,不會靜默退成 false——這幾支開關決定某道檢查跑不跑,打錯字若退成 false 就與「刻意關掉」無法區分([#1599](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1599))。⚠️ **`yes` / `on` 在 #1599 之前被當成 true,現已改為啟動失敗**;`t` / `T` 則相反,過去被靜默當成 false,現在是 true。
+布林開關(`TA_RBAC_EMPTY_OPEN` / `TA_RBAC_METADATA_SCOPE_ENFORCE` / `TA_RBAC_METADATA_WRITE_SCOPE_ENFORCE` / `TA_RBAC_ORG_SCOPE_ENFORCE` / `TA_DEV_BYPASS_AUTH` / `TA_MACHINE_IDENTITY_AUDIT`)另立一格:它們是同名 flag 的**預設值**,一律以 `strconv.ParseBool` 解讀——與命令列走的是同一支解析器。接受 `1` / `t` / `T` / `TRUE` / `true` / `True` / `0` / `f` / `F` / `FALSE` / `false` / `False`;未設或只有空白 = 維持該 flag 自己的預設;**其餘任何值一律啟動失敗**,不會靜默退成 false——這幾支開關決定某道檢查跑不跑,打錯字若退成 false 就與「刻意關掉」無法區分([#1599](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1599))。⚠️ **`yes` / `on` 在 #1599 之前被當成 true,現已改為啟動失敗**;`t` / `T` 則相反,過去被靜默當成 false,現在是 true。
 
 ### RBAC YAML
 
@@ -228,6 +228,10 @@ groups:
 ```
 
 支援以環境 / 域 metadata 做進一步過濾(細節見 `internal/rbac/` 註解)。**沒標記該 metadata 的租戶**在受限規則下預設**仍放行**(SHADOW,行為與過去一致),但每次會計入 `tenant_api_scope_would_deny_total{axis="metadata"}`(**單調遞增 counter**、僅重啟歸零)。待 `increase(tenant_api_scope_would_deny_total{axis="metadata"}[soak窗])` 在整個 soak 窗維持 **0**(看增長率非絕對值),並**掃過確認沒有落單租戶**(counter 是 traffic-driven:沒被 list 到的租戶不會觸發)後,設 `--rbac-metadata-scope-enforce`(或 `TA_RBAC_METADATA_SCOPE_ENFORCE=1`;helm `--set rbac.metadataScopeEnforce=true`)切成**沒標記就拒絕**(fail-closed,ADR-027 / LD-6 P1)。
+
+⚠️ 上述 `environments[]` / `domains[]` 在 #1597 之前**只約束 list 可見性**——一條 `environments: [dev]` 的規則,可以 PUT 一個它在清單裡根本看不到的 prod 租戶。#1597 把**同一條軸接上寫入平面**,並且是**兩處**判定:寫入前的租戶現況(pre-state),以及 PUT body 提議的 `_metadata`(post-state)——後者擋的是「一次 PUT 就把租戶改標到自己 scope 內」這條繞路。
+
+這條軸有**自己的開關** `--rbac-metadata-write-scope-enforce`(或 `TA_RBAC_METADATA_WRITE_SCOPE_ENFORCE=1`;helm `--set rbac.metadataWriteScopeEnforce=true`)。⛔ **刻意不共用** `--rbac-metadata-scope-enforce`:那支管的是 list 平面**早已綁定**的軸(只剩「未標記」那一支還在遷移),共用的話,一個已經跑完 list 平面 soak、旗標開著的部署一升級就當場被收緊、沒有任何過渡窗——這正是 ADR-027 D4 給 org 軸獨立旗標的同一個理由。預設 SHADOW:寫入照舊放行,只計入 `tenant_api_scope_would_deny_total{axis="metadata_write"}`,`increase(...[soak窗])` 撐過整個窗維持 0 才 flip。⚠️ 它與 `{axis="metadata"}` **量的不是同一件事**:後者量「未標記租戶」的寬容度(是一份補標記的待辦清單),前者量「這次 flip 會開始拒絕哪些**真實寫入**」(是一份 blast-radius 清單)。讀取平面不受這支旗標影響(read-by-id 的 metadata 軸是另一次遷移),故 `PermRead` 的 403 訊息刻意不提這條建議——指向一個轉不動的旋鈕正是要避免的事。
 
 org 軸(租戶→組織,`_tenant_orgs.yaml`;ADR-027 / LD-6 P4)獨立於 metadata 軸、有**自己的 enforce 開關**:`--rbac-org-scope-enforce`(或 `TA_RBAC_ORG_SCOPE_ENFORCE=1`;helm `--set rbac.orgScopeEnforce=true`)。同一支開關**原子地**支配 org-scoped 規則的**三個**判定面——list 可見性(P4a)、per-tenant 寫入 / admin 授權(含 federation token 簽發,P4b)、與 read-by-id 單租戶讀取(P4c),不存在只翻其一的中間態。預設 SHADOW:沒掛 org 的租戶仍放行,但分別計入 `tenant_api_scope_would_deny_total{axis="org"}`(read/visibility 面:list + read-by-id/collection)與 `{axis="org_write"}`(寫入面);翻 enforce 的判準是**兩軸** `increase(...[soak窗])` 皆維持 0(單調 counter、看增長率),並掃過確認沒有漏標租戶。✅ read-by-id(GET `/{id}`、`/access` 等單租戶讀取)已接 org 軸(P4c),閉掉了 enforce 空窗期的 read-only IDOR/enumeration-oracle,即 #1040 enforce 翻閘的硬前置。⚠️ 一個 labeled 租戶在 shadow 就已於三面 org-enforce(labeled-mismatch 兩模式皆拒);真正的行為變更觸發點是 **labeling**,故 labeling 前須確認 org claim 經每個 PEP(尤其 recipe-preview 的 `PREVIEW_CLAIM_HEADERS`)送達 tenant-api。
 

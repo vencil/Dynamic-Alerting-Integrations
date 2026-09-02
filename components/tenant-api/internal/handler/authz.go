@@ -27,10 +27,50 @@ package handler
 
 import (
 	"net/http"
+	"os"
 
+	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/tenantorg"
 )
+
+// ScopeMetaFunc resolves one tenant's (environment, domain) for a write-plane
+// scope decision (#1597).
+//
+// Resolution happens at DECISION TIME, straight from the tenant's own file. A
+// stale authorization input on the plane that MUTATES state is a real (if
+// small) window, and the cost argument for caching does not hold here: the same
+// request is about to run a git commit, which is orders of magnitude more
+// expensive than one file read. (The read/collection filters deliberately do
+// NOT take one of these — they are per-item loops, and binding the metadata
+// axis there is a separate plane with its own migration, out of scope here.)
+//
+// It fails SOFT to the empty pair — an unlabeled tenant — which is exactly what
+// the pre-#1597 metadata-blind write plane behaved like. Resolution never
+// invents a label it could not read.
+type ScopeMetaFunc func(tenantID string) (environment, domain string)
+
+// WriteScopeMeta builds the write-plane resolver: one targeted read of the
+// tenant's actual file (confd.ResolveTenantFile, so a `<id>.yml` tenant is not
+// silently treated as unlabeled — #1673).
+func WriteScopeMeta(configDir string) ScopeMetaFunc {
+	return func(tenantID string) (string, string) {
+		if configDir == "" {
+			return "", ""
+		}
+		path, err := confd.ResolveTenantFile(configDir, tenantID)
+		if err != nil {
+			return "", "" // absent, ambiguous or unsafe id → unlabeled
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return "", ""
+		}
+		var summary TenantSummary
+		extractMetadata(&summary, data, tenantID)
+		return summary.Environment, summary.Domain
+	}
+}
 
 // OrgAllowed is the single composition point of tenantorg.OrgsForTenant and
 // rbac.AllowedInOrg (ADR-027 / LD-6 P4b): it resolves the target tenant's
@@ -46,9 +86,13 @@ import (
 // tenant as unlabeled, which with no org-scoped rule is byte-identical to
 // the pre-P4b permission check.
 func OrgAllowed(rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager,
-	p *rbac.VerifiedPrincipal, tenantID string, want rbac.Permission) bool {
+	p *rbac.VerifiedPrincipal, tenantID string, want rbac.Permission, meta ScopeMetaFunc) bool {
 	orgs, _ := tenantOrg.OrgsForTenant(tenantID)
-	return rbacMgr.AllowedInOrg(p, tenantID, want, orgs)
+	var environment, domain string
+	if meta != nil {
+		environment, domain = meta(tenantID)
+	}
+	return rbacMgr.AllowedInOrg(p, tenantID, want, orgs, environment, domain)
 }
 
 // OrgAllowedRead is the READ/VISIBILITY-plane sibling of OrgAllowed (ADR-027 /
@@ -77,22 +121,67 @@ func OrgAllowedRead(rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager,
 // neither the tenant's org list nor any principal claim value (principal.go
 // logging discipline — the org names are an enumeration oracle).
 func RequireOrgWrite(w http.ResponseWriter, r *http.Request, d *Deps, tenantID string, want rbac.Permission) bool {
+	return requireOrgWriteWithMeta(w, r, d, tenantID, want, WriteScopeMeta(d.ConfigDir),
+		"insufficient permissions for tenant "+tenantID+
+			" (permission and organization-scope checks, ADR-027)")
+}
+
+// RequireOrgWriteProposed is the POST-STATE half of the write gate (#1597
+// follow-up). RequireOrgWrite authorizes against the tenant's metadata as it is
+// ON DISK; that is the right question to ask before reading the body, but it is
+// not the only one, because `_metadata` lives INSIDE the file a whole-file PUT
+// replaces. A caller authorized for environment=production could therefore
+// submit a body setting environment=dev and have it committed — the write would
+// be checked against production and land in dev, planting configuration in a
+// scope the caller does not administer (and removing the tenant from their own
+// reach).
+//
+// This is specific to the metadata axis. The org axis cannot be attacked this
+// way: org membership lives in the admin-only `_tenant_orgs.yaml`, a separate
+// file this path cannot write. Nor can the batch path reach it — it refuses to
+// overwrite a structured key like `_metadata` with a scalar patch value
+// (tenant_batch.go). Whole-file PUT is the exposed shape.
+//
+// The check runs the SAME predicate against the PROPOSED metadata, so it
+// inherits the axis's flag: in shadow it changes nothing, and it closes the gap
+// exactly when --rbac-metadata-write-scope-enforce is flipped. Call it AFTER
+// the body is read and BEFORE any write; RequireOrgWrite still runs first so a
+// denied caller learns nothing from a body it was never allowed to submit.
+func RequireOrgWriteProposed(w http.ResponseWriter, r *http.Request, d *Deps,
+	tenantID string, want rbac.Permission, proposedYAML string) bool {
+	return requireOrgWriteWithMeta(w, r, d, tenantID, want, proposedScopeMeta(proposedYAML),
+		"insufficient permissions for the tenant metadata this write proposes"+
+			" — the environment/domain in the body places tenant "+tenantID+
+			" outside your scope (#1597)")
+}
+
+// proposedScopeMeta reads environment/domain from the content the caller is
+// proposing to write, rather than from disk. Same extractor the list plane
+// uses, so a body and a stored file are read identically.
+func proposedScopeMeta(yamlContent string) ScopeMetaFunc {
+	return func(tenantID string) (string, string) {
+		var summary TenantSummary
+		extractMetadata(&summary, []byte(yamlContent), tenantID)
+		return summary.Environment, summary.Domain
+	}
+}
+
+func requireOrgWriteWithMeta(w http.ResponseWriter, r *http.Request, d *Deps,
+	tenantID string, want rbac.Permission, meta ScopeMetaFunc, denyMsg string) bool {
 	// A Deps literal without an RBAC manager is a TEST-ONLY state (nil-safe
 	// contract, mirroring TenantOrg above): main.go always wires a non-nil
 	// manager — even open mode is a non-nil Manager — and the route-level
 	// RBAC middleware dereferences the same manager, so a nil here can never
 	// be reached by a routed production request. Treating it as "no RBAC
-	// layer configured" preserves the pre-P4b behavior of the handlers this
-	// wrapper now guards, which performed no in-handler permission check.
+	// layer configured" preserves the pre-P4b behavior of the handlers these
+	// wrappers guard, which performed no in-handler permission check.
 	if d.RBAC == nil {
 		return true
 	}
-	if OrgAllowed(d.RBAC, d.TenantOrg, rbac.RequestPrincipal(r), tenantID, want) {
+	if OrgAllowed(d.RBAC, d.TenantOrg, rbac.RequestPrincipal(r), tenantID, want, meta) {
 		return true
 	}
-	WriteJSONErrorWithCode(w, r, http.StatusForbidden, CodeForbidden,
-		"insufficient permissions for tenant "+tenantID+
-			" (permission and organization-scope checks, ADR-027)")
+	WriteJSONErrorWithCode(w, r, http.StatusForbidden, CodeForbidden, denyMsg)
 	return false
 }
 
@@ -121,7 +210,7 @@ func RequireOrgWrite(w http.ResponseWriter, r *http.Request, d *Deps, tenantID s
 //   - tenantIDs is nil/empty → empty result (nothing to check)
 //   - duplicate ids in input → de-duplicated output (forbidden ids
 //     aren't repeated; matches what an operator wants to see)
-func tenantsLackingPermission(rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager, p *rbac.VerifiedPrincipal, tenantIDs []string, want rbac.Permission) []string {
+func tenantsLackingPermission(rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager, p *rbac.VerifiedPrincipal, tenantIDs []string, want rbac.Permission, meta ScopeMetaFunc) []string {
 	if len(tenantIDs) == 0 {
 		return nil
 	}
@@ -132,7 +221,7 @@ func tenantsLackingPermission(rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manage
 			continue
 		}
 		seen[tid] = true
-		if !OrgAllowed(rbacMgr, tenantOrg, p, tid, want) {
+		if !OrgAllowed(rbacMgr, tenantOrg, p, tid, want, meta) {
 			forbidden = append(forbidden, tid)
 		}
 	}

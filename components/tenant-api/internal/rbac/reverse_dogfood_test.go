@@ -173,11 +173,11 @@ func TestReverseReport_WitnessPositiveRuleIsolated(t *testing.T) {
 				for _, pc := range perms {
 					wantShadow := pc.eff && shadowGate
 					wantEnforce := pc.eff && enforceGate
-					if got := shadowM.AllowedInOrg(w, tc.id, pc.perm, tc.orgs); got != wantShadow {
+					if got := shadowM.AllowedInOrg(w, tc.id, pc.perm, tc.orgs, "", ""); got != wantShadow {
 						t.Errorf("grant %d (%s) perm=%s: shadow AllowedInOrg = %v, report claims %v",
 							g.Index, g.Rule, pc.perm, got, wantShadow)
 					}
-					if got := enforceM.AllowedInOrg(w, tc.id, pc.perm, tc.orgs); got != wantEnforce {
+					if got := enforceM.AllowedInOrg(w, tc.id, pc.perm, tc.orgs, "", ""); got != wantEnforce {
 						t.Errorf("grant %d (%s) perm=%s: enforce AllowedInOrg = %v, report claims %v",
 							g.Index, g.Rule, pc.perm, got, wantEnforce)
 					}
@@ -301,7 +301,7 @@ func TestReverseReport_CompletenessProperty(t *testing.T) {
 				}
 				for pi, p := range principals {
 					for _, want := range []Permission{PermRead, PermWrite, PermAdmin} {
-						if !m.AllowedInOrg(p, tn.id, want, tn.orgs) {
+						if !m.AllowedInOrg(p, tn.id, want, tn.orgs, "", "") {
 							continue
 						}
 						// Forward granted → the report must explain it.
@@ -318,7 +318,7 @@ func TestReverseReport_CompletenessProperty(t *testing.T) {
 						default:
 							explained := false
 							for _, g := range rep.Grants {
-								if subFor(g.Index).AllowedInOrg(p, tn.id, want, tn.orgs) {
+								if subFor(g.Index).AllowedInOrg(p, tn.id, want, tn.orgs, "", "") {
 									explained = true
 									break
 								}
@@ -384,13 +384,13 @@ func TestReverseReport_AdversarialCases(t *testing.T) {
 		shadowM, enforceM := singleRuleManagers(cfg.Groups[g.Index])
 		w := witnessFor(g)
 		delete(w.Claims, g.OrgGate.ClaimKey) // strip the org claim
-		if shadowM.AllowedInOrg(w, "db-team-1", PermWrite, orgs) ||
-			enforceM.AllowedInOrg(w, "db-team-1", PermWrite, orgs) {
+		if shadowM.AllowedInOrg(w, "db-team-1", PermWrite, orgs, "", "") ||
+			enforceM.AllowedInOrg(w, "db-team-1", PermWrite, orgs, "", "") {
 			t.Error("conditional gate must deny a caller with NO org claim in BOTH modes (labeled tenant = no basis to match)")
 		}
 		// Control: the intact witness passes (proves the denial above is the
 		// missing claim, not a broken fixture).
-		if !enforceM.AllowedInOrg(witnessFor(g), "db-team-1", PermWrite, orgs) {
+		if !enforceM.AllowedInOrg(witnessFor(g), "db-team-1", PermWrite, orgs, "", "") {
 			t.Error("control: intact witness must pass under enforce")
 		}
 	})
@@ -583,10 +583,10 @@ func TestReverseReport_AdversarialCases(t *testing.T) {
 			if enforce {
 				mm.EnableOrgScopeEnforce()
 			}
-			if mm.AllowedInOrg(p, "db-x", PermWrite, tenantOrgs) {
+			if mm.AllowedInOrg(p, "db-x", PermWrite, tenantOrgs, "", "") {
 				t.Errorf("enforce=%v: forward write granted across rules — premise broken", enforce)
 			}
-			if !mm.AllowedInOrg(p, "db-x", PermRead, tenantOrgs) {
+			if !mm.AllowedInOrg(p, "db-x", PermRead, tenantOrgs, "", "") {
 				t.Errorf("enforce=%v: forward read via rule B must hold", enforce)
 			}
 		}
