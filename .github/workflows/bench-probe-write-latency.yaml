@@ -150,8 +150,25 @@ jobs:
                   continue
               d = dict(kv.split("=", 1) for kv in m.group(2).split())
               rows.append({k: int(v) for k, v in d.items()})
+          # ⛔ 丟掉校準輪。`-benchtime=Nx` 之下 Go 仍會先用 b.N==1 跑一次本體來
+          # 校準，所以 rounds=3 會產出 4 列，而那多出來的一列是**行程啟動後的第
+          # 一趟**——冷快取、first-touch page fault 都算在裡面。把它池進來，等於
+          # 讓一支「輸出就是散佈」的工具把自己的暖機報成量測噪音（同一個冷啟動
+          # 效應在 `audit-reports/bench-aa-2026-08/README.md` §三 量到 ~+24.8%）。
+          # ⚠️ 但只在「確實存在 b.N>1 的列」時才丟：有人手動用 `-benchtime=1x`
+          # 跑時所有列都是 1，那時候丟光就等於把整份資料刪掉還印一份空報告。
+          calib = [r for r in rows if r.get("bench_n") == 1]
+          if calib and any(r.get("bench_n", 1) > 1 for r in rows):
+              rows = [r for r in rows if r.get("bench_n", 1) > 1]
+              dropped = f"（已排除 {len(calib)} 個 b.N==1 的校準輪）"
+          elif calib:
+              dropped = f"⚠️ 全部 {len(calib)} 列都是 b.N==1，無法區分校準輪，全數保留"
+          else:
+              dropped = ""
+
           if len(rows) < 2:
-              print(f"::error::expected >=2 PROBEROW records, parsed {len(rows)}")
+              print(f"::error::expected >=2 measurement PROBEROW records, parsed {len(rows)}"
+                    f" (calibration rows seen: {len(calib)})")
               sys.exit(2)
 
           if not env:
@@ -161,7 +178,7 @@ jobs:
           print("```")
           for e in env:
               print(e)
-          print(f"rounds parsed: {len(rows)}")
+          print(f"rounds parsed: {len(rows)} {dropped}".rstrip())
           print("```\n")
 
           tot = [r["write_sum"] + r["load_sum"] for r in rows]

@@ -42,7 +42,7 @@ def aa_sessions():
 
 
 def warmup_fit(pts):
-    """One-parameter warm-up model for the baseline curves.
+    """Warm-up model for the baseline curves: two fitted parameters.
 
     Added 2026-09-01 (issue #1497). The instrumented branch count on the flat
     scanner shows the cost curve is not mysterious: for the first W iterations
@@ -51,10 +51,16 @@ def warmup_fit(pts):
 
         t(N) = t_steady + C * min(N, W) / N
 
-    with t_steady taken from the largest N measured and (C, W) fitted here on
-    N>=100. Small N is excluded: those points are single-digit-iteration
-    invocations whose own noise dominates. Prints nothing when the curve is too
-    short to fit.
+    ⛔ TWO parameters are fitted here, C and W - W by scanning, C by least
+    squares at each candidate W. Only `t_steady` is fixed, and it is not fitted
+    at all: it is read off the largest N measured. The first version of this
+    docstring (and the README and CHANGELOG entries quoting it) said
+    "one-parameter", which was left over from an earlier exploration that held
+    W at a value measured elsewhere. (CodeRabbit, PR #1678.)
+
+    Fitted on N>=100. Small N is excluded: those points are single-digit-
+    iteration invocations whose own noise dominates. Prints nothing when the
+    curve is too short to fit.
     """
     d = dict(pts)
     ns = [n for n in sorted(d) if n >= 100]
@@ -115,7 +121,8 @@ def bn_gap_effect():
         for name, f in s["files"].items():
             r, side = name[1:].rsplit("_", 1)
             per.setdefault(int(r), {})[side] = st.median(x["n"] for x in f["samples"])
-        gaps = [abs(v["B"] - v["A"]) for v in per.values() if "A" in v and "B" in v]
+        pairs = {r: v for r, v in per.items() if "A" in v and "B" in v}
+        gaps = [abs(v["B"] - v["A"]) for v in pairs.values()]
         med = st.median(ns)
         print(f"\n[benchtime={s['benchtime']}] run {s['run_id']}  {bench[0]}")
         if not gaps or max(gaps) == 0:
@@ -126,9 +133,21 @@ def bn_gap_effect():
         if len(curve) < 2:
             print("  no local sweep for this benchmark - cannot price the gap")
             continue
-        lo, hi = _curve_at(curve, med), _curve_at(curve, med + max(gaps))
-        print(f"  the LARGEST gap is worth {100 * (hi / lo - 1):+.2f}% on the local curve"
-              f"  (N={med:.0f} -> {med + max(gaps):.0f})")
+        # ⛔ Price each round at ITS OWN A and B. The first version priced a
+        # synthetic pair instead - median b.N against median + the largest gap
+        # seen anywhere in the session - which (a) throws away the sign, so a
+        # round where A is the larger side came out with the wrong direction,
+        # (b) evaluates the curve at a point no round actually occupied, and
+        # (c) can miss the largest magnitude, because the curve's slope varies
+        # with N. Measured on this data it reported -0.61% for the Xeon session
+        # where the true worst round is +0.63%. (CodeRabbit, PR #1678.)
+        effects = {r: 100 * (_curve_at(curve, v["B"]) / _curve_at(curve, v["A"]) - 1)
+                   for r, v in pairs.items()}
+        worst = max(effects.items(), key=lambda kv: abs(kv[1]))
+        print("  per-round curve-only effect (%): "
+              + " ".join(f"{effects[r]:+.2f}" for r in sorted(effects)))
+        print(f"  largest |effect| = {worst[1]:+.2f}%  (round {worst[0]}: "
+              f"b.N {pairs[worst[0]]['A']:.0f} -> {pairs[worst[0]]['B']:.0f})")
         print(f"  observed A/A spread this session: "
               f"{max(x for _, x in ratios) - min(x for _, x in ratios):.2f}pp")
 

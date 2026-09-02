@@ -93,7 +93,7 @@ func BenchmarkProbeWriteLatency(b *testing.B) {
 			write[i] = t1.Sub(t0).Nanoseconds()
 			load[i] = t2.Sub(t1).Nanoseconds()
 		}
-		probeReport(probeRound, write, load)
+		probeReport(probeRound, b.N, write, load)
 		probeRound++
 	}
 }
@@ -101,12 +101,21 @@ func BenchmarkProbeWriteLatency(b *testing.B) {
 // probeReport prints one PROBEROW per round plus the ten slowest iterations.
 // Quantiles rather than every iteration: 400 lines per round is not more
 // information, it is the same information in a form nobody greps.
-func probeReport(round int, write, load []int64) {
+//
+// `bench_n` is b.N for the invocation this round belongs to, and it is on the
+// row because consumers need it: under `-benchtime=Nx` Go still runs the body
+// once with b.N==1 to calibrate, so a 3x run emits FOUR rounds - one of them
+// the very first pass after process start, with cold caches and first-touch
+// page faults. Pooling that round into a spread is how a tool whose entire
+// output is a spread reports its own start-up as measurement noise. (The same
+// cold-start effect is documented at ~+24.8% in
+// `docs/internal/audit-reports/bench-aa-2026-08/README.md` §三.)
+func probeReport(round, benchN int, write, load []int64) {
 	w, l := probeSorted(write), probeSorted(load)
-	fmt.Printf("PROBEROW round=%d iters=%d"+
+	fmt.Printf("PROBEROW round=%d bench_n=%d iters=%d"+
 		" write_p50=%d write_p90=%d write_p99=%d write_max=%d write_sum=%d"+
 		" load_p50=%d load_p90=%d load_p99=%d load_max=%d load_sum=%d\n",
-		round, len(write),
+		round, benchN, len(write),
 		probeQ(w, 0.50), probeQ(w, 0.90), probeQ(w, 0.99), w[len(w)-1], probeSum(write),
 		probeQ(l, 0.50), probeQ(l, 0.90), probeQ(l, 0.99), l[len(l)-1], probeSum(load))
 
