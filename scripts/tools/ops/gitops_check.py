@@ -273,7 +273,23 @@ def check_local(dir_path: str) -> CheckResult:
     try:
         for entry in sorted(base.iterdir(), key=lambda p: p.name):
             filename = entry.name
-            if not has_yaml_extension(filename, (".yaml",)) or is_reserved_name(filename):
+            # ⛔ `.yml` IS A TENANT CARRIER HERE NOW (#1603). This site used to
+            # pass `suffixes=(".yaml",)` while the defaults resolver above
+            # already accepts both spellings — so ONE invocation returned TWO
+            # answers about the same tree. Measured on a conf.d holding
+            # `_defaults.yml` plus `db-b.yml`, contents byte-identical to the
+            # `.yaml` control:
+            #
+            #     _defaults.yaml + db-a.yaml -> pass, 1 tenant file   <- control
+            #     _defaults.yml  + db-b.yml  -> pass, 0 tenant files  <- before
+            #     _defaults.yml  + db-b.yml  -> pass, 1 tenant file   <- after
+            #
+            # rc=0 and an empty stderr in every row: the readiness report told
+            # the operator their GitOps repo was in order while counting none
+            # of the tenants the exporter is serving out of it
+            # (`config_hierarchy.go:195` suffixes on both spellings). Omitting
+            # the argument takes `CONFIG_SUFFIXES`, which is the exporter's set.
+            if not has_yaml_extension(filename) or is_reserved_name(filename):
                 continue
 
             file_path = str(entry)

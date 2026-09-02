@@ -360,13 +360,23 @@ class TestCheckLocal:
         assert result.details["tenant_files"] == 0
         assert result.details["total_metrics"] == 0
 
-    def test_local_ignores_hidden_files(self, config_dir):
-        """Hidden files (starting with _) are ignored."""
+    def test_local_ignores_reserved_files(self, config_dir):
+        """`_`-prefixed control files are not tenant carriers.
+
+        ⛔ Renamed from `test_local_ignores_hidden_files`, which called a
+        `_`-prefixed file "hidden". `_lib_confd` makes `is_reserved_name`
+        (`_` prefix) and `is_hidden_name` (`.` prefix) two DELIBERATELY
+        orthogonal predicates, and this reader treats them differently: it
+        drops reserved names and COUNTS dot-prefixed ones. Under the old
+        name, anyone grepping for coverage of the hidden axis found this
+        green test and stopped — see the SCOPE block further down, which
+        records that the hidden axis has no assertion at all.
+        """
         defaults = {"threshold": 100}
         with open(os.path.join(config_dir, "_defaults.yaml"), "w") as f:
             yaml.dump(defaults, f)
 
-        # Create hidden file (should be ignored)
+        # Create reserved-prefix file (should be ignored)
         with open(os.path.join(config_dir, "_hidden.yaml"), "w") as f:
             yaml.dump({"hidden": True}, f)
 
@@ -414,6 +424,251 @@ class TestCheckLocal:
         assert result.status == "pass"
         assert result.details["tenant_files"] == 1
         assert result.details["total_metrics"] == 0
+
+
+# ── 3b. The extension-SPELLING axis (#1603) ────────────────────────────────
+#
+# `check_local` is what `da-tools gitops-check local` runs, i.e. what an
+# operator points at their GitOps repo to answer "is this ready?". Its
+# defaults resolver takes `_defaults.yaml` OR `_defaults.yml` while its
+# tenant scan used to take `.yaml` only, so one invocation answered the
+# same question two ways: it found the defaults carrier and then reported
+# `pass` with `tenant_files: 0`, rc=0, stderr empty, on a tree the
+# exporter is serving tenants out of.
+#
+# The oracle is the exporter's scanner: `config_hierarchy.go:195` lowercases
+# the entry name and accepts BOTH `.yaml` and `.yml`.
+#
+# ⚠️ SCOPE. These pin the extension-SPELLING axis only. The other three axes
+# are NOT covered, and none of them has an open ticket standing behind it, so
+# the disclosure has to carry itself:
+#   * Recursion: `check_local` is flat by construction (`base.iterdir()`).
+#     That is `test_confd_enumeration_contract.py`'s axis; nested carriers do
+#     get a `WARN` on stderr, so this one at least speaks.
+#   * Hidden names: this reader COUNTS `.hidden.yaml` as a tenant file while
+#     the exporter skips dot-prefixed entries (`config_hierarchy.go:181,190`).
+#     Measured on the tree before this change and unchanged by it, so it is
+#     pre-existing — but it is also the same shape as the bug fixed here: the
+#     shared predicates say `is_hidden_name(".secret.yaml") is True` and
+#     `config_stem(".secret.yaml") == ""` (this file carries no tenant id),
+#     while the loop two lines below counts it as tenant #2. This module
+#     imports three of the four name predicates and not `is_hidden_name`.
+#     ⛔ Closing it DELETES tenants that count today, so it is a separate
+#     behaviour change; the fixtures below therefore contain no dot-prefixed
+#     name at all, rather than pinning today's answer for them.
+#     ⚠️ #1339 (the family ticket) is closed, so nothing is tracking this.
+#   * Entries `is_file()` drops (a directory named `notes.yml/`, a broken
+#     symlink) are still silently skipped rather than named. ⚠️ #1607 is
+#     closed (state_reason=COMPLETED) — its closing comment verifies `operator_generate`
+#     and `custom_alerts/loader` on main and does not mention this tool, and
+#     measured here it still drops both shapes with rc=0 and an empty stderr.
+#     This reader is a residual of a ticket that reads as finished.
+
+class TestCheckLocalExtensionSpelling:
+    """`.yml` carriers must count exactly as `.yaml` ones do — no more."""
+
+    @staticmethod
+    def _seed(root, ext):
+        """One conf.d whose every carrier uses `ext`. Bodies never change."""
+        Path(root, f"_defaults{ext}").write_text(
+            "global_threshold: 100\n", encoding="utf-8")
+        Path(root, f"db-a{ext}").write_text(
+            "mysql_connections: '80'\n"
+            "mysql_threads_running: '75'\n"
+            "_routing:\n  receiver_type: slack\n", encoding="utf-8")
+        Path(root, f"db-b{ext}").write_text(
+            "redis_memory_usage: '80'\n", encoding="utf-8")
+
+    def test_local_agrees_across_extension_spellings(self, tmp_path):
+        """FLOOR. Two trees, same bytes, different extension → same answer.
+
+        ⛔ Asserted as an EQUALITY between the two runs rather than as
+        "`.yml` is accepted". The second is satisfied by a reader that takes
+        `.yml` and drops `.yaml`, and it stops meaning anything the day the
+        exporter grows a third spelling; the equality keeps saying the right
+        thing in both cases.
+        """
+        lower, alt = tmp_path / "yaml", tmp_path / "yml"
+        lower.mkdir()
+        alt.mkdir()
+        self._seed(lower, ".yaml")
+        self._seed(alt, ".yml")
+
+        a = gc.check_local(str(lower))
+        b = gc.check_local(str(alt))
+
+        def comparable(result):
+            # `details["directory"]` echoes the input path, which differs
+            # between the two trees by construction.
+            details = {k: v for k, v in (result.details or {}).items()
+                       if k != "directory"}
+            return result.status, result.message, details
+
+        # ⛔ Vacuity guard FIRST: two trees it cannot read at all would also
+        # compare equal.
+        #
+        # ⛔ And it is asserted on BOTH sides, not just the control. Blind
+        # review measured that gutting `comparable()` down to `(status,)` and
+        # narrowing the scan back to `.yaml` leaves this test GREEN: all of
+        # its discriminating power lived inside that one helper, which is
+        # also the cheapest way to make a legitimate-but-inconvenient failure
+        # go away. Pinning the two counts directly means the equality can be
+        # weakened without silently disarming the test.
+        for label, r in (("`.yaml`", a), ("`.yml`", b)):
+            assert (r.details.get("tenant_files"),
+                    r.details.get("total_metrics")) == (2, 3), (
+                f"the {label} tree reported "
+                f"tenant_files={r.details.get('tenant_files')} "
+                f"total_metrics={r.details.get('total_metrics')}, not (2, 3) — "
+                f"the equality below would prove nothing"
+            )
+        assert comparable(a) == comparable(b), (
+            f"gitops-check reports a different readiness for a conf.d whose "
+            f"only difference is `.yaml` vs `.yml`, both of which the "
+            f"exporter serves:\n  .yaml: {comparable(a)}\n  .yml : "
+            f"{comparable(b)}"
+        )
+
+    def test_local_names_an_unparseable_yml_carrier(self, tmp_path):
+        """FLOOR, second observable: a broken `.yml` is NAMED, not skipped.
+
+        The count-equality above goes red if a `.yml` tenant disappears; this
+        goes red if one is dropped from the FAILURE path instead, which is the
+        same silence wearing a green exit code.
+        """
+        for ext in (".yaml", ".yml"):
+            root = tmp_path / ext.lstrip(".")
+            root.mkdir()
+            Path(root, "_defaults.yaml").write_text(
+                "global_threshold: 100\n", encoding="utf-8")
+            Path(root, f"db-b{ext}").write_text(
+                "mysql_connections: [unclosed\n", encoding="utf-8")
+
+            result = gc.check_local(str(root))
+
+            assert result.status == "fail", (
+                f"a conf.d holding an unparseable `db-b{ext}` was reported "
+                f"{result.status!r}"
+            )
+            assert [e["file"] for e in result.details["parse_errors"]] == [
+                f"db-b{ext}"], (
+                f"the report must name the carrier it could not parse; got "
+                f"{result.details.get('parse_errors')!r}"
+            )
+
+    def test_local_does_not_count_a_json_or_reserved_carrier(self, tmp_path):
+        """CEILING, by counterexample — that is all a ceiling can be.
+
+        ⛔ The name says `.json` and reserved rather than "a carrier the
+        exporter does not serve", because you cannot enumerate the complement
+        of an accept-set: this pins TWO counterexamples, not a rule. In
+        particular it does NOT cover dot-prefixed names, which this reader
+        counts and the exporter skips (see the SCOPE block above) — a name
+        promising the general claim would have been read as covering that.
+
+        ⛔ Blind review of the sibling fix (#1663) measured that over-widening
+        a call site to `(".yaml", ".yml", ".json")` — a single-token edit, and
+        `has_yaml_extension`'s own docstring says this argument gets touched —
+        left the whole suite green while the tool began reading carriers the
+        exporter never loads. Re-measured for THIS tool on the base this
+        change sits on (`daf747fb`): with the widening applied to
+        `check_local` and this file's four new tests absent, the CI-exact
+        suite is 15905 passed / 185 skipped / rc=0 — nothing anywhere was
+        watching that direction.
+
+        The two counts are a FINGERPRINT, not two loose bounds: each file
+        contributes a distinct number of metric keys (1 / 2 / 4 / 8), so
+        `total_metrics` identifies exactly WHICH files were counted. Measured,
+        each with the edit that produces it:
+
+            accept `.json` too                    -> 3 / 7
+            narrow back to `.yaml` only           -> 1 / 1
+            drop the `is_reserved_name(...)` term -> 4 / 12   (`_defaults.yaml`
+                                                    is `_`-prefixed too, so it
+                                                    joins as well)
+            keep it but narrow it to `_defaults`  -> 3 / 11
+
+        Every one of them fails this assertion.
+        """
+        root = tmp_path / "confd"
+        root.mkdir()
+        Path(root, "_defaults.yaml").write_text(
+            "global_threshold: 100\n", encoding="utf-8")
+        # 1 key — plain tenant carrier.
+        Path(root, "alpha.yaml").write_text("k1: '1'\n", encoding="utf-8")
+        # 2 keys — the spelling this change widened to.
+        Path(root, "beta.yml").write_text(
+            "k1: '1'\nk2: '2'\n", encoding="utf-8")
+        # 4 keys — parses fine as YAML (JSON is a YAML subset), and that is
+        # the point: nothing but the extension rule keeps it out.
+        Path(root, "gamma.json").write_text(
+            '{"k1": "1", "k2": "2", "k3": "3", "k4": "4"}\n', encoding="utf-8")
+        # 8 keys — `_`-prefixed control file, never a tenant carrier.
+        Path(root, "_profiles.yaml").write_text(
+            "".join(f"k{i}: '{i}'\n" for i in range(8)), encoding="utf-8")
+
+        result = gc.check_local(str(root))
+
+        assert result.status == "pass"
+        assert (result.details["tenant_files"], result.details["total_metrics"]) \
+            == (2, 3), (
+            f"gitops-check counted a different set of carriers than the two "
+            f"the exporter serves here (alpha.yaml + beta.yml); got "
+            f"tenant_files={result.details['tenant_files']} "
+            f"total_metrics={result.details['total_metrics']}"
+        )
+
+    def test_local_counts_every_spelling_the_shared_set_names(self, tmp_path):
+        """FLOOR, derived: one carrier per member of `CONFIG_SUFFIXES`.
+
+        The two tests above hard-code `.yaml` and `.yml`, so they stop
+        covering the floor the day the exporter grows a third spelling and
+        `_lib_confd.CONFIG_SUFFIXES` follows it. This one reads the set
+        instead of restating it, so it widens on its own.
+
+        ⛔ It does NOT re-implement `has_yaml_extension` — that would be the
+        predicate checking itself. It uses the shared CONSTANT, whose
+        agreement with the exporter's scanner is pinned elsewhere
+        (`tests/shared/confd_name_classification_matrix.json`, asserted from
+        the Go side by `confd_name_classification_parity_test.go` and from
+        the Python side by `tests/shared/test_confd_name_classification_parity.py`).
+
+        ⚠️ Floor only: satisfied by a reader that is too WIDE, which is what
+        the counterexample test above is for.
+        """
+        from _lib_confd import CONFIG_SUFFIXES  # noqa: PLC0415
+
+        # ⛔ Anti-vacuity: an empty `CONFIG_SUFFIXES` would make the assertion
+        # below `0 == 0`. The set is not this test's to guard, so say who
+        # does rather than pretending a floor here would be independent.
+        assert len(CONFIG_SUFFIXES) >= 2, (
+            f"CONFIG_SUFFIXES collapsed to {CONFIG_SUFFIXES!r}; the shared "
+            f"classification matrix is the thing that should have gone red "
+            f"first, so fix that before touching this line"
+        )
+
+        root = tmp_path / "confd"
+        root.mkdir()
+        Path(root, "_defaults.yaml").write_text(
+            "global_threshold: 100\n", encoding="utf-8")
+        for i, suffix in enumerate(CONFIG_SUFFIXES):
+            Path(root, f"t{i}{suffix}").write_text(
+                "".join(f"k{j}: '{j}'\n" for j in range(i + 1)),
+                encoding="utf-8")
+
+        result = gc.check_local(str(root))
+        expected_metrics = sum(range(1, len(CONFIG_SUFFIXES) + 1))
+
+        assert result.status == "pass"
+        assert (result.details["tenant_files"],
+                result.details["total_metrics"]) == (
+                    len(CONFIG_SUFFIXES), expected_metrics), (
+            f"one carrier was written per member of CONFIG_SUFFIXES "
+            f"({CONFIG_SUFFIXES!r}) and gitops-check counted "
+            f"tenant_files={result.details['tenant_files']} "
+            f"total_metrics={result.details['total_metrics']}, expected "
+            f"{(len(CONFIG_SUFFIXES), expected_metrics)}"
+        )
 
 
 # ── 4. check_sidecar() Tests ───────────────────────────────────────────────
