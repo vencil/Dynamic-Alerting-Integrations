@@ -41,3 +41,35 @@ func TestTenantIDFromFile(t *testing.T) {
 		})
 	}
 }
+
+// TestIsAddressableTenantIDRejectsSeparators pins the gap this predicate
+// exists for: IsTenantConfigFile answers a NAME question and says yes to ids
+// carrying separators, so a write site gating on it alone builds a path it did
+// not mean to (#1681).
+func TestIsAddressableTenantIDRejectsSeparators(t *testing.T) {
+	for _, tc := range []struct {
+		id   string
+		want bool
+	}{
+		{"db-a", true},
+		{"Upper", true},
+		{"", false},
+		{"a/b", false},
+		{`a\b`, false},
+		{"..", false},
+		{"../x", false},
+		{"a/../../b", false},
+		{"/abs", false},
+		{"_defaults", false},
+		{".hidden", false},
+	} {
+		if got := IsAddressableTenantID(tc.id); got != tc.want {
+			t.Errorf("IsAddressableTenantID(%q) = %v, want %v", tc.id, got, tc.want)
+		}
+		// Every id this predicate accepts must also satisfy the name rule the
+		// scanners skip on — the two namespaces stay structurally equal.
+		if tc.want && !IsTenantConfigFile(tc.id+".yaml") {
+			t.Errorf("%q is addressable but would not be scanned", tc.id)
+		}
+	}
+}

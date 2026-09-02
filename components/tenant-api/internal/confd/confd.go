@@ -89,3 +89,28 @@ func IsTenantConfigFile(name string) bool {
 	_, ok := TenantIDFromFile(name)
 	return ok
 }
+
+// IsAddressableTenantID reports whether id may be used to ADDRESS a tenant
+// file — the write plane's question, as opposed to IsTenantConfigFile's "would
+// a scanner pick this name up". It is the same rule plus the structural checks
+// that keep `filepath.Join(configDir, id+".yaml")` inside configDir.
+//
+// Those structural checks live here rather than at each write site because
+// IsTenantConfigFile alone does NOT reject separators: measured, "a/b",
+// "a/../../b" and "/abs" all satisfy it (nothing in a name rule cares about
+// directories), so a second, weaker hand-written copy at a write site is the
+// exact shape this package exists to prevent (#1339 family, #1681).
+func IsAddressableTenantID(id string) bool {
+	if id == "" {
+		return false
+	}
+	// `\` is rejected on every GOOS, not just where filepath treats it as a
+	// separator, so no id reaching the last line can differ from its own
+	// filepath.Base. A Base check here was measured to be an equivalent mutant
+	// — deleting it turned nothing red — so it is deliberately absent rather
+	// than forgotten.
+	if strings.ContainsAny(id, `/\`) || strings.Contains(id, "..") {
+		return false
+	}
+	return IsTenantConfigFile(id + ".yaml")
+}

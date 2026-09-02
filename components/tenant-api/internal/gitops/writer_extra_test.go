@@ -23,16 +23,35 @@ func TestValidate_ValidConfig(t *testing.T) {
 	}
 }
 
+// TestValidate_MultipleTenants asserted, until #1681, that a body declaring
+// several tenants validates for ANY of them. That was the vulnerability stated
+// as a contract: the exporter takes tenant ids from these keys, so a tenant
+// could write a section it does not own — freezing every tenant's config reload
+// when the smuggled id owned a file, and conjuring a tenant no filename-based
+// plane could see when it did not. The rule is now a delta (addedTenantKeys),
+// so what this test measures is which side of that delta a body falls on.
 func TestValidate_MultipleTenants(t *testing.T) {
 	t.Parallel()
-	yaml := "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n  db-b:\n    _silent_mode: \"critical\"\n"
-	errs, _ := validate("", "db-a", "", yaml)
-	if len(errs) != 0 {
-		t.Errorf("expected no errors for db-a, got: %v", errs)
+	yamlBody := "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n  db-b:\n    _silent_mode: \"critical\"\n"
+
+	// No baseline (unit-test shape, and no resolved file path): both sections
+	// are additions for whichever id is being written, so both are refused.
+	for _, id := range []string{"db-a", "db-b"} {
+		errs, _ := validate("", id, "", yamlBody)
+		if len(errs) != 1 || !strings.Contains(errs[0], "adds tenant section") {
+			t.Errorf("expected the added-section refusal for %s, got: %v", id, errs)
+		}
 	}
-	errs, _ = validate("", "db-b", "", yaml)
-	if len(errs) != 0 {
-		t.Errorf("expected no errors for db-b, got: %v", errs)
+
+	// With a base file that already declares both, the same body is an edit of
+	// sections that are already there — the flat-file shape the exporter serves.
+	dir := t.TempDir()
+	base := filepath.Join(dir, "db-a.yaml")
+	if err := os.WriteFile(base, []byte(yamlBody), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if errs, _ := validate(dir, "db-a", base, yamlBody); len(errs) != 0 {
+		t.Errorf("expected no errors editing a grandfathered file, got: %v", errs)
 	}
 }
 
