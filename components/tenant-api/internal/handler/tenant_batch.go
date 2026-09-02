@@ -168,7 +168,7 @@ func batchTenantsPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, req Ba
 			batchResults = append(batchResults, BatchResult{TenantID: op.TenantID, Status: "error", Message: err.Error()})
 			continue
 		}
-		if !OrgAllowed(d.RBAC, d.TenantOrg, p, op.TenantID, rbac.PermWrite) {
+		if !OrgAllowed(d.RBAC, d.TenantOrg, p, op.TenantID, rbac.PermWrite, WriteScopeMeta(d.ConfigDir)) {
 			batchResults = append(batchResults, BatchResult{TenantID: op.TenantID, Status: "error", Message: "insufficient permissions"})
 			continue
 		}
@@ -290,7 +290,7 @@ func batchTenantsPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, req Ba
 func executeBatchOps(ctx context.Context, w *gitops.Writer, configDir string, ops []BatchOperation, email string, p *rbac.VerifiedPrincipal, rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager, policyMgr *policy.Manager) []BatchResult {
 	results := make([]BatchResult, 0, len(ops))
 	for _, op := range ops {
-		if res, failed := gateBatchOp(op.TenantID, p, rbacMgr, tenantOrg); failed {
+		if res, failed := gateBatchOp(op.TenantID, p, rbacMgr, tenantOrg, configDir); failed {
 			results = append(results, res)
 			continue
 		}

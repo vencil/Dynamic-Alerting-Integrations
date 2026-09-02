@@ -337,12 +337,12 @@ func TestAllowedInOrg_Matrix(t *testing.T) {
 			t.Parallel()
 			for _, want := range []Permission{PermRead, PermWrite} {
 				shadowM := NewForTest(orgWriteCfg())
-				if got := shadowM.AllowedInOrg(c.p, "db-a", want, c.tenantOrgs); got != c.wantShadow {
+				if got := shadowM.AllowedInOrg(c.p, "db-a", want, c.tenantOrgs, "", ""); got != c.wantShadow {
 					t.Errorf("shadow: AllowedInOrg(%s) = %v, want %v", want, got, c.wantShadow)
 				}
 				enforceM := NewForTest(orgWriteCfg())
 				enforceM.EnableOrgScopeEnforce()
-				if got := enforceM.AllowedInOrg(c.p, "db-a", want, c.tenantOrgs); got != c.wantWrite {
+				if got := enforceM.AllowedInOrg(c.p, "db-a", want, c.tenantOrgs, "", ""); got != c.wantWrite {
 					t.Errorf("enforce: AllowedInOrg(%s) = %v, want %v", want, got, c.wantWrite)
 				}
 			}
@@ -353,7 +353,7 @@ func TestAllowedInOrg_Matrix(t *testing.T) {
 				if enforce {
 					m.EnableOrgScopeEnforce()
 				}
-				if m.AllowedInOrg(c.p, "db-a", PermAdmin, c.tenantOrgs) {
+				if m.AllowedInOrg(c.p, "db-a", PermAdmin, c.tenantOrgs, "", "") {
 					t.Errorf("enforce=%v: AllowedInOrg(admin) must be false (rule grants write only)", enforce)
 				}
 			}
@@ -410,8 +410,8 @@ func TestAllowedInOrg_Monotonic(t *testing.T) {
 			for _, tenant := range []string{"db-a", "redis-01", "*"} {
 				for oName, orgs := range orgLists {
 					for _, want := range []Permission{PermRead, PermWrite, PermAdmin} {
-						e := enforceM.AllowedInOrg(p, tenant, want, orgs)
-						s := shadowM.AllowedInOrg(p, tenant, want, orgs)
+						e := enforceM.AllowedInOrg(p, tenant, want, orgs, "", "")
+						s := shadowM.AllowedInOrg(p, tenant, want, orgs, "", "")
 						a := shadowM.Allowed(p, tenant, want)
 						if e && !s {
 							t.Errorf("[%s p=%s tenant=%q orgs=%s want=%s] enforce=true but shadow=false (org axis must only narrow)",
@@ -446,7 +446,7 @@ func TestAllowed_OrgBlindUnderOrgScopedRule(t *testing.T) {
 	if !m.Allowed(outsider, "db-a", PermWrite) {
 		t.Error("Allowed must stay org-blind (grant) even under enforce with a non-member caller")
 	}
-	if m.AllowedInOrg(outsider, "db-a", PermWrite, []string{"ORG-A"}) {
+	if m.AllowedInOrg(outsider, "db-a", PermWrite, []string{"ORG-A"}, "", "") {
 		t.Error("AllowedInOrg must deny the same non-member caller (labeled tenant, enforce)")
 	}
 	if rec.counts[scopeAxisOrgWrite] != 0 {
@@ -478,16 +478,16 @@ func TestAllowedInOrg_CrossRuleUnionNoLeak(t *testing.T) {
 		}
 		// Leak case: tenant labeled with a DIFFERENT org → A fails org in both
 		// modes (labeled non-match), B never grants write. MUST deny.
-		if m.AllowedInOrg(p, "db-x", PermWrite, []string{"ORG-OTHER"}) {
+		if m.AllowedInOrg(p, "db-x", PermWrite, []string{"ORG-OTHER"}, "", "") {
 			t.Errorf("enforce=%v: cross-rule leak — write granted though no single rule grants it", enforce)
 		}
 		// Control 1: A alone grants when the org matches (proves A is live).
-		if !m.AllowedInOrg(p, "db-x", PermWrite, []string{"ORG-USER"}) {
+		if !m.AllowedInOrg(p, "db-x", PermWrite, []string{"ORG-USER"}, "", "") {
 			t.Errorf("enforce=%v: control — same-org write via rule A must be granted", enforce)
 		}
 		// Control 2: read still flows through org-less rule B regardless of org
 		// (proves B is live and the leak-case denial is genuinely cross-rule).
-		if !m.AllowedInOrg(p, "db-x", PermRead, []string{"ORG-OTHER"}) {
+		if !m.AllowedInOrg(p, "db-x", PermRead, []string{"ORG-OTHER"}, "", "") {
 			t.Errorf("enforce=%v: control — read via org-less rule B must be granted", enforce)
 		}
 	}
@@ -504,7 +504,7 @@ func TestAllowedInOrg_WouldDenyRecording(t *testing.T) {
 		m := NewForTest(orgWriteCfg())
 		rec := newFakeScopeRecorder()
 		m.SetScopeAuditor(rec)
-		if !m.AllowedInOrg(member, "db-a", PermWrite, nil) {
+		if !m.AllowedInOrg(member, "db-a", PermWrite, nil, "", "") {
 			t.Error("shadow: unlabeled tenant must still be granted")
 		}
 		if rec.counts[scopeAxisOrgWrite] != 1 || rec.counts[scopeAxisOrg] != 0 || rec.counts[scopeAxisMetadata] != 0 {
@@ -519,7 +519,7 @@ func TestAllowedInOrg_WouldDenyRecording(t *testing.T) {
 		m.EnableOrgScopeEnforce()
 		rec := newFakeScopeRecorder()
 		m.SetScopeAuditor(rec)
-		if m.AllowedInOrg(member, "db-a", PermWrite, nil) {
+		if m.AllowedInOrg(member, "db-a", PermWrite, nil, "", "") {
 			t.Error("enforce: unlabeled tenant must be denied")
 		}
 		if rec.counts[scopeAxisOrgWrite] != 1 {
@@ -545,7 +545,7 @@ func TestAllowedInOrg_WouldDenyRecording(t *testing.T) {
 		m := NewForTest(orgWriteCfg())
 		rec := newFakeScopeRecorder()
 		m.SetScopeAuditor(rec)
-		if m.AllowedInOrg(member, "db-a", PermWrite, []string{"ORG-OTHER"}) {
+		if m.AllowedInOrg(member, "db-a", PermWrite, []string{"ORG-OTHER"}, "", "") {
 			t.Error("labeled non-member must be denied even in shadow")
 		}
 		if rec.counts[scopeAxisOrgWrite] != 0 {
@@ -587,7 +587,7 @@ func TestAllowedInOrg_TenantorgSnapshotSwap(t *testing.T) {
 		"db-a": {"ORG-OTHER"}, // mapping A: tenant belongs to someone else's org
 	}})
 	orgs, _ := torg.OrgsForTenant("db-a")
-	if m.AllowedInOrg(p, "db-a", PermWrite, orgs) {
+	if m.AllowedInOrg(p, "db-a", PermWrite, orgs, "", "") {
 		t.Fatal("mapping A: non-member write must be denied under enforce")
 	}
 
@@ -597,7 +597,7 @@ func TestAllowedInOrg_TenantorgSnapshotSwap(t *testing.T) {
 		"db-a": {"ORG-A"},
 	}})
 	orgs, _ = torg.OrgsForTenant("db-a")
-	if !m.AllowedInOrg(p, "db-a", PermWrite, orgs) {
+	if !m.AllowedInOrg(p, "db-a", PermWrite, orgs, "", "") {
 		t.Error("after snapshot swap: member write must be granted (orgs resolved at decision time)")
 	}
 }

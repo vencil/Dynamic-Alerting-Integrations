@@ -15,6 +15,14 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ### Fixed
 
+- **`_rbac.yaml` 的 `environments:` / `domains:` 對寫入平面零約束力，而寫入被拒時的 403 正好叫人去調那兩格（tenant-api；[#1597](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1597)）**：`AllowedInOrg`——doc comment 自稱是「the ONLY write-plane authorization entry point」——的簽名根本沒有 environment / domain 參數，其委派的迴圈也從未讀 `rule.Environments` / `rule.Domains`。實測同一條規則、同一個 principal：`WRITE` 放行、`LIST` 擋下。所以照範本寫 `environments: [production, staging]` 的部署，其寫入對**每一個** `tenants:` 匹配到的租戶都是全開的。
+  - **修法**：寫入平面新增 metadata 軸，與 org 軸同構（同一組 `scopeFieldModes` 述詞、2×2 shadow/enforce lattice、per-axis would-deny）。
+  - ⚠️ **這是收緊權限的變更，因此整條軸都在新旗標後面**：`--rbac-metadata-write-scope-enforce`（`TA_RBAC_METADATA_WRITE_SCOPE_ENFORCE`），預設 **false = shadow**（寫入照舊放行，只計數）。刻意**不**沿用 `--rbac-metadata-scope-enforce`：那支管的是 list 平面早已綁定的軸（只有「未標記」那一支還在遷移），若共用，已完成 list 平面 soak 的部署一升級就會當場被收緊、沒有過渡期——這正是 ADR-027 D4 給 org 軸獨立旗標的理由。
+  - **新 soak 序列** `tenant_api_scope_would_deny_total{axis="metadata_write"}`。與 `{axis="metadata"}` 語意不同：後者量的是 list 平面的未標記租戶寬容度，前者量的是「這次 flip 會開始拒絕哪些**真實寫入**」。`increase()==0` 撐過 soak window 才 flip。
+  - **403 訊息改為隨旗標分岔**：`environments[]/domains[]` 那半句只在該軸真的生效時才出現。原本它無條件出現且讀寫共用，於是在最需要準確的情境（寫入被拒、而該欄位根本不能拒絕寫入）反而把人指向一個轉不動的旋鈕。
+  - **範圍**：只綁寫入平面。read-by-id 的 metadata 軸同樣未綁定，但那是另一個平面、需要自己的遷移，本次不擴大。
+  - **測試**：`TestMetadataScopeBindsOnTheWritePlane`（shadow 仍放行 / enforce 擋下 / 命中 environments 仍放行 / 兩平面在 enforce 下一致）、`TestMetadataWritePlaneRecordsOnItsOwnAxis`（would-deny 落在 `metadata_write`、不污染 `metadata`）、`TestAllowedStaysBlindOnBothAxes`（平台萬用字元路徑兩軸皆盲、零記錄）。
+
 - **租戶檔存成 `db-b.yml` 時，`GET /tenants` 看得到他、`GET /tenants/{id}` 卻回 404；而一次 PUT 會在旁邊新建 `db-b.yaml` 讓同一個租戶出現兩份真相（tenant-api；[#1673](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1673)）**：tenant-api 內有兩套互斥的「哪個檔是這個租戶的」慣例——枚舉平面走 `confd.TenantIDFromFile`（接受 `.yaml`/`.yml`、副檔名大小寫不敏感），per-tenant 定址平面則硬寫 `filepath.Join(dir, id+".yaml")`，共 9 站。本次把後者收斂到共用的 `confd.ResolveTenantFile` / `TenantFilePathForWrite`，讀取端解析租戶的**實際**檔案，寫入端寫回**既有**檔案（只有全新租戶才用 `.yaml` 預設拼法）。
   - **同一條流程只解析一次**：`readMergeValidate` 與其後的 commit、以及 batch 迴圈裡的每個 op，都改由呼叫端解析後往下傳，避免「讀的是 A 檔、寫的是 B 檔」。`validate()` 也改為接收已解析路徑，其 eol-expansion guard 因此讀到與寫入同一個檔。
   - **同 stem 兩種拼法並存 → fail-loud，不做優先序猜測**：`ResolveTenantFile` 回 `ErrAmbiguousTenantFile`，`loadAllTenants` 對重複 tenant id 直接報錯而非回兩列，API 邊界（GET / PUT / POST diff）對映為 **409**。這與 exporter 既有的 `DuplicateTenantError` 立場一致——[#1603](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1603) 那筆逐字標過的「拼法對齊 ≠ 兩種拼法可以並存」邊界，這次補上 tenant-api 這一半。

@@ -98,7 +98,7 @@ func (m *Manager) Middleware(want Permission, tenantIDFn func(*http.Request) str
 				authorized = m.Allowed(bPrincipal, tenantID, want)
 			}
 			if !authorized {
-				writeForbidden(w, r, tenantID, want)
+				m.writeForbidden(w, r, tenantID, want)
 				return
 			}
 
@@ -202,11 +202,25 @@ func writeError(w http.ResponseWriter, r *http.Request, status int, msg string) 
 // v2.5.0: Enhanced error message with guidance for RBAC troubleshooting.
 // Unified-envelope migration: help/action/message preserved verbatim;
 // code + request_id added.
-func writeForbidden(w http.ResponseWriter, r *http.Request, tenantID string, want Permission) {
+//
+// #1597: the environments[]/domains[] half of the Action is now CONDITIONAL on
+// the metadata axis actually being in enforce mode. That sentence was
+// unconditional and shared by both planes, which made it actively misleading in
+// the one case that mattered: a WRITE denied while the metadata axis was blind
+// (pre-#1597) or still in shadow. An operator following it would tune
+// environments[] forever without changing the outcome, because that field could
+// not deny a write. Naming a knob that cannot move the result is worse than
+// naming no knob at all, so the sentence appears only when the knob is live.
+func (m *Manager) writeForbidden(w http.ResponseWriter, r *http.Request, tenantID string, want Permission) {
+	action := "Check your _rbac.yaml group rules. Ensure your IdP group has '" + string(want) +
+		"' permission for tenant '" + tenantID + "'"
+	if m.metadataWriteScopeEnforce {
+		action += ", and that environments[]/domains[] constraints match the tenant metadata"
+	}
 	writeEnvelope(w, r, http.StatusForbidden, errorEnvelope{
 		Error:  "insufficient permissions for tenant " + tenantID,
 		Code:   codeForbidden,
 		Help:   "https://github.com/vencil/vibe-k8s-lab/blob/main/docs/governance-security.md",
-		Action: "Check your _rbac.yaml group rules. Ensure your IdP group has '" + string(want) + "' permission for tenant '" + tenantID + "', and that environments[]/domains[] constraints match the tenant metadata.",
+		Action: action + ".",
 	})
 }

@@ -22,6 +22,13 @@ data:
         permissions: [read, write, admin]
         # No environments/domains restriction — full access
 
+      # environments/domains are SCOPE filters on both planes as of #1597 —
+      # but the write plane is behind its own flag while it soaks. Until
+      # --rbac-metadata-write-scope-enforce is set, these two fields restrict
+      # only what this group can SEE (list + read); its writes reach every
+      # tenant matched by tenants:[...]. Watch
+      # tenant_api_scope_would_deny_total{axis="metadata_write"} — a non-zero
+      # rate names the writes the flip will start rejecting — then flip.
       - name: db-operators
         tenants: ["db-a-*", "db-b-*"]
         permissions: [read, write]

@@ -128,7 +128,7 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 func executeGroupBatchOps(ctx context.Context, writer *gitops.Writer, configDir string, members []string, patch map[string]string, email string, p *rbac.VerifiedPrincipal, rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager) []BatchResult {
 	results := make([]BatchResult, 0, len(members))
 	for _, tenantID := range members {
-		if res, failed := gateBatchOp(tenantID, p, rbacMgr, tenantOrg); failed {
+		if res, failed := gateBatchOp(tenantID, p, rbacMgr, tenantOrg, configDir); failed {
 			results = append(results, res)
 			continue
 		}

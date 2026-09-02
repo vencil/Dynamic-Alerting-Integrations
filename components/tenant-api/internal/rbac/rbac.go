@@ -153,6 +153,16 @@ type Manager struct {
 	// independent.
 	metadataScopeEnforce bool
 
+	// metadataWriteScopeEnforce (#1597) is the WRITE plane's own metadata-axis
+	// fail-mode flag. Separate from metadataScopeEnforce on purpose: that one
+	// governs an axis the list plane has always bound (only its unlabeled arm is
+	// in migration), whereas the write plane's metadata axis is new in its
+	// entirety, so it needs its own audit→enforce rollout — the same reasoning
+	// ADR-027 D4 used to give the org axis a flag of its own. Default false =
+	// shadow: the axis allows everything and only counts
+	// tenant_api_scope_would_deny_total{axis="metadata_write"}.
+	metadataWriteScopeEnforce bool
+
 	// orgScopeEnforce (ADR-027 / LD-6 P4) is the org-scope axis's own fail-mode
 	// flag, mirroring metadataScopeEnforce but for the org (tenant→organization)
 	// axis. false (the default) is SHADOW: an unlabeled tenant (one with no orgs
@@ -217,6 +227,13 @@ func (m *Manager) SetMachineAuditor(a MachineIdentityAuditor) { m.machineAuditor
 // setter (not a NewManager arg) so the many NewManager call sites stay
 // unchanged, mirroring AllowOpenReadOnEmpty / SetMachineAuditor.
 func (m *Manager) EnableMetadataScopeEnforce() { m.metadataScopeEnforce = true }
+
+// EnableMetadataWriteScopeEnforce switches the WRITE plane's metadata
+// (environment/domain) axis from SHADOW (default, allow-and-count) to ENFORCE
+// (#1597). Flip only after tenant_api_scope_would_deny_total{axis="metadata_write"}
+// shows increase()==0 over the soak window — a non-zero counter names exactly
+// the writes this flip would start rejecting.
+func (m *Manager) EnableMetadataWriteScopeEnforce() { m.metadataWriteScopeEnforce = true }
 
 // EnableOrgScopeEnforce switches the org-scope axis from SHADOW (default) to
 // ENFORCE: an unlabeled tenant on an org-scoped rule is DENIED instead of
@@ -607,14 +624,16 @@ func ruleGrants(rule *GroupRule, want Permission) bool {
 //
 // Empty-config semantics are byte-identical to the historical Allowed:
 // failClosedOnEmpty denies both modes; open mode grants read-only in both.
-func (m *Manager) allowedOrgModes(p *VerifiedPrincipal, tenantID string, want Permission, tenantOrgs []string) (passShadow, passEnforce bool, orgBlockedRule string) {
+func (m *Manager) allowedScopedModes(p *VerifiedPrincipal, tenantID string, want Permission,
+	tenantOrgs []string, environment, domain string) (passSS, passSE, passES, passEE bool, blockedRule string) {
 	cfg := m.Get()
 	if len(cfg.Groups) == 0 {
 		if m.failClosedOnEmpty {
-			return false, false, "" // MED-8: configured but empty _rbac.yaml → deny
+			return false, false, false, false, "" // MED-8: configured but empty _rbac.yaml → deny
 		}
 		// Open mode — authenticated users have read access only
-		return want == PermRead, want == PermRead, ""
+		open := want == PermRead
+		return open, open, open, open, ""
 	}
 
 	subject := subjectFor(p)
@@ -629,20 +648,35 @@ func (m *Manager) allowedOrgModes(p *VerifiedPrincipal, tenantID string, want Pe
 		if !ruleGrants(rule, want) {
 			continue
 		}
+		// #1597: the metadata axis on the write plane. NOTE the deliberate
+		// asymmetry with ScopeAllowed: there, shadow/enforce differ only on the
+		// UNLABELED arm, because the axis has always bound labeled values on the
+		// list plane. Here the whole axis is NEW, so its shadow outcome is
+		// unconditionally "allow" — anything else would tighten every existing
+		// deployment the moment this ships, with no flag and no soak, which is
+		// precisely the migration hazard #1597 called out. Only enforce applies
+		// the real predicate.
+		_, envEnforce := scopeFieldModes(rule.Environments, environment)
+		_, domEnforce := scopeFieldModes(rule.Domains, domain)
+		metaShadow := true
+		metaEnforce := envEnforce && domEnforce
+
 		orgShadow, orgEnforce := true, true // no org-scope on this rule = no org restriction
 		if rule.OrgScope != "" {
 			orgShadow, orgEnforce = scopeSetModes(subject.claims[rule.OrgScope], tenantOrgs)
 		}
-		if orgBlockedRule == "" && (!orgShadow || !orgEnforce) {
-			orgBlockedRule = rule.Name
+		if blockedRule == "" && (!metaShadow || !metaEnforce || !orgShadow || !orgEnforce) {
+			blockedRule = rule.Name
 		}
-		passShadow = passShadow || orgShadow
-		passEnforce = passEnforce || orgEnforce
-		if passShadow && passEnforce {
-			break // both modes granted; further rules cannot change either
+		passSS = passSS || (metaShadow && orgShadow)
+		passSE = passSE || (metaShadow && orgEnforce)
+		passES = passES || (metaEnforce && orgShadow)
+		passEE = passEE || (metaEnforce && orgEnforce)
+		if passSS && passSE && passES && passEE {
+			break // all four outcomes granted; further rules cannot change any
 		}
 	}
-	return passShadow, passEnforce, orgBlockedRule
+	return passSS, passSE, passES, passEE, blockedRule
 }
 
 // Allowed checks whether the caller p is granted the wanted permission for
@@ -670,11 +704,24 @@ func (m *Manager) allowedOrgModes(p *VerifiedPrincipal, tenantID string, want Pe
 // (org_write) and AllowedInOrgRead (org) only, so nothing routed through the
 // org-blind path can pollute the enforce-flip soak metrics.
 func (m *Manager) Allowed(p *VerifiedPrincipal, tenantID string, want Permission) bool {
-	passShadow, _, _ := m.allowedOrgModes(p, tenantID, want, nil)
-	return passShadow
+	// Both axes held at SHADOW and fed unlabeled inputs (nil orgs, empty
+	// environment/domain) — scopeFieldModes documents empty-value-under-shadow
+	// as (true, false), so passSS here is byte-identical to the pre-#1597
+	// passShadow this line used to read. Deliberately blind on both axes: this
+	// is the platform-wildcard path, and it must record no would-deny.
+	passSS, _, _, _, _ := m.allowedScopedModes(p, tenantID, want, nil, "", "")
+	return passSS
 }
 
-// AllowedInOrg is the org-scope-aware per-tenant permission check and the ONLY
+// #1597: AllowedInOrg is now scope-aware on BOTH axes. It used to take no
+// environment/domain and never read rule.Environments / rule.Domains, so a
+// rule's `environments:` constrained only what a subject could SEE (list plane,
+// ScopeAllowed) and never what it could WRITE — while the 403 told the denied
+// operator to go adjust exactly that field. The metadata axis now runs here
+// under its own flag (metadataScopeEnforce) and its own write-plane soak series
+// (scopeAxisMetadataWrite), mirroring how the org axis already spans planes.
+//
+// AllowedInOrg is the scope-aware per-tenant permission check and the ONLY
 // write-plane authorization entry point (ADR-027 / LD-6 P4b). tenantOrgs is
 // the target tenant's organization list (tenantorg.OrgsForTenant), resolved by
 // the caller AT DECISION TIME — rbac does not import tenantorg, mirroring
@@ -688,8 +735,10 @@ func (m *Manager) Allowed(p *VerifiedPrincipal, tenantID string, want Permission
 // keeps counting as a "denied by org scope" signal). Monotonicity holds by
 // construction: AllowedInOrg(enforce) ⟹ AllowedInOrg(shadow) ⟹ Allowed —
 // the org axis only ever narrows a grant, never widens one.
-func (m *Manager) AllowedInOrg(p *VerifiedPrincipal, tenantID string, want Permission, tenantOrgs []string) bool {
-	return m.allowedInOrgOnAxis(p, tenantID, want, tenantOrgs, scopeAxisOrgWrite, "write-plane")
+func (m *Manager) AllowedInOrg(p *VerifiedPrincipal, tenantID string, want Permission,
+	tenantOrgs []string, environment, domain string) bool {
+	return m.allowedScopedOnAxes(p, tenantID, want, tenantOrgs, environment, domain,
+		scopeAxisMetadataWrite, scopeAxisOrgWrite, "write-plane", true)
 }
 
 // AllowedInOrgRead is the org-scope-aware per-tenant permission check for the
@@ -705,7 +754,11 @@ func (m *Manager) AllowedInOrg(p *VerifiedPrincipal, tenantID string, want Permi
 // axis, no separate flip gate. Governed by the same m.orgScopeEnforce flag, so
 // list + write + read flip atomically.
 func (m *Manager) AllowedInOrgRead(p *VerifiedPrincipal, tenantID string, want Permission, tenantOrgs []string) bool {
-	return m.allowedInOrgOnAxis(p, tenantID, want, tenantOrgs, scopeAxisOrg, "read-plane")
+	// Metadata-blind by design: binding that axis on the read plane is a
+	// separate plane with its own migration (#1597 scopes itself to writes).
+	// Passing the unlabeled pair keeps this byte-identical to its pre-#1597 self.
+	return m.allowedScopedOnAxes(p, tenantID, want, tenantOrgs, "", "",
+		scopeAxisMetadata, scopeAxisOrg, "read-plane", false)
 }
 
 // allowedInOrgOnAxis is the shared org-scope decision + would-deny recording for
@@ -715,27 +768,51 @@ func (m *Manager) AllowedInOrgRead(p *VerifiedPrincipal, tenantID string, want P
 // decision (allowedOrgModes) is axis-independent — only the observability label
 // differs — so a read call can never pollute the write-plane soak counter and
 // vice versa.
-func (m *Manager) allowedInOrgOnAxis(p *VerifiedPrincipal, tenantID string, want Permission, tenantOrgs []string, axis, plane string) bool {
-	passShadow, passEnforce, orgBlockedRule := m.allowedOrgModes(p, tenantID, want, tenantOrgs)
-	m.recordScopeShadowGap(passShadow, passEnforce, axis)
-	if m.orgScopeEnforce {
-		if !passEnforce && orgBlockedRule != "" {
-			// The org axis curtailed an otherwise-granting rule → loud enough to
-			// debug a 403. Tenant + rule NAME only; claim values never reach logs
-			// (principal.go multi-value-refusal discipline).
-			slog.Warn("org-scope denied "+plane+" permission",
-				"tenant", tenantID, "axis", axis, "rule", orgBlockedRule, "perm", string(want))
-		}
-		return passEnforce
+func (m *Manager) allowedScopedOnAxes(p *VerifiedPrincipal, tenantID string, want Permission,
+	tenantOrgs []string, environment, domain string, metaAxis, orgAxis, plane string, metaAxisLive bool) bool {
+	passSS, passSE, passES, passEE, blockedRule := m.allowedScopedModes(p, tenantID, want, tenantOrgs, environment, domain)
+
+	// The write plane's metadata axis has its OWN flag (ADR-027 D4's per-axis
+	// rule): a deployment that already finished the LIST plane's soak and set
+	// metadataScopeEnforce must not have its writes tightened by an upgrade.
+	// Planes where the axis is not bound at all pass metaAxisLive=false and are
+	// pinned to shadow, so they cost nothing and record nothing new.
+	metaFlag := metaAxisLive && m.metadataWriteScopeEnforce
+	orgFlag := m.orgScopeEnforce
+
+	// Per-axis would-deny, recorded exactly as ScopeAllowed does it: hold the
+	// OTHER axis at its current effective flag and compare this axis's shadow
+	// vs enforce outcome. A grant is a would-deny for an axis iff flipping that
+	// axis ALONE from shadow→enforce takes it away — which is what makes each
+	// axis's soak counter a usable flip criterion on its own.
+	m.recordScopeShadowGap(
+		visAt(passSS, passSE, passES, passEE, false, orgFlag), // metadata=shadow
+		visAt(passSS, passSE, passES, passEE, true, orgFlag),  // metadata=enforce
+		metaAxis)
+	m.recordScopeShadowGap(
+		visAt(passSS, passSE, passES, passEE, metaFlag, false), // org=shadow
+		visAt(passSS, passSE, passES, passEE, metaFlag, true),  // org=enforce
+		orgAxis)
+
+	effective := visAt(passSS, passSE, passES, passEE, metaFlag, orgFlag)
+
+	switch {
+	case !effective && blockedRule != "":
+		// A scope axis curtailed an otherwise-granting rule → loud enough to
+		// debug a 403. Tenant + rule NAME only; claim values never reach logs
+		// (principal.go multi-value-refusal discipline).
+		slog.Warn("scope denied "+plane+" permission",
+			"tenant", tenantID, "rule", blockedRule, "perm", string(want),
+			"metadata_enforce", metaFlag, "org_enforce", orgFlag)
+	case effective && !visAt(passSS, passSE, passES, passEE, true, true):
+		// Migration gap: at least one axis still in shadow is carrying this
+		// grant. One line per observation (matches the would-deny increments)
+		// so operators can attribute the soak counters to a tenant/rule.
+		slog.Info("scope "+plane+" would-deny (shadow mode)",
+			"tenant", tenantID, "rule", blockedRule, "perm", string(want),
+			"metadata_enforce", metaFlag, "org_enforce", orgFlag)
 	}
-	if passShadow && !passEnforce {
-		// Shadow-mode migration gap: enforce would deny this grant. One line per
-		// observation (matches the would-deny increment) so operators can
-		// attribute the soak counter to a tenant/rule; no claim values.
-		slog.Info("org-scope "+plane+" would-deny (shadow mode)",
-			"tenant", tenantID, "axis", axis, "rule", orgBlockedRule, "perm", string(want))
-	}
-	return passShadow
+	return effective
 }
 
 // MetadataAllowed checks whether the caller p is granted access for a tenant

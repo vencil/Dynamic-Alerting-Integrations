@@ -177,6 +177,18 @@ const (
 	// require increase(tenant_api_scope_would_deny_total{axis=...})==0 on BOTH the
 	// read/visibility and the write plane independently before flipping.
 	scopeAxisOrgWrite = "org_write"
+
+	// scopeAxisMetadataWrite is the metadata axis's WRITE-plane counterpart
+	// (#1597). It exists for the same reason scopeAxisOrgWrite does: the write
+	// plane's soak signal must not be polluted by reads, so the enforce-flip
+	// criterion can require increase()==0 on the plane it is about to close.
+	//
+	// Before #1597 the metadata axis had NO write-plane presence at all —
+	// AllowedInOrg took no environment/domain and never read rule.Environments
+	// or rule.Domains, so `environments:` in _rbac.yaml constrained only what a
+	// subject could SEE, never what it could WRITE, while the 403 told the
+	// denied operator to go adjust exactly that field.
+	scopeAxisMetadataWrite = "metadata_write"
 )
 
 // HeaderResolver wraps the pre-existing oauth2-proxy header-trust path in the

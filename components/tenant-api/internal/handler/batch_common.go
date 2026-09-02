@@ -24,11 +24,11 @@ import (
 // Note: the tenant path layers an additional policy.CheckWrite step AFTER this
 // gate (group has none), so that check stays in executeBatchOps; only the two
 // checks that are identical across both paths live here.
-func gateBatchOp(tenantID string, p *rbac.VerifiedPrincipal, rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager) (BatchResult, bool) {
+func gateBatchOp(tenantID string, p *rbac.VerifiedPrincipal, rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager, configDir string) (BatchResult, bool) {
 	if err := ValidateTenantID(tenantID); err != nil {
 		return BatchResult{TenantID: tenantID, Status: "error", Message: err.Error()}, true
 	}
-	if !OrgAllowed(rbacMgr, tenantOrg, p, tenantID, rbac.PermWrite) {
+	if !OrgAllowed(rbacMgr, tenantOrg, p, tenantID, rbac.PermWrite, WriteScopeMeta(configDir)) {
 		return BatchResult{TenantID: tenantID, Status: "error", Message: "insufficient permissions for tenant " + tenantID}, true
 	}
 	return BatchResult{}, false

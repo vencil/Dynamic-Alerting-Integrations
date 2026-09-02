@@ -419,7 +419,7 @@ func TestWriteError_NilRequest(t *testing.T) {
 func TestWriteForbidden_EnvelopeShape(t *testing.T) {
 	t.Parallel()
 	w := httptest.NewRecorder()
-	writeForbidden(w, httptest.NewRequest("GET", "/", nil), "db-x", PermWrite)
+	NewForTest(&RBACConfig{}).writeForbidden(w, httptest.NewRequest("GET", "/", nil), "db-x", PermWrite)
 
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", w.Code)

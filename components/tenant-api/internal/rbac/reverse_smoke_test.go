@@ -129,7 +129,7 @@ func TestReverseAccessReport_SmokeHappyPath(t *testing.T) {
 	// with a passing org value must be granted by the REAL forward gate — the
 	// reverse claim and the forward decision must agree.
 	p := &VerifiedPrincipal{Groups: []string{"ops"}, Claims: map[string]string{"org": "ORG-1"}}
-	if !m.AllowedInOrg(p, "db-team-1", PermWrite, tenantOrgs) {
+	if !m.AllowedInOrg(p, "db-team-1", PermWrite, tenantOrgs, "", "") {
 		t.Errorf("forward AllowedInOrg denies the witness the reverse report claims grant1 admits")
 	}
 

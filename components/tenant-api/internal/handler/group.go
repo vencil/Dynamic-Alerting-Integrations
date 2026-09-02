@@ -218,7 +218,7 @@ func PutGroup(d *Deps) http.HandlerFunc {
 		// if any member is forbidden. List ALL forbidden ids in the
 		// error so the operator can fix in one round-trip rather
 		// than discovering them one-at-a-time.
-		if forbidden := tenantsLackingPermission(d.RBAC, d.TenantOrg, p, req.Members, rbac.PermWrite); len(forbidden) > 0 {
+		if forbidden := tenantsLackingPermission(d.RBAC, d.TenantOrg, p, req.Members, rbac.PermWrite, WriteScopeMeta(d.ConfigDir)); len(forbidden) > 0 {
 			WriteJSONError(w, r, http.StatusForbidden,
 				"insufficient permission to write group with forbidden member tenants: "+
 					strings.Join(forbidden, ", "))
@@ -322,7 +322,7 @@ func DeleteGroup(d *Deps) http.HandlerFunc {
 		// pre-check entirely and paying an admission slot per forbidden call;
 		// that trade is deliberately not made here — it is recorded so the
 		// next reader does not mistake the current shape for full coverage.
-		if forbidden := tenantsLackingPermission(d.RBAC, d.TenantOrg, p, existing.Members, rbac.PermWrite); len(forbidden) > 0 {
+		if forbidden := tenantsLackingPermission(d.RBAC, d.TenantOrg, p, existing.Members, rbac.PermWrite, WriteScopeMeta(d.ConfigDir)); len(forbidden) > 0 {
 			writeGroupMemberForbidden(w, r, "delete", forbidden)
 			return
 		}
@@ -355,7 +355,7 @@ func DeleteGroup(d *Deps) http.HandlerFunc {
 				if !present {
 					return nil, nil
 				}
-				if f := tenantsLackingPermission(d.RBAC, d.TenantOrg, p, stored.Members, rbac.PermWrite); len(f) > 0 {
+				if f := tenantsLackingPermission(d.RBAC, d.TenantOrg, p, stored.Members, rbac.PermWrite, WriteScopeMeta(d.ConfigDir)); len(f) > 0 {
 					forbiddenOnDisk = f
 					return nil, errGroupMemberForbidden
 				}

@@ -27,10 +27,50 @@ package handler
 
 import (
 	"net/http"
+	"os"
 
+	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/tenantorg"
 )
+
+// ScopeMetaFunc resolves one tenant's (environment, domain) for a write-plane
+// scope decision (#1597).
+//
+// Resolution happens at DECISION TIME, straight from the tenant's own file. A
+// stale authorization input on the plane that MUTATES state is a real (if
+// small) window, and the cost argument for caching does not hold here: the same
+// request is about to run a git commit, which is orders of magnitude more
+// expensive than one file read. (The read/collection filters deliberately do
+// NOT take one of these — they are per-item loops, and binding the metadata
+// axis there is a separate plane with its own migration, out of scope here.)
+//
+// It fails SOFT to the empty pair — an unlabeled tenant — which is exactly what
+// the pre-#1597 metadata-blind write plane behaved like. Resolution never
+// invents a label it could not read.
+type ScopeMetaFunc func(tenantID string) (environment, domain string)
+
+// WriteScopeMeta builds the write-plane resolver: one targeted read of the
+// tenant's actual file (confd.ResolveTenantFile, so a `<id>.yml` tenant is not
+// silently treated as unlabeled — #1673).
+func WriteScopeMeta(configDir string) ScopeMetaFunc {
+	return func(tenantID string) (string, string) {
+		if configDir == "" {
+			return "", ""
+		}
+		path, err := confd.ResolveTenantFile(configDir, tenantID)
+		if err != nil {
+			return "", "" // absent, ambiguous or unsafe id → unlabeled
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return "", ""
+		}
+		var summary TenantSummary
+		extractMetadata(&summary, data, tenantID)
+		return summary.Environment, summary.Domain
+	}
+}
 
 // OrgAllowed is the single composition point of tenantorg.OrgsForTenant and
 // rbac.AllowedInOrg (ADR-027 / LD-6 P4b): it resolves the target tenant's
@@ -46,9 +86,13 @@ import (
 // tenant as unlabeled, which with no org-scoped rule is byte-identical to
 // the pre-P4b permission check.
 func OrgAllowed(rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager,
-	p *rbac.VerifiedPrincipal, tenantID string, want rbac.Permission) bool {
+	p *rbac.VerifiedPrincipal, tenantID string, want rbac.Permission, meta ScopeMetaFunc) bool {
 	orgs, _ := tenantOrg.OrgsForTenant(tenantID)
-	return rbacMgr.AllowedInOrg(p, tenantID, want, orgs)
+	var environment, domain string
+	if meta != nil {
+		environment, domain = meta(tenantID)
+	}
+	return rbacMgr.AllowedInOrg(p, tenantID, want, orgs, environment, domain)
 }
 
 // OrgAllowedRead is the READ/VISIBILITY-plane sibling of OrgAllowed (ADR-027 /
@@ -87,7 +131,7 @@ func RequireOrgWrite(w http.ResponseWriter, r *http.Request, d *Deps, tenantID s
 	if d.RBAC == nil {
 		return true
 	}
-	if OrgAllowed(d.RBAC, d.TenantOrg, rbac.RequestPrincipal(r), tenantID, want) {
+	if OrgAllowed(d.RBAC, d.TenantOrg, rbac.RequestPrincipal(r), tenantID, want, WriteScopeMeta(d.ConfigDir)) {
 		return true
 	}
 	WriteJSONErrorWithCode(w, r, http.StatusForbidden, CodeForbidden,
@@ -121,7 +165,7 @@ func RequireOrgWrite(w http.ResponseWriter, r *http.Request, d *Deps, tenantID s
 //   - tenantIDs is nil/empty → empty result (nothing to check)
 //   - duplicate ids in input → de-duplicated output (forbidden ids
 //     aren't repeated; matches what an operator wants to see)
-func tenantsLackingPermission(rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager, p *rbac.VerifiedPrincipal, tenantIDs []string, want rbac.Permission) []string {
+func tenantsLackingPermission(rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager, p *rbac.VerifiedPrincipal, tenantIDs []string, want rbac.Permission, meta ScopeMetaFunc) []string {
 	if len(tenantIDs) == 0 {
 		return nil
 	}
@@ -132,7 +176,7 @@ func tenantsLackingPermission(rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manage
 			continue
 		}
 		seen[tid] = true
-		if !OrgAllowed(rbacMgr, tenantOrg, p, tid, want) {
+		if !OrgAllowed(rbacMgr, tenantOrg, p, tid, want, meta) {
 			forbidden = append(forbidden, tid)
 		}
 	}
