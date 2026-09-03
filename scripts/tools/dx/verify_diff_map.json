@@ -24,6 +24,8 @@
    "tests/ops/test_grar_strict_hardening.py"
   ],
   "scripts/tools/_lib_confd.py": [
+   "tests/dx/test_generate_tenant_metadata.py",
+   "tests/lint/test_check_path_metadata_consistency.py",
    "tests/ops/test_confd_unusable_signal.py",
    "tests/ops/test_gitops_check.py",
    "tests/shared/test_confd_name_classification_parity.py",
@@ -191,6 +193,9 @@
   ],
   "scripts/tools/dx/generate_rulepack_configmaps.py": [
    "tests/dx/test_generate_rulepack_configmaps.py"
+  ],
+  "scripts/tools/dx/generate_tenant_metadata.py": [
+   "tests/dx/test_generate_tenant_metadata.py"
   ],
   "scripts/tools/dx/generate_tool_map.py": [
    "tests/dx/test_generate_tool_map.py",
@@ -774,7 +779,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "b3c5c6768554b320b753a182e5a7f58e91e06aa49e9559ced5188579f8083621",
+ "source_digest": "3c17286cdc3870aea7a4e8c459ed70fad4655c6e8e36377d2ca2edff933a2c1d",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -808,6 +813,7 @@
   "tests/dx/test_generate_rule_pack_stats_injection.py",
   "tests/dx/test_generate_rulepack_configmaps.py",
   "tests/dx/test_generate_tenant_fixture.py",
+  "tests/dx/test_generate_tenant_metadata.py",
   "tests/dx/test_generate_tool_map.py",
   "tests/dx/test_generate_tool_map_encoding.py",
   "tests/dx/test_inject_waveform.py",
@@ -1030,6 +1036,7 @@
   "tests/ops/test_performance.py",
   "tests/ops/test_policy_engine.py",
   "tests/ops/test_policy_opa_bridge.py",
+  "tests/ops/test_prepush_hook_wiring.py",
   "tests/ops/test_printed_paths_are_reachable.py",
   "tests/ops/test_property_based.py",
   "tests/ops/test_registry_lib.py",
@@ -1229,6 +1236,7 @@
    "tests/dx/test_bump_docs.py",
    "tests/dx/test_compile_custom_alerts.py",
    "tests/dx/test_line_ending_policy.py",
+   "tests/dx/test_preflight_marker.py",
    "tests/dx/test_recover_index.py",
    "tests/dx/test_scaffold_lint.py",
    "tests/helm/test_environments_overlay_sync.py",
@@ -1237,6 +1245,7 @@
    "tests/lint/test_check_dev_rules_enforcement.py",
    "tests/lint/test_check_makefile_targets.py",
    "tests/lint/test_check_orphan_lint.py",
+   "tests/lint/test_check_path_metadata_consistency.py",
    "tests/lint/test_check_portal_asset_shipping.py",
    "tests/lint/test_check_threshold_reachability.py",
    "tests/lint/test_counterexample_coverage.py",
@@ -1244,6 +1253,7 @@
    "tests/lint/test_validate_docs_versions.py",
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/ops/test_generated_ci_artifacts.py",
+   "tests/ops/test_prepush_hook_wiring.py",
    "tests/ops/test_wrapped_path_references.py",
    "tests/shared/test_actionlint_pin_parity.py"
   ],
@@ -1329,7 +1339,8 @@
    "tests/helm/test_portal_relay_token_guard.py"
   ],
   "components/da-tools": [
-   "tests/lint/test_check_subprocess_timeout.py"
+   "tests/lint/test_check_subprocess_timeout.py",
+   "tests/shared/test_sast.py"
   ],
   "components/da-tools/README.md": [
    "tests/dx/test_bump_docs.py",
@@ -1438,6 +1449,7 @@
   ],
   "components/threshold-exporter/config/conf.d": [
    "tests/dx/test_compile_custom_alerts.py",
+   "tests/lint/test_check_path_metadata_consistency.py",
    "tests/lint/test_check_threshold_reachability.py",
    "tests/ops/test_ci_baseline_substitution.py",
    "tests/ops/test_guard_defaults_scopes.py",
@@ -1621,7 +1633,8 @@
    "tests/ops/test_wrapped_path_references.py",
    "tests/shared/test_bilingual_help_contract.py",
    "tests/shared/test_ci_flag_contract.py",
-   "tests/shared/test_json_stdout_contract.py"
+   "tests/shared/test_json_stdout_contract.py",
+   "tests/shared/test_sast.py"
   ],
   "docs/internal/doc-map.en.md": [
    "tests/dx/test_generate_doc_map.py"
@@ -2073,6 +2086,7 @@
   ],
   "rule-packs/rule-pack-mariadb.yaml": [
    "tests/lint/test_check_hardcode_tenant.py",
+   "tests/lint/test_check_path_metadata_consistency.py",
    "tests/shared/test_ci_flag_contract.py",
    "tests/shared/test_json_stdout_contract.py"
   ],
@@ -2109,6 +2123,9 @@
    "tests/ops/test_ci_flake_retry.py",
    "tests/ops/test_nightly_scan_matrix_drift.py",
    "tests/ops/test_printed_paths_are_reachable.py"
+  ],
+  "scripts/ops/_prepush_refs.sh": [
+   "tests/ops/test_prepush_hook_wiring.py"
   ],
   "scripts/ops/_verify_download.sh": [
    "tests/ops/test_ci_path_filter_coverage.py",
@@ -2151,7 +2168,11 @@
    "tests/ops/test_nightly_race_issue_policy.py",
    "tests/ops/test_parse_go_test_json.py"
   ],
+  "scripts/ops/pre_push_mkdocs_strict.sh": [
+   "tests/ops/test_prepush_hook_wiring.py"
+  ],
   "scripts/ops/protect_main_push.sh": [
+   "tests/ops/test_prepush_hook_wiring.py",
    "tests/ops/test_wrapped_path_references.py"
   ],
   "scripts/ops/recover_index.sh": [
@@ -2159,7 +2180,8 @@
   ],
   "scripts/ops/require_preflight_pass.sh": [
    "tests/dx/test_preflight_marker.py",
-   "tests/dx/test_preflight_pass_gate.py"
+   "tests/dx/test_preflight_pass_gate.py",
+   "tests/ops/test_prepush_hook_wiring.py"
   ],
   "scripts/ops/verify_release_digest.sh": [
    "tests/helm/test_image_tag_derivation.py"
@@ -2715,9 +2737,6 @@
    "tests/dx/test_verify_diff.py",
    "tests/shared/test_dry_run_no_write.py"
   ],
-  "tests/dx/test_compile_custom_alerts.py": [
-   "tests/shared/test_confd_case_parity_across_tools.py"
-  ],
   "tests/dx/test_coverage_delta.py": [
    "tests/dx/test_dx_json_stdout_contract.py"
   ],
@@ -2734,6 +2753,12 @@
   ],
   "tests/dx/test_pr_preflight_checks.py": [
    "tests/ops/test_generated_ci_artifacts.py"
+  ],
+  "tests/dx/test_preflight_marker.py": [
+   "tests/ops/test_prepush_hook_wiring.py"
+  ],
+  "tests/dx/test_preflight_pass_gate.py": [
+   "tests/ops/test_prepush_hook_wiring.py"
   ],
   "tests/dx/test_tenant_log_query_dashboard.py": [
    "tests/dx/test_federation_revocation_dashboard.py"
@@ -2880,7 +2905,8 @@
    "tests/lint/test_check_threshold_registry.py"
   ],
   "tests/lint/test_e2e_spec_lint.py": [
-   "tests/ops/test_ci_path_filter_coverage.py"
+   "tests/ops/test_ci_path_filter_coverage.py",
+   "tests/shared/test_sast.py"
   ],
   "tests/lint/test_mkdocs_strict_check.py": [
    "tests/lint/test_e2e_spec_lint.py"
@@ -2934,9 +2960,6 @@
    "tests/ops/test_wrapped_path_references.py",
    "tests/shared/test_actionlint_pin_parity.py"
   ],
-  "tests/ops/test_gitops_check.py": [
-   "tests/shared/test_confd_case_parity_across_tools.py"
-  ],
   "tests/ops/test_guard_defaults_scopes.py": [
    "tests/lint/test_check_threshold_reachability.py",
    "tests/ops/test_ci_aggregate_gate_contract.py"
@@ -2952,6 +2975,9 @@
    "tests/ops/test_ci_aggregate_gate_contract.py",
    "tests/ops/test_generated_ci_artifacts.py",
    "tests/ops/test_nightly_race_issue_policy.py"
+  ],
+  "tests/ops/test_prepush_hook_wiring.py": [
+   "tests/dx/test_preflight_marker.py"
   ],
   "tests/ops/test_registry_lib.py": [
    "tests/ops/test_ci_path_filter_coverage.py"
@@ -3000,6 +3026,8 @@
    "tests/shared/test_property_tools.py"
   ],
   "tests/shared/confd_name_classification_matrix.json": [
+   "tests/dx/test_generate_tenant_metadata.py",
+   "tests/lint/test_check_path_metadata_consistency.py",
    "tests/ops/test_gitops_check.py",
    "tests/shared/test_confd_name_classification_parity.py"
   ],
@@ -3019,6 +3047,8 @@
    "tests/ops/test_confd_unusable_signal.py"
   ],
   "tests/shared/test_confd_name_classification_parity.py": [
+   "tests/dx/test_generate_tenant_metadata.py",
+   "tests/lint/test_check_path_metadata_consistency.py",
    "tests/ops/test_gitops_check.py"
   ],
   "tests/shared/test_dry_run_no_write.py": [

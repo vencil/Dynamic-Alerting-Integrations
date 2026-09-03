@@ -144,7 +144,7 @@ da-tools validate-config --config-dir conf.d/ --json
 
 | # | Rule | Detection Method | Severity |
 |---|------|---------|--------|
-| 1 | `open()` must include `encoding="utf-8"` | AST scan open() calls, exclude binary modes | High |
+| 1 | `open()` must include `encoding="utf-8"`; source must not start with a UTF-8 BOM | AST scan open() calls, exclude binary modes; BOM checked on the leading bytes | High |
 | 2 | `subprocess` forbids `shell=True` | AST scan subprocess.run/call/Popen keywords | Critical |
 | 3 | File write must pair with `os.chmod(0o600)` | Same-function write-open + chmod pair (advisory) | Medium |
 | 4 | Forbid `yaml.load()`, enforce `yaml.safe_load()` | AST scan yaml.load missing SafeLoader | Critical |

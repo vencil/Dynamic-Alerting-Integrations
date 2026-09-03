@@ -222,12 +222,41 @@ class TestCheckConflict:
 # check_local_hooks
 # ---------------------------------------------------------------------------
 class TestCheckLocalHooks:
+    """⛔ These pin how pre-commit's OUTPUT is parsed. `check_local_hooks` also
+    refuses up front when the pre-push hook is not installed (#1664), and that
+    probe goes through the same `pp.run`, which `_stub_run_constant` replaces
+    with one constant CompletedProcess — so without pinning it the probe reads
+    the hook listing as a path, returns False, and every test here fails on the
+    early return instead of on what it is about. The install branch has its own
+    test below, plus `TestPrepushHookInstalled` in test_preflight_marker.py.
+    """
+
+    @staticmethod
+    def _assume_installed(monkeypatch, installed=True):
+        monkeypatch.setattr(pp, "_prepush_hook_installed", lambda: installed)
+
     def test_all_pass(self, monkeypatch):
+        self._assume_installed(monkeypatch)
         _stub_run_constant(monkeypatch, _cp(0, "hook-a..............Passed\n"))
         result = pp.check_local_hooks()
         assert result.status == pp.Status.PASS
 
+    def test_missing_prepush_hook_fails_before_running_anything(self, monkeypatch):
+        """The guards cannot fire if the hook was never installed, so preflight
+        says so instead of reporting on the pre-commit stage alone."""
+        self._assume_installed(monkeypatch, installed=False)
+
+        def _boom(*a, **k):  # pragma: no cover - must not be reached
+            raise AssertionError("pre-commit was run despite no pre-push hook")
+
+        monkeypatch.setattr(pp, "run", _boom)
+        result = pp.check_local_hooks()
+        assert result.status == pp.Status.FAIL
+        assert "pre-push" in result.message
+        assert "pre-commit install --hook-type pre-push" in result.detail
+
     def test_failed_hooks_parsed(self, monkeypatch):
+        self._assume_installed(monkeypatch)
         output = (
             "hook-a..................Passed\n"
             "hook-b..................Failed\n"
@@ -242,6 +271,7 @@ class TestCheckLocalHooks:
         assert "hook-c" in result.detail
 
     def test_subprocess_error_fails_with_stderr(self, monkeypatch):
+        self._assume_installed(monkeypatch)
         _stub_run_constant(monkeypatch, _cp(127, "", "pre-commit: command not found"))
         result = pp.check_local_hooks()
         assert result.status == pp.Status.FAIL

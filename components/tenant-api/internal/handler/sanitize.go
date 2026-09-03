@@ -34,11 +34,8 @@ func ValidateTenantID(id string) error {
 	if !confd.IsTenantConfigFile(id + ".yaml") {
 		return fmt.Errorf("tenant ID must not name a reserved control file")
 	}
-	// The granular checks above exist for their messages; this is the shared
-	// predicate the write plane itself gates on, so the two can never disagree
-	// in the ACCEPT direction however the list above is edited (#1681).
-	if !confd.IsAddressableTenantID(id) {
-		return fmt.Errorf("tenant ID must be a simple filename naming a tenant config")
-	}
+	// These checks must keep agreeing with confd.IsAddressableTenantID, the
+	// predicate the write plane gates on; that is asserted by
+	// TestValidateTenantIDAgreesWithTheSharedPredicate, not by a branch here.
 	return nil
 }

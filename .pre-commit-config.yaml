@@ -1,6 +1,15 @@
 # Pre-commit hooks for documentation & config drift prevention
-# Install: pip install pre-commit && pre-commit install
+# Install: pip install pre-commit && pre-commit install && pre-commit install --hook-type pre-push
 # Manual:  pre-commit run --all-files
+#
+# ⛔ BOTH install lines are required (#1664). `pre-commit install` on its own
+# installs the pre-commit hook ONLY — the three `stages: [pre-push]` guards
+# below (block direct push to main / require a preflight marker / mkdocs
+# strict) simply do not exist without the second command. Measured on a fresh
+# clone that followed the previous one-command instruction: no
+# `.git/hooks/pre-push`, and `git push` straight to main succeeded behind a
+# full screen of green pre-commit-stage hooks. `make pr-preflight` now fails
+# with this exact remedy when the pre-push hook is missing.
 #
 # These hooks run the lightweight CI checks locally before each commit,
 # catching drift issues early (tool-map, rule-pack stats, glossary, etc.).
@@ -940,7 +949,14 @@ repos:
         entry: python3 -X utf8 scripts/tools/lint/check_path_metadata_consistency.py --ci
         language: system
         pass_filenames: false
-        files: ^components/threshold-exporter/config/conf\.d/.*\.yaml$
+        # ⛔ `\.ya?ml$`, not `\.yaml$` (#1603). The script's selection now
+        # accepts both spellings; leaving the TRIGGER on one of them is the
+        # producer and the consumer moving apart — a PR that only touches
+        # `.yml` conf.d carriers would not run this check at all. Pinned by
+        # `TestHookSelectsEverythingTheScriptScans`, which is the mirror of
+        # `test_check_admin_config_schema.py`'s fail-open guard: that one
+        # requires regex ⊆ script, this one requires script ⊆ regex.
+        files: ^components/threshold-exporter/config/conf\.d/.*\.ya?ml$
         stages: [manual]
 
       - id: check-doc-template

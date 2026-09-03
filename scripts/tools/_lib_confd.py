@@ -169,9 +169,14 @@ def has_yaml_extension(
     is case folding, where no reviewer is looking for it. Callers pass
     the set they already accept; the default is both.
 
-    ⚠️ That list is a SNAPSHOT, not an invariant: #1603 widened
-    `custom_alerts/loader`, so the narrow set is smaller than four now.
-    Do not quote the number from here — grep the call sites.
+    ⚠️ That list is a SNAPSHOT, not an invariant. #1603 has since widened
+    `custom_alerts/loader`, `generate_tenant_metadata` and
+    `check_path_metadata_consistency`; of the four named above only
+    `operator_generate` is still narrow, and the axis reaches call sites
+    that list never had (it was drawn from one spelling of the narrowing —
+    a keyword `suffixes=` — and missed the positional ones).
+    ⛔ Do not quote a number or a name list from here — census the call
+    sites by the VALUE passed, at any argument position, to any callee.
 
     ⛔ Do not "simplify" this by dropping the parameter and folding every
     caller to `CONFIG_SUFFIXES`. That is the behaviour change, spelled as

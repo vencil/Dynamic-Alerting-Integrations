@@ -30,7 +30,11 @@
 #
 # Design notes:
 #   * Uses `git rev-parse --git-dir` for worktree safety.
-#   * Reads stdin to inspect refspecs — same protocol protect_main_push uses.
+#   * The refspecs come from scripts/ops/_prepush_refs.sh, not from stdin
+#     directly: when this hook is installed through pre-commit, pre-commit has
+#     already consumed the stdin git wrote, so reading it here yields nothing
+#     and the `pushing_any_commit=0` branch below allowed EVERY push (#1664).
+#     That helper's header carries the measurements and the known residual.
 #   * Non-blocking on edge cases (tag push, delete-ref) to avoid disrupting
 #     release flow.
 set -euo pipefail
@@ -50,25 +54,83 @@ if [ -z "$head_sha" ]; then
     exit 0
 fi
 
-# Read pre-push stdin to detect refs being pushed.
-# Protocol: <local_ref> <local_sha> <remote_ref> <remote_sha> per line.
+# Which refs is this push updating? One implementation, two channels.
+# ⛔ Pure parameter expansion, NOT `$(dirname …)`: test_gh_missing_* strips PATH
+# down to bash/git/basename/sh/cat to prove this gate still works without `gh`,
+# and `dirname` is not in that set. Measured: it fails there with
+# `dirname: command not found` and takes the whole gate down with it — on Linux
+# only, so a Windows run reports the sourcing as fine.
+_prepush_dir="${BASH_SOURCE[0]%/*}"
+[ "$_prepush_dir" = "${BASH_SOURCE[0]}" ] && _prepush_dir="."
+# ⛔ Say so when the helper is missing. `set -e` turns a failed `source` into a
+# total abort — feature-branch pushes die too — under a bare "No such file or
+# directory". The three cheapest ways out of that picture (--no-verify, delete
+# the hook, copy the helper into .git/hooks and freeze it) all make things
+# worse, so name the reinstall here instead.
+if [ ! -r "$_prepush_dir/_prepush_refs.sh" ]; then
+    cat >&2 <<'PREPUSH_MISSING'
+
+[require_preflight_pass] ⛔ _prepush_refs.sh is not next to this script, so the
+gate cannot tell what is being pushed.
+
+Most likely cause: the hook was installed by copying this file alone (the
+pre-#1664 recipe). It now needs its sibling helper.
+
+Reinstall, either way:
+  1. pre-commit (this repo's default path):
+       pre-commit install --hook-type pre-push
+  2. native hook, keeping the script inside the repo so the helper resolves:
+       printf '%s\n%s\n' '#!/usr/bin/env bash' \
+         'exec bash "$(git rev-parse --show-toplevel)/scripts/ops/require_preflight_pass.sh" "$@"' \
+         > .git/hooks/pre-push && chmod +x .git/hooks/pre-push
+
+⛔ Do not reach for --no-verify and do not delete .git/hooks/pre-push: both
+turn off the direct-push-to-main guard for good, which is what #1664 fixed.
+
+PREPUSH_MISSING
+    exit 1
+fi
+# shellcheck source=scripts/ops/_prepush_refs.sh
+. "$_prepush_dir/_prepush_refs.sh"
+
+if ! _refs="$(prepush_refs)"; then
+    prepush_refs_unavailable_message >&2
+    exit 1
+fi
+
 pushing_to_protected=0
 pushing_any_commit=0
 pushed_branches=()
 zero="0000000000000000000000000000000000000000"
 
-while read -r local_ref local_sha remote_ref remote_sha; do
+# Each row: <remote_ref> <local_sha>. remote_ref comes FIRST on purpose:
+# local_sha is legitimately empty on the first push of a branch to an empty
+# remote (pre-commit exports no PRE_COMMIT_TO_REF there), and a leading empty
+# field is collapsed by default-IFS `read`, which used to leave remote_ref
+# empty and drop the row entirely — a silent allow. See the helper's header.
+while read -r remote_ref local_sha; do
+    [ -n "${remote_ref:-}" ] || continue
     # Deleting a ref (local_sha = zeros) — not a commit push, skip.
     if [ "$local_sha" = "$zero" ]; then
         continue
     fi
+    # ⛔ Tag pushes: this file's header has promised "tag push → allow" since it
+    # was written, and the code never did it. `${remote_ref##refs/heads/}` only
+    # strips a heads/ prefix, so `refs/tags/v1.2.3` stayed intact and was
+    # treated as a branch name — measured: a tag push was BLOCKED whenever `gh`
+    # could not answer, which is the state the dev container is in (no `gh`
+    # there), i.e. exactly the six-line release tag push. Harmless while the
+    # guard was inert; #1664 made it live, so the promise has to be kept.
+    case "$remote_ref" in
+        refs/tags/*) continue ;;
+    esac
     pushing_any_commit=1
     remote_branch="${remote_ref##refs/heads/}"
     if [ "$remote_branch" = "main" ] || [ "$remote_branch" = "master" ]; then
         pushing_to_protected=1
     fi
     pushed_branches+=("$remote_branch")
-done
+done <<< "$_refs"
 
 # Nothing being pushed (empty stdin or all deletes) — allow.
 if [ "$pushing_any_commit" = "0" ]; then
@@ -86,11 +148,22 @@ fi
 #
 # STRICT mode overrides (always require marker, regardless of PR state):
 #   GIT_PREFLIGHT_STRICT=1 git push ...
+# ⛔ Track WHY the marker ends up required. The banner used to state one reason
+# unconditionally ("gate only triggers when branch has an OPEN PR — close the
+# PR to push freely"), and that sentence is false in the `gh`-unavailable case,
+# which is not exotic: the dev container this repo calls the 主路徑 has no `gh`
+# at all. Following the false note reaches no green — there is no PR to close.
+marker_reason="branch has an OPEN PR (CI cost matters once it is reviewable)"
+if [ "${GIT_PREFLIGHT_STRICT:-0}" = "1" ]; then
+    marker_reason="GIT_PREFLIGHT_STRICT=1 is set"
+fi
 if [ "${GIT_PREFLIGHT_STRICT:-0}" != "1" ]; then
     has_open_pr=0
     gh_available=0
     if command -v gh >/dev/null 2>&1; then
         gh_available=1
+    else
+        marker_reason="\`gh\` is not on PATH, so PR state is unknown (safe default)"
     fi
     if [ "$gh_available" = "1" ]; then
         for b in "${pushed_branches[@]}"; do
@@ -105,6 +178,7 @@ if [ "${GIT_PREFLIGHT_STRICT:-0}" != "1" ]; then
             if ! open_prs="$(gh pr list --head "$b" --state open \
                 --json number --jq 'length' 2>/dev/null)"; then
                 gh_available=0
+                marker_reason="the \`gh\` PR query failed (not authenticated, or API/network), so PR state is unknown (safe default)"
                 break
             fi
             case "$open_prs" in
@@ -144,9 +218,13 @@ cat >&2 <<EOF
 ║  Emergency bypass (use sparingly):                           ║
 ║      GIT_PREFLIGHT_BYPASS=1 git push ...                     ║
 ║                                                              ║
-║  Note: gate only triggers when branch has an OPEN PR.        ║
-║  Close the PR (or switch to a WIP branch) to push freely.    ║
-║  Force strict mode: GIT_PREFLIGHT_STRICT=1 git push ...      ║
+║  Why the marker is required for THIS push:
+║      ${marker_reason}
+║                                                              ║
+║  ⛔ If the reason above is about \`gh\`, there is no PR to close
+║  and no WIP branch to switch to — run the preflight above, or
+║  use the bypass. Force strict mode anywhere:
+║      GIT_PREFLIGHT_STRICT=1 git push ...                     ║
 ║                                                              ║
 ║  Why: pushing without preflight risks CI-visible failures    ║
 ║  that block PR merges. See dev-rules #12 + windows-mcp       ║

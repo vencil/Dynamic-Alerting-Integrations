@@ -53,12 +53,13 @@ downgrade.
   That is a real divergence on the extension-SPELLING axis; it is
   deliberately NOT fixed here (widening them is a behaviour change that
   must not ride along inside a case fix) and is filed separately (#1603).
-  `custom_alerts/loader` and `gitops_check` were in that class when this
-  file was written and no longer are — #1603 widened both, and the parity
-  each now has is pinned by its own suite
-  (`tests/dx/test_compile_custom_alerts.py` and
-  `tests/ops/test_gitops_check.py`), not by this file. Ask `_lib_confd`
-  for the current set rather than trusting a count here.
+  ⛔ That class is SHRINKING, one tool per #1603 PR, and each tool takes its
+  spelling parity with it into its OWN suite rather than into this file. So
+  do not read a membership list here: this paragraph would be stale the next
+  time one lands, and it has already been rewritten twice. Census the call
+  sites instead — by the VALUE passed to `has_yaml_extension` /
+  `unusable_config_entries`, at any argument position, to any callee — and
+  ask `_lib_confd` for the accepted set.
 * Only tools reachable through a conf.d CLI flag, plus the two
   library-shaped readers covered by direct calls at the bottom of this
   file.
