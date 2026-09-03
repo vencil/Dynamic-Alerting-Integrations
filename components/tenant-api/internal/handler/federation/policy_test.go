@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/vencil/tenant-api/internal/federation/fedpolicy"
+	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/handler"
 )
 
@@ -466,5 +468,172 @@ func TestGetTenantFederation_NoFileYieldsEmptySubset(t *testing.T) {
 	}
 	if len(got.Metrics) != 0 {
 		t.Errorf("metrics = %d, want 0", len(got.Metrics))
+	}
+}
+
+// federationJoinIDs is the id set both _federation/ join sites are
+// tested against. Kept in one place so a shape added here has to be
+// answered by the read site and the write site alike.
+//
+// The `.hidden` row earns its place: it is the only shape here whose
+// rejection comes solely from confd's reserved-name rule. A hand-rolled
+// read-side copy of the predicate that remembered `/`, `\`, `..` and the
+// `_` prefix but forgot the dot prefix satisfies every other row — and a
+// second hand-written copy is precisely what sharing the predicate is
+// meant to prevent. Without this row the agreement assertion below can
+// never fire.
+var federationJoinIDs = []struct {
+	name          string
+	id            string
+	unaddressable bool
+}{
+	{"ordinary tenant id", "tenant-alpha", false},
+	{"traversal escaping _federation, landing inside ConfigDir", "foo/../../etc/passwd", true},
+	{"traversal escaping ConfigDir entirely", "foo/../../../outside/secret", true},
+	{"leading traversal, also escaping ConfigDir", "../../etc/passwd", true},
+	{"nested path without traversal", "sub/nested", true},
+	{"backslash separator", `win\path`, true},
+	{"bare dot-dot", "..", true},
+	{"reserved control-file name", "_defaults", true},
+	{"dot-prefixed name", ".hidden", true},
+	{"empty id", "", true},
+}
+
+// plantSubset writes a subset file carrying a unique marker metric at
+// the exact path readFederationSubset would open for id, derived from
+// federationSubsetPath rather than restating the join here. A
+// hand-written fixture path drifts silently the next time that
+// expression changes; this one cannot.
+func plantSubset(t *testing.T, configDir, id, marker string) string {
+	t.Helper()
+	path := federationSubsetPath(configDir, id)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir for id %q: %v", id, err)
+	}
+	if err := os.WriteFile(path, []byte("metrics:\n  - "+marker+"\n"), 0o644); err != nil {
+		t.Fatalf("plant for id %q at %s: %v", id, path, err)
+	}
+	return path
+}
+
+// TestReadFederationSubset_SinkGuard pins the read-side sink predicate.
+//
+// EVERY row gets a real file planted at its own join target first. That
+// is what makes each rejection load-bearing: most of these ids land on
+// paths that would otherwise be empty, where a missing guard returns an
+// empty subset rather than a leak, and "the guard rejected" would be
+// indistinguishable from "there was nothing there anyway". With a file
+// planted, dropping the predicate serves it.
+//
+// Only two rows escape ConfigDir outright (`../../etc/passwd` and
+// `foo/../../../outside/secret`); a third escapes _federation/ but stays
+// under ConfigDir. The rest never escape at all — they are rejected for
+// not being able to name a subset file, which is a different claim, and
+// the planted files are what let this test hold both kinds to the same
+// standard.
+func TestReadFederationSubset_SinkGuard(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	configDir := filepath.Join(root, "conf.d")
+	d := &handler.Deps{ConfigDir: configDir}
+
+	// Written before any subtest starts, read-only thereafter.
+	markers := make(map[string]string, len(federationJoinIDs))
+	for i, tc := range federationJoinIDs {
+		markers[tc.id] = fmt.Sprintf("planted_row_%d", i)
+		plantSubset(t, configDir, tc.id, markers[tc.id])
+	}
+
+	for _, tc := range federationJoinIDs {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			subset, err := readFederationSubset(d, tc.id)
+			want := markers[tc.id]
+
+			if !tc.unaddressable {
+				if err != nil {
+					t.Fatalf("readFederationSubset(%q): %v", tc.id, err)
+				}
+				if len(subset.Metrics) != 1 || subset.Metrics[0] != want {
+					t.Errorf("metrics = %v, want [%s] — an addressable id must still read its own subset",
+						subset.Metrics, want)
+				}
+				return
+			}
+
+			if !errors.Is(err, ErrUnaddressableTenantID) {
+				t.Fatalf("readFederationSubset(%q) err = %v, want ErrUnaddressableTenantID; a subset file carrying %q sits at %s, so dropping the predicate serves it (got subset %+v)",
+					tc.id, err, want, federationSubsetPath(configDir, tc.id), subset)
+			}
+			if subset != nil {
+				t.Errorf("readFederationSubset(%q) returned subset %+v alongside its rejection", tc.id, subset)
+			}
+		})
+	}
+
+	t.Run("absent subset stays an empty subset, not an error", func(t *testing.T) {
+		t.Parallel()
+		subset, err := readFederationSubset(d, "tenant-with-no-subset-yet")
+		if err != nil {
+			t.Fatalf("readFederationSubset: %v", err)
+		}
+		if len(subset.Metrics) != 0 {
+			t.Errorf("metrics = %v, want empty", subset.Metrics)
+		}
+	})
+}
+
+// TestFederationJoinSites_AgreeOnEveryID is why the read site reuses the
+// write site's predicate instead of carrying a second hand-written copy:
+// the two _federation/ join sites must disagree about no id.
+//
+// The comparison is by sentinel identity, so a write failing for an
+// unrelated reason (git, disk) cannot make the two look asymmetric. The
+// flip side is that the agreement assertion fires only when one side
+// stops consulting the shared predicate — the exact regression it exists
+// for, and the reason the `.hidden` row above has to be in the table.
+//
+// The addressable row also asserts the write produced its file: without
+// that, a write plane broken end to end still satisfies "not rejected by
+// the predicate" on every row, and the git setup below would carry no
+// weight.
+//
+// Subtests here deliberately do NOT call t.Parallel(): each addressable
+// row drives a real commit against one shared git repo. With a single
+// such row today that is precaution rather than necessity — it becomes
+// necessary the moment a second one is added to the table.
+func TestFederationJoinSites_AgreeOnEveryID(t *testing.T) {
+	t.Parallel()
+	configDir := t.TempDir()
+	initGitRepo(t, configDir)
+	w := newTestWriter(configDir)
+	d := &handler.Deps{ConfigDir: configDir}
+
+	for _, tc := range federationJoinIDs {
+		t.Run(tc.name, func(t *testing.T) {
+			_, readErr := readFederationSubset(d, tc.id)
+			writeErr := w.WriteFederationSubsetFile(context.Background(), tc.id, "test@test.com", "metrics: []\n")
+
+			readRejected := errors.Is(readErr, ErrUnaddressableTenantID)
+			writeRejected := errors.Is(writeErr, gitops.ErrReservedTenantID)
+			if readRejected != writeRejected {
+				t.Errorf("id %q: read-side rejected = %v (err %v), write-side rejected = %v (err %v); the two join sites must agree",
+					tc.id, readRejected, readErr, writeRejected, writeErr)
+			}
+			if readRejected != tc.unaddressable {
+				t.Errorf("id %q: read-side rejected = %v, want %v (err %v)", tc.id, readRejected, tc.unaddressable, readErr)
+			}
+			if tc.unaddressable {
+				return
+			}
+			if writeErr != nil {
+				t.Fatalf("write of addressable id %q failed: %v", tc.id, writeErr)
+			}
+			if _, err := os.Stat(federationSubsetPath(configDir, tc.id)); err != nil {
+				t.Errorf("write of %q reported success but left no file at %s: %v — the two sites no longer agree on where the subset lives",
+					tc.id, federationSubsetPath(configDir, tc.id), err)
+			}
+		})
 	}
 }
