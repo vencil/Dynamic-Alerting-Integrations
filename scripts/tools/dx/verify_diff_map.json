@@ -779,7 +779,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "f383ba182f8ec849dbe25f2ce2968eb92bf90918de676fb75a6874e4464426cc",
+ "source_digest": "3c17286cdc3870aea7a4e8c459ed70fad4655c6e8e36377d2ca2edff933a2c1d",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1339,7 +1339,8 @@
    "tests/helm/test_portal_relay_token_guard.py"
   ],
   "components/da-tools": [
-   "tests/lint/test_check_subprocess_timeout.py"
+   "tests/lint/test_check_subprocess_timeout.py",
+   "tests/shared/test_sast.py"
   ],
   "components/da-tools/README.md": [
    "tests/dx/test_bump_docs.py",
@@ -1632,7 +1633,8 @@
    "tests/ops/test_wrapped_path_references.py",
    "tests/shared/test_bilingual_help_contract.py",
    "tests/shared/test_ci_flag_contract.py",
-   "tests/shared/test_json_stdout_contract.py"
+   "tests/shared/test_json_stdout_contract.py",
+   "tests/shared/test_sast.py"
   ],
   "docs/internal/doc-map.en.md": [
    "tests/dx/test_generate_doc_map.py"
@@ -2903,7 +2905,8 @@
    "tests/lint/test_check_threshold_registry.py"
   ],
   "tests/lint/test_e2e_spec_lint.py": [
-   "tests/ops/test_ci_path_filter_coverage.py"
+   "tests/ops/test_ci_path_filter_coverage.py",
+   "tests/shared/test_sast.py"
   ],
   "tests/lint/test_mkdocs_strict_check.py": [
    "tests/lint/test_e2e_spec_lint.py"

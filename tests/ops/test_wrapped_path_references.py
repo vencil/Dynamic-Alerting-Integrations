@@ -773,10 +773,14 @@ def _implicit_concat_references(text: str, path: str = "<synthetic>") -> list[tu
     # (`_implicit_concat_offenders`) and why the control drives THAT rather than
     # this function: a control that only proves this raises says nothing about
     # whether anybody still listens.
-    # ⚠️ There is no per-file isolation: ONE unparseable tracked `.py` aborts the
-    # whole scan. Today the tree has zero of those, but a deliberately broken
-    # fixture and a BOM-prefixed file are both legal inputs, and every route
-    # back to green from that traceback disarms something — #1632.
+    # ⚠️ No per-file isolation: ONE unparseable tracked `.py` aborts the whole
+    # scan, so a real offender sitting behind the abort is never reported (both
+    # measured; the numbers live in the commit that introduced this). A
+    # deliberately broken fixture is still a legal input with no route back to
+    # green -- that half is the open policy question in #1632.
+    # ⚠️ A deliberately broken fixture is still a legal input with no route back
+    # to green — that half is the open policy question in #1632. A BOM-prefixed
+    # file is NOT: see the strip below, that was this guard being wrong.
     # ⛔ `filename=` ALONE does not put the path in front of the reader, and the
     # axis is the PLATFORM, not the interpreter: `SyntaxError.__str__` trims the
     # filename at the platform separator (`\` on Windows, `/` on POSIX), so the
@@ -793,14 +797,35 @@ def _implicit_concat_references(text: str, path: str = "<synthetic>") -> list[tu
     # drops `filename`, `lineno`, `offset` and `text` to None — the structured
     # diagnostics this whole paragraph exists to protect.
     # ⚠️ Re-raising is not swallowing — the ban above is on `continue`.
+    # ⛔ ONE leading BOM is stripped first: `ast.parse` over a decoded `str` is
+    # stricter than Python itself, which compiles from BYTES and whose tokeniser
+    # drops one U+FEFF. A file that RUNS was being reported as unparseable.
+    # ⛔ EXACTLY ONE -- and that is why this does NOT reuse the existing
+    # `_lint_helpers._strip_bom`, which is an `lstrip` and drops every leading
+    # BOM. Against the interpreter as oracle: one BOM compiles, two do not;
+    # `removeprefix` agrees at both arities, `lstrip` accepts a file that does
+    # not run. Reusing that helper would trade this false red for a false GREEN.
+    # (No defect there -- its callers anchor word starts, where arity cannot
+    # matter.) The same call `check_build_completeness.py` already makes.
+    # ⛔ HERE, not at the read: this is a pure function, and the synthetic cases
+    # below hand it text that never passes through `_decode_whole`, so a strip
+    # living only at the read would leave them unprotected.
+    # ⚠️ Positions are unaffected -- nothing in this module reads `col_offset`.
+    # ⛔ Tolerating a BOM is not permitting one. SAST rule 1
+    # (`test_sast.py::TestOpenEncoding::test_source_has_no_bom`) rejects a BOM'd
+    # tracked `.py` outright; this scan's job is only to not CRASH on one. Both
+    # must exist: without that guard, fixing the false red here would have made
+    # such a file invisible to a FATAL pre-commit hook and to six SAST rules.
+    # ⚠️ Still unguarded: four sibling modules self-parse with no BOM handling
+    # and no `filename=`. On #1632.
     try:
-        tree = ast.parse(text, filename=path)
+        tree = ast.parse(text.removeprefix("\ufeff"), filename=path)
     except SyntaxError as exc:
         # ⚠️ The ticket pointer is the only guidance a contributor gets
         # here. Blind review measured what its absence costs: a legitimately
-        # unparseable `.py` (a linter fixture, a BOM'd file that runs fine)
-        # turns this scan into a bare traceback, and every cheap way back to
-        # green disarms something. #1632 is where that policy question lives.
+        # unparseable `.py` (a fixture for a linter's error path) turns this
+        # scan into a bare traceback, and every cheap way back to green disarms
+        # something. #1632 is where that policy question lives.
         exc.msg = f"{path}: {exc.msg} (this file must parse for the #1394 scan; see #1632)"
         raise
     lines = text.split("\n")
@@ -1499,7 +1524,20 @@ def test_tracked_is_never_narrowed_at_a_use_site() -> None:
     local bound from the call, and a wrapper call are recognised; `islice`
     and filtering comprehensions are not.
     """
-    tree = ast.parse(Path(__file__).resolve().read_text(encoding="utf-8"))
+    # ⛔ `utf-8-sig` and a `filename=`, for the same reason the tree scan above
+    # carries them — and this site is the one that had NEITHER. Blind review
+    # measured it: prepend a BOM to THIS module (it still runs; `compile(bytes)`
+    # drops one leading U+FEFF) and the tree scan sails through while this line
+    # dies with a bare `SyntaxError ... File "<unknown>", line 1` — no path, no
+    # ticket — in the file whose neighbouring twenty lines exist to defend that
+    # exact diagnostic. Two planes in one module, opposite answers, same bytes.
+    # ⚠️ `utf-8-sig` rather than the tree scan's `removeprefix`: this reads its
+    # OWN file directly, one read and one strip, so there is no second stripper
+    # to collide with. The same choice `check_build_completeness.py` made.
+    # ⚠️ Four sibling modules self-parse the same way and are still bare; that
+    # is a separate ticket, not silence.
+    source = Path(__file__).resolve().read_text(encoding="utf-8-sig")
+    tree = ast.parse(source, filename=__file__)
 
     def _is_call(node: ast.AST) -> bool:
         return (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
@@ -1658,6 +1696,44 @@ def test_no_reference_is_split_across_implicit_concatenation() -> None:
         "`.js` path), and neither the span nor the token index may: "
         + repr(_implicit_concat_references(mixed)))
 
+    # MUST REPORT: the same split in a file that carries a UTF-8 BOM.
+    # ⛔ ONE CASE, TWO DIRECTIONS on purpose — this is the entire control for the
+    # BOM strip above, and BOTH ways of breaking it are red:
+    #   * drop the `removeprefix` -> `ast.parse` raises on U+FEFF and this case
+    #     ERRORS. That is the false red #1632 reported: the file RUNS
+    #     (`compile(bytes)` and `python <file>` both succeed) while the guard
+    #     called it unparseable.
+    #   * "fix" that by SKIPPING BOM'd files instead -> no exception, but the
+    #     offender goes unreported and the equality below FAILS.
+    # ⚠️ An assertion that only proved "it no longer raises" would be satisfied
+    # by the skipping edit — the cheaper of the two, and the one that silently
+    # costs coverage. So this asserts the HIT, not the absence of a crash.
+    bom = "\ufeff" + plain
+    assert _implicit_concat_references(bom, "zfake/one_bom.py") == [(2, subject)], (
+        "a BOM-prefixed source must be SCANNED, not refused: the interpreter "
+        "strips one leading U+FEFF when it compiles from bytes, so such a file "
+        "runs normally and a split reference in it hides from `git grep` just "
+        "the same. Refusing it is a false red; skipping it drops the file from "
+        "the corpus: " + repr(_implicit_concat_references(bom, "zfake/one_bom.py")))
+
+    # ⛔ WHAT WAS HERE AND WHY IT IS GONE — this is the cost of a removal, not a
+    # limitation that was always there.
+    # Two more assertions used to sit here: "two leading BOMs must still raise"
+    # and "the corpus read must hand this scan the text unchanged". Both were
+    # added in review rounds, both had two-sided attribution, and both defended
+    # the same thing: that this scan never grows MORE permissive than the
+    # interpreter, which accepts one BOM and rejects two.
+    # They were removed because that state is UNREACHABLE. SAST rule 1
+    # (`test_sast.py::TestOpenEncoding::test_source_has_no_bom`) rejects a BOM'd
+    # tracked `.py` outright — measured on a one-BOM file AND a two-BOM file,
+    # `1 failed` in both cells, against a clean-tree control of `616 passed`.
+    # A two-BOM file cannot reach this scan, so neither assertion could ever
+    # fire on real input; they were machinery guarding a sibling's job.
+    # ⚠️ THE PRICE, measured rather than implied: swapping `removeprefix` for an
+    # `lstrip`, or adding a second strip at the read, is now SILENT here. Both
+    # were KILLED before the removal. What still catches the shapes that matter
+    # is the case above (drop the strip, or skip BOM'd files) plus rule 1.
+
     # MUST REPORT: a split whose token ALSO appears contiguously ELSEWHERE in
     # the same file. Comparing against the whole file instead of the constant's
     # own lines silences exactly this, and the live instance had precisely that
@@ -1795,8 +1871,9 @@ def test_no_reference_is_split_across_implicit_concatenation() -> None:
     #                                       deletion stayed invisible
     #
     # ⛔ AND THE PAIR ACTIVELY MISLED. Adding a legitimately unparseable `.py`
-    # (a fixture for a linter's error path, or a BOM'd file that runs fine) makes
-    # the scan below raise. The honest fix is to exclude that one file; the
+    # (a fixture for a linter's error path — a BOM'd file no longer qualifies;
+    # see the strip in `_implicit_concat_references`) makes the scan below raise.
+    # The honest fix is to exclude that one file; the
     # equality's message said "⛔ Do not narrow this comparison ... widen the
     # corpus back", which is not a route back to green — so the next move it left
     # was to write the filter INSIDE the call expression, where neither guard can

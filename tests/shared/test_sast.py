@@ -2,7 +2,7 @@
 """test_sast.py — 集中式 SAST (Static Application Security Testing) 合規掃描。
 
 掃描所有 Python 工具程式碼，確保符合專案安全規範：
-  1. open() 呼叫必須帶 encoding="utf-8"（或 utf-8-sig）
+  1. open() 呼叫必須帶 encoding="utf-8"（或 utf-8-sig），且原始碼不得以 BOM 開頭
   2. subprocess 呼叫禁止 shell=True
   3. 檔案寫入需搭配 os.chmod(path, 0o600) 限制權限
 
@@ -12,6 +12,7 @@
 import ast
 import os
 import re
+import subprocess
 
 import pytest
 
@@ -33,10 +34,63 @@ assert len(_PY_FILES) >= 40, (
 )
 
 
+# ── BOM 檢查的語料：全部 tracked `.py`，與上面的 `_PY_FILES` 分開 ──────────
+# ⛔ 分開是刻意的。`_PY_FILES` 是其餘六條規則的掃描面（`scripts/tools/`），動它
+# 等於一次改掉六條規則的範圍。而 BOM 的傷害面比那大得多：本規則訊息點名的
+# `subprocess-timeout-audit` 是 **FATAL** pre-commit hook，它的 `files:` 是
+# `^(scripts|components/da-tools|tests)/.*\.py$` ── 實測 606 個檔，其中 365 個
+# 落在 `scripts/tools/` 之外。只掃 `_PY_FILES` 等於守住它自己指的那道閘門的四成。
+# ⚠️ 用 tracked 檔而不是 `os.walk`：untracked / gitignored 的檔不該讓 CI 紅。
+# ⚠️ 成本量過才擴的：讀 616 個檔的前 3 bytes 是 **0.05 秒**。
+def _tracked_py():
+    out = subprocess.run(
+        ["git", "ls-files", "-z", "*.py"], cwd=REPO_ROOT, capture_output=True,
+        text=True, stdin=subprocess.DEVNULL, check=True, timeout=120).stdout
+    return sorted(os.path.join(REPO_ROOT, p) for p in out.split("\0") if p)
+
+
+_TRACKED_PY = _tracked_py()
+
+# ⛔ 下限寫成字面量、不取自 `_TRACKED_PY` 自己：從被保護的東西推導出來的下限，
+# 會跟著它一起縮到零而不出聲。
+assert len(_TRACKED_PY) >= 400, (
+    f"`git ls-files '*.py'` 只回了 {len(_TRACKED_PY)} 個檔，不像這個 repo 的清單；"
+    "掃描面被截斷時，下面的『沒有檔案帶 BOM』會自己同意自己。"
+)
+
+
 def _read_source(path):
-    """讀取並回傳檔案原始碼。"""
+    """讀取並回傳檔案原始碼，剝掉一個前導 BOM。
+
+    ⛔ 剝除是必要的，而且它不是在放行 BOM——放行的是**這支檔案原本的行為**。
+    `open(encoding="utf-8")` 會把 BOM 當成 U+FEFF 留在字串裡，而 `ast.parse`
+    對它拋 SyntaxError，於是下面每一條規則都走進 `pytest.skip`。實測（同一份
+    位元組只差開頭 3 bytes，且該檔 `python <file>` **rc=0 跑得起來**）：
+
+        plain  1 failed / 1694 passed      ← 蓄意違規被抓到
+        BOM    1689 passed / 6 skipped     ← rc=0，六條規則全部靜默
+
+    六條裡有三條是 `governance-security.md` 標 Critical 的（`shell=True`、
+    `yaml.load`、`eval/exec/pickle`）。⚠️ CI 那行沒有 `-rs`，所以
+    FAILED→SKIPPED 只反映在一個數字上，沒有人會看見。
+    ⚠️ 而 skip 訊息說「語法錯誤」——那句話對 BOM 檔是**假的**，它照樣編得過。
+    ⛔ 剝掉之後 BOM 本身仍然要被擋，那是下面 `test_source_has_no_bom` 的事：
+    這裡負責「看得見」，那裡負責「不准有」。兩件事分開，缺一個就是靜默。
+    ⚠️ 剝掉**恰好一個**，與直譯器一致：`compile(bytes)` 對一個 BOM 是 OK、
+    對兩個是 SyntaxError，所以兩個 BOM 的檔仍應該走到下面的 skip。
+    """
     with open(path, encoding="utf-8") as f:
-        return f.read()
+        return f.read().removeprefix("\ufeff")
+
+
+def _starts_with_bom(head: bytes) -> bool:
+    """Pure, so the control above can hand it bytes that never touch the disk.
+
+    ⛔ Inline over real files this predicate cannot fail — every file in the repo
+    is clean — so nothing would tell "the check is here" from "the check was
+    deleted". Split out for exactly that reason.
+    """
+    return head[:3] == b"\xef\xbb\xbf"
 
 
 def _short_path(path):
@@ -61,7 +115,81 @@ _BINARY_MODE_RE = re.compile(r'["\'][rwax]+b["\']')
 
 
 class TestOpenEncoding:
-    """掃描所有 open() 呼叫，確認帶有 encoding 參數。"""
+    """SAST 規則 1：open() 的 encoding，以及原始碼不得帶 BOM。
+
+    ⚠️ 兩者掃描面不同：encoding 掃 `_PY_FILES`（`scripts/tools/`），BOM 掃
+    `_TRACKED_PY`（全部 tracked `.py`）。理由見 `_tracked_py` 上方。
+    """
+
+    def test_the_reader_strips_a_bom_so_the_other_rules_can_see_the_file(self, tmp_path):
+        """⛔ CONTROL for `_read_source`, and it has to be synthetic.
+
+        剝除的效果在這棵樹上**不可觀察**：BOM 檔一個都沒有，而下面那條規則正是
+        要讓它永遠沒有。實測拿掉剝除 ⇒ 2305 passed rc=0，什麼都不會響。
+        ⇒ 唯一能釘住它的是自己造一個帶 BOM 的檔餵給 reader。少了這一格，
+        「剝除」這一層是純粹的裝飾——而它的靜默失效會讓六條規則重新變瞎。
+        ⚠️ 兩個方向都釘：BOM 要被剝掉，而檔案其餘內容一個位元組都不能動。
+        """
+        body = "import os\nprint(os.name)\n"
+        f = tmp_path / "bom_sample.py"
+        f.write_bytes(b"\xef\xbb\xbf" + body.encode("utf-8"))
+        got = _read_source(str(f))
+        assert got == body, repr(got)
+        assert not got.startswith("\ufeff"), "the BOM survived the read"
+        # 對照：沒有 BOM 的檔必須原封不動
+        g = tmp_path / "plain.py"
+        g.write_bytes(body.encode("utf-8"))
+        assert _read_source(str(g)) == body
+
+    def test_the_bom_predicate_actually_rejects_a_bom(self):
+        """⛔ POSITIVE CONTROL for the scan below. 沒有它，那條掃描是空的。
+
+        `test_source_has_no_bom` 斷言的是「這批檔案都乾淨」，而**任何**讓它
+        少看一點的改動都會自動滿足它：實測把它的判定式換成 `head is not None`
+        ⇒ 1929 passed rc=0；把 `_read_source` 的剝除拿掉 ⇒ 1929 passed rc=0。
+        兩格都存活，因為沒有任何東西拿一個「已知是壞的」輸入餵過那個判定。
+        ⇒ 這裡用合成位元組直接餵判定式，兩個方向都釘：該拒的要拒、該收的要收
+        （後者防它朝「見人就咬」漂移，例如改成 `head is not None`）。
+        """
+        assert _starts_with_bom(b"\xef\xbb\xbf" + b"x = 1")
+        assert _starts_with_bom(b"\xef\xbb\xbf")
+        assert not _starts_with_bom(b"x = 1")
+        assert not _starts_with_bom(b"")
+        assert not _starts_with_bom(b"# -*- coding: utf-8 -*-")
+        # ⚠️ 一個 BOM 的前綴片段不算 BOM——別讓判定式退化成「開頭是 0xEF」。
+        assert not _starts_with_bom(b"\xef\xbb")
+
+    @pytest.mark.parametrize("py_file", _TRACKED_PY, ids=_short_path)
+    def test_source_has_no_bom(self, py_file):
+        """原始碼不得以 UTF-8 BOM 開頭。
+
+        ⛔ 這條規則本來就寫在 `docs/internal/dev-rules.md` 的 SAST 第 1 條
+        （「encoding 檢查（強制 UTF-8 without BOM）」），只是一直沒有實作。
+        ⚠️ 補上它之前，對「**別的**檔案帶 BOM」唯一會有反應的是一支關於折行
+        路徑引用的守衛，而它是以**裸 traceback** 反應的（#1632）。那句話需要
+        這個限定詞：幾支模組會 `ast.parse` 自己，所以它們對**自己**帶 BOM 也
+        會紅——盲審實測 `tests/lint/test_e2e_spec_lint.py` 就是一例。
+        ⚠️ Windows 主機加上 PowerShell 的 `Out-File` / `>` 預設就寫 BOM，
+        所以這不是理論風險；`CLAUDE.md` 自己記著這一條。
+
+        ⛔ 為什麼獨立成一條、而不是靠 parse 失敗來擋：帶 BOM 的檔**跑得起來**
+        （`compile(bytes)` 會剝掉一個前導 U+FEFF，實測 `python <file>` rc=0），
+        所以它不會在任何執行路徑上出聲；而上面 `_read_source` 現在會剝掉它，
+        正是為了讓其餘規則看得見那個檔。少了這一條，BOM 就完全沒有人管。
+        ⭐ 這條有一條真正回到綠的路，一句話說得完：把檔案存成不帶 BOM 的
+        UTF-8。那是它與被它取代的那個裸 traceback 最大的差別。
+        """
+        with open(py_file, "rb") as handle:
+            head = handle.read(3)
+        assert not _starts_with_bom(head), (
+            f"{_short_path(py_file)} 以 UTF-8 BOM 開頭。這個檔案跑得起來"
+            "（直譯器編譯 bytes 時會剝掉一個前導 U+FEFF），所以不會有任何"
+            "執行期症狀；但本模組其餘規則、`check_open_encoding` 與 "
+            "`check_subprocess_timeout` 讀到的是帶 U+FEFF 的字串，實測會"
+            "**靜默跳過**這個檔（#1632）。⚠️ 本模組其餘規則已不在此列——"
+            "同一顆 commit 的 `_read_source` 會剝掉它，所以它們現在看得見"
+            "這個檔。修法：把它存成不帶 BOM 的 UTF-8。"
+        )
 
     @pytest.mark.parametrize("py_file", _PY_FILES, ids=_short_path)
     def test_open_has_encoding(self, py_file):
