@@ -26,7 +26,13 @@ type: application
 #          list plane already binds, this one binds writes for the first time, so
 #          sharing it would tighten writes the moment a list-plane-soaked deployment
 #          upgrades. Default shadow = no-op.
-version: 2.9.21
+# 2.9.22 — #1597: add values-scope-enforce.yaml, a Container SAST L2 lint VARIANT
+#          (not a deployment profile). All three rbac scope flags ship default-false
+#          and each arg block is templated behind `{{- if }}`, so the chart's only
+#          rendered manifest had every axis OFF — the enforce arms were never linted.
+#          check_iac_helm.py auto-discovers values*.yaml, so this makes them a target.
+#          No template change; no deployment renders differently unless it passes -f.
+version: 2.9.22
 # appVersion: Go binary 版本
 # ⚠ appVersion pins the image tag. The --human-socket binary flag ships in a NEW
 # tenant-api image; humanSocket.enabled=true REQUIRES that image (NOTES + values
