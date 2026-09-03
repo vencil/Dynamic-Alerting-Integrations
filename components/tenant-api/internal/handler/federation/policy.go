@@ -23,6 +23,7 @@ import (
 	"sync"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/federation/fedpolicy"
 	"github.com/vencil/tenant-api/internal/handler"
 	"github.com/vencil/tenant-api/internal/gitops"
@@ -447,12 +448,62 @@ func PutTenantFederation(d *handler.Deps) http.HandlerFunc {
 	}
 }
 
+// ErrUnaddressableTenantID is the read-side counterpart of
+// gitops.ErrReservedTenantID: an id that cannot name a _federation/
+// subset file. A sentinel rather than a bare fmt.Errorf so a test pins
+// the branch by identity, not by message text.
+var ErrUnaddressableTenantID = errors.New("unaddressable tenant id: cannot name a _federation/ subset file")
+
+// federationSubsetPath is the only place the _federation/<id>.yaml join
+// is spelled on the read side. It exists so a test can plant a fixture
+// at exactly the path the reader will open, instead of hand-copying the
+// expression into the test and letting the copy go stale in silence the
+// next time this one changes.
+//
+// The write side spells the same join separately, in another package
+// (gitops.Writer.WriteFederationSubsetFile). Unifying the two is a
+// refactor of its own; what this change does buy is that both run the
+// same confd predicate before they get there.
+func federationSubsetPath(configDir, tenantID string) string {
+	return filepath.Join(configDir, "_federation", tenantID+".yaml")
+}
+
 // readFederationSubset loads conf.d/_federation/<tenantID>.yaml. A
 // missing file is not an error — it means the tenant has selected no
 // federation metrics yet, which yields an empty subset.
+//
+// The confd predicate below is the read-side twin of guardTenantID's
+// sink-side check on the write path (internal/gitops/writer.go) — the
+// same predicate, so the two _federation/ join sites answer every id
+// alike.
+//
+// What it actually stops, measured on linux/amd64 rather than assumed:
+// only an id combining a separator WITH `..` walks out of the directory
+// —  `foo/../../etc/passwd` lands on <ConfigDir>/etc/passwd.yaml, and
+// `../../etc/passwd` leaves ConfigDir altogether. The rest of the
+// rejected set never escapes at all: on Linux `win\path` and `..` stay
+// inside _federation/ as ordinary filenames, and `sub/nested` merely
+// buries the file one level down. They are refused because the id could
+// not name a subset file, not because each one is its own traversal.
+//
+// The predicate runs BEFORE the join and the read, so a rejected id
+// never reaches os.ReadFile — the file at the escaped path is not
+// opened, not read, and not discarded after the fact.
+//
+// This is a backstop, not the request-shape gate: the sole caller runs
+// handler.ValidateTenantID on the chi URL param first, so an id
+// reaching here means a future caller forgot to. That is a wiring bug,
+// which is why the branch keeps the caller's 500 rather than posing as
+// a 400 the production path can never produce. ⚠️ That 500 choice is
+// argued, not pinned: because ValidateTenantID makes the branch
+// unreachable over HTTP, no test drives it through the handler, and
+// changing the status code at policy.go's GetTenantFederation would
+// turn nothing red.
 func readFederationSubset(d *handler.Deps, tenantID string) (*fedpolicy.Subset, error) {
-	path := filepath.Join(d.ConfigDir, "_federation", tenantID+".yaml")
-	data, err := os.ReadFile(path)
+	if !confd.IsAddressableTenantID(tenantID) {
+		return nil, fmt.Errorf("%w: %q", ErrUnaddressableTenantID, tenantID)
+	}
+	data, err := os.ReadFile(federationSubsetPath(d.ConfigDir, tenantID))
 	if errors.Is(err, os.ErrNotExist) {
 		return &fedpolicy.Subset{Metrics: []string{}}, nil
 	}
