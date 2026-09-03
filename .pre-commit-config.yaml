@@ -940,7 +940,14 @@ repos:
         entry: python3 -X utf8 scripts/tools/lint/check_path_metadata_consistency.py --ci
         language: system
         pass_filenames: false
-        files: ^components/threshold-exporter/config/conf\.d/.*\.yaml$
+        # ⛔ `\.ya?ml$`, not `\.yaml$` (#1603). The script's selection now
+        # accepts both spellings; leaving the TRIGGER on one of them is the
+        # producer and the consumer moving apart — a PR that only touches
+        # `.yml` conf.d carriers would not run this check at all. Pinned by
+        # `TestHookSelectsEverythingTheScriptScans`, which is the mirror of
+        # `test_check_admin_config_schema.py`'s fail-open guard: that one
+        # requires regex ⊆ script, this one requires script ⊆ regex.
+        files: ^components/threshold-exporter/config/conf\.d/.*\.ya?ml$
         stages: [manual]
 
       - id: check-doc-template

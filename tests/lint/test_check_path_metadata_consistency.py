@@ -348,3 +348,291 @@ class TestScanFileOSError:
         outside = tmp_path / "outside.yaml"
         outside.write_text(_tenant_yaml("t", environment="staging"))
         assert cpmc.scan_file(outside, config_dir) == []
+
+
+# ── The extension-SPELLING axis (#1603) ──────────────────────────────
+#
+# `iter_tenant_files` and the "not checked" report in `main` both used to
+# pass `suffixes=(".yaml",)` while the exporter's scanner
+# (`config_hierarchy.go:195`) lowercases the entry name and accepts BOTH
+# `.yaml` and `.yml`. Measured on a tree whose path says `staging/` while
+# `_metadata` says `prod`, contents byte-identical, extension the only
+# difference:
+#
+#     db-a.yaml -> 2 mismatches, and it says so on stderr   <- control
+#     db-a.yml  -> `0 mismatch(es) across 0 tenant file(s)`, stderr empty
+#
+# i.e. a lint calling a tree clean because it never opened it, at exit 0.
+#
+# ⚠️ SCOPE. These pin the extension-SPELLING axis only, and neither of the
+# other two divergences has an open ticket behind it:
+#   * Hidden names: dot-prefixed carriers reach `iter_tenant_files` (the
+#     module imports `is_reserved_name` but not `is_hidden_name`) while the
+#     exporter skips them. Pre-existing, unchanged here; closing it stops
+#     checking files that are checked today.
+#     ⚠️ #1339 (the family ticket) is closed. #1589 IS open on the hidden
+#     axis, but its subject is the exporter's `pkg/config` enumerator and
+#     the path-vs-basename distinction — not a Python reader scanning
+#     `.hidden.yaml`, so this disclosure still has to carry itself.
+#   * Entries `is_file()` drops are named by `main` — that half of #1607 is
+#     wired up in this module.
+
+
+class TestExtensionSpellingAxis:
+    """`.yml` carriers must be scanned exactly as `.yaml` ones — no more."""
+
+    @staticmethod
+    def _seed(config_dir: Path, ext: str) -> Path:
+        """A conf.d whose path says `staging` and whose `_metadata` says
+        `prod`, so there is a real disagreement for the lint to find."""
+        _write(config_dir / f"_defaults{ext}", "defaults:\n  cpu: 100\n")
+        _write(config_dir / "payments" / "staging" / f"db-a{ext}",
+               _tenant_yaml("db-a", domain="search", environment="prod"))
+        return config_dir
+
+    def test_scan_agrees_across_extension_spellings(self, tmp_path):
+        """FLOOR. Two trees, same bytes, different extension, same findings.
+
+        Asserted as an EQUALITY between the two runs rather than as
+        "`.yml` is accepted": the latter is satisfied by a reader that takes
+        `.yml` and drops `.yaml`. The `file` field legitimately carries the
+        extension, so only that is folded away.
+        """
+        a = cpmc.scan(self._seed(tmp_path / "yaml" / "conf.d", ".yaml"))
+        b = cpmc.scan(self._seed(tmp_path / "yml" / "conf.d", ".yml"))
+
+        def comparable(ms):
+            return sorted((m.tenant, m.field, m.path_value, m.metadata_value)
+                          for m in ms)
+
+        # Vacuity guard FIRST, and on BOTH sides: two trees the lint cannot
+        # read at all also compare equal. Pinned as a concrete count so that
+        # gutting `comparable` cannot silently disarm the equality — that
+        # erosion path was measured on the sibling fix and left it green.
+        for label, ms in (("`.yaml`", a), ("`.yml`", b)):
+            assert len(ms) == 2, (
+                f"the {label} tree produced {len(ms)} mismatch(es), not 2, "
+                f"so the equality below would prove nothing. Got {ms!r}"
+            )
+        assert comparable(a) == comparable(b), (
+            f"the lint reports different findings for a conf.d whose only "
+            f"difference is `.yaml` vs `.yml`, both of which the exporter "
+            f"serves:\n  .yaml: {comparable(a)}\n  .yml : {comparable(b)}"
+        )
+
+    def test_main_names_an_unreadable_yml_carrier(
+            self, tmp_path, monkeypatch, capsys):
+        """FLOOR, second site: the "not checked" report must see `.yml` too.
+
+        The equality above only exercises `iter_tenant_files`. The
+        `unusable_config_entries` call in `main` is a separate site, and
+        reverting it alone leaves the equality green — the same gap that
+        survived the first round of the sibling fix (#1663).
+
+        The unreadable carrier is a DIRECTORY named like a config file, not
+        a broken symlink: symlink creation needs administrator rights on
+        Windows, so a symlink fixture would be skipped on the host most of
+        this repo's maintainers use.
+        """
+        for ext in (".yaml", ".yml"):
+            root = tmp_path / ext.lstrip(".")
+            (root / ".git").mkdir(parents=True)
+            config_dir = self._seed(root / "conf.d", ext)
+            (config_dir / ("db-broken" + ext)).mkdir()
+
+            code, _out, err = _run_cli(
+                monkeypatch, capsys, root,
+                "--config-dir", str(config_dir), "--ci",
+            )
+
+            assert code == 0, "this lint is warning-only and must stay exit 0"
+            # Name the REASON, not just the filename. The sibling tool has a
+            # SECOND stderr station that prints the same basename (its
+            # parse-failure handler), and blind review showed a
+            # filename-only assertion there can be satisfied by the wrong
+            # station. This module has no such twin today; pinning the
+            # reason is what keeps this test honest if one is ever added.
+            # ⚠️ Only the reason fragment — the surrounding wording is
+            # deliberately unpinned everywhere else in this file.
+            named = [ln for ln in err.splitlines()
+                     if ("db-broken" + ext) in ln
+                     and "is a directory, not a config file" in ln]
+            assert len(named) == 1, (
+                f"the `not checked` report must name `db-broken{ext}` "
+                f"exactly once, with the reason; stderr was {err!r}"
+            )
+
+    def test_a_json_carrier_is_not_scanned(self, tmp_path):
+        """CEILING, by counterexample, which is all a ceiling can be.
+
+        You cannot enumerate the complement of an accept-set, so this pins
+        counterexamples and the name says which ones. Over-widening a call
+        site to `(".yaml", ".yml", ".json")` is a single token, and
+        `has_yaml_extension`'s own docstring says this argument gets
+        touched. Measured on this change's base (`eed193a7`): with that
+        widening applied and this class absent, the CI-exact suite is
+        15909 passed / 185 skipped / rc=0.
+
+        It does NOT cover dot-prefixed names, which this reader scans and
+        the exporter skips — see the SCOPE block above. The fixture
+        deliberately contains no dot-prefixed name rather than pinning
+        today's answer for it.
+        """
+        config_dir = self._seed(tmp_path / "conf.d", ".yaml")
+        # JSON parses fine as YAML, so nothing but the extension rule keeps
+        # it out. It declares a tenant no other file in the tree declares.
+        _write(config_dir / "payments" / "staging" / "db-json.json",
+               '{"tenants": {"db-json": {"_metadata": '
+               '{"environment": "prod"}, "threshold": {"cpu": 80}}}}')
+        # `_`-prefixed control file, never a tenant carrier.
+        _write(config_dir / "payments" / "staging" / "_profiles.yaml",
+               _tenant_yaml("db-reserved", environment="prod"))
+
+        tenants = {m.tenant for m in cpmc.scan(config_dir)}
+        assert tenants == {"db-a"}, (
+            f"a carrier the exporter does not serve was scanned: {tenants}"
+        )
+
+    def test_every_spelling_the_shared_set_names_is_scanned(self, tmp_path):
+        """FLOOR, derived: one carrier per member of `CONFIG_SUFFIXES`.
+
+        The tests above hard-code `.yaml` and `.yml`, so they stop covering
+        the floor the day the exporter grows a third spelling and
+        `_lib_confd.CONFIG_SUFFIXES` follows it. This reads the set instead
+        of restating it.
+
+        It does NOT re-implement `has_yaml_extension`; it uses the shared
+        CONSTANT, whose agreement with the exporter is pinned by
+        `tests/shared/confd_name_classification_matrix.json` (asserted from
+        the Go side by `confd_name_classification_parity_test.go` and from
+        the Python side by
+        `tests/shared/test_confd_name_classification_parity.py`).
+
+        Floor only: a too-WIDE reader satisfies it, which is what the
+        counterexample test above is for.
+        """
+        from _lib_confd import CONFIG_SUFFIXES  # noqa: PLC0415
+
+        # Anti-vacuity: an empty set makes the assertion `set() == set()`.
+        # Guarding the set is not this test's job, so name who does.
+        assert len(CONFIG_SUFFIXES) >= 2, (
+            f"CONFIG_SUFFIXES collapsed to {CONFIG_SUFFIXES!r}; the shared "
+            f"classification matrix should have gone red first"
+        )
+
+        config_dir = tmp_path / "conf.d"
+        _write(config_dir / "_defaults.yaml", "defaults:\n  cpu: 100\n")
+        for i, suffix in enumerate(CONFIG_SUFFIXES):
+            _write(config_dir / "payments" / "staging" / f"t{i}{suffix}",
+                   _tenant_yaml(f"t{i}", environment="prod"))
+
+        tenants = {m.tenant for m in cpmc.scan(config_dir)}
+        expected = {f"t{i}" for i in range(len(CONFIG_SUFFIXES))}
+        assert tenants == expected, (
+            f"one carrier was written per member of CONFIG_SUFFIXES "
+            f"({CONFIG_SUFFIXES!r}) and the lint scanned {tenants}, "
+            f"expected {expected}"
+        )
+
+
+# ── the hook's trigger must not be narrower than the script's selection ──
+
+import re  # noqa: E402
+import yaml  # noqa: E402
+
+
+def _repo_root() -> Path:
+    """Repo root derived from the module under test, not from `cwd`.
+
+    `cpmc.find_repo_root()` walks up from `Path.cwd()`, and several tests in
+    this file `monkeypatch.chdir` into a tmp tree — so calling it here would
+    answer a different question depending on test order.
+    """
+    return Path(cpmc.__file__).resolve().parents[3]
+
+
+class TestHookSelectsEverythingTheScriptScans:
+    """The pre-commit `files:` regex is a SECOND copy of "which files matter".
+
+    `test_check_admin_config_schema.py::TestGateIntegrity` pins one direction
+    of this — regex ⊆ script, i.e. nothing the hook selects may be silently
+    skipped. This is the mirror: script ⊆ regex, i.e. nothing the script
+    would scan may fail to trigger the hook.
+
+    It exists because #1603 widened `iter_tenant_files` to both YAML
+    spellings while the hook's `files:` still ended in `\\.yaml$`. Nothing
+    went red: the hook is `stages: [manual]` with `pass_filenames: false`,
+    so the documented `--all-files` invocation still fired on some other
+    `.yaml`. The hole only opens for a changed-files invocation of the
+    manual stage on a PR that touches `.yml` carriers alone — which is
+    exactly the PR this check exists for.
+    """
+
+    @staticmethod
+    def _hook_files_regex() -> "re.Pattern[str]":
+        cfg = yaml.safe_load(
+            (_repo_root() / ".pre-commit-config.yaml").read_text(
+                encoding="utf-8"))
+        hooks = [h for repo in cfg["repos"] for h in repo.get("hooks", [])]
+        hook = next(h for h in hooks
+                    if h.get("id") == "path-metadata-consistency-check")
+        return re.compile(hook["files"])
+
+    def test_every_spelling_the_script_scans_also_triggers_the_hook(
+            self, tmp_path):
+        """Derived on both sides, so neither can drift alone.
+
+        The candidate names come from `_lib_confd.CONFIG_SUFFIXES`, and
+        "would the script scan it" is answered by running `iter_tenant_files`
+        on a real tree rather than by re-implementing the predicate.
+        """
+        from _lib_confd import CONFIG_SUFFIXES  # noqa: PLC0415
+
+        prefix = "components/threshold-exporter/config/conf.d/"
+        pattern = self._hook_files_regex()
+
+        config_dir = tmp_path / "conf.d"
+        for i, suffix in enumerate(CONFIG_SUFFIXES):
+            _write(config_dir / f"t{i}{suffix}", _tenant_yaml(f"t{i}"))
+        scanned = {p.name for p in cpmc.iter_tenant_files(config_dir)}
+
+        # ⛔ Vacuity guard: if the script scanned nothing, the loop below is
+        # empty and the test passes without asserting anything.
+        assert len(scanned) == len(CONFIG_SUFFIXES), (
+            f"the script scanned {sorted(scanned)} out of "
+            f"{len(CONFIG_SUFFIXES)} carriers written from CONFIG_SUFFIXES "
+            f"({CONFIG_SUFFIXES!r}) — fix that before trusting this test"
+        )
+
+        for name in sorted(scanned):
+            assert pattern.search(prefix + name), (
+                f"`{name}` is scanned by the script but the hook's `files:` "
+                f"regex ({pattern.pattern!r}) does not select it, so a change "
+                f"touching only files like it would not run this check"
+            )
+
+    def test_the_regex_still_excludes_things_the_script_ignores(self):
+        """The other side of the same coin — a trigger that fires on
+        everything is not a fix, it is the check running on unrelated edits.
+
+        ⛔ Positive control first: without it, a regex that matched nothing
+        would satisfy every assertion below.
+        """
+        prefix = "components/threshold-exporter/config/conf.d/"
+        pattern = self._hook_files_regex()
+
+        assert pattern.search(prefix + "db-a.yaml"), (
+            "the regex no longer selects an ordinary carrier — every "
+            "exclusion asserted below would be vacuous"
+        )
+        for rel in ("notes.txt", "db-a.json", "README.md", "db-a.yaml.bak"):
+            assert not pattern.search(prefix + rel), (
+                f"the hook's `files:` regex selects `{rel}`, which this "
+                f"script never scans"
+            )
+        for outside in ("rule-packs/rule-pack-mariadb.yaml",
+                        "try-local/seed/conf.d/db-a.yaml"):
+            assert not pattern.search(outside), (
+                f"the hook's `files:` regex reaches outside the conf.d tree "
+                f"it is scoped to: {outside}"
+            )

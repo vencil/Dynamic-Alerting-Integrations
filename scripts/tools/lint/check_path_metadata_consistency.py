@@ -99,10 +99,18 @@ def iter_tenant_files(config_dir: Path,
     # #1607: the `is_file()` filter is a THIRD axis and it is silent here.
     # ⛔ The report for what it drops lives in `main`, NOT in this generator:
     # `scan` also consumes it, so naming them here would print twice.
+    # ⛔ `.yml` IS A TENANT CARRIER HERE NOW (#1603). This site used to pass
+    # `(".yaml",)`, so a tenant declared in `db-a.yml` was not scanned at all:
+    # measured on a tree where the path says `staging/` and `_metadata` says
+    # `prod`, the `.yaml` spelling reports 2 mismatches on stderr while
+    # the `.yml` spelling reports
+    # `0 mismatch(es) across 0 tenant file(s)`, rc=0, stderr empty — a lint
+    # calling a tree clean because it never opened it. The exporter
+    # (`config_hierarchy.go:195`) reads both spellings.
     listing = config_dir.rglob("*") if entries is None else entries
     for path in sorted(
         p for p in listing
-        if p.is_file() and has_yaml_extension(p.name, (".yaml",))
+        if p.is_file() and has_yaml_extension(p.name)   # both spellings (#1603)
     ):
         if path.name.startswith("_"):
             continue
@@ -291,9 +299,11 @@ def main() -> int:
     # `conf.d` mid-run. `scan`/`scan_file` stay as they are — they are the
     # tested entry points; only `main` stops re-walking.
     entries = sorted(config_dir.rglob("*"))
+    # ⛔ Both spellings (#1603) — this has to move WITH `iter_tenant_files`
+    # above, or the "not checked" report and the selection disagree about
+    # which files exist and an unreadable `.yml` carrier goes unnamed.
     for bad in unusable_config_entries(
         [p for p in entries if not is_reserved_name(p.name)],
-        suffixes=(".yaml",),
     ):
         print(f"{bad}:0: warning: not checked — {unusable_reason(bad)}",
               file=sys.stderr)
