@@ -19,7 +19,12 @@
 # blocks would ship green — and it would surface at exactly the worst moment,
 # the day an operator finishes their soak window and flips the axis.
 #
-# Same reasoning (and same shape) as helm/vector/values-projection.yaml.
+# Same reasoning (and same shape) as helm/vector/values-projection.yaml — but
+# NOT the same blast radius, which is why this chart also gained a .helmignore
+# in the same change. helm/vector is never `helm package`d; helm/tenant-api is
+# packaged and pushed to oci://<registry>/charts on every release, so without
+# that .helmignore entry this file would ship inside the chart customers pull,
+# sitting next to values.yaml with every axis pre-enforced.
 #
 # ⚠️ Enforce is the END state of a migration, never a starting default. Do NOT
 # copy this file into a deployment: each axis has its own soak criterion
