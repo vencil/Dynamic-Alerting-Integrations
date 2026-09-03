@@ -15,12 +15,16 @@ Closes the audit gap (P1-5 / 596 LOC tool was 0% covered). Targets the spine:
 """
 from __future__ import annotations
 
+import ast
 import json
+import os
 from pathlib import Path
 
 import pytest
 
 import doc_coverage as dc
+import generate_doc_map as gdm
+import _version_patterns as vp
 from _lib_exitcodes import EXIT_CALLER_ERROR
 
 
@@ -111,6 +115,129 @@ class TestIsExcluded:
         # File outside repo — relative_to raises ValueError; method returns False.
         outside = Path("/no/such/path/outside.md")
         assert a._is_excluded(outside) is False
+
+    def test_symlinked_alias_is_still_excluded(self, tmp_path):
+        """#1692：別名是**真的** symlink 時仍必須被排除。
+
+        改動前 `_is_excluded` 以 `file_path.resolve()` 當鍵，而 `resolve()`
+        會跟隨 symlink：鍵變成 root 的 `CHANGELOG.md`，不在排除清單裡，
+        於是排除靜默失效。⚠️ 這一格**只在建得出 symlink 的平台**有鑑別力
+        ——Windows checkout 把別名物化成路徑 stub，那裡改動前後都是綠的
+        （實測 `2654e395`：Linux 分母 262、Windows 259，差的正是這三筆）。
+        """
+        (tmp_path / "CHANGELOG.md").write_text("root", encoding="utf-8")
+        (tmp_path / "docs").mkdir()
+        alias = tmp_path / "docs" / "CHANGELOG.md"
+        try:
+            alias.symlink_to(Path("..") / "CHANGELOG.md")
+        except (OSError, NotImplementedError) as exc:
+            # ⛔ fail-closed：只有「這個平台本來就建不出 symlink」才略過。
+            # POSIX 上建不出來代表環境壞了，不是本測試不適用——靜默 skip
+            # 會讓唯一釘住 #1692 的那一格在 CI 上消失。
+            if os.name != "nt":
+                raise
+            pytest.skip(f"platform cannot create symlinks: {exc!r}")
+        assert alias.is_symlink(), "fixture didn't actually make a symlink"
+        a = dc.DocCoverageAnalyzer(str(tmp_path))
+        assert a._is_excluded(alias) is True
+
+    def test_the_real_root_document_is_not_excluded(self, tmp_path):
+        """⛔ 排除鍵是**路徑**不是名稱——root `CHANGELOG.md` 是真文件。
+
+        #1692 票面建議「改成以名稱比對」。這一格是那個修法的反例：
+        `root_md_files` 含真正的 root `CHANGELOG.md`，名稱比對會把本尊
+        一起排掉。（對改動前的碼這一格本來就是綠的——它釘的不是被修掉的
+        那個缺陷，是那個**沒有被採用的修法**。）
+        """
+        (tmp_path / "CHANGELOG.md").write_text("root", encoding="utf-8")
+        a = dc.DocCoverageAnalyzer(str(tmp_path))
+        assert "CHANGELOG.md" in a.root_md_files
+        assert a._is_excluded(tmp_path / "CHANGELOG.md") is False
+
+
+# ---------------------------------------------------------------------------
+# #1692 — the three docs/ symlink aliases have ONE literal home
+# ---------------------------------------------------------------------------
+class TestAliasListHasOneHome:
+    """正本是 `lint/_version_patterns.DOCS_TREE_SYMLINK_ALIAS_PATHS`。
+
+    #1692 之前 `doc_coverage.EXCLUDE_RELATIVE_PATHS` 與
+    `generate_doc_map.SKIP_FILES` 各自抄了一份，而其中一份還連鍵的算法都
+    不一樣（見上面的 symlink 那一格）。
+    """
+
+    _CONSUMERS = ("scripts/tools/dx/doc_coverage.py",
+                  "scripts/tools/dx/generate_doc_map.py")
+    _HOME = "scripts/tools/lint/_version_patterns.py"
+
+    @staticmethod
+    def _repo_root() -> Path:
+        # <root>/scripts/tools/dx/doc_coverage.py → parents[3] == <root>
+        return Path(dc.__file__).resolve().parents[3]
+
+    @staticmethod
+    def _literals(path: Path) -> set[str]:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        return {n.value for n in ast.walk(tree)
+                if isinstance(n, ast.Constant) and isinstance(n.value, str)}
+
+    def test_only_the_home_module_spells_the_alias_paths(self):
+        """⛔ 消費端不得再出現那三個路徑字面值。
+
+        正控在前：先斷言**正本確實拼了它們**，否則掃描器壞掉時（AST 解析
+        失敗、路徑算錯）兩個消費端也會回報「乾淨」，而那與真的收攏完成
+        在畫面上一模一樣。
+
+        ⚠️ 已知繞法，不粉飾：字面值可以用拼接（`"docs/" + "CHANGELOG.md"`）
+        或 f-string 躲開這一格。擋住那種形狀的是下面的成員資格斷言與
+        `_is_excluded` 的行為測試，不是這一條。
+        """
+        root = self._repo_root()
+        aliases = set(vp.DOCS_TREE_SYMLINK_ALIAS_PATHS)
+        assert len(aliases) == 3, aliases
+
+        home_lits = self._literals(root / self._HOME) & aliases
+        assert home_lits == aliases, (
+            f"positive control failed: {self._HOME} should spell all three "
+            f"alias paths, found {sorted(home_lits)} — the scanner is broken, "
+            "so the consumer results below prove nothing")
+
+        for rel in self._CONSUMERS:
+            respelled = sorted(self._literals(root / rel) & aliases)
+            assert respelled == [], (
+                f"{rel} re-spells the alias path(s) {respelled}; import "
+                "DOCS_TREE_SYMLINK_ALIAS_PATHS instead — a second literal is "
+                "exactly the drift #1692 removed")
+
+    def test_both_consumers_still_skip_all_three_aliases(self):
+        """⛔ 上面那格只證明「沒有第二份字面值」，證不了「還有在排除」。
+
+        少了這一格，把別名整組從 `SKIP_FILES` 拿掉就能讓上面那格轉綠——
+        比重抄還糟。兩格合起來才是「不重抄**而且**仍然排除」。
+        ⚠️ 這裡不釘 `SKIP_FILES` 的大小或其餘成員：那些成員與本次改動無關，
+        釘了只會在別人新增一個 skip 項時紅，而還原本次改動它照樣綠
+        ——也就是它測的不是這支修法。其餘 8 項沒被動到，由
+        `generate_doc_map --check` 的產物比對負責（本次實測 rc=0）。
+        """
+        assert (dc.DocCoverageAnalyzer.EXCLUDE_RELATIVE_PATHS
+                == vp.DOCS_TREE_SYMLINK_ALIAS_PATHS)
+        assert vp.DOCS_TREE_SYMLINK_ALIAS_PATHS <= gdm.SKIP_FILES, (
+            sorted(vp.DOCS_TREE_SYMLINK_ALIAS_PATHS - gdm.SKIP_FILES))
+
+    def test_the_two_views_agree_and_keep_their_shapes(self):
+        """兩個視圖必須一致，且形狀不可互換。
+
+        ⚠️ 誠實邊界：這一格**證不了**名稱視圖是「推導的」——一份**正確**的
+        第二字面清單會通過它（實測：把它換成一份**寫錯**的字面清單 KILLED，
+        寫對的則會 SURVIVED）。它擋的是兩個視圖走音，以及「拿名稱視圖去比
+        `docs/` 路徑」這種用錯視圖的形狀。
+        """
+        assert vp.DOCS_TREE_SYMLINK_ALIASES == {
+            p.rsplit("/", 1)[-1] for p in vp.DOCS_TREE_SYMLINK_ALIAS_PATHS}
+        # 名稱視圖不含 `docs/` 前綴，路徑視圖含——兩者不可互換使用。
+        assert all("/" not in n for n in vp.DOCS_TREE_SYMLINK_ALIASES)
+        assert all(p.startswith("docs/")
+                   for p in vp.DOCS_TREE_SYMLINK_ALIAS_PATHS)
 
 
 # ---------------------------------------------------------------------------
