@@ -779,7 +779,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "3c17286cdc3870aea7a4e8c459ed70fad4655c6e8e36377d2ca2edff933a2c1d",
+ "source_digest": "1961d0669fc8649e19d993d7a917118e1c23e7d81fb6a6bb852af0f893d5a5d0",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1158,8 +1158,7 @@
    "tests/ops/test_generated_ci_artifacts.py",
    "tests/ops/test_init_project.py",
    "tests/ops/test_nightly_race_issue_policy.py",
-   "tests/shared/test_actionlint_pin_parity.py",
-   "tests/shared/test_validate_all.py"
+   "tests/shared/test_actionlint_pin_parity.py"
   ],
   ".github/workflows/bench-record.yaml": [
    "tests/dx/test_pair_bench_ratio.py",
@@ -1255,7 +1254,8 @@
    "tests/ops/test_generated_ci_artifacts.py",
    "tests/ops/test_prepush_hook_wiring.py",
    "tests/ops/test_wrapped_path_references.py",
-   "tests/shared/test_actionlint_pin_parity.py"
+   "tests/shared/test_actionlint_pin_parity.py",
+   "tests/shared/test_validate_all.py"
   ],
   "CHANGELOG.md": [
    "tests/dx/test_add_frontmatter.py",

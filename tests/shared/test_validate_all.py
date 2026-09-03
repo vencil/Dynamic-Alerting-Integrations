@@ -532,11 +532,29 @@ class TestRunOne:
 
 
 # ============================================================
-# main() CLI 模式
+# main() --list 模式
 # ============================================================
 
-class TestMainCLI:
-    """main() CLI 整合測試。"""
+class TestListMode:
+    """`--list` 的完整性。
+
+    ⛔ 這個 class 原本也叫 `TestMainCLI`，與本檔下方（`_generate_diff_report`
+    之後）那個同名 class 撞名。後定義的 binding 會覆蓋前一個，所以底下兩支
+    測試在 `origin/main` 上 `--collect-only` **一次都沒有被 collect**。
+    改名而不動測試內容（#1620）。
+
+    ⚠️ 這件事沒有守衛：本 repo 未採用**通用 Python linter**，所以 F811 這類
+    重定義檢查不存在。`.pre-commit-config.yaml` 唯一提到 `pyflakes` 的地方，
+    是 actionlint 把該整合**釘成關閉**。⚠️ shellcheck **另有獨立且啟用中的
+    hook**——它是 shell linter，不在這個軸上（⛔ 本段前一版把 shellcheck 寫進
+    「唯一提到那類工具」這個全稱句裡，因而為假：那是拿掉一個會腐爛的數字之後
+    留下的全稱句，由盲審抓出）。重新撞名會再次靜默：這是揭露，不是保護——
+    它的靜默失效不會讓 #1620 的缺陷回來，只會讓 `--list` 的完整性重新失去見證。
+
+    這一支之所以承重：#1620 新增的失敗訊息把 operator 導向 `--list`，
+    而 `test_list_mode_shows_all_tools` 是唯一斷言 `--list` 印出**每一個**
+    註冊名稱的東西。
+    """
 
     def test_list_mode(self, capsys, monkeypatch, cli_argv):
         """--list 模式列出所有檢查並正常結束。"""
@@ -667,14 +685,28 @@ class TestMainCLI:
         assert "Validation Report" in out
 
     def test_skip_flag(self, monkeypatch, capsys, cli_argv):
-        """--skip 跳過指定 check。"""
+        """--skip 跳過指定 check。
+
+        ⛔ 本測試原本只斷言 `len(out) > 0`——由建構方式保證為真，任何實作
+        都過得了，而它是本檔唯一同時給 `--only` 與 `--skip` 的既有測試，
+        也就是 #1620 改掉的那個語意名義上的覆蓋者。改為斷言**實際執行了
+        什麼**（盲審抓出）。
+        """
+        calls = []
+
+        def recording(short_name, script_path, tool_args, project_root):
+            calls.append(short_name)
+            return (short_name, "pass", 0.1, "ok", "output")
+
         cli_argv('validate_all', '--skip', 'versions,links', '--only', 'freshness')
-        monkeypatch.setattr(va, "_run_one", self._mock_run_one)
+        monkeypatch.setattr(va, "_run_one", recording)
         with pytest.raises(SystemExit) as exc_info:
             va.main()
         assert exc_info.value.code == 0
-        out = capsys.readouterr().out
-        assert len(out) > 0
+        assert calls == ["freshness"], (
+            "--only picks freshness and --skip subtracts two names that were "
+            "never selected, so exactly freshness must run")
+        assert len(capsys.readouterr().out) > 0
 
     def test_ci_stops_on_failure(self, monkeypatch, cli_argv):
         """--ci 模式遇到失敗時 exit 1。"""
@@ -1029,15 +1061,112 @@ class TestMainExtended:
         assert "Smart mode" in out
 
     def test_smart_mode_none(self, monkeypatch, capsys, cli_argv):
-        """--smart with None (git unavailable) runs all."""
+        """--smart with None (git unavailable) runs all.
+
+        ⛔ The first version passed `--only versions` alongside `--smart`,
+        and `if args.smart and not only_set` short-circuits on that, so the
+        mock was never called and the docstring described a path the test did
+        not reach. The counter below is what makes the claim checkable
+        (#1620).
+        """
+        calls = []
+        ran = []
+
         def mock_smart(project_root):
+            calls.append(project_root)
             return None
+
+        def rec(short_name, script_path, tool_args, project_root):
+            ran.append(short_name)
+            return (short_name, "pass", 0.1, "ok", "output")
+
         monkeypatch.setattr(va, "_smart_detect", mock_smart)
-        monkeypatch.setattr(va, "_run_one", self._mock_run_one_pass)
-        cli_argv('validate_all', '--smart', '--only', 'versions')
+        monkeypatch.setattr(va, "_run_one", rec)
+        cli_argv('validate_all', '--smart')
         with pytest.raises(SystemExit) as exc:
             va.main()
         assert exc.value.code == 0
+        assert len(calls) == 1, "the detector was never consulted"
+        assert len(ran) == len(va.TOOLS), (
+            "git unavailable must run everything; ran %d of %d"
+            % (len(ran), len(va.TOOLS)))
+
+    @pytest.mark.parametrize("detected", [None, [], ["versions", "links"]])
+    def test_smart_mode_announces_what_it_will_actually_run(
+            self, monkeypatch, capsys, cli_argv, detected):
+        """⛔ The announced count must survive `--skip`.
+
+        The first version of this line derived the number from the smart
+        selection alone, so `--smart --skip a,b,c` announced 33 and ran 30 --
+        a fresh copy of the one-run-two-answers shape #1620 exists to remove,
+        introduced by the same change that removed the original. Deriving it
+        from the same filter the run uses is what keeps the two in step.
+        """
+        ran = []
+
+        def rec(short_name, script_path, tool_args, project_root):
+            ran.append(short_name)
+            return (short_name, "pass", 0.1, "ok", "output")
+
+        monkeypatch.setattr(va, "_smart_detect", lambda project_root: detected)
+        monkeypatch.setattr(va, "_run_one", rec)
+        cli_argv('validate_all', '--smart', '--skip', 'versions')
+        with pytest.raises(SystemExit) as exc:
+            va.main()
+        assert exc.value.code == 0
+        raw = capsys.readouterr().out
+        out = " ".join(raw.split())
+        assert "versions" not in ran, "--skip must still subtract"
+        # the announced number, whatever branch printed it, is the one that ran
+        import re as _re
+        nums = [int(x) for x in _re.findall(r"running (?:all )?(\d+)", out)]
+        if detected is None:
+            # git unavailable: the tool announces nothing at all, so
+            # there is no number to contradict. Pin that instead.
+            assert not nums, "no selection was made; %s" % out
+            assert len(ran) == len(va.TOOLS) - 1, len(ran)
+        else:
+            assert nums, out
+            assert nums[0] == len(ran), (
+                "announced %r, ran %d (%s)" % (nums, len(ran), out))
+            # ⛔ The names too, not just the count: reverting the list half
+            # to `sorted(only_set)` while leaving the count derived left the
+            # whole suite green and printed a check that does not run.
+            line = next((l for l in raw.splitlines()
+                         if l.startswith("Smart mode:")), "")
+            if "git diff: " in line:
+                announced = [x.strip() for x
+                             in line.split("git diff: ", 1)[1].split(",")]
+                assert sorted(announced) == sorted(ran), (
+                    "announced %r, ran %r" % (announced, sorted(ran)))
+
+    def test_smart_mode_with_an_empty_diff_does_not_claim_zero(
+            self, monkeypatch, capsys, cli_argv):
+        """⛔ An empty selection means NO RESTRICTION, so the run does
+        everything. The tool used to print `running 0 check(s)` and then run
+        all of them -- the same one-run-two-answers shape #1620 removed from
+        `--only X --skip X`, measured on a clean worktree.
+
+        This pins the report, not the behaviour: the fall-through is
+        deliberately unchanged.
+        """
+        ran = []
+
+        def rec(short_name, script_path, tool_args, project_root):
+            ran.append(short_name)
+            return (short_name, "pass", 0.1, "ok", "output")
+
+        monkeypatch.setattr(va, "_smart_detect", lambda project_root: [])
+        monkeypatch.setattr(va, "_run_one", rec)
+        cli_argv('validate_all', '--smart')
+        with pytest.raises(SystemExit) as exc:
+            va.main()
+        assert exc.value.code == 0
+        out = " ".join(capsys.readouterr().out.split())
+        assert len(ran) == len(va.TOOLS), "an empty selection restricts nothing"
+        assert "running 0 check" not in out, (
+            "it announced 0 checks and then ran %d" % len(ran))
+        assert "selected no checks" in out and str(len(va.TOOLS)) in out, out
 
     def test_diff_report_mode(self, monkeypatch, capsys, cli_argv):
         """--diff-report shows diff output."""
@@ -1060,14 +1189,28 @@ class TestMainExtended:
         assert "DIFF REPORT" in out
 
     def test_all_skipped_text_output(self, monkeypatch, capsys, cli_argv):
-        """All tools skipped shows appropriate message."""
-        cli_argv('validate_all', '--only', 'nonexistent_check')
+        """`total == 0` prints the all-skipped summary, reached LEGALLY.
+
+        ⛔ This test used to reach that branch with `--only nonexistent_check`
+        and assert `code == 0`, i.e. it pinned #1620's defect as if it were
+        the intended contract: a name nothing answers to was dropped silently
+        and the run reported success. The docstring said only what the code
+        did, so six reviewers read it as deliberate. The *branch* is worth
+        covering; the invocation that reached it was not.
+
+        Skipping every registered name is an explicit request to run nothing,
+        so exit 0 is correct here and stays asserted. The name list is derived
+        from TOOLS so it cannot rot into a partial skip that stops reaching
+        this branch.
+        """
+        every_name = ",".join(n for n, _, _, _ in TOOLS)
+        cli_argv('validate_all', '--skip', every_name)
         monkeypatch.setattr(va, "_run_one", self._mock_run_one_pass)
         with pytest.raises(SystemExit) as exc:
             va.main()
         assert exc.value.code == 0
         out = capsys.readouterr().out
-        assert "skipped" in out.lower() or "0" in out
+        assert "All tools skipped" in out
 
     def test_fix_error_handling(self, monkeypatch, capsys, cli_argv):
         """--fix handles fix command errors."""
@@ -1089,101 +1232,575 @@ class TestMainExtended:
         assert "fix error" in out or "Auto-fixing" in out
 
 
-class TestOnlyListsInAutomaticCallers:
-    """Every name the automatic callers pass to `--only` must exist in TOOLS.
+class TestTheGateIsStillSelected:
+    """`cli_default_drift` must still be named in an `--only` list in both
+    automatic callers. That is #1492's axis, and #1620's runtime guard does
+    not cover it: a registered check nobody selects is never run and nothing
+    says so.
 
-    ⛔ `--only` drops unknown names SILENTLY (`if n in only_set`). Measured by
-    blind review: misspelling ONE name in the CI list, with a real drift
-    planted, gave `Result: 11/11 passed` and rc=0 — the job runs, reports
-    green, and the check it was meant to run never executed. `WATCH_TRIGGERS`
-    already had a ⊆-TOOLS pin; the two `--only` strings did not, and they are
-    the ones wired to a required status check.
+    ⚠️ GREEN MEANS EXACTLY ONE THING: the name appears in an `--only` list
+    in that file. It does NOT mean the check runs. Measured during #1620, all
+    of these defeat it: a `--skip <same name>` beside the `--only`; `make
+    lint-docs ARGS="--only x"` (argparse takes the last `--only`); a decoy
+    mention elsewhere in the same file after the real recipe dropped it; an
+    indented line-continuation truncating the list. Answering the real
+    question means knowing WHICH invocation CI runs. An attempt to build that
+    here was measured net-negative and reverted, and the apparatus that grew
+    around it -- a three-state scanner, 26 shape fixtures and three tests
+    whose job was to document its wrong answers -- was deleted with it: none
+    of it went red when the fix under test was reverted, because none of it
+    was testing the fix. #1492 owns the real mechanism.
     """
 
-    # ⛔ `--only=X` and a backslash-continued list are both legal and both were
-    # invisible to the first cut of this regex (`--only\s+([A-Za-z0-9_,]+)`).
-    # That matters: the CI string is already 118 characters, so a line break is
-    # the most likely next edit to it, and `validate_all --only=name` runs fine.
-    # A scanner narrower than the thing it guards is the defect it guards
-    # against, wearing the guard's name.
     _ONLY_RE = r"--only[= \t]+((?:[A-Za-z0-9_,]|,\s*\\\s*\n\s*|\\\s*\n\s*)+)"
+    _CALLERS = ["Makefile", ".github/workflows/docs-ci.yaml"]
+    _GATE = "cli_default_drift"
 
     @classmethod
-    def _only_names(cls, text):
+    def _only_lists(cls, text):
         import re
-        out = []
-        for m in re.finditer(cls._ONLY_RE, text):
-            raw = re.sub(r"\\\s*\n\s*", "", m.group(1))
-            out.append([n for n in raw.split(",") if n.strip()])
-        return out
+        return [[n for n in re.sub(r"\\\s*\n\s*", "", m.group(1)).split(",") if n.strip()]
+                for m in re.finditer(cls._ONLY_RE, text)]
+
+    def _read(self, rel):
+        from pathlib import Path
+        return (Path(va.__file__).resolve().parents[2]
+                / rel).read_text(encoding="utf-8")
+
+    def _selects(self, text):
+        return any(self._GATE in names for names in self._only_lists(text))
+
+    @pytest.mark.parametrize("rel", _CALLERS)
+    def test_the_gate_is_named_in_the_only_list(self, rel):
+        """⛔ The control runs through the same predicate as the assertion,
+        deliberately: `assert any(...)` over a scan is satisfied by anything
+        that makes the scan find less, and a separate control test over the
+        scan HELPER does not cover that -- measured, the short-circuited
+        assertion survived while the helper was still exercised.
+        """
+        text = self._read(rel)
+        assert self._only_lists(text), (
+            f"no `--only` list could be read out of {rel} at all -- this "
+            f"assertion would be vacuous, so it fails loudly instead of "
+            f"passing quietly")
+        assert self._selects(text), (
+            f"no `--only` in {rel} names `{self._GATE}`. It stays in TOOLS, "
+            f"every other assertion stays green, and nothing runs it (#1492)."
+            f"{NL}Lists read: {self._only_lists(text)}")
+        assert not self._selects(text.replace("," + self._GATE, "")), (
+            f"control: removing `{self._GATE}` from {rel} left this green, so "
+            f"the assertion above cannot be detecting it")
+
+
+# ============================================================
+
+def _parser_boolean_flags():
+    """Every ``store_true`` flag the parser accepts, read from the source.
+
+    ⛔ Derived, not listed. A flag added later joins the parametrize below on
+    its own; a hand-written list would have to be remembered, and the reason
+    that parametrize exists is that a hand-written witness — one mode — let
+    every other mode bypass the guard undetected.
+
+    Two flags are excluded on purpose, and both are asserted to still exist so
+    a rename cannot empty the list quietly:
+
+      ``--list``   returns BEFORE the guard, deliberately — it is the route the
+                   failure message points at, so it has to keep working while
+                   the invocation that produced that message is still on the
+                   command line. Pinned by
+                   ``test_list_still_works_alongside_a_bad_only``.
+      ``--watch``  polls forever; it has its own test that replaces
+                   ``_run_watch`` so a regression fails instead of hanging.
+    """
+    import ast
+    from pathlib import Path
+    src = Path(va.__file__).with_suffix(".py").read_text(encoding="utf-8")
+    flags = []
+    for node in ast.walk(ast.parse(src)):
+        if not isinstance(node, ast.Call):
+            continue
+        if getattr(node.func, "attr", None) != "add_argument":
+            continue
+        if not any(kw.arg == "action"
+                   and getattr(kw.value, "value", None) == "store_true"
+                   for kw in node.keywords):
+            continue
+        for a in node.args:
+            if isinstance(a, ast.Constant) and str(a.value).startswith("--"):
+                flags.append(a.value)
+    assert flags, "no store_true flags parsed; the parametrize below is vacuous"
+    excluded = {"--list", "--watch"}
+    missing = sorted(excluded - set(flags))
+    assert not missing, (
+        f"the documented exclusions {missing} are no longer parser flags; the "
+        f"exclusion list has gone stale and is now hiding a real mode")
+    return sorted(set(flags) - excluded)
+
+
+_BOOL_FLAGS = _parser_boolean_flags()
+
+
+class TestUnknownCheckNames:
+    """A requested check name nothing answers to is EXIT_CALLER_ERROR (#1620).
+
+    Measured on `cb93a9ff` (this branch's parent) before this change,
+    each row alongside a control that had to behave differently and did:
+
+    ======================================  ===  ==========================
+    invocation                               rc   what the operator saw
+    ======================================  ===  ==========================
+    [control] --only versions                 0   1/1 passed, 32 skipped
+    --only cli_default_drift_typo             0   Result: All tools skipped
+    --only versions,cli_default_drift_typo    0   1/1 passed, 32 skipped
+    --skip nonexistent_check --only versions  0   (no mention of it at all)
+    --only versions --skip versions           0   both a skipped row AND a
+                                                  passed row, for `versions`
+    ======================================  ===  ==========================
+
+    Row 3 is the one that matters. Both automatic callers pass a long list of
+    names to `--only`, and this runner is the required status check
+    `Drift Detection (validate_all.py)` — so one misspelled name reported a
+    clean pass, at rc 0, with a real planted drift sitting unlooked-at.
+    ⚠️ How long those lists are is deliberately not written down here: it is
+    a number someone would have to come back and edit, and what actually has
+    to hold about them is asserted instead, by
+    `TestTheGateIsStillSelected`.
+
+    Scope, stated so a green run is not read for more than it earns:
+
+      COVERED      the NAME axis — a `--only` / `--skip` value that resolves
+                   to no registered check.
+      NOT COVERED  the sibling FLAG axis (a flag supplied and silently
+                   ignored). ⛔ Named, never counted: the first draft of this
+                   paragraph gave a count, and a blind review immediately
+                   found an equal number it had not reached. The two families
+                   are —
+                     * SELECTION: one flag quietly wins over another (e.g.
+                       `--smart` under `--only`, via `if args.smart and not
+                       only_set`).
+                     * EARLY RETURN: a branch exits before later flags are
+                       read (the `--watch` dispatch; `--ci`'s exit inside the
+                       run loop, which is ahead of the summary and of every
+                       flag handled after it).
+                   The per-flag measurements live in #1695, which is a
+                   snapshot by construction — unlike this docstring, which
+                   someone would otherwise have to maintain.
+    """
+
+    # ⛔ A second, INDEPENDENT literal on purpose — not `va.EXIT_CALLER_ERROR`.
+    # Binding it to the constant the runner exits with would make the
+    # assertion true by construction: the mutation `sys.exit(1)` in place of
+    # `sys.exit(EXIT_CALLER_ERROR)` is killed here only because the two sides
+    # are written down separately. This is a contract value (`_lib_exitcodes`,
+    # dev-rules #13), not a measurement — nobody comes back to edit it.
+    _CALLER_ERROR = 2
+
+    # Chosen for the shapes a membership test gets wrong, not one obvious typo:
+    #   cli_default_drift_typo — the measured CI-list misspelling
+    #   version                — a PREFIX of a real name; an accept test built
+    #                            on substring matching would take it
+    #   VERSIONS               — case variant
+    #   zz_not_a_check         — plainly absent
+    _ABSENT = ("cli_default_drift_typo", "version", "VERSIONS",
+               "zz_not_a_check")
 
     @staticmethod
-    def _callers():
-        """Every file that invokes validate_all, found rather than listed.
+    def _known():
+        return {name for name, _, _, _ in TOOLS}
 
-        ⛔ The first cut hard-coded two paths, so a third automatic caller
-        would have been outside the scan surface entirely — measured: adding a
-        second `--only=...TYPO` invocation to docs-ci.yaml left the suite green.
+    @staticmethod
+    def _recording_run_one(calls):
+        def run_one(short_name, script_path, tool_args, project_root):
+            calls.append(short_name)
+            return (short_name, "pass", 0.1, "ok", "output")
+        return run_one
+
+    # ---- the probes themselves ------------------------------------------
+
+    def test_the_probe_names_really_are_absent(self):
+        """Control for every assertion below: if one of these ever became a
+        real check name, its test would pass for the wrong reason."""
+        assert self._ABSENT, (
+            "the probe tuple is empty; every parametrize below collapses to "
+            "zero cases and this control passes vacuously")
+        assert not (set(self._ABSENT) & self._known())
+
+    # ---- the accepted set is exactly the registry, both directions ------
+
+    def test_every_registered_name_is_accepted(self):
+        """Pins the ACCEPT set rather than a list of rejected spellings.
+
+        A reject-list is structurally blind to "one more thing got accepted".
+        This direction is what goes red if the guard's source is narrowed —
+        e.g. derived from FIX_COMMANDS, a strict subset, instead of TOOLS.
         """
-        from pathlib import Path
-        root = Path(va.__file__).resolve().parents[2]
-        hits = []
-        for pat in ("Makefile", ".github/workflows/*.yml",
-                    ".github/workflows/*.yaml", "scripts/**/*.sh",
-                    "*.mk", "Makefile.*"):
-            for p in root.glob(pat):
-                if p.is_file() and "validate_all" in p.read_text(
-                        encoding="utf-8", errors="replace"):
-                    hits.append(p)
-        return root, sorted(set(hits))
+        known = self._known()
+        assert va._unknown_check_names(known, set()) == []
+        assert va._unknown_check_names(set(), known) == []
 
-    def test_every_only_name_is_a_registered_tool(self):
-        root, callers = self._callers()
-        assert callers, "no validate_all caller found; this pin is now vacuous"
-        known = {name for name, _, _, _ in TOOLS}
-        seen_any = False
-        for p in callers:
-            for names in self._only_names(p.read_text(encoding="utf-8")):
-                seen_any = True
-                unknown = [n for n in names if n not in known]
-                assert not unknown, (
-                    f"{p.relative_to(root)} passes --only {unknown}, which "
-                    f"validate_all drops silently — that leg reports success "
-                    f"having run nothing.")
-        assert seen_any, (
-            "found validate_all callers but parsed no --only list out of any "
-            "of them; the regex has stopped matching.")
+    @pytest.mark.parametrize("absent", _ABSENT)
+    def test_nothing_outside_the_registry_is_accepted(self, absent):
+        assert va._unknown_check_names({absent}, set()) == \
+            [("--only", [absent])]
+        assert va._unknown_check_names(set(), {absent}) == \
+            [("--skip", [absent])]
 
-    @pytest.mark.parametrize("rel,name", [
-        ("Makefile", "cli_default_drift"),
-        (".github/workflows/docs-ci.yaml", "cli_default_drift"),
+    def test_both_flags_are_attributed_separately(self):
+        """The operator has to be told WHICH flag to go and look at."""
+        assert va._unknown_check_names({"zz_a", "versions"}, {"zz_b"}) == \
+            [("--only", ["zz_a"]), ("--skip", ["zz_b"])]
+
+    # ---- the call site (the function above proves nothing on its own) ----
+
+    @pytest.mark.parametrize("mode", [[]] + [[f] for f in _BOOL_FLAGS],
+                             ids=["bare"] + [f.lstrip("-") for f in _BOOL_FLAGS])
+    def test_main_rejects_an_unknown_only_name(self, monkeypatch, capsys,
+                                               cli_argv, mode, tmp_path):
+        """⛔ Parametrised over MODES, not just the bare call.
+
+        The guard sits ahead of every mode dispatch, and the source says so —
+        but the first cut witnessed that for `--watch` alone. Measured then:
+        making the guard conditional (`if problems and not args.smart:`, and
+        the same for `--fix` / `--parallel` / `--json` / `--ci`) left the
+        whole suite green, every time. A prose claim about all modes, with an
+        assertion about one. This turns the claim into the assertion.
+        """
+        monkeypatch.setattr(va, "BASELINE_FILE", tmp_path / "baseline.json")
+        monkeypatch.setattr(va, "PROFILE_CSV", tmp_path / "profile.csv")
+        calls = []
+        monkeypatch.setattr(va, "_run_one", self._recording_run_one(calls))
+        cli_argv('validate_all', *mode,
+                 '--only', 'versions,cli_default_drift_typo')
+        with pytest.raises(SystemExit) as exc:
+            va.main()
+        assert exc.value.code == self._CALLER_ERROR, (
+            f"{mode or ['(no mode flag)']} must not carry the guard past the "
+            f"unknown name")
+        assert calls == [], (
+            "a rejected invocation must not run anything — reporting on a "
+            "partial run is the failure mode this replaces")
+        err = capsys.readouterr().err
+        assert "cli_default_drift_typo" in err, \
+            "the message has to name the offending value"
+        assert "--list" in err, \
+            "the message has to point at a route to the right spelling"
+        assert "--only" in err.splitlines()[0], (
+            "the message has to name the flag the operator typed. Measured: "
+            "swapping the two arguments at the call site made it say `--skip` "
+            "for an `--only` typo, and nothing went red — while both automatic "
+            "callers pass only `--only`, so CI would have pointed at a flag "
+            "that is not in the command")
+
+    def test_the_mode_list_is_the_parsers_own_set(self):
+        """⛔ Anti-vacuity for the parametrize above, from an INDEPENDENT source.
+
+        Measured: making `_parser_boolean_flags()` return `["--verbose"]` left
+        the whole suite green — the parametrize just ran fewer cases, which is
+        what a quantifier with no floor looks like. A count would rot with the
+        next flag, and a floor derived the same way (re-reading the AST) would
+        be a parallel rewrite of the thing it guards. So compare against
+        argparse's OWN usage rendering, produced by the parser object rather
+        than by reading its source: `[--ci]` is boolean, `[--skip SKIP]` is
+        not, and the two exclusions have to be spelled out here too.
+        """
+        import re as _re
+        r = subprocess.run(
+            [sys.executable, va.__file__, "--help"],
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=60)
+        assert r.returncode == 0, r.stderr[:300]
+        usage = r.stdout.split("\n\n", 1)[0]
+        rendered = set(_re.findall(r"\[(--[A-Za-z0-9-]+)\]", usage))
+        assert rendered, (
+            "parsed no boolean flags out of argparse's usage line; this floor "
+            "is measuring nothing")
+        assert set(_BOOL_FLAGS) == rendered - {"--list", "--watch"}, (
+            f"the derived mode list and argparse's own usage disagree: "
+            f"derived-only={sorted(set(_BOOL_FLAGS) - rendered)}, "
+            f"usage-only={sorted(rendered - set(_BOOL_FLAGS) - {'--list', '--watch'})}")
+
+    @pytest.mark.parametrize("typo,want", [
+        ("VERSIONS", "versions"),
+        ("Cli_Default_Drift", "cli_default_drift"),
+        ("TOOL_MAP", "tool_map"),
     ])
-    def test_the_gate_is_actually_selected(self, rel, name):
-        """⛔ ⊆-TOOLS is not enough: DELETING a name from both lists leaves it
-        registered-but-never-run, which is #1492's shape and the thing this PR
-        spends a paragraph describing. Measured: removing `cli_default_drift`
-        from both lists kept 129 tests green and `check_orphan_lint --ci` at
-        `✓ All 93 executable lints are wired to a runner`.
-        """
-        from pathlib import Path
-        root = Path(va.__file__).resolve().parents[2]
-        lists = self._only_names((root / rel).read_text(encoding="utf-8"))
-        assert any(name in names for names in lists), (
-            f"{rel} no longer selects `{name}`. It stays in TOOLS, every "
-            f"existing assertion stays green, and it never runs again.")
+    def test_a_case_variant_still_gets_the_safe_remedy(self, typo, want):
+        """⛔ difflib is case-sensitive, so an all-caps typo scored under the
+        cutoff and the message offered NO name at all -- leaving `--list` as
+        the only way out, which is the expensive one.
 
-    @pytest.mark.parametrize("text,expected", [
-        ("--only versions,cli_default_drift_typo",
-         [["versions", "cli_default_drift_typo"]]),
-        ("--only=versions,cli_default_drift_typo",
-         [["versions", "cli_default_drift_typo"]]),
-        ("--only versions,\\\n  cli_default_drift_typo",
-         [["versions", "cli_default_drift_typo"]]),
-    ], ids=["space", "equals", "continuation"])
-    def test_the_pin_would_catch_a_typo(self, text, expected):
-        """Control: without this, the tests above are satisfied by an
-        `_only_names` that has stopped matching anything."""
-        known = {name for name, _, _, _ in TOOLS}
-        assert self._only_names(text) == expected
-        assert [n for n in expected[0] if n not in known] == \
-            ["cli_default_drift_typo"]
+        The design of this whole message is "the safe remedy is also the
+        cheapest, and it is on line 2". That guarantee was silently absent for
+        this input class, and `VERSIONS` was already one of the probes here:
+        the tests only asserted it was REJECTED, never that the rejection was
+        usable (#1620).
+        """
+        msg = va._unknown_check_names_message([("--only", [typo])])
+        assert "Did you mean" in msg, (
+            "no suggestion at all for %r; the operator's only route is --list"
+            % typo)
+        assert want in msg, (typo, msg)
+
+
+    @pytest.mark.parametrize("extra", [
+        [], ["--only", "versions"], ["--smart"], ["--ci"],
+        ["--watch", "--only", "versions"], ["--parallel"],
+    ], ids=["bare", "only", "smart", "ci", "watch-only", "parallel"])
+    def test_the_message_is_the_same_in_every_mode(
+            self, capsys, cli_argv, extra):
+        """⛔ The property three rounds of review died on.
+
+        The message used to predict what the run would do, and the builder
+        cannot see the mode: `--smart` fills the selection AFTER this guard,
+        and `--watch` never reads `--only` at all. So every mode-dependent
+        clause was false for some caller -- measured, in this order:
+          * "deleting the name stops running it" -- false for a sole name,
+            which runs everything instead;
+          * "EVERY registered check runs" under `--skip` -- false whenever
+            `--only` narrowed the run, and BOTH automatic callers pass one;
+          * the `--only`-aware rewrite of that -- false under `--smart` (the
+            selection is not filled yet) and under `--watch` (`--only` is
+            read by nobody), and it told a watch user to edit a list that
+            mode ignores.
+        Each fix invented the next lie. What is pinned now is that there is
+        nothing left to be mode-dependent: same bytes, every mode.
+        """
+        cli_argv('validate_all', *(extra + ['--skip', 'glosary']))
+        with pytest.raises(SystemExit) as exc:
+            va.main()
+        assert exc.value.code == 2
+        err = capsys.readouterr().err
+        assert err == va._unknown_check_names_message(
+            [("--skip", ["glosary"])]) + chr(10), err
+        for predicted in ("EVERY registered check", "already narrowed",
+                          "take it out of the --only list", "will then RUN"):
+            assert predicted not in err, (
+                "%r predicts the run; the builder cannot know the mode" %
+                predicted)
+
+    def test_each_flag_gets_its_own_consequence(self):
+        """⛔ An early draft split the WARNING but left one shared body
+        sentence -- `--only`'s failure shape, printed under `--skip` too --
+        and the test of the day stayed green because it only read the
+        warning. What is pinned is the property, not the sentences: each
+        flag's block names that flag, and the two are not the same text.
+        """
+        only = va._unknown_check_names_message([("--only", ["zz_not_a_check"])])
+        skip = va._unknown_check_names_message([("--skip", ["zz_not_a_check"])])
+        assert "--only:" in only and "--skip:" not in only, only
+        assert "--skip:" in skip and "--only:" not in skip, skip
+        assert only != skip
+        both = va._unknown_check_names_message(
+            [("--only", ["tool_mapp"]), ("--skip", ["glossaryy"])])
+        assert "--only:" in both and "--skip:" in both, (
+            "when both flags are wrong the operator needs both consequences")
+
+
+    def test_the_message_is_ascii_so_it_survives_a_cp950_console(self):
+        """⚠️ This text goes to stderr, and `try_utf8_stdout` patches stdout
+        only (by its own documented design). Measured before: on a cp950
+        console the warning line degraded to `\\u26d4 … �X …` — the one line
+        that carries the severity. Severity now rides on the word, not a glyph.
+        """
+        for problems in ([("--only", ["zz"])], [("--skip", ["zz"])],
+                         [("--only", ["tool_mapp"])]):
+            msg = va._unknown_check_names_message(problems)
+            msg.encode("ascii")  # raises if a glyph sneaks back in
+
+    def test_the_close_match_is_derived_not_canned(self):
+        """A suggestion only appears when the registry actually has a
+        neighbour; an unrelated name must not be handed a random check.
+
+        ⚠️ The multi-name case is pinned too: measured, an earlier shape let
+        the first name without a neighbour suppress the hint for all of them.
+        """
+        near = va._unknown_check_names_message([("--only", ["tool_mapp"])])
+        assert "Did you mean (--only): tool_map" in near
+        far = va._unknown_check_names_message([("--only", ["zz_not_a_check"])])
+        assert "Did you mean" not in far
+        mixed = va._unknown_check_names_message(
+            [("--only", ["zz_not_a_check", "tool_mapp"])])
+        assert "tool_map" in mixed, (
+            "a name with no neighbour must not suppress the others' hints")
+
+    def test_main_rejects_an_unknown_skip_name(self, monkeypatch, capsys,
+                                               cli_argv):
+        calls = []
+        monkeypatch.setattr(va, "_run_one", self._recording_run_one(calls))
+        cli_argv('validate_all', '--skip', 'nonexistent_check',
+                 '--only', 'versions')
+        with pytest.raises(SystemExit) as exc:
+            va.main()
+        assert exc.value.code == self._CALLER_ERROR
+        assert calls == []
+        assert "nonexistent_check" in capsys.readouterr().err
+
+    def test_main_accepts_the_same_shape_spelled_correctly(self, monkeypatch,
+                                                           capsys, cli_argv):
+        """Control for the two above: same argv shape, real names.
+
+        Without it, an implementation that rejects every `--only` whatsoever
+        satisfies them both.
+
+        ⚠️ The names are DERIVED from TOOLS. Hard-coded ones turned a correct,
+        complete rename of a check into `assert 2 == 0` with the offending
+        name only in captured stderr — measured by blind review, renaming
+        `cli_default_drift` everywhere it is registered and selected.
+        """
+        picked = [n for n, _, _, _ in TOOLS][:2]
+        calls = []
+        monkeypatch.setattr(va, "_run_one", self._recording_run_one(calls))
+        cli_argv('validate_all', '--only', ",".join(picked))
+        with pytest.raises(SystemExit) as exc:
+            va.main()
+        assert exc.value.code == 0, (
+            f"{picked} are registered checks; this invocation must be accepted "
+            f"(stderr: {capsys.readouterr().err.strip()[:200]!r})")
+        assert sorted(calls) == sorted(picked)
+
+    def test_list_still_works_alongside_a_bad_only(self, capsys, cli_argv):
+        """⛔ `--list` returns before the guard, and that is deliberate.
+
+        It is the route the failure message points at, so an operator holding
+        a bad `--only` on the command line has to be able to append `--list`
+        and get an answer. Pinned because the guard's placement ("before every
+        mode dispatch") otherwise reads as if it should cover this one too.
+        """
+        cli_argv('validate_all', '--list', '--only', 'zz_not_a_check')
+        assert va.main() is None
+        out = capsys.readouterr().out
+        for name, _, _, _ in TOOLS:
+            assert name in out, f"--list must still show {name}"
+
+    # ---- watch mode re-parses --skip itself, so the guard must precede it -
+
+    def test_watch_mode_is_rejected_before_it_starts(self, monkeypatch,
+                                                    cli_argv):
+        """`_run_watch` builds its own skip_set (it is handed `args`, not our
+        parsed sets), so an unknown name there would be dropped in its filter
+        instead.
+
+        `_run_watch` is replaced because the real one polls forever: a
+        regression here would HANG rather than fail, and a hang reads as
+        infrastructure trouble rather than as this assertion.
+        """
+        entered = []
+        monkeypatch.setattr(va, "_run_watch",
+                            lambda *a, **k: entered.append("started"))
+        cli_argv('validate_all', '--watch', '--skip', 'zz_not_a_check')
+        with pytest.raises(SystemExit) as exc:
+            va.main()
+        assert exc.value.code == self._CALLER_ERROR
+        assert entered == []
+
+    def test_watch_mode_still_starts_for_a_registered_name(self, monkeypatch,
+                                                           cli_argv):
+        """Control: the guard must not have turned `--watch` into a dead flag.
+        """
+        entered = []
+        monkeypatch.setattr(va, "_run_watch",
+                            lambda *a, **k: entered.append("started"))
+        cli_argv('validate_all', '--watch', '--skip', 'versions')
+        assert va.main() is None
+        assert entered == ["started"]
+
+    # ---- symptom 3: --skip subtracts from --only ------------------------
+
+    def test_skip_subtracts_from_only(self, monkeypatch, capsys, cli_argv):
+        """Asserted on what EXECUTED, not on the report text.
+
+        Before: `--skip` was ignored whenever `--only` was present, while the
+        skipped-items loop printed `... skipped` for it anyway, so a single
+        run reported both outcomes for one check. Pinning execution means a
+        change to the report cannot satisfy this on its own.
+        """
+        keep, drop = [n for n, _, _, _ in TOOLS][:2]
+        calls = []
+        monkeypatch.setattr(va, "_run_one", self._recording_run_one(calls))
+        cli_argv('validate_all', '--only', f"{drop},{keep}", '--skip', drop)
+        with pytest.raises(SystemExit) as exc:
+            va.main()
+        assert exc.value.code == 0, (
+            f"both {drop!r} and {keep!r} are registered; only the subtraction "
+            f"should change what runs "
+            f"(stderr: {capsys.readouterr().err.strip()[:200]!r})")
+        assert calls == [keep], (
+            f"--skip {drop} must remove it from the --only selection")
+
+    def test_an_empty_intersection_runs_nothing_at_exit_zero(self, monkeypatch,
+                                                             capsys,
+                                                             cli_argv):
+        """Every name existed; asking for an empty selection is a request to
+        run nothing, not a bad invocation.
+
+        This is the line between #1620 and a rule that would reject legal
+        use: the predicate is "does a check answer to this name", never "did
+        the selection come out empty".
+        """
+        import re
+        one = TOOLS[0][0]
+        calls = []
+        monkeypatch.setattr(va, "_run_one", self._recording_run_one(calls))
+        cli_argv('validate_all', '--only', one, '--skip', one)
+        with pytest.raises(SystemExit) as exc:
+            va.main()
+        assert exc.value.code == 0
+        assert calls == []
+        out = capsys.readouterr().out
+        assert "All tools skipped" in out
+        # And the report no longer states two outcomes for one check: exactly
+        # one row, naming that check, and its verdict is `skipped`.
+        rows = [(name, tail.strip()) for _sym, name, tail
+                in re.findall(r"^(\S+)\s+(\S+)\s+\.\.\.\s*(.*)$", out, re.M)]
+        assert rows == [(one, "skipped")], (
+            "before #1620 this printed a skipped row AND a passed row for the "
+            "same check in one run")
+
+    @pytest.mark.parametrize("value", ["", "   ", ",", " , ,"],
+                             ids=["empty", "blank", "comma", "commas"])
+    @pytest.mark.parametrize("flag", ["--only", "--skip"])
+    def test_a_value_that_names_nothing_means_no_restriction(
+            self, monkeypatch, capsys, cli_argv, flag, value):
+        """A value that parses to zero names is NOT an unknown name.
+
+        ⚠️ Pinned as intent rather than left silent (blind review). `--only
+        "$CHECKS"` with an empty variable runs everything, which is the
+        fail-safe direction — but "the tool did something other than what the
+        argument said" with nothing written down is exactly #1620's shape, so
+        it gets an assertion either way. The guard's predicate stays "does a
+        check answer to this name"; an absent name is not an unknown one.
+        """
+        calls = []
+        monkeypatch.setattr(va, "_run_one", self._recording_run_one(calls))
+        cli_argv('validate_all', flag, value)
+        with pytest.raises(SystemExit) as exc:
+            va.main()
+        assert exc.value.code == 0, (
+            f"{flag} {value!r} names no check at all, so there is nothing for "
+            f"the guard to reject "
+            f"(stderr: {capsys.readouterr().err.strip()[:200]!r})")
+        assert len(calls) == len(TOOLS), (
+            f"{flag} {value!r} restricts nothing, so every registered check "
+            f"runs")
+
+    def test_whitespace_around_names_is_accepted(self, monkeypatch, capsys,
+                                                 cli_argv):
+        """⛔ `--only "a, b"` is a legal invocation and must stay legal.
+
+        The runner strips each name before matching. Measured with that strip
+        removed: `--only "links, mermaid"` became `exit 2` naming a check
+        called `' mermaid'` — a caller error for a command that works. #1620's
+        whole value rests on `exit 2` meaning the operator really did typo, so
+        the strip is load-bearing and had no test.
+        """
+        first, second = [n for n, _, _, _ in TOOLS][:2]
+        calls = []
+        monkeypatch.setattr(va, "_run_one", self._recording_run_one(calls))
+        cli_argv('validate_all', '--only', f" {first},  {second} ")
+        with pytest.raises(SystemExit) as exc:
+            va.main()
+        assert exc.value.code == 0, (
+            f"padded names must be accepted "
+            f"(stderr: {capsys.readouterr().err.strip()[:200]!r})")
+        assert sorted(calls) == sorted([first, second])
