@@ -914,11 +914,55 @@ def check_conflict() -> CheckResult:
     )
 
 
+def _prepush_hook_installed() -> bool:
+    """pre-commit 的 pre-push hook 在這個 clone 上真的裝了嗎？
+
+    ⛔ #1664 續辦。`pre-commit install`——也就是 repo 自己的安裝說明教人跑的
+    那一條——只裝 **pre-commit** 那一層。三支 `stages: [pre-push]` 的守衛
+    （擋直推 main／要求 preflight marker／mkdocs strict）需要
+    `--hook-type pre-push`，而 repo 裡沒有任何可執行路徑會跑它。實測：全新
+    clone 照文件做，`.git/hooks/pre-push` 不存在，直推 main 成功、畫面滿是
+    綠色的 pre-commit 層 hook——與 #1664 修掉的那張畫面同形，只是高一層。
+
+    用 `--git-path` 而不是 `--git-dir`：在 worktree 裡 git dir 是
+    `.git/worktrees/<name>`，但 hook 住在**主 repo** 的 `.git/hooks`，
+    `--git-path` 會解到正確位置。內容比對找的是 pre-commit 產生 hook 時寫進去
+    的那個參數，所以一支手寫的舊 pre-push hook 不會被讀成「已安裝」。
+    """
+    r = run(["git", "rev-parse", "--git-path", "hooks/pre-push"], timeout=30)
+    if r.returncode != 0:
+        return False
+    path = Path((r.stdout or "").strip())
+    if not path.is_file():
+        return False
+    try:
+        return "--hook-type=pre-push" in path.read_text(
+            encoding="utf-8", errors="replace"
+        )
+    except OSError:
+        return False
+
+
 def check_local_hooks() -> CheckResult:
-    """跑 pre-commit run --all-files。"""
+    """跑 pre-commit run --all-files，並確認 pre-push 那一層真的裝了。"""
+    if not _prepush_hook_installed():
+        return CheckResult(
+            "Local hooks",
+            Status.FAIL,
+            "pre-push hooks 未安裝——擋直推 main 那道閘門現在不存在",
+            detail=(
+                "修法（一次性）：\n"
+                "    pre-commit install --hook-type pre-push\n"
+                "`pre-commit install` 只裝 pre-commit 那一層；三支 "
+                "stages: [pre-push] 的守衛需要上面那個旗標（#1664）。\n"
+                "跳過本項：make pr-preflight-quick（--skip-hooks）"
+            ),
+        )
     r = run(["pre-commit", "run", "--all-files"], timeout=300)
     if r.returncode == 0:
-        return CheckResult("Local hooks", Status.PASS, "pre-commit 全部通過")
+        return CheckResult(
+            "Local hooks", Status.PASS, "pre-commit 全部通過（pre-push 層已安裝）"
+        )
 
     # Count failures
     failed = re.findall(r"^(.+?)\.+Failed$", r.stdout or "", re.MULTILINE)

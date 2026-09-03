@@ -60,6 +60,83 @@ def _init_git(repo: Path) -> str:
     return sha
 
 
+class TestPrepushHookInstalled:
+    """`pr_preflight._prepush_hook_installed` — the #1664 install-path check.
+
+    ⛔ The middle case is the whole reason it exists: `pre-commit install` —
+    what the repo's own install line told people to run — leaves the pre-push
+    hook uninstalled. Measured on a fresh clone following that instruction: no
+    `.git/hooks/pre-push`, and `git push` straight to main succeeded behind a
+    full screen of green pre-commit-stage hooks.
+
+    The second test is the negative control that keeps the probe from decaying
+    into "some file is there": a hand-written pre-push hook is not pre-commit's,
+    so the three `stages: [pre-push]` guards are still not wired.
+    """
+
+    @staticmethod
+    def _repo(tmp_path):
+        env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e"}
+        subprocess.run(["git", "init", "-q", "-b", "main", str(tmp_path)],  # subprocess-timeout: ignore
+                       check=True, env=env)
+        (tmp_path / "a.txt").write_text("hi", encoding="utf-8")
+        (tmp_path / ".pre-commit-config.yaml").write_text(
+            "repos: []\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(tmp_path), "add", "-A"],  # subprocess-timeout: ignore
+                       check=True, env=env)
+        subprocess.run(  # subprocess-timeout: ignore
+            ["git", "-C", str(tmp_path), "-c", "core.hooksPath=/dev/null",
+             "commit", "-q", "-m", "init"], check=True, env=env)
+
+    @staticmethod
+    def _install(tmp_path, *args):
+        return subprocess.run(  # subprocess-timeout: ignore
+            [sys.executable, "-X", "utf8", "-m", "pre_commit", "install", *args],
+            cwd=tmp_path, capture_output=True, text=True,
+        ).returncode
+
+    def test_absent_then_precommit_only_then_prepush(self, tmp_path, monkeypatch):
+        # ⛔ Not a bare `importorskip`. This is the only test that separates
+        # `pre-commit install` from `pre-commit install --hook-type pre-push`,
+        # so if a CI job loses pre-commit from its `pip install` the assertions
+        # below do not fail — they vanish, and the job reports green. That is
+        # the #1664 shape one level up. Same flag and same fail-closed shape as
+        # tests/ops/test_prepush_hook_wiring.py (`VIBE_REQUIRE_PRE_COMMIT`),
+        # which is the sibling this file was measured against.
+        if os.environ.get("VIBE_REQUIRE_PRE_COMMIT") == "1":
+            assert importlib.util.find_spec("pre_commit") is not None, (
+                "VIBE_REQUIRE_PRE_COMMIT=1 but `pre_commit` is not importable — "
+                "the pre-push install probe would have skipped silently. It is "
+                "installed by this job's pip install step."
+            )
+        else:
+            pytest.importorskip("pre_commit")
+        mod = _load()
+        self._repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+
+        assert mod._prepush_hook_installed() is False, "no hooks at all"
+
+        assert self._install(tmp_path) == 0
+        assert mod._prepush_hook_installed() is False, (
+            "`pre-commit install` on its own installs the pre-commit hook only "
+            "— reporting that as installed is the #1664 defect one level up"
+        )
+
+        assert self._install(tmp_path, "--hook-type", "pre-push") == 0
+        assert mod._prepush_hook_installed() is True
+
+    def test_a_hand_written_prepush_hook_does_not_count(self, tmp_path, monkeypatch):
+        mod = _load()
+        self._repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        hook = tmp_path / ".git" / "hooks" / "pre-push"
+        hook.parent.mkdir(parents=True, exist_ok=True)
+        hook.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8", newline="\n")
+        assert mod._prepush_hook_installed() is False
+
+
 class TestMarkerPython:
     def test_write_marker_creates_file(self, tmp_path, monkeypatch):
         mod = _load()

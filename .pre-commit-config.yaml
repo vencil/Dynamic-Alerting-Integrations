@@ -1,6 +1,15 @@
 # Pre-commit hooks for documentation & config drift prevention
-# Install: pip install pre-commit && pre-commit install
+# Install: pip install pre-commit && pre-commit install && pre-commit install --hook-type pre-push
 # Manual:  pre-commit run --all-files
+#
+# ⛔ BOTH install lines are required (#1664). `pre-commit install` on its own
+# installs the pre-commit hook ONLY — the three `stages: [pre-push]` guards
+# below (block direct push to main / require a preflight marker / mkdocs
+# strict) simply do not exist without the second command. Measured on a fresh
+# clone that followed the previous one-command instruction: no
+# `.git/hooks/pre-push`, and `git push` straight to main succeeded behind a
+# full screen of green pre-commit-stage hooks. `make pr-preflight` now fails
+# with this exact remedy when the pre-push hook is missing.
 #
 # These hooks run the lightweight CI checks locally before each commit,
 # catching drift issues early (tool-map, rule-pack stats, glossary, etc.).

@@ -176,8 +176,9 @@ lang: zh
 **規則**：任何變更走 feature branch → PR → owner 同意後 merge；命名 `feat/` / `fix/` / `chore/` / `docs/`。歷史教訓：多次未審核直推 main 後才發現問題。
 
 ✅ **Codified**：
-- `scripts/ops/protect_main_push.sh` pre-push hook（`pre-commit install --hook-type pre-push` 自動裝）攔截 main push
-- `make pr-preflight`（merge 前必跑）寫 `.git/.preflight-ok.<SHA>` marker；`scripts/ops/require_preflight_pass.sh` 走 `gh pr view` 狀態判斷（OPEN PR 才擋，WIP 直接放行）
+- `scripts/ops/protect_main_push.sh` pre-push hook 攔截 main push。⛔ **它不會自動裝**：`pre-commit install` 只裝 pre-commit 那一層，pre-push 那三支需要**另一條**指令 `pre-commit install --hook-type pre-push`（實測全新 clone 只跑前者 ⇒ `.git/hooks/pre-push` 不存在、直推 main 成功且滿螢幕綠）。`make pr-preflight` 現在會對「沒裝」直接 FAIL 並印出這條指令
+- `make pr-preflight`（merge 前必跑）寫 `.git/.preflight-ok.<SHA>` marker；`scripts/ops/require_preflight_pass.sh` 走 `gh pr list --head <branch> --state open` 判斷（OPEN PR 才擋，WIP 直接放行）。⛔ **不是 `gh pr view`**——該腳本在那段查詢的註解裡逐字寫明為何不能用它：`pr view` 對「這個分支沒有 PR」與「查詢本身失敗」回同一種非零，而這兩者必須落在閘門的相反側（⛔ 這裡刻意不寫行號：那個註解在 [#1664](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1664) 的改動中被往下推了 20 行，而三個載體裡的行號沒有一個跟著動）
+- ⚠️ 這兩支 pre-push guard 取得 refspec 的通道見 `scripts/ops/_prepush_refs.sh`；經 pre-commit 安裝時**只看得到一列 refspec**，而且是**字典序最前**的那一列、不是你在命令列先寫的那一個（[#1664](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1664) 殘差，量測與邊界見該檔檔頭與 `docs/internal/hook-vs-skill-coverage.md` §1）
 - 七項檢查：branch 身份 / behind main / conflict / local hooks / scope drift / CI 狀態 / PR mergeable
 
 **執行入口**（三條等價）：`make pr-preflight` ｜ `win_git_escape.bat pr-preflight [PR#]` ｜ `win_git_escape.ps1 pr-preflight [PR#]`。
