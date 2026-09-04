@@ -213,6 +213,63 @@ jobs:
                 f"max={worst['write_max']/1000:.1f} µs；"
                 f"載入 p99={worst['load_p99']/1e6:.2f} ms、max={worst['load_max']/1e6:.2f} ms。")
 
+          # ⛔ 上面那段只看最慢的一輪，而「最慢的一輪」可以由兩種完全相反的形狀
+          # 造成：每一次迭代都變慢（水位平移），或少數幾次迭代卡住（episode）。
+          # 兩者對機制 1 的意義相反——機制 1 預測的是 episode——但在 `load_sum`
+          # 這個總和上長得一模一樣。把 `load_sum` 在該輪自己的 p50 切開就分得出
+          # 來：`p50 × iters` 是水位，`load_sum − p50 × iters` 是水位以上的質量。
+          # ⚠️ 判準是哪一半**跟著 round total 動**（相關係數），不是哪一半比較大
+          # ——整條分布平移時兩者都會變大。
+          def _corr(x, y):
+              mx, my = st.mean(x), st.mean(y)
+              num = sum((a - mx) * (b - my) for a, b in zip(x, y))
+              den = (sum((a - mx) ** 2 for a in x) * sum((b - my) ** 2 for b in y)) ** 0.5
+              return num / den if den else float("nan")
+
+          # ⛔ 兩三個點的相關係數是 ±1 的擲硬幣，印出來只會被當成結論。門檻寫死
+          # 在這裡，而且不足時印的是「輪數不夠」——與「量了沒事」必須是兩行不同
+          # 的字。
+          MIN_ROUNDS_FOR_CORR = 5
+          print("\n### 這批 round-to-round 變異是什麼形狀\n")
+          if len(rows) < MIN_ROUNDS_FOR_CORR:
+              print(f"⚠️ 只有 {len(rows)} 輪，少於 {MIN_ROUNDS_FOR_CORR} 輪，"
+                    "**不印相關係數**——這是輪數不夠，不是形狀不明顯。")
+          else:
+              lvl = [r["load_p50"] * r["iters"] for r in rows]
+              abv = [r["load_sum"] - r["load_p50"] * r["iters"] for r in rows]
+              sd_t = st.stdev(tot)
+              print("| 分量 | corr(round total, ·) | 自身 sd | 自身 sd ÷ round total sd |")
+              print("|---|---|---|---|")
+              for nm, v in (("水位 `p50 × iters`", lvl), ("水位以上的質量", abv),
+                            ("`write_sum`", w)):
+                  print(f"| {nm} | {_corr(tot, v):+.3f} | {st.stdev(v)/1e6:.2f} ms |"
+                        f" {100*st.stdev(v)/sd_t if sd_t else float('nan'):.1f}% |")
+              print("\n⚠️ 相關係數說「哪一個跟著動」，最後一欄說「它最多能推動多少」。"
+                    "一個分量要當成因，兩欄都要成立——**相關係數自己分不出來**："
+                    "純水位平移與純 episode 兩種形狀下，水位那一列的相關係數分別是 "
+                    "+1.000 與 +0.791（皆為正且大），把兩者分開的是最後一欄的 "
+                    "150.8% vs 1.1%（合成資料實測，見 "
+                    "`docs/internal/audit-reports/bench-probe-2026-09/README.md`）。")
+              print("\n⛔ 最後一欄**不是** variance 分解，三列不會加總到 100%："
+                    "三個分量彼此相關，>100% 表示它被另一個分量抵銷掉一部分"
+                    "（水位平移時水位與『水位以上的質量』反向，實測 corr −0.999）。")
+
+          # 機制 1 的量級門檻。⭐ 這一段刻意**不依賴有沒有抓到 episode**：它問的是
+          # 「要產生 #1497 那個量級，寫入路徑得做到什麼」，然後拿它跟實際看到的最大
+          # 一次相比。一次什麼都沒抓到的執行也答得出這一題。
+          # ⛔ 它給的是對**已觀測** episode 的上界，不是「不可能更大」的證明。
+          TARGET_SWING_PP = 30.38 - 3.98   # #1497 同日三次 dispatch 的高低模差距
+          need = TARGET_SWING_PP / 100 * med
+          biggest = max(w) - st.median(w)
+          iters_per_round = rows[0]["iters"]
+          print(f"\n### 機制 1 要達到 #1497 的量級得做到什麼\n")
+          print(f"單側擺 {TARGET_SWING_PP:.2f}% 在 {med/1e6:.0f} ms 的一輪上是 **{need/1e6:.0f} ms**。"
+                f"本次 {len(rows)} 輪裡，`write_sum` 高於中位最多的一輪是 **{biggest/1e6:.1f} ms**"
+                f"（差 **{need/biggest:.0f}×**）。")
+          print(f"換算到每次迭代：中位輪的寫入平均 {st.median(w)/iters_per_round/1000:.1f} µs，"
+                f"要達標得在全部 {iters_per_round} 次迭代上平均 {need/iters_per_round/1e6:.2f} ms"
+                f"，即整個寫入路徑成本的 **{need/st.median(w):.0f}×**、而且是**持續**不是尖峰。")
+
           print("\n> ⛔ 判讀限制：本 job 只跑一台 runner、一個 job，跨輪散佈與 #1497 "
                 "觀察到的**跨 dispatch** 散佈不是同一個量。若上面的 spread 沒有重現 "
                 "#1497 的量級，那是**這次沒抓到**，不是「沒有」。")

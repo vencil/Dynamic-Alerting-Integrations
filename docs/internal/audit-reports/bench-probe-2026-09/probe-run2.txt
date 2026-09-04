@@ -1,0 +1,343 @@
+PROBEENV goos=linux goarch=amd64 numcpu=4 go=go1.26.7 iters=400 b.N=1
+PROBEROW round=0 bench_n=1 iters=400 write_p50=64752 write_p90=74420 write_p99=118272 write_max=141255 write_sum=26985998 load_p50=6508649 load_p90=15647692 load_p99=16985048 load_max=17766238 load_sum=3581029131
+PROBETAIL round=0 rank=0 iter=113 w=89408 l=17766238
+PROBETAIL round=0 rank=1 iter=108 w=66725 l=17391402
+PROBETAIL round=0 rank=2 iter=42 w=66374 l=17338054
+PROBETAIL round=0 rank=3 iter=27 w=68699 l=17005746
+PROBETAIL round=0 rank=4 iter=91 w=79520 l=16985048
+PROBETAIL round=0 rank=5 iter=39 w=67266 l=16869144
+PROBETAIL round=0 rank=6 iter=78 w=69150 l=16733023
+PROBETAIL round=0 rank=7 iter=56 w=68569 l=16687060
+PROBETAIL round=0 rank=8 iter=109 w=117500 l=16461876
+PROBETAIL round=0 rank=9 iter=49 w=88957 l=16338027
+PROBEENV goos=linux goarch=amd64 numcpu=4 go=go1.26.7 iters=400 b.N=30
+PROBEROW round=1 bench_n=30 iters=400 write_p50=64310 write_p90=75612 write_p99=90430 write_max=100750 write_sum=26547894 load_p50=6467814 load_p90=15825574 load_p99=18616897 load_max=20446462 load_sum=3569800886
+PROBETAIL round=1 rank=0 iter=39 w=84478 l=20446462
+PROBETAIL round=1 rank=1 iter=64 w=66154 l=19378778
+PROBETAIL round=1 rank=2 iter=65 w=74309 l=18962717
+PROBETAIL round=1 rank=3 iter=68 w=78177 l=18946057
+PROBETAIL round=1 rank=4 iter=67 w=76103 l=18616897
+PROBETAIL round=1 rank=5 iter=44 w=85751 l=18547260
+PROBETAIL round=1 rank=6 iter=51 w=72206 l=18554964
+PROBETAIL round=1 rank=7 iter=50 w=77196 l=18514725
+PROBETAIL round=1 rank=8 iter=71 w=69069 l=18374834
+PROBETAIL round=1 rank=9 iter=43 w=68699 l=18011814
+PROBEROW round=2 bench_n=30 iters=400 write_p50=64140 write_p90=73317 write_p99=85320 write_max=101931 write_sum=26299625 load_p50=6526840 load_p90=15744557 load_p99=18350337 load_max=21173321 load_sum=3577374332
+PROBETAIL round=2 rank=0 iter=20 w=85320 l=21173321
+PROBETAIL round=2 rank=1 iter=17 w=65262 l=20692458
+PROBETAIL round=2 rank=2 iter=18 w=83327 l=20606529
+PROBETAIL round=2 rank=3 iter=19 w=85320 l=20218008
+PROBETAIL round=2 rank=4 iter=21 w=66825 l=18350337
+PROBETAIL round=2 rank=5 iter=23 w=64391 l=16713610
+PROBETAIL round=2 rank=6 iter=45 w=67857 l=16702865
+PROBETAIL round=2 rank=7 iter=101 w=65723 l=16643992
+PROBETAIL round=2 rank=8 iter=46 w=101931 l=16462663
+PROBETAIL round=2 rank=9 iter=77 w=62498 l=16468625
+PROBEROW round=3 bench_n=30 iters=400 write_p50=64652 write_p90=73688 write_p99=117531 write_max=7703542 write_sum=34356056 load_p50=6519862 load_p90=15712373 load_p99=16804333 load_max=18148908 load_sum=3585928057
+PROBETAIL round=3 rank=0 iter=2 w=97483 l=18148908
+PROBETAIL round=3 rank=1 iter=397 w=7703542 l=10146154
+PROBETAIL round=3 rank=2 iter=83 w=68929 l=17355032
+PROBETAIL round=3 rank=3 iter=3 w=103444 l=17060174
+PROBETAIL round=3 rank=4 iter=0 w=117531 l=16849193
+PROBETAIL round=3 rank=5 iter=1 w=96501 l=16804333
+PROBETAIL round=3 rank=6 iter=38 w=64951 l=16621799
+PROBETAIL round=3 rank=7 iter=51 w=68980 l=16555185
+PROBETAIL round=3 rank=8 iter=73 w=63499 l=16512054
+PROBETAIL round=3 rank=9 iter=66 w=62878 l=16398481
+PROBEROW round=4 bench_n=30 iters=400 write_p50=65222 write_p90=76534 write_p99=96702 write_max=4479642 write_sum=31321118 load_p50=6503450 load_p90=15749938 load_p99=17032131 load_max=17658006 load_sum=3573266989
+PROBETAIL round=4 rank=0 iter=39 w=66234 l=17658006
+PROBETAIL round=4 rank=1 iter=70 w=66655 l=17193071
+PROBETAIL round=4 rank=2 iter=99 w=69721 l=17147696
+PROBETAIL round=4 rank=3 iter=25 w=68759 l=17101411
+PROBETAIL round=4 rank=4 iter=28 w=64000 l=17032131
+PROBETAIL round=4 rank=5 iter=53 w=67546 l=16876218
+PROBETAIL round=4 rank=6 iter=40 w=69440 l=16743075
+PROBETAIL round=4 rank=7 iter=68 w=63780 l=16400710
+PROBETAIL round=4 rank=8 iter=59 w=66805 l=16363591
+PROBETAIL round=4 rank=9 iter=104 w=68559 l=16259347
+PROBEROW round=5 bench_n=30 iters=400 write_p50=67497 write_p90=80221 write_p99=97804 write_max=1026617 write_sum=28705145 load_p50=6598613 load_p90=15843209 load_p99=16476902 load_max=17311211 load_sum=3597672224
+PROBETAIL round=5 rank=0 iter=45 w=68659 l=17311211
+PROBETAIL round=5 rank=1 iter=78 w=102152 l=16960621
+PROBETAIL round=5 rank=2 iter=77 w=65553 l=16802541
+PROBETAIL round=5 rank=3 iter=106 w=80592 l=16489149
+PROBETAIL round=5 rank=4 iter=96 w=77335 l=16476902
+PROBETAIL round=5 rank=5 iter=73 w=74169 l=16406134
+PROBETAIL round=5 rank=6 iter=103 w=74600 l=16373312
+PROBETAIL round=5 rank=7 iter=24 w=73688 l=16350788
+PROBETAIL round=5 rank=8 iter=81 w=74730 l=16294572
+PROBETAIL round=5 rank=9 iter=42 w=65122 l=16286414
+PROBEROW round=6 bench_n=30 iters=400 write_p50=66826 write_p90=78046 write_p99=114906 write_max=128882 write_sum=27768245 load_p50=6569998 load_p90=15980097 load_p99=18800775 load_max=19428969 load_sum=3596455506
+PROBETAIL round=6 rank=0 iter=44 w=123672 l=19428969
+PROBETAIL round=6 rank=1 iter=45 w=127229 l=19151424
+PROBETAIL round=6 rank=2 iter=38 w=112661 l=19067842
+PROBETAIL round=6 rank=3 iter=43 w=112772 l=19030233
+PROBETAIL round=6 rank=4 iter=41 w=109285 l=18800775
+PROBETAIL round=6 rank=5 iter=40 w=112822 l=18472271
+PROBETAIL round=6 rank=6 iter=42 w=116789 l=18210773
+PROBETAIL round=6 rank=7 iter=39 w=109615 l=17780172
+PROBETAIL round=6 rank=8 iter=46 w=114906 l=17581698
+PROBETAIL round=6 rank=9 iter=98 w=69431 l=17591495
+PROBEROW round=7 bench_n=30 iters=400 write_p50=67437 write_p90=88727 write_p99=120166 write_max=134732 write_sum=28731567 load_p50=6652665 load_p90=16101711 load_p99=18209985 load_max=20108543 load_sum=3649435136
+PROBETAIL round=7 rank=0 iter=39 w=104186 l=20108543
+PROBETAIL round=7 rank=1 iter=43 w=119244 l=19332055
+PROBETAIL round=7 rank=2 iter=42 w=99116 l=18626617
+PROBETAIL round=7 rank=3 iter=35 w=116429 l=18378671
+PROBETAIL round=7 rank=4 iter=34 w=110608 l=18209985
+PROBETAIL round=7 rank=5 iter=36 w=123983 l=18001877
+PROBETAIL round=7 rank=6 iter=45 w=96371 l=17868855
+PROBETAIL round=7 rank=7 iter=44 w=128010 l=17772178
+PROBETAIL round=7 rank=8 iter=37 w=118472 l=17569718
+PROBETAIL round=7 rank=9 iter=97 w=69410 l=17616651
+PROBEROW round=8 bench_n=30 iters=400 write_p50=64892 write_p90=73538 write_p99=86833 write_max=105539 write_sum=26698100 load_p50=6492495 load_p90=15767073 load_p99=16744484 load_max=17796318 load_sum=3570945425
+PROBETAIL round=8 rank=0 iter=23 w=71715 l=17796318
+PROBETAIL round=8 rank=1 iter=111 w=68699 l=17139431
+PROBETAIL round=8 rank=2 iter=50 w=74831 l=17124054
+PROBETAIL round=8 rank=3 iter=25 w=73037 l=17113883
+PROBETAIL round=8 rank=4 iter=71 w=70442 l=16744484
+PROBETAIL round=8 rank=5 iter=5 w=64792 l=16565199
+PROBETAIL round=8 rank=6 iter=105 w=66414 l=16305411
+PROBETAIL round=8 rank=7 iter=21 w=66665 l=16294627
+PROBETAIL round=8 rank=8 iter=96 w=68549 l=16285819
+PROBETAIL round=8 rank=9 iter=93 w=66154 l=16267551
+PROBEROW round=9 bench_n=30 iters=400 write_p50=66224 write_p90=77425 write_p99=101050 write_max=112461 write_sum=27365419 load_p50=6646065 load_p90=15782700 load_p99=16943081 load_max=20284816 load_sum=3621416521
+PROBETAIL round=9 rank=0 iter=106 w=69741 l=20284816
+PROBETAIL round=9 rank=1 iter=15 w=71615 l=18071971
+PROBETAIL round=9 rank=2 iter=135 w=60053 l=17416560
+PROBETAIL round=9 rank=3 iter=16 w=112461 l=17022458
+PROBETAIL round=9 rank=4 iter=81 w=66024 l=16943081
+PROBETAIL round=9 rank=5 iter=62 w=73047 l=16861914
+PROBETAIL round=9 rank=6 iter=32 w=78357 l=16638639
+PROBETAIL round=9 rank=7 iter=99 w=68879 l=16518088
+PROBETAIL round=9 rank=8 iter=61 w=65102 l=16377441
+PROBETAIL round=9 rank=9 iter=105 w=74289 l=16244014
+PROBEROW round=10 bench_n=30 iters=400 write_p50=65382 write_p90=77695 write_p99=113233 write_max=135605 write_sum=27316569 load_p50=6546578 load_p90=15721016 load_p99=17667659 load_max=19034589 load_sum=3595149620
+PROBETAIL round=10 rank=0 iter=51 w=109616 l=19034589
+PROBETAIL round=10 rank=1 iter=52 w=113954 l=18438801
+PROBETAIL round=10 rank=2 iter=53 w=107552 l=18369964
+PROBETAIL round=10 rank=3 iter=6 w=95950 l=17945150
+PROBETAIL round=10 rank=4 iter=13 w=106630 l=17667659
+PROBETAIL round=10 rank=5 iter=50 w=104055 l=17301704
+PROBETAIL round=10 rank=6 iter=62 w=66745 l=17158583
+PROBETAIL round=10 rank=7 iter=49 w=68259 l=17069881
+PROBETAIL round=10 rank=8 iter=3 w=103865 l=17013536
+PROBETAIL round=10 rank=9 iter=1 w=98515 l=16956028
+PROBEROW round=11 bench_n=30 iters=400 write_p50=65323 write_p90=79339 write_p99=135515 write_max=727776 write_sum=28552626 load_p50=6526597 load_p90=16052171 load_p99=18706322 load_max=19824649 load_sum=3606414181
+PROBETAIL round=11 rank=0 iter=72 w=125406 l=19824649
+PROBETAIL round=11 rank=1 iter=80 w=112601 l=19199211
+PROBETAIL round=11 rank=2 iter=73 w=130575 l=19024847
+PROBETAIL round=11 rank=3 iter=81 w=179076 l=18767046
+PROBETAIL round=11 rank=4 iter=71 w=108273 l=18706322
+PROBETAIL round=11 rank=5 iter=70 w=147006 l=18254934
+PROBETAIL round=11 rank=6 iter=76 w=105107 l=18152342
+PROBETAIL round=11 rank=7 iter=82 w=135515 l=18078347
+PROBETAIL round=11 rank=8 iter=69 w=101781 l=18110876
+PROBETAIL round=11 rank=9 iter=74 w=113522 l=17995358
+PROBEROW round=12 bench_n=30 iters=400 write_p50=65163 write_p90=73838 write_p99=115266 write_max=3951145 write_sum=30866902 load_p50=6517630 load_p90=15810791 load_p99=17805250 load_max=19773932 load_sum=3586500361
+PROBETAIL round=12 rank=0 iter=21 w=68488 l=19773932
+PROBETAIL round=12 rank=1 iter=98 w=121608 l=18977989
+PROBETAIL round=12 rank=2 iter=100 w=104446 l=18945051
+PROBETAIL round=12 rank=3 iter=96 w=70472 l=18109878
+PROBETAIL round=12 rank=4 iter=99 w=115266 l=17805250
+PROBETAIL round=12 rank=5 iter=13 w=70172 l=17243311
+PROBETAIL round=12 rank=6 iter=97 w=111449 l=17197379
+PROBETAIL round=12 rank=7 iter=101 w=141164 l=17130645
+PROBETAIL round=12 rank=8 iter=55 w=67327 l=17100838
+PROBETAIL round=12 rank=9 iter=68 w=67267 l=17006789
+PROBEROW round=13 bench_n=30 iters=400 write_p50=68598 write_p90=84348 write_p99=113814 write_max=557707 write_sum=28866226 load_p50=6630224 load_p90=16273025 load_p99=17961184 load_max=19924245 load_sum=3624390999
+PROBETAIL round=13 rank=0 iter=11 w=105688 l=19924245
+PROBETAIL round=13 rank=1 iter=8 w=136597 l=18728374
+PROBETAIL round=13 rank=2 iter=99 w=557707 l=18199707
+PROBETAIL round=13 rank=3 iter=10 w=102403 l=18485032
+PROBETAIL round=13 rank=4 iter=7 w=119544 l=17948000
+PROBETAIL round=13 rank=5 iter=98 w=72787 l=17961184
+PROBETAIL round=13 rank=6 iter=12 w=113814 l=17670622
+PROBETAIL round=13 rank=7 iter=1 w=109265 l=17648573
+PROBETAIL round=13 rank=8 iter=32 w=78387 l=17641473
+PROBETAIL round=13 rank=9 iter=9 w=111679 l=17572400
+PROBEROW round=14 bench_n=30 iters=400 write_p50=66195 write_p90=83647 write_p99=122650 write_max=299994 write_sum=28418084 load_p50=6524263 load_p90=16156725 load_p99=19225868 load_max=20589464 load_sum=3601273622
+PROBETAIL round=14 rank=0 iter=72 w=122650 l=20589464
+PROBETAIL round=14 rank=1 iter=85 w=145282 l=19738700
+PROBETAIL round=14 rank=2 iter=84 w=86582 l=19753727
+PROBETAIL round=14 rank=3 iter=70 w=117672 l=19247870
+PROBETAIL round=14 rank=4 iter=80 w=100589 l=19225868
+PROBETAIL round=14 rank=5 iter=69 w=117550 l=18928953
+PROBETAIL round=14 rank=6 iter=81 w=128101 l=18911503
+PROBETAIL round=14 rank=7 iter=71 w=112080 l=18794384
+PROBETAIL round=14 rank=8 iter=73 w=116489 l=18650634
+PROBETAIL round=14 rank=9 iter=82 w=126367 l=18621489
+PROBEROW round=15 bench_n=30 iters=400 write_p50=67637 write_p90=95349 write_p99=128341 write_max=171461 write_sum=29286755 load_p50=6592032 load_p90=16277952 load_p99=18664056 load_max=19363114 load_sum=3645681822
+PROBETAIL round=15 rank=0 iter=3 w=120216 l=19363114
+PROBETAIL round=15 rank=1 iter=4 w=123932 l=18946357
+PROBETAIL round=15 rank=2 iter=2 w=114626 l=18762243
+PROBETAIL round=15 rank=3 iter=0 w=105588 l=18704134
+PROBETAIL round=15 rank=4 iter=5 w=113544 l=18664056
+PROBETAIL round=15 rank=5 iter=1 w=127640 l=18633096
+PROBETAIL round=15 rank=6 iter=50 w=109695 l=18060999
+PROBETAIL round=15 rank=7 iter=6 w=119995 l=17701111
+PROBETAIL round=15 rank=8 iter=93 w=87083 l=17682619
+PROBETAIL round=15 rank=9 iter=73 w=111229 l=17469696
+PROBEROW round=16 bench_n=30 iters=400 write_p50=72966 write_p90=101260 write_p99=127869 write_max=175269 write_sum=31359587 load_p50=6751860 load_p90=16911282 load_p99=19249808 load_max=20048096 load_sum=3704140162
+PROBETAIL round=16 rank=0 iter=102 w=83036 l=20048096
+PROBETAIL round=16 rank=1 iter=97 w=115537 l=19970654
+PROBETAIL round=16 rank=2 iter=93 w=133550 l=19458656
+PROBETAIL round=16 rank=3 iter=98 w=105107 l=19349000
+PROBETAIL round=16 rank=4 iter=88 w=117661 l=19249808
+PROBETAIL round=16 rank=5 iter=84 w=114365 l=19102079
+PROBETAIL round=16 rank=6 iter=91 w=116830 l=19029841
+PROBETAIL round=16 rank=7 iter=86 w=110076 l=18973127
+PROBETAIL round=16 rank=8 iter=83 w=114615 l=18959777
+PROBETAIL round=16 rank=9 iter=82 w=113583 l=18784458
+PROBEROW round=17 bench_n=30 iters=400 write_p50=80572 write_p90=113833 write_p99=149020 write_max=195026 write_sum=34770546 load_p50=7136856 load_p90=17972058 load_p99=18989831 load_max=22254888 load_sum=3839680084
+PROBETAIL round=17 rank=0 iter=78 w=114685 l=22254888
+PROBETAIL round=17 rank=1 iter=32 w=128631 l=20445472
+PROBETAIL round=17 rank=2 iter=88 w=112561 l=19260001
+PROBETAIL round=17 rank=3 iter=25 w=114815 l=19046157
+PROBETAIL round=17 rank=4 iter=31 w=120867 l=18989831
+PROBETAIL round=17 rank=5 iter=29 w=110988 l=18980887
+PROBETAIL round=17 rank=6 iter=98 w=105378 l=18951493
+PROBETAIL round=17 rank=7 iter=26 w=114825 l=18913367
+PROBETAIL round=17 rank=8 iter=19 w=126718 l=18840528
+PROBETAIL round=17 rank=9 iter=0 w=105668 l=18823820
+PROBEROW round=18 bench_n=30 iters=400 write_p50=69941 write_p90=109176 write_p99=158096 write_max=222368 write_sum=31918743 load_p50=7001491 load_p90=16816033 load_p99=18939794 load_max=19507474 load_sum=3762746179
+PROBETAIL round=18 rank=0 iter=25 w=115447 l=19507474
+PROBETAIL round=18 rank=1 iter=42 w=123972 l=19316789
+PROBETAIL round=18 rank=2 iter=40 w=129774 l=19077162
+PROBETAIL round=18 rank=3 iter=39 w=108233 l=18986755
+PROBETAIL round=18 rank=4 iter=41 w=123561 l=18939794
+PROBETAIL round=18 rank=5 iter=43 w=115346 l=18908819
+PROBETAIL round=18 rank=6 iter=26 w=123131 l=18882845
+PROBETAIL round=18 rank=7 iter=45 w=109957 l=18825832
+PROBETAIL round=18 rank=8 iter=37 w=110737 l=18533968
+PROBETAIL round=18 rank=9 iter=36 w=84058 l=18508331
+PROBEROW round=19 bench_n=30 iters=400 write_p50=68509 write_p90=85901 write_p99=130625 write_max=2909311 write_sum=31967498 load_p50=6700894 load_p90=15944257 load_p99=18432271 load_max=20616822 load_sum=3649662767
+PROBETAIL round=19 rank=0 iter=65 w=111169 l=20616822
+PROBETAIL round=19 rank=1 iter=86 w=2909311 l=16381148
+PROBETAIL round=19 rank=2 iter=68 w=124283 l=18774061
+PROBETAIL round=19 rank=3 iter=63 w=160993 l=18632773
+PROBETAIL round=19 rank=4 iter=66 w=127289 l=18428509
+PROBETAIL round=19 rank=5 iter=64 w=112882 l=18432271
+PROBETAIL round=19 rank=6 iter=62 w=92293 l=18440156
+PROBETAIL round=19 rank=7 iter=67 w=104717 l=18311452
+PROBETAIL round=19 rank=8 iter=69 w=104005 l=17445728
+PROBETAIL round=19 rank=9 iter=26 w=69180 l=17324592
+PROBEROW round=20 bench_n=30 iters=400 write_p50=73808 write_p90=94928 write_p99=110919 write_max=142587 write_sum=30851568 load_p50=6819888 load_p90=16303652 load_p99=17366059 load_max=17743390 load_sum=3686131656
+PROBETAIL round=20 rank=0 iter=72 w=77906 l=17743390
+PROBETAIL round=20 rank=1 iter=60 w=113453 l=17703821
+PROBETAIL round=20 rank=2 iter=68 w=102312 l=17484015
+PROBETAIL round=20 rank=3 iter=59 w=102212 l=17389287
+PROBETAIL round=20 rank=4 iter=58 w=99988 l=17366059
+PROBETAIL round=20 rank=5 iter=31 w=68508 l=17177692
+PROBETAIL round=20 rank=6 iter=63 w=94928 l=17055571
+PROBETAIL round=20 rank=7 iter=107 w=86653 l=17042130
+PROBETAIL round=20 rank=8 iter=100 w=108083 l=16948169
+PROBETAIL round=20 rank=9 iter=55 w=100739 l=16919531
+PROBEROW round=21 bench_n=30 iters=400 write_p50=70773 write_p90=94547 write_p99=125535 write_max=151955 write_sum=30237729 load_p50=6717109 load_p90=16396634 load_p99=17440914 load_max=19502393 load_sum=3654173771
+PROBETAIL round=21 rank=0 iter=48 w=90741 l=19502393
+PROBETAIL round=21 rank=1 iter=16 w=87274 l=18331747
+PROBETAIL round=21 rank=2 iter=70 w=107632 l=17884707
+PROBETAIL round=21 rank=3 iter=67 w=110167 l=17722274
+PROBETAIL round=21 rank=4 iter=68 w=123172 l=17431469
+PROBETAIL round=21 rank=5 iter=49 w=74219 l=17440914
+PROBETAIL round=21 rank=6 iter=40 w=99707 l=17300888
+PROBETAIL round=21 rank=7 iter=47 w=83517 l=17294399
+PROBETAIL round=21 rank=8 iter=78 w=111229 l=17254138
+PROBETAIL round=21 rank=9 iter=35 w=81383 l=17201775
+PROBEROW round=22 bench_n=30 iters=400 write_p50=70953 write_p90=95099 write_p99=131246 write_max=277424 write_sum=30630260 load_p50=6663391 load_p90=16539453 load_p99=17738128 load_max=18340017 load_sum=3654006632
+PROBETAIL round=22 rank=0 iter=83 w=142207 l=18340017
+PROBETAIL round=22 rank=1 iter=27 w=111459 l=18205892
+PROBETAIL round=22 rank=2 iter=81 w=122640 l=18052454
+PROBETAIL round=22 rank=3 iter=80 w=109555 l=18035759
+PROBETAIL round=22 rank=4 iter=26 w=105117 l=17738128
+PROBETAIL round=22 rank=5 iter=82 w=111119 l=17713651
+PROBETAIL round=22 rank=6 iter=96 w=88667 l=17572010
+PROBETAIL round=22 rank=7 iter=29 w=107512 l=17547900
+PROBETAIL round=22 rank=8 iter=43 w=88166 l=17454440
+PROBETAIL round=22 rank=9 iter=104 w=79810 l=17453812
+PROBEROW round=23 bench_n=30 iters=400 write_p50=71715 write_p90=90661 write_p99=131758 write_max=3929194 write_sum=33954385 load_p50=6787038 load_p90=16006402 load_p99=17795949 load_max=19526044 load_sum=3676080785
+PROBETAIL round=23 rank=0 iter=44 w=116147 l=19526044
+PROBETAIL round=23 rank=1 iter=45 w=149541 l=18796350
+PROBETAIL round=23 rank=2 iter=42 w=111319 l=18809987
+PROBETAIL round=23 rank=3 iter=43 w=114415 l=17833835
+PROBETAIL round=23 rank=4 iter=41 w=107372 l=17795949
+PROBETAIL round=23 rank=5 iter=109 w=83457 l=17493498
+PROBETAIL round=23 rank=6 iter=40 w=94788 l=17442059
+PROBETAIL round=23 rank=7 iter=103 w=74790 l=17105553
+PROBETAIL round=23 rank=8 iter=108 w=90780 l=17038109
+PROBETAIL round=23 rank=9 iter=69 w=90269 l=17009330
+PROBEROW round=24 bench_n=30 iters=400 write_p50=70953 write_p90=94878 write_p99=118452 write_max=143069 write_sum=30142527 load_p50=6670134 load_p90=16454196 load_p99=17782157 load_max=18603252 load_sum=3640310375
+PROBETAIL round=24 rank=0 iter=59 w=110938 l=18603252
+PROBETAIL round=24 rank=1 iter=63 w=103965 l=18410354
+PROBETAIL round=24 rank=2 iter=107 w=123562 l=18234109
+PROBETAIL round=24 rank=3 iter=65 w=93847 l=18103293
+PROBETAIL round=24 rank=4 iter=49 w=114225 l=17782157
+PROBETAIL round=24 rank=5 iter=93 w=86512 l=17733907
+PROBETAIL round=24 rank=6 iter=58 w=82385 l=17536804
+PROBETAIL round=24 rank=7 iter=48 w=118452 l=17474421
+PROBETAIL round=24 rank=8 iter=47 w=91812 l=17478636
+PROBETAIL round=24 rank=9 iter=64 w=114555 l=17371506
+PROBEROW round=25 bench_n=30 iters=400 write_p50=66014 write_p90=83437 write_p99=134402 write_max=143729 write_sum=28421349 load_p50=6541131 load_p90=16117293 load_p99=19310654 load_max=19632799 load_sum=3613027695
+PROBETAIL round=25 rank=0 iter=26 w=118703 l=19632799
+PROBETAIL round=25 rank=1 iter=28 w=138150 l=19564059
+PROBETAIL round=25 rank=2 iter=31 w=127579 l=19435749
+PROBETAIL round=25 rank=3 iter=20 w=121188 l=19418015
+PROBETAIL round=25 rank=4 iter=27 w=143729 l=19310654
+PROBETAIL round=25 rank=5 iter=18 w=112521 l=19308851
+PROBETAIL round=25 rank=6 iter=34 w=101991 l=19104477
+PROBETAIL round=25 rank=7 iter=15 w=60173 l=19135685
+PROBETAIL round=25 rank=8 iter=39 w=138770 l=19028021
+PROBETAIL round=25 rank=9 iter=16 w=125326 l=19020559
+PROBEROW round=26 bench_n=30 iters=400 write_p50=67226 write_p90=85120 write_p99=98184 write_max=112000 write_sum=28439340 load_p50=6550361 load_p90=16227103 load_p99=17345076 load_max=19056780 load_sum=3601415958
+PROBETAIL round=26 rank=0 iter=8 w=97103 l=19056780
+PROBETAIL round=26 rank=1 iter=76 w=93195 l=18027692
+PROBETAIL round=26 rank=2 iter=108 w=80561 l=17916373
+PROBETAIL round=26 rank=3 iter=1 w=92514 l=17396948
+PROBETAIL round=26 rank=4 iter=40 w=80611 l=17345076
+PROBETAIL round=26 rank=5 iter=24 w=76754 l=17051518
+PROBETAIL round=26 rank=6 iter=107 w=77175 l=16993772
+PROBETAIL round=26 rank=7 iter=97 w=71103 l=16815006
+PROBETAIL round=26 rank=8 iter=0 w=112000 l=16751167
+PROBETAIL round=26 rank=9 iter=27 w=75461 l=16782063
+PROBEROW round=27 bench_n=30 iters=400 write_p50=64631 write_p90=76884 write_p99=91903 write_max=2221218 write_sum=29021507 load_p50=6513071 load_p90=15925785 load_p99=16753163 load_max=17412683 load_sum=3573858984
+PROBETAIL round=27 rank=0 iter=11 w=2221218 l=16786406
+PROBETAIL round=27 rank=1 iter=27 w=72526 l=17412683
+PROBETAIL round=27 rank=2 iter=9 w=72006 l=16976221
+PROBETAIL round=27 rank=3 iter=6 w=73587 l=16790802
+PROBETAIL round=27 rank=4 iter=39 w=69200 l=16753163
+PROBETAIL round=27 rank=5 iter=49 w=79930 l=16686064
+PROBETAIL round=27 rank=6 iter=99 w=77726 l=16687247
+PROBETAIL round=27 rank=7 iter=100 w=96652 l=16513350
+PROBETAIL round=27 rank=8 iter=101 w=88656 l=16359161
+PROBETAIL round=27 rank=9 iter=98 w=77836 l=16368158
+PROBEROW round=28 bench_n=30 iters=400 write_p50=63970 write_p90=73868 write_p99=82495 write_max=100369 write_sum=26214051 load_p50=6556493 load_p90=15784323 load_p99=16604359 load_max=17126510 load_sum=3574296260
+PROBETAIL round=28 rank=0 iter=88 w=73649 l=17126510
+PROBETAIL round=28 rank=1 iter=79 w=79329 l=17031483
+PROBETAIL round=28 rank=2 iter=93 w=61866 l=16911890
+PROBETAIL round=28 rank=3 iter=9 w=82495 l=16668145
+PROBETAIL round=28 rank=4 iter=106 w=65293 l=16604359
+PROBETAIL round=28 rank=5 iter=58 w=68990 l=16570452
+PROBETAIL round=28 rank=6 iter=28 w=65092 l=16527862
+PROBETAIL round=28 rank=7 iter=71 w=67667 l=16473601
+PROBETAIL round=28 rank=8 iter=8 w=88346 l=16350775
+PROBETAIL round=28 rank=9 iter=20 w=71985 l=16293585
+PROBEROW round=29 bench_n=30 iters=400 write_p50=62938 write_p90=69330 write_p99=85751 write_max=105818 write_sum=25742096 load_p50=6459903 load_p90=15643270 load_p99=16117149 load_max=17051926 load_sum=3557972613
+PROBETAIL round=29 rank=0 iter=32 w=66405 l=17051926
+PROBETAIL round=29 rank=1 iter=59 w=61896 l=16466747
+PROBETAIL round=29 rank=2 iter=92 w=63910 l=16385010
+PROBETAIL round=29 rank=3 iter=1 w=80801 l=16137465
+PROBETAIL round=29 rank=4 iter=41 w=64842 l=16117149
+PROBETAIL round=29 rank=5 iter=0 w=105818 l=16073430
+PROBETAIL round=29 rank=6 iter=14 w=74239 l=16071116
+PROBETAIL round=29 rank=7 iter=96 w=76013 l=16025597
+PROBETAIL round=29 rank=8 iter=31 w=62487 l=16035333
+PROBETAIL round=29 rank=9 iter=65 w=63739 l=16032300
+PROBEROW round=30 bench_n=30 iters=400 write_p50=63038 write_p90=69390 write_p99=85851 write_max=95098 write_sum=25695903 load_p50=6481034 load_p90=15624452 load_p99=16555179 load_max=17031520 load_sum=3562793746
+PROBETAIL round=30 rank=0 iter=84 w=66275 l=17031520
+PROBETAIL round=30 rank=1 iter=6 w=64461 l=16778205
+PROBETAIL round=30 rank=2 iter=37 w=64601 l=16666843
+PROBETAIL round=30 rank=3 iter=63 w=64110 l=16563254
+PROBETAIL round=30 rank=4 iter=3 w=64120 l=16555179
+PROBETAIL round=30 rank=5 iter=54 w=63610 l=16453548
+PROBETAIL round=30 rank=6 iter=68 w=62557 l=16446836
+PROBETAIL round=30 rank=7 iter=22 w=77926 l=16209057
+PROBETAIL round=30 rank=8 iter=66 w=64381 l=16213855
+PROBETAIL round=30 rank=9 iter=12 w=63269 l=16101114
