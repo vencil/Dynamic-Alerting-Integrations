@@ -13,6 +13,10 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 <!-- 下一版 in-flight 工作暫存區。每筆 entry 目標 3-6 行使用者重點 + 一行指回內部 artifact；session 過程 / FUSE trap / 完整 commit list 不入此處。release 收尾時做最終 condensation 並切正式 `## [vX.Y.Z]` heading。 -->
 
+### Added
+
+- **[`SECURITY.md`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/SECURITY.md)：漏洞回報有了公開的入口與時限承諾（docs）**：此前 repo 完全沒有 `SECURITY.md`（root / `.github/` / `docs/` 三處皆無），而 GitHub private vulnerability reporting **其實早已啟用** —— 所以缺的一直不是管道，是可發現性、以及「回報之後會發生什麼」。新檔指向 PVR 入口、明寫不要開公開 issue（本 repo 是公開的，開 issue 即等同揭露），承諾**首次回應 7 天內**，並把既有的揭露慣例寫下來：**修補先進 release tag，advisory 才發布**。⚠️ 刻意**不複製版號**——只寫「每條線最新的已發布 tag 受支援」並指向 Releases，否則它會腐爛成一份與實際發布不符的清單。ZH 為主 + 檔尾一段 English：GitHub 只認 `SECURITY.md` 這一個檔名，走不了本專案的 `.en.md` 分檔慣例。
+
 ### Fixed
 
 - **`validate_all` 的 `--only` / `--skip` 打錯一個字就少跑一支檢查，而它自己就是 required check（dx、lint；[#1620](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1620)）**：⛔ **行為變更** —— `--only` / `--skip` 收到沒有任何檢查回應的名字，現在 `exit 2`（`EXIT_CALLER_ERROR`），不再靜默丟棄。實測（`cb93a9ff`＝本 PR 的父 commit，每列都配一個必須不同的對照組）：`--only versions` → rc 0 `1/1 passed`；`--only cli_default_drift_typo` → **rc 0** `Result: All tools skipped`；**`--only versions,cli_default_drift_typo` → rc 0 `1/1 passed, 32 skipped`**。第三列是危險的那一個：兩個自動呼叫端都傳一長串名字給 `--only`，而這支 runner 就是 required status check `Drift Detection (validate_all.py)` —— 打錯一個名字，畫面就是一次乾淨的全數通過、rc 0，而植入的漂移沒有人看。⚠️ 那兩份清單有多長，我刻意不寫進本 PR 動到的任何載體：那是會被人回來改的數字。⛔ **但這句話不能寫成全稱句**——第六輪盲審量到 `.github/workflows/docs-ci.yaml:99` 的註解以另一個名字記著其中一份的長度（「validate_all.py, **12** subprocess calls」，而該檔的 `--only` 清單實量正是 12 個名字），且無 SSOT。那不是本 PR 造成的，但我的全稱句因此為假，已收窄；那則註解另開票。⚠️ 而**今天仍被斷言的性質比那句話窄**——`TestTheGateIsStillSelected` 只釘住「`cli_default_drift` 仍被選中」這一個名字（實測：兩份清單同時刪掉 `tool_map` 或 `changelog`，整套測試仍全綠）；其餘名字由 runner 自己的 `exit 2` 在執行期涵蓋，把 pin 擴到整份清單是 [#1492](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1492) 的工作。
