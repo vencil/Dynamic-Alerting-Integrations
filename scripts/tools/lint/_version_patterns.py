@@ -302,9 +302,25 @@ SKIP_RULE_PACK_FILES = {"CHANGELOG.md", "CHANGELOG.en.md", "benchmarks.md",
 # ⛔ These three `docs/` entries are mode-120000 symlinks to files OUTSIDE
 # `docs/` (`git ls-files -s docs/` shows the modes). They are ALIASES, not
 # documents. Any reader that COUNTS or PAIRS documents must skip them or the
-# same document is seen twice; readers that merely scan text (links,
-# frontmatter, templates, reading time) are unaffected and must NOT use this
-# set — narrowing their scan would remove real coverage.
+# same document is seen twice.
+#
+# ⛔ Do NOT bolt this exclusion onto a reader that merely scans text (links,
+# frontmatter, templates, reading time) just because it visits an alias twice:
+# there, visiting twice has no consequence and narrowing the scan would remove
+# real coverage. A text-side reader that skips these anyway needs its own
+# reason stated at its own use site — `dx/add_frontmatter.py` has one (never
+# write THROUGH a symlink; dev-rules #11), which is why it keeps a separate
+# list instead of importing from here. Two lists with two different reasons
+# are not the duplication this constant exists to remove.
+#
+# ⚠️ TWO VIEWS, ONE LITERAL. The `docs/`-relative paths are primary because a
+# path identifies an alias and a bare NAME does not: `CHANGELOG.md` is also a
+# real document at the repo root, so a reader whose scan set includes the root
+# (`dx/doc_coverage.py`, whose `root_md_files` carries it) would exclude the
+# genuine article if it matched on names — which is why the name view is the
+# derived one and why "just compare names" is the wrong fix here.
+# Readers that only ever walk `docs/` (`bump_docs._count_docs`,
+# `validate_docs_versions.count_bilingual_pairs`) take the name view.
 #
 # ⚠️ Deliberately a literal set rather than `Path.is_symlink()`: a checkout
 # without symlink support materialises these as 12-byte path stubs, so the
@@ -317,8 +333,10 @@ SKIP_RULE_PACK_FILES = {"CHANGELOG.md", "CHANGELOG.en.md", "benchmarks.md",
 # either way today, so that asymmetry is latent, not active — left alone
 # rather than "tidied", because adding a name there narrows a scan with no
 # measured defect behind it.
-DOCS_TREE_SYMLINK_ALIASES = {"CHANGELOG.md", "README-root.md",
-                             "README-root.en.md"}
+DOCS_TREE_SYMLINK_ALIAS_PATHS = {"docs/CHANGELOG.md", "docs/README-root.md",
+                                 "docs/README-root.en.md"}
+DOCS_TREE_SYMLINK_ALIASES = {p.rsplit("/", 1)[-1]
+                             for p in DOCS_TREE_SYMLINK_ALIAS_PATHS}
 
 # Bilingual number consistency skips the aliases (see above) plus
 # `benchmarks.md`, which is skipped for an unrelated reason: it is a table of

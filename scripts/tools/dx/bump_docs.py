@@ -1170,23 +1170,22 @@ def _count_docs():
       1. ``validate_docs_versions.count_bilingual_pairs``  — applies the set
       2. ``validate_docs_versions.check_bilingual_number_consistency``
          — applies it via ``SKIP_BILINGUAL_NUMBER_FILES``
-      3. ``dx/doc_coverage.py`` — its OWN literal copy of the same three names
-         (``EXCLUDE_RELATIVE_PATHS``). ⚠️ NOT merely a duplicate spelling: it
-         keys on ``file_path.resolve().relative_to(repo_root)``, and
-         ``resolve()`` follows symlinks. Here the aliases are materialised as
-         regular stubs so nothing is followed and the exclusion matches
-         (measured: denominator 259, all three excluded). On a checkout where
-         they really are symlinks the keys become ``CHANGELOG.md`` /
-         ``README.en.md`` at repo root, which are not in that set, and the
-         exclusion stops working. Latent here, real elsewhere.
-      4. ``dx/generate_doc_map.py`` — a THIRD literal copy (``SKIP_FILES``).
-         It keys on ``relative_to(REPO_ROOT)`` with no ``resolve()``, so it has
-         no such platform dependence; a plain duplicate.
+      3. ``dx/doc_coverage.py`` (``EXCLUDE_RELATIVE_PATHS``) — was a second
+         literal copy AND keyed on ``file_path.resolve()``, which follows
+         symlinks, so the exclusion silently stopped working wherever the
+         aliases are real symlinks. #1692 dropped the ``resolve()`` and pointed
+         the constant at ``DOCS_TREE_SYMLINK_ALIAS_PATHS``.
+      4. ``dx/generate_doc_map.py`` (``SKIP_FILES``) — was a third literal
+         copy; #1692 made it a union with the same constant (only 3 of its 11
+         entries are aliases).
       5. this function — handled it nowhere, which is what is fixed here.
     (``DOC_MAP_SKIP_NAMES`` carries a fourth, partial copy — ``README-root.md``
     but not ``README-root.en.md``; the constant's own header records that as
-    latent-not-active.) Collapsing 3 and 4 is #1665 follow-up work, not this
-    change: one feeds a coverage percentage and the other a generated catalogue.
+    latent-not-active, and #1692 left it alone for that reason.)
+    ``dx/add_frontmatter.py`` names the same three paths but is NOT in this
+    census: it is a write-safety list and its answer does not change with the
+    aliases on a symlink-capable checkout (measured — its ``is_symlink()`` skip
+    fires first).
 
     The membership test is by NAME rather than ``Path.is_symlink()`` on
     purpose — see the constant's own header: a checkout without symlink support

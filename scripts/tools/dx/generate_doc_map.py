@@ -30,6 +30,10 @@ from _atomic_write import atomic_write_text  # noqa: E402
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
+# `../lint` for DOCS_TREE_SYMLINK_ALIAS_PATHS — the same cross-package shape
+# bump_docs.py, compile_custom_alerts.py and generate_rulepack_configmaps.py
+# already use.
+sys.path.insert(0, os.path.join(str(_THIS_DIR), "..", "lint"))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_versions import (  # noqa: E402
     PlatformVersionUnreadable,
@@ -39,6 +43,7 @@ from _lib_exitcodes import (  # noqa: E402
     EXIT_CALLER_ERROR,
     EXIT_VIOLATION,
 )
+from _version_patterns import DOCS_TREE_SYMLINK_ALIAS_PATHS  # noqa: E402
 
 REPO_ROOT = SCRIPT_DIR.parent.parent.parent
 DOC_MAP_ZH = REPO_ROOT / "docs" / "internal" / "doc-map.md"
@@ -76,12 +81,16 @@ AUDIENCE_DISPLAY = {
     },
 }
 
-# Files to skip (auto-generated or meta)
-SKIP_FILES = {
+# Files to skip (auto-generated or meta).
+#
+# ⛔ The three mode-120000 aliases are NOT re-spelled here — they come from
+# `lint/_version_patterns.DOCS_TREE_SYMLINK_ALIAS_PATHS`, which is also what
+# `dx/doc_coverage.py`, `bump_docs._count_docs` and
+# `validate_docs_versions.count_bilingual_pairs` read. Only 3 of the entries
+# below are aliases; the rest are meta/generated pages with unrelated reasons,
+# so this is a union rather than a replacement.
+SKIP_FILES = DOCS_TREE_SYMLINK_ALIAS_PATHS | {
     "docs/tags.md",
-    "docs/CHANGELOG.md",
-    "docs/README-root.md",
-    "docs/README-root.en.md",
     "docs/README.md",
     "docs/internal/doc-map.md",
     "docs/internal/doc-map.en.md",

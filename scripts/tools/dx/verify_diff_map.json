@@ -179,6 +179,7 @@
    "tests/shared/test_property_tools.py"
   ],
   "scripts/tools/dx/generate_doc_map.py": [
+   "tests/dx/test_doc_coverage.py",
    "tests/dx/test_generate_doc_map.py",
    "tests/shared/test_property_tools.py"
   ],
@@ -260,6 +261,9 @@
   "scripts/tools/lint/_rule_tree.py": [
    "tests/lint/test_check_rulepack_sync.py",
    "tests/ops/test_generate_routes_orchestration.py"
+  ],
+  "scripts/tools/lint/_version_patterns.py": [
+   "tests/dx/test_doc_coverage.py"
   ],
   "scripts/tools/lint/check_account_registry_monotonic.py": [
    "tests/lint/test_check_account_registry_monotonic.py"
@@ -779,7 +783,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "1961d0669fc8649e19d993d7a917118e1c23e7d81fb6a6bb852af0f893d5a5d0",
+ "source_digest": "491a6d020da1d70237d778f921c0f495289f267d212a40a905c644d2a585ca4e",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1260,6 +1264,7 @@
   "CHANGELOG.md": [
    "tests/dx/test_add_frontmatter.py",
    "tests/dx/test_bump_docs.py",
+   "tests/dx/test_doc_coverage.py",
    "tests/dx/test_generate_changelog.py",
    "tests/lint/test_check_bilingual_structure.py",
    "tests/lint/test_check_changelog_no_tbd.py",
@@ -2308,6 +2313,9 @@
    "tests/ops/test_property_based.py",
    "tests/shared/test_confd_case_parity_across_tools.py"
   ],
+  "scripts/tools/dx/doc_coverage.py": [
+   "tests/dx/test_doc_coverage.py"
+  ],
   "scripts/tools/dx/gen_agent_adapters.py": [
    "tests/dx/test_gen_agent_adapters.py"
   ],
@@ -2315,7 +2323,8 @@
    "tests/dx/test_generate_byo_rulepack_table.py"
   ],
   "scripts/tools/dx/generate_doc_map.py": [
-   "tests/dx/test_atomic_write.py"
+   "tests/dx/test_atomic_write.py",
+   "tests/dx/test_doc_coverage.py"
   ],
   "scripts/tools/dx/generate_platform_data.py": [
    "tests/dx/test_generate_platform_data.py",
@@ -2409,6 +2418,7 @@
    "tests/ops/test_generate_routes_orchestration.py"
   ],
   "scripts/tools/lint/_version_patterns.py": [
+   "tests/dx/test_doc_coverage.py",
    "tests/lint/test_validate_docs_versions.py"
   ],
   "scripts/tools/lint/check_admin_config_schema.py": [

@@ -26,8 +26,13 @@ from dataclasses import dataclass, asdict
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
+# `../lint` for DOCS_TREE_SYMLINK_ALIAS_PATHS — the same cross-package shape
+# bump_docs.py, compile_custom_alerts.py and generate_rulepack_configmaps.py
+# already use.
+sys.path.insert(0, os.path.join(str(_THIS_DIR), "..", "lint"))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _version_patterns import DOCS_TREE_SYMLINK_ALIAS_PATHS  # noqa: E402
 
 
 @dataclass
@@ -59,15 +64,16 @@ class DocCoverageAnalyzer:
     # 規則：
     # - symlink 到 repo-root 的檔案（docs/CHANGELOG.md, docs/README-root*）
     #   → 本尊已經在 root_md_files 掃到，symlink 只是 GitHub 瀏覽輔助
+    #   ⛔ 不要在這裡重抄那三個名字：清單的正本是
+    #   `lint/_version_patterns.DOCS_TREE_SYMLINK_ALIAS_PATHS`，它同時是
+    #   `bump_docs._count_docs` 與 `validate_docs_versions.count_bilingual_pairs`
+    #   的來源。這裡取的是**路徑**視圖而不是名稱視圖，因為 `root_md_files`
+    #   含真正的 root `CHANGELOG.md`，用名稱比對會把本尊一起排掉。
     # - mkdocs-material snippets 的 include 檔（docs/includes/**）
     #   → 這些是被其他 doc embed 的 fragment，加 YAML frontmatter 會破壞 host doc
     # - transient resume notes（docs/internal/_resume-*.md）
     #   → 每個 session 生滅的 AI agent note，不是正式 doc
-    EXCLUDE_RELATIVE_PATHS = {
-        "docs/CHANGELOG.md",
-        "docs/README-root.md",
-        "docs/README-root.en.md",
-    }
+    EXCLUDE_RELATIVE_PATHS = DOCS_TREE_SYMLINK_ALIAS_PATHS
     EXCLUDE_PATH_PREFIXES = (
         "docs/includes/",
     )
@@ -110,12 +116,32 @@ class DocCoverageAnalyzer:
         self.known_sections: Set[str] = set()
         self.section_pattern = re.compile(r'§(\d+)\.(\d+)')
 
+    def _rel_key(self, file_path: Path) -> str:
+        """把掃描到的路徑轉成 repo-relative 的比對鍵。
+
+        ⛔ 這裡刻意**不呼叫** `Path.resolve()`。`docs/CHANGELOG.md` 與
+        `docs/README-root.{md,en.md}` 是 mode-120000 symlink，`resolve()`
+        會跟隨它們，鍵於是變成 root 的 `CHANGELOG.md` / `README.en.md`
+        ——兩者都不在排除清單裡，排除因此失效，而**只在真的支援 symlink 的
+        平台上失效**：Windows checkout（含**掛載進 dev container 的那棵
+        Windows 工作樹**，實測 `is_symlink()` 為 False、15 bytes 的
+        `../CHANGELOG.md`）把它們物化成路徑 stub，所以那裡一直是對的；
+        容器內自己 clone 出來的樹則是真 symlink。實測 `2654e395`：真
+        symlink 的樹分母 262、stub 的樹 259，差的正是那三筆。改用未
+        resolve 的路徑後兩邊同為 259。
+
+        `os.path.abspath` 只做語法正規化（cwd + `..`/`.`），不跟隨 symlink，
+        所以呼叫端傳相對路徑時也算得出鍵。
+        """
+        return Path(os.path.abspath(file_path)).relative_to(
+            self.repo_root).as_posix()
+
     def _is_excluded(self, file_path: Path) -> bool:
         """判斷檔案是否應該從覆蓋率掃描中完全排除"""
         import fnmatch
 
         try:
-            rel = file_path.resolve().relative_to(self.repo_root).as_posix()
+            rel = self._rel_key(file_path)
         except ValueError:
             return False
 
@@ -130,7 +156,7 @@ class DocCoverageAnalyzer:
     def _is_bilingual_excluded(self, file_path: Path) -> bool:
         """判斷檔案是否應該從 bilingual 覆蓋率分母中排除（但仍計入 frontmatter 分母）"""
         try:
-            rel = file_path.resolve().relative_to(self.repo_root).as_posix()
+            rel = self._rel_key(file_path)
         except ValueError:
             return False
 
