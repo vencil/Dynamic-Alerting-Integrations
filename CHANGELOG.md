@@ -15,6 +15,18 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ### Added
 
+- **remote session 的環境隨 repo 交接：新增 SessionStart hook（dx）**：Claude Code on the web 的 session 每次都從**全新 shallow clone** 起，前一個 session 手動裝的東西一律不存活。而缺的那幾樣不會大聲失敗，它們**靜默或誤導性地**失效——這一輪四樣全部踩到：
+  - **沒有 `pre-commit` ⇒ `.git/hooks/` 是空的**，105 道閘門一道都不跑，且沒有任何提示。⚠️ 本輪的第一顆 commit 就是在這個狀態下做的（閘門來自手動跑 `pre-commit run --files`，不是 hook 攔的）；hook 裝上之後，下一次 push 當場被 `require-preflight-pass` 擋下——那道 guard 先前形同不存在。
+  - **shallow clone 無 tag** ⇒ `image-pin-capability-check` 報「git tag `tools/vX.Y.Z` does not resolve」，讀起來像 pin 打錯而不是少 fetch。
+  - **無 `tests/e2e/node_modules`**（gitignored）⇒ `playwright-lint` 失敗。
+  - **無 `pytest`** ⇒ 整族 `tests/**/*.py` uncollectable，「沒有失敗」與「什麼都沒跑」無法區分。
+  - ⛔ **中間兩項先前被交接紀錄誤記為「既有債 / 兩支 BLOCKED hook，拿 marker 走 `--skip-hooks`」——兩支都不是既有債**，各自 `git fetch --tags` 與 `npm install` 就綠了（實測皆 rc=0）。一個誤判的「既有債」標籤會讓後續每個 session 都繞過它，而不是花三十秒修掉。
+  - **版本一律取自 `requirements/ci-constraints.txt`**（repo 自己的 SSOT），本機與 CI 對得上；hook 只在 `CLAUDE_CODE_REMOTE=true` 動作，本機 checkout 直接 exit 0（實測 `env -u CLAUDE_CODE_REMOTE` 跑：rc=0、輸出 0 行）。
+  - ⚠️ **`--ignore-installed PyYAML` 是承重的**：這些映像帶一份 distro-managed PyYAML，pip 卸不掉（`RECORD file not found. Hint: The package was installed by debian`），而 constraints 釘的是另一個版本 ⇒ pip 嘗試取代並**讓整個 transaction 失敗**。實測：不加該旗標 `pip install pre-commit -c requirements/ci-constraints.txt` **rc=1**，加了 **rc=0**。而 pre-commit 正是**唯一**不能失敗的那個——它掉了，這個 repo 的每一道閘門都跟著掉。hook 因此在裝完後顯式檢查 `command -v pre-commit`，缺了就大聲 `exit 1`，而不是讓 `set -e` 在下一行以一句 command-not-found 收場。
+  - **驗證方式是真的把它拆掉再裝回來**，不是假設：`pip uninstall pre-commit` ＋ `rm .git/hooks/{pre-commit,pre-push}` 模擬全新容器後跑 hook ⇒ rc=0、pre-commit 4.6.0（正是 CI 釘的版本）回來、兩個 stage 的 hook 都在。接著實測 linter（單檔 `pre-commit run --files` rc=0、8 Passed）、Python 測試（`tests/lint/test_check_iac_helm.py` **50 passed**，先前是 ModuleNotFoundError）、Go 測試（rc=0）。冪等：連跑兩次皆 rc=0。
+
+### Added
+
 - **`--rbac-metadata-write-scope-enforce` 的 enforce 路徑補上端到端 HTTP 驗證，helm 三支 scope 旗標的 `true` 分支補上渲染涵蓋（test、helm；[#1597](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1597)）**：[#1686](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1686) 合併時逐字列了三項「關票不代表這些消失」，本則收其中兩項。**零 production 行為變更**，且 `helm package` 出貨的 chart 內容逐位元組不變——新增的是測試與一個 lint 用的 values variant。
   - **端到端那半在補接線，不是補述詞**。該軸原有的兩支回歸測試都是 in-process（`rbac/metadata_write_scope_test.go` 直接叫 `AllowedInOrg`、`handler/metadata_write_proposed_test.go` 直接叫 `OrgAllowed`），而寫入平面的 metadata gate **只存在於 handler**：PermWrite 路由的 middleware 授權走 `m.Allowed`，那在 enforce 模式下仍然 metadata-blind——由 `rbac.TestAllowedStaysBlindOnBothAxes` 釘住（`middleware.go` 另有一句同向的註解，講的是 org 軸把 gate 留在 handler 側）。⇒ 一個部署真正依賴的每一段——resolver 有沒有拿到 `d.ConfigDir`、handler 有沒有在任何 commit 之前叫 gate、post-state gate 有沒有真的接在 routed PUT 上——全都是單元測試視為既定的接線。新增 `handler/metadata_write_enforce_test.go`：真實 `rbac.NewManager` 讀真實 `_rbac.yaml`、真實 middleware、`httptest`、git-backed writer 帶 `onWrite` spy（被拒的請求不只要回 403，還要**證明沒有 commit**）。形狀比照 org 軸既有的 `handler/org_write_enforce_test.go`。
   - ⭐ **這支測試被自己的守衛與兩位盲審打回三次，每一次都是「測試看起來綠、但它沒有在測它宣稱的東西」**：

@@ -14,6 +14,8 @@ Session 起手式 codified 為 **PreToolUse hook** (v2.8.0；#824 改經 `run-ho
 
 第二支 PreToolUse hook：`scripts/session-guards/preflight_bash.py`（audit-2026-04 §H1+H2）— 攔 `sed -i` + 掛載路徑（dev-rules #11，免 token 浪費 fix file hygiene）+ 攔 `_*.bat`/`_*.ps1`/`_*.cmd` 寫到 whitelist 之外（Trap #54 防再造輪子）。被擋時 stderr 直接告訴 Claude 該用什麼替代（Read+Edit / `win_git_escape.bat raw <args>`）。
 
+第三支 hook（**SessionStart**，`.claude/hooks/session-start.sh`）：**只在 Claude Code on the web 跑**（`CLAUDE_CODE_REMOTE=true` 才動作，本機 checkout 直接 exit 0）。remote session 每次都從**全新 shallow clone** 起，前一個 session 裝的東西一律不存活，而缺的那幾樣會讓閘門**靜默或誤導性地**失效：① 沒有 `pre-commit` ⇒ `.git/hooks/` 是空的、105 道閘門一道都不跑，且**沒有任何提示**；② shallow clone 無 tag ⇒ `image-pin-capability-check` 報「git tag 不 resolve」，讀起來像 pin 打錯；③ 無 `tests/e2e/node_modules` ⇒ `playwright-lint` 失敗；④ 無 `pytest` ⇒ 整族 Python 測試 uncollectable，「沒有失敗」與「什麼都沒跑」無法區分。版本一律取自 `requirements/ci-constraints.txt`（本 repo 的 SSOT），本機與 CI 對得上。⚠️ ②③ 曾被交接紀錄誤記為「既有債 / BLOCKED hook」——兩支都不是，它們就是這張清單。
+
 ### 設計原則：主路徑 / 逃生門
 
 > **主路徑** Dev Container 做所有事（code/test/commit/push，優先 `make dc-*`）；**逃生門** FUSE 卡死用 Windows 原生 git（`make win-commit` / `scripts/ops/win_git_escape.bat`）。目標：不讓任何 session 因 FUSE 卡死。
