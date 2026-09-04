@@ -14,7 +14,7 @@ import (
 // validTenantYAML is a minimal config that passes validate() for tenant "db-a".
 const validTenantYAML = "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n"
 
-func gitRun(t *testing.T, dir string, args ...string) {
+func gitRun(t testing.TB, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -22,7 +22,7 @@ func gitRun(t *testing.T, dir string, args ...string) {
 	}
 }
 
-func gitOut(t *testing.T, dir string, args ...string) string {
+func gitOut(t testing.TB, dir string, args ...string) string {
 	t.Helper()
 	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).Output()
 	if err != nil {

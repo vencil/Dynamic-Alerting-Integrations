@@ -53,15 +53,16 @@ func (w *Writer) WritePR(ctx context.Context, tenantID, authorEmail, yamlContent
 	if err := guardTenantID(tenantID); err != nil {
 		return nil, err
 	}
-	// Step 1: validate schema before anything. notices (the non-blocking
-	// deprecation channel, #1231 1b) ride the result so the handler can
-	// surface them in its 200 response.
-	filePath, err := w.tenantFilePath(tenantID)
-	if err != nil {
-		return nil, err
-	}
-	errs, notices := validate(w.configDir, tenantID, filePath, yamlContent)
-	if len(errs) > 0 {
+	// Step 1: body-shaped pre-flight, before the admission token and before any
+	// git work, so a malformed body is a 400 that costs no fetch and no branch.
+	// ⛔ STATELESS ONLY. Every check that reads conf.d state moved to step 3c
+	// (#1339): the tree visible here is the tree as it was BEFORE the in-lock
+	// fetch, and judging against it is wrong in BOTH directions — it grandfathers
+	// a `tenants.<other>` section the fresh base no longer declares, and it
+	// refuses a body whose foreign section or metric key the fresh base declares
+	// perfectly legitimately. WritePRBatch has always run its authoritative
+	// validation after the checkout for the same reason.
+	if _, errs, _ := validateStateless(tenantID, yamlContent); len(errs) > 0 {
 		return nil, fmt.Errorf("%w: %s", ErrValidation, strings.Join(errs, "; "))
 	}
 
@@ -101,18 +102,38 @@ func (w *Writer) WritePR(ctx context.Context, tenantID, authorEmail, yamlContent
 		return nil, fmt.Errorf("create branch: %w", err)
 	}
 
-	// Step 3b: RE-resolve the tenant's file now that the feature branch is
-	// checked out (#1673). The path resolved at Step 1 describes the tree as
-	// it was BEFORE checkoutBaseClean + resolveFreshBaseRef; if the fresh base
-	// carries a rename (`db-a.yml` → `db-a.yaml`, or the reverse), writing the
-	// pre-checkout path would recreate the old spelling beside the new one —
-	// the exact duplicate this change exists to prevent. WritePRBatch already
-	// resolves inside its post-checkout loop; this brings the single-tenant
-	// path in line.
-	filePath, err = w.tenantFilePath(tenantID)
+	// Step 3b: resolve the tenant's file now that the feature branch is checked
+	// out (#1673) — never before it. If the fresh base carries a rename
+	// (`db-a.yml` → `db-a.yaml`, or the reverse), a path resolved against the
+	// pre-fetch tree would recreate the old spelling beside the new one — the
+	// exact duplicate this exists to prevent. WritePRBatch already resolves
+	// inside its post-checkout loop; this keeps the single-tenant path in line.
+	filePath, err := w.tenantFilePath(tenantID)
 	if err != nil {
 		w.abortFeatureBranch(base, branchName)
 		return nil, err
+	}
+
+	// Step 3c: AUTHORITATIVE validation, against the tree this write actually
+	// lands on (#1339). Everything in validate() that reads conf.d state — the
+	// added-section delta gate's baseline, the `_defaults.yaml` merge behind
+	// ValidateTenantKeys, and the eol-expansion guard's current-alerts read —
+	// is only meaningful against THIS tree, the freshly-fetched base the commit
+	// below will sit on. Running it here rather than at step 1 is what makes the
+	// verdict and the commit describe the same repository state; the notices
+	// (#1231 1b) come from this run for the same reason.
+	//
+	// A failure here costs the branch we just cut (rolled back below) and the
+	// fetch that preceded it. That price is intrinsic: "is this section/key
+	// legitimate?" cannot be answered without the fresh base, and the fresh base
+	// costs a fetch. It is bounded on both sides — step 1 already refused every
+	// body that is malformed rather than merely wrong, and reaching here at all
+	// means passing admission control, whose token a plain VALID write holds for
+	// longer (it adds the commit and the push this path never reaches).
+	errs, notices := validate(w.configDir, tenantID, filePath, yamlContent)
+	if len(errs) > 0 {
+		w.abortFeatureBranch(base, branchName)
+		return nil, fmt.Errorf("%w: %s", ErrValidation, strings.Join(errs, "; "))
 	}
 
 	// Step 4: write file — the tenant's existing file on THIS branch, whatever
@@ -210,24 +231,36 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 	}
 	defer w.releaseWrite()
 
-	// Pre-flight: merge + validate every op against the current on-disk base
-	// before cutting a branch. The authoritative merge re-runs under the lock
-	// below (against the fresh origin base), but rejecting here keeps a single
-	// invalid op from creating a dangling branch and preserves the
-	// ErrValidation→400 mapping without requiring a git repo to reach it.
+	// Pre-flight: merge every op and check the RESULT's body-shaped properties
+	// before cutting a branch, so one malformed op fails fast (ErrValidation→400)
+	// without leaving a dangling branch and without needing a git repo to reach.
+	// The authoritative merge + full validate re-run under the lock below,
+	// against the freshly-fetched base.
+	//
+	// ⛔ STATELESS ONLY, same as WritePR step 1 (#1339). This pre-flight used to
+	// run the full validate() against the current on-disk tree, which is the tree
+	// BEFORE the in-lock fetch — so a batch could be refused for adding a
+	// `tenants.<other>` section, or using a metric key, that the fresh base
+	// declares perfectly legitimately, and no amount of retrying helped until the
+	// pod restarted. Only the post-checkout loop can answer those.
+	//
+	// Residual, deliberately accepted: the merge here still reads the pre-fetch
+	// file, so a partial patch merged onto a stale base could in principle
+	// produce content whose SHAPE differs from the authoritative merge's. The
+	// shape checks are body-level (parseable, root keys, declares the op's
+	// tenant, single document, legal id, own custom-alert recipes) and the
+	// authoritative loop re-runs all of them, so the worst case is a fast 400
+	// that would have been a slower 400.
 	for _, op := range ops {
 		// Reserved-id backstop per op (defense-in-depth; see guardTenantID).
 		if err := guardTenantID(op.TenantID); err != nil {
 			return nil, err
 		}
-		// Pre-flight notices are discarded — the authoritative in-lock merge
-		// below re-runs validate against the fresh base and collects them
-		// exactly once (no duplicates in the aggregated result).
 		opPath, err := w.tenantFilePath(op.TenantID)
 		if err != nil {
 			return nil, err
 		}
-		if _, _, _, err := w.readMergeValidate(op.TenantID, opPath, op.Merge); err != nil {
+		if err := w.readMergeStateless(op.TenantID, opPath, op.Merge); err != nil {
 			return nil, err
 		}
 	}

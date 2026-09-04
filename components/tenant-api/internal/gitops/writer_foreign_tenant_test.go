@@ -286,27 +286,101 @@ func TestWritePRRefusesContentAfterTheFirstDocument(t *testing.T) {
 
 // An empty trailer is not a smuggling channel, and refusing it would reject
 // bodies a YAML emitter may legitimately produce.
+//
+// The `unparseable` column is the one that fails CLOSED, and the rows that
+// exercise it are the hole this table used to have: it pinned `...` with
+// NOTHING after it (legitimate, must stay legal) and never asked what happens
+// when content follows it. `...` ends a document without starting one, so a
+// bare block after it is a parse error rather than a second document — which
+// the old single-int signature reported as "nothing after the first document".
 func TestExtraDocumentsWithContent(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		body string
-		want int
+		name            string
+		body            string
+		wantExtra       int
+		wantUnparseable bool
 	}{
-		{"single document", ownOnly, 0},
-		{"leading marker", "---\n" + ownOnly, 0},
-		{"trailing marker, no content", ownOnly + "---\n", 0},
-		{"trailing end-of-document marker", ownOnly + "...\n", 0},
-		{"trailing comment-only document", ownOnly + "---\n# nothing here\n", 0},
-		{"second document with a tenant", smuggledDoc2, 1},
-		{"second document with a root key", rootKeyDoc2, 1},
-		{"two extra documents", smuggledDoc2 + "---\ndefaults:\n  cpu_critical: 1\n", 2},
-		{"invalid YAML is the earlier check's business", "{{not yaml", 0},
+		{"single document", ownOnly, 0, false},
+		{"leading marker", "---\n" + ownOnly, 0, false},
+		{"trailing marker, no content", ownOnly + "---\n", 0, false},
+		{"trailing end-of-document marker", ownOnly + "...\n", 0, false},
+		{"trailing comment-only document", ownOnly + "---\n# nothing here\n", 0, false},
+		{"end-of-document marker then a comment", ownOnly + "...\n# nothing here\n", 0, false},
+		{"second document with a tenant", smuggledDoc2, 1, false},
+		{"second document with a root key", rootKeyDoc2, 1, false},
+		{"two extra documents", smuggledDoc2 + "---\ndefaults:\n  cpu_critical: 1\n", 2, false},
+		// ⛔ The fail-open rows. The last four are the ones the FIRST version of
+		// this fix still let through: it kept "a failure on document 0 is the
+		// caller's Unmarshal to report", and Unmarshal into ThresholdConfig
+		// never decodes the subtree of a root key the struct does not know — so
+		// a bad tag parked there is invisible to it and fatal here.
+		{"unparseable from the very first byte", "{{not yaml", 0, true},
+		{"end-of-document marker then a tenants block", ownOnly + "...\ntenants:\n  other:\n    _silent_mode: \"warning\"\n", 0, true},
+		{"end-of-document marker then a root key", ownOnly + "...\ndefaults:\n  cpu_critical: 1\n", 0, true},
+		{"end-of-document marker then a proper second document", ownOnly + "...\n---\ntenants:\n  other:\n    _silent_mode: \"warning\"\n", 1, false},
+		{"bad tag under an unknown root key, then a second document", ownOnly + "zzz: !!int \"abc\"\n---\ntenants:\n  other:\n    _silent_mode: \"warning\"\n", 0, true},
+		{"bad binary tag under an unknown root key", ownOnly + "zzz: !!binary \"@@@\"\n---\ntenants:\n  other:\n    _silent_mode: \"warning\"\n", 0, true},
+		{"duplicate key under an unknown root key", ownOnly + "zzz:\n  k: 1\n  k: 2\n---\ntenants:\n  other:\n    _silent_mode: \"warning\"\n", 0, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := extraDocumentsWithContent(tc.body); got != tc.want {
-				t.Errorf("got %d want %d", got, tc.want)
+			extra, unparseable := extraDocumentsWithContent(tc.body)
+			if extra != tc.wantExtra || unparseable != tc.wantUnparseable {
+				t.Errorf("got (extra=%d, unparseable=%v) want (extra=%d, unparseable=%v)",
+					extra, unparseable, tc.wantExtra, tc.wantUnparseable)
 			}
 		})
+	}
+}
+
+// TestWritePRRefusesATrailerItCannotParse is the end-to-end half: the unit
+// table above would still pass if validateStateless ignored the new second
+// return value, and the body is committed VERBATIM, so the property that
+// matters is that the foreign section never reaches origin.
+func TestWritePRRefusesATrailerItCannotParse(t *testing.T) {
+	second := "---\ntenants:\n  other:\n    _silent_mode: \"critical\"\n"
+	for _, tc := range []struct{ name, body string }{
+		// A document-END marker ends document 1 without starting document 2, so
+		// the block after it is a parse error rather than a second document.
+		{"end-of-document marker then a bare block",
+			ownOnly + "...\ntenants:\n  other:\n    _silent_mode: \"critical\"\n"},
+		// ⛔ These decode CLEAN into cfg.ThresholdConfig — struct decoding never
+		// walks the subtree of a root key the struct does not declare, so the bad
+		// tag is invisible to the caller's Unmarshal and only the generic decoder
+		// ever sees it. The body is committed verbatim, so "only the generic
+		// decoder sees it" is the whole vulnerability.
+		{"bad int tag under an unknown root key", ownOnly + "zzz: !!int \"abc\"\n" + second},
+		{"bad binary tag under an unknown root key", ownOnly + "zzz: !!binary \"@@@\"\n" + second},
+		{"duplicate key under an unknown root key", ownOnly + "zzz:\n  k: 1\n  k: 2\n" + second},
+		{"unknown root key beside a platform-scoped one",
+			ownOnly + "zzz: !!int \"abc\"\ndefaults:\n  cpu_critical: 1\n" + second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := initRepoOnMain(t)
+			_, err := newW(dir).WritePR(context.Background(), "db-a", "a@example.com", tc.body)
+			if !errors.Is(err, ErrValidation) {
+				t.Fatalf("WritePR err = %v, want ErrValidation — the body carried an "+
+					"unvalidated tenants block into the commit", err)
+			}
+		})
+	}
+}
+
+// TestCheckTenantRootKeysAgreesWithTheTrailerGate records WHY the gate above has
+// to be the one that fails closed. CheckTenantRootKeys — the #705 root-key gate —
+// decodes into map[string]any and returns NO violations when that decode fails,
+// so on these bodies it reports a clean root map while `zzz:` (and a smuggled
+// `defaults:`) sit right there. Nothing here asks CheckTenantRootKeys to change;
+// this pins that the trailer gate covers what it misses, so a future edit that
+// relaxes the trailer gate has to confront this.
+func TestCheckTenantRootKeysAgreesWithTheTrailerGate(t *testing.T) {
+	body := ownOnly + "zzz: !!int \"abc\"\ndefaults:\n  cpu_critical: 1\n"
+	if got := cfg.CheckTenantRootKeys([]byte(body)); len(got) != 0 {
+		t.Logf("CheckTenantRootKeys now reports %v — it no longer fails open here; "+
+			"the trailer gate below is then belt-and-braces rather than the only cover", got)
+	}
+	if _, unparseable := extraDocumentsWithContent(body); !unparseable {
+		t.Fatal("the trailer gate must refuse a body whose generic decode fails, " +
+			"because the root-key gate answers 'no violations' on exactly these")
 	}
 }
 

@@ -60,7 +60,8 @@ func TestFetchTimeoutIndependentFromGitTimeout(t *testing.T) {
 }
 
 // gitClone clones remote into dst (skips the test if git is unavailable).
-func gitClone(t *testing.T, remote, dst string) {
+// t is testing.TB so the #1339 benchmarks can build the same fixture.
+func gitClone(t testing.TB, remote, dst string) {
 	t.Helper()
 	if out, err := exec.Command("git", "clone", remote, dst).CombinedOutput(); err != nil {
 		t.Skipf("git clone: %v\n%s", err, out)
@@ -68,7 +69,7 @@ func gitClone(t *testing.T, remote, dst string) {
 }
 
 // initBareRemoteOnMain creates a bare remote whose default branch is "main".
-func initBareRemoteOnMain(t *testing.T) string {
+func initBareRemoteOnMain(t testing.TB) string {
 	t.Helper()
 	dir := t.TempDir()
 	if out, err := exec.Command("git", "init", "--bare", "-b", "main", dir).CombinedOutput(); err != nil {
@@ -77,7 +78,7 @@ func initBareRemoteOnMain(t *testing.T) string {
 	return dir
 }
 
-func writeFileInDir(t *testing.T, dir, name, content string) {
+func writeFileInDir(t testing.TB, dir, name, content string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
 		t.Fatalf("write %s: %v", name, err)

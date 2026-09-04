@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -107,16 +108,44 @@ var ErrReservedTenantID = errors.New("reserved tenant id: names a conf.d control
 // the handler's ValidateTenantID uses — so no tenant write method can overwrite
 // a reserved control file even if a future caller forgets to validate first
 // (single-choke-point fragility is the exact bug class this change closes).
-// extraDocumentsWithContent counts the YAML documents after the first that
-// decode to something non-nil. A body whose YAML is invalid returns 0 — that is
-// the caller's earlier Unmarshal check to report, not this one's.
-func extraDocumentsWithContent(yamlContent string) int {
+// extraDocumentsWithContent reports what follows the FIRST YAML document:
+// extra counts the further documents that decode to something non-nil, and
+// unparseableTrailer says the bytes after the first document could not be
+// decoded as documents at all.
+//
+// ⛔ Those are two answers, not one, and collapsing them is what made this
+// function fail OPEN. It used to return the running count on ANY decode error,
+// reasoning that "a parse error the Unmarshal above already owns". ANY decode
+// error must instead be reported as an unaccountable trailer, and the reason is
+// the precondition below — not a judgement about which document failed.
+//
+// ⛔ PRECONDITION: callers MUST have already decoded yamlContent into
+// cfg.ThresholdConfig and rejected the body if that failed (validateStateless
+// does, before calling this). Given that, a decode failure HERE — at any index,
+// the first document included — means the two decoders DISAGREE about the same
+// bytes, and disagreement between what the validator saw and what gets
+// committed is exactly the hazard: the write path commits the body VERBATIM.
+//
+// That the index does not matter was learned twice, the second time the hard
+// way. First: `...` (document-END, not document-START) ends document 1 and a
+// bare `tenants:` block after it is a parse error at i==1, which the old code
+// answered as 0. Then the first fix kept `i > 0` on the same false reasoning —
+// and struct decoding is precisely where it breaks, because Unmarshal into
+// ThresholdConfig SKIPS the subtree of a root key the struct does not know. So
+// `zzz: !!int "abc"` (bad tag, unknown root key) decodes clean into the struct,
+// fails at i==0 here, answered (0, false), and carried a whole second document
+// into git — while CheckTenantRootKeys, decoding into map[string]any, failed the
+// same way and reported zero illegal root keys. "The caller's Unmarshal owns it"
+// is only ever true of a decoder with the SAME failure modes as this one.
+func extraDocumentsWithContent(yamlContent string) (extra int, unparseableTrailer bool) {
 	dec := yaml.NewDecoder(strings.NewReader(yamlContent))
-	extra := 0
 	for i := 0; ; i++ {
 		var doc any
 		if err := dec.Decode(&doc); err != nil {
-			return extra // io.EOF, or a parse error the Unmarshal above already owns
+			if errors.Is(err, io.EOF) {
+				return extra, false // a clean end — including a trailing `...`
+			}
+			return extra, true
 		}
 		if i > 0 && doc != nil {
 			extra++
@@ -398,6 +427,27 @@ func (w *Writer) readMergeValidate(tenantID, filePath string, merge MergeFunc) (
 		return "", existing, nil, fmt.Errorf("%w for %s: %s", ErrValidation, tenantID, strings.Join(errs, "; "))
 	}
 	return content, existing, notices, nil
+}
+
+// readMergeStateless is readMergeValidate's fail-fast half: it merges an op
+// against the current on-disk file and checks only the properties of the RESULT
+// that depend on nothing but the body (validateStateless). It exists for
+// WritePRBatch's pre-flight, which runs before the branch is cut and therefore
+// before the tree the write lands on is even known (#1339) — see the comment at
+// that call site for what the pre-fetch merge base costs there.
+func (w *Writer) readMergeStateless(tenantID, filePath string, merge MergeFunc) error {
+	existing, rerr := os.ReadFile(filePath)
+	if rerr != nil && !os.IsNotExist(rerr) {
+		return fmt.Errorf("read current tenant file for %s: %w", tenantID, rerr)
+	}
+	content, merr := merge(existing)
+	if merr != nil {
+		return fmt.Errorf("merge tenant config for %s: %w", tenantID, merr)
+	}
+	if _, errs, _ := validateStateless(tenantID, content); len(errs) > 0 {
+		return fmt.Errorf("%w for %s: %s", ErrValidation, tenantID, strings.Join(errs, "; "))
+	}
+	return nil
 }
 
 // WriteMerged persists a tenant config whose content is computed, UNDER the
@@ -760,17 +810,32 @@ func (w *Writer) gitCommit(filePath, tenantID, authorEmail string, trailer ...st
 // sees the migration signal on the write path itself, not only via GET /
 // POST /validate. Structural failures (bad YAML / root keys / missing tenant
 // section) return nil notices: key validation never ran.
-func validate(configDir, tenantID, tenantFilePath, yamlContent string) (errs, notices []string) {
-	var tcfg cfg.ThresholdConfig
+// validateStateless runs the subset of validate()'s checks that read the request
+// BODY and nothing else — no conf.d state, no disk, no git.
+//
+// It exists so a PR-mode write can reject a malformed body for free, BEFORE the
+// admission token and before any git work, while every check that needs conf.d
+// state runs later against the tree the commit actually LANDS on (#1339). The
+// split is the whole point: those stateful checks used to run against the tree
+// as it was before the in-lock fetch, which both let a foreign section through
+// and refused legitimate ones — see WritePR's step 3c.
+//
+// fatal reports a STRUCTURAL failure (unparseable, wrong root keys, no
+// tenants.{id}, trailing documents, reserved id): validate()'s stateful half
+// cannot run on such a body at all, which is why it returns nil notices for
+// exactly these. A NON-fatal error set (custom-alerts violations, which are
+// per-tenant stateless) is accumulated alongside the stateful errors instead, so
+// validate()'s message composition is unchanged.
+func validateStateless(tenantID, yamlContent string) (tcfg cfg.ThresholdConfig, errs []string, fatal bool) {
 	if err := yaml.Unmarshal([]byte(yamlContent), &tcfg); err != nil {
-		return []string{"invalid YAML: " + err.Error()}, nil
+		return tcfg, []string{"invalid YAML: " + err.Error()}, true
 	}
 	// Reject any non-`tenants` top-level key before anything else (#705).
 	if rootErrs := cfg.CheckTenantRootKeys([]byte(yamlContent)); len(rootErrs) > 0 {
-		return rootErrs, nil
+		return tcfg, rootErrs, true
 	}
 	if _, ok := tcfg.Tenants[tenantID]; !ok {
-		return []string{fmt.Sprintf("YAML must contain tenants.%s section", tenantID)}, nil
+		return tcfg, []string{fmt.Sprintf("YAML must contain tenants.%s section", tenantID)}, true
 	}
 	// Everything after the first YAML document is bytes that nothing here reads:
 	// Unmarshal above and CheckTenantRootKeys both decode ONE document and
@@ -779,11 +844,17 @@ func validate(configDir, tenantID, tenantFilePath, yamlContent string) (errs, no
 	// straight into git, past every gate in this function (#1681). An empty
 	// trailer (a bare `---`, a comment-only document) carries nothing and stays
 	// legal, so this counts content rather than documents.
-	if extra := extraDocumentsWithContent(yamlContent); extra > 0 {
-		return []string{fmt.Sprintf(
+	switch extra, unparseable := extraDocumentsWithContent(yamlContent); {
+	case unparseable:
+		return tcfg, []string{"YAML has content after the first document that does not " +
+			"parse as a further document — a tenant config is a single document, and the " +
+			"write path commits the body verbatim, so those bytes would be written but " +
+			"never validated"}, true
+	case extra > 0:
+		return tcfg, []string{fmt.Sprintf(
 			"YAML has %d document(s) with content after the first — a tenant config "+
 				"is a single document; anything after it would be written but never "+
-				"validated", extra)}, nil
+				"validated", extra)}, true
 	}
 	// The write plane addresses a file by tenant id, but the exporter takes
 	// tenant ids from the file's `tenants:` KEYS — so without this the two
@@ -791,12 +862,26 @@ func validate(configDir, tenantID, tenantFilePath, yamlContent string) (errs, no
 	// only walks the ROOT map; a second `tenants.<other>` block passes it, and
 	// both remaining gates (RequireOrgWrite, Policy.CheckWrite via
 	// extractPatchKeys) read the URL id alone and never see it (#1681).
-	// This function joins tenantID into a path below, and it is reachable from
-	// callers that have not run the id past guardTenantID (WriteMerged's merge
-	// step, and any future one). Re-asserting it here costs a string compare and
-	// keeps the containment check in the same function as the path it protects.
+	// validate() joins tenantID into a path, and it is reachable from callers
+	// that have not run the id past guardTenantID (WriteMerged's merge step, and
+	// any future one). Re-asserting it costs a string compare and keeps the
+	// containment check in the same call chain as the path it protects.
 	if err := guardTenantID(tenantID); err != nil {
-		return []string{err.Error()}, nil
+		return tcfg, []string{err.Error()}, true
+	}
+	// S5 shift-left preflight (ADR-024 §S5): validate the tenant's OWN `_custom_alerts`
+	// recipes in-process (Go-native, no promtool/Python). Stateless per-tenant —
+	// cross-inheritance collisions + compiler template bugs stay the CI compiler's
+	// authority. Runs on the raw body (tcfg), not the merged config: the PUT body is
+	// a full overlay, so it carries the tenant's complete own recipe set. NOT fatal:
+	// validate() appends these after the key errors, exactly as it always has.
+	return tcfg, cfg.ValidateTenantCustomAlerts(tenantID, tcfg.Tenants[tenantID], cfg.MaxCustomRecipesDefault), false
+}
+
+func validate(configDir, tenantID, tenantFilePath, yamlContent string) (errs, notices []string) {
+	tcfg, statelessErrs, fatal := validateStateless(tenantID, yamlContent)
+	if fatal {
+		return statelessErrs, nil
 	}
 	// Read the file this write replaces ONCE. Two stateful checks need it — the
 	// added-section gate below and the eol-expansion guard at the end — and on a
@@ -845,13 +930,10 @@ func validate(configDir, tenantID, tenantFilePath, yamlContent string) (errs, no
 	}
 	keyErrs := kv.Errors
 	notices = kv.Notices
-	// S5 shift-left preflight (ADR-024 §S5): validate the tenant's OWN `_custom_alerts`
-	// recipes in-process (Go-native, no promtool/Python). Stateless per-tenant —
-	// cross-inheritance collisions + compiler template bugs stay the CI compiler's
-	// authority. Runs on the raw body (tcfg), not the merged config: the PUT body is
-	// a full overlay, so it carries the tenant's complete own recipe set.
-	caViol := cfg.ValidateTenantCustomAlerts(tenantID, tcfg.Tenants[tenantID], cfg.MaxCustomRecipesDefault)
-	errs = append(keyErrs, caViol...)
+	// statelessErrs here is the custom-alerts violation set validateStateless
+	// deliberately did NOT treat as fatal, appended after the key errors exactly
+	// where it has always been composed.
+	errs = append(keyErrs, statelessErrs...)
 
 	// B2-wide eol-expansion guard (ADR-024 §8) at the SHARED write choke point, so
 	// PutTenant + batch full-config writes are covered, not just the /custom-alerts
