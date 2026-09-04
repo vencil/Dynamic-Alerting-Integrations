@@ -6,6 +6,8 @@ Usage:
   python3 scripts/tools/validate_all.py --parallel      # parallel execution
   python3 scripts/tools/validate_all.py --ci            # exit 1 on first failure
   python3 scripts/tools/validate_all.py --skip links,mermaid
+  python3 scripts/tools/validate_all.py --only versions,tool_map
+  python3 scripts/tools/validate_all.py --list           # registered check names
   python3 scripts/tools/validate_all.py --json          # JSON summary output
   python3 scripts/tools/validate_all.py --json --baseline  # save JSON as baseline
   python3 scripts/tools/validate_all.py --json --compare   # compare against baseline
@@ -15,6 +17,14 @@ Usage:
   python3 scripts/tools/validate_all.py --watch            # file-watch auto-rerun
   python3 scripts/tools/validate_all.py --smart            # git-diff based auto-skip
   python3 scripts/tools/validate_all.py --notify           # desktop notification on completion
+
+Exit codes:
+  0  every selected check passed
+  1  a check failed
+  2  the invocation could not be used: an unrecognised flag, or a --only /
+     --skip value that no registered check answers to (--list prints them).
+     In --json mode this path writes nothing to stdout; the reason goes to
+     stderr, the same as argparse's own errors. (#1620)
 """
 
 import argparse
@@ -34,6 +44,13 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+# EXIT_CALLER_ERROR (2) for an unusable invocation. ⚠️ dev-rules #13's literal
+# scope is "da-tools 子命令" and this runner is NOT one — it is absent from
+# components/da-tools/app/entrypoint.py's COMMAND_MAP, and the gate that
+# enforces dev-rules #13 (tests/shared/test_tool_exit_codes.py) only walks ops/ dx/
+# lint/, not scripts/tools/ itself. Reusing the SSOT constant here is a
+# deliberate alignment, not a rule this file was already under (#1620).
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent
@@ -92,6 +109,115 @@ TOOLS = [
     ("jsx_loader_compat", "lint/check_jsx_loader_compat.py", ["--ci"], "JSX-loader Babel-standalone compat (named exports / non-allowlist imports / require() — S#93 from PR #182 fix)"),
     ("playwright_rtl_drift", "lint/check_playwright_rtl_drift.py", ["--ci"], "Playwright spec uses React Testing Library API names (getByDisplayValue / getByLabelText / getByPlaceholderText — S#96 mechanical safety net for testing-playbook §LL §10 from PR #184 fix)"),
 ]
+
+
+def _unknown_check_names(only_set, skip_set):
+    """Requested check names that no registered check answers to.
+
+    The accepted set is re-derived from ``TOOLS`` here — the same list
+    ``--list`` prints and the same list the runnable filter matches against —
+    so registering a check makes it acceptable with no second place to update,
+    and un-registering one makes it unacceptable the same way. There is
+    deliberately no list of *rejected* spellings: a name is acceptable iff a
+    check answers to it.
+
+    Returns a list of ``(flag, sorted_unknown_names)`` pairs, empty when every
+    requested name exists. The flag is carried so the message can say which of
+    the two flags the operator has to look at.
+    """
+    known = {name for name, _, _, _ in TOOLS}
+    problems = []
+    for flag, names in (("--only", only_set), ("--skip", skip_set)):
+        unknown = sorted(n for n in names if n not in known)
+        if unknown:
+            problems.append((flag, unknown))
+    return problems
+
+
+def _unknown_check_names_message(problems):
+    """Operator-facing text for a non-empty _unknown_check_names() result.
+
+    Three things this message has already been wrong about, each fixed here:
+
+    1. ⛔ The two ways out are NOT equivalent, and the first draft offered them
+       as peers ("fix the spelling, or drop the name"). Correcting the spelling
+       runs the check; deleting the name ALSO reaches green. So: lead with the
+       close match, and name the cost of the other route instead of offering
+       it.
+    2. ⛔ That cost is OPPOSITE for the two flags, and the second draft printed
+       one sentence for both. Measured: `--skip glossary` runs the other
+       checks; before #1620, `--skip glossary_TYPO` ran everything — the
+       unknown name made MORE run, not fewer. Deleting a name from `--skip`
+       makes that check start running; deleting one from `--only` makes it
+       stop. Each flag gets its own consequence line.
+    3. ⚠️ ASCII only. This goes to stderr, and `_lib_compat.try_utf8_stdout`
+       deliberately patches stdout alone (see its own rationale), so on the
+       cp950-class consoles this repo actually runs on, `⛔` degraded to
+       `\\u26d4` and an em dash to mojibake — on the one line carrying the
+       warning. Severity is carried by the word WARNING, not by a glyph.
+
+    The registry is pointed at via ``--list`` rather than repeated, so the
+    advice cannot go stale.
+    """
+    import difflib
+
+    known = sorted(name for name, _, _, _ in TOOLS)
+    # ⛔ Match case-insensitively. difflib is not, so `VERSIONS` scored
+    # below the cutoff and got NO suggestion -- and this whole message is
+    # built on "the safe remedy is also the cheapest, and it is on line 2".
+    # `VERSIONS` is one of the probes the tests use, which is how the gap
+    # stayed invisible: they only asserted it was rejected (#1620).
+    _folded = {k.lower(): k for k in known}
+    detail = "; ".join(f"{flag} {', '.join(names)}"
+                       for flag, names in problems)
+    hint = ""
+    for flag, names in problems:
+        sugg = []
+        for n in names:
+            for c in difflib.get_close_matches(n.lower(), list(_folded),
+                                               n=3, cutoff=0.6):
+                if _folded[c] not in sugg:
+                    sugg.append(_folded[c])
+        if sugg:
+            hint += f"  Did you mean ({flag}): {', '.join(sugg)}\n"
+    # ⛔ The WHOLE consequence is per-flag, not just the warning. An earlier
+    # draft split the warning but left one shared body sentence, and that
+    # sentence was `--only`'s failure shape printed under `--skip` too.
+    consequence = {
+    # ⛔ NOTHING here may predict what this run will do. Three rounds
+    # of #1620 blind review died on that: the builder cannot see the
+    # mode -- `--smart` fills only_set AFTER this guard, and `--watch`
+    # never reads args.only at all -- so every mode-dependent clause was
+    # false for some caller, and each fix invented a new one. What is
+    # left is true whatever mode printed it: what the NAME did, and what
+    # deleting it would and would not accomplish.
+    # ⛔ NOTHING here may predict what this run will do. Three rounds
+    # of #1620 blind review died on that: the builder cannot see the
+    # mode -- `--smart` fills only_set AFTER this guard, and `--watch`
+    # never reads args.only at all -- so every mode-dependent clause was
+    # false for some caller, and each fix invented a new one. Two lines
+    # per flag: what the NAME did, and what the cheap fix would cost.
+    # The history of the bug belongs in the commit, not in an error.
+        "--only": (
+            "  --only: no registered check answers to this name, so it selects\n"
+            "  nothing.\n"
+            "  WARNING (--only): deleting the name also turns this green without\n"
+            "  fixing anything -- only some checks are pinned as must-still-be-\n"
+            "  selected (#1492).\n"),
+        "--skip": (
+            "  --skip: no registered check answers to this name, so it subtracts\n"
+            "  nothing.\n"
+            "  WARNING (--skip): deleting the name also turns this green, and\n"
+            "  subtracts nothing either way.\n"),
+    }
+    tail = "".join(consequence[flag] for flag, _names in problems)
+    return (
+        f"error: no registered check is named: {detail}\n"
+        + hint +
+        "  `python3 scripts/tools/validate_all.py --list` prints every "
+        "registered name.\n"
+        + tail
+    ).rstrip("\n")
 
 
 def _run_one(
@@ -566,11 +692,15 @@ def main():
     )
     parser.add_argument(
         "--skip", type=str, default="",
-        help="Comma-separated list of tools to skip (e.g. links,mermaid)",
+        help="Comma-separated list of tools to skip (e.g. links,mermaid). "
+             "A name no check answers to is a caller error (exit 2); "
+             "--list prints the registered names",
     )
     parser.add_argument(
         "--only", type=str, default="",
-        help="Comma-separated list of tools to run (e.g. versions,tool_map)",
+        help="Comma-separated list of tools to run (e.g. versions,tool_map). "
+             "A name no check answers to is a caller error (exit 2); "
+             "--skip still subtracts from this list",
     )
     parser.add_argument(
         "--list", action="store_true",
@@ -627,6 +757,23 @@ def main():
             print(f"  {short_name:20} {desc} ({script_name})")
         return
 
+    skip_set = set(s.strip() for s in args.skip.split(",") if s.strip())
+    only_set = set(s.strip() for s in args.only.split(",") if s.strip())
+
+    # #1620: reject names nothing answers to, BEFORE every mode dispatch
+    # EXCEPT `--list` -- that one returns above this point on purpose, so
+    # the remedy this message points at still works while the invocation
+    # is broken (pinned by test_list_still_works_alongside_a_bad_only, and
+    # `--list`/`--watch` are the named exclusions in the test file's
+    # _parser_boolean_flags).
+    # Parsed here rather than after the --watch branch so that
+    # `--watch --skip <typo>` is rejected too — watch mode reads args.skip
+    # itself and would otherwise drop the name in its own filter.
+    problems = _unknown_check_names(only_set, skip_set)
+    if problems:
+        print(_unknown_check_names_message(problems), file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
+
     tools_dir = Path(__file__).parent
     project_root = tools_dir.parent.parent
     os.chdir(project_root)
@@ -636,21 +783,47 @@ def main():
         _run_watch(args, tools_dir, project_root)
         return
 
-    skip_set = set(s.strip() for s in args.skip.split(",") if s.strip())
-    only_set = set(s.strip() for s in args.only.split(",") if s.strip())
-
     # --smart: derive only_set from git diff
     if args.smart and not only_set:
         smart_checks = _smart_detect(project_root)
         if smart_checks is not None:
             only_set = set(smart_checks)
             if not args.json:
-                print(f"Smart mode: running {len(only_set)} check(s) "
-                      f"based on git diff: {', '.join(sorted(only_set))}\n")
+                # ⛔ Derive the announcement from the SAME filter the
+                # run uses, `--skip` included. Announcing `only_set`
+                # alone was wrong the moment `--skip` started
+                # subtracting (#1620): `--smart --skip a,b,c` said 33 and
+                # ran 30 -- a fresh copy of the one-run-two-answers shape
+                # this change exists to remove.
+                will_run = sorted(
+                    n for n, _s, _a, _d in TOOLS
+                    if (not only_set or n in only_set)
+                    and n not in skip_set)
+                if only_set:
+                    print(f"Smart mode: running {len(will_run)} check(s) "
+                          f"based on git diff: "
+                          f"{', '.join(will_run)}\n")
+                else:
+                    # An empty selection means "no restriction" three
+                    # lines below, so the run does everything that is not
+                    # skipped. Printing "running 0 check(s)" and then
+                    # running all of them was the same contradiction.
+                    print(f"Smart mode: the git diff selected no checks, "
+                          f"so nothing is restricted -- running "
+                          f"{len(will_run)}.\n")
 
-    # Filter to runnable tools
+    # Filter to runnable tools. `--skip` subtracts in BOTH branches (#1620):
+    # it used to be ignored whenever `--only` was present, while the
+    # skipped-items loop below printed `... skipped` for it regardless, so one
+    # invocation reported both outcomes for the same check —
+    #   `--only versions --skip versions`
+    #     ⊘ versions  ... skipped
+    #     ✓ versions  ... 2.7s
+    # An empty result is still exit 0: every name existed, and asking for an
+    # empty intersection is a request to run nothing, not a bad invocation.
     if only_set:
-        runnable = [(n, s, a, d) for n, s, a, d in TOOLS if n in only_set]
+        runnable = [(n, s, a, d) for n, s, a, d in TOOLS
+                    if n in only_set and n not in skip_set]
     else:
         runnable = [(n, s, a, d) for n, s, a, d in TOOLS if n not in skip_set]
     skipped = len(TOOLS) - len(runnable)

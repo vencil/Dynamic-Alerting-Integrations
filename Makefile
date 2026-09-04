@@ -878,6 +878,11 @@ lint-extract: ## 拆新 lint script（PR #154/#162/#166/#169/#170 共通 boilerp
 		$(if $(FORCE),--force) \
 		$(if $(NO_HOOK),--no-hook)
 
+# ⛔ 這條目標原本沒宣告 .PHONY（#1620 盲審量到）。少了它，repo root
+# 只要出現一個名為 lint-docs 的檔案或目錄，make 就回 `'lint-docs' is up to date.`、
+# rc 0，而 validate_all 一次都不跑——required check `Lint Documentation` 跑的正是這條。
+# 實測：無 .PHONY + 同名檔 → rc 0；補上 .PHONY 的對照組 → rc 2。
+.PHONY: lint-docs
 lint-docs: ## 一站式文件 lint（versions + drift + tool consistency，支援 ARGS="--parallel"）
 	@python3 ./scripts/tools/validate_all.py \
 		--only versions,tool_map,doc_map,rule_pack_stats,byo_rulepack_table,rule_packs,changelog,glossary,includes,platform_data,tool_consistency,alerts,cli_default_drift \
