@@ -39,11 +39,28 @@
 #   MKDOCS_STRICT_BYPASS=1 git push  (skips this hook entirely)
 #
 # Configuration:
-#   Wired in .pre-commit-config.yaml under `stages: [pre-push]`.
+#   ⛔ NOT a pre-commit hook, and there is no `mkdocs-strict-pre-push` id any
+#   more (#1689). It is run by scripts/ops/prepush_dispatch.sh; install with
+#       bash scripts/ops/install_prepush_hook.sh
+#   ⛔ Do not put a `stages: [pre-push]` entry back in .pre-commit-config.yaml.
+#   A hook that pre-commit runs is handed exactly ONE refspec, so the two
+#   siblings on that dispatcher went blind that way — and the shipped test
+#   asserts that the config declares no pre-push hooks at all.
+#
+#   The dispatcher skips this guard when the push carries no commits (a
+#   deletion, or an up-to-date push). That is not a new policy: pre-commit's
+#   `_pre_push_ns` returns None in both cases and then runs no pre-push hooks,
+#   so before #1689 a `git push origin :branch` never reached this check
+#   either. It still should not — this guard does not read the refspec (it
+#   diffs `@{u}...HEAD`, #1690), so on a deletion it would judge something the
+#   push is not doing. Measured: without the skip, deleting a merged branch
+#   started requiring a green docs build.
 #
 # See:
+#   - scripts/ops/prepush_dispatch.sh — what runs this, and with what
 #   - scripts/tools/lint/mkdocs_strict_check.sh — the actual strict check
 #   - issue #412 — the recurrence pattern that motivated this hook
+#   - issue #1690 — this guard checks `@{u}...HEAD`, not the pushed refspec
 #   - dev-rules.md #4 — mkdocs strict semantic gap context
 
 set -uo pipefail

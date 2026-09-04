@@ -127,24 +127,34 @@ It is running under pre-commit, but neither channel carried a refspec: git's
 stdin was empty (pre-commit consumes it before the hook runs, #1664) and
 PRE_COMMIT_REMOTE_BRANCH is unset.
 
-The one measured way to reach this state is invoking the hook outside a push:
+⛔ SINCE #1689 THIS GUARD IS NOT SUPPOSED TO RUN UNDER pre-commit AT ALL.
+The pre-push guards were moved out of .pre-commit-config.yaml because a hook
+run by pre-commit is shown exactly ONE refspec, so a push carrying `feat/x`
+and `main` together hid `main` from the guard whose entire job is to block it.
+They are run by scripts/ops/prepush_dispatch.sh now, which reads git's stdin
+itself and hands every guard the whole thing.
 
-    pre-commit run --hook-stage pre-push ...
+So reaching this message means one of:
 
-There is nothing for the guard to judge there. Three ways forward, all cheap
-and none of which weaken anything (measured):
+  * a `stages: [pre-push]` entry for this guard was added back to
+    .pre-commit-config.yaml — remove it; the copy pre-commit runs is the blind
+    one, and it will not stop shadowing the dispatcher by being green;
+  * you invoked it by hand under a pre-commit environment, in which case there
+    is genuinely nothing to judge.
 
-    git push --dry-run origin HEAD:refs/heads/<branch>   # exercise it for real
-    pre-commit run --hook-stage pre-push mkdocs-strict-pre-push
-                                                        # the one pre-push hook
-                                                        # with work to do here
-    SKIP=protect-main-push,require-preflight-pass \
-      pre-commit run --all-files --hook-stage pre-push  # sweep the rest
+To exercise the guards for real, push something:
 
-⛔ If you are seeing this during an actual `git push`, then pre-commit stopped
-exporting PRE_COMMIT_REMOTE_BRANCH and this guard is blind. Fix the wiring —
-do not reach for --no-verify, and do not "fix" this by allowing the empty
-case, which is exactly the defect #1664 removed.
+    git push --dry-run origin HEAD:refs/heads/<branch>
+
+⛔ Measured: --dry-run runs the hooks and leaves the remote untouched, and an
+up-to-date push runs them with ZERO rows — "nothing to push" and "cannot see
+what is being pushed" are different answers and must stay that way.
+
+⛔ Do not reach for --no-verify, and do not "fix" this by allowing the empty
+case: that is exactly the defect #1664 removed. To ask whether the guards are
+on the push path at all:
+
+    make pr-preflight          (its `Local hooks` row answers exactly that)
 
 PREPUSH_MSG
 }

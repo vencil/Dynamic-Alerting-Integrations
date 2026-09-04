@@ -32,7 +32,7 @@ import sys
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 # Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
 # Modern pattern (PR #432, 2026-05-12): main()-scoped UTF-8 reconfigure
@@ -914,54 +914,115 @@ def check_conflict() -> CheckResult:
     )
 
 
-def _prepush_hook_installed() -> bool:
-    """pre-commit 的 pre-push hook 在這個 clone 上真的裝了嗎？
+_PREPUSH_SHIM_MARKER = "vibe-prepush-shim"
+_PRECOMMIT_HOOK_MARKER = "--hook-type=pre-push"
 
-    ⛔ #1664 續辦。`pre-commit install`——也就是 repo 自己的安裝說明教人跑的
-    那一條——只裝 **pre-commit** 那一層。三支 `stages: [pre-push]` 的守衛
-    （擋直推 main／要求 preflight marker／mkdocs strict）需要
-    `--hook-type pre-push`，而 repo 裡沒有任何可執行路徑會跑它。實測：全新
-    clone 照文件做，`.git/hooks/pre-push` 不存在，直推 main 成功、畫面滿是
-    綠色的 pre-commit 層 hook——與 #1664 修掉的那張畫面同形，只是高一層。
 
-    用 `--git-path` 而不是 `--git-dir`：在 worktree 裡 git dir 是
-    `.git/worktrees/<name>`，但 hook 住在**主 repo** 的 `.git/hooks`，
-    `--git-path` 會解到正確位置。內容比對找的是 pre-commit 產生 hook 時寫進去
-    的那個參數，所以一支手寫的舊 pre-push hook 不會被讀成「已安裝」。
+def _hook_body(path: Path) -> Optional[str]:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+
+
+def _prepush_guards_wired() -> Tuple[bool, str]:
+    """三支 pre-push 守衛在這個 clone 上真的在 push 路徑上嗎？
+
+    ⛔ #1664 續辦，#1689 改寫。**這裡是這個判定的唯一實作**，而且刻意是純
+    Python、零子行程。前一版把判定放進 `install_prepush_hook.sh --check` 再由
+    本函式 shell out，理由是「安裝器與閘門不要各寫一份」；那個理由仍然對，但
+    載體選錯了，而且錯的方向是**給出錯誤的判決**而不是大聲失敗：
+
+      * 由 PowerShell 發動的 Python，`shutil.which("bash")` 命中的是
+        `C:\\WINDOWS\\System32\\bash.EXE`＝**WSL**，它看不到這個 repo
+        （`--check` rc=127「No such file or directory」）⇒ 假紅。
+      * `Git\\usr\\bin\\bash.exe` 在非 MSYS 父行程下 PATH 上**沒有 `grep`**，
+        而 `grep -q … 2>/dev/null` 把「指令不存在」吞掉 ⇒ 對一個裝好的 shim
+        回報「沒裝」⇒ 也是假紅。
+
+    而假紅的最省事轉綠是 `--skip-hooks`，那條**寫死在 Windows 逃生門裡**
+    （`win_git_escape.bat` / `.ps1`）⇒ 這道閘門會變成恆為 SKIP。
+
+    **兩種正確狀態**（兩種安裝順序各一）：shim 直接住 `.git/hooks/pre-push`，
+    或 pre-commit 擁有該檔而 shim 住 `pre-push.legacy`（pre-commit 用**完整**
+    refspec 呼叫它）。
+
+    ⛔ **可執行位元也是判定的一部分**：git 對沒有執行位元的 hook **完全不跑**，
+    只印一行 `advice.ignoredHook` 可關掉的 `hint:`。實測把位元拿掉之後，直推
+    main 成功、守衛橫幅一個字都沒有，而舊版的內容比對照樣回報「已接上」。
+    ⚠️ Windows 沒有這個位元，`os.access(X_OK)` 對存在的檔一律回 True——所以這
+    一格在 Windows 上是**不生效**而不是「通過」。
+
+    回傳 `(wired, message)`。⛔ **「量不到」與「量了沒事」要分得開**。
     """
     r = run(["git", "rev-parse", "--git-path", "hooks/pre-push"], timeout=30)
     if r.returncode != 0:
-        return False
-    path = Path((r.stdout or "").strip())
-    if not path.is_file():
-        return False
-    try:
-        return "--hook-type=pre-push" in path.read_text(
-            encoding="utf-8", errors="replace"
+        return False, "查不出來：git rev-parse --git-path 失敗（不在 work tree 裡？）"
+    hook = Path((r.stdout or "").strip())
+    legacy = hook.with_name("pre-push.legacy")
+
+    def _ok(p: Path) -> bool:
+        return os.access(p, os.X_OK)
+
+    hook_body = _hook_body(hook) if hook.is_file() else None
+    legacy_body = _hook_body(legacy) if legacy.is_file() else None
+
+    if hook_body is not None and _PREPUSH_SHIM_MARKER in hook_body:
+        if not _ok(hook):
+            return False, (
+                f"{hook} 是守衛 shim，但**沒有執行位元** ⇒ git 完全不會跑它"
+                "（只印一行可關掉的 hint）。重跑 install_prepush_hook.sh。"
+            )
+        return True, f"OK：{hook} 就是守衛 shim"
+
+    if hook_body is not None and _PRECOMMIT_HOOK_MARKER in hook_body:
+        if legacy_body is not None and _PREPUSH_SHIM_MARKER in legacy_body:
+            if not _ok(legacy):
+                return False, (
+                    f"{legacy} 是守衛 shim，但**沒有執行位元** ⇒ pre-commit 叫不動它。"
+                    "重跑 install_prepush_hook.sh。"
+                )
+            return True, f"OK：pre-commit 擁有 {hook.name}，並以完整 refspec 呼叫 {legacy.name} 的守衛 shim"
+        # ⛔ 兩種因果共用這一格，而它們**分不出來**——不要只講其中一種。
+        # `pre-commit install -f --hook-type pre-push` 會靜默刪掉 pre-push.legacy
+        # （rc=0、輸出隻字未提），而「從來沒裝過」看起來一模一樣，且那是合併後
+        # 每個人的第一次。前一版只講了繳械那一種，於是對每個新 clone 誤診。
+        return False, (
+            f"{hook} 是 pre-commit 的樣板，但 {legacy.name} 不是守衛 shim。"
+            "兩種原因看起來一樣：**從來沒安裝過**，或 "
+            "`pre-commit install -f --hook-type pre-push` 把它刪掉了（它會靜默刪除）。"
         )
-    except OSError:
-        return False
+
+    if hook_body is None:
+        return False, f"{hook} 不存在——守衛從未安裝。"
+    return False, (
+        f"{hook} 既不是守衛 shim 也不是 pre-commit 的樣板，"
+        "所以是別人裝的 hook。安裝器會把它移到 pre-push.chained 並繼續執行它。"
+    )
 
 
 def check_local_hooks() -> CheckResult:
-    """跑 pre-commit run --all-files，並確認 pre-push 那一層真的裝了。"""
-    if not _prepush_hook_installed():
+    """跑 pre-commit run --all-files，並確認 pre-push 守衛真的在 push 路徑上。"""
+    wired, why = _prepush_guards_wired()
+    if not wired:
         return CheckResult(
             "Local hooks",
             Status.FAIL,
-            "pre-push hooks 未安裝——擋直推 main 那道閘門現在不存在",
+            "pre-push 守衛不在 push 路徑上——擋直推 main 那道閘門現在不存在",
             detail=(
-                "修法（一次性）：\n"
-                "    pre-commit install --hook-type pre-push\n"
-                "`pre-commit install` 只裝 pre-commit 那一層；三支 "
-                "stages: [pre-push] 的守衛需要上面那個旗標（#1664）。\n"
+                f"{why}\n\n"
+                "修法（一次性、可重複跑）：\n"
+                "    bash scripts/ops/install_prepush_hook.sh\n"
+                "⛔ 不要改用 `pre-commit install --hook-type pre-push`：那條在 "
+                "#1689 之後只會讓守衛看到**一個** refspec，而且只要設了 "
+                "core.hooksPath 就會直接 rc=1 拒絕安裝。\n"
                 "跳過本項：make pr-preflight-quick（--skip-hooks）"
             ),
         )
     r = run(["pre-commit", "run", "--all-files"], timeout=300)
     if r.returncode == 0:
         return CheckResult(
-            "Local hooks", Status.PASS, "pre-commit 全部通過（pre-push 層已安裝）"
+            "Local hooks", Status.PASS, "pre-commit 全部通過（pre-push 守衛已接上）"
         )
 
     # Count failures

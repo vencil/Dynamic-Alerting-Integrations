@@ -42,6 +42,7 @@ import datetime as _dt
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -318,11 +319,59 @@ def _install_commit_msg_hook(repo_root: Path) -> str:
         return f"install failed: {exc}"
 
 
+def _install_prepush_hook(repo_root: Path) -> str:
+    """Put the pre-push guards on the push path (#1689).
+
+    ⛔ Shells out to scripts/ops/install_prepush_hook.sh instead of writing
+    .git/hooks/pre-push here. That script owns the whole decision — including
+    the part that matters, which is that it must NOT clobber pre-commit's hook
+    file when pre-commit got there first. A second opinion living in this file
+    is how the two drift into disagreeing about whether the guards are wired.
+
+    ⛔ `shutil.which("bash")`, never a bare "bash" in the argv. On Windows,
+    CreateProcess searches System32 before PATH, and System32 holds WSL's
+    bash.exe — measured on this host: `subprocess.run(["bash", ...])` lands in
+    WSL (`uname=Linux`, `pwd=/mnt/c/...`), which cannot see this repo and
+    reports "No such file or directory" for every path form. The failure looks
+    like a broken script, not a wrong interpreter.
+
+    Returns a human-readable status string; never raises. This runs on the
+    first tool call of a session, so a hostile environment must not take the
+    session down with it.
+    """
+    script = repo_root / "scripts" / "ops" / "install_prepush_hook.sh"
+    if not script.exists():
+        return "installer not present"
+    bash = shutil.which("bash")
+    if not bash:
+        return "skipped: no bash on PATH"
+    try:
+        proc = subprocess.run(
+            [bash, str(script)],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        # ⛔ SubprocessError, not just OSError: TimeoutExpired is a
+        # SubprocessError and is NOT under the OSError tree, so catching only
+        # OSError lets a hung installer kill the session.
+        return f"install failed: {type(exc).__name__}"
+    if proc.returncode != 0:
+        first = (proc.stderr or proc.stdout or "").strip().splitlines()
+        return f"not wired (rc={proc.returncode}): {first[0][:120] if first else ''}"
+    return (proc.stdout or "").strip().splitlines()[-1][:160] if proc.stdout.strip() else "ok"
+
+
 def _heal_git_hooks(repo_root: Path) -> dict:
     """Run all hook-healing steps. Returns status dict for telemetry."""
     return {
         "pre_commit_shebang": _heal_pre_commit_shebang(repo_root),
         "commit_msg": _install_commit_msg_hook(repo_root),
+        "prepush": _install_prepush_hook(repo_root),
     }
 
 
@@ -357,6 +406,21 @@ def _do_init(
     if not success:
         print(
             f"[session-init] vscode_git_toggle failed: {msg}",
+            file=sys.stderr,
+        )
+    # ⛔ Say it out loud when the pre-push guards did not get installed.
+    # Everything else here is telemetry-only on purpose, but this one is
+    # different: its failure means the session can push straight to main with
+    # nothing watching, and the only other signal is a `make pr-preflight` the
+    # session may never run. Measured on a fresh clone where git-lfs owns
+    # .git/hooks/pre-push: the installer refused, and not one character reached
+    # the session.
+    prepush = hook_status.get("prepush", "")
+    if prepush and not prepush.startswith("[install_prepush_hook] installed"):
+        print(
+            f"[session-init] ⛔ pre-push guards not installed: {prepush}\n"
+            "[session-init]    dev-rule #12 (no direct push to main) has no local "
+            "enforcement in this session. Fix: bash scripts/ops/install_prepush_hook.sh",
             file=sys.stderr,
         )
     _touch_heartbeat(repo_root)

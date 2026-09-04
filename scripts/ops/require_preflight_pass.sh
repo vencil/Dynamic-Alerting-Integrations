@@ -22,19 +22,23 @@
 #   5. Marker present for HEAD sha → allow
 #   6. Otherwise → block with instruction to run `make pr-preflight`
 #
-# Installed via .pre-commit-config.yaml:
-#     - id: require-preflight-pass
-#       stages: [pre-push]
-#       always_run: true
-#       entry: bash scripts/ops/require_preflight_pass.sh
+# Installed by scripts/ops/install_prepush_hook.sh, which puts
+# scripts/ops/prepush_dispatch.sh on the push path; the dispatcher runs this
+# script with git's FULL stdin.
+#
+# ⛔ It is NOT a pre-commit hook any more (#1689). A hook run by pre-commit is
+# shown exactly one refspec, so a push carrying several branches only ever
+# reached this gate as its first ref in sort order. Do not add a
+# `stages: [pre-push]` entry back to .pre-commit-config.yaml — the copy
+# pre-commit runs is the blind one, and it goes green.
 #
 # Design notes:
 #   * Uses `git rev-parse --git-dir` for worktree safety.
 #   * The refspecs come from scripts/ops/_prepush_refs.sh, not from stdin
-#     directly: when this hook is installed through pre-commit, pre-commit has
-#     already consumed the stdin git wrote, so reading it here yields nothing
-#     and the `pushing_any_commit=0` branch below allowed EVERY push (#1664).
-#     That helper's header carries the measurements and the known residual.
+#     directly: that helper owns "which channel is carrying the refspec", so
+#     the answer does not get re-derived once per guard. Under the dispatcher
+#     the answer is git's own stdin. Its header carries the measurements and
+#     the known residuals.
 #   * Non-blocking on edge cases (tag push, delete-ref) to avoid disrupting
 #     release flow.
 set -euo pipefail
@@ -74,15 +78,15 @@ if [ ! -r "$_prepush_dir/_prepush_refs.sh" ]; then
 gate cannot tell what is being pushed.
 
 Most likely cause: the hook was installed by copying this file alone (the
-pre-#1664 recipe). It now needs its sibling helper.
+pre-#1664 recipe). It needs its sibling helper.
 
-Reinstall, either way:
-  1. pre-commit (this repo's default path):
-       pre-commit install --hook-type pre-push
-  2. native hook, keeping the script inside the repo so the helper resolves:
-       printf '%s\n%s\n' '#!/usr/bin/env bash' \
-         'exec bash "$(git rev-parse --show-toplevel)/scripts/ops/require_preflight_pass.sh" "$@"' \
-         > .git/hooks/pre-push && chmod +x .git/hooks/pre-push
+Reinstall — since #1689 there is exactly one way:
+    bash scripts/ops/install_prepush_hook.sh
+
+⛔ Do not hand-write a hook that runs only this script: that silently drops
+protect_main_push and the mkdocs strict check while this one still looks fine.
+⛔ Do not use `pre-commit install --hook-type pre-push` either: a hook run by
+pre-commit sees only one refspec (#1689).
 
 ⛔ Do not reach for --no-verify and do not delete .git/hooks/pre-push: both
 turn off the direct-push-to-main guard for good, which is what #1664 fixed.

@@ -1,20 +1,24 @@
 #!/usr/bin/env bash
 # protect_main_push.sh — pre-push hook：禁止直推 main/master
 #
-# 安裝方式（擇一）：
+# 安裝方式 —— **只有一條**（#1689）：
 #
-#   1. pre-commit（本 repo 的預設路徑）：
-#        pre-commit install --hook-type pre-push
+#     bash scripts/ops/install_prepush_hook.sh
 #
-#   2. 原生 hook —— ⛔ 不能只 `cp` 本檔，它會 source 同目錄的 _prepush_refs.sh：
-#        printf '%s\n%s\n' '#!/usr/bin/env bash' \
-#          'exec bash "$(git rev-parse --show-toplevel)/scripts/ops/protect_main_push.sh" "$@"' \
-#          > .git/hooks/pre-push
-#        chmod +x .git/hooks/pre-push
-#      wrapper 讓本檔留在 repo 內執行，helper 因此找得到，stdin 也原樣轉發。
-#      ⛔ `exec bash <path>` 不是 `exec <path>`：本檔在 git 裡是 mode 100644，直接 exec
-#      在 Linux 上是 `Permission denied`（實測，Windows 上看不到）。`bash <script>` 也正是
-#      pre-commit `entry:` 用的形式，兩條安裝路徑因此走同一種呼叫。
+#   它裝的是 scripts/ops/prepush_dispatch.sh，由 dispatcher 依序跑本檔與另外兩支
+#   守衛，並把 git 的完整 stdin 各餵一份。
+#
+# ⛔ 舊檔頭教過兩條，兩條現在都是錯的：
+#   1. `pre-commit install --hook-type pre-push` —— pre-commit 只會餵 hook **一個**
+#      refspec，於是「同時推 feat/x 和 main」讓 main 對本守衛隱形（#1689 實測：
+#      印 Passed 且 main 真的推上去了）。而且設了 core.hooksPath 時它直接 rc=1。
+#   2. 自己 `printf … > .git/hooks/pre-push` 只掛本檔 —— 那會把
+#      require_preflight_pass 與 mkdocs strict **靜默拆掉**，而畫面上這一支還在。
+#      ⛔ 兩支守衛的檔頭都曾各自教過「只裝自己」的配方，照任一份做都會少兩支。
+#
+#   仍然成立的那一半（dispatcher 沿用）：⛔ 不能只 `cp` 本檔，它 source 同目錄的
+#   _prepush_refs.sh；且要 `bash <script>` 不是直接 exec ——本檔在 git 裡是 mode
+#   100644，直接 exec 在 Linux 上是 `Permission denied`（實測，Windows 上看不到）。
 #
 # 設計：
 #   - 偵測 push target 是否為 main 或 master
@@ -43,17 +47,17 @@ if [ ! -r "$_prepush_dir/_prepush_refs.sh" ]; then
 
 [protect_main_push] ⛔ 找不到同目錄的 _prepush_refs.sh，本守衛無法判斷你在推什麼。
 
-最可能的原因：你是用 #1664 之前的舊說明安裝的——
+最可能的原因：你是用舊說明安裝的——
     cp scripts/ops/protect_main_push.sh .git/hooks/pre-push
-那個做法只複製了一個檔，而本檔現在需要同目錄的 helper。
+那個做法只複製了一個檔，而本檔需要同目錄的 helper。
 
-重裝（擇一）：
-  1. pre-commit（本 repo 預設路徑）：
-       pre-commit install --hook-type pre-push
-  2. 原生 hook（讓腳本留在 repo 內執行，helper 因此找得到）：
-       printf '%s\n%s\n' '#!/usr/bin/env bash' \
-         'exec bash "$(git rev-parse --show-toplevel)/scripts/ops/protect_main_push.sh" "$@"' \
-         > .git/hooks/pre-push && chmod +x .git/hooks/pre-push
+重裝（#1689 之後只有這一條）：
+    bash scripts/ops/install_prepush_hook.sh
+
+⛔ 不要自己 printf 一個只掛本檔的 hook：那會把 require_preflight_pass 與
+mkdocs strict 靜默拆掉，而畫面上本守衛還在。⛔ 也不要用
+`pre-commit install --hook-type pre-push`：經它安裝的 hook 只看得到一個
+refspec（#1689）。
 
 ⛔ 不要用 --no-verify、也不要刪掉 .git/hooks/pre-push 來轉綠——那會把擋直推
 main 這道閘門永久關掉，正是 #1664 修掉的那件事。

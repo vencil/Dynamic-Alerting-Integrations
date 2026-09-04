@@ -184,30 +184,39 @@ def load_feedback(memory_dir: Path) -> list[dict]:
 
 
 def check_count_reconciliation(hooks: list[dict]) -> list[str]:
-    """Compare measured hook stage split vs CLAUDE.md's stated 'N auto + M manual + K pre-push'."""
-    measured = {"auto": 0, "manual": 0, "pre-push": 0}
+    """Compare measured hook stage split vs CLAUDE.md's stated 'N auto + M manual'.
+
+    ⛔ The `+ K pre-push` term left CLAUDE.md with #1689: the three pre-push
+    guards stopped being pre-commit hooks, so this file's pre-push stage count
+    is 0, and printing that beside a claim would reconcile two different
+    populations. The regex deliberately stops at `manual-stage` so it still
+    MATCHES an un-migrated CLAUDE.md that carries the old third term — a
+    non-match falls into the "找不到宣告字串" branch, which reads as a missing
+    declaration rather than a stale one.
+
+    ⚠️ Second reader of the same sentence: scripts/tools/dx/bump_docs.py owns
+    writing it. Deliberately not merged (one syncs, one audits), so a change to
+    the sentence has to be made in both places — this note is the only thing
+    that says so.
+    """
+    measured = {"auto": 0, "manual": 0}
     for h in hooks:
-        measured[h["stage"]] += 1
+        if h["stage"] in measured:
+            measured[h["stage"]] += 1
     findings: list[str] = []
     claude = _read(CLAUDE_MD)
     m = re.search(
-        r"(\d+)\s*auto-run\s*\+\s*(\d+)\s*manual-stage\s*\+\s*(\d+)\s*pre-push",
+        r"(\d+)\s*auto-run\s*\+\s*(\d+)\s*manual-stage",
         claude,
     )
-    measured_str = (
-        f"{measured['auto']} auto + {measured['manual']} manual + "
-        f"{measured['pre-push']} pre-push"
-    )
+    measured_str = f"{measured['auto']} auto + {measured['manual']} manual"
     if not m:
         findings.append(
             f"⚠️ 找不到 CLAUDE.md 的 hook 計數宣告字串；實測 {measured_str}。"
         )
         return findings
-    claimed = {"auto": int(m.group(1)), "manual": int(m.group(2)), "pre-push": int(m.group(3))}
-    claimed_str = (
-        f"{claimed['auto']} auto + {claimed['manual']} manual + "
-        f"{claimed['pre-push']} pre-push"
-    )
+    claimed = {"auto": int(m.group(1)), "manual": int(m.group(2))}
+    claimed_str = f"{claimed['auto']} auto + {claimed['manual']} manual"
     if claimed == measured:
         findings.append(f"✅ hook 計數一致：CLAUDE.md 宣告 = 實測 = {measured_str}。")
     else:
@@ -347,9 +356,23 @@ def render_report(
     lines.append("| 來源 | 數量 |")
     lines.append("|---|---|")
     lines.append(f"| dev-rules `### ` 條目 | {len(dev_rules)} |")
+    # ⛔ No pre-push term (#1689). It would read 0 — true of this config file,
+    # false about the repo, which still runs three pre-push guards from
+    # scripts/ops/prepush_dispatch.sh. A row that says 0 in an audit report is
+    # worse than no row: the next reader reconciles it against "3 pre-push
+    # gates" elsewhere and concludes something drifted.
+    # ⛔ auto + manual, not len(hooks): the breakdown beside it counts only those
+    # two stages (#1689), so a pre-push-stage hook would be inside the total and
+    # outside the split — an internally inconsistent row. Equal today (the
+    # shipped config declares no pre-push stanza, and a test keeps it that way);
+    # this is about which number the row MEANS, not about today's value.
     lines.append(
-        f"| pre-commit hooks | {len(hooks)}"
-        f"（{counts['auto']} auto / {counts['manual']} manual / {counts['pre-push']} pre-push）|"
+        f"| pre-commit hooks | {counts['auto'] + counts['manual']}"
+        f"（{counts['auto']} auto / {counts['manual']} manual）|"
+    )
+    lines.append(
+        "| pre-push 守衛（非 pre-commit） | "
+        "見 `scripts/ops/prepush_dispatch.sh` 的 `GUARDS` |"
     )
     lines.append(f"| 本地 skills | {len(skills)} |")
     if memory_available:

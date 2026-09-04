@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -60,26 +61,49 @@ def _init_git(repo: Path) -> str:
     return sha
 
 
-class TestPrepushHookInstalled:
-    """`pr_preflight._prepush_hook_installed` — the #1664 install-path check.
+class TestPrepushWiring:
+    """`pr_preflight._prepush_guards_wired` — are the guards on the push path?
 
-    ⛔ The middle case is the whole reason it exists: `pre-commit install` —
-    what the repo's own install line told people to run — leaves the pre-push
-    hook uninstalled. Measured on a fresh clone following that instruction: no
-    `.git/hooks/pre-push`, and `git push` straight to main succeeded behind a
-    full screen of green pre-commit-stage hooks.
+    ⛔ This class used to assert that `pre-commit install --hook-type pre-push`
+    counts as installed. #1689 made that FALSE and this is where the flip is
+    recorded: a hook run by pre-commit is handed exactly one refspec, so a push
+    carrying `feat/x` and `main` reached the direct-push guard as `feat/x` and
+    printed Passed while main moved on the remote. The old assertion was a test
+    holding a defect in place.
 
-    The second test is the negative control that keeps the probe from decaying
-    into "some file is there": a hand-written pre-push hook is not pre-commit's,
-    so the three `stages: [pre-push]` guards are still not wired.
+    There are now TWO wired states, because there are two install orders and
+    both really happen:
+
+        shim at .git/hooks/pre-push                     (installer ran alone)
+        pre-commit's template + shim at pre-push.legacy (pre-commit ran after,
+                                                         or before, the installer)
+
+    and one state that looks wired and is not: pre-commit's template with
+    nothing behind it. `pre-commit install -f --hook-type pre-push` produces it
+    by DELETING pre-push.legacy — measured: rc=0, and the output says only
+    "pre-commit installed at …", not one word about the removal. That is the
+    case the last test pins.
     """
 
-    @staticmethod
-    def _repo(tmp_path):
+    _COPY = (
+        "_prepush_refs.sh", "protect_main_push.sh", "require_preflight_pass.sh",
+        "pre_push_mkdocs_strict.sh", "prepush_dispatch.sh",
+        "install_prepush_hook.sh",
+    )
+
+    @classmethod
+    def _repo(cls, tmp_path):
         env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e",
                "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e"}
         subprocess.run(["git", "init", "-q", "-b", "main", str(tmp_path)],  # subprocess-timeout: ignore
                        check=True, env=env)
+        # The probe shells out to the repo's own installer, so the temp repo has
+        # to carry it. Copied, not referenced by absolute path: that is the
+        # production file, re-read from disk on every run.
+        ops = tmp_path / "scripts" / "ops"
+        ops.mkdir(parents=True)
+        for name in cls._COPY:
+            shutil.copy2(_REPO_ROOT / "scripts" / "ops" / name, ops / name)
         (tmp_path / "a.txt").write_text("hi", encoding="utf-8")
         (tmp_path / ".pre-commit-config.yaml").write_text(
             "repos: []\n", encoding="utf-8")
@@ -90,42 +114,126 @@ class TestPrepushHookInstalled:
              "commit", "-q", "-m", "init"], check=True, env=env)
 
     @staticmethod
-    def _install(tmp_path, *args):
+    def _precommit_install(tmp_path, *args):
         return subprocess.run(  # subprocess-timeout: ignore
             [sys.executable, "-X", "utf8", "-m", "pre_commit", "install", *args],
             cwd=tmp_path, capture_output=True, text=True,
         ).returncode
 
-    def test_absent_then_precommit_only_then_prepush(self, tmp_path, monkeypatch):
-        # ⛔ Not a bare `importorskip`. This is the only test that separates
-        # `pre-commit install` from `pre-commit install --hook-type pre-push`,
-        # so if a CI job loses pre-commit from its `pip install` the assertions
-        # below do not fail — they vanish, and the job reports green. That is
-        # the #1664 shape one level up. Same flag and same fail-closed shape as
-        # tests/ops/test_prepush_hook_wiring.py (`VIBE_REQUIRE_PRE_COMMIT`),
-        # which is the sibling this file was measured against.
+    @staticmethod
+    def _install_guards(tmp_path):
+        bash = shutil.which("bash")
+        assert bash, "no bash on PATH"
+        return subprocess.run(  # subprocess-timeout: ignore
+            [bash, "scripts/ops/install_prepush_hook.sh"],
+            cwd=tmp_path, capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
+        )
+
+    def _require_pre_commit(self):
+        # ⛔ Not a bare `importorskip`. Without pre-commit these assertions do
+        # not fail — they vanish, and the job reports green, which is the #1664
+        # shape one level up. Same flag as tests/ops/test_prepush_hook_wiring.py.
         if os.environ.get("VIBE_REQUIRE_PRE_COMMIT") == "1":
             assert importlib.util.find_spec("pre_commit") is not None, (
                 "VIBE_REQUIRE_PRE_COMMIT=1 but `pre_commit` is not importable — "
-                "the pre-push install probe would have skipped silently. It is "
+                "the pre-push wiring probe would have skipped silently. It is "
                 "installed by this job's pip install step."
             )
         else:
             pytest.importorskip("pre_commit")
+
+    def test_neither_install_command_alone_is_enough(self, tmp_path, monkeypatch):
+        self._require_pre_commit()
         mod = _load()
         self._repo(tmp_path)
         monkeypatch.chdir(tmp_path)
 
-        assert mod._prepush_hook_installed() is False, "no hooks at all"
+        wired, _ = mod._prepush_guards_wired()
+        assert wired is False, "no hooks at all"
 
-        assert self._install(tmp_path) == 0
-        assert mod._prepush_hook_installed() is False, (
-            "`pre-commit install` on its own installs the pre-commit hook only "
-            "— reporting that as installed is the #1664 defect one level up"
+        assert self._precommit_install(tmp_path) == 0
+        wired, _ = mod._prepush_guards_wired()
+        assert wired is False, (
+            "`pre-commit install` on its own installs the pre-commit hook only"
         )
 
-        assert self._install(tmp_path, "--hook-type", "pre-push") == 0
-        assert mod._prepush_hook_installed() is True
+        assert self._precommit_install(tmp_path, "--hook-type", "pre-push") == 0
+        wired, why = mod._prepush_guards_wired()
+        assert wired is False, (
+            "pre-commit's own pre-push hook is NOT the wiring any more (#1689): "
+            f"it is handed one refspec. why={why!r}"
+        )
+
+    def test_the_installer_wires_it_in_either_order(self, tmp_path, monkeypatch):
+        self._require_pre_commit()
+        mod = _load()
+        self._repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+
+        r = self._install_guards(tmp_path)
+        assert r.returncode == 0, f"{r.stdout}{r.stderr}"
+        wired, why = mod._prepush_guards_wired()
+        assert wired is True, why
+        assert (tmp_path / ".git" / "hooks" / "pre-push").exists()
+
+        # …and pre-commit arriving afterwards must not break it: it migrates the
+        # shim to pre-push.legacy and calls it with the FULL stdin.
+        assert self._precommit_install(tmp_path, "--hook-type", "pre-push") == 0
+        assert (tmp_path / ".git" / "hooks" / "pre-push.legacy").exists()
+        wired, why = mod._prepush_guards_wired()
+        assert wired is True, f"the migrated state must count as wired: {why!r}"
+
+    def test_installer_after_precommit_does_not_clobber_the_template(
+        self, tmp_path, monkeypatch
+    ):
+        """The other order. ⛔ The installer must not overwrite
+        .git/hooks/pre-push here — doing so would silently drop every
+        pre-commit-stage hook, trading one silent gap for another."""
+        self._require_pre_commit()
+        mod = _load()
+        self._repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+
+        assert self._precommit_install(tmp_path, "--hook-type", "pre-push") == 0
+        hook = tmp_path / ".git" / "hooks" / "pre-push"
+        template = hook.read_text(encoding="utf-8")
+
+        r = self._install_guards(tmp_path)
+        assert r.returncode == 0, f"{r.stdout}{r.stderr}"
+        assert hook.read_text(encoding="utf-8") == template, (
+            "the installer overwrote pre-commit's hook file"
+        )
+        assert (tmp_path / ".git" / "hooks" / "pre-push.legacy").exists()
+        wired, why = mod._prepush_guards_wired()
+        assert wired is True, why
+
+    def test_force_reinstall_disarms_it_and_the_probe_says_so(
+        self, tmp_path, monkeypatch
+    ):
+        """`pre-commit install -f` deletes pre-push.legacy without saying so.
+
+        This is the one failure mode the installer cannot prevent, which is
+        exactly why the probe has to catch it: after -f the picture is a
+        perfectly normal pre-commit hook, and every guard is gone.
+        """
+        self._require_pre_commit()
+        mod = _load()
+        self._repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+
+        assert self._install_guards(tmp_path).returncode == 0
+        assert self._precommit_install(tmp_path, "--hook-type", "pre-push") == 0
+        wired, _ = mod._prepush_guards_wired()
+        assert wired is True, "CONTROL: it must be wired before -f, or this proves nothing"
+
+        assert self._precommit_install(tmp_path, "-f", "--hook-type", "pre-push") == 0
+        assert not (tmp_path / ".git" / "hooks" / "pre-push.legacy").exists()
+        wired, why = mod._prepush_guards_wired()
+        assert wired is False, "a -f reinstall left the probe reporting wired"
+        assert "pre-push.legacy" in why, (
+            f"the explanation must name what went missing; got {why!r}"
+        )
 
     def test_a_hand_written_prepush_hook_does_not_count(self, tmp_path, monkeypatch):
         mod = _load()
@@ -134,7 +242,62 @@ class TestPrepushHookInstalled:
         hook = tmp_path / ".git" / "hooks" / "pre-push"
         hook.parent.mkdir(parents=True, exist_ok=True)
         hook.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8", newline="\n")
-        assert mod._prepush_hook_installed() is False
+        wired, why = mod._prepush_guards_wired()
+        assert wired is False
+        assert "chained" in why, (
+            f"the message must say what the installer will do with it: {why!r}"
+        )
+
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="Windows has no executable bit; os.access(X_OK) is True for any "
+               "existing file, so this property cannot be measured here. It is "
+               "measured on Linux, which is what CI and the dev container run.",
+    )
+    def test_a_shim_without_the_executable_bit_is_not_wired(self, tmp_path, monkeypatch):
+        """⛔ git IGNORES a non-executable hook and says so only in a `hint:`
+        line that `advice.ignoredHook=false` turns off.
+
+        Measured: with the bit cleared, a direct push to main succeeded and the
+        guard banner never appeared, while a content-only probe still reported
+        "wired". That is a false green in the one judgement everything else
+        relies on, so the bit is part of the judgement.
+        """
+        mod = _load()
+        self._repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        assert self._install_guards(tmp_path).returncode == 0
+        hook = tmp_path / ".git" / "hooks" / "pre-push"
+
+        wired, _ = mod._prepush_guards_wired()
+        assert wired is True, "CONTROL: it must be wired before we clear the bit"
+
+        hook.chmod(hook.stat().st_mode & ~0o111)
+        wired, why = mod._prepush_guards_wired()
+        assert wired is False, "a non-executable shim was reported as wired"
+        assert "執行位元" in why, why
+
+    def test_the_never_installed_case_is_not_diagnosed_as_a_force_reinstall(
+        self, tmp_path, monkeypatch
+    ):
+        """⛔ Two different causes land in the same state and they are NOT
+        distinguishable — so the message must not pick one.
+
+        `pre-commit install -f` deletes pre-push.legacy silently, and "never
+        installed" looks identical. The first version of this message asserted
+        the -f story outright, which misdiagnosed every fresh clone — including
+        the maintainer's own repo, which had simply never run the installer.
+        """
+        self._require_pre_commit()
+        mod = _load()
+        self._repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        assert self._precommit_install(tmp_path, "--hook-type", "pre-push") == 0
+
+        wired, why = mod._prepush_guards_wired()
+        assert wired is False
+        assert "從來沒安裝過" in why, f"the never-installed cause is missing: {why!r}"
+        assert "-f" in why, f"the silent-delete cause is missing: {why!r}"
 
 
 class TestMarkerPython:

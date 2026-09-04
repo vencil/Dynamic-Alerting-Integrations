@@ -70,7 +70,18 @@ _OPS = _REPO_ROOT / "scripts" / "ops"
 # (``C:\...``) is mangled by Git Bash — the reason the sibling gate tests skip
 # on win32 entirely. Copying keeps the entry relative while still exercising
 # the production bytes, which are re-read from disk on every test run.
-_GUARD_FILES = ("protect_main_push.sh", "require_preflight_pass.sh", "_prepush_refs.sh")
+_GUARD_FILES = (
+    "protect_main_push.sh",
+    "require_preflight_pass.sh",
+    "_prepush_refs.sh",
+    # #1689: the guards are no longer pre-commit hooks. The dispatcher reads
+    # git's stdin once and hands every guard a copy; the installer decides where
+    # the shim goes. Both are production bytes and both are copied in, so the
+    # tests below drive the shipped wiring rather than a paraphrase of it.
+    "prepush_dispatch.sh",
+    "install_prepush_hook.sh",
+    "pre_push_mkdocs_strict.sh",
+)
 
 # ⛔ Resolve bash instead of spelling it "bash" in argv. On Windows,
 # CreateProcess searches System32 before PATH, so a bare "bash" runs
@@ -305,32 +316,277 @@ def test_dry_run_still_runs_the_hook_and_leaves_the_remote_alone(
 # ---------------------------------------------------------------------------
 
 
-def test_the_native_install_instruction_from_the_script_header_works(
-    tmp_path: Path,
-) -> None:
-    """Run the header's install recipe verbatim and check it actually guards.
+# ⛔ The dispatcher runs ALL THREE guards, so a test about protect_main_push has
+# to silence the other two or it measures them instead. require_preflight_pass
+# is the sharp one: with no GitHub remote, `gh pr list` fails, the gate falls
+# back to "require the marker (safe default)" and blocks the very push these
+# tests use as their must-fire control. Escape hatches, not stubs — these are
+# the documented ones, so the guards under test stay the shipped bytes.
+_SIBLINGS_OFF = {"GIT_PREFLIGHT_BYPASS": "1", "MKDOCS_STRICT_BYPASS": "1"}
 
-    ``protect_main_push.sh`` now sources a sibling helper, so the instruction
-    it used to carry (``cp`` the one file into .git/hooks/pre-push) would
-    break. The replacement is an exec wrapper. A shipped instruction that
-    nobody executes is how the previous one rotted, so this executes it.
+
+def _install_guards(work: Path, *args: str) -> subprocess.CompletedProcess:
+    """Run the ONE shipped install recipe, verbatim.
+
+    ⛔ `_BASH`, not "bash" — see the module header: a bare "bash" is WSL here.
+    """
+    assert _BASH, "no bash resolved; the module-level skip should have fired"
+    return subprocess.run(  # subprocess-timeout: ignore
+        [_BASH, "scripts/ops/install_prepush_hook.sh", *args],
+        cwd=work, capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+
+
+def test_the_shipped_install_recipe_actually_guards(tmp_path: Path) -> None:
+    """Run the install recipe the scripts' headers carry, then push at main.
+
+    A shipped instruction that nobody executes is how the previous one rotted:
+    before #1689 both guards' headers carried a hand-written `printf … >
+    .git/hooks/pre-push` recipe that installed ONLY that guard, silently
+    dropping the other two while the one you were reading still looked fine.
+    There is one recipe now, and this runs it.
     """
     work = _make_repo(tmp_path, _PROTECT_ONLY)
-    hook = work / ".git" / "hooks" / "pre-push"
-    # ⛔ `exec bash <path>`, not `exec <path>`: the guard is mode 100644 in git,
-    # so exec'ing it directly is "Permission denied" on Linux — measured here,
-    # and invisible on Windows, which is why this assertion runs the shipped
-    # recipe verbatim instead of paraphrasing it.
-    hook.write_text(
-        "#!/usr/bin/env bash\n"
-        'exec bash "$(git rev-parse --show-toplevel)/scripts/ops/protect_main_push.sh" "$@"\n',
-        encoding="utf-8",
-        newline="\n",
-    )
-    hook.chmod(0o755)
-    r, out = _push(work, "HEAD:refs/heads/main")
-    assert r.returncode != 0, f"native install did not guard main:\n{out}"
+    r = _install_guards(work)
+    assert r.returncode == 0, f"installer failed:\n{r.stdout}{r.stderr}"
+    assert (work / ".git" / "hooks" / "pre-push").exists()
+
+    pushed, out = _push(work, "HEAD:refs/heads/main", env_extra=_SIBLINGS_OFF)
+    assert pushed.returncode != 0, f"the installed wiring did not guard main:\n{out}"
     assert _BANNER in out, out
+
+
+def test_a_co_pushed_branch_no_longer_hides_main(tmp_path: Path) -> None:
+    """#1689 itself: `git push origin <branch> main` must still reach the guard.
+
+    git feeds pre-push rows in sorted ref order and pre-commit's
+    ``_pre_push_ns`` returns on the first pushable one, so a branch sorting
+    before ``refs/heads/main`` used to hide main from the guard whose whole job
+    is to block it. Every prefix dev-rules #12 asks for — feat/ fix/ chore/ —
+    sorts before ``main``.
+
+    ⛔ The single-ref push below is the must-fire control, not decoration: it is
+    the only thing separating "the multi-ref push was blocked" from "this
+    harness blocks everything".
+    """
+    work = _make_repo(tmp_path, _PROTECT_ONLY)
+    # ⛔ Publish the co-pushed branch BEFORE installing, so both rows are real
+    # fast-forwards. Installing first made this setup push go through the
+    # guards, and require_preflight_pass blocked it — correctly: no marker, no
+    # `gh`, so it takes its documented safe default. Measured, and it is the
+    # right behaviour; the ordering was the bug.
+    assert _git(work, "push", "-q", "origin", "HEAD:refs/heads/aaa-first").returncode == 0
+    _commit(work, "third")
+    assert _install_guards(work).returncode == 0
+
+    multi, multi_out = _push(
+        work, "HEAD:refs/heads/aaa-first", "HEAD:refs/heads/main",
+        env_extra=_SIBLINGS_OFF,
+    )
+    assert multi.returncode != 0, (
+        "a push carrying a branch that sorts before main did not reach the "
+        f"guard — this is #1689:\n{multi_out}"
+    )
+    assert _BANNER in multi_out, multi_out
+
+    single, single_out = _push(
+        work, "HEAD:refs/heads/aaa-first", env_extra=_SIBLINGS_OFF
+    )
+    assert single.returncode == 0, (
+        "CONTROL FAILED: pushing only the feature branch was blocked too, so the "
+        f"assertion above proves nothing about main:\n{single_out}"
+    )
+
+
+def test_an_existing_foreign_hook_is_chained_not_refused(tmp_path: Path) -> None:
+    """A fresh clone of THIS repo already has a pre-push hook: git-lfs's.
+
+    `.gitattributes` has `filter=lfs` paths and `git lfs install` is global, so
+    `git clone` lands with `.git/hooks/pre-push` running `git lfs pre-push`.
+    Measured on the Windows host: an installer that refused to overwrite it
+    exited 1 — and `make pr-preflight` tells you to run the installer, so the
+    shipped remedy was a dead end for every new clone. The old instruction was
+    no better: `pre-commit install --hook-type pre-push` migrated lfs's
+    `#!/bin/sh` hook to pre-push.legacy and then every push died with
+    `ExecutableNotFoundError: /bin/sh` (pre-commit resolves shebangs itself on
+    Windows).
+
+    So the foreign hook is moved aside and still runs — with the same argv and
+    the same stdin, which git-lfs needs.
+    """
+    work = _make_repo(tmp_path, _PROTECT_ONLY)
+    hooks = work / ".git" / "hooks"
+    hooks.mkdir(parents=True, exist_ok=True)
+    # shaped like git-lfs's: /bin/sh, takes <remote> <url>, reads stdin
+    (hooks / "pre-push").write_text(
+        "#!/bin/sh\n"
+        'n=0\n'
+        'while read -r a b c d; do n=$((n+1)); done\n'
+        'printf "FOREIGN argv=%s rows=%s\\n" "$*" "$n" '
+        '>> "$(git rev-parse --show-toplevel)/foreign.log"\n'
+        "exit 0\n",
+        encoding="utf-8", newline="\n",
+    )
+    (hooks / "pre-push").chmod(0o755)
+
+    r = _install_guards(work)
+    assert r.returncode == 0, f"installer refused a foreign hook:\n{r.stdout}{r.stderr}"
+    assert (hooks / "pre-push.chained").is_file(), "the foreign hook was not chained"
+    assert "FOREIGN" not in (hooks / "pre-push").read_text(encoding="utf-8"), (
+        "the shim did not take the pre-push slot"
+    )
+
+    # it must still run, and still see the refspec
+    _commit(work, "third")
+    pushed, out = _push(work, "HEAD:refs/heads/feat/chained", env_extra=_SIBLINGS_OFF)
+    assert pushed.returncode == 0, out
+    log = work / "foreign.log"
+    assert log.is_file(), f"the chained hook never ran:\n{out}"
+    body = log.read_text(encoding="utf-8")
+    assert "rows=1" in body, f"the chained hook ran but got no refspec: {body!r}"
+    assert "argv=origin" in body, f"the chained hook lost its argv: {body!r}"
+
+    # ⛔ CONTROL: the guards still guard. Without this, a dispatcher that ran
+    # ONLY the chained hook would satisfy everything above.
+    blocked, blocked_out = _push(
+        work, "HEAD:refs/heads/main", env_extra=_SIBLINGS_OFF
+    )
+    assert blocked.returncode != 0 and _BANNER in blocked_out, blocked_out
+
+
+def test_deleting_a_branch_does_not_require_a_green_docs_build(tmp_path: Path) -> None:
+    """Deleting a remote branch must not be gated on ``scripts/ops/pre_push_mkdocs_strict.sh``.
+
+    ⛔ That full path is deliberate, not decoration. `verify_diff_map.json` keys
+    test selection on literal paths appearing in the test, and this guard was
+    the ONE of the five that appeared only as a bare filename — so a change to
+    it fell back to the broad `scripts/ops` rule, which selects five tests, none
+    of them this file. Measured before this line existed: the other four guards
+    all routed here, this one routed nowhere near it. Editing the guard this
+    test exists to pin would not have run this test.
+
+    #1691 makes deletions reach the dispatcher — deleting `main` is exactly the
+    case the direct-push guard must judge. But the mkdocs guard does not read
+    the refspec at all (#1690), so on a deletion it renders a verdict about
+    something the push is not doing. Before #1689 it never ran there:
+    pre-commit's `_pre_push_ns` returns None for an all-deletion push and then
+    runs no pre-push hooks. Measured, old wiring vs new, with a docs edit
+    outstanding: old rc=0, new rc=1.
+    """
+    work = _make_repo(tmp_path, _PROTECT_ONLY)
+    # make the mkdocs guard's Tier 1 fire and fail, the way an in-progress docs
+    # edit does locally
+    fake = work / "fakebin"
+    fake.mkdir()
+    (fake / "mkdocs").write_text("#!/bin/sh\necho 'mkdocs 1.0.0'\n",
+                                 encoding="utf-8", newline="\n")
+    (fake / "mkdocs").chmod(0o755)
+    (work / "scripts" / "tools" / "lint").mkdir(parents=True, exist_ok=True)
+    (work / "scripts" / "tools" / "lint" / "mkdocs_strict_check.sh").write_text(
+        "#!/bin/sh\necho 'strict says no'\nexit 1\n", encoding="utf-8", newline="\n")
+    (work / "scripts" / "tools" / "lint" / "mkdocs_strict_check.sh").chmod(0o755)
+    # ⛔ `_commit` only stages a.txt, so a docs file written next to it never
+    # reaches the diff the mkdocs guard looks at — the first version of this
+    # test did exactly that, the guard reported "non-doc push", and the control
+    # below caught it. Stage everything explicitly instead.
+    (work / "docs").mkdir(exist_ok=True)
+    (work / "docs" / "a.md").write_text("# d\n", encoding="utf-8")
+    assert _git(work, "add", "-A").returncode == 0
+    assert _git(work, "-c", "core.hooksPath=/dev/null", "commit", "-q",
+                "-m", "docs edit").returncode == 0
+    assert _git(work, "push", "-q", "origin", "HEAD:refs/heads/tmpdel").returncode == 0
+    assert _install_guards(work).returncode == 0
+
+    env = {"GIT_PREFLIGHT_BYPASS": "1",
+           "PATH": f"{fake}{os.pathsep}{os.environ.get('PATH', '')}"}
+
+    # ⛔ CONTROL FIRST: with commits to push, the mkdocs guard MUST fire. If it
+    # does not, the deletion result below says nothing.
+    blocked, blocked_out = _push(work, "HEAD:refs/heads/feat/docs", env_extra=env)
+    assert blocked.returncode != 0, (
+        f"CONTROL FAILED: the mkdocs guard did not fire on a docs push:\n{blocked_out}"
+    )
+
+    deleted, del_out = _push(work, ":refs/heads/tmpdel", env_extra=env)
+    assert deleted.returncode == 0, (
+        f"deleting a branch was blocked by the docs check:\n{del_out}"
+    )
+
+
+def test_deleting_main_is_still_judged(tmp_path: Path) -> None:
+    """⛔ The other side of the skip above: it must not turn into "deletions are
+    exempt". #1691 is precisely about `git push origin :main`."""
+    work = _make_repo(tmp_path, _PROTECT_ONLY)
+    assert _install_guards(work).returncode == 0
+    blocked, out = _push(work, ":refs/heads/main", env_extra=_SIBLINGS_OFF)
+    assert blocked.returncode != 0, f"deleting main was allowed:\n{out}"
+    assert _BANNER in out, out
+
+
+def test_the_shim_says_what_to_do_when_the_dispatcher_is_missing(
+    tmp_path: Path,
+) -> None:
+    """.git/hooks is shared by every worktree, and the shim resolves the
+    dispatcher from the CURRENT tree — so a tree checked out before #1689 landed
+    has a hook pointing at a file it does not have. Measured before this
+    message existed: one line of `bash: …: No such file or directory` under
+    three green `Passed` lines, and zero guidance. The three cheapest ways out
+    of that picture each disarm the guards for every worktree at once.
+    """
+    work = _make_repo(tmp_path, _PROTECT_ONLY)
+    assert _install_guards(work).returncode == 0
+    (work / "scripts" / "ops" / "prepush_dispatch.sh").unlink()
+
+    r, out = _push(work, "HEAD:refs/heads/feat/no-dispatcher", env_extra=_SIBLINGS_OFF)
+    assert r.returncode != 0, f"a missing dispatcher silently allowed the push:\n{out}"
+    assert "install_prepush_hook.sh" in out, (
+        f"the failure names no way back to a working install:\n{out}"
+    )
+    assert "--no-verify" in out, (
+        "the message does not warn against the cheapest (and worst) way out:\n" + out
+    )
+
+
+def test_every_guard_in_the_dispatcher_gets_the_refspec_not_just_the_first(
+    tmp_path: Path,
+) -> None:
+    """⛔ The SECOND guard has to see it too, and only this test says so.
+
+    Each guard reads the refspec itself, so a dispatcher that piped one stdin
+    through them in sequence would let the first drain it and hand every later
+    guard EOF — #1664 exactly, relocated one layer down and invisible, because
+    ``require_preflight_pass``'s answer to "nothing is being pushed" is to allow.
+    Every other test here silences the siblings to keep its own verdict
+    unambiguous, which means every other test would stay green through that
+    change.
+
+    STRICT mode so the verdict does not depend on a `gh` shim: the branch has
+    no marker, so the only question left is whether the gate learned that
+    anything is being pushed at all.
+    """
+    work = _make_repo(tmp_path, _PROTECT_ONLY)
+    assert _install_guards(work).returncode == 0
+    strict = {"GIT_PREFLIGHT_STRICT": "1", "MKDOCS_STRICT_BYPASS": "1"}
+
+    blocked, out = _push(work, "HEAD:refs/heads/feat/no-marker", env_extra=strict)
+    assert blocked.returncode != 0, (
+        "the second guard in the dispatcher never learned anything was being "
+        f"pushed — it took its 'nothing to push' branch and allowed it:\n{out}"
+    )
+    assert "Push blocked" in out, (
+        f"blocked, but not by require_preflight_pass:\n{out}"
+    )
+
+    # ⛔ Opposite direction, or the assertion above is satisfied by a gate that
+    # blocks unconditionally — including one that blocks because it CRASHED.
+    head = _git(work, "rev-parse", "HEAD").stdout.strip()
+    (work / ".git" / f".preflight-ok.{head}").touch()
+    allowed, allowed_out = _push(
+        work, "HEAD:refs/heads/feat/with-marker", env_extra=strict
+    )
+    assert allowed.returncode == 0, (
+        f"CONTROL FAILED: a marked push was blocked too:\n{allowed_out}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -638,59 +894,99 @@ def test_precommit_env_channel_carries_one_ref_while_git_carries_all(
 # ---------------------------------------------------------------------------
 
 
-_EXPECTED_PREPUSH_HOOKS = {
-    "protect-main-push": "scripts/ops/protect_main_push.sh",
-    "require-preflight-pass": "scripts/ops/require_preflight_pass.sh",
-    "mkdocs-strict-pre-push": "scripts/ops/pre_push_mkdocs_strict.sh",
-}
+_EXPECTED_PREPUSH_GUARDS = (
+    "protect_main_push.sh",
+    "require_preflight_pass.sh",
+    "pre_push_mkdocs_strict.sh",
+)
 
 
-def test_the_shipped_precommit_config_still_wires_all_three_guards() -> None:
-    """Everything else in this file synthesises its own config, so nothing here
-    touched the stanzas the repo actually ships.
+def _dispatcher_array(name: str) -> list[str]:
+    """Read one `NAME=( … )` array out of prepush_dispatch.sh."""
+    text = (_OPS / "prepush_dispatch.sh").read_text(encoding="utf-8")
+    match = re.search(rf"^{name}=\((.*?)^\)", text, re.M | re.S)
+    assert match, f"prepush_dispatch.sh no longer has a {name}=( … ) block"
+    return [
+        line.strip()
+        for line in match.group(1).splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
 
-    Measured on that gap: deleting the ``protect-main-push`` stanza, moving it
-    to ``stages: [manual]``, dropping ``always_run: true``, pointing ``entry:``
-    at a filename that does not exist, and swapping the guard for an unrelated
-    no-op pre-push hook were ALL green across the guard suites. The one thing
-    that noticed any of it was a hook COUNT in CLAUDE.md — which a swap keeps
-    satisfied. So the cheapest way to disarm the guard was to replace it with
-    some other pre-push hook.
+
+def _dispatcher_guards() -> list[str]:
+    """The scripts prepush_dispatch.sh actually runs, read out of its GUARDS=()."""
+    return _dispatcher_array("GUARDS")
+
+
+def test_the_shipped_wiring_runs_exactly_the_three_guards() -> None:
+    """Everything else in this file synthesises its own config or installs into
+    a temp repo, so nothing here looks at what the repo actually ships.
+
+    Measured on that gap (before #1689, when the owner was the config): deleting
+    the ``protect-main-push`` stanza, moving it to ``stages: [manual]``,
+    dropping ``always_run: true``, pointing ``entry:`` at a filename that does
+    not exist, and swapping the guard for an unrelated no-op pre-push hook were
+    ALL green across the guard suites. The cheapest disarm was to replace the
+    guard with some other pre-push hook.
+
+    ⛔ The owner moved (#1689). The pin moved with it, and it now has two
+    halves, because the failure it has to catch changed shape:
+
+      1. the dispatcher runs exactly these three scripts, and
+      2. .pre-commit-config.yaml declares NO pre-push hooks at all.
+
+    Half 2 is not tidiness. A ``stages: [pre-push]`` entry re-added there does
+    not merely duplicate the dispatcher — the copy pre-commit runs is the BLIND
+    one (it is handed a single refspec), and it reports Passed, so the picture
+    is a guard that ran and approved.
 
     This is a pin, not a classifier: a closed, named set of three artifacts in
     one repo, where any edit should force a review. Set equality both ways, so
-    adding a fourth pre-push hook also reds and gets a look.
+    adding a fourth guard also reds and gets a look.
     """
     config = yaml.safe_load(
         (_REPO_ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8")
     )
-    found = {}
-    for repo in config.get("repos", []):
-        for hook in repo.get("hooks", []):
-            if "pre-push" in (hook.get("stages") or []):
-                found[hook["id"]] = hook
-
-    assert set(found) == set(_EXPECTED_PREPUSH_HOOKS), (
-        "the set of pre-push hooks changed. Adding or removing one is fine, but "
-        "it must be a deliberate edit here too — this assertion is the only "
-        f"thing that looks at the shipped stanzas. got={sorted(found)}"
+    stanzas = [
+        hook["id"]
+        for repo in config.get("repos", [])
+        for hook in repo.get("hooks", [])
+        if "pre-push" in (hook.get("stages") or [])
+    ]
+    assert stanzas == [], (
+        "a `stages: [pre-push]` hook is back in .pre-commit-config.yaml: "
+        f"{stanzas}. pre-commit hands a pre-push hook exactly ONE refspec "
+        "(#1689), so that copy is blind — and it prints Passed. The guards are "
+        "run by scripts/ops/prepush_dispatch.sh."
     )
-    for hook_id, script in _EXPECTED_PREPUSH_HOOKS.items():
-        hook = found[hook_id]
-        assert hook.get("entry") == f"bash {script}", (
-            f"{hook_id}: entry no longer runs {script} — got {hook.get('entry')!r}"
+
+    guards = _dispatcher_guards()
+    assert set(guards) == set(_EXPECTED_PREPUSH_GUARDS), (
+        "the set of guards the dispatcher runs changed. Adding or removing one "
+        "is fine, but it must be a deliberate edit here too — this assertion is "
+        f"the only thing that looks at the shipped wiring. got={sorted(guards)}"
+    )
+    for script in _EXPECTED_PREPUSH_GUARDS:
+        assert (_OPS / script).is_file(), (
+            f"the dispatcher runs {script}, which does not exist"
         )
-        assert (_REPO_ROOT / script).is_file(), (
-            f"{hook_id}: entry points at {script}, which does not exist"
-        )
-        assert hook.get("always_run") is True, (
-            f"{hook_id}: always_run dropped — with no files matched the hook is "
-            "skipped and the guard silently stops running"
-        )
-        assert hook.get("pass_filenames") is False, (
-            f"{hook_id}: pass_filenames must stay false; pre-commit's default is "
-            "true, which appends filenames the guard does not accept"
-        )
+
+    # ⛔ The commits-only list is a pin too, and its membership is a decision,
+    # not a detail: a guard added here silently stops running on deletions and
+    # on up-to-date pushes. Only the mkdocs check belongs — it is the one that
+    # does not read the refspec (#1690), so on a deletion it judges something
+    # the push is not doing. The other two MUST NOT be here: `git push origin
+    # :main` is exactly what #1691 is about.
+    needs_commits = _dispatcher_array("GUARDS_NEEDING_COMMITS")
+    assert needs_commits == ["pre_push_mkdocs_strict.sh"], (
+        "the set of guards skipped on a no-commit push changed. Adding one here "
+        "means it stops judging deletions — for protect_main_push that would "
+        f"re-open #1691. got={needs_commits}"
+    )
+    assert set(needs_commits) <= set(guards), (
+        f"GUARDS_NEEDING_COMMITS names something the dispatcher does not run: "
+        f"{sorted(set(needs_commits) - set(guards))}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -699,10 +995,21 @@ def test_the_shipped_precommit_config_still_wires_all_three_guards() -> None:
 
 
 @pytest.mark.parametrize(
-    "script", ["protect_main_push.sh", "require_preflight_pass.sh"]
+    ("script", "var"),
+    [
+        ("protect_main_push.sh", "_prepush_dir"),
+        ("require_preflight_pass.sh", "_prepush_dir"),
+        # ⛔ The dispatcher joined this list with #1689 and it is the one that
+        # most needs it: it is the file the hook shim execs, so if IT spawns a
+        # command to find its own directory, the PATH-stripped contract dies one
+        # level above the two guards that document it. Measured before adding
+        # this row: the parametrize covered two scripts, and a `$(dirname …)`
+        # in the dispatcher was green.
+        ("prepush_dispatch.sh", "_dispatch_dir"),
+    ],
 )
-def test_the_helper_is_sourced_without_spawning_anything(script: str) -> None:
-    """Both guards must locate the helper with parameter expansion only.
+def test_the_helper_is_sourced_without_spawning_anything(script: str, var: str) -> None:
+    """Each file must locate its siblings with parameter expansion only.
 
     ``test_gh_missing_*`` in tests/dx/test_preflight_pass_gate.py strips PATH to
     ``bash git basename sh cat`` to prove the preflight gate still works without
@@ -710,8 +1017,8 @@ def test_the_helper_is_sourced_without_spawning_anything(script: str) -> None:
     the whole gate down. That behavioural coverage exists for
     ``require_preflight_pass.sh`` only; ``protect_main_push.sh`` carries the same
     comment with nothing driving it (measured: rewriting its sourcing with
-    ``$(dirname …)`` left 41/41 green). This holds the property for both, and it
-    runs on every platform, which the PATH-stripping tests do not.
+    ``$(dirname …)`` left 41/41 green). This holds the property for all three,
+    and it runs on every platform, which the PATH-stripping tests do not.
     """
     lines = (_OPS / script).read_text(encoding="utf-8").splitlines()
 
@@ -733,11 +1040,11 @@ def test_the_helper_is_sourced_without_spawning_anything(script: str) -> None:
             continue
         code.append(ln)
 
-    mechanism = [ln for ln in code if "_prepush_dir" in ln]
+    mechanism = [ln for ln in code if var in ln]
     assert len(mechanism) >= 3, (
         f"{script}: could not find the sourcing mechanism; got {mechanism}"
     )
-    assert any(ln.strip() == '_prepush_dir="${BASH_SOURCE[0]%/*}"' for ln in mechanism), (
+    assert any(ln.strip() == f'{var}="${{BASH_SOURCE[0]%/*}}"' for ln in mechanism), (
         f"{script}: the directory is no longer derived by parameter expansion:\n"
         + "\n".join(mechanism)
     )
@@ -763,7 +1070,7 @@ def test_a_legacy_single_file_install_says_how_to_reinstall(tmp_path: Path) -> N
     hook.chmod(0o755)
     r, out = _push(work, "HEAD:refs/heads/feat/legacy")
     assert r.returncode != 0, f"a broken install silently allowed the push:\n{out}"
-    assert "pre-commit install --hook-type pre-push" in out, (
+    assert "scripts/ops/install_prepush_hook.sh" in out, (
         f"the failure names no way back to a working install:\n{out}"
     )
 

@@ -20,11 +20,13 @@
 #   4. pytest & friends missing  → every tests/**/*.py suite is uncollectable
 #                                  (ModuleNotFoundError), so "no failures" is
 #                                  indistinguishable from "nothing ran".
-#   5. mkdocs missing            → `mkdocs-strict-pre-push` (installed by step 2
-#                                  below) degrades to a warn-only Tier 2 and
-#                                  exits 0. Installing the pre-push stage while
-#                                  leaving this gate inert is worse than not
-#                                  installing it: it LOOKS wired.
+#   5. mkdocs missing            → the mkdocs strict guard (installed by step 2
+#                                  below, via scripts/ops/install_prepush_hook.sh
+#                                  — it is not a pre-commit hook id any more,
+#                                  #1689) degrades to a warn-only Tier 2 and
+#                                  exits 0. Installing the guards while leaving
+#                                  this one inert is worse than not installing
+#                                  them: it LOOKS wired.
 #
 #   Items 2 and 3 have been misfiled as "pre-existing debt / BLOCKED hooks" in a
 #   handoff note before. They are neither — they are this list.
@@ -176,9 +178,21 @@ if hp=$(git config --get core.hooksPath 2>/dev/null) && [ -n "$hp" ]; then
   note "RESULT=failed (core.hooksPath=$hp)"
   exit 1
 fi
-say "installing pre-commit hooks (commit + push stages)"
+say "installing pre-commit hooks (commit stage)"
 pre-commit install
-pre-commit install --hook-type pre-push
+# ⛔ NOT `pre-commit install --hook-type pre-push` (#1689). Since the three
+# pre-push guards left .pre-commit-config.yaml that command installs a hook
+# which runs ZERO pre-push hooks — and a hook pre-commit runs is handed only one
+# refspec anyway, which is the defect #1689 removed. The installer below owns
+# .git/hooks/pre-push, chains whatever was already there (git-lfs, on a fresh
+# clone), and is idempotent. Without it a remote session pushes with no guards
+# and `make pr-preflight` is the only thing that would ever say so.
+say "installing the pre-push guards"
+if ! bash scripts/ops/install_prepush_hook.sh; then
+  say "⛔ pre-push guards NOT installed — dev-rule #12 has no enforcement here"
+  note "RESULT=failed (install_prepush_hook)"
+  exit 1
+fi
 note "git-hooks=installed"
 
 # --- 4. Tags (shallow clones arrive without them) --------------------------
