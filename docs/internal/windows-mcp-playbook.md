@@ -496,12 +496,25 @@ done
 專案內的文件品質工具都已經知道要跳過這些 symlink proxy，避免在 FUSE 側
 或誤物化時覆蓋 target 字串：
 
-- `scripts/tools/dx/doc_coverage.py` — `EXCLUDE_RELATIVE_PATHS`
-- `scripts/tools/dx/add_frontmatter.py` — `EXCLUDE_RELATIVE_PATHS` + `os.path.islink` 跳過
-- `scripts/tools/dx/generate_doc_map.py` — `SKIP_FILES` / `SKIP_FILENAME_PREFIXES`
+**清單的正本只有一份**（#1692）：`scripts/tools/lint/_version_patterns.py` 的
+`DOCS_TREE_SYMLINK_ALIAS_PATHS`（`docs/` 相對路徑）與由它推導的
+`DOCS_TREE_SYMLINK_ALIASES`（裸名稱）。消費端：
 
-寫新的 doc-scanning 工具時**請沿用同一套清單**，否則會在 FUSE 側踩雷
-（見 `archive/lessons-learned.md` 的 add_frontmatter.py 事件）。
+- `scripts/tools/dx/doc_coverage.py` — `EXCLUDE_RELATIVE_PATHS`（＝路徑視圖）
+- `scripts/tools/dx/generate_doc_map.py` — `SKIP_FILES`（路徑視圖 ∪ 其餘 8 個 meta 檔）
+  / `SKIP_FILENAME_PREFIXES`
+- `scripts/tools/dx/bump_docs.py`、`scripts/tools/lint/validate_docs_versions.py`
+  — 名稱視圖（它們只走 `docs/`）
+- `scripts/tools/dx/add_frontmatter.py` — **刻意保留自己的 `EXCLUDE_RELATIVE_PATHS`**
+  ＋ `Path.is_symlink()` 跳過。它的理由是**寫入安全**（不要寫穿 proxy）而不是計數；
+  兩份成員今天相同但語意不同，理由寫在該檔常數的上方。
+
+寫新的 doc-scanning 工具時：**會計數或會配對**的就 import 上面那個正本；
+**只掃文字**的（連結、frontmatter、模板、閱讀時間）**不要**套用它——多訪問一次別名
+無害，收窄掃描面反而會丟掉真涵蓋。⛔ 也不要用 `Path.is_symlink()` 當成員判定：
+Windows checkout（含掛載進 dev container 的那棵）把它們物化成路徑 stub，
+`is_symlink()` 因此每個平台答案不同。（背景見 `archive/lessons-learned.md` 的
+add_frontmatter.py 事件。）
 
 ### v2.7.1 LL：`end-of-file-fixer` 會把 symlink blob 弄壞
 

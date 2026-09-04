@@ -27,9 +27,23 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 # Files/paths excluded from front matter scanning.
-# Must stay aligned with doc_coverage.py EXCLUDE_* constants so drift
-# between the two tools does not leave coverage gaps or cause
-# accidental writes through FUSE symlink proxies (see dev-rules #11).
+#
+# ⛔ This is a WRITE-SAFETY list, not the document-counting one. It happens to
+# name the same three paths as
+# `lint/_version_patterns.DOCS_TREE_SYMLINK_ALIAS_PATHS`, and it deliberately
+# does NOT import it: that constant answers "would counting this twice inflate
+# a total", this list answers "would writing to this corrupt a symlink proxy"
+# (dev-rules #11). The two happen to coincide today; coupling them would make a
+# future entry in either one silently change the other tool's behaviour.
+#
+# ⚠️ Load-bearing only where the aliases are NOT real symlinks.
+# `find_markdown_files` skips `Path.is_symlink()` before consulting this list,
+# so on a checkout with symlink support this list is inert; on one that
+# materialises them as path stubs (a Windows checkout — including the one
+# bind-mounted into this repo's dev container, where `is_symlink()` is False)
+# it is the only thing that skips them. Measured on `2654e395` by emptying the
+# set: real-symlink tree delta 0 (258 -> 258), Windows tree delta 3
+# (258 -> 261, exactly the three).
 EXCLUDE_RELATIVE_PATHS = {
     "docs/CHANGELOG.md",       # symlink -> ../CHANGELOG.md
     "docs/README-root.md",     # symlink -> ../README.md
