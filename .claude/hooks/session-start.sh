@@ -143,6 +143,15 @@ command -v pre-commit >/dev/null 2>&1 || missing="$missing pre-commit(cli)"
 if [ -n "$missing" ]; then
   say "⛔ NOT importable after install:$missing"
   note "MISSING:$missing"
+  # ⛔ And this MUST reach the final RESULT line. Writing RESULT=ok next to a
+  # MISSING line is the same claim-without-evidence shape the comment above
+  # warns about, and it has two teeth: CLAUDE.md tells the next session that
+  # RESULT=ok means "gates ready", and the no-op predicate at the top of this
+  # script greps for exactly that string — so a half-installed container would
+  # short-circuit every later run and never repair itself. Measured: with
+  # mkdocs uninstallable, the marker carried "MISSING: mkdocs" AND "RESULT=ok",
+  # and the next run no-opped with mkdocs still absent.
+  bootstrap_incomplete="$missing"
 else
   note "python-deps=ok"
 fi
@@ -203,6 +212,13 @@ fi
 # paying it here means every later session starts warm.
 say "pre-building pre-commit hook environments (cached into the container image)"
 pre-commit install-hooks >/dev/null 2>&1 || say "  install-hooks incomplete — first run will build the rest"
+
+if [ -n "${bootstrap_incomplete:-}" ]; then
+  note "RESULT=failed (not importable:$bootstrap_incomplete)"
+  say "⛔ bootstrap INCOMPLETE — not importable:$bootstrap_incomplete (marker: $MARKER)"
+  say "   the next session start will retry rather than no-op"
+  exit 1
+fi
 
 note "RESULT=ok"
 say "ready (marker: $MARKER)"
