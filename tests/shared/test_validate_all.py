@@ -12,6 +12,7 @@ pytest style：使用 plain assert + conftest fixtures。
   7. TOOLS / FIX_COMMANDS 常數一致性
   8. WATCH_TRIGGERS 覆蓋率
   9. _send_notification() — 跨平台桌面通知
+ 10. mermaid / links 兩列註冊參數的 pin（#1702）
 
 Merged from previous _extended split (PR test-refactor sweep) — TestSmartDetect
 and TestMainExtended classes appended at the bottom cover _smart_detect() git-
@@ -498,6 +499,23 @@ class TestRunOne:
         assert status == "fail"
         assert "Error found" in detail
 
+    def test_failure_always_carries_a_reason(self, tmp_path):
+        """A blank first line must not produce a red with no text at all.
+
+        Which line a failure SHOULD quote is #1697's question; this pins only
+        that the answer is never empty.
+        """
+        script = tmp_path / "blank_first_line.py"
+        script.write_text(
+            "import sys\nprint()\nprint('the real reason')\nsys.exit(1)\n",
+            encoding="utf-8")
+        _name, status, _elapsed, detail, _output = _run_one(
+            "blank_first", str(script), [], str(tmp_path))
+        assert status == "fail"
+        assert detail.strip(), (
+            "a failing check printed no reason at all; the operator gets a "
+            "red tick and nothing else")
+
     def test_timeout_returns_error(self, monkeypatch):
         """Timeout 回傳 error 狀態。"""
         def mock_run(*args, **kwargs):
@@ -579,7 +597,15 @@ class TestListMode:
 # ============================================================
 
 class TestGenerateDiffReport:
-    """--diff-report 功能測試。"""
+    """--diff-report 功能測試。
+
+    The "fix runs" cases stub ``_unstaged_tracked_files`` clean so they test
+    diff generation, not #1706's refusal; the refusal has its own cases below.
+    """
+
+    @staticmethod
+    def _pretend_clean(monkeypatch):
+        monkeypatch.setattr(va, "_unstaged_tracked_files", lambda root: [])
 
     def test_no_fixable_checks(self, tmp_path):
         """No fixable failed checks returns informative message."""
@@ -602,6 +628,7 @@ class TestGenerateDiffReport:
                 mock.stdout = ""
             return mock
 
+        self._pretend_clean(monkeypatch)
         monkeypatch.setattr(subprocess, "run", mock_run)
         result = va._generate_diff_report(
             {"versions": "fail"}, tmp_path, tmp_path)
@@ -623,6 +650,7 @@ class TestGenerateDiffReport:
             mock.stdout = ""
             return mock
 
+        self._pretend_clean(monkeypatch)
         monkeypatch.setattr(subprocess, "run", mock_run)
         result = va._generate_diff_report(
             {"versions": "fail"}, tmp_path, tmp_path)
@@ -636,10 +664,134 @@ class TestGenerateDiffReport:
             mock.stdout = ""
             return mock
 
+        self._pretend_clean(monkeypatch)
         monkeypatch.setattr(subprocess, "run", mock_run)
         result = va._generate_diff_report(
             {"versions": "fail"}, tmp_path, tmp_path)
         assert "no diff produced" in result
+
+    # -------- #1706: the restore is `git checkout .` at the repo root -------
+
+    def test_refuses_while_a_tracked_file_has_unstaged_changes(
+            self, tmp_path, monkeypatch):
+        """Nothing may run: the restore would take the operator's edits too."""
+        calls = []
+
+        def mock_run(cmd, **kwargs):
+            calls.append(cmd)
+            mock = MagicMock()
+            mock.returncode = 0
+            mock.stdout = ""
+            return mock
+
+        # ⛔ Not a real tracked path: verify_diff.py builds its change map from
+        # string literals in test files, so naming a real doc here would wire a
+        # permanent phantom dependency between that doc and this module.
+        monkeypatch.setattr(
+            va, "_unstaged_tracked_files",
+            lambda root: ["zz-not-a-real-path/edited-by-the-operator.md"])
+        monkeypatch.setattr(subprocess, "run", mock_run)
+        result = va._generate_diff_report(
+            {"versions": "fail"}, tmp_path, tmp_path)
+        assert "Refusing to run" in result
+        assert "zz-not-a-real-path/edited-by-the-operator.md" in result
+        assert calls == [], (
+            f"the refusal must happen before anything is spawned, got {calls}")
+
+    def test_refuses_when_git_cannot_answer(self, tmp_path, monkeypatch):
+        """A probe that did not run is not evidence of a clean tree."""
+        calls = []
+
+        def mock_run(cmd, **kwargs):
+            calls.append(cmd)
+            mock = MagicMock()
+            mock.returncode = 0
+            mock.stdout = ""
+            return mock
+
+        monkeypatch.setattr(va, "_unstaged_tracked_files", lambda root: None)
+        monkeypatch.setattr(subprocess, "run", mock_run)
+        result = va._generate_diff_report(
+            {"versions": "fail"}, tmp_path, tmp_path)
+        assert "Refusing to run" in result
+        assert "could not be read" in result
+        assert calls == []
+
+    def test_refusal_names_a_way_back_to_green(self, tmp_path, monkeypatch):
+        """The route must be `git add -u`, and stash must be marked as not
+        equivalent: stashing the edit often clears the very failure that would
+        have produced this report, so the operator gets silence instead.
+        """
+        monkeypatch.setattr(va, "_unstaged_tracked_files", lambda root: ["a.md"])
+        result = va._generate_diff_report(
+            {"versions": "fail"}, tmp_path, tmp_path)
+        assert "git add -u" in result
+        assert "stash" in result and "NOT equivalent" in result
+
+
+class TestUnstagedTrackedFiles:
+    """#1706's predicate, against a real repo — it decides who gets refused.
+
+    The set has to be exactly what ``git checkout .`` overwrites. Too wide
+    (untracked files, staged content) and the refusal fires on every worktree
+    that has scratch files in it, which is the cheapest possible reason for
+    someone to delete the guard.
+    """
+
+    @staticmethod
+    def _repo(tmp_path):
+        run = ["git", "-c", "core.filemode=false", "-c", "user.email=t@e.st",
+               "-c", "user.name=t"]
+        subprocess.run(run + ["init", "-q", str(tmp_path)],
+                       check=True, timeout=30)
+        (tmp_path / "tracked.md").write_text("one\n", encoding="utf-8")
+        subprocess.run(run + ["-C", str(tmp_path), "add", "tracked.md"],
+                       check=True, timeout=30)
+        subprocess.run(run + ["-C", str(tmp_path), "commit", "-qm", "init"],
+                       check=True, timeout=30)
+        return tmp_path
+
+    def test_clean_repo_reports_nothing(self, tmp_path):
+        assert va._unstaged_tracked_files(self._repo(tmp_path)) == []
+
+    def test_modified_tracked_file_is_reported(self, tmp_path):
+        repo = self._repo(tmp_path)
+        (repo / "tracked.md").write_text("two\n", encoding="utf-8")
+        assert va._unstaged_tracked_files(repo) == ["tracked.md"]
+
+    def test_untracked_file_is_not_reported(self, tmp_path):
+        """`git checkout .` leaves untracked files alone, so they must pass."""
+        repo = self._repo(tmp_path)
+        (repo / "scratch.md").write_text("draft\n", encoding="utf-8")
+        assert va._unstaged_tracked_files(repo) == []
+
+    def test_staged_change_is_not_reported(self, tmp_path):
+        """The restore comes from the index, so staged content survives it."""
+        repo = self._repo(tmp_path)
+        (repo / "tracked.md").write_text("staged\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(repo), "add", "tracked.md"],
+                       check=True, timeout=30)
+        assert va._unstaged_tracked_files(repo) == []
+
+    def test_non_ascii_name_is_reported_verbatim(self, tmp_path):
+        """Without `-z` git C-quotes it, and naming the file is the whole
+        point of the refusal. Every other case in this class stays green
+        when `-z` is dropped, so this is the only one holding that flag.
+        """
+        repo = self._repo(tmp_path)
+        name = "中文檔案.md"
+        (repo / name).write_text("one\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(repo), "add", name],
+                       check=True, timeout=30)
+        subprocess.run(["git", "-c", "user.email=t@e.st", "-c", "user.name=t",
+                        "-C", str(repo), "commit", "-qm", "cjk"],
+                       check=True, timeout=30)
+        (repo / name).write_text("two\n", encoding="utf-8")
+        assert va._unstaged_tracked_files(repo) == [name]
+
+    def test_outside_a_repo_returns_none(self, tmp_path):
+        """None, not [] — 'could not measure' must differ from 'measured OK'."""
+        assert va._unstaged_tracked_files(tmp_path) is None
 
 
 class TestMainCLI:
@@ -1804,3 +1956,38 @@ class TestUnknownCheckNames:
             f"padded names must be accepted "
             f"(stderr: {capsys.readouterr().err.strip()[:200]!r})")
         assert sorted(calls) == sorted([first, second])
+
+# ============================================================
+# The two rows this change re-armed (#1702)
+# ============================================================
+
+class TestRearmedRows:
+    """#1702. A PIN on two named rows, not a classifier.
+
+    Dropping ``--ci`` makes a row incapable of failing while it still prints a
+    tick; dropping a path narrows what it scans; repointing the script leaves
+    args the new script may reject. All three are silent, so the row is pinned
+    whole and a deliberate change has to come through here.
+
+    ⚠️ NOT GUARDED, and this is the cost of a removal in this PR: nothing
+    asserts that the OTHER rows can run or can fail. The withdrawn check and
+    what it had measured are in the commit message; ``translation`` and
+    ``freshness`` are still un-armed and tracked in #1735.
+    """
+
+    PINNED = {
+        "mermaid": ("lint/validate_mermaid.py", ["docs/", "rule-packs/", "--ci"]),
+        "links": ("lint/check_doc_links.py", ["--ci"]),
+    }
+
+    @pytest.mark.parametrize("name", sorted(PINNED))
+    def test_row_script_and_args_are_pinned(self, name):
+        """Script AND args — pinning only the args left a repointed row green."""
+        rows = [r for r in TOOLS if r[0] == name]
+        assert len(rows) == 1, f"{name} must be registered exactly once"
+        assert (rows[0][1], rows[0][2]) == self.PINNED[name], (
+            f"the {name} row changed. Dropping --ci makes the row incapable "
+            f"of failing while still printing a tick; dropping a path "
+            f"silently narrows what it scans; repointing the script leaves "
+            f"args that the new script may reject. If the change is "
+            f"deliberate, update this pin in the same commit.")
