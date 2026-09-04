@@ -358,3 +358,62 @@ func TestMetadataWriteEnforce_EndToEnd_ShadowAllowsRelabel(t *testing.T) {
 		t.Errorf("shadow relabel: commits = %d, want 1", n)
 	}
 }
+
+// ── Onboarding: the tenant that does not exist on disk yet ─────────────────
+
+// scopeFieldModes (rbac.go) treats an UNRESOLVABLE metadata field as unlabeled,
+// and unlabeled under enforce is a DENY — fail-closed by design. A tenant file
+// that does not exist yet resolves to exactly that pair, so the pre-state gate
+// sees a brand-new tenant the same way it sees a mislabeled one.
+//
+// This row is here because that consequence is the operationally surprising
+// one: an operator who flips the flag keeps every existing in-scope tenant
+// writable and loses the ability to ONBOARD, with a message about the tenant's
+// environment/domain for a tenant that has neither yet. The behavior is
+// measured here rather than reasoned about, and its shadow counterpart below
+// pins that the flag is what changes it.
+func TestMetadataWriteEnforce_EndToEnd_CreateNewTenantDenied(t *testing.T) {
+	t.Parallel()
+	f := newMetaEnfFixture(t, true)
+
+	const newTenant = "tenant-meta-brandnew"
+	w := f.putTenant(t, newTenant,
+		tenantYAMLWithMeta(newTenant, metaEnfScopedEnv, metaEnfScopedDomain, metaEnfPutMode), nil)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 — an absent tenant file resolves as unlabeled, "+
+			"and unlabeled under enforce is fail-closed; body=%s", w.Code, w.Body.String())
+	}
+	code, errText := decodeEnvelope(t, w)
+	if code != "FORBIDDEN" {
+		t.Errorf("code = %q, want FORBIDDEN", code)
+	}
+	// Same discriminator as the pre-state rows: this must be the HANDLER's
+	// denial, not the middleware's (which is metadata-blind and would deny for
+	// an unrelated reason).
+	if !strings.Contains(errText, metaEnfHandlerPreStateFrag) {
+		t.Errorf("error = %q, want it to contain %q", errText, metaEnfHandlerPreStateFrag)
+	}
+	if n := f.writes.Load(); n != 0 {
+		t.Errorf("denied create committed %d time(s), want 0", n)
+	}
+}
+
+// The migration-safety half of the row above: the identical create succeeds in
+// shadow. Together they pin that onboarding is blocked BY THE FLAG and not by
+// something else in the create path.
+func TestMetadataWriteEnforce_EndToEnd_ShadowAllowsCreateNewTenant(t *testing.T) {
+	t.Parallel()
+	f := newMetaEnfFixture(t, false)
+
+	const newTenant = "tenant-meta-brandnew"
+	w := f.putTenant(t, newTenant,
+		tenantYAMLWithMeta(newTenant, metaEnfScopedEnv, metaEnfScopedDomain, metaEnfPutMode), nil)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("shadow: status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if n := f.writes.Load(); n != 1 {
+		t.Errorf("shadow: commits = %d, want 1", n)
+	}
+}

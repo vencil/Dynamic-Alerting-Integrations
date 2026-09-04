@@ -63,9 +63,43 @@ MARKER="/tmp/vibe-session-start-hook.ran"
 say() { printf '  [session-start] %s\n' "$1"; }
 note() { printf '%s\n' "$1" >> "$MARKER"; }
 
+# SessionStart fires for more than a cold start (a resumed or compacted session
+# reuses the SAME container, where everything below is already in place). Doing
+# the work again is not free: `npm ci` DELETES tests/e2e/node_modules and
+# reinstalls it every time. So re-verify the four things this script exists to
+# guarantee and no-op when they all hold. This is a state check, not a matcher —
+# it stays correct whichever sources the harness fires on, and a container that
+# genuinely lost one of them still gets repaired.
+if [ -f "$MARKER" ] && grep -q '^RESULT=ok$' "$MARKER" 2>/dev/null \
+  && command -v pre-commit >/dev/null 2>&1 \
+  && [ -f .git/hooks/pre-commit ] && [ -f .git/hooks/pre-push ] \
+  && { [ ! -f tests/e2e/package.json ] || [ -d tests/e2e/node_modules ]; }; then
+  note "re-run at $(date -u +%Y-%m-%dT%H:%M:%SZ): already bootstrapped, no-op"
+  say "already bootstrapped (marker: $MARKER) — nothing to do"
+  exit 0
+fi
+
 : > "$MARKER"
 note "session-start.sh ran at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 note "repo_root=$ROOT"
+
+# --- 0. The constraints file must only pin versions ------------------------
+# ⛔ pip HONORS global options written inside a `-c` constraints file. Measured:
+# a constraints file whose first line is `--index-url http://127.0.0.1:9/simple`
+# makes pip print "Looking in indexes: http://127.0.0.1:9/simple" and fetch from
+# there. Since this hook runs unattended at session start, a single line landing
+# in requirements/ci-constraints.txt would silently repoint every install below
+# at an attacker-controlled index. CI has the same exposure but at least runs in
+# a throwaway runner; this one installs into the environment you then work in.
+# The file is a version SSOT and has never carried such a line — so refuse to
+# proceed if it ever does, rather than discover it afterwards.
+if grep -nE '^[[:space:]]*(--(index-url|extra-index-url|find-links|trusted-host)|-i[[:space:]]|-f[[:space:]])' \
+     requirements/ci-constraints.txt; then
+  say "⛔ requirements/ci-constraints.txt redirects the package index (lines above)."
+  say "   Refusing to install from it. It is a version-pin SSOT; it must not set an index."
+  note "RESULT=failed (constraints file sets a package index)"
+  exit 1
+fi
 
 # --- 1. Python toolchain (pinned by requirements/ci-constraints.txt) --------
 # Same package set the CI test lane installs (.github/workflows/ci.yml), plus
