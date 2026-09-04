@@ -491,7 +491,16 @@ def validate_tenant_name(name: str) -> bool:
 
 
 def discover_tenant_configs(config_dir: Path) -> List[str]:
-    """Discover tenant names from conf.d/*.yaml files.
+    """Discover tenant names from conf.d carriers — BOTH YAML spellings.
+
+    ⛔ The summary used to say `conf.d/*.yaml`, which is what this function
+    did until #1603 and is no longer true: it takes `CONFIG_SUFFIXES`, the
+    same set the exporter's scanner accepts.
+
+    ⚠️ The tenant id comes from the file STEM, not from the `tenants:` key
+    inside — unlike `custom_alerts/loader` and `generate_tenant_metadata`.
+    That is why widening here changes which CRDs get emitted rather than
+    which tenants get merged.
 
     Args:
         config_dir: Directory containing tenant configs
@@ -532,10 +541,25 @@ def discover_tenant_configs(config_dir: Path) -> List[str]:
     # happen here — the same false finding `suffixes` exists to prevent, one
     # axis over. Blind review caught the first version warning about a
     # directory-shaped `_defaults.yaml/` that this function never reads.
+    # ⛔ `.yml` IS A TENANT CARRIER HERE NOW (#1603, the last of the four
+    # readers that ticket names). Both sites below used to pass `(".yaml",)`
+    # while the exporter's scanner (`config_hierarchy.go:195`) lowercases the
+    # entry name and accepts BOTH spellings. This reader is the one where
+    # that costs a KUBERNETES OBJECT rather than a report line — measured on
+    # two trees whose contents are byte-identical and differ only in the
+    # extension:
+    #
+    #     db-a.yaml -> 18 CRDs, including `da-tenant-db-a.yaml`   <- control
+    #     db-a.yml  -> 17 CRDs, no tenant CRD at all              <- before
+    #     db-a.yml  -> 18 CRDs, including `da-tenant-db-a.yaml`   <- after
+    #
+    # rc=0 in every row, and in the `.yml` row the string `db-a` appears in
+    # NEITHER stdout NOR stderr: the tenant the exporter is serving simply
+    # has no AlertmanagerConfig on the apply plane, and nothing says so.
+    # Omitting the argument takes `CONFIG_SUFFIXES`, the exporter's own set.
     entries = sorted(config_dir.iterdir())
     for bad in unusable_config_entries(
         [p for p in entries if not is_reserved_name(p.name)],
-        suffixes=(".yaml",),
     ):
         print(
             i18n_text(
@@ -547,7 +571,7 @@ def discover_tenant_configs(config_dir: Path) -> List[str]:
         )
     for yaml_file in (
         p for p in entries
-        if p.is_file() and has_yaml_extension(p.name, (".yaml",))
+        if p.is_file() and has_yaml_extension(p.name)   # both spellings (#1603)
     ):
         if not yaml_file.name.startswith("_"):
             tenant = yaml_file.stem

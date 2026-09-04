@@ -28,6 +28,7 @@
    "tests/lint/test_check_path_metadata_consistency.py",
    "tests/ops/test_confd_unusable_signal.py",
    "tests/ops/test_gitops_check.py",
+   "tests/ops/test_operator_generate_v2.py",
    "tests/shared/test_confd_name_classification_parity.py",
    "tests/shared/test_lib_confd.py"
   ],
@@ -783,7 +784,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "491a6d020da1d70237d778f921c0f495289f267d212a40a905c644d2a585ca4e",
+ "source_digest": "9fe3547016b9a622165df538cf5163bf770036537daa90e244d4011812f95088",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -3039,6 +3040,7 @@
    "tests/dx/test_generate_tenant_metadata.py",
    "tests/lint/test_check_path_metadata_consistency.py",
    "tests/ops/test_gitops_check.py",
+   "tests/ops/test_operator_generate_v2.py",
    "tests/shared/test_confd_name_classification_parity.py"
   ],
   "tests/shared/docs_yaml_split_matrix.json": [
