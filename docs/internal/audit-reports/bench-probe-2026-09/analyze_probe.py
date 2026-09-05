@@ -21,9 +21,12 @@ script. The correction is left visible rather than quietly patched.
 
 ⚠️ So #2 and #3 exist TWICE - once here, once inline in that workflow - and
 nothing checks that the two copies agree. Four divergences are already known -
-calibration-round detection, record matching, the minimum round count for
-correlations, and how a NaN correlation is rendered - and they are tracked as
-TRK-373. Do not read "the workflow has this too" as "the workflow does this
+how each REPORTS an ambiguous calibration round (both keep the same rows; this
+script prints a line that contradicts itself), record matching, the minimum
+round count for correlations, and how a NaN correlation is rendered - and they
+are tracked as TRK-373. Section 5 of this directory's README carries a table
+giving, for each of the four, how to reproduce it and what the two copies each
+print. Do not read "the workflow has this too" as "the workflow does this
 identically".
 
 1. CROSS-DISPATCH - the only one this script alone has. The workflow summarises
