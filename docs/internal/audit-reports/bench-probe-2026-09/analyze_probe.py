@@ -11,11 +11,24 @@ Usage:
 No network, no benchmark, no Go toolchain. Reads probe-run{1,2,3}.txt from its
 own directory.
 
-The three statistics that are here and NOT in the workflow's own per-job summary
--------------------------------------------------------------------------------
-1. CROSS-DISPATCH. The workflow summarises one job. #1497's bimodality was
-   observed ACROSS dispatches, so the medians of separate jobs have to be put
-   side by side to be on the same axis as the thing under investigation.
+What is here, and how it relates to the workflow's own per-job summary
+----------------------------------------------------------------------
+⛔ An earlier version of this docstring claimed all three statistics below are
+NOT in the workflow's per-job summary. That was false the moment it was written:
+the same change that created this file also added #2 and #3 to
+`.github/workflows/bench-probe-write-latency.yaml`. Only #1 is unique to this
+script. The correction is left visible rather than quietly patched.
+
+⚠️ So #2 and #3 exist TWICE - once here, once inline in that workflow - and
+nothing checks that the two copies agree. Three divergences are already known
+(calibration-round detection, record matching, and the minimum round count for
+correlations); they are tracked as TRK-373. Do not read "the workflow has this
+too" as "the workflow does this identically".
+
+1. CROSS-DISPATCH - the only one this script alone has. The workflow summarises
+   one job. #1497's bimodality was observed ACROSS dispatches, so the medians of
+   separate jobs have to be put side by side to be on the same axis as the thing
+   under investigation.
 
 2. THE SHAPE DISCRIMINATOR. `load_sum` can grow two ways and they mean opposite
    things: every iteration gets slower (a level shift), or a few iterations
