@@ -89,7 +89,7 @@ jobs:
         with:
           go-version: "1.26"
 
-      # 受測物識別特徵。⛔ 這一條線已經燒過四次「數字跑在錯的樹上」，其中一次
+      # 受測物識別特徵。⛔ 這一條線反覆燒過「數字跑在錯的樹上」，其中一次
       # 就是把 PATH 上那支 `go` 的版本寫成實際跑的版本（go.mod 是 1.26.4、
       # GOTOOLCHAIN=auto，模組內會切）。所以 Go 版本以**模組內**問到的為準，
       # 而探針自己也會印一行 `PROBEENV`（來自 `runtime.Version()`）。
@@ -174,6 +174,13 @@ jobs:
           if not env:
               print("::error::no PROBEENV record — cannot identify what was measured")
               sys.exit(2)
+          # ⛔ `iters` 在下面是除數。這裡是 0 代表**記錄壞掉**，不是 degenerate 但合法
+          # 的量測，所以直接拒收而不是印 n/a。
+          _bad = [r["round"] for r in rows if r.get("iters", 0) <= 0]
+          if _bad:
+              print(f"::error::rounds {_bad} report iters<=0; a round with no iterations"
+                    " cannot be summarised")
+              sys.exit(2)
           print("## Probe: write vs load latency (#1497 mechanism 1)\n")
           print("```")
           for e in env:
@@ -181,20 +188,27 @@ jobs:
           print(f"rounds parsed: {len(rows)} {dropped}".rstrip())
           print("```\n")
 
+          # ⛔ 這份摘要裡每一個除數都是**量到的量**，所以每一個都可能是 0。沒守衛的
+          # 除法不是讓報告變差，是**讓報告整個死掉**——而一份印不出東西的報告分不出
+          # 「量不到」與「量了沒事」，那正是這支工具唯一存在的理由。
+          # ⚠️ 不宣稱真實 probe run 會產生 0 除數：本輪所有 degenerate 狀態都是把輸入
+          # construct 出來才到達的，不可達性**沒有被枚舉過**。守衛的理由是失效模式，
+          # 不是發生機率。
+          def _pct(num, den, spec=".1f"):
+              return f"{100 * num / den:{spec}}%" if den else "n/a（除數為 0）"
+
           tot = [r["write_sum"] + r["load_sum"] for r in rows]
           w = [r["write_sum"] for r in rows]
           l = [r["load_sum"] for r in rows]
           med = st.median(tot)
-          spread = 100 * (max(tot) - min(tot)) / med
-          wshare = 100 * sum(w) / sum(tot)
 
           print("| quantity | value |")
           print("|---|---|")
           print(f"| round total, median | {med/1e6:.1f} ms |")
-          print(f"| round total, spread (max-min)/median | **{spread:.1f}%** |")
-          print(f"| write share of all time | **{wshare:.3f}%** |")
-          print(f"| write_sum spread | {100*(max(w)-min(w))/st.median(w):.1f}% |")
-          print(f"| load_sum spread | {100*(max(l)-min(l))/st.median(l):.1f}% |")
+          print(f"| round total, spread (max-min)/median | **{_pct(max(tot)-min(tot), med)}** |")
+          print(f"| write share of all time | **{_pct(sum(w), sum(tot), '.3f')}** |")
+          print(f"| write_sum spread | {_pct(max(w)-min(w), st.median(w))} |")
+          print(f"| load_sum spread | {_pct(max(l)-min(l), st.median(l))} |")
 
           # 歸因只在散佈真的出現時才有意義。門檻寫死在這裡是刻意的：它不是
           # 判定器，只是決定要印哪一段字，好讓「沒抓到」與「抓到且乾淨」不會
@@ -203,15 +217,90 @@ jobs:
           base = st.median(tot)
           excess = worst["write_sum"] + worst["load_sum"] - base
           print(f"\n最慢的一輪：round={worst['round']}，比中位多 "
-                f"{excess/1e6:.1f} ms（{100*excess/base:+.1f}%）。")
+                f"{excess/1e6:.1f} ms（{_pct(excess, base, '+.1f')}）。")
           if excess > 0:
               dw = worst["write_sum"] - st.median(w)
               dl = worst["load_sum"] - st.median(l)
               print(f"其中寫入貢獻 {dw/1e6:+.1f} ms、載入貢獻 {dl/1e6:+.1f} ms "
-                    f"⇒ 超額有 **{100*dw/excess:.1f}%** 落在寫入路徑。")
+                    f"⇒ 超額有 **{_pct(dw, excess)}** 落在寫入路徑。")
           print(f"\n該輪的寫入尾端：p99={worst['write_p99']/1000:.1f} µs、"
                 f"max={worst['write_max']/1000:.1f} µs；"
                 f"載入 p99={worst['load_p99']/1e6:.2f} ms、max={worst['load_max']/1e6:.2f} ms。")
+
+          # ⛔ 上面那段只看最慢的一輪，而「最慢的一輪」可以由兩種完全相反的形狀
+          # 造成：每一次迭代都變慢（水位平移），或少數幾次迭代卡住（episode）。
+          # 兩者對機制 1 的意義相反——機制 1 預測的是 episode——但在 `load_sum`
+          # 這個總和上長得一模一樣。把 `load_sum` 在該輪自己的 p50 切開就分得出
+          # 來：`p50 × iters` 是水位，`load_sum − p50 × iters` 是水位以上的質量。
+          # ⚠️ 判準是哪一半**跟著 round total 動**（相關係數），不是哪一半比較大
+          # ——整條分布平移時兩者都會變大。
+          def _corr(x, y):
+              mx, my = st.mean(x), st.mean(y)
+              num = sum((a - mx) * (b - my) for a, b in zip(x, y))
+              den = (sum((a - mx) ** 2 for a in x) * sum((b - my) ** 2 for b in y)) ** 0.5
+              return num / den if den else float("nan")
+
+          # ⛔ 兩三個點的相關係數是 ±1 的擲硬幣，印出來只會被當成結論。門檻寫死
+          # 在這裡，而且不足時印的是「輪數不夠」——與「量了沒事」必須是兩行不同
+          # 的字。
+          MIN_ROUNDS_FOR_CORR = 5
+          print("\n### 這批 round-to-round 變異是什麼形狀\n")
+          if len(rows) < MIN_ROUNDS_FOR_CORR:
+              print(f"⚠️ 只有 {len(rows)} 輪，少於 {MIN_ROUNDS_FOR_CORR} 輪，"
+                    "**不印相關係數**——這是輪數不夠，不是形狀不明顯。")
+          else:
+              lvl = [r["load_p50"] * r["iters"] for r in rows]
+              abv = [r["load_sum"] - r["load_p50"] * r["iters"] for r in rows]
+              sd_t = st.stdev(tot)
+              print("| 分量 | corr(round total, ·) | 自身 sd | 自身 sd ÷ round total sd |")
+              print("|---|---|---|---|")
+              for nm, v in (("水位 `p50 × iters`", lvl), ("水位以上的質量", abv),
+                            ("`write_sum`", w)):
+                  print(f"| {nm} | {_corr(tot, v):+.3f} | {st.stdev(v)/1e6:.2f} ms |"
+                        f" {_pct(st.stdev(v), sd_t)} |")
+              # ⛔ 這裡原本印一組具體數字（+1.000 / +0.791 / 150.8% / 1.1%）並稱之為
+              # 「合成資料實測」。那組數字來自一支從未被 commit、現在也已不存在的
+              # harness ⇒ 讀這份 summary 的人沒有任何辦法核對它。一句每次 CI 都會
+              # 重印、卻無從查證的斷言，比不印更糟，所以那組數字已從這裡與 README
+              # 兩邊刪除（不是加註解保留）。這裡只留設計理由，並明說它還沒有實測背書。
+              # 補回 harness 是 TRK-374，它依賴先解決兩份拷貝的 TRK-373。
+              print("\n⚠️ 相關係數說「哪一個跟著動」，最後一欄說「它最多能推動多少」。"
+                    "一個分量要當成因，兩欄都要成立——這是第二欄存在的**設計理由**。"
+                    "⛔ 它目前**沒有實測背書**：原本佐證它的那組合成資料數字，因為"
+                    "產生它的 harness 從未進 repo、無人能核對，已一併刪除（TRK-374 補回）。"
+                    "⇒ 這張表要兩欄一起讀，但不要把「兩欄一起讀就分得出形狀」當成已驗證。")
+              print("\n⛔ 最後一欄**不是** variance 分解，三列不會加總到 100%："
+                    "三個分量彼此相關，>100% 表示它被另一個分量抵銷掉一部分"
+                    "（水位平移時水位與『水位以上的質量』反向）。")
+
+          # 機制 1 的量級門檻。⭐ 這一段刻意**不依賴有沒有抓到 episode**：它問的是
+          # 「要產生 #1497 那個量級，寫入路徑得做到什麼」，然後拿它跟實際看到的最大
+          # 一次相比。一次什麼都沒抓到的執行也答得出這一題。
+          # ⛔ 它給的是對**已觀測** episode 的上界，不是「不可能更大」的證明。
+          TARGET_SWING_PP = 30.38 - 3.98   # #1497 同日三次 dispatch 的高低模差距
+          need = TARGET_SWING_PP / 100 * med
+          biggest = max(w) - st.median(w)
+          iters_per_round = rows[0]["iters"]
+          # ⛔ 兩個除數都可能是 0，而沒守衛的除法不是讓報告變差，是**讓報告整個死掉**
+          # ——一次確實收到資料的執行會一個字都不印。那正是這支工具最不該有的失敗
+          # 模式：「量不到」與「量了沒事」必須是兩行不同的字。
+          # ⚠️ 兩種狀態都不是真實 probe run 產生的，是把輸入 construct 出來的（所有
+          # write_sum 相同 ⇒ max == median ⇒ biggest 0）。不宣稱不可達——沒枚舉過。
+          med_w = st.median(w)
+          print(f"\n### 機制 1 要達到 #1497 的量級得做到什麼\n")
+          # ⛔ 兩個分支各自寫成完整句子，不共用前半段。共用前半段時 null 情況會印成
+          # 「高於中位最多的一輪是 0.0 ms，沒有任何一輪高於中位」——前半句斷言那一輪
+          # 存在，後半句說它不存在，自相矛盾。
+          print(f"單側擺 {TARGET_SWING_PP:.2f}% 在 {med/1e6:.0f} ms 的一輪上是 **{need/1e6:.0f} ms**。"
+                + (f"本次 {len(rows)} 輪裡，`write_sum` 高於中位最多的一輪是 "
+                   f"**{biggest/1e6:.1f} ms**（差 **{need/biggest:.0f}×**）。" if biggest > 0 else
+                   f"本次 {len(rows)} 輪裡**沒有任何一輪的 `write_sum` 高於中位**，"
+                   "所以沒有正向超額可以拿來比——這是一個 null 觀測，不是量測失敗。"))
+          print(f"換算到每次迭代：中位輪的寫入平均 {med_w/iters_per_round/1000:.1f} µs，"
+                f"要達標得在全部 {iters_per_round} 次迭代上平均 {need/iters_per_round/1e6:.2f} ms"
+                + (f"，即整個寫入路徑成本的 **{need/med_w:.0f}×**、而且是**持續**不是尖峰。"
+                   if med_w > 0 else
+                   "。⚠️ 中位輪的寫入半邊是 0 ns，因此它的倍數沒有定義。"))
 
           print("\n> ⛔ 判讀限制：本 job 只跑一台 runner、一個 job，跨輪散佈與 #1497 "
                 "觀察到的**跨 dispatch** 散佈不是同一個量。若上面的 spread 沒有重現 "
