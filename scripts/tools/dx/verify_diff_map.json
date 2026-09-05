@@ -784,7 +784,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "9fe3547016b9a622165df538cf5163bf770036537daa90e244d4011812f95088",
+ "source_digest": "3c4b1a8d7ceb8b0e2f306bdb0cd64801b90978e5d4e00cafff266037baef3078",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -2128,6 +2128,7 @@
    "tests/dx/test_line_ending_policy.py",
    "tests/ops/test_ci_flake_retry.py",
    "tests/ops/test_nightly_scan_matrix_drift.py",
+   "tests/ops/test_prepush_hook_wiring.py",
    "tests/ops/test_printed_paths_are_reachable.py"
   ],
   "scripts/ops/_prepush_refs.sh": [
@@ -2170,11 +2171,19 @@
   "scripts/ops/inject_default_key.py": [
    "tests/ops/test_inject_default_key.py"
   ],
+  "scripts/ops/install_prepush_hook.sh": [
+   "tests/dx/test_pr_preflight_checks.py",
+   "tests/dx/test_preflight_marker.py",
+   "tests/ops/test_prepush_hook_wiring.py"
+  ],
   "scripts/ops/parse_go_test_json.py": [
    "tests/ops/test_nightly_race_issue_policy.py",
    "tests/ops/test_parse_go_test_json.py"
   ],
   "scripts/ops/pre_push_mkdocs_strict.sh": [
+   "tests/ops/test_prepush_hook_wiring.py"
+  ],
+  "scripts/ops/prepush_dispatch.sh": [
    "tests/ops/test_prepush_hook_wiring.py"
   ],
   "scripts/ops/protect_main_push.sh": [
@@ -2554,7 +2563,8 @@
    "tests/ops/test_ci_path_filter_coverage.py"
   ],
   "scripts/tools/lint/mkdocs_strict_check.sh": [
-   "tests/lint/test_mkdocs_strict_check.py"
+   "tests/lint/test_mkdocs_strict_check.py",
+   "tests/ops/test_prepush_hook_wiring.py"
   ],
   "scripts/tools/lint/trufflehog_to_sarif.py": [
    "tests/ops/test_secret_scan_gate.py"

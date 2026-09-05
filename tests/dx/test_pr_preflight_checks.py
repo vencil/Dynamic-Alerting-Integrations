@@ -223,17 +223,22 @@ class TestCheckConflict:
 # ---------------------------------------------------------------------------
 class TestCheckLocalHooks:
     """⛔ These pin how pre-commit's OUTPUT is parsed. `check_local_hooks` also
-    refuses up front when the pre-push hook is not installed (#1664), and that
-    probe goes through the same `pp.run`, which `_stub_run_constant` replaces
-    with one constant CompletedProcess — so without pinning it the probe reads
-    the hook listing as a path, returns False, and every test here fails on the
-    early return instead of on what it is about. The install branch has its own
-    test below, plus `TestPrepushHookInstalled` in test_preflight_marker.py.
+    refuses up front when the pre-push guards are not on the push path (#1664,
+    #1689), and that probe goes through the same `pp.run`, which
+    `_stub_run_constant` replaces with one constant CompletedProcess — so
+    without pinning it the probe reads that stub as the installer's verdict,
+    returns False, and every test here fails on the early return instead of on
+    what it is about. The wiring branch has its own test below, plus
+    `TestPrepushWiring` in test_preflight_marker.py.
     """
 
     @staticmethod
     def _assume_installed(monkeypatch, installed=True):
-        monkeypatch.setattr(pp, "_prepush_hook_installed", lambda: installed)
+        monkeypatch.setattr(
+            pp,
+            "_prepush_guards_wired",
+            lambda: (installed, "stubbed by _assume_installed"),
+        )
 
     def test_all_pass(self, monkeypatch):
         self._assume_installed(monkeypatch)
@@ -242,18 +247,30 @@ class TestCheckLocalHooks:
         assert result.status == pp.Status.PASS
 
     def test_missing_prepush_hook_fails_before_running_anything(self, monkeypatch):
-        """The guards cannot fire if the hook was never installed, so preflight
+        """The guards cannot fire if they are not on the push path, so preflight
         says so instead of reporting on the pre-commit stage alone."""
         self._assume_installed(monkeypatch, installed=False)
 
         def _boom(*a, **k):  # pragma: no cover - must not be reached
-            raise AssertionError("pre-commit was run despite no pre-push hook")
+            raise AssertionError("pre-commit was run despite unwired pre-push guards")
 
         monkeypatch.setattr(pp, "run", _boom)
         result = pp.check_local_hooks()
         assert result.status == pp.Status.FAIL
         assert "pre-push" in result.message
-        assert "pre-commit install --hook-type pre-push" in result.detail
+        # ⛔ The remedy has to be the one that works. This assertion demanded
+        # `pre-commit install --hook-type pre-push` before #1689; that installs
+        # a hook which is shown ONE refspec, and it exits 1 outright while
+        # core.hooksPath is set — a remedy that cannot reach green.
+        assert "bash scripts/ops/install_prepush_hook.sh" in result.detail
+        # ⛔ NOT ASSERTED, on purpose: "the detail must not RECOMMEND the old
+        # command". The detail names it inside a ⛔ prohibition, so any
+        # substring check is satisfied by the very line that warns against it —
+        # recommend-vs-prohibit is a prose distinction and pinning it would mean
+        # pinning wording. The first draft of this test tried, and what it
+        # actually wrote was a tautology (`... or "⛔" in detail`).
+        # the stub's own explanation is surfaced rather than swallowed
+        assert "stubbed by _assume_installed" in result.detail
 
     def test_failed_hooks_parsed(self, monkeypatch):
         self._assume_installed(monkeypatch)

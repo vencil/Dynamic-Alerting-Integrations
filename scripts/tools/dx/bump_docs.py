@@ -1362,27 +1362,36 @@ def _build_count_rules():
     # the tail wagging the dog. Deleting is the honest option; what remains
     # below is every count sentence that actually exists.
 
-    # CLAUDE.md: pre-commit hook breakdown (auto-run + manual-stage + pre-push)
+    # CLAUDE.md: pre-commit hook breakdown (auto-run + manual-stage)
     # Source-of-truth count derived dynamically from .pre-commit-config.yaml stages.
-    auto_n, manual_n, push_n = _count_precommit_hook_stages()
+    #
+    # ⛔ The `+ N pre-push` term is deliberately gone (#1689). The three pre-push
+    # guards stopped being pre-commit hooks, so this file's pre-push stage count
+    # is now 0 — and "0 pre-push hooks" would be true of the config while being
+    # false about the repo, which still runs all three from
+    # scripts/ops/prepush_dispatch.sh. The three options were a misleading 0, a
+    # hand-maintained 3 with no SSOT, or dropping the dimension; dropped, and
+    # the sentence now points at the dispatcher where the list actually lives.
+    # The pattern still tolerates the old three-term form, so a CLAUDE.md that
+    # has not been synced yet gets rewritten instead of silently skipped.
+    auto_n, manual_n, _push_n = _count_precommit_hook_stages()
     rules.append({
         "id": "precommit-hook-breakdown",
         "file": "CLAUDE.md",
         "desc": (
             f"CLAUDE.md: pre-commit hook breakdown "
-            f"({auto_n} auto + {manual_n} manual + {push_n} push)"
+            f"({auto_n} auto + {manual_n} manual)"
         ),
         "pattern": (
             r"\d+\s+auto-run\s+\+\s+\d+\s+manual-stage"
             r"(?:\s+\+\s+\d+\s+pre-push)?\s+hooks"
         ),
         "replacement": lambda _: (
-            f"{auto_n} auto-run + {manual_n} manual-stage "
-            f"+ {push_n} pre-push hooks"
+            f"{auto_n} auto-run + {manual_n} manual-stage hooks"
         ),
         "is_count": True,
         "source": ".pre-commit-config.yaml (hook stages)",
-        "source_ok": auto_n + manual_n + push_n > 0,
+        "source_ok": auto_n + manual_n > 0,
     })
 
     # dev-rules.md: 互動工具 SOP 章節「N 個 JSX 互動工具」count

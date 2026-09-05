@@ -26,7 +26,7 @@ lang: zh
 
 死亡組合：以為某事是 hook-enforced（其實是 ⚙️ CI-only 或 👁️ reviewer-only）→ 不做 / 信任 hook 會擋 → **push 吃 CI 紅燈** / reviewer 退件。本表就是消除這種誤判。
 
-> **📊 Count reconciliation**：⛔ **本行刻意不再自己抄一份數字（[#1664](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1664) 順帶）。** 先前它寫「102 auto + 13 manual + 3 pre-push = 118…與 CLAUDE.md 宣告一致」——實測 SSOT（`bump_docs._count_precommit_hook_stages()`，由 `.pre-commit-config.yaml` YAML parse）是 **105 / 13 / 3**，也就是那句「一致」自己就是假的，而它是這份文件裡唯一一個**沒有寫入端也沒有檢查端**的計數副本，所以它必然再腐爛一次。權威值只有一處：`CLAUDE.md` 的 hook 計數，由 CI 的 `bump_docs --sync-counts --check` gate（見 §4.5）。⚠️ **下文 §3/§4 標題內的數字是當時的盤點快照、不由任何 gate 維護、且已知與 SSOT 不符**——標題保持原樣是為了不改動既有的 mkdocs anchor；要現值請跑 `bump_docs --sync-counts --check` 或讀 CLAUDE.md，不要從標題讀。CLAUDE.md 的 hook 計數自 #1185 PR2 起由 CI `bump_docs --sync-counts --check` gate（本身即 ⚙️ CI-only，見 §4.5）。下文 §3/§4 的職能分組表為 v2.8.1 盤點時的快照、其後新 hook 僅逐案補列——**計數以 `.pre-commit-config.yaml` YAML parse 為準**，分組表供職能導覽不做計數依據。
+> **📊 Count reconciliation**：⛔ **本行刻意不再自己抄一份數字（[#1664](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1664) 順帶）。** 先前它寫「102 auto + 13 manual + 3 pre-push = 118…與 CLAUDE.md 宣告一致」——當時對 SSOT（`bump_docs._count_precommit_hook_stages()`，由 `.pre-commit-config.yaml` YAML parse）重量，**三個數字沒有一個對得上**，也就是那句「一致」自己就是假的；而它是這份文件裡唯一一個**沒有寫入端也沒有檢查端**的計數副本，所以它必然再腐爛一次。⛔ **這裡刻意不重寫成新的三個數字**：`pre-push` 那一項在 [#1689](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1689) 之後已經不是 pre-commit 的 stage（守衛改由 `scripts/ops/prepush_dispatch.sh` 執行），所以連「幾個 stage」這個維度都換了母體——再抄一次只會製造第二次腐爛。權威值只有一處：`CLAUDE.md` 的 hook 計數，由 CI 的 `bump_docs --sync-counts --check` gate（見 §4.5）。⚠️ **下文 §3/§4 標題內的數字是當時的盤點快照、不由任何 gate 維護、且已知與 SSOT 不符**——標題保持原樣是為了不改動既有的 mkdocs anchor；要現值請跑 `bump_docs --sync-counts --check` 或讀 CLAUDE.md，不要從標題讀。CLAUDE.md 的 hook 計數自 #1185 PR2 起由 CI `bump_docs --sync-counts --check` gate（本身即 ⚙️ CI-only，見 §4.5）。下文 §3/§4 的職能分組表為 v2.8.1 盤點時的快照、其後新 hook 僅逐案補列——**計數以 `.pre-commit-config.yaml` YAML parse 為準**，分組表供職能導覽不做計數依據。
 >
 > **更正（TRK-307，時值 v2.8.1 = 51/13/3）**：本表初版（PR #582）曾誤記「50 auto + 14 manual」並反指 CLAUDE.md 計數漂移——那是用 grep `stages:\s*\[manual\]` 數的結果，**配到了 `jsx-babel-check-strict-linecount` 的註解行**（該 hook 註解明寫 "Auto-stage (NOT manual)"，曾被提議 manual 但 PR #162 改回 auto）。TRK-307 的 `audit_rules_drift.py` 用 **YAML parse**（非 grep）重數，確認當時為 51/13/3，CLAUDE.md 一直是對的。**教訓：hook 計數要 YAML parse，grep 會配到註解 / 文字**——audit 工具上線首次執行即抓出此自埋誤差。
 
@@ -34,17 +34,23 @@ lang: zh
 
 ## 1. Pre-push gates（3）— 🔧 機械，push 時最後防線
 
-| Gate | hook id | Trigger | 涵蓋 | 失敗代價 | Reference |
-|---|---|---|---|---|---|
-| 擋直推 main | `protect-main-push` | 每次 `git push` | dev-rule #12 | push 被拒 | `scripts/ops/protect_main_push.sh` |
-| 要求 preflight marker | `require-preflight-pass` | 每次 `git push`，但 **main/master 直接放行**（那歸 `protect-main-push`） | 確保 `make pr-preflight` 跑過 | push 被拒（無 marker） | `scripts/ops/require_preflight_pass.sh` |
-| mkdocs strict | `mkdocs-strict-pre-push` | push 含 `docs/**` / `mkdocs.yml` / `README.md` | dev-rule #4 mkdocs site-root 語意 | push 被拒（Tier 1）/ CI backstop（Tier 2） | `scripts/ops/pre_push_mkdocs_strict.sh` |
+| Gate | Trigger | 涵蓋 | 失敗代價 | Reference |
+|---|---|---|---|---|
+| 擋直推 main | 每次 `git push` | dev-rule #12 | push 被拒 | `scripts/ops/protect_main_push.sh` |
+| 要求 preflight marker | 每次 `git push`，但 **main/master 直接放行**（那歸擋直推 main 那支） | 確保 `make pr-preflight` 跑過 | push 被拒（無 marker） | `scripts/ops/require_preflight_pass.sh` |
+| mkdocs strict | push 含 `docs/**` / `mkdocs.yml` / `README.md` | dev-rule #4 mkdocs site-root 語意 | push 被拒（Tier 1）/ CI backstop（Tier 2） | `scripts/ops/pre_push_mkdocs_strict.sh` |
 
 > **AI 注意**：mkdocs strict 是 push 時才跑——但 `vibe-dev-rules` skill 要你 **commit 前**先跑（`feedback_vibe_dev_rules_skill_before_commit`），別等 push 才發現 site-root link 壞掉。
 
-> ⛔ **這三支不會自動安裝（[#1664](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1664)）。** `pre-commit install` 只裝 pre-commit 那一層；要有這三支必須**另外**跑 `pre-commit install --hook-type pre-push`。實測全新 clone 只照舊的單行說明做 ⇒ `.git/hooks/pre-push` 不存在、直推 main 成功、畫面滿是綠色的 pre-commit 層 hook。`make pr-preflight` 的 `Local hooks` 現在對「沒裝」直接 FAIL 並印出那條指令（`--skip-hooks` / `make pr-preflight-quick` 可略過）。
+> ⛔ **本表沒有 `hook id` 欄，因為這三支不再是 pre-commit hook（[#1689](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1689)）。** 它們由 `scripts/ops/prepush_dispatch.sh` 執行，`.pre-commit-config.yaml` 裡**沒有**對應的 `stages: [pre-push]` 條目——有一支測試釘住「零條目」，因為重新加回去的那一份**是瞎的**（見下）而且會印 Passed。
 
-> ⚠️ **前兩支看得到的 refspec 只有一列，而且是字典序最前的那一列（同票殘差）。** 它們從 `scripts/ops/_prepush_refs.sh` 取 refspec；經 pre-commit 安裝時走的是 `PRE_COMMIT_REMOTE_BRANCH`，而 pre-commit 的 `hook_impl._pre_push_ns` 只回報 stdin **第一列**可推送的 ref。⛔ **git 是照 remote ref 名稱排序餵那些列的，不是照你在命令列打的順序**：實測 `git push origin main zzz` 與 `git push origin zzz main` 產生**逐字相同**的 stdin（`main` 在前）⇒ 「把 main 寫在前面」不是保命的方法；會藏住 main 的是**排序在 `refs/heads/main` 之前**的同批分支（例如 `abc`）。單一 refspec 的 push 不受影響——含「第一次把分支推到空 remote」這條 pre-commit 不匯出 `PRE_COMMIT_TO_REF` 的路徑，該格另有測試釘住。第三支不讀 refspec（走 `@{u}` 比對），與此無關。量測全部釘在 `tests/ops/test_prepush_hook_wiring.py`。⚠️ `git push --all` / `--mirror` 是否落進同一格，本 repo 尚未獨立重現，暫不宣稱。
+> ⛔ **這三支不會自動安裝（[#1664](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1664)）。** 安裝只有一條：`bash scripts/ops/install_prepush_hook.sh`（冪等）。實測全新 clone 只照舊的單行說明做 ⇒ 直推 main 成功、畫面滿是綠色的 pre-commit 層 hook。「有沒有接上」由 `make pr-preflight` 的 `Local hooks` 回答，它對「沒接上」直接 FAIL 並印那條指令（`--skip-hooks` / `make pr-preflight-quick` 可略過）。
+>
+> ⛔ **安裝器會串接既有的 pre-push hook，而不是拒絕**——這不是方便，是必要：本 repo 有 `filter=lfs` 路徑而 `git lfs install` 是全域設定，所以**每一個全新 clone 的 `.git/hooks/pre-push` 一落地就是 git-lfs 的**。實測（Windows host、全新 clone）：拒絕覆寫 ⇒ 安裝器 rc=1，而 `make pr-preflight` 印的補救指令正是它 ⇒ 死路；改用舊指令 `pre-commit install --hook-type pre-push` ⇒ rc=0，但它把 lfs 那支 `#!/bin/sh` 的 hook 遷到 `pre-push.legacy`，之後**每次 push 都死在 `ExecutableNotFoundError: /bin/sh`**（pre-commit 在 Windows 自己解 shebang）——那條路在本次改動之前就是壞的。現在外來 hook 會被移到 `pre-push.chained`，由 dispatcher 用同樣的 argv 與 stdin 繼續呼叫。
+>
+> ⚠️ **`pre-commit install --hook-type pre-push` 不再是替代方案**：它裝出來的 hook 只看得到一列 refspec，而且只要設了 `core.hooksPath`（任何值）它直接 rc=1 拒絕安裝。
+
+> ✅ **「只看得到一列 refspec」這個殘差已由 #1689 修掉，記在這裡是因為成因仍然是活的。** pre-commit 的 `hook_impl._pre_push_ns` 只回報 stdin **第一列**可推送的 ref；⛔ **git 是照 remote ref 名稱排序餵那些列的，不是照你在命令列打的順序**：實測 `git push origin main zzz` 與 `git push origin zzz main` 產生**逐字相同**的 stdin（`main` 在前）⇒ 「把 main 寫在前面」不是保命的方法；會藏住 main 的是**排序在 `refs/heads/main` 之前**的同批分支——而 dev-rule #12 要求的 `feat/` `fix/` `chore/` 全部落在那一側。實測（未修時）：`git push origin aaa main` 印 `Guard: block direct push to main ... Passed` 且 main 真的推上去了。⇒ **修法是不再把那三支註冊為 pre-commit 的 pre-push stage**；dispatcher 自己讀 stdin，所以 `--all` / `--mirror` 這類「一次多列」的形式也一併涵蓋，不必逐一宣稱。量測釘在 `tests/ops/test_prepush_hook_wiring.py`。第三支不讀 refspec（走 `@{u}` 比對），與此無關——它自己的缺陷是 [#1690](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1690)。
 
 ---
 
@@ -199,7 +205,7 @@ lang: zh
 ## 8. AI agent 使用指引
 
 1. **Commit / push 前**：先掃本表「🕳️ 漏接」+「🧠 skill-advised」——這些沒人機械擋，必須自覺做。
-2. **不要重做 🔧 hook-enforced 的事**（全部 auto hooks + 3 pre-push + 2 PreToolUse；確切數字見 §Count reconciliation）——浪費 token，hook 會擋。**但 ⚙️ CI-only gate（§4.5：`test_sast` / `bump_docs` hook 計數 / OpenAPI drift / 契約測試）本地不跑、push 才紅**——別把它們當 hook-enforced；改到對應輸入時本地手動跑（否則吃一輪 CI 紅燈）。
+2. **不要重做 🔧 hook-enforced 的事**（全部 auto hooks + §1 那三支 pre-push 守衛 + 2 PreToolUse；pre-commit stage 的確切數字見 §Count reconciliation，pre-push 那三支見 `scripts/ops/prepush_dispatch.sh` 的 `GUARDS`）——浪費 token，hook 會擋。**但 ⚙️ CI-only gate（§4.5：`test_sast` / `bump_docs` hook 計數 / OpenAPI drift / 契約測試）本地不跑、push 才紅**——別把它們當 hook-enforced；改到對應輸入時本地手動跑（否則吃一輪 CI 紅燈）。
 3. **記得手動跑 §4 manual hooks**（改對應檔後）——它們不在 commit 自動跑，漏了 CI 才擋。
 4. **trailer 規則**信任 commit-msg hook 會擋，但格式自覺照 CLAUDE.md 高頻地雷 #2 寫對（省一輪 commit 重試）。
 

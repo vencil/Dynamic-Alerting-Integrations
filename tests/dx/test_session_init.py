@@ -739,3 +739,45 @@ class TestHookHealing:
         assert isinstance(status, dict)
         assert "pre_commit_shebang" in status
         assert "commit_msg" in status
+
+
+class TestPrepushInstallFailureIsAudible:
+    """#1689: a failed pre-push install has to reach the model, not just fd 2.
+
+    ⛔ stderr alone does not. ``_do_init`` returns 0 by design (never block a
+    tool call) and PreToolUse only feeds stderr back on exit 2 — the exact
+    channel in which both session guards "died silently for 7 weeks" (#824).
+    ``run-hooks.sh`` already answers this with ``additionalContext`` on stdout,
+    and this pins that session-init reaches for the same one.
+    """
+
+    def test_failure_emits_additional_context_on_stdout(
+        self, tmp_marker_dir, monkeypatch, capsys
+    ):
+        mod, _ = tmp_marker_dir
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "prepush-fail-1")
+        monkeypatch.setattr(mod, "_run_vscode_git_toggle", lambda _r: (True, ""))
+        monkeypatch.setattr(
+            mod, "_install_prepush_hook", lambda _r: "⛔ refusing: git-lfs owns it"
+        )
+        assert mod.main([]) == 0
+        out = capsys.readouterr().out
+        payload = json.loads(out.strip().splitlines()[0])
+        ctx = payload["hookSpecificOutput"]["additionalContext"]
+        assert payload["hookSpecificOutput"]["hookEventName"] == "PreToolUse"
+        assert "git-lfs owns it" in ctx, ctx
+        assert "install_prepush_hook.sh" in ctx, ctx
+
+    def test_success_stays_quiet(self, tmp_marker_dir, monkeypatch, capsys):
+        """⛔ CONTROL: without this, emitting the block unconditionally would
+        satisfy the test above while spamming every single session start."""
+        mod, _ = tmp_marker_dir
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "prepush-ok-1")
+        monkeypatch.setattr(mod, "_run_vscode_git_toggle", lambda _r: (True, ""))
+        monkeypatch.setattr(
+            mod,
+            "_install_prepush_hook",
+            lambda _r: "[install_prepush_hook] installed guard shim at .git/hooks/pre-push",
+        )
+        assert mod.main([]) == 0
+        assert capsys.readouterr().out.strip() == ""

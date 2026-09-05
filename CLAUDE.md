@@ -108,7 +108,9 @@ Vibe 專案內建 **八個本地 skills**，在對應情境自動觸發。
 
 ## Pre-commit 品質閘門
 
-105 auto-run + 13 manual-stage + 3 pre-push hooks，清單見 [`.pre-commit-config.yaml`](.pre-commit-config.yaml)。手動觸發：`pre-commit run --all-files`（auto）/ `pre-commit run --hook-stage manual --all-files`（manual）。**hook ↔ skill 職責邊界**（哪些機械強制 / 哪些 AI 須自覺 / 漏接）見 [`hook-vs-skill-coverage.md`](docs/internal/hook-vs-skill-coverage.md)（TRK-304）。
+105 auto-run + 13 manual-stage hooks，清單見 [`.pre-commit-config.yaml`](.pre-commit-config.yaml)。手動觸發：`pre-commit run --all-files`（auto）/ `pre-commit run --hook-stage manual --all-files`（manual）。**hook ↔ skill 職責邊界**（哪些機械強制 / 哪些 AI 須自覺 / 漏接）見 [`hook-vs-skill-coverage.md`](docs/internal/hook-vs-skill-coverage.md)（TRK-304）。
+
+**pre-push 守衛不在上面那份清單裡**（#1689）——擋直推 main／要求 preflight marker／mkdocs strict 由 [`scripts/ops/prepush_dispatch.sh`](scripts/ops/prepush_dispatch.sh) 執行，安裝走 `bash scripts/ops/install_prepush_hook.sh`（冪等；它會把既有的 pre-push hook——全新 clone 上那是 git-lfs 的——移到 `pre-push.chained` 並繼續執行它）。「守衛在不在 push 路徑上」由 `make pr-preflight` 的 `Local hooks` 回答。⛔ 它們**不能**放回 `.pre-commit-config.yaml`：pre-commit 只會餵 hook **一個** refspec，於是「同時推 `feat/x` 和 `main`」會讓 main 對守衛隱形。
 
 ## 文件 / 工具 / Makefile
 
