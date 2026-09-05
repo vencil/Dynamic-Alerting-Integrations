@@ -61,6 +61,8 @@ updated_at: 2026-07-22
 
 `--fix` 後自動顯示 diff summary（目前 `--fix` 和 `--diff-report` 是獨立的），減少手動操作步驟。
 
+⛔ 天真的接法（跑完 `--fix` 再呼叫 `_generate_diff_report()`）**只要 fix 真的改到東西就會被擋**：`--fix` 刻意把修好的內容留在工作樹上，而 `--diff-report` 自 #1706 起在有未 staged 改動時拒絕執行（它的收尾是 repo root 的 `git checkout .`）。要做這個 combo，diff 必須在 fix **之前**取得，或改成不依賴 `git checkout .` 的還原方式。
+
 ### generate_doc_map.py ADR 預設包含
 
 目前需要 `--include-adr` 才會包含 ADR 文件。考慮改為預設行為（或 `--exclude-adr` 反向控制），減少遺漏風險。pre-commit hook 已加 `--include-adr`，但 CLI 預設值不一致。

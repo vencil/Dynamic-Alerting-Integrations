@@ -618,3 +618,51 @@ class TestNoInvisibleCharsInLinkAnchors:
         assert scanned >= 200, (
             f"only {scanned} markdown files scanned — the walk did not reach the "
             "doc tree, so this assertion is vacuous")
+
+
+# ---------------------------------------------------------------------------
+# --ci gate (#1702)
+# ---------------------------------------------------------------------------
+class TestCIGate:
+    """``validate_all``'s ``links`` row now passes ``--ci`` (#1702), and this
+    module tested that flag nowhere — disarming it left every relevant test
+    green while a genuinely broken link returned 0.
+    """
+
+    @staticmethod
+    def _tree(root, target):
+        (root / "docs").mkdir(parents=True, exist_ok=True)
+        (root / "README.md").write_text("# Readme\n", encoding="utf-8")
+        (root / "docs" / "target.md").write_text("# Target\n", encoding="utf-8")
+        (root / "docs" / "a.md").write_text(
+            f"# A\n\n[x]({target})\n", encoding="utf-8")
+        return root
+
+    @staticmethod
+    def _run_ci(root):
+        argv = ["check_doc_links.py", "--ci", "--repo-root", str(root)]
+        with patch.object(sys, "argv", argv):
+            return cdl.main()
+
+    def test_broken_link_is_a_violation_under_ci(self, tmp_path):
+        """EXIT_VIOLATION specifically: a regression answering
+        EXIT_CALLER_ERROR would satisfy `!= 0` while blaming the invocation.
+        """
+        rc = self._run_ci(self._tree(tmp_path / "bad", "./no-such-file.md"))
+        assert rc == cdl.EXIT_VIOLATION, (
+            f"a broken link must fail the gate the registry now uses with "
+            f"EXIT_VIOLATION, got {rc}")
+
+    def test_valid_link_is_zero_under_ci(self, tmp_path):
+        """Must-not-fire control, so the gate cannot drift into biting all."""
+        rc = self._run_ci(self._tree(tmp_path / "ok", "./target.md"))
+        assert rc == cdl.EXIT_OK
+
+    def test_unusable_repo_root_is_a_caller_error(self, tmp_path):
+        """The third code, kept distinguishable from the second."""
+        empty = tmp_path / "not-a-repo"
+        empty.mkdir()
+        rc = self._run_ci(empty)
+        assert rc == cdl.EXIT_CALLER_ERROR, (
+            f"a root with neither docs/ nor README.md is a caller error, "
+            f"got {rc}")

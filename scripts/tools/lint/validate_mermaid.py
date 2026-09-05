@@ -3,10 +3,14 @@
 
 掃描 Markdown 文件中的 Mermaid 區塊，進行語法檢查和可選的渲染驗證。
 
-用法:
-  python3 scripts/tools/validate_mermaid.py                    # 基本語法檢查
-  python3 scripts/tools/validate_mermaid.py --render            # 使用 mmdc 完整渲染
-  python3 scripts/tools/validate_mermaid.py --ci                # CI 模式
+用法（路徑可給零個到多個；不給就掃當前目錄）:
+  python3 scripts/tools/lint/validate_mermaid.py docs/                 # 基本語法檢查
+  python3 scripts/tools/lint/validate_mermaid.py docs/ rule-packs/     # 一次掃兩棵樹（#1702）
+  python3 scripts/tools/lint/validate_mermaid.py docs/ --render        # 使用 mmdc 完整渲染
+  python3 scripts/tools/lint/validate_mermaid.py docs/ --ci            # CI 模式
+
+⛔ 沒有 `--ci` 時**圖的錯誤**不會讓 rc 非零（caller error 仍會 exit 2）。接進閘門的
+呼叫端一律要傳 `--ci`，否則那一格只是裝飾（#1702）。
 """
 
 import argparse
@@ -452,10 +456,10 @@ def main():
         description='Validate Mermaid diagrams in Markdown files'
     )
     parser.add_argument(
-        'path',
-        nargs='?',
-        default='.',
-        help='Path to scan for Markdown files (default: current directory)'
+        'paths',
+        nargs='*',
+        default=['.'],
+        help='Paths to scan for Markdown files (default: current directory)'
     )
     parser.add_argument(
         '--render',
@@ -475,19 +479,33 @@ def main():
 
     args = parser.parse_args()
 
-    # Find all Markdown files
-    scan_path = Path(args.path)
-    if not scan_path.exists():
-        print(f"Error: Path does not exist: {args.path}", file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
+    # Find all Markdown files under every requested path. Accepting more than
+    # one is what lets a caller cover two disjoint trees in a single run;
+    # docs-ci.yaml still passes one path per invocation and is unaffected.
+    md_files = []
+    seen = set()
+    for raw_path in args.paths:
+        scan_path = Path(raw_path)
+        if not scan_path.exists():
+            print(f"Error: Path does not exist: {raw_path}", file=sys.stderr)
+            sys.exit(EXIT_CALLER_ERROR)
 
-    if scan_path.is_file():
-        md_files = [scan_path] if scan_path.suffix == '.md' else []
-    else:
-        md_files = sorted(scan_path.glob('**/*.md'))
+        candidates = ([scan_path] if scan_path.is_file()
+                      else sorted(scan_path.glob('**/*.md')))
+        for md_file in candidates:
+            if md_file.suffix != '.md':
+                continue
+            # ⛔ Key is the path AS CONSTRUCTED, not `.resolve()`: resolving
+            # also collapses a symlink onto its target, and docs/ holds three
+            # of those — measured on Linux, the default `.` scan drops 332→329
+            # under a resolving key and stays 332 under this one.
+            if md_file in seen:
+                continue
+            seen.add(md_file)
+            md_files.append(md_file)
 
     if not md_files:
-        print(f"No Markdown files found in {args.path}")
+        print(f"No Markdown files found in {', '.join(args.paths)}")
         sys.exit(EXIT_OK)
 
     # Validate

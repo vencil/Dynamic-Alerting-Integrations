@@ -184,9 +184,10 @@ jobs:
 
       - name: Validate and render Mermaid diagrams
         run: |
-          # validate_mermaid.py takes a single positional path (nargs='?').
-          # Run it twice — once for docs/, once for rule-packs/ — so both
-          # trees are covered. Both must pass.
+          # Run it twice — once for docs/, once for rule-packs/ — so a failure
+          # names which tree it came from. Both must pass. (validate_mermaid.py
+          # takes nargs='*' since #1702, so one call with both paths would also
+          # work; kept split for the attribution.)
           python scripts/tools/lint/validate_mermaid.py docs/ --ci --render
           python scripts/tools/lint/validate_mermaid.py rule-packs/ --ci --render
 

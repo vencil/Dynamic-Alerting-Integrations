@@ -11,7 +11,7 @@ Usage:
   python3 scripts/tools/validate_all.py --json          # JSON summary output
   python3 scripts/tools/validate_all.py --json --baseline  # save JSON as baseline
   python3 scripts/tools/validate_all.py --json --compare   # compare against baseline
-  python3 scripts/tools/validate_all.py --diff-report       # show what --fix would change
+  python3 scripts/tools/validate_all.py --diff-report       # show what --fix would change (needs `git add -u` first)
   python3 scripts/tools/validate_all.py --fix              # auto-fix all drift
   python3 scripts/tools/validate_all.py --profile          # append timing to CSV
   python3 scripts/tools/validate_all.py --watch            # file-watch auto-rerun
@@ -74,9 +74,14 @@ FIX_COMMANDS: Dict[str, List[str]] = {
     "frontmatter_versions": ["lint/check_frontmatter_versions.py", "--fix"],
 }
 
+# ⛔ A row registered without its script's gate flag CANNOT FAIL — the tool
+# prints the violations and still returns 0, so the runner shows a tick
+# (#1702). links and mermaid are armed below and pinned in
+# tests/shared/test_validate_all.py::TestRearmedRows; translation and
+# freshness are still un-armed because they are red on today's content (#1735).
 TOOLS = [
-    ("links", "lint/check_doc_links.py", [], "Link validation"),
-    ("mermaid", "lint/validate_mermaid.py", ["docs/", "rule-packs/"], "Mermaid diagram syntax"),
+    ("links", "lint/check_doc_links.py", ["--ci"], "Link validation"),
+    ("mermaid", "lint/validate_mermaid.py", ["docs/", "rule-packs/", "--ci"], "Mermaid diagram syntax"),
     ("translation", "lint/check_translation.py", [], "Bilingual structure consistency"),
     ("glossary", "dx/sync_glossary_abbr.py", ["--check"], "Glossary abbreviation sync"),
     ("schema", "dx/sync_schema.py", ["--check"], "Go→JSON Schema drift"),
@@ -258,9 +263,16 @@ def _run_one(
             detail = _extract_detail(result.stdout)
             return short_name, "pass", elapsed, detail, result.stdout
         else:
+            # ⛔ The first line is not always there. validate_mermaid.py opens
+            # its summary with a blank line, so `split("\n")[0]` is "" while
+            # `result.stdout` is still truthy — the `Exit code` fallback below
+            # never fires and the row prints a bare `✗ name ... 0.3s` with no
+            # reason at all (measured, #1702). Whether the FIRST line is the
+            # right line to quote at all is #1697's question and is left to it;
+            # this only refuses to print nothing.
             detail = (result.stdout.split("\n")[0][:80]
-                      if result.stdout
-                      else f"Exit code: {result.returncode}")
+                      or _extract_detail(result.stdout)
+                      or f"Exit code: {result.returncode}")
             return short_name, "fail", elapsed, detail, result.stdout
 
     except subprocess.TimeoutExpired:
@@ -598,6 +610,39 @@ def _compare_baseline(current: dict) -> None:
     print("=" * 60, file=sys.stderr)
 
 
+def _unstaged_tracked_files(project_root: Path):
+    """Tracked files whose working-tree copy differs from the index.
+
+    This approximates what the ``git checkout .`` below overwrites: that
+    command restores from the index, so staged content survives and untracked
+    files are left alone. Deriving the precondition from what the destructive
+    command actually destroys, rather than from a general "is the tree clean",
+    is what keeps it from refusing on the untracked scratch files every
+    worktree has. ``-z`` because git C-quotes non-ASCII paths otherwise, and
+    the names this prints are the whole point of the refusal.
+
+    ⛔ THIS IS NOT PROTECTION — it narrows an unconditional loss to a race.
+    Two gaps still lose data, and both are open in #1706: the probe samples
+    one instant while each fix command below runs before the restore (TOCTOU),
+    and ``--assume-unchanged`` files are absent here while ``git checkout .``
+    still overwrites them. Do not cite this function as proof of safety.
+
+    Returns ``None`` when git cannot answer. A probe that did not run is not
+    evidence of a clean tree, and the caller treats it the same as dirty.
+    """
+    try:
+        probe = subprocess.run(
+            ["git", "diff", "--name-only", "-z"],
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=30, cwd=str(project_root),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if probe.returncode != 0:
+        return None
+    return [p for p in probe.stdout.split("\0") if p]
+
+
 def _generate_diff_report(failed_checks: dict, tools_dir: Path,
                           project_root: Path) -> str:
     """Generate unified diff for failed checks that have fix commands.
@@ -607,6 +652,11 @@ def _generate_diff_report(failed_checks: dict, tools_dir: Path,
     2. Run the fix command
     3. Capture git diff
     4. Restore original files
+
+    Step 4 is ``git checkout .`` at the repo root and step 3's diff is
+    whole-tree, so this mode refuses to start when any tracked file has
+    unstaged changes: it would both overwrite them and report them as the
+    fix's own (#1706).
 
     Returns formatted diff report string.
     """
@@ -619,6 +669,41 @@ def _generate_diff_report(failed_checks: dict, tools_dir: Path,
     fixable = {n for n in failed_checks if n in FIX_COMMANDS}
     if not fixable:
         lines.append("  No auto-fixable checks failed.")
+        return "\n".join(lines)
+
+    # Checked after the no-op case above: with nothing to run there is nothing
+    # to restore, so there is nothing to refuse.
+    dirty = _unstaged_tracked_files(project_root)
+    if dirty is None or dirty:
+        lines.append("")
+        lines.append("  Refusing to run. This mode runs each fix command and then")
+        lines.append("  restores with `git checkout .`, which overwrites EVERY")
+        lines.append("  unstaged change to a tracked file, not only the ones the fix")
+        lines.append("  touched. The report would be wrong too: the `git diff` it")
+        lines.append("  prints would carry your edits mixed in with the fix's.")
+        if dirty is None:
+            lines.append("")
+            lines.append("  `git diff --name-only` could not be read here, so an")
+            lines.append("  unstaged change cannot be ruled out. Get that command")
+            lines.append("  working in this directory first — committing or stashing")
+            lines.append("  is not the problem here. (#1706)")
+        else:
+            lines.append("")
+            lines.append(f"  {len(dirty)} tracked file(s) with unstaged changes:")
+            for path in dirty[:20]:
+                lines.append(f"    {path}")
+            if len(dirty) > 20:
+                lines.append(f"    ... and {len(dirty) - 20} more")
+            lines.append("")
+            lines.append("  Run `git add -u` and re-run. Staging is the lossless")
+            lines.append("  route: `git checkout .` restores FROM the index, so your")
+            lines.append("  edits survive it, and the diff you get back is then the")
+            lines.append("  fix's alone. Untracked files are unaffected either way.")
+            lines.append("  ⛔ `git stash` is NOT equivalent: if your edit is what")
+            lines.append("  made a check fail, stashing it makes the failure go away")
+            lines.append("  and this report is never produced. (#1706)")
+        lines.append("")
+        lines.append("=" * 60)
         return "\n".join(lines)
 
     for name in sorted(fixable):
@@ -737,7 +822,9 @@ def main():
     )
     parser.add_argument(
         "--diff-report", action="store_true",
-        help="Show unified diff of what --fix would change for failed checks",
+        help="Show unified diff of what --fix would change for failed checks. "
+             "Refuses to run while any tracked file has unstaged changes: it "
+             "restores with `git checkout .` afterwards (#1706)",
     )
     parser.add_argument(
         "--notify", action="store_true",

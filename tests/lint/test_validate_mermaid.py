@@ -360,6 +360,57 @@ class TestMainCLI:
         combined = capsys.readouterr()
         assert "Total diagrams found:" in combined.out
 
+    def test_main_with_two_directories(self, tmp_path, monkeypatch, capsys,
+                                       cli_argv):
+        """#1702: the registry passes two paths; before nargs='*' the second
+        was `unrecognized arguments` → exit 2 on every run. The single-path
+        cases around this one are the must-stay-green side (docs-ci).
+        """
+        for name in ("first", "second"):
+            tree = tmp_path / name
+            tree.mkdir()
+            (tree / "d.md").write_text("```mermaid\ngraph TD\n    A-->B\n```\n",
+                                       encoding="utf-8")
+        cli_argv("validate_mermaid", str(tmp_path / "first"),
+                 str(tmp_path / "second"))
+        with pytest.raises(SystemExit) as exc:
+            vm.main()
+        assert exc.value.code == 0
+        combined = capsys.readouterr()
+        assert "Total diagrams found: 2" in combined.out, (
+            "both paths must be scanned, not just the first")
+
+    def test_main_overlapping_paths_do_not_double_count(
+            self, tmp_path, monkeypatch, capsys, cli_argv):
+        """Overlapping arguments must not scan the same file twice.
+
+        The key is the path as constructed, not `.resolve()` -- see the note
+        at the de-duplication site for why.
+        """
+        nested = tmp_path / "nested"
+        nested.mkdir()
+        (nested / "d.md").write_text("```mermaid\ngraph TD\n    A-->B\n```\n",
+                                     encoding="utf-8")
+        cli_argv("validate_mermaid", str(tmp_path), str(nested))
+        with pytest.raises(SystemExit) as exc:
+            vm.main()
+        assert exc.value.code == 0
+        combined = capsys.readouterr()
+        assert "Total diagrams found: 1" in combined.out, (
+            "the shared file must be scanned once, not once per argument")
+
+    def test_main_second_path_missing_is_a_caller_error(
+            self, tmp_path, monkeypatch, capsys, cli_argv):
+        """A bad path must not be swallowed just because the first one was fine."""
+        good = tmp_path / "good"
+        good.mkdir()
+        (good / "d.md").write_text("```mermaid\ngraph TD\n    A-->B\n```\n",
+                                   encoding="utf-8")
+        cli_argv("validate_mermaid", str(good), str(tmp_path / "nope"))
+        with pytest.raises(SystemExit) as exc:
+            vm.main()
+        assert exc.value.code == EXIT_CALLER_ERROR
+
     def test_main_nonexistent_path(self, monkeypatch, capsys, cli_argv):
         cli_argv("validate_mermaid", "/nonexistent/path")
         with pytest.raises(SystemExit) as exc:
