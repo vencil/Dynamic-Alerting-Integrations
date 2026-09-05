@@ -24,6 +24,19 @@ package handler
 // "*"-semantics pins (invariant I6) live at the bottom: enforce mode must
 // NOT change platform-scope ("*") gates or non-tenant-data writes — the org
 // axis narrows per-tenant write grants only.
+//
+// ⚠️ WHAT A GREEN RUN OF THIS FAMILY DOES NOT MEAN (#1710). "The family passes"
+// is not "every gate is pinned". Site #10 has TWO org gates — pre-state
+// (tenant_put.go:81) and post-state (:109) — and org membership lives in the
+// admin-only `_tenant_orgs.yaml`, which no request body can move, so both gates
+// receive the SAME org input and answer identically. Measured: short-circuit
+// either one ALONE and this whole family still exits 0; only removing BOTH
+// turns it red. The rows below therefore observe that PutTenant authorizes on
+// the org axis, not WHICH gate does it — and so not where in the handler it
+// runs. TestOrgWriteEnforce_PutTenant_GateRunsBeforeHeaderParsing is the row
+// that pins the pre-state gate specifically; before it existed, deleting that
+// gate was invisible here. When adding a gate to a site that already has one,
+// check whether the new row can tell them apart, or it pins neither.
 
 import (
 	"bytes"
