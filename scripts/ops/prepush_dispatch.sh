@@ -85,13 +85,15 @@ for _guard in "${GUARDS[@]}"; do
         cat >&2 <<GUARD_MISSING
 
 [prepush_dispatch] ⛔ $_guard is missing next to this script, so one of the
-pre-push guards cannot run. This hook is refusing rather than passing silently.
+pre-push guards cannot run. Stopping here rather than running the rest.
 
-Reinstall:
-    bash scripts/ops/install_prepush_hook.sh
+The guards are version-controlled files, so restore them from git:
+    git checkout -- scripts/ops/
 
-⛔ Do not reach for --no-verify and do not delete .git/hooks/pre-push. Both turn
-off the direct-push-to-main guard for good, which is what #1664 fixed.
+⛔ Not the installer: it writes .git/hooks, never scripts/ops, so it exits 0
+and changes nothing here. And do not reach for --no-verify or delete
+.git/hooks/pre-push — both turn off the direct-push-to-main guard for good,
+which is what #1664 fixed.
 
 GUARD_MISSING
         exit 1

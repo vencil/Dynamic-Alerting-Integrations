@@ -374,6 +374,17 @@ def render_report(
         "| pre-push 守衛（非 pre-commit） | "
         "見 `scripts/ops/prepush_dispatch.sh` 的 `GUARDS` |"
     )
+    # ⛔ The only reader of counts["pre-push"], and the only thing in this whole
+    # report that can see a pre-push stanza come back. Everything else above now
+    # filters that stage out (#1689), so without this row the "pre-commit hooks"
+    # count would silently understate the config it claims to measure. Do not
+    # drop this without also dropping the key — an audit must not compute a
+    # number it never looks at.
+    if counts["pre-push"]:
+        lines.append(
+            f"| 🕳️ config 內的 pre-push stanza | {counts['pre-push']}"
+            "（#1689 後應為 0；上一列的計數不含它們）|"
+        )
     lines.append(f"| 本地 skills | {len(skills)} |")
     if memory_available:
         lines.append(f"| memory feedback 卡 | {len(feedback)} |")

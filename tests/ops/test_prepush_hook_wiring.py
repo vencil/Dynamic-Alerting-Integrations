@@ -454,6 +454,45 @@ def test_an_existing_foreign_hook_is_chained_not_refused(tmp_path: Path) -> None
     assert blocked.returncode != 0 and _BANNER in blocked_out, blocked_out
 
 
+def test_an_occupied_chained_slot_is_never_overwritten(tmp_path: Path) -> None:
+    """Chaining must refuse rather than destroy whatever already sits there.
+
+    ⛔ The loss is permanent: `pre-push.chained` is outside version control, so
+    an overwrite drops someone else's hook with no copy anywhere. The refusal
+    was already correct and completely unheld — mutating `[ -e "$chained" ]` to
+    `false` left all 119 tests green.
+
+    Reachable through the disarm path this file already documents: install once
+    (git-lfs moves to the chained slot), then `pre-commit install -f
+    --hook-type pre-push` retakes pre-push, then the installer runs again and
+    finds a foreign hook in front of an occupied slot.
+    """
+    work = _make_repo(tmp_path, _PROTECT_ONLY)
+    hooks = work / ".git" / "hooks"
+    hooks.mkdir(parents=True, exist_ok=True)
+    (hooks / "pre-push").write_text(
+        "#!/bin/sh\nexit 0\n", encoding="utf-8", newline="\n"
+    )
+    (hooks / "pre-push").chmod(0o755)
+    assert _install_guards(work).returncode == 0
+    first = (hooks / "pre-push.chained").read_text(encoding="utf-8")
+
+    # a second, different foreign hook takes the pre-push slot back
+    (hooks / "pre-push").write_text(
+        "#!/bin/sh\n# SECOND\nexit 0\n", encoding="utf-8", newline="\n"
+    )
+    (hooks / "pre-push").chmod(0o755)
+
+    r = _install_guards(work)
+    assert r.returncode != 0, (
+        "the installer overwrote an occupied chained slot instead of refusing:\n"
+        f"{r.stdout}{r.stderr}"
+    )
+    assert (hooks / "pre-push.chained").read_text(encoding="utf-8") == first, (
+        "the hook already in the chained slot was destroyed"
+    )
+
+
 def test_deleting_a_branch_does_not_require_a_green_docs_build(tmp_path: Path) -> None:
     """Deleting a remote branch must not be gated on ``scripts/ops/pre_push_mkdocs_strict.sh``.
 
@@ -539,12 +578,24 @@ def test_the_shim_says_what_to_do_when_the_dispatcher_is_missing(
 
     r, out = _push(work, "HEAD:refs/heads/feat/no-dispatcher", env_extra=_SIBLINGS_OFF)
     assert r.returncode != 0, f"a missing dispatcher silently allowed the push:\n{out}"
-    assert "install_prepush_hook.sh" in out, (
+    assert "rebase" in out, (
         f"the failure names no way back to a working install:\n{out}"
     )
     assert "--no-verify" in out, (
         "the message does not warn against the cheapest (and worst) way out:\n" + out
     )
+    # ⛔ The message used to offer "from a tree that has it, re-run the
+    # installer" as a second remedy. Measured on the real repo: the installer
+    # prints `installed …` and exits 0, the shim it writes is byte-identical
+    # (sha256 unchanged), and the very next push fails with the same text — the
+    # shim resolves the dispatcher from the tree you push FROM, which is the
+    # stale one. A remedy that reports success and changes nothing is worse
+    # than no second remedy, so no reinstall instruction belongs here.
+    assert "bash scripts/ops/install_prepush_hook.sh" not in out, (
+        "the message is offering a reinstall again; it exits 0 and fixes "
+        f"nothing for the tree that printed this:\n{out}"
+    )
+
 
 
 def test_every_guard_in_the_dispatcher_gets_the_refspec_not_just_the_first(
@@ -992,6 +1043,54 @@ def test_the_shipped_wiring_runs_exactly_the_three_guards() -> None:
 # ---------------------------------------------------------------------------
 # Contracts the guards' own comments claim
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "script",
+    [
+        "prepush_dispatch.sh",
+        "protect_main_push.sh",
+        "require_preflight_pass.sh",
+        "pre_push_mkdocs_strict.sh",
+    ],
+)
+def test_every_executed_pre_push_script_has_a_relative_shebang(script: str) -> None:
+    """`#!/usr/bin/env bash`, never an absolute interpreter path.
+
+    When pre-commit owns .git/hooks/pre-push it resolves the legacy hook's
+    shebang ITSELF (``parse_shebang.normalize_cmd``), and an absolute POSIX path
+    does not resolve on Windows: the push dies with ``ExecutableNotFoundError``
+    before any guard runs. That is exactly how git-lfs's ``#!/bin/sh`` hook
+    breaks pushes under pre-commit — measured in this file's chaining test.
+
+    ⛔ This replaces prose. The property was carried only by comments until now,
+    and those comments were cut in the same PR that added this: rewriting the
+    dispatcher's shebang to ``#!/bin/bash`` left all 119 tests green. A text pin
+    is the right instrument here because the failure it prevents is
+    Windows-only, while this assertion holds on every platform.
+    """
+    first = (_OPS / script).read_text(encoding="utf-8").splitlines()[0]
+    assert first == "#!/usr/bin/env bash", (
+        f"{script} starts with {first!r}; an absolute interpreter path aborts "
+        "the whole push before any guard runs when pre-commit owns the hook"
+    )
+
+
+def test_the_generated_shim_has_a_relative_shebang(tmp_path: Path) -> None:
+    """The shim the installer WRITES carries the same constraint.
+
+    Pinned separately from the four source files above because it is generated
+    from a heredoc inside install_prepush_hook.sh: changing that one line is
+    invisible to a check that only reads the shipped scripts, and it is the file
+    pre-commit resolves the shebang of.
+    """
+    work = _make_repo(tmp_path, _PROTECT_ONLY)
+    assert _install_guards(work).returncode == 0
+    shim = work / ".git" / "hooks" / "pre-push"
+    first = shim.read_text(encoding="utf-8").splitlines()[0]
+    assert first == "#!/usr/bin/env bash", (
+        f"the installed shim starts with {first!r}"
+    )
 
 
 @pytest.mark.parametrize(

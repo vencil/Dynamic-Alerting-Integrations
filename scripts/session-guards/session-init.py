@@ -415,14 +415,31 @@ def _do_init(
     # session may never run. Measured on a fresh clone where git-lfs owns
     # .git/hooks/pre-push: the installer refused, and not one character reached
     # the session.
+    #
+    # ⛔ stderr ALONE does not reach the model. This function returns 0 by
+    # design (never block a tool call), and PreToolUse only feeds stderr back on
+    # exit 2 — which is how both session guards "died silently for 7 weeks"
+    # (#824). run-hooks.sh already solved this one file over: additionalContext
+    # on stdout arrives as a system reminder. Emit BOTH, same as it does.
     prepush = hook_status.get("prepush", "")
     if prepush and not prepush.startswith("[install_prepush_hook] installed"):
-        print(
+        warning = (
             f"[session-init] ⛔ pre-push guards not installed: {prepush}\n"
             "[session-init]    dev-rule #12 (no direct push to main) has no local "
-            "enforcement in this session. Fix: bash scripts/ops/install_prepush_hook.sh",
-            file=sys.stderr,
+            "enforcement in this session. Fix: bash scripts/ops/install_prepush_hook.sh"
         )
+        print(
+            json.dumps(
+                {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "additionalContext": warning,
+                    }
+                },
+                ensure_ascii=False,
+            )
+        )
+        print(warning, file=sys.stderr)
     _touch_heartbeat(repo_root)
     _write_log(
         event=event,
