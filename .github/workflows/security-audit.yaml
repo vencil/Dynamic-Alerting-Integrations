@@ -1,9 +1,34 @@
 name: Security Audit (Python SAST)
 
-# bandit gate for dev-rules.md Rule #5 (#455). WARN-ONLY for 2 weeks
-# post-merge; flip `continue-on-error` to `false` afterwards.
+# bandit gate for dev-rules.md Rule #5 (#455). HARD-FAIL since #1643 —
+# the warn-only soak opened 2026-05-20 with a 2-week horizon and was still
+# open 15 weeks later, while this job is the mechanism dev-rules.md §5
+# names for items 2/4/5/6. Flipped on a surface that reports 0 MEDIUM+
+# findings at this floor.
+# ⚠️ That 0 is held up by `# nosec` suppressions already in the tree — with
+# `--ignore-nosec` the same command reports findings. Audit them with:
+#   bandit -c .bandit -r scripts/tools components/da-tools -ll -ii --ignore-nosec
+# ⛔ A `# nosec` with no parseable `B<ID>` is a BLANKET suppression (every rule
+# on that line, B506 included) and its warning text is identical to a harmless
+# one — see dev-rules.md §5 Suppression.
 # Scope: scripts/tools/** + components/da-tools/** (other Python dirs
 # excluded via .bandit). Floor `-ll -ii` = MEDIUM severity × confidence.
+# ⚠️ This job is NOT a required status check, and it CANNOT be listed as one
+# as written: the `paths:` filters below mean the workflow does not run at all
+# on a PR that touches nothing in scope, so a required context would never be
+# reported and such PRs would hang on "Expected — Waiting for status".
+# Making it required needs the workflow to run on every PR first. The pattern
+# is already documented in validate.yaml's banner (no top-level `paths:`; gate
+# individual jobs with `if:` on detect-changes, because a skipped job DOES
+# report and satisfies the requirement).
+# ⛔ Adopting that pattern lands you in the NEXT failure mode, which is what
+# #1398 tracks: a job skipped because its detect job BROKE also reports
+# `skipped`, and skip satisfies a required check — the gate is then green
+# without ever running. Opposite direction from this one (too tight vs too
+# loose), so #1398 does NOT already cover the case below.
+# ⛔ BOTH have to be done, in this order: (A) make the workflow always run,
+# (B) add the fail-closed aggregation #1398 asks for. Doing (A) alone hands
+# you a required check that passes when bandit never ran.
 
 on:
   pull_request:
@@ -52,8 +77,10 @@ jobs:
 
       - name: Run bandit (medium severity + confidence)
         id: bandit
-        # warn-only soak — flip to false to hard-fail after triage stabilizes.
-        continue-on-error: true
+        # ⛔ Hard-fail (#1643). Do not put `continue-on-error` back: this step
+        # is the only enforcement of dev-rules.md §5 item 4 since the AST
+        # duplicate in tests/shared/test_sast.py was removed.
+        continue-on-error: false
         run: |
           set -euo pipefail
           bandit -c .bandit \
@@ -73,7 +100,7 @@ jobs:
           n=$(python3 -c "import json,sys; print(len(json.load(open('bandit-report.json'))['results']))")
           echo "bandit findings (MEDIUM+ severity & confidence): $n"
           if [ "$n" -gt 0 ]; then
-            echo "::warning::bandit found $n MEDIUM+ severity/confidence finding(s) — see uploaded report. WARN-ONLY during soak."
+            echo "::error::bandit found $n MEDIUM+ severity/confidence finding(s) — see uploaded report. The scan step above has already failed this job (#1643)."
             python3 -c "import json; r=json.load(open('bandit-report.json'))['results']; [print(f\"  [{i['test_id']} sev={i['issue_severity']}] {i['filename']}:{i['line_number']} — {i['issue_text'][:120]}\") for i in r]"
           fi
 

@@ -129,7 +129,8 @@ lang: zh
 
 | Gate | 本地手動跑 | 涵蓋 | 何時該手動跑 |
 |---|---|---|---|
-| **AST SAST 契約**（`tests/shared/test_sast.py`，1500+ tests） | `pytest tests/shared/test_sast.py` | `scripts/tools/` 全檔 AST 掃描（open-encoding / subprocess-timeout / eval 等 7 規則） | 改 `scripts/tools/**` 後 |
+| **AST SAST 契約**（`tests/shared/test_sast.py`，1500+ tests） | `pytest tests/shared/test_sast.py` | `scripts/tools/` 全檔 AST 掃描（open-encoding / eval / 硬編碼機密 等 **6 規則**；⛔ `subprocess-timeout` **不在這 6 條裡**，它是 `.pre-commit-config.yaml` 的 FATAL **本機** hook `subprocess-timeout-audit`；dev-rules §5 第 4 條 `yaml.load` 自 #1643 起改由 bandit B506 強制，見下一列） | 改 `scripts/tools/**` 後 |
+| **Python SAST（bandit B506 等）**（`.github/workflows/security-audit.yaml`） | `bandit -c .bandit -r scripts/tools components/da-tools -ll -ii` | dev-rules §5 items 2/4/5/6 的 native 規則；⛔ **hard-fail 但尚未列入 required check** | 改 `scripts/tools/**` / `components/da-tools/**` 後 |
 | **工具 exit-code / bilingual-help 契約**（`test_tool_exit_codes.py`、`test_bilingual_help_contract.py`，數百 subprocess） | `pytest tests/shared/test_tool_exit_codes.py tests/shared/test_bilingual_help_contract.py` | da-tools 子命令 exit 0/1/2 約定（#452）、`--help` 雙語 | 改工具 CLI / help 後 |
 | **pre-commit hook 計數一致性**（`bump_docs --sync-counts --check`） | `python scripts/tools/dx/bump_docs.py --sync-counts --check` | CLAUDE.md 的 pre-commit hook 計數——**唯一無本地 hook 的計數維度**（version / rulepack / tool / badge 計數已由 §3 auto hook `version-consistency` 本地攔） | 增刪 pre-commit hook 後（#1185 PR2 接進 CI Version Consistency job） |
 | **OpenAPI spec drift** | `make api-docs` | tenant-api handler `@Router`/`@Param` 標註 ↔ 產出的 OpenAPI spec | 改 handler swag 標註後 |

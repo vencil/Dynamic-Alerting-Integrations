@@ -1003,35 +1003,24 @@ class _ExporterKeyLoader(yaml.SafeLoader):
 def _load_with_exporter_keys(stream):
     """``yaml.load(stream, Loader=_ExporterKeyLoader)``, spelled the long way.
 
-    ⛔ NOT a style choice, and NOT a way around the safety rule. The repo's
-    own SAST test (``tests/shared/test_sast.py::TestNoUnsafeYamlLoad``)
-    accepts a ``yaml.load`` call only when the ``Loader=`` keyword is an
-    ``ast.Attribute`` whose ``.attr`` is literally ``SafeLoader`` or
-    ``CSafeLoader``. Any subclass — and, read from that code, even
-    ``from yaml import SafeLoader`` followed by ``Loader=SafeLoader``,
-    because that is an ``ast.Name`` — is a violation to it. So the guard
-    cannot express "a SafeLoader subclass", and widening a repo-wide
-    security guard is not this change's blast radius.
+    ⛔ NOT a style choice, and NOT a way around the safety rule. The loader
+    has to be a ``SafeLoader`` **subclass** (it changes how mapping KEYS are
+    read), and no automated check in this repo can express that: dev-rules
+    §5 item 4 is enforced by bandit B506, which flags
+    ``Loader=<SafeLoader subclass>`` as a violation just as the AST guard
+    removed in #1643 did. Spelling the call out longhand keeps it outside a
+    predicate that would be wrong about it either way.
 
-    ⚠️ Be exact about what that costs, because the paragraph above reads as
-    "the guard still checks this, only under a spelling it rejects". It does
-    not. This body never calls ``yaml.load``, and the guard's predicate
-    matches ONLY ``yaml.load(...)`` — so this function is not a rejected
-    spelling, it is OUTSIDE the predicate. Measured by AST over the guard's
-    own corpus (``scripts/tools/**``, 240 files) at ``2ac818ab``: zero
-    ``yaml.load(`` sites and zero direct-Loader constructions, so this is
-    the repo's FIRST site of a shape that guard cannot see, and someone
-    copying the shape with ``yaml.UnsafeLoader`` gets no red. That is a cost
-    this change introduces, not a hole it inherited.
+    ⚠️ Be exact about the cost. This body never calls ``yaml.load``, so it is
+    not a *rejected* spelling — it is OUTSIDE both predicates. Someone
+    copying this shape with ``yaml.UnsafeLoader`` gets no red from anything.
 
-    What matters is that the safety property is pinned SOMEWHERE, and the
-    call-site spelling was never where it lived: the guard reads how the
-    loader is named, not what it can construct.
+    The safety property is therefore pinned by BEHAVIOUR, not by spelling:
     ``TestTenantIdParity::test_the_loader_cannot_construct_python_objects``
     feeds this function an actual ``!!python/object/apply`` payload and
-    requires it to be refused — which is the property, measured.
-    ⚠️ NOT GUARDED: that test pins THIS loader only. Nothing pins a future
-    copy, and this change deliberately does not widen the repo-wide guard.
+    requires it to be refused, with a must-still-work control beside it.
+    ⛔ Deleting that test leaves this shape completely unguarded.
+    ⚠️ NOT GUARDED: it pins THIS loader only — nothing pins a future copy.
 
     This body is what ``yaml.load`` does; keeping it in one named function
     means there is one place to read, and one place a future edit lands.

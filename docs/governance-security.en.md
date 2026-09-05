@@ -147,10 +147,10 @@ da-tools validate-config --config-dir conf.d/ --json
 | 1 | `open()` must include `encoding="utf-8"`; source must not start with a UTF-8 BOM | AST scan open() calls, exclude binary modes; BOM checked on the leading bytes | High |
 | 2 | `subprocess` forbids `shell=True` | AST scan subprocess.run/call/Popen keywords | Critical |
 | 3 | File write must pair with `os.chmod(0o600)` | Same-function write-open + chmod pair (advisory) | Medium |
-| 4 | Forbid `yaml.load()`, enforce `yaml.safe_load()` | AST scan yaml.load missing SafeLoader | Critical |
+| 4 | Forbid `yaml.load()`, enforce `yaml.safe_load()` | **bandit B506** (`.github/workflows/security-audit.yaml`, hard-fail); the AST implementation in `tests/shared/test_sast.py` was removed in #1643 | Critical |
 | 5 | Forbid hardcoded secrets (password/token/secret/api_key) | Regex scan, exclude env vars and placeholders | High |
 | 6 | Forbid dangerous functions (eval/exec/pickle.load/os.system) | AST scan builtin + module functions | Critical |
-| 7 | Forbid unsafe file operations (pathlib without exception handling) | AST scan Path.mkdir/unlink/rename missing try-except | Medium |
+| 7 | Error messages must route to stderr (`print()` starting with `ERROR`/`Error` needs `file=sys.stderr`) | AST scan of print() call args and keywords | Medium |
 
 ### Go Component Security
 

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """test_sast.py — 集中式 SAST (Static Application Security Testing) 合規掃描。
 
-掃描所有 Python 工具程式碼，確保符合專案安全規範：
-  1. open() 呼叫必須帶 encoding="utf-8"（或 utf-8-sig），且原始碼不得以 BOM 開頭
-  2. subprocess 呼叫禁止 shell=True
-  3. 檔案寫入需搭配 os.chmod(path, 0o600) 限制權限
+規則集的 SSOT 是 `docs/internal/dev-rules.md` §5（編號 1-7），本檔的分節標號與它
+一致。⛔ 第 4 條（yaml.load）**不在本檔**——#1643 起由 bandit B506 強制，理由寫
+在下面第 4 節。其餘六條在本檔各有一個 Test* class。
 
-涵蓋範圍: scripts/tools/ 全部 Python 檔案。
+涵蓋範圍: scripts/tools/ 全部 Python 檔案；⚠️ BOM 那一條例外，它掃全部 tracked
+`.py`（理由見下方 `_tracked_py` 上方的註解）。
 """
 
 import ast
@@ -70,8 +70,9 @@ def _read_source(path):
         plain  1 failed / 1694 passed      ← 蓄意違規被抓到
         BOM    1689 passed / 6 skipped     ← rc=0，六條規則全部靜默
 
-    六條裡有三條是 `governance-security.md` 標 Critical 的（`shell=True`、
-    `yaml.load`、`eval/exec/pickle`）。⚠️ CI 那行沒有 `-rs`，所以
+    六條裡有兩條是 `governance-security.md` 標 Critical 的（`shell=True`、
+    `eval/exec/pickle`）。⛔ `yaml.load` **不在本檔**（#1643 起由 bandit B506
+    強制，見下面規則 4 的區塊）。⚠️ CI 那行沒有 `-rs`，所以
     FAILED→SKIPPED 只反映在一個數字上，沒有人會看見。
     ⚠️ 而 skip 訊息說「語法錯誤」——那句話對 BOM 檔是**假的**，它照樣編得過。
     ⛔ 剝掉之後 BOM 本身仍然要被擋，那是下面 `test_source_has_no_bom` 的事：
@@ -424,55 +425,28 @@ class TestFileWritePermissions:
 
 # ============================================================
 # 4. 禁止 yaml.load()（必須使用 yaml.safe_load）
+#    ⛔ 這一條**不在本檔實作**——它由 bandit B506 強制，見
+#    `.github/workflows/security-audit.yaml`（dev-rules §5 第 4 條逐字
+#    指定的就是 B506）。本檔先前另有一份 AST 實作，已於 #1643 移除。
+#
+#    ⚠️ 這是本次撤除的代價，不是這裡本來就沒有守衛。逐格量測（被移除的那份
+#    vs B506）留在該 commit 的訊息裡，不複製到這裡。⛔ 撤除唯一失去的真陽性
+#    是「**關不掉**」——`# nosec` 對 B506 有效、對 AST 版無效。
+#
+#    ⛔ 兩者都看不到的，撤除後仍然看不到。⛔ **不要在這裡列舉形狀**——列舉會
+#    漏（本輪盲審就是這樣打出來的）。可推導的那句話是：兩者認的都只是**名字
+#    剛好叫 `yaml.load` 的那個呼叫**，所以別的入口一律全盲——`yaml.load_all` /
+#    `unsafe_load` / `full_load`，以及自己建 loader 再 `.get_single_data()`。
+#    唯一的反向例外是 `Loader=<SafeLoader 子類>`：兩者都**誤紅**。
+#    本 repo 兩個活實例（今天都安全，但改壞了沒有人會看見）：
+#      `check_admin_config_schema._StrictSafeLoader`（走 `load_all`）；
+#      `validate_config._load_with_exporter_keys()`（自己建 loader）。後者的
+#    安全性質由**行為級**測試釘住（`tests/ops/test_validate_config.py::
+#    TestTenantIdParity::test_the_loader_cannot_construct_python_objects`，餵真的
+#    `!!python/object/apply` payload）。⛔ 刪那支測試等於讓它完全無人看守。
+#
+#    ⛔ 不要在本檔重新長出第二份 AST 實作——同一個判定兩份實作正是 #1643。
 # ============================================================
-
-class TestNoUnsafeYamlLoad:
-    """掃描 yaml.load() 呼叫，強制使用 yaml.safe_load()。
-
-    yaml.load() 不帶 Loader 參數會允許任意 Python 物件反序列化，
-    可能導致遠端程式碼執行 (RCE)。
-    """
-
-    @pytest.mark.parametrize("py_file", _PY_FILES, ids=_short_path)
-    def test_no_unsafe_yaml_load(self, py_file):
-        """yaml.load() 呼叫必須使用 SafeLoader，或改用 yaml.safe_load()。"""
-        source = _read_source(py_file)
-        try:
-            tree = ast.parse(source, filename=py_file)
-        except SyntaxError:
-            pytest.skip(f"語法錯誤，跳過: {_short_path(py_file)}")
-            return
-
-        violations = []
-
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            func = node.func
-
-            # 偵測 yaml.load(...) 呼叫
-            if not (isinstance(func, ast.Attribute) and func.attr == "load"):
-                continue
-            if not (isinstance(func.value, ast.Name) and func.value.id == "yaml"):
-                continue
-
-            # 檢查是否帶有 Loader 參數
-            has_safe_loader = False
-            for kw in node.keywords:
-                if kw.arg == "Loader" and isinstance(kw.value, ast.Attribute):
-                    if kw.value.attr in ("SafeLoader", "CSafeLoader"):
-                        has_safe_loader = True
-
-            if not has_safe_loader:
-                violations.append(
-                    f"L{node.lineno}: yaml.load() 缺少 SafeLoader — "
-                    "請改用 yaml.safe_load()"
-                )
-
-        assert not violations, (
-            f"{_short_path(py_file)} 有 {len(violations)} 個不安全 YAML 載入:\n"
-            + "\n".join(f"  {v}" for v in violations)
-        )
 
 
 # ============================================================
