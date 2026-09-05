@@ -10,11 +10,14 @@ package gitops
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/vencil/tenant-api/internal/confd"
 )
 
 // PRWriteResult contains the result of a PR-mode write operation.
@@ -63,11 +66,17 @@ func (w *Writer) WritePR(ctx context.Context, tenantID, authorEmail, yamlContent
 	// without needing a git repo to reach it, and stops an invalid write from
 	// cutting a dangling branch. Its notices are DISCARDED — Step 3c collects
 	// them once, against the tree the write lands on.
-	filePath, err := w.tenantFilePath(tenantID)
-	if err != nil {
-		return nil, err
-	}
-	if errs, _ := validate(w.configDir, tenantID, filePath, yamlContent); len(errs) > 0 {
+	//
+	// ⛔ AND IT NO LONGER RESOLVES THE TENANT'S PATH HERE. tenantFilePath walks
+	// configDir (confd.ResolveTenantFile → os.ReadDir), so its errors are
+	// judgments on the CURRENT tree too — ErrAmbiguousTenantFile most of all. A
+	// tenant whose duplicate spelling was cleaned up remotely would be refused
+	// here on a tree the write does not land on, which is the same defect this
+	// change exists to remove. Step 0's guardTenantID already covers the part
+	// that is NOT tree-derived (the id itself), and Step 3b resolves the path
+	// against the base the write lands on. Keeping a second resolution here
+	// bought nothing and re-introduced the bug one line above its own fix.
+	if errs := validateBodyOnly(tenantID, yamlContent); len(errs) > 0 {
 		return nil, fmt.Errorf("%w: %s", ErrValidation, strings.Join(errs, "; "))
 	}
 
@@ -107,15 +116,17 @@ func (w *Writer) WritePR(ctx context.Context, tenantID, authorEmail, yamlContent
 		return nil, fmt.Errorf("create branch: %w", err)
 	}
 
-	// Step 3b: RE-resolve the tenant's file now that the feature branch is
-	// checked out (#1673). The path resolved at Step 1 describes the tree as
-	// it was BEFORE checkoutBaseClean + resolveFreshBaseRef; if the fresh base
-	// carries a rename (`db-a.yml` → `db-a.yaml`, or the reverse), writing the
-	// pre-checkout path would recreate the old spelling beside the new one —
-	// the exact duplicate this change exists to prevent. WritePRBatch already
-	// resolves inside its post-checkout loop; this brings the single-tenant
-	// path in line.
-	filePath, err = w.tenantFilePath(tenantID)
+	// Step 3b: resolve the tenant's file now that the feature branch is checked
+	// out (#1673) — the ONLY resolution on this path since #1718.
+	//
+	// It must happen here and nowhere earlier: if the fresh base carries a
+	// rename (`db-a.yml` → `db-a.yaml`, or the reverse), a path taken from the
+	// pre-checkout tree would recreate the old spelling beside the new one — the
+	// exact duplicate #1673 exists to prevent — and an ambiguity that the fresh
+	// base has already cleaned up would refuse a write that is fine where it
+	// lands (#1718). WritePRBatch resolves inside its post-checkout loop for the
+	// same reason.
+	filePath, err := w.tenantFilePath(tenantID)
 	if err != nil {
 		w.abortFeatureBranch(base, branchName)
 		return nil, err
@@ -260,11 +271,26 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 		// Pre-flight notices are discarded — the authoritative in-lock merge
 		// below re-runs validate against the fresh base and collects them
 		// exactly once (no duplicates in the aggregated result).
+		//
+		// ⛔ AMBIGUITY HERE IS NOT A VERDICT. This resolution runs before the
+		// checkout, so like the validators it is reading a tree the write does
+		// not land on — and WritePR stopped resolving in its pre-flight for
+		// exactly that reason (#1718). Batch cannot drop the call the same way
+		// (MergeFunc needs the existing body), so it drops only the refusal: a
+		// tenant whose duplicate spelling was already cleaned up remotely must
+		// not be turned away here while WritePR accepts it. Skipping the
+		// pre-flight for that op costs nothing that matters — the post-checkout
+		// loop resolves again and refuses there, with abortFeatureBranch, so no
+		// dangling branch survives. ⚠️ Only THIS error is tolerated: every
+		// other one is about reaching configDir at all, not about its shape.
 		opPath, err := w.tenantFilePath(op.TenantID)
 		if err != nil {
+			if errors.Is(err, confd.ErrAmbiguousTenantFile) {
+				continue
+			}
 			return nil, err
 		}
-		if _, _, _, err := w.readMergeValidate(op.TenantID, opPath, op.Merge); err != nil {
+		if err := w.readMergeBodyOnly(op.TenantID, opPath, op.Merge); err != nil {
 			return nil, err
 		}
 	}
