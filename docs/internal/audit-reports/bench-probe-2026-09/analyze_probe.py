@@ -162,9 +162,19 @@ def main():
               f"max {ms(max(w)):8.3f}   share of all time {pct(sum(w), sum(tot), '.3f')}")
         print(f"      write tail    worst p99 over rounds {max(r['write_p99'] for r in rows) / 1000:8.1f} us   "
               f"worst single write {max(r['write_max'] for r in rows) / 1000:8.1f} us")
-        print(f"      slowest round #{worst['round']}: {ms(excess):+.1f} ms vs median round "
-              f"({pct(excess, med, '+.2f')}); the write half contributes {ms(dw):+.3f} ms "
-              f"= {pct(dw, excess)} of that excess")
+        line = (f"      slowest round #{worst['round']}: {ms(excess):+.1f} ms vs median round "
+                f"({pct(excess, med, '+.2f')})")
+        # ⛔ The attribution clause is omitted, not filled with n/a, when there is no
+        # excess to attribute. The workflow's copy of this report already does that
+        # and says why: attribution only means anything once a spread actually
+        # appeared, so "did not catch one" and "caught one and it was clean" must not
+        # come out as the same sentence. Printing "= n/a of that excess" instead
+        # implies an attribution exists and is merely unavailable. These two scripts
+        # are meant to be one report in two places, so this one follows that.
+        if excess > 0:
+            line += (f"; the write half contributes {ms(dw):+.3f} ms "
+                     f"= {pct(dw, excess)} of that excess")
+        print(line)
 
     print()
     print("=" * 74)

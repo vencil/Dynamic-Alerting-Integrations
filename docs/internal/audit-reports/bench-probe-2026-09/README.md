@@ -120,6 +120,8 @@ python3 docs/internal/audit-reports/bench-probe-2026-09/analyze_probe.py
 
 ⚠️ **仍然不宣稱這些狀態不可達**：本節所有 degenerate 情況都是把輸入 construct 出來才到達的，沒有一個是真實 probe run 產生的。守衛的理由是失效模式，不是發生機率。
 
+⭐ **上面那句全稱句是被獨立驗過的，不是我自己說了算**：一位換模型、跑在隔離 detached worktree、看不到本輪任何實作敘事的盲審 reviewer，自己用 AST 重新枚舉兩支腳本並逐一裁決，裁定它在 `7598843` 上成立（它也獨立認出 `HERE / name` 是 pathlib 路徑接合、不是算術除法）。同一位還找到一條我沒發現的**殘留不一致**：`excess <= 0` 時 workflow 把整個歸因子句省略（有 rationale——歸因只在散佈真的出現時才有意義），而 `analyze_probe.py` 照印並填 `n/a`，那反而暗示存在一個歸因。已對齊到有 rationale 的那一邊。
+
 ## ⛔ 沒有做的事（別把它讀成已做）
 
 - **沒有重現雙峰。** 三個 dispatch 的中位數散佈 6.75%，票裡是 26.40 pp。這是**這次沒抓到**，不是「沒有」。
