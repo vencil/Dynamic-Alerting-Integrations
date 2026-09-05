@@ -102,11 +102,6 @@ var ErrNoChanges = errors.New("no changes: batch produced no commits")
 // the single "what counts as a tenant file" predicate shared with the scanners.
 var ErrReservedTenantID = errors.New("reserved tenant id: names a conf.d control file")
 
-// guardTenantID rejects an id whose {id}.yaml would not be a tenant config
-// file. It is the writer-side second enforcement of the same confd predicate
-// the handler's ValidateTenantID uses — so no tenant write method can overwrite
-// a reserved control file even if a future caller forgets to validate first
-// (single-choke-point fragility is the exact bug class this change closes).
 // extraDocumentsWithContent counts the YAML documents after the first that
 // decode to something non-nil. A body whose YAML is invalid returns 0 — that is
 // the caller's earlier Unmarshal check to report, not this one's.
@@ -167,6 +162,11 @@ func addedTenantKeys(baseRaw []byte, tcfg cfg.ThresholdConfig, tenantID string) 
 	return added
 }
 
+// guardTenantID rejects an id whose {id}.yaml would not be a tenant config
+// file. It is the writer-side second enforcement of the same confd predicate
+// the handler's ValidateTenantID uses — so no tenant write method can overwrite
+// a reserved control file even if a future caller forgets to validate first
+// (single-choke-point fragility is the exact bug class this change closes).
 func guardTenantID(tenantID string) error {
 	if !confd.IsAddressableTenantID(tenantID) {
 		return fmt.Errorf("%w: %q", ErrReservedTenantID, tenantID)
@@ -359,18 +359,6 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 // between the read and the write.
 type MergeFunc func(existing []byte) (string, error)
 
-// readMergeValidate is the shared read-merge-validate core behind both the
-// direct (WriteMerged) and PR-mode (WritePRBatch) partial-write paths (#1097).
-// It reads the current on-disk tenant file, runs merge against it, and runs the
-// same schema/custom-alert/eol validator every write boundary uses. It does NOT
-// persist — the caller decides how (commit-on-write vs branch commit).
-//
-// existing is nil on ENOENT; MergeFunc is responsible for the new-tenant case.
-// A merge error means the on-disk file is unparseable/structurally wrong — the
-// caller must NOT fall back to an overwrite (that is exactly the silent
-// key-loss this path exists to prevent). The raw existing bytes are returned so
-// the caller can detect a byte-identical (no-op) merge. notices is validate()'s
-// advisory deprecation channel (#1231 1b), meaningful only when err is nil.
 // tenantFilePath is the writer-side answer to "which file does this tenant's
 // config live in" (#1673). It returns the tenant's EXISTING file whatever its
 // spelling, and DefaultTenantFileName only for a tenant that has none — so a
@@ -419,6 +407,18 @@ func (w *Writer) readMergeBodyOnly(tenantID, filePath string, merge MergeFunc) e
 	return nil
 }
 
+// readMergeValidate is the shared read-merge-validate core behind both the
+// direct (WriteMerged) and PR-mode (WritePRBatch) partial-write paths (#1097).
+// It reads the current on-disk tenant file, runs merge against it, and runs the
+// same schema/custom-alert/eol validator every write boundary uses. It does NOT
+// persist — the caller decides how (commit-on-write vs branch commit).
+//
+// existing is nil on ENOENT; MergeFunc is responsible for the new-tenant case.
+// A merge error means the on-disk file is unparseable/structurally wrong — the
+// caller must NOT fall back to an overwrite (that is exactly the silent
+// key-loss this path exists to prevent). The raw existing bytes are returned so
+// the caller can detect a byte-identical (no-op) merge. notices is validate()'s
+// advisory deprecation channel (#1231 1b), meaningful only when err is nil.
 func (w *Writer) readMergeValidate(tenantID, filePath string, merge MergeFunc) (content string, existing []byte, notices []string, err error) {
 	content, existing, err = w.readMerge(tenantID, filePath, merge)
 	if err != nil {
@@ -751,46 +751,6 @@ func (w *Writer) gitCommit(filePath, tenantID, authorEmail string, trailer ...st
 // PR-mode write-back (PRWriteResult / WritePR / WritePRBatch / PRBatchOp) lives
 // in writer_pr.go.
 
-// validate checks an incoming tenant YAML body before it is written.
-//
-// yamlContent is the tenant-only document the portal sends (the real
-// conf.d/{id}.yaml shape — "Only 'tenants' block"):
-//
-//	tenants:
-//	  <tenantID>:
-//	    key: value
-//
-// Three stages:
-//  1. Root-key contract — the body may carry ONLY a top-level `tenants` block
-//     (cfg.CheckTenantRootKeys, mirroring tenant-config.schema.json's
-//     additionalProperties:false). A stray `defaults:` / `state_filters:` /
-//     `profiles:` (or a typo) is rejected, so the write never persists a file
-//     that violates conf.d's "Only 'tenants' block" invariant (#705). The same
-//     check runs in POST /{id}/validate so the dry-run and the write agree.
-//  2. Structural — run on the RAW body: it must be valid YAML and declare the
-//     target tenant. Kept separate from the merge so a body missing
-//     tenants.{id} is rejected outright rather than silently synthesised by
-//     MergeTenantWithRootDefaults' flat-KV fallback.
-//  3. Key validation — the _defaults.yaml at configDir is merged in BEFORE
-//     ValidateTenantKeys, so a tenant-only body's metric keys resolve against
-//     the inherited platform defaults. Without this merge, ValidateTenantKeys
-//     sees an empty Defaults map and flags EVERY metric key as "unknown key
-//     not in defaults", blocking the write — even though GET /{id}, GET
-//     /{id}/effective and POST /{id}/validate all merge defaults and accept
-//     the same body (ADR-024 PR4 / #704 write-vs-read asymmetry). It also
-//     makes ADR-024 version declarations (e.g. container_cpu{version="v2"})
-//     pass without the tenant having to inline `defaults:` into the body.
-//
-// configDir == "" falls back to structural-only key validation (unit tests
-// that exercise YAML shape without a defaults fixture).
-//
-// Returns two channels (#1231 1b, mirroring cfg.KeyValidation): errs is the
-// blocking set every write gate turns into ErrValidation; notices is the
-// advisory set (deprecated-key alias advisories) that must NEVER block a
-// write — callers thread it up to the handler responses so the config author
-// sees the migration signal on the write path itself, not only via GET /
-// POST /validate. Structural failures (bad YAML / root keys / missing tenant
-// section) return nil notices: key validation never ran.
 // validateShape runs every check that reads ONLY the request body and the URL
 // id, in the order validate has always run them, and hands back the parsed
 // config so no caller decodes the same bytes twice.
@@ -878,6 +838,46 @@ func validateBodyOnly(tenantID, yamlContent string) []string {
 	return cfg.ValidateTenantCustomAlerts(tenantID, tcfg.Tenants[tenantID], cfg.MaxCustomRecipesDefault)
 }
 
+// validate checks an incoming tenant YAML body before it is written.
+//
+// yamlContent is the tenant-only document the portal sends (the real
+// conf.d/{id}.yaml shape — "Only 'tenants' block"):
+//
+//	tenants:
+//	  <tenantID>:
+//	    key: value
+//
+// Three stages:
+//  1. Root-key contract — the body may carry ONLY a top-level `tenants` block
+//     (cfg.CheckTenantRootKeys, mirroring tenant-config.schema.json's
+//     additionalProperties:false). A stray `defaults:` / `state_filters:` /
+//     `profiles:` (or a typo) is rejected, so the write never persists a file
+//     that violates conf.d's "Only 'tenants' block" invariant (#705). The same
+//     check runs in POST /{id}/validate so the dry-run and the write agree.
+//  2. Structural — run on the RAW body: it must be valid YAML and declare the
+//     target tenant. Kept separate from the merge so a body missing
+//     tenants.{id} is rejected outright rather than silently synthesised by
+//     MergeTenantWithRootDefaults' flat-KV fallback.
+//  3. Key validation — the _defaults.yaml at configDir is merged in BEFORE
+//     ValidateTenantKeys, so a tenant-only body's metric keys resolve against
+//     the inherited platform defaults. Without this merge, ValidateTenantKeys
+//     sees an empty Defaults map and flags EVERY metric key as "unknown key
+//     not in defaults", blocking the write — even though GET /{id}, GET
+//     /{id}/effective and POST /{id}/validate all merge defaults and accept
+//     the same body (ADR-024 PR4 / #704 write-vs-read asymmetry). It also
+//     makes ADR-024 version declarations (e.g. container_cpu{version="v2"})
+//     pass without the tenant having to inline `defaults:` into the body.
+//
+// configDir == "" falls back to structural-only key validation (unit tests
+// that exercise YAML shape without a defaults fixture).
+//
+// Returns two channels (#1231 1b, mirroring cfg.KeyValidation): errs is the
+// blocking set every write gate turns into ErrValidation; notices is the
+// advisory set (deprecated-key alias advisories) that must NEVER block a
+// write — callers thread it up to the handler responses so the config author
+// sees the migration signal on the write path itself, not only via GET /
+// POST /validate. Structural failures (bad YAML / root keys / missing tenant
+// section) return nil notices: key validation never ran.
 func validate(configDir, tenantID, tenantFilePath, yamlContent string) (errs, notices []string) {
 	// ⛔ THE ORDER OF THE REMAINING CHECKS IS UNCHANGED, DELIBERATELY. Hoisting
 	// ValidateTenantCustomAlerts up into validateShape would have let a recipe
