@@ -1,0 +1,47 @@
+# values-scope-enforce.yaml — Container SAST L2 lint VARIANT (#1597).
+#
+# NOT a deployment profile — this exists so the L2 render actually SEES the
+# enforce-mode args. All three ADR-027 scope axes ship default-false (shadow),
+# and each is templated behind `{{- if .Values.rbac.<flag> }}` in
+# templates/deployment.yaml, so under the chart's DEFAULT values none of the
+# three arg blocks is rendered at all:
+#
+#   deployment.yaml:111  {{- if .Values.rbac.metadataScopeEnforce }}
+#   deployment.yaml:121  {{- if .Values.rbac.metadataWriteScopeEnforce }}
+#   deployment.yaml:134  {{- if .Values.rbac.orgScopeEnforce }}
+#
+# check_iac_helm.py auto-discovers every values*.yaml as a render variant
+# (values_variants(): chart default + each values*.yaml override), and before
+# this file `helm/tenant-api/` had exactly one — values.yaml, the default. So
+# the enforce arms of all three axes were unrendered and unlinted: the ONLY
+# manifest CI has ever produced for this chart is the one where every scope axis
+# is off. A typo, a bad indent or a renamed flag inside any of those three
+# blocks would ship green — and it would surface at exactly the worst moment,
+# the day an operator finishes their soak window and flips the axis.
+#
+# Same reasoning (and same shape) as helm/vector/values-projection.yaml — but
+# NOT the same blast radius, which is why this chart also gained a .helmignore
+# in the same change. helm/vector is never `helm package`d; helm/tenant-api is
+# packaged and pushed to oci://<registry>/charts on every release, so without
+# that .helmignore entry this file would ship inside the chart customers pull,
+# sitting next to values.yaml with every axis pre-enforced.
+#
+# ⚠️ Enforce is the END state of a migration, never a starting default. Do NOT
+# copy this file into a deployment: each axis has its own soak criterion
+# (increase(tenant_api_scope_would_deny_total{axis=...}[soak-window]) == 0), and
+# they are deliberately three separate flags because they bind three different
+# planes at three different times. See components/tenant-api/README.md and the
+# per-flag comments in values.yaml.
+
+rbac:
+  # List/visibility plane — the axis bound since ADR-027 / LD-6 P1; only the
+  # UNLABELED arm is still migrating.
+  metadataScopeEnforce: true
+
+  # Write plane (#1597) — binds environments[]/domains[] to writes for the first
+  # time. Its own flag precisely so it cannot ride in on the list plane's soak.
+  metadataWriteScopeEnforce: true
+
+  # Org plane (ADR-027 / LD-6 P4) — one flag, atomic over list + write +
+  # read-by-id.
+  orgScopeEnforce: true

@@ -1,0 +1,26 @@
+# Patterns to ignore when building Helm chart packages.
+# Shell glob matching, relative path matching, and negation (prefixed with !).
+# One pattern per line.
+#
+# ⚠️ Deliberately MINIMAL. This chart had no .helmignore until #1597, so every
+# pattern added here CHANGES what ships in tenant-api-<version>.tgz. The one
+# entry below excludes a file that did not exist before, which keeps the
+# packaged chart byte-identical to what it was — do not extend this file with
+# the usual boilerplate (README.md, .git, *.swp …) without checking what that
+# would remove from the published artifact.
+#
+# NB: Helm's .helmignore matcher does NOT support `**` (it errors and aborts
+# `helm template` / `helm install`). A bare basename already matches at any
+# depth. (Same constraint documented in helm/da-portal/.helmignore.)
+
+# Container SAST L2 lint variant, NOT a deployment profile — it turns all three
+# rbac scope axes to enforce so the `{{- if }}` arms get rendered and linted.
+# `helm package helm/tenant-api` runs on every tenant-api release
+# (.github/workflows/release.yaml) and pushes to oci://<registry>/charts, so
+# without this line a values file with every axis pre-enforced would ship inside
+# the chart customers pull, sitting next to values.yaml.
+#
+# This does NOT affect the lint variant's purpose: check_iac_helm.py renders it
+# via `helm template <chart> -f <repo-path>`, reading the file from the
+# repository by path rather than from the packaged chart.
+values-scope-enforce.yaml

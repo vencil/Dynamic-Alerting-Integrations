@@ -82,3 +82,18 @@ k8s/03-monitoring/configmap-rules-*.yaml    @vencil
 scripts/tools/           @vencil
 docs/                    @vencil
 CLAUDE.md                @vencil
+
+# ============================================================
+# Agent 執行面（#1597）
+#
+# `.github/workflows/` 上面已列，理由是「repo 內容會被自動執行」。#1597 加入
+# `.claude/hooks/session-start.sh` 之後，`.claude/` 進入同一類：它是 repo 裡
+# 的一段 shell，由 Claude Code 在 session 開始時自動跑在開發者的環境中，沒有
+# 人在迴圈裡按下同意。同一個理由該給同一個 pattern。
+#
+# ⚠️ 這條**不含** `requirements/`。那裡的 `ci-constraints.txt` 也被上述 hook
+# 讀去餵 `pip -c`（實測：constraints 檔內的 `--index-url` pip 會照用），但那個
+# 曝險 CI 早就有、不是本 PR 造成的；處置放在 hook 自己的 fail-closed 檢查，
+# 是否再補 CODEOWNERS 另議。
+# ============================================================
+.claude/                 @vencil

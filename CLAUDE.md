@@ -14,6 +14,24 @@ Session 起手式 codified 為 **PreToolUse hook** (v2.8.0；#824 改經 `run-ho
 
 第二支 PreToolUse hook：`scripts/session-guards/preflight_bash.py`（audit-2026-04 §H1+H2）— 攔 `sed -i` + 掛載路徑（dev-rules #11，免 token 浪費 fix file hygiene）+ 攔 `_*.bat`/`_*.ps1`/`_*.cmd` 寫到 whitelist 之外（Trap #54 防再造輪子）。被擋時 stderr 直接告訴 Claude 該用什麼替代（Read+Edit / `win_git_escape.bat raw <args>`）。
 
+第三支 hook（**SessionStart**，`.claude/hooks/session-start.sh`）：**只在 Claude Code on the web 跑**（`CLAUDE_CODE_REMOTE=true` 才動作，本機 checkout 直接 exit 0）。remote session 每次都從**全新 shallow clone** 起，前一個 session 裝的東西一律不存活，而缺的那幾樣會讓閘門**靜默或誤導性地**失效：① 沒有 `pre-commit` ⇒ `.git/hooks/` 是空的、105 道閘門一道都不跑，且**沒有任何提示**；② shallow clone 無 tag ⇒ `image-pin-capability-check` 報「git tag 不 resolve」，讀起來像 pin 打錯；③ 無 `tests/e2e/node_modules` ⇒ `playwright-lint` 失敗；④ 無 `pytest` ⇒ 整族 Python 測試 uncollectable，「沒有失敗」與「什麼都沒跑」無法區分；⑤ 無 `mkdocs` ⇒ 步驟 ② 裝上的 `mkdocs-strict-pre-push` 退成 warn-only 並 exit 0，**看起來接好了其實空轉**。版本一律取自 `requirements/ci-constraints.txt`（本 repo 的 SSOT），本機與 CI 對得上。⚠️ ②③ 曾被交接紀錄誤記為「既有債 / BLOCKED hook」——兩支都不是，它們就是這張清單。
+
+⛔ **但這三支 hook 可能一次都不會執行（[#1719](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1719)）**。在**多 repo 的 web session**裡，Claude Code 的 project root 是本 repo 的**上層**（`/home/user`），於是它讀的是 `/home/user/.claude/settings.json`，本 repo 的 `.claude/settings.json` **整份不載入**——連同上面兩支 PreToolUse guard 與 `permissions` 區塊。實測：帶 mount-path token 的 `sed -i` 沒有被 `preflight_bash.py` 攔下，`session-init.py` 的 marker 與 telemetry log 全樹零命中。⇒ **本段開頭那句「已自動化 🛡️」在 web session 不成立**。
+
+⭐ **所以起手式的第一件事是確認它到底跑了沒**，而不是假設它跑了：
+
+```bash
+cat /tmp/vibe-session-start-hook.ran     # 沒有這個檔 = hook 沒跑
+```
+
+有 `RESULT=ok` ⇒ 閘門已就緒。**檔案不存在或 `RESULT=failed` ⇒ 手動跑一次**：
+
+```bash
+CLAUDE_CODE_REMOTE=true CLAUDE_PROJECT_DIR="$PWD" bash .claude/hooks/session-start.sh
+```
+
+⚠️ 在那之前，`.git/hooks/` 很可能是空的——**commit 不受任何閘門保護**，且 `dev-rules #11` 的 `sed -i` 攔截也不存在。
+
 ### 設計原則：主路徑 / 逃生門
 
 > **主路徑** Dev Container 做所有事（code/test/commit/push，優先 `make dc-*`）；**逃生門** FUSE 卡死用 Windows 原生 git（`make win-commit` / `scripts/ops/win_git_escape.bat`）。目標：不讓任何 session 因 FUSE 卡死。
