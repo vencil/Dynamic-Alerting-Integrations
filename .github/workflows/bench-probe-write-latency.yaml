@@ -262,13 +262,23 @@ jobs:
           need = TARGET_SWING_PP / 100 * med
           biggest = max(w) - st.median(w)
           iters_per_round = rows[0]["iters"]
+          # ⛔ 兩個除數都可能是 0，而沒守衛的除法不是讓報告變差，是**讓報告整個死掉**
+          # ——一次確實收到資料的執行會一個字都不印。那正是這支工具最不該有的失敗
+          # 模式：「量不到」與「量了沒事」必須是兩行不同的字。
+          # ⚠️ 兩種狀態都不是真實 probe run 產生的，是把輸入 construct 出來的（所有
+          # write_sum 相同 ⇒ max == median ⇒ biggest 0）。不宣稱不可達——沒枚舉過。
+          med_w = st.median(w)
           print(f"\n### 機制 1 要達到 #1497 的量級得做到什麼\n")
           print(f"單側擺 {TARGET_SWING_PP:.2f}% 在 {med/1e6:.0f} ms 的一輪上是 **{need/1e6:.0f} ms**。"
                 f"本次 {len(rows)} 輪裡，`write_sum` 高於中位最多的一輪是 **{biggest/1e6:.1f} ms**"
-                f"（差 **{need/biggest:.0f}×**）。")
-          print(f"換算到每次迭代：中位輪的寫入平均 {st.median(w)/iters_per_round/1000:.1f} µs，"
+                + (f"（差 **{need/biggest:.0f}×**）。" if biggest > 0 else
+                   "，**沒有任何一輪的 `write_sum` 高於中位**，所以沒有正向超額可以比"
+                   "——這是一個 null 觀測，不是量測失敗。"))
+          print(f"換算到每次迭代：中位輪的寫入平均 {med_w/iters_per_round/1000:.1f} µs，"
                 f"要達標得在全部 {iters_per_round} 次迭代上平均 {need/iters_per_round/1e6:.2f} ms"
-                f"，即整個寫入路徑成本的 **{need/st.median(w):.0f}×**、而且是**持續**不是尖峰。")
+                + (f"，即整個寫入路徑成本的 **{need/med_w:.0f}×**、而且是**持續**不是尖峰。"
+                   if med_w > 0 else
+                   "。⚠️ 中位輪的寫入半邊是 0 ns，因此它的倍數沒有定義。"))
 
           print("\n> ⛔ 判讀限制：本 job 只跑一台 runner、一個 job，跨輪散佈與 #1497 "
                 "觀察到的**跨 dispatch** 散佈不是同一個量。若上面的 spread 沒有重現 "

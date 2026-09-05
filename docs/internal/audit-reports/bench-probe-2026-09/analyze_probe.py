@@ -194,17 +194,33 @@ def main():
     med_round = st.median(tot)
     need = TARGET_SWING_PP / 100 * med_round
     biggest = max(w) - st.median(w)
+    med_w = st.median(w)
     iters = allrows[0]["iters"]
     print(f"  A one-sided swing of {TARGET_SWING_PP:.2f}% on a {ms(med_round):.0f} ms round is "
           f"{ms(need):.0f} ms.")
     print(f"  Largest write-path excursion above the median write_sum, in all "
           f"{len(allrows)} rounds: {ms(biggest):.1f} ms.")
-    print(f"  => short by a factor of {need / biggest:.0f}x")
+    # ⛔ Both divisors can be zero, and an unguarded division does not degrade the
+    # report - it kills it, so a run that DID collect data prints nothing at all.
+    # That is the one failure mode this whole tool exists to avoid: "could not
+    # measure" and "measured, nothing there" have to be two different lines.
+    # ⚠️ Neither state was produced by a real probe run; both were reached by
+    # constructing the input (all write_sum equal => max == median => biggest 0).
+    # Unreachability is not claimed - it was not enumerated.
+    if biggest > 0:
+        print(f"  => short by a factor of {need / biggest:.0f}x")
+    else:
+        print("  => N/A: no round's write_sum sat above the median, so there is no"
+              " positive excursion to compare against (this is a null observation,"
+              " not a measurement failure)")
     print(f"  Per iteration: the median round's write half averages "
-          f"{st.median(w) / iters / 1000:.1f} us;")
+          f"{med_w / iters / 1000:.1f} us;")
     print(f"     to reach {ms(need):.0f} ms it would have to average "
           f"{need / iters / 1e6:.2f} ms across all {iters} iterations,")
-    print(f"     i.e. {need / st.median(w):.0f}x its entire observed cost, sustained — not in a spike.")
+    if med_w > 0:
+        print(f"     i.e. {need / med_w:.0f}x its entire observed cost, sustained — not in a spike.")
+    else:
+        print("     the median round's write half is 0 ns, so no multiple of it is defined.")
     print("\n  ⛔ This bounds the episodes that WERE seen. It is not a proof that no larger"
           "\n     episode exists: the high mode itself was not reproduced in these runs"
           "\n     (see the cross-dispatch spread above).")
