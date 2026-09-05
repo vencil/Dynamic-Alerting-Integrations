@@ -5,9 +5,9 @@ Reads rule-packs/ and conf.d/ directories, generates PrometheusRule,
 AlertmanagerConfig, and ServiceMonitor CRDs for dynamic alerting stack.
 
 Usage:
-    da-tools operator-generate
+    da-tools operator-generate | kubectl apply -f -   # CRDs to stdout; nothing written
     da-tools operator-generate --rule-packs-dir /path/to/rule-packs
-    da-tools operator-generate --output-dir operator-crds/
+    da-tools operator-generate --output-dir operator-crds/   # writing is opt-in (#1582)
     da-tools operator-generate --namespace monitoring --dry-run
     da-tools operator-generate --components rules,alertmanager
     da-tools operator-generate --gitops --json
@@ -61,7 +61,7 @@ _HELP = {
         "desc": "生成 Prometheus + Alertmanager CRD YAML（PrometheusRule、AlertmanagerConfig、ServiceMonitor）",
         "rule_packs_dir": "Rule packs 目錄（預設 rule-packs/）",
         "config_dir": "租户配置目錄（預設 conf.d/）",
-        "output_dir": "輸出 CRD 目錄（預設 operator-manifests/）",
+        "output_dir": "把 CRD 寫進這個目錄。不給、或帶 --dry-run，就改印到 stdout 而不寫任何檔案",
         "namespace": "目標命名空間（預設 monitoring）",
         "api_version": "AlertmanagerConfig API 版本（預設 v1beta1）",
         "gitops": "啟用 GitOps 模式（排序鍵、無時間戳）",
@@ -77,7 +77,7 @@ _HELP = {
         "desc": "Generate Kubernetes CRD YAML for Prometheus + Alertmanager (PrometheusRule, AlertmanagerConfig, ServiceMonitor)",
         "rule_packs_dir": "Rule packs directory (default rule-packs/)",
         "config_dir": "Tenant config directory (default conf.d/)",
-        "output_dir": "Output CRD directory (default operator-manifests/)",
+        "output_dir": "Write CRDs into this directory. Omit it, or pass --dry-run, and they go to stdout instead; nothing is written",
         "namespace": "Target namespace (default monitoring)",
         "api_version": "AlertmanagerConfig API version (default v1beta1)",
         "gitops": "Enable GitOps mode (sorted keys, no timestamps)",
@@ -729,8 +729,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--output-dir",
-        type=Path,
-        default=Path("operator-manifests"),
+        type=_output_dir_arg,
+        default=None,   # #1582：不給就不寫檔（寫入是 opt-in），見 main() 的分派
         help=i18n_text(_HELP["zh"]["output_dir"], _HELP["en"]["output_dir"]),
     )
     parser.add_argument(
@@ -806,13 +806,37 @@ def _crd_filenames(result: Dict[str, Any]) -> List[str]:
     return [f'{crd["metadata"]["name"]}.yaml' for crd in _ordered_crds(result)]
 
 
+def _output_dir_arg(value: str) -> Path:
+    """`--output-dir` 的 argparse type：拒絕空字串／純空白。
+
+    ⛔ 不能靠 `type=Path` 之後在 main() 補判：`Path("")` 就是 `Path(".")`，
+    到那時「使用者傳了空字串」與「使用者傳了 `.`」已經無法區分（實測：補判版本
+    對 `--output-dir ""` 回 rc=0 並照樣寫檔）。判定必須發生在還看得見原始字串的
+    這一層。
+    ⚠️ 為什麼值得判：#1582 之後「要寫檔就必須打這個參數」，於是
+    `--output-dir "$OUT"` 在 OUT 未設時會傳空字串、產物無聲落在呼叫目錄——
+    命中面從零變成全部。`.` 仍然合法（明確要求寫進目前目錄）。
+    """
+    if not value.strip():
+        raise argparse.ArgumentTypeError(i18n_text(
+            "不能是空字串；要寫進目前目錄請明確傳 --output-dir .",
+            "must not be empty; pass --output-dir . to write into the current directory",
+        ))
+    return Path(value)
+
 def emit_dry_run(
     result: Dict[str, Any],
     kustomize: bool,
     namespace: str,
     as_json: bool,
+    gitops: bool = False,
 ) -> tuple:
-    """Dry-run output path: print CRD (and optional kustomization) YAML to stdout.
+    """stdout output path: print CRD (and optional kustomization) YAML to stdout.
+
+    Reached by ``--dry-run`` **and** by omitting ``--output-dir`` (#1582 — writing
+    is opt-in). ``gitops`` is honoured here for the same reason it is in
+    ``write_crds``: it is a *rendering* property (sorted keys), so dropping it on
+    this path would silently ignore a flag the caller passed.
 
     In ``--json`` mode nothing is printed here — the documents are collected and
     returned so main() can emit the single #1112 envelope once at the end.
@@ -830,7 +854,10 @@ def emit_dry_run(
             for i, crd in enumerate(all_crds):
                 if i > 0:
                     print("---")
-                print(yaml.dump(crd, default_flow_style=False, allow_unicode=True), end="")
+                print(yaml.dump(
+                    crd, default_flow_style=False,
+                    sort_keys=gitops, allow_unicode=True,
+                ), end="")
         else:
             for crd in all_crds:
                 print(_dict_to_yaml(crd))
@@ -847,6 +874,7 @@ def emit_dry_run(
             print(yaml.dump(
                 kustomize_dict,
                 default_flow_style=False,
+                sort_keys=gitops,
                 allow_unicode=True,
             ), end="")
         else:
@@ -987,7 +1015,21 @@ def main():
     # Resolve paths relative to current directory
     rule_packs_dir = args.rule_packs_dir.resolve()
     config_dir = args.config_dir.resolve()
-    output_dir = args.output_dir.resolve()
+    # #1582：沒給 --output-dir 就沒有寫入目標。⛔ 不要在這裡塞回一個預設值——
+    # 那正是本票的缺陷形狀（輸入被重導、輸出沒被重導，仍寫進呼叫目錄）。
+    output_dir = args.output_dir.resolve() if args.output_dir is not None else None
+
+    # #1582：stdout 現在是**預設**的產物通道，所以它必須和寫檔通道等價。
+    # ⛔ 不等價是量出來的，不是預防性的：在 cp950 主控台上直接跑本檔，PyYAML
+    # 對目標編碼放不下的字元（例如 `≥`）會退成字面 `≥`，而 write_text_secure
+    # 寫出的檔是真正的字元 —— 同一次比對 15 份相同、1 份語意不同、rc=0 無聲。
+    # 換行同理：write_text_secure 明文強制 LF，而 print() 在 Windows 會譯成 CRLF。
+    # `da-tools` dispatcher 已經做同一件事（entrypoint._configure_std_utf8），
+    # 這裡補的是「直接 python 跑本檔」那條 entrypoint docstring 自承支援的路徑。
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", newline="\n")
+    except (AttributeError, ValueError, OSError):  # 非 TextIOWrapper 的 stdout
+        pass
 
     # Validate: --secret-name requires --receiver-template
     if args.secret_name and not args.receiver_template:
@@ -1014,13 +1056,14 @@ def main():
         print(f"ERROR: {safe_label(exc)}", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
-    # Emit CRDs. dry-run prints YAML to stdout; the write path writes files and
+    # Emit CRDs. No --output-dir (or --dry-run) prints YAML to stdout; the write path writes files and
     # logs `Generated:` lines to stderr. Both hand back the documents the #1112
     # single-document JSON envelope needs (empty list / None unless --json), so
     # in `--json` mode stdout stays exactly ONE document (emitted at the end).
-    if args.dry_run:
+    if args.dry_run or output_dir is None:
         json_crds, json_kustomization = emit_dry_run(
             result, args.kustomize, args.namespace, args.json,
+            gitops=args.gitops,
         )
     else:
         json_crds, json_kustomization = write_crds(

@@ -858,3 +858,104 @@ class TestPlanStdout:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestWritingIsOptIn:
+    """#1582：沒有 `--output-dir` 就一個檔也不寫，checklist 改走 stdout。
+
+    反事實（`9f5fe89a`，本改動前）：不給 `--output-dir` 時，同一條指令在**呼叫
+    目錄**建出 `migration-output/`。⚠️ 本改動把「沒有寫入目標」摺進既有的
+    `dry_run` 布林（`plan_stdout()` 的 8 組合矩陣），所以第一版只擋掉寫入而
+    stdout 是空的——那是「靜默什麼都不做」，比原本更糟。下面第二支測試就是
+    釘住這一點：不寫檔的同時**必須**有東西送到 stdout。
+    """
+
+    @staticmethod
+    def _tree(root: Path) -> set:
+        """⛔ `root` 必須是 `tmp_path`，不能只給呼叫目錄——理由與
+        `test_operator_generate_v2.TestWritingIsOptIn._tree` 同一條（盲審實測，
+        只看 cwd 時「寫進被重導的輸入樹」這個變異會存活）。"""
+        return {p.relative_to(root) for p in root.rglob("*")}
+
+    def test_no_output_dir_writes_nothing(
+        self, temp_configmap_dir, temp_config_dir, tmp_path, monkeypatch, capsys,
+    ):
+        cwd = tmp_path / "caller_cwd"
+        cwd.mkdir()
+        monkeypatch.chdir(cwd)
+
+        # ⚠️ 兩個輸入樹是 module-level fixture（不在 tmp_path 底下），所以三棵都要看。
+        roots = [tmp_path, Path(temp_configmap_dir), Path(temp_config_dir)]
+        before = [self._tree(r) for r in roots]
+        with patch("sys.argv", [
+            "migrate_to_operator.py",
+            "--source-dir", str(temp_configmap_dir),
+            "--config-dir", str(temp_config_dir),
+        ]):
+            mto.main()
+
+        for root, snap in zip(roots, before):
+            assert self._tree(root) == snap, (
+                f"no --output-dir was given, so NOTHING may be written under {root} "
+                f"(cwd, the source tree, or the redirected conf.d tree); "
+                f"these appeared: {sorted(map(str, self._tree(root) - snap))}"
+            )
+        capsys.readouterr()
+
+    def test_no_output_dir_still_produces_output_on_stdout(
+        self, temp_configmap_dir, temp_config_dir, tmp_path, monkeypatch, capsys,
+    ):
+        cwd = tmp_path / "caller_cwd2"
+        cwd.mkdir()
+        monkeypatch.chdir(cwd)
+
+        with patch("sys.argv", [
+            "migrate_to_operator.py",
+            "--source-dir", str(temp_configmap_dir),
+            "--config-dir", str(temp_config_dir),
+        ]):
+            mto.main()
+
+        out = capsys.readouterr().out
+        assert out.strip(), (
+            "suppressing the write without redirecting the payload leaves the tool "
+            "silently producing nothing — stdout must carry the checklist"
+        )
+        assert "<--output-dir>" in out, (
+            "the checklist embeds the output directory in its kubectl commands. "
+            "With no --output-dir there is no real path, so it must render a "
+            "placeholder rather than a default the tool never created. "
+            f"stdout was {out[:300]!r}"
+        )
+
+    def test_output_dir_still_writes_and_checklist_carries_the_real_path(
+        self, temp_configmap_dir, temp_config_dir, temp_output_dir, tmp_path, monkeypatch, capsys,
+    ):
+        cwd = tmp_path / "caller_cwd3"
+        cwd.mkdir()
+        monkeypatch.chdir(cwd)
+        # ⚠️ before/after 差集，不是「必須為空」——輸入 fixture 本來就有檔案在裡面。
+        roots = [tmp_path, Path(temp_configmap_dir), Path(temp_config_dir)]
+        before = [self._tree(r) for r in roots]
+
+        with patch("sys.argv", [
+            "migrate_to_operator.py",
+            "--source-dir", str(temp_configmap_dir),
+            "--config-dir", str(temp_config_dir),
+            "--output-dir", str(temp_output_dir),
+        ]):
+            mto.main()
+        capsys.readouterr()
+
+        checklist = temp_output_dir / "MIGRATION-CHECKLIST.md"
+        assert checklist.exists(), "--output-dir was given: the write path must still write"
+        body = checklist.read_text(encoding="utf-8")
+        assert "<--output-dir>" not in body, (
+            "a real --output-dir was given, so the checklist must name it, not the placeholder"
+        )
+        for root, snap in zip(roots, before):
+            leaked = self._tree(root) - snap
+            assert not leaked, (
+                f"an explicit --output-dir was given, so every new file must land "
+                f"there; these appeared under {root}: {sorted(map(str, leaked))}"
+            )
