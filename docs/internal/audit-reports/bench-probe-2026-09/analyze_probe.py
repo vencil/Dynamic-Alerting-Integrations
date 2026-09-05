@@ -20,10 +20,11 @@ the same change that created this file also added #2 and #3 to
 script. The correction is left visible rather than quietly patched.
 
 ⚠️ So #2 and #3 exist TWICE - once here, once inline in that workflow - and
-nothing checks that the two copies agree. Three divergences are already known
-(calibration-round detection, record matching, and the minimum round count for
-correlations); they are tracked as TRK-373. Do not read "the workflow has this
-too" as "the workflow does this identically".
+nothing checks that the two copies agree. Four divergences are already known -
+calibration-round detection, record matching, the minimum round count for
+correlations, and how a NaN correlation is rendered - and they are tracked as
+TRK-373. Do not read "the workflow has this too" as "the workflow does this
+identically".
 
 1. CROSS-DISPATCH - the only one this script alone has. The workflow summarises
    one job. #1497's bimodality was observed ACROSS dispatches, so the medians of
