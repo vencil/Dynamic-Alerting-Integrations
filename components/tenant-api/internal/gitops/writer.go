@@ -384,14 +384,45 @@ func (w *Writer) tenantFilePath(tenantID string) (string, error) {
 	return confd.TenantFilePathForWrite(w.configDir, tenantID)
 }
 
-func (w *Writer) readMergeValidate(tenantID, filePath string, merge MergeFunc) (content string, existing []byte, notices []string, err error) {
+// readMerge is the half of readMergeValidate that produces the content: read
+// the current file, hand it to the caller's merge. Split out so the pre-flight
+// and the authoritative pass can run the SAME read+merge under DIFFERENT
+// validators (#1718) without a second copy of either step.
+func (w *Writer) readMerge(tenantID, filePath string, merge MergeFunc) (content string, existing []byte, err error) {
 	existing, rerr := os.ReadFile(filePath)
 	if rerr != nil && !os.IsNotExist(rerr) {
-		return "", nil, nil, fmt.Errorf("read current tenant file for %s: %w", tenantID, rerr)
+		return "", nil, fmt.Errorf("read current tenant file for %s: %w", tenantID, rerr)
 	}
 	content, merr := merge(existing)
 	if merr != nil {
-		return "", existing, nil, fmt.Errorf("merge tenant config for %s: %w", tenantID, merr)
+		return "", existing, fmt.Errorf("merge tenant config for %s: %w", tenantID, merr)
+	}
+	return content, existing, nil
+}
+
+// readMergeBodyOnly is the PRE-FLIGHT form: same read+merge, but the merged
+// content is judged by validateBodyOnly.
+//
+// ⚠️ THE MERGE BASE IS STILL THE CALLER'S CURRENT TREE, and that is fine here
+// precisely because nothing is decided on it: the authoritative pass re-reads,
+// re-merges and re-validates against the checked-out base. What this must not
+// do is REFUSE on tree-derived evidence, which is what validateBodyOnly rules
+// out structurally (it takes no path and no configDir).
+func (w *Writer) readMergeBodyOnly(tenantID, filePath string, merge MergeFunc) error {
+	content, _, err := w.readMerge(tenantID, filePath, merge)
+	if err != nil {
+		return err
+	}
+	if errs := validateBodyOnly(tenantID, content); len(errs) > 0 {
+		return fmt.Errorf("%w for %s: %s", ErrValidation, tenantID, strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+func (w *Writer) readMergeValidate(tenantID, filePath string, merge MergeFunc) (content string, existing []byte, notices []string, err error) {
+	content, existing, err = w.readMerge(tenantID, filePath, merge)
+	if err != nil {
+		return "", existing, nil, err
 	}
 	errs, notices := validate(w.configDir, tenantID, filePath, content)
 	if len(errs) > 0 {
@@ -760,17 +791,37 @@ func (w *Writer) gitCommit(filePath, tenantID, authorEmail string, trailer ...st
 // sees the migration signal on the write path itself, not only via GET /
 // POST /validate. Structural failures (bad YAML / root keys / missing tenant
 // section) return nil notices: key validation never ran.
-func validate(configDir, tenantID, tenantFilePath, yamlContent string) (errs, notices []string) {
+// validateShape runs every check that reads ONLY the request body and the URL
+// id, in the order validate has always run them, and hands back the parsed
+// config so no caller decodes the same bytes twice.
+//
+// ⛔ THE SPLIT LINE IS "DOES IT READ THE WORKING TREE", NOT "DOES IT SOUND
+// STATIC" (#1718). Three of validate's checks read the tree and are therefore
+// only meaningful against the tree the write lands on:
+//
+//   - addedTenantKeys      ← os.ReadFile(tenantFilePath)
+//   - ValidateTenantKeys   ← mergeTenantConfig reads <configDir>/_defaults.yaml
+//   - the eol-expansion guard ← the same baseRaw as addedTenantKeys
+//
+// The middle one is the trap: "key validation" reads like a pure body check and
+// is not — it merges the platform defaults off disk. Both it and addedTenantKeys
+// were MEASURED to reject legitimate writes when the caller's tree is stale
+// (#1718); classifying by name rather than by what the code reads would have
+// left the second one behind.
+//
+// Everything here short-circuits, exactly as before — the first failure is the
+// only one reported.
+func validateShape(tenantID, yamlContent string) (cfg.ThresholdConfig, []string) {
 	var tcfg cfg.ThresholdConfig
 	if err := yaml.Unmarshal([]byte(yamlContent), &tcfg); err != nil {
-		return []string{"invalid YAML: " + err.Error()}, nil
+		return tcfg, []string{"invalid YAML: " + err.Error()}
 	}
 	// Reject any non-`tenants` top-level key before anything else (#705).
 	if rootErrs := cfg.CheckTenantRootKeys([]byte(yamlContent)); len(rootErrs) > 0 {
-		return rootErrs, nil
+		return tcfg, rootErrs
 	}
 	if _, ok := tcfg.Tenants[tenantID]; !ok {
-		return []string{fmt.Sprintf("YAML must contain tenants.%s section", tenantID)}, nil
+		return tcfg, []string{fmt.Sprintf("YAML must contain tenants.%s section", tenantID)}
 	}
 	// Everything after the first YAML document is bytes that nothing here reads:
 	// Unmarshal above and CheckTenantRootKeys both decode ONE document and
@@ -780,10 +831,10 @@ func validate(configDir, tenantID, tenantFilePath, yamlContent string) (errs, no
 	// trailer (a bare `---`, a comment-only document) carries nothing and stays
 	// legal, so this counts content rather than documents.
 	if extra := extraDocumentsWithContent(yamlContent); extra > 0 {
-		return []string{fmt.Sprintf(
+		return tcfg, []string{fmt.Sprintf(
 			"YAML has %d document(s) with content after the first — a tenant config "+
 				"is a single document; anything after it would be written but never "+
-				"validated", extra)}, nil
+				"validated", extra)}
 	}
 	// The write plane addresses a file by tenant id, but the exporter takes
 	// tenant ids from the file's `tenants:` KEYS — so without this the two
@@ -796,7 +847,47 @@ func validate(configDir, tenantID, tenantFilePath, yamlContent string) (errs, no
 	// step, and any future one). Re-asserting it here costs a string compare and
 	// keeps the containment check in the same function as the path it protects.
 	if err := guardTenantID(tenantID); err != nil {
-		return []string{err.Error()}, nil
+		return tcfg, []string{err.Error()}
+	}
+	return tcfg, nil
+}
+
+// validateBodyOnly is the PRE-FLIGHT validator: every check that can be decided
+// from the request body alone, and not one that reads the working tree.
+//
+// It exists so a pre-flight running against a possibly-stale tree cannot REFUSE
+// a write on evidence it has no right to (#1718): a tenant sharing a flat file
+// was locked out of its own section until the pod restarted, and a tenant using
+// a metric key the platform had just added was told the key does not exist.
+//
+// ⛔ IT CANNOT SILENTLY GROW A TREE READ: it takes no configDir and no file
+// path, so the compiler rejects one. That is the whole reason the parameters
+// were dropped rather than passed and ignored.
+//
+// ⚠️ It is NOT a weaker validate — it is a DIFFERENT question ("is this body
+// well-formed?"). The authoritative answer still comes from validate, run
+// against the tree the write lands on. A caller that has no checkout between
+// the two — Write, WriteMerged — must keep calling validate directly.
+func validateBodyOnly(tenantID, yamlContent string) []string {
+	tcfg, errs := validateShape(tenantID, yamlContent)
+	if len(errs) > 0 {
+		return errs
+	}
+	// ADR-024 §S5 recipe validation is per-tenant and reads only the body, so it
+	// belongs on this side of the line.
+	return cfg.ValidateTenantCustomAlerts(tenantID, tcfg.Tenants[tenantID], cfg.MaxCustomRecipesDefault)
+}
+
+func validate(configDir, tenantID, tenantFilePath, yamlContent string) (errs, notices []string) {
+	// ⛔ THE ORDER OF THE REMAINING CHECKS IS UNCHANGED, DELIBERATELY. Hoisting
+	// ValidateTenantCustomAlerts up into validateShape would have let a recipe
+	// violation short-circuit ahead of addedTenantKeys — i.e. a body that both
+	// smuggles a foreign section AND has a bad recipe would stop reporting the
+	// foreign section, quietly replacing the #1681 gate's message with another.
+	// So this path keeps running the two separately, in the original sequence.
+	tcfg, shapeErrs := validateShape(tenantID, yamlContent)
+	if len(shapeErrs) > 0 {
+		return shapeErrs, nil
 	}
 	// Read the file this write replaces ONCE. Two stateful checks need it — the
 	// added-section gate below and the eol-expansion guard at the end — and on a

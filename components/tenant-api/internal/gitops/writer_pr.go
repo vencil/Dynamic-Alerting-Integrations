@@ -67,7 +67,7 @@ func (w *Writer) WritePR(ctx context.Context, tenantID, authorEmail, yamlContent
 	if err != nil {
 		return nil, err
 	}
-	if errs, _ := validate(w.configDir, tenantID, filePath, yamlContent); len(errs) > 0 {
+	if errs := validateBodyOnly(tenantID, yamlContent); len(errs) > 0 {
 		return nil, fmt.Errorf("%w: %s", ErrValidation, strings.Join(errs, "; "))
 	}
 
@@ -264,7 +264,7 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 		if err != nil {
 			return nil, err
 		}
-		if _, _, _, err := w.readMergeValidate(op.TenantID, opPath, op.Merge); err != nil {
+		if err := w.readMergeBodyOnly(op.TenantID, opPath, op.Merge); err != nil {
 			return nil, err
 		}
 	}
