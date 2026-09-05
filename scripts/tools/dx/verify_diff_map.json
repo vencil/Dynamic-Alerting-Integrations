@@ -784,7 +784,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "b0a255476fc774897b16e427047e31565e3d19e7d9bde1e91c5eaaea2949133f",
+ "source_digest": "02192e7bde9480c2a122fcacda44cf02eb04873c905a176622100a10086c3b53",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1227,6 +1227,9 @@
   ],
   ".github/workflows/secret-scan.yml": [
    "tests/ops/test_secret_scan_gate.py"
+  ],
+  ".github/workflows/security-audit.yaml": [
+   "tests/shared/test_sast.py"
   ],
   ".github/workflows/try-local-smoke.yaml": [
    "tests/ops/test_trylocal_compose_pins.py"
@@ -3005,6 +3008,9 @@
   ],
   "tests/ops/test_secret_scan_gate.py": [
    "tests/ops/test_ci_aggregate_gate_contract.py"
+  ],
+  "tests/ops/test_validate_config.py": [
+   "tests/shared/test_sast.py"
   ],
   "tests/ops/test_wrapped_path_references.py": [
    "tests/lint/test_check_threshold_reachability.py"

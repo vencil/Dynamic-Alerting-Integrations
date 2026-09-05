@@ -2306,10 +2306,14 @@ class TestTenantIdParity:
 
         The custom loader exists to change how mapping KEYS are read; it must
         not have widened what YAML is allowed to construct.
-        ``tests/shared/test_sast.py::TestNoUnsafeYamlLoad`` cannot answer that:
-        it accepts a ``yaml.load`` call only when ``Loader=`` is written as
-        ``<something>.SafeLoader``, so a subclass is indistinguishable to it
-        from ``yaml.UnsafeLoader``. This feeds the real payload instead."""
+
+        ⛔ No static check answers that. dev-rules §5 item 4 is enforced by
+        bandit B506, which reads how the loader is NAMED, not what it can
+        construct — a ``SafeLoader`` subclass is indistinguishable to it from
+        ``yaml.UnsafeLoader``, and a directly constructed loader (what
+        ``_load_with_exporter_keys`` does) is outside its predicate entirely.
+        This test is the only thing pinning the property; it feeds the real
+        payload. See the block at rule 4 in ``tests/shared/test_sast.py``."""
         import io
 
         assert issubclass(vc._ExporterKeyLoader, yaml.SafeLoader)
