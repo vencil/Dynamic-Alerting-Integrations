@@ -190,6 +190,62 @@ func TestOrgWriteEnforce_PutTenant_PRModeDeniedBeforeClaim(t *testing.T) {
 	}
 }
 
+// tenant_put.go states an ORDERING property, not just an authorization one:
+// the gate sits at the top of the handler "BEFORE the body is read, so a denied
+// caller triggers no side effect on either write path (direct commit or PR
+// mode) and learns nothing from policy-violation details". Nothing pinned that
+// (#1710): the two rows above assert only "403 + zero commits", and the handler
+// has TWO org gates — pre-state (:81) and post-state (:109) — that receive the
+// SAME org input, because org membership lives in the admin-only
+// `_tenant_orgs.yaml` and cannot be moved by the body. Measured: short-circuit
+// either one alone and the whole TestOrgWriteEnforce family still passes
+// (rc=0); only removing BOTH turns it red. So the family observes that PutTenant
+// authorizes on the org axis, but not WHICH gate does it — and therefore not
+// where in the handler it runs.
+//
+// What that ordering buys is real: a caller with no write permission must not be
+// able to tell request shapes apart from the response. Pair an out-of-scope
+// caller with a malformed X-DA-Base-Hash — if the gate ever moves below
+// readBaseHashHeader (:93), this answers 400 (with that header's format
+// tutorial) instead of 403.
+//
+// ⚠️ One probe is enough for both symptoms #1710 lists. readBaseHashHeader runs
+// BEFORE readLimitedBody (:99), so any downward move past the header parse is
+// visible here, while an over-limit-body probe would only see a move past the
+// body read — strictly the weaker boundary.
+//
+// The message assertion is what makes this pin the PRE-state gate specifically:
+// a bare 403 is also what rbac.writeForbidden (the middleware, org-blind) and
+// RequireOrgWriteProposed (the post-state gate) produce. Only RequireOrgWrite
+// appends this suffix.
+func TestOrgWriteEnforce_PutTenant_GateRunsBeforeHeaderParsing(t *testing.T) {
+	t.Parallel()
+	f := newOrgEnfFixture(t, nil)
+
+	body := bytes.NewBufferString("tenants:\n  " + orgEnfTenantIn + ":\n    _silent_mode: \"critical\"\n")
+	req := newRequestWithChiParam("PUT", "/api/v1/tenants/"+orgEnfTenantIn, "id", orgEnfTenantIn, body)
+	req = orgEnfIdentity(req, orgEnfOutsiderOrg)
+	req.Header.Set(BaseHashHeader, "not-a-source-hash")
+	w := httptest.NewRecorder()
+	wrapWithRBACMiddleware(PutTenant(f.deps()), f.rbacMgr, rbac.PermWrite, TenantIDFromPath).ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 — authorization must precede %s parsing; body=%s",
+			w.Code, BaseHashHeader, w.Body.String())
+	}
+	code, errText := decodeEnvelope(t, w)
+	if code != CodeForbidden {
+		t.Errorf("code = %q, want %q", code, CodeForbidden)
+	}
+	if want := "(permission and organization-scope checks, ADR-027)"; !strings.Contains(errText, want) {
+		t.Errorf("error = %q, want it to contain %q — that suffix is what separates the\n"+
+			"pre-state gate from the middleware and the post-state gate", errText, want)
+	}
+	if n := f.writes.Load(); n != 0 {
+		t.Errorf("denied request committed %d time(s), want 0", n)
+	}
+}
+
 // ── Site #11: PutTenantCustomAlerts ────────────────────────────────────────
 
 func TestOrgWriteEnforce_PutCustomAlerts(t *testing.T) {
