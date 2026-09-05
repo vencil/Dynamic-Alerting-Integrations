@@ -86,6 +86,23 @@ def ms(x):
     return x / 1e6
 
 
+def pct(num, den, spec=".1f"):
+    """`100*num/den` as a percent string, or an explicit n/a when den is zero.
+
+    ⛔ Every divisor in this report is a MEASURED quantity, so every one of them
+    can be zero on degenerate input. An unguarded division does not degrade the
+    report - it kills it, and a report that prints nothing cannot tell "could not
+    measure" apart from "measured, nothing there". That distinction is the only
+    reason this tool exists, so it is not allowed to die on the way to stating it.
+
+    ⚠️ This is not a claim that any real probe run produces a zero denominator.
+    None of the degenerate states here were produced by a run; they were reached
+    by constructing the input. Unreachability is NOT claimed - it was never
+    enumerated. The guard is justified by the failure mode, not by its odds.
+    """
+    return f"{100 * num / den:{spec}}%" if den else "n/a (denominator is 0)"
+
+
 def main():
     sessions = []
     for name in RUNS:
@@ -99,6 +116,13 @@ def main():
             return 2
         if not env:
             print(f"::error::{name}: no PROBEENV record — cannot identify what was measured")
+            return 2
+        # ⛔ `iters` is a divisor further down. Zero here is a MALFORMED record, not a
+        # degenerate-but-valid measurement, so it is rejected rather than printed n/a.
+        bad = [r["round"] for r in rows if r.get("iters", 0) <= 0]
+        if bad:
+            print(f"::error::{name}: rounds {bad} report iters<=0; a round with no"
+                  " iterations cannot be summarised")
             return 2
         sessions.append(dict(name=name, rows=rows, env=env, ncal=ncal, tails=tails))
 
@@ -133,14 +157,14 @@ def main():
         dw = worst["write_sum"] - st.median(w)
         print(f"\n  {s['name']}  ({len(rows)} measurement rounds, {s['ncal']} calibration dropped)")
         print(f"      round total   median {ms(med):8.1f} ms   min {ms(min(tot)):8.1f}   "
-              f"max {ms(max(tot)):8.1f}   spread {100 * (max(tot) - min(tot)) / med:6.2f}%")
+              f"max {ms(max(tot)):8.1f}   spread {pct(max(tot) - min(tot), med, '6.2f'):>7}")
         print(f"      write_sum     median {ms(st.median(w)):8.3f} ms  min {ms(min(w)):8.3f}   "
-              f"max {ms(max(w)):8.3f}   share of all time {100 * sum(w) / sum(tot):.3f}%")
+              f"max {ms(max(w)):8.3f}   share of all time {pct(sum(w), sum(tot), '.3f')}")
         print(f"      write tail    worst p99 over rounds {max(r['write_p99'] for r in rows) / 1000:8.1f} us   "
               f"worst single write {max(r['write_max'] for r in rows) / 1000:8.1f} us")
         print(f"      slowest round #{worst['round']}: {ms(excess):+.1f} ms vs median round "
-              f"({100 * excess / med:+.2f}%); the write half contributes {ms(dw):+.3f} ms "
-              f"= {100 * dw / excess:.1f}% of that excess")
+              f"({pct(excess, med, '+.2f')}); the write half contributes {ms(dw):+.3f} ms "
+              f"= {pct(dw, excess)} of that excess")
 
     print()
     print("=" * 74)
@@ -150,8 +174,8 @@ def main():
     gm = st.median(meds)
     for s, m in zip(sessions, meds):
         print(f"  {s['name']:<18} median round total {ms(m):8.1f} ms   "
-              f"{100 * (m - gm) / gm:+6.2f}% vs the middle dispatch")
-    print(f"  spread of the three medians: {100 * (max(meds) - min(meds)) / gm:.2f}%")
+              f"{pct(m - gm, gm, '+6.2f'):>7} vs the middle dispatch")
+    print(f"  spread of the three medians: {pct(max(meds) - min(meds), gm, '.2f')}")
     print(f"  ⛔ #1497's gap between modes, for comparison: {TARGET_SWING_PP:.2f} pp")
 
     allrows = [r for s in sessions for r in s["rows"]]
@@ -179,11 +203,11 @@ def main():
     print(f"\n  standard deviation over the pooled {len(allrows)} rounds:")
     print(f"      round total           {ms(st.stdev(tot)):8.2f} ms   (range {ms(max(tot) - min(tot)):7.2f} ms)")
     print(f"      level  (p50 x iters)  {ms(st.stdev(base)):8.2f} ms   (range {ms(max(base) - min(base)):7.2f} ms)"
-          f"  = {100 * st.stdev(base) / st.stdev(tot):5.1f}% of the round total's sd")
+          f"  = {pct(st.stdev(base), st.stdev(tot), '5.1f'):>6} of the round total's sd")
     print(f"      above-p50 mass        {ms(st.stdev(above)):8.2f} ms   (range {ms(max(above) - min(above)):7.2f} ms)"
-          f"  = {100 * st.stdev(above) / st.stdev(tot):5.1f}%")
+          f"  = {pct(st.stdev(above), st.stdev(tot), '5.1f'):>6}")
     print(f"      write_sum             {ms(st.stdev(w)):8.2f} ms   (range {ms(max(w) - min(w)):7.2f} ms)"
-          f"  = {100 * st.stdev(w) / st.stdev(tot):5.1f}%")
+          f"  = {pct(st.stdev(w), st.stdev(tot), '5.1f'):>6}")
     print("\n  ⚠️ correlation says which quantity moves WITH the round; the sd column says"
           "\n     how much it could move the round at all. A term needs both to be a cause.")
 
@@ -198,8 +222,6 @@ def main():
     iters = allrows[0]["iters"]
     print(f"  A one-sided swing of {TARGET_SWING_PP:.2f}% on a {ms(med_round):.0f} ms round is "
           f"{ms(need):.0f} ms.")
-    print(f"  Largest write-path excursion above the median write_sum, in all "
-          f"{len(allrows)} rounds: {ms(biggest):.1f} ms.")
     # ⛔ Both divisors can be zero, and an unguarded division does not degrade the
     # report - it kills it, so a run that DID collect data prints nothing at all.
     # That is the one failure mode this whole tool exists to avoid: "could not
@@ -207,12 +229,18 @@ def main():
     # ⚠️ Neither state was produced by a real probe run; both were reached by
     # constructing the input (all write_sum equal => max == median => biggest 0).
     # Unreachability is not claimed - it was not enumerated.
+    # ⛔ The two branches are each a whole sentence; they do NOT share a preamble.
+    # Sharing one printed "largest excursion above the median: 0.0 ms" and then
+    # "no round sat above the median" - the first half asserts that round exists,
+    # the second says it does not.
     if biggest > 0:
-        print(f"  => short by a factor of {need / biggest:.0f}x")
+        print(f"  Largest write-path excursion above the median write_sum, in all "
+              f"{len(allrows)} rounds: {ms(biggest):.1f} ms => short by a factor of "
+              f"{need / biggest:.0f}x")
     else:
-        print("  => N/A: no round's write_sum sat above the median, so there is no"
-              " positive excursion to compare against (this is a null observation,"
-              " not a measurement failure)")
+        print(f"  In all {len(allrows)} rounds no write_sum sat above the median, so there"
+              " is no positive excursion to compare against (a null observation, not a"
+              " measurement failure)")
     print(f"  Per iteration: the median round's write half averages "
           f"{med_w / iters / 1000:.1f} us;")
     print(f"     to reach {ms(need):.0f} ms it would have to average "
