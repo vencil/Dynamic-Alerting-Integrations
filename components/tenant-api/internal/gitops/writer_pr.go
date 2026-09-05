@@ -53,15 +53,21 @@ func (w *Writer) WritePR(ctx context.Context, tenantID, authorEmail, yamlContent
 	if err := guardTenantID(tenantID); err != nil {
 		return nil, err
 	}
-	// Step 1: validate schema before anything. notices (the non-blocking
-	// deprecation channel, #1231 1b) ride the result so the handler can
-	// surface them in its 200 response.
+	// Step 1: PRE-FLIGHT validate, before anything touches git.
+	//
+	// ⛔ THIS IS NOT THE AUTHORITATIVE RUN — Step 3c is. Everything stateful in
+	// validate (the addedTenantKeys baseline, the eol-expansion guard) reads the
+	// tenant file on the tree as it is RIGHT NOW, and Step 3 replaces that tree
+	// with the fresh origin/<base>. Keeping this pre-flight anyway mirrors
+	// WritePRBatch, and for its reason: it maps a bad body to ErrValidation→400
+	// without needing a git repo to reach it, and stops an invalid write from
+	// cutting a dangling branch. Its notices are DISCARDED — Step 3c collects
+	// them once, against the tree the write lands on.
 	filePath, err := w.tenantFilePath(tenantID)
 	if err != nil {
 		return nil, err
 	}
-	errs, notices := validate(w.configDir, tenantID, filePath, yamlContent)
-	if len(errs) > 0 {
+	if errs, _ := validate(w.configDir, tenantID, filePath, yamlContent); len(errs) > 0 {
 		return nil, fmt.Errorf("%w: %s", ErrValidation, strings.Join(errs, "; "))
 	}
 
@@ -113,6 +119,37 @@ func (w *Writer) WritePR(ctx context.Context, tenantID, authorEmail, yamlContent
 	if err != nil {
 		w.abortFeatureBranch(base, branchName)
 		return nil, err
+	}
+
+	// Step 3c: AUTHORITATIVE validate, against the tree the write actually lands
+	// on (#1681 timing half).
+	//
+	// ⛔ RE-RESOLVING THE PATH WAS ONLY HALF OF #1673. The path now describes the
+	// fresh base, but the DECISION was still Step 1's — taken against the tree as
+	// it was before the checkout. `addedTenantKeys` derives its baseline from the
+	// tenant file's existing `tenants:` keys, so the two trees disagreeing about
+	// that file makes the gate answer a question nobody asked:
+	//
+	//   - stale base declares `other`, fresh base does not → BYPASS: the section
+	//     is grandfathered against a tree the write does not land on, and the
+	//     write ADDS it. (A long-lived pod's local base going stale is the very
+	//     condition resolveFreshBaseRef exists for — TRK-318.)
+	//   - stale base lacks a section the fresh base grandfathered → OVER-REJECT:
+	//     a tenant legitimately sharing a flat file cannot edit its own section
+	//     until the pod restarts.
+	//
+	// Both directions are the same defect, and both are fixed by deciding on the
+	// tree that will receive the bytes. WritePRBatch already does exactly this —
+	// it re-runs readMergeValidate inside its post-checkout loop — so this brings
+	// the single-tenant path in line rather than inventing a second shape.
+	//
+	// notices come from HERE, not Step 1, for the same reason the batch path
+	// discards its pre-flight's: they describe the body as merged against the
+	// base it lands on, and collecting them twice would duplicate them.
+	errs, notices := validate(w.configDir, tenantID, filePath, yamlContent)
+	if len(errs) > 0 {
+		w.abortFeatureBranch(base, branchName)
+		return nil, fmt.Errorf("%w: %s", ErrValidation, strings.Join(errs, "; "))
 	}
 
 	// Step 4: write file — the tenant's existing file on THIS branch, whatever
