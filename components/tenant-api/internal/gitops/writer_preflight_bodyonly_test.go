@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/vencil/tenant-api/internal/confd"
 )
 
 // --- the split, at the unit level ---------------------------------------------
@@ -157,6 +159,131 @@ func TestWritePRBatch_StaleTreeNoLongerOverRejects(t *testing.T) {
 		[]PRBatchOp{{TenantID: "db-a", Merge: merge}}, "op@example.com"); err != nil {
 		t.Fatalf("legitimate batch write refused on the STALE tree: %v", err)
 	}
+}
+
+// TestWritePR_AmbiguousSpelling covers the resolution that moved out of the
+// pre-flight with the same reasoning as the validators.
+//
+// tenantFilePath walks configDir (confd.ResolveTenantFile → os.ReadDir), so its
+// errors are tree-derived too — which is why Step 1 no longer calls it. The two
+// arms are the two halves of that: the refusal must survive, and the refusal
+// must stop being issued on evidence from a tree the write does not land on.
+//
+// ⚠️ Nothing pinned WritePR's ambiguity refusal before this: the pre-existing
+// TestWrite_AmbiguousSpellingIsRefused drives Write, not WritePR. So "no test
+// broke when Step 1 stopped resolving" was NOT evidence that nothing changed —
+// this is what makes it evidence.
+func TestWritePR_AmbiguousSpelling(t *testing.T) {
+	const body = "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n"
+	const seed = "tenants:\n  db-a:\n    _silent_mode: \"false\"\n"
+
+	t.Run("still refused when the FRESH base is ambiguous", func(t *testing.T) {
+		dir := initRepoOnMain(t)
+		seedBase(t, dir, "db-a.yaml", seed)
+		seedBase(t, dir, "db-a.yml", seed)
+		gitRun(t, dir, "add", "-A")
+		gitRun(t, dir, "commit", "-m", "two spellings")
+
+		_, err := NewWriter(dir, dir).WritePR(context.Background(), "db-a", "b@example.com", body)
+		if err == nil {
+			t.Fatal("WritePR accepted a tenant claimed by two files — it would pick one arbitrarily")
+		}
+		if b := gitOut(t, dir, "branch", "--format=%(refname:short)"); strings.Contains(b, "tenant-api/") {
+			t.Errorf("refused write left a dangling feature branch:\n%s", b)
+		}
+	})
+
+	t.Run("no longer refused when only the STALE tree was ambiguous", func(t *testing.T) {
+		// Built inline rather than through seedStaleAndFresh: the remote advance
+		// here is a DELETION, and that helper only writes files.
+		remoteDir := initBareRemoteOnMain(t)
+		authorDir := t.TempDir()
+		gitClone(t, remoteDir, authorDir)
+		gitRun(t, authorDir, "config", "user.email", "a@a.com")
+		gitRun(t, authorDir, "config", "user.name", "A")
+		writeFileInDir(t, authorDir, "db-a.yaml", seed)
+		writeFileInDir(t, authorDir, "db-a.yml", seed)
+		gitRun(t, authorDir, "add", "-A")
+		gitRun(t, authorDir, "commit", "-m", "two spellings")
+		gitRun(t, authorDir, "push", "origin", "main")
+
+		// The pod clones while the tree is still ambiguous, and never fetches.
+		dir := t.TempDir()
+		gitClone(t, remoteDir, dir)
+		gitRun(t, dir, "config", "user.email", "t@t.com")
+		gitRun(t, dir, "config", "user.name", "T")
+
+		// An operator cleans the duplicate up remotely.
+		gitRun(t, authorDir, "rm", "-q", "db-a.yml")
+		gitRun(t, authorDir, "commit", "-m", "clean up the duplicate spelling")
+		gitRun(t, authorDir, "push", "origin", "main")
+
+		if _, err := NewWriter(dir, dir).WritePR(
+			context.Background(), "db-a", "b@example.com", body); err != nil {
+			t.Fatalf("write refused over an ambiguity the FRESH base no longer has: %v", err)
+		}
+	})
+}
+
+// TestWritePRBatch_AmbiguousSpelling is the batch twin of the test above.
+//
+// Batch cannot drop the pre-flight resolution the way WritePR did — MergeFunc
+// needs the existing body — so it drops only the refusal. Without these arms
+// the two entry points disagree about the same tenant: WritePR accepts a write
+// whose duplicate spelling the fresh base already cleaned up, WritePRBatch
+// refuses it. Nothing detected that asymmetry before.
+func TestWritePRBatch_AmbiguousSpelling(t *testing.T) {
+	const seed = "tenants:\n  db-a:\n    _silent_mode: \"false\"\n"
+	merge := func([]byte) (string, error) {
+		return "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n", nil
+	}
+	batch := func(dir string) error {
+		_, err := NewWriter(dir, dir).WritePRBatch(context.Background(),
+			[]PRBatchOp{{TenantID: "db-a", Merge: merge}}, "op@example.com")
+		return err
+	}
+
+	t.Run("still refused when the FRESH base is ambiguous", func(t *testing.T) {
+		dir := initRepoOnMain(t)
+		seedBase(t, dir, "db-a.yaml", seed)
+		seedBase(t, dir, "db-a.yml", seed)
+		gitRun(t, dir, "add", "-A")
+		gitRun(t, dir, "commit", "-m", "two spellings")
+
+		err := batch(dir)
+		if !errors.Is(err, confd.ErrAmbiguousTenantFile) {
+			t.Fatalf("err = %v, want confd.ErrAmbiguousTenantFile", err)
+		}
+		if b := gitOut(t, dir, "branch", "--format=%(refname:short)"); strings.Contains(b, "tenant-api/") {
+			t.Errorf("refused batch left a dangling feature branch:\n%s", b)
+		}
+	})
+
+	t.Run("no longer refused when only the STALE tree was ambiguous", func(t *testing.T) {
+		remoteDir := initBareRemoteOnMain(t)
+		authorDir := t.TempDir()
+		gitClone(t, remoteDir, authorDir)
+		gitRun(t, authorDir, "config", "user.email", "a@a.com")
+		gitRun(t, authorDir, "config", "user.name", "A")
+		writeFileInDir(t, authorDir, "db-a.yaml", seed)
+		writeFileInDir(t, authorDir, "db-a.yml", seed)
+		gitRun(t, authorDir, "add", "-A")
+		gitRun(t, authorDir, "commit", "-m", "two spellings")
+		gitRun(t, authorDir, "push", "origin", "main")
+
+		dir := t.TempDir()
+		gitClone(t, remoteDir, dir)
+		gitRun(t, dir, "config", "user.email", "t@t.com")
+		gitRun(t, dir, "config", "user.name", "T")
+
+		gitRun(t, authorDir, "rm", "-q", "db-a.yml")
+		gitRun(t, authorDir, "commit", "-m", "clean up the duplicate spelling")
+		gitRun(t, authorDir, "push", "origin", "main")
+
+		if err := batch(dir); err != nil {
+			t.Fatalf("batch refused over an ambiguity the FRESH base no longer has: %v", err)
+		}
+	})
 }
 
 // --- what the pre-flight used to buy, and must still buy ----------------------
