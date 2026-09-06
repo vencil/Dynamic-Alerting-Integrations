@@ -619,6 +619,43 @@ def test_check_commit_msg_file_returns_ok_for_merge_directly(tmp_path: Path) -> 
     assert mod.check_commit_msg_file(msg, _REPO_ROOT) == 0
 
 
+def test_commitlint_ignored_matches_merge_line_in_body() -> None:
+    """#1756 review: two merge wildcards are multiline upstream.
+
+    Measured on commitlint 21.2.2 with this repo's `.commitlintrc.yaml`: this
+    message exits 0, and exits 1 once `defaultIgnores: false` is appended ⇒ the
+    pass comes from the ignore path. Passing the header alone would return
+    False here and re-open the local-red / CI-green gap.
+    """
+    mod = _load_module()
+    message = "invalid(scope): header\n\nMerge branch 'main' into feature/x\n"
+    assert mod.is_commitlint_ignored(message) is True
+    assert mod.is_commitlint_ignored(message.splitlines()[0]) is False
+
+
+def test_commitlint_ignored_body_revert_is_not_multiline() -> None:
+    """Control for the test above — `^(R|r)evert ` carries no `/m` upstream, so
+    a body line does NOT make CI skip the commit (measured: exit 1)."""
+    mod = _load_module()
+    assert mod.is_commitlint_ignored(
+        'invalid(scope): header\n\nRevert "feat(dx): x"\n'
+    ) is False
+
+
+def test_check_commit_msg_file_accepts_merge_line_in_body(tmp_path: Path) -> None:
+    """Same case through the commit-msg path, `#` template lines included."""
+    mod = _load_module()
+    msg = tmp_path / "m.txt"
+    msg.write_text(
+        "invalid(scope): header\n"
+        "\n"
+        "Merge branch 'main' into feature/x\n"
+        "# Please enter a commit message.\n",
+        encoding="utf-8",
+    )
+    assert mod.check_commit_msg_file(msg, _REPO_ROOT) == 0
+
+
 def test_check_commit_msg_file_still_rejects_bad_scope_directly(
     tmp_path: Path,
 ) -> None:
