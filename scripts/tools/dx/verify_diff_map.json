@@ -796,7 +796,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "cece09153385a6df91580e39833d73d54cb22b01068a4fce8f9f5f6ee98693f0",
+ "source_digest": "03bfc8af01e9e5e2ae2909c7b04118d22de5865bcfe8f1bcee09d329de01815e",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1945,6 +1945,9 @@
   ],
   "helm/threshold-exporter/Chart.yaml": [
    "tests/lint/test_validate_docs_versions.py"
+  ],
+  "helm/threshold-exporter/README.md": [
+   "tests/lint/test_check_chart_ship_surface.py"
   ],
   "helm/threshold-exporter/templates/configmap.yaml": [
    "tests/helm/test_optional_overrides_render.py"
