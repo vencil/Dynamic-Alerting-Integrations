@@ -112,7 +112,7 @@ Full comparison with Alertmanager routing examples: [Config-Driven Design](docs/
      94 `.en.md` files minus the alias, with 0 orphans.
      The per-document list comes from the generated doc-map linked below.
      ⚠️ The other numbers in this table are NOT in the same position, so do not
-     read them together: the 224 Python tools have a bump_docs writer and a
+     read them together: the 225 Python tools have a bump_docs writer and a
      validate_docs_versions checker on both halves, but the 16 rule packs do
      NOT have either FOR THIS TABLE — measured, none of the four relevant cells
      matches any RULE_PACK_COUNT_PATTERNS; what is guarded is the README badge

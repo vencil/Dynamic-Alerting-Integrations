@@ -107,7 +107,7 @@ graph TD
      大小（它另外跳過 benchmarks.md）；docs/ 內真正湊得出 zh 側的 pair 是 93——那是
      94 個 `.en.md` 去掉別名之後的 93，落單者 0。
      逐份清單由下方連到的 doc-map 生成表提供。
-     ⚠️ 同表其餘數字的處境也各不相同，不要一起讀：Python 工具 224 兩半都有 bump_docs
+     ⚠️ 同表其餘數字的處境也各不相同，不要一起讀：Python 工具 225 兩半都有 bump_docs
      寫入端與 validate_docs_versions 檢查端；而 rule-pack 16 在**這張表裡**沒有——實測
      四個相關儲存格沒有一個匹配得到 RULE_PACK_COUNT_PATTERNS，被守著的是 README badge
      與別處的「16 個 Rule Pack …」句子。要在這一列加數字前，先為它接上兩端並定義母體。 -->

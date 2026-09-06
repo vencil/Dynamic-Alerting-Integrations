@@ -76,6 +76,12 @@ TARGET_SWING_PP = 30.38 - 3.98
 # 1.000 for n=2, which is what Pearson always returns there.
 MIN_ROUNDS_FOR_CORR = 5
 
+# ⛔ The archive report's file list is FIXED, exactly as the script this replaced
+# had it. It is not a glob — see the comment at the call site in main() for the
+# three ways globbing changed behaviour, and note that the CROSS DISPATCH section
+# hard-codes the word "three" in its prose.
+RUNS = ["probe-run1.txt", "probe-run2.txt", "probe-run3.txt"]
+
 # ⛔ Divergence 2: records are NOT anchored at line start. `go test` prefixes the
 # first output line of each invocation with `BenchmarkProbeWriteLatency-4   \t`,
 # and `-benchtime=Nx` always produces two invocations (a b.N==1 calibration pass
@@ -148,9 +154,21 @@ def load(text, name):
     return Session(name, rows, list(env), len(calib), calib_ambiguous, tails)
 
 
-def reject(session):
-    """Return an ::error:: string if this session must not be summarised."""
+def reject(session, thin_msg=None):
+    """Return an ::error:: string if this session must not be summarised.
+
+    ⛔ `thin_msg` exists because the two originals worded the "too few rows"
+    refusal DIFFERENTLY, and that wording is part of each report's output. An
+    earlier draft of this module unified them onto the workflow's phrasing,
+    which silently changed what a maintainer re-verifying the archive sees.
+    Caught in blind review; each mode now keeps the sentence it always had.
+    ⚠️ The other two refusals (no PROBEENV, iters<=0) are NOT parameterised —
+    those two were already worded identically in both originals, checked by
+    diffing the removed code rather than by recollection.
+    """
     if len(session.rows) < 2:
+        if thin_msg is not None:
+            return thin_msg(session)
         return (f"::error::expected >=2 measurement PROBEROW records, parsed"
                 f" {len(session.rows)} (calibration rows seen: {session.ncal})")
     if not session.env:
@@ -475,7 +493,8 @@ def main(argv=None):
     g.add_argument("--from-log", metavar="PATH", type=pathlib.Path,
                    help="summarise ONE probe.out as the per-job CI summary (Markdown)")
     g.add_argument("--archive", metavar="DIR", type=pathlib.Path,
-                   help="summarise probe-run*.txt in DIR as the archive report (text)")
+                   help="summarise probe-run{1,2,3}.txt in DIR as the archive"
+                        " report (text); all three must be present")
     args = ap.parse_args(argv)
 
     if args.from_log is not None:
@@ -490,14 +509,32 @@ def main(argv=None):
             return 2
         return render_ci(session)
 
-    paths = sorted(args.archive.glob("probe-run*.txt"))
-    if not paths:
-        print(f"::error::no probe-run*.txt found in {args.archive}")
-        return 2
+    # ⛔ A FIXED file list, not a glob. An earlier draft of this module globbed
+    # `probe-run*.txt`, which looked like a harmless generalisation and was not:
+    #   - with two files present it produced a full report where the original
+    #     REFUSED (`::error::missing data file ...`, rc=2);
+    #   - with a fourth file present every dispatch's "vs the middle dispatch"
+    #     percentage silently changed (probe-run1 read +5.34% -> +2.60% on
+    #     identical data), because the median of the medians moved;
+    #   - and the CROSS DISPATCH section says "spread of the THREE medians" in
+    #     hard-coded prose, so both cases printed a sentence that was false.
+    # Found in blind review, not by me. It was a sixth behavioural divergence in
+    # a change whose whole claim was that there were five. Restored to the
+    # original contract; generalising the tool to other archive directories is a
+    # separate change that has to update that prose too.
+    # ⚠️ Carried over unchanged: a `probe-run4.txt` sitting in DIR is IGNORED
+    # rather than rejected, because the original ignored it too. That is
+    # inherited behaviour, not a decision made here — pinned by a test so it
+    # stays visible.
     sessions = []
-    for path in paths:
+    for name in RUNS:
+        path = args.archive / name
+        if not path.exists():
+            print(f"::error::missing data file {path}")
+            return 2
         session = load(path.read_text(), path.name)
-        err = reject(session)
+        err = reject(session, thin_msg=lambda s: (
+            f"::error::parsed {len(s.rows)} measurement rows, need >= 2"))
         if err:
             print(err.replace("::error::", f"::error::{path.name}: ", 1))
             return 2

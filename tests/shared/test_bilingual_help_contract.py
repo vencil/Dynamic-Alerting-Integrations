@@ -516,7 +516,7 @@ def test_allowlists_shrink_only_count_pin():
     # gate turning the PR red. The bilingual question was never asked while the
     # tool was being written; the ratchet is what forced it to be answered.
     assert len(ENGLISH_ONLY) <= 146, (
-        f"ENGLISH_ONLY grew to {len(ENGLISH_ONLY)} (pin=145). Adding an "
+        f"ENGLISH_ONLY grew to {len(ENGLISH_ONLY)} (pin=146). Adding an "
         "English-only tool is allowed but must be an explicit, reviewed "
         "decision — bump this pin in the same commit and justify it."
     )
