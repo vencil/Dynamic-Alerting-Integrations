@@ -690,3 +690,48 @@ class TestCheckCommitScopeRange:
         _stub_run_constant(monkeypatch, _cp(128, "", "fatal: bad revision"))
         result = pp.check_commit_scope_range()
         assert result.status == pp.Status.WARN
+
+    # --- #1756: commitlint defaultIgnores parity ---------------------------
+    # CI's commitlint drops these commits before any rule runs, so FAILing on
+    # them here is a local-red / CI-green block that also clears the preflight
+    # marker (which then blocks the push).
+
+    def test_merge_commit_does_not_fail(self, monkeypatch):
+        """The subject `git merge main` / GitHub "Update branch" writes."""
+        _stub_run_constant(
+            monkeypatch,
+            _cp(0, "fix(exporter): ok\n"
+                   "Merge remote-tracking branch 'origin/main' into feat/x\n"),
+        )
+        result = pp.check_commit_scope_range()
+        assert result.status == pp.Status.PASS
+        assert "略過 1" in result.message
+
+    def test_merge_branch_subject_does_not_fail(self, monkeypatch):
+        _stub_run_constant(
+            monkeypatch,
+            _cp(0, "fix(exporter): ok\nMerge branch 'main' into feat/x\n"),
+        )
+        result = pp.check_commit_scope_range()
+        assert result.status == pp.Status.PASS
+
+    def test_all_commits_ignored_skips(self, monkeypatch):
+        _stub_run_constant(
+            monkeypatch, _cp(0, "Merge pull request #1 from vencil/feat/x\n"),
+        )
+        result = pp.check_commit_scope_range()
+        assert result.status == pp.Status.SKIP
+        assert "略過 1" in result.message
+
+    def test_ignored_commit_does_not_mask_a_real_violation(self, monkeypatch):
+        """Control: the skip must not swallow the violation next to it, and
+        the denominator must count only what was actually validated."""
+        _stub_run_constant(
+            monkeypatch,
+            _cp(0, "Merge branch 'main' into feat/x\n"
+                   "fix(threshold-exporter): bad scope\n"),
+        )
+        result = pp.check_commit_scope_range()
+        assert result.status == pp.Status.FAIL
+        assert "1/1" in result.message
+        assert "threshold-exporter" in (result.detail or "")

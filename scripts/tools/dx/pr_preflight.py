@@ -261,6 +261,53 @@ def validate_conventional_header(
     return errors
 
 
+# #1756: commitlint `defaultIgnores` parity.
+#
+# CI runs `npx commitlint --from <base> --to <head>`, and commitlint drops
+# every commit matching one of `@commitlint/is-ignored`'s wildcards BEFORE
+# any rule runs. The local re-implementations below (the commit-msg hook and
+# preflight's `Commit scope`) skipped nothing, so the merge commit produced
+# by `git merge main` — or by GitHub's "Update branch" button — was blocked
+# locally while CI reported success. That local-red / CI-green direction is
+# the harmful one: the message told the committer to amend a commit that CI
+# never objects to, and the FAIL additionally cleared the preflight marker,
+# so the pre-push guard blocked the push too.
+#
+# Mirrored from @commitlint/is-ignored 21.2.2 `lib/defaults.js` (`wildcards`),
+# minus its `isSemver` wildcard — that one skips a bare-version subject such
+# as `1.2.3`, needs a semver parser, and this repo's release commits are
+# `chore(release): vX.Y.Z`, which passes the enum on its own. Omitting it
+# leaves the local checks *stricter* than CI for that single shape, which is
+# the safe direction: being stricter can never let a CI failure through.
+#
+# JS `RegExp.test()` searches, so these use `.search()`; `re.M` is applied to
+# exactly the two wildcards that carry the `/m` flag upstream.
+_COMMITLINT_DEFAULT_IGNORES = [
+    re.compile(
+        r"^((Merge pull request)|(Merge (.*?) into (.*?)|(Merge branch (.*?)))"
+        r"(?:\r?\n)*$)",
+        re.M,
+    ),
+    re.compile(r"^(Merge tag (.*?))(?:\r?\n)*$", re.M),
+    re.compile(r"^(R|r)evert (.*)"),
+    re.compile(r"^(R|r)eapply (.*)"),
+    re.compile(r"^(amend|fixup|squash)!"),
+    re.compile(r"^(Merged (.*?)(in|into) (.*)|Merged PR (.*): (.*))"),
+    re.compile(r"^Merge remote-tracking branch(\s*)(.*)"),
+    re.compile(r"^Automatic merge(.*)"),
+    re.compile(r"^Auto-merged (.*?) into (.*)"),
+]
+
+
+def is_commitlint_ignored(header: str) -> bool:
+    """True when commitlint's `defaultIgnores` would skip this commit (#1756).
+
+    Every wildcard is anchored at the start of the message, so passing the
+    header alone is equivalent to passing the full commit message.
+    """
+    return any(p.search(header) for p in _COMMITLINT_DEFAULT_IGNORES)
+
+
 # v2.8.0 Issue #53: commitlint body/footer line-length enforcement.
 #
 # Before this PR the local commit-msg hook only validated the header.
@@ -473,6 +520,20 @@ def check_commit_scope_range(base_ref: str = "origin/main") -> "CheckResult":
             "Commit scope", Status.SKIP, f"{base_ref}..HEAD 無 commit 可驗",
         )
 
+    # #1756: drop what CI's commitlint drops before any rule runs — otherwise
+    # a merge commit fails here while the commitlint job reports success.
+    ignored = [s for s in subjects if is_commitlint_ignored(s)]
+    subjects = [s for s in subjects if not is_commitlint_ignored(s)]
+    ignored_note = (
+        f"；略過 {len(ignored)} 個 commitlint defaultIgnores commit（merge / revert / fixup）"
+        if ignored else ""
+    )
+    if not subjects:
+        return CheckResult(
+            "Commit scope", Status.SKIP,
+            f"{base_ref}..HEAD 無需驗的 commit{ignored_note}",
+        )
+
     type_enum = _read_commitlint_enum(repo_root, "type-enum")
     scope_enum = _read_commitlint_enum(repo_root, "scope-enum")
 
@@ -490,12 +551,12 @@ def check_commit_scope_range(base_ref: str = "origin/main") -> "CheckResult":
         return CheckResult(
             "Commit scope", Status.FAIL,
             f"{len(bad)}/{len(subjects)} commit(s) 違反 commitlint type/scope enum"
-            f"（會在 PR 首次 CI 紅 → deadlock，先 amend 修好再 push）",
+            f"（會在 PR 首次 CI 紅 → deadlock，先 amend 修好再 push{ignored_note}）",
             detail="\n".join(detail_lines),
         )
     return CheckResult(
         "Commit scope", Status.PASS,
-        f"{len(subjects)} commit(s) type/scope 合規（{base_ref}..HEAD）",
+        f"{len(subjects)} commit(s) type/scope 合規（{base_ref}..HEAD{ignored_note}）",
     )
 
 
@@ -554,6 +615,12 @@ def check_commit_msg_file(path: Path, repo_root: Path) -> int:
     if header is None:
         # Empty commit messages are allowed by git with --allow-empty-message;
         # we don't enforce beyond that.
+        return EXIT_OK
+
+    # #1756: CI's commitlint drops this commit entirely (header AND body rules)
+    # before validating, so blocking it here can only produce a local-red /
+    # CI-green stop — most visibly on the merge commit `git merge main` writes.
+    if is_commitlint_ignored(header):
         return EXIT_OK
 
     type_enum = _read_commitlint_enum(repo_root, "type-enum")

@@ -532,3 +532,85 @@ def test_cli_check_commit_msg_no_pass2_trailer_is_fine(tmp_path: Path) -> None:
     msg.write_text("feat(dx): thing\n\nbody line\n", encoding="utf-8")
     proc = _run_cli("--check-commit-msg", str(msg))
     assert proc.returncode == 0, f"stderr={proc.stderr}"
+
+
+# ---------------------------------------------------------------------------
+# #1756: commitlint `defaultIgnores` parity
+# ---------------------------------------------------------------------------
+# The expected-ignored table is the wildcard list of @commitlint/is-ignored
+# 21.2.2 `lib/defaults.js`, minus its `isSemver` wildcard (deliberately not
+# mirrored — see the comment on _COMMITLINT_DEFAULT_IGNORES).
+#
+# Measured against that version with this repo's .commitlintrc.yaml:
+#   - IGNORED_HEADERS:     13/13 exit 0; the same 13 exit 1 once
+#     `defaultIgnores: false` is appended to the config ⇒ the pass comes from
+#     the ignore path, not from the header being valid on its own.
+#   - NOT_IGNORED_HEADERS: 4/4 exit 1 ⇒ commitlint really does validate them.
+
+IGNORED_HEADERS = [
+    "Merge pull request #1744 from vencil/claude/foo",
+    "Merge branch 'main' into claude/foo",
+    "Merge remote-tracking branch 'origin/main' into claude/foo",
+    "Merge tag 'v2.9.0' into main",
+    "Merged in feature/x (pull request #3)",
+    "Merged PR 42: add thing",
+    "Automatic merge from safe-branch",
+    "Auto-merged main into feature/x",
+    'Revert "feat(dx): thing"',
+    'Reapply "feat(dx): thing"',
+    "fixup! feat(dx): thing",
+    "squash! feat(dx): thing",
+    "amend! feat(dx): thing",
+]
+
+NOT_IGNORED_HEADERS = [
+    # Control group: `merge` / `revert` as ordinary words must stay validated,
+    # otherwise the ignore path would be swallowing real violations.
+    "fix(threshold-exporter): merge tenant configs",
+    "fix(threshold-exporter): revert the revert",
+    "Merging branch main",
+    "blam(unknown-scope): bogus",
+]
+
+
+@pytest.mark.parametrize("header", IGNORED_HEADERS)
+def test_commitlint_ignored_headers(header: str) -> None:
+    mod = _load_module()
+    assert mod.is_commitlint_ignored(header) is True
+
+
+@pytest.mark.parametrize("header", NOT_IGNORED_HEADERS)
+def test_commitlint_not_ignored_headers(header: str) -> None:
+    mod = _load_module()
+    assert mod.is_commitlint_ignored(header) is False
+
+
+def test_cli_check_commit_msg_accepts_merge_commit(tmp_path: Path) -> None:
+    """End-to-end: the message `git merge main` hands the commit-msg hook.
+
+    Before #1756 this exited 1, so the merge could not be committed without
+    `--no-verify` — while CI's commitlint job reported success on the very
+    same commit.
+    """
+    msg = tmp_path / "m.txt"
+    msg.write_text(
+        "Merge remote-tracking branch 'origin/main' into claude/foo\n"
+        "\n"
+        "# Please enter a commit message to explain why this merge "
+        "is necessary,\n",
+        encoding="utf-8",
+    )
+    proc = _run_cli("--check-commit-msg", str(msg))
+    assert proc.returncode == 0, f"stderr={proc.stderr}"
+
+
+def test_cli_check_commit_msg_merge_word_in_subject_still_validated(
+    tmp_path: Path,
+) -> None:
+    """Control for the test above: a bad scope is still rejected when the
+    subject merely contains the word `merge`."""
+    msg = tmp_path / "m.txt"
+    msg.write_text("fix(threshold-exporter): merge configs\n", encoding="utf-8")
+    proc = _run_cli("--check-commit-msg", str(msg))
+    assert proc.returncode == 1
+    assert "threshold-exporter" in proc.stderr
