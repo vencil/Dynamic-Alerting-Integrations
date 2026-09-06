@@ -482,3 +482,40 @@ class TestMainCLI:
         monkeypatch.setattr(bd, "run_diagnose_for_tenant", mock_run)
         bd.main()
         assert captured["url"] == "http://localhost:9090"
+
+
+class TestDiscoverTenantsSpellingMatchesTheProducer:
+    """#1603 — the ConfigMap keys ARE conf.d filenames, so match the producer.
+
+    `make configmap-assemble` globs `conf.d/` straight into `--from-file` and
+    now ships both spellings; a narrower set here would report a smaller
+    tenant set than what is deployed. Bounded on both sides below.
+    """
+
+    def _discover(self, monkeypatch, keys):
+        cm = {"data": {k: "tenants: {}" for k in keys}}
+        monkeypatch.setattr(
+            bd.subprocess, "run",
+            lambda *a, **k: MagicMock(returncode=0, stdout=json.dumps(cm)))
+        return bd.discover_tenants()
+
+    def test_yml_key_is_a_tenant(self, monkeypatch):
+        """LOWER + CONTROL."""
+        got = self._discover(
+            monkeypatch, ["_defaults.yaml", "db-a.yaml", "db-b.yml"])
+        assert got == ["db-a", "db-b"]
+
+    def test_non_config_extensions_are_still_not_tenants(self, monkeypatch):
+        """UPPER — widened to the config suffixes, not to 'any key'."""
+        got = self._discover(
+            monkeypatch,
+            ["_defaults.yaml", "db-a.yaml", "README.md", "db-c.json",
+             "x.yang", "plain.y"])
+        assert got == ["db-a"]
+
+    def test_reserved_keys_stay_out_in_both_spellings(self, monkeypatch):
+        """The `_` filter is orthogonal to the spelling and must survive it."""
+        got = self._discover(
+            monkeypatch,
+            ["_defaults.yaml", "_profiles.yml", "db-a.yaml", "db-b.yml"])
+        assert got == ["db-a", "db-b"]

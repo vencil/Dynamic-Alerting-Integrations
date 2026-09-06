@@ -568,10 +568,18 @@ baseline-discovery: ## Baseline Discovery: 觀測指標 + 建議閾值 (使用: 
 CONFDIR := components/threshold-exporter/config/conf.d
 
 configmap-assemble: ## 從 conf.d/ 組裝 threshold-config ConfigMap YAML（供 GitOps sync）
+	@# #1603: ship both spellings, because the exporter's scanner reads both.
+	@# `[ -e ]` guards the unmatched glob (POSIX sh leaves it literal) and
+	@# `|| :` keeps the loop's status at 0 when the LAST iteration misses.
+	@# Case is not folded: shell has no portable case-insensitive glob, so
+	@# the pre-check REPORTS that residue instead (#1588's axis). The
+	@# pre-check is its own line so it can fail the target — see its docstring.
+	@mkdir -p .build
+	@python3 ./scripts/ops/configmap_assemble_precheck.py --config-dir $(CONFDIR)
 	@kubectl create configmap threshold-config \
-		$(shell for f in $(CONFDIR)/*.yaml; do echo "--from-file=$$(basename $$f)=$$f"; done) \
+		$(shell for f in $(CONFDIR)/*.yaml $(CONFDIR)/*.yml; do [ -e "$$f" ] && echo "--from-file=$$(basename $$f)=$$f" || :; done) \
 		-n monitoring --dry-run=client -o yaml > .build/threshold-config.yaml
-	@echo "✓ .build/threshold-config.yaml ($(shell ls $(CONFDIR)/*.yaml | wc -l) files)"
+	@echo "✓ .build/threshold-config.yaml ($(shell for f in $(CONFDIR)/*.yaml $(CONFDIR)/*.yml; do [ -e "$$f" ] && echo x || :; done | wc -l) files)"
 
 sharded-assemble: ## Sharded GitOps: 合併多個 conf.d/ 來源 (使用: make sharded-assemble SOURCES=team-a/conf.d,team-b/conf.d)
 	@mkdir -p .build
