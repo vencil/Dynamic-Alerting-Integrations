@@ -1517,6 +1517,31 @@ repos:
         # edit that never runs the gate.
         files: ^(k8s/.*\.ya?ml|helm/[^/]+/(values[^/]*\.ya?ml|Chart\.ya?ml|templates/.*\.ya?ml)|components/da-tools/app/(entrypoint\.py|build\.sh)|scripts/tools/lint/(check_image_pin_capability|_lint_helpers)\.py)$
 
+      - id: chart-ship-surface
+        name: "chart ship surface — every root file of a packaged chart must be declared SHIP or .helmignore'd (#1755)"
+        entry: python3 -X utf8 scripts/tools/lint/check_chart_ship_surface.py
+        language: python
+        pass_filenames: false
+        # The image carrier already has content gates (image-pin-capability,
+        # build-completeness); the chart carrier had none, so #1597 — a
+        # Container SAST lint variant about to ship next to values.yaml inside
+        # the .tgz customers pull — was found by hand. This asserts the chart
+        # SOURCE tree: every file at the root of a chart the release pipeline
+        # `helm package`s is declared SHIP, or EXCLUDE plus a .helmignore line
+        # that actually matches it.
+        # ⚠️ It does NOT read the produced .tgz — that needs `helm`, which the
+        # dev container does not have; a gate whose main path cannot be run
+        # locally is the shape #1747 was closed for. Stated in the docstring.
+        # Which charts ship is DERIVED from the `helm package` call sites, so
+        # `files:` must include them: a chart that starts shipping in
+        # release.yaml has to re-run this gate, and so does any change to a
+        # chart root or a .helmignore.
+        # ⚠️ `helm/[^/]+/[^/]+` = every DIRECT child of a chart dir, on purpose.
+        # An extension allowlist (.yaml/.md/.helmignore) missed exactly the
+        # files this gate exists to catch — Chart.lock, LICENSE, values.json,
+        # NOTES.txt — so adding one would not have re-run the check at all.
+        files: ^(helm/[^/]+/[^/]+|\.github/workflows/.*\.ya?ml|Makefile|scripts/tools/lint/check_chart_ship_surface\.py)$
+
       - id: devcontainer-dep-parity
         name: "dev container must declare every Python dep CI installs (#1254)"
         entry: python3 -X utf8 scripts/tools/lint/check_devcontainer_dep_parity.py
