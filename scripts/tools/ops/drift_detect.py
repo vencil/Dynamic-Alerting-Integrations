@@ -39,6 +39,7 @@ sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_python import detect_cli_lang, format_json_report, i18n_text  # noqa: E402
 from _lib_exitcodes import EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_confd import is_hidden_name, warn_nested  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Bilingual help text
@@ -138,7 +139,7 @@ def _file_sha256(path: Path) -> str:
 def compute_dir_manifest(dir_path: str, label: str = "") -> FileManifest:
     """Build a SHA-256 manifest for all YAML files in a directory.
 
-    Skips hidden files (starting with '.').
+    Skips hidden (dot-prefixed) entries, as the exporter's walker does.
     """
     p = Path(dir_path)
     manifest = FileManifest(
@@ -148,8 +149,18 @@ def compute_dir_manifest(dir_path: str, label: str = "") -> FileManifest:
     if not p.is_dir():
         return manifest
 
+    # Flat by construction: two hierarchical conf.d trees must not compare
+    # as "no drift" merely because neither side's subtree was read. Names
+    # the skipped carriers on stderr; the manifest itself is unchanged
+    # (#1761: this reader sat outside the enumeration gate's population).
+    warn_nested(p, tool="drift_detect")
+
+    # ⚠️ `*.yaml` only — a `.yml` carrier is invisible to this manifest
+    # while the exporter reads both spellings. That is the extension-
+    # SPELLING axis (#1603) and takes its own A/B measurement; it is
+    # deliberately not widened inside this change.
     for f in sorted(p.glob("*.yaml")):
-        if f.name.startswith("."):
+        if is_hidden_name(f.name):
             continue
         manifest.files[f.name] = _file_sha256(f)
 

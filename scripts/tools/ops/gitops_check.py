@@ -45,6 +45,7 @@ from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
     has_yaml_extension,
     is_reserved_name,
     resolve_defaults_file,
+    warn_nested,
 )
 
 # ---------------------------------------------------------------------------
@@ -269,6 +270,13 @@ def check_local(dir_path: str) -> CheckResult:
     tenant_files = []
     parse_errors = []
     total_alerts = 0
+
+    # Flat by construction (`base.iterdir()` below), and a hierarchical
+    # conf.d must not read as an empty one: name the carriers this scan
+    # cannot see. stderr only — the readiness verdict is unchanged (#1761:
+    # this reader sat outside the enumeration gate's population, so the
+    # missing call was never red).
+    warn_nested(base, tool="gitops_check")
 
     try:
         for entry in sorted(base.iterdir(), key=lambda p: p.name):

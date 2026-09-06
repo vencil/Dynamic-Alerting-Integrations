@@ -779,6 +779,10 @@
    "tests/rulepacks/test_vm_backend_parity.py",
    "tests/rulepacks/test_vm_replay_staleness.py"
   ],
+  "tests/shared/_confd_population.py": [
+   "tests/shared/test_confd_case_parity_across_tools.py",
+   "tests/shared/test_confd_enumeration_contract.py"
+  ],
   "tests/shared/test_json_stdout_contract.py": [
    "tests/shared/test_ci_flag_contract.py",
    "tests/shared/test_dry_run_no_write.py"
@@ -788,7 +792,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "fba3184d5c9fa77669ce38b014c00dd87fe2d216957861b44cd5fa6d0722fc43",
+ "source_digest": "e568c264e3c56299acc2382442f174fadddbfe99573576f23f7cbe981ca07e98",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1168,7 +1172,8 @@
    "tests/ops/test_generated_ci_artifacts.py",
    "tests/ops/test_init_project.py",
    "tests/ops/test_nightly_race_issue_policy.py",
-   "tests/shared/test_actionlint_pin_parity.py"
+   "tests/shared/test_actionlint_pin_parity.py",
+   "tests/shared/test_confd_enumeration_contract.py"
   ],
   ".github/workflows/bench-probe-write-latency.yaml": [
    "tests/dx/test_analyze_probe.py"
@@ -2265,6 +2270,7 @@
    "tests/ops/test_property_based.py",
    "tests/shared/test_bilingual_help_contract.py",
    "tests/shared/test_confd_case_parity_across_tools.py",
+   "tests/shared/test_confd_enumeration_contract.py",
    "tests/shared/test_dispatch_contract.py",
    "tests/shared/test_entrypoint.py",
    "tests/shared/test_input_path_contract.py",
@@ -3048,7 +3054,8 @@
    "tests/ops/test_wrapped_path_references.py",
    "tests/rulepacks/test_platform_rules_extract_sync.py",
    "tests/rulepacks/test_reference_validation_readme_pointers.py",
-   "tests/rulepacks/test_vm_alert_parity.py"
+   "tests/rulepacks/test_vm_alert_parity.py",
+   "tests/shared/test_confd_enumeration_contract.py"
   ],
   "tests/rulepacks/reference-validation/README.md": [
    "tests/rulepacks/test_reference_validation_readme_pointers.py"

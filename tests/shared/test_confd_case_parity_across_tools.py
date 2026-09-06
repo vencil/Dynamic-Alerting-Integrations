@@ -78,53 +78,17 @@ import sys
 
 import pytest
 
+# ⛔ ONE implementation of "which flag is the conf.d flag" (#1761). The
+# argparse walk used to live here while `test_confd_enumeration_contract`
+# discovered its population by substring; a tool could satisfy neither
+# and be absent from both. Both gates now read `_confd_population`.
+from _confd_population import confd_flag
+
 REPO = pathlib.Path(__file__).resolve().parents[2]
 TOOLS_DIR = REPO / "scripts" / "tools"
 
-# Every spelling a Vibe tool uses for "the tenant conf.d directory".
-CONFD_FLAGS = ("--config-dir", "--conf-d", "--confd", "--config-base",
-               "--source-dir")
-
 
 # ── population ────────────────────────────────────────────────────────
-def _confd_flag(path: pathlib.Path) -> str | None:
-    """Which flag this tool takes a conf.d through, from its argparse AST.
-
-    ⛔ Derived from the `add_argument` calls rather than from a substring
-    search, because the two are not the same question: `"--config-dir"`
-    appears in help text, comments and docstrings of tools that never
-    accept it, and a tool that accepts `--conf-d` (`describe_tenant`)
-    contains neither spelling of the other.
-
-    ⚠️ It reads LITERAL declarations only. A tool that passes the flag
-    name as a variable, an f-string or `*flags` is invisible to this walk
-    — blind review measured that with a real fake tool, and the earlier
-    wording here ("what makes tool #32 covered on the day it lands")
-    claimed a guarantee this does not provide. That hole is now closed by
-    `test_no_tool_declares_flags_the_population_walk_cannot_read`, which
-    is what actually makes the claim true; this function alone does not.
-    """
-    try:
-        tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
-    except SyntaxError:
-        return None
-    found: set[str] = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        fn = node.func
-        if not (isinstance(fn, ast.Attribute) and fn.attr == "add_argument"):
-            continue
-        for arg in node.args:
-            if isinstance(arg, ast.Constant) and arg.value in CONFD_FLAGS:
-                found.add(arg.value)
-    # A tool declaring several: prefer the explicitly conf.d-named one.
-    for preferred in CONFD_FLAGS:
-        if preferred in found:
-            return preferred
-    return None
-
-
 def collect_confd_tools() -> list[tuple[pathlib.Path, str]]:
     out: list[tuple[pathlib.Path, str]] = []
     for sub in ("ops", "dx", "lint"):
@@ -134,7 +98,7 @@ def collect_confd_tools() -> list[tuple[pathlib.Path, str]]:
         for p in sorted(d.glob("*.py")):
             if p.name.startswith("_") or p.name == "__init__.py":
                 continue
-            flag = _confd_flag(p)
+            flag = confd_flag(p)
             if flag:
                 out.append((p, flag))
     return out
@@ -215,9 +179,37 @@ def _write_tree(root: pathlib.Path, *, upper: bool, tenants: bool) -> None:
         "    when: \"tenant.pg_connections > 100\"\n"
         "    then: deny\n",
         encoding="utf-8")
+    # #1679: the two ADR-007 control files, in EVERY tree and always spelled
+    # lower-case. They are what `check_routing_profiles` exists to read, and
+    # without them it printed the same `OK: 0 profile(s)` with or without
+    # tenants — parked in KNOWN_INSENSITIVE while its case-sensitive
+    # `endswith(".yaml")` let a dangling `_routing_profile` in `Upper.YAML`
+    # pass the pre-commit gate with rc=0. With `alpha` referencing
+    # `standard` and the policy listing `alpha`, removing the tenants turns
+    # the profile orphan and the policy dangling, so the tool's answer
+    # finally depends on the tenant carriers.
+    #
+    # ⚠️ Their NAMES are not flipped with `upper`: nothing in the exporter
+    # reads them (routing profiles are a tooling-plane concept), so there is
+    # no oracle for their casing and only the tenant carriers are the
+    # question this file asks.
+    (root / "_routing_profiles.yaml").write_text(
+        "routing_profiles:\n"
+        "  standard:\n"
+        "    receiver: team-standard\n"
+        "    group_by: [tenant, alertname, severity]\n",
+        encoding="utf-8")
+    (root / "_domain_policy.yaml").write_text(
+        "domain_policies:\n"
+        "  alpha-domain:\n"
+        "    tenants: [alpha]\n"
+        "    constraints:\n"
+        "      enforce_group_by: [tenant, alertname, severity]\n",
+        encoding="utf-8")
     if tenants:
         (root / names["alpha"]).write_text(
-            "tenants:\n  alpha:\n    pg_connections: 90\n", encoding="utf-8")
+            "tenants:\n  alpha:\n    pg_connections: 90\n"
+            "    _routing_profile: standard\n", encoding="utf-8")
         (root / names["beta"]).write_text(
             "tenants:\n  beta:\n    pg_connections: 91\n", encoding="utf-8")
 
@@ -470,8 +462,8 @@ def test_population_discovery_did_not_collapse() -> None:
     """
     assert len(ALL_TOOLS) >= 25, (
         f"only {len(ALL_TOOLS)} conf.d tools discovered — check that "
-        f"_confd_flag still recognises how tools declare their config-dir "
-        f"argument"
+        f"_confd_population.confd_flag still recognises how tools declare "
+        f"their config-dir argument"
     )
 
 
@@ -479,7 +471,7 @@ def test_no_tool_declares_flags_the_population_walk_cannot_read() -> None:
     """No `add_argument` may hide its flag name behind a non-literal.
 
     ⛔ This is the hole blind review found, closed at its root rather than
-    patched per-tool. `_confd_flag` reads `add_argument("--config-dir")`;
+    patched per-tool. `confd_flag` reads `add_argument("--config-dir")`;
     it cannot read `add_argument(FLAG)`, `add_argument(f"--{x}")` or
     `add_argument(*flags)`. A tool written that way does not land in a
     skip set where the pinned tables above would notice — it never enters
@@ -529,7 +521,8 @@ def test_no_tool_declares_flags_the_population_walk_cannot_read() -> None:
         f"`collect_confd_tools`, and invisible is worse than skipped: the "
         f"pinned skip sets below only notice tools that ARE in the "
         f"population. Either spell the flag as a literal, or extend "
-        f"`_confd_flag` to resolve this form and delete the entry here. "
+        "`_confd_population.confd_flag` to resolve this form and delete "
+        "the entry here. "
         f"See issue #1588."
     )
 
@@ -566,13 +559,17 @@ KNOWN_UNMEASURABLE: dict[str, str] = {
 # are removed. ⚠️ This is not a clean bill of health — it says the A/B
 # comparison cannot see them, so they may or may not read filenames
 # correctly. Several are genuinely conf.d-insensitive (they read rule
-# packs, or need a fixture this file does not build, e.g.
-# `check_routing_profiles` needs `_routing_profiles.yaml`).
+# packs, or need a fixture this file does not build).
+#
+# ⛔ `check_routing_profiles.py` LEFT this set in #1679. Its recorded reason
+# ("needs `_routing_profiles.yaml`") was true and nobody built the file; the
+# fixture now carries both ADR-007 control files, and the tool measured
+# DIVERGENT on the day it became visible (`Upper.YAML` invisible to its
+# hand-written extension test — rc=0 on a dangling profile reference).
 KNOWN_INSENSITIVE: set[str] = {
     "analyze_rule_pack_gaps.py",
     "backtest_threshold.py",
     "check_retire_drift.py",
-    "check_routing_profiles.py",
     "compile_custom_alerts.py",
     "config_history.py",
     "da_assembler.py",
