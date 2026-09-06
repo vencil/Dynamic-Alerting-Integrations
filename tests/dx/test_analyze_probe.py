@@ -515,6 +515,9 @@ def test_archive_refuses_runs_whose_iters_disagree(tmp_path):
     assert "runs report differing iters [400, 800]" in out, out
     assert "probe-run1.txt=[800]" in out, out
     assert "probe-run2.txt=[400]" in out, out
+    # ⛔ The LAST run too. Measured: building the per-run list as `sessions[:-1]`
+    # dropped probe-run3 from the message entirely and this suite stayed green.
+    assert "probe-run3.txt=[400]" in out, out
 
 
 def test_archive_mode_also_buffers_a_crash(capsys, monkeypatch):
@@ -539,6 +542,89 @@ def test_archive_mode_also_buffers_a_crash(capsys, monkeypatch):
         "::error::report generation failed after the input was accepted:"
         " RuntimeError: boom"
     ], out
+
+
+def test_a_discarded_calibration_record_is_named_not_silently_dropped(tmp_path):
+    """Exempting a defect must not make the record VANISH.
+
+    ⛔ The first version of the calibration exemption traded a false refusal for
+    a silent discard: the report came out byte-identical to a clean run except
+    that the "calibration dropped" clause quietly disappeared, with nothing
+    anywhere saying a record had been thrown away. That is the same
+    "could not measure" dressed as "measured" this whole tool exists to
+    prevent, one layer down. Found by blind review of the exemption.
+    """
+    d = build_archive(tmp_path, lambda ls: _calibration_row(
+        ls, lambda l: re.sub(r"\s*load_p50=\d+", "", l)))
+    rc, out = run_stdout("--from-log", str(d / "probe-run1.txt"))
+    assert rc == 0, out
+    assert "1 筆校準輪記錄格式有誤" in out, out
+    assert "line 2" in out, out
+
+    rc, out = run_stdout("--archive", str(d))
+    assert rc == 0, out
+    assert "1 unparseable calibration record(s) skipped" in out, out
+
+
+def test_a_defect_is_reported_when_no_calibration_round_is_dropped(tmp_path):
+    """The exemption's GUARD, in the direction where it must NOT fire.
+
+    ⛔ Under a manual `-benchtime=1x` every row is `bench_n=1`, so the
+    calibration filter keeps them all — nothing is dropped and a defect in one
+    of them is a defect in data the report reads. Measured: removing the
+    `dropped_calibration` guard (leaving only `bench_n == 1`) swallowed the
+    defect and printed a clean rc=0 report, and the whole suite stayed green —
+    the three shapes parameterised above all exercise the OTHER direction.
+    """
+    def all_calibration_one_broken(lines):
+        out, broken = [], False
+        for l in lines:
+            if l.startswith("PROBEROW"):
+                l = re.sub(r"bench_n=\d+", "bench_n=1", l)
+                if not broken and "round=1 " in l:
+                    l = re.sub(r"\s*load_p50=\d+", "", l)
+                    broken = True
+            out.append(l)
+        assert broken, "no round=1 PROBEROW to break — the fixture changed"
+        return out
+
+    d = build_archive(tmp_path, all_calibration_one_broken)
+    rc, out = run("--from-log", str(d / "probe-run1.txt"))
+    assert rc == 2, out
+    assert "missing load_p50" in out, out
+
+
+def test_a_record_too_broken_to_classify_is_still_reported(tmp_path):
+    """`bench_n` itself unparseable — the exemption must not guess.
+
+    ⛔ `partial.get("bench_n")` carries NO default on purpose: a record whose
+    own `bench_n` failed to parse cannot be called a calibration round, so it
+    stays reported. Measured: giving that `.get()` a default of 1 made such a
+    record disappear from a clean rc=0 report, and the suite stayed green.
+    """
+    d = build_archive(tmp_path, lambda ls: _calibration_row(
+        ls, lambda l: l.replace("bench_n=1", "bench_n=x")))
+    rc, out = run("--from-log", str(d / "probe-run1.txt"))
+    assert rc == 2, out
+    assert "bench_n='x' is not an integer" in out, out
+
+
+def test_the_first_defect_on_a_row_is_the_one_reported(tmp_path):
+    """Two defects on one row: the message names the earlier field.
+
+    ⛔ `parse_row` keeps the FIRST reason (`why = why or ...`). Nothing tested
+    it: measured, making the later branch overwrite instead pointed the operator
+    at a different field and the suite stayed green.
+    """
+    def two_defects(l):
+        l = re.sub(r"write_p50=\d+", "write_p50=BAD", l)     # earlier in payload
+        return re.sub(r"write_sum=\d+", "write_sum", l)      # later in payload
+
+    d = build_archive(tmp_path, lambda ls: _first_measurement_row(ls, two_defects))
+    rc, out = run("--from-log", str(d / "probe-run1.txt"))
+    assert rc == 2, out
+    assert "write_p50='BAD' is not an integer" in out, out
+    assert "has no '='" not in out, out
 
 
 def test_the_crash_guard_covers_key_error_not_only_the_type_a_test_raises(

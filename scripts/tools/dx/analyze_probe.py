@@ -139,7 +139,7 @@ class Session:
     """One parsed probe log: the rows, what produced them, and how it was read."""
 
     def __init__(self, name, rows, env, ncal, calib_ambiguous, tails,
-                 malformed=()):
+                 malformed=(), discarded=()):
         self.name = name
         self.rows = rows
         self.env = env
@@ -149,6 +149,14 @@ class Session:
         # ⛔ Carried, not raised. `reject()` is the ONLY place allowed to refuse;
         # a defect that escapes `load()` as an exception bypasses it entirely.
         self.malformed = list(malformed)
+        # ⛔ Defective records the calibration exemption let through. They are
+        # NOT a refusal, but they ARE data that went missing, so both renderers
+        # say so: a record thrown away without a word is exactly the
+        # "could not measure" wearing "measured" costume this tool exists to
+        # prevent. Found by blind review of the exemption, which discarded them
+        # in silence — the report was byte-identical to a clean run except for
+        # the calibration-dropped clause quietly going away.
+        self.discarded = list(discarded)
 
 
 def load(text, name):
@@ -222,10 +230,20 @@ def load(text, name):
     # ⚠️ Only when the filter actually fired, and only for a record whose
     # `bench_n` itself parsed as 1. A record too broken to classify stays
     # reported: loud beats dropping it on a guess.
-    malformed = [(n, why) for n, why, partial in defective
-                 if not (dropped_calibration and partial.get("bench_n") == 1)]
+    # ⛔ ONE predicate, partitioned in one pass. Written as two comprehensions
+    # with the condition duplicated, the two lists can disagree — and when they
+    # do, the disagreement is UNOBSERVABLE: a record in both `malformed` and
+    # `exempt` is refused before anything renders `discarded`, so no test can
+    # see it. Measured while dogfooding: mutating one copy of the condition left
+    # the whole suite green. A predicate that cannot drift beats a test for a
+    # state nothing can reach.
+    exempt, malformed = [], []
+    for lineno_, why_, partial_ in defective:
+        bucket = (exempt if dropped_calibration and partial_.get("bench_n") == 1
+                  else malformed)
+        bucket.append((lineno_, why_))
     return Session(name, rows, list(env), len(calib), calib_ambiguous,
-                   tails, malformed)
+                   tails, malformed, exempt)
 
 
 def reject(session, thin_msg=None):
@@ -336,6 +354,11 @@ def render_ci(session):
     for e in session.env:
         print(f"PROBEENV {e}")
     print(f"rounds parsed: {len(rows)} {dropped}".rstrip())
+    if session.discarded:
+        where = ", ".join(f"line {n}" for n, _ in session.discarded)
+        print(f"\n> ⚠️ {len(session.discarded)} 筆校準輪記錄格式有誤、無法解析，已略過"
+              f"（{where}）。⛔ 它們本來就會被校準過濾器丟棄，所以量測結果不受影響——"
+              f"但「被丟掉」這件事必須說出來，不能只是消失。")
     print("```\n")
 
     tot = [total(r) for r in rows]
@@ -463,6 +486,10 @@ def render_archive(sessions):
                    " b.N==1 — calibration indistinguishable, none dropped")
         else:
             how = f"{len(rows)} measurement rounds, {s.ncal} calibration dropped"
+        if s.discarded:
+            how += (f", {len(s.discarded)} unparseable calibration record(s)"
+                    f" skipped (line{'s' if len(s.discarded) > 1 else ''} "
+                    + ", ".join(str(n) for n, _ in s.discarded) + ")")
         print(f"\n  {s.name}  ({how})")
         print(f"      round total   median {ms(med):8.1f} ms   min {ms(min(tot)):8.1f}   "
               f"max {ms(max(tot)):8.1f}   spread {pct(max(tot) - min(tot), med, '6.2f'):>7}")
