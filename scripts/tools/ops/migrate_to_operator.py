@@ -6,8 +6,8 @@ and conf.d/ tenant configs, then produces equivalent PrometheusRule + Alertmanag
 CRDs along with a step-by-step migration checklist.
 
 Usage:
-    da-tools migrate-to-operator --source-dir configmaps/ --config-dir conf.d/
-    da-tools migrate-to-operator --source-dir configmaps/ --output-dir migration-output/
+    da-tools migrate-to-operator --source-dir configmaps/ --config-dir conf.d/   # stdout; nothing written
+    da-tools migrate-to-operator --source-dir configmaps/ --output-dir migration-output/   # writing is opt-in (#1582)
     da-tools migrate-to-operator --source-dir configmaps/ --dry-run
     da-tools migrate-to-operator --source-dir configmaps/ --checklist-only
     da-tools migrate-to-operator --source-dir configmaps/ --json
@@ -48,7 +48,7 @@ _HELP = {
         "desc": "將 ConfigMap 式規則遷移至 Operator CRD 格式（PrometheusRule、AlertmanagerConfig）",
         "source_dir": "ConfigMap YAML 檔案來源目錄",
         "config_dir": "租户配置目錄（預設 conf.d/）",
-        "output_dir": "輸出 CRD 目錄（預設 migration-output/）",
+        "output_dir": "把 CRD 與 checklist 寫進這個目錄。不給、或帶 --dry-run / --checklist-only，就改印到 stdout 而不寫任何檔案",
         "namespace": "目標命名空間（預設 monitoring）",
         "receiver_template": f"Receiver 模板類型（{' | '.join(_RECEIVER_TEMPLATES)}）",
         "secret_name": "K8s Secret 名稱（receiver 機密引用）",
@@ -61,7 +61,7 @@ _HELP = {
         "desc": "Migrate ConfigMap-based Prometheus rules to Operator CRD format (PrometheusRule, AlertmanagerConfig)",
         "source_dir": "Source directory with ConfigMap YAML files",
         "config_dir": "Tenant config directory (default conf.d/)",
-        "output_dir": "Output CRD directory (default migration-output/)",
+        "output_dir": "Write CRDs and the checklist into this directory. Omit it, or pass --dry-run / --checklist-only, and everything goes to stdout instead; nothing is written",
         "namespace": "Target namespace (default monitoring)",
         "receiver_template": f"Receiver template type ({' | '.join(_RECEIVER_TEMPLATES)})",
         "secret_name": "K8s Secret name (for receiver credential reference)",
@@ -392,10 +392,28 @@ def analyze_migration(source_dir: Path, config_dir: Path) -> dict:
     return analysis
 
 
+def _output_dir_arg(value: str) -> Path:
+    """`--output-dir` 的 argparse type：拒絕空字串／純空白。
+
+    ⛔ 不能靠 `type=Path` 之後在 main() 補判：`Path("")` 就是 `Path(".")`，
+    到那時「使用者傳了空字串」與「使用者傳了 `.`」已經無法區分（實測：補判版本
+    對 `--output-dir ""` 回 rc=0 並照樣寫檔）。判定必須發生在還看得見原始字串的
+    這一層。
+    ⚠️ 為什麼值得判：#1582 之後「要寫檔就必須打這個參數」，於是
+    `--output-dir "$OUT"` 在 OUT 未設時會傳空字串、產物無聲落在呼叫目錄——
+    命中面從零變成全部。`.` 仍然合法（明確要求寫進目前目錄）。
+    """
+    if not value.strip():
+        raise argparse.ArgumentTypeError(i18n_text(
+            "不能是空字串；要寫進目前目錄請明確傳 --output-dir .",
+            "must not be empty; pass --output-dir . to write into the current directory",
+        ))
+    return Path(value)
+
 def build_migration_checklist(
     source_dir: Path,
     config_dir: Path,
-    output_dir: Path,
+    output_dir: Optional[Path],
     result: dict,
 ) -> str:
     """Generate a markdown-formatted migration checklist.
@@ -403,12 +421,18 @@ def build_migration_checklist(
     Args:
         source_dir: Source ConfigMap directory
         config_dir: Tenant config directory
-        output_dir: Output CRD directory
+        output_dir: Output CRD directory, or ``None`` when no ``--output-dir``
+            was given (#1582 — writing is opt-in)
         result: Migration result dict
 
     Returns:
         Markdown-formatted checklist string
     """
+    # #1582：checklist 把輸出目錄嵌進 13 條 `kubectl apply -f {output_dir}/...`。
+    # 沒有 --output-dir 時就沒有真實路徑。⛔ 不要在這裡填回預設值——那會教使用者
+    # 對一個從來沒被建立的目錄跑 kubectl，而 kubectl 的錯誤訊息不會提到是我們印錯的。
+    if output_dir is None:
+        output_dir = "<--output-dir>"
     timestamp = datetime.now(timezone.utc).isoformat()
     pr_count = len(result.get("prometheus_rules", []))
     ac_count = len(result.get("alertmanager_configs", []))
@@ -596,7 +620,7 @@ If rollback is needed:
 def generate_migration(
     source_dir: Path,
     config_dir: Path,
-    output_dir: Path,
+    output_dir: Optional[Path],
     namespace: str,
     receiver_template: Optional[str] = None,
     secret_name: Optional[str] = None,
@@ -832,8 +856,8 @@ def main():
     )
     parser.add_argument(
         "--output-dir",
-        type=Path,
-        default=Path("migration-output"),
+        type=_output_dir_arg,
+        default=None,   # #1582：不給就不寫檔（寫入是 opt-in），見 main() 的寫入閘
         help=i18n_text(_HELP["zh"]["output_dir"], _HELP["en"]["output_dir"]),
     )
     parser.add_argument(
@@ -884,7 +908,20 @@ def main():
     # Resolve paths
     source_dir = args.source_dir.resolve()
     config_dir = args.config_dir.resolve()
-    output_dir = args.output_dir.resolve()
+    # #1582：沒給 --output-dir 就沒有寫入目標。⛔ 不要在這裡塞回一個預設值。
+    output_dir = args.output_dir.resolve() if args.output_dir is not None else None
+
+    # #1582：理由與 operator_generate.main() 同一段（stdout 升為預設產物通道 ⇒
+    # 必須與寫檔通道等價：UTF-8 且 LF）。
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", newline="\n")
+    except (AttributeError, ValueError, OSError):
+        pass
+    # ⛔ 一個真相來源。「沒有寫入目標」與 --dry-run 在**輸出面完全同義**，所以摺成
+    # 同一個布林，而不是給 plan_stdout() 加第四個維度——那張 8 組合矩陣已經被
+    # characterization 釘住（#1112 兩個歷史 bug 的修法就住在裡面）。分開判會讓
+    # 「不寫檔」與「印什麼」各有一份判定，正是本票在修的那種形狀。
+    no_write = args.dry_run or output_dir is None
 
     # Analyze migration
     print(
@@ -933,7 +970,7 @@ def main():
 
     # Write mode: the only branch with filesystem side effects. Progress lines
     # go to stderr (existing convention); stdout is decided below.
-    if not args.checklist_only and not args.dry_run:
+    if not args.checklist_only and not no_write:
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # Write CRD files
@@ -962,7 +999,7 @@ def main():
     # branches.
     for doc in plan_stdout(
         checklist_only=args.checklist_only,
-        dry_run=args.dry_run,
+        dry_run=no_write,
         json_mode=args.json,
         result=result,
         checklist=checklist,

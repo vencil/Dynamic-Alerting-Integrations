@@ -1371,7 +1371,7 @@ da-tools operator-generate [options]
 |------|------|--------|
 | `--rule-packs-dir <DIR>` | Rule Pack 目錄路徑 | `rule-packs/` |
 | `--config-dir <DIR>` | 租戶配置目錄路徑 | `conf.d/` |
-| `--output-dir <DIR>` | 輸出 CRD 目錄 | `operator-manifests/` |
+| `--output-dir <DIR>` | 把 CRD 寫進這個目錄。⚠️ **寫檔要同時滿足：給了本旗標 _且_ 沒帶 `--dry-run`**；任一不成立就改印到 **stdout**、一個檔也不寫 | 無 |
 | `--namespace <NS>` | 目標 K8s namespace | `monitoring` |
 | `--api-version <VER>` | AlertmanagerConfig API 版本（`v1alpha1` / `v1beta1`） | `v1beta1` |
 | `--components <COMP>` | 要生成的元件（`all` / `rules` / `alertmanager` / `servicemonitor`） | `all` |
@@ -1381,12 +1381,16 @@ da-tools operator-generate [options]
 | `--gitops` | GitOps 模式（sorted keys、無 timestamps） | false |
 | `--dry-run` | 列印輸出而不寫入檔案 | false |
 | `--json` | 以 JSON 格式輸出結果報告 | false |
+| `--kustomize` | 一併產生 `kustomization.yaml`。⚠️ 沒有 `--output-dir` 時它會**混進 stdout 串流**，而 `Kustomization` 不能被 `kubectl apply -f -` 接受 | false |
 
 **範例**
 
 ```bash
-# 基本：產出所有 CRD 到目錄
-da-tools operator-generate --rule-packs-dir rule-packs/ --config-dir conf.d/
+# 基本：CRD 走 stdout（不寫檔），可直接 apply
+da-tools operator-generate --rule-packs-dir rule-packs/ --config-dir conf.d/ | kubectl apply -f -
+
+# 要寫成檔案就明確指定目錄（#1582：寫入是 opt-in）
+da-tools operator-generate --rule-packs-dir rule-packs/ --config-dir conf.d/ --output-dir ./operator-crds
 
 # GitOps 模式 + Slack receiver
 da-tools operator-generate \
@@ -1431,7 +1435,7 @@ da-tools migrate-to-operator [options]
 |------|------|--------|
 | `--source-dir <DIR>` | ConfigMap YAML 檔案所在目錄 | （必填） |
 | `--config-dir <DIR>` | 租戶配置目錄 | `conf.d` |
-| `--output-dir <DIR>` | 輸出目錄 | `migration-output` |
+| `--output-dir <DIR>` | 把 CRD 與 checklist 寫進這個目錄。⚠️ **寫檔要同時滿足：給了本旗標 _且_ 沒帶 `--dry-run` _且_ 沒帶 `--checklist-only`**（與下面 `--json` 信封同一組判別條件）；任一不成立就改印到 **stdout**、一個檔也不寫 | 無 |
 | `--namespace <NS>` | 目標 K8s namespace | `monitoring` |
 | `--receiver-template <TYPE>` | Receiver 類型（`slack` / `pagerduty` / `email` / `teams` / `opsgenie` / `webhook`） | — |
 | `--secret-name <NAME>` | K8s Secret 名稱 | — |
@@ -1440,11 +1444,21 @@ da-tools migrate-to-operator [options]
 | `--checklist-only` | 僅產出遷移清單 | false |
 | `--json` | JSON 輸出模式 | false |
 
+> ⚠️ **`--json` 的 top-level 結構有三種，判別順序如下**（#1582，8 組合逐一實測）：
+> 1. `--checklist-only` —— **壓過其他所有旗標**（含 `--dry-run` 與 `--output-dir`）⇒ **checklist 信封**（多 `checklist` / `status` 兩鍵，`prometheus_rules` 是**計數**）；
+> 2. 否則 `--dry-run` **或**沒給 `--output-dir` ⇒ **預覽信封**（`metadata` / `errors`，`prometheus_rules` 是 **CRD 清單**）；
+> 3. 否則（有 `--output-dir`、無 `--dry-run`、無 `--checklist-only`）⇒ **寫入報告**（`configmap_files` / `rule_groups` / `tenants` / `total_crds`，`prometheus_rules` 是**計數**）。
+>
+> ⛔ 三者鍵名重疊而型別不同。消費端要按上面的順序判，**不能只看 `--output-dir`**——`--output-dir DIR --dry-run` 給的是預覽信封，不是報告。
+
 **範例**
 
 ```bash
-# 基本遷移
+# 基本：checklist 與 CRD 走 stdout（不寫檔）
 da-tools migrate-to-operator --source-dir configmaps/
+
+# 要寫成檔案就明確指定目錄（#1582：寫入是 opt-in）
+da-tools migrate-to-operator --source-dir configmaps/ --output-dir ./migration-output
 
 # 預覽遷移計畫
 da-tools migrate-to-operator --source-dir configmaps/ --dry-run
