@@ -158,6 +158,21 @@ REPO_ANCHORED_OUTPUT: dict[str, str] = {
     "compile_custom_alerts.py": "--out",
 }
 
+# Tools that need a SECOND directory argument before argparse will let them
+# run at all. ⛔ An EMPTY directory is the right value: the question this file
+# asks lives entirely on `--config-dir`, so anything in the second tree would
+# add a variable rather than remove a barrier.
+#
+# ⚠️ #1604: `migrate_to_operator.py` sat in `KNOWN_UNMEASURABLE` for
+# "argparse: required argument" — and that reason was TRUE but not a reason to
+# stop. The table's own header says to read it as questions to re-ask; nobody
+# re-asked, and a real divergence (its `discover_tenant_configs` was a drifted
+# twin of `operator_generate`'s) sat behind the unmeasured label for months.
+# Measured: with `--source-dir <empty dir>` it runs, rc=0, and reports tenants.
+SANDBOX_DIR_ARGS: dict[str, str] = {
+    "migrate_to_operator.py": "--source-dir",
+}
+
 # The fixture names, mapped to NEUTRAL sentinels rather than to each
 # other's lower-case spelling.
 #
@@ -236,6 +251,10 @@ def _run(tool: pathlib.Path, flag: str, config_dir: pathlib.Path,
     if tool.name in REPO_ANCHORED_OUTPUT:
         args += [REPO_ANCHORED_OUTPUT[tool.name], str(sandbox / "out.yaml")]
     sandbox.mkdir(parents=True, exist_ok=True)
+    if tool.name in SANDBOX_DIR_ARGS:
+        empty = sandbox / "empty_second_tree"
+        empty.mkdir(parents=True, exist_ok=True)
+        args += [SANDBOX_DIR_ARGS[tool.name], str(empty)]
     try:
         r = subprocess.run(args, capture_output=True, timeout=120,
                            cwd=str(sandbox),
@@ -529,7 +548,17 @@ KNOWN_UNMEASURABLE: dict[str, str] = {
     # Requires arguments this file deliberately does not fabricate,
     # because inventing them would exercise a different code path than
     # the one an operator runs.
-    "migrate_to_operator.py": "argparse: required argument",
+    #
+    # ⛔ `migrate_to_operator.py` LEFT this set in #1604 — see
+    # `SANDBOX_DIR_ARGS`. It is named here only so the next reader does not
+    # re-add it: an empty second tree removes the barrier without changing
+    # the code path `--config-dir` drives.
+    #
+    # ⚠️ `run_chaos_soak.py` stays, and its recorded reason is INCOMPLETE
+    # rather than wrong: measured, `--target-url` and `--output-dir` are also
+    # required, and `--target-url` wants a live endpoint. Fabricating the two
+    # directories would move it from "argparse" to "external precondition",
+    # not to "measured".
     "run_chaos_soak.py": "argparse: required argument",
 }
 

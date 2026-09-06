@@ -39,11 +39,8 @@ from _lib_io import load_yaml_file  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_yaml import _dict_to_yaml, write_yaml_crd  # noqa: E402
 from _lib_confd import (  # noqa: E402
-    has_yaml_extension,
-    is_reserved_name,
-    unusable_config_entries,
+    tenant_carriers,
     unusable_reason,
-    warn_nested,
 )
 
 # ---------------------------------------------------------------------------
@@ -519,10 +516,15 @@ def discover_tenant_configs(config_dir: Path) -> List[str]:
             )
         )
 
-    tenants = []
-    # #1339: flat by design here — but a hierarchical conf.d must not
-    # look like an empty one. Name the files this scan cannot see.
-    warn_nested(config_dir, tool="operator_generate")
+    # ⛔ The scan itself lives in `_lib_confd.tenant_carriers` since #1604:
+    # `migrate_to_operator` had a verbatim twin of the loop that used to be
+    # here, #1603/#1607 fixed only this copy, and the pair then answered
+    # differently on three axes at once. Everything below is just this tool's
+    # SINK for what that one scan found — stderr — which is the only part the
+    # two readers legitimately differ on.
+    carriers = tenant_carriers(
+        config_dir, tool="operator_generate", validate=validate_tenant_name,
+    )
     # ⚠️ `is_file()` is a THIRD axis, beyond the extension axis this change
     # is about and the recursion axis it deliberately leaves alone. The old
     # `glob("*.yaml")` yielded a DIRECTORY named `notes.yaml/` (an
@@ -556,11 +558,7 @@ def discover_tenant_configs(config_dir: Path) -> List[str]:
     # rc=0 in every row, and in the `.yml` row the string `db-a` appears in
     # NEITHER stdout NOR stderr: the tenant the exporter is serving simply
     # has no AlertmanagerConfig on the apply plane, and nothing says so.
-    # Omitting the argument takes `CONFIG_SUFFIXES`, the exporter's own set.
-    entries = sorted(config_dir.iterdir())
-    for bad in unusable_config_entries(
-        [p for p in entries if not is_reserved_name(p.name)],
-    ):
+    for bad in carriers.unusable:
         print(
             i18n_text(
                 f"WARNING: 略過 '{safe_label(bad.name)}'——{unusable_reason(bad)}",
@@ -569,24 +567,16 @@ def discover_tenant_configs(config_dir: Path) -> List[str]:
             ),
             file=sys.stderr,
         )
-    for yaml_file in (
-        p for p in entries
-        if p.is_file() and has_yaml_extension(p.name)   # both spellings (#1603)
-    ):
-        if not yaml_file.name.startswith("_"):
-            tenant = yaml_file.stem
-            if validate_tenant_name(tenant):
-                tenants.append(tenant)
-            else:
-                print(
-                    i18n_text(
-                        f"WARNING: 略過無效的租戶名稱 '{safe_label(tenant)}'（不符合 RFC 1123）",
-                        f"WARNING: Skipping invalid tenant name '{safe_label(tenant)}' "
-                        f"(not RFC 1123 compliant)",
-                    ),
-                    file=sys.stderr,
-                )
-    return sorted(tenants)
+    for tenant in carriers.invalid:
+        print(
+            i18n_text(
+                f"WARNING: 略過無效的租戶名稱 '{safe_label(tenant)}'（不符合 RFC 1123）",
+                f"WARNING: Skipping invalid tenant name '{safe_label(tenant)}' "
+                f"(not RFC 1123 compliant)",
+            ),
+            file=sys.stderr,
+        )
+    return carriers.tenants
 
 
 # ---------------------------------------------------------------------------
