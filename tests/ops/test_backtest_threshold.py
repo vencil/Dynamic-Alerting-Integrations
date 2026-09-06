@@ -29,11 +29,128 @@ class TestParseLookback:
         ("7d", 7 * 86400),
         ("24h", 24 * 3600),
         ("30m", 30 * 60),
-        ("invalid", 7 * 86400),
-    ], ids=["days", "hours", "minutes", "invalid-fallback"])
+    ], ids=["days", "hours", "minutes"])
     def test_parse_lookback(self, lookback_str, expected):
         """各種 lookback 字串正確解析為秒數。"""
         assert bt.parse_lookback(lookback_str) == expected
+
+    @pytest.mark.parametrize("lookback_str", ["invalid", "7", "", "banana"],
+                             ids=["word", "bare-number", "empty", "banana"])
+    def test_parse_lookback_unusable_raises(self, lookback_str):
+        """#1625: 不符合 `<數字><d|h|m>` 的值 → ValueError，不再靜默回退 7d。
+
+        ⛔ 這條原本是 parametrize 裡的 `("invalid", 7 * 86400)`（id
+        `invalid-fallback`），把「打錯的值被當成預設」當成契約在守。裸數字
+        `7` 是舊文件教的寫法——最需要被抓的一種。
+        """
+        with pytest.raises(ValueError) as exc:
+            bt.parse_lookback(lookback_str)
+        assert repr(lookback_str) in str(exc.value)
+        assert "<number><d|h|m>" in str(exc.value)
+
+
+class TestGitDiffPrecondition:
+    """#1556 item 4 (D-06): `--git-diff` 供了但 git 不可用 → exit 2，不是「沒變更」。
+
+    da-tools 映像檔沒裝 git、WORKDIR 也不是 repo，所以 `--git-diff` 在那裡永遠
+    像「你的 PR 沒改東西」。這裡把 `_git_bytes` 換成 None 來重現；control
+    列用 b""（git 正常、diff 空）證明原本的 "No threshold changes found." 路徑
+    還在。
+    """
+
+    def _argv(self, cli_argv, *extra):
+        cli_argv("backtest_threshold", "--git-diff",
+                 "--prometheus", "http://prom:9090", *extra)
+
+    def test_git_unusable_exits_caller_error(self, monkeypatch, capsys, cli_argv):
+        monkeypatch.setattr(bt, "_git_bytes", lambda *a, **k: None)
+        # Prometheus 可達與否都不該影響：這裡故意讓它「不可達」並帶
+        # --skip-if-unavailable，證明 git 前置檢查不被那個旗標跳過。
+        monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: False)
+        self._argv(cli_argv, "--skip-if-unavailable")
+        with pytest.raises(SystemExit) as exc_info:
+            bt.main()
+        assert exc_info.value.code == 2
+        captured = capsys.readouterr()
+        assert "--git-diff" in captured.err
+        assert "could not run" in captured.err
+        assert "Do not switch to --config-dir" in captured.err
+        assert captured.out == ""
+
+    def test_git_unusable_json_envelope(self, monkeypatch, capsys, cli_argv):
+        monkeypatch.setattr(bt, "_git_bytes", lambda *a, **k: None)
+        monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: True)
+        self._argv(cli_argv, "--json")
+        with pytest.raises(SystemExit) as exc_info:
+            bt.main()
+        assert exc_info.value.code == 2
+        captured = capsys.readouterr()
+        doc = json.loads(captured.out)           # 全文 parse ⇒ stdout 恰一份 JSON
+        assert doc["status"] == "caller_error"
+        assert doc["reason"] == "git_diff_unavailable"
+        assert set(doc) == set(bt.generate_report([], doc["lookback"])) | {"status", "reason"}
+        assert "could not run" in captured.err
+
+    def test_empty_diff_is_still_no_changes(self, monkeypatch, capsys, cli_argv):
+        """control：git 正常、diff 空（b""）→ 原本的 "No threshold changes found." exit 0。"""
+        monkeypatch.setattr(bt, "_git_bytes", lambda *a, **k: b"")
+        monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: True)
+        self._argv(cli_argv, "--json")
+        with pytest.raises(SystemExit) as exc_info:
+            bt.main()
+        assert exc_info.value.code == 0
+        captured = capsys.readouterr()
+        assert "No threshold changes found." in captured.err
+        doc = json.loads(captured.out)
+        assert doc["status"] == "no_changes"
+
+
+class TestLookbackCli:
+    """#1625: `--lookback` 供了但不可用 → argparse 出口 exit 2 並指名格式。
+
+    負向列只證明「壞值被擋」；兩條 control 列證明「好值與省略仍可用」——
+    一個把所有 `--lookback` 都拒絕的修法，光靠負向列也會全綠。
+    """
+
+    def _skip_argv(self, cli_argv, *extra):
+        cli_argv("backtest_threshold",
+                 "--tenant", "tenant-one", "--metric", "max_connections",
+                 "--old-value", "100", "--new-value", "150",
+                 "--prometheus", "http://prom:9090",
+                 "--skip-if-unavailable", "--json", *extra)
+
+    @pytest.mark.parametrize("bad", ["banana", "7", ""],
+                             ids=["banana", "bare-number", "empty"])
+    def test_unusable_lookback_exits_caller_error(self, monkeypatch, capsys,
+                                                  cli_argv, bad):
+        monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: False)
+        self._skip_argv(cli_argv, "--lookback", bad)
+        with pytest.raises(SystemExit) as exc_info:
+            bt.main()
+        assert exc_info.value.code == 2
+        err = capsys.readouterr().err
+        assert "<number><d|h|m>" in err
+        assert repr(bad) in err                  # `!r` ⇒ '' 看得見
+
+    def test_valid_lookback_accepted(self, monkeypatch, capsys, cli_argv):
+        """control：`--lookback 30d` 照常接受並被回音。"""
+        monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: False)
+        self._skip_argv(cli_argv, "--lookback", "30d")
+        with pytest.raises(SystemExit) as exc_info:
+            bt.main()
+        assert exc_info.value.code == 0
+        doc = json.loads(capsys.readouterr().out)
+        assert doc["lookback"] == "30d"
+
+    def test_omitted_lookback_uses_default(self, monkeypatch, capsys, cli_argv):
+        """control：省略 `--lookback` → 預設 `7d`（argparse 對字串預設也跑 type）。"""
+        monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: False)
+        self._skip_argv(cli_argv)
+        with pytest.raises(SystemExit) as exc_info:
+            bt.main()
+        assert exc_info.value.code == 0
+        doc = json.loads(capsys.readouterr().out)
+        assert doc["lookback"] == "7d"
 
 
 class TestCountThresholdBreaches:
@@ -354,21 +471,30 @@ class TestExtractChangesFromGitDiff:
         changes = bt.extract_changes_from_git_diff()
         assert len(changes) == 0
 
-    def test_git_failure_returns_empty(self, monkeypatch):
-        """git 命令失敗回傳空清單。"""
+    def test_git_failure_returns_none(self, monkeypatch):
+        """git 命令失敗回傳 None（#1556 item 4：不再與「空 diff」同值）。
+
+        ⛔ 原名 `test_git_failure_returns_empty`、斷言 `== []`——把「git 跑不了」
+        和「PR 沒改東西」釘成同一個值，正是 main() 靜默 rc 0 的根源。
+        """
         def mock_run(*args, **kwargs):
             return type("R", (), {"returncode": 1, "stdout": ""})()
         monkeypatch.setattr(subprocess, "run", mock_run)
-        changes = bt.extract_changes_from_git_diff()
-        assert changes == []
+        assert bt.extract_changes_from_git_diff() is None
 
-    def test_git_timeout_returns_empty(self, monkeypatch):
-        """git 命令逾時回傳空清單。"""
+    def test_git_timeout_returns_none(self, monkeypatch):
+        """git 命令逾時回傳 None。"""
         def mock_run(*args, **kwargs):
             raise subprocess.TimeoutExpired(cmd="git", timeout=15)
         monkeypatch.setattr(subprocess, "run", mock_run)
-        changes = bt.extract_changes_from_git_diff()
-        assert changes == []
+        assert bt.extract_changes_from_git_diff() is None
+
+    def test_git_bytes_none_vs_empty(self, monkeypatch):
+        """直接分辨兩個值：_git_bytes → None ⇒ None；→ b"" ⇒ []（git 正常、diff 空）。"""
+        monkeypatch.setattr(bt, "_git_bytes", lambda *a, **k: None)
+        assert bt.extract_changes_from_git_diff() is None
+        monkeypatch.setattr(bt, "_git_bytes", lambda *a, **k: b"")
+        assert bt.extract_changes_from_git_diff() == []
 
     def test_new_key_only(self, monkeypatch):
         """只有新增 key（無對應 old）。"""

@@ -17,6 +17,7 @@
 
 import itertools
 import os
+import sys
 import tempfile
 
 import pytest
@@ -338,6 +339,132 @@ def test_load_policy_unreadable_policy_is_caller_error():
     with pytest.raises(SystemExit) as exc:
         lint_custom_rules.load_policy("/nonexistent/policy.yaml")
     assert exc.value.code == 2
+
+
+# ── #1618: scan targets that do not exist / files that cannot be decoded ──
+
+_HOLT_RULE = (
+    "groups:\n"
+    "- name: g\n"
+    "  rules:\n"
+    "  - alert: Bad\n"
+    "    expr: holt_winters(my_metric[1h], 0.3, 0.7) > 1\n"
+    "    labels:\n"
+    "      severity: critical\n"
+)
+
+
+@pytest.mark.parametrize("extra", [[], ["--ci"]], ids=["plain", "ci"])
+def test_main_missing_target_is_caller_error(tmp_path, monkeypatch, capsys, extra):
+    """不存在的掃描目標 → exit 2 並指名路徑；有無 --ci 答案相同。
+
+    ⛔ 之前 collect_files 直接略過它，`lint /typo --ci` 印 "No YAML files
+    found." 然後 exit 0——一個沒人掃過的路徑通過了治理閘門。
+    """
+    missing = tmp_path / "missing"
+    monkeypatch.setattr(sys, "argv", ["lint_custom_rules", str(missing), *extra])
+    with pytest.raises(SystemExit) as exc:
+        lint_custom_rules.main()
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert str(missing) in err
+    assert "Do not drop the path" in err
+
+
+def test_main_missing_target_names_only_the_missing_one(tmp_path, monkeypatch, capsys):
+    """`lint <真目錄> <不存在>` → 2，訊息只指名不存在的那個。"""
+    real = tmp_path / "real"
+    real.mkdir()
+    missing = tmp_path / "missing"
+    monkeypatch.setattr(sys, "argv", ["lint_custom_rules", str(real), str(missing)])
+    with pytest.raises(SystemExit) as exc:
+        lint_custom_rules.main()
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert repr(str(missing)) in err
+    assert repr(str(real)) not in err
+
+
+@pytest.mark.parametrize("extra", [[], ["--ci"]], ids=["plain", "ci"])
+def test_main_empty_string_target_is_caller_error(tmp_path, monkeypatch, capsys, extra):
+    """`lint ''` → exit 2 and the message shows the empty string as ''.
+
+    Blind-review follow-up to #1618. `Path('')` is `PosixPath('.')`, so
+    `exists()` is True and the missing-target guard let it through: measured
+    on HEAD (820c7785) from a directory holding rule files, `lint ''` scanned
+    the CURRENT DIRECTORY and exited 0 — an unset shell variable turned into
+    "lint whatever is here".
+    """
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "rules.yaml").write_text(_HOLT_RULE, encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["lint_custom_rules", "", *extra])
+    with pytest.raises(SystemExit) as exc:
+        lint_custom_rules.main()
+    assert exc.value.code == 2
+    captured = capsys.readouterr()
+    assert "''" in captured.err
+    assert "Do not drop the path" in captured.err
+    assert "Scanned" not in captured.out      # nothing in cwd was linted
+
+
+def test_main_empty_string_alongside_real_dir_names_only_the_empty_one(
+        tmp_path, monkeypatch, capsys):
+    """`lint <real dir> ''` → 2, message names '' and not the real dir."""
+    real = tmp_path / "real"
+    real.mkdir()
+    monkeypatch.setattr(sys, "argv", ["lint_custom_rules", str(real), ""])
+    with pytest.raises(SystemExit) as exc:
+        lint_custom_rules.main()
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert "''" in err
+    assert repr(str(real)) not in err
+
+
+def test_main_existing_empty_dir_is_ok(tmp_path, monkeypatch, capsys):
+    """control：存在但沒有 YAML 的目錄 → exit 0，"No YAML files found" 並指名目標。"""
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    monkeypatch.setattr(sys, "argv", ["lint_custom_rules", str(empty), "--ci"])
+    with pytest.raises(SystemExit) as exc:
+        lint_custom_rules.main()
+    assert exc.value.code == 0
+    out = capsys.readouterr().out
+    assert "No YAML files found" in out
+    assert str(empty) in out
+
+
+_CP950_BYTES = b"groups:\n  - name: \xa4\xa4\n"   # cp950「中」— invalid UTF-8
+
+
+def test_lint_file_non_utf8_is_one_error_result(tmp_path):
+    """非 UTF-8 檔案 → 一筆 ERROR "cannot read file"，不 raise。
+
+    ⛔ UnicodeDecodeError 是 ValueError、不是 OSError；原本的 `except OSError`
+    看不到它，整個 run 以 traceback 收場、stdout 0 bytes。
+    """
+    bad = tmp_path / "aa_bad.yaml"
+    bad.write_bytes(_CP950_BYTES)
+    results, count = lint_custom_rules.lint_file(str(bad), lint_custom_rules.DEFAULT_POLICY)
+    assert count == 0
+    assert len(results) == 1
+    assert results[0].severity == "ERROR"
+    assert "cannot read file" in results[0].message
+
+
+def test_main_non_utf8_file_is_quarantined_per_file(tmp_path, monkeypatch, capsys):
+    """--ci 下：壞檔一筆 ERROR，其他檔案的 finding 照印，整體 exit 1。"""
+    (tmp_path / "aa_bad.yaml").write_bytes(_CP950_BYTES)
+    (tmp_path / "zz_ok.yaml").write_text(_HOLT_RULE, encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["lint_custom_rules", str(tmp_path), "--ci"])
+    with pytest.raises(SystemExit) as exc:
+        lint_custom_rules.main()
+    assert exc.value.code == 1
+    out = capsys.readouterr().out
+    assert "cannot read file" in out
+    assert "aa_bad.yaml" in out
+    assert "zz_ok.yaml" in out
+    assert "holt_winters" in out
 
 
 def test_group_interval_exceeds_max():

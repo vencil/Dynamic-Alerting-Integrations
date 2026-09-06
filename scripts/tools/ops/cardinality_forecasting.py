@@ -223,7 +223,14 @@ def query_cardinality_range(
     Returns:
         {tenant: [(timestamp, cardinality), ...]}。
     """
-    lookback_secs = parse_duration_seconds(lookback) or 30 * SECONDS_PER_DAY
+    lookback_secs = parse_duration_seconds(lookback)
+    if lookback_secs is None:
+        # ⛔ #1625 class (D-06): a lookback this function cannot parse used to
+        # be `or 30 * SECONDS_PER_DAY` — silently replaced by the default.
+        # Library level: fail loud, never substitute.
+        raise ValueError(
+            f"invalid lookback {lookback!r}: expected a duration such as "
+            "5m / 4h / 30d")
     end = time.time()
     start = end - lookback_secs
 
@@ -514,6 +521,25 @@ def generate_markdown(report: ForecastReport) -> str:
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
+def duration_arg(value: str) -> str:
+    """argparse ``type`` for ``--lookback``: validate, return the ORIGINAL string.
+
+    ⛔ #1625 class (agent-rulebook D-06): ``main()`` used to do
+    ``parse_duration_seconds(args.lookback) or 30 * SECONDS_PER_DAY``, so a
+    supplied-but-unusable ``--lookback`` (``banana``, ``''``, ``0s``) was
+    silently replaced by the default and the run exited 0. A value that is
+    supplied but unusable is a caller error (exit 2) that names the value
+    and the accepted shape. The string is kept as-is because the report
+    path recomputes seconds from it.
+    """
+    secs = parse_duration_seconds(value)
+    if secs is None or secs <= 0:
+        raise argparse.ArgumentTypeError(
+            f"invalid --lookback {value!r}: expected a positive duration "
+            "such as 5m / 4h / 30d")
+    return value
+
+
 def build_parser(lang: str = "en") -> argparse.ArgumentParser:
     """建構 CLI 解析器。"""
     if lang == "zh":
@@ -522,8 +548,9 @@ def build_parser(lang: str = "en") -> argparse.ArgumentParser:
         )
         parser.add_argument("--prometheus", required=True,
                             help="Prometheus 端點 URL")
-        parser.add_argument("--lookback", default=DEFAULT_LOOKBACK,
-                            help=f"回看時間範圍（預設: {DEFAULT_LOOKBACK}）")
+        parser.add_argument("--lookback", default=DEFAULT_LOOKBACK, type=duration_arg,
+                            help=f"回看時間範圍，如 5m / 4h / 30d（預設: {DEFAULT_LOOKBACK}）；"
+                                 "不符合格式 ⇒ 結束碼 2")
         parser.add_argument("--limit", type=int, default=DEFAULT_CARDINALITY_LIMIT,
                             help=f"基數上限（預設: {DEFAULT_CARDINALITY_LIMIT}）")
         parser.add_argument("--warn-days", type=int, default=DEFAULT_WARN_DAYS,
@@ -541,8 +568,9 @@ def build_parser(lang: str = "en") -> argparse.ArgumentParser:
         )
         parser.add_argument("--prometheus", required=True,
                             help="Prometheus endpoint URL")
-        parser.add_argument("--lookback", default=DEFAULT_LOOKBACK,
-                            help=f"Lookback period (default: {DEFAULT_LOOKBACK})")
+        parser.add_argument("--lookback", default=DEFAULT_LOOKBACK, type=duration_arg,
+                            help=f"Lookback period such as 5m / 4h / 30d (default: "
+                                 f"{DEFAULT_LOOKBACK}); any other shape exits 2")
         parser.add_argument("--limit", type=int, default=DEFAULT_CARDINALITY_LIMIT,
                             help=f"Cardinality limit (default: {DEFAULT_CARDINALITY_LIMIT})")
         parser.add_argument("--warn-days", type=int, default=DEFAULT_WARN_DAYS,
@@ -565,8 +593,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser = build_parser(lang)
     args = parser.parse_args(argv)
 
-    # Parse lookback
-    lookback_secs = parse_duration_seconds(args.lookback) or 30 * SECONDS_PER_DAY
+    # Parse lookback — already validated by `duration_arg` at the parser, so
+    # no `or <default>` here (#1625: that fallback hid unusable values).
+    lookback_secs = parse_duration_seconds(args.lookback)
     lookback_days = lookback_secs // SECONDS_PER_DAY
 
     # Query Prometheus

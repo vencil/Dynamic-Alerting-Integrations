@@ -224,7 +224,7 @@ da-tools check-alert PostgreSQLHighConnections db-product-01
 
 ```bash
 # 修改前用歷史數據回測影響（比較新舊配置目錄）
-da-tools backtest --config-dir conf.d --baseline conf.d-old --lookback 7
+da-tools backtest --config-dir conf.d --baseline conf.d-old --lookback 7d
 ```
 
 ### 2.3 運營模式管理

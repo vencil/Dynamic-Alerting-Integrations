@@ -724,6 +724,195 @@ class TestCLI:
         assert doc["reason"] == "config_dir_not_found"
         assert doc["passed"] is False
 
+    # ── #1651: --policy supplied but not a file ──────────────────────
+
+    def test_main_policy_empty_string_is_caller_error(self, tmp_path, capsys):
+        """`--policy ''` → 2，stderr 看得見 ''（`!r`）。
+
+        ⛔ 之前 `if args.policy:` 把 '' 送進「省略」分支 → "No policy rules
+        found" + exit 0。'' 是 SUPPLIED（未設定的 shell 變數展開就是它）。
+        """
+        (tmp_path / "db-a.yaml").write_text("mysql_threads_running: '80'\n", encoding="utf-8")
+        exit_code = pe.main(["--config-dir", str(tmp_path), "--policy", ""])
+        assert exit_code == 2
+        err = capsys.readouterr().err
+        assert "''" in err
+        assert "--policy" in err
+
+    def test_main_policy_missing_file_is_caller_error(self, tmp_path, capsys):
+        """`--policy <typo>` → 2 並指名路徑（之前 load_yaml_file → None → [] → 0）。"""
+        (tmp_path / "db-a.yaml").write_text("mysql_threads_running: '80'\n", encoding="utf-8")
+        missing = tmp_path / "nope.yaml"
+        exit_code = pe.main(["--config-dir", str(tmp_path), "--policy", str(missing)])
+        assert exit_code == 2
+        err = capsys.readouterr().err
+        assert str(missing) in err
+        assert "Do not drop the flag" in err or "不要靠拿掉" in err
+
+    def test_main_policy_missing_file_json_envelope(self, tmp_path, capsys):
+        """同上 + --json → stdout 恰一份 JSON，caller_error / policy_file_not_found。"""
+        (tmp_path / "db-a.yaml").write_text("mysql_threads_running: '80'\n", encoding="utf-8")
+        missing = tmp_path / "nope.yaml"
+        exit_code = pe.main(["--config-dir", str(tmp_path),
+                             "--policy", str(missing), "--json"])
+        assert exit_code == 2
+        captured = capsys.readouterr()
+        doc = json.loads(captured.out)
+        assert doc["status"] == "caller_error"
+        assert doc["reason"] == "policy_file_not_found"
+        assert doc["passed"] is False
+        assert doc["violations"] == []
+        assert str(missing) in captured.err
+
+    # ── #1651 blind-review follow-up: --policy IS a file but cannot be read ──
+    # Measured on HEAD before the fix (820c7785): `policies: [` and a cp950
+    # file both escaped `_lib_io.load_yaml_file` as a traceback — rc 1 and
+    # 0 bytes of stdout under --json; a top-level list / scalar returned rc 0
+    # with "No policy rules found" because `"policies" in "a str"` is a
+    # substring test.
+
+    @staticmethod
+    def _tenant_dir(tmp_path):
+        cfg = tmp_path / "cfg"
+        cfg.mkdir()
+        (cfg / "db-a.yaml").write_text("mysql_threads_running: '80'\n", encoding="utf-8")
+        return cfg
+
+    def test_main_policy_invalid_yaml_is_caller_error(self, tmp_path, capsys):
+        """`--policy <file with 'policies: ['>` → 2 naming the path and "not valid YAML".
+
+        Before the fix: yaml.parser.ParserError traceback, rc 1.
+        """
+        cfg = self._tenant_dir(tmp_path)
+        pol = tmp_path / "broken.yaml"
+        pol.write_text("policies: [\n", encoding="utf-8")
+        exit_code = pe.main(["--config-dir", str(cfg), "--policy", str(pol)])
+        assert exit_code == 2
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert str(pol) in captured.err
+        assert "not valid YAML" in captured.err or "不是有效的 YAML" in captured.err
+        assert "Traceback" not in captured.err
+
+    def test_main_policy_non_utf8_is_caller_error(self, tmp_path, capsys):
+        """`--policy <cp950 bytes>` → 2 naming the path and "not valid UTF-8".
+
+        Before the fix: UnicodeDecodeError traceback, rc 1 (it is a ValueError,
+        so an `except OSError` would not have caught it either).
+        """
+        cfg = self._tenant_dir(tmp_path)
+        pol = tmp_path / "cp950.yaml"
+        pol.write_bytes("測試: 1\n".encode("cp950"))
+        exit_code = pe.main(["--config-dir", str(cfg), "--policy", str(pol)])
+        assert exit_code == 2
+        captured = capsys.readouterr()
+        assert str(pol) in captured.err
+        assert "not valid UTF-8" in captured.err or "不是有效的 UTF-8" in captured.err
+        assert "Traceback" not in captured.err
+
+    @pytest.mark.parametrize("body, kind", [
+        ("- a\n- b\n", "list"),
+        ("just a string\n", "str"),
+    ], ids=["top-level-list", "top-level-scalar"])
+    def test_main_policy_top_level_not_mapping_is_caller_error(
+            self, tmp_path, capsys, body, kind):
+        """A top-level list / scalar → 2 naming the path and the actual type.
+
+        Before the fix: rc 0 "No policy rules found" — for a str,
+        `"policies" in data` was a substring test that happened to be False.
+        """
+        cfg = self._tenant_dir(tmp_path)
+        pol = tmp_path / "shape.yaml"
+        pol.write_text(body, encoding="utf-8")
+        exit_code = pe.main(["--config-dir", str(cfg), "--policy", str(pol)])
+        assert exit_code == 2
+        err = capsys.readouterr().err
+        assert str(pol) in err
+        assert kind in err
+        assert "mapping" in err
+        assert "No policy rules found" not in err
+        assert "未找到策略規則" not in err
+
+    @pytest.mark.parametrize("body, reason", [
+        ("policies: [\n", "policy_file_invalid"),
+        ("測試: 1\n".encode("cp950"), "policy_file_invalid"),
+        ("- a\n", "policy_file_invalid"),
+    ], ids=["invalid-yaml", "cp950", "top-level-list"])
+    def test_main_policy_unusable_file_json_envelope(self, tmp_path, capsys, body, reason):
+        """Same three shapes + --json → stdout is exactly one JSON document
+        carrying status caller_error and the reason; prose stays on stderr.
+
+        Before the fix: 0 bytes of stdout (traceback) for the first two, and
+        a `no_policies` / passed:true envelope with rc 0 for the list.
+        """
+        cfg = self._tenant_dir(tmp_path)
+        pol = tmp_path / "shape.yaml"
+        if isinstance(body, bytes):
+            pol.write_bytes(body)
+        else:
+            pol.write_text(body, encoding="utf-8")
+        exit_code = pe.main(["--config-dir", str(cfg), "--policy", str(pol), "--json"])
+        assert exit_code == 2
+        captured = capsys.readouterr()
+        doc = json.loads(captured.out)          # exactly one document
+        assert doc["status"] == "caller_error"
+        assert doc["reason"] == reason
+        assert doc["passed"] is False
+        assert doc["violations"] == []
+        assert str(pol) in captured.err
+
+    def test_main_policy_valid_file_still_evaluates(self, tmp_path, capsys):
+        """control: a valid mapping with `policies:` still loads and evaluates
+        — the guard lets it through and the one rule is applied (rc 0).
+        """
+        cfg = self._tenant_dir(tmp_path)
+        pol = tmp_path / "good.yaml"
+        pol.write_text(
+            "policies:\n"
+            "  - name: threads-exists\n"
+            "    target: mysql_threads_running\n"
+            "    operator: required\n",
+            encoding="utf-8")
+        exit_code = pe.main(["--config-dir", str(cfg), "--policy", str(pol), "--json"])
+        assert exit_code == 0
+        doc = json.loads(capsys.readouterr().out)
+        assert doc["rules_evaluated"] == 1
+        assert doc["tenants_evaluated"] == 1
+        assert doc["passed"] is True
+        assert doc.get("status") != "caller_error"
+
+    def test_main_policy_empty_file_is_still_no_rules(self, tmp_path, capsys):
+        """control: an EMPTY policy file parses to None and stays the #1649
+        "no rules" content axis (rc 0), not a caller error."""
+        cfg = self._tenant_dir(tmp_path)
+        pol = tmp_path / "empty.yaml"
+        pol.write_text("", encoding="utf-8")
+        exit_code = pe.main(["--config-dir", str(cfg), "--policy", str(pol)])
+        assert exit_code == 0
+        err = capsys.readouterr().err
+        assert "No policy rules found" in err or "未找到策略規則" in err
+
+    def test_main_policy_omitted_says_specify_policy(self, tmp_path, capsys):
+        """control：省略 --policy、目錄存在但無 _defaults.yaml → 0，訊息建議 --policy。"""
+        (tmp_path / "db-a.yaml").write_text("mysql_threads_running: '80'\n", encoding="utf-8")
+        exit_code = pe.main(["--config-dir", str(tmp_path)])
+        assert exit_code == 0
+        err = capsys.readouterr().err
+        assert "specify --policy" in err or "指定 --policy" in err
+
+    def test_main_policy_file_without_rules_names_it(self, tmp_path, capsys):
+        """control：--policy 存在但沒有 policies: → 仍 0（#1649），但訊息不再叫人「指定 --policy」。"""
+        (tmp_path / "db-a.yaml").write_text("mysql_threads_running: '80'\n", encoding="utf-8")
+        pol = tmp_path / "empty-policy.yaml"
+        pol.write_text("something_else: 1\n", encoding="utf-8")
+        exit_code = pe.main(["--config-dir", str(tmp_path), "--policy", str(pol)])
+        assert exit_code == 0
+        err = capsys.readouterr().err
+        assert "No policy rules found" in err or "未找到策略規則" in err
+        assert "specify --policy" not in err
+        assert "指定 --policy" not in err
+        assert str(pol) in err
+
     def test_main_no_policies_json_envelope(self, tmp_path, capsys):
         """#1112: 無策略規則 + --json → stdout 仍是恰好一份 JSON（report schema 歸零）。"""
         (tmp_path / "db-a.yaml").write_text("mysql_threads_running: '80'\n", encoding="utf-8")

@@ -223,7 +223,7 @@ da-tools check-alert PostgreSQLHighConnections db-product-01
 
 ```bash
 # Before modifying, backtest impact using historical data (compare new vs old config)
-da-tools backtest --config-dir conf.d --baseline conf.d-old --lookback 7
+da-tools backtest --config-dir conf.d --baseline conf.d-old --lookback 7d
 ```
 
 ### 2.3 Operational Mode Management
