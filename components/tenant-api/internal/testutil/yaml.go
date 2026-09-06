@@ -70,3 +70,35 @@ func WriteFile(t testing.TB, path, content string) string {
 	}
 	return path
 }
+
+// RepoRoot walks up from the test's working directory to the git checkout root.
+//
+// ⛔ IT LIVES HERE BECAUSE TWO PACKAGES HAD A LINE-FOR-LINE COPY. Guard tests in
+// gitops and handler each need to address the repo (walking it for real tenant
+// configs, reading helm values and the README), and duplicated predicates drift —
+// which is the failure these guards exist to prevent.
+//
+// ⛔ IT FAILS RATHER THAN SKIPS when the root cannot be found. A guard that
+// quietly turns into a no-op the moment its input moves is not a guard; that
+// exact shape (skip on missing input → green) has been the defect in three
+// separate versions of these tests.
+func RepoRoot(t testing.TB) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("cannot determine working directory: %v", err)
+	}
+	for i := 0; i < 12; i++ {
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	t.Fatal("no .git found walking up from the working directory — these guards " +
+		"address the repository and cannot verify anything without it")
+	return ""
+}

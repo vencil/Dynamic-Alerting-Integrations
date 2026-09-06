@@ -117,6 +117,30 @@ jobs:
               - "tests/rulepacks/**"
               - "tests/dx/fixtures/**"
               - "rule-packs/**"
+              #   - **/conf.d/** and components/da-tools/** — the tenant-config
+              #     guards in internal/gitops (TestRealTenantFilesAreNowhereNearTheCap,
+              #     TestCapClearsTheRecipeCeiling) walk the repo for real tenant
+              #     configs; all 20 of them today live under a conf.d/ directory.
+              #     Counted, not assumed: exactly ONE of the 20 falls outside
+              #     every other entry —
+              #     components/da-tools/app/examples/cardinality-demo/conf.d/over-budget-tenant.yaml
+              #     — and components/da-tools/** alone covers it, so **/conf.d/** buys
+              #     no coverage today and is here for the next such file, which is
+              #     far likelier to land under a conf.d/ than under da-tools.
+              #     Without them the Go leg skips on a PR that only grows that
+              #     file, so the guard never runs (#1722).
+              #     ⛔ NOT GUARDED BY A TEST, deliberately. A test asserting that
+              #     this filter covers what the walk reads was written and then
+              #     REMOVED: it guarded another guard rather than a defect, and
+              #     its own matcher/parser produced three findings in two review
+              #     rounds (a false pass on `!` exclusions, a silent skip on a
+              #     trailing comment, a false alarm on single quotes) — the
+              #     hardening had become the defect source (agent-rulebook D-01).
+              #     The residual cost, stated rather than guarded: add a tenant
+              #     config outside conf.d/ and these entries stop covering it,
+              #     with no red test to say so.
+              - "**/conf.d/**"
+              - "components/da-tools/**"
               - "k8s/03-monitoring/**"
               - "try-local/**"
               - "scripts/ops/ci_flake_retry.py"

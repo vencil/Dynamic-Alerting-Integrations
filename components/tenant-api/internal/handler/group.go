@@ -150,7 +150,7 @@ func GetGroup(d *Deps) http.HandlerFunc {
 type PutGroupRequest struct {
 	Label       string            `json:"label" validate:"required,min=1,max=256"`
 	Description string            `json:"description" validate:"max=4096"`
-	Filters     map[string]string `json:"filters"`
+	Filters     map[string]string `json:"filters" validate:"max=20"`
 	Members     []string          `json:"members" validate:"max=1000,dive,min=1,max=256"`
 }
 

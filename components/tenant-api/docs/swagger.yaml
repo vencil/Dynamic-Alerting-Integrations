@@ -363,7 +363,8 @@ definitions:
       patch:
         additionalProperties:
           type: string
-        description: 'key → value to set (e.g., "_silent_mode": "warning")'
+        description: 'key → value to set (e.g., "_silent_mode": "warning"); at most
+          1000 entries.'
         type: object
       tenant_id:
         maxLength: 256
@@ -578,7 +579,9 @@ definitions:
       patch:
         additionalProperties:
           type: string
-        description: 'key → value (e.g., "_silent_mode": "warning")'
+        description: |-
+          key → value to set on every member (e.g., "_silent_mode": "warning");
+          at most 1000 entries.
         type: object
     type: object
   internal_handler.GroupBatchResponse:
@@ -1476,6 +1479,10 @@ paths:
           description: Not Found
           schema:
             $ref: '#/definitions/ErrorResponse'
+        "413":
+          description: Request Entity Too Large
+          schema:
+            $ref: '#/definitions/ErrorResponse'
       summary: Batch operation on group members
       tags:
       - groups
@@ -1978,6 +1985,10 @@ paths:
             type: object
         "400":
           description: Bad Request
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        "413":
+          description: Request Entity Too Large
           schema:
             $ref: '#/definitions/ErrorResponse'
         "500":

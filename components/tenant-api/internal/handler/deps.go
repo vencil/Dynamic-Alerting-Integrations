@@ -182,6 +182,45 @@ type Deps struct {
 	// Read via d.BackfillTimeout() so a zero value (tests that build Deps
 	// literally) falls back to a safe default.
 	BackfillTimeoutDur time.Duration
+
+	// MaxBatchBodyBytes caps the request body of the BATCH write endpoints,
+	// which are parsed repeatedly inside the single-writer token and so get a
+	// tighter budget than MaxBodyBytes (see DefaultMaxBatchBodyBytes). Wired
+	// from `TA_MAX_BATCH_BODY_BYTES`. Read via d.MaxBatchBody().
+	//
+	// ⛔ Placed AFTER BackfillTimeoutDur, with a blank line above: inserting it
+	// between that field's doc comment and the field itself made godoc attach
+	// the backfill prose to THIS field and leave BackfillTimeoutDur undocumented
+	// — the same defect #1730 had just fixed one commit earlier.
+	MaxBatchBodyBytes int64
+}
+
+// MaxBatchBody returns d.MaxBatchBodyBytes with a fallback to
+// DefaultMaxBatchBodyBytes when unset (zero / negative), so test fixtures
+// that build Deps literally keep working unchanged.
+func (d *Deps) MaxBatchBody() int64 {
+	n, _ := d.BatchBodyLimit()
+	return n
+}
+
+// BatchBodyLimit returns the effective batch-body cap AND the name of the knob
+// that produced it.
+//
+// ⛔ The two can disagree, and the 413 message is what the operator acts on.
+// The global cap still bounds the batch endpoints — an operator lowering
+// TA_MAX_BODY_BYTES to shrink the OOM blast radius would otherwise see the
+// batch endpoints keep buffering up to their own, larger budget — so when the
+// global cap is the binding one, naming TA_MAX_BATCH_BODY_BYTES in the error
+// would send them to a knob that cannot move the limit.
+func (d *Deps) BatchBodyLimit() (limit int64, knob string) {
+	n := d.MaxBatchBodyBytes
+	if n <= 0 {
+		n = DefaultMaxBatchBodyBytes
+	}
+	if g := d.MaxBody(); g < n {
+		return g, "TA_MAX_BODY_BYTES"
+	}
+	return n, "TA_MAX_BATCH_BODY_BYTES"
 }
 
 // MaxBody returns d.MaxBodyBytes with a fallback to

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -18,7 +19,9 @@ import (
 // GroupBatchRequest is the body for POST /api/v1/groups/{id}/batch.
 // Applies a patch to all members of the specified group.
 type GroupBatchRequest struct {
-	Patch map[string]string `json:"patch"` // key → value (e.g., "_silent_mode": "warning")
+	// key → value to set on every member (e.g., "_silent_mode": "warning");
+	// at most 1000 entries.
+	Patch map[string]string `json:"patch" validate:"max=1000"`
 }
 
 // GroupBatchResponse is the response for POST /api/v1/groups/{id}/batch.
@@ -52,6 +55,7 @@ type GroupBatchResponse struct {
 // @Success     200   {object} GroupBatchResponse
 // @Success     202   {object} map[string]interface{}
 // @Failure     400   {object} ErrorResponse
+// @Failure     413   {object} ErrorResponse
 // @Failure     404   {object} ErrorResponse
 // @Router      /api/v1/groups/{id}/batch [post]
 func GroupBatch(d *Deps) http.HandlerFunc {
@@ -75,13 +79,40 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 			return
 		}
 
+		// #1722: same budget, same reason as POST /tenants/batch — and this
+		// endpoint needed it MORE, not less. It reached the identical write
+		// path (executeGroupBatchOps → applyPatch → WriteMerged →
+		// readMergeValidate → validate) with a bare json.NewDecoder and no cap
+		// at all, and it applies ONE patch to EVERY member, so the in-lock cost
+		// is multiplied by the group size rather than paid once.
+		//
+		// ⛔ The read happens before the per-member permission gate, so an
+		// oversize body is materialised for a caller who may hold no write
+		// permission anywhere. That is why the cap sits here, at the read,
+		// rather than after authorization.
+		batchLimit, batchKnob := d.BatchBodyLimit()
+		body, ok := readBodyWithin(w, r, batchLimit, batchKnob)
+		if !ok {
+			return
+		}
 		var req GroupBatchRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := json.NewDecoder(bytes.NewReader(body)).Decode(&req); err != nil {
 			WriteJSONError(w, r, http.StatusBadRequest, "invalid JSON: "+err.Error())
 			return
 		}
 		if len(req.Patch) == 0 {
 			WriteJSONError(w, r, http.StatusBadRequest, "patch must not be empty")
+			return
+		}
+		// #1722: the byte cap above does NOT bound the key count, and this is the
+		// endpoint where that matters most — mergePatchYAML is quadratic in
+		// len(patch), runs inside the single-writer token, and here it runs once
+		// PER MEMBER. A body of ~18k short legal keys sits comfortably inside the
+		// 256 KiB budget. The `max` lives on the struct tag so the bound is one
+		// value, not two; it is enforced HERE because executeGroupBatchOps builds
+		// BatchOperation in Go, which never passes through JSON-decode validation.
+		if violations := ValidateStructTags(&req); len(violations) > 0 {
+			WriteValidationErrors(w, r, violations)
 			return
 		}
 

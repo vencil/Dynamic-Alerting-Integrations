@@ -104,6 +104,52 @@ func SlogRequestLogger(next http.Handler) http.Handler {
 // for atypical payloads override via `TA_MAX_BODY_BYTES`.
 const DefaultMaxBodyBytes int64 = 1 << 20
 
+// DefaultMaxBatchBodyBytes is the request-body cap for the BATCH write endpoints
+// (POST /tenants/batch, POST /groups/{id}/batch), which before #1722 read their
+// body with a bare json.NewDecoder and so had no cap at all — DefaultMaxBodyBytes
+// only ever reached handlers calling readLimitedBody, and there is no body-size
+// middleware.
+//
+// It is tighter than DefaultMaxBodyBytes because the cost profile differs in
+// kind: WritePRBatch takes the single-writer token FIRST and then validates every
+// op TWICE inside it, and GroupBatch applies one patch to EVERY member — so an
+// oversize batch body delays every OTHER tenant's write, not just its sender's.
+//
+// ⛔ NO CAP HERE BOUNDS THE PRODUCT. Cost is (ops) x (per-document parse cost);
+// this bounds the first factor and TA_MAX_TENANT_DOC_BYTES the second, so a
+// request at the 1000-op ceiling with each document just under that cap
+// satisfies both and still occupies the write plane for minutes — tracked
+// separately, and it needs a new policy number rather than a tighter byte cap.
+//
+// The pre-merge bound that byte caps genuinely could not express — patch key
+// count, which mergePatchYAML is quadratic in, inside the lock, before either
+// byte gate — IS closed: BatchOperation.Patch and GroupBatchRequest.Patch both
+// carry `validate:"max=1000"`.
+//
+// ⚠️ No wall-clock figure is quoted here on purpose: it cannot be verified
+// mechanically and rots. Run gitops' BenchmarkValidateAtCap for the per-document
+// half. Sizing against real batches is asserted by
+// TestRealisticBulkBatchFitsTheBudget — including the counter-example: the
+// key-count and per-key length limits still leave a batch whose every field is
+// legal free to exceed this budget and get a 413.
+// Override via `TA_MAX_BATCH_BODY_BYTES`.
+const DefaultMaxBatchBodyBytes int64 = 256 << 10
+
+// MaxBatchBodyBytesFromEnv reads `TA_MAX_BATCH_BODY_BYTES`, mirroring
+// MaxBodyBytesFromEnv exactly (strict full-string parse; "0"/negative/
+// unparseable → default + malformed=true so the caller can WARN at startup).
+func MaxBatchBodyBytesFromEnv(envValue string) (n int64, malformed bool) {
+	v := strings.TrimSpace(envValue)
+	if v == "" {
+		return DefaultMaxBatchBodyBytes, false
+	}
+	parsed, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || parsed <= 0 {
+		return DefaultMaxBatchBodyBytes, true
+	}
+	return parsed, false
+}
+
 // MaxBodyBytesFromEnv reads `TA_MAX_BODY_BYTES` and returns
 // (bytes, malformed). Mirrors RateLimitConfigFromEnv: returns the
 // default fallback on any out-of-range / unparseable input AND

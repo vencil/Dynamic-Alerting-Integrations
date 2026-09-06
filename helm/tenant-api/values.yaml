@@ -125,6 +125,24 @@ tenantApi:
     # headroom. Raise only for atypical payloads — a higher cap
     # widens the OOM blast radius of a single POST.
     maxBodyBytes: 1048576
+    # #1722: the BATCH endpoints get a tighter, SEPARATE budget. Their body is
+    # not merely held in memory — WritePRBatch takes the single-writer token
+    # first and validates every operation twice inside it, and the group-batch
+    # endpoint applies one patch to every member, so an oversize batch delays
+    # every OTHER tenant's write, not just its own sender.
+    # Sizing evidence is asserted by TestRealisticBulkBatchFitsTheBudget rather
+    # than quoted here; no figure in this file is a source of truth.
+    maxBatchBodyBytes: 262144
+    # #1722: pre-parse ceiling on ONE tenant document. yaml.v3 cost grows faster
+    # than size in the number of keys in a single mapping, and this parse happens
+    # while the write lock is held — so the cap bounds cross-tenant write latency
+    # rather than memory. Sizing evidence lives in
+    # TestRealTenantFilesAreNowhereNearTheCap / TestCapClearsTheRecipeCeiling.
+    # ⚠️ It measures the document the write path PARSES: on the merged (batch /
+    # patch) paths that is the whole merged FILE, so a tenant sharing a very
+    # large flat conf.d file can be refused for a small patch — raise this or
+    # split the file.
+    maxTenantDocBytes: 65536
   # #143: SSE (/api/v1/events) per-client liveness. Defaults match the binary
   # built-in (heartbeat 25s / write 10s / max-lifetime disabled), so a default
   # upgrade is a no-op. Read as TA_SSE_* env (malformed → default + WARN).
