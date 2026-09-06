@@ -1,8 +1,30 @@
 version: "2"
 linters:
   default: standard
+  # godoclint: a doc comment must start with the name of the declaration it is
+  # attached to, and a package may carry only one package doc. It catches the
+  # comment that ends up describing the WRONG declaration — a shape gofmt, vet
+  # and the tests are all blind to.
+  #
+  # ⚠️ The start-with-name rule fires only when the declaration HOLDING the
+  # comment is exported, so that half is a first layer, not full coverage (the
+  # gap is tracked in #1736). The package-doc rules fire regardless of export,
+  # and several of the sites fixed here went through that path.
+  #
+  # ⛔ When it flags a `const (...)` / `var (...)` group heading, split the group
+  # into its own block so the heading becomes a block-level doc. Do NOT insert a
+  # blank line: that silences the linter by deleting the text from godoc.
+  #
+  # ⛔ On "package has more than one godoc", do NOT add a `_test.go` exclusion
+  # (this file already has three to copy from). Measured: it hides the file that
+  # actually carries the second package doc and leaves the innocent one red. Put
+  # a blank line above the offending file's `package` clause instead.
+  #
+  # Coverage numbers and the gate's positive controls live in the CHANGELOG
+  # entry and in PR #1743.
   enable:
     - depguard
+    - godoclint
   settings:
     errcheck:
       # CLI/stdout writes are intentional fire-and-forget; checking their error is

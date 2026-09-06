@@ -7,6 +7,7 @@
 // guards against branching a new feature branch from a STALE base. Behavior is
 // unchanged from the original writer.go definitions; ErrForgeDegraded stays
 // declared in writer.go and is visible here as same-package (gitops) state.
+
 package gitops
 
 import (

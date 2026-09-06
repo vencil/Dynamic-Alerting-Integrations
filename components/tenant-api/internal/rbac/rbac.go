@@ -713,7 +713,7 @@ func (m *Manager) Allowed(p *VerifiedPrincipal, tenantID string, want Permission
 	return passSS
 }
 
-// #1597: AllowedInOrg is now scope-aware on BOTH axes. It used to take no
+// AllowedInOrg is now scope-aware on BOTH axes (#1597). It used to take no
 // environment/domain and never read rule.Environments / rule.Domains, so a
 // rule's `environments:` constrained only what a subject could SEE (list plane,
 // ScopeAllowed) and never what it could WRITE — while the 403 told the denied
