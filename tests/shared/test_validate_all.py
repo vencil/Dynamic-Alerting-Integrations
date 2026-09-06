@@ -138,79 +138,146 @@ class TestFormatHelpers:
 # _detect_changed_checks
 # ============================================================
 class TestDetectChangedChecks:
-    """_detect_changed_checks() 檔案變更偵測測試。"""
+    """_detect_changed_checks() 檔案變更偵測測試。
+
+    Since #1704 the function returns a ``SmartSelection`` (checks /
+    unmatched / changed) and no longer decides anything: the "run all"
+    fallback that used to live in its last line is gone, because that
+    fallback is what made an unmatched file and an explicit empty set
+    indistinguishable to the caller.
+    """
 
     def test_docs_change_triggers_doc_checks(self):
         """docs/ 目錄變更觸發文件相關 check。"""
         old = {"docs/guide.md": 1000}
         new = {"docs/guide.md": 2000}
-        affected = _detect_changed_checks(old, new)
-        assert "links" in affected
-        assert "versions" in affected
+        sel = _detect_changed_checks(old, new)
+        assert "links" in sel.checks
+        assert "versions" in sel.checks
 
     def test_rule_packs_change(self):
         """rule-packs/ 目錄變更觸發 rule pack 相關 check。"""
         old = {"rule-packs/mariadb.yaml": 1000}
         new = {"rule-packs/mariadb.yaml": 2000}
-        affected = _detect_changed_checks(old, new)
-        assert "alerts" in affected
-        assert "platform_data" in affected
+        sel = _detect_changed_checks(old, new)
+        assert "alerts" in sel.checks
+        assert "platform_data" in sel.checks
 
     def test_no_change_returns_empty(self):
-        """無檔案變更回傳空 list。"""
+        """無檔案變更：三個欄位皆空，`changed` 為空是 watch 迴圈的 continue 條件。"""
         snap = {"docs/guide.md": 1000}
-        assert _detect_changed_checks(snap, snap) == []
+        assert _detect_changed_checks(snap, snap) == va.SmartSelection([], [], [])
 
     def test_deleted_file_detected(self):
         """刪除的檔案也能偵測。"""
         old = {"docs/old.md": 1000}
         new = {}
-        affected = _detect_changed_checks(old, new)
-        assert len(affected) > 0
+        sel = _detect_changed_checks(old, new)
+        assert sel.changed == ["docs/old.md"]
+        assert len(sel.checks) > 0
 
     def test_new_file_detected(self):
         """新增的檔案也能偵測。"""
         old = {}
         new = {"docs/new.md": 1000}
-        affected = _detect_changed_checks(old, new)
-        assert len(affected) > 0
+        sel = _detect_changed_checks(old, new)
+        assert sel.changed == ["docs/new.md"]
+        assert len(sel.checks) > 0
 
     def test_scripts_tools_change(self):
         """scripts/tools/ 變更觸發 tool_map check。"""
         old = {"scripts/tools/ops/new_tool.py": 1000}
         new = {"scripts/tools/ops/new_tool.py": 2000}
-        affected = _detect_changed_checks(old, new)
-        assert "tool_map" in affected
+        sel = _detect_changed_checks(old, new)
+        assert "tool_map" in sel.checks
 
     def test_changelog_change(self):
         """CHANGELOG.md 變更觸發 changelog check。"""
         old = {"CHANGELOG.md": 1000}
         new = {"CHANGELOG.md": 2000}
-        affected = _detect_changed_checks(old, new)
-        assert "changelog" in affected
+        sel = _detect_changed_checks(old, new)
+        assert "changelog" in sel.checks
 
     def test_docs_assets_triggers_platform_data(self):
         """docs/assets/ 變更觸發 platform_data 與 tool_consistency 檢查。"""
         old = {"docs/assets/data.json": 1000}
         new = {"docs/assets/data.json": 2000}
-        affected = _detect_changed_checks(old, new)
-        assert "platform_data" in affected
-        assert "tool_consistency" in affected
-
-    def test_unmatched_file_runs_all(self):
-        """未匹配任何 WATCH_TRIGGERS 的檔案變更回傳所有檢查。"""
-        old = {}
-        new = {"some_random_file.txt": 1000}
-        affected = _detect_changed_checks(old, new)
-        all_names = sorted(n for n, _, _, _ in TOOLS)
-        assert affected == all_names
+        sel = _detect_changed_checks(old, new)
+        assert "platform_data" in sel.checks
+        assert "tool_consistency" in sel.checks
 
     def test_result_is_sorted(self):
         """回傳結果按字母排序。"""
         old = {"docs/a.md": 1000, "rule-packs/b.yaml": 1000}
         new = {"docs/a.md": 2000, "rule-packs/b.yaml": 2000}
-        affected = _detect_changed_checks(old, new)
-        assert affected == sorted(affected)
+        sel = _detect_changed_checks(old, new)
+        assert sel.checks == sorted(sel.checks)
+        assert sel.changed == sorted(sel.changed)
+
+    # ---- #1704: the three outcomes, on the pure function -----------------
+
+    def test_unmatched_file_is_reported_not_turned_into_run_all(self):
+        """#1704 outcome 1 (no information). Before, this function answered
+        an unmatched file with the full TOOLS list -- the SAME value it
+        would return for "every check is affected", so the watch loop could
+        not say why it was re-running everything. Now the file is NAMED in
+        `unmatched` and `checks` says what the matched files (none) said;
+        the fail-safe "run all" is the caller's decision, via
+        _selection_outcome.
+        """
+        sel = _detect_changed_checks({}, {"some_random_file.txt": 1000})
+        assert sel.unmatched == ["some_random_file.txt"]
+        assert sel.checks == []
+        outcome, chosen = va._selection_outcome(sel)
+        assert outcome == va.OUTCOME_UNKNOWN
+        assert chosen == [n for n, _, _, _ in TOOLS], "fail-safe: every check"
+
+    def test_precommit_config_alone_is_an_explicit_empty_set(self):
+        """#1704 outcome 2 (explicit empty). `WATCH_TRIGGERS[".pre-commit-
+        config.yaml"] = []` reads "affects no check", but the old
+        `sorted(affected) if affected else <all>` made an empty union mean
+        "run all 33" -- so the entry was dead configuration. It is matched
+        (not in `unmatched`), contributes nothing, and the outcome is EMPTY:
+        nothing to run.
+        """
+        sel = _detect_changed_checks({".pre-commit-config.yaml": 1},
+                                     {".pre-commit-config.yaml": 2})
+        assert sel.changed == [".pre-commit-config.yaml"]
+        assert sel.unmatched == [], "it matched a trigger; the list is just empty"
+        assert sel.checks == []
+        outcome, chosen = va._selection_outcome(sel)
+        assert outcome == va.OUTCOME_EMPTY
+        assert chosen == []
+
+    def test_precommit_config_plus_an_unmatched_file_is_unknown_not_empty(self):
+        """Paired control for the two above: both have `checks == []`, so an
+        implementation that classifies on `checks` alone would call this
+        EMPTY and run nothing for a file whose impact nobody knows. The
+        unmatched file has to win.
+        """
+        sel = _detect_changed_checks(
+            {}, {".pre-commit-config.yaml": 1, "zz_unknown.cfg": 1})
+        assert sel.checks == []
+        assert sel.unmatched == ["zz_unknown.cfg"]
+        outcome, _ = va._selection_outcome(sel)
+        assert outcome == va.OUTCOME_UNKNOWN
+
+    def test_a_matched_file_with_checks_is_selected(self):
+        """#1704 outcome 3 (control): the ordinary case still yields exactly
+        the union, not "all" and not "nothing"."""
+        sel = _detect_changed_checks({}, {"CHANGELOG.md": 1})
+        outcome, chosen = va._selection_outcome(sel)
+        assert outcome == va.OUTCOME_SELECTED
+        assert chosen == ["changelog"]
+
+    def test_none_means_git_could_not_answer_and_is_unknown(self):
+        """`_smart_detect` returns None when git cannot answer; that is "no
+        information", the same outcome as an unmatched file, never "clean
+        tree, run nothing"."""
+        outcome, chosen = va._selection_outcome(None)
+        assert outcome == va.OUTCOME_UNKNOWN
+        assert chosen == [n for n, _, _, _ in TOOLS]
+        assert "git could not be read" in va._unmatched_clause(None)
 
 
 # ============================================================
@@ -578,6 +645,18 @@ class TestWatchTriggers:
     def test_changelog_trigger_exists(self):
         """CHANGELOG.md 觸發存在。"""
         assert "CHANGELOG.md" in WATCH_TRIGGERS
+
+    def test_an_empty_trigger_list_means_matched_and_affects_nothing(self):
+        """#1704. The empty list is a meaningful value now, so pin what it
+        means at the derivation both modes share: the file is MATCHED (not
+        reported as unknown) and contributes no check. The entry itself is
+        asserted to still be empty -- if someone adds checks to it, this
+        pin is the reminder that the empty-list semantics need another
+        witness.
+        """
+        assert WATCH_TRIGGERS[".pre-commit-config.yaml"] == []
+        sel = va._select_checks([".pre-commit-config.yaml"])
+        assert sel == va.SmartSelection([], [], [".pre-commit-config.yaml"])
 
 
 # ============================================================
@@ -1025,13 +1104,22 @@ class TestMainCLI:
             "never selected, so exactly freshness must run")
         assert len(capsys.readouterr().out) > 0
 
-    def test_ci_stops_on_failure(self, monkeypatch, cli_argv):
-        """--ci 模式遇到失敗時 exit 1。"""
+    def test_ci_stops_on_failure(self, monkeypatch, capsys, cli_argv):
+        """--ci 模式遇到失敗時 exit 1 —— 而且是從結尾統一的 exit 出去的。
+
+        #1695 家族二之前，這個 exit 1 是迴圈中間的 `sys.exit(1)`：rc 對、
+        但 `Result:` 摘要與後面每個旗標都沒跑。這支原本只斷言 rc，所以在
+        兩種實作下都綠；現在同時斷言摘要有印，把「rc 對」與「尾段有跑」
+        分開見證（完整的五對 twin 在 TestCiStopFallsThroughToTheTail）。
+        """
         cli_argv('validate_all', '--ci', '--only', 'versions')
         monkeypatch.setattr(va, "_run_one", self._mock_run_one_fail)
         with pytest.raises(SystemExit) as exc_info:
             va.main()
         assert exc_info.value.code == 1
+        out = capsys.readouterr().out
+        assert "Stopping after failure (versions)" in out
+        assert "Result:" in out, "the summary was skipped by the mid-loop exit"
 
     def test_verbose_flag(self, monkeypatch, capsys, cli_argv):
         """--verbose 顯示完整輸出。"""
@@ -1122,16 +1210,20 @@ from validate_all import _smart_detect  # noqa: E402
 
 
 class TestSmartDetect:
-    """_smart_detect() git-diff based check selection."""
+    """_smart_detect() git-diff based check selection.
+
+    Since #1704 it returns a ``SmartSelection`` or None; "run all" is no
+    longer a value it can produce (see TestDetectChangedChecks for why).
+    """
 
     def _mock_git(self, monkeypatch, diff_files="", staged_files="",
-                  untracked_files="", fail=False):
+                  untracked_files="", fail=False, rc=0):
         """Mock subprocess.run for git commands."""
         def mock_run(cmd, **kwargs):
             result = MagicMock()
             if fail:
                 raise subprocess.TimeoutExpired(cmd, 30)
-            result.returncode = 0
+            result.returncode = rc
             if "diff" in cmd and "--cached" in cmd:
                 result.stdout = staged_files
             elif "diff" in cmd:
@@ -1144,57 +1236,73 @@ class TestSmartDetect:
 
         monkeypatch.setattr(subprocess, "run", mock_run)
 
-    def test_no_changes_returns_empty(self, monkeypatch, tmp_path):
+    def test_no_changes_returns_an_empty_selection(self, monkeypatch, tmp_path):
+        """A clean tree is an EMPTY selection, distinct from None."""
         self._mock_git(monkeypatch)
         result = _smart_detect(tmp_path)
-        assert result == []
+        assert result == va.SmartSelection([], [], [])
 
     def test_docs_change_triggers_doc_checks(self, monkeypatch, tmp_path):
         self._mock_git(monkeypatch, diff_files="docs/guide.md\n")
         result = _smart_detect(tmp_path)
-        assert "links" in result
-        assert "versions" in result
+        assert "links" in result.checks
+        assert "versions" in result.checks
 
     def test_rule_packs_change(self, monkeypatch, tmp_path):
         self._mock_git(monkeypatch, diff_files="rule-packs/mariadb.yaml\n")
         result = _smart_detect(tmp_path)
-        assert "alerts" in result
-        assert "platform_data" in result
+        assert "alerts" in result.checks
+        assert "platform_data" in result.checks
 
-    def test_unknown_file_runs_all(self, monkeypatch, tmp_path):
+    def test_unknown_file_is_named_not_turned_into_run_all(self, monkeypatch,
+                                                           tmp_path):
+        """#1704. The old detector returned the full TOOLS list here --
+        indistinguishable from a diff that really touched everything, and
+        the reason (which file?) was lost before main() saw it."""
         self._mock_git(monkeypatch, diff_files="unknown_file.txt\n")
         result = _smart_detect(tmp_path)
-        all_names = sorted(n for n, _, _, _ in TOOLS)
-        assert result == all_names
+        assert result.unmatched == ["unknown_file.txt"]
+        assert result.checks == []
 
     def test_timeout_returns_none(self, monkeypatch, tmp_path):
         self._mock_git(monkeypatch, fail=True)
         result = _smart_detect(tmp_path)
         assert result is None
 
+    def test_a_git_command_that_fails_returns_none(self, monkeypatch, tmp_path):
+        """#1704. A probe with a non-zero rc used to be skipped and `changed`
+        stayed empty -- harmless when empty meant "run all", but now empty
+        means "run nothing", so `git diff HEAD` failing (not a repo, unborn
+        HEAD) would have read as a clean tree. Failure is "no information",
+        i.e. None.
+        """
+        self._mock_git(monkeypatch, rc=128)
+        assert _smart_detect(tmp_path) is None
+
     def test_staged_files_detected(self, monkeypatch, tmp_path):
         self._mock_git(monkeypatch, staged_files="scripts/tools/ops/new.py\n")
         result = _smart_detect(tmp_path)
-        assert "tool_map" in result
+        assert "tool_map" in result.checks
 
     def test_untracked_files_detected(self, monkeypatch, tmp_path):
         self._mock_git(monkeypatch, untracked_files="CHANGELOG.md\n")
         result = _smart_detect(tmp_path)
-        assert "changelog" in result
+        assert "changelog" in result.checks
 
     def test_result_is_sorted(self, monkeypatch, tmp_path):
         self._mock_git(monkeypatch,
                        diff_files="docs/a.md\nrule-packs/b.yaml\n")
         result = _smart_detect(tmp_path)
-        assert result == sorted(result)
+        assert result.checks == sorted(result.checks)
+        assert result.changed == sorted(result.changed)
 
     def test_combined_changes(self, monkeypatch, tmp_path):
         self._mock_git(monkeypatch,
                        diff_files="docs/guide.md\n",
                        staged_files="CHANGELOG.md\n")
         result = _smart_detect(tmp_path)
-        assert "links" in result
-        assert "changelog" in result
+        assert "links" in result.checks
+        assert "changelog" in result.checks
 
 
 class TestMainExtended:
@@ -1461,7 +1569,7 @@ class TestMainExtended:
     def test_smart_mode(self, monkeypatch, capsys, cli_argv):
         """--smart mode derives checks from git diff."""
         def mock_smart(project_root):
-            return ["versions"]
+            return va.SmartSelection(["versions"], [], ["mkdocs.yml"])
         monkeypatch.setattr(va, "_smart_detect", mock_smart)
         monkeypatch.setattr(va, "_run_one", self._mock_run_one_pass)
         cli_argv('validate_all', '--smart')
@@ -1472,13 +1580,14 @@ class TestMainExtended:
         assert "Smart mode" in out
 
     def test_smart_mode_none(self, monkeypatch, capsys, cli_argv):
-        """--smart with None (git unavailable) runs all.
+        """--smart with None (git unavailable) runs all -- and says why.
 
         ⛔ The first version passed `--only versions` alongside `--smart`,
         and `if args.smart and not only_set` short-circuits on that, so the
         mock was never called and the docstring described a path the test did
         not reach. The counter below is what makes the claim checkable
-        (#1620).
+        (#1620). Since #1704 this is outcome 1 ("no information"): the tool
+        used to fall through in silence, now the line names the cause.
         """
         calls = []
         ran = []
@@ -1501,8 +1610,14 @@ class TestMainExtended:
         assert len(ran) == len(va.TOOLS), (
             "git unavailable must run everything; ran %d of %d"
             % (len(ran), len(va.TOOLS)))
+        out = capsys.readouterr().out
+        assert "git could not be read" in out and "impact unknown" in out, out
 
-    @pytest.mark.parametrize("detected", [None, [], ["versions", "links"]])
+    @pytest.mark.parametrize("detected", [
+        None,
+        va.SmartSelection([], ["zz_unknown.cfg"], ["zz_unknown.cfg"]),
+        va.SmartSelection(["links", "versions"], [], ["docs/x.md"]),
+    ], ids=["git-unavailable", "unmatched-file", "selected"])
     def test_smart_mode_announces_what_it_will_actually_run(
             self, monkeypatch, capsys, cli_argv, detected):
         """⛔ The announced count must survive `--skip`.
@@ -1512,6 +1627,9 @@ class TestMainExtended:
         a fresh copy of the one-run-two-answers shape #1620 exists to remove,
         introduced by the same change that removed the original. Deriving it
         from the same filter the run uses is what keeps the two in step.
+        Since #1704 every branch that runs something announces a number (the
+        None branch used to announce nothing), so all three are held to it;
+        the branch that runs NOTHING has its own test below.
         """
         ran = []
 
@@ -1531,35 +1649,40 @@ class TestMainExtended:
         # the announced number, whatever branch printed it, is the one that ran
         import re as _re
         nums = [int(x) for x in _re.findall(r"running (?:all )?(\d+)", out)]
-        if detected is None:
-            # git unavailable: the tool announces nothing at all, so
-            # there is no number to contradict. Pin that instead.
-            assert not nums, "no selection was made; %s" % out
+        assert nums, out
+        assert nums[0] == len(ran), (
+            "announced %r, ran %d (%s)" % (nums, len(ran), out))
+        if detected is None or detected.unmatched:
             assert len(ran) == len(va.TOOLS) - 1, len(ran)
         else:
-            assert nums, out
-            assert nums[0] == len(ran), (
-                "announced %r, ran %d (%s)" % (nums, len(ran), out))
             # ⛔ The names too, not just the count: reverting the list half
             # to `sorted(only_set)` while leaving the count derived left the
             # whole suite green and printed a check that does not run.
-            line = next((l for l in raw.splitlines()
-                         if l.startswith("Smart mode:")), "")
-            if "git diff: " in line:
-                announced = [x.strip() for x
-                             in line.split("git diff: ", 1)[1].split(",")]
-                assert sorted(announced) == sorted(ran), (
-                    "announced %r, ran %r" % (announced, sorted(ran)))
+            line = next((ln for ln in raw.splitlines()
+                         if ln.startswith("Smart mode:")), "")
+            assert "git diff: " in line, line
+            announced = [x.strip() for x
+                         in line.split("git diff: ", 1)[1].split(",")]
+            assert sorted(announced) == sorted(ran), (
+                "announced %r, ran %r" % (announced, sorted(ran)))
 
-    def test_smart_mode_with_an_empty_diff_does_not_claim_zero(
+    def test_smart_mode_on_a_clean_tree_runs_nothing(
             self, monkeypatch, capsys, cli_argv):
-        """⛔ An empty selection means NO RESTRICTION, so the run does
-        everything. The tool used to print `running 0 check(s)` and then run
-        all of them -- the same one-run-two-answers shape #1620 removed from
-        `--only X --skip X`, measured on a clean worktree.
+        """#1704. An empty selection now means RUN NOTHING.
 
-        This pins the report, not the behaviour: the fall-through is
-        deliberately unchanged.
+        ⛔ The previous version of this test pinned the opposite: "an empty
+        selection restricts nothing", asserting all 33 ran while the line
+        said `selected no checks, so nothing is restricted -- running 33`.
+        That wording was #1620's STOPGAP -- it only corrected the printed
+        number (`running 0 check(s)` followed by 33 rows) and left the
+        fall-through alone, deferring the semantics to #1704 on purpose.
+        The fall-through existed because the selection was poured into
+        `only_set`, whose emptiness means "no restriction" for `--only`;
+        so a clean tree, `--only ""` and "every check" were one value.
+        #1704 decided: nothing to select is nothing to run -- that is what
+        `smart` means, and no automatic caller passes `--smart` (measured:
+        Makefile and docs-ci both pass `--only`; a repo-wide grep finds
+        `--smart` only in this tool, this file and the CHANGELOG).
         """
         ran = []
 
@@ -1567,17 +1690,20 @@ class TestMainExtended:
             ran.append(short_name)
             return (short_name, "pass", 0.1, "ok", "output")
 
-        monkeypatch.setattr(va, "_smart_detect", lambda project_root: [])
+        monkeypatch.setattr(va, "_smart_detect",
+                            lambda project_root: va.SmartSelection([], [], []))
         monkeypatch.setattr(va, "_run_one", rec)
         cli_argv('validate_all', '--smart')
         with pytest.raises(SystemExit) as exc:
             va.main()
         assert exc.value.code == 0
         out = " ".join(capsys.readouterr().out.split())
-        assert len(ran) == len(va.TOOLS), "an empty selection restricts nothing"
-        assert "running 0 check" not in out, (
-            "it announced 0 checks and then ran %d" % len(ran))
-        assert "selected no checks" in out and str(len(va.TOOLS)) in out, out
+        assert ran == [], "an empty selection ran %d check(s)" % len(ran)
+        assert "Smart mode: nothing to run" in out, out
+        assert "no changes against HEAD" in out, out
+        assert "Use --only" in out and "drop --smart" in out, out
+        assert "All tools skipped" in out, "the un-run checks count as skipped"
+        assert "running 0 check" not in out and "running 33" not in out, out
 
     def test_diff_report_mode(self, monkeypatch, capsys, cli_argv):
         """--diff-report shows diff output."""
@@ -1641,6 +1767,354 @@ class TestMainExtended:
         assert exc.value.code == 1
         out = capsys.readouterr().out
         assert "fix error" in out or "Auto-fixing" in out
+
+
+class TestSmartModeThreeOutcomes:
+    """#1704: `--smart` keeps "no information" and "an empty set" apart,
+    end to end through the real `_smart_detect` (git mocked, `_run_one`
+    mocked). Measured on this branch's parent, all four rows below ran
+    every registered check at rc 0, and only one of them had a reason to:
+
+      clean tree                       ran 33, `selected no checks ... running 33`
+      only .pre-commit-config.yaml     ran 33, same line (the [] entry was dead)
+      one file outside every prefix    ran 33, NO line at all (silent)
+      git unavailable                  ran 33, NO line at all (silent)
+
+    Now: the first two run nothing and say why; the last two run
+    everything and say why, naming the file / the cause. Outcome 3 (a
+    non-empty selection) is the control and is unchanged. Outcome "git
+    unavailable" is pinned in TestMainExtended.test_smart_mode_none.
+    """
+
+    @staticmethod
+    def _git(monkeypatch, diff_files=""):
+        """Only `git diff --name-only HEAD` reports files; the index and
+        untracked probes are clean. `_run_one` is replaced separately, so
+        this mock serves git and nothing else."""
+        def mock_run(cmd, **kwargs):
+            r = MagicMock()
+            r.returncode = 0
+            r.stdout = diff_files if ("diff" in cmd
+                                      and "--cached" not in cmd) else ""
+            return r
+        monkeypatch.setattr(subprocess, "run", mock_run)
+
+    @staticmethod
+    def _recording(monkeypatch):
+        ran = []
+
+        def rec(short_name, script_path, tool_args, project_root):
+            ran.append(short_name)
+            return (short_name, "pass", 0.1, "ok", "output")
+        monkeypatch.setattr(va, "_run_one", rec)
+        return ran
+
+    def _run(self, capsys, cli_argv, *argv):
+        cli_argv('validate_all', '--smart', *argv)
+        with pytest.raises(SystemExit) as exc:
+            va.main()
+        captured = capsys.readouterr()
+        return exc.value.code, captured.out, captured.err
+
+    def test_a_clean_tree_runs_nothing_and_says_so(
+            self, monkeypatch, capsys, cli_argv):
+        """(a) Explicit empty: nothing changed -> nothing runs, exit 0, and
+        the line says why and how to run something anyway."""
+        self._git(monkeypatch)
+        ran = self._recording(monkeypatch)
+        rc, out, _ = self._run(capsys, cli_argv)
+        assert rc == 0
+        assert ran == []
+        line = next(ln for ln in out.splitlines() if ln.startswith("Smart mode:"))
+        assert "nothing to run" in line and "no changes against HEAD" in line
+        assert "Use --only to pick checks or drop --smart" in line
+        line.encode("ascii")  # under --json the same line goes to stderr
+        assert "Result: All tools skipped" in out
+
+    def test_only_the_precommit_config_changed_runs_nothing(
+            self, monkeypatch, capsys, cli_argv):
+        """(b) Explicit empty via an empty trigger list: the file MATCHED
+        `.pre-commit-config.yaml: []`, so its impact is known to be none.
+        Before #1704 that entry was dead configuration -- the empty union
+        fell through to "run all 33" exactly like an unknown file."""
+        self._git(monkeypatch, ".pre-commit-config.yaml\n")
+        ran = self._recording(monkeypatch)
+        rc, out, _ = self._run(capsys, cli_argv)
+        assert rc == 0
+        assert ran == []
+        line = next(ln for ln in out.splitlines() if ln.startswith("Smart mode:"))
+        assert "nothing to run" in line, line
+        assert ".pre-commit-config.yaml" in line and "affect no check" in line
+        assert "Result: All tools skipped" in out
+
+    def test_a_file_outside_every_prefix_runs_all_and_names_it(
+            self, monkeypatch, capsys, cli_argv):
+        """(c) No information: paired control for (b). Both have an empty
+        union of check lists; the difference is whether the file matched a
+        trigger at all. An unknown file's impact is unknown, so everything
+        runs -- and the operator is told which file caused that, which the
+        old silent fall-through never did."""
+        self._git(monkeypatch, "zz_unknown.cfg\n")
+        ran = self._recording(monkeypatch)
+        rc, out, _ = self._run(capsys, cli_argv)
+        assert rc == 0
+        assert ran == [n for n, _, _, _ in TOOLS]
+        line = next(ln for ln in out.splitlines() if ln.startswith("Smart mode:"))
+        assert "zz_unknown.cfg" in line, "the unmatched file must be named"
+        assert "match no known trigger" in line and "impact unknown" in line
+        assert f"running all {len(TOOLS)} check(s)" in line, line
+
+    def test_precommit_config_plus_an_unknown_file_runs_all(
+            self, monkeypatch, capsys, cli_argv):
+        """(b)+(c) together: the unknown file wins. An implementation that
+        classified on "is the union empty" would run nothing here."""
+        self._git(monkeypatch, ".pre-commit-config.yaml\nzz_unknown.cfg\n")
+        ran = self._recording(monkeypatch)
+        rc, out, _ = self._run(capsys, cli_argv)
+        assert rc == 0
+        assert len(ran) == len(TOOLS)
+        assert "zz_unknown.cfg" in out and "nothing to run" not in out
+
+    def test_skip_still_subtracts_from_a_non_empty_selection(
+            self, monkeypatch, capsys, cli_argv):
+        """(e) Outcome 3 control, with `--skip`: the selection is used and
+        `--skip` subtracts from it (#1620), and the announced names are the
+        ones that ran."""
+        self._git(monkeypatch, "CHANGELOG.md\nmkdocs.yml\n")
+        ran = self._recording(monkeypatch)
+        rc, out, _ = self._run(capsys, cli_argv, '--skip', 'versions')
+        assert rc == 0
+        assert ran == ["changelog"], ran
+        line = next(ln for ln in out.splitlines() if ln.startswith("Smart mode:"))
+        assert line.rstrip().endswith("based on git diff: changelog"), line
+
+    @pytest.mark.parametrize("diff_files,total", [
+        ("", 0), ("CHANGELOG.md\n", 1),
+    ], ids=["clean-tree", "selected"])
+    def test_json_stdout_is_one_document_and_the_reason_goes_to_stderr(
+            self, monkeypatch, capsys, cli_argv, diff_files, total):
+        """Under `--json` the Smart-mode line moves to stderr so stdout stays
+        a single JSON document (the same rule the --profile rotation notice
+        follows); the reason is never dropped. On a clean tree the document
+        carries total 0 and every check as skipped."""
+        self._git(monkeypatch, diff_files)
+        self._recording(monkeypatch)
+        rc, out, err = self._run(capsys, cli_argv, '--json')
+        assert rc == 0
+        data = json.loads(out)
+        assert data["total"] == total
+        assert data["skipped"] == len(TOOLS) - total
+        assert "Smart mode:" in err and "Smart mode:" not in out
+
+
+class TestCiStopFallsThroughToTheTail:
+    """#1695 family 2, the `--ci` half. The first failure used to
+    `sys.exit(1)` INSIDE the sequential loop, ahead of the summary and of
+    every flag handled after it. Measured on this branch's parent, with
+    `_run_one` mocked to fail (the issue's own table; the right-hand column
+    is the non-`--ci` twin, which is what every row here is paired with):
+
+      --only versions --fix --ci           fix subprocess: 0 calls   (twin: 1)
+      --only versions --profile --ci       CSV: not written          (twin: written)
+      --only versions --notify --ci        notify: 0 calls           (twin: 1)
+      --only versions --json --ci          stdout: not JSON          (twin: one doc)
+      --only versions --diff-report --ci   report: not printed       (twin: printed)
+
+    Consumers measured before changing the stdout shape: docs-ci.yaml's
+    `drift-checks` (`--only ... --ci`) and the Makefile's `lint-docs`
+    (`--only ... $(ARGS)`) both read the exit code only; a grep across
+    .github/, Makefile, docs/ and scripts/ finds nothing parsing `--ci`
+    stdout. The exit code is unchanged (1), now produced by the same
+    `sys.exit(0 if failed == 0 else 1)` as every other mode.
+    """
+
+    def _failing(self, monkeypatch, status="fail"):
+        ran = []
+
+        def run_one(short_name, script_path, tool_args, project_root):
+            ran.append(short_name)
+            return (short_name, status, 0.2, "error detail", "failure output")
+        monkeypatch.setattr(va, "_run_one", run_one)
+        return ran
+
+    @staticmethod
+    def _three_names():
+        """Three CONSECUTIVE names in TOOLS order, starting at the first
+        fixable one. The run iterates TOOLS, not the `--only` string, so the
+        "first" check has to be first in TOOLS order -- measured: with
+        `versions,links,mermaid` the run stopped after `links`."""
+        names = [n for n, _, _, _ in TOOLS]
+        i = next(i for i, n in enumerate(names) if n in FIX_COMMANDS)
+        picked = names[i:i + 3]
+        assert len(picked) == 3, "the fix row below would be vacuous"
+        assert "versions" in FIX_COMMANDS, "the single-check rows use it"
+        return picked
+
+    def _main(self, cli_argv, capsys, *argv):
+        cli_argv('validate_all', *argv)
+        with pytest.raises(SystemExit) as exc:
+            va.main()
+        captured = capsys.readouterr()
+        return exc.value.code, captured.out, captured.err
+
+    # ---- the issue's five rows, each with its non-`--ci` twin -----------
+
+    @pytest.mark.parametrize("ci", [[], ["--ci"]], ids=["twin", "ci"])
+    def test_fix_runs_the_fix_subprocess_once(self, monkeypatch, capsys,
+                                              cli_argv, ci):
+        fix_calls = []
+
+        def mock_sub(cmd, **kwargs):
+            fix_calls.append(cmd)
+            r = MagicMock()
+            r.returncode = 0
+            r.stdout = "Fixed something"
+            return r
+        self._failing(monkeypatch)
+        monkeypatch.setattr(subprocess, "run", mock_sub)
+        rc, out, _ = self._main(cli_argv, capsys, '--only', 'versions',
+                                '--fix', *ci)
+        assert rc == 1
+        assert len(fix_calls) == 1, f"fix ran {len(fix_calls)} times"
+        assert "Auto-fixing" in out
+
+    @pytest.mark.parametrize("ci", [[], ["--ci"]], ids=["twin", "ci"])
+    def test_profile_writes_the_csv(self, monkeypatch, capsys, cli_argv,
+                                    tmp_path, ci):
+        csv_file = tmp_path / ".validation-profile.csv"
+        monkeypatch.setattr(va, "PROFILE_CSV", csv_file)
+        self._failing(monkeypatch)
+        rc, _, _ = self._main(cli_argv, capsys, '--only', 'versions',
+                              '--profile', *ci)
+        assert rc == 1
+        assert csv_file.exists(), "no CSV row was written"
+        lines = csv_file.read_text(encoding="utf-8").strip().split("\n")
+        assert len(lines) == 2, "header + one row"
+        assert "fail" in lines[1].split(",")
+
+    @pytest.mark.parametrize("ci", [[], ["--ci"]], ids=["twin", "ci"])
+    def test_notify_notifies_once(self, monkeypatch, capsys, cli_argv, ci):
+        calls = []
+        monkeypatch.setattr(va, "_send_notification",
+                            lambda t, m: calls.append((t, m)))
+        self._failing(monkeypatch)
+        rc, _, _ = self._main(cli_argv, capsys, '--only', 'versions',
+                              '--notify', *ci)
+        assert rc == 1
+        assert len(calls) == 1, calls
+        assert "Failed" in calls[0][0]
+
+    @pytest.mark.parametrize("ci", [[], ["--ci"]], ids=["twin", "ci"])
+    def test_json_emits_one_document_on_failure(self, monkeypatch, capsys,
+                                                cli_argv, ci):
+        """The row that matters most: `--json --ci` produced NO JSON exactly
+        when the run failed -- the one time a consumer would read it."""
+        self._failing(monkeypatch)
+        rc, out, _ = self._main(cli_argv, capsys, '--only', 'versions',
+                                '--json', *ci)
+        assert rc == 1
+        data = json.loads(out)  # raises if stdout is not one document
+        assert data["failed"] == 1
+        assert data["results"]["versions"]["status"] == "fail"
+        assert data["ci_stopped_after"] == ("versions" if ci else None)
+        assert data["not_run"] == []
+        assert "CI mode" not in out, "no banner text inside a JSON stdout"
+
+    @pytest.mark.parametrize("ci", [[], ["--ci"]], ids=["twin", "ci"])
+    def test_diff_report_is_printed(self, monkeypatch, capsys, cli_argv, ci):
+        self._failing(monkeypatch)
+        monkeypatch.setattr(
+            va, "_generate_diff_report",
+            lambda failed, tools_dir, root: "=== DIFF REPORT ===\nversions")
+        rc, out, _ = self._main(cli_argv, capsys, '--only', 'versions',
+                                '--diff-report', *ci)
+        assert rc == 1
+        assert "DIFF REPORT" in out
+
+    # ---- what a stop looks like when there WAS something left to run ----
+
+    @pytest.mark.parametrize("ci", [[], ["--ci"]], ids=["twin", "ci"])
+    def test_a_stop_names_the_checks_not_run_in_the_text_summary(
+            self, monkeypatch, capsys, cli_argv, ci):
+        """With three failing checks, `--ci` runs the first only and the
+        summary says so twice: the existing banner at the stop, and one
+        line after `Result:` naming the two that were never reached. The
+        twin runs all three and prints neither."""
+        first, b, c = self._three_names()
+        ran = self._failing(monkeypatch)
+        rc, out, _ = self._main(cli_argv, capsys,
+                                '--only', ",".join([first, b, c]), *ci)
+        assert rc == 1
+        if ci:
+            assert ran == [first]
+            assert f"CI mode: Stopping after failure ({first})" in out
+            assert "Result: 0/3 passed, 1 failed" in out, out
+            assert (f"CI mode: stopped after {first}; 2 check(s) not run: "
+                    f"{b}, {c}") in out, out
+        else:
+            assert ran == [first, b, c]
+            assert "CI mode" not in out
+            assert "Result: 0/3 passed, 3 failed" in out, out
+
+    @pytest.mark.parametrize("ci", [[], ["--ci"]], ids=["twin", "ci"])
+    def test_json_shape_of_a_stop(self, monkeypatch, capsys, cli_argv, ci):
+        """One pinned shape: `ci_stopped_after` and `not_run` are ALWAYS
+        present (null / [] when nothing stopped). Not-run checks are NOT in
+        `results`: a not-run check is not a result, and `--compare` reads a
+        name absent from `results` as vanished (#1703) -- which is the
+        right reading, so the two keys carry them instead. The identity
+        `total == len(results) + len(not_run)` is what lets a consumer
+        reconcile the counts."""
+        first, b, c = self._three_names()
+        self._failing(monkeypatch)
+        rc, out, _ = self._main(cli_argv, capsys, '--json',
+                                '--only', ",".join([first, b, c]), *ci)
+        assert rc == 1
+        data = json.loads(out)
+        assert "ci_stopped_after" in data and "not_run" in data
+        assert data["total"] == 3
+        if ci:
+            assert data["ci_stopped_after"] == first
+            assert data["not_run"] == [b, c]
+            assert list(data["results"]) == [first]
+        else:
+            assert data["ci_stopped_after"] is None
+            assert data["not_run"] == []
+            assert list(data["results"]) == [first, b, c]
+        assert data["total"] == len(data["results"]) + len(data["not_run"])
+        assert not set(data["not_run"]) & set(data["results"])
+
+    def test_a_stop_on_an_error_status_is_still_exit_one(
+            self, monkeypatch, capsys, cli_argv):
+        """The stop fires on `error` as well as `fail` (timeouts, OSError),
+        and `failed` counts both, so the tail's exit code is 1 -- a stopped
+        run can never leave at exit 0."""
+        first, b, c = self._three_names()
+        ran = self._failing(monkeypatch, status="error")
+        rc, out, _ = self._main(cli_argv, capsys, '--ci',
+                                '--only', ",".join([first, b, c]))
+        assert rc == 1
+        assert ran == [first]
+        assert f"stopped after {first}; 2 check(s) not run" in out
+
+    def test_ci_with_every_check_passing_does_not_stop(
+            self, monkeypatch, capsys, cli_argv):
+        """Control: `--ci` on a green run is the plain sequential run --
+        all three run, no banner, no `not run` line, exit 0, and the JSON
+        keys are at their not-stopped values."""
+        first, b, c = self._three_names()
+        ran = []
+
+        def ok(short_name, script_path, tool_args, project_root):
+            ran.append(short_name)
+            return (short_name, "pass", 0.1, "ok", "output")
+        monkeypatch.setattr(va, "_run_one", ok)
+        rc, out, _ = self._main(cli_argv, capsys, '--ci', '--json',
+                                '--only', ",".join([first, b, c]))
+        assert rc == 0
+        assert ran == [first, b, c]
+        data = json.loads(out)
+        assert data["ci_stopped_after"] is None and data["not_run"] == []
 
 
 class TestTheGateIsStillSelected:
@@ -1752,6 +2226,39 @@ def _parser_boolean_flags():
 _BOOL_FLAGS = _parser_boolean_flags()
 
 
+def _args_attrs_read_by_run_watch():
+    """Every ``args.<attr>`` read inside ``_run_watch``, from its AST.
+
+    #1695 family 2: main() returns right after ``_run_watch``, so a flag this
+    function does not read is a flag ``--watch`` silently drops. The set of
+    flags it DOES read is derived here, from the function body, so that the
+    conflict table in the tool (a pin) can be compared against it.
+    """
+    import ast
+    import inspect
+    import textwrap
+    tree = ast.parse(textwrap.dedent(inspect.getsource(va._run_watch)))
+    attrs = {node.attr for node in ast.walk(tree)
+             if isinstance(node, ast.Attribute)
+             and isinstance(node.value, ast.Name) and node.value.id == "args"}
+    assert "skip" in attrs, (
+        "the AST walk found no `args.skip` read in _run_watch, and that read "
+        "is known to exist -- the derivation is broken, not the function")
+    return attrs
+
+
+def _flags_run_watch_never_reads():
+    """Parser ``store_true`` flags (minus ``--list`` / ``--watch``) whose
+    argparse dest ``_run_watch`` never reads. ``--only`` is a string flag and
+    has its own, older pair."""
+    read = _args_attrs_read_by_run_watch()
+    return sorted(f for f in _BOOL_FLAGS
+                  if f.lstrip("-").replace("-", "_") not in read)
+
+
+_WATCH_BLIND = _flags_run_watch_never_reads()
+
+
 class TestUnknownCheckNames:
     """A requested check name nothing answers to is EXIT_CALLER_ERROR (#1620).
 
@@ -1793,8 +2300,12 @@ class TestUnknownCheckNames:
                        `TestConflictingFlags` below.
                      * EARLY RETURN: a branch exits before later flags are
                        read (the `--watch` dispatch; `--ci`'s exit inside the
-                       run loop, which is ahead of the summary and of every
-                       flag handled after it). Still open (#1695 family 2).
+                       run loop, which was ahead of the summary and of every
+                       flag handled after it). Closed by #1695 family 2:
+                       `--ci` now breaks out and falls through to the same
+                       tail as every mode (`TestCiStopFallsThroughToTheTail`),
+                       and `--watch` with a flag `_run_watch` never reads is
+                       exit 2 (`TestConflictingFlags`).
                    The per-flag measurements live in #1695, which is a
                    snapshot by construction — unlike this docstring, which
                    someone would otherwise have to maintain.
@@ -2223,8 +2734,8 @@ class TestUnknownCheckNames:
 
 class TestConflictingFlags:
     """A flag combination where one flag would be ignored is
-    EXIT_CALLER_ERROR (#1695, family 1 only — family 2, the `--ci` /
-    `--watch` early returns, is untouched here).
+    EXIT_CALLER_ERROR (#1695 family 1, and the `--watch` half of family 2;
+    the `--ci` half is TestCiStopFallsThroughToTheTail).
 
     Measured on this branch's parent (mock `_run_one` recording the
     selection; `_run_watch` inspected statically), each pair alongside the
@@ -2236,6 +2747,13 @@ class TestConflictingFlags:
                                      PARALLEL
       --baseline --compare           rc 0, baseline written, no comparison
       --watch --only versions        `_run_watch` never reads only_set
+      --watch + any of _WATCH_BLIND  `_run_watch` reads `args.skip` (and,
+                                     since this change, `args.verbose`)
+                                     and main() returns right after it, so
+                                     --json / --fix / --profile / --notify /
+                                     --diff-report / --baseline / --compare
+                                     / --smart / --ci / --parallel were all
+                                     parsed and never consulted (family 2)
 
     Callers were measured BEFORE rejecting: the two automatic invocations
     (Makefile `lint-docs`: `--only … $(ARGS)`; docs-ci.yaml `drift-checks`:
@@ -2270,7 +2788,9 @@ class TestConflictingFlags:
         monkeypatch.setattr(va, "_run_one", self._rec_run_one)
         monkeypatch.setattr(va, "_run_watch",
                             lambda *a, **k: self.entered.append("watch"))
-        monkeypatch.setattr(va, "_smart_detect", lambda root: ["versions"])
+        monkeypatch.setattr(
+            va, "_smart_detect",
+            lambda root: va.SmartSelection(["versions"], [], ["mkdocs.yml"]))
         monkeypatch.setattr(va, "BASELINE_FILE", tmp_path / "baseline.json")
         monkeypatch.setattr(va, "PROFILE_CSV", tmp_path / "profile.csv")
         return self.calls, self.entered
@@ -2331,26 +2851,89 @@ class TestConflictingFlags:
         assert exc.value.code == 0
         assert calls == ["versions"], "the --smart selection was used"
 
+    @staticmethod
+    def _namespace(**on):
+        """Every parser boolean off (derived from the parser, so a new flag
+        is present here too), then the named ones on."""
+        import argparse
+        base = {f.lstrip("-").replace("-", "_"): False
+                for f in _BOOL_FLAGS + ["--watch", "--list"]}
+        return argparse.Namespace(**{**base, **on})
+
     def test_the_guard_is_derived_from_args_the_dispatch_reads(self):
-        """The four sites named in #1695 are the four pairs, and the
+        """The four sites named in #1695 family 1 are the four pairs, and the
         predicate for `--only` is `only_set`, not `args.only` — asserted
         on the function so the parametrize above cannot quietly cover
         three pairs while a fourth is dropped from the guard."""
-        import argparse
-        base = dict(smart=False, parallel=False, ci=False, baseline=False,
-                    compare=False, watch=False)
-        assert va._conflicting_flags(argparse.Namespace(**base), set()) == []
-        assert va._conflicting_flags(argparse.Namespace(**base), {"versions"}) == []
-        got = va._conflicting_flags(argparse.Namespace(
-            **{**base, "smart": True, "parallel": True, "ci": True,
-               "baseline": True, "compare": True, "watch": True}),
-            {"versions"})
-        assert [(k, i) for k, i, _ in got] == [
+        assert va._conflicting_flags(self._namespace(), set()) == []
+        assert va._conflicting_flags(self._namespace(), {"versions"}) == []
+        got = va._conflicting_flags(self._namespace(
+            smart=True, parallel=True, ci=True, baseline=True, compare=True,
+            watch=True), {"versions"})
+        assert [(k, i) for k, i, _ in got][:4] == [
             ("--only", "--smart"), ("--ci", "--parallel"),
             ("--baseline", "--compare"), ("--watch", "--only")]
         # `--smart --only ""`: an empty set is no conflict
-        assert va._conflicting_flags(
-            argparse.Namespace(**{**base, "smart": True}), set()) == []
+        assert va._conflicting_flags(self._namespace(smart=True), set()) == []
+
+    # ---- #1695 family 2, the --watch half -------------------------------
+
+    def test_the_watch_pin_equals_the_set_derived_from_run_watch(self):
+        """⛔ Two independent sources. The tool carries `_WATCH_NEVER_READS`
+        as a PIN (dest -> flag); this file derives the same set from the
+        parser's store_true flags minus the `args.<attr>` reads in
+        `_run_watch`'s own AST. They have to agree in both directions: a
+        flag added to the parser that `_run_watch` does not read shows up
+        derived-only (it would be dropped silently again -- the defect);
+        a read added to `_run_watch` without removing the pin shows up
+        pin-only (a legal flag is being rejected -- the false red that gets
+        guards deleted)."""
+        derived = set(_WATCH_BLIND)
+        pinned = set(va._WATCH_NEVER_READS.values())
+        assert derived, "derived nothing; the parametrize below is vacuous"
+        assert pinned == derived, (
+            f"pin-only={sorted(pinned - derived)} "
+            f"derived-only={sorted(derived - pinned)}")
+        for dest, flag in va._WATCH_NEVER_READS.items():
+            assert dest == flag.lstrip("-").replace("-", "_"), (dest, flag)
+        # And the reads the derivation subtracted are the ones the docstring
+        # of _run_watch promises: skip and verbose, nothing else.
+        assert _args_attrs_read_by_run_watch() == {"skip", "verbose"}
+
+    @pytest.mark.parametrize("flag", _WATCH_BLIND, ids=lambda f: f.lstrip("-"))
+    def test_watch_with_a_flag_it_never_reads_is_rejected(
+            self, monkeypatch, capsys, cli_argv, tmp_path, flag):
+        """Family 2: before this change every one of these ran at rc 0 and
+        the other flag did nothing -- `--watch --json` printed the text
+        banner, `--watch --notify` never notified, and so on. Exit 2, both
+        flags named, watch never started."""
+        calls, entered = self._quiet(monkeypatch, tmp_path)
+        cli_argv('validate_all', '--watch', flag)
+        with pytest.raises(SystemExit) as exc:
+            va.main()
+        assert exc.value.code == self._CALLER_ERROR
+        assert calls == [] and entered == []
+        err = capsys.readouterr().err
+        assert "--watch" in err and flag in err, err
+        assert "never consulted" in err, err
+        err.encode("ascii")
+
+    @pytest.mark.parametrize("argv", [
+        ["--watch", "--skip", "versions"], ["--watch", "--verbose"],
+    ], ids=["skip", "verbose"])
+    def test_watch_with_a_flag_it_reads_still_starts(
+            self, monkeypatch, capsys, cli_argv, tmp_path, argv):
+        """Paired control: the two flags `_run_watch` DOES read stay legal
+        (an implementation rejecting `--watch` with anything at all passes
+        the test above). `--verbose` is read since this change -- it used
+        to be one more silently dropped flag, and printing full output is
+        what a watch loop is for."""
+        assert "verbose" in _args_attrs_read_by_run_watch()
+        _, entered = self._quiet(monkeypatch, tmp_path)
+        cli_argv('validate_all', *argv)
+        assert va.main() is None
+        assert entered == ["watch"]
+        assert "would be ignored" not in capsys.readouterr().err
 
 
 # ============================================================
