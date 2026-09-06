@@ -153,6 +153,7 @@ ENGLISH_ONLY: dict[str, str] = {
     # ── scripts/tools/dx ───────────────────────────────────────────────
     "add_frontmatter.py": _R_DX,
     "analyze_bench_history.py": _R_DX,
+    "analyze_probe.py": _R_DX,
     "analyze_tier1_fp_rate.py": _R_DX,
     "axe_lite_static.py": _R_DX,
     "bump_playbook_versions.py": _R_DX,
@@ -497,7 +498,24 @@ def test_allowlists_shrink_only_count_pin():
     # this gate turning the PR red. The tool was written without anyone asking
     # the bilingual question, and the ratchet is what forced the question to be
     # answered explicitly — which is the behaviour the ratchet exists for.
-    assert len(ENGLISH_ONLY) <= 145, (
+    # pin 146: bumped from 145 for analyze_probe.py (TRK-373 / #1731), the probe
+    # summary whose computation used to exist twice — inline in
+    # bench-probe-write-latency.yaml and in the bench-probe-2026-09 audit
+    # directory. A dx CLI invoked by that workflow's Summarize step and by a
+    # maintainer recomputing the archived report, never by a customer.
+    # ⛔ A decision, not a default: `scripts/tools/dx/` is overwhelmingly
+    # English-only and the sibling this one sits beside (analyze_bench_history.py)
+    # is already here, so wiring detect_cli_lang() would make it the lone
+    # bilingual exception in its own family.
+    # ⚠️ What this entry does NOT claim: the tool's rendered OUTPUT is far from
+    # CJK-free. Its CI renderer is almost entirely Chinese — that text moved here
+    # verbatim from the workflow heredoc it replaced, and dev-rules §9c forbids
+    # translating only the lines a change happens to touch. Only `--help` is this
+    # gate's jurisdiction, and that is English.
+    # ⚠️ Worth recording HOW this entry got here: not by design review but by this
+    # gate turning the PR red. The bilingual question was never asked while the
+    # tool was being written; the ratchet is what forced it to be answered.
+    assert len(ENGLISH_ONLY) <= 146, (
         f"ENGLISH_ONLY grew to {len(ENGLISH_ONLY)} (pin=145). Adding an "
         "English-only tool is allowed but must be an explicit, reviewed "
         "decision — bump this pin in the same commit and justify it."

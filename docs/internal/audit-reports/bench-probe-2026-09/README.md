@@ -31,10 +31,12 @@
 ## 重算
 
 ```bash
-python3 docs/internal/audit-reports/bench-probe-2026-09/analyze_probe.py
+python3 scripts/tools/dx/analyze_probe.py --archive docs/internal/audit-reports/bench-probe-2026-09
 ```
 
 不連網、不重跑 benchmark、不需要 Go。它回答的是「本文的數字能不能從收進來的資料重算出來」，**不是**「今天重跑會得到什麼」。
+
+⛔ **這支腳本原本就放在本目錄裡，已於 TRK-373（[#1731](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1731)）搬到 `scripts/tools/dx/`。** 搬家的理由不是整理：它與 `bench-probe-write-latency.yaml` 的 Summarize step 曾是**同一份計算的兩份拷貝**，沒有任何機制保證兩者一致，而實測已累積五處行為分歧。現在 workflow 呼叫的就是這一支，兩種輸入來源只差在讀檔那一層。⚠️ 本節這條指令的輸出與搬家前**逐位元相同**（`tests/dx/fixtures/analyze_probe/archive.golden.txt` 釘住這一點），所以本文其餘各節引用的數字不受搬家影響。
 
 資料進 repo 的理由與隔壁 `bench-aa-2026-08/` 相同：**來源是 job log，而 job log 有 90 天保留期**（本批 2026-12-03 到期），且 artifact 那條路在本專案的分析環境走不通。三份 `probe-run{1,2,3}.txt` 是從 job log 逐字抽出的 `PROBEENV` / `PROBEROW` / `PROBETAIL` 記錄，各 343 行。
 
