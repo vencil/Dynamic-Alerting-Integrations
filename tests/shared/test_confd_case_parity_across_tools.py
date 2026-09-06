@@ -1543,9 +1543,13 @@ def test_chaos_soak_perturbs_a_carrier_under_either_casing(
         # wrong one, and `trigger_reload` writes to whichever entry it
         # matches FIRST — so a filter that stopped filtering would edit an
         # operator's `neighbour.txt` and still report success.
+        # ⚠️ `db-c.yml` used to sit here; #1603 made `.yml` a legitimate
+        # carrier for this tool (its spelling parity lives in
+        # `tests/dx/test_run_chaos_soak.py`), so the neighbour is now the
+        # hidden axis (#1630): a `.`-prefixed file the exporter never reads.
         others = {}
         for name, body in (("neighbour.txt", "not a config\n"),
-                           ("db-c.yml", _TENANT_BODY),
+                           (".hidden.yaml", _TENANT_BODY),
                            ("_defaults.yaml", "defaults:\n  cpu_usage: 80\n")):
             (confd / name).write_text(body, encoding="utf-8")
             others[name] = body

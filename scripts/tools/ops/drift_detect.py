@@ -39,7 +39,7 @@ sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_python import detect_cli_lang, format_json_report, i18n_text  # noqa: E402
 from _lib_exitcodes import EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
-from _lib_confd import is_hidden_name, warn_nested  # noqa: E402
+from _lib_confd import has_yaml_extension, is_hidden_name, warn_nested  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Bilingual help text
@@ -155,12 +155,17 @@ def compute_dir_manifest(dir_path: str, label: str = "") -> FileManifest:
     # (#1761: this reader sat outside the enumeration gate's population).
     warn_nested(p, tool="drift_detect")
 
-    # ⚠️ `*.yaml` only — a `.yml` carrier is invisible to this manifest
-    # while the exporter reads both spellings. That is the extension-
-    # SPELLING axis (#1603) and takes its own A/B measurement; it is
-    # deliberately not widened inside this change.
-    for f in sorted(p.glob("*.yaml")):
-        if is_hidden_name(f.name):
+    # #1603 (extension-SPELLING axis): this used to be `glob("*.yaml")`,
+    # so a `.yml` or `.YAML` carrier never entered the manifest while the
+    # exporter reads both spellings in any case. Measured on byte-identical
+    # bodies before the fix: `alpha.yaml` → manifest {_defaults, alpha};
+    # `alpha.yml` and `Alpha.YAML` → {_defaults} — the same answer as a
+    # tree with NO tenant at all, so two clusters could differ in a `.yml`
+    # tenant and compare as "drift-free". The predicate is now the shared
+    # one (`_lib_confd.has_yaml_extension`, the exporter's rule); the scan
+    # stays flat and the hidden-entry skip is unchanged.
+    for f in sorted(p.iterdir()):
+        if is_hidden_name(f.name) or not has_yaml_extension(f.name):
             continue
         manifest.files[f.name] = _file_sha256(f)
 

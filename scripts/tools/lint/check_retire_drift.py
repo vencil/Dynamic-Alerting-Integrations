@@ -83,6 +83,7 @@ except Exception:  # pragma: no cover - compat shim optional
     def try_utf8_stdout() -> None:  # type: ignore
         pass
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_confd import has_yaml_extension  # noqa: E402
 
 
 def _repo_root() -> Path:
@@ -103,13 +104,24 @@ def conf_d_declared_db_type_tenants(config_dir: Path) -> Dict[str, str]:
     """tenant → db_type for every conf.d tenant that DECLARES a non-empty db_type.
 
     Mirrors the collector's emit set (ResolveMetadata + db_type!="" guard):
-    walk every *.yaml under config_dir except `_`-prefixed files (defaults /
-    profiles) and the examples/ subtree (dev templates, never shipped); read the
-    `tenants:` block; pick up `_metadata.db_type` (the _metadata value is the same
-    re-serialized mapping ResolveMetadata parses). Only non-empty db_type counts.
+    walk every YAML carrier under config_dir (`.yaml` / `.yml`, any case —
+    `_lib_confd.has_yaml_extension`, the exporter's own rule) except
+    `_`-prefixed files (defaults / profiles) and the examples/ subtree (dev
+    templates, never shipped); read the `tenants:` block; pick up
+    `_metadata.db_type` (the _metadata value is the same re-serialized mapping
+    ResolveMetadata parses). Only non-empty db_type counts.
+
+    #1603 (extension-SPELLING axis): this was `rglob("*.yaml")`. Measured on
+    byte-identical bodies before the fix: `alpha.yaml` → {alpha: postgres};
+    `alpha.yml` and `Alpha.YAML` → {} — the same answer as a tree with no
+    tenant, i.e. a `.yml` tenant whose K8s target was removed passed this
+    gate with rc=0 while the exporter kept emitting tenant_expected_exporter
+    for it. Hidden (`.`-prefixed) entries are NOT skipped here, exactly as
+    before — that is a separate axis (#1630) with its own measurement.
     """
     out: Dict[str, str] = {}
-    for path in sorted(config_dir.rglob("*.yaml")):
+    for path in sorted(p for p in config_dir.rglob("*")
+                       if has_yaml_extension(p.name)):
         # Skip _-prefixed config files (e.g. _defaults.yaml, _routing_profiles.yaml).
         if path.name.startswith("_"):
             continue

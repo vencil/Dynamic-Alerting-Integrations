@@ -159,9 +159,69 @@ class TestTriggerReload:
         assert rcs.trigger_reload(ghost) is False
 
     def test_no_yaml_files_returns_false(self, tmp_path):
-        # Directory exists but contains no .yaml files.
+        # Directory exists but contains no YAML carrier (`.yaml` / `.yml`,
+        # any case — the exporter's rule via `_lib_confd`; #1603).
         (tmp_path / "readme.md").write_text("x", encoding="utf-8")
         assert rcs.trigger_reload(tmp_path) is False
+
+    @pytest.mark.parametrize("carrier", ["alpha.yml", "Alpha.YAML"])
+    def test_perturbs_a_yml_or_upper_case_carrier_like_yaml(self, tmp_path, carrier):
+        """#1603 — a `.yml` / `.YAML` carrier is a reload target like `.yaml`.
+
+        WHY: the exporter hot-reloads both spellings; a soak against a
+        `.yml` tree perturbed nothing and reported `reload count: 0` for
+        the wrong reason. Measured before the fix: `alpha.yaml` → True,
+        `alpha.yml` → False. `test_no_yaml_files_returns_false` above is
+        the sensitivity control (a tree with no carrier → False).
+        """
+        f = tmp_path / carrier
+        f.write_text("x: 1\n", encoding="utf-8")
+        assert rcs.trigger_reload(tmp_path) is True
+        assert "soak-toggle" in f.read_text(encoding="utf-8")
+
+    def test_hidden_file_is_not_a_reload(self, tmp_path):
+        """#1630 — a `.`-prefixed carrier is never read by the exporter.
+
+        WHY: perturbing it fires NO reload, yet this returned True and the
+        summary's `reload_count` went up — a soak "surviving N reloads"
+        that never reloaded once. Measured before the fix: True.
+        """
+        defaults = tmp_path / "_defaults.yaml"
+        defaults.write_text("baseline: 1\n", encoding="utf-8")
+        hidden = tmp_path / ".disabled-tenant.yaml"
+        hidden.write_text("x: 1\n", encoding="utf-8")
+        assert rcs.trigger_reload(tmp_path) is False
+        assert hidden.read_text(encoding="utf-8") == "x: 1\n"
+        assert defaults.read_text(encoding="utf-8") == "baseline: 1\n"
+
+    def test_file_under_hidden_dir_is_not_a_reload(self, tmp_path):
+        """#1630 — the exporter `SkipDir`s a `.`-prefixed directory, so a
+        visible name underneath it is hidden too. Measured before the fix:
+        True for `.draft/alpha.yaml`.
+        """
+        (tmp_path / "_defaults.yaml").write_text("baseline: 1\n", encoding="utf-8")
+        draft = tmp_path / ".draft"
+        draft.mkdir()
+        f = draft / "alpha.yaml"
+        f.write_text("x: 1\n", encoding="utf-8")
+        assert rcs.trigger_reload(tmp_path) is False
+        assert f.read_text(encoding="utf-8") == "x: 1\n"
+
+    def test_visible_carrier_beside_hidden_ones_is_the_one_perturbed(self, tmp_path):
+        """Control for the two above: with a visible carrier present the
+        soak still fires, and it writes the visible one, never the hidden.
+        """
+        hidden = tmp_path / ".disabled-tenant.yaml"
+        hidden.write_text("x: 1\n", encoding="utf-8")
+        (tmp_path / ".draft").mkdir()
+        nested = tmp_path / ".draft" / "alpha.yaml"
+        nested.write_text("x: 1\n", encoding="utf-8")
+        visible = tmp_path / "alpha.yaml"
+        visible.write_text("x: 1\n", encoding="utf-8")
+        assert rcs.trigger_reload(tmp_path) is True
+        assert "soak-toggle" in visible.read_text(encoding="utf-8")
+        assert hidden.read_text(encoding="utf-8") == "x: 1\n"
+        assert nested.read_text(encoding="utf-8") == "x: 1\n"
 
     def test_only_underscore_files_returns_false(self, tmp_path):
         # _defaults.yaml is intentionally skipped (platform invariant).

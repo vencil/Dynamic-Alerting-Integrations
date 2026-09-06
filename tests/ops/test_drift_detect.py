@@ -125,6 +125,35 @@ class TestComputeManifest:
         m = dd.compute_dir_manifest(str(tmp_path / "nope"))
         assert m.files == {}
 
+    @pytest.mark.parametrize("carrier", ["alpha.yml", "Alpha.YAML"])
+    def test_sees_yml_and_upper_case_the_same_as_yaml(self, tmp_path, carrier):
+        """#1603 — a `.yml` / `.YAML` carrier must enter the manifest like `.yaml`.
+
+        WHY: the exporter reads both spellings in any case, so two clusters
+        that differ only in a `.yml` tenant DO drift. Measured before the fix
+        with byte-identical bodies: `alpha.yaml` → 2 entries, `alpha.yml` and
+        `Alpha.YAML` → 1 entry — the same answer as a tree with NO tenant, so
+        the drift was reported as "drift-free". The `notenants` arm is the
+        sensitivity control: if it ever equals the `yaml` arm the comparison
+        has no discriminating power and this test proves nothing.
+        """
+        body = "tenants:\n  alpha:\n    pg_connections: 90\n"
+        seen = {}
+        for arm, name in (("yaml", "alpha.yaml"), ("other", carrier),
+                          ("notenants", None)):
+            d = tmp_path / arm
+            d.mkdir()
+            _write_yaml(d, "_defaults.yaml", "defaults: {}\n")
+            if name:
+                _write_yaml(d, name, body)
+            seen[arm] = dd.compute_dir_manifest(str(d)).files
+        assert seen["yaml"] != seen["notenants"], (
+            "fixture is vacuous — removing the tenant changed nothing")
+        assert carrier in seen["other"], (
+            f"{carrier} is invisible to the manifest: {sorted(seen['other'])}")
+        # Same bodies ⇒ same hash multiset; only the NAMES differ.
+        assert sorted(seen["other"].values()) == sorted(seen["yaml"].values())
+
     def test_same_content_same_hash(self, tmp_path):
         """相同內容產生相同 SHA-256。"""
         d1 = tmp_path / "d1"

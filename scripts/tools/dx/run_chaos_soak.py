@@ -90,7 +90,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
-from _lib_confd import has_yaml_extension, is_reserved_name  # noqa: E402
+from _lib_confd import has_yaml_extension, is_hidden_name, is_reserved_name  # noqa: E402
 
 # Metrics we extract from /metrics (Prometheus text format).
 # Adding new ones here automatically extends the timeseries CSV.
@@ -174,11 +174,13 @@ def fetch_metrics(target_url: str, timeout_sec: float = 5.0) -> dict[str, float]
 
 
 def trigger_reload(config_dir: Path) -> bool:
-    """Bump mtime of all .yaml files under config_dir to fire SHA-256 diff.
+    """Perturb one YAML carrier the exporter reads, to fire its SHA-256 diff.
 
     threshold-exporter's hot-reload watches mtime + content hash. Touching
     mtime alone won't fire if content unchanged; we append a no-op comment
     line that toggles between two values to force a fresh hash each pass.
+
+    Returns True only if a carrier the exporter WOULD reload was written.
     """
     if not config_dir.exists():
         return False
@@ -189,13 +191,24 @@ def trigger_reload(config_dir: Path) -> bool:
     # reload still produces a full run report, so the whole exercise reads
     # as "hot-reload survived N hours" having never reloaded once.
     #
-    # ⚠️ `.yaml` ONLY is preserved (the spelling axis is #1603), and the
-    # relative order of `rglob("*")` matches what `rglob("*.yaml")` yielded
-    # — MEASURED on a nested tree whose entries were created in shuffled
-    # order, not assumed — so "the first non-`_` file" still picks the same
-    # carrier and the soak keeps perturbing what it used to perturb.
+    # #1603 (extension-SPELLING axis): `.yaml` only was kept through #1588
+    # on purpose; measured on byte-identical bodies before widening:
+    # `alpha.yaml` → True, `alpha.yml` → False (nothing perturbed). Now the
+    # shared predicate with its default set, i.e. both spellings, any case.
+    #
+    # #1630 (HIDDEN axis): a `.`-prefixed file, or any file under a
+    # `.`-prefixed directory, is never read by the exporter
+    # (`config_hierarchy.go` skips the file / `SkipDir`s the directory).
+    # Perturbing one fires NO reload, yet this returned True and
+    # `reload_count` in the summary went up — measured True on a tree
+    # holding only `_defaults.yaml` + `.disabled-tenant.yaml`, and True on
+    # `_defaults.yaml` + `.draft/alpha.yaml`. Every path component relative
+    # to config_dir is tested, so a visible name under a hidden directory
+    # is hidden too, exactly as the walker sees it.
     yaml_files = [p for p in config_dir.rglob("*")
-                  if has_yaml_extension(p.name, (".yaml",))]
+                  if has_yaml_extension(p.name)
+                  and not any(is_hidden_name(part)
+                              for part in p.relative_to(config_dir).parts)]
     if not yaml_files:
         return False
     # Pick the first non-_defaults file to perturb (keeps platform invariants stable)

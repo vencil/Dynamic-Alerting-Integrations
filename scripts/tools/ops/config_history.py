@@ -31,7 +31,7 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_python import detect_cli_lang, format_json_report  # noqa: E402
-from _lib_confd import warn_nested  # noqa: E402
+from _lib_confd import has_yaml_extension, is_hidden_name, warn_nested  # noqa: E402
 
 # Canonical lang detection (da-tools ROI r3 W2 bug fix): the former local
 # `_detect_lang` only checked the zh prefix per variable, so DA_LANG=en fell
@@ -63,8 +63,15 @@ def _scan_config_dir(config_dir):
     # #1339: flat by design here — but a hierarchical conf.d must not
     # look like an empty one. Name the files this scan cannot see.
     warn_nested(config_path, tool="config_history")
-    for f in sorted(config_path.glob("*.yaml")):
-        if f.name.startswith('.'):
+    # #1603 (extension-SPELLING axis): this was `glob("*.yaml")` plus a
+    # hand-rolled `startswith('.')`. Measured on byte-identical bodies
+    # before the fix: `alpha.yaml` → [_defaults, alpha]; `alpha.yml` and
+    # `Alpha.YAML` → [_defaults] — the same answer as a tree with no
+    # tenant, so a snapshot/diff never recorded a `.yml` tenant's changes
+    # while the exporter hot-reloaded them. Both predicates are now the
+    # shared ones (`_lib_confd`, the exporter's rule); the scan stays flat.
+    for f in sorted(config_path.iterdir()):
+        if is_hidden_name(f.name) or not has_yaml_extension(f.name):
             continue
         content = f.read_text(encoding='utf-8')
         h = _sha256(content)
