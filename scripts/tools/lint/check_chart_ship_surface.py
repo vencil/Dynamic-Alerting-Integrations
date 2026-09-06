@@ -164,8 +164,15 @@ _COMMENT_RE = re.compile(r"^[\s@\-]*#")
 ARCHIVE_CHECK = "check_chart_package_contents.py"
 
 # Spellings that discard the verification step's exit code. Compared
-# whitespace-stripped, so `|| true` and `||true` both match.
-_NEUTERING = ("||true", "||:", "continue-on-error:true", "set+e")
+# whitespace-stripped, so `|| true` and `||true` both match. Which of these
+# actually applies to a given invocation is decided by `_neutering_hits`, not by
+# their mere presence in the window.
+_NEUTERING_INLINE = ("||true", "||:")
+_SET_MINUS_E = "set+e"
+_CONTINUE_ON_ERROR = "continue-on-error:true"
+# Start of a YAML step, so `continue-on-error:` can be attributed to the step it
+# actually belongs to rather than to anything that happens to sit in the window.
+_STEP_START_RE = re.compile(r"^\s*-\s+(name|uses|run|id|with|env|if|shell):")
 _MAKE_ASSIGN_RE = re.compile(r"^(?P<name>[A-Z][A-Z0-9_]*)\s*:?=\s*(?P<value>\S+)")
 
 
@@ -322,6 +329,50 @@ def _runner_files(repo_root: Path) -> List[Path]:
     return files
 
 
+def _neutering_hits(window: List[str], idx: int) -> List[Tuple[int, str]]:
+    """Error handling that actually applies to the verifier at `window[idx]`.
+
+    Scoped on purpose. An earlier revision flagged any `|| true` or `set +e`
+    anywhere in the window, which made `rm -rf .build/tmp || true` next to a
+    perfectly wired check read as sabotage — a guard that reports work nobody
+    can do gets switched off, so a false positive here is not harmless.
+
+    What still counts:
+      - `|| true` / `||:` on the verifier's OWN line — that is how you discard
+        a command's exit code;
+      - `set +e` BEFORE it in the same block — after it the command has already
+        run and been evaluated;
+      - `continue-on-error: true` inside the verifier's own YAML step.
+    """
+    hits: List[Tuple[int, str]] = []
+    squashed = window[idx].replace(" ", "")
+    hits.extend((idx, m) for m in _NEUTERING_INLINE if m in squashed)
+    hits.extend(
+        (i, "set +e")
+        for i in range(idx)
+        if _SET_MINUS_E in window[i].replace(" ", "")
+        and not _COMMENT_RE.match(window[i])
+    )
+
+    start = 0
+    for i in range(idx, -1, -1):
+        if _STEP_START_RE.match(window[i]):
+            start = i
+            break
+    end = len(window)
+    for i in range(idx + 1, len(window)):
+        if _STEP_START_RE.match(window[i]):
+            end = i
+            break
+    hits.extend(
+        (i, "continue-on-error: true")
+        for i in range(start, end)
+        if _CONTINUE_ON_ERROR in window[i].replace(" ", "")
+        and not _COMMENT_RE.match(window[i])
+    )
+    return sorted(hits)
+
+
 def check_package_verification_wiring(repo_root: Path = REPO_ROOT) -> List[str]:
     """Every `helm package` must be verified before the archive is pushed.
 
@@ -341,10 +392,17 @@ def check_package_verification_wiring(repo_root: Path = REPO_ROOT) -> List[str]:
                 continue
             below = lines[n:]
             stop = next(
-                (i for i, l in enumerate(below) if _HELM_PUSH_RE.search(l)), len(below)
+                (
+                    i
+                    for i, l in enumerate(below)
+                    if _HELM_PUSH_RE.search(l) and not _COMMENT_RE.match(l)
+                ),
+                len(below),
             )
             window = below[:stop]
-            if not any(ARCHIVE_CHECK in l for l in window):
+            if not any(
+                ARCHIVE_CHECK in l and not _COMMENT_RE.match(l) for l in window
+            ):
                 where = (
                     f"before the `helm push` on line {n + stop + 1}"
                     if stop < len(below)
@@ -360,17 +418,18 @@ def check_package_verification_wiring(repo_root: Path = REPO_ROOT) -> List[str]:
             # Present but neutered reads exactly like protection while providing
             # none — the failure mode this whole assertion exists to prevent, so
             # it is not enough to see the invocation.
-            for offset, l in enumerate(window):
-                neutered = next(
-                    (m for m in _NEUTERING if m in l.replace(" ", "")), None
+            idx = next(
+                i
+                for i, l in enumerate(window)
+                if ARCHIVE_CHECK in l and not _COMMENT_RE.match(l)
+            )
+            for offset, neutered in _neutering_hits(window, idx):
+                violations.append(
+                    f"{rel}:{n + offset + 1} neutralises the {ARCHIVE_CHECK} "
+                    f"step for the `helm package` on line {n} "
+                    f"({neutered!r}): its exit code is discarded, so the step "
+                    f"passes whatever the archive contains."
                 )
-                if neutered is not None:
-                    violations.append(
-                        f"{rel}:{n + offset + 1} neutralises the {ARCHIVE_CHECK} "
-                        f"step for the `helm package` on line {n} "
-                        f"({neutered!r}): its exit code is discarded, so the step "
-                        f"passes whatever the archive contains."
-                    )
     return violations
 
 

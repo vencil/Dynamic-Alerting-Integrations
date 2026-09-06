@@ -613,31 +613,77 @@ class TestPackageVerificationWiring:
         )
         assert gate.check_package_verification_wiring(repo) == []
 
+    # The verifier invocation and the push, as the real workflow spells them.
+    _V = "          python3 x/check_chart_package_contents.py\n"
+    _U = "          helm push .build/demo-1.0.0.tgz oci://reg/charts\n"
+
     @pytest.mark.parametrize(
-        "neutering",
+        ("label", "body"),
         [
-            "          python3 x/check_chart_package_contents.py || true\n",
-            "          python3 x/check_chart_package_contents.py ||true\n",
-            "        continue-on-error: true\n"
-            "        run: python3 x/check_chart_package_contents.py\n",
-            "          python3 x/check_chart_package_contents.py\n"
-            "          set +e\n",
+            ("inline || true", "          python3 x/check_chart_package_contents.py || true\n" + _U),
+            ("inline ||true", "          python3 x/check_chart_package_contents.py ||true\n" + _U),
+            ("set +e before it", "          set +e\n" + _V + _U),
+            (
+                "continue-on-error in ITS step",
+                "      - name: Verify\n        continue-on-error: true\n        run: |\n" + _V + _U,
+            ),
         ],
     )
     def test_a_neutered_verification_is_red(
-        self, tmp_path: Path, neutering: str
+        self, tmp_path: Path, label: str, body: str
     ) -> None:
         """⭐ Present-but-defanged reads exactly like protection while providing
         none. Finding the invocation is not enough."""
         repo = self._repo(
-            tmp_path,
-            "          helm package helm/demo -d .build/\n"
-            + neutering
-            + "          helm push .build/demo-1.0.0.tgz oci://reg/charts\n",
+            tmp_path, "          helm package helm/demo -d .build/\n" + body
         )
         v = gate.check_package_verification_wiring(repo)
-        assert len(v) == 1, v
+        assert len(v) == 1, (label, v)
         assert "neutralises" in v[0]
+
+    @pytest.mark.parametrize(
+        ("label", "body"),
+        [
+            # ⛔ The dangerous direction: a check that is commented out reads as
+            # absent to a human and as PRESENT to a naive substring scan. This
+            # gate exists to catch a disabled check; being fooled by `#` would
+            # make it decorative. (CodeRabbit on #1780; verified, then fixed.)
+            ("commented-out verifier", "          # python3 x/check_chart_package_contents.py\n" + _U),
+        ],
+    )
+    def test_a_commented_out_verification_does_not_count(
+        self, tmp_path: Path, label: str, body: str
+    ) -> None:
+        repo = self._repo(
+            tmp_path, "          helm package helm/demo -d .build/\n" + body
+        )
+        v = gate.check_package_verification_wiring(repo)
+        assert len(v) == 1, (label, v)
+        assert "nothing invokes" in v[0]
+
+    @pytest.mark.parametrize(
+        ("label", "body"),
+        [
+            # A guard that reports work nobody can do gets switched off, so each
+            # of these false positives was worth removing.
+            ("commented `helm push` before the real one",
+             "          # helm push (old spelling)\n" + _V + _U),
+            ("another command's `|| true`",
+             "          rm -rf .build/tmp || true\n" + _V + _U),
+            ("`set +e` AFTER the verifier has already run",
+             _V + "          set +e\n" + _U),
+            ("continue-on-error on a DIFFERENT step",
+             "      - name: Other\n        continue-on-error: true\n"
+             "        run: echo hi\n      - name: Verify\n        run: |\n" + _V + _U),
+        ],
+    )
+    def test_wiring_that_is_actually_fine_is_green(
+        self, tmp_path: Path, label: str, body: str
+    ) -> None:
+        repo = self._repo(
+            tmp_path, "          helm package helm/demo -d .build/\n" + body
+        )
+        assert gate.check_package_verification_wiring(repo) == [], label
 
     def test_a_makefile_call_site_counts_too(self, tmp_path: Path) -> None:
         """`make chart-package` publishes through `chart-push`; the workflows are
