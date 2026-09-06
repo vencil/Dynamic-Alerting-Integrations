@@ -817,3 +817,219 @@ class TestDiscoverTenantConfigsExtensionSpelling:
             f"({CONFIG_SUFFIXES!r}) and discovery returned {tenants}, "
             f"expected {expected}"
         )
+
+
+class TestWritingIsOptIn:
+    """#1582：沒有 `--output-dir` 就一個檔也不寫，CRD 改走 stdout。
+
+    ⛔ 缺陷形狀是「輸入被重導、輸出沒被重導」：把 `--config-dir` 指向一棵拋棄式
+    fixture 樹，工具仍把產物寫進**呼叫目錄**的 `operator-manifests/`。
+    反事實（`9f5fe89a`，本改動前）：同一條指令在呼叫目錄建出 17 個檔、stdout 空。
+
+    三支測試各釘一個方向，任何一支單獨都不夠：
+      * 下界——不給輸出就不准寫（拿掉 `output_dir is None` 分派即紅）；
+      * 上界——給了輸出仍然要寫（把寫入整段拿掉即紅，光有下界抓不到）；
+      * `--gitops` 不得在 stdout 這條路上被靜默丟掉（本改動把 stdout 從
+        `--dry-run` 專屬變成**預設**路徑，而 `gitops` 原本只傳給 write path）。
+    """
+
+    @staticmethod
+    def _tree(root: Path) -> set:
+        """`root` 底下的完整相對路徑集合。
+
+        ⛔ 用集合而不是「有沒有某個具名目錄」，否則預設輸出路徑一改名，這支測試
+        就對它盲了。⛔ 而且 `root` 必須是 **`tmp_path`**（涵蓋 rule-packs / conf.d /
+        呼叫目錄三棵），不能只給呼叫目錄：盲審實測，只看 cwd 時「改成把 19 個檔
+        寫進被重導的 `--config-dir` 樹」這個變異**存活**——而那正是本票 docstring
+        描述的情境。⚠️ 誠實邊界：寫到 `tmp_path` 之外的絕對路徑仍不在覆蓋內。
+        """
+        return {p.relative_to(root) for p in root.rglob("*")}
+
+    def test_no_output_dir_writes_nothing_and_streams_to_stdout(
+        self, gen_dirs, tmp_path, monkeypatch, capsys,
+    ):
+        packs, confd, _unused = gen_dirs
+        cwd = tmp_path / "caller_cwd"
+        cwd.mkdir()
+        monkeypatch.chdir(cwd)
+
+        before = self._tree(tmp_path)
+        with patch("sys.argv", [
+            "operator_generate.py",
+            "--rule-packs-dir", str(packs),
+            "--config-dir", str(confd),
+        ]):
+            og.main()
+        after = self._tree(tmp_path)
+
+        assert after == before, (
+            f"no --output-dir was given, so NOTHING may be written anywhere under "
+            f"tmp_path (cwd, the rule-packs tree, or the redirected conf.d tree); "
+            f"these appeared: {sorted(map(str, after - before))}"
+        )
+        out = capsys.readouterr().out
+        assert "kind: PrometheusRule" in out, (
+            "writing is opt-in, so the CRDs have to go somewhere — stdout. "
+            f"stdout was {out[:200]!r}"
+        )
+
+    def test_output_dir_still_writes_and_keeps_stdout_clean(
+        self, gen_dirs, tmp_path, monkeypatch, capsys,
+    ):
+        packs, confd, out_dir = gen_dirs
+        cwd = tmp_path / "caller_cwd2"
+        cwd.mkdir()
+        monkeypatch.chdir(cwd)
+        before_files = {p for p in self._tree(tmp_path) if (tmp_path / p).is_file()}
+
+        with patch("sys.argv", [
+            "operator_generate.py",
+            "--rule-packs-dir", str(packs),
+            "--config-dir", str(confd),
+            "--output-dir", str(out_dir),
+        ]):
+            og.main()
+
+        written = sorted(p.name for p in out_dir.glob("*.yaml"))
+        assert written, "--output-dir was given: the write path must still write"
+        captured = capsys.readouterr()
+        assert captured.out == "", (
+            f"write mode keeps stdout empty (progress goes to stderr); got {captured.out[:200]!r}"
+        )
+        leaked = {
+            p for p in self._tree(tmp_path)
+            if not str(p).startswith(out_dir.name) and (tmp_path / p).is_file()
+        } - before_files
+        assert not leaked, (
+            f"an explicit --output-dir was given, so every new file must land there; "
+            f"these landed elsewhere under tmp_path: {sorted(map(str, leaked))}"
+        )
+
+    def test_stdout_is_forced_to_utf8_lf_on_a_legacy_console(
+        self, tmp_path, monkeypatch,
+    ):
+        """stdout 現在是預設的產物通道 ⇒ 它必須與寫檔通道等價。
+
+        ⛔ 不能用 `capsys` 測：那是記憶體裡的 text stream，沒有目標編碼可言，
+        **沒有修法也會綠**。這裡把 `sys.stdout` 換成真的 cp950 `TextIOWrapper`
+        （並帶 Windows 的 CRLF 轉譯）來重現機制：PyYAML 對目標編碼放不下的字元
+        會退成字面 escape，而 `write_text_secure` 寫出的檔是真正的字元。
+        盲審在 cp950 主控台上實測 15 份相同、**1 份語意不同**、rc=0 無聲。
+        """
+        import io as _io
+
+        # 變異測試會把預設值還原成 cwd-relative，所以這支也要隔離 cwd，
+        # 否則變異跑動時會把產物漏進工作樹（實測漏過一次）。
+        cwd = tmp_path / "caller_cwd5"
+        cwd.mkdir()
+        monkeypatch.chdir(cwd)
+
+        packs = tmp_path / "rule-packs"
+        packs.mkdir()
+        (packs / "rule-pack-uni.yaml").write_text(
+            "groups:\n"
+            "  - name: uni_alerts\n"
+            "    rules:\n"
+            "      - alert: UniHigh\n"
+            "        expr: uni_metric > 80\n"
+            "        annotations:\n"
+            "          summary: needs an HA set (≥ 2) to page\n",
+            encoding="utf-8",
+        )
+        confd = tmp_path / "conf.d"
+        confd.mkdir()
+        (confd / "_defaults.yaml").write_text(
+            "defaults:\n  uni_metric: 80\n", encoding="utf-8")
+
+        buf = _io.BytesIO()
+        legacy = _io.TextIOWrapper(buf, encoding="cp950", newline="\r\n")
+        monkeypatch.setattr(sys, "stdout", legacy)
+        with patch("sys.argv", [
+            "operator_generate.py",
+            "--rule-packs-dir", str(packs),
+            "--config-dir", str(confd),
+            "--components", "rules",
+        ]):
+            og.main()
+        legacy.flush()
+        raw = buf.getvalue()
+
+        assert raw, "the stdout path must have emitted something"
+        assert b"\\u2265" not in raw, (
+            "the character survives into the file channel but was escaped on stdout — "
+            "the two channels are not equivalent, and stdout is now the default one"
+        )
+        assert "≥".encode("utf-8") in raw, (
+            f"stdout must carry the real character as UTF-8; got {raw[:200]!r}"
+        )
+        assert b"\r\n" not in raw, (
+            "write_text_secure forces LF and calls it load-bearing; the stdout "
+            "channel must not hand back CRLF for the same document"
+        )
+
+    def test_empty_output_dir_is_rejected_not_silently_the_cwd(
+        self, gen_dirs, tmp_path, monkeypatch,
+    ):
+        """`--output-dir "$OUT"` 在 OUT 未設時傳空字串，而 `Path("").resolve()` 是 cwd。
+
+        ⛔ 這一格在本改動之前命中面是零（沒人需要打這個參數），之後是**全部**。
+        ⛔ 判定必須發生在 argparse 的 type 層：`type=Path` 之後再判就晚了，
+        `Path("")` 與 `Path(".")` 已經無法區分（實測補判版本回 rc=0 並照樣寫檔）。
+        `.` 仍須合法——那是明確要求寫進目前目錄。
+        """
+        packs, confd, _unused = gen_dirs
+        cwd = tmp_path / "caller_cwd4"
+        cwd.mkdir()
+        monkeypatch.chdir(cwd)
+
+        for bad in ("", " "):
+            with pytest.raises(SystemExit) as exc:
+                with patch("sys.argv", [
+                    "operator_generate.py",
+                    "--rule-packs-dir", str(packs),
+                    "--config-dir", str(confd),
+                    "--output-dir", bad,
+                ]):
+                    og.main()
+            assert exc.value.code == 2, f"argparse caller error expected for {bad!r}"
+            assert self._tree(cwd) == set(), (
+                f"{bad!r} must be rejected, not resolved to the cwd; "
+                f"these appeared: {sorted(map(str, self._tree(cwd)))}"
+            )
+
+        # 必響對照組：`.` 是合法的，仍然要寫。
+        with patch("sys.argv", [
+            "operator_generate.py",
+            "--rule-packs-dir", str(packs),
+            "--config-dir", str(confd),
+            "--output-dir", ".",
+        ]):
+            og.main()
+        assert list(cwd.glob("*.yaml")), "--output-dir . must still write into the cwd"
+
+    def test_gitops_is_not_silently_dropped_on_the_stdout_path(
+        self, gen_dirs, tmp_path, monkeypatch, capsys,
+    ):
+        packs, confd, _unused = gen_dirs
+        cwd = tmp_path / "caller_cwd3"
+        cwd.mkdir()
+        monkeypatch.chdir(cwd)
+
+        argv = [
+            "operator_generate.py",
+            "--rule-packs-dir", str(packs),
+            "--config-dir", str(confd),
+        ]
+        with patch("sys.argv", list(argv)):
+            og.main()
+        plain = capsys.readouterr().out
+        with patch("sys.argv", argv + ["--gitops"]):
+            og.main()
+        gitops = capsys.readouterr().out
+
+        assert plain and gitops, "both runs must emit YAML to stdout"
+        assert plain != gitops, (
+            "--gitops is a rendering property (sorted keys). If the stdout path "
+            "ignores it, the two runs are byte-identical and the flag is silently "
+            "dropped — which is what this test exists to catch."
+        )

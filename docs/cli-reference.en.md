@@ -1524,7 +1524,7 @@ da-tools migrate-to-operator [options]
 |--------|-------------|---------|
 | `--source-dir <DIR>` | Directory containing ConfigMap YAML files | (required) |
 | `--config-dir <DIR>` | Tenant config directory | `conf.d` |
-| `--output-dir <DIR>` | Output directory | `migration-output` |
+| `--output-dir <DIR>` | Write CRDs and the checklist into this directory. ⚠️ **Writing requires all three: this flag set, no `--dry-run`, and no `--checklist-only`** (the same discriminators as the `--json` envelope below); if any fails, everything goes to **stdout** and no file is written | none |
 | `--namespace <NS>` | Target K8s namespace | `monitoring` |
 | `--receiver-template <TYPE>` | Receiver type (`slack` / `pagerduty` / `email` / `teams` / `opsgenie` / `webhook`) | — |
 | `--secret-name <NAME>` | K8s Secret name | — |
@@ -1533,11 +1533,21 @@ da-tools migrate-to-operator [options]
 | `--checklist-only` | Generate migration checklist only | false |
 | `--json` | JSON output mode | false |
 
+> ⚠️ **There are three top-level `--json` shapes. They are selected in this order** (#1582, all 8 combinations measured):
+> 1. `--checklist-only` — **outranks every other flag** (including `--dry-run` and `--output-dir`) ⇒ **checklist envelope** (adds `checklist` / `status`; `prometheus_rules` is a **count**);
+> 2. otherwise `--dry-run` **or** no `--output-dir` ⇒ **preview envelope** (`metadata` / `errors`; `prometheus_rules` is a **list of CRDs**);
+> 3. otherwise (`--output-dir` set, no `--dry-run`, no `--checklist-only`) ⇒ **write report** (`configmap_files` / `rule_groups` / `tenants` / `total_crds`; `prometheus_rules` is a **count**).
+>
+> ⛔ The key names overlap but the types differ. Consumers must branch in that order — **not on `--output-dir` alone**: `--output-dir DIR --dry-run` yields the preview envelope, not the report.
+
 **Examples**
 
 ```bash
-# Basic migration
+# Basic: the checklist and the CRDs go to stdout (nothing is written)
 da-tools migrate-to-operator --source-dir configmaps/
+
+# To write files, name the directory explicitly (#1582: writing is opt-in)
+da-tools migrate-to-operator --source-dir configmaps/ --output-dir ./migration-output
 
 # Preview migration plan
 da-tools migrate-to-operator --source-dir configmaps/ --dry-run
