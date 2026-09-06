@@ -25,10 +25,14 @@ What is pinned here:
      the replaced copy is gone, so completeness cannot be established now.
 
   3. THE REJECTION PATHS — rc=2 and an ::error:: line, not a traceback.
-     ⚠️ Only the ones that already rejected. Malformed records still raise a
-     bare traceback in both renderers; that is TRK-375 (#1733), deliberately not
-     fixed here, and these tests pin today's behaviour so #1733 must change them
-     on purpose.
+     ⚠️ Malformed records USED to raise a bare traceback here; TRK-375 (#1733)
+     turned each into a refusal, and the shapes it covers are parameterised
+     below. ⛔ Two of them (a field with no '=', a non-integer value) used to
+     die before printing anything; the third (a row missing a field the report
+     indexes) died 23 lines in, leaving a normal-LOOKING half report on the Job
+     Summary page. `test_a_crash_after_acceptance_prints_no_partial_report`
+     pins the property that makes that shape impossible in general, not just
+     for the three known inputs.
 
 ⛔ WHERE THE HISTORY LIVES, AND WHY NOT HERE. Five review rounds on this change
 produced 30 findings; 16 were defects in explanatory prose like this docstring,
@@ -315,6 +319,22 @@ def test_divergence5_a_repeated_env_record_is_shown_not_swallowed(tmp_path):
 # 3. Rejection paths — an ::error:: line and rc=2, never a half-printed report
 # ---------------------------------------------------------------------------
 
+def _first_measurement_row(lines, edit):
+    """Apply `edit` to the first non-calibration PROBEROW only.
+
+    ⛔ Not `[0]` and not "every row": the calibration row (`bench_n=1`) is
+    dropped before `reject()` sees it, so a mutation landing there is invisible
+    to the assertions below — a test that passes for the wrong reason.
+    """
+    out, done = [], False
+    for l in lines:
+        if l.startswith("PROBEROW") and "bench_n=1 " not in l and not done:
+            l, done = edit(l), True
+        out.append(l)
+    assert done, "no measurement PROBEROW to mutate — the fixture changed"
+    return out
+
+
 @pytest.mark.parametrize("mutate,needle", [
     (lambda ls: [l for l in ls if not l.startswith("PROBEENV")],
      "no PROBEENV record"),
@@ -322,6 +342,22 @@ def test_divergence5_a_repeated_env_record_is_shown_not_swallowed(tmp_path):
                  if l.startswith("PROBEROW") and "bench_n=1" not in l else l
                  for l in ls],
      "iters<=0"),
+    # TRK-375 (#1733) — each of these used to be a bare traceback.
+    (lambda ls: _first_measurement_row(
+        ls, lambda l: re.sub(r"write_sum=\d+", "write_sum", l)),
+     "has no '='"),
+    (lambda ls: _first_measurement_row(
+        ls, lambda l: re.sub(r"write_sum=\d+", "write_sum=NaN", l)),
+     "is not an integer"),
+    (lambda ls: _first_measurement_row(
+        ls, lambda l: re.sub(r"\s*load_p50=\d+", "", l)),
+     "missing load_p50"),
+    # Not a malformed record — every row parses — but the per-iteration figures
+    # divide by ONE row's `iters`, so a log whose rows disagree reported a
+    # halved average with rc=0 and no warning.
+    (lambda ls: _first_measurement_row(
+        ls, lambda l: l.replace("iters=400", "iters=800")),
+     "differing iters"),
 ])
 def test_malformed_input_is_rejected_with_an_error_annotation(tmp_path, mutate, needle):
     d = build_archive(tmp_path, mutate)
@@ -614,6 +650,69 @@ def test_rejection_returns_two_in_process(tmp_path, capsys):
     d = build_archive(tmp_path, lambda ls: [l for l in ls if not l.startswith("PROBEENV")])
     assert analyze_probe.main(["--from-log", str(d / "probe-run1.txt")]) == 2
     assert "::error::" in capsys.readouterr().out
+
+def test_a_crash_after_acceptance_prints_no_partial_report(capsys, monkeypatch):
+    """An UNANTICIPATED renderer crash must not reach the page half-rendered.
+
+    ⛔ This pins the PROPERTY, not the three inputs above. `reject()` can only
+    refuse defects someone thought of; before TRK-375 (#1733) the renderers
+    streamed print() straight to stdout and the workflow teed it live, so ANY
+    crash part-way published a normal-LOOKING truncated report. Measured on the
+    pre-change code, a row missing `load_p50` put 23 lines on the Job Summary
+    page, ending on a section heading with nothing under it.
+    ⚠️ The job was already red — the step runs under `set -o pipefail`. What
+    this protects is the reader who looks at the Summary and not the log.
+    ⛔ In-process on purpose: the assertion is that stdout carries the error
+    line AND NOTHING ELSE, and it needs to inject a crash the tool cannot
+    produce on demand from a file.
+    """
+    import analyze_probe
+
+    def explodes_midway(_session):
+        print("## Probe: write vs load latency (#1497 mechanism 1)")
+        print("| round | write_p50 |")
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(analyze_probe, "render_ci", explodes_midway)
+    rc = analyze_probe.main(["--from-log", str(ARCHIVE / "probe-run1.txt")])
+    out = capsys.readouterr().out
+    assert rc == 2, out
+    assert out.splitlines() == [
+        "::error::report generation failed after the input was accepted:"
+        " RuntimeError: boom"
+    ], out
+
+
+def test_required_row_fields_match_what_the_code_indexes():
+    """Re-derive `REQUIRED_ROW_FIELDS` from the tool's own AST and pin the two.
+
+    ⛔ The tuple is a hand-written copy of a mechanical fact, so it can go stale
+    silently: the moment a renderer starts writing `r["write_p50"]`, a record
+    missing that field raises KeyError mid-report again — the exact defect
+    TRK-375 (#1733) closed — and nothing else in this suite would say so.
+    ⚠️ `.get()` reads are excluded by construction: they carry a default and
+    cannot raise, which is why `bench_n` is not in the required set.
+    ⚠️ If this goes red because an unrelated dict is now indexed with a string
+    constant, the fix is to narrow this derivation — NOT to widen the tuple,
+    which would start refusing records the report can summarise.
+    """
+    import ast
+
+    import analyze_probe
+
+    tree = ast.parse(TOOL.read_text(encoding="utf-8"))
+    indexed = {
+        n.slice.value
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Subscript)
+        and isinstance(n.slice, ast.Constant)
+        and isinstance(n.slice.value, str)
+    }
+    assert indexed == set(analyze_probe.REQUIRED_ROW_FIELDS), (
+        "REQUIRED_ROW_FIELDS and the fields the code indexes have diverged; "
+        f"only in the code: {sorted(indexed - set(analyze_probe.REQUIRED_ROW_FIELDS))}; "
+        f"only in the tuple: {sorted(set(analyze_probe.REQUIRED_ROW_FIELDS) - indexed)}"
+    )
 
 
 # ---------------------------------------------------------------------------
