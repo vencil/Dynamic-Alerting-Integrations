@@ -311,7 +311,72 @@ def test_archive_rejection_names_the_offending_file(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 4. The workflow actually calls this tool, with a path CI will resolve
+# 4. In-process entry — so coverage can see this module at all
+# ---------------------------------------------------------------------------
+# These were added for VISIBILITY. Every other test in this file runs the tool as
+# a subprocess, which is the right interface to assert (it is what the workflow
+# consumes) but is invisible to coverage.py: it does not follow child processes,
+# so with only those tests this module reports as "never imported" and every
+# coverage-derived signal reads it as unchanged and untested. Measured, with the
+# module selector rather than a path (a path selector reports "never imported"
+# even for in-process tests — a broken instrument, not a result):
+#
+#     15 subprocess tests, --cov=analyze_probe  ->  "No data was collected"
+#      2 in-process tests, --cov=analyze_probe  ->  91.5% (248 stmts, 21 missed)
+#
+# ⛔ The comment here first said these buy "visibility, NOT detection power".
+# The dogfood refuted that and the correction is left visible rather than quietly
+# patched. Mutating `main` to run the renderer but return None instead of its
+# value was caught ONLY by test_archive_mode_runs_in_process; all 15 subprocess
+# tests stayed green, because `sys.exit(None)` exits 0 — so from a subprocess the
+# broken return is indistinguishable from success. The `main()` return contract
+# is structurally invisible to the interface the other tests assert.
+# ⚠️ What is still true is the ordering: the subprocess tests carry the bulk of
+# the detection power (dogfood 8/8, each break caught by its own test), and the
+# coverage NUMBER these three produce is not evidence the tool is well tested.
+# Measured increment of these three, over three mutations: 1 caught by these
+# alone, 2 also caught by the existing tests.
+# ⛔ The underlying blind spot is repo-wide, not local to this file: 78 test
+# files invoke tools through `sys.executable`. Whether each is also imported
+# somewhere was NOT measured, so no count of affected modules is claimed here.
+# Tracked as TRK-379 (#1746). ⚠️ It was numbered TRK-378 when first written; that
+# number collided with #1741, which landed on main first, so this one was
+# renumbered. See the TRK-379 row in planning-id-mapping.md for the arbitration.
+
+def test_archive_mode_runs_in_process(capsys):
+    """Same run as the --archive golden, but imported rather than spawned."""
+    import analyze_probe
+
+    assert analyze_probe.main(["--archive", str(ARCHIVE)]) == 0
+    out = capsys.readouterr().out
+    assert "IDENTITY OF THE THING MEASURED" in out
+    assert "CROSS DISPATCH" in out
+
+
+def test_ci_mode_runs_in_process(capsys):
+    """Same run as the --from-log golden, but imported rather than spawned."""
+    import analyze_probe
+
+    assert analyze_probe.main(["--from-log", str(ARCHIVE / "probe-run1.txt")]) == 0
+    out = capsys.readouterr().out
+    assert "## Probe: write vs load latency (#1497 mechanism 1)" in out
+
+
+def test_rejection_returns_two_in_process(tmp_path, capsys):
+    """The refusal path returns rc=2 rather than raising — asserted in-process.
+
+    The subprocess tests already pin the exit status; this one pins that `main`
+    RETURNS it, which is what `sys.exit(main())` depends on.
+    """
+    import analyze_probe
+
+    d = build_archive(tmp_path, lambda ls: [l for l in ls if not l.startswith("PROBEENV")])
+    assert analyze_probe.main(["--from-log", str(d / "probe-run1.txt")]) == 2
+    assert "::error::" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# 5. The workflow actually calls this tool, with a path CI will resolve
 # ---------------------------------------------------------------------------
 
 WORKFLOW = REPO / ".github" / "workflows" / "bench-probe-write-latency.yaml"
