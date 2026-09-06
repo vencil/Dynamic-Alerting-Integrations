@@ -31,7 +31,7 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_python import detect_cli_lang, format_json_report  # noqa: E402
-from _lib_confd import warn_nested  # noqa: E402
+from _lib_confd import has_yaml_extension, warn_nested  # noqa: E402
 
 # Canonical lang detection (da-tools ROI r3 W2 bug fix): the former local
 # `_detect_lang` only checked the zh prefix per variable, so DA_LANG=en fell
@@ -63,7 +63,54 @@ def _scan_config_dir(config_dir):
     # #1339: flat by design here — but a hierarchical conf.d must not
     # look like an empty one. Name the files this scan cannot see.
     warn_nested(config_path, tool="config_history")
-    for f in sorted(config_path.glob("*.yaml")):
+    # #1603: `glob("*.yaml")` here meant a `db-b.yml` carrier the exporter is
+    # serving never entered a snapshot — so it could be added, edited or
+    # deleted between two `config-history` runs and the diff stayed empty.
+    # `has_yaml_extension` (`CONFIG_SUFFIXES`, the exporter's own set) decides
+    # the SPELLING; `*.y*` is a pre-filter.
+    # ⛔ NOT a purely cheap one, and the difference matters on exactly one
+    # axis: `Path.glob` is case-SENSITIVE on POSIX, so `DB-C.YAML` never
+    # reaches the predicate at all — the pre-filter is what settles the CASE
+    # axis here, and it settles it the same way `glob("*.yaml")` did. Saying
+    # "the predicate is authoritative" full stop would be false in that one
+    # direction. Leaving it there is the point: case is #1588's axis.
+    # ⛔ Not `glob("*")`: `test_confd_enumeration_contract._call_kind` reads
+    # the literal pattern and only calls a glob flat when it starts `*.y`, so
+    # `"*"` would drop this file out of the flat class and make the
+    # `warn_nested` assertion vacuous for it.
+    #
+    # What was measured, and on what: the SELECTION EXPRESSION on its own
+    # (`glob(...)` plus the predicate), old form vs new, on the dev container
+    # (Linux / Python 3.13.13, the CI interpreter), over one directory holding
+    # db-a.yaml, db-b.yml, DB-C.YAML, _defaults.yaml, .hidden.yaml, x.yang,
+    # plain.y, notes.txt and a DIRECTORY named dirnamed.yaml. Delta: exactly
+    # `+db-b.yml`, nothing removed.
+    # ⛔ NOT this function end to end, and the distinction is load bearing:
+    # `read_text` on `dirnamed.yaml` raises `IsADirectoryError` — before this
+    # change AND after it — so on that fixture the function has no output to
+    # diff. The `is_file` axis (#1607 / #1469) is untouched here in the sense
+    # that both versions fail identically, not in the sense that both return.
+    # See the disclosure below.
+    # ⚠️ DISCLOSURE — this widening extends an EXISTING crash to a second
+    # spelling. Measured, same probe on `5a03cb8f` and here:
+    #
+    #   entry in the conf.d          before        after
+    #   `dirnamed.yaml/` (a dir)     RAISED        RAISED     <- unchanged
+    #   `dirnamed.yml/`  (a dir)     ok, ignored   RAISED     <- reach grew
+    #   `broken.yaml` (dead link)    RAISED        RAISED     <- unchanged
+    #   `broken.yml`  (dead link)    ok, ignored   RAISED     <- reach grew
+    #   `bad.yaml` (invalid UTF-8)   RAISED        RAISED     <- unchanged
+    #   `bad.yml`  (invalid UTF-8)   ok, ignored   RAISED     <- reach grew
+    #
+    # The CLASS is pre-existing and filed (#1469 for the directory-shaped
+    # entry, #1654 for the undecodable content); what grew is which spellings
+    # reach it, and that follows from the entry being a real carrier now.
+    # ⛔ Deliberately NOT "fixed" here by swallowing the error: #1469 says in
+    # so many words that turning this into a quiet pass is the wrong repair —
+    # the right one names the entry (`_lib_confd.unusable_config_paths`),
+    # which is a separate change with its own blast radius.
+    for f in sorted(p for p in config_path.glob("*.y*")
+                    if has_yaml_extension(p.name)):
         if f.name.startswith('.'):
             continue
         content = f.read_text(encoding='utf-8')

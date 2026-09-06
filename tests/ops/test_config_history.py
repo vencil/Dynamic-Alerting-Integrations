@@ -262,7 +262,12 @@ class TestScanConfigDir:
             assert result == []
 
     def test_skip_non_yaml_files(self):
-        """只掃描 *.yaml 檔案。"""
+        """只掃描設定載體（`CONFIG_SUFFIXES`），`.txt` / `.py` 不算。
+
+        ⚠️ 這行 docstring 原本寫「只掃描 *.yaml 檔案」——#1603 之後那句是假的
+        （`.yml` 也是載體）。這支測試本身沒變，它餵的兩個鄰居本來就不是任何
+        一種拼法；拼法軸由 `TestScanAcceptsBothSpellings` 釘。
+        """
         with tempfile.TemporaryDirectory() as tmpdir:
             config_dir = Path(tmpdir) / 'conf.d'
             config_dir.mkdir()
@@ -1210,6 +1215,47 @@ class TestEndToEnd:
             assert history[0]['id'] == 1
             assert history[4]['id'] == 5
             assert history[4]['file_count'] == 1
+
+
+# ── 21. _scan_config_dir 的副檔名拼法（#1603）────────────────────────
+
+class TestScanAcceptsBothSpellings:
+    """快照的母體必須與 exporter 服務的那一組相同（#1603）。
+
+    `glob("*.yaml")` 讓 `db-b.yml` 這個 exporter 正在服務的租戶檔從未進過
+    任何一份快照 ⇒ 它可以在兩次 `config-history snapshot` 之間被新增、修改
+    或刪除，而 `cmd_diff` 一片空白、rc=0。
+
+    三面：LOWER（`.yml` 必須被收）／CONTROL（`.yaml` 照舊，這一列不響就是
+    fixture 壞了）／UPPER（exporter 不收的名字必須仍被排除）。
+
+    ⚠️ 只有拼法軸。大小寫（`DB-A.YAML`，#1588）與 `is_file`（名為
+    `notes.yaml/` 的目錄，#1607）在本次改動前後實測不變，不在此斷言涵蓋內。
+    """
+
+    def _scan(self, tmp_path, names):
+        d = tmp_path / "conf.d"
+        d.mkdir()
+        for n in names:
+            (d / n).write_text("mysql_connections: 100\n", encoding="utf-8")
+        return {f["name"] for f in ch._scan_config_dir(str(d))}
+
+    def test_yml_carrier_enters_the_snapshot(self, tmp_path):
+        """LOWER + CONTROL。"""
+        got = self._scan(tmp_path, ["db-a.yaml", "db-b.yml"])
+        assert got == {"db-a.yaml", "db-b.yml"}
+
+    def test_non_config_extensions_stay_out(self, tmp_path):
+        """UPPER — `*.y*` 只是預過濾，判定仍是 has_yaml_extension。"""
+        got = self._scan(tmp_path,
+                         ["db-a.yaml", "db-c.json", "db-d.yang",
+                          "plain.y", "notes.txt"])
+        assert got == {"db-a.yaml"}
+
+    def test_hidden_carriers_still_skipped(self, tmp_path):
+        """既有的 `.` 前綴排除未被本次改動碰到（#1630 是另一條軸）。"""
+        got = self._scan(tmp_path, ["db-a.yaml", ".hidden.yaml", ".hidden.yml"])
+        assert got == {"db-a.yaml"}
 
 
 if __name__ == '__main__':

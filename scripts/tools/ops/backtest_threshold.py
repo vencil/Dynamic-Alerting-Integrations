@@ -305,9 +305,11 @@ def extract_changes_from_git_diff():
             basename = Path(fname).name
             # #1588 site 1 of 6 in this file (the first version counted 4 and the
             # two it missed were `_flat_keys_at_head1` — which was still
-            # broken — and `load_conf_files`, which needed no change). `.yaml` ONLY is preserved on
-            # purpose — the spelling axis is #1603 — but the case folding
-            # and the stem both move to the shared predicates. Hand-slicing
+            # broken — and `load_conf_files`, which needed no change). The
+            # extension set is now the shared default (#1603): omitting the
+            # argument takes `CONFIG_SUFFIXES`, which is the exporter's own
+            # set, so a `conf.d/db-b.yml` the exporter is serving stops being
+            # invisible to this diff parser. Hand-slicing
             # the stem is what `config_stem` exists to stop: `str.lower()`
             # can shrink byte length, so an offset taken from the folded
             # copy cuts the original in the wrong place.
@@ -316,7 +318,7 @@ def extract_changes_from_git_diff():
             # `.foo`. The exporter's scanner skips hidden entries, so that
             # agrees with the oracle — but it is a second-order change and
             # is recorded here rather than left for someone to discover.
-            if has_yaml_extension(basename, (".yaml",)) \
+            if has_yaml_extension(basename) \
                     and not is_reserved_name(basename):
                 # `config_stem` answers "" for a hidden name and the
                 # `if not current_file` below already treats that as
@@ -464,9 +466,11 @@ def extract_changes_from_dirs(config_dir, baseline_dir):
     # ⚠️ The listing goes through `_confd_entries`, not a bare `iterdir()`:
     # see its docstring for the unreadable-directory regression that a
     # plain `is_dir()` guard does NOT cover.
+    # #1603: the extension argument is gone, so this takes `CONFIG_SUFFIXES`
+    # — both spellings, the set `config_hierarchy.go` accepts.
     _entries = _confd_entries(config_base)
     for path in (p for p in _entries
-                 if has_yaml_extension(p.name, (".yaml",))):
+                 if has_yaml_extension(p.name)):
         basename = path.name
         if is_reserved_name(basename):
             continue
@@ -598,7 +602,7 @@ def changed_conf_files():
     # changes is the half that drops them.
     names = [_fsdecode(b) for b in raw.split(b"\0") if b]
     return [f"conf.d/{Path(n).name}" for n in names
-            if has_yaml_extension(n, (".yaml",))
+            if has_yaml_extension(n)
             and not is_hidden_name(Path(n).name)]
 
 
@@ -655,9 +659,10 @@ def find_custom_alert_tenants(parsed):
 def _carrier_at_head1(tenant):
     """The HEAD~1 `conf.d/` path whose stem IS `tenant`, or None.
 
-    ⚠️ `.yaml` ONLY, matching every other site in this file: the spelling
-    axis is #1603 and widening it here would let a `.yml` carrier answer
-    for a tenant this tool otherwise cannot see.
+    ⚠️ Both spellings, matching every other site in this file (#1603): the
+    tenant id reaching this function was itself parsed off a carrier this
+    tool accepted, so a narrower set here would resolve to None for a
+    tenant the very same run had just reported a change for.
 
     The comparison is `config_stem(name) == tenant` — the SAME predicate
     that produced the tenant id in the first place, so the two cannot
@@ -675,7 +680,7 @@ def _carrier_at_head1(tenant):
         return None
     for entry in (_fsdecode(b) for b in raw.split(b"\0") if b):
         name = Path(entry).name
-        if has_yaml_extension(name, (".yaml",)) and config_stem(name) == tenant:
+        if has_yaml_extension(name) and config_stem(name) == tenant:
             # ⚠️ The FULL relative path, not `./conf.d/` + basename: with `-r`
             # the entry can be nested, and rebuilding from the basename hands
             # `git show` a path that is not in the tree. The `./` prefix is
@@ -1150,15 +1155,23 @@ def main():
         # was tried and measured: `load_conf_files` checks reserved, hidden
         # and `is_file` but NOT the extension (it is also fed
         # `conf.d/<basename>` strings by the `--git-diff` path, where the
-        # extension was already decided upstream), so a `notes.txt` and a
-        # `db-c.yml` went straight through and the operator-facing recipe
-        # notice grew two tenants that do not exist:
-        #   NOTE: 3 tenant(s) ... acme, ghost_txt, ghost_yml
+        # extension was already decided upstream), so a `notes.txt` goes
+        # straight through and the operator-facing recipe notice grows a
+        # tenant that does not exist. RE-MEASURED after #1603 widened this
+        # line to `CONFIG_SUFFIXES`, one tree holding acme.yaml +
+        # ghost_txt.txt + ghost_yml.yml:
+        #   with this rule     NOTE: 2 tenant(s) ... acme, ghost_yml
+        #   without this rule  NOTE: 3 tenant(s) ... acme, ghost_txt, ghost_yml
+        # ⚠️ The original note here was taken while this line passed
+        # `(".yaml",)` and counted the `.yml` row as a second ghost. It is
+        # not one any more — `ghost_yml` is a carrier the exporter serves,
+        # so it is in BOTH arms. The rule is still load bearing, for the
+        # `.txt` row.
         # `_confd_entries` lists, this line decides the extension,
         # `load_conf_files` decides reserved/hidden. One rule, one place.
         parsed_conf = load_conf_files(
             [str(p) for p in _confd_entries(Path(args.config_dir))
-             if has_yaml_extension(p.name, (".yaml",))]
+             if has_yaml_extension(p.name)]
         )
     else:
         parsed_conf = {}

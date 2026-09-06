@@ -39,6 +39,7 @@ sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_python import detect_cli_lang, format_json_report, i18n_text  # noqa: E402
 from _lib_exitcodes import EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_confd import has_yaml_extension, warn_nested  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Bilingual help text
@@ -148,8 +149,61 @@ def compute_dir_manifest(dir_path: str, label: str = "") -> FileManifest:
     if not p.is_dir():
         return manifest
 
-    for f in sorted(p.glob("*.yaml")):
-        if f.name.startswith("."):
+    warn_nested(p, tool="drift_detect")
+    # #1603: `glob("*.yaml")` here meant a `db-b.yml` carrier never entered
+    # either manifest, so two clusters that genuinely disagree about it
+    # compared equal — this tool's whole job is to answer "do these trees
+    # differ", and that carrier was outside the question.
+    # `has_yaml_extension` (`CONFIG_SUFFIXES`, the set `config_hierarchy.go`
+    # accepts) decides the SPELLING; `*.y*` is a pre-filter, and `glob("*")`
+    # is deliberately NOT used — see `config_history._scan_config_dir` for
+    # the measured reason (the enumeration-contract classifier reads the
+    # literal pattern). ⛔ The pre-filter is NOT neutral on one axis:
+    # `Path.glob` is case-SENSITIVE on POSIX, so `DB-C.YAML` never reaches
+    # the predicate — the pre-filter settles the CASE axis, the same way
+    # `glob("*.yaml")` did.
+    #
+    # What was measured: the SELECTION EXPRESSION alone, old vs new, on the CI
+    # interpreter — delta exactly `+db-b.yml`, nothing removed. ⛔ Not this
+    # function end to end: `_file_sha256` calls `read_bytes()`, which raises
+    # on a DIRECTORY named `x.yaml` (before this change and after it).
+    #
+    # ⚠️ DISCLOSURE — the widening extends an EXISTING crash to a second
+    # spelling. Measured on `5a03cb8f` vs here:
+    #
+    #   `dirnamed.yaml/` / `broken.yaml` (dead link)   RAISED  -> RAISED
+    #   `dirnamed.yml/`  / `broken.yml`  (dead link)   ok      -> RAISED
+    #   invalid UTF-8 content, either spelling         ok      -> ok
+    #     (this reader takes bytes, so #1654 does not reach it)
+    #
+    # Class is pre-existing and filed (#1469); what grew is which spellings
+    # reach it. ⛔ Not repaired by swallowing the error — #1469 rejects that
+    # shape; naming the entry is a separate change.
+    #
+    # ⚠️ This is a FLAT scan of a config dir, and on a hierarchical conf.d
+    # (ADR-016) it silently hashes only the top level: two trees differing
+    # ONLY below the root compare equal and this tool answers "no drift" —
+    # the silent-zero `_lib_confd` exists against, in the one tool whose
+    # entire job is to answer that question. `warn_nested` is the gate's own
+    # option (b): stay flat, say so. It does not change WHAT is hashed.
+    # ⚠️ Known cost, measured: `--dirs` is documented for arbitrary
+    # directories too (`--dirs dir-a,dir-b`), and on a tree that has nothing
+    # to do with a conf.d the shared wording still cites threshold-exporter
+    # and ADR-016/017. It reaches stderr only — `--json` and the exit code
+    # are unaffected (measured) — but on such a tree the sentence is generic
+    # boilerplate rather than a fact about that tree.
+    #
+    # ⛔ Do not read this module's membership in
+    # `test_confd_enumeration_contract` as durable. That gate discovers its
+    # subjects by enumerated substrings (`config_dir` / `conf-d` / `conf_d`)
+    # and this module names its knob `--dirs` / `dir_path`: on `5a03cb8f` it
+    # scored 0 on all three and was never a subject at all. It is one today
+    # only because the comment above happens to name another tool's
+    # function. `gitops_check.check_local` is still outside that population
+    # with the same shape. Filed as #1761; the guard below is here because
+    # the defect is real, not because the gate asked.
+    for f in sorted(p.glob("*.y*")):
+        if f.name.startswith(".") or not has_yaml_extension(f.name):
             continue
         manifest.files[f.name] = _file_sha256(f)
 
