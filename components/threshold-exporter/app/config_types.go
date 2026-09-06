@@ -37,14 +37,15 @@ type (
 	RoutingConfig             = config.RoutingConfig
 	ConfigInfo                = config.ConfigInfo
 
-	// v2.8.0 PR-8: hierarchy graph promoted to pkg/config so cmd/da-guard
+	// InheritanceGraph was promoted to pkg/config in v2.8.0 PR-8 so cmd/da-guard
 	// and tenant-api can construct it without importing package main.
 	// app's scanDirHierarchical still owns the disk-walking implementation
 	// (it threads fileStat for mtime fast-path).
 	InheritanceGraph = config.InheritanceGraph
 
-	// C6-A (#127 library-side gap): cross-file duplicate-tenant error lowered
-	// into pkg/config so tenant-api / cmd/da-guard / simulate can errors.As it.
+	// DuplicateTenantError is the cross-file duplicate-tenant error, lowered
+	// into pkg/config (C6-A, #127 library-side gap) so tenant-api /
+	// cmd/da-guard / simulate can errors.As it.
 	// app's scanDirHierarchical + config.go's errors.As keep compiling
 	// unchanged through this alias.
 	DuplicateTenantError = config.DuplicateTenantError

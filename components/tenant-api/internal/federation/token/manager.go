@@ -1,4 +1,4 @@
-// Package federation implements federation-token issuance for ADR-020
+// Package token implements federation-token issuance for ADR-020
 // (Tenant Federation — Label-Injection Proxy over Self-Built Endpoint).
 //
 // A federation token is a short-lived (default 4h) RS256-signed JWT a

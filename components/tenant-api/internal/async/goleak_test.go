@@ -9,6 +9,7 @@
 // audit (P1-6 in the testing-quality plan): treat goroutine lifetime as
 // a first-class invariant in async/ instead of relying on individual
 // tests to spot leaks during local debugging.
+
 package async
 
 import (
