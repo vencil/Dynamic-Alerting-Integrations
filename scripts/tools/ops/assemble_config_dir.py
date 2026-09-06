@@ -34,7 +34,7 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_python import format_json_report  # noqa: E402
-from _lib_confd import warn_nested  # noqa: E402
+from _lib_confd import has_yaml_extension, warn_nested  # noqa: E402
 
 try:
     import yaml
@@ -51,7 +51,18 @@ PLATFORM_FILES = {"_defaults.yaml", "_profiles.yaml"}
 # ── Source discovery ─────────────────────────────────────────────────
 
 def discover_yamls(source_dir: Path) -> List[Path]:
-    """List all *.yaml files in a source directory (non-recursive).
+    """List every YAML carrier in a source directory (non-recursive).
+
+    `.yaml` / `.yml`, any case — `_lib_confd.has_yaml_extension`, the
+    exporter's own rule. #1603 (extension-SPELLING axis): this was
+    `glob("*.yaml")`, so a `.yml` shard was silently LEFT OUT of the
+    assembled config-dir — measured on byte-identical bodies before the
+    fix: shard `alpha.yaml` → discovered; `alpha.yml` / `Alpha.YAML` → not,
+    the same answer as an empty shard. Blast radius of widening: a `.yml`
+    shard that used to be dropped is now merged (and can now collide by
+    name with a same-named `.yml` in another shard, which `detect_conflicts`
+    reports as before). Hidden (`.`-prefixed) entries were never skipped
+    here and still are not — that is a separate axis (#1630).
 
     Raises FileNotFoundError if directory does not exist.
     """
@@ -60,7 +71,8 @@ def discover_yamls(source_dir: Path) -> List[Path]:
     # #1339: flat by design here — but a hierarchical conf.d must not
     # look like an empty one. Name the files this scan cannot see.
     warn_nested(source_dir, tool="assemble_config_dir")
-    return sorted(source_dir.glob("*.yaml"))
+    return sorted(p for p in source_dir.iterdir()
+                  if has_yaml_extension(p.name))
 
 
 def _file_sha256(path: Path) -> str:
@@ -184,7 +196,10 @@ def validate_merged(output_dir: Path) -> List[str]:
     # #1339: second scan site — the guard must live where the scan does,
     # otherwise a hierarchical conf.d is silently empty on THIS path.
     warn_nested(output_dir, tool="assemble_config_dir")
-    for f in sorted(output_dir.glob("*.yaml")):
+    # #1603: same predicate as `discover_yamls` — a `.yml` file this tool
+    # now copies into the output must also be the one it validates.
+    for f in sorted(p for p in output_dir.iterdir()
+                    if has_yaml_extension(p.name)):
         try:
             with open(f, encoding="utf-8") as fh:
                 data = yaml.safe_load(fh)
