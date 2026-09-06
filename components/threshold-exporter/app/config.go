@@ -834,42 +834,6 @@ func isTenantOnlyChange(changed, added, removed []string) bool {
 	return true
 }
 
-// patchTenants builds a merged config from the tenant-only incremental fast
-// path: it shallow-copies prev (Defaults/StateFilters/Profiles shared, Tenants
-// map cloned) then overwrites tenants from changed/added files and drops
-// tenants from removed files. Extracted from IncrementalLoad Phase 4; the
-// caller reads prev under the lock, this function is otherwise pure.
-//
-// Two invariants keep this fast path equivalent to the full-rebuild path
-// (mergePartialConfigs + ApplyProfiles):
-//
-//   - changed+added are applied as one sorted filename sequence, mirroring
-//     mergePartialConfigs' own sort, so the last-writer is deterministic.
-//   - a removed file's tenant is dropped only when this same reload did NOT
-//     re-introduce it via an added/changed file. A tenant relocating from a
-//     removed file into an added/changed file in the same reload must stay —
-//     the full rebuild keeps it because it re-merges every surviving file.
-//     Without this guard the overwrite below adds the moved tenant and the
-//     removal loop then wrongly drops it again (issue #790).
-//
-// ⛔ THE PARAGRAPH THAT USED TO SIT HERE WAS FALSE, and both of its claims are
-// what #1569 measured. It said the removal pass may "consult only the
-// just-patched tenants" because "cross-file duplicate declarations are rejected
-// upstream by the hierarchical scan (issue #127)". They are rejected on a FULL
-// load; this fast path accepts them silently, so a live tree can hold one. Once
-// it does, a tenant surviving the deletion of one declaration does NOT have to
-// reappear in a changed file — the surviving file did not change. The removal
-// pass therefore scans the surviving parses (`reclaimTenantFrom`), which costs
-// O(|newConfigs|) per removed tenant rather than O(1), and removals are rare.
-//
-// ⚠️ `patchedTenants` USED TO BE BUILT HERE AND IS GONE. It recorded the
-// tenants this reload reintroduced, so the removal pass could tell a deletion
-// from a move. Once both removal loops consult the declaration index instead,
-// nothing read it — a reviewer pointed out it had no readers left, and a
-// bookkeeping set nobody reads is a claim that the code does something it does
-// not. The move case is now answered by the index, which knows every file that
-// declares the tenant, not just the ones reparsed this round.
-
 // indexTenantDeclarations maps each tenant to the sorted filenames declaring
 // it, built ONCE per reload.
 //
@@ -974,6 +938,41 @@ func reclaimTenantFrom(newConfigs map[string]ThresholdConfig, declaredIn tenantD
 	return overrides, true
 }
 
+// patchTenants builds a merged config from the tenant-only incremental fast
+// path: it shallow-copies prev (Defaults/StateFilters/Profiles shared, Tenants
+// map cloned) then overwrites tenants from changed/added files and drops
+// tenants from removed files. Extracted from IncrementalLoad Phase 4; the
+// caller reads prev under the lock, this function is otherwise pure.
+//
+// Two invariants keep this fast path equivalent to the full-rebuild path
+// (mergePartialConfigs + ApplyProfiles):
+//
+//   - changed+added are applied as one sorted filename sequence, mirroring
+//     mergePartialConfigs' own sort, so the last-writer is deterministic.
+//   - a removed file's tenant is dropped only when this same reload did NOT
+//     re-introduce it via an added/changed file. A tenant relocating from a
+//     removed file into an added/changed file in the same reload must stay —
+//     the full rebuild keeps it because it re-merges every surviving file.
+//     Without this guard the overwrite below adds the moved tenant and the
+//     removal loop then wrongly drops it again (issue #790).
+//
+// ⛔ THE PARAGRAPH THAT USED TO SIT HERE WAS FALSE, and both of its claims are
+// what #1569 measured. It said the removal pass may "consult only the
+// just-patched tenants" because "cross-file duplicate declarations are rejected
+// upstream by the hierarchical scan (issue #127)". They are rejected on a FULL
+// load; this fast path accepts them silently, so a live tree can hold one. Once
+// it does, a tenant surviving the deletion of one declaration does NOT have to
+// reappear in a changed file — the surviving file did not change. The removal
+// pass therefore scans the surviving parses (`reclaimTenantFrom`), which costs
+// O(|newConfigs|) per removed tenant rather than O(1), and removals are rare.
+//
+// ⚠️ `patchedTenants` USED TO BE BUILT HERE AND IS GONE. It recorded the
+// tenants this reload reintroduced, so the removal pass could tell a deletion
+// from a move. Once both removal loops consult the declaration index instead,
+// nothing read it — a reviewer pointed out it had no readers left, and a
+// bookkeeping set nobody reads is a claim that the code does something it does
+// not. The move case is now answered by the index, which knows every file that
+// declares the tenant, not just the ones reparsed this round.
 func patchTenants(prev *ThresholdConfig, newConfigs, oldConfigs map[string]ThresholdConfig, changed, added, removed []string) ThresholdConfig {
 	merged := ThresholdConfig{
 		Defaults: prev.Defaults, // shared (immutable between patches)
@@ -1360,6 +1359,15 @@ func logConfigStats(logger *log.Logger, cfg *ThresholdConfig, prefix string) {
 	}
 }
 
+// WatchLoop periodically checks for config changes and reloads.
+// Uses content hash comparison for reliable change detection.
+// K8s ConfigMap volumes update via symlink rotation (..data), so hash-based
+// detection is more reliable than ModTime for both modes.
+// The stopCh parameter allows graceful shutdown — close it to stop the loop.
+//
+// In directory mode, uses incremental reload (v2.1.0): per-file hash tracking
+// means only changed files are re-parsed, reducing reload latency for large
+// multi-tenant deployments.
 func (m *ConfigManager) WatchLoop(interval time.Duration, stopCh <-chan struct{}) {
 	// Defensive: ConfigManager constructed via struct literal (test
 	// shortcut) wouldn't have called NewConfigManagerWithDebounce, so the
