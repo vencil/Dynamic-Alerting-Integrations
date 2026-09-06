@@ -796,7 +796,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "93b2aca6b07b9d2e86cf792caf7f0d8000319995bd6a763135bafab9b99e1429",
+ "source_digest": "cece09153385a6df91580e39833d73d54cb22b01068a4fce8f9f5f6ee98693f0",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -2103,7 +2103,8 @@
    "tests/lint/test_mkdocs_strict_check.py",
    "tests/lint/test_validate_docs_versions.py",
    "tests/ops/test_ci_path_filter_coverage.py",
-   "tests/ops/test_validate_config.py"
+   "tests/ops/test_validate_config.py",
+   "tests/shared/test_validate_all.py"
   ],
   "renovate.json": [
    "tests/ops/test_renovate_config.py"

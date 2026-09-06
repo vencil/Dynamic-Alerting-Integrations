@@ -396,7 +396,7 @@ tenant-api 的 PR/MR write-back（`internal/github` / `internal/gitlab`）除了
 
 ### 覆蓋率提升技巧
 
-7. 🛡️ **main() 的 sys.exit() 要 catch**：validate_all.py main() 走 `sys.exit(0/1/2)`，pytest 需要 `pytest.raises(SystemExit)` 包裹 `[已自動化於 test: test_validate_all]`。⚠️ **不是只有結尾會 exit**：`--ci` 在執行迴圈中間 `sys.exit(1)`，而 `--only`/`--skip` 的未知檢查名走 `EXIT_CALLER_ERROR`（2）**在 `os.chdir` 之前**就早退（[#1620](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1620)）⇒ 測早退路徑的斷言不能假設工具已經切到 repo root，也不能只覆蓋 0/1
+7. 🛡️ **main() 的 sys.exit() 要 catch**：validate_all.py main() 走 `sys.exit(0/1/2)`，pytest 需要 `pytest.raises(SystemExit)` 包裹 `[已自動化於 test: test_validate_all]`。⚠️ **不是只有結尾會 exit**：`--only`/`--skip` 的未知檢查名與互吃的旗標組合走 `EXIT_CALLER_ERROR`（2）**在 `os.chdir` 之前**就早退；`--ci` 則**不再**在執行迴圈中間 `sys.exit(1)`——它 `break` 後走同一條收尾路徑（摘要／`--json`／`--fix`／`--profile`／`--notify`／`--diff-report` 照跑）再以 1 結束（[#1695](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1695) 家族二）（[#1620](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1620)）⇒ 測早退路徑的斷言不能假設工具已經切到 repo root，也不能只覆蓋 0/1
 8. 🛡️ **mock _run_one 跳過子進程**：validate_all 內部用 subprocess 跑其他 Python 腳本，mock `_run_one` 回傳 `(name, "pass", 0.1, "ok", "output")` tuple 即可覆蓋 main() 邏輯 `[已自動化於 test: test_validate_all]`
 9. 🛡️ **_init_changelog_entry 需 monkeypatch REPO_ROOT**：bump_docs 的 CHANGELOG 操作依賴 REPO_ROOT，tmp_path mock 後可安全測試插入邏輯 `[已自動化於 test: test_bump_docs]`
 

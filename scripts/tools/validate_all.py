@@ -4,7 +4,7 @@
 Usage:
   python3 scripts/tools/validate_all.py                # sequential (default)
   python3 scripts/tools/validate_all.py --parallel      # parallel execution
-  python3 scripts/tools/validate_all.py --ci            # exit 1 on first failure
+  python3 scripts/tools/validate_all.py --ci            # stop at first failure (exit 1); summary + later flags still run
   python3 scripts/tools/validate_all.py --skip links,mermaid
   python3 scripts/tools/validate_all.py --only versions,tool_map
   python3 scripts/tools/validate_all.py --list           # registered check names
@@ -36,7 +36,7 @@ import sys
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, NamedTuple, Optional, Tuple
 
 # Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
 # Migrated in #489 Phase B (was missing encoding setup → would crash on
@@ -227,9 +227,31 @@ def _unknown_check_names_message(problems):
     ).rstrip("\n")
 
 
+# #1695 family 2, the `--watch` half: `_run_watch` is handed `args` and
+# reads ONLY `args.skip` and `args.verbose`, then main() returns before the
+# summary and before every flag handled after the run loop. So each flag
+# below was accepted with `--watch` and did nothing. dest -> flag. This is
+# a PIN, not a derivation: the test suite derives the same set from the
+# parser's store_true flags minus the `args.<attr>` reads inside
+# `_run_watch` (AST) and compares, so a flag added later that `_run_watch`
+# does not read goes red there instead of being dropped quietly again.
+_WATCH_NEVER_READS: Dict[str, str] = {
+    "ci": "--ci",
+    "parallel": "--parallel",
+    "json": "--json",
+    "baseline": "--baseline",
+    "compare": "--compare",
+    "fix": "--fix",
+    "profile": "--profile",
+    "smart": "--smart",
+    "diff_report": "--diff-report",
+    "notify": "--notify",
+}
+
+
 def _conflicting_flags(args, only_set):
     """Flag pairs where one flag would silently lose to the other (#1695,
-    family 1).
+    family 1, plus the ``--watch`` half of family 2).
 
     Each entry is ``(kept, ignored, what_the_ignored_flag_would_have_done)``.
     Measured on the parent of this change, every pair here was accepted at
@@ -252,6 +274,12 @@ def _conflicting_flags(args, only_set):
                               <typo>` was already rc 2 (#1620), so the
                               WRONG name got more information than the
                               right one.
+      --watch with any flag in _WATCH_NEVER_READS
+                              `_run_watch` returns before the summary; the
+                              flag was parsed and never consulted (family
+                              2's watch half). `--baseline` / `--compare`
+                              also set `args.json`, so those name two
+                              flags each.
 
     ``--only`` is judged by ``only_set`` (the parsed names), not by the raw
     string, so `--only ""` — which #1620 pins as "no restriction" — is not a
@@ -279,6 +307,13 @@ def _conflicting_flags(args, only_set):
         pairs.append(("--watch", "--only",
                       "watch mode re-runs whatever the changed files map "
                       "to; --only never narrows it"))
+    if args.watch:
+        for dest, flag in _WATCH_NEVER_READS.items():
+            if getattr(args, dest):
+                pairs.append(("--watch", flag,
+                              "watch mode reads only --skip and --verbose "
+                              "and returns before the summary, so "
+                              f"{flag} is never consulted"))
     return pairs
 
 
@@ -453,6 +488,9 @@ WATCH_TRIGGERS: Dict[str, List[str]] = {
     "CLAUDE.md": ["versions", "doc_map"],
     "CHANGELOG.md": ["changelog"],
     "CHANGELOG.en.md": ["changelog"],
+    # An EMPTY list means "changes here affect no check", and since #1704
+    # that is honoured: a diff touching only this file runs nothing, it no
+    # longer falls through to "run everything" (see _selection_outcome).
     ".pre-commit-config.yaml": [],
     "components/": ["versions", "cli_coverage"],
     "mkdocs.yml": ["versions"],
@@ -546,9 +584,101 @@ def _snapshot_mtimes(repo_root: Path) -> Dict[str, float]:
     return snap
 
 
+class SmartSelection(NamedTuple):
+    """What a set of changed files says about which checks to run (#1704).
+
+    ``checks``     sorted union of the WATCH_TRIGGERS lists of every file
+                   that matched a prefix
+    ``unmatched``  changed files matching NO prefix -- their impact is
+                   unknown, which is not the same thing as "affects nothing"
+    ``changed``    every changed file, sorted, so a message can name them
+
+    Deliberately no "run everything" fallback in here: that fallback,
+    applied inside the detector, is what turned an explicit empty set into
+    "run all 33" before #1704. The caller classifies (_selection_outcome)
+    and says why.
+    """
+    checks: List[str]
+    unmatched: List[str]
+    changed: List[str]
+
+
+def _select_checks(changed) -> SmartSelection:
+    """Map changed paths to checks through WATCH_TRIGGERS.
+
+    The ONE derivation behind both ``--smart`` and ``--watch``. A file that
+    matches a prefix whose list is empty (``.pre-commit-config.yaml``) is
+    MATCHED and contributes nothing -- it lands in ``checks`` as nothing, not
+    in ``unmatched``.
+    """
+    changed = sorted(set(changed))
+    affected: set = set()
+    unmatched: List[str] = []
+    for cf in changed:
+        matched = False
+        for prefix, checks in WATCH_TRIGGERS.items():
+            if cf.startswith(prefix) or cf == prefix.rstrip("/"):
+                affected.update(checks)
+                matched = True
+        if not matched:
+            unmatched.append(cf)
+    return SmartSelection(sorted(affected), unmatched, changed)
+
+
+OUTCOME_UNKNOWN = "unknown"
+OUTCOME_EMPTY = "empty"
+OUTCOME_SELECTED = "selected"
+
+
+def _selection_outcome(sel: Optional[SmartSelection]) -> Tuple[str, List[str]]:
+    """``(outcome, checks)`` -- the three outcomes #1704 asked to keep apart.
+
+    ``unknown``   git could not answer (``sel is None``), or at least one
+                  changed file matches no trigger: the impact is unknown, so
+                  fail safe -- every registered check. The caller has to say
+                  WHY and name the files.
+    ``empty``     nothing changed, or every changed file matched a trigger
+                  and the union of their lists is empty: an explicit empty
+                  set, so run nothing.
+    ``selected``  a non-empty selection -- exactly those checks.
+
+    Before #1704 the second and first outcomes collapsed into each other at
+    three sites (``sorted(affected) if affected else <all>`` in both
+    detectors, and ``only_set`` empty meaning "no restriction" in main()),
+    so a clean tree and an unknown file both ran everything and only one of
+    them had a reason to.
+    """
+    if sel is None or sel.unmatched:
+        return OUTCOME_UNKNOWN, [n for n, _, _, _ in TOOLS]
+    if not sel.checks:
+        return OUTCOME_EMPTY, []
+    return OUTCOME_SELECTED, list(sel.checks)
+
+
+def _name_files(paths: List[str], cap: int = 10) -> str:
+    """``a, b, c`` or ``a, ..., j, ... and N more`` -- for messages."""
+    if len(paths) <= cap:
+        return ", ".join(paths)
+    return ", ".join(paths[:cap]) + f", ... and {len(paths) - cap} more"
+
+
+def _unmatched_clause(sel: Optional[SmartSelection]) -> str:
+    """The WHY for OUTCOME_UNKNOWN, naming the files. ASCII only: under
+    ``--json`` this goes to stderr, which is not utf-8-patched."""
+    if sel is None:
+        return "git could not be read"
+    return (f"{len(sel.unmatched)} changed file(s) match no known trigger "
+            f"({_name_files(sel.unmatched)})")
+
+
 def _detect_changed_checks(old_snap: Dict[str, float],
-                           new_snap: Dict[str, float]) -> List[str]:
-    """Compare two snapshots and return affected check names."""
+                           new_snap: Dict[str, float]) -> SmartSelection:
+    """Compare two snapshots and map the changed files to checks.
+
+    Returns a SmartSelection; ``changed`` empty means nothing changed. No
+    "run all" fallback here any more (#1704) -- the caller classifies via
+    _selection_outcome, exactly as ``--smart`` does.
+    """
     changed_files = set()
     for rel, mtime in new_snap.items():
         if rel not in old_snap or old_snap[rel] != mtime:
@@ -557,22 +687,18 @@ def _detect_changed_checks(old_snap: Dict[str, float],
     for rel in old_snap:
         if rel not in new_snap:
             changed_files.add(rel)
-
-    if not changed_files:
-        return []
-
-    affected: set = set()
-    for cf in changed_files:
-        for prefix, checks in WATCH_TRIGGERS.items():
-            if cf.startswith(prefix) or cf == prefix.rstrip("/"):
-                affected.update(checks)
-
-    return sorted(affected) if affected else sorted(
-        n for n, _, _, _ in TOOLS)  # fallback: run all
+    return _select_checks(changed_files)
 
 
 def _run_watch(args, tools_dir: Path, project_root: Path) -> None:
-    """Watch mode: poll for changes and re-run affected checks."""
+    """Watch mode: poll for changes and re-run affected checks.
+
+    Reads ``args.skip`` and ``args.verbose`` and nothing else from ``args``
+    -- every other flag is rejected with ``--watch`` by _conflicting_flags
+    (#1695 family 2), and the test suite derives that set from the
+    ``args.<attr>`` reads in THIS function, so adding a read here is what
+    makes a flag legal alongside ``--watch``.
+    """
     poll_interval = 2  # seconds
 
     print("=" * 60)
@@ -584,50 +710,71 @@ def _run_watch(args, tools_dir: Path, project_root: Path) -> None:
     print(f"  Watching {len(snap)} files...", flush=True)
     print(flush=True)
 
+    skip_set = set(
+        s.strip() for s in args.skip.split(",") if s.strip())
+
     try:
         while True:
             time.sleep(poll_interval)
             new_snap = _snapshot_mtimes(project_root)
-            affected = _detect_changed_checks(snap, new_snap)
+            sel = _detect_changed_checks(snap, new_snap)
 
-            if not affected:
+            if not sel.changed:
+                continue
+            snap = new_snap
+
+            # The same three outcomes as --smart (#1704). Before, an
+            # explicit empty set (only .pre-commit-config.yaml touched)
+            # re-ran every check with no reason given.
+            outcome, chosen = _selection_outcome(sel)
+            print(f"\n{'─'*60}")
+            if outcome == OUTCOME_EMPTY:
+                print(f"  {len(sel.changed)} file(s) changed "
+                      f"({_name_files(sel.changed)}) → nothing to re-run: "
+                      f"they affect no check")
+                print(f"{'─'*60}\n")
+                print("  Watching... (Ctrl+C to stop)")
                 continue
 
-            changed_count = sum(
-                1 for r in new_snap
-                if r not in snap or snap[r] != new_snap[r])
-            print(f"\n{'─'*60}")
-            print(f"  {changed_count} file(s) changed → "
-                  f"running: {', '.join(affected)}")
-            print(f"{'─'*60}\n")
-
-            skip_set = set(
-                s.strip() for s in args.skip.split(",") if s.strip())
             runnable = [(n, s, a, d)
                         for n, s, a, d in TOOLS
-                        if n in affected and n not in skip_set]
+                        if n in chosen and n not in skip_set]
+            if outcome == OUTCOME_UNKNOWN:
+                print(f"  {_unmatched_clause(sel)} → impact unknown, "
+                      f"re-running all {len(runnable)} check(s)")
+            else:
+                print(f"  {len(sel.changed)} file(s) changed → running: "
+                      f"{', '.join(n for n, _, _, _ in runnable)}")
+            print(f"{'─'*60}\n")
 
             for short_name, script_name, tool_args, _ in runnable:
                 script_path = str(tools_dir / script_name)
-                _, status, elapsed, detail, _ = _run_one(
+                _, status, elapsed, detail, full_out = _run_one(
                     short_name, script_path, tool_args,
                     str(project_root))
+                if args.verbose and full_out:
+                    print(f"\n--- {short_name.upper()} ---")
+                    print(full_out)
                 sym = _status_symbol(status)
                 detail_str = f" ({detail})" if detail else ""
                 print(f"  {sym} {short_name:20} ... "
                       f"{_format_time(elapsed)}{detail_str}")
 
-            snap = new_snap
-            print(f"\n  Watching... (Ctrl+C to stop)")
+            print("\n  Watching... (Ctrl+C to stop)")
 
     except KeyboardInterrupt:
         print("\n\n  Watch mode stopped.")
 
 
-def _smart_detect(project_root: Path):
-    """Detect affected checks from git diff HEAD (staged + unstaged).
+def _smart_detect(project_root: Path) -> Optional[SmartSelection]:
+    """Map git's view of the working tree (HEAD diff, index, untracked) to
+    checks.
 
-    Returns a list of check names, or None if git is unavailable.
+    Returns a SmartSelection, or None when git could not answer -- a
+    command that could not run OR one that ran and failed (not a repo,
+    unborn HEAD). Both are "no information", and since #1704 an empty
+    selection means "run nothing", so a failed probe must not read as a
+    clean tree.
     """
     try:
         result = subprocess.run(
@@ -648,27 +795,17 @@ def _smart_detect(project_root: Path):
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return None
 
+    # A probe that ran and failed used to be skipped silently, which left
+    # `changed` empty -- harmless while empty meant "run all", wrong now
+    # that it means "run nothing".
+    if any(r.returncode != 0 for r in (result, staged, untracked)):
+        return None
+
     changed = set()
     for r in (result, staged, untracked):
-        if r.returncode == 0:
-            changed.update(
-                ln.strip() for ln in r.stdout.splitlines() if ln.strip())
-
-    if not changed:
-        return []
-
-    affected: set = set()
-    for cf in changed:
-        matched = False
-        for prefix, checks in WATCH_TRIGGERS.items():
-            if cf.startswith(prefix) or cf == prefix.rstrip("/"):
-                affected.update(checks)
-                matched = True
-        if not matched:
-            # Unknown file changed → run all checks
-            return sorted(n for n, _, _, _ in TOOLS)
-
-    return sorted(affected) if affected else sorted(n for n, _, _, _ in TOOLS)
+        changed.update(
+            ln.strip() for ln in r.stdout.splitlines() if ln.strip())
+    return _select_checks(changed)
 
 
 def _compare_baseline(current: dict) -> None:
@@ -922,8 +1059,10 @@ def main():
     )
     parser.add_argument(
         "--ci", action="store_true",
-        help="Exit 1 on first failure (CI mode; always sequential, so "
-             "combining it with --parallel is a caller error, exit 2)",
+        help="Stop at the first failure (exit 1); the summary, --json, "
+             "--fix, --profile, --notify and --diff-report still run, and "
+             "the checks not reached are listed. Always sequential, so "
+             "combining it with --parallel is a caller error (exit 2)",
     )
     parser.add_argument(
         "--parallel", action="store_true",
@@ -971,12 +1110,18 @@ def main():
     )
     parser.add_argument(
         "--watch", action="store_true",
-        help="Watch mode: poll for file changes and re-run affected checks",
+        help="Watch mode: poll for file changes and re-run the affected "
+             "checks. Reads only --skip and --verbose; any other flag would "
+             "be ignored, so combining one with --watch is a caller error "
+             "(exit 2)",
     )
     parser.add_argument(
         "--smart", action="store_true",
-        help="Only run checks affected by files changed since last commit "
-             "(uses git diff HEAD)",
+        help="Select checks from git diff HEAD (staged, unstaged, untracked). "
+             "Three outcomes: a changed file no trigger knows -> impact "
+             "unknown, every check runs and the file is named; a clean tree "
+             "or files that affect no check -> nothing runs (exit 0); "
+             "otherwise only the affected checks",
     )
     parser.add_argument(
         "--diff-report", action="store_true",
@@ -1037,36 +1182,46 @@ def main():
         _run_watch(args, tools_dir, project_root)
         return
 
-    # --smart: derive only_set from git diff
-    if args.smart and not only_set:
-        smart_checks = _smart_detect(project_root)
-        if smart_checks is not None:
-            only_set = set(smart_checks)
-            if not args.json:
-                # ⛔ Derive the announcement from the SAME filter the
-                # run uses, `--skip` included. Announcing `only_set`
-                # alone was wrong the moment `--skip` started
-                # subtracting (#1620): `--smart --skip a,b,c` said 33 and
-                # ran 30 -- a fresh copy of the one-run-two-answers shape
-                # this change exists to remove.
-                will_run = sorted(
-                    n for n, _s, _a, _d in TOOLS
-                    if (not only_set or n in only_set)
-                    and n not in skip_set)
-                if only_set:
-                    print(f"Smart mode: running {len(will_run)} check(s) "
-                          f"based on git diff: "
-                          f"{', '.join(will_run)}\n")
-                else:
-                    # An empty selection means "no restriction" three
-                    # lines below, so the run does everything that is not
-                    # skipped. Printing "running 0 check(s)" and then
-                    # running all of them was the same contradiction.
-                    print(f"Smart mode: the git diff selected no checks, "
-                          f"so nothing is restricted -- running "
-                          f"{len(will_run)}.\n")
+    # --smart: derive the selection from git diff (#1704). `--smart --only
+    # <names>` is rejected above, so only_set is empty here. The selection
+    # is NOT poured into only_set any more: an empty only_set means "no
+    # restriction" below, which is how an explicit empty selection used to
+    # become "run all 33" (#1620's stopgap only corrected the printed
+    # number). `smart_restrict is None` = no restriction; a set, possibly
+    # EMPTY, = run exactly these.
+    smart_restrict: Optional[set] = None
+    if args.smart:
+        sel = _smart_detect(project_root)
+        outcome, chosen = _selection_outcome(sel)
+        # stderr under --json so stdout stays one JSON document (same rule
+        # as the --profile rotation notice); ASCII because stderr is not
+        # utf-8-patched (see _unknown_check_names_message).
+        say = sys.stderr if args.json else sys.stdout
+        if outcome == OUTCOME_UNKNOWN:
+            # ⛔ Announce from the SAME filter the run uses, `--skip`
+            # included -- `--smart --skip a,b,c` once said 33 and ran 30.
+            will_run = [n for n, _s, _a, _d in TOOLS if n not in skip_set]
+            print(f"Smart mode: {_unmatched_clause(sel)} -- impact "
+                  f"unknown, running all {len(will_run)} check(s)"
+                  f"{' not skipped' if skip_set else ''}\n", file=say)
+        elif outcome == OUTCOME_EMPTY:
+            smart_restrict = set()
+            if sel.changed:
+                reason = (f"the {len(sel.changed)} changed file(s) "
+                          f"({_name_files(sel.changed)}) affect no check")
+            else:
+                reason = "the working tree has no changes against HEAD"
+            print(f"Smart mode: nothing to run -- {reason}. Use --only to "
+                  f"pick checks or drop --smart to run everything.\n",
+                  file=say)
+        else:
+            smart_restrict = set(chosen)
+            will_run = [n for n, _s, _a, _d in TOOLS
+                        if n in smart_restrict and n not in skip_set]
+            print(f"Smart mode: running {len(will_run)} check(s) based on "
+                  f"git diff: {', '.join(will_run)}\n", file=say)
 
-    # Filter to runnable tools. `--skip` subtracts in BOTH branches (#1620):
+    # Filter to runnable tools. `--skip` subtracts in EVERY branch (#1620):
     # it used to be ignored whenever `--only` was present, while the
     # skipped-items loop below printed `... skipped` for it regardless, so one
     # invocation reported both outcomes for the same check —
@@ -1074,8 +1229,12 @@ def main():
     #     ⊘ versions  ... skipped
     #     ✓ versions  ... 2.7s
     # An empty result is still exit 0: every name existed, and asking for an
-    # empty intersection is a request to run nothing, not a bad invocation.
-    if only_set:
+    # empty intersection -- or a `--smart` diff that affects no check -- is a
+    # request to run nothing, not a bad invocation.
+    if smart_restrict is not None:
+        runnable = [(n, s, a, d) for n, s, a, d in TOOLS
+                    if n in smart_restrict and n not in skip_set]
+    elif only_set:
         runnable = [(n, s, a, d) for n, s, a, d in TOOLS
                     if n in only_set and n not in skip_set]
     else:
@@ -1097,6 +1256,14 @@ def main():
                 print(f"{_status_symbol('skip')} {n:20} ... skipped")
 
     results: Dict[str, Tuple[str, float, str]] = {}
+    # #1695 family 2: set when --ci stopped the sequential loop. Both are
+    # reported by the tail (text line, JSON keys) and neither goes into
+    # `results` -- a not-run check is not a result. `_compare_baseline`
+    # therefore lists it as vanished when the baseline had it (#1703), and
+    # that is the intended reading: after a --ci stop the rest of the run
+    # set genuinely did not run, which a comparison must not paper over.
+    ci_stopped_after: Optional[str] = None
+    not_run: List[str] = []
 
     if effective_mode == "parallel":
         # ------------------------------------------------------------------
@@ -1134,10 +1301,12 @@ def main():
                       f"{detail_str}")
     else:
         # ------------------------------------------------------------------
-        # Sequential execution (default, or --ci which needs early-exit)
+        # Sequential execution (default, or --ci which stops at the first
+        # failure and then falls through to the same tail as every mode)
         # ------------------------------------------------------------------
         wall_start = time.time()
-        for short_name, script_name, tool_args, _desc in runnable:
+        for idx, (short_name, script_name, tool_args, _desc) in enumerate(
+                runnable):
             script_path = str(tools_dir / script_name)
             _, status, elapsed, detail, full_out = _run_one(
                 short_name, script_path, tool_args, str(project_root),
@@ -1155,11 +1324,20 @@ def main():
                       f"{detail_str}")
 
             if args.ci and status in ("fail", "error"):
-                print()
-                print("=" * 60)
-                print(f"CI mode: Stopping after failure ({short_name})")
-                print("=" * 60)
-                sys.exit(1)
+                # #1695 family 2: `break`, not `sys.exit(1)`. The exit here
+                # skipped the summary and every flag handled after the
+                # loop: `--json` wrote no document exactly when the run
+                # failed, and `--fix` / `--profile` / `--notify` /
+                # `--diff-report` never ran. The exit code is unchanged --
+                # `failed` is >= 1 on this path, so the tail exits 1.
+                ci_stopped_after = short_name
+                not_run = [n for n, _, _, _ in runnable[idx + 1:]]
+                if not args.json:
+                    print()
+                    print("=" * 60)
+                    print(f"CI mode: Stopping after failure ({short_name})")
+                    print("=" * 60)
+                break
 
         wall_elapsed = time.time() - wall_start
 
@@ -1178,6 +1356,11 @@ def main():
             "failed": failed,
             "skipped": skipped,
             "total": total,
+            # Always present (null / []), so a consumer can read the shape
+            # without probing for the key. total == len(results) +
+            # len(not_run) whenever ci_stopped_after is set.
+            "ci_stopped_after": ci_stopped_after,
+            "not_run": not_run,
             "results": {
                 n: {"status": s, "elapsed": round(e, 2), "detail": d}
                 for n, (s, e, d) in results.items()
@@ -1216,6 +1399,10 @@ def main():
                 time_info = f"  (total: {wall_elapsed:.1f}s)"
             print(f"Result: {passed}/{total} passed, {failed} failed, "
                   f"{skipped} skipped{time_info}")
+        if ci_stopped_after is not None:
+            names = f": {', '.join(not_run)}" if not_run else ""
+            print(f"CI mode: stopped after {ci_stopped_after}; "
+                  f"{len(not_run)} check(s) not run{names}")
         print("=" * 60)
 
     # --profile: append timing data to CSV
