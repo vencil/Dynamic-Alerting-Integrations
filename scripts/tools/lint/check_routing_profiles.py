@@ -26,7 +26,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
 from _lib_python import detect_cli_lang, load_yaml_file  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
-from _lib_confd import warn_nested  # noqa: E402
+from _lib_confd import has_yaml_extension, is_hidden_name, warn_nested  # noqa: E402
 
 _LANG = detect_cli_lang()
 
@@ -42,9 +42,17 @@ def _collect_data(config_dir: str) -> dict:
     # look like an empty one. Name the files this scan cannot see.
     warn_nested(config_dir, tool="check_routing_profiles")
 
+    # #1679: the extension test is the shared, case-insensitive predicate.
+    # The hand-written `endswith(".yaml")` made `Upper.YAML` invisible here
+    # while the exporter and validate_config both read it — measured: a
+    # tenant in that file with a dangling `_routing_profile` passed this
+    # pre-commit gate with rc=0, and rc=1 once the file was spelled
+    # `upper.yaml`. Only the extension axis changes: the `_`-prefixed
+    # control files matched by exact name below are what this tool exists
+    # to READ, so `config_stem`'s reserved-prefix filtering does not apply.
     files = sorted(
         f for f in os.listdir(config_dir)
-        if (f.endswith(".yaml") or f.endswith(".yml")) and not f.startswith(".")
+        if has_yaml_extension(f) and not is_hidden_name(f)
     )
 
     for fname in files:

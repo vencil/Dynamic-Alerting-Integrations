@@ -261,6 +261,30 @@ class TestScanConfigDir:
 
             assert result == []
 
+    @pytest.mark.parametrize("carrier", ["alpha.yml", "Alpha.YAML"])
+    def test_sees_yml_and_upper_case_the_same_as_yaml(self, tmp_path, carrier):
+        """#1603 — a `.yml` / `.YAML` carrier is scanned like `.yaml`.
+
+        WHY: the exporter hot-reloads both spellings, so a carrier this scan
+        cannot see is a tenant whose changes never reach a snapshot or a
+        diff. Measured before the fix with byte-identical bodies:
+        `alpha.yaml` → 2 files, `alpha.yml` / `Alpha.YAML` → 1 — the same
+        answer as a tree with no tenant (`none`, the sensitivity control).
+        """
+        body = "tenants:\n  alpha:\n    pg_connections: 90\n"
+        seen = {}
+        for arm, name in (("yaml", "alpha.yaml"), ("other", carrier),
+                          ("none", None)):
+            d = tmp_path / arm
+            d.mkdir()
+            (d / "_defaults.yaml").write_text("defaults: {}\n", encoding="utf-8")
+            if name:
+                (d / name).write_text(body, encoding="utf-8")
+            seen[arm] = {f["name"]: f["hash"] for f in ch._scan_config_dir(str(d))}
+        assert seen["yaml"] != seen["none"], "fixture is vacuous"
+        assert carrier in seen["other"], sorted(seen["other"])
+        assert sorted(seen["other"].values()) == sorted(seen["yaml"].values())
+
     def test_skip_non_yaml_files(self):
         """只掃描設定載體（`CONFIG_SUFFIXES`），`.txt` / `.py` 不算。
 

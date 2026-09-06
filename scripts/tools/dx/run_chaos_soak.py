@@ -185,6 +185,8 @@ def trigger_reload(config_dir: Path) -> bool:
     threshold-exporter's hot-reload watches mtime + content hash. Touching
     mtime alone won't fire if content unchanged; we append a no-op comment
     line that toggles between two values to force a fresh hash each pass.
+
+    Returns True only if a carrier the exporter WOULD reload was written.
     """
     if not config_dir.exists():
         return False

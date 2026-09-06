@@ -274,6 +274,13 @@ ENGLISH_ONLY: dict[str, str] = {
     "trufflehog_to_sarif.py": _R_LINT,
     "validate_mermaid.py": _R_LINT,
     "validate_planning_session_row.py": _R_LINT,
+    # ── scripts/tools (top level) ─────────────────────────────────────
+    # In the corpus since #1642 widened collect_tools() to the top level; it
+    # is the runner behind `make lint-docs` and the required check
+    # `Drift Detection (validate_all.py)`, absent from da-tools' COMMAND_MAP,
+    # never invoked by a customer. Its help was English-only all along — the
+    # question was simply never asked because no gate enumerated the file.
+    "validate_all.py": _R_DX,
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -515,8 +522,18 @@ def test_allowlists_shrink_only_count_pin():
     # ⚠️ Worth recording HOW this entry got here: not by design review but by this
     # gate turning the PR red. The bilingual question was never asked while the
     # tool was being written; the ratchet is what forced it to be answered.
-    assert len(ENGLISH_ONLY) <= 146, (
-        f"ENGLISH_ONLY grew to {len(ENGLISH_ONLY)} (pin=146). Adding an "
+    # pin 147: bumped from 146 for validate_all.py (#1642). Not a new tool —
+    # the corpus grew: collect_tools() now walks the top level of
+    # scripts/tools/, so the runner behind the required check `Drift
+    # Detection (validate_all.py)` is enumerated for the first time and this
+    # gate asked the bilingual question of it for the first time. Same class
+    # as the dx CLIs already here: invoked by `make lint-docs` and docs-ci,
+    # never by a customer; its --help was English-only before #1642 and is
+    # unchanged. ⛔ A decision, not a default — wiring detect_cli_lang() into
+    # a 30-flag internal runner would make it the lone bilingual exception
+    # among the tools it drives.
+    assert len(ENGLISH_ONLY) <= 147, (
+        f"ENGLISH_ONLY grew to {len(ENGLISH_ONLY)} (pin=147). Adding an "
         "English-only tool is allowed but must be an explicit, reviewed "
         "decision — bump this pin in the same commit and justify it."
     )

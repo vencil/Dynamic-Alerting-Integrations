@@ -783,6 +783,10 @@
    "tests/rulepacks/test_vm_backend_parity.py",
    "tests/rulepacks/test_vm_replay_staleness.py"
   ],
+  "tests/shared/_confd_population.py": [
+   "tests/shared/test_confd_case_parity_across_tools.py",
+   "tests/shared/test_confd_enumeration_contract.py"
+  ],
   "tests/shared/test_json_stdout_contract.py": [
    "tests/shared/test_ci_flag_contract.py",
    "tests/shared/test_dry_run_no_write.py"
@@ -792,7 +796,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "4f7fe574a0887a6bd34041a34a81fff7cd1535df616f1cda08aced8edb65c734",
+ "source_digest": "3c162181ca6a7f5abd10fea90251471b6cda88921bf7e3ee9427b49632353566",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1173,7 +1177,8 @@
    "tests/ops/test_generated_ci_artifacts.py",
    "tests/ops/test_init_project.py",
    "tests/ops/test_nightly_race_issue_policy.py",
-   "tests/shared/test_actionlint_pin_parity.py"
+   "tests/shared/test_actionlint_pin_parity.py",
+   "tests/shared/test_confd_enumeration_contract.py"
   ],
   ".github/workflows/bench-probe-write-latency.yaml": [
    "tests/dx/test_analyze_probe.py"
@@ -1472,6 +1477,9 @@
   "components/threshold-exporter/app/rulepack_contract_test.go": [
    "tests/lint/test_check_threshold_reachability.py"
   ],
+  "components/threshold-exporter/config": [
+   "tests/lint/test_check_threshold_unit_sanity.py"
+  ],
   "components/threshold-exporter/config/conf.d": [
    "tests/dx/test_compile_custom_alerts.py",
    "tests/lint/test_check_path_metadata_consistency.py",
@@ -1694,6 +1702,9 @@
   ],
   "docs/internal/secret-leak-remediation-sop.md": [
    "tests/ops/test_secret_scan_gate.py"
+  ],
+  "docs/internal/tool-map.en.md": [
+   "tests/shared/test_validate_all.py"
   ],
   "docs/internal/tool-map.md": [
    "tests/dx/test_paired_trend_watch.py",
@@ -2276,6 +2287,7 @@
    "tests/ops/test_property_based.py",
    "tests/shared/test_bilingual_help_contract.py",
    "tests/shared/test_confd_case_parity_across_tools.py",
+   "tests/shared/test_confd_enumeration_contract.py",
    "tests/shared/test_dispatch_contract.py",
    "tests/shared/test_entrypoint.py",
    "tests/shared/test_input_path_contract.py",
@@ -2285,6 +2297,7 @@
    "tests/shared/test_prometheus_url_fallback_guard.py",
    "tests/shared/test_property_tools.py",
    "tests/shared/test_sast.py",
+   "tests/shared/test_tool_exit_codes.py",
    "tests/shared/test_validate_all.py"
   ],
   "scripts/tools/_lib_compat.py": [
@@ -2727,7 +2740,8 @@
   "scripts/tools/validate_all.py": [
    "tests/lint/test_check_doc_freshness.py",
    "tests/lint/test_check_orphan_lint.py",
-   "tests/lint/test_check_structure.py"
+   "tests/lint/test_check_structure.py",
+   "tests/shared/test_tool_exit_codes.py"
   ],
   "scripts/tools/vendor_download.sh": [
    "tests/lint/test_check_structure.py"
@@ -3065,7 +3079,8 @@
    "tests/ops/test_wrapped_path_references.py",
    "tests/rulepacks/test_platform_rules_extract_sync.py",
    "tests/rulepacks/test_reference_validation_readme_pointers.py",
-   "tests/rulepacks/test_vm_alert_parity.py"
+   "tests/rulepacks/test_vm_alert_parity.py",
+   "tests/shared/test_confd_enumeration_contract.py"
   ],
   "tests/rulepacks/reference-validation/README.md": [
    "tests/rulepacks/test_reference_validation_readme_pointers.py"

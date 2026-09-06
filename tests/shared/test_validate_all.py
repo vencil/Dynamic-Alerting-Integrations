@@ -78,6 +78,37 @@ class TestExtractDetail:
         output = "first\nsecond\n\n\n"
         assert _extract_detail(output) == "second"
 
+    @pytest.mark.parametrize("rule", ["---", "───────", "+---+---+", "...",
+                                      "=== END ==="],
+                             ids=["dashes", "box-drawing", "table-border",
+                                  "dots", "banner"])
+    def test_skips_rule_and_border_lines(self, rule):
+        """⛔ Before #1697 only a `===`-prefixed line was skipped, so a tool
+        that closes with a `---` rule or a `+---+` table border (measured:
+        alerts' summary ends on `+---`) had THAT quoted as its detail — a
+        row whose reason is a line of punctuation. The banner case is the
+        pre-existing rule, kept as a control that widening did not drop it.
+        """
+        assert _extract_detail(f"the reason\n{rule}\n") == "the reason"
+
+    def test_truncation_is_by_character_not_byte(self):
+        """#1697 §3 worried the 80-cut "切在半個字上" for CJK. Measured: it
+        does not — this is str slicing, so the cut is between code points
+        and the result always re-encodes. Pinned so a future "optimise"
+        to bytes (`.encode()[:80]`) — which WOULD split a 3-byte CJK char
+        and yield a line that cannot be encoded back — goes red here.
+        """
+        line = "中" * 100
+        got = _extract_detail(line)
+        assert len(got) == 80, "cut by code points, not bytes"
+        assert got == "中" * 80, "every character survives whole"
+        got.encode("utf-8")  # a byte cut would leave a dangling lead byte
+        # Control: the byte-sliced shape really is broken, so the assertion
+        # above is discriminating rather than true of any slicing.
+        broken = line.encode("utf-8")[:80]
+        with pytest.raises(UnicodeDecodeError):
+            broken.decode("utf-8")
+
 
 # ============================================================
 # _status_symbol / _format_time
@@ -287,6 +318,84 @@ class TestCompareBaseline:
         _compare_baseline(current)
         err = capsys.readouterr().err
         assert "Regressions" not in err
+
+    # ---- #1703: a check that vanishes from the run set ----------------
+
+    @staticmethod
+    def _write_baseline(tmp_path, monkeypatch, results):
+        bf = tmp_path / "baseline.json"
+        bf.write_text(json.dumps({
+            "results": results,
+            "passed": sum(1 for r in results.values() if r["status"] == "pass"),
+            "failed": sum(1 for r in results.values() if r["status"] != "pass"),
+        }), encoding="utf-8")
+        monkeypatch.setattr(va, "BASELINE_FILE", bf)
+
+    def test_a_check_that_vanished_is_a_named_regression(
+            self, capsys, tmp_path, monkeypatch):
+        """#1703. `pass → N/A` fell through both branches (pass→fail,
+        fail→pass), so `regressions` stayed empty and the tool printed
+        `✅ No regressions detected.` directly under `3 pass → 2 pass` —
+        the exact shape this family of incidents is reported in ("required
+        check green, but one check never ran"), and --compare was the only
+        detector. The line has to NAME the check and say it vanished, not
+        that it failed: an operator running `--only` on purpose reads that
+        and moves on; the one in the incident needs the name.
+        """
+        self._write_baseline(tmp_path, monkeypatch, {
+            "links": {"status": "pass", "elapsed": 1.0},
+            "versions": {"status": "pass", "elapsed": 1.0},
+        })
+        _compare_baseline({
+            "results": {"links": {"status": "pass", "elapsed": 1.0}},
+            "passed": 1, "failed": 0,
+        })
+        err = capsys.readouterr().err
+        assert "Regressions" in err
+        assert "versions" in err, "the vanished check must be named"
+        line = next(ln for ln in err.splitlines() if "versions" in ln)
+        assert "vanished" in line and "did not fail" in line, line
+        assert "No regressions detected" not in err, (
+            "the verdict said green while a check was missing from the run")
+
+    def test_identical_sets_still_say_no_regressions(
+            self, capsys, tmp_path, monkeypatch):
+        """Control for the test above: an implementation that flags every
+        comparison would also satisfy it. Same two checks on both sides,
+        same statuses → the ✅ line is still printed.
+        """
+        results = {
+            "links": {"status": "pass", "elapsed": 1.0},
+            "versions": {"status": "pass", "elapsed": 1.0},
+        }
+        self._write_baseline(tmp_path, monkeypatch, results)
+        _compare_baseline({"results": results, "passed": 2, "failed": 0})
+        err = capsys.readouterr().err
+        assert "No regressions detected" in err
+        assert "Regressions" not in err
+        assert "vanished" not in err
+
+    def test_a_new_check_is_reported_but_not_as_a_regression(
+            self, capsys, tmp_path, monkeypatch):
+        """The reverse direction (#1703's last paragraph): `N/A → pass` used
+        to be silent, and silence on one side is how the two sides of a
+        comparison drift apart. It is reported under its own neutral
+        heading — it is neither a regression nor an improvement — and the
+        ✅ verdict is unaffected by it.
+        """
+        self._write_baseline(tmp_path, monkeypatch, {
+            "links": {"status": "pass", "elapsed": 1.0},
+        })
+        _compare_baseline({
+            "results": {"links": {"status": "pass", "elapsed": 1.0},
+                        "versions": {"status": "pass", "elapsed": 1.0}},
+            "passed": 2, "failed": 0,
+        })
+        err = capsys.readouterr().err
+        assert "New checks" in err
+        assert "versions" in err, "the new check must be named"
+        assert "Regressions" not in err
+        assert "No regressions detected" in err
 
     def test_timing_no_warning_for_fast_checks(self, capsys, tmp_path, monkeypatch):
         """基線 < 0.5s 的 check 不觸發效能警告（即使倍增）。"""
@@ -515,6 +624,62 @@ class TestRunOne:
         assert detail.strip(), (
             "a failing check printed no reason at all; the operator gets a "
             "red tick and nothing else")
+
+    def test_failure_quotes_the_reason_not_the_opening_success_line(
+            self, tmp_path):
+        """#1697. A failing check used to quote its FIRST stdout line; the
+        repo's tools print progress first and the reason last, so the row
+        read `✗ tool_map ... (✅ Tool map (zh) is up to date.)` — symbol
+        says fail, parenthesis says pass. Reproduced with the issue's own
+        minimal tool, and on the real tool_map / doc_map rows in a scratch
+        copy of the repo (OLD `✅ Tool map (zh) is up to date.` → NEW `❌
+        docs/internal/tool-map.en.md is outdated …`).
+        """
+        script = tmp_path / "progress_then_error.py"
+        script.write_text(
+            "import sys\n"
+            "print('OK: everything is fine')\n"
+            "print('ERROR: something is broken')\n"
+            "sys.exit(1)\n",
+            encoding="utf-8")
+        _name, status, _elapsed, detail, _output = _run_one(
+            "progress_then_error", str(script), [], str(tmp_path))
+        assert status == "fail"
+        assert detail == "ERROR: something is broken", (
+            f"the row quoted {detail!r}: the opening line, not the reason")
+        assert "everything is fine" not in detail
+
+    def test_failure_with_a_single_error_line_still_quotes_it(self,
+                                                              tmp_path):
+        """Control for the test above: with one line only, first == last,
+        so an implementation that merely SKIPS the first line would print
+        nothing here and fall through to `Exit code: 1`. The reason must
+        still be the line the tool printed.
+        """
+        script = tmp_path / "single_line.py"
+        script.write_text(
+            "import sys\nprint('ERROR: the only thing said')\nsys.exit(1)\n",
+            encoding="utf-8")
+        _name, status, _elapsed, detail, _output = _run_one(
+            "single_line", str(script), [], str(tmp_path))
+        assert status == "fail"
+        assert detail == "ERROR: the only thing said"
+
+    def test_failure_with_no_stdout_falls_back_to_exit_code(self, tmp_path):
+        """The `Exit code: N` fallback is kept on purpose: measured for
+        #1697, 9 of 15 induced failures print their reason to stderr only
+        (glossary, alerts, rule_packs, …), so an empty stdout is the common
+        case, not a corner. Reading stderr is a separate change.
+        """
+        script = tmp_path / "stderr_only.py"
+        script.write_text(
+            "import sys\nprint('reason on stderr', file=sys.stderr)\n"
+            "sys.exit(3)\n",
+            encoding="utf-8")
+        _name, status, _elapsed, detail, _output = _run_one(
+            "stderr_only", str(script), [], str(tmp_path))
+        assert status == "fail"
+        assert detail == "Exit code: 3"
 
     def test_timeout_returns_error(self, monkeypatch):
         """Timeout 回傳 error 狀態。"""
@@ -1130,6 +1295,100 @@ class TestMainExtended:
         lines = csv_file.read_text(encoding="utf-8").strip().split("\n")
         assert len(lines) == 3  # header + 2 data rows
 
+    # ---- #1705: header ↔ row column drift, and the mode column ----------
+
+    def _derived_header(self):
+        return ("timestamp,mode,wall_time," +
+                ",".join(f"{n}_time,{n}_status" for n, _, _, _ in va.TOOLS))
+
+    def test_profile_header_mismatch_rotates_instead_of_appending(
+            self, monkeypatch, capsys, tmp_path, cli_argv):
+        """#1705. The header was written once, on file creation, while every
+        row expanded the CURRENT `TOOLS` — so registering a check made each
+        later row two columns wider than the header with no warning, and
+        one column index then meant different checks in early and late
+        rows. A file whose header does not match the derived one must not
+        be appended to: it is moved aside and a fresh file starts with the
+        header the rows actually use.
+        """
+        csv_file = tmp_path / ".validation-profile.csv"
+        monkeypatch.setattr(va, "PROFILE_CSV", csv_file)
+        stale = "timestamp,mode,wall_time,old_check_time,old_check_status\n"
+        csv_file.write_text(stale + "2026-01-01T00:00:00+00:00,sequential,1.00,0.5,pass\n",
+                            encoding="utf-8")
+        cli_argv('validate_all', '--profile', '--only', 'versions')
+        monkeypatch.setattr(va, "_run_one", self._mock_run_one_pass)
+        with pytest.raises(SystemExit) as exc:
+            va.main()
+        assert exc.value.code == 0
+        lines = csv_file.read_text(encoding="utf-8").split("\n")
+        assert lines[0] == self._derived_header(), "the new file starts with the derived header"
+        assert len(lines[1].split(",")) == len(lines[0].split(",")), (
+            "row and header must have the same number of columns")
+        assert "old_check" not in csv_file.read_text(encoding="utf-8")
+        backups = sorted(tmp_path.glob(".validation-profile.csv.bak-*"))
+        assert len(backups) == 1, "the stale file must be rotated aside, not lost"
+        assert backups[0].read_text(encoding="utf-8").startswith(stale), (
+            "the rotated file is the old one, byte for byte")
+        assert "header no longer matches" in capsys.readouterr().err, (
+            "the rotation has to be announced; silence is the defect")
+
+    def test_profile_matching_header_is_appended_to(
+            self, monkeypatch, capsys, tmp_path, cli_argv):
+        """Control: a file whose header IS the derived one keeps growing —
+        an implementation that rotates on every run would pass the test
+        above and destroy the trend data the flag exists to collect.
+        """
+        csv_file = tmp_path / ".validation-profile.csv"
+        monkeypatch.setattr(va, "PROFILE_CSV", csv_file)
+        csv_file.write_text(self._derived_header() + "\n", encoding="utf-8")
+        cli_argv('validate_all', '--profile', '--only', 'versions')
+        monkeypatch.setattr(va, "_run_one", self._mock_run_one_pass)
+        with pytest.raises(SystemExit):
+            va.main()
+        assert not list(tmp_path.glob(".validation-profile.csv.bak-*"))
+        lines = csv_file.read_text(encoding="utf-8").strip().split("\n")
+        assert len(lines) == 2, "header + the appended row"
+        assert "header no longer matches" not in capsys.readouterr().err
+
+    def test_effective_mode_is_the_branch_taken_not_the_flag(self):
+        """#1705 neighbour 2. `--ci --parallel` took the sequential branch
+        (`args.parallel and not args.ci`) while the header, the JSON `mode`
+        and the CSV `mode` column each read `args.parallel` and said
+        `parallel`. The derivation is pinned here at the helper because the
+        pair itself is now exit 2 at main() (#1695 family 1,
+        TestConflictingFlags), so main() can no longer reach a CSV row for
+        it; the wiring of the three labels to this helper is covered by the
+        two end-to-end tests below.
+        """
+        import argparse
+        assert va._effective_mode(argparse.Namespace(parallel=True, ci=True)) == "sequential"
+        assert va._effective_mode(argparse.Namespace(parallel=True, ci=False)) == "parallel"
+        assert va._effective_mode(argparse.Namespace(parallel=False, ci=True)) == "sequential"
+        assert va._effective_mode(argparse.Namespace(parallel=False, ci=False)) == "sequential"
+
+    @pytest.mark.parametrize("flags,want", [
+        (["--parallel"], "parallel"),
+        (["--ci"], "sequential"),
+    ], ids=["parallel", "ci"])
+    def test_profile_and_json_mode_come_from_effective_mode(
+            self, monkeypatch, capsys, tmp_path, cli_argv, flags, want):
+        """Wiring for the helper above: the CSV `mode` column and the JSON
+        `mode` field must both carry the effective mode. Two rows so that
+        a constant would fail one of them.
+        """
+        csv_file = tmp_path / ".validation-profile.csv"
+        monkeypatch.setattr(va, "PROFILE_CSV", csv_file)
+        cli_argv('validate_all', *flags, '--profile', '--json',
+                 '--only', 'versions')
+        monkeypatch.setattr(va, "_run_one", self._mock_run_one_pass)
+        with pytest.raises(SystemExit) as exc:
+            va.main()
+        assert exc.value.code == 0
+        assert json.loads(capsys.readouterr().out)["mode"] == want
+        row = csv_file.read_text(encoding="utf-8").strip().split("\n")[1]
+        assert row.split(",")[1] == want
+
     def test_notify_pass(self, monkeypatch, capsys, cli_argv):
         """--notify on successful run."""
         calls = []
@@ -1530,11 +1789,12 @@ class TestUnknownCheckNames:
                    are —
                      * SELECTION: one flag quietly wins over another (e.g.
                        `--smart` under `--only`, via `if args.smart and not
-                       only_set`).
+                       only_set`). Guarded since #1695 family 1 — see
+                       `TestConflictingFlags` below.
                      * EARLY RETURN: a branch exits before later flags are
                        read (the `--watch` dispatch; `--ci`'s exit inside the
                        run loop, which is ahead of the summary and of every
-                       flag handled after it).
+                       flag handled after it). Still open (#1695 family 2).
                    The per-flag measurements live in #1695, which is a
                    snapshot by construction — unlike this docstring, which
                    someone would otherwise have to maintain.
@@ -1956,6 +2216,142 @@ class TestUnknownCheckNames:
             f"padded names must be accepted "
             f"(stderr: {capsys.readouterr().err.strip()[:200]!r})")
         assert sorted(calls) == sorted([first, second])
+
+# ============================================================
+# #1695 family 1: a flag pair where one flag silently loses
+# ============================================================
+
+class TestConflictingFlags:
+    """A flag combination where one flag would be ignored is
+    EXIT_CALLER_ERROR (#1695, family 1 only — family 2, the `--ci` /
+    `--watch` early returns, is untouched here).
+
+    Measured on this branch's parent (mock `_run_one` recording the
+    selection; `_run_watch` inspected statically), each pair alongside the
+    control that had to behave identically and did:
+
+      --smart --only versions        rc 0, ran ['versions']
+      [control] --only versions      rc 0, ran ['versions']  — same bytes
+      --parallel --ci                rc 0, sequential branch, header said
+                                     PARALLEL
+      --baseline --compare           rc 0, baseline written, no comparison
+      --watch --only versions        `_run_watch` never reads only_set
+
+    Callers were measured BEFORE rejecting: the two automatic invocations
+    (Makefile `lint-docs`: `--only … $(ARGS)`; docs-ci.yaml `drift-checks`:
+    `--only … --ci`) pass none of these pairs, and a repo-wide grep found no
+    other non-test invocation passing one.
+    """
+
+    _CALLER_ERROR = 2  # independent literal, same reason as TestUnknownCheckNames
+
+    _PAIRS = [
+        (["--smart", "--only", "versions"], "--smart", "--only"),
+        (["--parallel", "--ci"], "--parallel", "--ci"),
+        (["--baseline", "--compare"], "--baseline", "--compare"),
+        (["--watch", "--only", "versions"], "--watch", "--only"),
+    ]
+
+    def _rec_run_one(self, short_name, script_path, tool_args, project_root):
+        # A bound method, not a closure: the `--parallel` control below
+        # goes through ProcessPoolExecutor, which pickles `_run_one`, and a
+        # local function cannot be pickled (measured: AttributeError from
+        # the pool). Appends made in a child process do not come back, so
+        # `calls` is only asserted on in-process (rejected / sequential)
+        # runs.
+        self.calls.append(short_name)
+        return (short_name, "pass", 0.1, "ok", "output")
+
+    def _quiet(self, monkeypatch, tmp_path):
+        """Make every mode inert so a control run cannot touch the tree or
+        hang: no subprocess, no watch loop, no real baseline / CSV path."""
+        self.calls = []
+        self.entered = []
+        monkeypatch.setattr(va, "_run_one", self._rec_run_one)
+        monkeypatch.setattr(va, "_run_watch",
+                            lambda *a, **k: self.entered.append("watch"))
+        monkeypatch.setattr(va, "_smart_detect", lambda root: ["versions"])
+        monkeypatch.setattr(va, "BASELINE_FILE", tmp_path / "baseline.json")
+        monkeypatch.setattr(va, "PROFILE_CSV", tmp_path / "profile.csv")
+        return self.calls, self.entered
+
+    @pytest.mark.parametrize("argv,a,b", _PAIRS,
+                             ids=[f"{a}+{b}" for _, a, b in _PAIRS])
+    def test_each_pair_is_rejected_naming_both_flags(
+            self, monkeypatch, capsys, cli_argv, tmp_path, argv, a, b):
+        """Every pair → exit 2, nothing runs, and stderr names BOTH flags:
+        the operator believed the losing flag was in effect, so the message
+        has to say which one it was."""
+        calls, entered = self._quiet(monkeypatch, tmp_path)
+        cli_argv('validate_all', *argv)
+        with pytest.raises(SystemExit) as exc:
+            va.main()
+        assert exc.value.code == self._CALLER_ERROR, (
+            f"{argv} was accepted; before #1695 it ran at rc 0 with one "
+            f"flag silently dropped")
+        assert calls == [] and entered == [], (
+            "a rejected invocation must not run anything")
+        err = capsys.readouterr().err
+        assert a in err and b in err, err
+        assert "would be ignored" in err, err
+        err.encode("ascii")  # stderr is not utf-8-patched (see #1620)
+
+    @pytest.mark.parametrize("argv", [
+        ["--smart"], ["--only", "versions"], ["--parallel"], ["--ci"],
+        ["--baseline"], ["--compare"], ["--watch", "--skip", "versions"],
+    ], ids=lambda a: "+".join(a))
+    def test_each_flag_alone_does_not_hit_the_guard(
+            self, monkeypatch, capsys, cli_argv, tmp_path, argv):
+        """Paired control: an implementation that rejects any invocation
+        carrying one of these flags satisfies the test above. Each flag on
+        its own (with a valid name where one is needed) must get past the
+        guard — `--watch` returns None from main(), the rest exit 0."""
+        self._quiet(monkeypatch, tmp_path)
+        cli_argv('validate_all', *argv)
+        if "--watch" in argv:
+            assert va.main() is None
+        else:
+            with pytest.raises(SystemExit) as exc:
+                va.main()
+            assert exc.value.code == 0, (
+                f"{argv} alone must be accepted "
+                f"(stderr: {capsys.readouterr().err.strip()[:200]!r})")
+        assert "would be ignored" not in capsys.readouterr().err
+
+    def test_an_empty_only_is_no_restriction_and_no_conflict(
+            self, monkeypatch, capsys, cli_argv, tmp_path):
+        """`--only ""` parses to zero names, which #1620 pins as "no
+        restriction". The conflict predicate has to read the PARSED set,
+        not the raw string: `--smart --only ""` selects by git diff, and is
+        not a conflict."""
+        calls, _ = self._quiet(monkeypatch, tmp_path)
+        cli_argv('validate_all', '--smart', '--only', '')
+        with pytest.raises(SystemExit) as exc:
+            va.main()
+        assert exc.value.code == 0
+        assert calls == ["versions"], "the --smart selection was used"
+
+    def test_the_guard_is_derived_from_args_the_dispatch_reads(self):
+        """The four sites named in #1695 are the four pairs, and the
+        predicate for `--only` is `only_set`, not `args.only` — asserted
+        on the function so the parametrize above cannot quietly cover
+        three pairs while a fourth is dropped from the guard."""
+        import argparse
+        base = dict(smart=False, parallel=False, ci=False, baseline=False,
+                    compare=False, watch=False)
+        assert va._conflicting_flags(argparse.Namespace(**base), set()) == []
+        assert va._conflicting_flags(argparse.Namespace(**base), {"versions"}) == []
+        got = va._conflicting_flags(argparse.Namespace(
+            **{**base, "smart": True, "parallel": True, "ci": True,
+               "baseline": True, "compare": True, "watch": True}),
+            {"versions"})
+        assert [(k, i) for k, i, _ in got] == [
+            ("--only", "--smart"), ("--ci", "--parallel"),
+            ("--baseline", "--compare"), ("--watch", "--only")]
+        # `--smart --only ""`: an empty set is no conflict
+        assert va._conflicting_flags(
+            argparse.Namespace(**{**base, "smart": True}), set()) == []
+
 
 # ============================================================
 # The two rows this change re-armed (#1702)

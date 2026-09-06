@@ -96,7 +96,14 @@ def test_warning_names_the_skipped_files(hierarchical: pathlib.Path):
     assert "unit-test" in msg
     assert "2 config file(s)" in msg
     assert "finance/us-east/prod/tenant-a.yaml" in msg
-    assert "#1339" in msg
+    # #1714: the sentence must stand on its own. It used to end "See issue
+    # #1339", which is an unrelated ticket (ADR-017 explicit-null
+    # inheritance), so an operator following the pointer landed on the
+    # wrong topic. What to do has to be IN the message: the exporter
+    # reads recursively, this tool did not, here is the way to reconcile.
+    assert "#1339" not in msg
+    assert "recursively" in msg
+    assert "top level only" in msg
 
 
 def test_warning_truncates_but_says_how_many(tmp_path: pathlib.Path):

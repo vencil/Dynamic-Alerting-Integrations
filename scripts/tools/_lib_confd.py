@@ -1,4 +1,9 @@
-"""Single answer to "what is in a conf.d/ directory" (#1339).
+"""Single answer to "what is in a conf.d/ directory".
+
+The defect family this module closes: many readers of the same tenant
+config tree, each hand-rolling its own enumeration, giving different
+answers about what the tree contains — and the flat ones reporting
+"nothing" in a way indistinguishable from "nothing to find".
 
 ADR-016 introduced a hierarchical `conf.d/` (L0 global → L1 domain → L2
 region → L3 env → tenant) and ADR-017 defined how the levels merge. The
@@ -668,13 +673,19 @@ def nested_yaml_warning(
     root = Path(config_dir)
     shown = [p.relative_to(root).as_posix() for p in missed[:limit]]
     more = f" (+{len(missed) - limit} more)" if len(missed) > limit else ""
+    # ⛔ Self-contained on purpose (#1714): this sentence used to end with a
+    # ticket number that belongs to an unrelated topic, so an operator who
+    # followed it landed on the wrong page. Say what happened, what it
+    # means, and what to do — nothing here needs a lookup.
     return (
-        f"{tool}: reads {config_dir} FLAT, but {len(missed)} config file(s) "
-        f"live in subdirectories and are being SKIPPED: "
+        f"{tool}: read {config_dir} FLAT (top level only), but {len(missed)} "
+        f"config file(s) live in subdirectories and were SKIPPED: "
         f"{', '.join(shown)}{more}. "
         f"threshold-exporter reads this tree recursively (ADR-016/017), so "
-        f"this tool's answer does not describe what the exporter is doing. "
-        f"See issue #1339."
+        f"what this tool just reported does not describe what the exporter "
+        f"is serving. Before acting on this output, run a recursive reader "
+        f"(e.g. validate_config) over the same tree, or flatten the tree so "
+        f"every reader sees the same files."
     )
 
 
