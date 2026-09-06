@@ -416,6 +416,9 @@
   "scripts/tools/lint/check_repo_name.py": [
    "tests/lint/test_check_repo_name.py"
   ],
+  "scripts/tools/lint/check_retire_drift.py": [
+   "tests/lint/test_check_retire_drift.py"
+  ],
   "scripts/tools/lint/check_routing_profiles.py": [
    "tests/lint/test_check_routing_profiles.py"
   ],
@@ -789,7 +792,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "07f9c577784160b1f90b81a17ff3732cf310fff02055b88b5ee343fac1969906",
+ "source_digest": "4f7fe574a0887a6bd34041a34a81fff7cd1535df616f1cda08aced8edb65c734",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -936,6 +939,7 @@
   "tests/lint/test_check_pr_scope_drift.py",
   "tests/lint/test_check_property_coverage.py",
   "tests/lint/test_check_repo_name.py",
+  "tests/lint/test_check_retire_drift.py",
   "tests/lint/test_check_routing_profiles.py",
   "tests/lint/test_check_rulepack_sync.py",
   "tests/lint/test_check_scrape_reachability.py",
