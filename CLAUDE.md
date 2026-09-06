@@ -87,6 +87,8 @@ Vibe 專案內建 **八個本地 skills**，在對應情境自動觸發。
 
 13 條完整規範見 [`docs/internal/dev-rules.md`](docs/internal/dev-rules.md)；完整 Top 4 說明 + 互動工具變更 SOP → 觸發 `vibe-dev-rules` skill。
 
+⚠️ **那 13 條的受眾是 contributor（人）。跨 repo 的 AI 行為約束是另一份**：[`docs/internal/agent-rulebook.md`](docs/internal/agent-rulebook.md)（D-01～D-09，含路由表與成本上限）——寫 lint／守衛前、宣稱買到偵測力前、寫「沒有 X 涵蓋」前、判 CI 綠燈前、每修一輪就冒新洞時觸發。⛔ 兩份刻意分開，不要把認識論紀律寫進 `dev-rules.md`。
+
 1. **#12 Branch + PR** — ⛔ **禁止直推 main**。一律開 branch → PR → owner 同意後 merge。pre-push hook 攔截（`scripts/ops/protect_main_push.sh` + `scripts/ops/require_preflight_pass.sh`）
 2. **#11 檔案衛生** — 禁止對掛載路徑用 `sed -i`（會截斷缺少 EOF 換行的檔案）。用 Read+Edit 或 pipe
 3. **#4 Doc-as-Code** — 影響 API / schema / CLI / 計數的變更須同步 `CHANGELOG.md` + `CLAUDE.md` + `README.md`
