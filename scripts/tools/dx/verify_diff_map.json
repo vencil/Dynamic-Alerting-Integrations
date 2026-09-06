@@ -124,6 +124,9 @@
    "tests/dx/test_paired_trend_watch.py",
    "tests/dx/test_write_baseline_marker.py"
   ],
+  "scripts/tools/dx/analyze_probe.py": [
+   "tests/dx/test_analyze_probe.py"
+  ],
   "scripts/tools/dx/axe_lite_static.py": [
    "tests/dx/test_axe_lite_static.py",
    "tests/shared/test_property_tools.py"
@@ -785,10 +788,11 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "39ad8fcd39e2ead17824cc93b0508ec2b22088d40e9746df8c10fa7266360e17",
+ "source_digest": "c5a14022910d5091874a45a671e93c5888cc3d7f1aa2114ec4439683e68ef96e",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
+  "tests/dx/test_analyze_probe.py",
   "tests/dx/test_atomic_write.py",
   "tests/dx/test_axe_lite_static.py",
   "tests/dx/test_bat_label_integrity.py",
@@ -1165,6 +1169,9 @@
    "tests/ops/test_init_project.py",
    "tests/ops/test_nightly_race_issue_policy.py",
    "tests/shared/test_actionlint_pin_parity.py"
+  ],
+  ".github/workflows/bench-probe-write-latency.yaml": [
+   "tests/dx/test_analyze_probe.py"
   ],
   ".github/workflows/bench-record.yaml": [
    "tests/dx/test_pair_bench_ratio.py",
@@ -1628,6 +1635,12 @@
   ],
   "docs/internal/audit-reports/bench-paired-2026-08/nights.json": [
    "tests/dx/test_paired_trend_watch.py"
+  ],
+  "docs/internal/audit-reports/bench-probe-2026-09": [
+   "tests/dx/test_analyze_probe.py"
+  ],
+  "docs/internal/audit-reports/bench-probe-2026-09/probe-run1.txt": [
+   "tests/dx/test_analyze_probe.py"
   ],
   "docs/internal/backend-compat-baseline.md": [
    "tests/rulepacks/test_vm_backend_parity.py"
@@ -2230,6 +2243,7 @@
    "tests/lint/test_check_session_guard_liveness.py"
   ],
   "scripts/tools": [
+   "tests/dx/test_analyze_probe.py",
    "tests/dx/test_bump_docs.py",
    "tests/dx/test_generate_rule_pack_readme.py",
    "tests/dx/test_generate_tool_map.py",
@@ -2287,6 +2301,7 @@
    "tests/lint/test_check_structure.py"
   ],
   "scripts/tools/dx": [
+   "tests/dx/test_analyze_probe.py",
    "tests/dx/test_dx_json_stdout_contract.py",
    "tests/dx/test_generate_tenant_fixture.py",
    "tests/dx/test_line_ending_policy.py",
@@ -2300,6 +2315,9 @@
   "scripts/tools/dx/_atomic_write.py": [
    "tests/dx/test_atomic_write.py",
    "tests/dx/test_verify_diff.py"
+  ],
+  "scripts/tools/dx/analyze_probe.py": [
+   "tests/dx/test_analyze_probe.py"
   ],
   "scripts/tools/dx/axe_lite_static.py": [
    "tests/dx/test_axe_lite_static.py"

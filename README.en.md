@@ -112,7 +112,7 @@ Full comparison with Alertmanager routing examples: [Config-Driven Design](docs/
      94 `.en.md` files minus the alias, with 0 orphans.
      The per-document list comes from the generated doc-map linked below.
      ⚠️ The other numbers in this table are NOT in the same position, so do not
-     read them together: the 224 Python tools have a bump_docs writer and a
+     read them together: the 225 Python tools have a bump_docs writer and a
      validate_docs_versions checker on both halves, but the 16 rule packs do
      NOT have either FOR THIS TABLE — measured, none of the four relevant cells
      matches any RULE_PACK_COUNT_PATTERNS; what is guarded is the README badge
@@ -127,7 +127,7 @@ Full comparison with Alertmanager routing examples: [Config-Driven Design](docs/
 | [`rule-packs/`](rule-packs/) | 16 rule-pack source YAMLs (`rule-pack-<tech>.yaml`) + [ALERT-REFERENCE](rule-packs/ALERT-REFERENCE.en.md) | Add / modify alerting rules |
 | [`policies/`](policies/) | OPA Rego policy samples (naming, routing, threshold-bounds) | Governance rules |
 | [`environments/`](environments/) | CI / local environment profiles | Cross-environment config |
-| [`scripts/`](scripts/) | Shell entrypoints + 224 Python tools under `scripts/tools/{ops,dx,lint}` | Run tools, linting, DX |
+| [`scripts/`](scripts/) | Shell entrypoints + 225 Python tools under `scripts/tools/{ops,dx,lint}` | Run tools, linting, DX |
 | [`tests/`](tests/) | Python pytest (`test_*.py`), shell scenarios (`scenario-*.sh`), `e2e/` Playwright, `snapshots/` | Run / add tests |
 | [`docs/`](docs/) | Public documents and their zh/en bilingual pairs. Per-document lookup table: [doc-map](docs/internal/doc-map.en.md) | Design / integration / ops docs |
 | [`operator-manifests/`](operator-manifests/) | `operator_generate.py` output samples (16 PrometheusRule rule-packs) | Reference output for operator mode |

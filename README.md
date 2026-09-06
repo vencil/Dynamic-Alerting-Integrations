@@ -107,7 +107,7 @@ graph TD
      大小（它另外跳過 benchmarks.md）；docs/ 內真正湊得出 zh 側的 pair 是 93——那是
      94 個 `.en.md` 去掉別名之後的 93，落單者 0。
      逐份清單由下方連到的 doc-map 生成表提供。
-     ⚠️ 同表其餘數字的處境也各不相同，不要一起讀：Python 工具 224 兩半都有 bump_docs
+     ⚠️ 同表其餘數字的處境也各不相同，不要一起讀：Python 工具 225 兩半都有 bump_docs
      寫入端與 validate_docs_versions 檢查端；而 rule-pack 16 在**這張表裡**沒有——實測
      四個相關儲存格沒有一個匹配得到 RULE_PACK_COUNT_PATTERNS，被守著的是 README badge
      與別處的「16 個 Rule Pack …」句子。要在這一列加數字前，先為它接上兩端並定義母體。 -->
@@ -120,7 +120,7 @@ graph TD
 | [`rule-packs/`](rule-packs/) | 16 份 Rule Pack 來源 YAML（`rule-pack-<tech>.yaml`）+ [ALERT-REFERENCE](rule-packs/ALERT-REFERENCE.md) | 新增/修改告警規則 |
 | [`policies/`](policies/) | OPA Rego 政策範例（naming、routing、threshold-bounds） | 治理層規則 |
 | [`environments/`](environments/) | CI / local 環境 profile | 跨環境差異配置 |
-| [`scripts/`](scripts/) | Shell 進入點 + `scripts/tools/{ops,dx,lint}` 下 224 個 Python 工具 | 跑工具、lint、開發者體驗 |
+| [`scripts/`](scripts/) | Shell 進入點 + `scripts/tools/{ops,dx,lint}` 下 225 個 Python 工具 | 跑工具、lint、開發者體驗 |
 | [`tests/`](tests/) | Python pytest（`test_*.py`）、shell scenario（`scenario-*.sh`）、`e2e/` Playwright、`snapshots/` | 跑測試、加測試 |
 | [`docs/`](docs/) | 公開文件與其中英雙語 pair，逐份對照表見 [doc-map](docs/internal/doc-map.md)；另有 internal playbook/planning 文件不入 catalog | 讀設計/整合/運維文件 |
 | [`operator-manifests/`](operator-manifests/) | `operator_generate.py` 產出的 PrometheusRule 範例（16 個 rule-pack） | 參考 operator 模式的輸出樣板 |
