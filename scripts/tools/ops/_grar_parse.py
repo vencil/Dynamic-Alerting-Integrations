@@ -498,7 +498,7 @@ def _parse_config_files(config_dir: str) -> dict:
             # `map[string]map[string]ScheduledValue`
             # (`pkg/config/types.go:239`), so a sequence here is a
             # `yaml.TypeError`, `parsePartialConfig` returns ok=false
-            # (`flat_scanner.go:69-80`) and the **entire file is dropped** —
+            # (`flat_scanner.go`) and the **entire file is dropped** —
             # taking `defaults:` with it, which this loop has already
             # harvested a few lines above. Same bytes: CI green here, empty
             # platform defaults in the exporter. That is verbatim the hazard

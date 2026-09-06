@@ -59,15 +59,6 @@ func loadFile(path string) (ThresholdConfig, string, error) {
 	return cfg, hash, nil
 }
 
-// parsePartialConfig unmarshals one config file's bytes into a ThresholdConfig.
-// On parse failure it records the parse_failure metric and logs — ERROR for
-// underscore-prefixed files (a broken _defaults/_profiles silently nullifies an
-// entire block → every dependent tenant override breaks; cycle-6 RCA, planning
-// archive §S#37d, cost 5+ hours at WARN) or WARN for tenant files — then
-// returns ok=false so the caller can skip the file. `name` is the base filename
-// (drives the underscore severity choice); `path` is the display path used for
-// logs and the metric basename. Shared by IncrementalLoad and fullDirLoad so
-// the flat-mode parse paths report failures identically.
 // scanKeyBase is the underscore convention's unit of judgement: the FILE NAME,
 // not the whole scan key. Keys are root-relative slash paths since #1521
 // (`nested/_defaults.yaml`), and every `_`-prefix test in this package means
@@ -77,22 +68,6 @@ func loadFile(path string) (ThresholdConfig, string, error) {
 // shadowing the package.
 func scanKeyBase(key string) string { return path.Base(key) }
 
-// resolveScanRoot is the ONE derivation of "which directory is the conf.d
-// root" that every enumerator over that tree must use.
-//
-// ⛔ IT EXISTS BECAUSE HAVING TWO OF THEM IS THIS TICKET'S ENTIRE DEFECT
-// CLASS. `filepath.WalkDir` lstats its root and never follows a symlink, so
-// each scanner that starts from an unresolved `-config-dir` silently sees an
-// EMPTY tree when that path is a link. Fixing only the flat scanner produced
-// exactly the split this PR closes, one layer down: measured on a symlinked
-// root, `GetConfig()` had the tenant while `hierarchy.enabled` was false and
-// `tenantSources` was empty, so the tenant's series carried the ROOT default
-// (50) instead of the subtree's (90) — and the divergence audit reports only
-// the opposite direction, so the gauge stayed at 0. (#1569 blind review.)
-//
-// ⚠️ Falls back to the given path when resolution fails (dangling link,
-// permission), so the caller's own error handling still decides — this
-// function never turns a broken path into a different one.
 // isNestedPlatformFile reports whether a scan key names an underscore-prefixed
 // platform file BELOW the conf.d root.
 //
@@ -123,6 +98,22 @@ func absScanRoot(dir string) string {
 	return resolveScanRoot(clean)
 }
 
+// resolveScanRoot is the ONE derivation of "which directory is the conf.d
+// root" that every enumerator over that tree must use.
+//
+// ⛔ IT EXISTS BECAUSE HAVING TWO OF THEM IS THIS TICKET'S ENTIRE DEFECT
+// CLASS. `filepath.WalkDir` lstats its root and never follows a symlink, so
+// each scanner that starts from an unresolved `-config-dir` silently sees an
+// EMPTY tree when that path is a link. Fixing only the flat scanner produced
+// exactly the split this PR closes, one layer down: measured on a symlinked
+// root, `GetConfig()` had the tenant while `hierarchy.enabled` was false and
+// `tenantSources` was empty, so the tenant's series carried the ROOT default
+// (50) instead of the subtree's (90) — and the divergence audit reports only
+// the opposite direction, so the gauge stayed at 0. (#1569 blind review.)
+//
+// ⚠️ Falls back to the given path when resolution fails (dangling link,
+// permission), so the caller's own error handling still decides — this
+// function never turns a broken path into a different one.
 func resolveScanRoot(dir string) string {
 	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
 		return resolved
@@ -152,6 +143,15 @@ func reportUnparseableNestedPlatformFile(fullPath string, data []byte, metrics *
 	logger.Printf("ERROR: skip unparseable defaults/profiles file %s: %v (entire block dropped — fix file or remove)", fullPath, err)
 }
 
+// parsePartialConfig unmarshals one config file's bytes into a ThresholdConfig.
+// On parse failure it records the parse_failure metric and logs — ERROR for
+// underscore-prefixed files (a broken _defaults/_profiles silently nullifies an
+// entire block → every dependent tenant override breaks; cycle-6 RCA, planning
+// archive §S#37d, cost 5+ hours at WARN) or WARN for tenant files — then
+// returns ok=false so the caller can skip the file. `name` is the base filename
+// (drives the underscore severity choice); `path` is the display path used for
+// logs and the metric basename. Shared by IncrementalLoad and fullDirLoad so
+// the flat-mode parse paths report failures identically.
 func parsePartialConfig(name, path string, data []byte, metrics *configMetrics, logger *log.Logger) (ThresholdConfig, bool) {
 	var partial ThresholdConfig
 	if err := yaml.Unmarshal(data, &partial); err != nil {
@@ -320,12 +320,6 @@ func scanDirFileHashes(dir string, oldHashes map[string]string, oldMtimes map[st
 	return perFile, fmt.Sprintf("%x", compositeHasher.Sum(nil)), mtimes, dataCache, nil
 }
 
-// IncrementalLoad performs an incremental reload in directory mode.
-// It compares per-file hashes with the cached state, re-parses only
-// changed/added files, removes deleted files from cache, then rebuilds
-// the merged config from cached partials.
-//
-// Falls back to full Load() for single-file mode or first-time load.
 // applyBoundaryRules enforces the boundary convention: state_filters and
 // defaults only in _defaults.yaml, profiles only in _profiles.yaml.
 // logger may be nil → falls back to log.Default() (production safety).

@@ -323,8 +323,6 @@ func keyBypassesTheDeclaredSurface(cfg *ThresholdConfig, key string, sv Schedule
 // criticalKeySuffix mirrors pkg/config's unexported `criticalSuffix`.
 const criticalKeySuffix = "_critical"
 
-// declaredAnywhere reports whether the platform recognises this exact key on
-// either surface `resolveBaseRows` / `resolveDeclaredRows` iterate.
 // reservedShapeWins mirrors the reserved-key exclusions at the top of
 // `resolveDimensionalRows`, verbatim. Kept as its own function so a change
 // there is a one-line change here rather than a condition to re-derive.
@@ -335,6 +333,8 @@ func reservedShapeWins(key string) bool {
 		strings.HasPrefix(key, "_routing")
 }
 
+// declaredAnywhere reports whether the platform recognises this exact key on
+// either surface `resolveBaseRows` / `resolveDeclaredRows` iterate.
 func declaredAnywhere(cfg *ThresholdConfig, key string) bool {
 	if _, global := cfg.Defaults[key]; global {
 		return true

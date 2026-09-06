@@ -10,6 +10,11 @@ import (
 	"time"
 )
 
+// probeRound is monotonic across invocations on purpose. Go runs the body once
+// with b.N==1 to calibrate even under `-benchtime=Nx`, so a per-invocation
+// counter emits two different rounds both labelled `round=0`.
+var probeRound int
+
 // BenchmarkProbeWriteLatency splits BenchmarkIncrementalLoad_1000_OneFileChanged's
 // loop into its two halves and reports the LATENCY DISTRIBUTION of each, instead
 // of reporting one mean.
@@ -48,11 +53,6 @@ import (
 //
 // `-benchtime=1x` is required, not stylistic: b.N is the round counter here and
 // the inner loop is what supplies the iterations.
-// probeRound is monotonic across invocations on purpose. Go runs the body once
-// with b.N==1 to calibrate even under `-benchtime=Nx`, so a per-invocation
-// counter emits two different rounds both labelled `round=0`.
-var probeRound int
-
 func BenchmarkProbeWriteLatency(b *testing.B) {
 	iters := probeEnvInt("PROBE_ITERS", 400)
 	fmt.Printf("PROBEENV goos=%s goarch=%s numcpu=%d go=%s iters=%d b.N=%d\n",

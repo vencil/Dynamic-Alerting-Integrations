@@ -378,6 +378,19 @@ func (cm *configMetrics) IncFreeOSMemory() {
 	cm.freeOSMemory.Inc()
 }
 
+// SetHierarchyDivergentTenants publishes the current size of the conf.d
+// dual-scanner divergent set (#1521). Called from
+// ConfigManager.auditHierarchyDivergence on every config commit,
+// including the healthy case (n == 0) — the zero write is what lets the
+// gauge recover after an operator moves the misplaced tenant file, and it
+// distinguishes "audited, clean" from "never audited" only in combination
+// with the load having happened at all. See config_divergence.go for why
+// this is a gauge rather than a counter, and why the divergence does not
+// fail the load.
+func (cm *configMetrics) SetHierarchyDivergentTenants(n int) {
+	cm.hierarchyDivergentTenants.Set(float64(n))
+}
+
 // PublishTenantMetricsOverLimit replaces the entire da_tenant_metrics_over_limit
 // snapshot with the supplied per-tenant magnitudes (#652). Called from
 // ThresholdCollector.Collect each scrape with the ResolveStats produced
@@ -395,19 +408,6 @@ func (cm *configMetrics) IncFreeOSMemory() {
 // Collect within the same Gather: ThresholdCollector is registered
 // first (see collector.go MetricsHandler), so its Reset+Set runs before
 // the GaugeVec is asked to emit its current state.
-// SetHierarchyDivergentTenants publishes the current size of the conf.d
-// dual-scanner divergent set (#1521). Called from
-// ConfigManager.auditHierarchyDivergence on every config commit,
-// including the healthy case (n == 0) — the zero write is what lets the
-// gauge recover after an operator moves the misplaced tenant file, and it
-// distinguishes "audited, clean" from "never audited" only in combination
-// with the load having happened at all. See config_divergence.go for why
-// this is a gauge rather than a counter, and why the divergence does not
-// fail the load.
-func (cm *configMetrics) SetHierarchyDivergentTenants(n int) {
-	cm.hierarchyDivergentTenants.Set(float64(n))
-}
-
 func (cm *configMetrics) PublishTenantMetricsOverLimit(perTenant map[string]int) {
 	cm.tenantMetricsOverLimit.Reset()
 	for tenant, magnitude := range perTenant {

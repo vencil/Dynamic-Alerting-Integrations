@@ -18,14 +18,6 @@ import (
 // ConfigManager — supports both single-file and directory mode
 // ============================================================
 
-// ConfigManager handles loading and hot-reloading the config.
-// Supports two modes:
-//   - Single-file mode (legacy): reads one YAML file
-//   - Directory mode: scans all *.yaml files in a directory and deep-merges
-//
-// In directory mode, ConfigManager supports incremental hot-reload (v2.1.0):
-// per-file SHA-256 tracking + parsed config cache → only changed files are
-// re-parsed on each reload cycle, then all cached partials are merged.
 // flatScanState bundles the v2.1.0 incremental-reload caches used by the
 // flat-mode scanner (`scanDirFileHashes` + `IncrementalLoad`). Per-file
 // SHA-256 + parsed partial config + mtime fast-path stat. nil maps when
@@ -91,6 +83,14 @@ type debouncerState struct {
 	fired          uint64          // count of fires; read via DebounceFiredCount()
 }
 
+// ConfigManager handles loading and hot-reloading the config.
+// Supports two modes:
+//   - Single-file mode (legacy): reads one YAML file
+//   - Directory mode: scans all *.yaml files in a directory and deep-merges
+//
+// In directory mode, ConfigManager supports incremental hot-reload (v2.1.0):
+// per-file SHA-256 tracking + parsed config cache → only changed files are
+// re-parsed on each reload cycle, then all cached partials are merged.
 type ConfigManager struct {
 	path       string // file path or directory path
 	isDir      bool   // true = directory mode
@@ -482,6 +482,12 @@ func anyNestedKey(groups ...[]string) bool {
 	return false
 }
 
+// IncrementalLoad performs an incremental reload in directory mode.
+// It compares per-file hashes with the cached state, re-parses only
+// changed/added files, removes deleted files from cache, then rebuilds
+// the merged config from cached partials.
+//
+// Falls back to full Load() for single-file mode or first-time load.
 func (m *ConfigManager) IncrementalLoad() error {
 	// Single-file mode or first load: fall back to full Load
 	if !m.isDir {
