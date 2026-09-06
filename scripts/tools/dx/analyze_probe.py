@@ -354,12 +354,19 @@ def render_ci(session):
     for e in session.env:
         print(f"PROBEENV {e}")
     print(f"rounds parsed: {len(rows)} {dropped}".rstrip())
+    print("```\n")
+    # ⛔ OUTSIDE the fence. Printed between the ``` markers this renders as
+    # literal text in a code block instead of the callout it is written as —
+    # verified against a Markdown renderer, not by reading. A note whose entire
+    # job is "being thrown away must be SEEN, not just present in the bytes"
+    # being swallowed by the raw-log styling is the same failure it exists to
+    # prevent, one layer up. Found by blind review. The `> ⛔ 判讀限制` note
+    # further down is outside a fence for the same reason.
     if session.discarded:
         where = ", ".join(f"line {n}" for n, _ in session.discarded)
-        print(f"\n> ⚠️ {len(session.discarded)} 筆校準輪記錄格式有誤、無法解析，已略過"
+        print(f"> ⚠️ {len(session.discarded)} 筆校準輪記錄格式有誤、無法解析，已略過"
               f"（{where}）。⛔ 它們本來就會被校準過濾器丟棄，所以量測結果不受影響——"
-              f"但「被丟掉」這件事必須說出來，不能只是消失。")
-    print("```\n")
+              f"但「被丟掉」這件事必須說出來，不能只是消失。\n")
 
     tot = [total(r) for r in rows]
     w = [r["write_sum"] for r in rows]
@@ -487,9 +494,14 @@ def render_archive(sessions):
         else:
             how = f"{len(rows)} measurement rounds, {s.ncal} calibration dropped"
         if s.discarded:
+            # ⛔ Same shape as the CI renderer's line list, deliberately: the
+            # earlier version inflected "line"/"lines" on the count, and that
+            # branch was pure grammar with no fixture behind it — a dead branch
+            # kept alive only by a plural. Repeating "line N" needs no inflection
+            # and so cannot be wrong.
+            where = ", ".join(f"line {n}" for n, _ in s.discarded)
             how += (f", {len(s.discarded)} unparseable calibration record(s)"
-                    f" skipped (line{'s' if len(s.discarded) > 1 else ''} "
-                    + ", ".join(str(n) for n, _ in s.discarded) + ")")
+                    f" skipped ({where})")
         print(f"\n  {s.name}  ({how})")
         print(f"      round total   median {ms(med):8.1f} ms   min {ms(min(tot)):8.1f}   "
               f"max {ms(max(tot)):8.1f}   spread {pct(max(tot) - min(tot), med, '6.2f'):>7}")

@@ -563,7 +563,66 @@ def test_a_discarded_calibration_record_is_named_not_silently_dropped(tmp_path):
 
     rc, out = run_stdout("--archive", str(d))
     assert rc == 0, out
-    assert "1 unparseable calibration record(s) skipped" in out, out
+    # ⛔ On the RIGHT run's line, with the RIGHT line number. A global substring
+    # search cannot tell "probe-run1 lost a record" from "probe-run2 did":
+    # measured, attaching the note to every run's line, and replacing the line
+    # number with a constant, both left this suite green. Naming the wrong
+    # dispatch is precisely the failure the identity section exists to prevent.
+    def _run_line(text, name):
+        return next(l for l in text.splitlines()
+                    if name in l and "measurement rounds" in l)
+
+    assert "1 unparseable calibration record(s) skipped (line 2)" in \
+        _run_line(out, "probe-run1.txt"), out
+    for other in ("probe-run2.txt", "probe-run3.txt"):
+        assert "unparseable" not in _run_line(out, other), out
+
+    # ⛔ Again with the defect on a run that is NOT the first. With only run1
+    # broken, "read this run's discarded list" and "read sessions[0]'s" produce
+    # the same bytes — measured, that mutation stayed green. The attribution is
+    # only pinned when the broken run is not the one a constant index would hit.
+    second = tmp_path / "defect-on-run2"
+    second.mkdir()
+    for name in RUNS:
+        lines = (ARCHIVE / name).read_text(encoding="utf-8").splitlines()
+        if name == "probe-run2.txt":
+            lines = _calibration_row(
+                lines, lambda l: re.sub(r"\s*load_p50=\d+", "", l))
+        (second / name).write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    rc, out2 = run_stdout("--archive", str(second))
+    assert rc == 0, out2
+    assert "1 unparseable calibration record(s) skipped (line 2)" in \
+        _run_line(out2, "probe-run2.txt"), out2
+    for other in ("probe-run1.txt", "probe-run3.txt"):
+        assert "unparseable" not in _run_line(out2, other), out2
+
+
+def test_the_discarded_note_is_outside_the_markdown_fence(tmp_path):
+    """A callout printed between ``` markers is not a callout.
+
+    ⛔ The CI report is read in a GitHub Job Summary pane, where a `>` line
+    inside a fenced block renders as literal text in the raw-log styling rather
+    than as an admonition. A note whose entire job is "a record was thrown away
+    and that must be SEEN" being swallowed by the log dump is the same failure
+    it exists to prevent, one layer up. Found by blind review; verified against
+    a Markdown renderer at the time, pinned structurally here so the assertion
+    does not depend on a renderer being installed.
+    """
+    d = build_archive(tmp_path, lambda ls: _calibration_row(
+        ls, lambda l: re.sub(r"\s*load_p50=\d+", "", l)))
+    rc, out = run_stdout("--from-log", str(d / "probe-run1.txt"))
+    assert rc == 0, out
+
+    lines = out.splitlines()
+    note = next(i for i, l in enumerate(lines) if "筆校準輪記錄格式有誤" in l)
+    fences = [i for i, l in enumerate(lines) if l.strip() == "```"]
+    assert len(fences) % 2 == 0, f"unbalanced fences at {fences}"
+    inside = any(a < note < b for a, b in zip(fences[0::2], fences[1::2]))
+    assert not inside, (
+        f"the discarded note is on line {note}, inside a fence "
+        f"(fences at {fences}) — it will render as code, not as a callout"
+    )
 
 
 def test_a_defect_is_reported_when_no_calibration_round_is_dropped(tmp_path):
