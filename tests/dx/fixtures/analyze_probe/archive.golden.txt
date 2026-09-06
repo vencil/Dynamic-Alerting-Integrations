@@ -1,0 +1,77 @@
+==========================================================================
+IDENTITY OF THE THING MEASURED
+==========================================================================
+  probe-run1.txt
+      PROBEENV goos=linux goarch=amd64 numcpu=4 go=go1.26.7 iters=400 b.N=1
+      PROBEENV goos=linux goarch=amd64 numcpu=4 go=go1.26.7 iters=400 b.N=30
+  probe-run2.txt
+      PROBEENV goos=linux goarch=amd64 numcpu=4 go=go1.26.7 iters=400 b.N=1
+      PROBEENV goos=linux goarch=amd64 numcpu=4 go=go1.26.7 iters=400 b.N=30
+  probe-run3.txt
+      PROBEENV goos=linux goarch=amd64 numcpu=4 go=go1.26.7 iters=400 b.N=1
+      PROBEENV goos=linux goarch=amd64 numcpu=4 go=go1.26.7 iters=400 b.N=30
+
+  distinct (goos, goarch, numcpu, go, iters) tuples across all runs: 1
+      goos=linux goarch=amd64 numcpu=4 go=go1.26.7 iters=400
+
+==========================================================================
+PER DISPATCH
+==========================================================================
+
+  probe-run1.txt  (30 measurement rounds, 1 calibration dropped)
+      round total   median   3881.3 ms   min   3751.9   max   4166.0   spread  10.67%
+      write_sum     median   34.117 ms  min   30.158   max   81.099   share of all time 0.942%
+      write tail    worst p99 over rounds   3300.1 us   worst single write   8933.8 us
+      slowest round #10: +284.8 ms vs median round (+7.34%); the write half contributes +46.982 ms = 16.5% of that excess
+
+  probe-run2.txt  (30 measurement rounds, 1 calibration dropped)
+      round total   median   3632.4 ms   min   3583.7   max   3874.5   spread   8.00%
+      write_sum     median   28.799 ms  min   25.696   max   34.771   share of all time 0.803%
+      write tail    worst p99 over rounds    158.1 us   worst single write   7703.5 us
+      slowest round #17: +242.0 ms vs median round (+6.66%); the write half contributes +5.972 ms = 2.5% of that excess
+
+  probe-run3.txt  (30 measurement rounds, 1 calibration dropped)
+      round total   median   3684.5 ms   min   3652.3   max   3790.9   spread   3.76%
+      write_sum     median   30.441 ms  min   29.044   max   37.154   share of all time 0.829%
+      write tail    worst p99 over rounds    134.4 us   worst single write   6035.9 us
+      slowest round #11: +106.3 ms vs median round (+2.89%); the write half contributes +2.837 ms = 2.7% of that excess
+
+==========================================================================
+CROSS DISPATCH — the axis #1497 observed its bimodality on
+==========================================================================
+  probe-run1.txt     median round total   3881.3 ms    +5.34% vs the middle dispatch
+  probe-run2.txt     median round total   3632.4 ms    -1.41% vs the middle dispatch
+  probe-run3.txt     median round total   3684.5 ms    +0.00% vs the middle dispatch
+  spread of the three medians: 6.75%
+  ⛔ #1497's gap between modes, for comparison: 26.40 pp
+
+==========================================================================
+SHAPE OF THE ROUND-TO-ROUND VARIATION — level shift or episode?
+==========================================================================
+dispatch             n   corr(total, p50xN)  corr(total, above-p50)  corr(total, write_sum)
+probe-run1.txt      30                0.958                  -0.255                   0.642
+probe-run2.txt      30                0.975                   0.124                   0.700
+probe-run3.txt      30                0.858                  -0.076                   0.639
+POOLED              90                0.981                   0.338                   0.692
+
+  standard deviation over the pooled 90 rounds:
+      round total             113.79 ms   (range  582.32 ms)
+      level  (p50 x iters)    103.94 ms   (range  540.89 ms)  =  91.3% of the round total's sd
+      above-p50 mass           21.89 ms   (range  102.52 ms)  =  19.2%
+      write_sum                 6.42 ms   (range   55.40 ms)  =   5.6%
+
+  ⚠️ correlation says which quantity moves WITH the round; the sd column says
+     how much it could move the round at all. A term needs both to be a cause.
+
+==========================================================================
+WHAT MECHANISM 1 WOULD HAVE TO DO
+==========================================================================
+  A one-sided swing of 26.40% on a 3698 ms round is 976 ms.
+  Largest write-path excursion above the median write_sum, in all 90 rounds: 50.3 ms => short by a factor of 19x
+  Per iteration: the median round's write half averages 77.1 us;
+     to reach 976 ms it would have to average 2.44 ms across all 400 iterations,
+     i.e. 32x its entire observed cost, sustained — not in a spike.
+
+  ⛔ This bounds the episodes that WERE seen. It is not a proof that no larger
+     episode exists: the high mode itself was not reproduced in these runs
+     (see the cross-dispatch spread above).

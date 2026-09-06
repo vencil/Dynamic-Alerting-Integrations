@@ -114,3 +114,15 @@ tools/portal/src/getting-started/wizard.jsx
 # this exemption is permanent rather than one-off. NUL-byte detection still
 # applies (the allowlist only suppresses the truncation heuristic).
 components/recipe-preview/promtool.openvex.json
+
+# TRK-373 / #1731: bench-probe-write-latency.yaml's Summarize step had the whole
+# probe summary computation inline as a 174-line python heredoc, a second copy of
+# docs/internal/audit-reports/bench-probe-2026-09/analyze_probe.py with five known
+# behavioural divergences. The computation moved to scripts/tools/dx/analyze_probe.py
+# and the step became a two-line call. 19379 -> ~8.1k bytes (~42%). Same shape and
+# same reason as the bench-gate-pr.yaml entry above.
+# ⚠️ This exemption is PERMANENT and file-wide: a future real truncation of this
+# workflow will not be caught by the shrink heuristic. Accepted because the file is
+# now short enough that a truncation is visible in review, and because the NUL-byte
+# half of the guard still applies. Genuine refactor, not damage.
+.github/workflows/bench-probe-write-latency.yaml

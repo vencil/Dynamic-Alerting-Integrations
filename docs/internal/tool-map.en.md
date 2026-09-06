@@ -89,6 +89,7 @@ lang: en
 | `_waveform_lib.py` | fault-waveform pack 合成核心（ADR-030 決策層驗證 PR-1，純函式庫） |
 | `add_frontmatter.py` | Add YAML front matter to documentation files for MkDocs/Docusaurus integration. |
 | `analyze_bench_history.py` | Aggregate bench-record nightly history into per-benchmark stats. |
+| `analyze_probe.py` | Summarise BenchmarkProbeWriteLatency PROBE records - write vs load attribution. |
 | `analyze_tier1_fp_rate.py` | Tier 1 bench-gate friction-rate observer (issue #433 W3). |
 | `axe_lite_static.py` | Axe-lite: static WCAG heuristics for JSX files (Phase .a0 Day 5 verification). |
 | `bump_docs.py` | 版號一致性管理工具 |
