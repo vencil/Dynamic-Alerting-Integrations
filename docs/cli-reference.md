@@ -619,7 +619,7 @@ da-tools backtest [--git-diff | --config-dir <dir> --baseline <dir>] [options]
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--lookback <DURATION>` | 歷史回測期間，格式為 `<數字><d\|h\|m>`（如 `7d`／`24h`）。⛔ **不符合這個格式的值會被靜默當成 `7d`**——`7`、`banana`、空字串實測全都得到 604800 秒，不會有任何錯誤訊息 | `7d` |
+| `--lookback <DURATION>` | 歷史回測期間，格式為 `<數字><d\|h\|m>`（如 `7d`／`24h`）。不符合格式的值（含裸數字 `7`、空字串）⇒ 結束碼 2 並列出接受的格式（#1625；之前會被靜默當成 `7d`） | `7d` |
 | `--output <FILE>` | 輸出至 JSON 或 CSV | stdout |
 
 **輸出**
@@ -629,8 +629,8 @@ da-tools backtest [--git-diff | --config-dir <dir> --baseline <dir>] [options]
 **範例**
 
 ```bash
-da-tools backtest --git-diff --lookback 7
-da-tools backtest --config-dir ./conf.d-new --baseline ./conf.d-old --lookback 7
+da-tools backtest --git-diff --lookback 7d
+da-tools backtest --config-dir ./conf.d-new --baseline ./conf.d-old --lookback 7d
 ```
 
 **結束碼**
@@ -638,7 +638,8 @@ da-tools backtest --config-dir ./conf.d-new --baseline ./conf.d-old --lookback 7
 | 代碼 | 說明 |
 |------|------|
 | `0` | 成功 |
-| `1` | Prometheus 連線或 Git 操作失敗 |
+| `1` | 至少一項門檻變更被評為 HIGH 風險（合併前先審閱）；Prometheus 連不上、git 跑不了都不是 1，見下列 |
+| `2` | 呼叫端錯誤：`--lookback` 供了但不可用（不符合 `<數字><d\|h\|m>`，#1625）；`--git-diff` 供了但 git 跑不了（沒裝 git、不在 git work tree 內、沒有 HEAD~1）——⛔ 不要改用 `--config-dir` 轉綠，那比的是兩棵樹、不是你的 PR |
 
 ---
 
@@ -1044,7 +1045,7 @@ da-tools cardinality-forecast --prometheus <URL> [--lookback <DURATION>] [--limi
 | 參數 | 說明 | 預設值 |
 |------|------|--------|
 | `--prometheus` | Prometheus URL（必填） | - |
-| `--lookback` | 回溯期間 | `30d` |
+| `--lookback` | 回溯期間，格式為 `<數字><d\|h\|m\|s>`（如 `30d`／`4h`）。不符合格式或不是正數的值（含裸數字 `30`、空字串、`0s`）⇒ 結束碼 2 並列出接受的格式（#1625；之前會被靜默當成 `30d`） | `30d` |
 | `--limit` | 基數上限 | `500` |
 | `--warn-days` | 預警天數 | `7` |
 | `--tenant` | 篩選特定 tenant | 全部 |
@@ -2079,7 +2080,7 @@ da-tools lint ./rule-packs --strict
 |------|------|
 | `0` | 沒有 ERROR 級違規。⚠️ **未加 `--ci` 時，即使有 ERROR 級違規也是 `0`**；WARN 級從不影響結束碼 |
 | `1` | `--ci` 模式下發現 ERROR 級違規 |
-| `2` | 呼叫端錯誤：`--policy` 供了但不可用（不是檔案／讀不到／不是合法 YAML／頂層不是 mapping）。⛔ 不要靠拿掉 `--policy` 轉綠——那等於改用內建政策 lint |
+| `2` | 呼叫端錯誤：`--policy` 供了但不可用（不是檔案／讀不到／不是合法 YAML／頂層不是 mapping）；掃描目標不存在（訊息指名哪一個，#1618）。⛔ 不要靠拿掉 `--policy` 或路徑轉綠——那等於改用內建政策 lint、或把沒掃過的目標當乾淨 |
 
 ---
 
@@ -2279,6 +2280,7 @@ da-tools evaluate-policy --config-dir conf.d/ --ci
 |------|------|
 | `0` | 無 error 違規 |
 | `1` | CI 模式：有 error 級別違規 |
+| `2` | 呼叫端錯誤：`--policy` 供了但不是檔案（含空字串）／`--config-dir` 不存在。⛔ 不要靠拿掉 `--policy` 轉綠——那等於不帶你的策略檔評估（#1651） |
 
 #### opa-evaluate
 

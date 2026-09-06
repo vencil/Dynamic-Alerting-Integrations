@@ -33,6 +33,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional, Union
 
+import yaml
+
 # Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
 # Migrated in #489 Phase B (was missing encoding setup → would crash on
 # legacy Windows cp950/cp936 consoles when printing emoji to stdout).
@@ -151,8 +153,18 @@ def load_policies(source: str) -> list[PolicyRule]:
     Returns:
         PolicyRule 清單。
     """
-    data = load_yaml_file(source)
-    if data is None:
+    return rules_from_policy_data(load_yaml_file(source))
+
+
+def rules_from_policy_data(data: Any) -> list[PolicyRule]:
+    """把已解析的 policy YAML（頂層 mapping）轉成 PolicyRule 清單。
+
+    ``None``（空檔）或非 mapping 的頂層 → ``[]``。CLI 的 ``--policy`` 守衛在
+    呼叫前就把非 mapping 當 caller error 擋掉；這裡的 ``isinstance`` 是給
+    ``load_policies``（library 呼叫端）用的，避免 ``"policies" in "a str"``
+    變成子字串測試。
+    """
+    if not isinstance(data, dict):
         return []
 
     raw_rules: list[dict] = []
@@ -657,6 +669,35 @@ def main(argv: Optional[list[str]] = None) -> int:
             }))
         return EXIT_CALLER_ERROR
 
+    # #1651 (D-06 "fix the class, not the cell"): `--policy` SUPPLIED but not a
+    # file is a caller error, never "no policy". Measured before the fix:
+    # `--policy ''` returned 0 because `if args.policy:` routed '' into the
+    # omitted branch, and `--policy <typo>` returned 0 because
+    # `load_yaml_file` returns None for a non-file so `load_policies` gave [].
+    # Both then printed "No policy rules found" — a typo'd gate that passes.
+    # Omitted is `is None` (argparse default); '' is supplied.
+    if args.policy is not None and not Path(args.policy).is_file():
+        if lang == "zh":
+            print(f"--policy 不是檔案: {args.policy!r}", file=sys.stderr)
+            print("  ⛔ 不要靠拿掉 --policy 轉綠——那等於不帶你的策略檔評估。",
+                  file=sys.stderr)
+        else:
+            print(f"--policy: {args.policy!r} is not a file", file=sys.stderr)
+            print("  ⛔ Do not drop the flag to clear this — that evaluates "
+                  "without your policy file.", file=sys.stderr)
+        if args.json_output:
+            print(format_json_report({
+                "status": "caller_error",
+                "reason": "policy_file_not_found",
+                "tenants_evaluated": 0,
+                "rules_evaluated": 0,
+                "error_count": 0,
+                "warning_count": 0,
+                "passed": False,
+                "violations": [],
+            }))
+        return EXIT_CALLER_ERROR
+
     # Load policies
     rules: list[PolicyRule] = []
 
@@ -666,8 +707,69 @@ def main(argv: Optional[list[str]] = None) -> int:
         rules.extend(load_policies(defaults_path))
 
     # From standalone policy file
-    if args.policy:
-        rules.extend(load_policies(args.policy))
+    if args.policy is not None:   # ⛔ not truthiness: '' is supplied (#1651)
+        # Blind-review follow-up to #1651: the guard above only proves the
+        # path IS a file. Measured before this: a file that is not valid
+        # UTF-8 or not valid YAML escaped `_lib_io.load_yaml_file` as a
+        # traceback — rc 1 (EXIT_VIOLATION's number, for a caller mistake)
+        # and 0 bytes of stdout under --json; a top-level list or scalar
+        # fell through to "No policy rules found" rc 0 because
+        # `"policies" in "just a string"` is a substring test. Same handler
+        # ladder as `lint_custom_rules.load_policy`: each shape is a caller
+        # error (2) naming the path and the reason, with the --json envelope
+        # the not-found path emits.
+        problem: Optional[tuple[str, str, str]] = None   # (reason, en, zh)
+        try:
+            with open(args.policy, encoding="utf-8") as f:
+                policy_data = yaml.safe_load(f)
+        except OSError as e:
+            problem = ("policy_file_unreadable",
+                       f"cannot read {args.policy!r}: {e}",
+                       f"無法讀取 {args.policy!r}: {e}")
+        except UnicodeDecodeError as e:
+            # ⛔ NOT an OSError — it is a ValueError, so the handler above
+            # does not see it.
+            problem = ("policy_file_invalid",
+                       f"{args.policy!r} is not valid UTF-8: {e}",
+                       f"{args.policy!r} 不是有效的 UTF-8: {e}")
+        except yaml.YAMLError as e:
+            problem = ("policy_file_invalid",
+                       f"{args.policy!r} is not valid YAML: {e}",
+                       f"{args.policy!r} 不是有效的 YAML: {e}")
+        else:
+            # An EMPTY file parses to None and stays "no rules" (rc 0 below,
+            # the #1649 content axis); any other non-mapping top level is
+            # a file the engine cannot read rules from.
+            if policy_data is not None and not isinstance(policy_data, dict):
+                kind = type(policy_data).__name__
+                problem = ("policy_file_invalid",
+                           f"top level of {args.policy!r} is {kind}, "
+                           "expected a mapping with a `policies:` list",
+                           f"{args.policy!r} 的頂層是 {kind}，應為含 "
+                           "`policies:` 清單的 mapping")
+        if problem is not None:
+            reason, en, zh = problem
+            print(f"--policy: {zh}" if lang == "zh" else f"--policy: {en}",
+                  file=sys.stderr)
+            if lang == "zh":
+                print("  ⛔ 不要靠拿掉 --policy 轉綠——那等於不帶你的策略檔評估。",
+                      file=sys.stderr)
+            else:
+                print("  ⛔ Do not drop the flag to clear this — that evaluates "
+                      "without your policy file.", file=sys.stderr)
+            if args.json_output:
+                print(format_json_report({
+                    "status": "caller_error",
+                    "reason": reason,
+                    "tenants_evaluated": 0,
+                    "rules_evaluated": 0,
+                    "error_count": 0,
+                    "warning_count": 0,
+                    "passed": False,
+                    "violations": [],
+                }))
+            return EXIT_CALLER_ERROR
+        rules.extend(rules_from_policy_data(policy_data))
 
     # #1112: an early return is still a `--json` terminal path — emit the report
     # schema with everything zeroed (`passed: true`: nothing was evaluated, so
@@ -686,17 +788,32 @@ def main(argv: Optional[list[str]] = None) -> int:
         }
 
     if not rules:
+        # #1651: when a policy file WAS supplied (it exists — the guard above
+        # ran — but yielded no rules), "specify --policy" is the wrong advice:
+        # the operator already did. Name both carriers that came up empty.
+        # The content axis itself stays exit 0 (#1649, owner decision).
+        carrier = Path(defaults_path).name
         if lang == "zh":
-            print("未找到策略規則。在 _defaults.yaml 新增 _policies 或指定 --policy。",
-                  file=sys.stderr)
+            if args.policy is None:
+                print(f"未找到策略規則。在 {carrier} 新增 _policies 或指定 --policy。",
+                      file=sys.stderr)
+            else:
+                print(f"未找到策略規則。{carrier} 沒有 _policies，"
+                      f"且 --policy {args.policy!r} 沒有 policies: 清單。",
+                      file=sys.stderr)
         else:
             # #1588 review: name the carrier this run actually resolved.
             # Telling an operator to edit `_defaults.yaml` on a tree whose
             # carrier is `_DEFAULTS.YAML` sends them to a file that is not
             # there.
-            print(f"No policy rules found. Add _policies to "
-                  f"{Path(defaults_path).name} or specify --policy.",
-                  file=sys.stderr)
+            if args.policy is None:
+                print(f"No policy rules found. Add _policies to "
+                      f"{carrier} or specify --policy.",
+                      file=sys.stderr)
+            else:
+                print(f"No policy rules found. {carrier} has no _policies "
+                      f"and --policy {args.policy!r} has no policies: list.",
+                      file=sys.stderr)
         if args.json_output:
             print(format_json_report(_empty_report("no_policies", "no_policy_rules_found")))
         return EXIT_OK

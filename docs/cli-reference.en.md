@@ -712,7 +712,7 @@ Choose one mode:
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--lookback <DURATION>` | Historical lookback window, `<number><d\|h\|m>` (e.g. `7d` / `24h`). ⛔ **Anything that does not match that shape is silently treated as `7d`** — `7`, `banana` and the empty string all measured 604800 seconds, with no error | `7d` |
+| `--lookback <DURATION>` | Historical lookback window, `<number><d\|h\|m>` (e.g. `7d` / `24h`). A value that does not match that shape (including a bare `7` or the empty string) ⇒ exit code 2 listing the accepted shape (#1625; it used to be silently treated as `7d`) | `7d` |
 | `--output <FILE>` | Output to JSON or CSV | stdout |
 
 **Output**
@@ -727,7 +727,7 @@ cd <repo> && docker run --rm --network=host \
   -v $(pwd):/workspace:ro \
   -e PROMETHEUS_URL=http://prometheus.monitoring.svc.cluster.local:9090 \
   ghcr.io/vencil/da-tools:v2.9.0 \
-  backtest --git-diff --lookback 7
+  backtest --git-diff --lookback 7d
 
 # Directory comparison mode
 docker run --rm --network=host \
@@ -735,7 +735,7 @@ docker run --rm --network=host \
   -v $(pwd)/conf.d-new:/data/new:ro \
   -e PROMETHEUS_URL=http://prometheus.monitoring.svc.cluster.local:9090 \
   ghcr.io/vencil/da-tools:v2.9.0 \
-  backtest --config-dir /data/new --baseline /data/old --lookback 7
+  backtest --config-dir /data/new --baseline /data/old --lookback 7d
 ```
 
 **Exit Codes**
@@ -743,7 +743,8 @@ docker run --rm --network=host \
 | Code | Description |
 |------|-------------|
 | `0` | Success |
-| `1` | Prometheus connection or Git operation failed |
+| `1` | At least one threshold change was rated HIGH risk (review before merging); an unreachable Prometheus or a git that cannot run is not 1, see below |
+| `2` | Caller error: `--lookback` supplied but unusable (not `<number><d\|h\|m>`, #1625); `--git-diff` supplied but git cannot run (git not installed, not inside a git work tree, no HEAD~1) — ⛔ do not switch to `--config-dir` to go green, that compares two trees, not your PR |
 
 ---
 
@@ -1149,7 +1150,7 @@ da-tools cardinality-forecast --prometheus <URL> [--lookback <DURATION>] [--limi
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `--prometheus` | Prometheus URL (required) | - |
-| `--lookback` | Lookback period | `30d` |
+| `--lookback` | Lookback period, `<number><d\|h\|m\|s>` (e.g. `30d` / `4h`). A value that does not match that shape or is not positive (including a bare `30`, the empty string, `0s`) ⇒ exit code 2 listing the accepted shape (#1625; it used to be silently treated as `30d`) | `30d` |
 | `--limit` | Cardinality limit | `500` |
 | `--warn-days` | Warning days before limit | `7` |
 | `--tenant` | Filter to specific tenant | all |
@@ -2314,7 +2315,7 @@ docker run --rm \
 |------|-------------|
 | `0` | No ERROR-level violations. ⚠️ **Without `--ci`, ERROR-level violations still exit `0`**; WARN level never affects the exit code |
 | `1` | ERROR-level violations found, in `--ci` mode |
-| `2` | Caller error: `--policy` was supplied but is unusable (not a file / unreadable / not valid YAML / top level not a mapping). ⛔ Do not go green by dropping `--policy` — that silently lints against the built-in policy instead |
+| `2` | Caller error: `--policy` was supplied but is unusable (not a file / unreadable / not valid YAML / top level not a mapping); a scan target does not exist (the message names it, #1618). ⛔ Do not go green by dropping `--policy` or the path — that silently lints against the built-in policy, or treats an unscanned target as clean |
 
 ---
 
@@ -2548,6 +2549,7 @@ da-tools evaluate-policy --config-dir conf.d/ --ci
 |------|-------------|
 | `0` | No error-level violations |
 | `1` | CI mode: error-level violations found |
+| `2` | Caller error: `--policy` supplied but not a file (including the empty string) / `--config-dir` does not exist. ⛔ Do not go green by dropping `--policy` — that evaluates without your policy file (#1651) |
 
 #### opa-evaluate
 

@@ -72,14 +72,42 @@ RISK_THRESHOLDS = {
 
 
 def parse_lookback(lookback_str):
-    """Convert lookback string (e.g., '7d', '24h') to seconds."""
+    """Convert lookback string (e.g., '7d', '24h') to seconds.
+
+    Raises ``ValueError`` on anything that is not ``<number><d|h|m>``.
+
+    ⛔ #1625: this used to ``return 7 * 86400`` on a non-match, so a bare
+    ``7`` (the shape the docs taught), ``banana`` and the empty string all
+    measured 604800 s and the run exited 0 — a supplied-but-unusable value
+    silently replaced by the default (agent-rulebook D-06). The grammar is
+    deliberately NOT widened: the fix is to fail loud, not to accept more.
+    """
     m = re.match(r"^(\d+)([dhm])$", lookback_str)
     if not m:
-        return 7 * 86400  # default 7d
+        raise ValueError(
+            f"invalid lookback {lookback_str!r}: expected <number><d|h|m>, "
+            "e.g. 7d / 24h / 30m")
     val = int(m.group(1))
     unit = m.group(2)
     multipliers = {"d": 86400, "h": 3600, "m": 60}
     return val * multipliers[unit]
+
+
+def lookback_arg(value: str) -> str:
+    """argparse ``type`` for ``--lookback``: validate, return the ORIGINAL string.
+
+    The report echoes the string the caller gave (``generate_report(results,
+    args.lookback)`` → ``"lookback": "3d"``), so the parsed seconds are
+    recomputed later via ``parse_lookback``; this only turns an unusable
+    value into an argparse usage error (exit 2 = EXIT_CALLER_ERROR) that
+    names the value and the accepted shape. argparse applies ``type`` to a
+    string default too, so ``DEFAULT_LOOKBACK`` is validated on every run.
+    """
+    try:
+        parse_lookback(value)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(str(e))
+    return value
 
 
 def prometheus_available(prom_url, timeout=5):
@@ -261,7 +289,17 @@ def tenant_is_queryable(tenant):
 def extract_changes_from_git_diff():
     """Parse git diff of conf.d/ to find threshold changes.
 
-    Returns list of dicts: [{tenant, metric, old_value, new_value}, ...]
+    Returns list of dicts: [{tenant, metric, old_value, new_value}, ...],
+    or ``None`` when git itself could not answer (not on PATH, not inside a
+    work tree, no ``HEAD~1``, timeout).
+
+    ⛔ #1556 item 4 (D-06): ``None`` from ``_git_bytes`` used to be folded into
+    ``[]`` here, so "git is unusable" and "the diff is empty" were the same
+    value and ``main()`` printed "No threshold changes found." + rc 0 for
+    both. The da-tools image installs no git and its WORKDIR is not a repo,
+    so `--git-diff` there ALWAYS looked like "your PR changed nothing".
+    ``b""`` (git ran, diff empty) still parses to ``[]``; only ``None`` is
+    passed through.
     """
     # ⚠️ `quotepath_off`, NOT `-z`: `-z` changes nothing in a unified diff's
     # `+++` header. Parsing then stays on bytes all the way down -- see
@@ -269,7 +307,7 @@ def extract_changes_from_git_diff():
     raw = _git_bytes(["diff", "HEAD~1", "--unified=0", "--", "conf.d/"],
                      quotepath_off=True)
     if raw is None:
-        return []
+        return None
 
     changes = []
     current_file = None
@@ -1100,9 +1138,14 @@ def main():
         help_text="Prometheus Query API URL "
                   "(default: $PROMETHEUS_URL, else http://localhost:9090)",
     )
+    # #1625: `type=lookback_arg` — a value that is supplied but does not match
+    # `<number><d|h|m>` is a caller error (exit 2 with the value named), not a
+    # silent 7-day fallback. Measured before the fix: `--lookback 7`,
+    # `--lookback banana` and `--lookback ''` all ran a 604800 s window, rc 0.
     parser.add_argument(
-        "--lookback", default=DEFAULT_LOOKBACK,
-        help=f"Historical lookback window (default: {DEFAULT_LOOKBACK})",
+        "--lookback", default=DEFAULT_LOOKBACK, type=lookback_arg,
+        help="Historical lookback window as <number><d|h|m>, e.g. 7d / 24h / 30m "
+             f"(default: {DEFAULT_LOOKBACK}); any other shape exits 2",
     )
     parser.add_argument(
         "--skip-if-unavailable", action="store_true",
@@ -1179,6 +1222,25 @@ def main():
     if recipe_tenants:
         print(custom_alert_notice(recipe_tenants), file=sys.stderr)
 
+    # #1556 item 4 / D-06: `--git-diff` was supplied, so git must be able to
+    # answer. This runs BEFORE the Prometheus check on purpose:
+    # `--skip-if-unavailable` is about Prometheus, not git, and must not turn
+    # "git is unusable" into a green skip. It also runs before the "no
+    # changes" exit below, which is the silent path this replaces.
+    git_changes = None
+    if args.git_diff:
+        git_changes = extract_changes_from_git_diff()
+        if git_changes is None:
+            print("--git-diff: `git diff HEAD~1 -- conf.d/` could not run "
+                  "(git not on PATH, not inside a git work tree, or no parent "
+                  "commit); run from a checkout with git installed.\n"
+                  "  ⛔ Do not switch to --config-dir to clear this — that "
+                  "compares two trees, not your PR.", file=sys.stderr)
+            if args.json:
+                print(format_json_report(empty_report(
+                    args.lookback, "caller_error", "git_diff_unavailable")))
+            sys.exit(EXIT_CALLER_ERROR)
+
     # Check Prometheus availability
     if not prometheus_available(args.prometheus):
         if args.skip_if_unavailable:
@@ -1197,7 +1259,7 @@ def main():
 
     # Extract changes
     if args.git_diff:
-        changes = keep_flat_threshold_changes(extract_changes_from_git_diff(), parsed_conf)
+        changes = keep_flat_threshold_changes(git_changes, parsed_conf)
     elif args.config_dir:
         if not args.baseline:
             print("ERROR: --config-dir requires --baseline", file=sys.stderr)

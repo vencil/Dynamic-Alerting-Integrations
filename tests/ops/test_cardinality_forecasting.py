@@ -403,6 +403,12 @@ class TestQueryPrometheus:
         result = cf.query_cardinality_range("http://prom:9090")
         assert result == {}
 
+    def test_query_range_unusable_lookback_raises(self):
+        """#1625 class: 函式庫層對不能解析的 lookback 直接 ValueError，不代入 30d。"""
+        with pytest.raises(ValueError) as exc:
+            cf.query_cardinality_range("http://prom:9090", lookback="banana")
+        assert "'banana'" in str(exc.value)
+
     @patch("_lib_prometheus.http_get_json")
     def test_query_range_error_status(self, mock_get):
         """查詢 status != success。"""
@@ -522,6 +528,30 @@ class TestCLI:
         mock_get.return_value = (None, "connection error")
         exit_code = cf.main(["--prometheus", "http://prom:9090"])
         assert exit_code == 2  # EXIT_CALLER_ERROR (#452: cannot reach Prometheus)
+
+    @pytest.mark.parametrize("bad", ["banana", "", "0s"], ids=["banana", "empty", "zero"])
+    def test_main_unusable_lookback_exits_caller_error(self, capsys, bad):
+        """#1625 class: `--lookback` 供了但不可用 → argparse 出口 exit 2，指名值與格式。
+
+        對照 test_main_no_data_json_envelope（`--lookback 30d` 照常接受）：
+        一個把所有 `--lookback` 都拒絕的修法會在那條 control 上紅。
+        """
+        with pytest.raises(SystemExit) as exc:
+            cf.main(["--prometheus", "http://prom:9090", "--lookback", bad])
+        assert exc.value.code == 2
+        err = capsys.readouterr().err
+        assert repr(bad) in err
+        assert "5m / 4h / 30d" in err
+
+    @patch("_lib_prometheus.http_get_json")
+    def test_main_valid_lookback_still_accepted(self, mock_get, capsys):
+        """control：`--lookback 30d` 通過 argparse（後續因無資料 exit 2，非 usage error）。"""
+        mock_get.return_value = (None, "connection error")
+        exit_code = cf.main(["--prometheus", "http://prom:9090", "--lookback", "30d", "--json"])
+        assert exit_code == 2
+        doc = json.loads(capsys.readouterr().out)   # 走到了 no_data envelope，不是 usage error
+        assert doc["reason"] == "no_cardinality_data"
+        assert doc["lookback_days"] == 30
 
     @patch("_lib_prometheus.http_get_json")
     def test_main_no_data_json_envelope(self, mock_get, capsys):

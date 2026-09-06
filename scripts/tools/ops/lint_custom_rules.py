@@ -253,7 +253,13 @@ def lint_file(filepath, policy):
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
             content = f.read()
-    except OSError as e:
+    except (OSError, UnicodeDecodeError) as e:
+        # ⛔ #1618: `UnicodeDecodeError` is a ValueError, NOT an OSError, so
+        # the bare `except OSError` here did not see it and one non-UTF-8
+        # file (cp950 bytes in a .yaml) escaped as a traceback with 0 bytes
+        # of stdout — every OTHER file's findings were lost with it. Now it
+        # is one ERROR LintResult for THAT file (per-file quarantine, #1008
+        # style); under `--ci` that ERROR still fails the run.
         results.append(LintResult(filepath, None, None, "ERROR", f"cannot read file: {e}"))
         return results, rule_count
 
@@ -480,10 +486,30 @@ def main():
     args = parser.parse_args()
 
     policy = load_policy(args.policy)
+
+    # ⛔ #1618 (D-06): a scan target that does not exist is a caller error,
+    # not a clean scan. `collect_files` simply skipped it, so
+    # `lint /typo/dir --ci` printed "No YAML files found." and exited 0 —
+    # a governance gate that passes on a path nobody scanned. Same answer
+    # with and without `--ci`. A target that EXISTS but holds no YAML is a
+    # legitimate no-op and stays EXIT_OK below.
+    # ⛔ `p == ""` is a separate test, not folded into `exists()`:
+    # `Path('')` is `PosixPath('.')`, so `exists()` is True and `lint ''`
+    # (an unset shell variable) silently linted the CURRENT DIRECTORY and
+    # exited on whatever it found there. '' is supplied and unusable — same
+    # family as a missing target, and `!r` makes it visible as ''.
+    missing = [p for p in args.paths if p == "" or not Path(p).exists()]
+    if missing:
+        die_caller_error(
+            "scan target(s) not found or empty: "
+            + ", ".join(repr(p) for p in missing)
+            + "\n  ⛔ Do not drop the path to clear this — an absent target "
+              "is not a clean one, and '' is not the current directory.")
+
     files = collect_files(args.paths)
 
     if not files:
-        print("No YAML files found.")
+        print("No YAML files found under: " + ", ".join(repr(p) for p in args.paths))
         sys.exit(EXIT_OK)
 
     all_results = []
