@@ -16,18 +16,44 @@ LINT_DIR = TOOLS_DIR / "lint"
 
 
 def collect_tools():
-    """Collect all .py tool files from ops, dx, lint subdirectories.
+    """Collect all .py tool files from scripts/tools/ and its ops, dx, lint
+    subdirectories.
 
     Excludes files starting with underscore and __init__.py.
+
+    ⛔ The top level is walked too (#1642). Before this, the population was
+    ops/ dx/ lint/ ONLY, so ``scripts/tools/validate_all.py`` — the runner
+    behind the required check ``Drift Detection (validate_all.py)`` — was
+    never under this contract at all, and its own source said so in a
+    comment rather than being fixed. A tool the gate does not enumerate can
+    drift to any exit code without a test going red; the enumeration is the
+    contract's reach, so it is derived from the directory, not from a list.
     """
     tools = []
-    for d in [OPS_DIR, DX_DIR, LINT_DIR]:
+    for d in [TOOLS_DIR, OPS_DIR, DX_DIR, LINT_DIR]:
         if d.is_dir():
             for f in sorted(d.glob("*.py")):
                 if f.name.startswith("_") or f.name == "__init__.py":
                     continue
                 tools.append(f)
     return tools
+
+
+def test_population_includes_the_top_level_runner():
+    """Anti-vacuity for the #1642 fix above.
+
+    ``TOOLS_DIR`` sits first in the walk; if it were dropped again the
+    parametrized sweeps below would just run fewer cases and stay green,
+    which is exactly how validate_all.py stayed out of the contract for the
+    life of this file. A named member of the top level is asserted to be
+    enumerated, so the population cannot shrink back silently.
+    """
+    names = {t.name for t in ALL_TOOLS}
+    assert "validate_all.py" in names, (
+        "scripts/tools/validate_all.py is not in the exit-code population; "
+        "the top-level walk has been lost (#1642)")
+    assert not any(n.startswith("_") for n in names), (
+        "a _lib_*.py helper was enumerated; those are libraries, not CLIs")
 
 
 ALL_TOOLS = collect_tools()
