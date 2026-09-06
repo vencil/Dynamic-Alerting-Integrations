@@ -15,6 +15,11 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ### Fixed
 
+- **nested `CLAUDE.md` 的觸發限制從 CHANGELOG 搬進「漏接」矩陣（docs；[#1757](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1757)）**：TRK-377 建立的路徑觸發層有一個實測出來的洞——**只有 Read 工具讀該目錄的檔才帶入，Bash 的 `cat`／`head` 不會**——而它先前只記在 CHANGELOG，也就是**沒有人會在做決定時去讀的載體**。失敗形狀：下一個人把它加到別的子樹，在用 shell 讀檔的 session 裡靜默不生效，得到的結論會是「這個檔沒用」而不是「讀檔路徑才是關鍵變數」。已補進 `hook-vs-skill-coverage.md` §7 🕳️ 漏接（該節職責正是「機械防線缺席**或只在某一種形態下存在**」），並把推廣前該做的事寫在同一列。
+  - ⭐ **它是既有兩種漏法的第三個變體**：A-13 那列缺的是 hook 的**依賴**（`node_modules`）、#1719 那列缺的是**註冊**（`.claude/settings.json` 整份沒載入），這一列缺的是**叫用形式**（同一個檔，Read 觸發、Bash 不觸發）。該節收尾的判別語同步從兩問擴成三問：依賴在不在／註冊載入了沒／**我現在的叫用方式會不會讓它根本不被觸發**。
+
+### Fixed
+
 - **`dev-rules` §P1 教的考古方法對 merge 後的 main 是錯的（docs；[#1741](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1741)）**：§P1 說沒有 trailer 就會「與 git log 失聯」，而 **merge 後 main 上那個 block 一定是斷的**——GitHub squash merge 在空行後附加自己的 `Co-authored-by:`，把作者寫的整段推出 block。照字面用 `%(trailers:key=Resolves)` 在 main 上考古**恆回空**，讀起來像「沒人遵守這條規則」。補上正確做法 `git log --grep`：⭐ **文字完好無損，丟掉的只有解析**（實測近 200 顆：`--grep` 命中 6、`%(trailers:...)` 命中 0）。
   - ⭐ **決定不修根因，理由是量出來的**：兩支消費端（`pr_preflight.py` 的 pass2 gate、`check_planning_status_sync.py`）都讀 `<base>..HEAD`、都由 `on: pull_request` 觸發、都 checkout PR head ⇒ **沒有任何東西從 merged main 讀 trailer**，功能面零損害；全樹亦無工具從 main 歷史讀 `Resolves`。
   - ⛔ **#1741 候選方向 2「作者側不要自己寫 `Co-Authored-By:`」實測推翻**：把作者寫的與 GitHub 附加的**分開**統計（近 120 顆），受損的 103 顆**全部**有 GitHub 附加那一行，而作者側有 141 顆寫的就是小寫拼法 ⇒ **拼法不是判別變數**。真正的規律：**GitHub 一律在空行後附加；受損與否只取決於作者訊息裡還有沒有別的 trailer**（未受損的 17 顆，作者側 co-author 為 0）。⇒ 剩下的兩條路是「換 merge method」（owner 決定）與「加 post-merge 檢查」（會對每顆 commit 開火，依 `agent-rulebook` D-01 不做）。
