@@ -1501,7 +1501,7 @@ class TestMainExtended:
         """--notify on successful run."""
         calls = []
         monkeypatch.setattr(va, "_send_notification",
-                            lambda t, m: calls.append((t, m)))
+                            lambda t, m, **kw: calls.append((t, m)))
         cli_argv('validate_all', '--notify', '--only', 'versions')
         monkeypatch.setattr(va, "_run_one", self._mock_run_one_pass)
         with pytest.raises(SystemExit) as exc:
@@ -1514,7 +1514,7 @@ class TestMainExtended:
         """--notify on failed run."""
         calls = []
         monkeypatch.setattr(va, "_send_notification",
-                            lambda t, m: calls.append((t, m)))
+                            lambda t, m, **kw: calls.append((t, m)))
         cli_argv('validate_all', '--notify', '--only', 'versions')
         monkeypatch.setattr(va, "_run_one", self._mock_run_one_fail)
         with pytest.raises(SystemExit) as exc:
@@ -1996,7 +1996,7 @@ class TestCiStopFallsThroughToTheTail:
     def test_notify_notifies_once(self, monkeypatch, capsys, cli_argv, ci):
         calls = []
         monkeypatch.setattr(va, "_send_notification",
-                            lambda t, m: calls.append((t, m)))
+                            lambda t, m, **kw: calls.append((t, m)))
         self._failing(monkeypatch)
         rc, _, _ = self._main(cli_argv, capsys, '--only', 'versions',
                               '--notify', *ci)
@@ -2257,6 +2257,226 @@ def _flags_run_watch_never_reads():
 
 
 _WATCH_BLIND = _flags_run_watch_never_reads()
+
+
+def _failing_run_one(short_name, script_path, tool_args, project_root):
+    """A `_run_one` stand-in that fails every check.
+
+    Module-level on purpose: `--parallel` hands `_run_one` to a
+    ProcessPoolExecutor, which pickles it by qualified name -- a closure or
+    a lambda cannot cross into the worker.
+    """
+    return (short_name, "fail", 0.2, "error detail", "FULL TOOL OUTPUT")
+
+
+def _fix_subprocess_ok(cmd, **kwargs):
+    import types
+    return types.SimpleNamespace(returncode=0, stdout="Fixed something",
+                                 stderr="")
+
+
+def _arm_fix(monkeypatch, tmp_path):
+    monkeypatch.setattr(va.subprocess, "run", _fix_subprocess_ok)
+
+
+def _arm_diff_report(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        va, "_generate_diff_report",
+        lambda failed, tools_dir, root: "=== DIFF REPORT ===\nversions")
+
+
+def _arm_profile(monkeypatch, tmp_path):
+    monkeypatch.setattr(va, "PROFILE_CSV", tmp_path / "profile.csv")
+
+
+def _arm_baseline(monkeypatch, tmp_path):
+    monkeypatch.setattr(va, "BASELINE_FILE", tmp_path / "baseline.json")
+
+
+def _arm_compare(monkeypatch, tmp_path):
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text(json.dumps({
+        "mode": "sequential", "wall_time": 0.1, "sum_time": 0.1,
+        "passed": 1, "failed": 0, "skipped": 0, "total": 1,
+        "ci_stopped_after": None, "not_run": [],
+        "results": {"versions": {"status": "pass", "elapsed": 0.1,
+                                 "detail": "ok"}},
+    }), encoding="utf-8")
+    monkeypatch.setattr(va, "BASELINE_FILE", baseline)
+
+
+def _arm_notify(monkeypatch, tmp_path):
+    # An OS no backend answers to -> the terminal-bell fallback, no
+    # subprocess.
+    import platform
+    monkeypatch.setattr(platform, "system", lambda: "FreeBSD")
+
+
+def _arm_smart(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        va, "_smart_detect",
+        lambda root: va.SmartSelection(["versions"], [], ["mkdocs.yml"]))
+
+
+# Per-flag side effects that must not touch the repo (a CSV / baseline file
+# under REPO_ROOT, a real fix subprocess, a real desktop notification, a
+# real git diff). Flags absent here (--verbose, --ci, --parallel) have no
+# side effect to arm.
+_ARM = {
+    "--fix": _arm_fix,
+    "--diff-report": _arm_diff_report,
+    "--profile": _arm_profile,
+    "--baseline": _arm_baseline,
+    "--compare": _arm_compare,
+    "--notify": _arm_notify,
+    "--smart": _arm_smart,
+}
+
+# Every store_true flag except --json itself (--list / --watch are already
+# excluded by _parser_boolean_flags). Derived, not listed: a flag added
+# later joins the matrix on its own.
+_JSON_ROWS = sorted(set(_BOOL_FLAGS) - {"--json"})
+
+# The text each tail flag produces on a failing run, and which the #1772
+# rule REDIRECTS to stderr under --json rather than dropping.
+_MOVED_TO_STDERR = {
+    "--fix": "Auto-fixing",
+    "--diff-report": "DIFF REPORT",
+    "--verbose": "FULL TOOL OUTPUT",
+    "--notify": "\a",
+    "--profile": "Timing appended",
+    "--baseline": "Baseline saved",
+    "--compare": "Baseline Comparison",
+}
+
+
+class TestJsonStdoutIsOneDocument:
+    """Under --json, stdout is exactly one JSON document (#1772).
+
+    Measured on main af12dce0 with `_run_one` mocked to fail, each row
+    `--only versions --json <flag>`; `json.loads(stdout)` is the probe:
+
+      --diff-report   human text AFTER the document   Extra data: line 20
+      --fix           human text AFTER the document   Extra data: line 20
+      --verbose       full tool output BEFORE it      Expecting value: line 2
+      --notify        the bell `\x07` AFTER it        Extra data
+      --profile       "Timing appended" notice        silently suppressed
+
+    The rule the fix applies: two kinds of human text exist once the parser
+    has accepted the flags. The report body (banner, per-check lines,
+    summary) IS the JSON document in another shape, so it is suppressed.
+    What the tail flags say (--verbose output, the --diff-report text, the
+    --fix log, the --profile / --baseline notices, the --notify bell) has no
+    JSON representation, so it is redirected to stderr, not dropped. The
+    --smart notice and the --baseline notice already followed that rule;
+    the fix routes every tail print through the same `say` stream.
+
+    The population is derived from the parser's store_true flags, minus
+    --json itself, so a flag added later is under this contract on its own.
+    """
+
+    @staticmethod
+    def _argv(flag, json=True):
+        # `--smart --only <names>` is rejected by _conflicting_flags (exit 2),
+        # so the --smart row selects `versions` through the armed detector.
+        if flag == "--smart":
+            return ["--smart"] + (["--json"] if json else [])
+        return ["--only", "versions"] + (["--json"] if json else []) + [flag]
+
+    def _main(self, cli_argv, capsys, *argv):
+        cli_argv('validate_all', *argv)
+        with pytest.raises(SystemExit) as exc:
+            va.main()
+        captured = capsys.readouterr()
+        return exc.value.code, captured.out, captured.err
+
+    def _arm(self, flag, monkeypatch, tmp_path):
+        monkeypatch.setattr(va, "_run_one", _failing_run_one)
+        arm = _ARM.get(flag)
+        if arm is not None:
+            arm(monkeypatch, tmp_path)
+
+    # ---- anti-vacuity -----------------------------------------------------
+
+    def test_the_population_is_derived_and_non_empty(self):
+        assert _JSON_ROWS, "no flag rows; every test below is vacuous"
+        assert "--json" not in _JSON_ROWS
+        assert "--list" not in _JSON_ROWS and "--watch" not in _JSON_ROWS
+
+    def test_every_arming_entry_names_a_live_flag(self):
+        dead = sorted(set(_ARM) - set(_JSON_ROWS))
+        assert not dead, (
+            f"{dead} are armed but are no longer parser flags; the arming "
+            f"table has gone stale")
+
+    def test_every_moved_fragment_names_a_live_flag(self):
+        dead = sorted(set(_MOVED_TO_STDERR) - set(_JSON_ROWS))
+        assert not dead, (
+            f"{dead} have a stderr fragment but are no longer parser flags")
+
+    # ---- the contract -----------------------------------------------------
+
+    @pytest.mark.parametrize("flag", _JSON_ROWS)
+    def test_stdout_is_one_document_with_each_flag(self, flag, monkeypatch,
+                                                   capsys, cli_argv,
+                                                   tmp_path):
+        self._arm(flag, monkeypatch, tmp_path)
+        rc, out, _err = self._main(cli_argv, capsys, *self._argv(flag))
+        assert rc == 1
+        data = json.loads(out)   # raises on anything before or after it
+        assert data["failed"] == 1
+        assert "versions" in data["results"]
+
+    @pytest.mark.parametrize("flag", sorted(_MOVED_TO_STDERR))
+    def test_the_text_is_moved_not_dropped(self, flag, monkeypatch, capsys,
+                                           cli_argv, tmp_path):
+        fragment = _MOVED_TO_STDERR[flag]
+        self._arm(flag, monkeypatch, tmp_path)
+        rc, out, err = self._main(cli_argv, capsys, *self._argv(flag))
+        assert rc == 1
+        assert fragment in err, f"{flag}: {fragment!r} was dropped, not moved"
+        assert fragment not in out
+
+    @pytest.mark.parametrize(
+        "flag", ["--fix", "--diff-report", "--verbose", "--notify",
+                 "--profile"])
+    def test_without_json_the_text_still_goes_to_stdout(self, flag,
+                                                        monkeypatch, capsys,
+                                                        cli_argv, tmp_path):
+        """The flags that do not imply --json (--baseline / --compare do)
+        keep their text on stdout in text mode."""
+        fragment = _MOVED_TO_STDERR[flag]
+        self._arm(flag, monkeypatch, tmp_path)
+        rc, out, _err = self._main(cli_argv, capsys,
+                                   *self._argv(flag, json=False))
+        assert rc == 1
+        assert fragment in out
+
+    @pytest.mark.parametrize("mode", [["--ci"], ["--parallel"]],
+                             ids=["sequential-ci", "parallel"])
+    def test_every_tail_flag_at_once(self, mode, monkeypatch, capsys,
+                                     cli_argv, tmp_path):
+        """Both execution branches: the --verbose print exists once per
+        loop (parallel / sequential), and the single-flag rows above only
+        reach the sequential one. `--ci --parallel` is a rejected pair, so
+        the two modes are the two rows."""
+        flags = ["--fix", "--diff-report", "--verbose", "--profile",
+                 "--notify"]
+        monkeypatch.setattr(va, "_run_one", _failing_run_one)
+        for flag in flags:
+            if flag in _ARM:
+                _ARM[flag](monkeypatch, tmp_path)
+        rc, out, err = self._main(
+            cli_argv, capsys, "--only", "versions", "--json", *flags, *mode)
+        assert rc == 1
+        data = json.loads(out)
+        assert data["failed"] == 1
+        assert data["mode"] == ("parallel" if "--parallel" in mode
+                                else "sequential")
+        assert data["ci_stopped_after"] == ("versions" if "--ci" in mode
+                                            else None)
+        for flag in flags:
+            assert _MOVED_TO_STDERR[flag] in err, flag
 
 
 class TestUnknownCheckNames:

@@ -31,11 +31,19 @@ never codified, so it rotted.  This file is that gate; its harness shape
 
 SCOPE — WHAT THIS GATE ASSERTS
 ------------------------------
-* All 37 in-scope tools: 33 spell the flag ``--json``, 4 spell it
+* All 38 in-scope tools: 34 spell the flag ``--json``, 4 spell it
   ``--json-output`` (``blind_spot_discovery`` / ``config_diff`` /
   ``cutover_tenant`` / ``maintenance_scheduler``).  Same contract, both spellings.
   ``test_recipe_table_covers_every_json_tool`` fails if a new tool grows a JSON
   flag without getting a recipe here, so the scope cannot silently rot.
+* ``scripts/tools/validate_all.py`` (the top level, walked since #1772) gets two
+  recipes: ``explicit-empty-run-set`` (``--only versions --skip versions``, the
+  terminal path that runs no child check) and ``one-check`` (``--only
+  repo_name``, one real ~0.1 s check).  Its failing-run tail — ``--fix`` /
+  ``--diff-report`` / ``--verbose`` / ``--notify`` / ``--profile`` after a
+  failed check — cannot be driven from a subprocess without mocking
+  ``_run_one``, so it is pinned in-process by
+  ``tests/shared/test_validate_all.py::TestJsonStdoutIsOneDocument``.
 * Multi-mode tools get one recipe **per distinct terminal path**, not one per
   tool — the known regressions all live in the non-default modes (skip / dry-run
   / early-return / write-to-file branches).
@@ -86,7 +94,7 @@ The HTTP stub is an *out-of-process server* rather than the in-process
 ``shadow_verify`` / ``threshold_govern`` / ``discover_instance_mappings``).  One
 real socket covers every one of them uniformly, and subprocess execution gives us
 the *actual, complete* stdout byte stream — which is the thing under test — with
-no import-time module-namespace crosstalk between 37 tools.
+no import-time module-namespace crosstalk between 38 tools.
 
 SCOPE — WHAT THIS GATE DOES *NOT* ASSERT (honest boundaries)
 ------------------------------------------------------------
@@ -147,7 +155,8 @@ from typing import Callable
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-OPS_DIR = REPO_ROOT / "scripts" / "tools" / "ops"
+TOOLS_DIR = REPO_ROOT / "scripts" / "tools"
+OPS_DIR = TOOLS_DIR / "ops"
 
 # ── Real in-repo fixtures (all asserted to exist by test_fixture_paths_exist) ──
 SEED_CONF_D = REPO_ROOT / "try-local" / "seed" / "conf.d"
@@ -175,18 +184,36 @@ EXIT_CALLER_ERROR = 2
 JSON_FLAG_RE = re.compile(r'"--json(?:-output)?"')
 
 
-def collect_json_tools() -> list[str]:
-    """Every ops tool that declares a `--json` / `--json-output` flag."""
-    out = []
-    for f in sorted(OPS_DIR.glob("*.py")):
-        if f.name.startswith("_") or f.name == "__init__.py":
-            continue
-        if JSON_FLAG_RE.search(f.read_text(encoding="utf-8")):
-            out.append(f.stem)
+def collect_json_tools() -> dict[str, Path]:
+    """Every tool that declares a `--json` / `--json-output` flag, as
+    stem -> path relative to REPO_ROOT.
+
+    ⛔ The top level of scripts/tools/ is walked too (#1772, mirroring #1642
+    in test_tool_exit_codes.py::collect_tools). Before this, the population
+    was ops/ ONLY, so ``scripts/tools/validate_all.py`` — the runner behind
+    the required check ``Drift Detection (validate_all.py)`` — was never
+    under this contract, and its ``--json`` stdout carried prose before or
+    after the document on four of its tail flags without a test going red. The
+    enumeration is the contract's reach, so it is derived from the
+    directories, not from a list.
+
+    Honest boundary: ``scripts/tools/dx/`` and ``scripts/tools/lint/`` are
+    NOT walked. Measured on af12dce0 with JSON_FLAG_RE they hold 40 more
+    files declaring a JSON flag (14 dx + 26 lint), each of which would need
+    its own recipe — a separate wave.
+    """
+    out: dict[str, Path] = {}
+    for d in [TOOLS_DIR, OPS_DIR]:
+        for f in sorted(d.glob("*.py")):
+            if f.name.startswith("_") or f.name == "__init__.py":
+                continue
+            if JSON_FLAG_RE.search(f.read_text(encoding="utf-8")):
+                out[f.stem] = f.relative_to(REPO_ROOT)
     return out
 
 
-JSON_TOOLS = collect_json_tools()
+JSON_TOOL_PATHS = collect_json_tools()
+JSON_TOOLS = sorted(JSON_TOOL_PATHS)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -608,6 +635,31 @@ def _opa_input_doc(doc: object) -> str | None:
     return None
 
 
+def _explicit_empty_doc(doc: object) -> str | None:
+    """`--only X --skip X` is the explicit-empty run set: no child check runs.
+
+    The document must say so (total 0, no results) rather than be the
+    "ran everything" document an empty selection once meant (#1620).
+    """
+    if not isinstance(doc, dict):
+        return f"expected a JSON object, got {type(doc).__name__}"
+    if doc.get("total") != 0:
+        return f"total must be 0 for an explicit-empty run set, got {doc.get('total')!r}"
+    if doc.get("results") != {}:
+        return f"results must be empty, got {sorted(doc.get('results') or {})}"
+    return None
+
+
+def _one_check_doc(doc: object) -> str | None:
+    """`--only repo_name` ran exactly that check and the document names it."""
+    if not isinstance(doc, dict):
+        return f"expected a JSON object, got {type(doc).__name__}"
+    results = doc.get("results")
+    if not isinstance(results, dict) or "repo_name" not in results:
+        return f"results must contain `repo_name`, got {sorted(results or {})}"
+    return None
+
+
 R = Recipe
 RECIPES: list[Recipe] = [
     # ── alert_correlate ────────────────────────────────────────────────────
@@ -970,6 +1022,19 @@ RECIPES: list[Recipe] = [
     R("validate_config", "full",
       lambda t, s: ["--config-dir", str(SEED_CONF_D),
                     "--rule-packs", str(RULE_PACKS), "--version-check", "--json"]),
+
+    # ── validate_all  (scripts/tools/ top level, #1772) ────────────────────
+    # Two terminal paths a subprocess can reach without side effects. The
+    # failing-run tail (--fix / --diff-report / --verbose / --notify /
+    # --profile after a failed check) cannot be driven from a subprocess
+    # without mocking `_run_one`, so it is pinned in-process by
+    # tests/shared/test_validate_all.py::TestJsonStdoutIsOneDocument (#1772).
+    R("validate_all", "explicit-empty-run-set",
+      lambda t, s: ["--json", "--only", "versions", "--skip", "versions"],
+      doc_check=_explicit_empty_doc),
+    R("validate_all", "one-check",
+      lambda t, s: ["--json", "--only", "repo_name"],
+      doc_check=_one_check_doc),
 ]
 
 
@@ -982,10 +1047,26 @@ def test_fixture_paths_exist():
     assert not missing, f"gate fixtures missing from the repo: {missing}"
 
 
+def test_top_level_is_in_the_population():
+    """Anti-vacuity for the #1772 walk above (#1642 style).
+
+    ``TOOLS_DIR`` sits first in the walk; if it were dropped again the
+    parametrized gate below would just run fewer cases and stay green, which
+    is exactly how validate_all.py stayed out of this contract for the life
+    of this file. A named member of the top level is asserted to be
+    enumerated, so the population cannot shrink back silently.
+    """
+    assert "validate_all" in JSON_TOOLS, (
+        "scripts/tools/validate_all.py is not in the --json population; "
+        "the top-level walk has been lost (#1772)")
+    assert not any(n.startswith("_") for n in JSON_TOOLS), (
+        "a _lib_*.py helper was enumerated; those are libraries, not CLIs")
+
+
 def test_recipe_table_covers_every_json_tool():
     """A tool that grows a --json flag must gain a recipe, or this gate rots.
 
-    (33 tools spell it `--json`, 4 spell it `--json-output`; all 37 are in scope.)
+    (34 tools spell it `--json`, 4 spell it `--json-output`; all 38 are in scope.)
     """
     covered = {r.tool for r in RECIPES}
     uncovered = sorted(set(JSON_TOOLS) - covered)
@@ -995,8 +1076,8 @@ def test_recipe_table_covers_every_json_tool():
         f"no recipe in RECIPES: {uncovered}"
     )
     assert not stale, f"RECIPES names tool(s) that no longer exist: {stale}"
-    assert len(JSON_TOOLS) == 37, (
-        f"expected 37 JSON-flag tools (33 --json + 4 --json-output), "
+    assert len(JSON_TOOLS) == 38, (
+        f"expected 38 JSON-flag tools (34 --json + 4 --json-output), "
         f"found {len(JSON_TOOLS)}: {sorted(JSON_TOOLS)}"
     )
 
@@ -1007,7 +1088,7 @@ def test_recipe_table_covers_every_json_tool():
 def _run(recipe: Recipe, tmp_path: Path, stub: str, sandbox_root: Path,
          fake_bin: Path) -> subprocess.CompletedProcess:
     root = sandbox_root if recipe.sandbox else REPO_ROOT
-    script = root / "scripts" / "tools" / "ops" / f"{recipe.tool}.py"
+    script = root / JSON_TOOL_PATHS[recipe.tool]
     env = dict(os.environ)
     # Windows hosts default to cp950 -> tools with CJK output would raise
     # UnicodeEncodeError before we ever see stdout. That's an environment

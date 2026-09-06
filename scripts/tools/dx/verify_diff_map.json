@@ -799,7 +799,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "8d5e697965eaa678705c57218a49c8d92cf65c34a10ac7e80aaa3fc0bedf30a4",
+ "source_digest": "fc89ee8b49f7ac44da94896ac602abf3df5d6a2f8328dac6f50db4bf1d31b14b",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -2354,7 +2354,8 @@
    "tests/ops/test_property_based.py",
    "tests/ops/test_validate_config.py",
    "tests/shared/test_bilingual_help_contract.py",
-   "tests/shared/test_dry_run_no_write.py"
+   "tests/shared/test_dry_run_no_write.py",
+   "tests/shared/test_json_stdout_contract.py"
   ],
   "scripts/tools/dx/_atomic_write.py": [
    "tests/dx/test_atomic_write.py",
@@ -2492,6 +2493,7 @@
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/ops/test_image_flat_layout.py",
    "tests/shared/test_bilingual_help_contract.py",
+   "tests/shared/test_json_stdout_contract.py",
    "tests/shared/test_property_tools.py"
   ],
   "scripts/tools/lint/_rule_tree.py": [
@@ -2769,6 +2771,7 @@
    "tests/lint/test_check_doc_freshness.py",
    "tests/lint/test_check_orphan_lint.py",
    "tests/lint/test_check_structure.py",
+   "tests/shared/test_json_stdout_contract.py",
    "tests/shared/test_tool_exit_codes.py"
   ],
   "scripts/tools/vendor_download.sh": [
@@ -3205,6 +3208,9 @@
    "tests/dx/test_dx_json_stdout_contract.py",
    "tests/lint/test_check_admin_config_schema.py",
    "tests/lint/test_check_confd_schema.py",
+   "tests/shared/test_json_stdout_contract.py"
+  ],
+  "tests/shared/test_validate_all.py": [
    "tests/shared/test_json_stdout_contract.py"
   ],
   "tests/shared/test_vector_pin_parity.py": [
