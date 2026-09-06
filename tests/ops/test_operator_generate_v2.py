@@ -1033,3 +1033,57 @@ class TestWritingIsOptIn:
             "ignores it, the two runs are byte-identical and the flag is silently "
             "dropped — which is what this test exists to catch."
         )
+
+
+class TestNestedWarningSurvivesTheExtraction:
+    """#1604 moved this tool's flat scan into `_lib_confd.tenant_carriers`.
+
+    ⛔ That has a cost worth naming: `test_confd_enumeration_contract` derives
+    its subjects from the AST of each file, so once `operator_generate.py` has
+    no `iterdir`/`glob("*.y…")` of its own it stops being classified as a flat
+    reader and the gate has nothing to say about it. Measured before/after —
+    `{'flat': True, 'guarded': True}` became `{'flat': False, 'guarded': False}`.
+
+    ⚠️ No enforcement was lost (the guard travelled WITH the scan, and the gate
+    still watches `_lib_confd.py`, which is `flat=True, guarded=True`), but the
+    property is now pinned BEHAVIOURALLY here so it does not depend on which
+    file the scan happens to live in.
+    """
+
+    def test_a_hierarchical_confd_is_named_not_silently_empty(self, tmp_path, capsys):
+        from _lib_confd import reset_warned_for_test
+
+        root = tmp_path / "conf.d"
+        (root / "team-a").mkdir(parents=True)
+        (root / "_defaults.yaml").write_text("defaults:\n  x: 1\n", encoding="utf-8")
+        (root / "team-a" / "db-a.yaml").write_text(
+            "tenants:\n  db-a:\n    x: 2\n", encoding="utf-8")
+
+        reset_warned_for_test()
+        tenants = og.discover_tenant_configs(root)
+        err = capsys.readouterr().err
+
+        assert tenants == [], "this reader is flat by design; the nested carrier is not a tenant"
+        assert "db-a.yaml" in err, (
+            f"a flat scan of a hierarchical conf.d returns zero tenants, which "
+            f"is indistinguishable from an empty one unless the skipped files "
+            f"are NAMED. stderr was {err!r}"
+        )
+
+    def test_a_flat_confd_says_nothing(self, tmp_path, capsys):
+        """必響對照組：警告不能是無條件印出的。"""
+        from _lib_confd import reset_warned_for_test
+
+        root = tmp_path / "conf.d"
+        root.mkdir()
+        (root / "_defaults.yaml").write_text("defaults:\n  x: 1\n", encoding="utf-8")
+        (root / "db-a.yaml").write_text("tenants:\n  db-a:\n    x: 2\n", encoding="utf-8")
+
+        reset_warned_for_test()
+        tenants = og.discover_tenant_configs(root)
+        err = capsys.readouterr().err
+
+        assert tenants == ["db-a"]
+        assert "subdirectories" not in err, (
+            f"a FLAT conf.d must not trigger the nested warning; stderr was {err!r}"
+        )

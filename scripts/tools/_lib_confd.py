@@ -44,7 +44,7 @@ and this is what stops "shared" from meaning "equally silent".
 from __future__ import annotations
 
 import os
-from typing import Iterable
+from typing import Callable, Iterable, NamedTuple
 import sys
 from pathlib import Path
 
@@ -62,6 +62,8 @@ __all__ = [
     "nested_yaml_warning",
     "reset_warned_for_test",
     "unusable_config_entries",
+    "TenantCarriers",
+    "tenant_carriers",
     "unusable_config_paths",
     "unusable_reason",
     "warn_nested",
@@ -717,3 +719,107 @@ def warn_nested(config_dir: str | os.PathLike[str], *, tool: str | None = None) 
     _WARNED.add(key)
     print(f"WARN: {msg}", file=sys.stderr)
     return True
+
+
+class TenantCarriers(NamedTuple):
+    """One flat conf.d scan, split into what each caller has to say about it.
+
+    ⛔ Three lists, not one, because the two operator-plane readers print to
+    different sinks: `operator_generate` warns on stderr, while
+    `migrate_to_operator.analyze_migration` collects the same facts into its
+    JSON `issues` array. Returning the classification instead of printing it
+    is what lets ONE scan serve both — see `tenant_carriers`.
+    """
+
+    tenants: list[str]
+    """Stems of readable carriers that passed `validate`, sorted."""
+
+    invalid: list[str]
+    """Stems `validate` rejected, in scan order (so warnings stay stable)."""
+
+    unusable: list[Path]
+    """Config-NAMED entries the reader cannot read (directory, broken link)."""
+
+
+def tenant_carriers(
+    config_dir: "str | os.PathLike[str]",
+    *,
+    tool: "str | None" = None,
+    validate: "Callable[[str], bool] | None" = None,
+    suffixes: "tuple[str, ...]" = CONFIG_SUFFIXES,
+) -> TenantCarriers:
+    """The ONE flat scan both operator-plane readers take tenant stems from.
+
+    ⛔ This exists because there were two of them and they drifted (#1604).
+    `operator_generate.discover_tenant_configs` and
+    `migrate_to_operator.discover_tenant_configs` were verbatim twins over the
+    same tree; #1603/#1607 fixed only the first, and the pair then answered
+    DIFFERENTLY on three axes at once. Measured on one fixture:
+
+        db-a.yaml (control)   operator_generate: yes   migrate: yes
+        db-b.yml              operator_generate: yes   migrate: NO
+        notes.yaml/  (a dir)  operator_generate: no    migrate: YES  <- invented
+        broken.yaml  (link)   operator_generate: no    migrate: YES  <- invented
+
+    The two extra rows are the direction the ticket did not name: the narrow
+    twin does not merely miss a tenant, it INVENTS two from a directory and a
+    dangling symlink, and emits CRDs for them in silence.
+
+    ⚠️ `p.stem`, not `config_stem`: they differ on dot-prefixed names, where
+    `config_stem` returns `""` (silently skipped) while this scan hands the
+    stem to `validate` so the caller can SAY the name is unusable. #1603 pinned
+    that behaviour deliberately; folding it in here would be a second
+    behaviour change wearing a refactor's clothes.
+
+    ⚠️ Flat by design, and the guard rides along: `warn_nested` is called HERE,
+    in the same scope as the `iterdir()`, because `test_confd_enumeration_contract`
+    requires exactly that — a scan whose warning lives in another function is
+    the gate-never-fires shape. Callers therefore must NOT call `warn_nested`
+    again for the same directory (it de-duplicates, but a second call reads as
+    a second scan to anyone auditing).
+
+    Args:
+        config_dir: the conf.d to scan. Must exist — callers own the
+            "directory missing" error because they word it for their own CLI.
+        tool: name used by the nested-config warning.
+        validate: tenant-name predicate; `None` accepts every stem.
+        suffixes: extension set. ⛔ Defaults to `CONFIG_SUFFIXES` (BOTH
+            spellings, the exporter's own set) — passing `(".yaml",)` here is
+            how the divergence above was built.
+
+    Returns:
+        `TenantCarriers`.
+    """
+    root = Path(config_dir)
+    warn_nested(root, tool=tool)
+    # ⛔ The listing error is NOT caught here, and that is deliberate
+    # (CodeRabbit proposed catching it, PR #1750). Two reasons, both measured:
+    #   1. Returning an empty classification would be the SILENT ZERO this
+    #      module exists against — a conf.d that cannot be listed would read
+    #      exactly like one with no tenants. Before #1604 `migrate_to_operator`
+    #      globbed instead, and `glob("*.yaml")` on a directory removed after
+    #      the `is_dir()` check returns `[]` with no error at all; `iterdir()`
+    #      raises. Trading the raise for `[]` walks that back.
+    #   2. Reporting the ROOT as an unusable ENTRY would print the wrong
+    #      reason: `unusable_reason(<the conf.d>)` says "is a directory, not a
+    #      config file", which is true of every conf.d and explains nothing.
+    # Callers catch `OSError` where they have somewhere to put it (see
+    # `migrate_to_operator.analyze_migration`).
+    entries = sorted(root.iterdir())
+    # `_`-prefixed control files are not carriers and must not be reported as
+    # unreadable ones either: naming one would claim a loss that did not happen.
+    candidates = [p for p in entries if not is_reserved_name(p.name)]
+    unusable = unusable_config_entries(candidates, suffixes=suffixes)
+    tenants: list[str] = []
+    invalid: list[str] = []
+    for p in candidates:
+        # `is_file()` is its own axis: a DIRECTORY named `notes.yaml/` and a
+        # dangling symlink both satisfy the extension test.
+        if not (p.is_file() and has_yaml_extension(p.name, suffixes)):
+            continue
+        stem = p.stem
+        if validate is None or validate(stem):
+            tenants.append(stem)
+        else:
+            invalid.append(stem)
+    return TenantCarriers(sorted(tenants), invalid, unusable)
