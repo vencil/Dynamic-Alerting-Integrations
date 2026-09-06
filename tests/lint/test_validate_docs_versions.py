@@ -917,6 +917,102 @@ class TestPlatformVersionSourceIsLoadBearing:
                     if i["check"] == "platform-version-source"]
 
 
+class TestPlatformVersionScanIsRecursive:
+    """#1612 — `check_platform_version` walks `docs/**`; only a nested fixture can prove it.
+
+    Both halves of the check take their file list from
+    `_cached_rglob(DOCS_DIR, ...)`. Every other fixture in this module writes
+    at the top level of `tmp_path`, where `rglob` and `glob` return the same
+    list, so the module stayed fully green with `rglob` replaced by `glob`
+    (measured on #1612's base). In the real tree the two are not close:
+    `docs/` holds 45 `.md` at the top level and 267 recursively, and the JSX
+    tree the issue measured (the portal's JSX sources) is 68 files under
+    `rglob("*.jsx")` and 0 under `glob("*.jsx")` (the portal's JSX source
+    tree; the literal path is kept out of this docstring so verify_diff's
+    text-ref rule does not map this whole module onto portal changes) — all
+    of them in subdirectories. `DOCS_DIR` itself carries no `.jsx` on the current tree
+    (0 either way), so on the real tree the `.md` half is where the recursion
+    is load-bearing; the `.jsx` half is pinned here on a synthetic tree so it
+    cannot go the same way unnoticed.
+
+    ⚠️ #1484's "the JSX source tree is not where this check looks" error
+    belongs to `check_e2e_and_jsx_versions` and tests `jsx_dir.is_dir()`,
+    which stays True when a recursive scan turns into a flat one that finds
+    zero files — it does not fire on this defect. Measured on af12dce0 with
+    `_cached_rglob` swapped for a flat glob: the only other test that moves
+    is `TestTheHookFiresOnEverythingTheGateReads::
+    test_the_measurement_itself_is_not_empty` (#1610), which reports a
+    count drop without naming the scan; on #1612's base (774a6992) the whole
+    module stayed green.
+    """
+
+    WRONG = "---\ntitle: p\nversion: v2.7.0\n---\nbody\n"
+    RIGHT = "---\ntitle: t\nversion: v2.9.0\n---\nbody\n"
+
+    @classmethod
+    def _nested(cls, tmp_path):
+        """docs/ with one nested .md, one nested .jsx, and a correct top-level control."""
+        docs = tmp_path / "docs"
+        (docs / "sub" / "deep").mkdir(parents=True)
+        (docs / "tools" / "sub").mkdir(parents=True)
+        (docs / "sub" / "deep" / "page.md").write_text(cls.WRONG, encoding="utf-8")
+        (docs / "tools" / "sub" / "probe.jsx").write_text(
+            "---\ntitle: probe\nversion: v2.7.0\n---\nbody\n", encoding="utf-8")
+        (docs / "top.md").write_text(cls.RIGHT, encoding="utf-8")
+        return docs
+
+    @staticmethod
+    def _point(monkeypatch, root, docs):
+        monkeypatch.setattr(mod, "REPO_ROOT", root)
+        monkeypatch.setattr(mod, "DOCS_DIR", docs)
+
+    def test_the_jsx_probe_line_matches_the_pattern(self):
+        """The .jsx half is `re.match` per line; the probe must be a line it takes."""
+        m = re.match(mod.PLATFORM_VERSION_FRONTMATTER_PATTERN, "version: v2.7.0")
+        assert m and m.group(1) == "2.7.0"
+
+    def test_a_nested_md_and_a_nested_jsx_are_both_scanned(
+            self, tmp_path, monkeypatch):
+        docs = self._nested(tmp_path)
+        self._point(monkeypatch, tmp_path, docs)
+
+        issues = mod.check_platform_version("2.9.0")
+
+        assert len(issues) == 2, [(i.file, i.message) for i in issues]
+        assert {i.check for i in issues} == {"platform-version"}
+        # `Issue.file` is OS-native; compare in POSIX form so the assertion
+        # holds on a Windows host too.
+        files = sorted(Path(i.file).as_posix() for i in issues)
+        assert "sub/deep/page.md" in files[0], files
+        assert "tools/sub/probe.jsx" in files[1], files
+        # The correct top-level control was read and produced nothing: the
+        # two issues are the nested drift, not "everything is red".
+        assert not [i for i in issues if "top.md" in i.file], files
+
+    def test_the_fixture_is_nested_where_it_matters(self, tmp_path):
+        """The fixture must be one a flat glob would MISS — that is its
+        whole reason to exist (D-05c). Measured against the fixture itself,
+        not by patching production: every other fixture in this module
+        writes at the top level, where `glob` and `rglob` agree, which is
+        how the module stayed green with a flat scan (#1612).
+
+        A blind review of the first version of this test found it patched
+        `_cached_rglob` to a flat glob and asserted the scan found nothing —
+        which fails only when `check_platform_version` stops routing through
+        `_cached_rglob`, a benign refactor, and stays green under the actual
+        defect. The counterfactual that matters is the test above going red
+        under a flat scan; this one just guards the fixture's shape.
+        """
+        docs = self._nested(tmp_path)
+        nested_md = [p for p in docs.rglob("*.md") if p.parent != docs]
+        nested_jsx = [p for p in docs.rglob("*.jsx") if p.parent != docs]
+        assert nested_md and nested_jsx, "the fixture lost its nesting"
+        # A flat glob sees only the correct top-level control, so a flat
+        # scan of this corpus reports nothing — the shape #1612 measured.
+        assert [p.name for p in docs.glob("*.md")] == ["top.md"]
+        assert list(docs.glob("*.jsx")) == []
+
+
 # ============================================================
 # check_release_tag_currency (TB-F1 class — release-tag forms)
 # ============================================================

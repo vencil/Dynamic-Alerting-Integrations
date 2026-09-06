@@ -643,7 +643,8 @@
   "scripts/tools/ops/init_project.py": [
    "tests/lint/test_counterexample_coverage.py",
    "tests/ops/test_generated_ci_artifacts.py",
-   "tests/ops/test_init_project.py"
+   "tests/ops/test_init_project.py",
+   "tests/ops/test_tenant_name_rfc1123.py"
   ],
   "scripts/tools/ops/inject_metadata_join.py": [
    "tests/ops/test_inject_metadata_join.py"
@@ -662,7 +663,8 @@
   "scripts/tools/ops/migrate_to_operator.py": [
    "tests/ops/test_lib_yaml.py",
    "tests/ops/test_migrate_to_operator.py",
-   "tests/ops/test_property_based.py"
+   "tests/ops/test_property_based.py",
+   "tests/ops/test_tenant_name_rfc1123.py"
   ],
   "scripts/tools/ops/notification_tester.py": [
    "tests/ops/test_notification_tester.py"
@@ -685,7 +687,8 @@
    "tests/ops/test_lib_yaml.py",
    "tests/ops/test_migrate_to_operator.py",
    "tests/ops/test_operator_generate_v2.py",
-   "tests/ops/test_property_based.py"
+   "tests/ops/test_property_based.py",
+   "tests/ops/test_tenant_name_rfc1123.py"
   ],
   "scripts/tools/ops/parser_dispatch.py": [
    "tests/shared/test_dispatch_contract.py"
@@ -796,7 +799,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "03bfc8af01e9e5e2ae2909c7b04118d22de5865bcfe8f1bcee09d329de01815e",
+ "source_digest": "8d5e697965eaa678705c57218a49c8d92cf65c34a10ac7e80aaa3fc0bedf30a4",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1073,6 +1076,7 @@
   "tests/ops/test_shadow_verify.py",
   "tests/ops/test_silencer_drift_check.py",
   "tests/ops/test_state_reconcile.py",
+  "tests/ops/test_tenant_name_rfc1123.py",
   "tests/ops/test_threshold_govern.py",
   "tests/ops/test_threshold_govern_manifest.py",
   "tests/ops/test_threshold_recommend.py",
