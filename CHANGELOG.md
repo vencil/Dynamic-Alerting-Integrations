@@ -13,6 +13,12 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 <!-- 下一版 in-flight 工作暫存區。每筆 entry 目標 3-6 行使用者重點 + 一行指回內部 artifact；session 過程 / FUSE trap / 完整 commit list 不入此處。release 收尾時做最終 condensation 並切正式 `## [vX.Y.Z]` heading。 -->
 
+### Fixed
+
+- **`dev-rules` §P1 教的考古方法對 merge 後的 main 是錯的（docs；[#1741](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1741)）**：§P1 說沒有 trailer 就會「與 git log 失聯」，而 **merge 後 main 上那個 block 一定是斷的**——GitHub squash merge 在空行後附加自己的 `Co-authored-by:`，把作者寫的整段推出 block。照字面用 `%(trailers:key=Resolves)` 在 main 上考古**恆回空**，讀起來像「沒人遵守這條規則」。補上正確做法 `git log --grep`：⭐ **文字完好無損，丟掉的只有解析**（實測近 200 顆：`--grep` 命中 6、`%(trailers:...)` 命中 0）。
+  - ⭐ **決定不修根因，理由是量出來的**：兩支消費端（`pr_preflight.py` 的 pass2 gate、`check_planning_status_sync.py`）都讀 `<base>..HEAD`、都由 `on: pull_request` 觸發、都 checkout PR head ⇒ **沒有任何東西從 merged main 讀 trailer**，功能面零損害；全樹亦無工具從 main 歷史讀 `Resolves`。
+  - ⛔ **#1741 候選方向 2「作者側不要自己寫 `Co-Authored-By:`」實測推翻**：把作者寫的與 GitHub 附加的**分開**統計（近 120 顆），受損的 103 顆**全部**有 GitHub 附加那一行，而作者側有 141 顆寫的就是小寫拼法 ⇒ **拼法不是判別變數**。真正的規律：**GitHub 一律在空行後附加；受損與否只取決於作者訊息裡還有沒有別的 trailer**（未受損的 17 顆，作者側 co-author 為 0）。⇒ 剩下的兩條路是「換 merge method」（owner 決定）與「加 post-merge 檢查」（會對每顆 commit 開火，依 `agent-rulebook` D-01 不做）。
+
 ### Added
 
 - **`godoclint` 上膛：doc comment 掛錯宣告的匯出面，現在由 required check 擋下（lint；[#1736](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1736)）**：Go 的 doc comment 邊界是空行，少一個空行，整段就會掛到**下一個**宣告上，而它要描述的那個變成零註解。`gofmt` / `go vet` / 測試對此全部無感，所以它在兩個 component 活了數個月：[#1730](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1730) 修掉 tenant-api 3 處、[#1738](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1738) 修掉 threshold-exporter 10 處，其中 `go doc CanonicalKeyFor` 在公開 godoc 面上印的是一個呼叫者叫不到的名字。本次在兩個 module 的 `.golangci.yml` 啟用 `godoclint`（已內建於 repo 現用的 golangci-lint v2.12.2，只是沒開），既有的 required check **Go Lint** 直接成為守門人，不需要新增任何 hook。連帶修掉 **12 筆既有 godoclint 違規**（tenant-api 8 + exporter 4；⚠️ 這 12 筆與下一點那 13 處掛錯缺陷是**兩個不相交的集合**——後者早已由 #1730 / #1738 修完），其中 `internal/federation/token/manager.go` 的 package doc 寫的是 `Package federation`——而該 package 叫 `token`。
