@@ -21,10 +21,20 @@ Session 起手式 codified 為 **PreToolUse hook** (v2.8.0；#824 改經 `run-ho
 ⭐ **所以起手式的第一件事是確認它到底跑了沒**，而不是假設它跑了：
 
 ```bash
-cat /tmp/vibe-session-start-hook.ran     # 沒有這個檔 = hook 沒跑
+cat /tmp/vibe-session-start-hook.ran
 ```
 
-有 `RESULT=ok` ⇒ 閘門已就緒。**檔案不存在或 `RESULT=failed` ⇒ 手動跑一次**：
+marker 有**三**種狀態，三種的成因不同，別混為一談：
+
+| 看到什麼 | 意義 | 該做什麼 |
+|---|---|---|
+| **檔案不存在** | harness **從未呼叫**這支 hook —— 本 repo 的 `.claude/settings.json` 整份沒被載入（#1719 本體） | 手動跑（下方指令）。這也是本 repo 的兩支 PreToolUse guard 同樣沒生效的訊號 |
+| `RESULT=failed (cannot locate the repo root …)` | hook **被呼叫了**，但 `CLAUDE_PROJECT_DIR` 指到的不是這個 checkout 就退出了 | 手動跑（下方指令）。⚠️ 與上一列不同：settings **有**被載入，錯的是 project root 的位置 |
+| `RESULT=ok` | 閘門已就緒 | 不必動作 |
+
+其餘 `RESULT=failed (...)` 是 bootstrap 本身失敗（缺套件、`core.hooksPath` 被設等），括號內寫明原因。
+
+**除了 `RESULT=ok` 以外，一律手動跑一次**：
 
 ```bash
 CLAUDE_CODE_REMOTE=true CLAUDE_PROJECT_DIR="$PWD" bash .claude/hooks/session-start.sh

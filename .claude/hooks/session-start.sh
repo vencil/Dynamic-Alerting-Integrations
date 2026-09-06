@@ -54,16 +54,40 @@ fi
 # string and `cd ""` SUCCEEDS in bash (exit 0, cwd unchanged) — so `set -e`
 # never fires and every step below runs in the wrong directory, with
 # `-c requirements/ci-constraints.txt` silently unresolvable. Measured.
-ROOT="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || true)}"
-if [ -z "$ROOT" ] || [ ! -f "$ROOT/requirements/ci-constraints.txt" ]; then
-  printf '  [session-start] ⛔ cannot locate the repo root (CLAUDE_PROJECT_DIR unset and cwd is not this checkout)\n' >&2
-  exit 1
-fi
-cd "$ROOT"
-
+# ⛔ MARKER and its writers are defined BEFORE the repo-root resolution below,
+# because the FAILURE path writes to them. Measured (#1719): Claude Code takes
+# hook declarations from `<project root>/.claude/settings.json` and exports
+# CLAUDE_PROJECT_DIR = that project root. So a declaration living at the project
+# root rather than inside this checkout runs this script with ROOT pointing one
+# level above the repo, the check below fails, and the script exits 1 at a point
+# where the marker did not yet exist — leaving no trace whatsoever.
+#
+# That made two different failures produce a byte-identical picture: an absent
+# marker meant EITHER "the harness never called this hook" (the settings file is
+# not loaded at all) OR "it called it and the hook could not find the checkout".
+# They need opposite fixes, so they must not look the same. This is the same
+# claim-without-evidence shape the comments further down warn about, one layer up.
 MARKER="/tmp/vibe-session-start-hook.ran"
 say() { printf '  [session-start] %s\n' "$1"; }
 note() { printf '%s\n' "$1" >> "$MARKER"; }
+
+ROOT="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || true)}"
+if [ -z "$ROOT" ] || [ ! -f "$ROOT/requirements/ci-constraints.txt" ]; then
+  # ⛔ Truncate, do not append. The marker describes the MOST RECENT
+  # invocation — the normal path below does the same — and any earlier
+  # RESULT=ok was written under a DIFFERENT root resolution. Carrying it forward
+  # would let the no-op predicate short-circuit on evidence this invocation could
+  # not confirm. Re-running the bootstrap is idempotent; trusting a stale claim
+  # is not.
+  : > "$MARKER"
+  note "session-start.sh entered at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  note "CLAUDE_PROJECT_DIR=${CLAUDE_PROJECT_DIR:-<unset>}"
+  note "RESULT=failed (cannot locate the repo root — see #1719)"
+  printf '  [session-start] ⛔ cannot locate the repo root (CLAUDE_PROJECT_DIR unset, or set to something that is not this checkout)\n' >&2
+  printf '  [session-start]    wrote %s so this is distinguishable from "the hook never ran"\n' "$MARKER" >&2
+  exit 1
+fi
+cd "$ROOT"
 
 # SessionStart fires for more than a cold start (a resumed or compacted session
 # reuses the SAME container, where everything below is already in place). Doing
