@@ -127,9 +127,9 @@ jobs:
             -test.benchtime="${ROUNDS}x" -test.timeout=25m \
             | tee "${RUNNER_TEMP}/probe.out"
 
-          # ⛔ 上面接了管線，`$?` 讀到的是 tee 的 rc。這一行才是探針自己的。
-          rc="${PIPESTATUS[0]}"
-          [ "$rc" -eq 0 ] || { echo "::error::probe exited $rc"; exit "$rc"; }
+          # ⛔ 不要在這裡加 PIPESTATUS/rc 檢查，也不要拿掉上面的 `set -o pipefail`（同下方
+          # Summarize step）：pipefail 讓管線非零，`set -e` 就在那一行終止，下一行不可達。
+          # 重現 bash -c 'set -euo pipefail; (exit 7)|tee /dev/null; echo NOPE' → 不印 NOPE、exit 7
 
       - name: Summarize
         run: |
