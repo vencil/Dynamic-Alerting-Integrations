@@ -85,7 +85,11 @@ FIX_COMMANDS: Dict[str, List[str]] = {
 # prints the violations and still returns 0, so the runner shows a tick
 # (#1702). links and mermaid are armed below and pinned in
 # tests/shared/test_validate_all.py::TestRearmedRows; translation and
-# freshness are still un-armed because they are red on today's content (#1735).
+# freshness are still un-armed (#1735): translation is red on today's
+# content, and freshness's `--check` is rc 0 ONLY on a shallow clone (the
+# graft commit's date hides every doc's real age) -- on full history docs
+# older than 90 days exist, so arming it would make a bare run red for
+# content reasons this runner does not own.
 TOOLS = [
     ("links", "lint/check_doc_links.py", ["--ci"], "Link validation"),
     ("mermaid", "lint/validate_mermaid.py", ["docs/", "rule-packs/", "--ci"], "Mermaid diagram syntax"),
