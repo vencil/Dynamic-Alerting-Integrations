@@ -233,8 +233,8 @@ class TestDetectChangedChecks:
         assert chosen == [n for n, _, _, _ in TOOLS], "fail-safe: every check"
 
     def test_precommit_config_alone_is_an_explicit_empty_set(self):
-        """#1704 outcome 2 (explicit empty). `WATCH_TRIGGERS[".pre-commit-
-        config.yaml"] = []` reads "affects no check", but the old
+        """#1704 outcome 2 (explicit empty). The `WATCH_TRIGGERS` entry for
+        `.pre-commit-config.yaml` is `[]`, which reads "affects no check", but the old
         `sorted(affected) if affected else <all>` made an empty union mean
         "run all 33" -- so the entry was dead configuration. It is matched
         (not in `unmatched`), contributes nothing, and the outcome is EMPTY:
