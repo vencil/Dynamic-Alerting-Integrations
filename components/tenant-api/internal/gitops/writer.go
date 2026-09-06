@@ -766,27 +766,6 @@ func (w *Writer) gitCommit(filePath, tenantID, authorEmail string, trailer ...st
 // are not the same document.
 const defaultMaxTenantDocBytes int64 = 64 << 10
 
-// validateShape runs every check that reads ONLY the request body and the URL
-// id, in the order validate has always run them, and hands back the parsed
-// config so no caller decodes the same bytes twice.
-//
-// ⛔ THE SPLIT LINE IS "DOES IT READ THE WORKING TREE", NOT "DOES IT SOUND
-// STATIC" (#1718). Three of validate's checks read the tree and are therefore
-// only meaningful against the tree the write lands on:
-//
-//   - addedTenantKeys      ← os.ReadFile(tenantFilePath)
-//   - ValidateTenantKeys   ← mergeTenantConfig reads <configDir>/_defaults.yaml
-//   - the eol-expansion guard ← the same baseRaw as addedTenantKeys
-//
-// The middle one is the trap: "key validation" reads like a pure body check and
-// is not — it merges the platform defaults off disk. Both it and addedTenantKeys
-// were MEASURED to reject legitimate writes when the caller's tree is stale
-// (#1718); classifying by name rather than by what the code reads would have
-// left the second one behind.
-//
-// Everything here short-circuits, exactly as before — the first failure is the
-// only one reported.
-
 // maxTenantDocBytes is resolved once at package init. CheckTenantDocSize is on
 // the hot path of every write and takes no receiver, so the env read cannot hang
 // off a Writer; a package var keeps the check to one comparison.
@@ -863,6 +842,26 @@ func CheckTenantDocSize(yamlContent string) []string {
 		n, maxTenantDocBytes)}
 }
 
+// validateShape runs every check that reads ONLY the request body and the URL
+// id, in the order validate has always run them, and hands back the parsed
+// config so no caller decodes the same bytes twice.
+//
+// ⛔ THE SPLIT LINE IS "DOES IT READ THE WORKING TREE", NOT "DOES IT SOUND
+// STATIC" (#1718). Three of validate's checks read the tree and are therefore
+// only meaningful against the tree the write lands on:
+//
+//   - addedTenantKeys      ← os.ReadFile(tenantFilePath)
+//   - ValidateTenantKeys   ← mergeTenantConfig reads <configDir>/_defaults.yaml
+//   - the eol-expansion guard ← the same baseRaw as addedTenantKeys
+//
+// The middle one is the trap: "key validation" reads like a pure body check and
+// is not — it merges the platform defaults off disk. Both it and addedTenantKeys
+// were MEASURED to reject legitimate writes when the caller's tree is stale
+// (#1718); classifying by name rather than by what the code reads would have
+// left the second one behind.
+//
+// Everything here short-circuits, exactly as before — the first failure is the
+// only one reported.
 func validateShape(tenantID, yamlContent string) (cfg.ThresholdConfig, []string) {
 	var tcfg cfg.ThresholdConfig
 	// PRE-PARSE SIZE GATE (#1722). Must be the FIRST thing here and must come
