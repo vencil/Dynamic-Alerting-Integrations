@@ -13,6 +13,7 @@
 //     manager (proves the goroutine pool wiring is correct), using a
 //     poll-with-deadline pattern instead of time.Sleep (avoids the flake
 //     anti-pattern tracked separately by TRK-217/-019).
+
 package handler
 
 import (

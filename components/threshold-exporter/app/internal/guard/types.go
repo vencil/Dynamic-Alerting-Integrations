@@ -94,17 +94,21 @@ type FindingKind string
 const (
 	FindingMissingRequired   FindingKind = "missing_required"
 	FindingRedundantOverride FindingKind = "redundant_override"
+)
 
-	// Routing-schema findings (PR-2; see routing.go for rationale on
-	// why this is not "routing_cycle"/"orphaned_route").
+// Routing-schema findings (PR-2; see routing.go for rationale on
+// why this is not "routing_cycle"/"orphaned_route").
+const (
 	FindingUnknownReceiverType        FindingKind = "unknown_receiver_type"
 	FindingMissingReceiverField       FindingKind = "missing_receiver_field"
 	FindingEmptyOverrideMatcher       FindingKind = "empty_override_matcher"
 	FindingConflictingOverrideMatcher FindingKind = "conflicting_override_matcher"
 	FindingDuplicateOverrideMatcher   FindingKind = "duplicate_override_matcher"
 	FindingRedundantOverrideReceiver  FindingKind = "redundant_override_receiver"
+)
 
-	// Cardinality findings (PR-3; see cardinality.go).
+// Cardinality findings (PR-3; see cardinality.go).
+const (
 	FindingCardinalityExceeded FindingKind = "cardinality_exceeded"
 	FindingCardinalityWarning  FindingKind = "cardinality_warning"
 )
