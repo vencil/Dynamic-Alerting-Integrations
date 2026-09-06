@@ -340,6 +340,54 @@ def test_every_ssot_relative_link_resolves_from_both_trees():
     assert checked >= 29, f"only {checked} relative links seen; corpus shrank?"
 
 
+def test_the_enforced_trailer_key_is_named_in_both_always_on_files():
+    """A key a CI gate enforces must be visible to BOTH audiences.
+
+    `CLAUDE.md` and `AGENTS.md` deliberately carry the same non-negotiables for
+    two readerships -- Claude Code reads the first, every AAIF-standard agent
+    (Codex / Cursor / Copilot / Gemini CLI / Grok) reads the second -- and
+    nothing was checking that the two copies still name the same trailers.
+    They had already diverged: AGENTS.md listed three trailer keys and
+    `Self-Review-Pass-2:` was not among them, so an agent working from the
+    portable file produced commits that `Validate Self-Review-Pass-2 trailer`
+    has nothing to find. TRK-377 / #1737.
+
+    Scope is deliberately one key, not a similarity engine over both files.
+    That was built and withdrawn: measured against these two files it produced
+    9 findings, at least three of them naming differences that are intentional
+    (AGENTS.md says outright that CLAUDE.md is the deeper document, and the two
+    correctly link the same doc by different relative paths), plus one pair
+    present in both files scored below threshold and was reported as missing
+    from each. Its counterfactual was flat -- the divergence this pin exists
+    for did not move the finding count.
+
+    The literal is repeated here on purpose. Reading it out of the enforcing
+    script would let a rename move both sides together, and a contract value is
+    exactly where a second independent literal earns its keep.
+    """
+    key = "Self-Review-Pass-2"
+    enforcer = os.path.join(
+        gaa.REPO_ROOT, "scripts", "tools", "dx", "pr_preflight.py")
+    with open(enforcer, encoding="utf-8") as fh:
+        # Bind the membership test before asserting: `assert key in fh.read()`
+        # makes pytest expand the whole file into the failure report, which on
+        # a CJK document under a legacy console is a screenful of mojibake with
+        # the actual message buried under it.
+        still_enforced = key in fh.read()
+    assert still_enforced, (
+            f"{key} is no longer referenced by pr_preflight.py -- this pin "
+            "would be guarding a key nothing enforces. Retire it or repoint it "
+            "at whatever replaced the gate."
+        )
+    for rel in ("CLAUDE.md", "AGENTS.md"):
+        with open(os.path.join(gaa.REPO_ROOT, rel), encoding="utf-8") as fh:
+            named = key in fh.read()
+        assert named, (
+                f"{rel} does not name the enforced trailer key `{key}:`. Both "
+                "always-on files must, or one readership never learns of it."
+            )
+
+
 # ============================================================
 # provenance comment syntax per file type (CodeRabbit #1481 C1)
 # ============================================================
