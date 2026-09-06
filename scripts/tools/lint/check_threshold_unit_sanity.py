@@ -77,7 +77,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_validation import i18n_text  # noqa: E402
-from _lib_confd import has_yaml_extension  # noqa: E402
+from _lib_confd import has_yaml_extension, is_hidden_name  # noqa: E402
 
 # ---------------------------------------------------------------- dimensions
 
@@ -267,8 +267,18 @@ def _iter_yaml_files(root: str):
             yield rel, p
     for d in _YAML_DIRS:
         base = os.path.join(root, d)
-        for dirpath, _dirs, files in os.walk(base):
+        for dirpath, dirs, files in os.walk(base):
+            # #1630 (HIDDEN axis): the exporter never merges a `.`-prefixed
+            # file nor anything under a `.`-prefixed directory
+            # (`config_hierarchy.go`: skip / `SkipDir`). Measured before
+            # this fix: `.hidden.yaml` carrying `k: 300` for a `%` unit →
+            # 1 OUT-OF-DOMAIN error, same for `.draft/x.yaml` — a red gate
+            # for a value no tenant can ever be served. Pruning in place so
+            # `os.walk` does not descend.
+            dirs[:] = [d for d in dirs if not is_hidden_name(d)]
             for f in sorted(files):
+                if is_hidden_name(f):
+                    continue
                 # #1588: was `f.endswith((".yaml", ".yml"))`, i.e. yet
                 # another hand-written copy of the extension rule — and a
                 # case-SENSITIVE one. Measured on this gate before the fix,

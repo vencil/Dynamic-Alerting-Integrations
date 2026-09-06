@@ -39,7 +39,7 @@ sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_python import detect_cli_lang, format_json_report, i18n_text  # noqa: E402
 from _lib_exitcodes import EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
-from _lib_confd import has_yaml_extension, warn_nested  # noqa: E402
+from _lib_confd import has_yaml_extension, is_hidden_name, warn_nested  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Bilingual help text
@@ -139,7 +139,7 @@ def _file_sha256(path: Path) -> str:
 def compute_dir_manifest(dir_path: str, label: str = "") -> FileManifest:
     """Build a SHA-256 manifest for all YAML files in a directory.
 
-    Skips hidden files (starting with '.').
+    Skips hidden (dot-prefixed) entries, as the exporter's walker does.
     """
     p = Path(dir_path)
     manifest = FileManifest(
@@ -155,13 +155,16 @@ def compute_dir_manifest(dir_path: str, label: str = "") -> FileManifest:
     # compared equal — this tool's whole job is to answer "do these trees
     # differ", and that carrier was outside the question.
     # `has_yaml_extension` (`CONFIG_SUFFIXES`, the set `config_hierarchy.go`
-    # accepts) decides the SPELLING; `*.y*` is a pre-filter, and `glob("*")`
-    # is deliberately NOT used — see `config_history._scan_config_dir` for
-    # the measured reason (the enumeration-contract classifier reads the
-    # literal pattern). ⛔ The pre-filter is NOT neutral on one axis:
-    # `Path.glob` is case-SENSITIVE on POSIX, so `DB-C.YAML` never reaches
-    # the predicate — the pre-filter settles the CASE axis, the same way
-    # `glob("*.yaml")` did.
+    # accepts) decides the SPELLING and, being case-insensitive, the CASE:
+    # the listing is `iterdir()` rather than a `glob("*.y*")` pre-filter,
+    # because `Path.glob` is case-SENSITIVE on POSIX and `DB-C.YAML` would
+    # never reach the predicate — measured on byte-identical bodies:
+    # `alpha.yaml` / `alpha.yml` / `Alpha.YAML` all enter the manifest,
+    # a tree with no tenant does not (tests/ops/test_drift_detect.py).
+    # `iterdir` is in `test_confd_enumeration_contract._FLAT_CALLS`, so this
+    # stays in the gate's flat class and the `warn_nested` above stays a
+    # subject of its assertions; `glob("*")` would NOT (the classifier reads
+    # the literal pattern and only treats `*.y…` as flat).
     #
     # What was measured: the SELECTION EXPRESSION alone, old vs new, on the CI
     # interpreter — delta exactly `+db-b.yml`, nothing removed. ⛔ Not this
@@ -193,17 +196,16 @@ def compute_dir_manifest(dir_path: str, label: str = "") -> FileManifest:
     # are unaffected (measured) — but on such a tree the sentence is generic
     # boilerplate rather than a fact about that tree.
     #
-    # ⛔ Do not read this module's membership in
-    # `test_confd_enumeration_contract` as durable. That gate discovers its
-    # subjects by enumerated substrings (`config_dir` / `conf-d` / `conf_d`)
-    # and this module names its knob `--dirs` / `dir_path`: on `5a03cb8f` it
-    # scored 0 on all three and was never a subject at all. It is one today
-    # only because the comment above happens to name another tool's
-    # function. `gitops_check.check_local` is still outside that population
-    # with the same shape. Filed as #1761; the guard below is here because
-    # the defect is real, not because the gate asked.
-    for f in sorted(p.glob("*.y*")):
-        if f.name.startswith(".") or not has_yaml_extension(f.name):
+    # Membership in `test_confd_enumeration_contract` used to hang on a
+    # substring net (`config_dir` / `conf-d` / `conf_d`) this module never
+    # matched — it names its knob `--dirs` / `dir_path`, scored 0 on all
+    # three at `5a03cb8f`, and was never a subject. Since #1761 the gate
+    # derives its population from three independent keys (the `_lib_confd`
+    # import binding above is one of them) and pins every flat enumerator
+    # it cannot see, so this module is a subject by construction, not by
+    # the accident of a comment naming another tool's function.
+    for f in sorted(p.iterdir()):
+        if is_hidden_name(f.name) or not has_yaml_extension(f.name):
             continue
         manifest.files[f.name] = _file_sha256(f)
 

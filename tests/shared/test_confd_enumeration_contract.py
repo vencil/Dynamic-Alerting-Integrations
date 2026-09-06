@@ -23,6 +23,16 @@ is the point: the silent-zero class is closed, not merely documented.
 Derivation, not enumeration: membership is computed from what the file
 actually calls, so a tool cannot dodge the gate by spelling its flat scan
 differently — a new flat form still has to satisfy (a) or (b).
+
+⛔ WHO IS IN THE POPULATION is the other half of that promise (#1761).
+The first version decided it by substring — `config_dir` / `conf-d` /
+`conf_d` — so a tool that named its knob `dir_path` (`gitops_check`) or
+`--dirs` (`drift_detect`) enumerated a conf.d flat and was never
+parametrized: not skipped, not red, simply absent. Membership is now the
+union of three independently derived keys (`_confd_population`), and the
+reconciliation pin at the bottom asks the complementary question — what
+enumerates a directory flat and is in NONE of them — so a fourth naming
+convention has to be reviewed instead of slipping by.
 """
 
 from __future__ import annotations
@@ -32,11 +42,10 @@ import pathlib
 
 import pytest
 
+from _confd_population import parse, population_keys
+
 REPO = pathlib.Path(__file__).resolve().parents[2]
 TOOLS = REPO / "scripts" / "tools"
-
-# A file "reads a tenant config dir" if it mentions one of these knobs.
-_DIR_HINTS = ("config_dir", "conf-d", "conf_d")
 
 _RECURSIVE_CALLS = {"rglob", "walk"}
 # Every way a caller can list ONE directory level. Enumerated deliberately
@@ -94,16 +103,25 @@ def _own_scope_calls(fn: ast.AST):
         stack.extend(ast.iter_child_nodes(node))
 
 
+def _enumeration_kinds(path: pathlib.Path) -> set[str]:
+    """Every `_call_kind` this file's AST contains — {} if unparseable."""
+    tree = parse(path)
+    if tree is None:
+        return set()
+    return {k for k in (_call_kind(n) for n in ast.walk(tree)
+                        if isinstance(n, ast.Call)) if k}
+
+
 def _classify(path: pathlib.Path):
-    """Return (reads_config_dir, flat, recursive, guarded)."""
-    src = path.read_text(encoding="utf-8", errors="replace")
-    if not any(h in src for h in _DIR_HINTS):
+    """Return (reads_config_dir, flat, recursive, guarded).
+
+    `reads_config_dir` is the union population from `_confd_population`
+    (imports `_lib_confd` / declares a conf.d flag / mentions a conf.d
+    hint), not a single substring net — see the module docstring.
+    """
+    if not population_keys(path):
         return False, False, False, False
-    try:
-        tree = ast.parse(src)
-    except SyntaxError:
-        return False, False, False, False
-    kinds = {_call_kind(n) for n in ast.walk(tree) if isinstance(n, ast.Call)}
+    kinds = _enumeration_kinds(path)
     return True, "flat" in kinds, "recursive" in kinds, "guard" in kinds
 
 
@@ -115,14 +133,17 @@ def _readers():
 
 
 def test_at_least_one_reader_is_discovered():
-    """Tripwire: if the hint list ever stops matching, the gate goes quiet.
+    """Tripwire: if every population key stops matching, the gate goes quiet.
 
     A gate that discovers zero subjects passes vacuously — the exact
-    failure mode this repo has paid for before.
+    failure mode this repo has paid for before. The floor reads the UNION
+    (`_confd_population.population_keys`), so it only collapses when all
+    three keys do at once.
     """
     assert len(_readers()) >= 10, (
-        "conf.d reader discovery collapsed — check _DIR_HINTS still matches "
-        "how tools name their config-dir argument"
+        "conf.d reader discovery collapsed — check `_confd_population`'s "
+        "three keys (import of _lib_confd / CONFD_FLAGS / CONFD_TEXT_HINTS) "
+        "still match how tools take their config dir"
     )
 
 
@@ -160,8 +181,9 @@ def test_flat_confd_reader_is_not_silent(path: pathlib.Path):
         f"Pick one:\n"
         f"  (a) recurse  — `from _lib_confd import iter_config_files`\n"
         f"  (b) stay flat but speak up — `from _lib_confd import "
-        f"nested_yaml_warning` and print it when it returns non-None\n"
-        f"See issue #1339."
+        f"warn_nested` and call it in the scanning function; it prints the "
+        f"skipped files to stderr once per directory\n"
+        f"The full contract is `_lib_confd`'s module docstring."
     )
 
 
@@ -182,8 +204,9 @@ def test_guard_lives_where_the_flat_scan_lives(path: pathlib.Path):
         f"{path.relative_to(REPO).as_posix()}: function(s) {unguarded} enumerate "
         f"a conf.d flat with no guard in the same scope. The import alone does "
         f"not help the code path that produces the wrong answer — move the "
-        f"`nested_yaml_warning(...)` call into the scanning function, or make "
-        f"that function recurse. See issue #1339."
+        f"`warn_nested(...)` call into the scanning function, or make that "
+        f"function recurse. The full contract is `_lib_confd`'s module "
+        f"docstring."
     )
 
 
@@ -251,3 +274,164 @@ def test_legitimate_shapes_are_not_flagged(name, tmp_path: pathlib.Path):
     _, flat, recursive, guarded = _classify(f)
     assert recursive or guarded
     assert _flat_scopes_without_guard(f) == []
+
+
+# ── Who is in the population (#1761) ──────────────────────────────────
+#
+# Everything above only speaks about files `_classify` admits. The pin
+# below is the complementary question: of every file under scripts/tools
+# whose AST enumerates a directory FLAT, which ones are in NONE of the
+# population keys? Each must be a repo-owned-tree reader, named with its
+# reason, and the assertion is set equality in BOTH directions:
+#
+#   * a new flat enumerator outside the population lands in the actual
+#     set and is not pinned → red → a human decides whether it reads a
+#     tenant conf.d (add a key / a hint) or a repo tree (add it here);
+#   * a pinned file that starts importing `_lib_confd` (or grows a conf.d
+#     flag) drops out of the actual set while still pinned → red → its
+#     entry is deleted, because it is now inside the gate proper.
+#
+# ⚠️ FLAT only, on purpose. Recursive-only enumerators outside the
+# population (48 doc/lint tools using `rglob` over docs/, helm/, .github/
+# on the tree this was written against) can never turn the gate red —
+# the assertions above return early when nothing is flat — so pinning
+# them would be a 50-line list that reddens on every new `rglob` doc lint
+# and buys no detection. A recursive tool that later adds a flat scan
+# enters this set at that moment, which is when the question matters.
+#
+# ⛔ Set equality has no anti-vacuity of its own (`set() == set()` is
+# green). The independent witness is `test_population_keys_synthetic_
+# controls` below: a synthetic file built OUTSIDE scripts/tools must land
+# in the "flat and outside" set, proving the classifier still produces
+# that answer — the pin cannot be satisfied by the classifier going dark.
+
+FLAT_OUTSIDE_POPULATION: dict[str, str] = {
+    "dx/gen_agent_adapters.py":
+        "os.listdir over agents/skills — the repo-owned skill SSOT it generates adapters from",
+    "dx/inject_waveform.py":
+        "`--rules` is a PrometheusRule candidate file/dir (glob *.yaml/*.yml), not a tenant conf.d",
+    "dx/pr_preflight.py":
+        "globs .github/workflows",
+    "lint/check_maintenance_symmetry.py":
+        "iterdir over rule-packs/",
+    "lint/check_orphan_lint.py":
+        "globs .github/workflows",
+    "lint/check_unpinned_deps.py":
+        "globs .github/workflows",
+    "lint/check_vmalert_coverage.py":
+        "iterdir over rule-packs/ and tests/rulepacks/",
+    "lint/check_workflow_git_push_permissions.py":
+        "globs `--workflows-dir` (.github/workflows)",
+    "ops/inject_metadata_join.py":
+        "globs RULE_PACKS_DIR (rule-packs/)",
+}
+
+
+def _flat_enumerators_outside_population(root: pathlib.Path) -> set[str]:
+    """Files under `root` that enumerate flat and carry no population key."""
+    return {
+        p.relative_to(root).as_posix()
+        for p in root.rglob("*.py")
+        if "flat" in _enumeration_kinds(p) and not population_keys(p)
+    }
+
+
+def test_every_flat_enumerator_outside_the_population_is_named():
+    """A flat scan the population cannot see must be a reviewed exemption.
+
+    This is what #1761 lacked: `gitops_check` and `drift_detect` both
+    enumerated flat, both were outside the substring net, and nothing
+    said so. Two-way equality: arriving here unpinned is red, and staying
+    pinned after joining the population is red too.
+    """
+    actual = _flat_enumerators_outside_population(TOOLS)
+    pinned = set(FLAT_OUTSIDE_POPULATION)
+    assert actual == pinned, (
+        f"flat enumerators outside the conf.d population changed.\n"
+        f"  unpinned (new flat scan the gate cannot see): "
+        f"{sorted(actual - pinned)}\n"
+        f"  stale pin (now inside the population — delete): "
+        f"{sorted(pinned - actual)}\n"
+        f"For a new entry decide which it is: a tenant conf.d reader must "
+        f"import `_lib_confd` (or take a `_confd_population.CONFD_FLAGS` "
+        f"flag) so the gate proper sees it; a repo-owned-tree reader is "
+        f"pinned in FLAT_OUTSIDE_POPULATION with the tree it reads."
+    )
+
+
+# Paired controls (D-05d): each key must admit a file ON ITS OWN, and a
+# file with none of them must be classified outside. A synthetic file
+# never passes through scripts/tools, so it is the witness that does not
+# shrink together with the thing it protects.
+_CONTROL_CASES: dict[str, tuple[str, set[str]]] = {
+    # The #1761 shape itself: a `--dirs` knob, a flat scan, no hint text,
+    # no `_lib_confd` import. MUST be outside — this is what the pin
+    # catches, and nothing else in this file would.
+    "dirs_knob_no_hint_no_import": (
+        "import argparse, os\n"
+        "def main():\n"
+        "    p = argparse.ArgumentParser()\n"
+        "    p.add_argument('--dirs')\n"
+        "    for d in p.parse_args().dirs.split(','):\n"
+        "        for f in os.listdir(d):\n            pass\n",
+        set(),
+    ),
+    # K1 alone: the import binds the module; nothing else mentions conf.d.
+    "import_only": (
+        "from _lib_confd import warn_nested\n"
+        "def scan(d):\n"
+        "    warn_nested(d)\n"
+        "    for f in d.iterdir():\n        pass\n",
+        {"import"},
+    ),
+    # K2 alone: `--confd` is a CONFD_FLAGS member that contains none of the
+    # text hints (`conf-d` / `conf_d` / `conf.d` / `config_dir`).
+    "flag_only": (
+        "import argparse, os\n"
+        "def main():\n"
+        "    p = argparse.ArgumentParser()\n"
+        "    p.add_argument('--confd')\n"
+        "    for f in os.listdir(p.parse_args().confd):\n        pass\n",
+        {"flag"},
+    ),
+    # K3 alone: the literal directory name in a docstring, as
+    # `drift_detect`'s usage line has it.
+    "hint_only": (
+        '"""Usage: tool --dirs cluster-a/conf.d,cluster-b/conf.d"""\n'
+        "import os\n"
+        "def scan(d):\n"
+        "    for f in os.listdir(d):\n        pass\n",
+        {"hint"},
+    ),
+    # A comment naming the library is NOT an import: K1 is an AST key.
+    "comment_mentions_library_is_not_a_key": (
+        "import os\n"
+        "# see _lib_confd for the shared predicates\n"
+        "def scan(d):\n"
+        "    for f in os.listdir(d):\n        pass\n",
+        set(),
+    ),
+}
+
+
+@pytest.mark.parametrize("name", sorted(_CONTROL_CASES))
+def test_population_keys_synthetic_controls(name, tmp_path: pathlib.Path):
+    """Each population key admits on its own; no key ⇒ outside, and the pin sees it.
+
+    The first case is the negative control for the reconciliation pin: a
+    flat reader spelled the way `drift_detect` is spelled must show up in
+    `_flat_enumerators_outside_population`, otherwise the pin's set
+    equality could hold because the classifier stopped answering.
+    """
+    src, expected = _CONTROL_CASES[name]
+    f = tmp_path / f"{name}.py"
+    f.write_text(src, encoding="utf-8")
+    assert population_keys(f) == expected
+    outside = _flat_enumerators_outside_population(tmp_path)
+    if expected:
+        assert f.name not in outside, "a keyed file must be inside the population"
+    else:
+        assert f.name in outside, (
+            "a flat reader with no population key must surface in the "
+            "reconciliation set — that is the only place it can turn red"
+        )
