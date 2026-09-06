@@ -54,7 +54,7 @@ lang: zh
 
 ---
 
-## 2. PreToolUse session-guards（2）— 🔧 機械，tool 呼叫時
+## 2. PreToolUse session-guards（2）— 🔧 機械，tool 呼叫時**（僅限 project root == 本 repo 的 checkout）**
 
 | Guard | 觸發 | 涵蓋 | Reference |
 |---|---|---|---|
@@ -62,6 +62,8 @@ lang: zh
 | `preflight_bash.py` | 每次 `Bash`/`Write` | 攔 `sed -i` 掛載路徑（dev-rule #11）+ 攔 `_*.bat`/`_*.ps1`/`_*.cmd` 出 whitelist（Trap #54） | `scripts/session-guards/preflight_bash.py` |
 
 > 這兩支讓「起手式」「檔案衛生」從 skill-advised 升級為 hook-enforced——AI 不必每次手動跑起手式，hook 代勞。兩支自 #824 起一律經 `run-hooks.sh` launcher 啟動（功能性直譯器探測；`session-guard-liveness-check` pre-commit gate 防回歸）。
+>
+> ⛔ **上一段的「hook 代勞」在 web session 裡可能整段不成立（[#1719](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1719)）。** Claude Code 的 hook 宣告來自 **project root** 的 `.claude/settings.json`；當 repo 被放在 project root 的**子目錄**（Claude Code on the web 的多 repo 形態，project root = `/home/user`），本 repo 的 `.claude/settings.json` **整份不載入**——連同這兩支 PreToolUse guard 與同檔的 `permissions` 區塊。實測（remote session、repo 位於 `/home/user/<repo>`）：Claude Code 全程只探測 `<project root>/.claude/settings.json` 與 `<project root>/.claude/settings.local.json` 兩條路徑，**沒有任何一條指向 repo 子目錄**；同一次啟動記錄的 skill 載入來源亦為 `project=[]`。⇒ 在該形態下這兩支 guard 的實際涵蓋是**零**，本節其餘敘述僅適用於 project root 就是本 repo 的 checkout（本機 clone、devcontainer、單 repo 形態）。
 >
 > **已知不涵蓋（負空間，#824 取證後誠實列出）**：
 > - matcher 只含 `Bash|Write|Edit|MultiEdit`——**`PowerShell` 工具與 MCP 寫入類工具（Desktop Commander / Windows-MCP 等）不觸發任何 guard**。PowerShell-first session 的第一個 mutating call 不會跑起手式；MCP 寫檔完全繞過檔案衛生攔截。
@@ -177,7 +179,7 @@ lang: zh
 ### 🔁 Overlap（冗餘，多半 intentional 為安全）
 
 - **Commit trailer 規則 = 4 層**：dev-rules §P1（文件）+ `commit-msg` hook `validate_pass2_trailer_placement`（機械擋）+ `vibe-dev-rules` skill（commit 前提醒）+ CLAUDE.md 高頻地雷（always-on）。**唯一機械擋的是 commit-msg hook**；其餘 3 層是 advisory。→ TRK-310 收尾時 CLAUDE.md 版可縮 1-liner 指 dev-rules §P1（DRY）。
-- **檔案衛生（sed -i）= 5 層**：dev-rule #11 + `preflight_bash.py`（PreToolUse 機械擋）+ `sed-damage-guard`（pre-commit）+ CLAUDE.md 高頻地雷 + `vibe-workflow`。機械擋有 2 層（PreToolUse + pre-commit），夠厚。
+- **檔案衛生（sed -i）= 5 層**：dev-rule #11 + `preflight_bash.py`（PreToolUse 機械擋）+ `sed-damage-guard`（pre-commit）+ CLAUDE.md 高頻地雷 + `vibe-workflow`。機械擋有 2 層（PreToolUse + pre-commit）——⛔ **但這個「2 層」有 checkout 形態前提**：`.claude/settings.json` 不載入的 web session 形態下 `preflight_bash.py` 不會跑（§2 的 ⛔、#1719），該形態下機械擋只剩 pre-commit 1 層。
 
 ### ⚖️ Conflict（優先級歧義，由 TRK-301 仲裁）
 
@@ -199,14 +201,16 @@ lang: zh
 | **SAST 7 條的 1/3/7**（encoding/chmod/stderr） | 👁️ reviewer convention（bandit 只 native 蓋 2/4/5/6） | 進 repo | dev-rule #5 已明列；reviewer 把關 |
 | **A-13**（`test.skip()` / `test.fixme()`，任何寫法）在 **worktree** 內 | 🔧 `playwright-lint` hook，但**只在有 `tests/e2e/node_modules` 的 checkout 跑得起來** | `node_modules` 是 gitignored ⇒ 每一棵新開的 worktree 對它都是壞的、且不會自己好 | #1428：三個入口（hook／`make lint-e2e`／CI job）收斂到 `scripts/tools/lint/e2e_spec_lint.sh`（缺依賴時印 `cd tests/e2e && npm ci` 並 fail），並由 `tests/lint/test_e2e_spec_lint.py` 釘住三者真的**執行**它、以及 CI job 不得帶 `if:` / `continue-on-error`。⚠️ **CI 腿目前是 advisory**——`E2E Spec Lint (A-13)` **這個 job 自己**不在 main 的 required checks 內（`Smoke Tests (Chromium)` 也不在，但把後者設成 required 不會讓前者變 blocking）。要 blocking 見該票 |
 
-> ⛔ **這一列的漏法是新的，值得單獨記**：前幾列都是「沒有機械防線」，這一列是 **gate 存在、寫得對、在主 checkout 綠，但只在那一種 checkout 形態下能執行**。§3 的「commit 時自動跑，失敗會擋」與 §8 第 2 點的「不要重做 hook-enforced 的事」對它**不成立**——判別時要問的不只是「有沒有 hook」，還有「這個 hook 的依賴，在我現在這棵樹裡在嗎」。
+| **起手式 + `sed -i` 檔案衛生**（§2 兩支 PreToolUse guard）在 **web session** 內 | 🔧 `.claude/settings.json` 宣告的 hook，但**只在 project root == 本 repo 的 checkout 形態下載入** | 多 repo web session 的 project root 是本 repo 的**上層**（`/home/user`）⇒ 本 repo 的 `.claude/settings.json` 整份不載入，兩支 guard 涵蓋為零，同檔的 `permissions` 區塊亦然。⚠️ 比 A-13 那列更難自覺：A-13 缺依賴時 hook 會**出聲**失敗，這裡是 hook **根本沒被註冊**，畫面上與「沒有這條規則」無法區分 | [#1719](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1719)：可觀測性已落地（SessionStart hook + `/tmp/vibe-session-start-hook.ran` marker；CLAUDE.md 起手式先查 marker）。⛔ 但 marker 只有「有／無」兩態，**無法區分「hook 沒被呼叫」與「hook 被呼叫但在定位 repo root 時就 exit 1」**——後者發生在 marker 寫入之前。根因修法（把宣告移到 project root）未裁決 |
+
+> ⛔ **最後這兩列的漏法是同一種，值得單獨記**：前幾列都是「沒有機械防線」，這兩列是 **gate 存在、寫得對、在主 checkout 綠，但只在某一種 checkout 形態下能執行**——A-13 那列缺的是 hook 的**依賴**（`node_modules`），#1719 那列缺的是 hook 的**註冊**（settings 檔整份沒載入）。§3 的「commit 時自動跑，失敗會擋」與 §8 第 2 點的「不要重做 hook-enforced 的事」對它**不成立**——判別時要問的不只是「有沒有 hook」，還有「這個 hook 的依賴，在我現在這棵樹裡在嗎」。
 
 ---
 
 ## 8. AI agent 使用指引
 
 1. **Commit / push 前**：先掃本表「🕳️ 漏接」+「🧠 skill-advised」——這些沒人機械擋，必須自覺做。
-2. **不要重做 🔧 hook-enforced 的事**（全部 auto hooks + §1 那三支 pre-push 守衛 + 2 PreToolUse；pre-commit stage 的確切數字見 §Count reconciliation，pre-push 那三支見 `scripts/ops/prepush_dispatch.sh` 的 `GUARDS`）——浪費 token，hook 會擋。**但 ⚙️ CI-only gate（§4.5：`test_sast` / `bump_docs` hook 計數 / OpenAPI drift / 契約測試）本地不跑、push 才紅**——別把它們當 hook-enforced；改到對應輸入時本地手動跑（否則吃一輪 CI 紅燈）。
+2. **不要重做 🔧 hook-enforced 的事**（全部 auto hooks + §1 那三支 pre-push 守衛 + 2 PreToolUse——⛔ **後者先確認自己這棵樹的 project root 就是本 repo**，否則見 §2 的 ⛔ 與 #1719；pre-commit stage 的確切數字見 §Count reconciliation，pre-push 那三支見 `scripts/ops/prepush_dispatch.sh` 的 `GUARDS`）——浪費 token，hook 會擋。**但 ⚙️ CI-only gate（§4.5：`test_sast` / `bump_docs` hook 計數 / OpenAPI drift / 契約測試）本地不跑、push 才紅**——別把它們當 hook-enforced；改到對應輸入時本地手動跑（否則吃一輪 CI 紅燈）。
 3. **記得手動跑 §4 manual hooks**（改對應檔後）——它們不在 commit 自動跑，漏了 CI 才擋。
 4. **trailer 規則**信任 commit-msg hook 會擋，但格式自覺照 CLAUDE.md 高頻地雷 #2 寫對（省一輪 commit 重試）。
 
