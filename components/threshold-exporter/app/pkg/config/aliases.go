@@ -57,16 +57,6 @@ var legacyKeyByCanonical = func() map[string]string {
 	return m
 }()
 
-// canonicalKeyFor returns the canonical spelling for a tenant-config key and
-// whether the key was a deprecated alias. Exactly three shapes canonicalize:
-//
-//	mysql_cpu                → mysql_threads_running                (exact)
-//	mysql_cpu_critical       → mysql_threads_running_critical       (suffix-derived)
-//	mysql_cpu{version="v2"}  → mysql_threads_running{version="v2"}  (dimensional base)
-//
-// Everything else — including typos that merely share the prefix, like
-// mysql_cpu_util — is returned unchanged (exact-match contract, see the
-// package comment's ⛔ note).
 // CanonicalKeyFor resolves a deprecated spelling to its canonical one
 // (exported for the overlay's reachability check and for testing).
 func CanonicalKeyFor(key string) (string, bool) { return canonicalKeyFor(key) }
@@ -94,6 +84,16 @@ func CanonicalKeyFor(key string) (string, bool) { return canonicalKeyFor(key) }
 // two predicates disagree. (#1569 blind review.)
 func LegacySpellingFor(canonical string) (string, bool) { return legacySpellingFor(canonical) }
 
+// canonicalKeyFor returns the canonical spelling for a tenant-config key and
+// whether the key was a deprecated alias. Exactly three shapes canonicalize:
+//
+//	mysql_cpu                → mysql_threads_running                (exact)
+//	mysql_cpu_critical       → mysql_threads_running_critical       (suffix-derived)
+//	mysql_cpu{version="v2"}  → mysql_threads_running{version="v2"}  (dimensional base)
+//
+// Everything else — including typos that merely share the prefix, like
+// mysql_cpu_util — is returned unchanged (exact-match contract, see the
+// package comment's ⛔ note).
 func canonicalKeyFor(key string) (string, bool) {
 	if canon, ok := deprecatedKeyAliases[key]; ok {
 		return canon, true

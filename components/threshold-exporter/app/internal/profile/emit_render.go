@@ -18,6 +18,9 @@ import (
 	"strings"
 )
 
+// renderProposalMarkdown produces the PROPOSAL.md body — a human
+// summary so a reviewer can decide accept / reject without diving
+// into the YAML files.
 func renderProposalMarkdown(propIdx int, prop ExtractionProposal, tenantKey string) string {
 	out := strings.Builder{}
 	fmt.Fprintf(&out, "# Proposal %d\n\n", propIdx)
@@ -132,7 +135,3 @@ func renderTranslatedProposalMarkdown(propIdx int, prop ExtractionProposal, tran
 	out.WriteString("_runtime ResolveAt path consumes them via ADR-017 inheritance._\n")
 	return out.String()
 }
-
-// sortedTenantKeys returns map keys sorted alphabetically (helper
-// for renderTranslatedProposalMarkdown so the per-tenant override
-// list is deterministic).

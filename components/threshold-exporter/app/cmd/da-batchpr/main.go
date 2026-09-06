@@ -266,7 +266,7 @@ func parseRepoFlag(s string) (batchpr.Repo, error) {
 	return batchpr.Repo{Owner: parts[0], Name: parts[1]}, nil
 }
 
-// exitCodeForSummary maps a result summary to an exit code.
+// exitCodeForApply maps a result summary to an exit code.
 // Returns exitFailures iff at least one target ended up Failed.
 // Skipped / NoChange / DryRun / Clean / Updated all count as
 // success for exit purposes.
