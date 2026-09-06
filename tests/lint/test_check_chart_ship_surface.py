@@ -101,6 +101,34 @@ class TestLiveRepoIsClean:
         patterns = gate.helmignore_patterns(REPO_ROOT / "helm" / "tenant-api")
         assert gate._is_ignored("values-scope-enforce.yaml", patterns)
 
+    def test_every_live_ship_declaration_survives_helmignore(self) -> None:
+        """The SHIP side, asserted on the live repo rather than a fixture.
+
+        `helm/threshold-exporter/README.md` was declared SHIP with the reason
+        "chart usage doc, written for whoever pulls it" while line 12 of that
+        chart's `.helmignore` is `README.md` — so nobody pulling the chart had
+        ever received it. A real `helm package` confirmed the `.tgz` root held
+        only `.helmignore`, `Chart.yaml` and `values.yaml`.
+        """
+        offenders = []
+        for chart, entries in gate.DECLARED.items():
+            patterns = gate.helmignore_patterns(REPO_ROOT / chart)
+            for name, (disposition, _reason) in entries.items():
+                if disposition != gate.SHIP:
+                    continue
+                hit = gate.matching_pattern(name, patterns)
+                if hit is not None:
+                    offenders.append(f"{chart}/{name} killed by {hit!r}")
+        # ⛔ Vacuity guard: with no SHIP entries the loop asserts nothing.
+        ship_count = sum(
+            1
+            for entries in gate.DECLARED.values()
+            for d, _ in entries.values()
+            if d == gate.SHIP
+        )
+        assert ship_count >= 7, ship_count
+        assert offenders == [], offenders
+
 
 # ---------------------------------------------------------------------------
 # counterfactuals
@@ -196,6 +224,82 @@ class TestViolations:
         assert len(violations) == 1
         assert "values-debug.yaml" in violations[0]
         assert "undeclared" in violations[0]
+
+    def test_ship_declaration_killed_by_helmignore_is_red(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """The threshold-exporter/README.md shape, as a fixture.
+
+        Before the SHIP side was asserted, this passed: the gate only ever
+        checked EXCLUDE against `.helmignore`, so a table could promise a file
+        reached customers while the packer dropped it.
+        """
+        repo = _make_repo(
+            tmp_path,
+            root_files={"Chart.yaml": "name: demo\n", "README.md": "docs\n"},
+            helmignore="README.md\n",
+        )
+        monkeypatch.setattr(
+            gate,
+            "DECLARED",
+            {
+                "helm/demo": {
+                    "Chart.yaml": (gate.SHIP, "metadata"),
+                    ".helmignore": (gate.SHIP, "packing control file"),
+                    "README.md": (gate.SHIP, "chart usage doc"),
+                }
+            },
+        )
+        violations = gate.check(repo)
+        assert len(violations) == 1
+        assert "README.md" in violations[0]
+        assert "declared SHIP" in violations[0]
+        assert "'README.md'" in violations[0]  # names the offending line
+
+    def test_the_same_file_declared_exclude_is_green(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Control for the test above: only the disposition changes, so the RED
+        comes from the SHIP/ignore contradiction and nothing else."""
+        repo = _make_repo(
+            tmp_path,
+            root_files={"Chart.yaml": "name: demo\n", "README.md": "docs\n"},
+            helmignore="README.md\n",
+        )
+        monkeypatch.setattr(
+            gate,
+            "DECLARED",
+            {
+                "helm/demo": {
+                    "Chart.yaml": (gate.SHIP, "metadata"),
+                    ".helmignore": (gate.SHIP, "packing control file"),
+                    "README.md": (gate.EXCLUDE, "excluded on purpose"),
+                }
+            },
+        )
+        assert gate.check(repo) == []
+
+    def test_a_ship_file_no_pattern_touches_is_green(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """⛔ Anti-vacuity: the SHIP assertion must not fire on everything."""
+        repo = _make_repo(
+            tmp_path,
+            root_files={"Chart.yaml": "name: demo\n", "README.md": "docs\n"},
+            helmignore="values-*.yaml\n",
+        )
+        monkeypatch.setattr(
+            gate,
+            "DECLARED",
+            {
+                "helm/demo": {
+                    "Chart.yaml": (gate.SHIP, "metadata"),
+                    ".helmignore": (gate.SHIP, "packing control file"),
+                    "README.md": (gate.SHIP, "chart usage doc"),
+                }
+            },
+        )
+        assert gate.check(repo) == []
 
     def test_stale_declaration_is_red(self, tmp_path: Path, monkeypatch) -> None:
         repo = _make_repo(tmp_path, root_files={"Chart.yaml": "name: demo\n"})
@@ -300,6 +404,14 @@ class TestHelmignoreSemantics:
 
     def test_unrelated_pattern_does_not_match(self) -> None:
         assert not gate._is_ignored("values-scope-enforce.yaml", ["/README.md"])
+
+    def test_matching_pattern_returns_the_line_verbatim(self) -> None:
+        """The violation message quotes it, so it must be the raw line — the
+        leading slash included — not the normalized form used for matching."""
+        assert gate.matching_pattern("values-a.yaml", ["x", "/values-*.yaml"]) == (
+            "/values-*.yaml"
+        )
+        assert gate.matching_pattern("values-a.yaml", ["/README.md"]) is None
 
     def test_root_relative_pattern_satisfies_an_exclude_end_to_end(
         self, tmp_path: Path, monkeypatch

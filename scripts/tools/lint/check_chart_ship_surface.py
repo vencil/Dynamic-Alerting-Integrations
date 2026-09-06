@@ -32,18 +32,42 @@ What it checks
 3. An `EXCLUDE` file must actually be matched by a line in that chart's
    `.helmignore`. A declaration the packer does not honour is worse than none:
    it reads like protection while shipping the file.
-4. A declaration naming a file that no longer exists is also a violation, so
+4. Symmetrically, a `SHIP` file must **not** be matched by any `.helmignore`
+   line. Without this the table can claim a file reaches customers while
+   `helm package` drops it — which is what `helm/threshold-exporter/README.md`
+   did: declared SHIP as "chart usage doc, written for whoever pulls it", while
+   line 12 of that chart's `.helmignore` is literally `README.md`, so nobody
+   pulling the chart has ever received it. Verified against a real `.tgz`.
+5. A declaration naming a file that no longer exists is also a violation, so
    the table cannot rot into a list of ghosts.
 
 Scope boundary (deliberate — see #1755)
 ---------------------------------------
 This asserts the chart **source tree** plus its `.helmignore`. It does **not**
-read the bytes of the produced `.tgz`: that needs `helm`, which is absent here
-(`get.helm.sh` is blocked by egress policy and helm publishes no GitHub release
-asset), and a gate whose main path its author cannot run is the exact shape
-PR #1747 was closed for. `templates/`, `crds/` and `charts/` are out of scope
-too: their contents are deployment material by construction, while the incident
-class lives at the chart root, next to `values.yaml`.
+read the bytes of the produced `.tgz`.
+
+⚠️ The reason is NOT that helm is unobtainable. An earlier revision of this
+docstring said so and was wrong: `get.helm.sh` is indeed blocked by egress
+policy, but `go install helm.sh/helm/v3/cmd/helm@vX` builds it from source in
+about two minutes, and CI already installs it (`azure/setup-helm@v4`, three
+jobs in ci.yml and three in release.yaml). The real reason is placement: this
+gate runs in pre-commit's *automatic* stage, where a 107 MB toolchain fetch
+does not belong. A tarball-reading assertion is a separate check for the
+manual stage or a CI job, and is tracked as such rather than smuggled in here.
+
+What that costs is bounded and measured, not guessed. The model below was run
+against real `helm package` output for all six `.helmignore` spellings that can
+apply to a root file — bare basename, glob, `/glob`, `/literal`, trailing-slash
+`mustDir`, non-matching — and agreed with helm 6/6. The two constructs it does
+not model make helm fail loudly rather than diverge silently: a `!` negation
+line ignores everything it does not match (so `helm package` aborts with
+"Chart.yaml file is missing"), and `**` is rejected outright by helm's own
+parser. So the residual risk lives in the SUBDIRECTORIES this gate declares out
+of scope — `templates/`, `crds/`, `charts/` — not at the chart root.
+
+`templates/`, `crds/` and `charts/` are out of scope: their contents are
+deployment material by construction, while the incident class lives at the
+chart root, next to `values.yaml`.
 
 Usage
     python3 scripts/tools/lint/check_chart_ship_surface.py
@@ -89,7 +113,16 @@ DECLARED: Dict[str, Dict[str, Tuple[str, str]]] = {
     "helm/threshold-exporter": {
         "Chart.yaml": (SHIP, "chart metadata — helm requires it"),
         "values.yaml": (SHIP, "the chart's default values"),
-        "README.md": (SHIP, "chart usage doc, written for whoever pulls it"),
+        "README.md": (
+            EXCLUDE,
+            "⚠️ NOT shipped, despite reading like chart documentation: line 12 "
+            "of this chart's .helmignore is `README.md`, and a real "
+            "`helm package` confirms the .tgz has never contained it. The "
+            "declaration used to say SHIP — the first thing this gate's "
+            "SHIP-side assertion caught. Left excluded on purpose: dropping "
+            "that .helmignore line would change the contents of an already "
+            "published artifact, which is a release decision, not a lint fix.",
+        ),
         ".helmignore": (SHIP, "helm's own packing control file"),
     },
     "helm/recipe-preview": {
@@ -226,13 +259,23 @@ def _is_ignored(name: str, patterns: List[str]) -> bool:
     the direction that makes this gate complain, never the direction that lets
     an undeclared file ship unnoticed.
     """
+    return matching_pattern(name, patterns) is not None
+
+
+def matching_pattern(name: str, patterns: List[str]) -> str | None:
+    """The `.helmignore` line that excludes `name`, verbatim, or None.
+
+    Same semantics as `_is_ignored`; it returns the line rather than a bool so
+    a violation can name the rule the author has to look at, instead of making
+    them scan the file for whichever pattern matched.
+    """
     for raw in patterns:
         if raw.endswith("/"):
             continue  # directory-only rule (helm's mustDir); never a file
         rule = raw[1:] if raw.startswith("/") else raw
         if name == rule or fnmatch.fnmatch(name, rule):
-            return True
-    return False
+            return raw
+    return None
 
 
 def check(repo_root: Path = REPO_ROOT) -> List[str]:
@@ -273,11 +316,20 @@ def check(repo_root: Path = REPO_ROOT) -> List[str]:
                     f"drop the stale declaration."
                 )
                 continue
-            if disposition == EXCLUDE and not _is_ignored(name, patterns):
+            hit = matching_pattern(name, patterns)
+            if disposition == EXCLUDE and hit is None:
                 violations.append(
                     f"{chart}/{name}: declared {EXCLUDE} but no .helmignore line "
                     f"matches it, so `helm package` still ships it. Add the "
                     f"pattern, or change the declaration to {SHIP}."
+                )
+            elif disposition == SHIP and hit is not None:
+                violations.append(
+                    f"{chart}/{name}: declared {SHIP}, but the .helmignore line "
+                    f"{hit!r} matches it, so `helm package` drops it and nobody "
+                    f"pulling the chart receives it. Either remove that line — "
+                    f"which CHANGES what the published .tgz contains — or change "
+                    f"the declaration to {EXCLUDE} with the real reason."
                 )
 
     return violations
