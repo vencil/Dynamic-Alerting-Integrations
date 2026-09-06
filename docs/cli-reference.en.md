@@ -704,6 +704,7 @@ Choose one mode:
 
 1. **Git Diff Mode**: `--git-diff`
    (Run inside Git repo, auto-detect changes)
+   ⚠️ Needs `git` on PATH and, as the working directory, the directory that contains `conf.d/` (the tool runs `git diff HEAD~1 -- conf.d/` relative to the cwd; under the customer layout that is the repo root). Inside a container, mount the directory that contains `conf.d/` and `-w` into the mount point (e.g. `-v $(pwd):/workspace -w /workspace`). The `ghcr.io/vencil/da-tools` image **does not ship git**, so `git diff` cannot run inside it — run this mode where git is installed
 
 2. **Directory Comparison Mode**: `--config-dir <dir> --baseline <dir>`
    (Compare two config versions)
@@ -722,12 +723,12 @@ Comparison report showing impact of threshold changes on historical data (potent
 **Examples**
 
 ```bash
-# Git Diff mode
-cd <repo> && docker run --rm --network=host \
-  -v $(pwd):/workspace:ro \
-  -e PROMETHEUS_URL=http://prometheus.monitoring.svc.cluster.local:9090 \
-  ghcr.io/vencil/da-tools:v2.9.0 \
-  backtest --git-diff --lookback 7d
+# Git Diff mode — the image has no git, so run the script on a host checkout
+# (same invocation as this repo's .github/workflows/backtest.yaml), from the
+# directory that contains conf.d/
+python3 scripts/tools/ops/backtest_threshold.py --git-diff \
+  --prometheus http://prometheus.monitoring.svc.cluster.local:9090 \
+  --lookback 7d --skip-if-unavailable
 
 # Directory comparison mode
 docker run --rm --network=host \
@@ -2302,11 +2303,12 @@ docker run --rm \
   ghcr.io/vencil/da-tools:v2.9.0 \
   lint /data/rules/my-rules.yaml
 
-# Check entire directory
+# Check entire directory. In CI always pass --ci: without it, ERROR-level
+# violations still exit 0
 docker run --rm \
   -v $(pwd)/rule-packs:/data/rules:ro \
   ghcr.io/vencil/da-tools:v2.9.0 \
-  lint /data/rules --strict
+  lint /data/rules --ci
 ```
 
 **Exit Codes**
