@@ -1258,8 +1258,10 @@ def main():
     results: Dict[str, Tuple[str, float, str]] = {}
     # #1695 family 2: set when --ci stopped the sequential loop. Both are
     # reported by the tail (text line, JSON keys) and neither goes into
-    # `results` -- a not-run check is not a result, and --compare would
-    # otherwise read it as vanished (#1703).
+    # `results` -- a not-run check is not a result. `_compare_baseline`
+    # therefore lists it as vanished when the baseline had it (#1703), and
+    # that is the intended reading: after a --ci stop the rest of the run
+    # set genuinely did not run, which a comparison must not paper over.
     ci_stopped_after: Optional[str] = None
     not_run: List[str] = []
 
