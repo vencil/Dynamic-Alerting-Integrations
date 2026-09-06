@@ -659,15 +659,26 @@ class TestCheckPRMergeable:
 # valid scope; `threshold-exporter` is NOT (the exact mistake that caused the
 # #689 deadlock). git log output is stubbed via pp.run.
 class TestCheckCommitScopeRange:
+    # `check_commit_scope_range` reads `git log --format=%B%x00`: whole messages,
+    # NUL-delimited. It needs the whole message because two of commitlint's merge
+    # wildcards are multiline (#1756 review) — a `Merge branch …` line in the BODY
+    # is enough for CI to skip the commit. `_log()` builds that stub payload.
+
+    @staticmethod
+    def _log(*messages: str) -> str:
+        return "".join(m + "\0" for m in messages)
+
     def test_valid_scope_passes(self, monkeypatch):
-        _stub_run_constant(monkeypatch, _cp(0, "fix(exporter): foo bar\n"))
+        _stub_run_constant(monkeypatch, _cp(0, self._log("fix(exporter): foo bar\n")))
         result = pp.check_commit_scope_range()
         assert result.status == pp.Status.PASS
 
     def test_invalid_scope_fails(self, monkeypatch):
         # `threshold-exporter` is not in scope-enum → must FAIL so the
         # preflight marker is withheld before the bad commit reaches a PR.
-        _stub_run_constant(monkeypatch, _cp(0, "fix(threshold-exporter): foo\n"))
+        _stub_run_constant(
+            monkeypatch, _cp(0, self._log("fix(threshold-exporter): foo\n")),
+        )
         result = pp.check_commit_scope_range()
         assert result.status == pp.Status.FAIL
         assert "threshold-exporter" in (result.detail or "")
@@ -675,11 +686,25 @@ class TestCheckCommitScopeRange:
     def test_one_bad_among_many_fails(self, monkeypatch):
         _stub_run_constant(
             monkeypatch,
-            _cp(0, "fix(exporter): ok\nchore(bogusscope): bad\n"),
+            _cp(0, self._log("fix(exporter): ok\n", "chore(bogusscope): bad\n")),
         )
         result = pp.check_commit_scope_range()
         assert result.status == pp.Status.FAIL
         assert "1/2" in result.message
+
+    def test_body_is_not_mistaken_for_a_second_commit(self, monkeypatch):
+        """One commit with a multi-line body is one commit, not several.
+
+        The NUL delimiter is what makes this true; splitting on newlines would
+        validate `body line` as a header and FAIL.
+        """
+        _stub_run_constant(
+            monkeypatch,
+            _cp(0, self._log("fix(exporter): ok\n\nbody line\n\nRefs: #1\n")),
+        )
+        result = pp.check_commit_scope_range()
+        assert result.status == pp.Status.PASS
+        assert "1 commit(s)" in result.message
 
     def test_no_commits_skips(self, monkeypatch):
         _stub_run_constant(monkeypatch, _cp(0, "\n"))
@@ -690,3 +715,70 @@ class TestCheckCommitScopeRange:
         _stub_run_constant(monkeypatch, _cp(128, "", "fatal: bad revision"))
         result = pp.check_commit_scope_range()
         assert result.status == pp.Status.WARN
+
+    # --- #1756: commitlint defaultIgnores parity ---------------------------
+    # CI's commitlint drops these commits before any rule runs, so FAILing on
+    # them here is a local-red / CI-green block that also clears the preflight
+    # marker (which then blocks the push).
+
+    def test_merge_commit_does_not_fail(self, monkeypatch):
+        """The subject `git merge main` / GitHub "Update branch" writes."""
+        _stub_run_constant(
+            monkeypatch,
+            _cp(0, self._log(
+                "fix(exporter): ok\n",
+                "Merge remote-tracking branch 'origin/main' into feat/x\n",
+            )),
+        )
+        result = pp.check_commit_scope_range()
+        assert result.status == pp.Status.PASS
+        assert "略過 1" in result.message
+
+    def test_merge_branch_subject_does_not_fail(self, monkeypatch):
+        _stub_run_constant(
+            monkeypatch,
+            _cp(0, self._log("fix(exporter): ok\n", "Merge branch 'main' into feat/x\n")),
+        )
+        result = pp.check_commit_scope_range()
+        assert result.status == pp.Status.PASS
+
+    def test_merge_line_in_body_is_ignored_like_ci(self, monkeypatch):
+        """#1756 review: the merge wildcards are multiline upstream.
+
+        A bad header whose BODY carries `Merge branch …` is skipped by CI, so
+        FAILing on it locally would re-open the gap this check exists to close.
+        Measured on commitlint 21.2.2 with this repo's config: exit 0, and
+        exit 1 once `defaultIgnores: false` is set.
+        """
+        _stub_run_constant(
+            monkeypatch,
+            _cp(0, self._log(
+                "invalid(scope): header\n\nMerge branch 'main' into feature/x\n",
+            )),
+        )
+        result = pp.check_commit_scope_range()
+        assert result.status == pp.Status.SKIP
+        assert "略過 1" in result.message
+
+    def test_all_commits_ignored_skips(self, monkeypatch):
+        _stub_run_constant(
+            monkeypatch, _cp(0, self._log("Merge pull request #1 from vencil/feat/x\n")),
+        )
+        result = pp.check_commit_scope_range()
+        assert result.status == pp.Status.SKIP
+        assert "略過 1" in result.message
+
+    def test_ignored_commit_does_not_mask_a_real_violation(self, monkeypatch):
+        """Control: the skip must not swallow the violation next to it, and
+        the denominator must count only what was actually validated."""
+        _stub_run_constant(
+            monkeypatch,
+            _cp(0, self._log(
+                "Merge branch 'main' into feat/x\n",
+                "fix(threshold-exporter): bad scope\n",
+            )),
+        )
+        result = pp.check_commit_scope_range()
+        assert result.status == pp.Status.FAIL
+        assert "1/1" in result.message
+        assert "threshold-exporter" in (result.detail or "")
