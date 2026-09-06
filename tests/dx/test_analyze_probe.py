@@ -357,7 +357,7 @@ def _first_measurement_row(lines, edit):
     # halved average with rc=0 and no warning.
     (lambda ls: _first_measurement_row(
         ls, lambda l: l.replace("iters=400", "iters=800")),
-     "differing iters"),
+     "differing iters [400, 800]"),
 ])
 def test_malformed_input_is_rejected_with_an_error_annotation(tmp_path, mutate, needle):
     d = build_archive(tmp_path, mutate)
@@ -365,6 +365,13 @@ def test_malformed_input_is_rejected_with_an_error_annotation(tmp_path, mutate, 
     assert rc == 2, out
     assert "::error::" in out
     assert needle in out
+    # ⛔ EXACTLY one line on stdout, not merely "contains". A refusal that also
+    # emits anything else is the half-report shape wearing a different hat, and
+    # a substring assertion cannot tell them apart: measured, adding a stray
+    # print() to the refusal branch left every `in`-style assertion green.
+    rc_only, stdout = run_stdout("--from-log", str(d / "probe-run1.txt"))
+    assert rc_only == 2, stdout
+    assert len(stdout.strip().splitlines()) == 1, stdout
 
 
 def test_too_few_measurement_rounds_is_rejected(tmp_path):
@@ -388,6 +395,176 @@ def test_missing_archive_directory_is_rejected():
     rc, out = run("--archive", str(REPO / "does-not-exist"))
     assert rc == 2, out
     assert "::error::missing data file" in out
+
+
+def _calibration_row(lines, edit):
+    """Apply `edit` to the calibration PROBEROW (`bench_n=1`) only."""
+    out, done = [], False
+    for l in lines:
+        if l.startswith("PROBEROW") and "bench_n=1 " in l and not done:
+            l, done = edit(l), True
+        out.append(l)
+    assert done, "no calibration PROBEROW to mutate — the fixture changed"
+    return out
+
+
+@pytest.mark.parametrize("edit", [
+    lambda l: re.sub(r"write_sum=\d+", "write_sum", l),
+    lambda l: re.sub(r"write_sum=\d+", "write_sum=NaN", l),
+    lambda l: re.sub(r"\s*load_p50=\d+", "", l),
+])
+def test_a_defect_in_the_dropped_calibration_round_is_not_a_refusal(tmp_path, edit):
+    """The calibration round is dropped before any renderer reads it.
+
+    ⛔ So a defect THERE breaks nothing, and refusing over it rejects input that
+    summarises fine. The first draft of TRK-375 (#1733) did exactly that: a
+    calibration row missing `load_p50` turned a clean rc=0 report into rc=2,
+    caught by blind review. ⚠️ Two of these three shapes killed the pre-#1733
+    code outright (a bare traceback), so this test pins an improvement on those
+    and a restored behaviour on the third.
+    """
+    d = build_archive(tmp_path, lambda ls: _calibration_row(ls, edit))
+    rc, out = run_stdout("--from-log", str(d / "probe-run1.txt"))
+    assert rc == 0, out
+    assert out.startswith("## Probe: write vs load latency"), out[:200]
+
+
+def test_the_reported_line_number_is_the_line_the_defect_is_on(tmp_path):
+    """⛔ The line number is the whole value of the message to an operator.
+
+    Measured: changing `enumerate(..., 1)` to `enumerate(..., 0)` — every
+    reported line off by one — left the rest of this suite green.
+    """
+    src = (ARCHIVE / "probe-run1.txt").read_text(encoding="utf-8").splitlines()
+    target = next(i for i, l in enumerate(src, 1)
+                  if l.startswith("PROBEROW") and "bench_n=1 " not in l)
+    d = build_archive(tmp_path, lambda ls: _first_measurement_row(
+        ls, lambda l: re.sub(r"\s*load_p50=\d+", "", l)))
+    rc, out = run("--from-log", str(d / "probe-run1.txt"))
+    assert rc == 2, out
+    assert f"line {target}: missing load_p50" in out, out
+
+
+def test_multiple_malformed_records_are_counted_and_truncated(tmp_path):
+    """The count and the `(+N more)` tail, on a log with more than three.
+
+    ⛔ Every other malformed test breaks exactly one row, so the count, the
+    three-item cut and the tail were all unexercised: measured, `[:3]` could be
+    changed to `[:1]` with the tail deleted and this suite stayed green.
+    """
+    def break_five(lines):
+        out, n = [], 0
+        for l in lines:
+            if l.startswith("PROBEROW") and "bench_n=1 " not in l and n < 5:
+                l = re.sub(r"\s*load_p50=\d+", "", l)
+                n += 1
+            out.append(l)
+        assert n == 5, f"only {n} measurement rows to break — fixture changed"
+        return out
+
+    d = build_archive(tmp_path, break_five)
+    rc, out = run("--from-log", str(d / "probe-run1.txt"))
+    assert rc == 2, out
+    assert "5 malformed PROBEROW record(s)" in out, out
+    assert out.count("missing load_p50") == 3, out
+    assert "(+2 more)" in out, out
+
+
+def test_malformed_is_reported_before_too_few_measurement_rows(tmp_path):
+    """Order matters: the cause, not the symptom.
+
+    ⛔ On a log that is BOTH short and malformed, reporting "parsed 1 row" names
+    the consequence of the defect and hides the defect. `reject()` says this in
+    a comment; measured, moving the malformed check below the row-count check
+    left this suite green, so the comment was the only thing holding it.
+    """
+    def one_good_one_broken(lines):
+        kept, seen = [], 0
+        for l in lines:
+            if l.startswith("PROBEROW") and "bench_n=1 " not in l:
+                seen += 1
+                if seen == 1:
+                    l = re.sub(r"\s*load_p50=\d+", "", l)
+                elif seen > 2:
+                    continue
+            kept.append(l)
+        return kept
+
+    d = build_archive(tmp_path, one_good_one_broken)
+    rc, out = run("--from-log", str(d / "probe-run1.txt"))
+    assert rc == 2, out
+    assert "malformed PROBEROW" in out, out
+    assert "expected >=2 measurement PROBEROW" not in out, out
+
+
+def test_archive_refuses_runs_whose_iters_disagree(tmp_path):
+    """The pooled divisor, across FILES — `reject()` runs per file and cannot see it.
+
+    ⛔ `render_archive` pools all three runs' rows and divides the per-iteration
+    figures by `allrows[0]["iters"]`. Measured on the first draft of TRK-375
+    (#1733), which guarded only the per-file path: run1 at iters=800 with the
+    other two at 400 printed "across all 800 iterations" while its own identity
+    section printed `iters=400` — a report contradicting itself, rc=0, silent.
+    Found by blind review.
+    """
+    d = build_archive(tmp_path, lambda ls: [
+        l.replace("iters=400", "iters=800") if l.startswith("PROBEROW") else l
+        for l in ls])
+    rc, out = run("--archive", str(d))
+    assert rc == 2, out
+    assert "runs report differing iters [400, 800]" in out, out
+    assert "probe-run1.txt=[800]" in out, out
+    assert "probe-run2.txt=[400]" in out, out
+
+
+def test_archive_mode_also_buffers_a_crash(capsys, monkeypatch):
+    """The atomic-output guarantee covers BOTH renderers, not just the CI one.
+
+    ⛔ Measured: with only the `--from-log` crash pinned, the `emit()` wrapper
+    could be removed from the `--archive` branch — restoring the exact
+    half-printed-report defect for that mode — and this suite stayed green.
+    """
+    import analyze_probe
+
+    def explodes_midway(_sessions):
+        print("==========================================================")
+        print("IDENTITY OF THE THING MEASURED")
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(analyze_probe, "render_archive", explodes_midway)
+    rc = analyze_probe.main(["--archive", str(ARCHIVE)])
+    out = capsys.readouterr().out
+    assert rc == 2, out
+    assert out.splitlines() == [
+        "::error::report generation failed after the input was accepted:"
+        " RuntimeError: boom"
+    ], out
+
+
+def test_the_crash_guard_covers_key_error_not_only_the_type_a_test_raises(
+        capsys, monkeypatch):
+    """`except Exception` is deliberate; this pins the breadth, not the intent.
+
+    ⛔ KeyError is THE exception TRK-375 (#1733) exists to contain — it is what
+    a renderer raises on a row missing a field it indexes. Measured with only a
+    RuntimeError case present, `except Exception` could be narrowed to a list
+    that EXCLUDES KeyError and this suite stayed green, silently reopening the
+    defect. A docstring saying "not a narrow list" is not a test.
+    """
+    import analyze_probe
+
+    def explodes_with_keyerror(_session):
+        print("## Probe: write vs load latency (#1497 mechanism 1)")
+        raise KeyError("load_p50")
+
+    monkeypatch.setattr(analyze_probe, "render_ci", explodes_with_keyerror)
+    rc = analyze_probe.main(["--from-log", str(ARCHIVE / "probe-run1.txt")])
+    out = capsys.readouterr().out
+    assert rc == 2, out
+    assert out.splitlines() == [
+        "::error::report generation failed after the input was accepted:"
+        " KeyError: 'load_p50'"
+    ], out
 
 
 # ---------------------------------------------------------------------------
