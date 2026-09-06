@@ -203,6 +203,7 @@ SOT 在 [`dx-tooling-backlog.md`](dx-tooling-backlog.md)。
 | TRK-374 | [#1732](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1732) | `bench-probe-2026-09/README.md` §四 的反事實 harness 從未被 commit、現已不存在 ⇒ 該節數字無法用該目錄的〈重算〉指令重現。房規先例是 `bench-trend-2026-08/counterfactual.py`。**依賴 TRK-373**：兩份拷貝分歧時「驗的是哪一份」才有答案。#1716 只收窄了宣稱，未補回驗證 | — |
 | TRK-375 | [#1733](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1733) | probe summary 對格式壞掉的輸入是裸 traceback 而非明確拒收；⛔ 其中一種發生在部分內容已 `tee` 進 `$GITHUB_STEP_SUMMARY` 之後 ⇒ Summary 頁顯示一份印到一半、外觀正常的表，**失敗看起來像成功**。併收跨列 `iters` 不一致不警告、`PROBETAIL` 死碼 | — |
 | TRK-376 | [#1734](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1734) | `bench-probe-write-latency.yaml` 的 `PIPESTATUS` 註解技術理由錯誤（pipefail 下 `$?` 已是管線的失敗狀態），且它守的那三行在 `set -e` 下**是死碼**——探針真失敗時自訂的 `::error::` 永遠不會印。既有債，來自已合併的 [#1678](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1678)，不在 #1716 範圍 | — |
+| TRK-377 | [#1737](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1737) | 長期記憶的分層與可攜——把與機器/環境無關的 feedback（B 類跨 repo 認識論原則、C 類本 repo 領域知識）從本機 `~/.claude/**/memory/` 搬進 repo，讓雲端 session 與任何 clone 都拿得到。設計要點：B/C 走不同層（C 用路徑觸發的 nested `CLAUDE.md`、B 用 always-on 指標＋skill 觸發詞）；錨例採「留形狀、刪計數、考古降格成 `Traced To` 連結」三分法。前身 TRK-302（#572）已完整落地但驗收條件明寫封頂 4-6 條，是一次性 batch 而非常設機制。⚠️ 票內原寫的「四份重複」經 PR 1 實查**不成立**（那四處是同族不同規則），已於票內勘誤 | — |
 
 ## 不在 mapping 範圍
 

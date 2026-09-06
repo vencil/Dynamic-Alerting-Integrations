@@ -784,7 +784,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "02192e7bde9480c2a122fcacda44cf02eb04873c905a176622100a10086c3b53",
+ "source_digest": "15f814d67477b57b06a1d86017e60aae9ce7ee8fc4d0984dfcc2f6dccec8ea6c",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -2372,6 +2372,7 @@
    "tests/dx/test_paired_trend_watch.py"
   ],
   "scripts/tools/dx/pr_preflight.py": [
+   "tests/dx/test_gen_agent_adapters.py",
    "tests/dx/test_preflight_marker.py",
    "tests/dx/test_preflight_msg_validator.py",
    "tests/ops/test_ci_aggregate_gate_contract.py"
