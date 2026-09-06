@@ -31,7 +31,7 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_python import detect_cli_lang, format_json_report  # noqa: E402
-from _lib_confd import has_yaml_extension, warn_nested  # noqa: E402
+from _lib_confd import has_yaml_extension, is_hidden_name, warn_nested  # noqa: E402
 
 # Canonical lang detection (da-tools ROI r3 W2 bug fix): the former local
 # `_detect_lang` only checked the zh prefix per variable, so DA_LANG=en fell
@@ -67,17 +67,17 @@ def _scan_config_dir(config_dir):
     # serving never entered a snapshot — so it could be added, edited or
     # deleted between two `config-history` runs and the diff stayed empty.
     # `has_yaml_extension` (`CONFIG_SUFFIXES`, the exporter's own set) decides
-    # the SPELLING; `*.y*` is a pre-filter.
-    # ⛔ NOT a purely cheap one, and the difference matters on exactly one
-    # axis: `Path.glob` is case-SENSITIVE on POSIX, so `DB-C.YAML` never
-    # reaches the predicate at all — the pre-filter is what settles the CASE
-    # axis here, and it settles it the same way `glob("*.yaml")` did. Saying
-    # "the predicate is authoritative" full stop would be false in that one
-    # direction. Leaving it there is the point: case is #1588's axis.
-    # ⛔ Not `glob("*")`: `test_confd_enumeration_contract._call_kind` reads
-    # the literal pattern and only calls a glob flat when it starts `*.y`, so
-    # `"*"` would drop this file out of the flat class and make the
-    # `warn_nested` assertion vacuous for it.
+    # the SPELLING and, being case-insensitive, the CASE. The listing is
+    # `iterdir()` on purpose: a `glob("*.y*")` pre-filter is case-SENSITIVE
+    # on POSIX, so `DB-C.YAML` would never reach the predicate — measured on
+    # byte-identical bodies: `alpha.yaml` / `alpha.yml` / `Alpha.YAML` all
+    # enter the snapshot, a tree with no tenant does not
+    # (tests/ops/test_config_history.py). `iterdir` is in
+    # `test_confd_enumeration_contract._FLAT_CALLS`, so this stays in the
+    # gate's flat class and the `warn_nested` above stays a subject of its
+    # assertions; `glob("*")` would NOT (the classifier reads the literal
+    # pattern and only treats `*.y…` as flat). Hidden entries are skipped by
+    # the shared `is_hidden_name`, the exporter's own rule.
     #
     # What was measured, and on what: the SELECTION EXPRESSION on its own
     # (`glob(...)` plus the predicate), old form vs new, on the dev container
@@ -109,9 +109,8 @@ def _scan_config_dir(config_dir):
     # so many words that turning this into a quiet pass is the wrong repair —
     # the right one names the entry (`_lib_confd.unusable_config_paths`),
     # which is a separate change with its own blast radius.
-    for f in sorted(p for p in config_path.glob("*.y*")
-                    if has_yaml_extension(p.name)):
-        if f.name.startswith('.'):
+    for f in sorted(config_path.iterdir()):
+        if is_hidden_name(f.name) or not has_yaml_extension(f.name):
             continue
         content = f.read_text(encoding='utf-8')
         h = _sha256(content)

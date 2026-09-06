@@ -30,6 +30,7 @@ Exit codes:
 import argparse
 import json as json_mod
 import os
+import re
 import subprocess
 import sys
 import time
@@ -46,10 +47,11 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 # EXIT_CALLER_ERROR (2) for an unusable invocation. ⚠️ dev-rules #13's literal
 # scope is "da-tools 子命令" and this runner is NOT one — it is absent from
-# components/da-tools/app/entrypoint.py's COMMAND_MAP, and the gate that
-# enforces dev-rules #13 (tests/shared/test_tool_exit_codes.py) only walks ops/ dx/
-# lint/, not scripts/tools/ itself. Reusing the SSOT constant here is a
-# deliberate alignment, not a rule this file was already under (#1620).
+# components/da-tools/app/entrypoint.py's COMMAND_MAP. The gate that enforces
+# dev-rules #13 (tests/shared/test_tool_exit_codes.py) used to walk ops/ dx/
+# lint/ only, so this file sat outside it; since #1642 the top level of
+# scripts/tools/ is enumerated too and this file IS under that contract
+# (--help → 0, unknown flag → 2).
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -225,6 +227,79 @@ def _unknown_check_names_message(problems):
     ).rstrip("\n")
 
 
+def _conflicting_flags(args, only_set):
+    """Flag pairs where one flag would silently lose to the other (#1695,
+    family 1).
+
+    Each entry is ``(kept, ignored, what_the_ignored_flag_would_have_done)``.
+    Measured on the parent of this change, every pair here was accepted at
+    rc 0 with output indistinguishable from the invocation WITHOUT the
+    losing flag:
+
+      --smart with --only     `if args.smart and not only_set` never
+                              computes the git-diff selection; ran exactly
+                              what `--only` alone ran.
+      --parallel with --ci    `if args.parallel and not args.ci` takes the
+                              sequential branch; the report header, the
+                              JSON `mode` and the profile CSV all still
+                              said `parallel` (#1705's neighbour).
+      --baseline with --compare
+                              `if args.baseline: … elif args.compare:` —
+                              the comparison is never printed.
+      --watch with --only     `_run_watch` reads `args.skip` and never
+                              `only_set`; watched everything. Note the
+                              asymmetry this closes: `--watch --only
+                              <typo>` was already rc 2 (#1620), so the
+                              WRONG name got more information than the
+                              right one.
+
+    ``--only`` is judged by ``only_set`` (the parsed names), not by the raw
+    string, so `--only ""` — which #1620 pins as "no restriction" — is not a
+    conflict with anything.
+
+    Callers were measured before any pair was rejected: the two automatic
+    invocations (Makefile `lint-docs`, docs-ci.yaml `drift-checks`) pass
+    `--only` with `--ci` or with `$(ARGS)`, and no file in the repo passes
+    any pair listed here outside this tool's own tests.
+    """
+    pairs = []
+    if args.smart and only_set:
+        pairs.append(("--only", "--smart",
+                      "the git-diff selection is never computed; --only "
+                      "alone decides what runs"))
+    if args.parallel and args.ci:
+        pairs.append(("--ci", "--parallel",
+                      "--ci runs sequentially so it can stop at the first "
+                      "failure; nothing runs in parallel"))
+    if args.baseline and args.compare:
+        pairs.append(("--baseline", "--compare",
+                      "the baseline is overwritten and no comparison is "
+                      "printed"))
+    if args.watch and only_set:
+        pairs.append(("--watch", "--only",
+                      "watch mode re-runs whatever the changed files map "
+                      "to; --only never narrows it"))
+    return pairs
+
+
+def _conflicting_flags_message(pairs):
+    """Operator-facing text for a non-empty _conflicting_flags() result.
+
+    Names BOTH flags and which one would have been ignored — the whole
+    point is that the operator believed the ignored flag was in effect.
+    ASCII only, for the same cp950-console reason as
+    _unknown_check_names_message.
+    """
+    lines = []
+    for kept, ignored, effect in pairs:
+        lines.append(
+            f"error: {kept} and {ignored} cannot be combined: {ignored} "
+            f"would be ignored ({effect}).")
+    lines.append("  Drop one flag of each pair. Before #1695 this ran at "
+                 "exit 0 with the ignored flag silently dropped.")
+    return "\n".join(lines)
+
+
 def _run_one(
     short_name: str,
     script_path: str,
@@ -263,15 +338,20 @@ def _run_one(
             detail = _extract_detail(result.stdout)
             return short_name, "pass", elapsed, detail, result.stdout
         else:
-            # ⛔ The first line is not always there. validate_mermaid.py opens
-            # its summary with a blank line, so `split("\n")[0]` is "" while
-            # `result.stdout` is still truthy — the `Exit code` fallback below
-            # never fires and the row prints a bare `✗ name ... 0.3s` with no
-            # reason at all (measured, #1702). Whether the FIRST line is the
-            # right line to quote at all is #1697's question and is left to it;
-            # this only refuses to print nothing.
-            detail = (result.stdout.split("\n")[0][:80]
-                      or _extract_detail(result.stdout)
+            # #1697: the SAME predicate as the pass branch. A failure used to
+            # quote the FIRST stdout line, so a tool that prints progress
+            # first and the reason last — this repo's norm — produced
+            #     ✗ tool_map ... (✅ Tool map (zh) is up to date.)
+            # the symbol saying fail and the parenthesis saying pass. The
+            # predicate itself (and why it is not "prefer an error marker")
+            # is justified on _extract_detail. The `Exit code` fallback
+            # stays for a tool that wrote nothing usable to stdout — and
+            # that is common: 9 of the 15 induced failures measured for
+            # #1697 put their reason on stderr only (glossary, alerts,
+            # rule_packs, changelog, rule_pack_stats, byo_rulepack_table,
+            # repo_name, hardcode_tenant, changelog_no_tbd). Reading stderr
+            # here is a separate change and is deliberately not made.
+            detail = (_extract_detail(result.stdout)
                       or f"Exit code: {result.returncode}")
             return short_name, "fail", elapsed, detail, result.stdout
 
@@ -283,14 +363,61 @@ def _run_one(
         return short_name, "error", elapsed, str(e)[:80], ""
 
 
+# A line made only of rule / border characters (`===`, `---`, `───`,
+# `+---+`, `...`). Such a line says nothing about the run, so it is never
+# the detail. This is in ADDITION to the older `===`-prefix rule, which
+# also catches banners with words in them (`=== END ===`).
+_DECORATIVE_LINE = re.compile(r"^[\s=\-─_*#.~|+]*$")
+
+
 def _extract_detail(output: str) -> str:
-    """Extract a brief detail message from tool output."""
+    """Last meaningful line of a tool's stdout, cut to 80 characters.
+
+    Since #1697 this is the detail for BOTH verdicts; a failure used to quote
+    the opening line instead (see _run_one). The predicate was chosen after
+    measuring, as the issue asked, not before: every TOOLS row was run with
+    its registered args, and 15 failures were induced in a scratch copy of
+    the repo. In all 15 the last meaningful stdout line WAS the reason
+    (`❌ docs/internal/tool-map.en.md is outdated …`, `❌ 34 error(s), 0
+    warning(s)`). A marker-preferring variant — walk from the end, prefer
+    the last line containing ❌ / ✗ / ERROR / error: / FAIL / Traceback —
+    picked the identical line in 15/15, so it buys nothing measurable, and
+    it has a measured false-positive source: jsx_babel prints `✗ 361
+    browser-incompatible pattern(s) found:` on a GREEN run, so a marker in
+    the middle of an output proves nothing about the verdict. The simpler
+    predicate is the one kept. Tracebacks are on stderr and never reach
+    this function either way.
+
+    Truncation is by CHARACTER: this is str slicing, so a CJK line is never
+    cut inside a character and the result always re-encodes as valid UTF-8
+    (#1697's "half a character" worry describes BYTE slicing, which this
+    never did; pinned by TestExtractDetail). What a character cut can still
+    do is cosmetic: separate a combining mark or VS16 — the second code
+    point of ⚠️ — from its base when it sits exactly at the boundary.
+    """
     lines = output.strip().split("\n")
     for line in reversed(lines):
         line = line.strip()
-        if line and not line.startswith("==="):
+        if (line and not line.startswith("===")
+                and not _DECORATIVE_LINE.match(line)):
             return line[:80]
     return ""
+
+
+def _effective_mode(args) -> str:
+    """``"parallel"`` or ``"sequential"`` — the branch main() actually takes.
+
+    #1705: the report header, the JSON ``mode`` field and the profile CSV
+    ``mode`` column each read ``args.parallel`` on their own, while the
+    dispatch read ``args.parallel and not args.ci``. So ``--ci --parallel``
+    ran sequentially and wrote ``parallel`` into all three. One derivation,
+    used by the dispatch AND by every label, is what keeps them from
+    disagreeing again. (The pair itself is now rejected at exit 2 by
+    _conflicting_flags, so the two conditions coincide today; the labels
+    still read this function rather than the flag so that stays true if
+    the guard is ever relaxed.)
+    """
+    return "parallel" if (args.parallel and not args.ci) else "sequential"
 
 
 def _status_symbol(status: str) -> str:
@@ -558,19 +685,45 @@ def _compare_baseline(current: dict) -> None:
     print("Baseline Comparison", file=sys.stderr)
     print("=" * 60, file=sys.stderr)
 
-    # Status changes (regression / improvement)
+    # Status changes (regression / improvement / vanished / new)
     b_results = baseline.get("results", {})
     c_results = current.get("results", {})
     regressions = []
     improvements = []
+    new_checks = []
 
     for name in sorted(set(b_results) | set(c_results)):
         b_status = b_results.get(name, {}).get("status", "N/A")
         c_status = c_results.get(name, {}).get("status", "N/A")
         if b_status == "pass" and c_status in ("fail", "error"):
             regressions.append(f"  ✗ {name}: {b_status} → {c_status}")
+        elif b_status != "N/A" and c_status == "N/A":
+            # #1703. Only the two branches above existed, so a check that
+            # was in the baseline and is NOT in this run fell through both,
+            # `regressions` stayed empty and the verdict line below said
+            # "No regressions detected" — directly under a "3 pass → 2
+            # pass" it did not explain. That is the reported shape of this
+            # whole family ("required check green, but one check never
+            # ran"), and this was its only detector. It is counted as a
+            # regression so the verdict cannot say green, and the message
+            # says VANISHED rather than failed: someone running `--only` on
+            # purpose can read that and move on, someone in the incident
+            # needs the name. A baseline fail/error that vanishes is
+            # listed too — removing a red check from the set is the same
+            # incident with a stronger motive.
+            regressions.append(
+                f"  ✗ {name}: {b_status} in the baseline, absent from this "
+                f"run — it vanished from the run set (not selected), it did "
+                f"not fail")
         elif b_status in ("fail", "error") and c_status == "pass":
             improvements.append(f"  ✓ {name}: {b_status} → {c_status}")
+        elif b_status == "N/A" and c_status != "N/A":
+            # The reverse direction, reported under its own neutral heading
+            # (#1703): a check the baseline never saw is neither a
+            # regression nor an improvement, but staying silent about it
+            # is how the two sides of a comparison drift apart unnoticed.
+            new_checks.append(
+                f"  + {name}: not in the baseline, {c_status} in this run")
 
     if regressions:
         print("\n🔴 Regressions:", file=sys.stderr)
@@ -579,6 +732,10 @@ def _compare_baseline(current: dict) -> None:
     if improvements:
         print("\n🟢 Improvements:", file=sys.stderr)
         for r in improvements:
+            print(r, file=sys.stderr)
+    if new_checks:
+        print("\n🆕 New checks (not in the baseline):", file=sys.stderr)
+        for r in new_checks:
             print(r, file=sys.stderr)
 
     # Timing comparison (>20% slower = warning)
@@ -765,7 +922,8 @@ def main():
     )
     parser.add_argument(
         "--ci", action="store_true",
-        help="Exit 1 on first failure (CI mode, sequential only)",
+        help="Exit 1 on first failure (CI mode; always sequential, so "
+             "combining it with --parallel is a caller error, exit 2)",
     )
     parser.add_argument(
         "--parallel", action="store_true",
@@ -861,6 +1019,15 @@ def main():
         print(_unknown_check_names_message(problems), file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
+    # #1695 family 1: a flag pair where one flag silently loses. Sits AFTER
+    # the name guard on purpose — a bad name is the more basic error, and
+    # its message is pinned byte-for-byte across modes (including
+    # `--watch --only <name>`), so it has to be the first thing said.
+    conflicts = _conflicting_flags(args, only_set)
+    if conflicts:
+        print(_conflicting_flags_message(conflicts), file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
+
     tools_dir = Path(__file__).parent
     project_root = tools_dir.parent.parent
     os.chdir(project_root)
@@ -915,10 +1082,11 @@ def main():
         runnable = [(n, s, a, d) for n, s, a, d in TOOLS if n not in skip_set]
     skipped = len(TOOLS) - len(runnable)
 
+    effective_mode = _effective_mode(args)
     if not args.json:
         print("=" * 60)
-        mode_label = "PARALLEL" if args.parallel else "SEQUENTIAL"
-        print(f"Documentation & Config Validation Report ({mode_label})")
+        print(f"Documentation & Config Validation Report "
+              f"({effective_mode.upper()})")
         print("=" * 60)
         print()
 
@@ -930,7 +1098,7 @@ def main():
 
     results: Dict[str, Tuple[str, float, str]] = {}
 
-    if args.parallel and not args.ci:
+    if effective_mode == "parallel":
         # ------------------------------------------------------------------
         # Parallel execution
         # ------------------------------------------------------------------
@@ -1003,7 +1171,7 @@ def main():
 
     if args.json:
         out = {
-            "mode": "parallel" if args.parallel else "sequential",
+            "mode": effective_mode,
             "wall_time": round(wall_elapsed, 2),
             "sum_time": round(sum_elapsed, 2),
             "passed": passed,
@@ -1041,7 +1209,7 @@ def main():
             print("Result: All tools skipped")
         else:
             time_info = ""
-            if args.parallel:
+            if effective_mode == "parallel":
                 time_info = (f"  (wall: {wall_elapsed:.1f}s, "
                              f"sum: {sum_elapsed:.1f}s)")
             else:
@@ -1054,20 +1222,42 @@ def main():
     if args.profile and results:
         import stat
         from datetime import datetime, timezone
+        # #1705: ONE column list for the header and for every row. The
+        # header used to be written once, on file creation, while each row
+        # expanded the CURRENT `TOOLS` — so registering a check made every
+        # later row two columns wider than the header, silently, and the
+        # same column index then meant different checks in early and late
+        # rows. Now the file's header is compared to the derived one and a
+        # mismatch ROTATES the old file aside rather than appending to it.
+        all_names = [n for n, _, _, _ in TOOLS]
+        header = ("timestamp,mode,wall_time," +
+                  ",".join(f"{n}_time,{n}_status" for n in all_names))
+        if PROFILE_CSV.exists():
+            with open(PROFILE_CSV, encoding="utf-8") as csvf:
+                existing_header = csvf.readline().rstrip("\r\n")
+            if existing_header != header:
+                stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+                rotated = PROFILE_CSV.with_name(
+                    f"{PROFILE_CSV.name}.bak-{stamp}")
+                os.replace(PROFILE_CSV, rotated)
+                # stderr in every mode: --profile combines with --json,
+                # whose stdout has to stay a single JSON document.
+                print(f"\n⚠️  {PROFILE_CSV.name}: its header no longer "
+                      f"matches the registered checks (a check was added, "
+                      f"removed or renamed). Appending would misalign the "
+                      f"columns, so the old file was moved to "
+                      f"{rotated.name} and a new one starts here (#1705).",
+                      file=sys.stderr)
         write_header = not PROFILE_CSV.exists()
         # newline="\n" (not the csv module's newline=""): these rows are
         # written as plain strings with an explicit "\n", so there is no
         # csv.writer adding its own \r\n terminator to preserve.
         with open(PROFILE_CSV, "a", encoding="utf-8", newline="\n") as csvf:
             if write_header:
-                all_names = [n for n, _, _, _ in TOOLS]
-                csvf.write("timestamp,mode,wall_time," +
-                           ",".join(f"{n}_time,{n}_status" for n in all_names)
-                           + "\n")
-            all_names = [n for n, _, _, _ in TOOLS]
+                csvf.write(header + "\n")
             row_parts = [
                 datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                "parallel" if args.parallel else "sequential",
+                effective_mode,
                 f"{wall_elapsed:.2f}",
             ]
             for n in all_names:

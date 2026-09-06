@@ -105,6 +105,26 @@ def test_out_of_domain_values(tmp_path, unit, value, needle):
     assert any("OUT-OF-DOMAIN" in e and needle in e for e in errs), errs
 
 
+@pytest.mark.parametrize("rel,expected", [
+    ("conf.d/.hidden.yaml", 0),
+    ("conf.d/.draft/x.yaml", 0),
+    ("conf.d/visible.yaml", 1),
+])
+def test_hidden_carriers_are_not_linted(tmp_path, rel, expected):
+    """#1630 — a `.`-prefixed file, or anything under a `.`-prefixed dir, is
+    never merged by the exporter (`config_hierarchy.go` skip / `SkipDir`).
+
+    WHY: an out-of-domain value there cannot reach any tenant, so a red gate
+    for it sends an operator to fix a file that is not part of the config.
+    Measured before the fix: 1 error for both hidden shapes. The visible
+    arm is the control — same body, must still be 1 error.
+    """
+    _write(tmp_path, "components/threshold-exporter/config/" + rel,
+           "defaults:\n  k: 300\n")
+    errs = _errors(_registry(k=_spec(50, "%")), tmp_path)
+    assert len([e for e in errs if "OUT-OF-DOMAIN" in e]) == expected, errs
+
+
 def test_zero_is_legal_for_count_but_not_percent(tmp_path):
     """REGRESSION: `kafka_under_replicated_partitions: 0` (`> 0` = alert if ANY)
     is shipped and correct; a blanket `> 0` rule wrongly flagged it."""
