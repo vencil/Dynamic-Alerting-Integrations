@@ -604,6 +604,34 @@ def test_cli_check_commit_msg_accepts_merge_commit(tmp_path: Path) -> None:
     assert proc.returncode == 0, f"stderr={proc.stderr}"
 
 
+def test_check_commit_msg_file_returns_ok_for_merge_directly(tmp_path: Path) -> None:
+    """In-process twin of the CLI test above.
+
+    The CLI tests reach this branch through a subprocess, which in-process
+    coverage cannot see — call the function directly so the ignore branch is
+    asserted where it lives, not only end-to-end.
+    """
+    mod = _load_module()
+    msg = tmp_path / "m.txt"
+    msg.write_text(
+        "Merge branch 'main' into claude/foo\n", encoding="utf-8",
+    )
+    assert mod.check_commit_msg_file(msg, _REPO_ROOT) == 0
+
+
+def test_check_commit_msg_file_still_rejects_bad_scope_directly(
+    tmp_path: Path,
+) -> None:
+    """Control for the test above, same call path: the ignore branch must not
+    turn the validator into a no-op."""
+    mod = _load_module()
+    msg = tmp_path / "m.txt"
+    msg.write_text(
+        "fix(threshold-exporter): bad scope\n", encoding="utf-8",
+    )
+    assert mod.check_commit_msg_file(msg, _REPO_ROOT) == 1
+
+
 def test_cli_check_commit_msg_merge_word_in_subject_still_validated(
     tmp_path: Path,
 ) -> None:
