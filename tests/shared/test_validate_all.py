@@ -12,7 +12,8 @@ pytest style：使用 plain assert + conftest fixtures。
   7. TOOLS / FIX_COMMANDS 常數一致性
   8. WATCH_TRIGGERS 覆蓋率
   9. _send_notification() — 跨平台桌面通知
- 10. mermaid / links 兩列註冊參數的 pin（#1702）
+ 10. mermaid / links 註冊參數的 pin（#1702）
+ 11. TestEveryRowParsesItsOwnArgs -- every TOOLS row dry-parses its own declared args (#1702 point 2)
 
 Merged from previous _extended split (PR test-refactor sweep) — TestSmartDetect
 and TestMainExtended classes appended at the bottom cover _smart_detect() git-
@@ -23,6 +24,7 @@ import json
 import os
 import subprocess
 import sys
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -3157,7 +3159,124 @@ class TestConflictingFlags:
 
 
 # ============================================================
-# The two rows this change re-armed (#1702)
+# Every TOOLS row must parse its own declared args (#1702 point 2)
+# ============================================================
+
+_DRY_PARSE_SENTINEL = "DRY-PARSE-OK"
+
+# Run as `python -c SHIM <script> <args...>`. Patches parse_args so the
+# script's own parser validates the row's args and then the process exits 0
+# from INSIDE parse_args, before the tool does any work. argparse rejection
+# still exits 2 from the real parse (the sentinel is never printed). The
+# script's own directory goes to sys.path[0], exactly what `python script.py`
+# does (validate_docs_versions.py imports _version_patterns from its own dir
+# and fails to import without it).
+_DRY_PARSE_SHIM = r"""
+import argparse, os, runpy, sys
+script, *args = sys.argv[1:]
+_orig = argparse.ArgumentParser.parse_args
+def _dry(self, *a, **k):
+    _orig(self, *a, **k)          # argparse validates; on rejection it exits 2 here
+    print("DRY-PARSE-OK", file=sys.stderr)
+    sys.exit(0)
+argparse.ArgumentParser.parse_args = _dry
+sys.argv = [script] + args
+sys.path.insert(0, os.path.dirname(os.path.abspath(script)))
+runpy.run_path(script, run_name="__main__")
+"""
+
+_TOOLS_DIR = Path(va.__file__).resolve().parent          # scripts/tools
+_REPO_ROOT = _TOOLS_DIR.parent.parent
+
+
+def _dry_parse(script_path: Path, args: list) -> subprocess.CompletedProcess:
+    """Run ``script_path`` with ``args`` under the dry-parse shim."""
+    env = dict(os.environ, PYTHONIOENCODING="utf-8")
+    return subprocess.run(
+        [sys.executable, "-c", _DRY_PARSE_SHIM, str(script_path), *args],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=60, cwd=str(_REPO_ROOT), env=env,
+    )
+
+
+def _last_stderr_line(proc: subprocess.CompletedProcess) -> str:
+    lines = [ln for ln in proc.stderr.splitlines() if ln.strip()]
+    return lines[-1] if lines else "<no stderr>"
+
+
+_ROW_PARAMS = [(n, s, a) for n, s, a, _ in va.TOOLS]
+_ROW_IDS = [n for n, *_ in va.TOOLS]
+
+
+class TestEveryRowParsesItsOwnArgs:
+    """#1702 point 2. The mechanical floor for the whole ``TOOLS`` registry:
+    every row, invoked with exactly the args it declares, must get past the
+    script's own argparse.
+
+    Why it exists: #1702 point 1 was the ``mermaid`` row registered with two
+    positionals (``docs/ rule-packs/``) that the script did not take, so
+    argparse returned rc 2 on every run -- and since no ``--only`` caller
+    selected that row, nobody saw it. #1726 fixed the script
+    (``nargs='*'``), and ``TestRearmedRows`` below pins that ONE row. This
+    class is the floor under all of them: a row whose args its script
+    rejects fails here, by name, with the argparse error text.
+
+    Why not ``--help``: it is NOT a dry-parse. Measured:
+    ``validate_mermaid.py docs/ rule-packs/ --help`` exits 0 even when the
+    second positional would be rejected, because argparse reports
+    unrecognized arguments only after the help action has already exited.
+
+    Mechanism: a shim (``_DRY_PARSE_SHIM``) runs the script in a subprocess
+    with ``parse_args`` patched to do the real parse, print a sentinel to
+    stderr and ``sys.exit(0)`` -- so the process exits from inside
+    ``parse_args`` and the tool's actual work is skipped (all 33 rows in
+    ~1.7 s total). The sentinel separates "parsed and stopped here" from
+    "ran to completion and happened to return 0": a script that never calls
+    ``parse_args`` (e.g. one using ``parse_known_args`` directly) runs in
+    full and fails this test loudly on the missing sentinel rather than
+    passing by accident. A row pointing at a missing script also fails here
+    (runpy raises, traceback on stderr, no sentinel), so no separate
+    file-exists test is needed.
+    """
+
+    @pytest.mark.parametrize("name, script, args", _ROW_PARAMS, ids=_ROW_IDS)
+    def test_row_args_are_accepted_by_the_scripts_own_parser(self, name, script, args):
+        """The row's own script must accept the row's own args."""
+        proc = _dry_parse(_TOOLS_DIR / script, list(args))
+        assert proc.returncode == 0 and _DRY_PARSE_SENTINEL in proc.stderr, (
+            f"TOOLS row {name!r} ({script} {' '.join(args)}) does not get past "
+            f"its own argparse: rc={proc.returncode}, sentinel "
+            f"{'present' if _DRY_PARSE_SENTINEL in proc.stderr else 'absent'}; "
+            f"last stderr line: {_last_stderr_line(proc)}")
+
+    # ---- anti-vacuity: the probe must discriminate (D-05c) ----
+
+    def test_the_probe_rejects_an_unknown_flag(self):
+        """A real registered row plus a flag no script takes -> argparse rc 2,
+        no sentinel. Without this, a shim that always printed the sentinel
+        would pass every row above."""
+        name, script, args = _ROW_PARAMS[0]
+        proc = _dry_parse(_TOOLS_DIR / script, list(args) + ["--no-such-flag"])
+        assert proc.returncode == 2, (name, proc.returncode, _last_stderr_line(proc))
+        assert _DRY_PARSE_SENTINEL not in proc.stderr
+        assert "unrecognized arguments" in proc.stderr, proc.stderr
+
+    def test_the_probe_rejects_a_surplus_positional(self):
+        """The exact #1702 point 1 shape: a positional the script does not
+        take. ``links`` (check_doc_links.py --ci) takes none -- measured:
+        ``check_doc_links.py --ci extra`` -> rc 2 "unrecognized arguments:
+        extra"."""
+        rows = [(n, s, a) for n, s, a in _ROW_PARAMS if n == "links"]
+        assert len(rows) == 1, "the links row must be registered exactly once"
+        name, script, args = rows[0]
+        proc = _dry_parse(_TOOLS_DIR / script, list(args) + ["extra"])
+        assert proc.returncode == 2, (name, proc.returncode, _last_stderr_line(proc))
+        assert _DRY_PARSE_SENTINEL not in proc.stderr
+        assert "unrecognized arguments" in proc.stderr, proc.stderr
+
+
+# ============================================================
+# The rows re-armed under #1702
 # ============================================================
 
 class TestRearmedRows:
@@ -3169,9 +3288,19 @@ class TestRearmedRows:
     whole and a deliberate change has to come through here.
 
     ⚠️ NOT GUARDED, and this is the cost of a removal in this PR: nothing
-    asserts that the OTHER rows can run or can fail. The withdrawn check and
-    what it had measured are in the commit message; ``translation`` and
-    ``freshness`` are still un-armed and tracked in #1735.
+    asserts that the OTHER rows can run or can fail (the floor that every
+    row at least parses its own args is ``TestEveryRowParsesItsOwnArgs``
+    above; it says nothing about whether a row can fail). The withdrawn
+    check and what it had measured are in the commit message.
+    ``translation`` and ``freshness`` are still un-armed and tracked in
+    #1735: ``check_translation.py --ci`` is rc 1 on today's content, and
+    ``check_doc_freshness.py --check`` is rc 0 only on a SHALLOW clone --
+    it ages files by ``git log -1``, and the graft commit's date caps every
+    age at the clone's depth (measured: ``docs/README-root.md`` shows
+    2026-07-30 here, 2026-03-13 on GitHub, i.e. 177 days and stale). A
+    blind review of the first version of this change caught that; arming
+    the row on that measurement would have made a bare run red on every
+    full clone for content reasons (#1735's own ⛔).
     """
 
     PINNED = {

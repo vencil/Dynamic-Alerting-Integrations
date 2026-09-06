@@ -799,7 +799,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "0b5b0643e50cae6a2eb32a7c8670a263774ebce8e1285b34437e54d2abab278b",
+ "source_digest": "f7ae7f5801ea6a895d07f92bcf1faa4773b8ce159cc25953f8b803b43ef420cc",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1526,7 +1526,8 @@
    "tests/lint/test_validate_docs_versions.py"
   ],
   "docs/README-root.md": [
-   "tests/lint/test_fix_file_hygiene.py"
+   "tests/lint/test_fix_file_hygiene.py",
+   "tests/shared/test_validate_all.py"
   ],
   "docs/README.en.md": [
    "tests/dx/test_add_frontmatter.py"
