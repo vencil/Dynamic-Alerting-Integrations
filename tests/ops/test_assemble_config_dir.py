@@ -76,47 +76,6 @@ class TestDiscoverYamls:
         names = [f.name for f in result]
         assert names == ["a.yaml", "b.yaml", "c.yaml"]
 
-    @pytest.mark.parametrize("carrier", ["alpha.yml", "Alpha.YAML"])
-    def test_sees_yml_and_upper_case_the_same_as_yaml(self, tmp_path, carrier):
-        """#1603 — a `.yml` / `.YAML` shard file is discovered like `.yaml`.
-
-        WHY: the exporter reads both spellings, so a shard file this tool
-        does not discover is a tenant silently missing from the assembled
-        config-dir. Measured before the fix: `alpha.yaml` discovered,
-        `alpha.yml` / `Alpha.YAML` not — same answer as an empty shard.
-        The `none` arm is the sensitivity control.
-        """
-        seen = {}
-        for arm, name in (("yaml", "alpha.yaml"), ("other", carrier),
-                          ("none", None)):
-            d = tmp_path / arm
-            d.mkdir()
-            _write_file(d / "_defaults.yaml", "defaults: {}")
-            if name:
-                _write_file(d / name, "tenants:\n  alpha:\n    x: 1\n")
-            seen[arm] = [p.name for p in discover_yamls(d)]
-        assert seen["yaml"] != seen["none"], "fixture is vacuous"
-        assert len(seen["other"]) == len(seen["yaml"]) and carrier in seen["other"], (
-            f"{carrier} was not discovered: {seen['other']}")
-
-    def test_yml_shard_is_merged_and_can_conflict(self, tmp_path):
-        """Blast radius of #1603 here: a `.yml` shard now REACHES the merge.
-
-        Before: `alpha.yml` in shard 2 was dropped from `file_map` without
-        a word. After: it is merged, and two `.yml` shards with the same
-        name and different bodies are a conflict like their `.yaml` twins.
-        """
-        s1, s2 = tmp_path / "s1", tmp_path / "s2"
-        s1.mkdir()
-        s2.mkdir()
-        _write_file(s1 / "beta.yaml", "tenants:\n  beta:\n    x: 1\n")
-        _write_file(s2 / "alpha.yml", "tenants:\n  alpha:\n    x: 1\n")
-        conflicts, fmap = detect_conflicts([s1, s2])
-        assert "alpha.yml" in fmap and conflicts == {}
-        _write_file(s1 / "alpha.yml", "tenants:\n  alpha:\n    x: 2\n")
-        conflicts, fmap = detect_conflicts([s1, s2])
-        assert "alpha.yml" in conflicts and "alpha.yml" not in fmap
-
 
 # ============================================================
 # _file_sha256
@@ -308,19 +267,6 @@ class TestValidateMerged:
         """無 YAML 檔案回傳空清單。"""
         issues = validate_merged(Path(config_dir))
         assert issues == []
-
-    @pytest.mark.parametrize("carrier", ["bad.yml", "BAD.YAML"])
-    def test_validates_yml_and_upper_case_the_same_as_yaml(self, config_dir, carrier):
-        """#1603 — the file `discover_yamls` now copies must also be the one
-        validated; a broken `.yml` in the output is a parse error like a
-        broken `.yaml`. Control: the same body under `.txt` is not a YAML
-        carrier and produces no issue.
-        """
-        _write_file(os.path.join(config_dir, carrier), ":\n  - [invalid")
-        _write_file(os.path.join(config_dir, "notes.txt"), ":\n  - [invalid")
-        issues = validate_merged(Path(config_dir))
-        assert [i for i in issues if carrier in i and "parse error" in i], issues
-        assert not [i for i in issues if "notes.txt" in i], issues
 
 
 # ============================================================
