@@ -698,6 +698,40 @@ class TestPackageVerificationWiring:
         assert len(v) == 1
         assert v[0].startswith("Makefile:1")
 
+    def test_unlistable_workflows_dir_is_a_caller_error(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """⛔ Same contract as the sibling assertions: could-not-run is exit 2,
+        never a quiet "no violations". monkeypatch rather than chmod, because
+        chmod 000 does not stop root and this repo's dev container runs as root
+        (#1264) — that test would pass in CI and do nothing here."""
+        repo = self._repo(tmp_path, "          helm package helm/demo\n")
+        real = Path.iterdir
+
+        def patched(self, *a, **k):
+            if self.name == "workflows":
+                raise PermissionError(13, "Permission denied")
+            return real(self, *a, **k)
+
+        monkeypatch.setattr(Path, "iterdir", patched)
+        with pytest.raises(gate.CallerError, match="cannot list"):
+            gate.check_package_verification_wiring(repo)
+
+    def test_unreadable_runner_file_is_a_caller_error(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        repo = self._repo(tmp_path, "          helm package helm/demo\n")
+        real = Path.read_text
+
+        def patched(self, *a, **k):
+            if self.name == "release.yaml":
+                raise PermissionError(13, "Permission denied")
+            return real(self, *a, **k)
+
+        monkeypatch.setattr(Path, "read_text", patched)
+        with pytest.raises(gate.CallerError, match="cannot read"):
+            gate.check_package_verification_wiring(repo)
+
     def test_no_call_sites_means_nothing_to_assert(self, tmp_path: Path) -> None:
         """⛔ Anti-vacuity in the other direction: the assertion must not invent
         violations where no chart is packaged at all."""
