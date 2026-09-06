@@ -27,7 +27,7 @@ gh api repos/vencil/Dynamic-Alerting-Integrations/commits/<sha>/check-runs --jq 
 
 ## 新增 portal lint
 
-⛔ **只放進 Makefile 的 `lint-portal` target 等於沒上膛——CI 不呼叫它。** CI 的 Lint job 跑的是 `make lint-docs` 加上逐條列出的 `pre-commit run <id> --all-files`。而 `check_orphan_lint` 把「Makefile 有引用」算成已接線，所以它會過——**過了不等於有在擋**。要真的生效：`.pre-commit-config.yaml` 加 `- id:`（`pass_filenames: false`、`files:` 寫它實際掃的路徑），**並且**在 `ci.yml` 的 Lint job 補一行。
+⛔ **只放進 Makefile 的 `lint-portal` target 等於沒上膛——CI 不呼叫它。** CI 的 `Lint` job 跑的是**逐條列出的** `pre-commit run <id> --all-files`（`make lint-docs` 在另一個 job `Lint Documentation`）。而 `check_orphan_lint` 把「Makefile 有引用」算成已接線，所以它會過——**過了不等於有在擋**。要真的生效：`.pre-commit-config.yaml` 加 `- id:`（`pass_filenames: false`、`files:` 寫它實際掃的路徑），**並且**在 `ci.yml` 的 Lint job 補一行。
 
 ## 新增 portal 要消費的資料
 
@@ -43,6 +43,6 @@ gh api repos/vencil/Dynamic-Alerting-Integrations/commits/<sha>/check-runs --jq 
 
 ## 設計階段
 
-評估「該不該升級某個 portal entry 的 UX」之前，**預設它是 demo / onboarding**。要主張它是 production surface，三項要全過：資料來源是真的（不是 `MOCK_*` / `EXAMPLE_*` / 寫死陣列）、frontmatter `audience:` 以 `sre` / `operator` / `platform-engineer` 為主、frontmatter `related:` 以 production 工具為主。任一項不過就重新 scope 成「改善 demo 完成度」。
+評估「該不該升級某個 portal entry 的 UX」之前，**預設它是 demo / onboarding**。要主張它是 production surface，三項要全過：資料來源是真的（不是 `MOCK_*` / `EXAMPLE_*` / 寫死陣列）、frontmatter `audience:` 以 `platform-engineer` / `sre` 為主（實際在用的值只有這幾個，沒有 `operator`）、frontmatter `related:` 以 production 工具為主。任一項不過就重新 scope 成「改善 demo 完成度」。
 
 ⚠️ 反過來也不要一竿子打翻：`tenant-manager` 接真的 tenant-api，是真的 production 工具。**逐個開檔判斷，不要從一個 entry 推論整棵樹。**
