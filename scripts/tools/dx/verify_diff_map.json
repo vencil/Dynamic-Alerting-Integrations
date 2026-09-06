@@ -788,7 +788,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "291df569b0dca72d937f7ca84eedc7b2817568ab207c4e9984885671dda4cf56",
+ "source_digest": "fba3184d5c9fa77669ce38b014c00dd87fe2d216957861b44cd5fa6d0722fc43",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1635,6 +1635,9 @@
   ],
   "docs/internal/audit-reports/bench-paired-2026-08/nights.json": [
    "tests/dx/test_paired_trend_watch.py"
+  ],
+  "docs/internal/audit-reports/bench-probe-2026-09": [
+   "tests/dx/test_analyze_probe.py"
   ],
   "docs/internal/audit-reports/bench-probe-2026-09/probe-run1.txt": [
    "tests/dx/test_analyze_probe.py"

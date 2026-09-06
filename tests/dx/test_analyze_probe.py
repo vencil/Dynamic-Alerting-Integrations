@@ -1,56 +1,45 @@
 """Tests for analyze_probe.py — the de-duplicated probe summary (TRK-373 / #1731).
 
-⭐ What this file is actually protecting, and why it is shaped this way.
+This module replaced two copies of one computation: an inline python program in
+.github/workflows/bench-probe-write-latency.yaml and a script in
+docs/internal/audit-reports/bench-probe-2026-09/. Nothing had been checking that
+the two agreed, and they had drifted.
 
-Until #1731 this computation existed TWICE: inline in the Summarize step of
-.github/workflows/bench-probe-write-latency.yaml, and in
-docs/internal/audit-reports/bench-probe-2026-09/analyze_probe.py. Nothing checked
-that the two agreed and six behavioural divergences had accumulated
-(five found before the merge landed, the sixth in blind review of it).
+⛔ The fix deleted one copy rather than adding a copy-vs-copy test, which would
+have locked the duplication in place. So there is deliberately no such assertion.
 
-⛔ The fix was to delete one copy, NOT to add a test that compares two copies —
-a differential test would have locked the duplication in place (every future edit
-would then need two edits plus a test edit). So there is deliberately NO
-copy-vs-copy assertion here.
+What is pinned here:
 
-What is pinned instead:
+  1. GOLDEN — both renderers, byte for byte, against output captured before the
+     merge. It is the only artefact that can still answer "did de-duplicating
+     change what the reports say": the copy it was captured from is gone.
+     ⚠️ Regenerating a golden SILENCES this. If a change is meant to alter a
+     report, regenerate deliberately and say so; never to clear a red.
 
-  1. GOLDEN — both renderers, byte for byte, against output captured from the
-     PRE-CHANGE code. This is the only artefact that can still answer "did the
-     de-duplication change what the reports say", because the copy it was
-     captured from no longer exists in the tree.
-     ⚠️ Regenerating a golden file is how you SILENCE this test. If a change is
-     meant to alter a report, say so in the commit message and regenerate
-     deliberately; do not regenerate to make a red test go away.
+  2. THE RESOLVED DIVERGENCES — for each, the behaviour that was chosen, on an
+     input that used to tell the two copies apart.
+     ⚠️ Divergence 4 (NaN rendering) is also visible to the goldens, being a
+     format string they already pin; 1, 2, 3, 5 and 6 each turn only their own
+     test red.
+     ⛔ The count is over what was enumerated, not a proof that no more exist —
+     the replaced copy is gone, so completeness cannot be established now.
 
-  2. THE RESOLVED DIVERGENCES — each as the behaviour that was CHOSEN, on a
-     constructed input that used to tell the two copies apart.
-     ⛔ This section said "THE FIVE" and said the goldens "cannot see any of
-     them". Blind review falsified both halves and the correction is left here
-     rather than quietly applied:
-       - There was a SIXTH, unenumerated: the archive file list had been changed
-         from a fixed three-name contract to a glob, which made an incomplete
-         directory produce a report the original refused, and made a stray
-         fourth file silently move every cross-dispatch percentage. Restored,
-         and pinned in section 3b below.
-       - Divergence 4 (NaN rendering) IS visible to the goldens: it is a format
-         string the goldens already pin, so its dedicated test is not the only
-         thing protecting it. That is true of divergence 4 alone; 1, 2, 3 and 5
-         were each confirmed to turn only their own test red.
-     ⚠️ "Six" is the count over what has been enumerated so far, by two people.
-     It is not a proof that no seventh exists — the copy this replaced is gone,
-     so completeness cannot now be established at all.
+  3. THE REJECTION PATHS — rc=2 and an ::error:: line, not a traceback.
+     ⚠️ Only the ones that already rejected. Malformed records still raise a
+     bare traceback in both renderers; that is TRK-375 (#1733), deliberately not
+     fixed here, and these tests pin today's behaviour so #1733 must change them
+     on purpose.
 
-  3. THE REJECTION PATHS — rc=2 plus an ::error:: line, not a traceback.
-     ⚠️ Only the three that already rejected. Malformed records (a field with no
-     "=", a non-numeric value) still raise a bare traceback in BOTH renderers;
-     that is TRK-375 (#1733) and is deliberately NOT fixed here. The tests below
-     pin the CURRENT behaviour so that #1733 has to change them on purpose.
-
-⛔ Coverage limit, stated because the alternative is implying it does not exist:
-divergence 4 (NaN rendering) is pinned as "still different on the two sides" —
-that non-unification was a deliberate scope decision, not an oversight, and
-#1733 owns it.
+⛔ WHERE THE HISTORY LIVES, AND WHY NOT HERE. Five review rounds on this change
+produced 30 findings; 16 were defects in explanatory prose like this docstring,
+and of the 13 found in the two rounds that reviewed a FIX, 9 were prose the
+previous fix had just written. Rounds 3 and 5 found zero production defects.
+An earlier version of this file carried that error history inline and it kept
+generating new errors — stale counts, contradictions between paragraphs. So the
+narrative moved to where the repo already keeps history: the CHANGELOG entry for
+#1731 and dev/trk-373/ROUNDS.jsonl. What stays here is only what a reader needs
+in order not to break something, and any number a command can produce is given
+as the command instead.
 """
 from __future__ import annotations
 
@@ -75,13 +64,10 @@ def run(*args, cwd=None):
     stdout and exit status, so that is what gets asserted. An in-process call
     would test a different interface than the one CI depends on.
 
-    ⚠️ Returns stdout and stderr COMBINED, which is right for the assertions that
-    look for a message but WRONG for a byte-for-byte golden: the workflow tees
-    only stdout into the job summary, so a line written to stderr cannot change
-    the published report yet would break a golden built from the combination.
-    Blind review demonstrated exactly that (adding a `::notice::` on stderr
-    turned both goldens red and nothing else). The golden tests therefore use
-    `run_stdout` below.
+    ⚠️ Returns stdout and stderr COMBINED — right for assertions that look for a
+    message, wrong for a byte-for-byte golden: the workflow tees only stdout, so
+    a stderr line cannot change the published report yet would break a combined
+    golden. The golden tests use `run_stdout` below.
     """
     proc = subprocess.run(
         [sys.executable, "-X", "utf8", str(TOOL), *args],
@@ -124,14 +110,12 @@ def build_archive(tmp_path, mutate=None, files=RUNS, mutate_all=False):
 def test_the_archive_inputs_are_the_ones_the_goldens_were_recorded_from():
     """⛔ Runs BEFORE the goldens, and exists to separate two different failures.
 
-    The goldens below are computed from the live audit directory, not from a
-    copied fixture — deliberately, because copying 70 KB of measurement data into
-    `tests/` to protect a de-duplication change would put a second copy of the
-    same bytes in the tree. The cost of that choice is that "someone edited the
-    archived data" and "someone broke the report code" both surface as the same
-    golden diff. This test makes them two different reds: if it fails, the INPUTS
-    moved and the goldens are expected to fail too — regenerate them
-    deliberately. If it passes and a golden fails, the CODE changed the report.
+    The goldens run against the live audit directory rather than a copied
+    fixture — copying 70 KB of the same measurement data into `tests/` to protect
+    a de-duplication change would put a second copy of it in the tree. The cost
+    is that "the data changed" and "the code changed" would otherwise look like
+    the same golden diff. This test separates them: if it fails, the INPUTS
+    moved; if it passes and a golden fails, the CODE changed the report.
     """
     import hashlib
 
@@ -145,11 +129,10 @@ def test_the_archive_inputs_are_the_ones_the_goldens_were_recorded_from():
         for name in RUNS
     }
     assert actual == digests, (
-        "the archived probe data changed. ⚠️ The goldens below MAY or may not "
-        "also fail — measured: appending a junk line to probe-run1.txt reddens "
-        "only this test, because the parser ignores non-record lines. So do not "
-        "regenerate a golden just because this failed; work out first whether "
-        "the report actually changed, then regenerate on purpose."
+        "the archived probe data changed. ⚠️ The goldens below may or may not "
+        "also fail — the parser ignores non-record lines, so some edits move the "
+        "bytes without moving the report. Work out whether the report actually "
+        "changed before regenerating anything."
     )
 
 
@@ -572,48 +555,30 @@ def test_archive_rejection_names_the_offending_file(tmp_path):
 # ---------------------------------------------------------------------------
 # 4. In-process entry — so coverage can see this module at all
 # ---------------------------------------------------------------------------
-# These were added for VISIBILITY. Every other test in this file runs the tool as
-# a subprocess, which is the right interface to assert (it is what the workflow
-# consumes) but is invisible to coverage.py: it does not follow child processes,
-# so with only those tests this module reports as "never imported" and every
-# coverage-derived signal reads it as unchanged and untested. Measured, with the
-# module selector rather than a path (a path selector reports "never imported"
-# even for in-process tests — a broken instrument, not a result):
+# ⛔ Every other test here runs the tool as a subprocess — the right interface to
+# assert, since that is what the workflow consumes, but invisible to coverage.py,
+# which does not follow child processes. With only those, this module reports as
+# "never imported" and every coverage-derived signal reads it as untested. These
+# three give coverage something to see.
+# ⚠️ Use the MODULE selector, not a path: `--cov=<path>` reports "never imported"
+# even for in-process tests, which is a broken instrument rather than a result.
 #
-#     the subprocess tests, --cov=analyze_probe  ->  "No data was collected"
-#     the in-process tests, --cov=analyze_probe  ->  ~92% of the module
+#     PYTHONPATH=scripts/tools/dx:scripts/tools python3 -m pytest \
+#         tests/dx/test_analyze_probe.py -k in_process --cov=analyze_probe
 #
-#   ⛔ THIS BLOCK HAS NOW CARRIED A WRONG COUNT TWICE, and the second time was in
-#   the very commit that corrected the first. It said "15 subprocess tests"; that
-#   was corrected to "12 (13 collected)" — which was already stale when written,
-#   because the same commit added nine tests. Both were recalled, not counted.
-#   ⇒ The exact figures are deliberately NOT restated here any more. They are a
-#   property of the file, so read them off the file instead of trusting prose:
+# ⛔ No test counts or coverage percentages are quoted here. Every version of this
+# comment that quoted one was wrong or went stale within the same change. Run the
+# command.
 #
-#       python3 -m pytest tests/dx/test_analyze_probe.py --collect-only -q
-#       PYTHONPATH=scripts/tools/dx:scripts/tools python3 -m pytest \
-#           tests/dx/test_analyze_probe.py -k in_process --cov=analyze_probe
-#
-#   What is durable, and is the only thing this block needs to say: the
-#   subprocess tests contribute ZERO measured coverage and the in-process ones
-#   cover almost all of the module.
-#
-# ⛔ The comment here first said these buy "visibility, NOT detection power".
-# The dogfood refuted that and the correction is left visible rather than quietly
-# patched. Mutating `main` to run the renderer but return None instead of its
-# value was caught ONLY by test_archive_mode_runs_in_process; the subprocess
-# tests all stayed green, because `sys.exit(None)` exits 0 — so from a subprocess the
-# broken return is indistinguishable from success. The `main()` return contract
-# is structurally invisible to the interface the other tests assert.
-# ⚠️ What is still true is the ordering: the subprocess tests carry the bulk of
-# the detection power (dogfood: every break caught by its own test), and the
-# coverage NUMBER these three produce is not evidence the tool is well tested.
-# Measured increment of these three, over three mutations: 1 caught by these
-# alone, 2 also caught by the existing tests.
-# ⛔ The underlying blind spot is repo-wide, not local to this file: 78 files
-# under `tests/` invoke tools through `sys.executable`, of which 75 are named
-# `test_*.py` (the earlier wording here said "78 test files", conflating the
-# two — corrected, not silently narrowed). Whether each is also imported
+# ⭐ They also carry detection the subprocess tests structurally cannot: making
+# `main` run the renderer but return None instead of its value is caught only
+# here, because `sys.exit(None)` exits 0 and a subprocess cannot tell that from
+# success. The `main()` return contract is invisible to the other interface.
+# ⚠️ The coverage number they produce is not evidence the tool is well tested —
+# the subprocess tests carry most of the detection power.
+# ⛔ The blind spot is repo-wide, not local to this file: many files under
+# `tests/` invoke tools through `sys.executable` (count them with
+# `grep -rl sys.executable tests --include='*.py'`). Whether each is also imported
 # somewhere was NOT measured, so no count of affected modules is claimed here.
 # Tracked as TRK-379 (#1746). ⚠️ It was numbered TRK-378 when first written; that
 # number collided with #1741, which landed on main first, so this one was
@@ -736,7 +701,12 @@ def test_workflow_invokes_this_tool_and_no_longer_inlines_the_computation():
             continue
         if "scripts/tools/dx/analyze_probe.py" in line:
             continue
-        if ".py" in line or re.search(r"python3\s+(-\w+\s+)*-c\b", line):
+        # ⛔ `.py`, `-c` AND `-m`. The first version of this predicate checked
+        # only `.py`/`-c`, so `python3 -m some_module >> "$GITHUB_STEP_SUMMARY"`
+        # — a second program writing the summary, exactly what this test exists
+        # to forbid — passed. `python3 --version` names none of the three and
+        # stays allowed; both directions are pinned by the dogfood harness.
+        if ".py" in line or re.search(r"python3\s+(-\w+\s+)*-[cm]\b", line):
             others.append(line.strip())
     assert not others, (
         f"the Summarize step runs python3 on something other than this tool: {others}"

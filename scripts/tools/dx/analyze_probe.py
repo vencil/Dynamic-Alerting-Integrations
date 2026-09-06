@@ -34,16 +34,13 @@ resolution is annotated at the site rather than only in the commit message:
     4. NaN rendering              -> UNCHANGED on both sides, deliberately
     5. duplicate PROBEENV records -> the workflow's behaviour (do not de-duplicate)
 
-⛔ #4 is deliberately NOT unified: the two renderers keep the format strings they
-had ("+nan" here, "nan" there). Unifying report conventions is a separate concern
-from removing the duplicate, and mixing them makes a review diff unreadable. It
-stays open under TRK-375 (#1733).
+⛔ #4 is deliberately NOT unified: each renderer keeps the format string it had
+("+nan" here, "nan" there). Unifying report conventions is a separate concern
+from removing the duplicate. It stays open under TRK-375 (#1733).
 
-⚠️ "Six" is the count over the inputs that were actually enumerated (12
-constructed inputs x 6 decision signals, plus one targeted check for #4 which the
-signal set cannot see). It is NOT a claim that the two copies had no other
-difference - completeness was never established, and the copy this replaced is
-gone, so it cannot now be established either.
+⚠️ The count is over what was enumerated, not a claim that the copies had no
+other difference. The replaced copy is gone, so completeness cannot be
+established now. The enumeration itself is recorded in dev/trk-373/ROUNDS.jsonl.
 """
 
 import argparse
@@ -159,13 +156,9 @@ def reject(session, thin_msg=None):
     """Return an ::error:: string if this session must not be summarised.
 
     ⛔ `thin_msg` exists because the two originals worded the "too few rows"
-    refusal DIFFERENTLY, and that wording is part of each report's output. An
-    earlier draft of this module unified them onto the workflow's phrasing,
-    which silently changed what a maintainer re-verifying the archive sees.
-    Caught in blind review; each mode now keeps the sentence it always had.
+    refusal DIFFERENTLY, and that wording is part of each report's output.
     ⚠️ The other two refusals (no PROBEENV, iters<=0) are NOT parameterised —
-    those two were already worded identically in both originals, checked by
-    diffing the removed code rather than by recollection.
+    they were already worded identically in both originals.
     """
     if len(session.rows) < 2:
         if thin_msg is not None:
@@ -510,24 +503,16 @@ def main(argv=None):
             return 2
         return render_ci(session)
 
-    # ⛔ A FIXED file list, not a glob. An earlier draft of this module globbed
-    # `probe-run*.txt`, which looked like a harmless generalisation and was not:
-    #   - with two files present it produced a full report where the original
-    #     REFUSED (`::error::missing data file ...`, rc=2);
-    #   - with a fourth file present every dispatch's "vs the middle dispatch"
-    #     percentage silently changed (probe-run1 read +5.34% -> +2.60% on
-    #     identical data), because the median of the medians moved;
-    #   - and the CROSS DISPATCH section says "spread of the THREE medians" in
-    #     hard-coded prose, so both cases printed a sentence that was false.
-    # Found in blind review, not by me. It was a sixth behavioural divergence in
-    # a change whose whole claim was that there were five (that claim is now
-    # corrected to six everywhere it appears). Restored to the
-    # original contract; generalising the tool to other archive directories is a
-    # separate change that has to update that prose too.
-    # ⚠️ Carried over unchanged: a `probe-run4.txt` sitting in DIR is IGNORED
-    # rather than rejected, because the original ignored it too. That is
-    # inherited behaviour, not a decision made here — pinned by a test so it
-    # stays visible.
+    # ⛔ A FIXED file list, not a glob — globbing is not a harmless
+    # generalisation here. Two files present would produce a report where the
+    # original refused; a fourth file present silently moves every dispatch's
+    # "vs the middle dispatch" percentage, because the median of the medians
+    # moves; and the CROSS DISPATCH section says "spread of the THREE medians"
+    # in hard-coded prose, so both cases would print a false sentence.
+    # Generalising to other archive directories is a separate change that has to
+    # update that prose too.
+    # ⚠️ Inherited, not chosen here: a `probe-run4.txt` in DIR is IGNORED rather
+    # than rejected, because the original ignored it. Pinned by a test.
     sessions = []
     for name in RUNS:
         path = args.archive / name
