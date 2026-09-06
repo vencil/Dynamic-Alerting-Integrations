@@ -679,6 +679,7 @@
   ],
   "scripts/tools/ops/operator_generate.py": [
    "tests/ops/test_lib_yaml.py",
+   "tests/ops/test_migrate_to_operator.py",
    "tests/ops/test_operator_generate_v2.py",
    "tests/ops/test_property_based.py"
   ],
@@ -787,7 +788,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "9ac12318cd1907f22c7caab94dd669ced47a9a517d2b7329a810b1cc4804e8fe",
+ "source_digest": "7d9f9e38e67951530a819270003202a1c39b4861ae12799f6040e6cab2fb9cc4",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",

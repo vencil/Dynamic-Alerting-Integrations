@@ -35,7 +35,13 @@ from _lib_python import detect_cli_lang, format_json_report, i18n_text  # noqa: 
 from _lib_io import load_yaml_file, write_text_secure  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_yaml import _dict_to_yaml, write_yaml_crd  # noqa: E402
-from _lib_confd import warn_nested  # noqa: E402
+from _lib_confd import (  # noqa: E402
+    TenantCarriers,
+    has_yaml_extension,
+    tenant_carriers,
+    unusable_reason,
+    warn_nested,
+)
 
 # Reuse patterns from operator_generate
 import re
@@ -84,8 +90,22 @@ def validate_tenant_name(name: str) -> bool:
     return bool(_TENANT_NAME_RE.match(name))
 
 
-def discover_tenant_configs(config_dir: Path) -> List[str]:
-    """Discover tenant names from conf.d/*.yaml files."""
+def _scan_tenant_carriers(config_dir: Path) -> TenantCarriers:
+    """One scan of `config_dir`, shared with `operator_generate` (#1604).
+
+    ⛔ This module used to carry a VERBATIM TWIN of that tool's loop. #1603
+    and #1607 widened only the other copy, and the pair then disagreed about
+    the same directory on three axes at once — measured:
+
+        db-a.yaml (control)   operator_generate: yes   this module: yes
+        db-b.yml              operator_generate: yes   this module: NO
+        notes.yaml/  (a dir)  operator_generate: no    this module: YES
+        broken.yaml  (link)   operator_generate: no    this module: YES
+
+    The last two rows are the direction #1604 did not name: the narrow copy
+    did not merely miss `.yml`, it INVENTED tenants from a directory and a
+    dangling symlink and emitted CRDs for them without a word.
+    """
     if not config_dir.is_dir():
         raise FileNotFoundError(
             i18n_text(
@@ -93,26 +113,38 @@ def discover_tenant_configs(config_dir: Path) -> List[str]:
                 f"config directory not found: {config_dir}",
             )
         )
+    return tenant_carriers(
+        config_dir, tool="migrate_to_operator", validate=validate_tenant_name,
+    )
 
-    tenants = []
-    # #1339: flat by design here — but a hierarchical conf.d must not
-    # look like an empty one. Name the files this scan cannot see.
-    warn_nested(config_dir, tool="migrate_to_operator")
-    for yaml_file in config_dir.glob("*.yaml"):
-        if not yaml_file.name.startswith("_"):
-            tenant = yaml_file.stem
-            if validate_tenant_name(tenant):
-                tenants.append(tenant)
-            else:
-                print(
-                    i18n_text(
-                        f"WARNING: 略過無效的租戶名稱 '{safe_label(tenant)}'（不符合 RFC 1123）",
-                        f"WARNING: Skipping invalid tenant name '{safe_label(tenant)}' "
-                        f"(not RFC 1123 compliant)",
-                    ),
-                    file=sys.stderr,
-                )
-    return sorted(tenants)
+
+def discover_tenant_configs(config_dir: Path) -> List[str]:
+    """Discover tenant names from conf.d carriers — BOTH YAML spellings.
+
+    ⚠️ Warnings go to stderr here; `analyze_migration` needs the same facts
+    as DATA for its `issues` array, so it calls `_scan_tenant_carriers`
+    directly rather than re-scanning (that second scan was #1604's `:372`).
+    """
+    carriers = _scan_tenant_carriers(config_dir)
+    for bad in carriers.unusable:
+        print(
+            i18n_text(
+                f"WARNING: 略過 '{safe_label(bad.name)}'——{unusable_reason(bad)}",
+                f"WARNING: Skipping '{safe_label(bad.name)}' — "
+                f"{unusable_reason(bad)}",
+            ),
+            file=sys.stderr,
+        )
+    for tenant in carriers.invalid:
+        print(
+            i18n_text(
+                f"WARNING: 略過無效的租戶名稱 '{safe_label(tenant)}'（不符合 RFC 1123）",
+                f"WARNING: Skipping invalid tenant name '{safe_label(tenant)}' "
+                f"(not RFC 1123 compliant)",
+            ),
+            file=sys.stderr,
+        )
+    return carriers.tenants
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -147,7 +179,18 @@ def parse_configmap_rules(source_dir: Path) -> List[dict]:
     # #1339: second scan site — the guard must live where the scan does,
     # otherwise a hierarchical conf.d is silently empty on THIS path.
     warn_nested(source_dir, tool="migrate_to_operator")
-    for yaml_file in sorted(source_dir.glob("*.yaml")):
+    # ⛔ BOTH spellings (#1604). This tool's conf.d reader takes
+    # `CONFIG_SUFFIXES`; leaving this half narrow would put one tool in
+    # disagreement with itself, which is the shape #1604 is about.
+    # `kubectl get cm -o yaml > rules.yml` is an ordinary way to produce
+    # exactly the input this scan reads.
+    # ⚠️ A DIFFERENT TREE from the conf.d scan — these are ConfigMap dumps,
+    # so `tenant_carriers` (which takes a file STEM as a tenant id) does not
+    # apply here; only the extension axis is shared.
+    for yaml_file in sorted(
+        p for p in source_dir.iterdir()
+        if p.is_file() and has_yaml_extension(p.name)
+    ):
         try:
             data = load_yaml_file(str(yaml_file))
             if not data:
@@ -364,24 +407,46 @@ def analyze_migration(source_dir: Path, config_dir: Path) -> dict:
         ))
 
     try:
-        # Scan raw tenant names to detect invalid ones before filtering
-        if config_dir.is_dir():
-            # #1339: second scan site — the guard must live where the scan does,
-            # otherwise a hierarchical conf.d is silently empty on THIS path.
-            warn_nested(config_dir, tool="migrate_to_operator")
-            for yaml_file in sorted(config_dir.glob("*.yaml")):
-                if not yaml_file.name.startswith("_"):
-                    raw_name = yaml_file.stem
-                    if not validate_tenant_name(raw_name):
-                        analysis["issues"].append(
-                            i18n_text(
-                                f"無效租戶名稱: {raw_name}（不符合 RFC 1123）",
-                                f"Invalid tenant name: {raw_name} (not RFC 1123 compliant)",
-                            )
-                        )
-        tenants = discover_tenant_configs(config_dir)
-        analysis["tenants"] = len(tenants)
-    except FileNotFoundError as exc:
+        # ⛔ ONE scan, two consumers (#1604). This used to scan `config_dir`
+        # itself AND then call `discover_tenant_configs`, which scanned again
+        # — two listings of one directory, and the second one was the twin
+        # that had drifted. The shared scan hands back the classification, so
+        # invalid names become `issues` entries here and the caller-facing
+        # stderr warnings stay in `discover_tenant_configs`.
+        carriers = _scan_tenant_carriers(config_dir)
+        for raw_name in carriers.invalid:
+            analysis["issues"].append(
+                i18n_text(
+                    f"無效租戶名稱: {raw_name}（不符合 RFC 1123）",
+                    f"Invalid tenant name: {raw_name} (not RFC 1123 compliant)",
+                )
+            )
+        # ⛔ `unusable` belongs in the report too (CodeRabbit, PR #1750). These
+        # are the entries #1604 is ABOUT — a directory named `notes.yaml/` and a
+        # dangling `broken.yaml` used to be turned into tenants here. Now they
+        # are correctly skipped, and a caller reading only this JSON would
+        # otherwise never learn that anything was skipped: `--json` consumers
+        # do not see the stderr warnings `discover_tenant_configs` prints, and
+        # THIS path deliberately does not call it (that was the second scan).
+        for bad in carriers.unusable:
+            analysis["issues"].append(
+                i18n_text(
+                    f"略過無法讀取的項目 '{safe_label(bad.name)}'：{unusable_reason(bad)}",
+                    f"Skipped unusable entry '{safe_label(bad.name)}': "
+                    f"{unusable_reason(bad)}",
+                )
+            )
+        analysis["tenants"] = len(carriers.tenants)
+    except OSError as exc:
+        # ⚠️ `OSError`, not just `FileNotFoundError` (CodeRabbit, PR #1750):
+        # `is_dir()` succeeding does not make `iterdir()` safe — the directory
+        # can vanish or become unreadable in between. Measured: on a directory
+        # removed after the check, `iterdir()` raises while the `glob("*.yaml")`
+        # this function used BEFORE #1604 returned `[]` silently.
+        # ⛔ Widening the CATCH is the fix, not swallowing the error inside the
+        # scan: returning an empty classification would restore exactly the
+        # silent zero `_lib_confd` exists against — "reporting nothing looks
+        # exactly like finding nothing".
         analysis["issues"].append(i18n_text(
             f"配置目錄錯誤: {exc}",
             f"Config directory error: {exc}",

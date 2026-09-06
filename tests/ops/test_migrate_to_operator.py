@@ -959,3 +959,203 @@ class TestWritingIsOptIn:
                 f"an explicit --output-dir was given, so every new file must land "
                 f"there; these appeared under {root}: {sorted(map(str, leaked))}"
             )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1604: the twin that drifted
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestDiscoveryParityWithOperatorGenerate:
+    """The two operator-plane readers must answer the SAME for one tree.
+
+    ⛔ This is the assertion the ticket exists for. `migrate_to_operator` and
+    `operator_generate` carried verbatim twins of one scan; #1603/#1607 fixed
+    only the second, and nothing compared them, so the pair drifted on three
+    axes at once and stayed green for months.
+
+    ⚠️ The fixture below is built so that a fix on ONE axis is not enough:
+    each entry is a different axis, and a narrow reader fails differently on
+    each (misses `.yml`, invents `notes`, invents `broken`).
+    """
+
+    @staticmethod
+    def _tree(root):
+        """One carrier per divergence axis, plus a control that both always see."""
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "_defaults.yaml").write_text("defaults:\n  x: 1\n", encoding="utf-8")
+        (root / "db-a.yaml").write_text("tenants:\n  db-a:\n    x: 2\n", encoding="utf-8")
+        (root / "db-b.yml").write_text("tenants:\n  db-b:\n    x: 2\n", encoding="utf-8")
+        (root / "notes.yaml").mkdir()                      # directory, not a file
+        return root
+
+    def test_both_readers_return_the_same_tenants(self, tmp_path):
+        import operator_generate as og
+
+        root = self._tree(tmp_path / "conf.d")
+        mine = mto.discover_tenant_configs(root)
+        theirs = og.discover_tenant_configs(root)
+
+        assert mine == theirs, (
+            f"the two operator-plane readers disagree about the same tree — "
+            f"that disagreement IS #1604.\n"
+            f"  migrate_to_operator: {mine}\n"
+            f"  operator_generate  : {theirs}\n"
+            f"  only in migrate    : {sorted(set(mine) - set(theirs))}\n"
+            f"  only in operator   : {sorted(set(theirs) - set(mine))}"
+        )
+        # ⛔ Equality alone would also hold if BOTH became blind. Pin the
+        # content: the control must be present and each axis must be decided
+        # the way the exporter decides it.
+        assert "db-a" in mine, "control carrier vanished — both readers went blind"
+        assert "db-b" in mine, ".yml is a tenant carrier (#1603); both must see it"
+        assert "notes" not in mine, "a DIRECTORY named *.yaml is not a tenant"
+
+    def test_a_narrow_reader_would_be_caught(self, tmp_path, monkeypatch):
+        """Counterfactual: restore the pre-#1604 scan and this class reddens.
+
+        Without this, "the two agree" could be satisfied by a fix that made
+        them agree on the WRONG answer.
+        """
+        root = self._tree(tmp_path / "conf.d")
+        narrow = sorted(
+            p.stem for p in root.glob("*.yaml") if not p.name.startswith("_")
+        )
+        assert narrow != mto.discover_tenant_configs(root), (
+            "the old flat `glob('*.yaml')` scan and the fixed reader return the "
+            "same list on this fixture, so the fixture cannot show the defect"
+        )
+
+
+class TestAnalyzeMigrationScansOnce:
+    """`analyze_migration` used to scan `config_dir` twice (#1604 `:372`)."""
+
+    def test_invalid_names_are_reported_without_a_second_scan(self, tmp_path, monkeypatch):
+        confd = tmp_path / "conf.d"
+        confd.mkdir()
+        (confd / "_defaults.yaml").write_text("defaults:\n  x: 1\n", encoding="utf-8")
+        (confd / "db-a.yaml").write_text("tenants:\n  db-a:\n    x: 2\n", encoding="utf-8")
+        (confd / "UPPER.yaml").write_text("tenants:\n  u:\n    x: 2\n", encoding="utf-8")
+        src = tmp_path / "src"
+        src.mkdir()
+
+        calls = []
+        real = mto.tenant_carriers
+
+        def counting(*a, **kw):
+            calls.append(a[0])
+            return real(*a, **kw)
+
+        monkeypatch.setattr(mto, "tenant_carriers", counting)
+        analysis = mto.analyze_migration(src, confd)
+
+        assert len([c for c in calls if str(c) == str(confd)]) == 1, (
+            f"config_dir must be listed ONCE; the shared scan was called "
+            f"{len(calls)} times: {calls}"
+        )
+        assert any("UPPER" in i for i in analysis["issues"]), (
+            f"the invalid name must still reach `issues`; got {analysis['issues']}"
+        )
+        assert analysis["tenants"] == 1, "only `db-a` is a valid tenant here"
+
+
+class TestConfigMapScanAcceptsBothSpellings:
+    """`parse_configmap_rules` reads `kubectl` output; `.yml` is ordinary."""
+
+    def test_yml_configmap_is_read(self, tmp_path):
+        src = tmp_path / "src"
+        src.mkdir()
+        body = (
+            "apiVersion: v1\n"
+            "kind: ConfigMap\n"
+            "metadata:\n"
+            "  name: rules\n"
+            "data:\n"
+            "  x.yaml: |\n"
+            "    groups:\n"
+            "      - name: g\n"
+            "        rules:\n"
+            "          - alert: A\n"
+            "            expr: up == 0\n"
+        )
+        (src / "cm.yml").write_text(body, encoding="utf-8")
+        got = mto.parse_configmap_rules(src)
+        assert got, "a .yml ConfigMap dump must be read (#1604)"
+
+        # 必響對照組：同一份內容改回 .yaml 也要讀得到，證明不是 fixture 本身壞了
+        (src / "cm.yml").unlink()
+        (src / "cm.yaml").write_text(body, encoding="utf-8")
+        assert mto.parse_configmap_rules(src), "control: .yaml must still be read"
+
+
+class TestAnalyzeMigrationReportsWhatItSkipped:
+    """`--json` 消費端看不到 stderr，所以跳過了什麼必須進 `issues`（PR #1750）。
+
+    ⛔ 這正是 #1604 的那批項目：一個名為 `notes.yaml/` 的目錄先前會被變成租戶。
+    現在它被正確跳過了 —— 但「正確跳過」與「根本沒有這個項目」對只讀 JSON 的
+    呼叫端是同一個畫面，除非把它寫進報告。⚠️ `analyze_migration` 這條路徑
+    **刻意不呼叫** `discover_tenant_configs`（那就是被拿掉的第二次掃描），所以
+    它拿不到那邊印的 stderr 警告。
+    """
+
+    def test_a_directory_shaped_carrier_is_named_in_issues(self, tmp_path):
+        confd = tmp_path / "conf.d"
+        confd.mkdir()
+        (confd / "_defaults.yaml").write_text("defaults:\n  x: 1\n", encoding="utf-8")
+        (confd / "db-a.yaml").write_text(
+            "tenants:\n  db-a:\n    x: 2\n", encoding="utf-8")
+        (confd / "notes.yaml").mkdir()          # 目錄，不是檔案
+        src = tmp_path / "src"
+        src.mkdir()
+
+        analysis = mto.analyze_migration(src, confd)
+
+        assert analysis["tenants"] == 1, "只有 db-a 是租戶"
+        assert any("notes.yaml" in i for i in analysis["issues"]), (
+            f"被跳過的項目必須進 issues，否則只讀 JSON 的呼叫端不會知道；"
+            f"issues = {analysis['issues']}"
+        )
+
+    def test_a_clean_tree_produces_no_skip_issue(self, tmp_path):
+        """必響對照組：這則 issue 不能是無條件產生的。"""
+        confd = tmp_path / "conf.d"
+        confd.mkdir()
+        (confd / "_defaults.yaml").write_text("defaults:\n  x: 1\n", encoding="utf-8")
+        (confd / "db-a.yaml").write_text(
+            "tenants:\n  db-a:\n    x: 2\n", encoding="utf-8")
+        src = tmp_path / "src"
+        src.mkdir()
+
+        analysis = mto.analyze_migration(src, confd)
+
+        assert analysis["tenants"] == 1
+        assert not [i for i in analysis["issues"] if "notes.yaml" in i], (
+            f"乾淨的樹不得產生跳過訊息；issues = {analysis['issues']}"
+        )
+
+    def test_an_unlistable_config_dir_becomes_an_issue_not_a_traceback(
+        self, tmp_path, monkeypatch,
+    ):
+        """`is_dir()` 通過不代表 `iterdir()` 安全（PR #1750）。
+
+        ⛔ 修法是把 CATCH 放寬到 `OSError`，**不是**在掃描裡吞掉錯誤 —— 後者會
+        讓「讀不到的 conf.d」與「沒有租戶的 conf.d」畫面相同，正是
+        `_lib_confd` 存在要防的 silent zero。實測：目錄在檢查後消失時
+        `iterdir()` 會 raise，而 #1604 之前用的 `glob("*.yaml")` 靜默回 `[]`。
+        """
+        confd = tmp_path / "conf.d"
+        confd.mkdir()
+        src = tmp_path / "src"
+        src.mkdir()
+
+        def boom(_config_dir):
+            raise PermissionError(13, "Permission denied", str(confd))
+
+        monkeypatch.setattr(mto, "_scan_tenant_carriers", boom)
+        analysis = mto.analyze_migration(src, confd)
+
+        assert any("Permission denied" in i or "配置目錄錯誤" in i
+                   for i in analysis["issues"]), (
+            f"PermissionError 必須變成一則 issue，而不是裸 traceback；"
+            f"issues = {analysis['issues']}"
+        )
