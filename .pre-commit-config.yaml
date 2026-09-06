@@ -1536,7 +1536,11 @@ repos:
         # `files:` must include them: a chart that starts shipping in
         # release.yaml has to re-run this gate, and so does any change to a
         # chart root or a .helmignore.
-        files: ^(helm/[^/]+/(\.helmignore|[^/]+\.ya?ml|[^/]+\.md)|\.github/workflows/.*\.ya?ml|Makefile|scripts/tools/lint/check_chart_ship_surface\.py)$
+        # ⚠️ `helm/[^/]+/[^/]+` = every DIRECT child of a chart dir, on purpose.
+        # An extension allowlist (.yaml/.md/.helmignore) missed exactly the
+        # files this gate exists to catch — Chart.lock, LICENSE, values.json,
+        # NOTES.txt — so adding one would not have re-run the check at all.
+        files: ^(helm/[^/]+/[^/]+|\.github/workflows/.*\.ya?ml|Makefile|scripts/tools/lint/check_chart_ship_surface\.py)$
 
       - id: devcontainer-dep-parity
         name: "dev container must declare every Python dep CI installs (#1254)"

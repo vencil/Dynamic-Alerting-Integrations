@@ -52,7 +52,7 @@ Exit codes
     0  every shipping chart's root is declared and consistent
     1  violation
     2  caller error — could not RUN the check (missing chart dir, unreadable
-       workflow). Never a silent pass.
+       workflow or Makefile). Never a silent pass.
 """
 from __future__ import annotations
 
@@ -145,7 +145,10 @@ def discover_shipping_charts(repo_root: Path = REPO_ROOT) -> Dict[str, List[str]
     makefile = repo_root / "Makefile"
     make_vars: Dict[str, str] = {}
     if makefile.is_file():
-        text = makefile.read_text(encoding="utf-8", errors="replace")
+        try:
+            text = makefile.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            raise CallerError(f"cannot read {makefile}: {exc}") from exc
         make_vars = _resolve_make_vars(text)
         for n, line in enumerate(text.splitlines(), 1):
             m = _HELM_PACKAGE_RE.search(line)
@@ -161,12 +164,16 @@ def discover_shipping_charts(repo_root: Path = REPO_ROOT) -> Dict[str, List[str]
 
     wf_dir = repo_root / ".github" / "workflows"
     if wf_dir.is_dir():
-        for wf in sorted(wf_dir.iterdir()):
+        try:
+            entries = sorted(wf_dir.iterdir())
+        except OSError as exc:
+            raise CallerError(f"cannot list {wf_dir}: {exc}") from exc
+        for wf in entries:
             if wf.suffix not in {".yaml", ".yml"}:
                 continue
             try:
                 text = wf.read_text(encoding="utf-8", errors="replace")
-            except OSError as exc:  # pragma: no cover — unreadable workflow
+            except OSError as exc:
                 raise CallerError(f"cannot read {wf}: {exc}") from exc
             for n, line in enumerate(text.splitlines(), 1):
                 m = _HELM_PACKAGE_RE.search(line)
@@ -198,10 +205,34 @@ def helmignore_patterns(chart_dir: Path) -> List[str]:
 
 
 def _is_ignored(name: str, patterns: List[str]) -> bool:
-    # helm matches a bare basename at any depth; `**` is unsupported upstream
-    # (documented in helm/tenant-api/.helmignore). fnmatch covers both the
-    # literal and the glob spellings without re-implementing helm's walker.
-    return any(name == p or fnmatch.fnmatch(name, p) for p in patterns)
+    """True if a file named `name`, sitting at the chart ROOT, is excluded.
+
+    Mirrors the part of helm's `parseRule` (helm/pkg/ignore/rules.go) that can
+    apply to a root file — read from helm's source, not from memory:
+
+    - trailing `/` sets `mustDir`, so the rule only ever matches directories
+      and can never exclude a file;
+    - leading `/` is root-relative: helm strips it and matches the remainder
+      against the path relative to the chart root, which for a root file is
+      just its name. Without this, `/values-*.yaml` — the spelling helm's own
+      docs give for "root only" — would read as unmatched and the gate would
+      report a violation for a file helm does exclude;
+    - a pattern with no slash matches the basename at any depth;
+    - `**` is rejected by helm itself (documented in helm/tenant-api/.helmignore).
+
+    Negation (`!`) is deliberately not modelled. Per helm's `Ignore`, a
+    negative rule never un-ignores a path an earlier rule already matched, and
+    leaving one to be compared literally can only under-report an exclusion —
+    the direction that makes this gate complain, never the direction that lets
+    an undeclared file ship unnoticed.
+    """
+    for raw in patterns:
+        if raw.endswith("/"):
+            continue  # directory-only rule (helm's mustDir); never a file
+        rule = raw[1:] if raw.startswith("/") else raw
+        if name == rule or fnmatch.fnmatch(name, rule):
+            return True
+    return False
 
 
 def check(repo_root: Path = REPO_ROOT) -> List[str]:

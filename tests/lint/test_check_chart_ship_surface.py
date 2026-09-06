@@ -24,10 +24,12 @@ unavailable in this environment; no test here claims otherwise.
 from __future__ import annotations
 
 import importlib.util
+import re
 import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 _SCRIPT = REPO_ROOT / "scripts" / "tools" / "lint" / "check_chart_ship_surface.py"
@@ -265,7 +267,195 @@ class TestFailsClosed:
 
 
 # ---------------------------------------------------------------------------
+# .helmignore semantics (read off helm/pkg/ignore/rules.go, not from memory)
+# ---------------------------------------------------------------------------
+class TestHelmignoreSemantics:
+    """`_is_ignored` answers "would helm exclude this root file?".
+
+    Getting it wrong in the permissive direction ships an undeclared file;
+    getting it wrong in the strict direction fails a chart that is fine. Both
+    spellings below are ones helm's own docs hand to chart authors.
+    """
+
+    def test_root_relative_pattern_matches_a_root_file(self) -> None:
+        """`/values-*.yaml` — helm strips the leading slash and matches the
+        path relative to the chart root, which for a root file is its name."""
+        assert gate._is_ignored("values-scope-enforce.yaml", ["/values-*.yaml"])
+
+    def test_root_relative_literal_matches(self) -> None:
+        assert gate._is_ignored("values-scope-enforce.yaml",
+                                ["/values-scope-enforce.yaml"])
+
+    def test_bare_basename_still_matches(self) -> None:
+        """Control: the spelling the live repo uses must keep working."""
+        assert gate._is_ignored("values-scope-enforce.yaml",
+                                ["values-scope-enforce.yaml"])
+
+    def test_directory_only_rule_never_matches_a_file(self) -> None:
+        """A trailing slash sets helm's `mustDir`; a root FILE is not a dir,
+        so declaring it EXCLUDE against `values-scope-enforce.yaml/` must stay
+        a violation rather than reading as protection."""
+        assert not gate._is_ignored("values-scope-enforce.yaml",
+                                    ["values-scope-enforce.yaml/"])
+
+    def test_unrelated_pattern_does_not_match(self) -> None:
+        assert not gate._is_ignored("values-scope-enforce.yaml", ["/README.md"])
+
+    def test_root_relative_pattern_satisfies_an_exclude_end_to_end(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """The same shape through `check()`: before this was modelled, the
+        gate reported a violation for a file helm does exclude."""
+        repo = _make_repo(
+            tmp_path,
+            root_files={
+                "Chart.yaml": "name: demo\n",
+                "values-scope-enforce.yaml": "rbac: enforce\n",
+            },
+            helmignore="/values-*.yaml\n",
+        )
+        monkeypatch.setattr(
+            gate,
+            "DECLARED",
+            {
+                "helm/demo": {
+                    "Chart.yaml": (gate.SHIP, "metadata"),
+                    ".helmignore": (gate.SHIP, "packing control file"),
+                    "values-scope-enforce.yaml": (gate.EXCLUDE, "lint variant"),
+                }
+            },
+        )
+        assert gate.check(repo) == []
+
+
+# ---------------------------------------------------------------------------
+# unreadable inputs are caller errors, not tracebacks
+# ---------------------------------------------------------------------------
+class TestUnreadableInputsFailClosed:
+    """The docstring promises exit 2 for "could not RUN". An OSError escaping
+    as a traceback would break that contract — and pre-commit would surface it
+    as a crash rather than as the documented, greppable caller error.
+
+    uid-independent on purpose: `chmod 000` does not stop root, so these tests
+    would pass in CI and quietly do nothing in a root dev container.
+    """
+
+    @staticmethod
+    def _raise_for(monkeypatch, attr: str, predicate) -> None:
+        real = getattr(Path, attr)
+
+        def patched(self, *args, **kwargs):
+            if predicate(self):
+                raise PermissionError(13, "Permission denied")
+            return real(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, attr, patched)
+
+    def test_unreadable_makefile(self, tmp_path: Path, monkeypatch) -> None:
+        repo = _make_repo(tmp_path, makefile="CHART_DIR := helm/demo\n")
+        self._raise_for(monkeypatch, "read_text", lambda p: p.name == "Makefile")
+        with pytest.raises(gate.CallerError, match="cannot read"):
+            gate.discover_shipping_charts(repo)
+
+    def test_unlistable_workflows_dir(self, tmp_path: Path, monkeypatch) -> None:
+        repo = _make_repo(tmp_path)
+        self._raise_for(monkeypatch, "iterdir", lambda p: p.name == "workflows")
+        with pytest.raises(gate.CallerError, match="cannot list"):
+            gate.discover_shipping_charts(repo)
+
+    def test_unreadable_workflow_file(self, tmp_path: Path, monkeypatch) -> None:
+        repo = _make_repo(tmp_path)
+        self._raise_for(monkeypatch, "read_text",
+                        lambda p: p.name == "release.yaml")
+        with pytest.raises(gate.CallerError, match="cannot read"):
+            gate.discover_shipping_charts(repo)
+
+    def test_non_yaml_file_in_workflows_dir_is_skipped(
+        self, tmp_path: Path
+    ) -> None:
+        """Control for the two above: a stray file is skipped, not read — so
+        the errors they raise come from the failure, not from the walk."""
+        repo = _make_repo(tmp_path)
+        (repo / ".github" / "workflows" / "README.txt").write_text(
+            "helm package helm/not-a-chart\n", encoding="utf-8"
+        )
+        assert set(gate.discover_shipping_charts(repo)) == {"helm/demo"}
+
+
+# ---------------------------------------------------------------------------
+# the pre-commit hook must actually FIRE on the files it guards
+# ---------------------------------------------------------------------------
+class TestHookTriggers:
+    """A gate that never runs is not a gate (dev-rules / rulebook D-04).
+
+    `pass_filenames: false` means the hook checks the whole repo — but only
+    when pre-commit decides a changed path matches `files:`. An extension
+    allowlist there silently excluded `Chart.lock` / `LICENSE` / `values.json`,
+    i.e. the very additions this gate exists to catch.
+    """
+
+    @staticmethod
+    def _hook_files_regex() -> "re.Pattern[str]":
+        cfg = yaml.safe_load(
+            (REPO_ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8")
+        )
+        hooks = [h for repo in cfg["repos"] for h in repo.get("hooks", [])]
+        hook = next(h for h in hooks if h.get("id") == "chart-ship-surface")
+        return re.compile(hook["files"])
+
+    def test_every_live_chart_root_file_triggers_the_hook(self) -> None:
+        """Derived from the charts discovery finds, not a hand-kept list."""
+        pattern = self._hook_files_regex()
+        roots = [
+            f"{chart}/{f.name}"
+            for chart in gate.discover_shipping_charts(REPO_ROOT)
+            for f in (REPO_ROOT / chart).iterdir()
+            if f.is_file()
+        ]
+        # ⛔ Vacuity guard: an empty list would make the loop assert nothing.
+        assert len(roots) >= 8, roots
+        unmatched = [r for r in roots if not pattern.match(r)]
+        assert unmatched == [], unmatched
+
+    @pytest.mark.parametrize(
+        "name", ["Chart.lock", "LICENSE", "values.json", "NOTES.txt", "app.tgz"]
+    )
+    def test_a_new_root_file_of_any_shape_triggers_the_hook(
+        self, name: str
+    ) -> None:
+        """These do not exist yet — which is the point. The next one to appear
+        must re-run the gate rather than slip in unchecked."""
+        assert self._hook_files_regex().match(f"helm/tenant-api/{name}")
+
+    def test_the_pattern_stays_scoped_to_the_chart_root(self) -> None:
+        """Negative control: `templates/` is out of scope by design, so a
+        match there would mean the pattern is not saying what it claims."""
+        pattern = self._hook_files_regex()
+        assert not pattern.match("helm/tenant-api/templates/deployment.yaml")
+        assert not pattern.match("helm/README.md")
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 def test_cli_on_the_live_repo_exits_zero() -> None:
     assert gate.main([]) == gate.EXIT_OK
+
+
+def test_cli_returns_exit_violation_and_prints_each_one(monkeypatch, capsys):
+    """The exit CODE is the whole contract with pre-commit: `check()` finding
+    a violation is worthless if `main()` still returns 0."""
+    monkeypatch.setattr(
+        gate, "check", lambda: ["helm/demo/values-debug.yaml: undeclared file"]
+    )
+    assert gate.main([]) == gate.EXIT_VIOLATION
+    assert "values-debug.yaml" in capsys.readouterr().err
+
+
+def test_cli_returns_exit_caller_error(monkeypatch, capsys):
+    def boom():
+        raise gate.CallerError("packages an unresolvable target")
+
+    monkeypatch.setattr(gate, "check", boom)
+    assert gate.main([]) == gate.EXIT_CALLER_ERROR
+    assert "unresolvable target" in capsys.readouterr().err
