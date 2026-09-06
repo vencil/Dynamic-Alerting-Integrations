@@ -796,7 +796,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "695da3181f47bedeeb275ce239d37df2ff9a241dbf3c4dd19d500aff173be659",
+ "source_digest": "93b2aca6b07b9d2e86cf792caf7f0d8000319995bd6a763135bafab9b99e1429",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -806,6 +806,7 @@
   "tests/dx/test_bat_label_integrity.py",
   "tests/dx/test_bump_docs.py",
   "tests/dx/test_bump_playbook_versions.py",
+  "tests/dx/test_canary_quotation_pins.py",
   "tests/dx/test_compile_custom_alerts.py",
   "tests/dx/test_converge_status.py",
   "tests/dx/test_coverage_delta.py",
@@ -1668,6 +1669,9 @@
   "docs/internal/backend-compat-baseline.md": [
    "tests/rulepacks/test_vm_backend_parity.py"
   ],
+  "docs/internal/benchmark-playbook.md": [
+   "tests/dx/test_canary_quotation_pins.py"
+  ],
   "docs/internal/design-system-guide.md": [
    "tests/dx/test_bump_docs.py"
   ],
@@ -2348,6 +2352,9 @@
    "tests/dx/test_atomic_write.py",
    "tests/dx/test_verify_diff.py"
   ],
+  "scripts/tools/dx/analyze_bench_history.py": [
+   "tests/dx/test_canary_quotation_pins.py"
+  ],
   "scripts/tools/dx/analyze_probe.py": [
    "tests/dx/test_analyze_probe.py"
   ],
@@ -2420,6 +2427,7 @@
    "tests/dx/test_paired_trend_watch.py"
   ],
   "scripts/tools/dx/paired_trend_watch.py": [
+   "tests/dx/test_canary_quotation_pins.py",
    "tests/dx/test_paired_trend_watch.py"
   ],
   "scripts/tools/dx/pr_preflight.py": [
@@ -2679,6 +2687,7 @@
   ],
   "scripts/tools/ops/bench-canary/canary_test.go": [
    "tests/dx/test_analyze_bench_history.py",
+   "tests/dx/test_canary_quotation_pins.py",
    "tests/dx/test_paired_trend_watch.py"
   ],
   "scripts/tools/ops/bench_report_pr.sh": [
@@ -2788,6 +2797,7 @@
   ],
   "tests/dx": [
    "tests/dx/test_bump_docs.py",
+   "tests/dx/test_canary_quotation_pins.py",
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/ops/test_init_project.py"
   ],
@@ -2810,6 +2820,9 @@
   "tests/dx/fixtures/waveform/tolerances/selftest_tolerances.yaml": [
    "tests/dx/test_dx_json_stdout_contract.py"
   ],
+  "tests/dx/test_analyze_bench_history.py": [
+   "tests/dx/test_canary_quotation_pins.py"
+  ],
   "tests/dx/test_atomic_write.py": [
    "tests/dx/test_line_ending_policy.py"
   ],
@@ -2830,6 +2843,9 @@
   ],
   "tests/dx/test_generate_adr_index.py": [
    "tests/dx/test_line_ending_policy.py"
+  ],
+  "tests/dx/test_paired_trend_watch.py": [
+   "tests/dx/test_canary_quotation_pins.py"
   ],
   "tests/dx/test_pr_preflight_checks.py": [
    "tests/ops/test_generated_ci_artifacts.py"
