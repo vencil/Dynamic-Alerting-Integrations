@@ -27,6 +27,7 @@
    "tests/dx/test_generate_tenant_metadata.py",
    "tests/lint/test_check_path_metadata_consistency.py",
    "tests/ops/test_confd_unusable_signal.py",
+   "tests/ops/test_drift_detect.py",
    "tests/ops/test_gitops_check.py",
    "tests/ops/test_operator_generate_v2.py",
    "tests/shared/test_confd_name_classification_parity.py",
@@ -788,7 +789,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "e0637bac8846c72fca0875f85fcf5ff57333736312a4fc88229f8f2e88be4614",
+ "source_digest": "07f9c577784160b1f90b81a17ff3732cf310fff02055b88b5ee343fac1969906",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1449,6 +1450,9 @@
    "tests/lint/test_check_threshold_reachability.py",
    "tests/ops/test_init_project.py"
   ],
+  "components/threshold-exporter/app/pkg/config/hierarchy.go": [
+   "tests/ops/test_backtest_threshold.py"
+  ],
   "components/threshold-exporter/app/pkg/config/optional_overrides_membership_test.go": [
    "tests/ops/test_generate_alertmanager_routes.py"
   ],
@@ -1478,6 +1482,9 @@
    "tests/lint/test_check_threshold_unit_sanity.py",
    "tests/ops/test_backtest_threshold.py",
    "tests/ops/test_generate_alertmanager_routes.py"
+  ],
+  "components/threshold-exporter/config/conf.d/db-a.yaml": [
+   "tests/ops/test_backtest_threshold.py"
   ],
   "components/threshold-exporter/config/conf.d/db-b.yaml": [
    "tests/ops/test_backtest_threshold.py"
@@ -2804,6 +2811,9 @@
   "tests/dx/test_preflight_pass_gate.py": [
    "tests/ops/test_prepush_hook_wiring.py"
   ],
+  "tests/dx/test_run_chaos_soak.py": [
+   "tests/shared/test_confd_case_parity_across_tools.py"
+  ],
   "tests/dx/test_tenant_log_query_dashboard.py": [
    "tests/dx/test_federation_revocation_dashboard.py"
   ],
@@ -2972,6 +2982,9 @@
   "tests/ops/_stub_declared_shared.py": [
    "tests/ops/test_init_project.py",
    "tests/ops/test_scaffold_tenant.py"
+  ],
+  "tests/ops/test_backtest_threshold.py": [
+   "tests/shared/test_confd_case_parity_across_tools.py"
   ],
   "tests/ops/test_blast_radius.py": [
    "tests/ops/test_ci_baseline_substitution.py"
