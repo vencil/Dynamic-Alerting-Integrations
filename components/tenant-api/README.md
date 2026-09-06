@@ -137,6 +137,8 @@
 |------|------|------|
 | 逐呼叫者限流 | 100 req/min | `TA_RATE_LIMIT_PER_MIN`(`0` 關閉) |
 | Request body | 1 MB | `TA_MAX_BODY_BYTES` |
+| Batch request body (tenants + groups) | 256 KiB | `TA_MAX_BATCH_BODY_BYTES` |
+| 單一租戶文件 | 64 KiB | `TA_MAX_TENANT_DOC_BYTES` |
 | 批次操作數 | 1–1000 / 次 | — |
 | Search page_size | 1–500(預設 50) | — |
 | Patch key / value 長度 | ≤ 256 / ≤ 1024 字元 | — |
@@ -197,6 +199,8 @@ data: {"type":"config_change","tenant_id":"db-a-prod","timestamp":"2026-05-03T10
 | `TA_ADDR` | `:8080` | HTTP listen address |
 | `TA_RATE_LIMIT_PER_MIN` | `100` | 逐呼叫者限流;`0` 關閉;非整數值回退預設並印 WARN |
 | `TA_MAX_BODY_BYTES` | `1048576` | request body 上限(bytes) |
+| `TA_MAX_BATCH_BODY_BYTES` | `262144` | **兩個**批次端點(`POST /tenants/batch`、`POST /groups/{id}/batch`)的 request body 上限(bytes)。比 `TA_MAX_BODY_BYTES` 緊,因為批次在持有 single-writer token 期間會把整個 body 反覆解析,超量會延遲其他租戶的寫入;group batch 更把同一個 patch 套用到每個成員。超量回 **413** (`code: PAYLOAD_TOO_LARGE`),訊息寫「at least N bytes」——只讀到 `limit+1`,精確長度結構上不可知 |
+| `TA_MAX_TENANT_DOC_BYTES` | `65536` | 單一租戶文件的 parse 前上限(bytes)。量的是寫入路徑實際會解析的那份文件 —— 在合併路徑上那是**合併後的整份檔案**,不是請求裡的 patch |
 | `TA_READ_TIMEOUT` / `TA_WRITE_TIMEOUT` / `TA_IDLE_TIMEOUT` | `15s` / `30s` / `60s` | HTTP server timeout(大批次 + 慢 git push 時可調高 write timeout) |
 | `TA_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
 | `TA_WRITE_MODE` | `direct` | `direct` / `pr` / `pr-github` / `pr-gitlab`。⛔ 前後空白先 trim,trim 後須逐字等於這四個之一;大小寫敏感,不符者(含 `DIRECT`、打錯字、`--write-mode=` 空值)一律**拒絕啟動**,不會退回 `direct`([ADR-034](../../docs/adr/034-legal-value-as-fallback.md)) |

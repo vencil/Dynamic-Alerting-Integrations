@@ -24,8 +24,9 @@ import (
 // `Patch` map shape can't be expressed in struct-tag rules; per-key
 // validation lives in `body_validator.go::validatePatchMap`.
 type BatchOperation struct {
-	TenantID string            `json:"tenant_id" validate:"required,min=1,max=256"`
-	Patch    map[string]string `json:"patch"` // key → value to set (e.g., "_silent_mode": "warning")
+	TenantID string `json:"tenant_id" validate:"required,min=1,max=256"`
+	// key → value to set (e.g., "_silent_mode": "warning"); at most 1000 entries.
+	Patch map[string]string `json:"patch" validate:"max=1000"`
 }
 
 // BatchRequest is the body for POST /api/v1/tenants/batch.
@@ -83,6 +84,7 @@ type BatchResponse struct {
 // @Success     200  {object} BatchResponse
 // @Success     202  {object} map[string]interface{}
 // @Failure     400  {object} ErrorResponse
+// @Failure     413  {object} ErrorResponse
 // @Failure     500  {object} ErrorResponse
 // @Failure     503  {object} ErrorResponse
 // @Router      /api/v1/tenants/batch [post]
@@ -95,8 +97,20 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 		// the immutable principal snapshot, not r / r.Context().
 		p := rbac.RequestPrincipal(r)
 
+		// #1722: this endpoint read its body with a bare json.NewDecoder and so
+		// had NO size cap — d.MaxBody() only ever reached the handlers that call
+		// readLimitedBody, and there is no body-size middleware. That mattered
+		// here more than anywhere else: WritePRBatch takes the single-writer
+		// token BEFORE its pre-flight and validates every op twice inside it, so
+		// an unbounded batch body is parsed repeatedly while every other tenant's
+		// write waits behind the token.
+		batchLimit, batchKnob := d.BatchBodyLimit()
+		body, ok := readBodyWithin(rw, r, batchLimit, batchKnob)
+		if !ok {
+			return
+		}
 		var req BatchRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := json.NewDecoder(bytes.NewReader(body)).Decode(&req); err != nil {
 			WriteJSONError(rw, r, http.StatusBadRequest, "invalid JSON: "+err.Error())
 			return
 		}
@@ -346,6 +360,15 @@ func applyPatch(ctx context.Context, w *gitops.Writer, configDir string, op Batc
 // (buildPatchYAML). A non-empty but unparseable / structurally-wrong existing
 // file returns an error — the caller must NOT fall back to an overwrite, which
 // would reintroduce the very data loss this prevents.
+// ⛔ COST NOTE (#1722): this is quadratic in len(patch) — yamlMapValue and
+// yamlSetMapValue each scan the mapping's Content once per key — and it runs
+// inside the single-writer token, BEFORE the merged document reaches
+// TA_MAX_TENANT_DOC_BYTES. The byte caps therefore do not cover the most
+// expensive step on this path; BatchOperation.Patch's `max` is what bounds it.
+//
+// ⚠️ The rationale lives HERE and not on the struct field because swag turns a
+// field's doc comment into the published OpenAPI description — internal cost
+// notes do not belong in the API contract.
 func mergePatchYAML(existing []byte, tenantID string, patch map[string]string) (string, error) {
 	if len(bytes.TrimSpace(existing)) == 0 {
 		return buildPatchYAML(tenantID, patch), nil

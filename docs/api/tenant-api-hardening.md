@@ -198,7 +198,10 @@ ADR-016 提到「flat tenant 缺 `_metadata.{domain,region,environment}` 時可�
 | 欄位 | 規則 |
 |---|---|
 | `BatchRequest.operations` | 1-1000 entries |
+| batch request body 總量(`POST /tenants/batch` **與** `POST /groups/{id}/batch`) | ≤ 256 KiB(`TA_MAX_BATCH_BODY_BYTES`,超量 413 `PAYLOAD_TOO_LARGE`) |
+| 單一租戶文件 | ≤ 64 KiB(`TA_MAX_TENANT_DOC_BYTES`,超量 400)。量的是寫入路徑實際會解析的那一份 —— 合併路徑(batch patch)上是合併後的整份檔案,`PUT /tenants/{id}` 與 dry-run 上是請求自己的 bytes |
 | `BatchOperation.tenant_id` | required, 1-256 chars |
+| `BatchOperation.patch` / `GroupBatchRequest.patch` key 數 | ≤ 1000 entries(bytes 不是這裡的正確單位:合併對 key 數是二次的,且跑在 single-writer token 內) |
 | `BatchOperation.patch` 一般 key/value | key ≤ 256 chars, value ≤ 1024 chars |
 | `BatchOperation.patch._silent_mode` | enum `{warning, critical, all, disable}`（case-insensitive，跟 threshold-exporter resolve 對齊）|
 | `BatchOperation.patch._timeout_ms` | integer 0..3,600,000（≤ 1h）|
@@ -208,6 +211,7 @@ ADR-016 提到「flat tenant 缺 `_metadata.{domain,region,environment}` 時可�
 | `PutGroupRequest.label` / `PutViewRequest.label` | required, 1-256 chars |
 | `PutGroupRequest.description` / `PutViewRequest.description` | ≤ 4096 chars |
 | `PutGroupRequest.members` | 0-1000 entries, each 1-256 chars |
+| `PutGroupRequest.filters` / `PutViewRequest.filters` 項目數 | ≤ 20 entries（view 另外 required、至少 1 個）。transform 跑在寫入鎖內，且結果寫進 `_groups.yaml` / `_views.yaml` ⇒ 劣化是永久的 |
 | `Filters` map values | ≤ 1024 chars per value |
 
 **Failure response shape**：

@@ -186,6 +186,12 @@ func main() {
 	// nested rule packs) can raise it without rebuilding.
 	maxBodyBytesEnv := os.Getenv("TA_MAX_BODY_BYTES")
 
+	// #1722: the BATCH endpoints get their own, tighter budget. Separate knob
+	// because the constraint is different: WritePRBatch parses the whole body
+	// several times over while holding the single-writer token, so this bounds
+	// cross-tenant write latency, not just memory.
+	maxBatchBodyBytesEnv := os.Getenv("TA_MAX_BATCH_BODY_BYTES")
+
 	// v2.9.0 ADR-020 IV-2d: tenant federation token endpoint.
 	// An empty --federation-key disables the endpoint entirely.
 	federationKey := flag.String("federation-key", envOrDefault("TA_FEDERATION_KEY", ""),
@@ -581,6 +587,31 @@ func main() {
 	}
 	deps.MaxBodyBytes = maxBodyBytes
 	slog.Info("request body size limit", "max_bytes", maxBodyBytes)
+	maxBatchBodyBytes, mbbbMalformed := handler.MaxBatchBodyBytesFromEnv(maxBatchBodyBytesEnv)
+	if mbbbMalformed {
+		slog.Warn("max batch body bytes env malformed, falling back to default",
+			"env_value", maxBatchBodyBytesEnv,
+			"default_bytes", maxBatchBodyBytes)
+	}
+	deps.MaxBatchBodyBytes = maxBatchBodyBytes
+	// ⛔ Log the EFFECTIVE value, not just the configured one: MaxBatchBody()
+	// clamps to the global TA_MAX_BODY_BYTES, so an operator who lowers the
+	// global cap below this one would otherwise read a startup line stating a
+	// budget the server never enforces.
+	slog.Info("batch request body size limit",
+		"max_bytes", maxBatchBodyBytes,
+		"effective_max_bytes", deps.MaxBatchBody())
+	// #1722: the per-document ceiling is resolved at gitops package-init (it sits
+	// on a package-level function, not a Writer), which runs BEFORE
+	// configureLogger — so the malformed flag is re-derived and logged HERE,
+	// through the configured JSON handler, rather than warned from init where it
+	// would bypass TA_LOG_LEVEL and the platform's log pipeline.
+	if _, tdbMalformed := gitops.TenantDocBytesFromEnv(os.Getenv("TA_MAX_TENANT_DOC_BYTES")); tdbMalformed {
+		slog.Warn("max tenant doc bytes env malformed, falling back to default",
+			"env_value", os.Getenv("TA_MAX_TENANT_DOC_BYTES"),
+			"default_bytes", gitops.MaxTenantDocBytes())
+	}
+	slog.Info("tenant document size limit", "max_bytes", gitops.MaxTenantDocBytes())
 	if rlCfg.RequestsPerMinute > 0 {
 		slog.Info("rate limiter enabled", "per_min_per_caller", rlCfg.RequestsPerMinute)
 	} else {

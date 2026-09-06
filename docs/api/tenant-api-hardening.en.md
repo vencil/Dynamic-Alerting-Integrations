@@ -198,7 +198,10 @@ Without the fix, PUT/DELETE Groups will hit the new tenant-scoped check and retu
 | Field | Rule |
 |---|---|
 | `BatchRequest.operations` | 1-1000 entries |
+| batch request body total (`POST /tenants/batch` **and** `POST /groups/{id}/batch`) | ≤ 256 KiB (`TA_MAX_BATCH_BODY_BYTES`, over the cap → 413 `PAYLOAD_TOO_LARGE`) |
+| single tenant document | ≤ 64 KiB (`TA_MAX_TENANT_DOC_BYTES`, over the cap → 400). It measures whichever document the write path actually parses — the merged file on the merge (batch patch) paths, the request's own bytes on `PUT /tenants/{id}` and dry-run |
 | `BatchOperation.tenant_id` | required, 1-256 chars |
+| `BatchOperation.patch` / `GroupBatchRequest.patch` key count | ≤ 1000 entries (bytes are the wrong unit here: the merge is quadratic in key count and runs inside the single-writer token) |
 | `BatchOperation.patch` generic key/value | key ≤ 256 chars, value ≤ 1024 chars |
 | `BatchOperation.patch._silent_mode` | enum `{warning, critical, all, disable}` (case-insensitive; matches threshold-exporter resolve) |
 | `BatchOperation.patch._timeout_ms` | integer 0..3,600,000 (≤ 1h) |
@@ -208,6 +211,7 @@ Without the fix, PUT/DELETE Groups will hit the new tenant-scoped check and retu
 | `PutGroupRequest.label` / `PutViewRequest.label` | required, 1-256 chars |
 | `PutGroupRequest.description` / `PutViewRequest.description` | ≤ 4096 chars |
 | `PutGroupRequest.members` | 0-1000 entries, each 1-256 chars |
+| `PutGroupRequest.filters` / `PutViewRequest.filters` entry count | ≤ 20 entries (a view additionally requires at least 1). The transform runs inside the write lock and its result lands in `_groups.yaml` / `_views.yaml`, so the slowdown is permanent |
 | `Filters` map values | ≤ 1024 chars per value |
 
 **Failure response shape**:

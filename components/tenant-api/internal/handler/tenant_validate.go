@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/vencil/tenant-api/internal/gitops"
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
 	"gopkg.in/yaml.v3"
 )
@@ -46,6 +47,26 @@ func ValidateTenant(d *Deps) http.HandlerFunc {
 
 		body, ok := readLimitedBody(w, r, d)
 		if !ok {
+			return
+		}
+
+		// Size gate first (#1722): the write path refuses an oversize document
+		// BEFORE parsing it, so a dry-run that parsed on and answered
+		// `valid: true` would contradict the PUT it exists to predict — the
+		// write-vs-read asymmetry #704 and #1718 each closed once already.
+		//
+		// ⛔ It calls gitops.CheckTenantDocSize rather than re-deriving the
+		// rule: this handler reassembles validate()'s checks by hand, which is
+		// precisely how the two boundaries drift apart.
+		//
+		// ⚠️ Known and accepted narrowing: the write path measures the MERGED
+		// document while this measures the body as sent, so a small patch onto
+		// an already-oversize shared file still passes here and fails at PUT.
+		// The dry-run has no merge base to measure (it is not a patch endpoint —
+		// PUT is a full overlay), so it answers the question it can: a body that
+		// is itself over the cap can never be written.
+		if sizeErrs := gitops.CheckTenantDocSize(string(body)); len(sizeErrs) > 0 {
+			writeJSON(w, http.StatusOK, ValidateResponse{Valid: false, Warnings: sizeErrs})
 			return
 		}
 
