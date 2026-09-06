@@ -1,4 +1,12 @@
 version: "2"
+# ⛔ Files behind a build tag are OUTSIDE the default build, so `golangci-lint
+# run ./...` never loads them — silently, with rc=0. `test/forgee2e/` sat there
+# until #1751. Enrolling the tag HERE rather than as a CI flag keeps a local
+# `run ./...` equivalent to the gate. Which tags need an entry is derived, not
+# listed, by tests/ops/test_go_lint_module_coverage.py.
+run:
+  build-tags:
+    - forge_e2e
 linters:
   default: standard
   # godoclint: a doc comment must start with the name of the declaration it is
@@ -86,3 +94,10 @@ linters:
       - path: _test\.go
         linters:
           - forbidigo
+
+# ⛔ `max-same-issues` and `max-issues-per-linter` both default to truncating, so
+# a report can read as complete and still be short. A gate that hides part of
+# what it found is the failure this file exists to fix.
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

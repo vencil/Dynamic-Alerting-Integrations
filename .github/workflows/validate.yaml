@@ -292,6 +292,20 @@ jobs:
       - name: Lint threshold-exporter
         working-directory: components/threshold-exporter/app
         run: golangci-lint run ./...
+      # #1751: the remaining Go modules. Until these steps existed no linter
+      # read them, while the two above printed `0 issues` — a report that reads
+      # like whole-repo coverage. ⛔ Do not add or drop a step by hand-counting:
+      # tests/ops/test_go_lint_module_coverage.py derives the module set from
+      # `git ls-files` and requires it to equal the set of steps here.
+      - name: Lint bench-canary
+        working-directory: scripts/tools/ops/bench-canary
+        run: golangci-lint run ./...
+      - name: Lint alertmanager-inhibit
+        working-directory: tests/alertmanager-inhibit
+        run: golangci-lint run ./...
+      - name: Lint e2e-bench receiver
+        working-directory: tests/e2e-bench/receiver
+        run: golangci-lint run ./...
 
   validate-config:
     name: Validate Tenant Config & Routes

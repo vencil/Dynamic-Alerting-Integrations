@@ -1,0 +1,20 @@
+version: "2"
+# Enrolled in the Go Lint job by #1751 — before that no linter read this module,
+# while the enrolled ones printed `0 issues`, which reads like whole-repo
+# coverage. Which modules must be enrolled is derived, not listed, by
+# tests/ops/test_go_lint_module_coverage.py.
+#
+# Linter set: module-agnostic rules run everywhere; the depguard/forbidigo
+# ratchets in the two production modules encode a layering this module does not
+# have, so they are not copied here.
+linters:
+  default: standard
+  enable:
+    - godoclint
+
+# ⛔ `max-same-issues` and `max-issues-per-linter` both default to truncating, so
+# a report can read as complete and still be short. A gate that hides part of
+# what it found is the failure this file exists to fix.
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

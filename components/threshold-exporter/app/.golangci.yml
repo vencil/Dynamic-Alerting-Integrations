@@ -51,3 +51,10 @@ linters:
       - path: _test\.go
         linters:
           - errcheck
+
+# ⛔ `max-same-issues` and `max-issues-per-linter` both default to truncating, so
+# a report can read as complete and still be short. A gate that hides part of
+# what it found is the failure this file exists to fix.
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
