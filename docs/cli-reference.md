@@ -611,6 +611,7 @@ da-tools backtest [--git-diff | --config-dir <dir> --baseline <dir>] [options]
 
 1. **Git Diff 模式**：`--git-diff`
    （在 Git repo 內執行，自動偵測變更）
+   ⚠️ 需要 `git` 在 PATH 上，且工作目錄是含 `conf.d/` 的目錄（工具以 cwd 為基準跑 `git diff HEAD~1 -- conf.d/`；客戶佈局下就是 repo 根）。容器內要把含 `conf.d/` 的目錄掛進來並用 `-w` 切到掛載點（例如 `-v $(pwd):/workspace -w /workspace`）。`ghcr.io/vencil/da-tools` 映像**沒有內建 git**，在該映像內跑這個模式時 `git diff` 跑不起來——請在裝有 git 的環境執行
 
 2. **目錄比對模式**：`--config-dir <dir> --baseline <dir>`
    （比對兩個配置版本）
@@ -629,7 +630,14 @@ da-tools backtest [--git-diff | --config-dir <dir> --baseline <dir>] [options]
 **範例**
 
 ```bash
-da-tools backtest --git-diff --lookback 7d
+# Git Diff 模式——映像沒有 git，請在主機 checkout 上直接跑腳本
+#（與本 repo 的 .github/workflows/backtest.yaml 同一組呼叫），
+# 在含 conf.d/ 的目錄執行
+python3 scripts/tools/ops/backtest_threshold.py --git-diff \
+  --prometheus http://prometheus.monitoring.svc.cluster.local:9090 \
+  --lookback 7d --skip-if-unavailable
+
+# 目錄比對模式
 da-tools backtest --config-dir ./conf.d-new --baseline ./conf.d-old --lookback 7d
 ```
 
@@ -2071,7 +2079,8 @@ da-tools lint <path...> [options]
 
 ```bash
 da-tools lint ./my-custom-rules.yaml
-da-tools lint ./rule-packs --strict
+# 接進 CI 一定要帶 --ci：沒帶時即使有 ERROR 級違規也是結束碼 0
+da-tools lint ./rule-packs --ci
 ```
 
 **結束碼**
