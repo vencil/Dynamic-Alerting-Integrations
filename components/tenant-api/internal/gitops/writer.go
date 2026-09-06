@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -751,6 +752,20 @@ func (w *Writer) gitCommit(filePath, tenantID, authorEmail string, trailer ...st
 // PR-mode write-back (PRWriteResult / WritePR / WritePRBatch / PRBatchOp) lives
 // in writer_pr.go.
 
+// defaultMaxTenantDocBytes is the pre-parse ceiling on ONE tenant document
+// (#1722). Both sides of the choice are derived by tests rather than restated
+// here as numbers: TestRealTenantFilesAreNowhereNearTheCap walks the repo for the
+// largest real tenant config and asserts a two-sided band around this constant,
+// and TestCapClearsTheRecipeCeiling projects a full cfg.MaxCustomRecipesDefault
+// body from the densest real file. For parse cost in seconds, run
+// BenchmarkValidateAtCap on the hardware you care about.
+//
+// Override with TA_MAX_TENANT_DOC_BYTES. Deliberately SEPARATE from the handler's
+// TA_MAX_BODY_BYTES: that bounds what a request may transfer, this bounds what
+// the write path parses while holding the lock — and on the merged paths those
+// are not the same document.
+const defaultMaxTenantDocBytes int64 = 64 << 10
+
 // validateShape runs every check that reads ONLY the request body and the URL
 // id, in the order validate has always run them, and hands back the parsed
 // config so no caller decodes the same bytes twice.
@@ -771,8 +786,102 @@ func (w *Writer) gitCommit(filePath, tenantID, authorEmail string, trailer ...st
 //
 // Everything here short-circuits, exactly as before — the first failure is the
 // only one reported.
+
+// maxTenantDocBytes is resolved once at package init. CheckTenantDocSize is on
+// the hot path of every write and takes no receiver, so the env read cannot hang
+// off a Writer; a package var keeps the check to one comparison.
+//
+// ⛔ IT DOES NOT WARN FROM HERE. Package-var initialisation runs before main's
+// configureLogger, so a slog.Warn at this point is emitted by the DEFAULT text
+// handler and ignores TA_LOG_LEVEL — i.e. a fat-fingered value would be
+// invisible to the platform's JSON log pipeline, which is the one place an
+// operator would look. The malformed flag rides out through
+// TenantDocBytesFromEnv instead, and main logs it alongside the sibling knobs.
+var maxTenantDocBytes, _ = TenantDocBytesFromEnv(os.Getenv("TA_MAX_TENANT_DOC_BYTES"))
+
+// MaxTenantDocBytes reports the resolved per-document ceiling, for callers that
+// need to describe it (the dry-run endpoint's error text, startup logging).
+func MaxTenantDocBytes() int64 { return maxTenantDocBytes }
+
+// DefaultTenantDocBytes reports the COMPILED-IN default, ignoring the env
+// override.
+//
+// ⛔ THE DISTINCTION IS LOAD-BEARING FOR THE DRIFT GUARDS. They compare what
+// helm and the README document against what the binary ships, and the shipped
+// value is the default — not whatever TA_MAX_TENANT_DOC_BYTES happens to be in
+// the shell running the tests. Comparing against MaxTenantDocBytes() made any
+// developer or CI job that exercised the override fail with a message asserting
+// "the code's default is N", which was not the default at all.
+func DefaultTenantDocBytes() int64 { return defaultMaxTenantDocBytes }
+
+// TenantDocBytesFromEnv parses TA_MAX_TENANT_DOC_BYTES as a positive byte count,
+// falling back to defaultMaxTenantDocBytes when unset, unparseable, or
+// non-positive, and reporting malformed so the CALLER can warn once the logger
+// exists. Mirrors handler.MaxBodyBytesFromEnv, including its reasons: a
+// full-string parse (a numeric PREFIX like "65536x" silently meant a wrong cap
+// in #795 F4) and treating "0" as malformed rather than honouring it, since a
+// zero cap would reject every write and is always a fat-finger.
+func TenantDocBytesFromEnv(envValue string) (n int64, malformed bool) {
+	v := strings.TrimSpace(envValue)
+	if v == "" {
+		return defaultMaxTenantDocBytes, false
+	}
+	parsed, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || parsed <= 0 {
+		return defaultMaxTenantDocBytes, true
+	}
+	return parsed, false
+}
+
+// CheckTenantDocSize is the pre-parse size gate on one tenant document (#1722).
+//
+// ⛔ EXPORTED SO THE DRY-RUN ENDPOINT ENFORCES THE BYTE-IDENTICAL RULE. POST
+// /tenants/{id}/validate does not call validate(); it re-assembles the same
+// checks by hand, so a gate living only inside validateShape let the dry-run
+// answer `valid: true` for a body the PUT then refused — the write-vs-read
+// asymmetry this repo has closed twice (#704, #1718). One function, two callers.
+//
+// ⚠️ WHAT IT MEASURES DEPENDS ON THE CALLER, so the message must not assert one.
+// The merged document reaches it from exactly two places — readMergeBodyOnly and
+// readMergeValidate, i.e. the PATCH paths. Every other arrival carries the
+// caller's own bytes: Write / WriteIfUnchanged, BOTH of WritePR's validations
+// (it takes a yamlContent string, never a MergeFunc), and the dry-run endpoint.
+func CheckTenantDocSize(yamlContent string) []string {
+	n := int64(len(yamlContent))
+	if n <= maxTenantDocBytes {
+		return nil
+	}
+	return []string{fmt.Sprintf(
+		"tenant document is %d bytes, over the %d-byte limit — this measures the "+
+			"document being validated. On a PATCH (the batch endpoints) that is "+
+			"the WHOLE merged file rather than the keys you sent, so a small patch "+
+			"onto a large shared conf.d file lands here too; on a full-body write "+
+			"or a dry-run it is exactly what you sent. Parsing cost grows faster "+
+			"than size and this runs while the single write lock is held, so an "+
+			"oversize one delays every other tenant's write. Split the file or "+
+			"raise TA_MAX_TENANT_DOC_BYTES",
+		n, maxTenantDocBytes)}
+}
+
 func validateShape(tenantID, yamlContent string) (cfg.ThresholdConfig, []string) {
 	var tcfg cfg.ThresholdConfig
+	// PRE-PARSE SIZE GATE (#1722). Must be the FIRST thing here and must come
+	// before yaml.Unmarshal, because the cost it bounds is the parse itself:
+	// yaml.v3 is superlinear in the number of keys in ONE mapping, and every
+	// caller below parses yamlContent three times (Unmarshal here,
+	// CheckTenantRootKeys, extraDocumentsWithContent).
+	//
+	// ⛔ WHY THIS IS NOT MERELY A NICE-TO-HAVE. Since #1718 the authoritative
+	// validate() runs INSIDE the single-writer token, so this cost is no longer
+	// paid by the sender alone — it is head-of-line blocking for every other
+	// tenant's write. The gate is in bytes, checked before any parse, so
+	// rejecting costs a length compare. For cost figures on your own hardware,
+	// run BenchmarkValidateAtCap; none are quoted here, for the reason the
+	// #1722 CHANGELOG entry gives.
+	//
+	if errs := CheckTenantDocSize(yamlContent); len(errs) > 0 {
+		return tcfg, errs
+	}
 	if err := yaml.Unmarshal([]byte(yamlContent), &tcfg); err != nil {
 		return tcfg, []string{"invalid YAML: " + err.Error()}
 	}

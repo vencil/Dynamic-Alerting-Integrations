@@ -728,6 +728,12 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
+                    },
+                    "413": {
+                        "description": "Request Entity Too Large",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
                     }
                 }
             }
@@ -861,6 +867,12 @@ const docTemplate = `{
                     },
                     "400": {
                         "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "413": {
+                        "description": "Request Entity Too Large",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -2169,7 +2181,7 @@ const docTemplate = `{
             ],
             "properties": {
                 "patch": {
-                    "description": "key → value to set (e.g., \"_silent_mode\": \"warning\")",
+                    "description": "key → value to set (e.g., \"_silent_mode\": \"warning\"); at most 1000 entries.",
                     "type": "object",
                     "additionalProperties": {
                         "type": "string"
@@ -2464,7 +2476,7 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "patch": {
-                    "description": "key → value (e.g., \"_silent_mode\": \"warning\")",
+                    "description": "key → value to set on every member (e.g., \"_silent_mode\": \"warning\");\nat most 1000 entries.",
                     "type": "object",
                     "additionalProperties": {
                         "type": "string"

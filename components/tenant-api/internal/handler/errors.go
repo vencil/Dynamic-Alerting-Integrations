@@ -59,6 +59,7 @@ const (
 	CodeConflict        = "CONFLICT"
 	CodeBadRequest      = "BAD_REQUEST"
 	CodeInternal        = "INTERNAL_ERROR"
+	CodePayloadTooLarge = "PAYLOAD_TOO_LARGE"
 	CodeUpstream        = "UPSTREAM_ERROR"
 	// CodeUnauthorized marks a 401 (missing/invalid caller identity). The RBAC
 	// middleware's 401 mirrors this value in its own package-local const
@@ -234,6 +235,11 @@ func codeFromStatus(status int) string {
 		return CodeNotFound
 	case http.StatusConflict:
 		return CodeConflict
+	case http.StatusRequestEntityTooLarge:
+		// 413 = the request body exceeded an endpoint's byte budget (#1722).
+		// Distinct from CodeBadRequest: the body is well-formed, and the
+		// client's remedy is to send less, not to fix its shape.
+		return CodePayloadTooLarge
 	case http.StatusNotImplemented:
 		return CodeNotImplemented
 	case http.StatusBadGateway:

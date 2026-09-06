@@ -241,6 +241,14 @@ spec:
             - name: TA_MAX_BODY_BYTES
               value: {{ .maxBodyBytes | quote }}
             {{- end }}
+            {{- if .maxBatchBodyBytes }}
+            - name: TA_MAX_BATCH_BODY_BYTES
+              value: {{ .maxBatchBodyBytes | quote }}
+            {{- end }}
+            {{- if .maxTenantDocBytes }}
+            - name: TA_MAX_TENANT_DOC_BYTES
+              value: {{ .maxTenantDocBytes | quote }}
+            {{- end }}
             {{- end }}
             {{- with .Values.tenantApi.sse }}
             {{- if .heartbeat }}
