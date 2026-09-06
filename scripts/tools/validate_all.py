@@ -25,6 +25,11 @@ Exit codes:
      --skip value that no registered check answers to (--list prints them).
      In --json mode this path writes nothing to stdout; the reason goes to
      stderr, the same as argparse's own errors. (#1620)
+
+--json output contract (#1772): stdout carries exactly one JSON document on
+every path that gets past argument parsing, including a failing run combined
+with --fix / --diff-report / --verbose / --profile / --notify. Everything
+those flags say goes to stderr; the report body is not printed at all.
 """
 
 import argparse
@@ -497,14 +502,16 @@ WATCH_TRIGGERS: Dict[str, List[str]] = {
 }
 
 
-def _send_notification(title: str, message: str) -> None:
+def _send_notification(title: str, message: str, bell_to=None) -> None:
     """Send an OS-native desktop notification (best-effort, cross-platform).
 
     Supported backends (tried in order):
     - Linux: notify-send (libnotify)
     - macOS: osascript (AppleScript)
     - Windows: PowerShell toast notification via BurntToast or fallback
-    - Fallback: terminal bell (\\a)
+    - Fallback: terminal bell (\\a), written to `bell_to` (default: the
+      current sys.stdout). main() passes stderr under --json so the bell
+      cannot land after the JSON document (#1772).
     """
     import platform
     system = platform.system()
@@ -546,8 +553,10 @@ def _send_notification(title: str, message: str) -> None:
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         pass
 
-    # Fallback: terminal bell
-    print("\a", end="", flush=True)
+    # Fallback: terminal bell. sys.stdout is resolved at CALL time, not at
+    # definition time -- pytest's capsys swaps it per test.
+    print("\a", end="", flush=True,
+          file=bell_to if bell_to is not None else sys.stdout)
 
 
 def _snapshot_mtimes(repo_root: Path) -> Dict[str, float]:
@@ -1173,6 +1182,22 @@ def main():
         print(_conflicting_flags_message(conflicts), file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
+    # #1772: under --json, stdout is ONE JSON document and nothing else.
+    # Two kinds of human text exist once the parser has accepted the flags:
+    #   - the report body (banner, per-check lines, summary): the JSON
+    #     document IS that information in another shape, so it is
+    #     suppressed (`if not args.json:`), not duplicated;
+    #   - what the tail flags say (--verbose full output, the --diff-report
+    #     text, the --fix log, the --profile / --baseline file notices, the
+    #     --notify bell): none of it has a JSON representation, so it is
+    #     REDIRECTED to stderr rather than lost.
+    # `say` is the only stream those tail prints may use -- the same rule the
+    # --smart notice and the #1620 / #1695 error paths already follow. stderr
+    # is not utf-8-patched (see _unknown_check_names_message), so on a cp950
+    # console the emoji in these lines degrade to `\uXXXX` under --json; that
+    # is cosmetic, the trade try_utf8_stdout documents.
+    say = sys.stderr if args.json else sys.stdout
+
     tools_dir = Path(__file__).parent
     project_root = tools_dir.parent.parent
     os.chdir(project_root)
@@ -1193,10 +1218,9 @@ def main():
     if args.smart:
         sel = _smart_detect(project_root)
         outcome, chosen = _selection_outcome(sel)
-        # stderr under --json so stdout stays one JSON document (same rule
-        # as the --profile rotation notice); ASCII because stderr is not
-        # utf-8-patched (see _unknown_check_names_message).
-        say = sys.stderr if args.json else sys.stdout
+        # Printed through the shared `say` (stderr under --json); ASCII
+        # because stderr is not utf-8-patched (see
+        # _unknown_check_names_message).
         if outcome == OUTCOME_UNKNOWN:
             # ⛔ Announce from the SAME filter the run uses, `--skip`
             # included -- `--smart --skip a,b,c` once said 33 and ran 30.
@@ -1284,8 +1308,8 @@ def main():
                 short_name, status, elapsed, detail, full_out = fut.result()
                 results[short_name] = (status, elapsed, detail)
                 if args.verbose and full_out:
-                    print(f"\n--- {short_name.upper()} ---")
-                    print(full_out)
+                    print(f"\n--- {short_name.upper()} ---", file=say)
+                    print(full_out, file=say)
 
         wall_elapsed = time.time() - wall_start
 
@@ -1314,8 +1338,8 @@ def main():
             results[short_name] = (status, elapsed, detail)
 
             if args.verbose and full_out:
-                print(f"\n--- {short_name.upper()} ---")
-                print(full_out)
+                print(f"\n--- {short_name.upper()} ---", file=say)
+                print(full_out, file=say)
 
             if not args.json:
                 sym = _status_symbol(status)
@@ -1457,28 +1481,27 @@ def main():
         os.chmod(PROFILE_CSV,
                  stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP
                  | stat.S_IROTH)
-        if not args.json:
-            print(f"\n📊 Timing appended to {PROFILE_CSV.name}")
+        print(f"\n📊 Timing appended to {PROFILE_CSV.name}", file=say)
 
     # --diff-report: show what --fix would change
     if args.diff_report and failed > 0:
         failed_checks = {n: s for n, (s, _, _) in results.items()
                          if s in ("fail", "error")}
         print(_generate_diff_report(
-            failed_checks, tools_dir, project_root))
+            failed_checks, tools_dir, project_root), file=say)
 
     # --fix: auto-fix failed checks that have fix commands
     if args.fix and failed > 0:
-        print()
-        print("=" * 60)
-        print("Auto-fixing drift...")
-        print("=" * 60)
+        print(file=say)
+        print("=" * 60, file=say)
+        print("Auto-fixing drift...", file=say)
+        print("=" * 60, file=say)
         fix_count = 0
         for name, (status, _, _) in results.items():
             if status not in ("fail", "error"):
                 continue
             if name not in FIX_COMMANDS:
-                print(f"  ⊘ {name:20} ... no auto-fix available")
+                print(f"  ⊘ {name:20} ... no auto-fix available", file=say)
                 continue
             cmd = FIX_COMMANDS[name]
             script_path = str(tools_dir / cmd[0])
@@ -1491,16 +1514,17 @@ def main():
                 )
                 if result.returncode == 0:
                     detail = _extract_detail(result.stdout)
-                    print(f"  🔧 {name:20} ... fixed ({detail})")
+                    print(f"  🔧 {name:20} ... fixed ({detail})", file=say)
                     fix_count += 1
                 else:
                     print(f"  ✗ {name:20} ... fix failed "
-                          f"(exit {result.returncode})")
+                          f"(exit {result.returncode})", file=say)
             except (OSError, subprocess.SubprocessError) as e:
-                print(f"  ✗ {name:20} ... fix error: {e}")
+                print(f"  ✗ {name:20} ... fix error: {e}", file=say)
 
         if fix_count > 0:
-            print(f"\n🔧 Fixed {fix_count} check(s). Re-run to verify.")
+            print(f"\n🔧 Fixed {fix_count} check(s). Re-run to verify.",
+                  file=say)
 
     # --notify: send desktop notification
     if args.notify:
@@ -1508,11 +1532,13 @@ def main():
             _send_notification(
                 "Validation Passed",
                 f"All {passed}/{total} checks passed ({wall_elapsed:.1f}s)",
+                bell_to=say,
             )
         else:
             _send_notification(
                 "Validation Failed",
                 f"{failed}/{total} checks failed ({wall_elapsed:.1f}s)",
+                bell_to=say,
             )
 
     sys.exit(0 if failed == 0 else 1)
