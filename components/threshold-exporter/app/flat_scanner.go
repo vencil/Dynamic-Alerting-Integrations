@@ -446,13 +446,3 @@ func mergePartialInto(merged *ThresholdConfig, partial ThresholdConfig) {
 		}
 	}
 }
-
-// WatchLoop periodically checks for config changes and reloads.
-// Uses content hash comparison for reliable change detection.
-// K8s ConfigMap volumes update via symlink rotation (..data), so hash-based
-// detection is more reliable than ModTime for both modes.
-// The stopCh parameter allows graceful shutdown — close it to stop the loop.
-//
-// In directory mode, uses incremental reload (v2.1.0): per-file hash tracking
-// means only changed files are re-parsed, reducing reload latency for large
-// multi-tenant deployments.
