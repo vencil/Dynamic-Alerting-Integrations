@@ -27,6 +27,7 @@
    "tests/dx/test_generate_tenant_metadata.py",
    "tests/lint/test_check_path_metadata_consistency.py",
    "tests/ops/test_confd_unusable_signal.py",
+   "tests/ops/test_drift_detect.py",
    "tests/ops/test_gitops_check.py",
    "tests/ops/test_operator_generate_v2.py",
    "tests/shared/test_confd_name_classification_parity.py",
@@ -795,7 +796,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "59b1b51bbbbf3d93c77a1ca10f8e392814c9536f3f343faf1fcf002de1487eb8",
+ "source_digest": "3c162181ca6a7f5abd10fea90251471b6cda88921bf7e3ee9427b49632353566",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1458,6 +1459,9 @@
    "tests/lint/test_check_threshold_reachability.py",
    "tests/ops/test_init_project.py"
   ],
+  "components/threshold-exporter/app/pkg/config/hierarchy.go": [
+   "tests/ops/test_backtest_threshold.py"
+  ],
   "components/threshold-exporter/app/pkg/config/optional_overrides_membership_test.go": [
    "tests/ops/test_generate_alertmanager_routes.py"
   ],
@@ -1490,6 +1494,9 @@
    "tests/lint/test_check_threshold_unit_sanity.py",
    "tests/ops/test_backtest_threshold.py",
    "tests/ops/test_generate_alertmanager_routes.py"
+  ],
+  "components/threshold-exporter/config/conf.d/db-a.yaml": [
+   "tests/ops/test_backtest_threshold.py"
   ],
   "components/threshold-exporter/config/conf.d/db-b.yaml": [
    "tests/ops/test_backtest_threshold.py"
@@ -2993,6 +3000,9 @@
   "tests/ops/_stub_declared_shared.py": [
    "tests/ops/test_init_project.py",
    "tests/ops/test_scaffold_tenant.py"
+  ],
+  "tests/ops/test_backtest_threshold.py": [
+   "tests/shared/test_confd_case_parity_across_tools.py"
   ],
   "tests/ops/test_blast_radius.py": [
    "tests/ops/test_ci_baseline_substitution.py"

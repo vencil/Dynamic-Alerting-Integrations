@@ -90,7 +90,9 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
-from _lib_confd import has_yaml_extension, is_hidden_name, is_reserved_name  # noqa: E402
+from _lib_confd import (  # noqa: E402
+    has_yaml_extension, is_hidden_name, is_reserved_name,
+)
 
 # Metrics we extract from /metrics (Prometheus text format).
 # Adding new ones here automatically extends the timeseries CSV.
@@ -174,7 +176,11 @@ def fetch_metrics(target_url: str, timeout_sec: float = 5.0) -> dict[str, float]
 
 
 def trigger_reload(config_dir: Path) -> bool:
-    """Perturb one YAML carrier the exporter reads, to fire its SHA-256 diff.
+    """Bump mtime of every config carrier under config_dir to fire SHA-256 diff.
+
+    "Config carrier" is `_lib_confd.CONFIG_SUFFIXES` — `.yaml` AND `.yml`,
+    the set the exporter's own scanner accepts (#1603). This docstring said
+    `.yaml` while the code passed `(".yaml",)`; both are now the shared set.
 
     threshold-exporter's hot-reload watches mtime + content hash. Touching
     mtime alone won't fire if content unchanged; we append a no-op comment
@@ -191,20 +197,40 @@ def trigger_reload(config_dir: Path) -> bool:
     # reload still produces a full run report, so the whole exercise reads
     # as "hot-reload survived N hours" having never reloaded once.
     #
-    # #1603 (extension-SPELLING axis): `.yaml` only was kept through #1588
-    # on purpose; measured on byte-identical bodies before widening:
-    # `alpha.yaml` → True, `alpha.yml` → False (nothing perturbed). Now the
-    # shared predicate with its default set, i.e. both spellings, any case.
+    # ⚠️ #1603: the extension argument is gone, so this takes
+    # `CONFIG_SUFFIXES` — both spellings, matching `config_hierarchy.go`.
+    # Before that, a conf.d whose carriers are `.yml` produced an EMPTY
+    # `yaml_files`, `perturb_config` returned False on every pass, and the
+    # soak still emitted a full run report: "hot-reload survived N hours"
+    # having never reloaded once. Same shape as the `.YAML` row below, one
+    # axis over. The
+    # relative order of `rglob("*")` matches what `rglob("*.yaml")` yielded
+    # — MEASURED on a nested tree whose entries were created in shuffled
+    # order, not assumed — so "the first non-`_` file" still picks the same
+    # carrier and the soak keeps perturbing what it used to perturb.
+    # ⛔ `is_hidden_name` is part of the SAME widening, not a second axis
+    # riding along. This function's claim is "perturb something the exporter
+    # is watching", and `config_hierarchy.go` SKIPS `.`-prefixed entries — so
+    # a set that includes them is not the exporter's set, it is a superset,
+    # and the difference is the whole point of the claim. Before #1603 the
+    # narrow `(".yaml",)` masked half of it; measured on one tree holding
+    # `db-a.yaml` + `.hidden.yml`:
     #
-    # #1630 (HIDDEN axis): a `.`-prefixed file, or any file under a
-    # `.`-prefixed directory, is never read by the exporter
-    # (`config_hierarchy.go` skips the file / `SkipDir`s the directory).
-    # Perturbing one fires NO reload, yet this returned True and
-    # `reload_count` in the summary went up — measured True on a tree
-    # holding only `_defaults.yaml` + `.disabled-tenant.yaml`, and True on
-    # `_defaults.yaml` + `.draft/alpha.yaml`. Every path component relative
-    # to config_dir is tested, so a visible name under a hidden directory
-    # is hidden too, exactly as the walker sees it.
+    #   narrow  (pre-#1603)          perturbed db-a.yaml    <- the right file
+    #   widened, no hidden filter    perturbed .hidden.yml  <- exporter never reads it
+    #   widened, this filter         perturbed db-a.yaml
+    #
+    # i.e. widening the spelling alone would have made this tool MORE likely
+    # to report "reload fired" for an edit the exporter cannot see. The
+    # hidden axis at large is #1630 (it also covers `check_threshold_unit_sanity`);
+    # this closes the half this commit would otherwise have made worse.
+    #
+    # ⛔ EVERY path segment, not just the basename: the exporter answers
+    # `fs.SkipDir` for a `.`-prefixed DIRECTORY, so `.draft/db.yaml` is not a
+    # carrier either — and `rglob("*")` walks into it. Filtering only the
+    # basename would leave this comment's claim ("this is the exporter's
+    # set") false in one direction, which is the shape this whole ticket
+    # family is about.
     yaml_files = [p for p in config_dir.rglob("*")
                   if has_yaml_extension(p.name)
                   and not any(is_hidden_name(part)

@@ -678,3 +678,145 @@ class TestPrometheusEnvFallback:
             monkeypatch, cli_argv,
             ["backtest_threshold", "--skip-if-unavailable", "--prometheus", "http://cli:9099"])
         assert url == "http://cli:9099"
+
+
+def _bytes_git(monkeypatch, stdout: bytes, returncode: int = 0):
+    """Replace `subprocess.run` with a fake answering BYTES.
+
+    Matches the existing fakes in this file: every path-carrying git call in
+    the tool runs without `text=True` (#1634), so a `str` fake would describe
+    an interface the tool no longer has.
+    """
+    monkeypatch.setattr(
+        subprocess, "run",
+        lambda *a, **k: type("R", (), {"returncode": returncode, "stdout": stdout})())
+
+
+class TestConfdSpellingParityWithTheExporter:
+    """#1603 — every conf.d reader in this file accepts BOTH spellings.
+
+    The exporter's scanner suffixes on `.yaml` AND `.yml`
+    (`components/threshold-exporter/app/pkg/config/hierarchy.go`), so a
+    `conf.d/db-b.yml` is a live tenant it is serving. Five sites here used
+    to pass `suffixes=(".yaml",)` and could not see it: a real threshold
+    change on that tenant produced an empty backtest, rc=0, and no message
+    naming what had been skipped.
+
+    Every test below is three-sided on purpose:
+
+      * LOWER   — the `.yml` carrier must be seen. This is what #1603
+                  buys; each of these assertions was RED before the
+                  argument was dropped (measured, both directions).
+      * UPPER   — a name the exporter does NOT accept (`.json`, `.yang`,
+                  `.txt`) must still be ignored, so "widened" cannot
+                  quietly become "accepts anything".
+      * CONTROL — the `.yaml` twin with a byte-identical body must behave
+                  exactly as before. If a CONTROL row stops firing, the
+                  fixture is broken and the other two rows prove nothing.
+
+    ⚠️ SCOPE — the SPELLING axis only. Case folding (`DB-A.YAML`, #1588)
+    and the `is_file` axis (a DIRECTORY named `notes.yaml/`, #1607) are
+    pinned elsewhere and were measured unchanged by the commit that added
+    this class; do not read a green run here as covering them.
+    """
+
+    # ── site 1 of 5: extract_changes_from_dirs ────────────────────────
+    def test_dir_comparison_sees_a_yml_carrier(self, tmp_path):
+        """LOWER + CONTROL: `.yml` and `.yaml` twins both yield a change."""
+        cur, base = tmp_path / "cur", tmp_path / "base"
+        cur.mkdir()
+        base.mkdir()
+        for name in ("db-a.yaml", "db-b.yml"):
+            (cur / name).write_text("mysql_connections: 50\n", encoding="utf-8")
+            (base / name).write_text("mysql_connections: 70\n", encoding="utf-8")
+
+        tenants = {c["tenant"] for c in bt.extract_changes_from_dirs(str(cur), str(base))}
+        assert tenants == {"db-a", "db-b"}, (
+            "db-a is the CONTROL and must always be here; db-b is the #1603 "
+            "row and was missing before the widening"
+        )
+
+    def test_dir_comparison_still_ignores_non_config_extensions(self, tmp_path):
+        """UPPER: widened to CONFIG_SUFFIXES, not to 'any file'."""
+        cur, base = tmp_path / "cur", tmp_path / "base"
+        cur.mkdir()
+        base.mkdir()
+        # CONTROL row proves the fixture can produce a change at all.
+        for name in ("db-a.yaml", "db-c.json", "db-d.yang", "db-e.txt"):
+            (cur / name).write_text("mysql_connections: 50\n", encoding="utf-8")
+            (base / name).write_text("mysql_connections: 70\n", encoding="utf-8")
+
+        tenants = {c["tenant"] for c in bt.extract_changes_from_dirs(str(cur), str(base))}
+        assert tenants == {"db-a"}
+
+    # ── site 2 of 5: extract_changes_from_git_diff ────────────────────
+    def test_git_diff_parser_sees_a_yml_carrier(self, monkeypatch):
+        """LOWER + CONTROL, and UPPER in the same diff."""
+        _bytes_git(monkeypatch, (
+            b"+++ b/conf.d/db-a.yaml\n"
+            b"-  mysql_connections: 70\n"
+            b"+  mysql_connections: 50\n"
+            b"+++ b/conf.d/db-b.yml\n"
+            b"-  mysql_connections: 70\n"
+            b"+  mysql_connections: 50\n"
+            b"+++ b/conf.d/db-c.json\n"
+            b"-  mysql_connections: 70\n"
+            b"+  mysql_connections: 50\n"
+        ))
+        tenants = {c["tenant"] for c in bt.extract_changes_from_git_diff()}
+        assert tenants == {"db-a", "db-b"}
+
+    # ── site 3 of 5: changed_conf_files ───────────────────────────────
+    def test_changed_conf_files_keeps_yml_and_drops_other_extensions(self, monkeypatch):
+        """LOWER + UPPER + CONTROL on one NUL-delimited listing."""
+        _bytes_git(monkeypatch, (
+            b"components/threshold-exporter/config/conf.d/db-a.yaml\0"
+            b"components/threshold-exporter/config/conf.d/db-b.yml\0"
+            b"components/threshold-exporter/config/conf.d/notes.txt\0"
+        ))
+        assert bt.changed_conf_files() == ["conf.d/db-a.yaml", "conf.d/db-b.yml"]
+
+    # ── site 4 of 5: _carrier_at_head1 ────────────────────────────────
+    def test_carrier_at_head1_resolves_a_yml_carrier(self, monkeypatch):
+        """LOWER: the tenant id came off a `.yml`, so resolution must too."""
+        _bytes_git(monkeypatch, b"conf.d/db-a.yaml\0conf.d/db-b.yml\0")
+        assert bt._carrier_at_head1("db-b") == "./conf.d/db-b.yml"
+        # CONTROL — the spelling this function always resolved.
+        assert bt._carrier_at_head1("db-a") == "./conf.d/db-a.yaml"
+
+    def test_carrier_at_head1_ignores_non_config_extensions(self, monkeypatch):
+        """UPPER: a `.json` stem must not answer for a tenant."""
+        _bytes_git(monkeypatch, b"conf.d/db-c.json\0")
+        assert bt._carrier_at_head1("db-c") is None
+
+    # ── site 5 of 5: the recipe notice in main() ──────────────────────
+    def test_recipe_notice_counts_a_tenant_declared_in_a_yml_carrier(
+        self, monkeypatch, tmp_path, capsys, cli_argv
+    ):
+        """LOWER + UPPER through `main()`'s own `_confd_entries` filter.
+
+        The operator-facing NOTE is built from `find_custom_alert_tenants`,
+        which reads whatever this filter admits — so a recipe-only tenant
+        living in a `.yml` used to be absent from a notice whose whole job
+        is "there are recipe tenants this flat backtest does not cover".
+        """
+        monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: True)
+        conf_d = tmp_path / "conf.d"
+        conf_d.mkdir()
+        recipe = ("tenants:\n  {t}:\n    _custom_alerts:\n"
+                  "      - recipe: threshold\n")
+        (conf_d / "acme.yaml").write_text(recipe.format(t="acme"), encoding="utf-8")
+        (conf_d / "beta.yml").write_text(recipe.format(t="beta"), encoding="utf-8")
+        # UPPER — same body, an extension the exporter never loads.
+        (conf_d / "ghost.txt").write_text(recipe.format(t="ghost"), encoding="utf-8")
+
+        cli_argv("backtest_threshold",
+                 "--config-dir", str(conf_d), "--baseline", str(conf_d),
+                 "--prometheus", "http://prom:9090")
+        with pytest.raises(SystemExit):
+            bt.main()
+
+        err = capsys.readouterr().err
+        assert "acme" in err, "CONTROL: the .yaml recipe tenant was always named"
+        assert "beta" in err, "#1603: the .yml recipe tenant is a real tenant"
+        assert "ghost" not in err

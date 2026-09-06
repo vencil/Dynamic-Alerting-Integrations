@@ -344,3 +344,105 @@ class TestMainCallerErrors:
         assert (out_dir / "summary.txt").exists()
         assert (out_dir / "metrics-timeseries.csv").exists()
         assert (out_dir / "run-config.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# trigger_reload — conf.d spelling parity with the exporter (#1603)
+# ---------------------------------------------------------------------------
+class TestTriggerReloadAcceptsBothSpellings:
+    """A soak whose carriers are `.yml` used to never fire a reload.
+
+    `trigger_reload` returning False on every pass does NOT abort the run:
+    `main()` keeps polling and still writes `summary.txt`, so the exercise
+    reads as "hot-reload survived N hours" having never reloaded once. That
+    is the same silent-green the `.YAML` case (#1588) produced, one axis
+    over — the exporter's scanner takes BOTH spellings, so a `db-b.yml` is
+    a carrier it is actively watching.
+
+    Three-sided: LOWER (`.yml` must perturb), CONTROL (`.yaml` must keep
+    working — if this row stops firing the fixture is broken), UPPER (a
+    name the exporter never loads must NOT be perturbed).
+    """
+
+    def test_yml_carrier_is_perturbed(self, tmp_path):
+        """LOWER — and the file must really change, not just return True."""
+        d = tmp_path / "conf.d"
+        d.mkdir()
+        carrier = d / "db-b.yml"
+        carrier.write_text("mysql_connections: 100\n", encoding="utf-8")
+
+        before = carrier.read_text(encoding="utf-8")
+        assert rcs.trigger_reload(d) is True
+        assert carrier.read_text(encoding="utf-8") != before, (
+            "returning True is not enough — the SHA-256 the exporter "
+            "watches only moves if the bytes moved"
+        )
+
+    def test_yaml_carrier_still_perturbed(self, tmp_path):
+        """CONTROL — the spelling that always worked."""
+        d = tmp_path / "conf.d"
+        d.mkdir()
+        carrier = d / "db-a.yaml"
+        carrier.write_text("mysql_connections: 100\n", encoding="utf-8")
+
+        before = carrier.read_text(encoding="utf-8")
+        assert rcs.trigger_reload(d) is True
+        assert carrier.read_text(encoding="utf-8") != before
+
+    @pytest.mark.parametrize("name", ["notes.txt", "db-c.json", "db-d.yang", "plain.y"])
+    def test_non_config_extensions_are_not_perturbed(self, tmp_path, name):
+        """UPPER — widened to CONFIG_SUFFIXES, not to 'any file'."""
+        d = tmp_path / "conf.d"
+        d.mkdir()
+        victim = d / name
+        victim.write_text("mysql_connections: 100\n", encoding="utf-8")
+
+        before = victim.read_text(encoding="utf-8")
+        assert rcs.trigger_reload(d) is False
+        assert victim.read_text(encoding="utf-8") == before
+
+    @pytest.mark.parametrize("hidden", [".hidden.yaml", ".hidden.yml"])
+    def test_hidden_carriers_are_never_the_file_it_perturbs(self, tmp_path, hidden):
+        """The set must be the EXPORTER's set, and it skips `.`-prefixed entries.
+
+        Widening the spelling without this filter made the tool MORE likely
+        to edit a file `config_hierarchy.go` never reads and still return
+        True — a soak reporting "reload fired" for a change the exporter
+        cannot see. Both spellings are covered because only one of them was
+        reachable before #1603.
+        """
+        d = tmp_path / "conf.d"
+        d.mkdir()
+        carrier = d / "db-a.yaml"
+        carrier.write_text("mysql_connections: 100\n", encoding="utf-8")
+        decoy = d / hidden
+        decoy.write_text("mysql_connections: 100\n", encoding="utf-8")
+
+        decoy_before = decoy.read_text(encoding="utf-8")
+        carrier_before = carrier.read_text(encoding="utf-8")
+        assert rcs.trigger_reload(d) is True
+        assert decoy.read_text(encoding="utf-8") == decoy_before
+        assert carrier.read_text(encoding="utf-8") != carrier_before, (
+            "the visible carrier is the only thing the exporter watches here"
+        )
+
+    @pytest.mark.parametrize("hidden_dir", [".draft", ".git"])
+    def test_carriers_under_a_hidden_directory_are_not_perturbed(
+        self, tmp_path, hidden_dir
+    ):
+        """Every path SEGMENT, not just the basename.
+
+        `config_hierarchy.go` answers `fs.SkipDir` for a `.`-prefixed
+        directory, and `rglob("*")` walks into one — so a basename-only
+        filter would leave `.draft/db.yaml` in the set.
+        """
+        d = tmp_path / "conf.d"
+        (d / hidden_dir).mkdir(parents=True)
+        buried = d / hidden_dir / "db-buried.yaml"
+        buried.write_text("mysql_connections: 100\n", encoding="utf-8")
+
+        before = buried.read_text(encoding="utf-8")
+        # No visible carrier anywhere: nothing the exporter watches, so the
+        # honest answer is False rather than "I touched something".
+        assert rcs.trigger_reload(d) is False
+        assert buried.read_text(encoding="utf-8") == before

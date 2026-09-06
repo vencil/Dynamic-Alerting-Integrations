@@ -21,6 +21,7 @@ import pytest
 
 import drift_detect as dd  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_confd import reset_warned_for_test  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -582,3 +583,106 @@ class TestCLI:
         with pytest.raises(SystemExit) as exc_info:
             dd.main()
         assert exc_info.value.code == EXIT_CALLER_ERROR
+
+
+# ---------------------------------------------------------------------------
+# compute_dir_manifest — conf.d spelling parity, and the flat-scan guard
+# ---------------------------------------------------------------------------
+class TestManifestAcceptsBothSpellings:
+    """#1603 — a carrier outside the manifest cannot produce drift.
+
+    This tool's entire job is answering "do these two trees differ".
+    `glob("*.yaml")` kept `db-b.yml` out of BOTH manifests, so two clusters
+    that genuinely disagree about that tenant compared equal and the report
+    said no drift — the one answer this tool must never give wrongly.
+
+    Three-sided: LOWER (`.yml` hashed), CONTROL (`.yaml` unchanged), UPPER
+    (names the exporter never loads stay out).
+
+    ⚠️ Only the spelling axis; case (#1588) and `is_file` (#1607) were
+    measured unchanged by the commit that added this class.
+    """
+
+    def _manifest(self, tmp_path, names):
+        d = tmp_path / "conf.d"
+        d.mkdir()
+        for n in names:
+            (d / n).write_text("tenants: {x: true}", encoding="utf-8")
+        return set(dd.compute_dir_manifest(str(d)).files)
+
+    def test_yml_carrier_is_hashed(self, tmp_path):
+        """LOWER + CONTROL."""
+        assert self._manifest(tmp_path, ["db-a.yaml", "db-b.yml"]) == {
+            "db-a.yaml", "db-b.yml"}
+
+    def test_non_config_extensions_stay_out(self, tmp_path):
+        """UPPER."""
+        assert self._manifest(
+            tmp_path,
+            ["db-a.yaml", "db-c.json", "db-d.yang", "plain.y", "notes.txt"],
+        ) == {"db-a.yaml"}
+
+    def test_hidden_carriers_still_skipped(self, tmp_path):
+        """既有的 `.` 前綴排除未被本次改動碰到。"""
+        assert self._manifest(
+            tmp_path, ["db-a.yaml", ".hidden.yaml", ".hidden.yml"]) == {"db-a.yaml"}
+
+    def test_a_yml_only_difference_is_now_reported_as_drift(self, tmp_path):
+        """端到端：兩棵樹只在一個 `.yml` 載體上不同，必須報 drift。
+
+        這是票面症狀本身——不是「manifest 少一個鍵」，是**這支工具對它唯一
+        要回答的那個問題給了錯的答案**。
+        """
+        a, b = tmp_path / "a", tmp_path / "b"
+        for d in (a, b):
+            d.mkdir()
+            (d / "db-a.yaml").write_text("tenants: {shared: true}", encoding="utf-8")
+        (a / "db-b.yml").write_text("tenants: {x: 1}", encoding="utf-8")
+        (b / "db-b.yml").write_text("tenants: {x: 2}", encoding="utf-8")
+
+        report = dd.compare_manifests(
+            dd.compute_dir_manifest(str(a), label="a"),
+            dd.compute_dir_manifest(str(b), label="b"),
+        )
+        assert [(i.filename, i.drift_type) for i in report.items] == [
+            ("db-b.yml", "modified")], (
+            "before #1603 this list was EMPTY and the tool reported no drift; "
+            "db-a.yaml is identical in both trees and is the CONTROL that "
+            "proves the comparison is running at all"
+        )
+
+
+class TestFlatScanSaysSoOutLoud:
+    """`compute_dir_manifest` is FLAT; on a hierarchical conf.d it must speak.
+
+    ADR-016 allows nesting and the exporter walks it recursively, so a flat
+    manifest of a nested tree hashes only the top level — two trees that
+    differ ONLY below the root compare equal and this tool answers "no
+    drift". `warn_nested` does not change WHAT is hashed; it names what the
+    scan could not see (`_lib_confd`, #1339).
+
+    ⚠️ Deliberately NOT covered here: making the scan recursive. That is a
+    selection change and belongs to its own blast radius.
+    """
+
+    def test_nested_tree_names_the_files_the_scan_cannot_see(self, tmp_path, capsys):
+        reset_warned_for_test()
+        d = tmp_path / "conf.d"
+        (d / "region-eu").mkdir(parents=True)
+        (d / "db-a.yaml").write_text("tenants: {a: 1}", encoding="utf-8")
+        (d / "region-eu" / "db-nested.yaml").write_text(
+            "tenants: {n: 1}", encoding="utf-8")
+
+        dd.compute_dir_manifest(str(d))
+        err = capsys.readouterr().err
+        assert "db-nested.yaml" in err
+
+    def test_flat_tree_stays_silent(self, tmp_path, capsys):
+        """必響對照組的反面：沒有巢狀檔就不准出聲，否則上面那格沒有鑑別力。"""
+        reset_warned_for_test()
+        d = tmp_path / "conf.d"
+        d.mkdir()
+        (d / "db-a.yaml").write_text("tenants: {a: 1}", encoding="utf-8")
+
+        dd.compute_dir_manifest(str(d))
+        assert capsys.readouterr().err == ""
