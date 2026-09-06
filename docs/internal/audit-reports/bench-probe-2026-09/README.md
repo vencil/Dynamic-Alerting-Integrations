@@ -36,7 +36,7 @@ python3 scripts/tools/dx/analyze_probe.py --archive docs/internal/audit-reports/
 
 不連網、不重跑 benchmark、不需要 Go。它回答的是「本文的數字能不能從收進來的資料重算出來」，**不是**「今天重跑會得到什麼」。
 
-⛔ **這支腳本原本就放在本目錄裡，已於 TRK-373（[#1731](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1731)）搬到 `scripts/tools/dx/`。** 搬家的理由不是整理：它與 `bench-probe-write-latency.yaml` 的 Summarize step 曾是**同一份計算的兩份拷貝**，沒有任何機制保證兩者一致，而實測已累積五處行為分歧。現在 workflow 呼叫的就是這一支，兩種輸入來源只差在讀檔那一層。⚠️ 本節這條指令的輸出與搬家前**逐位元相同**（`tests/dx/fixtures/analyze_probe/archive.golden.txt` 釘住這一點），所以本文其餘各節引用的數字不受搬家影響。
+⛔ **這支腳本原本就放在本目錄裡，已於 TRK-373（[#1731](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1731)）搬到 `scripts/tools/dx/`。** 搬家的理由不是整理：它與 `bench-probe-write-latency.yaml` 的 Summarize step 曾是**同一份計算的兩份拷貝**，沒有任何機制保證兩者一致，而實測已累積**六處**行為分歧（五處在合併前找到，第六處是合併之後的盲審找到的）。現在 workflow 呼叫的就是這一支，兩種輸入來源只差在讀檔那一層。⚠️ 本節這條指令的輸出與搬家前**逐位元相同**（`tests/dx/fixtures/analyze_probe/archive.golden.txt` 釘住這一點），所以本文其餘各節引用的數字不受搬家影響。
 
 資料進 repo 的理由與隔壁 `bench-aa-2026-08/` 相同：**來源是 job log，而 job log 有 90 天保留期**（本批 2026-12-03 到期），且 artifact 那條路在本專案的分析環境走不通。三份 `probe-run{1,2,3}.txt` 是從 job log 逐字抽出的 `PROBEENV` / `PROBEROW` / `PROBETAIL` 記錄，各 343 行。
 
@@ -116,7 +116,7 @@ python3 scripts/tools/dx/analyze_probe.py --archive docs/internal/audit-reports/
 
 ⚠️ **但 §三 的結論（「是水位平移，不是 episode」）不因此懸空，這一點要接起來說，否則刪掉本節等於默默弱化了頂部那句話。** 那個結論另有一條**不依賴本節**的證據：§三 第 3 點——各 dispatch 去均值後，「水位以上的質量」的相關係數由 `+0.338` 翻轉成 `−0.1271`，而「水位」維持 `+0.9547`。episode 的簽名是前者跟著總時間動，這裡它反向。⇒ **判別式的「一般判讀力」未驗證，但「這批資料是哪一種形狀」有獨立支撐。** 兩者是不同的問題，本文只對後者下結論。
 
-補回 harness 是 **TRK-374**（[#1732](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1732)），它依賴 **TRK-373**（[#1731](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1731)）：workflow 的 inline python 與 `analyze_probe.py` 是同一份計算的兩份拷貝、已知四處分歧，所以「驗的是哪一份」得先有答案。原文說驗的是「從 workflow 逐字抽出」的那一份，而本目錄交出來、可直接跑的是另一份。
+補回 harness 是 **TRK-374**（[#1732](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1732)），它依賴 **TRK-373**（[#1731](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1731)）：workflow 的 inline python 與 `analyze_probe.py` 曾是同一份計算的兩份拷貝，所以「驗的是哪一份」得先有答案。⛔ **本句已被 TRK-373 的落地推翻一半、就地更正**：inline python 已不存在（兩份合併為 `scripts/tools/dx/analyze_probe.py`），而「已知四處分歧」的四也不再成立——最終枚舉到六處。原文說驗的是「從 workflow 逐字抽出」的那一份，而本目錄交出來、可直接跑的是另一份。
 
 ## ⛔ 沒有做的事（別把它讀成已做）
 

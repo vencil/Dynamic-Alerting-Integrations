@@ -8,7 +8,8 @@ Two output modes, ONE computation
 ---------------------------------
     --from-log PATH      the per-job CI summary (Markdown, one probe.out).
                          Called by .github/workflows/bench-probe-write-latency.yaml.
-    --archive DIR        the archive report (plain text, probe-run*.txt in DIR),
+    --archive DIR        the archive report (plain text, probe-run{1,2,3}.txt
+                         in DIR — all three required, see main()),
                          which additionally puts separate dispatches side by side.
 
 ⭐ Why one file with two renderers, rather than one report: the two consumers
@@ -23,7 +24,7 @@ History (TRK-373 / #1731)
 -------------------------
 Until this file existed, the computation lived twice: inline in the workflow's
 Summarize step, and in docs/internal/audit-reports/bench-probe-2026-09/
-analyze_probe.py. Nothing checked that the two agreed, and five behavioural
+analyze_probe.py. Nothing checked that the two agreed, and six behavioural
 divergences had accumulated. Each is resolved here in one direction, and the
 resolution is annotated at the site rather than only in the commit message:
 
@@ -38,7 +39,7 @@ had ("+nan" here, "nan" there). Unifying report conventions is a separate concer
 from removing the duplicate, and mixing them makes a review diff unreadable. It
 stays open under TRK-375 (#1733).
 
-⚠️ "Five" is the count over the inputs that were actually enumerated (12
+⚠️ "Six" is the count over the inputs that were actually enumerated (12
 constructed inputs x 6 decision signals, plus one targeted check for #4 which the
 signal set cannot see). It is NOT a claim that the two copies had no other
 difference - completeness was never established, and the copy this replaced is
@@ -519,7 +520,8 @@ def main(argv=None):
     #   - and the CROSS DISPATCH section says "spread of the THREE medians" in
     #     hard-coded prose, so both cases printed a sentence that was false.
     # Found in blind review, not by me. It was a sixth behavioural divergence in
-    # a change whose whole claim was that there were five. Restored to the
+    # a change whose whole claim was that there were five (that claim is now
+    # corrected to six everywhere it appears). Restored to the
     # original contract; generalising the tool to other archive directories is a
     # separate change that has to update that prose too.
     # ⚠️ Carried over unchanged: a `probe-run4.txt` sitting in DIR is IGNORED

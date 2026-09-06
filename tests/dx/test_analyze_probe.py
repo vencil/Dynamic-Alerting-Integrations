@@ -5,7 +5,8 @@
 Until #1731 this computation existed TWICE: inline in the Summarize step of
 .github/workflows/bench-probe-write-latency.yaml, and in
 docs/internal/audit-reports/bench-probe-2026-09/analyze_probe.py. Nothing checked
-that the two agreed and five behavioural divergences had accumulated.
+that the two agreed and six behavioural divergences had accumulated
+(five found before the merge landed, the sixth in blind review of it).
 
 ⛔ The fix was to delete one copy, NOT to add a test that compares two copies —
 a differential test would have locked the duplication in place (every future edit
@@ -144,8 +145,11 @@ def test_the_archive_inputs_are_the_ones_the_goldens_were_recorded_from():
         for name in RUNS
     }
     assert actual == digests, (
-        "the archived probe data changed; the goldens below will also fail and "
-        "that is expected — regenerate them on purpose, do not silence them"
+        "the archived probe data changed. ⚠️ The goldens below MAY or may not "
+        "also fail — measured: appending a junk line to probe-run1.txt reddens "
+        "only this test, because the parser ignores non-record lines. So do not "
+        "regenerate a golden just because this failed; work out first whether "
+        "the report actually changed, then regenerate on purpose."
     )
 
 
@@ -177,7 +181,7 @@ def test_every_archived_run_still_summarises_cleanly():
 
 
 # ---------------------------------------------------------------------------
-# 2. The five resolved divergences
+# 2. The resolved divergences
 # ---------------------------------------------------------------------------
 
 def _all_calib(lines):
@@ -370,7 +374,7 @@ def test_missing_archive_directory_is_rejected():
 # ---------------------------------------------------------------------------
 # 3b. The archive file-list contract — restored after blind review
 # ---------------------------------------------------------------------------
-# ⛔ These three exist because an earlier draft globbed `probe-run*.txt` instead
+# ⛔ The tests in this block exist because an earlier draft globbed `probe-run*.txt` instead
 # of using the fixed list the original had. That was a SIXTH behavioural
 # divergence in a change that claimed five, and none of the tests above could
 # see it: they all run against a directory holding exactly the three files.
@@ -576,12 +580,23 @@ def test_archive_rejection_names_the_offending_file(tmp_path):
 # module selector rather than a path (a path selector reports "never imported"
 # even for in-process tests — a broken instrument, not a result):
 #
-#     12 subprocess tests, --cov=analyze_probe  ->  "No data was collected"
-#   ⛔ This line said "15". Blind review counted it: the file has 17 test
-#   functions, of which 3 are in-process and 2 read the workflow file without
-#   spawning anything, leaving 12 (13 collected cases — one is parametrised).
-#   The 15 was recalled, not counted. Correction left visible.
-#      2 in-process tests, --cov=analyze_probe  ->  91.5% (248 stmts, 21 missed)
+#     the subprocess tests, --cov=analyze_probe  ->  "No data was collected"
+#     the in-process tests, --cov=analyze_probe  ->  ~92% of the module
+#
+#   ⛔ THIS BLOCK HAS NOW CARRIED A WRONG COUNT TWICE, and the second time was in
+#   the very commit that corrected the first. It said "15 subprocess tests"; that
+#   was corrected to "12 (13 collected)" — which was already stale when written,
+#   because the same commit added nine tests. Both were recalled, not counted.
+#   ⇒ The exact figures are deliberately NOT restated here any more. They are a
+#   property of the file, so read them off the file instead of trusting prose:
+#
+#       python3 -m pytest tests/dx/test_analyze_probe.py --collect-only -q
+#       PYTHONPATH=scripts/tools/dx:scripts/tools python3 -m pytest \
+#           tests/dx/test_analyze_probe.py -k in_process --cov=analyze_probe
+#
+#   What is durable, and is the only thing this block needs to say: the
+#   subprocess tests contribute ZERO measured coverage and the in-process ones
+#   cover almost all of the module.
 #
 # ⛔ The comment here first said these buy "visibility, NOT detection power".
 # The dogfood refuted that and the correction is left visible rather than quietly
@@ -591,7 +606,7 @@ def test_archive_rejection_names_the_offending_file(tmp_path):
 # broken return is indistinguishable from success. The `main()` return contract
 # is structurally invisible to the interface the other tests assert.
 # ⚠️ What is still true is the ordering: the subprocess tests carry the bulk of
-# the detection power (dogfood 8/8, each break caught by its own test), and the
+# the detection power (dogfood: every break caught by its own test), and the
 # coverage NUMBER these three produce is not evidence the tool is well tested.
 # Measured increment of these three, over three mutations: 1 caught by these
 # alone, 2 also caught by the existing tests.
@@ -662,9 +677,19 @@ def _workflow_doc():
 
 
 def _summarize_step(doc):
+    """The step that turns probe.out into the job summary.
+
+    ⚠️ Located by what it DOES (writes to `$GITHUB_STEP_SUMMARY`), not by an
+    exact name. Blind review showed that requiring the name `Summarize` verbatim
+    turned red on renaming the step to "Summarize the probe output" — a harmless
+    edit that has nothing to do with what these tests protect.
+    """
     steps = doc["jobs"]["probe"]["steps"]
-    matches = [s for s in steps if s.get("name") == "Summarize"]
-    assert len(matches) == 1, f"expected exactly one Summarize step, got {len(matches)}"
+    matches = [s for s in steps if "GITHUB_STEP_SUMMARY" in (s.get("run") or "")]
+    assert len(matches) == 1, (
+        f"expected exactly one step writing to GITHUB_STEP_SUMMARY, got "
+        f"{len(matches)}: {[s.get('name') for s in matches]}"
+    )
     return matches[0]
 
 
@@ -676,16 +701,45 @@ def test_workflow_invokes_this_tool_and_no_longer_inlines_the_computation():
     entry elsewhere in the file.
     """
     run_script = _summarize_step(_workflow_doc())["run"]
-    assert "scripts/tools/dx/analyze_probe.py" in run_script
-    assert "--from-log" in run_script
+    # ⛔ SHELL comments are stripped first. Parsing YAML removed the "a YAML
+    # comment still contains the substring" evasion but not this one: a `#` line
+    # INSIDE the `run:` block scalar is part of the run string, and this step
+    # already carries comments naming the tool. Blind review pointed the step at
+    # `other_tool.py`, added `# replaces scripts/tools/dx/analyze_probe.py`, and
+    # both workflow tests stayed green. Assert on the executable lines only.
+    code = "\n".join(
+        line for line in run_script.splitlines()
+        if not line.lstrip().startswith("#")
+    )
+    assert "scripts/tools/dx/analyze_probe.py" in code, (
+        "the Summarize step's executable lines do not invoke this tool "
+        f"(comments stripped); they are:\n{code}"
+    )
+    assert "--from-log" in code
     # ⛔ Any heredoc, not just the one tag the first version looked for: a pasted
     # copy under `<<'PY2'` evaded that check and stayed green.
-    assert not re.search(r"<<-?\s*['\"]?\w+['\"]?\s*$", run_script, re.M), (
+    assert not re.search(r"<<-?\s*['\"]?\w+['\"]?\s*$", code, re.M), (
         "the Summarize step contains a heredoc — an inline copy of the "
         "computation may have been pasted back beside the tool call"
     )
-    assert "python3" in run_script and run_script.count("python3") == 1, (
-        "expected exactly one python3 invocation in the Summarize step"
+    # ⚠️ Deliberately NOT `count("python3") == 1`: blind review showed that
+    # reddened on a harmless `python3 --version` diagnostic line, which is not
+    # what this test protects. The property is "no SECOND program computes the
+    # summary", so only python3 lines that actually run something count — a line
+    # naming a `.py` file, or `-c` inline code. `python3 --version` names
+    # neither and is allowed.
+    # ⚠️ This narrower predicate was itself dogfooded both ways: `python3
+    # --version` must stay green, `python3 other_tool.py` must go red.
+    others = []
+    for line in code.splitlines():
+        if "python3" not in line:
+            continue
+        if "scripts/tools/dx/analyze_probe.py" in line:
+            continue
+        if ".py" in line or re.search(r"python3\s+(-\w+\s+)*-c\b", line):
+            others.append(line.strip())
+    assert not others, (
+        f"the Summarize step runs python3 on something other than this tool: {others}"
     )
 
 

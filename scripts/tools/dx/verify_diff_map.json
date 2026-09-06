@@ -788,7 +788,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "7d9f9e38e67951530a819270003202a1c39b4861ae12799f6040e6cab2fb9cc4",
+ "source_digest": "291df569b0dca72d937f7ca84eedc7b2817568ab207c4e9984885671dda4cf56",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -2240,6 +2240,7 @@
    "tests/lint/test_check_session_guard_liveness.py"
   ],
   "scripts/tools": [
+   "tests/dx/test_analyze_probe.py",
    "tests/dx/test_bump_docs.py",
    "tests/dx/test_generate_rule_pack_readme.py",
    "tests/dx/test_generate_tool_map.py",
@@ -2297,6 +2298,7 @@
    "tests/lint/test_check_structure.py"
   ],
   "scripts/tools/dx": [
+   "tests/dx/test_analyze_probe.py",
    "tests/dx/test_dx_json_stdout_contract.py",
    "tests/dx/test_generate_tenant_fixture.py",
    "tests/dx/test_line_ending_policy.py",
