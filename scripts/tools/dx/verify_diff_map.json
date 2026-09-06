@@ -789,7 +789,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "07f9c577784160b1f90b81a17ff3732cf310fff02055b88b5ee343fac1969906",
+ "source_digest": "d437d6467d69cb7138371542994d0ddefe84aec1d2e3e1af19e40e18c5127100",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -884,6 +884,7 @@
   "tests/lint/test_check_bilingual_structure.py",
   "tests/lint/test_check_build_completeness.py",
   "tests/lint/test_check_changelog_no_tbd.py",
+  "tests/lint/test_check_chart_ship_surface.py",
   "tests/lint/test_check_cli_coverage.py",
   "tests/lint/test_check_cli_default_drift.py",
   "tests/lint/test_check_codename_gate.py",
@@ -1229,7 +1230,8 @@
    "tests/ops/test_nightly_race_issue_policy.py"
   ],
   ".github/workflows/release.yaml": [
-   "tests/dx/test_verify_release.py"
+   "tests/dx/test_verify_release.py",
+   "tests/lint/test_check_chart_ship_surface.py"
   ],
   ".github/workflows/renovate.yaml": [
    "tests/ops/test_renovate_config.py"
@@ -1299,6 +1301,7 @@
    "tests/dx/test_describe_tenant.py",
    "tests/dx/test_makefile_utf8_mode.py",
    "tests/dx/test_recover_index.py",
+   "tests/lint/test_check_chart_ship_surface.py",
    "tests/lint/test_check_makefile_targets.py",
    "tests/lint/test_check_orphan_lint.py",
    "tests/lint/test_check_threshold_reachability.py",
@@ -1863,7 +1866,8 @@
    "tests/lint/test_check_helm_values_secrets.py"
   ],
   "helm/recipe-preview": [
-   "tests/helm/test_image_tag_derivation.py"
+   "tests/helm/test_image_tag_derivation.py",
+   "tests/lint/test_check_chart_ship_surface.py"
   ],
   "helm/recipe-preview/templates/deployment.yaml": [
    "tests/lint/test_check_dev_bypass_manifest.py"
@@ -1876,7 +1880,8 @@
    "tests/helm/test_image_tag_derivation.py",
    "tests/helm/test_machine_identity_guard.py",
    "tests/helm/test_oauth2_gitlab_profile.py",
-   "tests/helm/test_single_writer_guard.py"
+   "tests/helm/test_single_writer_guard.py",
+   "tests/lint/test_check_chart_ship_surface.py"
   ],
   "helm/tenant-api/Chart.yaml": [
    "tests/dx/test_bump_docs.py"
@@ -1913,6 +1918,7 @@
   "helm/threshold-exporter": [
    "tests/helm/test_image_tag_derivation.py",
    "tests/helm/test_optional_overrides_render.py",
+   "tests/lint/test_check_chart_ship_surface.py",
    "tests/lint/test_check_scrape_reachability.py",
    "tests/ops/test_operator_generate_v2.py"
   ],
@@ -2469,6 +2475,9 @@
   ],
   "scripts/tools/lint/check_build_completeness.py": [
    "tests/lint/test_check_build_completeness.py"
+  ],
+  "scripts/tools/lint/check_chart_ship_surface.py": [
+   "tests/lint/test_check_chart_ship_surface.py"
   ],
   "scripts/tools/lint/check_cli_default_drift.py": [
    "tests/lint/test_check_cli_default_drift.py"
