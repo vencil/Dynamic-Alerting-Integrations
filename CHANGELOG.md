@@ -92,6 +92,13 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ### Added
 
+- **產物內容檢查補上第二半：直接讀 `.tgz`（lint；[#1755](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1755)）**：先前兩輪驗的都是 chart **原始樹**；新的 `check_chart_package_contents.py` 驗的是 `helm package` **產出的位元組**——archive 根目錄的檔案集合必須等於 `DECLARED` 標 `SHIP` 的集合（⭐ 直接 import 同一張表，不開第二份 SSOT），且頂層子樹必須符合 `DECLARED_SUBTREES` 的宣告。接在 `release.yaml` 三處與 `Makefile` 的 `chart-package` 的 **`helm package` 與 `helm push` 之間**——那是唯一看得到「要送出去的那一包」的位置。
+  - **只有讀 archive 才看得到的三類**：① 打包當下的工作樹污染（`helm package` 打包的是指令執行**當下**的目錄，同一個 job 裡先前步驟寫進去的檔案會進包，跑在別的 commit／別的 job 的原始樹閘門對此**結構性盲**）；② 未宣告的頂層子樹——`charts/` 出現代表 subchart 相依的**全部內容**開始隨包出貨；③ helm 行為漂移。
+  - ⛔ **配套的靜態守衛才是這次的重點**：閘門住在 release workflow，而 workflow 裡的一步可以被刪掉、改名、或被 `|| true` / `continue-on-error` 閹掉而**沒有任何人會發現**。所以 `check_chart_ship_surface.py` 新增第 6 條斷言：每個 `helm package` 呼叫點後面、`helm push` 之前必須有這支驗證，且**不得被消音**。這條斷言**不需要 helm**，每個 PR 都跑。⚠️ 順序也在斷言範圍內——驗在 push 之後不是閘門，是驗屍。
+  - **實測**（真 chart、真 helm）：三個出貨 chart 皆綠；意圖性破壞逐一轉紅——根目錄放入 `values-debug.yaml`（訊息指名這是 #1597 的形狀）、塞入合法 subchart 使 `charts/` 出現、宣告不存在的 `crds/`；刪掉一處驗證步驟或加上 `continue-on-error` 也各自轉紅。`make chart-package` 端到端實跑通過。
+  - ⚠️ **它今天抓不到任何東西**：三個 chart 的 22 個子目錄檔全是 templates，且無 subchart 相依。這是對上述三類**尚未發生**風險的保險，不是修復——寫在守衛自己的 docstring 裡，避免有人把綠燈讀成「它抓到了什麼」。
+  - ⛔ **更正 #1755 票面的一句話**：票尾寫「本環境無 helm…這是量不到」。實為可得——`go install` 兩分鐘建得出來，而且 dev container 本來就裝（`devcontainer.json` 的 `kubectl-helm-minikube`），CI 的 `python-tests-run` / `iac-helm-sast` / `federation-e2e` 三個 job 也都裝。⇒ 測試不使用 skip：helm 缺席時走 `EXIT_CALLER_ERROR`（2），「量不到」與「量了沒事」在 exit code 上就分得開。
+  - **順帶修掉一個自己造的偽陽性**：呼叫點掃描原本連**註解**都算——fixture 裡一句 `# no helm package in this workflow` 被當成呼叫點。已跳過註解行，並把它釘成測試。
 - **chart ship-surface 的 `SHIP` 那一半從未被驗證過（lint；[#1755](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1755)）**：上一版的守衛只驗一個方向——`EXCLUDE` 宣告必須真的被 `.helmignore` 匹配；**`SHIP` 宣告從來沒有被拿去對照 `.helmignore`**，於是表格可以宣稱一個檔會到客戶手上，而 packer 其實把它丟掉。這不是假想：`helm/threshold-exporter/README.md` 當時逐字宣告為 `SHIP`、理由寫「chart usage doc, written for whoever pulls it」，而該 chart `.helmignore` 第 12 行逐字就是 `README.md`——**拉這個 chart 的人從來沒拿到過它**。補上對稱斷言後，閘門在真 repo 上立刻轉紅並指出那一行；修復前跑同一支閘門是 rc=0，該缺陷完全不可見。
   - **處置是改宣告而不是改 `.helmignore`**：拿掉那行會**改變一個已發布 artifact 的內容**，那是 release 決策不是 lint 修補。宣告改為 `EXCLUDE` 並把真實理由寫進表格。
   - **`.helmignore` 模型首次用真 helm 驗證**（`go install` 建出 v3.16 後跑 `helm package`）：六種可作用於根檔的寫法（裸 basename／glob／`/glob`／`/literal`／結尾斜線 `mustDir`／不相干 pattern）與模型 **6/6 一致**；兩個刻意不模擬的構造是**大聲失敗**而非靜默分歧——`!` 否定行會讓 helm 連 `Chart.yaml` 都忽略而中止（`Chart.yaml file is missing`）、`**` 被 helm 自己的 parser 拒絕。⇒ 殘餘風險落在明文宣告為範圍外的**子目錄**，不在 chart 根。

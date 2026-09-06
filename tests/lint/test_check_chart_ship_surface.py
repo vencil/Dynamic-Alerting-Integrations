@@ -548,6 +548,133 @@ class TestHookTriggers:
 
 
 # ---------------------------------------------------------------------------
+# the archive check must stay wired into every `helm package` call site
+# ---------------------------------------------------------------------------
+class TestPackageVerificationWiring:
+    """#1755's second half lives in release workflows, where helm exists.
+
+    A step that only lives in a workflow can be deleted, renamed or have its
+    exit code discarded, and nothing notices until a release ships something it
+    should not have. This assertion is the thing that notices — and it needs no
+    helm, so it runs on every PR.
+    """
+
+    @staticmethod
+    def _repo(tmp_path: Path, workflow: str, makefile: str | None = None) -> Path:
+        repo = tmp_path / "repo"
+        (repo / ".github" / "workflows").mkdir(parents=True)
+        (repo / ".github" / "workflows" / "release.yaml").write_text(
+            workflow, encoding="utf-8"
+        )
+        if makefile is not None:
+            (repo / "Makefile").write_text(makefile, encoding="utf-8")
+        return repo
+
+    def test_live_repo_has_every_call_site_wired(self) -> None:
+        """Green for the right reason: the four real call sites (#1755 lists
+        them) are all covered, not zero call sites found."""
+        assert gate.check_package_verification_wiring(REPO_ROOT) == []
+        sites = [
+            s
+            for sites in gate.discover_shipping_charts(REPO_ROOT).values()
+            for s in sites
+        ]
+        # ⛔ Vacuity guard: no call sites would make the assertion above empty.
+        assert len(sites) >= 4, sites
+
+    def test_package_without_verification_is_red(self, tmp_path: Path) -> None:
+        repo = self._repo(
+            tmp_path,
+            "          helm package helm/demo -d .build/\n"
+            "          helm push .build/demo-1.0.0.tgz oci://reg/charts\n",
+        )
+        v = gate.check_package_verification_wiring(repo)
+        assert len(v) == 1
+        assert "nothing invokes check_chart_package_contents.py" in v[0]
+        assert "before the `helm push` on line 2" in v[0]
+
+    def test_verification_after_the_push_is_red(self, tmp_path: Path) -> None:
+        """Ordering is the point: checking after publication is a post-mortem."""
+        repo = self._repo(
+            tmp_path,
+            "          helm package helm/demo -d .build/\n"
+            "          helm push .build/demo-1.0.0.tgz oci://reg/charts\n"
+            "          python3 scripts/tools/lint/check_chart_package_contents.py\n",
+        )
+        assert len(gate.check_package_verification_wiring(repo)) == 1
+
+    def test_verification_before_the_push_is_green(self, tmp_path: Path) -> None:
+        """Control for the two above — only the position changes."""
+        repo = self._repo(
+            tmp_path,
+            "          helm package helm/demo -d .build/\n"
+            "          python3 scripts/tools/lint/check_chart_package_contents.py\n"
+            "          helm push .build/demo-1.0.0.tgz oci://reg/charts\n",
+        )
+        assert gate.check_package_verification_wiring(repo) == []
+
+    @pytest.mark.parametrize(
+        "neutering",
+        [
+            "          python3 x/check_chart_package_contents.py || true\n",
+            "          python3 x/check_chart_package_contents.py ||true\n",
+            "        continue-on-error: true\n"
+            "        run: python3 x/check_chart_package_contents.py\n",
+            "          python3 x/check_chart_package_contents.py\n"
+            "          set +e\n",
+        ],
+    )
+    def test_a_neutered_verification_is_red(
+        self, tmp_path: Path, neutering: str
+    ) -> None:
+        """⭐ Present-but-defanged reads exactly like protection while providing
+        none. Finding the invocation is not enough."""
+        repo = self._repo(
+            tmp_path,
+            "          helm package helm/demo -d .build/\n"
+            + neutering
+            + "          helm push .build/demo-1.0.0.tgz oci://reg/charts\n",
+        )
+        v = gate.check_package_verification_wiring(repo)
+        assert len(v) == 1, v
+        assert "neutralises" in v[0]
+
+    def test_a_makefile_call_site_counts_too(self, tmp_path: Path) -> None:
+        """`make chart-package` publishes through `chart-push`; the workflows are
+        not the only road to the registry."""
+        repo = self._repo(
+            tmp_path,
+            "# no helm package in this workflow\n",
+            makefile="\t@helm package helm/demo -d .build/\n"
+            "\t@helm push .build/demo-1.0.0.tgz oci://reg/charts\n",
+        )
+        v = gate.check_package_verification_wiring(repo)
+        assert len(v) == 1
+        assert v[0].startswith("Makefile:1")
+
+    def test_no_call_sites_means_nothing_to_assert(self, tmp_path: Path) -> None:
+        """⛔ Anti-vacuity in the other direction: the assertion must not invent
+        violations where no chart is packaged at all."""
+        repo = self._repo(tmp_path, "# nothing here\n")
+        assert gate.check_package_verification_wiring(repo) == []
+
+    def test_a_comment_mentioning_helm_package_is_not_a_call_site(
+        self, tmp_path: Path
+    ) -> None:
+        """Found the hard way: a fixture comment reading "# no helm package in
+        this workflow" was counted as a call site. A guard that matches prose
+        reports work nobody can do."""
+        repo = self._repo(
+            tmp_path,
+            "# no helm package in this workflow\n"
+            "        # helm package helm/demo -d .build/  (disabled)\n",
+            makefile="# helm package helm/demo -d .build/\n",
+        )
+        assert gate.check_package_verification_wiring(repo) == []
+        assert gate.discover_shipping_charts(repo) == {}
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 def test_cli_on_the_live_repo_exits_zero() -> None:
