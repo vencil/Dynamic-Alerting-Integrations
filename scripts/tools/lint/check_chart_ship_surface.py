@@ -56,20 +56,29 @@ Exit codes
 """
 from __future__ import annotations
 
+import argparse
 import fnmatch
+import os
 import re
 import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
 
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
+from _lib_exitcodes import (  # noqa: E402
+    EXIT_OK,
+    EXIT_VIOLATION,
+    EXIT_CALLER_ERROR,
+)
+from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_validation import i18n_text  # noqa: E402
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 SHIP = "SHIP"
 EXCLUDE = "EXCLUDE"
-
-EXIT_OK = 0
-EXIT_VIOLATION = 1
-EXIT_CALLER_ERROR = 2
 
 # Chart-root files and why each one is where it is. Keyed by the chart
 # directory exactly as the `helm package` invocation spells it.
@@ -244,6 +253,24 @@ def check(repo_root: Path = REPO_ROOT) -> List[str]:
 
 
 def main(argv: List[str] | None = None) -> int:
+    # argparse with no flags — enforces the repo-wide CLI contract
+    # (`--help` exits 0; unknown flags exit 2, argparse's default). The
+    # description goes through i18n_text so `--help` responds to DA_LANG,
+    # the bilingual contract of dev-rules §9 L3; `try_utf8_stdout()` first
+    # because CJK in --help would raise UnicodeEncodeError on a legacy
+    # Windows console (cp950/cp936) before argparse ever prints.
+    try_utf8_stdout()
+    parser = argparse.ArgumentParser(
+        description=i18n_text(
+            "斷言每個會出貨的 Helm chart，其根目錄的每個檔案都已宣告："
+            "要嘛刻意隨 .tgz 到客戶手上，要嘛被該 chart 的 .helmignore 排除。",
+            "Assert that every file at the root of a shipping Helm chart is "
+            "declared: it either reaches customers inside the .tgz on "
+            "purpose, or that chart's .helmignore excludes it.",
+        ),
+    )
+    parser.parse_args(argv)
+
     try:
         violations = check()
     except CallerError as exc:
