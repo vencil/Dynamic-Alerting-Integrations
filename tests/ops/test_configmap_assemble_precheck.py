@@ -167,6 +167,19 @@ class TestPrecheckNeverTreatsCannotMeasureAsClean:
         rc = mod.main(["--config-dir", str(d)])
         assert rc == 2
 
+    def test_a_defaults_only_dir_is_allowed(self, tmp_path):
+        """⛔ Deliberate, and the boundary a reviewer will ask about: the
+        empty-dir arm is about the recipe's globs expanding to NOTHING, not
+        about how many tenants a tree ought to have. A `_defaults.yaml`-only
+        dir projects faithfully — the ConfigMap says what the tree says —
+        so blocking it would be this gate adopting a content policy it
+        explicitly declines to own."""
+        d = tmp_path / "conf.d"
+        d.mkdir()
+        (d / "_defaults.yaml").write_text(_DEFAULTS, encoding="utf-8")
+        r = _run(d)
+        assert r.returncode == 0, r.stdout + r.stderr
+
     def test_a_hanging_validator_is_refused_not_waited_on(self, tmp_path, monkeypatch):
         """`make configmap-assemble` is customer-run: an unbounded wait there
         is a silent wedge with no output. The timeout has to land in the SAME

@@ -513,6 +513,16 @@ class TestDiscoverTenantsSpellingMatchesTheProducer:
              "x.yang", "plain.y"])
         assert got == ["db-a"]
 
+    def test_a_same_stem_pair_counts_once_and_says_so(self, monkeypatch, capsys):
+        """Accepting both spellings made one stem reachable through two keys.
+        A ConfigMap in that state makes the exporter reject the ENTIRE config
+        dir, so counting `db-a` twice — or de-duplicating it quietly — would
+        both be misleading. Counted once, and named on stderr."""
+        got = self._discover(
+            monkeypatch, ["_defaults.yaml", "db-a.yaml", "db-a.yml"])
+        assert got == ["db-a"]
+        assert "db-a" in capsys.readouterr().err
+
     def test_reserved_keys_stay_out_in_both_spellings(self, monkeypatch):
         """The `_` filter is orthogonal to the spelling and must survive it."""
         got = self._discover(

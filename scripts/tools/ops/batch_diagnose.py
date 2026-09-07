@@ -105,6 +105,17 @@ def discover_tenants(namespace="monitoring", configmap="threshold-config"):
             print(f"WARNING: ConfigMap key {key!r} carries no tenant id — "
                   f"skipped", file=sys.stderr)
             continue
+        if tenant in tenants:
+            # Only reachable since this site started accepting both
+            # spellings: `db-a.yaml` + `db-a.yml` are two keys, one stem.
+            # ⛔ Loud, not silent — that ConfigMap makes the exporter reject
+            # the ENTIRE config dir, so a clean-looking report here would be
+            # the most misleading possible output.
+            print(f"WARNING: ConfigMap key {key!r} repeats tenant "
+                  f"{tenant!r} under another spelling — counted once; the "
+                  f"exporter rejects a config dir in this state",
+                  file=sys.stderr)
+            continue
         tenants.append(tenant)
     return sorted(tenants)
 

@@ -802,7 +802,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "826ca3f96103c24fce1b717a7fdbfea0a5150309545fc618f6c29c6487767952",
+ "source_digest": "e8ca59cb01843ac560d345c67d318e6d06c2123d61f6f82fe091410dffb355ea",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1010,6 +1010,7 @@
   "tests/ops/test_confd_unusable_signal.py",
   "tests/ops/test_config_diff.py",
   "tests/ops/test_config_history.py",
+  "tests/ops/test_configmap_assemble_precheck.py",
   "tests/ops/test_cutover_tenant.py",
   "tests/ops/test_da_assembler.py",
   "tests/ops/test_diagnose.py",
@@ -1328,6 +1329,7 @@
    "tests/lint/test_e2e_spec_lint.py",
    "tests/ops/test_ci_baseline_substitution.py",
    "tests/ops/test_ci_path_filter_coverage.py",
+   "tests/ops/test_configmap_assemble_precheck.py",
    "tests/ops/test_git_check_lock.py",
    "tests/ops/test_grar_strict_hardening.py",
    "tests/ops/test_nightly_scan_matrix_drift.py",
@@ -2217,6 +2219,9 @@
   ],
   "scripts/ops/commit_helper.py": [
    "tests/ops/test_commit_helper.py"
+  ],
+  "scripts/ops/configmap_assemble_precheck.py": [
+   "tests/ops/test_configmap_assemble_precheck.py"
   ],
   "scripts/ops/dx_run.py": [
    "tests/ops/test_dx_run.py"

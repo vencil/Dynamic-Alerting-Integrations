@@ -116,9 +116,14 @@ def main(argv: list[str] | None = None) -> int:
     shipped = _shipped(config_dir)
     if not shipped:
         print(
-            f"ERROR: {config_dir} contains no config carrier — the assembled "
-            f"ConfigMap would have no tenant keys at all, which the exporter "
-            f"cannot tell from 'this platform has no tenants'.",
+            f"ERROR: {config_dir} contains no config carrier — the recipe's "
+            f"globs would expand to nothing and the ConfigMap would be built "
+            f"with zero --from-file args. That is a mis-pointed --config-dir "
+            f"far more often than an intentional deploy.\n"
+            f"       ⚠️ NOT a tenant-count policy: a dir holding only "
+            f"`_defaults.yaml` is allowed, because the ConfigMap then "
+            f"faithfully projects a platform that has no tenants yet. "
+            f"Whether a tree SHOULD have tenants is validate_config's plane.",
             file=sys.stderr,
         )
         return EXIT_VIOLATION
