@@ -657,9 +657,14 @@ Silent Mode naturally bypasses routing: Alertmanager's `inhibit_rules` intercept
 python3 scripts/tools/ops/generate_alertmanager_routes.py \
   --config-dir conf.d/ --dry-run
 
-# Generate fragment + CI validation
+# CI validation (--validate writes nothing; with -o it is refused, exit 2)
 python3 scripts/tools/ops/generate_alertmanager_routes.py \
-  --config-dir conf.d/ -o alertmanager-routes.yaml --validate \
+  --config-dir conf.d/ --validate \
+  --policy .github/custom-rule-policy.yaml
+
+# Generate fragment
+python3 scripts/tools/ops/generate_alertmanager_routes.py \
+  --config-dir conf.d/ -o alertmanager-routes.yaml \
   --policy .github/custom-rule-policy.yaml
 
 # All-in-one merge into Alertmanager ConfigMap + reload

@@ -1772,16 +1772,20 @@ docker run --rm \
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--output <FILE>` | Output to file | stdout |
+| `--output <FILE>` | Output to file. **Read only by render (default) and `--output-configmap`, and not together with `--dry-run`**; with `--validate` / `--apply` / `--dry-run` it is a caller error (exit 2), never a silent no-write (#1650) | stdout |
 | `--output-configmap` | Output complete Kubernetes ConfigMap YAML | false |
 | `--base-config <FILE>` | Custom Alertmanager base config. **Only `--output-configmap` reads it**; supplying it in any other mode is a caller error (exit 2), not a silent no-op | built-in default (**only when the flag is omitted**; a supplied value that is unreadable / not valid YAML / not a mapping exits 2 rather than falling back) |
-| `--dry-run` | Show preview without writing | false |
-| `--validate` | Validate only, don't output | false |
+| `--dry-run` | Show preview without writing. **Not read by `--validate` / `--apply`** (exit 2) | false |
+| `--validate` | Validate only, don't output. Any tenant file in conf.d that cannot be parsed → exit 1, with or without `--strict` (#1460) | false |
 | `--apply` | Apply directly to Kubernetes (requires kubectl) | false |
-| `--yes` | Skip confirmation prompt with --apply | false |
+| `--namespace <NS>` | Namespace of the ConfigMap. **Read only by `--apply` / `--output-configmap`**; exit 2 in any other mode | `monitoring` |
+| `--configmap <NAME>` | ConfigMap name. **Read only by `--apply` / `--output-configmap`**; exit 2 in any other mode | `alertmanager-config` |
+| `--yes` | Skip confirmation prompt with --apply. **Read only by `--apply`**; exit 2 in any other mode | false |
 | `--policy <FILE>` | **Path** to a policy YAML holding an `allowed_domains:` list (omit for no constraint). ⚠️ This takes a file path, not a comma-separated domain list; a value that cannot be read exits 2 (#1556) | (unrestricted) |
 
 **Output**
+
+Every mode first prints one stdout line, `Config files: N read, M skipped (<names>)` (#1460) — N / M come from the structured record, not from the stderr WARN lines; when M > 0 and a skipped file is a tenant file, the run produces nothing further.
 
 **Fragment Mode** (no `--output-configmap`):
 YAML fragment containing route, receivers, inhibit_rules.
@@ -1839,8 +1843,8 @@ docker run --rm --kubeconfig=$HOME/.kube/config \
 | Code | Description |
 |------|-------------|
 | `0` | Success |
-| `1` | Config validation failed |
-| `2` | Caller error: **the tool could not do its job because of how it was invoked or its environment** — not because your config violates something. Reaching it today (non-exhaustive): `--policy` / `--base-config` supplied but unusable (not a file, unreadable, not valid YAML, top level not a mapping); `--base-config` used in a mode other than `--output-configmap`; the `-o` output path cannot be written; `--apply` without `--yes` where stdin cannot be read; and kubectl / cluster operations failing (#1556, #1616, #1617). ⚠️ **This row is the v2.10.0 contract**; the `v2.9.0` image pinned at the top of this page returns 0 or 1 for most of them |
+| `1` | Config validation failed; **or conf.d holds a tenant file that could not be parsed / read** (bad YAML, not UTF-8, top level not a mapping, a directory named `x.yaml`) — refused in every mode, with or without `--strict`, and the file is named on stdout (#1460) |
+| `2` | Caller error: **the tool could not do its job because of how it was invoked or its environment** — not because your config violates something. Reaching it today (non-exhaustive): `--policy` / `--base-config` supplied but unusable (not a file, unreadable, not valid YAML, top level not a mapping); `--base-config` used in a mode other than `--output-configmap`; **`-o` / `--dry-run` / `--namespace` / `--configmap` / `--yes` used in a mode that never reads them** (the message names the flag and the mode and gives a remedy argparse accepts; #1650); the `-o` output path cannot be written; `--apply` without `--yes` where stdin cannot be read; and kubectl / cluster operations failing (#1556, #1616, #1617). ⚠️ **This row is the v2.10.0 contract**; the `v2.9.0` image pinned at the top of this page returns 0 or 1 for most of them |
 
 ---
 

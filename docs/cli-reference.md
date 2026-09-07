@@ -1676,16 +1676,20 @@ da-tools generate-routes --config-dir <path> [options]
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--output <FILE>` | 輸出至檔案 | stdout |
+| `--output <FILE>` | 輸出至檔案。**只有 render（預設）與 `--output-configmap` 會讀它，且不能配 `--dry-run`**；配 `--validate` / `--apply` / `--dry-run` 是呼叫端錯誤（結束碼 2），不會靜默不寫（#1650） | stdout |
 | `--output-configmap` | 產出完整 Kubernetes ConfigMap YAML | false |
 | `--base-config <FILE>` | 自訂 Alertmanager 基礎配置。**僅 `--output-configmap` 會讀它**；用在其他模式是呼叫端錯誤（結束碼 2），不會被靜默忽略 | 內建預設（**僅在未提供本旗標時**；供了但讀不到／不是合法 YAML／頂層不是 mapping 一律結束碼 2，不會退回預設） |
-| `--dry-run` | 僅輸出預覽，不寫入檔案 | false |
-| `--validate` | 僅驗證，不輸出 | false |
+| `--dry-run` | 僅輸出預覽，不寫入檔案。**`--validate` / `--apply` 不讀它**（結束碼 2） | false |
+| `--validate` | 僅驗證，不輸出。conf.d 裡任何解析不了的租戶檔 → 結束碼 1，不分 `--strict`（#1460） | false |
 | `--apply` | 直接套用至 Kubernetes（需 kubectl） | false |
-| `--yes` | 搭配 --apply 跳過確認提示 | false |
+| `--namespace <NS>` | ConfigMap 所在 namespace。**只有 `--apply` / `--output-configmap` 會讀它**，其他模式結束碼 2 | `monitoring` |
+| `--configmap <NAME>` | ConfigMap 名稱。**只有 `--apply` / `--output-configmap` 會讀它**，其他模式結束碼 2 | `alertmanager-config` |
+| `--yes` | 搭配 --apply 跳過確認提示。**只有 `--apply` 會讀它**，其他模式結束碼 2 | false |
 | `--policy <FILE>` | 策略 YAML 的**路徑**，內含 `allowed_domains:` 清單（省略＝不限制）。⚠️ 這裡吃的是檔案路徑，不是逗號分隔的域名；供了但讀不到會 exit 2（#1556） | （不限制） |
 
 **輸出**
+
+每個模式 stdout 都先印一行 `Config files: N read, M skipped (<檔名>)`（#1460）——N / M 來自結構化紀錄，不是 stderr 的 WARN 行；M > 0 且被跳過的是租戶檔時，這次執行不會再往下產出任何結果。
 
 **Fragment 模式** (`--output-configmap` 未指定)：
 YAML 片段，包含 route、receivers、inhibit_rules。
@@ -1707,8 +1711,8 @@ da-tools generate-routes --config-dir ./conf.d --apply --yes
 | 代碼 | 說明 |
 |------|------|
 | `0` | 成功 |
-| `1` | 配置驗證失敗 |
-| `2` | 呼叫端錯誤：**工具因為「怎麼被呼叫的」或「環境」而做不了事**，不是你的設定有違規。今天到得了這一格的有（非窮舉）：`--policy` / `--base-config` 供了但不可用（不是檔案、讀不到、不是合法 YAML、頂層不是 mapping）、`--base-config` 用在 `--output-configmap` 以外的模式、`-o` 的輸出路徑寫不進去、`--apply` 在讀不到 stdin 的環境下沒帶 `--yes`、以及 kubectl／叢集操作失敗（#1556、#1616、#1617）。⚠️ **上列是 v2.10.0 的契約**；本頁上方釘的 `v2.9.0` 映像對其中多數回 0 或 1 |
+| `1` | 配置驗證失敗；**或 conf.d 裡有解析不了／讀不了的租戶檔**（壞 YAML、非 UTF-8、頂層不是 mapping、目錄型 `x.yaml`）——所有模式一律拒絕，不分 `--strict`，stdout 點名檔案（#1460） |
+| `2` | 呼叫端錯誤：**工具因為「怎麼被呼叫的」或「環境」而做不了事**，不是你的設定有違規。今天到得了這一格的有（非窮舉）：`--policy` / `--base-config` 供了但不可用（不是檔案、讀不到、不是合法 YAML、頂層不是 mapping）、`--base-config` 用在 `--output-configmap` 以外的模式、**`-o` / `--dry-run` / `--namespace` / `--configmap` / `--yes` 用在不讀它們的模式**（訊息會點名旗標與模式並給一個 argparse 接受的改法；#1650）、`-o` 的輸出路徑寫不進去、`--apply` 在讀不到 stdin 的環境下沒帶 `--yes`、以及 kubectl／叢集操作失敗（#1556、#1616、#1617）。⚠️ **上列是 v2.10.0 的契約**；本頁上方釘的 `v2.9.0` 映像對其中多數回 0 或 1 |
 
 ---
 

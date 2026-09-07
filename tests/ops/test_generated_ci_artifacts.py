@@ -4130,11 +4130,13 @@ _EXPECTED_GL_APPLY: dict[str, list[str]] = {
 # one pin covers the axis.
 _EXPECTED_GH_GENERATE: list[str] = [
     'mkdir -p .output',
-    # ⛔ `--user` is not cosmetic and must stay in the pin: this is the only
-    # WRITABLE mount in the workflow, and the image ends `USER nonroot`
-    # (uid 10001) while `mkdir -p .output` above runs as the runner user.
-    # Without it the container cannot create its own output file.
-    'docker run --rm --user $(id -u):$(id -g) -v ${{ github.workspace }}/${{ env.CONFIG_DIR }}:/data/conf.d:ro -v ${{ github.workspace }}/.output:/data/output ${{ env.DA_TOOLS_IMAGE }} generate-routes --config-dir /data/conf.d -o /data/output/alertmanager-routes.yaml --validate',
+    # #1423 / #1650: read-only, no `-o`, no `/data/output`, no `--user`. The
+    # previous pin carried `-o /data/output/alertmanager-routes.yaml
+    # --validate` — a file `--validate` never wrote and nothing consumed —
+    # and since #1650 the tool exits 2 on that combination, so the old line
+    # would have turned every customer's PR red. `mkdir -p .output` stays:
+    # the config-diff step below still redirects into it on the host.
+    'docker run --rm -v ${{ github.workspace }}/${{ env.CONFIG_DIR }}:/data/conf.d:ro ${{ env.DA_TOOLS_IMAGE }} generate-routes --config-dir /data/conf.d --validate',
     ': "${RUNNER_TEMP:?RUNNER_TEMP is not set; this step writes its intermediate files there}"',
     'config_dir="${CONFIG_DIR%/}"',
     'mkdir -p .output/base/"$config_dir"',
@@ -4159,7 +4161,7 @@ _EXPECTED_GH_GENERATE: list[str] = [
     'exit 1',
     'fi',
     'set +e',
-    'docker run --rm -v ${{ github.workspace }}/.output/base/${{ env.CONFIG_DIR }}:/data/conf.d.base:ro -v ${{ github.workspace }}/${{ env.CONFIG_DIR }}:/data/conf.d:ro -v ${{ github.workspace }}/.output:/data/output ${{ env.DA_TOOLS_IMAGE }} config-diff --old-dir /data/conf.d.base --new-dir /data/conf.d --format markdown > .output/blast-radius.md',
+    'docker run --rm -v ${{ github.workspace }}/.output/base/${{ env.CONFIG_DIR }}:/data/conf.d.base:ro -v ${{ github.workspace }}/${{ env.CONFIG_DIR }}:/data/conf.d:ro ${{ env.DA_TOOLS_IMAGE }} config-diff --old-dir /data/conf.d.base --new-dir /data/conf.d --format markdown > .output/blast-radius.md',
     'rc=$?',
     'set -e',
     'if [ "$rc" -gt 1 ]; then',
@@ -5994,23 +5996,40 @@ class TestGitHubLegDefectsFoundInRoundSeven:
             f'{job["container"]}')
 
     @pytest.mark.parametrize('deploy', ['kustomize', 'helm', 'argocd'])
-    def test_the_only_writable_mount_runs_as_the_runner(self, deploy):
-        """⛔ 映像以 `USER nonroot`（uid 10001）結尾，而 `mkdir -p .output` 是
-        runner 使用者（uid 1001, umask 022）建的目錄。
+    def test_generate_routes_step_has_no_writable_mount_and_no_dead_output(self, deploy):
+        """#1423：這一步以前掛 `/data/output` 可寫、傳
+        `-o /data/output/alertmanager-routes.yaml --validate`——但 `--validate`
+        在用到 `-o` 之前就 return，檔案從來不存在，也沒有任何 step 讀它或
+        upload 它；那個可寫 bind mount 只是一個等著爆的權限面（映像
+        `USER nonroot`、目錄是 runner 的）。#1650 之後工具對 `-o` + `--validate`
+        直接結束碼 2，所以舊組合會讓客戶每個 PR 都紅。
 
-        容器因此無法在自己的輸出目錄裡建檔，`generate-routes -o` 直接 EACCES
-        ——每一個 PR 都死在這一步，而整個 `pull-requests: write` 權限存在的理由
-        （blast-radius comment）永遠到不了。
-
-        對照組寫在下一步：config-diff 是在 **host** 上重導向，所以它碰不到這個
-        問題；只有這一步是把 `-o` 交給容器內部。
+        本測試釘的是「拿掉」：沒有 `-o`、沒有 `/data/output`、也就不需要
+        `--user`（它原本的理由就是那個可寫 mount）。對照組在下一步：config-diff
+        仍在 **host** 上重導向進 `.output/`，所以 `mkdir -p .output` 保留。
         """
         steps = self._gh(deploy)['jobs']['generate']['steps']
-        body = next(s['run'] for s in steps
-                    if s.get('name') == 'Generate Alertmanager routes')
-        assert '--user $(id -u):$(id -g)' in body, (
-            f'{deploy}: 唯一可寫的 bind mount 沒有 --user——容器寫不進去。'
+        raw = next(s['run'] for s in steps
+                   if s.get('name') == 'Generate Alertmanager routes')
+        # Command lines only: the step's comment EXPLAINS what was removed,
+        # and naming the removed tokens there must not read as their return.
+        body = '\n'.join(ln for ln in raw.splitlines()
+                         if not ln.lstrip().startswith('#'))
+        assert '-o ' not in body and 'alertmanager-routes.yaml' not in body, (
+            f'{deploy}: generate-routes 又帶了 -o——--validate 永遠不會寫它。'
             f'\n{body}')
+        assert '/data/output' not in body, (
+            f'{deploy}: generate-routes 又掛了可寫的 /data/output——沒有東西會寫它。'
+            f'\n{body}')
+        assert '--user' not in body, (
+            f'{deploy}: 沒有可寫 mount 就不該有 --user。\n{body}')
+        assert '--validate' in body and ':/data/conf.d:ro' in body, body
+        # 對照組：blast-radius 仍靠 host 端重導向落地，所以 .output 還在。
+        # ⛔ Match the COMMAND, not the word: the generate-routes comment
+        # above mentions "the config-diff step below" and matched first.
+        diff_body = next(s['run'] for s in steps
+                         if 'config-diff --old-dir' in str(s.get('run', '')))
+        assert '> .output/blast-radius.md' in diff_body, diff_body
 
     @pytest.mark.parametrize('deploy', ['kustomize', 'helm', 'argocd'])
     def test_the_push_leg_watches_the_same_trees_as_the_pr_leg(self, deploy):

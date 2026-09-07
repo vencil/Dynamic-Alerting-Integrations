@@ -636,9 +636,14 @@ Silent Mode 天然 bypass routing：Alertmanager 的 inhibit_rules 在 route eva
 python3 scripts/tools/ops/generate_alertmanager_routes.py \
   --config-dir conf.d/ --dry-run
 
-# 產出 fragment + CI 驗證
+# CI 驗證（--validate 不寫檔；配 -o 會被拒絕，結束碼 2）
 python3 scripts/tools/ops/generate_alertmanager_routes.py \
-  --config-dir conf.d/ -o alertmanager-routes.yaml --validate \
+  --config-dir conf.d/ --validate \
+  --policy .github/custom-rule-policy.yaml
+
+# 產出 fragment
+python3 scripts/tools/ops/generate_alertmanager_routes.py \
+  --config-dir conf.d/ -o alertmanager-routes.yaml \
   --policy .github/custom-rule-policy.yaml
 
 # 一站式合併至 Alertmanager ConfigMap + reload

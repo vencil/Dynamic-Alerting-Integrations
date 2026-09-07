@@ -622,7 +622,9 @@
    "tests/ops/test_error_consistency.py",
    "tests/ops/test_explain_route.py",
    "tests/ops/test_generate_alertmanager_routes.py",
+   "tests/ops/test_generate_routes_flag_modes.py",
    "tests/ops/test_generate_routes_orchestration.py",
+   "tests/ops/test_generate_routes_unreadable_tree.py",
    "tests/ops/test_grar_facade_reexports.py",
    "tests/ops/test_grar_strict_hardening.py",
    "tests/ops/test_integration.py",
@@ -758,7 +760,9 @@
    "tests/ops/test_domain_policy.py",
    "tests/ops/test_error_consistency.py",
    "tests/ops/test_generate_alertmanager_routes.py",
+   "tests/ops/test_generate_routes_flag_modes.py",
    "tests/ops/test_generate_routes_orchestration.py",
+   "tests/ops/test_generate_routes_unreadable_tree.py",
    "tests/ops/test_grar_strict_hardening.py",
    "tests/ops/test_integration.py",
    "tests/ops/test_maintenance_scheduler.py",
@@ -809,7 +813,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "48c3b22462b5552af06a204c15811074db5d141be25cd8bcdca09227869788f1",
+ "source_digest": "8a5a61387c6b8f0eca8407f4b27c3c03d0dc2b013ad0ccc306eb3fb0e1021ec2",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1036,7 +1040,9 @@
   "tests/ops/test_federation_keygen.py",
   "tests/ops/test_federation_revocation_reconciler.py",
   "tests/ops/test_generate_alertmanager_routes.py",
+  "tests/ops/test_generate_routes_flag_modes.py",
   "tests/ops/test_generate_routes_orchestration.py",
+  "tests/ops/test_generate_routes_unreadable_tree.py",
   "tests/ops/test_generate_rule_pack_split.py",
   "tests/ops/test_generate_tenant_mapping_rules.py",
   "tests/ops/test_generated_ci_artifacts.py",
@@ -2774,7 +2780,9 @@
   "scripts/tools/ops/generate_alertmanager_routes.py": [
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/ops/test_generate_alertmanager_routes.py",
-   "tests/ops/test_generate_routes_orchestration.py"
+   "tests/ops/test_generate_routes_flag_modes.py",
+   "tests/ops/test_generate_routes_orchestration.py",
+   "tests/ops/test_generate_routes_unreadable_tree.py"
   ],
   "scripts/tools/ops/generate_rule_pack_split.py": [
    "tests/ops/test_rule_pack_split_real_packs.py",

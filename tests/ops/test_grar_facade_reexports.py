@@ -70,11 +70,13 @@ EXPECTED_REEXPORTS: dict[str, tuple[str, ...]] = {
         "merge_routing_with_defaults",
     ),
     "_grar_parse": (
+        "TenantTree",  # #1460 file accounting
         "_merge_tenant_routing",
         "_parse_config_files",
         "_parse_platform_config",
         "_parse_tenant_overrides",
         "load_tenant_configs",
+        "load_tenant_tree",
     ),
     "_grar_routes": (
         "_build_enforced_routes",

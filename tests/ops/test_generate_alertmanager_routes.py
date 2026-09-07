@@ -2414,9 +2414,12 @@ class TestStrictValidateCLI:
 
     def _run(self, config_dir, *extra_flags):
         import subprocess
+        # #1650: this runner used to add `--dry-run`; every caller passes
+        # `--validate`, which never reads it, and the tool now exits 2 on
+        # the pair.
         return subprocess.run(
             [sys.executable, self._SCRIPT, "--config-dir", config_dir,
-             "--dry-run", *extra_flags],
+             *extra_flags],
             capture_output=True, text=True, encoding="utf-8", timeout=60)
 
     def test_nonstrict_validate_exit0_on_violation(self):

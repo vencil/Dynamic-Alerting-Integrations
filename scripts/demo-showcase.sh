@@ -227,11 +227,13 @@ step "Generate Alertmanager routes for all tenants"
 # ─────────────────────────────────────────────
 
 ROUTES_OUTPUT="$SHOWCASE_DIR/alertmanager-routes.yaml"
-info "Running: da-tools generate-routes --config-dir $CONF_DIR --validate"
+# #1423 / #1650: not `--validate` here — that mode returns before `-o` is
+# used (so the preview below never had a file to show), and the tool now
+# refuses the two together. Validation is its own call in the CI templates.
+info "Running: da-tools generate-routes --config-dir $CONF_DIR -o $ROUTES_OUTPUT"
 python3 "$TOOLS_DIR/ops/generate_alertmanager_routes.py" \
   --config-dir "$CONF_DIR" \
-  -o "$ROUTES_OUTPUT" \
-  --validate 2>&1 || true
+  -o "$ROUTES_OUTPUT" 2>&1 || true
 echo ""
 if [ -f "$ROUTES_OUTPUT" ]; then
   info "Generated routes → $ROUTES_OUTPUT"
