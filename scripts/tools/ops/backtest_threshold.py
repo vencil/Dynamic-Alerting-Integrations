@@ -47,7 +47,7 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import load_yaml_file, is_disabled, http_get_json, query_prometheus_range, write_json_secure, write_text_secure, add_prometheus_arg  # noqa: E402
+from _lib_python import load_yaml_file, is_disabled, http_get_json, query_prometheus_range, write_json_or_die, write_text_or_die, add_prometheus_arg  # noqa: E402
 from _lib_python import format_json_report  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
@@ -1250,7 +1250,8 @@ def main():
                 print(format_json_report(empty_report(
                     args.lookback, "skipped", "prometheus_unavailable")))
             if recipe_tenants and args.markdown_output:
-                write_text_secure(args.markdown_output, custom_alert_markdown(recipe_tenants))
+                write_text_or_die(args.markdown_output, custom_alert_markdown(recipe_tenants),
+                                  flag="--markdown-output")
             sys.exit(EXIT_OK)
         else:
             print(f"ERROR: Prometheus not reachable at {args.prometheus}", file=sys.stderr)
@@ -1299,7 +1300,8 @@ def main():
             print(format_json_report(empty_report(
                 args.lookback, "no_changes", "no_threshold_changes_detected")))
         if recipe_tenants and args.markdown_output:
-            write_text_secure(args.markdown_output, custom_alert_markdown(recipe_tenants))
+            write_text_or_die(args.markdown_output, custom_alert_markdown(recipe_tenants),
+                              flag="--markdown-output")
         sys.exit(EXIT_OK)
 
     # Run backtests
@@ -1318,8 +1320,10 @@ def main():
     else:
         print_text_report(report)
 
+    # #1641: an unwritable output path is rc=2 + one line naming the flag,
+    # not a traceback at rc=1 (which here would read as "HIGH risk found").
     if args.output:
-        write_json_secure(args.output, report)
+        write_json_or_die(args.output, report, flag="-o/--output")
         if not args.json:
             print(f"  JSON report: {args.output}")
 
@@ -1327,7 +1331,7 @@ def main():
         md = generate_markdown(report)
         if recipe_tenants:
             md += "\n\n" + custom_alert_markdown(recipe_tenants)
-        write_text_secure(args.markdown_output, md)
+        write_text_or_die(args.markdown_output, md, flag="--markdown-output")
         if not args.json:
             print(f"  Markdown report: {args.markdown_output}")
 

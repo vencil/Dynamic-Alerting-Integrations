@@ -37,7 +37,7 @@ from _lib_python import (  # noqa: E402
     format_json_report,
     load_tenant_configs as _load_tenant_configs_dir,
     load_yaml_file,
-    write_json_secure,
+    write_json_or_die,
 )
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
@@ -349,7 +349,8 @@ def main():
         print_report(results)
 
     if args.output:
-        write_json_secure(args.output, results)
+        # #1641: an unwritable -o is rc=2 + one line, not a traceback at rc=1.
+        write_json_or_die(args.output, results, flag="-o/--output")
         if not args.json:
             print(f"  JSON report: {args.output}")
 

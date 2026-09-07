@@ -34,10 +34,15 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, str(_THIS_DIR))  # Docker flat layout
 sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
 from _lib_python import (  # noqa: E402
-    read_onboard_hints, detect_cli_lang, write_text_secure, DOCS_INSTALL_URL,
-    DOCS_SITE_BASE,
+    read_onboard_hints, detect_cli_lang, ensure_dir_or_die, write_text_or_die,
+    DOCS_INSTALL_URL, DOCS_SITE_BASE,
 )
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+
+# #1641: every path this tool writes descends from -o/--output-dir, so every
+# writer names that flag; an unusable path is rc=2 + one line, not a
+# traceback at rc=1 (which reads as "invalid input").
+_OUTPUT_FLAG = "-o/--output-dir"
 # The predicate that decides which optional_overrides keys the PLATFORM ships
 # on the runtime `optional_overrides:` list (#1310). Imported rather than
 # re-spelled: the interactive prompt's behaviour below has to track shipped
@@ -1017,7 +1022,7 @@ def generate_report(tenant_name: str, selected_dbs: list[str], output_dir: str, 
 def write_outputs(output_dir: str, tenant_name: str, defaults_data: dict, tenant_data: dict, report: str, relabel_snippet: str | None = None, mapping_hint: dict | None = None) -> None:
     """Write all output files."""
     out = Path(output_dir)
-    out.mkdir(parents=True, exist_ok=True)
+    ensure_dir_or_die(out, flag=_OUTPUT_FLAG)
 
     # Write _defaults.yaml
     defaults_path = str(out / "_defaults.yaml")
@@ -1034,7 +1039,7 @@ def write_outputs(output_dir: str, tenant_name: str, defaults_data: dict, tenant
             yaml.safe_dump(defaults_data, default_flow_style=False,
                            allow_unicode=True, sort_keys=False))
     )
-    write_text_secure(defaults_path, defaults_content)
+    write_text_or_die(defaults_path, defaults_content, flag=_OUTPUT_FLAG)
     print(f"  📄 {defaults_path}")
 
     # Write tenant yaml
@@ -1091,13 +1096,13 @@ def write_outputs(output_dir: str, tenant_name: str, defaults_data: dict, tenant
     # 那個不一致正好會讓租戶對著一個 tenant-api 判 unknown 的 key 填值（400）。
     tenant_content = append_tenant_declared_stub(
         tenant_content, declared_keys, lang="zh")
-    write_text_secure(tenant_path, tenant_content)
+    write_text_or_die(tenant_path, tenant_content, flag=_OUTPUT_FLAG)
     print(f"  📄 {tenant_path}")
 
     # Write relabel_configs if provided (N:1 topology)
     if relabel_snippet:
         relabel_path = str(out / f"relabel_configs-{tenant_name}.yaml")
-        write_text_secure(relabel_path, relabel_snippet)
+        write_text_or_die(relabel_path, relabel_snippet, flag=_OUTPUT_FLAG)
         print(f"  📄 {relabel_path}")
 
     # v2.1.0 ADR-006: Write _instance_mapping hint if provided (1:N topology)
@@ -1111,12 +1116,12 @@ def write_outputs(output_dir: str, tenant_name: str, defaults_data: dict, tenant
             + yaml.safe_dump(mapping_hint, default_flow_style=False,
                              allow_unicode=True, sort_keys=False)
         )
-        write_text_secure(mapping_path, mapping_content)
+        write_text_or_die(mapping_path, mapping_content, flag=_OUTPUT_FLAG)
         print(f"  📄 {mapping_path}")
 
     # Write report
     report_path = str(out / "scaffold-report.txt")
-    write_text_secure(report_path, report)
+    write_text_or_die(report_path, report, flag=_OUTPUT_FLAG)
     print(f"  📄 {report_path}")
 
 
@@ -1458,7 +1463,7 @@ def main() -> None:
         profile_data = generate_profile(args.generate_profile, selected_dbs,
                                         tier=args.tier)
         output_dir = args.output_dir
-        Path(output_dir).mkdir(parents=True, exist_ok=True)
+        ensure_dir_or_die(output_dir, flag=_OUTPUT_FLAG)
         profiles_path = str(Path(output_dir) / "_profiles.yaml")
         profiles_content = (
             "# _profiles.yaml — Tenant Profile definitions\n"
@@ -1469,7 +1474,7 @@ def main() -> None:
         )
         # 飽和類 _critical 鍵上方插入教育註解（純顯示）
         profiles_content = annotate_saturation_criticals(profiles_content)
-        write_text_secure(profiles_path, profiles_content)
+        write_text_or_die(profiles_path, profiles_content, flag=_OUTPUT_FLAG)
         print(f"✅ Profile skeleton generated: {profiles_path}")
         print(f"   Profile: {args.generate_profile} (tier={args.tier})")
         print(f"   DBs: {', '.join(selected_dbs)}")

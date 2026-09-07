@@ -14,7 +14,7 @@ though the shipped Docker image always has PyYAML available transitively via
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 try:
     import yaml
@@ -28,6 +28,8 @@ def write_yaml_crd(
     output_path: Path,
     crd: dict,
     gitops: bool = False,
+    *,
+    flag: Optional[str] = None,
 ) -> None:
     """Write CRD to YAML file.
 
@@ -35,6 +37,13 @@ def write_yaml_crd(
         output_path: Output file path
         crd: CRD dict to serialize
         gitops: If True, use sorted keys and exclude timestamps
+        flag: The CLI flag *output_path* came from (``"--output-dir"``),
+              named in the error when the write fails (#1641)
+
+    Raises:
+        _lib_io.OutputWriteError: when *output_path* cannot be written. A
+            tool calling this on its CLI path catches it once in ``main()``
+            and exits ``EXIT_CALLER_ERROR`` (#1641).
     """
     if yaml:
         # Use yaml module if available
@@ -48,7 +57,7 @@ def write_yaml_crd(
         # Fallback: minimal YAML serialization
         yaml_str = _dict_to_yaml(crd)
 
-    write_text_secure(str(output_path), yaml_str)
+    write_text_secure(str(output_path), yaml_str, flag=flag)
 
 
 def _dict_to_yaml(obj: Any, indent: int = 0) -> str:

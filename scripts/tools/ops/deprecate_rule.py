@@ -41,7 +41,7 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import load_yaml_file as _lib_load_yaml  # noqa: E402
-from _lib_python import write_text_secure  # noqa: E402
+from _lib_python import write_text_or_die  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION  # noqa: E402
 from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
@@ -81,7 +81,9 @@ def save_yaml_file(path, data, header_comment=""):
         content += header_comment
     content += yaml.safe_dump(data, default_flow_style=False,
                               allow_unicode=True, sort_keys=False)
-    write_text_secure(path, content)
+    # #1641: the path is an existing conf.d file (derived, not an output
+    # flag) — no flag to name, but an unwritable file is rc=2, not rc=1.
+    write_text_or_die(path, content)
 
 
 def scan_for_metric(metric_key, config_dir):

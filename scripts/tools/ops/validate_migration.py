@@ -63,7 +63,7 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import http_get_json, write_text_secure, write_json_secure, query_prometheus_instant, add_prometheus_arg  # noqa: E402
+from _lib_python import http_get_json, ensure_dir_or_die, write_text_or_die, write_json_or_die, query_prometheus_instant, add_prometheus_arg  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 # Alias for backward-compat within this module
@@ -246,7 +246,9 @@ def classify_results(all_results):
 def write_csv_report(all_results, output_dir):
     """將比對結果寫入 CSV。"""
     out_dir = Path(output_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    # #1641: an unusable -o/--output-dir is rc=2 + one line naming the flag,
+    # not a traceback at rc=1 (which reads as "values mismatch").
+    ensure_dir_or_die(out_dir, flag="-o/--output-dir")
     csv_path = str(out_dir / "validation-report.csv")
 
     buf = io.StringIO()
@@ -280,8 +282,17 @@ def write_csv_report(all_results, output_dir):
                 d["status"],
                 ts,
             ])
-    write_text_secure(csv_path, "\ufeff" + buf.getvalue())
+    write_text_or_die(csv_path, "\ufeff" + buf.getvalue(), flag="-o/--output-dir")
     return csv_path
+
+
+def _convergence_flag(args) -> str:
+    """Which flag the convergence-report path came from (#1641).
+
+    ``--convergence-output`` when given; otherwise the report lands under
+    ``-o/--output-dir``, and that is the flag the write error must name.
+    """
+    return "--convergence-output" if args.convergence_output else "-o/--output-dir"
 
 
 class ConvergenceTracker:
@@ -473,9 +484,9 @@ def main():
                     conv_path = args.convergence_output or str(
                         Path(args.output_dir) / "cutover-readiness.json"
                     )
-                    parent = Path(conv_path).parent
-                    parent.mkdir(parents=True, exist_ok=True)
-                    write_json_secure(conv_path, report)
+                    conv_flag = _convergence_flag(args)
+                    ensure_dir_or_die(Path(conv_path).parent, flag=conv_flag)
+                    write_json_or_die(conv_path, report, flag=conv_flag)
                     print(f"\n  Cutover readiness report: {conv_path}")
                     break
 
@@ -488,9 +499,9 @@ def main():
             conv_path = args.convergence_output or str(
                 Path(args.output_dir) / "cutover-readiness.json"
             )
-            parent = Path(conv_path).parent
-            parent.mkdir(parents=True, exist_ok=True)
-            write_json_secure(conv_path, final)
+            conv_flag = _convergence_flag(args)
+            ensure_dir_or_die(Path(conv_path).parent, flag=conv_flag)
+            write_json_or_die(conv_path, final, flag=conv_flag)
             print(f"  Partial convergence report: {conv_path}")
 
         if csv_path:

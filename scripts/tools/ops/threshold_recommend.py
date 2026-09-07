@@ -71,7 +71,7 @@ from _lib_python import (  # noqa: E402
 # Aliased: the local format_json_report() below (domain report builder,
 # exercised directly by tests) delegates its final dump to the shared helper.
 from _lib_python import format_json_report as _dump_json  # noqa: E402
-from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
+from _lib_io import OutputWriteError, safe_label  # noqa: E402  (#1538 output-layer escaping; #1641)
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 import _observed_map_lib as observed_map_lib  # noqa: E402
 
@@ -1176,7 +1176,13 @@ def main() -> None:
 
     # #719: regenerate the observed-map and exit (does not need --config-dir).
     if args.generate_observed_map:
-        summary = observed_map_lib.write_observed_map()
+        try:
+            summary = observed_map_lib.write_observed_map()
+        except OutputWriteError as exc:
+            # #1641: the map path is internal (repo data file), but an
+            # unwritable workspace is still rc=2 + one line, not a traceback.
+            print(f"ERROR: {exc}", file=sys.stderr)
+            sys.exit(EXIT_CALLER_ERROR)
         # #1112: prose → stderr. `--generate-observed-map` is a maintenance
         # sub-command (regenerate a repo data file and exit), not a
         # recommendation run — so its `--json` document is the write summary

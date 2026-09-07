@@ -47,7 +47,7 @@ from _lib_python import (  # noqa: E402
     detect_cli_lang,
     format_json_report,
     http_get_json,
-    write_text_secure,
+    write_text_or_die,
 )
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
@@ -435,7 +435,8 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     if args.output:
-        write_text_secure(args.output, output)
+        # #1641: an unwritable -o is rc=2 + one line, not a traceback at rc=1.
+        write_text_or_die(args.output, output, flag="-o/--output")
         saved_msg = "已儲存" if lang == "zh" else "Saved to"
         print(f"\n{saved_msg}: {args.output}", file=sys.stderr)
 

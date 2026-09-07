@@ -46,25 +46,29 @@ class TestI18n:
 # ---------------------------------------------------------------------------
 class TestSafeWrite:
     def test_fallback_path_write_text(self, tmp_path, monkeypatch):
-        # Force the fallback branch (write_text_secure unavailable).
-        monkeypatch.setattr(grps, "write_text_secure", None)
+        # Force the fallback branch (shared writer unavailable).
+        monkeypatch.setattr(grps, "write_text_or_die", None)
         f = tmp_path / "out.yaml"
         grps._safe_write(str(f), "groups: []\n")
         assert f.read_text(encoding="utf-8") == "groups: []\n"
 
-    def test_uses_write_text_secure_when_available(self, tmp_path, monkeypatch):
+    def test_uses_shared_writer_when_available(self, tmp_path, monkeypatch):
+        """#1641: the shared writer is the _or_die form and is told which
+        flag the path came from, so an unusable --output-dir is rc=2."""
         called = {}
 
-        def fake_secure(path, content):
+        def fake_writer(path, content, *, flag=None):
             called["path"] = path
             called["content"] = content
+            called["flag"] = flag
             Path(path).write_text(content, encoding="utf-8")
 
-        monkeypatch.setattr(grps, "write_text_secure", fake_secure)
+        monkeypatch.setattr(grps, "write_text_or_die", fake_writer)
         f = tmp_path / "out.yaml"
         grps._safe_write(str(f), "groups: []\n")
         assert called["path"] == str(f)
         assert called["content"] == "groups: []\n"
+        assert called["flag"] == "--output-dir"
 
 
 # ---------------------------------------------------------------------------

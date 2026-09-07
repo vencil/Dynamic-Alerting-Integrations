@@ -41,7 +41,7 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from diagnose import check as diagnose_check  # noqa: E402
 from diagnose import query_prometheus  # noqa: E402
-from _lib_python import format_json_report, write_json_secure, add_prometheus_arg  # noqa: E402
+from _lib_python import format_json_report, write_json_or_die, add_prometheus_arg  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_confd import (  # noqa: E402
     config_stem,
@@ -356,7 +356,8 @@ def main():
         print_text_report(report)
 
     if args.output:
-        write_json_secure(args.output, report)
+        # #1641: an unwritable -o is rc=2 + one line, not a traceback at rc=1.
+        write_json_or_die(args.output, report, flag="-o/--output")
         if not args.json:
             print(f"\nJSON report written to: {args.output}")
 

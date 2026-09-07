@@ -347,6 +347,7 @@ da-tools batch-diagnose --tenants db-a,db-b,db-c --output /tmp/report.json
 |------|-------------|
 | `0` | All tenants healthy |
 | `1` | One or more tenant checks failed |
+| `2` | Caller error: bad arguments, or the output path given to `-o/--output` cannot be written (#1641) |
 
 ---
 
@@ -480,6 +481,7 @@ docker run --rm --network=host \
 |------|-------------|
 | `0` | Success (any convergence state) |
 | `1` | Prometheus connection or query failed |
+| `2` | Caller error: bad arguments, or the output path given to `-o/--output-dir` / `--convergence-output` cannot be written (#1641) |
 
 ---
 
@@ -745,7 +747,7 @@ docker run --rm --network=host \
 |------|-------------|
 | `0` | Success |
 | `1` | At least one threshold change was rated HIGH risk (review before merging); an unreachable Prometheus or a git that cannot run is not 1, see below |
-| `2` | Caller error: `--lookback` supplied but unusable (not `<number><d\|h\|m>`, #1625); `--git-diff` supplied but git cannot run (git not installed, not inside a git work tree, no HEAD~1) — ⛔ do not switch to `--config-dir` to go green, that compares two trees, not your PR |
+| `2` | Caller error: `--lookback` supplied but unusable (not `<number><d\|h\|m>`, #1625); `--git-diff` supplied but git cannot run (git not installed, not inside a git work tree, no HEAD~1) — ⛔ do not switch to `--config-dir` to go green, that compares two trees, not your PR; the output path given to `-o/--output` / `--markdown-output` cannot be written (#1641) |
 
 ---
 
@@ -1977,7 +1979,8 @@ docker run --rm \
 | Code | Description |
 |------|-------------|
 | `0` | Success |
-| `1` | Invalid input or I/O failed |
+| `1` | Invalid input |
+| `2` | Caller error: bad arguments, or the output path given to `-o/--output-dir` cannot be written (#1641) |
 
 ---
 
@@ -2060,7 +2063,8 @@ docker run --rm \
 | Code | Description |
 |------|-------------|
 | `0` | Success |
-| `1` | Invalid input file or I/O failed |
+| `1` | Invalid input file |
+| `2` | Caller error: bad arguments, or the output path given to `-o/--output-dir` cannot be written (#1641) |
 
 ---
 
@@ -2376,6 +2380,7 @@ docker run --rm \
 |------|-------------|
 | `0` | Success |
 | `1` | Invalid config file |
+| `2` | Caller error: bad arguments, or the output path given to `-o/--output-dir` cannot be written (#1641) |
 
 ---
 
@@ -2427,6 +2432,7 @@ docker run --rm \
 |------|-------------|
 | `0` | Success |
 | `1` | Invalid config file |
+| `2` | Caller error: bad arguments, or the output path given to `-o/--output` cannot be written (#1641) |
 
 ---
 
@@ -3088,6 +3094,7 @@ da-tools discover-mappings --endpoint http://mariadb-exporter:9104/metrics --jso
 |------|-------------|
 | `0` | Successfully discovered partition labels and generated mapping draft |
 | `1` | Connection failed or no suitable partition labels found |
+| `2` | Caller error: bad arguments, or the output path given to `-o/--output` cannot be written (#1641) |
 
 ---
 

@@ -333,6 +333,7 @@ da-tools batch-diagnose --tenants db-a,db-b,db-c --output /tmp/report.json
 |------|------|
 | `0` | 所有租戶健康 |
 | `1` | 一項或多項租戶檢查失敗 |
+| `2` | 呼叫端錯誤：參數錯誤，或 `-o/--output` 指到的輸出路徑寫不進去（#1641） |
 
 ---
 
@@ -441,6 +442,7 @@ da-tools validate --mapping mapping.csv --auto-detect-convergence --output valid
 |------|------|
 | `0` | 成功（任何收斂狀態） |
 | `1` | Prometheus 連線或查詢失敗 |
+| `2` | 呼叫端錯誤：參數錯誤，或 `-o/--output-dir`／`--convergence-output` 指到的輸出路徑寫不進去（#1641） |
 
 ---
 
@@ -647,7 +649,7 @@ da-tools backtest --config-dir ./conf.d-new --baseline ./conf.d-old --lookback 7
 |------|------|
 | `0` | 成功 |
 | `1` | 至少一項門檻變更被評為 HIGH 風險（合併前先審閱）；Prometheus 連不上、git 跑不了都不是 1，見下列 |
-| `2` | 呼叫端錯誤：`--lookback` 供了但不可用（不符合 `<數字><d\|h\|m>`，#1625）；`--git-diff` 供了但 git 跑不了（沒裝 git、不在 git work tree 內、沒有 HEAD~1）——⛔ 不要改用 `--config-dir` 轉綠，那比的是兩棵樹、不是你的 PR |
+| `2` | 呼叫端錯誤：`--lookback` 供了但不可用（不符合 `<數字><d\|h\|m>`，#1625）；`--git-diff` 供了但 git 跑不了（沒裝 git、不在 git work tree 內、沒有 HEAD~1）——⛔ 不要改用 `--config-dir` 轉綠，那比的是兩棵樹、不是你的 PR；`-o/--output`／`--markdown-output` 指到的輸出路徑寫不進去（#1641） |
 
 ---
 
@@ -1812,7 +1814,8 @@ da-tools scaffold --non-interactive --tenant db-c --db mariadb,redis
 | 代碼 | 說明 |
 |------|------|
 | `0` | 成功 |
-| `1` | 輸入無效或 I/O 失敗 |
+| `1` | 輸入無效 |
+| `2` | 呼叫端錯誤：參數錯誤，或 `-o/--output-dir` 指到的輸出路徑寫不進去（#1641） |
 
 ---
 
@@ -1873,7 +1876,8 @@ da-tools migrate ./my-rules.yml -o migration_output/
 | 代碼 | 說明 |
 |------|------|
 | `0` | 成功 |
-| `1` | 輸入檔案無效或 I/O 失敗 |
+| `1` | 輸入檔案無效 |
+| `2` | 呼叫端錯誤：參數錯誤，或 `-o/--output-dir` 指到的輸出路徑寫不進去（#1641） |
 
 ---
 
@@ -2138,6 +2142,7 @@ da-tools onboard ./alertmanager.yaml -o onboard-hints.json
 |------|------|
 | `0` | 成功 |
 | `1` | 配置檔案無效 |
+| `2` | 呼叫端錯誤：參數錯誤，或 `-o/--output-dir` 指到的輸出路徑寫不進去（#1641） |
 
 ---
 
@@ -2182,6 +2187,7 @@ da-tools analyze-gaps --config ./conf.d/db-a.yaml
 |------|------|
 | `0` | 成功 |
 | `1` | 配置檔案無效 |
+| `2` | 呼叫端錯誤：參數錯誤，或 `-o/--output` 指到的輸出路徑寫不進去（#1641） |
 
 ---
 
@@ -2829,6 +2835,7 @@ da-tools discover-mappings --endpoint http://mariadb-exporter:9104/metrics --jso
 |------|------|
 | `0` | 成功發現 partition label 並產生映射草稿 |
 | `1` | 無法連線或未發現合適的 partition label |
+| `2` | 呼叫端錯誤：參數錯誤，或 `-o/--output` 指到的輸出路徑寫不進去（#1641） |
 
 ---
 

@@ -43,7 +43,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import (  # noqa: E402
     detect_cli_lang,
     load_yaml_file,
-    write_text_secure,
+    write_text_or_die,
     iter_yaml_files,
 )
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
@@ -473,7 +473,8 @@ def main() -> None:
 
     # Write or print
     if args.output:
-        write_text_secure(args.output, output)
+        # #1641: an unwritable -o is rc=2 + one line, not a traceback at rc=1.
+        write_text_or_die(args.output, output, flag="-o/--output")
         print(f"Generated {len(groups)} rule group(s), "
               f"~{card['new_series_estimate']} new series → {args.output}",
               file=sys.stderr)

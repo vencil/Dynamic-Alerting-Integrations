@@ -43,7 +43,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo tools root
-from _lib_python import write_text_secure  # noqa: E402
+from _lib_python import ensure_dir_or_die, write_text_or_die  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 
@@ -249,9 +249,10 @@ def main():
             print(f"✗ Output file not found: {output_path}", file=sys.stderr)
             sys.exit(EXIT_VIOLATION)
 
-    # Write mode
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    write_text_secure(str(output_path), new_content)
+    # Write mode. #1641: an unusable --output is rc=2 + one line naming the
+    # flag, not a traceback at rc=1 (which reads as "out of sync").
+    ensure_dir_or_die(output_path.parent, flag="--output")
+    write_text_or_die(str(output_path), new_content, flag="--output")
 
     print(f"Synced {len(abbreviations)} abbreviations from glossary.md → abbreviations.md")
 

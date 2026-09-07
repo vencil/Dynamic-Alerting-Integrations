@@ -37,7 +37,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo tools root
-from _lib_python import write_text_secure  # noqa: E402
+from _lib_python import write_text_or_die  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 # ── Constants ────────────────────────────────────────────────────────
@@ -442,7 +442,8 @@ def main() -> int:
     output += f"<!-- Stats: {len(commits)} commits ({stats}) -->\n"
 
     if args.output:
-        write_text_secure(args.output, output)
+        # #1641: an unwritable -o is rc=2 + one line, not a traceback at rc=1.
+        write_text_or_die(args.output, output, flag="-o/--output")
         print(f"Written to {args.output}", file=sys.stderr)
     else:
         print(output)

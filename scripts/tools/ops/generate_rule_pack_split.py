@@ -49,11 +49,14 @@ sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
 
 try:
-    from _lib_python import detect_cli_lang, i18n_text, write_text_secure
+    from _lib_python import (
+        detect_cli_lang, i18n_text, ensure_dir_or_die, write_text_or_die,
+    )
 except ImportError:
     detect_cli_lang = None
     i18n_text = None
-    write_text_secure = None
+    ensure_dir_or_die = None
+    write_text_or_die = None
 
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
@@ -77,11 +80,24 @@ def t(zh: str, en: str) -> str:
 
 
 def _safe_write(path: str, content: str):
-    """Write file, fallback to Path.write_text if _lib not available."""
-    if write_text_secure:
-        write_text_secure(path, content)
+    """Write file, fallback to Path.write_text if _lib not available.
+
+    #1641: every path written here descends from ``--output-dir``; through the
+    shared writer an unusable path is rc=2 + one line naming that flag, not
+    a traceback at rc=1 (which reads as "edge/central metric mismatch").
+    """
+    if write_text_or_die:
+        write_text_or_die(path, content, flag="--output-dir")
     else:
         Path(path).write_text(content, encoding='utf-8', newline='\n')
+
+
+def _safe_mkdir(path: Path):
+    """``mkdir -p``; same fallback / same error shape as :func:`_safe_write`."""
+    if ensure_dir_or_die:
+        ensure_dir_or_die(path, flag="--output-dir")
+    else:
+        path.mkdir(parents=True, exist_ok=True)
 
 
 # ─ Metric extraction from PromQL expressions ────────────────────────────
@@ -453,8 +469,8 @@ def process_rule_packs(
     central_dir = output_path / "central-rules"
 
     if not dry_run:
-        edge_dir.mkdir(parents=True, exist_ok=True)
-        central_dir.mkdir(parents=True, exist_ok=True)
+        _safe_mkdir(edge_dir)
+        _safe_mkdir(central_dir)
 
     report = {
         "status": "success",
