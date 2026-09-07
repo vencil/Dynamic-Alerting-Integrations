@@ -2,7 +2,7 @@
 """deprecate_rule.py — 規則/指標下架工具。
 
 安全地將指定的 metric key 從平台中淘汰，三步自動化:
-  Step 1: 在 _defaults.yaml 中設定該 metric 為 "disable"
+  Step 1: 在每個 _defaults.yaml／_defaults.yml 載體中設定該 metric 為 "disable"
   Step 2: 掃描所有 conf.d/*.yaml，移除殘留的 metric key
   Step 3: 產出下架報告 (含需手動處理的 ConfigMap 清理指引)
 
@@ -43,8 +43,9 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import load_yaml_file as _lib_load_yaml  # noqa: E402
 from _lib_python import write_text_secure  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
-from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION  # noqa: E402
 from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
+    defaults_files_in,
     has_yaml_extension,
     resolve_defaults_file,
     unusable_config_entries,
@@ -156,9 +157,61 @@ def scan_for_metric(metric_key, config_dir):
     return findings
 
 
-def disable_in_defaults(metric_key, config_dir, execute=False):
-    """在 _defaults.yaml 中將 metric 設為 "disable"。"""
-    defaults_path = str(resolve_defaults_file(Path(config_dir)))
+def defaults_carriers(config_dir):
+    """列出 conf.d 內所有 defaults 載體（`_defaults.yaml`／`.yml`，任意大小寫）。
+
+    #1609: the exporter merges BOTH spellings into the defaults chain
+    (`config_hierarchy.go:216`), so a write that touches only the one
+    `resolve_defaults_file` picks leaves the threshold live in the other.
+    The scan (`scan_for_metric`) already sees every carrier; the writer has
+    to enumerate the same set or its report contradicts its action.
+
+    Flat read, like every other scan in this tool — hence `warn_nested`
+    (it dedups per directory per process, so this adds no second line).
+    `defaults_files_in` takes already-listed names on purpose (see its
+    docstring); listing here and filtering on `is_file()` keeps the set
+    identical to what the scan could read. Sorted, so a directory carrying
+    two spellings is processed in a deterministic order.
+    """
+    base = Path(config_dir)
+    warn_nested(base, tool="deprecate_rule")
+    entries = sorted(base.iterdir())
+    return defaults_files_in(base, [e.name for e in entries if e.is_file()])
+
+
+def disable_in_defaults(metric_key, config_dir, execute=False, *,
+                        defaults_path=None):
+    """在單一 defaults 載體中將 metric 設為 "disable"。
+
+    Single-carrier entry point, kept for callers that unpack `ok, msg`.
+    Without `defaults_path` it writes the one carrier
+    `resolve_defaults_file` picks — which is exactly the #1609 blind spot,
+    so the CLI flow goes through `disable_in_all_defaults` instead.
+    """
+    if defaults_path is None:
+        defaults_path = resolve_defaults_file(Path(config_dir))
+    return _disable_in_carrier(metric_key, Path(defaults_path), execute)
+
+
+def disable_in_all_defaults(metric_key, config_dir, execute=False):
+    """對每個 defaults 載體執行 `_disable_in_carrier`。
+
+    Returns one `(path, ok, msg)` per carrier from `defaults_carriers`.
+    With NO carrier present it returns the single canonical
+    `resolve_defaults_file` entry (`_defaults.yaml 不存在`), so a tree
+    without defaults reports exactly what it did before #1609.
+    """
+    base = Path(config_dir)
+    carriers = defaults_carriers(base)
+    if not carriers:
+        carriers = [resolve_defaults_file(base)]
+    return [(p, *_disable_in_carrier(metric_key, p, execute))
+            for p in carriers]
+
+
+def _disable_in_carrier(metric_key, defaults_path, execute=False):
+    """在指定的 defaults 載體檔案中將 metric 設為 "disable"。"""
+    defaults_path = str(defaults_path)
     if not Path(defaults_path).exists():
         return False, f"{Path(defaults_path).name} 不存在"
 
@@ -307,6 +360,11 @@ def main():
         print(f"  ⚠️  略過 {safe_label(bad.name)}——{unusable_reason(bad)}",
               file=sys.stderr)
 
+    # #1609: (metric, carrier, reason) for every defaults carrier the scan
+    # listed but Step 1 did not write, plus every carrier Step 1 itself
+    # reported as failed. Non-empty ⇒ the tool must NOT say 下架完成.
+    incomplete = []
+
     for metric in args.metrics:
         print(f"\n{'─'*40}")
         print(f"📌 Processing: {metric}")
@@ -323,12 +381,29 @@ def main():
         else:
             print(f"  ✅ 未發現任何引用")
 
-        # Step 2: 在 defaults 中設為 disable
-        print(f"\n  Step 1: "
-              f"{resolve_defaults_file(Path(args.config_dir)).name}")
-        ok, msg = disable_in_defaults(metric, args.config_dir, execute=args.execute)
-        icon = "✅" if ok else "❌"
-        print(f"  {icon} {safe_label(msg)}")
+        # Step 2: 在每個 defaults 載體中設為 disable (#1609: ALL carriers,
+        # not the one `resolve_defaults_file` picks — the scan above lists
+        # every carrier and the exporter reads every carrier).
+        results = disable_in_all_defaults(metric, args.config_dir,
+                                          execute=args.execute)
+        for carrier, ok, msg in results:
+            print(f"\n  Step 1: {safe_label(carrier.name)}")
+            icon = "✅" if ok else "❌"
+            print(f"  {icon} {safe_label(msg)}")
+
+        # "found N / changed N" must agree before the summary may say 完成.
+        # `found` is what the scan ITSELF reported as a defaults carrier —
+        # the same output the operator just read — so a carrier the scan
+        # named and Step 1 skipped is named again here, with its reason.
+        found = {f["filename"] for f in findings
+                 if any(sec == "defaults" for sec, _, _ in f["occurrences"])}
+        done = {p.name for p, ok, _ in results if ok}
+        reasons = {p.name: msg for p, ok, msg in results if not ok}
+        for name in sorted(found - done):
+            incomplete.append((metric, name, reasons.get(name, "未寫入")))
+        for p, ok, msg in results:
+            if not ok and p.name not in found:
+                incomplete.append((metric, p.name, msg))
 
         # Step 3: 從 tenant configs 移除
         print(f"\n  Step 2: Tenant configs")
@@ -350,6 +425,15 @@ def main():
 
     # 總結
     print(f"\n{'='*60}")
+    if incomplete:
+        # #1609: a preview that cannot complete must not read as clean
+        # either, so this branch runs in both modes.
+        print("❌ 下架未完成：")
+        for metric, carrier, reason in incomplete:
+            print(f"   • {safe_label(metric)} → {safe_label(carrier)}："
+                  f"{safe_label(reason)}")
+        print(f"{'='*60}")
+        sys.exit(EXIT_VIOLATION)
     if args.execute:
         print("✅ 下架完成！threshold-exporter 將在下次 reload 時生效。")
         print("📋 請在下個 Release Cycle 清理 Prometheus ConfigMap 中的對應規則。")

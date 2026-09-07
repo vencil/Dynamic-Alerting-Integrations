@@ -582,6 +582,7 @@
    "tests/ops/test_da_assembler.py"
   ],
   "scripts/tools/ops/deprecate_rule.py": [
+   "tests/ops/test_deprecate_rule_carriers.py",
    "tests/ops/test_offboard_deprecate.py"
   ],
   "scripts/tools/ops/diagnose.py": [
@@ -803,7 +804,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "0561d691a62cbe9db7e91131be254a97b8ed8f2ed9bf33e80281e7acd42f87e3",
+ "source_digest": "f92aa669c2626f9ddd99b65c5ac494ac501a601bf3c98191134ea35aa6a7d983",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1014,6 +1015,7 @@
   "tests/ops/test_configmap_assemble_precheck.py",
   "tests/ops/test_cutover_tenant.py",
   "tests/ops/test_da_assembler.py",
+  "tests/ops/test_deprecate_rule_carriers.py",
   "tests/ops/test_diagnose.py",
   "tests/ops/test_diagnose_inheritance.py",
   "tests/ops/test_discover_instance_mappings.py",
