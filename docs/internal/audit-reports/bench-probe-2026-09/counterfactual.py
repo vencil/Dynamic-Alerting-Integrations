@@ -40,7 +40,15 @@ Seven checks:
      discriminant, so "these checks have detection power" is measured
      here, and a check already red before any mutant is reported as NOT
      ASSESSABLE rather than credited with a vacuous kill
-  6. the two renderers agree, and each one's sd column matches its own share
+  6. on every shape the two renderers agree, each one's sd column matches its
+     own share, and the round-total sd matches the generated rows in absolute
+     terms (ratios alone cannot see a shared unit bug)
+
+⚠️ KNOWN BLIND SPOT, not fixed: every synthetic shape here is monotonic in the
+round total, so a `corr()` swapped for another monotonic statistic (Spearman,
+say) passes all seven. Measured by blind review. Closing it needs a
+non-monotonic shape; a rank correlation is not a plausible regression, so the
+gap is disclosed rather than papered over.
 
 Exit codes: 0 all checks pass, 1 a check failed, 3 could not measure, and
 argparse's own 2 for a usage error, before any measurement is attempted.
@@ -97,8 +105,16 @@ WRITE_JITTER_NS = 30_000    # per-ROUND, independent of load — see below
 # total's variance). Found by blind review, reproduced against a real copy of
 # the tool on disk, not reasoned about. This shape puts the variation where the
 # other two do not, so dropping either half of `total` becomes visible.
-WRITE_SHAPE_LOAD_SPAN_NS = 20_000     # bulk jitter: keeps level/above non-degenerate
-WRITE_SHAPE_WRITE_SPAN_NS = 200_000   # per-iteration write variation, dominates the round
+# ⛔ The variation is a write-side EPISODE, not a write-side level shift. With a
+# flat per-round write cost every write quantile equals the mean, so
+# `write_p50 * iters == write_sum` EXACTLY and a `total()` built on the wrong
+# one of those two was invisible — blind review found it by writing exactly that
+# mutant. Stalling a few writes moves `write_sum` while leaving `write_p50`
+# where it was, so the two stop being interchangeable. (It is also the shape
+# mechanism 1 actually predicts.)
+WRITE_SHAPE_LOAD_SPAN_NS = 10_000     # bulk jitter: keeps level/above non-degenerate
+WRITE_EPISODE_NS = 2_000_000          # one stalled write costs this much extra
+WRITE_EPISODE_MAX = 20                # per-round stalled-write count, drawn from [0, max]
 
 # ⛔ WRITE_JITTER_NS exists so `write_sum` has a DEFINED correlation. With write
 # constant across rounds its sd is 0 and the tool prints `+nan` there, which
@@ -115,9 +131,16 @@ TOL_CORR = 0.01             # |corr| must be within this of 1.0 where predicted
 # essentially none. Both bounds are round numbers, not fitted to the output.
 WRITE_SHARE_TOL_PP = 10.0
 QUIET_SHARE_PP = 25.0
+# "quiet" for a component that should not look like a cause of THIS shape's
+# variation. A round number, well clear of every measured value — the assertion
+# is "not ~+1", not a tight bound.
+QUIET_CORR = 0.5
 # check 6's sd-vs-share identity is computed from numbers already rounded for
 # printing (sd to 2 dp in ms, share to 1 dp), so it cannot be exact.
 SD_SHARE_IDENTITY_TOL_PP = 0.2
+# The absolute sd anchor is compared against a number printed to 2 dp; the
+# fraction is what absorbs that rounding, not a licence for the value to drift.
+SD_ABS_TOL_FRAC = 0.001
 
 # `render_ci`'s three table rows bind a label to a local; this maps that local to
 # the role the checks reason about. ⛔ The pairs themselves are read out of the
@@ -153,15 +176,20 @@ def load_module(path: Path, name: str):
     # harmless in a one-shot subprocess, not harmless if this file is ever
     # imported into a pytest session, which is the open question about wiring
     # it up. Measured by blind review: +2 entries per in-process `main()`.
-    saved_path = list(sys.path)
+    # ⛔ Same for sys.modules. The tool imports a sibling `_lib_compat`; left in
+    # the cache, a SECOND `--tool` pointing at a different copy silently reuses
+    # the FIRST copy's sibling. Measured by blind review: the second run's
+    # module object was the first run's, file path and all.
+    saved_path, saved_mods = list(sys.path), set(sys.modules)
     try:
         spec.loader.exec_module(mod)
     except Exception as exc:                                # noqa: BLE001
-        sys.modules.pop(name, None)
         raise CannotMeasure(
             f"importing {path} raised {type(exc).__name__}: {exc}") from exc
     finally:
         sys.path[:] = saved_path
+        for k in set(sys.modules) - saved_mods:
+            sys.modules.pop(k, None)
     return mod
 
 
@@ -215,19 +243,32 @@ def base_profile():
 
 
 def synth(shape):
-    """One synthetic probe log of known shape, as the text `load()` consumes."""
+    """`(text, totals)` — one synthetic probe log, and the round totals in it.
+
+    ⛔ `totals` is `write_sum + load_sum` per MEASUREMENT round, taken from the
+    numbers this function just generated. It is the one quantity this harness
+    computes for itself, and the boundary is deliberate: a sum of two fields the
+    producer emits is a DEFINITION, not the judgement under test. It gives the
+    sd column an absolute anchor — blind review showed the CI-vs-archive
+    comparison and the share == sd/total identity are both scale-invariant, so a
+    unit bug applied consistently in both renderers printed a round-total sd
+    1000x too large and passed.
+    """
     bulk, tail = base_profile()
     rng = random.Random(SEED)
+    totals = []
     out = [f"PROBEENV goos=linux goarch=amd64 numcpu=4 go=synthetic"
            f" iters={ITERS} shape={shape} seed={SEED} b.N=1"]
     # The calibration row the tool is required to drop. Present so this harness
     # exercises that filter rather than a log the real probe never emits.
+    # ⛔ NOT in `totals`: the tool drops it, so a report that included it would
+    # be the bug, not the baseline.
     out.append(probe_row(0, 1, [WRITE_NS] * ITERS, bulk + tail))
     for k in range(1, ROUNDS + 1):
-        wj = round((rng.random() - 0.5) * 2 * WRITE_JITTER_NS)
         if shape == "level":
             # Every bulk iteration slower by the same amount; the tail untouched.
             # This is the README's "水位平移": p50 moves, p90/p99 do not.
+            write = [WRITE_NS + round((rng.random() - 0.5) * 2 * WRITE_JITTER_NS)] * ITERS
             d = round(rng.random() * LEVEL_SPAN_NS)
             load = [v + d for v in bulk] + tail
         elif shape == "episode":
@@ -235,19 +276,22 @@ def synth(shape):
             # round to round. The stalled ones sort above the tail, so p50 drifts
             # only by however far it is pushed along the bulk — small, and
             # positive, which is what makes this shape interesting.
+            write = [WRITE_NS + round((rng.random() - 0.5) * 2 * WRITE_JITTER_NS)] * ITERS
             m = int(rng.random() * (EPISODE_MAX + 1))
             load = [v + EPISODE_NS for v in bulk[:m]] + bulk[m:] + tail
         elif shape == "write":
             # The load half barely moves — just enough that `level` and `above`
-            # have a defined sd instead of rendering as `nan` — and the write
-            # half carries the round-to-round variation.
+            # have a defined sd instead of rendering as `nan`. The write half
+            # carries the variation, and carries it in the TAIL.
             d = round(rng.random() * WRITE_SHAPE_LOAD_SPAN_NS)
             load = [v + d for v in bulk] + tail
-            wj = round(rng.random() * WRITE_SHAPE_WRITE_SPAN_NS)
+            mw = int(rng.random() * (WRITE_EPISODE_MAX + 1))
+            write = [WRITE_NS + WRITE_EPISODE_NS] * mw + [WRITE_NS] * (ITERS - mw)
         else:
             raise CannotMeasure(f"unknown shape {shape!r}")
-        out.append(probe_row(k, BENCH_N, [WRITE_NS + wj] * ITERS, load))
-    return "\n".join(out) + "\n"
+        out.append(probe_row(k, BENCH_N, write, load))
+        totals.append(sum(write) + sum(load))
+    return "\n".join(out) + "\n", totals
 
 
 def _predicted_shares():
@@ -258,13 +302,11 @@ def _predicted_shares():
     Shape B: one stall moves load_sum by EPISODE_NS and level by ITERS times the
     bulk's per-index slope (p50 slides one bulk index per stall).
     ⚠️ Independent write jitter inflates the round total's sd, so these are
-    upper bounds — the measured share is always at or below the prediction, and
-    TOL_PP is what absorbs the gap. ⛔ An earlier version of this docstring put
-    a figure on that gap ("under 1 pp"); blind review measured it at 1.13 pp on
-    the level shape. The number is gone rather than corrected: nothing
-    regenerates it, so it would drift again. Every run prints both the
-    prediction and the measurement, which is the number that has a command
-    behind it.
+    upper bounds — the measured share sits at or below the prediction, and
+    TOL_PP is what absorbs the gap. ⛔ No figure is put on that gap here. Two
+    earlier drafts of this docstring each quoted one, and each went stale; every
+    run prints the prediction and the measurement side by side, which is where
+    the number belongs.
     """
     slope = (BULK_HI_NS - BULK_LO_NS) / (BULK_N - 1)
     lvl_b = ITERS * slope
@@ -299,23 +341,36 @@ def drive(what, fn, *a):
         return fn(*a)
     except CannotMeasure:
         raise
-    except Exception as exc:                                # noqa: BLE001
+    # ⛔ SystemExit is NOT an Exception. A stray `sys.exit(1)` inside the tool
+    # escaped this handler, printed nothing at all, and handed the process an
+    # exit code of the tool's choosing — colliding with every code in the
+    # contract. Worse than the traceback it replaced: that at least named a
+    # cause. KeyboardInterrupt is deliberately still allowed through.
+    except (Exception, SystemExit) as exc:                  # noqa: BLE001
         raise CannotMeasure(
             f"{what} raised {type(exc).__name__}: {exc}") from exc
 
 
 def _corr(cell, what):
-    """A Pearson r, range-checked. Outside [-1, 1] means the WRONG CELL was read.
+    """A Pearson r, range-checked. Outside [-1, 1], this harness has no opinion.
 
     ⛔ Blind review swapped two of the table's columns and the level row's check
-    accepted `+132.200` as "~+1": the assertion had only a lower bound. A
-    correlation cannot exceed 1, so a value that does is a scraping failure —
-    could-not-measure — not a discriminant that misbehaved.
+    accepted `+132.200` as "~+1": the assertion had only a lower bound.
+
+    ⚠️ A second reviewer then pointed out that an out-of-range value has TWO
+    possible causes — the scraper reading the wrong cell, or the tool's `corr()`
+    not returning a correlation — and asked for the second to be reported as a
+    failed check instead. It is not, deliberately: the number alone does not say
+    which, and picking one would be the harness asserting something it cannot
+    see. What was wrong was the MESSAGE naming only one cause; it now names
+    both, and the outcome stays "could not measure".
     """
     v = _num(cell, what)
     if v == v and abs(v) > 1.0 + 1e-9:          # NaN is a legitimate reading
-        raise CannotMeasure(f"{what}: {v} is not a correlation;"
-                            " the scraper is reading the wrong cell")
+        raise CannotMeasure(
+            f"{what}: {v} is not a correlation. Either this harness is reading"
+            " the wrong cell, or the tool's corr() is not returning one — from"
+            " the number alone there is no way to tell, so neither is claimed")
     return v
 
 
@@ -420,10 +475,17 @@ def check3(ci):
         got, want = ci[role][2], p[role]
         if abs(got - want) > TOL_PP:
             bad.append(f"{role} share {got:.1f}% != predicted {want:.1f}%")
+    # ⛔ The write row was scraped and never asserted here. An episode is a
+    # load-side event, so a report that lets `write_sum` look like a cause of it
+    # is wrong in the direction #1497 cares about most.
+    if abs(ci["write"][0]) > QUIET_CORR or ci["write"][2] > QUIET_SHARE_PP:
+        bad.append(f"write {ci['write'][0]:+.3f} / {ci['write'][2]:.1f}% is not"
+                   " quiet on a load-side episode")
     detail = (f"corr level {ci['level'][0]:+.3f} / above {ci['above'][0]:+.3f}"
               f" — SAME SIGN, both ~+1; shares {ci['level'][2]:.1f}%"
               f" (predicted {p['level']:.1f}%) vs {ci['above'][2]:.1f}%"
-              f" (predicted {p['above']:.1f}%)")
+              f" (predicted {p['above']:.1f}%); write stays quiet at"
+              f" {ci['write'][0]:+.3f} / {ci['write'][2]:.1f}%")
     return not bad, detail + ("" if not bad else "  << " + "; ".join(bad))
 
 
@@ -465,11 +527,13 @@ def check7(ci):
     if not 100 - WRITE_SHARE_TOL_PP <= ci["write"][2] <= 100 + WRITE_SHARE_TOL_PP:
         bad.append(f"write share {ci['write'][2]:.1f}% is not ~100%")
     for role in ("level", "above"):
-        if ci[role][2] > QUIET_SHARE_PP:
-            bad.append(f"{role} share {ci[role][2]:.1f}% is not quiet")
+        if ci[role][2] > QUIET_SHARE_PP or abs(ci[role][0]) > QUIET_CORR:
+            bad.append(f"{role} {ci[role][0]:+.3f} / {ci[role][2]:.1f}% is not"
+                       " quiet on a write-side round")
     return not bad, (
-        f"write {ci['write'][0]:+.3f} / {ci['write'][2]:.1f}%;"
-        f" level {ci['level'][2]:.1f}% and above {ci['above'][2]:.1f}% stay quiet"
+        f"write {ci['write'][0]:+.3f} / {ci['write'][2]:.1f}%; level"
+        f" {ci['level'][0]:+.3f} / {ci['level'][2]:.1f}% and above"
+        f" {ci['above'][0]:+.3f} / {ci['above'][2]:.1f}% stay quiet"
         + ("" if not bad else "  << " + "; ".join(bad)))
 
 
@@ -484,6 +548,12 @@ MUTANTS = (
      "total", lambda r: r["load_sum"]),
     ("total := write_sum (drop the load half of the round total)",
      "total", lambda r: r["write_sum"]),
+    # ⛔ Not a plausible regression — a deliberate out-of-range correlation, so
+    # the "the mutant made the report unreadable" path in check5 is EXERCISED
+    # rather than merely written. Blind review measured that branch as dead
+    # under the four mutants above.
+    ("corr := 5.0 (a value no correlation can take)",
+     "corr", lambda x, y: 5.0),
 )
 
 
@@ -538,7 +608,23 @@ def check5(mod, roles, texts, baseline):
     return not (blind or blocked), rows
 
 
-def check6(ci, arch_pair):
+def check6(cis, archs, totals):
+    """Run the renderer cross-check over EVERY shape, not just one.
+
+    ⛔ Blind review enumerated which scraped cells no check reads: pinning one
+    shape left the other two's sd column unasserted — the same defect this
+    check was added to close, in the shapes it did not cover.
+    """
+    bad, seen = [], []
+    for shape in sorted(cis):
+        ok, detail = _check6_one(cis[shape], archs[shape], totals[shape])
+        seen.append(f"{shape}: {'ok' if ok else detail}")
+        if not ok:
+            bad.append(shape)
+    return not bad, "; ".join(seen)
+
+
+def _check6_one(ci, arch_pair, totals):
     """The two renderers agree, and each one's sd column matches its own share.
 
     ⛔ The second half exists because blind review changed ONLY render_ci's
@@ -549,6 +635,14 @@ def check6(ci, arch_pair):
     """
     arch, sd_total = arch_pair
     bad = []
+    # ⛔ The absolute anchor. Everything below this line is a RATIO, and blind
+    # review proved ratios cannot see a unit bug applied consistently in both
+    # renderers: `ms(x) = x/1e3` printed a round-total sd 1000x too large and
+    # the whole run passed. `totals` comes from the generator, in ns.
+    want_ms = st.stdev(totals) / 1e6
+    if abs(sd_total - want_ms) > max(0.011, SD_ABS_TOL_FRAC * want_ms):
+        bad.append(f"round-total sd {sd_total:.2f} ms != {want_ms:.2f} ms"
+                   " computed from the rows this harness generated")
     for role in ("level", "above", "write"):
         if abs(ci[role][0] - arch[role][0]) > 0.0011:
             bad.append(f"{role} corr {ci[role][0]:+.3f} vs {arch[role][0]:+.3f}")
@@ -563,8 +657,7 @@ def check6(ci, arch_pair):
             bad.append(f"{role} share {ci[role][2]:.1f}% != sd/total"
                        f" {want:.1f}% (sd {arch[role][2]:.2f} /"
                        f" {sd_total:.2f} ms)")
-    return not bad, (f"3 components x (corr, sd, share) agree across renderers,"
-                     f" and share == sd / {sd_total:.2f} ms round-total sd"
+    return not bad, ("3 x (corr, sd, share) agree; share == sd / round-total sd"
                      if not bad else "; ".join(bad))
 
 
@@ -576,7 +669,7 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
 
     if args.dump:
-        sys.stdout.write(synth(args.dump))
+        sys.stdout.write(synth(args.dump)[0])
         return 0
 
     try:
@@ -603,16 +696,22 @@ def main(argv=None) -> int:
               " tail untouched")
         print(f"      shape 'episode'  U[0,{EPISODE_MAX}] iters stalled by"
               f" {EPISODE_NS/1e6:.1f} ms, rest identical")
-        print(f"      write  {WRITE_NS/1000:.0f} us/iter +- {WRITE_JITTER_NS/1000:.0f} us"
-              " per round, independent of load")
+        print(f"      shape 'write'    U[0,{WRITE_EPISODE_MAX}] WRITES stalled by"
+              f" {WRITE_EPISODE_NS/1e6:.1f} ms; load jitters by"
+              f" U[0,{WRITE_SHAPE_LOAD_SPAN_NS/1000:.0f}) us/iter")
+        print(f"      write baseline  {WRITE_NS/1000:.0f} us/iter; in 'level' and"
+              f" 'episode' it jitters +-{WRITE_JITTER_NS/1000:.0f} us per round,"
+              " independent of load")
         print(f"      tolerances: shares +-{TOL_PP} pp, |corr| within {TOL_CORR}\n")
 
-        texts = {s: synth(s) for s in ("level", "episode", "write")}
+        built = {s: synth(s) for s in ("level", "episode", "write")}
+        texts = {s: v[0] for s, v in built.items()}
+        totals = {s: v[1] for s, v in built.items()}
         results = [("1  tool exposes what this harness drives",
                     check1(mod, path, roles))]
-        lvl = run_ci(mod, texts["level"], roles)
-        epi = run_ci(mod, texts["episode"], roles)
-        wrt = run_ci(mod, texts["write"], roles)
+        cis = {sh: run_ci(mod, texts[sh], roles) for sh in texts}
+        archs = {sh: run_archive(mod, texts[sh]) for sh in texts}
+        lvl, epi, wrt = cis["level"], cis["episode"], cis["write"]
         r2, r3, r4, r7 = check2(lvl), check3(epi), check4(lvl, epi), check7(wrt)
         baseline = {2: r2[0], 3: r3[0], 4: r4[0], 7: r7[0]}
         results += [
@@ -622,7 +721,8 @@ def main(argv=None) -> int:
             ("7  write-side variation: the round total keeps both halves", r7),
             ("5  mutation sensitivity of checks 2-4 and 7",
              check5(mod, roles, texts, baseline)),
-            ("6  CI table == archive block", check6(lvl, run_archive(mod, texts["level"]))),
+            ("6  renderers agree and the sd column is anchored, every shape",
+             check6(cis, archs, totals)),
         ]
     except CannotMeasure as exc:
         print(f"\n::error::COULD NOT MEASURE — {exc}", file=sys.stderr)

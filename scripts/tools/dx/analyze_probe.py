@@ -76,6 +76,9 @@ TARGET_SWING_PP = 30.38 - 3.98
 # 1.000 for n=2, which is what Pearson always returns there.
 MIN_ROUNDS_FOR_CORR = 5
 
+# TRK-374 (#1732) 的反事實 harness。單一字面值，理由見引用處的註解。
+_CF_HARNESS = "docs/internal/audit-reports/bench-probe-2026-09/counterfactual.py"
+
 # ⛔ The archive report's file list is FIXED, exactly as the script this replaced
 # had it. It is not a glob — see the comment at the call site in main() for the
 # three ways globbing changed behaviour, and note that the CROSS DISPATCH section
@@ -422,8 +425,11 @@ def render_ci(session):
               "一個分量要當成因，兩欄都要成立。⛔ 這已有實測背書：形狀已知的合成"
               "資料上，純 episode 時「水位」與「水位以上的質量」的相關係數**都是"
               "約 +1.000**——第一欄分不出來——而 sd 佔比一個只有幾個百分點、一個"
-              "接近全部。⇒ 兩欄一起讀；精確數字跑 `python3 -B docs/internal/"
-              "audit-reports/bench-probe-2026-09/counterfactual.py`（TRK-374 / #1732）。")
+              # ⛔ 路徑寫成一個完整字面值，不要為了排版切成兩段——
+              # `tests/ops/test_wrapped_path_references.py` 擋的就是這個：
+              # 切開之後 `git grep <path>` 找不到這處引用，而它回你「乾淨」。
+              f"接近全部。⇒ 兩欄一起讀；精確數字跑 `python3 -B {_CF_HARNESS}`"
+              "（TRK-374 / #1732）。")
         print("\n⛔ 最後一欄**不是** variance 分解，三列不會加總到 100%："
               "三個分量彼此相關，>100% 表示它被另一個分量抵銷掉一部分"
               "（水位平移時水位與『水位以上的質量』反向）。")
