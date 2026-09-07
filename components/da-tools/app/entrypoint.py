@@ -210,6 +210,17 @@ def detect_cli_lang():
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 _LANG = detect_cli_lang()
 
+# Exit code for "the dispatcher itself could not do its job": unknown
+# subcommand, or COMMAND_MAP points at a script the image does not ship.
+# Mirrors scripts/tools/_lib_exitcodes.EXIT_CALLER_ERROR (the 0/1/2 SSOT)
+# as a literal on purpose: entrypoint.py is contractually zero-import from
+# _lib_* (see _configure_std_utf8) — a raw local-dev run has only this dir
+# on sys.path, so importing the SSOT would break the escape hatch itself.
+# Never 1: that is EXIT_VIOLATION ("tool ran and found something"), and a
+# mistyped subcommand / an image whose tag moved past the subcommand must
+# not be indistinguishable from a finding with an empty report (#1406).
+EXIT_CALLER_ERROR = 2
+
 
 def _t(zh, en):
     """Pick the language variant of a message based on the detected CLI lang.
@@ -485,7 +496,7 @@ def run_tool(script_name, args):
         print(_t("已搜尋以下路徑：", "Searched paths:"), file=sys.stderr)
         for path in searched:
             print(f"  {path}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     # Rewrite sys.argv so argparse in each tool sees correct arguments
     sys.argv = [script_name] + args
@@ -562,7 +573,7 @@ def main():
                  f"Available commands: {commands}"), file=sys.stderr)
         print(_t("執行 'da-tools --help' 以查看用法。",
                  "Run 'da-tools --help' for usage."), file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CALLER_ERROR)
 
     # Inject PROMETHEUS_URL for applicable commands
     if command in PROMETHEUS_COMMANDS:

@@ -357,6 +357,8 @@ docker run --rm -v $(pwd)/conf.d:/data/conf.d:ro ghcr.io/vencil/da-tools \
 | `1` | 工具邏輯錯誤（lint failure、guard found errors、validate mismatch...） |
 | `2` | Caller error（flag 錯、檔不存在、Go binary 缺失...） |
 
+分派層（`da-tools` 本身）也遵守上表：**未知子命令、或映像內找不到子命令對應的腳本 ⇒ `2`**（訊息走 stderr、stdout 為空；[#1406](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1406) 之前是 `1`，與「工具邏輯錯誤」撞碼）。子命令自己的結束碼原封透傳，無重映射。
+
 `--ci` mode 將 warning 也視為 exit 1。
 
 `validate`（Shadow Monitoring 比對）在 mapping 載入後**零比對組**時 exit `2`——什麼都沒驗證不得視為驗證通過（`da-tools validate && promote` 不會被 vacuous pass 放行）。

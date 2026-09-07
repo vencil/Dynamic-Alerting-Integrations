@@ -20,6 +20,7 @@ import sys
 import pytest
 
 import entrypoint  # noqa: E402  (path set by conftest.py)
+import _lib_exitcodes  # noqa: E402  (scripts/tools on sys.path via conftest)
 from _lint_helpers import parse_build_sh_tools, BUILD_EXEMPT
 
 DA_TOOLS_DIR = os.path.join(
@@ -294,10 +295,11 @@ class TestRunToolErrors:
     """run_tool() 在 script 不存在時正確退出。"""
 
     def test_missing_script_exits(self):
-        """不存在的 script 應 sys.exit(1)。"""
+        """不存在的 script 應 sys.exit(2)——呼叫端錯誤，不是「有發現」的 1（#1406）。"""
         with pytest.raises(SystemExit) as exc_info:
             entrypoint.run_tool("nonexistent_tool_xyz.py", [])
-        assert exc_info.value.code == 1
+        assert exc_info.value.code == 2
+        assert exc_info.value.code == entrypoint.EXIT_CALLER_ERROR
 
     def test_missing_script_lists_searched_paths(self, capsys):
         """錯誤訊息應列出所有掃過的 paths（local-dev fallback transparency）。"""
@@ -307,6 +309,49 @@ class TestRunToolErrors:
         # Primary path (Docker image / TOOLS_DIR) always searched first
         assert "components" in err or "Searched paths" in err or "已搜尋" in err
         assert "nonexistent_tool_xyz.py" in err
+
+
+# ── run_tool exit-code pass-through ────────────────────────────────
+
+
+class TestRunToolExitPassthrough:
+    """run_tool() 原封不動透傳工具自己的結束碼（#1406 只改分派層，不改工具）。
+
+    工具以 exec_module 在同一行程內當 __main__ 執行，其 sys.exit(N) 以
+    SystemExit(N) 直接竄出 run_tool——沒有任何重映射。用假工具把 0 / 1 / 2
+    各自鎖住，避免日後在 run_tool 加 try/except 把 EXIT_VIOLATION 或
+    EXIT_CALLER_ERROR 折疊掉。
+    """
+
+    @staticmethod
+    def _fake_tool(tmp_path, monkeypatch, body):
+        script = tmp_path / "fake_tool_xyz.py"
+        script.write_text(body, encoding="utf-8")
+        monkeypatch.setattr(entrypoint, "_resolve_script_path",
+                            lambda name: (str(script), [str(script)]))
+        # run_tool 會改寫 sys.argv；經 monkeypatch 走一遍讓它自動還原
+        monkeypatch.setattr(sys, "argv", ["da-tools"])
+        return script
+
+    @pytest.mark.parametrize("code", [0, 1, 2])
+    def test_sys_exit_code_passes_through(self, tmp_path, monkeypatch, code):
+        """工具 sys.exit(0/1/2) → run_tool 竄出同碼的 SystemExit。"""
+        self._fake_tool(tmp_path, monkeypatch, f"import sys\nsys.exit({code})\n")
+        with pytest.raises(SystemExit) as exc_info:
+            entrypoint.run_tool("fake_tool_xyz.py", ["--flag"])
+        assert exc_info.value.code == code
+
+    def test_uncaught_exception_propagates_unwrapped(self, tmp_path, monkeypatch):
+        """工具拋出未捕捉例外 → 原樣竄出 run_tool（直譯器預設 rc 1、stderr 有
+        Traceback）——cli-reference 那一列說的「分派層刻意不包 try/except」。"""
+        self._fake_tool(tmp_path, monkeypatch, "raise RuntimeError('boom')\n")
+        with pytest.raises(RuntimeError, match="boom"):
+            entrypoint.run_tool("fake_tool_xyz.py", [])
+
+    def test_normal_return_is_exit_zero(self, tmp_path, monkeypatch):
+        """工具正常返回（不呼叫 sys.exit）→ run_tool 正常返回 → 直譯器 rc 0。"""
+        self._fake_tool(tmp_path, monkeypatch, "X = 1\n")
+        assert entrypoint.run_tool("fake_tool_xyz.py", []) is None
 
 
 # ── _resolve_script_path: local-dev fallback ──────────────────────
@@ -379,11 +424,58 @@ class TestMainRouting:
     """main() subcommand dispatch 測試。"""
 
     def test_unknown_command_exits(self, monkeypatch, cli_argv):
-        """未知 command 應 sys.exit(1)。"""
+        """未知 command 應 sys.exit(2)——呼叫端錯誤（#1406）。
+
+        之前是 1，與各子命令「有發現」的 EXIT_VIOLATION 撞碼：打錯子命令、或
+        image 的移動 tag 尚未收錄該子命令（CHANGELOG 記錄的週跑 threshold-govern
+        CronJob），在消費端看起來與「工具跑完並找到東西」同形，且 stdout 為空。
+        """
         cli_argv("da-tools", "nonexistent-xyz")
         with pytest.raises(SystemExit) as exc_info:
             entrypoint.main()
-        assert exc_info.value.code == 1
+        assert exc_info.value.code == 2
+        assert exc_info.value.code == entrypoint.EXIT_CALLER_ERROR
+
+    def test_unknown_command_stdout_empty(self, capsys, cli_argv):
+        """未知 command 的訊息全部走 stderr，stdout 為空（不污染 --json 消費端）。"""
+        cli_argv("da-tools", "nonexistent-xyz")
+        with pytest.raises(SystemExit):
+            entrypoint.main()
+        out, err = capsys.readouterr()
+        assert out == ""
+        assert err.strip()
+
+    def test_missing_script_in_image_exits_two(self, capsys, monkeypatch, cli_argv):
+        """已註冊子命令但 image 缺對應腳本 → rc 2 + stderr 點名腳本檔（#1406）。
+
+        模擬 build.sh TOOL_FILES 漏打包：COMMAND_MAP 有、_resolve_script_path
+        找不到（連 local-dev fallback 也沒有）。
+        """
+        monkeypatch.setitem(entrypoint.COMMAND_MAP, "ghost-cmd", "ghost_tool_xyz.py")
+        monkeypatch.setattr(
+            entrypoint, "_resolve_script_path",
+            lambda name: (None, [os.path.join(entrypoint.TOOLS_DIR, name)]))
+        cli_argv("da-tools", "ghost-cmd", "--whatever")
+        with pytest.raises(SystemExit) as exc_info:
+            entrypoint.main()
+        assert exc_info.value.code == 2
+        out, err = capsys.readouterr()
+        assert out == ""
+        assert "ghost_tool_xyz.py" in err
+
+    @pytest.mark.parametrize("code", [0, 1, 2])
+    def test_dispatched_tool_exit_passes_through(self, tmp_path, monkeypatch,
+                                                 cli_argv, code):
+        """main() 端到端：子命令自己的 0 / 1 / 2 原封透傳，分派層不重映射。"""
+        script = tmp_path / "fake_tool_xyz.py"
+        script.write_text(f"import sys\nsys.exit({code})\n", encoding="utf-8")
+        monkeypatch.setitem(entrypoint.COMMAND_MAP, "fake-cmd", "fake_tool_xyz.py")
+        monkeypatch.setattr(entrypoint, "_resolve_script_path",
+                            lambda name: (str(script), []))
+        cli_argv("da-tools", "fake-cmd")
+        with pytest.raises(SystemExit) as exc_info:
+            entrypoint.main()
+        assert exc_info.value.code == code
 
     def test_unknown_command_stderr(self, capsys, cli_argv):
         """未知 command 的 stderr 含命令名 + 錯誤前綴。
@@ -532,3 +624,11 @@ class TestBumpDocsToolsRuleCoverage:
             "bump_docs 沒有涵蓋 da-tools README 標題版號 "
             "(# da-tools (vX.Y.Z)) 的規則"
         )
+
+
+def test_dispatcher_mirror_of_the_exit_code_ssot_does_not_drift():
+    """entrypoint.py mirrors EXIT_CALLER_ERROR as a literal on purpose (it is
+    zero-import from _lib_*); this is the one place the mirror is checked
+    against the SSOT so a renumbering there cannot leave the dispatcher on
+    the old value (blind review, #1406)."""
+    assert entrypoint.EXIT_CALLER_ERROR == _lib_exitcodes.EXIT_CALLER_ERROR

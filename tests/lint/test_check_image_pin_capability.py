@@ -679,6 +679,34 @@ def test_parse_image_ref(image, expected):
 
 
 # ── capability extraction ───────────────────────────────────────────────────
+def test_unknown_command_exit_code_is_read_off_the_tag(monkeypatch):
+    """Re-review #1406: the finding names the rc the PINNED image really
+    exits with, not "1 or 2". tools/v2.9.0 predates #1406 → 1; an
+    entrypoint carrying EXIT_CALLER_ERROR → 2; an unreadable blob → 1 (the
+    pre-#1406 code, never a claim of the fix)."""
+    assert gate.unknown_command_exit_code("tools/v2.9.0") == 1
+    head = (gate.REPO_ROOT / gate.CAPABILITY_SOURCES["entrypoint"]).read_text(
+        encoding="utf-8")
+    assert "EXIT_CALLER_ERROR" in head
+    monkeypatch.setattr(gate, "show_blob", lambda tag, path: head)
+    assert gate.unknown_command_exit_code("any/tag") == 2
+    monkeypatch.setattr(gate, "show_blob", lambda tag, path: None)
+    assert gate.unknown_command_exit_code("any/tag") == 1
+
+
+def test_missing_subcommand_finding_states_the_exact_exit_code(monkeypatch):
+    """The evaluate() message for a missing COMMAND_MAP key carries the
+    tag's own rc and no hedge."""
+    monkeypatch.setattr(gate, "capabilities_for_tag",
+                        lambda tag: ({"other": "other.py"}, {"other.py"}))
+    monkeypatch.setattr(gate, "unknown_command_exit_code", lambda tag: 1)
+    wl = gate.Workload("k8s/x.yaml", "k8s/x.yaml (container c)", "v2.9.0",
+                       "subcommand", "threshold-govern")
+    msg = gate.evaluate(wl)
+    assert "exits 1 with `Unknown command`" in msg, msg
+    assert "before #1406" not in msg and "2 after" not in msg, msg
+
+
 def test_v290_lacks_both_entry_points():
     """Ground truth for the two incidents, read straight off the tag."""
     command_map, tool_files = gate.capabilities_for_tag("tools/v2.9.0")

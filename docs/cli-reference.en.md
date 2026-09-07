@@ -88,6 +88,18 @@ All commands support the following global options:
 | `--version` | Show version information |
 | `--config-dir <PATH>` | Path to tenant configuration directory (default: `./conf.d`; required by some commands) |
 
+**Dispatcher-level exit codes (`da-tools` itself)** — a different layer from the per-command exit-code tables below:
+
+| Situation | Exit code | Notes |
+|-----------|-----------|-------|
+| `--help` / `--version` / no arguments | `0` | Usage and version go to stdout |
+| **Unknown subcommand** | `2` | Caller error (since [#1406](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1406); was `1`). All messages go to stderr, stdout is empty |
+| **Tool script missing from the image** | `2` | Same; stderr names the missing script and the paths searched |
+| The subcommand's own exit code | Passed through unchanged | The tool runs as `__main__` in the same process, no remapping — see each command's exit-code table and the SSOT [`_lib_exitcodes.py`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/scripts/tools/_lib_exitcodes.py) |
+| The subcommand raises an uncaught exception (traceback) | `1` | The Python interpreter's default; the dispatcher deliberately has no `try/except` (that would break pass-through). This is the residual collision with the "findings" `1` — a `1` with no report on stdout and a `Traceback` (or the tool's own one-line error) on stderr is this row |
+
+> ⚠️ The first two rows used to return `1`, colliding with the per-subcommand "findings" `1` — `docker run … da-tools:<moving tag> <subcommand>` looked, in CI, exactly like "the tool ran fine and found something" (with an empty report on stdout) whenever a subcommand was renamed or the image did not ship it yet. Consumers should treat `2` as "the tool did not run" and never fold it into `1`.
+
 ---
 
 ## Command Categories
