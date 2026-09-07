@@ -25,10 +25,14 @@ What is pinned here:
      the replaced copy is gone, so completeness cannot be established now.
 
   3. THE REJECTION PATHS — rc=2 and an ::error:: line, not a traceback.
-     ⚠️ Only the ones that already rejected. Malformed records still raise a
-     bare traceback in both renderers; that is TRK-375 (#1733), deliberately not
-     fixed here, and these tests pin today's behaviour so #1733 must change them
-     on purpose.
+     ⚠️ Malformed records USED to raise a bare traceback here; TRK-375 (#1733)
+     turned each into a refusal, and the shapes it covers are parameterised
+     below. ⛔ Two of them (a field with no '=', a non-integer value) used to
+     die before printing anything; the third (a row missing a field the report
+     indexes) died 23 lines in, leaving a normal-LOOKING half report on the Job
+     Summary page. `test_a_crash_after_acceptance_prints_no_partial_report`
+     pins the property that makes that shape impossible in general, not just
+     for the three known inputs.
 
 ⛔ WHERE THE HISTORY LIVES, AND WHY NOT HERE. Five review rounds on this change
 produced 30 findings; 16 were defects in explanatory prose like this docstring,
@@ -315,6 +319,22 @@ def test_divergence5_a_repeated_env_record_is_shown_not_swallowed(tmp_path):
 # 3. Rejection paths — an ::error:: line and rc=2, never a half-printed report
 # ---------------------------------------------------------------------------
 
+def _first_measurement_row(lines, edit):
+    """Apply `edit` to the first non-calibration PROBEROW only.
+
+    ⛔ Not `[0]` and not "every row": the calibration row (`bench_n=1`) is
+    dropped before `reject()` sees it, so a mutation landing there is invisible
+    to the assertions below — a test that passes for the wrong reason.
+    """
+    out, done = [], False
+    for l in lines:
+        if l.startswith("PROBEROW") and "bench_n=1 " not in l and not done:
+            l, done = edit(l), True
+        out.append(l)
+    assert done, "no measurement PROBEROW to mutate — the fixture changed"
+    return out
+
+
 @pytest.mark.parametrize("mutate,needle", [
     (lambda ls: [l for l in ls if not l.startswith("PROBEENV")],
      "no PROBEENV record"),
@@ -322,6 +342,22 @@ def test_divergence5_a_repeated_env_record_is_shown_not_swallowed(tmp_path):
                  if l.startswith("PROBEROW") and "bench_n=1" not in l else l
                  for l in ls],
      "iters<=0"),
+    # TRK-375 (#1733) — each of these used to be a bare traceback.
+    (lambda ls: _first_measurement_row(
+        ls, lambda l: re.sub(r"write_sum=\d+", "write_sum", l)),
+     "has no '='"),
+    (lambda ls: _first_measurement_row(
+        ls, lambda l: re.sub(r"write_sum=\d+", "write_sum=NaN", l)),
+     "is not an integer"),
+    (lambda ls: _first_measurement_row(
+        ls, lambda l: re.sub(r"\s*load_p50=\d+", "", l)),
+     "missing load_p50"),
+    # Not a malformed record — every row parses — but the per-iteration figures
+    # divide by ONE row's `iters`, so a log whose rows disagree reported a
+    # halved average with rc=0 and no warning.
+    (lambda ls: _first_measurement_row(
+        ls, lambda l: l.replace("iters=400", "iters=800")),
+     "differing iters [400, 800]"),
 ])
 def test_malformed_input_is_rejected_with_an_error_annotation(tmp_path, mutate, needle):
     d = build_archive(tmp_path, mutate)
@@ -329,6 +365,13 @@ def test_malformed_input_is_rejected_with_an_error_annotation(tmp_path, mutate, 
     assert rc == 2, out
     assert "::error::" in out
     assert needle in out
+    # ⛔ EXACTLY one line on stdout, not merely "contains". A refusal that also
+    # emits anything else is the half-report shape wearing a different hat, and
+    # a substring assertion cannot tell them apart: measured, adding a stray
+    # print() to the refusal branch left every `in`-style assertion green.
+    rc_only, stdout = run_stdout("--from-log", str(d / "probe-run1.txt"))
+    assert rc_only == 2, stdout
+    assert len(stdout.strip().splitlines()) == 1, stdout
 
 
 def test_too_few_measurement_rounds_is_rejected(tmp_path):
@@ -352,6 +395,321 @@ def test_missing_archive_directory_is_rejected():
     rc, out = run("--archive", str(REPO / "does-not-exist"))
     assert rc == 2, out
     assert "::error::missing data file" in out
+
+
+def _calibration_row(lines, edit):
+    """Apply `edit` to the calibration PROBEROW (`bench_n=1`) only."""
+    out, done = [], False
+    for l in lines:
+        if l.startswith("PROBEROW") and "bench_n=1 " in l and not done:
+            l, done = edit(l), True
+        out.append(l)
+    assert done, "no calibration PROBEROW to mutate — the fixture changed"
+    return out
+
+
+@pytest.mark.parametrize("edit", [
+    lambda l: re.sub(r"write_sum=\d+", "write_sum", l),
+    lambda l: re.sub(r"write_sum=\d+", "write_sum=NaN", l),
+    lambda l: re.sub(r"\s*load_p50=\d+", "", l),
+])
+def test_a_defect_in_the_dropped_calibration_round_is_not_a_refusal(tmp_path, edit):
+    """The calibration round is dropped before any renderer reads it.
+
+    ⛔ So a defect THERE breaks nothing, and refusing over it rejects input that
+    summarises fine. The first draft of TRK-375 (#1733) did exactly that: a
+    calibration row missing `load_p50` turned a clean rc=0 report into rc=2,
+    caught by blind review. ⚠️ Two of these three shapes killed the pre-#1733
+    code outright (a bare traceback), so this test pins an improvement on those
+    and a restored behaviour on the third.
+    """
+    d = build_archive(tmp_path, lambda ls: _calibration_row(ls, edit))
+    rc, out = run_stdout("--from-log", str(d / "probe-run1.txt"))
+    assert rc == 0, out
+    assert out.startswith("## Probe: write vs load latency"), out[:200]
+
+
+def test_the_reported_line_number_is_the_line_the_defect_is_on(tmp_path):
+    """⛔ The line number is the whole value of the message to an operator.
+
+    Measured: changing `enumerate(..., 1)` to `enumerate(..., 0)` — every
+    reported line off by one — left the rest of this suite green.
+    """
+    src = (ARCHIVE / "probe-run1.txt").read_text(encoding="utf-8").splitlines()
+    target = next(i for i, l in enumerate(src, 1)
+                  if l.startswith("PROBEROW") and "bench_n=1 " not in l)
+    d = build_archive(tmp_path, lambda ls: _first_measurement_row(
+        ls, lambda l: re.sub(r"\s*load_p50=\d+", "", l)))
+    rc, out = run("--from-log", str(d / "probe-run1.txt"))
+    assert rc == 2, out
+    assert f"line {target}: missing load_p50" in out, out
+
+
+def test_multiple_malformed_records_are_counted_and_truncated(tmp_path):
+    """The count and the `(+N more)` tail, on a log with more than three.
+
+    ⛔ Every other malformed test breaks exactly one row, so the count, the
+    three-item cut and the tail were all unexercised: measured, `[:3]` could be
+    changed to `[:1]` with the tail deleted and this suite stayed green.
+    """
+    def break_five(lines):
+        out, n = [], 0
+        for l in lines:
+            if l.startswith("PROBEROW") and "bench_n=1 " not in l and n < 5:
+                l = re.sub(r"\s*load_p50=\d+", "", l)
+                n += 1
+            out.append(l)
+        assert n == 5, f"only {n} measurement rows to break — fixture changed"
+        return out
+
+    d = build_archive(tmp_path, break_five)
+    rc, out = run("--from-log", str(d / "probe-run1.txt"))
+    assert rc == 2, out
+    assert "5 malformed PROBEROW record(s)" in out, out
+    assert out.count("missing load_p50") == 3, out
+    assert "(+2 more)" in out, out
+
+
+def test_malformed_is_reported_before_too_few_measurement_rows(tmp_path):
+    """Order matters: the cause, not the symptom.
+
+    ⛔ On a log that is BOTH short and malformed, reporting "parsed 1 row" names
+    the consequence of the defect and hides the defect. `reject()` says this in
+    a comment; measured, moving the malformed check below the row-count check
+    left this suite green, so the comment was the only thing holding it.
+    """
+    def one_good_one_broken(lines):
+        kept, seen = [], 0
+        for l in lines:
+            if l.startswith("PROBEROW") and "bench_n=1 " not in l:
+                seen += 1
+                if seen == 1:
+                    l = re.sub(r"\s*load_p50=\d+", "", l)
+                elif seen > 2:
+                    continue
+            kept.append(l)
+        return kept
+
+    d = build_archive(tmp_path, one_good_one_broken)
+    rc, out = run("--from-log", str(d / "probe-run1.txt"))
+    assert rc == 2, out
+    assert "malformed PROBEROW" in out, out
+    assert "expected >=2 measurement PROBEROW" not in out, out
+
+
+def test_archive_refuses_runs_whose_iters_disagree(tmp_path):
+    """The pooled divisor, across FILES — `reject()` runs per file and cannot see it.
+
+    ⛔ `render_archive` pools all three runs' rows and divides the per-iteration
+    figures by `allrows[0]["iters"]`. Measured on the first draft of TRK-375
+    (#1733), which guarded only the per-file path: run1 at iters=800 with the
+    other two at 400 printed "across all 800 iterations" while its own identity
+    section printed `iters=400` — a report contradicting itself, rc=0, silent.
+    Found by blind review.
+    """
+    d = build_archive(tmp_path, lambda ls: [
+        l.replace("iters=400", "iters=800") if l.startswith("PROBEROW") else l
+        for l in ls])
+    rc, out = run("--archive", str(d))
+    assert rc == 2, out
+    assert "runs report differing iters [400, 800]" in out, out
+    assert "probe-run1.txt=[800]" in out, out
+    assert "probe-run2.txt=[400]" in out, out
+    # ⛔ The LAST run too. Measured: building the per-run list as `sessions[:-1]`
+    # dropped probe-run3 from the message entirely and this suite stayed green.
+    assert "probe-run3.txt=[400]" in out, out
+
+
+def test_archive_mode_also_buffers_a_crash(capsys, monkeypatch):
+    """The atomic-output guarantee covers BOTH renderers, not just the CI one.
+
+    ⛔ Measured: with only the `--from-log` crash pinned, the `emit()` wrapper
+    could be removed from the `--archive` branch — restoring the exact
+    half-printed-report defect for that mode — and this suite stayed green.
+    """
+    import analyze_probe
+
+    def explodes_midway(_sessions):
+        print("==========================================================")
+        print("IDENTITY OF THE THING MEASURED")
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(analyze_probe, "render_archive", explodes_midway)
+    rc = analyze_probe.main(["--archive", str(ARCHIVE)])
+    out = capsys.readouterr().out
+    assert rc == 2, out
+    assert out.splitlines() == [
+        "::error::report generation failed after the input was accepted:"
+        " RuntimeError: boom"
+    ], out
+
+
+def test_a_discarded_calibration_record_is_named_not_silently_dropped(tmp_path):
+    """Exempting a defect must not make the record VANISH.
+
+    ⛔ The first version of the calibration exemption traded a false refusal for
+    a silent discard: the report came out byte-identical to a clean run except
+    that the "calibration dropped" clause quietly disappeared, with nothing
+    anywhere saying a record had been thrown away. That is the same
+    "could not measure" dressed as "measured" this whole tool exists to
+    prevent, one layer down. Found by blind review of the exemption.
+    """
+    d = build_archive(tmp_path, lambda ls: _calibration_row(
+        ls, lambda l: re.sub(r"\s*load_p50=\d+", "", l)))
+    rc, out = run_stdout("--from-log", str(d / "probe-run1.txt"))
+    assert rc == 0, out
+    assert "1 筆校準輪記錄格式有誤" in out, out
+    assert "line 2" in out, out
+
+    rc, out = run_stdout("--archive", str(d))
+    assert rc == 0, out
+    # ⛔ On the RIGHT run's line, with the RIGHT line number. A global substring
+    # search cannot tell "probe-run1 lost a record" from "probe-run2 did":
+    # measured, attaching the note to every run's line, and replacing the line
+    # number with a constant, both left this suite green. Naming the wrong
+    # dispatch is precisely the failure the identity section exists to prevent.
+    def _run_line(text, name):
+        return next(l for l in text.splitlines()
+                    if name in l and "measurement rounds" in l)
+
+    assert "1 unparseable calibration record(s) skipped (line 2)" in \
+        _run_line(out, "probe-run1.txt"), out
+    for other in ("probe-run2.txt", "probe-run3.txt"):
+        assert "unparseable" not in _run_line(out, other), out
+
+    # ⛔ Again with the defect on a run that is NOT the first. With only run1
+    # broken, "read this run's discarded list" and "read sessions[0]'s" produce
+    # the same bytes — measured, that mutation stayed green. The attribution is
+    # only pinned when the broken run is not the one a constant index would hit.
+    second = tmp_path / "defect-on-run2"
+    second.mkdir()
+    for name in RUNS:
+        lines = (ARCHIVE / name).read_text(encoding="utf-8").splitlines()
+        if name == "probe-run2.txt":
+            lines = _calibration_row(
+                lines, lambda l: re.sub(r"\s*load_p50=\d+", "", l))
+        (second / name).write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    rc, out2 = run_stdout("--archive", str(second))
+    assert rc == 0, out2
+    assert "1 unparseable calibration record(s) skipped (line 2)" in \
+        _run_line(out2, "probe-run2.txt"), out2
+    for other in ("probe-run1.txt", "probe-run3.txt"):
+        assert "unparseable" not in _run_line(out2, other), out2
+
+
+def test_the_discarded_note_is_outside_the_markdown_fence(tmp_path):
+    """A callout printed between ``` markers is not a callout.
+
+    ⛔ The CI report is read in a GitHub Job Summary pane, where a `>` line
+    inside a fenced block renders as literal text in the raw-log styling rather
+    than as an admonition. A note whose entire job is "a record was thrown away
+    and that must be SEEN" being swallowed by the log dump is the same failure
+    it exists to prevent, one layer up. Found by blind review; verified against
+    a Markdown renderer at the time, pinned structurally here so the assertion
+    does not depend on a renderer being installed.
+    """
+    d = build_archive(tmp_path, lambda ls: _calibration_row(
+        ls, lambda l: re.sub(r"\s*load_p50=\d+", "", l)))
+    rc, out = run_stdout("--from-log", str(d / "probe-run1.txt"))
+    assert rc == 0, out
+
+    lines = out.splitlines()
+    note = next(i for i, l in enumerate(lines) if "筆校準輪記錄格式有誤" in l)
+    fences = [i for i, l in enumerate(lines) if l.strip() == "```"]
+    assert len(fences) % 2 == 0, f"unbalanced fences at {fences}"
+    inside = any(a < note < b for a, b in zip(fences[0::2], fences[1::2]))
+    assert not inside, (
+        f"the discarded note is on line {note}, inside a fence "
+        f"(fences at {fences}) — it will render as code, not as a callout"
+    )
+
+
+def test_a_defect_is_reported_when_no_calibration_round_is_dropped(tmp_path):
+    """The exemption's GUARD, in the direction where it must NOT fire.
+
+    ⛔ Under a manual `-benchtime=1x` every row is `bench_n=1`, so the
+    calibration filter keeps them all — nothing is dropped and a defect in one
+    of them is a defect in data the report reads. Measured: removing the
+    `dropped_calibration` guard (leaving only `bench_n == 1`) swallowed the
+    defect and printed a clean rc=0 report, and the whole suite stayed green —
+    the three shapes parameterised above all exercise the OTHER direction.
+    """
+    def all_calibration_one_broken(lines):
+        out, broken = [], False
+        for l in lines:
+            if l.startswith("PROBEROW"):
+                l = re.sub(r"bench_n=\d+", "bench_n=1", l)
+                if not broken and "round=1 " in l:
+                    l = re.sub(r"\s*load_p50=\d+", "", l)
+                    broken = True
+            out.append(l)
+        assert broken, "no round=1 PROBEROW to break — the fixture changed"
+        return out
+
+    d = build_archive(tmp_path, all_calibration_one_broken)
+    rc, out = run("--from-log", str(d / "probe-run1.txt"))
+    assert rc == 2, out
+    assert "missing load_p50" in out, out
+
+
+def test_a_record_too_broken_to_classify_is_still_reported(tmp_path):
+    """`bench_n` itself unparseable — the exemption must not guess.
+
+    ⛔ `partial.get("bench_n")` carries NO default on purpose: a record whose
+    own `bench_n` failed to parse cannot be called a calibration round, so it
+    stays reported. Measured: giving that `.get()` a default of 1 made such a
+    record disappear from a clean rc=0 report, and the suite stayed green.
+    """
+    d = build_archive(tmp_path, lambda ls: _calibration_row(
+        ls, lambda l: l.replace("bench_n=1", "bench_n=x")))
+    rc, out = run("--from-log", str(d / "probe-run1.txt"))
+    assert rc == 2, out
+    assert "bench_n='x' is not an integer" in out, out
+
+
+def test_the_first_defect_on_a_row_is_the_one_reported(tmp_path):
+    """Two defects on one row: the message names the earlier field.
+
+    ⛔ `parse_row` keeps the FIRST reason (`why = why or ...`). Nothing tested
+    it: measured, making the later branch overwrite instead pointed the operator
+    at a different field and the suite stayed green.
+    """
+    def two_defects(l):
+        l = re.sub(r"write_p50=\d+", "write_p50=BAD", l)     # earlier in payload
+        return re.sub(r"write_sum=\d+", "write_sum", l)      # later in payload
+
+    d = build_archive(tmp_path, lambda ls: _first_measurement_row(ls, two_defects))
+    rc, out = run("--from-log", str(d / "probe-run1.txt"))
+    assert rc == 2, out
+    assert "write_p50='BAD' is not an integer" in out, out
+    assert "has no '='" not in out, out
+
+
+def test_the_crash_guard_covers_key_error_not_only_the_type_a_test_raises(
+        capsys, monkeypatch):
+    """`except Exception` is deliberate; this pins the breadth, not the intent.
+
+    ⛔ KeyError is THE exception TRK-375 (#1733) exists to contain — it is what
+    a renderer raises on a row missing a field it indexes. Measured with only a
+    RuntimeError case present, `except Exception` could be narrowed to a list
+    that EXCLUDES KeyError and this suite stayed green, silently reopening the
+    defect. A docstring saying "not a narrow list" is not a test.
+    """
+    import analyze_probe
+
+    def explodes_with_keyerror(_session):
+        print("## Probe: write vs load latency (#1497 mechanism 1)")
+        raise KeyError("load_p50")
+
+    monkeypatch.setattr(analyze_probe, "render_ci", explodes_with_keyerror)
+    rc = analyze_probe.main(["--from-log", str(ARCHIVE / "probe-run1.txt")])
+    out = capsys.readouterr().out
+    assert rc == 2, out
+    assert out.splitlines() == [
+        "::error::report generation failed after the input was accepted:"
+        " KeyError: 'load_p50'"
+    ], out
 
 
 # ---------------------------------------------------------------------------
@@ -614,6 +972,212 @@ def test_rejection_returns_two_in_process(tmp_path, capsys):
     d = build_archive(tmp_path, lambda ls: [l for l in ls if not l.startswith("PROBEENV")])
     assert analyze_probe.main(["--from-log", str(d / "probe-run1.txt")]) == 2
     assert "::error::" in capsys.readouterr().out
+
+def test_a_crash_after_acceptance_prints_no_partial_report(capsys, monkeypatch):
+    """An UNANTICIPATED renderer crash must not reach the page half-rendered.
+
+    ⛔ This pins the PROPERTY, not the three inputs above. `reject()` can only
+    refuse defects someone thought of; before TRK-375 (#1733) the renderers
+    streamed print() straight to stdout and the workflow teed it live, so ANY
+    crash part-way published a normal-LOOKING truncated report. Measured on the
+    pre-change code, a row missing `load_p50` put 23 lines on the Job Summary
+    page, ending on a section heading with nothing under it.
+    ⚠️ The job was already red — the step runs under `set -o pipefail`. What
+    this protects is the reader who looks at the Summary and not the log.
+    ⛔ In-process on purpose: the assertion is that stdout carries the error
+    line AND NOTHING ELSE, and it needs to inject a crash the tool cannot
+    produce on demand from a file.
+    """
+    import analyze_probe
+
+    def explodes_midway(_session):
+        print("## Probe: write vs load latency (#1497 mechanism 1)")
+        print("| round | write_p50 |")
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(analyze_probe, "render_ci", explodes_midway)
+    rc = analyze_probe.main(["--from-log", str(ARCHIVE / "probe-run1.txt")])
+    out = capsys.readouterr().out
+    assert rc == 2, out
+    assert out.splitlines() == [
+        "::error::report generation failed after the input was accepted:"
+        " RuntimeError: boom"
+    ], out
+
+
+def test_required_row_fields_match_what_the_code_indexes():
+    """Re-derive `REQUIRED_ROW_FIELDS` from the tool's own AST and pin the two.
+
+    ⛔ The tuple is a hand-written copy of a mechanical fact, so it can go stale
+    silently: the moment a renderer starts writing `r["write_p50"]`, a record
+    missing that field raises KeyError mid-report again — the exact defect
+    TRK-375 (#1733) closed — and nothing else in this suite would say so.
+    ⚠️ `.get()` reads are excluded by construction: they carry a default and
+    cannot raise, which is why `bench_n` is not in the required set.
+    ⚠️ If this goes red because an unrelated dict is now indexed with a string
+    constant, the fix is to narrow this derivation — NOT to widen the tuple,
+    which would start refusing records the report can summarise.
+    """
+    import ast
+
+    import analyze_probe
+
+    tree = ast.parse(TOOL.read_text(encoding="utf-8"))
+    indexed = {
+        n.slice.value
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Subscript)
+        and isinstance(n.slice, ast.Constant)
+        and isinstance(n.slice.value, str)
+    }
+    assert indexed == set(analyze_probe.REQUIRED_ROW_FIELDS), (
+        "REQUIRED_ROW_FIELDS and the fields the code indexes have diverged; "
+        f"only in the code: {sorted(indexed - set(analyze_probe.REQUIRED_ROW_FIELDS))}; "
+        f"only in the tuple: {sorted(set(analyze_probe.REQUIRED_ROW_FIELDS) - indexed)}"
+    )
+
+
+def _probe_text():
+    return (ARCHIVE / "probe-run1.txt").read_text(encoding="utf-8")
+
+
+def test_parse_row_returns_partial_fields_with_the_reason_in_process():
+    """Direct call: the defect reasons AND the partial fields they come with.
+
+    ⛔ In-process for VISIBILITY, not for new detection. The subprocess tests
+    above already refuse each of these shapes; coverage.py just cannot see it,
+    because it does not follow a child process — "could not measure" presented
+    as "measured nothing", the confusion TRK-379 (#1746) names. Blind review
+    measured the redundancy: every mutation these catch, an existing test
+    catches too. That is the honest value here and it is worth stating, because
+    an earlier draft of this docstring claimed unique detection power it does
+    not have.
+    ⚠️ What is asserted about the partial fields is `bench_n` ONLY — the one
+    field `load()` consumes to classify a defective record. The general claim
+    "carrying whatever parsed" is NOT pinned: measured, dropping `round` from a
+    defective row's fields leaves this whole suite green. Not fixed by widening
+    the assertion, because nothing consumes those other fields; recorded so the
+    docstring does not out-claim the test.
+    """
+    import analyze_probe
+
+    good = ("round=1 bench_n=30 iters=400 write_p50=1 write_p90=1 write_p99=1"
+            " write_max=1 write_sum=1 load_p50=1 load_p90=1 load_p99=1"
+            " load_max=1 load_sum=1")
+    row, why = analyze_probe.parse_row(good)
+    assert why is None and row["round"] == 1 and row["iters"] == 400
+
+    row, why = analyze_probe.parse_row(good.replace("write_sum=1", "write_sum"))
+    assert why == "field 'write_sum' has no '='"
+    assert row["bench_n"] == 30, "the fields that parsed must still come back"
+
+    row, why = analyze_probe.parse_row(good.replace("write_sum=1", "write_sum=NaN"))
+    assert why == "field write_sum='NaN' is not an integer"
+    assert row["bench_n"] == 30
+
+    row, why = analyze_probe.parse_row(good.replace(" load_p50=1", ""))
+    assert why == "missing load_p50"
+    assert row["bench_n"] == 30
+
+    # Two defects: the FIRST in payload order wins.
+    two = good.replace("write_p50=1", "write_p50=BAD").replace("write_sum=1", "write_sum")
+    _, why = analyze_probe.parse_row(two)
+    assert why == "field write_p50='BAD' is not an integer"
+
+
+def test_load_partitions_defects_by_whether_the_row_survives_in_process():
+    """Direct call: the one predicate that decides refuse-vs-exempt.
+
+    ⛔ The two sides are unobservable from outside in opposite ways — a
+    `malformed` entry is refused before anything renders, and an `exempt` entry
+    only ever shows up as a line in a report. Reading both off the Session is
+    the only place they can be compared directly.
+    """
+    import analyze_probe
+
+    text = _probe_text()
+    lines = text.splitlines()
+
+    broke_measurement = "\n".join(
+        _first_measurement_row(lines, lambda l: re.sub(r"\s*load_p50=\d+", "", l)))
+    s = analyze_probe.load(broke_measurement, "x")
+    assert [why for _, why in s.malformed] == ["missing load_p50"]
+    assert s.discarded == []
+
+    broke_calibration = "\n".join(
+        _calibration_row(lines, lambda l: re.sub(r"\s*load_p50=\d+", "", l)))
+    s = analyze_probe.load(broke_calibration, "x")
+    assert s.malformed == []
+    assert [why for _, why in s.discarded] == ["missing load_p50"]
+
+    # No measurement row at all (-benchtime=1x): nothing is dropped, so the
+    # defect is NOT exempt even though the row says bench_n=1.
+    all_calib = "\n".join(
+        re.sub(r"bench_n=\d+", "bench_n=1", l) if l.startswith("PROBEROW") else l
+        for l in _calibration_row(
+            lines, lambda l: re.sub(r"\s*load_p50=\d+", "", l)))
+    s = analyze_probe.load(all_calib, "x")
+    assert [why for _, why in s.malformed] == ["missing load_p50"]
+    assert s.discarded == []
+
+
+def test_reject_messages_in_process():
+    """Direct call: the refusal strings, including the >3 truncation tail."""
+    import analyze_probe
+
+    lines = _probe_text().splitlines()
+
+    def break_n(n):
+        out, k = [], 0
+        for l in lines:
+            if l.startswith("PROBEROW") and "bench_n=1 " not in l and k < n:
+                l = re.sub(r"\s*load_p50=\d+", "", l)
+                k += 1
+            out.append(l)
+        assert k == n
+        return "\n".join(out)
+
+    err = analyze_probe.reject(analyze_probe.load(break_n(5), "x"))
+    assert err.startswith("::error::5 malformed PROBEROW record(s)")
+    assert err.count("missing load_p50") == 3 and "(+2 more)" in err
+
+    mixed = "\n".join(
+        _first_measurement_row(lines, lambda l: l.replace("iters=400", "iters=800")))
+    err = analyze_probe.reject(analyze_probe.load(mixed, "x"))
+    assert "rounds report differing iters [400, 800]" in err
+
+    assert analyze_probe.reject(analyze_probe.load(_probe_text(), "x")) is None
+
+
+def test_discarded_notes_and_cross_file_refusal_in_process(tmp_path, capsys):
+    """`main()` in-process over the paths only the renderers reach.
+
+    ⛔ For VISIBILITY. `sys.exit(None)` being exit 0 does make a lost return
+    value invisible to every subprocess assertion — but that hole was already
+    plugged by `test_archive_mode_runs_in_process` and `test_ci_mode_runs_in_
+    process`, which assert `main(...) == 0` in-process. Measured: they catch the
+    "stopped returning the renderer's code" mutation on their own. An earlier
+    draft of this docstring cited that hole as unique value for THIS test; it
+    is not, and the correction is left here rather than the claim.
+    """
+    import analyze_probe
+
+    d = build_archive(tmp_path, lambda ls: _calibration_row(
+        ls, lambda l: re.sub(r"\s*load_p50=\d+", "", l)))
+
+    assert analyze_probe.main(["--from-log", str(d / "probe-run1.txt")]) == 0
+    assert "筆校準輪記錄格式有誤" in capsys.readouterr().out
+
+    assert analyze_probe.main(["--archive", str(d)]) == 0
+    assert "unparseable calibration record(s) skipped" in capsys.readouterr().out
+
+    mixed = build_archive(tmp_path / "mixed", lambda ls: [
+        l.replace("iters=400", "iters=800") if l.startswith("PROBEROW") else l
+        for l in ls])
+    assert analyze_probe.main(["--archive", str(mixed)]) == 2
+    out = capsys.readouterr().out
+    assert "runs report differing iters [400, 800]" in out
+    assert "probe-run1.txt=[800]" in out and "probe-run3.txt=[400]" in out
 
 
 # ---------------------------------------------------------------------------

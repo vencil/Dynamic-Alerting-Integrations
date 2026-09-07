@@ -44,6 +44,8 @@ established now. The enumeration itself is recorded in dev/trk-373/ROUNDS.jsonl.
 """
 
 import argparse
+import contextlib
+import io
 import functools
 import os
 import pathlib
@@ -90,23 +92,84 @@ RUNS = ["probe-run1.txt", "probe-run2.txt", "probe-run3.txt"]
 REC = re.compile(r"\bPROBE(ROW|ENV) (.*)$")
 TAIL = re.compile(r"\bPROBETAIL round=(\d+) rank=(\d+) iter=(\d+) w=(\d+) l=(\d+)\s*$")
 
+# ⛔ The fields the renderers index with [] — i.e. exactly those whose absence
+# raises KeyError part-way through a report. NOT the set the producer emits:
+# `write_p50`, `write_p90` and `load_p90` are emitted and never read, and
+# rejecting a record for missing one of those would refuse input the report can
+# actually summarise. ⚠️ This is a hand-written list of a mechanical fact, so it
+# can drift the moment someone indexes a new field. `test_required_row_fields_
+# match_what_the_code_indexes` re-derives it from this file's own AST and pins
+# the two together; do not edit this tuple without letting that test agree.
+REQUIRED_ROW_FIELDS = ("iters", "load_max", "load_p50", "load_p99", "load_sum",
+                       "round", "write_max", "write_p99", "write_sum")
+
+
+def parse_row(payload):
+    """`(fields, None)` for a usable PROBEROW payload, `(fields, reason)` if not.
+
+    ⛔ `fields` is returned EVEN WHEN the record is defective, carrying whatever
+    parsed. The caller needs it: a record whose `bench_n` says it is the
+    calibration round is dropped before any renderer reads it, so refusing the
+    whole log over a field missing THERE would reject input that summarises
+    fine — the same over-strictness REQUIRED_ROW_FIELDS is narrow to avoid.
+    Found by blind review of the first draft, which refused it.
+
+    ⛔ Every defect here used to escape `load()` as a bare exception — a
+    ValueError from `dict(kv.split("="))`, a ValueError from `int()`, or a
+    KeyError raised much later, mid-report, by a renderer. See TRK-375 (#1733).
+    """
+    fields, why = {}, None
+    for kv in payload.split():
+        if "=" not in kv:
+            why = why or f"field {kv!r} has no '='"
+            continue
+        k, v = kv.split("=", 1)
+        try:
+            fields[k] = int(v)
+        except ValueError:
+            why = why or f"field {k}={v!r} is not an integer"
+    if why is None:
+        missing = [f for f in REQUIRED_ROW_FIELDS if f not in fields]
+        if missing:
+            why = "missing " + ", ".join(missing)
+    return fields, why
+
 
 class Session:
     """One parsed probe log: the rows, what produced them, and how it was read."""
 
-    def __init__(self, name, rows, env, ncal, calib_ambiguous, tails):
+    def __init__(self, name, rows, env, ncal, calib_ambiguous, tails,
+                 malformed=(), discarded=()):
         self.name = name
         self.rows = rows
         self.env = env
         self.ncal = ncal
         self.calib_ambiguous = calib_ambiguous
         self.tails = tails
+        # ⛔ Carried, not raised. `reject()` is the ONLY place allowed to refuse;
+        # a defect that escapes `load()` as an exception bypasses it entirely.
+        self.malformed = list(malformed)
+        # ⛔ Defective records the calibration exemption let through. They are
+        # NOT a refusal, but they ARE data that went missing, so both renderers
+        # say so: a record thrown away without a word is exactly the
+        # "could not measure" wearing "measured" costume this tool exists to
+        # prevent. Found by blind review of the exemption, which discarded them
+        # in silence — the report was byte-identical to a clean run except for
+        # the calibration-dropped clause quietly going away.
+        self.discarded = list(discarded)
 
 
 def load(text, name):
-    """Parse one probe log into a Session. No validation here - see reject()."""
-    rows, env, tails = [], [], {}
-    for line in text.splitlines():
+    """Parse one probe log into a Session. No validation here - see reject().
+
+    ⛔ "No validation" means no JUDGEMENT — it never meant "assume well-formed
+    input". Malformed PROBEROW records used to leave this function as bare
+    exceptions, so `reject()` — the one place allowed to refuse — never ran and
+    the caller got a traceback instead of an ::error::. They are now collected
+    and carried; `reject()` decides. TRK-375 (#1733).
+    """
+    rows, env, tails, defective = [], [], {}, []
+    for lineno, line in enumerate(text.splitlines(), 1):
         m = REC.search(line)
         if m:
             if m.group(1) == "ENV":
@@ -119,8 +182,11 @@ def load(text, name):
                 # that is the wrong default.
                 env.append(m.group(2).strip())
             else:
-                d = dict(kv.split("=", 1) for kv in m.group(2).split())
-                rows.append({k: int(v) for k, v in d.items()})
+                row, why = parse_row(m.group(2))
+                if why is not None:
+                    defective.append((lineno, why, row))
+                else:
+                    rows.append(row)
             continue
         m = TAIL.search(line)
         if m:
@@ -141,7 +207,13 @@ def load(text, name):
     # data and still print a report.
     calib = [r for r in rows if r.get("bench_n") == 1]
     calib_ambiguous = False
-    if calib and any(r.get("bench_n", 1) > 1 for r in rows):
+    # ⛔ Derived from the MEASUREMENT rows, not from `calib`: whether the filter
+    # below fires decides whether a defective calibration record matters, and a
+    # record too broken to parse never reaches `calib`. Keying off `calib` made
+    # the predicate answer "no calibration row here" for exactly the input it
+    # exists to classify — measured: the first draft of this fix changed nothing.
+    dropped_calibration = any(r.get("bench_n", 1) > 1 for r in rows)
+    if calib and dropped_calibration:
         rows = [r for r in rows if r.get("bench_n", 1) > 1]
     elif calib:
         # ⛔ Divergence 1: say the ambiguity out loud. The archive copy computed
@@ -149,7 +221,29 @@ def load(text, name):
         # it announced "3 measurement rounds, 3 calibration dropped" over 3 rows
         # - a header that contradicts itself.
         calib_ambiguous = True
-    return Session(name, rows, list(env), len(calib), calib_ambiguous, tails)
+    # ⛔ A defect in a record the calibration filter just DROPPED is not a defect
+    # in anything the report reads, and refusing over it rejects input that
+    # summarises fine. Measured on the first draft of this change: a calibration
+    # row missing `load_p50` turned a clean rc=0 report into rc=2. Found by blind
+    # review; it is the same over-strictness REQUIRED_ROW_FIELDS is narrow to
+    # avoid, one level up — per-RECORD instead of per-FIELD.
+    # ⚠️ Only when the filter actually fired, and only for a record whose
+    # `bench_n` itself parsed as 1. A record too broken to classify stays
+    # reported: loud beats dropping it on a guess.
+    # ⛔ ONE predicate, partitioned in one pass. Written as two comprehensions
+    # with the condition duplicated, the two lists can disagree — and when they
+    # do, the disagreement is UNOBSERVABLE: a record in both `malformed` and
+    # `exempt` is refused before anything renders `discarded`, so no test can
+    # see it. Measured while dogfooding: mutating one copy of the condition left
+    # the whole suite green. A predicate that cannot drift beats a test for a
+    # state nothing can reach.
+    exempt, malformed = [], []
+    for lineno_, why_, partial_ in defective:
+        bucket = (exempt if dropped_calibration and partial_.get("bench_n") == 1
+                  else malformed)
+        bucket.append((lineno_, why_))
+    return Session(name, rows, list(env), len(calib), calib_ambiguous,
+                   tails, malformed, exempt)
 
 
 def reject(session, thin_msg=None):
@@ -160,6 +254,14 @@ def reject(session, thin_msg=None):
     ⚠️ The other two refusals (no PROBEENV, iters<=0) are NOT parameterised —
     they were already worded identically in both originals.
     """
+    # ⛔ FIRST. A malformed record is not a thin log: reporting "parsed 1 row"
+    # for input whose rows failed to parse names the symptom and hides the cause.
+    if session.malformed:
+        shown = "; ".join(f"line {n}: {why}" for n, why in session.malformed[:3])
+        more = (f" (+{len(session.malformed) - 3} more)"
+                if len(session.malformed) > 3 else "")
+        return (f"::error::{len(session.malformed)} malformed PROBEROW"
+                f" record(s) — {shown}{more}")
     if len(session.rows) < 2:
         if thin_msg is not None:
             return thin_msg(session)
@@ -173,6 +275,17 @@ def reject(session, thin_msg=None):
     if bad:
         return (f"::error::rounds {bad} report iters<=0; a round with no"
                 " iterations cannot be summarised")
+    # ⛔ The per-iteration figures divide by ONE `iters` taken from the first row,
+    # while the level/above-level split divides row by row. On a log whose rows
+    # disagree — two differently-configured runs concatenated, which the
+    # transcribe-by-hand archive flow can produce — that mixture is silently
+    # wrong: measured, the reported per-iteration write average halves when only
+    # the first row's `iters` is doubled, rc=0, no warning. TRK-375 (#1733).
+    spread = sorted({r["iters"] for r in session.rows})
+    if len(spread) > 1:
+        return (f"::error::rounds report differing iters {spread}; the"
+                " per-iteration figures divide by a single value, so a log"
+                " mixing them cannot be summarised")
     return None
 
 
@@ -242,6 +355,18 @@ def render_ci(session):
         print(f"PROBEENV {e}")
     print(f"rounds parsed: {len(rows)} {dropped}".rstrip())
     print("```\n")
+    # ⛔ OUTSIDE the fence. Printed between the ``` markers this renders as
+    # literal text in a code block instead of the callout it is written as —
+    # verified against a Markdown renderer, not by reading. A note whose entire
+    # job is "being thrown away must be SEEN, not just present in the bytes"
+    # being swallowed by the raw-log styling is the same failure it exists to
+    # prevent, one layer up. Found by blind review. The `> ⛔ 判讀限制` note
+    # further down is outside a fence for the same reason.
+    if session.discarded:
+        where = ", ".join(f"line {n}" for n, _ in session.discarded)
+        print(f"> ⚠️ {len(session.discarded)} 筆校準輪記錄格式有誤、無法解析，已略過"
+              f"（{where}）。⛔ 它們本來就會被校準過濾器丟棄，所以量測結果不受影響——"
+              f"但「被丟掉」這件事必須說出來，不能只是消失。\n")
 
     tot = [total(r) for r in rows]
     w = [r["write_sum"] for r in rows]
@@ -368,6 +493,15 @@ def render_archive(sessions):
                    " b.N==1 — calibration indistinguishable, none dropped")
         else:
             how = f"{len(rows)} measurement rounds, {s.ncal} calibration dropped"
+        if s.discarded:
+            # ⛔ Same shape as the CI renderer's line list, deliberately: the
+            # earlier version inflected "line"/"lines" on the count, and that
+            # branch was pure grammar with no fixture behind it — a dead branch
+            # kept alive only by a plural. Repeating "line N" needs no inflection
+            # and so cannot be wrong.
+            where = ", ".join(f"line {n}" for n, _ in s.discarded)
+            how += (f", {len(s.discarded)} unparseable calibration record(s)"
+                    f" skipped ({where})")
         print(f"\n  {s.name}  ({how})")
         print(f"      round total   median {ms(med):8.1f} ms   min {ms(min(tot)):8.1f}   "
               f"max {ms(max(tot)):8.1f}   spread {pct(max(tot) - min(tot), med, '6.2f'):>7}")
@@ -478,6 +612,35 @@ def render_archive(sessions):
     return 0
 
 
+def emit(render):
+    """Run a renderer with stdout buffered, so a crash prints NOTHING.
+
+    ⛔ The renderers stream dozens of print() calls straight to stdout, and the
+    workflow tees stdout into $GITHUB_STEP_SUMMARY *as it arrives*. A crash
+    part-way therefore left a half-printed, entirely normal-LOOKING report on
+    the Job Summary page — "could not measure" wearing the costume of
+    "measured", which is the one confusion this tool exists to prevent.
+    Measured on the pre-change code: a row missing `load_p50` emitted 23 lines
+    before dying, ending on a section heading with nothing under it.
+    ⚠️ The job itself was already red (the step runs under `set -o pipefail`);
+    what this fixes is the Summary page, read by people who do not open the log.
+    Buffering makes the output atomic: the whole report, or one ::error:: line.
+    ⛔ Catching Exception (not a narrow list) is deliberate — the point is that
+    an UNANTICIPATED defect must not reach the page in half-rendered form. The
+    known ones are refused earlier, by reject(), with a message that names them.
+    """
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            rc = render()
+    except Exception as exc:  # noqa: BLE001 - see docstring
+        print(f"::error::report generation failed after the input was accepted:"
+              f" {type(exc).__name__}: {exc}")
+        return 2
+    sys.stdout.write(buf.getvalue())
+    return rc
+
+
 def main(argv=None):
     try_utf8_stdout()
     ap = argparse.ArgumentParser(
@@ -501,7 +664,7 @@ def main(argv=None):
         if err:
             print(err)
             return 2
-        return render_ci(session)
+        return emit(lambda: render_ci(session))
 
     # ⛔ A FIXED file list, not a glob — globbing is not a harmless
     # generalisation here. Two files present would produce a report where the
@@ -526,7 +689,26 @@ def main(argv=None):
             print(err.replace("::error::", f"::error::{path.name}: ", 1))
             return 2
         sessions.append(session)
-    return render_archive(sessions)
+
+    # ⛔ reject() runs PER FILE, so its iters check cannot see this: the archive
+    # renderer POOLS all three files' rows and divides the per-iteration figures
+    # by `allrows[0]["iters"]` — one value from one file, applied to all of them.
+    # Measured: with run1's rows at iters=800 and the other two at 400, the
+    # report printed "across all 800 iterations" while its own identity section
+    # printed `iters=400`, rc=0, no warning — a report contradicting itself.
+    # ⚠️ Deliberately harder than the neighbouring shape mismatch, which only
+    # warns: that one compares PROBEENV text, which is metadata, while this is
+    # the divisor. Found by blind review of the first draft, which only guarded
+    # the per-file path.
+    spread = sorted({r["iters"] for s in sessions for r in s.rows})
+    if len(spread) > 1:
+        per_run = ", ".join(
+            f"{s.name}={sorted({r['iters'] for r in s.rows})}" for s in sessions)
+        print(f"::error::runs report differing iters {spread} ({per_run}); the"
+              " per-iteration figures pool every run and divide by a single"
+              " value, so these cannot be summarised together")
+        return 2
+    return emit(lambda: render_archive(sessions))
 
 
 if __name__ == "__main__":
