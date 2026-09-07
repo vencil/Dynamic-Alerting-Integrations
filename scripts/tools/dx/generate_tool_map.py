@@ -80,6 +80,29 @@ TOOL_MAP_EN = REPO_ROOT / "docs" / "internal" / "tool-map.en.md"
 # `--check` then compares, so the drift is visible instead of a traceback.
 UNREADABLE_DESCRIPTION = "⚠️ description unreadable"
 
+# Files `extract_tool_description` could not read this process, path →
+# exception class name. Filled on first sight (the stderr warning prints
+# once per file per run — the shared-library footer re-reads `_lib*`
+# once per language, measured in blind review), and consumed by `main()`:
+# `--check` refuses to go green while this is non-empty, because a
+# placeholder is a drift that regenerating cannot clear.
+_UNREADABLE: dict = {}
+
+
+def _shown(filepath: Path) -> "Path":
+    """Path as printed: repo-relative when it is under REPO_ROOT."""
+    try:
+        return filepath.relative_to(REPO_ROOT)
+    except ValueError:
+        return filepath
+
+
+def _unreadable_detail() -> str:
+    """`unreadable: a.py (UnicodeDecodeError), b.py (IsADirectoryError)`."""
+    return "unreadable: " + ", ".join(
+        f"{_shown(p)} ({cls})" for p, cls in sorted(
+            _UNREADABLE.items(), key=lambda kv: str(kv[0])))
+
 
 def extract_tool_description(filepath: Path) -> str:
     """Extract description from a Python tool file.
@@ -112,12 +135,11 @@ def extract_tool_description(filepath: Path) -> str:
         pass
     except (UnicodeDecodeError, OSError) as exc:
         # stderr on purpose: in no-flag mode stdout IS the document.
-        try:
-            shown = filepath.relative_to(REPO_ROOT)
-        except ValueError:
-            shown = filepath
-        print(f"WARNING: {shown} unreadable ({type(exc).__name__}: {exc}); "
-              f"tool-map description set to placeholder", file=sys.stderr)
+        if filepath not in _UNREADABLE:
+            _UNREADABLE[filepath] = type(exc).__name__
+            print(f"WARNING: {_shown(filepath)} unreadable "
+                  f"({type(exc).__name__}: {exc}); "
+                  f"tool-map description set to placeholder", file=sys.stderr)
         return UNREADABLE_DESCRIPTION
 
     return ""
@@ -351,8 +373,9 @@ def main():
             os.chmod(target,
                      stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP
                      | stat.S_IROTH)
+            extra = f"; {_unreadable_detail()}" if _UNREADABLE else ""
             print(f"✅ Generated {target.relative_to(REPO_ROOT)} "
-                  f"({total} tools, {lang})")
+                  f"({total} tools, {lang}{extra})")
 
         elif args.check:
             if not target.exists():
@@ -381,6 +404,15 @@ def main():
                 sys.exit(EXIT_VIOLATION)
 
             print(f"✅ Tool map ({lang}) is up to date.")
+
+    if args.check and _UNREADABLE:
+        # #1542: the document may match, but it matches a PLACEHOLDER. On
+        # stdout so `validate_all` / `make pr-preflight` (which read the
+        # last stdout line) name the file, not just "outdated".
+        print(f"❌ {len(_UNREADABLE)} tool file(s) unreadable — "
+              f"{_unreadable_detail()}. Fix the file; regenerating cannot "
+              f"clear this.")
+        sys.exit(EXIT_VIOLATION)
 
 
 if __name__ == "__main__":

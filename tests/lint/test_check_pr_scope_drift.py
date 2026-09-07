@@ -128,6 +128,38 @@ class TestCheckToolMap:
             assert ok is False
             assert "generator crashed" in msg
 
+    def test_handled_unreadable_warning_is_not_a_crash(self, tmp_path):
+        """#1542: the generator now prints `WARNING: <file> unreadable
+        (UnicodeDecodeError: …)` on stderr and KEEPS GOING; its verdict is
+        on stdout. Matching the exception NAME turned that handled warning
+        into a phantom "generator crashed" verdict (blind review). The
+        crash signature is a Traceback or an rc outside the 0/1 contract;
+        the drift message must quote the stdout verdict line — with its
+        `Run with --generate --lang …` hint — not the stderr warning."""
+        stderr = ("WARNING: scripts/tools/ops/legacy.py unreadable "
+                  "(UnicodeDecodeError: 'utf-8' codec can't decode byte "
+                  "0xa4 in position 3: invalid start byte); tool-map "
+                  "description set to placeholder\n")
+        stdout = ("❌ docs/internal/tool-map.md is outdated. "
+                  "Run with --generate --lang all to update.\n")
+        with patch("check_pr_scope_drift.run",
+                   return_value=(1, stdout, stderr)):
+            ok, msg = cpsd.check_tool_map(tmp_path)
+        assert ok is False
+        assert "crashed" not in msg, msg
+        assert "Run with --generate --lang all" in msg, msg
+        assert "WARNING" not in msg, msg
+
+    def test_unexpected_exit_code_is_a_crash(self, tmp_path):
+        """An rc outside the tool's 0/1 contract with no Traceback text
+        (e.g. a SystemExit(2) from argparse) is still a crash, not drift."""
+        with patch("check_pr_scope_drift.run",
+                   return_value=(2, "", "usage: generate_tool_map.py [-h]\n"
+                                       "error: unrecognized arguments")):
+            ok, msg = cpsd.check_tool_map(tmp_path)
+        assert ok is False
+        assert "generator crashed" in msg
+
 
 # ---------------------------------------------------------------------------
 # check_working_tree_clean

@@ -16,6 +16,17 @@ sys.path.insert(0, os.path.join(_TOOLS_DIR, '..'))
 
 import generate_tool_map as gtm  # noqa: E402
 
+# Captured before any test patches `gtm.gather_tools`, for the one row that
+# needs the real walker inside the sandboxed `env` fixture.
+_REAL_GATHER_TOOLS = gtm.gather_tools
+
+
+@pytest.fixture(autouse=True)
+def _fresh_unreadable_ledger(monkeypatch):
+    """`_UNREADABLE` is process-global (it dedups the stderr warning and
+    makes `--check` refuse to go green); every test starts with it empty."""
+    monkeypatch.setattr(gtm, "_UNREADABLE", {})
+
 
 # ---------------------------------------------------------------------------
 # extract_tool_description
@@ -290,6 +301,28 @@ class TestGatherToolsUnreadableMember:
         assert "good.py" not in err
         assert out == ""
 
+    def test_shared_library_footer_warns_once_across_languages(
+            self, tmp_path, monkeypatch, capsys):
+        """The `_lib*` footer re-reads each shared module once PER LANGUAGE
+        (`generate_tool_map` is called for zh and for en), so without the
+        per-process ledger a cp950 `_lib_x.py` warned twice per run —
+        measured in blind review. Exactly one line per file per process."""
+        root = tmp_path / "tools"
+        root.mkdir()
+        (root / "_lib_bad.py").write_bytes(
+            '"""_lib_bad.py — 舊"""\n'.encode("cp950"))
+        monkeypatch.setattr(gtm, "TOOLS_ROOT", root)
+        monkeypatch.setattr(gtm, "require_platform_version",
+                            lambda *a, **k: "v0.0.0-test")
+        empty = {c: [] for c in gtm.CATEGORY_ORDER}
+
+        zh = gtm.generate_tool_map(empty, "zh")
+        en = gtm.generate_tool_map(empty, "en")
+        _out, err = capsys.readouterr()
+
+        assert gtm.UNREADABLE_DESCRIPTION in zh and gtm.UNREADABLE_DESCRIPTION in en
+        assert err.count("_lib_bad.py") == 1, err
+
 
 # ---------------------------------------------------------------------------
 # --check fix hints (#1696)
@@ -301,8 +334,11 @@ class TestFixHintLeadsToGreen:
     defaulted to zh only, so a red `tool-map.en.md` sent the reader to a
     command that changed nothing.
 
-    The judging criterion is "following the printed hint reaches green",
-    so every row here EXECUTES the hint rather than string-matching it.
+    Two assertions per row, each guarding a different half: the string
+    assertion pins that the hint ECHOES the `--lang` that was checked (an
+    over-regenerating `--lang all` hint would still reach green, so
+    execution alone cannot tell "echo" from "over-regenerate"); the
+    execution pins that following it actually reaches green.
     """
 
     _HINT = re.compile(r"Run with (--generate(?: --lang \w+)?) ")
@@ -369,6 +405,34 @@ class TestFixHintLeadsToGreen:
         assert rc == 0, out
         assert "up to date" in out, out
         assert "❌" not in out, out
+
+    def test_check_refuses_green_while_a_tool_file_is_unreadable(
+            self, env, tmp_path, monkeypatch):
+        """#1542, the half the diff cannot show: after `--generate` writes the
+        placeholder the documents MATCH, so a plain drift check would be
+        green while a shipped doc says `⚠️ description unreadable`.
+        `--check` must stay red and name the file on STDOUT — that is the
+        line `validate_all` and `make pr-preflight` quote — and the message
+        must not send the reader to `--generate` (it cannot clear this).
+        """
+        tools = gtm.TOOLS_ROOT
+        (tools / "ops").mkdir()
+        (tools / "ops" / "legacy.py").write_bytes(
+            '"""legacy.py — 舊"""\n'.encode("cp950"))
+        # The sandbox stubs `gather_tools`; this row needs the real walker.
+        monkeypatch.setattr(gtm, "gather_tools", _REAL_GATHER_TOOLS)
+
+        rc, out = env("--generate", "--lang", "all")
+        assert rc == 0, out
+        assert "unreadable: scripts/tools/ops/legacy.py (UnicodeDecodeError)" in out, out
+        assert gtm.UNREADABLE_DESCRIPTION in gtm.TOOL_MAP.read_text(encoding="utf-8")
+
+        rc, out = env("--check")
+        assert rc == 1, out
+        last = [ln for ln in out.strip().splitlines() if ln.strip()][-1]
+        assert "unreadable" in last and "scripts/tools/ops/legacy.py" in last, out
+        assert "UnicodeDecodeError" in last, out
+        assert "--generate" not in last, out
 
     @pytest.mark.parametrize("en_state", ["missing", "stale"])
     def test_bare_check_covers_the_en_file(self, env, en_state):
