@@ -2256,7 +2256,8 @@ docker run --rm \
 | Code | Description |
 |------|-------------|
 | `0` | Success |
-| `1` | Invalid config directory |
+| `1` | Deprecation incomplete (a defaults carrier the scan listed was not written; each one is named) |
+| `2` | Invalid config directory |
 
 ---
 
