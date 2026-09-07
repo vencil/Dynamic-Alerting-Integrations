@@ -2445,7 +2445,8 @@ def _prompt_text(prompt_text: str, default: str = '') -> str:
 
 def _validate_tenant_name(name: str) -> bool:
     """Validate tenant name follows K8s naming conventions."""
-    return bool(re.match(r'^[a-z0-9]([a-z0-9-]*[a-z0-9])?$', name)) and len(name) <= 63
+    # fullmatch, not match: `$` also succeeds before a trailing newline (#1779).
+    return bool(re.fullmatch(r'^[a-z0-9]([a-z0-9-]*[a-z0-9])?$', name)) and len(name) <= 63
 
 
 def _interactive_flow() -> dict:

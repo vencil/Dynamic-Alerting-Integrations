@@ -87,7 +87,8 @@ _LANG = detect_cli_lang()
 
 def validate_tenant_name(name: str) -> bool:
     """Validate tenant name against K8s label value rules (RFC 1123)."""
-    return bool(_TENANT_NAME_RE.match(name))
+    # fullmatch, not match: `$` also succeeds before a trailing newline (#1779).
+    return bool(_TENANT_NAME_RE.fullmatch(name))
 
 
 def _scan_tenant_carriers(config_dir: Path) -> TenantCarriers:

@@ -484,7 +484,9 @@ def validate_tenant_name(name: str) -> bool:
     Returns:
         True if valid
     """
-    return bool(_TENANT_NAME_RE.match(name))
+    # fullmatch, not match: `$` also succeeds before a trailing newline, so
+    # `re.match` let a stem literally named `evil\n` through (#1779).
+    return bool(_TENANT_NAME_RE.fullmatch(name))
 
 
 def discover_tenant_configs(config_dir: Path) -> List[str]:
