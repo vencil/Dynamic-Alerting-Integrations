@@ -152,7 +152,7 @@ def is_valid_lint_name(name: str) -> bool:
     """True if name is a valid Python module identifier matching our convention."""
     if not name:
         return False
-    if not _NAME_PATTERN.match(name):
+    if not _NAME_PATTERN.fullmatch(name):  # `$` would pass "foo\n" (#1779)
         return False
     # Reserved by Python or our codebase.
     if name in {"check", "lint", "test", "init", "main"}:

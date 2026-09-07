@@ -803,7 +803,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "3eb523914282189a47f8141e8aee72bd97151e4533c474edd4369a43a6b337ee",
+ "source_digest": "1bf56e132b1014dc4e202964d12dff2b5ca5ccb698dcebf306de864d3ad9e057",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1494,6 +1494,7 @@
    "tests/ops/test_generate_alertmanager_routes.py"
   ],
   "components/threshold-exporter/app/pkg/config/resolve.go": [
+   "tests/ops/test_generate_alertmanager_routes.py",
    "tests/ops/test_registry_lib.py"
   ],
   "components/threshold-exporter/app/pkg/config/types.go": [

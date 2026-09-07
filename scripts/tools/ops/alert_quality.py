@@ -146,7 +146,7 @@ def query_prometheus_alerts(
 
     label_filter = '{alertstate="firing"}'
     if tenant:
-        if not _TENANT_NAME_RE.match(tenant):
+        if not _TENANT_NAME_RE.fullmatch(tenant):
             return []
         label_filter = f'{{alertstate="firing",tenant="{tenant}"}}'
 
@@ -185,7 +185,7 @@ def query_alertmanager_alerts(
     if state:
         params.append(f"filter=alertstate%3D{quote(state)}")
     if tenant:
-        if not _TENANT_NAME_RE.match(tenant):
+        if not _TENANT_NAME_RE.fullmatch(tenant):
             return []
         params.append(f"filter=tenant%3D{quote(tenant)}")
 
@@ -693,7 +693,7 @@ def main() -> None:
         print(f"Error: invalid period '{args.period}'", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
-    if args.tenant and not _TENANT_NAME_RE.match(args.tenant):
+    if args.tenant and not _TENANT_NAME_RE.fullmatch(args.tenant):
         print(f"Error: invalid tenant name '{args.tenant}' "
               "(only alphanumeric, underscore, hyphen allowed)",
               file=sys.stderr)

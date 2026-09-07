@@ -550,3 +550,42 @@ class TestMain:
         ])
         aq.main()
         assert any("db-a" in q for q in queries_made)
+
+
+# ---------------------------------------------------------------------------
+# #1779: the label-value whitelist is a full-string gate
+# ---------------------------------------------------------------------------
+class TestTenantWhitelistRejectsTrailingNewline:
+    """`_TENANT_NAME_RE` is the PromQL / Alertmanager label-value injection
+    whitelist for `--tenant`. Under `re.match` its `$` also succeeded before a
+    trailing newline, so `"alpha\n"` passed and was interpolated into
+    `{tenant="alpha\n"}` — the exact class the whitelist exists to stop.
+    Three call sites, one gate: each is pinned with the same probe and an
+    accept control so a gate that rejects everything cannot pass."""
+
+    @pytest.mark.parametrize("tenant,accepted", [("alpha", True), ("alpha\n", False)])
+    def test_prometheus_query_gate(self, monkeypatch, tenant, accepted):
+        seen = []
+        monkeypatch.setattr("_lib_prometheus.http_get_json",
+                            lambda url, timeout=30: (seen.append(url) or
+                                                     ({"status": "success", "data": {"result": []}}, None)))
+        aq.query_prometheus_alerts("http://prom", "ALERTS", 3600, tenant=tenant)
+        assert bool(seen) is accepted, seen
+
+    @pytest.mark.parametrize("tenant,accepted", [("alpha", True), ("alpha\n", False)])
+    def test_alertmanager_query_gate(self, monkeypatch, tenant, accepted):
+        seen = []
+        # imported by name into the module, so patch the module's binding
+        monkeypatch.setattr(aq, "http_get_json",
+                            lambda url, timeout=30: (seen.append(url) or ([], None)))
+        aq.query_alertmanager_alerts("http://am", tenant=tenant)
+        assert bool(seen) is accepted, seen
+
+    def test_cli_gate_rejects_trailing_newline(self, monkeypatch, capsys):
+        monkeypatch.setattr("sys.argv", [
+            "alert_quality", "--prometheus", "http://prom", "--tenant", "alpha\n",
+        ])
+        with pytest.raises(SystemExit) as exc_info:
+            aq.main()
+        assert exc_info.value.code == 2
+        assert "invalid tenant name" in capsys.readouterr().err

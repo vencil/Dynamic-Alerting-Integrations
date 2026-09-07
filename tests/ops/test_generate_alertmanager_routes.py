@@ -1064,6 +1064,26 @@ class TestValidateVersionLabel:
     def test_bad_charset_warns(self):
         assert "violates" in self._warn('container_cpu{version="V2.0"}')
 
+    def test_trailing_newline_violates_like_go_re2_does(self):
+        """#1779: the same literal is run by Go RE2 in resolve.go, where `$`
+        is end-of-text; Python's `.match` accepted `"v1\\n"` and the two
+        planes disagreed. `fullmatch` aligns them."""
+        assert "violates" in self._warn('container_cpu{version="v1\n"}')
+        assert "violates" not in self._warn('container_cpu{version="v1"}')
+
+    def test_python_and_go_share_one_version_label_literal(self):
+        """The literal must stay byte-identical on both planes (#1779 kept the
+        text and changed only the matcher)."""
+        import re as _re
+        from pathlib import Path as _Path
+        import _grar_validate as _gv
+        repo = _Path(__file__).resolve().parents[2]
+        go = (repo / "components" / "threshold-exporter" / "app" / "pkg"
+              / "config" / "resolve.go").read_text(encoding="utf-8")
+        m = _re.search(r'versionLabelPattern = `([^`]+)`', go)
+        assert m, "versionLabelPattern literal not found in resolve.go"
+        assert m.group(1) == _gv.VERSION_LABEL_PATTERN
+
     def test_non_pilot_metric_warns(self):
         assert "non-pilot" in self._warn('redis_memory{version="v2"}')
 
