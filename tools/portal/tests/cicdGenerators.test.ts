@@ -163,25 +163,44 @@ describe('cicdGenerateDockerCommand', () => {
 });
 
 describe('cicdGenerateGitHubActionsPreview — writable mounts', () => {
-  it('runs the only container that writes into a mount as the runner', () => {
-    // ⛔ #1495 again, in the OTHER generator of this module. `generate-routes
-    // -o /data/output/routes.yaml` writes into the mounted `.output`, which
-    // belongs to the runner uid; the image is uid 10001, so without --user the
-    // very first PR fails with PermissionError and zero files. The CLI twin
-    // (scripts/tools/ops/init_project.py, the "Generate Alertmanager routes"
-    // step) has carried the flag all along — this is #1351's divergence
-    // surfacing as the exact defect #1495 is about.
-    //
-    // ⚠️ Asserted per step, not per file: the "Compute blast radius" step
-    // mounts nothing writable (its output is a shell redirect written by the
-    // runner), so a whole-file `toContain('--user')` would pass even if this
-    // step lost the flag again.
+  it('gives no container a writable mount, so no step needs --user', () => {
+    // #1423 / #1650: the "Generate routes" step used to mount `.output`
+    // writable and pass `-o /data/output/routes.yaml --validate` — but
+    // `--validate` returns before any file is written, so the mount was only
+    // a permission surface (#1495: image uid 10001 vs the runner's `.output`)
+    // and the tool now refuses `-o` under `--validate` (exit 2). The CLI twin
+    // (scripts/tools/ops/init_project.py, "Generate Alertmanager routes")
+    // dropped the mount and the flag at the same time; this pins the preview
+    // to the same shape. `.output/` is still written — by the runner, through
+    // the blast-radius shell redirect — never by a container.
     const yaml = cicdGenerateGitHubActionsPreview(baseConfig());
     const step = yaml.slice(yaml.indexOf('- name: Generate routes'),
       yaml.indexOf('- name: Compute blast radius'));
-    expect(step).toContain('-v ${{ github.workspace }}/.output:/data/output');
-    expect(step).toContain('--user $(id -u):$(id -g)');
-    expect(step.indexOf('--user')).toBeLessThan(step.indexOf('ghcr.io/vencil/da-tools'));
+    expect(step).toContain('generate-routes --config-dir /data/conf.d --validate');
+    expect(step).not.toMatch(/generate-routes[^\n]* -o /);
+    expect(step).not.toContain('/data/output');
+    expect(step).not.toContain('--user');
+    expect(yaml).not.toContain('/data/output');
+  });
+
+  it('runs every container that mounts something writable as the runner', () => {
+    // Derived, not enumerated: the rule #1495 established is "a writable
+    // mount needs --user ahead of the image"; a whole-file `toContain` would
+    // pass on a step that lost the flag. Walk every `docker run` block: any
+    // `-v` without `:ro` must be accompanied by `--user` placed before the
+    // image reference. Today the preview has no such block (the row above),
+    // so this is the tripwire for the next writable mount someone adds.
+    const yaml = cicdGenerateGitHubActionsPreview(baseConfig());
+    const blocks = yaml.split('docker run').slice(1)
+      .map((b) => b.slice(0, b.indexOf('\n\n') === -1 ? undefined : b.indexOf('\n\n')));
+    expect(blocks.length).toBeGreaterThan(0);
+    for (const b of blocks) {
+      const mounts = b.match(/-v (?:\$\{\{ github\.workspace \}\}|\S)[^ \\\n]*/g) ?? [];
+      const writable = mounts.filter((m) => !m.endsWith(':ro'));
+      if (writable.length === 0) continue;
+      expect(b, `writable mount without --user: ${writable.join(', ')}`).toContain('--user $(id -u):$(id -g)');
+      expect(b.indexOf('--user')).toBeLessThan(b.indexOf('ghcr.io/vencil/da-tools'));
+    }
   });
 
   it('keeps the tenant config mounted read-only in every step', () => {
