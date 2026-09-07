@@ -117,6 +117,37 @@ class TestTheRecordIsStructural:
         assert tree.files_read == 1, "a dropped file is not a read file"
 
 
+    def test_tenants_block_that_is_not_a_mapping_is_a_whole_file_loss(self, tmp_path):
+        """Blind review: `tenants:` as a list was WARN-only — every tenant in
+        the file vanished and `--validate` still said OK. Booked now."""
+        d = tmp_path / "conf.d"
+        d.mkdir()
+        (d / "alpha.yaml").write_text("tenants:\n  - alpha\n  - beta\n", encoding="utf-8")
+        (d / "gamma.yaml").write_text(_good_tenant("gamma"), encoding="utf-8")
+        tree = load_tenant_tree(str(d))
+        assert [f for f, _ in tree.tenant_file_errors] == ["alpha.yaml"]
+        assert "must be a mapping" in tree.tenant_file_errors[0][1]
+        assert tree.files_read == 1
+        r = _gar(["--config-dir", str(d), "--validate"])
+        assert r.returncode == EXIT_VIOLATION, (r.stdout, r.stderr)
+        assert "Config files: 1 read, 1 skipped (alpha.yaml)" in r.stdout, r.stdout
+
+    def test_tenant_entry_that_is_not_a_mapping_is_named_but_not_booked(self, tmp_path):
+        """Per-ENTRY, not per-file: the other tenants in the file are fine,
+        so the file is not refused — but the entry used to vanish silently."""
+        d = tmp_path / "conf.d"
+        d.mkdir()
+        (d / "alpha.yaml").write_text(
+            "tenants:\n  alpha:\n    - not-a-mapping\n  beta:\n    mysql_connections: '70'\n",
+            encoding="utf-8")
+        tree = load_tenant_tree(str(d))
+        assert tree.tenant_file_errors == [] and tree.files_read == 1
+        assert "beta" in tree.dedup_configs and "alpha" not in tree.dedup_configs
+        r = _gar(["--config-dir", str(d), "--validate"])
+        assert r.returncode == EXIT_OK, (r.stdout, r.stderr)
+        assert "alpha.yaml: tenant 'alpha' must be a mapping" in r.stderr, r.stderr
+
+
 # ── --validate ────────────────────────────────────────────────────────
 class TestValidateRefusesAnUnreadableTree:
 

@@ -1301,10 +1301,12 @@ def _gen_github_actions(
                 exit 1
               fi
               set +e
+              # Two read-only mounts only: config-diff writes to stdout and the
+              # HOST redirect below lands it in .output/. A writable output
+              # mount used to ride along here too, unused.
               docker run --rm \\
                 -v ${{{{ github.workspace }}}}/.output/base/${{{{ env.CONFIG_DIR }}}}:/data/conf.d.base:ro \\
                 -v ${{{{ github.workspace }}}}/${{{{ env.CONFIG_DIR }}}}:/data/conf.d:ro \\
-                -v ${{{{ github.workspace }}}}/.output:/data/output \\
                 ${{{{ env.DA_TOOLS_IMAGE }}}} \\
                 config-diff --old-dir /data/conf.d.base --new-dir /data/conf.d \\
                   --format markdown > .output/blast-radius.md

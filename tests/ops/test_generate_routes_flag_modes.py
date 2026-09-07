@@ -24,6 +24,8 @@ first-cut mistake) or one that lands back on this guard cannot ship.
 """
 from __future__ import annotations
 
+import inspect
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -31,6 +33,13 @@ from pathlib import Path
 import pytest
 
 from factories import make_routing_config, make_tenant_yaml
+from generate_alertmanager_routes import (
+    FLAGS_CLASSIFIED_BY_MODE_GUARD,
+    FLAGS_GUARDED_BY_BASE_CONFIG_CHECK,
+    FLAGS_READ_IN_EVERY_MODE,
+    _build_parser,
+    _flags_this_mode_never_reads,
+)
 
 _GAR = (Path(__file__).resolve().parents[2] / "scripts" / "tools" / "ops"
         / "generate_alertmanager_routes.py")
@@ -91,29 +100,73 @@ _UNREAD = [
      [["--validate"], ["--dry-run"]]),
     ("dry-run/apply", ["--apply", "--yes", "--dry-run"], "--dry-run", "--apply",
      [["--apply", "--yes"], ["--output-configmap", "--dry-run"]]),
+    # Blind review: the second clause of these remedies is read LITERALLY —
+    # "drop --validate AND add --apply/--output-configmap (keeping the flag)"
+    # — so both additions are run, not just the one that happens to be
+    # convenient. (`--apply` without --yes stops at the prompt, which is a
+    # different exit 2 and is allowed; the guard must not be the reason.)
     ("namespace/validate", ["--validate", "--namespace", PROBE_NS],
      "--namespace", "--validate",
-     [["--validate"], ["--output-configmap", "--namespace", PROBE_NS]]),
+     [["--validate"], ["--apply", "--namespace", PROBE_NS],
+      ["--output-configmap", "--namespace", PROBE_NS]]),
     ("namespace/render", ["--namespace", PROBE_NS], "--namespace", "render",
-     [[], ["--output-configmap", "--namespace", PROBE_NS]]),
+     [[], ["--apply", "--namespace", PROBE_NS],
+      ["--output-configmap", "--namespace", PROBE_NS]]),
     ("configmap/validate", ["--validate", "--configmap", PROBE_CM],
      "--configmap", "--validate",
-     [["--validate"], ["--output-configmap", "--configmap", PROBE_CM]]),
+     [["--validate"], ["--apply", "--configmap", PROBE_CM],
+      ["--output-configmap", "--configmap", PROBE_CM]]),
     ("configmap/render", ["--configmap", PROBE_CM], "--configmap", "render",
-     [[], ["--output-configmap", "--configmap", PROBE_CM]]),
+     [[], ["--apply", "--configmap", PROBE_CM],
+      ["--output-configmap", "--configmap", PROBE_CM]]),
     ("yes/validate", ["--validate", "--yes"], "--yes", "--validate",
      [["--validate"], ["--apply", "--yes"]]),
     ("yes/output-configmap", ["--output-configmap", "--yes"], "--yes",
      "--output-configmap", [["--output-configmap"]]),
     ("yes/render", ["--yes"], "--yes", "render", [[], ["--apply", "--yes"]]),
-    # --validate wins over --apply / --output-configmap (main() exits inside
-    # _validate_mode), so flags those modes read are unread here too.
+    # The mode flags themselves under --validate (blind review of the first
+    # cut: measured rc 0 for both, nothing applied / emitted).
+    ("apply/validate", ["--validate", "--apply", "--yes"], "--apply", "--validate",
+     [["--validate"], ["--apply", "--yes"]]),
+    ("output-configmap/validate", ["--validate", "--output-configmap"],
+     "--output-configmap", "--validate",
+     [["--validate"], ["--output-configmap"]]),
+    # Multi-flag cells: --validate wins over --apply / --output-configmap
+    # (main() exits inside _validate_mode), so flags those modes read are
+    # unread here too, and the mode flag itself is reported alongside them.
+    # ⛔ A prescription must not itself be of the guarded class: the first cut
+    # prescribed `--validate --output-configmap` here.
     ("namespace/validate+apply",
      ["--validate", "--apply", "--yes", "--namespace", PROBE_NS],
-     "--namespace", "--validate", [["--apply", "--yes", "--namespace", PROBE_NS]]),
+     "--namespace", "--validate",
+     [["--validate"], ["--apply", "--yes", "--namespace", PROBE_NS]]),
     ("yes/validate+output-configmap", ["--validate", "--output-configmap", "--yes"],
-     "--yes", "--validate", [["--validate", "--output-configmap"]]),
+     "--yes", "--validate", [["--validate"], ["--output-configmap"]]),
 ]
+
+# Flags that take a value; dropping them drops the value too.
+_VALUE_FLAGS = {"-o", "--output", "--namespace", "--configmap"}
+
+
+def _drop_flags(argv, flags):
+    """argv with every flag in *flags* (and its value) removed — the literal
+    "Drop X" reading of the guard's message."""
+    out, skip = [], False
+    for tok in argv:
+        if skip:
+            skip = False
+            continue
+        if tok in flags:
+            skip = tok in _VALUE_FLAGS
+            continue
+        out.append(tok)
+    return out
+
+
+def _reported_flags(stderr: str):
+    """Every flag the guard named, as argparse spellings (`-o/--output` → `-o`)."""
+    names = re.findall(r"^(\S+) is not read in", stderr, flags=re.M)
+    return {n.split("/")[0] for n in names}
 
 
 def _argv(base, tmp_path):
@@ -129,6 +182,12 @@ class TestUnreadFlagIsExit2:
         r = _gar(["--config-dir", str(tenant_dir), *_argv(argv, tmp_path)])
         err = r.stderr.decode("utf-8", "replace")
         assert r.returncode == EXIT_CALLER_ERROR, _text(r)[:500]
+        # ⛔ "reported", not "mentioned": a substring match was satisfied for
+        # `--apply` by the --yes remedy's "add --apply" while the --apply
+        # cell itself was removed (measured in the counterfactual).
+        assert flag in _reported_flags(err), (
+            f"the guard did not report {flag}; it reported "
+            f"{sorted(_reported_flags(err))}:\n{err}")
         assert f"{flag}" in err and GUARD in err, err
         assert f"in {mode} mode" in err, (
             f"the message must name the MODE the flag is unread in; got:\n{err}")
@@ -148,6 +207,23 @@ class TestUnreadFlagIsExit2:
                 f"prescription {p} is not argparse-legal:\n{err}")
             assert GUARD not in err, (
                 f"prescription {p} lands back on the guard:\n{err}")
+
+    def test_the_literal_drop_reading_of_the_message_is_legal(
+            self, tenant_dir, tmp_path, cid, argv, flag, mode, prescriptions):
+        """Blind review: "Drop --namespace, or drop --validate if you meant
+        to --apply" read literally left `--namespace ns` alone — this guard
+        again, one hop later. So: take the message, drop EVERY flag it
+        names, run that. It must not be argparse-rejected and must not land
+        here."""
+        r = _gar(["--config-dir", str(tenant_dir), *_argv(argv, tmp_path)])
+        reported = _reported_flags(r.stderr.decode("utf-8", "replace"))
+        assert flag in reported, reported
+        literal = _drop_flags(_argv(argv, tmp_path), reported)
+        r2 = _gar(["--config-dir", str(tenant_dir), *literal])
+        err = r2.stderr.decode("utf-8", "replace")
+        assert "error: argument" not in err and "not allowed with" not in err, err
+        assert GUARD not in err, (
+            f"dropping {sorted(reported)} as told still lands on the guard:\n{err}")
 
     def test_fires_on_a_tree_that_yields_no_routes(
             self, routeless_dir, tmp_path, cid, argv, flag, mode, prescriptions):
@@ -227,6 +303,66 @@ class TestReadingModeHonoursTheFlag:
         err = r.stderr.decode("utf-8", "replace")
         assert r.returncode == EXIT_CALLER_ERROR
         assert "interactive confirmation" in err and GUARD not in err, err
+
+
+class TestModeFlagsAloneAreRead:
+    """Controls for the `apply/validate` / `output-configmap/validate`
+    cells: each mode flag, without --validate, does its job."""
+
+    def test_output_configmap_alone_emits_a_configmap(self, tenant_dir):
+        r = _gar(["--config-dir", str(tenant_dir), "--output-configmap"])
+        assert r.returncode == EXIT_OK, _text(r)
+        assert b"kind: ConfigMap" in r.stdout
+
+    def test_apply_alone_reaches_the_apply_step(self, tenant_dir):
+        r = _gar(["--config-dir", str(tenant_dir), "--apply", "--yes"])
+        out = r.stdout.decode("utf-8", "replace")
+        assert "Apply:" in out and "Target:" in out, out
+        assert GUARD not in r.stderr.decode("utf-8", "replace")
+
+    def test_validate_alone_validates(self, tenant_dir):
+        r = _gar(["--config-dir", str(tenant_dir), "--validate"])
+        assert r.returncode == EXIT_OK, _text(r)
+        assert b"OK: all configs valid" in r.stdout
+
+
+class TestEveryFlagIsClassified:
+    """Item 7 of the blind review: the matrix is hand-listed, so derive its
+    completeness from the parser. A flag added to `_build_parser` without a
+    classification goes red here — instead of silently joining the class
+    this guard exists to close."""
+
+    def test_parser_dests_are_partitioned_by_the_three_sets(self):
+        dests = {a.dest for a in _build_parser()._actions if a.dest != "help"}
+        sets = [FLAGS_CLASSIFIED_BY_MODE_GUARD, FLAGS_READ_IN_EVERY_MODE,
+                FLAGS_GUARDED_BY_BASE_CONFIG_CHECK]
+        union = set().union(*sets)
+        assert dests == union, (
+            f"unclassified: {sorted(dests - union)}; "
+            f"classified but not in the parser: {sorted(union - dests)}")
+        for i, a in enumerate(sets):
+            for b in sets[i + 1:]:
+                assert not (a & b), f"a dest is in two sets: {sorted(a & b)}"
+
+    def test_every_guard_classified_dest_is_actually_read_by_the_guard(self):
+        """The set must not drift from the function: every name in it is
+        consulted as `args.<dest>` inside the guard's source."""
+        src = inspect.getsource(_flags_this_mode_never_reads)
+        missing = [d for d in sorted(FLAGS_CLASSIFIED_BY_MODE_GUARD)
+                   if f"args.{d}" not in src]
+        assert not missing, missing
+
+    def test_every_mode_dest_is_read_on_every_path(self):
+        """Spot-check the "read everywhere" set against the parser: these
+        are the flags no mode ignores, so none of them may ever be reported
+        by the guard in any mode."""
+        parser = _build_parser()
+        for mode_argv in ([], ["--validate"], ["--apply"], ["--output-configmap"]):
+            args = parser.parse_args(["--config-dir", "x", "--strict",
+                                      "--policy", "p.yaml", *mode_argv])
+            reported = {f.split("/")[0] for f, _, _ in _flags_this_mode_never_reads(args)}
+            assert not reported & {"--config-dir", "--strict", "--policy", "--validate"}, (
+                mode_argv, reported)
 
 
 class TestSuppliedMeansNotDefault:

@@ -39,18 +39,19 @@ This guide explains how to integrate the Dynamic Alerting platform into your exi
 > [Migration Toolkit installation guide](../migration-toolkit-installation.en.md).
 
 ⚠️ **A problem the mount does not explain, and changing the mount
-does not fix**: the §2.3 shape `generate-routes ... -o .output/xxx.yaml
---validate` prints `OK: all configs valid` and exits 0 while the file named by
-`-o` never appears — `--validate` finishes before `-o` is used; drop
-`--validate` and it fails because the tool does not create `.output/` — **from
-v2.10.0 that is exit 2 with a line naming `-o`**, where it used to be an
-uncaught `FileNotFoundError` traceback at exit 1
-([#1617](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1617)).
+does not fix**: before v2.10.0 the §2.3 shape `generate-routes ... -o
+.output/xxx.yaml --validate` **printed `OK: all configs valid` and exited 0
+while the file named by `-o` never appeared** — `--validate` finishes before
+`-o` is used ([#1423](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1423)).
+**From v2.10.0 the pair is refused outright: exit 2 with a line naming `-o`
+and `--validate`** ([#1650](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1650)).
+With `--validate` dropped, a missing `.output/` is likewise exit 2 with a line
+naming `-o`, where it used to be an uncaught `FileNotFoundError` traceback at
+exit 1 ([#1617](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1617)).
 ⚠️ If your CI greps the log for `FileNotFoundError` to detect this case, that
 string no longer appears. The tool still does not create the directory: to
 actually get the file, `mkdir -p .output` first and do not pass `--validate` in
-the same run. Tracked as
-[#1423](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1423).
+the same run.
 
 ## 1. Quick Init
 
@@ -456,7 +457,7 @@ repos:
 
 Trade-off, stated: that mount is the **whole repo, read-write** — wider than the read-only `conf.d` mount the hand-written form asked for. It is pre-commit's own mechanism, and a hook that cannot run protects nothing.
 
-Every commit touching `conf.d/` files runs local validation (`da-validate-config`) plus a routing dry-run (`da-generate-routes`).
+Every commit touching `conf.d/` files runs local validation (`da-validate-config`) plus a read-only routing validation (`da-generate-routes`, `--validate`).
 
 ## 5. End-to-End Workflow Example
 

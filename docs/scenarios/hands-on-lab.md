@@ -209,13 +209,20 @@ docker run --rm \
 ```bash
 mkdir -p .output
 
+# 產出檔案：不要同時給 --validate——它在用到 -o 之前就結束，工具會直接拒絕（結束碼 2）
 docker run --rm \
   --user $(id -u):$(id -g) \
   -v $(pwd)/conf.d:/data/conf.d:ro \
   -v $(pwd)/.output:/data/output \
   ghcr.io/vencil/da-tools:latest \
   generate-routes --config-dir /data/conf.d \
-  -o /data/output/alertmanager-routes.yaml --validate
+  -o /data/output/alertmanager-routes.yaml
+
+# 驗證另外跑一次（只讀、不寫檔）
+docker run --rm \
+  -v $(pwd)/conf.d:/data/conf.d:ro \
+  ghcr.io/vencil/da-tools:latest \
+  generate-routes --config-dir /data/conf.d --validate
 ```
 
 預期輸出摘要：

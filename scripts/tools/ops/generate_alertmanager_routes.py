@@ -372,6 +372,23 @@ def _print_config_summary(routing_configs: dict, dedup_configs: dict, enforced_r
 _DEFAULT_NAMESPACE = "monitoring"
 _DEFAULT_CONFIGMAP = "alertmanager-config"
 
+# #1650: every argparse dest of this tool, classified. The derivation test
+# (`tests/ops/test_generate_routes_flag_modes.py::TestEveryFlagIsClassified`)
+# builds the parser and checks that these three sets partition its dests
+# exactly — so a flag added to `_build_parser` without a row in
+# `_flags_this_mode_never_reads` (or an explicit entry here) goes red instead
+# of joining the class this guard exists to close.
+#   * FLAGS_CLASSIFIED_BY_MODE_GUARD: decided by `_flags_this_mode_never_reads`
+#     (each name must be read as `args.<dest>` in that function's source).
+#   * FLAGS_READ_IN_EVERY_MODE: consulted on every path main() can take.
+#   * FLAGS_GUARDED_BY_BASE_CONFIG_CHECK: the #1616 guard in main().
+FLAGS_CLASSIFIED_BY_MODE_GUARD = frozenset({
+    "output", "dry_run", "namespace", "configmap", "yes",
+    "apply", "output_configmap",
+})
+FLAGS_READ_IN_EVERY_MODE = frozenset({"config_dir", "validate", "strict", "policy"})
+FLAGS_GUARDED_BY_BASE_CONFIG_CHECK = frozenset({"base_config"})
+
 
 def _mode_of(args: argparse.Namespace) -> str:
     """The ONE mode this invocation runs, by the precedence main() applies.
@@ -425,6 +442,25 @@ def _flags_this_mode_never_reads(args: argparse.Namespace) -> list[tuple[str, st
     names_a_configmap = mode in ("--apply", "--output-configmap")
     found: list[tuple[str, str, str]] = []
 
+    # The mode flags themselves are of the same class under --validate:
+    # `_validate_mode` exits before the --apply / --output-configmap branch
+    # is reached, so `--validate --apply` applies nothing and
+    # `--validate --output-configmap` emits nothing — measured rc 0, silent,
+    # on the fixed tree too (the blind review of the first cut found it).
+    if validating and args.apply:
+        found.append((
+            "--apply",
+            "--validate returns before the apply step, so nothing is applied",
+            "Drop one of them: keep --validate to check, or keep --apply "
+            "(with --yes for a non-interactive run) to apply."))
+    if validating and args.output_configmap:
+        found.append((
+            "--output-configmap",
+            "--validate returns before the ConfigMap is assembled, so no "
+            "ConfigMap is emitted",
+            "Drop one of them: keep --validate to check, or keep "
+            "--output-configmap to emit the ConfigMap."))
+
     if args.output is not None:
         if validating:
             found.append((
@@ -468,11 +504,15 @@ def _flags_this_mode_never_reads(args: argparse.Namespace) -> list[tuple[str, st
         if value is None or names_a_configmap:
             continue
         if validating:
+            # ⛔ One hop, read literally. "drop --validate if you meant to
+            # --apply" left `--namespace ns` alone in render mode — which is
+            # this guard again. Every clause here is a complete argv change.
             found.append((
                 flag,
                 "--validate returns before any ConfigMap is named or touched",
-                f"Drop {flag}, or drop --validate if you meant to --apply or "
-                f"--output-configmap."))
+                f"Drop {flag}. To apply or write a ConfigMap instead, drop "
+                f"--validate AND add --apply or --output-configmap "
+                f"(keeping {flag})."))
         else:
             found.append((
                 flag,
@@ -485,7 +525,8 @@ def _flags_this_mode_never_reads(args: argparse.Namespace) -> list[tuple[str, st
             found.append((
                 "--yes",
                 "--validate never prompts, and never applies",
-                "Drop --yes, or drop --validate if you meant to --apply."))
+                "Drop --yes. To apply instead, drop --validate AND add "
+                "--apply (keeping --yes)."))
         elif mode == "--output-configmap":
             found.append((
                 "--yes",
@@ -501,8 +542,8 @@ def _flags_this_mode_never_reads(args: argparse.Namespace) -> list[tuple[str, st
     return found
 
 
-def main() -> None:
-    """CLI entry point: Generate Alertmanager route + receiver + inhibit config from tenant YAML."""
+def _build_parser() -> argparse.ArgumentParser:
+    """The CLI parser, separately so tests can enumerate its dests (#1650)."""
     parser = argparse.ArgumentParser(
         description="Generate Alertmanager route + receiver config from tenant YAML",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -546,20 +587,27 @@ def main() -> None:
                         help="Policy YAML with allowed_domains for webhook URL validation")
     parser.add_argument("--yes", action="store_true",
                         help="Skip confirmation prompt for --apply")
+    return parser
 
+
+def main() -> None:
+    """CLI entry point: Generate Alertmanager route + receiver + inhibit config from tenant YAML."""
+    parser = _build_parser()
     args = parser.parse_args()
 
     # #1650: four more flags of the #1616 class — accepted, then never read
     # by the mode that is about to run. Decided HERE, before any conf.d work,
     # for the reason the #1616 comment below spells out: a check inside a
     # mode handler is bypassed when the tree yields no routes.
-    unread = _flags_this_mode_never_reads(args)
-    if unread:
-        mode = _mode_of(args)
-        lines = []
-        for flag, why, remedy in unread:
-            lines.append(f"{flag} is not read in {mode} mode: {why}.\n  {remedy}")
-        die_caller_error("\n".join(lines))
+    # Both guards report into ONE message: `--validate --output-configmap
+    # --base-config X` is refused for two reasons at once (the mode flag AND
+    # the base file are unread), and an operator who only sees the first
+    # would fix it, re-run, and meet the second. Collected here, emitted
+    # after the --base-config block below.
+    caller_error_lines: list[str] = []
+    mode = _mode_of(args)
+    for flag, why, remedy in _flags_this_mode_never_reads(args):
+        caller_error_lines.append(f"{flag} is not read in {mode} mode: {why}.\n  {remedy}")
     namespace = args.namespace if args.namespace is not None else _DEFAULT_NAMESPACE
     configmap_name = args.configmap if args.configmap is not None else _DEFAULT_CONFIGMAP
 
@@ -605,7 +653,10 @@ def main() -> None:
                 "  Add --output-configmap, or drop --base-config.\n"
                 "  ⛔ Dropping it is only correct if you did not mean to "
                 "supply a base config — it does NOT make this mode honour one.")
-        die_caller_error(f"--base-config is not read in this mode: {why}.\n{remedy}")
+        caller_error_lines.append(
+            f"--base-config is not read in this mode: {why}.\n{remedy}")
+    if caller_error_lines:
+        die_caller_error("\n".join(caller_error_lines))
 
     # Load policy (webhook domain allowlist).
     # #1556: a supplied-but-unusable --policy is a caller error, not "no

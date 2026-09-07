@@ -214,13 +214,20 @@ If any warnings appear, review the key names and timing guardrails.
 ```bash
 mkdir -p .output
 
+# Write the file: do NOT add --validate here — it returns before -o is used, and the tool refuses the pair (exit 2)
 docker run --rm \
   --user $(id -u):$(id -g) \
   -v $(pwd)/conf.d:/data/conf.d:ro \
   -v $(pwd)/.output:/data/output \
   ghcr.io/vencil/da-tools:latest \
   generate-routes --config-dir /data/conf.d \
-  -o /data/output/alertmanager-routes.yaml --validate
+  -o /data/output/alertmanager-routes.yaml
+
+# Validate in a separate run (read-only, writes nothing)
+docker run --rm \
+  -v $(pwd)/conf.d:/data/conf.d:ro \
+  ghcr.io/vencil/da-tools:latest \
+  generate-routes --config-dir /data/conf.d --validate
 ```
 
 Expected output summary:

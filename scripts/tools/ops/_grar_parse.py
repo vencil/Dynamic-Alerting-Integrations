@@ -547,15 +547,35 @@ def _parse_config_files(config_dir: str) -> dict:
             # platform defaults in the exporter. That is verbatim the hazard
             # the `optional_overrides` branch of this same function warns
             # about, and this branch used to be a crash rather than a skip,
-            # so the quiet version is new. Say it in the warning until the
-            # two readers agree on a verdict.
-            print(f"  WARN: {safe_label(fname)}: 'tenants' must be a mapping, got "
-                  f"{type(tenants).__name__} — no tenant in this file is "
-                  f"loaded here, and the Go exporter drops the WHOLE file "
-                  f"on it (including its `defaults:`)", file=sys.stderr)
+            # so the quiet version is new.
+            #
+            # #1460 (blind review): a WARN alone left this a whole-file loss
+            # that `--validate` still called OK — every tenant in the file
+            # vanishes here, and the exporter drops the file outright. Book
+            # it like the other whole-file drops; `files_read` was counted
+            # at parse time, so take it back the way the non-mapping branch
+            # above does.
+            result["files_read"] -= 1
+            _drop_unreadable_file(
+                fname,
+                f"'tenants' must be a mapping, got {type(tenants).__name__} "
+                f"— no tenant in this file is loaded here, and the Go "
+                f"exporter drops the WHOLE file on it (including its "
+                f"`defaults:`)",
+                f"make `tenants:` in {fname} a mapping of "
+                f"<tenant>: {{<key>: <value>}}",
+                result)
             continue
         for tenant, overrides in tenants.items():
             if not isinstance(overrides, dict):
+                # Per-ENTRY, not per-file: the other tenants in this file
+                # are fine, so this stays out of the file booking — but it
+                # was silent before, and a tenant whose block is a list or a
+                # scalar simply did not exist as far as routing went.
+                print(f"  WARN: {safe_label(fname)}: tenant "
+                      f"'{safe_label(str(tenant))}' must be a mapping, got "
+                      f"{type(overrides).__name__} — that tenant is not "
+                      f"loaded", file=sys.stderr)
                 continue
             _parse_tenant_overrides(tenant, overrides, result)
 

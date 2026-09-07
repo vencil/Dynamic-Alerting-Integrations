@@ -622,6 +622,7 @@
    "tests/ops/test_error_consistency.py",
    "tests/ops/test_explain_route.py",
    "tests/ops/test_generate_alertmanager_routes.py",
+   "tests/ops/test_generate_routes_flag_modes.py",
    "tests/ops/test_generate_routes_orchestration.py",
    "tests/ops/test_generate_routes_unreadable_tree.py",
    "tests/ops/test_grar_facade_reexports.py",
@@ -812,7 +813,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "34a14078daee167719b07a0ea220742d8aaf9a7f5bfc13ec197fe075a18fbc5b",
+ "source_digest": "8a5a61387c6b8f0eca8407f4b27c3c03d0dc2b013ad0ccc306eb3fb0e1021ec2",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",

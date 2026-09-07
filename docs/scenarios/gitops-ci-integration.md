@@ -37,13 +37,15 @@ lang: zh
 > [Migration Toolkit 安裝指南](../migration-toolkit-installation.md)。
 
 ⚠️ **有一件事不是掛載造成的，換掛法也不會好**：§2.3 那類 `generate-routes ... -o .output/xxx.yaml
---validate` 會印 `OK: all configs valid` 並 exit 0，而 `-o` 指定的檔案**不會出現**——`--validate`
-在用到 `-o` 之前就結束了；拿掉 `--validate` 則會因為 `.output/` 目錄不存在而失敗——**v2.10.0 起是
-結束碼 2 加一行指名 `-o` 的訊息**，在那之前是未攔的 `FileNotFoundError` traceback 加結束碼 1
+--validate` 在 v2.10.0 之前**會印 `OK: all configs valid` 並 exit 0，而 `-o` 指定的檔案不會出現**——
+`--validate` 在用到 `-o` 之前就結束了（[#1423](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1423)）。
+**v2.10.0 起這個組合直接被拒絕：結束碼 2 加一行點名 `-o` 與 `--validate` 的訊息**
+（[#1650](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1650)）。拿掉 `--validate`
+之後，`.output/` 目錄不存在同樣是結束碼 2 加一行指名 `-o` 的訊息，在那之前是未攔的
+`FileNotFoundError` traceback 加結束碼 1
 （[#1617](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1617)）。⚠️ 若你的 CI 靠
 grep `FileNotFoundError` 判斷這一格，那個字串不會再出現。工具仍然不會自己建目錄：要拿到檔案就先
-`mkdir -p .output` 並且不要同時給 `--validate`。這條追蹤在
-[#1423](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1423)。
+`mkdir -p .output` 並且不要同時給 `--validate`。
 
 ## 1. 快速初始化
 
@@ -428,7 +430,7 @@ repos:
 
 代價講明白：那個掛載是**整個 repo 可讀寫**，比手寫的唯讀 `conf.d` 掛載寬。這是 pre-commit 自己的機制，而跑不起來的 hook 保護不了任何東西。
 
-每次 commit 修改 `conf.d/` 下的檔案時，自動在本機執行驗證（`da-validate-config`）並對路由做一次 dry-run（`da-generate-routes`）。
+每次 commit 修改 `conf.d/` 下的檔案時，自動在本機執行驗證（`da-validate-config`）並對路由做一次只讀驗證（`da-generate-routes`，`--validate`）。
 
 ## 5. 完整流程示例
 
