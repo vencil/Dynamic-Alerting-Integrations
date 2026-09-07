@@ -10,11 +10,13 @@ Functions:
   _parse_config_files(dir)      → walk YAML files → raw parsed dict
   _merge_tenant_routing(...)    → 4-layer merge (defaults → profile → tenant)
   load_tenant_configs(dir)      → orchestrate the full pipeline (public entry)
+  load_tenant_tree(dir)         → same, plus the file accounting (#1460)
 """
 from __future__ import annotations
 
 import os
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
@@ -135,6 +137,36 @@ def _drop_unusable_policy(fname: str, reason: str, remedy: str, result: dict,
     # --json, whose bytes must not change (json.dumps already escapes).
     print(safe_label(warning or f"  WARN: skip {fname}: {reason}"),
           file=sys.stderr)
+
+
+def _drop_unreadable_file(fname: str, reason: str, remedy: str, result: dict,
+                          warning: str | None = None) -> None:
+    """Book a WHOLE FILE this reader could not use, then drop it.
+
+    #1460: ``_drop_unusable_policy`` above records the failure only when the
+    file is a policy file — a tenant file that did not parse left one stderr
+    WARN and nothing else, so ``--validate`` went on to print
+    ``OK: all configs valid`` at rc=0 over a tree that was one tenant
+    smaller. Measured: with ``--strict`` too, and inside the shipped
+    pre-commit hook (which prints hook output only on failure) not even the
+    WARN reached the screen.
+
+    Every branch that drops a whole file — unreadable path, decode error,
+    parse error, any other read failure, a top level that is not a mapping —
+    goes through here, so ``files_skipped`` is the complete list and
+    ``tenant_file_errors`` is its non-policy subset. The consumer in
+    ``generate_alertmanager_routes.main`` derives its "read N, skipped M"
+    line and its refusal from these records, never from the WARN text.
+
+    Policy files keep their existing ``--strict`` treatment through the
+    delegate; they are booked in ``files_skipped`` (a skipped file is a
+    skipped file) but NOT in ``tenant_file_errors``.
+    """
+    result.setdefault("files_skipped", []).append((fname, reason))
+    if fname not in _POLICY_FILENAMES:
+        result.setdefault("tenant_file_errors", []).append(
+            (fname, f"{reason} — fix: {remedy}".replace("\n", " ")))
+    _drop_unusable_policy(fname, reason, remedy, result, warning=warning)
 
 
 def _parse_platform_config(data: dict, fname: str, result: dict) -> None:
@@ -324,6 +356,13 @@ def _parse_config_files(config_dir: str) -> dict:
         "tenant_profile_refs": {},   # v2.1.0 ADR-007: tenant → profile name
         "policy_misplacements": [],  # ADR-007 --strict: domain_policies in wrong file
         "policy_file_errors": [],    # ADR-007 --strict: unparseable _domain_policy.yaml
+        # #1460: whole-file accounting. `files_read` counts config files this
+        # reader parsed (a mapping, or an empty document); `files_skipped`
+        # is every (fname, reason) it had to drop; `tenant_file_errors` is
+        # the non-policy subset of those, with the remedy attached.
+        "files_read": 0,
+        "files_skipped": [],
+        "tenant_file_errors": [],
     }
 
     if not os.path.isdir(config_dir):
@@ -376,7 +415,7 @@ def _parse_config_files(config_dir: str) -> dict:
         sys.exit(EXIT_CALLER_ERROR)
 
     for bad in unusable:
-        _drop_unusable_policy(
+        _drop_unreadable_file(
             bad.name, unusable_reason(bad),
             f"remove {bad.name} or replace it with a readable YAML file",
             result)
@@ -401,7 +440,7 @@ def _parse_config_files(config_dir: str) -> dict:
             with open(path, encoding="utf-8") as f:
                 data = yaml.safe_load(f)
         except yaml.YAMLError as e:
-            _drop_unusable_policy(
+            _drop_unreadable_file(
                 fname, f"failed to parse: {e}",
                 f"repair the YAML syntax in {fname}", result,
                 warning=f"  WARN: skip unparseable {fname}: {e}")
@@ -411,7 +450,7 @@ def _parse_config_files(config_dir: str) -> dict:
             # #1448 made this a first-class finding in validate-config;
             # the sibling reader on the generate-routes / explain-route
             # path used to let it escape as a traceback.
-            _drop_unusable_policy(
+            _drop_unreadable_file(
                 fname,
                 f"not valid UTF-8 ({e.reason} at byte {e.start})",
                 f"re-save {fname} as UTF-8", result)
@@ -429,7 +468,7 @@ def _parse_config_files(config_dir: str) -> dict:
             # `generate-routes --validate --strict` with a traceback and
             # zero bytes on stdout: #1448's original symptom, surviving
             # on the shared path the fix claimed to have closed.
-            _drop_unusable_policy(
+            _drop_unreadable_file(
                 fname,
                 f"could not be read — {e.__class__.__name__}: "
                 f"{' '.join(str(e).split())}",
@@ -446,6 +485,9 @@ def _parse_config_files(config_dir: str) -> dict:
         # must be a mapping" and exited 1. Two readers, two verdicts, one
         # file. An empty mapping (`{}`) still skips quietly below — that one
         # really is a document with nothing in it.
+        # #1460: parsed — a mapping or an empty document both count as READ;
+        # the shape check below may still drop it, and books that separately.
+        result["files_read"] += 1
         if data is None:
             continue
 
@@ -456,7 +498,8 @@ def _parse_config_files(config_dir: str) -> dict:
         # way an unparseable file does — through the same helper, so the two
         # cannot report differently.
         if not isinstance(data, dict):
-            _drop_unusable_policy(
+            result["files_read"] -= 1  # #1460: dropped, so not read after all
+            _drop_unreadable_file(
                 fname,
                 f"top level must be a mapping, got {type(data).__name__}",
                 f"make {fname} a mapping — the keys this reader looks for "
@@ -564,12 +607,51 @@ def _merge_tenant_routing(parsed: dict, routing_defaults: dict) -> dict[str, dic
     return routing_configs
 
 
+@dataclass
+class TenantTree:
+    """What ``load_tenant_tree`` read, plus what it could NOT read (#1460).
+
+    The five positional fields are exactly ``load_tenant_configs``'s tuple —
+    ``as_tuple()`` hands them back in that order for the many callers that
+    unpack it. The accounting fields are the reason this type exists: a
+    consumer that only gets the tuple cannot tell "two tenants" from "three
+    tenants, one of which did not parse", and that gap is how a smaller
+    tree was reported as a valid one.
+
+    * ``files_read`` — config files parsed (a mapping or an empty document).
+    * ``files_skipped`` — ``(fname, reason)`` for every file dropped, policy
+      files included.
+    * ``tenant_file_errors`` — the non-policy subset of ``files_skipped``,
+      ``(fname, reason-with-remedy)``. Non-empty means the tree below is
+      INCOMPLETE and no verdict over it should be reported as a success.
+    """
+    routing_configs: dict[str, dict]
+    dedup_configs: dict[str, str]
+    schema_warnings: list[str]
+    enforced_routing: dict | None
+    metadata_configs: dict[str, dict]
+    files_read: int = 0
+    files_skipped: list[tuple[str, str]] = field(default_factory=list)
+    tenant_file_errors: list[tuple[str, str]] = field(default_factory=list)
+
+    def as_tuple(self) -> tuple[dict[str, dict], dict[str, str], list[str],
+                                dict | None, dict[str, dict]]:
+        return (self.routing_configs, self.dedup_configs, self.schema_warnings,
+                self.enforced_routing, self.metadata_configs)
+
+
 def load_tenant_configs(
     config_dir: str,
     *,
     strict_policies: bool = False,
 ) -> tuple[dict[str, dict], dict[str, str], list[str], dict | None, dict[str, dict]]:
     """Load and parse all tenant YAML files from a config directory.
+
+    Tuple-shaped wrapper over ``load_tenant_tree``; every field below is a
+    field of the returned ``TenantTree``. ⚠️ This tuple carries NO record of
+    files that failed to parse (#1460) — a consumer whose verdict depends on
+    the tree being complete must call ``load_tenant_tree`` and look at
+    ``tenant_file_errors``.
 
     Orchestrates the full configuration pipeline:
       1. Parse all .yaml/.yml files in config_dir (delegated to _parse_config_files())
@@ -596,6 +678,21 @@ def load_tenant_configs(
 
     Note:
         All tenants appear in dedup_configs even if they have no _routing config.
+    """
+    return load_tenant_tree(config_dir, strict_policies=strict_policies).as_tuple()
+
+
+def load_tenant_tree(
+    config_dir: str,
+    *,
+    strict_policies: bool = False,
+) -> TenantTree:
+    """``load_tenant_configs`` with the file accounting attached (#1460).
+
+    Same pipeline, same warnings, same exit-2 on an unusable directory; the
+    only addition is that a file this reader dropped is returned as data
+    (``TenantTree.tenant_file_errors`` / ``files_skipped``) instead of
+    surviving only as a stderr WARN line.
     """
     parsed = _parse_config_files(config_dir)
 
@@ -636,5 +733,9 @@ def load_tenant_configs(
                 f"loaded), so those policies are not enforced — fix: move "
                 f"the domain_policies block into _domain_policy.yaml")
 
-    return (routing_configs, parsed["dedup_configs"], schema_warnings,
-            parsed["enforced_routing"], parsed["metadata_configs"])
+    return TenantTree(
+        routing_configs, parsed["dedup_configs"], schema_warnings,
+        parsed["enforced_routing"], parsed["metadata_configs"],
+        files_read=parsed.get("files_read", 0),
+        files_skipped=list(parsed.get("files_skipped", [])),
+        tenant_file_errors=list(parsed.get("tenant_file_errors", [])))

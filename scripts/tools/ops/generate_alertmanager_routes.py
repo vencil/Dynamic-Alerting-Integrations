@@ -78,11 +78,13 @@ from _grar_merge import (  # noqa: E402, F401
 
 # ── Re-exports from _grar_parse ────────────────────────────────────
 from _grar_parse import (  # noqa: E402, F401
+    TenantTree,  # #1460 file accounting travels with the tree
     _merge_tenant_routing,
     _parse_config_files,
     _parse_platform_config,
     _parse_tenant_overrides,
     load_tenant_configs,
+    load_tenant_tree,
 )
 
 # ── Re-exports from _grar_routes ───────────────────────────────────
@@ -316,6 +318,46 @@ def _render_output_mode(routes: list[dict], receivers: list[dict], inhibit_rules
         print(content)
 
 
+def _refuse_unreadable_tenant_files(tree: TenantTree) -> None:
+    """#1460: say what was read, and refuse to go on if any of it was not.
+
+    Runs in EVERY mode, right after the scan and before the "No tenants
+    found" early exit. Measured before this: a tenant file with one quote
+    missing was skipped with a stderr WARN, and `--validate` (with or without
+    `--strict`) went on to print `OK: all configs valid` at rc=0 — two
+    tenants in, one tenant out, and the stdout tail byte-identical to the
+    all-good run. Inside the shipped pre-commit hook, which shows hook output
+    only on failure, not even the WARN was visible.
+
+    The rule shared with #1405 / #1420 (config-diff): an input that could not
+    be parsed makes the verdict UNTRUSTWORTHY, it does not make a smaller
+    success. So this is EXIT_VIOLATION regardless of `--strict` — a file that
+    cannot be read is not a policy finding to be escalated, it is a hole in
+    the tree — and it is refused in render / --apply / --output-configmap
+    too: a partial ConfigMap applied to the cluster is the worst outcome
+    here, not a tolerable one.
+
+    The counts and names come from the structured record on the tree, never
+    from grepping the WARN text.
+    """
+    skipped = tree.files_skipped
+    line = f"Config files: {tree.files_read} read, {len(skipped)} skipped"
+    if skipped:
+        line += " (" + ", ".join(safe_label(f) for f, _ in skipped) + ")"
+    print(line)
+    if not tree.tenant_file_errors:
+        return
+    n = len(tree.tenant_file_errors)
+    print(f"FAIL: {n} config file(s) could not be read — refusing to treat "
+          f"the remaining {tree.files_read} as the whole tree:", file=sys.stderr)
+    for fname, reason in tree.tenant_file_errors:
+        print(f"  {safe_label(fname)}: {safe_label(reason)}", file=sys.stderr)
+    print("  ⛔ Every tenant in a skipped file is ABSENT from this run, so no "
+          "verdict over the rest is a verdict over your conf.d. Repair the "
+          "file (or remove it from conf.d) and re-run.", file=sys.stderr)
+    sys.exit(EXIT_VIOLATION)
+
+
 def _print_config_summary(routing_configs: dict, dedup_configs: dict, enforced_routing: dict | None) -> None:
     """Print summary of loaded configs."""
     if enforced_routing:
@@ -443,8 +485,13 @@ def main() -> None:
             die_caller_error(str(exc))
 
     # Load tenant configs (routing + dedup + schema warnings + enforced routing + metadata)
+    # #1460: the tree form, not the tuple — the tuple has no record of the
+    # files that did not parse, and that record decides whether anything
+    # below is allowed to call itself a result.
+    tree = load_tenant_tree(args.config_dir, strict_policies=args.strict)
     routing_configs, dedup_configs, schema_warnings, enforced_routing, metadata_configs = \
-        load_tenant_configs(args.config_dir, strict_policies=args.strict)
+        tree.as_tuple()
+    _refuse_unreadable_tenant_files(tree)
 
     has_routing = bool(routing_configs)
     has_dedup = bool(dedup_configs)
