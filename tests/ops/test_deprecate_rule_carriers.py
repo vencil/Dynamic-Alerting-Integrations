@@ -223,3 +223,23 @@ def test_a_carrier_whose_defaults_key_is_null_does_not_traceback(tmp_path):
     text = (root / "_defaults.yaml").read_text(encoding="utf-8")
     assert text.startswith("# header\n"), text
     assert text.rstrip().endswith("cpu_usage: disable"), text
+
+
+def test_a_carrier_whose_defaults_is_not_a_mapping_is_refused_unchanged(tmp_path):
+    """Re-review: `defaults:` as a list (or scalar) was replaced by a fresh
+    mapping — 「✅ 下架完成」 rc 0 with the original block gone. The exporter
+    cannot decode that file either; it is the operator's to repair, not the
+    tool's to overwrite. Refuse by name, rc 1, bytes untouched — preview too."""
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    body = "# hdr\ndefaults:\n  - cpu_usage\n  - mem\n"
+    _write(root, "_defaults.yaml", body)
+
+    for mode in ((), ("--execute",)):
+        r = _run(root, *mode)
+        assert "Traceback" not in r.stderr, r.stderr
+        assert r.returncode == 1, r.stdout + r.stderr
+        assert "下架未完成" in r.stdout, r.stdout
+        assert "_defaults.yaml" in r.stdout and "不是 mapping（list）" in r.stdout, r.stdout
+        assert "下架完成" not in r.stdout.replace("下架未完成", ""), r.stdout
+        assert (root / "_defaults.yaml").read_text(encoding="utf-8") == body
