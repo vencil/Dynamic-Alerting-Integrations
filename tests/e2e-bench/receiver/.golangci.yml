@@ -1,12 +1,7 @@
 version: "2"
-# Enrolled in the Go Lint job by #1751 — before that no linter read this module,
-# while the enrolled ones printed `0 issues`, which reads like whole-repo
-# coverage. Which modules must be enrolled is derived, not listed, by
-# tests/ops/test_go_lint_module_coverage.py.
-#
-# Linter set: module-agnostic rules run everywhere. Not copied from the
-# production modules: depguard, whose rules are their dependency-direction
-# ratchets, and forbidigo, which is tenant-api's #932 shared-HTTP-pool ban.
+# Which modules must be enrolled, and the linter floor below, are derived by
+# tests/ops/test_go_lint_module_coverage.py. depguard/forbidigo stay in the two
+# production modules whose ratchets they are.
 #
 # ⛔ No `_test.go` errcheck exclusion, unlike the two production modules: the
 # errcheck findings this enrolment surfaced were the only evidence that nobody
@@ -17,9 +12,7 @@ linters:
   enable:
     - godoclint
 
-# ⛔ `max-same-issues` and `max-issues-per-linter` both default to truncating, so
-# a report can read as complete and still be short. A gate that hides part of
-# what it found is the failure this file exists to fix.
+# Both default to truncating; 0 = report everything.
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0

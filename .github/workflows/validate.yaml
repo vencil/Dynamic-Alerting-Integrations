@@ -48,8 +48,9 @@
 # merge.
 #
 # Checks:
-#   1. Go lint (golangci standard + godoclint on every Go module; plus the
-#      depguard dependency-direction ratchets and, in tenant-api, forbidigo)
+#   1. Go lint (every Go module; linter sets live in each module's
+#      .golangci.yml, and tests/ops/test_go_lint_module_coverage.py
+#      asserts the floor)
 #   2. Tenant config validation (schema + routing + policy)
 #   3. Custom rule linting (deny-list)
 #   4. Version consistency (bump_docs --check)
@@ -230,8 +231,10 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: "1.26"
-      # golangci-lint v2.12.2 (matches the dev container). Download the pinned
-      # install script and verify its SHA-256 BEFORE executing — no unverified
+      # golangci-lint, version pinned in GOLANGCI_VERSION below (kept equal to
+      # the dev container's by tests/ops/test_go_lint_module_coverage.py).
+      # Download the pinned install script and verify its SHA-256 BEFORE
+      # executing — no unverified
       # `curl | sh` — matching the hadolint download-then-verify pattern in
       # ci.yml. The verified script in turn checks the golangci-lint binary's
       # own checksum against the release.
@@ -254,22 +257,21 @@ jobs:
           path: ~/.cache/vibe-dl-golangci
           key: ${{ runner.os }}-vibe-dl-golangci-v2.12.2
 
-      # Go module + build cache. Every other Go job in this repo pairs setup-go
-      # with one (ci.yml's three test legs, the four bench workflows); this job
-      # was the exception, and it type-checks five modules — including
-      # tests/alertmanager-inhibit, whose graph pulls the whole prometheus/
-      # alertmanager tree. Keyed on the union of every module's go.sum so a
-      # dependency bump anywhere invalidates it, with a prefix restore-key so
-      # the miss is warm rather than cold.
+      # Go module + build cache. ⛔ Deliberately the SAME key namespace as
+      # ci.yml's Go legs, not a private one: this workflow is pull_request-only,
+      # so it never writes a default-branch cache, and a `-go-lint-` namespace
+      # would miss on every PR's first run while ci.yml's warm entry sat next to
+      # it. Sharing makes the first run warm.
       - name: Cache Go modules + build cache
         uses: actions/cache@v5
         with:
           path: |
             ~/go/pkg/mod
             ~/.cache/go-build
-          key: ${{ runner.os }}-go-lint-${{ hashFiles('**/go.sum') }}
+          key: ${{ runner.os }}-go-1.26-${{ hashFiles('**/go.sum') }}
           restore-keys: |
-            ${{ runner.os }}-go-lint-
+            ${{ runner.os }}-go-1.26-
+            ${{ runner.os }}-go-
 
       - name: Install golangci-lint
         run: |
@@ -314,8 +316,8 @@ jobs:
       # #1751: the remaining Go modules. Until these steps existed no linter
       # read them, while the two above printed `0 issues` — a report that reads
       # like whole-repo coverage. ⛔ Do not add or drop a step by hand-counting:
-      # tests/ops/test_go_lint_module_coverage.py derives the module set from
-      # `git ls-files` and requires it to equal the set of steps here.
+      # tests/ops/test_go_lint_module_coverage.py derives the set from
+      # `git ls-files` and requires every tracked .go to be reachable from it.
       - name: Lint bench-canary
         working-directory: scripts/tools/ops/bench-canary
         run: golangci-lint run ./...

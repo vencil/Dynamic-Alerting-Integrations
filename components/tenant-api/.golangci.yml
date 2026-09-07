@@ -6,11 +6,10 @@ version: "2"
 #
 # ⚠️ Loaded is not the same as reported: every file under `test/forgee2e/` is a
 # `_test.go`, so the blanket errcheck and forbidigo exclusions at the bottom of
-# this file apply to all of them. Measured at enrolment — those files carry 3
-# unchecked `resp.Body.Close()` that the exclusion drops. What the tag buys is
-# the linters this file does NOT exclude from tests.
+# this file apply to all of them. What the tag buys is the linters this file
+# does NOT exclude from tests.
 #
-# ⛔ The tags PRESENT in the tree are derived by
+# ⛔ The tags present in the tree are derived by
 # tests/ops/test_go_lint_module_coverage.py; which of them need an entry here
 # is a hand-written disposition in that file, and only `enrol` is verified.
 run:
@@ -24,8 +23,8 @@ linters:
   # and the tests are all blind to.
   #
   # ⚠️ The start-with-name rule fires only when the declaration HOLDING the
-  # comment is exported, so that half is a first layer, not full coverage (the
-  # gap is tracked in #1736). The package-doc rules fire regardless of export,
+  # comment is exported, so that half is a first layer, not full coverage. The
+  # package-doc rules fire regardless of export,
   # and several of the sites fixed here went through that path.
   #
   # ⛔ When it flags a `const (...)` / `var (...)` group heading, split the group
@@ -104,9 +103,7 @@ linters:
         linters:
           - forbidigo
 
-# ⛔ `max-same-issues` and `max-issues-per-linter` both default to truncating, so
-# a report can read as complete and still be short. A gate that hides part of
-# what it found is the failure this file exists to fix.
+# Both default to truncating; 0 = report everything.
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0

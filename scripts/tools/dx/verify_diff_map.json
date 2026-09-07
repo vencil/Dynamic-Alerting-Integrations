@@ -803,7 +803,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "f9f89617b903b5ec33fdaf3c058935d0b3551dcf08be61a9289392ac0fbd4365",
+ "source_digest": "178beefaf6c1b98ff98c6d0d15d416ff73f4d6a0c1a2855e5e8e7cf9d091a236",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1011,6 +1011,7 @@
   "tests/ops/test_confd_unusable_signal.py",
   "tests/ops/test_config_diff.py",
   "tests/ops/test_config_history.py",
+  "tests/ops/test_configmap_assemble_precheck.py",
   "tests/ops/test_cutover_tenant.py",
   "tests/ops/test_da_assembler.py",
   "tests/ops/test_diagnose.py",
@@ -1293,6 +1294,7 @@
    "tests/lint/test_e2e_spec_lint.py",
    "tests/lint/test_validate_docs_versions.py",
    "tests/ops/test_ci_path_filter_coverage.py",
+   "tests/ops/test_configmap_assemble_precheck.py",
    "tests/ops/test_generated_ci_artifacts.py",
    "tests/ops/test_prepush_hook_wiring.py",
    "tests/ops/test_wrapped_path_references.py",
@@ -1332,6 +1334,7 @@
    "tests/lint/test_e2e_spec_lint.py",
    "tests/ops/test_ci_baseline_substitution.py",
    "tests/ops/test_ci_path_filter_coverage.py",
+   "tests/ops/test_configmap_assemble_precheck.py",
    "tests/ops/test_git_check_lock.py",
    "tests/ops/test_grar_strict_hardening.py",
    "tests/ops/test_nightly_scan_matrix_drift.py",
@@ -1429,6 +1432,9 @@
    "tests/ops/test_go_lint_module_coverage.py",
    "tests/ops/test_nightly_race_issue_policy.py"
   ],
+  "components/tenant-api/.golangci.yml": [
+   "tests/ops/test_go_lint_module_coverage.py"
+  ],
   "components/tenant-api/Dockerfile": [
    "tests/dx/test_bump_docs.py"
   ],
@@ -1444,9 +1450,6 @@
   ],
   "components/tenant-api/internal/rbac/testdata/wizard": [
    "tests/ops/test_ci_path_filter_coverage.py"
-  ],
-  "components/tenant-api/test/forgee2e": [
-   "tests/ops/test_go_lint_module_coverage.py"
   ],
   "components/threshold-exporter": [
    "tests/ops/test_operator_generate_v2.py",
@@ -2227,6 +2230,9 @@
   "scripts/ops/commit_helper.py": [
    "tests/ops/test_commit_helper.py"
   ],
+  "scripts/ops/configmap_assemble_precheck.py": [
+   "tests/ops/test_configmap_assemble_precheck.py"
+  ],
   "scripts/ops/dx_run.py": [
    "tests/ops/test_dx_run.py"
   ],
@@ -2726,9 +2732,6 @@
   ],
   "scripts/tools/ops/bench_report_pr.sh": [
    "tests/ops/test_nightly_scan_matrix_drift.py"
-  ],
-  "scripts/tools/ops/bench_wrapper.sh": [
-   "tests/ops/test_go_lint_module_coverage.py"
   ],
   "scripts/tools/ops/blast_radius.py": [
    "tests/ops/test_blast_radius.py"
