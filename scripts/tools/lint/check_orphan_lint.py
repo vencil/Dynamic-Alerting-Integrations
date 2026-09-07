@@ -194,16 +194,42 @@ def gather_referencers(project_root: Path, lint_dir: Path) -> list[Path]:
 # `name:`, or a comment saying "(validate_all.py," is prose, not a call.
 _VALIDATE_ALL_CALL = re.compile(
     r"(?:python3?\s+(?:-X\s+utf8\s+)?(?:\./)?(?:scripts/tools/)?"
-    r"|(?:\./)?scripts/tools/)validate_all\.py(?![\w./])([^\n]*)")
-_ONLY_ARG = re.compile(r"--only[\s=]+([\w,]+)")
+    r"|(?:\./)?scripts/tools/)validate_all\.py(?![\w./])"
+    # the rest of the line, PLUS following lines that are option
+    # continuations (a YAML `>-`/`|` block lists one flag per line)
+    r"([^\n]*(?:\n[ \t]+-[^\n]*)*)")
+_ONLY_ARG = re.compile(r"--only[\s=]+[\"']?([\w,-]+)")
+_SKIP_ARG = re.compile(r"--skip[\s=]+[\"']?([\w,-]+)")
 
 
-def _executable_text(text: str) -> str:
-    """Runner text with ``#`` comment lines dropped and backslash line
-    continuations joined — a Makefile recipe spreads ``--only`` over two
-    lines, and a comment that mentions ``validate_all.py`` is not a call."""
-    lines = [ln for ln in text.splitlines() if not ln.lstrip().startswith("#")]
-    return re.sub(r"\\\n\s*", " ", "\n".join(lines))
+def _executable_text(text: str, suffix: str = "") -> str:
+    """Runner text reduced to what would EXECUTE.
+
+    ``#`` comment lines and trailing ``  # …`` comments are dropped, a
+    Python file's string literals (docstrings carry usage lines such as
+    ``python3 scripts/tools/validate_all.py --ci``) are blanked via AST, and
+    backslash line continuations are joined — a Makefile recipe spreads
+    ``--only`` over two lines, and a comment or usage line that mentions
+    ``validate_all.py`` is not a call (blind review found both shapes
+    flipping the gate fail-open).
+    """
+    if suffix == ".py":
+        try:
+            tree = ast.parse(text)
+            lines = text.splitlines(keepends=True)
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                    for i in range(node.lineno - 1, node.end_lineno):
+                        lines[i] = "\n"
+            text = "".join(lines)
+        except SyntaxError:
+            pass
+    kept = []
+    for ln in text.splitlines():
+        if ln.lstrip().startswith("#"):
+            continue
+        kept.append(re.sub(r"\s+#.*$", "", ln))
+    return re.sub(r"\\\n\s*", " ", "\n".join(kept))
 
 
 def registry_entries(project_root: Path) -> dict[str, str]:
@@ -245,22 +271,28 @@ def registry_reachable(project_root: Path, referencers: list[Path]) -> set[str]:
     if not entries:
         return set()
     selected: set[str] = set()
-    bare = False
+    bare_minus: list[set[str]] = []   # one entry per bare caller: its --skip set
     for f in referencers:
         try:
-            text = _executable_text(f.read_text(encoding="utf-8", errors="ignore"))
+            text = _executable_text(f.read_text(encoding="utf-8", errors="ignore"),
+                                    f.suffix)
         except OSError:
             continue
         for m in _VALIDATE_ALL_CALL.finditer(text):
-            args = m.group(1)
+            args = " ".join(m.group(1).split())
             only = _ONLY_ARG.search(args)
             if only:
-                selected.update(only.group(1).split(","))
+                selected.update(k for k in only.group(1).split(",") if k)
             elif "--only" in args or "--list" in args or "--help" in args:
-                continue
+                continue          # unparsable/quoted --only, or not a run: reaches nothing
+            elif not args.strip():
+                continue          # no flags at all is not a known caller shape: fail closed
             else:
-                bare = True
-    keys = set(entries) if bare else selected & set(entries)
+                skip = _SKIP_ARG.search(args)
+                bare_minus.append(set(skip.group(1).split(",")) if skip else set())
+    keys = selected & set(entries)
+    for skipped in bare_minus:
+        keys |= set(entries) - skipped
     return {entries[k] for k in keys}
 
 

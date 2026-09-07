@@ -96,7 +96,7 @@ jobs:
               #     check_doc_links.py; nothing else here reaches it.
               # ⚠️ The sweep is in-process, so it under-reports any leg that
               # fans out through subprocess — `drift-checks` (validate_all.py,
-              # 12 subprocess calls) is the one that does. Its inputs are NOT
+              # 13 subprocess calls) is the one that does. Its inputs are NOT
               # established by this measurement.
               - ".doclinkignore"
               - "scripts/tools/lint/mkdocs-anchor-debt.txt"

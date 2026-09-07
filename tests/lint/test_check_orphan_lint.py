@@ -174,14 +174,74 @@ class TestGatherReferencers:
         assert self._orphans(tmp_path, lint_dir) == ["check_b.py"]
 
     def test_only_list_across_a_backslash_continuation(self, tmp_path):
-        """The real Makefile spreads --only over a continued line."""
+        """The real Makefile spreads --only over a continued line. Two keys,
+        one selected: a scanner that lost the continuation would see no
+        --only, call the line bare and rescue BOTH (blind review: the
+        one-key version of this test passed under that mutation)."""
+        lint_dir = self._scaffold(tmp_path)
+        (lint_dir / "check_a.py").write_text("", encoding="utf-8")
+        (lint_dir / "check_b.py").write_text("", encoding="utf-8")
+        self._registry(tmp_path, ["a", "b"])
+        (tmp_path / "Makefile").write_text(
+            "lint-docs:\n\t@python3 ./scripts/tools/validate_all.py \\\n"
+            "\t\t--only versions,a \\\n\t\t$(ARGS)\n", encoding="utf-8")
+        assert self._orphans(tmp_path, lint_dir) == ["check_b.py"]
+
+    def test_yaml_block_lists_one_flag_per_line(self, tmp_path):
+        """A `run: >-` / `|` block puts --only on its own line with no
+        backslash; treating that as a bare call would rescue every row."""
+        lint_dir = self._scaffold(tmp_path)
+        (lint_dir / "check_a.py").write_text("", encoding="utf-8")
+        (lint_dir / "check_b.py").write_text("", encoding="utf-8")
+        self._registry(tmp_path, ["a", "b"])
+        wf = tmp_path / ".github" / "workflows" / "ci.yml"
+        wf.write_text("run: >-\n  python scripts/tools/validate_all.py\n"
+                      "  --only a\n  --ci\n", encoding="utf-8")
+        assert self._orphans(tmp_path, lint_dir) == ["check_b.py"]
+
+    def test_skip_list_reaches_everything_else(self, tmp_path):
+        lint_dir = self._scaffold(tmp_path)
+        (lint_dir / "check_a.py").write_text("", encoding="utf-8")
+        (lint_dir / "check_b.py").write_text("", encoding="utf-8")
+        self._registry(tmp_path, ["a", "b"])
+        (tmp_path / "Makefile").write_text(
+            "x:\n\t@python3 ./scripts/tools/validate_all.py --skip a --ci\n",
+            encoding="utf-8")
+        assert self._orphans(tmp_path, lint_dir) == ["check_a.py"]
+
+    def test_quoted_and_hyphenated_only_values(self, tmp_path):
+        lint_dir = self._scaffold(tmp_path)
+        (lint_dir / "check_a.py").write_text("", encoding="utf-8")
+        (lint_dir / "check_b.py").write_text("", encoding="utf-8")
+        self._registry(tmp_path, ["a", "b"])
+        (tmp_path / "Makefile").write_text(
+            'x:\n\t@python3 ./scripts/tools/validate_all.py --only="a,cli-x" --ci\n',
+            encoding="utf-8")
+        assert self._orphans(tmp_path, lint_dir) == ["check_b.py"]
+
+    def test_prefixed_usage_line_in_a_sibling_docstring_is_not_a_call(self, tmp_path):
+        """`python3 scripts/tools/validate_all.py --ci` inside a dx script's
+        docstring, or after a trailing `#`, has the invocation shape but is
+        not executed; counting it bare would rescue every row."""
+        lint_dir = self._scaffold(tmp_path)
+        (lint_dir / "check_a.py").write_text("", encoding="utf-8")
+        self._registry(tmp_path, ["a"])
+        dx = tmp_path / "scripts" / "tools" / "dx"
+        dx.mkdir(parents=True)
+        (dx / "tool.py").write_text(
+            '"""Usage:\n    python3 scripts/tools/validate_all.py --ci\n"""\n'
+            "x = 1  # python3 scripts/tools/validate_all.py --ci\n", encoding="utf-8")
+        assert self._orphans(tmp_path, lint_dir) == ["check_a.py"]
+
+    def test_call_with_no_flags_at_all_is_fail_closed(self, tmp_path):
+        """No known caller runs validate_all.py with zero flags; an empty
+        argument list is more likely a truncated capture than a run."""
         lint_dir = self._scaffold(tmp_path)
         (lint_dir / "check_a.py").write_text("", encoding="utf-8")
         self._registry(tmp_path, ["a"])
         (tmp_path / "Makefile").write_text(
-            "lint-docs:\n\t@python3 ./scripts/tools/validate_all.py \\\n"
-            "\t\t--only versions,a \\\n\t\t$(ARGS)\n", encoding="utf-8")
-        assert self._orphans(tmp_path, lint_dir) == []
+            "x:\n\t@python3 ./scripts/tools/validate_all.py\n", encoding="utf-8")
+        assert self._orphans(tmp_path, lint_dir) == ["check_a.py"]
 
     def test_bare_caller_reaches_every_row(self, tmp_path):
         lint_dir = self._scaffold(tmp_path)
