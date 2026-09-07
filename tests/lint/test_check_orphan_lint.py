@@ -187,6 +187,49 @@ class TestGatherReferencers:
             "\t\t--only versions,a \\\n\t\t$(ARGS)\n", encoding="utf-8")
         assert self._orphans(tmp_path, lint_dir) == ["check_b.py"]
 
+    def test_backslash_continuation_whose_line_is_not_an_option(self, tmp_path):
+        """Re-review: the option-line glue also captures `\t\t--only …`, so
+        the row above no longer proves the backslash join. Here the
+        continued line is the VALUE (`versions,a`) — only the join sees
+        `--only versions,a`; without it the call is `--only` with no
+        parsable list → reaches nothing → both rows orphan."""
+        lint_dir = self._scaffold(tmp_path)
+        (lint_dir / "check_a.py").write_text("", encoding="utf-8")
+        (lint_dir / "check_b.py").write_text("", encoding="utf-8")
+        self._registry(tmp_path, ["a", "b"])
+        (tmp_path / "Makefile").write_text(
+            "lint-docs:\n\t@python3 ./scripts/tools/validate_all.py --only \\\n"
+            "\t\tversions,a --ci\n", encoding="utf-8")
+        assert self._orphans(tmp_path, lint_dir) == ["check_b.py"]
+
+    def test_skip_is_subtracted_from_only_as_the_runner_does(self, tmp_path):
+        """Re-review: `validate_all` runs `--only` minus `--skip`
+        (`n in chosen and n not in skip_set`); the #1620 entry deferred
+        exactly this shape to #1492. `--only a,b --skip b` runs only a."""
+        lint_dir = self._scaffold(tmp_path)
+        (lint_dir / "check_a.py").write_text("", encoding="utf-8")
+        (lint_dir / "check_b.py").write_text("", encoding="utf-8")
+        self._registry(tmp_path, ["a", "b"])
+        (tmp_path / "Makefile").write_text(
+            "lint-docs:\n\t@python3 ./scripts/tools/validate_all.py "
+            "--only a,b --skip b --ci\n", encoding="utf-8")
+        assert self._orphans(tmp_path, lint_dir) == ["check_b.py"]
+
+    def test_a_following_yaml_list_item_is_not_an_option_continuation(
+            self, tmp_path):
+        """Re-review: a zero-flag call followed by the next step's
+        `- name:` line must stay fail-closed — gluing that line as args
+        made the call look flagged-but-bare and rescued every row."""
+        lint_dir = self._scaffold(tmp_path)
+        (lint_dir / "check_a.py").write_text("", encoding="utf-8")
+        (lint_dir / "check_b.py").write_text("", encoding="utf-8")
+        self._registry(tmp_path, ["a", "b"])
+        wf = tmp_path / ".github" / "workflows" / "ci.yml"
+        wf.write_text("    - run: |\n        python scripts/tools/validate_all.py\n"
+                      "    - name: next step\n      run: echo done\n",
+                      encoding="utf-8")
+        assert self._orphans(tmp_path, lint_dir) == ["check_a.py", "check_b.py"]
+
     def test_yaml_block_lists_one_flag_per_line(self, tmp_path):
         """A `run: >-` / `|` block puts --only on its own line with no
         backslash; treating that as a bare call would rescue every row."""

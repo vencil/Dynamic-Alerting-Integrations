@@ -50,9 +50,10 @@ rows. Measured on #1492: 33 registry rows, two ``--only`` lists, and ONE row
 (``frontmatter_versions``) that no caller selected and no other runner
 invoked — yet this gate said "all wired", and #1480 was misled by that green.
 So the registry is now read for REACHABILITY: a row counts as wired iff some
-automatic caller selects its key with ``--only`` (backslash continuations
-joined, comment lines ignored) or some caller runs ``validate_all.py`` with
-no ``--only`` at all. ``validate_all.py`` itself is no longer in the corpus —
+automatic caller selects its key with ``--only`` or runs ``validate_all.py``
+with flags but no ``--only`` (``--skip`` subtracted in both shapes; a call
+with no flags at all reaches nothing; only executable text is read — see
+``registry_reachable``). ``validate_all.py`` itself is no longer in the corpus —
 its row strings would otherwise rescue every registered lint by name.
 
 Why ``scripts/tools/lint/`` is excluded from the referencer set
@@ -197,7 +198,10 @@ _VALIDATE_ALL_CALL = re.compile(
     r"|(?:\./)?scripts/tools/)validate_all\.py(?![\w./])"
     # the rest of the line, PLUS following lines that are option
     # continuations (a YAML `>-`/`|` block lists one flag per line)
-    r"([^\n]*(?:\n[ \t]+-[^\n]*)*)")
+    # (an option starts `-x`/`--xx`; a YAML `- name:` list item or a
+    # make `-@cmd` prefix does not, and gluing those made a zero-flag
+    # call look flagged — blind review)
+    r"([^\n]*(?:\n[ \t]+-{1,2}[A-Za-z][^\n]*)*)")
 _ONLY_ARG = re.compile(r"--only[\s=]+[\"']?([\w,-]+)")
 _SKIP_ARG = re.compile(r"--skip[\s=]+[\"']?([\w,-]+)")
 
@@ -263,9 +267,19 @@ def registry_reachable(project_root: Path, referencers: list[Path]) -> set[str]:
     """Basenames of registry rows some automatic caller really runs.
 
     A caller is any referencer line invoking ``validate_all.py``: with
-    ``--only k1,k2`` it reaches exactly those keys; with no ``--only`` (and not
-    ``--list`` / ``--help``) it reaches every row. Membership alone reaches
-    nothing — that is the #1492 defect.
+    ``--only k1,k2`` it reaches exactly those keys; with flags but no
+    ``--only`` (and not ``--list`` / ``--help``) it reaches every row; in
+    both shapes ``--skip`` is subtracted, as the runner does
+    (``validate_all.py``: ``n in chosen and n not in skip_set``). A call with
+    no flags at all is not a known caller shape and reaches nothing (fail
+    closed). Membership alone reaches nothing — that is the #1492 defect.
+
+    Only what would EXECUTE is read (``_executable_text``): comment lines,
+    a Python sibling's string literals (so an argv list such as
+    ``["python3", "scripts/tools/validate_all.py", "--only", "a"]`` is
+    invisible — fail closed; a ``.sh`` sibling's ``echo`` of a usage line is
+    NOT blanked), with backslash continuations joined and a YAML block's
+    one-option-per-line continuations glued to the call.
     """
     entries = registry_entries(project_root)
     if not entries:
@@ -281,15 +295,17 @@ def registry_reachable(project_root: Path, referencers: list[Path]) -> set[str]:
         for m in _VALIDATE_ALL_CALL.finditer(text):
             args = " ".join(m.group(1).split())
             only = _ONLY_ARG.search(args)
+            skip = _SKIP_ARG.search(args)
+            skipped = set(skip.group(1).split(",")) if skip else set()
             if only:
-                selected.update(k for k in only.group(1).split(",") if k)
+                selected.update(k for k in only.group(1).split(",")
+                                if k and k not in skipped)
             elif "--only" in args or "--list" in args or "--help" in args:
                 continue          # unparsable/quoted --only, or not a run: reaches nothing
             elif not args.strip():
                 continue          # no flags at all is not a known caller shape: fail closed
             else:
-                skip = _SKIP_ARG.search(args)
-                bare_minus.append(set(skip.group(1).split(",")) if skip else set())
+                bare_minus.append(skipped)
     keys = selected & set(entries)
     for skipped in bare_minus:
         keys |= set(entries) - skipped
