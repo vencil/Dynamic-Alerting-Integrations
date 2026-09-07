@@ -90,7 +90,14 @@ RUNS = ["probe-run1.txt", "probe-run2.txt", "probe-run3.txt"]
 # such rows; worse, if the swallowed row was the calibration round, the filter
 # below stopped firing and cold-start got pooled into the measurements.
 REC = re.compile(r"\bPROBE(ROW|ENV) (.*)$")
-TAIL = re.compile(r"\bPROBETAIL round=(\d+) rank=(\d+) iter=(\d+) w=(\d+) l=(\d+)\s*$")
+# ⛔ There is deliberately NO parser for PROBETAIL. The probe still emits those
+# records (`probe_write_latency_test.go`) and the archived logs still carry them,
+# but nothing here reads one: every tail number in both reports comes from
+# PROBEROW's own `write_p99` / `write_max` / `load_p99` / `load_max`. A parser
+# existed until TRK-375 (#1733) and was pure dead weight — measured, removing it
+# left both renderers' output byte-identical on the real archive.
+# ⚠️ Do not "restore" it on the strength of seeing PROBETAIL in the input: the
+# thing to add first would be a consumer, not a parser.
 
 # ⛔ The fields the renderers index with [] — i.e. exactly those whose absence
 # raises KeyError part-way through a report. NOT the set the producer emits:
@@ -138,14 +145,13 @@ def parse_row(payload):
 class Session:
     """One parsed probe log: the rows, what produced them, and how it was read."""
 
-    def __init__(self, name, rows, env, ncal, calib_ambiguous, tails,
+    def __init__(self, name, rows, env, ncal, calib_ambiguous,
                  malformed=(), discarded=()):
         self.name = name
         self.rows = rows
         self.env = env
         self.ncal = ncal
         self.calib_ambiguous = calib_ambiguous
-        self.tails = tails
         # ⛔ Carried, not raised. `reject()` is the ONLY place allowed to refuse;
         # a defect that escapes `load()` as an exception bypasses it entirely.
         self.malformed = list(malformed)
@@ -168,7 +174,7 @@ def load(text, name):
     the caller got a traceback instead of an ::error::. They are now collected
     and carried; `reject()` decides. TRK-375 (#1733).
     """
-    rows, env, tails, defective = [], [], {}, []
+    rows, env, defective = [], [], []
     for lineno, line in enumerate(text.splitlines(), 1):
         m = REC.search(line)
         if m:
@@ -187,15 +193,6 @@ def load(text, name):
                     defective.append((lineno, why, row))
                 else:
                     rows.append(row)
-            continue
-        m = TAIL.search(line)
-        if m:
-            # ⛔ DEAD as of writing: nothing below reads `tails`. Every tail
-            # number in both reports comes from PROBEROW's own fields. Carried
-            # over unchanged rather than dropped, so this change stays a pure
-            # de-duplication; removing it is TRK-375 (#1733), which owns it.
-            tails.setdefault(int(m.group(1)), []).append(
-                (int(m.group(4)), int(m.group(5))))
 
     # ⛔ Drop the calibration round. Under `-benchtime=Nx` Go still runs the body
     # once at b.N==1 to calibrate, and that pass is the first after process start
@@ -243,7 +240,7 @@ def load(text, name):
                   else malformed)
         bucket.append((lineno_, why_))
     return Session(name, rows, list(env), len(calib), calib_ambiguous,
-                   tails, malformed, exempt)
+                   malformed, exempt)
 
 
 def reject(session, thin_msg=None):
