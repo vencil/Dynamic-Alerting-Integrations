@@ -8,7 +8,7 @@ rc=1 — and rc=1 in this repo is ``EXIT_VIOLATION`` ("the tool ran, your
 config has a finding"), while the exit-code SSOT (``_lib_exitcodes``) puts
 "IO failure / unexpected crash" under ``EXIT_CALLER_ERROR`` (2). Measured on
 ``origin/main`` with the same AST scanner this file carries: 46 call sites,
-4 guarded, 42 unguarded, across 21 modules.
+guarded / unguarded, spread across the tool modules.
 
 THE FIX SHAPE (and what this file pins)
 ---------------------------------------
@@ -22,7 +22,7 @@ The class is closed at the helper, not at 42 call sites:
   raising form and the TOOL that calls them catches ``OutputWriteError``
   once in ``main()``.
 
-Two things are asserted, both DERIVED from the tree rather than enumerated:
+Four things are asserted, all DERIVED from the tree rather than enumerated:
 
 1. **Tripwire** — every raw ``write_text_secure(`` / ``write_json_secure(``
    call under ``scripts/tools/`` (outside ``_lib_io.py`` itself) is either
@@ -35,6 +35,11 @@ Two things are asserted, both DERIVED from the tree rather than enumerated:
    ``except ValueError`` ⇒ UNGUARDED, call inside a nested ``def`` under a
    ``try`` ⇒ UNGUARDED). Without these a scanner that classifies everything
    GUARDED would pass the tripwire vacuously.
+3. **Allowlist size pin** — ``RAW_CALL_LIBRARY_MODULES`` has an exact size
+   constant; adding or swapping a raw-writing library is a visible edit.
+4. **Library callers** — every tool call of a library's WRITING function
+   (derived from the library body) sits inside a catching ``try``, or the
+   function it sits in is called only from inside catching tries.
 
 The unit tests below pin the helper contract itself (message shape, errno,
 ``from`` chaining, rc, no traceback, 0o600 kept on success, ``TypeError``
@@ -249,8 +254,11 @@ def test_library_allowlist_cannot_go_stale():
 _ALLOWLIST_CEILING = 3
 
 
-def test_library_allowlist_only_shrinks():
-    assert len(RAW_CALL_LIBRARY_MODULES) <= _ALLOWLIST_CEILING, sorted(RAW_CALL_LIBRARY_MODULES)
+def test_library_allowlist_size_is_pinned():
+    """Exact size, not `<=`: a same-diff swap (one out, one in) must touch
+    this line too, so adding a raw-writing library is always a visible
+    decision (blind review: `<=` let a swap through)."""
+    assert len(RAW_CALL_LIBRARY_MODULES) == _ALLOWLIST_CEILING, sorted(RAW_CALL_LIBRARY_MODULES)
 
 
 def _writing_functions(lib_rel: str) -> set[str]:
@@ -291,21 +299,38 @@ class _LibWriterSites(ast.NodeVisitor):
         self.guard_depth = 0
         self.func: list[str] = []
         self.raw: list[tuple[int, str, bool]] = []      # (line, enclosing fn, lexical guard)
-        self.guarded_calls: set[str] = set()            # fn names called inside a catching try
+        self.all_calls: dict[str, int] = {}             # fn name → number of call sites
+        self.guarded_calls: dict[str, int] = {}         # fn name → call sites inside a catching try
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        # A `def` is a scope boundary: a body written inside a `try` runs
+        # when CALLED, not where it is written, so the enclosing try guards
+        # nothing (the older `scan_source` pins the same rule).
+        saved, self.guard_depth = self.guard_depth, 0
         self.func.append(node.name)
         self.generic_visit(node)
         self.func.pop()
+        self.guard_depth = saved
 
     visit_AsyncFunctionDef = visit_FunctionDef  # type: ignore[assignment]
 
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        saved, self.guard_depth = self.guard_depth, 0
+        self.generic_visit(node)
+        self.guard_depth = saved
+
     @property
     def sites(self) -> list[tuple[int, bool]]:
-        """A site is guarded lexically, OR its enclosing function is itself
-        called somewhere in the module inside a catching try (the `main()`
-        wraps `_write_outputs(...)` shape)."""
-        return [(line, guarded or fn in self.guarded_calls) for line, fn, guarded in self.raw]
+        """A site is guarded lexically, OR its enclosing function is called
+        ONLY from inside catching tries — every `ast.Name` call site of it
+        in the module (the `main()` wraps `_write_outputs(...)` shape). One
+        level of indirection, by name: a deeper chain or a method call reads
+        as unguarded (a loud red to restructure around, never a silent
+        green). Handlers are judged by name, so `except OSError: raise`
+        still counts as catching — the same limit as `scan_source`."""
+        return [(line, guarded or (fn in self.guarded_calls
+                                   and self.guarded_calls[fn] == self.all_calls.get(fn, 0)))
+                for line, fn, guarded in self.raw]
 
     def visit_Try(self, node: ast.Try) -> None:
         catching = any(_handler_can_catch(h) for h in node.handlers)
@@ -326,8 +351,10 @@ class _LibWriterSites(ast.NodeVisitor):
         if is_writer:
             self.raw.append((node.lineno, self.func[-1] if self.func else "<module>",
                              self.guard_depth > 0))
-        elif self.guard_depth > 0 and isinstance(f, ast.Name):
-            self.guarded_calls.add(f.id)
+        elif isinstance(f, ast.Name):
+            self.all_calls[f.id] = self.all_calls.get(f.id, 0) + 1
+            if self.guard_depth > 0:
+                self.guarded_calls[f.id] = self.guarded_calls.get(f.id, 0) + 1
         self.generic_visit(node)
 
 
@@ -379,6 +406,13 @@ def test_lib_writer_scanner_controls():
     assert sites("from _zlib import write_thing\ndef _w():\n    write_thing('p')\ndef main():\n    try:\n        _w()\n    except OSError:\n        pass\n") == [(3, True)]
     # same helper, but main calls it OUTSIDE the try → unguarded
     assert sites("from _zlib import write_thing\ndef _w():\n    write_thing('p')\ndef main():\n    _w()\n    try:\n        pass\n    except OSError:\n        pass\n") == [(3, False)]
+    # helper guarded at ONE call site but bare at another → unguarded
+    assert sites("from _zlib import write_thing\ndef _w():\n    write_thing('p')\ndef main(x):\n    if x:\n        try:\n            _w()\n        except OSError:\n            pass\n    else:\n        _w()\n") == [(3, False)]
+    # a nested def / lambda WRITTEN inside a try but invoked outside → unguarded
+    assert sites("from _zlib import write_thing\ndef main():\n    try:\n        def _w():\n            write_thing('p')\n    except OSError:\n        pass\n    _w()\n") == [(5, False)]
+    assert sites("from _zlib import write_thing\ndef main():\n    try:\n        f = lambda: write_thing('p')\n    except OSError:\n        pass\n    f()\n") == [(4, False)]
+    # two levels of indirection: fail-closed (red), by design
+    assert sites("from _zlib import write_thing\ndef _w():\n    write_thing('p')\ndef _mid():\n    _w()\ndef main():\n    try:\n        _mid()\n    except OSError:\n        pass\n") == [(3, False)]
 
 
 def test_no_tool_module_calls_the_raw_writer_unguarded():
