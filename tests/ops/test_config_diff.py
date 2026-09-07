@@ -373,11 +373,14 @@ class TestExitCode:
          lambda p: Path(p).write_text("tenants:\n  db-a: [unclosed\n   x: :\n",
                                       encoding="utf-8", newline="\n"),
          (), True),
-        # Not UTF-8: open() raises before the parser is reached, so this is
-        # NOT a YAMLError and an enumerated `except yaml.YAMLError` misses it.
+        # Not UTF-8. Until #1654 open() raised UnicodeDecodeError before the
+        # parser was reached — NOT a YAMLError, and carrying no path, so this
+        # row recorded names_file=False as a known gap. The shared loader now
+        # hands PyYAML the bytes and wraps the ReaderError in YamlFileError
+        # with the path attached, so the file is named like the row above.
         ("non_utf8",
          lambda p: Path(p).write_bytes(b"tenants:\n  db-a:\n    note: caf\xe9\n"),
-         (), False),
+         (), True),
         # A self-referencing anchor: yaml.safe_load ACCEPTS it, and json.dumps
         # is what raises — downstream of every loader, so no try/except placed
         # around the loading step can reach it.
@@ -437,14 +440,13 @@ class TestExitCode:
                 f"parse; got {p.stderr[-300:]!r}"
             )
         else:
-            # ⚠️ NOT an endorsement — a recorded gap. These two exceptions do
-            # not carry a path (a byte offset into an unnamed buffer, and a
-            # bare "Circular reference detected"), so an operator is told a
-            # config file is broken without being told which one. Closing it
-            # means attaching the filename per file in the shared loader,
-            # which this change deliberately leaves alone. Asserting the
-            # absence keeps it from being quietly "fixed" by a message that
-            # only looks more specific.
+            # ⚠️ NOT an endorsement — a recorded gap. This exception does not
+            # carry a path (a bare "Circular reference detected" raised by
+            # json.dumps, downstream of every loader), so an operator is told
+            # a config file is broken without being told which one. (The
+            # non-UTF-8 row used to sit here too; #1654 closed that one in the
+            # shared loader.) Asserting the absence keeps it from being
+            # quietly "fixed" by a message that only looks more specific.
             assert "db-a.yaml" not in p.stderr, (
                 f"{label}: the message now names the file — good, but this "
                 "branch was recording that it could not. Move this case to "

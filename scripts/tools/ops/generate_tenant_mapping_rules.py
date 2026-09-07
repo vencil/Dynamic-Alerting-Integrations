@@ -42,6 +42,7 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import (  # noqa: E402
     detect_cli_lang,
+    exit_on_yaml_file_error,
     load_yaml_file,
     write_text_or_die,
     iter_yaml_files,
@@ -369,6 +370,7 @@ def estimate_cardinality(mappings: list[InstanceMapping], metric_count: int) -> 
 # Main
 # ---------------------------------------------------------------------------
 
+@exit_on_yaml_file_error  # #1654: unreadable mapping/tenant/dictionary file → rc 2, named
 def main() -> None:
     try_utf8_stdout()
     parser = argparse.ArgumentParser(

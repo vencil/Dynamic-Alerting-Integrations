@@ -55,6 +55,7 @@ sys.path.insert(0, str(_THIS_DIR))  # Docker flat layout
 sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
 
 from _lib_python import (  # noqa: E402
+    exit_on_yaml_file_error,
     load_yaml_file,
     validate_and_clamp,
     write_onboard_hints,
@@ -1197,6 +1198,7 @@ def _build_onboard_hints(phase1_results, phase2_results, phase3_results):
 # CLI
 # ============================================================
 
+@exit_on_yaml_file_error  # #1654: unreadable AM / rule / scrape file → rc 2, named
 def main():
     """CLI entry point: Reverse-analyze existing configs for Dynamic Alerting onboarding."""
     try_utf8_stdout()

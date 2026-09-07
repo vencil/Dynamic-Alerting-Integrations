@@ -60,6 +60,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 try:
     from _lib_python import (
         detect_cli_lang,
+        exit_on_yaml_file_error,
         format_json_report,
         load_tenant_configs,
         load_yaml_file,
@@ -67,6 +68,7 @@ try:
 except ImportError:
     from scripts.tools._lib_python import (  # type: ignore[no-redef]
         detect_cli_lang,
+        exit_on_yaml_file_error,
         format_json_report,
         load_tenant_configs,
         load_yaml_file,
@@ -446,6 +448,7 @@ def build_parser(lang: str = "en") -> argparse.ArgumentParser:
     return parser
 
 
+@exit_on_yaml_file_error  # #1654: unreadable tenant / _defaults file → rc 2, named
 def main(argv: Optional[list[str]] = None) -> int:
     """CLI entry point."""
     try_utf8_stdout()

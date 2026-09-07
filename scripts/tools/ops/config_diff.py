@@ -657,14 +657,15 @@ def main():
         # config files is broken".
         #
         # ⚠️ Measured, so that the next person does not over-trust this: only
-        # the YAMLError family actually names the offending file.
-        # ``UnicodeDecodeError`` reports a byte offset into an unnamed buffer,
-        # and ``ValueError('Circular reference detected')`` says nothing at
-        # all. Hence the type name (str() alone can be that terse) and both
-        # directory paths (the exception never says which side it was
-        # reading). Naming the file in those two cases needs the loader to
-        # attach it per file, which lives in the shared lib and is deliberately
-        # not changed here.
+        # the YAMLError family actually names the offending file — and since
+        # #1654 that family includes non-UTF-8 content, because the shared
+        # loader now hands ``yaml.safe_load`` the bytes and wraps the result
+        # in ``YamlFileError`` with the path attached (measured: a ``\xff``
+        # byte in ``alpha.yaml`` used to print this line with no filename;
+        # it now names the file). ``ValueError('Circular reference
+        # detected')`` still says nothing at all. Hence the type name (str()
+        # alone can be that terse) and both directory paths (the exception
+        # never says which side it was reading).
         print(
             f"ERROR: cannot compare configs "
             f"(--old-dir {args.old_dir} --new-dir {args.new_dir}): "

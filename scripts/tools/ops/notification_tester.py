@@ -58,6 +58,7 @@ from _lib_python import (  # noqa: E402
     RECEIVER_TYPES,
     RECEIVER_URL_FIELDS,
     detect_cli_lang,
+    exit_on_yaml_file_error,
     load_tenant_configs,
 )
 # Aliased: the local format_json_report() below (domain report builder,
@@ -702,6 +703,7 @@ def format_json_report(reports: list[TenantTestReport]) -> str:
 # ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
+@exit_on_yaml_file_error  # #1654: unreadable tenant file → rc 2, named
 def main() -> None:
     """CLI entry point: multi-channel notification connectivity testing."""
     parser = argparse.ArgumentParser(

@@ -550,7 +550,8 @@
   ],
   "scripts/tools/ops/backtest_threshold.py": [
    "tests/ops/test_backtest_threshold.py",
-   "tests/shared/test_confd_path_encoding_across_git_calls.py"
+   "tests/shared/test_confd_path_encoding_across_git_calls.py",
+   "tests/shared/test_yaml_file_error.py"
   ],
   "scripts/tools/ops/baseline_discovery.py": [
    "tests/ops/test_baseline_discovery.py"
@@ -816,7 +817,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "cbd7808bbbd1b2907daf14aa2152e64495a50fd0061a8134c4459b8d8b167e64",
+ "source_digest": "9f68486db08c1b312859330da4a5594e4c4fdddec418fb47e6b62b7d03d3bfad",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -2657,7 +2658,8 @@
    "tests/lint/test_check_property_coverage.py"
   ],
   "scripts/tools/lint/check_routing_profiles.py": [
-   "tests/lint/test_check_routing_profiles.py"
+   "tests/lint/test_check_routing_profiles.py",
+   "tests/shared/test_yaml_file_error.py"
   ],
   "scripts/tools/lint/check_rulepack_sync.py": [
    "tests/rulepacks/test_platform_rules_extract_sync.py"
@@ -2750,9 +2752,13 @@
   "scripts/tools/ops/alert_quality.py": [
    "tests/shared/test_help_contract.py"
   ],
+  "scripts/tools/ops/analyze_rule_pack_gaps.py": [
+   "tests/shared/test_yaml_file_error.py"
+  ],
   "scripts/tools/ops/backtest_threshold.py": [
    "tests/shared/test_confd_case_parity_across_tools.py",
-   "tests/shared/test_confd_path_encoding_across_git_calls.py"
+   "tests/shared/test_confd_path_encoding_across_git_calls.py",
+   "tests/shared/test_yaml_file_error.py"
   ],
   "scripts/tools/ops/bench-canary/canary_test.go": [
    "tests/dx/test_analyze_bench_history.py",
@@ -2768,12 +2774,19 @@
   "scripts/tools/ops/blast_radius.py": [
    "tests/ops/test_blast_radius.py"
   ],
+  "scripts/tools/ops/blind_spot_discovery.py": [
+   "tests/shared/test_yaml_file_error.py"
+  ],
   "scripts/tools/ops/check_alert.py": [
    "tests/lint/test_check_hardcode_tenant.py",
    "tests/shared/test_entrypoint.py"
   ],
   "scripts/tools/ops/config_diff.py": [
-   "tests/shared/test_help_contract.py"
+   "tests/shared/test_help_contract.py",
+   "tests/shared/test_yaml_file_error.py"
+  ],
+  "scripts/tools/ops/deprecate_rule.py": [
+   "tests/shared/test_yaml_file_error.py"
   ],
   "scripts/tools/ops/diagnose.py": [
    "tests/ops/test_validate_config.py"
@@ -2793,21 +2806,29 @@
    "tests/shared/test_sast.py"
   ],
   "scripts/tools/ops/generate_tenant_mapping_rules.py": [
-   "tests/ops/test_generate_tenant_mapping_rules.py"
+   "tests/ops/test_generate_tenant_mapping_rules.py",
+   "tests/shared/test_yaml_file_error.py"
   ],
   "scripts/tools/ops/init_project.py": [
    "tests/lint/test_check_threshold_reachability.py",
    "tests/ops/test_generated_ci_artifacts.py",
    "tests/ops/test_nightly_scan_matrix_drift.py"
   ],
+  "scripts/tools/ops/maintenance_scheduler.py": [
+   "tests/shared/test_yaml_file_error.py"
+  ],
   "scripts/tools/ops/metric_observed_map.yaml": [
    "tests/shared/test_json_stdout_contract.py"
+  ],
+  "scripts/tools/ops/notification_tester.py": [
+   "tests/shared/test_yaml_file_error.py"
   ],
   "scripts/tools/ops/offboard_tenant.py": [
    "tests/shared/test_confd_case_parity_across_tools.py"
   ],
   "scripts/tools/ops/onboard_platform.py": [
-   "tests/lint/test_check_threshold_reachability.py"
+   "tests/lint/test_check_threshold_reachability.py",
+   "tests/shared/test_yaml_file_error.py"
   ],
   "scripts/tools/ops/operator_generate.py": [
    "tests/shared/test_confd_case_parity_across_tools.py",
@@ -2817,7 +2838,11 @@
    "tests/ops/test_printed_paths_are_reachable.py"
   ],
   "scripts/tools/ops/policy_engine.py": [
-   "tests/shared/test_confd_case_parity_across_tools.py"
+   "tests/shared/test_confd_case_parity_across_tools.py",
+   "tests/shared/test_yaml_file_error.py"
+  ],
+  "scripts/tools/ops/policy_opa_bridge.py": [
+   "tests/shared/test_yaml_file_error.py"
   ],
   "scripts/tools/ops/scaffold_tenant.py": [
    "tests/lint/test_check_structure.py",
@@ -2825,11 +2850,15 @@
    "tests/shared/test_help_contract.py",
    "tests/shared/test_pipeline_integration.py"
   ],
+  "scripts/tools/ops/threshold_recommend.py": [
+   "tests/shared/test_yaml_file_error.py"
+  ],
   "scripts/tools/ops/validate_config.py": [
    "tests/ops/test_validate_config.py",
    "tests/shared/test_help_contract.py",
    "tests/shared/test_input_path_contract.py",
-   "tests/shared/test_pipeline_integration.py"
+   "tests/shared/test_pipeline_integration.py",
+   "tests/shared/test_yaml_file_error.py"
   ],
   "scripts/tools/validate_all.py": [
    "tests/lint/test_check_doc_freshness.py",
@@ -3167,7 +3196,8 @@
    "tests/ops/test_ci_aggregate_gate_contract.py"
   ],
   "tests/ops/test_validate_config.py": [
-   "tests/shared/test_sast.py"
+   "tests/shared/test_sast.py",
+   "tests/shared/test_yaml_file_error.py"
   ],
   "tests/ops/test_wrapped_path_references.py": [
    "tests/lint/test_check_threshold_reachability.py"
@@ -3257,6 +3287,9 @@
   ],
   "tests/shared/test_lib_toolcount.py": [
    "tests/lint/test_validate_docs_versions.py"
+  ],
+  "tests/shared/test_output_label_escaping.py": [
+   "tests/shared/test_yaml_file_error.py"
   ],
   "tests/shared/test_output_path_write_failure.py": [
    "tests/shared/test_write_failure_class.py"

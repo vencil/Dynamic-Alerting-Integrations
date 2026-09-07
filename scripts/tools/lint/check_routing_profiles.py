@@ -23,7 +23,7 @@ import yaml
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
-from _lib_python import detect_cli_lang, load_yaml_file  # noqa: E402
+from _lib_python import detect_cli_lang, exit_on_yaml_file_error, load_yaml_file  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_confd import has_yaml_extension, is_hidden_name, warn_nested  # noqa: E402
@@ -154,6 +154,7 @@ def validate(data: dict, *, strict: bool = False) -> list[str]:
     return messages
 
 
+@exit_on_yaml_file_error  # #1654: an unreadable control file → rc 2, named
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Lint routing profiles and domain policies (ADR-007)")

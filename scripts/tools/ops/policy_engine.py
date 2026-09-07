@@ -52,19 +52,23 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 try:
     from _lib_python import (
+        YamlFileError,
         detect_cli_lang,
         format_json_report,
         load_tenant_configs,
         load_yaml_file,
         parse_duration_seconds,
+        safe_label,
     )
 except ImportError:
     from scripts.tools._lib_python import (  # type: ignore[no-redef]
+        YamlFileError,
         detect_cli_lang,
         format_json_report,
         load_tenant_configs,
         load_yaml_file,
         parse_duration_seconds,
+        safe_label,
     )
 
 # ---------------------------------------------------------------------------
@@ -639,6 +643,33 @@ def build_parser(lang: str = "en") -> argparse.ArgumentParser:
     return parser
 
 
+def _unreadable_yaml_exit(exc: YamlFileError, args, lang: str) -> int:
+    """#1654: a conf.d file whose CONTENT cannot be read → rc 2, file named.
+
+    ``_defaults.yaml`` and every tenant file reach ``_lib_io.load_yaml_file``
+    with no handler; a ``\\xff`` byte in one of them used to be a
+    ``UnicodeDecodeError`` traceback (rc 1, 0 bytes of stdout under
+    ``--json``). Not the shared ``exit_on_yaml_file_error`` wrapper: this
+    tool owes ``--json`` its ``caller_error`` envelope on every terminal
+    path, same as the ``--policy`` ladder above.
+    """
+    label = safe_label(exc)   # untrusted filename in the message (#1538)
+    print(f"無法讀取 {label}" if lang == "zh" else f"ERROR: cannot read {label}",
+          file=sys.stderr)
+    if args.json_output:
+        print(format_json_report({
+            "status": "caller_error",
+            "reason": "yaml_file_unreadable",
+            "tenants_evaluated": 0,
+            "rules_evaluated": 0,
+            "error_count": 0,
+            "warning_count": 0,
+            "passed": False,
+            "violations": [],
+        }))
+    return EXIT_CALLER_ERROR
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     """CLI 進入點。"""
     try_utf8_stdout()
@@ -704,7 +735,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     # From _defaults.yaml in config-dir
     defaults_path = str(resolve_defaults_file(Path(args.config_dir)))
     if Path(defaults_path).is_file():
-        rules.extend(load_policies(defaults_path))
+        try:
+            rules.extend(load_policies(defaults_path))
+        except YamlFileError as exc:
+            return _unreadable_yaml_exit(exc, args, lang)
 
     # From standalone policy file
     if args.policy is not None:   # ⛔ not truthiness: '' is supplied (#1651)
@@ -819,7 +853,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         return EXIT_OK
 
     # Load tenant configs
-    tenant_configs = load_tenant_configs(args.config_dir)
+    try:
+        tenant_configs = load_tenant_configs(args.config_dir)
+    except YamlFileError as exc:
+        return _unreadable_yaml_exit(exc, args, lang)
     if not tenant_configs:
         if lang == "zh":
             print(f"未找到 tenant 配置於 {args.config_dir}", file=sys.stderr)

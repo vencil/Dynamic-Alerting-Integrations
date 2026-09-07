@@ -202,6 +202,19 @@ class TestExitOnYamlFileErrorWrapper:
         assert "ReaderError" in captured.err
         assert "Traceback" not in captured.err
 
+    def test_path_is_escaped_as_an_untrusted_label(self, capsys):
+        """#1538: the path in the message is a filename someone else chose.
+        Found by tests/shared/test_output_label_escaping.py on the first
+        cut of this wrapper — a ``\\x1b[31m`` in the name reached stderr raw."""
+        @lio.exit_on_yaml_file_error
+        def main():
+            raise lio.YamlFileError("conf.d/\x1b[31mred\x1b[0m.yaml",
+                                    yaml.YAMLError("bad"))
+        with pytest.raises(SystemExit):
+            main()
+        err = capsys.readouterr().err
+        assert "\x1b" not in err and "?[31mred?[0m.yaml" in err, err
+
     def test_passes_return_value_and_other_exceptions_through(self):
         @lio.exit_on_yaml_file_error
         def ok():
@@ -225,3 +238,448 @@ class TestExitOnYamlFileErrorWrapper:
             raise yaml.YAMLError("bare")
         with pytest.raises(yaml.YAMLError):
             boom()
+
+
+# ---------------------------------------------------------------------------
+# Tool level — real binaries, one \xff byte in the relevant input
+# ---------------------------------------------------------------------------
+OPS = TOOLS / "ops"
+LINT = TOOLS / "lint"
+_TIMEOUT = 120
+_PROM = "http://127.0.0.1:9"   # nothing listens; every row here is Prometheus-free or skips
+BETA_DOC = b"tenants:\n  beta:\n    cpu_usage: 85\n"
+DEFAULTS_DOC = b"defaults:\n  cpu_usage: 90\n"
+MAPPING_DOC = (b"instance_tenant_mapping:\n  db1:\n"
+               b"    - tenant: alpha\n      filter: 'db=\"a\"'\n")
+POLICY_DOC = (b"policies:\n  - name: routing-required\n    description: r\n"
+              b"    target: _routing\n    operator: required\n    severity: error\n")
+AM_DOC = (b"route:\n  receiver: default\n  routes:\n    - match:\n        tenant: alpha\n"
+          b"      receiver: alpha-hook\nreceivers:\n  - name: default\n  - name: alpha-hook\n"
+          b"    webhook_configs:\n      - url: https://hooks.example.com/alpha\n")
+
+
+def _dirty(doc: bytes) -> bytes:
+    return b"# legacy \xff marker\n" + doc
+
+
+def _run(script: Path, argv: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess:
+    env = dict(os.environ, PYTHONIOENCODING="utf-8", PROMETHEUS_URL=_PROM,
+               GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t",
+               GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
+    return subprocess.run(
+        [sys.executable, "-s", str(script), *argv],
+        capture_output=True, timeout=_TIMEOUT, encoding="utf-8", errors="replace",
+        cwd=str(cwd) if cwd else None, env=env)
+
+
+@pytest.fixture(scope="module")
+def fx(tmp_path_factory) -> dict[str, Path]:
+    """One tree per shape; ``bad`` variants differ from ``ok`` by one byte."""
+    root = tmp_path_factory.mktemp("axis6")
+
+    def tree(name: str, files: dict[str, bytes]) -> Path:
+        d = root / name
+        d.mkdir()
+        for fn, content in files.items():
+            (d / fn).write_bytes(content)
+        return d
+
+    out = {
+        "confd_ok": tree("confd_ok", {"alpha.yaml": XFF_DOC.replace(b"# legacy \xff marker\n", b""),
+                                      "beta.yaml": BETA_DOC, "_defaults.yaml": DEFAULTS_DOC}),
+        "confd_bad": tree("confd_bad", {"alpha.yaml": XFF_DOC, "beta.yaml": BETA_DOC,
+                                        "_defaults.yaml": DEFAULTS_DOC}),
+        "confd_bad_defaults": tree("confd_bad_defaults", {"alpha.yaml": CLEAN_DOC,
+                                                          "_defaults.yaml": _dirty(DEFAULTS_DOC)}),
+        "map_ok": tree("map_ok", {"alpha.yaml": CLEAN_DOC, "_instance_mapping.yaml": MAPPING_DOC}),
+        "map_bad": tree("map_bad", {"alpha.yaml": CLEAN_DOC,
+                                    "_instance_mapping.yaml": _dirty(MAPPING_DOC)}),
+        "map_bad_tenant": tree("map_bad_tenant", {"alpha.yaml": XFF_DOC,
+                                                  "_instance_mapping.yaml": MAPPING_DOC}),
+    }
+    files = root / "files"
+    files.mkdir()
+    for name, doc in (("policy", POLICY_DOC), ("alertmanager", AM_DOC),
+                      ("metric-dictionary", b"cpu_usage:\n  maps_to: cpu_usage\n")):
+        (files / f"{name}.yaml").write_bytes(doc)
+        (files / f"{name}.bad.yaml").write_bytes(_dirty(doc))
+    out["files"] = files
+
+    # --git-diff needs a repo whose HEAD~1..HEAD touches conf.d/ (ticket recipe)
+    def repo(name: str, doc: bytes) -> Path:
+        r = root / name
+        (r / "conf.d").mkdir(parents=True)
+        env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t",
+                   GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
+
+        def g(*a: str) -> None:
+            subprocess.run(["git", "-C", str(r), *a], check=True,
+                           capture_output=True, timeout=_TIMEOUT, env=env)
+        g("init", "-q")
+        (r / "conf.d" / "alpha.yaml").write_bytes(doc + b"    mem_usage: 70\n")
+        g("add", "-A"); g("commit", "-qm", "before")
+        (r / "conf.d" / "alpha.yaml").write_bytes(doc)
+        g("add", "-A"); g("commit", "-qm", "after")
+        return r
+    out["repo_ok"] = repo("repo_ok", CLEAN_DOC)
+    out["repo_bad"] = repo("repo_bad", XFF_DOC)
+    return out
+
+
+# (id, script, argv builder, cwd key or None, file the message must name, control argv builder)
+# Every bad row: rc 2, stderr names the file, no traceback. Every control row:
+# same invocation on the clean twin → the rc stated in the last column.
+_ROWS = [
+    ("check_routing_profiles", LINT / "check_routing_profiles.py",
+     lambda f: ["--config-dir", str(f["confd_bad"])], None, "alpha.yaml",
+     lambda f: ["--config-dir", str(f["confd_ok"])], EXIT_OK),
+    ("analyze_gaps --tenant-config", OPS / "analyze_rule_pack_gaps.py",
+     lambda f: ["--tenant-config", str(f["confd_bad"] / "alpha.yaml")], None, "alpha.yaml",
+     lambda f: ["--tenant-config", str(f["confd_ok"] / "alpha.yaml")], EXIT_OK),
+    ("analyze_gaps --metric-dictionary", OPS / "analyze_rule_pack_gaps.py",
+     lambda f: ["--config-dir", str(f["confd_ok"]),
+                "--metric-dictionary", str(f["files"] / "metric-dictionary.bad.yaml")],
+     None, "metric-dictionary.bad.yaml",
+     lambda f: ["--config-dir", str(f["confd_ok"]),
+                "--metric-dictionary", str(f["files"] / "metric-dictionary.yaml")], EXIT_OK),
+    ("gen_tenant_mapping mapping", OPS / "generate_tenant_mapping_rules.py",
+     lambda f: ["--config-dir", str(f["map_bad"]), "--metrics", "cpu_usage", "--dry-run"],
+     None, "_instance_mapping.yaml",
+     lambda f: ["--config-dir", str(f["map_ok"]), "--metrics", "cpu_usage", "--dry-run"], EXIT_OK),
+    ("gen_tenant_mapping tenant", OPS / "generate_tenant_mapping_rules.py",
+     lambda f: ["--config-dir", str(f["map_bad_tenant"]), "--metrics", "cpu_usage", "--dry-run",
+                "--validate"], None, "alpha.yaml",
+     lambda f: ["--config-dir", str(f["map_ok"]), "--metrics", "cpu_usage", "--dry-run",
+                "--validate"], EXIT_OK),
+    ("onboard --alertmanager-config", OPS / "onboard_platform.py",
+     lambda f: ["--alertmanager-config", str(f["files"] / "alertmanager.bad.yaml"), "--dry-run"],
+     None, "alertmanager.bad.yaml",
+     lambda f: ["--alertmanager-config", str(f["files"] / "alertmanager.yaml"), "--dry-run"], EXIT_OK),
+    ("policy_opa_bridge --dry-run", OPS / "policy_opa_bridge.py",
+     lambda f: ["--config-dir", str(f["confd_bad"]), "--dry-run"], None, "alpha.yaml",
+     lambda f: ["--config-dir", str(f["confd_ok"]), "--dry-run"], EXIT_OK),
+    ("policy_opa_bridge _defaults", OPS / "policy_opa_bridge.py",
+     lambda f: ["--config-dir", str(f["confd_bad_defaults"]), "--dry-run"], None, "_defaults.yaml",
+     lambda f: ["--config-dir", str(f["confd_ok"]), "--dry-run"], EXIT_OK),
+    ("blind_spot_discovery", OPS / "blind_spot_discovery.py",
+     lambda f: ["--config-dir", str(f["confd_bad"]), "--prometheus", _PROM], None, "alpha.yaml",
+     lambda f: ["--config-dir", str(f["confd_ok"]), "--prometheus", _PROM], EXIT_OK),
+    ("notification_tester --dry-run", OPS / "notification_tester.py",
+     lambda f: ["--config-dir", str(f["confd_bad"]), "--dry-run"], None, "alpha.yaml",
+     lambda f: ["--config-dir", str(f["confd_ok"]), "--dry-run"], EXIT_OK),
+    ("maintenance_scheduler --dry-run", OPS / "maintenance_scheduler.py",
+     lambda f: ["--config-dir", str(f["confd_bad"]), "--dry-run"], None, "alpha.yaml",
+     lambda f: ["--config-dir", str(f["confd_ok"]), "--dry-run"], EXIT_OK),
+    ("threshold_recommend", OPS / "threshold_recommend.py",
+     lambda f: ["--config-dir", str(f["confd_bad"]), "--prometheus", _PROM], None, "alpha.yaml",
+     lambda f: ["--config-dir", str(f["confd_ok"]), "--prometheus", _PROM], EXIT_OK),
+    # envelope tools: their own load-site handlers, not the decorator
+    ("backtest --git-diff", OPS / "backtest_threshold.py",
+     lambda f: ["--git-diff", "--prometheus", _PROM, "--skip-if-unavailable"], "repo_bad",
+     "conf.d/alpha.yaml",
+     lambda f: ["--git-diff", "--prometheus", _PROM, "--skip-if-unavailable"], EXIT_OK),
+    ("backtest --config-dir", OPS / "backtest_threshold.py",
+     lambda f: ["--config-dir", str(f["confd_bad"]), "--baseline", str(f["confd_ok"]),
+                "--prometheus", _PROM, "--skip-if-unavailable"], None, "alpha.yaml",
+     lambda f: ["--config-dir", str(f["confd_ok"]), "--baseline", str(f["confd_ok"]),
+                "--prometheus", _PROM, "--skip-if-unavailable"], EXIT_OK),
+    ("policy_engine _defaults", OPS / "policy_engine.py",
+     lambda f: ["--config-dir", str(f["confd_bad_defaults"])], None, "_defaults.yaml",
+     lambda f: ["--config-dir", str(f["confd_ok"]), "--policy", str(f["files"] / "policy.yaml")],
+     EXIT_OK),
+    ("policy_engine tenant", OPS / "policy_engine.py",
+     lambda f: ["--config-dir", str(f["confd_bad"]), "--policy", str(f["files"] / "policy.yaml")],
+     None, "alpha.yaml",
+     lambda f: ["--config-dir", str(f["confd_ok"]), "--policy", str(f["files"] / "policy.yaml")],
+     EXIT_OK),
+    # existing catch-all: rc was already 2, the file name is what is new
+    ("config_diff", OPS / "config_diff.py",
+     lambda f: ["--old-dir", str(f["confd_ok"]), "--new-dir", str(f["confd_bad"])], None,
+     "alpha.yaml",
+     lambda f: ["--old-dir", str(f["confd_ok"]), "--new-dir", str(f["confd_ok"])], EXIT_OK),
+]
+_ROW_IDS = [r[0] for r in _ROWS]
+
+
+@pytest.mark.parametrize("label, script, bad, cwd, named, ctrl, ctrl_rc", _ROWS, ids=_ROW_IDS)
+def test_tool_names_the_unreadable_file_and_exits_2(fx, label, script, bad, cwd, named, ctrl, ctrl_rc):
+    p = _run(script, bad(fx), fx[cwd] if cwd else None)
+    assert p.returncode == EXIT_CALLER_ERROR, (
+        f"{label}: rc {p.returncode}, expected 2 — 1 is EXIT_VIOLATION's number "
+        f"and an uncaught traceback's number.\nstderr={p.stderr[-500:]!r}")
+    assert "Traceback" not in p.stderr, f"{label}: {p.stderr[-500:]!r}"
+    assert named in p.stderr, f"{label}: stderr must name the file; got {p.stderr[-500:]!r}"
+    assert "cannot read" in p.stderr or "cannot compare" in p.stderr, p.stderr[-500:]
+    assert "ReaderError" in p.stderr, "the cause class tells apart bad bytes from bad syntax"
+
+
+@pytest.mark.parametrize("label, script, bad, cwd, named, ctrl, ctrl_rc", _ROWS, ids=_ROW_IDS)
+def test_control_clean_bytes_keep_the_normal_rc(fx, label, script, bad, cwd, named, ctrl, ctrl_rc):
+    """Same fixture minus the bad byte. Every row here measured 0 on the
+    clean twin (Prometheus-dependent tools either skip or warn and still
+    report). Without this row the test above cannot tell 'named the bad
+    file' from 'every input is called unreadable'."""
+    p = _run(script, ctrl(fx), fx[cwd.replace("bad", "ok")] if cwd else None)
+    assert p.returncode == ctrl_rc, f"{label}: control rc {p.returncode}\nstderr={p.stderr[-500:]!r}"
+    assert "cannot read" not in p.stderr and "Traceback" not in p.stderr, p.stderr[-500:]
+
+
+@pytest.mark.parametrize("label, script, argv, cwd, reason", [
+    ("backtest --git-diff", OPS / "backtest_threshold.py",
+     lambda f: ["--git-diff", "--prometheus", _PROM, "--json", "--skip-if-unavailable"],
+     "repo_bad", "conf_file_unreadable"),
+    ("policy_engine tenant", OPS / "policy_engine.py",
+     lambda f: ["--config-dir", str(f["confd_bad"]), "--policy",
+                str(f["files"] / "policy.yaml"), "--json"], None, "yaml_file_unreadable"),
+    ("policy_engine _defaults", OPS / "policy_engine.py",
+     lambda f: ["--config-dir", str(f["confd_bad_defaults"]), "--json"], None,
+     "yaml_file_unreadable"),
+], ids=["backtest --git-diff", "policy_engine tenant", "policy_engine _defaults"])
+def test_json_envelope_tools_still_emit_one_document(fx, label, script, argv, cwd, reason):
+    """These two tools promise --json one document on EVERY terminal path
+    (their existing ``caller_error`` envelope); measured before: 0 bytes."""
+    import json
+    p = _run(script, argv(fx), fx[cwd] if cwd else None)
+    assert p.returncode == EXIT_CALLER_ERROR, p.stderr[-500:]
+    doc = json.loads(p.stdout)
+    assert doc["status"] == "caller_error"
+    assert doc["reason"] == reason
+    assert "Traceback" not in p.stderr
+
+
+@pytest.mark.parametrize("label, script, argv", [
+    ("analyze_gaps --json", OPS / "analyze_rule_pack_gaps.py",
+     lambda f: ["--config-dir", str(f["confd_bad"]), "--json"]),
+    ("onboard --json", OPS / "onboard_platform.py",
+     lambda f: ["--alertmanager-config", str(f["files"] / "alertmanager.bad.yaml"),
+                "--dry-run", "--json"]),
+    ("policy_opa_bridge --json", OPS / "policy_opa_bridge.py",
+     lambda f: ["--config-dir", str(f["confd_bad"]), "--json"]),
+], ids=["analyze_gaps", "onboard", "policy_opa_bridge"])
+def test_decorated_tools_leave_stdout_empty_under_json(fx, label, script, argv):
+    """No envelope convention on their caller-error paths (their existing
+    ``sys.exit(EXIT_CALLER_ERROR)`` sites are stderr-only), so the wrapper
+    is stderr-only too — and stdout must not carry a half-written document."""
+    p = _run(script, argv(fx))
+    assert p.returncode == EXIT_CALLER_ERROR, p.stderr[-500:]
+    assert p.stdout == "", p.stdout[:200]
+
+
+def test_backtest_baseline_side_is_wrapped_too(fx, monkeypatch, capsys):
+    """``--baseline`` is read only inside ``extract_changes_from_dirs``, which
+    runs after the Prometheus gate — unreachable from a subprocess without a
+    Prometheus. In-process, with the gate answered True, the same file is
+    named and rc is 2 (the recipe scan reads ``--config-dir`` first, so the
+    bad byte sits on the baseline side here on purpose)."""
+    sys.path.insert(0, str(OPS))
+    import backtest_threshold as bt
+    monkeypatch.setattr(bt, "prometheus_available", lambda _url: True)
+    monkeypatch.setattr(sys, "argv", [
+        "backtest_threshold.py", "--config-dir", str(fx["confd_ok"]),
+        "--baseline", str(fx["confd_bad"]), "--prometheus", _PROM])
+    with pytest.raises(SystemExit) as ei:
+        bt.main()
+    assert ei.value.code == EXIT_CALLER_ERROR
+    err = capsys.readouterr().err
+    assert "cannot read" in err and "alpha.yaml" in err, err
+
+
+def test_deprecate_rule_names_and_continues(fx):
+    """Class (ii): its own wrapper already turned a broken file into a named
+    warning and went on (that is the deprecation workflow's documented
+    choice); the decode failure now takes that path instead of a traceback.
+    rc stays 0 — a NAMED skip, which is what #1654 asked for; not silent."""
+    p = _run(OPS / "deprecate_rule.py", ["cpu_usage", "--config-dir", str(fx["confd_bad"])])
+    assert p.returncode == EXIT_OK, p.stderr[-500:]
+    assert "Traceback" not in p.stderr
+    assert "alpha.yaml" in p.stdout and "無法讀取" in p.stdout, p.stdout[-500:]
+
+
+def test_validate_config_unchanged_rc_1_named(fx):
+    """Reads the tree itself before any helper call and already named the
+    file; the exit-code meaning (1 = finding about the customer's tree) is
+    pinned by tests/ops/test_validate_config.py and must not move to 2."""
+    p = _run(OPS / "validate_config.py", ["--config-dir", str(fx["confd_bad"])])
+    assert p.returncode == EXIT_VIOLATION, p.stderr[-500:]
+    assert "Traceback" not in p.stderr
+    assert "alpha.yaml" in p.stdout + p.stderr
+
+
+# ---------------------------------------------------------------------------
+# Regression tripwire (derivation): every lib load site is guarded or wrapped
+# ---------------------------------------------------------------------------
+_LIB_ROOTS = {"load_yaml_file", "load_tenant_configs"}
+_LIB_MODULES = {"_lib_io", "_lib_python", "scripts.tools._lib_io", "scripts.tools._lib_python"}
+# Handler spellings that catch YamlFileError (a yaml.YAMLError).
+_GUARDS = {"yaml.YAMLError", "YAMLError", "YamlFileError", "Exception", "_INPUT_ERRORS"}
+_ENTRY = "exit_on_yaml_file_error"
+
+# ⛔ Exit-locked. Modules whose lib load sites are NOT lexically guarded and
+# whose main is NOT wrapped, because they guard by hand somewhere up the
+# call chain — each with the function and handler that does it. May only
+# SHRINK (a module moving to the decorator deletes its row); adding a row
+# is adding a hand-written exception to the shared rule, and the ticket's
+# whole point was one answer, not twenty-one.
+_HAND_GUARDED: dict[str, tuple[str, str]] = {
+    "ops/backtest_threshold.py": ("main", "YamlFileError"),   # --json envelope
+    "ops/policy_engine.py": ("main", "YamlFileError"),        # --json envelope
+    "ops/config_diff.py": ("main", "Exception"),              # catch-all since #1448 era
+    "ops/validate_config.py": ("_run_check", "_INPUT_ERRORS"),  # dispatch wrapper (#1448)
+}
+
+
+def _handler_names(h: ast.ExceptHandler) -> list[str]:
+    if h.type is None:
+        return ["<bare>"]
+    if isinstance(h.type, ast.Tuple):
+        return [ast.unparse(e) for e in h.type.elts]
+    return [ast.unparse(h.type)]
+
+
+def _lib_aliases(tree: ast.Module) -> dict[str, str]:
+    """Local names bound to the lib's load_yaml_file / load_tenant_configs."""
+    out: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module in _LIB_MODULES:
+            for a in node.names:
+                if a.name in _LIB_ROOTS:
+                    out[a.asname or a.name] = a.name
+    return out
+
+
+def _module_aliases(tree: ast.Module) -> dict[str, str]:
+    """``import policy_engine as pe`` → {"pe": "policy_engine"}."""
+    out: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for a in node.names:
+                out[a.asname or a.name] = a.name
+    return out
+
+
+def _module_reexports_lib_root(modname: str, attr: str) -> bool:
+    """Does ``<modname>.<attr>`` resolve to the lib helper (imported, not
+    defined locally)? ``gen.load_tenant_configs`` is grar's own function;
+    ``pe.load_yaml_file`` is the lib's, re-exported."""
+    for d in (TOOLS, OPS, LINT):
+        p = d / f"{modname}.py"
+        if p.is_file():
+            t = ast.parse(p.read_text(encoding="utf-8"))
+            defines = any(isinstance(n, ast.FunctionDef) and n.name == attr for n in t.body)
+            return (not defines) and attr in _lib_aliases(t).values()
+    return False
+
+
+class _Sites(ast.NodeVisitor):
+    def __init__(self, tree: ast.Module) -> None:
+        self.lib = _lib_aliases(tree)
+        self.mods = _module_aliases(tree)
+        self.func: list[str] = []
+        self.handlers: list[list[str]] = []
+        self.sites: list[tuple[int, str, bool]] = []   # (line, func, guarded)
+        self.main_wrapped = False
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        if node.name == "main" and not self.func:
+            self.main_wrapped = any(
+                (isinstance(d, ast.Name) and d.id == _ENTRY)
+                or (isinstance(d, ast.Attribute) and d.attr == _ENTRY)
+                for d in node.decorator_list)
+        self.func.append(node.name)
+        self.generic_visit(node)
+        self.func.pop()
+
+    visit_AsyncFunctionDef = visit_FunctionDef  # type: ignore[assignment]
+
+    def visit_Try(self, node: ast.Try) -> None:
+        self.handlers.append([n for h in node.handlers for n in _handler_names(h)])
+        for n in node.body:
+            self.visit(n)
+        self.handlers.pop()
+        for part in (node.handlers, node.orelse, node.finalbody):
+            for n in part:
+                self.visit(n)
+
+    def visit_Call(self, node: ast.Call) -> None:
+        f = node.func
+        is_root = False
+        if isinstance(f, ast.Name) and f.id in self.lib:
+            is_root = True
+        elif (isinstance(f, ast.Attribute) and f.attr in _LIB_ROOTS
+              and isinstance(f.value, ast.Name) and f.value.id in self.mods):
+            is_root = _module_reexports_lib_root(self.mods[f.value.id], f.attr)
+        if is_root:
+            guarded = any(h in _GUARDS for hs in self.handlers for h in hs)
+            self.sites.append((node.lineno, ".".join(self.func) or "<module>", guarded))
+        self.generic_visit(node)
+
+
+def _tool_modules() -> list[Path]:
+    return sorted(p for d in (TOOLS, OPS, LINT, TOOLS / "dx") if d.is_dir()
+                  for p in d.glob("*.py") if not p.name.startswith("_"))
+
+
+def _scan(path: Path) -> _Sites:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    v = _Sites(tree)
+    v.visit(tree)
+    return v
+
+
+def test_scan_sees_the_known_population():
+    """Anti-vacuity: the scanner must find the sites the ticket counted, or a
+    green run below proves nothing. 13 modules on main at the time of the fix;
+    a new consumer is fine (it will be judged), a smaller count means the
+    scanner went blind."""
+    found = {p.name for p in _tool_modules() if _scan(p).sites}
+    expected = {
+        "check_routing_profiles.py", "analyze_rule_pack_gaps.py", "backtest_threshold.py",
+        "config_diff.py", "deprecate_rule.py", "generate_tenant_mapping_rules.py",
+        "migrate_to_operator.py", "onboard_platform.py", "operator_generate.py",
+        "policy_engine.py", "policy_opa_bridge.py", "validate_config.py",
+        "blind_spot_discovery.py", "notification_tester.py", "maintenance_scheduler.py",
+        "threshold_recommend.py",
+    }
+    assert expected <= found, sorted(expected - found)
+
+
+@pytest.mark.parametrize("path", _tool_modules(), ids=lambda p: p.name)
+def test_every_lib_load_site_is_guarded_or_the_entry_is_wrapped(path):
+    rel = path.relative_to(TOOLS).as_posix()
+    v = _scan(path)
+    unguarded = [(ln, fn) for ln, fn, g in v.sites if not g]
+    if rel in _HAND_GUARDED:
+        assert unguarded, (
+            f"{rel}: every lib load site is now lexically guarded — delete its "
+            "_HAND_GUARDED row so the list keeps shrinking")
+        func, handler = _HAND_GUARDED[rel]
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        fdefs = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == func]
+        assert fdefs, f"{rel}: hand-guard function {func} is gone"
+        handlers = [h for n in ast.walk(fdefs[0]) if isinstance(n, ast.Try)
+                    for hh in n.handlers for h in _handler_names(hh)]
+        assert handler in handlers, (
+            f"{rel}: {func} no longer catches {handler} (has {handlers}); the sites "
+            f"at {unguarded} would traceback again")
+        if handler == "_INPUT_ERRORS":
+            src = path.read_text(encoding="utf-8")
+            assert "_INPUT_ERRORS = (yaml.YAMLError" in src, (
+                f"{rel}: _INPUT_ERRORS no longer starts with yaml.YAMLError")
+        return
+    if unguarded:
+        assert v.main_wrapped, (
+            f"{rel}: lib load site(s) {unguarded} have no handler that catches "
+            f"yaml.YAMLError / YamlFileError / Exception, and main() is not "
+            f"decorated with @{_ENTRY} — a \\xff byte in that input is a traceback "
+            "again (#1654). Wrap the entry, or add a handler at the site.")
+
+
+def test_hand_guarded_list_only_shrinks():
+    """The lock itself. Each row must still exist AND still need the row; the
+    set may lose members, never gain them without editing this literal."""
+    assert set(_HAND_GUARDED) == {
+        "ops/backtest_threshold.py", "ops/policy_engine.py",
+        "ops/config_diff.py", "ops/validate_config.py",
+    }
+    for rel in _HAND_GUARDED:
+        assert (TOOLS / rel).is_file(), rel

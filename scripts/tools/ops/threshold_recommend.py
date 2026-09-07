@@ -64,6 +64,7 @@ from _lib_python import (  # noqa: E402
     VALID_RESERVED_PREFIXES,
     add_prometheus_arg,
     detect_cli_lang,
+    exit_on_yaml_file_error,
     load_tenant_configs,
     parse_duration_seconds,
     query_prometheus_instant,
@@ -1102,6 +1103,7 @@ def format_export_patch(reports: list[TenantRecommendation]) -> str:
 # ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
+@exit_on_yaml_file_error  # #1654: unreadable tenant file → rc 2, named
 def main() -> None:
     """CLI entry point: threshold recommendation engine."""
     parser = argparse.ArgumentParser(

@@ -113,7 +113,9 @@ def exit_on_yaml_file_error(fn: _F) -> _F:
         try:
             return fn(*args, **kwargs)
         except YamlFileError as exc:
-            print(f"ERROR: cannot read {exc}", file=sys.stderr)
+            # ``safe_label``: the path is an untrusted filename (#1538) —
+            # measured, a ``\x1b[31m`` in the name reached the terminal raw.
+            print(f"ERROR: cannot read {safe_label(exc)}", file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)
     return _wrapped  # type: ignore[return-value]
 
