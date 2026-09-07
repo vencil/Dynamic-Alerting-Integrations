@@ -170,3 +170,56 @@ def test_defaults_carriers_returns_exact_names_only_sorted(tmp_path):
     got = deprecate_rule.defaults_carriers(root)
 
     assert got == [root / "_DEFAULTS.YML", root / "_defaults.yaml"], got
+
+
+def test_non_carrier_files_with_a_defaults_block_follow_the_exporter_rule(
+        tmp_path):
+    """Blind review: `found` was every file with a `defaults:` block, so a
+    tenant file carrying one made the run rc 1 with reason 未寫入 — and no
+    rerun could clear it. The exporter's own rule decides: a tenant file's
+    `defaults:` is dropped (WARN) → named, not counted; a `_`-prefixed
+    non-carrier IS merged in flat mode but this tool may not write it →
+    incomplete, by name, with a reason that says so."""
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    _write(root, "_defaults.yaml", "defaults:\n  cpu_usage: 80\n")
+    _write(root, "alpha.yaml",
+           "defaults:\n  cpu_usage: 70\ntenants:\n  alpha:\n    cpu_usage: 85\n")
+
+    r = _run(root, "--execute")
+
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "下架完成" in r.stdout
+    assert "alpha.yaml 的 defaults 區塊 exporter 會丟棄" in r.stdout, r.stdout
+    assert "未寫入" not in r.stdout, r.stdout
+
+    root2 = tmp_path / "conf.d2"
+    root2.mkdir()
+    _write(root2, "_defaults.yaml", "defaults:\n  cpu_usage: 80\n")
+    _write(root2, "_defaults-multidb.yaml", "defaults:\n  cpu_usage: 60\n")
+
+    r = _run(root2, "--execute")
+
+    assert r.returncode == 1, r.stdout + r.stderr
+    tail = r.stdout.split("下架未完成", 1)[1]
+    assert "_defaults-multidb.yaml" in tail and "非 defaults 載體" in tail, tail
+    assert "未寫入" not in tail, tail
+    assert (root2 / "_defaults.yaml").read_text(encoding="utf-8").rstrip().endswith(
+        "cpu_usage: disable")
+
+
+def test_a_carrier_whose_defaults_key_is_null_does_not_traceback(tmp_path):
+    """Blind review: `defaults:` with no value parses to None; `pk in None`
+    raised TypeError → bare traceback, rc 1 — the code the docs now reserve
+    for 下架未完成. It is an empty defaults block and is written like one."""
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    _write(root, "_defaults.yaml", "# header\ndefaults:\n")
+
+    r = _run(root, "--execute")
+
+    assert "Traceback" not in r.stderr, r.stderr
+    assert r.returncode == 0, r.stdout + r.stderr
+    text = (root / "_defaults.yaml").read_text(encoding="utf-8")
+    assert text.startswith("# header\n"), text
+    assert text.rstrip().endswith("cpu_usage: disable"), text

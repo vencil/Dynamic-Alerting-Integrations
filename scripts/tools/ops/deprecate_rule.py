@@ -47,6 +47,7 @@ from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION  # noqa: E402
 from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
     defaults_files_in,
     has_yaml_extension,
+    is_defaults_name,
     resolve_defaults_file,
     unusable_config_entries,
     unusable_reason,
@@ -128,8 +129,10 @@ def scan_for_metric(metric_key, config_dir):
 
         occurrences = []
 
-        # Check defaults section
-        defaults = data.get("defaults", {})
+        # Check defaults section (`defaults:` with no value is None, not {})
+        defaults = data.get("defaults") or {}
+        if not isinstance(defaults, dict):
+            defaults = {}
         for pk in pattern_keys:
             if pk in defaults:
                 occurrences.append(("defaults", pk, defaults[pk]))
@@ -219,14 +222,16 @@ def _disable_in_carrier(metric_key, defaults_path, execute=False):
     if data is None:
         return False, f"無法讀取 {Path(defaults_path).name}"
 
-    defaults = data.get("defaults", {})
+    defaults = data.get("defaults") or {}
+    if not isinstance(defaults, dict):
+        defaults = {}
     current_val = defaults.get(metric_key)
 
     if current_val == "disable":
         return True, f"已經是 disable 狀態"
 
     if execute:
-        if "defaults" not in data:
+        if not isinstance(data.get("defaults"), dict):
             data["defaults"] = {}
         data["defaults"][metric_key] = "disable"
 
@@ -395,8 +400,15 @@ def main():
         # `found` is what the scan ITSELF reported as a defaults carrier —
         # the same output the operator just read — so a carrier the scan
         # named and Step 1 skipped is named again here, with its reason.
-        found = {f["filename"] for f in findings
-                 if any(sec == "defaults" for sec, _, _ in f["occurrences"])}
+        with_defaults = {f["filename"] for f in findings
+                         if any(sec == "defaults" for sec, _, _ in f["occurrences"])}
+        # Only the exact-name carriers are the writer's; the rest follow the
+        # exporter's own boundary rule (flat_scanner.go applyBoundaryRules):
+        # a `_`-prefixed file's `defaults:` IS merged in flat mode but this
+        # tool must not write it (is_defaults_name) → incomplete, by name;
+        # a tenant file's `defaults:` block is dropped with a WARN by the
+        # exporter → named here, not counted (blind review, #1609).
+        found = {n for n in with_defaults if is_defaults_name(n)}
         done = {p.name for p, ok, _ in results if ok}
         reasons = {p.name: msg for p, ok, msg in results if not ok}
         for name in sorted(found - done):
@@ -404,6 +416,13 @@ def main():
         for p, ok, msg in results:
             if not ok and p.name not in found:
                 incomplete.append((metric, p.name, msg))
+        for name in sorted(with_defaults - found):
+            if name.startswith("_"):
+                incomplete.append((metric, name,
+                                   "非 defaults 載體，本工具不寫入；flat 模式 exporter 仍會合併，需手動處理"))
+            else:
+                print(f"  ⚠️  {safe_label(name)} 的 defaults 區塊 exporter 會丟棄"
+                      f"（只認 _defaults.yaml／.yml），本工具不寫入")
 
         # Step 3: 從 tenant configs 移除
         print(f"\n  Step 2: Tenant configs")
