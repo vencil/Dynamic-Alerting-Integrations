@@ -333,7 +333,7 @@ da-tools batch-diagnose --tenants db-a,db-b,db-c --output /tmp/report.json
 |------|------|
 | `0` | 所有租戶健康 |
 | `1` | 一項或多項租戶檢查失敗 |
-| `2` | 呼叫端錯誤：參數錯誤，或 `-o/--output` 指到的輸出路徑寫不進去（#1641）——不是租戶檢查失敗 |
+| `2` | 呼叫端錯誤：參數錯誤，或 `-o/--output` 指到的輸出路徑寫不進去（#1641） |
 
 ---
 
@@ -1815,7 +1815,7 @@ da-tools scaffold --non-interactive --tenant db-c --db mariadb,redis
 |------|------|
 | `0` | 成功 |
 | `1` | 輸入無效 |
-| `2` | 呼叫端錯誤：參數錯誤，或 `-o/--output-dir` 指到的輸出路徑寫不進去（#1641）——不是輸入無效 |
+| `2` | 呼叫端錯誤：參數錯誤，或 `-o/--output-dir` 指到的輸出路徑寫不進去（#1641） |
 
 ---
 
@@ -1877,7 +1877,7 @@ da-tools migrate ./my-rules.yml -o migration_output/
 |------|------|
 | `0` | 成功 |
 | `1` | 輸入檔案無效 |
-| `2` | 呼叫端錯誤：參數錯誤，或 `-o/--output-dir` 指到的輸出路徑寫不進去（#1641）——不是輸入檔案無效 |
+| `2` | 呼叫端錯誤：參數錯誤，或 `-o/--output-dir` 指到的輸出路徑寫不進去（#1641） |
 
 ---
 
@@ -2142,7 +2142,7 @@ da-tools onboard ./alertmanager.yaml -o onboard-hints.json
 |------|------|
 | `0` | 成功 |
 | `1` | 配置檔案無效 |
-| `2` | 呼叫端錯誤：參數錯誤，或 `-o/--output-dir` 指到的輸出路徑寫不進去（#1641）——不是配置檔案無效 |
+| `2` | 呼叫端錯誤：參數錯誤，或 `-o/--output-dir` 指到的輸出路徑寫不進去（#1641） |
 
 ---
 
@@ -2187,7 +2187,7 @@ da-tools analyze-gaps --config ./conf.d/db-a.yaml
 |------|------|
 | `0` | 成功 |
 | `1` | 配置檔案無效 |
-| `2` | 呼叫端錯誤：參數錯誤，或 `-o/--output` 指到的輸出路徑寫不進去（#1641）——不是配置檔案無效 |
+| `2` | 呼叫端錯誤：參數錯誤，或 `-o/--output` 指到的輸出路徑寫不進去（#1641） |
 
 ---
 
@@ -2835,7 +2835,7 @@ da-tools discover-mappings --endpoint http://mariadb-exporter:9104/metrics --jso
 |------|------|
 | `0` | 成功發現 partition label 並產生映射草稿 |
 | `1` | 無法連線或未發現合適的 partition label |
-| `2` | 呼叫端錯誤：參數錯誤，或 `-o/--output` 指到的輸出路徑寫不進去（#1641）——不是找不到 partition label |
+| `2` | 呼叫端錯誤：參數錯誤，或 `-o/--output` 指到的輸出路徑寫不進去（#1641） |
 
 ---
 

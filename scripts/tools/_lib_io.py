@@ -204,7 +204,9 @@ class OutputWriteError(OSError):
 
 def _die_on_write_error(exc: OutputWriteError, exit_code: int) -> None:
     """Print the one-line message to stderr and exit — no traceback."""
-    print(f"ERROR: {exc}", file=sys.stderr)
+    # #1538: the path is operator argv — still escape control characters
+    # before it reaches a terminal (blind review).
+    print(f"ERROR: {safe_label(str(exc))}", file=sys.stderr)
     sys.exit(exit_code)
 
 

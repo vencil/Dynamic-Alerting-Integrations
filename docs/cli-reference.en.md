@@ -347,7 +347,7 @@ da-tools batch-diagnose --tenants db-a,db-b,db-c --output /tmp/report.json
 |------|-------------|
 | `0` | All tenants healthy |
 | `1` | One or more tenant checks failed |
-| `2` | Caller error: bad arguments, or the output path given to `-o/--output` cannot be written (#1641) — not a failed tenant check |
+| `2` | Caller error: bad arguments, or the output path given to `-o/--output` cannot be written (#1641) |
 
 ---
 
@@ -1980,7 +1980,7 @@ docker run --rm \
 |------|-------------|
 | `0` | Success |
 | `1` | Invalid input |
-| `2` | Caller error: bad arguments, or the output path given to `-o/--output-dir` cannot be written (#1641) — not invalid input |
+| `2` | Caller error: bad arguments, or the output path given to `-o/--output-dir` cannot be written (#1641) |
 
 ---
 
@@ -2064,7 +2064,7 @@ docker run --rm \
 |------|-------------|
 | `0` | Success |
 | `1` | Invalid input file |
-| `2` | Caller error: bad arguments, or the output path given to `-o/--output-dir` cannot be written (#1641) — not an invalid input file |
+| `2` | Caller error: bad arguments, or the output path given to `-o/--output-dir` cannot be written (#1641) |
 
 ---
 
@@ -2380,7 +2380,7 @@ docker run --rm \
 |------|-------------|
 | `0` | Success |
 | `1` | Invalid config file |
-| `2` | Caller error: bad arguments, or the output path given to `-o/--output-dir` cannot be written (#1641) — not an invalid config file |
+| `2` | Caller error: bad arguments, or the output path given to `-o/--output-dir` cannot be written (#1641) |
 
 ---
 
@@ -2432,7 +2432,7 @@ docker run --rm \
 |------|-------------|
 | `0` | Success |
 | `1` | Invalid config file |
-| `2` | Caller error: bad arguments, or the output path given to `-o/--output` cannot be written (#1641) — not an invalid config file |
+| `2` | Caller error: bad arguments, or the output path given to `-o/--output` cannot be written (#1641) |
 
 ---
 
@@ -3094,7 +3094,7 @@ da-tools discover-mappings --endpoint http://mariadb-exporter:9104/metrics --jso
 |------|-------------|
 | `0` | Successfully discovered partition labels and generated mapping draft |
 | `1` | Connection failed or no suitable partition labels found |
-| `2` | Caller error: bad arguments, or the output path given to `-o/--output` cannot be written (#1641) — not a missing partition label |
+| `2` | Caller error: bad arguments, or the output path given to `-o/--output` cannot be written (#1641) |
 
 ---
 

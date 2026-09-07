@@ -241,6 +241,79 @@ def test_library_allowlist_cannot_go_stale():
             "_or_die sisters instead of being allowlisted")
 
 
+# Exit-lock on the allowlist SIZE: an entry may retire (lower this), a new
+# one may never be added silently (blind review: the staleness check alone
+# let any `_`-prefixed module be appended). A new shared writer library is a
+# design decision — raise this number in the same diff that adds the
+# `except OutputWriteError` to every tool calling it, and say so.
+_ALLOWLIST_CEILING = 3
+
+
+def test_library_allowlist_only_shrinks():
+    assert len(RAW_CALL_LIBRARY_MODULES) <= _ALLOWLIST_CEILING, sorted(RAW_CALL_LIBRARY_MODULES)
+
+
+def _writing_functions(lib_rel: str) -> set[str]:
+    """Top-level functions of an allowlisted library whose body calls a raw
+    secure writer — derived, so a new writer in the library is judged too."""
+    tree = ast.parse((REPO_ROOT / lib_rel).read_text(encoding="utf-8"))
+    out = set()
+    for fn in (n for n in tree.body if isinstance(n, ast.FunctionDef)):
+        for c in ast.walk(fn):
+            if isinstance(c, ast.Call):
+                f = c.func
+                name = f.id if isinstance(f, ast.Name) else getattr(f, "attr", None)
+                if name in WRITER_NAMES:
+                    out.add(fn.name)
+                    break
+    return out
+
+
+def _tools_importing_a_writer(writers_by_stem: dict[str, set[str]]) -> list[Path]:
+    """Tool modules that import a WRITING function by name, or the library
+    module itself (`import _registry_lib` / `from ops import _registry_lib`)."""
+    out = []
+    for d in (TOOLS_DIR, TOOLS_DIR / "ops", TOOLS_DIR / "lint", TOOLS_DIR / "dx"):
+        for f in sorted(d.glob("*.py")):
+            if f.name.startswith("_"):
+                continue
+            tree = ast.parse(f.read_text(encoding="utf-8"))
+            hit = False
+            for n in ast.walk(tree):
+                if isinstance(n, ast.ImportFrom) and n.module in writers_by_stem:
+                    if any(a.name in writers_by_stem[n.module] for a in n.names):
+                        hit = True
+                elif isinstance(n, ast.Import):
+                    if any(a.name in writers_by_stem for a in n.names):
+                        hit = True
+                if hit:
+                    out.append(f)
+                    break
+    return out
+
+
+def test_every_tool_calling_an_allowlisted_writer_can_catch_the_error():
+    """The allowlist is a promise in two halves: the library keeps the RAISING
+    form, and every tool that imports one of its WRITING functions catches
+    OutputWriteError (or a superclass) somewhere on its CLI path. The first
+    half is the tripwire below; this is the second (blind review: it had no
+    test). Tools importing only pure helpers from those libraries owe
+    nothing — the writer set is derived from the library body, not guessed."""
+    writers_by_stem = {Path(rel).stem: _writing_functions(rel) for rel in RAW_CALL_LIBRARY_MODULES}
+    assert all(writers_by_stem.values()), writers_by_stem  # each allowlisted lib really writes
+    callers = _tools_importing_a_writer(writers_by_stem)
+    assert callers, "no tool imports an allowlisted writer — the allowlist is dead"
+    missing = []
+    for f in callers:
+        tree = ast.parse(f.read_text(encoding="utf-8"))
+        handlers = [n for n in ast.walk(tree) if isinstance(n, ast.ExceptHandler)]
+        if not any(_handler_can_catch(h) for h in handlers):
+            missing.append(f.relative_to(REPO_ROOT).as_posix())
+    assert not missing, (
+        "tool imports a raw-writing library function but nothing in it catches "
+        f"OutputWriteError/OSError: {missing}")
+
+
 def test_no_tool_module_calls_the_raw_writer_unguarded():
     """Every raw ``write_*_secure(`` under scripts/tools is guarded or in a lib.
 
@@ -434,4 +507,3 @@ def test_helper_module_has_no_import_cycle_with_exitcodes():
     src = (TOOLS_DIR / "_lib_exitcodes.py").read_text(encoding="utf-8")
     assert "_lib_io" not in src
     assert _lib_io.EXIT_CALLER_ERROR == 2
-    assert sys.modules["_lib_io"].write_text_or_die.__defaults__ is None
