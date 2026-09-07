@@ -1,11 +1,7 @@
 #!/usr/bin/env bash
 # _prepush_refs.sh — one implementation of "what is this push actually updating?"
 #
-# ⛔ Sourced, not executed. Source it with parameter expansion — NOT with
-#   `$(dirname …)`; see EXTERNAL COMMANDS below for why that is a requirement:
-#     _prepush_dir="${BASH_SOURCE[0]%/*}"
-#     [ "$_prepush_dir" = "${BASH_SOURCE[0]}" ] && _prepush_dir="."
-#     . "$_prepush_dir/_prepush_refs.sh"
+# ⛔ Sourced, not executed. See EXTERNAL COMMANDS at the bottom for how.
 #
 # WHY THIS EXISTS (#1664)
 #   A pre-push hook learns what is being pushed from git's stdin protocol —
@@ -18,9 +14,9 @@
 #   with stdin=PIPE that it never writes to, so the hook sees EOF immediately.
 #
 #   Measured on pre-commit 4.6.0 — same repo, same commit, same push:
-#       native .git/hooks/pre-push  -> hook stdin = 103 bytes -> guard exits 1
-#       installed via pre-commit    -> hook stdin =   0 bytes -> guard exits 0
-#                                      and pre-commit prints "Passed"
+#       native .git/hooks/pre-push  -> hook stdin carries the refspec -> exits 1
+#       installed via pre-commit    -> hook stdin EMPTY -> exits 0, and
+#                                      pre-commit prints "Passed"
 #   Both guards that read stdin were therefore inert while reporting success.
 #
 #   pre-commit does hand the same information over — as environment variables.
@@ -37,15 +33,25 @@
 #   Checking the environment first would have made every stdin-fed caller
 #   depend on PRE_COMMIT being absent, which is not a property anyone controls.
 #
-# OUTPUT
-#   One row per ref on stdout:   <remote_ref> <local_sha>
+# OUTPUT — TWO shapes, ONE channel decision
+#   prepush_refs        <remote_ref> <local_sha>
+#   prepush_refs_full   <remote_ref> <local_sha> <remote_sha>
 #
-#   Those two fields are what both channels agree on, and they are the only
-#   fields either guard consumes. Deliberately NOT carried: the remote sha.
-#   PRE_COMMIT_FROM_REF is not it — hook_impl._pre_push_ns sets that to
-#   `<first-ancestor>^` when the remote does not have the branch yet. Emitting
-#   it in the remote-sha slot would put a differently-defined value into a
-#   documented protocol position, which is how the next reader gets burned.
+#   One walk produces both, so the channel decision has one implementation.
+#
+#   ⛔ Do not add a third column to `prepush_refs`. Its consumers parse with
+#   `read -r remote_ref local_sha`, which folds any extra field into
+#   `local_sha`, and one of them compares that against the 40-zero sha to skip
+#   deletions — widening it brings #1691 back.
+#
+#   ⛔ In the three-column shape, unknown is the literal `-`, never blank. A
+#   blank middle field is collapsed by default-IFS `read` and shifts every
+#   later column left (the FIELD ORDER defect below, one position right).
+#
+#   ⛔ `-` for remote_sha does not mean "use PRE_COMMIT_FROM_REF instead": that
+#   variable is `<first-ancestor>^` when the remote lacks the branch, which is
+#   a different quantity in a documented slot. Consumers must read `-` as "base
+#   unknown" and do the work rather than skip it.
 #
 #   ⛔ FIELD ORDER: remote_ref FIRST. That is not cosmetic. `local_sha` can
 #   legitimately be empty — hook_impl._pre_push_ns has an `all_files=True`
@@ -74,10 +80,12 @@
 #   hook_impl._pre_push_ns returns on the first pushable line it finds, so
 #   under pre-commit a guard is shown one of N refs. Measured, with both
 #   branches already present on the remote:
-#       git push origin aaa-first main
+#       git push origin main aaa-first
 #         native stdin   -> 2 rows (aaa-first, main)
 #         pre-commit env -> PRE_COMMIT_REMOTE_BRANCH=refs/heads/aaa-first
 #         result         -> main was updated by that same command
+#   ⛔ Which ref survives is LEXICOGRAPHIC, not the order you typed — writing
+#   `main` first does not protect it.
 #   A guard built on this helper does not see that main. The other rows cannot
 #   be recovered from inside the hook; only the stdin channel has full
 #   fidelity. This is disclosure, not coverage — tests/ops/test_prepush_hook_wiring.py
@@ -92,13 +100,13 @@
 #   sourcing line fails there with `command not found` and takes the whole gate
 #   down with it — on Linux only, so a Windows run reports the sourcing as fine.
 
-prepush_refs() {
-    local _local_ref local_sha remote_ref _remote_sha
+_prepush_rows() {
+    local _local_ref local_sha remote_ref remote_sha
     local _rows=()
 
-    while read -r _local_ref local_sha remote_ref _remote_sha; do
+    while read -r _local_ref local_sha remote_ref remote_sha; do
         [ -n "${remote_ref:-}" ] || continue
-        _rows+=("$remote_ref $local_sha")
+        _rows+=("$remote_ref ${local_sha:--} ${remote_sha:--}")
     done
 
     if [ "${#_rows[@]}" -gt 0 ]; then
@@ -107,7 +115,7 @@ prepush_refs() {
     fi
 
     if [ -n "${PRE_COMMIT_REMOTE_BRANCH:-}" ]; then
-        printf '%s %s\n' "${PRE_COMMIT_REMOTE_BRANCH}" "${PRE_COMMIT_TO_REF:-}"
+        printf '%s %s -\n' "${PRE_COMMIT_REMOTE_BRANCH}" "${PRE_COMMIT_TO_REF:--}"
         return 0
     fi
 
@@ -115,6 +123,26 @@ prepush_refs() {
         return 3
     fi
 
+    return 0
+}
+
+prepush_refs_full() {
+    _prepush_rows
+}
+
+# ⛔ Second column is EMPTY (not `-`) when unknown — that is the shape its two
+# consumers have always parsed. Emitting `-` here is a silent behaviour change.
+prepush_refs() {
+    local _rc=0 _out
+    _out="$(_prepush_rows)" || _rc=$?
+    [ "$_rc" -ne 0 ] && return "$_rc"
+    [ -z "$_out" ] && return 0
+    local remote_ref local_sha _remote_sha
+    while read -r remote_ref local_sha _remote_sha; do
+        [ -n "${remote_ref:-}" ] || continue
+        [ "$local_sha" = "-" ] && local_sha=""
+        printf '%s %s\n' "$remote_ref" "$local_sha"
+    done <<< "$_out"
     return 0
 }
 

@@ -1,46 +1,19 @@
 #!/usr/bin/env bash
 # require_preflight_pass.sh — pre-push gate: verify `make pr-preflight`
-# ran against the current HEAD before allowing the push.
+# ran against the commits being PUSHED before allowing the push.
 #
 # Purpose:
 #   Prevent pushing pre-preflight commits that CI will likely reject. The
-#   gate checks for `.git/.preflight-ok.<HEAD-sha>` — written by
+#   gate checks for `.git/.preflight-ok.<sha>` — written by
 #   scripts/tools/dx/pr_preflight.py on PASS, cleared on FAIL.
 #
-# Logic (pre-push stdin: <local_ref> <local_sha> <remote_ref> <remote_sha>):
-#   1. If GIT_PREFLIGHT_BYPASS=1 in env → allow (escape hatch)
-#   2. If target branch is main/master → allow (protect_main_push owns that)
-#   3. If no commits being pushed (delete ref, tag push, etc.) → allow
-#   4. If GIT_PREFLIGHT_STRICT=1 → require the marker regardless of PR state.
-#      Otherwise, if `gh` confirms that none of the pushed branches has an
-#      OPEN PR → skip the marker requirement. The idea: WIP/feature branches
-#      without a PR yet are being iterated on; the marker requirement kicks
-#      in once a PR exists (i.e. the work is ready to be reviewed, so CI
-#      noise matters).
-#      If `gh` is missing, or the PR query itself fails (unauthenticated,
-#      API/network error) → require the marker (safe default).
-#   5. Marker present for HEAD sha → allow
-#   6. Otherwise → block with instruction to run `make pr-preflight`
+#   ⛔ `<sha>` is each PUSHED commit, not HEAD, and not "any of them" — the
+#   quantifier and the commit are both load-bearing, and both directions of
+#   getting them wrong are pinned in tests/dx/test_preflight_pass_gate.py.
 #
-# Installed by scripts/ops/install_prepush_hook.sh, which puts
-# scripts/ops/prepush_dispatch.sh on the push path; the dispatcher runs this
-# script with git's FULL stdin.
-#
-# ⛔ It is NOT a pre-commit hook any more (#1689). A hook run by pre-commit is
-# shown exactly one refspec, so a push carrying several branches only ever
-# reached this gate as its first ref in sort order. Do not add a
-# `stages: [pre-push]` entry back to .pre-commit-config.yaml — the copy
-# pre-commit runs is the blind one, and it goes green.
-#
-# Design notes:
-#   * Uses `git rev-parse --git-dir` for worktree safety.
-#   * The refspecs come from scripts/ops/_prepush_refs.sh, not from stdin
-#     directly: that helper owns "which channel is carrying the refspec", so
-#     the answer does not get re-derived once per guard. Under the dispatcher
-#     the answer is git's own stdin. Its header carries the measurements and
-#     the known residuals.
-#   * Non-blocking on edge cases (tag push, delete-ref) to avoid disrupting
-#     release flow.
+#   ⛔ The marker lives in the SHARED git dir. Which channel carries the
+#   refspec is _prepush_refs.sh's problem, not this file's; its header has the
+#   measurements and the known residuals.
 set -euo pipefail
 
 MARKER_PREFIX=".preflight-ok"
@@ -51,19 +24,30 @@ if [ "${GIT_PREFLIGHT_BYPASS:-0}" = "1" ]; then
     exit 0
 fi
 
-git_dir="$(git rev-parse --git-dir 2>/dev/null || echo .git)"
-head_sha="$(git rev-parse HEAD 2>/dev/null || echo '')"
+# ⛔ Refuse rather than allow when git itself is missing. The previous form
+# swallowed that into "empty repo" and exited 0 with ZERO bytes of output, so
+# "checked and fine" and "never ran" were the same picture — the #1664 shape.
+if ! command -v git >/dev/null 2>&1; then
+    echo "[require_preflight_pass] ⛔ git is not on PATH, so this gate cannot" >&2
+    echo "  see what is being pushed. Refusing rather than allowing blind." >&2
+    exit 1
+fi
+
+# ⛔ --git-common-dir, NOT --git-dir. A marker says "preflight passed on this
+# COMMIT", which is not a property of the worktree you happened to run it in.
+# With the per-worktree dir, a marker written in one worktree was invisible to
+# every other one — and this repo runs many. pr_preflight.py writes to the same
+# place; the two must not drift apart.
+git_dir="$(git rev-parse --git-common-dir 2>/dev/null || echo .git)"
+# --verify, so an unborn HEAD is empty rather than the literal string "HEAD".
+head_sha="$(git rev-parse --verify --quiet HEAD 2>/dev/null || echo '')"
 if [ -z "$head_sha" ]; then
-    # Empty repo or broken state — don't block; other hooks will catch it.
+    # No commits yet — there is nothing a preflight could have run against.
     exit 0
 fi
 
 # Which refs is this push updating? One implementation, two channels.
-# ⛔ Pure parameter expansion, NOT `$(dirname …)`: test_gh_missing_* strips PATH
-# down to bash/git/basename/sh/cat to prove this gate still works without `gh`,
-# and `dirname` is not in that set. Measured: it fails there with
-# `dirname: command not found` and takes the whole gate down with it — on Linux
-# only, so a Windows run reports the sourcing as fine.
+# ⛔ Pure parameter expansion, no `$(dirname …)`. Rationale in _prepush_refs.sh.
 _prepush_dir="${BASH_SOURCE[0]%/*}"
 [ "$_prepush_dir" = "${BASH_SOURCE[0]}" ] && _prepush_dir="."
 # ⛔ Say so when the helper is missing. `set -e` turns a failed `source` into a
@@ -105,6 +89,7 @@ fi
 pushing_to_protected=0
 pushing_any_commit=0
 pushed_branches=()
+pushed_shas=()
 zero="0000000000000000000000000000000000000000"
 
 # Each row: <remote_ref> <local_sha>. remote_ref comes FIRST on purpose:
@@ -118,31 +103,39 @@ while read -r remote_ref local_sha; do
     if [ "$local_sha" = "$zero" ]; then
         continue
     fi
-    # ⛔ Tag pushes: this file's header has promised "tag push → allow" since it
-    # was written, and the code never did it. `${remote_ref##refs/heads/}` only
-    # strips a heads/ prefix, so `refs/tags/v1.2.3` stayed intact and was
-    # treated as a branch name — measured: a tag push was BLOCKED whenever `gh`
-    # could not answer, which is the state the dev container is in (no `gh`
-    # there), i.e. exactly the six-line release tag push. Harmless while the
-    # guard was inert; #1664 made it live, so the promise has to be kept.
+    # ⛔ Tags before the `refs/heads/` strip below, which would leave
+    # `refs/tags/v1.2.3` intact and judge it as a branch name — that blocks the
+    # release tag push wherever `gh` cannot answer, e.g. the dev container.
     case "$remote_ref" in
         refs/tags/*) continue ;;
     esac
     pushing_any_commit=1
     remote_branch="${remote_ref##refs/heads/}"
+    # ⛔ Skip THIS ROW, do not exit. protect_main_push owns main, so adding
+    # noise there is pointless — but a whole-push early exit made one main row
+    # silence the marker check for every other branch in the same push, which
+    # is the "any" this gate exists to not be.
     if [ "$remote_branch" = "main" ] || [ "$remote_branch" = "master" ]; then
         pushing_to_protected=1
+        continue
     fi
     pushed_branches+=("$remote_branch")
+    # ⛔ The marker belongs to the COMMIT being published, not to the tree the
+    # pusher happens to be standing in — the same axis #1690 fixed in the
+    # mkdocs guard. `local_sha` is legitimately EMPTY on the first push of a
+    # branch to an empty remote (the env channel exports no TO_REF there), and
+    # no marker can ever exist for "" — so that row falls back to HEAD, which
+    # is the best answer available and is what this gate has always done.
+    pushed_shas+=("${local_sha:-$head_sha}")
 done <<< "$_refs"
 
-# Nothing being pushed (empty stdin or all deletes) — allow.
+# Nothing being pushed (empty stdin, all deletes, all tags) — allow.
 if [ "$pushing_any_commit" = "0" ]; then
     exit 0
 fi
 
-# Pushing to main/master: protect_main_push will block it; we don't add noise.
-if [ "$pushing_to_protected" = "1" ]; then
+# Only main/master was pushed: protect_main_push owns that verdict.
+if [ "${#pushed_branches[@]}" -eq 0 ] && [ "$pushing_to_protected" = "1" ]; then
     exit 0
 fi
 
@@ -152,11 +145,9 @@ fi
 #
 # STRICT mode overrides (always require marker, regardless of PR state):
 #   GIT_PREFLIGHT_STRICT=1 git push ...
-# ⛔ Track WHY the marker ends up required. The banner used to state one reason
-# unconditionally ("gate only triggers when branch has an OPEN PR — close the
-# PR to push freely"), and that sentence is false in the `gh`-unavailable case,
-# which is not exotic: the dev container this repo calls the 主路徑 has no `gh`
-# at all. Following the false note reaches no green — there is no PR to close.
+# ⛔ Track WHY the marker ends up required; the banner must not state one reason
+# unconditionally. "Close the PR to push freely" reaches no green when `gh` is
+# simply absent — which is the dev container's normal state.
 marker_reason="branch has an OPEN PR (CI cost matters once it is reviewable)"
 if [ "${GIT_PREFLIGHT_STRICT:-0}" = "1" ]; then
     marker_reason="GIT_PREFLIGHT_STRICT=1 is set"
@@ -185,9 +176,17 @@ if [ "${GIT_PREFLIGHT_STRICT:-0}" != "1" ]; then
                 marker_reason="the \`gh\` PR query failed (not authenticated, or API/network), so PR state is unknown (safe default)"
                 break
             fi
+            # ⛔ EMPTY is not "no PR". Measured: `--jq 'length'` prints `0`
+            # for a branch with no PR and `1` when there is one — it is never
+            # empty, so empty means the query produced nothing while still
+            # exiting 0 (a wrapper, a pager, a stripped exporter). Folding it
+            # in with `0` made unknown mean OK.
             case "$open_prs" in
-                ''|0) ;;   # query succeeded, no open PR for this branch
-                *)    has_open_pr=1; break ;;
+                0)  ;;   # query succeeded, no open PR for this branch
+                '') gh_available=0
+                    marker_reason="the \`gh\` PR query returned nothing, so PR state is unknown (safe default)"
+                    break ;;
+                *)  has_open_pr=1; break ;;
             esac
         done
     fi
@@ -200,24 +199,71 @@ if [ "${GIT_PREFLIGHT_STRICT:-0}" != "1" ]; then
     fi
 fi
 
-marker="$git_dir/$MARKER_PREFIX.$head_sha"
-if [ -f "$marker" ]; then
-    # Marker present — preflight passed for this SHA. Allow.
+# Every commit this push publishes needs its own marker. ⛔ Not HEAD: "standing
+# on A while pushing B" is ordinary here, and keying the check to HEAD both
+# let an unverified B through when A happened to be marked, and blocked a
+# verified B when A was not.
+# ⛔ A separate flag, not `-z "$_missing_sha"`. An empty sha is a real row
+# shape here (see the fallback above), and the empty-string sentinel made it
+# indistinguishable from "nothing is missing" — so a row whose sha we could
+# not determine would have been silently ALLOWED. Unknown must not mean OK.
+_missing_found=0
+_missing_sha=""
+_missing_branch=""
+for _i in "${!pushed_shas[@]}"; do
+    if [ ! -f "$git_dir/$MARKER_PREFIX.${pushed_shas[$_i]}" ]; then
+        _missing_found=1
+        _missing_sha="${pushed_shas[$_i]}"
+        _missing_branch="${pushed_branches[$_i]}"
+        break
+    fi
+done
+
+if [ "$_missing_found" = "0" ]; then
+    # Every pushed commit has a marker — preflight passed for all of them.
     exit 0
+fi
+
+marker="$git_dir/$MARKER_PREFIX.$_missing_sha"
+# ⛔ `git checkout <branch>` exits 128 when that branch is checked out in
+# another worktree, which is the normal state here — an instruction that
+# cannot reach green is a dead end, not a hint. Point at that worktree instead.
+_other_wt=""
+while read -r _wt_path _wt_rest; do
+    case "$_wt_rest" in
+        *"[$_missing_branch]"*) _other_wt="$_wt_path"; break ;;
+    esac
+done <<< "$(git worktree list 2>/dev/null)"
+
+if [ "$_missing_sha" = "$head_sha" ]; then
+    _checkout_hint="    make pr-preflight"
+elif [ -n "$_other_wt" ]; then
+    _checkout_hint="    cd ${_other_wt} && make pr-preflight"
+else
+    # ⛔ By SHA, not by branch name. `git push <old-sha>:refs/heads/x` and
+    # `git push HEAD:refs/heads/other-name` both name a remote branch that
+    # either does not exist locally or does not point at the commit being
+    # pushed — so `git checkout <branch>` marks the wrong commit, or fails.
+    _checkout_hint="    git checkout --detach ${_missing_sha} && make pr-preflight"
 fi
 
 # No marker — block with actionable instructions.
 cat >&2 <<EOF
 
 ╔══════════════════════════════════════════════════════════════╗
-║  ⛔ Push blocked — preflight not run on HEAD                 ║
+║  ⛔ Push blocked — preflight not run on the pushed commit    ║
 ╠══════════════════════════════════════════════════════════════╣
 ║                                                              ║
-║  HEAD: ${head_sha}
+║  Pushing: ${_missing_branch} -> ${_missing_sha}
+║  HEAD:    ${head_sha}
 ║  Missing marker: $(basename "$marker")
 ║                                                              ║
+║  ⛔ The marker names a COMMIT, not "now". If HEAD above is a
+║  different commit, running preflight where you stand writes
+║  the marker for THAT commit and this push stays blocked.
+║                                                              ║
 ║  Run this before pushing:                                    ║
-║      make pr-preflight                                       ║
+${_checkout_hint}
 ║                                                              ║
 ║  Emergency bypass (use sparingly):                           ║
 ║      GIT_PREFLIGHT_BYPASS=1 git push ...                     ║
@@ -231,8 +277,7 @@ cat >&2 <<EOF
 ║      GIT_PREFLIGHT_STRICT=1 git push ...                     ║
 ║                                                              ║
 ║  Why: pushing without preflight risks CI-visible failures    ║
-║  that block PR merges. See dev-rules #12 + windows-mcp       ║
-║  playbook §PR 收尾流程.                                       ║
+║  that block PR merges. See dev-rules #12.                    ║
 ╚══════════════════════════════════════════════════════════════╝
 
 EOF

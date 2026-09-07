@@ -61,7 +61,7 @@ lang: zh
 
 **檢查方式**：見 [doc-map.md § Change Impact Matrix](doc-map.md)，列出每種變更類型要連動哪些文件。
 
-**mkdocs strict semantic gate（自動）**：mkdocs strict build 用 site-root path 語意（`docs/` 是 root），與 pre-commit `check_doc_links.py` 的 filesystem 語意有 gap — 例如 `../../CHANGELOG.md` 在 filesystem 對但 mkdocs 視為跳出 site 而 fail。**v2.8.0 自動化**（`scripts/ops/pre_push_mkdocs_strict.sh`，issue #412；⛔ 自 [#1689](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1689) 起它**不再是 pre-commit hook**、已無 `mkdocs-strict-pre-push` 這個 id，改由 `scripts/ops/prepush_dispatch.sh` 執行）：當推送含 `docs/**/*.md` / `mkdocs.yml` / `README.md` 變動時自動跑 strict check。⚠️ 只在該次 push **真的帶著 commit** 時才跑——純刪除分支不會觸發它（它不讀 refspec，見 [#1690](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1690)）。Tier 1：native mkdocs 安裝即自動 block on fail；Tier 2：mkdocs 未安裝則 WARN + CI backstop。Bypass：`MKDOCS_STRICT_BYPASS=1 git push`（emergency only）。本地驗證仍可手動 `bash scripts/tools/lint/mkdocs_strict_check.sh`。
+**mkdocs strict semantic gate（自動）**：mkdocs strict build 用 site-root path 語意（`docs/` 是 root），與 pre-commit `check_doc_links.py` 的 filesystem 語意有 gap — 例如 `../../CHANGELOG.md` 在 filesystem 對但 mkdocs 視為跳出 site 而 fail。**v2.8.0 自動化**（`scripts/ops/pre_push_mkdocs_strict.sh`，issue #412；⛔ 自 [#1689](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1689) 起它**不再是 pre-commit hook**、已無 `mkdocs-strict-pre-push` 這個 id，改由 `scripts/ops/prepush_dispatch.sh` 執行）：⛔ 自 [#1690](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1690) 起它**讀被推的 refspec**——問「這次 push 帶進去的 commit 改了什麼」，並對**被推的那顆 commit** 開臨時 worktree 建站，不再是「diff 上游、然後建工作樹」（後者讓「站在 A 推 B」時 trigger 與 subject 兩個軸都判錯）。觸發集合的 SSOT 是該腳本裡的 `DOC_RE`，本文刻意不重列。⚠️ 只在該次 push **真的帶著 commit** 時才跑——純刪除分支不觸發。Tier 1：native mkdocs 安裝即自動 block on fail；Tier 2：mkdocs 未安裝則 WARN + CI backstop。Bypass：`MKDOCS_STRICT_BYPASS=1 git push`（emergency only）。本地驗證仍可手動 `bash scripts/tools/lint/mkdocs_strict_check.sh`。
 
 ### 5. SAST：7 條安全 review 準則
 
@@ -184,7 +184,7 @@ lang: zh
 **執行入口**（三條等價）：`make pr-preflight` ｜ `win_git_escape.bat pr-preflight [PR#]` ｜ `win_git_escape.ps1 pr-preflight [PR#]`。
 Status 處理 / hotfix 例外 / A vs B CI 分類細節見 [`github-release-playbook.md`](github-release-playbook.md)。
 
-**快速路徑（ROI r6 D 波 codified）**：剛 commit 完、pre-commit hooks 已在 commit 時證綠 → 用 `make pr-preflight-quick`（`--skip-hooks`）。對 pre-push gate **完全等價**——`--skip-hooks` 的 Local hooks 檢查記為 SKIP 非 FAIL，一樣寫 `.git/.preflight-ok.<SHA>` marker——省掉 hooks 的第二次全跑（commit→preflight→CI 三重執行去掉一重）。commit 後又改過 working tree、或 hooks 綠的是別的 SHA → 回頭跑完整 `make pr-preflight`。
+**快速路徑（ROI r6 D 波 codified）**：剛 commit 完、pre-commit hooks 已在 commit 時證綠 → 用 `make pr-preflight-quick`（`--skip-hooks`）。**就 marker 而言等價**——`--skip-hooks` 的 Local hooks 檢查記為 SKIP 非 FAIL，一樣寫 `.git/.preflight-ok.<SHA>` marker——省掉 hooks 的第二次全跑（commit→preflight→CI 三重執行去掉一重）。commit 後又改過 working tree、或 hooks 綠的是別的 SHA → 回頭跑完整 `make pr-preflight`。⛔ **quick 不回答「守衛還在不在 push 路徑上」**——那一問的唯一答案點是完整版的 `Local hooks` 那一列（它是 `_prepush_guards_wired()` 的唯一呼叫端），而 quick 把整格記成 SKIP。裝了新 clone、動過 `.git/hooks`、或 push 被守衛以外的東西擋住時，跑完整版。處置未拍板，見 [#1811](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1811)。
 ⚠️ **Scope 差異與適用邊界**：commit 時的 hooks 只掃 **staged 檔**，完整版 `pr-preflight` 的 Local hooks 跑 **`--all-files`**——「commit 剛證綠」≠「all-files 綠」。file-scoped hooks（staged-vs-all 是燒過的坑）對本次沒動到的檔的 pre-existing drift，只有 all-files 掃得到；quick 路徑下這類 drift 由 CI 的 all-files 兜底（push 後才知道）。連續多 commit 迭代的 branch 建議週期性（至少 PR 收尾前一次）跑完整 `make pr-preflight` 補 all-files 掃描。
 
 ### 13. da-tools 子命令 exit-code / `--json` / `--ci` 約定（#452）

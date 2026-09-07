@@ -1,54 +1,19 @@
 """Wiring tests for the pre-push guards — do they receive what they judge? (#1664)
 
-WHY THIS FILE EXISTS, GIVEN ``tests/dx/test_preflight_pass_gate.py`` ALREADY HAS 16 TESTS
------------------------------------------------------------------------------------------
-Those tests are good and they still pass. All 16 of them drive the gate script
-the same way::
+⛔ The sibling suites (``tests/dx/test_preflight_pass_gate.py``,
+``tests/dx/test_preflight_marker.py``) hand the gate script a refspec directly.
+That tests the PREDICATE. It cannot see whether anything ever hands the script
+a refspec in production — and that is where #1664 lived: installed through
+``pre-commit install --hook-type pre-push``, pre-commit consumed git's stdin
+itself, every guard saw EOF, read it as "nothing is being pushed", exited 0,
+and pre-commit printed ``Passed``.
 
-    subprocess.run(["bash", SCRIPT], input="refs/heads/x <sha> refs/heads/x <zero>\\n")
-
-That is, the test supplies a refspec the script would never have received in
-production. (``tests/dx/test_preflight_marker.py`` adds 12 more: 7 drive the
-script the same way, 5 exercise ``pr_preflight.py`` helpers in process and
-never touch it. So of 28 tests across the two files, 23 invoke the script and
-22 of those hand it a refspec — counting all 28 as "tests of the gate script"
-is exactly the sort of number this file exists to distrust.)
-
-⚠️ The 23rd is ``test_empty_stdin_allowed`` (``test_preflight_marker.py:178``):
-it feeds the script an EMPTY stdin and asserts ``rc == 0``. That is a test
-pinning the behaviour that made this bug invisible. It stays green and should:
-with no pre-commit environment either, empty stdin really does mean "nothing
-is being pushed". What it never asserted is that the empty set was *correct* —
-that question needs the wiring, which is what this file supplies.
-
-So the whole suite stayed green while
-``scripts/ops/protect_main_push.sh`` and ``scripts/ops/require_preflight_pass.sh``
-were, for four and a half months, inert on every real push: installed through
-``pre-commit install --hook-type pre-push``, pre-commit consumes git's stdin
-itself and spawns each hook with a stdin that is already at EOF, and both
-guards read an empty refspec set as "nothing is being pushed" and exited 0.
-pre-commit then printed ``Passed``.
-
-The predicate had coverage. The WIRING had none, and the wiring is where the
-defect lived. Every test below therefore drives a real ``git push`` through a
-real ``pre-commit install`` and asserts on what the push actually did.
-
-CONTROLS
---------
-A must-fire assertion is worthless without something proving the harness can
-produce the other answer, so each direction is pinned:
-
-* ``test_push_to_main_is_blocked_through_precommit``    — must fire.
-* ``test_the_same_harness_lets_a_clean_push_through``   — the harness CAN be
-  green; the red above therefore comes from the guard, not from a broken
-  fixture.
-* ``test_push_to_a_feature_branch_is_not_blocked``      — the guard does not
-  bite what it should tolerate.
-
-⚠️ All pushes here use ``--dry-run``. Measured: git still runs the pre-push
-hook, and the remote is left byte-identical — ``test_dry_run_still_runs_the_hook_and_leaves_the_remote_alone``
-pins both halves, because a harness that silently stopped pushing would make
-every "not blocked" assertion pass vacuously.
+So every test below drives a real ``git push`` through a real install and
+asserts on what the push actually did. ⚠️ All pushes use ``--dry-run``: git
+still runs the hook and the remote is left byte-identical, and
+``test_dry_run_still_runs_the_hook_and_leaves_the_remote_alone`` pins both
+halves — a harness that silently stopped pushing would make every "not
+blocked" assertion pass vacuously.
 """
 from __future__ import annotations
 
@@ -108,8 +73,8 @@ _REQUIRE_PRE_COMMIT = os.environ.get("VIBE_REQUIRE_PRE_COMMIT") == "1"
 # module-level skip covers `test_pre_commit_present_when_required` too, so the
 # fail-closed probe is skipped by the very condition it exists to detect:
 # measured, `VIBE_REQUIRE_PRE_COMMIT=1` in an interpreter without pre-commit
-# gave `13 skipped`, rc=0 — a silent green, which is the #1664 shape one level
-# up. With the flag set the module refuses to skip, so the probe runs and fails
+# skipped the whole module with rc=0 — a silent green, which is the #1664 shape
+# one level up. With the flag set the module refuses to skip, so the probe fails
 # by name and the rest error loudly rather than vanishing.
 pytestmark = pytest.mark.skipif(
     not _HAS_PRE_COMMIT and not _REQUIRE_PRE_COMMIT,
@@ -607,9 +572,11 @@ def test_every_guard_in_the_dispatcher_gets_the_refspec_not_just_the_first(
     through them in sequence would let the first drain it and hand every later
     guard EOF — #1664 exactly, relocated one layer down and invisible, because
     ``require_preflight_pass``'s answer to "nothing is being pushed" is to allow.
-    Every other test here silences the siblings to keep its own verdict
-    unambiguous, which means every other test would stay green through that
-    change.
+    Most other tests here silence the siblings to keep their own verdict
+    unambiguous, so they stay green through that change. ⚠️ Measured, not
+    assumed: draining stdin in the first guard also reds
+    ``test_deleting_a_branch_does_not_require_a_green_docs_build``, which does
+    the opposite — it relies on a sibling firing as its control.
 
     STRICT mode so the verdict does not depend on a `gh` shim: the branch has
     no marker, so the only question left is whether the gate learned that
@@ -991,6 +958,16 @@ def test_the_shipped_wiring_runs_exactly_the_three_guards() -> None:
     one (it is handed a single refspec), and it reports Passed, so the picture
     is a guard that ran and approved.
 
+    ⛔ Half 2 asks which hooks pre-commit RUNS at pre-push, not which ones spell
+    ``pre-push``. Two ways to run there without that literal, both measured on
+    pre-commit 4.6.0 against a scratch repo:
+
+      * ``stages: [push]`` — the pre-3.x alias. It still runs (with a
+        deprecation warning), and a guard stanza re-added in that spelling was
+        green against the literal-only assertion.
+      * no ``stages:`` at all, plus a top-level ``default_stages`` that lists a
+        push stage. The hook inherits it and runs.
+
     This is a pin, not a classifier: a closed, named set of three artifacts in
     one repo, where any edit should force a review. Set equality both ways, so
     adding a fourth guard also reds and gets a look.
@@ -998,17 +975,21 @@ def test_the_shipped_wiring_runs_exactly_the_three_guards() -> None:
     config = yaml.safe_load(
         (_REPO_ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8")
     )
+    # Both spellings of the same stage, and the inherited default.
+    push_stages = {"pre-push", "push"}
+    defaults = set(config.get("default_stages") or [])
     stanzas = [
         hook["id"]
         for repo in config.get("repos", [])
         for hook in repo.get("hooks", [])
-        if "pre-push" in (hook.get("stages") or [])
+        if push_stages & (set(hook.get("stages") or []) or defaults)
     ]
     assert stanzas == [], (
-        "a `stages: [pre-push]` hook is back in .pre-commit-config.yaml: "
-        f"{stanzas}. pre-commit hands a pre-push hook exactly ONE refspec "
-        "(#1689), so that copy is blind — and it prints Passed. The guards are "
-        "run by scripts/ops/prepush_dispatch.sh."
+        "a hook that pre-commit runs at pre-push is back in "
+        f".pre-commit-config.yaml: {stanzas}. pre-commit hands a pre-push hook "
+        "exactly ONE refspec (#1689), so that copy is blind — and it prints "
+        "Passed. The guards are run by scripts/ops/prepush_dispatch.sh. "
+        "⛔ `stages: [push]` and an inherited `default_stages` count too."
     )
 
     guards = _dispatcher_guards()
@@ -1105,6 +1086,13 @@ def test_the_generated_shim_has_a_relative_shebang(tmp_path: Path) -> None:
         # this row: the parametrize covered two scripts, and a `$(dirname …)`
         # in the dispatcher was green.
         ("prepush_dispatch.sh", "_dispatch_dir"),
+        # ⛔ #1690 turned this one into a sourcing caller too. Before that it
+        # used `$(dirname …)` and was entitled to: it did not source the
+        # helper, so the PATH-stripped contract did not reach it. The moment it
+        # did, nothing here was watching — measured before adding this row, the
+        # parametrize covered three scripts and a `$(dirname …)` in the mkdocs
+        # guard stayed green.
+        ("pre_push_mkdocs_strict.sh", "_prepush_dir"),
     ],
 )
 def test_the_helper_is_sourced_without_spawning_anything(script: str, var: str) -> None:
@@ -1116,7 +1104,7 @@ def test_the_helper_is_sourced_without_spawning_anything(script: str, var: str) 
     the whole gate down. That behavioural coverage exists for
     ``require_preflight_pass.sh`` only; ``protect_main_push.sh`` carries the same
     comment with nothing driving it (measured: rewriting its sourcing with
-    ``$(dirname …)`` left 41/41 green). This holds the property for all three,
+    ``$(dirname …)`` left the whole suite green). This holds it for all three,
     and it runs on every platform, which the PATH-stripping tests do not.
     """
     lines = (_OPS / script).read_text(encoding="utf-8").splitlines()
@@ -1226,3 +1214,493 @@ def test_the_resolved_bash_forwards_the_environment() -> None:
         "WSL launcher, which only forwards WSLENV. Every environment-channel "
         f"assertion in this file would be vacuous. stdout={r.stdout!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# #1690 — the docs guard judges the PUSHED ref, not the working tree
+# ---------------------------------------------------------------------------
+_Z40 = "0" * 40
+
+# A stand-in for scripts/tools/lint/mkdocs_strict_check.sh. It records the
+# commit of whatever tree it was started in. ⛔ Recording the SHA rather than
+# asserting "mkdocs ran" is the point: the defect was never "the check does not
+# run", it was "the check runs against the wrong tree", and only the SHA tells
+# those two apart.
+_RECORDER = """#!/usr/bin/env bash
+git rev-parse HEAD >> "$PREPUSH_TEST_RECORD"
+exit "${PREPUSH_TEST_RC:-0}"
+"""
+
+_FAKE_MKDOCS = """#!/usr/bin/env bash
+echo "mkdocs, version 0.0.0-test"
+"""
+
+
+def _docs_repo(tmp_path: Path) -> tuple[Path, Path, str, str]:
+    """Repo with the guards, a recording strict-check, and two branches.
+
+    Returns (work, record_file, sha_of_A_head, sha_of_B_head). The working tree
+    is left standing on A with a doc change committed only on B — the exact
+    shape #1690 describes.
+    """
+    work = _make_repo(tmp_path, _PROTECT_ONLY)
+    lint = work / "scripts" / "tools" / "lint"
+    lint.mkdir(parents=True)
+    (lint / "mkdocs_strict_check.sh").write_text(_RECORDER, encoding="utf-8")
+    (work / "docs").mkdir()
+    (work / "docs" / "index.md").write_text("# index\n", encoding="utf-8")
+    # ⛔ `_commit` stages only its own a.txt, so everything this fixture
+    # needs must be added explicitly. The guard checks out a COMMIT to
+    # validate it; an untracked recorder is simply absent from that tree, and
+    # the test then fails for a fixture reason wearing a real defect’s costume.
+    assert _git(work, "add", "-A").returncode == 0
+    _commit(work, "add recorder and docs")
+
+    _git(work, "branch", "topic")
+    _git(work, "checkout", "-q", "topic")
+    (work / "docs" / "index.md").write_text("# index\nchanged on topic\n", encoding="utf-8")
+    assert _git(work, "add", "-A").returncode == 0
+    _commit(work, "docs: change on topic only")
+    sha_b = _git(work, "rev-parse", "HEAD").stdout.strip()
+
+    _git(work, "checkout", "-q", "main")
+    sha_a = _git(work, "rev-parse", "HEAD").stdout.strip()
+    assert sha_a != sha_b
+    assert _git(work, "status", "--porcelain").stdout.strip() == ""
+    return work, tmp_path / "record.txt", sha_a, sha_b
+
+
+def _run_guard(work: Path, record: Path, rows: str, *, rc: str = "0",
+               remote: str = "origin"):
+    """Feed the guard a refspec exactly as prepush_dispatch.sh does."""
+    assert _BASH, "no bash resolved; the module-level skip should have fired"
+    bindir = work.parent / "fakebin"
+    bindir.mkdir(exist_ok=True)
+    fake = bindir / "mkdocs"
+    fake.write_text(_FAKE_MKDOCS, encoding="utf-8")
+    fake.chmod(0o755)
+    env = {
+        **os.environ,
+        "PATH": str(bindir) + os.pathsep + os.environ.get("PATH", ""),
+        "PREPUSH_TEST_RECORD": str(record),
+        "PREPUSH_TEST_RC": rc,
+    }
+    return subprocess.run(  # subprocess-timeout: ignore
+        [_BASH, "scripts/ops/pre_push_mkdocs_strict.sh", remote, "/dev/null"],
+        cwd=work, input=rows, capture_output=True, text=True,
+        encoding="utf-8", errors="replace", env=env,
+    )
+
+
+def test_the_docs_guard_validates_the_pushed_commit_not_the_working_tree(
+    tmp_path: Path,
+) -> None:
+    """#1690: standing on A while pushing B must validate B.
+
+    Measured before the fix, same fixture: the guard diffed ``@{u}...HEAD``,
+    found nothing (A is in sync with its own upstream), and exited 0 without
+    building anything — a doc change went out with a green local gate. The
+    assertion is on the recorded SHA, because "it ran" was never the question.
+    """
+    work, record, sha_a, sha_b = _docs_repo(tmp_path)
+    r = _run_guard(work, record, f"refs/heads/topic {sha_b} refs/heads/topic {sha_a}\n")
+
+    assert record.exists(), (
+        "the strict check never ran at all, so the guard skipped a push that "
+        f"changes docs/index.md. stdout={r.stdout} stderr={r.stderr}"
+    )
+    seen = record.read_text(encoding="utf-8").split()
+    assert seen == [sha_b], (
+        "the guard validated the wrong tree: it should have checked out the "
+        f"pushed commit {sha_b} but recorded {seen} (working tree is {sha_a})"
+    )
+
+
+def test_a_push_that_changes_no_docs_is_not_gated_when_another_branch_did(
+    tmp_path: Path,
+) -> None:
+    """The reverse false-red, which fixing only the trigger would have opened.
+
+    The pushed ref carries no doc change; the doc change is on another branch.
+    A guard that still looked at ``@{u}...HEAD`` here would block a push for
+    changes the push is not carrying.
+
+    ⚠️ The name used to say "with dirty docs nearby", which this fixture does
+    not do — ``_docs_repo`` asserts the working tree is clean, and no test in
+    this file drives the guard with a dirty tree. Naming it after the state it
+    actually creates keeps the gap visible instead of claiming it is covered.
+    """
+    work, record, sha_a, _sha_b = _docs_repo(tmp_path)
+    _git(work, "checkout", "-q", "-b", "codeonly")
+    (work / "note.txt").write_text("not a doc\n", encoding="utf-8")
+    assert _git(work, "add", "-A").returncode == 0
+    _commit(work, "chore: no docs here")
+    sha_code = _git(work, "rev-parse", "HEAD").stdout.strip()
+
+    r = _run_guard(work, record, f"refs/heads/codeonly {sha_code} refs/heads/codeonly {sha_a}\n")
+
+    assert r.returncode == 0, f"{r.stdout}{r.stderr}"
+    assert not record.exists(), (
+        "the guard built a site for a push that carries no doc change; that is "
+        "the false-red that fixing the trigger alone would have introduced"
+    )
+
+
+def test_an_unknown_base_builds_rather_than_skipping(tmp_path: Path) -> None:
+    """`-` in the remote-sha slot means "I cannot tell", and that must BUILD.
+
+    The env channel cannot supply a remote sha (see _prepush_refs.sh, OUTPUT),
+    so this row shape is reachable. Defaulting to skip there would rebuild the
+    #1690 defect behind a different door.
+    """
+    work, record, _sha_a, sha_b = _docs_repo(tmp_path)
+    # ⛔ FOUR columns — git's protocol is <local_ref> <local_sha> <remote_ref>
+    # <remote_sha>. A three-column row puts `-` in the REMOTE_REF slot, so the
+    # guard's ref-name handling never runs and the row does not have the shape
+    # this docstring describes.
+    r = _run_guard(work, record, f"refs/heads/topic {sha_b} refs/heads/topic -\n")
+
+    assert record.exists(), (
+        f"unknown base was treated as 'nothing to do'. stdout={r.stdout} stderr={r.stderr}"
+    )
+    assert record.read_text(encoding="utf-8").split() == [sha_b]
+
+
+def test_a_deletion_row_is_not_judged(tmp_path: Path) -> None:
+    """`git push origin :topic` carries no tree, so there is nothing to build.
+
+    The dispatcher also skips this guard on a no-commit push
+    (GUARDS_NEEDING_COMMITS), but that skip is now belt-and-braces: before
+    #1690 this guard could not tell a deletion from anything else because it
+    never read the refspec, and running it directly on a deletion row built the
+    working tree. Measured on the pre-#1690 script with this same fixture: it
+    ran the strict check; now it does not.
+    """
+    work, record, sha_a, _sha_b = _docs_repo(tmp_path)
+    r = _run_guard(work, record, f"refs/heads/topic {_Z40} refs/heads/topic {sha_a}\n")
+
+    assert r.returncode == 0, f"{r.stdout}{r.stderr}"
+    assert not record.exists(), "a deletion push was gated on a docs build"
+
+
+def test_the_guard_leaves_no_temporary_worktree_behind(tmp_path: Path) -> None:
+    """A guard that leaks a worktree per push poisons `git worktree list`.
+
+    ⚠️ Honest boundary, measured: this one is GREEN on the pre-#1690 script
+    too — that code never created a worktree, so there was nothing to leak. By
+    the repo's own rule (a guard earns its place when its silent failure brings
+    the ORIGINAL defect back) it would not qualify, because a leaked worktree
+    is a failure mode this fix introduces, not one it restores.
+
+    It is kept because it does discriminate on the mechanism it actually
+    guards: dropping the `git worktree remove` line in `_build_one` turns it
+    red naming the leaked path (measured). The four tests above are the ones
+    that carry #1690 itself — all four fail on the pre-fix script, this one
+    does not, and that difference is the point of writing it down here.
+    """
+    work, record, sha_a, sha_b = _docs_repo(tmp_path)
+    _run_guard(work, record, f"refs/heads/topic {sha_b} refs/heads/topic {sha_a}\n")
+
+    listed = _git(work, "worktree", "list").stdout.strip().splitlines()
+    assert len(listed) == 1, f"temporary worktree left registered: {listed}"
+    assert not list((work / ".git").glob("mkdocs-strict-*")), (
+        "temporary worktree directory left on disk"
+    )
+
+
+# ---------------------------------------------------------------------------
+# #1690 round 2 — gaps a coverage-inventory review measured as unasserted
+# ---------------------------------------------------------------------------
+_GIT_SHIM = """#!/usr/bin/env bash
+# Fail only `git worktree add`; delegate everything else to the real git.
+if [ "${1:-}" = "worktree" ] && [ "${2:-}" = "add" ]; then
+    echo "fatal: simulated worktree failure" >&2
+    exit 1
+fi
+exec "$REAL_GIT" "$@"
+"""
+
+
+def test_a_worktree_that_cannot_be_created_refuses_instead_of_building_the_tree(
+    tmp_path: Path,
+) -> None:
+    """⛔ The fallback that "obviously" belongs here is the #1690 defect itself.
+
+    Building the working tree when the checkout fails is worse as a fallback
+    than as the original bug: it returns the WRONG tree's exit status as the
+    verdict, so a clean working tree turns a broken pushed commit green. This
+    pins refusal.
+    """
+    work, record, sha_a, sha_b = _docs_repo(tmp_path)
+    real_git = shutil.which("git")
+    assert real_git, "no git on PATH"
+    bindir = work.parent / "gitshim"
+    bindir.mkdir()
+    shim = bindir / "git"
+    shim.write_text(_GIT_SHIM, encoding="utf-8")
+    shim.chmod(0o755)
+
+    fake_dir = work.parent / "fakebin"
+    fake_dir.mkdir(exist_ok=True)
+    fm = fake_dir / "mkdocs"
+    fm.write_text(_FAKE_MKDOCS, encoding="utf-8")
+    fm.chmod(0o755)
+
+    env = {
+        **os.environ,
+        "REAL_GIT": real_git,
+        "PATH": str(bindir) + os.pathsep + str(fake_dir) + os.pathsep
+                + os.environ.get("PATH", ""),
+        "PREPUSH_TEST_RECORD": str(record),
+    }
+    r = subprocess.run(  # subprocess-timeout: ignore
+        [_BASH, "scripts/ops/pre_push_mkdocs_strict.sh", "origin", "/dev/null"],
+        cwd=work, input="refs/heads/topic %s refs/heads/topic %s\n" % (sha_b, sha_a),
+        capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
+    )
+    assert r.returncode != 0, (
+        "the guard accepted a push it could not validate. stdout=%s stderr=%s"
+        % (r.stdout, r.stderr)
+    )
+    assert not record.exists(), (
+        "the guard fell back to building the working tree — that is #1690, and "
+        "as a fallback it reports the wrong tree's verdict"
+    )
+    assert "MKDOCS_STRICT_BYPASS" in (r.stdout + r.stderr), (
+        "refusing without naming the one command that reaches green turns this "
+        "into a dead end; the message must offer the documented escape hatch"
+    )
+    # ⛔ The docs were never built here, so the doc-link advice would be a
+    # guess dressed as a diagnosis. A blind review measured the same shape on
+    # a missing mkdocs plugin: an environment failure told the contributor to
+    # go fix their `../../foo.md` links.
+    assert "site-root path gotcha" not in (r.stdout + r.stderr), (
+        "an environment failure was reported as a broken-links failure; the "
+        "contributor is sent to edit docs that were never built. stdout=%s"
+        % r.stdout
+    )
+
+
+def test_a_branch_behind_the_base_is_not_charged_for_the_bases_own_docs(
+    tmp_path: Path,
+) -> None:
+    """The diff runs from the MERGE BASE, not two-way against the base.
+
+    ⛔ `git diff <base> <pushed>` is two-way, so a branch that is merely BEHIND
+    the base reports the base's own files as changed by this push. The first
+    push of a branch has no remote sha, so its base is `origin/main` — which
+    puts every branch cut before main's last docs commit on this path.
+
+    Measured on the two-dot form with this fixture: a push carrying one
+    code-only commit printed "Doc changes detected: docs/later.md" and built.
+    That is a false red on a real contributor action, and it costs a full
+    mkdocs build every time.
+    """
+    work, record, _sha_a, _sha_b = _docs_repo(tmp_path)
+
+    # main gains a docs commit that the branch will not have.
+    assert _git(work, "checkout", "-q", "main").returncode == 0
+    (work / "docs" / "later.md").write_text("# later\n", encoding="utf-8")
+    assert _git(work, "add", "-A").returncode == 0
+    _commit(work, "docs: only on main")
+    assert _git(work, "update-ref", "refs/remotes/origin/main", "main").returncode == 0
+
+    # A branch cut BEFORE that commit, carrying one code-only commit.
+    assert _git(work, "checkout", "-q", "-b", "behind", "main~1").returncode == 0
+    (work / "src.txt").write_text("code only\n", encoding="utf-8")
+    assert _git(work, "add", "-A").returncode == 0
+    _commit(work, "code only")
+    sha = _git(work, "rev-parse", "HEAD").stdout.strip()
+
+    r = _run_guard(work, record, f"refs/heads/behind {sha} refs/heads/behind {_Z40}\n")
+
+    assert not record.exists(), (
+        "a code-only push was gated on docs that live on the BASE and are not "
+        f"in this push. stdout={r.stdout} stderr={r.stderr}"
+    )
+    assert "Doc changes detected" not in r.stdout, (
+        f"the guard told a code-only push it changed docs. stdout={r.stdout}"
+    )
+
+
+def test_a_remote_not_called_origin_still_gets_a_base(tmp_path: Path) -> None:
+    """git names the remote in $1; the base comes from there before `origin`.
+
+    ⚠️ Without this the fail-safe swallows the whole clone: `origin/main` never
+    resolves, so EVERY push is "base unknown" and pays a full mkdocs build.
+    Measured on a clone whose remote is `upstream`: a code-only push built.
+    Fail-safe is the right default for one ref, but as a permanent state it is
+    a tax on a legitimate setup (a fork, or `git clone -o upstream`).
+
+    ⛔ This is the base lookup only. Deciding a default branch by name is a
+    different question and is deliberately not attempted here.
+    """
+    work, record, _sha_a, _sha_b = _docs_repo(tmp_path)
+    assert _git(work, "remote", "rename", "origin", "upstream").returncode == 0
+    assert _git(work, "rev-parse", "--verify", "--quiet",
+                "origin/main^{commit}").returncode != 0, "origin/main still resolves"
+    assert _git(work, "rev-parse", "--verify", "--quiet",
+                "upstream/main^{commit}").returncode == 0, "upstream/main missing"
+    # ⛔ `_make_repo` published main at the ROOT commit, before `_docs_repo`
+    # added docs/. Leaving the tracking ref there makes the branch genuinely
+    # introduce docs/index.md, and the test would then pass for a reason that
+    # has nothing to do with which remote name was consulted.
+    assert _git(work, "update-ref", "refs/remotes/upstream/main", "main").returncode == 0
+
+    assert _git(work, "checkout", "-q", "-b", "codeonly", "main").returncode == 0
+    (work / "src.txt").write_text("code only\n", encoding="utf-8")
+    assert _git(work, "add", "-A").returncode == 0
+    _commit(work, "code only")
+    sha = _git(work, "rev-parse", "HEAD").stdout.strip()
+
+    r = _run_guard(
+        work, record,
+        f"refs/heads/codeonly {sha} refs/heads/codeonly {_Z40}\n",
+        remote="upstream",
+    )
+
+    assert not record.exists(), (
+        "a code-only push built anyway: the base was not found through the "
+        f"remote's real name. stdout={r.stdout} stderr={r.stderr}"
+    )
+
+
+def test_no_base_at_all_builds_rather_than_skipping(tmp_path: Path) -> None:
+    """The fail-safe branch, reached for real — no `origin/main` to fall back on.
+
+    ⚠️ Its sibling `test_an_unknown_base_builds_rather_than_skipping` does NOT
+    reach this branch: `_make_repo` publishes `main`, so a `-` row takes the
+    `origin/main` fallback instead. Measured by a coverage review: with only
+    that sibling, turning the fail-safe into a fail-open stayed green, and only
+    mutating BOTH branches went red — the pair pinned a disjunction, not this
+    branch. This one removes the remote entirely.
+    """
+    work, record, _sha_a, sha_b = _docs_repo(tmp_path)
+    assert _git(work, "remote", "remove", "origin").returncode == 0
+    assert _git(work, "rev-parse", "--verify", "--quiet",
+                "origin/main^{commit}").returncode != 0, "origin/main still resolves"
+
+    r = _run_guard(work, record, "refs/heads/topic %s refs/heads/topic -\n" % sha_b)
+
+    assert record.exists(), (
+        "with no base at all the guard skipped instead of building — that is "
+        "#1690 through a different door. stdout=%s stderr=%s" % (r.stdout, r.stderr)
+    )
+    assert record.read_text(encoding="utf-8").split() == [sha_b]
+
+
+def test_the_docs_guard_refuses_when_no_channel_carries_a_refspec(
+    tmp_path: Path,
+) -> None:
+    """rc=3 from the helper must refuse, for THIS guard too.
+
+    `_prepush_refs.sh`'s EXIT STATUS section says a caller must treat "no
+    channel carried a refspec" as a refusal — warning-and-allowing is not an
+    option, because that is the #1664 picture. The existing
+    `test_guard_refuses_when_no_channel_carries_a_refspec` pins it for the
+    other two guards only; this guard became a third consumer of the helper
+    and was not added there.
+    """
+    work, record, _sha_a, _sha_b = _docs_repo(tmp_path)
+    assert _BASH
+    env = {k: v for k, v in os.environ.items() if not k.startswith("PRE_COMMIT")}
+    env["PRE_COMMIT"] = "1"
+    env["PREPUSH_TEST_RECORD"] = str(record)
+    r = subprocess.run(  # subprocess-timeout: ignore
+        [_BASH, "scripts/ops/pre_push_mkdocs_strict.sh", "origin", "/dev/null"],
+        cwd=work, input="", capture_output=True, text=True,
+        encoding="utf-8", errors="replace", env=env,
+    )
+    assert r.returncode != 0, (
+        "the guard allowed a push whose refspec it could not see at all; that "
+        "is exactly #1664. stdout=%s stderr=%s" % (r.stdout, r.stderr)
+    )
+    assert not record.exists(), "it also built something, with no idea what"
+
+
+# ---------------------------------------------------------------------------
+# dispatcher properties that were already correct but unpinned (pre-existing)
+# ---------------------------------------------------------------------------
+def _dispatch_repo(tmp_path: Path) -> Path:
+    work = _make_repo(tmp_path, _PROTECT_ONLY)
+    assert _git(work, "add", "-A").returncode == 0
+    _commit(work, "guards in place")
+    return work
+
+
+def test_the_dispatcher_runs_every_guard_even_after_one_fails(tmp_path: Path) -> None:
+    """⛔ No short-circuit: a failing guard must not hide the ones after it.
+
+    The dispatcher's own comment says so; nothing pinned it. Measured by a
+    coverage review: adding `break` after the first failure stayed green,
+    because the exit status is identical either way — only the number of
+    guards that actually ran differs.
+    """
+    work = _dispatch_repo(tmp_path)
+    ops = work / "scripts" / "ops"
+    marks = tmp_path / "marks"
+    for name, rc in (("protect_main_push.sh", 1),
+                     ("require_preflight_pass.sh", 0),
+                     ("pre_push_mkdocs_strict.sh", 0)):
+        ops.joinpath(name).write_text(
+            "#!/usr/bin/env bash\n"
+            'echo "%s" >> "$PREPUSH_MARKS"\n'
+            "exit %d\n" % (name, rc),
+            encoding="utf-8")
+    assert _BASH
+    rows = "refs/heads/x %s refs/heads/x %s\n" % ("a" * 40, "b" * 40)
+    r = subprocess.run(  # subprocess-timeout: ignore
+        [_BASH, "scripts/ops/prepush_dispatch.sh", "origin", "/dev/null"],
+        cwd=work, input=rows, capture_output=True, text=True,
+        encoding="utf-8", errors="replace",
+        env={**os.environ, "PREPUSH_MARKS": str(marks)},
+    )
+    assert r.returncode != 0, "a failing guard did not fail the push"
+    ran = marks.read_text(encoding="utf-8").split() if marks.exists() else []
+    assert ran == ["protect_main_push.sh", "require_preflight_pass.sh",
+                   "pre_push_mkdocs_strict.sh"], (
+        "the dispatcher stopped early; guards that ran: %s" % ran)
+
+
+def test_a_failing_chained_hook_fails_the_push(tmp_path: Path) -> None:
+    """git-lfs owns this slot on a fresh clone and has real work to do.
+
+    Swallowing its exit status would let a push report success while the LFS
+    objects never left the machine. The dispatcher propagates it today; nothing
+    pinned that.
+    """
+    work = _dispatch_repo(tmp_path)
+    hooks = work / ".git" / "hooks"
+    hooks.mkdir(parents=True, exist_ok=True)
+    chained = hooks / "pre-push.chained"
+    chained.write_text("#!/usr/bin/env bash\nexit 42\n", encoding="utf-8")
+    chained.chmod(0o755)
+    assert _BASH
+    r = subprocess.run(  # subprocess-timeout: ignore
+        [_BASH, "scripts/ops/prepush_dispatch.sh", "origin", "/dev/null"],
+        cwd=work, input="", capture_output=True, text=True,
+        encoding="utf-8", errors="replace",
+    )
+    assert r.returncode == 42, (
+        "the chained hook's failure was swallowed (rc=%d); a git-lfs failure "
+        "would report a successful push" % r.returncode)
+
+
+def test_the_chained_hook_is_executed_directly_not_through_bash() -> None:
+    """⚠️ Structural pin, and honest about being one.
+
+    The chained hook need not be a shell script — the dispatcher's header
+    records `import: command not found`, rc=2, for a python hook run through
+    `bash`. A behavioural test needs an interpreter present on every platform
+    this repo runs on, and there is none we can rely on here (this host has no
+    usable `node`, and `python3` is not on Git Bash's PATH), so this pins the
+    call shape rather than the consequence.
+    """
+    src = (_OPS / "prepush_dispatch.sh").read_text(encoding="utf-8")
+    code = [ln for ln in src.splitlines() if not ln.lstrip().startswith("#")]
+    invocations = [ln for ln in code if "_CHAINED_NAME" in ln and "$@" in ln]
+    assert invocations, "no chained-hook invocation found at all"
+    for ln in invocations:
+        assert "bash " not in ln, (
+            "the chained hook is invoked through bash, which ignores its "
+            "shebang: %s" % ln.strip())
