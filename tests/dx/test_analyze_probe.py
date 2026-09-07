@@ -1037,6 +1037,139 @@ def test_required_row_fields_match_what_the_code_indexes():
     )
 
 
+def _probe_text():
+    return (ARCHIVE / "probe-run1.txt").read_text(encoding="utf-8")
+
+
+def test_parse_row_returns_partial_fields_with_the_reason_in_process():
+    """Direct call: the defect reasons AND the partial fields they come with.
+
+    ⛔ In-process on purpose. The subprocess tests above already prove each
+    defect is refused, but coverage.py does not follow a child process, so the
+    branches inside `parse_row` read as "never executed" — "could not measure"
+    presented as "measured nothing", the exact confusion TRK-379 (#1746) names.
+    ⭐ And the interface buys real detection the subprocess one cannot reach:
+    that a defective row still yields the fields that DID parse is what lets
+    `load()` tell a calibration record apart from a measurement one, and no
+    subprocess assertion can see a return value.
+    """
+    import analyze_probe
+
+    good = ("round=1 bench_n=30 iters=400 write_p50=1 write_p90=1 write_p99=1"
+            " write_max=1 write_sum=1 load_p50=1 load_p90=1 load_p99=1"
+            " load_max=1 load_sum=1")
+    row, why = analyze_probe.parse_row(good)
+    assert why is None and row["round"] == 1 and row["iters"] == 400
+
+    row, why = analyze_probe.parse_row(good.replace("write_sum=1", "write_sum"))
+    assert why == "field 'write_sum' has no '='"
+    assert row["bench_n"] == 30, "the fields that parsed must still come back"
+
+    row, why = analyze_probe.parse_row(good.replace("write_sum=1", "write_sum=NaN"))
+    assert why == "field write_sum='NaN' is not an integer"
+    assert row["bench_n"] == 30
+
+    row, why = analyze_probe.parse_row(good.replace(" load_p50=1", ""))
+    assert why == "missing load_p50"
+    assert row["bench_n"] == 30
+
+    # Two defects: the FIRST in payload order wins.
+    two = good.replace("write_p50=1", "write_p50=BAD").replace("write_sum=1", "write_sum")
+    _, why = analyze_probe.parse_row(two)
+    assert why == "field write_p50='BAD' is not an integer"
+
+
+def test_load_partitions_defects_by_whether_the_row_survives_in_process():
+    """Direct call: the one predicate that decides refuse-vs-exempt.
+
+    ⛔ The two sides are unobservable from outside in opposite ways — a
+    `malformed` entry is refused before anything renders, and an `exempt` entry
+    only ever shows up as a line in a report. Reading both off the Session is
+    the only place they can be compared directly.
+    """
+    import analyze_probe
+
+    text = _probe_text()
+    lines = text.splitlines()
+
+    broke_measurement = "\n".join(
+        _first_measurement_row(lines, lambda l: re.sub(r"\s*load_p50=\d+", "", l)))
+    s = analyze_probe.load(broke_measurement, "x")
+    assert [why for _, why in s.malformed] == ["missing load_p50"]
+    assert s.discarded == []
+
+    broke_calibration = "\n".join(
+        _calibration_row(lines, lambda l: re.sub(r"\s*load_p50=\d+", "", l)))
+    s = analyze_probe.load(broke_calibration, "x")
+    assert s.malformed == []
+    assert [why for _, why in s.discarded] == ["missing load_p50"]
+
+    # No measurement row at all (-benchtime=1x): nothing is dropped, so the
+    # defect is NOT exempt even though the row says bench_n=1.
+    all_calib = "\n".join(
+        re.sub(r"bench_n=\d+", "bench_n=1", l) if l.startswith("PROBEROW") else l
+        for l in _calibration_row(
+            lines, lambda l: re.sub(r"\s*load_p50=\d+", "", l)))
+    s = analyze_probe.load(all_calib, "x")
+    assert [why for _, why in s.malformed] == ["missing load_p50"]
+    assert s.discarded == []
+
+
+def test_reject_messages_in_process():
+    """Direct call: the refusal strings, including the >3 truncation tail."""
+    import analyze_probe
+
+    lines = _probe_text().splitlines()
+
+    def break_n(n):
+        out, k = [], 0
+        for l in lines:
+            if l.startswith("PROBEROW") and "bench_n=1 " not in l and k < n:
+                l = re.sub(r"\s*load_p50=\d+", "", l)
+                k += 1
+            out.append(l)
+        assert k == n
+        return "\n".join(out)
+
+    err = analyze_probe.reject(analyze_probe.load(break_n(5), "x"))
+    assert err.startswith("::error::5 malformed PROBEROW record(s)")
+    assert err.count("missing load_p50") == 3 and "(+2 more)" in err
+
+    mixed = "\n".join(
+        _first_measurement_row(lines, lambda l: l.replace("iters=400", "iters=800")))
+    err = analyze_probe.reject(analyze_probe.load(mixed, "x"))
+    assert "rounds report differing iters [400, 800]" in err
+
+    assert analyze_probe.reject(analyze_probe.load(_probe_text(), "x")) is None
+
+
+def test_discarded_notes_and_cross_file_refusal_in_process(tmp_path, capsys):
+    """`main()` in-process over the paths only the renderers reach.
+
+    ⭐ Asserting the RETURN value, not just the text: `sys.exit(None)` is exit 0,
+    so a renderer path that silently stopped returning its code is invisible to
+    every subprocess assertion in this file (TRK-379 / #1746, measured there).
+    """
+    import analyze_probe
+
+    d = build_archive(tmp_path, lambda ls: _calibration_row(
+        ls, lambda l: re.sub(r"\s*load_p50=\d+", "", l)))
+
+    assert analyze_probe.main(["--from-log", str(d / "probe-run1.txt")]) == 0
+    assert "筆校準輪記錄格式有誤" in capsys.readouterr().out
+
+    assert analyze_probe.main(["--archive", str(d)]) == 0
+    assert "unparseable calibration record(s) skipped" in capsys.readouterr().out
+
+    mixed = build_archive(tmp_path / "mixed", lambda ls: [
+        l.replace("iters=400", "iters=800") if l.startswith("PROBEROW") else l
+        for l in ls])
+    assert analyze_probe.main(["--archive", str(mixed)]) == 2
+    out = capsys.readouterr().out
+    assert "runs report differing iters [400, 800]" in out
+    assert "probe-run1.txt=[800]" in out and "probe-run3.txt=[400]" in out
+
+
 # ---------------------------------------------------------------------------
 # 5. The workflow actually calls this tool, with a path CI will resolve
 # ---------------------------------------------------------------------------
