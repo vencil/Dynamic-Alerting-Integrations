@@ -73,6 +73,7 @@ modules:
       add_json_arg: "argparse boilerplate"
       add_ci_arg: "argparse boilerplate"
       add_prometheus_arg: "argparse boilerplate"
+      exit_on_yaml_file_error: "CLI-entry decorator (stderr + sys.exit on YamlFileError, #1654); example-pinned in tests/shared/test_yaml_file_error.py, no value computation to fuzz"
 
   scripts/tools/_lib_yaml.py:
     excluded:

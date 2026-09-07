@@ -621,6 +621,7 @@ docker run --rm --network=host \
 |------|-------------|
 | `0` | Success (regardless of blind spots) |
 | `1` | Prometheus connection failed |
+| `2` | Caller error: a file under `--config-dir` cannot be read (content not UTF-8 or not valid YAML; the message names the file, #1654) |
 
 ---
 
@@ -680,6 +681,7 @@ docker run --rm \
 |------|-------------|
 | `0` | Success |
 | `1` | Invalid config directory |
+| `2` | Caller error: a file under `--config-dir` cannot be read (content not UTF-8 or not valid YAML; the message names the file, #1654) |
 
 ---
 
@@ -747,7 +749,7 @@ docker run --rm --network=host \
 |------|-------------|
 | `0` | Success |
 | `1` | At least one threshold change was rated HIGH risk (review before merging); an unreachable Prometheus or a git that cannot run is not 1, see below |
-| `2` | Caller error: `--lookback` supplied but unusable (not `<number><d\|h\|m>`, #1625); `--git-diff` supplied but git cannot run (git not installed, not inside a git work tree, no HEAD~1) — ⛔ do not switch to `--config-dir` to go green, that compares two trees, not your PR; the output path given to `-o/--output` / `--markdown-output` cannot be written (#1641) |
+| `2` | Caller error: `--lookback` supplied but unusable (not `<number><d\|h\|m>`, #1625); `--git-diff` supplied but git cannot run (git not installed, not inside a git work tree, no HEAD~1) — ⛔ do not switch to `--config-dir` to go green, that compares two trees, not your PR; the output path given to `-o/--output` / `--markdown-output` cannot be written (#1641); `--lookback` supplied but unusable (not `<number><d\|h\|m>`, #1625); `--git-diff` supplied but git cannot run (git not installed, not inside a git work tree, no HEAD~1) — ⛔ do not switch to `--config-dir` to go green, that compares two trees, not your PR; a conf.d file whose content cannot be read (not UTF-8 or not valid YAML; the message names the file, #1654) |
 
 ---
 
@@ -2384,7 +2386,7 @@ docker run --rm \
 |------|-------------|
 | `0` | Success |
 | `1` | Invalid config file |
-| `2` | Caller error: bad arguments, or the output path given to `-o/--output-dir` cannot be written (#1641) |
+| `2` | Caller error: bad arguments, or the output path given to `-o/--output-dir` cannot be written (#1641); an input file cannot be read (content not UTF-8 or not valid YAML; the message names the file, #1654) |
 
 ---
 
@@ -2436,7 +2438,7 @@ docker run --rm \
 |------|-------------|
 | `0` | Success |
 | `1` | Invalid config file |
-| `2` | Caller error: bad arguments, or the output path given to `-o/--output` cannot be written (#1641) |
+| `2` | Caller error: bad arguments, or the output path given to `-o/--output` cannot be written (#1641); an input file cannot be read (content not UTF-8 or not valid YAML; the message names the file, #1654) |
 
 ---
 
@@ -2562,7 +2564,7 @@ da-tools evaluate-policy --config-dir conf.d/ --ci
 |------|-------------|
 | `0` | No error-level violations |
 | `1` | CI mode: error-level violations found |
-| `2` | Caller error: `--policy` supplied but not a file (including the empty string) / `--config-dir` does not exist. ⛔ Do not go green by dropping `--policy` — that evaluates without your policy file (#1651) |
+| `2` | Caller error: `--policy` supplied but not a file (including the empty string) / `--config-dir` does not exist / `_defaults.yaml` or a tenant file whose content cannot be read (not UTF-8 or not valid YAML; the message names the file, #1654). ⛔ Do not go green by dropping `--policy` — that evaluates without your policy file (#1651) |
 
 #### opa-evaluate
 
@@ -3016,6 +3018,7 @@ da-tools test-notification --config-dir conf.d/ --ci
 |------|-------------|
 | `0` | All receivers reachable (or non-CI mode) |
 | `1` | CI mode: one or more receivers unreachable |
+| `2` | Caller error: a file under `--config-dir` cannot be read (content not UTF-8 or not valid YAML; the message names the file, #1654) |
 
 #### explain-route
 

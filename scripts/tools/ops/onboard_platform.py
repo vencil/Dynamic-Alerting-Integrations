@@ -55,7 +55,10 @@ sys.path.insert(0, str(_THIS_DIR))  # Docker flat layout
 sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
 
 from _lib_python import (  # noqa: E402
+    YamlFileError,
+    exit_on_yaml_file_error,
     load_yaml_file,
+    safe_label,
     validate_and_clamp,
     write_onboard_hints,
     OutputWriteError,
@@ -543,7 +546,14 @@ def analyze_rule_files(file_paths, tenant_label=DEFAULT_TENANT_LABEL, metric_dic
     total_rules = 0
 
     for fpath in file_paths:
-        data = load_yaml_file(fpath)
+        # #1654 blind review: this loop already isolates per file; the
+        # entry-level rc-2 wrapper must not make its `errors` branch
+        # unreachable for an unreadable / unparsable rule file.
+        try:
+            data = load_yaml_file(fpath)
+        except YamlFileError as exc:
+            errors.append(f"Failed to load: {exc}")
+            continue
         if data is None:
             errors.append(f"Failed to load: {fpath}")
             continue
@@ -1197,6 +1207,7 @@ def _build_onboard_hints(phase1_results, phase2_results, phase3_results):
 # CLI
 # ============================================================
 
+@exit_on_yaml_file_error  # #1654: unreadable AM / rule / scrape file → rc 2, named
 def main():
     """CLI entry point: Reverse-analyze existing configs for Dynamic Alerting onboarding."""
     try_utf8_stdout()
@@ -1333,6 +1344,21 @@ def main():
         print(f"\nOutputs written to: {args.output_dir}")
         for f in report["files_written"]:
             print(f"  {f}")
+
+    # #1654 re-review: Phase 2 isolates per rule file so EVERY unreadable one
+    # is named in a single run and the readable ones still feed the plan —
+    # but a run that could not read an input is a caller error (the
+    # cli-reference `onboard` row says 2), not a success with a thinner plan.
+    # Measured before this: an all-bad rule set exited 0 and wrote a
+    # header-only migration-plan.csv. Outputs are written first (above) so
+    # the operator keeps what the readable files yielded; the rc comes last.
+    # Under --json the envelope above already carries
+    # `phases.phase2.summary.errors[]`.
+    rule_errors = phase2_results[2]["errors"] if phase2_results else []
+    if rule_errors:
+        print(f"ERROR: {len(rule_errors)} rule file(s) could not be read: "
+              + "; ".join(safe_label(e) for e in rule_errors), file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
 
     # Exit code: 0 if at least one phase produced results
     has_results = any(report["phases"].values())

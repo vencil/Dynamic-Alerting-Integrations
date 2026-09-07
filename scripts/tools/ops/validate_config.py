@@ -1503,13 +1503,16 @@ def _run_check(name: str, fn, *args, _config_dir: str | None = None,
              # ⛔ Not "the file reported by yaml_syntax above": an
              # unreadable `--policy` or `--rule-packs` file lives outside
              # `--config-dir`, so yaml_syntax passes and points at nothing.
-             # ⛔ Does not promise a filename. A YAMLError carries the
-             # path; a UnicodeDecodeError carries a codec and an offset and
-             # nothing else — and an unreadable --policy / --rule-packs file
-             # lives outside --config-dir, so yaml_syntax cannot name it
-             # either. Measured: a non-UTF-8 --policy file produced this row
-             # with no filename anywhere in the report, under a sentence
-             # telling the reader to go read the name.
+             # ⛔ Does not promise a filename. Files read through the
+             # shared `load_yaml_file` now always name themselves (#1654:
+             # `YamlFileError` carries the path for both decode and syntax
+             # failures); this tool's OWN text-mode reads (yaml_syntax,
+             # --policy) still raise a bare UnicodeDecodeError that carries
+             # a codec and an offset and nothing else — and an unreadable
+             # --policy / --rule-packs file lives outside --config-dir, so
+             # yaml_syntax cannot name it either. Measured before #1654: a
+             # non-UTF-8 --policy file produced this row with no filename
+             # anywhere in the report.
              "This check never reached its own logic. If no file is named "
              "above, the fault is in one of the paths you passed on the "
              "command line — check each one's encoding and syntax."])

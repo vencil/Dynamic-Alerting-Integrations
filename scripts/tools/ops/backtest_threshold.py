@@ -48,6 +48,7 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import load_yaml_file, is_disabled, http_get_json, query_prometheus_range, write_json_or_die, write_text_or_die, add_prometheus_arg  # noqa: E402
+from _lib_python import YamlFileError  # noqa: E402
 from _lib_python import format_json_report  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
@@ -1106,6 +1107,23 @@ def generate_markdown(report):
     return "\n".join(lines)
 
 
+def _exit_unreadable_conf(exc, args):
+    """#1654: a conf.d file whose CONTENT cannot be read → rc 2, file named.
+
+    The content axis of #1339 (the name axis is #1634): a pure-ASCII
+    ``db-a.yaml`` with one ``\\xff`` byte used to escape ``load_conf_files``
+    as a ``UnicodeDecodeError`` traceback — rc 1, and 0 bytes of stdout under
+    ``--json``. Not the shared ``exit_on_yaml_file_error`` wrapper, because
+    this tool owes ``--json`` its ``caller_error`` envelope on every terminal
+    path (same shape as the ``git_diff_unavailable`` exit above).
+    """
+    print(f"ERROR: cannot read {safe_label(exc)}", file=sys.stderr)  # #1538
+    if args.json:
+        print(format_json_report(empty_report(
+            args.lookback, "caller_error", "conf_file_unreadable")))
+    sys.exit(EXIT_CALLER_ERROR)
+
+
 def main():
     """CLI entry point: Backtest threshold changes against historical Prometheus data."""
     try_utf8_stdout()
@@ -1171,7 +1189,10 @@ def main():
     # is unreachable. Recipes use the compiler+promtool eval home, not this
     # flat-threshold tool. (#657)
     if args.git_diff:
-        parsed_conf = load_conf_files(changed_conf_files())
+        try:
+            parsed_conf = load_conf_files(changed_conf_files())
+        except YamlFileError as exc:
+            _exit_unreadable_conf(exc, args)
     elif args.config_dir:
         # #1588 site 4 of 6. Same listing helper as the scan above — the
         # unreadable-directory case reached main() FIRST, before the
@@ -1212,10 +1233,13 @@ def main():
         # `.txt` row.
         # `_confd_entries` lists, this line decides the extension,
         # `load_conf_files` decides reserved/hidden. One rule, one place.
-        parsed_conf = load_conf_files(
-            [str(p) for p in _confd_entries(Path(args.config_dir))
-             if has_yaml_extension(p.name)]
-        )
+        try:
+            parsed_conf = load_conf_files(
+                [str(p) for p in _confd_entries(Path(args.config_dir))
+                 if has_yaml_extension(p.name)]
+            )
+        except YamlFileError as exc:
+            _exit_unreadable_conf(exc, args)
     else:
         parsed_conf = {}
     recipe_tenants = find_custom_alert_tenants(parsed_conf)
@@ -1265,7 +1289,10 @@ def main():
         if not args.baseline:
             print("ERROR: --config-dir requires --baseline", file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)
-        changes = extract_changes_from_dirs(args.config_dir, args.baseline)
+        try:
+            changes = extract_changes_from_dirs(args.config_dir, args.baseline)
+        except YamlFileError as exc:   # the --baseline side is read only here
+            _exit_unreadable_conf(exc, args)
     elif args.tenant:
         if not args.metric or (args.old_value is None and args.new_value is None):
             print("ERROR: --tenant requires --metric and at least one of --old-value/--new-value",

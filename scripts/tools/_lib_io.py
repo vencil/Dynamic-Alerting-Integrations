@@ -6,12 +6,14 @@ Import via _lib_python.py facade for backward compatibility.
 from __future__ import annotations
 
 import argparse
+import functools
+import io
 import json
 import os
 import re
 import sys
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional, TypeVar
 
 import yaml
 
@@ -19,6 +21,33 @@ from _lib_confd import warn_nested
 from _lib_constants import ONBOARD_HINTS_FILENAME
 # No import cycle: _lib_exitcodes imports only sys + _lib_compat (#1641).
 from _lib_exitcodes import EXIT_CALLER_ERROR
+
+_F = TypeVar("_F", bound=Callable[..., Any])
+
+
+class YamlFileError(yaml.YAMLError):
+    """A YAML file that exists but cannot be read — and WHICH file (#1654).
+
+    ``yaml.YAMLError`` subclass on purpose: every ``except yaml.YAMLError``
+    (and ``except Exception``) a caller already has catches this, so a
+    decode failure now takes the same message path as a syntax error
+    instead of escaping as a traceback. Attributes:
+
+    * ``path``  — the file as the caller named it.
+    * ``cause`` — the original error (also ``__cause__``): the
+      ``UnicodeDecodeError`` for content that is not valid UTF-8, the
+      PyYAML error for bad syntax.
+
+    ``str()`` is ONE line, ``<path>: <original message> (<CauseClass>)``,
+    with the original's line breaks collapsed so the line/column PyYAML
+    reports survive but a caller can interpolate it into a report line.
+    """
+
+    def __init__(self, path: str, cause: Exception) -> None:
+        self.path = path
+        self.cause = cause
+        detail = " ".join(str(cause).split()) or cause.__class__.__name__
+        super().__init__(f"{path}: {detail} ({cause.__class__.__name__})")
 
 
 def load_yaml_file(path: Optional[str], default: Any = None) -> Any:
@@ -31,12 +60,70 @@ def load_yaml_file(path: Optional[str], default: Any = None) -> Any:
 
     Returns:
         Parsed YAML data, or *default*.
+
+    Raises:
+        YamlFileError: the file exists but cannot be read — content that is
+            not valid UTF-8 (``cause`` is the ``UnicodeDecodeError``) OR bad
+            YAML syntax (``cause`` is the PyYAML error). Before #1654 the
+            first escaped as a bare ``UnicodeDecodeError`` — a ``ValueError``
+            no ``except yaml.YAMLError`` in this repo saw, and one that never
+            carried the path. ⚠️ Never swallowed into *default*: a file that
+            is present but unreadable is the loudest input, not an empty one.
+        OSError: as before; not wrapped.
+
+    Decoding is STRICT UTF-8, exactly what the text-mode ``open`` did, so
+    the accepted encodings are unchanged: this helper must not start
+    serving (say) UTF-16 while ``validate_config``'s own reads and the
+    routes generator still refuse it — that would be #1339's "one input,
+    two answers" inside the Python tool family (blind review). Whether the
+    family should follow the exporter's parser on other encodings is a
+    separate decision. The decoded text is parsed from a named stream so
+    PyYAML's own marks (``in "<path>", line N, column M``) keep naming the
+    real file instead of ``"<unicode string>"``.
     """
     if not path or not Path(path).is_file():
         return default
-    with open(path, encoding="utf-8") as f:
-        data = yaml.safe_load(f)
+    raw = Path(path).read_bytes()
+    try:
+        stream = io.StringIO(raw.decode("utf-8"))
+        stream.name = str(path)
+        data = yaml.safe_load(stream)
+    except (UnicodeDecodeError, yaml.YAMLError) as exc:
+        raise YamlFileError(str(path), exc) from exc
     return data if data is not None else default
+
+
+def exit_on_yaml_file_error(fn: _F) -> _F:
+    """Decorate a CLI ``main`` so an unreadable YAML input exits 2, named.
+
+    The shared answer for every tool whose ``load_yaml_file`` call sites
+    have no handler of their own (#1654): instead of 21 hand-written
+    ``try/except`` blocks, the entry point is wrapped once, and
+    :class:`YamlFileError` becomes ``ERROR: cannot read <path>: <reason>``
+    on stderr plus ``sys.exit(EXIT_CALLER_ERROR)`` — an IO/decode failure
+    is a caller error in ``_lib_exitcodes``, not the rc 1 an uncaught
+    traceback produced.
+
+    ⚠️ Only :class:`YamlFileError`. A bare ``yaml.YAMLError`` has no path to
+    name and did not come from the helper; it keeps propagating so the
+    layer that raised it stays visible. Tools that owe stdout a ``--json``
+    envelope on this path (``backtest_threshold``, ``policy_engine``)
+    catch the error themselves at the load site instead of using this.
+
+    Lives here rather than in ``_lib_exitcodes`` because that module is
+    kept stdlib-only for the tools that import nothing else; this one
+    already owns ``yaml`` and the error class.
+    """
+    @functools.wraps(fn)
+    def _wrapped(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return fn(*args, **kwargs)
+        except YamlFileError as exc:
+            # ``safe_label``: the path is an untrusted filename (#1538) —
+            # measured, a ``\x1b[31m`` in the name reached the terminal raw.
+            print(f"ERROR: cannot read {safe_label(exc)}", file=sys.stderr)
+            sys.exit(EXIT_CALLER_ERROR)
+    return _wrapped  # type: ignore[return-value]
 
 
 def iter_yaml_files(
@@ -116,7 +203,8 @@ def load_tenant_configs(config_dir: str) -> dict[str, dict[str, Any]]:
 
     Raises:
         Anything raised while listing the directory or reading a file
-        propagates. ``yaml.YAMLError``, ``UnicodeDecodeError`` and ``OSError``
+        propagates. :class:`YamlFileError` (bad syntax OR non-UTF-8 content,
+        naming the file — #1654; it is a ``yaml.YAMLError``) and ``OSError``
         are the common ones, but this is deliberately NOT a closed list — a
         deeply nested document raises ``RecursionError``, which is a sibling
         of none of them, and an unreadable *directory* raises from

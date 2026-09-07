@@ -32,6 +32,8 @@ from _lib_constants import (  # noqa: F401
 )
 
 from _lib_io import (  # noqa: F401
+    YamlFileError,
+    exit_on_yaml_file_error,
     load_yaml_file,
     iter_yaml_files,
     load_tenant_configs,

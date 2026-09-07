@@ -34,6 +34,7 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_python import (  # noqa: E402
+    exit_on_yaml_file_error,
     format_json_report,
     load_tenant_configs as _load_tenant_configs_dir,
     load_yaml_file,
@@ -300,6 +301,7 @@ def print_report(results):
     print()
 
 
+@exit_on_yaml_file_error  # #1654: unreadable tenant/dictionary file → rc 2, named
 def main():
     """CLI entry point: Rule Pack gap analysis for custom rules."""
     parser = argparse.ArgumentParser(
