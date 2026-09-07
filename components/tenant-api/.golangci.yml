@@ -2,8 +2,17 @@ version: "2"
 # ⛔ Files behind a build tag are OUTSIDE the default build, so `golangci-lint
 # run ./...` never loads them — silently, with rc=0. `test/forgee2e/` sat there
 # until #1751. Enrolling the tag HERE rather than as a CI flag keeps a local
-# `run ./...` equivalent to the gate. Which tags need an entry is derived, not
-# listed, by tests/ops/test_go_lint_module_coverage.py.
+# `run ./...` equivalent to the gate.
+#
+# ⚠️ Loaded is not the same as reported: every file under `test/forgee2e/` is a
+# `_test.go`, so the blanket errcheck and forbidigo exclusions at the bottom of
+# this file apply to all of them. Measured at enrolment — those files carry 3
+# unchecked `resp.Body.Close()` that the exclusion drops. What the tag buys is
+# the linters this file does NOT exclude from tests.
+#
+# ⛔ The tags PRESENT in the tree are derived by
+# tests/ops/test_go_lint_module_coverage.py; which of them need an entry here
+# is a hand-written disposition in that file, and only `enrol` is verified.
 run:
   build-tags:
     - forge_e2e

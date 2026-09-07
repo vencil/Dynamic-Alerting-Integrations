@@ -4,9 +4,9 @@ version: "2"
 # coverage. Which modules must be enrolled is derived, not listed, by
 # tests/ops/test_go_lint_module_coverage.py.
 #
-# Linter set: module-agnostic rules run everywhere; the depguard/forbidigo
-# ratchets in the two production modules encode a layering this module does not
-# have, so they are not copied here.
+# Linter set: module-agnostic rules run everywhere. Not copied from the
+# production modules: depguard, whose rules are their dependency-direction
+# ratchets, and forbidigo, which is tenant-api's #932 shared-HTTP-pool ban.
 linters:
   default: standard
   enable:

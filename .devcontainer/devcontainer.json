@@ -20,8 +20,16 @@
       "version": "lts"
     },
     // 4. Go (threshold-exporter 開發用)
+    // golangciLintVersion is PINNED, not "latest": every .golangci.yml in this
+    // repo tells contributors a local `golangci-lint run ./...` is equivalent
+    // to the Go Lint gate, and that is only true while both sides run the same
+    // linter. Unpinned, the container got whatever was current when the image
+    // was last built and matched CI by coincidence. Bump together with
+    // GOLANGCI_VERSION in .github/workflows/validate.yaml — equality is
+    // asserted by tests/ops/test_go_lint_module_coverage.py.
     "ghcr.io/devcontainers/features/go:1": {
-      "version": "1.23"
+      "version": "1.23",
+      "golangciLintVersion": "2.12.2"
     },
     // 5. Python (確保有 pip)
     "ghcr.io/devcontainers/features/python:1": {

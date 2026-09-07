@@ -797,7 +797,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "3a2ff427bcf22aff82d86603d8beec10427d8d354016952eb73f04bde088e243",
+ "source_digest": "8a7976c91405cf3e7867d6859541f4ed124ccc0afc2bd31d863e81f94b2e7794",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -807,6 +807,7 @@
   "tests/dx/test_bat_label_integrity.py",
   "tests/dx/test_bump_docs.py",
   "tests/dx/test_bump_playbook_versions.py",
+  "tests/dx/test_canary_quotation_pins.py",
   "tests/dx/test_compile_custom_alerts.py",
   "tests/dx/test_converge_status.py",
   "tests/dx/test_coverage_delta.py",
@@ -892,6 +893,7 @@
   "tests/lint/test_check_bilingual_structure.py",
   "tests/lint/test_check_build_completeness.py",
   "tests/lint/test_check_changelog_no_tbd.py",
+  "tests/lint/test_check_chart_ship_surface.py",
   "tests/lint/test_check_cli_coverage.py",
   "tests/lint/test_check_cli_default_drift.py",
   "tests/lint/test_check_codename_gate.py",
@@ -1145,7 +1147,8 @@
    "tests/lint/test_check_commit_scope_doc.py"
   ],
   ".devcontainer/devcontainer.json": [
-   "tests/lint/test_check_devcontainer_dep_parity.py"
+   "tests/lint/test_check_devcontainer_dep_parity.py",
+   "tests/ops/test_go_lint_module_coverage.py"
   ],
   ".devcontainer/install-promtool.sh": [
    "tests/preview/test_promtool_pin_parity.py"
@@ -1240,7 +1243,8 @@
    "tests/ops/test_nightly_race_issue_policy.py"
   ],
   ".github/workflows/release.yaml": [
-   "tests/dx/test_verify_release.py"
+   "tests/dx/test_verify_release.py",
+   "tests/lint/test_check_chart_ship_surface.py"
   ],
   ".github/workflows/renovate.yaml": [
    "tests/ops/test_renovate_config.py"
@@ -1269,6 +1273,7 @@
    "tests/dx/test_scaffold_lint.py",
    "tests/helm/test_environments_overlay_sync.py",
    "tests/lint/test_check_admin_config_schema.py",
+   "tests/lint/test_check_chart_ship_surface.py",
    "tests/lint/test_check_confd_schema.py",
    "tests/lint/test_check_dev_rules_enforcement.py",
    "tests/lint/test_check_makefile_targets.py",
@@ -1311,6 +1316,7 @@
    "tests/dx/test_describe_tenant.py",
    "tests/dx/test_makefile_utf8_mode.py",
    "tests/dx/test_recover_index.py",
+   "tests/lint/test_check_chart_ship_surface.py",
    "tests/lint/test_check_makefile_targets.py",
    "tests/lint/test_check_orphan_lint.py",
    "tests/lint/test_check_threshold_reachability.py",
@@ -1422,7 +1428,8 @@
    "tests/lint/test_check_env_bool_parsers.py"
   ],
   "components/tenant-api/cmd/server/main.go": [
-   "tests/lint/test_check_env_bool_parsers.py"
+   "tests/lint/test_check_env_bool_parsers.py",
+   "tests/ops/test_go_lint_module_coverage.py"
   ],
   "components/tenant-api/internal/federation/token/manager.go": [
    "tests/ops/test_revoked_set_contract.py"
@@ -1671,6 +1678,9 @@
   "docs/internal/backend-compat-baseline.md": [
    "tests/rulepacks/test_vm_backend_parity.py"
   ],
+  "docs/internal/benchmark-playbook.md": [
+   "tests/dx/test_canary_quotation_pins.py"
+  ],
   "docs/internal/design-system-guide.md": [
    "tests/dx/test_bump_docs.py"
   ],
@@ -1885,7 +1895,8 @@
    "tests/lint/test_check_helm_values_secrets.py"
   ],
   "helm/recipe-preview": [
-   "tests/helm/test_image_tag_derivation.py"
+   "tests/helm/test_image_tag_derivation.py",
+   "tests/lint/test_check_chart_ship_surface.py"
   ],
   "helm/recipe-preview/templates/deployment.yaml": [
    "tests/lint/test_check_dev_bypass_manifest.py"
@@ -1898,7 +1909,8 @@
    "tests/helm/test_image_tag_derivation.py",
    "tests/helm/test_machine_identity_guard.py",
    "tests/helm/test_oauth2_gitlab_profile.py",
-   "tests/helm/test_single_writer_guard.py"
+   "tests/helm/test_single_writer_guard.py",
+   "tests/lint/test_check_chart_ship_surface.py"
   ],
   "helm/tenant-api/Chart.yaml": [
    "tests/dx/test_bump_docs.py"
@@ -1915,6 +1927,7 @@
    "tests/helm/test_machine_identity_guard.py",
    "tests/helm/test_oauth2_gitlab_profile.py",
    "tests/helm/test_single_writer_guard.py",
+   "tests/lint/test_check_chart_ship_surface.py",
    "tests/lint/test_check_dev_bypass_manifest.py",
    "tests/lint/test_check_single_writer_invariant.py",
    "tests/ops/test_nightly_scan_matrix_drift.py",
@@ -1935,11 +1948,15 @@
   "helm/threshold-exporter": [
    "tests/helm/test_image_tag_derivation.py",
    "tests/helm/test_optional_overrides_render.py",
+   "tests/lint/test_check_chart_ship_surface.py",
    "tests/lint/test_check_scrape_reachability.py",
    "tests/ops/test_operator_generate_v2.py"
   ],
   "helm/threshold-exporter/Chart.yaml": [
    "tests/lint/test_validate_docs_versions.py"
+  ],
+  "helm/threshold-exporter/README.md": [
+   "tests/lint/test_check_chart_ship_surface.py"
   ],
   "helm/threshold-exporter/templates/configmap.yaml": [
    "tests/helm/test_optional_overrides_render.py"
@@ -2098,7 +2115,8 @@
    "tests/lint/test_mkdocs_strict_check.py",
    "tests/lint/test_validate_docs_versions.py",
    "tests/ops/test_ci_path_filter_coverage.py",
-   "tests/ops/test_validate_config.py"
+   "tests/ops/test_validate_config.py",
+   "tests/shared/test_validate_all.py"
   ],
   "renovate.json": [
    "tests/ops/test_renovate_config.py"
@@ -2347,6 +2365,9 @@
    "tests/dx/test_atomic_write.py",
    "tests/dx/test_verify_diff.py"
   ],
+  "scripts/tools/dx/analyze_bench_history.py": [
+   "tests/dx/test_canary_quotation_pins.py"
+  ],
   "scripts/tools/dx/analyze_probe.py": [
    "tests/dx/test_analyze_probe.py"
   ],
@@ -2419,6 +2440,7 @@
    "tests/dx/test_paired_trend_watch.py"
   ],
   "scripts/tools/dx/paired_trend_watch.py": [
+   "tests/dx/test_canary_quotation_pins.py",
    "tests/dx/test_paired_trend_watch.py"
   ],
   "scripts/tools/dx/pr_preflight.py": [
@@ -2493,6 +2515,9 @@
   ],
   "scripts/tools/lint/check_build_completeness.py": [
    "tests/lint/test_check_build_completeness.py"
+  ],
+  "scripts/tools/lint/check_chart_ship_surface.py": [
+   "tests/lint/test_check_chart_ship_surface.py"
   ],
   "scripts/tools/lint/check_cli_default_drift.py": [
    "tests/lint/test_check_cli_default_drift.py"
@@ -2675,10 +2700,17 @@
   ],
   "scripts/tools/ops/bench-canary/canary_test.go": [
    "tests/dx/test_analyze_bench_history.py",
+   "tests/dx/test_canary_quotation_pins.py",
    "tests/dx/test_paired_trend_watch.py"
+  ],
+  "scripts/tools/ops/bench_filter.go": [
+   "tests/ops/test_go_lint_module_coverage.py"
   ],
   "scripts/tools/ops/bench_report_pr.sh": [
    "tests/ops/test_nightly_scan_matrix_drift.py"
+  ],
+  "scripts/tools/ops/bench_wrapper.sh": [
+   "tests/ops/test_go_lint_module_coverage.py"
   ],
   "scripts/tools/ops/blast_radius.py": [
    "tests/ops/test_blast_radius.py"
@@ -2784,6 +2816,7 @@
   ],
   "tests/dx": [
    "tests/dx/test_bump_docs.py",
+   "tests/dx/test_canary_quotation_pins.py",
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/ops/test_init_project.py"
   ],
@@ -2806,6 +2839,9 @@
   "tests/dx/fixtures/waveform/tolerances/selftest_tolerances.yaml": [
    "tests/dx/test_dx_json_stdout_contract.py"
   ],
+  "tests/dx/test_analyze_bench_history.py": [
+   "tests/dx/test_canary_quotation_pins.py"
+  ],
   "tests/dx/test_atomic_write.py": [
    "tests/dx/test_line_ending_policy.py"
   ],
@@ -2826,6 +2862,9 @@
   ],
   "tests/dx/test_generate_adr_index.py": [
    "tests/dx/test_line_ending_policy.py"
+  ],
+  "tests/dx/test_paired_trend_watch.py": [
+   "tests/dx/test_canary_quotation_pins.py"
   ],
   "tests/dx/test_pr_preflight_checks.py": [
    "tests/ops/test_generated_ci_artifacts.py"

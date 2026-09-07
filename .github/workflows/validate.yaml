@@ -48,7 +48,8 @@
 # merge.
 #
 # Checks:
-#   1. Go lint (golangci standard + depguard dependency-direction; both modules)
+#   1. Go lint (golangci standard + godoclint on every Go module; plus the
+#      depguard dependency-direction ratchets and, in tenant-api, forbidigo)
 #   2. Tenant config validation (schema + routing + policy)
 #   3. Custom rule linting (deny-list)
 #   4. Version consistency (bump_docs --check)
@@ -253,6 +254,23 @@ jobs:
           path: ~/.cache/vibe-dl-golangci
           key: ${{ runner.os }}-vibe-dl-golangci-v2.12.2
 
+      # Go module + build cache. Every other Go job in this repo pairs setup-go
+      # with one (ci.yml's three test legs, the four bench workflows); this job
+      # was the exception, and it type-checks five modules — including
+      # tests/alertmanager-inhibit, whose graph pulls the whole prometheus/
+      # alertmanager tree. Keyed on the union of every module's go.sum so a
+      # dependency bump anywhere invalidates it, with a prefix restore-key so
+      # the miss is warm rather than cold.
+      - name: Cache Go modules + build cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-go-lint-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-lint-
+
       - name: Install golangci-lint
         run: |
           GOLANGCI_VERSION=v2.12.2
@@ -284,8 +302,9 @@ jobs:
           bash scripts/ops/_verify_download.sh "$BIN/golangci-lint" "$GOLANGCI_BIN_SHA256"
           echo "$BIN" >> "$GITHUB_PATH"
           "$BIN/golangci-lint" version
-      # standard linters + depguard dependency-direction ratchet (per-module
-      # .golangci.yml: domain↛handler for tenant-api, logic↛net/http for exporter).
+      # The two production modules. Their per-module .golangci.yml adds the
+      # depguard dependency-direction ratchets (domain↛handler for tenant-api,
+      # logic↛net/http for exporter) on top of the standard set.
       - name: Lint tenant-api
         working-directory: components/tenant-api
         run: golangci-lint run ./...
