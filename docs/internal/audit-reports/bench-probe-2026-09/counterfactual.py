@@ -168,25 +168,33 @@ def load_module(path: Path, name: str):
     """
     if not path.is_file():
         raise CannotMeasure(f"tool not found: {path}")
-    spec = importlib.util.spec_from_file_location(name, path)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[name] = mod
-    # ⛔ The tool inserts two entries into `sys.path` at module scope, and this
-    # function is called again on every mutant run. Left alone they accumulate —
-    # harmless in a one-shot subprocess, not harmless if this file is ever
-    # imported into a pytest session, which is the open question about wiring
-    # it up. Measured by blind review: +2 entries per in-process `main()`.
-    # ⛔ Same for sys.modules. The tool imports a sibling `_lib_compat`; left in
-    # the cache, a SECOND `--tool` pointing at a different copy silently reuses
-    # the FIRST copy's sibling. Measured by blind review: the second run's
-    # module object was the first run's, file path and all.
+    # ⛔ EVERYTHING below is inside the guard. Round after round this function
+    # was fixed one statement at a time — first the exec, then SystemExit — and
+    # each time the statements just ABOVE the `try:` stayed exposed. Blind
+    # review reached them with `--tool` pointing at a `.txt`: importlib has no
+    # loader for that extension, `spec` comes back None, and
+    # `module_from_spec(None)` raised a bare AttributeError at rc 1 — the
+    # "a check failed" code, for a CLI typo. The boundary is the whole body now,
+    # not whichever line happened to break last.
+    # ⛔ `sys.path` AND `sys.modules` are both restored. The tool inserts two
+    # path entries at module scope and this function runs again for every
+    # mutant, so they accumulate; and its sibling `_lib_compat`, left in the
+    # cache, makes a SECOND `--tool` pointing at a different copy silently reuse
+    # the FIRST copy's sibling. Both measured by blind review.
     saved_path, saved_mods = list(sys.path), set(sys.modules)
     try:
+        spec = importlib.util.spec_from_file_location(name, path)
+        if spec is None or spec.loader is None:
+            raise CannotMeasure(
+                f"{path} is not importable as a Python module — importlib has"
+                " no loader for it (wrong extension?)")
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[name] = mod
         spec.loader.exec_module(mod)
-    # ⛔ SystemExit here too. The previous round added it to `drive()` and left
-    # THIS handler as `except Exception` — so a `sys.exit()` at the tool's module
-    # scope still walked out with no output and an exit code of its choosing.
-    # Found by blind review of that very fix.
+    except CannotMeasure:
+        raise
+    # ⛔ SystemExit is not an Exception; a `sys.exit()` at the tool's module
+    # scope would otherwise walk out with no output and a code of its choosing.
     except (Exception, SystemExit) as exc:                  # noqa: BLE001
         raise CannotMeasure(
             f"importing {path} raised {type(exc).__name__}: {exc}") from exc
@@ -725,7 +733,12 @@ def main(argv=None) -> int:
 
     try:
         path = args.tool.resolve()
-        blob = path.read_bytes() if path.is_file() else b""
+        # ⛔ Also inside the boundary. Blind review flagged this as a sibling of
+        # the import hole above and could not reproduce it (this sandbox runs as
+        # root, so chmod 000 does not deny a read). Unreproduced is not absent,
+        # and the guard costs one call — justified by the failure mode, not the
+        # odds.
+        blob = drive("reading the tool file", path.read_bytes) if path.is_file() else b""
         print("=" * 74)
         print("IDENTITY OF THE THING MEASURED")
         print("=" * 74)

@@ -148,6 +148,7 @@ python3 -B docs/internal/audit-reports/bench-probe-2026-09/counterfactual.py
 - **工具執行期崩潰**（`render_ci` 裡一個 `NameError`）以裸 traceback + rc 1 逃出。
 - **`SystemExit` 不是 `Exception`**：工具裡一句 `sys.exit()` 會**一個字都不印**地把出口碼交給工具決定。修了 `drive()` 之後**同一個洞還留在 `load_module`**，下一輪才被抓到。
 - **harness 自己的刮取碼**沒有保護：工具成功印出但欄數不對的表，會在 harness 內部炸成 `IndexError` + rc 1。
+- **`load_module` 一次只修「上次壞掉的那一行」，`try:` 上面的敘述句每一輪都還露在外面。** `--tool` 指到一個 `.txt`（CLI 打錯字就會發生）：importlib 找不到 loader、`spec` 回 `None`、`module_from_spec(None)` 拋裸 `AttributeError` 走 rc 1。⇒ 邊界改成**整個函式本體**，不是最後壞掉的那一行。
 
 方法本身的：
 
