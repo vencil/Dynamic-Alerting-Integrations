@@ -20,6 +20,7 @@ import sys
 import pytest
 
 import entrypoint  # noqa: E402  (path set by conftest.py)
+import _lib_exitcodes  # noqa: E402  (scripts/tools on sys.path via conftest)
 from _lint_helpers import parse_build_sh_tools, BUILD_EXEMPT
 
 DA_TOOLS_DIR = os.path.join(
@@ -616,3 +617,11 @@ class TestBumpDocsToolsRuleCoverage:
             "bump_docs 沒有涵蓋 da-tools README 標題版號 "
             "(# da-tools (vX.Y.Z)) 的規則"
         )
+
+
+def test_dispatcher_mirror_of_the_exit_code_ssot_does_not_drift():
+    """entrypoint.py mirrors EXIT_CALLER_ERROR as a literal on purpose (it is
+    zero-import from _lib_*); this is the one place the mirror is checked
+    against the SSOT so a renumbering there cannot leave the dispatcher on
+    the old value (blind review, #1406)."""
+    assert entrypoint.EXIT_CALLER_ERROR == _lib_exitcodes.EXIT_CALLER_ERROR

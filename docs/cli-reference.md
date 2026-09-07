@@ -97,6 +97,7 @@ da-tools <command> --help
 | **未知子命令** | `2` | 呼叫端錯誤（[#1406](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1406) 起；之前是 `1`）。訊息一律走 stderr，stdout 為空 |
 | **映像內找不到子命令對應的腳本** | `2` | 同上；stderr 點名缺的腳本檔與已搜尋路徑 |
 | 子命令自己的結束碼 | 原封透傳 | 工具在同一行程內以 `__main__` 執行，無重映射——語意見各命令章節的結束碼表與 SSOT [`_lib_exitcodes.py`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/scripts/tools/_lib_exitcodes.py) |
+| 子命令拋出未捕捉的例外（traceback） | `1` | Python 直譯器的預設；分派層刻意不包 `try/except`（否則透傳就壞了）。這是與「有發現」的 `1` 仍撞碼的殘餘——讀到 `1` 時請看 stderr 有無 `Traceback` |
 
 > ⚠️ 前兩列曾回 `1`，與各子命令「有發現」的 `1` 撞碼——`docker run … da-tools:<移動的 tag> <子命令>` 在子命令改名、或映像尚未收錄該子命令時，在 CI 看起來與「工具正常跑完並找到東西」完全同形（且 stdout 是一份空報告）。消費端請把 `2` 當「工具沒跑」處理，不要與 `1` 合併判定。
 

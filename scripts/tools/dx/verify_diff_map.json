@@ -71,6 +71,7 @@
    "tests/ops/test_scaffold_tenant.py",
    "tests/ops/test_threshold_recommend.py",
    "tests/ops/test_validate_config.py",
+   "tests/shared/test_entrypoint.py",
    "tests/shared/test_tool_exit_codes.py",
    "tests/shared/test_write_failure_class.py",
    "tests/shared/test_yaml_file_error.py"
@@ -819,7 +820,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "9c6e3bb74f1bb9d6de36e4501bdb6686afb813a49bd1c03f2d750d074bdab3e3",
+ "source_digest": "5e29f06b42f9d178c1029c6768f28fc933b533ae0efbc605ebabb4bd8fac66de",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",

@@ -9,7 +9,8 @@ image built from a tag whose tree does not contain the program they invoke:
   1. `k8s/03-monitoring/cronjob-threshold-govern.yaml` runs the entrypoint
      subcommand `threshold-govern`. `tools/v2.9.0`'s `entrypoint.py` has no
      such key in `COMMAND_MAP` (the subcommand landed after the tag), so the
-     weekly Job dies with `Unknown command` + exit 1 — silently, because the
+     weekly Job dies with `Unknown command` + a non-zero exit (1 on images
+     before #1406, 2 after) — silently, because the
      repo has NO job-failure alert at all (`kube_job_failed` /
      `kube_job_status_failed` appear nowhere in it) and the one alert that
      watches this CronJob, `ThresholdGovernanceStale`, keys on a series
@@ -747,8 +748,8 @@ def evaluate(workload: Workload) -> str | None:
         script = command_map.get(workload.entry)
         if script is None:
             return (f"entrypoint subcommand '{workload.entry}' is not in "
-                    f"COMMAND_MAP at {workload.git_tag} (the container exits 1 "
-                    f"with `Unknown command`)")
+                    f"COMMAND_MAP at {workload.git_tag} (the container exits "
+                    f"non-zero with `Unknown command`: 1 before #1406, 2 after)")
         if script not in tool_files:
             return (f"entrypoint subcommand '{workload.entry}' maps to {script}, "
                     f"which is NOT in build.sh TOOL_FILES at {workload.git_tag} "
