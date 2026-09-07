@@ -726,7 +726,7 @@ fatal: not a git repository: /workspaces/vibe-k8s-lab/.claude/worktrees/<name>/C
 
 1. **Docstring 第一行**：scope statement 是否反映新功能？例：S#88 加 `.html` scan + `--report-orphans` mode 時，原 docstring「Detect JSX/CSS references...」需改為「Detect JSX/CSS/HTML references... (with --report-orphans discovery mode)」。**Verification**：`head -3 scripts/tools/lint/check_<name>.py` 人眼檢視。
 2. **`scripts/tools/validate_all.py` 對應 row**：description string 是否與新 scope 一致？**Verification**：`grep -n "<lint_name>" scripts/tools/validate_all.py` 人眼比對。
-3. **Auto-generated tool-map**：跑 `python3 scripts/tools/dx/generate_tool_map.py --check` (zh) + `--check --lang en`。**這個 hook 在 commit-time 自動跑**（`tool-map-check`），但只 catch「已改 docstring 但沒 regen」class — **不 catch「該改 docstring 但沒改」class**。後者唯一防線是 step 1 人眼檢查。
+3. **Auto-generated tool-map**：跑 `python3 scripts/tools/dx/generate_tool_map.py --check`（預設 `--lang all`，一次驗 zh+en）。**這個 hook 在 commit-time 自動跑**（`tool-map-check`），但只 catch「已改 docstring 但沒 regen」class — **不 catch「該改 docstring 但沒改」class**。後者唯一防線是 step 1 人眼檢查。
 
 **Anti-pattern**：在 commit message 寫「Wiring triple synced ✓」但實際只 grep 不 verify。**正解**：Pass 2 trailer 寫具體 verification command 跑出的結果，而非泛 tick。例：
 

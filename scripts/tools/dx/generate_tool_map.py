@@ -5,9 +5,9 @@
 docs/internal/tool-map.md，確保工具清單與實際檔案同步。
 
 用法:
-  python3 scripts/tools/generate_tool_map.py              # 印出
-  python3 scripts/tools/generate_tool_map.py --generate    # 寫入 tool-map.md
-  python3 scripts/tools/generate_tool_map.py --check       # CI drift 偵測
+  python3 scripts/tools/dx/generate_tool_map.py              # 印出（zh + en）
+  python3 scripts/tools/dx/generate_tool_map.py --generate    # 寫入 tool-map.md + tool-map.en.md
+  python3 scripts/tools/dx/generate_tool_map.py --check       # CI drift 偵測（預設 --lang all）
 """
 import argparse
 import ast
@@ -73,6 +73,13 @@ CATEGORY_ORDER = ["ops", "dx", "lint"]
 
 TOOL_MAP_EN = REPO_ROOT / "docs" / "internal" / "tool-map.en.md"
 
+# #1542: placeholder written into the tool map when a tool file cannot be
+# read at all (wrong encoding, a directory named `x.py`, permissions).
+# The file stays IN the inventory — filtering it out at the scan layer
+# would silently move the published count — and the placeholder is what
+# `--check` then compares, so the drift is visible instead of a traceback.
+UNREADABLE_DESCRIPTION = "⚠️ description unreadable"
+
 
 def extract_tool_description(filepath: Path) -> str:
     """Extract description from a Python tool file.
@@ -80,6 +87,14 @@ def extract_tool_description(filepath: Path) -> str:
     Strategy:
     1. Parse AST and read module docstring first line.
     2. Fall back to first comment-style description.
+
+    A file that parses but carries no docstring, or does not parse at all,
+    yields "" (an existing test pins the SyntaxError case; do not widen it).
+    A file that cannot be READ — not UTF-8, a directory named `x.py`, no
+    permission — yields `UNREADABLE_DESCRIPTION` and one WARNING line on
+    stderr (#1542). Before that branch existed the whole generator
+    tracebacked, and because `--check --lang all` is the `tool-map-check`
+    pre-commit hook, the crash read as tool-map drift.
     """
     try:
         source = filepath.read_text(encoding="utf-8")
@@ -95,6 +110,15 @@ def extract_tool_description(filepath: Path) -> str:
             return first_line.strip()
     except SyntaxError:
         pass
+    except (UnicodeDecodeError, OSError) as exc:
+        # stderr on purpose: in no-flag mode stdout IS the document.
+        try:
+            shown = filepath.relative_to(REPO_ROOT)
+        except ValueError:
+            shown = filepath
+        print(f"WARNING: {shown} unreadable ({type(exc).__name__}: {exc}); "
+              f"tool-map description set to placeholder", file=sys.stderr)
+        return UNREADABLE_DESCRIPTION
 
     return ""
 
@@ -281,12 +305,19 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
+    # #1696: every machine caller (Makefile, pre-commit, validate_all,
+    # check_pr_scope_drift) passes `--check --lang all`, so the default
+    # follows them: a bare `--check` verifies both files, and the fix
+    # hints below echo the invocation so following one regenerates
+    # exactly what was checked.
     parser.add_argument("--generate", action="store_true",
-                        help="Write tool-map.md (and .en.md with --lang en)")
+                        help="Write tool-map.md and tool-map.en.md "
+                             "(narrow with --lang)")
     parser.add_argument("--check", action="store_true",
-                        help="CI mode: exit 1 if tool-map.md is outdated")
-    parser.add_argument("--lang", choices=["zh", "en", "all"], default="zh",
-                        help="Language: zh (default), en, or all")
+                        help="CI mode: exit 1 if tool-map.md or "
+                             "tool-map.en.md is outdated")
+    parser.add_argument("--lang", choices=["zh", "en", "all"], default="all",
+                        help="Language: all (default), zh, or en")
     parser.add_argument("--safe", action="store_true",
                         help="Write via sibling .tmp + atomic os.replace "
                              "(FUSE interruption safety; v2.8.0 Trap #60)")
@@ -326,7 +357,7 @@ def main():
         elif args.check:
             if not target.exists():
                 print(f"❌ {target.relative_to(REPO_ROOT)} does not exist. "
-                      f"Run with --generate first.")
+                      f"Run with --generate --lang {args.lang} first.")
                 sys.exit(EXIT_VIOLATION)
 
             existing = target.read_text(encoding="utf-8")
@@ -345,7 +376,8 @@ def main():
                 detail_str = (f" ({'; '.join(details)})"
                               if details else "")
                 print(f"❌ {target.relative_to(REPO_ROOT)} is outdated"
-                      f"{detail_str}. Run with --generate to update.")
+                      f"{detail_str}. Run with --generate --lang {args.lang} "
+                      f"to update.")
                 sys.exit(EXIT_VIOLATION)
 
             print(f"✅ Tool map ({lang}) is up to date.")
