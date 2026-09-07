@@ -87,6 +87,12 @@ class TestLiveRepoIsClean:
             "helm/threshold-exporter",
             "helm/recipe-preview",
             "helm/tenant-api",
+            # #1352 case A: release-portal published a Docker image and nothing
+            # else while components/da-portal/README.md taught customers to pull
+            # a chart over OCI. Adding the package/push steps put da-portal on
+            # this list — and that is what makes the DECLARED entry for it, and
+            # the .tgz-contents wiring below, load-bearing rather than decorative.
+            "helm/da-portal",
         }
         # tenant-api is discovered from the release workflow, not from DECLARED.
         assert any(
@@ -752,6 +758,29 @@ class TestPackageVerificationWiring:
         )
         assert gate.check_package_verification_wiring(repo) == []
         assert gate.discover_shipping_charts(repo) == {}
+
+
+# ---------------------------------------------------------------------------
+# unreadable inputs
+# ---------------------------------------------------------------------------
+# ⛔ monkeypatch, not chmod: the dev container runs as root (#1264), so a
+# `chmod 000` fixture passes in CI and silently exercises nothing locally.
+def test_an_unlistable_workflow_dir_is_an_error(tmp_path: Path, monkeypatch) -> None:
+    repo = _make_repo(tmp_path)
+    monkeypatch.setattr(
+        Path, "iterdir", lambda self: (_ for _ in ()).throw(OSError("boom")))
+    with pytest.raises(gate.CallerError) as exc:
+        gate.discover_pushed_charts(repo)
+    assert "cannot list" in str(exc.value)
+
+
+def test_an_unreadable_call_site_file_is_an_error(tmp_path: Path, monkeypatch) -> None:
+    repo = _make_repo(tmp_path)
+    monkeypatch.setattr(
+        Path, "read_text", lambda self, **kw: (_ for _ in ()).throw(OSError("boom")))
+    with pytest.raises(gate.CallerError) as exc:
+        gate.discover_pushed_charts(repo)
+    assert "cannot read" in str(exc.value)
 
 
 # ---------------------------------------------------------------------------

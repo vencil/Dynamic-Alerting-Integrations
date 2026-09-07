@@ -52,8 +52,8 @@ Token 只能存在 VM 的 `~/.git-credentials` 和 `~/.bashrc`（session 結束�
 |----------|------|---------------|
 | `ghcr.io/vencil/threshold-exporter` | `cmd/threshold-exporter/` | `exporter/v*` |
 | `ghcr.io/vencil/da-tools` | `scripts/tools/` | `tools/v*` |
-| `ghcr.io/vencil/da-portal` | `portal/` | `portal/v*` |
-| `ghcr.io/vencil/recipe-preview` (+ OCI chart) | `scripts/tools/dx/`（bundled eval core）| `recipe-preview/v*` |
+| `ghcr.io/vencil/da-portal` (+ OCI chart) | `portal/` | `portal/v*` |
+| `ghcr.io/vencil/recipe-preview` (+ OCI chart) ⛔ **尚未發布**（#1352 案例 B：`recipe-preview/v*` 零 tag，這條線從未被切過，兩個產物今天都不存在）| `scripts/tools/dx/`（bundled eval core）| `recipe-preview/v*` |
 | `ghcr.io/vencil/dynamic-alerting` (platform OCI) | Helm chart + Rule Packs | `v*` |
 | `ghcr.io/vencil/tenant-api` | `cmd/tenant-api/` | `tenant-api/v*` |
 
@@ -150,8 +150,8 @@ make pre-tag                    # 一鍵整合（含以上 + draft-advisory-chec
 | Platform (docs) | `v1.9.0` | `git tag v1.9.0` | **不觸發 build**（僅作 GitHub Release 錨點） |
 | Exporter (Go) | `exporter/v1.8.0` | `make release-tag-exporter`（從 Chart.yaml 推導） | `release-exporter` job → Docker image + Helm chart |
 | da-tools (Python) | `tools/v1.9.0` | `git tag tools/v1.9.0` | `release-da-tools` job → Docker image |
-| da-portal (Static) | `portal/v2.0.0` | `make release-tag-portal` | `release-portal` job → Docker image |
-| recipe-preview (Python) | `recipe-preview/v2.9.0` | `make release-tag-recipe-preview`（從 Chart.yaml 推導；#657 同步升） | `release-recipe-preview` job → Docker image + Helm chart |
+| da-portal (Static) | `portal/v2.0.0` | `make release-tag-portal` | `release-portal` job → Docker image + Helm chart（#1352 案例 A 起） |
+| recipe-preview (Python) | `recipe-preview/v2.9.0` ⛔ 從未切過 | `make release-tag-recipe-preview`（從 Chart.yaml 推導；#657 同步升） | `release-recipe-preview` job → Docker image + Helm chart（job 完整可用，但至今沒有任何一次執行紀錄） |
 | tenant-api (Go) | `tenant-api/v2.4.0` | `git tag tenant-api/v2.4.0` | `release-tenant-api` job → Docker image + Helm chart |
 
 **Workflow 整併：** `release.yaml` 是唯一的 release workflow（`release-exporter.yaml` 和 `release-tools.yaml` 已刪除）。`v*` tag 不在 trigger 列表中，不會觸發任何 CI job。
@@ -159,7 +159,7 @@ make pre-tag                    # 一鍵整合（含以上 + draft-advisory-chec
 **六線版號策略：** 六條獨立版號線（`v*` platform、`exporter/v*`、`tools/v*`、`portal/v*`、`recipe-preview/v*`、`tenant-api/v*`）各有各的生命週期。不是所有 component 每次都升版；僅推有 code change 的版號線。
 
 > **⛔ Component tag 版號 = 該 component 的 `Chart.yaml` `version`**（**不是** `appVersion`，**不是**平台線版號）。`release.yaml` 每個 component job 起手有 `Verify Chart.yaml version matches tag` 硬 gate：`grep '^version:' <chart>` ≠ tag → `ERROR: Chart.yaml version (X) != tag (Y)` → fail。
-> - **exporter / portal / recipe-preview** chart 與 release 線同步升（feature PR 不 bump），故其 tag = 平台同版（如 `exporter/v2.9.0`、`recipe-preview/v2.9.0`）。recipe-preview 之所以**同步升而非獨立 cadence**：它打包平台 compiler 的 byte-identical 快照，獨立版號會讓 bundled compiler 悄悄漂離平台 rule-pack（#657 PR-D2）。
+> - **exporter / portal / recipe-preview** chart 與 release 線同步升（feature PR 不 bump），故其 tag = 平台同版（如 `exporter/v2.9.0`、`recipe-preview/v2.9.0`）。recipe-preview 之所以**同步升而非獨立 cadence**：它打包平台 compiler 的 byte-identical 快照，獨立版號會讓 bundled compiler 悄悄漂離平台 rule-pack（#657 PR-D2）。⛔ 這是**設計**不是**紀錄**：`recipe-preview/v2.9.0` 只是這條規則推導出來的名字，實際上 origin 沒有任何 `recipe-preview/v*` tag（#1352 案例 B），所以那個「同步升」至今一次都沒發生過。
 > - **tenant-api** chart 是 **per-change**（每次 PR bump，dev-rule #7），版號會走在平台線前面，故 tenant-api **以自己的 chart 版號發版**（如 chart 2.9.7 → `tenant-api/v2.9.7`），**不跟平台 2.9.0**。硬壓 chart 回平台版 = 降級，禁止。
 
 ```bash

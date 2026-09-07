@@ -820,7 +820,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "03124b516638a1dd5e094d9f81711e69015715882d15971727ff4030646c122f",
+ "source_digest": "8f77b46923598ff063d4929b86165c3dd5ce557f18f93b2fdc91649574b8433a",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -917,6 +917,7 @@
   "tests/lint/test_check_build_completeness.py",
   "tests/lint/test_check_changelog_no_tbd.py",
   "tests/lint/test_check_chart_package_contents.py",
+  "tests/lint/test_check_chart_pull_surface.py",
   "tests/lint/test_check_chart_ship_surface.py",
   "tests/lint/test_check_cli_coverage.py",
   "tests/lint/test_check_cli_default_drift.py",
@@ -1277,6 +1278,7 @@
   ],
   ".github/workflows/release.yaml": [
    "tests/dx/test_verify_release.py",
+   "tests/lint/test_check_chart_pull_surface.py",
    "tests/lint/test_check_chart_ship_surface.py"
   ],
   ".github/workflows/renovate.yaml": [
@@ -1377,6 +1379,7 @@
    "tests/dx/test_generate_adr_index.py",
    "tests/dx/test_verify_diff.py",
    "tests/lint/test_check_bilingual_structure.py",
+   "tests/lint/test_check_chart_pull_surface.py",
    "tests/lint/test_check_cli_coverage.py",
    "tests/lint/test_check_doc_links.py",
    "tests/lint/test_check_planning_status_sync.py",
@@ -1396,6 +1399,8 @@
    "tests/ops/test_ci_path_filter_coverage.py"
   ],
   "components/da-portal/README.md": [
+   "tests/lint/test_check_chart_pull_surface.py",
+   "tests/lint/test_check_chart_ship_surface.py",
    "tests/ops/test_ci_path_filter_coverage.py"
   ],
   "components/da-portal/nginx-main.conf": [
@@ -1831,6 +1836,7 @@
    "tests/helm/test_oauth2_gitlab_profile.py",
    "tests/helm/test_portal_relay_token_guard.py",
    "tests/helm/test_portal_static_tier_guard.py",
+   "tests/lint/test_check_chart_ship_surface.py",
    "tests/lint/test_check_iac_helm.py",
    "tests/shared/test_helm_portal.py"
   ],
@@ -2575,6 +2581,9 @@
    "tests/lint/test_check_chart_package_contents.py",
    "tests/lint/test_check_chart_ship_surface.py"
   ],
+  "scripts/tools/lint/check_chart_pull_surface.py": [
+   "tests/lint/test_check_chart_pull_surface.py"
+  ],
   "scripts/tools/lint/check_chart_ship_surface.py": [
    "tests/lint/test_check_chart_ship_surface.py"
   ],
@@ -3156,6 +3165,7 @@
    "tests/shared/test_json_stdout_contract.py"
   ],
   "tests/ops/test_ci_path_filter_coverage.py": [
+   "tests/lint/test_check_chart_pull_surface.py",
    "tests/lint/test_counterexample_coverage.py",
    "tests/lint/test_e2e_spec_lint.py",
    "tests/ops/test_ci_aggregate_gate_contract.py",

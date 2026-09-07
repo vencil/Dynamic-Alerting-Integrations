@@ -135,6 +135,27 @@ DECLARED: Dict[str, Dict[str, Tuple[str, str]]] = {
         ),
         ".helmignore": (SHIP, "helm's own packing control file"),
     },
+    "helm/da-portal": {
+        "Chart.yaml": (SHIP, "chart metadata — helm requires it"),
+        "values.yaml": (SHIP, "the chart's default values"),
+        ".helmignore": (SHIP, "helm's own packing control file"),
+        "values-tier1.yaml": (
+            SHIP,
+            "#1352 case A: a customer-facing deployment profile, not an "
+            "internal fixture — components/da-portal/README.md tells the "
+            "reader to deploy Tier-1 with `-f values-tier1.yaml`. Now that the "
+            "chart reaches customers over OCI, dropping it would reproduce "
+            "this ticket in miniature: documentation naming a file the "
+            "artifact does not contain.",
+        ),
+        "values-tier2.yaml": (SHIP, "#1352 case A: the Tier-2 half of that pair."),
+        "README.md": (
+            EXCLUDE,
+            "this chart's .helmignore names it, so `helm package` drops it. "
+            "Left excluded to match helm/threshold-exporter rather than "
+            "changing what the first published da-portal .tgz contains.",
+        ),
+    },
     "helm/recipe-preview": {
         "Chart.yaml": (SHIP, "chart metadata — helm requires it"),
         "values.yaml": (SHIP, "the chart's default values"),
@@ -154,6 +175,17 @@ DECLARED: Dict[str, Dict[str, Tuple[str, str]]] = {
 
 _HELM_PACKAGE_RE = re.compile(r"helm\s+package\s+(?P<target>[^\s]+)")
 _HELM_PUSH_RE = re.compile(r"helm\s+push\b")
+# The chart NAME out of a `helm push .build/<name>-<version>.tgz` call. The
+# version half is templated by design and in three dialects — GitHub Actions
+# `${{ … }}`, Make `$(…)`, shell `${…}` — so it is matched and discarded. Only
+# a templated NAME is unresolvable, and that is refused rather than skipped
+# (see discover_pushed_charts()). The Make dialect was missing from the first
+# draft and the refusal is what surfaced it, which is the behaviour this gate
+# wants from its own machinery too.
+_PUSHED_ARCHIVE_RE = re.compile(
+    r"helm\s+push\s+(?:\S*/)?(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*?)"
+    r"-(?:\$\{\{[^}]*\}\}|\$\([^)]*\)|\$\{[^}]*\}|[0-9][A-Za-z0-9.+_-]*)\.tgz"
+)
 # A comment that merely mentions `helm package` is not a call site. Found by
 # a fixture whose own comment read "# no helm package in this workflow" and
 # was counted as one — the shape a prose-matching guard fails in.
@@ -255,6 +287,63 @@ def discover_shipping_charts(repo_root: Path = REPO_ROOT) -> Dict[str, List[str]
                         f".github/workflows/{wf.name}:{n}"
                     )
 
+    return sites
+
+
+def _call_site_files(repo_root: Path) -> List[Path]:
+    """Makefile + every workflow — the two places a chart is packaged or pushed."""
+    found: List[Path] = []
+    makefile = repo_root / "Makefile"
+    if makefile.is_file():
+        found.append(makefile)
+    wf_dir = repo_root / ".github" / "workflows"
+    if wf_dir.is_dir():
+        try:
+            found.extend(w for w in sorted(wf_dir.iterdir())
+                         if w.suffix in {".yaml", ".yml"})
+        except OSError as exc:
+            raise CallerError(f"cannot list {wf_dir}: {exc}") from exc
+    return found
+
+
+def discover_pushed_charts(repo_root: Path = REPO_ROOT) -> Dict[str, List[str]]:
+    """Chart NAME -> the call sites that `helm push` it. Derived, not enumerated.
+
+    Keyed by the chart's own name (the .tgz basename, which helm takes from
+    Chart.yaml `name`), because that — not the source directory — is what a
+    customer spells after `.../charts/` when they pull it.
+
+    Packaging is not publishing: `helm package` writes a local archive, and a
+    chart can be packaged in CI for verification and never pushed anywhere.
+    discover_shipping_charts() answers "what goes into an archive"; this answers
+    "what a customer can actually pull", and #1352 is what the gap between them
+    looks like from the customer's side.
+    """
+    sites: Dict[str, List[str]] = {}
+    for path in _call_site_files(repo_root):
+        rel = path.relative_to(repo_root).as_posix()
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            raise CallerError(f"cannot read {path}: {exc}") from exc
+        for n, line in enumerate(text.splitlines(), 1):
+            if _COMMENT_RE.match(line):
+                continue
+            if not _HELM_PUSH_RE.search(line):
+                continue
+            m = _PUSHED_ARCHIVE_RE.search(line)
+            if m is None:
+                # ⛔ Never `continue`. A push this function cannot read is a
+                # chart reaching customers that the caller will not know about,
+                # and silently dropping it is the fail-OPEN direction for every
+                # gate built on this answer.
+                raise CallerError(
+                    f"{rel}:{n} pushes a chart archive this gate cannot name "
+                    f"({line.strip()!r}); teach _PUSHED_ARCHIVE_RE about the "
+                    f"spelling rather than letting a published chart go "
+                    f"uncounted"
+                )
+            sites.setdefault(m.group("name"), []).append(f"{rel}:{n}")
     return sites
 
 
