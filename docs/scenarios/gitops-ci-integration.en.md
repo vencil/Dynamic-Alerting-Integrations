@@ -232,9 +232,11 @@ Runs only on PRs. Generates Alertmanager config fragments and computes blast rad
 mkdir -p .output
 da-tools generate-routes --config-dir conf.d/ \
   -o .output/alertmanager-routes.yaml
-# ⛔ Do not add --validate to the same call: it returns before -o is used, so
-# it prints OK and writes nothing (#1423). Validate in a separate run:
-da-tools generate-routes --config-dir conf.d/ --dry-run --validate
+# ⛔ Do not add --validate to the same call: it returns before -o is used
+# (#1423), and the tool now refuses the combination outright (exit 2; #1650).
+# Validate in a separate run (--validate does not read --dry-run either — also
+# exit 2):
+da-tools generate-routes --config-dir conf.d/ --validate
 
 # Compute blast radius (which tenants, which metrics affected)
 # In CI, first extract the base branch's conf.d/ into conf.d.base/
@@ -441,10 +443,10 @@ repos:
         pass_filenames: false
 
       - id: da-generate-routes
-        name: Generate Alertmanager routes (dry-run)
+        name: Generate Alertmanager routes (validate)
         entry: >-
           ghcr.io/vencil/da-tools:latest
-          generate-routes --config-dir /src/conf.d --dry-run --validate
+          generate-routes --config-dir /src/conf.d --validate
         language: docker_image
         files: ^conf\.d/.*\.ya?ml$
         pass_filenames: false

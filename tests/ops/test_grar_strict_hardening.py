@@ -334,9 +334,11 @@ class TestStrictBypassScenariosCLI:
         _wy(d, "tenant-fin.yaml", {"tenants": {"tenant-fin": {"cpu": "90"}}})
 
     def _run(self, config_dir, *flags):
+        # #1650: `--dry-run` is not read under `--validate` and the tool now
+        # exits 2 on the pair; this runner used to pass both.
         return subprocess.run(
             [sys.executable, _SCRIPT, "--config-dir", config_dir,
-             "--dry-run", "--validate", *flags],
+             "--validate", *flags],
             capture_output=True, text=True, encoding="utf-8", timeout=60)
 
     @pytest.mark.parametrize("defaults_patch,constraints,raw_policy,expect", [

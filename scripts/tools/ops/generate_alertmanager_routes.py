@@ -369,6 +369,138 @@ def _print_config_summary(routing_configs: dict, dedup_configs: dict, enforced_r
           f"{safe_label(', '.join(sorted(dedup_configs.keys())))}")
 
 
+_DEFAULT_NAMESPACE = "monitoring"
+_DEFAULT_CONFIGMAP = "alertmanager-config"
+
+
+def _mode_of(args: argparse.Namespace) -> str:
+    """The ONE mode this invocation runs, by the precedence main() applies.
+
+    `--validate` wins over everything: `_validate_mode` exits before the
+    apply / output-configmap / render branches are reached, so under
+    `--validate` those flags are as unread as any other (#1616 measured the
+    `--validate --output-configmap --base-config` shape). `--apply` and
+    `--output-configmap` are mutually exclusive by argparse.
+    """
+    if args.validate:
+        return "--validate"
+    if args.apply:
+        return "--apply"
+    if args.output_configmap:
+        return "--output-configmap"
+    return "render"
+
+
+def _flags_this_mode_never_reads(args: argparse.Namespace) -> list[tuple[str, str, str]]:
+    """#1650: every supplied flag the current mode will never look at.
+
+    Returns ``(flag, why, remedy)`` triples. "Supplied" is "not the argparse
+    default": ``is not None`` for the path / string flags (which is why
+    ``--namespace`` / ``--configmap`` default to ``None`` and are resolved
+    after this check), ``True`` for the store_true ones.
+
+    The read sites, from main() and the mode handlers (line numbers as of
+    this change; the matrix is what matters, the numbers will drift):
+
+        flag          --validate  --apply  --output-configmap  render
+        -o/--output   never       never    unless --dry-run    unless --dry-run
+        --dry-run     never       never    read                read
+        --namespace   never       read     read                never
+        --configmap   never       read     read                never
+        --yes         never       read     never               never
+
+    Measured on main before this: `--validate -o <path>` exited 0 with the
+    file absent and stderr empty — even for a path that could not have been
+    written, because nothing ever tried. The operator's signal was identical
+    to "all good".
+
+    ⛔ Every remedy is a combination argparse ACCEPTS and that this table says
+    is READ. The #1616 first cut told `--apply` users to add
+    `--output-configmap`, which argparse forbids; the tests here run each
+    prescription and check it does not come back through this door.
+    """
+    mode = _mode_of(args)
+    validating = mode == "--validate"
+    applying = mode == "--apply"
+    names_a_configmap = mode in ("--apply", "--output-configmap")
+    found: list[tuple[str, str, str]] = []
+
+    if args.output is not None:
+        if validating:
+            found.append((
+                "-o/--output",
+                "--validate returns before anything is written, so the file "
+                "at -o is never created (not even checked for writability)",
+                "Drop -o, or drop --validate if you meant to write the file — "
+                "validate in one run and write in another."))
+        elif applying:
+            found.append((
+                "-o/--output",
+                "--apply writes into the cluster's ConfigMap, not to a file",
+                "Drop -o. (To write the merged ConfigMap to a file instead, "
+                "use --output-configmap -o <file>; that mode cannot be "
+                "combined with --apply.)"))
+        elif args.dry_run:
+            found.append((
+                "-o/--output",
+                "--dry-run prints the preview to stdout and never writes a file",
+                "Drop --dry-run to write the file, or drop -o to preview."))
+
+    if args.dry_run:
+        if validating:
+            found.append((
+                "--dry-run",
+                "--validate returns before the render step, so there is no "
+                "preview to print — and --validate never writes a file anyway",
+                "Drop --dry-run, or drop --validate if you meant to preview "
+                "the output."))
+        elif applying:
+            found.append((
+                "--dry-run",
+                "--apply has no preview: it merges into the cluster or it "
+                "does nothing",
+                "Drop --dry-run. To preview the merged YAML without touching "
+                "the cluster, use --output-configmap --dry-run (cannot be "
+                "combined with --apply)."))
+
+    for flag, value in (("--namespace", args.namespace),
+                        ("--configmap", args.configmap)):
+        if value is None or names_a_configmap:
+            continue
+        if validating:
+            found.append((
+                flag,
+                "--validate returns before any ConfigMap is named or touched",
+                f"Drop {flag}, or drop --validate if you meant to --apply or "
+                f"--output-configmap."))
+        else:
+            found.append((
+                flag,
+                "plain render mode emits a routing fragment, which has no "
+                "ConfigMap to name",
+                f"Add --apply or --output-configmap, or drop {flag}."))
+
+    if args.yes and not applying:
+        if validating:
+            found.append((
+                "--yes",
+                "--validate never prompts, and never applies",
+                "Drop --yes, or drop --validate if you meant to --apply."))
+        elif mode == "--output-configmap":
+            found.append((
+                "--yes",
+                "--output-configmap writes YAML and never touches the "
+                "cluster, so there is nothing to confirm",
+                "Drop --yes. (--apply, the mode that prompts, cannot be "
+                "combined with --output-configmap.)"))
+        else:
+            found.append((
+                "--yes",
+                "plain render mode never prompts",
+                "Add --apply if you meant to apply, or drop --yes."))
+    return found
+
+
 def main() -> None:
     """CLI entry point: Generate Alertmanager route + receiver + inhibit config from tenant YAML."""
     parser = argparse.ArgumentParser(
@@ -402,16 +534,34 @@ def main() -> None:
                             help="Output complete Alertmanager ConfigMap YAML (for GitOps PR flow)")
     parser.add_argument("--base-config", default=None,
                         help="Base Alertmanager YAML for --output-configmap (global + defaults)")
-    parser.add_argument("--namespace", default="monitoring",
-                        help="K8s namespace for --apply/--output-configmap (default: monitoring)")
-    parser.add_argument("--configmap", default="alertmanager-config",
-                        help="ConfigMap name for --apply/--output-configmap (default: alertmanager-config)")
+    # #1650: default=None so "supplied" is decidable; the value is resolved
+    # to _DEFAULT_NAMESPACE / _DEFAULT_CONFIGMAP after the mode check below.
+    parser.add_argument("--namespace", default=None,
+                        help=f"K8s namespace for --apply/--output-configmap "
+                             f"(default: {_DEFAULT_NAMESPACE})")
+    parser.add_argument("--configmap", default=None,
+                        help=f"ConfigMap name for --apply/--output-configmap "
+                             f"(default: {_DEFAULT_CONFIGMAP})")
     parser.add_argument("--policy", default=None,
                         help="Policy YAML with allowed_domains for webhook URL validation")
     parser.add_argument("--yes", action="store_true",
                         help="Skip confirmation prompt for --apply")
 
     args = parser.parse_args()
+
+    # #1650: four more flags of the #1616 class — accepted, then never read
+    # by the mode that is about to run. Decided HERE, before any conf.d work,
+    # for the reason the #1616 comment below spells out: a check inside a
+    # mode handler is bypassed when the tree yields no routes.
+    unread = _flags_this_mode_never_reads(args)
+    if unread:
+        mode = _mode_of(args)
+        lines = []
+        for flag, why, remedy in unread:
+            lines.append(f"{flag} is not read in {mode} mode: {why}.\n  {remedy}")
+        die_caller_error("\n".join(lines))
+    namespace = args.namespace if args.namespace is not None else _DEFAULT_NAMESPACE
+    configmap_name = args.configmap if args.configmap is not None else _DEFAULT_CONFIGMAP
 
     # #1616, third CARRIER-OF-THE-FLAG (the sixth carrier of the #1556 class):
     # --base-config is read ONLY on the ConfigMap-assembly path.
@@ -538,13 +688,13 @@ def main() -> None:
 
     # Apply mode
     if args.apply:
-        _apply_mode(routes, receivers, inhibit_rules, args.namespace,
-                    args.configmap, args.yes, strict=args.strict)
+        _apply_mode(routes, receivers, inhibit_rules, namespace,
+                    configmap_name, args.yes, strict=args.strict)
 
     # Output-configmap mode
     if args.output_configmap:
         _output_configmap_mode(routes, receivers, inhibit_rules, base_config,
-                              args.namespace, args.configmap, args.dry_run, args.output,
+                              namespace, configmap_name, args.dry_run, args.output,
                               strict=args.strict)
         return
 

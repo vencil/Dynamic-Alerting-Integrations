@@ -185,12 +185,12 @@ jobs:
         run: mkdir -p .output
       - name: Generate routes
         run: |
+          # Validate only (#1423 / #1650): --validate returns before -o is
+          # used, and the tool now refuses the two together.
           docker run --rm \\
-            --user $(id -u):$(id -g) \\
             -v \${{ github.workspace }}/conf.d:/data/conf.d:ro \\
-            -v \${{ github.workspace }}/.output:/data/output \\
             ghcr.io/vencil/da-tools:latest \\
-            generate-routes --config-dir /data/conf.d -o /data/output/routes.yaml --validate
+            generate-routes --config-dir /data/conf.d --validate
       - name: Compute blast radius
         run: |
           docker run --rm \\

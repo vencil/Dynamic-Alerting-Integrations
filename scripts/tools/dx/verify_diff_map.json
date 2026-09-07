@@ -759,6 +759,7 @@
    "tests/ops/test_domain_policy.py",
    "tests/ops/test_error_consistency.py",
    "tests/ops/test_generate_alertmanager_routes.py",
+   "tests/ops/test_generate_routes_flag_modes.py",
    "tests/ops/test_generate_routes_orchestration.py",
    "tests/ops/test_generate_routes_unreadable_tree.py",
    "tests/ops/test_grar_strict_hardening.py",
@@ -811,7 +812,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "146d43bcc42054a026ca9b3ef80bdceb59172fa4f134398f23a25e5d1146e448",
+ "source_digest": "34a14078daee167719b07a0ea220742d8aaf9a7f5bfc13ec197fe075a18fbc5b",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1038,6 +1039,7 @@
   "tests/ops/test_federation_keygen.py",
   "tests/ops/test_federation_revocation_reconciler.py",
   "tests/ops/test_generate_alertmanager_routes.py",
+  "tests/ops/test_generate_routes_flag_modes.py",
   "tests/ops/test_generate_routes_orchestration.py",
   "tests/ops/test_generate_routes_unreadable_tree.py",
   "tests/ops/test_generate_rule_pack_split.py",
@@ -2777,6 +2779,7 @@
   "scripts/tools/ops/generate_alertmanager_routes.py": [
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/ops/test_generate_alertmanager_routes.py",
+   "tests/ops/test_generate_routes_flag_modes.py",
    "tests/ops/test_generate_routes_orchestration.py",
    "tests/ops/test_generate_routes_unreadable_tree.py"
   ],

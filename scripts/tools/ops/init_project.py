@@ -1159,21 +1159,22 @@ def _gen_github_actions(
 
           - name: Generate Alertmanager routes
             run: |
-              # ⛔ `--user` is load-bearing on the ONE writable mount in this
-              # workflow. The image ends `USER nonroot:nonroot` (uid 10001)
-              # while `mkdir -p .output` above runs as the runner user (uid
-              # 1001, umask 022) — so the container cannot create a file in
-              # its own output directory and the step dies with EACCES. The
-              # config-diff step below never hits this because it redirects on
-              # the HOST; this one is told `-o` inside the container.
+              # Read-only, deliberately: this step VALIDATES the routes it
+              # would generate; nothing downstream consumes a written file.
+              # An earlier template mounted `.output` writable and asked for
+              # an output file together with `--validate` — but `--validate`
+              # returns before any file is written, so nothing ever landed
+              # there, and the writable mount was only a permission surface
+              # (the image runs as a non-root user, the directory belongs to
+              # the runner). The tool now refuses an output path under
+              # `--validate` (exit 2), so that pairing cannot come back
+              # quietly. With no writable mount there is nothing for a
+              # `--user` override to fix; the config-diff step below writes
+              # on the HOST via a shell redirect.
               docker run --rm \\
-                --user $(id -u):$(id -g) \\
                 -v ${{{{ github.workspace }}}}/${{{{ env.CONFIG_DIR }}}}:/data/conf.d:ro \\
-                -v ${{{{ github.workspace }}}}/.output:/data/output \\
                 ${{{{ env.DA_TOOLS_IMAGE }}}} \\
-                generate-routes --config-dir /data/conf.d \\
-                  -o /data/output/alertmanager-routes.yaml \\
-                  --validate
+                generate-routes --config-dir /data/conf.d --validate
 
           - name: Resolve base config snapshot
             if: github.event_name == 'pull_request'
@@ -2321,10 +2322,13 @@ def _gen_precommit_snippet(da_tools_image: str) -> str:
         "        pass_filenames: false\n"
         "\n"
         "      - id: da-generate-routes\n"
-        "        name: Generate Alertmanager routes (dry-run)\n"
+        "        name: Generate Alertmanager routes (validate)\n"
         "        entry: >-\n"
         f"          {da_tools_image}\n"
-        "          generate-routes --config-dir /src/conf.d --dry-run --validate\n"
+        # #1650: `--dry-run` is never read under `--validate` (the validate
+        # path returns before the render step) and the tool now exits 2 on
+        # that combination rather than ignoring half of it.
+        "          generate-routes --config-dir /src/conf.d --validate\n"
         "        language: docker_image\n"
         "        files: ^conf\\.d/.*\\.ya?ml$\n"
         "        pass_filenames: false\n"

@@ -211,9 +211,10 @@ da-tools validate-config --config-dir conf.d/
 mkdir -p .output
 da-tools generate-routes --config-dir conf.d/ \
   -o .output/alertmanager-routes.yaml
-# ⛔ 不要在同一次呼叫加 --validate：它會在用到 -o 之前就結束，於是印 OK 卻不產檔（#1423）。
-# 要驗證就另外跑一次：
-da-tools generate-routes --config-dir conf.d/ --dry-run --validate
+# ⛔ 不要在同一次呼叫加 --validate：它會在用到 -o 之前就結束（#1423），
+# 而工具現在會直接拒絕這個組合（結束碼 2；#1650）。要驗證就另外跑一次
+# （--validate 也不讀 --dry-run，同樣結束碼 2）：
+da-tools generate-routes --config-dir conf.d/ --validate
 
 # 計算 blast radius（影響哪些 tenant、哪些 metric）
 # CI 中先把 base branch 的 conf.d/ 取出到 conf.d.base/
@@ -414,10 +415,10 @@ repos:
         pass_filenames: false
 
       - id: da-generate-routes
-        name: Generate Alertmanager routes (dry-run)
+        name: Generate Alertmanager routes (validate)
         entry: >-
           ghcr.io/vencil/da-tools:latest
-          generate-routes --config-dir /src/conf.d --dry-run --validate
+          generate-routes --config-dir /src/conf.d --validate
         language: docker_image
         files: ^conf\.d/.*\.ya?ml$
         pass_filenames: false
