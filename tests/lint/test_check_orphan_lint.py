@@ -141,14 +141,188 @@ class TestGatherReferencers:
         checks = ol.find_check_lints(lint_dir)
         assert "check_a.py" in ol.find_orphans(checks, corpus)
 
-    def test_validate_all_reference_rescues(self, tmp_path):
-        lint_dir = self._scaffold(tmp_path)
-        (lint_dir / "check_a.py").write_text("", encoding="utf-8")
+    # ── #1492: registry membership is not execution ──────────────────
+
+    def _registry(self, tmp_path, keys):
+        rows = ", ".join(f'("{k}", "lint/check_{k}.py", [], "x")' for k in keys)
         (tmp_path / "scripts" / "tools" / "validate_all.py").write_text(
-            'TOOLS = [("a", "lint/check_a.py", [], "x")]\n', encoding="utf-8")
+            f"TOOLS = [{rows}]\n", encoding="utf-8")
+
+    def _orphans(self, tmp_path, lint_dir):
         refs = ol.gather_referencers(tmp_path, lint_dir)
         corpus = ol.read_corpus(refs)
-        assert ol.find_orphans(["check_a.py"], corpus) == []
+        reachable = ol.registry_reachable(tmp_path, refs)
+        return ol.find_orphans(ol.find_check_lints(lint_dir), corpus, None, reachable)
+
+    def test_registry_membership_alone_does_not_rescue(self, tmp_path):
+        """The #1492 defect: a TOOLS row that no caller selects is dead."""
+        lint_dir = self._scaffold(tmp_path)
+        (lint_dir / "check_a.py").write_text("", encoding="utf-8")
+        self._registry(tmp_path, ["a"])
+        refs = ol.gather_referencers(tmp_path, lint_dir)
+        assert all(p.name != "validate_all.py" for p in refs), refs
+        assert self._orphans(tmp_path, lint_dir) == ["check_a.py"]
+
+    def test_only_list_selects_the_row(self, tmp_path):
+        lint_dir = self._scaffold(tmp_path)
+        (lint_dir / "check_a.py").write_text("", encoding="utf-8")
+        (lint_dir / "check_b.py").write_text("", encoding="utf-8")
+        self._registry(tmp_path, ["a", "b"])
+        (tmp_path / "Makefile").write_text(
+            "lint-docs:\n\t@python3 ./scripts/tools/validate_all.py --only a --ci\n",
+            encoding="utf-8")
+        assert self._orphans(tmp_path, lint_dir) == ["check_b.py"]
+
+    def test_only_list_across_a_backslash_continuation(self, tmp_path):
+        """The real Makefile spreads --only over a continued line. Two keys,
+        one selected: a scanner that lost the continuation would see no
+        --only, call the line bare and rescue BOTH (blind review: the
+        one-key version of this test passed under that mutation)."""
+        lint_dir = self._scaffold(tmp_path)
+        (lint_dir / "check_a.py").write_text("", encoding="utf-8")
+        (lint_dir / "check_b.py").write_text("", encoding="utf-8")
+        self._registry(tmp_path, ["a", "b"])
+        (tmp_path / "Makefile").write_text(
+            "lint-docs:\n\t@python3 ./scripts/tools/validate_all.py \\\n"
+            "\t\t--only versions,a \\\n\t\t$(ARGS)\n", encoding="utf-8")
+        assert self._orphans(tmp_path, lint_dir) == ["check_b.py"]
+
+    def test_backslash_continuation_whose_line_is_not_an_option(self, tmp_path):
+        """Re-review: the option-line glue also captures `\t\t--only …`, so
+        the row above no longer proves the backslash join. Here the
+        continued line is the VALUE (`versions,a`) — only the join sees
+        `--only versions,a`; without it the call is `--only` with no
+        parsable list → reaches nothing → both rows orphan."""
+        lint_dir = self._scaffold(tmp_path)
+        (lint_dir / "check_a.py").write_text("", encoding="utf-8")
+        (lint_dir / "check_b.py").write_text("", encoding="utf-8")
+        self._registry(tmp_path, ["a", "b"])
+        (tmp_path / "Makefile").write_text(
+            "lint-docs:\n\t@python3 ./scripts/tools/validate_all.py --only \\\n"
+            "\t\tversions,a --ci\n", encoding="utf-8")
+        assert self._orphans(tmp_path, lint_dir) == ["check_b.py"]
+
+    def test_skip_is_subtracted_from_only_as_the_runner_does(self, tmp_path):
+        """Re-review: `validate_all` runs `--only` minus `--skip`
+        (`n in chosen and n not in skip_set`); the #1620 entry deferred
+        exactly this shape to #1492. `--only a,b --skip b` runs only a."""
+        lint_dir = self._scaffold(tmp_path)
+        (lint_dir / "check_a.py").write_text("", encoding="utf-8")
+        (lint_dir / "check_b.py").write_text("", encoding="utf-8")
+        self._registry(tmp_path, ["a", "b"])
+        (tmp_path / "Makefile").write_text(
+            "lint-docs:\n\t@python3 ./scripts/tools/validate_all.py "
+            "--only a,b --skip b --ci\n", encoding="utf-8")
+        assert self._orphans(tmp_path, lint_dir) == ["check_b.py"]
+
+    def test_a_following_yaml_list_item_is_not_an_option_continuation(
+            self, tmp_path):
+        """Re-review: a zero-flag call followed by the next step's
+        `- name:` line must stay fail-closed — gluing that line as args
+        made the call look flagged-but-bare and rescued every row."""
+        lint_dir = self._scaffold(tmp_path)
+        (lint_dir / "check_a.py").write_text("", encoding="utf-8")
+        (lint_dir / "check_b.py").write_text("", encoding="utf-8")
+        self._registry(tmp_path, ["a", "b"])
+        wf = tmp_path / ".github" / "workflows" / "ci.yml"
+        wf.write_text("    - run: |\n        python scripts/tools/validate_all.py\n"
+                      "    - name: next step\n      run: echo done\n",
+                      encoding="utf-8")
+        assert self._orphans(tmp_path, lint_dir) == ["check_a.py", "check_b.py"]
+
+    def test_yaml_block_lists_one_flag_per_line(self, tmp_path):
+        """A `run: >-` / `|` block puts --only on its own line with no
+        backslash; treating that as a bare call would rescue every row."""
+        lint_dir = self._scaffold(tmp_path)
+        (lint_dir / "check_a.py").write_text("", encoding="utf-8")
+        (lint_dir / "check_b.py").write_text("", encoding="utf-8")
+        self._registry(tmp_path, ["a", "b"])
+        wf = tmp_path / ".github" / "workflows" / "ci.yml"
+        wf.write_text("run: >-\n  python scripts/tools/validate_all.py\n"
+                      "  --only a\n  --ci\n", encoding="utf-8")
+        assert self._orphans(tmp_path, lint_dir) == ["check_b.py"]
+
+    def test_skip_list_reaches_everything_else(self, tmp_path):
+        lint_dir = self._scaffold(tmp_path)
+        (lint_dir / "check_a.py").write_text("", encoding="utf-8")
+        (lint_dir / "check_b.py").write_text("", encoding="utf-8")
+        self._registry(tmp_path, ["a", "b"])
+        (tmp_path / "Makefile").write_text(
+            "x:\n\t@python3 ./scripts/tools/validate_all.py --skip a --ci\n",
+            encoding="utf-8")
+        assert self._orphans(tmp_path, lint_dir) == ["check_a.py"]
+
+    def test_quoted_and_hyphenated_only_values(self, tmp_path):
+        lint_dir = self._scaffold(tmp_path)
+        (lint_dir / "check_a.py").write_text("", encoding="utf-8")
+        (lint_dir / "check_b.py").write_text("", encoding="utf-8")
+        self._registry(tmp_path, ["a", "b"])
+        (tmp_path / "Makefile").write_text(
+            'x:\n\t@python3 ./scripts/tools/validate_all.py --only="a,cli-x" --ci\n',
+            encoding="utf-8")
+        assert self._orphans(tmp_path, lint_dir) == ["check_b.py"]
+
+    def test_prefixed_usage_line_in_a_sibling_docstring_is_not_a_call(self, tmp_path):
+        """`python3 scripts/tools/validate_all.py --ci` inside a dx script's
+        docstring, or after a trailing `#`, has the invocation shape but is
+        not executed; counting it bare would rescue every row."""
+        lint_dir = self._scaffold(tmp_path)
+        (lint_dir / "check_a.py").write_text("", encoding="utf-8")
+        self._registry(tmp_path, ["a"])
+        dx = tmp_path / "scripts" / "tools" / "dx"
+        dx.mkdir(parents=True)
+        (dx / "tool.py").write_text(
+            '"""Usage:\n    python3 scripts/tools/validate_all.py --ci\n"""\n'
+            "x = 1  # python3 scripts/tools/validate_all.py --ci\n", encoding="utf-8")
+        assert self._orphans(tmp_path, lint_dir) == ["check_a.py"]
+
+    def test_call_with_no_flags_at_all_is_fail_closed(self, tmp_path):
+        """No known caller runs validate_all.py with zero flags; an empty
+        argument list is more likely a truncated capture than a run."""
+        lint_dir = self._scaffold(tmp_path)
+        (lint_dir / "check_a.py").write_text("", encoding="utf-8")
+        self._registry(tmp_path, ["a"])
+        (tmp_path / "Makefile").write_text(
+            "x:\n\t@python3 ./scripts/tools/validate_all.py\n", encoding="utf-8")
+        assert self._orphans(tmp_path, lint_dir) == ["check_a.py"]
+
+    def test_bare_caller_reaches_every_row(self, tmp_path):
+        lint_dir = self._scaffold(tmp_path)
+        (lint_dir / "check_a.py").write_text("", encoding="utf-8")
+        self._registry(tmp_path, ["a"])
+        wf = tmp_path / ".github" / "workflows" / "ci.yml"
+        wf.write_text("run: python scripts/tools/validate_all.py --ci\n", encoding="utf-8")
+        assert self._orphans(tmp_path, lint_dir) == []
+
+    def test_prose_and_comment_mentions_are_not_calls(self, tmp_path):
+        """A YAML job name, a comment, or a docstring usage line that says
+        validate_all.py must not count as a bare (reach-everything) caller."""
+        lint_dir = self._scaffold(tmp_path)
+        (lint_dir / "check_a.py").write_text("", encoding="utf-8")
+        self._registry(tmp_path, ["a"])
+        wf = tmp_path / ".github" / "workflows" / "ci.yml"
+        wf.write_text("name: Drift Detection (validate_all.py)\n"
+                      "# python3 scripts/tools/validate_all.py --ci\n", encoding="utf-8")
+        dx = tmp_path / "scripts" / "tools" / "dx"
+        dx.mkdir(parents=True)
+        (dx / "tool.py").write_text('"""usage: validate_all.py --ci"""\n', encoding="utf-8")
+        assert self._orphans(tmp_path, lint_dir) == ["check_a.py"]
+
+    def test_registry_only_orphan_is_named_as_such(self, tmp_path, capsys, monkeypatch):
+        """The report says WHY: in TOOLS under key 'a', selected by nobody."""
+        lint_dir = self._scaffold(tmp_path)
+        (lint_dir / "check_a.py").write_text("", encoding="utf-8")
+        self._registry(tmp_path, ["a"])
+        monkeypatch.setattr(ol.Path, "resolve", lambda self_: self_, raising=False)
+        # drive main() against the scaffold by pointing __file__ under it
+        fake = tmp_path / "scripts" / "tools" / "lint" / "check_orphan_lint.py"
+        monkeypatch.setattr(ol, "__file__", str(fake))
+        monkeypatch.setattr("sys.argv", ["check_orphan_lint.py", "--ci"])
+        rc = ol.main()
+        out = capsys.readouterr().out
+        assert rc == 1
+        assert "check_frontmatter_versions" not in out
+        assert "as 'a'" in out and "registry membership is not execution" in out
 
     def test_skips_venv_and_vendored_trees(self, tmp_path):
         """A check_*.py name appearing inside scripts/.venv or node_modules must
