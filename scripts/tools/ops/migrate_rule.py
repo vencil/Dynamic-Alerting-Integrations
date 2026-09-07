@@ -45,7 +45,12 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, str(_THIS_DIR))  # Docker flat layout
 sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
-from _lib_python import write_text_secure  # noqa: E402
+from _lib_python import ensure_dir_or_die, write_text_or_die  # noqa: E402
+
+# #1641: every path this tool writes descends from -o/--output-dir, so every
+# writer names that flag; an unusable path is rc=2 + one line, not a
+# traceback at rc=1 (which reads as "your rules have a violation").
+_OUTPUT_FLAG = "-o/--output-dir"
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -807,7 +812,7 @@ def write_triage_csv(results, output_dir, dictionary):
             r.original_expr[:200],  # Truncate long exprs
         ])
     # CSV with BOM for Excel compatibility
-    write_text_secure(csv_path, "\ufeff" + buf.getvalue())
+    write_text_or_die(csv_path, "\ufeff" + buf.getvalue(), flag=_OUTPUT_FLAG)
     return csv_path
 
 
@@ -843,7 +848,7 @@ def write_prefix_mapping(results, output_dir, prefix):
         + yaml.safe_dump(mapping, default_flow_style=False,
                          allow_unicode=True, sort_keys=False)
     )
-    write_text_secure(mapping_path, mapping_content)
+    write_text_or_die(mapping_path, mapping_content, flag=_OUTPUT_FLAG)
     return mapping_path
 
 
@@ -1087,23 +1092,24 @@ def write_outputs(results, output_dir, prefix="custom_", dictionary=None):
 
     序列化邏輯已抽成 render_* 純函式；本函式僅負責路徑組裝與落盤 (thin writer)。
     """
-    os.makedirs(output_dir, exist_ok=True)
+    ensure_dir_or_die(output_dir, flag=_OUTPUT_FLAG)
 
     # --- tenant-config.yaml (含 boilerplate 範例) ---
     tenant_config_path = str(Path(output_dir) / "tenant-config.yaml")
-    write_text_secure(tenant_config_path, render_tenant_config(results))
+    write_text_or_die(tenant_config_path, render_tenant_config(results), flag=_OUTPUT_FLAG)
 
     # --- platform-recording-rules.yaml (合法 YAML, 含 groups/rules 結構) ---
     recording_rules_path = str(Path(output_dir) / "platform-recording-rules.yaml")
-    write_text_secure(recording_rules_path, render_recording_rules(results, prefix))
+    write_text_or_die(recording_rules_path, render_recording_rules(results, prefix),
+                      flag=_OUTPUT_FLAG)
 
     # --- platform-alert-rules.yaml (合法 YAML, 含 groups/rules 結構) ---
     alert_rules_path = str(Path(output_dir) / "platform-alert-rules.yaml")
-    write_text_secure(alert_rules_path, render_alert_rules(results, prefix))
+    write_text_or_die(alert_rules_path, render_alert_rules(results, prefix), flag=_OUTPUT_FLAG)
 
     # --- migration-report.txt ---
     report_path = str(Path(output_dir) / "migration-report.txt")
-    write_text_secure(report_path, render_report(results))
+    write_text_or_die(report_path, render_report(results), flag=_OUTPUT_FLAG)
 
     # --- v3: Triage CSV ---
     csv_path = write_triage_csv(results, output_dir, dictionary)
@@ -1269,7 +1275,7 @@ def main():
     # 輸出
     if args.triage:
         # Triage mode: 只產 CSV + 統計
-        os.makedirs(args.output_dir, exist_ok=True)
+        ensure_dir_or_die(args.output_dir, flag=_OUTPUT_FLAG)
         csv_path = write_triage_csv(results, args.output_dir, dictionary)
         print_triage(results)
         print(f"📁 CSV 報告已輸出至 {csv_path}")

@@ -32,7 +32,8 @@ except ImportError:
     yaml = None
 
 from _lib_python import detect_cli_lang, format_json_report, i18n_text  # noqa: E402
-from _lib_io import load_yaml_file, write_text_secure  # noqa: E402
+from _lib_io import OutputWriteError, ensure_dir, load_yaml_file, write_text_secure  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_yaml import _dict_to_yaml, write_yaml_crd  # noqa: E402
 from _lib_confd import (  # noqa: E402
@@ -1037,27 +1038,36 @@ def main():
     # Write mode: the only branch with filesystem side effects. Progress lines
     # go to stderr (existing convention); stdout is decided below.
     if not args.checklist_only and not no_write:
-        output_dir.mkdir(parents=True, exist_ok=True)
+        # #1641: every path below descends from --output-dir. The shared
+        # write_yaml_crd keeps the RAISING form (it is a library reached by
+        # several tools), so the one handler for the whole block lives here:
+        # an unusable --output-dir is rc=2 + one line naming the flag, not a
+        # traceback at rc=1 (which reads as "your migration has a finding").
+        try:
+            ensure_dir(output_dir, flag="--output-dir")
 
-        # Write CRD files
-        for item in result["prometheus_rules"]:
-            crd = item["crd"]
-            name = crd["metadata"]["name"]
-            output_path = output_dir / f"{name}.yaml"
-            write_yaml_crd(output_path, crd, gitops=False)
-            print(f"Generated: {safe_label(output_path)}", file=sys.stderr)
+            # Write CRD files
+            for item in result["prometheus_rules"]:
+                crd = item["crd"]
+                name = crd["metadata"]["name"]
+                output_path = output_dir / f"{name}.yaml"
+                write_yaml_crd(output_path, crd, gitops=False, flag="--output-dir")
+                print(f"Generated: {safe_label(output_path)}", file=sys.stderr)
 
-        for item in result["alertmanager_configs"]:
-            crd = item["crd"]
-            name = crd["metadata"]["name"]
-            output_path = output_dir / f"{name}.yaml"
-            write_yaml_crd(output_path, crd, gitops=False)
-            print(f"Generated: {safe_label(output_path)}", file=sys.stderr)
+            for item in result["alertmanager_configs"]:
+                crd = item["crd"]
+                name = crd["metadata"]["name"]
+                output_path = output_dir / f"{name}.yaml"
+                write_yaml_crd(output_path, crd, gitops=False, flag="--output-dir")
+                print(f"Generated: {safe_label(output_path)}", file=sys.stderr)
 
-        # Write checklist
-        checklist_path = output_dir / "MIGRATION-CHECKLIST.md"
-        write_text_secure(str(checklist_path), checklist)
-        print(f"Generated: {safe_label(checklist_path)}", file=sys.stderr)
+            # Write checklist
+            checklist_path = output_dir / "MIGRATION-CHECKLIST.md"
+            write_text_secure(str(checklist_path), checklist, flag="--output-dir")
+            print(f"Generated: {safe_label(checklist_path)}", file=sys.stderr)
+        except OutputWriteError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            sys.exit(EXIT_CALLER_ERROR)
 
     # stdout: the whole 8-combo (checklist_only × dry_run × json) matrix is
     # decided in plan_stdout() — main() only prints. See plan_stdout() for the

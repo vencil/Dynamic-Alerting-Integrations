@@ -35,7 +35,7 @@ except ImportError:
 
 from _lib_python import detect_cli_lang, format_json_report, i18n_text  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
-from _lib_io import load_yaml_file  # noqa: E402
+from _lib_io import OutputWriteError, ensure_dir, load_yaml_file  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_yaml import _dict_to_yaml, write_yaml_crd  # noqa: E402
 from _lib_confd import (  # noqa: E402
@@ -890,7 +890,10 @@ def write_crds(
     (json_crds, json_kustomization) for the #1112 envelope — the same stdout
     schema as the dry-run path (a report of what was generated / written).
     """
-    output_dir.mkdir(parents=True, exist_ok=True)
+    # #1641: every path here descends from --output-dir. ensure_dir and the
+    # shared write_yaml_crd RAISE OutputWriteError (library form); main()
+    # catches it once around this call — rc=2 + one line naming the flag.
+    ensure_dir(output_dir, flag="--output-dir")
 
     crd_files: List[str] = []
 
@@ -898,7 +901,7 @@ def write_crds(
         crd = item["crd"]
         name = crd["metadata"]["name"]
         output_path = output_dir / f"{name}.yaml"
-        write_yaml_crd(output_path, crd, gitops=gitops)
+        write_yaml_crd(output_path, crd, gitops=gitops, flag="--output-dir")
         print(f"Generated: {safe_label(output_path)}", file=sys.stderr)
         crd_files.append(f"{name}.yaml")
 
@@ -906,7 +909,7 @@ def write_crds(
         crd = item["crd"]
         name = crd["metadata"]["name"]
         output_path = output_dir / f"{name}.yaml"
-        write_yaml_crd(output_path, crd, gitops=gitops)
+        write_yaml_crd(output_path, crd, gitops=gitops, flag="--output-dir")
         print(f"Generated: {safe_label(output_path)}", file=sys.stderr)
         crd_files.append(f"{name}.yaml")
 
@@ -914,7 +917,7 @@ def write_crds(
         crd = result["service_monitor"]["crd"]
         name = crd["metadata"]["name"]
         output_path = output_dir / f"{name}.yaml"
-        write_yaml_crd(output_path, crd, gitops=gitops)
+        write_yaml_crd(output_path, crd, gitops=gitops, flag="--output-dir")
         print(f"Generated: {safe_label(output_path)}", file=sys.stderr)
         crd_files.append(f"{name}.yaml")
 
@@ -923,7 +926,7 @@ def write_crds(
     if kustomize:
         kustomize_dict = build_kustomization(crd_files, namespace)
         kustomize_path = output_dir / "kustomization.yaml"
-        write_yaml_crd(kustomize_path, kustomize_dict, gitops=gitops)
+        write_yaml_crd(kustomize_path, kustomize_dict, gitops=gitops, flag="--output-dir")
         print(f"Generated: {safe_label(kustomize_path)}", file=sys.stderr)
         json_kustomization = kustomize_dict
 
@@ -1058,10 +1061,16 @@ def main():
             gitops=args.gitops,
         )
     else:
-        json_crds, json_kustomization = write_crds(
-            result, output_dir, args.gitops, args.kustomize,
-            args.namespace, args.json,
-        )
+        try:
+            json_crds, json_kustomization = write_crds(
+                result, output_dir, args.gitops, args.kustomize,
+                args.namespace, args.json,
+            )
+        except OutputWriteError as exc:
+            # #1641: unusable --output-dir ⇒ rc=2 + one line, not a traceback
+            # at rc=1 (which reads as "your config has a finding").
+            print(f"ERROR: {exc}", file=sys.stderr)
+            sys.exit(EXIT_CALLER_ERROR)
 
     summary = build_summary(result, args.kustomize)
 

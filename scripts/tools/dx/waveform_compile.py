@@ -44,7 +44,7 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 import _waveform_lib as wf  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
-from _lib_python import write_text_secure  # noqa: E402
+from _lib_python import ensure_dir_or_die, write_text_or_die  # noqa: E402
 
 try:
     from _lib_compat import try_utf8_stdout  # noqa: E402
@@ -87,7 +87,8 @@ def _compile_one(pack: dict, out_dir: str, seed: int, fanout: int) -> list[str]:
     }
     for name, content in targets.items():
         path = os.path.join(out_dir, name)
-        write_text_secure(path, content)
+        # #1641: `out_dir` is `--out`; an unwritable path is rc=2, not rc=1.
+        write_text_or_die(path, content, flag="--out")
         written.append(path)
     return written
 
@@ -158,7 +159,7 @@ def main() -> int:
         if args.render_readback:
             print(wf.render_readback(pack))
         elif args.compile_mode:
-            os.makedirs(args.out, exist_ok=True)
+            ensure_dir_or_die(args.out, flag="--out")
             try:
                 written = _compile_one(pack, args.out, args.seed, args.fanout)
             except wf.WaveformInputError as exc:

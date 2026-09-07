@@ -58,12 +58,18 @@ from _lib_python import (  # noqa: E402
     load_yaml_file,
     validate_and_clamp,
     write_onboard_hints,
-    write_text_secure,
-    write_json_secure,
+    OutputWriteError,
+    ensure_dir_or_die,
+    write_text_or_die,
     RECEIVER_TYPES,
     METRIC_PREFIX_DB_MAP,
 )
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+
+# #1641: every path this tool writes descends from -o/--output-dir, so every
+# writer names that flag; an unusable path is rc=2 + one line, not a
+# traceback at rc=1 (which reads as "your config file is invalid").
+_OUTPUT_FLAG = "-o/--output-dir"
 # The `<base>_critical` suffix, from the module that owns it for every other
 # `_defaults.yaml` producer (#1218). Re-spelling the literal here is how this
 # file came to route the critical tier into the wrong section in the first place.
@@ -800,7 +806,7 @@ def write_migration_csv(candidates, output_path):
         if row.get("dict_match"):
             row["dict_match"] = row["dict_match"].get("maps_to", "")
         writer.writerow(row)
-    write_text_secure(output_path, buf.getvalue())
+    write_text_or_die(output_path, buf.getvalue(), flag=_OUTPUT_FLAG)
 
 
 # ============================================================
@@ -938,7 +944,7 @@ def _write_phase1_outputs(output_dir, phase1_results, report):
     yamls = generate_tenant_routing_yamls(tenant_routings, dedup_info)
 
     p1 = Path(output_dir) / "phase1-routing"
-    p1.mkdir(parents=True, exist_ok=True)
+    ensure_dir_or_die(p1, flag=_OUTPUT_FLAG)
     phase1_dir = str(p1)
 
     for tenant, content in yamls.items():
@@ -949,7 +955,7 @@ def _write_phase1_outputs(output_dir, phase1_results, report):
             f"# Review and merge into conf.d/{tenant}.yaml\n\n"
             + content
         )
-        write_text_secure(fpath, yaml_content)
+        write_text_or_die(fpath, yaml_content, flag=_OUTPUT_FLAG)
         report["files_written"].append(fpath)
 
     # Summary CSV
@@ -969,7 +975,7 @@ def _write_phase1_outputs(output_dir, phase1_results, report):
             r.get("repeat_interval", ""),
             dedup_info.get(tenant, "unknown"),
         ])
-    write_text_secure(csv_path, buf.getvalue())
+    write_text_or_die(csv_path, buf.getvalue(), flag=_OUTPUT_FLAG)
     report["files_written"].append(csv_path)
 
     report["phases"]["phase1"] = {
@@ -990,7 +996,7 @@ def _write_phase2_outputs(output_dir, phase2_results, report):
     candidates, recording_rules, summary = phase2_results
 
     p2 = Path(output_dir) / "phase2-rules"
-    p2.mkdir(parents=True, exist_ok=True)
+    ensure_dir_or_die(p2, flag=_OUTPUT_FLAG)
 
     # Migration plan CSV
     csv_path = str(p2 / "migration-plan.csv")
@@ -1024,7 +1030,7 @@ def _write_phase2_outputs(output_dir, phase2_results, report):
             + _render_critical_suggestion(
                 suggestion.get("critical_overrides", {}), suggested_defaults)
         )
-        write_text_secure(defaults_path, defaults_content)
+        write_text_or_die(defaults_path, defaults_content, flag=_OUTPUT_FLAG)
         report["files_written"].append(defaults_path)
 
     report["phases"]["phase2"] = {
@@ -1045,7 +1051,7 @@ def _write_phase3_outputs(output_dir, phase3_results, report):
     job_analyses, summary = phase3_results
 
     p3 = Path(output_dir) / "phase3-scrape"
-    p3.mkdir(parents=True, exist_ok=True)
+    ensure_dir_or_die(p3, flag=_OUTPUT_FLAG)
 
     # Per-job analysis + suggestions
     for analysis in job_analyses:
@@ -1062,7 +1068,7 @@ def _write_phase3_outputs(output_dir, phase3_results, report):
             buf.write(yaml.dump(suggestion["snippet"], default_flow_style=False,
                                 allow_unicode=True, sort_keys=False))
             buf.write("\n")
-        write_text_secure(fpath, buf.getvalue())
+        write_text_or_die(fpath, buf.getvalue(), flag=_OUTPUT_FLAG)
         report["files_written"].append(fpath)
 
     # Summary
@@ -1082,7 +1088,7 @@ def _write_phase3_outputs(output_dir, phase3_results, report):
             ],
         }, default_flow_style=False, allow_unicode=True, sort_keys=False)
     )
-    write_text_secure(summary_path, summary_content)
+    write_text_or_die(summary_path, summary_content, flag=_OUTPUT_FLAG)
     report["files_written"].append(summary_path)
 
     report["phases"]["phase3"] = {
@@ -1126,7 +1132,7 @@ def write_outputs(output_dir, phase1_results=None, phase2_results=None,
             }
         return report
 
-    os.makedirs(output_dir, exist_ok=True)
+    ensure_dir_or_die(output_dir, flag=_OUTPUT_FLAG)
 
     if phase1_results:
         _write_phase1_outputs(output_dir, phase1_results, report)
@@ -1141,7 +1147,8 @@ def write_outputs(output_dir, phase1_results=None, phase2_results=None,
     if not dry_run and not json_output:
         hints = _build_onboard_hints(phase1_results, phase2_results, phase3_results)
         if hints.get("tenants"):
-            hints_path = write_onboard_hints(output_dir, hints)
+            # Library writer: RAISES OutputWriteError; main() catches it (#1641).
+            hints_path = write_onboard_hints(output_dir, hints, flag=_OUTPUT_FLAG)
             report["files_written"].append(hints_path)
             report["onboard_hints"] = hints
 
@@ -1297,15 +1304,21 @@ def main():
                   f"{summary['with_tenant_mapping']} with tenant mapping, "
                   f"{summary['without_tenant_mapping']} without", file=sys.stderr)
 
-    # Generate outputs
-    report = write_outputs(
-        args.output_dir,
-        phase1_results=phase1_results,
-        phase2_results=phase2_results,
-        phase3_results=phase3_results,
-        dry_run=args.dry_run,
-        json_output=args.json,
-    )
+    # Generate outputs. #1641: the phase writers exit on their own via the
+    # _or_die sisters; the shared write_onboard_hints raises instead, so the
+    # one handler for it is here — rc=2 + one line, not a traceback at rc=1.
+    try:
+        report = write_outputs(
+            args.output_dir,
+            phase1_results=phase1_results,
+            phase2_results=phase2_results,
+            phase3_results=phase3_results,
+            dry_run=args.dry_run,
+            json_output=args.json,
+        )
+    except OutputWriteError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
 
     if args.json:
         print(json.dumps(report, indent=2, default=str))

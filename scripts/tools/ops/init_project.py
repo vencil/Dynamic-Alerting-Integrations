@@ -38,7 +38,7 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, str(_THIS_DIR))  # Docker flat layout
 sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
-from _lib_python import detect_cli_lang, write_text_secure  # noqa: E402
+from _lib_python import detect_cli_lang, ensure_dir_or_die, write_text_or_die  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 # #1310 — the declared-without-value key names shipped in `optional_overrides:`.
 # Same import shape as scaffold_tenant.py's (see its comment): the derivation is
@@ -2508,7 +2508,9 @@ def _interactive_flow() -> dict:
 # ============================================================
 
 def _ensure_dir(path: str) -> None:
-    os.makedirs(path, exist_ok=True)
+    # #1641: every directory here descends from -o/--output-dir; an unusable
+    # one is rc=2 + one line naming the flag, not a traceback at rc=1.
+    ensure_dir_or_die(path, flag="-o/--output-dir")
 
 
 def _write_file(path: str, content: str, created_files: list[str]) -> None:
@@ -2523,7 +2525,7 @@ def _write_file(path: str, content: str, created_files: list[str]) -> None:
     write path means a future generator cannot reintroduce it.
     """
     _ensure_dir(str(Path(path).parent))
-    write_text_secure(path, content.rstrip('\n') + '\n')
+    write_text_or_die(path, content.rstrip('\n') + '\n', flag="-o/--output-dir")
     created_files.append(path)
 
 

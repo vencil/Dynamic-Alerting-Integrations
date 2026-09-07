@@ -15,7 +15,7 @@ from pathlib import Path
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import write_text_secure  # noqa: E402
+from _lib_python import write_text_or_die  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 # Repo root is 4 levels up: scripts/tools/ops/inject_metadata_join.py.
@@ -75,7 +75,9 @@ def process_file(filepath):
         i += 1
 
     if modified:
-        write_text_secure(filepath, "\n".join(new_lines))
+        # #1641: internal (rule-packs/) path — no flag to name; an unwritable
+        # pack is still rc=2, not a traceback at rc=1.
+        write_text_or_die(filepath, "\n".join(new_lines))
         print(f"  MODIFIED {Path(filepath).name}")
         return True
 

@@ -149,7 +149,8 @@ modules:
     excluded:
       get_lang: "Trivial env-var dispatcher; covered transitively by detect_cli_lang"
       t: "Bilingual string selector wrapper around get_lang"
-      _safe_write: "I/O wrapper around write_text_secure"
+      _safe_write: "I/O wrapper around write_text_or_die (#1641)"
+      _safe_mkdir: "I/O wrapper around ensure_dir_or_die (#1641); same fallback shape as _safe_write"
       dump_yaml: "Serialization helper; thin wrapper over yaml.safe_dump"
       load_rule_pack: "I/O (yaml load)"
       extract_recording_outputs: "Pure but tightly coupled to PrometheusRule CRD shape; covered by tests/ops/test_generate_rule_pack_split.py with realistic fixtures"

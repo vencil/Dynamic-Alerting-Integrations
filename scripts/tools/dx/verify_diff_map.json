@@ -801,14 +801,15 @@
   ],
   "tests/shared/test_json_stdout_contract.py": [
    "tests/shared/test_ci_flag_contract.py",
-   "tests/shared/test_dry_run_no_write.py"
+   "tests/shared/test_dry_run_no_write.py",
+   "tests/shared/test_output_path_write_failure.py"
   ],
   "tests/shared/test_tool_exit_codes.py": [
    "tests/shared/test_bilingual_help_contract.py"
   ]
  },
  "parse_errors": [],
- "source_digest": "425eb607ba30d0d67831df7a6a6c06f197c002a15103447ac7140dab57fb22c0",
+ "source_digest": "16d823b02a5319671d7c38cf3473122f160e7156ffde22ef12e8cbf4fdcc8fe7",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1134,6 +1135,7 @@
   "tests/shared/test_mutation_guards.py",
   "tests/shared/test_nginx_proxy.py",
   "tests/shared/test_output_label_escaping.py",
+  "tests/shared/test_output_path_write_failure.py",
   "tests/shared/test_pipeline_integration.py",
   "tests/shared/test_probe_health.py",
   "tests/shared/test_projection_gate_exposer.py",
@@ -2060,7 +2062,8 @@
    "tests/lint/test_check_pint.py",
    "tests/ops/test_generate_routes_orchestration.py",
    "tests/ops/test_grar_strict_hardening.py",
-   "tests/ops/test_scaffold_db.py"
+   "tests/ops/test_scaffold_db.py",
+   "tests/shared/test_output_path_write_failure.py"
   ],
   "k8s/03-monitoring/configmap-alertmanager.yaml": [
    "tests/dx/test_verify_diff.py",
@@ -2346,6 +2349,7 @@
    "tests/shared/test_json_stdout_contract.py",
    "tests/shared/test_lib_toolcount.py",
    "tests/shared/test_output_label_escaping.py",
+   "tests/shared/test_output_path_write_failure.py",
    "tests/shared/test_prometheus_url_fallback_guard.py",
    "tests/shared/test_property_tools.py",
    "tests/shared/test_sast.py",
@@ -2874,6 +2878,9 @@
   "tests/dx/fixtures/slo_burn_multiplier_vectors.json": [
    "tests/dx/test_compile_custom_alerts.py"
   ],
+  "tests/dx/fixtures/waveform/selftest_disk_used_percent.yaml": [
+   "tests/shared/test_output_path_write_failure.py"
+  ],
   "tests/dx/fixtures/waveform/selftest_service_up.yaml": [
    "tests/dx/test_dx_json_stdout_contract.py"
   ],
@@ -3180,7 +3187,8 @@
    "tests/rulepacks/test_vm_backend_parity.py"
   ],
   "tests/shared": [
-   "tests/ops/test_ci_path_filter_coverage.py"
+   "tests/ops/test_ci_path_filter_coverage.py",
+   "tests/shared/test_output_path_write_failure.py"
   ],
   "tests/shared/_go_mutation_pilot.py": [
    "tests/shared/test_go_mutation_pilot.py"
@@ -3237,6 +3245,9 @@
   ],
   "tests/shared/test_lib_toolcount.py": [
    "tests/lint/test_validate_docs_versions.py"
+  ],
+  "tests/shared/test_output_path_write_failure.py": [
+   "tests/shared/test_write_failure_class.py"
   ],
   "tests/shared/test_property.py": [
    "tests/shared/test_property_tools.py"
