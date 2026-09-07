@@ -141,14 +141,85 @@ class TestGatherReferencers:
         checks = ol.find_check_lints(lint_dir)
         assert "check_a.py" in ol.find_orphans(checks, corpus)
 
-    def test_validate_all_reference_rescues(self, tmp_path):
-        lint_dir = self._scaffold(tmp_path)
-        (lint_dir / "check_a.py").write_text("", encoding="utf-8")
+    # ── #1492: registry membership is not execution ──────────────────
+
+    def _registry(self, tmp_path, keys):
+        rows = ", ".join(f'("{k}", "lint/check_{k}.py", [], "x")' for k in keys)
         (tmp_path / "scripts" / "tools" / "validate_all.py").write_text(
-            'TOOLS = [("a", "lint/check_a.py", [], "x")]\n', encoding="utf-8")
+            f"TOOLS = [{rows}]\n", encoding="utf-8")
+
+    def _orphans(self, tmp_path, lint_dir):
         refs = ol.gather_referencers(tmp_path, lint_dir)
         corpus = ol.read_corpus(refs)
-        assert ol.find_orphans(["check_a.py"], corpus) == []
+        reachable = ol.registry_reachable(tmp_path, refs)
+        return ol.find_orphans(ol.find_check_lints(lint_dir), corpus, None, reachable)
+
+    def test_registry_membership_alone_does_not_rescue(self, tmp_path):
+        """The #1492 defect: a TOOLS row that no caller selects is dead."""
+        lint_dir = self._scaffold(tmp_path)
+        (lint_dir / "check_a.py").write_text("", encoding="utf-8")
+        self._registry(tmp_path, ["a"])
+        refs = ol.gather_referencers(tmp_path, lint_dir)
+        assert all(p.name != "validate_all.py" for p in refs), refs
+        assert self._orphans(tmp_path, lint_dir) == ["check_a.py"]
+
+    def test_only_list_selects_the_row(self, tmp_path):
+        lint_dir = self._scaffold(tmp_path)
+        (lint_dir / "check_a.py").write_text("", encoding="utf-8")
+        (lint_dir / "check_b.py").write_text("", encoding="utf-8")
+        self._registry(tmp_path, ["a", "b"])
+        (tmp_path / "Makefile").write_text(
+            "lint-docs:\n\t@python3 ./scripts/tools/validate_all.py --only a --ci\n",
+            encoding="utf-8")
+        assert self._orphans(tmp_path, lint_dir) == ["check_b.py"]
+
+    def test_only_list_across_a_backslash_continuation(self, tmp_path):
+        """The real Makefile spreads --only over a continued line."""
+        lint_dir = self._scaffold(tmp_path)
+        (lint_dir / "check_a.py").write_text("", encoding="utf-8")
+        self._registry(tmp_path, ["a"])
+        (tmp_path / "Makefile").write_text(
+            "lint-docs:\n\t@python3 ./scripts/tools/validate_all.py \\\n"
+            "\t\t--only versions,a \\\n\t\t$(ARGS)\n", encoding="utf-8")
+        assert self._orphans(tmp_path, lint_dir) == []
+
+    def test_bare_caller_reaches_every_row(self, tmp_path):
+        lint_dir = self._scaffold(tmp_path)
+        (lint_dir / "check_a.py").write_text("", encoding="utf-8")
+        self._registry(tmp_path, ["a"])
+        wf = tmp_path / ".github" / "workflows" / "ci.yml"
+        wf.write_text("run: python scripts/tools/validate_all.py --ci\n", encoding="utf-8")
+        assert self._orphans(tmp_path, lint_dir) == []
+
+    def test_prose_and_comment_mentions_are_not_calls(self, tmp_path):
+        """A YAML job name, a comment, or a docstring usage line that says
+        validate_all.py must not count as a bare (reach-everything) caller."""
+        lint_dir = self._scaffold(tmp_path)
+        (lint_dir / "check_a.py").write_text("", encoding="utf-8")
+        self._registry(tmp_path, ["a"])
+        wf = tmp_path / ".github" / "workflows" / "ci.yml"
+        wf.write_text("name: Drift Detection (validate_all.py)\n"
+                      "# python3 scripts/tools/validate_all.py --ci\n", encoding="utf-8")
+        dx = tmp_path / "scripts" / "tools" / "dx"
+        dx.mkdir(parents=True)
+        (dx / "tool.py").write_text('"""usage: validate_all.py --ci"""\n', encoding="utf-8")
+        assert self._orphans(tmp_path, lint_dir) == ["check_a.py"]
+
+    def test_registry_only_orphan_is_named_as_such(self, tmp_path, capsys, monkeypatch):
+        """The report says WHY: in TOOLS under key 'a', selected by nobody."""
+        lint_dir = self._scaffold(tmp_path)
+        (lint_dir / "check_a.py").write_text("", encoding="utf-8")
+        self._registry(tmp_path, ["a"])
+        monkeypatch.setattr(ol.Path, "resolve", lambda self_: self_, raising=False)
+        # drive main() against the scaffold by pointing __file__ under it
+        fake = tmp_path / "scripts" / "tools" / "lint" / "check_orphan_lint.py"
+        monkeypatch.setattr(ol, "__file__", str(fake))
+        monkeypatch.setattr("sys.argv", ["check_orphan_lint.py", "--ci"])
+        rc = ol.main()
+        out = capsys.readouterr().out
+        assert rc == 1
+        assert "check_frontmatter_versions" not in out
+        assert "as 'a'" in out and "registry membership is not execution" in out
 
     def test_skips_venv_and_vendored_trees(self, tmp_path):
         """A check_*.py name appearing inside scripts/.venv or node_modules must

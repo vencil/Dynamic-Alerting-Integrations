@@ -20,7 +20,8 @@ A ``check_*.py`` is **live** when its filename appears as an invocation in ANY
 repo-internal runner (the "被任一 runner 引用" reference graph from #717's scope):
 
   - ``.pre-commit-config.yaml``        — an ``entry:`` hook
-  - ``scripts/tools/validate_all.py``  — the ``TOOLS`` registry
+  - ``scripts/tools/validate_all.py``  — the ``TOOLS`` registry, **but only
+    the rows some automatic caller actually selects** (see below)
   - ``Makefile``                       — a recipe target
   - ``.github/workflows/*.{yml,yaml}`` — a ``run:`` step
   - any sibling script under ``scripts/`` *outside* ``scripts/tools/lint/``
@@ -39,6 +40,20 @@ that are not actually orphans — a fail-open design (if such a check were later
 self-maintaining instead: a check is live iff some runner still invokes it, and a
 later removal re-surfaces it. So this gate scans the full runner graph and the
 allowlist stays reserved for *genuinely* runner-less checks.
+
+Registry membership is not execution (#1492)
+-------------------------------------------
+``validate_all.py``'s ``TOOLS`` registry used to count as a runner by itself.
+It is not one: every automatic caller of ``validate_all.py`` (``make
+lint-docs``, ``docs-ci.yaml``) passes ``--only <list>`` and runs only those
+rows. Measured on #1492: 33 registry rows, two ``--only`` lists, and ONE row
+(``frontmatter_versions``) that no caller selected and no other runner
+invoked — yet this gate said "all wired", and #1480 was misled by that green.
+So the registry is now read for REACHABILITY: a row counts as wired iff some
+automatic caller selects its key with ``--only`` (backslash continuations
+joined, comment lines ignored) or some caller runs ``validate_all.py`` with
+no ``--only`` at all. ``validate_all.py`` itself is no longer in the corpus —
+its row strings would otherwise rescue every registered lint by name.
 
 Why ``scripts/tools/lint/`` is excluded from the referencer set
 ---------------------------------------------------------------
@@ -86,6 +101,7 @@ Exit codes (see scripts/tools/_lib_exitcodes.py):
 from __future__ import annotations
 
 import argparse
+import ast
 import os
 import re
 import sys
@@ -137,7 +153,7 @@ def gather_referencers(project_root: Path, lint_dir: Path) -> list[Path]:
     """
     referencers: list[Path] = []
 
-    for rel in (".pre-commit-config.yaml", "scripts/tools/validate_all.py", "Makefile"):
+    for rel in (".pre-commit-config.yaml", "Makefile"):
         p = project_root / rel
         if p.exists():
             referencers.append(p)
@@ -166,9 +182,86 @@ def gather_referencers(project_root: Path, lint_dir: Path) -> list[Path]:
                     continue
                 if p.parent == lint_dir:  # lint files are not referencers
                     continue
+                if p.name == "validate_all.py":  # the registry is not a runner (#1492)
+                    continue
                 referencers.append(p)
 
     return referencers
+
+
+# An INVOCATION of validate_all.py: a `python`/`python3` (optionally `-X utf8`)
+# prefix, or a `scripts/tools/` path — a docstring's usage line, a YAML job
+# `name:`, or a comment saying "(validate_all.py," is prose, not a call.
+_VALIDATE_ALL_CALL = re.compile(
+    r"(?:python3?\s+(?:-X\s+utf8\s+)?(?:\./)?(?:scripts/tools/)?"
+    r"|(?:\./)?scripts/tools/)validate_all\.py(?![\w./])([^\n]*)")
+_ONLY_ARG = re.compile(r"--only[\s=]+([\w,]+)")
+
+
+def _executable_text(text: str) -> str:
+    """Runner text with ``#`` comment lines dropped and backslash line
+    continuations joined — a Makefile recipe spreads ``--only`` over two
+    lines, and a comment that mentions ``validate_all.py`` is not a call."""
+    lines = [ln for ln in text.splitlines() if not ln.lstrip().startswith("#")]
+    return re.sub(r"\\\n\s*", " ", "\n".join(lines))
+
+
+def registry_entries(project_root: Path) -> dict[str, str]:
+    """``validate_all.TOOLS`` as {key: check basename}, read via AST so a
+    registry that does not import (or is absent) yields {} instead of a crash."""
+    va = project_root / "scripts" / "tools" / "validate_all.py"
+    if not va.is_file():
+        return {}
+    try:
+        tree = ast.parse(va.read_text(encoding="utf-8", errors="ignore"))
+    except SyntaxError:
+        return {}
+    out: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Assign)
+                and any(isinstance(t, ast.Name) and t.id == "TOOLS" for t in node.targets)
+                and isinstance(node.value, (ast.List, ast.Tuple))):
+            continue
+        for elt in node.value.elts:
+            if isinstance(elt, ast.Tuple) and len(elt.elts) >= 2:
+                try:
+                    key, rel = ast.literal_eval(elt.elts[0]), ast.literal_eval(elt.elts[1])
+                except ValueError:
+                    continue
+                if isinstance(key, str) and isinstance(rel, str):
+                    out[key] = Path(rel).name
+    return out
+
+
+def registry_reachable(project_root: Path, referencers: list[Path]) -> set[str]:
+    """Basenames of registry rows some automatic caller really runs.
+
+    A caller is any referencer line invoking ``validate_all.py``: with
+    ``--only k1,k2`` it reaches exactly those keys; with no ``--only`` (and not
+    ``--list`` / ``--help``) it reaches every row. Membership alone reaches
+    nothing — that is the #1492 defect.
+    """
+    entries = registry_entries(project_root)
+    if not entries:
+        return set()
+    selected: set[str] = set()
+    bare = False
+    for f in referencers:
+        try:
+            text = _executable_text(f.read_text(encoding="utf-8", errors="ignore"))
+        except OSError:
+            continue
+        for m in _VALIDATE_ALL_CALL.finditer(text):
+            args = m.group(1)
+            only = _ONLY_ARG.search(args)
+            if only:
+                selected.update(only.group(1).split(","))
+            elif "--only" in args or "--list" in args or "--help" in args:
+                continue
+            else:
+                bare = True
+    keys = set(entries) if bare else selected & set(entries)
+    return {entries[k] for k in keys}
 
 
 def read_corpus(referencers: list[Path]) -> str:
@@ -202,8 +295,10 @@ def find_orphans(
     check_lints: list[str],
     corpus: str,
     allowlist: dict[str, str] | None = None,
+    reachable: set[str] | frozenset[str] = frozenset(),
 ) -> list[str]:
-    """Return check_*.py basenames not referenced in the runner corpus.
+    """Return check_*.py basenames neither referenced in the runner corpus nor
+    reachable through a selected ``validate_all`` registry row (#1492).
 
     Allowlisted basenames are never reported.
     """
@@ -211,6 +306,8 @@ def find_orphans(
     orphans = []
     for name in check_lints:
         if name in allow:
+            continue
+        if name in reachable:
             continue
         if not _is_referenced(name, corpus):
             orphans.append(name)
@@ -239,7 +336,9 @@ def main() -> int:
     check_lints = find_check_lints(lint_dir)
     referencers = gather_referencers(project_root, lint_dir)
     corpus = read_corpus(referencers)
-    orphans = find_orphans(check_lints, corpus, ALLOWLIST)
+    reachable = registry_reachable(project_root, referencers)
+    entries = registry_entries(project_root)
+    orphans = find_orphans(check_lints, corpus, ALLOWLIST, reachable)
 
     if not orphans:
         allow_note = f" ({len(ALLOWLIST)} allowlisted)" if ALLOWLIST else ""
@@ -248,12 +347,19 @@ def main() -> int:
         return EXIT_OK
 
     print("✗ Orphan / dead lint(s) — wired into no runner:")
+    registered = {v: k for k, v in entries.items()}
     for name in orphans:
-        print(f"  DEAD  scripts/tools/lint/{name}")
+        if name in registered:
+            print(f"  DEAD  scripts/tools/lint/{name}  (in validate_all TOOLS as "
+                  f"'{registered[name]}', but no automatic caller selects it "
+                  f"with --only — registry membership is not execution, #1492)")
+        else:
+            print(f"  DEAD  scripts/tools/lint/{name}")
     print()
     print("Fix: wire each into a runner — a .pre-commit-config.yaml entry:, "
-          "the validate_all.py TOOLS list, a Makefile recipe, a CI workflow "
-          "run: step, or invoke it from a dx/ops sibling script. If it is")
+          "a validate_all.py TOOLS row that an automatic --only list SELECTS, "
+          "a Makefile recipe, a CI workflow run: step, or invoke it from a "
+          "dx/ops sibling script. If it is")
     print("genuinely manual-only, add it to ALLOWLIST in this file with a "
           "justification.")
 
