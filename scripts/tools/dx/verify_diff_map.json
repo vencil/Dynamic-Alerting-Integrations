@@ -72,7 +72,8 @@
    "tests/ops/test_threshold_recommend.py",
    "tests/ops/test_validate_config.py",
    "tests/shared/test_tool_exit_codes.py",
-   "tests/shared/test_write_failure_class.py"
+   "tests/shared/test_write_failure_class.py",
+   "tests/shared/test_yaml_file_error.py"
   ],
   "scripts/tools/_lib_godispatch.py": [
    "tests/shared/test_lib_godispatch.py",
@@ -83,7 +84,8 @@
    "tests/ops/test_policy_opa_bridge.py",
    "tests/shared/test_confd_name_classification_parity.py",
    "tests/shared/test_property_tools.py",
-   "tests/shared/test_write_failure_class.py"
+   "tests/shared/test_write_failure_class.py",
+   "tests/shared/test_yaml_file_error.py"
   ],
   "scripts/tools/_lib_prometheus.py": [
    "tests/shared/test_probe_health.py",
@@ -98,7 +100,8 @@
    "tests/shared/test_lib_python.py",
    "tests/shared/test_mutation_guards.py",
    "tests/shared/test_property.py",
-   "tests/shared/test_write_failure_class.py"
+   "tests/shared/test_write_failure_class.py",
+   "tests/shared/test_yaml_file_error.py"
   ],
   "scripts/tools/_lib_toolcount.py": [
    "tests/lint/test_validate_docs_versions.py",
@@ -813,7 +816,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "8a5a61387c6b8f0eca8407f4b27c3c03d0dc2b013ad0ccc306eb3fb0e1021ec2",
+ "source_digest": "cbd7808bbbd1b2907daf14aa2152e64495a50fd0061a8134c4459b8d8b167e64",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1157,7 +1160,8 @@
   "tests/shared/test_validate_all.py",
   "tests/shared/test_vector_pin_parity.py",
   "tests/shared/test_vector_projection_vrl.py",
-  "tests/shared/test_write_failure_class.py"
+  "tests/shared/test_write_failure_class.py",
+  "tests/shared/test_yaml_file_error.py"
  ],
  "text_map": {
   ".changelog-lint-ignore": [
