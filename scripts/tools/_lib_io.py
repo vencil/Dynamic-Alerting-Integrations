@@ -17,6 +17,8 @@ import yaml
 
 from _lib_confd import warn_nested
 from _lib_constants import ONBOARD_HINTS_FILENAME
+# No import cycle: _lib_exitcodes imports only sys + _lib_compat (#1641).
+from _lib_exitcodes import EXIT_CALLER_ERROR
 
 
 def load_yaml_file(path: Optional[str], default: Any = None) -> Any:
@@ -147,7 +149,66 @@ def load_tenant_configs(config_dir: str) -> dict[str, dict[str, Any]]:
     return configs
 
 
-def write_text_secure(path: str, content: str) -> None:
+class OutputWriteError(OSError):
+    """A secure writer could not write (or create the directory for) *path*.
+
+    #1641. Raised by :func:`write_text_secure` / :func:`write_json_secure` /
+    :func:`ensure_dir` in place of the bare ``OSError`` family, so that the
+    ONE class of failure — "the output path is unusable" — has one name and
+    one message shape across every tool, instead of a traceback at rc=1
+    (which in this repo reads as EXIT_VIOLATION, "your config has a
+    violation", for what is a mistyped ``-o``).
+
+    It subclasses :class:`OSError` on purpose: every call site that already
+    guarded with ``except OSError`` keeps working unchanged, and ``errno`` /
+    ``strerror`` / ``filename`` are populated from the original exception.
+
+    Attributes:
+        path:   The path that could not be written.
+        flag:   The CLI flag the path came from (``"-o/--output"``), or
+                ``None`` when the path is derived internally.
+        cause:  The original :class:`OSError`.
+        action: ``"write"`` (default) or ``"create directory"``.
+
+    ``str(exc)`` is the operator-facing line::
+
+        cannot write <path>: <strerror> (errno <n>) — check the value given to <flag>
+        cannot write <path>: <strerror> (errno <n>) — internal output path, this is a bug or an unwritable workspace
+    """
+
+    def __init__(
+        self,
+        path: Any,
+        cause: OSError,
+        *,
+        flag: Optional[str] = None,
+        action: str = "write",
+    ) -> None:
+        self.path = str(path)
+        self.flag = flag
+        self.cause = cause
+        self.action = action
+        strerror = getattr(cause, "strerror", None) or str(cause) or type(cause).__name__
+        super().__init__(getattr(cause, "errno", None), strerror, self.path)
+
+    def __str__(self) -> str:
+        detail = self.strerror or str(self.cause)
+        if self.errno is not None:
+            detail = f"{detail} (errno {self.errno})"
+        if self.flag:
+            hint = f"check the value given to {self.flag}"
+        else:
+            hint = "internal output path, this is a bug or an unwritable workspace"
+        return f"cannot {self.action} {self.path}: {detail} — {hint}"
+
+
+def _die_on_write_error(exc: OutputWriteError, exit_code: int) -> None:
+    """Print the one-line message to stderr and exit — no traceback."""
+    print(f"ERROR: {exc}", file=sys.stderr)
+    sys.exit(exit_code)
+
+
+def write_text_secure(path: str, content: str, *, flag: Optional[str] = None) -> None:
     """Write text to *path* with UTF-8 encoding, LF endings, and ``0o600``.
 
     Centralises the SAST-mandated pattern::
@@ -175,10 +236,21 @@ def write_text_secure(path: str, content: str) -> None:
     Args:
         path: Filesystem path to write.
         content: Text content.
+        flag: The CLI flag *path* came from (e.g. ``"-o/--output"``), named
+              in the error message; ``None`` for an internally derived path.
+
+    Raises:
+        OutputWriteError: on any ``OSError`` from the write or the chmod
+            (#1641). It IS an ``OSError``, so an existing ``except OSError``
+            still catches it. Tool code on a CLI path should prefer
+            :func:`write_text_or_die`, which turns it into rc=2 + one line.
     """
     target = Path(path)
-    target.write_text(content, encoding="utf-8", newline="\n")
-    target.chmod(0o600)
+    try:
+        target.write_text(content, encoding="utf-8", newline="\n")
+        target.chmod(0o600)
+    except OSError as exc:
+        raise OutputWriteError(path, exc, flag=flag) from exc
 
 
 def write_json_secure(
@@ -187,6 +259,7 @@ def write_json_secure(
     *,
     indent: int = 2,
     ensure_ascii: bool = False,
+    flag: Optional[str] = None,
 ) -> None:
     """Write *data* as JSON to *path* with ``0o600`` permissions.
 
@@ -195,29 +268,124 @@ def write_json_secure(
         data: JSON-serializable object.
         indent: JSON indentation (default 2).
         ensure_ascii: If ``False`` (default), allow non-ASCII characters.
+        flag: The CLI flag *path* came from; see :func:`write_text_secure`.
 
     ``newline="\\n"`` is load-bearing for the same reason as
     :func:`write_text_secure` — ``json.dump`` emits ``\\n`` between lines and
     the text layer would translate every one of them to CRLF on a Windows
     host. ``.gitattributes`` pins ``*.json`` to ``eol=lf``.
+
+    Raises:
+        OutputWriteError: on any ``OSError`` from the open / write / chmod
+            (#1641), same contract as :func:`write_text_secure`. A
+            non-serialisable *data* still raises ``TypeError`` — that is a
+            programming error, not an output-path problem.
     """
-    with open(path, "w", encoding="utf-8", newline="\n") as fh:
-        json.dump(data, fh, indent=indent, ensure_ascii=ensure_ascii)
-    Path(path).chmod(0o600)
+    try:
+        with open(path, "w", encoding="utf-8", newline="\n") as fh:
+            json.dump(data, fh, indent=indent, ensure_ascii=ensure_ascii)
+        Path(path).chmod(0o600)
+    except OSError as exc:
+        raise OutputWriteError(path, exc, flag=flag) from exc
 
 
-def write_onboard_hints(output_dir: str, hints: dict[str, Any]) -> str:
+def write_text_or_die(
+    path: str,
+    content: str,
+    *,
+    flag: Optional[str] = None,
+    exit_code: int = EXIT_CALLER_ERROR,
+) -> None:
+    """:func:`write_text_secure`, but an unusable path ends the process.
+
+    #1641. On :class:`OutputWriteError` prints ``ERROR: <message>`` to stderr
+    and exits with *exit_code* (default ``EXIT_CALLER_ERROR`` = 2, the
+    exit-code SSOT's "IO failure" cell) — no traceback, and NOT rc=1, which
+    would read as "your config has a violation".
+
+    Args:
+        path: Filesystem path to write.
+        content: Text content.
+        flag: The CLI flag *path* came from (e.g. ``"-o/--output"``). Pass it
+              whenever the path is operator-supplied so the message can say
+              which flag to check; leave ``None`` for internal paths.
+        exit_code: Process exit code on failure.
+    """
+    try:
+        write_text_secure(path, content, flag=flag)
+    except OutputWriteError as exc:
+        _die_on_write_error(exc, exit_code)
+
+
+def write_json_or_die(
+    path: str,
+    data: Any,
+    *,
+    indent: int = 2,
+    ensure_ascii: bool = False,
+    flag: Optional[str] = None,
+    exit_code: int = EXIT_CALLER_ERROR,
+) -> None:
+    """:func:`write_json_secure`, but an unusable path ends the process.
+
+    Same contract as :func:`write_text_or_die` (#1641).
+    """
+    try:
+        write_json_secure(path, data, indent=indent, ensure_ascii=ensure_ascii, flag=flag)
+    except OutputWriteError as exc:
+        _die_on_write_error(exc, exit_code)
+
+
+def ensure_dir(path: Any, *, flag: Optional[str] = None) -> None:
+    """``mkdir -p`` *path*, raising :class:`OutputWriteError` on failure.
+
+    #1641. Output-directory tools create the directory themselves before the
+    first secure write, and ``os.makedirs(..., exist_ok=True)`` raises the
+    same ``OSError`` family (``NotADirectoryError`` when a path component is
+    a file, ``PermissionError``, …) OUTSIDE the writer. Routing the mkdir
+    through here keeps the failure in the one class, with the same message
+    shape (``cannot create directory <path>: …``).
+    """
+    try:
+        Path(path).mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise OutputWriteError(path, exc, flag=flag, action="create directory") from exc
+
+
+def ensure_dir_or_die(
+    path: Any,
+    *,
+    flag: Optional[str] = None,
+    exit_code: int = EXIT_CALLER_ERROR,
+) -> None:
+    """:func:`ensure_dir`, but an unusable path ends the process (rc=2)."""
+    try:
+        ensure_dir(path, flag=flag)
+    except OutputWriteError as exc:
+        _die_on_write_error(exc, exit_code)
+
+
+def write_onboard_hints(
+    output_dir: str,
+    hints: dict[str, Any],
+    *,
+    flag: Optional[str] = None,
+) -> str:
     """Write onboard hints JSON for scaffold consumption.
 
     Args:
         output_dir: Directory to write ``onboard-hints.json`` into.
         hints: Data dict (tenants, db_types, routing_hints, …).
+        flag: The CLI flag *output_dir* came from; see :func:`write_text_secure`.
 
     Returns:
         Absolute path to the written file.
+
+    Raises:
+        OutputWriteError: see :func:`write_json_secure` (#1641).
     """
     path = str(Path(output_dir) / ONBOARD_HINTS_FILENAME)
-    write_json_secure(path, hints)
+    write_json_secure(path, hints, flag=flag)
     return path
 
 

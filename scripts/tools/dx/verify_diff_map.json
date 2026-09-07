@@ -71,7 +71,8 @@
    "tests/ops/test_scaffold_tenant.py",
    "tests/ops/test_threshold_recommend.py",
    "tests/ops/test_validate_config.py",
-   "tests/shared/test_tool_exit_codes.py"
+   "tests/shared/test_tool_exit_codes.py",
+   "tests/shared/test_write_failure_class.py"
   ],
   "scripts/tools/_lib_godispatch.py": [
    "tests/shared/test_lib_godispatch.py",
@@ -81,7 +82,8 @@
    "tests/dx/test_line_ending_policy.py",
    "tests/ops/test_policy_opa_bridge.py",
    "tests/shared/test_confd_name_classification_parity.py",
-   "tests/shared/test_property_tools.py"
+   "tests/shared/test_property_tools.py",
+   "tests/shared/test_write_failure_class.py"
   ],
   "scripts/tools/_lib_prometheus.py": [
    "tests/shared/test_probe_health.py",
@@ -95,7 +97,8 @@
    "tests/ops/test_scaffold_tenant.py",
    "tests/shared/test_lib_python.py",
    "tests/shared/test_mutation_guards.py",
-   "tests/shared/test_property.py"
+   "tests/shared/test_property.py",
+   "tests/shared/test_write_failure_class.py"
   ],
   "scripts/tools/_lib_toolcount.py": [
    "tests/lint/test_validate_docs_versions.py",
@@ -105,7 +108,8 @@
    "tests/shared/test_property_tools.py"
   ],
   "scripts/tools/_lib_yaml.py": [
-   "tests/ops/test_lib_yaml.py"
+   "tests/ops/test_lib_yaml.py",
+   "tests/shared/test_write_failure_class.py"
   ],
   "scripts/tools/dx/_atomic_write.py": [
    "tests/dx/test_line_ending_policy.py"
@@ -804,7 +808,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "3e2f468c51d59a622427eba7a2602878d6fb28527fee1a805041c738958d5ff7",
+ "source_digest": "425eb607ba30d0d67831df7a6a6c06f197c002a15103447ac7140dab57fb22c0",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1144,7 +1148,8 @@
   "tests/shared/test_tool_exit_codes.py",
   "tests/shared/test_validate_all.py",
   "tests/shared/test_vector_pin_parity.py",
-  "tests/shared/test_vector_projection_vrl.py"
+  "tests/shared/test_vector_projection_vrl.py",
+  "tests/shared/test_write_failure_class.py"
  ],
  "text_map": {
   ".changelog-lint-ignore": [
@@ -2345,7 +2350,8 @@
    "tests/shared/test_property_tools.py",
    "tests/shared/test_sast.py",
    "tests/shared/test_tool_exit_codes.py",
-   "tests/shared/test_validate_all.py"
+   "tests/shared/test_validate_all.py",
+   "tests/shared/test_write_failure_class.py"
   ],
   "scripts/tools/_lib_compat.py": [
    "tests/shared/test_console_encoding_resilience.py"
@@ -2361,7 +2367,8 @@
    "tests/ops/test_config_diff.py",
    "tests/shared/test_ci_flag_contract.py",
    "tests/shared/test_json_stdout_contract.py",
-   "tests/shared/test_tool_exit_codes.py"
+   "tests/shared/test_tool_exit_codes.py",
+   "tests/shared/test_write_failure_class.py"
   ],
   "scripts/tools/_lib_io.py": [
    "tests/dx/test_verify_diff.py",
@@ -2370,6 +2377,9 @@
   ],
   "scripts/tools/_lib_python.py": [
    "tests/lint/test_check_structure.py"
+  ],
+  "scripts/tools/_lib_yaml.py": [
+   "tests/shared/test_write_failure_class.py"
   ],
   "scripts/tools/dx": [
    "tests/dx/test_analyze_probe.py",
@@ -2711,10 +2721,14 @@
    "tests/lint/test_check_threshold_registry.py",
    "tests/shared/test_input_path_contract.py"
   ],
+  "scripts/tools/ops/_observed_map_lib.py": [
+   "tests/shared/test_write_failure_class.py"
+  ],
   "scripts/tools/ops/_registry_lib.py": [
    "tests/lint/test_check_threshold_reachability.py",
    "tests/ops/test_registry_lib.py",
-   "tests/ops/test_wrapped_path_references.py"
+   "tests/ops/test_wrapped_path_references.py",
+   "tests/shared/test_write_failure_class.py"
   ],
   "scripts/tools/ops/alert_correlate.py": [
    "tests/dx/test_coverage_gap_analysis.py"
@@ -2827,7 +2841,8 @@
    "tests/ops/test_image_flat_layout.py",
    "tests/shared/test_bilingual_help_contract.py",
    "tests/shared/test_console_encoding_resilience.py",
-   "tests/shared/test_property_tools.py"
+   "tests/shared/test_property_tools.py",
+   "tests/shared/test_write_failure_class.py"
   ],
   "tests/contract": [
    "tests/dx/test_verify_diff.py",
