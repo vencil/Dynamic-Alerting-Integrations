@@ -62,16 +62,25 @@ Scan surface
 The pin MUST be read by parsing YAML, never by scanning lines: a Helm values
 pin is split across two lines (`repository:` / `tag:`) and so is invisible to
 any line-oriented regex. That blind spot is exactly why `bump_docs.py` — which
-does scan lines — has never seen the federation-reconciler pin at all.
+does scan lines — has never seen the federation-reconciler pin at all. Both
+values shapes count: the split mapping AND the one-line `image: repo:tag`
+scalar, because reading only one of them makes a chart that uses the other
+invisible, and an invisible chart is a chart this gate silently passes.
 
 Fail-closed
 -----------
-Four conditions are errors, never a silent pass:
+Five conditions are errors, never a silent pass:
 
   * the pinned `tools/vX.Y.Z` tag does not resolve locally (shallow clone) —
     the check cannot be performed, so it must not report success;
   * a da-tools workload's entry point cannot be resolved from its
-    `command:` / `args:`;
+    `command:` / `args:` — a `command:` key that is PRESENT but unreadable
+    counts, because an explicit command replaces the image entrypoint and
+    reading `args[0]` instead answers with something that never runs;
+  * a document holds a duplicate mapping key, which a plain YAML load resolves
+    silently in favour of the last one. Stripping template actions manufactures
+    exactly that shape out of an `{{ if }}`/`{{ else }}` pair writing the same
+    key in both branches, and the branch that loses is not scanned;
   * `entrypoint.py` / `build.sh` cannot be read (or parses to nothing) at the
     pinned tag;
   * a chart pins a da-tools image but its templates yield ZERO containers.
@@ -115,7 +124,9 @@ Usage
 
 Exit codes:
   0 = every da-tools pin can run its workload (registered exemptions aside)
-  1 = at least one incapable pin, or a stale EXEMPTIONS entry to delete
+  1 = at least one incapable pin, or an EXEMPTIONS entry to delete — stale
+      (the image now provides the entry point) or orphaned (no workload
+      resolves to that key any more)
   2 = the check could not be RUN (tag not fetched / unresolvable workload /
       unreadable capability source)
 """
@@ -201,6 +212,62 @@ EXEMPTIONS: dict[tuple[str, str, str], str] = {
         "(the gate will demand it).",
 }
 
+# --- YAML loading -----------------------------------------------------------
+# ⛔ `yaml.safe_load` resolves a duplicate mapping key by keeping the LAST one
+# and saying NOTHING. That is not an edge case here: an `{{ if }}`/`{{ else }}`
+# pair that writes `containers:` in both branches becomes two `containers:`
+# keys once the actions are stripped, and the first branch's containers
+# disappear — the exact opposite of the over-approximation the stripping is
+# built to produce, and a silent pass for whatever ran in that branch. A
+# duplicate key means this gate can no longer claim to have seen every
+# container, so refuse the document instead.
+class _StrictLoader(yaml.SafeLoader):
+    """SafeLoader that raises on a duplicate mapping key instead of picking one."""
+
+    def construct_mapping(self, node, deep=False):
+        seen: set = set()
+        for key_node, _ in node.value:
+            key = self.construct_object(key_node, deep=deep)
+            try:
+                duplicate = key in seen
+            except TypeError:
+                continue      # unhashable key: super() raises its own error
+            if duplicate:
+                raise yaml.constructor.ConstructorError(
+                    "while constructing a mapping", node.start_mark,
+                    f"found duplicate key {key!r}", key_node.start_mark)
+            seen.add(key)
+        return super().construct_mapping(node, deep=deep)
+
+
+# The loader is driven directly rather than through `yaml.load(...)`: bandit
+# B506 flags that call for any Loader it cannot name-match to SafeLoader, and
+# a SafeLoader *subclass* is not name-matched. This is what load_all() does.
+def load_all_strict(text: str) -> list:
+    """`yaml.safe_load_all`, but a duplicate mapping key raises ConstructorError."""
+    loader = _StrictLoader(text)
+    try:
+        docs = []
+        while loader.check_data():
+            docs.append(loader.get_data())
+        return docs
+    finally:
+        loader.dispose()
+
+
+def load_strict(text: str):
+    """`yaml.safe_load`, but a duplicate mapping key raises ConstructorError.
+
+    Mirrors safe_load exactly, second document included: `get_single_data()`
+    raises on a multi-document stream rather than quietly reading the first.
+    """
+    loader = _StrictLoader(text)
+    try:
+        return loader.get_single_data()
+    finally:
+        loader.dispose()
+
+
 # --- Go-template stripping --------------------------------------------------
 # A Helm template is not YAML until the actions are gone. Two-step, in order:
 #   1. remove every `{{ … }}` span (DOTALL — `{{- /* … */ -}}` comment blocks
@@ -209,8 +276,11 @@ EXEMPTIONS: dict[tuple[str, str, str], str] = {
 #      `{{- if … }}` / `{{- end }}` occupies a whole line and would otherwise
 #      become a stray scalar inside a mapping and break the parse).
 # Lines with a sentinel next to real content keep it as an opaque scalar. The
-# result over-approximates: bodies of every `{{ if }}` branch are kept, which
-# is the fail-closed direction for "find every container".
+# result over-approximates ONLY as far as the YAML parser lets it: the bodies
+# of every `{{ if }}` branch survive the strip, but two branches that write the
+# SAME key leave a duplicate, and a plain loader would silently keep one of
+# them. Keeping "find every container" fail-closed therefore takes both halves
+# — this strip, and load_all_strict() refusing the duplicate it produces.
 _TEMPLATE_ACTION_RE = re.compile(r"\{\{-?.*?-?\}\}", re.DOTALL)
 _SENTINEL = "\x00tpl\x00"
 _PLACEHOLDER = "__helm_template__"
@@ -460,9 +530,18 @@ def resolve_entry(container: dict) -> tuple[str, str] | None:
     "subcommand" (`args[0]`, the image ENTRYPOINT's dispatch name).
     `command:` wins: an explicit command REPLACES the image entrypoint, so a
     container with both is not running a subcommand at all.
+
+    ⛔ The `command` test is KEY PRESENCE, not `isinstance(..., list)`. A
+    `command:` this function cannot read is still a command — it still
+    replaces the entrypoint — so falling through to `args[0]` answers with a
+    subcommand that is not what runs, and when `args[0]` happens to name a
+    real COMMAND_MAP entry the gate reports that workload as verified. Return
+    None and let the caller raise its unresolvable-workload error instead.
     """
-    command = container.get("command")
-    if isinstance(command, list):
+    if "command" in container:
+        command = container["command"]
+        if not isinstance(command, list):
+            return None
         for element in command:
             if isinstance(element, str) and element.startswith(IMAGE_TOOLS_DIR):
                 name = element[len(IMAGE_TOOLS_DIR):]
@@ -477,8 +556,25 @@ def resolve_entry(container: dict) -> tuple[str, str] | None:
     return None
 
 
+def unresolved_reason(container: dict) -> str:
+    """Why resolve_entry() returned None, in the operator's terms."""
+    if "command" in container:
+        return (f"`command:` is set but names no {IMAGE_TOOLS_DIR}*.py "
+                f"(and `args[0]` cannot stand in for it — an explicit command "
+                f"replaces the image entrypoint)")
+    return "no `command:` and no subcommand as `args[0]`"
+
+
 def find_image_pins(node, trail: str = "") -> list[tuple[str, dict]]:
-    """Yield (dotted-path, mapping) for every `repository:` pin in *node*.
+    """Yield (dotted-path, mapping) for every image pin in *node*.
+
+    TWO shapes, because charts use both and recognising only one is a silent
+    pass. The split `repository:`/`tag:` mapping is returned as-is; the
+    one-line `image: repo:tag` scalar is parsed into the same mapping shape so
+    every caller keeps reading `.get("repository")` / `.get("tag")`. Missing
+    the scalar shape hid a whole chart from this gate: `find_image_pins` found
+    no da-tools pin, `collect_helm_workloads` skipped the chart as "not ours",
+    and the run printed OK.
 
     A missing `tag:` key does NOT disqualify a mapping: `repository:` with no
     `tag:` is a common chart idiom (the template writes
@@ -490,6 +586,18 @@ def find_image_pins(node, trail: str = "") -> list[tuple[str, dict]]:
     if isinstance(node, dict):
         if isinstance(node.get("repository"), str):
             found.append((trail or "<root>", node))
+        image = node.get("image")
+        if isinstance(image, str) and image.strip():
+            repo, tag, digest = parse_image_ref(image)
+            pin = {"repository": repo}
+            # Set only when present: the caller distinguishes "no `tag:` key"
+            # (an error it words differently) from a tag it can read, and an
+            # empty `digest` must stay falsy the way `digest: ""` does.
+            if tag is not None:
+                pin["tag"] = tag
+            if digest is not None:
+                pin["digest"] = digest
+            found.append((f"{trail}.image" if trail else "image", pin))
         for key, value in node.items():
             found.extend(find_image_pins(value, f"{trail}.{key}" if trail else str(key)))
     elif isinstance(node, list):
@@ -542,10 +650,11 @@ def collect_k8s_workloads(errors: list[str]) -> list[Workload]:
     for path in _k8s_files():
         rel = path.relative_to(REPO_ROOT).as_posix()
         try:
-            docs = list(yaml.safe_load_all(path.read_text(encoding="utf-8")))
+            docs = load_all_strict(path.read_text(encoding="utf-8"))
         except yaml.YAMLError as exc:
             errors.append(f"{rel}: not parseable as YAML, so any image pin in it "
-                          f"is invisible to this gate ({exc.__class__.__name__})")
+                          f"is invisible to this gate ({exc.__class__.__name__}: "
+                          f"{getattr(exc, 'problem', exc)})")
             continue
         for doc in docs:
             for container in iter_containers(doc):
@@ -569,9 +678,8 @@ def collect_k8s_workloads(errors: list[str]) -> list[Workload]:
                 resolved = resolve_entry(container)
                 if resolved is None:
                     errors.append(f"{rel} (container {name}): cannot tell what this "
-                                  f"da-tools container runs — no "
-                                  f"{IMAGE_TOOLS_DIR}*.py in `command:` and no "
-                                  f"subcommand as `args[0]`")
+                                  f"da-tools container runs — "
+                                  f"{unresolved_reason(container)}")
                     continue
                 kind, entry = resolved
                 workloads.append(Workload(rel, f"{rel} (container {name})", tag, kind, entry))
@@ -616,11 +724,12 @@ def collect_helm_workloads(errors: list[str]) -> list[Workload]:
         for values in values_files:
             values_rel = values.relative_to(REPO_ROOT).as_posix()
             try:
-                values_doc = yaml.safe_load(values.read_text(encoding="utf-8"))
+                values_doc = load_strict(values.read_text(encoding="utf-8"))
             except yaml.YAMLError as exc:
                 errors.append(f"{values_rel}: not parseable as YAML "
-                              f"({exc.__class__.__name__}), so an image pin in it "
-                              f"is invisible to this gate")
+                              f"({exc.__class__.__name__}: "
+                              f"{getattr(exc, 'problem', exc)}), so an image pin in "
+                              f"it is invisible to this gate")
                 unreadable = True
                 continue
             for trail, pin in find_image_pins(values_doc):
@@ -670,12 +779,13 @@ def collect_helm_workloads(errors: list[str]) -> list[Workload]:
             stripped, actions = strip_helm_actions_indexed(
                 template.read_text(encoding="utf-8"))
             try:
-                docs = list(yaml.safe_load_all(stripped))
+                docs = load_all_strict(stripped)
             except yaml.YAMLError as exc:
                 chart_errors.append(f"{template_rel}: not parseable as YAML even after "
                                     f"stripping template actions "
-                                    f"({exc.__class__.__name__}) — a da-tools container "
-                                    f"in it would be invisible to this gate")
+                                    f"({exc.__class__.__name__}: "
+                                    f"{getattr(exc, 'problem', exc)}) — a da-tools "
+                                    f"container in it would be invisible to this gate")
                 continue
             for doc in docs:
                 for container in iter_containers(doc):
@@ -708,8 +818,8 @@ def collect_helm_workloads(errors: list[str]) -> list[Workload]:
                         chart_errors.append(
                             f"{template_rel} (container {name}): chart pins the "
                             f"da-tools image but this container's entry point "
-                            f"cannot be resolved (no {IMAGE_TOOLS_DIR}*.py in "
-                            f"`command:`, no subcommand as `args[0]`)")
+                            f"cannot be resolved — "
+                            f"{unresolved_reason(container)}")
                         continue
                     kind, entry = resolved
                     for tag in tags:
@@ -776,11 +886,17 @@ def evaluate(workload: Workload) -> str | None:
 
 
 def run_check(workloads: list[Workload], exemptions: dict[tuple[str, str, str], str]):
-    """Classify *workloads*. Returns (violations, exempted, stale_exemptions)."""
+    """Classify *workloads*.
+
+    Returns (violations, exempted, stale_exemptions, orphaned_exemptions).
+    """
     violations: list[str] = []
     exempted: list[str] = []
     satisfied_keys: set[tuple[str, str, str]] = set()
+    matched_keys: set[tuple[str, str, str]] = set()
     for workload in workloads:
+        if workload.key in exemptions:
+            matched_keys.add(workload.key)
         defect = evaluate(workload)
         if defect is None:
             if workload.key in exemptions:
@@ -795,7 +911,22 @@ def run_check(workloads: list[Workload], exemptions: dict[tuple[str, str, str], 
              f"entry point — delete the EXEMPTIONS entry in "
              f"scripts/tools/lint/check_image_pin_capability.py"
              for source, entry, tag in sorted(satisfied_keys)]
-    return violations, exempted, stale
+    # ⛔ An exemption no workload MATCHED is not the same as a satisfied one,
+    # and `stale` cannot see it: `stale` is derived from resolved workloads, so
+    # a key stops being reported the moment the workload it licensed stops
+    # resolving to that key. Every silent-pass shape this gate has (a chart
+    # that becomes invisible, a `command:` that resolves to a different entry)
+    # orphans its exemption on the way through — the entry stays in the file,
+    # licensing nothing, while its "the gate will demand it" exit condition
+    # quietly stops being enforceable. An unmatched key is therefore an error
+    # in its own right, whatever the reason for it.
+    orphaned = [f"{source} / {entry} @ {tag}: no workload resolves to this "
+                f"EXEMPTIONS key — the workload it licensed was removed, "
+                f"re-pinned, or now resolves to a different entry. Delete the "
+                f"entry, or re-register it under the key the workload "
+                f"resolves to now."
+                for source, entry, tag in sorted(set(exemptions) - matched_keys)]
+    return violations, exempted, stale, orphaned
 
 
 def main() -> int:
@@ -829,7 +960,7 @@ def main() -> int:
         return EXIT_CALLER_ERROR
 
     try:
-        violations, exempted, stale = run_check(workloads, EXEMPTIONS)
+        violations, exempted, stale, orphaned = run_check(workloads, EXEMPTIONS)
     except CapabilityError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return EXIT_CALLER_ERROR
@@ -837,12 +968,15 @@ def main() -> int:
     for note in exempted:
         print(f"  EXEMPT {note}")
 
-    if violations or stale:
-        print(f"FAIL: {len(violations) + len(stale)} da-tools image pin problem(s):")
+    if violations or stale or orphaned:
+        print(f"FAIL: {len(violations) + len(stale) + len(orphaned)} "
+              f"da-tools image pin problem(s):")
         for violation in violations:
             print(f"  - {violation}")
         for note in stale:
             print(f"  - STALE EXEMPTION {note}")
+        for note in orphaned:
+            print(f"  - ORPHANED EXEMPTION {note}")
         if violations:
             print(
                 "\nFix: bump the pin to a tools/v* tag whose tree contains the "
