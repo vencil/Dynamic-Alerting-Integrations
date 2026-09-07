@@ -1044,14 +1044,20 @@ def _probe_text():
 def test_parse_row_returns_partial_fields_with_the_reason_in_process():
     """Direct call: the defect reasons AND the partial fields they come with.
 
-    ⛔ In-process on purpose. The subprocess tests above already prove each
-    defect is refused, but coverage.py does not follow a child process, so the
-    branches inside `parse_row` read as "never executed" — "could not measure"
-    presented as "measured nothing", the exact confusion TRK-379 (#1746) names.
-    ⭐ And the interface buys real detection the subprocess one cannot reach:
-    that a defective row still yields the fields that DID parse is what lets
-    `load()` tell a calibration record apart from a measurement one, and no
-    subprocess assertion can see a return value.
+    ⛔ In-process for VISIBILITY, not for new detection. The subprocess tests
+    above already refuse each of these shapes; coverage.py just cannot see it,
+    because it does not follow a child process — "could not measure" presented
+    as "measured nothing", the confusion TRK-379 (#1746) names. Blind review
+    measured the redundancy: every mutation these catch, an existing test
+    catches too. That is the honest value here and it is worth stating, because
+    an earlier draft of this docstring claimed unique detection power it does
+    not have.
+    ⚠️ What is asserted about the partial fields is `bench_n` ONLY — the one
+    field `load()` consumes to classify a defective record. The general claim
+    "carrying whatever parsed" is NOT pinned: measured, dropping `round` from a
+    defective row's fields leaves this whole suite green. Not fixed by widening
+    the assertion, because nothing consumes those other fields; recorded so the
+    docstring does not out-claim the test.
     """
     import analyze_probe
 
@@ -1146,9 +1152,13 @@ def test_reject_messages_in_process():
 def test_discarded_notes_and_cross_file_refusal_in_process(tmp_path, capsys):
     """`main()` in-process over the paths only the renderers reach.
 
-    ⭐ Asserting the RETURN value, not just the text: `sys.exit(None)` is exit 0,
-    so a renderer path that silently stopped returning its code is invisible to
-    every subprocess assertion in this file (TRK-379 / #1746, measured there).
+    ⛔ For VISIBILITY. `sys.exit(None)` being exit 0 does make a lost return
+    value invisible to every subprocess assertion — but that hole was already
+    plugged by `test_archive_mode_runs_in_process` and `test_ci_mode_runs_in_
+    process`, which assert `main(...) == 0` in-process. Measured: they catch the
+    "stopped returning the renderer's code" mutation on their own. An earlier
+    draft of this docstring cited that hole as unique value for THIS test; it
+    is not, and the correction is left here rather than the claim.
     """
     import analyze_probe
 
