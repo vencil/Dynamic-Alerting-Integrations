@@ -341,6 +341,13 @@ class TestRunToolExitPassthrough:
             entrypoint.run_tool("fake_tool_xyz.py", ["--flag"])
         assert exc_info.value.code == code
 
+    def test_uncaught_exception_propagates_unwrapped(self, tmp_path, monkeypatch):
+        """工具拋出未捕捉例外 → 原樣竄出 run_tool（直譯器預設 rc 1、stderr 有
+        Traceback）——cli-reference 那一列說的「分派層刻意不包 try/except」。"""
+        self._fake_tool(tmp_path, monkeypatch, "raise RuntimeError('boom')\n")
+        with pytest.raises(RuntimeError, match="boom"):
+            entrypoint.run_tool("fake_tool_xyz.py", [])
+
     def test_normal_return_is_exit_zero(self, tmp_path, monkeypatch):
         """工具正常返回（不呼叫 sys.exit）→ run_tool 正常返回 → 直譯器 rc 0。"""
         self._fake_tool(tmp_path, monkeypatch, "X = 1\n")

@@ -9,8 +9,9 @@ image built from a tag whose tree does not contain the program they invoke:
   1. `k8s/03-monitoring/cronjob-threshold-govern.yaml` runs the entrypoint
      subcommand `threshold-govern`. `tools/v2.9.0`'s `entrypoint.py` has no
      such key in `COMMAND_MAP` (the subcommand landed after the tag), so the
-     weekly Job dies with `Unknown command` + a non-zero exit (1 on images
-     before #1406, 2 after) — silently, because the
+     weekly Job dies with `Unknown command` + a non-zero exit (the code is
+     read off that tag's entrypoint: 2 once it carries #1406's
+     `EXIT_CALLER_ERROR`, 1 before) — silently, because the
      repo has NO job-failure alert at all (`kube_job_failed` /
      `kube_job_status_failed` appear nowhere in it) and the one alert that
      watches this CronJob, `ThresholdGovernanceStale`, keys on a series
@@ -373,6 +374,17 @@ def tag_exists(git_tag: str) -> bool:
 def show_blob(git_tag: str, path: str) -> str | None:
     code, out = _git(["show", f"{git_tag}:{path}"])
     return out if code == 0 else None
+
+
+def unknown_command_exit_code(git_tag: str) -> int:
+    """The rc the entrypoint AT *git_tag* uses for `Unknown command`.
+
+    #1406 moved it from 1 to `EXIT_CALLER_ERROR` (2); the pinned image
+    runs the entrypoint of its own tag, so the message must read the
+    code off that source rather than hedge "1 or 2" (re-review).
+    """
+    src = show_blob(git_tag, CAPABILITY_SOURCES["entrypoint"]) or ""
+    return 2 if "EXIT_CALLER_ERROR" in src else 1
 
 
 class CapabilityError(RuntimeError):
@@ -749,7 +761,8 @@ def evaluate(workload: Workload) -> str | None:
         if script is None:
             return (f"entrypoint subcommand '{workload.entry}' is not in "
                     f"COMMAND_MAP at {workload.git_tag} (the container exits "
-                    f"non-zero with `Unknown command`: 1 before #1406, 2 after)")
+                    f"{unknown_command_exit_code(workload.git_tag)} with "
+                    f"`Unknown command`)")
         if script not in tool_files:
             return (f"entrypoint subcommand '{workload.entry}' maps to {script}, "
                     f"which is NOT in build.sh TOOL_FILES at {workload.git_tag} "
