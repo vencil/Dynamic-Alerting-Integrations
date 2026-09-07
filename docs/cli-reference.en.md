@@ -388,12 +388,12 @@ da-tools baseline --tenant <name> [options]
 | `--duration <SEC>` | Observation duration in seconds | `600` |
 | `--interval <SEC>` | Sampling interval in seconds | `15` |
 | `--metrics <LIST>` | Comma-separated metric list (empty=all) | (all) |
-| `--output <FILE>` | Output to CSV file | stdout |
+| `-o, --output-dir <DIR>` | Output directory; both CSVs are written there (see Output below), created if missing | `baseline_output` |
 | `--dry-run` | Only show metrics to observe, don't sample | false |
 
 **Output**
 
-CSV format with one line per metric containing statistical summary (p50, p90, p95, p99, max, recommended threshold).
+The statistical summary is printed to stdout; two CSVs are also written under `--output-dir`: `baseline-<tenant>-timeseries.csv` (raw samples) and `baseline-<tenant>-summary.csv` (one line per metric: min / max / avg / p50 / p90 / p95 / p99 and the recommended thresholds). ⚠️ There is no single-file output flag — `--output <FILE>` is accepted by argparse as an abbreviation of `--output-dir`, so it creates a **directory** named `<FILE>`.
 
 **Examples**
 
@@ -402,7 +402,7 @@ CSV format with one line per metric containing statistical summary (p50, p90, p9
 docker run --rm --network=host \
   -e PROMETHEUS_URL=http://prometheus.monitoring.svc.cluster.local:9090 \
   ghcr.io/vencil/da-tools:v2.9.0 \
-  baseline --tenant db-a --duration 1800 --interval 30 --output /tmp/baseline.csv
+  baseline --tenant db-a --duration 1800 --interval 30 -o /tmp/baseline_out
 ```
 
 **Exit Codes**
@@ -450,13 +450,13 @@ Choose one mode:
 | `--rounds <N>` | Number of monitoring rounds. ⚠️ `0` is not infinite — it runs **no rounds at all** (`for i in range(rounds)`) | `10` |
 | `--tolerance <RATIO>` | Allowed deviation as a **ratio**, not a percentage: `0.01` = 1% | `0.001` |
 | `--auto-detect-convergence` | Auto-detect convergence and output readiness JSON | false |
-| `--output <FILE>` | Output to CSV or JSON file | stdout |
+| `-o, --output-dir <DIR>` | Output directory; `validation-report.csv` (and, in watch mode, `cutover-readiness.json`) are written there | `validation_output` |
 
 **Output**
 
-CSV format with one line per rule showing comparison results (old value, new value, difference %, convergence status).
+`<output-dir>/validation-report.csv`, one line per rule (old value, new value, difference %, convergence status); the summary is also printed to stdout. ⚠️ There is no single-file output flag — `--output <FILE>` is accepted by argparse as an abbreviation of `--output-dir`, so it creates a **directory** named `<FILE>`.
 
-If `--auto-detect-convergence` is used, additionally outputs `cutover-readiness.json` for use with `cutover` command.
+With `--watch --auto-detect-convergence`, `cutover-readiness.json` is additionally written into the same directory for the `cutover` command (`--convergence-output <FILE>` overrides the path); single-shot mode (no `--watch`) never writes this file.
 
 **Examples**
 
@@ -483,8 +483,8 @@ docker run --rm --network=host \
   -e PROMETHEUS_URL=http://prometheus.monitoring.svc.cluster.local:9090 \
   ghcr.io/vencil/da-tools:v2.9.0 \
   validate --mapping /data/mapping.csv \
-    --auto-detect-convergence \
-    --output /data/output/validation-report.csv
+    --watch --auto-detect-convergence \
+    --output-dir /data/output
 ```
 
 **Exit Codes**
@@ -1951,7 +1951,7 @@ docker run --rm -it \
 | `--tenant <NAME>` | Tenant ID | (interactive prompt) |
 | `--db <LIST>` | Comma-separated DB type list | (interactive prompt) |
 | `--namespaces <LIST>` | Comma-separated K8s namespace list | (interactive prompt) |
-| `--output <DIR>` | Output directory | `./` |
+| `-o, --output-dir <DIR>` | Output directory | `scaffold_output` |
 
 **Supported DB Types**
 
@@ -1978,7 +1978,7 @@ docker run --rm -it \
   --user $(id -u):$(id -g) \
   -v $(pwd)/output:/data/output \
   ghcr.io/vencil/da-tools:v2.9.0 \
-  scaffold --output /data/output
+  scaffold --output-dir /data/output
 
 # Non-interactive generation (CI/CD)
 docker run --rm \
@@ -1989,7 +1989,7 @@ docker run --rm \
     --tenant db-c \
     --db mariadb,redis \
     --namespaces ns-db-c \
-    --output /data/output
+    --output-dir /data/output
 ```
 
 **Exit Codes**
@@ -2414,14 +2414,14 @@ Compare custom rules with Rule Pack, find duplicates/gaps.
 docker run --rm \
   -v <config_dir>:/etc/config:ro \
   ghcr.io/vencil/da-tools:v2.9.0 \
-  analyze-gaps --config <path> [options]
+  analyze-gaps --tenant-config <path> [options]
 ```
 
 **Required Parameters**
 
 | Parameter | Description |
 |-----------|-------------|
-| `--config <PATH>` | Tenant config file or directory |
+| `--tenant-config <PATH>` | Single tenant config file (use `--config-dir <DIR>` for a whole directory). ⚠️ Do not shorten it to `--config`: argparse resolves that to `--config-dir`, and a file path there answers "no custom_ metrics" with rc 0 |
 
 **Options**
 
@@ -2441,7 +2441,7 @@ CSV list where each row represents a custom rule and its Rule Pack coverage rela
 docker run --rm \
   -v $(pwd)/conf.d:/etc/config:ro \
   ghcr.io/vencil/da-tools:v2.9.0 \
-  analyze-gaps --config /etc/config/db-a.yaml
+  analyze-gaps --tenant-config /etc/config/db-a.yaml
 ```
 
 **Exit Codes**

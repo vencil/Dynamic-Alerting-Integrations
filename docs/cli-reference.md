@@ -374,17 +374,17 @@ da-tools baseline --tenant <name> [options]
 | `--duration <SEC>` | 觀測時長（秒） | `600` |
 | `--interval <SEC>` | 採樣間隔（秒） | `15` |
 | `--metrics <LIST>` | 逗號分隔指標清單（空=全部） | （全部） |
-| `--output <FILE>` | 輸出至 CSV 檔案 | stdout |
+| `-o, --output-dir <DIR>` | 輸出目錄；兩個 CSV 都寫在這裡（見下方「輸出」），目錄不存在會建立 | `baseline_output` |
 | `--dry-run` | 僅顯示要觀測的指標，不實際採樣 | false |
 
 **輸出**
 
-CSV 格式，各行為一個指標的統計摘要（包含 p50、p90、p95、p99、max、建議閾值）。
+統計摘要印到 stdout；同時在 `--output-dir` 目錄寫入兩個 CSV：`baseline-<tenant>-timeseries.csv`（原始採樣）與 `baseline-<tenant>-summary.csv`（各行為一個指標：min／max／avg／p50／p90／p95／p99 與建議閾值）。⚠️ 沒有「輸出到單一檔案」的旗標——`--output <FILE>` 會被 argparse 當成 `--output-dir` 的縮寫，於是產生一個叫 `<FILE>` 的**目錄**。
 
 **範例**
 
 ```bash
-da-tools baseline --tenant db-a --duration 1800 --interval 30 --output /tmp/baseline.csv
+da-tools baseline --tenant db-a --duration 1800 --interval 30 -o /tmp/baseline_out
 ```
 
 **結束碼**
@@ -432,20 +432,20 @@ da-tools validate [--mapping <file> | --old <query> --new <query>] [options]
 | `--rounds <N>` | 監控輪數。⚠️ `0` 不是無限，是**一輪都不跑**（`for i in range(rounds)`） | `10` |
 | `--tolerance <RATIO>` | 容許誤差**比值**（不是百分比）：`0.01` = 1% | `0.001` |
 | `--auto-detect-convergence` | 自動偵測收斂並產出 readiness JSON | false |
-| `--output <FILE>` | 輸出至 CSV 或 JSON 檔案 | stdout |
+| `-o, --output-dir <DIR>` | 輸出目錄；`validation-report.csv`（與 watch 模式的 `cutover-readiness.json`）寫在這裡 | `validation_output` |
 
 **輸出**
 
-CSV 格式，各行為一個 rule 的比對結果（舊值、新值、差異百分比、收斂狀態）。
+`<output-dir>/validation-report.csv`，各行為一個 rule 的比對結果（舊值、新值、差異百分比、收斂狀態）；摘要另印到 stdout。⚠️ 沒有「輸出到單一檔案」的旗標——`--output <FILE>` 會被 argparse 當成 `--output-dir` 的縮寫，於是產生一個叫 `<FILE>` 的**目錄**。
 
-若使用 `--auto-detect-convergence`，額外產出 `cutover-readiness.json` 供 `cutover` 命令使用。
+`--watch` 搭配 `--auto-detect-convergence` 時，額外在同一目錄寫入 `cutover-readiness.json` 供 `cutover` 命令使用（`--convergence-output <FILE>` 可改路徑）；單次模式（無 `--watch`）不會產出這個檔。
 
 **範例**
 
 ```bash
 da-tools validate --mapping mapping.csv
 da-tools validate --mapping mapping.csv --watch --interval 60 --rounds 1440
-da-tools validate --mapping mapping.csv --auto-detect-convergence --output validation-report.csv
+da-tools validate --mapping mapping.csv --watch --auto-detect-convergence -o ./validation_output
 ```
 
 **結束碼**
@@ -1801,7 +1801,7 @@ da-tools scaffold [options]
 | `--tenant <NAME>` | Tenant ID | （互動詢問） |
 | `--db <LIST>` | 逗號分隔 DB 類型清單 | （互動詢問） |
 | `--namespaces <LIST>` | 逗號分隔 K8s namespace 清單 | （互動詢問） |
-| `--output <DIR>` | 輸出目錄 | `./` |
+| `-o, --output-dir <DIR>` | 輸出目錄 | `scaffold_output` |
 
 **支援的 DB 類型**
 
@@ -2173,14 +2173,14 @@ da-tools onboard ./alertmanager.yaml -o onboard-hints.json
 **語法**
 
 ```bash
-da-tools analyze-gaps --config <path> [options]
+da-tools analyze-gaps --tenant-config <path> [options]
 ```
 
 **必需參數**
 
 | 參數 | 說明 |
 |------|------|
-| `--config <PATH>` | 租戶配置檔案或目錄 |
+| `--tenant-config <PATH>` | 單一租戶配置檔案（整個目錄用 `--config-dir <DIR>`）。⚠️ 不要縮寫成 `--config`：argparse 會把它當成 `--config-dir`，對著一個檔案路徑回答「沒有 custom_ 指標」、rc 0 |
 
 **選項**
 
@@ -2196,7 +2196,7 @@ CSV 列表，各行表示一條 custom rule 與對應 Rule Pack 的覆蓋關係�
 **範例**
 
 ```bash
-da-tools analyze-gaps --config ./conf.d/db-a.yaml
+da-tools analyze-gaps --tenant-config ./conf.d/db-a.yaml
 ```
 
 **結束碼**

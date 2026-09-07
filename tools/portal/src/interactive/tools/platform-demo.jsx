@@ -17,9 +17,9 @@ const PHASE_CONFIG = [
     id: 'scaffold',
     title: t('Scaffold Tenant', 'Scaffold Tenant'),
     description: t('Create demo-tenant.yaml with dynamic alerting config', 'Create demo-tenant.yaml with dynamic alerting config'),
-    command: 'da-tools scaffold --tenant demo-tenant --output conf.d/demo-tenant.yaml',
+    command: 'da-tools scaffold --tenant demo-tenant --output-dir conf.d',
     terminal: [
-      '$ da-tools scaffold --tenant demo-tenant --output conf.d/demo-tenant.yaml',
+      '$ da-tools scaffold --tenant demo-tenant --output-dir conf.d',
       '',
       '▶ Scaffold: demo-tenant',
       '  Creating conf.d/demo-tenant.yaml...',
@@ -28,7 +28,7 @@ const PHASE_CONFIG = [
       '  ✓ Configured webhook domain policy',
       '  ✓ Validated schema (18 keys)',
       '',
-      'Output: conf.d/demo-tenant.yaml (847 bytes)',
+      'Output dir: conf.d/ → demo-tenant.yaml (847 bytes), _defaults.yaml, scaffold-report.txt',
       'Status: SUCCESS',
     ],
     sample: `apiVersion: alertmanager.io/v1
