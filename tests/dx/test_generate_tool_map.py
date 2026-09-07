@@ -434,6 +434,51 @@ class TestFixHintLeadsToGreen:
         assert "UnicodeDecodeError" in last, out
         assert "--generate" not in last, out
 
+    @pytest.mark.parametrize("doc_state", ["missing", "stale"])
+    def test_check_names_the_unreadable_file_even_when_also_outdated(
+            self, env, tmp_path, monkeypatch, doc_state):
+        """Re-review #1542: the FIRST run an operator sees is usually
+        "outdated" (the doc predates the bad file). Exiting on that alone
+        sent them to `--generate`, which cannot clear the cause; only the
+        second run named the file. The last stdout line — the one
+        `validate_all` / `make pr-preflight` quote — must name the file
+        on the first run and give the two-step fix."""
+        tools = gtm.TOOLS_ROOT
+        (tools / "ops").mkdir()
+        (tools / "ops" / "legacy.py").write_bytes(
+            '"""legacy.py — 舊"""\n'.encode("cp950"))
+        monkeypatch.setattr(gtm, "gather_tools", _REAL_GATHER_TOOLS)
+        if doc_state == "stale":
+            for target in (gtm.TOOL_MAP, gtm.TOOL_MAP_EN):
+                target.write_text("# stale — `other.py`\n", encoding="utf-8")
+
+        rc, out = env("--check")
+        assert rc == 1, out
+        lines = [ln for ln in out.strip().splitlines() if ln.strip()]
+        verdict = "is outdated" if doc_state == "stale" else "does not exist"
+        assert any(verdict in ln for ln in lines), out
+        last = lines[-1]
+        assert last.startswith("❌ unreadable: scripts/tools/ops/legacy.py"), out
+        assert "UnicodeDecodeError" in last, out
+        assert "fix the file, then run with --generate --lang all" in last, out
+
+    def test_generate_names_the_unreadable_file_on_its_last_line(
+            self, env, tmp_path, monkeypatch):
+        """Re-review #1542: `validate_all --fix` quotes the generator's last
+        stdout line cut to 80 characters; the path must lead that line, or
+        the operator reads `fixed (… unreadable: scripts/too` ."""
+        tools = gtm.TOOLS_ROOT
+        (tools / "ops").mkdir()
+        (tools / "ops" / "legacy.py").write_bytes(
+            '"""legacy.py — 舊"""\n'.encode("cp950"))
+        monkeypatch.setattr(gtm, "gather_tools", _REAL_GATHER_TOOLS)
+
+        rc, out = env("--generate", "--lang", "all")
+        assert rc == 0, out
+        last = [ln for ln in out.strip().splitlines() if ln.strip()][-1]
+        assert last.startswith("❌ unreadable: scripts/tools/ops/legacy.py"), out
+        assert "scripts/tools/ops/legacy.py" in last[:80], out
+
     @pytest.mark.parametrize("en_state", ["missing", "stale"])
     def test_bare_check_covers_the_en_file(self, env, en_state):
         """Default pin: zh fresh, en not → bare `--check` is red and names en.

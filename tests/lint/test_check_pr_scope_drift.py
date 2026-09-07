@@ -150,15 +150,19 @@ class TestCheckToolMap:
         assert "Run with --generate --lang all" in msg, msg
         assert "WARNING" not in msg, msg
 
-    def test_unexpected_exit_code_is_a_crash(self, tmp_path):
+    def test_unexpected_exit_code_is_a_refusal_not_drift(self, tmp_path):
         """An rc outside the tool's 0/1 contract with no Traceback text
-        (e.g. a SystemExit(2) from argparse) is still a crash, not drift."""
+        (argparse, or the generator refusing to stamp a stale version) is
+        the tool REFUSING — reported with its rc and stderr reason, never
+        as drift and not as a crash (re-review, #1542)."""
         with patch("check_pr_scope_drift.run",
                    return_value=(2, "", "usage: generate_tool_map.py [-h]\n"
                                        "error: unrecognized arguments")):
             ok, msg = cpsd.check_tool_map(tmp_path)
         assert ok is False
-        assert "generator crashed" in msg
+        assert "refused (rc 2)" in msg, msg
+        assert "unrecognized arguments" in msg, msg
+        assert "crashed" not in msg and "drift" not in msg, msg
 
 
 # ---------------------------------------------------------------------------

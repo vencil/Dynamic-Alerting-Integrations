@@ -108,7 +108,12 @@ def check_tool_map(repo: Path) -> tuple[bool, str]:
     # phantom "crashed" verdict this branch exists to prevent (blind review).
     if "Traceback" in stderr or rc not in (0, 1):
         last_err = stderr.strip().splitlines()[-1] if stderr.strip() else "(no stderr)"
-        return False, f"tool-map generator crashed: {last_err}"
+        # rc 2 with no Traceback is the tool REFUSING (EXIT_CALLER_ERROR:
+        # argparse, an unreadable CLAUDE.md version anchor) — not a crash;
+        # either way it is not drift, and the stderr line is the reason.
+        if "Traceback" in stderr:
+            return False, f"tool-map generator crashed: {last_err}"
+        return False, f"tool-map generator refused (rc {rc}): {last_err}"
 
     if rc == 0 and "outdated" not in combined.lower():
         return True, "tool-map --check: PASS"

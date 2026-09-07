@@ -322,6 +322,9 @@ def _force_utf8_streams() -> None:
 def main():
     """CLI entry point: 工具導覽自動生成."""
     _force_utf8_streams()
+    # #1542: the ledger is module-global; an in-process caller that already
+    # walked a tree with an unreadable member must not make THIS run red.
+    _UNREADABLE.clear()
     parser = argparse.ArgumentParser(
         description="Generate docs/internal/tool-map.md from scripts/tools/*.py",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -357,6 +360,7 @@ def main():
             print(generate_tool_map(categorized, lang))
         return
 
+    outdated = False
     for lang in langs:
         content = generate_tool_map(categorized, lang)
         target = TOOL_MAP if lang == "zh" else TOOL_MAP_EN
@@ -373,15 +377,17 @@ def main():
             os.chmod(target,
                      stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP
                      | stat.S_IROTH)
-            extra = f"; {_unreadable_detail()}" if _UNREADABLE else ""
             print(f"✅ Generated {target.relative_to(REPO_ROOT)} "
-                  f"({total} tools, {lang}{extra})")
+                  f"({total} tools, {lang})")
 
         elif args.check:
             if not target.exists():
                 print(f"❌ {target.relative_to(REPO_ROOT)} does not exist. "
                       f"Run with --generate --lang {args.lang} first.")
-                sys.exit(EXIT_VIOLATION)
+                if not _UNREADABLE:
+                    sys.exit(EXIT_VIOLATION)
+                outdated = True
+                continue
 
             existing = target.read_text(encoding="utf-8")
             if existing.strip() != content.strip():
@@ -401,18 +407,27 @@ def main():
                 print(f"❌ {target.relative_to(REPO_ROOT)} is outdated"
                       f"{detail_str}. Run with --generate --lang {args.lang} "
                       f"to update.")
-                sys.exit(EXIT_VIOLATION)
+                if not _UNREADABLE:
+                    sys.exit(EXIT_VIOLATION)
+                # An unreadable member is the deeper cause; fall through so
+                # the LAST stdout line names it (blind review, #1542).
+                outdated = True
+                continue
 
             print(f"✅ Tool map ({lang}) is up to date.")
 
-    if args.check and _UNREADABLE:
-        # #1542: the document may match, but it matches a PLACEHOLDER. On
-        # stdout so `validate_all` / `make pr-preflight` (which read the
-        # last stdout line) name the file, not just "outdated".
-        print(f"❌ {len(_UNREADABLE)} tool file(s) unreadable — "
-              f"{_unreadable_detail()}. Fix the file; regenerating cannot "
-              f"clear this.")
-        sys.exit(EXIT_VIOLATION)
+    if _UNREADABLE:
+        # #1542: `--check` may find the document matching — but matching a
+        # PLACEHOLDER — or outdated; either way the file is the cause and
+        # regenerating cannot clear it. One LAST stdout line, because that
+        # is the line `validate_all` / `make pr-preflight` quote (80 chars,
+        # so the path comes before anything else).
+        also = (f" The document is also outdated: fix the file, then run "
+                f"with --generate --lang {args.lang}." if outdated else
+                " Fix the file; regenerating cannot clear this.")
+        print(f"❌ {_unreadable_detail()}.{also}")
+        if args.check:
+            sys.exit(EXIT_VIOLATION)
 
 
 if __name__ == "__main__":
