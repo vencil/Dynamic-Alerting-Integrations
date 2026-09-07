@@ -166,6 +166,12 @@ safe_ignore:
 
 # ── 人工映射：AST/文字掃描與目錄規則都構不到的個案 ────────────────────────
 overrides:
+  # 每一份 .golangci.yml。⛔ 用 glob 不用逐一列舉：受檢 module 的集合由
+  # test_go_lint_module_coverage.py 從 git ls-files 推導，手寫清單會在第六個
+  # module 進來時靜默漏掉，而 overrides 沒有任何保鮮檢查會說話。
+  - source: "**/.golangci.yml"
+    tests: [tests/ops/test_go_lint_module_coverage.py]
+    justification: 守衛斷言每份 config 的 linter 下限與 run.build-tags；自動映射選得到別的測試，選不到這一支
   - source: "scripts/tools/dx/verify_diff_rules.yaml"
     tests: [tests/dx/test_verify_diff.py]
     justification: 工具自身的規則檔（測試經 DEFAULT_RULES_PATH 常數引用，非字面路徑，掃描構不到）

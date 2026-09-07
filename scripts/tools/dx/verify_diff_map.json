@@ -777,7 +777,8 @@
    "tests/ops/test_ci_baseline_substitution.py"
   ],
   "tests/ops/test_ci_path_filter_coverage.py": [
-   "tests/lint/test_e2e_spec_lint.py"
+   "tests/lint/test_e2e_spec_lint.py",
+   "tests/ops/test_go_lint_module_coverage.py"
   ],
   "tests/ops/test_init_project.py": [
    "tests/ops/test_generated_ci_artifacts.py"
@@ -802,7 +803,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "2d06d17d852a95b4a498249a643783aec47bd4f4a3bc62f45362c7a1597f6d97",
+ "source_digest": "178beefaf6c1b98ff98c6d0d15d416ff73f4d6a0c1a2855e5e8e7cf9d091a236",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1034,6 +1035,7 @@
   "tests/ops/test_generated_ci_artifacts.py",
   "tests/ops/test_git_check_lock.py",
   "tests/ops/test_gitops_check.py",
+  "tests/ops/test_go_lint_module_coverage.py",
   "tests/ops/test_grafana_import.py",
   "tests/ops/test_grar_facade_reexports.py",
   "tests/ops/test_grar_strict_hardening.py",
@@ -1154,7 +1156,8 @@
    "tests/lint/test_check_commit_scope_doc.py"
   ],
   ".devcontainer/devcontainer.json": [
-   "tests/lint/test_check_devcontainer_dep_parity.py"
+   "tests/lint/test_check_devcontainer_dep_parity.py",
+   "tests/ops/test_go_lint_module_coverage.py"
   ],
   ".devcontainer/install-promtool.sh": [
    "tests/preview/test_promtool_pin_parity.py"
@@ -1267,7 +1270,8 @@
   ".github/workflows/validate.yaml": [
    "tests/dx/test_bump_docs.py",
    "tests/ops/test_ci_path_filter_coverage.py",
-   "tests/ops/test_confd_unusable_signal.py"
+   "tests/ops/test_confd_unusable_signal.py",
+   "tests/ops/test_go_lint_module_coverage.py"
   ],
   ".pre-commit-config.yaml": [
    "tests/dx/test_bump_docs.py",
@@ -1425,7 +1429,11 @@
   ],
   "components/tenant-api": [
    "tests/ops/test_ci_path_filter_coverage.py",
+   "tests/ops/test_go_lint_module_coverage.py",
    "tests/ops/test_nightly_race_issue_policy.py"
+  ],
+  "components/tenant-api/.golangci.yml": [
+   "tests/ops/test_go_lint_module_coverage.py"
   ],
   "components/tenant-api/Dockerfile": [
    "tests/dx/test_bump_docs.py"
@@ -1434,7 +1442,8 @@
    "tests/lint/test_check_env_bool_parsers.py"
   ],
   "components/tenant-api/cmd/server/main.go": [
-   "tests/lint/test_check_env_bool_parsers.py"
+   "tests/lint/test_check_env_bool_parsers.py",
+   "tests/ops/test_go_lint_module_coverage.py"
   ],
   "components/tenant-api/internal/federation/token/manager.go": [
    "tests/ops/test_revoked_set_contract.py"
@@ -2717,6 +2726,9 @@
    "tests/dx/test_analyze_bench_history.py",
    "tests/dx/test_canary_quotation_pins.py",
    "tests/dx/test_paired_trend_watch.py"
+  ],
+  "scripts/tools/ops/bench_filter.go": [
+   "tests/ops/test_go_lint_module_coverage.py"
   ],
   "scripts/tools/ops/bench_report_pr.sh": [
    "tests/ops/test_nightly_scan_matrix_drift.py"

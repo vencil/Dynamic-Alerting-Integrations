@@ -1,4 +1,20 @@
 version: "2"
+# ⛔ Files behind a build tag are OUTSIDE the default build, so `golangci-lint
+# run ./...` never loads them — silently, with rc=0. `test/forgee2e/` sat there
+# until #1751. Enrolling the tag HERE rather than as a CI flag keeps a local
+# `run ./...` equivalent to the gate.
+#
+# ⚠️ Loaded is not the same as reported: every file under `test/forgee2e/` is a
+# `_test.go`, so the blanket errcheck and forbidigo exclusions at the bottom of
+# this file apply to all of them. What the tag buys is the linters this file
+# does NOT exclude from tests.
+#
+# ⛔ The tags present in the tree are derived by
+# tests/ops/test_go_lint_module_coverage.py; which of them need an entry here
+# is a hand-written disposition in that file, and only `enrol` is verified.
+run:
+  build-tags:
+    - forge_e2e
 linters:
   default: standard
   # godoclint: a doc comment must start with the name of the declaration it is
@@ -7,8 +23,8 @@ linters:
   # and the tests are all blind to.
   #
   # ⚠️ The start-with-name rule fires only when the declaration HOLDING the
-  # comment is exported, so that half is a first layer, not full coverage (the
-  # gap is tracked in #1736). The package-doc rules fire regardless of export,
+  # comment is exported, so that half is a first layer, not full coverage. The
+  # package-doc rules fire regardless of export,
   # and several of the sites fixed here went through that path.
   #
   # ⛔ When it flags a `const (...)` / `var (...)` group heading, split the group
@@ -86,3 +102,8 @@ linters:
       - path: _test\.go
         linters:
           - forbidigo
+
+# Both default to truncating; 0 = report everything.
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

@@ -1,0 +1,18 @@
+version: "2"
+# Which modules must be enrolled, and the linter floor below, are derived by
+# tests/ops/test_go_lint_module_coverage.py. depguard/forbidigo stay in the two
+# production modules whose ratchets they are.
+#
+# ⛔ No `_test.go` errcheck exclusion, unlike the two production modules: the
+# errcheck findings this enrolment surfaced were the only evidence that nobody
+# had been looking, so silencing them by config would have retired the
+# measurement rather than the defect. They are fixed in place.
+linters:
+  default: standard
+  enable:
+    - godoclint
+
+# Both default to truncating; 0 = report everything.
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

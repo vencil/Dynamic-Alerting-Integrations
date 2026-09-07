@@ -106,7 +106,7 @@ func TestHookEndpoint_FlattensAlertsArray(t *testing.T) {
 	if err != nil {
 		t.Fatalf("POST /hook: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
@@ -129,7 +129,7 @@ func TestHookEndpoint_TolerantOfNonAlertmanagerJson(t *testing.T) {
 	if err != nil {
 		t.Fatalf("POST /hook: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200 even for non-AM payload, got %d", resp.StatusCode)
 	}
@@ -149,7 +149,7 @@ func TestPostsEndpoint_ReturnsJSONArray(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /posts: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var posts []Post
 	if err := json.NewDecoder(resp.Body).Decode(&posts); err != nil {
@@ -169,7 +169,7 @@ func TestHealthz_ReturnsOK(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /healthz: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("expected 200, got %d", resp.StatusCode)
 	}

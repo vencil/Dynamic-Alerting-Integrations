@@ -48,7 +48,9 @@
 # merge.
 #
 # Checks:
-#   1. Go lint (golangci standard + depguard dependency-direction; both modules)
+#   1. Go lint (every Go module; linter sets live in each module's
+#      .golangci.yml, and tests/ops/test_go_lint_module_coverage.py
+#      asserts the floor)
 #   2. Tenant config validation (schema + routing + policy)
 #   3. Custom rule linting (deny-list)
 #   4. Version consistency (bump_docs --check)
@@ -229,8 +231,10 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: "1.26"
-      # golangci-lint v2.12.2 (matches the dev container). Download the pinned
-      # install script and verify its SHA-256 BEFORE executing — no unverified
+      # golangci-lint, version pinned in GOLANGCI_VERSION below (kept equal to
+      # the dev container's by tests/ops/test_go_lint_module_coverage.py).
+      # Download the pinned install script and verify its SHA-256 BEFORE
+      # executing — no unverified
       # `curl | sh` — matching the hadolint download-then-verify pattern in
       # ci.yml. The verified script in turn checks the golangci-lint binary's
       # own checksum against the release.
@@ -252,6 +256,22 @@ jobs:
         with:
           path: ~/.cache/vibe-dl-golangci
           key: ${{ runner.os }}-vibe-dl-golangci-v2.12.2
+
+      # Go module + build cache. ⛔ Deliberately the SAME key namespace as
+      # ci.yml's Go legs, not a private one: this workflow is pull_request-only,
+      # so it never writes a default-branch cache, and a `-go-lint-` namespace
+      # would miss on every PR's first run while ci.yml's warm entry sat next to
+      # it. Sharing makes the first run warm.
+      - name: Cache Go modules + build cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-go-1.26-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-1.26-
+            ${{ runner.os }}-go-
 
       - name: Install golangci-lint
         run: |
@@ -284,13 +304,28 @@ jobs:
           bash scripts/ops/_verify_download.sh "$BIN/golangci-lint" "$GOLANGCI_BIN_SHA256"
           echo "$BIN" >> "$GITHUB_PATH"
           "$BIN/golangci-lint" version
-      # standard linters + depguard dependency-direction ratchet (per-module
-      # .golangci.yml: domain↛handler for tenant-api, logic↛net/http for exporter).
+      # The two production modules. Their per-module .golangci.yml adds the
+      # depguard dependency-direction ratchets (domain↛handler for tenant-api,
+      # logic↛net/http for exporter) on top of the standard set.
       - name: Lint tenant-api
         working-directory: components/tenant-api
         run: golangci-lint run ./...
       - name: Lint threshold-exporter
         working-directory: components/threshold-exporter/app
+        run: golangci-lint run ./...
+      # #1751: the remaining Go modules. Until these steps existed no linter
+      # read them, while the two above printed `0 issues` — a report that reads
+      # like whole-repo coverage. ⛔ Do not add or drop a step by hand-counting:
+      # tests/ops/test_go_lint_module_coverage.py derives the set from
+      # `git ls-files` and requires every tracked .go to be reachable from it.
+      - name: Lint bench-canary
+        working-directory: scripts/tools/ops/bench-canary
+        run: golangci-lint run ./...
+      - name: Lint alertmanager-inhibit
+        working-directory: tests/alertmanager-inhibit
+        run: golangci-lint run ./...
+      - name: Lint e2e-bench receiver
+        working-directory: tests/e2e-bench/receiver
         run: golangci-lint run ./...
 
   validate-config:
