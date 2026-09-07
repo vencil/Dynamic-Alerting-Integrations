@@ -23,26 +23,27 @@ interpolation; max = last; sum). See `probeReport` in
 `components/threshold-exporter/app/probe_write_latency_test.go`. That is the
 thing under measurement's INPUT, not the thing under measurement.
 
-⛔ THE OLD NUMBERS ARE NOT REPRODUCED AND THIS FILE DOES NOT TRY. §四 used to
-quote 150.8% / 50.8% / +0.791 / 1.1%; the parameters that produced them are not
-recoverable from the numbers alone. The synthetic shapes below were chosen for
-being cleanly constructible and are printed in full at the top of every run —
-they are NOT reverse-engineered to land on the old figures. Where the two
-disagree, the number this file prints is the one that has a command behind it.
-(As it happens 150.8/50.8 and this file's ITERS/BULK_N are the same algebra with
-a different bulk fraction: 1/f and (1-f)/f, f=0.663 there, f=0.75 here. That is
-an observation about the old numbers' shape, not a reproduction of them.)
+⛔ THE OLD NUMBERS ARE NOT REPRODUCED AND THIS FILE DOES NOT TRY. The
+parameters behind them are not recoverable from the numbers alone. The
+synthetic shapes below were chosen for being cleanly constructible and are
+printed in full at the top of every run — they are NOT reverse-engineered to
+land on the old figures. Where the two disagree, the number this file prints is
+the one that has a command behind it.
 
-Six checks:
+Seven checks:
   1. the tool exposes what this harness drives, and its identity is printed
   2. pure level shift: the shares match what the split's algebra predicts
-  3. pure episode: `level` correlates at ~+1.000 and still accounts for ~5%
+  3. pure episode: `level` correlates at ~+1.000 and still owns a small share
   4. neither column alone separates the two shapes; together they do
-  5. mutation sensitivity — each of checks 2-4 is killed by >=1 broken
+  7. write-side variation: `total()` keeps both halves of the round
+  5. mutation sensitivity — each of checks 2-4 and 7 is killed by >=1 broken
      discriminant, so "these checks have detection power" is measured
      here, and a check already red before any mutant is reported as NOT
      ASSESSABLE rather than credited with a vacuous kill
-  6. the CI table and the archive block agree, to printed precision
+  6. the two renderers agree, and each one's sd column matches its own share
+
+Exit codes: 0 all checks pass, 1 a check failed, 3 could not measure, and
+argparse's own 2 for a usage error, before any measurement is attempted.
 
 Usage:  python3 -B counterfactual.py [--tool PATH] [--dump SHAPE]
 """
@@ -88,6 +89,17 @@ EPISODE_MAX = 40            # shape B: per-round stall count drawn from [0, max]
 WRITE_NS = 80_000           # per-iteration write cost, flat within a round
 WRITE_JITTER_NS = 30_000    # per-ROUND, independent of load — see below
 
+# ⛔ Shape "write" exists because of `total()`. In the two shapes above the write
+# half is only noise, so a `total()` that returns `load_sum` alone — dropping the
+# write half of the very quantity every correlation in the table is measured
+# against — passed all six checks, with numbers CLOSER to the predictions than
+# the correct implementation's (removing write also removes the only noise in
+# total's variance). Found by blind review, reproduced against a real copy of
+# the tool on disk, not reasoned about. This shape puts the variation where the
+# other two do not, so dropping either half of `total` becomes visible.
+WRITE_SHAPE_LOAD_SPAN_NS = 20_000     # bulk jitter: keeps level/above non-degenerate
+WRITE_SHAPE_WRITE_SPAN_NS = 200_000   # per-iteration write variation, dominates the round
+
 # ⛔ WRITE_JITTER_NS exists so `write_sum` has a DEFINED correlation. With write
 # constant across rounds its sd is 0 and the tool prints `+nan` there, which
 # tells the reader nothing about the discriminant. It is independent of the load
@@ -97,6 +109,15 @@ WRITE_JITTER_NS = 30_000    # per-ROUND, independent of load — see below
 
 TOL_PP = 2.0                # tolerance on a predicted-vs-measured share, in pp
 TOL_CORR = 0.01             # |corr| must be within this of 1.0 where predicted
+# check 7 has no closed-form prediction to compare against (the two halves are
+# independent, so the round total's sd is a quadrature sum): it asserts the
+# write component owns essentially all of the spread and the load components own
+# essentially none. Both bounds are round numbers, not fitted to the output.
+WRITE_SHARE_TOL_PP = 10.0
+QUIET_SHARE_PP = 25.0
+# check 6's sd-vs-share identity is computed from numbers already rounded for
+# printing (sd to 2 dp in ms, share to 1 dp), so it cannot be exact.
+SD_SHARE_IDENTITY_TOL_PP = 0.2
 
 # `render_ci`'s three table rows bind a label to a local; this maps that local to
 # the role the checks reason about. ⛔ The pairs themselves are read out of the
@@ -127,12 +148,20 @@ def load_module(path: Path, name: str):
     spec = importlib.util.spec_from_file_location(name, path)
     mod = importlib.util.module_from_spec(spec)
     sys.modules[name] = mod
+    # ⛔ The tool inserts two entries into `sys.path` at module scope, and this
+    # function is called again on every mutant run. Left alone they accumulate —
+    # harmless in a one-shot subprocess, not harmless if this file is ever
+    # imported into a pytest session, which is the open question about wiring
+    # it up. Measured by blind review: +2 entries per in-process `main()`.
+    saved_path = list(sys.path)
     try:
         spec.loader.exec_module(mod)
     except Exception as exc:                                # noqa: BLE001
         sys.modules.pop(name, None)
         raise CannotMeasure(
             f"importing {path} raised {type(exc).__name__}: {exc}") from exc
+    finally:
+        sys.path[:] = saved_path
     return mod
 
 
@@ -208,6 +237,13 @@ def synth(shape):
             # positive, which is what makes this shape interesting.
             m = int(rng.random() * (EPISODE_MAX + 1))
             load = [v + EPISODE_NS for v in bulk[:m]] + bulk[m:] + tail
+        elif shape == "write":
+            # The load half barely moves — just enough that `level` and `above`
+            # have a defined sd instead of rendering as `nan` — and the write
+            # half carries the round-to-round variation.
+            d = round(rng.random() * WRITE_SHAPE_LOAD_SPAN_NS)
+            load = [v + d for v in bulk] + tail
+            wj = round(rng.random() * WRITE_SHAPE_WRITE_SPAN_NS)
         else:
             raise CannotMeasure(f"unknown shape {shape!r}")
         out.append(probe_row(k, BENCH_N, [WRITE_NS + wj] * ITERS, load))
@@ -222,8 +258,13 @@ def _predicted_shares():
     Shape B: one stall moves load_sum by EPISODE_NS and level by ITERS times the
     bulk's per-index slope (p50 slides one bulk index per stall).
     ⚠️ Independent write jitter inflates the round total's sd, so these are
-    upper bounds; at the parameters above the gap is under 1 pp, which is why
-    TOL_PP is 2.
+    upper bounds — the measured share is always at or below the prediction, and
+    TOL_PP is what absorbs the gap. ⛔ An earlier version of this docstring put
+    a figure on that gap ("under 1 pp"); blind review measured it at 1.13 pp on
+    the level shape. The number is gone rather than corrected: nothing
+    regenerates it, so it would drift again. Every run prints both the
+    prediction and the measurement, which is the number that has a command
+    behind it.
     """
     slope = (BULK_HI_NS - BULK_LO_NS) / (BULK_N - 1)
     lvl_b = ITERS * slope
@@ -245,15 +286,48 @@ def _num(cell, what):
         raise CannotMeasure(f"{what}: cannot read a number out of {cell!r}")
 
 
+def drive(what, fn, *a):
+    """Call into the tool. ⛔ A crash in there is CannotMeasure, never a FAIL.
+
+    Found by blind review: `load_module` wrapped IMPORT-time failures but every
+    CALL was bare, so a plain NameError inside `render_ci` came out as a
+    traceback and rc=1 — the code this file documents for "ran, and the
+    discriminant misbehaved". That is the same disguise the import fix removed,
+    one layer in.
+    """
+    try:
+        return fn(*a)
+    except CannotMeasure:
+        raise
+    except Exception as exc:                                # noqa: BLE001
+        raise CannotMeasure(
+            f"{what} raised {type(exc).__name__}: {exc}") from exc
+
+
+def _corr(cell, what):
+    """A Pearson r, range-checked. Outside [-1, 1] means the WRONG CELL was read.
+
+    ⛔ Blind review swapped two of the table's columns and the level row's check
+    accepted `+132.200` as "~+1": the assertion had only a lower bound. A
+    correlation cannot exceed 1, so a value that does is a scraping failure —
+    could-not-measure — not a discriminant that misbehaved.
+    """
+    v = _num(cell, what)
+    if v == v and abs(v) > 1.0 + 1e-9:          # NaN is a legitimate reading
+        raise CannotMeasure(f"{what}: {v} is not a correlation;"
+                            " the scraper is reading the wrong cell")
+    return v
+
+
 def run_ci(mod, text, roles):
     """{role: (corr, sd_ms, share_pct)} scraped from render_ci's table."""
-    session = mod.load(text, "synthetic")
-    why = mod.reject(session)
+    session = drive("the tool's load()", mod.load, text, "synthetic")
+    why = drive("the tool's reject()", mod.reject, session)
     if why:
         raise CannotMeasure(f"the tool refused the synthetic log: {why}")
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
-        mod.render_ci(session)
+        drive("the tool's render_ci()", mod.render_ci, session)
     lines = buf.getvalue().splitlines()
     at = next((i for i, s in enumerate(lines)
                if s.startswith("|") and "corr(round total" in s), None)
@@ -271,19 +345,19 @@ def run_ci(mod, text, roles):
     for (label, role), cells in zip(roles, body):
         if cells[0] != label:
             raise CannotMeasure(f"row label {cells[0]!r} != AST's {label!r}")
-        out[role] = (_num(cells[1], f"{role} corr"),
+        out[role] = (_corr(cells[1], f"{role} corr"),
                      _num(cells[2].removesuffix("ms"), f"{role} sd"),
                      _num(cells[3], f"{role} share"))
     return out
 
 
 def run_archive(mod, text):
-    """{role: (corr, share_pct)} scraped from render_archive's pooled block."""
-    session = mod.load(text, "synthetic")
+    """{role: (corr, share_pct, sd_ms)} + the round total's sd, from the archive."""
+    session = drive("the tool's load()", mod.load, text, "synthetic")
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
-        mod.render_archive([session])
-    corrs, shares = None, {}
+        drive("the tool's render_archive()", mod.render_archive, [session])
+    corrs, shares, sds, sd_total = None, {}, {}, None
     keys = (("level", "level  (p50 x iters)"), ("above", "above-p50 mass"),
             ("write", "write_sum "))
     for s in buf.getvalue().splitlines():
@@ -291,15 +365,20 @@ def run_archive(mod, text):
         if t.startswith("POOLED"):
             f = t.split()
             corrs = dict(zip(("level", "above", "write"),
-                             (_num(x, "pooled corr") for x in f[2:5])))
+                             (_corr(x, "pooled corr") for x in f[2:5])))
+        if t.startswith("round total ") and " ms " in t:
+            sd_total = _num(t.split(" ms")[0].split()[-1], "archive total sd")
         for role, prefix in keys:
             if t.startswith(prefix) and "=" in t:
                 shares[role] = _num(t.rsplit("=", 1)[1].split()[0],
                                     f"archive {role} share")
-    if corrs is None or len(shares) != 3:
-        raise CannotMeasure("render_archive printed no pooled correlation row"
-                            f" (corrs={corrs is not None}, shares={len(shares)})")
-    return {r: (corrs[r], shares[r]) for r in corrs}
+                sds[role] = _num(t.split(" ms")[0].split()[-1], f"archive {role} sd")
+    if corrs is None or len(shares) != 3 or len(sds) != 3 or sd_total is None:
+        raise CannotMeasure("render_archive's pooled block did not yield the"
+                            f" expected values (corrs={corrs is not None},"
+                            f" shares={len(shares)}, sds={len(sds)},"
+                            f" total sd={sd_total is not None})")
+    return {r: (corrs[r], shares[r], sds[r]) for r in corrs}, sd_total
 
 
 # ── checks ───────────────────────────────────────────────────────────────────
@@ -371,6 +450,29 @@ def check4(lvl_ci, epi_ci):
         + ("" if not bad else "  << " + "; ".join(bad)))
 
 
+def check7(ci):
+    """The write half of `total()` is load-bearing, and a dropped half shows.
+
+    ⛔ This check exists because of a hole blind review put a real broken copy
+    of the tool through: with `total()` returning `load_sum` alone, checks 1-6
+    all passed. In shapes "level" and "episode" the write half is only noise, so
+    removing it from the round total changes nothing any check reads. Here the
+    variation IS the write half, so either half going missing moves the numbers.
+    """
+    bad = []
+    if ci["write"][0] < 1 - TOL_CORR:
+        bad.append(f"write corr {ci['write'][0]:+.3f} is not ~+1")
+    if not 100 - WRITE_SHARE_TOL_PP <= ci["write"][2] <= 100 + WRITE_SHARE_TOL_PP:
+        bad.append(f"write share {ci['write'][2]:.1f}% is not ~100%")
+    for role in ("level", "above"):
+        if ci[role][2] > QUIET_SHARE_PP:
+            bad.append(f"{role} share {ci[role][2]:.1f}% is not quiet")
+    return not bad, (
+        f"write {ci['write'][0]:+.3f} / {ci['write'][2]:.1f}%;"
+        f" level {ci['level'][2]:.1f}% and above {ci['above'][2]:.1f}% stay quiet"
+        + ("" if not bad else "  << " + "; ".join(bad)))
+
+
 MUTANTS = (
     ("above := load_sum (forget to subtract the level)",
      "above", lambda r: r["load_sum"]),
@@ -378,6 +480,10 @@ MUTANTS = (
      "level", lambda r: r["load_p50"]),
     ("above := level - load_sum (sign flip)",
      "above", lambda r: r["load_p50"] * r["iters"] - r["load_sum"]),
+    ("total := load_sum (drop the write half of the round total)",
+     "total", lambda r: r["load_sum"]),
+    ("total := write_sum (drop the load half of the round total)",
+     "total", lambda r: r["write_sum"]),
 )
 
 
@@ -408,9 +514,16 @@ def check5(mod, roles, texts, baseline):
         try:
             lvl = run_ci(mod, texts["level"], roles)
             epi = run_ci(mod, texts["episode"], roles)
+            wrt = run_ci(mod, texts["write"], roles)
+            verdicts = {2: check2(lvl)[0], 3: check3(epi)[0],
+                        4: check4(lvl, epi)[0], 7: check7(wrt)[0]}
+        except CannotMeasure:
+            # ⛔ A mutant that makes the report unreadable IS detected — the
+            # numbers stop existing. Counted as a kill for every assessable
+            # check rather than escaping as this run's own rc 3.
+            verdicts = {n: False for n in assessable}
         finally:
             setattr(mod, attr, orig)
-        verdicts = {2: check2(lvl)[0], 3: check3(epi)[0], 4: check4(lvl, epi)[0]}
         for n in assessable:
             if not verdicts[n]:
                 killed[n].append(name.split(" (")[0])
@@ -425,22 +538,40 @@ def check5(mod, roles, texts, baseline):
     return not (blind or blocked), rows
 
 
-def check6(ci, arch):
-    """The CI table and the archive block are the same three quantities."""
+def check6(ci, arch_pair):
+    """The two renderers agree, and each one's sd column matches its own share.
+
+    ⛔ The second half exists because blind review changed ONLY render_ci's
+    sd-in-ms divisor (`/1e6` -> `/1e3`) and the harness still reported a full
+    pass: no check read that column for anything but its own printed detail
+    string. A number this file scrapes but never asserts is a number this file
+    is not checking, however prominently it appears in the report.
+    """
+    arch, sd_total = arch_pair
     bad = []
     for role in ("level", "above", "write"):
         if abs(ci[role][0] - arch[role][0]) > 0.0011:
             bad.append(f"{role} corr {ci[role][0]:+.3f} vs {arch[role][0]:+.3f}")
         if abs(ci[role][2] - arch[role][1]) > 0.11:
             bad.append(f"{role} share {ci[role][2]:.1f}% vs {arch[role][1]:.1f}%")
-    return not bad, ("3 components x (corr, sd share) agree to printed precision"
+        if abs(ci[role][1] - arch[role][2]) > 0.011:
+            bad.append(f"{role} sd {ci[role][1]:.2f} vs {arch[role][2]:.2f} ms")
+        # The sd column and the share column are the same measurement printed
+        # twice; a unit or scaling bug in either one breaks the identity.
+        want = 100 * arch[role][2] / sd_total if sd_total else float("nan")
+        if abs(ci[role][2] - want) > SD_SHARE_IDENTITY_TOL_PP:
+            bad.append(f"{role} share {ci[role][2]:.1f}% != sd/total"
+                       f" {want:.1f}% (sd {arch[role][2]:.2f} /"
+                       f" {sd_total:.2f} ms)")
+    return not bad, (f"3 components x (corr, sd, share) agree across renderers,"
+                     f" and share == sd / {sd_total:.2f} ms round-total sd"
                      if not bad else "; ".join(bad))
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--tool", type=Path, default=DEFAULT_TOOL)
-    ap.add_argument("--dump", choices=("level", "episode"),
+    ap.add_argument("--dump", choices=("level", "episode", "write"),
                     help="print the synthetic log for one shape and exit")
     args = ap.parse_args(argv)
 
@@ -476,18 +607,20 @@ def main(argv=None) -> int:
               " per round, independent of load")
         print(f"      tolerances: shares +-{TOL_PP} pp, |corr| within {TOL_CORR}\n")
 
-        texts = {s: synth(s) for s in ("level", "episode")}
+        texts = {s: synth(s) for s in ("level", "episode", "write")}
         results = [("1  tool exposes what this harness drives",
                     check1(mod, path, roles))]
         lvl = run_ci(mod, texts["level"], roles)
         epi = run_ci(mod, texts["episode"], roles)
-        r2, r3, r4 = check2(lvl), check3(epi), check4(lvl, epi)
-        baseline = {2: r2[0], 3: r3[0], 4: r4[0]}
+        wrt = run_ci(mod, texts["write"], roles)
+        r2, r3, r4, r7 = check2(lvl), check3(epi), check4(lvl, epi), check7(wrt)
+        baseline = {2: r2[0], 3: r3[0], 4: r4[0], 7: r7[0]}
         results += [
             ("2  pure level shift: shares match the split's algebra", r2),
-            ("3  pure episode: level corr ~+1 yet a ~5% share", r3),
+            ("3  pure episode: level corr ~+1 yet a small share", r3),
             ("4  neither column alone separates the shapes", r4),
-            ("5  mutation sensitivity of checks 2-4",
+            ("7  write-side variation: the round total keeps both halves", r7),
+            ("5  mutation sensitivity of checks 2-4 and 7",
              check5(mod, roles, texts, baseline)),
             ("6  CI table == archive block", check6(lvl, run_archive(mod, texts["level"]))),
         ]
