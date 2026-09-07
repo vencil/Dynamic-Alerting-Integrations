@@ -286,6 +286,9 @@
   "scripts/tools/lint/check_changelog_no_tbd.py": [
    "tests/lint/test_check_changelog_no_tbd.py"
   ],
+  "scripts/tools/lint/check_chart_ship_surface.py": [
+   "tests/lint/test_check_chart_package_contents.py"
+  ],
   "scripts/tools/lint/check_cli_coverage.py": [
    "tests/lint/test_check_cli_coverage.py"
   ],
@@ -799,7 +802,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "f7ae7f5801ea6a895d07f92bcf1faa4773b8ce159cc25953f8b803b43ef420cc",
+ "source_digest": "a81ebd342d6d0098ff4ee1109dc575f5661b5bbac68e6545c9c1286d49828702",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -895,6 +898,7 @@
   "tests/lint/test_check_bilingual_structure.py",
   "tests/lint/test_check_build_completeness.py",
   "tests/lint/test_check_changelog_no_tbd.py",
+  "tests/lint/test_check_chart_package_contents.py",
   "tests/lint/test_check_chart_ship_surface.py",
   "tests/lint/test_check_cli_coverage.py",
   "tests/lint/test_check_cli_default_drift.py",
@@ -1892,6 +1896,7 @@
   ],
   "helm/recipe-preview": [
    "tests/helm/test_image_tag_derivation.py",
+   "tests/lint/test_check_chart_package_contents.py",
    "tests/lint/test_check_chart_ship_surface.py"
   ],
   "helm/recipe-preview/templates/deployment.yaml": [
@@ -1906,6 +1911,7 @@
    "tests/helm/test_machine_identity_guard.py",
    "tests/helm/test_oauth2_gitlab_profile.py",
    "tests/helm/test_single_writer_guard.py",
+   "tests/lint/test_check_chart_package_contents.py",
    "tests/lint/test_check_chart_ship_surface.py"
   ],
   "helm/tenant-api/Chart.yaml": [
@@ -1944,6 +1950,7 @@
   "helm/threshold-exporter": [
    "tests/helm/test_image_tag_derivation.py",
    "tests/helm/test_optional_overrides_render.py",
+   "tests/lint/test_check_chart_package_contents.py",
    "tests/lint/test_check_chart_ship_surface.py",
    "tests/lint/test_check_scrape_reachability.py",
    "tests/ops/test_operator_generate_v2.py"
@@ -2513,6 +2520,10 @@
   ],
   "scripts/tools/lint/check_build_completeness.py": [
    "tests/lint/test_check_build_completeness.py"
+  ],
+  "scripts/tools/lint/check_chart_package_contents.py": [
+   "tests/lint/test_check_chart_package_contents.py",
+   "tests/lint/test_check_chart_ship_surface.py"
   ],
   "scripts/tools/lint/check_chart_ship_surface.py": [
    "tests/lint/test_check_chart_ship_surface.py"

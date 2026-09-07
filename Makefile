@@ -1105,6 +1105,9 @@ CHART_VER  := $(shell grep '^version:' $(CHART_DIR)/Chart.yaml | awk '{print $$2
 chart-package: ## 打包 Helm chart (.tgz)
 	@mkdir -p .build
 	@helm package $(CHART_DIR) -d .build/
+	@python3 -X utf8 scripts/tools/lint/check_chart_package_contents.py \
+		--chart $(CHART_DIR) \
+		--tgz .build/threshold-exporter-$(CHART_VER).tgz
 	@echo "✓ .build/threshold-exporter-$(CHART_VER).tgz"
 
 .PHONY: chart-push

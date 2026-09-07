@@ -156,6 +156,7 @@ lang: en
 | `check_bilingual_structure.py` | ZH/EN 文件結構同步 lint |
 | `check_build_completeness.py` | build.sh ↔ COMMAND_MAP 雙向同步檢查。 |
 | `check_changelog_no_tbd.py` | Detect TBD/TODO placeholders in CHANGELOG (Self-review Gap A.c). |
+| `check_chart_package_contents.py` | assert what a packaged Helm chart .tgz actually contains (#1755). |
 | `check_chart_ship_surface.py` | a shipping chart's root files must be declared SHIP or .helmignore'd (#1755). |
 | `check_cli_coverage.py` | CLI 命令覆蓋率檢查 |
 | `check_cli_default_drift.py` | cli-reference 的「預設值」欄 vs argparse 的實際 default。 |

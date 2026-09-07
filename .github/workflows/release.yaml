@@ -115,6 +115,17 @@ jobs:
           mkdir -p .build
           helm package helm/threshold-exporter -d .build/
 
+      # ⛔ #1755: assert what the archive CONTAINS before it is published. The
+      # source-tree gate (check_chart_ship_surface.py) runs on every PR; this one
+      # reads the .tgz itself, which is the only place a package-time surprise —
+      # a stray file written by an earlier step, a newly pulled subchart — is
+      # visible. `check_chart_ship_surface.py` asserts this step still exists.
+      - name: Verify packaged chart contents (#1755)
+        run: |
+          python3 -X utf8 scripts/tools/lint/check_chart_package_contents.py \
+            --chart helm/threshold-exporter \
+            --tgz .build/threshold-exporter-${{ steps.version.outputs.VERSION }}.tgz
+
       - name: Push Helm chart to OCI registry
         run: |
           helm push .build/threshold-exporter-${{ steps.version.outputs.VERSION }}.tgz \
@@ -655,6 +666,17 @@ jobs:
           mkdir -p .build
           helm package helm/recipe-preview -d .build/
 
+      # ⛔ #1755: assert what the archive CONTAINS before it is published. The
+      # source-tree gate (check_chart_ship_surface.py) runs on every PR; this one
+      # reads the .tgz itself, which is the only place a package-time surprise —
+      # a stray file written by an earlier step, a newly pulled subchart — is
+      # visible. `check_chart_ship_surface.py` asserts this step still exists.
+      - name: Verify packaged chart contents (#1755)
+        run: |
+          python3 -X utf8 scripts/tools/lint/check_chart_package_contents.py \
+            --chart helm/recipe-preview \
+            --tgz .build/recipe-preview-${{ steps.version.outputs.VERSION }}.tgz
+
       - name: Push Helm chart to OCI registry
         run: |
           helm push .build/recipe-preview-${{ steps.version.outputs.VERSION }}.tgz \
@@ -748,6 +770,17 @@ jobs:
         run: |
           mkdir -p .build
           helm package helm/tenant-api -d .build/
+
+      # ⛔ #1755: assert what the archive CONTAINS before it is published. The
+      # source-tree gate (check_chart_ship_surface.py) runs on every PR; this one
+      # reads the .tgz itself, which is the only place a package-time surprise —
+      # a stray file written by an earlier step, a newly pulled subchart — is
+      # visible. `check_chart_ship_surface.py` asserts this step still exists.
+      - name: Verify packaged chart contents (#1755)
+        run: |
+          python3 -X utf8 scripts/tools/lint/check_chart_package_contents.py \
+            --chart helm/tenant-api \
+            --tgz .build/tenant-api-${{ steps.version.outputs.VERSION }}.tgz
 
       - name: Push Helm chart to OCI registry
         run: |

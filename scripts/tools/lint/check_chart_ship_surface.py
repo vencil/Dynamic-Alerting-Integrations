@@ -40,6 +40,16 @@ What it checks
    pulling the chart has ever received it. Verified against a real `.tgz`.
 5. A declaration naming a file that no longer exists is also a violation, so
    the table cannot rot into a list of ghosts.
+6. **Every `helm package` call site must be followed by the archive check**
+   (`check_chart_package_contents.py`) before any `helm push` in the same file.
+   That check reads the produced `.tgz` and needs helm, so it lives in release
+   workflows rather than here — and a step that only lives in a workflow can be
+   deleted, renamed or `|| true`'d without anything noticing. This assertion is
+   what stops that wiring from rotting silently, and it needs no helm to run.
+   ⚠️ Asserted by `check_package_verification_wiring()`, which `main()` runs
+   alongside `check()`. Deliberately NOT folded into `check()`: that one is
+   about a chart's DECLARED table, this one about `helm package` call sites, and
+   a fixture for one is not a fixture for the other.
 
 Scope boundary (deliberate — see #1755)
 ---------------------------------------
@@ -143,6 +153,26 @@ DECLARED: Dict[str, Dict[str, Tuple[str, str]]] = {
 }
 
 _HELM_PACKAGE_RE = re.compile(r"helm\s+package\s+(?P<target>[^\s]+)")
+_HELM_PUSH_RE = re.compile(r"helm\s+push\b")
+# A comment that merely mentions `helm package` is not a call site. Found by
+# a fixture whose own comment read "# no helm package in this workflow" and
+# was counted as one — the shape a prose-matching guard fails in.
+_COMMENT_RE = re.compile(r"^[\s@\-]*#")
+
+# The archive-contents gate (#1755). Named here as a string on purpose: this
+# module must not import it — that one imports DECLARED from here.
+ARCHIVE_CHECK = "check_chart_package_contents.py"
+
+# Spellings that discard the verification step's exit code. Compared
+# whitespace-stripped, so `|| true` and `||true` both match. Which of these
+# actually applies to a given invocation is decided by `_neutering_hits`, not by
+# their mere presence in the window.
+_NEUTERING_INLINE = ("||true", "||:")
+_SET_MINUS_E = "set+e"
+_CONTINUE_ON_ERROR = "continue-on-error:true"
+# Start of a YAML step, so `continue-on-error:` can be attributed to the step it
+# actually belongs to rather than to anything that happens to sit in the window.
+_STEP_START_RE = re.compile(r"^\s*-\s+(name|uses|run|id|with|env|if|shell):")
 _MAKE_ASSIGN_RE = re.compile(r"^(?P<name>[A-Z][A-Z0-9_]*)\s*:?=\s*(?P<value>\S+)")
 
 
@@ -184,6 +214,8 @@ def discover_shipping_charts(repo_root: Path = REPO_ROOT) -> Dict[str, List[str]
             raise CallerError(f"cannot read {makefile}: {exc}") from exc
         make_vars = _resolve_make_vars(text)
         for n, line in enumerate(text.splitlines(), 1):
+            if _COMMENT_RE.match(line):
+                continue
             m = _HELM_PACKAGE_RE.search(line)
             if m:
                 target = _expand(m.group("target"), make_vars)
@@ -209,6 +241,8 @@ def discover_shipping_charts(repo_root: Path = REPO_ROOT) -> Dict[str, List[str]
             except OSError as exc:
                 raise CallerError(f"cannot read {wf}: {exc}") from exc
             for n, line in enumerate(text.splitlines(), 1):
+                if _COMMENT_RE.match(line):
+                    continue
                 m = _HELM_PACKAGE_RE.search(line)
                 if m:
                     target = m.group("target")
@@ -276,6 +310,127 @@ def matching_pattern(name: str, patterns: List[str]) -> str | None:
         if name == rule or fnmatch.fnmatch(name, rule):
             return raw
     return None
+
+
+def _runner_files(repo_root: Path) -> List[Path]:
+    """Files that may invoke `helm package`: the Makefile and every workflow."""
+    files: List[Path] = []
+    makefile = repo_root / "Makefile"
+    if makefile.is_file():
+        files.append(makefile)
+    wf_dir = repo_root / ".github" / "workflows"
+    if wf_dir.is_dir():
+        try:
+            files.extend(
+                sorted(p for p in wf_dir.iterdir() if p.suffix in {".yaml", ".yml"})
+            )
+        except OSError as exc:
+            raise CallerError(f"cannot list {wf_dir}: {exc}") from exc
+    return files
+
+
+def _neutering_hits(window: List[str], idx: int) -> List[Tuple[int, str]]:
+    """Error handling that actually applies to the verifier at `window[idx]`.
+
+    Scoped on purpose. An earlier revision flagged any `|| true` or `set +e`
+    anywhere in the window, which made `rm -rf .build/tmp || true` next to a
+    perfectly wired check read as sabotage — a guard that reports work nobody
+    can do gets switched off, so a false positive here is not harmless.
+
+    What still counts:
+      - `|| true` / `||:` on the verifier's OWN line — that is how you discard
+        a command's exit code;
+      - `set +e` BEFORE it in the same block — after it the command has already
+        run and been evaluated;
+      - `continue-on-error: true` inside the verifier's own YAML step.
+    """
+    hits: List[Tuple[int, str]] = []
+    squashed = window[idx].replace(" ", "")
+    hits.extend((idx, m) for m in _NEUTERING_INLINE if m in squashed)
+    hits.extend(
+        (i, "set +e")
+        for i in range(idx)
+        if _SET_MINUS_E in window[i].replace(" ", "")
+        and not _COMMENT_RE.match(window[i])
+    )
+
+    start = 0
+    for i in range(idx, -1, -1):
+        if _STEP_START_RE.match(window[i]):
+            start = i
+            break
+    end = len(window)
+    for i in range(idx + 1, len(window)):
+        if _STEP_START_RE.match(window[i]):
+            end = i
+            break
+    hits.extend(
+        (i, "continue-on-error: true")
+        for i in range(start, end)
+        if _CONTINUE_ON_ERROR in window[i].replace(" ", "")
+        and not _COMMENT_RE.match(window[i])
+    )
+    return sorted(hits)
+
+
+def check_package_verification_wiring(repo_root: Path = REPO_ROOT) -> List[str]:
+    """Every `helm package` must be verified before the archive is pushed.
+
+    The window is "after this `helm package`, before the next `helm push` in the
+    same file" — ordering matters: a check that runs after publication is not a
+    gate, it is a post-mortem.
+    """
+    violations: List[str] = []
+    for path in _runner_files(repo_root):
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError as exc:
+            raise CallerError(f"cannot read {path}: {exc}") from exc
+        rel = path.relative_to(repo_root)
+        for n, line in enumerate(lines, 1):
+            if _COMMENT_RE.match(line) or not _HELM_PACKAGE_RE.search(line):
+                continue
+            below = lines[n:]
+            stop = next(
+                (
+                    i
+                    for i, l in enumerate(below)
+                    if _HELM_PUSH_RE.search(l) and not _COMMENT_RE.match(l)
+                ),
+                len(below),
+            )
+            window = below[:stop]
+            if not any(
+                ARCHIVE_CHECK in l and not _COMMENT_RE.match(l) for l in window
+            ):
+                where = (
+                    f"before the `helm push` on line {n + stop + 1}"
+                    if stop < len(below)
+                    else "after it"
+                )
+                violations.append(
+                    f"{rel}:{n} runs `helm package` but nothing invokes "
+                    f"{ARCHIVE_CHECK} {where}. The archive would be published "
+                    f"without anyone asserting what is inside it — the #1755 gap "
+                    f"this pair of checks exists to close."
+                )
+                continue
+            # Present but neutered reads exactly like protection while providing
+            # none — the failure mode this whole assertion exists to prevent, so
+            # it is not enough to see the invocation.
+            idx = next(
+                i
+                for i, l in enumerate(window)
+                if ARCHIVE_CHECK in l and not _COMMENT_RE.match(l)
+            )
+            for offset, neutered in _neutering_hits(window, idx):
+                violations.append(
+                    f"{rel}:{n + offset + 1} neutralises the {ARCHIVE_CHECK} "
+                    f"step for the `helm package` on line {n} "
+                    f"({neutered!r}): its exit code is discarded, so the step "
+                    f"passes whatever the archive contains."
+                )
+    return violations
 
 
 def check(repo_root: Path = REPO_ROOT) -> List[str]:
@@ -355,7 +510,7 @@ def main(argv: List[str] | None = None) -> int:
     parser.parse_args(argv)
 
     try:
-        violations = check()
+        violations = check() + check_package_verification_wiring()
     except CallerError as exc:
         print(f"❌ chart ship-surface check could not run: {exc}", file=sys.stderr)
         return EXIT_CALLER_ERROR

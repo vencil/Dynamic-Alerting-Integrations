@@ -548,6 +548,213 @@ class TestHookTriggers:
 
 
 # ---------------------------------------------------------------------------
+# the archive check must stay wired into every `helm package` call site
+# ---------------------------------------------------------------------------
+class TestPackageVerificationWiring:
+    """#1755's second half lives in release workflows, where helm exists.
+
+    A step that only lives in a workflow can be deleted, renamed or have its
+    exit code discarded, and nothing notices until a release ships something it
+    should not have. This assertion is the thing that notices — and it needs no
+    helm, so it runs on every PR.
+    """
+
+    @staticmethod
+    def _repo(tmp_path: Path, workflow: str, makefile: str | None = None) -> Path:
+        repo = tmp_path / "repo"
+        (repo / ".github" / "workflows").mkdir(parents=True)
+        (repo / ".github" / "workflows" / "release.yaml").write_text(
+            workflow, encoding="utf-8"
+        )
+        if makefile is not None:
+            (repo / "Makefile").write_text(makefile, encoding="utf-8")
+        return repo
+
+    def test_live_repo_has_every_call_site_wired(self) -> None:
+        """Green for the right reason: the four real call sites (#1755 lists
+        them) are all covered, not zero call sites found."""
+        assert gate.check_package_verification_wiring(REPO_ROOT) == []
+        sites = [
+            s
+            for sites in gate.discover_shipping_charts(REPO_ROOT).values()
+            for s in sites
+        ]
+        # ⛔ Vacuity guard: no call sites would make the assertion above empty.
+        assert len(sites) >= 4, sites
+
+    def test_package_without_verification_is_red(self, tmp_path: Path) -> None:
+        repo = self._repo(
+            tmp_path,
+            "          helm package helm/demo -d .build/\n"
+            "          helm push .build/demo-1.0.0.tgz oci://reg/charts\n",
+        )
+        v = gate.check_package_verification_wiring(repo)
+        assert len(v) == 1
+        assert "nothing invokes check_chart_package_contents.py" in v[0]
+        assert "before the `helm push` on line 2" in v[0]
+
+    def test_verification_after_the_push_is_red(self, tmp_path: Path) -> None:
+        """Ordering is the point: checking after publication is a post-mortem."""
+        repo = self._repo(
+            tmp_path,
+            "          helm package helm/demo -d .build/\n"
+            "          helm push .build/demo-1.0.0.tgz oci://reg/charts\n"
+            "          python3 scripts/tools/lint/check_chart_package_contents.py\n",
+        )
+        assert len(gate.check_package_verification_wiring(repo)) == 1
+
+    def test_verification_before_the_push_is_green(self, tmp_path: Path) -> None:
+        """Control for the two above — only the position changes."""
+        repo = self._repo(
+            tmp_path,
+            "          helm package helm/demo -d .build/\n"
+            "          python3 scripts/tools/lint/check_chart_package_contents.py\n"
+            "          helm push .build/demo-1.0.0.tgz oci://reg/charts\n",
+        )
+        assert gate.check_package_verification_wiring(repo) == []
+
+    # The verifier invocation and the push, as the real workflow spells them.
+    _V = "          python3 x/check_chart_package_contents.py\n"
+    _U = "          helm push .build/demo-1.0.0.tgz oci://reg/charts\n"
+
+    @pytest.mark.parametrize(
+        ("label", "body"),
+        [
+            ("inline || true", "          python3 x/check_chart_package_contents.py || true\n" + _U),
+            ("inline ||true", "          python3 x/check_chart_package_contents.py ||true\n" + _U),
+            ("set +e before it", "          set +e\n" + _V + _U),
+            (
+                "continue-on-error in ITS step",
+                "      - name: Verify\n        continue-on-error: true\n        run: |\n" + _V + _U,
+            ),
+        ],
+    )
+    def test_a_neutered_verification_is_red(
+        self, tmp_path: Path, label: str, body: str
+    ) -> None:
+        """⭐ Present-but-defanged reads exactly like protection while providing
+        none. Finding the invocation is not enough."""
+        repo = self._repo(
+            tmp_path, "          helm package helm/demo -d .build/\n" + body
+        )
+        v = gate.check_package_verification_wiring(repo)
+        assert len(v) == 1, (label, v)
+        assert "neutralises" in v[0]
+
+    @pytest.mark.parametrize(
+        ("label", "body"),
+        [
+            # ⛔ The dangerous direction: a check that is commented out reads as
+            # absent to a human and as PRESENT to a naive substring scan. This
+            # gate exists to catch a disabled check; being fooled by `#` would
+            # make it decorative. (CodeRabbit on #1780; verified, then fixed.)
+            ("commented-out verifier", "          # python3 x/check_chart_package_contents.py\n" + _U),
+        ],
+    )
+    def test_a_commented_out_verification_does_not_count(
+        self, tmp_path: Path, label: str, body: str
+    ) -> None:
+        repo = self._repo(
+            tmp_path, "          helm package helm/demo -d .build/\n" + body
+        )
+        v = gate.check_package_verification_wiring(repo)
+        assert len(v) == 1, (label, v)
+        assert "nothing invokes" in v[0]
+
+    @pytest.mark.parametrize(
+        ("label", "body"),
+        [
+            # A guard that reports work nobody can do gets switched off, so each
+            # of these false positives was worth removing.
+            ("commented `helm push` before the real one",
+             "          # helm push (old spelling)\n" + _V + _U),
+            ("another command's `|| true`",
+             "          rm -rf .build/tmp || true\n" + _V + _U),
+            ("`set +e` AFTER the verifier has already run",
+             _V + "          set +e\n" + _U),
+            ("continue-on-error on a DIFFERENT step",
+             "      - name: Other\n        continue-on-error: true\n"
+             "        run: echo hi\n      - name: Verify\n        run: |\n" + _V + _U),
+        ],
+    )
+    def test_wiring_that_is_actually_fine_is_green(
+        self, tmp_path: Path, label: str, body: str
+    ) -> None:
+        repo = self._repo(
+            tmp_path, "          helm package helm/demo -d .build/\n" + body
+        )
+        assert gate.check_package_verification_wiring(repo) == [], label
+
+    def test_a_makefile_call_site_counts_too(self, tmp_path: Path) -> None:
+        """`make chart-package` publishes through `chart-push`; the workflows are
+        not the only road to the registry."""
+        repo = self._repo(
+            tmp_path,
+            "# no helm package in this workflow\n",
+            makefile="\t@helm package helm/demo -d .build/\n"
+            "\t@helm push .build/demo-1.0.0.tgz oci://reg/charts\n",
+        )
+        v = gate.check_package_verification_wiring(repo)
+        assert len(v) == 1
+        assert v[0].startswith("Makefile:1")
+
+    def test_unlistable_workflows_dir_is_a_caller_error(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """⛔ Same contract as the sibling assertions: could-not-run is exit 2,
+        never a quiet "no violations". monkeypatch rather than chmod, because
+        chmod 000 does not stop root and this repo's dev container runs as root
+        (#1264) — that test would pass in CI and do nothing here."""
+        repo = self._repo(tmp_path, "          helm package helm/demo\n")
+        real = Path.iterdir
+
+        def patched(self, *a, **k):
+            if self.name == "workflows":
+                raise PermissionError(13, "Permission denied")
+            return real(self, *a, **k)
+
+        monkeypatch.setattr(Path, "iterdir", patched)
+        with pytest.raises(gate.CallerError, match="cannot list"):
+            gate.check_package_verification_wiring(repo)
+
+    def test_unreadable_runner_file_is_a_caller_error(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        repo = self._repo(tmp_path, "          helm package helm/demo\n")
+        real = Path.read_text
+
+        def patched(self, *a, **k):
+            if self.name == "release.yaml":
+                raise PermissionError(13, "Permission denied")
+            return real(self, *a, **k)
+
+        monkeypatch.setattr(Path, "read_text", patched)
+        with pytest.raises(gate.CallerError, match="cannot read"):
+            gate.check_package_verification_wiring(repo)
+
+    def test_no_call_sites_means_nothing_to_assert(self, tmp_path: Path) -> None:
+        """⛔ Anti-vacuity in the other direction: the assertion must not invent
+        violations where no chart is packaged at all."""
+        repo = self._repo(tmp_path, "# nothing here\n")
+        assert gate.check_package_verification_wiring(repo) == []
+
+    def test_a_comment_mentioning_helm_package_is_not_a_call_site(
+        self, tmp_path: Path
+    ) -> None:
+        """Found the hard way: a fixture comment reading "# no helm package in
+        this workflow" was counted as a call site. A guard that matches prose
+        reports work nobody can do."""
+        repo = self._repo(
+            tmp_path,
+            "# no helm package in this workflow\n"
+            "        # helm package helm/demo -d .build/  (disabled)\n",
+            makefile="# helm package helm/demo -d .build/\n",
+        )
+        assert gate.check_package_verification_wiring(repo) == []
+        assert gate.discover_shipping_charts(repo) == {}
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 def test_cli_on_the_live_repo_exits_zero() -> None:
