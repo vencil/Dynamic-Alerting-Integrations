@@ -358,6 +358,79 @@ class TestValidate:
 
 
 # ===========================================================================
+# #1654 re-review: one unreadable file must not cascade into N findings
+# ===========================================================================
+
+class TestUnreadableFileDoesNotCascade:
+    """`_collect_data` isolates an unreadable file as one `unreadable` entry;
+    `validate` must then SKIP the checks that file was the input for, and
+    say so once, rather than run them on an empty set. Measured before this:
+    an unreadable `_routing_profiles.yaml` → every tenant's `_routing_profile`
+    became "unknown profile" (ERROR under --strict); an unreadable tenant
+    file → every profile "defined but not referenced"."""
+
+    @staticmethod
+    def _bad(config_dir, filename, body: bytes):
+        with open(os.path.join(config_dir, filename), 'wb') as f:
+            f.write(b"# \xff\n" + body)
+
+    def test_unreadable_profiles_file_does_not_make_every_ref_unknown(self, config_dir):
+        self._bad(config_dir, '_routing_profiles.yaml', b"routing_profiles:\n  standard: {}\n")
+        _write(config_dir, 'alpha.yaml', {'tenants': {'alpha': {'_routing_profile': 'standard'}}})
+        _write(config_dir, 'beta.yaml', {'tenants': {'beta': {'_routing_profile': 'standard'}}})
+        data = _collect_data(config_dir)
+        assert data["unreadable_files"] == ['_routing_profiles.yaml']
+        for strict in (False, True):
+            msgs = validate(data, strict=strict)
+            assert not any("unknown profile" in m for m in msgs), msgs
+            assert not any(m.startswith("ERROR") for m in msgs), msgs
+            assert sum("profile checks skipped: _routing_profiles.yaml unreadable" in m
+                       for m in msgs) == 1, msgs
+
+    def test_unreadable_tenant_file_does_not_make_every_profile_orphan(self, config_dir):
+        _write(config_dir, '_routing_profiles.yaml', {'routing_profiles': {'standard': {}}})
+        self._bad(config_dir, 'alpha.yaml', b"tenants:\n  alpha:\n    _routing_profile: standard\n")
+        data = _collect_data(config_dir)
+        assert data["unreadable_files"] == ['alpha.yaml']
+        msgs = validate(data)
+        assert not any("not referenced" in m for m in msgs), msgs
+        assert sum("tenant checks skipped: alpha.yaml unreadable" in m for m in msgs) == 1, msgs
+
+    def test_unreadable_tenant_file_does_not_make_policy_tenants_missing(self, config_dir):
+        _write(config_dir, '_domain_policy.yaml',
+               {'domain_policies': {'fin': {'tenants': ['alpha'], 'constraints': {}}}})
+        self._bad(config_dir, 'alpha.yaml', b"tenants:\n  alpha: {}\n")
+        msgs = validate(_collect_data(config_dir), strict=True)
+        assert not any("not found in config-dir" in m for m in msgs), msgs
+
+    def test_real_finding_in_a_readable_file_still_reports(self, config_dir):
+        """Skipping is per INPUT, not global: with the profile set readable,
+        a readable tenant's dangling reference is still a finding even
+        though another tenant file is unreadable."""
+        _write(config_dir, '_routing_profiles.yaml', {'routing_profiles': {'standard': {}}})
+        self._bad(config_dir, 'alpha.yaml', b"tenants:\n  alpha: {}\n")
+        _write(config_dir, 'beta.yaml', {'tenants': {'beta': {'_routing_profile': 'nope'}}})
+        msgs = validate(_collect_data(config_dir), strict=True)
+        assert any("tenant 'beta'" in m and "unknown profile 'nope'" in m for m in msgs), msgs
+
+    def test_cli_unreadable_profiles_file_is_one_error_rc_1(self, config_dir):
+        """End to end under --strict: the cannot-read line, the skip line,
+        rc 1 — and no per-tenant ERROR cascade."""
+        import subprocess
+        self._bad(config_dir, '_routing_profiles.yaml', b"routing_profiles: {}\n")
+        _write(config_dir, 'alpha.yaml', {'tenants': {'alpha': {'_routing_profile': 'standard'}}})
+        script = os.path.join(_REPO, 'scripts', 'tools', 'lint', 'check_routing_profiles.py')
+        result = subprocess.run(
+            [sys.executable, script, '--config-dir', config_dir, '--strict'],
+            capture_output=True, text=True, encoding='utf-8', timeout=120)
+        assert result.returncode == 1, result.stderr
+        assert 'Traceback' not in result.stderr
+        assert result.stderr.count('ERROR:') == 1 and 'cannot read' in result.stderr, result.stderr
+        assert 'profile checks skipped' in result.stderr, result.stderr
+        assert 'unknown profile' not in result.stderr, result.stderr
+
+
+# ===========================================================================
 # CLI integration tests
 # ===========================================================================
 

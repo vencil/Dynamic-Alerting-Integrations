@@ -23,7 +23,7 @@ import yaml
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
-from _lib_python import YamlFileError, detect_cli_lang, exit_on_yaml_file_error, load_yaml_file  # noqa: E402
+from _lib_python import YamlFileError, detect_cli_lang, load_yaml_file  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_confd import has_yaml_extension, is_hidden_name, warn_nested  # noqa: E402
@@ -56,15 +56,19 @@ def _collect_data(config_dir: str) -> dict:
     )
 
     unreadable: list[str] = []
+    unreadable_files: list[str] = []
     for fname in files:
         path = os.path.join(config_dir, fname)
         # #1654 blind review: a lint isolates per file — one unreadable
         # file is one ERROR finding, the other files are still checked
         # (#1008 convention), not an abort that hides their findings.
+        # The file NAME is kept as well as the message: `validate` needs
+        # it to skip the checks whose input this file was (re-review).
         try:
             data = load_yaml_file(path)
         except YamlFileError as exc:
             unreadable.append(str(exc))
+            unreadable_files.append(fname)
             continue
         if not data or not isinstance(data, dict):
             continue
@@ -97,26 +101,50 @@ def _collect_data(config_dir: str) -> dict:
         "tenant_ids": tenant_ids,
         "profile_refs": profile_refs,
         "unreadable": unreadable,
+        "unreadable_files": unreadable_files,
     }
 
 
 def validate(data: dict, *, strict: bool = False) -> list[str]:
-    """Run all validation checks. Returns list of messages."""
+    """Run all validation checks. Returns list of messages.
+
+    #1654 re-review: a check whose INPUT file could not be read is skipped,
+    and says so in one line, instead of running on the empty set. Measured
+    before this: an unreadable ``_routing_profiles.yaml`` made every tenant's
+    reference an "unknown profile" finding (ERROR under ``--strict``), and an
+    unreadable tenant file made every profile "defined but not referenced" —
+    one bad file, N findings about files that are fine. The ``ERROR: cannot
+    read`` line for the bad file is still emitted by ``main`` and still sets
+    rc 1; only the dependent checks go quiet.
+    """
     messages: list[str] = []
     severity = "ERROR" if strict else "WARN"
     profiles = data["profiles"]
     policies = data["policies"]
     tenant_ids = data["tenant_ids"]
     profile_refs = data["profile_refs"]
+    unreadable_files = list(data.get("unreadable_files", []))
+    profiles_unreadable = [f for f in unreadable_files
+                           if f in ("_routing_profiles.yaml", "_routing_profiles.yml")]
+    tenants_unreadable = [f for f in unreadable_files if not f.startswith("_")]
+    if profiles_unreadable:
+        messages.append("INFO: profile checks skipped: "
+                        f"{', '.join(profiles_unreadable)} unreadable")
+    if tenants_unreadable:
+        messages.append("INFO: tenant checks skipped: "
+                        f"{', '.join(tenants_unreadable)} unreadable")
 
     # Check 1: Profile references point to existing profiles
-    for tenant, ref in sorted(profile_refs.items()):
-        if ref not in profiles:
-            messages.append(
-                f"{severity}: tenant '{tenant}': _routing_profile "
-                f"references unknown profile '{ref}'")
+    # (needs the profile set — skipped when _routing_profiles.yaml is unreadable)
+    if not profiles_unreadable:
+        for tenant, ref in sorted(profile_refs.items()):
+            if ref not in profiles:
+                messages.append(
+                    f"{severity}: tenant '{tenant}': _routing_profile "
+                    f"references unknown profile '{ref}'")
 
     # Check 2: Domain policy tenant lists reference existing tenants
+    # (the tenant-existence half needs every tenant file readable)
     for policy_name, policy in sorted(policies.items()):
         if not isinstance(policy, dict):
             messages.append(f"WARN: domain_policy '{policy_name}': not a dict")
@@ -125,6 +153,8 @@ def validate(data: dict, *, strict: bool = False) -> list[str]:
         if not isinstance(tenants, list):
             messages.append(
                 f"WARN: domain_policy '{policy_name}': 'tenants' must be a list")
+            continue
+        if tenants_unreadable:
             continue
         for t in tenants:
             if t not in tenant_ids:
@@ -153,17 +183,22 @@ def validate(data: dict, *, strict: bool = False) -> list[str]:
                     f"unknown constraint '{key}'")
 
     # Check 4: Orphan profiles (defined but never referenced) — info only
-    referenced = set(profile_refs.values())
-    for pname in sorted(profiles):
-        if pname not in referenced:
-            messages.append(
-                f"INFO: routing_profile '{pname}' is defined but "
-                f"not referenced by any tenant")
+    # (needs both sides readable: the profile set AND every tenant's ref)
+    if not profiles_unreadable and not tenants_unreadable:
+        referenced = set(profile_refs.values())
+        for pname in sorted(profiles):
+            if pname not in referenced:
+                messages.append(
+                    f"INFO: routing_profile '{pname}' is defined but "
+                    f"not referenced by any tenant")
 
     return messages
 
 
-@exit_on_yaml_file_error  # #1654: an unreadable control file → rc 2, named
+# #1654: no entry-level rc-2 wrapper here on purpose — the one lib load site
+# is caught per file in `_collect_data` (a lint reports an unreadable file as
+# an ERROR finding, rc 1, and keeps checking the rest), so a decorator would
+# be unreachable and its "rc 2" promise false.
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Lint routing profiles and domain policies (ADR-007)")

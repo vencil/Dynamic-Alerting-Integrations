@@ -417,19 +417,27 @@ _ROWS = [
 ]
 _ROW_IDS = [r[0] for r in _ROWS]
 
-# A LINT isolates per file (#1008): one unreadable file is one ERROR
-# finding — rc 1 — and the other files are still checked; it is not the
-# caller-error abort the CLI tools use. Everything else expects 2.
-_BAD_RC_OVERRIDE = {"check_routing_profiles": EXIT_VIOLATION}
+def _expected_bad_rc(script: Path) -> int:
+    """Derived from the tool's CLASS, not a per-label table (re-review).
+
+    A LINT (``scripts/tools/lint/``) isolates per file (#1008): one
+    unreadable file is one ERROR finding — ``EXIT_VIOLATION`` — and the
+    other files are still checked. A CLI tool that cannot read its input is
+    a caller error — ``EXIT_CALLER_ERROR``. A new lint tool added to
+    ``_ROWS`` gets the lint answer without anyone editing a dict.
+    """
+    return EXIT_VIOLATION if script.parent == LINT else EXIT_CALLER_ERROR
 
 
 @pytest.mark.parametrize("label, script, bad, cwd, named, ctrl, ctrl_rc", _ROWS, ids=_ROW_IDS)
-def test_tool_names_the_unreadable_file_and_exits_2(fx, label, script, bad, cwd, named, ctrl, ctrl_rc):
+def test_tool_names_the_unreadable_file_with_its_class_rc(fx, label, script, bad, cwd, named, ctrl, ctrl_rc):
     p = _run(script, bad(fx), fx[cwd] if cwd else None)
-    expected_rc = _BAD_RC_OVERRIDE.get(label, EXIT_CALLER_ERROR)
+    expected_rc = _expected_bad_rc(script)
     assert p.returncode == expected_rc, (
-        f"{label}: rc {p.returncode}, expected {expected_rc} — 1 is EXIT_VIOLATION's number "
-        f"and an uncaught traceback's number.\nstderr={p.stderr[-500:]!r}")
+        f"{label}: rc {p.returncode}, expected {expected_rc} "
+        f"({'lint finding' if expected_rc == EXIT_VIOLATION else 'caller error'}); an "
+        f"uncaught traceback also exits 1, so the traceback check below is what tells "
+        f"a lint finding from a crash.\nstderr={p.stderr[-500:]!r}")
     assert "Traceback" not in p.stderr, f"{label}: {p.stderr[-500:]!r}"
     assert named in p.stderr, f"{label}: stderr must name the file; got {p.stderr[-500:]!r}"
     assert "cannot read" in p.stderr or "cannot compare" in p.stderr, p.stderr[-500:]
@@ -533,9 +541,16 @@ def test_validate_config_unchanged_rc_1_named(fx):
 # ---------------------------------------------------------------------------
 _LIB_ROOTS = {"load_yaml_file", "load_tenant_configs"}
 _LIB_MODULES = {"_lib_io", "_lib_python", "scripts.tools._lib_io", "scripts.tools._lib_python"}
-# Handler spellings that catch YamlFileError (a yaml.YAMLError).
-_GUARDS = {"yaml.YAMLError", "YAMLError", "YamlFileError", "Exception", "_INPUT_ERRORS"}
+# Handler spellings that catch YamlFileError (a yaml.YAMLError). Matched on
+# the LAST attribute segment, so `yaml.error.YAMLError`, `_lib_io.YamlFileError`
+# and `_lib_python.YamlFileError` count too (re-review: they were judged
+# unguarded); a bare `except:` and `BaseException` catch everything.
+_GUARD_NAMES = {"YAMLError", "YamlFileError", "Exception", "BaseException", "_INPUT_ERRORS"}
 _ENTRY = "exit_on_yaml_file_error"
+
+
+def _is_guard(handler: str) -> bool:
+    return handler == "<bare>" or handler.rsplit(".", 1)[-1] in _GUARD_NAMES
 
 # ⛔ Exit-locked. Modules whose lib load sites are NOT lexically guarded and
 # whose main is NOT wrapped, because they guard by hand somewhere up the
@@ -643,7 +658,7 @@ class _Sites(ast.NodeVisitor):
             is_root = (target in _LIB_MODULES
                        or _module_reexports_lib_root(target, f.attr))
         if is_root:
-            guarded = any(h in _GUARDS for hs in self.handlers for h in hs)
+            guarded = any(_is_guard(h) for hs in self.handlers for h in hs)
             self.sites.append((node.lineno, ".".join(self.func) or "<module>", guarded))
         self.generic_visit(node)
 
@@ -734,6 +749,40 @@ def test_scanner_sees_module_alias_attribute_calls():
     assert _sites_of("import _lib_python\ndef f(p):\n    return _lib_python.load_yaml_file(p)\n")
 
 
+@pytest.mark.parametrize("handler", [
+    "except:", "except BaseException:", "except Exception:",
+    "except yaml.error.YAMLError:", "except _lib_io.YamlFileError:",
+    "except _lib_python.YamlFileError:", "except (OSError, yaml.YAMLError):",
+])
+def test_scanner_accepts_every_handler_spelling_that_catches_it(handler):
+    """Each of these catches a YamlFileError at runtime; the first cut of the
+    scanner matched whole strings and called the dotted ones unguarded.
+
+    ⚠️ Latent alias gaps, recorded and NOT closed here (no code in the tree
+    uses them; a wrong classifier reads as a rule): ``from ops import
+    policy_engine as pe`` (package-qualified module import — `_module_aliases`
+    only sees `import X as y`), ``from scripts.tools import _lib_io`` (the
+    lib module bound by ImportFrom, not Import), and ``getattr(mod,
+    "load_yaml_file")(p)`` (no static name at all). A site reached through
+    one of those is invisible, i.e. silently passes — the scanner errs open
+    on shapes it cannot see, which is the direction to remember."""
+    src = ("import yaml\nimport _lib_io\nimport _lib_python\n"
+           "from _lib_io import load_yaml_file\n"
+           f"def f(p):\n    try:\n        return load_yaml_file(p)\n    {handler}\n        return None\n")
+    sites = _sites_of(src)
+    assert sites and all(g for _, _, g in sites), (handler, sites)
+
+
+def test_scanner_still_flags_a_handler_that_does_not_catch_it():
+    """Control for the test above: `except OSError` / `except KeyError` are
+    not guards, and neither is a dotted name ending in something else."""
+    for handler in ("except OSError:", "except (KeyError, ValueError):", "except yaml.reader.ReaderError:"):
+        src = ("import yaml\nfrom _lib_io import load_yaml_file\n"
+               f"def f(p):\n    try:\n        return load_yaml_file(p)\n    {handler}\n        return None\n")
+        sites = _sites_of(src)
+        assert sites and not any(g for _, _, g in sites), (handler, sites)
+
+
 def test_scanner_sees_reexport_through_a_tool_module():
     """`from policy_engine import load_yaml_file` resolves to the lib helper
     (policy_engine imports it and does not define its own)."""
@@ -759,6 +808,57 @@ def test_onboard_rule_file_loop_still_isolates_per_file(tmp_path):
     _c, recording, summary = ob.analyze_rule_files([str(bad), str(good)])
     assert any(str(bad) in e for e in summary["errors"]), summary["errors"]
     assert len(recording) == 1, recording
+    # Re-review: isolation names every bad file, but the RUN must not end
+    # 0 — main turns a non-empty summary["errors"] into rc 2 after writing.
+    assert "Failed to load" in summary["errors"][0]
+
+
+_RULE_GOOD = b"groups:\n  - name: g\n    rules:\n      - alert: A\n        expr: up > 1\n"
+_RULE_BAD = b"groups:\n  - name: \xff\n"
+
+
+@pytest.mark.parametrize("shape, files, rc, plan_written", [
+    ("all-bad", {"a.yml": _RULE_BAD, "b.yml": _RULE_BAD}, EXIT_CALLER_ERROR, True),
+    ("bad+good", {"a.yml": _RULE_BAD, "b.yml": _RULE_GOOD}, EXIT_CALLER_ERROR, True),
+    ("all-good", {"a.yml": _RULE_GOOD, "b.yml": _RULE_GOOD}, EXIT_OK, True),
+], ids=["all-bad", "bad+good", "all-good"])
+def test_onboard_rule_files_unreadable_ends_with_rc_2_after_writing(tmp_path, shape, files, rc, plan_written):
+    """The three shapes of `--rule-files` with per-file isolation: every bad
+    file named in one run, the plan still written from the readable ones,
+    and the rc says whether every input was read. Measured before the
+    re-review fix: all-bad → rc 0 with a header-only migration-plan.csv."""
+    rules = tmp_path / "rules"
+    rules.mkdir()
+    for name, body in files.items():
+        (rules / name).write_bytes(body)
+    out = tmp_path / "out"
+    p = _run(OPS / "onboard_platform.py",
+             ["--rule-files", str(rules / "*.yml"), "-o", str(out)])
+    assert p.returncode == rc, f"{shape}: rc {p.returncode}\nstderr={p.stderr[-600:]!r}"
+    assert "Traceback" not in p.stderr
+    assert any(out.rglob("migration-plan.csv")) == plan_written, \
+        sorted(str(f) for f in out.rglob("*"))
+    bad_names = [n for n, b in files.items() if b is _RULE_BAD]
+    if bad_names:
+        assert f"ERROR: {len(bad_names)} rule file(s) could not be read" in p.stderr, p.stderr[-600:]
+        for n in bad_names:
+            assert n in p.stderr
+    else:
+        assert "could not be read" not in p.stderr
+
+
+def test_onboard_rule_files_json_keeps_envelope_with_errors(tmp_path):
+    import json
+    rules = tmp_path / "rules"
+    rules.mkdir()
+    (rules / "a.yml").write_bytes(_RULE_BAD)
+    (rules / "b.yml").write_bytes(_RULE_GOOD)
+    p = _run(OPS / "onboard_platform.py",
+             ["--rule-files", str(rules / "*.yml"), "-o", str(tmp_path / "out"), "--json"])
+    assert p.returncode == EXIT_CALLER_ERROR, p.stderr[-600:]
+    doc = json.loads(p.stdout)
+    errors = doc["phases"]["phase2"]["summary"]["errors"]
+    assert len(errors) == 1 and "a.yml" in errors[0], errors
 
 
 def test_routing_lint_reports_the_bad_file_and_still_reads_the_rest(tmp_path):
