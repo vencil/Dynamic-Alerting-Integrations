@@ -93,6 +93,8 @@ def invalid_tenant_names(draw):
         'too_long',       # > 63 chars
         'special',        # special characters
         'empty',          # empty string
+        'trailing_newline',  # the #1779 shape, deterministic (see below)
+        'control_char',   # embedded / other control chars
     ]))
 
     if invalid_type == 'uppercase':
@@ -111,6 +113,19 @@ def invalid_tenant_names(draw):
         return name + '-'
     elif invalid_type == 'too_long':
         return 'a' * 64
+    elif invalid_type == 'trailing_newline':
+        # `re.match(r"^…$")` accepted exactly this shape — `$` succeeds
+        # before a final newline — and nothing else in this strategy does
+        # (every other control char was already outside the character
+        # class). Its own branch so every run draws it, not 1 in 64
+        # (blind review measured the mixed branch missing the regression
+        # on some seeds).
+        name = draw(st.text(alphabet='abc123', min_size=1, max_size=5))
+        return name + '\n'
+    elif invalid_type == 'control_char':
+        name = draw(st.text(alphabet='abc123', min_size=1, max_size=5))
+        ctrl = draw(st.sampled_from(['\r', '\x1b', '\x00']))
+        return name + ctrl if draw(st.booleans()) else name + ctrl + name
     elif invalid_type == 'special':
         # Include at least one special char
         base = draw(st.text(alphabet='abc123', min_size=0, max_size=5))

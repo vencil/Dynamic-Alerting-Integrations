@@ -55,6 +55,7 @@ class TestNameValidation:
             "foo!",  # symbol
             "_foo",  # leading underscore
             "foo_",  # trailing underscore
+            "foo\n",  # trailing newline: `$` + .match let it through (#1779)
             "check",  # reserved
             "lint",  # reserved
             "test",  # reserved

@@ -806,7 +806,9 @@ def _validate_version_label(tenant: str, key: str, base: str) -> list[str]:
         out.append(
             f"  WARN: {tenant}: literal version=\"default\" in key '{key}' is "
             f"reserved for the normalize-layer fallback (ADR-024 OQ-6)")
-    elif not _VERSION_LABEL_RE.match(value):
+    # fullmatch: `$` also succeeds before a trailing newline under `.match`,
+    # while the same literal run by Go RE2 (resolve.go) is end-of-text (#1779).
+    elif not _VERSION_LABEL_RE.fullmatch(value):
         out.append(
             f"  WARN: {tenant}: version '{value}' in key '{key}' violates "
             f"{VERSION_LABEL_PATTERN} (ADR-024 OQ-6; pilot-calibratable)")
