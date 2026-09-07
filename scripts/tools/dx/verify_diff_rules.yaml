@@ -166,6 +166,25 @@ safe_ignore:
 
 # ── 人工映射：AST/文字掃描與目錄規則都構不到的個案 ────────────────────────
 overrides:
+  # 五份 .golangci.yml：守衛從 tracked go.mod 推導 module、再動態組出設定檔
+  # 路徑，所以三層自動映射（import / text / dir）都構不到它們——紀律 #1 的形狀。
+  # 自 invariant 5 起「設定檔內容能不能真的 lint 到東西」也是斷言，於是改任何
+  # 一份都可能讓守衛轉紅，映射必須存在。
+  - source: "components/tenant-api/.golangci.yml"
+    tests: [tests/ops/test_go_lint_module_coverage.py]
+    justification: run.build-tags 收編（invariant 3）＋ linters 內容下限（invariant 5）；路徑由 go.mod 推導而來，掃描構不到
+  - source: "components/threshold-exporter/app/.golangci.yml"
+    tests: [tests/ops/test_go_lint_module_coverage.py]
+    justification: 同上（invariant 5 的 linters.default／exclusions 下限）
+  - source: "scripts/tools/ops/bench-canary/.golangci.yml"
+    tests: [tests/ops/test_go_lint_module_coverage.py]
+    justification: 同上
+  - source: "tests/alertmanager-inhibit/.golangci.yml"
+    tests: [tests/ops/test_go_lint_module_coverage.py]
+    justification: 同上
+  - source: "tests/e2e-bench/receiver/.golangci.yml"
+    tests: [tests/ops/test_go_lint_module_coverage.py]
+    justification: 同上
   - source: "scripts/tools/dx/verify_diff_rules.yaml"
     tests: [tests/dx/test_verify_diff.py]
     justification: 工具自身的規則檔（測試經 DEFAULT_RULES_PATH 常數引用，非字面路徑，掃描構不到）

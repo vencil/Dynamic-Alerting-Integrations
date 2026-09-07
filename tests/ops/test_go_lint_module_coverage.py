@@ -27,6 +27,9 @@ reason. Read it as the list of holes, not as a formality.
   4.  TOOLCHAIN PARITY — the configs tell contributors a local run equals the
       gate; that holds only while the gate's pinned linter and the dev
       container's are the same version.
+  5.  EFFECTIVE CONFIG — a step that runs and can never report is enrolment on
+      paper. `default: none`, a catch-all exclusion, or no config at all makes
+      `0 issues` permanent while 1a still counts the module as covered.
 
 ⛔ Invariant 3 is a PIN, not a classifier — it asserts this repo's build tags
 are exactly the named set below, each with a hand-written disposition. Only the
@@ -42,12 +45,17 @@ carries an anti-vacuity pin (`_ANCHOR_MODULE`, `_ANCHOR_TAG`,
 `_ANCHOR_GO_FILE`): an empty derivation makes every `all(...)` below trivially
 true, which is the failure this module exists to prevent.
 
-⚠️ Known blind spots, so they are not mistaken for coverage: a `.golangci.yml`
-whose CONTENT disables everything (`default: none`, a catch-all exclusion) is
-enrolment as far as 1a is concerned; a module with a step but no config at all
-lints with upstream defaults; and neither `strategy.matrix` nor a
+⚠️ Known blind spots, so they are not mistaken for coverage. **Nothing here
+runs golangci-lint** — every invariant reads workflow, config and paths, so a
+linter that silently stopped detecting would pass all of them; the executable
+control is the `Go Lint` job itself, and a probe inside pytest was rejected on
+measurement (`ci.yml::python-tests-run` has no `setup-go`, so it would skip in
+CI, and a vacuous control is worse than a declared gap). Invariant 5 checks the
+config's SHAPE, not its effect. Neither `strategy.matrix` nor a
 `${{ }}`-valued `working-directory` is modelled — 1a reports those as a
-missing/stale pair rather than naming them.
+missing/stale pair rather than naming them. `_UNREACHABLE_DIRS` pins upstream
+behaviour, so a golangci-lint upgrade that changes its default skip set makes
+1b stale without saying so.
 
 ⛔ The matching and condition-evaluation helpers are IMPORTED from
 `test_ci_path_filter_coverage`, never reimplemented — a second answer to "does
@@ -199,6 +207,31 @@ def _tracked_go_files() -> tuple[str, ...]:
     return tuple(p for p in _tracked_files() if p.endswith(".go"))
 
 
+# Directory names `golangci-lint run ./...` never descends into. NOT my list:
+# the `go` command itself ignores `testdata` and any path element beginning
+# `.` or `_` (cmd/go's package-matching rules), and golangci-lint's default
+# `exclude-dirs-use-default` adds vendor/third_party/Godeps/builtin/examples.
+# Enumeration is legitimate here because the authority is outside this repo —
+# but it is a PIN on that upstream behaviour, so a golangci-lint upgrade that
+# changes the default set makes this stale, silently.
+_UNREACHABLE_DIRS = frozenset(
+    {"testdata", "vendor", "third_party", "Godeps", "builtin", "examples"})
+
+
+def _unreachable_by_dotdotdot(rel: str) -> bool:
+    """Is `rel` inside a directory `./...` skips, even within a linted module?
+
+    ⛔ Without this, invariant 1b claims more than it checks — exactly the
+    over-claim that let `bench_filter.go` hide. A file under `testdata/` sits
+    inside a module with a lint step and is still read by nothing.
+    """
+    return any(
+        segment in _UNREACHABLE_DIRS
+        or segment.startswith(("_", "."))
+        for segment in rel.split("/")[:-1]
+    )
+
+
 def _owning_module(rel: str, modules: frozenset[str]) -> str | None:
     """The nearest ancestor directory of `rel` that is a Go module, or None.
 
@@ -211,12 +244,18 @@ def _owning_module(rel: str, modules: frozenset[str]) -> str | None:
     return max(candidates, key=len) if candidates else None
 
 
-def _configured_build_tags(module: str) -> list[str]:
+def _module_config(module: str) -> dict:
     config = ROOT / module / ".golangci.yml"
     assert config.is_file(), (
-        f"{module} has no .golangci.yml, so `run.build-tags` cannot enrol "
-        "anything and its tagged files are outside every linter.")
-    parsed = yaml.safe_load(config.read_text(encoding="utf-8")) or {}
+        f"{module} has no .golangci.yml. golangci-lint then walks up, finds "
+        "none, and runs its OWN defaults — no godoclint, and the truncating "
+        "`max-same-issues`/`max-issues-per-linter` this repo turns off. The "
+        "step still prints `0 issues`, so the loss is silent.")
+    return yaml.safe_load(config.read_text(encoding="utf-8")) or {}
+
+
+def _configured_build_tags(module: str) -> list[str]:
+    parsed = _module_config(module)
     return [str(t) for t in (parsed.get("run") or {}).get("build-tags") or []]
 
 
@@ -274,17 +313,20 @@ def test_every_go_file_is_under_a_linted_module() -> None:
     orphans = sorted(
         rel for rel in go_files
         if _owning_module(rel, modules) not in linted
+        or _unreachable_by_dotdotdot(rel)
     )
 
     undisclosed = [rel for rel in orphans if rel not in _EXEMPT_GO_FILES]
     assert not undisclosed, (
         f"tracked .go file(s) that no lint step reaches: {undisclosed}.\n"
-        "⛔ golangci-lint operates on modules, so a file outside every go.mod "
-        "is read by no linter and by no gofmt — silently, because every "
-        "enrolled module still prints `0 issues`.\n"
-        "Move it under a module (preferred), or add it to _EXEMPT_GO_FILES "
-        "with the reason it cannot be — that entry records a hole, it does not "
-        "close one.")
+        "⛔ Two ways to land here, both silent because every enrolled module "
+        "still prints `0 issues`: the file is outside every `go.mod` (golangci-"
+        "lint needs a module, so no linter and no gofmt reads it), or it is "
+        "inside a linted module but under a directory `./...` skips "
+        f"({sorted(_UNREACHABLE_DIRS)}, or any `_`/`.`-prefixed segment).\n"
+        "Move it where `./...` reaches it (preferred), or add it to "
+        "_EXEMPT_GO_FILES with the reason it cannot be — that entry records a "
+        "hole, it does not close one.")
 
     stale = sorted(set(_EXEMPT_GO_FILES) - set(orphans))
     assert not stale, (
@@ -423,3 +465,73 @@ def test_golangci_version_matches_the_dev_container() -> None:
         f"container declares {declared[0]}. A local `golangci-lint run ./...` "
         "is then NOT the gate, which is exactly what the per-module configs "
         "promise it is. Bump both together.")
+
+
+# ── invariant 5: an enrolled module must actually lint something ───────────
+
+
+def test_every_linted_module_configures_a_real_linter_set() -> None:
+    """Enrolment is a step; this is whether the step can ever report.
+
+    ⛔ Raised independently by two reviewers, and the shape is this module's
+    own subject matter one level down: invariant 1a asks whether a step
+    EXISTS, and a config saying `default: none` — or carrying an exclusion
+    that matches every file — satisfies it while golangci-lint reports
+    `0 issues` forever. Cheapest disarm in the whole PR, one word.
+
+    ⚠️ What this does NOT do is run the linter. An executable probe was
+    considered and rejected on measurement: the job that runs these tests
+    (`ci.yml::python-tests-run`) has no `setup-go` and no golangci-lint, so
+    the probe would skip in CI — a vacuous control is worse than a declared
+    gap. The real executable control is the `Go Lint` job itself.
+    """
+    for module in sorted(set(_lint_steps().values())):
+        parsed = _module_config(module)
+        linters = parsed.get("linters") or {}
+
+        default = linters.get("default")
+        assert default == "standard", (
+            f"{module}/.golangci.yml sets `linters.default: {default!r}`. "
+            "Every module in this repo starts from `standard`; anything else "
+            "(especially `none`) makes the lint step run and report nothing "
+            "while invariant 1a still counts the module as enrolled. If a "
+            "module genuinely needs a different base, say so here first.")
+
+        for rule in (linters.get("exclusions") or {}).get("rules") or []:
+            pattern = str(rule.get("path", ""))
+            assert pattern not in {".*", ".", "^.*$", r".*\.go$", ".+"}, (
+                f"{module}/.golangci.yml excludes `path: {pattern}`, which "
+                "matches every file in the module — the step then reports "
+                "nothing and still exits 0. Narrow it to the files that "
+                "actually need the exclusion.")
+
+
+def test_unreachable_dir_predicate_is_exercised_by_something() -> None:
+    """`_UNREACHABLE_DIRS` has ZERO live instances, so 1b cannot exercise it.
+
+    ⛔ A predicate the corpus never reaches is indistinguishable from one that
+    returns False for everything — mutating it would leave the suite green.
+    Pin both directions on synthetic paths so the predicate itself is held.
+    Fictional on purpose: `_unreachable_by_dotdotdot` never touches the
+    filesystem, and a real path here would be harvested as an input this
+    module reads.
+    """
+    for reachable in (
+        "components/zzz-api/internal/svc/handler.go",
+        "components/zzz-api/main.go",
+        "zzz/testdatabase/loader.go",      # substring, not a path segment
+        "zzz/my_helpers/util.go",          # `_` inside a segment, not leading
+    ):
+        assert not _unreachable_by_dotdotdot(reachable), reachable
+
+    for hidden in (
+        "components/zzz-api/internal/testdata/fixture.go",
+        "components/zzz-api/vendor/example.com/dep/dep.go",
+        "components/zzz-api/_scratch/probe.go",
+        "components/zzz-api/.hidden/probe.go",
+        "components/zzz-api/examples/demo/main.go",
+    ):
+        assert _unreachable_by_dotdotdot(hidden), hidden
+
+    # The file itself is never the excluded segment — only its directories.
+    assert not _unreachable_by_dotdotdot("zzz/testdata.go")
