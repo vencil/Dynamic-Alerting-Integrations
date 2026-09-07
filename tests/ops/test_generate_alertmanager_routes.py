@@ -1065,9 +1065,13 @@ class TestValidateVersionLabel:
         assert "violates" in self._warn('container_cpu{version="V2.0"}')
 
     def test_trailing_newline_violates_like_go_re2_does(self):
-        """#1779: the same literal is run by Go RE2 in resolve.go, where `$`
-        is end-of-text; Python's `.match` accepted `"v1\\n"` and the two
-        planes disagreed. `fullmatch` aligns them."""
+        """#1779: `.match` accepted `"v1\\n"` (Python's `$` succeeds before
+        a final newline); `fullmatch` rejects it, which is what the shared
+        literal means under Go RE2 (`$` = end of text). The exporter never
+        reaches that comparison for this key — its `keyWithLabelsRe` `.`
+        does not cross a newline, so the key is not even dimensional there
+        — so "reject" is the answer on both planes either way; the Python
+        side's wider key parse is a pre-existing difference (#1788)."""
         assert "violates" in self._warn('container_cpu{version="v1\n"}')
         assert "violates" not in self._warn('container_cpu{version="v1"}')
 
@@ -1080,7 +1084,11 @@ class TestValidateVersionLabel:
         repo = _Path(__file__).resolve().parents[2]
         go = (repo / "components" / "threshold-exporter" / "app" / "pkg"
               / "config" / "resolve.go").read_text(encoding="utf-8")
-        m = _re.search(r'versionLabelPattern = `([^`]+)`', go)
+        # anchored to a declaration line (optionally inside `const (`),
+        # so a comment quoting an old literal cannot satisfy it, and a
+        # gofmt-realigned `=` still matches; a moved/renamed literal fails
+        # LOUDLY on `assert m`, never vacuously.
+        m = _re.search(r'^\s*(?:const\s+)?versionLabelPattern\s*=\s*`([^`]+)`', go, _re.M)
         assert m, "versionLabelPattern literal not found in resolve.go"
         assert m.group(1) == _gv.VERSION_LABEL_PATTERN
 
