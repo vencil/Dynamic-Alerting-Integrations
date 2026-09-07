@@ -25,10 +25,10 @@ byte in the relevant input, ``rc / traceback / file named``):
 
 Two decisions, both pinned here:
 
-* **The helper names the file.** ``load_yaml_file`` now reads bytes and
-  lets PyYAML decode them (``yaml.reader.ReaderError`` on bad UTF-8 — a
-  ``YAMLError``), then wraps ANY ``YAMLError`` in :class:`YamlFileError`
-  whose ``str()`` starts with the path. ``UnicodeDecodeError`` carries a
+* **The helper names the file.** ``load_yaml_file`` now reads bytes,
+  decodes them as strict UTF-8, and wraps the ``UnicodeDecodeError`` or any
+  ``YAMLError`` in :class:`YamlFileError` (itself a ``YAMLError``) whose
+  ``str()`` starts with the path. ``UnicodeDecodeError`` carries a
   codec and an offset and no path; the helper is the only layer that has
   the path AND sees the failure, so it is the one that speaks. Because
   ``YamlFileError`` is itself a ``yaml.YAMLError``, every existing
@@ -40,11 +40,12 @@ Two decisions, both pinned here:
   the shared ``exit_on_yaml_file_error`` entry wrapper: ``ERROR: cannot
   read <path>: <reason>`` on stderr, rc 2.
 
-Bytes-mode also moves the Python side ONTO the exporter's answer: measured
-with ``gopkg.in/yaml.v3`` (the exporter's parser), ``\\xff`` is rejected,
-UTF-8 BOM loads, UTF-16-with-BOM loads. PyYAML on bytes gives the same three
-answers; the old text-mode read crashed on UTF-16 while the exporter served
-it — one file, two answers, which is the family this ticket belongs to.
+Decoding stays STRICT UTF-8 (what text mode did): the helper must not
+start serving UTF-16 while ``validate_config``'s own reads and the routes
+generator still refuse it — that would be one file, two answers inside the
+Python tool family (blind review). The exporter's parser (``yaml.v3``)
+does read UTF-16-with-BOM; whether the family should follow is a separate
+decision, pinned here as the rejected-and-named row.
 """
 from __future__ import annotations
 
@@ -110,8 +111,8 @@ class TestLoadYamlFileContentEncoding:
         exc = ei.value
         assert isinstance(exc, yaml.YAMLError)
         assert str(p) in str(exc)
-        assert isinstance(exc.__cause__, yaml.reader.ReaderError), (
-            "PyYAML decodes the bytes itself; the decode failure is a ReaderError")
+        assert isinstance(exc.__cause__, UnicodeDecodeError), (
+            "strict UTF-8 decode: the cause is the UnicodeDecodeError, now with a path")
         assert exc.cause is exc.__cause__
 
     def test_invalid_utf8_is_not_swallowed_into_default(self, tmp_path):
@@ -132,14 +133,27 @@ class TestLoadYamlFileContentEncoding:
         p.write_text(BOM_DOC, encoding="utf-8")
         assert lio.load_yaml_file(str(p)) == PARSED
 
-    def test_utf16_with_bom_loads(self, tmp_path):
-        """Observed, and a deliberate delta: text mode raised UnicodeDecodeError
-        here; bytes mode lets PyYAML honour the BOM. The exporter's yaml.v3
-        reads this file too (measured), so this is the parity direction.
+    def test_utf16_with_bom_is_rejected_and_named(self, tmp_path):
+        """Text mode raised a bare UnicodeDecodeError here; the helper still
+        refuses the file (strict UTF-8, same accepted encodings as before)
+        but now names it. Not served: `validate_config` and the routes
+        generator read in text mode and would reject the same file.
         """
         p = tmp_path / "alpha.yaml"
         p.write_bytes(UTF16_DOC)
-        assert lio.load_yaml_file(str(p)) == PARSED
+        with pytest.raises(lio.YamlFileError) as ei:
+            lio.load_yaml_file(str(p))
+        assert str(p) in str(ei.value)
+        assert isinstance(ei.value.cause, UnicodeDecodeError)
+
+    def test_broken_yaml_mark_names_the_real_file(self, tmp_path):
+        """PyYAML's own mark says `in "<path>"`, not `"<unicode string>"`."""
+        p = tmp_path / "alpha.yaml"
+        p.write_text("a: [\n", encoding="utf-8")
+        with pytest.raises(lio.YamlFileError) as ei:
+            lio.load_yaml_file(str(p))
+        assert f'in "{p}"' in str(ei.value.cause)
+        assert "<unicode string>" not in str(ei.value)
 
     def test_broken_yaml_now_names_the_path(self, tmp_path):
         """Also improves every existing YAMLError site: the path rides along."""
@@ -263,7 +277,10 @@ def _dirty(doc: bytes) -> bytes:
 
 
 def _run(script: Path, argv: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess:
-    env = dict(os.environ, PYTHONIOENCODING="utf-8", PROMETHEUS_URL=_PROM,
+    # DA_LANG pinned: policy_engine's handler is bilingual and prints
+    # 無法讀取 under a zh locale, which the "cannot read" assertions below
+    # would miss (blind review).
+    env = dict(os.environ, PYTHONIOENCODING="utf-8", PROMETHEUS_URL=_PROM, DA_LANG="en",
                GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t",
                GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
     return subprocess.run(
@@ -400,17 +417,23 @@ _ROWS = [
 ]
 _ROW_IDS = [r[0] for r in _ROWS]
 
+# A LINT isolates per file (#1008): one unreadable file is one ERROR
+# finding — rc 1 — and the other files are still checked; it is not the
+# caller-error abort the CLI tools use. Everything else expects 2.
+_BAD_RC_OVERRIDE = {"check_routing_profiles": EXIT_VIOLATION}
+
 
 @pytest.mark.parametrize("label, script, bad, cwd, named, ctrl, ctrl_rc", _ROWS, ids=_ROW_IDS)
 def test_tool_names_the_unreadable_file_and_exits_2(fx, label, script, bad, cwd, named, ctrl, ctrl_rc):
     p = _run(script, bad(fx), fx[cwd] if cwd else None)
-    assert p.returncode == EXIT_CALLER_ERROR, (
-        f"{label}: rc {p.returncode}, expected 2 — 1 is EXIT_VIOLATION's number "
+    expected_rc = _BAD_RC_OVERRIDE.get(label, EXIT_CALLER_ERROR)
+    assert p.returncode == expected_rc, (
+        f"{label}: rc {p.returncode}, expected {expected_rc} — 1 is EXIT_VIOLATION's number "
         f"and an uncaught traceback's number.\nstderr={p.stderr[-500:]!r}")
     assert "Traceback" not in p.stderr, f"{label}: {p.stderr[-500:]!r}"
     assert named in p.stderr, f"{label}: stderr must name the file; got {p.stderr[-500:]!r}"
     assert "cannot read" in p.stderr or "cannot compare" in p.stderr, p.stderr[-500:]
-    assert "ReaderError" in p.stderr, "the cause class tells apart bad bytes from bad syntax"
+    assert "UnicodeDecodeError" in p.stderr, "the cause class tells apart bad bytes from bad syntax"
 
 
 @pytest.mark.parametrize("label, script, bad, cwd, named, ctrl, ctrl_rc", _ROWS, ids=_ROW_IDS)
@@ -544,6 +567,12 @@ def _lib_aliases(tree: ast.Module) -> dict[str, str]:
             for a in node.names:
                 if a.name in _LIB_ROOTS:
                     out[a.asname or a.name] = a.name
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            # `from policy_engine import load_yaml_file` — a tool module
+            # re-exporting the lib helper (blind review: was invisible).
+            for a in node.names:
+                if a.name in _LIB_ROOTS and _module_reexports_lib_root(node.module, a.name):
+                    out[a.asname or a.name] = a.name
     return out
 
 
@@ -607,7 +636,12 @@ class _Sites(ast.NodeVisitor):
             is_root = True
         elif (isinstance(f, ast.Attribute) and f.attr in _LIB_ROOTS
               and isinstance(f.value, ast.Name) and f.value.id in self.mods):
-            is_root = _module_reexports_lib_root(self.mods[f.value.id], f.attr)
+            target = self.mods[f.value.id]
+            # `import _lib_io as lio; lio.load_yaml_file(...)` IS the lib
+            # (blind review: this shape was invisible); a tool-module alias
+            # counts only when that module re-exports the lib helper.
+            is_root = (target in _LIB_MODULES
+                       or _module_reexports_lib_root(target, f.attr))
         if is_root:
             guarded = any(h in _GUARDS for hs in self.handlers for h in hs)
             self.sites.append((node.lineno, ".".join(self.func) or "<module>", guarded))
@@ -683,3 +717,60 @@ def test_hand_guarded_list_only_shrinks():
     }
     for rel in _HAND_GUARDED:
         assert (TOOLS / rel).is_file(), rel
+
+
+# ── tripwire self-controls for the two alias shapes blind review found ─────
+
+def _sites_of(src: str) -> list[tuple[int, str, bool]]:
+    tree = ast.parse(src)
+    v = _Sites(tree)
+    v.visit(tree)
+    return v.sites
+
+
+def test_scanner_sees_module_alias_attribute_calls():
+    """`import _lib_io as lio; lio.load_yaml_file(p)` is a lib site."""
+    assert _sites_of("import _lib_io as lio\ndef f(p):\n    return lio.load_yaml_file(p)\n")
+    assert _sites_of("import _lib_python\ndef f(p):\n    return _lib_python.load_yaml_file(p)\n")
+
+
+def test_scanner_sees_reexport_through_a_tool_module():
+    """`from policy_engine import load_yaml_file` resolves to the lib helper
+    (policy_engine imports it and does not define its own)."""
+    assert _sites_of("from policy_engine import load_yaml_file\ndef f(p):\n    return load_yaml_file(p)\n")
+    # control: a tool's OWN function of the same name is not the lib
+    assert not _sites_of("from generate_alertmanager_routes import load_tenant_configs\ndef f(p):\n    return load_tenant_configs(p)\n")
+
+
+# ── per-file isolation kept where the tool already had it (blind review) ──
+
+def test_onboard_rule_file_loop_still_isolates_per_file(tmp_path):
+    """`onboard_platform.analyze_rule_files` had an `errors.append(...);
+    continue` branch for a file it could not load; the entry-level rc-2
+    wrapper must not make that branch unreachable. One bad rule file is one
+    error line and the good file is still analysed."""
+    sys.path.insert(0, str(OPS))
+    import onboard_platform as ob
+    bad = tmp_path / "bad.yaml"
+    bad.write_bytes(b"groups:\n  - name: \xff\n")
+    good = tmp_path / "good.yaml"
+    good.write_text("groups:\n  - name: g\n    rules:\n      - record: r\n        expr: up\n",
+                    encoding="utf-8")
+    _c, recording, summary = ob.analyze_rule_files([str(bad), str(good)])
+    assert any(str(bad) in e for e in summary["errors"]), summary["errors"]
+    assert len(recording) == 1, recording
+
+
+def test_routing_lint_reports_the_bad_file_and_still_reads_the_rest(tmp_path):
+    """A lint isolates per file (#1008): the unreadable file is one ERROR
+    finding (rc 1) and the other control files are still collected."""
+    sys.path.insert(0, str(LINT))
+    import check_routing_profiles as crp
+    confd = tmp_path / "conf.d"
+    confd.mkdir()
+    (confd / "_routing_profiles.yaml").write_text(
+        "routing_profiles:\n  standard:\n    receiver: r\n", encoding="utf-8")
+    (confd / "alpha.yaml").write_bytes(b"# \xff\ntenants:\n  alpha: {}\n")
+    data = crp._collect_data(str(confd))
+    assert "standard" in data["profiles"], data
+    assert len(data["unreadable"]) == 1 and "alpha.yaml" in data["unreadable"][0], data["unreadable"]

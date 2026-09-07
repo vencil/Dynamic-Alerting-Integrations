@@ -55,6 +55,7 @@ sys.path.insert(0, str(_THIS_DIR))  # Docker flat layout
 sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
 
 from _lib_python import (  # noqa: E402
+    YamlFileError,
     exit_on_yaml_file_error,
     load_yaml_file,
     validate_and_clamp,
@@ -544,7 +545,14 @@ def analyze_rule_files(file_paths, tenant_label=DEFAULT_TENANT_LABEL, metric_dic
     total_rules = 0
 
     for fpath in file_paths:
-        data = load_yaml_file(fpath)
+        # #1654 blind review: this loop already isolates per file; the
+        # entry-level rc-2 wrapper must not make its `errors` branch
+        # unreachable for an unreadable / unparsable rule file.
+        try:
+            data = load_yaml_file(fpath)
+        except YamlFileError as exc:
+            errors.append(f"Failed to load: {exc}")
+            continue
         if data is None:
             errors.append(f"Failed to load: {fpath}")
             continue

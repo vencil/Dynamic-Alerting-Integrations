@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import functools
+import io
 import json
 import os
 import re
@@ -33,15 +34,16 @@ class YamlFileError(yaml.YAMLError):
     instead of escaping as a traceback. Attributes:
 
     * ``path``  — the file as the caller named it.
-    * ``cause`` — the original PyYAML error (also ``__cause__``); for
-      content that is not valid UTF-8 that is ``yaml.reader.ReaderError``.
+    * ``cause`` — the original error (also ``__cause__``): the
+      ``UnicodeDecodeError`` for content that is not valid UTF-8, the
+      PyYAML error for bad syntax.
 
     ``str()`` is ONE line, ``<path>: <original message> (<CauseClass>)``,
     with the original's line breaks collapsed so the line/column PyYAML
     reports survive but a caller can interpolate it into a report line.
     """
 
-    def __init__(self, path: str, cause: yaml.YAMLError) -> None:
+    def __init__(self, path: str, cause: Exception) -> None:
         self.path = path
         self.cause = cause
         detail = " ".join(str(cause).split()) or cause.__class__.__name__
@@ -60,29 +62,33 @@ def load_yaml_file(path: Optional[str], default: Any = None) -> Any:
         Parsed YAML data, or *default*.
 
     Raises:
-        YamlFileError: the file exists but PyYAML cannot read it — bad
-            syntax, OR content that is not valid UTF-8. The bytes go to
-            ``yaml.safe_load`` undecoded, so an invalid byte surfaces as
-            ``yaml.reader.ReaderError`` (a ``YAMLError``) rather than the
-            ``UnicodeDecodeError`` a text-mode ``open`` raised — which is a
-            ``ValueError`` no ``except yaml.YAMLError`` in this repo saw
-            (#1654). The wrapper carries the path; ``UnicodeDecodeError``
-            never did. ⚠️ Never swallowed into *default*: a file that is
-            present but unreadable is the loudest input, not an empty one.
+        YamlFileError: the file exists but cannot be read — content that is
+            not valid UTF-8 (``cause`` is the ``UnicodeDecodeError``) OR bad
+            YAML syntax (``cause`` is the PyYAML error). Before #1654 the
+            first escaped as a bare ``UnicodeDecodeError`` — a ``ValueError``
+            no ``except yaml.YAMLError`` in this repo saw, and one that never
+            carried the path. ⚠️ Never swallowed into *default*: a file that
+            is present but unreadable is the loudest input, not an empty one.
         OSError: as before; not wrapped.
 
-    Measured against the exporter's parser (``gopkg.in/yaml.v3``): a
-    ``\\xff`` byte is rejected on both sides, a UTF-8 BOM loads on both, and
-    a UTF-16 file with a BOM loads on both — text mode used to crash on the
-    last one while the exporter served it, so bytes mode is the parity
-    direction, not a loosening.
+    Decoding is STRICT UTF-8, exactly what the text-mode ``open`` did, so
+    the accepted encodings are unchanged: this helper must not start
+    serving (say) UTF-16 while ``validate_config``'s own reads and the
+    routes generator still refuse it — that would be #1339's "one input,
+    two answers" inside the Python tool family (blind review). Whether the
+    family should follow the exporter's parser on other encodings is a
+    separate decision. The decoded text is parsed from a named stream so
+    PyYAML's own marks (``in "<path>", line N, column M``) keep naming the
+    real file instead of ``"<unicode string>"``.
     """
     if not path or not Path(path).is_file():
         return default
     raw = Path(path).read_bytes()
     try:
-        data = yaml.safe_load(raw)
-    except yaml.YAMLError as exc:
+        stream = io.StringIO(raw.decode("utf-8"))
+        stream.name = str(path)
+        data = yaml.safe_load(stream)
+    except (UnicodeDecodeError, yaml.YAMLError) as exc:
         raise YamlFileError(str(path), exc) from exc
     return data if data is not None else default
 

@@ -430,7 +430,8 @@
    "tests/lint/test_check_retire_drift.py"
   ],
   "scripts/tools/lint/check_routing_profiles.py": [
-   "tests/lint/test_check_routing_profiles.py"
+   "tests/lint/test_check_routing_profiles.py",
+   "tests/shared/test_yaml_file_error.py"
   ],
   "scripts/tools/lint/check_rulepack_sync.py": [
    "tests/dx/test_generate_rulepack_configmaps.py",
@@ -692,7 +693,8 @@
    "tests/ops/test_error_consistency.py",
    "tests/ops/test_integration.py",
    "tests/ops/test_onboard_platform.py",
-   "tests/ops/test_regression.py"
+   "tests/ops/test_regression.py",
+   "tests/shared/test_yaml_file_error.py"
   ],
   "scripts/tools/ops/operator_check.py": [
    "tests/ops/test_operator_check.py"
@@ -817,7 +819,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "9f68486db08c1b312859330da4a5594e4c4fdddec418fb47e6b62b7d03d3bfad",
+ "source_digest": "3e07cb07650082e6650b9f290d49c0973031d4168cc60cefd4ffe2c7760fca76",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",

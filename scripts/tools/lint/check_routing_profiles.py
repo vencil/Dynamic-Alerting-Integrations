@@ -23,7 +23,7 @@ import yaml
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
-from _lib_python import detect_cli_lang, exit_on_yaml_file_error, load_yaml_file  # noqa: E402
+from _lib_python import YamlFileError, detect_cli_lang, exit_on_yaml_file_error, load_yaml_file  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_confd import has_yaml_extension, is_hidden_name, warn_nested  # noqa: E402
@@ -55,9 +55,17 @@ def _collect_data(config_dir: str) -> dict:
         if has_yaml_extension(f) and not is_hidden_name(f)
     )
 
+    unreadable: list[str] = []
     for fname in files:
         path = os.path.join(config_dir, fname)
-        data = load_yaml_file(path)
+        # #1654 blind review: a lint isolates per file — one unreadable
+        # file is one ERROR finding, the other files are still checked
+        # (#1008 convention), not an abort that hides their findings.
+        try:
+            data = load_yaml_file(path)
+        except YamlFileError as exc:
+            unreadable.append(str(exc))
+            continue
         if not data or not isinstance(data, dict):
             continue
 
@@ -88,6 +96,7 @@ def _collect_data(config_dir: str) -> dict:
         "policies": policies,
         "tenant_ids": tenant_ids,
         "profile_refs": profile_refs,
+        "unreadable": unreadable,
     }
 
 
@@ -170,7 +179,8 @@ def main() -> None:
         sys.exit(EXIT_CALLER_ERROR)
 
     data = _collect_data(args.config_dir)
-    messages = validate(data, strict=args.strict)
+    messages = [f"ERROR: cannot read {u}" for u in data.get("unreadable", [])]
+    messages += validate(data, strict=args.strict)
 
     if not messages:
         profiles_count = len(data["profiles"])
