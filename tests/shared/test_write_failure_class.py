@@ -269,49 +269,116 @@ def _writing_functions(lib_rel: str) -> set[str]:
     return out
 
 
-def _tools_importing_a_writer(writers_by_stem: dict[str, set[str]]) -> list[Path]:
-    """Tool modules that import a WRITING function by name, or the library
-    module itself (`import _registry_lib` / `from ops import _registry_lib`)."""
-    out = []
+class _LibWriterSites(ast.NodeVisitor):
+    """Call sites of an allowlisted library's WRITING functions inside a tool
+    module, each with whether a lexically enclosing `try` can catch
+    OutputWriteError. Both spellings: `from lib import writer; writer(...)`
+    and `import lib [as x]; x.writer(...)`."""
+
+    def __init__(self, tree: ast.Module, writers_by_stem: dict[str, set[str]]) -> None:
+        self.names: dict[str, str] = {}      # local name → writer
+        self.aliases: dict[str, str] = {}    # local module alias → lib stem
+        self.writers = writers_by_stem
+        for n in ast.walk(tree):
+            if isinstance(n, ast.ImportFrom) and n.module in writers_by_stem:
+                for a in n.names:
+                    if a.name in writers_by_stem[n.module]:
+                        self.names[a.asname or a.name] = a.name
+            elif isinstance(n, ast.Import):
+                for a in n.names:
+                    if a.name in writers_by_stem:
+                        self.aliases[a.asname or a.name] = a.name
+        self.guard_depth = 0
+        self.func: list[str] = []
+        self.raw: list[tuple[int, str, bool]] = []      # (line, enclosing fn, lexical guard)
+        self.guarded_calls: set[str] = set()            # fn names called inside a catching try
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self.func.append(node.name)
+        self.generic_visit(node)
+        self.func.pop()
+
+    visit_AsyncFunctionDef = visit_FunctionDef  # type: ignore[assignment]
+
+    @property
+    def sites(self) -> list[tuple[int, bool]]:
+        """A site is guarded lexically, OR its enclosing function is itself
+        called somewhere in the module inside a catching try (the `main()`
+        wraps `_write_outputs(...)` shape)."""
+        return [(line, guarded or fn in self.guarded_calls) for line, fn, guarded in self.raw]
+
+    def visit_Try(self, node: ast.Try) -> None:
+        catching = any(_handler_can_catch(h) for h in node.handlers)
+        self.guard_depth += catching
+        for n in node.body:
+            self.visit(n)
+        self.guard_depth -= catching
+        for part in (node.handlers, node.orelse, node.finalbody):
+            for n in part:
+                self.visit(n)
+
+    def visit_Call(self, node: ast.Call) -> None:
+        f = node.func
+        is_writer = (isinstance(f, ast.Name) and f.id in self.names) or (
+            isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name)
+            and f.value.id in self.aliases
+            and f.attr in self.writers[self.aliases[f.value.id]])
+        if is_writer:
+            self.raw.append((node.lineno, self.func[-1] if self.func else "<module>",
+                             self.guard_depth > 0))
+        elif self.guard_depth > 0 and isinstance(f, ast.Name):
+            self.guarded_calls.add(f.id)
+        self.generic_visit(node)
+
+
+def _lib_writer_sites(writers_by_stem: dict[str, set[str]]) -> dict[Path, list[tuple[int, bool]]]:
+    out: dict[Path, list[tuple[int, bool]]] = {}
     for d in (TOOLS_DIR, TOOLS_DIR / "ops", TOOLS_DIR / "lint", TOOLS_DIR / "dx"):
         for f in sorted(d.glob("*.py")):
             if f.name.startswith("_"):
                 continue
             tree = ast.parse(f.read_text(encoding="utf-8"))
-            hit = False
-            for n in ast.walk(tree):
-                if isinstance(n, ast.ImportFrom) and n.module in writers_by_stem:
-                    if any(a.name in writers_by_stem[n.module] for a in n.names):
-                        hit = True
-                elif isinstance(n, ast.Import):
-                    if any(a.name in writers_by_stem for a in n.names):
-                        hit = True
-                if hit:
-                    out.append(f)
-                    break
+            v = _LibWriterSites(tree, writers_by_stem)
+            v.visit(tree)
+            if v.sites:
+                out[f] = v.sites
     return out
 
 
 def test_every_tool_calling_an_allowlisted_writer_can_catch_the_error():
     """The allowlist is a promise in two halves: the library keeps the RAISING
-    form, and every tool that imports one of its WRITING functions catches
-    OutputWriteError (or a superclass) somewhere on its CLI path. The first
-    half is the tripwire below; this is the second (blind review: it had no
-    test). Tools importing only pure helpers from those libraries owe
-    nothing — the writer set is derived from the library body, not guessed."""
+    form, and every tool CALL of one of its writing functions sits inside a
+    `try` whose handler can catch OutputWriteError (or a superclass). The
+    first half is the tripwire below; this is the second (blind review: it
+    had no test). Per call site, not per module — a module with an unrelated
+    `except OSError` elsewhere must not pass (the first version of this test
+    did exactly that and its counterfactual was a false signal). Tools that
+    import only pure helpers owe nothing; the writer set is derived from the
+    library body, not guessed."""
     writers_by_stem = {Path(rel).stem: _writing_functions(rel) for rel in RAW_CALL_LIBRARY_MODULES}
     assert all(writers_by_stem.values()), writers_by_stem  # each allowlisted lib really writes
-    callers = _tools_importing_a_writer(writers_by_stem)
-    assert callers, "no tool imports an allowlisted writer — the allowlist is dead"
-    missing = []
-    for f in callers:
-        tree = ast.parse(f.read_text(encoding="utf-8"))
-        handlers = [n for n in ast.walk(tree) if isinstance(n, ast.ExceptHandler)]
-        if not any(_handler_can_catch(h) for h in handlers):
-            missing.append(f.relative_to(REPO_ROOT).as_posix())
-    assert not missing, (
-        "tool imports a raw-writing library function but nothing in it catches "
-        f"OutputWriteError/OSError: {missing}")
+    sites = _lib_writer_sites(writers_by_stem)
+    assert sites, "no tool calls an allowlisted writer — the allowlist is dead"
+    unguarded = [f"{f.relative_to(REPO_ROOT).as_posix()}:{line}"
+                 for f, rows in sites.items() for line, guarded in rows if not guarded]
+    assert not unguarded, (
+        "raw-writing library function called outside a try that can catch "
+        f"OutputWriteError/OSError: {unguarded}")
+
+
+def test_lib_writer_scanner_controls():
+    """Synthetic positive/negative controls for the scanner above."""
+    w = {"_zlib": {"write_thing"}}
+    def sites(src):
+        t = ast.parse(src); v = _LibWriterSites(t, w); v.visit(t); return v.sites
+    assert sites("from _zlib import write_thing\ndef m():\n    write_thing('p')\n") == [(3, False)]
+    assert sites("from _zlib import write_thing\ndef m():\n    try:\n        write_thing('p')\n    except OutputWriteError:\n        pass\n") == [(4, True)]
+    assert sites("import _zlib as z\ndef m():\n    try:\n        z.write_thing('p')\n    except ValueError:\n        pass\n") == [(4, False)]
+    assert sites("import _zlib\ndef m():\n    return _zlib.CONST\n") == []
+    # helper called from main under a catching try → guarded (non-lexical)
+    assert sites("from _zlib import write_thing\ndef _w():\n    write_thing('p')\ndef main():\n    try:\n        _w()\n    except OSError:\n        pass\n") == [(3, True)]
+    # same helper, but main calls it OUTSIDE the try → unguarded
+    assert sites("from _zlib import write_thing\ndef _w():\n    write_thing('p')\ndef main():\n    _w()\n    try:\n        pass\n    except OSError:\n        pass\n") == [(3, False)]
 
 
 def test_no_tool_module_calls_the_raw_writer_unguarded():
