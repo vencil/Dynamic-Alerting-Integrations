@@ -16,8 +16,10 @@ commit 任何狀態 ⇒ 整棵樹每一個租戶都失去告警，不只那一�
 3. **「量不到」不是「量了沒事」**——JSON 解不出來、或那一項不在輸出裡，一律
    `EXIT_CALLER_ERROR`。
 
-大小寫殘留只回報不擋（#1588 的軸）：shell 沒有可攜的大小寫不敏感 glob，所以
-`DB-A.YAML` 這種載體 exporter 收、這一步不收；差集逐檔印出來。
+大小寫殘留只回報不擋：shell 沒有可攜的大小寫不敏感 glob，所以 `DB-A.YAML` 這種
+載體 exporter 收、這一步（在 case-sensitive 檔案系統上）不收；差集逐檔印出來。
+⚠️ #1588 收的是 Python reader 那一半、已 CLOSED；**這個 shell glob 不在任何票的
+範圍內**，所以下面那則 WARN 目前是它唯一的訊號。
 """
 from __future__ import annotations
 
@@ -136,7 +138,9 @@ def main(argv: list[str] | None = None) -> int:
             "WARN: the exporter's scanner accepts these; whether the recipe's "
             "POSIX glob does depends on the filesystem (case-sensitive: no, "
             "macOS default: yes), so this is a portability split, not a fixed "
-            "drop. Extension-case is #1588's axis: " + ", ".join(sorted(dropped)),
+            "drop. ⚠️ No open ticket tracks the case axis on THIS shell glob "
+            "(#1588 covered the Python readers and is closed), so this line is "
+            "the only signal you get: " + ", ".join(sorted(dropped)),
             file=sys.stderr,
         )
 

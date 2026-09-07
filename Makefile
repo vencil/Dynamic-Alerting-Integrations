@@ -572,7 +572,7 @@ configmap-assemble: ## 從 conf.d/ 組裝 threshold-config ConfigMap YAML（供 
 	@# `[ -e ]` guards the unmatched glob (POSIX sh leaves it literal) and
 	@# `|| :` keeps the loop's status at 0 when the LAST iteration misses.
 	@# Case is not folded: shell has no portable case-insensitive glob, so
-	@# the pre-check REPORTS that residue instead (#1588's axis). The
+	@# the pre-check REPORTS that residue instead — no ticket tracks it. The
 	@# pre-check is its own line so it can fail the target — see its docstring.
 	@mkdir -p .build
 	@python3 ./scripts/ops/configmap_assemble_precheck.py --config-dir $(CONFDIR)
