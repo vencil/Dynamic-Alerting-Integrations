@@ -30,7 +30,7 @@ printed in full at the top of every run — they are NOT reverse-engineered to
 land on the old figures. Where the two disagree, the number this file prints is
 the one that has a command behind it.
 
-Seven checks:
+Checks, in the order they run:
   1. the tool exposes what this harness drives, and its identity is printed
   2. pure level shift: the shares match what the split's algebra predicts
   3. pure episode: `level` correlates at ~+1.000 and still owns a small share
@@ -183,7 +183,11 @@ def load_module(path: Path, name: str):
     saved_path, saved_mods = list(sys.path), set(sys.modules)
     try:
         spec.loader.exec_module(mod)
-    except Exception as exc:                                # noqa: BLE001
+    # ⛔ SystemExit here too. The previous round added it to `drive()` and left
+    # THIS handler as `except Exception` — so a `sys.exit()` at the tool's module
+    # scope still walked out with no output and an exit code of its choosing.
+    # Found by blind review of that very fix.
+    except (Exception, SystemExit) as exc:                  # noqa: BLE001
         raise CannotMeasure(
             f"importing {path} raised {type(exc).__name__}: {exc}") from exc
     finally:
@@ -400,9 +404,21 @@ def run_ci(mod, text, roles):
     for (label, role), cells in zip(roles, body):
         if cells[0] != label:
             raise CannotMeasure(f"row label {cells[0]!r} != AST's {label!r}")
-        out[role] = (_corr(cells[1], f"{role} corr"),
-                     _num(cells[2].removesuffix("ms"), f"{role} sd"),
-                     _num(cells[3], f"{role} share"))
+        # ⛔ The scraping itself. `drive()` only wraps calls INTO the tool, so a
+        # table the tool renders successfully but in an unexpected shape (a row
+        # with two cells instead of four) crashed HERE — bare IndexError, rc 1,
+        # the "a check failed" code. Found by blind review; the harness failing
+        # to read something is could-not-measure, whoever's fault it is.
+        try:
+            out[role] = (_corr(cells[1], f"{role} corr"),
+                         _num(cells[2].removesuffix("ms"), f"{role} sd"),
+                         _num(cells[3], f"{role} share"))
+        except CannotMeasure:
+            raise
+        except Exception as exc:                            # noqa: BLE001
+            raise CannotMeasure(
+                f"row {label!r} has {len(cells)} cell(s), not the 4 this"
+                f" harness reads ({type(exc).__name__})") from exc
     return out
 
 
@@ -412,7 +428,7 @@ def run_archive(mod, text):
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         drive("the tool's render_archive()", mod.render_archive, [session])
-    corrs, shares, sds, sd_total = None, {}, {}, None
+    corrs, shares, sds, sd_total, med_total = None, {}, {}, None, None
     keys = (("level", "level  (p50 x iters)"), ("above", "above-p50 mass"),
             ("write", "write_sum "))
     for s in buf.getvalue().splitlines():
@@ -421,19 +437,27 @@ def run_archive(mod, text):
             f = t.split()
             corrs = dict(zip(("level", "above", "write"),
                              (_corr(x, "pooled corr") for x in f[2:5])))
-        if t.startswith("round total ") and " ms " in t:
-            sd_total = _num(t.split(" ms")[0].split()[-1], "archive total sd")
+        # ⛔ TWO printed lines start with "round total": the per-dispatch median
+        # and the sd. Matching on the prefix alone left which one won to
+        # iteration order. Disambiguated on the text each line actually carries.
+        if t.startswith("round total") and " ms" in t:
+            if "median" in t:
+                med_total = _num(t.split(" ms")[0].split()[-1], "archive total median")
+            elif "(range" in t:
+                sd_total = _num(t.split(" ms")[0].split()[-1], "archive total sd")
         for role, prefix in keys:
             if t.startswith(prefix) and "=" in t:
                 shares[role] = _num(t.rsplit("=", 1)[1].split()[0],
                                     f"archive {role} share")
                 sds[role] = _num(t.split(" ms")[0].split()[-1], f"archive {role} sd")
-    if corrs is None or len(shares) != 3 or len(sds) != 3 or sd_total is None:
+    if (corrs is None or len(shares) != 3 or len(sds) != 3
+            or sd_total is None or med_total is None):
         raise CannotMeasure("render_archive's pooled block did not yield the"
                             f" expected values (corrs={corrs is not None},"
                             f" shares={len(shares)}, sds={len(sds)},"
-                            f" total sd={sd_total is not None})")
-    return {r: (corrs[r], shares[r], sds[r]) for r in corrs}, sd_total
+                            f" total sd={sd_total is not None},"
+                            f" total median={med_total is not None})")
+    return {r: (corrs[r], shares[r], sds[r]) for r in corrs}, sd_total, med_total
 
 
 # ── checks ───────────────────────────────────────────────────────────────────
@@ -551,7 +575,9 @@ MUTANTS = (
     # ⛔ Not a plausible regression — a deliberate out-of-range correlation, so
     # the "the mutant made the report unreadable" path in check5 is EXERCISED
     # rather than merely written. Blind review measured that branch as dead
-    # under the four mutants above.
+    # under the mutants above. ⚠️ This comment said "the four mutants above"
+    # when there were five; the count is gone rather than corrected, for the
+    # same reason every other hand-typed count in this change is gone.
     ("corr := 5.0 (a value no correlation can take)",
      "corr", lambda x, y: 5.0),
 )
@@ -578,6 +604,7 @@ def check5(mod, roles, texts, baseline):
     blocked = sorted(n for n, ok in baseline.items() if not ok)
     assessable = sorted(n for n, ok in baseline.items() if ok)
     killed = {n: [] for n in assessable}
+    blanket_kills = {n: [] for n in assessable}
     for name, attr, fn in MUTANTS:
         orig = getattr(mod, attr)
         setattr(mod, attr, fn)
@@ -587,24 +614,34 @@ def check5(mod, roles, texts, baseline):
             wrt = run_ci(mod, texts["write"], roles)
             verdicts = {2: check2(lvl)[0], 3: check3(epi)[0],
                         4: check4(lvl, epi)[0], 7: check7(wrt)[0]}
+            blanket = False
         except CannotMeasure:
             # ⛔ A mutant that makes the report unreadable IS detected — the
-            # numbers stop existing. Counted as a kill for every assessable
-            # check rather than escaping as this run's own rc 3.
+            # numbers stop existing. Counted rather than escaping as this run's
+            # own rc 3, but counted SEPARATELY: it kills every check at once,
+            # including one whose own logic reads nothing. Blind review proved
+            # that by registering a check that ignores its argument and always
+            # passes — it came out "killed 1/6". Detection power requires a kill
+            # where the report was READABLE and this check still said no.
             verdicts = {n: False for n in assessable}
+            blanket = True
         finally:
             setattr(mod, attr, orig)
         for n in assessable:
             if not verdicts[n]:
-                killed[n].append(name.split(" (")[0])
+                (blanket_kills if blanket else killed)[n].append(
+                    name.split(" (")[0])
     blind = [n for n, ks in killed.items() if not ks]
-    rows = "; ".join(f"check{n} killed by {len(ks)}/{len(MUTANTS)}"
+    rows = "; ".join(f"check{n} killed by {len(ks)}"
+                     f"(+{len(blanket_kills[n])} unreadable)/{len(MUTANTS)}"
                      for n, ks in sorted(killed.items())) or "nothing assessable"
     if blocked:
         rows += (f"  << check(s) {blocked} NOT ASSESSABLE: already FAIL on the"
                  " unmutated tool, so every mutant kills them vacuously")
     if blind:
-        rows += f"  << check(s) {blind} survive every mutant — no detection power"
+        rows += (f"  << check(s) {blind} were killed only by mutants that made"
+                 " the report unreadable, or by none — no demonstrated detection"
+                 " power of their own")
     return not (blind or blocked), rows
 
 
@@ -633,8 +670,22 @@ def _check6_one(ci, arch_pair, totals):
     string. A number this file scrapes but never asserts is a number this file
     is not checking, however prominently it appears in the report.
     """
-    arch, sd_total = arch_pair
+    arch, sd_total, med_total = arch_pair
     bad = []
+    # ⛔ The MEDIAN anchor, not just the sd. sd and corr are both
+    # SHIFT-invariant, so `total(r) + 999_999_999` — a whole second added to
+    # every round — passed all seven checks unchanged. The median is the one
+    # printed number an additive bias moves. Found by blind review.
+    # ⚠️ The same class in `level()` / `above()` is NOT covered and cannot be:
+    # neither raw value is ever printed, only their corr and sd, so an additive
+    # bias there is invisible in the tool's output to any consumer, not just to
+    # this harness. `test_level_and_above_are_only_ever_read_through_corr_or_sd`
+    # does not exist; the claim is checkable by eye in `render_ci` /
+    # `render_archive`, and is written down rather than asserted.
+    want_med = st.median(totals) / 1e6
+    if abs(med_total - want_med) > max(0.11, SD_ABS_TOL_FRAC * want_med):
+        bad.append(f"round-total median {med_total:.1f} ms != {want_med:.1f} ms"
+                   " computed from the rows this harness generated")
     # ⛔ The absolute anchor. Everything below this line is a RATIO, and blind
     # review proved ratios cannot see a unit bug applied consistently in both
     # renderers: `ms(x) = x/1e3` printed a round-total sd 1000x too large and
