@@ -7,7 +7,9 @@ appended below.
 """
 from __future__ import annotations
 
+import re
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -363,6 +365,272 @@ class TestLintChangelog:
         ))
         issues = gc.lint_changelog(str(f))
         assert any("[2.9.0]" in i and "no ### subsections" in i for i in issues)
+
+
+class TestLintSeesTheUnreleasedSection:
+    """#1765 — the one section every PR edits used to be invisible.
+
+    The header pattern was semver-only and every check was gated on having
+    seen a version, so nothing above the first released heading was linted.
+    """
+
+    def _make(self, tmp_path: Path, content: str) -> Path:
+        f = tmp_path / "CHANGELOG.md"
+        f.write_text(content, encoding="utf-8")
+        return f
+
+    _RELEASED = "## [v2.9.0] — Title (2026-06-06)\n\n### Fixed\n- a\n"
+
+    def test_unreleased_without_subsections_is_flagged(self, tmp_path):
+        f = self._make(tmp_path, "## [Unreleased]\n\nJust prose.\n\n" + self._RELEASED)
+        issues = gc.lint_changelog(str(f))
+        assert any("[Unreleased]" in i and "no ### subsections" in i for i in issues), issues
+
+    def test_a_second_unreleased_heading_is_flagged(self, tmp_path):
+        f = self._make(tmp_path,
+                       "## [Unreleased]\n\n### Fixed\n- a\n\n"
+                       "## [Unreleased]\n\n### Fixed\n- b\n\n" + self._RELEASED)
+        issues = gc.lint_changelog(str(f))
+        assert any("duplicate version [Unreleased]" in i for i in issues), issues
+
+    def test_unreleased_needs_no_date(self, tmp_path):
+        """⛔ Demanding one would make the common case permanently red, which
+        is how a gate gets switched off."""
+        f = self._make(tmp_path, "## [Unreleased]\n\n### Fixed\n- a\n\n" + self._RELEASED)
+        assert gc.lint_changelog(str(f)) == []
+
+    def test_a_repeated_subsection_name_is_not_an_issue(self, tmp_path):
+        """Each PR prepends its own block, so a second `### Fixed` under
+        Unreleased is the convention working, not a defect."""
+        f = self._make(tmp_path,
+                       "## [Unreleased]\n\n### Fixed\n- a\n\n### Fixed\n- b\n\n"
+                       + self._RELEASED)
+        assert gc.lint_changelog(str(f)) == []
+
+    def test_released_sections_still_need_a_date(self, tmp_path):
+        """必響對照組 for the exemption above: without it, the exemption could
+        be implemented as 'never check dates' and nothing would notice."""
+        f = self._make(tmp_path, "## [Unreleased]\n\n### Fixed\n- a\n\n"
+                                 "## [v2.9.0] — Title\n\n### Fixed\n- b\n")
+        issues = gc.lint_changelog(str(f))
+        assert any("missing date" in i for i in issues), issues
+
+
+class TestLintCannotBeSilencedByTheFileItself:
+    """Blind review found three ways the file could switch the lint off."""
+
+    def _make(self, tmp_path: Path, content: str) -> Path:
+        f = tmp_path / "CHANGELOG.md"
+        f.write_text(content, encoding="utf-8")
+        return f
+
+    @pytest.mark.parametrize("heading", [
+        "## [Unrelesed]",   # typo — was silently ignored
+        "## [2.10.0] — T (2026-09-08)",  # missing `v`; bump_docs requires it
+    ], ids=["typo", "no-v-prefix"])
+    def test_an_unrecognised_heading_is_named(self, tmp_path, heading):
+        """Every check is gated on having entered a section, so an
+        unrecognised heading does not fail — it makes its whole section
+        invisible. That is the ticket's own defect, reachable by one typo."""
+        f = self._make(tmp_path, heading + "\n\n- content, no subsection\n")
+        issues = gc.lint_changelog(str(f))
+        assert any("not a recognised section heading" in i for i in issues), issues
+
+    def test_a_fenced_heading_is_not_real_structure(self, tmp_path):
+        """An entry that DOCUMENTS changelog markup must not be read as
+        markup. Both directions: no phantom duplicate from the fence…"""
+        f = self._make(tmp_path,
+                       "## [Unreleased]\n\n### Fixed\n- a\n\n"
+                       "```markdown\n## [Unreleased]\n### Fixed\n```\n")
+        assert gc.lint_changelog(str(f)) == []
+
+    def test_a_fenced_subsection_does_not_satisfy_a_section(self, tmp_path):
+        """…and no phantom satisfaction either."""
+        f = self._make(tmp_path,
+                       "## [v2.9.0] — T (2026-06-06)\n\n- prose only\n\n"
+                       "```markdown\n### Fixed\n```\n")
+        issues = gc.lint_changelog(str(f))
+        assert any("no ### subsections" in i for i in issues), issues
+
+    def test_an_empty_unreleased_placeholder_is_allowed(self, tmp_path):
+        """The shape release wrap-up leaves behind after cutting Unreleased
+        into `## [vX.Y.Z]`. Flagging it would make the gate red on the release
+        commit itself — which is how a gate gets switched off."""
+        f = self._make(tmp_path,
+                       "## [Unreleased]\n\n<!-- next release goes here -->\n\n"
+                       "## [v2.9.0] — T (2026-06-06)\n\n### Fixed\n- a\n")
+        assert gc.lint_changelog(str(f)) == []
+
+
+class TestLintCliSeparatesCallerErrorFromFinding:
+    """`_lib_exitcodes`: a bad path or an unreadable file is rc 2, not rc 1.
+
+    An uncaught traceback also exits 1, so without this a caller cannot tell
+    "your changelog has one issue" from "I could not read it".
+    """
+
+    def test_a_missing_path_is_a_caller_error(self, tmp_path, cli_argv, capsys):
+        cli_argv("generate_changelog.py", "--lint", str(tmp_path / "nope.md"))
+        assert gc.main() == EXIT_CALLER_ERROR
+        assert "not a readable file" in capsys.readouterr().err
+
+    def test_a_directory_is_a_caller_error(self, tmp_path, cli_argv, capsys):
+        cli_argv("generate_changelog.py", "--lint", str(tmp_path))
+        assert gc.main() == EXIT_CALLER_ERROR
+        capsys.readouterr()
+
+    def test_an_undecodable_file_is_a_caller_error(self, tmp_path, cli_argv, capsys):
+        f = tmp_path / "CHANGELOG.md"
+        f.write_bytes("## [v1.0.0] — 標題 (2026-01-01)\n".encode("cp950"))
+        cli_argv("generate_changelog.py", "--lint", str(f))
+        assert gc.main() == EXIT_CALLER_ERROR
+        assert "could not read" in capsys.readouterr().err
+
+    def test_a_real_finding_is_still_a_violation_not_a_caller_error(
+            self, tmp_path, cli_argv, capsys):
+        """必響對照組: without it, "always return 2" would pass the three above."""
+        f = tmp_path / "CHANGELOG.md"
+        f.write_text("## [v1.0.0] — T\n\n### Fixed\n- a\n", encoding="utf-8")
+        cli_argv("generate_changelog.py", "--lint", str(f))
+        rc = gc.main()
+        assert rc == 1, capsys.readouterr()
+
+    def test_repeated_paths_are_not_counted_twice(self, tmp_path, cli_argv, capsys):
+        f = tmp_path / "CHANGELOG.md"
+        f.write_text("## [Unreleased]\n\n- content, no subsection\n", encoding="utf-8")
+        cli_argv("generate_changelog.py", "--lint", str(f), str(f))
+        assert gc.main() == 1
+        out = capsys.readouterr().out
+        assert "1 changelog format issue(s)" in out, out
+
+
+class TestLintWiring:
+    """⛔ The halves are tested above; this pins that they are CONNECTED.
+
+    A file-format linter with no caller is what #1765 was about, so the
+    wiring is the part that must not be silently removable.
+    """
+
+    @staticmethod
+    def _lint_hooks():
+        import yaml
+        repo = Path(__file__).resolve().parents[2]
+        cfg = yaml.safe_load((repo / ".pre-commit-config.yaml").read_text(encoding="utf-8"))
+        hooks = [h for r in cfg["repos"] for h in r.get("hooks", [])]
+        return repo, [h for h in hooks
+                      if "generate_changelog.py --lint" in h.get("entry", "")]
+
+    def test_the_precommit_hook_runs_lint_on_changelog_files(self):
+        """⛔ Every assertion here is on BEHAVIOUR, not on substrings.
+
+        Blind review broke the real wiring three ways while a substring-based
+        version of this test stayed green: a `files:` pattern that matches
+        nothing but still contains the word CHANGELOG, `stages: [manual]`, and
+        an entry that still contains `--lint` but can never fail.
+        """
+        repo, lint = self._lint_hooks()
+        assert lint, "no pre-commit hook runs the changelog file linter"
+        for h in lint:
+            pattern = h.get("files", "")
+            # The pattern must actually select the files, and must not be a
+            # catch-all that would merely look selective.
+            assert re.search(pattern, "CHANGELOG.md"), pattern
+            assert re.search(pattern, "CHANGELOG-archive.md"), pattern
+            assert not re.search(pattern, "docs/internal/dev-rules.md"), pattern
+            # ⛔ It must receive the files it matched. `pass_filenames: false`
+            # would make the `files:` pattern decorative — the hook would fire
+            # for CHANGELOG-archive.md and lint CHANGELOG.md instead.
+            assert h.get("pass_filenames", True) is True, h
+            # A hook moved to the manual stage never runs on a commit.
+            stages = h.get("stages")
+            assert stages is None or any(
+                s in ("pre-commit", "commit") for s in stages), h
+
+    def test_the_configured_entry_actually_fails_on_a_broken_file(self, tmp_path):
+        """Run the entry AS CONFIGURED. An entry that still reads `--lint` can
+        be inert: appending `--help` makes argparse stop consuming paths and
+        exit 0 before the linter is ever called."""
+        repo, lint = self._lint_hooks()
+        broken = tmp_path / "CHANGELOG.md"
+        broken.write_text("## [Unreleased]\n\n- a bullet, but no ### heading\n",
+                          encoding="utf-8")
+        for h in lint:
+            argv = h["entry"].split()
+            if Path(argv[0]).stem in ("python3", "python", "py"):
+                argv[0] = sys.executable
+            r = subprocess.run(argv + [str(broken)], cwd=repo, timeout=120,
+                               capture_output=True, text=True,
+                               encoding="utf-8", errors="replace")
+            assert r.returncode != 0, (
+                f"the hook as configured accepted a broken changelog\n"
+                f"entry: {h['entry']}\nstdout: {r.stdout}\nstderr: {r.stderr}")
+
+    def test_lint_actually_reads_the_paths_it_is_given(self, tmp_path, capsys, cli_argv):
+        """⛔ The other half of `pass_filenames`. A hook that hands the tool a
+        path it then ignores is the same shape as this whole ticket: bound to
+        a file it never opens. Two files, only the SECOND one is broken."""
+        good = tmp_path / "CHANGELOG.md"
+        good.write_text("## [v2.9.0] — T (2026-06-06)\n\n### Fixed\n- a\n",
+                        encoding="utf-8")
+        bad = tmp_path / "CHANGELOG-archive.md"
+        bad.write_text("## [v1.0.0] — T (2026-03-01)\n\nno subsections here\n",
+                       encoding="utf-8")
+        cli_argv("generate_changelog.py", "--lint", str(good), str(bad))
+        rc = gc.main()
+        out = capsys.readouterr().out
+        assert rc != 0, out
+        assert "CHANGELOG-archive.md" in out, out
+
+    def test_validate_all_registers_it_and_maps_changelog_to_it(self):
+        repo = Path(__file__).resolve().parents[2]
+        sys.path.insert(0, str(repo / "scripts" / "tools"))
+        import validate_all as va
+        row = [t for t in va.TOOLS if t[0] == "changelog_format"]
+        assert row, "changelog_format is not registered"
+        _, script, args, _ = row[0]
+        assert script == "dx/generate_changelog.py"
+        # ⛔ Paths are explicit. A bare `--lint` defaults to CHANGELOG.md, so
+        # this row would lint that file even when selected because
+        # CHANGELOG-archive.md changed.
+        assert args[0] == "--lint"
+        assert set(args[1:]) == {"CHANGELOG.md", "CHANGELOG-archive.md"}, args
+        assert "changelog_format" in va.WATCH_TRIGGERS["CHANGELOG.md"]
+        assert "changelog_format" in va.WATCH_TRIGGERS["CHANGELOG-archive.md"]
+
+        # ⛔ Mapped-but-not-linted is claimed coverage that does not exist:
+        # `--smart` would select this check because that file changed, and the
+        # check would not look at it. Scoped to files that EXIST, because
+        # `CHANGELOG.en.md` is mapped as a future file and naming it as a
+        # target today would make every run exit 2. This fires the moment
+        # someone adds it — which is exactly when the target list must grow.
+        mapped = {f for f, checks in va.WATCH_TRIGGERS.items()
+                  if "changelog_format" in checks}
+        for f in sorted(mapped):
+            if (repo / f).is_file():
+                assert f in args[1:], (
+                    f"{f} is mapped to changelog_format but the check never "
+                    f"lints it; targets are {args[1:]}")
+
+    def test_ci_actually_reaches_it(self):
+        """⛔ Registered is not the same as reachable — blind review measured
+        that gap on this very change.
+
+        The `Lint` job names each hook it runs, and both automated
+        `validate_all.py` callers pass an explicit `--only` allow-list. A hook
+        or a registry row absent from those lists never executes in CI, exits
+        0, and reports nothing: the defect class this ticket is about.
+        """
+        repo = Path(__file__).resolve().parents[2]
+        ci = (repo / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+        assert "pre-commit run changelog-format --all-files" in ci
+
+        for rel in (("Makefile",), (".github", "workflows", "docs-ci.yaml")):
+            text = repo.joinpath(*rel).read_text(encoding="utf-8")
+            only = [ln for ln in text.splitlines() if "--only " in ln]
+            assert only, f"no --only line in {rel}"
+            assert any("changelog_format" in ln for ln in only), (
+                f"{rel} runs validate_all with an --only list that omits "
+                f"changelog_format, so the check never runs there")
 
 
 class TestMain:

@@ -251,10 +251,22 @@ def lint_changelog(changelog_path: str = "CHANGELOG.md") -> List[str]:
 
     Checks:
     - Each version header has semver format [vX.Y.Z...]
-    - Date format is YYYY-MM-DD in parenthetical suffix
-    - Each version section has at least one ### subsection
-    - No duplicate version entries
+    - Date format is YYYY-MM-DD in parenthetical suffix (released sections only)
+    - Each section has at least one ### subsection
+    - No duplicate section entries
     Returns list of issue strings (empty = clean).
+
+    ⛔ `## [Unreleased]` counts as a section (#1765). It did not, because the
+    header pattern was semver-only and every check below was gated on having
+    seen a version — so the one section every PR actually edits (here: the top
+    ~1250 lines) was structurally invisible. Two measured holes: deleting all
+    of its `###` subheadings, and a second `## [Unreleased]` heading, both
+    linted clean.
+
+    ⛔ Repeated subsection names within one section are NOT an issue. Each PR
+    prepends its own block, so a second `### Fixed` under Unreleased is the
+    convention working; `CHANGELOG.md`'s own header comment puts condensation
+    at release time.
     """
     from pathlib import Path
     path = Path(changelog_path)
@@ -267,24 +279,60 @@ def lint_changelog(changelog_path: str = "CHANGELOG.md") -> List[str]:
     seen_versions: Dict[str, int] = {}
     current_version: Optional[str] = None
     has_subsection = False
+    has_content = False
 
+    # ⛔ The `v` is REQUIRED on a released heading, because
+    # `bump_docs._RELEASED_CHANGELOG_HEADING` requires it to decide which part
+    # of the file is frozen history. `## [2.10.0]` linted clean here while
+    # bump_docs treated it as live in-flight content and would rewrite the
+    # version strings inside it. One predicate, two tools, same answer.
+    # ⛔ The `v` stays outside the capture: issue text says `[2.9.0]`, and a
+    # test pins that. Widening a pattern is also a chance to change what it
+    # captures — those are two different edits.
     semver_re = re.compile(
-        r"^\#\# \[v?(\d+\.\d+\.\d+(?:-[a-zA-Z0-9._-]+)?)\]"
+        r"^\#\# \[(?:(Unreleased)|v(\d+\.\d+\.\d+(?:-[a-zA-Z0-9._-]+)?))\]"
     )
+    # ⛔ Anything shaped like a section heading but NOT recognised above. Every
+    # check here is gated on having entered a section, so an unrecognised
+    # heading does not fail — it makes its whole section invisible, silently.
+    # `## [Unrelesed]` (typo) and `## [2.10.0]` (missing `v`, which
+    # `bump_docs._RELEASED_CHANGELOG_HEADING` requires) both linted clean.
+    heading_re = re.compile(r"^\#\# \[")
     date_re = re.compile(r"\((\d{4}-\d{2}-\d{2})\)")
     subsection_re = re.compile(r"^### ")
+    # Fence tracking: without it a fenced example of changelog markup is read
+    # as real structure — in both directions (a fenced `## [Unreleased]` was
+    # reported as a duplicate, a fenced `### Fixed` satisfied a section that
+    # had none).
+    fence_re = re.compile(r"^\s*(```|~~~)")
 
+    def close_section():
+        # An EMPTY `## [Unreleased]` is the shape release wrap-up leaves
+        # behind after cutting the section into `## [vX.Y.Z]`. Demanding a
+        # `###` there would make the gate red on the release commit itself.
+        # ⛔ The exemption is Unreleased-only: a RELEASED section with nothing
+        # under it is a defect in its own right, and an existing test pins it.
+        if current_version is None or has_subsection:
+            return
+        if current_version == "Unreleased" and not has_content:
+            return
+        issues.append(
+            f"L{seen_versions[current_version]}: [{current_version}] "
+            f"has no ### subsections"
+        )
+
+    in_fence = False
     for i, line in enumerate(lines, 1):
+        if fence_re.match(line):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+
         vm = semver_re.match(line)
         if vm:
-            # Check previous version had subsections
-            if current_version and not has_subsection:
-                issues.append(
-                    f"L{seen_versions[current_version]}: [{current_version}] "
-                    f"has no ### subsections"
-                )
-
-            ver = vm.group(1)
+            close_section()
+            ver = vm.group(1) or vm.group(2)
             if ver in seen_versions:
                 issues.append(
                     f"L{i}: duplicate version [{ver}] "
@@ -293,22 +341,30 @@ def lint_changelog(changelog_path: str = "CHANGELOG.md") -> List[str]:
             seen_versions[ver] = i
             current_version = ver
             has_subsection = False
+            has_content = False
 
-            # Check date
-            dm = date_re.search(line)
-            if not dm:
+            # Check date — released sections only. An Unreleased section has
+            # no date by definition; demanding one would make the common case
+            # permanently red, which is how a gate gets switched off.
+            if ver != "Unreleased" and not date_re.search(line):
                 issues.append(f"L{i}: [{ver}] missing date (YYYY-MM-DD)")
+            continue
 
-        if subsection_re.match(line) and current_version:
-            has_subsection = True
+        if heading_re.match(line):
+            issues.append(
+                f"L{i}: {line.strip()[:60]} is not a recognised section "
+                f"heading — expected [Unreleased] or [vX.Y.Z]; everything "
+                f"under it is unchecked"
+            )
+            continue
 
-    # Last version
-    if current_version and not has_subsection:
-        issues.append(
-            f"L{seen_versions[current_version]}: [{current_version}] "
-            f"has no ### subsections"
-        )
+        if current_version:
+            if subsection_re.match(line):
+                has_subsection = True
+            if line.strip() and not line.lstrip().startswith("<!--"):
+                has_content = True
 
+    close_section()
     return issues
 
 
@@ -340,20 +396,45 @@ def main() -> int:
     )
     parser.add_argument(
         "--lint",
-        action="store_true",
-        help="Lint CHANGELOG.md format (semver headers, dates, subsections)",
+        nargs="*",
+        metavar="PATH",
+        # ⛔ Takes paths so the pre-commit hook can pass the files it matched.
+        # Hardcoding CHANGELOG.md here made the hook's `files:` pattern a lie:
+        # it also matches CHANGELOG-archive.md, and editing that would have run
+        # a check that never opened it (#1765).
+        help="Lint changelog file format (semver/Unreleased headers, dates, "
+             "subsections); defaults to CHANGELOG.md",
     )
     args = parser.parse_args()
 
-    # Lint mode — validate existing CHANGELOG format
-    if args.lint:
-        issues = lint_changelog("CHANGELOG.md")
+    # Lint mode — validate existing changelog format. ⛔ `is not None`: bare
+    # `--lint` yields an empty list, which is falsy.
+    if args.lint is not None:
+        # ⛔ De-duplicated: pre-commit can hand the same path twice, and the
+        # issue count is what an operator acts on.
+        targets = list(dict.fromkeys(args.lint or ["CHANGELOG.md"]))
+        issues = []
+        for target in targets:
+            # ⛔ `_lib_exitcodes` splits these: a bad path or an unreadable
+            # file is the CALLER's error (2), not a finding the user must act
+            # on in the file (1). An uncaught traceback exits 1 too, which is
+            # indistinguishable from "this changelog has one issue".
+            p = Path(target)
+            if not p.is_file():
+                print(f"ERROR: not a readable file: {target}", file=sys.stderr)
+                return EXIT_CALLER_ERROR
+            try:
+                found = lint_changelog(target)
+            except (OSError, UnicodeDecodeError) as exc:
+                print(f"ERROR: could not read {target}: {exc}", file=sys.stderr)
+                return EXIT_CALLER_ERROR
+            issues += [f"{target}: {i}" for i in found]
         if issues:
-            print(f"❌ {len(issues)} CHANGELOG format issue(s):")
+            print(f"❌ {len(issues)} changelog format issue(s):")
             for issue in issues:
                 print(f"  {issue}")
             return EXIT_VIOLATION
-        print("✅ CHANGELOG.md format is clean")
+        print(f"✅ changelog format is clean ({', '.join(targets)})")
         return EXIT_OK
 
     # Determine starting point

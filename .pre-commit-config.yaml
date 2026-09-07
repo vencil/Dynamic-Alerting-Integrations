@@ -364,11 +364,21 @@ repos:
         files: ^docs/.*\.md$
         additional_dependencies: ['pyyaml']
 
+      # ⛔ The name used to be "Changelog format", which is what a reader
+      # assumes it verifies. It walks `git log`; it never opens the file
+      # (#1765). The file's structure is the hook below.
       - id: changelog-lint
-        name: Changelog format
+        name: Conventional commit format (walks git log, does NOT read the file)
         entry: python3 -X utf8 scripts/tools/dx/generate_changelog.py --check
         language: python
         pass_filenames: false
+        files: ^CHANGELOG.*\.md$
+        additional_dependencies: ['pyyaml']
+
+      - id: changelog-format
+        name: Changelog file structure (headers, dates, subsections)
+        entry: python3 -X utf8 scripts/tools/dx/generate_changelog.py --lint
+        language: python
         files: ^CHANGELOG.*\.md$
         additional_dependencies: ['pyyaml']
 

@@ -435,7 +435,7 @@ jobs:
       - name: Run drift checks (versions, tool-map, doc-map, rule-pack-stats, rule-pack-readme, cli-defaults, frontmatter-versions)
         run: |
           python scripts/tools/validate_all.py \
-            --only versions,tool_map,doc_map,rule_pack_stats,byo_rulepack_table,rule_packs,changelog,glossary,includes,repo_name,alerts,cli_default_drift,frontmatter_versions \
+            --only versions,tool_map,doc_map,rule_pack_stats,byo_rulepack_table,rule_packs,changelog,changelog_format,glossary,includes,repo_name,alerts,cli_default_drift,frontmatter_versions \
             --ci
 
   i4-runbook-smoke-test:
