@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -14,6 +15,17 @@ sys.path.insert(0, _TOOLS_DIR)
 sys.path.insert(0, os.path.join(_TOOLS_DIR, '..'))
 
 import generate_tool_map as gtm  # noqa: E402
+
+# Captured before any test patches `gtm.gather_tools`, for the one row that
+# needs the real walker inside the sandboxed `env` fixture.
+_REAL_GATHER_TOOLS = gtm.gather_tools
+
+
+@pytest.fixture(autouse=True)
+def _fresh_unreadable_ledger(monkeypatch):
+    """`_UNREADABLE` is process-global (it dedups the stderr warning and
+    makes `--check` refuse to go green); every test starts with it empty."""
+    monkeypatch.setattr(gtm, "_UNREADABLE", {})
 
 
 # ---------------------------------------------------------------------------
@@ -77,6 +89,79 @@ class TestExtractToolDescription:
         p.write_text('"""tool.py — 工具導覽自動生成"""\n', encoding="utf-8")
         desc = gtm.extract_tool_description(p)
         assert desc == "工具導覽自動生成"
+
+    # -- #1542: files that cannot be READ (as opposed to parsed) ----------
+    # Before the fix these raised out of `extract_tool_description`, and
+    # because `--check --lang all` is the `tool-map-check` pre-commit hook,
+    # the traceback was read as tool-map drift. The contract is: placeholder
+    # description, ONE warning line on stderr naming the file and the
+    # exception class, nothing on stdout (in no-flag mode stdout IS the
+    # generated document).
+
+    def test_cp950_file_yields_placeholder_and_warns_on_stderr(
+            self, tmp_path, capsys):
+        """A cp950-encoded tool file is unreadable as UTF-8: placeholder + stderr."""
+        p = tmp_path / "legacy.py"
+        p.write_bytes('"""工具 — 說明"""\n'.encode("cp950"))
+        desc = gtm.extract_tool_description(p)
+        out, err = capsys.readouterr()
+        assert desc == gtm.UNREADABLE_DESCRIPTION
+        assert "legacy.py" in err
+        assert "UnicodeDecodeError" in err
+        assert out == ""
+
+    def test_directory_named_py_yields_placeholder_and_warns(
+            self, tmp_path, capsys):
+        """A directory named `pkg.py` cannot be read as a file: placeholder + stderr."""
+        d = tmp_path / "pkg.py"
+        d.mkdir()
+        desc = gtm.extract_tool_description(d)
+        out, err = capsys.readouterr()
+        assert desc == gtm.UNREADABLE_DESCRIPTION
+        assert "pkg.py" in err
+        assert "IsADirectoryError" in err
+        assert out == ""
+
+    def test_permission_error_yields_placeholder_and_warns(
+            self, tmp_path, capsys, monkeypatch):
+        """An unreadable-by-permission file: placeholder + stderr.
+
+        The suite runs as root in CI and in the dev container, where chmod
+        0o000 does not deny anything, so the denial is injected at
+        `Path.read_text` for this one path only.
+        """
+        p = tmp_path / "locked.py"
+        p.write_text('"""locked.py — hidden."""\n', encoding="utf-8")
+        real_read_text = Path.read_text
+
+        def _deny(self, *args, **kwargs):
+            if self == p:
+                raise PermissionError(13, "Permission denied", str(self))
+            return real_read_text(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", _deny)
+        desc = gtm.extract_tool_description(p)
+        out, err = capsys.readouterr()
+        assert desc == gtm.UNREADABLE_DESCRIPTION
+        assert "locked.py" in err
+        assert "PermissionError" in err
+        assert out == ""
+
+    def test_syntax_error_file_is_still_silent_and_empty(
+            self, tmp_path, capsys):
+        """Control for #1542: the SyntaxError branch is unchanged.
+
+        A file that reads fine but does not parse still yields "" and
+        writes nothing to either stream — the unreadable branch must not
+        have widened into "anything that fails".
+        """
+        p = tmp_path / "broken.py"
+        p.write_text("def broken(:\n  pass\n", encoding="utf-8")
+        desc = gtm.extract_tool_description(p)
+        out, err = capsys.readouterr()
+        assert desc == ""
+        assert err == ""
+        assert out == ""
 
 
 # ---------------------------------------------------------------------------
@@ -180,3 +265,243 @@ class TestConstants:
             "back to two definitions")
         assert "_lib_old.py" not in rendered, (
             "the footer still lists the old prefix after it moved")
+
+
+# ---------------------------------------------------------------------------
+# gather_tools with an unreadable member (#1542)
+# ---------------------------------------------------------------------------
+class TestGatherToolsUnreadableMember:
+    """#1542 at the level the hook actually runs: one bad file must not
+    take the whole inventory down, and must not be dropped from it either
+    (filtering at the scan layer would silently move the published count).
+    """
+
+    def test_unreadable_member_is_listed_with_placeholder(
+            self, tmp_path, monkeypatch, capsys):
+        """ops/good.py (UTF-8) + ops/legacy.py (cp950): both listed, no raise."""
+        root = tmp_path / "tools"
+        ops = root / "ops"
+        ops.mkdir(parents=True)
+        (ops / "good.py").write_text(
+            '"""good.py — A readable tool."""\n', encoding="utf-8")
+        (ops / "legacy.py").write_bytes(
+            '"""legacy.py — 舊工具"""\n'.encode("cp950"))
+        monkeypatch.setattr(gtm, "TOOLS_ROOT", root)
+
+        categorized = gtm.gather_tools()  # must not raise
+        out, err = capsys.readouterr()
+
+        listed = dict(categorized["ops"])
+        assert listed == {
+            "good.py": "A readable tool.",
+            "legacy.py": gtm.UNREADABLE_DESCRIPTION,
+        }, categorized
+        assert err.count("legacy.py") == 1, err
+        assert "UnicodeDecodeError" in err
+        assert "good.py" not in err
+        assert out == ""
+
+    def test_shared_library_footer_warns_once_across_languages(
+            self, tmp_path, monkeypatch, capsys):
+        """The `_lib*` footer re-reads each shared module once PER LANGUAGE
+        (`generate_tool_map` is called for zh and for en), so without the
+        per-process ledger a cp950 `_lib_x.py` warned twice per run —
+        measured in blind review. Exactly one line per file per process."""
+        root = tmp_path / "tools"
+        root.mkdir()
+        (root / "_lib_bad.py").write_bytes(
+            '"""_lib_bad.py — 舊"""\n'.encode("cp950"))
+        monkeypatch.setattr(gtm, "TOOLS_ROOT", root)
+        monkeypatch.setattr(gtm, "require_platform_version",
+                            lambda *a, **k: "v0.0.0-test")
+        empty = {c: [] for c in gtm.CATEGORY_ORDER}
+
+        zh = gtm.generate_tool_map(empty, "zh")
+        en = gtm.generate_tool_map(empty, "en")
+        _out, err = capsys.readouterr()
+
+        assert gtm.UNREADABLE_DESCRIPTION in zh and gtm.UNREADABLE_DESCRIPTION in en
+        assert err.count("_lib_bad.py") == 1, err
+
+
+# ---------------------------------------------------------------------------
+# --check fix hints (#1696)
+# ---------------------------------------------------------------------------
+class TestFixHintLeadsToGreen:
+    """#1696: the hint `--check` prints must, when executed verbatim,
+    regenerate exactly what `--check` checked, so the next `--check` is
+    green. The old hints said `Run with --generate` while `--generate`
+    defaulted to zh only, so a red `tool-map.en.md` sent the reader to a
+    command that changed nothing.
+
+    Two assertions per row, each guarding a different half: the string
+    assertion pins that the hint ECHOES the `--lang` that was checked (an
+    over-regenerating `--lang all` hint would still reach green, so
+    execution alone cannot tell "echo" from "over-regenerate"); the
+    execution pins that following it actually reaches green.
+    """
+
+    _HINT = re.compile(r"Run with (--generate(?: --lang \w+)?) ")
+
+    @pytest.fixture
+    def env(self, tmp_path, monkeypatch, capsys):
+        """A sandboxed generator: targets, tools root and version are all fake."""
+        docs = tmp_path / "docs" / "internal"
+        docs.mkdir(parents=True)
+        tools = tmp_path / "scripts" / "tools"
+        tools.mkdir(parents=True)
+        # `main` renders paths relative to REPO_ROOT, so the sandbox has
+        # to be the root or `relative_to` raises before any hint prints.
+        monkeypatch.setattr(gtm, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(gtm, "TOOLS_ROOT", tools)
+        monkeypatch.setattr(gtm, "TOOL_MAP", docs / "tool-map.md")
+        monkeypatch.setattr(gtm, "TOOL_MAP_EN", docs / "tool-map.en.md")
+        fixed = {c: [] for c in gtm.CATEGORY_ORDER}
+        fixed["ops"].append(("fixed_tool.py", "A fixed tool."))
+        monkeypatch.setattr(gtm, "gather_tools", lambda: fixed)
+        # Imported by name (`from _lib_versions import require_platform_version`),
+        # so the module-level binding is what `generate_tool_map` looks up.
+        monkeypatch.setattr(gtm, "require_platform_version",
+                            lambda *a, **k: "v0.0.0-test")
+
+        def run(*argv):
+            """Drive `gtm.main()` with argv; return (rc, stdout)."""
+            monkeypatch.setattr(sys, "argv", ["generate_tool_map.py", *argv])
+            try:
+                gtm.main()
+            except SystemExit as exc:
+                rc = exc.code if exc.code is not None else 0
+            else:
+                rc = 0
+            out, _err = capsys.readouterr()
+            return rc, out
+
+        return run
+
+    @staticmethod
+    def _targets(lang):
+        return {"zh": [gtm.TOOL_MAP], "en": [gtm.TOOL_MAP_EN],
+                "all": [gtm.TOOL_MAP, gtm.TOOL_MAP_EN]}[lang]
+
+    @pytest.mark.parametrize("lang", ["zh", "en", "all"])
+    @pytest.mark.parametrize("state", ["missing", "stale"])
+    def test_executing_the_hint_reaches_green(self, env, lang, state):
+        """`--check --lang L` red → run the printed hint → `--check --lang L` green."""
+        if state == "stale":
+            for target in self._targets(lang):
+                target.write_text("junk\n", encoding="utf-8")
+
+        rc, out = env("--check", "--lang", lang)
+        assert rc == 1, out
+        assert f"Run with --generate --lang {lang}" in out, out
+
+        m = self._HINT.search(out)
+        assert m, out
+        hint_argv = m.group(1).split()
+        rc, out = env(*hint_argv)
+        assert rc == 0, out
+
+        rc, out = env("--check", "--lang", lang)
+        assert rc == 0, out
+        assert "up to date" in out, out
+        assert "❌" not in out, out
+
+    def test_check_refuses_green_while_a_tool_file_is_unreadable(
+            self, env, tmp_path, monkeypatch):
+        """#1542, the half the diff cannot show: after `--generate` writes the
+        placeholder the documents MATCH, so a plain drift check would be
+        green while a shipped doc says `⚠️ description unreadable`.
+        `--check` must stay red and name the file on STDOUT — that is the
+        line `validate_all` and `make pr-preflight` quote — and the message
+        must not send the reader to `--generate` (it cannot clear this).
+        """
+        tools = gtm.TOOLS_ROOT
+        (tools / "ops").mkdir()
+        (tools / "ops" / "legacy.py").write_bytes(
+            '"""legacy.py — 舊"""\n'.encode("cp950"))
+        # The sandbox stubs `gather_tools`; this row needs the real walker.
+        monkeypatch.setattr(gtm, "gather_tools", _REAL_GATHER_TOOLS)
+
+        rc, out = env("--generate", "--lang", "all")
+        assert rc == 0, out
+        assert "unreadable: scripts/tools/ops/legacy.py (UnicodeDecodeError)" in out, out
+        assert gtm.UNREADABLE_DESCRIPTION in gtm.TOOL_MAP.read_text(encoding="utf-8")
+
+        rc, out = env("--check")
+        assert rc == 1, out
+        last = [ln for ln in out.strip().splitlines() if ln.strip()][-1]
+        assert "unreadable" in last and "scripts/tools/ops/legacy.py" in last, out
+        assert "UnicodeDecodeError" in last, out
+        assert "--generate" not in last, out
+
+    @pytest.mark.parametrize("doc_state", ["missing", "stale"])
+    def test_check_names_the_unreadable_file_even_when_also_outdated(
+            self, env, tmp_path, monkeypatch, doc_state):
+        """Re-review #1542: the FIRST run an operator sees is usually
+        "outdated" (the doc predates the bad file). Exiting on that alone
+        sent them to `--generate`, which cannot clear the cause; only the
+        second run named the file. The last stdout line — the one
+        `validate_all` / `make pr-preflight` quote — must name the file
+        on the first run and give the two-step fix."""
+        tools = gtm.TOOLS_ROOT
+        (tools / "ops").mkdir()
+        (tools / "ops" / "legacy.py").write_bytes(
+            '"""legacy.py — 舊"""\n'.encode("cp950"))
+        monkeypatch.setattr(gtm, "gather_tools", _REAL_GATHER_TOOLS)
+        if doc_state == "stale":
+            for target in (gtm.TOOL_MAP, gtm.TOOL_MAP_EN):
+                target.write_text("# stale — `other.py`\n", encoding="utf-8")
+
+        rc, out = env("--check")
+        assert rc == 1, out
+        lines = [ln for ln in out.strip().splitlines() if ln.strip()]
+        verdict = "is outdated" if doc_state == "stale" else "does not exist"
+        assert any(verdict in ln for ln in lines), out
+        last = lines[-1]
+        assert last.startswith("❌ unreadable: scripts/tools/ops/legacy.py"), out
+        assert "UnicodeDecodeError" in last, out
+        assert "fix the file, then run with --generate --lang all" in last, out
+
+    def test_generate_names_the_unreadable_file_on_its_last_line(
+            self, env, tmp_path, monkeypatch):
+        """Re-review #1542: `validate_all --fix` quotes the generator's last
+        stdout line cut to 80 characters; the path must lead that line, or
+        the operator reads `fixed (… unreadable: scripts/too` ."""
+        tools = gtm.TOOLS_ROOT
+        (tools / "ops").mkdir()
+        (tools / "ops" / "legacy.py").write_bytes(
+            '"""legacy.py — 舊"""\n'.encode("cp950"))
+        monkeypatch.setattr(gtm, "gather_tools", _REAL_GATHER_TOOLS)
+
+        rc, out = env("--generate", "--lang", "all")
+        assert rc == 0, out
+        last = [ln for ln in out.strip().splitlines() if ln.strip()][-1]
+        assert last.startswith("❌ unreadable: scripts/tools/ops/legacy.py"), out
+        assert "scripts/tools/ops/legacy.py" in last[:80], out
+
+    @pytest.mark.parametrize("en_state", ["missing", "stale"])
+    def test_bare_check_covers_the_en_file(self, env, en_state):
+        """Default pin: zh fresh, en not → bare `--check` is red and names en.
+
+        This is the ticket's "same tree, two opposite answers" row: with
+        the old `--lang zh` default a bare `--check` said green while the
+        machine callers' `--check --lang all` said red on the same tree.
+        """
+        rc, _out = env("--generate", "--lang", "zh")
+        assert rc == 0
+        assert gtm.TOOL_MAP.exists()
+        if en_state == "stale":
+            gtm.TOOL_MAP_EN.write_text("junk\n", encoding="utf-8")
+        else:
+            assert not gtm.TOOL_MAP_EN.exists()
+
+        rc, out = env("--check")
+        assert rc == 1, out
+        assert "tool-map.en.md" in out, out
+        assert "Run with --generate --lang all" in out, out
+
+        # And the hint it printed is itself sufficient.
+        rc, out = env("--generate", "--lang", "all")
+        assert rc == 0, out
+        rc, out = env("--check")
+        assert rc == 0, out

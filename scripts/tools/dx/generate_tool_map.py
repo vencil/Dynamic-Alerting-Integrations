@@ -5,9 +5,9 @@
 docs/internal/tool-map.md，確保工具清單與實際檔案同步。
 
 用法:
-  python3 scripts/tools/generate_tool_map.py              # 印出
-  python3 scripts/tools/generate_tool_map.py --generate    # 寫入 tool-map.md
-  python3 scripts/tools/generate_tool_map.py --check       # CI drift 偵測
+  python3 scripts/tools/dx/generate_tool_map.py              # 印出（zh + en）
+  python3 scripts/tools/dx/generate_tool_map.py --generate    # 寫入 tool-map.md + tool-map.en.md
+  python3 scripts/tools/dx/generate_tool_map.py --check       # CI drift 偵測（預設 --lang all）
 """
 import argparse
 import ast
@@ -73,6 +73,36 @@ CATEGORY_ORDER = ["ops", "dx", "lint"]
 
 TOOL_MAP_EN = REPO_ROOT / "docs" / "internal" / "tool-map.en.md"
 
+# #1542: placeholder written into the tool map when a tool file cannot be
+# read at all (wrong encoding, a directory named `x.py`, permissions).
+# The file stays IN the inventory — filtering it out at the scan layer
+# would silently move the published count — and the placeholder is what
+# `--check` then compares, so the drift is visible instead of a traceback.
+UNREADABLE_DESCRIPTION = "⚠️ description unreadable"
+
+# Files `extract_tool_description` could not read this process, path →
+# exception class name. Filled on first sight (the stderr warning prints
+# once per file per run — the shared-library footer re-reads `_lib*`
+# once per language, measured in blind review), and consumed by `main()`:
+# `--check` refuses to go green while this is non-empty, because a
+# placeholder is a drift that regenerating cannot clear.
+_UNREADABLE: dict = {}
+
+
+def _shown(filepath: Path) -> "Path":
+    """Path as printed: repo-relative when it is under REPO_ROOT."""
+    try:
+        return filepath.relative_to(REPO_ROOT)
+    except ValueError:
+        return filepath
+
+
+def _unreadable_detail() -> str:
+    """`unreadable: a.py (UnicodeDecodeError), b.py (IsADirectoryError)`."""
+    return "unreadable: " + ", ".join(
+        f"{_shown(p)} ({cls})" for p, cls in sorted(
+            _UNREADABLE.items(), key=lambda kv: str(kv[0])))
+
 
 def extract_tool_description(filepath: Path) -> str:
     """Extract description from a Python tool file.
@@ -80,6 +110,14 @@ def extract_tool_description(filepath: Path) -> str:
     Strategy:
     1. Parse AST and read module docstring first line.
     2. Fall back to first comment-style description.
+
+    A file that parses but carries no docstring, or does not parse at all,
+    yields "" (an existing test pins the SyntaxError case; do not widen it).
+    A file that cannot be READ — not UTF-8, a directory named `x.py`, no
+    permission — yields `UNREADABLE_DESCRIPTION` and one WARNING line on
+    stderr (#1542). Before that branch existed the whole generator
+    tracebacked, and because `--check --lang all` is the `tool-map-check`
+    pre-commit hook, the crash read as tool-map drift.
     """
     try:
         source = filepath.read_text(encoding="utf-8")
@@ -95,6 +133,14 @@ def extract_tool_description(filepath: Path) -> str:
             return first_line.strip()
     except SyntaxError:
         pass
+    except (UnicodeDecodeError, OSError) as exc:
+        # stderr on purpose: in no-flag mode stdout IS the document.
+        if filepath not in _UNREADABLE:
+            _UNREADABLE[filepath] = type(exc).__name__
+            print(f"WARNING: {_shown(filepath)} unreadable "
+                  f"({type(exc).__name__}: {exc}); "
+                  f"tool-map description set to placeholder", file=sys.stderr)
+        return UNREADABLE_DESCRIPTION
 
     return ""
 
@@ -276,17 +322,27 @@ def _force_utf8_streams() -> None:
 def main():
     """CLI entry point: 工具導覽自動生成."""
     _force_utf8_streams()
+    # #1542: the ledger is module-global; an in-process caller that already
+    # walked a tree with an unreadable member must not make THIS run red.
+    _UNREADABLE.clear()
     parser = argparse.ArgumentParser(
         description="Generate docs/internal/tool-map.md from scripts/tools/*.py",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
+    # #1696: every machine caller (Makefile, pre-commit, validate_all,
+    # check_pr_scope_drift) passes `--check --lang all`, so the default
+    # follows them: a bare `--check` verifies both files, and the fix
+    # hints below echo the invocation so following one regenerates
+    # exactly what was checked.
     parser.add_argument("--generate", action="store_true",
-                        help="Write tool-map.md (and .en.md with --lang en)")
+                        help="Write tool-map.md and tool-map.en.md "
+                             "(narrow with --lang)")
     parser.add_argument("--check", action="store_true",
-                        help="CI mode: exit 1 if tool-map.md is outdated")
-    parser.add_argument("--lang", choices=["zh", "en", "all"], default="zh",
-                        help="Language: zh (default), en, or all")
+                        help="CI mode: exit 1 if tool-map.md or "
+                             "tool-map.en.md is outdated")
+    parser.add_argument("--lang", choices=["zh", "en", "all"], default="all",
+                        help="Language: all (default), zh, or en")
     parser.add_argument("--safe", action="store_true",
                         help="Write via sibling .tmp + atomic os.replace "
                              "(FUSE interruption safety; v2.8.0 Trap #60)")
@@ -304,6 +360,7 @@ def main():
             print(generate_tool_map(categorized, lang))
         return
 
+    outdated = False
     for lang in langs:
         content = generate_tool_map(categorized, lang)
         target = TOOL_MAP if lang == "zh" else TOOL_MAP_EN
@@ -326,8 +383,11 @@ def main():
         elif args.check:
             if not target.exists():
                 print(f"❌ {target.relative_to(REPO_ROOT)} does not exist. "
-                      f"Run with --generate first.")
-                sys.exit(EXIT_VIOLATION)
+                      f"Run with --generate --lang {args.lang} first.")
+                if not _UNREADABLE:
+                    sys.exit(EXIT_VIOLATION)
+                outdated = True
+                continue
 
             existing = target.read_text(encoding="utf-8")
             if existing.strip() != content.strip():
@@ -345,10 +405,29 @@ def main():
                 detail_str = (f" ({'; '.join(details)})"
                               if details else "")
                 print(f"❌ {target.relative_to(REPO_ROOT)} is outdated"
-                      f"{detail_str}. Run with --generate to update.")
-                sys.exit(EXIT_VIOLATION)
+                      f"{detail_str}. Run with --generate --lang {args.lang} "
+                      f"to update.")
+                if not _UNREADABLE:
+                    sys.exit(EXIT_VIOLATION)
+                # An unreadable member is the deeper cause; fall through so
+                # the LAST stdout line names it (blind review, #1542).
+                outdated = True
+                continue
 
             print(f"✅ Tool map ({lang}) is up to date.")
+
+    if _UNREADABLE:
+        # #1542: `--check` may find the document matching — but matching a
+        # PLACEHOLDER — or outdated; either way the file is the cause and
+        # regenerating cannot clear it. One LAST stdout line, because that
+        # is the line `validate_all` / `make pr-preflight` quote (80 chars,
+        # so the path comes before anything else).
+        also = (f" The document is also outdated: fix the file, then run "
+                f"with --generate --lang {args.lang}." if outdated else
+                " Fix the file; regenerating cannot clear this.")
+        print(f"❌ {_unreadable_detail()}.{also}")
+        if args.check:
+            sys.exit(EXIT_VIOLATION)
 
 
 if __name__ == "__main__":

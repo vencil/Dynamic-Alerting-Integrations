@@ -99,14 +99,28 @@ def check_tool_map(repo: Path) -> tuple[bool, str]:
     # Crash signatures take precedence — if the generator exploded, mark as
     # a distinct failure mode rather than reporting "drift". This avoids the
     # diagnostic-misdirection we hit in the PR #46 smoke test.
-    crash_sigs = ("Traceback", "UnicodeEncodeError", "UnicodeDecodeError")
-    if any(sig in stderr for sig in crash_sigs):
+    #
+    # ⛔ The signature is a Traceback (or an exit code outside the tool's
+    # 0/1 contract), NOT an exception NAME in stderr. Since #1542 the
+    # generator prints `WARNING: <file> unreadable (UnicodeDecodeError: …)`
+    # and keeps going — a handled condition, and its verdict is on stdout.
+    # Matching the name here turned that handled warning back into the
+    # phantom "crashed" verdict this branch exists to prevent (blind review).
+    if "Traceback" in stderr or rc not in (0, 1):
         last_err = stderr.strip().splitlines()[-1] if stderr.strip() else "(no stderr)"
-        return False, f"tool-map generator crashed: {last_err}"
+        # rc 2 with no Traceback is the tool REFUSING (EXIT_CALLER_ERROR:
+        # argparse, an unreadable CLAUDE.md version anchor) — not a crash;
+        # either way it is not drift, and the stderr line is the reason.
+        if "Traceback" in stderr:
+            return False, f"tool-map generator crashed: {last_err}"
+        return False, f"tool-map generator refused (rc {rc}): {last_err}"
 
     if rc == 0 and "outdated" not in combined.lower():
         return True, "tool-map --check: PASS"
-    last = combined.splitlines()[-1] if combined else "(no output)"
+    # The verdict (and its `Run with --generate --lang …` hint) is the last
+    # STDOUT line; stderr may carry warnings that would otherwise bury it.
+    verdict_src = stdout.strip() or stderr.strip()
+    last = verdict_src.splitlines()[-1] if verdict_src else "(no output)"
     return False, f"tool-map drift: {last}"
 
 

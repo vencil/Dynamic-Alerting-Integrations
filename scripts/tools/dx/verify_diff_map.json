@@ -803,7 +803,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "155eee5efc20b904063dff66d4b20deefea0b03d395a037069412648f1555d2a",
+ "source_digest": "0561d691a62cbe9db7e91131be254a97b8ed8f2ed9bf33e80281e7acd42f87e3",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1738,6 +1738,7 @@
   ],
   "docs/internal/tool-map.md": [
    "tests/dx/test_paired_trend_watch.py",
+   "tests/lint/test_check_pr_scope_drift.py",
    "tests/shared/test_lib_toolcount.py"
   ],
   "docs/scenarios": [
