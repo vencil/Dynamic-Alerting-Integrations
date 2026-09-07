@@ -1431,12 +1431,12 @@ def test_batch_diagnose_discovers_tenants_from_either_casing(
         # green on a one-key ConfigMap (blind review measured that hole):
         #   `_defaults.yaml`  reserved — never a tenant
         #   `README.md`       not a config carrier at all
-        #   `db-c.yml`        the SPELLING axis: `.yaml`-only is this
-        #                     tool's declared set (widening it is #1603),
-        #                     and `config_stem` internally accepts BOTH
-        #                     spellings — so if the outer filter is ever
-        #                     dropped, a `.yml` key silently becomes a
-        #                     tenant. That is pinned here, not assumed.
+        #   `db-c.yml`        ⚠️ NOT a "must not be seen" neighbour any
+        #                     more: #1603 widened this tool to the producer's
+        #                     set (`make configmap-assemble` globs `conf.d/`
+        #                     into `--from-file`, both spellings), so this is
+        #                     a real key of a real tenant. The two neighbours
+        #                     above still pin their filters.
         payload = _json.dumps(
             {"data": {fname: _TENANT_BODY,
                       "_defaults.yaml": "d: {}\n",
@@ -1454,15 +1454,19 @@ def test_batch_diagnose_discovers_tenants_from_either_casing(
         with contextlib.redirect_stderr(err):
             found[arm] = mod.discover_tenants()
         noise[arm] = err.getvalue()
-    assert found["lower"] == ["db-a"], (
-        f"fixture is vacuous — the lower arm found {found['lower']}")
+    # ⚠️ `db-c` joined this list at #1603 — see the neighbour note above.
+    # If you added a key, the tool is fine and THIS expectation is what needs
+    # updating; do not remove your key to get green.
+    assert found["lower"] == ["db-a", "db-c"], (
+        f"the lower arm did not find exactly the two carrier keys this "
+        f"ConfigMap has; got {found['lower']}")
     # ⛔ Compare the SHAPE, not the strings: `config_stem` preserves the
     # carrier's case on purpose (folding it would rename the tenant on the
     # write plane only), so the two arms legitimately carry different ids.
     assert len(found["UPPER"]) == len(found["lower"]), (
         f"upper-cased ConfigMap keys yielded {found['UPPER']} against "
         f"{found['lower']} for the identical body")
-    assert found["UPPER"] == ["DB-A"], (
+    assert found["UPPER"] == ["DB-A", "db-c"], (
         f"the tenant id must keep the key's original case; got "
         f"{found['UPPER']}")
     # ⛔ The `_defaults.yaml` neighbour above does NOT pin the reserved

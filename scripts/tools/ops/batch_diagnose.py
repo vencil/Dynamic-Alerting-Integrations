@@ -84,14 +84,15 @@ def discover_tenants(namespace="monitoring", configmap="threshold-config"):
     # `DB-A.YAML` -> [], i.e. every tenant in the report vanished and the
     # run still exited 0.
     #
-    # ⚠️ The accepted spelling stays `.yaml` ONLY. The ConfigMap projection
-    # is not the conf.d tree and nobody has measured what it does with a
-    # `.yml` carrier; widening it here would be the extension-SPELLING axis
-    # (#1603) smuggled into a case fix.
+    # #1603: match the PRODUCER. `threshold-config` is built by the
+    # `configmap-assemble` recipe in `Makefile`, straight out of `conf.d/`,
+    # so its keys are conf.d filenames and it now ships both spellings.
+    # A narrower set here reproduces the original defect one hop downstream:
+    # a tenant set smaller than what is deployed.
     data_keys = list(cm_data.get("data", {}).keys())
     tenants = []
     for key in data_keys:
-        if not has_yaml_extension(key, (".yaml",)) or is_reserved_name(key):
+        if not has_yaml_extension(key) or is_reserved_name(key):
             continue
         tenant = config_stem(key)
         if not tenant:
@@ -103,6 +104,20 @@ def discover_tenants(namespace="monitoring", configmap="threshold-config"):
             # tenant quietly missing from the report.
             print(f"WARNING: ConfigMap key {key!r} carries no tenant id — "
                   f"skipped", file=sys.stderr)
+            continue
+        if tenant in tenants:
+            # Only reachable since this site started accepting both spellings:
+            # `db-a.yaml` + `db-a.yml` are two keys, one stem.
+            # ⛔ Says only what it knows. This tool identifies tenants by KEY
+            # NAME; the exporter's own predicate is "one id declared in two
+            # files", and an id comes from the file's `tenants:` mapping, not
+            # from its stem (`validate_config` states this explicitly). So two
+            # same-stem keys may or may not be a duplicate declaration — what
+            # is certain is that this report can only count the stem once.
+            print(f"WARNING: ConfigMap keys collapse to one tenant id here — "
+                  f"{key!r} repeats {tenant!r}; counted once. This report "
+                  f"names tenants by key, so check those two keys by hand",
+                  file=sys.stderr)
             continue
         tenants.append(tenant)
     return sorted(tenants)

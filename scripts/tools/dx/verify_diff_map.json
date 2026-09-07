@@ -802,7 +802,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "826ca3f96103c24fce1b717a7fdbfea0a5150309545fc618f6c29c6487767952",
+ "source_digest": "2d06d17d852a95b4a498249a643783aec47bd4f4a3bc62f45362c7a1597f6d97",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1010,6 +1010,7 @@
   "tests/ops/test_confd_unusable_signal.py",
   "tests/ops/test_config_diff.py",
   "tests/ops/test_config_history.py",
+  "tests/ops/test_configmap_assemble_precheck.py",
   "tests/ops/test_cutover_tenant.py",
   "tests/ops/test_da_assembler.py",
   "tests/ops/test_diagnose.py",
@@ -1289,6 +1290,7 @@
    "tests/lint/test_e2e_spec_lint.py",
    "tests/lint/test_validate_docs_versions.py",
    "tests/ops/test_ci_path_filter_coverage.py",
+   "tests/ops/test_configmap_assemble_precheck.py",
    "tests/ops/test_generated_ci_artifacts.py",
    "tests/ops/test_prepush_hook_wiring.py",
    "tests/ops/test_wrapped_path_references.py",
@@ -1328,6 +1330,7 @@
    "tests/lint/test_e2e_spec_lint.py",
    "tests/ops/test_ci_baseline_substitution.py",
    "tests/ops/test_ci_path_filter_coverage.py",
+   "tests/ops/test_configmap_assemble_precheck.py",
    "tests/ops/test_git_check_lock.py",
    "tests/ops/test_grar_strict_hardening.py",
    "tests/ops/test_nightly_scan_matrix_drift.py",
@@ -2217,6 +2220,9 @@
   ],
   "scripts/ops/commit_helper.py": [
    "tests/ops/test_commit_helper.py"
+  ],
+  "scripts/ops/configmap_assemble_precheck.py": [
+   "tests/ops/test_configmap_assemble_precheck.py"
   ],
   "scripts/ops/dx_run.py": [
    "tests/ops/test_dx_run.py"
