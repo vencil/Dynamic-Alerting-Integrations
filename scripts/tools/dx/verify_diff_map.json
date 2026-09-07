@@ -802,7 +802,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "e8ca59cb01843ac560d345c67d318e6d06c2123d61f6f82fe091410dffb355ea",
+ "source_digest": "2d06d17d852a95b4a498249a643783aec47bd4f4a3bc62f45362c7a1597f6d97",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1290,6 +1290,7 @@
    "tests/lint/test_e2e_spec_lint.py",
    "tests/lint/test_validate_docs_versions.py",
    "tests/ops/test_ci_path_filter_coverage.py",
+   "tests/ops/test_configmap_assemble_precheck.py",
    "tests/ops/test_generated_ci_artifacts.py",
    "tests/ops/test_prepush_hook_wiring.py",
    "tests/ops/test_wrapped_path_references.py",

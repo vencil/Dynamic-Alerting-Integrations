@@ -106,14 +106,17 @@ def discover_tenants(namespace="monitoring", configmap="threshold-config"):
                   f"skipped", file=sys.stderr)
             continue
         if tenant in tenants:
-            # Only reachable since this site started accepting both
-            # spellings: `db-a.yaml` + `db-a.yml` are two keys, one stem.
-            # ⛔ Loud, not silent — that ConfigMap makes the exporter reject
-            # the ENTIRE config dir, so a clean-looking report here would be
-            # the most misleading possible output.
-            print(f"WARNING: ConfigMap key {key!r} repeats tenant "
-                  f"{tenant!r} under another spelling — counted once; the "
-                  f"exporter rejects a config dir in this state",
+            # Only reachable since this site started accepting both spellings:
+            # `db-a.yaml` + `db-a.yml` are two keys, one stem.
+            # ⛔ Says only what it knows. This tool identifies tenants by KEY
+            # NAME; the exporter's own predicate is "one id declared in two
+            # files", and an id comes from the file's `tenants:` mapping, not
+            # from its stem (`validate_config` states this explicitly). So two
+            # same-stem keys may or may not be a duplicate declaration — what
+            # is certain is that this report can only count the stem once.
+            print(f"WARNING: ConfigMap keys collapse to one tenant id here — "
+                  f"{key!r} repeats {tenant!r}; counted once. This report "
+                  f"names tenants by key, so check those two keys by hand",
                   file=sys.stderr)
             continue
         tenants.append(tenant)
