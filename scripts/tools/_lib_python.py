@@ -44,6 +44,8 @@ from _lib_io import (  # noqa: F401
     write_json_or_die,
     ensure_dir,
     ensure_dir_or_die,
+    output_write,
+    exit_on_output_write_error,
     write_onboard_hints,
     read_onboard_hints,
     format_json_report,

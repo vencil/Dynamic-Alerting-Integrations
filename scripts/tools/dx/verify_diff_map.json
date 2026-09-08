@@ -84,6 +84,7 @@
    "tests/dx/test_line_ending_policy.py",
    "tests/ops/test_policy_opa_bridge.py",
    "tests/shared/test_confd_name_classification_parity.py",
+   "tests/shared/test_lib_io_output_write.py",
    "tests/shared/test_property_tools.py",
    "tests/shared/test_write_failure_class.py",
    "tests/shared/test_yaml_file_error.py"
@@ -232,7 +233,8 @@
    "tests/dx/test_pr_preflight_orchestrator.py"
   ],
   "scripts/tools/dx/run_chaos_soak.py": [
-   "tests/dx/test_run_chaos_soak.py"
+   "tests/dx/test_run_chaos_soak.py",
+   "tests/shared/test_output_path_write_failure.py"
   ],
   "scripts/tools/dx/scaffold_jsx_dep.py": [
    "tests/dx/test_scaffold_jsx_dep.py"
@@ -818,10 +820,13 @@
   ],
   "tests/shared/test_tool_exit_codes.py": [
    "tests/shared/test_bilingual_help_contract.py"
+  ],
+  "tests/shared/test_write_failure_class.py": [
+   "tests/shared/test_output_write_sites_stay_guarded.py"
   ]
  },
  "parse_errors": [],
- "source_digest": "18b710f38e7ed7be519d16cd4ab53e3972ca9741add287f3e59ceea184509c6e",
+ "source_digest": "9887e8360717fb3e408a3947ae52c7e0c2cf992fbfa6bd041df50fc5c8fbb857",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1145,6 +1150,7 @@
   "tests/shared/test_lib_confd.py",
   "tests/shared/test_lib_godispatch.py",
   "tests/shared/test_lib_helpers.py",
+  "tests/shared/test_lib_io_output_write.py",
   "tests/shared/test_lib_python.py",
   "tests/shared/test_lib_toolcount.py",
   "tests/shared/test_mutation_catalog.py",
@@ -1152,6 +1158,7 @@
   "tests/shared/test_nginx_proxy.py",
   "tests/shared/test_output_label_escaping.py",
   "tests/shared/test_output_path_write_failure.py",
+  "tests/shared/test_output_write_sites_stay_guarded.py",
   "tests/shared/test_pipeline_integration.py",
   "tests/shared/test_probe_health.py",
   "tests/shared/test_projection_gate_exposer.py",
@@ -2385,6 +2392,7 @@
    "tests/shared/test_lib_toolcount.py",
    "tests/shared/test_output_label_escaping.py",
    "tests/shared/test_output_path_write_failure.py",
+   "tests/shared/test_output_write_sites_stay_guarded.py",
    "tests/shared/test_prometheus_url_fallback_guard.py",
    "tests/shared/test_property_tools.py",
    "tests/shared/test_sast.py",
@@ -2469,7 +2477,8 @@
    "tests/golden/test_merge_parity.py",
    "tests/ops/test_ci_baseline_substitution.py",
    "tests/ops/test_property_based.py",
-   "tests/shared/test_confd_case_parity_across_tools.py"
+   "tests/shared/test_confd_case_parity_across_tools.py",
+   "tests/shared/test_output_write_sites_stay_guarded.py"
   ],
   "scripts/tools/dx/doc_coverage.py": [
    "tests/dx/test_doc_coverage.py"
@@ -2524,6 +2533,7 @@
    "tests/ops/test_ci_aggregate_gate_contract.py"
   ],
   "scripts/tools/dx/run_chaos_soak.py": [
+   "tests/shared/test_output_write_sites_stay_guarded.py",
    "tests/shared/test_sast.py"
   ],
   "scripts/tools/dx/scaffold_lint.py": [
@@ -2785,10 +2795,16 @@
   "scripts/tools/ops/analyze_rule_pack_gaps.py": [
    "tests/shared/test_yaml_file_error.py"
   ],
+  "scripts/tools/ops/assemble_config_dir.py": [
+   "tests/shared/test_output_write_sites_stay_guarded.py"
+  ],
   "scripts/tools/ops/backtest_threshold.py": [
    "tests/shared/test_confd_case_parity_across_tools.py",
    "tests/shared/test_confd_path_encoding_across_git_calls.py",
    "tests/shared/test_yaml_file_error.py"
+  ],
+  "scripts/tools/ops/baseline_discovery.py": [
+   "tests/shared/test_output_write_sites_stay_guarded.py"
   ],
   "scripts/tools/ops/bench-canary/canary_test.go": [
    "tests/dx/test_analyze_bench_history.py",
@@ -2880,6 +2896,9 @@
    "tests/shared/test_help_contract.py",
    "tests/shared/test_pipeline_integration.py"
   ],
+  "scripts/tools/ops/state_reconcile.py": [
+   "tests/shared/test_output_write_sites_stay_guarded.py"
+  ],
   "scripts/tools/ops/threshold_recommend.py": [
    "tests/shared/test_yaml_file_error.py"
   ],
@@ -2916,6 +2935,7 @@
    "tests/ops/test_image_flat_layout.py",
    "tests/shared/test_bilingual_help_contract.py",
    "tests/shared/test_console_encoding_resilience.py",
+   "tests/shared/test_lib_io_output_write.py",
    "tests/shared/test_property_tools.py",
    "tests/shared/test_write_failure_class.py"
   ],
@@ -3261,7 +3281,8 @@
   ],
   "tests/shared": [
    "tests/ops/test_ci_path_filter_coverage.py",
-   "tests/shared/test_output_path_write_failure.py"
+   "tests/shared/test_output_path_write_failure.py",
+   "tests/shared/test_output_write_sites_stay_guarded.py"
   ],
   "tests/shared/_go_mutation_pilot.py": [
    "tests/shared/test_go_mutation_pilot.py"
@@ -3324,6 +3345,9 @@
   ],
   "tests/shared/test_output_path_write_failure.py": [
    "tests/shared/test_write_failure_class.py"
+  ],
+  "tests/shared/test_output_write_sites_stay_guarded.py": [
+   "tests/shared/test_output_path_write_failure.py"
   ],
   "tests/shared/test_property.py": [
    "tests/shared/test_property_tools.py"

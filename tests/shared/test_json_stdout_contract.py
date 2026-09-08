@@ -247,6 +247,31 @@ _RICH_METRICS = (
     b'mysql_info{instance="stub:9104",schema="billing"} 1\n'
 )
 
+# Go-runtime exposition, served under the `/soak` personality. This is what
+# `dx/run_chaos_soak` scrapes: it parses only UNLABELLED samples whose name is
+# in its own `TRACKED_METRICS`, aborts with rc=2 when the endpoint is
+# unreachable, and warns when nothing tracked comes back — so the plain
+# `/metrics` body above (mysql_*, and one of them labelled) reaches it as "no
+# tracked metrics", not as a working target. The labelled `go_goroutines`
+# sample is here on purpose: run_chaos_soak must skip it and take the
+# unlabelled one, which is what a real Go binary exposes.
+_GO_RUNTIME_METRICS = (
+    b"# HELP go_goroutines Number of goroutines that currently exist.\n"
+    b"# TYPE go_goroutines gauge\n"
+    b'go_goroutines{ignored="labelled sample"} 999\n'
+    b"go_goroutines 42\n"
+    b"# TYPE go_memstats_sys_bytes gauge\n"
+    b"go_memstats_sys_bytes 2.0971520e+07\n"
+    b"go_memstats_alloc_bytes 3.145728e+06\n"
+    b"go_memstats_heap_inuse_bytes 4.194304e+06\n"
+    b"go_memstats_heap_idle_bytes 1.048576e+06\n"
+    b"go_memstats_heap_released_bytes 524288\n"
+    b"go_memstats_heap_objects 12345\n"
+    b"# TYPE go_gc_duration_seconds summary\n"
+    b'go_gc_duration_seconds{quantile="0"} 1.2e-05\n'
+    b"go_gc_duration_seconds_count 7\n"
+)
+
 
 def _stub_payload(path: str) -> tuple[int, bytes, str]:
     """(status, body, content_type) for a stubbed upstream path."""
@@ -256,6 +281,10 @@ def _stub_payload(path: str) -> tuple[int, bytes, str]:
     rich = path.startswith("/rich")
     if rich:
         path = path[len("/rich"):] or "/"
+    # `/soak`: same server, Go-runtime `/metrics` body (dx/run_chaos_soak).
+    soak = path.startswith("/soak")
+    if soak:
+        path = path[len("/soak"):] or "/"
 
     if path.startswith("/api/v1/query_range"):
         return j(_RICH_MATRIX if rich else _EMPTY_MATRIX)
@@ -306,9 +335,10 @@ def _stub_payload(path: str) -> tuple[int, bytes, str]:
     if path.startswith("/api/v1/tenants"):
         return j({"pr_url": "https://example.invalid/pr/1", "pr_number": 1,
                   "status": "open"})
-    # Exporter /metrics scrape target (discover_instance_mappings --endpoint)
+    # Exporter /metrics scrape target (discover_instance_mappings --endpoint,
+    # run_chaos_soak --target-url under the `/soak` personality)
     if path.rstrip("/").endswith("/metrics"):
-        body = _RICH_METRICS if rich else _PLAIN_METRICS
+        body = _GO_RUNTIME_METRICS if soak else _RICH_METRICS if rich else _PLAIN_METRICS
         return 200, body, "text/plain; version=0.0.4"
     return j({"status": "success", "data": {}})
 
