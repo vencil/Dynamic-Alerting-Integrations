@@ -519,7 +519,25 @@ class TestCLIUnderADotDirectoryAndOnAnEmptyTree:
         with pytest.raises(SystemExit) as exc_info:
             cfv.main(argv)
         assert exc_info.value.code == EXIT_CALLER_ERROR
-        assert "no markdown files found" in capsys.readouterr().err
+        captured = capsys.readouterr()
+        assert "no markdown files found" in captured.err
+        # validate_all quotes only the last stdout line — the reason must
+        # reach that path too, not just the error stream.
+        assert "no markdown files found" in captured.out.strip().splitlines()[-1]
+
+    def test_markdown_that_is_all_hidden_says_so(self, tmp_path, monkeypatch, capsys):
+        """Blind-review F2: "no markdown files found" would be false here."""
+        docs = tmp_path / "docs"
+        (docs / ".archive").mkdir(parents=True)
+        (docs / ".archive" / "x.md").write_text("---\nversion: v1.0.0\n---\n",
+                                                 encoding="utf-8")
+        _point(monkeypatch, tmp_path, docs)
+        with pytest.raises(SystemExit) as exc_info:
+            cfv.main(["--ci"])
+        assert exc_info.value.code == EXIT_CALLER_ERROR
+        err = capsys.readouterr().err
+        assert "all skipped as hidden" in err
+        assert "no markdown files found" not in err
 
     def test_a_missing_docs_dir_is_a_caller_error(self, tmp_path, monkeypatch):
         _point(monkeypatch, tmp_path, tmp_path / "docs-not-here")
@@ -534,3 +552,16 @@ class TestCLIUnderADotDirectoryAndOnAnEmptyTree:
         (docs / "plain.md").write_text("# no frontmatter\n", encoding="utf-8")
         _point(monkeypatch, tmp_path, docs)
         cfv.main(["--ci"])  # must not raise
+
+    def test_files_without_any_frontmatter_do_not_print_the_green_line(
+            self, tmp_path, monkeypatch, capsys):
+        """Blind-review F5: "✅ All 0 … match" must not be reachable at all."""
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "a.md").write_text("# a\n", encoding="utf-8")
+        (docs / "b.md").write_text("# b\n", encoding="utf-8")
+        _point(monkeypatch, tmp_path, docs)
+        cfv.main(["--ci"])  # rc 0 by design: frontmatter is per-file optional
+        out = capsys.readouterr().out
+        assert "nothing was compared" in out
+        assert "✅" not in out
