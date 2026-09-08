@@ -593,7 +593,17 @@ class TestLintWiring:
         # this row would lint that file even when selected because
         # CHANGELOG-archive.md changed.
         assert args[0] == "--lint"
-        assert set(args[1:]) == {"CHANGELOG.md", "CHANGELOG-archive.md"}, args
+        # ⛔ NOT an exact set: that would contradict the invariant below the
+        # moment it fires — adding `CHANGELOG.en.md` to the targets is exactly
+        # what the invariant demands, and an `==` assertion would call it a
+        # regression. What actually matters is stated directly instead:
+        # the default target is there, and no target is a file that does not
+        # exist (a phantom target makes every run exit 2).
+        assert "CHANGELOG.md" in args[1:], args
+        for target in args[1:]:
+            assert (repo / target).is_file(), (
+                f"{target} is a lint target but does not exist; the check "
+                f"would exit 2 on every run")
         assert "changelog_format" in va.WATCH_TRIGGERS["CHANGELOG.md"]
         assert "changelog_format" in va.WATCH_TRIGGERS["CHANGELOG-archive.md"]
 
