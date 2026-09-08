@@ -159,28 +159,16 @@ class CannotMeasure(RuntimeError):
 
 
 def load_module(path: Path, name: str):
-    """Import the tool. ⛔ An import that raises is a CannotMeasure, not a FAIL.
-
-    Found while dogfooding `--tool`: a copy of the tool placed somewhere without
-    a `../_lib_compat.py` beside it (the tool inserts its own parent on
-    `sys.path` and imports from there) came out as a bare ModuleNotFoundError
-    traceback and rc=1 — the same exit code a discriminant that misbehaved gets.
-    """
+    """Import the tool, under `drive()`'s rule: any failure is CannotMeasure."""
     if not path.is_file():
         raise CannotMeasure(f"tool not found: {path}")
-    # ⛔ EVERYTHING below is inside the guard. Round after round this function
-    # was fixed one statement at a time — first the exec, then SystemExit — and
-    # each time the statements just ABOVE the `try:` stayed exposed. Blind
-    # review reached them with `--tool` pointing at a `.txt`: importlib has no
-    # loader for that extension, `spec` comes back None, and
-    # `module_from_spec(None)` raised a bare AttributeError at rc 1 — the
-    # "a check failed" code, for a CLI typo. The boundary is the whole body now,
-    # not whichever line happened to break last.
-    # ⛔ `sys.path` AND `sys.modules` are both restored. The tool inserts two
-    # path entries at module scope and this function runs again for every
-    # mutant, so they accumulate; and its sibling `_lib_compat`, left in the
-    # cache, makes a SECOND `--tool` pointing at a different copy silently reuse
-    # the FIRST copy's sibling. Both measured by blind review.
+    # ⛔ The whole body is inside the guard, per `drive()`'s rule — not just the
+    # line that broke last.
+    # ⛔ `sys.path` and `sys.modules` are restored to what they were before this
+    # call, the tool's own entry included; the caller holds the module object.
+    # The tool inserts two path entries at module scope and this runs again for
+    # every mutant, so they accumulate; and its sibling `_lib_compat`, left
+    # cached, makes a second `--tool` copy silently reuse the first copy's.
     saved_path, saved_mods = list(sys.path), set(sys.modules)
     try:
         spec = importlib.util.spec_from_file_location(name, path)
@@ -207,7 +195,10 @@ def load_module(path: Path, name: str):
 
 def table_roles(path: Path):
     """[(label, role)] in render_ci's row order, read out of the tool's AST."""
-    fn = next((n for n in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+    src = drive("reading the tool source",
+                lambda: path.read_text(encoding="utf-8"))
+    tree = drive("parsing the tool source", ast.parse, src)
+    fn = next((n for n in ast.walk(tree)
                if isinstance(n, ast.FunctionDef) and n.name == "render_ci"), None)
     if fn is None:
         raise CannotMeasure(f"no render_ci in {path}")
@@ -257,14 +248,12 @@ def base_profile():
 def synth(shape):
     """`(text, totals)` — one synthetic probe log, and the round totals in it.
 
-    ⛔ `totals` is `write_sum + load_sum` per MEASUREMENT round, taken from the
-    numbers this function just generated. It is the one quantity this harness
-    computes for itself, and the boundary is deliberate: a sum of two fields the
-    producer emits is a DEFINITION, not the judgement under test. It gives the
-    sd column an absolute anchor — blind review showed the CI-vs-archive
-    comparison and the share == sd/total identity are both scale-invariant, so a
-    unit bug applied consistently in both renderers printed a round-total sd
-    1000x too large and passed.
+    ⛔ `totals` is `write_sum + load_sum` per MEASUREMENT round, from the
+    numbers this function just generated — the one quantity this harness
+    computes for itself. The boundary is deliberate: a sum of two fields the
+    producer emits is a DEFINITION, not the judgement under test. It is what
+    anchors the sd and median columns in ABSOLUTE terms; every other comparison
+    here is a ratio, and ratios cannot see a unit bug both renderers share.
     """
     bulk, tail = base_profile()
     rng = random.Random(SEED)
@@ -314,11 +303,9 @@ def _predicted_shares():
     Shape B: one stall moves load_sum by EPISODE_NS and level by ITERS times the
     bulk's per-index slope (p50 slides one bulk index per stall).
     ⚠️ Independent write jitter inflates the round total's sd, so these are
-    upper bounds — the measured share sits at or below the prediction, and
-    TOL_PP is what absorbs the gap. ⛔ No figure is put on that gap here. Two
-    earlier drafts of this docstring each quoted one, and each went stale; every
-    run prints the prediction and the measurement side by side, which is where
-    the number belongs.
+    upper bounds; TOL_PP absorbs the gap. ⛔ No figure is put on that gap here —
+    every run prints prediction and measurement side by side, which is where a
+    number that nothing regenerates belongs.
     """
     slope = (BULK_HI_NS - BULK_LO_NS) / (BULK_N - 1)
     lvl_b = ITERS * slope
@@ -343,11 +330,19 @@ def _num(cell, what):
 def drive(what, fn, *a):
     """Call into the tool. ⛔ A crash in there is CannotMeasure, never a FAIL.
 
-    Found by blind review: `load_module` wrapped IMPORT-time failures but every
-    CALL was bare, so a plain NameError inside `render_ci` came out as a
-    traceback and rc=1 — the code this file documents for "ran, and the
-    discriminant misbehaved". That is the same disguise the import fix removed,
-    one layer in.
+    ⛔ THE RULE, because four consecutive rounds of blind review each found one
+    more statement outside the boundary and each fix only moved the boundary
+    past the statement that had just broken:
+
+        EVERY operation that touches the tool goes through this function.
+        Resolving its path, reading its bytes, reading its source, parsing it,
+        importing it, calling into it. Anything that is this harness's OWN logic
+        does NOT, and is allowed to crash.
+
+    That line is where the exit-code contract comes from: could-not-measure (3)
+    is "the tool, or getting at it, failed"; a failed check (1) is "the tool ran
+    and the discriminant misbehaved"; an unhandled traceback means this harness
+    has a bug, which is a third thing and should look like one.
     """
     try:
         return fn(*a)
@@ -366,16 +361,12 @@ def drive(what, fn, *a):
 def _corr(cell, what):
     """A Pearson r, range-checked. Outside [-1, 1], this harness has no opinion.
 
-    ⛔ Blind review swapped two of the table's columns and the level row's check
-    accepted `+132.200` as "~+1": the assertion had only a lower bound.
-
-    ⚠️ A second reviewer then pointed out that an out-of-range value has TWO
-    possible causes — the scraper reading the wrong cell, or the tool's `corr()`
-    not returning a correlation — and asked for the second to be reported as a
-    failed check instead. It is not, deliberately: the number alone does not say
-    which, and picking one would be the harness asserting something it cannot
-    see. What was wrong was the MESSAGE naming only one cause; it now names
-    both, and the outcome stays "could not measure".
+    ⛔ An out-of-range value has TWO causes — the scraper reading the wrong cell,
+    or the tool's `corr()` not returning a correlation — and the number alone
+    does not say which. So it stays could-not-measure and the message names
+    both; reporting it as a failed check would assert something unseen.
+    ⚠️ The assertion elsewhere had only a lower bound, which let a swapped
+    column read `+132.200` as "~+1". Hence the range check, not just `>=`.
     """
     v = _num(cell, what)
     if v == v and abs(v) > 1.0 + 1e-9:          # NaN is a legitimate reading
@@ -547,11 +538,10 @@ def check4(lvl_ci, epi_ci):
 def check7(ci):
     """The write half of `total()` is load-bearing, and a dropped half shows.
 
-    ⛔ This check exists because of a hole blind review put a real broken copy
-    of the tool through: with `total()` returning `load_sum` alone, checks 1-6
-    all passed. In shapes "level" and "episode" the write half is only noise, so
-    removing it from the round total changes nothing any check reads. Here the
-    variation IS the write half, so either half going missing moves the numbers.
+    ⛔ In shapes "level" and "episode" the write half is only noise, so a
+    `total()` that drops it changes nothing any other check reads — measured:
+    `total := load_sum` passed all of them. Here the variation IS the write
+    half, so either half going missing moves the numbers.
     """
     bad = []
     if ci["write"][0] < 1 - TOL_CORR:
@@ -594,20 +584,14 @@ MUTANTS = (
 def check5(mod, roles, texts, baseline):
     """Every one of checks 2-4 must be killed by at least one broken split.
 
-    ⛔ This is the intentional-break dogfood, in-process and part of the run
-    rather than a thing someone did once by hand. A check no mutant can kill is
-    reported as such and fails this check: "passes on the real code" is not
-    evidence of detection power, and a green that nothing can turn red is the
-    exact failure mode §四 documents.
+    ⛔ The intentional-break dogfood, in-process and part of the run. "Passes on
+    the real code" is not evidence of detection power; a green nothing can turn
+    red is the failure mode this whole file exists to remove.
 
-    ⛔ `baseline` is the verdicts on the UNMUTATED tool, and a check that is
-    already FAIL there is NOT ASSESSABLE — every mutant "kills" it trivially.
-    Measured, not reasoned: the first draft took no baseline, and with
-    `above := load_sum` written into the tool on disk it reported
-    "check2 killed by 3/3" while check2 was red before any mutant ran. A kill
-    count that cannot tell "the mutant broke it" from "it was already broken"
-    is the same could-not-measure-wearing-measured costume this whole file is
-    about.
+    ⛔ `baseline` is the verdicts on the UNMUTATED tool. A check already FAIL
+    there is NOT ASSESSABLE — every mutant kills it trivially, and a kill count
+    that cannot tell "the mutant broke it" from "it was already broken" is
+    could-not-measure wearing measured's costume.
     """
     blocked = sorted(n for n, ok in baseline.items() if not ok)
     assessable = sorted(n for n, ok in baseline.items() if ok)
@@ -624,12 +608,9 @@ def check5(mod, roles, texts, baseline):
                         4: check4(lvl, epi)[0], 7: check7(wrt)[0]}
             blanket = False
         except CannotMeasure:
-            # ⛔ A mutant that makes the report unreadable IS detected — the
-            # numbers stop existing. Counted rather than escaping as this run's
-            # own rc 3, but counted SEPARATELY: it kills every check at once,
-            # including one whose own logic reads nothing. Blind review proved
-            # that by registering a check that ignores its argument and always
-            # passes — it came out "killed 1/6". Detection power requires a kill
+            # ⛔ A mutant that makes the report unreadable IS detected, but is
+            # counted SEPARATELY: it kills every check at once, including one
+            # whose own logic reads nothing. Detection power requires a kill
             # where the report was READABLE and this check still said no.
             verdicts = {n: False for n in assessable}
             blanket = True
@@ -672,11 +653,9 @@ def check6(cis, archs, totals):
 def _check6_one(ci, arch_pair, totals):
     """The two renderers agree, and each one's sd column matches its own share.
 
-    ⛔ The second half exists because blind review changed ONLY render_ci's
-    sd-in-ms divisor (`/1e6` -> `/1e3`) and the harness still reported a full
-    pass: no check read that column for anything but its own printed detail
-    string. A number this file scrapes but never asserts is a number this file
-    is not checking, however prominently it appears in the report.
+    ⛔ A number this file scrapes but never asserts is a number it is not
+    checking, however prominently the report shows it — measured: changing only
+    `render_ci`'s sd divisor (`/1e6` -> `/1e3`) used to pass everything.
     """
     arch, sd_total, med_total = arch_pair
     bad = []
@@ -732,13 +711,9 @@ def main(argv=None) -> int:
         return 0
 
     try:
-        path = args.tool.resolve()
-        # ⛔ Also inside the boundary. Blind review flagged this as a sibling of
-        # the import hole above and could not reproduce it (this sandbox runs as
-        # root, so chmod 000 does not deny a read). Unreproduced is not absent,
-        # and the guard costs one call — justified by the failure mode, not the
-        # odds.
-        blob = drive("reading the tool file", path.read_bytes) if path.is_file() else b""
+        path = drive("resolving the tool path", args.tool.resolve)
+        blob = drive("reading the tool file",
+                     lambda: path.read_bytes() if path.is_file() else b"")
         print("=" * 74)
         print("IDENTITY OF THE THING MEASURED")
         print("=" * 74)
