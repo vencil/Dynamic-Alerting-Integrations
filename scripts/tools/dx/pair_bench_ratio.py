@@ -104,6 +104,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
 
 # Same shape analyze_bench_history.py parses, deliberately: both read the raw
 # `go test -bench` stdout that bench_interleave.sh appends per round.
@@ -302,6 +303,7 @@ def read_workload_digest(path: pathlib.Path | None) -> dict:
     }
 
 
+@exit_on_output_write_error
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -383,9 +385,11 @@ def main() -> int:
         "workload_drift": read_workload_drift(args.workload_drift),
         "workload_digest": read_workload_digest(args.workload_digest),
     }
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n",
-                        encoding="utf-8", newline="\n")
+    with output_write(args.out, flag="--out", action="create directory"):
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+    with output_write(args.out, flag="--out"):
+        args.out.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n",
+                            encoding="utf-8", newline="\n")
 
     print(f"[pair_bench_ratio] reference {args.reference_tag} on {ref_cpu}")
     print(f"[pair_bench_ratio] {len(evaluated)} evaluated, "

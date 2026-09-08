@@ -826,7 +826,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "9887e8360717fb3e408a3947ae52c7e0c2cf992fbfa6bd041df50fc5c8fbb857",
+ "source_digest": "d8d4d294be5c20407ba4a74a92138e7f288ed22c3730e101c3d533158f665dc5",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1649,7 +1649,8 @@
    "tests/dx/test_bump_docs.py",
    "tests/dx/test_scan_component_health.py",
    "tests/dx/test_sync_tool_registry.py",
-   "tests/lint/test_check_portal_asset_shipping.py"
+   "tests/lint/test_check_portal_asset_shipping.py",
+   "tests/shared/test_output_path_write_failure.py"
   ],
   "docs/cli-reference.md": [
    "tests/ops/test_generate_routes_orchestration.py",
@@ -2466,6 +2467,9 @@
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/shared/test_lib_toolcount.py"
   ],
+  "scripts/tools/dx/compile_custom_alerts.py": [
+   "tests/shared/test_output_write_sites_stay_guarded.py"
+  ],
   "scripts/tools/dx/converge_status.py": [
    "tests/dx/test_converge_status.py"
   ],
@@ -2505,10 +2509,12 @@
   ],
   "scripts/tools/dx/generate_tenant_fixture.py": [
    "tests/dx/test_generate_tenant_fixture.py",
+   "tests/shared/test_output_write_sites_stay_guarded.py",
    "tests/shared/test_sast.py"
   ],
   "scripts/tools/dx/generate_tenant_metadata.py": [
-   "tests/lint/test_check_makefile_targets.py"
+   "tests/lint/test_check_makefile_targets.py",
+   "tests/shared/test_output_write_sites_stay_guarded.py"
   ],
   "scripts/tools/dx/generate_tool_map.py": [
    "tests/dx/test_atomic_write.py",
@@ -2519,8 +2525,12 @@
    "tests/dx/test_inject_waveform.py",
    "tests/dx/test_waveform_score.py"
   ],
+  "scripts/tools/dx/migrate_conf_d.py": [
+   "tests/shared/test_output_write_sites_stay_guarded.py"
+  ],
   "scripts/tools/dx/pair_bench_ratio.py": [
-   "tests/dx/test_paired_trend_watch.py"
+   "tests/dx/test_paired_trend_watch.py",
+   "tests/shared/test_output_write_sites_stay_guarded.py"
   ],
   "scripts/tools/dx/paired_trend_watch.py": [
    "tests/dx/test_canary_quotation_pins.py",
@@ -2532,6 +2542,9 @@
    "tests/dx/test_preflight_msg_validator.py",
    "tests/ops/test_ci_aggregate_gate_contract.py"
   ],
+  "scripts/tools/dx/render_soak_diff.py": [
+   "tests/shared/test_output_write_sites_stay_guarded.py"
+  ],
   "scripts/tools/dx/run_chaos_soak.py": [
    "tests/shared/test_output_write_sites_stay_guarded.py",
    "tests/shared/test_sast.py"
@@ -2541,6 +2554,9 @@
    "tests/lint/test_check_hardcode_tenant.py",
    "tests/lint/test_check_jsx_loader_compat.py",
    "tests/lint/test_check_undefined_tokens.py"
+  ],
+  "scripts/tools/dx/scan_component_health.py": [
+   "tests/shared/test_output_write_sites_stay_guarded.py"
   ],
   "scripts/tools/dx/sync_schema.py": [
    "tests/shared/test_reserved_key_py_go_parity.py"
@@ -3387,7 +3403,8 @@
    "tests/dx/test_bump_docs.py",
    "tests/lint/test_check_threshold_reachability.py",
    "tests/ops/test_ci_path_filter_coverage.py",
-   "tests/ops/test_wrapped_path_references.py"
+   "tests/ops/test_wrapped_path_references.py",
+   "tests/shared/test_output_path_write_failure.py"
   ],
   "tools/portal/build.mjs": [
    "tests/ops/test_generated_ci_artifacts.py"

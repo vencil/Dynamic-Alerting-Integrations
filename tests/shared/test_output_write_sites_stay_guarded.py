@@ -106,19 +106,29 @@ _OK_RETURNS = frozenset({"EXIT_OK"})
 _EXITING_CALLS = frozenset({"exit", "_exit", "_die_on_write_error", "error", "fail"})
 
 # ── The population ─────────────────────────────────────────────────────────
-# ⛔ Repo-relative POSIX paths of the tool files this ticket wraps. EMPTY in
-# Phase A: the helpers and this scanner land before the sites do, so there is
-# nothing to pin yet and `test_no_raw_sink_in_a_guarded_file_is_bare` is
-# vacuously true. The ceiling below says so out loud instead of letting a
-# green run be mistaken for coverage. Phase B adds files here AND raises the
-# ceiling in the same diff.
-GUARDED_FILES: tuple[str, ...] = ()
-_GUARDED_FILES_CEILING = 0
+# ⛔ Repo-relative POSIX paths of the tool files this ticket wraps. A file
+# lands here in the SAME diff that wraps its sites and raises the ceiling
+# below — the ceiling is what stops a file being added without anyone
+# counting, and what stops a green run from being read as tree-wide
+# coverage. Everything NOT in this tuple is unpinned and this file knows
+# nothing about it.
+GUARDED_FILES: tuple[str, ...] = (
+    "scripts/tools/dx/compile_custom_alerts.py",
+    "scripts/tools/dx/describe_tenant.py",
+    "scripts/tools/dx/generate_tenant_fixture.py",
+    "scripts/tools/dx/generate_tenant_metadata.py",
+    "scripts/tools/dx/migrate_conf_d.py",
+    "scripts/tools/dx/pair_bench_ratio.py",
+    "scripts/tools/dx/render_soak_diff.py",
+    "scripts/tools/dx/scan_component_health.py",
+)
+_GUARDED_FILES_CEILING = 8
 
 # Sites inside a GUARDED_FILES file that stay unguarded on purpose, as
 # `"<repo-relative path>:<line>"` → reason. Exit-locked the same way: an
 # entry that no longer names an unguarded sink must be REMOVED, so the list
-# only shrinks. EMPTY in Phase A for the same reason as above.
+# only shrinks. EMPTY so far: every sink in every pinned file is wrapped, so
+# there is no site claiming an exemption to justify.
 NOT_GUARDED: dict[str, str] = {}
 _NOT_GUARDED_CEILING = 0
 
@@ -546,10 +556,11 @@ def test_the_scan_root_is_not_empty():
 # ═══════════════════════════════════════════════════════════════════════════
 # Gate controls — the verdict logic, driven with synthetic sites
 #
-# ``GUARDED_FILES`` is empty in Phase A, so the gate below runs on an empty
-# list and can only say yes. These drive the same two functions it calls with
-# a population that is not empty, so the machinery Phase B switches on is
-# already known to work — and known to be able to say NO.
+# The real population is whatever ``GUARDED_FILES`` currently holds, and a
+# gate that only ever ran on files that happen to be clean could not be shown
+# to say NO. These drive the same two functions it calls with sites that are
+# deliberately unguarded, so the verdict logic is exercised in both signs
+# independently of what the tree looks like today.
 # ═══════════════════════════════════════════════════════════════════════════
 _UNWRAPPED = "def main():\n    out.mkdir(parents=True)\n    Path(p).write_text(s)\n"
 _WRAPPED = ("def main():\n"
@@ -599,15 +610,16 @@ class TestGateVerdict:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# The gate — vacuous in Phase A, and it says so
+# The gate — over the pinned population, whose size is stated out loud
 # ═══════════════════════════════════════════════════════════════════════════
 def test_guarded_files_ceiling_is_explicit():
     """Exact size, not `<=`: adding a file to the pinned population is a
     decision that must appear in the diff next to the sites it pins.
 
-    Phase A ships this at 0. A green run of the gate below therefore proves
-    NOTHING about the tree yet — this constant is what stops that being
-    mistaken for coverage.
+    The number is also the honest scope of a green run below: it proves the
+    sinks in exactly this many files are wrapped, and nothing about the rest
+    of the tree. This constant is what stops that being mistaken for
+    coverage.
     """
     assert len(GUARDED_FILES) == _GUARDED_FILES_CEILING, GUARDED_FILES
     assert len(NOT_GUARDED) == _NOT_GUARDED_CEILING, sorted(NOT_GUARDED)

@@ -39,6 +39,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
 
 # How much rise across the run counts as drift?
 WARN_THRESHOLD_PCT = 5.0
@@ -233,6 +234,7 @@ def render(input_dir: Path, warmup_sec_override: int | None = None) -> tuple[str
     return "\n".join(lines) + "\n", exit_code
 
 
+@exit_on_output_write_error
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[1])
     parser.add_argument("--input-dir", required=True,
@@ -248,7 +250,8 @@ def main() -> int:
     report, exit_code = render(Path(args.input_dir), warmup_sec_override=args.warmup_sec)
 
     if args.output:
-        Path(args.output).write_text(report, encoding="utf-8", newline="\n")
+        with output_write(args.output, flag="--output"):
+            Path(args.output).write_text(report, encoding="utf-8", newline="\n")
         print(f"[info] report written to {args.output}", file=sys.stderr)
     else:
         sys.stdout.write(report)

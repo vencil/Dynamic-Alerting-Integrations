@@ -50,6 +50,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_OK  # noqa: E402
+from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
 
 # --- 自動偵測 repo 根目錄（從 script 位置往上找 .git） ---
 def _find_repo_root(start: Path) -> Path:
@@ -510,6 +511,7 @@ def scan(today: datetime | None = None) -> dict:
     return {"summary": summary, "tools": results}
 
 
+@exit_on_output_write_error
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument(
@@ -535,11 +537,24 @@ def main() -> int:
     print(json.dumps(data["summary"], indent=2, ensure_ascii=False))
 
     if not args.summary_only:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(
-            json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8", newline="\n"
-        )
-        print(f"\nWrote: {args.output.relative_to(REPO)}")
+        # #1789: `--output` may name a path outside the repo, or a relative
+        # one — both are legitimate operator input, and `relative_to(REPO)`
+        # raises ValueError for both, which crashed the SUCCESS path with a
+        # traceback after the file had already been written. Resolve once so
+        # the mkdir, the write and the label all name the same path, and show
+        # the absolute path when it is not under the repo.
+        out_path = args.output.resolve()
+        with output_write(out_path, flag="--output", action="create directory"):
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+        with output_write(out_path, flag="--output"):
+            out_path.write_text(
+                json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8", newline="\n"
+            )
+        try:
+            shown: Path = out_path.relative_to(REPO)
+        except ValueError:
+            shown = out_path
+        print(f"\nWrote: {shown}")
 
     return EXIT_OK
 

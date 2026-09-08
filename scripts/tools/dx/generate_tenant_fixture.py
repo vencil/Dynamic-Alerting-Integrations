@@ -34,6 +34,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -283,7 +284,8 @@ def generate_flat(
     the root `_defaults.yaml` only (not cascaded; see _gen_defaults_yaml
     docstring)."""
     rng = _seed_rng(seed)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    with output_write(output_dir, flag="-o/--output", action="create directory"):
+        output_dir.mkdir(parents=True, exist_ok=True)
 
     if with_defaults:
         _write_yaml(
@@ -315,7 +317,8 @@ def generate_hierarchical(
     cascading level. Use case: bench harness `bench_trigger` registration.
     """
     rng = _seed_rng(seed)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    with output_write(output_dir, flag="-o/--output", action="create directory"):
+        output_dir.mkdir(parents=True, exist_ok=True)
 
     # Distribute tenants across domain/region/env
     slots: list[tuple[str, str, str]] = []
@@ -334,7 +337,8 @@ def generate_hierarchical(
             break
         n = tenants_per_slot + (1 if slot_i < remainder else 0)
         slot_dir = output_dir / domain / region / env
-        slot_dir.mkdir(parents=True, exist_ok=True)
+        with output_write(slot_dir, flag="-o/--output", action="create directory"):
+            slot_dir.mkdir(parents=True, exist_ok=True)
 
         for j in range(n):
             if idx >= count:
@@ -459,7 +463,8 @@ def generate_synthetic_v2(
     looks alike.
     """
     rng = _seed_rng(seed)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    with output_write(output_dir, flag="-o/--output", action="create directory"):
+        output_dir.mkdir(parents=True, exist_ok=True)
 
     slots: list[tuple[str, str, str]] = []
     for d in DOMAINS:
@@ -481,7 +486,8 @@ def generate_synthetic_v2(
             break
         n = tenants_per_slot + (1 if slot_i < remainder else 0)
         slot_dir = output_dir / domain / region / env
-        slot_dir.mkdir(parents=True, exist_ok=True)
+        with output_write(slot_dir, flag="-o/--output", action="create directory"):
+            slot_dir.mkdir(parents=True, exist_ok=True)
 
         for j in range(n):
             if idx >= count:
@@ -535,10 +541,17 @@ def generate_synthetic_v2(
 
 
 def _write_yaml(path: Path, data: dict) -> None:
-    """Write a dict as YAML. Avoids importing yaml to keep deps minimal."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8", newline="\n") as f:
-        _dump_yaml(f, data, indent=0)
+    """Write a dict as YAML. Avoids importing yaml to keep deps minimal.
+
+    #1789: every caller's *path* is inside the tree `-o/--output` names (or
+    its in-repo default), so an unusable one is that flag's value — hence
+    the wrapper naming it rather than a bare traceback at rc=1.
+    """
+    with output_write(path, flag="-o/--output", action="create directory"):
+        path.parent.mkdir(parents=True, exist_ok=True)
+    with output_write(path, flag="-o/--output"):
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
+            _dump_yaml(f, data, indent=0)
 
 
 def _dump_yaml(f, obj, indent: int = 0) -> None:  # noqa: C901 — simple recursive writer
@@ -591,6 +604,7 @@ def _dump_yaml(f, obj, indent: int = 0) -> None:  # noqa: C901 — simple recurs
                     f.write(f"{prefix}- {sv}\n")
 
 
+@exit_on_output_write_error
 def main() -> None:
     try_utf8_stdout()
     parser = argparse.ArgumentParser(

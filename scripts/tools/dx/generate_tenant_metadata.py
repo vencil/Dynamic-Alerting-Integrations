@@ -36,6 +36,7 @@ from _lib_confd import (  # noqa: E402
     warn_nested,
 )
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
+from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -432,6 +433,7 @@ def _build_dimension_groups(tenant_metadata: dict[str, dict]) -> dict:
     return result
 
 
+@exit_on_output_write_error
 def main():
     """CLI entry point: 租戶元資料產生器."""
     try_utf8_stdout()
@@ -512,12 +514,17 @@ def main():
         return
 
     # Write output file
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(content, encoding="utf-8", newline="\n")
-    os.chmod(
-        args.output,
-        stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH,
-    )
+    with output_write(args.output, flag="--output", action="create directory"):
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+    # The chmod is INSIDE the same block as the write: 0644 is part of
+    # producing this file, and a chmod that fails leaves the operator with a
+    # file whose mode is not the one the tool promises (#1789).
+    with output_write(args.output, flag="--output"):
+        args.output.write_text(content, encoding="utf-8", newline="\n")
+        os.chmod(
+            args.output,
+            stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH,
+        )
 
     try:
         display_path = args.output.relative_to(REPO_ROOT)

@@ -161,6 +161,62 @@ def _mapping_conf_d(tmp: Path) -> str:
     return str(d)
 
 
+def _custom_alerts_conf_d(tmp: Path) -> str:
+    """A conf.d tree with one `_custom_alerts` recipe — enough to compile."""
+    d = tmp / "custom-alerts-conf.d"
+    d.mkdir()
+    (d / "a.yaml").write_text(
+        "tenants:\n"
+        "  ta:\n"
+        "    _custom_alerts:\n"
+        '      - {recipe: threshold, name: cpu_hot, metric: node_cpu, op: ">",\n'
+        '         window: 5m, threshold: "80:warning"}\n',
+        encoding="utf-8")
+    return str(d)
+
+
+def _soak_output_dir(tmp: Path) -> str:
+    """A `run_chaos_soak.py` output directory, hand-built.
+
+    Flat samples on purpose: the renderer's verdict is "no single-direction
+    trend ⇒ PASS", and only a rc=0 run is a usable control pair.
+    """
+    d = tmp / "soak-out"
+    d.mkdir()
+    (d / "run-config.json").write_text(
+        '{"target_url": "http://127.0.0.1:1", "duration_min": 1,\n'
+        ' "reload_interval_sec": 9999, "metrics_poll_sec": 10,\n'
+        ' "started_at_utc": "2026-09-08T00:00:00+00:00",\n'
+        ' "ended_at_utc": "2026-09-08T00:01:00+00:00", "reload_count": 0}\n',
+        encoding="utf-8")
+    (d / "metrics-timeseries.csv").write_text(
+        "timestamp_utc,elapsed_sec,reload_count_so_far,go_goroutines,"
+        "process_resident_memory_bytes\n"
+        "2026-09-08T00:00:00Z,0,0,10,1000\n"
+        "2026-09-08T00:00:10Z,10,0,10,1000\n"
+        "2026-09-08T00:00:20Z,20,0,10,1000\n"
+        "2026-09-08T00:00:30Z,30,0,10,1000\n",
+        encoding="utf-8")
+    return str(d)
+
+
+def _bench_side(tmp: Path, name: str) -> str:
+    """One side of a paired bench run: a `cpu:` header plus ns/op rows.
+
+    Both sides are IDENTICAL, so every benchmark is evaluated and the verdict
+    is a clean rc=0 — the control half needs that.
+    """
+    p = tmp / f"bench-{name}.txt"
+    p.write_text(
+        "goos: linux\ngoarch: amd64\npkg: example/app\n"
+        "cpu: Stub CPU @ 1.00GHz\n"
+        "BenchmarkAlpha-4   1000   1200 ns/op\n"
+        "BenchmarkAlpha-4   1000   1210 ns/op\n"
+        "BenchmarkAlpha-4   1000   1190 ns/op\n",
+        encoding="utf-8")
+    return str(p)
+
+
 def _one_rule_pack_dir(tmp: Path) -> str:
     d = tmp / "rule-packs"
     d.mkdir()
@@ -224,11 +280,70 @@ class Row:
 R = Row
 ROWS: list[Row] = [
     # ── dx ─────────────────────────────────────────────────────────────────
+    R("dx/describe_tenant.py", "-o/--output", "file",
+      lambda c, out: ["--conf-d", str(_jsc.SEED_CONF_D), "--all", "-o", str(out)],
+      reach="in-repo try-local seed conf.d; --all is what reaches the write",
+      out_name="tenants.json"),
+    R("dx/migrate_conf_d.py", "-o/--output-plan", "file",
+      lambda c, out: ["--conf-d", str(_jsc.SEED_CONF_D), "-o", str(out)],
+      reach="in-repo try-local seed conf.d (dry-run is the default)",
+      out_name="migration-plan.json"),
+    R("dx/scan_component_health.py", "--output", "file",
+      lambda c, out: ["--output", str(out), "--today", "2026-09-08"],
+      reach="in-repo docs/assets/tool-registry.yaml + tools/portal sources",
+      out_name="component-health.json",
+      # Its own `mkdir -p` creates the parent, so missing_parent is a
+      # legitimate success. parent_is_file is what reaches the mkdir; the
+      # write_text behind it is covered by the static pin, not by a row —
+      # no shape here can make the write fail while the mkdir succeeds for
+      # a FILE-shaped output flag.
+      shapes=("parent_is_file",)),
+    R("dx/compile_custom_alerts.py", "--out", "file",
+      lambda c, out: ["--config-dir", _custom_alerts_conf_d(c.tmp), "--out", str(out)],
+      reach="tmp conf.d with one _custom_alerts threshold recipe",
+      out_name="rule-pack-custom-alerts.yaml"),
     R("dx/generate_changelog.py", "-o/--output", "file",
       lambda c, out: ["-o", str(out)],
       reach="throw-away git repo with one conventional commit (cwd)",
       out_name="CHANGELOG-draft.md",
       cwd=lambda c: _git_repo_with_one_commit(c.tmp)),
+    R("dx/generate_tenant_metadata.py", "--output", "file",
+      lambda c, out: ["--config-dir", str(_jsc.SEED_CONF_D), "--output", str(out)],
+      reach="in-repo try-local seed conf.d",
+      out_name="tenant-metadata.json",
+      # Its own `mkdir -p` creates a missing parent, so only the blocked
+      # parent fails. The `chmod 0644` sits inside the same wrapped block as
+      # the write, so a chmod failure lands on the same flag.
+      shapes=("parent_is_file",)),
+    # Three rows, one per `--layout`: each layout has its OWN
+    # `output_dir.mkdir` (generate_flat / generate_hierarchical /
+    # generate_synthetic_v2), so one row would only ever prove the default
+    # one. The four sinks behind them — the two `slot_dir.mkdir`s and
+    # `_write_yaml`'s mkdir + open — cannot be reached from here at all: the
+    # tool refuses a non-empty output directory (rc=2, no ERROR line) before
+    # any of them runs, which is what the `artifact_is_dir` shape would need.
+    # They are wrapped, and the static pin is the only evidence for them.
+    *[R("dx/generate_tenant_fixture.py", "-o/--output", "dir",
+        (lambda layout: lambda c, out: ["--count", "2", "--layout", layout,
+                                        "-o", str(out)])(_layout),
+        reach=f"flags only; --layout {_layout}",
+        out_name="conf.d",
+        shapes=("parent_is_file",))
+      for _layout in ("flat", "hierarchical", "synthetic-v2")],
+    R("dx/pair_bench_ratio.py", "--out", "file",
+      lambda c, out: ["--reference", _bench_side(c.tmp, "ref"),
+                      "--main", _bench_side(c.tmp, "main"),
+                      "--reference-tag", "v1.0.0", "--out", str(out)],
+      reach="two synthetic `go test -bench` transcripts with the same cpu: header",
+      out_name="bench-paired.json",
+      # `--out`'s own `mkdir -p` creates a missing parent, so only the
+      # blocked-parent shape reaches a failure.
+      shapes=("parent_is_file",)),
+    R("dx/render_soak_diff.py", "--output", "file",
+      lambda c, out: ["--input-dir", _soak_output_dir(c.tmp), "--output", str(out),
+                      "--warmup-sec", "0"],
+      reach="hand-built soak output dir (run-config.json + flat timeseries CSV)",
+      out_name="soak-report.md"),
     R("dx/sync_glossary_abbr.py", "--output", "file",
       lambda c, out: ["--glossary", _glossary(c.tmp), "--output", str(out)],
       reach="tmp glossary.md with two **ABBR (Expansion)** entries",
