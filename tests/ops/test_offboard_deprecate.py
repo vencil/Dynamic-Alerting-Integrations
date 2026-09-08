@@ -210,50 +210,78 @@ def test_scan_for_metric_dimensional_key():
 
 
 # ===================================================================
-# 6. deprecate_rule — disable_in_defaults
+# 6. deprecate_rule — remove_from_defaults (#1787: 下架＝刪 key)
 # ===================================================================
 
-def test_disable_in_defaults_preview_mode():
+def test_remove_from_defaults_preview_mode():
     """測試預覽模式。"""
     with tempfile.TemporaryDirectory() as d:
         make_confdir(d, {
             "_defaults.yaml": {"defaults": {"mysql_connections": 70}},
         })
-        ok, msg = deprecate_rule.disable_in_defaults(
+        ok, msg = deprecate_rule.remove_from_defaults(
             "mysql_connections", d, execute=False)
         assert ok is True
-        assert "disable" in msg
+        assert "將從" in msg and "移除" in msg
         # File should NOT be modified
         data = deprecate_rule.load_yaml_file(os.path.join(d, "_defaults.yaml"))
         assert data["defaults"]["mysql_connections"] == 70
 
-def test_disable_in_defaults_execute_mode():
-    """測試執行模式。"""
+def test_remove_from_defaults_execute_mode():
+    """測試執行模式：key 被刪掉，而不是被寫成 "disable"。
+
+    #1787: `defaults:` 的值是 `map[string]float64`
+    (threshold-exporter/app/pkg/config/types.go:208)，寫進字串會讓整份檔被
+    `parsePartialConfig` 丟掉。這條斷言釘的是「key 不存在」，不是「值變成
+    某個哨兵」。
+    """
     with tempfile.TemporaryDirectory() as d:
         make_confdir(d, {
-            "_defaults.yaml": {"defaults": {"mysql_connections": 70}},
+            "_defaults.yaml": {"defaults": {"mysql_connections": 70,
+                                            "mem_usage": 90}},
         })
-        ok, msg = deprecate_rule.disable_in_defaults(
+        ok, msg = deprecate_rule.remove_from_defaults(
             "mysql_connections", d, execute=True)
         assert ok is True
         data = deprecate_rule.load_yaml_file(os.path.join(d, "_defaults.yaml"))
-        assert data["defaults"]["mysql_connections"] == "disable"
+        assert "mysql_connections" not in data["defaults"]
+        # 只刪目標，鄰居留著。
+        assert data["defaults"]["mem_usage"] == 90
 
-def test_disable_in_defaults_already_disabled():
-    """測試已停用。"""
+def test_remove_from_defaults_repairs_a_carrier_already_written_as_disable():
+    """舊行為留下的 `<m>: disable` 也是「相關 key」，重跑會把它刪掉。
+
+    這是 BREAKING 條目承諾的修復路徑：已經被舊版工具寫成 `disable` 的 root
+    檔（此刻 `parsePartialConfig` 對它整份回 ok=false），重跑新版工具即修復。
+    """
     with tempfile.TemporaryDirectory() as d:
         make_confdir(d, {
-            "_defaults.yaml": {"defaults": {"mysql_connections": "disable"}},
+            "_defaults.yaml": {"defaults": {"mysql_connections": "disable",
+                                            "mem_usage": 90}},
         })
-        ok, msg = deprecate_rule.disable_in_defaults(
+        ok, msg = deprecate_rule.remove_from_defaults(
             "mysql_connections", d, execute=True)
         assert ok is True
-        assert "已經是" in msg
+        data = deprecate_rule.load_yaml_file(os.path.join(d, "_defaults.yaml"))
+        assert "mysql_connections" not in data["defaults"]
+        assert data["defaults"] == {"mem_usage": 90}
 
-def test_disable_in_defaults_missing_defaults_file():
+def test_remove_from_defaults_no_related_key_is_a_named_noop():
+    """載體沒有任何相關 key ⇒ 具名 no-op，一個位元組都不寫。"""
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "_defaults.yaml")
+        make_confdir(d, {"_defaults.yaml": {"defaults": {"mem_usage": 90}}})
+        before = open(path, "rb").read()
+        ok, msg = deprecate_rule.remove_from_defaults(
+            "mysql_connections", d, execute=True)
+        assert ok is True
+        assert "沒有 mysql_connections 相關 key" in msg and "略過" in msg
+        assert open(path, "rb").read() == before
+
+def test_remove_from_defaults_missing_defaults_file():
     """測試缺失預設值檔案。"""
     with tempfile.TemporaryDirectory() as d:
-        ok, msg = deprecate_rule.disable_in_defaults("m", d, execute=False)
+        ok, msg = deprecate_rule.remove_from_defaults("m", d, execute=False)
         assert ok is False
 
 

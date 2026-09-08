@@ -829,7 +829,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "f51d3b59c6c5dca39614723b65f3799099303ee51fda5fbc55144317947b9991",
+ "source_digest": "323ea5fc4ee38642f940cbd3fc169ec9d9e9dd3753d81621c98e953a1f16597c",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1546,6 +1546,7 @@
    "tests/ops/test_registry_lib.py"
   ],
   "components/threshold-exporter/app/pkg/config/types.go": [
+   "tests/ops/test_deprecate_rule_carriers.py",
    "tests/shared/test_reserved_key_py_go_parity.py"
   ],
   "components/threshold-exporter/app/rulepack_contract_test.go": [

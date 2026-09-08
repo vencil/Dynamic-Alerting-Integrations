@@ -133,7 +133,7 @@ Commands (File System — offline):
     migrate           Convert legacy Prometheus rules to dynamic format
     scaffold          Generate tenant configuration interactively
     offboard          Pre-check and remove a tenant configuration
-    deprecate         Mark metrics as disabled across configs
+    deprecate         Remove a metric's keys from configs (deprecation)
     lint              Validate custom rules against governance deny-list
     onboard           Analyze existing Alertmanager/Prometheus configs for migration
     validate-config   One-stop config validation (YAML + schema + routing + policy)

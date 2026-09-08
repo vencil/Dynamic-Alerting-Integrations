@@ -167,7 +167,7 @@ da-tools <command> --help
 | `migrate` | 傳統規則 → 動態格式轉換（AST 引擎） | `<input_file>` |
 | `validate-config` | 一站式配置驗證（YAML + schema + routes + policy） | `--config-dir <dir>` |
 | `offboard` | 下架 tenant 配置 | `<tenant>` |
-| `deprecate` | 標記指標為 disabled | `<metric_keys...>` |
+| `deprecate` | 下架指標（從 defaults／tenants 移除其 key） | `<metric_keys...>` |
 | `lint` | 檢查 Custom Rule 治理合規性 | `<path...>` |
 | `onboard` | 分析既有 Alertmanager/Prometheus 配置進行遷移 | `<config_file>` 或 `--alertmanager-config <file>` |
 | `analyze-gaps` | Custom Rule 對應 Rule Pack 缺口分析 | `--tenant-config <path>` |
@@ -2027,7 +2027,7 @@ da-tools offboard db-old --config-dir ./conf.d --execute
 
 #### deprecate
 
-標記指標為 disabled，防止誤用。
+下架指標：從每個 defaults 載體與每個 tenant 設定中**移除**該 metric 的 key。
 
 **用途**：逐步淘汰舊指標；維護版本相容性。
 
@@ -2054,7 +2054,7 @@ da-tools deprecate <metric_keys...> [options]
 
 **輸出**
 
-在 _defaults.yaml 中新增或更新 metric key 的 `enabled: false` 標記。
+從 _defaults.yaml 的 `defaults:` 與各租戶檔中刪除 `<metric>`／`<metric>_critical`／`custom_<metric>`／`custom_<metric>_critical`，並逐 key 印出原值；載體沒有相關 key 時具名略過、不寫入。⚠️ **不是**把值寫成 `disable` 或 `enabled: false`：`defaults:` 的值型別是 `map[string]float64`，字串會讓 exporter 丟掉整份載體（[#1787](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1787)）。
 
 **範例**
 

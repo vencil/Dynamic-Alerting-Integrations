@@ -166,7 +166,7 @@ These tools operate on local YAML files and don't require network.
 | `migrate` | Legacy rules → dynamic format conversion (AST engine) | `<input_file>` |
 | `validate-config` | One-stop configuration validation (YAML + schema + routes + policy) | `--config-dir <dir>` |
 | `offboard` | Offboard tenant configuration | `<tenant>` |
-| `deprecate` | Mark metrics as disabled | `<metric_keys...>` |
+| `deprecate` | Deprecate metrics (remove their keys from defaults/tenants) | `<metric_keys...>` |
 | `lint` | Check Custom Rule governance compliance | `<path...>` |
 | `onboard` | Analyze existing Alertmanager/Prometheus config for migration | `<config_file>` or `--alertmanager-config <file>` |
 | `analyze-gaps` | Compare custom rules with Rule Pack coverage | `--tenant-config <path>` |
@@ -2240,7 +2240,7 @@ docker run --rm \
 
 #### deprecate
 
-Mark metrics as disabled to prevent accidental use.
+Deprecate metrics: **remove** the metric's keys from every defaults carrier and every tenant config.
 
 **Purpose**: Gradually retire old metrics; maintain version compatibility.
 
@@ -2270,7 +2270,7 @@ docker run --rm \
 
 **Output**
 
-Add or update metric key with `enabled: false` flag in _defaults.yaml.
+Deletes `<metric>` / `<metric>_critical` / `custom_<metric>` / `custom_<metric>_critical` from `defaults:` in _defaults.yaml and from the tenant files, naming each removed key and its old value; a carrier holding none of them is named and left untouched. ⚠️ It does **not** write `disable` or `enabled: false`: `defaults:` is typed `map[string]float64`, so a string there makes the exporter drop the whole carrier ([#1787](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1787)).
 
 **Examples**
 
