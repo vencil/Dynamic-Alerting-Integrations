@@ -15,10 +15,14 @@ package main
 // ⛔ The fixtures are hand-written YAML on purpose — nothing here shells out to
 // Python. These tests pin the SHAPE the tool must produce, so they stay
 // meaningful in a Go-only CI run and cannot go green because a Python
-// dependency was unavailable. The Python side pins that the tool produces this
-// shape (`tests/ops/test_deprecate_rule_carriers.py`,
-// `test_the_written_root_defaults_still_decodes_as_map_string_float64`); the two
-// halves meet here, on the bytes.
+// dependency was unavailable. The Python side separately pins that the tool
+// produces this shape (`tests/ops/test_deprecate_rule_carriers.py`,
+// `test_the_written_root_defaults_still_decodes_as_map_string_float64`).
+//
+// ⚠️ The two sides each pin the SEMANTIC shape from their own end; there is no
+// byte-level link between them — nothing here reads a file the Python side
+// wrote, and no fixture is shared. A drift that changed the tool's output
+// without changing either assertion would not be caught by the pair.
 //
 // ⚠️ The `disable-sentinel` arm of each test is a CONTROL and is expected to
 // FAIL to load. If it ever starts loading, the property asserted here has

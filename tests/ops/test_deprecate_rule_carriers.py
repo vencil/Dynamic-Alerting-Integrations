@@ -47,12 +47,17 @@ def _ticket_fixture(root: Path) -> Path:
     return root
 
 
-def _run(config_dir: Path, *extra: str) -> subprocess.CompletedProcess:
+def _run_metrics(config_dir: Path, metrics: list[str],
+                 *extra: str) -> subprocess.CompletedProcess:
     return subprocess.run(
-        [sys.executable, str(TOOL), "cpu_usage", "--config-dir",
+        [sys.executable, str(TOOL), *metrics, "--config-dir",
          str(config_dir), *extra],
         capture_output=True, text=True, encoding="utf-8", timeout=60,
         env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+
+
+def _run(config_dir: Path, *extra: str) -> subprocess.CompletedProcess:
+    return _run_metrics(config_dir, ["cpu_usage"], *extra)
 
 
 def _step1_lines(stdout: str) -> list[str]:
@@ -297,11 +302,16 @@ def test_a_carrier_holding_only_the_critical_variant_loses_it_and_gains_nothing(
 
 
 def test_a_root_without_the_metric_is_a_named_noop_byte_for_byte(tmp_path):
-    """root 本來就沒有這個 metric ⇒ 具名回報 + 位元組不變。
+    """root 本來就沒有這個 metric ⇒ 具名回報，且**這條 no-op 路徑**位元組不變。
 
     ⚠️ 比對的是**位元組**而不是 YAML 值：舊行為除了新增一行，還會把整份檔
     重新 `safe_dump` 一次（引號、旗標樣式、註解位置都會動）。一個「沒事做」
     的載體不該有任何一種被改寫。
+
+    ⛔ 這個保證的射程只到 no-op 路徑（二輪 F-05）。真的有 key 要刪時，寫回仍
+    然走既有的 `save_yaml_file`，也就是 header 註解之外**整份 safe_dump 重寫**
+    ——引號、flow 樣式、非 header 位置的註解都會動。本輪沒有換 dumper，不要把
+    這條斷言讀成「本工具永遠只改它動到的行」。
     """
     root = tmp_path / "conf.d"
     root.mkdir()
@@ -393,20 +403,20 @@ def test_a_reference_the_writer_cannot_clear_blocks_the_completion_claim(
 def _non_numeric_defaults(text: str) -> list[tuple[str, object]]:
     """`defaults:` 底下所有**不是** int/float 的 (key, value)。
 
-    這是 `ThresholdConfig.Defaults` 宣告的 `map[string]float64`
-    （`components/threshold-exporter/app/pkg/config/types.go:208`）在 Python
-    這一側的鏡射：Go 的 yaml decoder 對這個型別碰到字串不是「跳過那個 key」，
-    而是對**整份檔**回錯 —— `parsePartialConfig` 因此回 ok=false，那個載體
-    連同它的 `state_filters:` / `_routing_defaults:` 一起從設定裡消失。所以
-    「值是數字」不是風格偏好，是這份檔被讀進去的前提。
+    ⛔ 判定式**不在這裡**：這支只負責把 YAML 文字剖成 `defaults:` 這個 mapping，
+    然後把它交給產線的 `deprecate_rule.non_numeric_defaults`（二輪 F-02，
+    D-05d「控制項必須呼叫產線那份」）。工具自己在寫回後也是呼叫同一支來決定
+    要不要收回「下架完成」的宣稱，所以下面的正／負兩臂測到的是產線行為，
+    不是一份寫在測試裡的等價品。
 
-    ⚠️ `bool` 在 Python 是 `int` 的子類別，明確排除：`cpu_usage: yes` 會被
-    YAML 解成 `True`，而它在 Go 那邊同樣不是 float64。
+    產線那支的理由：`ThresholdConfig.Defaults` 宣告成 `map[string]float64`
+    （`components/threshold-exporter/app/pkg/config/types.go:208`），Go 的
+    yaml decoder 對這個型別碰到字串不是「跳過那個 key」，而是對**整份檔**回錯
+    —— `parsePartialConfig` 因此回 ok=false，那個載體連同它的 `state_filters:`
+    / `_routing_defaults:` 一起從設定裡消失。
     """
     data = yaml.safe_load(text) or {}
-    defaults = data.get("defaults") or {}
-    return [(k, v) for k, v in defaults.items()
-            if isinstance(v, bool) or not isinstance(v, (int, float))]
+    return deprecate_rule.non_numeric_defaults(data.get("defaults"))
 
 
 def test_the_written_root_defaults_still_decodes_as_map_string_float64(tmp_path):
@@ -437,3 +447,176 @@ def test_the_written_root_defaults_still_decodes_as_map_string_float64(tmp_path)
                      "  disk_usage: 85\n")
     assert _non_numeric_defaults(old_behaviour) == [("cpu_usage", "disable")], (
         "the same checker must call the old shape out")
+
+
+# ===================================================================
+# #1787 二輪盲審 — F-01 / F-02 / F-03
+# ===================================================================
+
+
+def test_a_neighbouring_metric_sharing_the_prefix_is_not_this_metrics_key(
+        tmp_path):
+    """F-01：`container_cpu` 的下架不能被 `container_cpu_throttle_critical` 卡住。
+
+    這是 stock 樹的形狀（`da-tools init --rule-packs mariadb,kubernetes` 會同時
+    給出 `container_cpu` 與 `container_cpu_throttle`，租戶檔各帶一個
+    `_critical`）。掃描端用的是子字串 (`metric_key in key`)、移除端用的是精確
+    名字，兩邊述詞不同 ⇒ 掃描把**另一個活指標**的 key 報成本 metric 的引用，
+    重掃於是判它殘留、rc 1，而且沒有任何重跑清得掉。
+
+    ⛔ 反向也要成立：那個鄰居是另一個指標的**資料**，本工具不得刪它。舊的移除
+    端子字串分支會刪掉 `container_cpu_throttle{pod="x"}`。
+    """
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    _write(root, "_defaults.yaml",
+           "defaults:\n  container_cpu: 80\n  container_cpu_throttle: 25\n")
+    _write(root, "db-a.yaml",
+           "tenants:\n  db-a:\n    container_cpu_critical: '95'\n"
+           "    container_cpu_throttle_critical: '50'\n"
+           "    container_cpu_throttle{pod=\"x\"}: '60'\n")
+
+    r = _run_metrics(root, ["container_cpu"], "--execute")
+
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "下架完成" in r.stdout, r.stdout
+    assert "下架未完成" not in r.stdout, r.stdout
+    defaults = yaml.safe_load(
+        (root / "_defaults.yaml").read_text(encoding="utf-8"))["defaults"]
+    assert "container_cpu" not in defaults, defaults
+    assert defaults == {"container_cpu_throttle": 25}, defaults
+    tenant = yaml.safe_load(
+        (root / "db-a.yaml").read_text(encoding="utf-8"))["tenants"]["db-a"]
+    assert "container_cpu_critical" not in tenant, tenant
+    # 鄰居的兩個形狀都必須原封不動。
+    assert tenant["container_cpu_throttle_critical"] == "50", tenant
+    assert tenant['container_cpu_throttle{pod="x"}'] == "60", tenant
+
+
+def test_a_batch_run_judges_completeness_once_after_every_metric(tmp_path):
+    """F-01：`deprecate a b` 的判定在**兩個都處理完之後**跑，只跑一次。
+
+    語料選的是「第二個 metric 才會清掉的東西」：載體帶著舊版留下的
+    `old_metric: disable`，而 `old_metric` 正是本輪要下架的第二個 metric。
+    判定若留在 per-metric 迴圈裡，處理 `cpu_usage` 的那一輪會看到它、判成
+    非數值殘留 rc 1——而下一輪就要把它刪掉。判定是一次調用的性質，不是一個
+    metric 的性質。
+
+    ⚠️ 只有**跨 metric**的判定（載體體檢）能區分這兩個位置。同一個 metric 的
+    重掃在迴圈內外等價（述詞是精確的，A 的重掃看不見 B 的 key），所以搬出迴圈
+    對重掃那一半是結構整理，不是新的偵測力——不要把這條測試讀成它證明了那個。
+    """
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    _write(root, "_defaults.yaml",
+           "defaults:\n  cpu_usage: 80\n  old_metric: disable\n  mem_usage: 90\n")
+    _write(root, "db-a.yaml", "tenants:\n  db-a:\n    cpu_usage: '85'\n")
+
+    r = _run_metrics(root, ["cpu_usage", "old_metric"], "--execute")
+
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "下架完成" in r.stdout, r.stdout
+    assert "下架未完成" not in r.stdout, r.stdout
+    defaults = yaml.safe_load(
+        (root / "_defaults.yaml").read_text(encoding="utf-8"))["defaults"]
+    assert defaults == {"mem_usage": 90}, defaults
+
+
+def test_a_plain_batch_of_two_live_metrics_stays_clean(tmp_path):
+    """上一支的合法呼叫對照：兩個普通 metric 一次下架仍是 rc 0。"""
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    _write(root, "_defaults.yaml",
+           "defaults:\n  cpu_usage: 80\n  mem_usage: 90\n  disk_usage: 85\n")
+    _write(root, "db-a.yaml",
+           "tenants:\n  db-a:\n    cpu_usage: '85'\n    mem_usage: '70'\n")
+
+    r = _run_metrics(root, ["cpu_usage", "mem_usage"], "--execute")
+
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "下架完成" in r.stdout, r.stdout
+    defaults = yaml.safe_load(
+        (root / "_defaults.yaml").read_text(encoding="utf-8"))["defaults"]
+    assert defaults == {"disk_usage": 85}, defaults
+
+
+def test_a_non_numeric_residue_from_another_metric_withholds_the_claim(
+        tmp_path):
+    """F-02：載體還留著**別的** metric 的非數值 defaults ⇒ rc 1，具名型別。
+
+    舊版工具留下的 `old_metric: disable` 不在本輪的掃描射程裡（它是另一個
+    metric），但 exporter 會因為它把整份載體丟掉——所以「下架完成！
+    threshold-exporter 將在下次 reload 時生效」是一句假話：下次 reload 什麼
+    都不會生效。判定用的是產線的 `non_numeric_defaults`。
+    """
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    _write(root, "_defaults.yaml",
+           "defaults:\n  cpu_usage: 80\n  old_metric: disable\n  mem_usage: 90\n")
+
+    r = _run(root, "--execute")
+
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "下架未完成" in r.stdout, r.stdout
+    assert "將在下次 reload 時生效" not in r.stdout, r.stdout
+    tail = r.stdout.split("下架未完成", 1)[1]
+    assert "_defaults.yaml" in tail and "old_metric" in tail, tail
+    assert "str" in tail and "map[string]float64" in tail, tail
+    # 擋住宣稱不等於撤回已做的事。
+    assert "cpu_usage" not in (
+        root / "_defaults.yaml").read_text(encoding="utf-8")
+    # 而本輪自己要刪的那個 key，不會被自己的體檢當成殘留。
+    root2 = tmp_path / "conf.d2"
+    root2.mkdir()
+    _write(root2, "_defaults.yaml",
+           "defaults:\n  cpu_usage: disable\n  mem_usage: 90\n")
+    r2 = _run(root2, "--execute")
+    assert r2.returncode == 0, r2.stdout + r2.stderr
+    assert "下架完成" in r2.stdout, r2.stdout
+
+
+def test_preview_reaches_the_same_verdict_as_execute(tmp_path):
+    """F-03：預覽模式不得對一棵 `--execute` 會拒絕的樹回「乾淨」。
+
+    `_shared.yaml` 的 `tenants:` 區塊是掃描看得見、Step 2 依設計不寫的殘留
+    （`remove_from_tenants` 跳過所有 `_` 開頭檔名）。預覽算的是「掃描結果 −
+    本輪計畫刪除的 key」，所以它和 `--execute` 的重掃給出同一個判斷——
+    #1609 :553 那句「預覽不能讀起來比執行乾淨」才是一個性質，不是註解。
+    """
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    _write(root, "_defaults.yaml", "defaults:\n  cpu_usage: 80\n")
+    _write(root, "_shared.yaml",
+           "tenants:\n  shared:\n    cpu_usage: \"70\"\n")
+    before = {p.name: p.read_bytes() for p in root.iterdir()}
+
+    preview = _run(root)
+
+    assert preview.returncode == 1, preview.stdout + preview.stderr
+    assert "下架未完成" in preview.stdout, preview.stdout
+    tail = preview.stdout.split("下架未完成", 1)[1]
+    assert "_shared.yaml" in tail and "本工具不會清掉" in tail, tail
+    # 預覽仍然什麼都不寫。
+    assert {p.name: p.read_bytes() for p in root.iterdir()} == before
+
+    # 同一棵樹、同一個判斷。
+    executed = _run(root, "--execute")
+    assert executed.returncode == preview.returncode, executed.stdout
+
+
+def test_preview_on_a_clean_tree_still_reads_clean(tmp_path):
+    """F-03 的誤紅面：預覽把「乾淨的樹」判成未完成，這條修法就沒有價值。
+
+    ⭐ 這是上一支的成對反例（D-05d「反例要成對」）：只釘「髒樹會被擋」，
+    收緊述詞可以靠**全部拒絕**通過那一半。
+    """
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    _write(root, "_defaults.yaml", "defaults:\n  cpu_usage: 80\n  mem_usage: 90\n")
+    _write(root, "db-a.yaml", "tenants:\n  db-a:\n    cpu_usage: '85'\n")
+
+    r = _run(root)
+
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "預覽模式" in r.stdout, r.stdout
+    assert "下架未完成" not in r.stdout, r.stdout

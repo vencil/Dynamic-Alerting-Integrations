@@ -2054,12 +2054,12 @@ da-tools deprecate <metric_keys...> [options]
 
 **輸出**
 
-從 _defaults.yaml 的 `defaults:` 與各租戶檔中刪除 `<metric>`／`<metric>_critical`／`custom_<metric>`／`custom_<metric>_critical`，並逐 key 印出原值；載體沒有相關 key 時具名略過、不寫入。⚠️ **不是**把值寫成 `disable` 或 `enabled: false`：`defaults:` 的值型別是 `map[string]float64`，字串會讓 exporter 丟掉整份載體（[#1787](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1787)）。
+從 _defaults.yaml 的 `defaults:`，以及平面目錄下非 `_` 前綴的租戶檔中刪除 `<metric>`／`<metric>_critical`／`custom_<metric>`／`custom_<metric>_critical`，並逐 key 印出原值；載體沒有相關 key 時具名略過、不寫入（子目錄裡的檔本工具不掃也不寫，由 `warn_nested` 具名）。⚠️ **不是**把值寫成 `disable` 或 `enabled: false`：`defaults:` 的值型別是 `map[string]float64`，字串會讓 exporter 丟掉整份 root 載體（[#1787](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1787)）。
 
 **範例**
 
 ```bash
-# 標記多個指標為 disabled
+# 下架多個指標
 docker run --rm \
   --user $(id -u):$(id -g) \
   -v $(pwd)/conf.d:/etc/config:rw \
@@ -2074,7 +2074,7 @@ docker run --rm \
 | 代碼 | 說明 |
 |------|------|
 | `0` | 成功 |
-| `1` | 下架未完成（掃描列出的 defaults 載體有未寫入者，逐一具名） |
+| `1` | 下架未完成，逐一具名。三種情況：掃描列出的 defaults 載體有未寫入者；`--execute` 後重掃仍有引用（含本工具依設計不寫入的 `_` 前綴租戶檔）；或載體的 `defaults:` 還有非數值殘留（exporter 會整份丟棄）。⚠️ 預覽模式對同一棵樹給同一個判斷 |
 | `2` | 配置目錄無效 |
 
 ---

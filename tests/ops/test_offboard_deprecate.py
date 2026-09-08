@@ -286,6 +286,52 @@ def test_remove_from_defaults_missing_defaults_file():
 
 
 # ===================================================================
+# 6b. deprecate_rule — 租戶平面述詞（#1787 二輪 F-01）
+# ===================================================================
+
+def test_tenant_key_belongs_to_metric_accepts_exactly_the_metrics_own_shapes():
+    """接受集合**恰為**「四個確切名字 + 它們的維度形狀」。
+
+    列舉「哪些會被拒絕」測不出這件事：舊的子字串述詞對每一個含有該字串的 key
+    都說 True，而它「拒絕」的東西一樣拒絕得很好。這條釘的是被接受的集合。
+    """
+    belongs = deprecate_rule.tenant_key_belongs_to_metric
+    for key in ("container_cpu", "container_cpu_critical",
+                "custom_container_cpu", "custom_container_cpu_critical",
+                'container_cpu{pod="x"}',
+                'custom_container_cpu_critical{pod="x",ns="y"}'):
+        assert belongs(key, "container_cpu"), key
+
+
+def test_tenant_key_belongs_to_metric_rejects_a_neighbour_that_merely_shares_the_prefix():
+    """`container_cpu_throttle*` 是**另一個指標**，不是 `container_cpu` 的。
+
+    這是 stock 樹會出現的組合（`--rule-packs kubernetes` 同時給兩個），舊的
+    子字串述詞把它報成引用 ⇒ 永久 rc 1；而移除端的子字串分支會把它的維度鍵
+    真的刪掉 ⇒ 刪到別人的資料。
+    """
+    belongs = deprecate_rule.tenant_key_belongs_to_metric
+    for key in ("container_cpu_throttle", "container_cpu_throttle_critical",
+                'container_cpu_throttle{pod="x"}',
+                "custom_container_cpu_throttle_critical",
+                "mem_usage", "cpu_usage_backup"):
+        assert not belongs(key, "container_cpu"), key
+
+
+def test_non_numeric_defaults_names_the_values_the_exporter_cannot_decode():
+    """產線的載體體檢述詞：非 int/float 的值逐一回報，bool 也算。"""
+    fn = deprecate_rule.non_numeric_defaults
+    assert fn({"a": 80, "b": 1.5, "c": -3}) == []
+    assert fn({"a": 80, "old": "disable"}) == [("old", "disable")]
+    # bool 是 int 的子類別，但 Go 那邊不是 float64。
+    assert fn({"flag": True}) == [("flag", True)]
+    # `key:` 解成 None —— exporter 讀成 0，不是「沒有這個 key」。
+    assert fn({"k": None}) == [("k", None)]
+    # 非 mapping（空 block / 壞檔）不是本述詞的職責，回空讓具名路徑處理。
+    assert fn(None) == [] and fn(["a"]) == []
+
+
+# ===================================================================
 # 7. deprecate_rule — remove_from_tenants
 # ===================================================================
 

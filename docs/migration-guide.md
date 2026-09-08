@@ -366,7 +366,7 @@ da-tools deprecate mysql_slave_lag --execute   # 修改檔案
 da-tools deprecate mysql_slave_lag mysql_innodb_buffer_pool --execute  # 批次
 ```
 
-下架效果：threshold-exporter 下次 reload (30s) 自動清除閾值 → Prometheus 下次 scrape 向量消失 → 相關 alert 自動解除。Pre-check / 三步自動化（`_defaults.yaml` 設 `"disable"` → 掃描清除 tenant config 殘留 → 產出 ConfigMap 清理指引）細節：[`cli-reference.md#offboard`](cli-reference.md#offboard) · [`#deprecate`](cli-reference.md#deprecate)。
+下架效果：threshold-exporter 下次 reload (30s) 自動清除閾值 → Prometheus 下次 scrape 向量消失 → 相關 alert 自動解除。Pre-check / 三步自動化（從 `_defaults.yaml` 移除該 metric 的 key → 掃描清除 tenant config 殘留 → 產出 ConfigMap 清理指引）細節：[`cli-reference.md#offboard`](cli-reference.md#offboard) · [`#deprecate`](cli-reference.md#deprecate)。
 
 ---
 

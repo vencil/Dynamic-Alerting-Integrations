@@ -2270,12 +2270,12 @@ docker run --rm \
 
 **Output**
 
-Deletes `<metric>` / `<metric>_critical` / `custom_<metric>` / `custom_<metric>_critical` from `defaults:` in _defaults.yaml and from the tenant files, naming each removed key and its old value; a carrier holding none of them is named and left untouched. ⚠️ It does **not** write `disable` or `enabled: false`: `defaults:` is typed `map[string]float64`, so a string there makes the exporter drop the whole carrier ([#1787](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1787)).
+Deletes `<metric>` / `<metric>_critical` / `custom_<metric>` / `custom_<metric>_critical` from `defaults:` in _defaults.yaml and from the non-`_`-prefixed tenant files in the flat directory, naming each removed key and its old value; a carrier holding none of them is named and left untouched (files in subdirectories are neither scanned nor written — `warn_nested` names them). ⚠️ It does **not** write `disable` or `enabled: false`: `defaults:` is typed `map[string]float64`, so a string there makes the exporter drop the whole root carrier ([#1787](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1787)).
 
 **Examples**
 
 ```bash
-# Mark multiple metrics as disabled
+# Deprecate multiple metrics
 docker run --rm \
   --user $(id -u):$(id -g) \
   -v $(pwd)/conf.d:/etc/config:rw \
@@ -2290,7 +2290,7 @@ docker run --rm \
 | Code | Description |
 |------|-------------|
 | `0` | Success |
-| `1` | Deprecation incomplete (a defaults carrier the scan listed was not written; each one is named) |
+| `1` | Deprecation incomplete, each cause named. Three of them: a defaults carrier the scan listed was not written; references still found on the rescan after `--execute` (including the `_`-prefixed tenant files this tool does not write by design); or a non-numeric residue left under a carrier's `defaults:` (the exporter drops that carrier whole). ⚠️ Preview mode reaches the same verdict on the same tree |
 | `2` | Invalid config directory |
 
 ---

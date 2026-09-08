@@ -366,7 +366,7 @@ da-tools deprecate mysql_slave_lag --execute   # Apply changes
 da-tools deprecate mysql_slave_lag mysql_innodb_buffer_pool --execute  # Batch
 ```
 
-Offboarding effects: threshold-exporter clears thresholds on next reload (30s) → Prometheus drops the vector on next scrape → related alerts resolve automatically. Pre-check details and the three-step automation (set `"disable"` in `_defaults.yaml` → sweep tenant config residue → emit ConfigMap cleanup guidance): [`cli-reference.md#offboard`](cli-reference.md#offboard) · [`#deprecate`](cli-reference.md#deprecate).
+Offboarding effects: threshold-exporter clears thresholds on next reload (30s) → Prometheus drops the vector on next scrape → related alerts resolve automatically. Pre-check details and the three-step automation (remove the metric's keys from `_defaults.yaml` → sweep tenant config residue → emit ConfigMap cleanup guidance): [`cli-reference.md#offboard`](cli-reference.md#offboard) · [`#deprecate`](cli-reference.md#deprecate).
 
 ---
 
