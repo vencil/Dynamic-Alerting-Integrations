@@ -35,14 +35,18 @@ Checks, in the order they run:
   2. pure level shift: the shares match what the split's algebra predicts
   3. pure episode: `level` correlates at ~+1.000 and still owns a small share
   4. neither column alone separates the two shapes; together they do
+     ⚠️ a DERIVATION from 2's and 3's measurements, not an independent
+     constraint — given the tolerances it cannot fail while they pass;
+     check 5 prints that subsumption rather than this line asserting it
   7. write-side variation: `total()` keeps both halves of the round
   5. mutation sensitivity — each of checks 2-4 and 7 is killed by >=1 broken
      discriminant, so "these checks have detection power" is measured
      here, and a check already red before any mutant is reported as NOT
      ASSESSABLE rather than credited with a vacuous kill
   6. on every shape the two renderers agree, each one's sd column matches its
-     own share, and the round-total sd matches the generated rows in absolute
-     terms (ratios alone cannot see a shared unit bug)
+     own share, and the round total's sd AND median both match the generated
+     rows in absolute terms (ratios alone cannot see a shared unit bug; sd and
+     corr alone cannot see an additive one)
 
 ⚠️ KNOWN BLIND SPOT, not fixed: every synthetic shape here is monotonic in the
 round total, so a `corr()` swapped for another monotonic statistic (Spearman,
@@ -121,7 +125,9 @@ WRITE_EPISODE_MAX = 20                # per-round stalled-write count, drawn fro
 # tells the reader nothing about the discriminant. It is independent of the load
 # shape by construction, so it also serves as the negative control: a component
 # that neither tracks nor could move the round has to come out looking like one.
-# It costs the predictions below <1 pp — see _predicted_shares.
+# It costs the predictions below a little; `_predicted_shares` says why and every
+# run prints prediction beside measurement. ⛔ No figure here — this is the third
+# time a hand-typed number for that gap has gone stale.
 
 TOL_PP = 2.0                # tolerance on a predicted-vs-measured share, in pp
 TOL_CORR = 0.01             # |corr| must be within this of 1.0 where predicted
@@ -160,15 +166,17 @@ class CannotMeasure(RuntimeError):
 
 def load_module(path: Path, name: str):
     """Import the tool, under `drive()`'s rule: any failure is CannotMeasure."""
-    if not path.is_file():
+    if not drive("checking the tool exists", path.is_file):
         raise CannotMeasure(f"tool not found: {path}")
     # ⛔ The whole body is inside the guard, per `drive()`'s rule — not just the
     # line that broke last.
     # ⛔ `sys.path` and `sys.modules` are restored to what they were before this
     # call, the tool's own entry included; the caller holds the module object.
-    # The tool inserts two path entries at module scope and this runs again for
-    # every mutant, so they accumulate; and its sibling `_lib_compat`, left
-    # cached, makes a second `--tool` copy silently reuse the first copy's.
+    # The tool inserts two path entries at module scope, so repeated calls
+    # accumulate them; and its sibling `_lib_compat`, left cached, makes a
+    # second `--tool` copy silently reuse the first copy's. ⚠️ check5 does NOT
+    # re-import per mutant — it monkey-patches the one imported module — so
+    # today the only repeat caller is an in-process test or a second `--tool`.
     saved_path, saved_mods = list(sys.path), set(sys.modules)
     try:
         spec = importlib.util.spec_from_file_location(name, path)
@@ -498,9 +506,8 @@ def check3(ci):
         got, want = ci[role][2], p[role]
         if abs(got - want) > TOL_PP:
             bad.append(f"{role} share {got:.1f}% != predicted {want:.1f}%")
-    # ⛔ The write row was scraped and never asserted here. An episode is a
-    # load-side event, so a report that lets `write_sum` look like a cause of it
-    # is wrong in the direction #1497 cares about most.
+    # ⛔ An episode is a load-side event, so a report that lets `write_sum` look
+    # like a cause of it is wrong in the direction #1497 cares about most.
     if abs(ci["write"][0]) > QUIET_CORR or ci["write"][2] > QUIET_SHARE_PP:
         bad.append(f"write {ci['write'][0]:+.3f} / {ci['write'][2]:.1f}% is not"
                    " quiet on a load-side episode")
@@ -624,6 +631,25 @@ def check5(mod, roles, texts, baseline):
     rows = "; ".join(f"check{n} killed by {len(ks)}"
                      f"(+{len(blanket_kills[n])} unreadable)/{len(MUTANTS)}"
                      for n, ks in sorted(killed.items())) or "nothing assessable"
+    # ⛔ Kill COUNTS answer "does each check detect anything". They do not answer
+    # "does each check detect anything the others miss", or "does each mutant
+    # probe anything another does not" — and blind review found both answered
+    # NO in places. Neither is a pass/fail here; both are printed, because a
+    # sentence claiming it would drift while a computed line cannot.
+    for a in sorted(killed):
+        for b in sorted(killed):
+            if a != b and killed[a] and set(killed[a]) <= set(killed[b]):
+                rows += f"; ⚠️ check{a} never fails without check{b}"
+    by_mutant = {}
+    for n, ks in killed.items():
+        for k in ks:
+            by_mutant.setdefault(k, set()).add(n)
+    groups = {}
+    for m, checks in by_mutant.items():
+        groups.setdefault(frozenset(checks), []).append(m)
+    for g in groups.values():
+        if len(g) > 1:
+            rows += f"; ⚠️ same kill set: {' == '.join(sorted(g))}"
     if blocked:
         rows += (f"  << check(s) {blocked} NOT ASSESSABLE: already FAIL on the"
                  " unmutated tool, so every mutant kills them vacuously")
