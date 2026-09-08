@@ -27,6 +27,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 _SCRIPT = REPO_ROOT / "scripts" / "tools" / "lint" / "check_image_pin_capability.py"
@@ -72,7 +73,7 @@ class TestLiveRepoIsClean:
     def test_only_the_registered_two_are_incapable(self, live):
         """No THIRD incapable pin has crept in behind the registry."""
         workloads, _ = live
-        violations, _, _ = gate.run_check(workloads, exemptions={})
+        violations, _, _, _ = gate.run_check(workloads, exemptions={})
         assert len(violations) == 2, (
             "expected exactly the 2 registered incapable pins, got:\n"
             + "\n".join(violations)
@@ -81,9 +82,12 @@ class TestLiveRepoIsClean:
     def test_live_repo_passes_with_the_real_registry(self, live):
         """With EXEMPTIONS applied the repo is green and nothing is stale."""
         workloads, _ = live
-        violations, exempted, stale = gate.run_check(workloads, gate.EXEMPTIONS)
+        violations, exempted, stale, orphaned = gate.run_check(
+            workloads, gate.EXEMPTIONS)
         assert violations == []
         assert stale == []
+        # Every registered entry still licenses a workload that resolves to it.
+        assert orphaned == []
         assert len(exempted) == 2
 
     def test_a_capable_workload_exists(self, live):
@@ -121,10 +125,11 @@ class TestLiveRepoIsClean:
 def test_de_registering_an_exemption_turns_the_gate_red(live, dropped):
     workloads, _ = live
     reduced = {k: v for k, v in gate.EXEMPTIONS.items() if k != dropped}
-    violations, exempted, stale = gate.run_check(workloads, reduced)
+    violations, exempted, stale, orphaned = gate.run_check(workloads, reduced)
     assert len(violations) == 1, violations
     assert len(exempted) == 1
     assert stale == []
+    assert orphaned == []
     # The message must name the tag and the mechanism, not just "failed".
     assert "tools/v2.9.0" in violations[0]
     assert dropped[1] in violations[0]
@@ -146,7 +151,7 @@ class TestExemptionIsTagScoped:
                               "v2.8.0", pinned.kind, pinned.entry)
         # Precondition: the other tag really is incapable (else this proves nothing).
         assert gate.evaluate(moved) is not None
-        violations, exempted, _ = gate.run_check([moved], gate.EXEMPTIONS)
+        violations, exempted, _, _ = gate.run_check([moved], gate.EXEMPTIONS)
         assert exempted == []
         assert len(violations) == 1
         assert "tools/v2.8.0" in violations[0]
@@ -167,7 +172,7 @@ def test_stale_exemption_is_reported(live):
     """An entry the pinned image now SATISFIES must be flagged for deletion."""
     workloads, _ = live
     capable = next(w for w in workloads if gate.evaluate(w) is None)
-    violations, _, stale = gate.run_check(
+    violations, _, stale, _ = gate.run_check(
         workloads, {**gate.EXEMPTIONS, capable.key: "bogus — EXIT: never"})
     assert violations == []
     assert len(stale) == 1
@@ -652,6 +657,278 @@ def test_every_shipped_helm_template_survives_stripping():
             pytest.fail(f"{template.relative_to(REPO_ROOT).as_posix()}: {exc}")
 
 
+# ── #1532: the shapes that used to read as a pass ───────────────────────────
+# Each test here has a measured counterfactual on the pre-fix gate: the same
+# fixture produced `OK, 0 problems`. They are grouped because they share one
+# failure mode — the gate stopped being able to SEE something and said nothing.
+
+_SCALAR_PIN_VALUES = 'image: ghcr.io/vencil/da-tools:v2.9.0\n'
+
+
+def test_helm_one_line_scalar_pin_is_read(tmp_path, monkeypatch):
+    """`image: repo:tag` must resolve to the same workload as the split pin.
+
+    Pre-fix, find_image_pins() only recognised a `repository:` mapping, so a
+    chart written this way yielded no da-tools pin, was skipped as "not ours",
+    and the run printed OK with the chart never scanned.
+    """
+    _write_chart(tmp_path, values=_SCALAR_PIN_VALUES)
+    monkeypatch.setattr(gate, "REPO_ROOT", tmp_path)
+    errors: list[str] = []
+    workloads = gate.collect_helm_workloads(errors)
+    assert errors == []
+    assert len(workloads) == 1
+    assert workloads[0].image_tag == "v2.9.0"
+    assert workloads[0].entry == "maintenance_scheduler.py"
+
+
+def test_helm_scalar_pin_without_a_tag_is_an_error(tmp_path, monkeypatch):
+    _write_chart(tmp_path, values="image: ghcr.io/vencil/da-tools\n")
+    monkeypatch.setattr(gate, "REPO_ROOT", tmp_path)
+    errors: list[str] = []
+    assert gate.collect_helm_workloads(errors) == []
+    assert any("NO `tag:` key" in e for e in errors), errors
+
+
+def test_helm_scalar_pin_with_a_digest_is_an_error(tmp_path, monkeypatch):
+    _write_chart(tmp_path, values=(
+        "image: ghcr.io/vencil/da-tools:v2.9.0@sha256:" + "d" * 64 + "\n"))
+    monkeypatch.setattr(gate, "REPO_ROOT", tmp_path)
+    errors: list[str] = []
+    assert gate.collect_helm_workloads(errors) == []
+    assert any("digest" in e for e in errors), errors
+
+
+def test_a_foreign_scalar_pin_alone_still_skips_the_chart(tmp_path, monkeypatch):
+    """Reading the scalar shape must not turn unrelated charts into errors.
+
+    helm/mariadb-instance pins `mariadb:` and `prom/mysqld-exporter:` this way
+    and has no da-tools pin at all; it must stay silently out of scope.
+    """
+    _write_chart(tmp_path, values=(
+        "mariadb:\n  image: mariadb:11.8.8\n"
+        "exporter:\n  image: prom/mysqld-exporter:v0.19.0\n"))
+    monkeypatch.setattr(gate, "REPO_ROOT", tmp_path)
+    errors: list[str] = []
+    assert gate.collect_helm_workloads(errors) == []
+    assert errors == []
+
+
+_VALUES_OVERRIDABLE_COMMAND_TMPL = """\
+apiVersion: apps/v1
+kind: Deployment
+spec:
+  template:
+    spec:
+      containers:
+        - name: probe
+          image: {{ include "probe.image" . | quote }}
+          command:
+            {{- toYaml .Values.command | nindent 12 }}
+          args:
+            - threshold-recommend
+            - --json
+"""
+
+
+def test_an_unreadable_command_does_not_fall_through_to_args(tmp_path, monkeypatch):
+    """The silent-green shape: `command:` from values, `args[0]` in COMMAND_MAP.
+
+    `threshold-recommend` IS a real subcommand at tools/v2.9.0, so pre-fix this
+    chart resolved to a capable workload and the gate printed OK — for a
+    container whose actual entry point it never read. It must be a collection
+    error instead.
+    """
+    assert "threshold-recommend" in gate.capabilities_for_tag("tools/v2.9.0")[0], (
+        "precondition: args[0] must name a real subcommand, else this proves nothing")
+    _write_chart(tmp_path, template=_VALUES_OVERRIDABLE_COMMAND_TMPL)
+    monkeypatch.setattr(gate, "REPO_ROOT", tmp_path)
+    errors: list[str] = []
+    assert gate.collect_helm_workloads(errors) == []
+    assert len(errors) == 1, errors
+    assert "cannot be resolved" in errors[0]
+    assert "`command:` is set" in errors[0]
+
+
+_DUPLICATE_CONTAINERS_TMPL = """\
+apiVersion: apps/v1
+kind: Deployment
+spec:
+  template:
+    spec:
+      {{- if .Values.legacy }}
+      containers:
+        - name: legacy
+          image: {{ include "probe.image" . | quote }}
+          args:
+            - a-subcommand-that-does-not-exist
+      {{- else }}
+      containers:
+        - name: modern
+          image: {{ include "probe.image" . | quote }}
+          command:
+            - python3
+            - /opt/da-tools/maintenance_scheduler.py
+      {{- end }}
+"""
+
+
+def test_two_template_branches_writing_one_key_is_an_error(tmp_path, monkeypatch):
+    """Stripping actions leaves a duplicate key; a plain load picks the winner.
+
+    Pre-fix the `legacy` branch simply vanished — yaml.safe_load kept the last
+    `containers:` — so the gate reported the surviving container as checked and
+    exited OK while an incapable container sat in the same file. The strip
+    over-approximates only if the loader refuses to silently de-duplicate.
+    """
+    _write_chart(tmp_path, template=_DUPLICATE_CONTAINERS_TMPL)
+    monkeypatch.setattr(gate, "REPO_ROOT", tmp_path)
+    errors: list[str] = []
+    assert gate.collect_helm_workloads(errors) == []
+    # Two errors, both wanted: the duplicate key names the cause, and the
+    # zero-containers arm confirms the chart could not be read as a pass.
+    assert any("duplicate key 'containers'" in e for e in errors), errors
+    assert any("NO container could be parsed" in e for e in errors), errors
+
+
+def test_duplicate_keys_in_values_are_an_error(tmp_path, monkeypatch):
+    """A values file is read the same way — the LAST pin silently winning there
+    would mean the gate checks a tag the chart does not actually deploy."""
+    _write_chart(tmp_path, values=(
+        'image:\n  repository: ghcr.io/vencil/da-tools\n  tag: "v2.9.0"\n'
+        'image:\n  repository: ghcr.io/vencil/da-tools\n  tag: "v2.8.0"\n'))
+    monkeypatch.setattr(gate, "REPO_ROOT", tmp_path)
+    errors: list[str] = []
+    assert gate.collect_helm_workloads(errors) == []
+    assert any("duplicate key 'image'" in e for e in errors), errors
+
+
+def test_duplicate_keys_in_a_k8s_manifest_are_an_error(tmp_path, monkeypatch):
+    (tmp_path / "k8s").mkdir()
+    (tmp_path / "k8s" / "probe.yaml").write_text(
+        "apiVersion: v1\n"
+        "kind: Pod\n"
+        "spec:\n"
+        "  containers:\n"
+        "    - name: a\n"
+        "      image: ghcr.io/vencil/da-tools:v2.9.0\n"
+        "      args: [lint]\n"
+        "  containers:\n"
+        "    - name: b\n"
+        "      image: ghcr.io/vencil/da-tools:v2.9.0\n"
+        "      args: [validate]\n",
+        encoding="utf-8")
+    monkeypatch.setattr(gate, "REPO_ROOT", tmp_path)
+    errors: list[str] = []
+    assert gate.collect_k8s_workloads(errors) == []
+    assert any("duplicate key 'containers'" in e for e in errors), errors
+
+
+class TestStrictLoader:
+    def test_an_unhashable_key_is_still_refused(self):
+        """A complex key cannot be de-duplicated, so the loader must not try.
+
+        The duplicate check skips it and lets SafeConstructor raise its own
+        "found unhashable key" — the point being that neither path silently
+        keeps one of two mappings.
+        """
+        with pytest.raises(yaml.YAMLError) as exc:
+            gate.load_strict("? [a, b]\n: value\n")
+        assert "unhashable" in str(exc.value)
+
+    def test_it_matches_safe_load_on_ordinary_documents(self):
+        text = "a: 1\nb:\n  - x\n  - y\n"
+        assert gate.load_strict(text) == yaml.safe_load(text)
+
+    def test_load_all_strict_returns_every_document(self):
+        text = "a: 1\n---\nb: 2\n"
+        assert gate.load_all_strict(text) == [{"a": 1}, {"b": 2}]
+
+    def test_a_duplicate_key_raises_rather_than_picking_one(self):
+        with pytest.raises(yaml.YAMLError) as exc:
+            gate.load_strict("a: 1\na: 2\n")
+        assert "duplicate key 'a'" in str(exc.value)
+
+    def test_a_duplicate_key_nested_in_a_list_also_raises(self):
+        with pytest.raises(yaml.YAMLError):
+            gate.load_all_strict("items:\n  - k: 1\n    k: 2\n")
+
+    def test_load_strict_refuses_a_multi_document_stream(self):
+        """safe_load raises here; returning the first document would be a
+        silent half-read of a values file."""
+        with pytest.raises(yaml.YAMLError):
+            gate.load_strict("a: 1\n---\nb: 2\n")
+
+    def test_an_empty_document_is_none_not_an_error(self):
+        assert gate.load_strict("") is None
+        assert gate.load_all_strict("") == []
+
+
+# ── main(): the exit-code contract ──────────────────────────────────────────
+# The exit CODE is the whole contract with pre-commit. run_check() classifying
+# something correctly is worthless if main() still returns 0, and before this
+# block nothing exercised main() in-process at all — including the ORPHANED
+# EXEMPTION path added with it.
+@pytest.fixture
+def _bare_argv(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["check_image_pin_capability.py"])
+
+
+def test_main_on_the_live_repo_exits_zero(_bare_argv):
+    assert gate.main() == gate.EXIT_OK
+
+
+def test_main_reports_an_orphaned_exemption_and_fails(_bare_argv, monkeypatch, capsys):
+    ghost = ("helm/deleted-chart", "gone.py", "v2.9.0")
+    monkeypatch.setattr(gate, "EXEMPTIONS",
+                        {**gate.EXEMPTIONS, ghost: "bogus — EXIT: never"})
+    assert gate.main() == gate.EXIT_VIOLATION
+    out = capsys.readouterr().out
+    assert "ORPHANED EXEMPTION" in out
+    assert "helm/deleted-chart" in out
+
+
+def test_main_turns_a_collection_error_into_a_caller_error(_bare_argv, monkeypatch, capsys):
+    """⛔ A pin that could not be checked must not read as a pass."""
+    monkeypatch.setattr(gate, "collect_k8s_workloads",
+                        lambda errors: errors.append("probe: unreadable") or [])
+    assert gate.main() == gate.EXIT_CALLER_ERROR
+    assert "NOT a pass" in capsys.readouterr().err
+
+
+def test_an_exemption_no_workload_matches_is_reported(live):
+    """An entry that licenses nothing must be flagged, not silently carried.
+
+    `stale` cannot catch this: it is derived from resolved workloads, so an
+    exemption stops being reported the moment its workload stops resolving to
+    that key — which is precisely what every silent-pass shape above does on
+    its way through.
+    """
+    workloads, _ = live
+    ghost = ("helm/deleted-chart", "gone.py", "v2.9.0")
+    violations, _, stale, orphaned = gate.run_check(
+        workloads, {**gate.EXEMPTIONS, ghost: "bogus — EXIT: never"})
+    assert violations == []
+    assert stale == []
+    assert len(orphaned) == 1, orphaned
+    assert "helm/deleted-chart" in orphaned[0]
+    assert "delete" in orphaned[0].lower()
+
+
+def test_a_re_pinned_workload_orphans_its_exemption(live):
+    """The realistic route in: the pin moves, so the tag-qualified key stops
+    matching and the registered entry is left licensing nothing."""
+    workloads, _ = live
+    pinned = next(w for w in workloads if w.key == _RECONCILER_KEY)
+    moved = gate.Workload(pinned.source, pinned.where, "v2.8.0",
+                          pinned.kind, pinned.entry)
+    others = [w for w in workloads if w.key != _RECONCILER_KEY]
+    _, _, _, orphaned = gate.run_check(others + [moved], gate.EXEMPTIONS)
+    assert len(orphaned) == 1, orphaned
+    assert _RECONCILER_KEY[0] in orphaned[0]
+    assert "v2.9.0" in orphaned[0]
+
+
 # ── entry-point resolution ──────────────────────────────────────────────────
 @pytest.mark.parametrize("container,expected", [
     ({"args": ["threshold-govern", "--json"]}, ("subcommand", "threshold-govern")),
@@ -663,9 +940,26 @@ def test_every_shipped_helm_template_survives_stripping():
     ({"args": []}, None),
     ({"command": ["/bin/sh", "-c", "echo hi"]}, None),
     ({}, None),
+    # #1532 hole ①: a `command:` key that is PRESENT but not a readable list
+    # still replaces the image entrypoint, so `args[0]` is NOT what runs.
+    # Falling through to it answers with a subcommand nothing executes — and
+    # when that name happens to be in COMMAND_MAP the gate prints PASS. The
+    # None here is the collection error the caller raises instead.
+    ({"command": None, "args": ["threshold-govern"]}, None),
+    ({"command": "python3 /opt/da-tools/x.py", "args": ["threshold-govern"]}, None),
+    ({"command": {"from": "values"}, "args": ["threshold-govern"]}, None),
+    ({"command": [], "args": ["threshold-govern"]}, None),
 ])
 def test_resolve_entry(container, expected):
     assert gate.resolve_entry(container) == expected
+
+
+def test_unresolved_reason_distinguishes_a_present_command():
+    """The message must not claim `args[0]` is missing when it is right there."""
+    present = gate.unresolved_reason({"command": None, "args": ["threshold-govern"]})
+    assert "`command:` is set" in present
+    absent = gate.unresolved_reason({"args": ["--flags-only"]})
+    assert "no `command:`" in absent
 
 
 @pytest.mark.parametrize("image,expected", [

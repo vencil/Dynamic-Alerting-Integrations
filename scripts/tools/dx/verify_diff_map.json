@@ -820,7 +820,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "005224f0fd07c557be31855fdbe13525d04e9ae27cec296afa0b7fc5fceaf25a",
+ "source_digest": "03124b516638a1dd5e094d9f81711e69015715882d15971727ff4030646c122f",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1927,7 +1927,8 @@
    "tests/ops/test_renovate_config.py"
   ],
   "helm/mariadb-instance": [
-   "tests/lint/test_check_iac_helm.py"
+   "tests/lint/test_check_iac_helm.py",
+   "tests/lint/test_check_image_pin_capability.py"
   ],
   "helm/mariadb-instance/values.yaml": [
    "tests/lint/test_check_helm_values_secrets.py"
