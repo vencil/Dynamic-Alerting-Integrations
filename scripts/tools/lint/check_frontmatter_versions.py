@@ -22,6 +22,7 @@ from typing import Dict, List, Optional
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
+from _lib_confd import is_hidden_name  # noqa: E402
 from _lib_python import write_text_or_die  # noqa: E402
 from _lib_exitcodes import EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_versions import (  # noqa: E402
@@ -133,14 +134,24 @@ def extract_frontmatter(file_path: Path) -> FrontmatterInfo:
 
 
 def scan_docs(docs_dir: Path) -> List[FrontmatterInfo]:
-    """Scan all markdown files under docs/ for frontmatter versions."""
+    """Scan all markdown files under docs/ for frontmatter versions.
+
+    Hidden entries are judged on the path *below* ``docs_dir``, never on the
+    absolute path. #1790: the previous test walked ``md_file.parts`` — every
+    ancestor included — so a checkout living under any dot-directory
+    (Claude Code's agent worktrees sit in ``.claude/worktrees/<name>/``)
+    skipped the whole tree and reported a green "All 0 frontmatter versions
+    match". The predicate is ``_lib_confd.is_hidden_name``, the exporter
+    walker's own skip rule, so "hidden" means one thing across the tools.
+    """
     results = []
     if not docs_dir.exists():
         return results
 
     for md_file in sorted(docs_dir.rglob("*.md")):
-        # Skip hidden directories
-        if any(part.startswith(".") for part in md_file.parts):
+        # Skip hidden directories/files *inside* docs_dir only.
+        rel_parts = md_file.relative_to(docs_dir).parts
+        if any(is_hidden_name(part) for part in rel_parts):
             continue
         info = extract_frontmatter(md_file)
         results.append(info)
@@ -289,6 +300,16 @@ def main(argv: Optional[List[str]] = None) -> None:
         sys.exit(EXIT_CALLER_ERROR)
 
     scanned = scan_docs(docs_dir=DOCS_DIR)
+    if not scanned:
+        # #1790: an empty population is a caller error, not a clean pass.
+        # "Scanned: 0 files" used to exit 0 — indistinguishable from "every
+        # file matched" — which is exactly how the hidden-ancestor defect
+        # above went unnoticed. A docs tree with no markdown at all means
+        # the tool is pointed at the wrong place; say so and refuse.
+        print(f"ERROR: no markdown files found under {DOCS_DIR} — nothing "
+              "was measured, so this cannot pass (wrong checkout or docs "
+              "directory?)", file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
     total_scanned = len(scanned)
     total_with_fm = sum(1 for s in scanned if s.has_frontmatter)
 
