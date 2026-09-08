@@ -804,19 +804,30 @@ def find_repo_root() -> Path:
 
 # ─── Preflight Marker (consumed by pre-push gate) ────────────
 #
-# `.git/.preflight-ok.<HEAD-sha>` is a zero-byte marker file written when a
-# preflight run completes without FAIL. The pre-push hook
-# (scripts/ops/require_preflight_pass.sh) refuses to push unless the marker
-# for the exact HEAD sha exists. This prevents pushing pre-preflight commits
-# that CI will likely reject.
+# `.git/.preflight-ok.<sha>` is a zero-byte marker file written when a
+# preflight run completes without FAIL. This side WRITES it for HEAD — the
+# commit preflight just ran against. The pre-push gate
+# (scripts/ops/require_preflight_pass.sh) READS it for every commit the push
+# publishes, which is not necessarily HEAD (#1690's axis): pushing a branch by
+# name while standing somewhere else is ordinary here. So preflight must be
+# run FROM the commit being pushed — running it elsewhere marks that other
+# commit and leaves the push blocked.
 
 MARKER_PREFIX = ".preflight-ok"
 
 
 def _git_dir(repo_root: Path) -> Path:
-    """Resolve .git dir even for worktrees (git rev-parse --git-dir)."""
+    """Where markers live: the SHARED git dir, not the per-worktree one.
+
+    ⛔ `--git-common-dir`, not `--git-dir`. A marker says "preflight passed on
+    this COMMIT" — not a property of the worktree it was run in. With the
+    per-worktree dir, a marker written in one worktree was invisible to every
+    other one, so the pre-push gate blocked a commit that had in fact passed.
+    `scripts/ops/require_preflight_pass.sh` reads the same place; the two must
+    not drift apart.
+    """
     r = subprocess.run(
-        ["git", "rev-parse", "--git-dir"],
+        ["git", "rev-parse", "--git-common-dir"],
         cwd=repo_root, capture_output=True, text=True, check=False, timeout=10,
     )
     if r.returncode == 0 and r.stdout.strip():

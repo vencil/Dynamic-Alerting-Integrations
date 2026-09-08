@@ -14,12 +14,9 @@ set -uo pipefail
 _dispatch_dir="${BASH_SOURCE[0]%/*}"
 [ "$_dispatch_dir" = "${BASH_SOURCE[0]}" ] && _dispatch_dir="."
 
-# ⛔ Pure parameter expansion, no `$(dirname …)`. require_preflight_pass.sh's
-# test_gh_missing_* strips PATH down to bash/git/basename/sh/cat to prove the
-# gate still works without `gh`, and `dirname` is not in that set.
+# ⛔ Pure parameter expansion above, no `$(dirname …)`. Rationale in
+# _prepush_refs.sh.
 
-# ⛔ A PIN, NOT A SCAN: "this repo's pre-push guards are exactly these three".
-# Do not replace it with a glob of scripts/ops/*.sh.
 GUARDS=(
     protect_main_push.sh
     require_preflight_pass.sh
@@ -28,10 +25,9 @@ GUARDS=(
 
 # Guards that run only when the push carries commits. ⛔ Do NOT add the other
 # two: `git push origin :main` must stay judged (#1691). mkdocs belongs here
-# because it does not read the refspec at all (it diffs `@{u}...HEAD`, #1690),
-# so on a deletion it judges something the push is not doing. This restores the
-# pre-#1689 behaviour — `_pre_push_ns` returns None for deletions and for
-# up-to-date pushes, and pre-commit then ran no pre-push hooks at all.
+# because a deletion carries no tree to build — and since #1690 it drops
+# deletion rows itself, so this entry is a cheap short-circuit, not the
+# mechanism.
 GUARDS_NEEDING_COMMITS=(
     pre_push_mkdocs_strict.sh
 )

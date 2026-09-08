@@ -1,8 +1,10 @@
 """Tests for pr_preflight.py marker helpers + require_preflight_pass.sh gate.
 
-Plan C (v2.8.0 token-economy): the marker lives at
-`.git/.preflight-ok.<HEAD-sha>` and is the contract between
-`make pr-preflight` and the pre-push gate.
+Plan C (v2.8.0 token-economy): the marker lives at `.git/.preflight-ok.<sha>`
+and is the contract between `make pr-preflight` and the pre-push gate.
+⛔ The two sides key on different commits by design: the writer marks HEAD
+(what it just checked), the gate reads the commits being PUSHED (#1690's
+axis). `test_preflight_pass_gate.py` owns that half.
 
 We test the Python marker helpers in isolation (tmp_path ephemeral repos)
 and the bash gate script via subprocess with synthetic stdin + env.
@@ -349,6 +351,40 @@ class TestMarkerPython:
         p = mod.marker_path(tmp_path, sha)
         assert p.name.endswith(sha)
         assert mod.MARKER_PREFIX in p.name
+
+    def test_a_marker_written_in_a_worktree_lands_in_the_shared_git_dir(
+        self, tmp_path, monkeypatch
+    ):
+        """⛔ The writer and the pre-push gate must agree on ONE directory.
+
+        Keyed to `--git-dir`, a marker written while inside a linked worktree
+        landed in `.git/worktrees/<name>/` and no other checkout could see it
+        — so a commit that had passed preflight was blocked, and the banner's
+        recovery instruction could not reach green from anywhere. A marker is
+        a claim about a COMMIT; it does not belong to one worktree.
+        """
+        _init_git(tmp_path)
+        wt = tmp_path.parent / "wt-marker"
+        assert subprocess.run(  # subprocess-timeout: ignore
+            ["git", "-C", str(tmp_path), "worktree", "add", "-q", "--detach",
+             str(wt), "HEAD"],
+            capture_output=True, text=True,
+        ).returncode == 0
+
+        mod = _load()
+        monkeypatch.chdir(wt)
+        p = mod.marker_path(wt, "deadbeef")
+        private = subprocess.run(  # subprocess-timeout: ignore
+            ["git", "-C", str(wt), "rev-parse", "--absolute-git-dir"],
+            capture_output=True, text=True,
+        ).stdout.strip()
+
+        assert "worktrees" not in str(p), (
+            f"the marker landed in the per-worktree git dir: {p}"
+        )
+        assert str(p.parent) != private, (
+            "writer and gate would disagree: the gate reads the shared dir"
+        )
 
 
 @_BASH_SCRIPT_SKIP

@@ -50,7 +50,7 @@ lang: zh
 >
 > ⚠️ **`pre-commit install --hook-type pre-push` 不再是替代方案**：它裝出來的 hook 只看得到一列 refspec，而且只要設了 `core.hooksPath`（任何值）它直接 rc=1 拒絕安裝。
 
-> ✅ **「只看得到一列 refspec」這個殘差已由 #1689 修掉，記在這裡是因為成因仍然是活的。** pre-commit 的 `hook_impl._pre_push_ns` 只回報 stdin **第一列**可推送的 ref；⛔ **git 是照 remote ref 名稱排序餵那些列的，不是照你在命令列打的順序**：實測 `git push origin main zzz` 與 `git push origin zzz main` 產生**逐字相同**的 stdin（`main` 在前）⇒ 「把 main 寫在前面」不是保命的方法；會藏住 main 的是**排序在 `refs/heads/main` 之前**的同批分支——而 dev-rule #12 要求的 `feat/` `fix/` `chore/` 全部落在那一側。實測（未修時）：`git push origin aaa main` 印 `Guard: block direct push to main ... Passed` 且 main 真的推上去了。⇒ **修法是不再把那三支註冊為 pre-commit 的 pre-push stage**；dispatcher 自己讀 stdin，所以 `--all` / `--mirror` 這類「一次多列」的形式也一併涵蓋，不必逐一宣稱。量測釘在 `tests/ops/test_prepush_hook_wiring.py`。第三支不讀 refspec（走 `@{u}` 比對），與此無關——它自己的缺陷是 [#1690](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1690)。
+> ✅ **「只看得到一列 refspec」這個殘差已由 #1689 修掉，記在這裡是因為成因仍然是活的。** pre-commit 的 `hook_impl._pre_push_ns` 只回報 stdin **第一列**可推送的 ref；⛔ **git 是照 remote ref 名稱排序餵那些列的，不是照你在命令列打的順序**：實測 `git push origin main zzz` 與 `git push origin zzz main` 產生**逐字相同**的 stdin（`main` 在前）⇒ 「把 main 寫在前面」不是保命的方法；會藏住 main 的是**排序在 `refs/heads/main` 之前**的同批分支——而 dev-rule #12 要求的 `feat/` `fix/` `chore/` 全部落在那一側。實測（未修時）：`git push origin aaa main` 印 `Guard: block direct push to main ... Passed` 且 main 真的推上去了。⇒ **修法是不再把那三支註冊為 pre-commit 的 pre-push stage**；dispatcher 自己讀 stdin，所以 `--all` / `--mirror` 這類「一次多列」的形式也一併涵蓋，不必逐一宣稱。量測釘在 `tests/ops/test_prepush_hook_wiring.py`。第三支（mkdocs strict）當時不讀 refspec、走 `@{u}...HEAD` 比對，與這個殘差無關；它自己的缺陷是 [#1690](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1690)，**已修**——它現在的 trigger 與 subject 都取自被推的 refspec，並對被推的那顆 commit 開臨時 worktree 來建站，而不是建當下的工作樹。
 
 ---
 
