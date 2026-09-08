@@ -759,7 +759,13 @@ def collect_helm_workloads(errors: list[str]) -> list[Workload]:
                 broken = True
                 continue
             tag = pin.get("tag")
-            if not isinstance(tag, str) or not _TAG_RE.match(tag):
+            # #1788: fullmatch — a `tag: |` block scalar carries a trailing
+            # newline, `$` accepts it, and the diagnosis then became "tag does
+            # not resolve" instead of "not a release tag". Asymmetry, on
+            # purpose: the one-line `image: |` pin goes through
+            # parse_image_ref, which strips, so the same author error is
+            # accepted there and rejected here. Both are fail-closed.
+            if not isinstance(tag, str) or not _TAG_RE.fullmatch(tag):
                 errors.append(f"{trail}.tag is {tag!r}, not a vX.Y.Z release tag")
                 broken = True
                 continue
