@@ -690,6 +690,18 @@ def test_helm_scalar_pin_without_a_tag_is_an_error(tmp_path, monkeypatch):
     assert any("NO `tag:` key" in e for e in errors), errors
 
 
+def test_helm_tag_with_a_trailing_newline_is_not_a_release_tag(tmp_path, monkeypatch):
+    """#1788: `tag: |` (a YAML block scalar) yields "v2.9.0\\n"; `$` accepted it
+    and the pin went on to be reported as "does not resolve". Red if the shape
+    check goes back to `.match`."""
+    _write_chart(tmp_path, values=(
+        "image:\n  repository: ghcr.io/vencil/da-tools\n  tag: |\n    v2.9.0\n"))
+    monkeypatch.setattr(gate, "REPO_ROOT", tmp_path)
+    errors: list[str] = []
+    assert gate.collect_helm_workloads(errors) == []
+    assert any("not a vX.Y.Z release tag" in e for e in errors), errors
+
+
 def test_helm_scalar_pin_with_a_digest_is_an_error(tmp_path, monkeypatch):
     _write_chart(tmp_path, values=(
         "image: ghcr.io/vencil/da-tools:v2.9.0@sha256:" + "d" * 64 + "\n"))

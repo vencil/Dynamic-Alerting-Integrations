@@ -732,7 +732,14 @@ def load_night(payload, *, night_utc, run_id):
             for side in ("reference", "main"):
                 rec = sides.get(side)
                 value = rec.get("digest") if isinstance(rec, dict) else None
-                if not isinstance(value, str) or not _SHA256_RE.match(value):
+                # #1788: fullmatch, not match — `$` still matches before one
+                # trailing newline. The sanctioned producer (hashlib hexdigest
+                # in pair_bench_ratio) cannot emit one; if a producer changes
+                # or breaks, "<64hex>\n" would pass `.match`, be stored
+                # verbatim, and compare unequal to the next night's clean
+                # digest — the manufactured transition this branch exists to
+                # prevent.
+                if not isinstance(value, str) or not _SHA256_RE.fullmatch(value):
                     # ⛔ Shape-checked, exactly as `pair_bench_ratio.py` does at
                     # its own input boundary. A digest that is not a digest still
                     # compares unequal night-to-night, i.e. it manufactures a

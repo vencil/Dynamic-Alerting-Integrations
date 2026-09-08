@@ -438,7 +438,9 @@ def test_guard_disclosure_status_outside_the_vocabulary_is_unreadable(status):
 
 
 @pytest.mark.parametrize("bad", ["not-a-hash", _SHA_A[:63], _SHA_A.upper(),
-                                 "", 123, None])
+                                 "", 123, None,
+                                 # #1788: `$` matches before one trailing newline
+                                 _SHA_A + "\n"])
 def test_guard_malformed_digest_is_unreadable_and_clears_both_sides(bad):
     """A digest that is not a digest still compares unequal night to night.
 
