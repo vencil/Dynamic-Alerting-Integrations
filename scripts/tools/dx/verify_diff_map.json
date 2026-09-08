@@ -829,7 +829,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "a85855646a32851aca865b3888c2c941e93620127f963703bdad85391cdc18e3",
+ "source_digest": "ef1c0136c5741d4e9aa39f48219d08087d38fd69171e270b88d95daeeeefc76d",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1515,6 +1515,9 @@
   ],
   "components/threshold-exporter/app/config.go": [
    "tests/lint/test_check_hardcode_tenant.py"
+  ],
+  "components/threshold-exporter/app/config_deprecation_terminal_shape_test.go": [
+   "tests/ops/test_deprecate_rule_carriers.py"
   ],
   "components/threshold-exporter/app/config_golden_parity_test.go": [
    "tests/golden/test_merge_parity.py"
@@ -3165,6 +3168,9 @@
   "tests/golden/fixtures/mixed-mode/conf.d": [
    "tests/lint/test_check_threshold_reachability.py"
   ],
+  "tests/golden/fixtures/mixed-mode/conf.d/db": [
+   "tests/ops/test_deprecate_rule_carriers.py"
+  ],
   "tests/helm": [
    "tests/dx/test_verify_diff.py",
    "tests/helm/test_optional_overrides_render.py"
@@ -3259,6 +3265,9 @@
    "tests/lint/test_e2e_spec_lint.py",
    "tests/ops/test_ci_aggregate_gate_contract.py",
    "tests/ops/test_wrapped_path_references.py"
+  ],
+  "tests/ops/test_deprecate_rule_carriers.py": [
+   "tests/ops/test_offboard_deprecate.py"
   ],
   "tests/ops/test_domain_policy.py": [
    "tests/ops/test_generate_alertmanager_routes.py"

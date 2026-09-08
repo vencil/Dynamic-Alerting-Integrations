@@ -395,7 +395,7 @@ def test_a_reference_the_writer_cannot_clear_blocks_the_completion_claim(
     assert "tenants.shared" in tail and "cpu_usage" in tail, tail
     # 三輪 F-04：這是**依設計不歸本工具**的殘留，不是寫入失敗。訊息要說
     # 「請手動移除」，不是「重掃仍有引用」——後者會把人送去查一個沒發生的 bug。
-    assert "本工具依設計不寫 `_` 前綴租戶檔，請手動移除" in tail, tail
+    assert "本工具依設計不寫任何 `_` 前綴檔的 `tenants:` 區塊，請手動移除" in tail, tail
     assert "重掃仍有引用" not in tail, tail
     # 擋住宣稱不等於撤回已做的事：載體那一半仍然被清掉了。
     assert "cpu_usage" not in (root / "_defaults.yaml").read_text(encoding="utf-8")
@@ -421,9 +421,8 @@ def _non_numeric_defaults(text: str) -> list[tuple[str, object]]:
     —— `parsePartialConfig` 因此回 ok=false，那個載體連同它的 `state_filters:`
     / `_routing_defaults:` 一起從設定裡消失。
     """
-    data = yaml.safe_load(text) or {}
-    return [(k, v) for k, v, _kind
-            in deprecate_rule.non_numeric_defaults(data.get("defaults"))]
+    return [(k, raw) for k, raw, _kind
+            in deprecate_rule.non_numeric_defaults(text)]
 
 
 def test_the_written_root_defaults_still_decodes_as_map_string_float64(tmp_path):
@@ -568,9 +567,14 @@ def test_a_non_numeric_residue_from_another_metric_withholds_the_claim(
     assert "將在下次 reload 時生效" not in r.stdout, r.stdout
     tail = r.stdout.split("下架未完成", 1)[1]
     assert "_defaults.yaml" in tail and "old_metric" in tail, tail
-    assert "str" in tail and "map[string]float64" in tail, tail
-    # 擋住宣稱不等於撤回已做的事。
-    assert "cpu_usage" not in (
+    assert "值 disable 不是 YAML 1.2 的數字" in tail, tail
+    assert "map[string]float64" in tail, tail
+    # ⚠️ 四輪 F-06 之後這裡的契約反過來了：體檢跑在寫入**之前**，unparseable
+    # 的載體本輪一個字都不寫。理由是寫回會整份 `safe_dump`，順手把鄰居的純量
+    # 重新序列化（`1:30` → `90` 是語意改變）。所以 `cpu_usage` 仍然在檔裡，
+    # 而 rc 1 的訊息會告訴 operator 先修掉殘留再重跑。
+    assert "本輪不寫入" in r.stdout, r.stdout
+    assert "cpu_usage: 80" in (
         root / "_defaults.yaml").read_text(encoding="utf-8")
     # 而本輪自己要刪的那個 key，不會被自己的體檢當成殘留。
     root2 = tmp_path / "conf.d2"
@@ -604,7 +608,7 @@ def test_preview_reaches_the_same_verdict_as_execute(tmp_path):
     tail = preview.stdout.split("下架未完成", 1)[1]
     assert "_shared.yaml" in tail, tail
     # 兩種模式**同一句**（三輪 F-04）：依設計不碰的東西，預覽與執行沒有差別。
-    assert "本工具依設計不寫 `_` 前綴租戶檔，請手動移除" in tail, tail
+    assert "本工具依設計不寫任何 `_` 前綴檔的 `tenants:` 區塊，請手動移除" in tail, tail
     # 預覽仍然什麼都不寫。
     assert {p.name: p.read_bytes() for p in root.iterdir()} == before
 
@@ -644,13 +648,17 @@ _SUBTREE_ROOT = ("defaults:\n  mysql_connections: 80\n"
 _SUBTREE_CHILD = 'defaults:\n  _state_maintenance: "disable"\n'
 
 
-def test_a_subtree_carrier_is_not_judged_by_the_root_type_rule(tmp_path):
-    """F-01：`--config-dir` 指到子樹時不跑型別體檢。
+def test_plane_subtree_skips_the_root_type_rule(tmp_path):
+    """F-02：`--plane subtree` 跳過型別體檢，而且是**顯式**的。
 
-    工具自己的 usage 就教人這樣用（子樹載體要指過去才會被處理）。二輪的體檢
-    對每個載體無條件套 root 的型別規則，於是這棵樹回 rc 1、訊息教人刪掉
-    `_state_maintenance: "disable"` ——那是一條**正在生效**的維護窗，而且沒有
-    任何重跑清得掉那個 rc 1。
+    三輪用「祖先目錄裡有沒有 defaults 載體」推導 root／子樹。那個推導兩個方向
+    都有反例：`tests/golden/fixtures/mixed-mode/conf.d/db` 是沒有祖先載體的真
+    子樹（會被判成 root ⇒ 假 rc 1），而祖先目錄放一個無關的 `_defaults.yaml`
+    就能讓真 root 被判成子樹 ⇒ **體檢靜默關閉**。真值是「這個目錄在 exporter
+    的 `-config-dir` 之下的哪一層」，工具拿不到 —— 推不出來的東西就用旗標問。
+
+    語料是 `config_subtree_reach_test.go` 的 `state-filter-disable` 那棵樹：
+    子樹載體的 `"disable"` 是**正在生效**的維護窗設定。
     """
     root = tmp_path / "conf.d"
     root.mkdir()
@@ -660,7 +668,7 @@ def test_a_subtree_carrier_is_not_judged_by_the_root_type_rule(tmp_path):
     _write(sub, "_defaults.yaml", _SUBTREE_CHILD)
     _write(sub, "t1.yaml", "tenants:\n  t1: {}\n")
 
-    r = _run(sub, "--execute")
+    r = _run(sub, "--plane", "subtree", "--execute")
 
     assert r.returncode == 0, r.stdout + r.stderr
     assert "下架未完成" not in r.stdout, r.stdout
@@ -669,10 +677,12 @@ def test_a_subtree_carrier_is_not_judged_by_the_root_type_rule(tmp_path):
     assert "disable" in (sub / "_defaults.yaml").read_text(encoding="utf-8")
 
 
-def test_the_same_shape_at_the_root_is_still_judged(tmp_path):
-    """F-01 的成對反例：同一個字串值放在 **root** 載體上仍然 rc 1。
+def test_the_default_plane_is_root_and_it_names_the_escape_hatch(tmp_path):
+    """F-02 的成對反例：**預設**（不給旗標）是 root，體檢照跑 —— fail-closed。
 
-    ⭐ 沒有這一半，「子樹跳過體檢」最便宜的實作就是把體檢整支關掉。
+    ⭐ 沒有這一半，「子樹跳過體檢」最便宜的實作就是把體檢整支關掉。而既然
+    rc 1 有可能是「你其實指到子樹了」，訊息必須把那個出口講出來，否則它就是
+    D-05e 說的「把人推向下一個縫的路標」。
     """
     root = tmp_path / "conf.d"
     root.mkdir()
@@ -684,24 +694,27 @@ def test_the_same_shape_at_the_root_is_still_judged(tmp_path):
     assert r.returncode == 1, r.stdout + r.stderr
     tail = r.stdout.split("下架未完成", 1)[1]
     assert "_state_maintenance" in tail and "map[string]float64" in tail, tail
+    assert "--plane subtree" in tail, tail
     assert "子樹載體不做型別體檢" not in r.stdout, r.stdout
 
 
-def test_the_shipped_golden_subtree_fixture_runs_clean(tmp_path):
-    """F-01：本 repo 既有的正典子樹形狀（`full-l0-l3/conf.d/db/`）必須 rc 0。
+@pytest.mark.parametrize("fixture_name", ["full-l0-l3", "mixed-mode"])
+def test_the_shipped_golden_subtrees_run_clean_under_plane_subtree(
+        tmp_path, fixture_name):
+    """F-02：既有的兩個正典子樹形狀，`--plane subtree` 下都是 rc 0。
 
-    ⭐ 這是**合成案例以外**的證人：`level: L1` / `threshold: {...}` /
-    `pages: [...]` 不是我為了通過而挑的值，是 golden fixture 一直長這樣。
-    複製到 tmp 跑，避免動到 fixture 本身。
+    ⭐ 合成案例以外的證人：`level: L1` / `threshold: {...}` / `pages: [...]`
+    不是我為了通過而挑的值，是 golden fixture 一直長這樣。`mixed-mode` 那棵
+    另外證明**祖先沒有載體的子樹也存在** —— 三輪那個推導就是死在這一格。
     """
     fixture = (Path(__file__).resolve().parents[1] / "golden" / "fixtures"
-               / "full-l0-l3" / "conf.d")
+               / fixture_name / "conf.d")
     if not (fixture / "db" / "_defaults.yaml").exists():
         pytest.skip(f"golden fixture moved: {fixture}")
     root = tmp_path / "conf.d"
     shutil.copytree(fixture, root)
 
-    r = _run(root / "db", "--execute")
+    r = _run(root / "db", "--plane", "subtree", "--execute")
 
     assert r.returncode == 0, r.stdout + r.stderr
     assert "下架未完成" not in r.stdout, r.stdout
@@ -800,3 +813,211 @@ def test_a_write_that_silently_does_nothing_is_not_masked_by_the_rescan(
     assert "下架完成！" not in out, out
     # 這一格的前提：檔案真的沒被寫。
     assert (root / "_defaults.yaml").read_bytes() == before
+
+
+# ===================================================================
+# #1787 四輪盲審 — F-04 / F-05 / F-06 / F-11
+# ===================================================================
+
+# ⛔ 跨語言 oracle 的矩陣。**同一組 case 名**也出現在
+# `components/threshold-exporter/app/config_deprecation_terminal_shape_test.go`
+# 的 `defaultsScalarOracle`，那一半把同樣的純量餵給 `parsePartialConfig`。
+# 兩邊必須同進退：這裡是 Python 的判斷，那裡是**事實**。
+# PyYAML 自己的 resolver 不能當 oracle（YAML 1.1：`yes` 是 bool、`1:30` 是 90、
+# 不認 `0o17`），這張表就是為了不讓那個差異靜默通過（rulebook D-05a）。
+DEFAULTS_SCALAR_ORACLE = {
+    # exporter 收得下的 —— `defaults:` 是 map[string]float64
+    "plain-int": ("80", None),
+    "negative-int": ("-5", None),
+    "underscored-int": ("80_000", None),
+    "octal": ("0o17", None),
+    # ⚠️ 實測 yaml.v3 也收 legacy octal `017`（＝15）。文法跟著實測走，
+    # 不是跟著規格書 —— 這一格就是這面鏡子存在的理由。
+    "legacy-octal": ("017", None),
+    "hex": ("0x10", None),
+    "float": ("1.5", None),
+    "leading-dot-float": (".5", None),
+    "exponent": ("1e3", None),
+    "infinity": (".inf", None),
+    # 整份載體被丟的
+    "word": ("disable", "unparseable"),
+    "yes": ("yes", "unparseable"),
+    "true": ("true", "unparseable"),
+    "quoted-number": ('"80"', "unparseable"),
+    "date": ("2026-01-01", "unparseable"),
+    "sexagesimal": ("1:30", "unparseable"),
+    # 武裝一條 0 閾值的
+    "empty": ("", "decodes_to_zero"),
+    "tilde": ("~", "decodes_to_zero"),
+    "null": ("null", "decodes_to_zero"),
+    "NULL": ("NULL", "decodes_to_zero"),
+}
+
+
+@pytest.mark.parametrize("case_name", sorted(DEFAULTS_SCALAR_ORACLE))
+def test_the_defaults_scalar_oracle_matches_yaml_v3(case_name):
+    """F-05：判「這段位元組 exporter 收不收」的是產線那支，且答案與 Go 一致。
+
+    ⛔ 這條**不能**用 `yaml.safe_load` 當判準：PyYAML 走 YAML 1.1，`1:30` 在
+    這一側是 int 90（看起來合格）、在 Go 那一側是字串（整份檔失敗）；而
+    `"80"` 經過 `safe_load` 之後與 `80` 再也分不出來。產線改成讀原始文字
+    （`yaml.compose` 拿 ScalarNode 的原文與引號樣式）就是為了這件事。
+    """
+    scalar, want = DEFAULTS_SCALAR_ORACLE[case_name]
+    doc = f"defaults:\n  k: {scalar}\n  neighbour: 90\n"
+
+    got = deprecate_rule.non_numeric_defaults(doc)
+
+    if want is None:
+        assert got == [], f"{case_name}: {scalar!r} 被誤判成不合格 → {got}"
+        return
+    assert len(got) == 1, f"{case_name}: {scalar!r} → {got}"
+    key, _raw, kind = got[0]
+    assert key == "k" and kind == want, f"{case_name}: {scalar!r} → {got}"
+
+
+def test_a_carrier_with_an_unreadable_value_is_not_rewritten_at_all(tmp_path):
+    """F-06：體檢跑在**寫入之前**，unparseable 的載體本輪一個字都不寫。
+
+    寫回是整份 `safe_dump`，所以它會把鄰居的純量重新序列化一次。對
+    `neighbour: 1:30` 而言那不是拼法問題而是**語意**問題：PyYAML 讀成 90，
+    寫回去就變成 `90` —— 而 exporter 本來把它讀成字串。二輪／三輪的體檢跑在
+    寫入之後，所以那次改寫已經發生了才報 rc 1。
+    """
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    body = "defaults:\n  cpu_usage: 80\n  neighbour: 1:30\n"
+    _write(root, "_defaults.yaml", body)
+
+    r = _run(root, "--execute")
+
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "本輪不寫入" in r.stdout, r.stdout
+    assert (root / "_defaults.yaml").read_text(encoding="utf-8") == body, (
+        "the carrier was rewritten despite the residue")
+    tail = r.stdout.split("下架未完成", 1)[1]
+    assert "neighbour" in tail and "1:30" in tail, tail
+
+
+def test_a_healthy_carrier_is_still_written(tmp_path):
+    """F-06 的成對反例：沒有殘留時照常寫，`--plane subtree` 也照常寫。
+
+    ⭐ 只釘「髒載體不寫」，最便宜的實作是**永遠不寫**。
+    """
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    _write(root, "_defaults.yaml", "defaults:\n  cpu_usage: 80\n  mem_usage: 90\n")
+
+    r = _run(root, "--execute")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "cpu_usage" not in (root / "_defaults.yaml").read_text(encoding="utf-8")
+
+    # 子樹平面：字串值不擋，但 key 還是要刪掉。
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    _write(sub, "_defaults.yaml",
+           'defaults:\n  cpu_usage: 80\n  _state_maintenance: "disable"\n')
+    r2 = _run(sub, "--plane", "subtree", "--execute")
+    assert r2.returncode == 0, r2.stdout + r2.stderr
+    text = (sub / "_defaults.yaml").read_text(encoding="utf-8")
+    assert "cpu_usage" not in text, text
+    assert "disable" in text, text
+
+
+def test_a_non_carrier_underscore_file_declaring_the_metric_is_not_ignored(
+        tmp_path):
+    """F-04：`_shared.yaml` 的 `optional_overrides:` 會被 exporter 併進全域。
+
+    `flat_scanner.go:335` 的 boundary rule 對 `_` 開頭的檔**不剝**
+    OptionalOverrides，所以這個宣告是活的。掃描列得出來、Step 1 依設計不寫
+    它 —— 中間那個洞讓工具印了「下架完成」rc 0，而平台仍然認得那個 key。
+    """
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    _write(root, "_defaults.yaml", "defaults:\n  cpu_usage: 80\n")
+    _write(root, "_shared.yaml", "optional_overrides:\n- cpu_usage\n")
+
+    r = _run(root, "--execute")
+
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "下架完成！" not in r.stdout, r.stdout
+    tail = r.stdout.split("下架未完成", 1)[1]
+    assert "_shared.yaml" in tail, tail
+    assert "非 defaults 載體" in tail and "需手動處理" in tail, tail
+
+
+def test_the_scan_itself_lists_the_declared_tier(tmp_path):
+    """F-11：`[optional_overrides]` 出現在 Step 1 **之前**的「發現 N 處引用」。
+
+    ⛔ 不靠移除行作證：處置看得見它，不代表 operator 讀得到它。掃描那一段是
+    他決定要不要按下 `--execute` 的依據。
+    """
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    _write(root, "_defaults.yaml",
+           "defaults:\n  mem_usage: 90\noptional_overrides:\n- cpu_usage\n")
+
+    r = _run(root)  # 預覽，什麼都還沒動
+
+    head = r.stdout.split("Step 1:", 1)[0]
+    assert "發現 1 處引用" in head, r.stdout
+    assert "[optional_overrides] cpu_usage" in head, r.stdout
+
+
+def test_a_declared_only_carrier_does_not_grow_an_empty_defaults_block(
+        tmp_path):
+    """F-11／F-10：只有宣告層的載體處置後不得長出 `defaults: {}`。
+
+    空 mapping 與空 list 對稱：清空的 `optional_overrides:` 整個拿掉，本來就
+    沒有的 `defaults:` 也不要無中生有。這是本工具「no-op 不寫、不注入」那條
+    性質的同一面。
+    """
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    _write(root, "_defaults.yaml",
+           "# hdr\noptional_overrides:\n- cpu_usage\n- oracle_process_count\n")
+
+    r = _run(root, "--execute")
+
+    assert r.returncode == 0, r.stdout + r.stderr
+    text = (root / "_defaults.yaml").read_text(encoding="utf-8")
+    assert "defaults" not in text, text
+    assert yaml.safe_load(text) == {
+        "optional_overrides": ["oracle_process_count"]}, text
+
+
+def test_files_the_tool_cannot_reach_are_named_before_the_metric_loop(tmp_path):
+    """F-07：下架後會被 tenant-api 整份拒寫的那些檔，具名印出來，一次。
+
+    root 沒有這個 metric 之後，還持有它的租戶檔會落進 `resolve.go:1383` 的
+    unknown-key blocking error，`gitops/writer.go` 把它變成**整份檔**的寫入
+    拒絕 —— 那個租戶下一次存任何設定都會失敗，而失敗訊息不會提到這次下架。
+    本工具碰不到那兩類檔（子目錄、`_` 前綴檔的 tenants 區塊），至少要說。
+    """
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    _write(root, "_defaults.yaml", "defaults:\n  cpu_usage: 80\n")
+    _write(root, "_shared.yaml", "tenants:\n  shared:\n    mem_usage: '70'\n")
+    (root / "finance").mkdir()
+    _write(root / "finance", "t1.yaml", "tenants:\n  t1:\n    cpu_usage: '70'\n")
+
+    r = _run_metrics(root, ["cpu_usage", "mem_usage"], "--execute")
+
+    warn = "tenant-api 會拒寫"
+    assert r.stdout.count(warn) == 1, r.stdout  # 一次調用一次，不是每個 metric
+    block = r.stdout.split(warn, 1)[1]
+    assert "finance/（子目錄，本工具不遞迴）" in block, block
+    assert "_shared.yaml（`_` 前綴檔的 tenants: 區塊，本工具不寫）" in block, block
+
+
+def test_a_clean_flat_tree_says_nothing_about_unreachable_files(tmp_path):
+    """F-07 的成對反例：沒有那兩類檔時不印那段（否則它就是背景雜訊）。"""
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    _write(root, "_defaults.yaml", "defaults:\n  cpu_usage: 80\n")
+    _write(root, "db-a.yaml", "tenants:\n  db-a:\n    cpu_usage: '85'\n")
+
+    r = _run(root, "--execute")
+
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "tenant-api 會拒寫" not in r.stdout, r.stdout

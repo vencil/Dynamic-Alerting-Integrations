@@ -2265,10 +2265,11 @@ docker run --rm \
 |--------|-------------|---------|
 | `--config-dir <PATH>` | Tenant config directory. ⚠️ The default points at a repo-internal path that does not exist in the image — pass it explicitly | `components/threshold-exporter/config/conf.d` |
 | `--execute` | **Actually perform the change** (default is pre-check / preview only, nothing is written) | false |
+| `--plane {root,subtree}` | Whether this `--config-dir` is the conf.d root or one subtree carrier below the exporter's `-config-dir`. `root` type-checks the values under `defaults:` (they must be YAML 1.2 numbers); `subtree` skips that check — the subtree plane decodes into `map[string]any`, where string values are legal and take effect. ⚠️ The tool cannot infer this, so the default is fail-closed | `root` |
 
 **Output**
 
-Deletes `<metric>` / `<metric>_critical` / `custom_<metric>` / `custom_<metric>_critical` from `defaults:` in _defaults.yaml and from the non-`_`-prefixed tenant files in the flat directory, naming each removed key and its old value; a carrier holding none of them is named and left untouched (files in subdirectories are neither scanned nor written — `warn_nested` names them). ⚠️ It does **not** write `disable` or `enabled: false`: `defaults:` is typed `map[string]float64`, so a string there makes the exporter drop the whole root carrier ([#1787](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1787)).
+Deletes `<metric>` / `<metric>_critical` / `custom_<metric>` / `custom_<metric>_critical` from `defaults:` and `optional_overrides:` (the declared tier — names only, no values; the key is dropped entirely once emptied) in _defaults.yaml, and from the non-`_`-prefixed tenant files in the flat directory, naming each removed key and its old value; a carrier holding none of them is named and left untouched (files in subdirectories are neither scanned nor written — `warn_nested` names them). ⚠️ It does **not** write `disable` or `enabled: false`: `defaults:` is typed `map[string]float64`, so a string there makes the exporter drop the whole root carrier ([#1787](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1787)). ⚠️ The write-back re-serialises the whole carrier: the SPELLING of other scalars in it changes (`0x10` is written back as `16`; the value does not change). If the carrier still holds a value the exporter cannot read as a number — where re-serialising could change the meaning too, e.g. `1:30` — the tool does NOT write that carrier and exits 1.
 
 **Examples**
 

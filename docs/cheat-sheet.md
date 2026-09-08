@@ -36,7 +36,7 @@ da-tools 命令速查表。完整文件見 [cli-reference.md](cli-reference.md)�
 | `migrate` | 將傳統 Prometheus 規則轉換為動態格式（AST 引擎） | -o <DIR>, --dry-run, --triage | `da-tools migrate --help` |
 | `validate-config` | 一站式配置驗證：YAML 格式、schema、routing、policy、版本一致性 | --config-dir <PATH>, --policy <FILE>, --ci | `da-tools validate-config --help` |
 | `offboard` | 下架 tenant 配置與相關資源 | --config-dir <PATH>, --backup <DIR>, --cleanup-rules | `da-tools offboard --help` |
-| `deprecate` | 下架指標：從 defaults／tenants 移除其 key | --config-dir <PATH>, --execute | `da-tools deprecate --help` |
+| `deprecate` | 下架指標：從 defaults／optional_overrides／tenants 移除其 key | --config-dir <PATH>, --execute, --plane {root,subtree} | `da-tools deprecate --help` |
 | `lint` | 檢查 Custom Rule 的治理合規性（根據 `custom_` 前綴規則） | --strict, --json-output | `da-tools lint --help` |
 | `onboard` | 分析既有 Alertmanager 或 Prometheus 配置，產出遷移提示 | --alertmanager-config <FILE>, -o <DIR> | `da-tools onboard --help` |
 | `analyze-gaps` | 比對 custom rule 與 Rule Pack，找出重複/缺口 | --tenant-config <PATH>, --output <FILE>, --json-output | `da-tools analyze-gaps --help` |

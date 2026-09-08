@@ -37,6 +37,7 @@
 import sys
 import os
 import argparse
+import re
 from pathlib import Path
 import yaml
 
@@ -118,48 +119,6 @@ def metric_pattern_keys(metric_key):
     ]
 
 
-# 往上探幾層祖先才停。有界，因為這是一個**推導**而不是一次遍歷: 一個
-# conf.d 的巢狀深度是個位數（`config_hierarchy.go` 的樹也是），而無界上探
-# 會把「掛載點以外的檔案系統」變成本工具判斷的輸入。
-_ROOT_PROBE_ANCESTORS = 8
-
-
-def is_root_config_dir(config_dir):
-    """`--config-dir` 指的是 conf.d 的 root，還是它底下的一層子樹？
-
-    #1787 三輪 (F-01)。這個問題有兩個獨立的答法，取可推導的那個: **祖先目錄
-    裡有沒有 defaults 載體**。有 ⇒ 我在別人的樹底下 ⇒ 我是子樹；一路到頂都
-    沒有 ⇒ 我是 root。判定「那是不是一個載體」沿用 `is_defaults_name`
-    （`_lib_confd`），與本工具其他每一處同一份述詞。
-
-    為什麼要問: `defaults:` 底下的字串**只在 root／平面載體**上是致命的
-    （見 `non_numeric_defaults`）。子樹載體走 `computeEffectiveConfig` 的
-    `map[string]any`，字串在那裡合法且生效 ——
-    `config_subtree_reach_test.go` 的 `state-filter-disable` 就餵子樹
-    `_state_maintenance: "disable"` 並斷言它把維護窗關掉。對子樹套 root 的
-    型別體檢，會把一條**正在生效的設定**判成 rc 1，而且訊息會教人刪掉它；
-    那個 rc 1 也沒有任何重跑清得掉。實測: 本 repo 既有的
-    `tests/golden/fixtures/full-l0-l3/conf.d/db/` 就是這個形狀。
-
-    ⚠️ 祖先讀不到（權限／掛載）時回 `True`（＝當作 root，體檢照跑）。方向是
-    刻意的: 這一格的兩種錯法不對稱 —— 誤判成子樹會**靜默關掉**一道守衛，
-    誤判成 root 只會多一則具名、可讀、指得出檔名的 rc 1。
-    """
-    base = Path(config_dir).resolve()
-    parent = base.parent
-    for _ in range(_ROOT_PROBE_ANCESTORS):
-        try:
-            if any(is_defaults_name(e.name)
-                   for e in parent.iterdir() if e.is_file()):
-                return False
-        except OSError:
-            return True
-        if parent == parent.parent:  # 檔案系統根
-            break
-        parent = parent.parent
-    return True
-
-
 def tenant_key_belongs_to_metric(key, metric_key):
     """租戶平面上「這個 key 是不是這個 metric 的」—— 掃描／移除／重掃同一份述詞。
 
@@ -193,39 +152,96 @@ def tenant_key_belongs_to_metric(key, metric_key):
 UNPARSEABLE = "unparseable"      # 整份載體被丟
 DECODES_TO_ZERO = "decodes_to_zero"  # 這一個 key 變成 0 閾值
 
+# YAML 1.2 core schema 的數值文法，逐字寫出來 —— 這是一個**跨語言 oracle**，
+# 所以不能借 PyYAML 的 resolver（#1787 四輪 F-05，rulebook D-05a:「你的 parser
+# 與它的 parser 對同一段位元組可能給出不同的型別，而兩邊都不報錯」）。實測的
+# 分歧: PyYAML 走 YAML 1.1，把 `yes` 解成 bool、`1:30` 解成六十進位 int 90、
+# 而不認得 `0o17`；Go 的 yaml.v3 走 core schema，`1:30`／`yes` 兩個都是
+# **字串**（餵進 `map[string]float64` 會讓整份檔解析失敗），`0o17` 是 15。
+# ⚠️ `0o` 是**選擇性**的: 實測 yaml.v3 也把 `017` 收成 15（legacy octal），
+# 所以文法要跟著它，不是跟著規格書。那一格就是這面鏡子存在的理由。
+# 兩邊的矩陣，case 名相同:
+#   tests/ops/test_deprecate_rule_carriers.py 的 `DEFAULTS_SCALAR_ORACLE`
+#   components/threshold-exporter/app/config_deprecation_terminal_shape_test.go
+#   的 `defaultsScalarOracle`
+_YAML12_INT = re.compile(
+    r"^[-+]?(0|[1-9][0-9_]*)$|^[-+]?0o?[0-7_]+$|^0x[0-9a-fA-F_]+$")
+_YAML12_FLOAT = re.compile(
+    r"^[-+]?(\.[0-9_]+|[0-9][0-9_]*(\.[0-9_]*)?)([eE][-+]?[0-9]+)?$"
+    r"|^[-+]?\.(inf|Inf|INF)$|^\.(nan|NaN|NAN)$")
+_YAML12_NULL = ("", "~", "null", "Null", "NULL")
 
-def non_numeric_defaults(defaults):
-    """root `defaults:` 底下每一個 exporter 讀不成門檻的 `(key, value, kind)`。
+
+def non_numeric_defaults(carrier_text):
+    """root `defaults:` 底下每一個 exporter 讀不成門檻的 `(key, 原文, kind)`。
+
+    輸入是載體的**原始 YAML 文字**，不是解析後的 mapping (#1787 四輪 F-05)。
+    理由是 oracle: 要判的是「yaml.v3 能不能把這段**位元組**收進
+    `map[string]float64`」，而 `yaml.safe_load` 先用 PyYAML 的 YAML 1.1
+    resolver 把它變成 Python 物件之後，那個問題已經被答錯了 ——
+    `cpu_usage: 1:30` 在 Python 這邊是 int 90（看起來合格），在 Go 那邊是字串
+    （整份檔失敗）；`cpu_usage: "80"` 兩邊都是字串，但 `safe_load` 之後與
+    `80` 不再分得出來。所以這裡走 `yaml.compose`，拿到 ScalarNode 的原文與
+    引號樣式，再套上面那兩條**自己寫的** core-schema 文法。
 
     `ThresholdConfig.Defaults` 是 `map[string]float64`
-    (`components/threshold-exporter/app/pkg/config/types.go:208`)，而它有
-    **兩種**壞法，實測分開（#1787 三輪 F-03；二輪只寫了第一種，並把第二種也
-    掛在第一種的理由下，那句話是假的）:
+    (`components/threshold-exporter/app/pkg/config/types.go:208`)，它有兩種
+    壞法，實測分開（三輪 F-03；二輪只寫了第一種，並把第二種也掛在第一種的
+    理由下，那句話是假的）:
 
-    * `UNPARSEABLE` —— 字串／bool／mapping／list。`yaml.Unmarshal` 對整個
-      document 回錯，`parsePartialConfig` 回 ok=false，被丟掉的是**整份載體**
-      （這份檔的其餘門檻連同它的 `state_filters:`／`_routing_defaults:`）。
-      舊版工具留下的 `old_metric: disable` 是這一類。
-    * `DECODES_TO_ZERO` —— `key:`（空值／`null`）。實測 ok=**true**，解成
-      `0`。檔案好好的，但那個 key 變成一條**0 閾值**，對每個租戶都成立 ——
-      等於武裝一條永遠觸發的告警。這不是「沒有這個 key」。
+    * `UNPARSEABLE` —— 引號字串／`yes`／`1:30`／日期／mapping／list。
+      `yaml.Unmarshal` 對整個 document 回錯，`parsePartialConfig` 回
+      ok=false，被丟掉的是**整份載體**（這份檔的其餘門檻連同它的
+      `state_filters:`／`_routing_defaults:`）。舊版工具留下的
+      `old_metric: disable` 是這一類。
+    * `DECODES_TO_ZERO` —— 空值／`null`／`~`。實測 ok=**true**，解成 `0`。
+      檔案好好的，但那個 key 變成一條 **0 閾值**，對每個租戶都成立 —— 等於
+      武裝一條永遠觸發的告警。這不是「沒有這個 key」。
 
-    ⚠️ `bool` 在 Python 是 `int` 的子類別，明確排除: `cpu_usage: yes` 被 YAML
-    解成 `True`，在 Go 那邊同樣不是 float64。
-
-    ⛔ 只對 **root／平面**載體有意義。子樹載體走 `computeEffectiveConfig` 的
-    `map[string]any`，字串在那裡合法且生效 —— 呼叫端要先問
-    `is_root_config_dir`。
+    ⛔ 只對 **root／平面**載體有意義，呼叫端用 `--plane` 決定（四輪 F-02）。
+    子樹載體走 `computeEffectiveConfig` 的 `map[string]any`，字串在那裡合法
+    且生效。
     """
-    if not isinstance(defaults, dict):
+    try:
+        root = yaml.compose(carrier_text)
+    except yaml.YAMLError:
+        return []          # 壞檔：Step 1 的 `無法讀取` 已經具名
+    if not isinstance(root, yaml.MappingNode):
         return []
     out = []
-    for k, v in defaults.items():
-        if v is None:
-            out.append((k, v, DECODES_TO_ZERO))
-        elif isinstance(v, bool) or not isinstance(v, (int, float)):
-            out.append((k, v, UNPARSEABLE))
+    for k_node, v_node in root.value:
+        if getattr(k_node, "value", None) != "defaults":
+            continue
+        if not isinstance(v_node, yaml.MappingNode):
+            return []      # 空 block／非 mapping：各自已有具名路徑
+        for key_node, val_node in v_node.value:
+            key = key_node.value
+            if not isinstance(val_node, yaml.ScalarNode):
+                kind_of = ("mapping" if isinstance(val_node, yaml.MappingNode)
+                           else "list")
+                out.append((key, f"<{kind_of}>", UNPARSEABLE))
+                continue
+            raw = val_node.value
+            if val_node.style in ('"', "'"):
+                # 引號＝明確的 `!!str`。yaml.v3 不會把它強制成 float64。
+                out.append((key, f"{val_node.style}{raw}{val_node.style}",
+                            UNPARSEABLE))
+            elif raw in _YAML12_NULL:
+                out.append((key, raw or "(空)", DECODES_TO_ZERO))
+            elif _YAML12_INT.match(raw) or _YAML12_FLOAT.match(raw):
+                continue
+            else:
+                out.append((key, raw, UNPARSEABLE))
     return out
+
+
+def carrier_defaults_health(path):
+    """讀一個載體檔，回傳 `non_numeric_defaults` 的結果（讀不到就空）。"""
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            return non_numeric_defaults(fh.read())
+    except OSError:
+        return []
 
 
 def unclearable_occurrences(metric_key, findings, *, predict):
@@ -248,10 +264,17 @@ def unclearable_occurrences(metric_key, findings, *, predict):
 
     回傳的第五格 `designed` 把殘留分成兩種**不同的話**（#1787 三輪 F-04）:
 
-    * `designed=True` —— 本工具依設計不碰的東西（`_` 前綴租戶檔的
-      `tenants:` 區塊，`remove_from_tenants` 明文跳過）。它需要的是一句
-      「請手動移除」，不是「重掃仍有引用」——後者讀起來像寫入失敗，會把人
-      送去查一個沒發生的 bug。
+    * `designed=True` —— 本工具依設計不碰的東西: **任何** `_` 前綴檔的
+      `tenants:` 區塊（`remove_from_tenants` 明文跳過所有 `_` 開頭檔名）。
+      它需要的是一句「請手動移除」，不是「重掃仍有引用」——後者讀起來像寫入
+      失敗，會把人送去查一個沒發生的 bug。
+
+    ⚠️ **`defaults:`／`optional_overrides:` 這兩個 section 的同一條規則寫在
+    `main`**（`with_defaults` 那一段）: 非載體檔的那兩個 section 被本函式跳過
+    之後，由 main 決定它是「`_` 前綴 ⇒ exporter 會併進全域 ⇒ incomplete 具名」
+    還是「租戶檔 ⇒ exporter 會丟棄 ⇒ 只警告」。四輪 F-04 的洞就長在這兩半
+    中間: 本函式跳過了 `optional_overrides`，而 main 那一半當時只看
+    `defaults`，於是它兩邊都沒人管。改動任一半都要看另一半。
     * `designed=False` —— Step 1／2 應該清掉、卻還在的東西。這才是「寫入
       沒有發生」。
     """
@@ -404,7 +427,8 @@ def remove_from_defaults(metric_key, config_dir, execute=False, *,
     return ok, msg
 
 
-def remove_from_all_defaults(metric_key, config_dir, execute=False):
+def remove_from_all_defaults(metric_key, config_dir, execute=False, *,
+                            blocked=frozenset()):
     """對每個 defaults 載體執行 `_remove_in_carrier`。
 
     Returns one `(path, ok, msg, removed)` per carrier from
@@ -412,19 +436,12 @@ def remove_from_all_defaults(metric_key, config_dir, execute=False):
     canonical `resolve_defaults_file` entry (`_defaults.yaml 不存在`), so a
     tree without defaults reports exactly what it did before #1609.
 
-    ⛔ root 與子樹的 defaults 載體都是「刪 key」，不是「寫 disable」(#1787)。
-    兩個平面的**理由不同**，不要拿其中一個解釋另一個:
-
-    * root／平面載體的理由是型別 —— 細節與實測在 `non_numeric_defaults`。
-    * 子樹與租戶的理由是 root 已經沒有這個 metric 之後，還持有它的那一層會
-      落進 `resolve.go:1383` 的 `unknown key %q not in defaults`（只留
-      `<m>_critical` 時是 `resolve.go:1298` 的 dangling `_critical`）。這條走
-      `KeyValidation.Errors` 這個 blocking channel，tenant-api 的
-      `gitops/writer.go` 把它變成寫入拒絕 —— 下架會表現成「那個租戶從此改不
-      了設定」。
-    * 而 `disable` 本來就是**租戶 opt-out**：宣告不要一個平台仍在供應的指標。
-      下架之後平台不再供應它，沒有東西可以 opt out。這也是 ADR-017 的平面
-      分界：`defaults:` 說「平台供應什麼」，opt-out 住在租戶平面。
+    ⛔ root 與子樹的 defaults 載體都是「刪 key」，不是「寫 disable」(#1787)，
+    但兩個平面的理由不同 —— root／平面是型別（見 `non_numeric_defaults`），
+    子樹與租戶是 `resolve.go` 的 unknown-key blocking error（下架後仍持有該
+    key 的那一層會被 tenant-api 的 `gitops/writer.go` 整份拒寫；main 在
+    Step 1 之後把這件事印給 operator 看）。而 `disable` 本來就是租戶
+    opt-out，不是下架 —— 這也是 ADR-017 的平面分界。
 
     ⚠️ 本函式與整支工具一樣是**平面**讀取（只看 `config_dir` 這一層）。子樹
     載體要用 `--config-dir` 指到那一層才會被處理；`warn_nested` 會把這一層看
@@ -434,7 +451,11 @@ def remove_from_all_defaults(metric_key, config_dir, execute=False):
     carriers = defaults_carriers(base)
     if not carriers:
         carriers = [resolve_defaults_file(base)]
-    return [(p, *_remove_in_carrier(metric_key, p, execute))
+    # #1787 四輪 F-06: `blocked` 的載體本輪只預覽、不寫。寫回是整份
+    # `safe_dump`，所以碰一個帶 `1:30`（yaml.v3 讀成字串、PyYAML 讀成 90）的
+    # 檔會把鄰居的**語意**改掉。那種檔要先讓人修，不是順手重新序列化。
+    return [(p, *_remove_in_carrier(metric_key, p,
+                                    execute and p.name not in blocked))
             for p in carriers]
 
 
@@ -498,7 +519,10 @@ def _remove_in_carrier(metric_key, defaults_path, execute=False):
     for where, pk, _val in removed:
         if where == "defaults":
             del defaults[pk]
-    data["defaults"] = defaults
+    # #1787 四輪 F-10: 只有 `optional_overrides:` 命中的載體本來就沒有
+    # `defaults:`，別給它長一個空的出來 —— 與下面清空的 list 整個拿掉對稱。
+    if defaults or "defaults" in data:
+        data["defaults"] = defaults
     if declared_hit:
         kept = [k for k in declared if k not in declared_hit]
         # 清空的 list 整個拿掉，而不是留一個 `optional_overrides: []`——
@@ -592,6 +616,10 @@ def main():
                         help="conf.d 目錄路徑")
     parser.add_argument("--execute", action="store_true",
                         help="實際執行下架 (預設只預覽)")
+    parser.add_argument("--plane", choices=("root", "subtree"), default="root",
+                        help="這個 --config-dir 是 conf.d 的 root（預設）還是"
+                             "一層子樹載體。root 會對 defaults 的值做型別"
+                             "體檢；subtree 跳過（子樹平面的字串值合法）")
 
     args = parser.parse_args()
 
@@ -633,10 +661,63 @@ def main():
         print(f"  ⚠️  略過 {safe_label(bad.name)}——{unusable_reason(bad)}",
               file=sys.stderr)
 
+    # #1787 四輪 F-07: 本工具的租戶清理射程是「平面目錄下非 `_` 前綴的檔」
+    # (`remove_from_tenants`)。射程外**而且可能持有租戶 key** 的載體有兩類，
+    # 在這裡列一次（`_entries` 是同一次列舉，不另外走一趟目錄）。
+    _bad_names = {b.name for b in unusable_config_entries(_entries)}
+    _unreachable = []
+    for _e in _entries:
+        if _e.name in _bad_names:
+            continue  # 上面已經按名字報過，不要說兩次
+        if _e.is_dir():
+            _unreachable.append(f"{_e.name}/（子目錄，本工具不遞迴）")
+        elif (_e.is_file() and has_yaml_extension(_e.name)
+              and _e.name.startswith("_") and not is_defaults_name(_e.name)):
+            _d = load_yaml_file(str(_e))
+            if isinstance(_d, dict) and _d.get("tenants"):
+                _unreachable.append(
+                    f"{_e.name}（`_` 前綴檔的 tenants: 區塊，本工具不寫）")
+    # ⛔ 印在 per-metric 迴圈**之前**、一次。與 #1607 對 `unusable_config_entries`
+    # 的處置同一條理由: 這是目錄的性質，不是某個 metric 的性質，而
+    # `deprecate_rule a b c` 會把迴圈內的每一行印三次。
+    if _unreachable:
+        print("\n  ⚠️  下架後，這些本工具不寫入的檔若仍持有該 metric 的 key，"
+              "tenant-api 會拒寫**整份檔**"
+              "（resolve.go:1383 unknown key → gitops/writer.go）：")
+        for _label in _unreachable:
+            print(f"     • {safe_label(_label)}")
+
     # #1609: (metric, carrier, reason) for every defaults carrier the scan
     # listed but Step 1 did not write, plus every carrier Step 1 itself
     # reported as failed. Non-empty ⇒ the tool must NOT say 下架完成.
     incomplete = []
+    # #1787 四輪 F-06: 載體體檢跑在**任何寫入之前**。寫回是整份
+    # `safe_dump`，所以一個 `1:30`（yaml.v3 讀成字串、PyYAML 讀成 90）的鄰居
+    # 值會在「順手重新序列化」中被改掉語意 —— 那必須先擋下來，不是事後才報。
+    #
+    # ⛔ 只在 `--plane root` 跑（四輪 F-02，PM 拍板）。這個問題的真值是「這個
+    # 目錄在 exporter 的 `-config-dir` **之下的哪一層**」，而本工具拿不到那個
+    # 事實 —— 三輪用祖先目錄推導，兩個方向都有反例:
+    # `tests/golden/fixtures/mixed-mode/conf.d/db` 是沒有祖先載體的真子樹
+    # （會被判成 root ⇒ 假 rc 1），而祖先放一個無關的 `_defaults.yaml` 或一條
+    # symlink 就能讓真 root 被判成子樹 ⇒ **體檢靜默關閉**。推不出來的東西就
+    # 用旗標問，預設 fail-closed（root，體檢照跑）。
+    carrier_health = {}
+    blocked_carriers = set()
+    if args.plane == "root":
+        _planned = {k for m in args.metrics for k in metric_pattern_keys(m)}
+        for carrier in defaults_carriers(Path(args.config_dir)):
+            residue = [(k, raw, kind)
+                       for k, raw, kind in carrier_defaults_health(carrier)
+                       if k not in _planned]
+            if residue:
+                carrier_health[carrier.name] = residue
+                if any(kind == UNPARSEABLE for _, _, kind in residue):
+                    blocked_carriers.add(carrier.name)
+    elif defaults_carriers(Path(args.config_dir)):
+        print("  ℹ️  子樹載體不做型別體檢：子樹平面的字串值合法"
+              "（`computeEffectiveConfig` 走 map[string]any），"
+              "root 的 map[string]float64 規則不適用於這一層。")
     # #1787 二輪 F-01/F-03: the completeness verdict is taken ONCE, after the
     # loop. What actually needs that position is the CARRIER HEALTH CHECK: it
     # is invocation-wide, so inside the loop `deprecate a b` would judge the
@@ -675,11 +756,16 @@ def main():
         # not the one `resolve_defaults_file` picks — the scan above lists
         # every carrier and the exporter reads every carrier).
         results = remove_from_all_defaults(metric, args.config_dir,
-                                           execute=args.execute)
+                                           execute=args.execute,
+                                           blocked=blocked_carriers)
         for carrier, ok, msg, removed in results:
             print(f"\n  Step 1: {safe_label(carrier.name)}")
             icon = "✅" if ok else "❌"
             print(f"  {icon} {safe_label(msg)}")
+            if args.execute and carrier.name in blocked_carriers:
+                print(f"  ⛔ 本輪不寫入 {safe_label(carrier.name)}："
+                      f"載體還有 exporter 讀不成數字的值，整份重新序列化會連"
+                      f"帶改掉它們的拼法甚至語意（見結尾的載體體檢）")
             # 逐 key 具名 (#1787): 「移除 2 個 key」不告訴 operator 是哪兩個，
             # 而 `<m>` 與 `<m>_critical` 的下場是他唯一需要複查的東西。
             action = "已移除" if args.execute else "將移除"
@@ -695,8 +781,13 @@ def main():
         # `found` is what the scan ITSELF reported as a defaults carrier —
         # the same output the operator just read — so a carrier the scan
         # named and Step 1 skipped is named again here, with its reason.
+        # #1787 四輪 F-04: `optional_overrides` 與 `defaults` 一起算。
+        # `flat_scanner.go:335` 的 boundary rule 對 `_` 開頭的檔**不剝**
+        # OptionalOverrides，所以一個 `_shared.yaml` 的宣告層會被併進全域 ——
+        # 掃描列得出來、Step 1 依設計不寫它，中間那個洞讓它印了「下架完成」。
         with_defaults = {f["filename"] for f in findings
-                         if any(sec == "defaults" for sec, _, _ in f["occurrences"])}
+                         if any(sec in ("defaults", "optional_overrides")
+                                for sec, _, _ in f["occurrences"])}
         # Only the exact-name carriers are the writer's; the rest follow the
         # exporter's own boundary rule (flat_scanner.go applyBoundaryRules):
         # a root-level `_`-prefixed file's `defaults:` IS merged into the
@@ -718,7 +809,8 @@ def main():
             if name.startswith("_"):
                 incomplete.append((metric, name,
                                    "非 defaults 載體，本工具不寫入；exporter 會把 root 層任何 `_` 開頭檔的 "
-                                   "defaults 併進全域（flat／hierarchical 皆然），需手動處理"))
+                                   "defaults／optional_overrides 併進全域"
+                                   "（flat／hierarchical 皆然），需手動處理"))
             else:
                 print(f"  ⚠️  {safe_label(name)} 的 defaults 區塊 exporter 會丟棄"
                       f"（只認 _defaults.yaml／.yml），本工具不寫入")
@@ -768,50 +860,31 @@ def main():
                 # bug；比照 `_` 前綴非載體那條，講的是「需手動處理」。
                 incomplete.append((
                     metric, name,
-                    f"本工具依設計不寫 `_` 前綴租戶檔，請手動移除："
+                    f"本工具依設計不寫任何 `_` 前綴檔的 `tenants:` 區塊，"
+                    f"請手動移除："
                     f"[{section}] {key}: {val}"))
             else:
                 incomplete.append((metric, name,
                                    f"{label}：[{section}] {key}: {val}"))
 
-    # #1787 二輪 F-02: 載體體檢。下架的 key 走了，不代表這份載體讀得進去 ——
-    # 舊版工具留下的 `old_metric: disable` 是**別的 metric** 的殘留，本輪的
-    # 掃描根本不會看它一眼，而 exporter 會因為它把整份載體丟掉。所以
-    # 「下架完成！threshold-exporter 將在下次 reload 時生效」在那棵樹上是假話。
-    # 判定用的是產線的 `non_numeric_defaults`，測試呼叫的也是這一份。
-    #
-    # ⛔ 只對 **root** 跑（三輪 F-01）。子樹載體的字串值是合法且生效的設定
-    # （`computeEffectiveConfig` 的 `map[string]any`），對它套 root 的型別
-    # 規則會把一條正在生效的維護窗判成 rc 1，訊息還會教人刪掉它——而且沒有
-    # 任何重跑清得掉。「這是不是 root」用 `is_root_config_dir` 推導。
-    if is_root_config_dir(args.config_dir):
-        for carrier in defaults_carriers(Path(args.config_dir)):
-            data = load_yaml_file(str(carrier))
-            if data is None:
-                continue  # 讀不進來：Step 1 已具名
-            defaults = data.get("defaults")
-            if not isinstance(defaults, dict):
-                continue  # 空 block／非 mapping：各自已有具名路徑
-            gone = planned_removals.get(carrier.name, set())
-            for key, val, kind in non_numeric_defaults(defaults):
-                if key in gone:
-                    continue  # 本輪正要刪掉它（預覽模式下檔案還沒動）
-                if kind == DECODES_TO_ZERO:
-                    reason = (f"`defaults:` 的 {key} 是空值（`{key}:`）——"
-                              f"exporter 會把它解成 0，每個租戶因此多一條 0 "
-                              f"閾值（等於永遠觸發），不是「沒有這個 key」；"
-                              f"請刪掉這一行或補一個數字")
-                else:
-                    reason = (f"`defaults:` 的 {key} 是 "
-                              f"{type(val).__name__}（值: {val}），不是數字"
-                              f"——exporter 的 defaults 型別是 "
-                              f"map[string]float64，這份載體會被整份丟棄，"
-                              f"下架不會生效；請先修掉它")
-                incomplete.append(("載體體檢", carrier.name, reason))
-    elif defaults_carriers(Path(args.config_dir)):
-        print("\n  ℹ️  子樹載體不做型別體檢：子樹平面的字串值合法"
-              "（`computeEffectiveConfig` 走 map[string]any），"
-              "root 的 map[string]float64 規則不適用於這一層。")
+    # #1787 二輪 F-02 / 四輪 F-06: 載體體檢的**結果**在這裡變成判定。體檢本身
+    # 已經在任何寫入之前跑完（`carrier_health`），這裡只是把它接到同一個
+    # incomplete 出口，讓「下架完成」不會蓋在一份 exporter 讀不進去的載體上。
+    for carrier_name, residue in carrier_health.items():
+        for key, raw, kind in residue:
+            if kind == DECODES_TO_ZERO:
+                reason = (f"`defaults:` 的 {key} 是空值（`{key}:`）——"
+                          f"exporter 會把它解成 0，每個租戶因此多一條 0 閾值"
+                          f"（等於永遠觸發），不是「沒有這個 key」；請刪掉這"
+                          f"一行或補一個數字")
+            else:
+                reason = (f"`defaults:` 的 {key} 的值 {raw} 不是 YAML 1.2 的"
+                          f"數字——exporter 的 defaults 型別是 "
+                          f"map[string]float64，這份載體會被整份丟棄，下架不"
+                          f"會生效；請先修掉它")
+            reason += ("。若這個 --config-dir 其實是子樹載體（exporter 的 "
+                       "-config-dir 之下的目錄），請加 `--plane subtree`")
+            incomplete.append(("載體體檢", carrier_name, reason))
 
     # 總結
     print(f"\n{'='*60}")

@@ -2049,10 +2049,11 @@ da-tools deprecate <metric_keys...> [options]
 |------|------|--------|
 | `--config-dir <PATH>` | 租戶配置目錄。⚠️ 預設指向 repo 內部路徑，映像裡不存在——請明確指定 | `components/threshold-exporter/config/conf.d` |
 | `--execute` | **實際執行**（預設只做 Pre-check／預覽，不寫入） | false |
+| `--plane {root,subtree}` | 這個 `--config-dir` 是 conf.d 的 root，還是 exporter `-config-dir` 之下的一層子樹載體。`root` 會對 `defaults:` 的值做型別體檢（值必須是 YAML 1.2 的數字）；`subtree` 跳過體檢——子樹平面走 `map[string]any`，字串值在那裡合法且生效。⚠️ 工具無法自己判斷，預設 fail-closed | `root` |
 
 **輸出**
 
-從 _defaults.yaml 的 `defaults:`，以及平面目錄下非 `_` 前綴的租戶檔中刪除 `<metric>`／`<metric>_critical`／`custom_<metric>`／`custom_<metric>_critical`，並逐 key 印出原值；載體沒有相關 key 時具名略過、不寫入（子目錄裡的檔本工具不掃也不寫，由 `warn_nested` 具名）。⚠️ **不是**把值寫成 `disable` 或 `enabled: false`：`defaults:` 的值型別是 `map[string]float64`，字串會讓 exporter 丟掉整份 root 載體（[#1787](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1787)）。
+從 _defaults.yaml 的 `defaults:` 與 `optional_overrides:`（宣告層——只有名字沒有值；清空後整個 key 拿掉），以及平面目錄下非 `_` 前綴的租戶檔中刪除 `<metric>`／`<metric>_critical`／`custom_<metric>`／`custom_<metric>_critical`，並逐 key 印出原值；載體沒有相關 key 時具名略過、不寫入（子目錄裡的檔本工具不掃也不寫，由 `warn_nested` 具名）。⚠️ **不是**把值寫成 `disable` 或 `enabled: false`：`defaults:` 的值型別是 `map[string]float64`，字串會讓 exporter 丟掉整份 root 載體（[#1787](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1787)）。⚠️ 寫回是整份重新序列化：同一份載體裡其他純量的**拼法**會跟著改（例如 `0x10` 寫成 `16`，值不變）。若載體還有 exporter 讀不成數字的值（重新序列化可能連語意一起改，例如 `1:30`），本工具**不寫入**該載體並回 rc 1。
 
 **範例**
 

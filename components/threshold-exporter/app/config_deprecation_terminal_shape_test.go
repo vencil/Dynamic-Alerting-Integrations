@@ -33,6 +33,7 @@ package main
 import (
 	"bytes"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -237,6 +238,87 @@ func TestDeprecatedMetricTerminalShape_WholeTreeReload(t *testing.T) {
 			if n := len(cfg.ResolveStateFilters()); n != a.wantStateFilters {
 				t.Errorf("state_filters resolved = %d, want %d",
 					n, a.wantStateFilters)
+			}
+		})
+	}
+}
+
+// defaultsScalarOracle is the FACT half of a cross-language oracle (#1787
+// round 4). Its case names and scalars are mirrored verbatim in
+// `tests/ops/test_deprecate_rule_carriers.py` as `DEFAULTS_SCALAR_ORACLE`,
+// where `deprecate_rule.non_numeric_defaults` has to reach the same verdict
+// from the raw YAML text alone.
+//
+// ⛔ The Python side cannot use its own parser as the oracle: PyYAML
+// implements YAML 1.1, so `yes` decodes to a bool, `1:30` to the
+// sexagesimal int 90, and `0o17` is not octal at all — three verdicts that
+// disagree with what this test measures. It therefore reimplements the core
+// schema's number grammar, and this table is what keeps that reimplementation
+// honest. When a row here changes, the Python table changes with it.
+//
+// `want` is what `parsePartialConfig` does with `defaults: {k: <scalar>}`:
+// ok=true and a value, or ok=false (the whole carrier is dropped).
+var defaultsScalarOracle = map[string]struct {
+	scalar string
+	wantOK bool
+	want   float64 // only read when wantOK
+}{
+	"plain-int":         {"80", true, 80},
+	"negative-int":      {"-5", true, -5},
+	"underscored-int":   {"80_000", true, 80000},
+	"octal":             {"0o17", true, 15},
+	"legacy-octal":      {"017", true, 15},
+	"hex":               {"0x10", true, 16},
+	"float":             {"1.5", true, 1.5},
+	"leading-dot-float": {".5", true, 0.5},
+	"exponent":          {"1e3", true, 1000},
+	"infinity":          {".inf", true, math.Inf(1)},
+	"word":              {"disable", false, 0},
+	"yes":               {"yes", false, 0},
+	"true":              {"true", false, 0},
+	"quoted-number":     {`"80"`, false, 0},
+	"date":              {"2026-01-01", false, 0},
+	"sexagesimal":       {"1:30", false, 0},
+	// ⚠️ The empty/null family parses FINE and lands on 0 — a carrier that
+	// keeps one is not dropped, it arms a zero threshold for every tenant.
+	// That is a different failure from the rows above, and the Python side
+	// reports it with a different message (`decodes_to_zero`).
+	"empty": {"", true, 0},
+	"tilde": {"~", true, 0},
+	"null":  {"null", true, 0},
+	"NULL":  {"NULL", true, 0},
+}
+
+func TestDefaultsScalarOracle(t *testing.T) {
+	for name, tc := range defaultsScalarOracle {
+		name, tc := name, tc
+		t.Run(name, func(t *testing.T) {
+			doc := "defaults:\n  k: " + tc.scalar + "\n  neighbour: 90\n"
+			var logBuf bytes.Buffer
+			cfg, ok := parsePartialConfig(
+				"_defaults.yaml", "/conf.d/_defaults.yaml", []byte(doc),
+				newConfigMetrics(), log.New(&logBuf, "", 0))
+
+			if ok != tc.wantOK {
+				t.Fatalf("scalar %q: ok = %v, want %v (log: %s)",
+					tc.scalar, ok, tc.wantOK, logBuf.String())
+			}
+			if !tc.wantOK {
+				// The whole carrier is gone, so the neighbour goes too. That
+				// is the blast radius the Python side has to predict.
+				return
+			}
+			got, present := cfg.Defaults["k"]
+			if !present {
+				t.Fatalf("scalar %q parsed but produced no key: %v",
+					tc.scalar, cfg.Defaults)
+			}
+			if got != tc.want && !(math.IsInf(tc.want, 1) && math.IsInf(got, 1)) {
+				t.Errorf("scalar %q = %v, want %v", tc.scalar, got, tc.want)
+			}
+			if cfg.Defaults["neighbour"] != 90 {
+				t.Errorf("scalar %q took its neighbour with it: %v",
+					tc.scalar, cfg.Defaults)
 			}
 		})
 	}
