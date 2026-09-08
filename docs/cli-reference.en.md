@@ -169,7 +169,7 @@ These tools operate on local YAML files and don't require network.
 | `deprecate` | Mark metrics as disabled | `<metric_keys...>` |
 | `lint` | Check Custom Rule governance compliance | `<path...>` |
 | `onboard` | Analyze existing Alertmanager/Prometheus config for migration | `<config_file>` or `--alertmanager-config <file>` |
-| `analyze-gaps` | Compare custom rules with Rule Pack coverage | `--config <path>` |
+| `analyze-gaps` | Compare custom rules with Rule Pack coverage | `--tenant-config <path>` |
 | `config-diff` | Directory-level config diff (GitOps PR review) | `--old-dir <dir> --new-dir <dir>` |
 | `evaluate-policy` | Policy-as-Code DSL evaluation engine | `--config-dir <dir>` |
 | `opa-evaluate` | OPA Rego policy evaluation bridge (OPA integration) | `--config-dir <dir>` |
@@ -237,7 +237,8 @@ da-tools check-alert MariaDBHighConnections db-a
 | Code | Description |
 |------|-------------|
 | `0` | Success (any state) |
-| `1` | Prometheus connection failed |
+| `1` | Only an uncaught exception (traceback) returns 1 — the command has no violation exit (inactive / pending / firing are all 0) |
+| `2` | Caller error: Prometheus API unreachable or errored (stdout carries an `{"error": ...}` JSON), or arguments argparse rejects |
 
 ---
 
@@ -388,12 +389,12 @@ da-tools baseline --tenant <name> [options]
 | `--duration <SEC>` | Observation duration in seconds | `600` |
 | `--interval <SEC>` | Sampling interval in seconds | `15` |
 | `--metrics <LIST>` | Comma-separated metric list (empty=all) | (all) |
-| `--output <FILE>` | Output to CSV file | stdout |
+| `-o, --output-dir <DIR>` | Output directory; both CSVs are written there (see Output below), created if missing | `baseline_output` |
 | `--dry-run` | Only show metrics to observe, don't sample | false |
 
 **Output**
 
-CSV format with one line per metric containing statistical summary (p50, p90, p95, p99, max, recommended threshold).
+The statistical summary is printed to stdout; two CSVs are also written under `--output-dir`: `baseline-<tenant>-timeseries.csv` (raw samples) and `baseline-<tenant>-summary.csv` (one line per metric: min / max / avg / p50 / p90 / p95 / p99 and the recommended thresholds). ⚠️ There is no single-file output flag — `--output <FILE>` is accepted by argparse as an abbreviation of `--output-dir`, so it creates a **directory** named `<FILE>`.
 
 **Examples**
 
@@ -402,7 +403,7 @@ CSV format with one line per metric containing statistical summary (p50, p90, p9
 docker run --rm --network=host \
   -e PROMETHEUS_URL=http://prometheus.monitoring.svc.cluster.local:9090 \
   ghcr.io/vencil/da-tools:v2.9.0 \
-  baseline --tenant db-a --duration 1800 --interval 30 --output /tmp/baseline.csv
+  baseline --tenant db-a --duration 1800 --interval 30 -o /tmp/baseline_out
 ```
 
 **Exit Codes**
@@ -410,7 +411,8 @@ docker run --rm --network=host \
 | Code | Description |
 |------|-------------|
 | `0` | Success |
-| `1` | Prometheus connection or query failed |
+| `1` | Uncaught exception (traceback) — measured when the parent of `-o/--output-dir` is a file (this tool still uses a raw `os.makedirs`, not the #1641 `_or_die` helpers; once #1789 lands this case becomes 2). ⚠️ A Prometheus connection / query failure is **not** 1 — failed samples are recorded as empty, the report and CSVs are still written, rc 0 |
+| `2` | Caller error: none of the `--metrics` names is one the tool knows (the error lists the accepted ones), the required `--tenant` missing, or arguments argparse rejects |
 
 ---
 
@@ -450,13 +452,13 @@ Choose one mode:
 | `--rounds <N>` | Number of monitoring rounds. ⚠️ `0` is not infinite — it runs **no rounds at all** (`for i in range(rounds)`) | `10` |
 | `--tolerance <RATIO>` | Allowed deviation as a **ratio**, not a percentage: `0.01` = 1% | `0.001` |
 | `--auto-detect-convergence` | Auto-detect convergence and output readiness JSON | false |
-| `--output <FILE>` | Output to CSV or JSON file | stdout |
+| `-o, --output-dir <DIR>` | Output directory; `validation-report.csv` (and, in watch mode, `cutover-readiness.json`) are written there | `validation_output` |
 
 **Output**
 
-CSV format with one line per rule showing comparison results (old value, new value, difference %, convergence status).
+`<output-dir>/validation-report.csv`, one line per rule (old value, new value, difference %, convergence status); the summary is also printed to stdout. ⚠️ There is no single-file output flag — `--output <FILE>` is accepted by argparse as an abbreviation of `--output-dir`, so it creates a **directory** named `<FILE>`.
 
-If `--auto-detect-convergence` is used, additionally outputs `cutover-readiness.json` for use with `cutover` command.
+With `--watch --auto-detect-convergence`, `cutover-readiness.json` is additionally written into the same directory for the `cutover` command (`--convergence-output <FILE>` overrides the path); single-shot mode (no `--watch`) never writes this file.
 
 **Examples**
 
@@ -483,8 +485,8 @@ docker run --rm --network=host \
   -e PROMETHEUS_URL=http://prometheus.monitoring.svc.cluster.local:9090 \
   ghcr.io/vencil/da-tools:v2.9.0 \
   validate --mapping /data/mapping.csv \
-    --auto-detect-convergence \
-    --output /data/output/validation-report.csv
+    --watch --auto-detect-convergence \
+    --output-dir /data/output
 ```
 
 **Exit Codes**
@@ -817,6 +819,7 @@ da-tools shadow-verify all --mapping mapping.yaml --report-csv report.csv --json
 |------|-------------|
 | `0` | All checks passed |
 | `1` | One or more checks failed |
+| `2` | Caller error: Prometheus unreachable or a query failed in `preflight` (including `all`; the check is still listed as FAIL, but the exit code is 2, not 1), an I/O error reading `--report-csv`, or arguments argparse rejects. ⚠️ A `--report-csv` that does not exist is **not** 2 — the CSV analysis is simply skipped. ⚠️ Running `runtime` alone with Prometheus unreachable is **neither** 2 nor 1: both queries fail without producing any check, so the result is `Overall: PASS` and exit code 0 |
 
 ---
 
@@ -867,6 +870,7 @@ da-tools byo-check all --json
 |------|-------------|
 | `0` | All checks passed |
 | `1` | One or more checks failed |
+| `2` | Caller error: Prometheus or Alertmanager unreachable, or a query / rules / status API call failed (the check is still listed as FAIL, but the exit code is 2, not 1); or arguments argparse rejects |
 
 ---
 
@@ -919,6 +923,7 @@ da-tools federation-check central --prometheus http://central:9090 --json
 |------|-------------|
 | `0` | All checks passed |
 | `1` | One or more checks failed |
+| `2` | Caller error: `e2e` without `--edge-urls`, a target other than edge / central / e2e; edge / central Prometheus unreachable or a config / query / rules API call failed (the check is still listed as FAIL, but the exit code is 2, not 1) |
 
 ---
 
@@ -964,7 +969,8 @@ da-tools fed-key --rotate --existing-jwks federation-jwks.json \
 | Code | Description |
 |------|-------------|
 | `0` | Key generated |
-| `1` | openssl missing, `--existing-jwks` unreadable, or invalid arguments |
+| `1` | Uncaught exception (traceback) — measured when the directory of `--jwks-out` does not exist |
+| `2` | Caller error: `openssl` not on PATH, timed out or failed; `--existing-jwks` unreadable, not a JWKS document (no `keys` array) or already holding the same kid; `--rotate` without `--existing-jwks`, `--key-bits` < 2048; stdout is a terminal (refuses to print the private-key Secret to a tty — pipe it to `\| kubectl apply -f -`) |
 
 ---
 
@@ -1014,7 +1020,8 @@ da-tools grafana-import --dashboard overview.json --dry-run
 | Code | Description |
 |------|-------------|
 | `0` | Success |
-| `1` | Import failed or verification found issues |
+| `1` | `--verify` found issues (a ConfigMap whose dashboard JSON is invalid). ⚠️ Import-mode failures are all 2, not 1; `kubectl` not on PATH is an uncaught exception (traceback, rc 1, in both import and `--verify`) |
+| `2` | Caller error: `--dashboard` file missing or not valid JSON, `--dashboard-dir` missing or holding no `*.json`; `kubectl create / apply / label` failed during import; `kubectl get` failed or its output unparsable under `--verify`; none of the three mode flags given |
 
 ---
 
@@ -1060,6 +1067,7 @@ da-tools alert-quality --prometheus http://prometheus:9090 --ci --min-score 60
 |------|-------------|
 | `0` | Success (CI mode: all alerts meet quality threshold) |
 | `1` | CI mode: BAD alerts found or score below threshold |
+| `2` | Caller error: `--period` unparsable, `--tenant` containing characters other than alphanumerics / underscore / hyphen, the required `--prometheus` missing, or arguments argparse rejects. ⚠️ An unreachable Prometheus is **not** 2 — failed queries count as no data and the report is still printed (rc 0; under `--ci` the score / BAD count decide 1) |
 
 ---
 
@@ -1106,6 +1114,7 @@ da-tools alert-correlate --prometheus http://prometheus:9090 --ci
 |------|-------------|
 | `0` | Success (CI mode: no critical alert clusters) |
 | `1` | CI mode: critical severity alert clusters found |
+| `2` | Caller error: `--window` unparsable or ≤ 0, or arguments argparse rejects. ⚠️ An unreachable Alertmanager/Prometheus is **not** 2 — a WARN is printed and the run continues with zero alerts (rc 0); an `--input` file that does not exist is an uncaught exception (traceback, rc 1) |
 
 ---
 
@@ -1149,6 +1158,7 @@ da-tools drift-detect --dirs staging/conf.d,prod/conf.d --ci
 |------|-------------|
 | `0` | No unexpected drift |
 | `1` | CI mode: unexpected drift detected |
+| `2` | Caller error: any `--dirs` directory missing, fewer than 2 directories in configmap mode, not exactly 1 directory in operator mode, `--labels` count not matching `--dirs`; in operator mode `kubectl` not on PATH, timed out (30s), exited non-zero or returned non-JSON; arguments argparse rejects |
 
 ---
 
@@ -1317,8 +1327,8 @@ da-tools state-reconcile [options]
 | Code | Description |
 |------|-------------|
 | `0` | State directory consistent (or changes applied successfully) |
-| `1` | Unresolvable schema drift; or `--ci` mode with pending changes |
-| `2` | Caller error (bad arguments etc.) |
+| `1` | Unresolvable schema drift (including a state file that cannot be read or lacks `schema_version`); or `--ci` with `--dry-run` detecting pending changes |
+| `2` | Caller error: arguments argparse rejects (unknown flags etc.). ⚠️ A missing `--state-dir` is **not** 2 — a warning is printed and it is treated as empty (manifest rebuilt with 0 states, rc 0; 1 under `--ci --dry-run` because a rebuild is pending) |
 
 **Why a single declarative command, not micro-commands**
 
@@ -1500,7 +1510,7 @@ da-tools operator-generate --rule-packs-dir <dir> --config-dir <dir> [options]
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--namespace <NS>` | Target K8s namespace | `monitoring` |
-| `--output <FILE>` | Output to file | stdout |
+| `--output-dir <DIR>` | Write CRDs into this directory. ⚠️ **Writing requires both: this flag set _and_ no `--dry-run`**; if either fails, everything goes to **stdout** and no file is written | none |
 | `--split` | Generate individual CRD files (split by Rule Pack) | false |
 | `--include-servicemonitor` | Also generate ServiceMonitor CRD | false |
 | `--dry-run` | Preview only | false |
@@ -1922,7 +1932,8 @@ docker run --rm \
 | Code | Description |
 |------|-------------|
 | `0` | Success |
-| `1` | Invalid ConfigMap or parameters |
+| `1` | Uncaught exception (traceback) — measured when `kubectl` is not on PATH |
+| `2` | Caller error: `kubectl get configmap threshold-config -n monitoring` exited non-zero (e.g. cluster unreachable, ConfigMap missing, no permission), a legacy-format ConfigMap without `config.yaml`, `--json` without `--diff` (refuses to apply), or arguments argparse rejects |
 
 ---
 
@@ -1951,7 +1962,7 @@ docker run --rm -it \
 | `--tenant <NAME>` | Tenant ID | (interactive prompt) |
 | `--db <LIST>` | Comma-separated DB type list | (interactive prompt) |
 | `--namespaces <LIST>` | Comma-separated K8s namespace list | (interactive prompt) |
-| `--output <DIR>` | Output directory | `./` |
+| `-o, --output-dir <DIR>` | Output directory | `scaffold_output` |
 
 **Supported DB Types**
 
@@ -1967,7 +1978,7 @@ docker run --rm -it \
 **Output**
 
 - `<tenant>.yaml` — Tenant configuration file
-- `_defaults.yaml` — Platform defaults (on first creation)
+- `_defaults.yaml` — Platform defaults. ⚠️ **Overwritten on every run** if the directory already has one — do not point `--output-dir` at a `conf.d/` whose platform defaults you have already tuned; scaffold into a staging directory and move only the tenant file
 - `scaffold-report.txt` — Summary report
 
 **Examples**
@@ -1978,7 +1989,7 @@ docker run --rm -it \
   --user $(id -u):$(id -g) \
   -v $(pwd)/output:/data/output \
   ghcr.io/vencil/da-tools:v2.9.0 \
-  scaffold --output /data/output
+  scaffold --output-dir /data/output
 
 # Non-interactive generation (CI/CD)
 docker run --rm \
@@ -1989,7 +2000,7 @@ docker run --rm \
     --tenant db-c \
     --db mariadb,redis \
     --namespaces ns-db-c \
-    --output /data/output
+    --output-dir /data/output
 ```
 
 **Exit Codes**
@@ -1997,8 +2008,8 @@ docker run --rm \
 | Code | Description |
 |------|-------------|
 | `0` | Success |
-| `1` | Invalid input |
-| `2` | Caller error: bad arguments, or the output path given to `-o/--output-dir` cannot be written (#1641) |
+| `1` | Only an uncaught exception (traceback on stderr); "invalid input" is 2, not 1 |
+| `2` | Caller error: bad arguments, an unsupported `--db` type, `--non-interactive` without `--tenant` or `--db`, or the output path given to `-o/--output-dir` cannot be written (#1641) |
 
 ---
 
@@ -2028,7 +2039,7 @@ docker run --rm \
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--output <DIR>` | Output directory | `./migration_output/` |
+| `-o, --output-dir <DIR>` | Output directory | `./migration_output/` |
 | `--dry-run` | Show report only, don't generate files | false |
 | `--triage` | Triage mode: output only CSV report | false |
 | `--interactive` | Ask user when uncertain | false |
@@ -2221,8 +2232,9 @@ docker run --rm \
 
 | Code | Description |
 |------|-------------|
-| `0` | Success |
-| `1` | Tenant not found or I/O failed |
+| `0` | Success; without `--execute` only the pre-check runs and **a failed pre-check is still 0** |
+| `1` | Pre-check failed under `--execute` (tenant not found, etc.) or I/O failed |
+| `2` | Caller error: only arguments argparse rejects (missing tenant positional, unknown flag) |
 
 ---
 
@@ -2414,14 +2426,14 @@ Compare custom rules with Rule Pack, find duplicates/gaps.
 docker run --rm \
   -v <config_dir>:/etc/config:ro \
   ghcr.io/vencil/da-tools:v2.9.0 \
-  analyze-gaps --config <path> [options]
+  analyze-gaps --tenant-config <path> [options]
 ```
 
 **Required Parameters**
 
 | Parameter | Description |
 |-----------|-------------|
-| `--config <PATH>` | Tenant config file or directory |
+| `--tenant-config <PATH>` | Single tenant config file (use `--config-dir <DIR>` for a whole directory). ⚠️ Do not shorten it to `--config`: argparse resolves that to `--config-dir`, and a file path there answers "no custom_ metrics" with rc 0 |
 
 **Options**
 
@@ -2441,7 +2453,7 @@ CSV list where each row represents a custom rule and its Rule Pack coverage rela
 docker run --rm \
   -v $(pwd)/conf.d:/etc/config:ro \
   ghcr.io/vencil/da-tools:v2.9.0 \
-  analyze-gaps --config /etc/config/db-a.yaml
+  analyze-gaps --tenant-config /etc/config/db-a.yaml
 ```
 
 **Exit Codes**

@@ -170,7 +170,7 @@ da-tools <command> --help
 | `deprecate` | 標記指標為 disabled | `<metric_keys...>` |
 | `lint` | 檢查 Custom Rule 治理合規性 | `<path...>` |
 | `onboard` | 分析既有 Alertmanager/Prometheus 配置進行遷移 | `<config_file>` 或 `--alertmanager-config <file>` |
-| `analyze-gaps` | Custom Rule 對應 Rule Pack 缺口分析 | `--config <path>` |
+| `analyze-gaps` | Custom Rule 對應 Rule Pack 缺口分析 | `--tenant-config <path>` |
 | `config-diff` | 兩目錄配置差異比對（GitOps PR review） | `--old-dir <dir> --new-dir <dir>` |
 | `evaluate-policy` | Policy-as-Code DSL 評估引擎 | `--config-dir <dir>` |
 | `opa-evaluate` | OPA Rego 策略評估橋接（OPA 整合） | `--config-dir <dir>` |
@@ -238,7 +238,8 @@ da-tools check-alert MariaDBHighConnections db-a
 | 代碼 | 說明 |
 |------|------|
 | `0` | 成功（任何狀態） |
-| `1` | Prometheus 連線失敗 |
+| `1` | 只有未捕捉例外（traceback）會回 1——本命令沒有 violation 出口（inactive／pending／firing 都是 0） |
+| `2` | 呼叫端錯誤：Prometheus API 連不上或回錯（stdout 印 `{"error": ...}` JSON），或 argparse 拒絕的參數 |
 
 ---
 
@@ -374,17 +375,17 @@ da-tools baseline --tenant <name> [options]
 | `--duration <SEC>` | 觀測時長（秒） | `600` |
 | `--interval <SEC>` | 採樣間隔（秒） | `15` |
 | `--metrics <LIST>` | 逗號分隔指標清單（空=全部） | （全部） |
-| `--output <FILE>` | 輸出至 CSV 檔案 | stdout |
+| `-o, --output-dir <DIR>` | 輸出目錄；兩個 CSV 都寫在這裡（見下方「輸出」），目錄不存在會建立 | `baseline_output` |
 | `--dry-run` | 僅顯示要觀測的指標，不實際採樣 | false |
 
 **輸出**
 
-CSV 格式，各行為一個指標的統計摘要（包含 p50、p90、p95、p99、max、建議閾值）。
+統計摘要印到 stdout；同時在 `--output-dir` 目錄寫入兩個 CSV：`baseline-<tenant>-timeseries.csv`（原始採樣）與 `baseline-<tenant>-summary.csv`（各行為一個指標：min／max／avg／p50／p90／p95／p99 與建議閾值）。⚠️ 沒有「輸出到單一檔案」的旗標——`--output <FILE>` 會被 argparse 當成 `--output-dir` 的縮寫，於是產生一個叫 `<FILE>` 的**目錄**。
 
 **範例**
 
 ```bash
-da-tools baseline --tenant db-a --duration 1800 --interval 30 --output /tmp/baseline.csv
+da-tools baseline --tenant db-a --duration 1800 --interval 30 -o /tmp/baseline_out
 ```
 
 **結束碼**
@@ -392,7 +393,8 @@ da-tools baseline --tenant db-a --duration 1800 --interval 30 --output /tmp/base
 | 代碼 | 說明 |
 |------|------|
 | `0` | 成功 |
-| `1` | Prometheus 連線或查詢失敗 |
+| `1` | 未捕捉例外（traceback）——實測 `-o/--output-dir` 的父路徑是檔案時是這一格（本工具用 raw `os.makedirs`，尚未走 #1641 的 `_or_die` 收口；#1789 收口後這一格會變 2）。⚠️ Prometheus 連線或查詢失敗**不是** 1——失敗的採樣記為空值、報告與 CSV 照出、rc 0 |
+| `2` | 呼叫端錯誤：`--metrics` 列出的指標沒有一個是工具認得的（錯誤訊息會列出可用清單）、缺必需的 `--tenant`，或 argparse 拒絕的參數 |
 
 ---
 
@@ -432,20 +434,20 @@ da-tools validate [--mapping <file> | --old <query> --new <query>] [options]
 | `--rounds <N>` | 監控輪數。⚠️ `0` 不是無限，是**一輪都不跑**（`for i in range(rounds)`） | `10` |
 | `--tolerance <RATIO>` | 容許誤差**比值**（不是百分比）：`0.01` = 1% | `0.001` |
 | `--auto-detect-convergence` | 自動偵測收斂並產出 readiness JSON | false |
-| `--output <FILE>` | 輸出至 CSV 或 JSON 檔案 | stdout |
+| `-o, --output-dir <DIR>` | 輸出目錄；`validation-report.csv`（與 watch 模式的 `cutover-readiness.json`）寫在這裡 | `validation_output` |
 
 **輸出**
 
-CSV 格式，各行為一個 rule 的比對結果（舊值、新值、差異百分比、收斂狀態）。
+`<output-dir>/validation-report.csv`，各行為一個 rule 的比對結果（舊值、新值、差異百分比、收斂狀態）；摘要另印到 stdout。⚠️ 沒有「輸出到單一檔案」的旗標——`--output <FILE>` 會被 argparse 當成 `--output-dir` 的縮寫，於是產生一個叫 `<FILE>` 的**目錄**。
 
-若使用 `--auto-detect-convergence`，額外產出 `cutover-readiness.json` 供 `cutover` 命令使用。
+`--watch` 搭配 `--auto-detect-convergence` 時，額外在同一目錄寫入 `cutover-readiness.json` 供 `cutover` 命令使用（`--convergence-output <FILE>` 可改路徑）；單次模式（無 `--watch`）不會產出這個檔。
 
 **範例**
 
 ```bash
 da-tools validate --mapping mapping.csv
 da-tools validate --mapping mapping.csv --watch --interval 60 --rounds 1440
-da-tools validate --mapping mapping.csv --auto-detect-convergence --output validation-report.csv
+da-tools validate --mapping mapping.csv --watch --auto-detect-convergence -o ./validation_output
 ```
 
 **結束碼**
@@ -719,6 +721,7 @@ da-tools shadow-verify all --mapping mapping.yaml --report-csv report.csv --json
 |------|------|
 | `0` | 所有檢查通過 |
 | `1` | 一項或多項檢查失敗 |
+| `2` | 呼叫端錯誤：`preflight`（含 `all`）的 Prometheus 連不上或查詢失敗（該項檢查同樣列為 FAIL，但結束碼是 2 不是 1）、`--report-csv` 讀取時 I/O 錯誤，或 argparse 拒絕的參數。⚠️ `--report-csv` 指到不存在的檔**不是** 2——CSV 分析直接略過。⚠️ 單獨執行 `runtime` 時 Prometheus 連不上**不是** 2 也不是 1：兩項查詢失敗時不產生任何檢查項，結果是 `Overall: PASS`、結束碼 0 |
 
 ---
 
@@ -769,6 +772,7 @@ da-tools byo-check all --json
 |------|------|
 | `0` | 所有檢查通過 |
 | `1` | 一項或多項檢查失敗 |
+| `2` | 呼叫端錯誤：Prometheus 或 Alertmanager 連不上、query／rules／status API 呼叫失敗（該項檢查同樣列為 FAIL，但結束碼是 2 不是 1），或 argparse 拒絕的參數 |
 
 ---
 
@@ -821,6 +825,7 @@ da-tools federation-check central --prometheus http://central:9090 --json
 |------|------|
 | `0` | 所有檢查通過 |
 | `1` | 一項或多項檢查失敗 |
+| `2` | 呼叫端錯誤：`e2e` 沒帶 `--edge-urls`、target 不是 edge／central／e2e；edge／central Prometheus 連不上或 config／query／rules API 失敗（該項檢查同樣列為 FAIL，但結束碼是 2 不是 1） |
 
 ---
 
@@ -866,7 +871,8 @@ da-tools fed-key --rotate --existing-jwks federation-jwks.json \
 | 代碼 | 說明 |
 |------|------|
 | `0` | 金鑰已產生 |
-| `1` | openssl 不存在、`--existing-jwks` 無法讀取、或參數錯誤 |
+| `1` | 未捕捉例外（traceback）——實測 `--jwks-out` 的目錄不存在時是這一格 |
+| `2` | 呼叫端錯誤：`openssl` 不在 PATH、逾時或失敗；`--existing-jwks` 讀不到、不是 JWKS 文件（沒有 `keys` 陣列）或已含同一個 kid；`--rotate` 沒帶 `--existing-jwks`、`--key-bits` < 2048；stdout 是終端機（拒絕把私鑰 Secret 印到 tty，請接 `\| kubectl apply -f -`） |
 
 ---
 
@@ -916,7 +922,8 @@ da-tools grafana-import --dashboard overview.json --dry-run
 | 代碼 | 說明 |
 |------|------|
 | `0` | 成功 |
-| `1` | 匯入失敗或驗證發現問題 |
+| `1` | `--verify` 發現問題（ConfigMap 內的 dashboard JSON 無效）。⚠️ 匯入模式的失敗全是 2 不是 1；`kubectl` 不在 PATH 是未捕捉例外（匯入與 `--verify` 皆 traceback、rc 1） |
+| `2` | 呼叫端錯誤：`--dashboard` 檔不存在或不是合法 JSON、`--dashboard-dir` 不存在或裡面沒有 `*.json`；匯入時 `kubectl create／apply／label` 失敗；`--verify` 時 `kubectl get` 失敗或輸出解析不了；三個模式旗標一個都沒給 |
 
 ---
 
@@ -962,6 +969,7 @@ da-tools alert-quality --prometheus http://prometheus:9090 --ci --min-score 60
 |------|------|
 | `0` | 成功（CI 模式：所有告警品質達標） |
 | `1` | CI 模式：有 BAD 告警或分數低於閾值 |
+| `2` | 呼叫端錯誤：`--period` 解析不出、`--tenant` 含英數／底線／連字號以外的字元、缺必需的 `--prometheus`，或 argparse 拒絕的參數。⚠️ Prometheus 連不上**不是** 2——查詢失敗當成沒有資料、報告照印（rc 0；`--ci` 下另依分數／BAD 數判 1） |
 
 ---
 
@@ -1008,6 +1016,7 @@ da-tools alert-correlate --prometheus http://prometheus:9090 --ci
 |------|------|
 | `0` | 成功（CI 模式：無 critical 告警群組） |
 | `1` | CI 模式：存在 critical 嚴重度的告警群組 |
+| `2` | 呼叫端錯誤：`--window` 解析不出或 ≤ 0，或 argparse 拒絕的參數。⚠️ Alertmanager／Prometheus 連不上**不是** 2——印 WARN 後以零告警繼續、rc 0；`--input` 指到不存在的檔是未捕捉例外（traceback、rc 1） |
 
 ---
 
@@ -1051,6 +1060,7 @@ da-tools drift-detect --dirs staging/conf.d,prod/conf.d --ci
 |------|------|
 | `0` | 無非預期漂移 |
 | `1` | CI 模式：偵測到非預期漂移 |
+| `2` | 呼叫端錯誤：`--dirs` 任一目錄不存在、configmap 模式少於 2 個目錄、operator 模式不是恰好 1 個目錄、`--labels` 數量與 `--dirs` 不符；operator 模式下 `kubectl` 不在 PATH、逾時（30s）、非零結束或輸出不是 JSON；argparse 拒絕的參數 |
 
 ---
 
@@ -1214,13 +1224,13 @@ da-tools state-reconcile [options]
 | `--ci` | **配合 `--dry-run` 用**：check-only CI gate，dry-run 偵測到需改動時 exit 1。Unresolvable drift 永遠 exit 1（不需 `--ci`）。單獨用 `--ci`（無 `--dry-run`）仍會 apply changes | 無 |
 | `--json` | 輸出 JSON 結構化報告 | 文字模式 |
 
-**Exit codes**
+**結束碼**
 
-| Code | 含義 |
+| 代碼 | 說明 |
 |------|------|
-| 0 | state 目錄一致（或已成功套用變更） |
-| 1 | 有 unresolvable schema drift；或 `--ci` 模式下 dry-run 偵測到需改動 |
-| 2 | caller error（參數錯誤等） |
+| `0` | state 目錄一致（或已成功套用變更） |
+| `1` | 有 unresolvable schema drift（含 state 檔讀不到或缺 `schema_version`）；或 `--ci` 搭配 `--dry-run` 偵測到需改動 |
+| `2` | 呼叫端錯誤：argparse 拒絕的參數（未知旗標等）。⚠️ `--state-dir` 不存在**不是** 2——印警告後視為空目錄（重建 0 筆的 manifest、rc 0；`--ci --dry-run` 下因需重建而 1） |
 
 **為什麼是 single declarative command 而非 micro-commands**
 
@@ -1775,7 +1785,8 @@ da-tools patch-config db-a mysql_connections 100 --yes
 | 代碼 | 說明 |
 |------|------|
 | `0` | 成功 |
-| `1` | ConfigMap 或參數無效 |
+| `1` | 未捕捉例外（traceback）——實測 `kubectl` 不在 PATH 時是這一格 |
+| `2` | 呼叫端錯誤：`kubectl get configmap threshold-config -n monitoring` 非零結束（例如叢集連不上、ConfigMap 不存在、無權限）、legacy 格式的 ConfigMap 缺 `config.yaml`、`--json` 沒配 `--diff`（拒絕套用），或 argparse 拒絕的參數 |
 
 ---
 
@@ -1801,7 +1812,7 @@ da-tools scaffold [options]
 | `--tenant <NAME>` | Tenant ID | （互動詢問） |
 | `--db <LIST>` | 逗號分隔 DB 類型清單 | （互動詢問） |
 | `--namespaces <LIST>` | 逗號分隔 K8s namespace 清單 | （互動詢問） |
-| `--output <DIR>` | 輸出目錄 | `./` |
+| `-o, --output-dir <DIR>` | 輸出目錄 | `scaffold_output` |
 
 **支援的 DB 類型**
 
@@ -1817,7 +1828,7 @@ da-tools scaffold [options]
 **輸出**
 
 - `<tenant>.yaml` — Tenant 配置檔案
-- `_defaults.yaml` — 平台預設值（首次建立時）
+- `_defaults.yaml` — 平台預設值。⚠️ **每次執行都會覆寫**目錄裡既有的 `_defaults.yaml`——已經調過平台預設值的 `conf.d/` 不要直接當 `--output-dir`，先產到暫存目錄再只搬租戶檔
 - `scaffold-report.txt` — 總結報告
 
 **範例**
@@ -1832,8 +1843,8 @@ da-tools scaffold --non-interactive --tenant db-c --db mariadb,redis
 | 代碼 | 說明 |
 |------|------|
 | `0` | 成功 |
-| `1` | 輸入無效 |
-| `2` | 呼叫端錯誤：參數錯誤，或 `-o/--output-dir` 指到的輸出路徑寫不進去（#1641） |
+| `1` | 只有未捕捉的例外（stderr 有 traceback）；「輸入無效」是 2 不是 1 |
+| `2` | 呼叫端錯誤：參數錯誤、不支援的 `--db` 類型、`--non-interactive` 缺 `--tenant` 或 `--db`，或 `-o/--output-dir` 指到的輸出路徑寫不進去（#1641） |
 
 ---
 
@@ -1859,7 +1870,7 @@ da-tools migrate <input_file> [options]
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--output <DIR>` | 輸出目錄 | `./migration_output/` |
+| `-o, --output-dir <DIR>` | 輸出目錄 | `./migration_output/` |
 | `--dry-run` | 僅顯示報告，不產生檔案 | false |
 | `--triage` | Triage 模式：只產出 CSV 分桶報告 | false |
 | `--interactive` | 遇到不確定時詢問使用者 | false |
@@ -2008,8 +2019,9 @@ da-tools offboard db-old --config-dir ./conf.d --execute
 
 | 代碼 | 說明 |
 |------|------|
-| `0` | 成功 |
-| `1` | Tenant 不存在或 I/O 失敗 |
+| `0` | 成功；不帶 `--execute` 時只做 pre-check，**pre-check 未通過也是 0** |
+| `1` | `--execute` 下 pre-check 未通過（tenant 不存在等）或 I/O 失敗 |
+| `2` | 呼叫端錯誤：只有 argparse 拒絕的參數（缺 tenant 位置參數、未知旗標） |
 
 ---
 
@@ -2173,14 +2185,14 @@ da-tools onboard ./alertmanager.yaml -o onboard-hints.json
 **語法**
 
 ```bash
-da-tools analyze-gaps --config <path> [options]
+da-tools analyze-gaps --tenant-config <path> [options]
 ```
 
 **必需參數**
 
 | 參數 | 說明 |
 |------|------|
-| `--config <PATH>` | 租戶配置檔案或目錄 |
+| `--tenant-config <PATH>` | 單一租戶配置檔案（整個目錄用 `--config-dir <DIR>`）。⚠️ 不要縮寫成 `--config`：argparse 會把它當成 `--config-dir`，對著一個檔案路徑回答「沒有 custom_ 指標」、rc 0 |
 
 **選項**
 
@@ -2196,7 +2208,7 @@ CSV 列表，各行表示一條 custom rule 與對應 Rule Pack 的覆蓋關係�
 **範例**
 
 ```bash
-da-tools analyze-gaps --config ./conf.d/db-a.yaml
+da-tools analyze-gaps --tenant-config ./conf.d/db-a.yaml
 ```
 
 **結束碼**

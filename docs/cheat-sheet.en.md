@@ -38,13 +38,13 @@ da-tools command quick reference. Full docs at [cli-reference.en.md](cli-referen
 | `generate-routes` | Generate Alertmanager route + receiver + inhibit from tenant YAML | --config-dir <PATH>, --output <FILE>, --output-configmap | `da-tools generate-routes --help` |
 | `patch-config` | ConfigMap partial update with preview (--diff) | --namespace <NS>, --configmap <CM>, --dry-run | `da-tools patch-config --help` |
 | `scaffold` | Generate new tenant config (interactive or non-interactive) | --non-interactive, --tenant <NAME>, --db <LIST> | `da-tools scaffold --help` |
-| `migrate` | Convert traditional Prometheus rules to dynamic format (AST engine) | --output <DIR>, --dry-run, --triage | `da-tools migrate --help` |
+| `migrate` | Convert traditional Prometheus rules to dynamic format (AST engine) | -o <DIR>, --dry-run, --triage | `da-tools migrate --help` |
 | `validate-config` | One-stop config validation: YAML, schema, routing, policy, version | --config-dir <PATH>, --policy <FILE>, --ci | `da-tools validate-config --help` |
 | `offboard` | Offboard tenant config and related resources | --config-dir <PATH>, --backup <DIR>, --cleanup-rules | `da-tools offboard --help` |
 | `deprecate` | Mark metrics as disabled to prevent misuse | --config-dir <PATH>, --reason <TEXT>, --dry-run | `da-tools deprecate --help` |
 | `lint` | Check Custom Rule governance compliance (`custom_` prefix rules) | --strict, --json-output | `da-tools lint --help` |
-| `onboard` | Analyze existing Alertmanager/Prometheus config for migration hints | --alertmanager-config <FILE>, --output <FILE> | `da-tools onboard --help` |
-| `analyze-gaps` | Compare custom rules vs Rule Packs for duplicates/gaps | --config <PATH>, --output <FILE>, --json-output | `da-tools analyze-gaps --help` |
+| `onboard` | Analyze existing Alertmanager/Prometheus config for migration hints | --alertmanager-config <FILE>, -o <DIR> | `da-tools onboard --help` |
+| `analyze-gaps` | Compare custom rules vs Rule Packs for duplicates/gaps | --tenant-config <PATH>, --output <FILE>, --json-output | `da-tools analyze-gaps --help` |
 | `config-diff` | Compare two config directories (GitOps PR review) | --old-dir <PATH>, --new-dir <PATH>, --json-output | `da-tools config-diff --help` |
 | `test-notification` | Multi-channel notification connectivity testing | --config-dir <PATH>, --tenant <NAME>, --dry-run, --ci | `da-tools test-notification --help` |
 | `threshold-recommend` | Threshold recommendation engine (historical P50/P95/P99) | --config-dir <PATH>, --prometheus <URL>, --lookback, --json | `da-tools threshold-recommend --help` |
