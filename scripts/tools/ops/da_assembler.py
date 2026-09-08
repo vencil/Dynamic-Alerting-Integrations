@@ -152,11 +152,11 @@ def write_rendered(
         log.info("DRY-RUN: would write %s (%d bytes)", filename, len(content))
         return True
 
-    # #1789 F6: the wrapper is given the PARENT, which is what the mkdir
-    # actually creates. Handing it the output file produced
-    # "cannot create directory <my-report.json>" — a sentence about a path
-    # nobody was creating. The ancestor rule still converts the failure,
-    # and the write below keeps naming the file.
+    # #1789: the wrapper is given the PARENT — the directory this mkdir
+    # actually creates. Handing it the output FILE makes the message a
+    # sentence about a path nobody was creating (worked example in
+    # `_lib_io.output_write`). The ancestor rule still converts the
+    # failure, and the write below keeps naming the file.
     with output_write(config_dir, flag="--config-dir", action="create directory"):
         config_dir.mkdir(parents=True, exist_ok=True)
     # The 0644 chmod is inside the same block as the write: the rendered file

@@ -27,10 +27,11 @@ A sink is guarded when, walking up from it WITHOUT crossing a ``def`` /
 ``class`` / ``lambda`` boundary, one of these holds:
 
 1. it is in the body of a ``with output_write(...)`` (#1789's wrapper);
-2. the call is itself one of the already-closed writers — any name ending in
-   ``_or_die`` or ``_secure``. Those are judged by ``test_write_failure_class``,
-   not here; recording them keeps a CONVERTED site visible in this file's
-   inventory instead of silently vanishing from it;
+2. the call is itself one of the already-closed shared writers, named one by
+   one in ``_CLOSED_WRITERS`` (a local ``foo_or_die`` a tool defined for
+   itself is NOT one). The two ``_secure`` names are judged by
+   ``test_write_failure_class``; recording all five keeps a CONVERTED site
+   visible in this file's inventory instead of silently vanishing from it;
 3. it is in the body of a ``try`` whose handler can catch ``OSError`` /
    ``OutputWriteError`` **and actually ends the run the right way** — the
    handler body calls ``sys.exit`` / ``os._exit`` (or
@@ -124,9 +125,21 @@ WRITE_MODE_CHARS = frozenset("wax+")
 WRAPPER_NAME = "output_write"
 GUARD_KINDS = ("output_write", "or_die", "try")
 
+# ⛔ A closed list, not a ``_or_die`` / ``_secure`` SUFFIX. The suffix rule
+# claimed these were judged by ``test_write_failure_class``, but that file's
+# ``WRITER_NAMES`` is exactly the two ``_secure`` names — so any local
+# ``foo_or_die`` a tool defined for itself got a free pass here from a gate
+# that had never heard of it. These five are the shared writers in
+# ``_lib_io``, and adding a sixth means adding it here.
+_CLOSED_WRITERS = frozenset({
+    "write_text_secure", "write_json_secure",
+    "write_text_or_die", "write_json_or_die", "ensure_dir_or_die",
+})
+
 # Handler bodies that end the run rather than swallow. `EXIT_OK` / `0` /
-# a bare `return` are the swallow shapes (ops/da_assembler measured rc=0).
-_OK_RETURNS = frozenset({"EXIT_OK"})
+# a bare `return` are the swallow shapes (ops/da_assembler measured rc=0);
+# `_is_stopping_status` is what says so, and it also rules out the codes that
+# end the run saying the WRONG thing.
 
 # ⛔ Matched on the FULL dotted spelling, never on the trailing attribute.
 # `_name_of` (the sink vocabulary's helper) answers the tail, and a tail-only
@@ -135,13 +148,29 @@ _OK_RETURNS = frozenset({"EXIT_OK"})
 # green while leaving the operator with a swallowed write failure. Same for
 # `writer.fail()` and any `obj.exit()`. Both directions are pinned by the
 # synthetic controls below.
-_EXITING_CALLS = frozenset({"sys.exit", "os._exit", "_die_on_write_error"})
+# ⛔ These two take a STATUS, and the status is half the judgement — see
+# `_is_stopping_status`. `_die_on_write_error` is not in that club: it exists
+# only to print this ticket's line and exit, and every call site passes the
+# caller-error code.
+_STATUS_TAKING_EXITS = frozenset({"sys.exit", "os._exit"})
+_EXITING_CALLS = frozenset({"_die_on_write_error"})
 # `parser.error(...)` really does end the run (argparse's `error` exits 2),
 # but only when the receiver IS a parser. There is no type information here,
 # so the receiver's NAME is the evidence — deliberately narrow, and a
 # false-red (an argument parser called something else) is the safe side:
 # someone has to look (rulebook D-05g).
-_PARSER_RECEIVER_SUFFIXES = ("parser", "ap", "argp")
+# ⛔ EQUALITY plus an explicit `_parser` suffix, not `endswith(("ap", ...))`:
+# that spelling made `sitemap.error(...)` and `heap.error(...)` read as
+# run-ending calls, which is a false GREEN and therefore the wrong side.
+_PARSER_RECEIVERS = frozenset({"parser", "ap", "argp"})
+
+# The status an exit has to carry to satisfy THIS ticket. `EXIT_OK` / `0` /
+# `None` end the run telling the operator it worked; `EXIT_VIOLATION` / `1`
+# end it with the code the whole ticket exists to stop a write failure being
+# reported as ("your config has a finding"). Only the caller-error code says
+# the true thing.
+_STOPPING_RETURNS = frozenset({"EXIT_CALLER_ERROR"})
+_STOPPING_CODE = 2
 
 # ── The population ─────────────────────────────────────────────────────────
 # ⛔ Repo-relative POSIX paths of the tool files this ticket wraps. A file
@@ -347,18 +376,69 @@ def _dotted_name(func: ast.expr) -> str | None:
     return None
 
 
+# Sentinel: this raise is not a ``SystemExit`` at all, which is different
+# from ``SystemExit`` with no status.
+_NOT_A_SYSTEM_EXIT = object()
+
+
+def _system_exit_status(node: ast.Raise):
+    """The status of a ``raise SystemExit(...)``, or ``_NOT_A_SYSTEM_EXIT``.
+
+    ``raise SystemExit`` (no call) and ``raise SystemExit()`` both mean status
+    0, so both come back as ``None`` — a status that exists and is zero, not
+    "no SystemExit here".
+    """
+    exc = node.exc
+    if isinstance(exc, ast.Name) and exc.id == "SystemExit":
+        return None
+    if isinstance(exc, ast.Call) and _name_of(exc.func) == "SystemExit":
+        return _first_arg(exc)
+    return _NOT_A_SYSTEM_EXIT
+
+
+def _is_stopping_status(node: ast.expr | None) -> bool:
+    """Does this exit status end the run the way this ticket's contract needs?
+
+    ⛔ Ending the run is not enough. ``sys.exit(0)`` and ``raise
+    SystemExit(0)`` end it with a SUCCESS — the operator is told the write
+    worked — and ``return 1`` / ``EXIT_VIOLATION`` ends it with exactly the
+    code #1789 exists to stop a mistyped ``-o`` being reported as. A MISSING
+    status (bare ``sys.exit()``, bare ``raise SystemExit``) is 0.
+
+    Anything the scanner cannot read (a variable, an expression) is not
+    accepted: a false red here means someone looks, which is the safe side.
+    """
+    if node is None:
+        return False
+    if isinstance(node, ast.Constant):
+        return node.value == _STOPPING_CODE
+    if isinstance(node, ast.Name):
+        return node.id in _STOPPING_RETURNS
+    return False
+
+
+def _first_arg(node: ast.Call) -> ast.expr | None:
+    return node.args[0] if node.args else None
+
+
 def _call_ends_the_run(node: ast.Call) -> bool:
-    """Does this call end the run? See ``_EXITING_CALLS`` for why it is
-    spelled dotted."""
+    """Does this call end the run, with a status that says the right thing?
+
+    See ``_EXITING_CALLS`` for why the name is matched dotted, and
+    ``_is_stopping_status`` for why the argument is looked at at all.
+    """
     dotted = _dotted_name(node.func)
     if dotted is None:
         return False
+    if dotted in _STATUS_TAKING_EXITS:
+        return _is_stopping_status(_first_arg(node))
     if dotted in _EXITING_CALLS:
         return True
     receiver, _, attr = dotted.rpartition(".")
     if attr != "error" or not receiver:
         return False
-    return receiver.rsplit(".", 1)[-1].lower().endswith(_PARSER_RECEIVER_SUFFIXES)
+    tail = receiver.rsplit(".", 1)[-1].lower()
+    return tail in _PARSER_RECEIVERS or tail.endswith("_parser")
 
 
 def _handler_stops(handler: ast.ExceptHandler) -> bool:
@@ -376,20 +456,24 @@ def _handler_stops(handler: ast.ExceptHandler) -> bool:
             continue
         for node in _walk_this_scope(stmt):
             if isinstance(node, ast.Raise):
-                if _raise_makes_a_new_exception(node, handler):
-                    return True
-                continue
+                if not _raise_makes_a_new_exception(node, handler):
+                    continue
+                # ``raise SystemExit(...)`` is an EXIT wearing a raise: it
+                # carries a status, and the status decides (a bare
+                # ``raise SystemExit`` or ``SystemExit(0)`` exits 0). Every
+                # other new exception object leaves the run to whatever is
+                # above, which for this population is the rc=2 decorator.
+                status = _system_exit_status(node)
+                if status is not _NOT_A_SYSTEM_EXIT:
+                    if _is_stopping_status(status):
+                        return True
+                    continue
+                return True
             if isinstance(node, ast.Call) and _call_ends_the_run(node):
                 return True
             if isinstance(node, ast.Return):
-                val = node.value
-                if val is None:
-                    continue
-                if isinstance(val, ast.Constant) and val.value in (None, 0):
-                    continue
-                if isinstance(val, ast.Name) and val.id in _OK_RETURNS:
-                    continue
-                return True
+                if _is_stopping_status(node.value):
+                    return True
     return False
 
 
@@ -417,7 +501,7 @@ def scan_source(source: str, label: str = "<snippet>") -> list[SinkCall]:
         if not isinstance(node, ast.Call):
             continue
         name = _name_of(node.func)
-        if name and (name.endswith("_or_die") or name.endswith("_secure")):
+        if name in _CLOSED_WRITERS:
             found.append(SinkCall(label, node.lineno, f"{name}()", "or_die"))
             continue
         sink = _classify_sink(node)
@@ -573,6 +657,22 @@ class TestGuardShapes:
     def test_or_die_and_secure_calls_read_as_already_closed(self):
         assert _guards("write_text_or_die(p, c, flag='-o')\n") == ["or_die"]
         assert _guards("lib.write_json_secure(p, d)\n") == ["or_die"]
+        assert _guards("ensure_dir_or_die(p, flag='-o')\n") == ["or_die"]
+
+    def test_a_locally_defined_or_die_is_not_one_of_the_closed_writers(self):
+        """#1789 F5. The old rule was the SUFFIX `_or_die` / `_secure`, and it
+        justified itself by saying those calls are judged by
+        `test_write_failure_class` — whose `WRITER_NAMES` is exactly the two
+        `_secure` names. So a tool that wrote `def save_or_die(...)` around a
+        bare `open()` got a free pass here from a gate that had never heard of
+        it, and nothing else was looking.
+
+        A specific break that reddens this: put the suffix rule back.
+        """
+        for src in ("save_or_die(p, c)\n",
+                    "helpers.dump_or_die(p, c)\n",
+                    "my_secure(p, c)\n"):
+            assert _guards(src) == [], src   # not a sink AND not an or_die
 
     def test_try_with_a_stopping_handler_is_guarded(self):
         for handler in ("except OSError as e:\n    sys.exit(2)\n",
@@ -615,6 +715,74 @@ class TestGuardShapes:
                         "except OSError as e:\n    self.parser.error(str(e))\n",
                         "except OSError as e:\n    ap.error(str(e))\n",
                         "except OutputWriteError as e:\n    _die_on_write_error(e, 2)\n"):
+            assert _guards(f"try:\n    open(p, 'w')\n{handler}") == ["try"], handler
+
+    def test_an_exit_that_says_it_worked_is_not_a_guard(self):
+        """#1789 F3. Ending the run is only half of it: `sys.exit(0)` and
+        `raise SystemExit(0)` end it telling the operator the write SUCCEEDED,
+        and a bare `sys.exit()` / `raise SystemExit` is the same 0.
+
+        A specific break that reddens this: stop looking at the status in
+        `_call_ends_the_run` / `_handler_stops`.
+        """
+        for handler in ("except OSError:\n    sys.exit(0)\n",
+                        "except OSError:\n    sys.exit()\n",
+                        "except OSError:\n    sys.exit(EXIT_OK)\n",
+                        "except OSError:\n    raise SystemExit(0)\n",
+                        "except OSError:\n    raise SystemExit\n",
+                        "except OSError:\n    raise SystemExit()\n",
+                        "except OSError:\n    raise SystemExit(EXIT_OK)\n",
+                        "except OSError:\n    os._exit(0)\n"):
+            assert _guards(f"try:\n    open(p, 'w')\n{handler}") == [None], handler
+
+    def test_an_exit_with_the_violation_code_is_not_a_guard_either(self):
+        """The other wrong status. rc=1 in this repo is EXIT_VIOLATION —
+        "your config has a finding" — which is precisely what #1789 exists to
+        stop a mistyped `-o` being reported as. A handler that ends the run
+        with it has not satisfied this contract.
+
+        A specific break that reddens this: accept any non-OK return again.
+        """
+        for handler in ("except OSError:\n    sys.exit(1)\n",
+                        "except OSError:\n    sys.exit(EXIT_VIOLATION)\n",
+                        "except OSError:\n    raise SystemExit(1)\n"):
+            assert _guards(f"try:\n    open(p, 'w')\n{handler}") == [None], handler
+        src = ("def main():\n    try:\n        open(p, 'w')\n"
+               "    except OSError:\n        return EXIT_VIOLATION\n")
+        assert _guards(src) == [None]
+        src = ("def main():\n    try:\n        open(p, 'w')\n"
+               "    except OSError:\n        return 1\n")
+        assert _guards(src) == [None]
+
+    def test_the_caller_error_code_is_the_one_that_guards(self):
+        """The complement: the narrowing is "which status", not "no status"."""
+        for handler in ("except OSError:\n    sys.exit(2)\n",
+                        "except OSError:\n    sys.exit(EXIT_CALLER_ERROR)\n",
+                        "except OSError:\n    os._exit(2)\n",
+                        "except OSError:\n    raise SystemExit(2)\n",
+                        "except OSError:\n    raise SystemExit(EXIT_CALLER_ERROR)\n"):
+            assert _guards(f"try:\n    open(p, 'w')\n{handler}") == ["try"], handler
+        src = ("def main():\n    try:\n        open(p, 'w')\n"
+               "    except OSError:\n        return EXIT_CALLER_ERROR\n")
+        assert _guards(src) == ["try"]
+        src = ("def main():\n    try:\n        open(p, 'w')\n"
+               "    except OSError:\n        return 2\n")
+        assert _guards(src) == ["try"]
+
+    def test_a_non_parser_receiver_named_error_is_not_an_exit(self):
+        """#1789 F4. `endswith(("parser", "ap", "argp"))` matched `sitemap`
+        and `heap`, so `sitemap.error(...)` read as argparse ending the run.
+
+        A specific break that reddens this: go back to the suffix test.
+        """
+        for handler in ("except OSError as e:\n    sitemap.error(e)\n",
+                        "except OSError as e:\n    heap.error(e)\n",
+                        "except OSError as e:\n    bootstrap.error(e)\n"):
+            assert _guards(f"try:\n    open(p, 'w')\n{handler}") == [None], handler
+        # The real receivers still count, including an explicit `_parser` tail.
+        for handler in ("except OSError as e:\n    parser.error(str(e))\n",
+                        "except OSError as e:\n    argp.error(str(e))\n",
+                        "except OSError as e:\n    self.sub_parser.error(str(e))\n"):
             assert _guards(f"try:\n    open(p, 'w')\n{handler}") == ["try"], handler
 
     def test_a_bare_reraise_is_not_a_guard(self):

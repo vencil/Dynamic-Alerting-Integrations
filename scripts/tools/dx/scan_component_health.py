@@ -544,11 +544,11 @@ def main() -> int:
         # the mkdir, the write and the label all name the same path, and show
         # the absolute path when it is not under the repo.
         out_path = args.output.resolve()
-        # #1789 F6: the wrapper is given the PARENT, which is what the mkdir
-        # actually creates. Handing it the output file produced
-        # "cannot create directory <my-report.json>" — a sentence about a path
-        # nobody was creating. The ancestor rule still converts the failure,
-        # and the write below keeps naming the file.
+        # #1789: the wrapper is given the PARENT — the directory this mkdir
+        # actually creates. Handing it the output FILE makes the message a
+        # sentence about a path nobody was creating (worked example in
+        # `_lib_io.output_write`). The ancestor rule still converts the
+        # failure, and the write below keeps naming the file.
         with output_write(out_path.parent, flag="--output",
                           action="create directory"):
             out_path.parent.mkdir(parents=True, exist_ok=True)

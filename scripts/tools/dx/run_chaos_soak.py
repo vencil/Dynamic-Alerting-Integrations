@@ -266,6 +266,32 @@ def trigger_reload(config_dir: Path) -> bool:
     return False
 
 
+def _report_deferred_write_error(
+    exc: OutputWriteError,
+    in_flight: type[BaseException] | None,
+) -> bool:
+    """Say the deferred write failure out loud — but only if it is about to be
+    swallowed. Returns whether a line was printed.
+
+    The summary/run-config writes live in a ``finally``, so their
+    ``OutputWriteError`` is REMEMBERED and re-raised after the block (raising
+    inside a ``finally`` would replace whatever was already unwinding). Two
+    cases follow from that, and they need opposite handling:
+
+    * *in_flight is None* — nothing else is unwinding, the re-raise really
+      happens, and the decorator prints the standard one-line rc=2. Printing
+      here as well would say the same thing twice.
+    * *in_flight is not None* — the exception already on its way out wins and
+      the re-raise is never reached. Without this line the write failure
+      disappears with no trace at all (#1789). It does NOT touch the rc:
+      whatever is in flight still decides that.
+    """
+    if in_flight is None:
+        return False
+    print(f"[warn] output write failed: {safe_label(str(exc))}", file=sys.stderr)
+    return True
+
+
 @exit_on_output_write_error
 def main() -> int:
     try_utf8_stdout()
@@ -389,6 +415,11 @@ def main() -> int:
             if sleep_for > 0:
                 time.sleep(min(sleep_for, 5.0))  # cap at 5s for responsiveness to signals
     finally:
+        # What was already unwinding when this `finally` started, if anything.
+        # ⛔ Read HERE and not in the handler below: inside
+        # `except OutputWriteError` the current exception IS that error, so
+        # `sys.exc_info()` there can never answer this question.
+        in_flight = sys.exc_info()[0]
         csv_file.close()
         cfg.ended_at_utc = datetime.now(timezone.utc).isoformat()
 
@@ -419,15 +450,7 @@ def main() -> int:
             # First failure wins and skips the rest; the info lines below still
             # run so the operator sees where the (partial) output went.
             pending_write_error = exc
-            # ⚠️ Said HERE, not only where it is re-raised. This `finally`
-            # also runs while ANOTHER exception is on its way out of the soak
-            # loop, and then the `raise pending_write_error` below is never
-            # reached: the write failure disappeared without a single line
-            # (#1789 F7). This does not touch the rc — whatever is in flight
-            # still decides that — it only makes sure the operator is told
-            # the summary was not written.
-            print(f"[warn] output write failed: {safe_label(str(exc))}",
-                  file=sys.stderr)
+            _report_deferred_write_error(exc, in_flight)
 
         print(f"\n[info] soak {'completed' if not interrupted else 'interrupted'}: "
               f"{cfg.reload_count} reloads / {cfg.poll_count} polls", file=sys.stderr)

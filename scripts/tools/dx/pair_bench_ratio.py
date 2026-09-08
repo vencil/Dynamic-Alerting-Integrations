@@ -385,11 +385,11 @@ def main() -> int:
         "workload_drift": read_workload_drift(args.workload_drift),
         "workload_digest": read_workload_digest(args.workload_digest),
     }
-    # #1789 F6: the wrapper is given the PARENT, which is what the mkdir
-    # actually creates. Handing it the output file produced
-    # "cannot create directory <my-report.json>" — a sentence about a path
-    # nobody was creating. The ancestor rule still converts the failure,
-    # and the write below keeps naming the file.
+    # #1789: the wrapper is given the PARENT — the directory this mkdir
+    # actually creates. Handing it the output FILE makes the message a
+    # sentence about a path nobody was creating (worked example in
+    # `_lib_io.output_write`). The ancestor rule still converts the
+    # failure, and the write below keeps naming the file.
     with output_write(args.out.parent, flag="--out", action="create directory"):
         args.out.parent.mkdir(parents=True, exist_ok=True)
     with output_write(args.out, flag="--out"):

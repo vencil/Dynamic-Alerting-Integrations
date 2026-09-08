@@ -547,6 +547,15 @@ def output_write(
         action: The verb in the message: ``"write"`` (default),
                 ``"create directory"``, ``"copy into"``, …
 
+    ⚠️ **Pass the path the block acts ON, not the path the tool is ultimately
+    producing.** For a ``mkdir`` in front of a file write that means the
+    PARENT: wrapping ``out.parent.mkdir(...)`` with ``path=out`` prints
+    "cannot create directory /srv/reports/health.json" — a sentence about a
+    path nobody was creating, pointing at a file that is not the problem.
+    Measured on six sites in this batch before they were split (#1789); the
+    behavioural gate now parses the verb out of the line and checks the path
+    against it, so the two cannot drift apart again.
+
     Raises:
         OutputWriteError: for an ``OSError`` raised inside the block that
             :func:`_output_write_names_target` attributes to *path*.

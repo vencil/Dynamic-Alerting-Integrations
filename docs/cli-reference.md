@@ -393,7 +393,8 @@ da-tools baseline --tenant db-a --duration 1800 --interval 30 -o /tmp/baseline_o
 | 代碼 | 說明 |
 |------|------|
 | `0` | 成功。⚠️ Prometheus 連線或查詢失敗**不是**錯誤——失敗的採樣記為空值、報告與 CSV 照出，仍是這一格 |
-| `2` | 呼叫端錯誤：`--metrics` 列出的指標沒有一個是工具認得的（錯誤訊息會列出可用清單）、缺必需的 `--tenant`、argparse 拒絕的參數，或 `-o/--output-dir` 寫不進去（實測：父路徑是檔案、目錄下要建的 CSV 已是目錄）——一行 `ERROR: cannot …` 指名 `-o/--output-dir`，不再是 traceback（#1789；本工具沒有「找到違規」語意，所以沒有 `1`） |
+| `1` | 只有未捕捉例外（traceback）會回 1——本命令沒有 violation 出口；實測 `--interval 0`（`duration // interval` 的 `ZeroDivisionError`）是這一格。⛔ 輸出路徑寫不進去自 #1789 起是 `2`，不再落在這裡 |
+| `2` | 呼叫端錯誤：`--metrics` 列出的指標沒有一個是工具認得的（錯誤訊息會列出可用清單）、缺必需的 `--tenant`、argparse 拒絕的參數，或 `-o/--output-dir` 寫不進去（實測：父路徑是檔案、目錄下要建的 CSV 已是目錄）——一行 `ERROR: cannot …` 指名 `-o/--output-dir`，不再是 traceback（#1789） |
 
 ---
 
@@ -870,7 +871,8 @@ da-tools fed-key --rotate --existing-jwks federation-jwks.json \
 | 代碼 | 說明 |
 |------|------|
 | `0` | 金鑰已產生 |
-| `2` | 呼叫端錯誤：`--jwks-out` 寫不進去（實測：目錄不存在）——一行 `ERROR: cannot …` 指名 `--jwks-out`，不再是 traceback（#1789；本工具沒有「找到違規」語意，所以沒有 `1`）；`openssl` 不在 PATH、逾時或失敗；`--existing-jwks` 讀不到、不是 JWKS 文件（沒有 `keys` 陣列）或已含同一個 kid；`--rotate` 沒帶 `--existing-jwks`、`--key-bits` < 2048；stdout 是終端機（拒絕把私鑰 Secret 印到 tty，請接 `\| kubectl apply -f -`） |
+| `1` | 只有未捕捉例外（traceback）會回 1——本命令沒有 violation 出口；實測 `--existing-jwks` 指到一份 JSON **陣列**（頂層不是物件）時是這一格。⛔ 輸出路徑寫不進去自 #1789 起是 `2`，不再落在這裡 |
+| `2` | 呼叫端錯誤：`--jwks-out` 寫不進去（實測：目錄不存在）——一行 `ERROR: cannot …` 指名 `--jwks-out`，不再是 traceback（#1789）；`openssl` 不在 PATH、逾時或失敗；`--existing-jwks` 讀不到、不是 JWKS 文件（沒有 `keys` 陣列）或已含同一個 kid；`--rotate` 沒帶 `--existing-jwks`、`--key-bits` < 2048；stdout 是終端機（拒絕把私鑰 Secret 印到 tty，請接 `\| kubectl apply -f -`） |
 
 ---
 

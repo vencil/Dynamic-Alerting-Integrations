@@ -567,11 +567,11 @@ def _write_yaml(path: Path, data: dict, *, flag: str | None = OUTPUT_FLAG) -> No
     then send the operator to a flag they never typed, so
     ``OutputWriteError`` prints the internal-path wording instead.
     """
-    # #1789 F6: the wrapper is given the PARENT, which is what the mkdir
-    # actually creates. Handing it the output file produced
-    # "cannot create directory <my-report.json>" — a sentence about a path
-    # nobody was creating. The ancestor rule still converts the failure,
-    # and the write below keeps naming the file.
+    # #1789: the wrapper is given the PARENT — the directory this mkdir
+    # actually creates. Handing it the output FILE makes the message a
+    # sentence about a path nobody was creating (worked example in
+    # `_lib_io.output_write`). The ancestor rule still converts the
+    # failure, and the write below keeps naming the file.
     with output_write(path.parent, flag=flag, action="create directory"):
         path.parent.mkdir(parents=True, exist_ok=True)
     with output_write(path, flag=flag):
@@ -703,7 +703,16 @@ def main() -> None:
         # Derived in-repo, not operator argv — there is no flag to send them to.
         out_flag = None
 
-    if output_dir.exists() and any(output_dir.iterdir()):
+    # #1789: the "already populated?" pre-check is wrapped TOO, even though it
+    # only READS. It runs before every write site, so it is where an
+    # `-o/--output` naming an existing FILE actually dies — `iterdir()` on a
+    # regular file raises NotADirectoryError, which reached the operator as a
+    # traceback at rc=1 while every wrapped write site below sat unreached
+    # (measured). The verb says what the block does: nothing is being written
+    # here yet.
+    with output_write(output_dir, flag=out_flag, action="inspect"):
+        already_populated = output_dir.exists() and any(output_dir.iterdir())
+    if already_populated:
         print(f"⚠️  Output directory {output_dir} already exists and is not empty.")
         print(f"   Use a different --output or remove it first.")
         sys.exit(EXIT_CALLER_ERROR)

@@ -183,7 +183,11 @@ def test_a_resolve_that_raises_oserror_lets_the_original_through(
     thrown by the classifier itself. The contract when the comparison cannot
     be made is unchanged: the original exception flies, untouched.
 
-    A specific break that reddens this: drop ``OSError`` from either
+    This one blows up on EVERY ``resolve``, so it is answered by the FIRST
+    arm (the target). The candidate arm has its own case below — without it,
+    reverting only that arm stayed green.
+
+    A specific break that reddens this: drop ``OSError`` from the TARGET
     ``except`` in ``_output_write_names_target``.
     """
     def _boom(self, strict=False):
@@ -195,6 +199,42 @@ def test_a_resolve_that_raises_oserror_lets_the_original_through(
         with output_write(blocker / "x", flag="-o"):
             raise original
     assert ei.value is original
+
+
+def test_only_the_candidate_resolve_raising_oserror_is_caught_too(
+        blocker: Path, monkeypatch):
+    """The SECOND arm on its own, which the case above cannot reach.
+
+    ``_output_write_names_target`` resolves twice: once for the wrapped path
+    (absolute here, so no cwd is needed) and once per ``exc.filename``. Only
+    the second one is made to raise — the shape a deleted cwd really
+    produces, since only a RELATIVE path has to consult it. With the arms
+    guarded differently this is the only case that can tell them apart, and
+    it is why the docstring can say "either ``except``".
+
+    A specific break that reddens this: drop ``OSError`` from the CANDIDATE
+    ``except`` in ``_output_write_names_target``.
+    """
+    out = blocker / "x"                      # absolute — resolves fine
+    real_resolve = Path.resolve
+    seen: list[str] = []
+
+    def _selective(self, strict=False):
+        seen.append(str(self))
+        if not self.is_absolute():
+            raise FileNotFoundError(2, "No such file or directory")
+        return real_resolve(self, strict=strict)
+
+    monkeypatch.setattr(Path, "resolve", _selective)
+    # A relative filename: the kernel reports what the caller handed it.
+    original = OSError(21, "Is a directory", "relative/x")
+    with pytest.raises(OSError) as ei:
+        with output_write(out, flag="-o"):
+            raise original
+    assert ei.value is original
+    assert not isinstance(ei.value, OutputWriteError)
+    # Both arms really ran — otherwise this would pass for the wrong reason.
+    assert seen == [str(out), "relative/x"], seen
 
 
 def test_oserror_with_no_filename_is_converted(blocker: Path):

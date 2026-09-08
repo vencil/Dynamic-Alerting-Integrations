@@ -83,6 +83,7 @@
   "scripts/tools/_lib_io.py": [
    "tests/dx/test_generate_tenant_fixture.py",
    "tests/dx/test_line_ending_policy.py",
+   "tests/dx/test_run_chaos_soak.py",
    "tests/ops/test_da_assembler.py",
    "tests/ops/test_policy_opa_bridge.py",
    "tests/shared/test_confd_name_classification_parity.py",
@@ -828,7 +829,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "24ade2df9d28d956adeb7e90094a57a23df91cad986bf2c29ff03e0d0ab623df",
+ "source_digest": "0de9cfb881e2456b1a2e6266f3ac24ca9aeba5bac1a0ef3e01f6828317c3538e",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",

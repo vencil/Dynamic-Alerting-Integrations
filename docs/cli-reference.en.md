@@ -411,7 +411,8 @@ docker run --rm --network=host \
 | Code | Description |
 |------|-------------|
 | `0` | Success. ⚠️ A Prometheus connection / query failure is **not** an error — failed samples are recorded as empty, the report and CSVs are still written, still this code |
-| `2` | Caller error: none of the `--metrics` names is one the tool knows (the error lists the accepted ones), the required `--tenant` missing, arguments argparse rejects, or `-o/--output-dir` cannot be written (measured: the parent is a file; a CSV the tool must create inside it is already a directory) — one `ERROR: cannot …` line naming `-o/--output-dir`, no traceback (#1789; this tool has no "found a violation" semantics, hence no `1`) |
+| `1` | Only an uncaught exception (traceback) returns 1 — this command has no violation exit; measured with `--interval 0` (`duration // interval` raises `ZeroDivisionError`). ⛔ An unwritable output path has been `2` since #1789 and no longer lands here |
+| `2` | Caller error: none of the `--metrics` names is one the tool knows (the error lists the accepted ones), the required `--tenant` missing, arguments argparse rejects, or `-o/--output-dir` cannot be written (measured: the parent is a file; a CSV the tool must create inside it is already a directory) — one `ERROR: cannot …` line naming `-o/--output-dir`, no traceback (#1789) |
 
 ---
 
@@ -968,7 +969,8 @@ da-tools fed-key --rotate --existing-jwks federation-jwks.json \
 | Code | Description |
 |------|-------------|
 | `0` | Key generated |
-| `2` | Caller error: `--jwks-out` cannot be written (measured: its directory does not exist) — one `ERROR: cannot …` line naming `--jwks-out`, no traceback (#1789; this tool has no "found a violation" semantics, hence no `1`); `openssl` not on PATH, timed out or failed; `--existing-jwks` unreadable, not a JWKS document (no `keys` array) or already holding the same kid; `--rotate` without `--existing-jwks`, `--key-bits` < 2048; stdout is a terminal (refuses to print the private-key Secret to a tty — pipe it to `\| kubectl apply -f -`) |
+| `1` | Only an uncaught exception (traceback) returns 1 — this command has no violation exit; measured when `--existing-jwks` points at a JSON **array** (a top level that is not an object). ⛔ An unwritable output path has been `2` since #1789 and no longer lands here |
+| `2` | Caller error: `--jwks-out` cannot be written (measured: its directory does not exist) — one `ERROR: cannot …` line naming `--jwks-out`, no traceback (#1789); `openssl` not on PATH, timed out or failed; `--existing-jwks` unreadable, not a JWKS document (no `keys` array) or already holding the same kid; `--rotate` without `--existing-jwks`, `--key-bits` < 2048; stdout is a terminal (refuses to print the private-key Secret to a tty — pipe it to `\| kubectl apply -f -`) |
 
 ---
 

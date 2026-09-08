@@ -509,7 +509,7 @@ ROWS: list[Row] = [
                                         "-o", str(out)])(_layout),
         reach=f"flags only; --layout {_layout}",
         out_name="conf.d",
-        shapes=("parent_is_file",))
+        shapes=("parent_is_file", "target_is_file"))
       for _layout in ("flat", "hierarchical", "synthetic-v2")],
     # `--summary-file` is why the population is derived from the WRITER and
     # not from `add_argument` names: a declaration-side scan for `--out*`
@@ -551,7 +551,7 @@ ROWS: list[Row] = [
                       "--output-dir", str(out)],
       reach="the shared stub's /soak personality (Go-runtime /metrics body); "
             "the first-probe check is what a wrong stub would fail on",
-      shapes=("parent_is_file",)),
+      shapes=("parent_is_file", "target_is_file")),
     *[R("dx/run_chaos_soak.py", "--output-dir", "dir",
         lambda c, out: ["--target-url", c.stub + "/soak",
                         "--config-dir", _soak_config_dir(c.tmp),
@@ -603,7 +603,7 @@ ROWS: list[Row] = [
       lambda c, out: ["--compile", "--out", str(out), "--allow-selftest",
                       str(WAVEFORM_FIXTURE)],
       reach="in-repo self-test waveform pack fixture",
-      shapes=("parent_is_file",)),
+      shapes=("parent_is_file", "target_is_file")),
     # ── lint ───────────────────────────────────────────────────────────────
     R("lint/trufflehog_to_sarif.py", "--output", "file",
       lambda c, out: ["--input", _trufflehog_ndjson(c.tmp), "--output", str(out)],
@@ -672,7 +672,7 @@ ROWS: list[Row] = [
       # (verified: deleting THEIR wrapper leaves this row green and turns the
       # static pin red — the two gates cover this file between them, neither
       # alone).
-      shapes=("parent_is_file", "artifact_is_dir"),
+      shapes=("parent_is_file", "target_is_file", "artifact_is_dir"),
       artifact="db-a.yaml"),
     R("ops/state_reconcile.py", "--manifest-path", "file",
       lambda c, out: ["--state-dir", _state_dir(c.tmp), "--manifest-path", str(out)],
@@ -721,7 +721,7 @@ ROWS: list[Row] = [
       # shape, because copy2 with a directory destination copies INTO it
       # (measured: rc=0, the file lands at <out>/alpha.yaml/alpha.yaml). That
       # sink is wrapped and only the static pin speaks for it.
-      shapes=("parent_is_file",)),
+      shapes=("parent_is_file", "target_is_file")),
     R("ops/assemble_config_dir.py", "--manifest", "file",
       lambda c, out: ["--sources", _shard_source_dir(c.tmp),
                       "--output", str(c.tmp / "assembled"), "--manifest", str(out)],
@@ -745,37 +745,37 @@ ROWS: list[Row] = [
       # `open(..., 'wb')` + `chmod` inside `_write_csv_secure`. The FIRST CSV
       # is the artefact — the summary write behind it is masked, as the
       # module docstring says, and only the static pin speaks for it.
-      shapes=("parent_is_file", "artifact_is_dir"),
+      shapes=("parent_is_file", "target_is_file", "artifact_is_dir"),
       artifact="baseline-t1-timeseries.csv"),
     # ── ops: output directories ────────────────────────────────────────────
     R("ops/init_project.py", "-o/--output-dir", "dir",
       lambda c, out: ["-o", str(out), "--non-interactive", "--tenants", "alpha",
                       "--rule-packs", "mariadb"],
       reach="non-interactive flags only",
-      shapes=("parent_is_file",)),
+      shapes=("parent_is_file", "target_is_file")),
     R("ops/migrate_rule.py", "-o/--output-dir", "dir",
       lambda c, out: [_legacy_rules(c.tmp), "-o", str(out)],
       reach="tmp legacy Prometheus rules file",
-      shapes=("parent_is_file",)),
+      shapes=("parent_is_file", "target_is_file")),
     R("ops/migrate_to_operator.py", "--output-dir", "dir",
       lambda c, out: ["--source-dir", str(_jsc.K8S_MONITORING),
                       "--config-dir", str(_jsc.SEED_CONF_D), "--output-dir", str(out)],
       reach="in-repo k8s/03-monitoring + seed conf.d",
-      shapes=("parent_is_file",)),
+      shapes=("parent_is_file", "target_is_file")),
     R("ops/onboard_platform.py", "-o/--output-dir", "dir",
       lambda c, out: ["--alertmanager-config", str(_jsc.ALERTMANAGER_YML), "-o", str(out)],
       reach="in-repo try-local alertmanager.yml",
-      shapes=("parent_is_file",)),
+      shapes=("parent_is_file", "target_is_file")),
     R("ops/scaffold_tenant.py", "-o/--output-dir", "dir",
       lambda c, out: ["--tenant", "alpha", "--db", "mariadb", "--non-interactive",
                       "-o", str(out)],
       reach="non-interactive flags only",
-      shapes=("parent_is_file",)),
+      shapes=("parent_is_file", "target_is_file")),
     R("ops/validate_migration.py", "-o/--output-dir", "dir",
       lambda c, out: ["--old", "up", "--new", "up", "--prometheus", c.stub + "/rich",
                       "-o", str(out)],
       reach="local Prometheus stub (/rich: identical vectors ⇒ match)",
-      shapes=("parent_is_file",)),
+      shapes=("parent_is_file", "target_is_file")),
     R("ops/generate_rule_pack_split.py", "--output-dir", "dir",
       lambda c, out: ["--rule-packs-dir", _one_rule_pack_dir(c.tmp), "--output-dir", str(out)],
       reach="tmp rule-packs dir holding a copy of rule-pack-mariadb.yaml",
@@ -785,13 +785,13 @@ ROWS: list[Row] = [
       # in the file — the `open(validation-report.json, "w")` that #1789
       # wrapped. Without this second shape the row would still be green with
       # that wrapper deleted.
-      shapes=("parent_is_file", "artifact_is_dir"),
+      shapes=("parent_is_file", "target_is_file", "artifact_is_dir"),
       artifact="validation-report.json"),
     R("ops/operator_generate.py", "--output-dir", "dir",
       lambda c, out: ["--rule-packs-dir", str(_jsc.RULE_PACKS),
                       "--config-dir", str(_jsc.SEED_CONF_D), "--output-dir", str(out)],
       reach="in-repo rule-packs + seed conf.d",
-      shapes=("parent_is_file",)),
+      shapes=("parent_is_file", "target_is_file")),
 ]
 
 
@@ -811,12 +811,16 @@ def _run(row: Row, ctx: Ctx, out: Path) -> subprocess.CompletedProcess:
 
 
 SHAPES = ("missing_parent", "parent_is_file", "target_is_dir",
-          "artifact_is_dir", "sibling_is_file", "sibling_is_dir")
+          "target_is_file", "artifact_is_dir", "sibling_is_file",
+          "sibling_is_dir")
 # Shapes that pre-create ``Row.artifact`` and therefore require it.
 _ARTIFACT_SHAPES = frozenset({"artifact_is_dir", "sibling_is_file",
                              "sibling_is_dir"})
 # The two shapes that corrupt the flag value's PARENT.
 _PARENT_SHAPES = frozenset({"missing_parent", "parent_is_file"})
+# Shapes a ``kind="dir"`` tool answers by failing at a ``mkdir``: either at
+# the flag value itself, or at the first subdirectory it makes inside it.
+_DIR_MKDIR_SHAPES = _PARENT_SHAPES | {"target_is_file"}
 
 
 def _bad_path(tmp: Path, shape: str, row: Row) -> Path:
@@ -832,6 +836,18 @@ def _bad_path(tmp: Path, shape: str, row: Row) -> Path:
         # it was told to WRITE is a directory.
         out = tmp / row.out_name
         out.mkdir(parents=True)
+        return out
+    if shape == "target_is_file":
+        # The mirror of the above, for a `--output-dir` tool: the flag value
+        # is a regular FILE. Its `mkdir -p` fails, but so does anything that
+        # LISTS the directory first — and that is the point. A pre-check
+        # ("is it already populated?") runs before every write site, so it is
+        # where such a tool actually dies; neither parent shape can see it,
+        # because they kill the tool at its own mkdir first. Measured on
+        # dx/generate_tenant_fixture as a NotADirectoryError traceback at
+        # rc=1 with every wrapped write site below it unreached (#1789).
+        out = tmp / row.out_name
+        out.write_text("this is a file, not a directory\n", encoding="utf-8")
         return out
     if shape == "artifact_is_dir":
         # The output directory itself is fine — the tool's own mkdir -p
@@ -858,7 +874,8 @@ def _bad_path(tmp: Path, shape: str, row: Row) -> Path:
 
 # The verbs ``_lib_io.OutputWriteError`` can put in ``cannot <action> …``.
 # Longest-first so ``create directory`` is not eaten by a prefix.
-_ACTIONS = ("create directory", "copy into", "append to", "write", "append")
+_ACTIONS = ("create directory", "copy into", "append to", "inspect",
+            "write", "append")
 
 
 def _named_path(line: str, prefix: str) -> tuple[str, str]:
@@ -902,7 +919,7 @@ def _expected_fragment(row: Row, shape: str, out: Path,
     * anything else, and every ``kind="dir"`` row (where the flag value IS
       the directory the tool creates) ⇒ the flag value itself.
     """
-    if shape == "target_is_dir":
+    if shape in ("target_is_dir", "target_is_file"):
         return out
     if shape == "artifact_is_dir":
         return out / row.artifact
@@ -926,13 +943,15 @@ def _names_the_blocked_path(row: Row, shape: str, out: Path,
     ⛔ The widening is gated on ``kind="dir"``, so it cannot rescue a FILE
     row: there ``out.parent`` and ``out`` are what have to be told apart, and
     ``out`` IS a descendant of ``out.parent`` — allowing descendants would
-    hand back exactly the hole #1789 F6 came out of.
+    hand back exactly the hole the mkdir-path defect came out of. It is also
+    gated on the ``create directory`` verb, so the ``inspect`` / ``write``
+    verbs still have to name the flag value exactly.
     """
     expected = _expected_fragment(row, shape, out, action)
     if named == str(expected):
         return True
     if (row.kind == "dir" and action == "create directory"
-            and shape in _PARENT_SHAPES):
+            and shape in _DIR_MKDIR_SHAPES):
         return expected in Path(named).parents
     return False
 
@@ -1009,6 +1028,17 @@ def test_control_writable_path_is_rc0_and_writes(row, tmp_path, stub_url):
     assert "Traceback" not in proc.stderr, _fail(row, proc, "control run leaked a traceback")
     assert not _error_lines(proc.stderr, row.prefix), _fail(
         row, proc, "control run printed a write error")
+    # ⛔ And once more WITHOUT the row's head. `_error_lines` is anchored on
+    # the declared prefix, so for the two rows that declare a non-default one
+    # a control run that printed the SHARED `ERROR: cannot …` line would slip
+    # past the check above — the prefix would not match, the line would not be
+    # counted, and a tool failing its write on a perfectly good path would
+    # read as clean. These two fragments are in every standard line whatever
+    # head is in front of them.
+    for fragment in ("cannot ", "check the value given to"):
+        assert fragment not in proc.stderr, _fail(
+            row, proc, f"control run printed {fragment!r} — a write error on a "
+                       f"writable path, whatever head is in front of it")
     if row.produces is not None:
         # A derived-output tool: the flag value is an INPUT the fixture just
         # populated, so "something exists there" proves nothing. Name what the
@@ -1178,6 +1208,38 @@ class TestRequiresSkip:
 
     def test_no_requirement_does_not_skip(self):
         _skip_if_unavailable(_control_row())
+
+
+class TestTargetIsFileShape:
+    """The mirror of ``target_is_dir``, for ``--output-dir`` tools (#1789).
+
+    A ``dir`` tool's flag value being a regular FILE is the shape that reaches
+    whatever runs BEFORE the first write — an "is it already populated?"
+    ``iterdir``, a ``glob``, a ``listdir``. ``dx/generate_tenant_fixture``
+    died there with a ``NotADirectoryError`` traceback at rc=1 while every
+    wrapped write site below it sat unreached, and neither parent shape could
+    see it: they corrupt the parent, so the tool dies at its own mkdir first.
+    """
+
+    def test_it_makes_the_flag_value_a_file(self, tmp_path):
+        row = _control_row(shapes=("target_is_file",))
+        out = _bad_path(tmp_path, "target_is_file", row)
+        assert out.is_file(), "the flag value itself must be the blocker"
+        assert out.parent.is_dir(), "the parent must stay usable"
+        with pytest.raises(NotADirectoryError):
+            list(out.iterdir())
+
+    def test_the_asserted_path_is_the_flag_value(self, tmp_path):
+        row = _control_row(shapes=("target_is_file",))
+        out = _bad_path(tmp_path, "target_is_file", row)
+        assert _expected_fragment(row, "target_is_file", out) == out
+        # A non-mkdir verb must name it EXACTLY: the subdirectory widening is
+        # for `create directory` only.
+        assert _names_the_blocked_path(row, "target_is_file", out, "inspect", str(out))
+        assert not _names_the_blocked_path(row, "target_is_file", out, "inspect",
+                                           str(out / "conf.d"))
+        assert _names_the_blocked_path(row, "target_is_file", out,
+                                       "create directory", str(out / "conf.d"))
 
 
 class TestArtifactIsDirShape:

@@ -446,3 +446,55 @@ class TestTriggerReloadAcceptsBothSpellings:
         # honest answer is False rather than "I touched something".
         assert rcs.trigger_reload(d) is False
         assert buried.read_text(encoding="utf-8") == before
+
+
+# ---------------------------------------------------------------------------
+# #1789: the deferred write error, and when it has to be said out loud
+# ---------------------------------------------------------------------------
+class TestDeferredWriteErrorReporting:
+    """The summary / run-config writes sit in a `finally`, so their
+    `OutputWriteError` is remembered and re-raised AFTER the block. Whether
+    that re-raise is ever reached depends on something this handler cannot
+    see from inside itself — whether another exception was already unwinding
+    — so the in-flight type is read at the top of the `finally` and passed in.
+    """
+
+    @staticmethod
+    def _exc():
+        from _lib_io import OutputWriteError
+        return OutputWriteError("/blocked/summary.txt",
+                                IsADirectoryError(21, "Is a directory"),
+                                flag="--output-dir")
+
+    def test_nothing_in_flight_stays_quiet(self, capsys):
+        """The re-raise below really happens and the decorator prints the
+        standard rc=2 line; saying it here too would print it twice.
+
+        A specific break that reddens this: print unconditionally.
+        """
+        assert rcs._report_deferred_write_error(self._exc(), None) is False
+        assert capsys.readouterr().err == ""
+
+    @pytest.mark.parametrize("in_flight", [KeyboardInterrupt, RuntimeError, SystemExit])
+    def test_an_in_flight_exception_makes_it_speak(self, capsys, in_flight):
+        """⛔ The case the first version got wrong by staying silent. The
+        exception already unwinding wins, `raise pending_write_error` is never
+        reached, and without this line the write failure leaves no trace at
+        all.
+
+        A specific break that reddens this: drop the `in_flight` argument and
+        return False unconditionally.
+        """
+        assert rcs._report_deferred_write_error(self._exc(), in_flight) is True
+        err = capsys.readouterr().err.strip().splitlines()
+        assert len(err) == 1, err
+        assert err[0].startswith("[warn] output write failed: cannot write ")
+        assert "--output-dir" in err[0]
+
+    def test_the_warn_line_is_not_the_standard_error_line(self, capsys):
+        """It must not be mistaken for the contract line: rc is unchanged and
+        the operator is being told a SECOND thing, not the primary failure."""
+        rcs._report_deferred_write_error(self._exc(), KeyboardInterrupt)
+        err = capsys.readouterr().err
+        assert not err.startswith("ERROR: ")
+        assert "\nERROR: " not in err
