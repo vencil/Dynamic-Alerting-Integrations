@@ -437,3 +437,189 @@ class TestCLI:
         cfv.main(["--fix"])
         content = doc.read_text(encoding="utf-8")
         assert "version: v2.0.0" in content
+
+
+# ============================================================
+# #1790 — hidden is judged below docs/, and an empty scan is refused
+# ============================================================
+
+
+def _claude_md(root, version="2.0.0"):
+    claude = root / "CLAUDE.md"
+    claude.write_text(f"## 專案概覽 (v{version})\n", encoding="utf-8")
+    return claude
+
+
+def _point(monkeypatch, root, docs):
+    monkeypatch.setattr(cfv, "REPO_ROOT", root)
+    monkeypatch.setattr(cfv, "DOCS_DIR", docs)
+    monkeypatch.setattr(cfv, "CLAUDE_MD", _claude_md(root))
+
+
+class TestHiddenIsJudgedBelowDocsDir:
+    """#1790: ``.claude/worktrees/<name>/docs/…`` must be scanned.
+
+    The old predicate looked at every component of the *absolute* path, so a
+    dot-directory anywhere above the checkout hid the whole docs tree. The
+    positive case here builds exactly that ancestor shape; the negative case
+    pins that hidden entries *inside* docs/ are still skipped, so the fix is
+    not "stop skipping hidden things".
+    """
+
+    def test_a_dot_ancestor_of_docs_dir_does_not_hide_the_tree(self, tmp_path):
+        docs = tmp_path / ".claude" / "worktrees" / "x" / "docs"
+        (docs / "sub").mkdir(parents=True)
+        (docs / "page.md").write_text("---\nversion: v1.0.0\n---\n",
+                                      encoding="utf-8")
+        (docs / "sub" / "deep.md").write_text("# plain\n", encoding="utf-8")
+        results = cfv.scan_docs(docs)
+        assert sorted(r.file_path.name for r in results) == ["deep.md", "page.md"]
+
+    def test_hidden_entries_inside_docs_dir_are_still_skipped(self, tmp_path):
+        docs = tmp_path / ".claude" / "worktrees" / "x" / "docs"
+        (docs / ".hidden").mkdir(parents=True)
+        (docs / "sub" / ".git").mkdir(parents=True)
+        (docs / ".hidden" / "a.md").write_text("---\nversion: v1.0.0\n---\n",
+                                               encoding="utf-8")
+        (docs / "sub" / ".git" / "b.md").write_text("---\nversion: v1.0.0\n---\n",
+                                                    encoding="utf-8")
+        (docs / ".dotfile.md").write_text("---\nversion: v1.0.0\n---\n",
+                                          encoding="utf-8")
+        (docs / "sub" / "ok.md").write_text("---\nversion: v1.0.0\n---\n",
+                                            encoding="utf-8")
+        results = cfv.scan_docs(docs)
+        assert [r.file_path.name for r in results] == ["ok.md"]
+
+
+class TestCLIUnderADotDirectoryAndOnAnEmptyTree:
+    """#1790 end-to-end: drift under a dot ancestor is seen; 0 files is rc 2."""
+
+    def test_ci_sees_drift_in_a_checkout_under_a_dot_directory(
+            self, tmp_path, monkeypatch):
+        """Before the fix this exited 0 with "All 0 frontmatter versions match"."""
+        root = tmp_path / ".claude" / "worktrees" / "x"
+        docs = root / "docs"
+        docs.mkdir(parents=True)
+        (docs / "old.md").write_text("---\nversion: v1.0.0\n---\n",
+                                     encoding="utf-8")
+        _point(monkeypatch, root, docs)
+        with pytest.raises(SystemExit) as exc_info:
+            cfv.main(["--ci"])
+        assert exc_info.value.code == 1
+
+    def _no_markdown(self, tmp_path, monkeypatch):
+        docs = tmp_path / "docs"
+        (docs / "images").mkdir(parents=True)
+        (docs / "images" / "logo.png").write_bytes(b"\x89PNG")
+        _point(monkeypatch, tmp_path, docs)
+
+    def test_a_docs_tree_with_no_markdown_is_a_caller_error(
+            self, tmp_path, monkeypatch, capsys):
+        """Red if the floor is removed, or if the reason stops reaching stdout
+        (validate_all quotes only the last meaningful stdout line)."""
+        self._no_markdown(tmp_path, monkeypatch)
+        with pytest.raises(SystemExit) as exc_info:
+            cfv.main(["--ci"])
+        assert exc_info.value.code == EXIT_CALLER_ERROR
+        captured = capsys.readouterr()
+        assert "no markdown files found" in captured.err
+        assert "no markdown files found" in captured.out.strip().splitlines()[-1]
+
+    def test_json_mode_refuses_with_one_json_document(
+            self, tmp_path, monkeypatch, capsys):
+        """dev-rules §13: --json stdout is exactly one JSON document on every
+        terminal path. Red if the refusal prints prose to stdout instead."""
+        self._no_markdown(tmp_path, monkeypatch)
+        with pytest.raises(SystemExit) as exc_info:
+            cfv.main(["--json"])
+        assert exc_info.value.code == EXIT_CALLER_ERROR
+        captured = capsys.readouterr()
+        doc = json.loads(captured.out)
+        assert doc["status"] == "caller_error"
+        assert "no markdown files found" in doc["reason"]
+        assert doc["total_scanned"] == 0 and doc["items"] == []
+        assert "no markdown files found" in captured.err
+
+    def test_markdown_that_is_all_hidden_says_so(self, tmp_path, monkeypatch, capsys):
+        """Blind-review F2: "no markdown files found" would be false here."""
+        docs = tmp_path / "docs"
+        (docs / ".archive").mkdir(parents=True)
+        (docs / ".archive" / "x.md").write_text("---\nversion: v1.0.0\n---\n",
+                                                 encoding="utf-8")
+        _point(monkeypatch, tmp_path, docs)
+        with pytest.raises(SystemExit) as exc_info:
+            cfv.main(["--ci"])
+        assert exc_info.value.code == EXIT_CALLER_ERROR
+        err = capsys.readouterr().err
+        assert "all 1 markdown file(s) hidden" in err
+        assert "no markdown files found" not in err
+
+    @pytest.mark.parametrize("shape", ["missing", "file"])
+    def test_a_docs_path_that_is_not_a_directory_is_named_as_such(
+            self, tmp_path, monkeypatch, capsys, shape):
+        """Blind-review round 2: "no markdown files found" would send the
+        operator to the wrong fix when docs/ is absent or is a plain file."""
+        docs = tmp_path / "docs"
+        if shape == "file":
+            docs.write_text("not a dir\n", encoding="utf-8")
+        _point(monkeypatch, tmp_path, docs)
+        with pytest.raises(SystemExit) as exc_info:
+            cfv.main(["--ci"])
+        assert exc_info.value.code == EXIT_CALLER_ERROR
+        err = capsys.readouterr().err
+        assert "not a directory" in err
+        assert "no markdown files found" not in err
+
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores mode bits")
+    def test_an_unreadable_docs_dir_is_named_as_such(
+            self, tmp_path, monkeypatch, capsys):
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "a.md").write_text("---\nversion: v1.0.0\n---\n", encoding="utf-8")
+        docs.chmod(0)
+        try:
+            _point(monkeypatch, tmp_path, docs)
+            with pytest.raises(SystemExit) as exc_info:
+                cfv.main(["--ci"])
+        finally:
+            docs.chmod(0o700)
+        assert exc_info.value.code == EXIT_CALLER_ERROR
+        assert "not readable" in capsys.readouterr().err
+
+    def test_the_report_says_how_many_were_skipped_as_hidden(
+            self, tmp_path, monkeypatch, capsys):
+        """The independent witness (every *.md, hidden or not) is printed on
+        every run, so a scan that shrank without reaching zero is visible."""
+        docs = tmp_path / "docs"
+        (docs / ".staging").mkdir(parents=True)
+        (docs / "a.md").write_text("---\nversion: v2.0.0\n---\n", encoding="utf-8")
+        (docs / "b.md").write_text("---\nversion: v2.0.0\n---\n", encoding="utf-8")
+        (docs / ".staging" / "c.md").write_text("---\nversion: v1.0.0\n---\n",
+                                                 encoding="utf-8")
+        _point(monkeypatch, tmp_path, docs)
+        cfv.main(["--ci"])
+        assert "Scanned: 2 of 3 markdown file(s) (1 hidden)" in capsys.readouterr().out
+
+    def test_files_without_any_frontmatter_do_not_print_the_green_line(
+            self, tmp_path, monkeypatch, capsys):
+        """Blind-review F5: "✅ All 0 … match" must not be reachable at all."""
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "a.md").write_text("# a\n", encoding="utf-8")
+        (docs / "b.md").write_text("# b\n", encoding="utf-8")
+        _point(monkeypatch, tmp_path, docs)
+        cfv.main(["--ci"])  # rc 0 by design: frontmatter is per-file optional
+        out = capsys.readouterr().out
+        assert "0 of 2 files carry frontmatter" in out
+        assert "✅" not in out
+
+    def test_hidden_is_whatever_the_shared_predicate_says(self, tmp_path, monkeypatch):
+        """Control for the delegation to _lib_confd.is_hidden_name: red if
+        scan_docs re-implements the dot test inline."""
+        docs = tmp_path / "docs"
+        (docs / "zzz").mkdir(parents=True)
+        (docs / ".h").mkdir()
+        (docs / "zzz" / "a.md").write_text("# a\n", encoding="utf-8")
+        (docs / ".h" / "b.md").write_text("# b\n", encoding="utf-8")
+        monkeypatch.setattr(cfv, "is_hidden_name", lambda name: name == "zzz")
+        assert [r.file_path.name for r in cfv.scan_docs(docs)] == ["b.md"]

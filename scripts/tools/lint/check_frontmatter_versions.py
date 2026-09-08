@@ -22,6 +22,7 @@ from typing import Dict, List, Optional
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
+from _lib_confd import is_hidden_name  # noqa: E402
 from _lib_python import write_text_or_die  # noqa: E402
 from _lib_exitcodes import EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_versions import (  # noqa: E402
@@ -133,14 +134,23 @@ def extract_frontmatter(file_path: Path) -> FrontmatterInfo:
 
 
 def scan_docs(docs_dir: Path) -> List[FrontmatterInfo]:
-    """Scan all markdown files under docs/ for frontmatter versions."""
+    """Scan all markdown files under docs/ for frontmatter versions.
+
+    Hidden entries are judged on the path *below* ``docs_dir``, never on the
+    absolute path. #1790: the previous test walked ``md_file.parts`` — every
+    ancestor included — so a checkout living under any dot-directory
+    (Claude Code's agent worktrees sit in ``.claude/worktrees/<name>/``)
+    skipped the whole tree and reported a green "All 0 frontmatter versions
+    match". The predicate is ``_lib_confd.is_hidden_name``.
+    """
     results = []
     if not docs_dir.exists():
         return results
 
     for md_file in sorted(docs_dir.rglob("*.md")):
-        # Skip hidden directories
-        if any(part.startswith(".") for part in md_file.parts):
+        # Skip hidden directories/files *inside* docs_dir only.
+        rel_parts = md_file.relative_to(docs_dir).parts
+        if any(is_hidden_name(part) for part in rel_parts):
             continue
         info = extract_frontmatter(md_file)
         results.append(info)
@@ -214,11 +224,22 @@ def format_text_report(
     expected: str,
     total_scanned: int,
     total_with_fm: int,
+    total_found: Optional[int] = None,
 ) -> str:
-    """Format a human-readable text report."""
+    """Format a human-readable text report.
+
+    ``total_found`` is every ``*.md`` below docs/ before the hidden filter;
+    printing it next to ``total_scanned`` is what lets a reader see a scan
+    that silently shrank (#1790) without re-running ``find`` themselves.
+    """
     lines = []
     lines.append(f"Platform version: v{expected}")
-    lines.append(f"Scanned: {total_scanned} files, {total_with_fm} with frontmatter")
+    if total_found is None:
+        lines.append(f"Scanned: {total_scanned} files, {total_with_fm} with frontmatter")
+    else:
+        lines.append(f"Scanned: {total_scanned} of {total_found} markdown file(s) "
+                     f"({total_found - total_scanned} hidden), "
+                     f"{total_with_fm} with frontmatter")
     lines.append("")
 
     errors = [i for i in items if i.severity == "error"]
@@ -239,7 +260,13 @@ def format_text_report(
             lines.append(f"  ⚠️  {item.file} — frontmatter has no version: field")
         lines.append("")
 
-    if not items:
+    if not items and total_with_fm == 0:
+        # #1790: files were enumerated but none carries frontmatter, so no
+        # comparison happened. rc stays 0 (frontmatter is per-file optional),
+        # but the wording must not be the green "All 0 … match".
+        lines.append(f"⚠️  0 of {total_scanned} files carry frontmatter — "
+                     "nothing was compared")
+    elif not items:
         lines.append(f"✅ All {total_with_fm} frontmatter versions match v{expected}")
     else:
         lines.append(f"Summary: {len(errors)} error(s), {len(warnings)} warning(s)")
@@ -252,12 +279,24 @@ def format_json_report(
     expected: str,
     total_scanned: int,
     total_with_fm: int,
+    total_found: Optional[int] = None,
+    status: str = "ok",
+    reason: Optional[str] = None,
 ) -> str:
-    """Format a JSON report."""
+    """Format a JSON report.
+
+    ``status``/``reason`` exist for the refused-empty-population path: in
+    ``--json`` mode stdout must still be exactly one JSON document
+    (dev-rules §13), so that path emits this shape zeroed out with
+    ``status="caller_error"`` instead of prose.
+    """
     errors = [i for i in items if i.severity == "error"]
     warnings = [i for i in items if i.severity == "warn"]
     result = {
+        "status": status,
+        "reason": reason,
         "expected_version": expected,
+        "total_found": total_found if total_found is not None else total_scanned,
         "total_scanned": total_scanned,
         "total_with_frontmatter": total_with_fm,
         "items": [i.to_dict() for i in items],
@@ -288,7 +327,40 @@ def main(argv: Optional[List[str]] = None) -> None:
               file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
-    scanned = scan_docs(docs_dir=DOCS_DIR)
+    # #1790: an empty population is a caller error, not a clean pass.
+    # "Scanned: 0 files" used to exit 0 — indistinguishable from "every file
+    # matched" — and nothing could tell the two apart until #1492 wired this
+    # tool into a runner. Say WHICH empty shape this is, because the
+    # operator's own `find docs -name '*.md'` contradicts the wrong wording:
+    # docs/ missing or a file, docs/ unreadable, no markdown at all, or
+    # markdown present but every file hidden. The discriminating words come
+    # FIRST: validate_all (`make lint-docs`) quotes only the last meaningful
+    # stdout line, cut to 80 characters.
+    reason: Optional[str] = None
+    total_found = 0
+    if not DOCS_DIR.is_dir():
+        reason = f"not a directory: {DOCS_DIR}"
+    elif not os.access(DOCS_DIR, os.R_OK):
+        reason = f"not readable: {DOCS_DIR}"
+    else:
+        total_found = sum(1 for _ in DOCS_DIR.rglob("*.md"))
+    scanned = scan_docs(docs_dir=DOCS_DIR) if reason is None else []
+    if not scanned:
+        if reason is None and total_found:
+            reason = (f"all {total_found} markdown file(s) hidden (skipped by "
+                      f"_lib_confd.is_hidden_name) under {DOCS_DIR}")
+        elif reason is None:
+            reason = f"no markdown files found under {DOCS_DIR}"
+        msg = f"ERROR: {reason} — nothing was measured"
+        print(msg, file=sys.stderr)
+        if args.json:
+            # dev-rules §13: --json stdout is exactly one JSON document on
+            # every terminal path, early exits included.
+            print(format_json_report([], expected, 0, 0, total_found=total_found,
+                                     status="caller_error", reason=reason))
+        else:
+            print(msg)
+        sys.exit(EXIT_CALLER_ERROR)
     total_scanned = len(scanned)
     total_with_fm = sum(1 for s in scanned if s.has_frontmatter)
 
@@ -302,9 +374,11 @@ def main(argv: Optional[List[str]] = None) -> None:
         items = detect_drift(scanned, expected)
 
     if args.json:
-        print(format_json_report(items, expected, total_scanned, total_with_fm))
+        print(format_json_report(items, expected, total_scanned, total_with_fm,
+                                 total_found=total_found))
     else:
-        print(format_text_report(items, expected, total_scanned, total_with_fm))
+        print(format_text_report(items, expected, total_scanned, total_with_fm,
+                                 total_found=total_found))
 
     errors = [i for i in items if i.severity == "error"]
     if args.ci and errors:
