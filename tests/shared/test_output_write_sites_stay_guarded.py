@@ -72,6 +72,13 @@ Reuses ``test_write_failure_class``: the same handler predicate
 boundaries (``_SCOPE_BOUNDARIES``), imported rather than restated, plus a
 control that its walk-up rule and this one agree on the shapes they share.
 
+Method-form ``<receiver>.open(...)`` with a literal write mode IS a sink
+(``Path.open("w")``, ``tarfile.open(name, "w:gz")``); with no literal mode it
+is a read. ``os.open`` (integer flags) is NOT in the vocabulary: measured at
+zero call sites under ``scripts/tools/``, and a detector nobody can witness
+is a claim, not a gate. The first ``os.open`` write site adds it here, with a
+control.
+
 ⚠️ **Measured blind spot, on purpose.** ``Path.replace`` / ``Path.rename``
 (method form) are NOT sinks here, while ``os.replace`` / ``os.rename`` are.
 Reason: 174 ``.replace(`` call sites under ``scripts/tools/`` and only 3 of
@@ -297,6 +304,28 @@ def _open_mode_is_write(node: ast.Call) -> bool | None:
     return None
 
 
+def _method_open_mode_is_write(node: ast.Call) -> bool | None:
+    """The same verdict for a method-form ``<receiver>.open(...)``.
+
+    The mode slot is not fixed here: ``Path.open`` takes it at position 0,
+    a module-style receiver (``tarfile.open(name, mode)``) at position 1.
+    Only a LITERAL string in either slot, or a ``mode=`` keyword, is judged.
+    A non-literal positional is a path far more often than a mode, so it is
+    read as "no mode given" rather than "unknowable" — a variable mode passed
+    positionally to a method-form open is the one shape this gate lets
+    through (pinned by a control below). ``mode=<variable>`` still fails loud.
+    """
+    for kw in node.keywords:
+        if kw.arg == "mode":
+            if isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
+                return bool(set(kw.value.value) & WRITE_MODE_CHARS)
+            return None
+    for arg in node.args[:2]:
+        if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+            return bool(set(arg.value) & WRITE_MODE_CHARS)
+    return False
+
+
 def _classify_sink(node: ast.Call) -> str | None:
     """The sink label for *node*, or ``None`` if it does not write."""
     func = node.func
@@ -311,6 +340,11 @@ def _classify_sink(node: ast.Call) -> str | None:
             return None
     if isinstance(func, ast.Attribute) and func.attr in PATH_METHOD_SINKS:
         return f".{func.attr}"
+    if isinstance(func, ast.Attribute) and func.attr in OPEN_NAMES:
+        verdict = _method_open_mode_is_write(node)
+        if verdict is not False:
+            return f".open({'?' if verdict is None else 'w'})"
+        return None
     if isinstance(func, ast.Name) and func.id in OPEN_NAMES:
         verdict = _open_mode_is_write(node)
         if verdict is not False:
@@ -585,6 +619,9 @@ class TestSinkVocabulary:
         ("open(p, 'r+')", "open(w)"),
         ("open(p, mode='w', encoding='utf-8')", "open(w)"),
         ("io.open(p, 'w')", "io.open(w)"),
+        ("p.open('w')", ".open(w)"),
+        ("Path(p).open(mode='a', encoding='utf-8')", ".open(w)"),
+        ("tarfile.open(t, 'w:gz')", ".open(w)"),
         ("Path(p).write_text(s)", ".write_text"),
         ("Path(p).write_bytes(b)", ".write_bytes"),
         ("out.mkdir(parents=True)", ".mkdir"),
@@ -606,6 +643,9 @@ class TestSinkVocabulary:
         "open(p)",                       # read
         "open(p, 'r')",
         "open(p, encoding='utf-8')",
+        "p.open()",                      # Path.open, text-read
+        "p.open(encoding='utf-8')",
+        "tarfile.open(t, 'r:gz')",
         "Path(p).read_text()",
         "os.path.exists(p)",
         "os.environ.copy()",             # dict.copy, not shutil.copy
@@ -620,6 +660,14 @@ class TestSinkVocabulary:
         """Fail LOUD on a site the classifier cannot judge: a variable mode
         reads as a sink, so somebody has to look at it."""
         assert [(c.sink, c.guard) for c in scan_source("open(p, mode)")] == [("open(?)", None)]
+
+    def test_a_method_form_open_with_a_variable_mode_keyword_fails_loud(self):
+        assert [(c.sink, c.guard) for c in scan_source("p.open(mode=m)")] == [(".open(?)", None)]
+
+    def test_a_method_form_open_with_a_positional_variable_is_read_as_a_path(self):
+        """The documented gap: a variable passed positionally to a method-form
+        open cannot be told from a path, so it is not judged as a mode."""
+        assert scan_source("p.open(m)") == []
 
     def test_the_measured_blind_spot_is_the_documented_one(self):
         """Pins the false-red trade-off in the module docstring: method-form
