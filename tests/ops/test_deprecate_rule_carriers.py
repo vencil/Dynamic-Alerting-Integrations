@@ -23,10 +23,12 @@ operator-visible report (stdout + rc), not a return value.
 """
 
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 import deprecate_rule  # noqa: E402
@@ -389,8 +391,12 @@ def test_a_reference_the_writer_cannot_clear_blocks_the_completion_claim(
     assert "下架未完成" in r.stdout, r.stdout
     assert "下架完成！" not in r.stdout, r.stdout
     tail = r.stdout.split("下架未完成", 1)[1]
-    assert "_shared.yaml" in tail and "重掃仍有引用" in tail, tail
+    assert "_shared.yaml" in tail, tail
     assert "tenants.shared" in tail and "cpu_usage" in tail, tail
+    # 三輪 F-04：這是**依設計不歸本工具**的殘留，不是寫入失敗。訊息要說
+    # 「請手動移除」，不是「重掃仍有引用」——後者會把人送去查一個沒發生的 bug。
+    assert "本工具依設計不寫 `_` 前綴租戶檔，請手動移除" in tail, tail
+    assert "重掃仍有引用" not in tail, tail
     # 擋住宣稱不等於撤回已做的事：載體那一半仍然被清掉了。
     assert "cpu_usage" not in (root / "_defaults.yaml").read_text(encoding="utf-8")
 
@@ -416,7 +422,8 @@ def _non_numeric_defaults(text: str) -> list[tuple[str, object]]:
     / `_routing_defaults:` 一起從設定裡消失。
     """
     data = yaml.safe_load(text) or {}
-    return deprecate_rule.non_numeric_defaults(data.get("defaults"))
+    return [(k, v) for k, v, _kind
+            in deprecate_rule.non_numeric_defaults(data.get("defaults"))]
 
 
 def test_the_written_root_defaults_still_decodes_as_map_string_float64(tmp_path):
@@ -595,7 +602,9 @@ def test_preview_reaches_the_same_verdict_as_execute(tmp_path):
     assert preview.returncode == 1, preview.stdout + preview.stderr
     assert "下架未完成" in preview.stdout, preview.stdout
     tail = preview.stdout.split("下架未完成", 1)[1]
-    assert "_shared.yaml" in tail and "本工具不會清掉" in tail, tail
+    assert "_shared.yaml" in tail, tail
+    # 兩種模式**同一句**（三輪 F-04）：依設計不碰的東西，預覽與執行沒有差別。
+    assert "本工具依設計不寫 `_` 前綴租戶檔，請手動移除" in tail, tail
     # 預覽仍然什麼都不寫。
     assert {p.name: p.read_bytes() for p in root.iterdir()} == before
 
@@ -620,3 +629,174 @@ def test_preview_on_a_clean_tree_still_reads_clean(tmp_path):
     assert r.returncode == 0, r.stdout + r.stderr
     assert "預覽模式" in r.stdout, r.stdout
     assert "下架未完成" not in r.stdout, r.stdout
+
+
+# ===================================================================
+# #1787 三輪盲審 — F-01 / F-02 / F-03 / F-09
+# ===================================================================
+
+# `config_subtree_reach_test.go` 的 `state-filter-disable` 那棵樹，原樣。
+# 子樹載體帶字串值是**合法且生效**的設定（那支 Go 測試斷言維護窗確實被關掉），
+# 所以工具對它套 root 的 `map[string]float64` 規則就是在判一條活著的設定有罪。
+_SUBTREE_ROOT = ("defaults:\n  mysql_connections: 80\n"
+                 "state_filters:\n  maintenance:\n    severity: warning\n"
+                 "    default_state: enable\n")
+_SUBTREE_CHILD = 'defaults:\n  _state_maintenance: "disable"\n'
+
+
+def test_a_subtree_carrier_is_not_judged_by_the_root_type_rule(tmp_path):
+    """F-01：`--config-dir` 指到子樹時不跑型別體檢。
+
+    工具自己的 usage 就教人這樣用（子樹載體要指過去才會被處理）。二輪的體檢
+    對每個載體無條件套 root 的型別規則，於是這棵樹回 rc 1、訊息教人刪掉
+    `_state_maintenance: "disable"` ——那是一條**正在生效**的維護窗，而且沒有
+    任何重跑清得掉那個 rc 1。
+    """
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    _write(root, "_defaults.yaml", _SUBTREE_ROOT)
+    sub = root / "finance"
+    sub.mkdir()
+    _write(sub, "_defaults.yaml", _SUBTREE_CHILD)
+    _write(sub, "t1.yaml", "tenants:\n  t1: {}\n")
+
+    r = _run(sub, "--execute")
+
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "下架未完成" not in r.stdout, r.stdout
+    assert "子樹載體不做型別體檢" in r.stdout, r.stdout
+    # 那條設定原封不動。
+    assert "disable" in (sub / "_defaults.yaml").read_text(encoding="utf-8")
+
+
+def test_the_same_shape_at_the_root_is_still_judged(tmp_path):
+    """F-01 的成對反例：同一個字串值放在 **root** 載體上仍然 rc 1。
+
+    ⭐ 沒有這一半，「子樹跳過體檢」最便宜的實作就是把體檢整支關掉。
+    """
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    _write(root, "_defaults.yaml",
+           'defaults:\n  _state_maintenance: "disable"\n  cpu_usage: 80\n')
+
+    r = _run(root, "--execute")
+
+    assert r.returncode == 1, r.stdout + r.stderr
+    tail = r.stdout.split("下架未完成", 1)[1]
+    assert "_state_maintenance" in tail and "map[string]float64" in tail, tail
+    assert "子樹載體不做型別體檢" not in r.stdout, r.stdout
+
+
+def test_the_shipped_golden_subtree_fixture_runs_clean(tmp_path):
+    """F-01：本 repo 既有的正典子樹形狀（`full-l0-l3/conf.d/db/`）必須 rc 0。
+
+    ⭐ 這是**合成案例以外**的證人：`level: L1` / `threshold: {...}` /
+    `pages: [...]` 不是我為了通過而挑的值，是 golden fixture 一直長這樣。
+    複製到 tmp 跑，避免動到 fixture 本身。
+    """
+    fixture = (Path(__file__).resolve().parents[1] / "golden" / "fixtures"
+               / "full-l0-l3" / "conf.d")
+    if not (fixture / "db" / "_defaults.yaml").exists():
+        pytest.skip(f"golden fixture moved: {fixture}")
+    root = tmp_path / "conf.d"
+    shutil.copytree(fixture, root)
+
+    r = _run(root / "db", "--execute")
+
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "下架未完成" not in r.stdout, r.stdout
+
+
+def test_the_declared_tier_is_deprecated_with_the_valued_one(tmp_path):
+    """F-02：`optional_overrides:` 是同一個載體的第二個平面，一起清。
+
+    一個離開 `defaults:` 卻留在 `optional_overrides:` 的 key，平台仍然認得它
+    （`ValidateTenantKeys` 放行、`resolveDeclaredRows` 對有寫值的租戶發 row），
+    所以「下架完成」蓋在一個**租戶重新寫上去就會復活**的指標上。
+    """
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    _write(root, "_defaults.yaml",
+           "defaults:\n  cpu_usage: 80\n  mem_usage: 90\n"
+           "optional_overrides:\n- cpu_usage\n- oracle_process_count\n")
+
+    r = _run(root, "--execute")
+
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "下架完成" in r.stdout, r.stdout
+    # 掃描要先看得見它，處置才可能清得掉它。
+    assert "optional_overrides" in r.stdout, r.stdout
+    data = yaml.safe_load((root / "_defaults.yaml").read_text(encoding="utf-8"))
+    assert data["defaults"] == {"mem_usage": 90}, data
+    assert data["optional_overrides"] == ["oracle_process_count"], data
+
+
+def test_a_declared_only_carrier_empties_the_list_rather_than_leaving_it(
+        tmp_path):
+    """F-02：清空的 `optional_overrides:` 整個拿掉，不留 `[]`。
+
+    `init_project` 對空 list 的既有立場就是不寫它（「空 list 讀起來像意外」）。
+    """
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    _write(root, "_defaults.yaml",
+           "defaults:\n  mem_usage: 90\noptional_overrides:\n- cpu_usage\n")
+
+    r = _run(root, "--execute")
+
+    assert r.returncode == 0, r.stdout + r.stderr
+    text = (root / "_defaults.yaml").read_text(encoding="utf-8")
+    assert "optional_overrides" not in text, text
+    assert yaml.safe_load(text) == {"defaults": {"mem_usage": 90}}, text
+
+
+def test_an_empty_value_is_reported_as_a_zero_threshold_not_as_a_dropped_file(
+        tmp_path):
+    """F-03：`key:`（空值）的訊息講的是 0 閾值，不是「整份載體被丟」。
+
+    Go 實測 `cpu_usage: null` 是 ok=**true**、解成 0。把它和字串寫成同一個
+    理由，是把一個沒發生的事寫給 operator 看——而他照著那句話做的動作
+    （「這份檔會被丟掉」）跟真正的後果（多一條永遠觸發的 0 閾值）不同。
+    """
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    _write(root, "_defaults.yaml", "defaults:\n  cpu_usage: 80\n  legacy_key:\n")
+
+    r = _run(root, "--execute")
+
+    assert r.returncode == 1, r.stdout + r.stderr
+    tail = r.stdout.split("下架未完成", 1)[1]
+    assert "legacy_key" in tail and "解成 0" in tail, tail
+    assert "整份丟棄" not in tail, tail
+
+
+def test_a_write_that_silently_does_nothing_is_not_masked_by_the_rescan(
+        tmp_path, monkeypatch, capsys):
+    """F-09：`predict=False` 不扣除計畫刪除的 key —— 這條註解現在有證人。
+
+    ⛔ 二輪寫下「否則寫入失敗會被這支函式自己遮掉」卻沒有任何測試（把
+    `predict=False` 改成 `predict=True` 之後全綠）。這裡把寫入變成**回報成功
+    但什麼都不寫**——工具自己認為它刪掉了 key——然後斷言重掃仍然把它列出來、
+    rc 1。in-process 呼叫 `main()`，因為要換掉的是產線的寫檔函式。
+    """
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    _write(root, "_defaults.yaml", "defaults:\n  cpu_usage: 80\n  mem_usage: 90\n")
+    before = (root / "_defaults.yaml").read_bytes()
+
+    monkeypatch.setattr(deprecate_rule, "save_yaml_file",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(sys, "argv",
+                        ["deprecate_rule.py", "cpu_usage",
+                         "--config-dir", str(root), "--execute"])
+
+    with pytest.raises(SystemExit) as exc:
+        deprecate_rule.main()
+
+    out = capsys.readouterr().out
+    assert exc.value.code == 1, out
+    assert "下架未完成" in out, out
+    assert "重掃仍有引用" in out and "cpu_usage" in out, out
+    assert "下架完成！" not in out, out
+    # 這一格的前提：檔案真的沒被寫。
+    assert (root / "_defaults.yaml").read_bytes() == before

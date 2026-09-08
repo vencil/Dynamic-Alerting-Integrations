@@ -318,15 +318,24 @@ def test_tenant_key_belongs_to_metric_rejects_a_neighbour_that_merely_shares_the
         assert not belongs(key, "container_cpu"), key
 
 
-def test_non_numeric_defaults_names_the_values_the_exporter_cannot_decode():
-    """產線的載體體檢述詞：非 int/float 的值逐一回報，bool 也算。"""
+def test_non_numeric_defaults_separates_the_two_ways_a_value_goes_wrong():
+    """產線的載體體檢述詞回**兩類**，因為下場是兩件不同的事（#1787 三輪 F-03）。
+
+    ⛔ 二輪把 `key:`（空值）也算成「整份載體被丟」，那句話是假的：Go 實測
+    `cpu_usage: null` 是 ok=**true**、解成 0——檔案好好的，多的是一條 0 閾值。
+    兩類共用一支函式、各帶自己的 kind，呼叫端才講得出各自的話。
+    """
     fn = deprecate_rule.non_numeric_defaults
+    UNP, ZERO = deprecate_rule.UNPARSEABLE, deprecate_rule.DECODES_TO_ZERO
+
     assert fn({"a": 80, "b": 1.5, "c": -3}) == []
-    assert fn({"a": 80, "old": "disable"}) == [("old", "disable")]
-    # bool 是 int 的子類別，但 Go 那邊不是 float64。
-    assert fn({"flag": True}) == [("flag", True)]
-    # `key:` 解成 None —— exporter 讀成 0，不是「沒有這個 key」。
-    assert fn({"k": None}) == [("k", None)]
+    # 整份載體被丟的那一類：字串／bool／mapping／list。
+    assert fn({"a": 80, "old": "disable"}) == [("old", "disable", UNP)]
+    assert fn({"flag": True}) == [("flag", True, UNP)]
+    assert fn({"m": {"x": 1}}) == [("m", {"x": 1}, UNP)]
+    assert fn({"l": [1]}) == [("l", [1], UNP)]
+    # 武裝一條 0 閾值的那一類，只有空值。
+    assert fn({"k": None}) == [("k", None, ZERO)]
     # 非 mapping（空 block / 壞檔）不是本述詞的職責，回空讓具名路徑處理。
     assert fn(None) == [] and fn(["a"]) == []
 

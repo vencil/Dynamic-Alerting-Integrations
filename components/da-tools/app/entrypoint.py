@@ -45,7 +45,7 @@ def _build_help_text(lang):
     migrate           轉換遺留 Prometheus 規則為動態格式
     scaffold          互動式生成租戶配置
     offboard          租戶配置預檢和移除
-    deprecate         跨配置標記指標為已禁用
+    deprecate         下架指標：從 defaults／tenants 移除其 key
     lint              針對治理禁止列表驗證自訂規則
     onboard           分析現有 Alertmanager/Prometheus 配置以供遷移
     validate-config   一站式配置驗證 (YAML + schema + routing + policy)

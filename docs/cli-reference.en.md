@@ -2265,8 +2265,6 @@ docker run --rm \
 |--------|-------------|---------|
 | `--config-dir <PATH>` | Tenant config directory. ⚠️ The default points at a repo-internal path that does not exist in the image — pass it explicitly | `components/threshold-exporter/config/conf.d` |
 | `--execute` | **Actually perform the change** (default is pre-check / preview only, nothing is written) | false |
-| `--reason <TEXT>` | Deprecation reason (annotation) | (none) |
-| `--dry-run` | Preview changes | false |
 
 **Output**
 
@@ -2290,7 +2288,7 @@ docker run --rm \
 | Code | Description |
 |------|-------------|
 | `0` | Success |
-| `1` | Deprecation incomplete, each cause named. Three of them: a defaults carrier the scan listed was not written; references still found on the rescan after `--execute` (including the `_`-prefixed tenant files this tool does not write by design); or a non-numeric residue left under a carrier's `defaults:` (the exporter drops that carrier whole). ⚠️ Preview mode reaches the same verdict on the same tree |
+| `1` | Deprecation incomplete, each cause named. What reaches it today: a defaults carrier the scan listed was not written; references still found on the rescan after `--execute`; a `_`-prefixed tenant file — which this tool does not write by design — still holding the key (remove it by hand); a non-carrier `_`-prefixed file carrying a `defaults:` block (the exporter merges it into the global defaults, so it needs manual handling); or a non-numeric / empty residue under a **root** carrier's `defaults:` (the former drops the carrier whole, the latter arms a zero threshold). ⚠️ Preview mode reaches the same verdict on the same tree; the two `_`-prefixed causes do not clear on a rerun — a person has to edit those files |
 | `2` | Invalid config directory |
 
 ---
