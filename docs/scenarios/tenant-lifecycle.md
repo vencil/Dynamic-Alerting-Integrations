@@ -388,7 +388,7 @@ tar czf archive/db-product-01-offboarding-$(date +%Y%m%d).tar.gz conf.d.archive/
 
 | 工具 | 用途 | 常用命令 |
 |------|------|--------|
-| **scaffold_tenant.py** | 新租戶上線 | `--tenant <name> --db <type> --output conf.d/` |
+| **scaffold_tenant.py** | 新租戶上線 | `--tenant <name> --db <type> --output-dir conf.d/` |
 | **diagnose.py** | 健康檢查 | `<tenant> --prometheus <url>` |
 | **check_alert.py** | 告警狀態查詢 | `<alertname> <tenant>` |
 | **baseline_discovery.py** | 閾值建議 | `--tenant <name> --duration 604800` |

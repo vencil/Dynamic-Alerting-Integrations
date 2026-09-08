@@ -170,7 +170,7 @@ da-tools <command> --help
 | `deprecate` | 標記指標為 disabled | `<metric_keys...>` |
 | `lint` | 檢查 Custom Rule 治理合規性 | `<path...>` |
 | `onboard` | 分析既有 Alertmanager/Prometheus 配置進行遷移 | `<config_file>` 或 `--alertmanager-config <file>` |
-| `analyze-gaps` | Custom Rule 對應 Rule Pack 缺口分析 | `--config <path>` |
+| `analyze-gaps` | Custom Rule 對應 Rule Pack 缺口分析 | `--tenant-config <path>` |
 | `config-diff` | 兩目錄配置差異比對（GitOps PR review） | `--old-dir <dir> --new-dir <dir>` |
 | `evaluate-policy` | Policy-as-Code DSL 評估引擎 | `--config-dir <dir>` |
 | `opa-evaluate` | OPA Rego 策略評估橋接（OPA 整合） | `--config-dir <dir>` |
@@ -721,7 +721,7 @@ da-tools shadow-verify all --mapping mapping.yaml --report-csv report.csv --json
 |------|------|
 | `0` | 所有檢查通過 |
 | `1` | 一項或多項檢查失敗 |
-| `2` | 呼叫端錯誤：preflight／runtime 的 Prometheus 連不上或查詢失敗（該項檢查同樣列為 FAIL，但結束碼是 2 不是 1）、`--report-csv` 讀取時 I/O 錯誤，或 argparse 拒絕的參數。⚠️ `--report-csv` 指到不存在的檔**不是** 2——CSV 分析直接略過 |
+| `2` | 呼叫端錯誤：`preflight`（含 `all`）的 Prometheus 連不上或查詢失敗（該項檢查同樣列為 FAIL，但結束碼是 2 不是 1）、`--report-csv` 讀取時 I/O 錯誤，或 argparse 拒絕的參數。⚠️ `--report-csv` 指到不存在的檔**不是** 2——CSV 分析直接略過。⚠️ 單獨執行 `runtime` 時 Prometheus 連不上**不是** 2 也不是 1：兩項查詢失敗時不產生任何檢查項，結果是 `Overall: PASS`、結束碼 0 |
 
 ---
 
@@ -1828,7 +1828,7 @@ da-tools scaffold [options]
 **輸出**
 
 - `<tenant>.yaml` — Tenant 配置檔案
-- `_defaults.yaml` — 平台預設值（首次建立時）
+- `_defaults.yaml` — 平台預設值。⚠️ **每次執行都會覆寫**目錄裡既有的 `_defaults.yaml`——已經調過平台預設值的 `conf.d/` 不要直接當 `--output-dir`，先產到暫存目錄再只搬租戶檔
 - `scaffold-report.txt` — 總結報告
 
 **範例**
@@ -1843,8 +1843,8 @@ da-tools scaffold --non-interactive --tenant db-c --db mariadb,redis
 | 代碼 | 說明 |
 |------|------|
 | `0` | 成功 |
-| `1` | 輸入無效 |
-| `2` | 呼叫端錯誤：參數錯誤，或 `-o/--output-dir` 指到的輸出路徑寫不進去（#1641） |
+| `1` | 只有未捕捉的例外（stderr 有 traceback）；「輸入無效」是 2 不是 1 |
+| `2` | 呼叫端錯誤：參數錯誤、不支援的 `--db` 類型、`--non-interactive` 缺 `--tenant` 或 `--db`，或 `-o/--output-dir` 指到的輸出路徑寫不進去（#1641） |
 
 ---
 
@@ -1870,7 +1870,7 @@ da-tools migrate <input_file> [options]
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--output <DIR>` | 輸出目錄 | `./migration_output/` |
+| `-o, --output-dir <DIR>` | 輸出目錄 | `./migration_output/` |
 | `--dry-run` | 僅顯示報告，不產生檔案 | false |
 | `--triage` | Triage 模式：只產出 CSV 分桶報告 | false |
 | `--interactive` | 遇到不確定時詢問使用者 | false |
@@ -2019,8 +2019,9 @@ da-tools offboard db-old --config-dir ./conf.d --execute
 
 | 代碼 | 說明 |
 |------|------|
-| `0` | 成功 |
-| `1` | Tenant 不存在或 I/O 失敗 |
+| `0` | 成功；不帶 `--execute` 時只做 pre-check，**pre-check 未通過也是 0** |
+| `1` | `--execute` 下 pre-check 未通過（tenant 不存在等）或 I/O 失敗 |
+| `2` | 呼叫端錯誤：只有 argparse 拒絕的參數（缺 tenant 位置參數、未知旗標） |
 
 ---
 

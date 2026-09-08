@@ -50,10 +50,10 @@ Run a command to analyze your Alertmanager routing tree, receiver count, and ide
 ```bash
 da-tools onboard \
   --alertmanager-config alertmanager.yaml \
-  --output audit-report.json
+  --output-dir onboard-audit
 ```
 
-**Expected output**: `audit-report.json` contains Alertmanager version, global config, receivers list (name, channels), routing tree, inhibit rules, and migration recommendations. Analysis points:
+**Expected output**: stdout lists whether each receiver carries a tenant matcher (`Found N tenant route(s) (of M total)`, one `SKIP` line per receiver without one), and the directory `onboard-audit/` is written (`-o/--output-dir` takes a **directory**; a file name yields a directory of that name) containing `phase1-routing/routing-summary.csv`: per tenant route, the receiver type, `group_wait` / `group_interval` / `repeat_interval`, and the severity-dedup verdict. Analysis points:
 - Receiver count → potential tenant count
 - Existing group_wait / repeat_interval → reference values for Dynamic Alerting routing guardrails
 - Inhibit rules → whether to migrate to Dynamic Alerting severity dedup
@@ -133,10 +133,10 @@ da-tools scaffold \
   --tenant redis-prod \
   --db redis \
   --non-interactive \
-  --output conf.d/redis-prod.yaml
+  --output-dir conf.d
 ```
 
-**Expected output**: `conf.d/redis-prod.yaml` contains recording rules config, threshold initial values (conservative), and routing config (initially disabled).
+**Expected output**: `conf.d/redis-prod.yaml` contains recording rules config, threshold initial values (conservative), and routing config (initially disabled); the same directory also gets `_defaults.yaml` (platform defaults) and `scaffold-report.txt`. `-o/--output-dir` takes a **directory** — writing `--output conf.d/redis-prod.yaml` yields a directory named `redis-prod.yaml` with the tenant file one level inside it.
 
 ### Step 1.2: Edit Threshold Configuration
 
@@ -421,7 +421,10 @@ da-tools scaffold \
   --tenant mariadb-prod \
   --db mariadb \
   --non-interactive \
-  --output conf.d/mariadb-prod.yaml
+  --output-dir scaffold_output
+# Move only the tenant file: scaffold regenerates _defaults.yaml on every run,
+# so pointing it at conf.d would overwrite the platform defaults tuned in Step 1.2
+cp scaffold_output/mariadb-prod.yaml conf.d/
 
 # Edit thresholds
 # Deploy threshold-exporter (second instance)

@@ -387,7 +387,7 @@ tar czf archive/db-product-01-offboarding-$(date +%Y%m%d).tar.gz conf.d.archive/
 
 | Tool | Purpose | Common command |
 |------|---------|--------|
-| **scaffold_tenant.py** | New tenant onboarding | `--tenant <name> --db <type> --output conf.d/` |
+| **scaffold_tenant.py** | New tenant onboarding | `--tenant <name> --db <type> --output-dir conf.d/` |
 | **diagnose.py** | Health check | `<tenant> --prometheus <url>` |
 | **check_alert.py** | Alert status query | `<alertname> <tenant>` |
 | **baseline_discovery.py** | Threshold suggestions | `--tenant <name> --duration 604800` |

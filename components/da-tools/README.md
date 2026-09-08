@@ -128,7 +128,7 @@ docker run --rm \
 | `evaluate-policy` | Policy-as-Code 宣告式 DSL（10 運算子） | `--config-dir <dir>` |
 | `opa-evaluate` | OPA Rego 政策評估橋接 | `--config-dir <dir> --policy <file>` |
 | `lint` | Custom Rule 治理合規檢查 | `<path...>` |
-| `analyze-gaps` | Custom Rule vs Rule Pack 缺口分析 | `--config <path>` |
+| `analyze-gaps` | Custom Rule vs Rule Pack 缺口分析 | `--tenant-config <path>` |
 | `config-diff` | 兩目錄配置差異比對（GitOps PR review） | `--old-dir <dir> --new-dir <dir>` |
 | `drift-detect` | 跨叢集 SHA-256 配置漂移偵測 | `--clusters <a,b>` |
 

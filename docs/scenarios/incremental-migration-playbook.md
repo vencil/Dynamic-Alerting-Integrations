@@ -50,10 +50,10 @@ lang: zh
 ```bash
 da-tools onboard \
   --alertmanager-config alertmanager.yaml \
-  --output audit-report.json
+  --output-dir onboard-audit
 ```
 
-**預期輸出**：`audit-report.json` 包含 Alertmanager 版本、全局設定、receiver 列表（名稱、通知渠道）、路由樹結構、inhibit rules、以及遷移建議。分析要點：
+**預期輸出**：stdout 列出每個 receiver 是否帶租戶 matcher（`Found N tenant route(s) (of M total)`，沒有的逐一 `SKIP`），並寫出目錄 `onboard-audit/`（`-o/--output-dir` 吃的是**目錄**，給檔名會得到一個同名目錄）——裡面是 `phase1-routing/routing-summary.csv`：每個租戶 route 的 receiver 類型、`group_wait`／`group_interval`／`repeat_interval` 與 severity dedup 判定。分析要點：
 - Receiver 數量 → 潛在租戶數量
 - 現有 group_wait / repeat_interval → 後續 Dynamic Alerting 的 Routing Guardrails 參考值
 - Inhibit rules → 是否需要遷移至 Dynamic Alerting 的 severity dedup 機制
@@ -133,10 +133,10 @@ da-tools scaffold \
   --tenant redis-prod \
   --db redis \
   --non-interactive \
-  --output conf.d/redis-prod.yaml
+  --output-dir conf.d
 ```
 
-**預期輸出**：`conf.d/redis-prod.yaml` 包含 recording rules 設定、threshold 初始值（conservative）、路由配置（初始禁用）。
+**預期輸出**：`conf.d/redis-prod.yaml` 包含 recording rules 設定、threshold 初始值（conservative）、路由配置（初始禁用）；同一個目錄下另有 `_defaults.yaml`（平台預設值）與 `scaffold-report.txt`。`-o/--output-dir` 吃的是**目錄**——寫 `--output conf.d/redis-prod.yaml` 會得到一個叫 `redis-prod.yaml` 的目錄、租戶檔在它裡面多一層。
 
 ### 步驟 1.2：編輯閾值配置
 
@@ -421,7 +421,10 @@ da-tools scaffold \
   --tenant mariadb-prod \
   --db mariadb \
   --non-interactive \
-  --output conf.d/mariadb-prod.yaml
+  --output-dir scaffold_output
+# 只搬租戶檔：scaffold 每次都會重新產生 _defaults.yaml，
+# 直接指到 conf.d 會把步驟 1.2 調過的平台預設值蓋掉
+cp scaffold_output/mariadb-prod.yaml conf.d/
 
 # 編輯閾值
 # 部署 threshold-exporter（第二個實例）

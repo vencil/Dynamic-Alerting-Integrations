@@ -169,7 +169,7 @@ These tools operate on local YAML files and don't require network.
 | `deprecate` | Mark metrics as disabled | `<metric_keys...>` |
 | `lint` | Check Custom Rule governance compliance | `<path...>` |
 | `onboard` | Analyze existing Alertmanager/Prometheus config for migration | `<config_file>` or `--alertmanager-config <file>` |
-| `analyze-gaps` | Compare custom rules with Rule Pack coverage | `--config <path>` |
+| `analyze-gaps` | Compare custom rules with Rule Pack coverage | `--tenant-config <path>` |
 | `config-diff` | Directory-level config diff (GitOps PR review) | `--old-dir <dir> --new-dir <dir>` |
 | `evaluate-policy` | Policy-as-Code DSL evaluation engine | `--config-dir <dir>` |
 | `opa-evaluate` | OPA Rego policy evaluation bridge (OPA integration) | `--config-dir <dir>` |
@@ -819,7 +819,7 @@ da-tools shadow-verify all --mapping mapping.yaml --report-csv report.csv --json
 |------|-------------|
 | `0` | All checks passed |
 | `1` | One or more checks failed |
-| `2` | Caller error: Prometheus unreachable or a query failed in preflight / runtime (the check is still listed as FAIL, but the exit code is 2, not 1), an I/O error reading `--report-csv`, or arguments argparse rejects. ⚠️ A `--report-csv` that does not exist is **not** 2 — the CSV analysis is simply skipped |
+| `2` | Caller error: Prometheus unreachable or a query failed in `preflight` (including `all`; the check is still listed as FAIL, but the exit code is 2, not 1), an I/O error reading `--report-csv`, or arguments argparse rejects. ⚠️ A `--report-csv` that does not exist is **not** 2 — the CSV analysis is simply skipped. ⚠️ Running `runtime` alone with Prometheus unreachable is **neither** 2 nor 1: both queries fail without producing any check, so the result is `Overall: PASS` and exit code 0 |
 
 ---
 
@@ -1510,7 +1510,7 @@ da-tools operator-generate --rule-packs-dir <dir> --config-dir <dir> [options]
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--namespace <NS>` | Target K8s namespace | `monitoring` |
-| `--output <FILE>` | Output to file | stdout |
+| `--output-dir <DIR>` | Write CRDs into this directory. ⚠️ **Writing requires both: this flag set _and_ no `--dry-run`**; if either fails, everything goes to **stdout** and no file is written | none |
 | `--split` | Generate individual CRD files (split by Rule Pack) | false |
 | `--include-servicemonitor` | Also generate ServiceMonitor CRD | false |
 | `--dry-run` | Preview only | false |
@@ -1978,7 +1978,7 @@ docker run --rm -it \
 **Output**
 
 - `<tenant>.yaml` — Tenant configuration file
-- `_defaults.yaml` — Platform defaults (on first creation)
+- `_defaults.yaml` — Platform defaults. ⚠️ **Overwritten on every run** if the directory already has one — do not point `--output-dir` at a `conf.d/` whose platform defaults you have already tuned; scaffold into a staging directory and move only the tenant file
 - `scaffold-report.txt` — Summary report
 
 **Examples**
@@ -2008,8 +2008,8 @@ docker run --rm \
 | Code | Description |
 |------|-------------|
 | `0` | Success |
-| `1` | Invalid input |
-| `2` | Caller error: bad arguments, or the output path given to `-o/--output-dir` cannot be written (#1641) |
+| `1` | Only an uncaught exception (traceback on stderr); "invalid input" is 2, not 1 |
+| `2` | Caller error: bad arguments, an unsupported `--db` type, `--non-interactive` without `--tenant` or `--db`, or the output path given to `-o/--output-dir` cannot be written (#1641) |
 
 ---
 
@@ -2039,7 +2039,7 @@ docker run --rm \
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--output <DIR>` | Output directory | `./migration_output/` |
+| `-o, --output-dir <DIR>` | Output directory | `./migration_output/` |
 | `--dry-run` | Show report only, don't generate files | false |
 | `--triage` | Triage mode: output only CSV report | false |
 | `--interactive` | Ask user when uncertain | false |
@@ -2232,8 +2232,9 @@ docker run --rm \
 
 | Code | Description |
 |------|-------------|
-| `0` | Success |
-| `1` | Tenant not found or I/O failed |
+| `0` | Success; without `--execute` only the pre-check runs and **a failed pre-check is still 0** |
+| `1` | Pre-check failed under `--execute` (tenant not found, etc.) or I/O failed |
+| `2` | Caller error: only arguments argparse rejects (missing tenant positional, unknown flag) |
 
 ---
 
