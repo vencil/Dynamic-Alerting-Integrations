@@ -237,7 +237,8 @@ da-tools check-alert MariaDBHighConnections db-a
 | Code | Description |
 |------|-------------|
 | `0` | Success (any state) |
-| `1` | Prometheus connection failed |
+| `1` | Only an uncaught exception (traceback) returns 1 — the command has no violation exit (inactive / pending / firing are all 0) |
+| `2` | Caller error: Prometheus API unreachable or errored (stdout carries an `{"error": ...}` JSON), or arguments argparse rejects |
 
 ---
 
@@ -410,7 +411,8 @@ docker run --rm --network=host \
 | Code | Description |
 |------|-------------|
 | `0` | Success |
-| `1` | Prometheus connection or query failed |
+| `1` | Uncaught exception (traceback) — measured when the parent of `-o/--output-dir` is a file. ⚠️ A Prometheus connection / query failure is **not** 1 — failed samples are recorded as empty, the report and CSVs are still written, rc 0 |
+| `2` | Caller error: none of the `--metrics` names is one the tool knows (the error lists the accepted ones), the required `--tenant` missing, or arguments argparse rejects |
 
 ---
 
@@ -817,6 +819,7 @@ da-tools shadow-verify all --mapping mapping.yaml --report-csv report.csv --json
 |------|-------------|
 | `0` | All checks passed |
 | `1` | One or more checks failed |
+| `2` | Caller error: Prometheus unreachable or a query failed in preflight / runtime (the check is still listed as FAIL, but the exit code is 2, not 1), an I/O error reading `--report-csv`, or arguments argparse rejects. ⚠️ A `--report-csv` that does not exist is **not** 2 — the CSV analysis is simply skipped |
 
 ---
 
@@ -867,6 +870,7 @@ da-tools byo-check all --json
 |------|-------------|
 | `0` | All checks passed |
 | `1` | One or more checks failed |
+| `2` | Caller error: Prometheus or Alertmanager unreachable, or a query / rules / status API call failed (the check is still listed as FAIL, but the exit code is 2, not 1); or arguments argparse rejects |
 
 ---
 
@@ -919,6 +923,7 @@ da-tools federation-check central --prometheus http://central:9090 --json
 |------|-------------|
 | `0` | All checks passed |
 | `1` | One or more checks failed |
+| `2` | Caller error: `e2e` without `--edge-urls`, a target other than edge / central / e2e; edge / central Prometheus unreachable or a config / query / rules API call failed (the check is still listed as FAIL, but the exit code is 2, not 1) |
 
 ---
 
@@ -964,7 +969,8 @@ da-tools fed-key --rotate --existing-jwks federation-jwks.json \
 | Code | Description |
 |------|-------------|
 | `0` | Key generated |
-| `1` | openssl missing, `--existing-jwks` unreadable, or invalid arguments |
+| `1` | Uncaught exception (traceback) — measured when the directory of `--jwks-out` does not exist |
+| `2` | Caller error: `openssl` not on PATH, timed out or failed; `--existing-jwks` unreadable, not a JWKS document (no `keys` array) or already holding the same kid; `--rotate` without `--existing-jwks`, `--key-bits` < 2048; stdout is a terminal (refuses to print the private-key Secret to a tty — pipe it to `\| kubectl apply -f -`) |
 
 ---
 
@@ -1014,7 +1020,8 @@ da-tools grafana-import --dashboard overview.json --dry-run
 | Code | Description |
 |------|-------------|
 | `0` | Success |
-| `1` | Import failed or verification found issues |
+| `1` | `--verify` found issues (a ConfigMap whose dashboard JSON is invalid). ⚠️ Import-mode failures are all 2, not 1; `kubectl` not on PATH is an uncaught exception (traceback, rc 1, in both import and `--verify`) |
+| `2` | Caller error: `--dashboard` file missing or not valid JSON, `--dashboard-dir` missing or holding no `*.json`; `kubectl create / apply / label` failed during import; `kubectl get` failed or its output unparsable under `--verify`; none of the three mode flags given |
 
 ---
 
@@ -1060,6 +1067,7 @@ da-tools alert-quality --prometheus http://prometheus:9090 --ci --min-score 60
 |------|-------------|
 | `0` | Success (CI mode: all alerts meet quality threshold) |
 | `1` | CI mode: BAD alerts found or score below threshold |
+| `2` | Caller error: `--period` unparsable, `--tenant` containing characters other than alphanumerics / underscore / hyphen, the required `--prometheus` missing, or arguments argparse rejects. ⚠️ An unreachable Prometheus is **not** 2 — failed queries count as no data and the report is still printed (rc 0; under `--ci` the score / BAD count decide 1) |
 
 ---
 
@@ -1106,6 +1114,7 @@ da-tools alert-correlate --prometheus http://prometheus:9090 --ci
 |------|-------------|
 | `0` | Success (CI mode: no critical alert clusters) |
 | `1` | CI mode: critical severity alert clusters found |
+| `2` | Caller error: `--window` unparsable or ≤ 0, or arguments argparse rejects. ⚠️ An unreachable Alertmanager/Prometheus is **not** 2 — a WARN is printed and the run continues with zero alerts (rc 0); an `--input` file that does not exist is an uncaught exception (traceback, rc 1) |
 
 ---
 
@@ -1149,6 +1158,7 @@ da-tools drift-detect --dirs staging/conf.d,prod/conf.d --ci
 |------|-------------|
 | `0` | No unexpected drift |
 | `1` | CI mode: unexpected drift detected |
+| `2` | Caller error: any `--dirs` directory missing, fewer than 2 directories in configmap mode, not exactly 1 directory in operator mode, `--labels` count not matching `--dirs`; in operator mode `kubectl` not on PATH, timed out (30s), exited non-zero or returned non-JSON; arguments argparse rejects |
 
 ---
 
@@ -1317,8 +1327,8 @@ da-tools state-reconcile [options]
 | Code | Description |
 |------|-------------|
 | `0` | State directory consistent (or changes applied successfully) |
-| `1` | Unresolvable schema drift; or `--ci` mode with pending changes |
-| `2` | Caller error (bad arguments etc.) |
+| `1` | Unresolvable schema drift (including a state file that cannot be read or lacks `schema_version`); or `--ci` with `--dry-run` detecting pending changes |
+| `2` | Caller error: arguments argparse rejects (unknown flags etc.). ⚠️ A missing `--state-dir` is **not** 2 — a warning is printed and it is treated as empty (manifest rebuilt with 0 states, rc 0; 1 under `--ci --dry-run` because a rebuild is pending) |
 
 **Why a single declarative command, not micro-commands**
 
@@ -1922,7 +1932,8 @@ docker run --rm \
 | Code | Description |
 |------|-------------|
 | `0` | Success |
-| `1` | Invalid ConfigMap or parameters |
+| `1` | Uncaught exception (traceback) — measured when `kubectl` is not on PATH |
+| `2` | Caller error: `kubectl get configmap threshold-config -n monitoring` exited non-zero (e.g. cluster unreachable, ConfigMap missing, no permission), a legacy-format ConfigMap without `config.yaml`, `--json` without `--diff` (refuses to apply), or arguments argparse rejects |
 
 ---
 

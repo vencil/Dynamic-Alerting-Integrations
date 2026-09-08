@@ -238,7 +238,8 @@ da-tools check-alert MariaDBHighConnections db-a
 | 代碼 | 說明 |
 |------|------|
 | `0` | 成功（任何狀態） |
-| `1` | Prometheus 連線失敗 |
+| `1` | 只有未捕捉例外（traceback）會回 1——本命令沒有 violation 出口（inactive／pending／firing 都是 0） |
+| `2` | 呼叫端錯誤：Prometheus API 連不上或回錯（stdout 印 `{"error": ...}` JSON），或 argparse 拒絕的參數 |
 
 ---
 
@@ -392,7 +393,8 @@ da-tools baseline --tenant db-a --duration 1800 --interval 30 -o /tmp/baseline_o
 | 代碼 | 說明 |
 |------|------|
 | `0` | 成功 |
-| `1` | Prometheus 連線或查詢失敗 |
+| `1` | 未捕捉例外（traceback）——實測 `-o/--output-dir` 的父路徑是檔案時是這一格。⚠️ Prometheus 連線或查詢失敗**不是** 1——失敗的採樣記為空值、報告與 CSV 照出、rc 0 |
+| `2` | 呼叫端錯誤：`--metrics` 列出的指標沒有一個是工具認得的（錯誤訊息會列出可用清單）、缺必需的 `--tenant`，或 argparse 拒絕的參數 |
 
 ---
 
@@ -719,6 +721,7 @@ da-tools shadow-verify all --mapping mapping.yaml --report-csv report.csv --json
 |------|------|
 | `0` | 所有檢查通過 |
 | `1` | 一項或多項檢查失敗 |
+| `2` | 呼叫端錯誤：preflight／runtime 的 Prometheus 連不上或查詢失敗（該項檢查同樣列為 FAIL，但結束碼是 2 不是 1）、`--report-csv` 讀取時 I/O 錯誤，或 argparse 拒絕的參數。⚠️ `--report-csv` 指到不存在的檔**不是** 2——CSV 分析直接略過 |
 
 ---
 
@@ -769,6 +772,7 @@ da-tools byo-check all --json
 |------|------|
 | `0` | 所有檢查通過 |
 | `1` | 一項或多項檢查失敗 |
+| `2` | 呼叫端錯誤：Prometheus 或 Alertmanager 連不上、query／rules／status API 呼叫失敗（該項檢查同樣列為 FAIL，但結束碼是 2 不是 1），或 argparse 拒絕的參數 |
 
 ---
 
@@ -821,6 +825,7 @@ da-tools federation-check central --prometheus http://central:9090 --json
 |------|------|
 | `0` | 所有檢查通過 |
 | `1` | 一項或多項檢查失敗 |
+| `2` | 呼叫端錯誤：`e2e` 沒帶 `--edge-urls`、target 不是 edge／central／e2e；edge／central Prometheus 連不上或 config／query／rules API 失敗（該項檢查同樣列為 FAIL，但結束碼是 2 不是 1） |
 
 ---
 
@@ -866,7 +871,8 @@ da-tools fed-key --rotate --existing-jwks federation-jwks.json \
 | 代碼 | 說明 |
 |------|------|
 | `0` | 金鑰已產生 |
-| `1` | openssl 不存在、`--existing-jwks` 無法讀取、或參數錯誤 |
+| `1` | 未捕捉例外（traceback）——實測 `--jwks-out` 的目錄不存在時是這一格 |
+| `2` | 呼叫端錯誤：`openssl` 不在 PATH、逾時或失敗；`--existing-jwks` 讀不到、不是 JWKS 文件（沒有 `keys` 陣列）或已含同一個 kid；`--rotate` 沒帶 `--existing-jwks`、`--key-bits` < 2048；stdout 是終端機（拒絕把私鑰 Secret 印到 tty，請接 `\| kubectl apply -f -`） |
 
 ---
 
@@ -916,7 +922,8 @@ da-tools grafana-import --dashboard overview.json --dry-run
 | 代碼 | 說明 |
 |------|------|
 | `0` | 成功 |
-| `1` | 匯入失敗或驗證發現問題 |
+| `1` | `--verify` 發現問題（ConfigMap 內的 dashboard JSON 無效）。⚠️ 匯入模式的失敗全是 2 不是 1；`kubectl` 不在 PATH 是未捕捉例外（匯入與 `--verify` 皆 traceback、rc 1） |
+| `2` | 呼叫端錯誤：`--dashboard` 檔不存在或不是合法 JSON、`--dashboard-dir` 不存在或裡面沒有 `*.json`；匯入時 `kubectl create／apply／label` 失敗；`--verify` 時 `kubectl get` 失敗或輸出解析不了；三個模式旗標一個都沒給 |
 
 ---
 
@@ -962,6 +969,7 @@ da-tools alert-quality --prometheus http://prometheus:9090 --ci --min-score 60
 |------|------|
 | `0` | 成功（CI 模式：所有告警品質達標） |
 | `1` | CI 模式：有 BAD 告警或分數低於閾值 |
+| `2` | 呼叫端錯誤：`--period` 解析不出、`--tenant` 含英數／底線／連字號以外的字元、缺必需的 `--prometheus`，或 argparse 拒絕的參數。⚠️ Prometheus 連不上**不是** 2——查詢失敗當成沒有資料、報告照印（rc 0；`--ci` 下另依分數／BAD 數判 1） |
 
 ---
 
@@ -1008,6 +1016,7 @@ da-tools alert-correlate --prometheus http://prometheus:9090 --ci
 |------|------|
 | `0` | 成功（CI 模式：無 critical 告警群組） |
 | `1` | CI 模式：存在 critical 嚴重度的告警群組 |
+| `2` | 呼叫端錯誤：`--window` 解析不出或 ≤ 0，或 argparse 拒絕的參數。⚠️ Alertmanager／Prometheus 連不上**不是** 2——印 WARN 後以零告警繼續、rc 0；`--input` 指到不存在的檔是未捕捉例外（traceback、rc 1） |
 
 ---
 
@@ -1051,6 +1060,7 @@ da-tools drift-detect --dirs staging/conf.d,prod/conf.d --ci
 |------|------|
 | `0` | 無非預期漂移 |
 | `1` | CI 模式：偵測到非預期漂移 |
+| `2` | 呼叫端錯誤：`--dirs` 任一目錄不存在、configmap 模式少於 2 個目錄、operator 模式不是恰好 1 個目錄、`--labels` 數量與 `--dirs` 不符；operator 模式下 `kubectl` 不在 PATH、逾時（30s）、非零結束或輸出不是 JSON；argparse 拒絕的參數 |
 
 ---
 
@@ -1214,13 +1224,13 @@ da-tools state-reconcile [options]
 | `--ci` | **配合 `--dry-run` 用**：check-only CI gate，dry-run 偵測到需改動時 exit 1。Unresolvable drift 永遠 exit 1（不需 `--ci`）。單獨用 `--ci`（無 `--dry-run`）仍會 apply changes | 無 |
 | `--json` | 輸出 JSON 結構化報告 | 文字模式 |
 
-**Exit codes**
+**結束碼**
 
-| Code | 含義 |
+| 代碼 | 說明 |
 |------|------|
-| 0 | state 目錄一致（或已成功套用變更） |
-| 1 | 有 unresolvable schema drift；或 `--ci` 模式下 dry-run 偵測到需改動 |
-| 2 | caller error（參數錯誤等） |
+| `0` | state 目錄一致（或已成功套用變更） |
+| `1` | 有 unresolvable schema drift（含 state 檔讀不到或缺 `schema_version`）；或 `--ci` 搭配 `--dry-run` 偵測到需改動 |
+| `2` | 呼叫端錯誤：argparse 拒絕的參數（未知旗標等）。⚠️ `--state-dir` 不存在**不是** 2——印警告後視為空目錄（重建 0 筆的 manifest、rc 0；`--ci --dry-run` 下因需重建而 1） |
 
 **為什麼是 single declarative command 而非 micro-commands**
 
@@ -1775,7 +1785,8 @@ da-tools patch-config db-a mysql_connections 100 --yes
 | 代碼 | 說明 |
 |------|------|
 | `0` | 成功 |
-| `1` | ConfigMap 或參數無效 |
+| `1` | 未捕捉例外（traceback）——實測 `kubectl` 不在 PATH 時是這一格 |
+| `2` | 呼叫端錯誤：`kubectl get configmap threshold-config -n monitoring` 非零結束（例如叢集連不上、ConfigMap 不存在、無權限）、legacy 格式的 ConfigMap 缺 `config.yaml`、`--json` 沒配 `--diff`（拒絕套用），或 argparse 拒絕的參數 |
 
 ---
 
