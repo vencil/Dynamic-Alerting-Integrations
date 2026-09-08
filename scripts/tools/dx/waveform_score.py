@@ -84,6 +84,7 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_python import write_text_secure  # noqa: E402
+from _lib_io import OutputWriteError, safe_label  # noqa: E402  (#1789)
 
 try:
     from _lib_compat import try_utf8_stdout  # noqa: E402
@@ -873,14 +874,34 @@ def main() -> int:
     try:
         report_json = json.dumps(emit, ensure_ascii=False, indent=2, sort_keys=True)
         if args.out:
-            write_text_secure(args.out, report_json + "\n")
+            write_text_secure(args.out, report_json + "\n", flag="--out")
         if args.json_output:
             print(report_json)
         elif args.redact:
             _print_redacted_human(emit)
         else:
             _print_human(emit)
+    except OutputWriteError as exc:
+        # #1789: the shared one-line message ("cannot write <path>: … — check
+        # the value given to --out") replaces this tool's own wording, which
+        # said nothing about which flag to fix. rc is unchanged (2).
+        #
+        # ⛔ It still goes through `_emit_error`, NOT `_die_on_write_error`,
+        # and that is the whole point: the de-identified error CODE is a
+        # documented contract of `--redact` (ERR_SCHEMA / ERR_TOLERANCES / … /
+        # ERR_OUTPUT, printed in both modes so an SME can triage without a
+        # re-run), and `--redact` must not print the path — which the shared
+        # line always contains. So `_emit_error` keeps deciding what reaches
+        # stderr, and only the non-redacted branch carries the standard text.
+        # The row in tests/shared/test_output_path_write_failure.py declares
+        # the `ERROR [ERR_OUTPUT]: ` head as its `prefix`; the doubled
+        # "ERROR" that produces is the visible cost of keeping both contracts.
+        # Listed BEFORE `except OSError` because OutputWriteError is one.
+        _emit_error("ERR_OUTPUT", f"ERROR: {safe_label(str(exc))}", args.redact)
+        return EXIT_CALLER_ERROR
     except OSError as exc:
+        # The other writes in this block go to stdout (`--json` / human
+        # rendering); a failure there is not an `--out` problem.
         _emit_error("ERR_OUTPUT", f"報告輸出失敗: {exc}", args.redact)  # exc 可能含 --out 路徑
         return EXIT_CALLER_ERROR
 

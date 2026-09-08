@@ -86,10 +86,20 @@ pair", never as "every tool with an output flag".
 
 A declaration-side population (grepping ``add_argument`` for ``--out*``) was
 measured and rejected: 37 hits, 2 of them input flags mis-collected, and it
-still missed ``--summary-file``.
+still missed ``--summary-file``. (``dx/paired_trend_watch``'s row is the one
+that flag names — the derived population found it, the grep would not have.)
+
+⛔ And one more hole, named rather than hidden: ``NO_OFFLINE_ROW`` at the
+bottom of this file lists tools that ARE in the derived population but whose
+write cannot be reached without infrastructure this test suite does not have.
+An entry means "the behavioural gate is silent about this tool", not "covered
+elsewhere". It is exit-locked (fixed size, every entry re-checked against the
+derived population) so it cannot quietly grow into the place where evidence
+should be.
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -105,7 +115,11 @@ import test_json_stdout_contract as _jsc  # noqa: E402  (tests/shared on sys.pat
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TOOLS_DIR = REPO_ROOT / "scripts" / "tools"
 WAVEFORM_FIXTURE = REPO_ROOT / "tests" / "dx" / "fixtures" / "waveform" / "selftest_disk_used_percent.yaml"
+WAVEFORM_TOLERANCES = (REPO_ROOT / "tests" / "dx" / "fixtures" / "waveform"
+                       / "tolerances" / "selftest_tolerances.yaml")
 THRESHOLDCONFIG_CR = REPO_ROOT / "k8s" / "crd" / "examples" / "example-thresholdconfig.yaml"
+PAIRED_DATASET = (REPO_ROOT / "docs" / "internal" / "audit-reports"
+                  / "bench-paired-2026-08")
 
 TIMEOUT_S = 120
 EXIT_CALLER_ERROR = 2
@@ -271,6 +285,84 @@ def _history_conf_d(out: Path) -> str:
     return str(out)
 
 
+def _inject_report(tmp: Path) -> str:
+    """A synthetic `inject_waveform` report for `dx/waveform_score`.
+
+    Built here rather than produced by `inject_waveform`, because that tool
+    needs a live vmsingle plus a `vmalert` binary and cannot run offline —
+    which is also why it has no row of its own (see `NO_OFFLINE_ROW`).
+    The one alert fires INSIDE the fault window, so the verdict is PASS and
+    the control half exits 0; a FAIL verdict would exit 1.
+    """
+    alert = {"alertname": "CandidateA", "fire_offset_s": 1000,
+             "last_fire_offset_s": 1060, "resolve_offset_s": 1090,
+             "firing_sample_count": 3,
+             "labels": {"alertname": "CandidateA", "waveform_signature": "0",
+                        "waveform_variant": "base", "severity": "warning"}}
+    report = {
+        "tool": "inject-waveform", "pack_id": "synthetic-pack",
+        "records": [{"signature_index": 0, "fault_class": "selftest-fault",
+                     "metric": "selftest_metric", "variant": "base",
+                     "series": None, "expects": "must_detect", "labels": {},
+                     "fired": True, "alerts": [alert]}],
+        "window": {"span_s": 12000, "step_s": 30},
+        "metadata": {"series": [{"signature_index": 0, "variant": "base",
+                                 "labels": {}, "expects": "must_detect",
+                                 "fault_window_s": [300, 9270],
+                                 "hold_start_s": None}]},
+        "unattributed_alerts": [],
+    }
+    p = tmp / "inject-report.json"
+    p.write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
+    return str(p)
+
+
+def _trufflehog_ndjson(tmp: Path) -> str:
+    """`--input` for `lint/trufflehog_to_sarif`: one unverified finding.
+
+    Unverified on purpose: a VERIFIED finding makes the tool exit
+    EXIT_VERIFIED_FINDING (1) after a successful write, and the control half
+    of the pair asserts rc=0.
+    """
+    p = tmp / "trufflehog.json"
+    p.write_text(
+        '{"DetectorName": "Generic", "Verified": false, "Raw": "x", '
+        '"SourceMetadata": {"Data": {"Filesystem": {"file": "a.txt", "line": 1}}}}\n',
+        encoding="utf-8")
+    return str(p)
+
+
+def _bench_baseline(tmp: Path) -> str:
+    """`--baseline` for `dx/write_baseline_marker`: two countable rows.
+
+    Countable by the CONSUMER's regex (`analyze_bench_history._BENCH_RE`),
+    which the tool imports rather than restates: a line the regex rejects
+    would make the tool refuse with "no parseable benchmark rows" (rc=1)
+    before it ever reaches the write this row is about.
+    """
+    p = tmp / "bench-baseline.txt"
+    p.write_text("BenchmarkFoo-8\t1000\t123 ns/op\n"
+                 "BenchmarkBar-8\t2000\t456 ns/op\n", encoding="utf-8")
+    return str(p)
+
+
+def _soak_config_dir(tmp: Path) -> str:
+    """`--config-dir` for `dx/run_chaos_soak`: a throw-away conf.d.
+
+    The tool PERTURBS a carrier in here on every reload tick (that is the
+    chaos), so the row must never point it at the in-repo seed. With
+    `--duration-min 0` the poll/reload loop does not run at all and nothing
+    is written here, but the copy is what makes that a property of the
+    fixture rather than of the argv.
+    """
+    d = tmp / "soak-conf.d"
+    if not d.is_dir():
+        d.mkdir()
+        (d / "alpha.yaml").write_text(
+            "tenants:\n  alpha:\n    max_connections: 100\n", encoding="utf-8")
+    return str(d)
+
+
 def _state_dir(tmp: Path) -> str:
     """`--state-dir` for `ops/state_reconcile`: one current-schema state file.
 
@@ -328,12 +420,20 @@ class Row:
     # parent (sync_glossary_abbr) legitimately succeeds on missing_parent, so
     # it lists parent_is_file only.
     shapes: tuple[str, ...] = ("missing_parent", "parent_is_file")
-    # Text the tool prints BEFORE the standard line, on the same line. Only
-    # ``write_baseline_marker`` has one: it emits a GitHub ``::error::``
-    # annotation, and that prefix is a contract of its own (a CI log parser
-    # reads it), so it is declared here and stripped before the shared
-    # assertions rather than being allowed to relax them. Declaring a prefix
-    # is load-bearing in both directions — the line must actually carry it.
+    # Text the tool prints BEFORE the standard line, on the same line. Two
+    # tools have one, and in both the prefix is a contract of its own that
+    # predates this ticket, so it is declared here and stripped before the
+    # shared assertions rather than being allowed to relax them:
+    #   * ``write_baseline_marker`` — a GitHub ``::error::`` annotation, read
+    #     by the nightly's log parser;
+    #   * ``waveform_score`` — ``ERROR [ERR_OUTPUT]: ``, the de-identified
+    #     error code its ``--redact`` mode is documented to print in both
+    #     modes (the SME triages by code without a re-run).
+    # Declaring a prefix is load-bearing in both directions — the line must
+    # actually carry it. ⚠️ It also DOUBLES the word ERROR in both lines,
+    # which is ugly and deliberate: the alternative was to loosen the shared
+    # matcher for two tools, and a matcher that accepts more shapes proves
+    # less about all of them.
     prefix: str = ""
     # For the ``artifact_is_dir`` shape: the name of the file the tool creates
     # INSIDE its output directory, which the harness pre-creates as a
@@ -413,6 +513,19 @@ ROWS: list[Row] = [
         out_name="conf.d",
         shapes=("parent_is_file",))
       for _layout in ("flat", "hierarchical", "synthetic-v2")],
+    # `--summary-file` is why the population is derived from the WRITER and
+    # not from `add_argument` names: a declaration-side scan for `--out*`
+    # misses it entirely (measured). `missing_parent` and `parent_is_file`
+    # reach the `open(..., "a")`; `target_is_dir` reaches the same call with a
+    # different errno, and is kept because an APPEND to an existing path is
+    # this tool's normal case (the CI runner's $GITHUB_STEP_SUMMARY already
+    # exists) — the shape that most resembles the real one.
+    R("dx/paired_trend_watch.py", "--summary-file", "file",
+      lambda c, out: ["--dataset", str(PAIRED_DATASET), "--summary-file", str(out)],
+      reach="the frozen six-night archival dataset in the repo; --dataset is "
+            "the offline source (--from-gh would need the gh CLI)",
+      out_name="paired-trend.md",
+      shapes=("missing_parent", "parent_is_file", "target_is_dir")),
     R("dx/pair_bench_ratio.py", "--out", "file",
       lambda c, out: ["--reference", _bench_side(c.tmp, "ref"),
                       "--main", _bench_side(c.tmp, "main"),
@@ -427,16 +540,78 @@ ROWS: list[Row] = [
                       "--warmup-sec", "0"],
       reach="hand-built soak output dir (run-config.json + flat timeseries CSV)",
       out_name="soak-report.md"),
+    # Four rows, four sinks. `run_chaos_soak` writes three artefacts under
+    # `--output-dir` and the run stops at the first failure, so one row would
+    # only ever prove the `mkdir`. `--duration-min 0` makes the poll loop a
+    # no-op (the `finally` still runs and still writes both files) and
+    # `--reload-interval-sec 9999` keeps the chaos from touching the fixture
+    # conf.d. All three artefact sinks were measured individually reachable.
+    R("dx/run_chaos_soak.py", "--output-dir", "dir",
+      lambda c, out: ["--target-url", c.stub + "/soak",
+                      "--config-dir", _soak_config_dir(c.tmp),
+                      "--duration-min", "0", "--reload-interval-sec", "9999",
+                      "--output-dir", str(out)],
+      reach="the shared stub's /soak personality (Go-runtime /metrics body); "
+            "the first-probe check is what a wrong stub would fail on",
+      shapes=("parent_is_file",)),
+    *[R("dx/run_chaos_soak.py", "--output-dir", "dir",
+        lambda c, out: ["--target-url", c.stub + "/soak",
+                        "--config-dir", _soak_config_dir(c.tmp),
+                        "--duration-min", "0", "--reload-interval-sec", "9999",
+                        "--output-dir", str(out)],
+        reach=f"same; {_artefact} is blocked so the run dies at that sink",
+        shapes=("artifact_is_dir",),
+        artifact=_artefact)
+      for _artefact in ("metrics-timeseries.csv", "summary.txt", "run-config.json")],
+    # One of the two rows with a `prefix` (the other is `dx/waveform_score`,
+    # for a different reason). This tool writes a GitHub annotation
+    # (`::error::`) in front of the standard line because the nightly's log
+    # parser reads annotations — see the comment at its `except
+    # OutputWriteError`, which explains why it does not use the shared
+    # decorator. `target_is_dir` is the shape that reaches the `write_text`;
+    # `parent_is_file` reaches the `mkdir -p` in front of it. `missing_parent`
+    # is a legitimate success (the tool creates the parent).
+    # ⛔ The write moved 1 → 2 here; the three INPUT refusals (`--baseline`
+    # missing / unreadable / no parseable rows) still exit 1 and
+    # tests/dx/test_write_baseline_marker.py pins that split.
+    R("dx/write_baseline_marker.py", "--out", "file",
+      lambda c, out: ["--baseline", _bench_baseline(c.tmp), "--out", str(out)],
+      reach="a two-row synthetic `go test -bench` dump",
+      out_name="bench-baseline.rows",
+      shapes=("parent_is_file", "target_is_dir"),
+      prefix="::error::"),
     R("dx/sync_glossary_abbr.py", "--output", "file",
       lambda c, out: ["--glossary", _glossary(c.tmp), "--output", str(out)],
       reach="tmp glossary.md with two **ABBR (Expansion)** entries",
       out_name="abbreviations.md",
       shapes=("parent_is_file",)),
+    # `prefix` again, for a different reason than write_baseline_marker's.
+    # This tool funnels every error through `_emit_error`, which stamps a
+    # de-identified error CODE — a documented `--redact` contract (the SME
+    # triages by code without a re-run, and under `--redact` the path must not
+    # be printed at all). So the standard line arrives BEHIND
+    # `ERROR [ERR_OUTPUT]: `, doubling the word ERROR; that is the declared
+    # cost of keeping both contracts, and declaring it here means the tool
+    # cannot quietly drop either half.
+    R("dx/waveform_score.py", "--out", "file",
+      lambda c, out: [_inject_report(c.tmp), "--tolerances", str(WAVEFORM_TOLERANCES),
+                      "--out", str(out)],
+      reach="a synthetic inject report whose one alert fires inside the fault "
+            "window (verdict PASS ⇒ rc=0) plus the in-repo self-test tolerance "
+            "matrix",
+      out_name="waveform-score.json",
+      prefix="ERROR [ERR_OUTPUT]: "),
     R("dx/waveform_compile.py", "--out", "dir",
       lambda c, out: ["--compile", "--out", str(out), "--allow-selftest",
                       str(WAVEFORM_FIXTURE)],
       reach="in-repo self-test waveform pack fixture",
       shapes=("parent_is_file",)),
+    # ── lint ───────────────────────────────────────────────────────────────
+    R("lint/trufflehog_to_sarif.py", "--output", "file",
+      lambda c, out: ["--input", _trufflehog_ndjson(c.tmp), "--output", str(out)],
+      reach="a one-finding NDJSON transcript; no trufflehog binary is needed, "
+            "the tool only converts",
+      out_name="trufflehog.sarif"),
     # ── ops: single-file outputs ───────────────────────────────────────────
     R("ops/analyze_rule_pack_gaps.py", "-o/--output", "file",
       lambda c, out: ["--config-dir", str(_jsc.SEED_CONF_D), "--output", str(out)],
@@ -506,11 +681,14 @@ ROWS: list[Row] = [
       reach="a state dir with one current-schema file: no migration runs, so "
             "the manifest write is the only sink the run reaches",
       out_name="manifest.json",
-      # ⚠️ This row is the ONLY evidence for `write_json`'s atomic sinks: the
-      # static pin cannot see them, because the pre-existing
-      # `except BaseException: <unlink temp>; raise` cleanup already satisfies
-      # its "a stopping handler is a guard" arm — the pin stays green with the
-      # wrapper deleted, this row does not (verified both ways).
+      # ⚠️ This row USED to be the only evidence for `write_json`'s atomic
+      # sinks: the pre-existing `except BaseException: <unlink temp>; raise`
+      # cleanup satisfied the static pin's "a stopping handler is a guard"
+      # arm, so the pin stayed green with the wrapper deleted while this row
+      # went red. That arm was tightened afterwards (a bare re-raise passes a
+      # raw OSError outwards, which nothing above catches), and both gates now
+      # go red when the wrapper is removed — verified both ways, and the
+      # reasoning is in test_output_write_sites_stay_guarded's docstring.
       # `missing_parent` is a legitimate success here — the tool creates the
       # manifest's parent itself. `parent_is_file` reaches that mkdir;
       # `target_is_dir` gets past it and reaches the `os.replace` that ends
@@ -526,6 +704,11 @@ ROWS: list[Row] = [
             "and the JWKS to --jwks-out — needs openssl for the keypair",
       out_name="federation-jwks.json",
       requires="openssl"),
+    R("ops/generate_alertmanager_routes.py", "-o/--output", "file",
+      lambda c, out: ["--config-dir", str(_jsc.SEED_CONF_D), "-o", str(out)],
+      reach="in-repo try-local seed conf.d; the default render mode writes the "
+            "routing fragment to -o",
+      out_name="alertmanager-routes.yaml"),
     R("ops/generate_tenant_mapping_rules.py", "-o/--output", "file",
       lambda c, out: ["--config-dir", _mapping_conf_d(c.tmp), "--metrics", "mysql_up",
                       "-o", str(out)],
@@ -976,7 +1159,9 @@ def test_rows_point_at_real_tools_and_fixtures():
             f"{row.id}: Row.artifact and an artefact-blocking shape "
             f"({sorted(_ARTIFACT_SHAPES)}) must be declared together")
     assert WAVEFORM_FIXTURE.is_file()
+    assert WAVEFORM_TOLERANCES.is_file()
     assert THRESHOLDCONFIG_CR.is_file()
+    assert (PAIRED_DATASET / "nights.json").is_file()
     for p in (_jsc.SEED_CONF_D, _jsc.RULE_PACKS, _jsc.K8S_MONITORING, _jsc.ALERTMANAGER_YML):
         assert p.exists(), p
 
@@ -1040,13 +1225,66 @@ def _tools_naming_a_flag() -> set[str]:
     return found
 
 
+# ⛔ Tools that DECLARE an output flag at their writer but cannot have a
+# control pair here, each with the measured reason. Exit-locked like every
+# other exception list in this ticket: `==` on the size, and an entry whose
+# tool is no longer in the derived population (or which grew a row) is a
+# failure, so the list can only shrink.
+#
+# ⚠️ An entry is NOT "this tool is covered by something else". It is "the
+# behavioural gate is silent about this tool", and the only thing speaking
+# for it is the static side (test_write_failure_class for a secure writer,
+# test_output_write_sites_stay_guarded for a raw sink) — which sees the shape
+# of the code, never the rc an operator gets.
+NO_OFFLINE_ROW: dict[str, str] = {
+    "dx/inject_waveform.py":
+        "Its `--out` write is the LAST step of an injection run: the tool "
+        "pushes a waveform into an isolated vmsingle over HTTP and then "
+        "shells out to a `vmalert` binary with `-replay`. Neither exists in "
+        "this repo's offline test environment (its own e2e tests skip on "
+        "exactly that, tests/dx/test_inject_waveform.py), and every argv that "
+        "gets as far as the write needs both. A `requires=` row would be a "
+        "permanent skip that reads as a pass — and would still be wrong on a "
+        "host that has `vmalert` but no vmsingle. #1789 gave it the shared "
+        "`flag=\"--out\"` message anyway. What speaks for it instead: "
+        "test_write_failure_class statically (its writer is "
+        "`write_text_secure`), and behaviourally its own "
+        "`test_out_write_failure_exits_two`, which stubs out the injection "
+        "pipeline, calls `main()` IN PROCESS and asserts rc=2 plus the "
+        "standard line. That is a weaker pair than a row — no subprocess, no "
+        "control half — and it is the reason this entry exists rather than "
+        "being silently absent.",
+}
+_NO_OFFLINE_ROW_CEILING = 1
+
+
 def test_every_flag_naming_tool_has_a_row():
     """Derived, not enumerated: a tool that names an output flag in its
     writer must have a control pair here, or the row table has gone stale."""
     naming = _tools_naming_a_flag()
     assert naming, "no tool passes flag= to a secure writer — scanner drift"
     covered = {r.tool for r in ROWS}
-    missing = sorted(naming - covered)
+    missing = sorted(naming - covered - set(NO_OFFLINE_ROW))
     assert not missing, (
         "tool(s) name an output flag in a secure writer but have no control "
         f"pair in ROWS: {missing}")
+
+
+def test_the_no_offline_row_list_is_exact_and_not_stale():
+    """The exception list's own gate: fixed size, every entry still in the
+    population, none of them quietly grown a row (which would make the
+    exception a lie), and every entry carrying a reason."""
+    assert len(NO_OFFLINE_ROW) == _NO_OFFLINE_ROW_CEILING, sorted(NO_OFFLINE_ROW)
+    naming = _tools_naming_a_flag()
+    covered = {r.tool for r in ROWS}
+    stale = []
+    for tool, reason in sorted(NO_OFFLINE_ROW.items()):
+        if not (TOOLS_DIR / tool).is_file():
+            stale.append(f"{tool}: no such tool any more")
+        elif tool not in naming:
+            stale.append(f"{tool}: no longer names a flag at its writer — delete this entry")
+        elif tool in covered:
+            stale.append(f"{tool}: has a row now — delete this entry")
+        elif not reason.strip():
+            stale.append(f"{tool}: needs a reason")
+    assert not stale, "\n".join(stale)

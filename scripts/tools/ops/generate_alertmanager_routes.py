@@ -41,7 +41,9 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 
 # ── Re-exports from _lib_python (kept for test backward-compat) ─────
-from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
+from _lib_io import (  # noqa: E402  (#1538 output-layer escaping, #1789)
+    OutputWriteError, _die_on_write_error, safe_label,
+)
 from _lib_python import (  # noqa: E402, F401
     write_text_secure,
     PLATFORM_DEFAULTS,
@@ -169,30 +171,54 @@ def _validate_mode(routes: list[dict], receivers: list[dict], inhibit_rules: lis
     sys.exit(EXIT_OK)
 
 
-def _write_output_or_die(output: str, content: str, label: str) -> None:
+def _write_output_or_die(output: str, content: str) -> None:
     """Write *content* to the operator-supplied ``-o`` path, or exit 2.
 
     A bare ``write_text_secure`` lets OSError escape as a traceback at rc=1,
     and rc=1 in this repo is EXIT_VIOLATION — "your CONFIG is wrong" — for what
     is a mistyped path.
 
-    ⚠️ NOT THE WHOLE CLASS. Most ``write_text_secure`` call sites across
-    ``scripts/**`` still have no enclosing handler that can catch OSError, and
-    most of the owning tools take their output path from argv. This closes the
-    sites in THIS tool only; the class, and the argument that the fix belongs
-    in the shared helper rather than at each call site, is #1641.
-    ⛔ Do not read this helper's existence as the class having been handled —
-    and do not quote a count from here: it was already wrong once, because this
-    very change moved it.
+    #1789: the rc was already 2 here, but the message was hand-written and
+    said the WRONG thing — it printed two lines, and because the flag was
+    never declared at the writer, ``OutputWriteError`` filled in "internal
+    output path, this is a bug or an unwritable workspace" for a path the
+    operator had typed on the command line (measured). Declaring
+    ``flag="-o/--output"`` and handing the exception to the SHARED
+    ``_die_on_write_error`` makes it the same single line every other tool in
+    the batch prints, and puts this tool into the population of
+    ``tests/shared/test_output_path_write_failure.py`` — which is what a
+    hand-written message here could never join.
+
+    ⚠️ The ``try``/``except`` stays HERE rather than moving to a
+    ``@exit_on_output_write_error`` on ``main``. Measured: with the handler
+    gone, ``test_write_failure_class`` goes red on this line — its tree-wide
+    rule is that every ``write_text_secure`` call in a tool module sits inside
+    a handler that can catch, and it reads that LEXICALLY (it stops at a
+    ``def``), so a decorator four frames up does not answer for it. The
+    decorator is for tools whose write sites are raw and scattered; a secure
+    writer is closed at its own call site.
+
+    ⚠️ The old text's *label* ("the ConfigMap" / "the routing fragment") is
+    gone: both call sites write to the same ``-o`` value and the path is in
+    the line, so the label distinguished nothing an operator has to act on.
+    What replaced the coverage it carried is
+    ``test_control_each_writer_mode_writes_its_own_artefact`` in
+    tests/ops/test_generate_routes_orchestration.py, which checks the CONTENT
+    each mode puts at ``-o``.
+
+    ⛔ STILL NOT THE WHOLE CLASS, and the caveat this docstring has carried
+    since #1641 stands. #1789 closed a NAMED BATCH of tools, not every writer
+    under ``scripts/**``; what is guarded tree-wide is the secure-writer
+    population (``tests/shared/test_write_failure_class.py``), while the raw
+    sinks are pinned only for the files that ticket touched. Do not read this
+    helper, or a green run of either gate, as the class having been handled
+    everywhere — and do not quote a count from here: it was wrong once
+    already, because a change like this one moved it.
     """
     try:
-        write_text_secure(output, content)
-    except OSError as exc:
-        die_caller_error(
-            f"-o: cannot write {label} to {output}: {exc}\n"
-            "  ⛔ This is an OUTPUT PATH problem, not a routing violation. "
-            "Check the parent directory exists and is writable; do not read "
-            "this as 'the generated routes are invalid'.")
+        write_text_secure(output, content, flag="-o/--output")
+    except OutputWriteError as exc:
+        _die_on_write_error(exc, EXIT_CALLER_ERROR)
 
 
 def _apply_mode(routes: list[dict], receivers: list[dict], inhibit_rules: list[dict],
@@ -277,7 +303,7 @@ def _output_configmap_mode(routes: list[dict], receivers: list[dict], inhibit_ru
         return
 
     if output:
-        _write_output_or_die(output, cm_yaml, "the ConfigMap")
+        _write_output_or_die(output, cm_yaml)
         print(f"Written to {output} ({route_count} routes, "
               f"{len(receivers)} receivers, {inhibit_count} inhibit rules)")
     else:
@@ -311,7 +337,7 @@ def _render_output_mode(routes: list[dict], receivers: list[dict], inhibit_rules
         return
 
     if output:
-        _write_output_or_die(output, content, "the routing fragment")
+        _write_output_or_die(output, content)
         print(f"Written to {output} ({route_count} routes, {len(receivers)} receivers, "
               f"{inhibit_count} inhibit rules)")
     else:

@@ -90,6 +90,9 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_io import (  # noqa: E402  (#1789)
+    OutputWriteError, exit_on_output_write_error, output_write,
+)
 from _lib_confd import (  # noqa: E402
     has_yaml_extension, is_hidden_name, is_reserved_name,
 )
@@ -251,6 +254,11 @@ def trigger_reload(config_dir: Path) -> bool:
                 new = content.replace(alt, marker)
             else:
                 new = content.rstrip() + "\n" + marker
+            # ⚠️ NOT an --output-dir sink and deliberately NOT wrapped
+            # (#1789): this perturbs a file under `--config-dir`, which is the
+            # INPUT tree the soak is chaos-testing, and the `except OSError:
+            # continue` below is the point — an unwritable carrier means "try
+            # the next one", not "the operator mistyped a flag".
             yf.write_text(new, encoding="utf-8", newline="\n")
             return True
         except OSError:
@@ -258,6 +266,7 @@ def trigger_reload(config_dir: Path) -> bool:
     return False
 
 
+@exit_on_output_write_error
 def main() -> int:
     try_utf8_stdout()
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[1])
@@ -290,7 +299,8 @@ def main() -> int:
         return EXIT_CALLER_ERROR
 
     out = Path(args.output_dir)
-    out.mkdir(parents=True, exist_ok=True)
+    with output_write(out, flag="--output-dir", action="create directory"):
+        out.mkdir(parents=True, exist_ok=True)
     csv_path = out / "metrics-timeseries.csv"
     summary_path = out / "summary.txt"
     run_config_path = out / "run-config.json"
@@ -310,8 +320,18 @@ def main() -> int:
     next_reload_at = time.time() + args.reload_interval_sec
     next_poll_at = time.time()  # first poll immediately
 
-    # Open CSV with header
-    csv_file = open(csv_path, "w", newline="", encoding="utf-8")
+    # Open CSV with header.
+    # ⚠️ Only the `open` is wrapped, and that is the whole of what can be
+    # wrapped here: the handle lives for the length of the soak, so its
+    # `writerow` / `flush` (in the loop below) and its `close()` (in the
+    # `finally`) happen OUTSIDE any block a context manager could span. A
+    # write or a flush that fails there — a filesystem that filled up mid-run
+    # — still exits 1 with a traceback. Written down in
+    # tests/shared/test_output_write_sites_stay_guarded.py (below its
+    # NOT_GUARDED list, which cannot hold them: they are not sinks the scanner
+    # can see), not silently ignored.
+    with output_write(csv_path, flag="--output-dir"):
+        csv_file = open(csv_path, "w", newline="", encoding="utf-8")
     writer = csv.writer(csv_file)
     writer.writerow(["timestamp_utc", "elapsed_sec", "reload_count_so_far", *TRACKED_METRICS])
 
@@ -326,6 +346,13 @@ def main() -> int:
     signal.signal(signal.SIGTERM, on_signal)
 
     started_wall = time.time()
+    # An output-write failure inside the `finally` below is REMEMBERED, not
+    # raised there: a `raise` (or a `sys.exit`) inside a `finally` replaces
+    # whatever exception was already unwinding — a KeyboardInterrupt, an error
+    # from the poll loop — and the operator would be shown the wrong failure.
+    # It is re-raised after the block instead, where it only wins if nothing
+    # else was in flight, and the decorator turns it into rc=2.
+    pending_write_error: OutputWriteError | None = None
     try:
         while time.time() < end_at and not interrupted:
             now = time.time()
@@ -366,29 +393,39 @@ def main() -> int:
         cfg.ended_at_utc = datetime.now(timezone.utc).isoformat()
 
         # Write summary + run-config
-        with open(summary_path, "w", encoding="utf-8", newline="\n") as f:
-            f.write(f"v2.8.0 readiness chaos soak — summary\n")
-            f.write(f"=" * 60 + "\n")
-            f.write(f"target:           {args.target_url}\n")
-            f.write(f"config-dir:       {args.config_dir}\n")
-            f.write(f"duration:         {args.duration_min} min "
-                    f"({'completed' if not interrupted else 'INTERRUPTED'})\n")
-            f.write(f"reload interval:  {args.reload_interval_sec}s\n")
-            f.write(f"metrics poll:     {args.metrics_poll_sec}s\n")
-            f.write(f"started (UTC):    {cfg.started_at_utc}\n")
-            f.write(f"ended (UTC):      {cfg.ended_at_utc}\n")
-            f.write(f"reload count:     {cfg.reload_count}\n")
-            f.write(f"metric polls:     {cfg.poll_count}\n")
-            f.write(f"\nTimeseries:       {csv_path.name}\n")
-            f.write(f"Run report:       run `python3 scripts/tools/dx/render_soak_diff.py "
-                    f"--input-dir {out}`\n")
+        try:
+            with output_write(summary_path, flag="--output-dir"):
+                with open(summary_path, "w", encoding="utf-8", newline="\n") as f:
+                    f.write(f"v2.8.0 readiness chaos soak — summary\n")
+                    f.write(f"=" * 60 + "\n")
+                    f.write(f"target:           {args.target_url}\n")
+                    f.write(f"config-dir:       {args.config_dir}\n")
+                    f.write(f"duration:         {args.duration_min} min "
+                            f"({'completed' if not interrupted else 'INTERRUPTED'})\n")
+                    f.write(f"reload interval:  {args.reload_interval_sec}s\n")
+                    f.write(f"metrics poll:     {args.metrics_poll_sec}s\n")
+                    f.write(f"started (UTC):    {cfg.started_at_utc}\n")
+                    f.write(f"ended (UTC):      {cfg.ended_at_utc}\n")
+                    f.write(f"reload count:     {cfg.reload_count}\n")
+                    f.write(f"metric polls:     {cfg.poll_count}\n")
+                    f.write(f"\nTimeseries:       {csv_path.name}\n")
+                    f.write(f"Run report:       run `python3 scripts/tools/dx/render_soak_diff.py "
+                            f"--input-dir {out}`\n")
 
-        with open(run_config_path, "w", encoding="utf-8", newline="\n") as f:
-            json.dump(asdict(cfg), f, indent=2, ensure_ascii=False)
+            with output_write(run_config_path, flag="--output-dir"):
+                with open(run_config_path, "w", encoding="utf-8", newline="\n") as f:
+                    json.dump(asdict(cfg), f, indent=2, ensure_ascii=False)
+        except OutputWriteError as exc:
+            # First failure wins and skips the rest; the info lines below still
+            # run so the operator sees where the (partial) output went.
+            pending_write_error = exc
 
         print(f"\n[info] soak {'completed' if not interrupted else 'interrupted'}: "
               f"{cfg.reload_count} reloads / {cfg.poll_count} polls", file=sys.stderr)
         print(f"[info] output: {out}", file=sys.stderr)
+
+    if pending_write_error is not None:
+        raise pending_write_error
 
     return EXIT_CALLER_ERROR if interrupted else EXIT_OK
 

@@ -135,6 +135,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
 
 # ── The pinned rule (ADR-032 §待決 5) ─────────────────────────────────────
 DEFAULT_THRESHOLD_PCT = 5.0
@@ -1855,6 +1856,7 @@ def render(result):
     return "\n".join(lines)
 
 
+@exit_on_output_write_error
 def main(argv=None):
     try_utf8_stdout()
     parser = argparse.ArgumentParser(
@@ -1941,8 +1943,19 @@ def main(argv=None):
 
     target = args.summary_file or os.environ.get("GITHUB_STEP_SUMMARY")
     if target:
-        with open(target, "a", encoding="utf-8", newline="\n") as handle:
-            handle.write(body + "\n")
+        # ⚠️ The flag is named only when the path CAME from the flag. The same
+        # variable is also filled from `$GITHUB_STEP_SUMMARY`, and telling an
+        # operator to "check the value given to --summary-file" for a path the
+        # CI runner exported would send them to a flag they never typed;
+        # `flag=None` prints the internal-path wording instead. Both branches
+        # still exit 2 with one line and no traceback (this used to be a raw
+        # `FileNotFoundError` at rc=1 — which this tool documents as the code
+        # it must NEVER return, since non-zero here reads as "found a
+        # regression").
+        flag = "--summary-file" if args.summary_file else None
+        with output_write(target, flag=flag, action="append to"):
+            with open(target, "a", encoding="utf-8", newline="\n") as handle:
+                handle.write(body + "\n")
 
     # ⛔ Exit 0 for FINDINGS as well as CLEAR. This is a REPORTER during the
     # parallel-run period, and a non-zero exit would turn the nightly red on a

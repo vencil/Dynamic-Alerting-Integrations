@@ -85,6 +85,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 import _waveform_lib as wf  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_python import write_text_secure  # noqa: E402
+from _lib_io import OutputWriteError, safe_label  # noqa: E402  (#1789)
 
 try:
     from _lib_compat import try_utf8_stdout  # noqa: E402
@@ -727,12 +728,29 @@ def main() -> int:
     try:
         report_json = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True)
         if args.out:
-            write_text_secure(args.out, report_json + "\n")
+            write_text_secure(args.out, report_json + "\n", flag="--out")
         if args.json_output:
             print(report_json)
         else:
             _print_human(report)
+    except OutputWriteError as exc:
+        # #1789: an unusable `--out` gets the shared one-line message that
+        # names the flag, instead of this tool's own wording wrapped around a
+        # raw OSError repr. Listed BEFORE the `except OSError` below because
+        # OutputWriteError IS an OSError — the broad handler would otherwise
+        # swallow it first. rc is unchanged (EXIT_CALLER_ERROR, already 2).
+        #
+        # ⚠️ Printed and RETURNED, not `_die_on_write_error` /
+        # `exit_on_output_write_error`: those raise SystemExit, and this
+        # `main` is documented to RETURN its exit code — the tool's own tests
+        # call it in process (`assert iw.main() == 2`) and a raise would be a
+        # second, unrelated behaviour change. Same text, same escaping.
+        print(f"ERROR: {safe_label(str(exc))}", file=sys.stderr)
+        return EXIT_CALLER_ERROR
     except OSError as exc:
+        # Still here for the OTHER writes in the block: `_print_human` and the
+        # `--json` dump go to stdout, and a broken pipe there is not an
+        # `--out` problem and must not be blamed on that flag.
         print(f"ERROR: 報告輸出失敗: {exc}", file=sys.stderr)
         return EXIT_CALLER_ERROR
     return EXIT_OK

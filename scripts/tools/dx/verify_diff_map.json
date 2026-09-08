@@ -827,7 +827,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "4b15057922e3376b6fb671883e983202cb9a629da9299059d351ecd815ad4ca2",
+ "source_digest": "39b54faae288e577d0b2ec74afcbaf36c34f6f68460836b482b380969c16a0ea",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1727,7 +1727,8 @@
    "tests/dx/test_paired_trend_watch.py"
   ],
   "docs/internal/audit-reports/bench-paired-2026-08/nights.json": [
-   "tests/dx/test_paired_trend_watch.py"
+   "tests/dx/test_paired_trend_watch.py",
+   "tests/shared/test_output_path_write_failure.py"
   ],
   "docs/internal/audit-reports/bench-probe-2026-09": [
    "tests/dx/test_analyze_probe.py"
@@ -2539,7 +2540,8 @@
   ],
   "scripts/tools/dx/paired_trend_watch.py": [
    "tests/dx/test_canary_quotation_pins.py",
-   "tests/dx/test_paired_trend_watch.py"
+   "tests/dx/test_paired_trend_watch.py",
+   "tests/shared/test_output_write_sites_stay_guarded.py"
   ],
   "scripts/tools/dx/pr_preflight.py": [
    "tests/dx/test_gen_agent_adapters.py",
@@ -2591,7 +2593,8 @@
    "tests/dx/test_waveform_score.py"
   ],
   "scripts/tools/dx/write_baseline_marker.py": [
-   "tests/dx/test_write_baseline_marker.py"
+   "tests/dx/test_write_baseline_marker.py",
+   "tests/shared/test_output_write_sites_stay_guarded.py"
   ],
   "scripts/tools/lint": [
    "tests/dx/test_line_ending_policy.py",
@@ -2761,7 +2764,8 @@
    "tests/ops/test_prepush_hook_wiring.py"
   ],
   "scripts/tools/lint/trufflehog_to_sarif.py": [
-   "tests/ops/test_secret_scan_gate.py"
+   "tests/ops/test_secret_scan_gate.py",
+   "tests/shared/test_output_write_sites_stay_guarded.py"
   ],
   "scripts/tools/lint/validate_docs_versions.py": [
    "tests/lint/test_validate_docs_versions.py",
@@ -3009,7 +3013,8 @@
    "tests/dx/test_dx_json_stdout_contract.py"
   ],
   "tests/dx/fixtures/waveform/tolerances/selftest_tolerances.yaml": [
-   "tests/dx/test_dx_json_stdout_contract.py"
+   "tests/dx/test_dx_json_stdout_contract.py",
+   "tests/shared/test_output_path_write_failure.py"
   ],
   "tests/dx/test_analyze_bench_history.py": [
    "tests/dx/test_canary_quotation_pins.py"
@@ -3035,6 +3040,9 @@
   "tests/dx/test_generate_adr_index.py": [
    "tests/dx/test_line_ending_policy.py"
   ],
+  "tests/dx/test_inject_waveform.py": [
+   "tests/shared/test_output_path_write_failure.py"
+  ],
   "tests/dx/test_paired_trend_watch.py": [
    "tests/dx/test_canary_quotation_pins.py"
   ],
@@ -3058,6 +3066,9 @@
   ],
   "tests/dx/test_waveform_score.py": [
    "tests/dx/test_dx_json_stdout_contract.py"
+  ],
+  "tests/dx/test_write_baseline_marker.py": [
+   "tests/shared/test_output_path_write_failure.py"
   ],
   "tests/e2e": [
    "tests/lint/test_check_playwright_rtl_drift.py",
@@ -3380,6 +3391,7 @@
    "tests/shared/test_yaml_file_error.py"
   ],
   "tests/shared/test_output_path_write_failure.py": [
+   "tests/ops/test_generate_routes_orchestration.py",
    "tests/shared/test_write_failure_class.py"
   ],
   "tests/shared/test_output_write_sites_stay_guarded.py": [
