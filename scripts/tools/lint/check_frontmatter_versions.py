@@ -141,8 +141,7 @@ def scan_docs(docs_dir: Path) -> List[FrontmatterInfo]:
     ancestor included — so a checkout living under any dot-directory
     (Claude Code's agent worktrees sit in ``.claude/worktrees/<name>/``)
     skipped the whole tree and reported a green "All 0 frontmatter versions
-    match". The predicate is ``_lib_confd.is_hidden_name``, the exporter
-    walker's own skip rule, so "hidden" means one thing across the tools.
+    match". The predicate is ``_lib_confd.is_hidden_name``.
     """
     results = []
     if not docs_dir.exists():
@@ -225,11 +224,22 @@ def format_text_report(
     expected: str,
     total_scanned: int,
     total_with_fm: int,
+    total_found: Optional[int] = None,
 ) -> str:
-    """Format a human-readable text report."""
+    """Format a human-readable text report.
+
+    ``total_found`` is every ``*.md`` below docs/ before the hidden filter;
+    printing it next to ``total_scanned`` is what lets a reader see a scan
+    that silently shrank (#1790) without re-running ``find`` themselves.
+    """
     lines = []
     lines.append(f"Platform version: v{expected}")
-    lines.append(f"Scanned: {total_scanned} files, {total_with_fm} with frontmatter")
+    if total_found is None:
+        lines.append(f"Scanned: {total_scanned} files, {total_with_fm} with frontmatter")
+    else:
+        lines.append(f"Scanned: {total_scanned} of {total_found} markdown file(s) "
+                     f"({total_found - total_scanned} hidden), "
+                     f"{total_with_fm} with frontmatter")
     lines.append("")
 
     errors = [i for i in items if i.severity == "error"]
@@ -269,12 +279,24 @@ def format_json_report(
     expected: str,
     total_scanned: int,
     total_with_fm: int,
+    total_found: Optional[int] = None,
+    status: str = "ok",
+    reason: Optional[str] = None,
 ) -> str:
-    """Format a JSON report."""
+    """Format a JSON report.
+
+    ``status``/``reason`` exist for the refused-empty-population path: in
+    ``--json`` mode stdout must still be exactly one JSON document
+    (dev-rules §13), so that path emits this shape zeroed out with
+    ``status="caller_error"`` instead of prose.
+    """
     errors = [i for i in items if i.severity == "error"]
     warnings = [i for i in items if i.severity == "warn"]
     result = {
+        "status": status,
+        "reason": reason,
         "expected_version": expected,
+        "total_found": total_found if total_found is not None else total_scanned,
         "total_scanned": total_scanned,
         "total_with_frontmatter": total_with_fm,
         "items": [i.to_dict() for i in items],
@@ -305,28 +327,39 @@ def main(argv: Optional[List[str]] = None) -> None:
               file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
-    scanned = scan_docs(docs_dir=DOCS_DIR)
+    # #1790: an empty population is a caller error, not a clean pass.
+    # "Scanned: 0 files" used to exit 0 — indistinguishable from "every file
+    # matched" — and nothing could tell the two apart until #1492 wired this
+    # tool into a runner. Say WHICH empty shape this is, because the
+    # operator's own `find docs -name '*.md'` contradicts the wrong wording:
+    # docs/ missing or a file, docs/ unreadable, no markdown at all, or
+    # markdown present but every file hidden. The discriminating words come
+    # FIRST: validate_all (`make lint-docs`) quotes only the last meaningful
+    # stdout line, cut to 80 characters.
+    reason: Optional[str] = None
+    total_found = 0
+    if not DOCS_DIR.is_dir():
+        reason = f"not a directory: {DOCS_DIR}"
+    elif not os.access(DOCS_DIR, os.R_OK):
+        reason = f"not readable: {DOCS_DIR}"
+    else:
+        total_found = sum(1 for _ in DOCS_DIR.rglob("*.md"))
+    scanned = scan_docs(docs_dir=DOCS_DIR) if reason is None else []
     if not scanned:
-        # #1790: an empty population is a caller error, not a clean pass.
-        # "Scanned: 0 files" used to exit 0 — indistinguishable from "every
-        # file matched" — which is exactly how the hidden-ancestor defect
-        # above went unnoticed. Say which of the two empty shapes this is:
-        # nothing on disk, or markdown present but every file skipped as
-        # hidden — the operator's `find docs -name '*.md'` would contradict
-        # the first wording in the second case.
-        raw = sum(1 for _ in DOCS_DIR.rglob("*.md")) if DOCS_DIR.exists() else 0
-        if raw:
-            reason = (f"{raw} markdown file(s) under {DOCS_DIR} were all "
-                      "skipped as hidden (dot-prefixed entry below docs/)")
-        else:
+        if reason is None and total_found:
+            reason = (f"all {total_found} markdown file(s) hidden (skipped by "
+                      f"_lib_confd.is_hidden_name) under {DOCS_DIR}")
+        elif reason is None:
             reason = f"no markdown files found under {DOCS_DIR}"
-        msg = (f"ERROR: {reason} — nothing was measured, so this cannot pass "
-               "(wrong checkout or docs directory?)")
-        # Both streams on purpose: stderr is the error channel, but
-        # validate_all (`make lint-docs`) quotes only the last stdout line,
-        # so a stderr-only reason shows up there as a bare "Exit code: 2".
-        print(msg)
+        msg = f"ERROR: {reason} — nothing was measured"
         print(msg, file=sys.stderr)
+        if args.json:
+            # dev-rules §13: --json stdout is exactly one JSON document on
+            # every terminal path, early exits included.
+            print(format_json_report([], expected, 0, 0, total_found=total_found,
+                                     status="caller_error", reason=reason))
+        else:
+            print(msg)
         sys.exit(EXIT_CALLER_ERROR)
     total_scanned = len(scanned)
     total_with_fm = sum(1 for s in scanned if s.has_frontmatter)
@@ -341,9 +374,11 @@ def main(argv: Optional[List[str]] = None) -> None:
         items = detect_drift(scanned, expected)
 
     if args.json:
-        print(format_json_report(items, expected, total_scanned, total_with_fm))
+        print(format_json_report(items, expected, total_scanned, total_with_fm,
+                                 total_found=total_found))
     else:
-        print(format_text_report(items, expected, total_scanned, total_with_fm))
+        print(format_text_report(items, expected, total_scanned, total_with_fm,
+                                 total_found=total_found))
 
     errors = [i for i in items if i.severity == "error"]
     if args.ci and errors:
