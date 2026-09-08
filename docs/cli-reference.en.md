@@ -410,9 +410,8 @@ docker run --rm --network=host \
 
 | Code | Description |
 |------|-------------|
-| `0` | Success |
-| `1` | Uncaught exception (traceback) — measured when the parent of `-o/--output-dir` is a file (this tool still uses a raw `os.makedirs`, not the #1641 `_or_die` helpers; once #1789 lands this case becomes 2). ⚠️ A Prometheus connection / query failure is **not** 1 — failed samples are recorded as empty, the report and CSVs are still written, rc 0 |
-| `2` | Caller error: none of the `--metrics` names is one the tool knows (the error lists the accepted ones), the required `--tenant` missing, or arguments argparse rejects |
+| `0` | Success. ⚠️ A Prometheus connection / query failure is **not** an error — failed samples are recorded as empty, the report and CSVs are still written, still this code |
+| `2` | Caller error: none of the `--metrics` names is one the tool knows (the error lists the accepted ones), the required `--tenant` missing, arguments argparse rejects, or `-o/--output-dir` cannot be written (measured: the parent is a file; a CSV the tool must create inside it is already a directory) — one `ERROR: cannot …` line naming `-o/--output-dir`, no traceback (#1789; this tool has no "found a violation" semantics, hence no `1`) |
 
 ---
 
@@ -969,8 +968,7 @@ da-tools fed-key --rotate --existing-jwks federation-jwks.json \
 | Code | Description |
 |------|-------------|
 | `0` | Key generated |
-| `1` | Uncaught exception (traceback) — measured when the directory of `--jwks-out` does not exist |
-| `2` | Caller error: `openssl` not on PATH, timed out or failed; `--existing-jwks` unreadable, not a JWKS document (no `keys` array) or already holding the same kid; `--rotate` without `--existing-jwks`, `--key-bits` < 2048; stdout is a terminal (refuses to print the private-key Secret to a tty — pipe it to `\| kubectl apply -f -`) |
+| `2` | Caller error: `--jwks-out` cannot be written (measured: its directory does not exist) — one `ERROR: cannot …` line naming `--jwks-out`, no traceback (#1789; this tool has no "found a violation" semantics, hence no `1`); `openssl` not on PATH, timed out or failed; `--existing-jwks` unreadable, not a JWKS document (no `keys` array) or already holding the same kid; `--rotate` without `--existing-jwks`, `--key-bits` < 2048; stdout is a terminal (refuses to print the private-key Secret to a tty — pipe it to `\| kubectl apply -f -`) |
 
 ---
 

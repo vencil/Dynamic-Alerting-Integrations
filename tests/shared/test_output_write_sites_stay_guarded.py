@@ -1,4 +1,4 @@
-"""Static pin: a RAW output sink in a #1789 file stays guarded (Phase A skeleton).
+"""Static pin: a RAW output sink in a #1789 file stays guarded.
 
 WHAT THIS FILE IS FOR, AND WHAT IT IS NOT
 -----------------------------------------
@@ -33,9 +33,11 @@ A sink is guarded when, walking up from it WITHOUT crossing a ``def`` /
    inventory instead of silently vanishing from it;
 3. it is in the body of a ``try`` whose handler can catch ``OSError`` /
    ``OutputWriteError`` **and actually ends the run the right way** — the
-   handler body calls ``sys.exit`` (or ``_die_on_write_error`` / ``parser
-   .error``), returns something other than ``EXIT_OK``, or raises a NEW
-   exception object (``raise OutputWriteError(...)``).
+   handler body calls ``sys.exit`` / ``os._exit`` (or
+   ``_die_on_write_error`` / ``parser.error``), returns something other than
+   ``EXIT_OK``, or raises a NEW exception object
+   (``raise OutputWriteError(...)``). ⛔ Judged on the DOTTED name:
+   ``log.error(exc)`` is a swallow, not an exit.
 
 Arm 3 is deliberately STRICTER than the one in ``test_write_failure_class``,
 in TWO measured ways, and both are pinned by
@@ -71,8 +73,9 @@ control that its walk-up rule and this one agree on the shapes they share.
 
 ⚠️ **Measured blind spot, on purpose.** ``Path.replace`` / ``Path.rename``
 (method form) are NOT sinks here, while ``os.replace`` / ``os.rename`` are.
-Reason: 174 ``.replace(`` call sites under ``scripts/tools/`` and all but the
-``os.``-qualified ones are ``str.replace``. A predicate with that false-red
+Reason: 174 ``.replace(`` call sites under ``scripts/tools/`` and only 3 of
+them are ``os.``-qualified; the rest are ``str.replace`` and
+``datetime.replace``. A predicate with that false-red
 rate does not survive contact with the next person to hit it (rulebook D-05e:
 measure the false-red surface BEFORE choosing the predicate). One real
 method-form site exists — ``dx/migrate_ssot_language.py:357``
@@ -124,7 +127,21 @@ GUARD_KINDS = ("output_write", "or_die", "try")
 # Handler bodies that end the run rather than swallow. `EXIT_OK` / `0` /
 # a bare `return` are the swallow shapes (ops/da_assembler measured rc=0).
 _OK_RETURNS = frozenset({"EXIT_OK"})
-_EXITING_CALLS = frozenset({"exit", "_exit", "_die_on_write_error", "error", "fail"})
+
+# ⛔ Matched on the FULL dotted spelling, never on the trailing attribute.
+# `_name_of` (the sink vocabulary's helper) answers the tail, and a tail-only
+# vocabulary of {"exit", "error", "fail", …} scored `log.error(exc)` as a
+# handler that ENDS THE RUN — the cheapest possible way to turn this gate
+# green while leaving the operator with a swallowed write failure. Same for
+# `writer.fail()` and any `obj.exit()`. Both directions are pinned by the
+# synthetic controls below.
+_EXITING_CALLS = frozenset({"sys.exit", "os._exit", "_die_on_write_error"})
+# `parser.error(...)` really does end the run (argparse's `error` exits 2),
+# but only when the receiver IS a parser. There is no type information here,
+# so the receiver's NAME is the evidence — deliberately narrow, and a
+# false-red (an argument parser called something else) is the safe side:
+# someone has to look (rulebook D-05g).
+_PARSER_RECEIVER_SUFFIXES = ("parser", "ap", "argp")
 
 # ── The population ─────────────────────────────────────────────────────────
 # ⛔ Repo-relative POSIX paths of the tool files this ticket wraps. A file
@@ -169,7 +186,7 @@ NOT_GUARDED: dict[str, str] = {
         "behaviour: an unwritable carrier means 'perturb the next one', not "
         "'the operator mistyped a flag'. Wrapping it would blame "
         "`--output-dir` for a failure on a path that flag never named.",
-    "scripts/tools/ops/generate_rule_pack_split.py:145":
+    "scripts/tools/ops/generate_rule_pack_split.py:154":
         "_safe_mkdir's no-_lib_python fallback. It runs only when the "
         "`from _lib_python import ...` at the top of that file raised "
         "ImportError, which (measured) means PyYAML is missing — and "
@@ -314,14 +331,45 @@ def _raise_makes_a_new_exception(node: ast.Raise, handler: ast.ExceptHandler) ->
     return True
 
 
+def _dotted_name(func: ast.expr) -> str | None:
+    """The call target as WRITTEN: ``sys.exit``, ``log.error``, ``error``.
+
+    :func:`_name_of` answers the trailing attribute, which is what the sink
+    vocabulary wants (``os.replace`` and ``Path.replace`` are judged
+    separately there). For the handler predicate the receiver is the whole
+    question, so this keeps it.
+    """
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        base = _dotted_name(func.value)
+        return f"{base}.{func.attr}" if base else None
+    return None
+
+
+def _call_ends_the_run(node: ast.Call) -> bool:
+    """Does this call end the run? See ``_EXITING_CALLS`` for why it is
+    spelled dotted."""
+    dotted = _dotted_name(node.func)
+    if dotted is None:
+        return False
+    if dotted in _EXITING_CALLS:
+        return True
+    receiver, _, attr = dotted.rpartition(".")
+    if attr != "error" or not receiver:
+        return False
+    return receiver.rsplit(".", 1)[-1].lower().endswith(_PARSER_RECEIVER_SUFFIXES)
+
+
 def _handler_stops(handler: ast.ExceptHandler) -> bool:
     """Does *handler* end the run the way this ticket's contract needs?
 
-    ``sys.exit`` (or ``parser.error`` / ``_die_on_write_error``), a ``return``
-    of anything that is not ``EXIT_OK`` / ``0`` / ``None``, or a ``raise`` of
-    a NEW exception object — see :func:`_raise_makes_a_new_exception` for why
-    a bare re-raise does not count. A nested ``def`` inside the handler does
-    not count either — its body runs later.
+    ``sys.exit`` / ``os._exit`` (or ``parser.error`` / ``_die_on_write_error``
+    — see :func:`_call_ends_the_run`), a ``return`` of anything that is not
+    ``EXIT_OK`` / ``0`` / ``None``, or a ``raise`` of a NEW exception object —
+    see :func:`_raise_makes_a_new_exception` for why a bare re-raise does not
+    count. A nested ``def`` inside the handler does not count either — its
+    body runs later.
     """
     for stmt in handler.body:
         if isinstance(stmt, _SCOPE_BOUNDARIES):
@@ -331,7 +379,7 @@ def _handler_stops(handler: ast.ExceptHandler) -> bool:
                 if _raise_makes_a_new_exception(node, handler):
                     return True
                 continue
-            if isinstance(node, ast.Call) and _name_of(node.func) in _EXITING_CALLS:
+            if isinstance(node, ast.Call) and _call_ends_the_run(node):
                 return True
             if isinstance(node, ast.Return):
                 val = node.value
@@ -399,9 +447,10 @@ def scan_source(source: str, label: str = "<snippet>") -> list[SinkCall]:
 def bare_sinks(calls: list[SinkCall], not_guarded: dict[str, str]) -> list[str]:
     """The gate's verdict, as a pure function of scanned sinks + exceptions.
 
-    Split out so the controls below can drive it with synthetic sites: in
-    Phase A the real population is empty, and a gate that only ever runs on
-    an empty list would be untested code shipping green.
+    Split out so the controls below can drive it with synthetic sites: the
+    real population is whatever ``GUARDED_FILES`` currently holds, and a gate
+    that only ever ran on files that happen to be clean could not be shown to
+    say NO.
     """
     return [f"  {c.where}  {c.sink}"
             for c in calls if not c.guarded and c.where not in not_guarded]
@@ -535,6 +584,39 @@ class TestGuardShapes:
                         "except OSError:\n    raise RuntimeError('nope')\n"):
             assert _guards(f"try:\n    open(p, 'w')\n{handler}") == ["try"], handler
 
+    def test_a_logger_call_is_not_an_exit(self):
+        """⛔ The cheapest false green there is. `log.error(exc)` shares its
+        trailing attribute with `parser.error(...)`, so a tail-only predicate
+        scored a handler that only LOGS as one that ends the run — the exact
+        shape (`ops/da_assembler`) this file exists to catch.
+
+        A specific break that reddens this: put the bare tails ("error",
+        "fail", "exit") back into `_EXITING_CALLS`.
+        """
+        for handler in ("except OSError as e:\n    log.error(e)\n",
+                        "except OSError as e:\n    logger.error('write failed: %s', e)\n",
+                        "except OSError as e:\n    self.log.error(e)\n",
+                        "except OSError as e:\n    writer.fail(e)\n",
+                        "except OSError as e:\n    ui.exit(e)\n"):
+            assert _guards(f"try:\n    open(p, 'w')\n{handler}") == [None], handler
+
+    def test_a_logger_call_before_an_ok_return_is_not_an_exit_either(self):
+        src = ("def main():\n    try:\n        open(p, 'w')\n"
+               "    except OSError as e:\n        logger.error(e)\n"
+               "        return EXIT_OK\n")
+        assert _guards(src) == [None]
+
+    def test_the_real_exits_still_count(self):
+        """The complement, so the narrowing is "the receiver matters", not
+        "nothing counts any more"."""
+        for handler in ("except OSError as e:\n    sys.exit(2)\n",
+                        "except OSError as e:\n    os._exit(2)\n",
+                        "except OSError as e:\n    parser.error(str(e))\n",
+                        "except OSError as e:\n    self.parser.error(str(e))\n",
+                        "except OSError as e:\n    ap.error(str(e))\n",
+                        "except OutputWriteError as e:\n    _die_on_write_error(e, 2)\n"):
+            assert _guards(f"try:\n    open(p, 'w')\n{handler}") == ["try"], handler
+
     def test_a_bare_reraise_is_not_a_guard(self):
         """#1789 group 3. A bare ``raise`` sends the ORIGINAL exception on, and
         for this population that is a raw ``OSError`` — which nothing above
@@ -615,8 +697,9 @@ def test_this_scanner_agrees_with_the_secure_writer_one_where_they_overlap():
 
     Both scanners answer "is this call lexically inside a catching try,
     without crossing a def". Fed the same shapes, they must agree — with the
-    ONE documented difference: a handler that catches but does not stop is
-    guarded there and unguarded here.
+    TWO documented differences, both pinned below: a handler that catches but
+    does not stop, and a handler whose only action is a BARE ``raise``, are
+    each guarded there and unguarded here.
     """
     assert _handler_can_catch is _wfc._handler_can_catch
     assert CATCHING_HANDLER_NAMES is _wfc.CATCHING_HANDLER_NAMES

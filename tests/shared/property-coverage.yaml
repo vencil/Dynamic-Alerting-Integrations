@@ -75,7 +75,7 @@ modules:
       add_prometheus_arg: "argparse boilerplate"
       exit_on_yaml_file_error: "CLI-entry decorator (stderr + sys.exit on YamlFileError, #1654); example-pinned in tests/shared/test_yaml_file_error.py, no value computation to fuzz"
       output_write: "Context manager wrapping a raw output sink (#1789); the value it computes is delegated to _output_write_names_target, and the wrapping itself is side-effect-free control flow — example-pinned in tests/shared/test_lib_io_output_write.py"
-      _output_write_names_target: "Pure predicate, but its inputs are real OSError instances the kernel populates (errno/filename/filename2); a generated OSError would test the fixture rather than the predicate (#1789) — example-pinned in tests/shared/test_lib_io_output_write.py, every arm mutation-checked"
+      _output_write_names_target: "Pure predicate, but its inputs are real OSError instances the kernel populates (errno/filename/filename2); a generated OSError would test the fixture rather than the predicate (#1789) — example-pinned in tests/shared/test_lib_io_output_write.py"
       exit_on_output_write_error: "CLI-entry decorator (stderr + sys.exit on OutputWriteError, #1789); same rationale as exit_on_yaml_file_error, no value computation to fuzz"
 
   scripts/tools/_lib_yaml.py:

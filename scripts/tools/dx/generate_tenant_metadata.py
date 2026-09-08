@@ -514,7 +514,13 @@ def main():
         return
 
     # Write output file
-    with output_write(args.output, flag="--output", action="create directory"):
+    # #1789 F6: the wrapper is given the PARENT, which is what the mkdir
+    # actually creates. Handing it the output file produced
+    # "cannot create directory <my-report.json>" — a sentence about a path
+    # nobody was creating. The ancestor rule still converts the failure,
+    # and the write below keeps naming the file.
+    with output_write(args.output.parent, flag="--output",
+                      action="create directory"):
         args.output.parent.mkdir(parents=True, exist_ok=True)
     # The chmod is INSIDE the same block as the write: 0644 is part of
     # producing this file, and a chmod that fails leaves the operator with a

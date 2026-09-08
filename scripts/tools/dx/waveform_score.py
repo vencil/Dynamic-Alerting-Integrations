@@ -893,11 +893,14 @@ def main() -> int:
         # re-run), and `--redact` must not print the path — which the shared
         # line always contains. So `_emit_error` keeps deciding what reaches
         # stderr, and only the non-redacted branch carries the standard text.
+        # ⚠️ `str(exc)` is passed VERBATIM, with no `ERROR: ` of its own:
+        # `_emit_error` already writes `ERROR [ERR_OUTPUT]: ` in front of it,
+        # and adding the shared head too would print the word ERROR twice.
         # The row in tests/shared/test_output_path_write_failure.py declares
-        # the `ERROR [ERR_OUTPUT]: ` head as its `prefix`; the doubled
-        # "ERROR" that produces is the visible cost of keeping both contracts.
+        # `ERROR [ERR_OUTPUT]: ` as this tool's head, so dropping it — or
+        # letting the doubled form back in — goes red.
         # Listed BEFORE `except OSError` because OutputWriteError is one.
-        _emit_error("ERR_OUTPUT", f"ERROR: {safe_label(str(exc))}", args.redact)
+        _emit_error("ERR_OUTPUT", safe_label(str(exc)), args.redact)
         return EXIT_CALLER_ERROR
     except OSError as exc:
         # The other writes in this block go to stdout (`--json` / human

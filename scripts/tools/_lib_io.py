@@ -485,6 +485,16 @@ def _output_write_names_target(exc: OSError, path: Any) -> bool:
 
     An EMPTY filename is treated as absent rather than as ``""`` (which would
     resolve to the current directory and match anything under it).
+
+    ⛔ ``resolve`` can raise ``OSError`` too, not only ``TypeError`` /
+    ``ValueError``: a RELATIVE path needs the cwd, and a cwd that was deleted
+    out from under the process makes ``os.getcwd()`` raise
+    ``FileNotFoundError``. Letting that escape would replace the write error
+    the operator caused with a chained traceback at rc=1 from the predicate
+    that was supposed to classify it — the exact failure this whole ticket is
+    about, produced by its own machinery. Both arms therefore catch it and
+    fall back to "cannot compare", which lets the ORIGINAL exception through
+    untouched.
     """
     named = [n for n in (getattr(exc, "filename", None), getattr(exc, "filename2", None))
              if n is not None and n != ""]
@@ -492,13 +502,13 @@ def _output_write_names_target(exc: OSError, path: Any) -> bool:
         return True
     try:
         target = Path(os.fspath(path)).resolve(strict=False)
-    except (TypeError, ValueError):  # pragma: no cover — a non-path *path*
+    except (TypeError, ValueError, OSError):
         return False
     for name in named:
         try:
             candidate = Path(os.fspath(name)).resolve(strict=False)
-        except (TypeError, ValueError):
-            continue  # fd number / bytes: not comparable, so not our path
+        except (TypeError, ValueError, OSError):
+            continue  # fd number / bytes / no cwd: not comparable
         if candidate == target or candidate in target.parents:
             return True
     return False
@@ -562,8 +572,16 @@ def output_write(
     ``except FileNotFoundError`` inside the block, or a ``try/except OSError:
     continue`` loop around the write, keeps its old behaviour and no rc
     changes. That is a silent miss, not a loud one: wrap the site, then read
-    outwards to the enclosing ``def`` for handlers that already intercept the
-    write. (Checked for every site this ticket wraps; none had one.)
+    outwards for handlers that already intercept the write. Measured over the
+    sites this ticket wraps: the only handlers INSIDE a wrapped block are the
+    three in ``ops/state_reconcile.write_json`` — ``mkstemp``'s converts to
+    ``OutputWriteError`` by hand, the cleanup ``except BaseException``
+    re-raises, and the ``except OSError: pass`` swallows the temp-file
+    ``unlink`` only, never the write. And reading out to the enclosing ``def``
+    is NOT far enough: ``ops/da_assembler``'s swallowing ``except Exception``
+    sits two levels out from the ``with`` — past ``write_rendered``, in its
+    caller ``reconcile_one`` — and only an explicit re-raise added there lets
+    the conversion reach the decorator.
     """
     try:
         yield

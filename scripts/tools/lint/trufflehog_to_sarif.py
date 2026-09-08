@@ -226,7 +226,7 @@ def main() -> int:
     sarif, verified_count = convert(findings, args.tool_version)
 
     # #1789: the rc was already EXIT_USAGE (2), but the message was this
-    # tool's own — it printed the raw `OSError` repr and never named the flag
+    # tool's own — it printed the `OSError` message and never named the flag
     # to fix. The wrapper keeps the write EXACTLY as it is (raw `write_text`,
     # so the bytes and the 0644 the SARIF uploader reads do not move) and
     # turns the failure into the one line every tool in the batch prints,

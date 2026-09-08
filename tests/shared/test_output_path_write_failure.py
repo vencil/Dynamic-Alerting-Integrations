@@ -20,7 +20,7 @@ the bad-path half and never be caught.
 
 HOW THE BAD PATH IS MADE (root-safe)
 ------------------------------------
-Two shapes, both failing for uid 0 as well as for a normal user:
+Each shape fails for uid 0 as well as for a normal user:
 
 * ``missing_parent`` — ``<tmp>/absent/<out>``: the parent directory does not
   exist, so ``open()`` fails ENOENT. Only meaningful for tools that write a
@@ -420,21 +420,19 @@ class Row:
     # parent (sync_glossary_abbr) legitimately succeeds on missing_parent, so
     # it lists parent_is_file only.
     shapes: tuple[str, ...] = ("missing_parent", "parent_is_file")
-    # Text the tool prints BEFORE the standard line, on the same line. Two
-    # tools have one, and in both the prefix is a contract of its own that
-    # predates this ticket, so it is declared here and stripped before the
-    # shared assertions rather than being allowed to relax them:
+    # The head the tool prints in front of the shared ``cannot <action> …``
+    # message, on the same line. The default is the one the shared emitter
+    # (``_lib_io._die_on_write_error``) writes; two tools replace it with a
+    # head of their own, each a contract that predates this ticket:
     #   * ``write_baseline_marker`` — a GitHub ``::error::`` annotation, read
     #     by the nightly's log parser;
     #   * ``waveform_score`` — ``ERROR [ERR_OUTPUT]: ``, the de-identified
     #     error code its ``--redact`` mode is documented to print in both
     #     modes (the SME triages by code without a re-run).
-    # Declaring a prefix is load-bearing in both directions — the line must
-    # actually carry it. ⚠️ It also DOUBLES the word ERROR in both lines,
-    # which is ugly and deliberate: the alternative was to loosen the shared
-    # matcher for two tools, and a matcher that accepts more shapes proves
-    # less about all of them.
-    prefix: str = ""
+    # Declaring the head here is load-bearing in both directions — the line
+    # must actually carry the declared one, so a tool that drops it OR swaps
+    # it for another goes red rather than being matched by a looser regex.
+    prefix: str = "ERROR: "
     # For the ``artifact_is_dir`` shape: the name of the file the tool creates
     # INSIDE its output directory, which the harness pre-creates as a
     # directory. Names the ONE sink this row is evidence about.
@@ -563,11 +561,11 @@ ROWS: list[Row] = [
         shapes=("artifact_is_dir",),
         artifact=_artefact)
       for _artefact in ("metrics-timeseries.csv", "summary.txt", "run-config.json")],
-    # One of the two rows with a `prefix` (the other is `dx/waveform_score`,
-    # for a different reason). This tool writes a GitHub annotation
-    # (`::error::`) in front of the standard line because the nightly's log
-    # parser reads annotations — see the comment at its `except
-    # OutputWriteError`, which explains why it does not use the shared
+    # One of the two rows with a non-default `prefix` (the other is
+    # `dx/waveform_score`, for a different reason). This tool writes a GitHub
+    # annotation (`::error::`) in place of the shared `ERROR: ` head because
+    # the nightly's log parser reads annotations — see the comment at its
+    # `except OutputWriteError`, which explains why it does not use the shared
     # decorator. `target_is_dir` is the shape that reaches the `write_text`;
     # `parent_is_file` reaches the `mkdir -p` in front of it. `missing_parent`
     # is a legitimate success (the tool creates the parent).
@@ -585,14 +583,14 @@ ROWS: list[Row] = [
       reach="tmp glossary.md with two **ABBR (Expansion)** entries",
       out_name="abbreviations.md",
       shapes=("parent_is_file",)),
-    # `prefix` again, for a different reason than write_baseline_marker's.
-    # This tool funnels every error through `_emit_error`, which stamps a
-    # de-identified error CODE — a documented `--redact` contract (the SME
-    # triages by code without a re-run, and under `--redact` the path must not
-    # be printed at all). So the standard line arrives BEHIND
-    # `ERROR [ERR_OUTPUT]: `, doubling the word ERROR; that is the declared
-    # cost of keeping both contracts, and declaring it here means the tool
-    # cannot quietly drop either half.
+    # A non-default `prefix` again, for a different reason than
+    # write_baseline_marker's. This tool funnels every error through
+    # `_emit_error`, which stamps a de-identified error CODE — a documented
+    # `--redact` contract (the SME triages by code without a re-run, and under
+    # `--redact` the path must not be printed at all). So the shared message
+    # arrives behind `ERROR [ERR_OUTPUT]: ` instead of the shared `ERROR: `,
+    # and declaring that head here means the tool cannot quietly drop either
+    # half.
     R("dx/waveform_score.py", "--out", "file",
       lambda c, out: [_inject_report(c.tmp), "--tolerances", str(WAVEFORM_TOLERANCES),
                       "--out", str(out)],
@@ -817,6 +815,8 @@ SHAPES = ("missing_parent", "parent_is_file", "target_is_dir",
 # Shapes that pre-create ``Row.artifact`` and therefore require it.
 _ARTIFACT_SHAPES = frozenset({"artifact_is_dir", "sibling_is_file",
                              "sibling_is_dir"})
+# The two shapes that corrupt the flag value's PARENT.
+_PARENT_SHAPES = frozenset({"missing_parent", "parent_is_file"})
 
 
 def _bad_path(tmp: Path, shape: str, row: Row) -> Path:
@@ -856,13 +856,51 @@ def _bad_path(tmp: Path, shape: str, row: Row) -> Path:
     raise AssertionError(shape)
 
 
-def _expected_fragment(row: Row, shape: str, out: Path) -> Path:
-    """The path the error line must name, per shape.
+# The verbs ``_lib_io.OutputWriteError`` can put in ``cannot <action> …``.
+# Longest-first so ``create directory`` is not eaten by a prefix.
+_ACTIONS = ("create directory", "copy into", "append to", "write", "append")
 
-    For the two parent-side shapes the tool may legitimately name either the
-    file or the directory it tried to create, so the common parent is what
-    can be asserted. For ``artifact_is_dir`` the whole point is WHICH sink
-    died, so the artefact path itself is required.
+
+def _named_path(line: str, prefix: str) -> tuple[str, str]:
+    """The ``(action, path)`` the standard line reports, parsed out of it.
+
+    ``<prefix>cannot <action> <path>: <detail> — <hint>``.
+
+    ⛔ Parsed, not substring-matched, because the parent-side shapes cannot
+    otherwise be told apart: ``str(out.parent)`` is a PREFIX of ``str(out)``,
+    so ``str(out.parent) in line`` was satisfied by a line that named the
+    TARGET. That is how six sites (#1789 F6) shipped a mkdir wrapped with the
+    output FILE as its path, printing "cannot create directory
+    <my-report.json>" — a sentence about a path nobody was creating — with
+    every row still green.
+    """
+    body = line[len(prefix):]
+    assert body.startswith("cannot "), line
+    body = body[len("cannot "):]
+    for action in _ACTIONS:
+        if body.startswith(action + " "):
+            body = body[len(action) + 1:]
+            break
+    else:
+        raise AssertionError(f"no known action verb in {line!r}")
+    path, sep, _ = body.partition(": ")
+    assert sep, line
+    return action, path
+
+
+def _expected_fragment(row: Row, shape: str, out: Path,
+                       action: str = "write") -> Path:
+    """The path the error line must name, per shape AND per reported verb.
+
+    For ``artifact_is_dir`` / the sibling shapes the whole point is WHICH sink
+    died, so the artefact path itself is required. For the two parent-side
+    shapes the answer follows the verb the tool used, which is the tool's own
+    statement about what it was doing:
+
+    * ``create directory`` on a ``kind="file"`` row ⇒ the directory being
+      created is the output file's PARENT;
+    * anything else, and every ``kind="dir"`` row (where the flag value IS
+      the directory the tool creates) ⇒ the flag value itself.
     """
     if shape == "target_is_dir":
         return out
@@ -870,22 +908,49 @@ def _expected_fragment(row: Row, shape: str, out: Path) -> Path:
         return out / row.artifact
     if shape in ("sibling_is_file", "sibling_is_dir"):
         return out.parent / row.artifact
-    return out.parent
+    if action == "create directory" and row.kind == "file":
+        return out.parent
+    return out
+
+
+def _names_the_blocked_path(row: Row, shape: str, out: Path,
+                            action: str, named: str) -> bool:
+    """Is *named* — parsed out of the error line — the path this shape blocks?
+
+    Exact, with ONE documented widening. A ``kind="dir"`` tool may create a
+    SUBDIRECTORY of its output directory before anything else
+    (``generate_rule_pack_split`` makes ``edge-rules/``, ``init_project`` its
+    scaffold tree), and under a blocked parent that inner mkdir is the one
+    that fails. It is still the operator's flag value, one level in.
+
+    ⛔ The widening is gated on ``kind="dir"``, so it cannot rescue a FILE
+    row: there ``out.parent`` and ``out`` are what have to be told apart, and
+    ``out`` IS a descendant of ``out.parent`` — allowing descendants would
+    hand back exactly the hole #1789 F6 came out of.
+    """
+    expected = _expected_fragment(row, shape, out, action)
+    if named == str(expected):
+        return True
+    if (row.kind == "dir" and action == "create directory"
+            and shape in _PARENT_SHAPES):
+        return expected in Path(named).parents
+    return False
 
 
 def _error_lines(stderr: str, prefix: str) -> list[str]:
     """The tool's standard write-error line(s) in *stderr*, *prefix* included.
 
-    A row that declares a ``prefix`` is asserting the tool emits it: the line
-    must carry the prefix AND the standard text after it. Declaring a prefix
-    therefore cannot loosen the match, and a tool that GROWS a prefix its row
-    does not declare stops matching — both directions are a visible red, which
-    is the point of putting the annotation in the table instead of in the
-    regex (rulebook D-05g: a declared classification can be declared wrong).
+    A row's ``prefix`` is an assertion that the tool emits exactly that head:
+    the line must carry it AND the shared ``cannot <action> …`` text right
+    after it. Declaring a head therefore cannot loosen the match, and a tool
+    that swaps the default ``ERROR: `` for one its row does not declare stops
+    matching — both directions are a visible red, which is the point of
+    putting the head in the table instead of in the regex (rulebook D-05g: a
+    declared classification can be declared wrong).
     """
     return [line for line in stderr.splitlines()
             if line.startswith(prefix)
-            and line[len(prefix):].startswith("ERROR: cannot ")]
+            and line[len(prefix):].startswith("cannot ")]
 
 
 def _fail(row: Row, proc: subprocess.CompletedProcess, why: str) -> str:
@@ -909,21 +974,23 @@ def test_unwritable_output_path_is_rc2_one_line_no_traceback(row, shape, tmp_pat
         row, proc, f"expected rc={EXIT_CALLER_ERROR} (EXIT_CALLER_ERROR) for shape "
                    f"{shape}; rc=1 would read as EXIT_VIOLATION")
     assert "Traceback" not in proc.stderr, _fail(row, proc, "a traceback leaked")
-    # A row that declares a `prefix` must still emit it: the prefix is a
-    # contract (a CI annotation), so a row cannot use it to loosen the match.
+    # The declared head must actually be emitted: for two rows it is a CI
+    # contract of its own, so a row cannot use it to loosen the match.
     error_lines = _error_lines(proc.stderr, row.prefix)
     assert len(error_lines) == 1, _fail(
-        row, proc, f"expected exactly one {row.prefix!r}+'ERROR: cannot …' line, "
+        row, proc, f"expected exactly one {row.prefix!r}+'cannot …' line, "
                    f"got {len(error_lines)}")
     line = error_lines[0]
-    # Which path must be named depends on the shape: see _expected_fragment.
-    assert str(_expected_fragment(row, shape, out)) in line, _fail(
-        row, proc, "the error line does not name the path")
+    # Which path must be named depends on the shape and on the verb the tool
+    # reported: see _expected_fragment. Compared for EQUALITY on the parsed
+    # path, not as a substring — see _named_path for what that was hiding.
+    action, named = _named_path(line, row.prefix)
+    assert _names_the_blocked_path(row, shape, out, action, named), _fail(
+        row, proc, f"the error line names {named!r} after 'cannot {action}', "
+                   f"which is not the path this shape blocks")
     assert row.flag in line, _fail(row, proc, f"the error line does not name {row.flag}")
     assert "check the value given to" in line, _fail(
         row, proc, "the error line does not point the operator at the flag")
-    assert not line[len(row.prefix):].startswith("ERROR: cannot ERROR"), _fail(
-        row, proc, "the message is doubled")
 
 
 @pytest.mark.parametrize("row", ROWS, ids=[r.id for r in ROWS])
@@ -940,7 +1007,7 @@ def test_control_writable_path_is_rc0_and_writes(row, tmp_path, stub_url):
 
     assert proc.returncode == 0, _fail(row, proc, "control run did not exit 0")
     assert "Traceback" not in proc.stderr, _fail(row, proc, "control run leaked a traceback")
-    assert "ERROR: cannot " not in proc.stderr, _fail(
+    assert not _error_lines(proc.stderr, row.prefix), _fail(
         row, proc, "control run printed a write error")
     if row.produces is not None:
         # A derived-output tool: the flag value is an INPUT the fixture just
@@ -1008,29 +1075,31 @@ def _control_row(**kw) -> Row:
 
 
 class TestErrorLineMatcher:
-    _STD = "ERROR: cannot write /x/out.txt: Not a directory (errno 20) — check the value given to -o"
+    _MSG = "cannot write /x/out.txt: Not a directory (errno 20) — check the value given to -o"
+    _STD = f"ERROR: {_MSG}"          # the shared emitter's head
+    _ANNOTATED = f"::error::{_MSG}"  # write_baseline_marker's head
 
-    def test_plain_line_matches_with_no_prefix(self):
-        assert _error_lines(f"[warn] noise\n{self._STD}\n", "") == [self._STD]
+    def test_the_default_head_matches_the_shared_line(self):
+        assert _error_lines(f"[warn] noise\n{self._STD}\n", "ERROR: ") == [self._STD]
 
-    def test_declared_prefix_is_matched_with_the_line(self):
-        line = f"::error::{self._STD}"
-        assert _error_lines(f"{line}\n", "::error::") == [line]
+    def test_declared_head_is_matched_with_the_line(self):
+        assert _error_lines(f"{self._ANNOTATED}\n", "::error::") == [self._ANNOTATED]
 
-    def test_declared_prefix_that_the_tool_stopped_emitting_does_not_match(self):
+    def test_declared_head_that_the_tool_stopped_emitting_does_not_match(self):
         """The CI annotation is a contract too: losing it must go red, not be
         silently accepted because the rest of the line is still right."""
         assert _error_lines(f"{self._STD}\n", "::error::") == []
 
-    def test_undeclared_prefix_does_not_match(self):
-        """A tool that GROWS a prefix goes red until the row declares it."""
-        assert _error_lines(f"::error::{self._STD}\n", "") == []
+    def test_an_undeclared_head_does_not_match(self):
+        """A tool that swaps the default head goes red until its row says so."""
+        assert _error_lines(f"{self._ANNOTATED}\n", "ERROR: ") == []
 
     def test_unrelated_stderr_is_not_counted(self):
-        assert _error_lines("[warn] /metrics fetch failed\nERROR: bad --tenant\n", "") == []
+        assert _error_lines("[warn] /metrics fetch failed\nERROR: bad --tenant\n",
+                            "ERROR: ") == []
 
     def test_two_lines_are_two(self):
-        assert len(_error_lines(f"{self._STD}\n{self._STD}\n", "")) == 2
+        assert len(_error_lines(f"{self._STD}\n{self._STD}\n", "ERROR: ")) == 2
 
 
 class TestSiblingShapes:
@@ -1133,14 +1202,35 @@ class TestArtifactIsDirShape:
         with pytest.raises(AssertionError):
             _bad_path(tmp_path, "artifact_is_dir", _control_row(shapes=("artifact_is_dir",)))
 
-    def test_the_mkdir_side_shapes_still_assert_the_parent(self, tmp_path):
-        row = _control_row()
+    def test_the_mkdir_side_shapes_follow_the_reported_verb(self, tmp_path):
+        """#1789 F6. A `create directory` verb on a FILE row means the tool
+        was creating the output's parent; every other verb, and every `dir`
+        row, means the flag value itself.
+
+        A specific break that reddens this: make the parent branch of
+        `_expected_fragment` return `out.parent` unconditionally again.
+        """
+        as_file = _control_row(kind="file")
+        as_dir = _control_row(kind="dir")
         for shape in ("missing_parent", "parent_is_file"):
             root = tmp_path / shape
             root.mkdir()
-            out = _bad_path(root, shape, row)
+            out = _bad_path(root, shape, as_file)
             assert not out.parent.is_dir(), shape
-            assert _expected_fragment(row, shape, out) == out.parent
+            assert _expected_fragment(as_file, shape, out,
+                                      "create directory") == out.parent
+            assert _expected_fragment(as_file, shape, out, "write") == out
+            assert _expected_fragment(as_dir, shape, out,
+                                      "create directory") == out
+            # The widening, both signs: a `dir` tool may name a subdirectory
+            # of its output directory; a `file` tool may not name the target
+            # when it claims to be creating a directory.
+            assert _names_the_blocked_path(as_dir, shape, out,
+                                           "create directory", str(out / "edge-rules"))
+            assert not _names_the_blocked_path(as_dir, shape, out,
+                                               "create directory", str(out.parent))
+            assert not _names_the_blocked_path(as_file, shape, out,
+                                               "create directory", str(out))
 
 
 # ═══════════════════════════════════════════════════════════════════════════

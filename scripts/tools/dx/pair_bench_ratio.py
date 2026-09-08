@@ -385,7 +385,12 @@ def main() -> int:
         "workload_drift": read_workload_drift(args.workload_drift),
         "workload_digest": read_workload_digest(args.workload_digest),
     }
-    with output_write(args.out, flag="--out", action="create directory"):
+    # #1789 F6: the wrapper is given the PARENT, which is what the mkdir
+    # actually creates. Handing it the output file produced
+    # "cannot create directory <my-report.json>" — a sentence about a path
+    # nobody was creating. The ancestor rule still converts the failure,
+    # and the write below keeps naming the file.
+    with output_write(args.out.parent, flag="--out", action="create directory"):
         args.out.parent.mkdir(parents=True, exist_ok=True)
     with output_write(args.out, flag="--out"):
         args.out.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n",

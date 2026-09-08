@@ -132,8 +132,7 @@ def _history_dir(config_dir):
     operator has to fix and the one the message names.
     """
     hdir = Path(config_dir).parent / '.da-history'
-    with output_write(hdir, flag="--config-dir",
-                      action="create the history directory"):
+    with output_write(hdir, flag="--config-dir", action="create directory"):
         hdir.mkdir(exist_ok=True)
     return hdir
 
@@ -162,8 +161,7 @@ def _save_history(config_dir, history):
     """Save history to disk."""
     hdir = _history_dir(config_dir)
     history_file = hdir / 'history.json'
-    with output_write(history_file, flag="--config-dir",
-                      action="write the history file"):
+    with output_write(history_file, flag="--config-dir", action="write"):
         history_file.write_text(format_json_report(history),
                                 encoding='utf-8', newline='\n')
 
@@ -210,15 +208,13 @@ def cmd_snapshot(config_dir, message=None):
     # Save snapshot content
     hdir = _history_dir(config_dir)
     snap_dir = hdir / f"snap-{entry['id']}"
-    with output_write(snap_dir, flag="--config-dir",
-                      action="create the snapshot directory"):
+    with output_write(snap_dir, flag="--config-dir", action="create directory"):
         snap_dir.mkdir(exist_ok=True)
     for f in files:
         fp = snap_dir / f['name']
         # The 0o600 is inside the block with the write: a snapshot may hold
         # sensitive config, so a chmod that fails is not a success (#1789).
-        with output_write(fp, flag="--config-dir",
-                          action="write the snapshot file"):
+        with output_write(fp, flag="--config-dir", action="write"):
             fp.write_text(f['content'], encoding='utf-8', newline='\n')
             os.chmod(fp, 0o600)  # Restrict snapshot files (may contain sensitive config)
 

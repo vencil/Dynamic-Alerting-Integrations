@@ -93,8 +93,12 @@ def write_marker(out: Path, rows: int) -> None:
     boundary when it walks outwards, so the ``try`` in ``main`` no longer
     covers for a deleted ``with``. (Verified both ways.)
     """
-    with output_write(out, flag="--out"):
+    # #1789 F6: the mkdir is its OWN block, on the PARENT, with the verb that
+    # matches what it does. In one shared block a blocked parent printed
+    # "cannot write <marker>" — the wrong verb about the wrong path.
+    with output_write(out.parent, flag="--out", action="create directory"):
         out.parent.mkdir(parents=True, exist_ok=True)
+    with output_write(out, flag="--out"):
         # newline="\n": the marker is compared byte-for-byte against what the
         # consumer re-derives, and `.gitattributes` pins `* text=auto eol=lf`.
         # An unpinned write emits CRLF on a Windows host and LF in CI.
@@ -152,16 +156,22 @@ def main(argv: list[str] | None = None) -> int:
         # which the annotation parser does not see. So the SHARED MESSAGE is
         # reused verbatim — same `cannot <action> <path>: … — check the value
         # given to <flag>` text, same `safe_label` escaping, same
-        # EXIT_CALLER_ERROR — and only the annotation prefix is added in front
-        # of it. `tests/dx/test_write_baseline_marker.py` pins the prefix and
-        # the row in `tests/shared/test_output_path_write_failure.py` declares
-        # it, so neither half can be dropped silently.
+        # EXIT_CALLER_ERROR — and the `::error::` annotation is put in front of
+        # it IN PLACE OF the shared `ERROR: ` head, not on top of it (writing
+        # both would print the word ERROR twice).
+        # `tests/dx/test_write_baseline_marker.py` pins the annotation and the
+        # row in `tests/shared/test_output_path_write_failure.py` declares it
+        # as this tool's head, so neither half can be dropped silently.
         #
         # ⚠️ Only the WRITE moved to rc=2. The three input refusals above
         # (`--baseline` missing / unreadable / no parseable rows) still return
         # 1: they are "this baseline is not vouchable", not "your output path
-        # is wrong", and the nightly distinguishes them.
-        print(f"::error::ERROR: {safe_label(str(exc))}", file=sys.stderr)
+        # is wrong", and the exit-code SSOT classifies them differently.
+        # ⛔ Not "the nightly distinguishes them": `bench-record.yaml` calls
+        # this bare under `set -euo pipefail`, so 1 and 2 both just fail the
+        # step. The split is for the operator reading the log and for any
+        # future consumer, not for a caller that reads it today.
+        print(f"::error::{safe_label(str(exc))}", file=sys.stderr)
         return EXIT_CALLER_ERROR
     print(f"baseline rows: {rows} (marker: {args.out})")
     return 0

@@ -81,6 +81,7 @@
    "tests/shared/test_property_tools.py"
   ],
   "scripts/tools/_lib_io.py": [
+   "tests/dx/test_generate_tenant_fixture.py",
    "tests/dx/test_line_ending_policy.py",
    "tests/ops/test_da_assembler.py",
    "tests/ops/test_policy_opa_bridge.py",
@@ -827,7 +828,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "39b54faae288e577d0b2ec74afcbaf36c34f6f68460836b482b380969c16a0ea",
+ "source_digest": "24ade2df9d28d956adeb7e90094a57a23df91cad986bf2c29ff03e0d0ab623df",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",

@@ -1949,9 +1949,8 @@ def main(argv=None):
         # CI runner exported would send them to a flag they never typed;
         # `flag=None` prints the internal-path wording instead. Both branches
         # still exit 2 with one line and no traceback (this used to be a raw
-        # `FileNotFoundError` at rc=1 — which this tool documents as the code
-        # it must NEVER return, since non-zero here reads as "found a
-        # regression").
+        # `FileNotFoundError` at rc=1 — a code this tool's exit contract has
+        # no room for: 0 = reported, 2 = could not check).
         flag = "--summary-file" if args.summary_file else None
         with output_write(target, flag=flag, action="append to"):
             with open(target, "a", encoding="utf-8", newline="\n") as handle:

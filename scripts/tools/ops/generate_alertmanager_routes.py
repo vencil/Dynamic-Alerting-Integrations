@@ -41,8 +41,12 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 
 # ── Re-exports from _lib_python (kept for test backward-compat) ─────
+# ⛔ Imported here and NOT added to the `_lib_python` block below: that block
+# carries `# noqa: F401` because everything in it is a re-export kept for
+# test backward-compat, and `test_grar_facade_reexports` pins that set. These
+# two are USED, not re-exported.
 from _lib_io import (  # noqa: E402  (#1538 output-layer escaping, #1789)
-    OutputWriteError, _die_on_write_error, safe_label,
+    safe_label, write_text_or_die,
 )
 from _lib_python import (  # noqa: E402, F401
     write_text_secure,
@@ -183,20 +187,25 @@ def _write_output_or_die(output: str, content: str) -> None:
     never declared at the writer, ``OutputWriteError`` filled in "internal
     output path, this is a bug or an unwritable workspace" for a path the
     operator had typed on the command line (measured). Declaring
-    ``flag="-o/--output"`` and handing the exception to the SHARED
-    ``_die_on_write_error`` makes it the same single line every other tool in
-    the batch prints, and puts this tool into the population of
-    ``tests/shared/test_output_path_write_failure.py`` — which is what a
-    hand-written message here could never join.
+    ``flag="-o/--output"`` and going through the SHARED writer makes it the
+    same single line every other tool in the batch prints, and puts this tool
+    into the population of ``tests/shared/test_output_path_write_failure.py``
+    — which is what a hand-written message here could never join.
 
-    ⚠️ The ``try``/``except`` stays HERE rather than moving to a
-    ``@exit_on_output_write_error`` on ``main``. Measured: with the handler
-    gone, ``test_write_failure_class`` goes red on this line — its tree-wide
-    rule is that every ``write_text_secure`` call in a tool module sits inside
-    a handler that can catch, and it reads that LEXICALLY (it stops at a
-    ``def``), so a decorator four frames up does not answer for it. The
-    decorator is for tools whose write sites are raw and scattered; a secure
-    writer is closed at its own call site.
+    ⚠️ ``write_text_or_die`` rather than ``write_text_secure`` + a local
+    ``except OutputWriteError: _die_on_write_error(...)``. They do the same
+    two things in the same order — that helper IS that pair — and this spells
+    it with the PUBLIC name instead of reaching past the underscore into
+    ``_lib_io``'s internals.
+
+    ⚠️ The exit still happens HERE rather than at a
+    ``@exit_on_output_write_error`` on ``main``. Measured: with nothing at
+    this call site, ``test_write_failure_class`` goes red on this line — its
+    tree-wide rule is that every ``write_text_secure`` call in a tool module
+    is closed where it is written, read LEXICALLY (it stops at a ``def``), so
+    a decorator four frames up does not answer for it. ``write_text_or_die``
+    satisfies that rule by BEING the closed writer. The decorator is for
+    tools whose write sites are raw and scattered.
 
     ⚠️ The old text's *label* ("the ConfigMap" / "the routing fragment") is
     gone: both call sites write to the same ``-o`` value and the path is in
@@ -215,10 +224,8 @@ def _write_output_or_die(output: str, content: str) -> None:
     everywhere — and do not quote a count from here: it was wrong once
     already, because a change like this one moved it.
     """
-    try:
-        write_text_secure(output, content, flag="-o/--output")
-    except OutputWriteError as exc:
-        _die_on_write_error(exc, EXIT_CALLER_ERROR)
+    write_text_or_die(output, content, flag="-o/--output",
+                      exit_code=EXIT_CALLER_ERROR)
 
 
 def _apply_mode(routes: list[dict], receivers: list[dict], inhibit_rules: list[dict],

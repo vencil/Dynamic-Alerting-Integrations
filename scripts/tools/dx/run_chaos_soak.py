@@ -91,7 +91,7 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import (  # noqa: E402  (#1789)
-    OutputWriteError, exit_on_output_write_error, output_write,
+    OutputWriteError, exit_on_output_write_error, output_write, safe_label,
 )
 from _lib_confd import (  # noqa: E402
     has_yaml_extension, is_hidden_name, is_reserved_name,
@@ -419,6 +419,15 @@ def main() -> int:
             # First failure wins and skips the rest; the info lines below still
             # run so the operator sees where the (partial) output went.
             pending_write_error = exc
+            # ⚠️ Said HERE, not only where it is re-raised. This `finally`
+            # also runs while ANOTHER exception is on its way out of the soak
+            # loop, and then the `raise pending_write_error` below is never
+            # reached: the write failure disappeared without a single line
+            # (#1789 F7). This does not touch the rc — whatever is in flight
+            # still decides that — it only makes sure the operator is told
+            # the summary was not written.
+            print(f"[warn] output write failed: {safe_label(str(exc))}",
+                  file=sys.stderr)
 
         print(f"\n[info] soak {'completed' if not interrupted else 'interrupted'}: "
               f"{cfg.reload_count} reloads / {cfg.poll_count} polls", file=sys.stderr)

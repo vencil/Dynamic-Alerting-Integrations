@@ -152,7 +152,12 @@ def write_rendered(
         log.info("DRY-RUN: would write %s (%d bytes)", filename, len(content))
         return True
 
-    with output_write(dest, flag="--config-dir", action="create directory"):
+    # #1789 F6: the wrapper is given the PARENT, which is what the mkdir
+    # actually creates. Handing it the output file produced
+    # "cannot create directory <my-report.json>" — a sentence about a path
+    # nobody was creating. The ancestor rule still converts the failure,
+    # and the write below keeps naming the file.
+    with output_write(config_dir, flag="--config-dir", action="create directory"):
         config_dir.mkdir(parents=True, exist_ok=True)
     # The 0644 chmod is inside the same block as the write: the rendered file
     # is read by the exporter, and a chmod that failed would leave a mode the
@@ -222,8 +227,19 @@ def reconcile_one(
     *,
     dry_run: bool = False,
     api: Any = None,
+    cli: bool = False,
 ) -> None:
-    """Reconcile a single ThresholdConfig CR."""
+    """Reconcile a single ThresholdConfig CR.
+
+    *cli* says which of the two callers this is: ``render_cr_file``
+    (``--render-cr``, one CR, the rc is the operator's answer) or the
+    controller loop (``run_once`` / ``run_watch``, one item among many).
+    ⛔ It is an EXPLICIT flag and not ``api is None``, because the controller
+    passes ``api=None`` too whenever ``--dry-run`` is set — inferring the
+    caller from it made a dry-run controller re-raise, which aborts
+    ``run_once`` after the first bad CR and turns ``run_watch`` into an
+    endless "Watch interrupted … Reconnecting" loop.
+    """
     name = cr["metadata"]["name"]
     namespace = cr["metadata"].get("namespace", "default")
     filename = _output_filename(cr)
@@ -250,13 +266,15 @@ def reconcile_one(
         # the CLI exited 0 having written nothing at all (measured). Re-raise
         # so `main`'s decorator turns it into the standard one-line rc=2.
         #
-        # ⛔ ONLY on the CLI path (`api is None`). In the CONTROLLER path a
-        # reconcile is one item in a watch loop: a write failure has to be
-        # reported on the CR's status and the loop has to keep going, or one
-        # bad CR stops every other tenant from being rendered. That path is
-        # unchanged — it still logs, still sets the Error status, still
-        # returns.
-        if api is None and isinstance(e, OutputWriteError):
+        # ⛔ ONLY on the CLI path (`cli=True`, i.e. `--render-cr`). In the
+        # CONTROLLER path a reconcile is one item in a watch loop: a write
+        # failure has to be reported on the CR's status and the loop has to
+        # keep going, or one bad CR stops every other tenant from being
+        # rendered. That path is unchanged — it still logs, still sets the
+        # Error status, still returns. ⚠️ `api is None` is NOT the test: the
+        # controller nulls `api` under `--dry-run`, so it would take this
+        # branch too (see the docstring).
+        if cli and isinstance(e, OutputWriteError):
             raise
         log.error("Failed to reconcile %s/%s: %s", namespace, name, e)
         if api and not dry_run:
@@ -374,7 +392,7 @@ def render_cr_file(
         log.error("%s is not a ThresholdConfig resource", cr_path)
         return EXIT_CALLER_ERROR
 
-    reconcile_one(cr, config_dir, dry_run=dry_run)
+    reconcile_one(cr, config_dir, dry_run=dry_run, cli=True)
     return EXIT_OK
 
 

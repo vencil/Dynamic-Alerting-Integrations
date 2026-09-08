@@ -110,8 +110,8 @@ def _safe_write(path: str, content: str):
     unreachable and was therefore an unguarded raw sink that no test could
     ever cover. The chain, measured rather than argued:
 
-    * ``write_text_or_die`` is ``None`` only when the ``from _lib_python
-      import …`` above raised ``ImportError``;
+    * ``write_text_or_die`` is ``None`` only when the imports in that
+      ``try`` raised ``ImportError``;
     * the modules behind that facade are stdlib-only except ``_lib_io``,
       which does a bare ``import yaml`` — so that ImportError means PyYAML is
       missing (a missing tools directory cannot be the cause: the unguarded
@@ -124,7 +124,16 @@ def _safe_write(path: str, content: str):
     Verified by running the tool with ``yaml`` blocked at ``sys.meta_path``:
     every pack fails with "YAML module not available, install PyYAML" and
     neither ``_safe_write`` call is reached.
+
+    ⛔ The guard below is what makes that reasoning FALSIFIABLE rather than
+    load-bearing. If the chain above ever stops holding — an ImportError from
+    something other than a missing PyYAML — the bare call would be
+    ``None(path, content, ...)``, i.e. a ``TypeError: 'NoneType' object is not
+    callable`` traceback that says nothing about what is actually wrong.
     """
+    if write_text_or_die is None:
+        raise RuntimeError(
+            "shared writer unavailable: the _lib_python import failed")
     write_text_or_die(path, content, flag="--output-dir")
 
 
@@ -666,6 +675,17 @@ def process_rule_packs(
         # both the bytes (the writer appends nothing, `json.dump` writes no
         # trailing newline) and the mode (0o600 instead of the 0o644 this
         # report has always had).
+        #
+        # ⚠️ Blind spot, named rather than hidden: on the degraded no-PyYAML
+        # path `output_write` is the `nullcontext` stand-in defined at the
+        # top of this file, so this sink is UNGUARDED there while
+        # `test_output_write_sites_stay_guarded` — which reads the source,
+        # not the import that won — still scores it guarded. The degraded run
+        # reaches here (every pack fails with "YAML module not available",
+        # `except Exception` records it, and the report is still written), so
+        # an unusable `--output-dir` is a raw traceback at rc=1 in that one
+        # case. Accepted: the alternative is a module-scope `_lib_io` import,
+        # which is what the `try` above exists to avoid.
         with output_write(report_file, flag="--output-dir"):
             with open(report_file, 'w', encoding='utf-8', newline='\n') as f:
                 json.dump(report, f, indent=2, ensure_ascii=False)

@@ -761,6 +761,23 @@ class TestMain:
         assert "y.yaml" in out
         assert "foo" in out
 
+    def test_safe_write_without_the_shared_writer_says_so(self, monkeypatch, tmp_path):
+        """#1789 F9: `write_text_or_die` is None when the `_lib_python` import
+        block failed. Calling it anyway is `TypeError: 'NoneType' object is
+        not callable` — a traceback that names neither the cause nor the fix.
+
+        The reachability argument in `_safe_write`'s docstring says this
+        cannot happen (a missing PyYAML kills `load_rule_pack` first). This
+        pins what happens if that argument ever stops holding, so the failure
+        arrives as a sentence instead of as a type error.
+
+        A specific break that reddens this: delete the
+        `if write_text_or_die is None: raise RuntimeError(...)` guard.
+        """
+        monkeypatch.setattr(grps, "write_text_or_die", None)
+        with pytest.raises(RuntimeError, match="shared writer unavailable"):
+            grps._safe_write(str(tmp_path / "x.yaml"), "content\n")
+
     def test_text_output_error_branch(self, monkeypatch, capsys, cli_argv):
         monkeypatch.setattr(grps, "process_rule_packs", lambda **kw: {
             "status": "error",

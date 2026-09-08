@@ -42,7 +42,11 @@ from pathlib import Path
 import pytest
 
 import _lib_io  # noqa: E402  (sys.path via tests/conftest.py)
-from _lib_io import OutputWriteError, output_write  # noqa: E402
+from _lib_io import (  # noqa: E402
+    OutputWriteError,
+    _output_write_names_target,
+    output_write,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TOOLS_DIR = REPO_ROOT / "scripts" / "tools"
@@ -121,17 +125,76 @@ def test_makedirs_intermediate_component_is_converted_as_an_ancestor(tmp_path: P
     assert str(out) in str(ei.value)
 
 
-def test_relative_and_absolute_spellings_of_the_same_path_match(tmp_path: Path, monkeypatch):
+def test_two_spellings_of_the_same_path_match(tmp_path: Path, monkeypatch):
     """Comparing the raw strings instead of ``Path(...).resolve(strict=False)``
-    makes this red: the tool holds ``out/report.txt`` (relative, straight from
-    argv) while the kernel reports the absolute path it resolved."""
-    (tmp_path / "out").write_text("blocker\n", encoding="utf-8")
+    makes this red.
+
+    ⚠️ The spellings have to actually DIFFER, which takes arranging. On Linux
+    ``exc.filename`` is the string the caller handed the syscall verbatim, so
+    a tool holding ``out/report.txt`` gets ``out/report.txt`` back — an
+    earlier version of this test compared that against itself and stayed
+    green with both ``.resolve()`` calls deleted. Here the wrapper is given a
+    path with a ``..`` component and the sink is driven with the normalised
+    one: only ``resolve`` makes those the same path.
+    """
     monkeypatch.chdir(tmp_path)
-    rel = Path("out") / "report.txt"
+    (tmp_path / "out.txt").mkdir()          # blocks the write with EISDIR
+    sink = Path("out.txt")                  # what the kernel will report
+    declared = Path("a") / ".." / "out.txt"  # what the wrapper was given
+    assert str(sink) != str(declared)
     with pytest.raises(OutputWriteError) as ei:
-        with output_write(rel, flag="-o/--output"):
-            rel.write_text("x", encoding="utf-8")
-    assert ei.value.path == str(rel)
+        with output_write(declared, flag="-o/--output"):
+            sink.write_text("x", encoding="utf-8")
+    assert ei.value.path == str(declared)
+
+
+@pytest.mark.parametrize("filename", [3, b"/tmp/out.txt"],
+                         ids=["fd-number", "bytes"])
+def test_an_incomparable_filename_is_not_our_path(blocker: Path, filename):
+    """The "cannot compare ⇒ not ours" arm, which had no witness.
+
+    ``os.fspath``/``Path`` reject a raw file-descriptor ``int`` outright, and
+    ``bytes`` builds a ``Path`` whose text never equals the ``str`` target
+    even when it names the same file. Either way the honest answer is "I
+    cannot tell", and this helper's safe side is to let the ORIGINAL
+    exception through with its own type and message rather than claim a flag.
+
+    A specific break that reddens this: return ``True`` from the
+    ``except (TypeError, ValueError, OSError)`` arms of
+    ``_output_write_names_target``.
+    """
+    out = blocker / "x"
+    exc = OSError(21, "Is a directory")
+    exc.filename = filename
+    assert _output_write_names_target(exc, out) is False
+    with pytest.raises(OSError) as ei:
+        with output_write(out, flag="-o"):
+            raise exc
+    assert not isinstance(ei.value, OutputWriteError)
+
+
+def test_a_resolve_that_raises_oserror_lets_the_original_through(
+        blocker: Path, monkeypatch):
+    """#1789 F3: ``resolve`` needs the cwd for a relative path, and a deleted
+    cwd makes it raise ``FileNotFoundError`` — an ``OSError``.
+
+    Catching only ``(TypeError, ValueError)`` let that escape the predicate,
+    so the operator's write error was replaced by a chained traceback at rc=1
+    thrown by the classifier itself. The contract when the comparison cannot
+    be made is unchanged: the original exception flies, untouched.
+
+    A specific break that reddens this: drop ``OSError`` from either
+    ``except`` in ``_output_write_names_target``.
+    """
+    def _boom(self, strict=False):
+        raise FileNotFoundError(2, "No such file or directory")
+
+    monkeypatch.setattr(Path, "resolve", _boom)
+    original = OSError(21, "Is a directory", str(blocker / "x"))
+    with pytest.raises(OSError) as ei:
+        with output_write(blocker / "x", flag="-o"):
+            raise original
+    assert ei.value is original
 
 
 def test_oserror_with_no_filename_is_converted(blocker: Path):
