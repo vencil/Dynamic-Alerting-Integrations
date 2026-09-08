@@ -821,7 +821,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "d04ed0bc9daad76e8785fac9b77b6cd9a3af5651e8fe24009957a109e47d4714",
+ "source_digest": "8cf2077e8c0b26b9b9044b486f936ebc120f8df82ffbb70fc018f47ecaa421d2",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -834,6 +834,7 @@
   "tests/dx/test_canary_quotation_pins.py",
   "tests/dx/test_compile_custom_alerts.py",
   "tests/dx/test_converge_status.py",
+  "tests/dx/test_counterfactual_harness.py",
   "tests/dx/test_coverage_delta.py",
   "tests/dx/test_coverage_gap_analysis.py",
   "tests/dx/test_custom_alerts_promtool.py",
@@ -1722,6 +1723,9 @@
   "docs/internal/audit-reports/bench-probe-2026-09": [
    "tests/dx/test_analyze_probe.py"
   ],
+  "docs/internal/audit-reports/bench-probe-2026-09/counterfactual.py": [
+   "tests/dx/test_counterfactual_harness.py"
+  ],
   "docs/internal/audit-reports/bench-probe-2026-09/probe-run1.txt": [
    "tests/dx/test_analyze_probe.py"
   ],
@@ -2389,6 +2393,7 @@
    "tests/shared/test_write_failure_class.py"
   ],
   "scripts/tools/_lib_compat.py": [
+   "tests/dx/test_counterfactual_harness.py",
    "tests/shared/test_console_encoding_resilience.py"
   ],
   "scripts/tools/_lib_constants.py": [
@@ -2437,7 +2442,8 @@
    "tests/dx/test_canary_quotation_pins.py"
   ],
   "scripts/tools/dx/analyze_probe.py": [
-   "tests/dx/test_analyze_probe.py"
+   "tests/dx/test_analyze_probe.py",
+   "tests/dx/test_counterfactual_harness.py"
   ],
   "scripts/tools/dx/axe_lite_static.py": [
    "tests/dx/test_axe_lite_static.py"
