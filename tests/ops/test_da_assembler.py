@@ -9,6 +9,7 @@ import pytest
 import yaml
 
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_io import OutputWriteError  # noqa: E402  (#1789)
 from da_assembler import (  # noqa: E402
     _content_sha256,
     _output_filename,
@@ -308,6 +309,42 @@ class TestReconcileOne:
         with tempfile.TemporaryDirectory() as d:
             # This should not raise even though spec is missing
             reconcile_one(cr, Path(d), api=mock_api)
+
+
+    def test_cli_path_reraises_an_unusable_config_dir(self):
+        """#1789: `api is None` is the CLI (`--render-cr`) path.
+
+        It used to log the OSError and let `render_cr_file` return EXIT_OK,
+        so `da-assembler --render-cr` exited 0 having written nothing. The
+        write-error class now leaves this function so `main`'s decorator can
+        turn it into rc=2 naming `--config-dir`.
+        """
+        cr = _make_cr(name="db-a")
+        with tempfile.TemporaryDirectory() as d:
+            blocker = Path(d) / "blocker"
+            blocker.write_text("not a directory\n", encoding="utf-8")
+            with pytest.raises(OutputWriteError) as exc:
+                reconcile_one(cr, blocker / "config-dir")
+        assert exc.value.flag == "--config-dir"
+
+    def test_controller_path_still_only_logs_and_carries_on(self):
+        """The other half, pinned so the fix cannot spread to the controller.
+
+        In watch/once mode a reconcile is ONE item in a loop over every CR in
+        the cluster: an unwritable config-dir must land on that CR's status
+        and let the loop continue, or a single bad CR stops every other
+        tenant from being rendered. So with an `api`, the same failure must
+        NOT propagate — same behaviour as before #1789.
+        """
+        mock_api = mock.MagicMock()
+        cr = _make_cr(name="db-a")
+        with tempfile.TemporaryDirectory() as d:
+            blocker = Path(d) / "blocker"
+            blocker.write_text("not a directory\n", encoding="utf-8")
+            reconcile_one(cr, blocker / "config-dir", api=mock_api)  # no raise
+        mock_api.patch_namespaced_custom_object_status.assert_called_once()
+        status = mock_api.patch_namespaced_custom_object_status.call_args
+        assert "Error" in str(status)
 
 
 class TestRunOnce:

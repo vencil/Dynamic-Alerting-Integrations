@@ -52,11 +52,30 @@ try:
     from _lib_python import (
         detect_cli_lang, i18n_text, ensure_dir_or_die, write_text_or_die,
     )
+    from _lib_io import exit_on_output_write_error, output_write  # (#1789)
 except ImportError:
     detect_cli_lang = None
     i18n_text = None
     ensure_dir_or_die = None
     write_text_or_die = None
+
+    # #1789: `_lib_io` is imported HERE, inside the guarded block, and not at
+    # module scope with the other `_lib_*` imports. It does a bare
+    # `import yaml`, so it is unimportable in exactly the situation this
+    # fallback exists for — a module-scope import of it would turn today's
+    # graceful "PyYAML missing ⇒ per-pack error, rc=2" into an ImportError
+    # traceback at rc=1 before argparse even runs (measured). The degraded
+    # path therefore keeps its OLD behaviour exactly: no wrapping, no rc
+    # change, the raw sink raises as it always did.
+    from contextlib import nullcontext as _nullcontext
+
+    def exit_on_output_write_error(fn):
+        """No-op stand-in: without `_lib_io` there is no error class to map."""
+        return fn
+
+    def output_write(path, *, flag, action="write"):
+        """No-op stand-in with the same signature (flag is keyword-only)."""
+        return _nullcontext()
 
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
@@ -80,20 +99,46 @@ def t(zh: str, en: str) -> str:
 
 
 def _safe_write(path: str, content: str):
-    """Write file, fallback to Path.write_text if _lib not available.
+    """Write one split rule file through the shared writer.
 
     #1641: every path written here descends from ``--output-dir``; through the
     shared writer an unusable path is rc=2 + one line naming that flag, not
     a traceback at rc=1 (which reads as "edge/central metric mismatch").
+
+    #1789: the ``if write_text_or_die: … else: Path(path).write_text(…)``
+    fallback that used to sit here is GONE, because the ``else`` arm was
+    unreachable and was therefore an unguarded raw sink that no test could
+    ever cover. The chain, measured rather than argued:
+
+    * ``write_text_or_die`` is ``None`` only when the ``from _lib_python
+      import …`` above raised ``ImportError``;
+    * the modules behind that facade are stdlib-only except ``_lib_io``,
+      which does a bare ``import yaml`` — so that ImportError means PyYAML is
+      missing (a missing tools directory cannot be the cause: the unguarded
+      ``_lib_compat`` / ``_lib_exitcodes`` imports would have killed the
+      module first);
+    * PyYAML missing also makes this module's own ``yaml`` ``None``, and
+      :func:`load_rule_pack` raises ``RuntimeError`` before returning;
+    * both call sites of this function are downstream of that call.
+
+    Verified by running the tool with ``yaml`` blocked at ``sys.meta_path``:
+    every pack fails with "YAML module not available, install PyYAML" and
+    neither ``_safe_write`` call is reached.
     """
-    if write_text_or_die:
-        write_text_or_die(path, content, flag="--output-dir")
-    else:
-        Path(path).write_text(content, encoding='utf-8', newline='\n')
+    write_text_or_die(path, content, flag="--output-dir")
 
 
 def _safe_mkdir(path: Path):
-    """``mkdir -p``; same fallback / same error shape as :func:`_safe_write`."""
+    """``mkdir -p``; same error shape as :func:`_safe_write`.
+
+    ⚠️ This one KEEPS its fallback: unlike ``_safe_write`` it runs BEFORE any
+    rule pack is parsed (``process_rule_packs`` creates the two output
+    subdirectories first), so the no-PyYAML run really does reach it — in the
+    experiment above ``edge-rules/`` and ``central-rules/`` were both created
+    with ``write_text_or_die`` unavailable. The arm is reachable, so it stays,
+    and it stays listed as a deliberate unguarded sink in
+    ``test_output_write_sites_stay_guarded.NOT_GUARDED``.
+    """
     if ensure_dir_or_die:
         ensure_dir_or_die(path, flag="--output-dir")
     else:
@@ -616,8 +661,14 @@ def process_rule_packs(
     # Write validation report
     if not dry_run:
         report_file = output_path / "validation-report.json"
-        with open(report_file, 'w', encoding='utf-8', newline='\n') as f:
-            json.dump(report, f, indent=2, ensure_ascii=False)
+        # The last raw sink in this file (#1789). It stays a raw `open` +
+        # `json.dump`: routing it through `write_text_or_die` would change
+        # both the bytes (the writer appends nothing, `json.dump` writes no
+        # trailing newline) and the mode (0o600 instead of the 0o644 this
+        # report has always had).
+        with output_write(report_file, flag="--output-dir"):
+            with open(report_file, 'w', encoding='utf-8', newline='\n') as f:
+                json.dump(report, f, indent=2, ensure_ascii=False)
 
     return report
 
@@ -625,6 +676,7 @@ def process_rule_packs(
 # ─ CLI ──────────────────────────────────────────────────────────────────
 
 
+@exit_on_output_write_error
 def main():
     """Main entry point."""
     try_utf8_stdout()

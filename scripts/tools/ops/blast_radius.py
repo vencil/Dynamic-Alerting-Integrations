@@ -29,6 +29,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
 from _lib_python import format_json_report  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -1124,6 +1125,7 @@ def load_effective_json(path: str) -> dict:
 # CLI
 # ---------------------------------------------------------------------------
 
+@exit_on_output_write_error
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Blast Radius diff engine: compare base vs PR effective tenant configs.",
@@ -1190,7 +1192,8 @@ def main() -> None:
     # Write output
     if args.output:
         out_path = Path(args.output)
-        out_path.write_text(output, encoding="utf-8", newline="\n")
+        with output_write(out_path, flag="-o/--output"):
+            out_path.write_text(output, encoding="utf-8", newline="\n")
         print(f"Written to {args.output}", file=sys.stderr)
     else:
         print(output)

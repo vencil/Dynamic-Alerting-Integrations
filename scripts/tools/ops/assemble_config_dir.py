@@ -35,6 +35,7 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_python import format_json_report  # noqa: E402
 from _lib_confd import has_yaml_extension, warn_nested  # noqa: E402
+from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
 
 try:
     import yaml
@@ -138,8 +139,13 @@ def assemble(
 
     Returns number of files written.
     """
+    # #1789: `output_dir` reaches here from `--output` only — main is the
+    # sole caller — so the flag is named literally rather than threaded
+    # through a parameter no other caller would ever set.
     if not dry_run:
-        output_dir.mkdir(parents=True, exist_ok=True)
+        with output_write(output_dir, flag="--output",
+                          action="create directory"):
+            output_dir.mkdir(parents=True, exist_ok=True)
 
     count = 0
     for name in sorted(file_map):
@@ -148,10 +154,18 @@ def assemble(
         if dry_run:
             print(f"  {name:40s} ← {src}")
         else:
-            shutil.copy2(src, dst)
-            os.chmod(dst,
-                     stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP
-                     | stat.S_IROTH)
+            # ⚠️ Only the DESTINATION side is converted. `shutil.copy2` reads
+            # `src`, which comes from `--sources`, and a source ENTRY that is
+            # itself a directory named `x.yaml` raises `IsADirectoryError`
+            # naming the SOURCE — `output_write` lets that fly through
+            # unchanged rather than telling the operator to check `--output`,
+            # the one flag that is correct (measured; pinned by
+            # `test_a_bad_source_entry_does_not_blame_the_output_flag`).
+            with output_write(dst, flag="--output", action="copy into"):
+                shutil.copy2(src, dst)
+                os.chmod(dst,
+                         stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP
+                         | stat.S_IROTH)
         count += 1
 
     return count
@@ -215,6 +229,7 @@ def validate_merged(output_dir: Path) -> List[str]:
 
 # ── Main ─────────────────────────────────────────────────────────────
 
+@exit_on_output_write_error
 def main() -> int:
     """CLI entry point: merge multiple conf.d/ sources into one config-dir."""
     try_utf8_stdout()
@@ -331,12 +346,16 @@ def main() -> int:
     if args.manifest:
         manifest = build_manifest(sources, file_map, conflicts)
         manifest_path = Path(args.manifest)
-        manifest_path.write_text(
-            format_json_report(manifest) + "\n",
-            encoding="utf-8", newline="\n",
-        )
-        os.chmod(manifest_path,
-                 stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+        # A SECOND flag and a second path: `--manifest` is not under
+        # `--output`, so its failure must name `--manifest` (#1789). The
+        # 0644 chmod is inside the same block as the write.
+        with output_write(manifest_path, flag="--manifest"):
+            manifest_path.write_text(
+                format_json_report(manifest) + "\n",
+                encoding="utf-8", newline="\n",
+            )
+            os.chmod(manifest_path,
+                     stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
 
     # Output
     if args.json:

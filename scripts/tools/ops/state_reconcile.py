@@ -59,6 +59,11 @@ sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
+from _lib_io import (  # noqa: E402  (#1789)
+    OutputWriteError,
+    exit_on_output_write_error,
+    output_write,
+)
 from _lib_python import format_json_report  # noqa: E402
 
 # Current schema version — keep aligned with docs/schemas/migration-state.md.
@@ -193,8 +198,16 @@ def build_manifest(state_files: list[Path], state_dir: Path) -> dict:
     }
 
 
-def write_json(path: Path, data: dict) -> None:
+def write_json(path: Path, data: dict, *, flag: str | None = None) -> None:
     """Write JSON atomically with stable formatting.
+
+    Args:
+        flag: The CLI flag *path* came from, named in the ``rc=2`` message
+            when the write fails (#1789). Both production call sites pass it
+            (``--state-dir`` for a migrated state file, ``--manifest-path``
+            for the manifest); a caller that omits it gets the same class and
+            the same exit code with the "internal output path" wording, which
+            is the honest message for a path no flag chose.
 
     Atomicity: write to a sibling temp file, then `os.replace()` to the
     target. `os.replace` is atomic on POSIX + Windows (Python 3.3+);
@@ -213,26 +226,44 @@ def write_json(path: Path, data: dict) -> None:
     that read on Linux CI — causes constant merge noise.
     """
     payload = format_json_report(data) + "\n"
-    # mkstemp returns (fd, abs_path). Same dir as target → same filesystem
-    # → guaranteed atomic os.replace.
-    fd, tmp_name = tempfile.mkstemp(
-        dir=str(path.parent),
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
-            f.write(payload)
-        os.replace(tmp_name, path)
-    except BaseException:
-        # Clean up temp on any failure — including KeyboardInterrupt /
-        # SystemExit. Suppress OSError on unlink (temp already gone) so
-        # the original exception still propagates.
+    # #1789: the whole atomic dance is wrapped, not converted — the temp file,
+    # the fdopen and the `os.replace` are what make a crash mid-write leave
+    # the customer's state file intact, and a secure writer would drop that.
+    # `output_write` only reclassifies the exception on its way out, so the
+    # cleanup `except BaseException` below still runs first and still removes
+    # the temp file.
+    with output_write(path, flag=flag):
+        # mkstemp returns (fd, abs_path). Same dir as target → same filesystem
+        # → guaranteed atomic os.replace.
         try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
-        raise
+            fd, tmp_name = tempfile.mkstemp(
+                dir=str(path.parent),
+                prefix=f".{path.name}.",
+                suffix=".tmp",
+            )
+        except OSError as exc:
+            # ⛔ Converted BY HAND, and only here. `mkstemp`'s OSError names
+            # the RANDOM temp sibling it was about to create
+            # (`.manifest.json.5qq0hzn7.tmp` — measured), which is neither
+            # `path` nor an ancestor of it, so `output_write`'s "does this
+            # name my path?" test correctly says no and would let it fly with
+            # a traceback. The failure is entirely about `path`'s directory,
+            # so it gets the same class, flag and exit code as the rest of
+            # the block.
+            raise OutputWriteError(path, exc, flag=flag) from exc
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+                f.write(payload)
+            os.replace(tmp_name, path)
+        except BaseException:
+            # Clean up temp on any failure — including KeyboardInterrupt /
+            # SystemExit. Suppress OSError on unlink (temp already gone) so
+            # the original exception still propagates.
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+            raise
 
 
 def reconcile(
@@ -313,7 +344,7 @@ def reconcile(
             continue
 
         if not dry_run:
-            write_json(sf, migrated)
+            write_json(sf, migrated, flag="--state-dir")
         report["schema_migrations"].append(
             {"file": str(sf), "from": sv, "to": CURRENT_SCHEMA_VERSION}
         )
@@ -329,8 +360,10 @@ def reconcile(
     manifest_changed = old_manifest != new_manifest
     if manifest_changed:
         if not dry_run:
-            manifest_path.parent.mkdir(parents=True, exist_ok=True)
-            write_json(manifest_path, new_manifest)
+            with output_write(manifest_path, flag="--manifest-path",
+                              action="create directory"):
+                manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            write_json(manifest_path, new_manifest, flag="--manifest-path")
         report["manifest_change"] = {
             "old_state_count": (
                 len(old_manifest.get("states", [])) if old_manifest else 0
@@ -404,6 +437,7 @@ def compute_exit_code(report: dict, *, ci: bool, dry_run: bool) -> int:
     return EXIT_OK
 
 
+@exit_on_output_write_error
 def main(argv: list[str] | None = None) -> int:
     try_utf8_stdout()
     ap = argparse.ArgumentParser(

@@ -121,16 +121,35 @@ GUARDED_FILES: tuple[str, ...] = (
     "scripts/tools/dx/pair_bench_ratio.py",
     "scripts/tools/dx/render_soak_diff.py",
     "scripts/tools/dx/scan_component_health.py",
+    "scripts/tools/ops/assemble_config_dir.py",
+    "scripts/tools/ops/baseline_discovery.py",
+    "scripts/tools/ops/blast_radius.py",
+    "scripts/tools/ops/config_history.py",
+    "scripts/tools/ops/da_assembler.py",
+    "scripts/tools/ops/federation_keygen.py",
+    "scripts/tools/ops/generate_rule_pack_split.py",
+    "scripts/tools/ops/state_reconcile.py",
 )
-_GUARDED_FILES_CEILING = 8
+_GUARDED_FILES_CEILING = 16
 
 # Sites inside a GUARDED_FILES file that stay unguarded on purpose, as
 # `"<repo-relative path>:<line>"` → reason. Exit-locked the same way: an
 # entry that no longer names an unguarded sink must be REMOVED, so the list
-# only shrinks. EMPTY so far: every sink in every pinned file is wrapped, so
-# there is no site claiming an exemption to justify.
-NOT_GUARDED: dict[str, str] = {}
-_NOT_GUARDED_CEILING = 0
+# only shrinks.
+NOT_GUARDED: dict[str, str] = {
+    "scripts/tools/ops/generate_rule_pack_split.py:145":
+        "_safe_mkdir's no-_lib_python fallback. It runs only when the "
+        "`from _lib_python import ...` at the top of that file raised "
+        "ImportError, which (measured) means PyYAML is missing — and "
+        "`_lib_io`, where output_write lives, does a bare `import yaml`, so "
+        "the wrapper is unavailable in exactly this case. Wrapping it would "
+        "turn today's graceful 'PyYAML missing => per-pack error, rc=2' into "
+        "an ImportError traceback at rc=1 before argparse runs. Unlike "
+        "_safe_write's fallback (deleted in #1789 as unreachable), this arm "
+        "IS reached: it creates edge-rules/ and central-rules/ before any "
+        "pack is parsed.",
+}
+_NOT_GUARDED_CEILING = 1
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -227,6 +246,21 @@ def _handler_stops(handler: ast.ExceptHandler) -> bool:
     Raise, ``sys.exit`` (or ``parser.error`` / ``_die_on_write_error``), or a
     ``return`` of anything that is not ``EXIT_OK`` / ``0`` / ``None``. A
     nested ``def`` inside the handler does not count — its body runs later.
+
+    ⚠️ **Measured gap, left as it is on purpose (#1789).** A BARE ``raise``
+    counts as stopping, and one real site is weaker for it:
+    ``ops/state_reconcile.write_json`` cleans up its temp file in an
+    ``except BaseException: … raise``, so its ``os.fdopen`` / ``os.replace``
+    read as guarded by arm 3 whether or not the ``with output_write(...)``
+    around them is there — deleting that ``with`` leaves this gate GREEN
+    (verified). Tightening the arm to reject a bare re-raise was tried and
+    rejected here: ``except OSError: raise`` reading as a guard is a Phase A
+    decision pinned by ``TestGuardShapes`` AND by the agreement invariant
+    with ``test_write_failure_class``, so flipping it is a change to both
+    scanners' shared contract, not to this file. What covers that site
+    instead is its ROW in ``test_output_path_write_failure`` — the
+    behavioural gate goes red when the wrapper is removed. Recorded so the
+    next reader does not mistake this file's green for evidence there.
     """
     for stmt in handler.body:
         if isinstance(stmt, _SCOPE_BOUNDARIES):

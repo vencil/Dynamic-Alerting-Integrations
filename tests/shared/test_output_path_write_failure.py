@@ -36,6 +36,19 @@ Two shapes, both failing for uid 0 as well as for a normal user:
   tool's own ``mkdir``, which means for a multi-artefact tool they only ever
   prove the FIRST sink is guarded. This one lets the tool get past its mkdir
   and reach a specific later write.
+* ``target_is_dir`` (#1789) — the flag value ITSELF is a directory. For a
+  tool that creates its parent with ``mkdir -p`` the two parent shapes both
+  die at that mkdir; this one satisfies the mkdir and fails at the write
+  proper, which for an atomic writer is the ``os.replace`` at the very end.
+* ``sibling_is_file`` / ``sibling_is_dir`` (#1789) — for a tool whose output
+  path is DERIVED from the flag rather than being it. ``ops/config_history``
+  takes ``--config-dir`` (an INPUT directory that must exist and hold YAML)
+  and writes its snapshots to ``<parent>/.da-history/…``. None of the three
+  shapes above can express that: they all corrupt the flag value itself, and
+  a ``--config-dir`` that does not exist is rejected long before any write.
+  These two build a VALID flag value and pre-create ``Row.artifact`` —
+  resolved against the flag value's PARENT, so it can name the derived tree —
+  as a regular file (blocks a ``mkdir``) or as a directory (blocks a write).
 
 Permission bits are deliberately not used: CI and the dev container run as
 root, where ``chmod 0o500`` is ignored and the test would pass vacuously.
@@ -92,6 +105,7 @@ import test_json_stdout_contract as _jsc  # noqa: E402  (tests/shared on sys.pat
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TOOLS_DIR = REPO_ROOT / "scripts" / "tools"
 WAVEFORM_FIXTURE = REPO_ROOT / "tests" / "dx" / "fixtures" / "waveform" / "selftest_disk_used_percent.yaml"
+THRESHOLDCONFIG_CR = REPO_ROOT / "k8s" / "crd" / "examples" / "example-thresholdconfig.yaml"
 
 TIMEOUT_S = 120
 EXIT_CALLER_ERROR = 2
@@ -217,6 +231,60 @@ def _bench_side(tmp: Path, name: str) -> str:
     return str(p)
 
 
+def _effective_config_json(tmp: Path, name: str) -> str:
+    """One side of a blast-radius diff, produced by the tool that feeds it.
+
+    `blast_radius` reads `describe_tenant --all --output` JSON, so the input is
+    generated with `describe_tenant` itself against the in-repo seed conf.d
+    rather than hand-written: a hand-written stand-in would drift from the
+    producer's schema and the row would start proving nothing.
+    """
+    p = tmp / f"effective-{name}.json"
+    if not p.exists():
+        subprocess.run(
+            [sys.executable, str(TOOLS_DIR / "dx" / "describe_tenant.py"),
+             "--conf-d", str(_jsc.SEED_CONF_D), "--all", "-o", str(p)],
+            check=True, capture_output=True, timeout=TIMEOUT_S)
+    return str(p)
+
+
+def _shard_source_dir(tmp: Path) -> str:
+    """One `--sources` shard for `assemble_config_dir`: a flat conf.d."""
+    d = tmp / "shard-a"
+    if not d.is_dir():
+        d.mkdir()
+        (d / "alpha.yaml").write_text(
+            "tenants:\n  alpha:\n    max_connections: 100\n", encoding="utf-8")
+    return str(d)
+
+
+def _history_conf_d(out: Path) -> str:
+    """`--config-dir` for `ops/config_history`: a real conf.d with one shard.
+
+    Built by the row rather than by the shape, because for this tool the flag
+    value is an INPUT that has to exist and hold at least one YAML carrier —
+    the output goes to `<parent>/.da-history`.
+    """
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "alpha.yaml").write_text(
+        "tenants:\n  alpha:\n    max_connections: 100\n", encoding="utf-8")
+    return str(out)
+
+
+def _state_dir(tmp: Path) -> str:
+    """`--state-dir` for `ops/state_reconcile`: one current-schema state file.
+
+    Current schema on purpose: no migration is triggered, so the ONLY write
+    the run makes is the manifest — the sink the row is about.
+    """
+    d = tmp / "state"
+    if not d.is_dir():
+        d.mkdir()
+        (d / "c1.json").write_text(
+            '{"schema_version": "1.0", "cluster": "c1"}\n', encoding="utf-8")
+    return str(d)
+
+
 def _one_rule_pack_dir(tmp: Path) -> str:
     d = tmp / "rule-packs"
     d.mkdir()
@@ -271,6 +339,21 @@ class Row:
     # INSIDE its output directory, which the harness pre-creates as a
     # directory. Names the ONE sink this row is evidence about.
     artifact: str | None = None
+    # An external executable the row's reachability depends on, skipped when
+    # it is absent. ``ops/federation_keygen`` shells out to ``openssl`` to
+    # make the keypair, and without it the run dies BEFORE the write under
+    # test — a red that says nothing about this contract. Mirrors the
+    # ``_needs_openssl`` skip in tests/ops/test_federation_keygen.py.
+    # ⚠️ A skip is not a pass: the row is silently absent wherever the binary
+    # is, which is why this field is per-row and named rather than a blanket
+    # try/except around the run.
+    requires: str | None = None
+    # For a tool whose output is DERIVED from the flag rather than being it:
+    # the path the CONTROL run must have produced, computed from the flag
+    # value. Without it the control for such a row would assert on the flag
+    # value itself — which the fixture populated — and would stay green for a
+    # tool that wrote nothing at all.
+    produces: Callable[[Path], Path] | None = None
 
     @property
     def id(self) -> str:
@@ -377,11 +460,112 @@ ROWS: list[Row] = [
                       "--output", str(out)],
       reach="local Prometheus stub (/rich personality carries schema=)",
       out_name="mapping.yaml"),
+    # Three rows, one derived sink each. `config_history` has no output flag:
+    # every path it writes hangs off `<--config-dir>/../.da-history`, so the
+    # flag it must name is the input one. The FOURTH sink — `_save_history`'s
+    # `history.json` write — has no row: every shape that makes history.json
+    # unwritable also makes it unreadable, and the deliberately unguarded READ
+    # at `_load_history` dies first (measured: rc=1 traceback at that line).
+    # It is wrapped; the static pin is the only evidence for it.
+    R("ops/config_history.py", "--config-dir", "dir",
+      lambda c, out: ["--config-dir", _history_conf_d(out), "snapshot", "-m", "x"],
+      reach="a one-shard conf.d built in place; `snapshot` is what writes",
+      out_name="conf.d", artifact=".da-history",
+      shapes=("sibling_is_file",),
+      produces=lambda out: out.parent / ".da-history" / "history.json"),
+    R("ops/config_history.py", "--config-dir", "dir",
+      lambda c, out: ["--config-dir", _history_conf_d(out), "snapshot", "-m", "x"],
+      reach="same, with the snapshot subdirectory blocked",
+      out_name="conf.d", artifact=".da-history/snap-1",
+      shapes=("sibling_is_file",),
+      produces=lambda out: out.parent / ".da-history" / "history.json"),
+    R("ops/config_history.py", "--config-dir", "dir",
+      lambda c, out: ["--config-dir", _history_conf_d(out), "snapshot", "-m", "x"],
+      reach="same, with the snapshot COPY of alpha.yaml blocked",
+      out_name="conf.d", artifact=".da-history/snap-1/alpha.yaml",
+      shapes=("sibling_is_dir",),
+      produces=lambda out: out.parent / ".da-history" / "history.json"),
+    R("ops/da_assembler.py", "--config-dir", "dir",
+      lambda c, out: ["--render-cr", str(THRESHOLDCONFIG_CR), "--config-dir", str(out)],
+      reach="in-repo example ThresholdConfig CR through --render-cr; the "
+            "offline path needs no Kubernetes client",
+      # ⛔ This tool used to exit 0 here having written nothing: `reconcile_one`
+      # logged the OSError and `render_cr_file` returned EXIT_OK regardless
+      # (measured rc=0 on both shapes). `parent_is_file` reaches the mkdir;
+      # `artifact_is_dir` reaches the rendered file itself — which is also
+      # where the idempotence read of that same path dies, and that is as far
+      # as a row can get: with `db-a.yaml` a directory the run never returns
+      # from that read, so the `write_text` + `chmod` behind it are masked
+      # (verified: deleting THEIR wrapper leaves this row green and turns the
+      # static pin red — the two gates cover this file between them, neither
+      # alone).
+      shapes=("parent_is_file", "artifact_is_dir"),
+      artifact="db-a.yaml"),
+    R("ops/state_reconcile.py", "--manifest-path", "file",
+      lambda c, out: ["--state-dir", _state_dir(c.tmp), "--manifest-path", str(out)],
+      reach="a state dir with one current-schema file: no migration runs, so "
+            "the manifest write is the only sink the run reaches",
+      out_name="manifest.json",
+      # ⚠️ This row is the ONLY evidence for `write_json`'s atomic sinks: the
+      # static pin cannot see them, because the pre-existing
+      # `except BaseException: <unlink temp>; raise` cleanup already satisfies
+      # its "a stopping handler is a guard" arm — the pin stays green with the
+      # wrapper deleted, this row does not (verified both ways).
+      # `missing_parent` is a legitimate success here — the tool creates the
+      # manifest's parent itself. `parent_is_file` reaches that mkdir;
+      # `target_is_dir` gets past it and reaches the `os.replace` that ends
+      # the atomic write, which is the sink the mkdir-side shape masks.
+      shapes=("parent_is_file", "target_is_dir"),
+      # Both defaults (`--state-dir .da/state`, `--manifest-path
+      # .da/manifest.json`) are CWD-relative; run in tmp so a future argv
+      # slip writes there and not into the checkout.
+      cwd=lambda c: c.tmp),
+    R("ops/federation_keygen.py", "--jwks-out", "file",
+      lambda c, out: ["--jwks-out", str(out)],
+      reach="flags only; the private key goes to stdout (a pipe, never a tty) "
+            "and the JWKS to --jwks-out — needs openssl for the keypair",
+      out_name="federation-jwks.json",
+      requires="openssl"),
     R("ops/generate_tenant_mapping_rules.py", "-o/--output", "file",
       lambda c, out: ["--config-dir", _mapping_conf_d(c.tmp), "--metrics", "mysql_up",
                       "-o", str(out)],
       reach="tmp conf.d with a two-tenant _instance_mapping.yaml",
       out_name="mapping-rules.yaml"),
+    R("ops/assemble_config_dir.py", "--output", "dir",
+      lambda c, out: ["--sources", _shard_source_dir(c.tmp), "--output", str(out)],
+      reach="one tmp conf.d shard with a single tenant file",
+      # `--output` and `--manifest` are two flags on two different paths, so
+      # they get a row each. Only the `mkdir` is reachable from here: the
+      # `shutil.copy2` behind it CANNOT be made to fail by the artifact_is_dir
+      # shape, because copy2 with a directory destination copies INTO it
+      # (measured: rc=0, the file lands at <out>/alpha.yaml/alpha.yaml). That
+      # sink is wrapped and only the static pin speaks for it.
+      shapes=("parent_is_file",)),
+    R("ops/assemble_config_dir.py", "--manifest", "file",
+      lambda c, out: ["--sources", _shard_source_dir(c.tmp),
+                      "--output", str(c.tmp / "assembled"), "--manifest", str(out)],
+      reach="same shard; `--output` is a writable tmp dir so the run reaches "
+            "the manifest write, which is the sink under test",
+      out_name="assembly-manifest.json"),
+    R("ops/blast_radius.py", "-o/--output", "file",
+      lambda c, out: ["--base", _effective_config_json(c.tmp, "base"),
+                      "--pr", _effective_config_json(c.tmp, "pr"),
+                      "-o", str(out)],
+      reach="two `describe_tenant --all` dumps of the in-repo seed conf.d "
+            "(identical: an empty diff is still a written report, rc=0)",
+      out_name="blast-radius.json"),
+    R("ops/baseline_discovery.py", "-o/--output-dir", "dir",
+      lambda c, out: ["--tenant", "t1", "--prometheus", "http://127.0.0.1:1",
+                      "--duration", "1", "--interval", "1", "-o", str(out)],
+      reach="a closed port for Prometheus: every query fails, every sample is "
+            "None, and the tool still exits 0 having written both CSVs",
+      # Two rows' worth of sinks in one tool: `parent_is_file` reaches the
+      # `os.makedirs`, `artifact_is_dir` gets past it and reaches the
+      # `open(..., 'wb')` + `chmod` inside `_write_csv_secure`. The FIRST CSV
+      # is the artefact — the summary write behind it is masked, as the
+      # module docstring says, and only the static pin speaks for it.
+      shapes=("parent_is_file", "artifact_is_dir"),
+      artifact="baseline-t1-timeseries.csv"),
     # ── ops: output directories ────────────────────────────────────────────
     R("ops/init_project.py", "-o/--output-dir", "dir",
       lambda c, out: ["-o", str(out), "--non-interactive", "--tenants", "alpha",
@@ -414,13 +598,25 @@ ROWS: list[Row] = [
     R("ops/generate_rule_pack_split.py", "--output-dir", "dir",
       lambda c, out: ["--rule-packs-dir", _one_rule_pack_dir(c.tmp), "--output-dir", str(out)],
       reach="tmp rule-packs dir holding a copy of rule-pack-mariadb.yaml",
-      shapes=("parent_is_file",)),
+      # `parent_is_file` dies at the first `_safe_mkdir` (edge-rules/), which
+      # is already an `ensure_dir_or_die`. `artifact_is_dir` gets past both
+      # mkdirs AND past the two split writes, and reaches the LAST raw sink
+      # in the file — the `open(validation-report.json, "w")` that #1789
+      # wrapped. Without this second shape the row would still be green with
+      # that wrapper deleted.
+      shapes=("parent_is_file", "artifact_is_dir"),
+      artifact="validation-report.json"),
     R("ops/operator_generate.py", "--output-dir", "dir",
       lambda c, out: ["--rule-packs-dir", str(_jsc.RULE_PACKS),
                       "--config-dir", str(_jsc.SEED_CONF_D), "--output-dir", str(out)],
       reach="in-repo rule-packs + seed conf.d",
       shapes=("parent_is_file",)),
 ]
+
+
+def _skip_if_unavailable(row: Row) -> None:
+    if row.requires and shutil.which(row.requires) is None:
+        pytest.skip(f"{row.id}: {row.requires} is not on PATH")
 
 
 def _run(row: Row, ctx: Ctx, out: Path) -> subprocess.CompletedProcess:
@@ -433,7 +629,11 @@ def _run(row: Row, ctx: Ctx, out: Path) -> subprocess.CompletedProcess:
     )
 
 
-SHAPES = ("missing_parent", "parent_is_file", "artifact_is_dir")
+SHAPES = ("missing_parent", "parent_is_file", "target_is_dir",
+          "artifact_is_dir", "sibling_is_file", "sibling_is_dir")
+# Shapes that pre-create ``Row.artifact`` and therefore require it.
+_ARTIFACT_SHAPES = frozenset({"artifact_is_dir", "sibling_is_file",
+                             "sibling_is_dir"})
 
 
 def _bad_path(tmp: Path, shape: str, row: Row) -> Path:
@@ -444,12 +644,31 @@ def _bad_path(tmp: Path, shape: str, row: Row) -> Path:
         blocker = tmp / "blocker"
         blocker.write_text("this is a file, not a directory\n", encoding="utf-8")
         return blocker / row.out_name
+    if shape == "target_is_dir":
+        # The parent is fine, so the tool's own `mkdir -p` succeeds; the path
+        # it was told to WRITE is a directory.
+        out = tmp / row.out_name
+        out.mkdir(parents=True)
+        return out
     if shape == "artifact_is_dir":
         # The output directory itself is fine — the tool's own mkdir -p
         # succeeds — and the ARTEFACT it is about to write is a directory.
         assert row.artifact, f"{row.id}: shape artifact_is_dir needs Row.artifact"
         out = tmp / row.out_name
         (out / row.artifact).mkdir(parents=True)
+        return out
+    if shape in ("sibling_is_file", "sibling_is_dir"):
+        # The flag value is a perfectly good directory; what is blocked is a
+        # path the tool DERIVES from it, resolved against its parent.
+        assert row.artifact, f"{row.id}: shape {shape} needs Row.artifact"
+        out = tmp / row.out_name
+        out.mkdir(parents=True, exist_ok=True)
+        blocked = tmp / row.artifact
+        blocked.parent.mkdir(parents=True, exist_ok=True)
+        if shape == "sibling_is_dir":
+            blocked.mkdir()
+        else:
+            blocked.write_text("this is a file, not a directory\n", encoding="utf-8")
         return out
     raise AssertionError(shape)
 
@@ -462,7 +681,13 @@ def _expected_fragment(row: Row, shape: str, out: Path) -> Path:
     can be asserted. For ``artifact_is_dir`` the whole point is WHICH sink
     died, so the artefact path itself is required.
     """
-    return out / row.artifact if shape == "artifact_is_dir" else out.parent
+    if shape == "target_is_dir":
+        return out
+    if shape == "artifact_is_dir":
+        return out / row.artifact
+    if shape in ("sibling_is_file", "sibling_is_dir"):
+        return out.parent / row.artifact
+    return out.parent
 
 
 def _error_lines(stderr: str, prefix: str) -> list[str]:
@@ -493,6 +718,7 @@ _CASES = [(row, shape) for row in ROWS for shape in row.shapes]
 
 @pytest.mark.parametrize("row,shape", _CASES, ids=[f"{r.id}-{s}" for r, s in _CASES])
 def test_unwritable_output_path_is_rc2_one_line_no_traceback(row, shape, tmp_path, stub_url):
+    _skip_if_unavailable(row)
     out = _bad_path(tmp_path, shape, row)
     proc = _run(row, Ctx(tmp_path, stub_url), out)
 
@@ -524,6 +750,7 @@ def test_control_writable_path_is_rc0_and_writes(row, tmp_path, stub_url):
     A tool that exits 2 whenever the flag is present would pass the bad-path
     test above; this is what rules it out.
     """
+    _skip_if_unavailable(row)
     out = tmp_path / "good" / row.out_name
     out.parent.mkdir()
     proc = _run(row, Ctx(tmp_path, stub_url), out)
@@ -532,12 +759,54 @@ def test_control_writable_path_is_rc0_and_writes(row, tmp_path, stub_url):
     assert "Traceback" not in proc.stderr, _fail(row, proc, "control run leaked a traceback")
     assert "ERROR: cannot " not in proc.stderr, _fail(
         row, proc, "control run printed a write error")
-    if row.kind == "file":
+    if row.produces is not None:
+        # A derived-output tool: the flag value is an INPUT the fixture just
+        # populated, so "something exists there" proves nothing. Name what the
+        # run had to produce instead.
+        made = row.produces(out)
+        assert made.is_file() and made.stat().st_size > 0, _fail(
+            row, proc, f"control run did not produce {made}")
+    elif row.kind == "file":
         assert out.is_file() and out.stat().st_size > 0, _fail(
             row, proc, f"control run did not write {out}")
     else:
         written = [p for p in out.rglob("*") if p.is_file()]
         assert written, _fail(row, proc, f"control run wrote nothing under {out}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# The other direction: an INPUT failure must not be dressed up as an output one
+# ═══════════════════════════════════════════════════════════════════════════
+def test_a_bad_source_entry_does_not_blame_the_output_flag(tmp_path):
+    """`assemble_config_dir` copies `--sources` entries into `--output`.
+
+    A source entry that is itself a DIRECTORY named `x.yaml` (measured, not
+    hypothetical — `discover_yamls` lists it by extension, it does not stat
+    it) makes `shutil.copy2` raise `IsADirectoryError` naming the SOURCE.
+    That failure happens INSIDE the block wrapped for `--output`, and the
+    wrapper is what decides not to claim it: `output_write` converts only an
+    `OSError` that names its own path or an ancestor of it.
+
+    Turning this one into the standard line would print "cannot copy into
+    <output>/x.yaml … check the value given to --output" and send the
+    operator to edit the one flag that is correct. So the pin is negative:
+    whatever the tool does with a bad source, it must not name `--output`.
+    """
+    src = tmp_path / "sources"
+    (src / "x.yaml").mkdir(parents=True)
+    proc = subprocess.run(
+        [sys.executable, str(TOOLS_DIR / "ops" / "assemble_config_dir.py"),
+         "--sources", str(src), "--output", str(tmp_path / "assembled")],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=TIMEOUT_S, env={**os.environ, "PYTHONUTF8": "1"})
+
+    assert proc.returncode != 0, proc.stdout
+    assert "check the value given to --output" not in proc.stderr, (
+        "a source-side failure was mis-attributed to the output flag:\n"
+        + proc.stderr[-1500:])
+    assert "cannot copy into" not in proc.stderr, proc.stderr[-1500:]
+    # And it is still recognisably the source that failed.
+    assert str(src / "x.yaml") in proc.stderr, proc.stderr[-1500:]
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -550,7 +819,8 @@ def test_control_writable_path_is_rc0_and_writes(row, tmp_path, stub_url):
 # existing row green. They call the production helpers, not copies of them.
 # ═══════════════════════════════════════════════════════════════════════════
 def _control_row(**kw) -> Row:
-    return Row(tool="dx/run_chaos_soak.py", flag="--output-dir", kind="dir",
+    kw.setdefault("kind", "dir")
+    return Row(tool="dx/run_chaos_soak.py", flag="--output-dir",
                build=lambda c, out: [], reach="synthetic control", **kw)
 
 
@@ -578,6 +848,84 @@ class TestErrorLineMatcher:
 
     def test_two_lines_are_two(self):
         assert len(_error_lines(f"{self._STD}\n{self._STD}\n", "")) == 2
+
+
+class TestSiblingShapes:
+    """The derived-output shapes: the flag value stays USABLE.
+
+    That is the whole difference from `parent_is_file` — if these corrupted
+    the flag value the tool would be rejected at argument validation and the
+    row would go green on the wrong failure.
+    """
+
+    def test_the_flag_value_is_a_usable_directory(self, tmp_path):
+        row = _control_row(shapes=("sibling_is_file",), artifact=".da-history")
+        out = _bad_path(tmp_path, "sibling_is_file", row)
+        assert out.is_dir()
+        (out / "alpha.yaml").write_text("x\n", encoding="utf-8")
+
+    def test_sibling_is_file_blocks_a_mkdir(self, tmp_path):
+        row = _control_row(shapes=("sibling_is_file",), artifact=".da-history")
+        out = _bad_path(tmp_path, "sibling_is_file", row)
+        blocked = out.parent / ".da-history"
+        assert blocked.is_file()
+        with pytest.raises(FileExistsError):
+            blocked.mkdir(exist_ok=True)
+
+    def test_sibling_is_dir_blocks_a_write(self, tmp_path):
+        row = _control_row(shapes=("sibling_is_dir",), artifact=".da-history/snap-1/a.yaml")
+        out = _bad_path(tmp_path, "sibling_is_dir", row)
+        blocked = out.parent / ".da-history" / "snap-1" / "a.yaml"
+        assert blocked.is_dir(), "intermediate components must be created too"
+        with pytest.raises(IsADirectoryError):
+            blocked.write_text("x\n", encoding="utf-8")
+
+    def test_the_asserted_path_is_the_sibling(self, tmp_path):
+        for shape, art in (("sibling_is_file", ".da-history"),
+                           ("sibling_is_dir", ".da-history/snap-1/a.yaml")):
+            row = _control_row(shapes=(shape,), artifact=art)
+            out = _bad_path(tmp_path / shape, shape, row)
+            assert _expected_fragment(row, shape, out) == out.parent / art
+
+    def test_it_refuses_to_build_without_an_artifact(self, tmp_path):
+        with pytest.raises(AssertionError):
+            _bad_path(tmp_path, "sibling_is_file", _control_row(shapes=("sibling_is_file",)))
+
+
+class TestTargetIsDirShape:
+    def test_the_parent_is_usable_and_the_target_is_a_directory(self, tmp_path):
+        row = _control_row(kind="file", out_name="manifest.json",
+                           shapes=("target_is_dir",))
+        out = _bad_path(tmp_path, "target_is_dir", row)
+        assert out.is_dir() and out.parent.is_dir()
+        with pytest.raises(IsADirectoryError):
+            out.write_text("x\n", encoding="utf-8")
+
+    def test_the_asserted_path_is_the_target_itself(self, tmp_path):
+        row = _control_row(kind="file", out_name="manifest.json",
+                           shapes=("target_is_dir",))
+        out = _bad_path(tmp_path, "target_is_dir", row)
+        assert _expected_fragment(row, "target_is_dir", out) == out
+
+
+class TestRequiresSkip:
+    """`requires` must skip only when the binary is really missing.
+
+    A predicate that skipped unconditionally would turn every row carrying it
+    into a silent no-op, and the run would still be green — so both signs are
+    driven here, on the production helper.
+    """
+
+    def test_a_missing_binary_skips(self):
+        row = _control_row(requires="definitely-not-a-real-binary-1789")
+        with pytest.raises(pytest.skip.Exception):
+            _skip_if_unavailable(row)
+
+    def test_a_present_binary_does_not_skip(self):
+        _skip_if_unavailable(_control_row(requires=Path(sys.executable).name))
+
+    def test_no_requirement_does_not_skip(self):
+        _skip_if_unavailable(_control_row())
 
 
 class TestArtifactIsDirShape:
@@ -624,10 +972,11 @@ def test_rows_point_at_real_tools_and_fixtures():
         # The two fields are each other's precondition: a row that names an
         # artefact without driving the shape proves nothing about that sink,
         # and the shape without the artefact cannot build its bad path.
-        assert (row.artifact is not None) == ("artifact_is_dir" in row.shapes), (
-            f"{row.id}: Row.artifact and the artifact_is_dir shape must be "
-            "declared together")
+        assert (row.artifact is not None) == bool(_ARTIFACT_SHAPES & set(row.shapes)), (
+            f"{row.id}: Row.artifact and an artefact-blocking shape "
+            f"({sorted(_ARTIFACT_SHAPES)}) must be declared together")
     assert WAVEFORM_FIXTURE.is_file()
+    assert THRESHOLDCONFIG_CR.is_file()
     for p in (_jsc.SEED_CONF_D, _jsc.RULE_PACKS, _jsc.K8S_MONITORING, _jsc.ALERTMANAGER_YML):
         assert p.exists(), p
 

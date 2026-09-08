@@ -82,6 +82,7 @@
   ],
   "scripts/tools/_lib_io.py": [
    "tests/dx/test_line_ending_policy.py",
+   "tests/ops/test_da_assembler.py",
    "tests/ops/test_policy_opa_bridge.py",
    "tests/shared/test_confd_name_classification_parity.py",
    "tests/shared/test_lib_io_output_write.py",
@@ -826,7 +827,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "d8d4d294be5c20407ba4a74a92138e7f288ed22c3730e101c3d533158f665dc5",
+ "source_digest": "4b15057922e3376b6fb671883e983202cb9a629da9299059d351ecd815ad4ca2",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -2180,6 +2181,9 @@
    "tests/lint/test_check_k8s_manifests.py",
    "tests/ops/test_generate_routes_orchestration.py"
   ],
+  "k8s/crd/examples/example-thresholdconfig.yaml": [
+   "tests/shared/test_output_path_write_failure.py"
+  ],
   "mkdocs.yml": [
    "tests/lint/test_check_head_blob_hygiene.py",
    "tests/lint/test_mkdocs_strict_check.py",
@@ -2482,6 +2486,7 @@
    "tests/ops/test_ci_baseline_substitution.py",
    "tests/ops/test_property_based.py",
    "tests/shared/test_confd_case_parity_across_tools.py",
+   "tests/shared/test_output_path_write_failure.py",
    "tests/shared/test_output_write_sites_stay_guarded.py"
   ],
   "scripts/tools/dx/doc_coverage.py": [
@@ -2812,6 +2817,7 @@
    "tests/shared/test_yaml_file_error.py"
   ],
   "scripts/tools/ops/assemble_config_dir.py": [
+   "tests/shared/test_output_path_write_failure.py",
    "tests/shared/test_output_write_sites_stay_guarded.py"
   ],
   "scripts/tools/ops/backtest_threshold.py": [
@@ -2834,7 +2840,8 @@
    "tests/ops/test_nightly_scan_matrix_drift.py"
   ],
   "scripts/tools/ops/blast_radius.py": [
-   "tests/ops/test_blast_radius.py"
+   "tests/ops/test_blast_radius.py",
+   "tests/shared/test_output_write_sites_stay_guarded.py"
   ],
   "scripts/tools/ops/blind_spot_discovery.py": [
    "tests/shared/test_yaml_file_error.py"
@@ -2847,6 +2854,12 @@
    "tests/shared/test_help_contract.py",
    "tests/shared/test_yaml_file_error.py"
   ],
+  "scripts/tools/ops/config_history.py": [
+   "tests/shared/test_output_write_sites_stay_guarded.py"
+  ],
+  "scripts/tools/ops/da_assembler.py": [
+   "tests/shared/test_output_write_sites_stay_guarded.py"
+  ],
   "scripts/tools/ops/deprecate_rule.py": [
    "tests/shared/test_yaml_file_error.py"
   ],
@@ -2855,6 +2868,9 @@
   ],
   "scripts/tools/ops/drift_detect.py": [
    "tests/dx/test_coverage_gap_analysis.py"
+  ],
+  "scripts/tools/ops/federation_keygen.py": [
+   "tests/shared/test_output_write_sites_stay_guarded.py"
   ],
   "scripts/tools/ops/generate_alertmanager_routes.py": [
    "tests/ops/test_ci_path_filter_coverage.py",
@@ -2865,6 +2881,7 @@
   ],
   "scripts/tools/ops/generate_rule_pack_split.py": [
    "tests/ops/test_rule_pack_split_real_packs.py",
+   "tests/shared/test_output_write_sites_stay_guarded.py",
    "tests/shared/test_sast.py"
   ],
   "scripts/tools/ops/generate_tenant_mapping_rules.py": [
@@ -3224,6 +3241,9 @@
   ],
   "tests/ops/test_domain_policy.py": [
    "tests/ops/test_generate_alertmanager_routes.py"
+  ],
+  "tests/ops/test_federation_keygen.py": [
+   "tests/shared/test_output_path_write_failure.py"
   ],
   "tests/ops/test_federation_revocation_reconciler.py": [
    "tests/helm/test_federation_store_sentinel_guard.py"
