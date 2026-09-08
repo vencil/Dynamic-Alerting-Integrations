@@ -224,7 +224,18 @@ def table_roles(path: Path):
                 raise CannotMeasure(
                     f"render_ci's table binds unknown local(s) {unknown}; this"
                     " harness cannot tell which row is which. Update VAR_ROLE.")
-            return [(lbl, VAR_ROLE[v]) for lbl, v in pairs]
+            roles = [(lbl, VAR_ROLE[v]) for lbl, v in pairs]
+            # ⛔ A row REMOVED from the table shrinks this list and the printed
+            # table together, so the `len(body) != len(roles)` check downstream
+            # sees nothing — and the checks then hit a bare `KeyError` at rc 1.
+            # Measured by blind review of the finished file, which is where that
+            # lockstep is visible; a per-round diff cannot see it.
+            missing = sorted(set(VAR_ROLE.values()) - {r for _, r in roles})
+            if missing:
+                raise CannotMeasure(
+                    f"render_ci's table no longer has a row for {missing};"
+                    " every check here reads all three components")
+            return roles
     raise CannotMeasure("could not locate render_ci's component table loop")
 
 
