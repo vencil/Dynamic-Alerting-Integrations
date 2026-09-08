@@ -411,7 +411,7 @@ docker run --rm --network=host \
 | Code | Description |
 |------|-------------|
 | `0` | Success |
-| `1` | Uncaught exception (traceback) — measured when the parent of `-o/--output-dir` is a file. ⚠️ A Prometheus connection / query failure is **not** 1 — failed samples are recorded as empty, the report and CSVs are still written, rc 0 |
+| `1` | Uncaught exception (traceback) — measured when the parent of `-o/--output-dir` is a file (this tool still uses a raw `os.makedirs`, not the #1641 `_or_die` helpers; once #1789 lands this case becomes 2). ⚠️ A Prometheus connection / query failure is **not** 1 — failed samples are recorded as empty, the report and CSVs are still written, rc 0 |
 | `2` | Caller error: none of the `--metrics` names is one the tool knows (the error lists the accepted ones), the required `--tenant` missing, or arguments argparse rejects |
 
 ---

@@ -393,7 +393,7 @@ da-tools baseline --tenant db-a --duration 1800 --interval 30 -o /tmp/baseline_o
 | 代碼 | 說明 |
 |------|------|
 | `0` | 成功 |
-| `1` | 未捕捉例外（traceback）——實測 `-o/--output-dir` 的父路徑是檔案時是這一格。⚠️ Prometheus 連線或查詢失敗**不是** 1——失敗的採樣記為空值、報告與 CSV 照出、rc 0 |
+| `1` | 未捕捉例外（traceback）——實測 `-o/--output-dir` 的父路徑是檔案時是這一格（本工具用 raw `os.makedirs`，尚未走 #1641 的 `_or_die` 收口；#1789 收口後這一格會變 2）。⚠️ Prometheus 連線或查詢失敗**不是** 1——失敗的採樣記為空值、報告與 CSV 照出、rc 0 |
 | `2` | 呼叫端錯誤：`--metrics` 列出的指標沒有一個是工具認得的（錯誤訊息會列出可用清單）、缺必需的 `--tenant`，或 argparse 拒絕的參數 |
 
 ---
