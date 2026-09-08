@@ -101,6 +101,22 @@ TOOLS = [
     ("freshness", "lint/check_doc_freshness.py", [], "Dead doc detection"),
     ("includes", "lint/check_includes_sync.py", ["--check"], "Include snippet zh/en sync"),
     ("changelog", "dx/generate_changelog.py", ["--check"], "Conventional commit format"),
+    # ⛔ Separate entry on purpose: `--check` walks git log and never opens the
+    # file. Until #1765 that was the ONLY thing a CHANGELOG.md edit triggered,
+    # so a green run meant "commit messages are well formed", not "this file's
+    # structure is intact" — and nothing was checking the latter.
+    # ⛔ Paths are explicit. A bare `--lint` defaults to CHANGELOG.md, so this
+    # row would have linted THAT file even when it was selected because
+    # CHANGELOG-archive.md changed — the same "checks a file it was not
+    # pointed at" shape #1765 is about, one layer up.
+    # ⛔ These targets and the WATCH_TRIGGERS keys below must stay in step: a
+    # file mapped to this check but absent from this list is claimed coverage
+    # that does not exist. `CHANGELOG.en.md` is mapped and does NOT exist in
+    # the tree, so it is deliberately not listed here — naming it would make
+    # every run exit 2 ("not a readable file"). A test fires the moment that
+    # file appears, because then it must be added here too.
+    ("changelog_format", "dx/generate_changelog.py",
+     ["--lint", "CHANGELOG.md", "CHANGELOG-archive.md"], "Changelog file structure"),
     ("versions", "lint/validate_docs_versions.py", ["--ci"], "Version/count consistency"),
     ("rule_pack_stats", "dx/generate_rule_pack_stats.py", ["--check", "--lang", "all"], "Rule Pack stats include drift"),
     ("byo_rulepack_table", "dx/generate_byo_rulepack_table.py", ["--check", "--lang", "all"], "BYO Prometheus rule-pack table drift"),
@@ -495,8 +511,9 @@ WATCH_TRIGGERS: Dict[str, List[str]] = {
     # 預設值、沒動文件」這個方向在 watch/smart 模式下完全沒有偵測。
     "scripts/tools/": ["tool_map", "cli_coverage", "cli_default_drift"],
     "CLAUDE.md": ["versions", "doc_map"],
-    "CHANGELOG.md": ["changelog"],
-    "CHANGELOG.en.md": ["changelog"],
+    "CHANGELOG.md": ["changelog", "changelog_format"],
+    "CHANGELOG.en.md": ["changelog", "changelog_format"],
+    "CHANGELOG-archive.md": ["changelog_format"],
     # An EMPTY list means "changes here affect no check", and since #1704
     # that is honoured: a diff touching only this file runs nothing, it no
     # longer falls through to "run everything" (see _selection_outcome).
@@ -573,7 +590,10 @@ def _snapshot_mtimes(repo_root: Path) -> Dict[str, float]:
     """
     snap: Dict[str, float] = {}
     watch_dirs = ["docs", "rule-packs", "scripts/tools", "components"]
+    # ⛔ A file that is MAPPED to a check but not watched can never trigger it
+    # in `--watch`: the mapping reads as coverage that does not exist.
     watch_files = ["CLAUDE.md", "CHANGELOG.md", "CHANGELOG.en.md",
+                   "CHANGELOG-archive.md",
                    "mkdocs.yml", ".pre-commit-config.yaml"]
 
     for wf in watch_files:

@@ -497,6 +497,11 @@ jobs:
           pre-commit run version-consistency --all-files
           pre-commit run glossary-check --all-files
           pre-commit run changelog-lint --all-files
+          # ⛔ `changelog-lint` walks git log; it never opens the file. This
+          # second line is the one that checks the file's structure (#1765),
+          # and naming it here is what makes it a REQUIRED check instead of
+          # something only a local hook run would catch.
+          pre-commit run changelog-format --all-files
           pre-commit run includes-sync --all-files
           pre-commit run platform-data-check --all-files
           # Fence hygiene over docs/**. Lives HERE, not in a pytest, because

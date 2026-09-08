@@ -759,6 +759,7 @@
    "tests/ops/test_validate_migration.py"
   ],
   "scripts/tools/validate_all.py": [
+   "tests/dx/test_generate_changelog.py",
    "tests/shared/test_validate_all.py"
   ],
   "tests/factories.py": [
@@ -820,7 +821,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "8f77b46923598ff063d4929b86165c3dd5ce557f18f93b2fdc91649574b8433a",
+ "source_digest": "c101df000010ac7d15442e3c76c318510cd89ef69f4e243b26f690b97c8f87b1",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1235,6 +1236,7 @@
   ],
   ".github/workflows/ci.yml": [
    "tests/dx/test_compile_custom_alerts.py",
+   "tests/dx/test_generate_changelog.py",
    "tests/dx/test_recover_index.py",
    "tests/lint/test_check_admin_config_schema.py",
    "tests/lint/test_check_confd_schema.py",
@@ -1302,6 +1304,7 @@
   ".pre-commit-config.yaml": [
    "tests/dx/test_bump_docs.py",
    "tests/dx/test_compile_custom_alerts.py",
+   "tests/dx/test_generate_changelog.py",
    "tests/dx/test_line_ending_policy.py",
    "tests/dx/test_preflight_marker.py",
    "tests/dx/test_recover_index.py",
@@ -1327,6 +1330,9 @@
    "tests/shared/test_actionlint_pin_parity.py",
    "tests/shared/test_validate_all.py"
   ],
+  "CHANGELOG-archive.md": [
+   "tests/dx/test_generate_changelog.py"
+  ],
   "CHANGELOG.md": [
    "tests/dx/test_add_frontmatter.py",
    "tests/dx/test_bump_docs.py",
@@ -1350,6 +1356,7 @@
    "tests/dx/test_bump_docs.py",
    "tests/dx/test_compile_custom_alerts.py",
    "tests/dx/test_describe_tenant.py",
+   "tests/dx/test_generate_changelog.py",
    "tests/dx/test_makefile_utf8_mode.py",
    "tests/dx/test_recover_index.py",
    "tests/lint/test_check_chart_ship_surface.py",
@@ -1728,6 +1735,7 @@
   ],
   "docs/internal/dev-rules.md": [
    "tests/dx/test_bump_docs.py",
+   "tests/dx/test_generate_changelog.py",
    "tests/dx/test_verify_diff.py",
    "tests/lint/test_check_devrules_size.py",
    "tests/ops/test_ci_path_filter_coverage.py",

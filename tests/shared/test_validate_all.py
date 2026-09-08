@@ -270,7 +270,7 @@ class TestDetectChangedChecks:
         sel = _detect_changed_checks({}, {"CHANGELOG.md": 1})
         outcome, chosen = va._selection_outcome(sel)
         assert outcome == va.OUTCOME_SELECTED
-        assert chosen == ["changelog"]
+        assert chosen == ["changelog", "changelog_format"]
 
     def test_none_means_git_could_not_answer_and_is_unknown(self):
         """`_smart_detect` returns None when git cannot answer; that is "no
@@ -1886,12 +1886,13 @@ class TestSmartModeThreeOutcomes:
         ran = self._recording(monkeypatch)
         rc, out, _ = self._run(capsys, cli_argv, '--skip', 'versions')
         assert rc == 0
-        assert ran == ["changelog"], ran
+        assert ran == ["changelog", "changelog_format"], ran
         line = next(ln for ln in out.splitlines() if ln.startswith("Smart mode:"))
-        assert line.rstrip().endswith("based on git diff: changelog"), line
+        assert line.rstrip().endswith(
+            "based on git diff: changelog, changelog_format"), line
 
     @pytest.mark.parametrize("diff_files,total", [
-        ("", 0), ("CHANGELOG.md\n", 1),
+        ("", 0), ("CHANGELOG.md\n", 2),
     ], ids=["clean-tree", "selected"])
     def test_json_stdout_is_one_document_and_the_reason_goes_to_stderr(
             self, monkeypatch, capsys, cli_argv, diff_files, total):
