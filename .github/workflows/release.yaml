@@ -3,8 +3,9 @@
 # 觸發條件（六線版號策略）：
 #   - exporter/v*        → threshold-exporter Docker image + Helm chart
 #   - tools/v*           → da-tools Docker image
-#   - portal/v*          → da-portal Docker image (Interactive Tools Portal)
-#   - recipe-preview/v*  → recipe-preview Docker image + Helm chart (#657 would-fire preview)
+#   - portal/v*          → da-portal Docker image + Helm chart (Interactive Tools Portal)
+#   - recipe-preview/v*  → recipe-preview Docker image + Helm chart (#657 would-fire
+#                          preview) — ⛔ 這條線從未被切過，見下方「產出」
 #   - tenant-api/v*      → tenant-api Docker image + Helm chart
 #   - v*                 → platform tag，僅用於 GitHub Release 錨點，不觸發 build
 #
@@ -12,11 +13,18 @@
 #   - ghcr.io/vencil/threshold-exporter:v<version>  (Docker image, v-prefixed)
 #   - ghcr.io/vencil/da-tools:v<da-tools-version>    (Docker image, v-prefixed)
 #   - ghcr.io/vencil/da-portal:v<version>             (Docker image, v-prefixed)
-#   - ghcr.io/vencil/recipe-preview:v<version>        (Docker image, v-prefixed)
 #   - ghcr.io/vencil/tenant-api:v<version>             (Docker image, v-prefixed)
 #   - oci://ghcr.io/vencil/charts/threshold-exporter (Helm chart)
-#   - oci://ghcr.io/vencil/charts/recipe-preview     (Helm chart)
+#   - oci://ghcr.io/vencil/charts/da-portal          (Helm chart, #1352 案例 A)
 #   - oci://ghcr.io/vencil/charts/tenant-api         (Helm chart)
+#
+# ⛔ 宣告 ≠ 已發布（#1352）。上面每一列是「切了對應 tag 之後這支 workflow 會
+#   產出的東西」。recipe-preview 是唯一一條從未被切過的線——
+#   `git ls-remote --tags origin 'refs/tags/recipe-preview/*'` 回空（其餘四
+#   條線都有 tag），所以 ghcr.io/vencil/recipe-preview 與
+#   oci://…/charts/recipe-preview 都不存在，刻意不列在上面。
+#   release-recipe-preview job 本身完整可用；要啟用這條線就切一個
+#   recipe-preview/v* tag，然後把這兩筆產物加回清單。
 #
 # 前置條件：
 #   - Repository Settings → Actions → Workflow permissions → Read and write
@@ -545,6 +553,38 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash scripts/ops/verify_release_digest.sh da-portal helm/da-portal/Chart.yaml
 
+      # --- Helm chart (#1352 case A) ---
+      # ⛔ Added because the customer-facing install path was a lie: this job
+      # gated Chart.yaml version == tag and bump_docs.py kept the README's
+      # `oci://…/charts/da-portal --version` string fresh, while nothing ever
+      # packaged or pushed that chart. check_chart_pull_surface.py now asserts
+      # the pair. Placed before the Trivy scan, the same way release-exporter
+      # does, so a scan failure does not withhold a chart whose image is
+      # already published.
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Package Helm chart
+        run: |
+          mkdir -p .build
+          helm package helm/da-portal -d .build/
+
+      # ⛔ #1755: assert what the archive CONTAINS before it is published. The
+      # source-tree gate (check_chart_ship_surface.py) runs on every PR; this one
+      # reads the .tgz itself, which is the only place a package-time surprise —
+      # a stray file written by an earlier step, a newly pulled subchart — is
+      # visible. `check_chart_ship_surface.py` asserts this step still exists.
+      - name: Verify packaged chart contents (#1755)
+        run: |
+          python3 -X utf8 scripts/tools/lint/check_chart_package_contents.py \
+            --chart helm/da-portal \
+            --tgz .build/da-portal-${{ steps.version.outputs.VERSION }}.tgz
+
+      - name: Push Helm chart to OCI registry
+        run: |
+          helm push .build/da-portal-${{ steps.version.outputs.VERSION }}.tgz \
+            oci://${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/charts
+
       - name: Scan image with Trivy
         uses: aquasecurity/trivy-action@0.35.0
         with:
@@ -557,9 +597,17 @@ jobs:
   # ----------------------------------------------------------------
   # Job 4: Build & push recipe-preview image + Helm chart (#657)
   # ----------------------------------------------------------------
-  # recipe-preview is a "sync-bumped" line — re-tagged at EVERY platform release
-  # (same commit as the rule-pack ConfigMap), NOT an independent cadence — so its
-  # bundled compiler snapshot can't silently drift from the platform compiler.
+  # recipe-preview was DESIGNED as a "sync-bumped" line — re-tagged at every
+  # platform release (same commit as the rule-pack ConfigMap), NOT an independent
+  # cadence, so its bundled compiler snapshot cannot silently drift from the
+  # platform compiler.
+  #
+  # ⛔ #1352 case B: that is the DESIGN, not the record. The line has never been
+  # cut — zero `recipe-preview/v*` tags exist on origin — so this job has never
+  # run, and the drift it guards against has never actually been guarded. The
+  # sentence above used to read as a statement of fact about EVERY release; it is
+  # reworded rather than deleted because the job is complete and correct, and
+  # cutting the first tag is all that enabling the line takes.
   # The image bundles a SHA-pinned promtool because the firing/inactive verdict
   # format is version-bound; PROM_VERSION + amd64 digest == ci.yml's promtool gate
   # is CI-enforced (tests/preview/test_promtool_pin_parity.py).

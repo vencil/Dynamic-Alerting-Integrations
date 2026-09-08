@@ -1542,6 +1542,26 @@ repos:
         # NOTES.txt — so adding one would not have re-run the check at all.
         files: ^(helm/[^/]+/[^/]+|\.github/workflows/.*\.ya?ml|Makefile|scripts/tools/lint/check_chart_ship_surface\.py)$
 
+      - id: chart-pull-surface
+        name: "chart pull surface — a chart the docs teach `oci://` must have a matching `helm push` (#1352)"
+        entry: python3 -X utf8 scripts/tools/lint/check_chart_pull_surface.py
+        language: python
+        additional_dependencies: ['pyyaml']
+        pass_filenames: false
+        # #1352 case A: components/da-portal/README.md taught customers to
+        # `helm install … oci://…/charts/da-portal`, bump_docs.py kept that
+        # version string fresh at every release wrap, and release-portal pushed
+        # a Docker image and nothing else. Four releases, every gate green, and
+        # a 403 for anyone who followed the README.
+        #
+        # ⚠️ `files: .` is deliberate, not laziness. The scanner's universe is
+        # `git ls-files` — ANY committed file can spell an install command, and
+        # the neighbouring gate's comment says why the two must agree: a
+        # `files:` narrower than the scanner gives an edit that never runs the
+        # check. Measured at 0.36s on the full tree, which is cheaper than
+        # enumerating carriers and being wrong about one.
+        files: .
+
       - id: devcontainer-dep-parity
         name: "dev container must declare every Python dep CI installs (#1254)"
         entry: python3 -X utf8 scripts/tools/lint/check_devcontainer_dep_parity.py
