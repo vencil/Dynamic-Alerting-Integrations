@@ -76,6 +76,9 @@ TARGET_SWING_PP = 30.38 - 3.98
 # 1.000 for n=2, which is what Pearson always returns there.
 MIN_ROUNDS_FOR_CORR = 5
 
+# TRK-374 (#1732) 的反事實 harness。單一字面值，理由見引用處的註解。
+_CF_HARNESS = "docs/internal/audit-reports/bench-probe-2026-09/counterfactual.py"
+
 # ⛔ The archive report's file list is FIXED, exactly as the script this replaced
 # had it. It is not a glob — see the comment at the call site in main() for the
 # three ways globbing changed behaviour, and note that the CROSS DISPATCH section
@@ -413,11 +416,20 @@ def render_ci(session):
             # is TRK-375 (#1733), not this change.
             print(f"| {nm} | {corr(tot, v):+.3f} | {st.stdev(v)/1e6:.2f} ms |"
                   f" {_pct(st.stdev(v), sd_t)} |")
+        # ⛔ 這段話從「只有設計理由」改成「有實測背書」，靠的是 TRK-374（#1732）
+        # 補進來的 harness——**不是**改了措辭。它跑的是這個模組本身（`load` /
+        # `reject` / 本函式），數字從本表的輸出刮出來，不重算相關係數。
+        # ⚠️ 這裡刻意不寫精確數字：沒有機械化 SSOT 的數字會漂，而那正是原本
+        # 那組數字消失的原因。要數字就跑那支 harness。
         print("\n⚠️ 相關係數說「哪一個跟著動」，最後一欄說「它最多能推動多少」。"
-              "一個分量要當成因，兩欄都要成立——這是第二欄存在的**設計理由**。"
-              "⛔ 它目前**沒有實測背書**：原本佐證它的那組合成資料數字，因為"
-              "產生它的 harness 從未進 repo、無人能核對，已一併刪除（TRK-374 補回）。"
-              "⇒ 這張表要兩欄一起讀，但不要把「兩欄一起讀就分得出形狀」當成已驗證。")
+              "一個分量要當成因，兩欄都要成立。⛔ 這已有實測背書：形狀已知的合成"
+              "資料上，純 episode 時「水位」與「水位以上的質量」的相關係數**都是"
+              "約 +1.000**——第一欄分不出來——而 sd 佔比一個只有幾個百分點、一個"
+              # ⛔ 路徑寫成一個完整字面值，不要為了排版切成兩段——
+              # `tests/ops/test_wrapped_path_references.py` 擋的就是這個：
+              # 切開之後 `git grep <path>` 找不到這處引用，而它回你「乾淨」。
+              f"接近全部。⇒ 兩欄一起讀；精確數字跑 `python3 -B {_CF_HARNESS}`"
+              "（TRK-374 / #1732）。")
         print("\n⛔ 最後一欄**不是** variance 分解，三列不會加總到 100%："
               "三個分量彼此相關，>100% 表示它被另一個分量抵銷掉一部分"
               "（水位平移時水位與『水位以上的質量』反向）。")
