@@ -97,9 +97,10 @@ def build(repo: Path) -> dict:
 
     modules: dict[str, str] = {}
     for src in sources:
-        # ⚠️ `**/` 至少要吃一層目錄 ⇒ 只給 `{src}/**/*.py` 會**漏掉該目錄的頂層檔案**
-        # （實測 `scripts/tools/*.py` 那一層 12 支 `_lib_*.py` 全部不在母體裡）。
+        # ⚠️ `**/` 至少要吃一層目錄 ⇒ 只給 `{src}/**/*.py` 會**漏掉該目錄的頂層檔案**。
         # 兩個 pathspec 都給，git ls-files 會取聯集。
+        # 釘住：`test_top_level_modules_are_in_the_population` /
+        #       `test_top_level_test_files_are_in_the_population`
         for p in tracked(repo, f"{src}/*.py", f"{src}/**/*.py"):
             if p in omit or "/vendor/" in p or "__pycache__" in p:
                 continue

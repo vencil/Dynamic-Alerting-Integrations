@@ -62,7 +62,7 @@ def _fixture(tmp_path: Path, files: dict[str, str]) -> Path:
 def test_runs_on_the_real_repo_and_reports_a_list() -> None:
     """⛔ 清單必須是**跑出來的**，不是寫死的。"""
     data = _json(_REPO_ROOT)
-    assert data["blind_spots"], "盲點清單是空的——量測時是 30 支，這比較像枚舉壞了"
+    assert data["blind_spots"], "盲點清單是空的——這比較像枚舉壞了"
     for e in data["blind_spots"]:
         assert e["module"].endswith(".py")
         assert e["tests"], f"{e['module']} 被判為盲點卻沒有任何測試檔？"
@@ -71,24 +71,19 @@ def test_runs_on_the_real_repo_and_reports_a_list() -> None:
 def test_population_is_not_vacuous() -> None:
     """⚠️ 反空轉下限 —— 票明寫的對照組：掃描面歸零的實作也會「通過」。
 
-    量測時（#1746，於本 PR 的最終樹）：246 個模組 stem、351 個測試檔、其中 86 個
-    含 ``sys.executable``。下限取得遠低於現況，但足以在枚舉壞掉時立刻紅。
+    ⚠️ 一支自我量測的工具，母體與分類會被它自己的落地影響（工具本身依序落在
+    ``untested`` → ``blind_spots`` → ``both``），所以這裡只放**下限**，不放快照——
+    下限取得遠低於現況，但足以在枚舉壞掉時立刻紅。
 
-    ⚠️ **這些數字會隨本 PR 自己而動**，因為本工具的母體就是這棵樹：只有工具、
-    還沒寫測試時盲點是 30（工具在 ``untested``）；加了 subprocess-only 測試變 31
-    （工具進 ``blind_spots``）；加了 in-process 進入點又回到 30（工具進 ``both``）。
-    一支自我量測的工具，數字本來就會被自己的落地影響——所以這裡記的是**最終樹**。
-
-    ⚠️ 第一版量到 232，那是**枚舉有 bug**：只給 ``{src}/**/*.py`` 而 ``**/`` 至少
-    要吃一層目錄 ⇒ ``scripts/tools/*.py`` 那一層整個不在母體裡。這一格的下限
-    150 不足以抓到那種等級的漏（232 也遠高於 150），所以真正抓到它的是下面的
-    fixture 那幾格——反空轉下限擋的是「歸零」，不是「少一截」。
+    ⛔ 下限擋的是「歸零」，不是「少一截」：曾經有一版枚舉只給 ``{src}/**/*.py``，
+    而 ``**/`` 至少要吃一層目錄 ⇒ ``{src}/*.py`` 整層不在母體裡，數字仍遠高於這裡
+    的下限。真正抓到它的是 ``test_top_level_modules_are_in_the_population`` 那幾格。
     """
     data = _json(_REPO_ROOT)
-    assert data["stems"] >= 150, f"模組母體只剩 {data['stems']}（量測時 246）"
-    assert data["tests"] >= 200, f"測試母體只剩 {data['tests']}（量測時 351）"
+    assert data["stems"] >= 150, f"模組母體只剩 {data['stems']}"
+    assert data["tests"] >= 200, f"測試母體只剩 {data['tests']}"
     assert data["tests_with_sys_executable"] >= 40, (
-        f"含 sys.executable 的測試檔只剩 {data['tests_with_sys_executable']}（量測時 86）"
+        f"含 sys.executable 的測試檔只剩 {data['tests_with_sys_executable']}"
     )
 
 
@@ -109,8 +104,8 @@ def test_classification_is_an_exact_partition() -> None:
 def test_overlap_is_the_dominant_bucket() -> None:
     """⚠️ 這一格釘住票的核心結論：**重疊很大**，盲點遠少於 subprocess 測試檔數。
 
-    量測時：盲點 30、重疊 198 ⇒ 「86 個含 sys.executable 的測試檔」與「30 個盲點」
-    差一個數量級。若哪天重疊塌到比盲點還少，那是分類邏輯壞了，不是真的變差。
+    「含 sys.executable 的測試檔數」與「盲點數」差一個數量級，就是因為多數模組同時
+    有 in-process 進入點。若哪天重疊塌到比盲點還少，那是分類邏輯壞了，不是真的變差。
     """
     data = _json(_REPO_ROOT)
     assert len(data["both"]) > len(data["blind_spots"]), (
@@ -265,11 +260,7 @@ def test_top_level_modules_are_in_the_population(tmp_path: Path) -> None:
 
     ⚠️ 這一格是 mutation dogfood 抓不到的缺口補上的：把 glob 改回只有 ``**/``，
     全套測試**仍然全綠**——因為當時沒有任何一格斷言頂層模組在母體裡，而
-    ``test_population_is_not_vacuous`` 的下限 150 對 232 vs 245 這種「少一截」
-    無感（反空轉下限擋的是歸零，不是少一截）。
-
-    實測本 repo：``scripts/tools/*.py`` 那一層有 12 支 ``_lib_*.py``，第一版的
-    母體是 232、修好之後是 245。
+    ``test_population_is_not_vacuous`` 的下限對「少一截」無感（它擋的是歸零）。
     """
     repo = _fixture(tmp_path, {
         "scripts/tools/toplevel.py": _TOOL_SRC,          # ⚠️ 直接放在 scripts/tools/
