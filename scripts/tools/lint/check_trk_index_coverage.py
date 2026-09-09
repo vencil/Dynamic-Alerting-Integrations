@@ -73,7 +73,12 @@ _MAPPING = Path("docs/internal/planning-id-mapping.md")
 # (?<![\w-]) / (?![\w-]) 讓 TRK-3811 與 xTRK-381 都不會誤配
 _TRK_RE = re.compile(r"(?<![\w-])TRK-(\d{3})(?![\w-])")
 _TRK_CELL_RE = re.compile(r"^TRK-(\d{3})$")
-_API = "https://api.github.com/repos/{owner}/{repo}/issues"
+_API_HOST = "https://api.github.com/"
+_API = _API_HOST + "repos/{owner}/{repo}/issues"
+# owner / repo 由 argv 給，先收斂成 GitHub 實際允許的字元集，避免它們把路徑帶去別處。
+# ⚠️ 字元集本身不夠：`.` 與 `..` 都通過字元集卻是路徑走訪，實測會讓請求真的發出去
+# （測試那格打到 api.github.com 收 403 才發現）。所以另外排除純點的段。
+_SLUG_RE = re.compile(r"^(?!\.+$)[A-Za-z0-9._-]+$")
 
 
 def defined_trks(repo: Path) -> set[str]:
@@ -127,11 +132,17 @@ def commit_trks(repo: Path, limit: int = 2000) -> tuple[dict[str, str], bool]:
 
 def title_trks(owner: str, repo: str, token: str) -> dict[str, str]:
     """issue / PR 標題裡的 TRK。⛔ search API 對本 token 回 403 ⇒ 列 issue 本地過濾。"""
+    if not (_SLUG_RE.match(owner) and _SLUG_RE.match(repo)):
+        raise ValueError(f"owner/repo 不是合法的 GitHub slug: {owner!r}/{repo!r}")
     hits: dict[str, str] = {}
     page = 1
     while page <= 40:
         url = f"{_API.format(owner=owner, repo=repo)}?state=all&per_page=100&page={page}"
-        req = urllib.request.Request(
+        # 述詞而不是註解：host 與 scheme 是常數前綴，argv 只能影響其後的路徑段，
+        # 而那兩段已由 _SLUG_RE 收斂過。
+        if not url.startswith(_API_HOST):
+            raise ValueError(f"refusing to fetch a non-GitHub URL: {url!r}")
+        req = urllib.request.Request(  # nosec B310  # https-only, host pinned to _API_HOST above
             url,
             headers={
                 "Authorization": f"Bearer {token}",
@@ -139,7 +150,7 @@ def title_trks(owner: str, repo: str, token: str) -> dict[str, str]:
                 "User-Agent": "check_trk_index_coverage",
             },
         )
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        with urllib.request.urlopen(req, timeout=60) as resp:  # nosec B310  # same, scheme+host asserted
             batch = json.load(resp)
         if not batch:
             break

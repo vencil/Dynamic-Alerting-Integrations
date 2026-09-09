@@ -203,3 +203,25 @@ def test_every_declared_trailer_key_is_scanned(tmp_path: Path, key: str) -> None
     repo = _fixture(tmp_path, "| TRK-401 | #1 | x | — |\n",
                     [f"chore: x\n\n{key}: TRK-777\n"])
     assert [m["trk"] for m in _json(repo)["missing"]] == ["777"], key
+
+
+def test_owner_repo_slug_is_validated() -> None:
+    """⛔ argv 給的 owner/repo 不得把請求帶去 api.github.com 以外的路徑。
+
+    ⚠️ bandit 的 B310（`urllib.urlopen`）在 `-ll -ii` 下是硬性 gate。抑制它用的是
+    inline `# nosec B310`，而那只有在**述詞真的成立**時才誠實 —— 這一格就是那個
+    述詞的控制項：slug 收斂 + host 常數前綴斷言。
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("_trk_mod", _CHECKER)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    # ⛔ 每一個都必須在**發出請求之前**被擋下。⚠️ `.` / `..` 原本通過字元集檢查，
+    # 那一格真的打到 api.github.com（收 403）才暴露出來——字元集不等於路徑安全。
+    bad_slugs = ("evil.com/x?", "a/b", ".", "..", "...", "own er", "", "a\\b", "%2e%2e")
+    for bad in bad_slugs:
+        with pytest.raises(ValueError):
+            mod.title_trks(bad, "repo", "token")
+        with pytest.raises(ValueError):
+            mod.title_trks("owner", bad, "token")
