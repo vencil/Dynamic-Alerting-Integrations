@@ -282,15 +282,15 @@ func TestInheritanceGraph_DefaultsToTenantsOrder(t *testing.T) {
 // TestScanDirHierarchical_K8sSymlinkLayout (A-8b, planning §12.2) locks
 // the invariants around Kubernetes ConfigMap mount layouts:
 //
-//   conf.d/                        ← exporter mount root
-//     _defaults.yaml  → real/_defaults.yaml        (file-symlink)
-//     team-a/                                      (real directory)
-//       tenant-a.yaml → ../real/tenant-a.yaml      (file-symlink)
-//     sl-dir/         → real/                      (dir-symlink)
-//     real/                                        (actual content)
-//       _defaults.yaml
-//       tenant-a.yaml
-//       nested-only.yaml                           (only reachable via sl-dir)
+//	conf.d/                        ← exporter mount root
+//	  _defaults.yaml  → real/_defaults.yaml        (file-symlink)
+//	  team-a/                                      (real directory)
+//	    tenant-a.yaml → ../real/tenant-a.yaml      (file-symlink)
+//	  sl-dir/         → real/                      (dir-symlink)
+//	  real/                                        (actual content)
+//	    _defaults.yaml
+//	    tenant-a.yaml
+//	    nested-only.yaml                           (only reachable via sl-dir)
 //
 // Go `filepath.WalkDir` under the hood uses `fs.DirEntry` + `Lstat`:
 //   - **file-level symlinks** ARE followed when we call `os.ReadFile(path)`
@@ -500,12 +500,12 @@ func TestScanDirHierarchical_MixedValidInvalid(t *testing.T) {
 // cycle-6 RCA contract on the **production hot path** (`recomputeMergedHash`
 // → `computeMergedHash`):
 //
-//   1. Broken `_defaults.yaml` in the inheritance chain → ERROR-level log
-//      that mentions "skip unparseable defaults/profiles file" + the
-//      offending filename.
-//   2. `da_config_parse_failure_total{file_basename="_defaults.yaml"}`
-//      incremented for each affected tenant (per-tenant duplication
-//      intentional — count == affected-tenant blast radius).
+//  1. Broken `_defaults.yaml` in the inheritance chain → ERROR-level log
+//     that mentions "skip unparseable defaults/profiles file" + the
+//     offending filename.
+//  2. `da_config_parse_failure_total{file_basename="_defaults.yaml"}`
+//     incremented for each affected tenant (per-tenant duplication
+//     intentional — count == affected-tenant blast radius).
 //
 // Per-tenant emission semantics: 3 dependent tenants × 1 broken root
 // _defaults.yaml = counter +3. Ops alert `sum(rate(...{file_basename=

@@ -182,7 +182,7 @@ func FuzzDeepMerge(f *testing.F) {
 	for _, seed := range [][2]string{
 		{"a:1;b:2", "c:3"},
 		{"a:1;b:2", "a:99"},
-		{"a:1;b:2", "a:nil"},  // nil-delete
+		{"a:1;b:2", "a:nil"}, // nil-delete
 		{"", ""},
 		{"", "x:7"},
 	} {

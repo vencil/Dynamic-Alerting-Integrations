@@ -22,12 +22,12 @@ func hdr(kv ...string) http.Header {
 func TestDetectRateLimit(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name       string
-		status     int
-		header     http.Header
-		body       string
-		wantLim    bool
-		wantRetry  time.Duration
+		name      string
+		status    int
+		header    http.Header
+		body      string
+		wantLim   bool
+		wantRetry time.Duration
 	}{
 		{"GitHub secondary rate limit: 403 + Retry-After", http.StatusForbidden,
 			hdr("Retry-After", "120"), "", true, 120 * time.Second},

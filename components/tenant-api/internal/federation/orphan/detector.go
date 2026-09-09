@@ -114,7 +114,6 @@ func scanSubsetTenants(configDir string) ([]string, error) {
 	return out, nil
 }
 
-
 // Detector periodically reports federation artifacts left behind
 // by an incomplete tenant offboarding — live token Records and
 // conf.d/_federation/<tenant>.yaml subset files whose owning tenant is

@@ -22,7 +22,7 @@ import (
 
 // Event represents a config change notification.
 type Event struct {
-	Type      string    `json:"type"`              // "config_change" | "task_update" | "reload" | "connected" | "close" | "server_shutdown"
+	Type      string    `json:"type"` // "config_change" | "task_update" | "reload" | "connected" | "close" | "server_shutdown"
 	TenantID  string    `json:"tenant_id,omitempty"`
 	TaskID    string    `json:"task_id,omitempty"`
 	Timestamp time.Time `json:"timestamp"`

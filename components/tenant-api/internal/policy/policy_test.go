@@ -284,7 +284,7 @@ func TestCheckWrite_NoReceiverTypeInPatch(t *testing.T) {
 
 	patch := map[string]string{
 		"_routing_group_wait": "10s",
-		"_routing_repeat": "1h",
+		"_routing_repeat":     "1h",
 	}
 
 	violations := m.CheckWrite("db-a", patch)

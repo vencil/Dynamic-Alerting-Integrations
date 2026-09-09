@@ -558,4 +558,3 @@ tenants:
 		t.Errorf("db-fin chain after mid-level delete: expected 1 (root only), got %d: %v", len(finChain), finChain)
 	}
 }
-
