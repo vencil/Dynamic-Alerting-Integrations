@@ -668,11 +668,17 @@ def test_parse_error_does_not_swallow_findings_from_other_files(tmp_path: Path) 
 # 每一格的 ground truth 都是 bash 本身：`REACHED` 有沒有印出來。
 # ---------------------------------------------------------------------------
 def _bash_reaches(script: str, tmp_path: Path) -> bool:
-    """跑 bash，回傳「管線之後那行有沒有真的執行到」。"""
+    """跑 bash，回傳「管線之後那行有沒有真的執行到」。
+
+    ⛔ ``cwd=tmp_path`` 是**必要的**，不是整潔而已：fixture 腳本會寫檔（例如
+    ``> input.txt``），少了它就以 pytest 的 cwd（repo 根）執行，**每跑一次測試就在
+    repo 裡留一個檔**。那正是這樣溜進 commit 的。
+    釘住：`test_bash_ground_truth_helper_does_not_write_into_the_repo`。
+    """
     fp = tmp_path / "gt.sh"
     fp.write_text(script, encoding="utf-8")
     proc = subprocess.run(
-        ["bash", str(fp)], capture_output=True, text=True, timeout=60
+        ["bash", str(fp)], capture_output=True, text=True, timeout=60, cwd=tmp_path
     )
     return "REACHED" in proc.stdout
 
@@ -987,3 +993,20 @@ def test_sibling_function_definitions_stay_decidable(tmp_path: Path) -> None:
     data = _findings(repo)
     assert not data["skipped"], f"並排函式被冤枉拒判：{data['skipped']}"
     assert len(data["findings"]) == 1, f"真違規被丟掉：{data}"
+
+
+def test_bash_ground_truth_helper_does_not_write_into_the_repo(tmp_path: Path) -> None:
+    """⛔ ground-truth helper 不得把檔案寫進 repo 工作區。
+
+    ``_bash_reaches`` 執行的是 fixture 腳本，而那些腳本會寫檔。少了 ``cwd=tmp_path``
+    就以 pytest 的 cwd（repo 根）執行 ⇒ **每跑一次測試就污染 repo 一次**，而且因為
+    檔案一旦被提交，工作區反而是「乾淨」的，scope-drift 那類只看未提交變更的檢查看不見。
+    """
+    marker = "helper_cwd_probe.txt"
+    probe = _REPO_ROOT / marker
+    assert not probe.exists(), f"這一格開始前 repo 裡就有 {marker}"
+    _bash_reaches(
+        f"#!/usr/bin/env bash\nprintf x > {marker}\necho REACHED\n", tmp_path
+    )
+    assert (tmp_path / marker).exists(), "腳本沒有真的寫檔，這一格會空轉"
+    assert not probe.exists(), f"helper 把 {marker} 寫進了 repo 工作區"
