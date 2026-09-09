@@ -6,8 +6,6 @@
 entries:
   - {file: docs/cli-reference.en.md, command: analyze-gaps, verdict: V3, token: "--json-output", count: 1, ticket: "#1619"}
   - {file: docs/cli-reference.en.md, command: config-diff, verdict: V3, token: "--summary-only", count: 1, ticket: "#1619"}
-  - {file: docs/cli-reference.en.md, command: deprecate, verdict: V3, token: "--dry-run", count: 1, ticket: "#1619"}
-  - {file: docs/cli-reference.en.md, command: deprecate, verdict: V3, token: "--reason", count: 1, ticket: "#1818"}
   - {file: docs/cli-reference.en.md, command: diagnose, verdict: V3, token: "--namespace", count: 1, ticket: "#1818"}
   - {file: docs/cli-reference.en.md, command: lint, verdict: V3, token: "--json-output", count: 1, ticket: "#1619"}
   - {file: docs/cli-reference.en.md, command: lint, verdict: V3, token: "--strict", count: 1, ticket: "#1619"}
@@ -35,8 +33,6 @@ entries:
   - {file: docs/cli-reference.en.md, command: rule-pack-split, verdict: V3, token: "--scenario", count: 1, ticket: "#1619"}
   - {file: docs/cli-reference.md, command: analyze-gaps, verdict: V3, token: "--json-output", count: 1, ticket: "#1619"}
   - {file: docs/cli-reference.md, command: config-diff, verdict: V3, token: "--summary-only", count: 1, ticket: "#1619"}
-  - {file: docs/cli-reference.md, command: deprecate, verdict: V3, token: "--dry-run", count: 1, ticket: "#1619"}
-  - {file: docs/cli-reference.md, command: deprecate, verdict: V3, token: "--reason", count: 1, ticket: "#1818"}
   - {file: docs/cli-reference.md, command: diagnose, verdict: V3, token: "--namespace", count: 1, ticket: "#1818"}
   - {file: docs/cli-reference.md, command: lint, verdict: V3, token: "--json-output", count: 1, ticket: "#1619"}
   - {file: docs/cli-reference.md, command: lint, verdict: V3, token: "--strict", count: 1, ticket: "#1619"}
