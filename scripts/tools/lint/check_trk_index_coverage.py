@@ -35,8 +35,11 @@ TRK 在第 2 欄）。散文裡提到某個 TRK **不算**它被定義了——�
   絕不當成掃過了。（GitHub 的 search API 對本 token 回 403 ⇒ 改用列 issue
   再本地過濾。）
 
-⚠️ 兩個面不可互相取代：實測 TRK-366 **只**活在 issue 標題（沒有任何 commit
-提到它），而 TRK-380 兩個面都有。只掃 commits 會漏掉 366。
+⛔ **兩個面不可互相取代，而且 commits 面比想像中弱得多**。在本 repo 的 shallow
+clone 上實測（掃描面 = subject + trailer）：把 #1627 的六列拿掉之後，**commits
+面一個都找不到、回綠**；六個全部只由 titles 面看得到（TRK-363←#1545、365←#1558、
+366←#1564、367←#1571、368←#1574、380←#1757）。⇒ **只跑 commits 面的 pre-commit
+hook 對這一類是弱後備，不是偵測器**；真正的偵測要 titles 面（需 token，見上）。
 
 Usage
 -----
@@ -88,11 +91,23 @@ def defined_trks(repo: Path) -> set[str]:
     return out
 
 
+# ⛔ 掃的是 **subject 行 + trailer**，不是整篇 commit body。
+# 票寫的掃描面是「issue／PR 標題與 commit **trailer**」。掃整個 body 會把散文裡
+# 當例子提到的號碼讀成一次引用——實測：本工具自己的 commit 訊息描述 dogfood 時
+# 寫了 `TRK-999`／`TRK-401`（fixture 用的假號），整個 body 掃法把它們判成兩個洞，
+# 於是**守衛擋下了自己的落地 commit**。那是誤紅，不是缺陷。
+# trailer 用 git 原生 parser 取（與 check_planning_status_sync.py 同一理由：
+# RFC-2822 的大小寫、空行分隔、多行值，regex 打不準）。
+_TRAILER_KEYS = ("Refs", "Resolves", "Closes", "Fixes", "Fix", "Related")
+
+
 def commit_trks(repo: Path, limit: int = 2000) -> tuple[dict[str, str], bool]:
-    """commit 訊息裡的 TRK。回傳 (trk -> 第一個 commit 短 SHA, 是否為完整歷史)。"""
+    """commit 的 subject + trailer 裡的 TRK。回傳 (trk -> 短 SHA, 是否完整歷史)。"""
     shallow = (repo / ".git" / "shallow").exists()
+    keys = ",".join(f"key={k},valueonly=true,unfold=true" for k in _TRAILER_KEYS)
+    fmt = "%h%x00%s%x00%(trailers:" + keys + ")%x1e"
     proc = subprocess.run(
-        ["git", "-C", str(repo), "log", f"-n{limit}", "--format=%h%x00%B%x1e"],
+        ["git", "-C", str(repo), "log", f"-n{limit}", f"--format={fmt}"],
         capture_output=True,
         text=True,
         timeout=120,
@@ -101,11 +116,12 @@ def commit_trks(repo: Path, limit: int = 2000) -> tuple[dict[str, str], bool]:
         return {}, False
     hits: dict[str, str] = {}
     for rec in proc.stdout.split("\x1e"):
-        if "\x00" not in rec:
+        parts = rec.split("\x00")
+        if len(parts) < 3:
             continue
-        sha, body = rec.split("\x00", 1)
-        for m in _TRK_RE.finditer(body):
-            hits.setdefault(m.group(1), sha.strip())
+        sha, subject, trailers = parts[0].strip(), parts[1], parts[2]
+        for m in _TRK_RE.finditer(subject + "\n" + trailers):
+            hits.setdefault(m.group(1), sha)
     return hits, not shallow
 
 

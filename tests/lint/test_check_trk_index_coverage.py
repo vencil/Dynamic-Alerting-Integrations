@@ -3,9 +3,12 @@
 ⚠️ **票明寫要對照組**：只斷言「今天乾淨」的話，一個**掃描面歸零**的實作也會過。
 所以每一格「綠」的斷言旁邊都有一格種了假引用必須轉紅的孿生格。
 
-⛔ 兩個掃描面不可互相取代，這是實測不是設計理由：TRK-363 與 TRK-366 **只**活在
-issue 標題（沒有任何 commit 提到它們），TRK-365 / 367 / 368 / 380 兩個面都有。
-補列前實測 commits 面找到 4 個洞、加上 titles 面是 6 個。
+⛔ 兩個掃描面不可互相取代，這是實測不是設計理由。⚠️ **而且 commits 面比一開始
+以為的弱得多**：掃描面收窄成 subject + trailer 之後（見下），在本 repo 的 shallow
+clone 上把六列拿掉重量，**commits 面 0/6、回綠**，六個全部只由 titles 面看得到。
+先前記的「commits 面 4 個」是**掃整篇 commit body** 的數字，那個掃法已因誤紅
+（它擋下了本功能自己的落地 commit——訊息裡當例子寫的 `TRK-999`／`TRK-401` 被讀成
+引用）而改掉。⇒ 只跑 commits 面的 pre-commit hook 是弱後備，不是偵測器。
 """
 from __future__ import annotations
 
@@ -162,3 +165,41 @@ def test_shallow_clone_is_reported_as_partial(tmp_path: Path) -> None:
     data = _json(repo)
     assert data["partial"] is True
     assert "PARTIAL" in _run(repo).stdout
+
+
+# ---------------------------------------------------------------------------
+# 掃描面：subject + trailer，不是整篇 body
+# ---------------------------------------------------------------------------
+def test_trk_mentioned_only_in_commit_body_prose_is_not_a_reference(tmp_path: Path) -> None:
+    """⛔ commit 散文裡當例子提到的號碼**不是**一次引用。
+
+    ⚠️ 這一格是本功能自己燒出來的：第一版掃整篇 commit body，於是它的落地 commit
+    ——訊息裡寫著「dogfood 種一個 TRK-999 引用」——被判成一個洞，**pre-commit 擋下
+    了那次 commit**。票寫的掃描面是「commit trailer」，不是整篇散文。
+    """
+    body = ("chore: 說明用的 commit\n\n"
+            "這段散文提到 TRK-999 與 TRK-888 只是舉例，不是引用。\n\n"
+            "Refs: TRK-401\n")
+    repo = _fixture(tmp_path, "| TRK-401 | #1 | x | — |\n", [body])
+    assert _json(repo)["missing"] == []
+
+
+def test_trk_in_a_trailer_is_a_reference(tmp_path: Path) -> None:
+    """同一顆 commit，號碼改放 trailer 就必須算引用。"""
+    body = "chore: x\n\n散文完全不提號碼。\n\nRefs: TRK-777\n"
+    repo = _fixture(tmp_path, "| TRK-401 | #1 | x | — |\n", [body])
+    assert [m["trk"] for m in _json(repo)["missing"]] == ["777"]
+
+
+def test_trk_in_the_subject_line_is_a_reference(tmp_path: Path) -> None:
+    """subject 行等同 issue/PR 標題那一面，也算引用。"""
+    repo = _fixture(tmp_path, "| TRK-401 | #1 | x | — |\n", ["TRK-555: 做了某件事"])
+    assert [m["trk"] for m in _json(repo)["missing"]] == ["555"]
+
+
+@pytest.mark.parametrize("key", ["Refs", "Resolves", "Closes", "Fixes"])
+def test_every_declared_trailer_key_is_scanned(tmp_path: Path, key: str) -> None:
+    """宣告的 trailer key 每一個都要真的被掃到——否則就是列了沒接。"""
+    repo = _fixture(tmp_path, "| TRK-401 | #1 | x | — |\n",
+                    [f"chore: x\n\n{key}: TRK-777\n"])
+    assert [m["trk"] for m in _json(repo)["missing"]] == ["777"], key
