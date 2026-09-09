@@ -201,7 +201,7 @@ if !waitFor(t, 2*time.Second, func() bool {
 | `ops/test_benchmark.py` | 效能基線 | 14 | benchmark + slow markers |
 | `shared/test_property.py` | Hypothesis property-based | 15 | slow marker |
 | `ops/test_analyze_gaps.py` | analyze_rule_pack_gaps.py gap 分析 | 34 | Wave 15 unittest→pytest + 新增 |
-| `ops/test_assemble_config_dir.py` | assemble_config_dir.py 組裝工具 | 34 | Wave 15 unittest→pytest + 新增 |
+| `ops/test_assemble_config_dir.py` | assemble_config_dir.py 組裝工具 | 100 | Wave 15 unittest→pytest + 新增 |
 | `shared/test_validate_all.py` | validate_all.py 驗證入口 | 58 | Wave 16 覆蓋率攻略（14→41%） |
 | `ops/test_baseline_discovery.py` | baseline_discovery.py 基線觀測 | 38 | Wave 17 覆蓋率攻略（31→55%） |
 | `ops/test_backtest_threshold.py` | backtest_threshold.py 閾值回測 | 39 | Wave 17 覆蓋率攻略（32→70%）+ W18 parametrize |

@@ -26,6 +26,17 @@ REPO = Path(__file__).resolve().parents[2]
 PRECHECK = REPO / "scripts" / "ops" / "configmap_assemble_precheck.py"
 MAKEFILE = REPO / "Makefile"
 
+sys.path.insert(0, str(REPO / "scripts" / "tools"))
+import _lib_tenant_uniqueness as tu  # noqa: E402
+
+# ⛔ The "could not measure" arms below patch `subprocess.run` on the stdlib
+# module object, which is what `_lib_tenant_uniqueness` calls. #1794 moved the
+# measurement out of the pre-check into that shared module (the sibling
+# producer `assemble_config_dir` has to ask the identical question), so the
+# pre-check no longer imports `subprocess` at all: patching
+# `precheck.subprocess` raises `AttributeError` — measured, all five arms fail
+# loudly rather than quietly running against the real validator.
+
 _TENANT = "tenants:\n  {t}:\n    mysql_connections: 50\n"
 _DEFAULTS = "defaults:\n  mysql_connections: 100\n"
 
@@ -195,7 +206,7 @@ class TestPrecheckNeverTreatsCannotMeasureAsClean:
             stdout = "not json at all"
             stderr = ""
 
-        monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: _R())
+        monkeypatch.setattr(subprocess, "run", lambda *a, **k: _R())
         rc = mod.main(["--config-dir", str(d)])
         assert rc == 2
 
@@ -232,7 +243,7 @@ class TestPrecheckNeverTreatsCannotMeasureAsClean:
             }])
             stderr = ""
 
-        monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: _R())
+        monkeypatch.setattr(subprocess, "run", lambda *a, **k: _R())
         assert mod.main(["--config-dir", str(d)]) == 2
 
     def test_a_dotfile_is_not_a_carrier(self, tmp_path):
@@ -257,15 +268,15 @@ class TestPrecheckNeverTreatsCannotMeasureAsClean:
         sys.modules["precheck_probe4"] = mod
         spec.loader.exec_module(mod)
 
-        assert mod._VALIDATE_TIMEOUT_S > 0, "the hang guard must be bounded"
+        assert tu._VALIDATE_TIMEOUT_S > 0, "the hang guard must be bounded"
         d = _tree(tmp_path, ["db-a.yaml"])
 
         def _hang(*a, **k):
-            assert k.get("timeout") == mod._VALIDATE_TIMEOUT_S, (
+            assert k.get("timeout") == tu._VALIDATE_TIMEOUT_S, (
                 "the call must pass its own bound, not rely on a default")
             raise subprocess.TimeoutExpired(cmd="validate_config", timeout=k["timeout"])
 
-        monkeypatch.setattr(mod.subprocess, "run", _hang)
+        monkeypatch.setattr(subprocess, "run", _hang)
         assert mod.main(["--config-dir", str(d)]) == 2
 
     def test_a_missing_uniqueness_entry_is_refused(self, tmp_path, monkeypatch):
@@ -284,7 +295,7 @@ class TestPrecheckNeverTreatsCannotMeasureAsClean:
             stdout = json.dumps([{"check": "yaml_syntax", "status": "pass"}])
             stderr = ""
 
-        monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: _R())
+        monkeypatch.setattr(subprocess, "run", lambda *a, **k: _R())
         rc = mod.main(["--config-dir", str(d)])
         assert rc == 2
 
@@ -307,7 +318,7 @@ class TestPrecheckNeverTreatsCannotMeasureAsClean:
             ])
             stderr = ""
 
-        monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: _R())
+        monkeypatch.setattr(subprocess, "run", lambda *a, **k: _R())
         assert mod.main(["--config-dir", str(d)]) == 0  # … but not on our axis
 
 

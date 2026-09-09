@@ -26,6 +26,7 @@
   "scripts/tools/_lib_confd.py": [
    "tests/dx/test_generate_tenant_metadata.py",
    "tests/lint/test_check_path_metadata_consistency.py",
+   "tests/ops/test_assemble_config_dir.py",
    "tests/ops/test_confd_unusable_signal.py",
    "tests/ops/test_drift_detect.py",
    "tests/ops/test_gitops_check.py",
@@ -107,6 +108,10 @@
    "tests/shared/test_property.py",
    "tests/shared/test_write_failure_class.py",
    "tests/shared/test_yaml_file_error.py"
+  ],
+  "scripts/tools/_lib_tenant_uniqueness.py": [
+   "tests/ops/test_assemble_config_dir.py",
+   "tests/ops/test_configmap_assemble_precheck.py"
   ],
   "scripts/tools/_lib_toolcount.py": [
    "tests/lint/test_validate_docs_versions.py",
@@ -829,7 +834,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "a8bcb32880b5b4e14fa11415d8248f1a40fd8f5db16dd46b85958e3153101a9f",
+ "source_digest": "4e87271b2f5200632ef9175bba51146d63d44d7c0d896285ad5ca2d4ae77f123",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1377,6 +1382,7 @@
    "tests/lint/test_check_threshold_reachability.py",
    "tests/lint/test_check_unpinned_deps.py",
    "tests/lint/test_e2e_spec_lint.py",
+   "tests/ops/test_assemble_config_dir.py",
    "tests/ops/test_ci_baseline_substitution.py",
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/ops/test_configmap_assemble_precheck.py",
