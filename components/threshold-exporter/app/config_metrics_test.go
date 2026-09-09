@@ -26,7 +26,7 @@ import (
 //   - m.SetMetrics(fresh)        — for ConfigManager-driven tests
 //   - scanDirHierarchicalWithMetrics(dir, nil, fresh, nil)  — for scanner tests
 //   - fresh.IncReloadTrigger(...)                       — for direct
-//                                                          method-form helper tests
+//     method-form helper tests
 //
 // Replaces the previous withIsolatedMetrics global-swap pattern (#4a).
 // Multiple parallel tests can each own their own *configMetrics
@@ -120,7 +120,7 @@ func TestIncDefaultsNoop_AccumulatesTotal(t *testing.T) {
 	fresh.IncDefaultsNoop()
 	fresh.IncDefaultsNoop()
 	fresh.IncDefaultsNoopBy(5)
-	fresh.IncDefaultsNoopBy(0) // no-op
+	fresh.IncDefaultsNoopBy(0)  // no-op
 	fresh.IncDefaultsNoopBy(-1) // no-op (defensive)
 
 	if got := testutil.ToFloat64(fresh.defaultsNoop); got != 7 {

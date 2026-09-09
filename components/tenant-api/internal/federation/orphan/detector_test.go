@@ -135,7 +135,8 @@ func TestScanSubsetTenants_NoDir(t *testing.T) {
 // diff: gauge updates and — critically — the fail-safe invariant that a
 // READ ERROR anywhere in the pass (conf.d, _federation/, token store)
 // skips the pass WITHOUT touching the gauges. A transient failure must
-// never be published as "everything is orphaned" (detector.go:152-155).
+// never be published as "everything is orphaned" (detector.go, the
+// "cannot scan _federation/, skipping pass" early return).
 //
 // NOT parallel: orphanedTokens / orphanedSubsets are package-level
 // gauges. Each test snapshots and restores them.

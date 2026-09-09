@@ -143,14 +143,14 @@ func TestValidateViewID(t *testing.T) {
 		{"view_with_many_chars_and_numbers_12345", false},
 
 		// Invalid cases
-		{"", true},                                       // empty
-		{"UPPERCASE", true},                             // uppercase
-		{"has space", true},                             // space
-		{"has.dot", true},                               // dot
-		{"has/slash", true},                             // slash
-		{"has@at", true},                                // at sign
-		{string(make([]byte, 129)), true},               // too long (129 chars)
-		{"view-with-CAPS", true},                        // mixed case with uppercase
+		{"", true},                        // empty
+		{"UPPERCASE", true},               // uppercase
+		{"has space", true},               // space
+		{"has.dot", true},                 // dot
+		{"has/slash", true},               // slash
+		{"has@at", true},                  // at sign
+		{string(make([]byte, 129)), true}, // too long (129 chars)
+		{"view-with-CAPS", true},          // mixed case with uppercase
 	}
 
 	for _, tt := range tests {
