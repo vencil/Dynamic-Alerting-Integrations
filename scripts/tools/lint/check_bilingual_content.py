@@ -214,14 +214,16 @@ def run_all_checks(
     return findings
 
 
-def format_text_report(findings: list, *, compared: tuple | None = None) -> str:
+def format_text_report(findings: list, *, compared: tuple | None = None,
+                       unreadable: list | None = None) -> str:
     """Format human-readable text report.
 
-    ``compared`` is ``(english, chinese)`` document counts when the caller
-    knows them (#1810): markdown present but no document classified as a
-    zh/en pair means nothing was compared, and that must not read as the
-    green "passed" — the wording is the only thing that tells the two apart
-    (rc stays 0: being paired is per-file optional).
+    ``compared`` is ``(english, chinese)`` counts of documents actually read
+    and ``unreadable`` the selected documents that could not be read
+    (#1810): nothing compared must not read as the green "passed", and the
+    wording names WHICH empty shape it is — no document classified as a
+    zh/en pair, or every selected one unreadable (rc stays 0: being paired
+    is per-file optional).
     """
     lines = []
     lines.append("=" * 60)
@@ -229,11 +231,17 @@ def format_text_report(findings: list, *, compared: tuple | None = None) -> str:
     lines.append("=" * 60)
     if compared is not None:
         lines.append(f"Compared: {compared[0]} English, {compared[1]} Chinese document(s)")
+    for f in unreadable or []:
+        lines.append(f"  ⚠ not compared (unreadable or not UTF-8): {f}")
 
     if not findings:
         if compared is not None and compared == (0, 0):
-            lines.append("⚠ nothing was compared: markdown present but no document "
-                         "is classified as a zh/en pair")
+            if unreadable:
+                lines.append("⚠ nothing was compared: every selected document "
+                             "was unreadable")
+            else:
+                lines.append("⚠ nothing was compared: markdown present but no "
+                             "document is classified as a zh/en pair")
         else:
             lines.append("✓ All bilingual content checks passed.")
         return "\n".join(lines)
@@ -251,16 +259,18 @@ def format_text_report(findings: list, *, compared: tuple | None = None) -> str:
 
 
 def format_json_report(findings: list, *, reason: str | None = None,
-                       compared: tuple | None = None) -> str:
+                       compared: tuple | None = None,
+                       unreadable: list | None = None) -> str:
     """Format JSON report.
 
     ``status`` is one of ``pass | warn | caller_error``. ``reason`` is set
     only on the refused-empty-population path (#1810): ``--json`` stdout
     must still be exactly one JSON document there, so that path emits this
     shape zeroed out with ``status="caller_error"`` and the reason instead
-    of prose. ``compared`` adds ``{"english": n, "chinese": m}`` when the
-    caller knows the counts, so a consumer can tell "pass" from "nothing was
-    compared".
+    of prose. ``compared`` adds ``{"english": n, "chinese": m}`` (documents
+    actually read) and ``unreadable`` the selected documents that could not
+    be read, so a consumer can tell "pass" from "nothing was compared"; the
+    CLI always passes both, on every exit path.
     """
     report = {
         "check": "bilingual_content",
@@ -275,6 +285,8 @@ def format_json_report(findings: list, *, reason: str | None = None,
     }
     if compared is not None:
         report["compared"] = {"english": compared[0], "chinese": compared[1]}
+    if unreadable is not None:
+        report["unreadable"] = list(unreadable)
     if reason is not None:
         report["status"] = "caller_error"
         report["reason"] = reason
@@ -316,7 +328,8 @@ def main():
         msg = f"ERROR: {reason} — nothing was measured"
         print(msg, file=sys.stderr)
         if args.json:
-            print(format_json_report([], reason=reason))
+            print(format_json_report([], reason=reason, compared=(0, 0),
+                                     unreadable=[]))
         else:
             # validate_all quotes only the last meaningful stdout line.
             print(msg)
@@ -328,15 +341,18 @@ def main():
                               measured=measured, unreadable=unreadable)
     # Counts of documents actually READ (#1810), not merely selected.
     compared = (len(measured["english"]), len(measured["chinese"]))
-    for f in sorted(unreadable):
-        # A selected document that could not be read was not compared;
-        # say so instead of folding it into a green "passed".
-        print(f"⚠ not compared (unreadable or not UTF-8): {f}", file=sys.stderr)
+    # A selected document that could not be read was not compared; it is
+    # named in the report (stdout / JSON — the consumers read those, not
+    # stderr) instead of being folded into a green "passed".
+    unreadable_rel = [str(f.relative_to(PROJECT_ROOT)) if f.is_relative_to(PROJECT_ROOT)
+                      else str(f) for f in sorted(unreadable)]
 
     if args.json:
-        print(format_json_report(findings, compared=compared))
+        print(format_json_report(findings, compared=compared,
+                                 unreadable=unreadable_rel))
     else:
-        print(format_text_report(findings, compared=compared))
+        print(format_text_report(findings, compared=compared,
+                                 unreadable=unreadable_rel))
 
     has_warnings = any(s == "warning" for s, *_ in findings)
     if args.ci and has_warnings:

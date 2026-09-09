@@ -29,9 +29,9 @@ the executable contract.
 
 Scope (files): ``components/``, ``cmd/``, ``internal/``, ``pkg/``,
 ``scripts/``, ``rule-packs/``, ``helm/templates/`` — production code
-paths only. Tests and fixtures are excluded by the pre-commit
-``files:`` pattern (no ``_test.go`` / ``testdata/`` / ``tests/`` /
-``examples/``).
+paths only. Test / fixture / example files are excluded in code
+(``_PATH_SKIP_DIR_SEGMENTS`` and the ``test_`` / ``_test.`` filename
+rules), judged on the path below the repo root (#1810).
 
 Severity model
 --------------
@@ -218,6 +218,10 @@ def _is_excluded_path(path: Path, *, root: Path | None = None) -> bool:
     - absolute and NOT under ``root`` -> filename rules only; a file the
       caller named explicitly is the population, whatever its ancestors
     - relative -> ``path.parts`` as given (already root-relative)
+
+    Callers pass RESOLVED paths (see ``_resolve_target_paths``): the
+    verdict is about where a file really is, so a symlink alias, a ``..``
+    spelling and the real path all get the same answer.
     """
     if root is None:
         root = PROJECT_ROOT
@@ -240,20 +244,22 @@ def _resolve_target_paths(args: argparse.Namespace) -> list[Path]:
     if args.paths:
         out: list[Path] = []
         for p in args.paths:
-            # Normalise the ANCESTORS of an explicit argument before the root
-            # test (#1810): a symlink alias of the checkout or a `..` spelling
-            # must reach the same branch of _is_excluded_path as the real
-            # path. The leaf itself is NOT resolved: a file is judged by where
-            # it sits in the tree, exactly as the default scan and a directory
-            # argument's rglob judge it — resolving the leaf would give a
-            # symlinked file a different verdict at each of the three entries.
+            # Every scanned path is judged by its RESOLVED location (#1810):
+            # the argument itself (a symlink alias of the checkout, a `..`
+            # spelling — including `x/..` as the last segment) and every
+            # file an rglob yields (a symlinked file inside the tree). One
+            # rule for the explicit entries and the default scan below, so
+            # the same file gets the same verdict whichever way it is named.
+            # rglob does not descend into symlinked directories; a symlinked
+            # directory named as the argument itself is entered because it
+            # is resolved first.
             spelled = Path(p) if Path(p).is_absolute() else PROJECT_ROOT / p
-            candidate = spelled.parent.resolve() / spelled.name
+            candidate = spelled.resolve()
             if candidate.is_file():
                 out.append(candidate)
             elif candidate.is_dir():
                 for ext in _DEFAULT_SCAN_EXTS:
-                    out.extend(candidate.rglob(f"*{ext}"))
+                    out.extend(f.resolve() for f in candidate.rglob(f"*{ext}"))
         return [p for p in out if not _is_excluded_path(p, root=PROJECT_ROOT)]
 
     out = []
@@ -262,8 +268,8 @@ def _resolve_target_paths(args: argparse.Namespace) -> list[Path]:
         if not root_path.is_dir():
             continue
         for ext in _DEFAULT_SCAN_EXTS:
-            out.extend(root_path.rglob(f"*{ext}"))
-    return sorted(p for p in out if not _is_excluded_path(p, root=PROJECT_ROOT))
+            out.extend(f.resolve() for f in root_path.rglob(f"*{ext}"))
+    return sorted(set(p for p in out if not _is_excluded_path(p, root=PROJECT_ROOT)))
 
 
 def _compute_exit_code(*, ci: bool, n_findings: int) -> int:

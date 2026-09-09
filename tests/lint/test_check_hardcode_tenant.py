@@ -361,17 +361,20 @@ class TestExplicitPathsAreNormalisedBeforeTheRootTest:
         assert lint.main(["--ci", spelled]) == lint.main(["--ci", str(outside)])
         assert lint.main(["--ci", str(outside)]) == 1
 
-    def test_a_symlinked_file_is_judged_where_it_sits_at_all_three_entries(
-            self, tmp_path, monkeypatch, capsys):
-        """The leaf is not resolved: `components/svc/cfg.go -> ../examples/real.go`
-        is production code at the default scan, at `components/` and when named
-        directly. Resolving the leaf gave the named entry a different verdict."""
+    def test_a_symlinked_file_gets_the_same_verdict_at_all_three_entries(
+            self, tmp_path, monkeypatch):
+        """Every scanned path is judged by its resolved location, so
+        `components/svc/cfg.go -> ../examples/real.go` is the example file at
+        the default scan, at `components/` and when named directly."""
         root = tmp_path / "real" / "repo"
         target = root / "components" / "examples" / "real.go"
         target.parent.mkdir(parents=True)
         target.write_text(_DIRTY_GO, encoding="utf-8")
         link = root / "components" / "svc" / "cfg.go"
         link.parent.mkdir()
+        # a clean production file keeps the default-roots population non-empty
+        (link.parent / "clean.go").write_text('package x\nvar q = `m{tenant="$t"}`\n',
+                                             encoding="utf-8")
         try:
             link.symlink_to(Path("..") / "examples" / "real.go")
         except (OSError, NotImplementedError):
@@ -382,8 +385,37 @@ class TestExplicitPathsAreNormalisedBeforeTheRootTest:
             "dir": lint.main(["--ci", "components"]),
             "file": lint.main(["--ci", "components/svc/cfg.go"]),
         }
-        assert verdicts == {"default": 1, "dir": 1, "file": 1}
-        assert "components/svc/cfg.go" in capsys.readouterr().err
+        assert verdicts == {"default": 0, "dir": 0, "file": 0}
+
+    def test_a_symlinked_directory_gets_the_same_verdict_named_or_walked(
+            self, tmp_path, monkeypatch):
+        """`components/linkex -> examples`: naming the directory and naming a
+        file inside it must agree (both resolve into examples/)."""
+        root = tmp_path / "real" / "repo"
+        real = root / "components" / "examples"
+        real.mkdir(parents=True)
+        (real / "e.go").write_text(_DIRTY_GO, encoding="utf-8")
+        try:
+            (root / "components" / "linkex").symlink_to(Path("examples"),
+                                                        target_is_directory=True)
+        except (OSError, NotImplementedError):
+            pytest.skip("symlinks unavailable here")
+        monkeypatch.setattr(lint, "PROJECT_ROOT", root)
+        assert lint.main(["--ci", "components/linkex"]) == 0
+        assert lint.main(["--ci", "components/linkex/e.go"]) == 0
+
+    @pytest.mark.parametrize("spelling", ["tests/..", "examples/..", "components/examples/.."])
+    def test_a_dot_dot_leaf_that_walks_through_a_skip_name_still_scans(
+            self, tmp_path, monkeypatch, spelling):
+        """`examples/..` names the root: the `examples` segment is walked
+        through, not a location, so nothing may be excluded because of it."""
+        root = tmp_path / "real" / "repo"
+        for d in ("tests", "examples", "components/examples"):
+            (root / d).mkdir(parents=True, exist_ok=True)
+        (root / "components" / "real").mkdir(parents=True)
+        (root / "components" / "real" / "x.go").write_text(_DIRTY_GO, encoding="utf-8")
+        monkeypatch.setattr(lint, "PROJECT_ROOT", root)
+        assert lint.main(["--ci", spelling]) == 1
 
 
 # ---------------------------------------------------------------------------

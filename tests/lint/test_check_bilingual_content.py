@@ -489,4 +489,51 @@ class TestNothingComparedIsNotPassed:
         # english: b.en.md, d.en.md; a.en.md selected but unreadable
         # chinese: a.md (has .en.md sibling)
         assert data["compared"] == {"english": 2, "chinese": 1}
-        assert "a.en.md" in captured.err and "not compared" in captured.err
+        assert data["unreadable"] == ["docs/a.en.md"]
+
+    def test_an_unreadable_chinese_document_is_named_and_not_counted(
+            self, tmp_path, monkeypatch, capsys, cli_argv):
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "a.md").write_bytes(b"\xff\xfe not utf-8")
+        (docs / "a.en.md").write_text("# A\n\nEnglish.\n" * 5, encoding="utf-8")
+        self._point(monkeypatch, docs)
+        cli_argv("check_bilingual_content")
+        cbc.main()
+        out = capsys.readouterr().out
+        assert "Compared: 1 English, 0 Chinese" in out
+        assert "not compared (unreadable or not UTF-8): docs/a.md" in out
+
+    def test_every_selected_document_unreadable_says_so_not_unpaired(
+            self, tmp_path, monkeypatch, capsys, cli_argv):
+        """(0, 0) has two causes; the report must not blame pairing when the
+        real cause is that nothing could be read."""
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "p.md").write_bytes(b"\xff\xfe")
+        (docs / "p.en.md").write_bytes(b"\xff\xfe")
+        self._point(monkeypatch, docs)
+        cli_argv("check_bilingual_content", "--json")
+        cbc.main()
+        data = json.loads(capsys.readouterr().out)
+        assert data["compared"] == {"english": 0, "chinese": 0}
+        assert sorted(data["unreadable"]) == ["docs/p.en.md", "docs/p.md"]
+        cli_argv("check_bilingual_content")
+        cbc.main()
+        out = capsys.readouterr().out
+        assert "every selected document was unreadable" in out
+        assert "classified as a zh/en pair" not in out
+
+    def test_refusal_json_carries_the_same_keys_as_a_pass(
+            self, tmp_path, monkeypatch, capsys, cli_argv):
+        """rc 2 --json is the same shape zeroed out: compared and unreadable
+        are present, so a consumer reading them never hits KeyError."""
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        self._point(monkeypatch, docs)
+        cli_argv("check_bilingual_content", "--json")
+        with pytest.raises(SystemExit):
+            cbc.main()
+        data = json.loads(capsys.readouterr().out)
+        assert data["compared"] == {"english": 0, "chinese": 0}
+        assert data["unreadable"] == []
