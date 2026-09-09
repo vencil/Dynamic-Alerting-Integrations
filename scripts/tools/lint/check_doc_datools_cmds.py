@@ -541,7 +541,15 @@ def check_writable_mount_has_user(doc_files: List[Path],
 # mentions are OUT OF SCOPE by declaration, not by oversight: they name no tag,
 # so there is no capability set to check them against (#1534 records this as a
 # separate problem).
-_PINNED_TAG_RE = re.compile(r"da-tools:(v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?)")
+# ⛔ `v?`, matching the bump rules' own `da-tools:v?<SEMVER>` pattern. Requiring
+# the `v` left `…/da-tools:2.9.0` rewritten by every release but invisible to
+# this check — the exact "bumped but never verified" gap this exists to close.
+_PINNED_TAG_RE = re.compile(
+    r"da-tools:(v?[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?)")
+
+# Shell punctuation that can abut the subcommand token. No da-tools subcommand
+# contains any of these, so cutting at the first one is lossless.
+_SHELL_META_RE = re.compile(r"[;|&()<>]")
 
 
 class PinnedInvocation(NamedTuple):
@@ -599,6 +607,14 @@ def iter_pinned_invocations(doc_files: List[Path],
             if not _DATOOLS_IMAGE_RE.search(flat):
                 continue
             toks = [t for t in _normalise(flat).split() if t != "\\"]
+            # ⛔ `--entrypoint` replaces the program, so what follows the image
+            # is that program's argv, not a da-tools subcommand. Grading it
+            # reports a "subcommand" the CLI was never asked to run — a red on
+            # a correct example, which for a release gate is the costly
+            # direction. Measured: `--entrypoint /bin/sh … -c 'ls'` reported
+            # `runs 'ls'`.
+            if "--entrypoint" in toks:
+                continue
             k = _image_index(toks)
             if k is None:
                 continue
@@ -606,10 +622,20 @@ def iter_pinned_invocations(doc_files: List[Path],
             if tag_m is None:
                 continue
             sub = next((t for t in toks[k + 1:] if not t.startswith("-")), None)
+            # ⛔ Cut at the first shell metacharacter, then unquote — the same
+            # over-reporting concern `_mounts` documents: a guard that
+            # over-reports goes red on examples that are already correct. A
+            # subcommand is routinely followed by `;`, `| jq`, or the closing
+            # `)` of `$(…)`, and may be quoted. ⚠️ rstrip alone is not enough:
+            # `validate|jq` ends in `q`, so the pipe has to be SPLIT on, not
+            # stripped. All four shapes reported a valid `validate` as unknown
+            # before this; no real subcommand contains any of these characters.
+            if sub is not None:
+                sub = _SHELL_META_RE.split(sub, 1)[0].strip("\"'").rstrip("\\,")
             # No operand at all is `--help` or a bare image — nothing claimed,
             # nothing to check. A placeholder (`<command>`) is a deliberate
             # "fill this in", not an assertion that the command exists.
-            if sub is None or any(c in sub for c in _PLACEHOLDER_CHARS):
+            if not sub or any(c in sub for c in _PLACEHOLDER_CHARS):
                 continue
             found.append(PinnedInvocation(rel, start + 1, tag_m.group(1), sub))
     return found
@@ -649,11 +675,33 @@ def pin_capability_doc_files(repo_root: Path = REPO_ROOT) -> List[Path]:
 
     Deliberately the SAME corpus `run()` uses, so widening one widens the other
     and the two cannot drift into disagreeing about what "the docs" means.
+
+    ⛔ Missing inputs RAISE; they are never quietly dropped. An earlier version
+    filtered the extras with `if …is_file()` — the exact fail-open shape the ⛔
+    note in `run()` calls "the same silent-gap shape this whole checker exists
+    to close". Renaming a landing page would have shrunk the release check's
+    corpus with no signal, and neither `components/da-tools/app/QUICKSTART.md`
+    nor `try-local/README.md` is a bump-rule target, so nothing else would have
+    noticed. The empty-`docs/` floor is the #1790 lesson applied here: a corpus
+    that collapsed to nothing must not read as "checked, all clean".
     """
-    return _doc_files(repo_root / "docs") + [
-        repo_root / rel for rel in _EXTRA_DOC_FILES
-        if (repo_root / rel).is_file()
-    ]
+    docs = _doc_files(repo_root / "docs")
+    if not docs:
+        raise RuntimeError(
+            f"{repo_root / 'docs'} yielded no markdown — refusing to report "
+            f"documented invocations as clean over an empty corpus."
+        )
+    missing = [rel for rel in _EXTRA_DOC_FILES
+               if not (repo_root / rel).is_file()]
+    if missing:
+        raise RuntimeError(
+            "listed in _EXTRA_DOC_FILES but not found: "
+            + ", ".join(missing)
+            + ". Point the tuple at each file's current path (if it moved, "
+              "this is a rename — follow it). Dropping the entry instead stops "
+              "that page being checked at all (#1495)."
+        )
+    return docs + [repo_root / rel for rel in _EXTRA_DOC_FILES]
 
 
 def run(repo_root: Path = REPO_ROOT) -> List[Issue]:

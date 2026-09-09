@@ -3461,3 +3461,62 @@ class TestDatoolsPinCapability:
         monkeypatch.setattr(bump_docs, "check_pinned_subcommands_against",
                             lambda *a, **kw: fake)
         assert bump_docs._check_datools_pin_capability("9.9.9") == 2
+
+    # --- the wiring itself, driven through main() -------------------------
+    #
+    # ⛔ Everything above grades the CHECK; none of it grades the two lines
+    # that make a finding matter — the `if line == "tools"` call site and
+    # `pin_capability_issues` in main()'s exit condition. Both were mutated
+    # away with the whole suite still green, i.e. the gate could be deleted
+    # and no test would notice. These two drive main() and read the exit code.
+
+    def _fake_finding(self):
+        import check_doc_datools_cmds as gate
+        return [gate.Issue("datools-pin-capability", "docs/a.md", 3, "m1")]
+
+    def test_main_exits_nonzero_when_a_documented_command_is_unrunnable(
+            self, monkeypatch, cli_argv):
+        monkeypatch.setattr(bump_docs, "check_pinned_subcommands_against",
+                            lambda *a, **kw: self._fake_finding())
+        cli_argv("bump_docs", "--tools", "9.9.9", "--dry-run")
+        with pytest.raises(SystemExit) as exc:
+            bump_docs.main()
+        assert exc.value.code != 0, (
+            "a documented invocation the released image cannot run must fail "
+            "the bump; otherwise the check prints and the release proceeds")
+
+    def test_main_is_green_when_the_check_is(self, monkeypatch, cli_argv):
+        """The counterpart: the finding, not merely running it, is what fails."""
+        monkeypatch.setattr(bump_docs, "check_pinned_subcommands_against",
+                            lambda *a, **kw: [])
+        cli_argv("bump_docs", "--tools", "9.9.9", "--dry-run")
+        bump_docs.main()  # must not SystemExit
+
+    def test_the_check_actually_runs_on_the_tools_line(self, monkeypatch,
+                                                       capsys, cli_argv):
+        """Pins the `if line == "tools"` call site AND the not-silent summary.
+
+        Renaming that guard left the whole suite green before this existed.
+        """
+        called = []
+        monkeypatch.setattr(bump_docs, "check_pinned_subcommands_against",
+                            lambda *a, **kw: called.append(1) or [])
+        cli_argv("bump_docs", "--tools", "9.9.9", "--dry-run")
+        bump_docs.main()
+        assert called, "the tools line did not invoke the pin capability check"
+        assert "da-tools pin capability" in capsys.readouterr().out
+
+    def test_real_corpus_is_not_empty(self):
+        """A blind extractor must not read as 'checked, all clean'.
+
+        `test_head_tree_is_clean` passes just as happily when
+        `iter_pinned_invocations` returns nothing at all, so on its own it
+        cannot tell a clean tree from a check that scanned zero commands.
+        """
+        import check_doc_datools_cmds as gate
+
+        docs = gate.pin_capability_doc_files(bump_docs.REPO_ROOT)
+        inv = gate.iter_pinned_invocations(docs, bump_docs.REPO_ROOT)
+        assert inv, ("the docs pin da-tools images and document subcommands "
+                     "against them; extracting none means the extractor is "
+                     "blind, not that the tree is clean")

@@ -82,6 +82,7 @@ from _version_patterns import DOCS_TREE_SYMLINK_ALIASES  # noqa: E402
 from _lint_helpers import parse_command_map_keys  # noqa: E402
 from check_doc_datools_cmds import (  # noqa: E402
     check_pinned_subcommands_against,
+    iter_pinned_invocations,
     pin_capability_doc_files,
 )
 
@@ -2392,8 +2393,25 @@ def _check_datools_pin_capability(new_ver: str) -> int:
               f"capability set (the parser is out of step with the source "
               f"layout).", file=sys.stderr)
         return 1
+    # ⛔ A corpus that lost files, or collapsed to nothing, raises rather than
+    # returning fewer invocations — otherwise "checked, all clean" and "checked
+    # almost nothing" print identically (#1790's lesson, applied here).
+    try:
+        doc_files = pin_capability_doc_files(REPO_ROOT)
+        invocations = iter_pinned_invocations(doc_files, REPO_ROOT)
+    except (RuntimeError, OSError) as exc:
+        print(f"\n❌ could not assemble the documented-invocation corpus: "
+              f"{exc}", file=sys.stderr)
+        return 1
     issues = check_pinned_subcommands_against(
-        command_map_keys, pin_capability_doc_files(REPO_ROOT), REPO_ROOT)
+        command_map_keys, doc_files, REPO_ROOT)
+    # ⛔ Say what was checked even when nothing is wrong. Without this line a
+    # silently blind extractor and a genuinely clean tree produce the same
+    # output — which is the failure mode this whole check exists to prevent, so
+    # it must not be how the check reports itself.
+    print(f"  ✅ da-tools pin capability: {len(invocations)} documented "
+          f"invocation(s) across {len(doc_files)} doc(s) checked against "
+          f"v{new_ver}")
     for it in issues:
         print(f"  ❌ [{it.check}] {it.file}:{it.line} — {it.message}",
               file=sys.stderr)
