@@ -312,3 +312,90 @@ def test_missing_pyyaml_is_rc2_not_rc1(tmp_path: Path) -> None:
     )
     assert proc.returncode == 2, f"rc={proc.returncode}\n{proc.stdout}\n{proc.stderr}"
     assert "量不到" in proc.stderr
+
+
+# ---------------------------------------------------------------------------
+# in-process 進入點 —— ⛔ 上面每一格都是 subprocess，對 coverage.py 完全不可見
+# ---------------------------------------------------------------------------
+# TRK-379 / #1746：以 subprocess 呼叫工具的測試，coverage 讀成「從未被 import」
+# （實測本檔在補這一段之前是 `No data was collected`）。那不只是可見度問題——
+# `main()` 的**回傳契約**對 subprocess 介面**結構上不可見**：讓 main() 跑完卻回
+# None 而不是回傳值，子行程看到的 rc 與輸出完全不變（`sys.exit(None)` 就是 0）。
+# 所以下面這些格子既補可見度、也補一類 subprocess 抓不到的缺陷。
+import importlib.util as _ilu
+
+_spec = _ilu.spec_from_file_location("check_unreachable_pipestatus", _CHECKER)
+_mod = _ilu.module_from_spec(_spec)
+_spec.loader.exec_module(_mod)
+
+
+def test_main_returns_int_not_none(tmp_path: Path) -> None:
+    """⛔ `main()` 必須**回傳** rc，不是只印東西然後回 None。
+
+    subprocess 測試抓不到這一類：`sys.exit(None)` 的行程 rc 是 0。
+    """
+    repo = _git_fixture(tmp_path, {"clean.sh": "#!/usr/bin/env bash\nset -euo pipefail\nfoo | bar\n"})
+    rc = _mod.main(["--repo", str(repo), "--ci"])
+    assert isinstance(rc, int) and rc == 0
+
+
+def test_main_returns_1_on_violation_in_process(tmp_path: Path) -> None:
+    repo = _git_fixture(tmp_path, {"violating.sh": _VIOLATING})
+    assert _mod.main(["--repo", str(repo), "--ci"]) == 1
+
+
+def test_main_returns_2_on_empty_population_in_process(tmp_path: Path) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, timeout=60)
+    assert _mod.main(["--repo", str(tmp_path)]) == 2
+
+
+@pytest.mark.parametrize(
+    "flags,expect",
+    [
+        (["-e"], (True, False)),
+        (["-eo", "pipefail"], (True, True)),
+        (["-e", "-o", "pipefail"], (True, True)),
+        (["-o", "pipefail", "-e"], (True, True)),
+        (["-euxo", "pipefail"], (True, True)),
+        (["+o", "pipefail"], (False, False)),
+    ],
+)
+def test_apply_set_unit(flags: list[str], expect: tuple[bool, bool]) -> None:
+    """⚠️ 旗標可以連寫、可以分開、順序可以反過來 —— 六種寫法都要對。"""
+    assert _mod.apply_set("set " + " ".join(flags), False, False) == expect
+
+
+def test_apply_set_plus_e_turns_errexit_off() -> None:
+    assert _mod.apply_set("set +e", True, True) == (False, True)
+
+
+@pytest.mark.parametrize(
+    "src,top,sub",
+    [
+        ("a | b", True, False),
+        ("a || b", False, False),          # || 是分隔符，不是管線
+        ("echo $(x | y)", False, True),    # $() 內的不是 top-level
+        ("echo `x | y`", False, True),
+        ("echo 'a | b'", False, False),    # 引號內不算
+    ],
+)
+def test_lex_pipe_classification(src: str, top: bool, sub: bool) -> None:
+    stmts = _mod.lex(list(enumerate(src.splitlines(), start=1)))
+    assert stmts, src
+    assert stmts[0].top_pipe is top, src
+    assert stmts[0].sub_pipe is sub, src
+
+
+def test_shebang_flags_unit() -> None:
+    assert _mod.shebang_flags([(1, "#!/bin/bash -e")]) == (True, False)
+    assert _mod.shebang_flags([(1, "#!/usr/bin/env bash")]) == (False, False)
+    assert _mod.shebang_flags([(1, "echo not a shebang")]) == (False, False)
+
+
+@pytest.mark.parametrize(
+    "shell,expect",
+    [("bash", True), ("bash -e", False), (None, False), ("pwsh", False), (7, False)],
+)
+def test_shell_is_pipefail_unit(shell: object, expect: bool) -> None:
+    """只有**恰好** `bash` 才是 `-eo pipefail`；`bash -e` 是自訂命令列，不是。"""
+    assert _mod._shell_is_pipefail(shell) is expect
