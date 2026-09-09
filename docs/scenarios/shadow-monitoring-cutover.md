@@ -187,16 +187,25 @@ python3 scripts/tools/ops/migrate_rule.py \
 #   - migration_output/prefix-mapping.yaml（old_query ↔ new_query 映射）
 
 # 2.2 部署新規則（shadow 狀態）——三件都要到位，少一件 shadow alert 就不會 fire：
-#   (a) tenant-config.yaml 併入 conf.d（exporter 才會發出 user_threshold 向量）
-cp migration_output/tenant-config.yaml conf.d/
+#   (a) tenant-config.yaml 是待貼片段（檔頭有範例）：把它的鍵縮排貼進 conf.d/<tenant>.yaml
+#       的 `tenants: <tenant>:` 之下——exporter 只讀 `tenants:` 包裹的區塊，直接 cp 整檔會被當成零租戶；
+#       <tenant> 要等於 alert 規則 join 的 tenant label
 #   (b) 兩份規則檔包進 ConfigMap；key 用 .yml，Prometheus 只讀 /etc/prometheus/rules/*.yml
 kubectl create configmap prometheus-rules-migration -n monitoring \
   --from-file=migration-recording.yml=migration_output/platform-recording-rules.yaml \
   --from-file=migration-alert.yml=migration_output/platform-alert-rules.yaml \
   --dry-run=client -o yaml | kubectl apply -f -
-#   (c) 把 prometheus-rules-migration 登記進 Prometheus 的 projected rule volume
-#       （k8s/03-monitoring/deployment-prometheus.yaml 的 volumes[rules].projected.sources，
-#       items 的 key/path 用上面的 .yml 檔名；ADR-005）再 apply——沒登記的 ConfigMap Prometheus 不會讀
+#   (c) 把 prometheus-rules-migration 登記進 Prometheus 的 projected rule volume——沒登記的 ConfigMap
+#       Prometheus 不會讀。在 k8s/03-monitoring/deployment-prometheus.yaml 的 volumes[rules].projected.sources
+#       比照既有的 prometheus-rules-* 加一段，再 kubectl apply 該 deployment：
+#         - configMap:
+#             name: prometheus-rules-migration
+#             optional: true
+#             items:
+#               - key: migration-recording.yml
+#                 path: migration-recording.yml
+#               - key: migration-alert.yml
+#                 path: migration-alert.yml
 
 # 2.3 更新 Alertmanager，攔截 shadow alert
 kubectl patch configmap alertmanager-config -n monitoring \

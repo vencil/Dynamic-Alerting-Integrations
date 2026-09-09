@@ -2203,7 +2203,7 @@ docker run --rm \
 
 **Output**
 
-Once the pre-checks (external dependencies, `custom_` rule references, …) pass, `--execute` removes the tenant config file; without `--execute` it only pre-checks and deletes nothing. The tool takes no backup and does not touch Recording/Alert rules — back up first, and retire rules with `deprecate`.
+Once the pre-checks (external dependencies, `custom_` rule references, …) pass, `--execute` removes the tenant config file; without `--execute` it only pre-checks and deletes nothing. The tool takes no backup and does not touch Recording/Alert rules (rules are platform-shared; once the tenant's threshold vectors disappear the related alerts resolve on their own) — back up first, and also clean up the `tenant=<tenant>` routing in Alertmanager.
 
 **Examples**
 

@@ -192,16 +192,25 @@ python3 scripts/tools/ops/migrate_rule.py \
 #   - migration_output/prefix-mapping.yaml (old_query ↔ new_query mapping)
 
 # 2.2 Deploy new rules (shadow state) — all three pieces are needed, or the shadow alerts never fire:
-#   (a) merge tenant-config.yaml into conf.d (the exporter emits user_threshold vectors from it)
-cp migration_output/tenant-config.yaml conf.d/
+#   (a) tenant-config.yaml is a snippet to paste (its header shows how): indent its keys under
+#       `tenants: <tenant>:` in conf.d/<tenant>.yaml — the exporter reads only the `tenants:` block,
+#       copying the file as-is yields zero tenants; <tenant> must equal the tenant label the alert rules join on
 #   (b) wrap both rule files in a ConfigMap; use .yml keys, Prometheus reads /etc/prometheus/rules/*.yml only
 kubectl create configmap prometheus-rules-migration -n monitoring \
   --from-file=migration-recording.yml=migration_output/platform-recording-rules.yaml \
   --from-file=migration-alert.yml=migration_output/platform-alert-rules.yaml \
   --dry-run=client -o yaml | kubectl apply -f -
-#   (c) register prometheus-rules-migration in Prometheus' projected rule volume
-#       (volumes[rules].projected.sources in k8s/03-monitoring/deployment-prometheus.yaml,
-#       items key/path = the .yml names above; ADR-005) and apply — an unregistered ConfigMap is never read
+#   (c) register prometheus-rules-migration in Prometheus' projected rule volume — an unregistered
+#       ConfigMap is never read. Add a source next to the existing prometheus-rules-* entries under
+#       volumes[rules].projected.sources in k8s/03-monitoring/deployment-prometheus.yaml, then kubectl apply it:
+#         - configMap:
+#             name: prometheus-rules-migration
+#             optional: true
+#             items:
+#               - key: migration-recording.yml
+#                 path: migration-recording.yml
+#               - key: migration-alert.yml
+#                 path: migration-alert.yml
 
 # 2.3 Update Alertmanager to intercept shadow alerts
 kubectl patch configmap alertmanager-config -n monitoring \
