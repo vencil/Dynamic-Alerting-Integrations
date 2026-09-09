@@ -951,3 +951,39 @@ def test_nested_loop_inside_an_if_condition_stays_protected(tmp_path: Path) -> N
     assert _bash_reaches(script, tmp_path), "ground truth 變了：bash 竟然沒執行到"
     repo = _git_fixture(tmp_path / "r", {"g.sh": script})
     assert not _findings(repo)["findings"], "巢狀迴圈把外層 if 條件提早關掉"
+
+
+def test_nested_function_definition_is_refused(tmp_path: Path) -> None:
+    """⛔ 巢狀函式定義：`cur_func` 是純量不是堆疊 ⇒ 範圍會掛到錯的函式上。
+
+    ``Stmt.in_func`` 只是布林，內層函式的 ``}`` 之後外層自己的程式碼仍然
+    ``in_func == True``，於是 ``cur_func`` 卡在內層名字上。實測**同一個形狀既能造成
+    假陰性也能造成誤紅** ⇒ 拒判，不猜。
+    """
+    script = (
+        "#!/usr/bin/env bash\nouter() {\n  inner() {\n    echo innerbody\n  }\n"
+        '  false | true\n  RC="${PIPESTATUS[0]}"\n  echo "REACHED $RC"\n}\n'
+        "set +e\nouter\ninner\nset -euo pipefail\nouter\n"
+    )
+    repo = _git_fixture(tmp_path / "r", {"g.sh": script})
+    data = _findings(repo)
+    assert data["skipped"], "巢狀函式定義沒有被拒判"
+    assert "nested-function-def" in data["skipped"][0]["reason"]
+    assert not data["findings"]
+
+
+def test_sibling_function_definitions_stay_decidable(tmp_path: Path) -> None:
+    """⚠️ 上一格的反向對照：**並排**的函式定義很常見，不得被拒判。
+
+    拒判的述詞要看**包含關係**，不是「檔案裡有兩個以上函式」—— 過度拒判會把真違規
+    靜默丟進 skipped。
+    """
+    script = (
+        "#!/usr/bin/env bash\na_fn() {\n  echo a\n}\nb_fn() {\n  echo b\n}\n"
+        'set -euo pipefail\nfalse | true\nRC="${PIPESTATUS[0]}"\necho "REACHED $RC"\n'
+    )
+    assert not _bash_reaches(script, tmp_path), "ground truth 變了"
+    repo = _git_fixture(tmp_path / "r", {"g.sh": script})
+    data = _findings(repo)
+    assert not data["skipped"], f"並排函式被冤枉拒判：{data['skipped']}"
+    assert len(data["findings"]) == 1, f"真違規被丟掉：{data}"

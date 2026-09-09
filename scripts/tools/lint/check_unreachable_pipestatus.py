@@ -260,6 +260,15 @@ def hard_constructs(lines: list[tuple[int, str]]) -> list[str]:
     # **內**才會提早關掉巢狀計數。配對不起來就當不確定、拒判。
     # 釘住：`test_function_and_unrelated_brace_group_stay_decidable`。
     spans = _func_spans(body)
+    # ⛔ **巢狀函式定義**（`outer() { inner() { … } … }`）：`cur_func` 是純量不是堆疊，
+    # 而 `Stmt.in_func` 只是布林 —— 內層函式的 `}` 之後，外層函式自己的程式碼仍然
+    # `in_func == True`，於是 `cur_func` 卡在內層的名字上，外層的 dead 追蹤與呼叫點
+    # 狀態全部掛到錯的範圍（實測同一形狀既能造成假陰性也能造成誤紅）。
+    # ⇒ 拒判，不猜。釘住：`test_nested_function_definition_is_refused`。
+    if spans and any(
+        any(a < m.start() < b for a, b in spans) for m in _FUNC_OPEN_RE.finditer(body)
+    ):
+        found.add("nested-function-def")
     if spans is None:
         found.add("brace-group-in-function")
     elif spans and any(
