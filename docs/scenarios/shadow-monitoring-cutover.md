@@ -71,7 +71,7 @@ Dynamic Alerting 提供端到端的遷移工作流，包含：
 ```mermaid
 graph LR
     A["現有告警<br/>（舊系統）"] -->|導入| B["onboard_platform.py<br/>反向分析"]
-    B -->|產出| C["onboard-hints.json<br/>遷移提示"]
+    B -->|產出| C["phase2-rules/migration-plan.csv<br/>遷移計畫"]
     C -->|參考| D["migrate_rule.py<br/>規則轉換"]
     D -->|部署| E["新規則<br/>migration_status: shadow<br/>（被 AM 攔截）"]
     A -->|並行運行| E
@@ -181,11 +181,16 @@ python3 scripts/tools/ops/migrate_rule.py \
   /path/to/old_rules/alerts.yml \
   --output-dir migration_output/
 # 產出（目錄）：
+#   - migration_output/platform-recording-rules.yaml（alert 規則引用的 recording rules）
 #   - migration_output/platform-alert-rules.yaml（新規則，帶 migration_status: shadow）
 #   - migration_output/prefix-mapping.yaml（old_query ↔ new_query 映射）
 
-# 2.2 部署新規則（shadow 狀態）
-kubectl apply -f migration_output/platform-alert-rules.yaml
+# 2.2 部署新規則（shadow 狀態）：兩份規則檔都是純 Prometheus rule YAML，
+#     要包進 ConfigMap 再掛進 Prometheus 的 rule volume（掛載方式見 threshold-exporter README §部署）
+kubectl create configmap prometheus-rules-migration -n monitoring \
+  --from-file=migration_output/platform-recording-rules.yaml \
+  --from-file=migration_output/platform-alert-rules.yaml \
+  --dry-run=client -o yaml | kubectl apply -f -
 
 # 2.3 更新 Alertmanager，攔截 shadow alert
 kubectl patch configmap alertmanager-config -n monitoring \
@@ -404,7 +409,7 @@ python3 scripts/tools/ops/cutover_tenant.py \
 
 - [ ] 現有配置已備份（`conf.d.bak`, `alertmanager.yml.bak`）
 - [ ] 執行 `validate_config.py` 通過
-- [ ] 執行 `onboard_platform.py` 完成，`onboard-hints.json` 已審視
+- [ ] 執行 `onboard_platform.py` 完成，`phase2-rules/migration-plan.csv` 已審視
 - [ ] 執行 `migrate_rule.py` 完成，新規則已部署
 - [ ] Alertmanager shadow route 已部署
 - [ ] Prometheus reload 完成

@@ -2203,7 +2203,7 @@ docker run --rm \
 
 **Output**
 
-Backup tenant config; optionally remove associated Recording/Alert rules.
+Removes the tenant config file once the pre-checks (external dependencies, `custom_` rule references, …) pass; without `--execute` it only pre-checks and deletes nothing. `--cleanup-rules` also removes the associated Recording/Alert rules. The tool takes no backup — back up first.
 
 **Examples**
 

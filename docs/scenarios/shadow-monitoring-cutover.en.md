@@ -76,7 +76,7 @@ Dynamic Alerting provides an end-to-end migration workflow:
 ```mermaid
 graph LR
     A["Existing Alerts<br/>(Legacy System)"] -->|Import| B["onboard_platform.py<br/>Reverse-engineer"]
-    B -->|Generate| C["onboard-hints.json<br/>Migration hints"]
+    B -->|Generate| C["phase2-rules/migration-plan.csv<br/>Migration plan"]
     C -->|Reference| D["migrate_rule.py<br/>Transform rules"]
     D -->|Deploy| E["New Rules<br/>migration_status: shadow<br/>(Alertmanager blocks)"]
     A -->|Run in parallel| E
@@ -186,11 +186,16 @@ python3 scripts/tools/ops/migrate_rule.py \
   /path/to/old_rules/alerts.yml \
   --output-dir migration_output/
 # Output (directory):
+#   - migration_output/platform-recording-rules.yaml (recording rules the alert rules refer to)
 #   - migration_output/platform-alert-rules.yaml (new rules with migration_status: shadow)
 #   - migration_output/prefix-mapping.yaml (old_query ↔ new_query mapping)
 
-# 2.2 Deploy new rules (shadow state)
-kubectl apply -f migration_output/platform-alert-rules.yaml
+# 2.2 Deploy new rules (shadow state): both files are plain Prometheus rule YAML,
+#     wrap them in a ConfigMap mounted into Prometheus' rule volume (see threshold-exporter README §Deployment)
+kubectl create configmap prometheus-rules-migration -n monitoring \
+  --from-file=migration_output/platform-recording-rules.yaml \
+  --from-file=migration_output/platform-alert-rules.yaml \
+  --dry-run=client -o yaml | kubectl apply -f -
 
 # 2.3 Update Alertmanager to intercept shadow alerts
 kubectl patch configmap alertmanager-config -n monitoring \
@@ -446,7 +451,7 @@ Before starting migration:
 
 - [ ] Current config backed up (`conf.d.bak`, `alertmanager.yml.bak`)
 - [ ] `validate_config.py` passes
-- [ ] `onboard_platform.py` complete, `onboard-hints.json` reviewed
+- [ ] `onboard_platform.py` complete, `phase2-rules/migration-plan.csv` reviewed
 - [ ] `migrate_rule.py` complete, new rules deployed
 - [ ] Alertmanager shadow route deployed
 - [ ] Prometheus reload complete
