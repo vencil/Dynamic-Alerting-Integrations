@@ -1,161 +1,168 @@
 # cli-contract-baseline.yaml — 既有內容票在 check_cli_contract 下的紅（#1379）。
-# 每列一個 (file, command, verdict, token)；同鍵的所有 finding 都被壓下。
-# 修好一處就刪一列：零命中的列是 stale 硬錯。ticket 必須是 #NNNN。
+# 每列一個 (file, command, verdict, token)，count = 該鍵在該檔的 finding 數；
+# 比對是集合相等：少於 count 是 stale 硬錯、多出來的是新紅。
+# 修好一處就降 count（歸零就刪列）。ticket 必須是 #NNNN。
 # 產生：python3 scripts/tools/lint/check_cli_contract.py --write-baseline
 entries:
-  - {file: docs/cli-reference.en.md, command: analyze-gaps, verdict: V3, token: "--json-output", ticket: "#1619"}
-  - {file: docs/cli-reference.en.md, command: config-diff, verdict: V3, token: "--summary-only", ticket: "#1619"}
-  - {file: docs/cli-reference.en.md, command: deprecate, verdict: V3, token: "--dry-run", ticket: "#1619"}
-  - {file: docs/cli-reference.en.md, command: deprecate, verdict: V3, token: "--reason", ticket: "#1379"}
-  - {file: docs/cli-reference.en.md, command: diagnose, verdict: V3, token: "--namespace", ticket: "#1379"}
-  - {file: docs/cli-reference.en.md, command: lint, verdict: V3, token: "--json-output", ticket: "#1619"}
-  - {file: docs/cli-reference.en.md, command: lint, verdict: V3, token: "--strict", ticket: "#1619"}
-  - {file: docs/cli-reference.en.md, command: maintenance-scheduler, verdict: V1, token: "--timezone", ticket: "#1513"}
-  - {file: docs/cli-reference.en.md, command: maintenance-scheduler, verdict: V1, token: "-o", ticket: "#1513"}
-  - {file: docs/cli-reference.en.md, command: maintenance-scheduler, verdict: V3, token: "--output", ticket: "#1379"}
-  - {file: docs/cli-reference.en.md, command: maintenance-scheduler, verdict: V3, token: "--timezone", ticket: "#1379"}
-  - {file: docs/cli-reference.en.md, command: offboard, verdict: V3, token: "--backup", ticket: "#1379"}
-  - {file: docs/cli-reference.en.md, command: offboard, verdict: V3, token: "--cleanup-rules", ticket: "#1619"}
-  - {file: docs/cli-reference.en.md, command: offboard, verdict: V3, token: "--dry-run", ticket: "#1619"}
-  - {file: docs/cli-reference.en.md, command: onboard, verdict: V2, token: "--output", ticket: "#1514"}
-  - {file: docs/cli-reference.en.md, command: operator-generate, verdict: V1, token: "--apply", ticket: "#1513"}
-  - {file: docs/cli-reference.en.md, command: operator-generate, verdict: V1, token: "--split", ticket: "#1513"}
-  - {file: docs/cli-reference.en.md, command: operator-generate, verdict: V1, token: "-o", ticket: "#1513"}
-  - {file: docs/cli-reference.en.md, command: operator-generate, verdict: V3, token: "--apply", ticket: "#1619"}
-  - {file: docs/cli-reference.en.md, command: operator-generate, verdict: V3, token: "--include-servicemonitor", ticket: "#1619"}
-  - {file: docs/cli-reference.en.md, command: operator-generate, verdict: V3, token: "--split", ticket: "#1619"}
-  - {file: docs/cli-reference.en.md, command: patch-config, verdict: V1, token: "--dry-run", ticket: "#1513"}
-  - {file: docs/cli-reference.en.md, command: patch-config, verdict: V1, token: "--yes", ticket: "#1513"}
-  - {file: docs/cli-reference.en.md, command: patch-config, verdict: V3, token: "--configmap", ticket: "#1379"}
-  - {file: docs/cli-reference.en.md, command: patch-config, verdict: V3, token: "--dry-run", ticket: "#1619"}
-  - {file: docs/cli-reference.en.md, command: patch-config, verdict: V3, token: "--namespace", ticket: "#1379"}
-  - {file: docs/cli-reference.en.md, command: patch-config, verdict: V3, token: "--yes", ticket: "#1619"}
-  - {file: docs/cli-reference.en.md, command: rule-pack-split, verdict: V1, token: "--scenario", ticket: "#1513"}
-  - {file: docs/cli-reference.en.md, command: rule-pack-split, verdict: V3, token: "--scenario", ticket: "#1619"}
-  - {file: docs/cli-reference.md, command: analyze-gaps, verdict: V3, token: "--json-output", ticket: "#1619"}
-  - {file: docs/cli-reference.md, command: config-diff, verdict: V3, token: "--summary-only", ticket: "#1619"}
-  - {file: docs/cli-reference.md, command: deprecate, verdict: V3, token: "--dry-run", ticket: "#1619"}
-  - {file: docs/cli-reference.md, command: deprecate, verdict: V3, token: "--reason", ticket: "#1379"}
-  - {file: docs/cli-reference.md, command: diagnose, verdict: V3, token: "--namespace", ticket: "#1379"}
-  - {file: docs/cli-reference.md, command: lint, verdict: V3, token: "--json-output", ticket: "#1619"}
-  - {file: docs/cli-reference.md, command: lint, verdict: V3, token: "--strict", ticket: "#1619"}
-  - {file: docs/cli-reference.md, command: maintenance-scheduler, verdict: V1, token: "--timezone", ticket: "#1513"}
-  - {file: docs/cli-reference.md, command: maintenance-scheduler, verdict: V1, token: "-o", ticket: "#1513"}
-  - {file: docs/cli-reference.md, command: maintenance-scheduler, verdict: V3, token: "--output", ticket: "#1379"}
-  - {file: docs/cli-reference.md, command: maintenance-scheduler, verdict: V3, token: "--timezone", ticket: "#1379"}
-  - {file: docs/cli-reference.md, command: offboard, verdict: V3, token: "--backup", ticket: "#1379"}
-  - {file: docs/cli-reference.md, command: offboard, verdict: V3, token: "--cleanup-rules", ticket: "#1619"}
-  - {file: docs/cli-reference.md, command: offboard, verdict: V3, token: "--dry-run", ticket: "#1619"}
-  - {file: docs/cli-reference.md, command: onboard, verdict: V2, token: "--output", ticket: "#1514"}
-  - {file: docs/cli-reference.md, command: patch-config, verdict: V1, token: "--dry-run", ticket: "#1513"}
-  - {file: docs/cli-reference.md, command: patch-config, verdict: V1, token: "--yes", ticket: "#1513"}
-  - {file: docs/cli-reference.md, command: patch-config, verdict: V3, token: "--configmap", ticket: "#1379"}
-  - {file: docs/cli-reference.md, command: patch-config, verdict: V3, token: "--dry-run", ticket: "#1619"}
-  - {file: docs/cli-reference.md, command: patch-config, verdict: V3, token: "--namespace", ticket: "#1379"}
-  - {file: docs/cli-reference.md, command: patch-config, verdict: V3, token: "--yes", ticket: "#1619"}
-  - {file: docs/cli-reference.md, command: rule-pack-split, verdict: V1, token: "--scenario", ticket: "#1513"}
-  - {file: docs/cli-reference.md, command: rule-pack-split, verdict: V3, token: "--scenario", ticket: "#1619"}
-  - {file: docs/getting-started/for-domain-experts.en.md, command: backtest, verdict: V1, token: "--comparison-metric", ticket: "#1379"}
-  - {file: docs/getting-started/for-domain-experts.en.md, command: backtest, verdict: V1, token: "--look-back", ticket: "#1379"}
-  - {file: docs/getting-started/for-domain-experts.en.md, command: backtest, verdict: V1, token: "--rule-pack", ticket: "#1379"}
-  - {file: docs/getting-started/for-domain-experts.en.md, command: lint, verdict: V1, token: "--check", ticket: "#1379"}
-  - {file: docs/getting-started/for-domain-experts.en.md, command: lint, verdict: V1, token: "--config-dir", ticket: "#1379"}
-  - {file: docs/getting-started/for-domain-experts.en.md, command: lint, verdict: V1, token: "--deny-list", ticket: "#1379"}
-  - {file: docs/getting-started/for-domain-experts.en.md, command: lint, verdict: V1, token: "--naming-convention", ticket: "#1379"}
-  - {file: docs/getting-started/for-domain-experts.en.md, command: lint, verdict: V1, token: "--rule-pack", ticket: "#1379"}
-  - {file: docs/getting-started/for-domain-experts.en.md, command: migrate, verdict: V1, token: "--input-rule", ticket: "#1379"}
-  - {file: docs/getting-started/for-domain-experts.en.md, command: migrate, verdict: V1, token: "--output-rule-pack", ticket: "#1379"}
-  - {file: docs/getting-started/for-domain-experts.en.md, command: migrate, verdict: V1, token: "--tenant-prefix", ticket: "#1379"}
-  - {file: docs/getting-started/for-domain-experts.en.md, command: onboard, verdict: V1, token: "--existing-prometheus-rules", ticket: "#1379"}
-  - {file: docs/getting-started/for-domain-experts.en.md, command: onboard, verdict: V1, token: "--output-hints", ticket: "#1379"}
-  - {file: docs/getting-started/for-domain-experts.en.md, command: validate, verdict: V1, token: "--compare-range", ticket: "#1379"}
-  - {file: docs/getting-started/for-domain-experts.en.md, command: validate, verdict: V1, token: "--new-prometheus-url", ticket: "#1379"}
-  - {file: docs/getting-started/for-domain-experts.en.md, command: validate, verdict: V1, token: "--old-prometheus-url", ticket: "#1379"}
-  - {file: docs/getting-started/for-domain-experts.md, command: backtest, verdict: V1, token: "--comparison-metric", ticket: "#1379"}
-  - {file: docs/getting-started/for-domain-experts.md, command: backtest, verdict: V1, token: "--look-back", ticket: "#1379"}
-  - {file: docs/getting-started/for-domain-experts.md, command: backtest, verdict: V1, token: "--rule-pack", ticket: "#1379"}
-  - {file: docs/getting-started/for-domain-experts.md, command: lint, verdict: V1, token: "--check", ticket: "#1379"}
-  - {file: docs/getting-started/for-domain-experts.md, command: lint, verdict: V1, token: "--config-dir", ticket: "#1379"}
-  - {file: docs/getting-started/for-domain-experts.md, command: lint, verdict: V1, token: "--deny-list", ticket: "#1379"}
-  - {file: docs/getting-started/for-domain-experts.md, command: lint, verdict: V1, token: "--naming-convention", ticket: "#1379"}
-  - {file: docs/getting-started/for-domain-experts.md, command: lint, verdict: V1, token: "--rule-pack", ticket: "#1379"}
-  - {file: docs/getting-started/for-domain-experts.md, command: migrate, verdict: V1, token: "--input-rule", ticket: "#1379"}
-  - {file: docs/getting-started/for-domain-experts.md, command: migrate, verdict: V1, token: "--output-rule-pack", ticket: "#1379"}
-  - {file: docs/getting-started/for-domain-experts.md, command: migrate, verdict: V1, token: "--tenant-prefix", ticket: "#1379"}
-  - {file: docs/getting-started/for-domain-experts.md, command: onboard, verdict: V1, token: "--existing-prometheus-rules", ticket: "#1379"}
-  - {file: docs/getting-started/for-domain-experts.md, command: onboard, verdict: V1, token: "--output-hints", ticket: "#1379"}
-  - {file: docs/getting-started/for-domain-experts.md, command: validate, verdict: V1, token: "--compare-range", ticket: "#1379"}
-  - {file: docs/getting-started/for-domain-experts.md, command: validate, verdict: V1, token: "--new-prometheus-url", ticket: "#1379"}
-  - {file: docs/getting-started/for-domain-experts.md, command: validate, verdict: V1, token: "--old-prometheus-url", ticket: "#1379"}
-  - {file: docs/integration/troubleshooting-checklist.en.md, command: onboard, verdict: V1, token: "--analyze", ticket: "#1381"}
-  - {file: docs/integration/troubleshooting-checklist.en.md, command: onboard, verdict: V1, token: "--cluster-name", ticket: "#1381"}
-  - {file: docs/integration/troubleshooting-checklist.en.md, command: onboard, verdict: V1, token: "--markdown-summary", ticket: "#1381"}
-  - {file: docs/integration/troubleshooting-checklist.en.md, command: onboard, verdict: V2, token: "--output", ticket: "#1514"}
-  - {file: docs/integration/troubleshooting-checklist.md, command: onboard, verdict: V1, token: "--analyze", ticket: "#1381"}
-  - {file: docs/integration/troubleshooting-checklist.md, command: onboard, verdict: V1, token: "--cluster-name", ticket: "#1381"}
-  - {file: docs/integration/troubleshooting-checklist.md, command: onboard, verdict: V1, token: "--markdown-summary", ticket: "#1381"}
-  - {file: docs/integration/troubleshooting-checklist.md, command: onboard, verdict: V2, token: "--output", ticket: "#1514"}
-  - {file: docs/scenarios/hands-on-lab.en.md, command: validate-config, verdict: V1, token: "--ci", ticket: "#1380"}
-  - {file: docs/scenarios/hands-on-lab.md, command: validate-config, verdict: V1, token: "--ci", ticket: "#1380"}
-  - {file: docs/scenarios/incremental-migration-playbook.en.md, command: alert-quality, verdict: V1, token: "--lookback", ticket: "#1513"}
-  - {file: docs/scenarios/incremental-migration-playbook.en.md, command: batch-diagnose, verdict: V1, token: "--alertmanager", ticket: "#1513"}
-  - {file: docs/scenarios/incremental-migration-playbook.en.md, command: batch-diagnose, verdict: V1, token: "--config-dir", ticket: "#1513"}
-  - {file: docs/scenarios/incremental-migration-playbook.en.md, command: blind-spot, verdict: V2, token: "--json", ticket: "#1514"}
-  - {file: docs/scenarios/incremental-migration-playbook.en.md, command: cutover, verdict: V1, token: "--alertmanager", ticket: "#1513"}
-  - {file: docs/scenarios/incremental-migration-playbook.en.md, command: cutover, verdict: V1, token: "--execute", ticket: "#1513"}
-  - {file: docs/scenarios/incremental-migration-playbook.en.md, command: cutover, verdict: V1, token: "--rollback", ticket: "#1513"}
-  - {file: docs/scenarios/incremental-migration-playbook.en.md, command: cutover, verdict: V1, token: "--verbose", ticket: "#1513"}
-  - {file: docs/scenarios/incremental-migration-playbook.en.md, command: diagnose, verdict: V1, token: "--alertmanager", ticket: "#1513"}
-  - {file: docs/scenarios/incremental-migration-playbook.en.md, command: diagnose, verdict: V1, token: "--tenant", ticket: "#1513"}
-  - {file: docs/scenarios/incremental-migration-playbook.en.md, command: generate-routes, verdict: V1, token: "--tenant", ticket: "#1513"}
-  - {file: docs/scenarios/incremental-migration-playbook.en.md, command: offboard, verdict: V1, token: "--tenant", ticket: "#1513"}
-  - {file: docs/scenarios/incremental-migration-playbook.en.md, command: onboard, verdict: V1, token: "--prometheus-rules", ticket: "#1513"}
-  - {file: docs/scenarios/incremental-migration-playbook.en.md, command: onboard, verdict: V2, token: "--output", ticket: "#1514"}
-  - {file: docs/scenarios/incremental-migration-playbook.en.md, command: shadow-verify, verdict: V1, token: "--config-dir", ticket: "#1513"}
-  - {file: docs/scenarios/incremental-migration-playbook.en.md, command: validate-config, verdict: V1, token: "--ci", ticket: "#1380"}
-  - {file: docs/scenarios/incremental-migration-playbook.md, command: alert-quality, verdict: V1, token: "--lookback", ticket: "#1513"}
-  - {file: docs/scenarios/incremental-migration-playbook.md, command: batch-diagnose, verdict: V1, token: "--alertmanager", ticket: "#1513"}
-  - {file: docs/scenarios/incremental-migration-playbook.md, command: batch-diagnose, verdict: V1, token: "--config-dir", ticket: "#1513"}
-  - {file: docs/scenarios/incremental-migration-playbook.md, command: blind-spot, verdict: V2, token: "--json", ticket: "#1514"}
-  - {file: docs/scenarios/incremental-migration-playbook.md, command: cutover, verdict: V1, token: "--alertmanager", ticket: "#1513"}
-  - {file: docs/scenarios/incremental-migration-playbook.md, command: cutover, verdict: V1, token: "--execute", ticket: "#1513"}
-  - {file: docs/scenarios/incremental-migration-playbook.md, command: cutover, verdict: V1, token: "--rollback", ticket: "#1513"}
-  - {file: docs/scenarios/incremental-migration-playbook.md, command: cutover, verdict: V1, token: "--verbose", ticket: "#1513"}
-  - {file: docs/scenarios/incremental-migration-playbook.md, command: diagnose, verdict: V1, token: "--alertmanager", ticket: "#1513"}
-  - {file: docs/scenarios/incremental-migration-playbook.md, command: diagnose, verdict: V1, token: "--tenant", ticket: "#1513"}
-  - {file: docs/scenarios/incremental-migration-playbook.md, command: generate-routes, verdict: V1, token: "--tenant", ticket: "#1513"}
-  - {file: docs/scenarios/incremental-migration-playbook.md, command: offboard, verdict: V1, token: "--tenant", ticket: "#1513"}
-  - {file: docs/scenarios/incremental-migration-playbook.md, command: onboard, verdict: V1, token: "--prometheus-rules", ticket: "#1513"}
-  - {file: docs/scenarios/incremental-migration-playbook.md, command: onboard, verdict: V2, token: "--output", ticket: "#1514"}
-  - {file: docs/scenarios/incremental-migration-playbook.md, command: shadow-verify, verdict: V1, token: "--config-dir", ticket: "#1513"}
-  - {file: docs/scenarios/incremental-migration-playbook.md, command: validate-config, verdict: V1, token: "--ci", ticket: "#1380"}
-  - {file: docs/scenarios/multi-system-migration-playbook.en.md, command: onboard, verdict: V1, token: "--analyze", ticket: "#1381"}
-  - {file: docs/scenarios/multi-system-migration-playbook.en.md, command: onboard, verdict: V1, token: "--markdown-summary", ticket: "#1381"}
-  - {file: docs/scenarios/multi-system-migration-playbook.en.md, command: onboard, verdict: V2, token: "--output", ticket: "#1514"}
-  - {file: docs/scenarios/multi-system-migration-playbook.md, command: onboard, verdict: V1, token: "--analyze", ticket: "#1381"}
-  - {file: docs/scenarios/multi-system-migration-playbook.md, command: onboard, verdict: V1, token: "--markdown-summary", ticket: "#1381"}
-  - {file: docs/scenarios/multi-system-migration-playbook.md, command: onboard, verdict: V2, token: "--output", ticket: "#1514"}
-  - {file: docs/scenarios/shadow-monitoring-cutover.en.md, command: batch-diagnose, verdict: V1, token: "--check-shadow-removal", ticket: "#1379"}
-  - {file: docs/scenarios/shadow-monitoring-cutover.en.md, command: cutover, verdict: V1, token: "--rollback", ticket: "#1513"}
-  - {file: docs/scenarios/shadow-monitoring-cutover.en.md, command: migrate, verdict: V1, token: "--input", ticket: "#1379"}
-  - {file: docs/scenarios/shadow-monitoring-cutover.en.md, command: migrate, verdict: V1, token: "--tenant", ticket: "#1379"}
-  - {file: docs/scenarios/shadow-monitoring-cutover.en.md, command: migrate, verdict: V2, token: "--output", ticket: "#1379"}
-  - {file: docs/scenarios/shadow-monitoring-cutover.en.md, command: onboard, verdict: V1, token: "--legacy-config", ticket: "#1379"}
-  - {file: docs/scenarios/shadow-monitoring-cutover.en.md, command: onboard, verdict: V2, token: "--output", ticket: "#1514"}
-  - {file: docs/scenarios/shadow-monitoring-cutover.md, command: batch-diagnose, verdict: V1, token: "--check-shadow-removal", ticket: "#1379"}
-  - {file: docs/scenarios/shadow-monitoring-cutover.md, command: cutover, verdict: V1, token: "--rollback", ticket: "#1513"}
-  - {file: docs/scenarios/shadow-monitoring-cutover.md, command: migrate, verdict: V1, token: "--input", ticket: "#1379"}
-  - {file: docs/scenarios/shadow-monitoring-cutover.md, command: migrate, verdict: V1, token: "--tenant", ticket: "#1379"}
-  - {file: docs/scenarios/shadow-monitoring-cutover.md, command: migrate, verdict: V2, token: "--output", ticket: "#1379"}
-  - {file: docs/scenarios/shadow-monitoring-cutover.md, command: onboard, verdict: V1, token: "--legacy-config", ticket: "#1379"}
-  - {file: docs/scenarios/shadow-monitoring-cutover.md, command: onboard, verdict: V2, token: "--output", ticket: "#1514"}
-  - {file: docs/scenarios/tenant-lifecycle.en.md, command: offboard, verdict: V1, token: "--dry-run", ticket: "#1513"}
-  - {file: docs/scenarios/tenant-lifecycle.en.md, command: patch-config, verdict: V1, token: "--set", ticket: "#1513"}
-  - {file: docs/scenarios/tenant-lifecycle.en.md, command: patch-config, verdict: V1, token: "--tenant", ticket: "#1513"}
-  - {file: docs/scenarios/tenant-lifecycle.en.md, command: scaffold, verdict: V2, token: "--output", ticket: "#1514"}
-  - {file: docs/scenarios/tenant-lifecycle.md, command: offboard, verdict: V1, token: "--dry-run", ticket: "#1513"}
-  - {file: docs/scenarios/tenant-lifecycle.md, command: patch-config, verdict: V1, token: "--set", ticket: "#1513"}
-  - {file: docs/scenarios/tenant-lifecycle.md, command: patch-config, verdict: V1, token: "--tenant", ticket: "#1513"}
-  - {file: docs/scenarios/tenant-lifecycle.md, command: scaffold, verdict: V2, token: "--output", ticket: "#1514"}
-  - {file: docs/troubleshooting.en.md, command: operator-generate, verdict: V1, token: "--tenant", ticket: "#1513"}
-  - {file: docs/troubleshooting.md, command: operator-generate, verdict: V1, token: "--tenant", ticket: "#1513"}
+  - {file: docs/cli-reference.en.md, command: analyze-gaps, verdict: V3, token: "--json-output", count: 1, ticket: "#1619"}
+  - {file: docs/cli-reference.en.md, command: config-diff, verdict: V3, token: "--summary-only", count: 1, ticket: "#1619"}
+  - {file: docs/cli-reference.en.md, command: deprecate, verdict: V3, token: "--dry-run", count: 1, ticket: "#1619"}
+  - {file: docs/cli-reference.en.md, command: deprecate, verdict: V3, token: "--reason", count: 1, ticket: "#1818"}
+  - {file: docs/cli-reference.en.md, command: diagnose, verdict: V3, token: "--namespace", count: 1, ticket: "#1818"}
+  - {file: docs/cli-reference.en.md, command: lint, verdict: V3, token: "--json-output", count: 1, ticket: "#1619"}
+  - {file: docs/cli-reference.en.md, command: lint, verdict: V3, token: "--strict", count: 1, ticket: "#1619"}
+  - {file: docs/cli-reference.en.md, command: maintenance-scheduler, verdict: V1, token: "--timezone", count: 1, ticket: "#1513"}
+  - {file: docs/cli-reference.en.md, command: maintenance-scheduler, verdict: V1, token: "-o", count: 1, ticket: "#1513"}
+  - {file: docs/cli-reference.en.md, command: maintenance-scheduler, verdict: V3, token: "--output", count: 1, ticket: "#1818"}
+  - {file: docs/cli-reference.en.md, command: maintenance-scheduler, verdict: V3, token: "--timezone", count: 1, ticket: "#1818"}
+  - {file: docs/cli-reference.en.md, command: offboard, verdict: V3, token: "--backup", count: 1, ticket: "#1818"}
+  - {file: docs/cli-reference.en.md, command: offboard, verdict: V3, token: "--cleanup-rules", count: 1, ticket: "#1619"}
+  - {file: docs/cli-reference.en.md, command: offboard, verdict: V3, token: "--dry-run", count: 1, ticket: "#1619"}
+  - {file: docs/cli-reference.en.md, command: onboard, verdict: V2, token: "--output", count: 1, ticket: "#1514"}
+  - {file: docs/cli-reference.en.md, command: operator-generate, verdict: V1, token: "--apply", count: 1, ticket: "#1513"}
+  - {file: docs/cli-reference.en.md, command: operator-generate, verdict: V1, token: "--split", count: 1, ticket: "#1513"}
+  - {file: docs/cli-reference.en.md, command: operator-generate, verdict: V1, token: "-o", count: 1, ticket: "#1513"}
+  - {file: docs/cli-reference.en.md, command: operator-generate, verdict: V3, token: "--apply", count: 1, ticket: "#1619"}
+  - {file: docs/cli-reference.en.md, command: operator-generate, verdict: V3, token: "--include-servicemonitor", count: 1, ticket: "#1619"}
+  - {file: docs/cli-reference.en.md, command: operator-generate, verdict: V3, token: "--split", count: 1, ticket: "#1619"}
+  - {file: docs/cli-reference.en.md, command: patch-config, verdict: V1, token: "--dry-run", count: 1, ticket: "#1513"}
+  - {file: docs/cli-reference.en.md, command: patch-config, verdict: V1, token: "--yes", count: 1, ticket: "#1513"}
+  - {file: docs/cli-reference.en.md, command: patch-config, verdict: V3, token: "--configmap", count: 1, ticket: "#1818"}
+  - {file: docs/cli-reference.en.md, command: patch-config, verdict: V3, token: "--dry-run", count: 1, ticket: "#1619"}
+  - {file: docs/cli-reference.en.md, command: patch-config, verdict: V3, token: "--namespace", count: 1, ticket: "#1818"}
+  - {file: docs/cli-reference.en.md, command: patch-config, verdict: V3, token: "--yes", count: 1, ticket: "#1619"}
+  - {file: docs/cli-reference.en.md, command: rule-pack-split, verdict: V1, token: "--scenario", count: 1, ticket: "#1513"}
+  - {file: docs/cli-reference.en.md, command: rule-pack-split, verdict: V3, token: "--scenario", count: 1, ticket: "#1619"}
+  - {file: docs/cli-reference.md, command: analyze-gaps, verdict: V3, token: "--json-output", count: 1, ticket: "#1619"}
+  - {file: docs/cli-reference.md, command: config-diff, verdict: V3, token: "--summary-only", count: 1, ticket: "#1619"}
+  - {file: docs/cli-reference.md, command: deprecate, verdict: V3, token: "--dry-run", count: 1, ticket: "#1619"}
+  - {file: docs/cli-reference.md, command: deprecate, verdict: V3, token: "--reason", count: 1, ticket: "#1818"}
+  - {file: docs/cli-reference.md, command: diagnose, verdict: V3, token: "--namespace", count: 1, ticket: "#1818"}
+  - {file: docs/cli-reference.md, command: lint, verdict: V3, token: "--json-output", count: 1, ticket: "#1619"}
+  - {file: docs/cli-reference.md, command: lint, verdict: V3, token: "--strict", count: 1, ticket: "#1619"}
+  - {file: docs/cli-reference.md, command: maintenance-scheduler, verdict: V1, token: "--timezone", count: 1, ticket: "#1513"}
+  - {file: docs/cli-reference.md, command: maintenance-scheduler, verdict: V1, token: "-o", count: 1, ticket: "#1513"}
+  - {file: docs/cli-reference.md, command: maintenance-scheduler, verdict: V3, token: "--output", count: 1, ticket: "#1818"}
+  - {file: docs/cli-reference.md, command: maintenance-scheduler, verdict: V3, token: "--timezone", count: 1, ticket: "#1818"}
+  - {file: docs/cli-reference.md, command: offboard, verdict: V3, token: "--backup", count: 1, ticket: "#1818"}
+  - {file: docs/cli-reference.md, command: offboard, verdict: V3, token: "--cleanup-rules", count: 1, ticket: "#1619"}
+  - {file: docs/cli-reference.md, command: offboard, verdict: V3, token: "--dry-run", count: 1, ticket: "#1619"}
+  - {file: docs/cli-reference.md, command: onboard, verdict: V2, token: "--output", count: 1, ticket: "#1514"}
+  - {file: docs/cli-reference.md, command: patch-config, verdict: V1, token: "--dry-run", count: 1, ticket: "#1513"}
+  - {file: docs/cli-reference.md, command: patch-config, verdict: V1, token: "--yes", count: 1, ticket: "#1513"}
+  - {file: docs/cli-reference.md, command: patch-config, verdict: V3, token: "--configmap", count: 1, ticket: "#1818"}
+  - {file: docs/cli-reference.md, command: patch-config, verdict: V3, token: "--dry-run", count: 1, ticket: "#1619"}
+  - {file: docs/cli-reference.md, command: patch-config, verdict: V3, token: "--namespace", count: 1, ticket: "#1818"}
+  - {file: docs/cli-reference.md, command: patch-config, verdict: V3, token: "--yes", count: 1, ticket: "#1619"}
+  - {file: docs/cli-reference.md, command: rule-pack-split, verdict: V1, token: "--scenario", count: 1, ticket: "#1513"}
+  - {file: docs/cli-reference.md, command: rule-pack-split, verdict: V3, token: "--scenario", count: 1, ticket: "#1619"}
+  - {file: docs/getting-started/for-domain-experts.en.md, command: backtest, verdict: V1, token: "--comparison-metric", count: 1, ticket: "#1818"}
+  - {file: docs/getting-started/for-domain-experts.en.md, command: backtest, verdict: V1, token: "--look-back", count: 1, ticket: "#1818"}
+  - {file: docs/getting-started/for-domain-experts.en.md, command: backtest, verdict: V1, token: "--rule-pack", count: 1, ticket: "#1818"}
+  - {file: docs/getting-started/for-domain-experts.en.md, command: lint, verdict: V1, token: "--check", count: 1, ticket: "#1818"}
+  - {file: docs/getting-started/for-domain-experts.en.md, command: lint, verdict: V1, token: "--config-dir", count: 1, ticket: "#1818"}
+  - {file: docs/getting-started/for-domain-experts.en.md, command: lint, verdict: V1, token: "--deny-list", count: 1, ticket: "#1818"}
+  - {file: docs/getting-started/for-domain-experts.en.md, command: lint, verdict: V1, token: "--naming-convention", count: 1, ticket: "#1818"}
+  - {file: docs/getting-started/for-domain-experts.en.md, command: lint, verdict: V1, token: "--rule-pack", count: 1, ticket: "#1818"}
+  - {file: docs/getting-started/for-domain-experts.en.md, command: migrate, verdict: V1, token: "--input-rule", count: 1, ticket: "#1818"}
+  - {file: docs/getting-started/for-domain-experts.en.md, command: migrate, verdict: V1, token: "--output-rule-pack", count: 1, ticket: "#1818"}
+  - {file: docs/getting-started/for-domain-experts.en.md, command: migrate, verdict: V1, token: "--tenant-prefix", count: 1, ticket: "#1818"}
+  - {file: docs/getting-started/for-domain-experts.en.md, command: onboard, verdict: V1, token: "--existing-prometheus-rules", count: 1, ticket: "#1818"}
+  - {file: docs/getting-started/for-domain-experts.en.md, command: onboard, verdict: V1, token: "--output-hints", count: 1, ticket: "#1818"}
+  - {file: docs/getting-started/for-domain-experts.en.md, command: validate, verdict: V1, token: "--compare-range", count: 1, ticket: "#1818"}
+  - {file: docs/getting-started/for-domain-experts.en.md, command: validate, verdict: V1, token: "--new-prometheus-url", count: 1, ticket: "#1818"}
+  - {file: docs/getting-started/for-domain-experts.en.md, command: validate, verdict: V1, token: "--old-prometheus-url", count: 1, ticket: "#1818"}
+  - {file: docs/getting-started/for-domain-experts.md, command: backtest, verdict: V1, token: "--comparison-metric", count: 1, ticket: "#1818"}
+  - {file: docs/getting-started/for-domain-experts.md, command: backtest, verdict: V1, token: "--look-back", count: 1, ticket: "#1818"}
+  - {file: docs/getting-started/for-domain-experts.md, command: backtest, verdict: V1, token: "--rule-pack", count: 1, ticket: "#1818"}
+  - {file: docs/getting-started/for-domain-experts.md, command: lint, verdict: V1, token: "--check", count: 1, ticket: "#1818"}
+  - {file: docs/getting-started/for-domain-experts.md, command: lint, verdict: V1, token: "--config-dir", count: 1, ticket: "#1818"}
+  - {file: docs/getting-started/for-domain-experts.md, command: lint, verdict: V1, token: "--deny-list", count: 1, ticket: "#1818"}
+  - {file: docs/getting-started/for-domain-experts.md, command: lint, verdict: V1, token: "--naming-convention", count: 1, ticket: "#1818"}
+  - {file: docs/getting-started/for-domain-experts.md, command: lint, verdict: V1, token: "--rule-pack", count: 1, ticket: "#1818"}
+  - {file: docs/getting-started/for-domain-experts.md, command: migrate, verdict: V1, token: "--input-rule", count: 1, ticket: "#1818"}
+  - {file: docs/getting-started/for-domain-experts.md, command: migrate, verdict: V1, token: "--output-rule-pack", count: 1, ticket: "#1818"}
+  - {file: docs/getting-started/for-domain-experts.md, command: migrate, verdict: V1, token: "--tenant-prefix", count: 1, ticket: "#1818"}
+  - {file: docs/getting-started/for-domain-experts.md, command: onboard, verdict: V1, token: "--existing-prometheus-rules", count: 1, ticket: "#1818"}
+  - {file: docs/getting-started/for-domain-experts.md, command: onboard, verdict: V1, token: "--output-hints", count: 1, ticket: "#1818"}
+  - {file: docs/getting-started/for-domain-experts.md, command: validate, verdict: V1, token: "--compare-range", count: 1, ticket: "#1818"}
+  - {file: docs/getting-started/for-domain-experts.md, command: validate, verdict: V1, token: "--new-prometheus-url", count: 1, ticket: "#1818"}
+  - {file: docs/getting-started/for-domain-experts.md, command: validate, verdict: V1, token: "--old-prometheus-url", count: 1, ticket: "#1818"}
+  - {file: docs/integration/troubleshooting-checklist.en.md, command: onboard, verdict: V1, token: "--analyze", count: 9, ticket: "#1381"}
+  - {file: docs/integration/troubleshooting-checklist.en.md, command: onboard, verdict: V1, token: "--cluster-name", count: 1, ticket: "#1381"}
+  - {file: docs/integration/troubleshooting-checklist.en.md, command: onboard, verdict: V1, token: "--markdown-summary", count: 1, ticket: "#1381"}
+  - {file: docs/integration/troubleshooting-checklist.en.md, command: onboard, verdict: V2, token: "--output", count: 5, ticket: "#1514"}
+  - {file: docs/integration/troubleshooting-checklist.md, command: onboard, verdict: V1, token: "--analyze", count: 9, ticket: "#1381"}
+  - {file: docs/integration/troubleshooting-checklist.md, command: onboard, verdict: V1, token: "--cluster-name", count: 1, ticket: "#1381"}
+  - {file: docs/integration/troubleshooting-checklist.md, command: onboard, verdict: V1, token: "--markdown-summary", count: 1, ticket: "#1381"}
+  - {file: docs/integration/troubleshooting-checklist.md, command: onboard, verdict: V2, token: "--output", count: 5, ticket: "#1514"}
+  - {file: docs/scenarios/hands-on-lab.en.md, command: validate-config, verdict: V1, token: "--ci", count: 1, ticket: "#1380"}
+  - {file: docs/scenarios/hands-on-lab.md, command: validate-config, verdict: V1, token: "--ci", count: 1, ticket: "#1380"}
+  - {file: docs/scenarios/incremental-migration-playbook.en.md, command: alert-quality, verdict: V1, token: "--lookback", count: 1, ticket: "#1513"}
+  - {file: docs/scenarios/incremental-migration-playbook.en.md, command: batch-diagnose, verdict: V1, token: "--alertmanager", count: 1, ticket: "#1513"}
+  - {file: docs/scenarios/incremental-migration-playbook.en.md, command: batch-diagnose, verdict: V1, token: "--config-dir", count: 1, ticket: "#1513"}
+  - {file: docs/scenarios/incremental-migration-playbook.en.md, command: blind-spot, verdict: V2, token: "--json", count: 1, ticket: "#1514"}
+  - {file: docs/scenarios/incremental-migration-playbook.en.md, command: cutover, verdict: V1, token: "--alertmanager", count: 2, ticket: "#1513"}
+  - {file: docs/scenarios/incremental-migration-playbook.en.md, command: cutover, verdict: V1, token: "--execute", count: 1, ticket: "#1513"}
+  - {file: docs/scenarios/incremental-migration-playbook.en.md, command: cutover, verdict: V1, token: "--rollback", count: 2, ticket: "#1513"}
+  - {file: docs/scenarios/incremental-migration-playbook.en.md, command: cutover, verdict: V1, token: "--verbose", count: 1, ticket: "#1513"}
+  - {file: docs/scenarios/incremental-migration-playbook.en.md, command: diagnose, verdict: V1, token: "--alertmanager", count: 1, ticket: "#1513"}
+  - {file: docs/scenarios/incremental-migration-playbook.en.md, command: diagnose, verdict: V1, token: "--tenant", count: 1, ticket: "#1513"}
+  - {file: docs/scenarios/incremental-migration-playbook.en.md, command: generate-routes, verdict: V1, token: "--tenant", count: 1, ticket: "#1513"}
+  - {file: docs/scenarios/incremental-migration-playbook.en.md, command: offboard, verdict: V1, token: "--tenant", count: 1, ticket: "#1513"}
+  - {file: docs/scenarios/incremental-migration-playbook.en.md, command: onboard, verdict: V1, token: "--prometheus-rules", count: 1, ticket: "#1513"}
+  - {file: docs/scenarios/incremental-migration-playbook.en.md, command: onboard, verdict: V2, token: "--output", count: 1, ticket: "#1514"}
+  - {file: docs/scenarios/incremental-migration-playbook.en.md, command: shadow-verify, verdict: V1, token: "--config-dir", count: 1, ticket: "#1513"}
+  - {file: docs/scenarios/incremental-migration-playbook.en.md, command: validate-config, verdict: V1, token: "--ci", count: 2, ticket: "#1380"}
+  - {file: docs/scenarios/incremental-migration-playbook.md, command: alert-quality, verdict: V1, token: "--lookback", count: 1, ticket: "#1513"}
+  - {file: docs/scenarios/incremental-migration-playbook.md, command: batch-diagnose, verdict: V1, token: "--alertmanager", count: 1, ticket: "#1513"}
+  - {file: docs/scenarios/incremental-migration-playbook.md, command: batch-diagnose, verdict: V1, token: "--config-dir", count: 1, ticket: "#1513"}
+  - {file: docs/scenarios/incremental-migration-playbook.md, command: blind-spot, verdict: V2, token: "--json", count: 1, ticket: "#1514"}
+  - {file: docs/scenarios/incremental-migration-playbook.md, command: cutover, verdict: V1, token: "--alertmanager", count: 2, ticket: "#1513"}
+  - {file: docs/scenarios/incremental-migration-playbook.md, command: cutover, verdict: V1, token: "--execute", count: 1, ticket: "#1513"}
+  - {file: docs/scenarios/incremental-migration-playbook.md, command: cutover, verdict: V1, token: "--rollback", count: 2, ticket: "#1513"}
+  - {file: docs/scenarios/incremental-migration-playbook.md, command: cutover, verdict: V1, token: "--verbose", count: 1, ticket: "#1513"}
+  - {file: docs/scenarios/incremental-migration-playbook.md, command: diagnose, verdict: V1, token: "--alertmanager", count: 1, ticket: "#1513"}
+  - {file: docs/scenarios/incremental-migration-playbook.md, command: diagnose, verdict: V1, token: "--tenant", count: 1, ticket: "#1513"}
+  - {file: docs/scenarios/incremental-migration-playbook.md, command: generate-routes, verdict: V1, token: "--tenant", count: 1, ticket: "#1513"}
+  - {file: docs/scenarios/incremental-migration-playbook.md, command: offboard, verdict: V1, token: "--tenant", count: 1, ticket: "#1513"}
+  - {file: docs/scenarios/incremental-migration-playbook.md, command: onboard, verdict: V1, token: "--prometheus-rules", count: 1, ticket: "#1513"}
+  - {file: docs/scenarios/incremental-migration-playbook.md, command: onboard, verdict: V2, token: "--output", count: 1, ticket: "#1514"}
+  - {file: docs/scenarios/incremental-migration-playbook.md, command: shadow-verify, verdict: V1, token: "--config-dir", count: 1, ticket: "#1513"}
+  - {file: docs/scenarios/incremental-migration-playbook.md, command: tenant, verdict: V0, token: "tenant", count: 1, ticket: "#1818"}
+  - {file: docs/scenarios/incremental-migration-playbook.md, command: validate-config, verdict: V1, token: "--ci", count: 2, ticket: "#1380"}
+  - {file: docs/scenarios/multi-system-migration-playbook.en.md, command: onboard, verdict: V1, token: "--analyze", count: 2, ticket: "#1381"}
+  - {file: docs/scenarios/multi-system-migration-playbook.en.md, command: onboard, verdict: V1, token: "--markdown-summary", count: 1, ticket: "#1381"}
+  - {file: docs/scenarios/multi-system-migration-playbook.en.md, command: onboard, verdict: V2, token: "--output", count: 1, ticket: "#1514"}
+  - {file: docs/scenarios/multi-system-migration-playbook.md, command: onboard, verdict: V1, token: "--analyze", count: 2, ticket: "#1381"}
+  - {file: docs/scenarios/multi-system-migration-playbook.md, command: onboard, verdict: V1, token: "--markdown-summary", count: 1, ticket: "#1381"}
+  - {file: docs/scenarios/multi-system-migration-playbook.md, command: onboard, verdict: V2, token: "--output", count: 1, ticket: "#1514"}
+  - {file: docs/scenarios/shadow-monitoring-cutover.en.md, command: batch-diagnose, verdict: V1, token: "--check-shadow-removal", count: 2, ticket: "#1818"}
+  - {file: docs/scenarios/shadow-monitoring-cutover.en.md, command: cutover, verdict: V1, token: "--rollback", count: 1, ticket: "#1513"}
+  - {file: docs/scenarios/shadow-monitoring-cutover.en.md, command: migrate, verdict: V1, token: "--input", count: 1, ticket: "#1818"}
+  - {file: docs/scenarios/shadow-monitoring-cutover.en.md, command: migrate, verdict: V1, token: "--tenant", count: 1, ticket: "#1818"}
+  - {file: docs/scenarios/shadow-monitoring-cutover.en.md, command: migrate, verdict: V2, token: "--output", count: 1, ticket: "#1818"}
+  - {file: docs/scenarios/shadow-monitoring-cutover.en.md, command: onboard, verdict: V1, token: "--legacy-config", count: 1, ticket: "#1818"}
+  - {file: docs/scenarios/shadow-monitoring-cutover.en.md, command: onboard, verdict: V2, token: "--output", count: 1, ticket: "#1514"}
+  - {file: docs/scenarios/shadow-monitoring-cutover.md, command: batch-diagnose, verdict: V1, token: "--check-shadow-removal", count: 2, ticket: "#1818"}
+  - {file: docs/scenarios/shadow-monitoring-cutover.md, command: cutover, verdict: V1, token: "--rollback", count: 1, ticket: "#1513"}
+  - {file: docs/scenarios/shadow-monitoring-cutover.md, command: migrate, verdict: V1, token: "--input", count: 1, ticket: "#1818"}
+  - {file: docs/scenarios/shadow-monitoring-cutover.md, command: migrate, verdict: V1, token: "--tenant", count: 1, ticket: "#1818"}
+  - {file: docs/scenarios/shadow-monitoring-cutover.md, command: migrate, verdict: V2, token: "--output", count: 1, ticket: "#1818"}
+  - {file: docs/scenarios/shadow-monitoring-cutover.md, command: onboard, verdict: V1, token: "--legacy-config", count: 1, ticket: "#1818"}
+  - {file: docs/scenarios/shadow-monitoring-cutover.md, command: onboard, verdict: V2, token: "--output", count: 1, ticket: "#1514"}
+  - {file: docs/scenarios/staged-adoption-guide.en.md, command: shadow-verify, verdict: V1, token: "--check-subset-overlap", count: 1, ticket: "#1513"}
+  - {file: docs/scenarios/staged-adoption-guide.en.md, command: shadow-verify, verdict: V1, token: "--window", count: 1, ticket: "#1513"}
+  - {file: docs/scenarios/staged-adoption-guide.md, command: shadow-verify, verdict: V1, token: "--check-subset-overlap", count: 1, ticket: "#1513"}
+  - {file: docs/scenarios/staged-adoption-guide.md, command: shadow-verify, verdict: V1, token: "--window", count: 1, ticket: "#1513"}
+  - {file: docs/scenarios/tenant-lifecycle.en.md, command: offboard, verdict: V1, token: "--dry-run", count: 1, ticket: "#1513"}
+  - {file: docs/scenarios/tenant-lifecycle.en.md, command: patch-config, verdict: V1, token: "--set", count: 1, ticket: "#1513"}
+  - {file: docs/scenarios/tenant-lifecycle.en.md, command: patch-config, verdict: V1, token: "--tenant", count: 1, ticket: "#1513"}
+  - {file: docs/scenarios/tenant-lifecycle.en.md, command: scaffold, verdict: V2, token: "--output", count: 1, ticket: "#1514"}
+  - {file: docs/scenarios/tenant-lifecycle.md, command: offboard, verdict: V1, token: "--dry-run", count: 1, ticket: "#1513"}
+  - {file: docs/scenarios/tenant-lifecycle.md, command: patch-config, verdict: V1, token: "--set", count: 1, ticket: "#1513"}
+  - {file: docs/scenarios/tenant-lifecycle.md, command: patch-config, verdict: V1, token: "--tenant", count: 1, ticket: "#1513"}
+  - {file: docs/scenarios/tenant-lifecycle.md, command: scaffold, verdict: V2, token: "--output", count: 1, ticket: "#1514"}
+  - {file: docs/schemas/migration-state.md, command: onboard, verdict: V1, token: "--analyze", count: 3, ticket: "#1381"}
+  - {file: docs/troubleshooting.en.md, command: operator-generate, verdict: V1, token: "--tenant", count: 3, ticket: "#1513"}
+  - {file: docs/troubleshooting.md, command: operator-generate, verdict: V1, token: "--tenant", count: 3, ticket: "#1513"}

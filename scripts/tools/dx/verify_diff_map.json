@@ -834,7 +834,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "67aa1b189594d3f3baef6702c0fd093938df3aed3e483d5a21ab22689d1385d7",
+ "source_digest": "8a35675ff62bd0a729deae1576526e60f1f0757b5327e5db0740bbc88dfb03f7",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1591,6 +1591,7 @@
   "docs/CHANGELOG.md": [
    "tests/dx/test_bump_docs.py",
    "tests/dx/test_doc_coverage.py",
+   "tests/lint/test_check_cli_contract.py",
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/ops/test_generated_ci_artifacts.py"
   ],
@@ -1827,6 +1828,9 @@
   ],
   "docs/scenarios/incremental-migration-playbook.md": [
    "tests/dx/test_tenant_verify.py"
+  ],
+  "docs/schemas/migration-state.md": [
+   "tests/lint/test_check_cli_contract.py"
   ],
   "docs/schemas/platform-defaults.schema.json": [
    "tests/helm/test_optional_overrides_render.py",

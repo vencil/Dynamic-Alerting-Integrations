@@ -283,7 +283,7 @@ Rule Pack v2 升級時若**改了 alert name 或 label schema**，客戶針對 v
 4. 對 v2 改語意的：`custom_*` 重寫對齊 v2 schema 或留原樣（**且** disable 配置同步更新）
 5. 對 v2 breaking：必須要 promote（被動 forced upgrade）
 
-**Audit hook 建議**（追蹤 [issue #405](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/405)）：`da-tools upgrade-check` 跑 v1→v2 升級時自動偵測 disablement drift，列「會 double-fire 的 alert」清單，merge 前須清零。可能與 `silencer-drift-check` 合併實作。
+**Audit hook 建議**（追蹤 [issue #405](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/405)）：`da-tools upgrade-check` 跑 v1→v2 升級時自動偵測 disablement drift，列「會 double-fire 的 alert」清單，merge 前須清零。可能與 `silencer-drift-check` 合併實作。 <!-- datools-cmd-ignore: #405 提議的 audit hook，尚未實作 -->
 
 ### 三情境的共同模式
 

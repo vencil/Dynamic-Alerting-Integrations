@@ -22,14 +22,14 @@ The Scale Foundation I laid in v2.7.0 (`conf.d/` hierarchy + `_defaults.yaml` in
 
 ### Customer Migration Pipeline — 5-step chain ✅
 
-End-to-end flow that imports a customer's existing PromRule corpus into this platform's conf.d/ architecture. `da-parser` / `da-batchpr` / `da-guard` are codified as offline-runnable Go binaries; Profile Builder is a library embedded in the batch-pr pipeline (the standalone `da-tools profile build` CLI is not yet shipped — planned):
+End-to-end flow that imports a customer's existing PromRule corpus into this platform's conf.d/ architecture. `da-parser` / `da-batchpr` / `da-guard` are codified as offline-runnable Go binaries; Profile Builder is a library embedded in the batch-pr pipeline (the standalone `da-tools profile build` CLI is not yet shipped — planned): <!-- datools-cmd-ignore: planned CLI, not shipped -->
 
 ```
 PromRule corpus → da-parser → Profile Builder (library) → da-batchpr apply → da-guard → conf.d/
 ```
 
 - **`da-parser`**: Dialect detection (prom / metricsql / ambiguous) + VM-only function allowlist (`vm_only_functions.yaml` via `go:embed`, CI freshness gate detects new metricsql upstream functions) + `StrictPromQLValidator` + provenance header (`generated_by` / `source_rule_id` / `parsed_at` / `source_checksum`). The `prom_portable: bool` flag lets customers identify the "can-go-back-to-Prom" subset after migrating to VM — a concrete anti-vendor-lock-in commitment.
-- **Profile Builder (library-only; the `da-tools profile build` CLI is not yet shipped — planned)**: Cluster similar rules → median algorithm picks the cluster's shared threshold → write `_defaults.yaml`, deviating tenants write `<id>.yaml` containing override-only keys; opt-in fuzzy matching applies duration-equivalence canonicalisation (`[5m]` ≡ `[300s]` ≡ `[300000ms]`); exposed as the `BuildProposals` / `EmitProposals` library consumed by the batch-pr pipeline; follows [ADR-018](../adr/018-profile-as-directory-default.en.md) Profile-as-Directory-Default.
+- **Profile Builder (library-only; the `da-tools profile build` CLI is not yet shipped — planned)**: Cluster similar rules → median algorithm picks the cluster's shared threshold → write `_defaults.yaml`, deviating tenants write `<id>.yaml` containing override-only keys; opt-in fuzzy matching applies duration-equivalence canonicalisation (`[5m]` ≡ `[300s]` ≡ `[300000ms]`); exposed as the `BuildProposals` / `EmitProposals` library consumed by the batch-pr pipeline; follows [ADR-018](../adr/018-profile-as-directory-default.en.md) Profile-as-Directory-Default. <!-- datools-cmd-ignore: planned CLI, not shipped -->
 - **`da-batchpr apply`**: Hierarchy-Aware chunking — `_defaults.yaml` changes go in a Base Infrastructure PR; per-tenant PRs marked `Blocked by:`. `refresh` auto-rebases downstream after Base merge; `refresh-source` (+ `--patches-dir`) rewrites affected tenants' files and regenerates patch PRs for parser bug fixes.
 - **`da-guard`**: Schema / Routing / Cardinality / Redundant-override 4-layer check; `.github/workflows/guard-defaults-impact.yml` runs automatically + posts sticky PR comment (marker-based update vs create) + uploads artifact with 14d retention.
 
@@ -43,7 +43,7 @@ PromRule corpus → da-parser → Profile Builder (library) → da-batchpr apply
 
 - **Server-side Search API** `GET /api/v1/tenants/search`: page_size cap 500 + closed-field free-text + RBAC-before-pagination + 30s TTL `tenantSnapshotCache`; p99 < 200ms @ 1000 tenants.
 - **Tenant Manager JSX**: API-first 3-layer priority chain (API → platform-data.json → DEMO) + 429 retry-with-backoff + server-side `q` filter (debounced 300ms) + URL state (`useURLState` + `useDebouncedValue`) + self-written `useVirtualGrid` (only virtualizes when `filtered.length > 50`; the customer 500+ tenant DOM-freeze problem is solved at the server-cap layer).
-- **Master Onboarding Dual Entry**: Import Journey 5 steps (parser / batch-pr / guard inline CLI + a Profile Builder library step — the `da-tools profile build` CLI is not yet shipped, planned) vs Wizard Journey 5 steps (cicd-setup → deployment → alert-builder → routing-trace → tenant-manager — all 5/5 real wizards).
+- **Master Onboarding Dual Entry**: Import Journey 5 steps (parser / batch-pr / guard inline CLI + a Profile Builder library step — the `da-tools profile build` CLI is not yet shipped, planned) vs Wizard Journey 5 steps (cicd-setup → deployment → alert-builder → routing-trace → tenant-manager — all 5/5 real wizards). <!-- datools-cmd-ignore: planned CLI, not shipped -->
 - **Tenant Manager × Wizard integration**: TenantCard footer 3 buttons (Alert / Route / Preview) deep link + `?tenant_id=` URL param pre-fill + standalone `simulate-preview.jsx` widget (4-state machine + 500ms debounce + AbortController).
 - **Smart Views**: `useSavedViews` + `SavedViewsPanel` wires to v2.5.0 backend `/api/v1/views` CRUD; RBAC-aware (Save/Delete hidden when `canWrite=false`).
 
@@ -89,7 +89,7 @@ v2.9.0 shifts from "feature stacking" to "battle-hardening". Based on first onbo
 |-----------|--------------|----------------|
 | **Anomaly-Aware Dynamic Threshold** | ML infrastructure (time-series analysis, seasonality detection) | Thresholds evolve from "manually set" to "auto-adaptive". `_threshold_mode: adaptive` + `quantile_over_time`. Static thresholds as safety floor |
 | **Log-to-Metric Bridge** | Loki / Elasticsearch integration | Unified log + metric alert management. Recommended: `grok_exporter / mtail → Prometheus → this platform` |
-| **Multi-Format Export** | metric-dictionary.yaml mapping table | `da-tools export --format datadog/terraform` — platform becomes alert policy abstraction layer |
+| **Multi-Format Export** | metric-dictionary.yaml mapping table | `da-tools export --format datadog/terraform` — platform becomes alert policy abstraction layer | <!-- datools-cmd-ignore: roadmap vision, not shipped -->
 | **DynamicAlertTenant CRD** | Operator SDK + CRD versioning | Replace ConfigMap + Directory Scanner (requires re-evaluating ADR-008 boundaries) |
 | **ChatOps Deep Integration** | Slack/Teams Bot SDK | Bidirectional operations (query tenant status, trigger silent mode) |
 | **CI/CD Pipeline Status Pass-through** | PR write-back stabilization | PR/MR CI Status Check feedback to Portal UI |

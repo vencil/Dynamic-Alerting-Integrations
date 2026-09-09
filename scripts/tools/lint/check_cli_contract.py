@@ -3,12 +3,12 @@
 
 判定（每條都從兩個獨立來源推導後比對，不列舉壞拼法）：
 
-  V0  fence 內 ``da-tools <x>`` 的 ``x`` 不是 ``COMMAND_MAP`` 的鍵
-  V1  fence 內的旗標不在該 subcommand 的 parser ``option_strings`` 裡（含
-      二層 argparse 子命令不在 ``add_subparsers`` 的 choices）
-  V2  fence 內的旗標不是精確名、卻是恰一個長旗標的前綴——argparse 預設
-      ``allow_abbrev`` 會收下它並綁到另一個旗標、rc=0（#1514）。owner 裁決
-      一律違規，不分有害無害：今天無害只是因為還沒有第二個同前綴的旗標
+  V0  ``da-tools <x>`` 的 ``x`` 不是 ``COMMAND_MAP`` 的鍵
+  V1  旗標不在該 subcommand 的 parser ``option_strings`` 裡（含二層 argparse
+      子命令不在 ``add_subparsers`` 的 choices）
+  V2  旗標不是精確名、卻是恰一個長旗標的前綴——argparse 預設 ``allow_abbrev``
+      會收下它並綁到另一個旗標、rc=0（#1514）。owner 裁決一律違規，不分有害
+      無害：今天無害只是因為還沒有第二個同前綴的旗標
   V3  cli-reference 選項表第一欄的旗標不在 parser（#1619）
   V4  script 以 AST 可達的非零結束碼，不在 cli-reference 該命令節的結束碼表
       （#1416；只判「可達但未列」，不判 ``0``、不判「列了但 AST 看不到」）
@@ -19,22 +19,36 @@
 ``--prometheus`` 由 entrypoint 對 ``PROMETHEUS_COMMANDS`` 注入，從 entrypoint
 的 AST 讀。
 
+命令載體（V0–V2）：fenced block 的每個邏輯行（合併 ``\\`` 續行、去 shell 註解）
+與 fence 之外的每個 ``\\`…\\``` inline span，都以控制運算子切成命令段、每段各找
+主語各判；``$(…)`` 整段當一個佔位值；``sh -c "…"`` 的字串照同一條規則再判一次；
+K8s manifest 的 ``command:``／``args:`` 清單（image 是 da-tools 或
+``command: ["da-tools"]``）展開成 argv 判。主語三種：裸 ``da-tools``（只在命令
+位置：段首，或前一個字是 ``run``／``exec``／``--``／POSIX 包裝字）、``run`` 之後
+的 image ref（image 之前是 docker 旗標）、``python3 …/<script>.py`` 反查
+COMMAND_MAP。
+
 分工：``guard`` / ``parser`` / ``batch-pr`` 走 ``GoBinaryDispatcher``，runpy 在
 argparse 之前就 SystemExit，本閘門把它們歸「無 parser」通道、不判旗標、只揭露
 計數；它們的子命令合法性由既有 ``check_doc_datools_cmds`` 負責（本閘門不重做）。
 portal 的 ``commands.js`` / ``platform-demo.jsx`` 不在本閘門掃描面（另一支 PR），
-同樣只揭露。
+同樣只揭露。``docs/CHANGELOG.md`` 是根 CHANGELOG 的 symlink，歷史條目合法地寫著
+已改名的旗標（與 #1513 的掃描面一致），symlink 一律不掃。
 
 帳本：``docs/internal/cli-contract-baseline.yaml`` 列既有內容票的紅
-（``file`` + ``command`` + ``verdict`` + ``token`` + ``ticket``）；帳本外的紅
-就是紅，帳本內**不再重現**的列是 stale 硬錯，``ticket`` 必須是 ``#NNNN``。
-逃生門：fence 行尾 ``# datools-cmd-ignore: <理由>``、表格列尾
-``<!-- datools-cmd-ignore: <理由> -->``；理由空是硬錯，帳本與 ignore 同時命中
-同一 finding 是硬錯，被 ignore 的行計入揭露。
+（``file`` + ``command`` + ``verdict`` + ``token`` + ``count`` + ``ticket``）；
+比對是集合相等——同鍵命中數少於 ``count`` 是 stale 硬錯，多出來的是新 finding；
+``ticket`` 必須是 ``#NNNN``。逃生門：fence 行尾 ``# datools-cmd-ignore: <理由>``、
+表格列尾／散文行尾 ``<!-- datools-cmd-ignore: <理由> -->``；理由空是硬錯，帳本與
+ignore 同時命中同一 finding 是硬錯，被 ignore 的行計入揭露。
 
-⚠️ NOT scored 是揭露不是涵蓋：無 parser 的命令、不在 COMMAND_MAP 的
-script、位置參數、佔位符旗標、不可判的 exit 表達式、被 ignore 的行、以及
-非 markdown 載體，這支工具都看不到，計數印在輸出末尾。
+結束碼：閘門自己跑不完（帳本缺檔或格式錯、script 載入失敗、掃描面為空）回 2；
+有 finding 或內容面硬錯在 ``--ci`` 下回 1。
+
+⚠️ NOT scored 是揭露不是涵蓋：無 parser 的命令、不在 COMMAND_MAP 的 script、
+不在命令位置的裸 ``da-tools``、``run`` 之後認不出 image 的段、位置參數、佔位符、
+未宣告旗標後被當成值跳過的字、不可判的 exit 表達式、沒有結束碼表的命令、被
+ignore 的行、以及非 markdown 載體，這支工具都看不到，計數印在輸出末尾。
 """
 from __future__ import annotations
 
@@ -48,7 +62,7 @@ import shlex
 import sys
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, Iterator, NamedTuple
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
@@ -84,8 +98,24 @@ _TICKET_RE = re.compile(r"^#\d+$")
 _ENTRYPOINT_GLOBAL = frozenset({"-h", "--help", "help", "--version"})
 # Flags argparse itself provides on every parser.
 _PARSER_GLOBAL = frozenset({"-h", "--help"})
+# Words after which the NEXT word is a command: the container runtimes' `run`
+# / `exec`, POSIX `--` (end of options, utility guideline 10) and the coreutils
+# / POSIX wrappers that exec their operand. An enumeration with an authority
+# outside this file (POSIX + coreutils), which is what makes it legal.
+_COMMAND_WRAPPERS = frozenset({"run", "exec", "--", "sudo", "env", "time",
+                               "nohup", "xargs"})
+# Container runtimes whose `run` takes an image operand — used only to count
+# a `run` we could not resolve to a da-tools image.
+_CONTAINER_RUNTIMES = frozenset({"docker", "podman", "nerdctl", "kubectl"})
+# CI/manifest keys whose value IS a command line (GitHub Actions / GitLab CI /
+# compose / k8s schemas), so `run: da-tools …` starts at da-tools.
+_COMMAND_KEYS = frozenset({"run:", "script:", "command:", "entrypoint:", "cmd:",
+                           "before_script:", "after_script:"})
+_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+_SHELLS = frozenset({"sh", "bash", "dash", "zsh"})
 
 _HEADING = re.compile(r"^####\s+`?([A-Za-z][\w-]*)`?\s*$")
+_H4 = re.compile(r"^####\s")
 _SECTION_END = re.compile(r"^#{1,3}\s")
 _FLAG_IN_CELL = re.compile(r"(?<![\w./-])(--?[A-Za-z][\w-]*)")
 # A first cell that IS a flag spec: an optional single code span whose text
@@ -94,16 +124,21 @@ _FLAG_IN_CELL = re.compile(r"(?<![\w./-])(--?[A-Za-z][\w-]*)")
 # unrecognised `| 輸出 | 內容 |` header, where the looser "contains a flag"
 # test turned that prose into a hard error with no legal way to go green.
 _FLAG_ROW = re.compile(r"^`?-{1,2}[A-Za-z][\w-]*(?:[^`]*`)?\s*$")
-_CODE_CELL = re.compile(r"^`?(\d+)`?$")
+# `\`1\``, `1`, or several codes in one cell: `\`1\` / \`2\``.
+_CODE_CELL = re.compile(r"^`?\d+`?(?:\s*/\s*`?\d+`?)*$")
 _UNESCAPED_PIPE = re.compile(r"(?<!\\)\|")
 _ROW_IGNORE = re.compile(r"<!--\s*" + INLINE_IGNORE + r"\s*:?\s*(.*?)\s*-->")
 _FENCE_IGNORE = re.compile(INLINE_IGNORE + r"\s*:?\s*(.*)$")
+_SPAN = re.compile(r"`([^`\n]+)`")
 _IMAGE_REF = re.compile(r"^(?:[\w.-]+/)*da-tools(?:[:@][^\s\\]+)?$")
 _PY_INTERPRETERS = frozenset({"python", "python3", "py"})
 _REDIRECT = re.compile(r"^(\d*>|<)")
-_NEGATIVE_NUMBER = re.compile(r"^-\d")
+# argparse's own `_negative_number_matcher`: `-1` and `-.5` are values, `-1d`
+# is an option string (rc=2 when undeclared).
+_NEGATIVE_NUMBER = re.compile(r"^-\d+$|^-\d*\.\d+$")
 _PLACEHOLDER_CHARS = "<>${}[]…"
 _SHELL_PUNCT = "();|&"
+_SUBSTITUTION = "$(...)"
 # Exit-code table headers = the pinned no-default headers whose first column
 # names a code. Derived from the shared pin, not transcribed.
 _EXIT_HEADERS: frozenset[tuple[str, ...]] = frozenset(
@@ -259,16 +294,29 @@ class ExitCodes(NamedTuple):
     undecidable: list[int]            # lines whose exit expression is opaque
 
 
+def _own_returns(fn: ast.AST) -> Iterator[ast.Return]:
+    """``return`` statements of *fn* itself — nested defs and lambdas return
+    to their own callers, not to ``sys.exit``."""
+    stack = list(ast.iter_child_nodes(fn))
+    while stack:
+        node = stack.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            continue
+        if isinstance(node, ast.Return):
+            yield node
+        stack.extend(ast.iter_child_nodes(node))
+
+
 def reachable_exit_codes(source: str) -> ExitCodes:
     """Non-zero exit codes a script can produce, by AST.
 
     Resolves ``sys.exit(<expr>)`` / ``raise SystemExit(<expr>)`` /
     ``die_caller_error(...)`` (=2), where ``<expr>`` is an ``EXIT_*`` name, an
     int literal, an ``IfExp`` (both arms), a module-level name bound to an int
-    literal, or a module-level function whose ``return`` statements resolve by
-    the same rules (``sys.exit(main())``). Anything else is undecidable and
-    disclosed with its line. argparse's own rc 2 is not looked for here: the
-    caller adds it for every command that HAS a parser.
+    literal, or a module-level function whose own ``return`` statements
+    resolve by the same rules (``sys.exit(main())``). Anything else is
+    undecidable and disclosed with its line. argparse's own rc 2 is not looked
+    for here: the caller adds it for every command that HAS a parser.
     """
     tree = ast.parse(source)
     consts = dict(_EXIT_NAMES)
@@ -303,10 +351,8 @@ def reachable_exit_codes(source: str) -> ExitCodes:
             _resolve_expr(expr.orelse, line, depth)
         elif isinstance(expr, ast.Call) and isinstance(expr.func, ast.Name) \
                 and expr.func.id in funcs and depth < 3:
-            fn = funcs[expr.func.id]
-            for sub in ast.walk(fn):
-                if isinstance(sub, ast.Return):
-                    _resolve_expr(sub.value, sub.lineno, depth + 1)
+            for ret in _own_returns(funcs[expr.func.id]):
+                _resolve_expr(ret.value, ret.lineno, depth + 1)
         else:
             undecidable.append(line)
 
@@ -380,37 +426,72 @@ def tokenize(code: str) -> list[str] | None:
     lex = shlex.shlex(code, posix=True, punctuation_chars=_SHELL_PUNCT)
     lex.whitespace_split = True
     try:
-        return [t for t in lex if t != "\\"]
+        return _collapse_substitutions([t for t in lex if t != "\\"])
     except ValueError:
         return None
 
 
-def _truncate_at_separator(tokens: list[str]) -> list[str]:
-    """The argv of the FIRST command in *tokens*.
+def _collapse_substitutions(tokens: list[str]) -> list[str]:
+    """``$( … )`` becomes ONE placeholder token, parentheses matched.
 
-    Control operators (``|`` ``&&`` ``;`` ``&`` ``(`` ``)``) and a heredoc end
-    the command. A redirection (``> f``, ``>f``, ``2>/dev/null``, ``< f``) is
-    dropped together with its target and the walk CONTINUES — the shell still
-    hands ``--flag`` in ``cmd > out.json --flag`` to ``cmd``, so stopping there
-    would silently un-judge everything after the redirect. ``<tenant>`` is a
-    placeholder, not a redirect: it closes with ``>``.
+    shlex hands `$` `(` … `)` out separately, and `(` is also the subshell
+    operator — so `--expect $(jq …) --next` used to be cut at the `(` and
+    every flag after it went unjudged in silence (#1513 item 6).
     """
     out: list[str] = []
+    i = 0
+    while i < len(tokens):
+        # `$` may carry a prefix: `$(id -u):$(id -g)` lexes as `$` `(` … `)`
+        # `:$` `(` … `)`. Measured: matching only a bare `$` left the second
+        # `(` as a subshell operator, split the docker line in two, and the
+        # image after it was reported as "run without a recognisable image".
+        if tokens[i].endswith("$") and i + 1 < len(tokens) and tokens[i + 1] == "(":
+            depth = 0
+            j = i + 1
+            while j < len(tokens):
+                depth += (tokens[j] == "(") - (tokens[j] == ")")
+                if depth == 0:
+                    break
+                j += 1
+            out.append(tokens[i][:-1] + _SUBSTITUTION)
+            i = j + 1
+            continue
+        out.append(tokens[i])
+        i += 1
+    return out
+
+
+def split_commands(tokens: list[str]) -> list[list[str]]:
+    """Command segments: split at control operators, redirects dropped.
+
+    Control operators (``|`` ``&&`` ``;`` ``&`` ``(`` ``)``) start a new
+    segment — `cmd && da-tools x --bad` has TWO commands and both are judged.
+    A heredoc (``<<``) ends the line. A redirection (``> f``, ``>f``,
+    ``2>/dev/null``, ``2>&1``, ``< f``) is dropped together with its target and
+    the walk CONTINUES: the shell still hands ``--flag`` in ``cmd > out.json
+    --flag`` to ``cmd``. ``<tenant>`` is a placeholder, not a redirect.
+    """
+    segments: list[list[str]] = []
+    current: list[str] = []
     skip_next = False
     for tok in tokens:
         if skip_next:
-            # `2>&1` tokenises as `2>` `&` `1`: the `&` is a dup marker here,
-            # not a control operator, and the fd after it is its target.
-            skip_next = tok == "&"
+            skip_next = tok == "&"       # `2>&1`: `&` dups, the fd follows
             continue
-        if set(tok) <= set(_SHELL_PUNCT) or tok.startswith("<<"):
+        if tok.startswith("<<"):
             break
+        if set(tok) <= set(_SHELL_PUNCT):
+            if current:
+                segments.append(current)
+            current = []
+            continue
         if _REDIRECT.match(tok) and not (tok.startswith("<") and ">" in tok):
-            # bare operator (`>`, `>>`, `2>`, `<`): the target is the next token
             skip_next = tok.rstrip("<>0123456789") == ""
             continue
-        out.append(tok)
-    return out
+        current.append(tok)
+    if current:
+        segments.append(current)
+    return segments
 
 
 class Subject(NamedTuple):
@@ -420,81 +501,141 @@ class Subject(NamedTuple):
     note: str | None   # disclosure when command is None
 
 
-def find_subject(tokens: list[str], command_map: dict[str, str]) -> Subject | None:
-    """The da-tools argv in *tokens*, or None when no subject token is present.
+def _command_start(segment: list[str]) -> int:
+    """Index of the first token that can be a command word.
 
-    Three forms: the bare binary, an image reference (everything BEFORE it is a
-    docker flag), and ``python3 …/<script>.py`` reverse-mapped through
-    COMMAND_MAP.
+    Skips a `$` prompt, `VAR=value` assignments and a CI/manifest key
+    (`run:`, `script:`) — the tokens that legitimately precede the command
+    on the same line.
+    """
+    i = 0
+    while i < len(segment):
+        tok = segment[i]
+        if tok == "$" or tok == "-" or _ASSIGNMENT.match(tok) \
+                or tok in _COMMAND_KEYS:
+            i += 1
+            continue
+        break
+    return i
+
+
+def _in_command_position(segment: list[str], i: int, start: int) -> bool:
+    """Is token *i* where a shell would read a command word?
+
+    Either the first word of the segment, or the word after a wrapper that
+    execs its operand (`sudo`, `env`, `time`, `xargs -I{}`, `docker compose
+    run --rm`, `kubectl exec pod --`). Walking back over the wrapper's own
+    `-flags` is what lets `xargs -I{} da-tools` through; `docker build -t
+    da-tools .` walks back to `build`, which execs nothing.
+    """
+    if i == start:
+        return True
+    j = i - 1
+    while j > start and _looks_like_flag(segment[j]):
+        j -= 1
+    return segment[j] in _COMMAND_WRAPPERS
+
+
+def find_subject(segment: list[str], command_map: dict[str, str],
+                 stats: dict[str, int] | None = None) -> Subject | None:
+    """The da-tools argv in one command segment, or None.
+
+    Three forms: the bare binary (in command position only), an image
+    reference after `run` (everything BEFORE it is a docker flag), and
+    ``python3 …/<script>.py`` reverse-mapped through COMMAND_MAP.
     """
     by_script = {v: k for k, v in command_map.items()}
-    for i, tok in enumerate(tokens):
+    start = _command_start(segment)
+    for i in range(start, len(segment)):
+        tok = segment[i]
         if tok == "da-tools" or (tok.endswith("/da-tools") and tok[0] in "./~$"):
-            # the binary, bare or by path (`./da-tools`, `$HOME/bin/da-tools`)
-            return Subject("da-tools", None, tokens[i + 1:], None)
+            if _in_command_position(segment, i, start):
+                return Subject("da-tools", None, segment[i + 1:], None)
+            # `docker build -t da-tools .`, `helm install da-tools …`,
+            # `- name: da-tools`: the word names something, executes nothing.
+            if stats is not None:
+                stats["cmd_bare_not_command"] += 1
+            continue
         if _IMAGE_REF.match(tok):
             # ⛔ An image reference is a subject only where the image is RUN.
             # `docker pull/push/tag`, `kind load docker-image` and a YAML
             # `image:` line name the same reference and execute nothing;
-            # measured on the tree this landed in, `kind load docker-image
-            # da-tools:dev --name …` and `docker tag … internal-registry.corp/
-            # da-tools:v2.9.0` both reported their NEXT token as an unknown
-            # subcommand. "Something before it is `run`" is the derivable
-            # property (docker/podman/nerdctl/`compose run`/`container run`
-            # all spell it that way); the enumeration it replaces was "which
-            # docker verbs do not run" — a list with no authority behind it.
-            if "run" not in tokens[:i]:
-                continue      # `docker pull X && da-tools …`: keep looking
+            # measured: `kind load docker-image da-tools:dev --name …` and
+            # `docker tag … internal-registry.corp/da-tools:v2.9.0` both
+            # reported their NEXT token as an unknown subcommand. "Something
+            # before it is `run`" is the derivable property (docker / podman
+            # / nerdctl / `compose run` / `container run` all spell it that
+            # way); the enumeration it replaces was "which docker verbs do
+            # not run" — a list with no authority behind it.
+            if "run" not in segment[start:i]:
+                continue
             if any(t == "--entrypoint" or t.startswith("--entrypoint=")
-                   for t in tokens[:i]):
-                return Subject("image", None, tokens[i + 1:],
+                   for t in segment[:i]):
+                return Subject("image", None, segment[i + 1:],
                                "entrypoint overridden; argv is not da-tools'")
-            return Subject("image", None, tokens[i + 1:], None)
+            return Subject("image", None, segment[i + 1:], None)
         if tok in _PY_INTERPRETERS:
             # interpreter flags (`py -3`, `python3 -X utf8`) sit before the script
             j = i + 1
-            while j < len(tokens) and tokens[j].startswith("-"):
-                j += 1 + (tokens[j] in ("-X", "-W", "-m", "-c"))
-            if j < len(tokens) and tokens[j].endswith(".py"):
-                base = tokens[j].rsplit("/", 1)[-1]
+            while j < len(segment) and segment[j].startswith("-"):
+                j += 1 + (segment[j] in ("-X", "-W", "-m", "-c"))
+            if j < len(segment) and segment[j].endswith(".py"):
+                base = segment[j].rsplit("/", 1)[-1]
                 if base in by_script:
-                    return Subject("python", by_script[base], tokens[j + 1:], None)
-                if "scripts/tools/" in tokens[j]:
-                    return Subject("python", None, tokens[j + 1:],
+                    return Subject("python", by_script[base], segment[j + 1:], None)
+                if "scripts/tools/" in segment[j]:
+                    return Subject("python", None, segment[j + 1:],
                                    f"script not in COMMAND_MAP: {base}")
+    if stats is not None and segment and segment[start:start + 1] \
+            and segment[start] in _CONTAINER_RUNTIMES and "run" in segment[start:]:
+        # `docker run $IMAGE …`, `kubectl run x --image=… -- …`: something is
+        # run and we cannot tell what. Disclosed, not guessed.
+        stats["cmd_run_without_image"] += 1
     return None
 
 
 # ---------------------------------------------------------------------------
 # Judging one argv
 # ---------------------------------------------------------------------------
-def resolve_flag(name: str, model: ParserModel) -> tuple[str | None, str | None]:
-    """(verdict, resolved option) for one flag token against one parser.
+class _Resolved(NamedTuple):
+    verdict: str | None     # None = accepted; "V2" = unique prefix; "V1" = rejected
+    option: str | None      # the option string argparse would bind
+    attached: bool          # the value is inside the token (`-oVALUE`, `-vqoX`)
 
-    verdict None = accepted exactly; "V2" = accepted only as a unique long
-    prefix; "V1" = rejected (unknown, or an ambiguous prefix argparse would
-    also reject with rc 2).
+
+def resolve_flag(name: str, model: ParserModel) -> _Resolved:
+    """One flag token against one parser, with argparse's own rules.
+
+    Long: exact, else a UNIQUE prefix (V2), else rejected (unknown or an
+    ambiguous prefix — argparse rc 2 either way). Short: exact, else a
+    cluster `-vq[o[VALUE]]` where every character is a declared short option,
+    all but the last take no value, and the last may carry its value inline.
     """
     if name in model.options or name in _PARSER_GLOBAL:
-        return None, name
+        return _Resolved(None, name, False)
     if name.startswith("--"):
         hits = sorted(o for o in model.options
                       if o.startswith("--") and o.startswith(name))
         if len(hits) == 1:
-            return "V2", hits[0]
-        return "V1", None
-    if len(name) > 2 and name[:2] in model.options and model.arity.get(name[:2]) != 0:
-        return None, name[:2]          # -oVALUE
-    return "V1", None
+            return _Resolved("V2", hits[0], False)
+        return _Resolved("V1", None, False)
+    for k in range(1, len(name)):
+        short = "-" + name[k]
+        if short not in model.options:
+            return _Resolved("V1", None, False)
+        if model.arity.get(short) != 0:
+            # this one takes a value: the rest of the token is that value
+            return _Resolved(None, short, k + 1 < len(name))
+    return _Resolved(None, "-" + name[-1], False)
 
 
 def judge_argv(args: list[str], command: str, model: ParserModel | None,
                injected: frozenset[str], stats: dict[str, int],
                file: str, line: int) -> list[Finding]:
-    """Findings for the tokens after the subcommand of one command line."""
+    """Findings for the tokens after the subcommand of one command."""
     findings: list[Finding] = []
     if model is None:
-        stats["fence_no_parser"] += 1
+        stats["cmd_no_parser"] += 1
         return findings
     parser = model
     positional_index = 0
@@ -504,7 +645,7 @@ def judge_argv(args: list[str], command: str, model: ParserModel | None,
         tok = args[i]
         i += 1
         if after_double_dash:
-            stats["fence_positionals"] += 1
+            stats["cmd_positionals"] += 1
             continue
         if tok == "--":
             after_double_dash = True
@@ -512,31 +653,41 @@ def judge_argv(args: list[str], command: str, model: ParserModel | None,
         if _looks_like_flag(tok):
             name, eq, _val = tok.partition("=")
             if _is_placeholder(name):
-                stats["fence_placeholder_flags"] += 1
+                stats["cmd_placeholder_flags"] += 1
                 continue
             if name in injected:
-                verdict, resolved, arity = None, name, 1
+                res = _Resolved(None, name, False)
+                arity: Any = 1
             else:
-                verdict, resolved = resolve_flag(name, parser)
-                arity = parser.arity.get(resolved, 0) if resolved else 0
-                if resolved is not None and resolved != name:
-                    # `-oVALUE`: the value is attached, nothing follows
-                    if not name.startswith("--"):
-                        arity = 0
+                res = resolve_flag(name, parser)
+                arity = parser.arity.get(res.option, 0) if res.option else 0
+                if res.attached:
+                    arity = 0
             stats["scored"] += 1
-            if verdict == "V2":
+            if res.verdict == "V2":
                 findings.append(Finding(
                     "V2", file, line, command, name,
                     f"`{name}` is not a flag of `{command}`; argparse accepts it "
-                    f"only as an abbreviation of `{resolved}` (rc=0, bound to the "
-                    f"other flag — #1514). Spell it out as `{resolved}`."))
-            elif verdict == "V1":
+                    f"only as an abbreviation of `{res.option}` (rc=0, bound to "
+                    f"that flag — #1514). Spell it out as `{res.option}` AND "
+                    f"re-check the value and the prose around it: the target "
+                    f"flag's meaning (a directory vs a file, a different unit) "
+                    f"is what the abbreviation was hiding, so the example and "
+                    f"its expected output change with it (#1514)."))
+            elif res.verdict == "V1":
                 findings.append(Finding(
                     "V1", file, line, command, name,
                     f"`{command}` does not declare `{name}` — copying this line "
                     f"gives `unrecognized arguments`, rc=2. Use a flag the CLI "
                     f"declares (see `da-tools {command} --help`); a deliberately "
                     f"aspirational example needs `# {INLINE_IGNORE}: <why>`."))
+                if not eq and i < len(args) and not _looks_like_flag(args[i]):
+                    # The word after an undeclared flag is most likely ITS
+                    # value; reading it as a positional produced a second,
+                    # noise finding (`--repo r snapshot` → `r` "not an action").
+                    stats["cmd_skipped_values"] += 1
+                    i += 1
+                continue
             if eq or arity == 0:
                 continue
             if arity == "?" or arity == 1 or isinstance(arity, int):
@@ -556,7 +707,7 @@ def judge_argv(args: list[str], command: str, model: ParserModel | None,
                 stats["scored"] += 1
                 continue
             if _is_placeholder(tok):
-                stats["fence_placeholder_subcommands"] += 1
+                stats["cmd_placeholder_subcommands"] += 1
                 return findings
             stats["scored"] += 1
             findings.append(Finding(
@@ -565,12 +716,76 @@ def judge_argv(args: list[str], command: str, model: ParserModel | None,
                 f"{', '.join(sorted(parser.subparsers))})."))
             return findings
         positional_index += 1
-        stats["fence_positionals"] += 1
+        stats["cmd_positionals"] += 1
+    return findings
+
+
+class _Ctx(NamedTuple):
+    command_map: dict[str, str]
+    parsers: dict[str, ParserModel]
+    injected_for: dict[str, frozenset[str]]
+    stats: dict[str, int]
+
+
+def judge_tokens(tokens: list[str], rel: str, number: int, ctx: _Ctx,
+                 carrier: str, depth: int = 0) -> list[Finding]:
+    """Every command segment of one tokenised line, judged."""
+    findings: list[Finding] = []
+    for segment in split_commands(tokens):
+        start = _command_start(segment)
+        # `sh -c "da-tools …"` anywhere in the segment (`docker run … img bash
+        # -c '…'`): the quoted string is the command line, the rest is wrapper.
+        shell = next((k for k in range(start, len(segment) - 1)
+                      if segment[k].rsplit("/", 1)[-1] in _SHELLS
+                      and segment[k + 1] == "-c"), None)
+        if depth == 0 and shell is not None:
+            if shell + 2 < len(segment):
+                inner = tokenize(segment[shell + 2])
+                if inner is not None:
+                    ctx.stats["cmd_sh_c_strings"] += 1
+                    findings += judge_tokens(inner, rel, number, ctx, carrier, depth + 1)
+            continue
+        subject = find_subject(segment, ctx.command_map, ctx.stats)
+        if subject is None:
+            continue
+        ctx.stats[carrier] += 1
+        args = subject.args
+        command = subject.command
+        seg_findings: list[Finding] = []
+        if command is None and subject.note:
+            ctx.stats["cmd_entrypoint_override" if subject.kind == "image"
+                      else "cmd_script_not_in_map"] += 1
+            continue
+        if command is None:
+            if not args:
+                continue
+            head = args[0]
+            if head in _ENTRYPOINT_GLOBAL:
+                continue
+            if _is_placeholder(head):
+                ctx.stats["cmd_placeholder_subcommands"] += 1
+                continue
+            ctx.stats["scored"] += 1
+            command = head
+            if head not in ctx.command_map:
+                seg_findings.append(Finding(
+                    "V0", rel, number, head, head,
+                    f"`da-tools {head}` — no such subcommand in COMMAND_MAP "
+                    f"(rc=2). Use a real subcommand; a deliberately aspirational "
+                    f"example needs `{INLINE_IGNORE}: <why>` (shell comment in a "
+                    f"fence, `<!-- … -->` in prose or a table row)."))
+            else:
+                args = args[1:]
+        if not seg_findings:
+            seg_findings = judge_argv(
+                args, command, ctx.parsers.get(command),
+                ctx.injected_for.get(command, frozenset()), ctx.stats, rel, number)
+        findings += seg_findings
     return findings
 
 
 # ---------------------------------------------------------------------------
-# Carrier A: fenced commands
+# Carrier A: fenced commands, inline spans, manifest args
 # ---------------------------------------------------------------------------
 def _logical_lines(lines: list[str]) -> list[tuple[int, str]]:
     """Fenced-block content as (first line number, joined text) pairs."""
@@ -602,9 +817,106 @@ def _logical_lines(lines: list[str]) -> list[tuple[int, str]]:
     return out
 
 
-def scan_fences(doc: Path, rel: str, command_map: dict[str, str],
-                parsers: dict[str, ParserModel], injected_for: dict[str, frozenset[str]],
-                stats: dict[str, int], errors: list[str]) -> list[Finding]:
+def _fence_blocks(lines: list[str]) -> list[tuple[int, list[str]]]:
+    """(first line number, raw lines) of every fenced block."""
+    blocks: list[tuple[int, list[str]]] = []
+    in_code = False
+    buf: list[str] = []
+    start = 0
+    for number, raw in enumerate(lines, 1):
+        line = _unquote_md(raw)
+        if _is_fence(line):
+            if in_code:
+                blocks.append((start, buf))
+                buf = []
+            else:
+                start = number + 1
+            in_code = not in_code
+            continue
+        if in_code:
+            buf.append(line)
+    return blocks
+
+
+_LIST_ITEM = re.compile(r"^(\s*)-\s+(.*)$")
+_KEY = re.compile(r"^(\s*)(?:-\s+)?([A-Za-z_]+):\s*(.*)$")
+
+
+def _yaml_list(value: str, following: list[str], indent: int) -> list[str] | None:
+    """Items of a YAML list given inline (`[a, "b"]`) or as `- item` lines."""
+    value = value.strip()
+    if value.startswith("["):
+        if not value.endswith("]"):
+            return None
+        return [v.strip().strip("\"'") for v in value[1:-1].split(",") if v.strip()]
+    if value:
+        return None
+    items: list[str] = []
+    for raw in following:
+        m = _LIST_ITEM.match(raw)
+        if not m or len(m.group(1)) <= indent:
+            break
+        items.append(m.group(2).strip().strip("\"'"))
+    return items
+
+
+def manifest_argvs(block: list[str]) -> list[tuple[int, list[str]]]:
+    """da-tools argvs declared by k8s-style ``command:``/``args:`` lists.
+
+    A container whose ``image:`` is a da-tools reference runs the image's
+    entrypoint, so its ``args:`` are da-tools' argv; ``command:
+    ["da-tools"]`` says so explicitly. Returns (offset within block, argv).
+    """
+    out: list[tuple[int, list[str]]] = []
+    image_is_datools = False
+    command: list[str] | None = None
+    command_at = 0
+    key_indent: int | None = None    # indent of the container's own keys
+
+    def _flush() -> None:
+        # `command: ["da-tools", "widget", …]` with no `args:` at all
+        if command and command[0] == "da-tools" and len(command) > 1:
+            out.append((command_at, command[1:]))
+
+    for idx, raw in enumerate(block):
+        m = _KEY.match(raw)
+        if not m:
+            continue
+        indent, key, value = len(m.group(1)), m.group(2), m.group(3)
+        if key == "name" and raw.lstrip().startswith("-"):
+            # A new container only when the dash sits OUTSIDE the current
+            # container's keys: `env:` holds `- name: PROMETHEUS_URL` items
+            # deeper than `image:`, and treating those as a boundary dropped
+            # the image (measured: 2 of 5 manifest argvs on the real tree).
+            if key_indent is None or indent < key_indent:
+                _flush()
+                image_is_datools, command, key_indent = False, None, None
+            continue
+        if key_indent is None or indent < key_indent:
+            key_indent = indent
+        if key == "image":
+            image_is_datools = bool(_IMAGE_REF.match(value.strip().strip("\"'")))
+        elif key == "command":
+            command, command_at = _yaml_list(value, block[idx + 1:], indent), idx
+            if command and command[0].rsplit("/", 1)[-1] in _SHELLS \
+                    and "-c" in command[:-1]:
+                out.append((idx, ["sh", "-c", command[command.index("-c") + 1]]))
+                command = None
+        elif key == "args":
+            args = _yaml_list(value, block[idx + 1:], indent)
+            if args is None:
+                continue
+            if command and command[0] == "da-tools":
+                out.append((idx, command[1:] + args))
+            elif command is None and image_is_datools:
+                out.append((idx, args))
+            command = None
+    _flush()
+    return out
+
+
+def scan_commands(doc: Path, rel: str, ctx: _Ctx, errors: list[str]) -> list[Finding]:
+    """Fenced lines, inline spans and manifest argvs of one document."""
     findings: list[Finding] = []
     lines = doc.read_text(encoding="utf-8").splitlines()
     for number, text in _logical_lines(lines):
@@ -619,63 +931,79 @@ def scan_fences(doc: Path, rel: str, command_map: dict[str, str],
                 continue
         tokens = tokenize(code)
         if tokens is None:
-            stats["fence_unparseable"] += 1
+            ctx.stats["cmd_unparseable"] += 1
             continue
-        subject = find_subject(tokens, command_map)
-        if subject is None:
-            continue
-        stats["fence_commands"] += 1
-        args = _truncate_at_separator(subject.args)
-        command = subject.command
-        line_findings: list[Finding] = []
-        if command is None and subject.note:
-            stats["fence_entrypoint_override" if subject.kind == "image"
-                  else "fence_script_not_in_map"] += 1
-            continue
-        if command is None:
-            if not args:
-                continue
-            head = args[0]
-            if head in _ENTRYPOINT_GLOBAL:
-                continue
-            if _is_placeholder(head):
-                stats["fence_placeholder_subcommands"] += 1
-                continue
-            stats["scored"] += 1
-            if head not in command_map:
-                line_findings.append(Finding(
-                    "V0", rel, number, head, head,
-                    f"`da-tools {head}` — no such subcommand in COMMAND_MAP "
-                    f"(rc=2). Use a real subcommand; a deliberately aspirational "
-                    f"example needs `# {INLINE_IGNORE}: <why>`."))
-                command = head
-            else:
-                command = head
-                args = args[1:]
-        if not line_findings:
-            line_findings = judge_argv(
-                args, command, parsers.get(command),
-                injected_for.get(command, frozenset()), stats, rel, number)
         if reason is not None:
-            stats["ignored"] += 1
-            line_findings = [f._replace(ignored=reason) for f in line_findings]
-        seen: set[tuple[str, str, str]] = set()
-        for f in line_findings:
-            if (f.verdict, f.command, f.token) not in seen:
-                seen.add((f.verdict, f.command, f.token))
-                findings.append(f)
+            ctx.stats["ignored"] += 1
+        findings += _dedupe(judge_tokens(tokens, rel, number, ctx, "cmd_segments"), reason)
+    for start, block in _fence_blocks(lines):
+        for offset, argv in manifest_argvs(block):
+            ctx.stats["cmd_manifest_argvs"] += 1
+            if argv[:2] == ["sh", "-c"]:
+                inner = tokenize(argv[2]) if len(argv) > 2 else None
+                tokens = inner if inner is not None else []
+            else:
+                tokens = ["da-tools"] + argv
+            findings += _dedupe(judge_tokens(tokens, rel, start + offset, ctx,
+                                             "cmd_segments"), None)
+    in_code = False
+    for number, raw in enumerate(lines, 1):
+        line = _unquote_md(raw)
+        if _is_fence(line):
+            in_code = not in_code
+            continue
+        if in_code or "`" not in line:
+            continue
+        reason = None
+        m = _ROW_IGNORE.search(line)
+        if m:
+            reason = m.group(1).strip()
+            line = line[:m.start()] + line[m.end():]
+            if not reason:
+                errors.append(f"{rel}:{number}: `{INLINE_IGNORE}` without a reason — "
+                              f"write `<!-- {INLINE_IGNORE}: <why> -->`")
+                continue
+        if reason is not None:
+            ctx.stats["ignored"] += 1
+        for span in _SPAN.findall(line):
+            tokens = tokenize(span)
+            if tokens is None:
+                ctx.stats["cmd_unparseable"] += 1
+                continue
+            findings += _dedupe(judge_tokens(tokens, rel, number, ctx, "inline_spans"),
+                                reason)
     return findings
+
+
+def _dedupe(found: list[Finding], reason: str | None) -> list[Finding]:
+    if reason is not None:
+        found = [f._replace(ignored=reason) for f in found]
+    seen: set[tuple[str, str, str]] = set()
+    out: list[Finding] = []
+    for f in found:
+        if (f.verdict, f.command, f.token) not in seen:
+            seen.add((f.verdict, f.command, f.token))
+            out.append(f)
+    return out
 
 
 # ---------------------------------------------------------------------------
 # Carriers B and C: cli-reference option tables and exit-code tables
 # ---------------------------------------------------------------------------
+class ReferenceFacts(NamedTuple):
+    option_rows: int
+    exit_codes: int
+    sections: set[str]          # commands with a `####` section in this doc
+    exit_tables: set[str]       # commands with an exit-code table in this doc
+    unmatched_sections: int     # `####` headings that name no command
+
+
 def scan_reference(doc: Path, rel: str, parsers: dict[str, ParserModel],
                    injected_for: dict[str, frozenset[str]],
                    exit_codes: dict[str, ExitCodes],
                    stats: dict[str, int], errors: list[str],
                    by_header: dict[tuple[str, ...], int],
-                   per_doc: dict[str, dict[str, int]]) -> list[Finding]:
+                   ) -> tuple[list[Finding], ReferenceFacts]:
     findings: list[Finding] = []
     command: str | None = None
     header: tuple[str, ...] | None = None      # the recognised kind, or None
@@ -683,7 +1011,9 @@ def scan_reference(doc: Path, rel: str, parsers: dict[str, ParserModel],
     table_header: tuple[str, ...] | None = None  # the row before the separator
     documented: dict[str, set[int]] = {}
     exit_table_line: dict[str, int] = {}
-    counts = per_doc.setdefault(rel, {"option_rows": 0, "exit_codes": 0})
+    sections: set[str] = set()
+    unmatched = 0
+    option_rows = exit_count = 0
     in_fence = False
     for number, raw in enumerate(doc.read_text(encoding="utf-8").splitlines(), 1):
         if _is_fence(raw):
@@ -699,12 +1029,16 @@ def scan_reference(doc: Path, rel: str, parsers: dict[str, ParserModel],
         heading = _HEADING.match(raw)
         if heading:
             command = heading.group(1)
+            sections.add(command)
             header = pending = table_header = None
             continue
-        if _SECTION_END.match(raw):
-            # A higher-level heading ends the last command's section; the
-            # document-tail tables (version matrix, related docs) are not
-            # `discover-mappings` content just because it came last.
+        if _H4.match(raw) or _SECTION_END.match(raw):
+            # A `####` that names no command (`#### Rollback 程序`) or a
+            # higher-level heading ends the last command's section; its
+            # tables are not the previous command's just because it came
+            # first.
+            if _H4.match(raw):
+                unmatched += 1
             command = None
             header = pending = table_header = None
             continue
@@ -751,9 +1085,9 @@ def scan_reference(doc: Path, rel: str, parsers: dict[str, ParserModel],
                     f"from this check with no red anywhere.")
             continue
         if header in _EXIT_HEADERS:
-            code = _CODE_CELL.match(cells[0])
-            if code:
-                documented.setdefault(command, set()).add(int(code.group(1)))
+            if _CODE_CELL.match(cells[0]):
+                documented.setdefault(command, set()).update(
+                    int(c) for c in re.findall(r"\d+", cells[0]))
             continue
         # option table row
         flags = _FLAG_IN_CELL.findall(cells[0])
@@ -769,7 +1103,7 @@ def scan_reference(doc: Path, rel: str, parsers: dict[str, ParserModel],
         row: list[Finding] = []
         for flag in flags:
             stats["scored"] += 1
-            counts["option_rows"] += 1
+            option_rows += 1
             by_header[header] = by_header.get(header, 0) + 1
             if flag in options or flag in _PARSER_GLOBAL or flag in injected:
                 continue
@@ -779,7 +1113,10 @@ def scan_reference(doc: Path, rel: str, parsers: dict[str, ParserModel],
                 row.append(Finding(
                     "V2", rel, number, command, flag,
                     f"option table lists `{flag}`, which `{command}` accepts only as "
-                    f"an abbreviation of `{hits[0]}` (#1514). Spell it out."))
+                    f"an abbreviation of `{hits[0]}` (#1514). Spell it out — and "
+                    f"re-read the row's description against `{hits[0]}`'s real "
+                    f"meaning (a directory vs a file), which is what the "
+                    f"abbreviation was hiding."))
             else:
                 row.append(Finding(
                     "V3", rel, number, command, flag,
@@ -794,10 +1131,7 @@ def scan_reference(doc: Path, rel: str, parsers: dict[str, ParserModel],
     for cmd, codes in documented.items():
         ec = exit_codes.get(cmd)
         if ec is None:
-            stats["exit_tables_no_script"] += 1
             continue
-        if ec.undecidable:
-            stats["exit_undecidable_scripts"] += 1
         judged = {c for c in ec.reachable if c != 0}
         if not judged and ec.undecidable:
             continue
@@ -805,7 +1139,7 @@ def scan_reference(doc: Path, rel: str, parsers: dict[str, ParserModel],
             judged.add(EXIT_CALLER_ERROR)
         for code in sorted(judged):
             stats["scored"] += 1
-            counts["exit_codes"] += 1
+            exit_count += 1
             if code in codes:
                 continue
             where = ", ".join(f"line {n}" for n in ec.reachable.get(code, [])) \
@@ -814,7 +1148,8 @@ def scan_reference(doc: Path, rel: str, parsers: dict[str, ParserModel],
                 "V4", rel, exit_table_line.get(cmd, 0), cmd, str(code),
                 f"`{cmd}` can exit {code} ({where}) but its exit-code table lists "
                 f"only {sorted(codes)} (#1416). Add the row."))
-    return findings
+    return findings, ReferenceFacts(option_rows, exit_count, sections,
+                                    set(documented), unmatched)
 
 
 def _all_options(model: ParserModel) -> frozenset[str]:
@@ -832,14 +1167,18 @@ class BaselineEntry(NamedTuple):
     command: str
     verdict: str
     token: str
+    count: int
     ticket: str
 
     def key(self) -> tuple[str, str, str, str]:
         return (self.file, self.command, self.verdict, self.token)
 
 
+_ENTRY_KEYS = {"file", "command", "verdict", "token", "count", "ticket"}
+
+
 def load_baseline(path: Path = BASELINE_PATH) -> tuple[list[BaselineEntry], list[str]]:
-    """Ledger entries plus hard errors about the ledger's own shape."""
+    """Ledger entries plus FATAL errors about the ledger's own shape."""
     import yaml
     errors: list[str] = []
     if not path.is_file():
@@ -856,13 +1195,18 @@ def load_baseline(path: Path = BASELINE_PATH) -> tuple[list[BaselineEntry], list
     entries: list[BaselineEntry] = []
     seen: set[tuple[str, str, str, str]] = set()
     for idx, row in enumerate(rows, 1):
-        if not isinstance(row, dict) or set(row) != {"file", "command", "verdict",
-                                                    "token", "ticket"}:
+        if not isinstance(row, dict) or set(row) != _ENTRY_KEYS:
             errors.append(f"baseline entry {idx}: must have exactly the keys "
-                          f"file/command/verdict/token/ticket, got {row!r}")
+                          f"{'/'.join(sorted(_ENTRY_KEYS))}, got {row!r}")
             continue
-        entry = BaselineEntry(*(str(row[k]) for k in
-                                ("file", "command", "verdict", "token", "ticket")))
+        count = row["count"]
+        if not isinstance(count, int) or isinstance(count, bool) or count < 1:
+            errors.append(f"baseline entry {idx}: count must be a positive integer, "
+                          f"got {count!r}")
+            count = 1
+        entry = BaselineEntry(str(row["file"]), str(row["command"]),
+                              str(row["verdict"]), str(row["token"]), count,
+                              str(row["ticket"]))
         if entry.verdict not in VERDICTS:
             errors.append(f"baseline entry {idx}: verdict {entry.verdict!r} is not "
                           f"one of {VERDICTS}")
@@ -883,9 +1227,13 @@ def apply_baseline(findings: list[Finding], entries: list[BaselineEntry]
                    ) -> tuple[list[Finding], list[Finding], list[str]]:
     """(open findings, suppressed findings, hard errors).
 
-    An entry suppresses EVERY open finding with its key. An entry matching
-    nothing is stale (the content was fixed — delete the row). An entry whose
-    key is also inline-ignored is a double exemption (pick one).
+    Set equality, not containment: an entry suppresses exactly ``count``
+    findings with its key (the first ``count`` by line). Fewer live findings
+    than ``count`` is stale (content was fixed — lower or delete the row);
+    more is new debt (the surplus stays red). ⛔ Measured before ``count``:
+    one row `(cli-reference.md, patch-config, V1, --dry-run)` also swallowed a
+    brand-new `--dry-run` planted at the end of the same file. An entry
+    whose key is also inline-ignored is a double exemption (pick one).
     """
     by_key: dict[tuple[str, str, str, str], list[Finding]] = {}
     ignored_keys: set[tuple[str, str, str, str]] = set()
@@ -896,21 +1244,20 @@ def apply_baseline(findings: list[Finding], entries: list[BaselineEntry]
             by_key.setdefault(f.key(), []).append(f)
     errors: list[str] = []
     suppressed: list[Finding] = []
-    matched: set[tuple[str, str, str, str]] = set()
     for e in entries:
         if e.key() in ignored_keys:
             errors.append(f"baseline entry {e.key()} is ALSO covered by an inline "
                           f"`{INLINE_IGNORE}` — one exemption per finding; drop one")
-        hits = by_key.get(e.key())
-        if not hits:
-            errors.append(f"stale baseline entry {e.key()} ({e.ticket}): no such "
-                          f"finding any more — delete the row so the ledger only "
+        hits = sorted(by_key.get(e.key(), []), key=lambda f: f.line)
+        if len(hits) < e.count:
+            errors.append(f"stale baseline entry {e.key()} ({e.ticket}): count is "
+                          f"{e.count} but only {len(hits)} such finding(s) remain — "
+                          f"lower the count (delete the row at 0) so the ledger only "
                           f"holds live debt")
-            continue
-        matched.add(e.key())
-        suppressed.extend(hits)
+        suppressed.extend(hits[:e.count])
+    done = {id(f) for f in suppressed}
     open_findings = [f for f in findings
-                     if f.ignored is None and f.key() not in matched]
+                     if f.ignored is None and id(f) not in done]
     return open_findings, suppressed, errors
 
 
@@ -918,30 +1265,42 @@ def write_baseline(findings: list[Finding], existing: list[BaselineEntry],
                    path: Path = BASELINE_PATH) -> int:
     """Regenerate the ledger from *findings*, keeping known tickets."""
     tickets = {e.key(): e.ticket for e in existing}
-    keys = sorted({f.key() for f in findings if f.ignored is None})
+    counts: dict[tuple[str, str, str, str], int] = {}
+    for f in findings:
+        if f.ignored is None:
+            counts[f.key()] = counts.get(f.key(), 0) + 1
     lines = [
         "# cli-contract-baseline.yaml — 既有內容票在 check_cli_contract 下的紅（#1379）。",
-        "# 每列一個 (file, command, verdict, token)；同鍵的所有 finding 都被壓下。",
-        "# 修好一處就刪一列：零命中的列是 stale 硬錯。ticket 必須是 #NNNN。",
+        "# 每列一個 (file, command, verdict, token)，count = 該鍵在該檔的 finding 數；",
+        "# 比對是集合相等：少於 count 是 stale 硬錯、多出來的是新紅。",
+        "# 修好一處就降 count（歸零就刪列）。ticket 必須是 #NNNN。",
         "# 產生：python3 scripts/tools/lint/check_cli_contract.py --write-baseline",
         "entries:",
     ]
-    for file, command, verdict, token in keys:
-        ticket = tickets.get((file, command, verdict, token), "#TODO")
+    for key in sorted(counts):
+        file, command, verdict, token = key
         lines.append(f'  - {{file: {file}, command: {command}, verdict: {verdict}, '
-                     f'token: "{token}", ticket: "{ticket}"}}')
-    if not keys:
+                     f'token: "{token}", count: {counts[key]}, '
+                     f'ticket: "{tickets.get(key, "#TODO")}"}}')
+    if not counts:
         lines[-1] = "entries: []"
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return len(keys)
+    return len(counts)
 
 
 # ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
 def doc_files(repo_root: Path = REPO_ROOT) -> tuple[list[Path], list[str]]:
+    """Scanned docs and the landing pages that are missing.
+
+    Symlinks are skipped: `docs/CHANGELOG.md` points at the root CHANGELOG,
+    whose historical entries legitimately quote flags that have since been
+    renamed (#1513 excludes it for the same reason).
+    """
     docs = [f for f in sorted((repo_root / "docs").rglob("*.md"))
-            if "/internal/" not in f.as_posix() and "/archive/" not in f.as_posix()]
+            if "/internal/" not in f.as_posix() and "/archive/" not in f.as_posix()
+            and not f.is_symlink()]
     missing = [rel for rel in EXTRA_DOC_FILES if not (repo_root / rel).is_file()]
     present = [repo_root / rel for rel in EXTRA_DOC_FILES if (repo_root / rel).is_file()]
     return docs + present, missing
@@ -961,14 +1320,28 @@ def _unscanned_carriers(repo_root: Path = REPO_ROOT) -> int:
     return n
 
 
+_STAT_KEYS = (
+    "scored", "cmd_segments", "inline_spans", "cmd_manifest_argvs", "cmd_sh_c_strings",
+    "cmd_no_parser", "cmd_script_not_in_map", "cmd_entrypoint_override",
+    "cmd_run_without_image", "cmd_bare_not_command", "cmd_positionals",
+    "cmd_placeholder_flags", "cmd_placeholder_subcommands", "cmd_skipped_values",
+    "cmd_unparseable", "table_rows_positional", "table_rows_no_parser",
+    "reference_sections_unmatched", "exit_tables_no_script",
+    "exit_undecidable_scripts", "commands_without_exit_table", "ignored",
+    "unscanned_carrier_files")
+
+
 def _new_stats() -> dict[str, int]:
-    return {k: 0 for k in (
-        "scored", "fence_commands", "fence_no_parser", "fence_script_not_in_map",
-        "fence_entrypoint_override",
-        "fence_positionals", "fence_placeholder_flags", "fence_placeholder_subcommands",
-        "fence_unparseable", "table_rows_positional", "table_rows_no_parser",
-        "exit_tables_no_script", "exit_undecidable_scripts", "ignored",
-        "unscanned_carrier_files")}
+    return {k: 0 for k in _STAT_KEYS}
+
+
+class ScanResult(NamedTuple):
+    findings: list[Finding]          # ignored ones carry their reason
+    stats: dict[str, int]
+    errors: list[str]                # content-side: rc 1 under --ci
+    fatal: list[str]                 # the gate could not do its job: rc 2
+    by_header: dict[tuple[str, ...], int]
+    per_doc: dict[str, dict[str, int]]
 
 
 def scan(parsers: dict[str, ParserModel] | None = None,
@@ -978,20 +1351,19 @@ def scan(parsers: dict[str, ParserModel] | None = None,
          injected: set[str] | None = None,
          exit_codes: dict[str, ExitCodes] | None = None,
          repo_root: Path = REPO_ROOT,
-         ) -> tuple[list[Finding], dict[str, int], list[str],
-                    dict[tuple[str, ...], int], dict[str, dict[str, int]]]:
-    """All findings (ignored ones carry their reason) + stats + hard errors."""
+         ) -> ScanResult:
     errors: list[str] = []
+    fatal: list[str] = []
     stats = _new_stats()
     if command_map is None:
         command_map = parse_command_map()
     if parsers is None:
         parsers, unscoreable, blind, faults = introspect_parsers()
-        errors += [f"could not load {b} — this check saw NOTHING for that command"
-                   for b in blind] + list(faults)
+        fatal += [f"could not load {b} — this check saw NOTHING for that command"
+                  for b in blind] + list(faults)
     elif not command_map:
-        errors.append("COMMAND_MAP parsed to zero commands — nothing to check "
-                      "against, so a clean result here means nothing")
+        fatal.append("COMMAND_MAP parsed to zero commands — nothing to check "
+                     "against, so a clean result here means nothing")
     if injected is None:
         injected = prometheus_commands()
     injected_for = {c: frozenset({"--prometheus"}) for c in injected}
@@ -1004,31 +1376,44 @@ def scan(parsers: dict[str, ParserModel] | None = None,
                     path.read_text(encoding="utf-8"))
     if docs is None:
         docs, missing = doc_files(repo_root)
-        errors += [f"{rel}: listed in EXTRA_DOC_FILES but not found — point the "
-                   f"tuple at the file's current path; deleting the entry stops "
-                   f"the page being scanned at all" for rel in missing]
+        fatal += [f"{rel}: listed in EXTRA_DOC_FILES but not found — point the "
+                  f"tuple at the file's current path; deleting the entry stops "
+                  f"the page being scanned at all" for rel in missing]
+    ctx = _Ctx(command_map, parsers, injected_for, stats)
     findings: list[Finding] = []
     for doc in docs:
-        rel = _rel(doc, repo_root)
-        findings += scan_fences(doc, rel, command_map, parsers, injected_for,
-                                stats, errors)
+        findings += scan_commands(doc, _rel(doc, repo_root), ctx, errors)
     by_header: dict[tuple[str, ...], int] = {}
     per_doc: dict[str, dict[str, int]] = {}
+    no_table: set[str] = set()
+    no_script: set[str] = set()
     for doc in reference_docs:
         rel = _rel(doc, repo_root)
-        findings += scan_reference(doc, rel, parsers, injected_for, exit_codes,
-                                   stats, errors, by_header, per_doc)
-        counts = per_doc[rel]
+        found, facts = scan_reference(doc, rel, parsers, injected_for, exit_codes,
+                                      stats, errors, by_header)
+        findings += found
+        per_doc[rel] = {"option_rows": facts.option_rows, "exit_codes": facts.exit_codes}
+        stats["reference_sections_unmatched"] += facts.unmatched_sections
+        no_table |= {c for c in facts.sections
+                     if c in parsers and c not in facts.exit_tables}
+        no_script |= {c for c in facts.exit_tables if c not in exit_codes}
         for carrier, label in (("option_rows", "option-table flags"),
                                ("exit_codes", "exit codes")):
-            if not counts[carrier]:
-                errors.append(f"{rel} contributed 0 judged {label} — this check "
-                              f"read the file and compared nothing in it")
+            if not per_doc[rel][carrier]:
+                fatal.append(f"{rel} contributed 0 judged {label} — this check "
+                             f"read the file and compared nothing in it")
+    # ⛔ Disclosure counts are SETS of commands, computed once. Accumulating
+    # them inside the per-document loop reported "14 scripts" for 7 scripts
+    # seen in two documents.
+    stats["commands_without_exit_table"] = len(no_table)
+    stats["exit_tables_no_script"] = len(no_script)
+    stats["exit_undecidable_scripts"] = len(
+        {c for c, ec in exit_codes.items() if ec.undecidable})
     if not stats["scored"]:
-        errors.append("0 judged tokens — every command, flag and exit code was "
-                      "skipped, so this check compared nothing")
+        fatal.append("0 judged tokens — every command, flag and exit code was "
+                     "skipped, so this check compared nothing")
     stats["unscanned_carrier_files"] = _unscanned_carriers(repo_root)
-    return findings, stats, errors, by_header, per_doc
+    return ScanResult(findings, stats, errors, fatal, by_header, per_doc)
 
 
 def _rel(doc: Path, repo_root: Path) -> str:
@@ -1039,25 +1424,33 @@ def _rel(doc: Path, repo_root: Path) -> str:
 
 
 def _not_scored_lines(stats: dict[str, int]) -> list[str]:
+    s = stats
     return [
-        f"NOT scored: {stats['fence_no_parser']} fenced commands under a "
-        f"subcommand with no argparse parser (guard/parser/batch-pr — their "
-        f"subcommands are check_doc_datools_cmds' job), "
-        f"{stats['fence_script_not_in_map']} `python3 scripts/tools/…` scripts "
-        f"not in COMMAND_MAP, {stats['fence_positionals']} positional tokens, "
-        f"{stats['fence_placeholder_flags']} placeholder flags, "
-        f"{stats['fence_placeholder_subcommands']} placeholder subcommands, "
-        f"{stats['fence_entrypoint_override']} `docker run --entrypoint` "
-        f"overrides, "
-        f"{stats['fence_unparseable']} unparseable fenced lines, "
-        f"{stats['table_rows_positional']} option-table rows without a flag, "
-        f"{stats['table_rows_no_parser']} option-table rows under a no-parser "
-        f"subcommand, {stats['exit_tables_no_script']} exit-code tables with no "
-        f"script, {stats['exit_undecidable_scripts']} scripts with an opaque "
-        f"exit expression (judged only on what resolved), "
-        f"{stats['ignored']} lines/rows under `{INLINE_IGNORE}`, "
-        f"{stats['unscanned_carrier_files']} non-markdown files mentioning "
-        f"da-tools (portal JS/JSX, shell scripts) outside this scan set",
+        f"scanned: {s['cmd_segments']} fenced command segments, {s['inline_spans']} "
+        f"inline code spans, {s['cmd_manifest_argvs']} manifest args lists, "
+        f"{s['cmd_sh_c_strings']} `sh -c` strings",
+        f"NOT scored: {s['cmd_no_parser']} commands under a subcommand with no "
+        f"argparse parser (guard/parser/batch-pr — their subcommands are "
+        f"check_doc_datools_cmds' job), {s['cmd_script_not_in_map']} `python3 "
+        f"scripts/tools/…` scripts not in COMMAND_MAP, {s['cmd_bare_not_command']} "
+        f"`da-tools` words not in command position (image names, release names, "
+        f"container names), {s['cmd_run_without_image']} `docker/kubectl run` "
+        f"segments whose image could not be recognised (`$IMAGE`, `--image=`), "
+        f"{s['cmd_entrypoint_override']} `docker run --entrypoint` overrides, "
+        f"{s['cmd_positionals']} positional tokens, {s['cmd_placeholder_flags']} "
+        f"placeholder flags, {s['cmd_placeholder_subcommands']} placeholder "
+        f"subcommands, {s['cmd_skipped_values']} words skipped as the value of an "
+        f"undeclared flag, {s['cmd_unparseable']} unparseable lines/spans, "
+        f"{s['table_rows_positional']} option-table rows without a flag, "
+        f"{s['table_rows_no_parser']} option-table rows under a no-parser "
+        f"subcommand, {s['reference_sections_unmatched']} `####` headings naming no "
+        f"command, {s['exit_tables_no_script']} exit-code tables with no script, "
+        f"{s['exit_undecidable_scripts']} scripts with an opaque exit expression "
+        f"(judged only on what resolved), {s['commands_without_exit_table']} "
+        f"commands with a parser and a reference section but no exit-code table, "
+        f"{s['ignored']} lines/rows under `{INLINE_IGNORE}`, "
+        f"{s['unscanned_carrier_files']} non-markdown files mentioning da-tools "
+        f"(portal JS/JSX, shell scripts) outside this scan set",
         "⚠️ NOT scored is a disclosure, not coverage: this check cannot see those.",
     ]
 
@@ -1077,32 +1470,35 @@ def main() -> int:
             if args.json:
                 import json
                 json.dump({"findings": [], "suppressed": 0, "ignored": 0,
-                           "stats": {}, "errors": [f"missing {doc}"]},
+                           "stats": {}, "errors": [], "fatal": [f"missing {doc}"]},
                           sys.stdout, ensure_ascii=False)
                 sys.stdout.write("\n")
             print(f"ERROR: missing {doc}", file=sys.stderr)
             return EXIT_CALLER_ERROR
 
-    findings, stats, errors, _by_header, _per_doc = scan()
+    result = scan()
+    findings, stats = result.findings, result.stats
     entries, ledger_errors = load_baseline()
     if args.write_baseline:
         n = write_baseline(findings, entries)
         print(f"wrote {n} entries to {BASELINE_PATH.relative_to(REPO_ROOT).as_posix()} "
               f"(fill every `#TODO` ticket; the check rejects placeholders)")
         return EXIT_OK
-    errors += ledger_errors
+    fatal = result.fatal + ledger_errors
     open_findings, suppressed, baseline_errors = apply_baseline(findings, entries)
-    errors += baseline_errors
+    errors = result.errors + baseline_errors
     ignored = [f for f in findings if f.ignored is not None]
 
     if args.json:
         import json
         json.dump({"findings": [f._asdict() for f in open_findings],
                    "suppressed": len(suppressed), "ignored": len(ignored),
-                   "stats": stats, "errors": errors},
+                   "stats": stats, "errors": errors, "fatal": fatal},
                   sys.stdout, ensure_ascii=False, indent=1)
         sys.stdout.write("\n")
     else:
+        for e in fatal:
+            print(f"[FATAL] {e}", file=sys.stderr)
         for e in errors:
             print(f"[ERROR] {e}", file=sys.stderr)
         for f in open_findings:
@@ -1114,8 +1510,12 @@ def main() -> int:
               f"{len(ignored)} inline-ignored")
         for line in _not_scored_lines(stats):
             print(line)
-        if not open_findings and not errors:
+        if not open_findings and not errors and not fatal:
             print("✅ every documented da-tools invocation matches the CLI contract")
+    if fatal:
+        # The apparatus did not run to completion: a caller/setup error, never
+        # to be confused with "checked and found N things".
+        return EXIT_CALLER_ERROR
     if errors or open_findings:
         return EXIT_VIOLATION if args.ci else EXIT_OK
     return EXIT_OK
