@@ -507,6 +507,16 @@ python3 scripts/tools/ops/assemble_config_dir.py \
 ```
 
 With CI pipeline integration, each team only modifies their own conf.d/. The merge stage auto-detects conflicts (same tenant in multiple sources).
+⛔ **Detecting one means refusing to assemble**: when two files declare the same tenant id the exporter rejects the **entire** config-dir, so this step exits non-zero and **writes none of this round's output** — deciding which file owns that tenant is yours to make ([#1794](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1794)).
+
+⚠️ **This tool does not clear `--output`.** It only copies in, so a CI loop
+writing the same directory every round keeps the previous round's carriers —
+**and the exporter reads those too**. Two consequences: a shard retired at
+source does not disappear from the artifact (the tool lists such leftovers and
+counts them in the duplicate-tenant question, but still assembles and exits 0);
+and on a round that refuses, the previous round's complete, appliable artifact
+is still sitting there. Clear the output directory each round, or treat it as
+append-only.
 
 ⛔ **This section is currently reachable only by maintainers of this project.**
 Unlike every other command on this page, `assemble_config_dir.py` has **no
@@ -515,7 +525,11 @@ image — the line above needs a source checkout of this repository, which the
 [prerequisites](#prerequisites) do not ask you for. If you need this capability,
 please open an issue. Until then the workable substitute is to copy each team's
 `conf.d/` into one directory in your own CI and run `da-tools validate-config`
-over it (what you lose is the conflict detection).
+over it. ⚠️ **What you lose is not the whole-tree risk above**: a cross-file
+duplicate tenant is still reported (measured: rc 1, `tenant_uniqueness` FAIL).
+What you lose is same-FILENAME-across-sources detection — and the copy step
+itself silently overwrites one of them, so two teams each shipping a
+`db-a.yaml` leave one file behind and `validate-config` exits 0.
 
 ## 7. Troubleshooting
 
