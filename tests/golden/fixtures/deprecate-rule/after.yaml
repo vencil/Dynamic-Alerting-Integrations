@@ -1,0 +1,12 @@
+# _defaults.yaml — Platform global defaults
+# Managed by Platform Team. Tenant files should NOT contain this section.
+defaults:
+  mem_usage: 90
+  disk_usage: 85
+optional_overrides:
+- oracle_process_count
+state_filters:
+  container_crashloop:
+    reasons:
+    - CrashLoopBackOff
+    severity: critical

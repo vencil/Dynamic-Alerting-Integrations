@@ -829,7 +829,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "f51d3b59c6c5dca39614723b65f3799099303ee51fda5fbc55144317947b9991",
+ "source_digest": "a8bcb32880b5b4e14fa11415d8248f1a40fd8f5db16dd46b85958e3153101a9f",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -3142,6 +3142,16 @@
   ],
   "tests/golden/build_and_capture.py": [
    "tests/golden/test_merge_parity.py"
+  ],
+  "tests/golden/fixtures/defaults-carrier-oracle.json": [
+   "tests/ops/test_deprecate_rule_carriers.py",
+   "tests/ops/test_offboard_deprecate.py"
+  ],
+  "tests/golden/fixtures/deprecate-rule/after.yaml": [
+   "tests/ops/test_deprecate_rule_carriers.py"
+  ],
+  "tests/golden/fixtures/deprecate-rule/before.yaml": [
+   "tests/ops/test_deprecate_rule_carriers.py"
   ],
   "tests/golden/fixtures/full-l0-l3": [
    "tests/lint/test_check_threshold_reachability.py"

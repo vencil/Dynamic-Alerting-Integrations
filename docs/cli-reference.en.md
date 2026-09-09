@@ -166,7 +166,7 @@ These tools operate on local YAML files and don't require network.
 | `migrate` | Legacy rules → dynamic format conversion (AST engine) | `<input_file>` |
 | `validate-config` | One-stop configuration validation (YAML + schema + routes + policy) | `--config-dir <dir>` |
 | `offboard` | Offboard tenant configuration | `<tenant>` |
-| `deprecate` | Mark metrics as disabled | `<metric_keys...>` |
+| `deprecate` | Deprecate metrics: delete their keys from `defaults:` / `optional_overrides:` / tenant files | `<metric_keys...>` |
 | `lint` | Check Custom Rule governance compliance | `<path...>` |
 | `onboard` | Analyze existing Alertmanager/Prometheus config for migration | `<config_file>` or `--alertmanager-config <file>` |
 | `analyze-gaps` | Compare custom rules with Rule Pack coverage | `--tenant-config <path>` |
@@ -2240,7 +2240,7 @@ docker run --rm \
 
 #### deprecate
 
-Mark metrics as disabled to prevent accidental use.
+Deprecate metrics: remove `<m>`, `<m>_critical`, `custom_<m>`, `custom_<m>_critical` from `defaults:` / `optional_overrides:` / tenant files; on the tenant plane also the dimensional keys `<name>{…}` of those four names.
 
 **Purpose**: Gradually retire old metrics; maintain version compatibility.
 
@@ -2265,17 +2265,16 @@ docker run --rm \
 |--------|-------------|---------|
 | `--config-dir <PATH>` | Tenant config directory. ⚠️ The default points at a repo-internal path that does not exist in the image — pass it explicitly | `components/threshold-exporter/config/conf.d` |
 | `--execute` | **Actually perform the change** (default is pre-check / preview only, nothing is written) | false |
-| `--reason <TEXT>` | Deprecation reason (annotation) | (none) |
-| `--dry-run` | Preview changes | false |
+| `--plane {root,subtree}` | Whether this `--config-dir` is the conf.d root or one subtree carrier below the exporter's `-config-dir`. `root` runs the carrier health check on every `_`-prefixed file at this level (whether the exporter can read the values under `defaults:`, judged the way yaml.v3 does); `subtree` skips it (string values are legal on the subtree plane and take effect). The tool cannot infer this, so the default is fail-closed | `root` |
 
 **Output**
 
-Add or update metric key with `enabled: false` flag in _defaults.yaml.
+Deletes those keys from `defaults:` and `optional_overrides:` (the declared tier, names only) in `_defaults.yaml` / `.yml`, and from the non-`_`-prefixed tenant files in the flat directory, naming each removed key and its old value; an emptied `defaults:` / `optional_overrides:` is dropped entirely; a carrier holding none of them is named and left untouched. It does **not** write `disable`: `defaults:` is `map[string]float64`, so a string there makes the exporter drop the whole root carrier ([#1787](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1787)). When the carrier health check (see `--plane`) finds a file the exporter cannot read, the whole run degrades to a preview: nothing is written, rc 1; a `_`-prefixed file the tool's own pure-Python parser cannot read degrades the run the same way (the message says the exporter can read it); an empty value under `defaults:` only warns. The tool does not write into subdirectories, but the completeness rescan looks down into them: residue in a subtree's own `_defaults.yaml` or a tenant file's `tenants:` block clears by running `--plane subtree` on that subtree as the printed guidance says; the `tenants:` / `profiles:` blocks of root-level `_`-prefixed files are out of reach and any residue there has to be removed by hand; blocks the exporter does not read or drops only warn. ⚠️ NOT GUARDED: the write-back re-serialises the whole file (comments outside the header are removed, scalars in YAML 1.1 spellings change type); legacy spellings from the exporter's alias table and the value shapes of the other blocks are outside the health check (tracking entry: #1822).
 
 **Examples**
 
 ```bash
-# Mark multiple metrics as disabled
+# Deprecate multiple metrics
 docker run --rm \
   --user $(id -u):$(id -g) \
   -v $(pwd)/conf.d:/etc/config:rw \
@@ -2290,8 +2289,8 @@ docker run --rm \
 | Code | Description |
 |------|-------------|
 | `0` | Success |
-| `1` | Deprecation incomplete (a defaults carrier the scan listed was not written; each one is named) |
-| `2` | Invalid config directory |
+| `1` | Deprecation incomplete; every cause is printed in the output. ⚠️ Preview mode reaches the same verdict on the same tree |
+| `2` | Invalid config directory, or a carrier could not be written back |
 
 ---
 
