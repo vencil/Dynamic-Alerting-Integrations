@@ -308,3 +308,33 @@ class TestGenerators:
         assert "'a': '../interactive/tools/a.jsx'," in out  # not-last → comma
         assert "'b': '../getting-started/b.jsx'" in out  # last → no comma
         assert not out.rstrip().rstrip("};").rstrip().endswith(",")
+
+
+# ---------------------------------------------------------------------------
+# #1810 — "internal/" is judged below docs/, not on the absolute path
+# ---------------------------------------------------------------------------
+
+
+class TestAppearsInScanIsJudgedBelowDocsDir:
+    """A checkout under an ancestor named ``internal`` must still be scanned;
+    ``docs/internal/`` inside the tree is still excluded."""
+
+    def _tree(self, root):
+        docs = root / "docs"
+        (docs / "guide").mkdir(parents=True)
+        (docs / "internal").mkdir()
+        (docs / "guide" / "page.md").write_text("see tools/foo.jsx\n", encoding="utf-8")
+        (docs / "internal" / "note.md").write_text("see tools/foo.jsx\n", encoding="utf-8")
+        return root
+
+    def _appears(self, monkeypatch, root):
+        monkeypatch.setattr(srt, "PROJECT_ROOT", root)
+        result = srt.scan_appears_in([{"key": "foo", "file": "foo.jsx"}], verbose=False)
+        return {p for p in result.get("foo", [])}
+
+    def test_same_tree_under_internal_and_under_plain_scans_the_same_docs(
+            self, tmp_path, monkeypatch):
+        under_clash = self._appears(monkeypatch, self._tree(tmp_path / "internal" / "repo"))
+        under_plain = self._appears(monkeypatch, self._tree(tmp_path / "plain" / "repo"))
+        assert under_clash == under_plain
+        assert under_clash and all("internal/" not in p for p in under_clash)

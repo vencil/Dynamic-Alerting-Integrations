@@ -412,8 +412,11 @@ def scan_appears_in(tools: list, verbose: bool) -> dict:
     """Scan all markdown files for tool references and return actual appears_in map."""
     docs_dir = PROJECT_ROOT / "docs"
     md_files = list(docs_dir.rglob("*.md"))
-    # Exclude internal docs that don't count as "appears_in"
-    md_files = [f for f in md_files if "internal/" not in str(f)]
+    # Exclude internal docs that don't count as "appears_in". Judged on the
+    # path below docs/, not on the absolute path (#1810): a checkout under an
+    # ancestor named `internal` must not empty the scan.
+    md_files = [f for f in md_files
+                if "internal/" not in f.relative_to(docs_dir).as_posix()]
 
     actual = {}
     for tool in tools:

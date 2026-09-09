@@ -280,8 +280,16 @@ class TestOutputFormatting:
 # ---------------------------------------------------------------------------
 
 
+def _one_clean_pair(root: Path) -> None:
+    """有東西被比較、零 finding：一對乾淨的 zh/en 文件。"""
+    (root / "guide.md").write_text("# 指南\n\n這是一份中文文件，內容足夠。\n" * 5,
+                                   encoding="utf-8")
+    (root / "guide.en.md").write_text("# Guide\n\nThis is an English document.\n" * 5,
+                                      encoding="utf-8")
+
+
 def _one_unpaired_doc(root: Path) -> None:
-    """非空母體、零 finding：一個沒有 .en.md / .zh.md 配對的 plain.md。"""
+    """有 markdown、但沒有任何一份被分類成 zh/en 配對：什麼都沒被比較。"""
     (root / "plain.md").write_text("# plain\n\n單獨一份、不配對。\n", encoding="utf-8")
 
 
@@ -290,7 +298,7 @@ class TestCLI:
 
     def test_main_no_findings(self, tmp_path, monkeypatch, capsys, cli_argv):
         """無 findings 時正常退出。"""
-        _one_unpaired_doc(tmp_path)
+        _one_clean_pair(tmp_path)
         cli_argv("check_bilingual_content")
         monkeypatch.setattr(cbc, "DOCS_DIR", tmp_path)
         monkeypatch.setattr(cbc, "PROJECT_ROOT", tmp_path)
@@ -300,7 +308,7 @@ class TestCLI:
 
     def test_main_json_flag(self, tmp_path, monkeypatch, capsys, cli_argv):
         """--json 輸出 JSON。"""
-        _one_unpaired_doc(tmp_path)
+        _one_clean_pair(tmp_path)
         cli_argv("check_bilingual_content", "--json")
         monkeypatch.setattr(cbc, "DOCS_DIR", tmp_path)
         monkeypatch.setattr(cbc, "PROJECT_ROOT", tmp_path)
@@ -308,6 +316,7 @@ class TestCLI:
         out = capsys.readouterr().out
         data = json.loads(out)
         assert data["status"] == "pass"
+        assert data["compared"] == {"english": 1, "chinese": 1}
 
     def test_main_ci_exits_on_warnings(self, tmp_path, monkeypatch, capsys, cli_argv):
         """--ci 有 warnings 時 exit 1。"""
@@ -323,7 +332,7 @@ class TestCLI:
 
     def test_main_threshold_flag(self, tmp_path, monkeypatch, capsys, cli_argv):
         """--threshold 參數生效。"""
-        _one_unpaired_doc(tmp_path)
+        _one_clean_pair(tmp_path)
         cli_argv("check_bilingual_content", "--threshold", "0.99")
         monkeypatch.setattr(cbc, "DOCS_DIR", tmp_path)
         monkeypatch.setattr(cbc, "PROJECT_ROOT", tmp_path)
@@ -400,3 +409,59 @@ class TestEmptyPopulationIsACallerError:
         err = capsys.readouterr().err
         assert "not a directory" in err
         assert "no markdown files found" not in err
+
+
+# ---------------------------------------------------------------------------
+# #1810 — 有 markdown 但沒有任何 zh/en 配對：不是 passed，是 nothing was compared
+# ---------------------------------------------------------------------------
+
+
+class TestNothingComparedIsNotPassed:
+    """盲審 F1：`docs/` 有 markdown、但沒有一份被分類成 zh/en 文件時，舊碼印綠色的
+    「passed」。被比較的文件數是零，措辭必須說出來（rc 仍 0：配對是逐檔可選的，
+    與 #1809 對「有檔但沒有 frontmatter」的處置同形）。"""
+
+    def _point(self, monkeypatch, docs: Path) -> None:
+        monkeypatch.setattr(cbc, "DOCS_DIR", docs)
+        monkeypatch.setattr(cbc, "PROJECT_ROOT", docs.parent)
+
+    def test_text_says_nothing_was_compared_and_not_passed(
+            self, tmp_path, monkeypatch, capsys, cli_argv):
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        _one_unpaired_doc(docs)
+        self._point(monkeypatch, docs)
+        cli_argv("check_bilingual_content", "--ci")
+        cbc.main()
+        out = capsys.readouterr().out
+        assert "nothing was compared" in out
+        assert "passed" not in out
+        assert "Compared: 0 English, 0 Chinese" in out
+
+    def test_json_carries_the_compared_counts(
+            self, tmp_path, monkeypatch, capsys, cli_argv):
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        _one_unpaired_doc(docs)
+        self._point(monkeypatch, docs)
+        cli_argv("check_bilingual_content", "--json")
+        cbc.main()
+        data = json.loads(capsys.readouterr().out)
+        assert data["status"] == "pass"
+        assert data["compared"] == {"english": 0, "chinese": 0}
+
+    def test_scans_and_document_lists_select_the_same_files(self, tmp_path):
+        """scan_* 與 english_docs/chinese_docs 必須是同一個選擇；若有人在 scan 內
+        另寫一份過濾（例如把 includes 跳過寫回 scan_zh_docs），這裡轉紅。"""
+        docs = _docs_tree(tmp_path / "repo")
+        (docs / "includes").mkdir()
+        (docs / "includes" / "gen.zh.md").write_text(_UNTRANSLATED, encoding="utf-8")
+        (docs / "guide" / "setup.en.md").write_text("# 全中文\n\n中文內容。" * 10,
+                                                    encoding="utf-8")
+        with patch.object(cbc, "PROJECT_ROOT", tmp_path / "repo"):
+            zh_paths = {p for _s, _m, p, _r in cbc.scan_zh_docs(docs, min_threshold=1.0)}
+            en_paths = {p for _s, _m, p, _r in cbc.scan_en_docs(docs, threshold=0.0)}
+        rel = lambda f: str(f.relative_to(tmp_path / "repo"))  # noqa: E731
+        assert zh_paths == {rel(f) for f in cbc.chinese_docs(docs)}
+        assert en_paths == {rel(f) for f in cbc.english_docs(docs)}
+        assert zh_paths and en_paths

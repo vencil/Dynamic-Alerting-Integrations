@@ -240,7 +240,11 @@ def _resolve_target_paths(args: argparse.Namespace) -> list[Path]:
     if args.paths:
         out: list[Path] = []
         for p in args.paths:
-            candidate = Path(p) if Path(p).is_absolute() else PROJECT_ROOT / p
+            # Resolve before the root test (#1810): a symlink alias of the
+            # checkout or a `..` spelling must reach the same branch of
+            # _is_excluded_path as the real path — otherwise one file gets
+            # two verdicts depending on how the caller spelled it.
+            candidate = (Path(p) if Path(p).is_absolute() else PROJECT_ROOT / p).resolve()
             if candidate.is_file():
                 out.append(candidate)
             elif candidate.is_dir():

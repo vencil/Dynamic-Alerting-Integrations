@@ -93,6 +93,22 @@ def _is_chinese_doc(filepath: Path) -> bool:
     return False
 
 
+def english_docs(docs_dir: Path) -> list:
+    """The English documents scan_en_docs compares, in scan order."""
+    return [f for f in sorted(docs_dir.rglob("*.md")) if _is_english_doc(f)]
+
+
+def chinese_docs(docs_dir: Path) -> list:
+    """The Chinese documents scan_zh_docs compares, in scan order.
+
+    Skips internal/generated files. The skip-set is judged on the segments
+    below docs_dir, not on the absolute path (#1810).
+    """
+    return [f for f in sorted(docs_dir.rglob("*.md"))
+            if _is_chinese_doc(f)
+            and "includes" not in f.relative_to(docs_dir).parts]
+
+
 def scan_en_docs(
     docs_dir: Path,
     threshold: float = DEFAULT_CJK_THRESHOLD,
@@ -103,9 +119,7 @@ def scan_en_docs(
     Returns list of (severity, message, filepath, ratio) tuples.
     """
     findings = []
-    for f in sorted(docs_dir.rglob("*.md")):
-        if not _is_english_doc(f):
-            continue
+    for f in english_docs(docs_dir):
         try:
             text = f.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
@@ -133,13 +147,7 @@ def scan_zh_docs(
     Returns list of (severity, message, filepath, ratio) tuples.
     """
     findings = []
-    for f in sorted(docs_dir.rglob("*.md")):
-        if not _is_chinese_doc(f):
-            continue
-        # Skip internal/generated files. The skip-set is judged on the
-        # segments below docs_dir, not on the absolute path (#1810).
-        if "includes" in f.relative_to(docs_dir).parts:
-            continue
+    for f in chinese_docs(docs_dir):
         try:
             text = f.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
@@ -175,15 +183,28 @@ def run_all_checks(
     return findings
 
 
-def format_text_report(findings: list) -> str:
-    """Format human-readable text report."""
+def format_text_report(findings: list, *, compared: tuple | None = None) -> str:
+    """Format human-readable text report.
+
+    ``compared`` is ``(english, chinese)`` document counts when the caller
+    knows them (#1810): markdown present but no document classified as a
+    zh/en pair means nothing was compared, and that must not read as the
+    green "passed" — the wording is the only thing that tells the two apart
+    (rc stays 0: being paired is per-file optional).
+    """
     lines = []
     lines.append("=" * 60)
     lines.append("Bilingual Content Check")
     lines.append("=" * 60)
+    if compared is not None:
+        lines.append(f"Compared: {compared[0]} English, {compared[1]} Chinese document(s)")
 
     if not findings:
-        lines.append("✓ All bilingual content checks passed.")
+        if compared is not None and compared == (0, 0):
+            lines.append("⚠ nothing was compared: markdown present but no document "
+                         "is classified as a zh/en pair")
+        else:
+            lines.append("✓ All bilingual content checks passed.")
         return "\n".join(lines)
 
     warn_count = sum(1 for s, *_ in findings if s == "warning")
@@ -198,14 +219,17 @@ def format_text_report(findings: list) -> str:
     return "\n".join(lines)
 
 
-def format_json_report(findings: list, *, reason: str | None = None) -> str:
+def format_json_report(findings: list, *, reason: str | None = None,
+                       compared: tuple | None = None) -> str:
     """Format JSON report.
 
     ``status`` is one of ``pass | warn | caller_error``. ``reason`` is set
     only on the refused-empty-population path (#1810): ``--json`` stdout
     must still be exactly one JSON document there, so that path emits this
     shape zeroed out with ``status="caller_error"`` and the reason instead
-    of prose.
+    of prose. ``compared`` adds ``{"english": n, "chinese": m}`` when the
+    caller knows the counts, so a consumer can tell "pass" from "nothing was
+    compared".
     """
     report = {
         "check": "bilingual_content",
@@ -218,6 +242,8 @@ def format_json_report(findings: list, *, reason: str | None = None) -> str:
         "status": "pass" if not any(s == "warning" for s, *_ in findings)
                   else "warn",
     }
+    if compared is not None:
+        report["compared"] = {"english": compared[0], "chinese": compared[1]}
     if reason is not None:
         report["status"] = "caller_error"
         report["reason"] = reason
@@ -266,11 +292,12 @@ def main():
         sys.exit(EXIT_CALLER_ERROR)
 
     findings = run_all_checks(docs_dir=DOCS_DIR, threshold=args.threshold)
+    compared = (len(english_docs(DOCS_DIR)), len(chinese_docs(DOCS_DIR)))
 
     if args.json:
-        print(format_json_report(findings))
+        print(format_json_report(findings, compared=compared))
     else:
-        print(format_text_report(findings))
+        print(format_text_report(findings, compared=compared))
 
     has_warnings = any(s == "warning" for s, *_ in findings)
     if args.ci and has_warnings:

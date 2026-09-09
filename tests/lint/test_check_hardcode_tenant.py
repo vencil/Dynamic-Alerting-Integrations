@@ -324,6 +324,44 @@ class TestSkipSetIsJudgedBelowTheScanRoot:
         assert "db-a" in capsys.readouterr().err
 
 
+class TestExplicitPathsAreNormalisedBeforeTheRootTest:
+    """Blind-review F2/F3: the same file must get the same verdict however
+    the caller spells it. A symlink alias of the checkout, or a `..` spelling
+    that lexically sits under the root while the file does not, used to
+    reach a different branch of _is_excluded_path than the real path."""
+
+    def _tree(self, tmp_path):
+        root = tmp_path / "real" / "repo"
+        example = root / "components" / "examples" / "demo.go"
+        example.parent.mkdir(parents=True)
+        example.write_text(_DIRTY_GO, encoding="utf-8")
+        return root, example
+
+    def test_a_symlink_alias_of_the_checkout_gets_the_real_path_verdict(
+            self, tmp_path, monkeypatch):
+        root, example = self._tree(tmp_path)
+        alias = tmp_path / "alias"
+        try:
+            alias.symlink_to(root, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            pytest.skip("symlinks unavailable here")
+        monkeypatch.setattr(lint, "PROJECT_ROOT", root)
+        via_alias = alias / "components" / "examples" / "demo.go"
+        assert lint.main(["--ci", str(example)]) == lint.main(["--ci", str(via_alias)])
+        assert lint.main(["--ci", str(via_alias)]) == 0
+
+    def test_a_dot_dot_spelling_of_an_outside_file_is_not_treated_as_inside(
+            self, tmp_path, monkeypatch):
+        root, _ = self._tree(tmp_path)
+        outside = tmp_path / "outside" / "examples" / "o.go"
+        outside.parent.mkdir(parents=True)
+        outside.write_text(_DIRTY_GO, encoding="utf-8")
+        monkeypatch.setattr(lint, "PROJECT_ROOT", root)
+        spelled = "../../outside/examples/o.go"  # lexically under root
+        assert lint.main(["--ci", spelled]) == lint.main(["--ci", str(outside)])
+        assert lint.main(["--ci", str(outside)]) == 1
+
+
 # ---------------------------------------------------------------------------
 # #1810 — an empty default-roots population is a caller error
 # ---------------------------------------------------------------------------
