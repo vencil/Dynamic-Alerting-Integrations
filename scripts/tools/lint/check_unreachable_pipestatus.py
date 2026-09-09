@@ -362,6 +362,17 @@ def lex(lines: list[tuple[int, str]]) -> list[Stmt]:
             if ch == "#" and (i == 0 or raw[i - 1].isspace()):
                 break  # 行內註解
             # --- 巢狀 ---
+            # ⛔ 算術命令 `(( … ))` 裡的 `|` 是**位元或**，不是管線。lexer 原本只追
+            # `$(` 與反引號 ⇒ `(( a = 1 | 2 ))` 被讀成 top-level 管線而誤紅。
+            # 深度 +2，讓收尾的兩個 `)` 各自扣回來。
+            # 釘住：`test_arithmetic_command_bitwise_or_is_not_a_pipeline`。
+            if raw.startswith("((", i) and depth == 0 and not buf.rstrip().endswith("$"):
+                depth += 2
+                buf += "(("
+                if buf_line is None:
+                    buf_line = lineno
+                i += 2
+                continue
             if raw.startswith("$(", i):
                 depth += 1
                 buf += "$("
@@ -498,12 +509,11 @@ def shebang_flags(lines: list[tuple[int, str]]) -> tuple[bool, bool]:
 _GUARD_PREFIX = re.compile(r"^\s*(if|while|until|elif)\b|^\s*!\s")
 
 
-def is_protected(stmt: Stmt) -> bool:
-    """管線是否被 if/while/until/! 條件或 ``||`` / ``&&`` 接住。
+_COND_END = re.compile(r"^\s*(then|do)\b")
 
-    ⚠️ ``sep_before`` 也算：``pipeline && next`` 之後的語句，其前導分隔符就是
-    ``&&`` ⇒ 那條管線的失敗被接住了，errexit 不觸發。
-    """
+
+def is_protected(stmt: Stmt) -> bool:
+    """這條語句自己就以 ``if`` / ``while`` / ``until`` / ``elif`` / ``!`` 開頭。"""
     return bool(_GUARD_PREFIX.search(stmt.text))
 
 
@@ -529,18 +539,18 @@ def scan_unit(lines: list[tuple[int, str]], errexit: bool, pipefail: bool) -> li
     # ⛔ 函式體要對**每一個**呼叫點的狀態求值，取「存在一個呼叫點使讀取不可達」。
     # 只看最早那次會漏掉「先在 set +e 下呼叫、之後在 set -euo pipefail 下再呼叫」。
     # 釘住：`test_second_call_site_under_stricter_state_is_caught`。
-    state_at: dict[str, tuple[bool, bool]] = {}
+    # ⛔ 存的是**每個呼叫點的整組狀態**，不是兩個旗標各自 OR —— 各自 OR 會把
+    # 「呼叫甲只有 errexit、呼叫乙只有 pipefail」合成一個從未存在的 (True, True)，
+    # 於是誤紅一段兩次呼叫都真的執行到的程式碼。
+    # 釘住：`test_flags_from_different_call_sites_are_not_merged`。
+    state_at: dict[str, set[tuple[bool, bool]]] = {}
     e, pf = errexit, pipefail
     for st in stmts:
         if st.text.split()[:1] == ["set"]:
             e, pf = apply_set(st.text, e, pf)
         head = st.text.split()[0] if st.text.split() else ""
         if head in func_names and not st.in_func:
-            prev_state = state_at.get(head)
-            if prev_state is None:
-                state_at[head] = (e, pf)
-            else:
-                state_at[head] = (prev_state[0] or e, prev_state[1] or pf)
+            state_at.setdefault(head, set()).add((e, pf))
 
     # ⛔ 述詞不是「**前一個**語句是管線」，而是「**在**一條沒被接住的 top-level 管線
     # **之後**」——errexit 在管線那一行就終止腳本，後面**整段**都不可達，中間隔幾個
@@ -549,15 +559,25 @@ def scan_unit(lines: list[tuple[int, str]], errexit: bool, pipefail: bool) -> li
     violations: list[dict] = []
     e, pf = errexit, pipefail
     cur_func: str | None = None
-    dead: Stmt | None = None          # 造成後續不可達的那條管線
-    dead_scope: bool | None = None    # 該管線所在的 in_func，離開該範圍就重置
+    dead: dict[str | None, Stmt | None] = {}   # 每個範圍各自的「之後不可達」標記
+    # ⛔ `if` / `while` / `until` 的**條件串列整段**免除 errexit，不是只有第一個命令。
+    # `if [ -n "$X" ] && foo | bar; then` 的那條管線是被保護的（bash 實測 rc=0）。
+    # 釘住：`test_pipeline_later_in_an_if_condition_list_is_protected`。
+    in_cond = False
     for idx, st in enumerate(stmts):
         m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*\(\)", st.text)
         if m:
+            # ⛔ 只重置**這個函式自己**的範圍。原本無條件把 dead 清掉，於是一個
+            # 出現在致命管線**之後**（因此自己也不可達）的函式定義就能讓守衛忘記
+            # 前面已經死掉 ⇒ 真違規被報成 scanned + clean（最糟的一類）。
+            # 釘住：`test_function_definition_after_a_fatal_pipeline_does_not_revive`。
             cur_func = m.group(1)
-            dead = None
-        if dead is not None and st.in_func != dead_scope:
-            dead = None               # 跨出（或進入）函式體，重新起算
+            dead[cur_func] = None
+        elif not st.in_func:
+            cur_func = None
+        scope = cur_func if st.in_func else None
+        if _COND_END.match(st.text):
+            in_cond = False
         if st.text.split()[:1] == ["set"]:
             e, pf = apply_set(st.text, e, pf)
             continue
@@ -565,20 +585,24 @@ def scan_unit(lines: list[tuple[int, str]], errexit: bool, pipefail: bool) -> li
         if st.in_func and cur_func:
             if cur_func not in state_at:
                 continue
-            ce, cpf = state_at[cur_func]
+            # 「存在一個呼叫點使讀取不可達」＝ 有任一組同時開著 errexit 與 pipefail
+            ce = cpf = any(x and y for x, y in state_at[cur_func])
         else:
             ce, cpf = e, pf
 
-        if _PIPESTATUS_RE.search(st.text) and ce and cpf and dead is not None:
+        d = dead.get(scope)
+        if _PIPESTATUS_RE.search(st.text) and ce and cpf and d is not None:
             violations.append(
-                {"line": st.line, "code": st.text[:120], "pipeline": dead.text[:120]}
+                {"line": st.line, "code": st.text[:120], "pipeline": d.text[:120]}
             )
 
-        if st.top_pipe and not is_protected(st):
+        if st.top_pipe and not is_protected(st) and not in_cond:
             # 被 `&&` / `||` 接住的管線不會觸發 errexit —— 看**下一個**語句的前導分隔符
             nxt = stmts[idx + 1] if idx + 1 < len(stmts) else None
             if nxt is None or nxt.sep_before not in ("&&", "||"):
-                dead, dead_scope = st, st.in_func
+                dead[scope] = st
+        if is_protected(st):
+            in_cond = True
     return violations
 
 

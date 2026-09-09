@@ -811,3 +811,67 @@ def test_pipeline_inside_a_case_branch_is_still_caught(tmp_path: Path) -> None:
     repo = _git_fixture(tmp_path / "r", {"g.sh": script})
     data = _findings(repo)
     assert len(data["findings"]) == 1, f"case 分支體內的真違規被漏掉：{data}"
+
+
+def test_pipeline_later_in_an_if_condition_list_is_protected(tmp_path: Path) -> None:
+    """⛔ ``if`` / ``while`` / ``until`` 的**條件串列整段**免除 errexit，不只第一個命令。
+
+    只看「這條語句自己以 if 開頭」會把 ``if cond && pipeline; then`` 裡那條管線當成
+    致命的，於是誤紅一段 bash 實測**確實執行到**的程式碼。
+    """
+    script = (
+        "#!/usr/bin/env bash\nset -euo pipefail\nfoo() { return 1; }\nbar() { return 0; }\n"
+        'X=\nif [ -n "$X" ] && foo | bar; then\n  echo ok\nfi\n'
+        'RC="${PIPESTATUS[0]}"\necho "REACHED $RC"\n'
+    )
+    assert _bash_reaches(script, tmp_path), "ground truth 變了：bash 竟然沒執行到"
+    repo = _git_fixture(tmp_path / "r", {"g.sh": script})
+    assert not _findings(repo)["findings"], "if 條件串列裡的管線被誤判為致命"
+
+
+def test_arithmetic_command_bitwise_or_is_not_a_pipeline(tmp_path: Path) -> None:
+    """⛔ 算術命令 ``(( … ))`` 裡的 ``|`` 是**位元或**，不是管線。
+
+    lexer 若只追 ``$(`` 與反引號，``(( a = 1 | 2 ))`` 會被讀成 top-level 管線。
+    """
+    script = (
+        "#!/usr/bin/env bash\nset -euo pipefail\n(( flags = 1 | 2 ))\necho hi\n"
+        'RC="${PIPESTATUS[0]}"\necho "REACHED $RC"\n'
+    )
+    assert _bash_reaches(script, tmp_path), "ground truth 變了：bash 竟然沒執行到"
+    repo = _git_fixture(tmp_path / "r", {"g.sh": script})
+    assert not _findings(repo)["findings"], "算術裡的位元或被當成管線"
+
+
+def test_flags_from_different_call_sites_are_not_merged(tmp_path: Path) -> None:
+    """⛔ 呼叫點狀態要整組保存，不能把 errexit 與 pipefail 各自 OR。
+
+    各自 OR 會把「呼叫甲只有 errexit、呼叫乙只有 pipefail」合成一個**從未存在**的
+    ``(True, True)``，於是誤紅一段兩次呼叫都真的執行到的程式碼。
+    """
+    script = (
+        "#!/usr/bin/env bash\nmyfunc() {\n  false | true\n"
+        '  RC="${PIPESTATUS[0]}"\n  echo "REACHED $RC"\n}\n'
+        "set -eu\nmyfunc\nset +e\nset -o pipefail\nmyfunc\necho done\n"
+    )
+    proc = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=60)
+    assert proc.stdout.count("REACHED") == 2, f"ground truth 變了：{proc.stdout!r}"
+    repo = _git_fixture(tmp_path / "r", {"g.sh": script})
+    assert not _findings(repo)["findings"], "兩個呼叫點的旗標被合成出不存在的組合"
+
+
+def test_function_definition_after_a_fatal_pipeline_does_not_revive(tmp_path: Path) -> None:
+    """⛔ 出現在致命管線**之後**的函式定義，自己也不可達，不得清掉 dead 標記。
+
+    無條件清掉的話，一個路過的函式定義就能讓守衛忘記前面已經死掉 ⇒ 真違規被報成
+    ``scanned`` + clean，那是最糟的一類（連 ``skipped`` 都不是）。
+    """
+    script = (
+        "#!/usr/bin/env bash\nset -euo pipefail\nfoo() { return 0; }\nfalse | true\n"
+        'myfunc() {\n  echo hi\n}\nRC="${PIPESTATUS[0]}"\necho "REACHED $RC"\n'
+    )
+    assert not _bash_reaches(script, tmp_path), "ground truth 變了：bash 竟然執行到了"
+    repo = _git_fixture(tmp_path / "r", {"g.sh": script})
+    data = _findings(repo)
+    assert not data["skipped"]
+    assert len(data["findings"]) == 1, f"函式定義讓守衛忘記前面已經死掉：{data}"
