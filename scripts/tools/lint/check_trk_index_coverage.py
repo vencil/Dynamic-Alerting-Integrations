@@ -67,6 +67,13 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_validation import i18n_text  # noqa: E402
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _MAPPING = Path("docs/internal/planning-id-mapping.md")
 
@@ -162,19 +169,37 @@ def title_trks(owner: str, repo: str, token: str) -> dict[str, str]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--surface", default="commits", choices=["commits", "titles", "all"])
-    ap.add_argument("--ci", action="store_true", help="有違規時 exit 1")
-    ap.add_argument("--json", action="store_true")
-    ap.add_argument("--repo", default=str(_REPO_ROOT))
-    ap.add_argument("--owner", default="vencil")
-    ap.add_argument("--gh-repo", default="dynamic-alerting-integrations")
+    # ⛔ try_utf8_stdout() 要在 argparse 之前：`--help` 裡的 CJK 在 legacy Windows
+    # console（cp950/cp936）會在 argparse 印出來之前就 UnicodeEncodeError。
+    try_utf8_stdout()
+    ap = argparse.ArgumentParser(
+        description=i18n_text(
+            "斷言被引用的 TRK 都出現在 planning SSOT 的索引裡——"
+            "表上有洞而號碼在外面被用，會讓下一個人配號撞號，而且是靜默的。",
+            "Assert that every referenced TRK appears in the planning SSOT "
+            "index. A hole in the table while the number is in use makes the "
+            "next person collide on it, silently.",
+        ),
+    )
+    ap.add_argument("--surface", default="commits", choices=["commits", "titles", "all"],
+                    help=i18n_text("掃描面（titles 需要 GH_TOKEN）",
+                                   "scan surface (titles needs GH_TOKEN)"))
+    ap.add_argument("--ci", action="store_true",
+                    help=i18n_text("有違規時 exit 1", "exit 1 when violations are found"))
+    ap.add_argument("--json", action="store_true",
+                    help=i18n_text("輸出 JSON", "emit JSON"))
+    ap.add_argument("--repo", default=str(_REPO_ROOT),
+                    help=i18n_text("要掃描的 repo 根目錄", "repository root to scan"))
+    ap.add_argument("--owner", default="vencil",
+                    help=i18n_text("GitHub owner", "GitHub owner"))
+    ap.add_argument("--gh-repo", default="dynamic-alerting-integrations",
+                    help=i18n_text("GitHub repo 名", "GitHub repo name"))
     args = ap.parse_args(argv)
 
     repo = Path(args.repo).resolve()
     if not (repo / _MAPPING).exists():
         print(f"[trk-index] ⛔ 量不到：找不到 {_MAPPING}", file=sys.stderr)
-        return 2
+        return EXIT_CALLER_ERROR
 
     defined = defined_trks(repo)
     if not defined:
