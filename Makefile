@@ -566,6 +566,10 @@ baseline-discovery: ## Baseline Discovery: 觀測指標 + 建議閾值 (使用: 
 	@python3 ./scripts/tools/ops/baseline_discovery.py --tenant $(TENANT) --prometheus http://localhost:9090
 
 CONFDIR := components/threshold-exporter/config/conf.d
+# One value for both sharded targets: the dry run has to be able to ask
+# about the same directory the real run writes into, or its green means
+# something narrower than the operator reads it as (#1794).
+SHARDED_OUTDIR := .build/config-dir
 
 configmap-assemble: ## 從 conf.d/ 組裝 threshold-config ConfigMap YAML（供 GitOps sync）
 	@# #1603: ship both spellings, because the exporter's scanner reads both.
@@ -584,12 +588,13 @@ configmap-assemble: ## 從 conf.d/ 組裝 threshold-config ConfigMap YAML（供 
 sharded-assemble: ## Sharded GitOps: 合併多個 conf.d/ 來源 (使用: make sharded-assemble SOURCES=team-a/conf.d,team-b/conf.d)
 	@mkdir -p .build
 	@python3 ./scripts/tools/ops/assemble_config_dir.py \
-		--sources $(SOURCES) --output .build/config-dir --validate \
+		--sources $(SOURCES) --output $(SHARDED_OUTDIR) --validate \
 		--manifest .build/assembly-manifest.json
 	@echo "✓ manifest: .build/assembly-manifest.json"
 
 sharded-check: ## Sharded GitOps: 衝突偵測（dry-run）
-	@python3 ./scripts/tools/ops/assemble_config_dir.py --sources $(SOURCES) --check
+	@python3 ./scripts/tools/ops/assemble_config_dir.py \
+		--sources $(SOURCES) --output $(SHARDED_OUTDIR) --check
 
 assembler-render: ## CRD Assembler: 離線渲染 CR → YAML (使用: make assembler-render CR=k8s/crd/example-thresholdconfig.yaml)
 	@mkdir -p .build/config-dir

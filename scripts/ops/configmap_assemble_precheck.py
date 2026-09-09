@@ -10,7 +10,9 @@ commit 任何狀態 ⇒ 整棵樹每一個租戶都失去告警，不只那一�
 ⛔ 三個刻意的邊界：
 
 1. **不重寫規則**——`validate_config` 的 `tenant_uniqueness`（#1577）已經在
-   回答這個問題，這支只消費它的 `--json` 逐項輸出。
+   回答這個問題，這支只消費它的裁決。量測與三態分類住在
+   `_lib_tenant_uniqueness`，與 `assemble_config_dir`（另一個 producer，
+   #1794）共用；**措辭不共用**，因為兩者拒絕的理由不同。
 2. **不採用它的完整裁決**——那會讓客戶樹只要有任何一項無關違規就從「能部署」
    變成「不能部署」，是與本軸無關的迴歸。
 3. **「量不到」不是「量了沒事」**——JSON 解不出來、那一項不在輸出裡、或它回的
@@ -30,12 +32,8 @@ commit 任何狀態 ⇒ 整棵樹每一個租戶都失去告警，不只那一�
 from __future__ import annotations
 
 import argparse
-import json
 import os
-import shutil
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 _THIS_DIR = Path(__file__).resolve().parent
@@ -47,12 +45,7 @@ from _lib_exitcodes import (  # noqa: E402
     EXIT_CALLER_ERROR,
 )
 from _lib_confd import has_yaml_extension, is_hidden_name, warn_nested  # noqa: E402
-
-_VALIDATE = _TOOLS / "ops" / "validate_config.py"
-CHECK_NAME = "tenant_uniqueness"
-# Generous: this walks the customer's whole conf.d tree. It is a hang guard,
-# not a performance budget.
-_VALIDATE_TIMEOUT_S = 300
+import _lib_tenant_uniqueness as tu  # noqa: E402
 
 # The set the Makefile recipe ships: POSIX `*.yaml` + `*.yml`, i.e. lowercase
 # only. Kept here as the ONE place that describes what that recipe does, so
@@ -89,48 +82,12 @@ def _exporter_accepts(config_dir: Path) -> list[Path]:
     )
 
 
-def _run_validate(config_dir: Path) -> list[dict]:
-    """`validate_config --json`, parsed. Raises RuntimeError with a reason."""
-    try:
-        proc = subprocess.run(
-            [sys.executable, "-X", "utf8", str(_VALIDATE),
-             "--config-dir", str(config_dir), "--json"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
-            # A hang here would wedge `make configmap-assemble` — a target
-            # customers run — with no output at all. Bounded, and the timeout
-            # lands in the SAME "could not measure" arm as a parse failure.
-            timeout=_VALIDATE_TIMEOUT_S,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(
-            f"validate_config did not finish within {_VALIDATE_TIMEOUT_S}s"
-        ) from exc
-    # ⛔ The return code is deliberately IGNORED: a non-zero rc here means
-    # "some check failed", and this gate only speaks for one of them.
-    out = proc.stdout.strip()
-    if not out:
-        raise RuntimeError(
-            f"validate_config produced no stdout (rc={proc.returncode}). "
-            f"stderr: {proc.stderr.strip()[:400] or '(empty)'}"
-        )
-    try:
-        data = json.loads(out)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"validate_config --json was not parseable: {exc}") from exc
-    if not isinstance(data, list):
-        raise RuntimeError(
-            f"validate_config --json returned {type(data).__name__}, expected a list"
-        )
-    return data
-
-
-def _forward(entry: dict) -> None:
+def _forward(verdict: tu.Verdict) -> None:
     """Print the check's own details and hint. It knows more than we do."""
-    for line in entry.get("details") or []:
+    for line in verdict.details:
         print(f"  {line}", file=sys.stderr)
-    action = entry.get("suggested_action")
-    if action:
-        print(f"  -> {action}", file=sys.stderr)
+    if verdict.action:
+        print(f"  -> {verdict.action}", file=sys.stderr)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -185,58 +142,20 @@ def main(argv: list[str] | None = None) -> int:
     # build and told the operator the exporter would reject everything).
     # The nested files that do NOT ship are disclosed by `warn_nested` above,
     # which is the other half of the same honesty.
-    try:
-        with tempfile.TemporaryDirectory(prefix="cm-precheck-") as tmp:
-            flat = Path(tmp)
-            for p in shipped:
-                shutil.copy2(p, flat / p.name)
-            checks = _run_validate(flat)
-    except OSError as exc:
-        print(f"ERROR: could not stage the shipped set for checking — {exc}",
-              file=sys.stderr)
-        print("       This is 'could not measure', NOT 'measured clean'.",
-              file=sys.stderr)
-        return EXIT_CALLER_ERROR
-    except RuntimeError as exc:
-        print(f"ERROR: could not run the duplicate-tenant check — {exc}",
-              file=sys.stderr)
-        print("       This is 'could not measure', NOT 'measured clean'.",
-              file=sys.stderr)
-        return EXIT_CALLER_ERROR
+    verdict = tu.verdict_for({p.name: p for p in shipped})
 
-    entry = next((c for c in checks
-                  if isinstance(c, dict) and c.get("check") == CHECK_NAME), None)
-    if entry is None:
-        names = sorted(str(c.get("check")) for c in checks if isinstance(c, dict))
-        print(
-            f"ERROR: validate_config did not report a `{CHECK_NAME}` check; "
-            f"it reported: {names}. This gate cannot confirm the config dir "
-            f"is free of cross-file duplicate tenants, so it refuses rather "
-            f"than assuming it is.",
-            file=sys.stderr,
-        )
-        return EXIT_CALLER_ERROR
-
-    status = entry.get("status")
-    if status == "fail":
-        print(f"ERROR: {CHECK_NAME} failed — refusing to assemble a ConfigMap "
+    if verdict.outcome == tu.DUPLICATE:
+        print(f"ERROR: {tu.CHECK_NAME} failed — refusing to assemble a ConfigMap "
               f"the exporter would reject in full.", file=sys.stderr)
-        _forward(entry)
-        return EXIT_VIOLATION
+        _forward(verdict)
+        return tu.EXIT_FOR[verdict.outcome]
 
-    # ⛔ Derived, not enumerated: anything that is not an affirmative pass is
-    # not a pass. `tenant_uniqueness` also returns `warn`, and its own details
-    # say "this is a limit on what was checked, not a clean result" — a second
-    # declaration can be sitting in a file it could not open. Treating that as
-    # clean is precisely the failure this gate exists to refuse.
-    if status != "pass":
-        print(f"ERROR: {CHECK_NAME} came back `{status}`, which is not a pass "
-              f"— the duplicate-tenant question was not fully answered.",
-              file=sys.stderr)
-        _forward(entry)
+    if verdict.outcome != tu.CLEAN:
+        print(f"ERROR: {verdict.reason}", file=sys.stderr)
+        _forward(verdict)
         print("       This is 'could not measure', NOT 'measured clean'.",
               file=sys.stderr)
-        return EXIT_CALLER_ERROR
+        return tu.EXIT_FOR[verdict.outcome]
 
     print(f"✓ pre-check OK: {len(shipped)} carrier(s), no duplicate tenant")
     return EXIT_OK
