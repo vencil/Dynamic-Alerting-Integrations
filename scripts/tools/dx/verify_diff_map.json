@@ -829,7 +829,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "ef1c0136c5741d4e9aa39f48219d08087d38fd69171e270b88d95daeeeefc76d",
+ "source_digest": "81dda8661d423e217cbd42e0b67198eb4e8034d984784b955abe9e2b5464131c",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1516,9 +1516,6 @@
   "components/threshold-exporter/app/config.go": [
    "tests/lint/test_check_hardcode_tenant.py"
   ],
-  "components/threshold-exporter/app/config_deprecation_terminal_shape_test.go": [
-   "tests/ops/test_deprecate_rule_carriers.py"
-  ],
   "components/threshold-exporter/app/config_golden_parity_test.go": [
    "tests/golden/test_merge_parity.py"
   ],
@@ -1549,7 +1546,6 @@
    "tests/ops/test_registry_lib.py"
   ],
   "components/threshold-exporter/app/pkg/config/types.go": [
-   "tests/ops/test_deprecate_rule_carriers.py",
    "tests/shared/test_reserved_key_py_go_parity.py"
   ],
   "components/threshold-exporter/app/rulepack_contract_test.go": [
@@ -3147,6 +3143,16 @@
   "tests/golden/build_and_capture.py": [
    "tests/golden/test_merge_parity.py"
   ],
+  "tests/golden/fixtures/defaults-carrier-oracle.json": [
+   "tests/ops/test_deprecate_rule_carriers.py",
+   "tests/ops/test_offboard_deprecate.py"
+  ],
+  "tests/golden/fixtures/deprecate-rule/after/_defaults.yaml": [
+   "tests/ops/test_deprecate_rule_carriers.py"
+  ],
+  "tests/golden/fixtures/deprecate-rule/before/_defaults.yaml": [
+   "tests/ops/test_deprecate_rule_carriers.py"
+  ],
   "tests/golden/fixtures/full-l0-l3": [
    "tests/lint/test_check_threshold_reachability.py"
   ],
@@ -3167,9 +3173,6 @@
   ],
   "tests/golden/fixtures/mixed-mode/conf.d": [
    "tests/lint/test_check_threshold_reachability.py"
-  ],
-  "tests/golden/fixtures/mixed-mode/conf.d/db": [
-   "tests/ops/test_deprecate_rule_carriers.py"
   ],
   "tests/helm": [
    "tests/dx/test_verify_diff.py",
@@ -3265,9 +3268,6 @@
    "tests/lint/test_e2e_spec_lint.py",
    "tests/ops/test_ci_aggregate_gate_contract.py",
    "tests/ops/test_wrapped_path_references.py"
-  ],
-  "tests/ops/test_deprecate_rule_carriers.py": [
-   "tests/ops/test_offboard_deprecate.py"
   ],
   "tests/ops/test_domain_policy.py": [
    "tests/ops/test_generate_alertmanager_routes.py"

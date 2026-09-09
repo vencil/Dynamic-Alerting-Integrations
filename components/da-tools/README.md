@@ -191,7 +191,7 @@ docker run --rm \
 | 命令 | 用途 | 最小參數 |
 |------|------|----------|
 | `offboard` | 下架 tenant 配置（含預檢） | `<tenant>` |
-| `deprecate` | 下架指標：從 defaults／tenants 移除其 key | `<metric_keys...>` |
+| `deprecate` | 下架指標：從 `defaults:`／`optional_overrides:`／租戶檔移除 `<m>`、`<m>_critical`、`custom_<m>`、`custom_<m>_critical`；租戶平面另含這四個名字的維度鍵 `<名字>{…}` | `<metric_keys...>` |
 
 ### 4.10 Bridge（外掛整合）
 

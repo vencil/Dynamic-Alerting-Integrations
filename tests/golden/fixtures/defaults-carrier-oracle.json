@@ -1,0 +1,577 @@
+{
+  "$comment": "Truth table for `deprecate_rule`'s carrier health check: `exporter` is what threshold-exporter's parsePartialConfig does with `doc` as a root `_defaults.yaml` (Go test TestDefaultsCarrierOracle is the authority; tests/ops/test_deprecate_rule_carriers.py::test_carrier_health_matches_the_exporter must reach the same verdict from the bytes). `dropped` = the whole file is rejected; `accepted` = it loads and `key` (when non-null) is present with `value` (when given); `zero` = it loads and `key` decodes to 0.",
+  "cases": [
+    {
+      "name": "plain-int",
+      "doc": "defaults:\n  k: 80\n  neighbour: 90\n",
+      "exporter": "accepted",
+      "key": "k",
+      "value": 80
+    },
+    {
+      "name": "explicit-zero",
+      "doc": "defaults:\n  k: 0\n  neighbour: 90\n",
+      "exporter": "accepted",
+      "key": "k",
+      "value": 0
+    },
+    {
+      "name": "negative-int",
+      "doc": "defaults:\n  k: -5\n  neighbour: 90\n",
+      "exporter": "accepted",
+      "key": "k",
+      "value": -5
+    },
+    {
+      "name": "plus-int",
+      "doc": "defaults:\n  k: +5\n  neighbour: 90\n",
+      "exporter": "accepted",
+      "key": "k",
+      "value": 5
+    },
+    {
+      "name": "underscored-int",
+      "doc": "defaults:\n  k: 80_000\n  neighbour: 90\n",
+      "exporter": "accepted",
+      "key": "k",
+      "value": 80000
+    },
+    {
+      "name": "trailing-underscore",
+      "doc": "defaults:\n  k: 5_\n  neighbour: 90\n",
+      "exporter": "accepted",
+      "key": "k",
+      "value": 5
+    },
+    {
+      "name": "leading-underscore",
+      "doc": "defaults:\n  k: _5\n  neighbour: 90\n",
+      "exporter": "dropped",
+      "key": "k"
+    },
+    {
+      "name": "octal-0o",
+      "doc": "defaults:\n  k: 0o17\n  neighbour: 90\n",
+      "exporter": "accepted",
+      "key": "k",
+      "value": 15
+    },
+    {
+      "name": "legacy-octal",
+      "doc": "defaults:\n  k: 017\n  neighbour: 90\n",
+      "exporter": "accepted",
+      "key": "k",
+      "value": 15
+    },
+    {
+      "name": "zero-eight",
+      "doc": "defaults:\n  k: 08\n  neighbour: 90\n",
+      "exporter": "accepted",
+      "key": "k",
+      "value": 8
+    },
+    {
+      "name": "hex",
+      "doc": "defaults:\n  k: 0x10\n  neighbour: 90\n",
+      "exporter": "accepted",
+      "key": "k",
+      "value": 16
+    },
+    {
+      "name": "negative-hex",
+      "doc": "defaults:\n  k: -0x10\n  neighbour: 90\n",
+      "exporter": "accepted",
+      "key": "k",
+      "value": -16
+    },
+    {
+      "name": "plus-hex",
+      "doc": "defaults:\n  k: +0x10\n  neighbour: 90\n",
+      "exporter": "accepted",
+      "key": "k",
+      "value": 16
+    },
+    {
+      "name": "binary",
+      "doc": "defaults:\n  k: 0b101\n  neighbour: 90\n",
+      "exporter": "accepted",
+      "key": "k",
+      "value": 5
+    },
+    {
+      "name": "negative-binary",
+      "doc": "defaults:\n  k: -0b101\n  neighbour: 90\n",
+      "exporter": "accepted",
+      "key": "k",
+      "value": -5
+    },
+    {
+      "name": "float",
+      "doc": "defaults:\n  k: 1.5\n  neighbour: 90\n",
+      "exporter": "accepted",
+      "key": "k",
+      "value": 1.5
+    },
+    {
+      "name": "leading-dot-float",
+      "doc": "defaults:\n  k: .5\n  neighbour: 90\n",
+      "exporter": "accepted",
+      "key": "k",
+      "value": 0.5
+    },
+    {
+      "name": "exponent",
+      "doc": "defaults:\n  k: 1e3\n  neighbour: 90\n",
+      "exporter": "accepted",
+      "key": "k",
+      "value": 1000
+    },
+    {
+      "name": "exponent-upper-signed",
+      "doc": "defaults:\n  k: 1E+3\n  neighbour: 90\n",
+      "exporter": "accepted",
+      "key": "k",
+      "value": 1000
+    },
+    {
+      "name": "trailing-dot",
+      "doc": "defaults:\n  k: 5.\n  neighbour: 90\n",
+      "exporter": "accepted",
+      "key": "k",
+      "value": 5
+    },
+    {
+      "name": "exponent-overflow",
+      "doc": "defaults:\n  k: 1e999\n  neighbour: 90\n",
+      "exporter": "dropped",
+      "key": "k"
+    },
+    {
+      "name": "dot-inf",
+      "doc": "defaults:\n  k: .inf\n  neighbour: 90\n",
+      "exporter": "accepted",
+      "key": "k"
+    },
+    {
+      "name": "negative-dot-inf",
+      "doc": "defaults:\n  k: -.inf\n  neighbour: 90\n",
+      "exporter": "accepted",
+      "key": "k"
+    },
+    {
+      "name": "dot-nan",
+      "doc": "defaults:\n  k: .NaN\n  neighbour: 90\n",
+      "exporter": "accepted",
+      "key": "k"
+    },
+    {
+      "name": "huge-int",
+      "doc": "defaults:\n  k: 99999999999999999999\n  neighbour: 90\n",
+      "exporter": "accepted",
+      "key": "k",
+      "value": 1e+20
+    },
+    {
+      "name": "word",
+      "doc": "defaults:\n  k: disable\n  neighbour: 90\n",
+      "exporter": "dropped",
+      "key": "k"
+    },
+    {
+      "name": "yes",
+      "doc": "defaults:\n  k: yes\n  neighbour: 90\n",
+      "exporter": "dropped",
+      "key": "k"
+    },
+    {
+      "name": "on",
+      "doc": "defaults:\n  k: on\n  neighbour: 90\n",
+      "exporter": "dropped",
+      "key": "k"
+    },
+    {
+      "name": "true",
+      "doc": "defaults:\n  k: true\n  neighbour: 90\n",
+      "exporter": "dropped",
+      "key": "k"
+    },
+    {
+      "name": "bare-inf",
+      "doc": "defaults:\n  k: inf\n  neighbour: 90\n",
+      "exporter": "dropped",
+      "key": "k"
+    },
+    {
+      "name": "bare-nan",
+      "doc": "defaults:\n  k: NaN\n  neighbour: 90\n",
+      "exporter": "dropped",
+      "key": "k"
+    },
+    {
+      "name": "merge-token-as-value",
+      "doc": "defaults:\n  k: <<\n  neighbour: 90\n",
+      "exporter": "dropped",
+      "key": "k"
+    },
+    {
+      "name": "double-quoted",
+      "doc": "defaults:\n  k: \"80\"\n  neighbour: 90\n",
+      "exporter": "dropped",
+      "key": "k"
+    },
+    {
+      "name": "single-quoted",
+      "doc": "defaults:\n  k: '80'\n  neighbour: 90\n",
+      "exporter": "dropped",
+      "key": "k"
+    },
+    {
+      "name": "tagged-str",
+      "doc": "defaults:\n  k: !!str 80\n  neighbour: 90\n",
+      "exporter": "dropped",
+      "key": "k"
+    },
+    {
+      "name": "tagged-float",
+      "doc": "defaults:\n  k: !!float 80\n  neighbour: 90\n",
+      "exporter": "accepted",
+      "key": "k",
+      "value": 80
+    },
+    {
+      "name": "tagged-float-quoted",
+      "doc": "defaults:\n  k: !!float \"80\"\n  neighbour: 90\n",
+      "exporter": "accepted",
+      "key": "k",
+      "value": 80
+    },
+    {
+      "name": "tagged-int-hex",
+      "doc": "defaults:\n  k: !!int 0x10\n  neighbour: 90\n",
+      "exporter": "accepted",
+      "key": "k",
+      "value": 16
+    },
+    {
+      "name": "tagged-int-on-float",
+      "doc": "defaults:\n  k: !!int 1.5\n  neighbour: 90\n",
+      "exporter": "dropped",
+      "key": "k"
+    },
+    {
+      "name": "tagged-float-on-word",
+      "doc": "defaults:\n  k: !!float disable\n  neighbour: 90\n",
+      "exporter": "dropped",
+      "key": "k"
+    },
+    {
+      "name": "tagged-null-on-int",
+      "doc": "defaults:\n  k: !!null 80\n  neighbour: 90\n",
+      "exporter": "dropped",
+      "key": "k"
+    },
+    {
+      "name": "tagged-null-tilde",
+      "doc": "defaults:\n  k: !!null ~\n  neighbour: 90\n",
+      "exporter": "zero",
+      "key": "k"
+    },
+    {
+      "name": "tagged-bool",
+      "doc": "defaults:\n  k: !!bool true\n  neighbour: 90\n",
+      "exporter": "dropped",
+      "key": "k"
+    },
+    {
+      "name": "tagged-binary",
+      "doc": "defaults:\n  k: !!binary ODA=\n  neighbour: 90\n",
+      "exporter": "dropped",
+      "key": "k"
+    },
+    {
+      "name": "tagged-custom",
+      "doc": "defaults:\n  k: !num 80\n  neighbour: 90\n",
+      "exporter": "dropped",
+      "key": "k"
+    },
+    {
+      "name": "block-literal",
+      "doc": "defaults:\n  k: |\n    80\n  neighbour: 90\n",
+      "exporter": "dropped",
+      "key": "k"
+    },
+    {
+      "name": "block-folded",
+      "doc": "defaults:\n  k: >\n    80\n  neighbour: 90\n",
+      "exporter": "dropped",
+      "key": "k"
+    },
+    {
+      "name": "date",
+      "doc": "defaults:\n  k: 2026-01-01\n  neighbour: 90\n",
+      "exporter": "dropped",
+      "key": "k"
+    },
+    {
+      "name": "datetime",
+      "doc": "defaults:\n  k: 2026-01-01T00:00:00Z\n  neighbour: 90\n",
+      "exporter": "dropped",
+      "key": "k"
+    },
+    {
+      "name": "sexagesimal",
+      "doc": "defaults:\n  k: 1:30\n  neighbour: 90\n",
+      "exporter": "dropped",
+      "key": "k"
+    },
+    {
+      "name": "sexagesimal-long",
+      "doc": "defaults:\n  k: 190:20:30\n  neighbour: 90\n",
+      "exporter": "dropped",
+      "key": "k"
+    },
+    {
+      "name": "mapping-value",
+      "doc": "defaults:\n  k:\n    x: 1\n  neighbour: 90\n",
+      "exporter": "dropped",
+      "key": "k"
+    },
+    {
+      "name": "list-value",
+      "doc": "defaults:\n  k:\n  - 1\n  neighbour: 90\n",
+      "exporter": "dropped",
+      "key": "k"
+    },
+    {
+      "name": "empty",
+      "doc": "defaults:\n  k:\n  neighbour: 90\n",
+      "exporter": "zero",
+      "key": "k"
+    },
+    {
+      "name": "tilde",
+      "doc": "defaults:\n  k: ~\n  neighbour: 90\n",
+      "exporter": "zero",
+      "key": "k"
+    },
+    {
+      "name": "null",
+      "doc": "defaults:\n  k: null\n  neighbour: 90\n",
+      "exporter": "zero",
+      "key": "k"
+    },
+    {
+      "name": "Null",
+      "doc": "defaults:\n  k: Null\n  neighbour: 90\n",
+      "exporter": "zero",
+      "key": "k"
+    },
+    {
+      "name": "NULL",
+      "doc": "defaults:\n  k: NULL\n  neighbour: 90\n",
+      "exporter": "zero",
+      "key": "k"
+    },
+    {
+      "name": "alias-scalar",
+      "doc": "base: &v 80\ndefaults:\n  k: *v\n  neighbour: 90\n",
+      "exporter": "accepted",
+      "key": "k",
+      "value": 80
+    },
+    {
+      "name": "alias-string-scalar",
+      "doc": "base: &v disable\ndefaults:\n  k: *v\n  neighbour: 90\n",
+      "exporter": "dropped",
+      "key": "k"
+    },
+    {
+      "name": "merge-numeric-anchor",
+      "doc": "base: &b\n  k: 80\ndefaults:\n  <<: *b\n  neighbour: 90\n",
+      "exporter": "accepted",
+      "key": "k",
+      "value": 80
+    },
+    {
+      "name": "merge-overridden-string",
+      "doc": "base: &b\n  k: disable\ndefaults:\n  <<: *b\n  k: 80\n  neighbour: 90\n",
+      "exporter": "accepted",
+      "key": "k",
+      "value": 80
+    },
+    {
+      "name": "merge-string",
+      "doc": "base: &b\n  k: disable\ndefaults:\n  <<: *b\n  neighbour: 90\n",
+      "exporter": "dropped",
+      "key": "k"
+    },
+    {
+      "name": "merge-sequence-first-wins",
+      "doc": "a: &a\n  k: 80\nb: &b\n  k: disable\ndefaults:\n  <<: [*a, *b]\n  neighbour: 90\n",
+      "exporter": "accepted",
+      "key": "k",
+      "value": 80
+    },
+    {
+      "name": "merge-sequence-second-decoded",
+      "doc": "a: &a\n  j: 1\nb: &b\n  k: disable\ndefaults:\n  <<: [*a, *b]\n  neighbour: 90\n",
+      "exporter": "dropped",
+      "key": "k"
+    },
+    {
+      "name": "merge-scalar",
+      "doc": "defaults:\n  <<: 80\n  neighbour: 90\n",
+      "exporter": "dropped",
+      "key": null
+    },
+    {
+      "name": "merge-nested-anchor",
+      "doc": "a: &a\n  k: disable\nb: &b\n  <<: *a\n  j: 1\ndefaults:\n  <<: *b\n  neighbour: 90\n",
+      "exporter": "dropped",
+      "key": "k"
+    },
+    {
+      "name": "quoted-merge-key-is-a-key",
+      "doc": "defaults:\n  \"<<\": 80\n  neighbour: 90\n",
+      "exporter": "accepted",
+      "key": "<<",
+      "value": 80
+    },
+    {
+      "name": "dup-key-in-defaults",
+      "doc": "defaults:\n  k: 80\n  k: 81\n  neighbour: 90\n",
+      "exporter": "dropped",
+      "key": null
+    },
+    {
+      "name": "dup-key-quoted-twin",
+      "doc": "defaults:\n  k: 80\n  \"k\": 81\n  neighbour: 90\n",
+      "exporter": "dropped",
+      "key": null
+    },
+    {
+      "name": "dup-top-level-defaults",
+      "doc": "defaults:\n  k: 80\ndefaults:\n  neighbour: 90\n",
+      "exporter": "dropped",
+      "key": null
+    },
+    {
+      "name": "dup-in-tenants",
+      "doc": "defaults:\n  k: 80\ntenants:\n  t:\n    a: 1\n    a: 2\n",
+      "exporter": "dropped",
+      "key": null
+    },
+    {
+      "name": "dup-tenant-name",
+      "doc": "defaults:\n  k: 80\ntenants:\n  t: {}\n  t: {}\n",
+      "exporter": "dropped",
+      "key": null
+    },
+    {
+      "name": "dup-state-filter-name",
+      "doc": "defaults:\n  k: 80\nstate_filters:\n  x: {}\n  x: {}\n",
+      "exporter": "dropped",
+      "key": null
+    },
+    {
+      "name": "dup-in-unknown-section",
+      "doc": "defaults:\n  k: 80\nfoo:\n  a: 1\n  a: 2\n",
+      "exporter": "accepted",
+      "key": "k",
+      "value": 80
+    },
+    {
+      "name": "dup-unknown-top-level",
+      "doc": "defaults:\n  k: 80\nfoo: 1\nfoo: 2\n",
+      "exporter": "dropped",
+      "key": null
+    },
+    {
+      "name": "defaults-is-list",
+      "doc": "defaults:\n- k\n",
+      "exporter": "dropped",
+      "key": null
+    },
+    {
+      "name": "defaults-is-scalar",
+      "doc": "defaults: 80\n",
+      "exporter": "dropped",
+      "key": null
+    },
+    {
+      "name": "defaults-is-quoted-empty",
+      "doc": "defaults: \"\"\n",
+      "exporter": "dropped",
+      "key": null
+    },
+    {
+      "name": "defaults-null",
+      "doc": "defaults:\n",
+      "exporter": "accepted",
+      "key": null
+    },
+    {
+      "name": "defaults-absent",
+      "doc": "tenants:\n  t: {}\n",
+      "exporter": "accepted",
+      "key": null
+    },
+    {
+      "name": "quoted-defaults-key",
+      "doc": "\"defaults\":\n  k: 80\n",
+      "exporter": "accepted",
+      "key": "k",
+      "value": 80
+    },
+    {
+      "name": "empty-document",
+      "doc": "",
+      "exporter": "accepted",
+      "key": null
+    },
+    {
+      "name": "comment-only",
+      "doc": "# nothing here\n",
+      "exporter": "accepted",
+      "key": null
+    },
+    {
+      "name": "top-level-list",
+      "doc": "- defaults\n",
+      "exporter": "dropped",
+      "key": null
+    },
+    {
+      "name": "top-level-scalar",
+      "doc": "defaults\n",
+      "exporter": "dropped",
+      "key": null
+    },
+    {
+      "name": "multi-document",
+      "doc": "defaults:\n  k: 80\n---\ndefaults:\n  k: disable\n",
+      "exporter": "accepted",
+      "key": "k",
+      "value": 80
+    },
+    {
+      "name": "utf8-bom",
+      "doc": "﻿defaults:\n  k: 80\n",
+      "exporter": "accepted",
+      "key": "k",
+      "value": 80
+    },
+    {
+      "name": "tab-indent",
+      "doc": "defaults:\n\tk: 80\n",
+      "exporter": "dropped",
+      "key": null
+    },
+    {
+      "name": "unterminated-flow",
+      "doc": "defaults: [\n",
+      "exporter": "dropped",
+      "key": null
+    }
+  ]
+}

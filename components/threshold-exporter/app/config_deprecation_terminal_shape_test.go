@@ -1,39 +1,33 @@
 package main
 
-// The shape `deprecate_rule --execute` leaves a root `_defaults.yaml` in, read
-// back by the loader that actually consumes it (#1787).
+// Where the exporter's own loader meets `deprecate_rule --execute` (#1787).
 //
-// `scripts/tools/ops/deprecate_rule.py` used to deprecate a metric by writing
-// `<metric>: "disable"` under `defaults:`. `ThresholdConfig.Defaults` is
-// `map[string]float64` (pkg/config/types.go:208), so that string does not
-// disable one metric — `yaml.Unmarshal` fails on the document and
-// `parsePartialConfig` returns ok=false, which makes the caller drop the ENTIRE
-// carrier: every surviving threshold in it, plus its `state_filters:`. The tool
-// now removes the metric's keys instead, and this file is the Go-side half of
-// that contract.
+// `ThresholdConfig.Defaults` is `map[string]float64` (pkg/config/types.go:208):
+// a string under a root `defaults:` does not disable one metric — `yaml.Unmarshal`
+// fails and `parsePartialConfig` drops the WHOLE carrier, `state_filters:` and
+// all. The tool therefore deletes keys, and two fixtures under
+// tests/golden/fixtures link the two sides byte for byte:
 //
-// ⛔ The fixtures are hand-written YAML on purpose — nothing here shells out to
-// Python. These tests pin the SHAPE the tool must produce, so they stay
-// meaningful in a Go-only CI run and cannot go green because a Python
-// dependency was unavailable. The Python side separately pins that the tool
-// produces this shape (`tests/ops/test_deprecate_rule_carriers.py`,
-// `test_the_written_root_defaults_still_decodes_as_map_string_float64`).
+//   - deprecate-rule/{before,after}/_defaults.yaml — the Python side runs the
+//     tool on a copy of before/ and asserts the bytes equal after/
+//     (tests/ops/test_deprecate_rule_carriers.py::
+//     test_the_tool_output_is_the_golden_after_file); this file loads after/
+//     through the real loader.
+//   - defaults-carrier-oracle.json — the truth table for the tool's carrier
+//     health check. TestDefaultsCarrierOracle is the AUTHORITY on the
+//     `exporter` column; the Python side (…::test_carrier_health_matches_the_exporter)
+//     must reach the same verdict from the same bytes. A verdict in that file
+//     changes only when this test proves it.
 //
-// ⚠️ The two sides each pin the SEMANTIC shape from their own end; there is no
-// byte-level link between them — nothing here reads a file the Python side
-// wrote, and no fixture is shared. A drift that changed the tool's output
-// without changing either assertion would not be caught by the pair.
-//
-// ⚠️ The `disable-sentinel` arm of each test is a CONTROL and is expected to
-// FAIL to load. If it ever starts loading, the property asserted here has
-// stopped being a property (the loader would have been widened to accept string
-// sentinels under `defaults:`) — at which point ADR-017's defaults/tenants type
+// ⚠️ The `disable-sentinel` arm of each terminal-shape test is a CONTROL and is
+// expected to FAIL to load. If it ever starts loading, the loader was widened to
+// accept string sentinels under `defaults:` — ADR-017's defaults/tenants type
 // boundary, not this test, is the thing to revisit.
 
 import (
 	"bytes"
+	"encoding/json"
 	"log"
-	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -41,56 +35,53 @@ import (
 	"time"
 )
 
-// The carrier, in the two terminal shapes, for one deprecated metric
-// (`cpu_usage`, base + `_critical`).
-const (
-	deprecatedDeleteKeyCarrier = `# _defaults.yaml — Platform global defaults
-defaults:
-  mem_usage: 90
-  mem_usage_critical: 97
-  disk_usage: 85
-state_filters:
-  container_crashloop:
-    reasons: ["CrashLoopBackOff"]
-    severity: "critical"
-`
+// goldenFixture reads one file under tests/golden/fixtures. Missing is a
+// failure, not a skip: the fixture IS the link between the two sides.
+func goldenFixture(t *testing.T, parts ...string) []byte {
+	t.Helper()
+	path := filepath.Join(append([]string{"..", "..", "..", "tests", "golden",
+		"fixtures"}, parts...)...)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("golden fixture unreadable: %v", err)
+	}
+	return data
+}
 
-	deprecatedDisableCarrier = `# _defaults.yaml — Platform global defaults
+// The carrier `deprecate_rule --execute` used to leave behind (pre-#1787).
+const deprecatedDisableCarrier = `# _defaults.yaml — Platform global defaults
 defaults:
   cpu_usage: disable
-  cpu_usage_critical: disable
   mem_usage: 90
-  mem_usage_critical: 97
   disk_usage: 85
 state_filters:
   container_crashloop:
     reasons: ["CrashLoopBackOff"]
     severity: "critical"
 `
-)
 
-// What the platform still owes every tenant AFTER cpu_usage is deprecated.
+// What the platform still owes every tenant AFTER cpu_usage is deprecated —
+// the values in deprecate-rule/before/_defaults.yaml that are not cpu_usage's.
 var deprecationSurvivors = map[string]float64{
-	"mem_usage":          90,
-	"mem_usage_critical": 97,
-	"disk_usage":         85,
+	"mem_usage":  90,
+	"disk_usage": 85,
 }
 
 func TestDeprecatedMetricTerminalShape_CarrierStillParses(t *testing.T) {
 	arms := []struct {
 		name    string
-		doc     string
+		doc     []byte
 		wantOK  bool
 		wantLog string // substring the loader must log when it rejects the file
 	}{
 		{
-			name:   "delete-key (post-#1787 deprecate_rule output)",
-			doc:    deprecatedDeleteKeyCarrier,
+			name:   "delete-key (deprecate-rule/after golden)",
+			doc:    goldenFixture(t, "deprecate-rule", "after", "_defaults.yaml"),
 			wantOK: true,
 		},
 		{
 			name:    "disable-sentinel (pre-#1787 output — control)",
-			doc:     deprecatedDisableCarrier,
+			doc:     []byte(deprecatedDisableCarrier),
 			wantOK:  false,
 			wantLog: "entire block dropped",
 		},
@@ -101,7 +92,7 @@ func TestDeprecatedMetricTerminalShape_CarrierStillParses(t *testing.T) {
 		t.Run(a.name, func(t *testing.T) {
 			var logBuf bytes.Buffer
 			cfg, ok := parsePartialConfig(
-				"_defaults.yaml", "/conf.d/_defaults.yaml", []byte(a.doc),
+				"_defaults.yaml", "/conf.d/_defaults.yaml", a.doc,
 				newConfigMetrics(), log.New(&logBuf, "", 0))
 
 			if ok != a.wantOK {
@@ -111,12 +102,9 @@ func TestDeprecatedMetricTerminalShape_CarrierStillParses(t *testing.T) {
 
 			if !a.wantOK {
 				// ⚠️ Do NOT assert on the returned struct here: `yaml.Unmarshal`
-				// leaves it PARTIALLY populated (it fills what it decoded before
-				// the type error), which reads like "only cpu_usage was lost"
-				// and is the opposite of what happens. The `ok=false` IS the
-				// loss — every caller discards the value on it, and
-				// `..._WholeTreeReload` below measures that at the level where
-				// it is observable. What must be pinned here is that the
+				// leaves it PARTIALLY populated, which reads like "only
+				// cpu_usage was lost" and is the opposite of what happens. The
+				// `ok=false` IS the loss; what must be pinned here is that the
 				// rejection is not silent.
 				if !strings.Contains(logBuf.String(), a.wantLog) {
 					t.Errorf("expected the drop to be logged with %q, got: %s",
@@ -125,12 +113,18 @@ func TestDeprecatedMetricTerminalShape_CarrierStillParses(t *testing.T) {
 				return
 			}
 
-			// The deprecated metric is gone …
+			// The deprecated metric is gone from both planes …
 			for _, k := range []string{"cpu_usage", "cpu_usage_critical",
 				"custom_cpu_usage", "custom_cpu_usage_critical"} {
 				if _, present := cfg.Defaults[k]; present {
 					t.Errorf("deprecated key %q survived in defaults: %v",
 						k, cfg.Defaults)
+				}
+				for _, o := range cfg.OptionalOverrides {
+					if o == k {
+						t.Errorf("deprecated key %q survived in optional_overrides: %v",
+							k, cfg.OptionalOverrides)
+					}
 				}
 			}
 			// … and nothing else went with it.
@@ -147,6 +141,10 @@ func TestDeprecatedMetricTerminalShape_CarrierStillParses(t *testing.T) {
 				if got != want {
 					t.Errorf("defaults[%q] = %v, want %v", k, got, want)
 				}
+			}
+			if len(cfg.OptionalOverrides) != 1 || cfg.OptionalOverrides[0] != "oracle_process_count" {
+				t.Errorf("optional_overrides = %v, want the one surviving name",
+					cfg.OptionalOverrides)
 			}
 			// The sibling block riding in the same file — the part of the blast
 			// radius nobody expects a "metric deprecation" to touch.
@@ -169,29 +167,25 @@ func TestDeprecatedMetricTerminalShape_CarrierStillParses(t *testing.T) {
 
 // TestDeprecatedMetricTerminalShape_WholeTreeReload measures the same two
 // shapes where an operator would notice: the series the exporter resolves for
-// a whole conf.d. This is the codified miniature of the #1787 counterfactual —
-// deleting the key costs exactly the deprecated metric's rows, while the
-// `disable` sentinel costs the entire tree that carrier fed (and takes
-// `state_filters` with it, which no ticket about a threshold would predict).
+// a whole conf.d. Deleting the key costs exactly the deprecated metric's rows;
+// the `disable` sentinel costs the entire tree that carrier fed, state
+// filters included.
 func TestDeprecatedMetricTerminalShape_WholeTreeReload(t *testing.T) {
 	arms := []struct {
 		name             string
-		carrier          string
-		wantMetrics      []string // metric names that must resolve for db-a
+		carrier          []byte
+		wantMetrics      []string // metric names that must resolve for the tenant
 		wantStateFilters int
 	}{
 		{
-			name:    "delete-key (post-#1787 deprecate_rule output)",
-			carrier: deprecatedDeleteKeyCarrier,
-			// cpu_usage is gone; everything else the platform owes survives.
-			wantMetrics:      []string{"mem_usage", "mem_usage_critical", "disk_usage"},
+			name:             "delete-key (deprecate-rule/after golden)",
+			carrier:          goldenFixture(t, "deprecate-rule", "after", "_defaults.yaml"),
+			wantMetrics:      []string{"mem_usage", "disk_usage"},
 			wantStateFilters: 1,
 		},
 		{
-			name:    "disable-sentinel (pre-#1787 output — control)",
-			carrier: deprecatedDisableCarrier,
-			// The carrier is rejected whole: no defaults, so no base rows at
-			// all — and the state filter goes with it.
+			name:             "disable-sentinel (pre-#1787 output — control)",
+			carrier:          []byte(deprecatedDisableCarrier),
 			wantMetrics:      nil,
 			wantStateFilters: 0,
 		},
@@ -201,15 +195,14 @@ func TestDeprecatedMetricTerminalShape_WholeTreeReload(t *testing.T) {
 		a := a
 		t.Run(a.name, func(t *testing.T) {
 			dir := t.TempDir()
-			write := func(name, body string) {
+			write := func(name string, body []byte) {
 				t.Helper()
-				if err := os.WriteFile(filepath.Join(dir, name),
-					[]byte(body), 0o600); err != nil {
+				if err := os.WriteFile(filepath.Join(dir, name), body, 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}
 			write("_defaults.yaml", a.carrier)
-			write("db-a.yaml", "tenants:\n  db-a: {}\n")
+			write("alpha.yaml", []byte("tenants:\n  alpha: {}\n"))
 
 			var logBuf bytes.Buffer
 			mgr := NewConfigManager(dir)
@@ -243,83 +236,80 @@ func TestDeprecatedMetricTerminalShape_WholeTreeReload(t *testing.T) {
 	}
 }
 
-// defaultsScalarOracle is the FACT half of a cross-language oracle (#1787
-// round 4). Its case names and scalars are mirrored verbatim in
-// `tests/ops/test_deprecate_rule_carriers.py` as `DEFAULTS_SCALAR_ORACLE`,
-// where `deprecate_rule.non_numeric_defaults` has to reach the same verdict
-// from the raw YAML text alone.
-//
-// ⛔ The Python side cannot use its own parser as the oracle: PyYAML
-// implements YAML 1.1, so `yes` decodes to a bool, `1:30` to the
-// sexagesimal int 90, and `0o17` is not octal at all — three verdicts that
-// disagree with what this test measures. It therefore reimplements the core
-// schema's number grammar, and this table is what keeps that reimplementation
-// honest. When a row here changes, the Python table changes with it.
-//
-// `want` is what `parsePartialConfig` does with `defaults: {k: <scalar>}`:
-// ok=true and a value, or ok=false (the whole carrier is dropped).
-var defaultsScalarOracle = map[string]struct {
-	scalar string
-	wantOK bool
-	want   float64 // only read when wantOK
-}{
-	"plain-int":         {"80", true, 80},
-	"negative-int":      {"-5", true, -5},
-	"underscored-int":   {"80_000", true, 80000},
-	"octal":             {"0o17", true, 15},
-	"legacy-octal":      {"017", true, 15},
-	"hex":               {"0x10", true, 16},
-	"float":             {"1.5", true, 1.5},
-	"leading-dot-float": {".5", true, 0.5},
-	"exponent":          {"1e3", true, 1000},
-	"infinity":          {".inf", true, math.Inf(1)},
-	"word":              {"disable", false, 0},
-	"yes":               {"yes", false, 0},
-	"true":              {"true", false, 0},
-	"quoted-number":     {`"80"`, false, 0},
-	"date":              {"2026-01-01", false, 0},
-	"sexagesimal":       {"1:30", false, 0},
-	// ⚠️ The empty/null family parses FINE and lands on 0 — a carrier that
-	// keeps one is not dropped, it arms a zero threshold for every tenant.
-	// That is a different failure from the rows above, and the Python side
-	// reports it with a different message (`decodes_to_zero`).
-	"empty": {"", true, 0},
-	"tilde": {"~", true, 0},
-	"null":  {"null", true, 0},
-	"NULL":  {"NULL", true, 0},
+// carrierOracleCase is one row of defaults-carrier-oracle.json.
+type carrierOracleCase struct {
+	Name     string   `json:"name"`
+	Doc      string   `json:"doc"`
+	Exporter string   `json:"exporter"` // accepted | dropped | zero
+	Key      *string  `json:"key"`      // nil for document-level rows
+	Value    *float64 `json:"value"`    // only for finite accepted values
 }
 
-func TestDefaultsScalarOracle(t *testing.T) {
-	for name, tc := range defaultsScalarOracle {
-		name, tc := name, tc
-		t.Run(name, func(t *testing.T) {
-			doc := "defaults:\n  k: " + tc.scalar + "\n  neighbour: 90\n"
-			var logBuf bytes.Buffer
-			cfg, ok := parsePartialConfig(
-				"_defaults.yaml", "/conf.d/_defaults.yaml", []byte(doc),
-				newConfigMetrics(), log.New(&logBuf, "", 0))
+func loadCarrierOracle(t *testing.T) []carrierOracleCase {
+	t.Helper()
+	var table struct {
+		Cases []carrierOracleCase `json:"cases"`
+	}
+	if err := json.Unmarshal(goldenFixture(t, "defaults-carrier-oracle.json"), &table); err != nil {
+		t.Fatalf("defaults-carrier-oracle.json: %v", err)
+	}
+	if len(table.Cases) == 0 {
+		t.Fatal("defaults-carrier-oracle.json holds no cases")
+	}
+	return table.Cases
+}
 
-			if ok != tc.wantOK {
-				t.Fatalf("scalar %q: ok = %v, want %v (log: %s)",
-					tc.scalar, ok, tc.wantOK, logBuf.String())
-			}
-			if !tc.wantOK {
-				// The whole carrier is gone, so the neighbour goes too. That
-				// is the blast radius the Python side has to predict.
-				return
-			}
-			got, present := cfg.Defaults["k"]
-			if !present {
-				t.Fatalf("scalar %q parsed but produced no key: %v",
-					tc.scalar, cfg.Defaults)
-			}
-			if got != tc.want && !(math.IsInf(tc.want, 1) && math.IsInf(got, 1)) {
-				t.Errorf("scalar %q = %v, want %v", tc.scalar, got, tc.want)
-			}
-			if cfg.Defaults["neighbour"] != 90 {
-				t.Errorf("scalar %q took its neighbour with it: %v",
-					tc.scalar, cfg.Defaults)
-			}
+// assertCarrierVerdict is the meaning of the `exporter` column.
+func assertCarrierVerdict(t *testing.T, name string, doc []byte, want string, key *string, value *float64) {
+	t.Helper()
+	var logBuf bytes.Buffer
+	cfg, ok := parsePartialConfig(
+		"_defaults.yaml", "/conf.d/_defaults.yaml", doc,
+		newConfigMetrics(), log.New(&logBuf, "", 0))
+	switch want {
+	case "dropped":
+		if ok {
+			t.Fatalf("%s: loaded (defaults=%v), want the carrier dropped", name, cfg.Defaults)
+		}
+	case "accepted", "zero":
+		if !ok {
+			t.Fatalf("%s: dropped, want %s (log: %s)", name, want, logBuf.String())
+		}
+		if key == nil {
+			return
+		}
+		got, present := cfg.Defaults[*key]
+		if !present {
+			t.Fatalf("%s: loaded but %q is not in defaults: %v", name, *key, cfg.Defaults)
+		}
+		if want == "zero" && got != 0 {
+			t.Fatalf("%s: defaults[%q] = %v, want 0", name, *key, got)
+		}
+		if value != nil && got != *value {
+			t.Fatalf("%s: defaults[%q] = %v, want %v", name, *key, got, *value)
+		}
+	default:
+		t.Fatalf("%s: unknown exporter verdict %q", name, want)
+	}
+}
+
+func TestDefaultsCarrierOracle(t *testing.T) {
+	seen := map[string]bool{}
+	for _, tc := range loadCarrierOracle(t) {
+		tc := tc
+		if seen[tc.Name] {
+			t.Fatalf("duplicate case name %q", tc.Name)
+		}
+		seen[tc.Name] = true
+		t.Run(tc.Name, func(t *testing.T) {
+			assertCarrierVerdict(t, tc.Name, []byte(tc.Doc), tc.Exporter, tc.Key, tc.Value)
 		})
 	}
+}
+
+// Bytes that are not UTF-8 cannot live in the JSON table, so this row is
+// written out in both languages under the same name.
+func TestDefaultsCarrierOracle_InvalidUTF8Bytes(t *testing.T) {
+	doc := []byte("defaults:\n  k: 80\n  neighbour: \xe9\n")
+	assertCarrierVerdict(t, "invalid-utf8-bytes", doc, "dropped", nil, nil)
 }

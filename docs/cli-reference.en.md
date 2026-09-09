@@ -166,7 +166,7 @@ These tools operate on local YAML files and don't require network.
 | `migrate` | Legacy rules → dynamic format conversion (AST engine) | `<input_file>` |
 | `validate-config` | One-stop configuration validation (YAML + schema + routes + policy) | `--config-dir <dir>` |
 | `offboard` | Offboard tenant configuration | `<tenant>` |
-| `deprecate` | Deprecate metrics (remove their keys from defaults/tenants) | `<metric_keys...>` |
+| `deprecate` | Deprecate metrics: remove `<m>`, `<m>_critical`, `custom_<m>`, `custom_<m>_critical` from `defaults:` / `optional_overrides:` / tenant files; on the tenant plane also the dimensional keys `<name>{…}` of those four names | `<metric_keys...>` |
 | `lint` | Check Custom Rule governance compliance | `<path...>` |
 | `onboard` | Analyze existing Alertmanager/Prometheus config for migration | `<config_file>` or `--alertmanager-config <file>` |
 | `analyze-gaps` | Compare custom rules with Rule Pack coverage | `--tenant-config <path>` |
@@ -2240,7 +2240,7 @@ docker run --rm \
 
 #### deprecate
 
-Deprecate metrics: **remove** the metric's keys from every defaults carrier and every tenant config.
+Deprecate metrics: remove `<m>`, `<m>_critical`, `custom_<m>`, `custom_<m>_critical` from `defaults:` / `optional_overrides:` / tenant files; on the tenant plane also the dimensional keys `<name>{…}` of those four names.
 
 **Purpose**: Gradually retire old metrics; maintain version compatibility.
 
@@ -2265,11 +2265,11 @@ docker run --rm \
 |--------|-------------|---------|
 | `--config-dir <PATH>` | Tenant config directory. ⚠️ The default points at a repo-internal path that does not exist in the image — pass it explicitly | `components/threshold-exporter/config/conf.d` |
 | `--execute` | **Actually perform the change** (default is pre-check / preview only, nothing is written) | false |
-| `--plane {root,subtree}` | Whether this `--config-dir` is the conf.d root or one subtree carrier below the exporter's `-config-dir`. `root` type-checks the values under `defaults:` (they must be YAML 1.2 numbers); `subtree` skips that check — the subtree plane decodes into `map[string]any`, where string values are legal and take effect. ⚠️ The tool cannot infer this, so the default is fail-closed | `root` |
+| `--plane {root,subtree}` | Whether this `--config-dir` is the conf.d root or one subtree carrier below the exporter's `-config-dir`. `root` runs the carrier health check on every `_`-prefixed file at this level — whether the exporter can read the values under `defaults:`, judged the way yaml.v3 does, truth table in `tests/golden/fixtures/defaults-carrier-oracle.json`; `subtree` skips that check — the subtree plane decodes into `map[string]any`, where string values are legal and take effect. ⚠️ The tool cannot infer this, so the default is fail-closed | `root` |
 
 **Output**
 
-Deletes `<metric>` / `<metric>_critical` / `custom_<metric>` / `custom_<metric>_critical` from `defaults:` and `optional_overrides:` (the declared tier — names only, no values; the key is dropped entirely once emptied) in _defaults.yaml, and from the non-`_`-prefixed tenant files in the flat directory, naming each removed key and its old value; a carrier holding none of them is named and left untouched (files in subdirectories are neither scanned nor written — `warn_nested` names them). ⚠️ It does **not** write `disable` or `enabled: false`: `defaults:` is typed `map[string]float64`, so a string there makes the exporter drop the whole root carrier ([#1787](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1787)). ⚠️ The write-back re-serialises the whole carrier: the SPELLING of other scalars in it changes (`0x10` is written back as `16`; the value does not change). If the carrier still holds a value the exporter cannot read as a number — where re-serialising could change the meaning too, e.g. `1:30` — the tool does NOT write that carrier and exits 1.
+Deletes those keys from `defaults:` and `optional_overrides:` (the declared tier — names only, no values) in `_defaults.yaml` / `.yml`, and from the non-`_`-prefixed tenant files in the flat directory, naming each removed key and its old value; an emptied `defaults:` / `optional_overrides:` is dropped entirely; a carrier holding none of them is named and left untouched. ⚠️ It does **not** write `disable`: `defaults:` is typed `map[string]float64`, so a string there makes the exporter drop the whole root carrier ([#1787](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1787)). ⚠️ The write-back re-serialises the whole file (carriers and tenant files alike): comments outside the header are removed; scalars in YAML 1.1 spellings change type. When the carrier health check (see `--plane`) is red the whole run degrades to a preview: not a byte is written, rc 1. The tool does not write into subdirectories, but the completeness rescan looks down into them: a residue in a subdirectory is named together with the subtree to run `--plane subtree` on; the `tenants:` / `profiles:` blocks of `_`-prefixed files are out of reach and any residue there has to be removed by hand.
 
 **Examples**
 
@@ -2289,7 +2289,7 @@ docker run --rm \
 | Code | Description |
 |------|-------------|
 | `0` | Success |
-| `1` | Deprecation incomplete, each cause named. What reaches it today: a defaults carrier the scan listed was not written; references still found on the rescan after `--execute`; a `_`-prefixed tenant file — which this tool does not write by design — still holding the key (remove it by hand); a non-carrier `_`-prefixed file carrying a `defaults:` block (the exporter merges it into the global defaults, so it needs manual handling); or a non-numeric / empty residue under a **root** carrier's `defaults:` (the former drops the carrier whole, the latter arms a zero threshold). ⚠️ Preview mode reaches the same verdict on the same tree; the two `_`-prefixed causes do not clear on a rerun — a person has to edit those files |
+| `1` | Deprecation incomplete; every cause is printed in the output. ⚠️ Preview mode reaches the same verdict on the same tree |
 | `2` | Invalid config directory |
 
 ---

@@ -210,8 +210,15 @@ def test_scan_for_metric_dimensional_key():
 
 
 # ===================================================================
-# 6. deprecate_rule — remove_from_defaults (#1787: 下架＝刪 key)
+# 6. deprecate_rule — remove_from_all_defaults (#1787: 下架＝刪 key)
 # ===================================================================
+
+def _only_carrier(results):
+    """`remove_from_all_defaults` 對單一載體回一筆 `(path, ok, msg, removed)`。"""
+    assert len(results) == 1, results
+    _path, ok, msg, _removed = results[0]
+    return ok, msg
+
 
 def test_remove_from_defaults_preview_mode():
     """測試預覽模式。"""
@@ -219,8 +226,8 @@ def test_remove_from_defaults_preview_mode():
         make_confdir(d, {
             "_defaults.yaml": {"defaults": {"mysql_connections": 70}},
         })
-        ok, msg = deprecate_rule.remove_from_defaults(
-            "mysql_connections", d, execute=False)
+        ok, msg = _only_carrier(deprecate_rule.remove_from_all_defaults(
+            "mysql_connections", d, execute=False))
         assert ok is True
         assert "將從" in msg and "移除" in msg
         # File should NOT be modified
@@ -228,20 +235,15 @@ def test_remove_from_defaults_preview_mode():
         assert data["defaults"]["mysql_connections"] == 70
 
 def test_remove_from_defaults_execute_mode():
-    """測試執行模式：key 被刪掉，而不是被寫成 "disable"。
-
-    #1787: `defaults:` 的值是 `map[string]float64`
-    (threshold-exporter/app/pkg/config/types.go:208)，寫進字串會讓整份檔被
-    `parsePartialConfig` 丟掉。這條斷言釘的是「key 不存在」，不是「值變成
-    某個哨兵」。
-    """
+    """執行模式：key 被刪掉，而不是被寫成 "disable"（`defaults:` 是
+    `map[string]float64`，字串會讓整份檔被 `parsePartialConfig` 丟掉）。"""
     with tempfile.TemporaryDirectory() as d:
         make_confdir(d, {
             "_defaults.yaml": {"defaults": {"mysql_connections": 70,
                                             "mem_usage": 90}},
         })
-        ok, msg = deprecate_rule.remove_from_defaults(
-            "mysql_connections", d, execute=True)
+        ok, msg = _only_carrier(deprecate_rule.remove_from_all_defaults(
+            "mysql_connections", d, execute=True))
         assert ok is True
         data = deprecate_rule.load_yaml_file(os.path.join(d, "_defaults.yaml"))
         assert "mysql_connections" not in data["defaults"]
@@ -249,18 +251,14 @@ def test_remove_from_defaults_execute_mode():
         assert data["defaults"]["mem_usage"] == 90
 
 def test_remove_from_defaults_repairs_a_carrier_already_written_as_disable():
-    """舊行為留下的 `<m>: disable` 也是「相關 key」，重跑會把它刪掉。
-
-    這是 BREAKING 條目承諾的修復路徑：已經被舊版工具寫成 `disable` 的 root
-    檔（此刻 `parsePartialConfig` 對它整份回 ok=false），重跑新版工具即修復。
-    """
+    """舊行為留下的 `<m>: disable` 也是「相關 key」，重跑會把它刪掉。"""
     with tempfile.TemporaryDirectory() as d:
         make_confdir(d, {
             "_defaults.yaml": {"defaults": {"mysql_connections": "disable",
                                             "mem_usage": 90}},
         })
-        ok, msg = deprecate_rule.remove_from_defaults(
-            "mysql_connections", d, execute=True)
+        ok, msg = _only_carrier(deprecate_rule.remove_from_all_defaults(
+            "mysql_connections", d, execute=True))
         assert ok is True
         data = deprecate_rule.load_yaml_file(os.path.join(d, "_defaults.yaml"))
         assert "mysql_connections" not in data["defaults"]
@@ -272,17 +270,19 @@ def test_remove_from_defaults_no_related_key_is_a_named_noop():
         path = os.path.join(d, "_defaults.yaml")
         make_confdir(d, {"_defaults.yaml": {"defaults": {"mem_usage": 90}}})
         before = open(path, "rb").read()
-        ok, msg = deprecate_rule.remove_from_defaults(
-            "mysql_connections", d, execute=True)
+        ok, msg = _only_carrier(deprecate_rule.remove_from_all_defaults(
+            "mysql_connections", d, execute=True))
         assert ok is True
         assert "沒有 mysql_connections 相關 key" in msg and "略過" in msg
         assert open(path, "rb").read() == before
 
 def test_remove_from_defaults_missing_defaults_file():
-    """測試缺失預設值檔案。"""
+    """沒有載體 ⇒ 回正典路徑那一筆，ok=False。"""
     with tempfile.TemporaryDirectory() as d:
-        ok, msg = deprecate_rule.remove_from_defaults("m", d, execute=False)
+        ok, msg = _only_carrier(deprecate_rule.remove_from_all_defaults(
+            "m", d, execute=False))
         assert ok is False
+        assert "_defaults.yaml 不存在" in msg
 
 
 # ===================================================================
@@ -318,32 +318,32 @@ def test_tenant_key_belongs_to_metric_rejects_a_neighbour_that_merely_shares_the
         assert not belongs(key, "container_cpu"), key
 
 
-def test_non_numeric_defaults_separates_the_two_ways_a_value_goes_wrong():
-    """產線的載體體檢述詞回**兩類**，因為下場是兩件不同的事（#1787 三輪 F-03）。
+def test_carrier_health_separates_the_three_ways_a_carrier_goes_wrong():
+    """產線的載體體檢回三類 kind，因為下場是三件不同的事。
 
-    ⛔ 二輪把 `key:`（空值）也算成「整份載體被丟」，那句話是假的：Go 實測
-    `cpu_usage: null` 是 ok=**true**、解成 0——檔案好好的，多的是一條 0 閾值。
-
-    ⛔ 輸入是**原始 YAML 文字**，不是解析後的 mapping（四輪 F-05）。整張跨語言
-    矩陣在 `tests/ops/test_deprecate_rule_carriers.py::DEFAULTS_SCALAR_ORACLE`
-    與 Go 側的 `defaultsScalarOracle`；這裡只釘形狀與兩個 kind 常數。
+    完整真值表在 `tests/golden/fixtures/defaults-carrier-oracle.json`（Go 側
+    `TestDefaultsCarrierOracle` 裁判）；這裡只釘形狀與三個 kind 常數。
     """
-    fn = deprecate_rule.non_numeric_defaults
+    fn = deprecate_rule.carrier_health
     UNP, ZERO = deprecate_rule.UNPARSEABLE, deprecate_rule.DECODES_TO_ZERO
 
-    assert fn("defaults:\n  a: 80\n  b: 1.5\n  c: -3\n") == []
-    # 整份載體被丟的那一類：純量文字不是 YAML 1.2 的數字，或是集合。
-    assert fn("defaults:\n  a: 80\n  old: disable\n") == [
+    assert fn(b"defaults:\n  a: 80\n  b: 1.5\n  c: -3\n") == []
+    # 整份載體被丟的那一類，key 具名。
+    assert fn(b"defaults:\n  a: 80\n  old: disable\n") == [
         ("old", "disable", UNP)]
-    assert fn("defaults:\n  m:\n    x: 1\n") == [("m", "<mapping>", UNP)]
-    assert fn("defaults:\n  l:\n  - 1\n") == [("l", "<list>", UNP)]
+    assert fn(b"defaults:\n  m:\n    x: 1\n") == [("m", "<mapping>", UNP)]
+    assert fn(b"defaults:\n  l:\n  - 1\n") == [("l", "<list>", UNP)]
     # 武裝一條 0 閾值的那一類。
-    assert fn("defaults:\n  k:\n") == [("k", "(空)", ZERO)]
-    # 沒有 `defaults:`／它不是 mapping／檔案根本壞掉 —— 都不是本述詞的職責，
-    # 回空讓各自的具名路徑處理。
-    assert fn("tenants:\n  a: {}\n") == []
-    assert fn("defaults:\n- a\n") == []
-    assert fn("defaults: [\n") == []
+    assert fn(b"defaults:\n  k:\n") == [("k", "(空)", ZERO)]
+    # 文件層級的那一類，key 是 None。
+    assert fn(b"defaults:\n- a\n") == [(None, "defaults 不是 mapping（list）", UNP)]
+    got = fn(b"defaults: [\n")
+    assert len(got) == 1 and got[0][0] is None and got[0][2] == UNP, got
+    # 沒有 `defaults:` 不是本述詞的事。
+    assert fn(b"tenants:\n  a: {}\n") == []
+    # 讀不到的檔是第三類。
+    got = deprecate_rule.carrier_health_at("/nonexistent/_defaults.yaml")
+    assert len(got) == 1 and got[0][0] is None and got[0][2] == deprecate_rule.UNREADABLE, got
 
 
 # ===================================================================
