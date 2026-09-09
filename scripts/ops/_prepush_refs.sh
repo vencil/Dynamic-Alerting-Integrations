@@ -183,6 +183,8 @@ case: that is exactly the defect #1664 removed. To ask whether the guards are
 on the push path at all:
 
     make pr-preflight          (its `Local hooks` row answers exactly that)
+    make pr-preflight-quick    (same answer, without the --all-files run: #1811
+                                made --skip-hooks skip only that half)
 
 PREPUSH_MSG
 }

@@ -272,6 +272,53 @@ class TestCheckLocalHooks:
         # the stub's own explanation is surfaced rather than swallowed
         assert "stubbed by _assume_installed" in result.detail
 
+    def test_run_precommit_false_skips_the_run_but_not_the_wiring_probe(
+        self, monkeypatch
+    ):
+        """#1811 — the quick path drops `pre-commit run`, never the wiring probe.
+
+        `--skip-hooks` used to take the whole row out, which took out the only
+        place that answers "are the pre-push guards still on the push path?".
+        Splitting it is affordable because the two halves differ by three
+        orders of magnitude: the probe is pure Python plus one `git rev-parse`,
+        the run is `pre-commit --all-files` at `timeout=300`.
+        """
+        probed = []
+
+        def _probe():
+            probed.append(1)
+            return True, "stubbed-wired"
+
+        monkeypatch.setattr(pp, "_prepush_guards_wired", _probe)
+
+        def _boom(*a, **k):  # pragma: no cover - must not be reached
+            raise AssertionError("pre-commit was run despite run_precommit=False")
+
+        monkeypatch.setattr(pp, "run", _boom)
+
+        result = pp.check_local_hooks(run_precommit=False)
+        assert probed == [1]
+        assert result.status == pp.Status.SKIP
+        assert "stubbed-wired" in result.message
+
+    def test_run_precommit_false_still_fails_when_unwired(self, monkeypatch):
+        """The quick path must not fail open — an unwired clone is still red.
+
+        Counterpart to the test above: proving the probe *runs* is not the same
+        as proving its verdict still gates. Before #1811 the quick path
+        reported SKIP unconditionally, whatever the probe would have said.
+        """
+        self._assume_installed(monkeypatch, installed=False)
+
+        def _boom(*a, **k):  # pragma: no cover - must not be reached
+            raise AssertionError("pre-commit was run despite unwired pre-push guards")
+
+        monkeypatch.setattr(pp, "run", _boom)
+
+        result = pp.check_local_hooks(run_precommit=False)
+        assert result.status == pp.Status.FAIL
+        assert "bash scripts/ops/install_prepush_hook.sh" in result.detail
+
     def test_failed_hooks_parsed(self, monkeypatch):
         self._assume_installed(monkeypatch)
         output = (

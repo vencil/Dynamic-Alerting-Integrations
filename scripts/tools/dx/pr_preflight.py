@@ -8,13 +8,13 @@
   1. Branch 身份：是否在 feature branch（非 main/master）
   2. 同步狀態：behind main 幾個 commit（>0 = 可能有 conflict）
   3. Conflict 偵測：dry-run merge 看有無衝突
-  4. Local hooks：pre-commit run --all-files（可選）
+  4. Local hooks：pre-push 守衛是否在 push 路徑上（一律跑）+ pre-commit run --all-files（可選）
   5. CI 狀態：透過 gh pr checks 查詢（需 gh CLI）
   6. PR mergeable：透過 gh pr view 查詢
 
 用法：
   python scripts/tools/dx/pr_preflight.py                    # 完整檢查
-  python scripts/tools/dx/pr_preflight.py --skip-hooks       # 跳過 local hooks
+  python scripts/tools/dx/pr_preflight.py --skip-hooks       # 跳過 pre-commit --all-files（守衛 wiring 仍會檢查）
   python scripts/tools/dx/pr_preflight.py --ci               # CI 模式（exit 1 on failure）
   python scripts/tools/dx/pr_preflight.py --pr 23            # 指定 PR 號碼
 
@@ -1099,8 +1099,19 @@ def _prepush_guards_wired() -> Tuple[bool, str]:
     )
 
 
-def check_local_hooks() -> CheckResult:
-    """跑 pre-commit run --all-files，並確認 pre-push 守衛真的在 push 路徑上。"""
+def check_local_hooks(*, run_precommit: bool = True) -> CheckResult:
+    """確認 pre-push 守衛真的在 push 路徑上，並（可選）跑 pre-commit run --all-files。
+
+    ⛔ #1811：`--skip-hooks` 只關掉 `run_precommit`，**wiring 判定一律執行**。
+    「守衛還在不在 push 路徑上」全 repo 只有這一個答案點（本函式是
+    `_prepush_guards_wired()` 的唯一呼叫端），而先前 `--skip-hooks` 把整格記成
+    SKIP ⇒ 日常路徑（`make pr-preflight-quick`、以及**寫死在 Windows 逃生門裡**
+    的 `win_git_escape.bat` / `.ps1`）從不執行它。其餘每一項檢查都預設閘門是活的。
+
+    分開跳的理由是成本差三個數量級：wiring 判定是純 Python + 一次
+    `git rev-parse`，而它原本被綁在一起跳過的是 `timeout=300` 的
+    `pre-commit run --all-files`。
+    """
     wired, why = _prepush_guards_wired()
     if not wired:
         return CheckResult(
@@ -1114,8 +1125,16 @@ def check_local_hooks() -> CheckResult:
                 "⛔ 不要改用 `pre-commit install --hook-type pre-push`：那條在 "
                 "#1689 之後只會讓守衛看到**一個** refspec，而且只要設了 "
                 "core.hooksPath 就會直接 rc=1 拒絕安裝。\n"
-                "跳過本項：make pr-preflight-quick（--skip-hooks）"
+                # ⛔ 不要把「跳過本項：--skip-hooks」加回來（#1811）：那個旗標
+                # 現在跳不掉本項，那句話是循環——出路只有上面那條安裝指令。
+                "⛔ 本項不能跳過：--skip-hooks 只跳 pre-commit run --all-files。"
             ),
+        )
+    if not run_precommit:
+        return CheckResult(
+            "Local hooks",
+            Status.SKIP,
+            f"pre-push 守衛已接上；pre-commit --all-files 已跳過（--skip-hooks）｜{why}",
         )
     r = run(["pre-commit", "run", "--all-files"], timeout=300)
     if r.returncode == 0:
@@ -1493,12 +1512,17 @@ def main() -> int:
         epilog="""
 範例：
   %(prog)s                    # 完整檢查（含 local hooks）
-  %(prog)s --skip-hooks       # 跳過 pre-commit（快速檢查）
+  %(prog)s --skip-hooks       # 跳過 pre-commit --all-files（快速檢查；守衛 wiring 仍會檢查）
   %(prog)s --ci               # CI 模式（有 FAIL 則 exit 1）
   %(prog)s --pr 23            # 指定 PR 號碼
 """,
     )
-    parser.add_argument("--skip-hooks", action="store_true", help="跳過 local pre-commit hooks（快速模式）")
+    parser.add_argument(
+        "--skip-hooks",
+        action="store_true",
+        help="跳過 pre-commit run --all-files（快速模式）。"
+             "⛔ 不跳「pre-push 守衛在不在 push 路徑上」那一半（#1811）",
+    )
     parser.add_argument("--ci", action="store_true", help="CI 模式：有 FAIL 時 exit 1")
     parser.add_argument("--pr", type=int, default=None, help="指定 PR 號碼（不指定則自動偵測）")
     parser.add_argument(
@@ -1556,11 +1580,9 @@ def main() -> int:
     # 3. Conflict detection
     report.add(check_conflict())
 
-    # 4. Local hooks (optional)
-    if args.skip_hooks:
-        report.add(CheckResult("Local hooks", Status.SKIP, "已跳過（--skip-hooks）"))
-    else:
-        report.add(check_local_hooks())
+    # 4. Local hooks — ⛔ #1811：`--skip-hooks` 只跳 `pre-commit run --all-files`，
+    #    「守衛在不在 push 路徑上」那半一律執行（它是那一問的唯一答案點）。
+    report.add(check_local_hooks(run_precommit=not args.skip_hooks))
 
     # 5. Scope drift (code-driven §P2 rule)
     report.add(check_scope_drift())

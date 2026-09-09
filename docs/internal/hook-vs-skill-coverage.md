@@ -44,7 +44,7 @@ lang: zh
 
 > ⛔ **本表沒有 `hook id` 欄，因為這三支不再是 pre-commit hook（[#1689](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1689)）。** 它們由 `scripts/ops/prepush_dispatch.sh` 執行，`.pre-commit-config.yaml` 裡**沒有**對應的 `stages: [pre-push]` 條目——有一支測試釘住「零條目」，因為重新加回去的那一份**是瞎的**（見下）而且會印 Passed。
 
-> ⛔ **這三支不會自動安裝（[#1664](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1664)）。** 安裝只有一條：`bash scripts/ops/install_prepush_hook.sh`（冪等）。實測全新 clone 只照舊的單行說明做 ⇒ 直推 main 成功、畫面滿是綠色的 pre-commit 層 hook。「有沒有接上」由 `make pr-preflight` 的 `Local hooks` 回答，它對「沒接上」直接 FAIL 並印那條指令（`--skip-hooks` / `make pr-preflight-quick` 可略過）。
+> ⛔ **這三支不會自動安裝（[#1664](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1664)）。** 安裝只有一條：`bash scripts/ops/install_prepush_hook.sh`（冪等）。實測全新 clone 只照舊的單行說明做 ⇒ 直推 main 成功、畫面滿是綠色的 pre-commit 層 hook。「有沒有接上」由 `make pr-preflight` 的 `Local hooks` 回答，它對「沒接上」直接 FAIL 並印那條指令。⛔ **`--skip-hooks` / `make pr-preflight-quick` 略過不了這一問**（[#1811](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1811)）：那個旗標只跳同一列裡的 `pre-commit run --all-files`。
 >
 > ⛔ **安裝器會串接既有的 pre-push hook，而不是拒絕**——這不是方便，是必要：本 repo 有 `filter=lfs` 路徑而 `git lfs install` 是全域設定，所以**每一個全新 clone 的 `.git/hooks/pre-push` 一落地就是 git-lfs 的**。實測（Windows host、全新 clone）：拒絕覆寫 ⇒ 安裝器 rc=1，而 `make pr-preflight` 印的補救指令正是它 ⇒ 死路；改用舊指令 `pre-commit install --hook-type pre-push` ⇒ rc=0，但它把 lfs 那支 `#!/bin/sh` 的 hook 遷到 `pre-push.legacy`，之後**每次 push 都死在 `ExecutableNotFoundError: /bin/sh`**（pre-commit 在 Windows 自己解 shebang）——那條路在本次改動之前就是壞的。現在外來 hook 會被移到 `pre-push.chained`，由 dispatcher 用同樣的 argv 與 stdin 繼續呼叫。
 >

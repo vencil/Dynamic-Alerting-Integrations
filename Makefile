@@ -236,15 +236,17 @@ git-preflight: ## Git 操作前自動降噪（關閉 VS Code Git + 清理 stale 
 .PHONY: pr-preflight
 pr-preflight: ## PR 收尾前檢查（branch / conflict / hooks / scope-drift / CI / mergeable）
 	@# 剛 commit 完（pre-commit hooks 已在 commit 時證綠）→ 用
-	@# make pr-preflight-quick：--skip-hooks 對 pre-push gate 完全等價
-	@# （SKIP 非 FAIL，一樣寫 .git/.preflight-ok.<SHA> marker），省掉
-	@# hooks 的第二次全跑（commit→preflight→CI 三重執行去掉一重）。
+	@# make pr-preflight-quick：--skip-hooks 只跳 pre-commit run --all-files，
+	@# 一樣寫 .git/.preflight-ok.<SHA> marker，省掉 hooks 的第二次全跑
+	@# （commit→preflight→CI 三重執行去掉一重）。
+	@# ⛔ #1811 起「pre-push 守衛在不在 push 路徑上」那一半 quick 也照跑
+	@# （沒接上一律 FAIL，本項無旗標出路）。
 	@# ⚠️ scope 差異：commit hooks 只掃 staged、完整版跑 --all-files——
 	@# 適用邊界見 dev-rules.md §12「快速路徑」段。
 	@python3 scripts/tools/dx/pr_preflight.py $(ARGS)
 
 .PHONY: pr-preflight-quick
-pr-preflight-quick: ## PR 快速檢查（--skip-hooks；commit 已證 hooks 綠時的預設路徑，marker 等價）
+pr-preflight-quick: ## PR 快速檢查（--skip-hooks 只跳 pre-commit --all-files；守衛 wiring 照跑，marker 等價）
 	@python3 scripts/tools/dx/pr_preflight.py --skip-hooks $(ARGS)
 
 .PHONY: diag-pr

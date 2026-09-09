@@ -12,7 +12,8 @@ Covers:
   - detect_commit_msg_bom: UTF-8 / UTF-16 LE/BE BOM detection + clean files
   - _classify_ci_failures: A/B classification with mocked gh
   - main() exit codes: --check-commit-msg / --check-pr-title fast paths,
-    --ci with passing/failing checks, --skip-hooks SKIPs the hooks check
+    --ci with passing/failing checks, --skip-hooks skips only the pre-commit
+    half of the hooks check (#1811)
 """
 from __future__ import annotations
 
@@ -315,8 +316,10 @@ class TestMainOrchestrator:
             else:
                 status = pp.Status.PASS
                 msg = "stubbed-pass"
-            # check_ci_status / check_pr_mergeable take args; wrap accordingly.
-            if fn_name in {"check_ci_status", "check_pr_mergeable"}:
+            # check_ci_status / check_pr_mergeable / check_local_hooks take
+            # args; wrap accordingly. (check_local_hooks grew a keyword-only
+            # `run_precommit` in #1811.)
+            if fn_name in {"check_ci_status", "check_pr_mergeable", "check_local_hooks"}:
                 monkeypatch.setattr(
                     pp, fn_name,
                     lambda *a, _label=label, _status=status, _msg=msg, **kw:
@@ -375,20 +378,40 @@ class TestMainOrchestrator:
         cli_argv("pr_preflight.py")
         assert pp.main() == 0
 
-    def test_skip_hooks_records_skip_status(self, monkeypatch, tmp_path, capsys, cli_argv):
+    def test_skip_hooks_still_runs_the_wiring_half_and_gates_on_it(
+        self, monkeypatch, tmp_path, capsys, cli_argv
+    ):
+        """#1811 — `--skip-hooks` must not skip the whole `Local hooks` row.
+
+        Before #1811 the orchestrator short-circuited to a hardcoded SKIP and
+        never called `check_local_hooks` at all, so `_prepush_guards_wired()`
+        — the repo's ONLY answer to "are the guards still on the push path?" —
+        ran zero times on the daily path (`make pr-preflight-quick`, and the
+        `--skip-hooks` hardcoded into `win_git_escape.bat` / `.ps1`).
+
+        This pins both halves of the seam: the function is still called, it is
+        told to skip only the pre-commit run, and a FAIL coming back from it
+        still reaches the exit code (i.e. quick mode cannot fail open).
+        """
         self._stub_repo_root_and_marker(monkeypatch, tmp_path)
         self._stub_all_checks(monkeypatch)
 
-        # Sentinel: if check_local_hooks IS called, fail loudly.
-        def fail_if_called():
-            raise AssertionError("check_local_hooks should be skipped")
-        monkeypatch.setattr(pp, "check_local_hooks", fail_if_called)
+        seen = {}
+
+        def _recording_check(*, run_precommit=True):
+            seen["run_precommit"] = run_precommit
+            return pp.CheckResult(
+                "Local hooks", pp.Status.FAIL, "stubbed-unwired"
+            )
+
+        monkeypatch.setattr(pp, "check_local_hooks", _recording_check)
 
         cli_argv("pr_preflight.py", "--skip-hooks", "--ci")
-        assert pp.main() == 0
+        assert pp.main() == 1
+        assert seen == {"run_precommit": False}
         out = capsys.readouterr().out
         assert "Local hooks" in out
-        assert "已跳過" in out  # SKIP message
+        assert "stubbed-unwired" in out
 
 
 # ---------------------------------------------------------------------------
