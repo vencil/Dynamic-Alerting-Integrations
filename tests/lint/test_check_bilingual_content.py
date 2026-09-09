@@ -417,7 +417,7 @@ class TestEmptyPopulationIsACallerError:
 
 
 class TestNothingComparedIsNotPassed:
-    """盲審 F1：`docs/` 有 markdown、但沒有一份被分類成 zh/en 文件時，舊碼印綠色的
+    """`docs/` 有 markdown、但沒有一份被分類成 zh/en 文件時，舊碼印綠色的
     「passed」。被比較的文件數是零，措辭必須說出來（rc 仍 0：配對是逐檔可選的，
     與 #1809 對「有檔但沒有 frontmatter」的處置同形）。"""
 
@@ -450,18 +450,43 @@ class TestNothingComparedIsNotPassed:
         assert data["status"] == "pass"
         assert data["compared"] == {"english": 0, "chinese": 0}
 
-    def test_scans_and_document_lists_select_the_same_files(self, tmp_path):
-        """scan_* 與 english_docs/chinese_docs 必須是同一個選擇；若有人在 scan 內
-        另寫一份過濾（例如把 includes 跳過寫回 scan_zh_docs），這裡轉紅。"""
+    def test_scans_read_exactly_the_files_the_document_lists_select(self, tmp_path):
+        """scan_* 迭代的集合必須就是 english_docs／chinese_docs 選出的集合；若有人在
+        scan 內另寫一份過濾（例如把 includes 跳過寫回 scan_zh_docs），這裡轉紅。
+        斷言的是「讀到哪些檔」，不靠 finding 當 oracle（短檔、零 CJK 的檔也算）。"""
         docs = _docs_tree(tmp_path / "repo")
         (docs / "includes").mkdir()
         (docs / "includes" / "gen.zh.md").write_text(_UNTRANSLATED, encoding="utf-8")
-        (docs / "guide" / "setup.en.md").write_text("# 全中文\n\n中文內容。" * 10,
-                                                    encoding="utf-8")
+        (docs / "guide" / "setup.en.md").write_text("short\n", encoding="utf-8")
+        (docs / "guide" / "tiny.zh.md").write_text("x\n", encoding="utf-8")
+        measured: dict = {}
         with patch.object(cbc, "PROJECT_ROOT", tmp_path / "repo"):
-            zh_paths = {p for _s, _m, p, _r in cbc.scan_zh_docs(docs, min_threshold=1.0)}
-            en_paths = {p for _s, _m, p, _r in cbc.scan_en_docs(docs, threshold=0.0)}
-        rel = lambda f: str(f.relative_to(tmp_path / "repo"))  # noqa: E731
-        assert zh_paths == {rel(f) for f in cbc.chinese_docs(docs)}
-        assert en_paths == {rel(f) for f in cbc.english_docs(docs)}
-        assert zh_paths and en_paths
+            cbc.run_all_checks(docs, measured=measured)
+        assert measured["chinese"] == set(cbc.chinese_docs(docs))
+        assert measured["english"] == set(cbc.english_docs(docs))
+        assert measured["chinese"] and measured["english"]
+        assert not any("includes" in f.relative_to(docs).parts for f in measured["chinese"])
+
+    def test_compared_counts_what_was_read_not_what_was_selected(
+            self, tmp_path, monkeypatch, capsys, cli_argv):
+        """一對配對文件裡英文那份不是 UTF-8：它被選中但沒被讀，Compared 不得把它
+        算進去，且要指名它。fixture 刻意不對稱（英 2／中 1），順序對調或算錯樹會紅。"""
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "a.md").write_text("# 中文\n\n中文內容。\n" * 5, encoding="utf-8")
+        (docs / "a.en.md").write_bytes(b"\xff\xfe not utf-8")
+        (docs / "b.en.md").write_text("# B\n\nEnglish.\n" * 5, encoding="utf-8")
+        (docs / "d.en.md").write_text("# D\n\nEnglish.\n" * 5, encoding="utf-8")
+        # a decoy pair OUTSIDE docs_dir but under PROJECT_ROOT must not be counted
+        (tmp_path / "x.md").write_text("# X\n\n中文。\n" * 5, encoding="utf-8")
+        (tmp_path / "x.en.md").write_text("# X\n\nEnglish.\n" * 5, encoding="utf-8")
+        monkeypatch.setattr(cbc, "DOCS_DIR", docs)
+        monkeypatch.setattr(cbc, "PROJECT_ROOT", tmp_path)
+        cli_argv("check_bilingual_content", "--json")
+        cbc.main()
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+        # english: b.en.md, d.en.md; a.en.md selected but unreadable
+        # chinese: a.md (has .en.md sibling)
+        assert data["compared"] == {"english": 2, "chinese": 1}
+        assert "a.en.md" in captured.err and "not compared" in captured.err

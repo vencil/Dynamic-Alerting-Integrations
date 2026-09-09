@@ -240,11 +240,15 @@ def _resolve_target_paths(args: argparse.Namespace) -> list[Path]:
     if args.paths:
         out: list[Path] = []
         for p in args.paths:
-            # Resolve before the root test (#1810): a symlink alias of the
-            # checkout or a `..` spelling must reach the same branch of
-            # _is_excluded_path as the real path — otherwise one file gets
-            # two verdicts depending on how the caller spelled it.
-            candidate = (Path(p) if Path(p).is_absolute() else PROJECT_ROOT / p).resolve()
+            # Normalise the ANCESTORS of an explicit argument before the root
+            # test (#1810): a symlink alias of the checkout or a `..` spelling
+            # must reach the same branch of _is_excluded_path as the real
+            # path. The leaf itself is NOT resolved: a file is judged by where
+            # it sits in the tree, exactly as the default scan and a directory
+            # argument's rglob judge it — resolving the leaf would give a
+            # symlinked file a different verdict at each of the three entries.
+            spelled = Path(p) if Path(p).is_absolute() else PROJECT_ROOT / p
+            candidate = spelled.parent.resolve() / spelled.name
             if candidate.is_file():
                 out.append(candidate)
             elif candidate.is_dir():

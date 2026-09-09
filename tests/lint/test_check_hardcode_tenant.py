@@ -325,7 +325,7 @@ class TestSkipSetIsJudgedBelowTheScanRoot:
 
 
 class TestExplicitPathsAreNormalisedBeforeTheRootTest:
-    """Blind-review F2/F3: the same file must get the same verdict however
+    """The same file must get the same verdict however
     the caller spells it. A symlink alias of the checkout, or a `..` spelling
     that lexically sits under the root while the file does not, used to
     reach a different branch of _is_excluded_path than the real path."""
@@ -360,6 +360,30 @@ class TestExplicitPathsAreNormalisedBeforeTheRootTest:
         spelled = "../../outside/examples/o.go"  # lexically under root
         assert lint.main(["--ci", spelled]) == lint.main(["--ci", str(outside)])
         assert lint.main(["--ci", str(outside)]) == 1
+
+    def test_a_symlinked_file_is_judged_where_it_sits_at_all_three_entries(
+            self, tmp_path, monkeypatch, capsys):
+        """The leaf is not resolved: `components/svc/cfg.go -> ../examples/real.go`
+        is production code at the default scan, at `components/` and when named
+        directly. Resolving the leaf gave the named entry a different verdict."""
+        root = tmp_path / "real" / "repo"
+        target = root / "components" / "examples" / "real.go"
+        target.parent.mkdir(parents=True)
+        target.write_text(_DIRTY_GO, encoding="utf-8")
+        link = root / "components" / "svc" / "cfg.go"
+        link.parent.mkdir()
+        try:
+            link.symlink_to(Path("..") / "examples" / "real.go")
+        except (OSError, NotImplementedError):
+            pytest.skip("symlinks unavailable here")
+        monkeypatch.setattr(lint, "PROJECT_ROOT", root)
+        verdicts = {
+            "default": lint.main(["--ci"]),
+            "dir": lint.main(["--ci", "components"]),
+            "file": lint.main(["--ci", "components/svc/cfg.go"]),
+        }
+        assert verdicts == {"default": 1, "dir": 1, "file": 1}
+        assert "components/svc/cfg.go" in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------------------

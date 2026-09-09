@@ -17,7 +17,8 @@ Usage:
     python3 scripts/tools/lint/check_bilingual_content.py --threshold 0.15
 
 Exit codes:
-    0 = all checks passed
+    0 = all checks passed, or nothing was compared (no document classified
+        as a zh/en pair — the report says which)
     1 = errors found
     2 = caller error (docs dir is not a directory, or holds no markdown —
         nothing was measured)
@@ -112,18 +113,28 @@ def chinese_docs(docs_dir: Path) -> list:
 def scan_en_docs(
     docs_dir: Path,
     threshold: float = DEFAULT_CJK_THRESHOLD,
+    *,
+    measured: set | None = None,
+    unreadable: set | None = None,
 ) -> list:
     """Scan English docs for excessive CJK content.
 
     Detects both legacy (.en.md) and new pattern (bare .md with .zh.md sibling).
     Returns list of (severity, message, filepath, ratio) tuples.
+    ``measured`` / ``unreadable`` collect the files that were read /
+    could not be read (#1810): a selected file that fails to read is not
+    compared, and the report must not count it as if it were.
     """
     findings = []
     for f in english_docs(docs_dir):
         try:
             text = f.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
+            if unreadable is not None:
+                unreadable.add(f)
             continue
+        if measured is not None:
+            measured.add(f)
         ratio = count_cjk_ratio(text)
         if ratio > threshold:
             rel = f.relative_to(PROJECT_ROOT)
@@ -140,18 +151,26 @@ def scan_en_docs(
 def scan_zh_docs(
     docs_dir: Path,
     min_threshold: float = DEFAULT_ZH_MIN_THRESHOLD,
+    *,
+    measured: set | None = None,
+    unreadable: set | None = None,
 ) -> list:
     """Scan Chinese docs for potentially untranslated content.
 
     Detects both legacy (bare .md with .en.md sibling) and new (.zh.md) patterns.
     Returns list of (severity, message, filepath, ratio) tuples.
+    ``measured`` / ``unreadable`` as in :func:`scan_en_docs`.
     """
     findings = []
     for f in chinese_docs(docs_dir):
         try:
             text = f.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
+            if unreadable is not None:
+                unreadable.add(f)
             continue
+        if measured is not None:
+            measured.add(f)
         # Only check files with substantial content
         if len(text.strip()) < 200:
             continue
@@ -172,14 +191,26 @@ def run_all_checks(
     docs_dir: Path = DOCS_DIR,
     threshold: float = DEFAULT_CJK_THRESHOLD,
     min_threshold: float = DEFAULT_ZH_MIN_THRESHOLD,
+    *,
+    measured: dict | None = None,
+    unreadable: set | None = None,
 ) -> list:
     """Run all bilingual content checks.
 
-    Returns list of (severity, message, filepath, ratio) tuples.
+    Returns list of (severity, message, filepath, ratio) tuples. When
+    ``measured`` is given it is filled with ``{"english": set, "chinese":
+    set}`` of the files each scan actually read (#1810).
     """
+    en_seen: set = set()
+    zh_seen: set = set()
     findings = []
-    findings.extend(scan_en_docs(docs_dir, threshold=threshold))
-    findings.extend(scan_zh_docs(docs_dir, min_threshold=min_threshold))
+    findings.extend(scan_en_docs(docs_dir, threshold=threshold,
+                                 measured=en_seen, unreadable=unreadable))
+    findings.extend(scan_zh_docs(docs_dir, min_threshold=min_threshold,
+                                 measured=zh_seen, unreadable=unreadable))
+    if measured is not None:
+        measured["english"] = en_seen
+        measured["chinese"] = zh_seen
     return findings
 
 
@@ -291,8 +322,16 @@ def main():
             print(msg)
         sys.exit(EXIT_CALLER_ERROR)
 
-    findings = run_all_checks(docs_dir=DOCS_DIR, threshold=args.threshold)
-    compared = (len(english_docs(DOCS_DIR)), len(chinese_docs(DOCS_DIR)))
+    measured: dict = {}
+    unreadable: set = set()
+    findings = run_all_checks(docs_dir=DOCS_DIR, threshold=args.threshold,
+                              measured=measured, unreadable=unreadable)
+    # Counts of documents actually READ (#1810), not merely selected.
+    compared = (len(measured["english"]), len(measured["chinese"]))
+    for f in sorted(unreadable):
+        # A selected document that could not be read was not compared;
+        # say so instead of folding it into a green "passed".
+        print(f"⚠ not compared (unreadable or not UTF-8): {f}", file=sys.stderr)
 
     if args.json:
         print(format_json_report(findings, compared=compared))
