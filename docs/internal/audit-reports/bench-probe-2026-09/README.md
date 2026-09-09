@@ -36,7 +36,7 @@ python3 scripts/tools/dx/analyze_probe.py --archive docs/internal/audit-reports/
 
 不連網、不重跑 benchmark、不需要 Go。它回答的是「本文的數字能不能從收進來的資料重算出來」，**不是**「今天重跑會得到什麼」。
 
-⛔ **這支腳本原本就放在本目錄裡，已於 TRK-373（[#1731](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1731)）搬到 `scripts/tools/dx/`。** 搬家的理由不是整理：它與 `bench-probe-write-latency.yaml` 的 Summarize step 曾是**同一份計算的兩份拷貝**，沒有任何機制保證兩者一致，而實測已累積**六處**行為分歧（五處在合併前找到，第六處是合併之後的盲審找到的）。現在 workflow 呼叫的就是這一支，兩種輸入來源只差在讀檔那一層。⚠️ 本節這條指令的輸出與搬家前**逐位元相同**（`tests/dx/fixtures/analyze_probe/archive.golden.txt` 釘住這一點），所以本文其餘各節引用的數字不受搬家影響。
+⛔ **這支腳本原本就放在本目錄裡，已於 TRK-373（[#1731](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1731)）搬到 `scripts/tools/dx/`。** 搬家的理由不是整理：它與 `bench-probe-write-latency.yaml` 的 Summarize step 曾是**同一份計算的兩份拷貝**，沒有任何機制保證兩者一致，而實測已累積多處行為分歧。⚠️ **這裡刻意不寫數字**：本檔原文寫「六處」、`planning-id-mapping.md` 的 TRK-373 列寫「4 處」並附一份四項清單、CHANGELOG 同一條目裡「五處」與「六處」都出現過——同一個計數散在三個載體、沒有任何機制保證一致，它已經漂過一次（TRK-373 / #1731）。**清單以 `planning-id-mapping.md` 的 TRK-373 列為準**，本檔只指過去。現在 workflow 呼叫的就是這一支，兩種輸入來源只差在讀檔那一層。⚠️ 本節這條指令的輸出與搬家前**逐位元相同**（`tests/dx/fixtures/analyze_probe/archive.golden.txt` 釘住這一點），所以本文其餘各節引用的數字不受搬家影響。
 
 資料進 repo 的理由與隔壁 `bench-aa-2026-08/` 相同：**來源是 job log，而 job log 有 90 天保留期**（本批 2026-12-03 到期），且 artifact 那條路在本專案的分析環境走不通。三份 `probe-run{1,2,3}.txt` 是從 job log 逐字抽出的 `PROBEENV` / `PROBEROW` / `PROBETAIL` 記錄，各 343 行。
 
@@ -94,7 +94,9 @@ python3 scripts/tools/dx/analyze_probe.py --archive docs/internal/audit-reports/
 3. **⛔ 上表的 pooled 那一欄是「生態相關」，被跨 dispatch 的均值差異污染。** 三次 dispatch 的中位輪本身就差 6.75%，把 90 輪攤平算相關係數，會把 dispatch 之間的系統性差異也算進去。把每個 dispatch 各自的均值先減掉再 pool，實測是：水位 `+0.9547`、水位以上的質量 **`−0.1271`**（**符號翻轉**）、`write_sum` `+0.5998`。⇒ **支撐「不是 episode」這個結論的，是上面逐 dispatch 那三個值，不是表格裡的 `+0.338`。** 結論方向不受影響（去均值後更遠離 episode），但那是這批資料剛好如此，不是這個算法保證的。
 
 > ⚠️ **這三個去均值後的數字 `analyze_probe.py` 也不印**（它只做 pooled 與逐 dispatch，沒有去均值那一步），所以〈重算〉那條指令同樣重現不了。要核對的做法：沿用 `analyze_probe.py` 裡 `SHAPE OF THE ROUND-TO-ROUND VARIATION` 那一段開頭的四個分量定義——`tot = write_sum + load_sum`、`base = load_p50 × iters`、`above = load_sum − base`、`w = write_sum`（⚠️ 請用變數名找，不要用行號——行號會隨編輯漂移）——**對每個 dispatch 各自減去該 dispatch 的均值後再併起來**算 Pearson。
-> ⛔ **這份報告的「可重算」承諾有缺口，缺口的完整清單如下**（找法：把 §一~§三 所有含小數點的數值抽出來，逐一比對是否出現在 `python3 analyze_probe.py` 的輸出裡。⚠️ 刻意不寫「共幾個」——本表自己也在 §三 之內，它列出的數字會被這個掃描數進去，那個計數自我指涉且每次編輯都會變）：
+> ⛔ **這份報告的「可重算」承諾有缺口，已知的缺口如下**（找法：把 §一~§三 所有含小數點的數值抽出來，逐一比對是否出現在 `python3 analyze_probe.py` 的輸出裡。⚠️ 刻意不寫「共幾個」——本表自己也在 §三 之內，它列出的數字會被這個掃描數進去，那個計數自我指涉且每次編輯都會變）：
+>
+> ⚠️ **本表原文寫「完整清單」，那個宣稱已降級**：窮舉性沒有任何機制在保證，而實測它就漏了東西——上一段那六個 `load_p50/p90/p99` 的 ms 值有列，但由它們**手算出來的百分比**（`+10.7%` / `+0.6%` / `+1.2%`，以及「比中位輪慢 `+7.34%`」）沒有，而那些同樣是 §三 裡「腳本不印、要自己算」的數字。⇒ 這是一份**已知缺口清單**，不是窮舉；要窮舉就得把那個找法 codify 成會跑的檢查，本次刻意不做（TRK-373 / [#1731](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1731) 那條線的教訓是：沒有機制的計數與清單都會漂）。
 >
 > | 位置 | 值 | 性質 |
 > |---|---|---|
