@@ -71,8 +71,13 @@ def test_runs_on_the_real_repo_and_reports_a_list() -> None:
 def test_population_is_not_vacuous() -> None:
     """⚠️ 反空轉下限 —— 票明寫的對照組：掃描面歸零的實作也會「通過」。
 
-    量測時（#1746，於 `dc62f7c5`）：245 個模組 stem、350 個測試檔、其中 85 個
+    量測時（#1746，於本 PR 的最終樹）：246 個模組 stem、351 個測試檔、其中 86 個
     含 ``sys.executable``。下限取得遠低於現況，但足以在枚舉壞掉時立刻紅。
+
+    ⚠️ **這些數字會隨本 PR 自己而動**，因為本工具的母體就是這棵樹：只有工具、
+    還沒寫測試時盲點是 30（工具在 ``untested``）；加了 subprocess-only 測試變 31
+    （工具進 ``blind_spots``）；加了 in-process 進入點又回到 30（工具進 ``both``）。
+    一支自我量測的工具，數字本來就會被自己的落地影響——所以這裡記的是**最終樹**。
 
     ⚠️ 第一版量到 232，那是**枚舉有 bug**：只給 ``{src}/**/*.py`` 而 ``**/`` 至少
     要吃一層目錄 ⇒ ``scripts/tools/*.py`` 那一層整個不在母體裡。這一格的下限
@@ -80,10 +85,10 @@ def test_population_is_not_vacuous() -> None:
     fixture 那幾格——反空轉下限擋的是「歸零」，不是「少一截」。
     """
     data = _json(_REPO_ROOT)
-    assert data["stems"] >= 150, f"模組母體只剩 {data['stems']}（量測時 245）"
-    assert data["tests"] >= 200, f"測試母體只剩 {data['tests']}（量測時 350）"
+    assert data["stems"] >= 150, f"模組母體只剩 {data['stems']}（量測時 246）"
+    assert data["tests"] >= 200, f"測試母體只剩 {data['tests']}（量測時 351）"
     assert data["tests_with_sys_executable"] >= 40, (
-        f"含 sys.executable 的測試檔只剩 {data['tests_with_sys_executable']}（量測時 85）"
+        f"含 sys.executable 的測試檔只剩 {data['tests_with_sys_executable']}（量測時 86）"
     )
 
 
@@ -104,7 +109,7 @@ def test_classification_is_an_exact_partition() -> None:
 def test_overlap_is_the_dominant_bucket() -> None:
     """⚠️ 這一格釘住票的核心結論：**重疊很大**，盲點遠少於 subprocess 測試檔數。
 
-    量測時：盲點 30、重疊 197 ⇒ 「85 個含 sys.executable 的測試檔」與「30 個盲點」
+    量測時：盲點 30、重疊 198 ⇒ 「86 個含 sys.executable 的測試檔」與「30 個盲點」
     差一個數量級。若哪天重疊塌到比盲點還少，那是分類邏輯壞了，不是真的變差。
     """
     data = _json(_REPO_ROOT)
@@ -295,3 +300,57 @@ def test_top_level_test_files_are_in_the_population(tmp_path: Path) -> None:
     data = _json(repo)
     assert data["tests"] == 1, data
     assert [e["stem"] for e in data["blind_spots"]] == ["mytool"], data
+
+
+# ---------------------------------------------------------------------------
+# in-process 進入點 —— ⛔ 上面每一格都是 subprocess，對 coverage.py 完全不可見
+# ---------------------------------------------------------------------------
+# ⚠️ 這支工具**自己就出現在自己產出的盲點清單裡**（實測 `No data was collected`）：
+# 它的測試全是 subprocess。那不只是笑話，是本票論點的又一個實例，而且發生在專門
+# 用來量這個問題的工具上。⇒ 補 in-process 進入點；下面第一格就拿「它不再回報自己」
+# 當控制項——這是這支工具獨有的、可自證的驗法。
+import importlib.util as _ilu
+
+_spec = _ilu.spec_from_file_location("list_subprocess_only_modules", _TOOL)
+_mod = _ilu.module_from_spec(_spec)
+_spec.loader.exec_module(_mod)
+
+
+def test_the_tool_no_longer_reports_itself() -> None:
+    """⭐ 自證：補了 in-process 進入點之後，它就不該再出現在自己的盲點清單裡。
+
+    ⛔ 這一格若紅，代表 in-process 進入點斷了——而那正是本工具存在要偵測的東西。
+    """
+    data = _mod.build(_REPO_ROOT)
+    blind = [e["module"] for e in data["blind_spots"]]
+    assert not any("list_subprocess_only_modules" in m for m in blind), (
+        "本工具又變回自己的盲點了（in-process 進入點斷了）：\n" + "\n".join(blind)
+    )
+
+
+def test_main_returns_int_not_none() -> None:
+    """⛔ `main()` 必須**回傳** rc，不是只印東西然後回 None。
+
+    subprocess 測試結構上抓不到這一類：`sys.exit(None)` 的行程 rc 就是 0。
+    """
+    rc = _mod.main(["--repo", str(_REPO_ROOT), "--json"])
+    assert isinstance(rc, int) and rc == 0
+
+
+def test_main_returns_2_on_non_git_dir_in_process(tmp_path: Path) -> None:
+    assert _mod.main(["--repo", str(tmp_path)]) == 2
+
+
+def test_coverage_sources_parses_pyproject() -> None:
+    """coverage source / omit 從 pyproject 讀，不硬編。"""
+    sources, omit = _mod.coverage_sources(_REPO_ROOT)
+    assert "scripts/tools" in sources, sources
+    assert any(o.endswith("validate_all.py") for o in omit), omit
+
+
+def test_build_partition_is_exact_in_process() -> None:
+    """同 partition 斷言，但走 in-process ⇒ 這一段邏輯對 coverage 可見。"""
+    d = _mod.build(_REPO_ROOT)
+    total = (len(d["blind_spots"]) + len(d["both"])
+             + len(d["import_only"]) + len(d["untested"]))
+    assert total == d["stems"]
