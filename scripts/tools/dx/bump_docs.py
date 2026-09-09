@@ -2356,11 +2356,14 @@ def _scope_empty_note(line, all_rules, scope):
 def _check_datools_pin_capability(new_ver: str) -> int:
     """Documented da-tools invocations must be runnable by the tag being cut.
 
-    Direction (1) of #1534: check AT THE MOMENT the pin is rewritten. Eight
-    rules in `_build_tools_rules()` repoint `ghcr.io/vencil/da-tools:vX.Y.Z`,
-    and only the two `k8s/03-monitoring/cronjob-*.yaml` ones are inside the
-    scan surface of check_image_pin_capability.py — the rest move pins through
-    prose that no capability gate reads.
+    Direction (1) of #1534: check AT THE MOMENT the pin is rewritten. Of the
+    rules in `_build_tools_rules()` that repoint
+    `ghcr.io/vencil/da-tools:vX.Y.Z`, only the `k8s/03-monitoring/cronjob-*`
+    ones are inside the scan surface of check_image_pin_capability.py — the
+    rest move pins through prose that no capability gate reads. The premise is
+    asserted by
+    tests/dx/test_bump_docs.py::TestDatoolsPinCapability::test_the_gap_this_check_closes_still_exists,
+    which fails if that stops being true.
 
     ⛔ The oracle is the WORKING TREE's `entrypoint.py`, not
     `capabilities_for_tag("tools/v<new_ver>")`. That function starts with
@@ -2368,9 +2371,8 @@ def _check_datools_pin_capability(new_ver: str) -> int:
     cut yet — so asking it would raise `CapabilityError` on every single
     release, i.e. the check would be structurally impossible to pass. The
     working tree IS what that tag will contain, which is exactly the question.
-    (The handoff note for this ticket claimed `capabilities_for_tag` was
-    directly reusable here; it is reusable for pins that point at an EXISTING
-    tag, which is the other gate's job, not this one's.)
+    `capabilities_for_tag` remains the right reader for a pin that points at an
+    EXISTING tag — that is the other gate's job, not this one's.
 
     ⚠️ Reads the pins as they stand, which under `--check` / `--dry-run` is
     still the OLD tag. That is deliberate and not a bug: the selector is "this

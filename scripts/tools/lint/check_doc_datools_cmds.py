@@ -520,31 +520,27 @@ def check_writable_mount_has_user(doc_files: List[Path],
 # --- pinned invocations, for dx/bump_docs.py (#1534) ------------------------
 #
 # `bump_docs --tools X.Y.Z` mechanically repoints every documented
-# `ghcr.io/vencil/da-tools:vX.Y.Z` pin. Eight of its rules do that, and only
-# the two `k8s/03-monitoring/cronjob-*.yaml` ones land inside the scan surface
-# of check_image_pin_capability.py (`k8s/**` + `helm/*`). The other six rewrite
-# pins in prose that NOTHING checks for capability — so a doc could keep
-# teaching `docker run ...:vNEW <subcommand>` for a subcommand the new image
-# does not dispatch, and every gate stays green. These helpers give bump_docs
-# the missing oracle. Reproduce the split with:
+# `ghcr.io/vencil/da-tools:vX.Y.Z` pin. Only the `k8s/03-monitoring/cronjob-*`
+# targets land inside the scan surface of check_image_pin_capability.py
+# (`k8s/**` + `helm/*`); the rest rewrite pins in prose that NOTHING checks for
+# capability — so a doc could keep teaching `docker run ...:vNEW <subcommand>`
+# for a subcommand the new image does not dispatch, and every gate stays green.
+# These helpers give bump_docs the missing oracle. List the split with:
 #
 #   python3 -c "import importlib.util,pathlib; s=importlib.util.spec_from_file_location('b',pathlib.Path('scripts/tools/dx/bump_docs.py')); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); \
-#     print(sum(1 for r in m._build_tools_rules() if 'ghcr\\\\.io/vencil/da-tools:v?' in r.get('pattern','')))"
+#     print([r.get('glob_dir', r['file']) for r in m._build_tools_rules() if 'ghcr\\\\.io/vencil/da-tools:v?' in r.get('pattern','')])"
 #
 # ⛔ This is deliberately NOT a new standalone gate over every documented
-# subcommand. That shape was prototyped and rejected at ~88 false positives
-# (#405) — see the Scope decision in this module's docstring. What keeps the
-# precision here is the narrowing, not the capability lookup: only fenced
-# blocks, only `docker run`, and only the first bare operand AFTER the image
-# as located by `_image_index`. Measured on this tree at the time of writing:
-# 125 fenced da-tools `docker run` blocks -> 24 distinct (tag, subcommand)
-# pairs -> 22 real subcommands, 0 of them bogus. The ticket's own ad-hoc probe,
-# which did not use `_image_index`, mis-caught `examples` and `is`.
+# subcommand. That shape was prototyped and rejected as too FP-heavy (#405) —
+# see the Scope decision in this module's docstring. What keeps the precision
+# here is the narrowing, not the capability lookup: only fenced blocks, only
+# `docker run`, and only the first bare operand AFTER the image as located by
+# `_image_index`.
 
 # The image reference must carry a real `:vX.Y.Z`. `:latest` and untagged
 # mentions are OUT OF SCOPE by declaration, not by oversight: they name no tag,
 # so there is no capability set to check them against (#1534 records this as a
-# separate problem). 33 of the 125 blocks are in that class.
+# separate problem).
 _PINNED_TAG_RE = re.compile(r"da-tools:(v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?)")
 
 
@@ -612,8 +608,7 @@ def iter_pinned_invocations(doc_files: List[Path],
             sub = next((t for t in toks[k + 1:] if not t.startswith("-")), None)
             # No operand at all is `--help` or a bare image — nothing claimed,
             # nothing to check. A placeholder (`<command>`) is a deliberate
-            # "fill this in", not an assertion that the command exists; 6 of
-            # the 24 pairs are each of these two shapes.
+            # "fill this in", not an assertion that the command exists.
             if sub is None or any(c in sub for c in _PLACEHOLDER_CHARS):
                 continue
             found.append(PinnedInvocation(rel, start + 1, tag_m.group(1), sub))

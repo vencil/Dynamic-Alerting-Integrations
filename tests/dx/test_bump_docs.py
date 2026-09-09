@@ -3412,11 +3412,12 @@ class TestDatoolsPinCapability:
         becomes redundant and should be deleted rather than left running — so
         the premise is asserted, not assumed.
 
-        Re-measure with:
+        Re-measure the split (pin-rewriting rules only, not all tools rules):
           python3 -c "import importlib.util,pathlib; \
             s=importlib.util.spec_from_file_location('b',pathlib.Path('scripts/tools/dx/bump_docs.py')); \
             m=importlib.util.module_from_spec(s); s.loader.exec_module(m); \
-            print([r['file'] for r in m._build_tools_rules()])"
+            print([r.get('glob_dir', r['file']) for r in m._build_tools_rules() \
+                   if 'ghcr\\.io/vencil/da-tools:v?' in r.get('pattern','')])"
         """
         rules = self._pin_rules()
         inside = [r for r in rules

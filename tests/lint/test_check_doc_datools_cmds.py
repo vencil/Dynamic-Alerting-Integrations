@@ -869,20 +869,13 @@ class TestPinnedInvocationCapability:
     repoints a pin. These tests grade the extractor + oracle that bump_docs
     calls; the wiring itself is pinned in tests/dx/test_bump_docs.py.
 
-    Intentional-break dogfood (testing-playbook §LL v2.8.0 §6) — each mutation
-    below was applied to check_doc_datools_cmds.py, the two suites re-run, and
-    the tree restored. All four bit; none of them is an article of faith:
+    Intentional-break dogfood (testing-playbook §v2.8.0 "Intentional-break
+    dogfood"): each test below whose name states a guarantee was verified by
+    mutating away the code path it names and confirming it goes red. The one
+    mutation the names do NOT give you is the comparison itself — turn
+    `inv.subcommand not in command_map_keys` into `False` and the flagging
+    tests must fail; if they do not, this class is decorative.
 
-      * the capability comparison itself (`inv.subcommand not in
-        command_map_keys` -> `False`)      -> the flagging tests go red
-      * the unreadable-doc `raise` -> a silent `continue`
-                                            -> test_unreadable_doc_fails_closed
-      * the empty-COMMAND_MAP guard removed
-                                            -> test_empty_capability_set_is_refused
-      * `_image_index(toks)` -> "first token containing da-tools"
-                                -> test_mount_path_containing_da_tools_is_not_the_image
-
-    Re-run any of them with:
       python3 -m pytest tests/lint/test_check_doc_datools_cmds.py \
               tests/dx/test_bump_docs.py -q
     """
