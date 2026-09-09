@@ -89,7 +89,7 @@ v2.9.0 shifts from "feature stacking" to "battle-hardening". Based on first onbo
 |-----------|--------------|----------------|
 | **Anomaly-Aware Dynamic Threshold** | ML infrastructure (time-series analysis, seasonality detection) | Thresholds evolve from "manually set" to "auto-adaptive". `_threshold_mode: adaptive` + `quantile_over_time`. Static thresholds as safety floor |
 | **Log-to-Metric Bridge** | Loki / Elasticsearch integration | Unified log + metric alert management. Recommended: `grok_exporter / mtail → Prometheus → this platform` |
-| **Multi-Format Export** | metric-dictionary.yaml mapping table | `da-tools export --format datadog/terraform` — platform becomes alert policy abstraction layer | <!-- datools-cmd-ignore: roadmap vision, not shipped -->
+| **Multi-Format Export** | metric-dictionary.yaml mapping table | `da-tools export --format datadog/terraform` — platform becomes alert policy abstraction layer <!-- datools-cmd-ignore: roadmap vision, not shipped --> |
 | **DynamicAlertTenant CRD** | Operator SDK + CRD versioning | Replace ConfigMap + Directory Scanner (requires re-evaluating ADR-008 boundaries) |
 | **ChatOps Deep Integration** | Slack/Teams Bot SDK | Bidirectional operations (query tenant status, trigger silent mode) |
 | **CI/CD Pipeline Status Pass-through** | PR write-back stabilization | PR/MR CI Status Check feedback to Portal UI |

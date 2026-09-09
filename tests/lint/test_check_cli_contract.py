@@ -309,9 +309,13 @@ class TestCommandForms:
 
     def test_an_entrypoint_override_is_disclosed_not_judged(self, tmp_path):
         r = _fence_scan(
-            tmp_path, "docker run --entrypoint sh ghcr.io/vencil/da-tools:v2.9.0 -c ls")
+            tmp_path, "docker run --entrypoint python3 ghcr.io/vencil/da-tools:v2.9.0 x.py --ci")
         assert _open(r.findings) == []
         assert r.stats["cmd_entrypoint_override"] == 1
+        # `--entrypoint sh <image> -c "…"` is the shell-string form instead
+        r = _fence_scan(
+            tmp_path, 'docker run --entrypoint sh ghcr.io/vencil/da-tools:v2.9.0 -c "ls"')
+        assert r.stats["cmd_entrypoint_override"] == 0 and r.stats["cmd_sh_c_strings"] == 1
 
     def test_docker_flags_before_the_image_are_not_judged(self, tmp_path):
         r = _fence_scan(
@@ -410,6 +414,7 @@ class TestCommandForms:
         assert _open(r.findings) == [], line
         assert r.stats["cmd_segments"] == 0, line
         assert r.stats["cmd_bare_not_command"] == words, line
+        assert r.stats["cmd_outside_command_position"] == 0, line
 
     @pytest.mark.parametrize("line", [
         "docker run --rm $IMAGE widget db-a --ci",
@@ -690,12 +695,26 @@ class TestBaselineLedger:
         open_, suppressed, errors = mod.apply_baseline(r.findings, [self._entry(count=2)])
         assert open_ == [] and len(suppressed) == 2 and errors == []
 
-    def test_a_surplus_finding_with_a_ledgered_key_stays_open(self, tmp_path):
+    def test_a_surplus_finding_with_a_ledgered_key_stays_open_and_names_every_site(
+            self, tmp_path):
         """⛔ Measured before `count`: one row swallowed a brand-new violation
-        with the same token appended to the same file."""
+        with the same token appended to the same file. The open one is the
+        later site, but the NEW one may be the earlier line, so the message
+        lists every line with this key (N3)."""
         r = _fence_scan(tmp_path, "da-tools widget db-a --ci", "da-tools widget db-b --ci")
         open_, suppressed, errors = mod.apply_baseline(r.findings, [self._entry(count=1)])
         assert [f.line for f in open_] == [3] and len(suppressed) == 1 and errors == []
+        assert "2 of 2 with this key" in open_[0].message and "lines 2, 3" in open_[0].message \
+            and "(#1380) covers 1 of them" in open_[0].message
+        # the reviewer's shape: the new site sits BEFORE the ledgered one
+        r = _fence_scan(tmp_path, "da-tools widget NEW --ci", "echo", "echo", "echo",
+                        "da-tools widget db-a --ci")
+        open_, _s, _e = mod.apply_baseline(r.findings, [self._entry(count=1)])
+        assert [f.line for f in open_] == [6] and "lines 2, 6" in open_[0].message
+        # control: a key the ledger covers exactly carries no annotation
+        r = _fence_scan(tmp_path, "da-tools widget db-a --ci", "da-tools widget db-b --ci")
+        open_, suppressed, _e = mod.apply_baseline(r.findings, [self._entry(count=2)])
+        assert open_ == [] and not any("with this key" in f.message for f in suppressed)
 
     def test_fewer_findings_than_count_is_stale(self, tmp_path):
         r = _fence_scan(tmp_path, "da-tools widget db-a --ci")
@@ -707,10 +726,17 @@ class TestBaselineLedger:
         _o, _s, errors = mod.apply_baseline(r.findings, [self._entry()])
         assert any("stale" in e for e in errors), errors
 
-    def test_an_entry_and_an_inline_ignore_on_the_same_key_is_a_hard_error(self, tmp_path):
-        r = _fence_scan(tmp_path, "da-tools widget db-a --ci  # datools-cmd-ignore: why")
-        _o, _s, errors = mod.apply_baseline(r.findings, [self._entry()])
-        assert any("ALSO covered" in e for e in errors), errors
+    def test_a_finding_exempted_twice_is_a_hard_error_but_one_each_is_fine(self, tmp_path):
+        """Per FINDING, not per key: one site in the ledger and another under
+        an inline ignore is one exemption each (N2)."""
+        both = _fence_scan(tmp_path, "da-tools widget db-a --ci",
+                           "da-tools widget db-b --ci  # datools-cmd-ignore: why")
+        open_, suppressed, errors = mod.apply_baseline(both.findings, [self._entry(count=1)])
+        assert errors == [] and open_ == [] and len(suppressed) == 1
+        only = _fence_scan(tmp_path, "da-tools widget db-a --ci  # datools-cmd-ignore: why")
+        _o, _s, errors = mod.apply_baseline(only.findings, [self._entry(count=1)])
+        assert any("exemption per finding" in e for e in errors), errors
+        assert not any("stale" in e for e in errors), "double exemption, not staleness"
 
     @pytest.mark.parametrize("ticket", ["#TODO", "1380", "TRK-370", ""])
     def test_a_placeholder_ticket_is_rejected(self, tmp_path, ticket):
@@ -749,6 +775,17 @@ class TestBaselineLedger:
         p.write_text("entries:\n  - {file: d.md, command: widget, verdict: V1, "
                      "token: \"--ci\", ticket: \"#1\"}\n", encoding="utf-8")
         assert any("count" in e for e in mod.load_baseline(p)[1]), "count is mandatory"
+
+    def test_write_baseline_escapes_tokens(self, tmp_path):
+        """A backslash in a token must survive the YAML round trip (N13)."""
+        r = _fence_scan(tmp_path, "da-tools 'foo\\bar' --x", "da-tools 'a\"b'")
+        out = tmp_path / "b.yaml"
+        mod.write_baseline(r.findings, [], out)
+        entries, _errors = mod.load_baseline(out)
+        assert {e.token for e in entries} == {"foo\\bar", 'a"b'}
+        open_, suppressed, errors = mod.apply_baseline(
+            r.findings, [e._replace(ticket="#1") for e in entries])
+        assert open_ == [] and errors == [] and len(suppressed) == 2
 
     def test_write_baseline_round_trips_counts_and_keeps_known_tickets(self, tmp_path):
         r = _fence_scan(tmp_path, "da-tools widget db-a --ci", "da-tools widget db-b --ci",
@@ -818,11 +855,207 @@ class TestBlindIsNotClean:
             assert self._run_main(monkeypatch, [], [], [], argv,
                                   ledger=([], ["baseline ledger is missing"])) == 2
 
+    def test_write_baseline_refuses_when_the_scan_did_not_complete(self, monkeypatch, tmp_path,
+                                                                 capsys):
+        """N4: a ledger regenerated under a blind parser would silently drop
+        every row of that command."""
+        target = tmp_path / "b.yaml"
+        monkeypatch.setattr(mod, "BASELINE_PATH", target)
+        monkeypatch.setattr(mod, "write_baseline",
+                            lambda f, e, path=target: path.write_text("entries: []\n") or 0)
+        assert self._run_main(monkeypatch, [], [], ["could not load foo"],
+                              ["--write-baseline"]) == 2
+        assert not target.exists(), "refused means nothing written"
+        assert "[FATAL]" in capsys.readouterr().err
+        assert self._run_main(monkeypatch, [], [], [], ["--write-baseline"]) == 0, "control"
+        assert target.exists()
+
     def test_json_mode_emits_exactly_one_document(self, monkeypatch, capsys):
         import json
         assert self._run_main(monkeypatch, [], [], [], ["--json"]) == 0
         doc = json.loads(capsys.readouterr().out)
         assert set(doc) == {"findings", "suppressed", "ignored", "stats", "errors", "fatal"}
+
+
+class TestRoundTwo:
+    """Second blind review (N1–N13): every shape has a positive and a negative."""
+
+    @pytest.mark.parametrize("line", [
+        "da-tools widget $(pwd); da-tools widget db-a --ci",            # `);` glued
+        "da-tools widget $(pwd)|| da-tools widget db-a --ci",           # `)||` glued
+        "da-tools widget $(dirname $(pwd)) --ci",                        # nested `))`
+        "da-tools widget $((1+2)) --ci",                                 # arithmetic `((`
+        "da-tools widget db-a --config-dir $(pwd)/conf.d && da-tools widget db-b --ci",
+    ])
+    def test_substitutions_glued_to_operators_or_nested_do_not_hide_the_rest(self, tmp_path, line):
+        assert _open(_fence_scan(tmp_path, line).findings) == [("V1", "widget", "--ci")], line
+
+    def test_an_unbalanced_substitution_is_unparseable_not_silent(self, tmp_path):
+        r = _fence_scan(tmp_path, "da-tools widget $(cat t --ci")
+        assert _open(r.findings) == [] and r.stats["cmd_unparseable"] == 1
+
+    @pytest.mark.parametrize("line", [
+        "if da-tools widget db-a --ci; then echo ok; fi",
+        "if ! da-tools widget db-a --ci; then exit 1; fi",
+        "{ da-tools widget db-a --ci; }",
+        "while da-tools widget db-a --ci; do sleep 1; done",
+        "env FOO=bar da-tools widget db-a --ci",
+        "docker run -e X=1 da-tools widget db-a --ci",       # bare local image name
+    ])
+    def test_reserved_words_and_assignment_wrappers_are_command_positions(self, tmp_path, line):
+        assert _open(_fence_scan(tmp_path, line).findings) == [("V1", "widget", "--ci")], line
+
+    @pytest.mark.parametrize("line", [
+        "docker exec vibe-dev-container da-tools widget db-a --ci",
+        "timeout 30 da-tools widget db-a --ci",
+        "xargs -n 1 da-tools widget --ci",
+        "sudo -u vibe da-tools widget db-a --ci",
+        'docker exec vibe-dev-container sh -c "da-tools widget db-a --ci"',
+        'docker exec -it vibe-dev-container bash -lc "da-tools widget db-a --ci"',
+        "│ da-tools widget --ci → deploy │",                   # box diagram
+        "[ ] 6. Sample: da-tools widget <id> --ci",            # checklist item
+    ])
+    def test_an_invocation_outside_command_position_is_disclosed_in_its_own_bucket(
+            self, tmp_path, line):
+        r = _fence_scan(tmp_path, line)
+        assert _open(r.findings) == [] and r.stats["cmd_segments"] == 0, line
+        assert r.stats["cmd_outside_command_position"] == 1, line
+        assert r.stats["cmd_bare_not_command"] == 0, line
+        assert r.stats["cmd_sh_c_strings"] == 0, line
+
+    def test_a_da_tools_image_running_a_shell_is_an_unknown_subcommand(self, tmp_path):
+        """N6: the image's entrypoint is da-tools, so `sh` is argv[0]."""
+        r = _fence_scan(tmp_path, 'docker run --rm ghcr.io/vencil/da-tools:latest sh -c "ls"')
+        assert _open(r.findings) == [("V0", "sh", "sh")] and r.stats["cmd_sh_c_strings"] == 0
+        assert r.stats["cmd_outside_command_position"] == 0, "no da-tools inside `ls`"
+        r = _fence_scan(tmp_path, 'docker run --rm ghcr.io/vencil/da-tools:latest sh -c '
+                                  '"da-tools widget db-a --ci"')
+        assert _open(r.findings) == [("V0", "sh", "sh")] and r.stats["cmd_sh_c_strings"] == 0
+        assert r.stats["cmd_outside_command_position"] == 1, "the string's da-tools is disclosed"
+        for line in ('docker run --rm --entrypoint sh ghcr.io/vencil/da-tools:latest '
+                     '-c "da-tools widget db-a --ci"',
+                     'docker run --rm busybox sh -c "da-tools widget db-a --ci"',
+                     'docker run --rm $IMAGE sh -c "da-tools widget db-a --ci"'):
+            runs = _fence_scan(tmp_path, line)
+            assert _open(runs.findings) == [("V1", "widget", "--ci")], line
+            assert runs.stats["cmd_sh_c_strings"] == 1, line
+
+    @pytest.mark.parametrize("line", [
+        'bash -lc "da-tools widget db-a --ci"',
+        'sh -ec "da-tools widget db-a --ci"',
+        'bash -cl "da-tools widget db-a --ci"',        # bash reads the cluster in any order
+        'kubectl exec pod -- sh -c "da-tools widget db-a --ci"',
+    ])
+    def test_short_flag_clusters_containing_c_are_shell_strings(self, tmp_path, line):
+        r = _fence_scan(tmp_path, line)
+        assert _open(r.findings) == [("V1", "widget", "--ci")] and r.stats["cmd_sh_c_strings"] == 1
+
+    def test_a_shell_option_without_c_is_not_a_command_string(self, tmp_path):
+        r = _fence_scan(tmp_path, 'sh -x "da-tools widget db-a --ci"')
+        assert _open(r.findings) == [] and r.stats["cmd_sh_c_strings"] == 0
+
+    @pytest.mark.parametrize("line", [
+        "sh -c 'da-tools widget db-a --ci \"x'",     # inner string unparseable
+        "sh -c",                                       # no string at all
+    ])
+    def test_a_broken_shell_string_is_counted_unparseable(self, tmp_path, line):
+        r = _fence_scan(tmp_path, line)
+        assert _open(r.findings) == [] and r.stats["cmd_unparseable"] == 1, line
+
+    @pytest.mark.parametrize("body,expect", [
+        (_fence("containers:", "  - name: v", "    image: busybox",
+                '    command: ["/bin/sh", "-c"]', '    args: ["da-tools widget db-a --ci"]',
+                lang="yaml"), [("V1", "widget", "--ci")]),
+        (_fence("services:", "  tool:", "    image: ghcr.io/vencil/da-tools:v2.9.0",
+                '    command: ["widget", "db-a", "--ci"]', lang="yaml"),
+         [("V1", "widget", "--ci")]),
+        (_fence("services:", "  tool:", "    image: ghcr.io/vencil/da-tools:v2.9.0",
+                "    command:", "    - widget", "    - db-a", '    - "--ci"', lang="yaml"),
+         [("V1", "widget", "--ci")]),                                  # items at key indent
+        (_fence("services:", "  tool:", "    image: ghcr.io/vencil/da-tools:v2.9.0",
+                "    entrypoint: da-tools", '    command: ["widget", "db-a", "--ci"]',
+                lang="yaml"), [("V1", "widget", "--ci")]),
+        (_fence("services:", "  tool:", "    image: ghcr.io/vencil/da-tools:v2.9.0",
+                '    command: ["sh", "-c", "da-tools widget db-a --ci"]', lang="yaml"),
+         [("V1", "widget", "--ci")]),
+        (_fence("containers:", "  - name: v", "    image: ghcr.io/vencil/da-tools:v2.9.0",
+                '    command: ["python3", "-m", "http.server", "8080"]', lang="yaml"), []),
+        (_fence("containers:", "  - name: v", "    image: ghcr.io/vencil/da-tools:v2.9.0",
+                '    command: ["widget", "db-a", "--ci"]', lang="yaml"), []),
+        (_fence("containers:", "  - name: v", "    image: ghcr.io/vencil/da-tools:v2.9.0",
+                '    command: ["python3", "serve.py"]', '    args: ["--ci"]', lang="yaml"), []),
+        (_fence("services:", "  tool:", "    image: ghcr.io/vencil/da-tools:v2.9.0",
+                '    entrypoint: ["python3"]', '    command: ["x.py", "--ci"]',
+                lang="yaml"), []),
+    ])
+    def test_manifest_shapes_follow_their_schemas_semantics(self, tmp_path, body, expect):
+        """k8s `command:` REPLACES the entrypoint (a da-tools image serving
+        http.server runs no da-tools — live on this tree); compose `command:`
+        is the CMD under the da-tools entrypoint unless `entrypoint:` replaces
+        it. The overrides are disclosed, not judged."""
+        r = _scan(tmp_path, docs=[_doc(tmp_path, body)])
+        assert _open(r.findings) == expect, body
+        assert r.stats["cmd_manifest_argvs"] == (1 if expect else 0)
+        assert r.stats["cmd_entrypoint_override"] == (0 if expect else 1), body
+
+    def test_a_diff_fence_judges_only_added_lines(self, tmp_path):
+        body = "```diff\n- da-tools widget db-a --old-flag\n+ da-tools widget db-a --ci\n```\n"
+        r = _scan(tmp_path, docs=[_doc(tmp_path, body)])
+        assert _open(r.findings) == [("V1", "widget", "--ci")]
+        body = "```diff\n-da-tools widget db-a --old-flag\n+da-tools widget db-a --ci\n```\n"
+        assert _open(_scan(tmp_path, docs=[_doc(tmp_path, body)]).findings) == [
+            ("V1", "widget", "--ci")]
+        control = "```bash\n- da-tools widget db-a --old-flag\n```\n"
+        assert _open(_scan(tmp_path, docs=[_doc(tmp_path, control)]).findings) == [
+            ("V1", "widget", "--old-flag")], "outside a diff fence `- ` is a list bullet"
+
+    def test_a_longer_fence_keeps_inner_fences_as_content(self, tmp_path):
+        body = "````markdown\n```bash\nda-tools widget db-a --ci\n```\n````\n"
+        r = _scan(tmp_path, docs=[_doc(tmp_path, body)])
+        assert _open(r.findings) == [("V1", "widget", "--ci")]
+        body = "```bash\nda-tools widget db-a --ci\n```\n\nprose `da-tools widget db-a --bogus`\n"
+        r = _scan(tmp_path, docs=[_doc(tmp_path, body)])
+        assert _open(r.findings) == [("V1", "widget", "--ci"), ("V1", "widget", "--bogus")], (
+            "control: an equal-length fence still closes")
+
+    def test_two_adjacent_equal_fences_are_two_blocks(self, tmp_path):
+        body = "```yaml\ncontainers:\n- name: a\n  image: ghcr.io/vencil/da-tools:v1\n```\n" \
+               "```yaml\n  args: [widget, --ci]\n```\n"
+        r = _scan(tmp_path, docs=[_doc(tmp_path, body)])
+        assert _open(r.findings) == [] and r.stats["cmd_manifest_argvs"] == 0, (
+            "the second block's args attached to the first block's image")
+        assert len(mod._fence_blocks(body.splitlines())) == 2
+        joined = body.replace("```\n```yaml\n", "")
+        assert _open(_scan(tmp_path, docs=[_doc(tmp_path, joined)]).findings) == [
+            ("V1", "widget", "--ci")], "control: in ONE block the args do attach"
+
+    @pytest.mark.parametrize("comment", [
+        "# see datools-cmd-ignore in docs",          # prose about the marker
+        "# datools-cmd-ignored stuff",               # another word
+    ])
+    def test_a_comment_that_merely_mentions_the_marker_is_not_an_ignore(self, tmp_path, comment):
+        r = _fence_scan(tmp_path, f"da-tools widget db-a --ci  {comment}")
+        assert _open(r.findings) == [("V1", "widget", "--ci")] and r.stats["ignored"] == 0
+        assert r.errors == []
+        r = _fence_scan(tmp_path, "da-tools widget db-a --ci  # datools-cmd-ignore: real reason")
+        assert _open(r.findings) == [] and r.stats["ignored"] == 1
+
+    def test_a_marker_without_its_colon_has_no_reason(self, tmp_path):
+        r = _fence_scan(tmp_path, "da-tools widget db-a --ci  # datools-cmd-ignore reason")
+        assert any("without a reason" in e for e in r.errors) and r.findings == []
+        prose = _scan(tmp_path, docs=[_doc(
+            tmp_path, "See `da-tools widget db-a --ci` <!-- datools-cmd-ignore reason -->\n")])
+        assert any("without a reason" in e for e in prose.errors) and prose.findings == []
+        mention = _scan(tmp_path, docs=[_doc(
+            tmp_path, "See `da-tools widget db-a --ci` <!-- see datools-cmd-ignore -->\n")])
+        assert _open(mention.findings) == [("V1", "widget", "--ci")] and mention.errors == []
+        ref = _reference(tmp_path, "| `--ci` | x | false <!-- datools-cmd-ignore reason --> |\n")
+        assert any("without a reason" in e for e in _scan(tmp_path, reference=ref).errors)
+
+    def test_a_table_row_ignore_inside_the_last_cell_is_honoured(self, tmp_path):
+        r = _scan(tmp_path, docs=[_doc(
+            tmp_path, "| a | `da-tools profile build` planned <!-- datools-cmd-ignore: not shipped --> |\n")])
+        assert _open(r.findings) == [] and r.stats["ignored"] == 1 and r.errors == []
 
 
 @pytest.fixture(scope="module")
@@ -888,6 +1121,8 @@ class TestRealRepo:
         assert errors == []
         assert sorted(regen) == sorted(result["entries"]), (
             "--write-baseline and the shipped ledger disagree; regenerate it")
+        assert out.read_bytes() == mod.BASELINE_PATH.read_bytes(), (
+            "the regenerated text differs from the shipped file; regenerate it")
 
     def test_the_productive_header_shapes_are_pinned(self, result):
         productive = {k for k, v in result["by_header"].items() if v > 0}
