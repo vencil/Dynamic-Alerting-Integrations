@@ -546,10 +546,11 @@ _LIBYAML_ONLY = {"trailing-tab", "tab-after-key-colon", "tab-in-flow"}
 
 @pytest.mark.parametrize("case_name", sorted(_ORACLE_BY_NAME))
 def test_carrier_health_matches_the_exporter(case_name):
-    """產線的 `carrier_health` 對每一格給出 Go `TestDefaultsCarrierOracle`
-    量到的判定：accepted ⇒ 無項；dropped ⇒ 恰一個 UNPARSEABLE（結構性的 key
-    為 None）；zero ⇒ 恰一個 DECODES_TO_ZERO。帶 `python` 覆寫欄位的格是刻意的
-    fail-closed 近似（Go 接受、本工具整檔擋），以覆寫為準。"""
+    """產線的 `exporter_verdicts`（鏡射那一層）對每一格給出 Go
+    `TestDefaultsCarrierOracle` 量到的判定：accepted ⇒ 無項；dropped ⇒ 恰一個
+    UNPARSEABLE（結構性的 key 為 None）；zero ⇒ 恰一個 DECODES_TO_ZERO。帶
+    `python` 覆寫欄位的格是刻意的 fail-closed 近似（Go 接受、本工具整檔擋），以
+    覆寫為準。`carrier_health` 在這一層之上再加本工具自己讀不讀得了。"""
     case = _ORACLE_BY_NAME[case_name]
     if case_name in _LIBYAML_ONLY and not yaml.__with_libyaml__:
         pytest.skip(f"{case_name}: 沒有 libyaml，pure parser 對 tab 的判定與 yaml.v3 不同")
@@ -768,53 +769,181 @@ def test_every_underscore_file_on_the_root_plane_is_health_checked(tmp_path):
     assert _tree_bytes(root) == before, "a degraded run wrote to the tree"
 
 
-def test_a_tenant_files_bad_defaults_value_only_warns(tmp_path):
-    """租戶檔的 `defaults:` 值不合格 ⇒ 只警告（exporter 會整份丟掉那個租戶檔），
-    不擋寫入、不影響 rc，而且與 `--plane` 無關。"""
+def test_a_tenant_file_the_exporter_cannot_decode_is_left_alone(tmp_path):
+    """租戶檔 exporter 讀不進去（`defaults:` 值型別、重複 key）⇒ 警告、Step 2 不碰
+    它、它的殘留具名 rc 1（理由與警告同一句）；兩個 plane 一樣。重複 key 不再被
+    safe_dump 靜默折疊。成對反例：乾淨的租戶檔照舊刪 key、rc 0、沒有任何 ⚠️。"""
+    bad_value = "defaults:\n  x: disable\ntenants:\n  alpha:\n    cpu_usage: '85'\n"
+    dup_key = ("tenants:\n  alpha:\n    mem: '1'\n    mem: '2'\n"
+               "    cpu_usage: '85'\n")
+    cases = [("root", bad_value, "x: disable"), ("root", dup_key, "重複 key"),
+             ("subtree", bad_value, "x: disable")]
+    for n, (plane, body, hint) in enumerate(cases):
+        root = tmp_path / f"conf.d{n}"
+        root.mkdir()
+        _write(root, "_defaults.yaml", "defaults:\n  cpu_usage: 80\n")
+        _write(root, "alpha.yaml", body)
+        before = (root / "alpha.yaml").read_bytes()
+
+        r = _run(root, "--plane", plane, "--execute")
+
+        assert r.returncode == 1, r.stdout + r.stderr
+        assert "本工具不寫它" in r.stdout, r.stdout
+        assert "已移除: alpha.yaml" not in r.stdout, r.stdout
+        tail = _tail(r.stdout)
+        assert "alpha.yaml" in tail and "租戶檔 exporter 讀不進去" in tail, tail
+        assert hint in tail and "本工具不改寫，請先修檔" in tail, tail
+        assert (root / "alpha.yaml").read_bytes() == before, (plane, hint)
+        assert "cpu_usage" not in (root / "_defaults.yaml").read_text(encoding="utf-8")
+        # 預覽給同一個判斷（預覽不寫，所以殘留是靠「本輪不改寫」那條規則列出來的）。
+        preview = _run(root, "--plane", plane)
+        assert preview.returncode == 1, preview.stdout + preview.stderr
+        assert _tail(preview.stdout) == tail, preview.stdout
+
+    clean = tmp_path / "clean"
+    clean.mkdir()
+    _write(clean, "_defaults.yaml", "defaults:\n  cpu_usage: 80\n")
+    _write(clean, "alpha.yaml", "tenants:\n  alpha:\n    cpu_usage: '85'\n")
+    r = _run(clean, "--execute")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "⚠️" not in r.stdout, r.stdout
+    assert "cpu_usage" not in (clean / "alpha.yaml").read_text(encoding="utf-8")
+
+
+def test_a_tenant_file_the_tool_cannot_parse_takes_the_unreadable_route(tmp_path):
+    """租戶檔本工具的 pure parser 讀不了（tab）: 走「無法讀取」具名 rc 1，沒有
+    第二句 pure-parser 警告，也不寫它。成對反例：載體同一形狀是「本工具讀不了
+    （pure parser 限制）」的體檢項。"""
     root = tmp_path / "conf.d"
     root.mkdir()
     _write(root, "_defaults.yaml", "defaults:\n  cpu_usage: 80\n")
-    _write(root, "alpha.yaml",
-           "defaults:\n  x: disable\ntenants:\n  alpha:\n    cpu_usage: '85'\n")
+    _write(root, "alpha.yaml", "tenants:\n  alpha:\n    cpu_usage: '85'\t\n")
+    before = (root / "alpha.yaml").read_bytes()
 
     r = _run(root, "--execute")
 
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert "exporter 會整份丟掉這個租戶檔" in r.stdout, r.stdout
-    assert "alpha.yaml" in r.stdout.split("exporter 會整份丟掉", 1)[0], r.stdout
-    assert "cpu_usage" not in (root / "_defaults.yaml").read_text(encoding="utf-8")
-    assert "cpu_usage" not in (root / "alpha.yaml").read_text(encoding="utf-8")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "pure parser" not in r.stdout, r.stdout
+    tail = _tail(r.stdout)
+    assert "alpha.yaml" in tail and "無法讀取" in tail, tail
+    assert (root / "alpha.yaml").read_bytes() == before
 
-    sub = tmp_path / "finance"
+
+def test_under_plane_subtree_a_root_style_underscore_file_is_not_read(tmp_path):
+    """`--plane subtree` 下，這一層 `_defaults` 以外的 `_` 檔 exporter 不讀：root
+    的指引（對該子樹跑）走到 rc 0，不再以「併進全域」判手動。成對反例：同一個
+    檔在 `--plane root` 是 exporter 會併進全域的殘留、rc 1。"""
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    _write(root, "_defaults.yaml", "defaults:\n  cpu_usage: 80\n")
+    sub = root / "finance"
     sub.mkdir()
-    _write(sub, "alpha.yaml",
-           "defaults:\n  x: disable\ntenants:\n  alpha:\n    cpu_usage: '85'\n")
+    _write(sub, "_shared.yaml", "defaults:\n  cpu_usage: 60\n")
+    _write(sub, "t1.yaml", "tenants:\n  t1:\n    cpu_usage: '70'\n")
+
+    r = _run(root, "--execute")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert f"--config-dir {sub} --plane subtree" in _tail(r.stdout), r.stdout
+
     r2 = _run(sub, "--plane", "subtree", "--execute")
     assert r2.returncode == 0, r2.stdout + r2.stderr
-    assert "exporter 會整份丟掉這個租戶檔" in r2.stdout, r2.stdout
+    assert "_shared.yaml exporter 不讀" in r2.stdout, r2.stdout
+    assert "併進全域" not in r2.stdout, r2.stdout
+    assert "cpu_usage" not in (sub / "t1.yaml").read_text(encoding="utf-8")
+    assert "cpu_usage: 60" in (sub / "_shared.yaml").read_text(encoding="utf-8")
+
+    r3 = _run(root, "--execute")
+    assert r3.returncode == 0, r3.stdout + r3.stderr
+
+    r4 = _run(sub, "--plane", "root", "--execute")
+    assert r4.returncode == 1, r4.stdout + r4.stderr
+    assert "併進全域" in _tail(r4.stdout), r4.stdout
 
 
-def test_a_tenant_file_the_exporter_cannot_decode_is_warned_about(tmp_path):
-    """租戶檔有重複 key：本工具讀得下（last wins）、exporter 整份丟——警告、rc 0。
-    成對反例：乾淨的租戶檔沒有任何 ⚠️。"""
+def test_a_subtree_carriers_tenants_and_profiles_blocks_are_not_read(tmp_path):
+    """子樹 `_defaults.yaml` 的 `tenants:`／`profiles:` 區塊 exporter 不讀（只讀它的
+    `defaults:`）：只警告，root 的指引走到 rc 0。成對反例：root 層 `_defaults.yaml`
+    自己的 `tenants:` 區塊 exporter 會讀，仍是手動殘留 rc 1。"""
+    carrier = ("defaults:\n  mem: 1\ntenants:\n  t9:\n    cpu_usage: '70'\n"
+               "profiles:\n  p:\n    cpu_usage: '1'\n")
     root = tmp_path / "conf.d"
     root.mkdir()
     _write(root, "_defaults.yaml", "defaults:\n  cpu_usage: 80\n")
-    _write(root, "alpha.yaml",
-           "defaults:\n  x: 1\n  x: 2\ntenants:\n  alpha:\n    mem_usage: '1'\n")
+    sub = root / "finance"
+    sub.mkdir()
+    _write(sub, "_defaults.yaml", carrier)
+    _write(sub, "t1.yaml", "tenants:\n  t1:\n    cpu_usage: '70'\n")
 
     r = _run(root, "--execute")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "子樹 `_defaults.yaml` 只讀 defaults 區塊" in r.stdout, r.stdout
+    tail = _tail(r.stdout)
+    assert "tenants.t9" not in tail and "profiles.p" not in tail, tail
 
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert "alpha.yaml exporter 讀不進去" in r.stdout and "重複 key" in r.stdout, r.stdout
-
-    root2 = tmp_path / "conf.d2"
-    root2.mkdir()
-    _write(root2, "_defaults.yaml", "defaults:\n  cpu_usage: 80\n")
-    _write(root2, "alpha.yaml", "tenants:\n  alpha:\n    cpu_usage: '85'\n")
-    r2 = _run(root2, "--execute")
+    r2 = _run(sub, "--plane", "subtree", "--execute")
     assert r2.returncode == 0, r2.stdout + r2.stderr
-    assert "⚠️" not in r2.stdout, r2.stdout
+    r3 = _run(root, "--execute")
+    assert r3.returncode == 0, r3.stdout + r3.stderr
+
+    top = tmp_path / "conf.d2"
+    top.mkdir()
+    _write(top, "_defaults.yaml", carrier.replace("mem: 1", "cpu_usage: 80"))
+    r4 = _run(top, "--execute")
+    assert r4.returncode == 1, r4.stdout + r4.stderr
+    tail = _tail(r4.stdout)
+    assert "tenants.t9" in tail and "profiles.p" in tail, tail
+
+
+def test_an_unreadable_carrier_is_the_tools_problem_in_the_banner_too(
+        tmp_path, monkeypatch, capsys):
+    """OS 層讀不到的載體：降級 banner 與結尾理由都說「本工具讀不了」，不說
+    「exporter 讀不進去」。成對反例：exporter 讀不進去的值 banner 說的是 exporter。"""
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    _write(root, "_defaults.yaml", "defaults:\n  cpu_usage: 80\n")
+    real = deprecate_rule.carrier_health_at
+    monkeypatch.setattr(
+        deprecate_rule, "carrier_health_at",
+        lambda p: ([(None, "Permission denied", deprecate_rule.UNREADABLE)]
+                   if p.name == "_defaults.yaml" else real(p)))
+    monkeypatch.setattr(sys, "argv", ["deprecate_rule.py", "cpu_usage",
+                                      "--config-dir", str(root), "--execute"])
+    with pytest.raises(SystemExit) as exc:
+        deprecate_rule.main()
+    out = capsys.readouterr().out
+    assert exc.value.code == 1, out
+    banner = [ln for ln in out.splitlines() if "本輪降級為預覽" in ln][0]
+    assert "本工具讀不了" in banner and "exporter 讀不進去" not in banner, banner
+    assert "本工具讀不了（無法讀取：Permission denied）" in _tail(out), out
+
+    monkeypatch.setattr(deprecate_rule, "carrier_health_at", real)
+    _write(root, "_defaults.yaml", "defaults:\n  cpu_usage: 80\n  old: disable\n")
+    r = _run(root, "--execute")
+    banner = [ln for ln in r.stdout.splitlines() if "本輪降級為預覽" in ln][0]
+    assert "exporter 讀不進去" in banner and "本工具讀不了" not in banner, banner
+
+
+def test_under_plane_subtree_an_unparseable_own_carrier_degrades_the_run(tmp_path):
+    """`--plane subtree` 下子樹自有 `_defaults.yaml` 本工具讀不了時，與 root 平面
+    對稱：整輪降級、租戶檔也不寫、rc 1。成對反例：讀得了的子樹載體照常寫。"""
+    if not yaml.__with_libyaml__:
+        pytest.skip("沒有 libyaml，tab 形狀走不到「本工具讀不了」")
+    sub = tmp_path / "finance"
+    sub.mkdir()
+    _write(sub, "_defaults.yaml", "defaults:\n  cpu_usage: 60\t\n")
+    _write(sub, "t1.yaml", "tenants:\n  t1:\n    cpu_usage: '70'\n")
+    before = _tree_bytes(sub)
+
+    r = _run(sub, "--plane", "subtree", "--execute")
+
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "本輪降級為預覽" in r.stdout, r.stdout
+    assert _tree_bytes(sub) == before, "a degraded subtree run wrote to the tree"
+
+    _write(sub, "_defaults.yaml", "defaults:\n  cpu_usage: 60\n")
+    r2 = _run(sub, "--plane", "subtree", "--execute")
+    assert r2.returncode == 0, r2.stdout + r2.stderr
+    assert "cpu_usage" not in (sub / "t1.yaml").read_text(encoding="utf-8")
 
 
 def test_an_empty_value_only_warns_and_the_run_still_writes(tmp_path):

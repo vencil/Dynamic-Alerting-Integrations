@@ -486,22 +486,28 @@ def _base_of(name):
     return name.rsplit("/", 1)[-1]
 
 
-def _nested_ignored(name):
-    """子目錄裡 `_defaults` 以外的 `_` 前綴檔: exporter 完全不讀（`isNestedPlatformFile`）。"""
+def _in_subtree(name, plane):
+    """子樹裡的檔: 子目錄裡的（`name` 含 `/`），或 `--plane subtree` 的這一層。"""
+    return "/" in name or plane == "subtree"
+
+
+def _nested_ignored(name, plane="root"):
+    """子樹裡 `_defaults` 以外的 `_` 前綴檔: exporter 完全不讀（`isNestedPlatformFile`）。"""
     base = _base_of(name)
-    return "/" in name and base.startswith("_") and not is_defaults_name(base)
+    return (_in_subtree(name, plane) and base.startswith("_")
+            and not is_defaults_name(base))
 
 
-def section_owner(name, section):
+def section_owner(name, section, plane="root"):
     """掃描結果的 `[section]` 在檔 `name` 裡由誰清: 本工具／手動／exporter 丟棄。
 
-    規則來自 exporter 的 `applyBoundaryRules`（`flat_scanner.go`）: 平台區塊
-    （`defaults`／`optional_overrides`／`profiles`）只從 `_` 前綴檔讀；本工具只寫
-    精確名載體的平台區塊與非 `_` 檔的 `tenants:`。子目錄裡的檔（`name` 含 `/`）
-    同一套 basename 規則，但本工具不遞迴寫入，所以本工具會寫的那兩類在子目錄裡
-    是「手動」（對該子樹跑）。
+    root 層的規則來自 exporter 的 `applyBoundaryRules`（`flat_scanner.go`）: 平台
+    區塊（`defaults`／`optional_overrides`／`profiles`）只從 `_` 前綴檔讀；本工具
+    只寫精確名載體的平台區塊與非 `_` 檔的 `tenants:`。子樹裡 exporter 只讀
+    `_defaults.yaml` 的 `defaults:`（`parseDefaultsBytes`），其他 `_` 檔不讀；
+    本工具不遞迴寫入，所以本工具會寫的那兩類在子目錄裡是「手動」（對該子樹跑）。
     """
-    if _nested_ignored(name):
+    if _nested_ignored(name, plane):
         return OWNER_EXPORTER
     if section == "unreadable":
         return OWNER_MANUAL
@@ -512,19 +518,22 @@ def section_owner(name, section):
         if is_defaults_name(base):
             return OWNER_MANUAL if nested else OWNER_TOOL
         return OWNER_MANUAL if base.startswith("_") else OWNER_EXPORTER
-    if block == "profiles":
-        return OWNER_MANUAL if base.startswith("_") else OWNER_EXPORTER
     if base.startswith("_"):
-        return OWNER_MANUAL
+        return OWNER_EXPORTER if _in_subtree(name, plane) else OWNER_MANUAL
+    if block == "profiles":
+        return OWNER_EXPORTER
     return OWNER_MANUAL if nested else OWNER_TOOL
 
 
-def exporter_drop_reason(name, section):
+def exporter_drop_reason(name, section, plane="root"):
     """`OWNER_EXPORTER` 的那一句警告（接在檔名後面）。"""
-    if _nested_ignored(name):
+    if _nested_ignored(name, plane):
         return ("exporter 不讀子目錄裡 `_defaults` 以外的 `_` 前綴檔"
                 "（isNestedPlatformFile），本工具不寫入")
     block = section.split(".", 1)[0]
+    if _in_subtree(name, plane) and _base_of(name).startswith("_"):
+        return (f"的 {block} 區塊 exporter 不讀（子樹 `_defaults.yaml` 只讀 "
+                f"defaults 區塊），本工具不寫入")
     return f"的 {block} 區塊 exporter 會丟棄（只從 `_` 前綴檔讀），本工具不寫入"
 
 
@@ -549,22 +558,26 @@ def manual_reason(name, section, key, val, config_dir):
             f"{where}")
 
 
-def unclearable_occurrences(metric_key, findings, *, predict):
+def unclearable_occurrences(metric_key, findings, *, predict, plane="root",
+                            skip=frozenset()):
     """掃描結果中本工具的處置**不會**（`predict=True`）或**沒有**清掉的引用。
 
     回傳 `[(filename, section, key, value, designed), ...]`，是 key 級完成度的
     唯一判定點。`designed=True` 是 `section_owner` 判給手動的那一類，兩種模式
     都列；`OWNER_TOOL` 的引用預覽時扣掉（本輪會刪），`--execute` 後重掃仍在就
-    列出——那才是「寫入沒有發生」。exporter 會丟棄的區塊不算殘留。
+    列出——那才是「寫入沒有發生」。exporter 會丟棄的區塊不算殘留。`skip` 是
+    本輪不改寫的租戶檔，它們的引用兩種模式都列（`designed=True`）。
     """
     out = []
     for f in findings:
         name = f["filename"]
         for section, key, val in f["occurrences"]:
-            owner = section_owner(name, section)
+            owner = section_owner(name, section, plane)
             if owner == OWNER_EXPORTER:
                 continue
-            if owner == OWNER_TOOL:
+            if owner == OWNER_TOOL and name in skip:
+                designed = True
+            elif owner == OWNER_TOOL:
                 if predict:
                     continue
                 designed = False
@@ -652,7 +665,7 @@ def nested_residue(metric_key, config_dir):
     return out
 
 
-def out_of_reach(entries):
+def out_of_reach(entries, plane="root"):
     """這一層本工具不寫的載體 `[(名字, 理由), ...]`: 子目錄、`_` 前綴檔的
     `tenants:`／`profiles:` 區塊（含 `_defaults.yaml` 自己的）。"""
     bad = {b.name for b in unusable_config_entries(entries)}
@@ -664,7 +677,7 @@ def out_of_reach(entries):
             out.append((f"{e.name}/", "子目錄，本工具不遞迴寫入；殘留請對該子樹跑 "
                                       "`--config-dir <子樹> --plane subtree`"))
         elif (e.is_file() and has_yaml_extension(e.name)
-              and e.name.startswith("_")):
+              and e.name.startswith("_") and plane == "root"):
             data, err = _read_yaml(str(e))
             if err is not None:
                 continue                       # 載體體檢會具名
@@ -775,8 +788,9 @@ def _header_of(path):
     return header
 
 
-def remove_from_tenants(metric_key, config_dir, execute=False):
-    """從平面目錄下非 `_` 前綴的租戶檔移除該 metric 的 key。"""
+def remove_from_tenants(metric_key, config_dir, execute=False, *,
+                        skip=frozenset()):
+    """從平面目錄下非 `_` 前綴的租戶檔移除該 metric 的 key；`skip` 裡的檔不碰。"""
     removed = []
     config_base = Path(config_dir)
     warn_nested(config_base, tool="deprecate_rule")
@@ -786,7 +800,8 @@ def remove_from_tenants(metric_key, config_dir, execute=False):
     ):
         filename = entry.name
         path = str(entry)
-        if filename.startswith('_') or filename.startswith('.'):
+        if (filename.startswith('_') or filename.startswith('.')
+                or filename in skip):
             continue
 
         data = load_yaml_file(path)     # 讀不了的檔 `scan_for_metric` 已具名
@@ -817,7 +832,7 @@ def remove_from_tenants(metric_key, config_dir, execute=False):
 
 def _health_reason(key, raw, kind):
     if kind == UNREADABLE:
-        return f"無法讀取（{raw}），本工具無法判定 exporter 讀不讀得進去"
+        return f"本工具讀不了（無法讀取：{raw}），無法判定 exporter 讀不讀得進去"
     if kind == UNPARSED_BY_TOOL:
         return f"本工具讀不了（pure parser 限制）：{raw}；請先修檔"
     if key is None:
@@ -868,7 +883,7 @@ def main():
     for bad in unusable_config_entries(entries):
         print(f"  ⚠️  略過 {safe_label(bad.name)}——{unusable_reason(bad)}",
               file=sys.stderr)
-    unreachable = out_of_reach(entries)
+    unreachable = out_of_reach(entries, args.plane)
     if unreachable:
         print("\n  ℹ️  本工具射程外（若仍持有該 metric 的 key，結尾會具名、rc 1）：")
         for name, reason in unreachable:
@@ -881,6 +896,7 @@ def main():
     planned = {k for m in args.metrics for k in metric_pattern_keys(m)}
     health = {}
     blocked = set()
+    tenant_bad = {}        # 租戶檔 → exporter 讀不進去的原因；本輪不改寫它
     for e in entries:
         if (not e.is_file() or not has_yaml_extension(e.name)
                 or e.name.startswith(".")):
@@ -889,6 +905,15 @@ def main():
         name = safe_label(e.name)
         if e.name.startswith("_"):
             if args.plane != "root":
+                # 子樹載體的字串值合法；本工具自己讀不了／讀不到的仍要擋寫入。
+                if is_defaults_name(e.name):
+                    items = [i for i in items
+                             if i[2] in (UNREADABLE, UNPARSED_BY_TOOL)
+                             or (i[2] == UNPARSEABLE and i[0] is None
+                                 and _read_yaml(str(e))[1] is not None)]
+                    if items:
+                        health[e.name] = items
+                        blocked.add(e.name)
                 continue
             if is_defaults_name(e.name):
                 items = [i for i in items if i[0] not in planned]
@@ -904,21 +929,19 @@ def main():
                 blocked.add(e.name)
         else:
             for key, raw, kind in items:
-                if kind not in (UNPARSEABLE, UNPARSED_BY_TOOL):
+                if kind != UNPARSEABLE:
                     continue
                 if key is None:
                     if _read_yaml(str(e))[1] is not None:
                         continue               # `scan_for_metric` 會以無法讀取具名
-                    if kind == UNPARSED_BY_TOOL:
-                        print(f"  ⚠️  {name} 本工具讀不了（pure parser 限制；"
-                              f"{safe_label(raw)}）；本工具不寫它")
-                    else:
-                        print(f"  ⚠️  {name} exporter 讀不進去（{safe_label(raw)}）"
-                              f"——整份租戶檔會被丟掉；本工具不寫它")
+                    print(f"  ⚠️  {name} exporter 讀不進去（{safe_label(raw)}）"
+                          f"——整份租戶檔會被丟掉；本工具不寫它")
+                    tenant_bad[e.name] = raw
                 else:
                     print(f"  ⚠️  {name} 的 `defaults:` 有 exporter 讀不成數字的值"
                           f"（{safe_label(key)}: {safe_label(raw)}）——exporter 會整份"
                           f"丟掉這個租戶檔；本工具不寫它")
+                    tenant_bad.setdefault(e.name, f"{key}: {raw}")
     if args.plane != "root" and carriers_here:
         print("  ℹ️  子樹載體不做型別體檢：子樹平面的字串值合法"
               "（`computeEffectiveConfig` 走 map[string]any），"
@@ -927,7 +950,7 @@ def main():
     write = args.execute and not blocked
     if args.execute and blocked:
         tool_only = {n for n, items in health.items()
-                     if all(k == UNPARSED_BY_TOOL for _, _, k in items)}
+                     if all(k in (UNPARSED_BY_TOOL, UNREADABLE) for _, _, k in items)}
         who = ("本工具讀不了" if blocked <= tool_only
                else "exporter 讀不進去" if not (blocked & tool_only)
                else "exporter 或本工具讀不進去")
@@ -967,14 +990,14 @@ def main():
         warned = set()
         for f in findings + nested:
             for section, _key, _val in f["occurrences"]:
-                if section_owner(f["filename"], section) != OWNER_EXPORTER:
+                if section_owner(f["filename"], section, args.plane) != OWNER_EXPORTER:
                     continue
                 block = section.split(".", 1)[0]
                 if (f["filename"], block) in warned:
                     continue
                 warned.add((f["filename"], block))
                 print(f"  ⚠️  {safe_label(f['filename'])} "
-                      f"{safe_label(exporter_drop_reason(f['filename'], section))}")
+                      f"{safe_label(exporter_drop_reason(f['filename'], section, args.plane))}")
 
         # Step 1 (as printed): 從每個 defaults 載體移除相關 key
         if args.plane != "root" and not carriers_here:
@@ -996,7 +1019,8 @@ def main():
 
         # Step 2 (as printed): 從 tenant configs 移除
         print(f"\n  Step 2: Tenant configs")
-        removed = remove_from_tenants(metric, args.config_dir, execute=write)
+        removed = remove_from_tenants(metric, args.config_dir, execute=write,
+                                      skip=tenant_bad)
         if removed:
             for filename, tenant, key, val in removed:
                 print(f"  🗑️  {action}: {safe_label(filename)} → "
@@ -1020,10 +1044,14 @@ def main():
                     else findings_by_metric[metric])
         findings = findings + nested_by_metric[metric]
         for name, section, key, val, designed in unclearable_occurrences(
-                metric, findings, predict=not write):
+                metric, findings, predict=not write, plane=args.plane,
+                skip=tenant_bad):
             if section == "unreadable" and name in health:
                 continue
-            if designed:
+            if name in tenant_bad:
+                reason = (f"租戶檔 exporter 讀不進去（{tenant_bad[name]}），本工具"
+                          f"不改寫，請先修檔：[{section}] {key}: {val}")
+            elif designed:
                 reason = manual_reason(name, section, key, val, args.config_dir)
             else:
                 reason = f"重掃仍有引用：[{section}] {key}: {val}"
