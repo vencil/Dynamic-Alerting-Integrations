@@ -3388,3 +3388,75 @@ class TestRoundEightMutationSurvivors:
         assert "GLOB-EMPTY" not in out, (
             "--scope docs 因為 scope 之外的缺陷而出聲\n" + out)
         assert exc.value.code == 0, (exc.value.code, out)
+
+
+class TestDatoolsPinCapability:
+    """#1534 — bump_docs checks pins for capability at the moment it repoints them.
+
+    Direction (1) of the ticket. The extractor and its precision are graded in
+    tests/lint/test_check_doc_datools_cmds.py; what is pinned here is the
+    WIRING and the fail-closed behaviour of the oracle lookup.
+    """
+
+    _PIN_PATTERN = r"ghcr\.io/vencil/da-tools:v?"
+
+    def _pin_rules(self):
+        return [r for r in bump_docs._build_tools_rules()
+                if self._PIN_PATTERN in r.get("pattern", "")]
+
+    def test_the_gap_this_check_closes_still_exists(self):
+        """The premise: most pin-rewriting rules land outside the gate's surface.
+
+        `check_image_pin_capability.py` scans `k8s/**` + `helm/*` only. If a
+        future change brings every pin target inside that surface, this check
+        becomes redundant and should be deleted rather than left running — so
+        the premise is asserted, not assumed.
+
+        Re-measure with:
+          python3 -c "import importlib.util,pathlib; \
+            s=importlib.util.spec_from_file_location('b',pathlib.Path('scripts/tools/dx/bump_docs.py')); \
+            m=importlib.util.module_from_spec(s); s.loader.exec_module(m); \
+            print([r['file'] for r in m._build_tools_rules()])"
+        """
+        rules = self._pin_rules()
+        inside = [r for r in rules
+                  if r["file"] != "__glob__"
+                  and (r["file"].startswith("k8s/")
+                       or r["file"].startswith("helm/"))]
+        assert len(rules) > len(inside), (
+            "every da-tools pin rewrite now lands inside the image-pin gate's "
+            "scan surface — this check has no gap left to cover")
+        assert inside, (
+            "no pin rule targets k8s/ or helm/ any more; the image-pin gate "
+            "and this check may now be looking at disjoint trees")
+
+    def test_head_tree_is_clean(self):
+        """The release path is green today — so a future red means a real drift."""
+        assert bump_docs._check_datools_pin_capability("9.9.9") == 0
+
+    def test_empty_command_map_fails_closed(self, monkeypatch):
+        """An unparseable entrypoint must fail the bump, not pass it.
+
+        The dangerous shape is silence: with an empty capability set every
+        documented invocation looks unknown (or, if the emptiness short-circuits
+        the loop, every one looks fine) and the release reports success.
+        """
+        monkeypatch.setattr(bump_docs, "parse_command_map_keys", lambda: set())
+        assert bump_docs._check_datools_pin_capability("9.9.9") == 1
+
+    def test_unreadable_entrypoint_fails_closed(self, monkeypatch):
+        def _boom():
+            raise OSError("simulated missing entrypoint")
+
+        monkeypatch.setattr(bump_docs, "parse_command_map_keys", _boom)
+        assert bump_docs._check_datools_pin_capability("9.9.9") == 1
+
+    def test_findings_are_counted_not_just_printed(self, monkeypatch):
+        """The return value is what main() adds to its failure tally."""
+        import check_doc_datools_cmds as gate
+
+        fake = [gate.Issue("datools-pin-capability", "docs/a.md", 3, "m1"),
+                gate.Issue("datools-pin-capability", "docs/b.md", 7, "m2")]
+        monkeypatch.setattr(bump_docs, "check_pinned_subcommands_against",
+                            lambda *a, **kw: fake)
+        assert bump_docs._check_datools_pin_capability("9.9.9") == 2

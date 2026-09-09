@@ -328,6 +328,9 @@
   "scripts/tools/lint/check_devrules_size.py": [
    "tests/lint/test_check_devrules_size.py"
   ],
+  "scripts/tools/lint/check_doc_datools_cmds.py": [
+   "tests/dx/test_bump_docs.py"
+  ],
   "scripts/tools/lint/check_doc_freshness.py": [
    "tests/lint/test_check_doc_freshness.py"
   ],
@@ -821,7 +824,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "df049a10b3eab22ff6a290c89c98167bc92ea97674383670634cc275e42d10fe",
+ "source_digest": "41a08f1598a74720084779fecef641b9a4c5eeb31ef8e95029b414bb5f25bc1f",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -2966,6 +2969,7 @@
   ],
   "tests/dx/test_bump_docs.py": [
    "tests/dx/test_verify_diff.py",
+   "tests/lint/test_check_doc_datools_cmds.py",
    "tests/shared/test_dry_run_no_write.py"
   ],
   "tests/dx/test_coverage_delta.py": [
@@ -3122,6 +3126,9 @@
   ],
   "tests/lint/test_check_devcontainer_dep_parity.py": [
    "tests/ops/test_ci_path_filter_coverage.py"
+  ],
+  "tests/lint/test_check_doc_datools_cmds.py": [
+   "tests/dx/test_bump_docs.py"
   ],
   "tests/lint/test_check_hub_badge_drift.py": [
    "tests/dx/test_verify_diff.py"

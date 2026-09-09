@@ -517,6 +517,150 @@ def check_writable_mount_has_user(doc_files: List[Path],
     return issues
 
 
+# --- pinned invocations, for dx/bump_docs.py (#1534) ------------------------
+#
+# `bump_docs --tools X.Y.Z` mechanically repoints every documented
+# `ghcr.io/vencil/da-tools:vX.Y.Z` pin. Eight of its rules do that, and only
+# the two `k8s/03-monitoring/cronjob-*.yaml` ones land inside the scan surface
+# of check_image_pin_capability.py (`k8s/**` + `helm/*`). The other six rewrite
+# pins in prose that NOTHING checks for capability — so a doc could keep
+# teaching `docker run ...:vNEW <subcommand>` for a subcommand the new image
+# does not dispatch, and every gate stays green. These helpers give bump_docs
+# the missing oracle. Reproduce the split with:
+#
+#   python3 -c "import importlib.util,pathlib; s=importlib.util.spec_from_file_location('b',pathlib.Path('scripts/tools/dx/bump_docs.py')); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); \
+#     print(sum(1 for r in m._build_tools_rules() if 'ghcr\\\\.io/vencil/da-tools:v?' in r.get('pattern','')))"
+#
+# ⛔ This is deliberately NOT a new standalone gate over every documented
+# subcommand. That shape was prototyped and rejected at ~88 false positives
+# (#405) — see the Scope decision in this module's docstring. What keeps the
+# precision here is the narrowing, not the capability lookup: only fenced
+# blocks, only `docker run`, and only the first bare operand AFTER the image
+# as located by `_image_index`. Measured on this tree at the time of writing:
+# 125 fenced da-tools `docker run` blocks -> 24 distinct (tag, subcommand)
+# pairs -> 22 real subcommands, 0 of them bogus. The ticket's own ad-hoc probe,
+# which did not use `_image_index`, mis-caught `examples` and `is`.
+
+# The image reference must carry a real `:vX.Y.Z`. `:latest` and untagged
+# mentions are OUT OF SCOPE by declaration, not by oversight: they name no tag,
+# so there is no capability set to check them against (#1534 records this as a
+# separate problem). 33 of the 125 blocks are in that class.
+_PINNED_TAG_RE = re.compile(r"da-tools:(v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?)")
+
+
+class PinnedInvocation(NamedTuple):
+    file: str
+    line: int
+    tag: str
+    subcommand: str
+
+
+def iter_pinned_invocations(doc_files: List[Path],
+                            repo_root: Path = REPO_ROOT
+                            ) -> List[PinnedInvocation]:
+    """Every `docker run <da-tools:vX.Y.Z> <subcommand>` in a fenced block."""
+    found: List[PinnedInvocation] = []
+    for f in doc_files:
+        # ⛔ NOT `except OSError: continue`. `check_datools_subcommands` above
+        # can afford that (it is one of several rules over the same corpus, and
+        # a skipped file merely under-reports one advisory check). Here the
+        # caller is a RELEASE gate whose whole claim is "every documented
+        # invocation was checked" — a file that silently drops out turns that
+        # claim false while the release reports success. Fail closed instead.
+        try:
+            lines = f.read_text(encoding="utf-8",
+                                errors="ignore").splitlines()
+        except OSError as exc:
+            raise RuntimeError(
+                f"{f} could not be read, so the invocations it documents "
+                f"cannot be checked against the tag being released. Refusing "
+                f"to report a clean result over a corpus that lost a file."
+            ) from exc
+        rel = str(f.relative_to(repo_root)).replace("\\", "/")
+        in_code = False
+        i = 0
+        while i < len(lines):
+            line = _unquote_md(lines[i])
+            if _is_fence(line):
+                in_code = not in_code
+                i += 1
+                continue
+            if not in_code or not _DOCKER_RUN_RE.search(line):
+                i += 1
+                continue
+            start = i
+            buf = [line]
+            while (buf[-1].rstrip().endswith("\\")
+                   and i + 1 < len(lines)
+                   and not _is_fence(_unquote_md(lines[i + 1]))):
+                i += 1
+                buf.append(_unquote_md(lines[i]))
+            blk = "\n".join(buf)
+            i += 1
+            if INLINE_IGNORE in blk:
+                continue
+            flat = " ".join(blk.split())
+            if not _DATOOLS_IMAGE_RE.search(flat):
+                continue
+            toks = [t for t in _normalise(flat).split() if t != "\\"]
+            k = _image_index(toks)
+            if k is None:
+                continue
+            tag_m = _PINNED_TAG_RE.search(toks[k])
+            if tag_m is None:
+                continue
+            sub = next((t for t in toks[k + 1:] if not t.startswith("-")), None)
+            # No operand at all is `--help` or a bare image — nothing claimed,
+            # nothing to check. A placeholder (`<command>`) is a deliberate
+            # "fill this in", not an assertion that the command exists; 6 of
+            # the 24 pairs are each of these two shapes.
+            if sub is None or any(c in sub for c in _PLACEHOLDER_CHARS):
+                continue
+            found.append(PinnedInvocation(rel, start + 1, tag_m.group(1), sub))
+    return found
+
+
+def check_pinned_subcommands_against(command_map_keys: Set[str],
+                                     doc_files: List[Path],
+                                     repo_root: Path = REPO_ROOT
+                                     ) -> List[Issue]:
+    """Documented pinned invocations must name a command the image dispatches.
+
+    *command_map_keys* is the capability set of the image the pins will point
+    at. ⛔ An empty set is refused rather than reported clean — an oracle that
+    knows nothing marks every invocation bad or (if inverted) every invocation
+    fine, and both are indistinguishable from "no findings" at the call site.
+    `capabilities_for_tag` in check_image_pin_capability.py refuses the same
+    way, for the same reason.
+    """
+    if not command_map_keys:
+        raise ValueError(
+            "refusing to check documented invocations against an empty "
+            "COMMAND_MAP — the capability oracle is the thing being trusted "
+            "here, and an empty one silently grades everything."
+        )
+    return [Issue("datools-pin-capability", inv.file, inv.line,
+                  f"documented `da-tools:{inv.tag}` runs '{inv.subcommand}', "
+                  f"which the image does not dispatch (it exits with "
+                  f"`Unknown command`). Either the doc names a command that "
+                  f"was renamed/removed, or the command is new and this "
+                  f"release does not ship it yet.")
+            for inv in iter_pinned_invocations(doc_files, repo_root)
+            if inv.subcommand not in command_map_keys]
+
+
+def pin_capability_doc_files(repo_root: Path = REPO_ROOT) -> List[Path]:
+    """The corpus bump_docs checks: docs/ plus the customer-facing landing pages.
+
+    Deliberately the SAME corpus `run()` uses, so widening one widens the other
+    and the two cannot drift into disagreeing about what "the docs" means.
+    """
+    return _doc_files(repo_root / "docs") + [
+        repo_root / rel for rel in _EXTRA_DOC_FILES
+        if (repo_root / rel).is_file()
+    ]
+
+
 def run(repo_root: Path = REPO_ROOT) -> List[Issue]:
     docs = _doc_files(repo_root / "docs")
     # ⛔ A missing entry is reported, never silently skipped. The previous

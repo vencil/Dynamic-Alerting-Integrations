@@ -75,6 +75,15 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_toolcount import count_by_subdir, count_scope  # noqa: E402
 from _version_patterns import DOCS_TREE_SYMLINK_ALIASES  # noqa: E402
+# #1534: the capability oracle and the doc extractor both already exist —
+# `_lint_helpers` reads the working tree's COMMAND_MAP (what the tag being cut
+# will ship), and check_doc_datools_cmds owns the fenced-block / docker-run /
+# `_image_index` extraction. Importing beats a fourth copy of either.
+from _lint_helpers import parse_command_map_keys  # noqa: E402
+from check_doc_datools_cmds import (  # noqa: E402
+    check_pinned_subcommands_against,
+    pin_capability_doc_files,
+)
 
 # ---------------------------------------------------------------------------
 # Repo root detection
@@ -2344,6 +2353,58 @@ def _scope_empty_note(line, all_rules, scope):
             f"was NOT checked. Widen or drop --scope to cover it.")
 
 
+def _check_datools_pin_capability(new_ver: str) -> int:
+    """Documented da-tools invocations must be runnable by the tag being cut.
+
+    Direction (1) of #1534: check AT THE MOMENT the pin is rewritten. Eight
+    rules in `_build_tools_rules()` repoint `ghcr.io/vencil/da-tools:vX.Y.Z`,
+    and only the two `k8s/03-monitoring/cronjob-*.yaml` ones are inside the
+    scan surface of check_image_pin_capability.py — the rest move pins through
+    prose that no capability gate reads.
+
+    ⛔ The oracle is the WORKING TREE's `entrypoint.py`, not
+    `capabilities_for_tag("tools/v<new_ver>")`. That function starts with
+    `tag_exists()`, and at release wrap the tag being bumped to has not been
+    cut yet — so asking it would raise `CapabilityError` on every single
+    release, i.e. the check would be structurally impossible to pass. The
+    working tree IS what that tag will contain, which is exactly the question.
+    (The handoff note for this ticket claimed `capabilities_for_tag` was
+    directly reusable here; it is reusable for pins that point at an EXISTING
+    tag, which is the other gate's job, not this one's.)
+
+    ⚠️ Reads the pins as they stand, which under `--check` / `--dry-run` is
+    still the OLD tag. That is deliberate and not a bug: the selector is "this
+    block pins SOME da-tools version", and after the bump every one of them is
+    `v<new_ver>` regardless. Keying on the old tag value would make the check
+    pass in dry-run and fail for real, or vice versa.
+    """
+    try:
+        command_map_keys = set(parse_command_map_keys())
+    except OSError as exc:
+        print(f"\n❌ could not read the da-tools entrypoint to determine what "
+              f"v{new_ver} will be able to run: {exc}", file=sys.stderr)
+        return 1
+    if not command_map_keys:
+        print(f"\n❌ parsed 0 COMMAND_MAP entries from the da-tools entrypoint "
+              f"— refusing to grade documented invocations against an empty "
+              f"capability set (the parser is out of step with the source "
+              f"layout).", file=sys.stderr)
+        return 1
+    issues = check_pinned_subcommands_against(
+        command_map_keys, pin_capability_doc_files(REPO_ROOT), REPO_ROOT)
+    for it in issues:
+        print(f"  ❌ [{it.check}] {it.file}:{it.line} — {it.message}",
+              file=sys.stderr)
+    if issues:
+        print(f"\n❌ {len(issues)} documented da-tools invocation(s) name a "
+              f"subcommand that v{new_ver} does not dispatch. The pins were "
+              f"repointed at v{new_ver}, so shipping this leaves the docs "
+              f"teaching a command the released image answers with "
+              f"`Unknown command`. Fix the doc, or ship the command.",
+              file=sys.stderr)
+    return len(issues)
+
+
 def main():
     """CLI entry point: 版號一致性管理工具."""
     try_utf8_stdout()
@@ -2864,6 +2925,7 @@ def main():
     dead_rules = 0
     missing_rules = 0
     glob_broken = 0
+    pin_capability_issues = 0
 
     for line, new_ver in requested:
 
@@ -2894,6 +2956,9 @@ def main():
             elif status in ("GLOB-EMPTY", "GLOB-DEAD"):
                 glob_broken += 1
 
+        if line == "tools":
+            pin_capability_issues += _check_datools_pin_capability(new_ver)
+
     # MISSING 與 DEAD 在這裡同等對待，理由一致：explicit bump 是 release 動作，
     # 「這條規則沒 bump 到任何東西」不論成因是 pattern 撈不到（DEAD）還是檔案
     # 不在（MISSING），結果都是某個版號引用被留在舊版本、而 release 流程回報成功。
@@ -2914,7 +2979,7 @@ def main():
               f"A release bump ran with those trees UNTOUCHED — fix "
               f"glob_dir/glob_pattern or the \"pattern\" in _build_*_rules().")
 
-    if dead_rules or missing_rules or glob_broken:
+    if dead_rules or missing_rules or glob_broken or pin_capability_issues:
         sys.exit(EXIT_VIOLATION)
 
     if args.check:
