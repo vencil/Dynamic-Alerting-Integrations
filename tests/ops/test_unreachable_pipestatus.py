@@ -875,3 +875,79 @@ def test_function_definition_after_a_fatal_pipeline_does_not_revive(tmp_path: Pa
     data = _findings(repo)
     assert not data["skipped"]
     assert len(data["findings"]) == 1, f"函式定義讓守衛忘記前面已經死掉：{data}"
+
+
+def test_function_called_only_from_another_function_is_not_silently_clean(tmp_path: Path) -> None:
+    """⛔ 被**另一個函式**呼叫的函式也要有狀態，否則它整個函式體被跳過求值。
+
+    原本只收 top-level 的呼叫點 ⇒ `outer() { inner; }` 裡的 inner 永遠沒有狀態，
+    它的函式體被 ``continue`` 掉，而單元仍算在 ``scanned`` 裡、回報乾淨。
+    那是**假陰性 + 靜默失明**，不是 ``skipped``。
+    """
+    script = (
+        "#!/usr/bin/env bash\ninner() {\n  false | true\n"
+        '  RC="${PIPESTATUS[0]}"\n  echo "REACHED $RC"\n}\n'
+        "outer() {\n  inner\n}\nset -euo pipefail\nouter\n"
+    )
+    assert not _bash_reaches(script, tmp_path), "ground truth 變了：bash 竟然執行到了"
+    repo = _git_fixture(tmp_path / "r", {"g.sh": script})
+    data = _findings(repo)
+    assert len(data["findings"]) == 1, f"跨函式的呼叫狀態沒有傳播：{data}"
+
+
+def test_unresolvable_function_state_with_a_read_is_refused_not_clean(tmp_path: Path) -> None:
+    """⚠️ 上一格的另一半：真的查不到呼叫點時要**拒判**，不能默默回乾淨。
+
+    ⛔ 但只在那一行**真的有** PIPESTATUS 讀取時才拒判 —— 沒被呼叫的函式很常見，
+    一律拒判會把大量單元冤枉掉，而過度拒判同樣會靜默丟掉真違規。
+    """
+    script = (
+        "#!/usr/bin/env bash\nset -euo pipefail\nnevercalled() {\n  false | true\n"
+        '  RC="${PIPESTATUS[0]}"\n}\necho top\n'
+    )
+    repo = _git_fixture(tmp_path / "r", {"g.sh": script})
+    data = _findings(repo)
+    assert data["skipped"], "查不到呼叫點卻默默回乾淨"
+    assert "unresolved-function-state" in data["skipped"][0]["reason"]
+    assert not data["findings"]
+
+
+def test_process_substitution_pipe_is_not_top_level(tmp_path: Path) -> None:
+    """⛔ ``<( … )`` / ``>( … )`` 是另一個行程，裡面的管線不觸發外層 errexit。"""
+    script = (
+        "#!/usr/bin/env bash\nset -euo pipefail\n"
+        'echo hi > /dev/null < <(false | true)\nRC="${PIPESTATUS[0]}"\necho "REACHED $RC"\n'
+    )
+    assert _bash_reaches(script, tmp_path), "ground truth 變了：bash 竟然沒執行到"
+    repo = _git_fixture(tmp_path / "r", {"g.sh": script})
+    assert not _findings(repo)["findings"], "行程替換裡的管線被當成 top-level"
+
+
+def test_case_fallthrough_returns_to_pattern_position(tmp_path: Path) -> None:
+    """⛔ ``;&`` fallthrough 之後仍在 case 裡，下一個分支的 ``a|b)`` 還是模式不是管線。
+
+    只處理 ``;;`` 的話 ``in_pattern`` 卡在 False，下一個分支的交替被當成管線 ⇒ 誤紅。
+    """
+    script = (
+        "#!/usr/bin/env bash\nset -euo pipefail\nx=foo\ncase \"$x\" in\n  foo)\n"
+        "    echo first\n    ;&\n  bar|baz)\n    echo notpipe\n"
+        '    RC="${PIPESTATUS[0]}"\n    echo "REACHED $RC"\n    ;;\nesac\n'
+    )
+    assert _bash_reaches(script, tmp_path), "ground truth 變了：bash 竟然沒執行到"
+    repo = _git_fixture(tmp_path / "r", {"g.sh": script})
+    assert not _findings(repo)["findings"], ";& 之後的模式交替被當成管線"
+
+
+def test_nested_loop_inside_an_if_condition_stays_protected(tmp_path: Path) -> None:
+    """⛔ 條件深度是**計數**不是布林：``if while …; do …; done; then`` 疊了兩層。
+
+    內層的 ``do`` 會把布林版提早關掉，於是仍在外層 ``if`` 條件裡的管線被當成致命的。
+    """
+    script = (
+        "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'a\\n' > input.txt\n"
+        'if while read -r line; do echo "$line" | grep -q a; done < input.txt; then\n'
+        '  echo cond-true\nfi\nRC="${PIPESTATUS[0]}"\necho "REACHED $RC"\n'
+    )
+    assert _bash_reaches(script, tmp_path), "ground truth 變了：bash 竟然沒執行到"
+    repo = _git_fixture(tmp_path / "r", {"g.sh": script})
+    assert not _findings(repo)["findings"], "巢狀迴圈把外層 if 條件提早關掉"

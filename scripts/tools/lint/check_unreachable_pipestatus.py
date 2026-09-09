@@ -366,6 +366,16 @@ def lex(lines: list[tuple[int, str]]) -> list[Stmt]:
             # `$(` 與反引號 ⇒ `(( a = 1 | 2 ))` 被讀成 top-level 管線而誤紅。
             # 深度 +2，讓收尾的兩個 `)` 各自扣回來。
             # 釘住：`test_arithmetic_command_bitwise_or_is_not_a_pipeline`。
+            # ⛔ 行程替換 `<( … )` / `>( … )` 是另一個行程，裡面的管線不是本語句的
+            # top-level 管線（bash 實測：內部失敗不觸發外層 errexit）。
+            # 釘住：`test_process_substitution_pipe_is_not_top_level`。
+            if raw.startswith("<(", i) or raw.startswith(">(", i):
+                depth += 1
+                buf += raw[i : i + 2]
+                if buf_line is None:
+                    buf_line = lineno
+                i += 2
+                continue
             if raw.startswith("((", i) and depth == 0 and not buf.rstrip().endswith("$"):
                 depth += 2
                 buf += "(("
@@ -400,7 +410,11 @@ def lex(lines: list[tuple[int, str]]) -> list[Stmt]:
                 i = m.end()
                 continue
             # --- 分隔符（只在深度 0 有效）---
-            if depth == 0 and raw.startswith(";;", i) and case_depth > 0:
+            # `;;` `;;&` `;&` 三種分支結束式都回到模式位置。
+            # 釘住：`test_case_fallthrough_returns_to_pattern_position`。
+            if depth == 0 and case_depth > 0 and (
+                raw.startswith(";;", i) or raw.startswith(";&", i)
+            ):
                 flush(";")
                 in_pattern = True
                 i += 2
@@ -510,6 +524,26 @@ _GUARD_PREFIX = re.compile(r"^\s*(if|while|until|elif)\b|^\s*!\s")
 
 
 _COND_END = re.compile(r"^\s*(then|do)\b")
+_COND_WORD = ("if", "while", "until", "elif")
+
+
+def cond_openers(text: str) -> int:
+    """這條語句開頭疊了幾個條件開啟關鍵字。
+
+    ⛔ **一個語句可以疊好幾個**：``if while read -r x`` 是 ``if`` 與 ``while`` 兩個，
+    各自要一個 ``then`` / ``do`` 來收。只加一次的話內層的 ``do`` 會提早把外層的條件
+    關掉，於是仍受保護的管線被當成致命的。
+    釘住：`test_nested_loop_inside_an_if_condition_stays_protected`。
+    """
+    n = 0
+    for tok in text.split():
+        if tok in _COND_WORD:
+            n += 1
+        elif tok == "!":
+            continue
+        else:
+            break
+    return n
 
 
 def is_protected(stmt: Stmt) -> bool:
@@ -517,13 +551,16 @@ def is_protected(stmt: Stmt) -> bool:
     return bool(_GUARD_PREFIX.search(stmt.text))
 
 
-def scan_unit(lines: list[tuple[int, str]], errexit: bool, pipefail: bool) -> list[dict]:
+def scan_unit(
+    lines: list[tuple[int, str]], errexit: bool, pipefail: bool
+) -> tuple[list[dict], list[str]]:
     """掃一個 shell 單元。``lines`` 是 (行號, 原始行) 串列。
 
     ⛔ 碰到 ``_HARD_CONSTRUCTS`` 一律**不判定**（回空），由呼叫端記成 skipped。
     """
-    if hard_constructs(lines):
-        return []
+    hard = hard_constructs(lines)
+    if hard:
+        return [], hard
     se, sp = shebang_flags(lines)
     errexit, pipefail = errexit or se, pipefail or sp
 
@@ -544,13 +581,41 @@ def scan_unit(lines: list[tuple[int, str]], errexit: bool, pipefail: bool) -> li
     # 於是誤紅一段兩次呼叫都真的執行到的程式碼。
     # 釘住：`test_flags_from_different_call_sites_are_not_merged`。
     state_at: dict[str, set[tuple[bool, bool]]] = {}
+    # ⛔ 函式**被另一個函式呼叫**時也要有狀態。原本只收 top-level 的呼叫點，於是
+    # `outer() { inner; }` 裡的 inner 永遠沒有狀態 ⇒ 它整個函式體被跳過求值，而單元
+    # 卻算在 scanned 裡、回報乾淨。那是假陰性 + 靜默失明，最糟的一類。
+    # 釘住：`test_function_called_only_from_another_function_is_not_silently_clean`。
+    calls_in: dict[str, set[str]] = {}
     e, pf = errexit, pipefail
+    walk_func: str | None = None
     for st in stmts:
+        m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*\(\)", st.text)
+        if m:
+            walk_func = m.group(1)
+        elif not st.in_func:
+            walk_func = None
         if st.text.split()[:1] == ["set"]:
             e, pf = apply_set(st.text, e, pf)
         head = st.text.split()[0] if st.text.split() else ""
-        if head in func_names and not st.in_func:
-            state_at.setdefault(head, set()).add((e, pf))
+        if head in func_names:
+            if not st.in_func:
+                state_at.setdefault(head, set()).add((e, pf))
+            elif walk_func and walk_func != head:
+                calls_in.setdefault(walk_func, set()).add(head)
+    # 傳播到不動點（函式數很少，上限用函式數當保險）
+    for _ in range(len(func_names) + 1):
+        changed = False
+        for caller, callees in calls_in.items():
+            src = state_at.get(caller)
+            if not src:
+                continue
+            for callee in callees:
+                tgt = state_at.setdefault(callee, set())
+                if not src <= tgt:
+                    tgt |= src
+                    changed = True
+        if not changed:
+            break
 
     # ⛔ 述詞不是「**前一個**語句是管線」，而是「**在**一條沒被接住的 top-level 管線
     # **之後**」——errexit 在管線那一行就終止腳本，後面**整段**都不可達，中間隔幾個
@@ -563,7 +628,10 @@ def scan_unit(lines: list[tuple[int, str]], errexit: bool, pipefail: bool) -> li
     # ⛔ `if` / `while` / `until` 的**條件串列整段**免除 errexit，不是只有第一個命令。
     # `if [ -n "$X" ] && foo | bar; then` 的那條管線是被保護的（bash 實測 rc=0）。
     # 釘住：`test_pipeline_later_in_an_if_condition_list_is_protected`。
-    in_cond = False
+    # ⛔ **深度計數不是布林**：`if while …; do …; done; then` 的內層 `do` 會把布林版
+    # 提早關掉，於是仍在外層條件裡的管線被當成致命的。
+    # 釘住：`test_nested_loop_inside_an_if_condition_stays_protected`。
+    cond_depth = 0
     for idx, st in enumerate(stmts):
         m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*\(\)", st.text)
         if m:
@@ -576,14 +644,20 @@ def scan_unit(lines: list[tuple[int, str]], errexit: bool, pipefail: bool) -> li
         elif not st.in_func:
             cur_func = None
         scope = cur_func if st.in_func else None
-        if _COND_END.match(st.text):
-            in_cond = False
+        if _COND_END.match(st.text) and cond_depth > 0:
+            cond_depth -= 1
         if st.text.split()[:1] == ["set"]:
             e, pf = apply_set(st.text, e, pf)
             continue
         # 函式體內改用「呼叫點」的狀態；查不到呼叫就保守跳過
         if st.in_func and cur_func:
             if cur_func not in state_at:
+                # ⛔ 查不到呼叫點時，只有當這一行**真的有** PIPESTATUS 讀取才拒判整個
+                # 單元 —— 默默跳過會讓單元算進 scanned 並回報乾淨（靜默失明）。
+                # ⚠️ 但不能一律拒判：沒被呼叫的函式很常見，那樣會把大量單元冤枉掉，
+                # 而過度拒判同樣會靜默丟掉真違規。
+                if _PIPESTATUS_RE.search(st.text):
+                    return [], ["unresolved-function-state"]
                 continue
             # 「存在一個呼叫點使讀取不可達」＝ 有任一組同時開著 errexit 與 pipefail
             ce = cpf = any(x and y for x, y in state_at[cur_func])
@@ -596,14 +670,13 @@ def scan_unit(lines: list[tuple[int, str]], errexit: bool, pipefail: bool) -> li
                 {"line": st.line, "code": st.text[:120], "pipeline": d.text[:120]}
             )
 
-        if st.top_pipe and not is_protected(st) and not in_cond:
+        if st.top_pipe and not is_protected(st) and cond_depth == 0:
             # 被 `&&` / `||` 接住的管線不會觸發 errexit —— 看**下一個**語句的前導分隔符
             nxt = stmts[idx + 1] if idx + 1 < len(stmts) else None
             if nxt is None or nxt.sep_before not in ("&&", "||"):
                 dead[scope] = st
-        if is_protected(st):
-            in_cond = True
-    return violations
+        cond_depth += cond_openers(st.text)
+    return violations, []
 
 
 def iter_shell_units(repo: Path, parse_errors: list[str] | None = None) -> list[dict]:
@@ -800,7 +873,11 @@ def main(argv: list[str] | None = None) -> int:
             # ⛔ 拒絕判定 ≠ 判定為乾淨。記下來、印出來、進 JSON。
             skipped.append({"path": u["path"], "reason": hard})
             continue
-        for v in scan_unit(u["lines"], u["errexit"], u["pipefail"]):
+        vs, refused = scan_unit(u["lines"], u["errexit"], u["pipefail"])
+        if refused:
+            skipped.append({"path": u["path"], "reason": refused})
+            continue
+        for v in vs:
             findings.append({"path": u["path"], "kind": u["kind"], **v})
 
     if args.json:
