@@ -179,7 +179,9 @@ def gather_referencers(project_root: Path, lint_dir: Path) -> list[Path]:
     if scripts_dir.is_dir():
         for pattern in ("**/*.py", "**/*.sh"):
             for p in scripts_dir.glob(pattern):
-                if _SKIP_DIRS.intersection(p.parts):  # skip venv / vendored trees
+                # Skip venv / vendored trees: judged on the segments below
+                # scripts_dir, not on the absolute path (#1810).
+                if _SKIP_DIRS.intersection(p.relative_to(scripts_dir).parts):
                     continue
                 if p.parent == lint_dir:  # lint files are not referencers
                     continue

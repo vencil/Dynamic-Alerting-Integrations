@@ -239,6 +239,92 @@ class TestMain:
 
 
 # ---------------------------------------------------------------------------
+# #1810 — the skip-set is judged below the scan root, not on the absolute path
+# ---------------------------------------------------------------------------
+_DIRTY_GO = 'package x\nvar q = `rate(m{tenant="db-a"}[5m])`\n'
+
+
+def _checkout(root: Path) -> Path:
+    """A minimal production tree: components/ with one dirty .go file."""
+    (root / "components" / "svc").mkdir(parents=True)
+    dirty = root / "components" / "svc" / "query.go"
+    dirty.write_text(_DIRTY_GO, encoding="utf-8")
+    return dirty
+
+
+def _default_scan(monkeypatch, root: Path) -> set[Path]:
+    import argparse
+
+    monkeypatch.setattr(lint, "PROJECT_ROOT", root)
+    paths = lint._resolve_target_paths(argparse.Namespace(paths=[]))
+    return {p.relative_to(root) for p in paths}
+
+
+class TestSkipSetIsJudgedBelowTheScanRoot:
+    """#1810: a checkout under an ancestor named ``examples`` must be scanned.
+
+    The old predicate looked at every component of the *absolute* path, so
+    any ancestor named ``examples`` / ``tests`` / ``fixtures`` / ``testdata``
+    excluded every file of the default scan and ``--ci`` printed a green
+    "no files matched scan target". The positive case builds exactly that
+    ancestor shape and compares against a neutral one; the negative case
+    pins that the skip-set still applies *inside* the root.
+    """
+
+    def test_same_tree_under_examples_and_under_plain_scans_the_same_files(
+            self, tmp_path, monkeypatch):
+        clash = tmp_path / "examples" / "repo"
+        plain = tmp_path / "plain" / "repo"
+        _checkout(clash)
+        _checkout(plain)
+        under_clash = _default_scan(monkeypatch, clash)
+        under_plain = _default_scan(monkeypatch, plain)
+        assert under_clash == under_plain
+        assert under_clash == {Path("components/svc/query.go")}
+
+    def test_a_skip_directory_inside_the_root_is_still_skipped(
+            self, tmp_path, monkeypatch):
+        root = tmp_path / "examples" / "repo"
+        _checkout(root)
+        (root / "components" / "examples").mkdir()
+        (root / "components" / "examples" / "demo.go").write_text(
+            _DIRTY_GO, encoding="utf-8")
+        (root / "components" / "svc" / "query_test.go").write_text(
+            _DIRTY_GO, encoding="utf-8")
+        assert _default_scan(monkeypatch, root) == {Path("components/svc/query.go")}
+
+    def test_is_excluded_path_judges_below_the_given_root(self, tmp_path):
+        root = tmp_path / "examples" / "repo"
+        assert lint._is_excluded_path(root / "components" / "a.go", root=root) is False
+        assert lint._is_excluded_path(
+            root / "components" / "examples" / "a.go", root=root) is True
+
+    def test_an_explicit_file_outside_the_root_is_judged_by_filename_only(
+            self, tmp_path, monkeypatch):
+        """A caller-named file is the population; its ancestors are not a
+        reason to drop it. Only the filename rules apply."""
+        outside = tmp_path / "examples" / "a.go"
+        outside.parent.mkdir()
+        outside.write_text(_DIRTY_GO, encoding="utf-8")
+        assert lint._is_excluded_path(outside, root=tmp_path / "elsewhere") is False
+        assert lint._is_excluded_path(
+            tmp_path / "examples" / "a_test.go", root=tmp_path / "elsewhere") is True
+        rc = lint.main(["--ci", str(outside)])
+        assert rc == 1
+
+    @pytest.mark.timeout(15)
+    def test_ci_sees_the_finding_in_a_checkout_under_examples(
+            self, tmp_path, monkeypatch, capsys):
+        """Before the fix this exited 0 with "no files matched scan target"."""
+        root = tmp_path / "examples" / "repo"
+        _checkout(root)
+        monkeypatch.setattr(lint, "PROJECT_ROOT", root)
+        rc = lint.main(["--ci"])
+        assert rc == 1
+        assert "db-a" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
 # Live dogfood — actual repo must pass
 # ---------------------------------------------------------------------------
 class TestLiveRepo:

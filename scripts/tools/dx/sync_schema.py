@@ -62,11 +62,17 @@ def extract_go_keys(go_source_path):
         # Production-source only: a `_test.go` or a mock/testdata/vendor copy that
         # (re)declares `var validReservedKeys` must never become the authoritative
         # source — otherwise the schema would get synced to a dummy test key.
+        # The exclusion is judged on the segments below go_dir, not on the
+        # absolute path (#1810): a checkout under an ancestor named `vendor`
+        # must still find its own source. It follows that if the caller points
+        # go_dir INSIDE a vendor subtree, that subtree is accepted — the
+        # exclusion means "a non-authoritative copy must not become the
+        # oracle", and which tree is authoritative is the caller's choice.
         _excluded_dirs = {"vendor", "testdata", "mocks"}
         config_file = next(
             (p for p in sorted(go_dir.rglob("*.go"))
              if not p.name.endswith("_test.go")
-             and not _excluded_dirs & set(p.parts)
+             and not _excluded_dirs & set(p.relative_to(go_dir).parts)
              and "var validReservedKeys" in p.read_text(encoding="utf-8", errors="ignore")),
             None,
         )

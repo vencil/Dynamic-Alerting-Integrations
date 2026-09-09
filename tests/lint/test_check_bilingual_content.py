@@ -155,6 +155,56 @@ class TestScanZhDocs:
 
 
 # ---------------------------------------------------------------------------
+# #1810 — includes 只對 docs_dir 之下的相對段判定
+# ---------------------------------------------------------------------------
+
+# >200 字元、只有一個 CJK 字：0 < ratio < DEFAULT_ZH_MIN_THRESHOLD → info finding。
+_UNTRANSLATED = "This is all English content without any CJK characters. " * 10 + "中"
+
+
+def _docs_tree(root: Path) -> Path:
+    """docs/ 下一個未翻譯的 zh 文件（>200 字元、幾乎純英文）。"""
+    docs = root / "docs"
+    (docs / "guide").mkdir(parents=True)
+    (docs / "guide" / "setup.zh.md").write_text(_UNTRANSLATED, encoding="utf-8")
+    return docs
+
+
+def _zh_findings(root: Path) -> set:
+    with patch.object(cbc, "PROJECT_ROOT", root):
+        findings = cbc.scan_zh_docs(root / "docs")
+    return {path for _sev, _msg, path, _ratio in findings}
+
+
+class TestIncludesIsJudgedBelowDocsDir:
+    """#1810：checkout 的祖先目錄叫 ``includes`` 時整棵 docs/ 不得被跳過。
+
+    舊述詞看絕對路徑的每一段，祖先撞名就全數跳過、印 passed。正向格把同
+    一棵樹放在撞名父目錄與中性父目錄下比對結果；負向格釘住 docs/ 之內
+    的 ``includes/`` 仍被跳過。
+    """
+
+    def test_same_tree_under_includes_and_under_plain_finds_the_same_files(
+            self, tmp_path):
+        clash = tmp_path / "includes" / "repo"
+        plain = tmp_path / "plain" / "repo"
+        _docs_tree(clash)
+        _docs_tree(plain)
+        under_clash = _zh_findings(clash)
+        under_plain = _zh_findings(plain)
+        assert under_clash == under_plain
+        assert under_clash == {str(Path("docs/guide/setup.zh.md"))}
+
+    def test_includes_inside_docs_dir_is_still_skipped(self, tmp_path):
+        root = tmp_path / "includes" / "repo"
+        docs = _docs_tree(root)
+        (docs / "includes").mkdir()
+        (docs / "includes" / "generated.zh.md").write_text(
+            _UNTRANSLATED, encoding="utf-8")
+        assert _zh_findings(root) == {str(Path("docs/guide/setup.zh.md"))}
+
+
+# ---------------------------------------------------------------------------
 # TestRunAllChecks
 # ---------------------------------------------------------------------------
 

@@ -169,6 +169,56 @@ class TestExtractPythonKeysEdge:
         assert prefixes == ["_state_"]
 
 
+_GO_DECL = (
+    "package config\n\n"
+    "var validReservedKeys = map[string]bool{\n"
+    '    "_silent_mode": true,\n'
+    '    "_metadata":    true,\n'
+    "}\n\n"
+    'var validReservedPrefixes = []string{"_state_", "_routing"}\n'
+)
+
+
+class TestExcludedDirsAreJudgedBelowGoDir:
+    """#1810: the content fallback must find the source in a checkout whose
+    ancestor is named ``vendor`` (the same for ``testdata`` / ``mocks``).
+
+    The old predicate intersected the exclusion set with every component of
+    the *absolute* path, so under such an ancestor every candidate was
+    rejected and the tool exited 2 "could not find". The positive case
+    compares the same tree under that ancestor and under a neutral one; the
+    negative case pins that a ``vendor/`` copy *inside* the tree is still
+    never adopted as the oracle.
+    """
+
+    def _tree(self, go_dir):
+        # No pkg/config/types.go: the fallback must run.
+        decl = go_dir / "internal" / "cfg" / "keys.go"
+        decl.parent.mkdir(parents=True)
+        decl.write_text(_GO_DECL, encoding="utf-8")
+        return go_dir
+
+    def test_same_tree_under_vendor_and_under_plain_extracts_the_same_keys(
+            self, tmp_path):
+        clash = self._tree(tmp_path / "vendor" / "app")
+        plain = self._tree(tmp_path / "plain" / "app")
+        under_clash = ss.extract_go_keys(str(clash))
+        under_plain = ss.extract_go_keys(str(plain))
+        assert under_clash == under_plain
+        assert under_clash == ({"_silent_mode", "_metadata"}, ["_state_", "_routing"])
+
+    def test_a_vendor_copy_inside_go_dir_is_still_not_the_oracle(
+            self, tmp_path, capsys):
+        go_dir = tmp_path / "vendor" / "app"
+        decoy = go_dir / "vendor" / "dep" / "keys.go"
+        decoy.parent.mkdir(parents=True)
+        decoy.write_text(_GO_DECL.replace("_silent_mode", "_decoy"), encoding="utf-8")
+        with pytest.raises(SystemExit) as exc_info:
+            ss.extract_go_keys(str(go_dir))
+        assert exc_info.value.code == ss.EXIT_CALLER_ERROR
+        assert "could not find" in capsys.readouterr().err
+
+
 class TestPrintDriftReport:
     """print_drift_report: has_drift return + every drift section renders."""
 

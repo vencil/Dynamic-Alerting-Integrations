@@ -134,8 +134,9 @@ def scan_zh_docs(
     for f in sorted(docs_dir.rglob("*.md")):
         if not _is_chinese_doc(f):
             continue
-        # Skip internal/generated files
-        if "includes" in f.parts:
+        # Skip internal/generated files. The skip-set is judged on the
+        # segments below docs_dir, not on the absolute path (#1810).
+        if "includes" in f.relative_to(docs_dir).parts:
             continue
         try:
             text = f.read_text(encoding="utf-8")

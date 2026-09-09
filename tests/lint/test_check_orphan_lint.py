@@ -324,7 +324,7 @@ class TestGatherReferencers:
         assert "check_frontmatter_versions" not in out
         assert "as 'a'" in out and "registry membership is not execution" in out
 
-    def test_skips_venv_and_vendored_trees(self, tmp_path):
+    def test_skips_venv_and_node_modules_trees(self, tmp_path):
         """A check_*.py name appearing inside scripts/.venv or node_modules must
         NOT be scanned (local-dev dependency-black-hole guard)."""
         lint_dir = self._scaffold(tmp_path)
@@ -334,7 +334,9 @@ class TestGatherReferencers:
             d.mkdir(parents=True)
             (d / "vendored.py").write_text("check_a.py\n", encoding="utf-8")
         refs = ol.gather_referencers(tmp_path, lint_dir)
-        assert all(not (ol._SKIP_DIRS & set(p.parts)) for p in refs)
+        scripts_dir = tmp_path / "scripts"
+        assert all(not (ol._SKIP_DIRS & set(p.relative_to(scripts_dir).parts))
+                   for p in refs if p.is_relative_to(scripts_dir))
         # check_a is referenced ONLY inside the black holes → still orphan
         assert ol.find_orphans(["check_a.py"], ol.read_corpus(refs)) == \
             ["check_a.py"]
@@ -350,6 +352,55 @@ class TestGatherReferencers:
             encoding="utf-8")
         refs = ol.gather_referencers(tmp_path, lint_dir)
         assert ol.find_orphans(["check_a.py"], ol.read_corpus(refs)) == []
+
+
+# ---------------------------------------------------------------------------
+# #1810 — _SKIP_DIRS is judged below scripts/, not on the absolute path
+# ---------------------------------------------------------------------------
+class TestSkipDirsAreJudgedBelowScriptsDir:
+    """#1810: a checkout under an ancestor named ``venv`` must still be walked.
+
+    The old predicate intersected ``_SKIP_DIRS`` with every component of the
+    *absolute* path, so an ancestor named ``venv`` / ``.venv`` / … dropped
+    every sibling script from the referencer set and every lint wired only
+    through a sibling script went red as orphan. The positive case compares
+    the same tree under that ancestor and under a neutral one; the negative
+    case pins that ``scripts/.venv/`` inside the root is still skipped.
+    """
+
+    def _tree(self, root: Path) -> Path:
+        lint_dir = root / "scripts" / "tools" / "lint"
+        lint_dir.mkdir(parents=True)
+        (root / "scripts" / "tools" / "validate_all.py").write_text(
+            "TOOLS = []\n", encoding="utf-8")
+        dx = root / "scripts" / "tools" / "dx"
+        dx.mkdir()
+        (dx / "pr_preflight.py").write_text("run('check_a.py')\n", encoding="utf-8")
+        (root / "scripts" / "run.sh").write_text("echo\n", encoding="utf-8")
+        return lint_dir
+
+    def _referencers(self, root: Path) -> set[Path]:
+        lint_dir = self._tree(root)
+        return {p.relative_to(root)
+                for p in ol.gather_referencers(root, lint_dir)}
+
+    def test_same_tree_under_venv_and_under_plain_yields_the_same_referencers(
+            self, tmp_path):
+        under_clash = self._referencers(tmp_path / "venv" / "repo")
+        under_plain = self._referencers(tmp_path / "plain" / "repo")
+        assert under_clash == under_plain
+        assert under_clash == {Path("scripts/tools/dx/pr_preflight.py"),
+                               Path("scripts/run.sh")}
+
+    def test_skip_dirs_inside_scripts_are_still_skipped(self, tmp_path):
+        root = tmp_path / "venv" / "repo"
+        lint_dir = self._tree(root)
+        d = root / "scripts" / ".venv" / "pkg"
+        d.mkdir(parents=True)
+        (d / "vendored.py").write_text("check_a.py\n", encoding="utf-8")
+        refs = {p.relative_to(root) for p in ol.gather_referencers(root, lint_dir)}
+        assert refs == {Path("scripts/tools/dx/pr_preflight.py"),
+                        Path("scripts/run.sh")}
 
 
 # ---------------------------------------------------------------------------

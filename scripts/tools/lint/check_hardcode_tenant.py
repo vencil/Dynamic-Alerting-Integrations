@@ -202,14 +202,29 @@ def scan_source(path: Path, source: str) -> list[HardcodeTenantFinding]:
     return findings
 
 
-def _is_excluded_path(path: Path) -> bool:
+def _is_excluded_path(path: Path, *, root: Path | None = None) -> bool:
     """True if the path looks like a test / fixture / example file.
 
     Match by directory segment (so ``examples/foo.py`` and
     ``components/foo/examples/bar.py`` both count) plus filename
     prefix / infix patterns.
+
+    The skip-set is judged on the path segments *below* the scan root
+    (#1810), never on the absolute path: a checkout whose ancestor
+    directory happens to be named ``examples`` / ``tests`` / … must not
+    hide the whole tree. Three shapes:
+
+    - absolute and under ``root`` -> ``path.relative_to(root).parts``
+    - absolute and NOT under ``root`` -> filename rules only; a file the
+      caller named explicitly is the population, whatever its ancestors
+    - relative -> ``path.parts`` as given (already root-relative)
     """
-    parts = path.parts
+    if root is None:
+        root = PROJECT_ROOT
+    if path.is_absolute():
+        parts = path.relative_to(root).parts if path.is_relative_to(root) else ()
+    else:
+        parts = path.parts
     if any(seg in _PATH_SKIP_DIR_SEGMENTS for seg in parts):
         return True
     name = path.name
@@ -231,7 +246,7 @@ def _resolve_target_paths(args: argparse.Namespace) -> list[Path]:
             elif candidate.is_dir():
                 for ext in _DEFAULT_SCAN_EXTS:
                     out.extend(candidate.rglob(f"*{ext}"))
-        return [p for p in out if not _is_excluded_path(p)]
+        return [p for p in out if not _is_excluded_path(p, root=PROJECT_ROOT)]
 
     out = []
     for root in _DEFAULT_SCAN_ROOTS:
@@ -240,7 +255,7 @@ def _resolve_target_paths(args: argparse.Namespace) -> list[Path]:
             continue
         for ext in _DEFAULT_SCAN_EXTS:
             out.extend(root_path.rglob(f"*{ext}"))
-    return sorted(p for p in out if not _is_excluded_path(p))
+    return sorted(p for p in out if not _is_excluded_path(p, root=PROJECT_ROOT))
 
 
 def _compute_exit_code(*, ci: bool, n_findings: int) -> int:
