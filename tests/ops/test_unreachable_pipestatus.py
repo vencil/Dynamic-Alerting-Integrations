@@ -544,3 +544,123 @@ def test_run_block_line_number_comes_from_the_yaml_node(tmp_path: Path) -> None:
     # 違規在第二個 step：run 區塊起於第 13 行，讀取在第 16 行
     assert findings[0]["path"].endswith(":13"), findings
     assert findings[0]["line"] == 16, findings
+
+
+# ---------------------------------------------------------------------------
+# 第 6 輪盲審（TRK-381）→ 第 7 輪修法（owner 明示解除 ROUND-CAP）
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "name,body",
+    [
+        # H1 —— 多行裸 `( … )` 子 shell。lexer 只追 `$(` 與反引號，裸括號完全不追 ⇒
+        #        群組內每一物理行被 flush 成獨立語句、真管線不再是 prev。
+        #        ⛔ 第 5 輪的安全性宣稱（判不了的都會被拒判）在這裡是**假的**：
+        #        它既沒判對、也沒被拒判，直接報「乾淨」。bash 實測 rc=1、REACHED 未印。
+        ("subshell.sh", 'set -euo pipefail\n(\n  false | true\n)\n'
+                        'RC="${PIPESTATUS[0]}"\necho "REACHED $RC"\n'),
+        # H2 —— 同一形狀，換成裸 `{ … }` 命令群組（不在任何函式內）
+        ("brace_group.sh", 'set -euo pipefail\n{\n  false | true\n}\n'
+                           'RC="${PIPESTATUS[0]}"\necho "REACHED $RC"\n'),
+    ],
+)
+def test_bare_multiline_groups_are_refused(tmp_path: Path, name: str, body: str) -> None:
+    """⛔ 這兩種 bash 實測都是真違規，而第 5 輪的守衛對它們**報乾淨**。"""
+    repo = _git_fixture(tmp_path, {name: body})
+    data = _findings(repo)
+    assert data["findings"] == [], f"{name} 不該產生 finding"
+    assert data["skipped"] and "bare-group" in data["skipped"][0]["reason"], data
+
+
+@pytest.mark.parametrize(
+    "name,body,line",
+    [
+        # H3 —— 雙引號字串裡的 `|{ `。prescan 原本對**原始文字**跑 regex，於是整個
+        #        檔案被誤拒判、真違規被靜默丟掉。
+        (
+            "quoted_brace.sh",
+            'myfunc() {\n  echo hi\n}\nset -euo pipefail\necho "a|{ b"\n'
+            'false | true\nRC="${PIPESTATUS[0]}"\n',
+            7,
+        ),
+        # H4 —— 多行單引號字串裡自成一行的 `cleanup()`，配上函式外合法的 `|| { …; }`
+        (
+            "quoted_func.sh",
+            "set -euo pipefail\nmsg='Example:\ncleanup()\nruns before exit'\n"
+            'echo "$msg" >/dev/null\ncommand -v ls >/dev/null || { echo x; exit 2; }\n'
+            'false | true\nRC="${PIPESTATUS[0]}"\n',
+            8,
+        ),
+        # H5 —— `<<<` 出現在 `#` 註解裡。lex() 本來就會丟掉註解，prescan 卻不會。
+        (
+            "comment_herestring.sh",
+            'set -euo pipefail\n# example: cmd <<< "input" reads a herestring\n'
+            'false | true\nRC="${PIPESTATUS[0]}"\n',
+            4,
+        ),
+    ],
+)
+def test_hard_constructs_inside_comments_and_strings_do_not_refuse(
+    tmp_path: Path, name: str, body: str, line: int
+) -> None:
+    """⛔ 拒判用的證據必須跟判定用的一樣乾淨。
+
+    三格都是 bash 實測 rc=1 的**真違規**，卻因為註解／引號內的字面文字被誤拒判。
+    """
+    repo = _git_fixture(tmp_path, {name: body})
+    data = _findings(repo)
+    assert data["skipped"] == [], f"{name} 被誤拒判：{data['skipped']}"
+    assert [f["line"] for f in data["findings"]] == [line], data
+
+
+def test_folded_scalar_run_block_is_refused(tmp_path: Path) -> None:
+    """⛔ `run: >` 的行號對不上實體行 ⇒ 拒判，不猜。
+
+    YAML 折疊把連續非空行併成一行、空行才變成換行，所以 ``value.splitlines()``
+    與實體行不再一一對應。第 6 輪盲審實測：真違規在第 12 行、報成第 10 行。
+    ⚠️ 真實樹目前 0 個 folded 區塊，所以這個拒判今天零成本。
+    """
+    wf = ("on: push\njobs:\n  j:\n    runs-on: ubuntu-latest\n    steps:\n"
+          "      - shell: bash\n        run: >\n          set -euo pipefail\n\n"
+          "          false | true\n\n"
+          '          RC="${PIPESTATUS[0]}"\n\n          echo "REACHED $RC"\n')
+    repo = _git_fixture(tmp_path, {".github/workflows/w.yml": wf})
+    data = _findings(repo)
+    assert data["findings"] == [], data
+    assert data["skipped"] and "folded-scalar" in data["skipped"][0]["reason"], data
+
+
+def test_literal_block_is_still_scanned(tmp_path: Path) -> None:
+    """對照：literal（`|`）與實體行一一對應，必須照掃。"""
+    wf = ("on: push\njobs:\n  j:\n    runs-on: ubuntu-latest\n    steps:\n"
+          "      - shell: bash\n        run: |\n          false | true\n"
+          '          rc="${PIPESTATUS[0]}"\n')
+    repo = _git_fixture(tmp_path, {".github/workflows/w.yml": wf})
+    data = _findings(repo)
+    assert data["skipped"] == [], data
+    assert len(data["findings"]) == 1, data
+
+
+def test_parse_error_does_not_swallow_findings_from_other_files(tmp_path: Path) -> None:
+    """⛔ 解析失敗不得把**別的檔案裡已經找到的真違規**一起吞掉。
+
+    ⚠️ 第 5 輪把「靜默假綠」換成了「全面停播」：一有 YAML 錯就整輪 rc 2、stdout
+    全空。正解是「報告我找到的 + 標記我量不到的」——findings 照印、parse error
+    照報、rc 仍是 2（因為確實有東西沒量到）。
+    """
+    broken = ("on: push\njobs:\n  j:\n    runs-on: ubuntu-latest\n    steps:\n"
+              "      - name: bad\n        with:\n          a: [unclosed\n")
+    repo = _git_fixture(tmp_path, {
+        "scripts/real_violation.sh": _VIOLATING,
+        ".github/workflows/broken.yml": broken,
+    })
+    proc = _run(repo, "--ci")
+    assert proc.returncode == 2, f"rc={proc.returncode}"
+    assert "real_violation.sh" in proc.stdout, "已找到的違規被吞掉了：\n" + proc.stdout
+    assert "broken.yml" in proc.stderr, proc.stderr
+    # ⚠️ 這一格刻意是 rc 2，所以不能用 _findings()（它斷言 rc in (0,1)）——
+    # 放寬那個 helper 會遮蔽別格的迴歸，所以只在這裡直接解析。
+    jproc = _run(repo, "--json")
+    assert jproc.returncode == 2, jproc.stderr
+    data = json.loads(jproc.stdout)
+    assert len(data["findings"]) == 1, data
+    assert data["parse_errors"], data

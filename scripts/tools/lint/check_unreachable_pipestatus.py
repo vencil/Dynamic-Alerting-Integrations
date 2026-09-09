@@ -43,12 +43,19 @@ Why this exists
 容器內），所以**不再寫第 3 版述詞**——改成碰到 lexer 決定不了的構造就整個單元
 **拒絕判定並在報告裡點名**（見 ``_HARD_CONSTRUCTS``）。
 
-⚠️ 這是用**覆蓋面換正確性**：量測時 360 個單元裡 **21 個（5.8%）**被拒判，實際
-掃過 339 個。⛔ 「跳過」與「掃過且乾淨」在輸出與 JSON 裡都分得開（``skipped``
+⚠️ 這是用**覆蓋面換正確性**：量測時 360 個單元裡 **36 個（10%）**被拒判，實際
+掃過 324 個。⛔ 「跳過」與「掃過且乾淨」在輸出與 JSON 裡都分得開（``skipped``
 ／``scanned``），因為兩者混在一起正是本條線要防的那個病。
 
 ⚠️ **拒判也要有證據**：第一版把 `case` 與**任何** brace group 都列進去，實測
 lexer 對它們給出與 bash 一致的答案 ⇒ 那兩條各自白白跳過 37 / 70 個單元，已移除。
+
+⛔ **第 6 輪盲審證明第 5 輪的安全性宣稱是假的**（owner 明示解除 ROUND-CAP 後修）：
+多行裸 ``( … )`` 與 ``{ … }`` 群組**既沒判對、也沒被拒判**，直接報「乾淨」
+（bash 實測兩者皆 rc=1）。⇒ 補進 ``_BARE_GROUP_RE``。同輪另外三條是**過度拒判**：
+prescan 原本對原始文字跑 regex，於是註解裡的 ``<<<``、雙引號裡的 ``|{ ``、單引號
+字串裡的 ``cleanup()`` 都會誤觸拒判、把真違規靜默丟掉 ⇒ 改為先 ``_mask()`` 掉註解
+與引號內文。**拒判用的證據必須跟判定用的一樣乾淨。**
 
 母體
 ----
@@ -152,12 +159,70 @@ _FUNC_DEF_RE = re.compile(r"^\s*[A-Za-z_][A-Za-z0-9_]*\s*\(\)", re.M)
 _BRACE_GROUP_RE = re.compile(r"(?:^\s*|[;&|]\s*)\{\s", re.M)
 
 
+# H1/H2（第 6 輪盲審）：**裸的**多行 `( … )` 子 shell 與 `{ … }` 命令群組，lexer
+# 完全不追它們的巢狀（只追 `$(` 與反引號），於是群組內每一物理行都被 flush 成獨立
+# 語句、真正的管線不再是 `prev` ⇒ **既沒判對也沒被拒判，直接報「乾淨」**。
+# 實測 bash 兩者皆 rc=1、REACHED 未印，而 checker 回 scanned／skipped 空／findings 空。
+# ⇒ 那是第 5 輪安全性宣稱（判不了的都會被拒判）的反例，補進拒判。
+# ⚠️ **只認自成一行的「開頭」**。把結尾 `)` / `}` 也算進來的話，`name() { … }`
+# 函式自己的結尾大括號就會命中 —— 那個錯我在第 5 輪已經犯過一次（見
+# `_BRACE_GROUP_RE` 旁的註解），這裡是第二次，形狀完全一樣。
+_BARE_GROUP_RE = re.compile(r"^\s*[({]\s*$", re.M)
+
+
+def _mask(body: str) -> str:
+    """把註解與引號內文換成空白，**只留下真正的程式碼字元**給 prescan 比對。
+
+    ⛔ H3/H4/H5（第 6 輪盲審）：prescan 原本直接對**原始文字**跑 regex，於是
+      - `echo "a|{ b"`（雙引號內的 `|{ `）
+      - 多行單引號字串裡自成一行的 `cleanup()`
+      - `#` 註解裡的 `<<<`
+    都會觸發拒判，把**真違規**靜默丟掉（三者 bash 實測皆 rc=1）。lex() 本來就正確
+    處理註解與引號，prescan 卻沒有 —— 拒判用的證據必須跟判定用的一樣乾淨。
+    """
+    out = []
+    quote = None
+    i = 0
+    prev_ws = True
+    while i < len(body):
+        ch = body[i]
+        if quote:
+            if ch == "\\" and quote == '"' and i + 1 < len(body):
+                out.append("  ")
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+                out.append(" ")
+            else:
+                out.append("\n" if ch == "\n" else " ")
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            out.append(" ")
+            prev_ws = False
+            i += 1
+            continue
+        if ch == "#" and prev_ws:
+            while i < len(body) and body[i] != "\n":
+                out.append(" ")
+                i += 1
+            continue
+        out.append(ch)
+        prev_ws = ch.isspace()
+        i += 1
+    return "".join(out)
+
+
 def hard_constructs(lines: list[tuple[int, str]]) -> list[str]:
     """回傳這個單元裡出現的、lexer 決定不了的構造名稱（去重、排序）。"""
-    body = "\n".join(raw for _, raw in lines)
+    body = _mask("\n".join(raw for _, raw in lines))
     found = {name for name, rx in _HARD_CONSTRUCTS if rx.search(body)}
     if _FUNC_DEF_RE.search(body) and _BRACE_GROUP_RE.search(body):
         found.add("brace-group-in-function")
+    if _BARE_GROUP_RE.search(body):
+        found.add("bare-group")
     return sorted(found)
 
 
@@ -440,7 +505,7 @@ def scan_unit(lines: list[tuple[int, str]], errexit: bool, pipefail: bool) -> li
     return violations
 
 
-def iter_shell_units(repo: Path) -> list[dict]:
+def iter_shell_units(repo: Path, parse_errors: list[str] | None = None) -> list[dict]:
     """母體：git 追蹤的 *.sh + workflow 的 run: 區塊。"""
     try:
         out = subprocess.run(
@@ -454,6 +519,7 @@ def iter_shell_units(repo: Path) -> list[dict]:
 
     paths = [p for p in out.decode("utf-8").split("\0") if p]
     units: list[dict] = []
+    parse_errors = parse_errors if parse_errors is not None else []
     for rel in paths:
         fp = repo / rel
         try:
@@ -471,7 +537,14 @@ def iter_shell_units(repo: Path) -> list[dict]:
                 }
             )
         else:
-            units.extend(_workflow_run_units(rel, text))
+            # ⛔ H7（第 6 輪盲審）：解析錯**不再中止整輪**。先前一有 YAML 錯就
+            # 讓整個 run 以 rc 2 結束、stdout 全空 ⇒ 其他檔案裡**已經找到的真違規**
+            # 一併被吞掉。那是把「靜默假綠」換成「全面停播」，而不是換成
+            # 「報告我找到的 + 標記我量不到的」。現在逐檔收集，兩者都印，rc 仍是 2。
+            try:
+                units.extend(_workflow_run_units(rel, text))
+            except WorkflowParseError as exc:
+                parse_errors.append(str(exc))
     return units
 
 
@@ -544,8 +617,15 @@ def _workflow_run_units(rel: str, text: str) -> list[dict]:
             shell = step_shell if step_shell is not None else (
                 job_shell if job_shell is not None else wf_shell
             )
-            # block scalar（`|` / `>`）的內容從標記行的下一行開始；
+            # literal block（`|`）的內容從標記行的下一行開始，與實體行一一對應；
             # plain scalar 的內容就在標記行上。
+            #
+            # ⛔ folded（`>`）**不行**：YAML 折疊會把連續非空行併成一行、空行才變成
+            # 換行，於是 `value.splitlines()` 與實體行不再一一對應，`base + i` 會默默
+            # 漂掉（第 6 輪盲審實測：真違規在第 12 行、報成第 10 行）。行號報錯對一支
+            # lint 來說就是壞掉，所以**拒判**而不是猜。真實樹目前 0 個 folded 區塊，
+            # 所以這個拒判今天零成本。
+            folded = run.style == ">"
             base = run.start_mark.line + (2 if run.style in ("|", ">") else 1)
             units.append(
                 {
@@ -553,6 +633,7 @@ def _workflow_run_units(rel: str, text: str) -> list[dict]:
                     "kind": "workflow-run",
                     "errexit": True,          # GitHub 預設就是 bash -e
                     "pipefail": _shell_is_pipefail(shell),
+                    "folded": folded,
                     "lines": [(base + i, ln) for i, ln in enumerate(run.value.splitlines())],
                 }
             )
@@ -593,14 +674,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[unreachable-pipestatus] ⛔ 量不到：{repo} 不是 git repo", file=sys.stderr)
         return 2
 
+    parse_errors: list[str] = []
     try:
-        units = iter_shell_units(repo)
-    except WorkflowParseError as exc:
-        print(
-            f"[unreachable-pipestatus] ⛔ 量不到：workflow 解析失敗，整個檔案沒有被掃到 —— {exc}",
-            file=sys.stderr,
-        )
-        return EXIT_CALLER_ERROR
+        units = iter_shell_units(repo, parse_errors)
     except RuntimeError as exc:
         print(f"[unreachable-pipestatus] ⛔ 量不到：{exc}", file=sys.stderr)
         return EXIT_CALLER_ERROR
@@ -617,6 +693,8 @@ def main(argv: list[str] | None = None) -> int:
     skipped: list[dict] = []
     for u in units:
         hard = hard_constructs(u["lines"])
+        if u.get("folded"):
+            hard = sorted(set(hard) | {"folded-scalar"})
         if hard:
             # ⛔ 拒絕判定 ≠ 判定為乾淨。記下來、印出來、進 JSON。
             skipped.append({"path": u["path"], "reason": hard})
@@ -627,7 +705,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.json:
         print(json.dumps(
             {"units": len(units), "scanned": len(units) - len(skipped),
-             "skipped": skipped, "findings": findings},
+             "skipped": skipped, "parse_errors": parse_errors, "findings": findings},
             ensure_ascii=False, indent=2))
     else:
         print(f"[unreachable-pipestatus] 母體：{len(units)} 個 shell 單元 "
@@ -649,6 +727,16 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[unreachable-pipestatus] ✅ 量了沒事："
                   f"實際掃過的 {len(units) - len(skipped)} 個單元裡沒有不可達的 PIPESTATUS 讀取")
 
+    # ⛔ 解析失敗是「量不到」，優先於「量了有事／沒事」：即使上面已經印出真違規，
+    # 也要讓呼叫端知道**有一整個檔案沒被掃到**。findings 照印，不吞。
+    if parse_errors:
+        for err in parse_errors:
+            print(f"[unreachable-pipestatus] ⛔ 量不到：workflow 解析失敗，"
+                  f"整個檔案沒有被掃到 —— {err}", file=sys.stderr)
+        print(f"[unreachable-pipestatus] ⛔ {len(parse_errors)} 個 workflow 檔解析失敗 "
+              f"⇒ 上面的結果**不完整**（已找到的 {len(findings)} 條照常列出）。",
+              file=sys.stderr)
+        return EXIT_CALLER_ERROR
     if findings and args.ci:
         return EXIT_VIOLATION
     return EXIT_OK
