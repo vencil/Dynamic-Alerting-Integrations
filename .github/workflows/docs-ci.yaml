@@ -75,6 +75,13 @@ jobs:
               - "CHANGELOG.md"
               - "mkdocs.yml"
               - "scripts/tools/**/*.py"
+              # cli_contract 的契約來源：COMMAND_MAP／PROMETHEUS_COMMANDS 與二層 dispatcher
+              - "components/da-tools/app/**"
+              # cli_contract 的其餘輸入：帳本與三個 landing page（與 pre-commit 的 files: 同一組）
+              - "docs/internal/cli-contract-baseline.yaml"
+              - "components/da-tools/README.md"
+              - "components/da-tools/app/QUICKSTART.md"
+              - "try-local/README.md"
               - "scripts/tools/lint/**/*.sh"
               # ⛔ Three inputs reached INDIRECTLY — through a script a gated job
               # merely invokes. That is exactly the class the coverage guard in
@@ -432,10 +439,10 @@ jobs:
           # the same as needed.)
           pip install pyyaml promql-parser croniter -c requirements/ci-constraints.txt
 
-      - name: Run drift checks (versions, tool-map, doc-map, rule-pack-stats, rule-pack-readme, cli-defaults, frontmatter-versions)
+      - name: Run drift checks (versions, tool-map, doc-map, rule-pack-stats, rule-pack-readme, cli-defaults, cli-contract, frontmatter-versions)
         run: |
           python scripts/tools/validate_all.py \
-            --only versions,tool_map,doc_map,rule_pack_stats,byo_rulepack_table,rule_packs,changelog,changelog_format,glossary,includes,repo_name,alerts,cli_default_drift,frontmatter_versions \
+            --only versions,tool_map,doc_map,rule_pack_stats,byo_rulepack_table,rule_packs,changelog,changelog_format,glossary,includes,repo_name,alerts,cli_default_drift,cli_contract,frontmatter_versions \
             --ci
 
   i4-runbook-smoke-test:

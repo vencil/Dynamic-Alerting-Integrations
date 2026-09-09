@@ -202,6 +202,11 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ### Added
 
+- **文件裡教客戶抄的 da-tools 命令，對著活的 argparse 契約驗（lint；[#1379](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1379) / TRK-370）**：新 `check_cli_contract.py` 從 `COMMAND_MAP` 推出 subcommand→script、用 runpy 攔下每支 script 真正的 `ArgumentParser`（含 entrypoint 注入的 `--prometheus`），再對 fenced block 的命令段、fence 之外的 inline code span、manifest 的 `command:`／`args:`、shell 真的會執行的 `sh -c` 字串，以及 cli-reference 的選項表與結束碼表比對。五個判定：V0 未知子命令、V1 未宣告旗標（含二層子命令）、V2 前綴縮寫（argparse `allow_abbrev` 會收下並綁到別的旗標，一律違規）、V3 選項表幻影列、V4 可達但未列的結束碼。
+  - **帳本帶紅上線**：既有內容票的紅記在 `docs/internal/cli-contract-baseline.yaml`（每列 file／command／verdict／token／count／ticket，ticket 必須是 `#NNNN`）；比對是集合相等——少於 count 是 stale 硬錯、多出來的是新紅；`--write-baseline` 重生帳本，新列 ticket 留 `#TODO` 而閘門拒收它。
+  - **逃生門要理由**：fence 行尾與 manifest `args:`／`command:` 行尾 `# datools-cmd-ignore: <why>`、散文行尾／表格末格 `<!-- datools-cmd-ignore: <why> -->`；理由空是硬錯，該行沒有 finding 可豁免是 stale 硬錯，同一 finding 同時被帳本與 ignore 豁免是硬錯。
+  - **結束碼與揭露**：閘門自身跑不完回 rc 2，有 finding 才在 `--ci` 下回 1；輸出末尾逐類列出 NOT scored——**那是揭露不是涵蓋**。接進 `validate_all` 的 `cli_contract`、`make lint-docs`、docs-ci Drift Detection 與 pre-commit `cli-contract-check`。
+  - 內部 artifact：`scripts/tools/lint/check_cli_contract.py`、`tests/lint/test_check_cli_contract.py`、`docs/internal/cli-contract-baseline.yaml`。
 - **產物內容檢查補上第二半：直接讀 `.tgz`（lint；[#1755](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1755)）**：先前兩輪驗的都是 chart **原始樹**；新的 `check_chart_package_contents.py` 驗的是 `helm package` **產出的位元組**——archive 根目錄的檔案集合必須等於 `DECLARED` 標 `SHIP` 的集合（⭐ 直接 import 同一張表，不開第二份 SSOT），且頂層子樹必須符合 `DECLARED_SUBTREES` 的宣告。接在 `release.yaml` 三處與 `Makefile` 的 `chart-package` 的 **`helm package` 與 `helm push` 之間**——那是唯一看得到「要送出去的那一包」的位置。
   - **只有讀 archive 才看得到的三類**：① 打包當下的工作樹污染（`helm package` 打包的是指令執行**當下**的目錄，同一個 job 裡先前步驟寫進去的檔案會進包，跑在別的 commit／別的 job 的原始樹閘門對此**結構性盲**）；② 未宣告的頂層子樹——`charts/` 出現代表 subchart 相依的**全部內容**開始隨包出貨；③ helm 行為漂移。
   - ⛔ **配套的靜態守衛才是這次的重點**：閘門住在 release workflow，而 workflow 裡的一步可以被刪掉、改名、或被 `|| true` / `continue-on-error` 閹掉而**沒有任何人會發現**。所以 `check_chart_ship_surface.py` 新增第 6 條斷言：每個 `helm package` 呼叫點後面、`helm push` 之前必須有這支驗證，且**不得被消音**。這條斷言**不需要 helm**，每個 PR 都跑。⚠️ 順序也在斷言範圍內——驗在 push 之後不是閘門，是驗屍。

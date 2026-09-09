@@ -80,6 +80,9 @@ _HEADER_NO_DEFAULT: set[tuple[str, ...]] = {
     ("參數", "說明"), ("參數", "說明", "可選值"), ("參數", "說明", "範例"),
     ("Parameter", "Description"), ("Parameter", "Description", "Values"),
     ("Parameter", "Description", "Example"),
+    # Two-column parameter tables; check_cli_contract reads flags through this
+    # pin and treats an unpinned header as a hard error (#1379).
+    ("參數", "用途"), ("Parameter", "Purpose"),
     ("代碼", "說明"), ("Code", "Description"), ("Code", "意義"),
     ("Code", "含義"), ("Code", "Meaning"),
     ("Exit Code", "含義", "CI 行為"),
