@@ -189,7 +189,7 @@ def test_workflow_run_block_with_shell_bash_gets_pipefail(tmp_path: Path) -> Non
 
 
 # ---------------------------------------------------------------------------
-# 第 2 輪盲審（TRK-381）找到的形狀 —— 每一格都以 bash 為 ground truth 驗過
+# 盲審找到的形狀 —— 每一格都以 bash 為 ground truth 驗過
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize(
     "name,body",
@@ -208,8 +208,8 @@ def test_workflow_run_block_with_shell_bash_gets_pipefail(tmp_path: Path) -> Non
             'set -euo pipefail\necho $(false | true) end\n'
             'RC="${PIPESTATUS[0]}"\necho "REACHED $RC"\n',
         ),
-        # ⛔ 誤紅：管線被 && 接住 ⇒ errexit 不觸發（第 1 輪對這半完全零覆蓋，
-        #    盲審用 mutation 證明刪掉 &&/|| 子句 11 格仍全綠）
+        # ⛔ 誤紅：管線被 && 接住 ⇒ errexit 不觸發。這一半曾經是零覆蓋的
+        #    ——刪掉 &&/|| 子句而全套仍綠，是 mutation 才照出來的。
         (
             "and_chained.sh",
             'set -euo pipefail\nfalse | true && RC="${PIPESTATUS[0]}"\necho ok\n',
@@ -252,7 +252,7 @@ def test_round2_false_positives_stay_green(tmp_path: Path, name: str, body: str)
     ],
 )
 def test_round2_false_negatives_now_caught(tmp_path: Path, name: str, body: str, line: int) -> None:
-    """這三格都是**真缺陷**（bash 逐一驗過），第 1 輪的逐行掃描全部漏抓。"""
+    """這三格都是**真缺陷**（bash 逐一驗過），手刻逐行掃描全部漏抓。"""
     repo = _git_fixture(tmp_path, {name: body})
     findings = _findings(repo)["findings"]
     assert len(findings) == 1, f"{name}: {findings}"
@@ -263,7 +263,7 @@ def test_round2_false_negatives_now_caught(tmp_path: Path, name: str, body: str,
 def test_defaults_run_shell_is_resolved(tmp_path: Path, scope: str) -> None:
     """``defaults.run.shell: bash`` 與 step 層的 ``shell: bash`` 等效。
 
-    ⚠️ 第 1 輪往上掃字串，只看得到 step 層那一行 ⇒ job／workflow 層完全隱形。
+    ⚠️ 往上掃字串只看得到 step 層那一行 ⇒ job／workflow 層完全隱形。
     現在由 YAML parser 回答繼承。
     """
     step = ('      - name: s\n        run: |\n          false | true\n'
@@ -280,7 +280,7 @@ def test_defaults_run_shell_is_resolved(tmp_path: Path, scope: str) -> None:
 
 
 def test_shell_bash_with_trailing_comment_still_resolves(tmp_path: Path) -> None:
-    """``shell: bash  # 註解`` —— 第 1 輪的行尾錨定 regex 會漏掉。"""
+    """``shell: bash  # 註解`` —— 行尾錨定的 regex 會漏掉。"""
     wf = ("on: push\njobs:\n  j:\n    runs-on: ubuntu-latest\n    steps:\n"
           "      - name: s\n        shell: bash  # explicit\n        run: |\n"
           '          false | true\n          rc="${PIPESTATUS[0]}"\n          echo "$rc"\n')
@@ -400,7 +400,7 @@ def test_shell_is_pipefail_unit(shell: object, expect: bool) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 第 3 輪盲審（TRK-381）→ 第 5 輪修法：不確定就不判，而且「跳過」要說出來
+# 「不確定就不判」，而且「跳過」要說出來
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize(
     "name,body,reason",
@@ -449,7 +449,7 @@ def test_undecidable_shapes_are_skipped_and_named(
     "name,body,line",
     [
         # ⚠️ 控制項：這兩種**不可以**被拒判。第一版把 `case` 與任何 brace group
-        #    都列進拒判，實測是過度收窄（各自白白跳過 37 / 70 個單元），而 lexer
+        #    都列進拒判，那是過度收窄（大量單元被白白跳過），而 lexer
         #    對它們給出與 bash 一致的答案。
         (
             "case_ok.sh",
@@ -544,14 +544,14 @@ def test_run_block_line_number_comes_from_the_yaml_node(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 第 6 輪盲審（TRK-381）→ 第 7 輪修法（owner 明示解除 ROUND-CAP）
+# 拒判清單的兩個方向：漏判要補進去，判得對的不准列進去
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize(
     "name,body",
     [
         # H1 —— 多行裸 `( … )` 子 shell。lexer 只追 `$(` 與反引號，裸括號完全不追 ⇒
         #        群組內每一物理行被 flush 成獨立語句、真管線不再是 prev。
-        #        ⛔ 第 5 輪的安全性宣稱（判不了的都會被拒判）在這裡是**假的**：
+        #        ⛔ 「判不了的都會被拒判」這個安全性宣稱在這裡是**假的**：
         #        它既沒判對、也沒被拒判，直接報「乾淨」。bash 實測 rc=1、REACHED 未印。
         ("subshell.sh", 'set -euo pipefail\n(\n  false | true\n)\n'
                         'RC="${PIPESTATUS[0]}"\necho "REACHED $RC"\n'),
@@ -561,7 +561,7 @@ def test_run_block_line_number_comes_from_the_yaml_node(tmp_path: Path) -> None:
     ],
 )
 def test_bare_multiline_groups_are_refused(tmp_path: Path, name: str, body: str) -> None:
-    """⛔ 這兩種 bash 實測都是真違規，而第 5 輪的守衛對它們**報乾淨**。"""
+    """⛔ 這兩種 bash 實測都是真違規，而守衛曾經對它們**報乾淨**。"""
     repo = _git_fixture(tmp_path, {name: body})
     data = _findings(repo)
     assert data["findings"] == [], f"{name} 不該產生 finding"
@@ -613,7 +613,7 @@ def test_folded_scalar_run_block_is_refused(tmp_path: Path) -> None:
     """⛔ `run: >` 的行號對不上實體行 ⇒ 拒判，不猜。
 
     YAML 折疊把連續非空行併成一行、空行才變成換行，所以 ``value.splitlines()``
-    與實體行不再一一對應。第 6 輪盲審實測：真違規在第 12 行、報成第 10 行。
+    與實體行不再一一對應 ⇒ `base + i` 會默默漂掉，行號報錯對 lint 就是壞掉。
     ⚠️ 真實樹目前 0 個 folded 區塊，所以這個拒判今天零成本。
     """
     wf = ("on: push\njobs:\n  j:\n    runs-on: ubuntu-latest\n    steps:\n"
@@ -640,7 +640,7 @@ def test_literal_block_is_still_scanned(tmp_path: Path) -> None:
 def test_parse_error_does_not_swallow_findings_from_other_files(tmp_path: Path) -> None:
     """⛔ 解析失敗不得把**別的檔案裡已經找到的真違規**一起吞掉。
 
-    ⚠️ 第 5 輪把「靜默假綠」換成了「全面停播」：一有 YAML 錯就整輪 rc 2、stdout
+    ⚠️ 曾經把「靜默假綠」換成「全面停播」：一有 YAML 錯就整輪 rc 2、stdout
     全空。正解是「報告我找到的 + 標記我量不到的」——findings 照印、parse error
     照報、rc 仍是 2（因為確實有東西沒量到）。
     """
@@ -661,3 +661,153 @@ def test_parse_error_does_not_swallow_findings_from_other_files(tmp_path: Path) 
     data = json.loads(jproc.stdout)
     assert len(data["findings"]) == 1, data
     assert data["parse_errors"], data
+
+
+# ---------------------------------------------------------------------------
+# 整份檔案盲審找到的六條 —— 各配一格，外加兩格反向對照。
+# 每一格的 ground truth 都是 bash 本身：`REACHED` 有沒有印出來。
+# ---------------------------------------------------------------------------
+def _bash_reaches(script: str, tmp_path: Path) -> bool:
+    """跑 bash，回傳「管線之後那行有沒有真的執行到」。"""
+    fp = tmp_path / "gt.sh"
+    fp.write_text(script, encoding="utf-8")
+    proc = subprocess.run(
+        ["bash", str(fp)], capture_output=True, text=True, timeout=60
+    )
+    return "REACHED" in proc.stdout
+
+
+def test_statement_between_pipeline_and_read_is_still_unreachable(tmp_path: Path) -> None:
+    """⛔ 述詞是「**在**沒被接住的管線**之後**」，不是「前一個語句是管線」。
+
+    中間隔一個 ``echo`` 是極常見的寫法。只看前一個語句的話，一個無害的中間語句就
+    打穿整支守衛 —— 而 bash 在管線那一行就終止，後面**整段**都不可達。
+    """
+    script = (
+        "#!/usr/bin/env bash\nset -euo pipefail\nfalse | true\necho mid\n"
+        'RC="${PIPESTATUS[0]}"\necho "REACHED $RC"\n'
+    )
+    assert not _bash_reaches(script, tmp_path), "ground truth 變了：bash 竟然執行到了"
+    repo = _git_fixture(tmp_path / "r", {"g.sh": script})
+    data = _findings(repo)
+    assert data["scanned"] == 1 and not data["skipped"]
+    assert len(data["findings"]) == 1, f"隔一個語句就漏抓：{data}"
+
+
+def test_pipeline_caught_by_and_stays_green_even_with_a_gap(tmp_path: Path) -> None:
+    """⚠️ 上一格的反向對照：被 ``&&`` 接住的管線**不會**終止腳本，隔幾行都不算違規。
+
+    沒有這一格，把「之後整段不可達」寫得太寬就會變成新的誤紅來源。
+    """
+    script = (
+        "#!/usr/bin/env bash\nset -euo pipefail\nfalse | true && echo caught\necho mid\n"
+        'RC="${PIPESTATUS[0]}"\necho "REACHED $RC"\n'
+    )
+    assert _bash_reaches(script, tmp_path), "ground truth 變了：bash 竟然沒執行到"
+    repo = _git_fixture(tmp_path / "r", {"g.sh": script})
+    data = _findings(repo)
+    assert not data["findings"], f"合法形狀被誤紅：{data['findings']}"
+
+
+def test_case_pattern_alternation_is_not_a_pipeline(tmp_path: Path) -> None:
+    """⛔ ``case`` 的 ``foo|bar)`` 與管線同形，把它當管線會誤紅一個**可達**的讀取。
+
+    誤紅是守衛被刪掉的原因，所以這一格是必須維持綠的對照。
+    """
+    script = (
+        "#!/usr/bin/env bash\nset -euo pipefail\nx=foo\ncase \"$x\" in\n  foo|bar)\n"
+        'RC="${PIPESTATUS[0]}"\n    echo "REACHED $RC"\n    ;;\nesac\n'
+    )
+    assert _bash_reaches(script, tmp_path), "ground truth 變了：bash 竟然沒執行到"
+    repo = _git_fixture(tmp_path / "r", {"g.sh": script})
+    data = _findings(repo)
+    assert not data["findings"], f"case 模式交替被誤判成管線：{data['findings']}"
+
+
+def test_function_and_unrelated_brace_group_stay_decidable(tmp_path: Path) -> None:
+    """⛔ ``brace-group-in-function`` 是**包含關係**，不是全檔存在性檢查。
+
+    函式定義與函式**外**的 ``cmd || { …; }`` 同時存在是常見慣用法，lexer 判得對。
+    用全檔存在性拒判，會把真違規靜默丟進 skipped。
+    """
+    script = (
+        "#!/usr/bin/env bash\nmyfunc() {\n  echo hi\n}\nset -euo pipefail\n"
+        "command -v ls >/dev/null || { echo miss; exit 2; }\nfalse | true\n"
+        'RC="${PIPESTATUS[0]}"\necho "REACHED $RC"\n'
+    )
+    assert not _bash_reaches(script, tmp_path)
+    repo = _git_fixture(tmp_path / "r", {"g.sh": script})
+    data = _findings(repo)
+    assert not data["skipped"], f"被冤枉拒判：{data['skipped']}"
+    assert len(data["findings"]) == 1, f"真違規被丟掉：{data}"
+
+
+def test_heredoc_body_does_not_trigger_refusal(tmp_path: Path) -> None:
+    """⛔ 拒判用的證據必須跟判定用的一樣乾淨 —— heredoc 內文不是程式碼。
+
+    ``lex()`` 本來就跳過 heredoc 內文，prescan 若沒跳過，內文裡的 ``{`` 會誤觸
+    ``bare-group`` 拒判，把同一檔的真違規靜默丟掉。
+    """
+    script = (
+        "#!/usr/bin/env bash\nset -euo pipefail\ncat <<'DOC'\nexample json:\n{\n"
+        '"a": 1\n}\nDOC\nfalse | true\nRC="${PIPESTATUS[0]}"\necho "REACHED $RC"\n'
+    )
+    assert not _bash_reaches(script, tmp_path)
+    repo = _git_fixture(tmp_path / "r", {"g.sh": script})
+    data = _findings(repo)
+    assert not data["skipped"], f"heredoc 內文誤觸拒判：{data['skipped']}"
+    assert len(data["findings"]) == 1, f"真違規被丟掉：{data}"
+
+
+def test_second_call_site_under_stricter_state_is_caught(tmp_path: Path) -> None:
+    """⛔ 函式體要對**每一個**呼叫點求值，取「存在一個呼叫點使讀取不可達」。
+
+    只看最早那次會漏掉「先在 ``set +e`` 下呼叫、之後在 ``set -euo pipefail`` 下
+    再呼叫」—— 第二次呼叫時那段讀取是不可達的。
+    """
+    script = (
+        "#!/usr/bin/env bash\nmyfunc() {\n  false | true\n"
+        '  RC="${PIPESTATUS[0]}"\n  echo "REACHED $RC"\n}\n'
+        'set +e\nmyfunc\nset -euo pipefail\nmyfunc\necho "second REACHED"\n'
+    )
+    proc = subprocess.run(
+        ["bash", "-c", script], capture_output=True, text=True, timeout=60
+    )
+    assert "second REACHED" not in proc.stdout, "ground truth 變了：第二次呼叫竟然通過了"
+    repo = _git_fixture(tmp_path / "r", {"g.sh": script})
+    data = _findings(repo)
+    assert not data["skipped"]
+    assert len(data["findings"]) == 1, f"第二個呼叫點的不可達讀取被漏掉：{data}"
+
+
+def test_rc_zero_without_ci_still_prints_findings(tmp_path: Path) -> None:
+    """⚠️ rc 0 **不等於**沒有違規 —— 沒給 ``--ci`` 時 findings 照印但 rc 仍是 0。
+
+    docstring 一度把 rc 0 寫成「沒有違規」，那會讓別的呼叫端只看 ``$?`` 就當成綠。
+    """
+    script = (
+        "#!/usr/bin/env bash\nset -euo pipefail\nfalse | true\n"
+        'RC="${PIPESTATUS[0]}"\necho "REACHED $RC"\n'
+    )
+    repo = _git_fixture(tmp_path / "r", {"g.sh": script})
+    plain = _run(repo)
+    assert plain.returncode == 0, "報告模式不該當閘門"
+    assert "✗" in plain.stdout, "findings 沒有印出來"
+    assert _run(repo, "--ci").returncode == 1, "--ci 才是閘門"
+
+
+def test_pipeline_inside_a_case_branch_is_still_caught(tmp_path: Path) -> None:
+    """⚠️ 上一格的反向對照：``case`` 分支**體內**的真管線仍然要抓得到。
+
+    模式位置的 ``|`` 是交替，但分支體內的 ``|`` 是管線。少了「``)`` 之後回到命令
+    位置」這個 reset，整個 case 區塊之後都會被當成模式位置 ⇒ 真違規全被漏掉。
+    """
+    script = (
+        "#!/usr/bin/env bash\nset -euo pipefail\nx=foo\ncase \"$x\" in\n  foo|bar)\n"
+        '    false | true\n    RC="${PIPESTATUS[0]}"\n    echo "REACHED $RC"\n'
+        "    ;;\nesac\n"
+    )
+    assert not _bash_reaches(script, tmp_path), "ground truth 變了：bash 竟然執行到了"
+    repo = _git_fixture(tmp_path / "r", {"g.sh": script})
+    data = _findings(repo)
+    assert len(data["findings"]) == 1, f"case 分支體內的真違規被漏掉：{data}"

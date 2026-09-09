@@ -72,8 +72,9 @@ Usage
 
 Exit codes
 ----------
-- ``0`` — 掃過了，沒有違規（**量了沒事**）
-- ``1`` — 有違規（``--ci``）
+- ``0`` — 掃過了。⚠️ **不等於沒有違規**：沒給 ``--ci`` 時 findings 照印、rc 仍是 0
+  （報告模式不當閘門）。要「有違規就非零」必須給 ``--ci``。
+- ``1`` — 有違規，**且**給了 ``--ci``
 - ``2`` — **量不到**：不是 git repo、git 不可用、母體是空的、PyYAML 不可用、
   或**任一 workflow 檔 YAML 解析失敗**。⛔ 空母體絕不回 0——「工具失能」長得就像
   「零命中」（D-07d），必須大聲失敗。⚠️ workflow 解析失敗特別列出來，是因為它
@@ -156,16 +157,42 @@ _BRACE_GROUP_RE = re.compile(r"(?:^\s*|[;&|]\s*)\{\s", re.M)
 _BARE_GROUP_RE = re.compile(r"^\s*[({]\s*$", re.M)
 
 
-def _mask(body: str) -> str:
-    """把註解與引號內文換成空白，**只留下真正的程式碼字元**給 prescan 比對。
+def _strip_heredocs(body: str) -> str:
+    """把 heredoc **內文**換成空行，行號不變。
 
-    ⛔ prescan 原本直接對**原始文字**跑 regex，於是
-      - `echo "a|{ b"`（雙引號內的 `|{ `）
-      - 多行單引號字串裡自成一行的 `cleanup()`
-      - `#` 註解裡的 `<<<`
-    都會觸發拒判，把**真違規**靜默丟掉（三者 bash 實測皆 rc=1）。lex() 本來就正確
-    處理註解與引號，prescan 卻沒有 —— 拒判用的證據必須跟判定用的一樣乾淨。
+    ⛔ `lex()` 本來就把 heredoc 內文當成非程式碼，prescan 卻沒有 —— 於是內文裡的
+    `{`、`function foo`、`<<<` 會誤觸拒判，**把真違規靜默丟掉**。
+    釘住：`test_heredoc_body_does_not_trigger_refusal`。
     """
+    out: list[str] = []
+    pending: list[str] = []
+    open_terms: list[str] = []
+    for line in body.split("\n"):
+        if open_terms:
+            if line.strip() == open_terms[0] or line.lstrip("\t").strip() == open_terms[0]:
+                open_terms.pop(0)
+                out.append(line)
+            else:
+                out.append("")
+            continue
+        for m in _HEREDOC_RE.finditer(line):
+            pending.append(m.group(2))
+        out.append(line)
+        if pending:
+            open_terms.extend(pending)
+            pending = []
+    return "\n".join(out)
+
+
+def _mask(body: str) -> str:
+    """把 heredoc 內文、註解與引號內文換成空白，只留下真正的程式碼字元給 prescan。
+
+    ⛔ **拒判用的證據必須跟判定用的一樣乾淨**：prescan 若對原始文字跑 regex，字串／
+    註解／heredoc 內文裡的構造都會誤觸拒判，而拒判會把真違規靜默丟掉。
+    釘住：`test_hard_constructs_inside_comments_and_strings_do_not_refuse` 與
+    `test_heredoc_body_does_not_trigger_refusal`。
+    """
+    body = _strip_heredocs(body)
     out = []
     quote = None
     i = 0
@@ -201,11 +228,43 @@ def _mask(body: str) -> str:
     return "".join(out)
 
 
+_FUNC_OPEN_RE = re.compile(r"^[ \t]*[A-Za-z_][A-Za-z0-9_]*[ \t]*\(\)[ \t]*\{", re.M)
+
+
+def _func_spans(body: str) -> list[tuple[int, int]] | None:
+    """回傳每個 `name() { … }` 函式體的 (起, 迄) 位移；配對不起來回 None（＝不確定）。"""
+    spans: list[tuple[int, int]] = []
+    for m in _FUNC_OPEN_RE.finditer(body):
+        depth = 0
+        i = m.end() - 1
+        while i < len(body):
+            if body[i] == "{":
+                depth += 1
+            elif body[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    spans.append((m.end(), i))
+                    break
+            i += 1
+        else:
+            return None
+    return spans
+
+
 def hard_constructs(lines: list[tuple[int, str]]) -> list[str]:
     """回傳這個單元裡出現的、lexer 決定不了的構造名稱（去重、排序）。"""
     body = _mask("\n".join(raw for _, raw in lines))
     found = {name for name, rx in _HARD_CONSTRUCTS if rx.search(body)}
-    if _FUNC_DEF_RE.search(body) and _BRACE_GROUP_RE.search(body):
+    # ⛔ **包含關係，不是全檔存在性**：函式定義與命令群組各自出現在檔案的不同地方是
+    # 常見慣用法（`cmd || { …; }` 在函式外），lexer 判得對。只有群組真的落在函式體
+    # **內**才會提早關掉巢狀計數。配對不起來就當不確定、拒判。
+    # 釘住：`test_function_and_unrelated_brace_group_stay_decidable`。
+    spans = _func_spans(body)
+    if spans is None:
+        found.add("brace-group-in-function")
+    elif spans and any(
+        any(a < m.start() < b for a, b in spans) for m in _BRACE_GROUP_RE.finditer(body)
+    ):
         found.add("brace-group-in-function")
     if _BARE_GROUP_RE.search(body):
         found.add("bare-group")
@@ -245,15 +304,27 @@ def lex(lines: list[tuple[int, str]]) -> list[Stmt]:
     heredocs: list[str] = []      # 待關閉的 heredoc 終止詞
     pending_heredoc: list[str] = []
     func_depth = 0                # { } 巢狀，用來粗判是否在函式體內
+    # ⛔ `case` 的模式交替 `foo|bar)` 與管線同形。不追蹤它會把**合法且可達**的
+    # PIPESTATUS 讀取報成違規（誤紅是守衛被刪掉的原因）。
+    # 釘住：`test_case_pattern_alternation_is_not_a_pipeline`。
+    case_depth = 0                # 巢狀 case … esac
+    in_pattern = False            # 目前在 case 的模式位置（`|` 是交替）
     buf, buf_line = "", None
     top_pipe = sub_pipe = False
     sep = ""
     next_sep = "\n"
 
     def flush(new_sep):
-        nonlocal buf, buf_line, top_pipe, sub_pipe, sep
-        if buf.strip():
-            stmts.append(Stmt(buf_line or 0, buf.strip(), top_pipe, sub_pipe, sep, func_depth > 0))
+        nonlocal buf, buf_line, top_pipe, sub_pipe, sep, case_depth, in_pattern
+        text = buf.strip()
+        if text:
+            stmts.append(Stmt(buf_line or 0, text, top_pipe, sub_pipe, sep, func_depth > 0))
+            if re.match(r"^case\b.*\bin$", text):
+                case_depth += 1
+                in_pattern = True
+            elif text == "esac" and case_depth > 0:
+                case_depth -= 1
+                in_pattern = False
         buf, buf_line, top_pipe, sub_pipe = "", None, False, False
         sep = new_sep
 
@@ -318,6 +389,11 @@ def lex(lines: list[tuple[int, str]]) -> list[Stmt]:
                 i = m.end()
                 continue
             # --- 分隔符（只在深度 0 有效）---
+            if depth == 0 and raw.startswith(";;", i) and case_depth > 0:
+                flush(";")
+                in_pattern = True
+                i += 2
+                continue
             if depth == 0 and ch == ";":
                 flush(";")
                 i += 1
@@ -330,10 +406,15 @@ def lex(lines: list[tuple[int, str]]) -> list[Stmt]:
                 flush("||")
                 i += 2
                 continue
+            if ch == ")" and depth == 0 and in_pattern:
+                # 模式結束、回到命令位置。⚠️ 這個 reset 是必要的：少了它，整個 case
+                # 區塊之後都被當成模式位置，分支**體內**的真管線會被漏掉。
+                # 釘住：`test_pipeline_inside_a_case_branch_is_still_caught`。
+                in_pattern = False
             if ch == "|":
-                if depth == 0:
+                if depth == 0 and not in_pattern:
                     top_pipe = True
-                else:
+                elif depth != 0:
                     sub_pipe = True
                 buf += ch
                 if buf_line is None:
@@ -445,48 +526,59 @@ def scan_unit(lines: list[tuple[int, str]], errexit: bool, pipefail: bool) -> li
         m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*\(\)", st.text)
         if m:
             func_names.add(m.group(1))
+    # ⛔ 函式體要對**每一個**呼叫點的狀態求值，取「存在一個呼叫點使讀取不可達」。
+    # 只看最早那次會漏掉「先在 set +e 下呼叫、之後在 set -euo pipefail 下再呼叫」。
+    # 釘住：`test_second_call_site_under_stricter_state_is_caught`。
     state_at: dict[str, tuple[bool, bool]] = {}
     e, pf = errexit, pipefail
     for st in stmts:
         if st.text.split()[:1] == ["set"]:
             e, pf = apply_set(st.text, e, pf)
         head = st.text.split()[0] if st.text.split() else ""
-        if head in func_names and not st.in_func and head not in state_at:
-            state_at[head] = (e, pf)
+        if head in func_names and not st.in_func:
+            prev_state = state_at.get(head)
+            if prev_state is None:
+                state_at[head] = (e, pf)
+            else:
+                state_at[head] = (prev_state[0] or e, prev_state[1] or pf)
 
+    # ⛔ 述詞不是「**前一個**語句是管線」，而是「**在**一條沒被接住的 top-level 管線
+    # **之後**」——errexit 在管線那一行就終止腳本，後面**整段**都不可達，中間隔幾個
+    # `echo` 不會讓它復活。只看前一個語句會讓一個無害的中間語句就打穿整支守衛。
+    # 釘住：`test_statement_between_pipeline_and_read_is_still_unreachable`。
     violations: list[dict] = []
     e, pf = errexit, pipefail
     cur_func: str | None = None
-    prev: Stmt | None = None
-    for st in stmts:
+    dead: Stmt | None = None          # 造成後續不可達的那條管線
+    dead_scope: bool | None = None    # 該管線所在的 in_func，離開該範圍就重置
+    for idx, st in enumerate(stmts):
         m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*\(\)", st.text)
         if m:
             cur_func = m.group(1)
+            dead = None
+        if dead is not None and st.in_func != dead_scope:
+            dead = None               # 跨出（或進入）函式體，重新起算
         if st.text.split()[:1] == ["set"]:
             e, pf = apply_set(st.text, e, pf)
-            prev = st
             continue
         # 函式體內改用「呼叫點」的狀態；查不到呼叫就保守跳過
         if st.in_func and cur_func:
             if cur_func not in state_at:
-                prev = st
                 continue
             ce, cpf = state_at[cur_func]
         else:
             ce, cpf = e, pf
-        if _PIPESTATUS_RE.search(st.text):
-            if (
-                ce
-                and cpf
-                and prev is not None
-                and prev.top_pipe          # ⛔ 只認 top-level 管線，$(...) 內的不算
-                and not is_protected(prev)
-                and st.sep_before not in ("&&", "||")   # 被 &&/|| 接住就不會終止
-            ):
-                violations.append(
-                    {"line": st.line, "code": st.text[:120], "pipeline": prev.text[:120]}
-                )
-        prev = st
+
+        if _PIPESTATUS_RE.search(st.text) and ce and cpf and dead is not None:
+            violations.append(
+                {"line": st.line, "code": st.text[:120], "pipeline": dead.text[:120]}
+            )
+
+        if st.top_pipe and not is_protected(st):
+            # 被 `&&` / `||` 接住的管線不會觸發 errexit —— 看**下一個**語句的前導分隔符
+            nxt = stmts[idx + 1] if idx + 1 < len(stmts) else None
+            if nxt is None or nxt.sep_before not in ("&&", "||"):
+                dead, dead_scope = st, st.in_func
     return violations
 
 
