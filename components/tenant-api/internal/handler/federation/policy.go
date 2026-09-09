@@ -25,8 +25,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/federation/fedpolicy"
-	"github.com/vencil/tenant-api/internal/handler"
 	"github.com/vencil/tenant-api/internal/gitops"
+	"github.com/vencil/tenant-api/internal/handler"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"gopkg.in/yaml.v3"
 )
@@ -63,8 +63,8 @@ func GetFederationPolicy(d *handler.Deps) http.HandlerFunc {
 // the tenant label — is never bypassable.
 type PutFederationPolicyRequest struct {
 	Whitelist []fedpolicy.WhitelistEntry `json:"whitelist"`
-	Force     bool                        `json:"force"`
-	Reason    string                      `json:"reason"`
+	Force     bool                       `json:"force"`
+	Reason    string                     `json:"reason"`
 }
 
 // PutFederationPolicy handles PUT /api/v1/federation/policy — replaces

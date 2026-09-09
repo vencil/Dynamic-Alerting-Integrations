@@ -253,8 +253,8 @@ func TestChangedDefaultsKeys_BothNilReturnsEmpty(t *testing.T) {
 
 func TestChangedDefaultsKeys_TypeChangeIsLeafChange(t *testing.T) {
 	t.Parallel()
-	a := map[string]any{"x": 80}                      // scalar
-	b := map[string]any{"x": map[string]any{"a": 1}}  // map
+	a := map[string]any{"x": 80}                     // scalar
+	b := map[string]any{"x": map[string]any{"a": 1}} // map
 	got := sortedKeys(changedDefaultsKeys(a, b))
 	if !reflect.DeepEqual(got, []string{"x"}) {
 		t.Errorf("expected [x] (type change is leaf), got %v", got)
@@ -410,7 +410,7 @@ func TestClassifyDefaultsNoOpEffect_ShadowedAcrossMultipleChainEntries(t *testin
 	}
 	now := map[string]map[string]any{
 		dp1: {"mysql_connections": 100, "redis_connections": 50}, // mysql changed
-		dp2: {"kafka_lag": 2000},                                  // kafka changed
+		dp2: {"kafka_lag": 2000},                                 // kafka changed
 	}
 	priorHashes := map[string]string{dp1: "h-old", dp2: "h-old"}
 	hashes := map[string]string{dp1: "h-NEW", dp2: "h-NEW"}

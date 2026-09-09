@@ -121,13 +121,13 @@ func printRootUsage(w io.Writer) {
 
 // importFlags holds the parsed configuration for the `import` subcommand.
 type importFlags struct {
-	input               string
-	output              string
-	generatedBy         string
-	validateStrictProm  bool
-	failOnNonPortable   bool
-	failOnAmbiguous     bool
-	help                bool
+	input              string
+	output             string
+	generatedBy        string
+	validateStrictProm bool
+	failOnNonPortable  bool
+	failOnAmbiguous    bool
+	help               bool
 }
 
 func parseImportFlags(args []string, errOut io.Writer) (*importFlags, error) {
@@ -361,4 +361,3 @@ func runAllowlist(args []string, stdout, errOut io.Writer) int {
 	}
 	return exitOK
 }
-

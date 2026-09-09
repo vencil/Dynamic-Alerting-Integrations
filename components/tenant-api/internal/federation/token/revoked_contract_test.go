@@ -48,16 +48,16 @@ func TestValidTokenID(t *testing.T) {
 	}
 	bad := []string{
 		"",
-		"ftk_",       // prefix with no body
-		"ftk_G0",     // out-of-charset body
-		"FTK_01",     // wrong-case prefix
-		"xftk_01",    // leading junk
-		"ftk_01x",    // trailing junk
-		" ftk_01",    // contract-violating line
-		"ftk_01 ",    // contract-violating line
-		"ftk_0\n1",   // contract-violating line
-		"ftk_01\n",   // contract-violating line
-		"ftk_0 1", // contract-violating line
+		"ftk_",     // prefix with no body
+		"ftk_G0",   // out-of-charset body
+		"FTK_01",   // wrong-case prefix
+		"xftk_01",  // leading junk
+		"ftk_01x",  // trailing junk
+		" ftk_01",  // contract-violating line
+		"ftk_01 ",  // contract-violating line
+		"ftk_0\n1", // contract-violating line
+		"ftk_01\n", // contract-violating line
+		"ftk_0 1",  // contract-violating line
 	}
 	for _, id := range bad {
 		if validTokenID(id) {
@@ -100,15 +100,15 @@ func recordStoreImpls() map[string]func(t *testing.T) RecordStore {
 // matrix in tests/ops/test_revoked_set_contract.py.
 var nonConformingTokenIDs = []string{
 	"",
-	"ftk_",       // prefix, no body
-	"ftk_G0",     // body outside the charset
-	"FTK_01",     // wrong-case prefix
-	"xftk_01",    // something before
-	"ftk_01x",    // something after
-	" ftk_01",    // a separator-ish byte before
-	"ftk_01 ",    // …after
-	"ftk_0 1",    // …inside
-	"ftk_0\n1",   // a real separator inside: two lines pretending to be one
+	"ftk_",     // prefix, no body
+	"ftk_G0",   // body outside the charset
+	"FTK_01",   // wrong-case prefix
+	"xftk_01",  // something before
+	"ftk_01x",  // something after
+	" ftk_01",  // a separator-ish byte before
+	"ftk_01 ",  // …after
+	"ftk_0 1",  // …inside
+	"ftk_0\n1", // a real separator inside: two lines pretending to be one
 	"not-a-token",
 }
 

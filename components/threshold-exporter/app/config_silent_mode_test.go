@@ -24,10 +24,10 @@ import (
 func TestResolveSilentModes(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name       string
-		tenants    map[string]map[string]ScheduledValue
+		name        string
+		tenants     map[string]map[string]ScheduledValue
 		expectedLen int
-		validate   func(t *testing.T, result []ResolvedSilentMode)
+		validate    func(t *testing.T, result []ResolvedSilentMode)
 	}{
 		{"Default", map[string]map[string]ScheduledValue{"db-a": {"mysql_connections": SV("70")}}, 0, nil},
 		{"Warning", map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SV("warning")}}, 1, func(t *testing.T, r []ResolvedSilentMode) {
@@ -75,7 +75,7 @@ func TestResolveAt_SkipsSilentKey(t *testing.T) {
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
 				"mysql_connections": SV("70"),
-				"_silent_mode":     SV("warning"),
+				"_silent_mode":      SV("warning"),
 			},
 		},
 	}
@@ -132,10 +132,10 @@ func TestResolveSilentModes_MixedTenants(t *testing.T) {
 func TestResolveSeverityDedup(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name       string
-		tenants    map[string]map[string]ScheduledValue
+		name        string
+		tenants     map[string]map[string]ScheduledValue
 		expectedLen int
-		validate   func(t *testing.T, r []ResolvedSeverityDedup)
+		validate    func(t *testing.T, r []ResolvedSeverityDedup)
 	}{
 		{"DefaultEnable", map[string]map[string]ScheduledValue{"db-a": {}}, 1, func(t *testing.T, r []ResolvedSeverityDedup) {
 			if r[0].Tenant != "db-a" || r[0].Mode != "enable" {
@@ -411,7 +411,7 @@ func TestResolveAt_SkipsRoutingKey(t *testing.T) {
 		Defaults: map[string]float64{"mysql_connections": 80},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
-				"_routing":         SV(`receiver: "https://example.com"`),
+				"_routing":          SV(`receiver: "https://example.com"`),
 				"mysql_connections": SV("70"),
 			},
 		},
@@ -517,8 +517,8 @@ func TestCardinalityGuard(t *testing.T) {
 		defsWith10[fmt.Sprintf("m_%d", i)] = float64(i)
 	}
 	tests := []struct {
-		name string
-		cfg  ThresholdConfig
+		name     string
+		cfg      ThresholdConfig
 		expected int
 	}{
 		{"UnderLimit", ThresholdConfig{Defaults: map[string]float64{"mysql_connections": 70, "redis_memory": 80}, Tenants: map[string]map[string]ScheduledValue{"db-a": {}}, MaxMetricsPerTenant: 10}, 2},

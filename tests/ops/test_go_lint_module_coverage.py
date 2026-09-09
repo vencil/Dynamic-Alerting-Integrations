@@ -83,6 +83,20 @@ _DISPOSITIONS = frozenset({"enrol", "default-build", "unlinted"})
 # the tree drift apart.
 _REQUIRED_LINTERS = frozenset({"godoclint"})
 
+# `run:` keys this repo has looked at. ⛔ This is a CHANGE DETECTOR, not a
+# safety proof — the honest claim is "someone reviewed this key once", and even
+# that is conditional: `build-tags` is here because tenant-api needs it, yet
+# enrolling a tag that some file NEGATES (`//go:build !x`) drops that file from
+# the corpus, which is the very shape this module exists to catch. No file in
+# the tree carries a negated constraint today.
+# An accept-set rather than a denylist because the harmful set is open; kept
+# wide enough that the ordinary knobs stay usable, because a guard that reds on
+# `timeout:` is a guard that gets deleted.
+_VETTED_RUN_KEYS = frozenset({
+    "build-tags", "timeout", "concurrency", "modules-download-mode",
+    "allow-parallel-runners", "allow-serial-runners",
+})
+
 
 def _go_modules() -> frozenset[str]:
     """Module directories, from git (which carries the truncation floor)."""
@@ -248,21 +262,35 @@ def test_build_tags_are_pinned_and_enrolled() -> None:
 # ── the step must be able to report ────────────────────────────────────────
 
 
-def _excludes_every_go_file(pattern: str | None, files: list[str]) -> bool:
-    """Would this exclusion `path` swallow the module's whole corpus?
+def _excludes_every_go_file(patterns: list[str | None], files: list[str]) -> bool:
+    """Would these exclusion `path`s together swallow the module's corpus?
 
     ⛔ Derived, not enumerated. A blacklist of spellings (`.*`, `^`, …) was
     measured to miss every natural one — including `_test\\.go` in a module
     whose files are ALL tests, which is this repo's most-copied exclusion.
     A rule with no `path` applies to everything, hence None -> True.
+
+    ⛔ `files` must be MODULE-relative. golangci-lint matches these patterns
+    against the path as seen from the module root, so `^foo\\.go$` excludes
+    everything in a one-file module while matching no repo-relative path at
+    all — measured: it took `run ./...` from rc=1 to `0 issues.` while an
+    earlier revision of this predicate called it harmless.
+
+    ⛔ Patterns are evaluated as a UNION, the way golangci applies them.
+    Asking one at a time answers a narrower question than the config does —
+    two patterns covering a file each silence a two-file module while neither
+    is a catch-all on its own.
     """
-    if pattern is None:
-        return True
-    try:
-        rx = re.compile(pattern)
-    except re.error:
-        return False  # golangci would reject it; not this guard's judgement
-    return bool(files) and all(rx.search(f) for f in files)
+    compiled = []
+    for pattern in patterns:
+        if pattern is None:
+            return True
+        try:
+            compiled.append(re.compile(pattern))
+        except re.error:
+            continue  # golangci would reject it; not this guard's judgement
+    return bool(files) and bool(compiled) and all(
+        any(rx.search(f) for rx in compiled) for f in files)
 
 
 def test_every_linted_module_reports_something() -> None:
@@ -271,6 +299,11 @@ def test_every_linted_module_reports_something() -> None:
     `default: none`, a linter set emptied by `disable`, or an exclusion that
     matches the whole module all make `0 issues` permanent while the module
     still counts as enrolled.
+
+    ⛔ `formatters:` is a SEPARATE top-level section in v2, and a config
+    carrying only `linters:` reports no formatting drift at all (#1699). It is
+    checked here rather than in its own test because it is the same invariant —
+    the step runs and cannot report — read off a second carrier.
     """
     modules = sorted(set(_lint_steps().values()))
     assert _ANCHOR_MODULE in modules, (
@@ -302,17 +335,57 @@ def test_every_linted_module_reports_something() -> None:
                 "which truncates the report — #1751 mis-measured this repo by "
                 "exactly that. Set it to 0.")
 
-        exclusions = linters.get("exclusions") or {}
-        for pattern in exclusions.get("paths") or []:
-            assert not _excludes_every_go_file(str(pattern), own), (
-                f"{module}/.golangci.yml excludes `paths: {pattern}`, which "
-                f"matches all {len(own)} of its .go files.")
-        for rule in exclusions.get("rules") or []:
+        # Module-relative, because that is the base golangci matches against.
+        rel = [f[len(module) + 1:] for f in own]
+
+        unvetted = sorted(set(cfg.get("run") or {}) - _VETTED_RUN_KEYS)
+        assert not unvetted, (
+            f"{module}/.golangci.yml sets `run.{unvetted}`, which nobody has "
+            "looked at yet. Four v2 keys are deliberately absent, each measured "
+            "to turn a finding into rc=0: `issues-exit-code: 0` prints every "
+            "finding and exits 0 anyway; `tests: false` empties the corpus of a "
+            "module whose .go files are all tests; `relative-path-mode` moves "
+            "the base the exclusion patterns above match against; `go:` above "
+            "the go.mod version retires the diagnostics gated on it. Check "
+            "yours against those shapes, then add it to _VETTED_RUN_KEYS.")
+
+        formatters = cfg.get("formatters") or {}
+        assert formatters.get("enable"), (
+            f"{module}/.golangci.yml enables no formatter. v2 moved gofmt out "
+            "of `linters`, so a config holding only `linters:` runs over a "
+            "mis-formatted tree and exits 0. Asserted non-empty rather than "
+            "pinned to `gofmt`: swapping in a stricter formatter is not a "
+            "regression, and pinning would report one.")
+
+        # ⛔ ONE set, not one per section: `linters.exclusions.paths` filters
+        # formatter findings too, so a config splitting the corpus between the
+        # two sections silences the formatter while each section on its own
+        # looks narrow. Measured: `run ./...` rc=1 -> `0 issues.`.
+        silencing = [
+            str(p)
+            for section in ("formatters", "linters")
+            for p in ((cfg.get(section) or {}).get("exclusions") or {}).get("paths") or []
+        ]
+        assert not _excludes_every_go_file(silencing, rel), (
+            f"{module}/.golangci.yml has `exclusions.paths` (formatters and "
+            f"linters combined: {silencing}) matching all {len(rel)} of its "
+            ".go files, so NO file in this module is format-checked any more. "
+            "Other linters may still report — this says the formatter cannot. "
+            "Narrow the patterns or drop them; reformatting the files cannot "
+            "clear it, because the exclusion is what silences them.")
+
+        # ⛔ DECLARED GAP — judging a rule by its `path` alone is the wrong
+        # dimension, in both directions, and this change does not fix it
+        # (#1821 carries the measurements). A rule silences only the linters it
+        # names — including a formatter, if named — so `path` on its own
+        # neither proves nor disproves that the module can still report.
+        # Nothing in the tree trips either direction today.
+        for rule in (linters.get("exclusions") or {}).get("rules") or []:
             pattern = rule.get("path")
             assert not _excludes_every_go_file(
-                None if pattern is None else str(pattern), own), (
+                [None if pattern is None else str(pattern)], rel), (
                 f"{module}/.golangci.yml has an exclusion matching all "
-                f"{len(own)} of its .go files (`path: {pattern}`). In a module "
+                f"{len(rel)} of its .go files (`path: {pattern}`). In a module "
                 "that is entirely tests, `_test\\.go` is exactly this. Narrow "
                 "it, or drop the linter deliberately.")
 

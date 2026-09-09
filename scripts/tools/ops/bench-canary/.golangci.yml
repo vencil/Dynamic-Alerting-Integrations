@@ -7,6 +7,13 @@ linters:
   enable:
     - godoclint
 
+# ⛔ v2 moved gofmt OUT of `linters` into this section; with only `linters:` a
+# mis-formatted tree still exits 0. tests/ops/test_go_lint_module_coverage.py
+# asserts this section stays able to report.
+formatters:
+  enable:
+    - gofmt
+
 # Both default to truncating; 0 = report everything.
 issues:
   max-issues-per-linter: 0
