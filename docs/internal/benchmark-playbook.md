@@ -571,7 +571,7 @@ func silenceLogs(b *testing.B) {
 }
 ```
 
-`silenceLogs(b)` 要放在 setup `fullDirLoad()` **之前**（不只是 `b.ResetTimer()` 前），否則每次 benchmark invocation 的 setup phase 仍會產生 log。`b.Cleanup()` 確保 benchmark 結束後恢復正常 log 輸出。Wrapper + silenceLogs 雙層防禦：即使新 benchmark 作者忘了加 silenceLogs，wrapper 的 -json 分流也能把污染隔離到 `bench.err.log`。
+`silenceLogs(b)` 要放在 setup `fullDirLoad()` **之前**（不只是 `b.ResetTimer()` 前），否則每次 benchmark invocation 的 setup phase 仍會產生 log。`b.Cleanup()` 確保 benchmark 結束後恢復正常 log 輸出。Wrapper + silenceLogs 雙層防禦：即使新 benchmark 作者忘了加 silenceLogs，`bench_filter.go` 也會把 log 事件擋在 `bench.out.txt` 之外。⚠️ **原文寫「wrapper 的 -json 分流也能把污染隔離到 `bench.err.log`」是假的**，與上面 §「`-json` 並不是把 stdout/stderr 分流」自相矛盾（同一份檔案相隔 25 行），已更正：實測 go1.24.7，`log.Println` 與直接寫 `os.Stderr` 兩者的輸出**都**進 `bench.raw.jsonl`（各自成為 `{"Action":"output"}` event），`bench.err.log` 是 **0 bytes**、`bench.out.txt` 0 筆。⇒ 防護是**篩選**不是分流；要看那些 log 請讀 `bench.raw.jsonl`。
 
 ### 連續多輪 benchmark port-forward 不穩定 (v2.0.0-preview.4)
 
