@@ -265,7 +265,6 @@ da-tools diagnose <tenant> [options]
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--config-dir <PATH>` | Tenant config directory (to query profile info) | `./conf.d` |
-| `--namespace <NS>` | K8s namespace (to query ConfigMap) | `monitoring` |
 
 **Output**
 
@@ -661,8 +660,6 @@ da-tools maintenance-scheduler --config-dir <path> [options]
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--output <FILE>` | Output to YAML file | stdout |
-| `--timezone <TZ>` | Timezone (IANA format) | `UTC` |
 | `--dry-run` | Only show silences to generate, don't write | false |
 
 **Output**
@@ -1898,8 +1895,6 @@ Choose one mode:
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--namespace <NS>` | K8s namespace | `monitoring` |
-| `--configmap <CM>` | ConfigMap name | `threshold-config` |
 | `--dry-run` | Show changes without applying | false |
 | `--yes` | Skip confirmation prompt | false |
 
@@ -2203,7 +2198,6 @@ docker run --rm \
 |--------|-------------|---------|
 | `--config-dir <PATH>` | Tenant config directory. ⚠️ The default points at a repo-internal path that does not exist in the image — pass it explicitly | `components/threshold-exporter/config/conf.d` |
 | `--execute` | **Actually perform the change** (default is pre-check / preview only, nothing is written) | false |
-| `--backup <DIR>` | Backup directory | `./offboarded/` |
 | `--cleanup-rules` | Remove associated Alert rules | false |
 | `--dry-run` | Preview items to delete | false |
 

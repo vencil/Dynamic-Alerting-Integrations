@@ -115,8 +115,8 @@ Validate new rules:
 
 ```bash
 python3 scripts/tools/ops/lint_custom_rules.py \
-  --rule-pack rule-packs/mariadb.yaml \
-  --check
+  rule-packs/mariadb.yaml \
+  --ci
 ```
 
 ### Creating New Rule Pack (New Database Type)
@@ -205,21 +205,19 @@ annotations:
 ```bash
 # 1. Reverse-analyze existing configuration
 python3 scripts/tools/ops/onboard_platform.py \
-  --existing-prometheus-rules /path/to/rules.yaml \
-  --output-hints onboard-hints.json
+  --rule-files '/path/to/rules/*.yml' \
+  --output-dir onboard_output/
 
 # 2. Migrate rules (AST + Triage + Prefix + Dictionary)
 python3 scripts/tools/ops/migrate_rule.py \
-  --input-rule alert.yml \
-  --output-rule-pack rule-packs/my-db.yaml \
-  --tenant-prefix "my-tenant"
+  alert.yml \
+  --output-dir migration_output/
 
 # 3. Validate migration (Shadow Monitoring value diff)
 # ⚠️ Use HTTPS in production; HTTP shown here for local dev only
 python3 scripts/tools/ops/validate_migration.py \
-  --old-prometheus-url "https://old-prometheus:9090" \
-  --new-prometheus-url "https://new-prometheus:9090" \
-  --compare-range "7d"
+  --mapping migration_output/prefix-mapping.yaml \
+  --prometheus "https://prometheus:9090"
 ```
 
 ### Testing Rule Pack Changes
@@ -228,10 +226,11 @@ Backtest in CI environment:
 
 ```bash
 python3 scripts/tools/ops/backtest_threshold.py \
-  --rule-pack rule-packs/mariadb.yaml \
   --tenant my-tenant \
-  --look-back "7d" \
-  --comparison-metric mysql_connections
+  --metric mysql_connections \
+  --old-value 80 \
+  --new-value 100 \
+  --lookback 7d
 ```
 
 Output: Shows how many times new thresholds would fire over past 7 days compared to existing thresholds.
@@ -242,16 +241,16 @@ Output: Shows how many times new thresholds would fire over past 7 days compared
 
 ```bash
 python3 scripts/tools/ops/lint_custom_rules.py \
-  --config-dir conf.d/ \
-  --deny-list "disable=.*production.*" \
-  --naming-convention "^[A-Z][a-zA-Z0-9_]+$"
+  rule-packs/custom/ \
+  --policy .github/custom-rule-policy.yaml \
+  --ci
 ```
 
-Checked items:
-- Naming conventions (avoid lowercase rule names)
-- Deny-list (prohibit specific patterns)
-- Schema conformance (required labels, annotations)
-- Dimension cardinality (prevent explosion)
+Checked items (tunable via the policy file; defaults are built into the tool):
+- Deny-list: expensive PromQL functions, dangerous regex patterns
+- Required labels (tenant)
+- Range vector length and evaluation interval limits
+- Syntax that breaks tenant isolation
 
 ### Three-Layer Governance Model
 

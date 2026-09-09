@@ -115,8 +115,8 @@ alert_rules:
 
 ```bash
 python3 scripts/tools/ops/lint_custom_rules.py \
-  --rule-pack rule-packs/mariadb.yaml \
-  --check
+  rule-packs/mariadb.yaml \
+  --ci
 ```
 
 ### 創建新 Rule Pack（新資料庫類型）
@@ -205,21 +205,19 @@ annotations:
 ```bash
 # 1. 反向分析現有配置
 python3 scripts/tools/ops/onboard_platform.py \
-  --existing-prometheus-rules /path/to/rules.yaml \
-  --output-hints onboard-hints.json
+  --rule-files '/path/to/rules/*.yml' \
+  --output-dir onboard_output/
 
 # 2. 遷移規則（AST + Triage + Prefix + Dictionary）
 python3 scripts/tools/ops/migrate_rule.py \
-  --input-rule alert.yml \
-  --output-rule-pack rule-packs/my-db.yaml \
-  --tenant-prefix "my-tenant"
+  alert.yml \
+  --output-dir migration_output/
 
 # 3. 驗證遷移（Shadow Monitoring 數值 diff）
 # ⚠️ 生產環境請使用 HTTPS，此處 HTTP 僅供本地開發示範
 python3 scripts/tools/ops/validate_migration.py \
-  --old-prometheus-url "https://old-prometheus:9090" \
-  --new-prometheus-url "https://new-prometheus:9090" \
-  --compare-range "7d"
+  --mapping migration_output/prefix-mapping.yaml \
+  --prometheus "https://prometheus:9090"
 ```
 
 ### 測試 Rule Pack 變更
@@ -228,10 +226,11 @@ python3 scripts/tools/ops/validate_migration.py \
 
 ```bash
 python3 scripts/tools/ops/backtest_threshold.py \
-  --rule-pack rule-packs/mariadb.yaml \
   --tenant my-tenant \
-  --look-back "7d" \
-  --comparison-metric mysql_connections
+  --metric mysql_connections \
+  --old-value 80 \
+  --new-value 100 \
+  --lookback 7d
 ```
 
 輸出：新閾值在過去 7 天內會觸發多少次告警，與現有閾值對比。
@@ -242,16 +241,16 @@ python3 scripts/tools/ops/backtest_threshold.py \
 
 ```bash
 python3 scripts/tools/ops/lint_custom_rules.py \
-  --config-dir conf.d/ \
-  --deny-list "disable=.*production.*" \
-  --naming-convention "^[A-Z][a-zA-Z0-9_]+$"
+  rule-packs/custom/ \
+  --policy .github/custom-rule-policy.yaml \
+  --ci
 ```
 
-檢查項目：
-- 命名慣例（避免小寫規則名稱）
-- Deny-list（禁止特定模式）
-- Schema 符合（required labels、annotations）
-- 維度基數（防止爆炸）
+檢查項目（policy 檔可調整，預設值內建於工具）：
+- Deny-list：高成本 PromQL 函式、危險的 regex pattern
+- 必要 label（tenant）
+- Range vector 長度與 evaluation interval 上限
+- 破壞 tenant 隔離的語法
 
 ### 三層治理模型
 

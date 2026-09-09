@@ -162,9 +162,10 @@ cp -r alertmanager.yml alertmanager.yml.bak
 
 # 1.2 掃描並分析現有配置
 python3 scripts/tools/ops/onboard_platform.py \
-  --legacy-config /path/to/old_rules/ \
+  --rule-files '/path/to/old_rules/*.yml' \
   --output migration_input/
-# 產出：onboard-hints.json（含規則映射提示、需手工調整的項目、預計遷移工作量）
+# 產出（目錄）：migration_input/phase2-rules/ 底下的 migration-plan.csv（規則映射與需手工調整的項目）
+#   與 _defaults-suggestion.yaml（建議的平台預設閾值）
 
 # 1.3 驗證環境就緒
 python3 scripts/tools/ops/validate_config.py \
@@ -177,15 +178,14 @@ python3 scripts/tools/ops/validate_config.py \
 ```bash
 # 2.1 執行規則轉換
 python3 scripts/tools/ops/migrate_rule.py \
-  --input migration_input/onboard-hints.json \
-  --tenant db-a,db-b \
-  --output migration_output/
-# 產出：
-#   - migration_output/custom_rules.yaml（新規則，帶 migration_status: shadow）
+  /path/to/old_rules/alerts.yml \
+  --output-dir migration_output/
+# 產出（目錄）：
+#   - migration_output/platform-alert-rules.yaml（新規則，帶 migration_status: shadow）
 #   - migration_output/prefix-mapping.yaml（old_query ↔ new_query 映射）
 
 # 2.2 部署新規則（shadow 狀態）
-kubectl apply -f migration_output/custom_rules.yaml
+kubectl apply -f migration_output/platform-alert-rules.yaml
 
 # 2.3 更新 Alertmanager，攔截 shadow alert
 kubectl patch configmap alertmanager-config -n monitoring \
@@ -269,18 +269,17 @@ for tenant in db-a db-b db-c; do
   sleep 60  # 每個 tenant 間隔 60 秒，避免 Prometheus reload 沖突
 done
 
-# 5.3 驗證全部切換成功
+# 5.3 驗證全部切換成功（post-cutover 多租戶健康報告）
 python3 scripts/tools/ops/batch_diagnose.py \
-  --prometheus http://localhost:9090 \
-  --check-shadow-removal
+  --prometheus http://localhost:9090
 ```
 
 ### 階段 6：清理（Day 15+）
 
 ```bash
-# 6.1 確認舊規則已完全移除（batch-diagnose 含 shadow-removal 檢查）
+# 6.1 清理前再跑一次 post-cutover 健康報告，確認全部 tenant 仍健康
 python3 scripts/tools/ops/batch_diagnose.py \
-  --prometheus http://localhost:9090 --check-shadow-removal
+  --prometheus http://localhost:9090
 
 # 6.2 清理遷移產物與備份
 rm -rf migration_input/ migration_output/ validation_output/

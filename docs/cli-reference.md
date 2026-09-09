@@ -266,7 +266,6 @@ da-tools diagnose <tenant> [options]
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
 | `--config-dir <PATH>` | 租戶配置目錄（用於查詢 profile 資訊） | `./conf.d` |
-| `--namespace <NS>` | K8s namespace（用於查詢 ConfigMap） | `monitoring` |
 
 **輸出**
 
@@ -586,8 +585,6 @@ da-tools maintenance-scheduler --config-dir <path> [options]
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--output <FILE>` | 輸出至 YAML 檔案 | stdout |
-| `--timezone <TZ>` | 時區（IANA 格式） | `UTC` |
 | `--dry-run` | 僅顯示要產出的 silence，不寫入 | false |
 
 **輸出**
@@ -1763,8 +1760,6 @@ da-tools patch-config [<tenant> <metric> <value> | --diff] [options]
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--namespace <NS>` | K8s namespace | `monitoring` |
-| `--configmap <CM>` | ConfigMap 名稱 | `threshold-config` |
 | `--dry-run` | 僅顯示將應用的變更，不實際更新 | false |
 | `--yes` | 跳過確認提示 | false |
 
@@ -1998,7 +1993,6 @@ da-tools offboard <tenant> [options]
 |------|------|--------|
 | `--config-dir <PATH>` | 租戶配置目錄。⚠️ 預設指向 repo 內部路徑，映像裡不存在——請明確指定 | `components/threshold-exporter/config/conf.d` |
 | `--execute` | **實際執行**（預設只做 Pre-check／預覽，不寫入） | false |
-| `--backup <DIR>` | 備份目錄 | `./offboarded/` |
 | `--cleanup-rules` | 移除相關 Alert 規則 | false |
 | `--dry-run` | 預覽將刪除的項目 | false |
 

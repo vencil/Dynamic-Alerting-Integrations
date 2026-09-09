@@ -167,9 +167,10 @@ cp -r alertmanager.yml alertmanager.yml.bak
 
 # 1.2 Scan and analyze current config
 python3 scripts/tools/ops/onboard_platform.py \
-  --legacy-config /path/to/old_rules/ \
+  --rule-files '/path/to/old_rules/*.yml' \
   --output migration_input/
-# Output: onboard-hints.json (rule mapping hints, manual adjustments needed, estimated effort)
+# Output (directory): migration_input/phase2-rules/ containing migration-plan.csv (rule mapping and items needing manual adjustment)
+#   and _defaults-suggestion.yaml (suggested platform default thresholds)
 
 # 1.3 Verify environment readiness
 python3 scripts/tools/ops/validate_config.py \
@@ -182,15 +183,14 @@ python3 scripts/tools/ops/validate_config.py \
 ```bash
 # 2.1 Execute rule transformation
 python3 scripts/tools/ops/migrate_rule.py \
-  --input migration_input/onboard-hints.json \
-  --tenant db-a,db-b \
-  --output migration_output/
-# Output:
-#   - migration_output/custom_rules.yaml (new rules with migration_status: shadow)
+  /path/to/old_rules/alerts.yml \
+  --output-dir migration_output/
+# Output (directory):
+#   - migration_output/platform-alert-rules.yaml (new rules with migration_status: shadow)
 #   - migration_output/prefix-mapping.yaml (old_query ↔ new_query mapping)
 
 # 2.2 Deploy new rules (shadow state)
-kubectl apply -f migration_output/custom_rules.yaml
+kubectl apply -f migration_output/platform-alert-rules.yaml
 
 # 2.3 Update Alertmanager to intercept shadow alerts
 kubectl patch configmap alertmanager-config -n monitoring \
@@ -274,18 +274,17 @@ for tenant in db-a db-b db-c; do
   sleep 60  # 60-second interval between tenants to avoid Prometheus reload conflicts
 done
 
-# 5.3 Verify all cutovers succeeded
+# 5.3 Verify all cutovers succeeded (post-cutover multi-tenant health report)
 python3 scripts/tools/ops/batch_diagnose.py \
-  --prometheus http://localhost:9090 \
-  --check-shadow-removal
+  --prometheus http://localhost:9090
 ```
 
 ### Phase 6: Cleanup (Day 15+)
 
 ```bash
-# 6.1 Verify old rules completely removed (batch-diagnose includes shadow-removal check)
+# 6.1 Run the post-cutover health report once more before cleanup to confirm every tenant is still healthy
 python3 scripts/tools/ops/batch_diagnose.py \
-  --prometheus http://localhost:9090 --check-shadow-removal
+  --prometheus http://localhost:9090
 
 # 6.2 Clean up migration artifacts and backups
 rm -rf migration_input/ migration_output/ validation_output/

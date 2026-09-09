@@ -584,7 +584,7 @@ Rehearsal 內容：
 | 單個 tenant PR revert + git-sync apply | < 5s | < 5s | git-sync polling 5s + scan_dir ≈ 51-273ms |
 | 單個 `_defaults.yaml` revert（region 級）→ 21t affected @ 1000 / 105t @ 5000 | < 600ms reload | < 1.5s reload | BlastRadius bench 266ms / 1308ms |
 | 整波退版（Base PR + 10 tenant PR + 2 cascading defaults）| < 90s | < 4 min | git-sync poll × N + reload × N |
-| `merged_hash` 收斂驗證 | < 30s | < 2 min | `da-tools tenant verify --all` |
+| `merged_hash` 收斂驗證 | < 30s | < 2 min | `da-tools tenant-verify --all` |
 
 **門檻**：實測超過上表 1.5 倍視為異常 → **暫停退版**，先讀 `da_config_reload_duration_seconds` p99 與 `da_config_blast_radius_tenants_affected{effect="applied"}` 看是否落在預期分佈，異常找 maintainer 介入。
 
