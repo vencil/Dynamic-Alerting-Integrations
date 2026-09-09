@@ -657,6 +657,17 @@ repos:
         # scan runs only in CI to avoid blocking commits on pre-existing drift.
         always_run: true
 
+      - id: trk-index-coverage
+        name: TRK index coverage (referenced TRK must be in planning SSOT)
+        entry: python3 -X utf8 scripts/tools/lint/check_trk_index_coverage.py --ci
+        language: python
+        pass_filenames: false
+        # ⚠️ 預設只掃 commit 面（離線、快）。issue/PR 標題面要 GH_TOKEN，
+        # 用 --surface all 手動或在 CI 跑 —— 實測 TRK-363 / 366 只活在標題，
+        # 兩個面不可互相取代。⛔ shallow clone 下 commit 面只看得到一部分，
+        # 報告會標 PARTIAL：「沒找到」不等於「沒有」。
+        always_run: true
+
       - id: routing-profiles-check
         name: Routing profiles & domain policies lint
         entry: python3 -X utf8 scripts/tools/lint/check_routing_profiles.py --config-dir components/threshold-exporter/config/conf.d

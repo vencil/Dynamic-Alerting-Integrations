@@ -829,7 +829,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "1406eeb83aaf2a73c85980edcee7f4bd50d9b550e3e5300759823eb86b0024fe",
+ "source_digest": "bc51659bbffd14fd43521c9e2825f9e33dd00dfd60c8375125bd58056b834660",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -993,6 +993,7 @@
   "tests/lint/test_check_threshold_registry.py",
   "tests/lint/test_check_threshold_unit_sanity.py",
   "tests/lint/test_check_translation.py",
+  "tests/lint/test_check_trk_index_coverage.py",
   "tests/lint/test_check_undefined_tokens.py",
   "tests/lint/test_check_unpinned_deps.py",
   "tests/lint/test_check_vmalert_coverage.py",
@@ -1777,6 +1778,9 @@
   ],
   "docs/internal/log-visibility-2tier-catalogue.md": [
    "tests/dx/test_log_visibility_catalogue.py"
+  ],
+  "docs/internal/planning-id-mapping.md": [
+   "tests/lint/test_check_trk_index_coverage.py"
   ],
   "docs/internal/planning-index.md": [
    "tests/dx/test_generate_planning_index.py"
@@ -2747,6 +2751,9 @@
   ],
   "scripts/tools/lint/check_threshold_registry.py": [
    "tests/lint/test_check_threshold_registry.py"
+  ],
+  "scripts/tools/lint/check_trk_index_coverage.py": [
+   "tests/lint/test_check_trk_index_coverage.py"
   ],
   "scripts/tools/lint/check_vmalert_coverage.py": [
    "tests/rulepacks/test_platform_rules_extract_sync.py"
