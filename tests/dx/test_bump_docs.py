@@ -3452,6 +3452,23 @@ class TestDatoolsPinCapability:
         monkeypatch.setattr(bump_docs, "parse_command_map_keys", _boom)
         assert bump_docs._check_datools_pin_capability("9.9.9") == 1
 
+    @pytest.mark.parametrize("exc", [RuntimeError("corpus lost a file"),
+                                     OSError("docs tree unreadable")])
+    def test_broken_corpus_fails_the_bump(self, monkeypatch, capsys, exc):
+        """A corpus that cannot be assembled must fail, never report clean.
+
+        `pin_capability_doc_files` raises when `docs/` yields nothing or an
+        `_EXTRA_DOC_FILES` entry was renamed. If this call site swallowed that,
+        the release would print no findings and proceed — the exact
+        "scanned nothing, looked green" shape the check exists to prevent.
+        """
+        def _boom(*a, **kw):
+            raise exc
+
+        monkeypatch.setattr(bump_docs, "pin_capability_doc_files", _boom)
+        assert bump_docs._check_datools_pin_capability("9.9.9") == 1
+        assert "corpus" in capsys.readouterr().err
+
     def test_findings_are_counted_not_just_printed(self, monkeypatch):
         """The return value is what main() adds to its failure tally."""
         import check_doc_datools_cmds as gate

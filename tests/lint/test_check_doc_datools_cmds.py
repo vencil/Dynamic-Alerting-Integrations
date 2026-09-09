@@ -1016,3 +1016,93 @@ class TestPinnedInvocationCapability:
         assert from_helper - gate_docs == {
             REPO_ROOT / rel for rel in mod._EXTRA_DOC_FILES
             if (REPO_ROOT / rel).is_file()}
+
+
+class TestPinnedInvocationPrecision:
+    """#1534 round 2 — the false-positive and fail-open classes an adversarial
+    review found after the first cut.
+
+    Every case here is a doc that is ALREADY CORRECT. For a release gate a
+    false red is the expensive direction: it blocks a good release and the only
+    escape is editing a customer-facing file to add a lint pragma.
+    """
+
+    CAPS = {"validate", "cutover"}
+
+    def _issues(self, tmp_path, cmd):
+        return mod.check_pinned_subcommands_against(
+            self.CAPS, [_doc(tmp_path, _FENCE.format(cmd))], tmp_path)
+
+    @pytest.mark.parametrize("cmd", [
+        "docker run ghcr.io/vencil/da-tools:v2.9.0 validate; echo done",
+        "OUT=$(docker run ghcr.io/vencil/da-tools:v2.9.0 validate)",
+        'docker run ghcr.io/vencil/da-tools:v2.9.0 "validate"',
+        "docker run ghcr.io/vencil/da-tools:v2.9.0 validate|jq .",
+        "docker run ghcr.io/vencil/da-tools:v2.9.0 validate | jq .",
+        "docker run ghcr.io/vencil/da-tools:v2.9.0 validate && echo ok",
+    ])
+    def test_shell_punctuation_does_not_make_a_valid_command_unknown(
+            self, tmp_path, cmd):
+        """⚠️ `validate|jq` ends in `q` — rstrip cannot fix it, only a split."""
+        assert self._issues(tmp_path, cmd) == [], cmd
+
+    def test_punctuation_does_not_hide_a_real_finding(self, tmp_path):
+        """The counterpart: cleaning the token must not swallow the defect."""
+        assert len(self._issues(
+            tmp_path,
+            "docker run ghcr.io/vencil/da-tools:v2.9.0 frobnicate; echo x")) == 1
+
+    def test_entrypoint_override_is_not_graded(self, tmp_path):
+        """After `--entrypoint`, the operands are that program's argv."""
+        assert self._issues(
+            tmp_path,
+            "docker run --rm --entrypoint /bin/sh "
+            "ghcr.io/vencil/da-tools:v2.9.0 -c 'ls /opt/da-tools'") == []
+
+    def test_tag_without_v_prefix_is_still_checked(self, tmp_path):
+        """bump_docs rewrites `da-tools:v?<semver>`; the check must match both.
+
+        Requiring the `v` left `:2.9.0` repointed by every release yet invisible
+        here — a pin that is bumped but never verified.
+        """
+        assert len(self._issues(
+            tmp_path,
+            "docker run ghcr.io/vencil/da-tools:2.9.0 frobnicate")) == 1
+
+
+class TestPinCapabilityCorpusFailsClosed:
+    """The corpus must never shrink silently — a smaller corpus reads as clean.
+
+    ⛔ Neither `components/da-tools/app/QUICKSTART.md` nor `try-local/README.md`
+    is a bump-rule target, so if one is renamed nothing else in the release path
+    notices. `run()` already reports that case; this corpus builder used to drop
+    it with an `if …is_file()` filter, which is the fail-open half.
+    """
+
+    def _tree(self, tmp_path):
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "docs" / "a.md").write_text("x\n", encoding="utf-8")
+        for rel in mod._EXTRA_DOC_FILES:
+            p = tmp_path / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text("x\n", encoding="utf-8")
+        return tmp_path
+
+    def test_complete_tree_is_accepted(self, tmp_path):
+        root = self._tree(tmp_path)
+        got = mod.pin_capability_doc_files(root)
+        assert len(got) == 1 + len(mod._EXTRA_DOC_FILES)
+
+    def test_a_renamed_landing_page_raises(self, tmp_path):
+        root = self._tree(tmp_path)
+        victim = root / mod._EXTRA_DOC_FILES[0]
+        victim.rename(victim.with_name("renamed.md"))
+        with pytest.raises(RuntimeError, match="_EXTRA_DOC_FILES"):
+            mod.pin_capability_doc_files(root)
+
+    def test_empty_docs_tree_raises(self, tmp_path):
+        """#1790's shape: 'scanned nothing' must not print as 'all clean'."""
+        root = self._tree(tmp_path)
+        (root / "docs" / "a.md").unlink()
+        with pytest.raises(RuntimeError, match="no markdown"):
+            mod.pin_capability_doc_files(root)
