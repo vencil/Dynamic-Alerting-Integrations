@@ -404,6 +404,29 @@ class TestExplicitPathsAreNormalisedBeforeTheRootTest:
         assert lint.main(["--ci", "components/linkex"]) == 0
         assert lint.main(["--ci", "components/linkex/e.go"]) == 0
 
+    def test_a_symlink_and_its_target_are_one_file_at_every_entry(
+            self, tmp_path, monkeypatch, capsys):
+        """`components/svc/link.go -> ../real/cfg.go`: both are production
+        locations, but they are one file — one finding, at the default scan,
+        at `components/`, and when both are named."""
+        root = tmp_path / "real" / "repo"
+        real = root / "components" / "real" / "cfg.go"
+        real.parent.mkdir(parents=True)
+        real.write_text(_DIRTY_GO, encoding="utf-8")
+        link = root / "components" / "svc" / "link.go"
+        link.parent.mkdir()
+        try:
+            link.symlink_to(Path("..") / "real" / "cfg.go")
+        except (OSError, NotImplementedError):
+            pytest.skip("symlinks unavailable here")
+        monkeypatch.setattr(lint, "PROJECT_ROOT", root)
+        for argv in (["--ci"], ["--ci", "components"],
+                     ["--ci", "components", "components/svc/link.go"]):
+            assert lint.main(argv) == 1
+            err = capsys.readouterr().err
+            assert "1 finding(s) in 1 file(s)" in err, argv
+            assert err.count("components/real/cfg.go:") == 1, argv
+
     @pytest.mark.parametrize("spelling", ["tests/..", "examples/..", "components/examples/.."])
     def test_a_dot_dot_leaf_that_walks_through_a_skip_name_still_scans(
             self, tmp_path, monkeypatch, spelling):

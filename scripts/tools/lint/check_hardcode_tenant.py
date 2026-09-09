@@ -70,9 +70,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _IGNORE_MARKER = "<!-- hardcode-tenant: ignore -->"
 _IGNORE_LOOKBACK_LINES = 3
 
-# Default scan roots (production code only — tests / fixtures excluded
-# at pre-commit `files:` regex layer; this list is for `--ci` runs
-# without explicit paths).
+# Default scan roots (production code only — tests / fixtures are
+# excluded in code by _is_excluded_path; this list is for runs without
+# explicit paths).
 _DEFAULT_SCAN_ROOTS = (
     "components",
     "cmd",
@@ -215,8 +215,11 @@ def _is_excluded_path(path: Path, *, root: Path | None = None) -> bool:
     hide the whole tree. Three shapes:
 
     - absolute and under ``root`` -> ``path.relative_to(root).parts``
-    - absolute and NOT under ``root`` -> filename rules only; a file the
-      caller named explicitly is the population, whatever its ancestors
+    - absolute and NOT under ``root`` -> filename rules only. This is a
+      file the caller named explicitly, or a symlink inside the tree whose
+      target lives outside the repo: either way it is the population,
+      whatever its ancestors (a ``testdata/`` symlink to an outside file
+      is therefore scanned, not skipped)
     - relative -> ``path.parts`` as given (already root-relative)
 
     Callers pass RESOLVED paths (see ``_resolve_target_paths``): the
@@ -260,7 +263,9 @@ def _resolve_target_paths(args: argparse.Namespace) -> list[Path]:
             elif candidate.is_dir():
                 for ext in _DEFAULT_SCAN_EXTS:
                     out.extend(f.resolve() for f in candidate.rglob(f"*{ext}"))
-        return [p for p in out if not _is_excluded_path(p, root=PROJECT_ROOT)]
+        # Same shape as the default scan: resolved, deduplicated, sorted —
+        # a symlink and its target are one file and get one finding.
+        return sorted(set(p for p in out if not _is_excluded_path(p, root=PROJECT_ROOT)))
 
     out = []
     for root in _DEFAULT_SCAN_ROOTS:
