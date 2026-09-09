@@ -139,10 +139,10 @@ func TestValidateProfileReference(t *testing.T) {
 func TestValidatePatchMap_ValidPassthrough(t *testing.T) {
 	t.Parallel()
 	patch := map[string]string{
-		"_silent_mode":     "warning",
-		"_timeout_ms":      "30000",
-		"max_connections":  "100", // non-reserved, no registry rule, passes through
-		"redis_memory":     "disable",
+		"_silent_mode":    "warning",
+		"_timeout_ms":     "30000",
+		"max_connections": "100", // non-reserved, no registry rule, passes through
+		"redis_memory":    "disable",
 	}
 	if v := validatePatchMap(patch, "operations[0].patch"); len(v) != 0 {
 		t.Errorf("expected no violations, got %d: %+v", len(v), v)
@@ -171,9 +171,9 @@ func TestValidatePatchMap_MultipleViolations_AllReported(t *testing.T) {
 	// Per #134 spec: report ALL violations, not first-only — matches
 	// PR-2 forbidden-member listing UX (one round-trip to fix everything).
 	patch := map[string]string{
-		"_silent_mode":     "purple-elephant",          // bad enum
-		"_timeout_ms":      "99999999999",              // exceeds 1h cap
-		"_routing_profile": strings.Repeat("p", 257),    // exceeds 256 chars
+		"_silent_mode":     "purple-elephant",        // bad enum
+		"_timeout_ms":      "99999999999",            // exceeds 1h cap
+		"_routing_profile": strings.Repeat("p", 257), // exceeds 256 chars
 	}
 	v := validatePatchMap(patch, "operations[0].patch")
 	if len(v) != 3 {

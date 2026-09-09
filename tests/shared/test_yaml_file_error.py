@@ -516,14 +516,15 @@ def test_backtest_baseline_side_is_wrapped_too(fx, monkeypatch, capsys):
 
 
 def test_deprecate_rule_names_and_continues(fx):
-    """Class (ii): its own wrapper already turned a broken file into a named
-    warning and went on (that is the deprecation workflow's documented
-    choice); the decode failure now takes that path instead of a traceback.
-    rc stays 0 — a NAMED skip, which is what #1654 asked for; not silent."""
+    """Class (ii): the decode failure is a NAMED finding, not a traceback. The
+    tool keeps going, but an unreadable tenant file withholds the completion
+    claim (#1787): rc 1 (EXIT_VIOLATION), the file named in the 下架未完成
+    summary."""
     p = _run(OPS / "deprecate_rule.py", ["cpu_usage", "--config-dir", str(fx["confd_bad"])])
-    assert p.returncode == EXIT_OK, p.stderr[-500:]
+    assert p.returncode == EXIT_VIOLATION, p.stderr[-500:]
     assert "Traceback" not in p.stderr
     assert "alpha.yaml" in p.stdout and "無法讀取" in p.stdout, p.stdout[-500:]
+    assert "下架未完成" in p.stdout, p.stdout[-500:]
 
 
 def test_validate_config_unchanged_rc_1_named(fx):

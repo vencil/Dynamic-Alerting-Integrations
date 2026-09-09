@@ -51,6 +51,10 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 # import is one refactor away from disappearing and the failure it prevents
 # (a `--help` crash on a cp950 console) shows up only on a legacy host.
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402  (#1789)
+from _lib_io import (  # noqa: E402  (#1789)
+    OutputWriteError, output_write, safe_label,
+)
 
 # ⛔ Import, do not restate. See the module docstring: a copied regex is the
 # one way this design can silently start counting a different thing.
@@ -73,6 +77,32 @@ def count_rows(text: str) -> int:
 def render_marker(rows: int) -> str:
     """Render the marker body. Key order is stable so the file diffs cleanly."""
     return f"schema: {MARKER_SCHEMA}\nrows: {rows}\n"
+
+
+def write_marker(out: Path, rows: int) -> None:
+    """Create `out`'s parent and write the marker there. Raises OutputWriteError.
+
+    ⛔ A separate function ON PURPOSE (#1789), not inlined into ``main``'s
+    ``try``. Both sinks have to sit inside ``with output_write(...)``, and
+    that ``with`` has to sit inside the ``try`` that turns the failure into
+    the annotation below — at which point the static pin
+    (``tests/shared/test_output_write_sites_stay_guarded.py``) reads them as
+    guarded by the ``try`` whether or not the ``with`` is still there, and
+    deleting the wrapper leaves it green. Moving the sinks behind a ``def``
+    puts the wrapper back in sole charge of them: the pin stops at a ``def``
+    boundary when it walks outwards, so the ``try`` in ``main`` no longer
+    covers for a deleted ``with``. (Verified both ways.)
+    """
+    # #1789 F6: the mkdir is its OWN block, on the PARENT, with the verb that
+    # matches what it does. In one shared block a blocked parent printed
+    # "cannot write <marker>" — the wrong verb about the wrong path.
+    with output_write(out.parent, flag="--out", action="create directory"):
+        out.parent.mkdir(parents=True, exist_ok=True)
+    with output_write(out, flag="--out"):
+        # newline="\n": the marker is compared byte-for-byte against what the
+        # consumer re-derives, and `.gitattributes` pins `* text=auto eol=lf`.
+        # An unpinned write emits CRLF on a Windows host and LF in CI.
+        out.write_text(render_marker(rows), encoding="utf-8", newline="\n")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -112,19 +142,37 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     try:
-        args.out.parent.mkdir(parents=True, exist_ok=True)
-        # newline="\n": the marker is compared byte-for-byte against what the
-        # consumer re-derives, and `.gitattributes` pins `* text=auto eol=lf`.
-        # An unpinned write emits CRLF on a Windows host and LF in CI.
-        args.out.write_text(render_marker(rows), encoding="utf-8", newline="\n")
-    except OSError as exc:
+        write_marker(args.out, rows)
+    except OutputWriteError as exc:
         # `--out` naming an existing directory used to raise a raw
         # IsADirectoryError traceback. It already failed safe (non-zero, no
         # marker written), but a stack trace in the nightly's log reads like the
         # benchmark crashed rather than like a mis-set path.
-        print(f"::error::cannot write the marker to {args.out} ({exc})",
-              file=sys.stderr)
-        return 1
+        #
+        # ⛔ Deliberately NOT `exit_on_output_write_error` / `_die_on_write_error`
+        # (#1789), and this is the one site in the batch that departs from them.
+        # The nightly reads this job's log through GitHub's `::error::`
+        # annotation syntax; the shared helper emits a bare `ERROR: …` line,
+        # which the annotation parser does not see. So the SHARED MESSAGE is
+        # reused verbatim — same `cannot <action> <path>: … — check the value
+        # given to <flag>` text, same `safe_label` escaping, same
+        # EXIT_CALLER_ERROR — and the `::error::` annotation is put in front of
+        # it IN PLACE OF the shared `ERROR: ` head, not on top of it (writing
+        # both would print the word ERROR twice).
+        # `tests/dx/test_write_baseline_marker.py` pins the annotation and the
+        # row in `tests/shared/test_output_path_write_failure.py` declares it
+        # as this tool's head, so neither half can be dropped silently.
+        #
+        # ⚠️ Only the WRITE moved to rc=2. The three input refusals above
+        # (`--baseline` missing / unreadable / no parseable rows) still return
+        # 1: they are "this baseline is not vouchable", not "your output path
+        # is wrong", and the exit-code SSOT classifies them differently.
+        # ⛔ Not "the nightly distinguishes them": `bench-record.yaml` calls
+        # this bare under `set -euo pipefail`, so 1 and 2 both just fail the
+        # step. The split is for the operator reading the log and for any
+        # future consumer, not for a caller that reads it today.
+        print(f"::error::{safe_label(str(exc))}", file=sys.stderr)
+        return EXIT_CALLER_ERROR
     print(f"baseline rows: {rows} (marker: {args.out})")
     return 0
 

@@ -167,7 +167,7 @@ da-tools <command> --help
 | `migrate` | 傳統規則 → 動態格式轉換（AST 引擎） | `<input_file>` |
 | `validate-config` | 一站式配置驗證（YAML + schema + routes + policy） | `--config-dir <dir>` |
 | `offboard` | 下架 tenant 配置 | `<tenant>` |
-| `deprecate` | 標記指標為 disabled | `<metric_keys...>` |
+| `deprecate` | 下架指標：從 `defaults:`／`optional_overrides:`／租戶檔刪除其 key | `<metric_keys...>` |
 | `lint` | 檢查 Custom Rule 治理合規性 | `<path...>` |
 | `onboard` | 分析既有 Alertmanager/Prometheus 配置進行遷移 | `<config_file>` 或 `--alertmanager-config <file>` |
 | `analyze-gaps` | Custom Rule 對應 Rule Pack 缺口分析 | `--tenant-config <path>` |
@@ -392,9 +392,9 @@ da-tools baseline --tenant db-a --duration 1800 --interval 30 -o /tmp/baseline_o
 
 | 代碼 | 說明 |
 |------|------|
-| `0` | 成功 |
-| `1` | 未捕捉例外（traceback）——實測 `-o/--output-dir` 的父路徑是檔案時是這一格（本工具用 raw `os.makedirs`，尚未走 #1641 的 `_or_die` 收口；#1789 收口後這一格會變 2）。⚠️ Prometheus 連線或查詢失敗**不是** 1——失敗的採樣記為空值、報告與 CSV 照出、rc 0 |
-| `2` | 呼叫端錯誤：`--metrics` 列出的指標沒有一個是工具認得的（錯誤訊息會列出可用清單）、缺必需的 `--tenant`，或 argparse 拒絕的參數 |
+| `0` | 成功。⚠️ Prometheus 連線或查詢失敗**不是**錯誤——失敗的採樣記為空值、報告與 CSV 照出，仍是這一格 |
+| `1` | 只有未捕捉例外（traceback）會回 1——本命令沒有 violation 出口；實測 `--interval 0`（`duration // interval` 的 `ZeroDivisionError`）是這一格。⛔ 輸出路徑寫不進去自 #1789 起是 `2`，不再落在這裡 |
+| `2` | 呼叫端錯誤：`--metrics` 列出的指標沒有一個是工具認得的（錯誤訊息會列出可用清單）、缺必需的 `--tenant`、argparse 拒絕的參數，或 `-o/--output-dir` 寫不進去（實測：父路徑是檔案、目錄下要建的 CSV 已是目錄）——一行 `ERROR: cannot …` 指名 `-o/--output-dir`，不再是 traceback（#1789） |
 
 ---
 
@@ -871,8 +871,8 @@ da-tools fed-key --rotate --existing-jwks federation-jwks.json \
 | 代碼 | 說明 |
 |------|------|
 | `0` | 金鑰已產生 |
-| `1` | 未捕捉例外（traceback）——實測 `--jwks-out` 的目錄不存在時是這一格 |
-| `2` | 呼叫端錯誤：`openssl` 不在 PATH、逾時或失敗；`--existing-jwks` 讀不到、不是 JWKS 文件（沒有 `keys` 陣列）或已含同一個 kid；`--rotate` 沒帶 `--existing-jwks`、`--key-bits` < 2048；stdout 是終端機（拒絕把私鑰 Secret 印到 tty，請接 `\| kubectl apply -f -`） |
+| `1` | 只有未捕捉例外（traceback）會回 1——本命令沒有 violation 出口；實測 `--existing-jwks` 指到一份 JSON **陣列**（頂層不是物件）時是這一格。⛔ 輸出路徑寫不進去自 #1789 起是 `2`，不再落在這裡 |
+| `2` | 呼叫端錯誤：`--jwks-out` 寫不進去（實測：目錄不存在）——一行 `ERROR: cannot …` 指名 `--jwks-out`，不再是 traceback（#1789）；`openssl` 不在 PATH、逾時或失敗；`--existing-jwks` 讀不到、不是 JWKS 文件（沒有 `keys` 陣列）或已含同一個 kid；`--rotate` 沒帶 `--existing-jwks`、`--key-bits` < 2048；stdout 是終端機（拒絕把私鑰 Secret 印到 tty，請接 `\| kubectl apply -f -`） |
 
 ---
 
@@ -2027,7 +2027,7 @@ da-tools offboard db-old --config-dir ./conf.d --execute
 
 #### deprecate
 
-標記指標為 disabled，防止誤用。
+下架指標：從 `defaults:`／`optional_overrides:`／租戶檔移除 `<m>`、`<m>_critical`、`custom_<m>`、`custom_<m>_critical`；租戶平面另含這四個名字的維度鍵 `<名字>{…}`。
 
 **用途**：逐步淘汰舊指標；維護版本相容性。
 
@@ -2049,17 +2049,16 @@ da-tools deprecate <metric_keys...> [options]
 |------|------|--------|
 | `--config-dir <PATH>` | 租戶配置目錄。⚠️ 預設指向 repo 內部路徑，映像裡不存在——請明確指定 | `components/threshold-exporter/config/conf.d` |
 | `--execute` | **實際執行**（預設只做 Pre-check／預覽，不寫入） | false |
-| `--reason <TEXT>` | 棄用原因（註釋） | （無） |
-| `--dry-run` | 預覽變更 | false |
+| `--plane {root,subtree}` | 這個 `--config-dir` 是 conf.d 的 root，還是 exporter `-config-dir` 之下的一層子樹載體。`root` 對這一層所有 `_` 前綴檔做載體體檢（`defaults:` 的值 exporter 讀不讀得進去，依 yaml.v3 的判定）；`subtree` 跳過體檢（子樹平面的字串值合法且生效）。工具無法自己判斷，預設 fail-closed | `root` |
 
 **輸出**
 
-在 _defaults.yaml 中新增或更新 metric key 的 `enabled: false` 標記。
+從 `_defaults.yaml`／`.yml` 的 `defaults:` 與 `optional_overrides:`（宣告層，只有名字），以及平面目錄下非 `_` 前綴的租戶檔刪除上述 key，逐 key 印出原值；清空的 `defaults:`／`optional_overrides:` 整個拿掉；載體沒有相關 key 時具名略過、不寫入。**不是**把值寫成 `disable`：`defaults:` 是 `map[string]float64`，字串會讓 exporter 丟掉整份 root 載體（[#1787](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1787)）。載體體檢（見 `--plane`）發現 exporter 讀不進去的檔時整輪降級為預覽：不寫入、rc 1；本工具 pure parser 讀不了的 `_` 檔同樣整輪降級（訊息會標明 exporter 讀得進去）；`defaults:` 的空值只警告。本工具不遞迴寫入子目錄，但完成度重掃會往下看：子樹自有 `_defaults.yaml` 與租戶檔 `tenants:` 的殘留照印出的指引對該子樹跑 `--plane subtree`；root 層 `_` 前綴檔的 `tenants:`／`profiles:` 區塊本工具射程外，殘留需手動移除；exporter 不讀或丟棄的區塊只警告。⚠️ NOT GUARDED：寫回是整份重新序列化（header 以外的註解會被移除、YAML 1.1 拼法的純量會被改型）；exporter alias 表的 legacy 拼法與其餘區塊的值形狀不在體檢範圍（追蹤入口：#1822）。
 
 **範例**
 
 ```bash
-# 標記多個指標為 disabled
+# 下架多個指標
 docker run --rm \
   --user $(id -u):$(id -g) \
   -v $(pwd)/conf.d:/etc/config:rw \
@@ -2074,8 +2073,8 @@ docker run --rm \
 | 代碼 | 說明 |
 |------|------|
 | `0` | 成功 |
-| `1` | 下架未完成（掃描列出的 defaults 載體有未寫入者，逐一具名） |
-| `2` | 配置目錄無效 |
+| `1` | 下架未完成，原因逐一印在輸出裡。⚠️ 預覽模式對同一棵樹給同一個判斷 |
+| `2` | 配置目錄無效，或載體寫回失敗 |
 
 ---
 

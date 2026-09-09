@@ -725,15 +725,14 @@ def _gen_defaults_yaml(rule_packs: list[str], namespace: str) -> str:
     config['state_filters'] = state_filters
     config['_routing_defaults'] = routing_defaults
 
+    # No three-state ("Custom value / Omitted / Disable") block in this header:
+    # a root `defaults:` is `map[string]float64` (`ThresholdConfig` in
+    # `pkg/config/types.go`), so a `"disable"` string there makes
+    # `parsePartialConfig` drop the whole file (#1787). The tenant-side sentence
+    # lives in `_gen_tenant_yaml`, the file it is true of.
     header = textwrap.dedent("""\
     # _defaults.yaml — Platform global defaults
     # Managed by Platform Team. Tenant files should NOT contain this section.
-    #
-    # Three-state logic — for the keys under `defaults:` below, which are the
-    # only ones that HAVE a platform value to fall back to:
-    #   - Custom value:  metric_key: 42     → Override platform default
-    #   - Omitted:       (not in tenant YAML) → Use this default
-    #   - Disable:       metric_key: "disable" → Suppress metric entirely
     #
     # optional_overrides (if present): key NAMES only, no values. The platform
     # RECOGNISES these keys — a tenant may set them in its own file and they

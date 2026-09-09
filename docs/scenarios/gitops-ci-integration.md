@@ -480,13 +480,15 @@ python3 scripts/tools/ops/assemble_config_dir.py \
   --validate
 ```
 
-搭配 CI pipeline，各團隊只修改自己的 conf.d/，合併階段自動偵測衝突（如同一 tenant 出現在多個來源）。
+搭配 CI pipeline，各團隊只修改自己的 conf.d/，合併階段自動偵測衝突（如同一 tenant 出現在多個來源）。⛔ **偵測到就拒絕組裝**：同一個租戶 id 被兩個檔宣告時 exporter 會拒絕**整棵** config-dir，所以這一步非零退出、**不寫本輪的產物**，由你決定哪一個檔擁有那個租戶（[#1794](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1794)）。
+
+⚠️ **這支工具不會清空 `--output`。** 它只複製進去，所以在 CI 裡反覆寫同一個目錄時，上一輪的載體會留著——**exporter 也會讀它們**。後果有兩種：來源端下架的租戶不會從產物消失（工具會列出這些殘留並把它們算進租戶唯一性的判定，但仍然組裝並回 0）；而拒絕的那一輪雖然不寫新東西，上一輪那份**完整、可 apply 的產物仍在原地**。建議每輪先清空輸出目錄，或把它視為只增不減。
 
 ⛔ **這一節目前只有本專案的維護者做得到。** 與本頁其他命令不同，`assemble_config_dir.py`
 **沒有對應的 `da-tools` 子命令**，也沒有被打包進 `ghcr.io/vencil/da-tools` 映像——上面那行需要
 一份本專案的原始碼 checkout，而本頁開頭的「前置條件」並沒有要求你有。若你需要這個能力，請開一張
 issue；在那之前，可行的替代是在你自己的 CI 裡把各團隊的 `conf.d/` 複製到同一個目錄再跑
-`da-tools validate-config`（缺少的是衝突偵測那一半）。
+`da-tools validate-config`。⚠️ **失去的不是上面那個整棵樹的風險**：跨檔重複租戶 `validate-config` 照樣會報（實測 rc 1、`tenant_uniqueness` FAIL）。失去的是**同檔名跨來源**的偵測——而複製那一步會**靜默覆寫**其中一份，兩隊各給一份 `db-a.yaml` 時合併目錄只剩一個檔、`validate-config` 回 0。
 
 ## 7. 故障排查
 

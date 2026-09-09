@@ -9,6 +9,7 @@ import pytest
 import yaml
 
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_io import OutputWriteError  # noqa: E402  (#1789)
 from da_assembler import (  # noqa: E402
     _content_sha256,
     _output_filename,
@@ -310,6 +311,75 @@ class TestReconcileOne:
             reconcile_one(cr, Path(d), api=mock_api)
 
 
+    def test_cli_path_reraises_an_unusable_config_dir(self):
+        """#1789: `cli=True` is the CLI (`--render-cr`) path.
+
+        It used to log the OSError and let `render_cr_file` return EXIT_OK,
+        so `da-assembler --render-cr` exited 0 having written nothing. The
+        write-error class now leaves this function so `main`'s decorator can
+        turn it into rc=2 naming `--config-dir`.
+        """
+        cr = _make_cr(name="db-a")
+        with tempfile.TemporaryDirectory() as d:
+            blocker = Path(d) / "blocker"
+            blocker.write_text("not a directory\n", encoding="utf-8")
+            with pytest.raises(OutputWriteError) as exc:
+                reconcile_one(cr, blocker / "config-dir", cli=True)
+        assert exc.value.flag == "--config-dir"
+
+    def test_the_default_caller_is_the_controller_not_the_cli(self):
+        """`cli` defaults to False, so only an explicit `cli=True` re-raises.
+
+        A specific break that reddens this: put the re-raise back on
+        `api is None`.
+        """
+        cr = _make_cr(name="db-a")
+        with tempfile.TemporaryDirectory() as d:
+            blocker = Path(d) / "blocker"
+            blocker.write_text("not a directory\n", encoding="utf-8")
+            reconcile_one(cr, blocker / "config-dir")  # no api, no raise
+
+    def test_controller_path_still_only_logs_and_carries_on(self):
+        """The other half, pinned so the fix cannot spread to the controller.
+
+        In watch/once mode a reconcile is ONE item in a loop over every CR in
+        the cluster: an unwritable config-dir must land on that CR's status
+        and let the loop continue, or a single bad CR stops every other
+        tenant from being rendered. So with an `api`, the same failure must
+        NOT propagate — same behaviour as before #1789.
+        """
+        mock_api = mock.MagicMock()
+        cr = _make_cr(name="db-a")
+        with tempfile.TemporaryDirectory() as d:
+            blocker = Path(d) / "blocker"
+            blocker.write_text("not a directory\n", encoding="utf-8")
+            reconcile_one(cr, blocker / "config-dir", api=mock_api)  # no raise
+        mock_api.patch_namespaced_custom_object_status.assert_called_once()
+        status = mock_api.patch_namespaced_custom_object_status.call_args
+        assert "Error" in str(status)
+
+    def test_the_controller_under_dry_run_also_only_logs(self):
+        """⛔ The dry-run cell, which `api is None` got wrong.
+
+        `run_once` / `run_watch` pass `api=None` whenever `--dry-run` is set,
+        so keying the CLI branch off that inference put the CONTROLLER on it.
+        The shape that reaches a raise under `--dry-run`: `write_rendered`'s
+        idempotence read is wrapped and runs BEFORE the `if dry_run` early
+        return, so a rendered path that is itself a DIRECTORY raises EISDIR
+        even though the run would never have written anything. (A blocked
+        PARENT does not: `Path.exists()` answers False on ENOTDIR instead of
+        raising.)
+
+        A specific break that reddens this: change the handler's condition
+        back to `api is None`.
+        """
+        cr = _make_cr(name="db-a")
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "db-a.yaml").mkdir()
+            # Exactly what run_once/run_watch pass under --dry-run.
+            reconcile_one(cr, Path(d), dry_run=True, api=None)
+
+
 class TestRunOnce:
     """run_once() 測試。"""
 
@@ -348,6 +418,30 @@ class TestRunOnce:
         with tempfile.TemporaryDirectory() as d:
             rc = run_once(mock_api, Path(d))
             assert rc == 0
+
+    def test_dry_run_over_an_unreadable_target_still_visits_every_cr(self):
+        """#1789 F1: the loop must not be aborted by one unusable path.
+
+        Under `--dry-run` the controller nulls `api`, which is what the first
+        version of the CLI/controller split keyed on. With that inference the
+        first CR raised OutputWriteError straight out of `run_once` and the
+        second was never reached.
+
+        A specific break that reddens this: change `reconcile_one`'s handler
+        condition back to `api is None`.
+        """
+        mock_api = mock.MagicMock()
+        crs = [_make_cr(name="first"), _make_cr(name="second")]
+        mock_api.list_cluster_custom_object.return_value = {"items": crs}
+
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "first.yaml").mkdir()   # the wrapped idempotence read
+            with mock.patch("da_assembler.reconcile_one",
+                            wraps=reconcile_one) as spy:
+                rc = run_once(mock_api, Path(d), dry_run=True)
+            assert rc == 0
+            assert [c.args[0]["metadata"]["name"] for c in spy.call_args_list] \
+                == ["first", "second"]
 
     def test_dry_run(self):
         mock_api = mock.MagicMock()

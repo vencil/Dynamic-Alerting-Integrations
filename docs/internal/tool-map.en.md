@@ -238,6 +238,7 @@ lang: en
 | `check_threshold_unit_sanity.py` | Threshold unit-sanity gate — the value-range validation #992 promised and nobody built. |
 | `check_tool_registry_jsx_parity.py` | every tool-registry.yaml entry must have a backing .jsx file (and vice versa). |
 | `check_translation.py` | 自動化翻譯品質檢查 |
+| `check_trk_index_coverage.py` | 被引用的 TRK 必須出現在 planning SSOT 的索引裡。 |
 | `check_undefined_tokens.py` | Detect JSX/CSS/HTML references to --da-* tokens not defined in design-tokens.css (with --report-orphans discovery mode). |
 | `check_unpinned_deps.py` | block unpinned dependency-acquisition in CI/build. |
 | `check_vmalert_coverage.py` | check_vmalert_coverage — rule-pack alert FIRING-decision coverage baseline guard. |
@@ -265,6 +266,7 @@ lang: en
 - `scripts/tools/_lib_io.py`: File I/O and YAML helpers for Dynamic Alerting platform.
 - `scripts/tools/_lib_prometheus.py`: HTTP and Prometheus query helpers for Dynamic Alerting platform.
 - `scripts/tools/_lib_python.py`: Shared library for Dynamic Alerting Python tools.
+- `scripts/tools/_lib_tenant_uniqueness.py`: Does this ARTIFACT declare one tenant twice? One measurement, two producers.
 - `scripts/tools/_lib_toolcount.py`: One scan behind the "N 個 Python 工具" sentence.
 - `scripts/tools/_lib_validation.py`: Validation and parsing helpers for Dynamic Alerting platform.
 - `scripts/tools/_lib_versions.py`: Version SSOT readers for the dx doc-generation tools.

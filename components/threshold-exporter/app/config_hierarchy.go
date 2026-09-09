@@ -305,4 +305,3 @@ func scanDirHierarchicalWithMetrics(rootPath string, priorMtimes map[string]file
 	metrics.SetLastScanComplete(time.Now())
 	return tenants, defaults, hashes, mtimes, graph, nil
 }
-

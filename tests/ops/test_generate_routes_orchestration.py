@@ -446,26 +446,73 @@ class TestOutputAndClusterExitCodes:
         # ⛔ `"-o" in err` was VACUOUS and measured so: pytest's own temp path
         # contains `pytest-of-<user>`, whose `-of` holds the substring, so the
         # assertion passed with the flag name removed from the diagnostic
-        # entirely. Anchor on the START of the line instead — that is the part
-        # a shortened message would lose.
+        # entirely. So the flag is still asserted as a WHOLE token, and the
+        # line is still anchored — just on the shared wording rather than on
+        # this tool's own.
+        #
+        # ⚠️ #1789 replaced the hand-written two-line message ("-o: cannot
+        # write <label> to <path>" + an "OUTPUT PATH problem" paragraph) with
+        # the one line every argv-output tool in the repo now prints, so that
+        # this tool joins the behavioural population of
+        # tests/shared/test_output_path_write_failure.py — which a message
+        # only this file knows the shape of could never be part of. rc is
+        # unchanged (2), and so is "the operator is told which path and which
+        # flag".
         lines = r.stderr.decode("utf-8", "replace").splitlines()
-        assert any(ln.startswith("-o:") for ln in lines), (
-            f"no line IDENTIFIES the flag. `\"-o\" in err` used to pass here "
-            f"because pytest's own temp path contains `pytest-of-<user>`, so "
-            f"the substring was present with the flag name deleted from the "
-            f"diagnostic entirely; a line-start anchor cannot be satisfied "
-            f"that way.\nstderr:\n" + "\n".join(lines[-6:]))
-        assert "OUTPUT PATH" in err, (
-            f"exit 2 is right but the message does not say it is the output "
-            f"path:\n{err[:500]}")
-        # The two writers must stay distinguishable: `label` is the only thing
-        # telling the operator whether the ConfigMap or the routing fragment
-        # failed to write, and swapping the two arguments was invisible.
-        expected_label = ("the ConfigMap" if "--output-configmap" in mode
-                          else "the routing fragment")
-        assert expected_label in err, (
-            f"the message must name WHICH artefact could not be written; "
-            f"expected {expected_label!r} for mode={mode}:\n{err[:500]}")
+        error_lines = [ln for ln in lines if ln.startswith("ERROR: cannot ")]
+        assert len(error_lines) == 1, (
+            f"expected exactly one anchored `ERROR: cannot …` line "
+            f"(#1789's shared shape); got {len(error_lines)}.\nstderr:\n"
+            + "\n".join(lines[-6:]))
+        line = error_lines[0]
+        assert str(target) in line, (
+            f"the line does not name the path it could not write:\n{line}")
+        assert "-o/--output" in line, (
+            f"no line IDENTIFIES the flag as a whole token — `\"-o\" in err` "
+            f"used to pass here because pytest's own temp path contains "
+            f"`pytest-of-<user>`, so the substring was present with the flag "
+            f"name deleted from the diagnostic entirely.\nstderr:\n"
+            + "\n".join(lines[-6:]))
+        assert "check the value given to" in line, (
+            f"exit 2 is right but the message does not send the operator to "
+            f"the flag:\n{line}")
+        # ⚠️ WHAT THIS NO LONGER PINS, said out loud rather than deleted
+        # quietly. The old message named the ARTEFACT ("the ConfigMap" /
+        # "the routing fragment") and this test required it, because passing
+        # `content` and `label` the wrong way round was otherwise invisible.
+        # The shared line has no room for it: it names the path and the flag,
+        # which are the two things the operator can act on. Two things replace
+        # it — `_write_output_or_die` no longer TAKES a label, so there is no
+        # argument left to swap, and
+        # `test_control_each_writer_mode_writes_its_own_artefact` below
+        # asserts on the CONTENT each mode puts at `-o`, which is the property
+        # the label was standing in for.
+
+    @pytest.mark.parametrize("mode,must_contain,must_not_contain", [
+        ([], b"Alertmanager Route + Receiver + Inhibit Rules Fragment",
+         b"kind: ConfigMap"),
+        (["--output-configmap"], b"kind: ConfigMap",
+         b"Alertmanager Route + Receiver + Inhibit Rules Fragment"),
+    ], ids=["render", "output-configmap"])
+    def test_control_each_writer_mode_writes_its_own_artefact(
+            self, _tenant_dir, tmp_path, mode, must_contain, must_not_contain):
+        """The two `-o` writers must stay distinguishable BY WHAT THEY WRITE.
+
+        ⛔ This is the half that used to ride on the error message. #1789
+        replaced that message with the repo-wide one-liner, which names the
+        path and the flag and not the artefact — so the "which writer" axis
+        moved here, where it is checked on the success path instead of only
+        when the write fails. Both directions are asserted: a mode that
+        emitted the OTHER artefact would satisfy "something was written".
+        """
+        out = tmp_path / "out.yaml"
+        r = _gar(["--config-dir", str(_tenant_dir), *mode, "-o", str(out)])
+        assert r.returncode == 0, r.stderr.decode("utf-8", "replace")[:400]
+        written = out.read_bytes()
+        assert must_contain in written, (
+            f"mode={mode} did not write its own artefact:\n{written[:300]!r}")
+        assert must_not_contain not in written, (
+            f"mode={mode} wrote the OTHER writer's artefact:\n{written[:300]!r}")
 
     def test_apply_without_a_readable_stdin_names_the_yes_flag(self, _tenant_dir):
         """⛔ The predicate is "reading a line failed", not `isatty()`.

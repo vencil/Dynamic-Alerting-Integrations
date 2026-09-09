@@ -49,6 +49,7 @@ ALLOWED_TOOLS_ROOT = {
     "_lib_yaml.py",        # v2.10.0 ROI r5 W2: minimal CRD YAML serializer (operator_generate + migrate_to_operator)
     "_lib_confd.py",       # #1339: single answer to "what is in a conf.d/" (recursive read + flat-reader guard)
     "_lib_toolcount.py",   # #1511: single answer to "what counts as a Python tool" (lint checker + two dx writers)
+    "_lib_tenant_uniqueness.py",  # #1794: one answer to "does this artifact declare a tenant twice" (two producers)
     "metric-dictionary.yaml",
     "validate_all.py",
     "vendor_download.sh",

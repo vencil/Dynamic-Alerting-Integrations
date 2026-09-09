@@ -148,9 +148,9 @@ func TestEffectiveSubset(t *testing.T) {
 		{Metric: "pg_up"},
 	}}
 	tests := []struct {
-		name  string
+		name   string
 		stored []string
-		want  []string
+		want   []string
 	}{
 		{
 			name:   "all metrics whitelisted — unchanged",

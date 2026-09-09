@@ -34,6 +34,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -272,23 +273,33 @@ def _gen_defaults_yaml(
     return defaults
 
 
+# The output flag, named in every write error under it. `main` passes
+# `None` instead when `-o/--output` was not given (#1789): the fallback
+# path is derived in-repo, and naming a flag the operator never typed
+# sends them to the wrong place.
+OUTPUT_FLAG = "-o/--output"
+
+
 def generate_flat(
     count: int,
     output_dir: Path,
     with_defaults: bool,
     seed: int,
     extra_defaults: dict[str, int | float] | None = None,
+    flag: str | None = OUTPUT_FLAG,
 ) -> None:
     """Generate a flat conf.d/ layout. `extra_defaults` is appended to
     the root `_defaults.yaml` only (not cascaded; see _gen_defaults_yaml
     docstring)."""
     rng = _seed_rng(seed)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    with output_write(output_dir, flag=flag, action="create directory"):
+        output_dir.mkdir(parents=True, exist_ok=True)
 
     if with_defaults:
         _write_yaml(
             output_dir / "_defaults.yaml",
             _gen_defaults_yaml(rng, extra_defaults=extra_defaults),
+            flag=flag,
         )
 
     for i in range(count):
@@ -296,7 +307,7 @@ def generate_flat(
         domain = DOMAINS[i % len(DOMAINS)]
         tid = f"{domain}-{db_type}-{i:04d}"
         tenant_config = {"tenants": {tid: _gen_tenant_config(rng, tid, db_type)}}
-        _write_yaml(output_dir / f"{tid}.yaml", tenant_config)
+        _write_yaml(output_dir / f"{tid}.yaml", tenant_config, flag=flag)
 
     print(f"✅ Generated {count} tenant files (flat) in {output_dir}")
 
@@ -307,6 +318,7 @@ def generate_hierarchical(
     with_defaults: bool,
     seed: int,
     extra_defaults: dict[str, int | float] | None = None,
+    flag: str | None = OUTPUT_FLAG,
 ) -> None:
     """Generate a hierarchical conf.d/ layout: domain/region/env/tenant.yaml.
 
@@ -315,7 +327,8 @@ def generate_hierarchical(
     cascading level. Use case: bench harness `bench_trigger` registration.
     """
     rng = _seed_rng(seed)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    with output_write(output_dir, flag=flag, action="create directory"):
+        output_dir.mkdir(parents=True, exist_ok=True)
 
     # Distribute tenants across domain/region/env
     slots: list[tuple[str, str, str]] = []
@@ -334,7 +347,8 @@ def generate_hierarchical(
             break
         n = tenants_per_slot + (1 if slot_i < remainder else 0)
         slot_dir = output_dir / domain / region / env
-        slot_dir.mkdir(parents=True, exist_ok=True)
+        with output_write(slot_dir, flag=flag, action="create directory"):
+            slot_dir.mkdir(parents=True, exist_ok=True)
 
         for j in range(n):
             if idx >= count:
@@ -346,7 +360,7 @@ def generate_hierarchical(
             tenant_config["tenants"][tid]["_metadata"]["domain"] = domain
             tenant_config["tenants"][tid]["_metadata"]["region"] = region
             tenant_config["tenants"][tid]["_metadata"]["environment"] = env
-            _write_yaml(slot_dir / f"{tid}.yaml", tenant_config)
+            _write_yaml(slot_dir / f"{tid}.yaml", tenant_config, flag=flag)
             domain_db_types.setdefault(domain, []).append(db_type)
             idx += 1
 
@@ -355,12 +369,14 @@ def generate_hierarchical(
         _write_yaml(
             output_dir / "_defaults.yaml",
             _gen_defaults_yaml(rng, extra_defaults=extra_defaults),
+            flag=flag,
         )
         for domain in DOMAINS:
             domain_dir = output_dir / domain
             if domain_dir.exists():
                 db_types_in_domain = list(set(domain_db_types.get(domain, DB_TYPES[:2])))
-                _write_yaml(domain_dir / "_defaults.yaml", _gen_defaults_yaml(rng, db_types_in_domain))
+                _write_yaml(domain_dir / "_defaults.yaml",
+                            _gen_defaults_yaml(rng, db_types_in_domain), flag=flag)
 
     print(f"✅ Generated {idx} tenant files (hierarchical) in {output_dir}")
     print(f"   Structure: {len(DOMAINS)} domains × {len(REGIONS)} regions × {len(ENVIRONMENTS)} envs")
@@ -435,6 +451,7 @@ def generate_synthetic_v2(
     with_defaults: bool,
     seed: int,
     extra_defaults: dict[str, int | float] | None = None,
+    flag: str | None = OUTPUT_FLAG,
 ) -> None:
     """Generate a synthetic-v2 hierarchical fixture with skewed distributions.
 
@@ -459,7 +476,8 @@ def generate_synthetic_v2(
     looks alike.
     """
     rng = _seed_rng(seed)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    with output_write(output_dir, flag=flag, action="create directory"):
+        output_dir.mkdir(parents=True, exist_ok=True)
 
     slots: list[tuple[str, str, str]] = []
     for d in DOMAINS:
@@ -481,7 +499,8 @@ def generate_synthetic_v2(
             break
         n = tenants_per_slot + (1 if slot_i < remainder else 0)
         slot_dir = output_dir / domain / region / env
-        slot_dir.mkdir(parents=True, exist_ok=True)
+        with output_write(slot_dir, flag=flag, action="create directory"):
+            slot_dir.mkdir(parents=True, exist_ok=True)
 
         for j in range(n):
             if idx >= count:
@@ -514,7 +533,7 @@ def generate_synthetic_v2(
                     }
                     cursor = cursor[nested_key]
 
-            _write_yaml(slot_dir / f"{tid}.yaml", tenant_config)
+            _write_yaml(slot_dir / f"{tid}.yaml", tenant_config, flag=flag)
             domain_db_types.setdefault(domain, []).append(db_type)
             idx += 1
 
@@ -522,23 +541,42 @@ def generate_synthetic_v2(
         _write_yaml(
             output_dir / "_defaults.yaml",
             _gen_defaults_yaml(rng, extra_defaults=extra_defaults),
+            flag=flag,
         )
         for domain in DOMAINS:
             domain_dir = output_dir / domain
             if domain_dir.exists():
                 db_types_in_domain = list(set(domain_db_types.get(domain, DB_TYPES[:2])))
-                _write_yaml(domain_dir / "_defaults.yaml", _gen_defaults_yaml(rng, db_types_in_domain))
+                _write_yaml(domain_dir / "_defaults.yaml",
+                            _gen_defaults_yaml(rng, db_types_in_domain), flag=flag)
 
     print(f"✅ Generated {idx} tenant files (synthetic-v2) in {output_dir}")
     print(f"   Skew: Zipf alpha=1.5 (sizes 1-6), power-law alpha=2.0 (overlay depths 0-3)")
     print(f"   Distribution: sizes p50={sorted(sizes)[len(sizes)//2]} p99={sorted(sizes)[int(len(sizes)*0.99)] if len(sizes)>1 else sizes[0]}; depths p50={sorted(depths)[len(depths)//2]} p99={sorted(depths)[int(len(depths)*0.99)] if len(depths)>1 else depths[0]}")
 
 
-def _write_yaml(path: Path, data: dict) -> None:
-    """Write a dict as YAML. Avoids importing yaml to keep deps minimal."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8", newline="\n") as f:
-        _dump_yaml(f, data, indent=0)
+def _write_yaml(path: Path, data: dict, *, flag: str | None = OUTPUT_FLAG) -> None:
+    """Write a dict as YAML. Avoids importing yaml to keep deps minimal.
+
+    #1789: every caller's *path* is inside the tree the output flag names, so
+    an unusable one is that flag's value — hence the wrapper naming it rather
+    than a bare traceback at rc=1.
+
+    ⛔ *flag* is ``None`` when ``-o/--output`` was NOT given and the tool fell
+    back to its in-repo default: "check the value given to -o/--output" would
+    then send the operator to a flag they never typed, so
+    ``OutputWriteError`` prints the internal-path wording instead.
+    """
+    # #1789: the wrapper is given the PARENT — the directory this mkdir
+    # actually creates. Handing it the output FILE makes the message a
+    # sentence about a path nobody was creating (worked example in
+    # `_lib_io.output_write`). The ancestor rule still converts the
+    # failure, and the write below keeps naming the file.
+    with output_write(path.parent, flag=flag, action="create directory"):
+        path.parent.mkdir(parents=True, exist_ok=True)
+    with output_write(path, flag=flag):
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
+            _dump_yaml(f, data, indent=0)
 
 
 def _dump_yaml(f, obj, indent: int = 0) -> None:  # noqa: C901 — simple recursive writer
@@ -591,6 +629,7 @@ def _dump_yaml(f, obj, indent: int = 0) -> None:  # noqa: C901 — simple recurs
                     f.write(f"{prefix}- {sv}\n")
 
 
+@exit_on_output_write_error
 def main() -> None:
     try_utf8_stdout()
     parser = argparse.ArgumentParser(
@@ -657,11 +696,23 @@ def main() -> None:
 
     if args.output:
         output_dir = Path(args.output)
+        out_flag: str | None = OUTPUT_FLAG
     else:
         repo_root = Path(__file__).resolve().parent.parent.parent.parent
         output_dir = repo_root / "tests" / "fixtures" / f"synthetic-{args.count}-{args.layout}" / "conf.d"
+        # Derived in-repo, not operator argv — there is no flag to send them to.
+        out_flag = None
 
-    if output_dir.exists() and any(output_dir.iterdir()):
+    # #1789: the "already populated?" pre-check is wrapped TOO, even though it
+    # only READS. It runs before every write site, so it is where an
+    # `-o/--output` naming an existing FILE actually dies — `iterdir()` on a
+    # regular file raises NotADirectoryError, which reached the operator as a
+    # traceback at rc=1 while every wrapped write site below sat unreached
+    # (measured). The verb says what the block does: nothing is being written
+    # here yet.
+    with output_write(output_dir, flag=out_flag, action="inspect"):
+        already_populated = output_dir.exists() and any(output_dir.iterdir())
+    if already_populated:
         print(f"⚠️  Output directory {output_dir} already exists and is not empty.")
         print(f"   Use a different --output or remove it first.")
         sys.exit(EXIT_CALLER_ERROR)
@@ -669,17 +720,17 @@ def main() -> None:
     if args.layout == "flat":
         generate_flat(
             args.count, output_dir, args.with_defaults, args.seed,
-            extra_defaults=extra_defaults or None,
+            extra_defaults=extra_defaults or None, flag=out_flag,
         )
     elif args.layout == "synthetic-v2":
         generate_synthetic_v2(
             args.count, output_dir, args.with_defaults, args.seed,
-            extra_defaults=extra_defaults or None,
+            extra_defaults=extra_defaults or None, flag=out_flag,
         )
     else:
         generate_hierarchical(
             args.count, output_dir, args.with_defaults, args.seed,
-            extra_defaults=extra_defaults or None,
+            extra_defaults=extra_defaults or None, flag=out_flag,
         )
 
     # Summary stats

@@ -47,16 +47,16 @@ type fakeGit struct {
 	lastWriteFiles  map[string]map[string][]byte // branch → files
 
 	// PR-3 — Refresh-related fakes.
-	rebaseCalls       []string                 // formatted "branch:oldBase->newBase"
-	rebaseOutcomes    map[string]*RebaseOutcome // branch → outcome to return
-	rebaseErr         map[string]error          // branch → fail RebaseOnto
-	forcePushCalls    []string                 // branch
-	forcePushErr      map[string]error          // branch → fail ForcePushWithLease
+	rebaseCalls    []string                  // formatted "branch:oldBase->newBase"
+	rebaseOutcomes map[string]*RebaseOutcome // branch → outcome to return
+	rebaseErr      map[string]error          // branch → fail RebaseOnto
+	forcePushCalls []string                  // branch
+	forcePushErr   map[string]error          // branch → fail ForcePushWithLease
 
 	// PR-4 — RefreshSource-related fakes.
-	checkoutCalls   []string         // branch
-	checkoutErr     map[string]error // branch → fail CheckoutBranch
-	commitMessages  map[string][]string // branch → commit messages received (PR-4 self-review)
+	checkoutCalls  []string            // branch
+	checkoutErr    map[string]error    // branch → fail CheckoutBranch
+	commitMessages map[string][]string // branch → commit messages received (PR-4 self-review)
 }
 
 func newFakeGit() *fakeGit {

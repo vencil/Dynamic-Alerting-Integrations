@@ -166,7 +166,7 @@ These tools operate on local YAML files and don't require network.
 | `migrate` | Legacy rules → dynamic format conversion (AST engine) | `<input_file>` |
 | `validate-config` | One-stop configuration validation (YAML + schema + routes + policy) | `--config-dir <dir>` |
 | `offboard` | Offboard tenant configuration | `<tenant>` |
-| `deprecate` | Mark metrics as disabled | `<metric_keys...>` |
+| `deprecate` | Deprecate metrics: delete their keys from `defaults:` / `optional_overrides:` / tenant files | `<metric_keys...>` |
 | `lint` | Check Custom Rule governance compliance | `<path...>` |
 | `onboard` | Analyze existing Alertmanager/Prometheus config for migration | `<config_file>` or `--alertmanager-config <file>` |
 | `analyze-gaps` | Compare custom rules with Rule Pack coverage | `--tenant-config <path>` |
@@ -410,9 +410,9 @@ docker run --rm --network=host \
 
 | Code | Description |
 |------|-------------|
-| `0` | Success |
-| `1` | Uncaught exception (traceback) — measured when the parent of `-o/--output-dir` is a file (this tool still uses a raw `os.makedirs`, not the #1641 `_or_die` helpers; once #1789 lands this case becomes 2). ⚠️ A Prometheus connection / query failure is **not** 1 — failed samples are recorded as empty, the report and CSVs are still written, rc 0 |
-| `2` | Caller error: none of the `--metrics` names is one the tool knows (the error lists the accepted ones), the required `--tenant` missing, or arguments argparse rejects |
+| `0` | Success. ⚠️ A Prometheus connection / query failure is **not** an error — failed samples are recorded as empty, the report and CSVs are still written, still this code |
+| `1` | Only an uncaught exception (traceback) returns 1 — this command has no violation exit; measured with `--interval 0` (`duration // interval` raises `ZeroDivisionError`). ⛔ An unwritable output path has been `2` since #1789 and no longer lands here |
+| `2` | Caller error: none of the `--metrics` names is one the tool knows (the error lists the accepted ones), the required `--tenant` missing, arguments argparse rejects, or `-o/--output-dir` cannot be written (measured: the parent is a file; a CSV the tool must create inside it is already a directory) — one `ERROR: cannot …` line naming `-o/--output-dir`, no traceback (#1789) |
 
 ---
 
@@ -969,8 +969,8 @@ da-tools fed-key --rotate --existing-jwks federation-jwks.json \
 | Code | Description |
 |------|-------------|
 | `0` | Key generated |
-| `1` | Uncaught exception (traceback) — measured when the directory of `--jwks-out` does not exist |
-| `2` | Caller error: `openssl` not on PATH, timed out or failed; `--existing-jwks` unreadable, not a JWKS document (no `keys` array) or already holding the same kid; `--rotate` without `--existing-jwks`, `--key-bits` < 2048; stdout is a terminal (refuses to print the private-key Secret to a tty — pipe it to `\| kubectl apply -f -`) |
+| `1` | Only an uncaught exception (traceback) returns 1 — this command has no violation exit; measured when `--existing-jwks` points at a JSON **array** (a top level that is not an object). ⛔ An unwritable output path has been `2` since #1789 and no longer lands here |
+| `2` | Caller error: `--jwks-out` cannot be written (measured: its directory does not exist) — one `ERROR: cannot …` line naming `--jwks-out`, no traceback (#1789); `openssl` not on PATH, timed out or failed; `--existing-jwks` unreadable, not a JWKS document (no `keys` array) or already holding the same kid; `--rotate` without `--existing-jwks`, `--key-bits` < 2048; stdout is a terminal (refuses to print the private-key Secret to a tty — pipe it to `\| kubectl apply -f -`) |
 
 ---
 
@@ -2240,7 +2240,7 @@ docker run --rm \
 
 #### deprecate
 
-Mark metrics as disabled to prevent accidental use.
+Deprecate metrics: remove `<m>`, `<m>_critical`, `custom_<m>`, `custom_<m>_critical` from `defaults:` / `optional_overrides:` / tenant files; on the tenant plane also the dimensional keys `<name>{…}` of those four names.
 
 **Purpose**: Gradually retire old metrics; maintain version compatibility.
 
@@ -2265,17 +2265,16 @@ docker run --rm \
 |--------|-------------|---------|
 | `--config-dir <PATH>` | Tenant config directory. ⚠️ The default points at a repo-internal path that does not exist in the image — pass it explicitly | `components/threshold-exporter/config/conf.d` |
 | `--execute` | **Actually perform the change** (default is pre-check / preview only, nothing is written) | false |
-| `--reason <TEXT>` | Deprecation reason (annotation) | (none) |
-| `--dry-run` | Preview changes | false |
+| `--plane {root,subtree}` | Whether this `--config-dir` is the conf.d root or one subtree carrier below the exporter's `-config-dir`. `root` runs the carrier health check on every `_`-prefixed file at this level (whether the exporter can read the values under `defaults:`, judged the way yaml.v3 does); `subtree` skips it (string values are legal on the subtree plane and take effect). The tool cannot infer this, so the default is fail-closed | `root` |
 
 **Output**
 
-Add or update metric key with `enabled: false` flag in _defaults.yaml.
+Deletes those keys from `defaults:` and `optional_overrides:` (the declared tier, names only) in `_defaults.yaml` / `.yml`, and from the non-`_`-prefixed tenant files in the flat directory, naming each removed key and its old value; an emptied `defaults:` / `optional_overrides:` is dropped entirely; a carrier holding none of them is named and left untouched. It does **not** write `disable`: `defaults:` is `map[string]float64`, so a string there makes the exporter drop the whole root carrier ([#1787](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1787)). When the carrier health check (see `--plane`) finds a file the exporter cannot read, the whole run degrades to a preview: nothing is written, rc 1; a `_`-prefixed file the tool's own pure-Python parser cannot read degrades the run the same way (the message says the exporter can read it); an empty value under `defaults:` only warns. The tool does not write into subdirectories, but the completeness rescan looks down into them: residue in a subtree's own `_defaults.yaml` or a tenant file's `tenants:` block clears by running `--plane subtree` on that subtree as the printed guidance says; the `tenants:` / `profiles:` blocks of root-level `_`-prefixed files are out of reach and any residue there has to be removed by hand; blocks the exporter does not read or drops only warn. ⚠️ NOT GUARDED: the write-back re-serialises the whole file (comments outside the header are removed, scalars in YAML 1.1 spellings change type); legacy spellings from the exporter's alias table and the value shapes of the other blocks are outside the health check (tracking entry: #1822).
 
 **Examples**
 
 ```bash
-# Mark multiple metrics as disabled
+# Deprecate multiple metrics
 docker run --rm \
   --user $(id -u):$(id -g) \
   -v $(pwd)/conf.d:/etc/config:rw \
@@ -2290,8 +2289,8 @@ docker run --rm \
 | Code | Description |
 |------|-------------|
 | `0` | Success |
-| `1` | Deprecation incomplete (a defaults carrier the scan listed was not written; each one is named) |
-| `2` | Invalid config directory |
+| `1` | Deprecation incomplete; every cause is printed in the output. ⚠️ Preview mode reaches the same verdict on the same tree |
+| `2` | Invalid config directory, or a carrier could not be written back |
 
 ---
 

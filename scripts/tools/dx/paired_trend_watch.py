@@ -135,6 +135,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
 
 # ── The pinned rule (ADR-032 §待決 5) ─────────────────────────────────────
 DEFAULT_THRESHOLD_PCT = 5.0
@@ -732,7 +733,14 @@ def load_night(payload, *, night_utc, run_id):
             for side in ("reference", "main"):
                 rec = sides.get(side)
                 value = rec.get("digest") if isinstance(rec, dict) else None
-                if not isinstance(value, str) or not _SHA256_RE.match(value):
+                # #1788: fullmatch, not match — `$` still matches before one
+                # trailing newline. The sanctioned producer (hashlib hexdigest
+                # in pair_bench_ratio) cannot emit one; if a producer changes
+                # or breaks, "<64hex>\n" would pass `.match`, be stored
+                # verbatim, and compare unequal to the next night's clean
+                # digest — the manufactured transition this branch exists to
+                # prevent.
+                if not isinstance(value, str) or not _SHA256_RE.fullmatch(value):
                     # ⛔ Shape-checked, exactly as `pair_bench_ratio.py` does at
                     # its own input boundary. A digest that is not a digest still
                     # compares unequal night-to-night, i.e. it manufactures a
@@ -1848,6 +1856,7 @@ def render(result):
     return "\n".join(lines)
 
 
+@exit_on_output_write_error
 def main(argv=None):
     try_utf8_stdout()
     parser = argparse.ArgumentParser(
@@ -1934,8 +1943,18 @@ def main(argv=None):
 
     target = args.summary_file or os.environ.get("GITHUB_STEP_SUMMARY")
     if target:
-        with open(target, "a", encoding="utf-8", newline="\n") as handle:
-            handle.write(body + "\n")
+        # ⚠️ The flag is named only when the path CAME from the flag. The same
+        # variable is also filled from `$GITHUB_STEP_SUMMARY`, and telling an
+        # operator to "check the value given to --summary-file" for a path the
+        # CI runner exported would send them to a flag they never typed;
+        # `flag=None` prints the internal-path wording instead. Both branches
+        # still exit 2 with one line and no traceback (this used to be a raw
+        # `FileNotFoundError` at rc=1 — a code this tool's exit contract has
+        # no room for: 0 = reported, 2 = could not check).
+        flag = "--summary-file" if args.summary_file else None
+        with output_write(target, flag=flag, action="append to"):
+            with open(target, "a", encoding="utf-8", newline="\n") as handle:
+                handle.write(body + "\n")
 
     # ⛔ Exit 0 for FINDINGS as well as CLEAR. This is a REPORTER during the
     # parallel-run period, and a non-zero exit would turn the nightly red on a

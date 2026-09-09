@@ -6,6 +6,7 @@ Import via _lib_python.py facade for backward compatibility.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import functools
 import io
 import json
@@ -13,7 +14,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import Any, Callable, Optional, TypeVar
+from typing import Any, Callable, Iterator, Optional, TypeVar
 
 import yaml
 
@@ -453,6 +454,181 @@ def ensure_dir_or_die(
         ensure_dir(path, flag=flag)
     except OutputWriteError as exc:
         _die_on_write_error(exc, exit_code)
+
+
+def _output_write_names_target(exc: OSError, path: Any) -> bool:
+    """Does *exc* name *path* (or a parent of it) as the thing that failed?
+
+    The decision procedure behind :func:`output_write`'s "convert or let it
+    fly" split, kept as a named function so the tests exercise the SAME code
+    the context manager runs (rulebook D-05d).
+
+    * Neither ``filename`` nor ``filename2`` is set ⇒ TRUE. ``Path.mkdir``,
+      ``Path.chmod`` and ``os.replace`` populate them, but plenty of failures
+      arrive bare (an ``OSError`` re-raised by a helper, ``shutil`` wrapping
+      an ``errno`` it built itself), and inside a block that exists only to
+      produce the output file, bare is the output.
+    * Either one resolves to *path* itself, or to an ANCESTOR of it ⇒ TRUE.
+      The ancestor arm is what makes ``os.makedirs("a/b/c")`` convertible:
+      the component that could not be created is ``a/b``, never the path the
+      caller named.
+    * Anything else ⇒ FALSE: the failure is about some OTHER file, and
+      calling it "cannot write <output> — check the value given to -o" would
+      be a lie that sends the operator to the wrong flag.
+
+    Comparison goes through ``os.fspath`` + ``Path(...).resolve(strict=False)``
+    so ``out`` and ``/abs/cwd/out`` are the same path; ``strict=False``
+    because the whole point is that the path does not exist yet. A filename
+    that is not path-like (a raw file descriptor ``int``, ``bytes``) cannot be
+    compared and counts as "names something else" — fail towards letting the
+    original exception through with its own type and message intact.
+
+    An EMPTY filename is treated as absent rather than as ``""`` (which would
+    resolve to the current directory and match anything under it).
+
+    ⛔ ``resolve`` can raise ``OSError`` too, not only ``TypeError`` /
+    ``ValueError``: a RELATIVE path needs the cwd, and a cwd that was deleted
+    out from under the process makes ``os.getcwd()`` raise
+    ``FileNotFoundError``. Letting that escape would replace the write error
+    the operator caused with a chained traceback at rc=1 from the predicate
+    that was supposed to classify it — the exact failure this whole ticket is
+    about, produced by its own machinery. Both arms therefore catch it and
+    fall back to "cannot compare", which lets the ORIGINAL exception through
+    untouched.
+    """
+    named = [n for n in (getattr(exc, "filename", None), getattr(exc, "filename2", None))
+             if n is not None and n != ""]
+    if not named:
+        return True
+    try:
+        target = Path(os.fspath(path)).resolve(strict=False)
+    except (TypeError, ValueError, OSError):
+        return False
+    for name in named:
+        try:
+            candidate = Path(os.fspath(name)).resolve(strict=False)
+        except (TypeError, ValueError, OSError):
+            continue  # fd number / bytes / no cwd: not comparable
+        if candidate == target or candidate in target.parents:
+            return True
+    return False
+
+
+@contextlib.contextmanager
+def output_write(
+    path: Any,
+    *,
+    flag: Optional[str],
+    action: str = "write",
+) -> Iterator[None]:
+    """Make a RAW write to *path* fail the way the secure writers do (#1789).
+
+    :func:`write_text_secure` and friends already turn "the output path is
+    unusable" into one :class:`OutputWriteError`, but a tool that writes with
+    ``open()``, ``Path.mkdir()``, ``shutil.copy2()`` or ``csv.writer`` cannot
+    use them without changing the bytes it emits. This wraps such a site
+    instead of converting it::
+
+        with output_write(out_dir, flag="-o/--output-dir", action="create directory"):
+            out_dir.mkdir(parents=True, exist_ok=True)
+
+    so that a mistyped ``-o`` ends in the same one-line ``ERROR: cannot …``
+    at rc=2 as every ``_or_die`` call site, instead of a traceback at rc=1
+    (which a CI consumer reads as ``EXIT_VIOLATION``, "your config has a
+    finding"). The bytes and the permissions of the SUCCESS path are
+    untouched: on success this context manager does nothing at all.
+
+    Args:
+        path: The output path the block is trying to produce.
+        flag: The CLI flag *path* came from (``"-o/--output"``), named in the
+              message. Keyword-only and REQUIRED — pass ``None`` explicitly
+              for an internally derived path, so that every wrapped site has
+              answered the question rather than inherited a default.
+        action: The verb in the message: ``"write"`` (default),
+                ``"create directory"``, ``"copy into"``, …
+
+    ⚠️ **Pass the path the block acts ON, not the path the tool is ultimately
+    producing.** For a ``mkdir`` in front of a file write that means the
+    PARENT: wrapping ``out.parent.mkdir(...)`` with ``path=out`` prints
+    "cannot create directory /srv/reports/health.json" — a sentence about a
+    path nobody was creating, pointing at a file that is not the problem.
+    Measured on six sites in this batch before they were split (#1789); the
+    behavioural gate now parses the verb out of the line and checks the path
+    against it, so the two cannot drift apart again.
+
+    Raises:
+        OutputWriteError: for an ``OSError`` raised inside the block that
+            :func:`_output_write_names_target` attributes to *path*.
+        Anything else: unchanged, including an ``OSError`` about a DIFFERENT
+            file and an :class:`OutputWriteError` that a nested secure writer
+            already raised (never double-wrapped — the inner one already
+            carries the right path, flag and action).
+
+    ⛔ **Why "an OSError about a different file" flies through, and why that
+    is not over-caution.** ``ops/assemble_config_dir`` copies each source
+    file into the output directory with ``shutil.copy2(src, dst)``; ``src``
+    comes from ``--sources``. A source ENTRY that is itself a directory (a
+    ``--sources`` tree holding a directory named ``x.yaml`` — measured, not
+    hypothetical) raises ``IsADirectoryError`` with ``filename`` pointing at
+    the SOURCE. Converting that would print "cannot copy into
+    <output>/x.yaml … check the value given to --output" and send the
+    operator to edit the one flag that is correct. Same for any input file
+    read inside the wrapped block.
+
+    ⚠️ **The design rule for where to put the ``with``.** This converts an
+    exception on its way OUT of the block, so a NARROW handler between the
+    raise and the ``with`` swallows it first and this never sees it — an
+    ``except FileNotFoundError`` inside the block, or a ``try/except OSError:
+    continue`` loop around the write, keeps its old behaviour and no rc
+    changes. That is a silent miss, not a loud one: wrap the site, then read
+    outwards for handlers that already intercept the write. Measured over the
+    sites this ticket wraps: the only handlers INSIDE a wrapped block are the
+    three in ``ops/state_reconcile.write_json`` — ``mkstemp``'s converts to
+    ``OutputWriteError`` by hand, the cleanup ``except BaseException``
+    re-raises, and the ``except OSError: pass`` swallows the temp-file
+    ``unlink`` only, never the write. And reading out to the enclosing ``def``
+    is NOT far enough: ``ops/da_assembler``'s swallowing ``except Exception``
+    sits two levels out from the ``with`` — past ``write_rendered``, in its
+    caller ``reconcile_one`` — and only an explicit re-raise added there lets
+    the conversion reach the decorator.
+    """
+    try:
+        yield
+    except OutputWriteError:
+        raise
+    except OSError as exc:
+        if not _output_write_names_target(exc, path):
+            raise
+        raise OutputWriteError(path, exc, flag=flag, action=action) from exc
+
+
+def exit_on_output_write_error(fn: _F) -> _F:
+    """Decorate a CLI ``main`` so an unusable OUTPUT path exits 2, named.
+
+    The sister of :func:`exit_on_yaml_file_error` for the write direction
+    (#1789): :class:`OutputWriteError` — raised by the secure writers, by
+    :func:`ensure_dir`, or by a raw site wrapped in :func:`output_write` —
+    becomes ``ERROR: cannot <action> <path>: … — check the value given to
+    <flag>`` on stderr plus ``sys.exit(EXIT_CALLER_ERROR)``, with no
+    traceback.
+
+    Use it on tools whose write sites are spread across several helpers, so
+    the class is closed once at the entry point instead of at each site.
+
+    ⚠️ Only :class:`OutputWriteError`, never a bare ``OSError``: an
+    ``OSError`` that reached ``main`` from somewhere else (an unreadable
+    INPUT, a socket) has no output path to name and no flag to point at, and
+    turning it into this message would misattribute it. Tools that must emit
+    a ``--json`` envelope on stdout for this path catch the error themselves
+    instead of using this.
+    """
+    @functools.wraps(fn)
+    def _wrapped(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return fn(*args, **kwargs)
+        except OutputWriteError as exc:
+            _die_on_write_error(exc, EXIT_CALLER_ERROR)
+    return _wrapped  # type: ignore[return-value]
 
 
 def write_onboard_hints(

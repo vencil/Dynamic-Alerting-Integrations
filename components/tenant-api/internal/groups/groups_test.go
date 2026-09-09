@@ -111,11 +111,11 @@ func TestValidateGroupID(t *testing.T) {
 		{"staging_all", false},
 		{"group-123", false},
 		{"a", false},
-		{"", true},            // empty
-		{"UPPERCASE", true},   // uppercase
-		{"has space", true},   // space
-		{"has.dot", true},     // dot
-		{"has/slash", true},   // slash
+		{"", true},                        // empty
+		{"UPPERCASE", true},               // uppercase
+		{"has space", true},               // space
+		{"has.dot", true},                 // dot
+		{"has/slash", true},               // slash
 		{string(make([]byte, 129)), true}, // too long
 	}
 

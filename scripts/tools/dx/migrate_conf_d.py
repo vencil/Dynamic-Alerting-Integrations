@@ -34,6 +34,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
 from _lib_confd import (  # noqa: E402
     has_yaml_extension,
     is_hidden_name,
@@ -189,6 +190,7 @@ def generate_git_commands(actions: list[dict], conf_d: Path) -> list[str]:
     return commands
 
 
+@exit_on_output_write_error
 def main() -> None:
     try_utf8_stdout()
     parser = argparse.ArgumentParser(
@@ -239,9 +241,10 @@ def main() -> None:
     print()
 
     if args.output_plan:
-        Path(args.output_plan).write_text(
-            json.dumps(actions, indent=2, ensure_ascii=False), encoding="utf-8", newline="\n"
-        )
+        with output_write(args.output_plan, flag="-o/--output-plan"):
+            Path(args.output_plan).write_text(
+                json.dumps(actions, indent=2, ensure_ascii=False), encoding="utf-8", newline="\n"
+            )
         print(f"✅ Plan written to {args.output_plan}")
 
     if not ok:
