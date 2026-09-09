@@ -2056,6 +2056,15 @@ TRACED_INDIRECT_INPUTS = {
     # deleting a line is as fatal as adding one.
     ("docs-ci.yaml", "docs", "scripts/tools/lint/mkdocs-anchor-debt.txt"),
     ("docs-ci.yaml", "docs", "components/threshold-exporter/README.md"),
+    # drift-checks → check_cli_contract.py: its contract source (entrypoint.py's
+    # COMMAND_MAP / PROMETHEUS_COMMANDS), its ledger, and the three landing
+    # pages it scans outside docs/ — all reached through validate_all.py's
+    # subprocess, which is why no scanner here can derive them.
+    ("docs-ci.yaml", "docs", "components/da-tools/app/entrypoint.py"),
+    ("docs-ci.yaml", "docs", "docs/internal/cli-contract-baseline.yaml"),
+    ("docs-ci.yaml", "docs", "components/da-tools/README.md"),
+    ("docs-ci.yaml", "docs", "components/da-tools/app/QUICKSTART.md"),
+    ("docs-ci.yaml", "docs", "try-local/README.md"),
     # version-check: bump_docs.py's version and count sources.
     # ⛔ CHANGELOG.md USED to be deliberately absent here, on the grounds that
     # the trace only shows `docs/CHANGELOG.md` and adding the root one would

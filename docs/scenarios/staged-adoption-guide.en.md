@@ -283,7 +283,7 @@ If a Rule Pack v2 upgrade **changes the alert name or label schema**, the custom
 4. For semantic changes in v2: either rewrite `custom_*` to align with v2's schema or leave it as-is (**and** synchronize the disable config)
 5. For v2 breaking changes: promotion is mandatory (forced upgrade)
 
-**Audit-hook suggestion** (tracked: [issue #405](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/405)): `da-tools upgrade-check` runs at v1→v2 upgrade time, auto-detects disablement drift, lists "alerts that would double-fire", and must hit zero before merge. May be unified with `silencer-drift-check`.
+**Audit-hook suggestion** (tracked: [issue #405](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/405)): `da-tools upgrade-check` runs at v1→v2 upgrade time, auto-detects disablement drift, lists "alerts that would double-fire", and must hit zero before merge. May be unified with `silencer-drift-check`. <!-- datools-cmd-ignore: audit hook proposed in #405, not implemented -->
 
 ### The pattern shared by all three scenarios
 

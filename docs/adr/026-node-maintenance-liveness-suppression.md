@@ -97,7 +97,7 @@ updated_at: 2026-06-19
 defer 的是「在 per-tenant liveness 告警上再疊一層維護 opt-out」，要點：
 
 - **雙軌 opt-out**：計畫性維護走 config（`_state_maintenance`，慢但本就提前規劃）；緊急延長走 Alertmanager Silence API（秒級、不依賴 exporter 存活——config 平面要過 GitOps + owner 批太慢）。業界（Grafana）也是這樣分宣告式 / 即時兩種用途。
-- **新建 `da-tools maintenance extend` CLI**：現行 `maintenance_scheduler.extend_silence` 是 Silence 平面、只被 CronJob 內部呼叫、無 CLI 入口（這兩點是查證修正過的事實）。
+- **新建 `da-tools maintenance extend` CLI**：現行 `maintenance_scheduler.extend_silence` 是 Silence 平面、只被 CronJob 內部呼叫、無 CLI 入口（這兩點是查證修正過的事實）。 <!-- datools-cmd-ignore: ADR 提案中的 CLI，尚未實作 -->
 - **盲區護欄**：抑制 liveness = 維護窗內對真實 down 盲，故設 Max-TTL 自動到期 + 事後對賬。
 
 > **為何 defer（而非現在就做）**：不是因為場景罕見（維護窗靜音是標準需求），而是三點不對稱——

@@ -188,7 +188,7 @@ conf.d/ 樹（GitOps merge）
 
 - [ ] 跑 `da-parser import` 對 customer PromRule corpus
 - [ ] 檢查 dialect 分布 + non-portable 比例
-- [ ] 以 Profile Builder library 萃取 cluster + Profile-as-Directory-Default（`da-tools profile build` 獨立 CLI 尚未出貨、規劃中）
+- [ ] 以 Profile Builder library 萃取 cluster + Profile-as-Directory-Default（`da-tools profile build` 獨立 CLI 尚未出貨、規劃中） <!-- datools-cmd-ignore: 規劃中的 CLI，尚未出貨 -->
 - [ ] 跑 `da-batchpr apply` 開出 Base + tenant chunk PRs
 - [ ] 跑 `da-guard` 過 4-layer schema/routing/cardinality/redundant-override 檢查
 - [ ] 詳情 → [Migration Toolkit Installation](../migration-toolkit-installation.md)

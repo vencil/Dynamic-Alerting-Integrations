@@ -837,7 +837,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "7dc5c47e2e48b5ed7ca7a5fe4cb68f9070962aba5141b6f9544ff48da6dd98a4",
+ "source_digest": "8a66d0a865c36499f043546dc4a4982050e19763a68bf463bf71ad7f595f8cca",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -937,6 +937,7 @@
   "tests/lint/test_check_chart_package_contents.py",
   "tests/lint/test_check_chart_pull_surface.py",
   "tests/lint/test_check_chart_ship_surface.py",
+  "tests/lint/test_check_cli_contract.py",
   "tests/lint/test_check_cli_coverage.py",
   "tests/lint/test_check_cli_default_drift.py",
   "tests/lint/test_check_codename_gate.py",
@@ -1457,7 +1458,8 @@
    "tests/ops/test_ci_baseline_substitution.py"
   ],
   "components/da-tools/app/QUICKSTART.md": [
-   "tests/lint/test_check_doc_datools_cmds.py"
+   "tests/lint/test_check_doc_datools_cmds.py",
+   "tests/ops/test_ci_path_filter_coverage.py"
   ],
   "components/da-tools/app/VERSION": [
    "tests/lint/test_validate_docs_versions.py",
@@ -1472,6 +1474,7 @@
   "components/da-tools/app/entrypoint.py": [
    "tests/dx/test_verify_diff.py",
    "tests/lint/test_check_image_pin_capability.py",
+   "tests/ops/test_ci_path_filter_coverage.py",
    "tests/ops/test_generated_ci_artifacts.py",
    "tests/ops/test_printed_paths_are_reachable.py"
   ],
@@ -1593,6 +1596,7 @@
   "docs/CHANGELOG.md": [
    "tests/dx/test_bump_docs.py",
    "tests/dx/test_doc_coverage.py",
+   "tests/lint/test_check_cli_contract.py",
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/ops/test_generated_ci_artifacts.py"
   ],
@@ -1665,7 +1669,11 @@
    "tests/lint/test_check_portal_asset_shipping.py",
    "tests/shared/test_output_path_write_failure.py"
   ],
+  "docs/cli-reference.en.md": [
+   "tests/lint/test_check_cli_contract.py"
+  ],
   "docs/cli-reference.md": [
+   "tests/lint/test_check_cli_contract.py",
    "tests/ops/test_generate_routes_orchestration.py",
    "tests/ops/test_generated_ci_artifacts.py",
    "tests/shared/test_input_path_contract.py"
@@ -1757,6 +1765,9 @@
   "docs/internal/benchmark-playbook.md": [
    "tests/dx/test_canary_quotation_pins.py"
   ],
+  "docs/internal/cli-contract-baseline.yaml": [
+   "tests/ops/test_ci_path_filter_coverage.py"
+  ],
   "docs/internal/design-system-guide.md": [
    "tests/dx/test_bump_docs.py"
   ],
@@ -1825,6 +1836,9 @@
   ],
   "docs/scenarios/incremental-migration-playbook.md": [
    "tests/dx/test_tenant_verify.py"
+  ],
+  "docs/schemas/migration-state.md": [
+   "tests/lint/test_check_cli_contract.py"
   ],
   "docs/schemas/platform-defaults.schema.json": [
    "tests/helm/test_optional_overrides_render.py",
@@ -2651,6 +2665,9 @@
   "scripts/tools/lint/check_chart_ship_surface.py": [
    "tests/lint/test_check_chart_ship_surface.py"
   ],
+  "scripts/tools/lint/check_cli_contract.py": [
+   "tests/lint/test_check_cli_contract.py"
+  ],
   "scripts/tools/lint/check_cli_default_drift.py": [
    "tests/lint/test_check_cli_default_drift.py"
   ],
@@ -2965,6 +2982,7 @@
    "tests/shared/test_yaml_file_error.py"
   ],
   "scripts/tools/validate_all.py": [
+   "tests/lint/test_check_cli_contract.py",
    "tests/lint/test_check_doc_freshness.py",
    "tests/lint/test_check_orphan_lint.py",
    "tests/lint/test_check_structure.py",
@@ -3530,7 +3548,8 @@
    "tests/ops/test_ci_path_filter_coverage.py"
   ],
   "try-local/README.md": [
-   "tests/lint/test_check_doc_datools_cmds.py"
+   "tests/lint/test_check_doc_datools_cmds.py",
+   "tests/ops/test_ci_path_filter_coverage.py"
   ],
   "try-local/alertmanager.yml": [
    "tests/dx/test_verify_diff.py",

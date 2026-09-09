@@ -24,14 +24,14 @@ v2.7.0 奠定的 Scale Foundation I（`conf.d/` 階層 + `_defaults.yaml` 繼承
 
 ### 客戶導入管線 — 5-step chain ✅
 
-把客戶既有的 PromRule corpus 導入到本平台 conf.d/ 架構的端到端流程，`da-parser` / `da-batchpr` / `da-guard` codify 為可離線執行的 Go binary，Profile Builder 則為嵌入 batch-pr 管線的 library（`da-tools profile build` 獨立 CLI 尚未出貨、規劃中）：
+把客戶既有的 PromRule corpus 導入到本平台 conf.d/ 架構的端到端流程，`da-parser` / `da-batchpr` / `da-guard` codify 為可離線執行的 Go binary，Profile Builder 則為嵌入 batch-pr 管線的 library（`da-tools profile build` 獨立 CLI 尚未出貨、規劃中）： <!-- datools-cmd-ignore: 規劃中的 CLI，尚未出貨 -->
 
 ```
 PromRule corpus → da-parser → Profile Builder（library）→ da-batchpr apply → da-guard → conf.d/
 ```
 
 - **`da-parser`**：dialect 偵測（prom / metricsql / ambiguous）+ VM-only 函數 allowlist（`vm_only_functions.yaml` 走 `go:embed`，CI freshness gate 偵測新版 metricsql 上游函數）+ `StrictPromQLValidator` + provenance header（`generated_by` / `source_rule_id` / `parsed_at` / `source_checksum`）。`prom_portable: bool` 旗標讓客戶遷入 VM 後仍能識別「可回 Prom」的子集 — anti-vendor-lock-in 具體承諾
-- **Profile Builder（library-only；`da-tools profile build` CLI 尚未出貨、規劃中）**：cluster 相似 rules → median 演算法決定 cluster 共通閾值 → 寫 `_defaults.yaml`、偏離 tenant 寫 `<id>.yaml` 只含 override；fuzzy matching opt-in 套 duration-equivalence canonicalisation（`[5m]` ≡ `[300s]` ≡ `[300000ms]`）；以 `BuildProposals` / `EmitProposals` library 由 batch-pr 管線消費，遵循 [ADR-018](../adr/018-profile-as-directory-default.md) Profile-as-Directory-Default
+- **Profile Builder（library-only；`da-tools profile build` CLI 尚未出貨、規劃中）**：cluster 相似 rules → median 演算法決定 cluster 共通閾值 → 寫 `_defaults.yaml`、偏離 tenant 寫 `<id>.yaml` 只含 override；fuzzy matching opt-in 套 duration-equivalence canonicalisation（`[5m]` ≡ `[300s]` ≡ `[300000ms]`）；以 `BuildProposals` / `EmitProposals` library 由 batch-pr 管線消費，遵循 [ADR-018](../adr/018-profile-as-directory-default.md) Profile-as-Directory-Default <!-- datools-cmd-ignore: 規劃中的 CLI，尚未出貨 -->
 - **`da-batchpr apply`**：Hierarchy-Aware 分塊 — `_defaults.yaml` 變更打 Base Infrastructure PR、tenant PRs 標 `Blocked by:`；`refresh` 在 Base merge 後自動 rebase 下游；`refresh-source`（+ `--patches-dir`）對 parser bug fix 重寫受影響 tenant 檔案、重生 patch PR
 - **`da-guard`**：Schema / Routing / Cardinality / Redundant-override 四層檢查；`.github/workflows/guard-defaults-impact.yml` 自動跑 + sticky PR comment（marker-based update vs create）+ artifact 14d retention
 
@@ -45,7 +45,7 @@ PromRule corpus → da-parser → Profile Builder（library）→ da-batchpr app
 
 - **Server-side Search API** `GET /api/v1/tenants/search`：page_size cap 500 + closed-field free-text + RBAC-before-pagination + 30s TTL `tenantSnapshotCache`，p99 < 200ms @ 1000T
 - **Tenant Manager JSX**：API-first 三層 priority chain（API → platform-data.json → DEMO）+ 429 retry-with-backoff + server-side `q` filter（debounced 300ms）+ URL state（`useURLState` + `useDebouncedValue`）+ self-written `useVirtualGrid`（`filtered.length > 50` 才 virtualize；客戶 500+ tenant DOM-freeze 在 server-cap 層解掉）
-- **Master Onboarding Dual Entry**：Import Journey 5 步（parser / batch-pr / guard inline CLI + Profile Builder library 步驟——`da-tools profile build` CLI 尚未出貨、規劃中）vs Wizard Journey 5 步（cicd-setup → deployment → alert-builder → routing-trace → tenant-manager 全 5/5 真 wizards）
+- **Master Onboarding Dual Entry**：Import Journey 5 步（parser / batch-pr / guard inline CLI + Profile Builder library 步驟——`da-tools profile build` CLI 尚未出貨、規劃中）vs Wizard Journey 5 步（cicd-setup → deployment → alert-builder → routing-trace → tenant-manager 全 5/5 真 wizards） <!-- datools-cmd-ignore: 規劃中的 CLI，尚未出貨 -->
 - **Tenant Manager × Wizard 整合**：TenantCard footer 三鈕（Alert / Route / Preview）deep link + `?tenant_id=` URL 參數預填 + 獨立 `simulate-preview.jsx` widget（4-state machine + 500ms debounce + AbortController）
 - **Smart Views**：`useSavedViews` + `SavedViewsPanel` 接 v2.5.0 backend `/api/v1/views` CRUD；RBAC-aware（Save/Delete hidden when `canWrite=false`）
 
@@ -91,7 +91,7 @@ v2.9.0 的開發節奏由「功能堆疊」轉向「實戰硬化」。根據首�
 |------|---------|---------|
 | **Anomaly-Aware Dynamic Threshold** | ML 基礎設施（時序分析、季節性偵測） | 閾值從「人工設定」進化為「自動調適」。`_threshold_mode: adaptive` + `quantile_over_time`。靜態閾值作為安全下限（floor） |
 | **Log-to-Metric Bridge** | Loki / Elasticsearch 整合 | 統一 log + metric 告警管理。推薦生態系解法：`grok_exporter / mtail → Prometheus → 本平台` |
-| **Multi-Format Export** | metric-dictionary.yaml 對照表 | `da-tools export --format datadog/terraform` — 平台成為告警策略的抽象層 |
+| **Multi-Format Export** | metric-dictionary.yaml 對照表 | `da-tools export --format datadog/terraform` — 平台成為告警策略的抽象層 <!-- datools-cmd-ignore: roadmap 願景，尚未出貨 --> |
 | **DynamicAlertTenant CRD** | Operator SDK + CRD versioning | 取代 ConfigMap + Directory Scanner（需重新評估 ADR-008 架構邊界） |
 | **ChatOps 深度整合** | Slack/Teams Bot SDK | 雙向操作（查詢 tenant 狀態、觸發靜默模式） |
 | **CI/CD Pipeline 狀態透傳** | PR write-back 穩定化 | PR/MR CI Status Check 回傳 Portal UI |
