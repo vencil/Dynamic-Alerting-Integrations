@@ -1475,7 +1475,7 @@ def write_baseline(findings: list[Finding], existing: list[BaselineEntry],
                      f'ticket: {q(tickets.get(key, "#TODO"))}}}')
     if not counts:
         lines[-1] = "entries: []"
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
     return len(counts)
 
 
