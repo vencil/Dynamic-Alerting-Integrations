@@ -868,6 +868,23 @@ class TestPinnedInvocationCapability:
     Direction (1): the check runs inside `dx/bump_docs.py` at the moment it
     repoints a pin. These tests grade the extractor + oracle that bump_docs
     calls; the wiring itself is pinned in tests/dx/test_bump_docs.py.
+
+    Intentional-break dogfood (testing-playbook §LL v2.8.0 §6) — each mutation
+    below was applied to check_doc_datools_cmds.py, the two suites re-run, and
+    the tree restored. All four bit; none of them is an article of faith:
+
+      * the capability comparison itself (`inv.subcommand not in
+        command_map_keys` -> `False`)      -> the flagging tests go red
+      * the unreadable-doc `raise` -> a silent `continue`
+                                            -> test_unreadable_doc_fails_closed
+      * the empty-COMMAND_MAP guard removed
+                                            -> test_empty_capability_set_is_refused
+      * `_image_index(toks)` -> "first token containing da-tools"
+                                -> test_mount_path_containing_da_tools_is_not_the_image
+
+    Re-run any of them with:
+      python3 -m pytest tests/lint/test_check_doc_datools_cmds.py \
+              tests/dx/test_bump_docs.py -q
     """
 
     CAPS = {"validate", "cutover", "threshold-govern"}
