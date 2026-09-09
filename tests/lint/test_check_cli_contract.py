@@ -1,11 +1,8 @@
 #!/usr/bin/env python3
-"""Tests for check_cli_contract (#1379 / TRK-370).
-
-⛔ Every verdict has a PLANTED positive and a must-not-report negative built
-from synthetic docs and synthetic parsers. "the repo is clean" (TestRealRepo)
-is the weakest assertion here — any change that scans less satisfies it —
-so it is paired with probes that must be FOUND and negatives that must exist
-in the docs and NOT be found.
+"""Tests for check_cli_contract (#1379 / TRK-370): every verdict, carrier and
+ledger rule has a planted positive and a must-not-report negative on synthetic
+docs and parsers; TestRealRepo pins the shipped tree and ledger with probes that
+must be found and negatives that must not be.
 """
 from __future__ import annotations
 
@@ -227,8 +224,7 @@ class TestV1UndeclaredFlag:
 
     def test_an_attached_short_value_does_not_swallow_the_next_token(self, tmp_path):
         """`-rX snapshot`: the value is attached, so `snapshot` is still the
-        action. Measured before the fix: `snapshot` was consumed as `-r`'s
-        value and `--message` was judged against the ROOT parser — a false red."""
+        action and `--message` is judged against the child parser."""
         r = _fence_scan(tmp_path, "da-tools tool2 -rX snapshot --message hi")
         assert _open(r.findings) == []
 
@@ -271,9 +267,8 @@ class TestV2PrefixAbbreviation:
         assert _open(r.findings) == [("V2", "widget", "--output")]
 
     def test_the_message_says_the_value_and_prose_change_too(self, tmp_path):
-        """#1514: `--output foo.yaml` → `--output-dir foo.yaml` is green and still
-        wrong (a directory named foo.yaml). The remedy must not stop at the
-        spelling, so the message must not either."""
+        """`--output foo.yaml` → `--output-dir foo.yaml` is green and still wrong
+        (a directory named foo.yaml), so the message must say more than the spelling."""
         r = _fence_scan(tmp_path, "da-tools widget db-a --output out.yaml")
         msg = r.findings[0].message
         assert "--output-dir" in msg and "directory" in msg and "#1514" in msg
@@ -368,7 +363,7 @@ class TestCommandForms:
         assert _open(r.findings) == [("V1", "widget", "--ci")]
 
     def test_a_flag_after_a_command_substitution_is_still_judged(self, tmp_path):
-        """#1513 item 6: `$(jq …)` used to end the command."""
+        """`$(jq …)` does not end the command."""
         r = _fence_scan(tmp_path, "da-tools widget $(cat tenant.txt) --bogus-flag")
         assert _open(r.findings) == [("V1", "widget", "--bogus-flag")]
 
@@ -565,8 +560,7 @@ class TestV3OptionTable:
         assert _scan(tmp_path, reference=ref).errors == []
 
     def test_an_unknown_table_does_not_inherit_the_previous_tables_kind(self, tmp_path):
-        """⛔ Measured: without the reset, four unpinned header shapes showed up
-        in the productive-header set of the real docs."""
+        """A separator under an unpinned header ends the previous table's reading."""
         ref = tmp_path / "ref.md"
         ref.write_text(_REF_HEAD + _REF_CLEAN_ROW + "\n| 模式 | 說明 |\n|---|---|\n"
                        "| `strict` | x |\n" + _REF_EXIT, encoding="utf-8")
@@ -594,8 +588,7 @@ class TestV3OptionTable:
         assert control.stats["reference_sections_unmatched"] == 0
 
     def test_a_fenced_comment_inside_a_section_is_not_a_heading(self, tmp_path):
-        """⛔ Measured: `# Dry-run` inside an example block reset the command
-        and the exit-code tables after it vanished — 61 judged codes → 36/14."""
+        """A `# comment` inside an example block does not end the command's section."""
         ref = tmp_path / "ref.md"
         ref.write_text(_REF_HEAD + _REF_CLEAN_ROW + "\n```bash\n# comment\nda-tools widget x\n```\n"
                        + _REF_EXIT.replace("| `3` | blocked |\n", ""), encoding="utf-8")
@@ -655,7 +648,7 @@ class TestV4ExitCodeTable:
         assert _open(r.findings) == [] and r.stats["exit_undecidable_scripts"] == 1
 
     def test_disclosure_counts_are_per_command_not_per_document(self, tmp_path):
-        """⛔ Measured: 7 opaque scripts seen in two documents printed as 14."""
+        """A script seen in both reference docs is one script."""
         opaque = {"widget": mod.reachable_exit_codes(_OPAQUE_SOURCE)}
         table = "\n**結束碼**\n\n| 代碼 | 說明 |\n|------|------|\n| `0` | ok |\n"
         a = _reference(tmp_path, exit_table=table, name="a.md")
@@ -676,7 +669,7 @@ class TestV4ExitCodeTable:
             "commands_without_exit_table"] == 0
 
     def test_the_exit_header_shapes_are_pinned(self):
-        """Which table headers produce exit-code comparisons (#1556 rule 3)."""
+        """Which table headers produce exit-code comparisons (the shared pin)."""
         assert mod._EXIT_HEADERS == {
             ("代碼", "說明"), ("Code", "Description"), ("Code", "意義"),
             ("Code", "含義"), ("Code", "Meaning"), ("Exit Code", "含義", "CI 行為"),
@@ -697,16 +690,14 @@ class TestBaselineLedger:
 
     def test_a_surplus_finding_with_a_ledgered_key_stays_open_and_names_every_site(
             self, tmp_path):
-        """⛔ Measured before `count`: one row swallowed a brand-new violation
-        with the same token appended to the same file. The open one is the
-        later site, but the NEW one may be the earlier line, so the message
-        lists every line with this key (N3)."""
+        """The open one is the later site, but the NEW one may be the earlier
+        line, so the message lists every line with this key."""
         r = _fence_scan(tmp_path, "da-tools widget db-a --ci", "da-tools widget db-b --ci")
         open_, suppressed, errors = mod.apply_baseline(r.findings, [self._entry(count=1)])
         assert [f.line for f in open_] == [3] and len(suppressed) == 1 and errors == []
         assert "2 of 2 with this key" in open_[0].message and "lines 2, 3" in open_[0].message \
             and "(#1380) covers 1 of them" in open_[0].message
-        # the reviewer's shape: the new site sits BEFORE the ledgered one
+        # the new site sits BEFORE the ledgered one
         r = _fence_scan(tmp_path, "da-tools widget NEW --ci", "echo", "echo", "echo",
                         "da-tools widget db-a --ci")
         open_, _s, _e = mod.apply_baseline(r.findings, [self._entry(count=1)])
@@ -728,7 +719,7 @@ class TestBaselineLedger:
 
     def test_a_finding_exempted_twice_is_a_hard_error_but_one_each_is_fine(self, tmp_path):
         """Per FINDING, not per key: one site in the ledger and another under
-        an inline ignore is one exemption each (N2)."""
+        an inline ignore is one exemption each."""
         both = _fence_scan(tmp_path, "da-tools widget db-a --ci",
                            "da-tools widget db-b --ci  # datools-cmd-ignore: why")
         open_, suppressed, errors = mod.apply_baseline(both.findings, [self._entry(count=1)])
@@ -777,7 +768,7 @@ class TestBaselineLedger:
         assert any("count" in e for e in mod.load_baseline(p)[1]), "count is mandatory"
 
     def test_write_baseline_escapes_tokens(self, tmp_path):
-        """A backslash in a token must survive the YAML round trip (N13)."""
+        """A backslash in a token must survive the YAML round trip."""
         r = _fence_scan(tmp_path, "da-tools 'foo\\bar' --x", "da-tools 'a\"b'")
         out = tmp_path / "b.yaml"
         mod.write_baseline(r.findings, [], out)
@@ -857,7 +848,7 @@ class TestBlindIsNotClean:
 
     def test_write_baseline_refuses_when_the_scan_did_not_complete(self, monkeypatch, tmp_path,
                                                                  capsys):
-        """N4: a ledger regenerated under a blind parser would silently drop
+        """A ledger regenerated under a blind parser would silently drop
         every row of that command."""
         target = tmp_path / "b.yaml"
         monkeypatch.setattr(mod, "BASELINE_PATH", target)
@@ -878,7 +869,8 @@ class TestBlindIsNotClean:
 
 
 class TestRoundTwo:
-    """Second blind review (N1–N13): every shape has a positive and a negative."""
+    """Substitution, wrapper, shell-string, manifest, fence and ignore-marker
+    shapes: each with a positive and a negative."""
 
     @pytest.mark.parametrize("line", [
         "da-tools widget $(pwd); da-tools widget db-a --ci",            # `);` glued
@@ -924,7 +916,7 @@ class TestRoundTwo:
         assert r.stats["cmd_sh_c_strings"] == 0, line
 
     def test_a_da_tools_image_running_a_shell_is_an_unknown_subcommand(self, tmp_path):
-        """N6: the image's entrypoint is da-tools, so `sh` is argv[0]."""
+        """The image's entrypoint is da-tools, so `sh` is argv[0]."""
         r = _fence_scan(tmp_path, 'docker run --rm ghcr.io/vencil/da-tools:latest sh -c "ls"')
         assert _open(r.findings) == [("V0", "sh", "sh")] and r.stats["cmd_sh_c_strings"] == 0
         assert r.stats["cmd_outside_command_position"] == 0, "no da-tools inside `ls`"
@@ -990,9 +982,9 @@ class TestRoundTwo:
     ])
     def test_manifest_shapes_follow_their_schemas_semantics(self, tmp_path, body, expect):
         """k8s `command:` REPLACES the entrypoint (a da-tools image serving
-        http.server runs no da-tools — live on this tree); compose `command:`
-        is the CMD under the da-tools entrypoint unless `entrypoint:` replaces
-        it. The overrides are disclosed, not judged."""
+        http.server runs no da-tools); compose `command:` is the CMD under the
+        da-tools entrypoint unless `entrypoint:` replaces it. The overrides are
+        disclosed, not judged."""
         r = _scan(tmp_path, docs=[_doc(tmp_path, body)])
         assert _open(r.findings) == expect, body
         assert r.stats["cmd_manifest_argvs"] == (1 if expect else 0)
@@ -1078,8 +1070,8 @@ class TestRealRepo:
             f"{f.verdict} {f.file}:{f.line} {f.command} {f.token}" for f in result["open"])
 
     def test_the_probes_are_measured(self, result):
-        """⛔ Self-check: the gate must SEE the defects the content tickets
-        describe, or a green tree proves only that it looked at nothing."""
+        """The gate must SEE the defects the content tickets describe, or a
+        green tree proves only that it looked at nothing."""
         keys = {(f.verdict, f.command, f.token) for f in result["findings"]}
         for probe in [("V1", "validate-config", "--ci"),        # #1380
                       ("V1", "onboard", "--analyze"),           # #1381
@@ -1142,8 +1134,8 @@ class TestRealRepo:
         assert set(result["per_doc"]) == {"docs/cli-reference.md", "docs/cli-reference.en.md"}
 
     def test_the_exit_code_probe_resolves(self):
-        """config-diff is 0/1/2 by construction (#1358); if the AST reader cannot
-        see that, every exit-code comparison is void."""
+        """config-diff is 0/1/2 by construction; if the AST reader cannot see
+        that, every exit-code comparison is void."""
         script = mod._resolve(mod.parse_command_map()["config-diff"])
         ec = mod.reachable_exit_codes(script.read_text(encoding="utf-8"))
         assert {1, 2} <= set(ec.reachable), ec

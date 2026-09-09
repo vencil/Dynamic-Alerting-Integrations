@@ -4,58 +4,28 @@
 判定（每條都從兩個獨立來源推導後比對，不列舉壞拼法）：
 
   V0  ``da-tools <x>`` 的 ``x`` 不是 ``COMMAND_MAP`` 的鍵
-  V1  旗標不在該 subcommand 的 parser ``option_strings`` 裡（含二層 argparse
-      子命令不在 ``add_subparsers`` 的 choices）
-  V2  旗標不是精確名、卻是恰一個長旗標的前綴——argparse 預設 ``allow_abbrev``
-      會收下它並綁到另一個旗標、rc=0（#1514）。owner 裁決一律違規，不分有害
-      無害：今天無害只是因為還沒有第二個同前綴的旗標
-  V3  cli-reference 選項表第一欄的旗標不在 parser（#1619）
-  V4  script 以 AST 可達的非零結束碼，不在 cli-reference 該命令節的結束碼表
-      （#1416；只判「可達但未列」，不判 ``0``、不判「列了但 AST 看不到」）
+  V1  旗標不在該 subcommand 的 parser ``option_strings``（含二層 ``add_subparsers`` 的 choices）
+  V2  旗標是恰一個長旗標的前綴——argparse ``allow_abbrev`` 會收下並綁到別的旗標、rc 0；一律違規
+  V3  cli-reference 選項表第一欄的旗標不在 parser
+  V4  script 以 AST 可達的非零結束碼不在 cli-reference 該命令節的結束碼表（只判「可達但未列」）
 
-契約來源：``_lint_helpers.parse_command_map`` 給 subcommand→script；每支 script
-用 runpy 跑到 ``parse_args`` 被攔下為止，拿到真的 ``ArgumentParser``（動態加入
-的參數也在；``--help`` 文字看不到沒有 help 的參數，CPython gh-95889）；
-``--prometheus`` 由 entrypoint 對 ``PROMETHEUS_COMMANDS`` 注入，從 entrypoint
-的 AST 讀。
+契約來源：``parse_command_map`` 給 subcommand→script，每支 script 用 runpy 跑到 ``parse_args``
+被攔下為止拿到真的 ``ArgumentParser``；``--prometheus`` 從 entrypoint 的 ``PROMETHEUS_COMMANDS`` 讀。
+載體：fenced block 的邏輯行（``diff`` fence 只看 ``+`` 行）、fence 之外的 inline code span、manifest
+的 ``command:``／``args:`` 清單、shell 真的會執行的 ``sh -c "…"`` 字串，以及 cli-reference 的選項表
+與結束碼表；裸 ``da-tools`` 只在命令位置才是主語。
 
-命令載體（V0–V2）：fenced block 的每個邏輯行（合併 ``\\`` 續行、去 shell 註解；
-fence 開闔照 CommonMark，``diff`` fence 只判 ``+`` 行）與 fence 之外的每個
-``\\`…\\``` inline span，都以控制運算子切成命令段、每段各找主語各判；``$(…)``
-（含巢狀與 ``$((…))``）整段當一個佔位值；``sh -c "…"``（``-lc``／``-cl`` 亦同）
-的字串只在 shell 真的會執行時（命令位置、``--entrypoint sh``、非 da-tools image
-的 argv）照同一條規則再判一次——da-tools image 的 argv 裡 ``sh`` 是 V0；
-manifest 的 ``command:``／``args:`` 清單依 schema 展開——k8s ``containers:`` 的
-``command:`` 與 compose 的 ``entrypoint:`` 覆蓋 entrypoint（揭露），compose
-``services:`` 的 ``command:`` 是 CMD。主語三種：裸 ``da-tools``（只在命令位置：
-段首，或前一個字是 ``run``／``exec``／``--``／POSIX 包裝字／shell 保留字）、``run``
-之後的 image ref（image 之前是 docker 旗標）、``python3 …/<script>.py`` 反查
-COMMAND_MAP。不在命令位置的 ``da-tools <subcommand>``（吃 operand 的包裝字
-``docker exec <ctr>``／``timeout N`` 之後、框線圖裡、checklist 項目裡）不判，另計揭露。
+帳本 ``docs/internal/cli-contract-baseline.yaml`` 每列 (file, command, verdict, token, count, ticket)，
+比對是集合相等——少於 count 是 stale 硬錯、多出來的是新 finding、ticket 必須是 ``#NNNN``。
+逃生門 ``datools-cmd-ignore: <理由>``（fence 內 shell 註解、散文行尾或表格末格的 HTML 註解）：
+理由空是硬錯，同一 finding 同時被帳本與 ignore 豁免是硬錯。
 
-分工：``guard`` / ``parser`` / ``batch-pr`` 走 ``GoBinaryDispatcher``，runpy 在
-argparse 之前就 SystemExit，本閘門把它們歸「無 parser」通道、不判旗標、只揭露
-計數；它們的子命令合法性由既有 ``check_doc_datools_cmds`` 負責（本閘門不重做）。
-portal 的 ``commands.js`` / ``platform-demo.jsx`` 不在本閘門掃描面（另一支 PR），
-同樣只揭露。``docs/CHANGELOG.md`` 是根 CHANGELOG 的 symlink，歷史條目合法地寫著
-已改名的旗標（與 #1513 的掃描面一致），symlink 一律不掃。
+結束碼：閘門自己跑不完回 2；有 finding 或內容面硬錯在 ``--ci`` 下回 1。
+輸出末尾的 NOT scored 是揭露不是涵蓋：列在那裡的東西這支工具看不到。
 
-帳本：``docs/internal/cli-contract-baseline.yaml`` 列既有內容票的紅
-（``file`` + ``command`` + ``verdict`` + ``token`` + ``count`` + ``ticket``）；
-比對是集合相等——同鍵命中數少於 ``count`` 是 stale 硬錯，多出來的是新 finding；
-``ticket`` 必須是 ``#NNNN``。逃生門：fence 行尾 ``# datools-cmd-ignore: <理由>``、
-表格列最後一格內／散文行尾 ``<!-- datools-cmd-ignore: <理由> -->``（註解開頭必須是
-這個 token 加冒號）；理由空是硬錯，同一 finding 同時被帳本與 ignore 豁免是硬錯
-（同鍵一處帳本一處 ignore 不是），被 ignore 的行計入揭露。
-
-結束碼：閘門自己跑不完（帳本缺檔或格式錯、script 載入失敗、掃描面為空）回 2；
-有 finding 或內容面硬錯在 ``--ci`` 下回 1。
-
-⚠️ NOT scored 是揭露不是涵蓋：無 parser 的命令、不在 COMMAND_MAP 的 script、
-不在命令位置的裸 ``da-tools``、未建模包裝字之後的命令、``run`` 之後認不出 image
-的段、entrypoint 覆蓋、位置參數、佔位符、
-未宣告旗標後被當成值跳過的字、不可判的 exit 表達式、沒有結束碼表的命令、被
-ignore 的行、以及非 markdown 載體，這支工具都看不到，計數印在輸出末尾。
+分工：無 parser 的 Go wrapper（``guard``／``parser``／``batch-pr``）只揭露不判，其子命令合法性歸
+``check_doc_datools_cmds``；表頭 pin、環境變數清洗與掃描面恆等式直接 import
+``check_cli_default_drift``，不抄第二份。
 """
 from __future__ import annotations
 
@@ -77,10 +47,8 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # repo subdir layout
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION  # noqa: E402
 from _lint_helpers import ENTRYPOINT_PATH, parse_command_map  # noqa: E402
-# ⛔ Imported, not copied: the header pin, the env scrub set and the
-# scan-surface identity are the SAME facts #1556 already established. A second
-# transcription of any of them is a second thing that can drift (D-05g: read
-# the declared set, do not keep a copy).
+# Imported, not copied: a second transcription of these pins is a second
+# thing that can drift.
 from check_cli_default_drift import (  # noqa: E402
     _HEADER_DEFAULT_COL, _HEADER_NO_DEFAULT, _SCRUBBED_ENV, _resolve,
     _scan_surface_faults,
@@ -90,9 +58,8 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 CLI_REFERENCE_DOCS = (REPO_ROOT / "docs" / "cli-reference.md",
                       REPO_ROOT / "docs" / "cli-reference.en.md")
 BASELINE_PATH = REPO_ROOT / "docs" / "internal" / "cli-contract-baseline.yaml"
-# Customer landing pages outside docs/. Enumerated by FILE (same tuple and
-# same reasoning as check_doc_datools_cmds); a missing one is a hard error,
-# never a silent shrink.
+# Customer landing pages outside docs/, enumerated by file (same tuple as
+# check_doc_datools_cmds); a missing one is a hard error, never a silent shrink.
 EXTRA_DOC_FILES = (
     "components/da-tools/README.md",
     "components/da-tools/app/QUICKSTART.md",
@@ -107,14 +74,12 @@ _ENTRYPOINT_GLOBAL = frozenset({"-h", "--help", "help", "--version"})
 # Flags argparse itself provides on every parser.
 _PARSER_GLOBAL = frozenset({"-h", "--help"})
 # Words after which the NEXT word is a command: the container runtimes' `run`
-# / `exec`, POSIX `--` (end of options, utility guideline 10) and the coreutils
-# / POSIX wrappers that exec their operand. An enumeration with an authority
-# outside this file (POSIX + coreutils), which is what makes it legal.
+# / `exec`, POSIX `--` (end of options) and the coreutils / POSIX wrappers
+# that exec their operand.
 _COMMAND_WRAPPERS = frozenset({"run", "exec", "--", "sudo", "env", "time",
                                "nohup", "xargs"})
 # POSIX shell reserved words after which a command begins (`if da-tools …;
-# then`, `if ! da-tools …`, `{ da-tools …; }`): authority is the POSIX shell
-# grammar, so the list is legal.
+# then`, `if ! da-tools …`, `{ da-tools …; }`).
 _RESERVED_WORDS = frozenset({"if", "!", "{", "then", "else", "elif", "do",
                              "while", "until"})
 _DASH_C = re.compile(r"^-[A-Za-z]*c[A-Za-z]*$")   # `-c`, `-lc`, `-ec`, `-cl`
@@ -134,9 +99,7 @@ _SECTION_END = re.compile(r"^#{1,3}\s")
 _FLAG_IN_CELL = re.compile(r"(?<![\w./-])(--?[A-Za-z][\w-]*)")
 # A first cell that IS a flag spec: an optional single code span whose text
 # starts with a flag. `\`--json\` 的 \`coverage[]\`` (two spans, prose between)
-# is a description that mentions a flag, not a flag row — measured under an
-# unrecognised `| 輸出 | 內容 |` header, where the looser "contains a flag"
-# test turned that prose into a hard error with no legal way to go green.
+# is a description that mentions a flag, not a flag row.
 _FLAG_ROW = re.compile(r"^`?-{1,2}[A-Za-z][\w-]*(?:[^`]*`)?\s*$")
 # `\`1\``, `1`, or several codes in one cell: `\`1\` / \`2\``.
 _CODE_CELL = re.compile(r"^`?\d+`?(?:\s*/\s*`?\d+`?)*$")
@@ -400,11 +363,9 @@ def reachable_exit_codes(source: str) -> ExitCodes:
 def _cells(line: str) -> list[str]:
     r"""Table cells, splitting only on unescaped pipes.
 
-    ⛔ Not the sibling's ``_cells``: that one splits on every ``|``, so a
-    flag cell such as ``\`--format md\|json\``` is cut in two and its first
-    fragment is an unterminated code span. Header keys are unaffected (no
-    header carries an escaped pipe), which is why the two readers can
-    disagree here without disagreeing on which table they are in.
+    Not the sibling's ``_cells``, which splits on every ``|`` and cuts a
+    flag cell such as ``\`--format md\|json\``` in two. No header carries an
+    escaped pipe, so both readers still agree on which table they are in.
     """
     return [c.strip() for c in _UNESCAPED_PIPE.split(line.strip().strip("|"))]
 
@@ -433,9 +394,7 @@ def walk_lines(lines: list[str]) -> Iterator[tuple[int, str, _Fence | None]]:
 
     A fence closes only on a run of the SAME character at least as long as
     the one that opened it, so a ```` fence containing ``` blocks keeps them
-    as content instead of flipping the state on every inner fence line
-    (pymdownx.superfences renders those nested blocks; this reader must see
-    the same command lines the reader does).
+    as content — the same command lines pymdownx.superfences renders.
     """
     fence: _Fence | None = None
     blocks = 0
@@ -503,17 +462,15 @@ def _collapse_substitutions(tokens: list[str]) -> list[str]:
     """``$( … )`` becomes ONE placeholder token, parentheses matched.
 
     shlex hands `$` `(` … `)` out separately, and `(` is also the subshell
-    operator — so `--expect $(jq …) --next` used to be cut at the `(` and
-    every flag after it went unjudged in silence (#1513 item 6).
+    operator — without this, `--expect $(jq …) --next` is cut at the `(` and
+    every flag after it goes unjudged.
     """
     out: list[str] = []
     i = 0
     while i < len(tokens):
         # `$` may carry a prefix: `$(id -u):$(id -g)` lexes as `$` `(` … `)`
-        # `:$` `(` … `)`. Measured: matching only a bare `$` left the second
-        # `(` as a subshell operator, split the docker line in two, and the
-        # image after it was reported as "run without a recognisable image".
-        # `$((1+2))` and `$(dirname $(pwd))` nest: depth counts every unit.
+        # `:$` `(` … `)`. `$((1+2))` and `$(dirname $(pwd))` nest: depth
+        # counts every unit.
         if tokens[i].endswith("$") and i + 1 < len(tokens) and tokens[i + 1] == "(":
             depth = 0
             j = i + 1
@@ -637,16 +594,11 @@ def find_subject(segment: list[str], command_map: dict[str, str],
                     stats["cmd_bare_not_command"] += 1
             continue
         if _IMAGE_REF.match(tok):
-            # ⛔ An image reference is a subject only where the image is RUN.
+            # An image reference is a subject only where the image is RUN:
             # `docker pull/push/tag`, `kind load docker-image` and a YAML
-            # `image:` line name the same reference and execute nothing;
-            # measured: `kind load docker-image da-tools:dev --name …` and
-            # `docker tag … internal-registry.corp/da-tools:v2.9.0` both
-            # reported their NEXT token as an unknown subcommand. "Something
-            # before it is `run`" is the derivable property (docker / podman
-            # / nerdctl / `compose run` / `container run` all spell it that
-            # way); the enumeration it replaces was "which docker verbs do
-            # not run" — a list with no authority behind it.
+            # `image:` line name the same reference and execute nothing.
+            # "Something before it is `run`" is the derivable property
+            # (docker / podman / nerdctl / `compose run` all spell it that way).
             if "run" not in segment[start:i]:
                 continue
             if any(t == "--entrypoint" or t.startswith("--entrypoint=")
@@ -763,8 +715,8 @@ def judge_argv(args: list[str], command: str, model: ParserModel | None,
                     f"aspirational example needs `# {INLINE_IGNORE}: <why>`."))
                 if not eq and i < len(args) and not _looks_like_flag(args[i]):
                     # The word after an undeclared flag is most likely ITS
-                    # value; reading it as a positional produced a second,
-                    # noise finding (`--repo r snapshot` → `r` "not an action").
+                    # value; read as a positional it would be a second, noise
+                    # finding (`--repo r snapshot` → `r` "not an action").
                     stats["cmd_skipped_values"] += 1
                     i += 1
                 continue
@@ -1001,8 +953,8 @@ def manifest_argvs(block: list[str], stats: dict[str, int] | None = None
 
     Two schemas, told apart by the enclosing key: under k8s ``containers:``
     the ``command:`` REPLACES the image entrypoint (a da-tools image running
-    ``["python3", "-m", "http.server"]`` runs no da-tools at all — a live
-    example on this tree; counted as an entrypoint override), so only
+    ``["python3", "-m", "http.server"]`` runs no da-tools at all; counted as
+    an entrypoint override), so only
     ``command: ["da-tools", …]``, a shell ``-c`` string, or ``args:`` under
     an untouched da-tools image are argv. Under compose ``services:`` the
     ``command:`` is the CMD and the entrypoint stays da-tools unless an
@@ -1040,8 +992,7 @@ def manifest_argvs(block: list[str], stats: dict[str, int] | None = None
         if key == "name" and raw.lstrip().startswith("-"):
             # A new container only when the dash sits OUTSIDE the current
             # container's keys: `env:` holds `- name: PROMETHEUS_URL` items
-            # deeper than `image:`, and treating those as a boundary dropped
-            # the image (measured: 2 of 5 manifest argvs on the real tree).
+            # deeper than `image:`, and those are not a boundary.
             if key_indent is None or indent < key_indent:
                 _flush()
                 image_is_datools, command, key_indent = False, None, None
@@ -1186,11 +1137,9 @@ def scan_reference(doc: Path, rel: str, parsers: dict[str, ParserModel],
     option_rows = exit_count = 0
     for number, raw, fence in walk_lines(doc.read_text(encoding="utf-8").splitlines()):
         if fence is not None:
-            # ⛔ Fenced content is not a table and its `# comment` lines are
-            # not headings. Measured without this: a shell comment inside a
-            # command's example block matched the section-end rule, reset
-            # the command, and the exit-code tables after it were skipped —
-            # 61 judged codes fell to 36 (zh) and 14 (en) with no error.
+            # Fenced content is not a table and its `# comment` lines are
+            # not headings: a shell comment in an example block must not
+            # end the command's section.
             continue
         heading = _HEADING.match(raw)
         if heading:
@@ -1200,9 +1149,7 @@ def scan_reference(doc: Path, rel: str, parsers: dict[str, ParserModel],
             continue
         if _H4.match(raw) or _SECTION_END.match(raw):
             # A `####` that names no command (`#### Rollback 程序`) or a
-            # higher-level heading ends the last command's section; its
-            # tables are not the previous command's just because it came
-            # first.
+            # higher-level heading ends the last command's section.
             if _H4.match(raw):
                 unmatched += 1
             command = None
@@ -1228,12 +1175,9 @@ def scan_reference(doc: Path, rel: str, parsers: dict[str, ParserModel],
                 documented.setdefault(command, set())
             continue
         if set("".join(cells)) <= set("-: "):
-            # ⛔ A separator after an UNRECOGNISED header ends the previous
-            # table's reading. Without this reset the rows of `| 參數 | 用途 |`
-            # were judged as if the option table above them continued —
-            # measured: four unpinned header shapes showed up in the
-            # "productive headers" set, i.e. tables were being scored under a
-            # header the pin had never seen.
+            # A separator after an UNRECOGNISED header ends the previous
+            # table's reading; otherwise its rows would be scored under the
+            # header of the table above.
             table_header = pending
             header = pending if (pending in _OPTION_HEADERS
                                  or pending in _EXIT_HEADERS) else None
@@ -1396,10 +1340,8 @@ def apply_baseline(findings: list[Finding], entries: list[BaselineEntry]
     Set equality, not containment: an entry suppresses exactly ``count``
     findings with its key (the first ``count`` by line). Fewer live findings
     than ``count`` is stale (content was fixed — lower or delete the row);
-    more is new debt (the surplus stays red). ⛔ Measured before ``count``:
-    one row `(cli-reference.md, patch-config, V1, --dry-run)` also swallowed a
-    brand-new `--dry-run` planted at the end of the same file. An entry
-    whose key is also inline-ignored is a double exemption (pick one).
+    more is new debt (the surplus stays red). An entry whose key is also
+    inline-ignored is a double exemption (pick one).
     """
     by_key: dict[tuple[str, str, str, str], list[Finding]] = {}
     ignored_by_key: dict[tuple[str, str, str, str], int] = {}
@@ -1487,7 +1429,7 @@ def doc_files(repo_root: Path = REPO_ROOT) -> tuple[list[Path], list[str]]:
 
     Symlinks are skipped: `docs/CHANGELOG.md` points at the root CHANGELOG,
     whose historical entries legitimately quote flags that have since been
-    renamed (#1513 excludes it for the same reason).
+    renamed.
     """
     docs = [f for f in sorted((repo_root / "docs").rglob("*.md"))
             if "/internal/" not in f.as_posix() and "/archive/" not in f.as_posix()
@@ -1594,9 +1536,8 @@ def scan(parsers: dict[str, ParserModel] | None = None,
             if not per_doc[rel][carrier]:
                 fatal.append(f"{rel} contributed 0 judged {label} — this check "
                              f"read the file and compared nothing in it")
-    # ⛔ Disclosure counts are SETS of commands, computed once. Accumulating
-    # them inside the per-document loop reported "14 scripts" for 7 scripts
-    # seen in two documents.
+    # Disclosure counts are SETS of commands, computed once: a script seen in
+    # both reference docs is one script.
     stats["commands_without_exit_table"] = len(no_table)
     stats["exit_tables_no_script"] = len(no_script)
     stats["exit_undecidable_scripts"] = len(

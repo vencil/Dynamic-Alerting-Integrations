@@ -511,9 +511,8 @@ WATCH_TRIGGERS: Dict[str, List[str]] = {
     # ⛔ cli_default_drift 兩側都要掛：它比對「文件的預設值欄」與「argparse 的
     # 真實 default」，任一側改動都會造成漂移。只掛 docs/ 會讓「改了 argparse
     # 預設值、沒動文件」這個方向在 watch/smart 模式下完全沒有偵測。
-    # cli_contract likewise: a flag renamed in argparse, a subcommand added to
-    # COMMAND_MAP (components/) or a doc example edited are all one side of
-    # the same comparison.
+    # cli_contract likewise compares docs against argparse and COMMAND_MAP
+    # (components/), so it hangs on every side.
     "scripts/tools/": ["tool_map", "cli_coverage", "cli_default_drift", "cli_contract"],
     "CLAUDE.md": ["versions", "doc_map"],
     "CHANGELOG.md": ["changelog", "changelog_format"],
