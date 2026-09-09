@@ -119,10 +119,9 @@ echo "---"
 #   pipefail 讓 go test 的失敗浮現成非零的 wrapper exit，同時仍產出部分輸出。
 #   ⚠️ 機制是「**最右邊**的非零」，不是最左邊（本行原文寫 leftmost，是錯的）：
 #   實測 `set -o pipefail; (exit 5)|(exit 0)|(exit 7)|(exit 0)` → rc **7**。
-#   實務上這條管線的每種失敗都收斂成 1（go test 的編譯錯誤／測試失敗／壞旗標／
-#   TestMain os.Exit(3)／測試 binary 被 SIGKILL 都是 rc 1；`go run` 也把 filter 的
-#   任何非零壓成 1），所以「最左／最右」今天觀察不到差別 —— 但 go test 自己被
-#   SIGKILL 時 rc 是 **137**，那個非 1 的碼會原樣逃出去，是唯一可觀察的一類。
+#   實務上 go test 把所有失敗模式都正規化成 rc 1、`go run` 也把 filter 的任何非零
+#   壓成 1，所以「最左／最右」今天觀察不到差別 —— 唯一的例外是 go test 自己被
+#   SIGKILL，rc **137** 會原樣逃出去。
 "$GO_BIN" test -json "$@" 2>"$ERR_LOG" \
     | tee "$RAW_JSONL" \
     | "$GO_BIN" run "$FILTER" \

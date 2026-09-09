@@ -35,27 +35,22 @@ Why this exists
 第 3、4 條讓述詞保守：讀不到管線就不判違規，寧可漏也不誤紅（D-05e——誤紅才是
 守衛被刪掉的原因）。
 
-⛔ **不確定就不判**（第 5 輪，owner 裁決）
------------------------------------------
-這支工具的 shell 半邊經過**兩輪**對抗式盲審都沒收斂：第 1 輪的逐行掃描被挑出 10
-條（含 2 個誤紅），換成 lexer 之後第 3 輪又挑出 6 條，其中 4 條是新 lexer 自己
-帶進來的。沒有權威 shell parser 可用（`bashlex` / `shfmt` / `shellcheck` 都不在
-容器內），所以**不再寫第 3 版述詞**——改成碰到 lexer 決定不了的構造就整個單元
-**拒絕判定並在報告裡點名**（見 ``_HARD_CONSTRUCTS``）。
+⛔ **不確定就不判**（owner 裁決）
+--------------------------------
+容器內沒有權威 shell parser（``bashlex`` / ``shfmt`` / ``shellcheck`` 都沒有），
+所以碰到手刻 lexer 決定不了的構造，整個單元**拒絕判定並在報告裡點名**，而不是猜
+（見 ``_HARD_CONSTRUCTS``）。
 
-⚠️ 這是用**覆蓋面換正確性**：量測時 360 個單元裡 **36 個（10%）**被拒判，實際
-掃過 324 個。⛔ 「跳過」與「掃過且乾淨」在輸出與 JSON 裡都分得開（``skipped``
-／``scanned``），因為兩者混在一起正是本條線要防的那個病。
+⚠️ 這是用**覆蓋面換正確性**：被拒判的單元不會有 finding。⛔ 「跳過」與「掃過且
+乾淨」在輸出與 JSON 裡分得開（``skipped`` ／``scanned``），因為兩者混在一起正是
+本條線要防的那個病。實際比例每次執行都會印，這裡不複製一份會漂的快照。
+釘住它的是 ``test_skipped_is_reported_and_not_counted_as_clean``。
 
-⚠️ **拒判也要有證據**：第一版把 `case` 與**任何** brace group 都列進去，實測
-lexer 對它們給出與 bash 一致的答案 ⇒ 那兩條各自白白跳過 37 / 70 個單元，已移除。
-
-⛔ **第 6 輪盲審證明第 5 輪的安全性宣稱是假的**（owner 明示解除 ROUND-CAP 後修）：
-多行裸 ``( … )`` 與 ``{ … }`` 群組**既沒判對、也沒被拒判**，直接報「乾淨」
-（bash 實測兩者皆 rc=1）。⇒ 補進 ``_BARE_GROUP_RE``。同輪另外三條是**過度拒判**：
-prescan 原本對原始文字跑 regex，於是註解裡的 ``<<<``、雙引號裡的 ``|{ ``、單引號
-字串裡的 ``cleanup()`` 都會誤觸拒判、把真違規靜默丟掉 ⇒ 改為先 ``_mask()`` 掉註解
-與引號內文。**拒判用的證據必須跟判定用的一樣乾淨。**
+⚠️ **拒判也要有證據，跟 finding 一樣**。兩個方向都會出事，兩個方向都有測試釘住：
+判得對的構造被列進拒判清單（過度拒判＝把真違規靜默丟掉）由
+``test_shapes_that_must_stay_decidable`` 擋；prescan 必須先 ``_mask()`` 掉註解與
+引號內文，否則字串裡的 ``<<<`` 會誤觸拒判，由
+``test_hard_constructs_inside_comments_and_strings_do_not_refuse`` 擋。
 
 母體
 ----
@@ -116,15 +111,10 @@ _WORKFLOW_DIR = Path(".github") / "workflows"
 _HEREDOC_RE = re.compile(r"<<-?\s*([\'\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
 
 
-# ⛔ 「不確定就不判」的清單（TRK-381 第 5 輪，owner 裁決）。
+# ⛔ 「不確定就不判」的清單（owner 裁決）。容器內沒有權威 shell parser，碰到手刻
+# lexer 決定不了的構造，整個單元**拒絕判定並在報告裡點名**，而不是猜。
 #
-# 這支工具的 shell 半邊經過**兩輪**對抗式盲審都沒收斂：第 1 輪的逐行掃描被挑出
-# 10 條（含 2 個誤紅），換成 lexer 之後第 3 輪又挑出 6 條，其中 4 條是新 lexer
-# 自己帶進來的。沒有權威 shell parser 可用（bashlex / shfmt / shellcheck 都不在
-# 容器內），所以**不再寫第 3 版述詞**——改成：碰到手刻 lexer 決定不了的構造，
-# 整個單元**拒絕判定並在報告裡點名**，而不是猜。
-#
-# 每一條都有實測依據（bash 為 ground truth）：
+# 每一條都要有實測依據（bash 為 ground truth）：
 #   <<<        herestring 被 _HEREDOC_RE 當成 heredoc 開頭 ⇒ 之後整個檔案被跳過
 #   case       `foo|bar)` 的模式交替與管線同形
 #   function   關鍵字式函式定義對 `()` 為準的函式追蹤完全不可見
@@ -132,12 +122,9 @@ _HEREDOC_RE = re.compile(r"<<-?\s*([\'\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
 #
 # ⚠️ 這是**用覆蓋面換正確性**：被跳過的單元不會有 finding，報告會說出有幾個、
 # 為什麼。⛔ 「跳過」與「掃過且乾淨」在輸出裡必須分得開。
-# ⚠️ 這張清單**只收有實測重現的構造**。第一版把 `case` 與**任何** brace group 都
-# 列進來，實測是過度收窄：把兩者的拒判關掉之後，lexer 對
-#   case "$x" in foo|bar) … esac ; false|true ; RC=${PIPESTATUS[0]}   → 命中（對）
-#   cmd || { echo x; exit 2; } ; false|true ; RC=${PIPESTATUS[0]}      → 命中（對）
-# 兩個 fixture 都給出與 bash 一致的答案 ⇒ 那兩條拒判各自白白跳過 37 / 70 個單元。
-# ⛔ 拒判要有證據，跟 finding 一樣。
+# ⛔ 這張清單**只收有實測重現的構造**——判得對的構造列進來就是過度拒判，會把真違規
+# 靜默丟掉。`case "$x" in foo|bar)` 與函式外的 `cmd || { …; }` 兩個形狀 lexer 判得
+# 對，由 `test_shapes_that_must_stay_decidable` 釘住它們不得被拒判。
 _HARD_CONSTRUCTS = (
     # G1：`cat <<< var` 被 _HEREDOC_RE 當成 heredoc 開頭，終止詞永不出現 ⇒
     #     之後整個檔案被 lex 跳過（實測 bash rc=1、守衛 0 findings）。
@@ -151,29 +138,28 @@ _HARD_CONSTRUCTS = (
 # 群組的 `}` 會提早關掉巢狀計數（實測 bash rc=1、守衛 0 findings）。
 # 函式外的 `|| { …; }` 是最常見的慣用法且 lexer 判得對，所以不能一起拒判。
 _FUNC_DEF_RE = re.compile(r"^\s*[A-Za-z_][A-Za-z0-9_]*\s*\(\)", re.M)
-# ⚠️ 只認**群組的開頭**，不認函式自己的大括號。第一版把 `^\s*\}$` 也算進來，於是
-# 每一個 `name() { … }` 函式的結尾 `}` 都命中 ⇒ 所有具名函式的檔案全被拒判
-# （44 個單元），連第 2 輪明確修好的 func_before_set 形狀都被吞掉。
+# ⚠️ 只認**群組的開頭**，不認函式自己的大括號：把 `^\s*\}$` 也算進來的話，每一個
+# `name() { … }` 函式的結尾 `}` 都會命中 ⇒ 所有具名函式的檔案全被拒判。
 # 群組開頭的形狀是「行首的 `{ `」或「`;` / `&&` / `||` 之後的 `{ `」；
 # `name() {` 的 `{` 前面是 `)`，兩者都不match。
 _BRACE_GROUP_RE = re.compile(r"(?:^\s*|[;&|]\s*)\{\s", re.M)
 
 
-# H1/H2（第 6 輪盲審）：**裸的**多行 `( … )` 子 shell 與 `{ … }` 命令群組，lexer
-# 完全不追它們的巢狀（只追 `$(` 與反引號），於是群組內每一物理行都被 flush 成獨立
-# 語句、真正的管線不再是 `prev` ⇒ **既沒判對也沒被拒判，直接報「乾淨」**。
-# 實測 bash 兩者皆 rc=1、REACHED 未印，而 checker 回 scanned／skipped 空／findings 空。
-# ⇒ 那是第 5 輪安全性宣稱（判不了的都會被拒判）的反例，補進拒判。
-# ⚠️ **只認自成一行的「開頭」**。把結尾 `)` / `}` 也算進來的話，`name() { … }`
-# 函式自己的結尾大括號就會命中 —— 那個錯我在第 5 輪已經犯過一次（見
-# `_BRACE_GROUP_RE` 旁的註解），這裡是第二次，形狀完全一樣。
+# **裸的**多行 `( … )` 子 shell 與 `{ … }` 命令群組：lexer 只追 `$(` 與反引號、不追
+# 它們的巢狀，於是群組內每一物理行都被 flush 成獨立語句、真正的管線不再是 `prev`
+# ⇒ **既沒判對也沒被拒判，直接報「乾淨」**（bash 實測兩者皆 rc=1）。那是「判不了的
+# 都會被拒判」這個安全性宣稱的反例，所以補進拒判。
+# ⚠️ **只認自成一行的「開頭」**——連結尾 `)` / `}` 一起認的話，`name() { … }` 函式
+# 自己的結尾大括號會命中，就變成上面 `_BRACE_GROUP_RE` 那個過度拒判。
+# 釘住：`test_bare_multiline_groups_are_refused`（漏判方向）與
+# `test_shapes_that_must_stay_decidable`（過度拒判方向）。
 _BARE_GROUP_RE = re.compile(r"^\s*[({]\s*$", re.M)
 
 
 def _mask(body: str) -> str:
     """把註解與引號內文換成空白，**只留下真正的程式碼字元**給 prescan 比對。
 
-    ⛔ H3/H4/H5（第 6 輪盲審）：prescan 原本直接對**原始文字**跑 regex，於是
+    ⛔ prescan 原本直接對**原始文字**跑 regex，於是
       - `echo "a|{ b"`（雙引號內的 `|{ `）
       - 多行單引號字串裡自成一行的 `cleanup()`
       - `#` 註解裡的 `<<<`
@@ -243,8 +229,7 @@ class Stmt:
 def lex(lines: list[tuple[int, str]]) -> list[Stmt]:
     """把 (行號, 原始行) 串列切成邏輯語句。
 
-    ⛔ 這一版刻意處理三件手刻逐行掃描做不到、而且已實測會出錯的事
-    （TRK-381 第 2 輪盲審，三條各附重現）：
+    ⛔ 這一版刻意處理三件手刻逐行掃描做不到、而且已實測會出錯的事（各附重現）：
 
     1. **heredoc 內文不是程式碼**。``true | cat <<'DOC'`` 之後的內文若含
        ``${PIPESTATUS[0]}`` 字樣，逐行掃描會把它當成一次讀取而**誤紅**。
@@ -537,7 +522,7 @@ def iter_shell_units(repo: Path, parse_errors: list[str] | None = None) -> list[
                 }
             )
         else:
-            # ⛔ H7（第 6 輪盲審）：解析錯**不再中止整輪**。先前一有 YAML 錯就
+            # ⛔ 解析錯**不再中止整輪**。先前一有 YAML 錯就
             # 讓整個 run 以 rc 2 結束、stdout 全空 ⇒ 其他檔案裡**已經找到的真違規**
             # 一併被吞掉。那是把「靜默假綠」換成「全面停播」，而不是換成
             # 「報告我找到的 + 標記我量不到的」。現在逐檔收集，兩者都印，rc 仍是 2。
@@ -581,15 +566,15 @@ def _defaults_shell(node: object) -> object:
 def _workflow_run_units(rel: str, text: str) -> list[dict]:
     """把 workflow 的 ``run:`` 區塊切出來，並依 YAML 解析 shell 的繼承。
 
-    ⛔ **YAML 解析失敗一律拋 WorkflowParseError，不回空**（TRK-381 第 5 輪）。
-    先前它 ``except yaml.YAMLError: return []``：一處與 ``run:`` 完全無關的語法錯
-    就讓**整個檔案**貢獻 0 個單元、零診斷，工具照樣印「✅ 量了沒事」。實測：同一個
-    含真違規的檔案，加一處無關語法錯 ⇒ rc 0；拿掉 ⇒ rc 1 並命中。那正是本條線的
-    核心禁忌（「量不到」被呈現成「量了沒事」）出現在自己的工具裡。
+    ⛔ **YAML 解析失敗一律拋 WorkflowParseError，不回空**。先前它
+    ``except yaml.YAMLError: return []``：一處與 ``run:`` 完全無關的語法錯就讓
+    **整個檔案**貢獻 0 個單元、零診斷，工具照樣印「✅ 量了沒事」——本條線的核心禁忌
+    出現在自己的工具裡。釘住：``test_yaml_parse_error_is_rc2_not_a_clean_pass``
+    與 ``test_parse_error_does_not_swallow_findings_from_other_files``。
 
-    ⚠️ 行號取自 YAML 節點的 ``start_mark``，不是拿首行去全檔比對。先前那個作法在
-    本 repo 實測會誤植：296 個 run step 裡 **138 個（46%）**首行與別的 step 相同
-    （光 ``set -euo pipefail`` 就 66 個）。
+    ⚠️ 行號取自 YAML 節點的 ``start_mark``，不是拿首行去全檔比對——本 repo 有大量
+    run step 首行彼此相同（``set -euo pipefail`` 就是其一），比對會誤植。釘住：
+    ``test_run_block_line_number_comes_from_the_yaml_node``。
     """
     try:
         root = yaml.compose(text)
@@ -622,9 +607,9 @@ def _workflow_run_units(rel: str, text: str) -> list[dict]:
             #
             # ⛔ folded（`>`）**不行**：YAML 折疊會把連續非空行併成一行、空行才變成
             # 換行，於是 `value.splitlines()` 與實體行不再一一對應，`base + i` 會默默
-            # 漂掉（第 6 輪盲審實測：真違規在第 12 行、報成第 10 行）。行號報錯對一支
-            # lint 來說就是壞掉，所以**拒判**而不是猜。真實樹目前 0 個 folded 區塊，
-            # 所以這個拒判今天零成本。
+            # 漂掉。行號報錯對一支 lint 來說就是壞掉，所以**拒判**而不是猜。
+            # 釘住：`test_folded_scalar_run_block_is_refused` /
+            # `test_literal_block_is_still_scanned`。
             folded = run.style == ">"
             base = run.start_mark.line + (2 if run.style in ("|", ">") else 1)
             units.append(

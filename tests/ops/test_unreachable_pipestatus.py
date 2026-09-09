@@ -73,15 +73,13 @@ def test_repo_has_no_unreachable_pipestatus_reads() -> None:
 def test_population_is_not_vacuous() -> None:
     """⚠️ 反空轉下限：母體不得為空、也不得暴跌到不合理的低點。
 
-    量測時（TRK-381 第 2 輪）母體是 360 個 shell 單元（64 scripts / 296
-    workflow run blocks）。⚠️ 第 1 輪是 264（200 個 run 區塊）——那版用 regex
-    比對 ``run: |`` 的縮排，**漏掉 96 個 run step**（單行 ``run:`` 與縮排不合
-    的區塊）。改由 YAML parser 枚舉後獨立複核：296 個 ``run:`` step，相符。
-    下限取 250 —— 遠低於現況、又足以在枚舉壞掉時立刻紅。
+    ⛔ 下限擋的是「歸零」，不是「少一截」：曾經有一版用 regex 比對 ``run: |`` 的
+    縮排來枚舉 workflow 區塊，漏掉單行 ``run:`` 與縮排不合的區塊——母體少了近三成，
+    仍然遠高於任何合理的下限。改由 YAML parser 枚舉，並由下面幾格釘住形狀。
     """
     data = _findings(_REPO_ROOT)
     assert data["units"] >= 250, (
-        f"母體只剩 {data['units']} 個 shell 單元（量測時 360）。"
+        f"母體只剩 {data['units']} 個 shell 單元。"
         "這比較像枚舉壞了，而不是檔案真的變少 —— 工具失能長得就像零命中。"
     )
 
@@ -528,9 +526,8 @@ def test_same_file_without_the_yaml_error_finds_the_violation(tmp_path: Path) ->
 def test_run_block_line_number_comes_from_the_yaml_node(tmp_path: Path) -> None:
     """⚠️ 行號不能拿首行去全檔比對取第一個命中。
 
-    本 repo 實測 296 個 run step 裡 **138 個（46%）**首行與別的 step 相同
-    （光 ``set -euo pipefail`` 就 66 個）⇒ 舊作法最多讓 46% 的 workflow finding
-    指到錯的位置。這一格的兩個 step 首行**刻意相同**。
+    本 repo 有大量 run step 首行彼此相同（``set -euo pipefail`` 就是其一）⇒ 拿首行
+    比對會讓 workflow finding 指到錯的位置。這一格的兩個 step 首行**刻意相同**。
     """
     wf = ("on: push\njobs:\n  j:\n    runs-on: ubuntu-latest\n    steps:\n"
           "      - name: first\n        shell: bash\n        run: |\n"
