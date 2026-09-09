@@ -33,6 +33,13 @@ def _load():
 mod = _load()
 
 
+_va_spec = importlib.util.spec_from_file_location(
+    "validate_all", REPO_ROOT / "scripts" / "tools" / "validate_all.py")
+validate_all = importlib.util.module_from_spec(_va_spec)
+assert _va_spec.loader is not None
+_va_spec.loader.exec_module(validate_all)
+
+
 # ---------------------------------------------------------------------------
 # Synthetic contract: real argparse parsers through the production `_model`
 # ---------------------------------------------------------------------------
@@ -1310,7 +1317,8 @@ class TestEnvironmentIsScrubbed:
         def run(extra_env):
             env = {**os.environ, **extra_env, "PYTHONIOENCODING": "utf-8"}
             return subprocess.run([sys.executable, "-s", str(SCRIPT), "--json"],
-                                  capture_output=True, timeout=600, env=env,
+                                  capture_output=True, env=env,
+                                  timeout=validate_all.CHECK_TIMEOUT_SECONDS,
                                   cwd=str(REPO_ROOT))
         clean = run({})
         polluted = run({"PROMETHEUS_URL": "http://sentinel.invalid:9090",

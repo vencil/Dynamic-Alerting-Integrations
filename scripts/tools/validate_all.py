@@ -63,6 +63,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent
 BASELINE_FILE = REPO_ROOT / ".validation-baseline.json"
 PROFILE_CSV = REPO_ROOT / ".validation-profile.csv"
+# 每個 check 的時間預算；check 的測試若要對真樹跑，拿這個當上限而不是另開一個數字。
+CHECK_TIMEOUT_SECONDS = 120
 
 # Mapping from check name → fix command (script + args).
 # Only checks that have a regenerate/fix mode are listed here.
@@ -390,7 +392,7 @@ def _run_one(
             # _force_utf8_streams); only the parent's decode side was wrong.
             encoding="utf-8",
             errors="replace",
-            timeout=120,
+            timeout=CHECK_TIMEOUT_SECONDS,
             cwd=cwd,
         )
         elapsed = time.time() - start

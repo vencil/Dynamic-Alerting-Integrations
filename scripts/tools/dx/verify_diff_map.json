@@ -834,7 +834,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "a9e27640f4101ad8ac40afcacae38b3eee3f35bd684e9ace6e94b64b780e4518",
+ "source_digest": "e392c325029280a523dc9189b15300790bb0510da72ee3f1b69650d63150f579",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -2979,6 +2979,7 @@
    "tests/shared/test_yaml_file_error.py"
   ],
   "scripts/tools/validate_all.py": [
+   "tests/lint/test_check_cli_contract.py",
    "tests/lint/test_check_doc_freshness.py",
    "tests/lint/test_check_orphan_lint.py",
    "tests/lint/test_check_structure.py",
