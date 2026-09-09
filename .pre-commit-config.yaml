@@ -681,6 +681,8 @@ repos:
         # 標題面看得到（要 GH_TOKEN，用 --surface all）。⇒ 這道 hook 是弱後備，
         # 真正的偵測要在有 token 的地方跑 --surface all。
         # ⚠️ shallow clone 下這一面更窄，報告會標 PARTIAL：「沒找到」不等於「沒有」。
+        always_run: true
+
       - id: unreachable-pipestatus
         name: unreachable PIPESTATUS reads (set -e + pipefail dead guards)
         entry: python3 -X utf8 scripts/tools/lint/check_unreachable_pipestatus.py --ci
