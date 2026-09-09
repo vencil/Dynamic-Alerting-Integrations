@@ -238,6 +238,7 @@ lang: en
 | `check_threshold_unit_sanity.py` | Threshold unit-sanity gate — the value-range validation #992 promised and nobody built. |
 | `check_tool_registry_jsx_parity.py` | every tool-registry.yaml entry must have a backing .jsx file (and vice versa). |
 | `check_translation.py` | 自動化翻譯品質檢查 |
+| `check_trk_index_coverage.py` | 被引用的 TRK 必須出現在 planning SSOT 的索引裡。 |
 | `check_undefined_tokens.py` | Detect JSX/CSS/HTML references to --da-* tokens not defined in design-tokens.css (with --report-orphans discovery mode). |
 | `check_unpinned_deps.py` | block unpinned dependency-acquisition in CI/build. |
 | `check_vmalert_coverage.py` | check_vmalert_coverage — rule-pack alert FIRING-decision coverage baseline guard. |
