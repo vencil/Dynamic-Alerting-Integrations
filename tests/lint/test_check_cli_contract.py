@@ -302,6 +302,24 @@ class TestCommandForms:
         assert _open(r.findings) == [], line
         assert r.stats["cmd_segments"] == 0, line
 
+    def test_a_prompt_before_a_subshell_is_not_a_substitution(self, tmp_path):
+        r = _fence_scan(tmp_path, "$ (cd x && da-tools widget db-a --ci)")
+        assert _open(r.findings) == [("V1", "widget", "--ci")]
+        r = _fence_scan(tmp_path, "$ da-tools widget $(pwd) --ci")
+        assert _open(r.findings) == [("V1", "widget", "--ci")] and r.stats["cmd_positionals"] == 1
+
+    @pytest.mark.parametrize("line", [
+        "docker run --rm -v $(pwd):/work da-tools widget db-a --ci",
+        "docker run --name t -p 8080:80 da-tools widget db-a --ci",
+        "podman run -w /work da-tools widget db-a --ci",
+    ])
+    def test_a_bare_image_name_after_run_is_the_image(self, tmp_path, line):
+        """A locally built image is run under its bare name; the values of
+        the docker options before it are not command words."""
+        r = _fence_scan(tmp_path, line)
+        assert _open(r.findings) == [("V1", "widget", "--ci")], line
+        assert r.stats["cmd_run_without_image"] == 0 and r.stats["cmd_outside_command_position"] == 0
+
     def test_an_entrypoint_override_is_disclosed_not_judged(self, tmp_path):
         r = _fence_scan(
             tmp_path, "docker run --entrypoint python3 ghcr.io/vencil/da-tools:v2.9.0 x.py --ci")
@@ -514,6 +532,31 @@ class TestInlineIgnore:
         bad = _scan(tmp_path, docs=[_doc(
             tmp_path, "See `da-tools profile build` <!-- datools-cmd-ignore -->\n")])
         assert any("without a reason" in e for e in bad.errors)
+
+    @pytest.mark.parametrize("body", [
+        _fence("da-tools widget db-a  # datools-cmd-ignore: whatever"),
+        "plain prose <!-- datools-cmd-ignore: whatever -->\n",
+        "see `da-tools widget db-a` <!-- datools-cmd-ignore: whatever -->\n",
+    ])
+    def test_an_ignore_that_exempts_nothing_is_stale(self, tmp_path, body):
+        """The same debt as a ledger row whose count is too high: the site
+        was fixed and the exemption stayed."""
+        r = _scan(tmp_path, docs=[_doc(tmp_path, body)])
+        assert r.findings == []
+        assert [e for e in r.errors if "stale" in e] == [
+            f"doc.md:{'2' if body.startswith('```') else '1'}: stale `datools-cmd-ignore` — "
+            f"no finding on this line to exempt; remove the marker"], r.errors
+        live = _fence_scan(tmp_path, "da-tools widget db-a --ci  # datools-cmd-ignore: whatever")
+        assert live.errors == [] and live.stats["ignored"] == 1
+
+    def test_a_reference_row_ignore_is_stale_only_when_no_carrier_uses_it(self, tmp_path):
+        ref = _reference(tmp_path, "| `--ci` | x | false <!-- datools-cmd-ignore: planned --> |\n")
+        r = _scan(tmp_path, docs=[ref], reference=ref)
+        assert _open(r.findings) == [] and r.errors == [], (
+            "the prose carrier sees no da-tools in `--ci`; the table carrier exempts the V3")
+        clean = _reference(tmp_path, "| `--config-dir` | x | . <!-- datools-cmd-ignore: planned --> |\n")
+        r = _scan(tmp_path, docs=[clean], reference=clean)
+        assert r.findings == [] and any("stale" in e for e in r.errors)
 
     def test_a_table_row_ignore_needs_a_reason_too(self, tmp_path):
         ref = _reference(tmp_path, "| `--ci` | x | false | <!-- datools-cmd-ignore -->\n")
@@ -868,7 +911,7 @@ class TestBlindIsNotClean:
         assert set(doc) == {"findings", "suppressed", "ignored", "stats", "errors", "fatal"}
 
 
-class TestRoundTwo:
+class TestSubstitutionsExemptionsAndShells:
     """Substitution, wrapper, shell-string, manifest, fence and ignore-marker
     shapes: each with a positive and a negative."""
 
@@ -914,6 +957,22 @@ class TestRoundTwo:
         assert r.stats["cmd_outside_command_position"] == 1, line
         assert r.stats["cmd_bare_not_command"] == 0, line
         assert r.stats["cmd_sh_c_strings"] == 0, line
+
+    @pytest.mark.parametrize("line", [
+        'bash --norc -c "da-tools widget db-a --ci"',
+        'sh -x -c "da-tools widget db-a --ci"',
+        'bash -o pipefail -c "da-tools widget db-a --ci"',
+        'bash -c -- "da-tools widget db-a --ci"',
+        'docker run --rm --entrypoint bash ghcr.io/vencil/da-tools:v1 -e -c "da-tools widget db-a --ci"',
+    ])
+    def test_the_shell_string_follows_the_shells_other_options(self, tmp_path, line):
+        r = _fence_scan(tmp_path, line)
+        assert _open(r.findings) == [("V1", "widget", "--ci")], line
+        assert r.stats["cmd_sh_c_strings"] == 1 and r.stats["cmd_unparseable"] == 0, line
+
+    def test_a_c_after_the_end_of_options_is_an_operand(self, tmp_path):
+        r = _fence_scan(tmp_path, 'bash -- -c "da-tools widget db-a --ci"')
+        assert _open(r.findings) == [] and r.stats["cmd_sh_c_strings"] == 0
 
     def test_a_da_tools_image_running_a_shell_is_an_unknown_subcommand(self, tmp_path):
         """The image's entrypoint is da-tools, so `sh` is argv[0]."""
@@ -989,6 +1048,89 @@ class TestRoundTwo:
         assert _open(r.findings) == expect, body
         assert r.stats["cmd_manifest_argvs"] == (1 if expect else 0)
         assert r.stats["cmd_entrypoint_override"] == (0 if expect else 1), body
+
+    @pytest.mark.parametrize("body", [
+        _fence("containers:", "  - name: v", "    image: ghcr.io/vencil/da-tools:v1  # pinned",
+               '    args: ["widget", "db-a", "--ci"]', lang="yaml"),
+        _fence("containers:", "  - name: v", "    image: ghcr.io/vencil/da-tools:v1",
+               '    args: ["widget", "db-a", "--ci"]  # see the flag table', lang="yaml"),
+        _fence("containers:", "  - name: v", "    image: busybox",
+               '    command: ["sh", "-c", "da-tools widget db-a --ci"]  # note', lang="yaml"),
+        _fence("containers:", "  - name: v", "    image: ghcr.io/vencil/da-tools:v1",
+               "    args:", "      - widget", "      - db-a", '      - "--ci"  # note',
+               lang="yaml"),
+    ])
+    def test_a_yaml_comment_does_not_change_what_a_manifest_line_declares(self, tmp_path, body):
+        r = _scan(tmp_path, docs=[_doc(tmp_path, body)])
+        assert _open(r.findings) == [("V1", "widget", "--ci")], body
+        assert r.stats["cmd_manifest_argvs"] == 1 and r.errors == []
+
+    def test_a_manifest_finding_is_exempted_on_the_line_it_points_at(self, tmp_path):
+        head = ("containers:", "  - name: v", "    image: ghcr.io/vencil/da-tools:v1")
+        on_args = _fence(*head, '    args: ["widget", "db-a", "--ci"]  # datools-cmd-ignore: planned',
+                         lang="yaml")
+        r = _scan(tmp_path, docs=[_doc(tmp_path, on_args)])
+        assert _open(r.findings) == [] and r.stats["ignored"] == 1 and r.errors == []
+        assert [f.ignored for f in r.findings] == ["planned"]
+        on_command = _fence(*head, '    command: ["da-tools", "widget", "db-a", "--ci"]  '
+                                   "# datools-cmd-ignore: planned", lang="yaml")
+        r = _scan(tmp_path, docs=[_doc(tmp_path, on_command)])
+        assert _open(r.findings) == [] and r.stats["ignored"] == 1 and r.errors == []
+        on_item = _fence(*head, "    args:", "      - widget", "      - db-a",
+                         '      - "--ci"  # datools-cmd-ignore: planned', lang="yaml")
+        r = _scan(tmp_path, docs=[_doc(tmp_path, on_item)])
+        assert _open(r.findings) == [("V1", "widget", "--ci")], "an item line exempts nothing"
+        assert "`args:` / `command:` line this finding points at" in r.findings[0].message
+        assert r.findings[0].line == 5, "the finding points at the args: line"
+        on_image = _fence("containers:", "  - name: v",
+                          "    image: ghcr.io/vencil/da-tools:v1  # datools-cmd-ignore: planned",
+                          '    args: ["widget", "db-a", "--ci"]', lang="yaml")
+        r = _scan(tmp_path, docs=[_doc(tmp_path, on_image)])
+        assert _open(r.findings) == [("V1", "widget", "--ci")]
+        assert any("stale" in e for e in r.errors), "a marker on the image line exempts nothing"
+        no_reason = _fence(*head, '    args: ["widget", "db-a", "--ci"]  # datools-cmd-ignore',
+                           lang="yaml")
+        r = _scan(tmp_path, docs=[_doc(tmp_path, no_reason)])
+        assert any("without a reason" in e for e in r.errors) and r.findings == []
+
+    @pytest.mark.parametrize("body", [
+        _fence("services:", "  tool:", '    entrypoint: ["/bin/sh"]',
+               "    image: ghcr.io/vencil/da-tools:v1",
+               '    command: ["-c", "da-tools widget db-a --ci"]', lang="yaml"),
+        _fence("services:", "  tool:", '    entrypoint: ["/bin/sh", "-c"]',
+               "    image: ghcr.io/vencil/da-tools:v1",
+               '    command: ["da-tools widget db-a --ci"]', lang="yaml"),
+        _fence("containers:", "  - name: v", '    args: ["widget", "db-a", "--ci"]',
+               "    image: ghcr.io/vencil/da-tools:v1", lang="yaml"),
+        _fence("services:", "  tool:", "    image: ghcr.io/vencil/da-tools:v1",
+               "    command: widget db-a --ci", lang="yaml"),
+        _fence("containers:", "  - name: v", "    image: ghcr.io/vencil/da-tools:v1",
+               "    args: [", '      "widget",', '      "db-a",', '      "--ci"', "    ]",
+               lang="yaml"),
+        _fence("containers:", "  - image: ghcr.io/vencil/da-tools:v1", "    name: v",
+               '    args: ["widget", "db-a", "--ci"]', lang="yaml"),
+    ])
+    def test_a_containers_keys_are_judged_together_whatever_their_order(self, tmp_path, body):
+        """compose runs entrypoint + command and k8s runs command + args, so
+        the process is known only once every key of the container is in."""
+        r = _scan(tmp_path, docs=[_doc(tmp_path, body)])
+        assert _open(r.findings) == [("V1", "widget", "--ci")], body
+        assert r.stats["cmd_manifest_argvs"] == 1 and r.stats["cmd_entrypoint_override"] == 0
+
+    def test_a_manifest_site_is_judged_by_one_carrier_only(self, tmp_path):
+        body = _fence("containers:", "  - name: v", "    image: ghcr.io/vencil/da-tools:v1",
+                      '    command: ["/bin/sh", "-c"]', "    args:",
+                      "      - da-tools widget db-a --ci", lang="yaml")
+        r = _scan(tmp_path, docs=[_doc(tmp_path, body)])
+        assert [(f.verdict, f.line, f.token) for f in r.findings] == [("V1", 6, "--ci")]
+        assert r.stats["cmd_manifest_argvs"] == 1 and r.stats["cmd_segments"] == 1
+        literal = _fence("containers:", "  - name: v", "    image: ghcr.io/vencil/da-tools:v1",
+                         '    command: ["sh", "-c"]', "    args:", "      - |",
+                         "        da-tools widget db-a --ci", lang="yaml")
+        r = _scan(tmp_path, docs=[_doc(tmp_path, literal)])
+        assert [(f.verdict, f.line, f.token) for f in r.findings] == [("V1", 8, "--ci")], (
+            "a `- |` string is judged where it is written, by the fenced-line carrier")
+        assert r.stats["cmd_manifest_argvs"] == 0 and r.stats["cmd_entrypoint_override"] == 0
 
     def test_a_diff_fence_judges_only_added_lines(self, tmp_path):
         body = "```diff\n- da-tools widget db-a --old-flag\n+ da-tools widget db-a --ci\n```\n"

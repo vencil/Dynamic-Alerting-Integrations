@@ -11,14 +11,17 @@
 
 契約來源：``parse_command_map`` 給 subcommand→script，每支 script 用 runpy 跑到 ``parse_args``
 被攔下為止拿到真的 ``ArgumentParser``；``--prometheus`` 從 entrypoint 的 ``PROMETHEUS_COMMANDS`` 讀。
-載體：fenced block 的邏輯行（``diff`` fence 只看 ``+`` 行）、fence 之外的 inline code span、manifest
-的 ``command:``／``args:`` 清單、shell 真的會執行的 ``sh -c "…"`` 字串，以及 cli-reference 的選項表
-與結束碼表；裸 ``da-tools`` 只在命令位置才是主語。
+載體：fenced block 的邏輯行（``diff`` fence 只看 ``+`` 行、段首 ``$ `` 提示字元不算）、fence 之外的
+inline code span、manifest 的 ``command:``／``args:`` 清單（行尾 YAML 註解剝掉、整個容器的 key 收齊
+再判、清單行不再被 fenced 行載體重判）、shell 真的會執行的 ``sh -c "…"`` 字串（``-c`` 可在其他
+選項之後），以及 cli-reference 的選項表與結束碼表；裸 ``da-tools`` 只在命令位置或 ``docker run``
+的 image 位置才是主語。
 
 帳本 ``docs/internal/cli-contract-baseline.yaml`` 每列 (file, command, verdict, token, count, ticket)，
 比對是集合相等——少於 count 是 stale 硬錯、多出來的是新 finding、ticket 必須是 ``#NNNN``。
-逃生門 ``datools-cmd-ignore: <理由>``（fence 內 shell 註解、散文行尾或表格末格的 HTML 註解）：
-理由空是硬錯，同一 finding 同時被帳本與 ignore 豁免是硬錯。
+逃生門 ``datools-cmd-ignore: <理由>``（fence 內 shell 註解、manifest 的 ``args:``／``command:`` 行尾、
+散文行尾或表格末格的 HTML 註解）：理由空是硬錯，該行沒有 finding 可豁免（stale）是硬錯，同一
+finding 同時被帳本與 ignore 豁免是硬錯。
 
 結束碼：閘門自己跑不完回 2；有 finding 或內容面硬錯在 ``--ci`` 下回 1。
 輸出末尾的 NOT scored 是揭露不是涵蓋：列在那裡的東西這支工具看不到。
@@ -122,6 +125,9 @@ _PLACEHOLDER_CHARS = "<>${}[]…"
 _SHELL_PUNCT = "();|&"
 _PUNCT_UNIT = re.compile(r"\(|\)|\|\||&&|;;|;|\||&")
 _SUBSTITUTION = "$(...)"
+# A `$ ` prompt at the start of a line is not the `$` of `$(…)`: shlex drops the
+# whitespace that tells them apart, so the prompt is stripped before lexing.
+_PROMPT = re.compile(r"^\s*\$\s+")
 # Exit-code table headers = the pinned no-default headers whose first column
 # names a code. Derived from the shared pin, not transcribed.
 _EXIT_HEADERS: frozenset[tuple[str, ...]] = frozenset(
@@ -444,7 +450,7 @@ def _looks_like_flag(tok: str) -> bool:
 
 
 def tokenize(code: str) -> list[str] | None:
-    lex = shlex.shlex(code, posix=True, punctuation_chars=_SHELL_PUNCT)
+    lex = shlex.shlex(_PROMPT.sub("", code), posix=True, punctuation_chars=_SHELL_PUNCT)
     lex.whitespace_split = True
     try:
         raw = [t for t in lex if t != "\\"]
@@ -574,11 +580,23 @@ def find_subject(segment: list[str], command_map: dict[str, str],
     """
     by_script = {v: k for k, v in command_map.items()}
     start = _command_start(segment)
+
+    def _image(i: int) -> Subject:
+        if any(t == "--entrypoint" or t.startswith("--entrypoint=")
+               for t in segment[:i]):
+            return Subject("image", None, segment[i + 1:],
+                           "entrypoint overridden; argv is not da-tools'")
+        return Subject("image", None, segment[i + 1:], None)
+
     for i in range(start, len(segment)):
         tok = segment[i]
         if tok == "da-tools" or (tok.endswith("/da-tools") and tok[0] in "./~$"):
             if _in_command_position(segment, i, start):
                 return Subject("da-tools", None, segment[i + 1:], None)
+            if segment[start] in _CONTAINER_RUNTIMES and "run" in segment[start:i]:
+                # `docker run -v a:b da-tools lint`: a locally built image
+                # under its bare name, in the image operand's position.
+                return _image(i)
             if stats is not None:
                 nxt = segment[i + 1] if i + 1 < len(segment) else ""
                 if nxt in command_map or nxt in _ENTRYPOINT_GLOBAL:
@@ -601,11 +619,7 @@ def find_subject(segment: list[str], command_map: dict[str, str],
             # (docker / podman / nerdctl / `compose run` all spell it that way).
             if "run" not in segment[start:i]:
                 continue
-            if any(t == "--entrypoint" or t.startswith("--entrypoint=")
-                   for t in segment[:i]):
-                return Subject("image", None, segment[i + 1:],
-                               "entrypoint overridden; argv is not da-tools'")
-            return Subject("image", None, segment[i + 1:], None)
+            return _image(i)
         if tok in _PY_INTERPRETERS:
             # interpreter flags (`py -3`, `python3 -X utf8`) sit before the script
             j = i + 1
@@ -752,16 +766,42 @@ def judge_argv(args: list[str], command: str, model: ParserModel | None,
     return findings
 
 
+def _shell_string_index(segment: list[str], k: int) -> int | None:
+    """Index of the string a shell at *k* runs, or None when no `-c` follows.
+
+    A shell reads its short options in any order and position (`-x -c`,
+    `--norc -c`), `-o`/`+o` take a value, and `--` ends the options; the
+    string is the first operand after all of that.
+    """
+    j = k + 1
+    while j < len(segment):
+        tok = segment[j]
+        if _DASH_C.match(tok):
+            j += 1
+            if j < len(segment) and segment[j] == "--":
+                j += 1
+            return j
+        if tok in ("-o", "+o"):
+            j += 2
+            continue
+        if tok == "--" or not (tok.startswith("-") or tok.startswith("+")):
+            return None
+        j += 1
+    return None
+
+
 def _any_shell_c(segment: list[str], start: int) -> int | None:
-    """Index of the first `-c` cluster right after a shell word, wherever it sits."""
+    """Index of the string of the first `shell … -c` in the segment, wherever it sits."""
     for k in range(start, len(segment) - 1):
-        if segment[k].rsplit("/", 1)[-1] in _SHELLS and _DASH_C.match(segment[k + 1]):
-            return k + 1
+        if segment[k].rsplit("/", 1)[-1] in _SHELLS:
+            idx = _shell_string_index(segment, k)
+            if idx is not None:
+                return idx
     return None
 
 
 def _shell_c_index(segment: list[str], start: int) -> int | None:
-    """Index of the `-c` cluster (`-c`, `-lc`, `-cl`) of a shell that RUNS, or None.
+    """Index of the string of a shell that RUNS with `-c`, or None.
 
     Three placements: `sh -c …` with the shell in command position;
     `docker run --entrypoint sh <image> -c …` (the `-c` follows the image);
@@ -770,21 +810,23 @@ def _shell_c_index(segment: list[str], start: int) -> int | None:
     not one of them: its string is disclosed by judge_tokens, not judged.
     """
     for k in range(start, len(segment) - 1):
-        if segment[k].rsplit("/", 1)[-1] in _SHELLS and _DASH_C.match(segment[k + 1]):
+        if segment[k].rsplit("/", 1)[-1] in _SHELLS:
+            idx = _shell_string_index(segment, k)
             before = segment[start:k]
-            if _in_command_position(segment, k, start):
-                return k + 1
-            if "run" in before and not any(_IMAGE_REF.match(t) for t in before):
-                return k + 1
-        if _IMAGE_REF.match(segment[k]) and _DASH_C.match(segment[k + 1]):
+            if idx is not None and (
+                    _in_command_position(segment, k, start)
+                    or ("run" in before and not any(_IMAGE_REF.match(t) for t in before))):
+                return idx
+        if _IMAGE_REF.match(segment[k]):
             before = segment[start:k]
             if any(t in ("--entrypoint",) or t.startswith("--entrypoint=") for t in before):
                 shell = next((before[i + 1] for i, t in enumerate(before[:-1])
                               if t == "--entrypoint"), "")
                 shell = shell or next((t.split("=", 1)[1] for t in before
                                        if t.startswith("--entrypoint=")), "")
-                if shell.rsplit("/", 1)[-1] in _SHELLS:
-                    return k + 1
+                idx = _shell_string_index(segment, k)
+                if shell.rsplit("/", 1)[-1] in _SHELLS and idx is not None:
+                    return idx
     return None
 
 
@@ -793,6 +835,7 @@ class _Ctx(NamedTuple):
     parsers: dict[str, ParserModel]
     injected_for: dict[str, frozenset[str]]
     stats: dict[str, int]
+    ignore_sites: set[tuple[str, int]]    # (file, line) of every marker with a reason
 
 
 def judge_tokens(tokens: list[str], rel: str, number: int, ctx: _Ctx,
@@ -810,7 +853,7 @@ def judge_tokens(tokens: list[str], rel: str, number: int, ctx: _Ctx,
             # image with no --entrypoint, `sh` is argv[0] handed to
             # entrypoint.py — `Unknown command 'sh'` — and stays a V0 below
             # (the string's own da-tools is then disclosed, see subject is None).
-            inner = tokenize(segment[dash_c + 1]) if dash_c + 1 < len(segment) else None
+            inner = tokenize(segment[dash_c]) if dash_c < len(segment) else None
             if inner is None:
                 ctx.stats["cmd_unparseable"] += 1
             else:
@@ -822,8 +865,8 @@ def judge_tokens(tokens: list[str], rel: str, number: int, ctx: _Ctx,
             # -c "da-tools …"`, `sh` as argv[0] of a da-tools image) may still
             # carry a da-tools inside: disclosed, not judged.
             any_c = _any_shell_c(segment, start)
-            inner = tokenize(segment[any_c + 1]) \
-                if any_c is not None and any_c + 1 < len(segment) else None
+            inner = tokenize(segment[any_c]) \
+                if any_c is not None and any_c < len(segment) else None
             if inner and any(find_subject(seg, ctx.command_map) is not None
                              for seg in split_commands(inner)):
                 ctx.stats["cmd_outside_command_position"] += 1
@@ -926,157 +969,217 @@ def _fence_blocks(lines: list[str]) -> list[tuple[int, list[str]]]:
 
 
 _LIST_ITEM = re.compile(r"^(\s*)-\s+(.*)$")
-_KEY = re.compile(r"^(\s*)(?:-\s+)?([A-Za-z_]+):\s*(.*)$")
+_KEY = re.compile(r"^(\s*)(-\s+)?([A-Za-z_][\w-]*):\s*(.*)$")
+_BLOCK_SCALAR = re.compile(r"^[|>][-+]?$")
+_MANIFEST_KEYS = frozenset({"image", "entrypoint", "command", "args"})
 
 
-def _yaml_list(value: str, following: list[str], indent: int) -> list[str] | None:
-    """Items of a YAML list given inline (`[a, "b"]`) or as `- item` lines."""
+def _yaml_code(raw: str) -> str:
+    """The line without its trailing comment: YAML and the shell open one the same way."""
+    return split_shell_comment(raw)[0]
+
+
+def _yaml_list(value: str, following: list[str], indent: int
+               ) -> tuple[list[str] | None, int]:
+    """(items, lines used after the key line) of a YAML list.
+
+    Given as a flow list (`[a, "b"]`, closed on this or a later line), as
+    `- item` lines (which may sit at the key's own indent), or as one plain
+    string that compose splits like a shell line. A `- |` item stays the
+    literal `|`: its content lines are the fenced-line carrier's to judge.
+    """
     value = value.strip()
     if value.startswith("["):
+        used = 0
+        while not value.endswith("]") and used < len(following):
+            value += " " + _yaml_code(following[used]).strip()
+            used += 1
         if not value.endswith("]"):
-            return None
-        return [v.strip().strip("\"'") for v in value[1:-1].split(",") if v.strip()]
+            return None, 0
+        return [v.strip().strip("\"'") for v in value[1:-1].split(",") if v.strip()], used
     if value:
-        return None
+        return (None if _BLOCK_SCALAR.match(value) else tokenize(value)), 0
     items: list[str] = []
+    used = 0
     for raw in following:
-        m = _LIST_ITEM.match(raw)
-        if not m or len(m.group(1)) < indent:      # `- item` may sit at the key's indent
+        m = _LIST_ITEM.match(_yaml_code(raw))
+        if not m or len(m.group(1)) < indent:
             break
         items.append(m.group(2).strip().strip("\"'"))
-    return items
+        used += 1
+    return items, used
+
+
+class ManifestArgv(NamedTuple):
+    at: int                 # block offset of the line the argv is reported at
+    argv: list[str] | None  # None: the lines were read but run no da-tools
+    consumed: set[int]      # block offsets the fenced-line carrier must skip
+
+
+def _is_shell(word: str) -> bool:
+    return word.rsplit("/", 1)[-1] in _SHELLS
 
 
 def manifest_argvs(block: list[str], stats: dict[str, int] | None = None
-                   ) -> list[tuple[int, list[str]]]:
+                   ) -> list[ManifestArgv]:
     """da-tools argvs declared by ``command:``/``args:`` lists.
 
     Two schemas, told apart by the enclosing key: under k8s ``containers:``
     the ``command:`` REPLACES the image entrypoint (a da-tools image running
     ``["python3", "-m", "http.server"]`` runs no da-tools at all; counted as
-    an entrypoint override), so only
-    ``command: ["da-tools", …]``, a shell ``-c`` string, or ``args:`` under
-    an untouched da-tools image are argv. Under compose ``services:`` the
-    ``command:`` is the CMD and the entrypoint stays da-tools unless an
-    ``entrypoint:`` key replaces it, so the whole list is argv. Returns
-    (offset within block, argv).
+    an entrypoint override), so only ``command: ["da-tools", …]``, a shell
+    ``-c`` string, or ``args:`` under an untouched da-tools image are argv.
+    Under compose ``services:`` the ``command:`` is the CMD and the entrypoint
+    stays da-tools unless an ``entrypoint:`` key replaces it, so the whole
+    list is argv. A container's keys are collected first and judged together,
+    so their order in the file does not matter.
     """
-    out: list[tuple[int, list[str]]] = []
-    image_is_datools = False
+    out: list[ManifestArgv] = []
     compose = False
-    command: list[str] | None = None
-    command_at = 0
-    key_indent: int | None = None    # indent of the container's own keys
+    image: str | None = None
+    keys: dict[str, tuple[list[str] | None, int, set[int]]] = {}
+    key_indent: int | None = None    # column of the container's own keys
 
     def _flush() -> None:
-        if not command:
+        ep, command, args = (keys.get(k) for k in ("entrypoint", "command", "args"))
+        is_datools = bool(image and _IMAGE_REF.match(image))
+        used: set[int] = set().union(*(k[2] for k in (ep, command, args) if k))
+        # The process the container runs, as (word, block offset it came from):
+        # compose = entrypoint + command; k8s = command + args.
+        parts: list[tuple[str, int]] = []
+        overridden = False
+        if compose and ep and ep[0] and ep[0][0].rsplit("/", 1)[-1] != "da-tools":
+            parts += [(t, ep[1]) for t in ep[0]]
+            overridden = True
+        if command and command[0]:
+            parts += [(t, command[1]) for t in command[0]]
+        if not compose and args and args[0]:
+            parts += [(t, args[1]) for t in args[0]]
+        full = [t for t, _ in parts]
+        if not full:
             return
-        if command[0] == "da-tools" and len(command) > 1:
-            # `command: ["da-tools", "widget", …]` with no `args:` at all
-            out.append((command_at, command[1:]))
-        elif image_is_datools and command[0].rsplit("/", 1)[-1] not in _SHELLS:
-            if compose:
-                out.append((command_at, list(command)))
-            elif stats is not None:
-                stats["cmd_entrypoint_override"] += 1
+        if _is_shell(full[0]):
+            k = next((i for i, c in enumerate(full[:-1]) if _DASH_C.match(c)), None)
+            if k is not None:
+                # `sh -c "da-tools …"` however the string is split over the
+                # keys; a `- |` string is judged where it is written
+                if not _BLOCK_SCALAR.match(full[k + 1]):
+                    out.append(ManifestArgv(parts[k + 1][1], ["sh", "-c", full[k + 1]], used))
+                return
+        if full[0] == "da-tools":
+            if len(full) > 1:
+                out.append(ManifestArgv(parts[-1][1], full[1:], used))
+            return
+        if not is_datools:
+            return
+        if compose and not overridden:
+            out.append(ManifestArgv(parts[0][1], full, used))
+            return
+        if not compose and not (command and command[0]):
+            out.append(ManifestArgv(parts[0][1], full, used))
+            return
+        # k8s `command:` and compose `entrypoint:` replace the image's
+        # entrypoint: nothing in these lists is da-tools' argv, not even a
+        # `- da-tools …` item under `args:`
+        if stats is not None:
+            stats["cmd_entrypoint_override"] += 1
+        out.append(ManifestArgv(parts[0][1], None, used))
 
     for idx, raw in enumerate(block):
-        m = _KEY.match(raw)
+        m = _KEY.match(_yaml_code(raw))
         if not m:
             continue
-        indent, key, value = len(m.group(1)), m.group(2), m.group(3)
-        if key == "services":
-            compose = True
-        elif key == "containers":
-            compose = False
-        if key == "name" and raw.lstrip().startswith("-"):
-            # A new container only when the dash sits OUTSIDE the current
-            # container's keys: `env:` holds `- name: PROMETHEUS_URL` items
-            # deeper than `image:`, and those are not a boundary.
-            if key_indent is None or indent < key_indent:
-                _flush()
-                image_is_datools, command, key_indent = False, None, None
+        indent, key, value = len(m.group(1)), m.group(3), m.group(4)
+        if key_indent is not None and indent < key_indent:
+            # a line left of the container's keys starts another container
+            # (`- name:` of the next pod entry, the next compose service, or
+            # a higher-level key); `env:` items sit deeper and are not one
+            _flush()
+            image, keys, key_indent = None, {}, None
+        if key in ("services", "containers", "initContainers"):
+            compose = key == "services"
             continue
-        if key_indent is None or indent < key_indent:
-            key_indent = indent
+        if key not in _MANIFEST_KEYS:
+            continue
+        if key_indent is None:
+            key_indent = m.start(3)
         if key == "image":
-            image_is_datools = bool(_IMAGE_REF.match(value.strip().strip("\"'")))
-        elif key == "entrypoint" and compose:
-            # compose `entrypoint:` replaces the image's; only `da-tools`
-            # itself keeps the `command:` list as da-tools' argv
-            ep = _yaml_list(value, block[idx + 1:], indent)
-            ep = ep if ep is not None else value.strip().strip("\"'").split()
-            if ep and ep[0].rsplit("/", 1)[-1] != "da-tools" and image_is_datools:
-                image_is_datools = False
-                if stats is not None:
-                    stats["cmd_entrypoint_override"] += 1
-        elif key == "command":
-            command, command_at = _yaml_list(value, block[idx + 1:], indent), idx
-            if command and command[0].rsplit("/", 1)[-1] in _SHELLS \
-                    and any(_DASH_C.match(c) for c in command[:-1]):
-                # `["sh", "-c", "da-tools …"]`: the string is the command line
-                k = next(i for i, c in enumerate(command) if _DASH_C.match(c))
-                out.append((idx, ["sh", "-c", command[k + 1]]))
-                command = None
-        elif key == "args":
-            args = _yaml_list(value, block[idx + 1:], indent)
-            if args is None:
-                continue
-            if command and command[0].rsplit("/", 1)[-1] in _SHELLS \
-                    and _DASH_C.match(command[-1]) and args:
-                # `command: ["/bin/sh", "-c"]` + `args: ["da-tools …"]`
-                out.append((idx, ["sh", "-c", args[0]]))
-            elif command and command[0] == "da-tools":
-                out.append((idx, command[1:] + args))
-            elif command is None and image_is_datools:
-                out.append((idx, args))
-            elif command and image_is_datools and not compose and stats is not None:
-                # k8s `command: ["python3", …]` + `args:` under a da-tools image
-                stats["cmd_entrypoint_override"] += 1
-            command = None
+            image = value.strip().strip("\"'")
+            continue
+        items, used = _yaml_list(value, block[idx + 1:], m.start(3))
+        keys[key] = (items, idx, set(range(idx, idx + used + 1)))
     _flush()
     return out
+
+
+_MANIFEST_NOTE = (f" For a manifest list the `# {INLINE_IGNORE}: <why>` goes at the end "
+                  f"of the `args:` / `command:` line this finding points at.")
+
+
+def _fence_reason(comment: str | None, rel: str, number: int, errors: list[str]
+                  ) -> tuple[str | None, bool]:
+    """(reason, usable): the marker of a shell comment; a reason-less marker is an error."""
+    m = _FENCE_IGNORE.match(comment) if comment is not None else None
+    if not m:
+        return None, True
+    reason = _ignore_reason(m)
+    if not reason:
+        errors.append(f"{rel}:{number}: `{INLINE_IGNORE}` without a reason — "
+                      f"write `# {INLINE_IGNORE}: <why this line is exempt>`")
+        return None, False
+    return reason, True
 
 
 def scan_commands(doc: Path, rel: str, ctx: _Ctx, errors: list[str]) -> list[Finding]:
     """Fenced lines, inline spans and manifest argvs of one document."""
     findings: list[Finding] = []
     lines = doc.read_text(encoding="utf-8").splitlines()
-    for number, text in _logical_lines(lines):
-        code, comment = split_shell_comment(text)
-        reason: str | None = None
-        m = _FENCE_IGNORE.match(comment) if comment is not None else None
-        if m:
-            reason = _ignore_reason(m)
-            if not reason:
-                errors.append(f"{rel}:{number}: `{INLINE_IGNORE}` without a reason — "
-                              f"write `# {INLINE_IGNORE}: <why this line is exempt>`")
+    consumed: set[int] = set()
+    for start, block in _fence_blocks(lines):
+        for item in manifest_argvs(block, ctx.stats):
+            consumed |= {start + o for o in item.consumed}
+            if item.argv is None:
                 continue
+            number = start + item.at
+            reason, usable = _fence_reason(split_shell_comment(block[item.at])[1],
+                                           rel, number, errors)
+            if not usable:
+                continue
+            ctx.stats["cmd_manifest_argvs"] += 1
+            if item.argv[:2] == ["sh", "-c"]:
+                inner = tokenize(item.argv[2]) if len(item.argv) > 2 else None
+                if inner is None:
+                    ctx.stats["cmd_unparseable"] += 1
+                    continue
+                tokens = inner
+            else:
+                tokens = ["da-tools"] + item.argv
+            if reason is not None:
+                ctx.stats["ignored"] += 1
+                ctx.ignore_sites.add((rel, number))
+            found = judge_tokens(tokens, rel, number, ctx, "cmd_segments")
+            findings += _dedupe([f._replace(message=f.message + _MANIFEST_NOTE)
+                                 for f in found], reason)
+    for number, text in _logical_lines(lines):
+        if number in consumed:
+            continue
+        code, comment = split_shell_comment(text)
+        reason, usable = _fence_reason(comment, rel, number, errors)
+        if not usable:
+            continue
         tokens = tokenize(code)
         if tokens is None:
             ctx.stats["cmd_unparseable"] += 1
             continue
         if reason is not None:
             ctx.stats["ignored"] += 1
+            ctx.ignore_sites.add((rel, number))
         findings += _dedupe(judge_tokens(tokens, rel, number, ctx, "cmd_segments"), reason)
-    for start, block in _fence_blocks(lines):
-        for offset, argv in manifest_argvs(block, ctx.stats):
-            ctx.stats["cmd_manifest_argvs"] += 1
-            if argv[:2] == ["sh", "-c"]:
-                inner = tokenize(argv[2]) if len(argv) > 2 else None
-                if inner is None:
-                    ctx.stats["cmd_unparseable"] += 1
-                    continue
-                tokens = inner
-            else:
-                tokens = ["da-tools"] + argv
-            findings += _dedupe(judge_tokens(tokens, rel, start + offset, ctx,
-                                             "cmd_segments"), None)
     for number, line, fence in walk_lines(lines):
-        if fence is not None or "`" not in line:
+        if fence is not None:
             continue
         reason = None
-        m = _ROW_IGNORE.search(line)
+        m = _ROW_IGNORE.search(line) if INLINE_IGNORE in line else None
         if m:
             reason = _ignore_reason(m)
             line = line[:m.start()] + line[m.end():]
@@ -1084,8 +1187,10 @@ def scan_commands(doc: Path, rel: str, ctx: _Ctx, errors: list[str]) -> list[Fin
                 errors.append(f"{rel}:{number}: `{INLINE_IGNORE}` without a reason — "
                               f"write `<!-- {INLINE_IGNORE}: <why> -->`")
                 continue
-        if reason is not None:
             ctx.stats["ignored"] += 1
+            ctx.ignore_sites.add((rel, number))
+        if "`" not in line:
+            continue
         for span in _SPAN.findall(line):
             tokens = tokenize(span)
             if tokens is None:
@@ -1124,6 +1229,7 @@ def scan_reference(doc: Path, rel: str, parsers: dict[str, ParserModel],
                    exit_codes: dict[str, ExitCodes],
                    stats: dict[str, int], errors: list[str],
                    by_header: dict[tuple[str, ...], int],
+                   ignore_sites: set[tuple[str, int]] | None = None,
                    ) -> tuple[list[Finding], ReferenceFacts]:
     findings: list[Finding] = []
     command: str | None = None
@@ -1166,6 +1272,8 @@ def scan_reference(doc: Path, rel: str, parsers: dict[str, ParserModel],
                 errors.append(f"{rel}:{number}: `{INLINE_IGNORE}` without a reason — "
                               f"write `<!-- {INLINE_IGNORE}: <why> -->`")
                 continue
+            if ignore_sites is not None:
+                ignore_sites.add((rel, number))
         cells = _cells(raw)
         key = tuple(c.strip("* ") for c in cells)
         if key in _OPTION_HEADERS or key in _EXIT_HEADERS:
@@ -1513,7 +1621,7 @@ def scan(parsers: dict[str, ParserModel] | None = None,
         fatal += [f"{rel}: listed in EXTRA_DOC_FILES but not found — point the "
                   f"tuple at the file's current path; deleting the entry stops "
                   f"the page being scanned at all" for rel in missing]
-    ctx = _Ctx(command_map, parsers, injected_for, stats)
+    ctx = _Ctx(command_map, parsers, injected_for, stats, set())
     findings: list[Finding] = []
     for doc in docs:
         findings += scan_commands(doc, _rel(doc, repo_root), ctx, errors)
@@ -1524,7 +1632,7 @@ def scan(parsers: dict[str, ParserModel] | None = None,
     for doc in reference_docs:
         rel = _rel(doc, repo_root)
         found, facts = scan_reference(doc, rel, parsers, injected_for, exit_codes,
-                                      stats, errors, by_header)
+                                      stats, errors, by_header, ctx.ignore_sites)
         findings += found
         per_doc[rel] = {"option_rows": facts.option_rows, "exit_codes": facts.exit_codes}
         stats["reference_sections_unmatched"] += facts.unmatched_sections
@@ -1536,6 +1644,12 @@ def scan(parsers: dict[str, ParserModel] | None = None,
             if not per_doc[rel][carrier]:
                 fatal.append(f"{rel} contributed 0 judged {label} — this check "
                              f"read the file and compared nothing in it")
+    # A marker that exempts nothing is the same stale debt as a ledger row
+    # whose count is too high: the site was fixed and the exemption stayed.
+    exempted = {(f.file, f.line) for f in findings if f.ignored is not None}
+    errors += [f"{rel}:{number}: stale `{INLINE_IGNORE}` — no finding on this line "
+               f"to exempt; remove the marker"
+               for rel, number in sorted(ctx.ignore_sites - exempted)]
     # Disclosure counts are SETS of commands, computed once: a script seen in
     # both reference docs is one script.
     stats["commands_without_exit_table"] = len(no_table)

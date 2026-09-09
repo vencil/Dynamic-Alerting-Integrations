@@ -834,7 +834,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "b06a652fe780c3575b2bd43c352ee4c1494521bb6db485f3cd059b52f50efe58",
+ "source_digest": "a9e27640f4101ad8ac40afcacae38b3eee3f35bd684e9ace6e94b64b780e4518",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1455,7 +1455,8 @@
    "tests/ops/test_ci_baseline_substitution.py"
   ],
   "components/da-tools/app/QUICKSTART.md": [
-   "tests/lint/test_check_doc_datools_cmds.py"
+   "tests/lint/test_check_doc_datools_cmds.py",
+   "tests/ops/test_ci_path_filter_coverage.py"
   ],
   "components/da-tools/app/VERSION": [
    "tests/lint/test_validate_docs_versions.py",
@@ -1470,6 +1471,7 @@
   "components/da-tools/app/entrypoint.py": [
    "tests/dx/test_verify_diff.py",
    "tests/lint/test_check_image_pin_capability.py",
+   "tests/ops/test_ci_path_filter_coverage.py",
    "tests/ops/test_generated_ci_artifacts.py",
    "tests/ops/test_printed_paths_are_reachable.py"
   ],
@@ -1759,6 +1761,9 @@
   ],
   "docs/internal/benchmark-playbook.md": [
    "tests/dx/test_canary_quotation_pins.py"
+  ],
+  "docs/internal/cli-contract-baseline.yaml": [
+   "tests/ops/test_ci_path_filter_coverage.py"
   ],
   "docs/internal/design-system-guide.md": [
    "tests/dx/test_bump_docs.py"
@@ -3535,7 +3540,8 @@
    "tests/ops/test_ci_path_filter_coverage.py"
   ],
   "try-local/README.md": [
-   "tests/lint/test_check_doc_datools_cmds.py"
+   "tests/lint/test_check_doc_datools_cmds.py",
+   "tests/ops/test_ci_path_filter_coverage.py"
   ],
   "try-local/alertmanager.yml": [
    "tests/dx/test_verify_diff.py",
