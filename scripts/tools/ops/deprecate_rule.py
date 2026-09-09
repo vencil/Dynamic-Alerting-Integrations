@@ -33,6 +33,7 @@ exporter 丟掉整份載體。
 import sys
 import os
 import argparse
+import codecs
 import math
 import re
 from pathlib import Path
@@ -120,10 +121,17 @@ def tenant_key_belongs_to_metric(key, metric_key):
 
 
 # ── 載體體檢：鏡射 yaml.v3 對 `map[string]float64` 的判定 ─────────────────
-UNPARSEABLE = "unparseable"          # exporter 整份丟掉這個檔
-DECODES_TO_ZERO = "decodes_to_zero"  # 這一個 key 變成 0 閾值
-UNREADABLE = "unreadable"            # 本工具讀不到，無法判定
-BLOCKING_KINDS = frozenset({UNPARSEABLE, UNREADABLE})
+UNPARSEABLE = "unparseable"            # exporter 整份丟掉這個檔
+DECODES_TO_ZERO = "decodes_to_zero"    # 這一個 key 變成 0 閾值（只警告）
+UNREADABLE = "unreadable"              # 本工具讀不到，無法判定
+UNPARSED_BY_TOOL = "unparsed_by_tool"  # pure-Python parser 讀不了；exporter 未必
+BLOCKING_KINDS = frozenset({UNPARSEABLE, UNREADABLE, UNPARSED_BY_TOOL})
+# yaml.v3 是 libyaml 的移植：有 libyaml 就用它讀，scanner 層的判定才同源。
+_LOADER = yaml.CSafeLoader if yaml.__with_libyaml__ else yaml.SafeLoader
+# `ThresholdConfig` 會解碼的頂層 key（`pkg/config/types.go`）；其餘頂層 key 的子樹
+# Go 不解碼。
+_DECODED_SECTIONS = ("defaults", "optional_overrides", "state_filters",
+                     "tenants", "profiles", "max_metrics_per_tenant")
 
 _T_STR, _T_INT, _T_FLOAT, _T_NULL, _T_BOOL, _T_TS, _T_BIN, _T_MERGE = (
     "!!str", "!!int", "!!float", "!!null", "!!bool", "!!timestamp", "!!binary",
@@ -245,16 +253,35 @@ def _resolve(tag, text):
     return _T_STR
 
 
-def _source_of(node):
-    m0, m1 = node.start_mark, node.end_mark
-    if m0.buffer is None:
-        return ""
-    return m0.buffer[m0.pointer:m1.pointer]
+def _decoded(data):
+    """原文的行列表，供 mark 的 line/column 切片（兩種 loader 的 column 都不算 BOM）。"""
+    if data.startswith(codecs.BOM_UTF16_LE):
+        text = data.decode("utf-16-le", "replace")
+    elif data.startswith(codecs.BOM_UTF16_BE):
+        text = data.decode("utf-16-be", "replace")
+    else:
+        text = data.decode("utf-8", "replace")
+    lines = text.splitlines(keepends=True)
+    if lines and lines[0].startswith("﻿"):
+        lines[0] = lines[0][1:]
+    return lines
 
 
-def _explicit_tag(node):
+def _source_of(node, lines):
+    s, e = node.start_mark, node.end_mark
+
+    def seg(i, a, b):
+        return lines[i][a:b] if i < len(lines) else ""
+
+    if s.line == e.line:
+        return seg(s.line, s.column, e.column)
+    return (seg(s.line, s.column, None) + "".join(lines[s.line + 1:e.line])
+            + seg(e.line, 0, e.column))
+
+
+def _explicit_tag(node, lines):
     """顯式 tag 的短形式，沒有（或只有非特定的 `!`）就 None。"""
-    src = _source_of(node)
+    src = _source_of(node, lines)
     if src.startswith("&"):
         parts = src.split(None, 1)
         src = parts[1] if len(parts) > 1 else ""
@@ -265,11 +292,11 @@ def _explicit_tag(node):
     return _short_tag(node.tag)
 
 
-def _scalar_verdict(node):
+def _scalar_verdict(node, lines):
     """decode.go `scalar()` 對 float64 目標的下場: accepted / zero / dropped。"""
     if not isinstance(node, yaml.ScalarNode):
         return "dropped"
-    tag = _explicit_tag(node)
+    tag = _explicit_tag(node, lines)
     if tag == _T_STR or (tag is None and node.style in ('"', "'", "|", ">")):
         return "dropped"                       # indicatedString
     rtag = _resolve(tag, node.value)
@@ -286,13 +313,13 @@ def _scalar_verdict(node):
     return "dropped"
 
 
-def _raw_of(node):
+def _raw_of(node, lines):
     if isinstance(node, yaml.MappingNode):
         return "<mapping>"
     if isinstance(node, yaml.SequenceNode):
         return "<list>"
-    lines = _source_of(node).splitlines() or ["(空)"]
-    return lines[0] + ("…" if len(lines) > 1 else "")
+    src = _source_of(node, lines).splitlines() or ["(空)"]
+    return src[0] + ("…" if len(src) > 1 else "")
 
 
 def _key_identity(node):
@@ -307,6 +334,20 @@ def _no_duplicate_keys(node):
         if ident in seen:
             raise _Dropped(f"重複 key `{ident[1]}`")
         seen.add(ident)
+
+
+def _walk_duplicate_keys(node, visiting=frozenset()):
+    """decode.go `mapping()` 的 uniqueKeys 檢查，套到這棵子樹的每一層 mapping。"""
+    if id(node) in visiting:
+        return
+    visiting = visiting | {id(node)}
+    if isinstance(node, yaml.MappingNode):
+        _no_duplicate_keys(node)
+        for _k, v in node.value:
+            _walk_duplicate_keys(v, visiting)
+    elif isinstance(node, yaml.SequenceNode):
+        for v in node.value:
+            _walk_duplicate_keys(v, visiting)
 
 
 def _is_merge_key(node):
@@ -345,7 +386,7 @@ def _effective_entries(node, seen, visiting):
     return out
 
 
-def carrier_health(data):
+def exporter_verdicts(data):
     """root 層載體的位元組 exporter 讀不讀得進去: `[(key, 原文, kind), ...]`。
 
     輸入是檔案的 bytes。判定鏡射 yaml.v3 v3.0.1 的 `decode.go`（`scalar()`／
@@ -354,54 +395,76 @@ def carrier_health(data):
     `tests/golden/fixtures/defaults-carrier-oracle.json`，Go 測試
     `TestDefaultsCarrierOracle` 是那張表的裁判。文件層級的項目 key 為 None。
 
-    NOT GUARDED（不看的東西）:
-      * `optional_overrides`／`state_filters`／`tenants`／`profiles` 的值形狀
-        （只看 Go 會解碼的那幾層有沒有重複 key）；`max_metrics_per_tenant` 的值。
+    已知近似與 NOT GUARDED:
+      * 重複 key: Go 會解碼的頂層區塊（`_DECODED_SECTIONS`）底下所有深度都檢查。
+        Go 對這些區塊內「未知欄位」底下的重複 key 會接受、本函式會擋——刻意
+        fail-closed（YAML 1.2 本就不允許，且寫回的 safe_dump 會靜默丟掉前一個）。
+        其他頂層 key 的子樹不看，與 Go 同。
+      * 值形狀: `optional_overrides`／`state_filters`／`tenants`／`profiles`／
+        `max_metrics_per_tenant` 的值型別不看。
+      * 只看第一份 document；第二份 document 緊接 `---` 的 scanner 錯誤 Go 會整份丟。
+      * merge key 的覆寫判定以 key 的字面文字比對；非 `!!str` 解析的 key（數字／
+        布林／null）與 alias 當 key，Go 用解碼後的值比對，可能分歧。
       * 頂層的 merge key、非純量 key、非特定 tag `!`、UTF-16 等向量表以外的拼法。
+      * 沒有 libyaml 時 pure parser 的 scanner 錯誤（如 tab）回 `UNPARSED_BY_TOOL`，
+        不冒充 exporter 的判定（有 libyaml 時同一格由 `carrier_health` 補上）。
       * exporter alias 表（`pkg/config/aliases.go`）的 legacy 拼法；Go 側後續票
-        處理（追蹤入口: #1787）。
+        處理（追蹤入口: #1822）。
     """
     try:
-        root = next(yaml.compose_all(data), None)
+        root = next(yaml.compose_all(data, Loader=_LOADER), None)
     except yaml.YAMLError as e:
         first = str(e).splitlines()[0] if str(e) else e.__class__.__name__
+        if _LOADER is yaml.SafeLoader and isinstance(e, yaml.scanner.ScannerError):
+            return [(None, first, UNPARSED_BY_TOOL)]
         return [(None, first, UNPARSEABLE)]
     if root is None:
         return []
     if not isinstance(root, yaml.MappingNode):
         return [(None, "頂層不是 mapping", UNPARSEABLE)]
+    lines = _decoded(data)
     try:
         _no_duplicate_keys(root)
         top = {k.value: v for k, v in root.value if isinstance(k, yaml.ScalarNode)}
-        for section in ("tenants", "profiles"):
-            block = top.get(section)
-            if isinstance(block, yaml.MappingNode):
-                _no_duplicate_keys(block)
-                for _name, inner in block.value:
-                    if isinstance(inner, yaml.MappingNode):
-                        _no_duplicate_keys(inner)
-        block = top.get("state_filters")
-        if isinstance(block, yaml.MappingNode):
-            _no_duplicate_keys(block)
+        for section in _DECODED_SECTIONS:
+            if section in top:
+                _walk_duplicate_keys(top[section])
         defaults = top.get("defaults")
         if defaults is None:
             return []
         if isinstance(defaults, yaml.ScalarNode):
-            if _scalar_verdict(defaults) == "zero":
+            if _scalar_verdict(defaults, lines) == "zero":
                 return []                      # `defaults:` 空值＝nil map
             raise _Dropped("defaults 不是 mapping（scalar）")
         if not isinstance(defaults, yaml.MappingNode):
             raise _Dropped("defaults 不是 mapping（list）")
         out = []
         for key_node, val_node in _effective_entries(defaults, None, frozenset()):
-            verdict = _scalar_verdict(val_node)
+            verdict = _scalar_verdict(val_node, lines)
             if verdict == "accepted":
                 continue
-            out.append((key_node.value, _raw_of(val_node),
+            out.append((key_node.value, _raw_of(val_node, lines),
                         DECODES_TO_ZERO if verdict == "zero" else UNPARSEABLE))
         return out
     except _Dropped as e:
         return [(None, str(e), UNPARSEABLE)]
+
+
+def carrier_health(data):
+    """`exporter_verdicts` 加上「本工具自己讀不讀得了」: 本工具的讀寫走 PyYAML 的
+    pure parser（`_lib_io.load_yaml_file`），它拒絕而 libyaml／yaml.v3 接受的檔
+    （如 tab）回 `UNPARSED_BY_TOOL`，擋寫入但不冒充 exporter 的判定。"""
+    items = exporter_verdicts(data)
+    if _LOADER is yaml.SafeLoader or any(k in BLOCKING_KINDS for _, _, k in items):
+        return items
+    try:
+        next(yaml.compose_all(data, Loader=yaml.SafeLoader), None)
+    except yaml.scanner.ScannerError as e:
+        first = str(e).splitlines()[0] if str(e) else e.__class__.__name__
+        return [(None, f"exporter 讀得進去；{first}", UNPARSED_BY_TOOL)]
+    except yaml.YAMLError:
+        pass                                   # 兩邊都拒絕的檔上面已經列了
+    return items
 
 
 def carrier_health_at(path):
@@ -417,7 +480,17 @@ def carrier_health_at(path):
 # ── 掃描與完成度 ──────────────────────────────────────────────────────────
 OWNER_TOOL = "tool"          # Step 1／2 會清
 OWNER_MANUAL = "manual"      # 本工具射程外，殘留要人去改（兩種模式都 rc 1）
-OWNER_EXPORTER = "exporter"  # exporter 自己會丟棄這個區塊，不算殘留
+OWNER_EXPORTER = "exporter"  # exporter 自己會丟棄／不讀，不算殘留，只警告
+
+
+def _base_of(name):
+    return name.rsplit("/", 1)[-1]
+
+
+def _nested_ignored(name):
+    """子目錄裡 `_defaults` 以外的 `_` 前綴檔: exporter 完全不讀（`isNestedPlatformFile`）。"""
+    base = _base_of(name)
+    return "/" in name and base.startswith("_") and not is_defaults_name(base)
 
 
 def section_owner(name, section):
@@ -425,18 +498,35 @@ def section_owner(name, section):
 
     規則來自 exporter 的 `applyBoundaryRules`（`flat_scanner.go`）: 平台區塊
     （`defaults`／`optional_overrides`／`profiles`）只從 `_` 前綴檔讀；本工具只寫
-    精確名載體的平台區塊與非 `_` 檔的 `tenants:`，而且不遞迴寫入子目錄。
+    精確名載體的平台區塊與非 `_` 檔的 `tenants:`。子目錄裡的檔（`name` 含 `/`）
+    同一套 basename 規則，但本工具不遞迴寫入，所以本工具會寫的那兩類在子目錄裡
+    是「手動」（對該子樹跑）。
     """
-    if "/" in name or section == "unreadable":
+    if _nested_ignored(name):
+        return OWNER_EXPORTER
+    if section == "unreadable":
         return OWNER_MANUAL
+    nested = "/" in name
+    base = _base_of(name)
     block = section.split(".", 1)[0]
     if block in ("defaults", "optional_overrides"):
-        if is_defaults_name(name):
-            return OWNER_TOOL
-        return OWNER_MANUAL if name.startswith("_") else OWNER_EXPORTER
+        if is_defaults_name(base):
+            return OWNER_MANUAL if nested else OWNER_TOOL
+        return OWNER_MANUAL if base.startswith("_") else OWNER_EXPORTER
     if block == "profiles":
-        return OWNER_MANUAL if name.startswith("_") else OWNER_EXPORTER
-    return OWNER_MANUAL if name.startswith("_") else OWNER_TOOL
+        return OWNER_MANUAL if base.startswith("_") else OWNER_EXPORTER
+    if base.startswith("_"):
+        return OWNER_MANUAL
+    return OWNER_MANUAL if nested else OWNER_TOOL
+
+
+def exporter_drop_reason(name, section):
+    """`OWNER_EXPORTER` 的那一句警告（接在檔名後面）。"""
+    if _nested_ignored(name):
+        return ("exporter 不讀子目錄裡 `_defaults` 以外的 `_` 前綴檔"
+                "（isNestedPlatformFile），本工具不寫入")
+    block = section.split(".", 1)[0]
+    return f"的 {block} 區塊 exporter 會丟棄（只從 `_` 前綴檔讀），本工具不寫入"
 
 
 def manual_reason(name, section, key, val, config_dir):
@@ -444,11 +534,13 @@ def manual_reason(name, section, key, val, config_dir):
     where = f"[{section}] {key}: {val}"
     if section == "unreadable":
         return f"無法讀取（{val}），本工具無法判定"
-    if "/" in name:
+    base = _base_of(name)
+    block = section.split(".", 1)[0]
+    if "/" in name and (block in ("defaults", "optional_overrides")
+                        or not base.startswith("_")):
         subtree = os.path.join(str(config_dir), *name.split("/")[:-1])
         return (f"子目錄裡的檔，本工具不遞迴寫入；請對該子樹跑 "
                 f"`--config-dir {subtree} --plane subtree`：{where}")
-    block = section.split(".", 1)[0]
     if block in ("defaults", "optional_overrides"):
         return (f"非 defaults 載體，本工具不寫入；exporter 會把 root 層任何 `_` "
                 f"開頭檔的 defaults／optional_overrides 併進全域，需手動處理：{where}")
@@ -726,14 +818,14 @@ def remove_from_tenants(metric_key, config_dir, execute=False):
 def _health_reason(key, raw, kind):
     if kind == UNREADABLE:
         return f"無法讀取（{raw}），本工具無法判定 exporter 讀不讀得進去"
+    if kind == UNPARSED_BY_TOOL:
+        return f"本工具讀不了（pure parser 限制）：{raw}；請先修檔"
     if key is None:
         return f"exporter 讀不進這份檔（{raw}），整份載體會被丟棄；請先修檔"
-    if kind == DECODES_TO_ZERO:
-        return (f"`defaults:` 的 {key} 是空值（`{key}:`）——exporter 會把它解成 0，"
-                f"每個租戶因此多一條 0 閾值（等於永遠觸發），不是「沒有這個 key」；"
-                f"請刪掉這一行或補一個數字")
     return (f"`defaults:` 的 {key} 的值 {raw} exporter 讀不成數字（defaults 的型別是 "
-            f"map[string]float64），這份載體會被整份丟棄，下架不會生效；請先修掉它")
+            f"map[string]float64），這份載體會被整份丟棄，下架不會生效；請先修掉它。"
+            f"若這個 --config-dir 其實是子樹載體（exporter 的 -config-dir 之下的"
+            f"目錄），請加 `--plane subtree`")
 
 
 def main():
@@ -781,45 +873,72 @@ def main():
         print("\n  ℹ️  本工具射程外（若仍持有該 metric 的 key，結尾會具名、rc 1）：")
         for name, reason in unreachable:
             print(f"     • {safe_label(name)}——{safe_label(reason)}")
+    carriers_here = defaults_carriers(base)
 
-    # 載體體檢跑在任何寫入之前，母體是這一層所有 `_` 前綴檔（exporter 把它們的
-    # 平台區塊全部併進全域）。本輪自己要刪的 key 不算殘留。紅則整輪降級為預覽。
+    # 載體體檢跑在任何寫入之前。root 平面的母體是這一層所有 `_` 前綴檔（exporter
+    # 把它們的平台區塊全部併進全域）；本輪自己要刪的 key 不算殘留；空值只警告；
+    # exporter 讀不進去的（blocking）讓整輪降級為預覽。租戶檔的警告與平面無關。
     planned = {k for m in args.metrics for k in metric_pattern_keys(m)}
     health = {}
     blocked = set()
-    if args.plane == "root":
-        for e in entries:
-            if (not e.is_file() or not has_yaml_extension(e.name)
-                    or e.name.startswith(".")):
+    for e in entries:
+        if (not e.is_file() or not has_yaml_extension(e.name)
+                or e.name.startswith(".")):
+            continue
+        items = carrier_health_at(e)
+        name = safe_label(e.name)
+        if e.name.startswith("_"):
+            if args.plane != "root":
                 continue
-            items = carrier_health_at(e)
-            if e.name.startswith("_"):
-                if is_defaults_name(e.name):
-                    items = [i for i in items if i[0] not in planned]
-                if items:
-                    health[e.name] = items
-                    if any(kind in BLOCKING_KINDS for _, _, kind in items):
-                        blocked.add(e.name)
-            else:
-                for key, raw, kind in items:
-                    if key is not None and kind == UNPARSEABLE:
-                        print(f"  ⚠️  {safe_label(e.name)} 的 `defaults:` 有 exporter "
-                              f"讀不成數字的值（{safe_label(key)}: {safe_label(raw)}）"
-                              f"——exporter 會整份丟掉這個租戶檔；本工具不寫它")
-    elif defaults_carriers(base):
+            if is_defaults_name(e.name):
+                items = [i for i in items if i[0] not in planned]
+            for key, _raw, kind in items:
+                if kind == DECODES_TO_ZERO:
+                    print(f"  ⚠️  {name} 的 `defaults:` 的 {safe_label(key)} 是空值"
+                          f"（`{safe_label(key)}:`）——exporter 會把它解成 0，每個租戶"
+                          f"因此多一條 0 閾值，不是「沒有這個 key」；請刪掉這一行或"
+                          f"補一個數字")
+            items = [i for i in items if i[2] in BLOCKING_KINDS]
+            if items:
+                health[e.name] = items
+                blocked.add(e.name)
+        else:
+            for key, raw, kind in items:
+                if kind not in (UNPARSEABLE, UNPARSED_BY_TOOL):
+                    continue
+                if key is None:
+                    if _read_yaml(str(e))[1] is not None:
+                        continue               # `scan_for_metric` 會以無法讀取具名
+                    if kind == UNPARSED_BY_TOOL:
+                        print(f"  ⚠️  {name} 本工具讀不了（pure parser 限制；"
+                              f"{safe_label(raw)}）；本工具不寫它")
+                    else:
+                        print(f"  ⚠️  {name} exporter 讀不進去（{safe_label(raw)}）"
+                              f"——整份租戶檔會被丟掉；本工具不寫它")
+                else:
+                    print(f"  ⚠️  {name} 的 `defaults:` 有 exporter 讀不成數字的值"
+                          f"（{safe_label(key)}: {safe_label(raw)}）——exporter 會整份"
+                          f"丟掉這個租戶檔；本工具不寫它")
+    if args.plane != "root" and carriers_here:
         print("  ℹ️  子樹載體不做型別體檢：子樹平面的字串值合法"
               "（`computeEffectiveConfig` 走 map[string]any），"
               "root 的 map[string]float64 規則不適用於這一層。")
 
     write = args.execute and not blocked
     if args.execute and blocked:
+        tool_only = {n for n, items in health.items()
+                     if all(k == UNPARSED_BY_TOOL for _, _, k in items)}
+        who = ("本工具讀不了" if blocked <= tool_only
+               else "exporter 讀不進去" if not (blocked & tool_only)
+               else "exporter 或本工具讀不進去")
         print(f"\n  ⛔ 本輪降級為預覽：{safe_label('、'.join(sorted(blocked)))} "
-              f"exporter 讀不進去，一個位元組都不寫；請先修掉結尾具名的殘留再重跑")
+              f"{who}，一個位元組都不寫；請先修掉結尾具名的殘留再重跑")
     action = "已移除" if write else ("將移除（本輪未寫入）" if args.execute
                                    else "將移除")
 
     incomplete = []
     findings_by_metric = {}
+    nested_by_metric = {}
 
     for metric in args.metrics:
         print(f"\n{'─'*40}")
@@ -828,7 +947,9 @@ def main():
 
         # 掃描（印出的 Step 1 之前）
         findings = scan_for_metric(metric, args.config_dir)
+        nested = nested_residue(metric, args.config_dir)
         findings_by_metric[metric] = findings
+        nested_by_metric[metric] = nested
         if findings:
             print(f"  📂 發現 {sum(len(f['occurrences']) for f in findings)} 處引用:")
             for f in findings:
@@ -842,18 +963,26 @@ def main():
                               f"{safe_label(val)}")
         else:
             print(f"  ✅ 未發現任何引用")
-        dropped_blocks = set()
-        for f in findings:
+        # exporter 會丟棄／不讀的區塊只警告，一檔一區塊一次（含子目錄）。
+        warned = set()
+        for f in findings + nested:
             for section, _key, _val in f["occurrences"]:
+                if section_owner(f["filename"], section) != OWNER_EXPORTER:
+                    continue
                 block = section.split(".", 1)[0]
-                if (section_owner(f["filename"], section) == OWNER_EXPORTER
-                        and (f["filename"], block) not in dropped_blocks):
-                    dropped_blocks.add((f["filename"], block))
-                    print(f"  ⚠️  {safe_label(f['filename'])} 的 {block} 區塊 "
-                          f"exporter 會丟棄（只從 `_` 前綴檔讀），本工具不寫入")
+                if (f["filename"], block) in warned:
+                    continue
+                warned.add((f["filename"], block))
+                print(f"  ⚠️  {safe_label(f['filename'])} "
+                      f"{safe_label(exporter_drop_reason(f['filename'], section))}")
 
         # Step 1 (as printed): 從每個 defaults 載體移除相關 key
-        results = remove_from_all_defaults(metric, args.config_dir, execute=write)
+        if args.plane != "root" and not carriers_here:
+            print("\n  Step 1: 此子樹沒有自己的載體，跳過")
+            results = []
+        else:
+            results = remove_from_all_defaults(metric, args.config_dir,
+                                               execute=write)
         for carrier, ok, msg, removed in results:
             print(f"\n  Step 1: {safe_label(carrier.name)}")
             icon = "✅" if ok else "❌"
@@ -862,7 +991,7 @@ def main():
                 plane = "" if where == "defaults" else f"{where} 的 "
                 print(f"     🗑️  {action} {plane}{safe_label(key)}"
                       f"（原值: {safe_label(val)}）")
-            if not ok:
+            if not ok and carrier.name not in health:
                 incomplete.append((metric, carrier.name, msg))
 
         # Step 2 (as printed): 從 tenant configs 移除
@@ -885,12 +1014,15 @@ def main():
               f"legacy 名字，租戶檔請一併檢查")
 
     # 完成度是 KEY 級: 重掃（或預覽時用掃描結果）扣掉本工具會清的，剩下的具名。
+    # 載體體檢已具名的檔不再以「無法讀取」重複列。
     for metric in args.metrics:
         findings = (scan_for_metric(metric, args.config_dir) if write
                     else findings_by_metric[metric])
-        findings = findings + nested_residue(metric, args.config_dir)
+        findings = findings + nested_by_metric[metric]
         for name, section, key, val, designed in unclearable_occurrences(
                 metric, findings, predict=not write):
+            if section == "unreadable" and name in health:
+                continue
             if designed:
                 reason = manual_reason(name, section, key, val, args.config_dir)
             else:
@@ -899,10 +1031,8 @@ def main():
 
     for carrier_name, items in health.items():
         for key, raw, kind in items:
-            reason = _health_reason(key, raw, kind)
-            reason += ("。若這個 --config-dir 其實是子樹載體（exporter 的 "
-                       "-config-dir 之下的目錄），請加 `--plane subtree`")
-            incomplete.append(("載體體檢", carrier_name, reason))
+            incomplete.append(("載體體檢", carrier_name,
+                               _health_reason(key, raw, kind)))
 
     # 總結
     print(f"\n{'='*60}")

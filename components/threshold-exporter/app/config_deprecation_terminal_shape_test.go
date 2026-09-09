@@ -8,11 +8,15 @@ package main
 // all. The tool therefore deletes keys, and two fixtures under
 // tests/golden/fixtures link the two sides byte for byte:
 //
-//   - deprecate-rule/{before,after}/_defaults.yaml — the Python side runs the
-//     tool on a copy of before/ and asserts the bytes equal after/
-//     (tests/ops/test_deprecate_rule_carriers.py::
-//     test_the_tool_output_is_the_golden_after_file); this file loads after/
-//     through the real loader.
+//   - deprecate-rule/{before,after}.yaml — one `_defaults.yaml` carrier before
+//     and after the tool. The Python side copies before.yaml in as
+//     conf.d/_defaults.yaml, runs the tool and asserts the bytes equal
+//     after.yaml (tests/ops/test_deprecate_rule_carriers.py::
+//     test_the_tool_output_is_the_golden_after_file); this file loads
+//     after.yaml through the real loader. ⚠️ Deliberately NOT named
+//     `_defaults.yaml`: check_threshold_reachability counts every tracked
+//     `_defaults.yaml` as a shipped conf.d artifact, and these are byte samples
+//     of tool I/O, not a conf.d tree.
 //   - defaults-carrier-oracle.json — the truth table for the tool's carrier
 //     health check. TestDefaultsCarrierOracle is the AUTHORITY on the
 //     `exporter` column; the Python side (…::test_carrier_health_matches_the_exporter)
@@ -61,7 +65,7 @@ state_filters:
 `
 
 // What the platform still owes every tenant AFTER cpu_usage is deprecated —
-// the values in deprecate-rule/before/_defaults.yaml that are not cpu_usage's.
+// the values in deprecate-rule/before.yaml that are not cpu_usage's.
 var deprecationSurvivors = map[string]float64{
 	"mem_usage":  90,
 	"disk_usage": 85,
@@ -75,8 +79,8 @@ func TestDeprecatedMetricTerminalShape_CarrierStillParses(t *testing.T) {
 		wantLog string // substring the loader must log when it rejects the file
 	}{
 		{
-			name:   "delete-key (deprecate-rule/after golden)",
-			doc:    goldenFixture(t, "deprecate-rule", "after", "_defaults.yaml"),
+			name:   "delete-key (deprecate-rule/after.yaml golden)",
+			doc:    goldenFixture(t, "deprecate-rule", "after.yaml"),
 			wantOK: true,
 		},
 		{
@@ -178,8 +182,8 @@ func TestDeprecatedMetricTerminalShape_WholeTreeReload(t *testing.T) {
 		wantStateFilters int
 	}{
 		{
-			name:             "delete-key (deprecate-rule/after golden)",
-			carrier:          goldenFixture(t, "deprecate-rule", "after", "_defaults.yaml"),
+			name:             "delete-key (deprecate-rule/after.yaml golden)",
+			carrier:          goldenFixture(t, "deprecate-rule", "after.yaml"),
 			wantMetrics:      []string{"mem_usage", "disk_usage"},
 			wantStateFilters: 1,
 		},

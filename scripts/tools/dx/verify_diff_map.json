@@ -829,7 +829,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "81dda8661d423e217cbd42e0b67198eb4e8034d984784b955abe9e2b5464131c",
+ "source_digest": "e1df331a7dad8b5c5f2e2d2d1bb678bab4b57ffd603d1482f98a7eb0db2f4c71",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -3147,10 +3147,10 @@
    "tests/ops/test_deprecate_rule_carriers.py",
    "tests/ops/test_offboard_deprecate.py"
   ],
-  "tests/golden/fixtures/deprecate-rule/after/_defaults.yaml": [
+  "tests/golden/fixtures/deprecate-rule/after.yaml": [
    "tests/ops/test_deprecate_rule_carriers.py"
   ],
-  "tests/golden/fixtures/deprecate-rule/before/_defaults.yaml": [
+  "tests/golden/fixtures/deprecate-rule/before.yaml": [
    "tests/ops/test_deprecate_rule_carriers.py"
   ],
   "tests/golden/fixtures/full-l0-l3": [

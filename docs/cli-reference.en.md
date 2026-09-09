@@ -2269,7 +2269,7 @@ docker run --rm \
 
 **Output**
 
-Deletes those keys from `defaults:` and `optional_overrides:` (the declared tier — names only, no values) in `_defaults.yaml` / `.yml`, and from the non-`_`-prefixed tenant files in the flat directory, naming each removed key and its old value; an emptied `defaults:` / `optional_overrides:` is dropped entirely; a carrier holding none of them is named and left untouched. ⚠️ It does **not** write `disable`: `defaults:` is typed `map[string]float64`, so a string there makes the exporter drop the whole root carrier ([#1787](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1787)). ⚠️ The write-back re-serialises the whole file (carriers and tenant files alike): comments outside the header are removed; scalars in YAML 1.1 spellings change type. When the carrier health check (see `--plane`) is red the whole run degrades to a preview: not a byte is written, rc 1. The tool does not write into subdirectories, but the completeness rescan looks down into them: a residue in a subdirectory is named together with the subtree to run `--plane subtree` on; the `tenants:` / `profiles:` blocks of `_`-prefixed files are out of reach and any residue there has to be removed by hand.
+Deletes those keys from `defaults:` and `optional_overrides:` (the declared tier — names only, no values) in `_defaults.yaml` / `.yml`, and from the non-`_`-prefixed tenant files in the flat directory, naming each removed key and its old value; an emptied `defaults:` / `optional_overrides:` is dropped entirely; a carrier holding none of them is named and left untouched. ⚠️ It does **not** write `disable`: `defaults:` is typed `map[string]float64`, so a string there makes the exporter drop the whole root carrier ([#1787](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1787)). ⚠️ The write-back re-serialises the whole file (carriers and tenant files alike): comments outside the header are removed; scalars in YAML 1.1 spellings change type. When the carrier health check (see `--plane`) finds a file the exporter cannot read, the whole run degrades to a preview: not a byte is written, rc 1; an empty value under `defaults:` only warns. The tool does not write into subdirectories, but the completeness rescan looks down into them: two kinds of residue — a subtree's own `_defaults.yaml` and the `tenants:` block of a tenant file — clear by following the printed guidance (run `--plane subtree` on that subtree); the rest (platform blocks in tenant files, `_`-prefixed files other than `_defaults` inside subdirectories) the exporter does not read or drops, so they only warn; the `tenants:` / `profiles:` blocks of root-level `_`-prefixed files are out of reach and any residue there has to be removed by hand.
 
 **Examples**
 
@@ -2290,7 +2290,7 @@ docker run --rm \
 |------|-------------|
 | `0` | Success |
 | `1` | Deprecation incomplete; every cause is printed in the output. ⚠️ Preview mode reaches the same verdict on the same tree |
-| `2` | Invalid config directory |
+| `2` | Invalid config directory, or a carrier could not be written back |
 
 ---
 

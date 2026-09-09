@@ -572,6 +572,66 @@
       "doc": "defaults: [\n",
       "exporter": "dropped",
       "key": null
+    },
+    {
+      "name": "dup-nested-state-filter",
+      "doc": "defaults:\n  k: 80\nstate_filters:\n  x:\n    severity: a\n    severity: b\n",
+      "exporter": "dropped",
+      "key": null
+    },
+    {
+      "name": "dup-nested-tenant-metric",
+      "doc": "defaults:\n  k: 80\ntenants:\n  t:\n    m:\n      default: '1'\n      default: '2'\n",
+      "exporter": "dropped",
+      "key": null
+    },
+    {
+      "name": "dup-nested-profile",
+      "doc": "defaults:\n  k: 80\nprofiles:\n  p:\n    m:\n      default: '1'\n      default: '2'\n",
+      "exporter": "dropped",
+      "key": null
+    },
+    {
+      "name": "dup-nested-tenant-routing",
+      "doc": "defaults:\n  k: 80\ntenants:\n  t:\n    _routing:\n      receiver: a\n      receiver: b\n",
+      "exporter": "dropped",
+      "key": null
+    },
+    {
+      "name": "dup-under-unknown-nested-field",
+      "doc": "defaults:\n  k: 80\nstate_filters:\n  x:\n    foo:\n      a: 1\n      a: 2\n",
+      "exporter": "accepted",
+      "key": "k",
+      "value": 80,
+      "python": "unparseable"
+    },
+    {
+      "name": "dup-in-custom-alerts-recipe",
+      "doc": "defaults:\n  k: 80\n_custom_alerts:\n- recipe: a\n  recipe: b\n",
+      "exporter": "accepted",
+      "key": "k",
+      "value": 80
+    },
+    {
+      "name": "trailing-tab",
+      "doc": "defaults:\n  k: 80\t\n  neighbour: 90\n",
+      "exporter": "accepted",
+      "key": "k",
+      "value": 80
+    },
+    {
+      "name": "tab-after-key-colon",
+      "doc": "defaults:\t\n  k: 80\n  neighbour: 90\n",
+      "exporter": "accepted",
+      "key": "k",
+      "value": 80
+    },
+    {
+      "name": "tab-in-flow",
+      "doc": "defaults: {\n\tk: 80, neighbour: 90}\n",
+      "exporter": "accepted",
+      "key": "k",
+      "value": 80
     }
   ]
 }
