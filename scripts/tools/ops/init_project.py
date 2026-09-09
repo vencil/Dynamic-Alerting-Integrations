@@ -725,19 +725,11 @@ def _gen_defaults_yaml(rule_packs: list[str], namespace: str) -> str:
     config['state_filters'] = state_filters
     config['_routing_defaults'] = routing_defaults
 
-    # ⛔ The three-state block ("Custom value / Omitted / Disable") that used to
-    # sit in this header is gone (#1787), by subtraction and not by rewording.
-    # It described what a TENANT writes in ITS OWN file, and it was printed at
-    # the top of the ROOT `_defaults.yaml`, two lines above a `defaults:` block
-    # — so the reader's next action was to write `metric_key: "disable"` right
-    # there. Under `defaults:` that is not a suppressed metric: the values are
-    # `map[string]float64` (`threshold-exporter/app/pkg/config/types.go:208`),
-    # so one string makes `parsePartialConfig` reject the WHOLE file and the
-    # platform loses this file's `state_filters:` and `_routing_defaults:` with
-    # it. Nothing is lost by deleting it — `_gen_tenant_yaml` carries the same
-    # sentence ("Set a key to \"disable\" to suppress that metric.") in the file
-    # it is actually true of, and `patch_config.py`'s copy is likewise
-    # tenant-scoped (it takes a `<tenant>` argument).
+    # No three-state ("Custom value / Omitted / Disable") block in this header:
+    # a root `defaults:` is `map[string]float64` (`ThresholdConfig` in
+    # `pkg/config/types.go`), so a `"disable"` string there makes
+    # `parsePartialConfig` drop the whole file (#1787). The tenant-side sentence
+    # lives in `_gen_tenant_yaml`, the file it is true of.
     header = textwrap.dedent("""\
     # _defaults.yaml — Platform global defaults
     # Managed by Platform Team. Tenant files should NOT contain this section.

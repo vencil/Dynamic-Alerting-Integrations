@@ -389,7 +389,7 @@ def _effective_entries(node, seen, visiting):
 def exporter_verdicts(data):
     """root 層載體的位元組 exporter 讀不讀得進去: `[(key, 原文, kind), ...]`。
 
-    輸入是檔案的 bytes。判定鏡射 yaml.v3 v3.0.1 的 `decode.go`（`scalar()`／
+    輸入是檔案的 bytes。判定鏡射 yaml.v3 的 `decode.go`（`scalar()`／
     `mapping()`／`merge()`／`indicatedString()`）與 `resolve.go`（`resolve()`）對
     `ThresholdConfig`（`defaults: map[string]float64`）的行為；真值表在
     `tests/golden/fixtures/defaults-carrier-oracle.json`，Go 測試
@@ -451,9 +451,8 @@ def exporter_verdicts(data):
 
 
 def carrier_health(data):
-    """`exporter_verdicts` 加上「本工具自己讀不讀得了」: 本工具的讀寫走 PyYAML 的
-    pure parser（`_lib_io.load_yaml_file`），它拒絕而 libyaml／yaml.v3 接受的檔
-    （如 tab）回 `UNPARSED_BY_TOOL`，擋寫入但不冒充 exporter 的判定。"""
+    """`exporter_verdicts` 加上「本工具自己讀不讀得了」: 讀寫走 PyYAML 的 pure
+    parser，它拒絕而 libyaml／yaml.v3 接受的檔（如 tab）回 `UNPARSED_BY_TOOL`。"""
     items = exporter_verdicts(data)
     if _LOADER is yaml.SafeLoader or any(k in BLOCKING_KINDS for _, _, k in items):
         return items
@@ -679,8 +678,9 @@ def out_of_reach(entries):
 def defaults_carriers(config_dir):
     """conf.d 這一層所有 defaults 載體（`_defaults.yaml`／`.yml`，任意大小寫）。
 
-    exporter 兩種拼法都併進 defaults chain（`config_hierarchy.go:216`），所以
-    寫入端要列舉掃描看得見的同一組。平面讀取，`warn_nested` 具名子目錄。
+    exporter 兩種拼法都併進 defaults chain（`config_hierarchy.go` 的
+    `scanDirHierarchicalWithMetrics`），所以寫入端要列舉掃描看得見的同一組。
+    平面讀取，`warn_nested` 具名子目錄。
     """
     base = Path(config_dir)
     warn_nested(base, tool="deprecate_rule")

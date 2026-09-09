@@ -167,7 +167,7 @@ da-tools <command> --help
 | `migrate` | 傳統規則 → 動態格式轉換（AST 引擎） | `<input_file>` |
 | `validate-config` | 一站式配置驗證（YAML + schema + routes + policy） | `--config-dir <dir>` |
 | `offboard` | 下架 tenant 配置 | `<tenant>` |
-| `deprecate` | 下架指標：從 `defaults:`／`optional_overrides:`／租戶檔移除 `<m>`、`<m>_critical`、`custom_<m>`、`custom_<m>_critical`；租戶平面另含這四個名字的維度鍵 `<名字>{…}` | `<metric_keys...>` |
+| `deprecate` | 下架指標：從 `defaults:`／`optional_overrides:`／租戶檔刪除其 key | `<metric_keys...>` |
 | `lint` | 檢查 Custom Rule 治理合規性 | `<path...>` |
 | `onboard` | 分析既有 Alertmanager/Prometheus 配置進行遷移 | `<config_file>` 或 `--alertmanager-config <file>` |
 | `analyze-gaps` | Custom Rule 對應 Rule Pack 缺口分析 | `--tenant-config <path>` |
@@ -2049,11 +2049,11 @@ da-tools deprecate <metric_keys...> [options]
 |------|------|--------|
 | `--config-dir <PATH>` | 租戶配置目錄。⚠️ 預設指向 repo 內部路徑，映像裡不存在——請明確指定 | `components/threshold-exporter/config/conf.d` |
 | `--execute` | **實際執行**（預設只做 Pre-check／預覽，不寫入） | false |
-| `--plane {root,subtree}` | 這個 `--config-dir` 是 conf.d 的 root，還是 exporter `-config-dir` 之下的一層子樹載體。`root` 會對這一層所有 `_` 前綴檔做載體體檢——`defaults:` 的值 exporter 讀不讀得進去，依 yaml.v3 的判定，真值表在 `tests/golden/fixtures/defaults-carrier-oracle.json`；`subtree` 跳過體檢——子樹平面走 `map[string]any`，字串值在那裡合法且生效。⚠️ 工具無法自己判斷，預設 fail-closed | `root` |
+| `--plane {root,subtree}` | 這個 `--config-dir` 是 conf.d 的 root，還是 exporter `-config-dir` 之下的一層子樹載體。`root` 對這一層所有 `_` 前綴檔做載體體檢（`defaults:` 的值 exporter 讀不讀得進去，依 yaml.v3 的判定）；`subtree` 跳過體檢（子樹平面的字串值合法且生效）。工具無法自己判斷，預設 fail-closed | `root` |
 
 **輸出**
 
-從 `_defaults.yaml`／`.yml` 的 `defaults:` 與 `optional_overrides:`（宣告層——只有名字沒有值），以及平面目錄下非 `_` 前綴的租戶檔中刪除上述 key，逐 key 印出原值；清空的 `defaults:`／`optional_overrides:` 整個拿掉；載體沒有相關 key 時具名略過、不寫入。⚠️ **不是**把值寫成 `disable`：`defaults:` 的值型別是 `map[string]float64`，字串會讓 exporter 丟掉整份 root 載體（[#1787](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1787)）。⚠️ 寫回是整份重新序列化（載體與租戶檔都是）：header 以外的註解會被移除；YAML 1.1 拼法的純量會被改型。載體體檢（見 `--plane`）發現 exporter 讀不進去的檔時整輪降級為預覽：一個位元組都不寫、rc 1；`defaults:` 的空值只警告。本工具不遞迴寫入子目錄，但完成度重掃會往下看：子樹自有 `_defaults.yaml` 與租戶檔 `tenants:` 兩類殘留可照印出的指引（對該子樹跑 `--plane subtree`）清掉；其餘（租戶檔的平台區塊、子目錄裡 `_defaults` 以外的 `_` 檔）exporter 不讀或丟棄，只警告；root 層 `_` 前綴檔的 `tenants:`／`profiles:` 區塊本工具射程外，殘留需手動移除。
+從 `_defaults.yaml`／`.yml` 的 `defaults:` 與 `optional_overrides:`（宣告層，只有名字），以及平面目錄下非 `_` 前綴的租戶檔刪除上述 key，逐 key 印出原值；清空的 `defaults:`／`optional_overrides:` 整個拿掉；載體沒有相關 key 時具名略過、不寫入。**不是**把值寫成 `disable`：`defaults:` 是 `map[string]float64`，字串會讓 exporter 丟掉整份 root 載體（[#1787](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1787)）。載體體檢（見 `--plane`）發現 exporter 讀不進去的檔時整輪降級為預覽：不寫入、rc 1；`defaults:` 的空值只警告。本工具不遞迴寫入子目錄，但完成度重掃會往下看：子樹自有 `_defaults.yaml` 與租戶檔 `tenants:` 的殘留照印出的指引對該子樹跑 `--plane subtree`；root 層 `_` 前綴檔的 `tenants:`／`profiles:` 區塊本工具射程外，殘留需手動移除；exporter 不讀或丟棄的區塊只警告。⚠️ NOT GUARDED：寫回是整份重新序列化（header 以外的註解會被移除、YAML 1.1 拼法的純量會被改型）；exporter alias 表的 legacy 拼法與其餘區塊的值形狀不在體檢範圍（追蹤入口：#1822）。
 
 **範例**
 

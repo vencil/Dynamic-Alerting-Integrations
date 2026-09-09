@@ -3,16 +3,14 @@ tests/ops/test_deprecate_rule_carriers.py — deprecate_rule writes EVERY
 defaults carrier and says 下架完成 only when the key is really gone
 (#1609, #1787).
 
-`ThresholdConfig.Defaults` is `map[string]float64`
-(`threshold-exporter/app/pkg/config/types.go:208`): a string under a root
-`defaults:` makes `parsePartialConfig` reject the whole carrier. 下架 therefore
+`ThresholdConfig.Defaults` is `map[string]float64`: a string under a root
+`defaults:` makes `parsePartialConfig` reject the whole carrier, so 下架
 removes the metric's keys, the completion claim is pinned at KEY level, and a
-carrier health check mirrors the exporter's own decoder. The two Go/Python
-links are byte-level fixtures:
+carrier health check mirrors the exporter's decoder. Go/Python links:
 `tests/golden/fixtures/deprecate-rule/before.yaml` →
-`tests/golden/fixtures/deprecate-rule/after.yaml` (one `_defaults.yaml` carrier
-before and after the tool; not named `_defaults.yaml` so the reachability lint
-does not count a byte sample as a shipped conf.d artifact) and
+`tests/golden/fixtures/deprecate-rule/after.yaml` (one carrier before and
+after the tool; not named `_defaults.yaml` so the reachability lint does not
+count it as a shipped conf.d artifact) and
 `tests/golden/fixtures/defaults-carrier-oracle.json` (health-check truth
 table, Go side is the judge).
 
@@ -430,8 +428,8 @@ def test_a_subtree_without_its_own_carrier_follows_the_guidance_to_green(tmp_pat
 def test_a_nested_underscore_file_other_than_defaults_is_not_read_by_the_exporter(
         tmp_path):
     """子目錄裡 `_defaults` 以外的 `_` 檔 exporter 完全不讀（isNestedPlatformFile）：
-    只警告「不讀」、rc 0，不再說「併進全域」。成對反例：同一內容改名
-    `_defaults.yaml` 就是子樹殘留 rc 1。"""
+    只警告「不讀」、rc 0。成對反例：同一內容改名 `_defaults.yaml` 就是子樹殘留
+    rc 1。"""
     root = tmp_path / "conf.d"
     root.mkdir()
     _write(root, "_defaults.yaml", "defaults:\n  cpu_usage: 80\n")
@@ -495,7 +493,7 @@ def test_a_profile_holding_the_key_is_out_of_reach_in_both_modes(tmp_path):
 
 def test_an_unreadable_tenant_file_withholds_the_claim_and_is_named_once(tmp_path):
     """讀不了的租戶檔不是 rc 0：它是一個「量不到」的引用，具名、rc 1，並且
-    只在掃描列表與結尾各具名一次（不再每個步驟印一次）。"""
+    只在掃描列表與結尾各具名一次。"""
     root = tmp_path / "conf.d"
     root.mkdir()
     _write(root, "_defaults.yaml", "defaults:\n  cpu_usage: 80\n")
@@ -579,7 +577,7 @@ def test_carrier_health_invalid_utf8_bytes():
 
 def test_the_written_root_defaults_still_decodes_as_map_string_float64(tmp_path):
     """執行後 root `_defaults.yaml` 餵產線的 `carrier_health` → 無項，並附一支
-    合成負向控制（舊行為的輸出餵同一支 → 紅）。"""
+    合成負向控制（`disable` 哨兵餵同一支 → 紅）。"""
     root = tmp_path / "conf.d"
     root.mkdir()
     _write(root, "_defaults.yaml",

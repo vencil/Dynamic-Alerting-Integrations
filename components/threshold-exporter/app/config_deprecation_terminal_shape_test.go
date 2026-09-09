@@ -2,7 +2,7 @@ package main
 
 // Where the exporter's own loader meets `deprecate_rule --execute` (#1787).
 //
-// `ThresholdConfig.Defaults` is `map[string]float64` (pkg/config/types.go:208):
+// `ThresholdConfig.Defaults` (pkg/config/types.go) is `map[string]float64`:
 // a string under a root `defaults:` does not disable one metric — `yaml.Unmarshal`
 // fails and `parsePartialConfig` drops the WHOLE carrier, `state_filters:` and
 // all. The tool therefore deletes keys, and two fixtures under
@@ -52,7 +52,7 @@ func goldenFixture(t *testing.T, parts ...string) []byte {
 	return data
 }
 
-// The carrier `deprecate_rule --execute` used to leave behind (pre-#1787).
+// Control arm: a `disable` sentinel under a root `defaults:`.
 const deprecatedDisableCarrier = `# _defaults.yaml — Platform global defaults
 defaults:
   cpu_usage: disable
@@ -105,11 +105,9 @@ func TestDeprecatedMetricTerminalShape_CarrierStillParses(t *testing.T) {
 			}
 
 			if !a.wantOK {
-				// ⚠️ Do NOT assert on the returned struct here: `yaml.Unmarshal`
-				// leaves it PARTIALLY populated, which reads like "only
-				// cpu_usage was lost" and is the opposite of what happens. The
-				// `ok=false` IS the loss; what must be pinned here is that the
-				// rejection is not silent.
+				// Not asserting on the returned struct: `yaml.Unmarshal` leaves
+				// it partially populated. `ok=false` IS the loss; what is pinned
+				// here is that the rejection is not silent.
 				if !strings.Contains(logBuf.String(), a.wantLog) {
 					t.Errorf("expected the drop to be logged with %q, got: %s",
 						a.wantLog, logBuf.String())

@@ -517,9 +517,9 @@ def test_backtest_baseline_side_is_wrapped_too(fx, monkeypatch, capsys):
 
 def test_deprecate_rule_names_and_continues(fx):
     """Class (ii): the decode failure is a NAMED finding, not a traceback. The
-    tool keeps going, and since #1787 an unreadable tenant file is a reason
-    the deprecation cannot be judged complete: rc 1 (EXIT_VIOLATION), the
-    file named in the 下架未完成 summary."""
+    tool keeps going, but an unreadable tenant file withholds the completion
+    claim (#1787): rc 1 (EXIT_VIOLATION), the file named in the 下架未完成
+    summary."""
     p = _run(OPS / "deprecate_rule.py", ["cpu_usage", "--config-dir", str(fx["confd_bad"])])
     assert p.returncode == EXIT_VIOLATION, p.stderr[-500:]
     assert "Traceback" not in p.stderr

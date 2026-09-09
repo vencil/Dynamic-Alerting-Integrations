@@ -286,14 +286,13 @@ def test_remove_from_defaults_missing_defaults_file():
 
 
 # ===================================================================
-# 6b. deprecate_rule — 租戶平面述詞（#1787 二輪 F-01）
+# 6b. deprecate_rule — 租戶平面述詞（#1787）
 # ===================================================================
 
 def test_tenant_key_belongs_to_metric_accepts_exactly_the_metrics_own_shapes():
     """接受集合**恰為**「四個確切名字 + 它們的維度形狀」。
 
-    列舉「哪些會被拒絕」測不出這件事：舊的子字串述詞對每一個含有該字串的 key
-    都說 True，而它「拒絕」的東西一樣拒絕得很好。這條釘的是被接受的集合。
+    只列舉被拒絕的 key 測不出述詞太寬，所以這條釘的是被接受的集合。
     """
     belongs = deprecate_rule.tenant_key_belongs_to_metric
     for key in ("container_cpu", "container_cpu_critical",
@@ -306,9 +305,7 @@ def test_tenant_key_belongs_to_metric_accepts_exactly_the_metrics_own_shapes():
 def test_tenant_key_belongs_to_metric_rejects_a_neighbour_that_merely_shares_the_prefix():
     """`container_cpu_throttle*` 是**另一個指標**，不是 `container_cpu` 的。
 
-    這是 stock 樹會出現的組合（`--rule-packs kubernetes` 同時給兩個），舊的
-    子字串述詞把它報成引用 ⇒ 永久 rc 1；而移除端的子字串分支會把它的維度鍵
-    真的刪掉 ⇒ 刪到別人的資料。
+    子字串比對會把它報成引用（永久 rc 1），移除端更會刪到它的維度鍵。
     """
     belongs = deprecate_rule.tenant_key_belongs_to_metric
     for key in ("container_cpu_throttle", "container_cpu_throttle_critical",
