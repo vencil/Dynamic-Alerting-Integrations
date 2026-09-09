@@ -455,6 +455,26 @@ repos:
         # later — and the file being edited is the guard.
         files: ^(docs/.*\.md|scripts/tools/ops/.*_dispatch\.py|scripts/tools/lint/check_doc_datools_cmds\.py|components/da-tools/(README\.md|app/QUICKSTART\.md)|try-local/README\.md)$
 
+      - id: cli-contract-check
+        name: Doc da-tools invocations ↔ argparse contract (V0–V4 + baseline ledger, #1379)
+        entry: python3 -X utf8 scripts/tools/lint/check_cli_contract.py --ci
+        language: python
+        pass_filenames: false
+        # The check loads every da-tools subcommand with runpy to capture its
+        # real ArgumentParser; pyyaml is the one import those tools need that
+        # is not stdlib (docs-ci's drift leg measured the same thing).
+        additional_dependencies: ['pyyaml']
+        # ⛔ Trigger surface ⊇ scan surface, same reasoning as doc-datools-cmds
+        # above: the check reads every docs/**/*.md plus the three customer
+        # landing pages, the CLI contract itself (entrypoint's COMMAND_MAP and
+        # PROMETHEUS_COMMANDS, every script's argparse — hence the whole of
+        # scripts/tools/, which also covers the checker and the sibling whose
+        # header pin and scan-surface identity it imports), and the baseline
+        # ledger, whose rows decide what this gate lets through. A file the
+        # gate reads but no commit can trigger it on is a gate that fires one
+        # push late on exactly the edit that changes its verdict.
+        files: ^(docs/.*\.md|docs/internal/cli-contract-baseline\.yaml|components/da-tools/(README\.md|app/(QUICKSTART\.md|entrypoint\.py))|try-local/README\.md|scripts/tools/.*\.py)$
+
       - id: design-token-usage
         name: Design token compliance (JSX)
         entry: python3 -X utf8 scripts/tools/lint/check_design_token_usage.py --ci

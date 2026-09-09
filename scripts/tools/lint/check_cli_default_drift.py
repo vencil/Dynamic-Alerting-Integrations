@@ -80,6 +80,10 @@ _HEADER_NO_DEFAULT: set[tuple[str, ...]] = {
     ("參數", "說明"), ("參數", "說明", "可選值"), ("參數", "說明", "範例"),
     ("Parameter", "Description"), ("Parameter", "Description", "Values"),
     ("Parameter", "Description", "Example"),
+    # rule-pack-diff / silencer-drift-check parameter tables (#1379: the
+    # contract check reads flags from these; a shape it does not know is a
+    # hard error there, so a new two-column parameter header lands here).
+    ("參數", "用途"), ("Parameter", "Purpose"),
     ("代碼", "說明"), ("Code", "Description"), ("Code", "意義"),
     ("Code", "含義"), ("Code", "Meaning"),
     ("Exit Code", "含義", "CI 行為"),

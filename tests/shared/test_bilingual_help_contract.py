@@ -199,6 +199,7 @@ ENGLISH_ONLY: dict[str, str] = {
     "check_changelog_no_tbd.py": _R_LINT,
     "check_cli_coverage.py": _R_LINT,
     "check_cli_default_drift.py": _R_LINT,
+    "check_cli_contract.py": _R_LINT,
     "check_codename_gate.py": _R_LINT,
     "check_codename_leak.py": _R_LINT,
     "check_commit_scope_doc.py": _R_LINT,
@@ -532,8 +533,17 @@ def test_allowlists_shrink_only_count_pin():
     # unchanged. ⛔ A decision, not a default — wiring detect_cli_lang() into
     # a 30-flag internal runner would make it the lone bilingual exception
     # among the tools it drives.
-    assert len(ENGLISH_ONLY) <= 147, (
-        f"ENGLISH_ONLY grew to {len(ENGLISH_ONLY)} (pin=147). Adding an "
+    # pin 148: bumped from 147 for check_cli_contract.py (#1379 / TRK-370), the
+    # documented-da-tools-invocations ↔ argparse-contract gate. Same class as
+    # check_cli_default_drift.py beside it: a lint wired to the `Drift
+    # Detection` required check, `make lint-docs` and pre-commit, never
+    # invoked by a customer. Its output is `[V1] <file>:<line> <cmd> <flag>`
+    # lines plus a NOT-scored count line: identifiers and numbers.
+    # ⛔ A choice, not a default — `scripts/tools/lint/` is English-only across
+    # the board, so wiring detect_cli_lang() here would make it the lone
+    # exception in its own directory rather than the start of a trend.
+    assert len(ENGLISH_ONLY) <= 148, (
+        f"ENGLISH_ONLY grew to {len(ENGLISH_ONLY)} (pin=148). Adding an "
         "English-only tool is allowed but must be an explicit, reviewed "
         "decision — bump this pin in the same commit and justify it."
     )
