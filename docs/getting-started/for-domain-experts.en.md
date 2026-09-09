@@ -27,7 +27,7 @@ lang: en
 
 **2. Rule Pack has three-part structure.** Part 1: Data normalization (unify metrics from various exporters). Part 2: Threshold normalization (support scheduled, dimensional, tri-state). Part 3: Alert rules (PromQL expressions).
 
-**3. Custom rules have governance.** lint_custom_rules.py enforces deny-list, naming conventions, and schema checks to prevent rule pollution.
+**3. Custom rules have governance.** lint_custom_rules.py enforces the deny-list, required labels, and range-vector limits to prevent rule pollution.
 
 ## Rule Pack Structure
 

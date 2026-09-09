@@ -27,7 +27,7 @@ lang: zh
 
 **2. Rule Pack 有三層結構。** 第一層：資料正規化（把各種 exporter 的指標統一格式）；第二層：閾值正規化（支援排程式、維度、三態）；第三層：alert rules（PromQL 表達式）。
 
-**3. Custom Rule 有治理機制。** lint_custom_rules.py 強制執行 deny-list、命名慣例、schema 檢查，避免規則污染。
+**3. Custom Rule 有治理機制。** lint_custom_rules.py 強制執行 deny-list、必要 label 與 range vector 上限，避免規則污染。
 
 ## Rule Pack 結構
 

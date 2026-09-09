@@ -186,16 +186,22 @@ python3 scripts/tools/ops/migrate_rule.py \
   /path/to/old_rules/alerts.yml \
   --output-dir migration_output/
 # Output (directory):
+#   - migration_output/tenant-config.yaml (tenant thresholds; the user_threshold vectors the alert rules refer to come from it)
 #   - migration_output/platform-recording-rules.yaml (recording rules the alert rules refer to)
 #   - migration_output/platform-alert-rules.yaml (new rules with migration_status: shadow)
 #   - migration_output/prefix-mapping.yaml (old_query ↔ new_query mapping)
 
-# 2.2 Deploy new rules (shadow state): both files are plain Prometheus rule YAML,
-#     wrap them in a ConfigMap mounted into Prometheus' rule volume (see threshold-exporter README §Deployment)
+# 2.2 Deploy new rules (shadow state) — all three pieces are needed, or the shadow alerts never fire:
+#   (a) merge tenant-config.yaml into conf.d (the exporter emits user_threshold vectors from it)
+cp migration_output/tenant-config.yaml conf.d/
+#   (b) wrap both rule files in a ConfigMap; use .yml keys, Prometheus reads /etc/prometheus/rules/*.yml only
 kubectl create configmap prometheus-rules-migration -n monitoring \
-  --from-file=migration_output/platform-recording-rules.yaml \
-  --from-file=migration_output/platform-alert-rules.yaml \
+  --from-file=migration-recording.yml=migration_output/platform-recording-rules.yaml \
+  --from-file=migration-alert.yml=migration_output/platform-alert-rules.yaml \
   --dry-run=client -o yaml | kubectl apply -f -
+#   (c) register prometheus-rules-migration in Prometheus' projected rule volume
+#       (volumes[rules].projected.sources in k8s/03-monitoring/deployment-prometheus.yaml,
+#       items key/path = the .yml names above; ADR-005) and apply — an unregistered ConfigMap is never read
 
 # 2.3 Update Alertmanager to intercept shadow alerts
 kubectl patch configmap alertmanager-config -n monitoring \

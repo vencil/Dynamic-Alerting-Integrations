@@ -1998,7 +1998,7 @@ da-tools offboard <tenant> [options]
 
 **輸出**
 
-Pre-check（外部依賴、`custom_` 規則引用等）通過後移除 tenant 配置檔；不帶 `--execute` 只做預檢不刪除。`--cleanup-rules` 可一併移除相關 Recording/Alert 規則。工具不做備份，請先自行備份。
+Pre-check（外部依賴、`custom_` 規則引用等）通過後，`--execute` 移除 tenant 配置檔；不帶 `--execute` 只做預檢不刪除。工具不做備份、不動 Recording/Alert 規則——請先自行備份，規則下架走 `deprecate`。
 
 **範例**
 
