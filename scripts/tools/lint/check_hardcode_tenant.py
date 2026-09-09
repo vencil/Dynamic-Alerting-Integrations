@@ -63,7 +63,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -266,6 +266,10 @@ def _compute_exit_code(*, ci: bool, n_findings: int) -> int:
     | False | *          | 0    |
     | True  | 0          | 0    |
     | True  | >0         | 1    |
+
+    An empty default-roots population (no explicit paths, nothing left
+    after resolution) is outside this table: it exits EXIT_CALLER_ERROR (2)
+    regardless of --ci — see ``main`` (#1810).
     """
     if not ci:
         return EXIT_OK
@@ -291,6 +295,24 @@ def main(argv: list[str] | None = None) -> int:
 
     paths = _resolve_target_paths(args)
     if not paths:
+        if not args.paths:
+            # #1810: an empty default-roots population is a caller error,
+            # not a clean pass — "no files matched" used to exit 0 and was
+            # indistinguishable from "every file is clean". Only the
+            # default roots are bound to this floor; explicit paths are
+            # the caller's own population (below). The reason reaches
+            # stdout as the last line because validate_all quotes only
+            # the last meaningful stdout line.
+            msg = (f"ERROR: no files under default scan roots below "
+                   f"{PROJECT_ROOT} — nothing was measured")
+            print(msg, file=sys.stderr)
+            print(msg)
+            return EXIT_CALLER_ERROR
+        print(
+            "⚠ every explicit path was excluded or does not exist — "
+            "nothing was measured",
+            file=sys.stderr,
+        )
         if args.ci:
             print("✓ no files matched scan target")
         return EXIT_OK

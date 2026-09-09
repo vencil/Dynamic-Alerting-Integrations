@@ -19,6 +19,8 @@ Usage:
 Exit codes:
     0 = all checks passed
     1 = errors found
+    2 = caller error (docs dir is not a directory, or holds no markdown —
+        nothing was measured)
 """
 
 import argparse
@@ -31,7 +33,7 @@ from pathlib import Path
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
-from _lib_exitcodes import EXIT_VIOLATION  # noqa: E402
+from _lib_exitcodes import EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent.parent.parent
@@ -196,9 +198,16 @@ def format_text_report(findings: list) -> str:
     return "\n".join(lines)
 
 
-def format_json_report(findings: list) -> str:
-    """Format JSON report."""
-    return json.dumps({
+def format_json_report(findings: list, *, reason: str | None = None) -> str:
+    """Format JSON report.
+
+    ``status`` is one of ``pass | warn | caller_error``. ``reason`` is set
+    only on the refused-empty-population path (#1810): ``--json`` stdout
+    must still be exactly one JSON document there, so that path emits this
+    shape zeroed out with ``status="caller_error"`` and the reason instead
+    of prose.
+    """
+    report = {
         "check": "bilingual_content",
         "findings": [
             {"severity": s, "message": m, "file": p, "cjk_ratio": r}
@@ -208,7 +217,26 @@ def format_json_report(findings: list) -> str:
         "info_count": sum(1 for s, *_ in findings if s == "info"),
         "status": "pass" if not any(s == "warning" for s, *_ in findings)
                   else "warn",
-    }, indent=2, ensure_ascii=False)
+    }
+    if reason is not None:
+        report["status"] = "caller_error"
+        report["reason"] = reason
+    return json.dumps(report, indent=2, ensure_ascii=False)
+
+
+def empty_population_reason(docs_dir: Path) -> str | None:
+    """Why nothing could be measured under ``docs_dir``, or None if it can.
+
+    #1810: an empty population is a caller error, not a clean pass — a
+    docs dir with no markdown printed "All bilingual content checks
+    passed" and exited 0. Name WHICH empty shape: not a directory, or no
+    markdown at all.
+    """
+    if not docs_dir.is_dir():
+        return f"not a directory: {docs_dir}"
+    if next(docs_dir.rglob("*.md"), None) is None:
+        return f"no markdown files found under {docs_dir}"
+    return None
 
 
 def main():
@@ -225,6 +253,17 @@ def main():
                         help=f"CJK ratio threshold for .en.md files "
                              f"(default: {DEFAULT_CJK_THRESHOLD})")
     args = parser.parse_args()
+
+    reason = empty_population_reason(DOCS_DIR)
+    if reason is not None:
+        msg = f"ERROR: {reason} — nothing was measured"
+        print(msg, file=sys.stderr)
+        if args.json:
+            print(format_json_report([], reason=reason))
+        else:
+            # validate_all quotes only the last meaningful stdout line.
+            print(msg)
+        sys.exit(EXIT_CALLER_ERROR)
 
     findings = run_all_checks(docs_dir=DOCS_DIR, threshold=args.threshold)
 

@@ -280,11 +280,17 @@ class TestOutputFormatting:
 # ---------------------------------------------------------------------------
 
 
+def _one_unpaired_doc(root: Path) -> None:
+    """非空母體、零 finding：一個沒有 .en.md / .zh.md 配對的 plain.md。"""
+    (root / "plain.md").write_text("# plain\n\n單獨一份、不配對。\n", encoding="utf-8")
+
+
 class TestCLI:
     """CLI main() 測試。"""
 
     def test_main_no_findings(self, tmp_path, monkeypatch, capsys, cli_argv):
         """無 findings 時正常退出。"""
+        _one_unpaired_doc(tmp_path)
         cli_argv("check_bilingual_content")
         monkeypatch.setattr(cbc, "DOCS_DIR", tmp_path)
         monkeypatch.setattr(cbc, "PROJECT_ROOT", tmp_path)
@@ -294,13 +300,14 @@ class TestCLI:
 
     def test_main_json_flag(self, tmp_path, monkeypatch, capsys, cli_argv):
         """--json 輸出 JSON。"""
+        _one_unpaired_doc(tmp_path)
         cli_argv("check_bilingual_content", "--json")
         monkeypatch.setattr(cbc, "DOCS_DIR", tmp_path)
         monkeypatch.setattr(cbc, "PROJECT_ROOT", tmp_path)
         cbc.main()
         out = capsys.readouterr().out
         data = json.loads(out)
-        assert "status" in data
+        assert data["status"] == "pass"
 
     def test_main_ci_exits_on_warnings(self, tmp_path, monkeypatch, capsys, cli_argv):
         """--ci 有 warnings 時 exit 1。"""
@@ -316,9 +323,80 @@ class TestCLI:
 
     def test_main_threshold_flag(self, tmp_path, monkeypatch, capsys, cli_argv):
         """--threshold 參數生效。"""
+        _one_unpaired_doc(tmp_path)
         cli_argv("check_bilingual_content", "--threshold", "0.99")
         monkeypatch.setattr(cbc, "DOCS_DIR", tmp_path)
         monkeypatch.setattr(cbc, "PROJECT_ROOT", tmp_path)
         cbc.main()
         out = capsys.readouterr().out
         assert "passed" in out
+
+
+# ---------------------------------------------------------------------------
+# #1810 — 空母體是 caller error，不是 passed
+# ---------------------------------------------------------------------------
+
+
+class TestEmptyPopulationIsACallerError:
+    """#1810：docs 下沒有任何 markdown、或 docs 不是目錄 ⇒ rc 2。
+
+    修前空 tmp_path 印 "All bilingual content checks passed" 且 rc 0，
+    與「每份文件都乾淨」無法區分。
+    """
+
+    def _point(self, monkeypatch, docs: Path) -> None:
+        monkeypatch.setattr(cbc, "DOCS_DIR", docs)
+        monkeypatch.setattr(cbc, "PROJECT_ROOT", docs.parent)
+
+    def test_no_markdown_is_rc_2_and_the_reason_is_the_last_stdout_line(
+            self, tmp_path, monkeypatch, capsys, cli_argv):
+        """下限被拿掉、或理由不再到 stdout 最後一行（validate_all 只引用
+        stdout 最後一行）時轉紅。"""
+        docs = tmp_path / "docs"
+        (docs / "images").mkdir(parents=True)
+        (docs / "images" / "logo.png").write_bytes(b"\x89PNG")
+        self._point(monkeypatch, docs)
+        cli_argv("check_bilingual_content", "--ci")
+        with pytest.raises(SystemExit) as exc_info:
+            cbc.main()
+        assert exc_info.value.code == cbc.EXIT_CALLER_ERROR
+        captured = capsys.readouterr()
+        assert "no markdown files found" in captured.err
+        assert "no markdown files found" in captured.out.strip().splitlines()[-1]
+        assert "passed" not in captured.out
+
+    def test_json_mode_refuses_with_one_json_document(
+            self, tmp_path, monkeypatch, capsys, cli_argv):
+        """--json 的 stdout 在每條終止路徑都必須是單一 JSON 文件（dev-rules
+        §13）；拒絕改印散文到 stdout 時轉紅。"""
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        self._point(monkeypatch, docs)
+        cli_argv("check_bilingual_content", "--json")
+        with pytest.raises(SystemExit) as exc_info:
+            cbc.main()
+        assert exc_info.value.code == cbc.EXIT_CALLER_ERROR
+        captured = capsys.readouterr()
+        doc = json.loads(captured.out)
+        assert doc["status"] == "caller_error"
+        assert "no markdown files found" in doc["reason"]
+        assert doc["findings"] == []
+        assert doc["warning_count"] == 0 and doc["info_count"] == 0
+        assert "no markdown files found" in captured.err
+
+    @pytest.mark.parametrize("shape", ["missing", "file"])
+    def test_a_docs_path_that_is_not_a_directory_is_named_as_such(
+            self, tmp_path, monkeypatch, capsys, cli_argv, shape):
+        """docs/ 不存在或是一般檔案時，理由要指名「not a directory」，不能
+        說成「no markdown files found」把 operator 送去錯的修法。"""
+        docs = tmp_path / "docs"
+        if shape == "file":
+            docs.write_text("not a dir\n", encoding="utf-8")
+        self._point(monkeypatch, docs)
+        cli_argv("check_bilingual_content")
+        with pytest.raises(SystemExit) as exc_info:
+            cbc.main()
+        assert exc_info.value.code == cbc.EXIT_CALLER_ERROR
+        err = capsys.readouterr().err
+        assert "not a directory" in err
+        assert "no markdown files found" not in err

@@ -325,6 +325,56 @@ class TestSkipSetIsJudgedBelowTheScanRoot:
 
 
 # ---------------------------------------------------------------------------
+# #1810 — an empty default-roots population is a caller error
+# ---------------------------------------------------------------------------
+class TestEmptyDefaultRootsPopulationIsACallerError:
+    """#1810: 0 files under the default scan roots is rc 2, --ci or not.
+
+    Before the floor, ``--ci`` printed "no files matched scan target" and
+    exited 0 — indistinguishable from "every file is clean". Only the
+    default-roots population is bound: explicit paths are the caller's own
+    choice and keep rc 0 (with a stderr note).
+    """
+
+    @pytest.mark.parametrize("argv", [["--ci"], []])
+    def test_no_files_under_default_roots_is_rc_2(
+            self, tmp_path, monkeypatch, capsys, argv):
+        """Red if the floor is removed, or if the reason stops reaching stdout
+        (validate_all quotes only the last meaningful stdout line)."""
+        (tmp_path / "components").mkdir()
+        monkeypatch.setattr(lint, "PROJECT_ROOT", tmp_path)
+        rc = lint.main(argv)
+        assert rc == lint.EXIT_CALLER_ERROR
+        captured = capsys.readouterr()
+        assert "no files under default scan roots" in captured.err
+        assert "no files under default scan roots" in \
+            captured.out.strip().splitlines()[-1]
+        assert "✓" not in captured.out
+
+    def test_default_roots_that_hold_only_skipped_files_is_rc_2(
+            self, tmp_path, monkeypatch, capsys):
+        (tmp_path / "components" / "testdata").mkdir(parents=True)
+        (tmp_path / "components" / "testdata" / "x.go").write_text(
+            _DIRTY_GO, encoding="utf-8")
+        monkeypatch.setattr(lint, "PROJECT_ROOT", tmp_path)
+        assert lint.main(["--ci"]) == lint.EXIT_CALLER_ERROR
+        assert "nothing was measured" in capsys.readouterr().err
+
+    def test_explicit_paths_that_are_all_excluded_keep_rc_0_but_say_so(
+            self, tmp_path, monkeypatch, capsys):
+        """Explicit paths are the caller's population: not a caller error,
+        but never silent either."""
+        skipped = tmp_path / "a_test.go"
+        skipped.write_text(_DIRTY_GO, encoding="utf-8")
+        monkeypatch.setattr(lint, "PROJECT_ROOT", tmp_path)
+        rc = lint.main(["--ci", str(skipped), str(tmp_path / "missing.go")])
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert "nothing was measured" in captured.err
+        assert "no files matched scan target" in captured.out
+
+
+# ---------------------------------------------------------------------------
 # Live dogfood — actual repo must pass
 # ---------------------------------------------------------------------------
 class TestLiveRepo:
