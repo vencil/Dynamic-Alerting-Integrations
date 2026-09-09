@@ -64,10 +64,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
 from pathlib import Path
+
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_validation import i18n_text  # noqa: E402
 
 try:
     import yaml
@@ -457,10 +465,24 @@ def _locate_block(lines: list[str], body: str) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--ci", action="store_true", help="有違規時 exit 1")
-    ap.add_argument("--json", action="store_true", help="輸出 JSON")
-    ap.add_argument("--repo", default=str(_REPO_ROOT))
+    # ⛔ try_utf8_stdout() 要在 argparse 之前：`--help` 裡的 CJK 在 legacy Windows
+    # console（cp950/cp936）會在 argparse 印出來之前就 UnicodeEncodeError。
+    try_utf8_stdout()
+    ap = argparse.ArgumentParser(
+        description=i18n_text(
+            "找出 `set -e` + `pipefail` 之下不可達的 PIPESTATUS 讀取——"
+            "管線失敗時腳本就在管線那一行終止，之後的 rc 檢查與它的訊息永遠不會執行。",
+            "Find PIPESTATUS reads that are unreachable under `set -e` + "
+            "`pipefail`: a failing pipeline terminates the script at the "
+            "pipeline itself, so the rc check after it never runs.",
+        ),
+    )
+    ap.add_argument("--ci", action="store_true",
+                    help=i18n_text("有違規時 exit 1", "exit 1 when violations are found"))
+    ap.add_argument("--json", action="store_true",
+                    help=i18n_text("輸出 JSON", "emit JSON"))
+    ap.add_argument("--repo", default=str(_REPO_ROOT),
+                    help=i18n_text("要掃描的 repo 根目錄", "repository root to scan"))
     args = ap.parse_args(argv)
 
     repo = Path(args.repo).resolve()
@@ -470,7 +492,7 @@ def main(argv: list[str] | None = None) -> int:
             "（pre-commit 需要 additional_dependencies: ['pyyaml']）",
             file=sys.stderr,
         )
-        return 2
+        return EXIT_CALLER_ERROR
 
     if not (repo / ".git").exists():
         print(f"[unreachable-pipestatus] ⛔ 量不到：{repo} 不是 git repo", file=sys.stderr)
