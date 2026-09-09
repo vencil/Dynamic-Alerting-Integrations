@@ -15,6 +15,7 @@ bytes 複製進測試會多出一個會漂的載體，而 CI 的 shallow clone �
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -72,12 +73,15 @@ def test_repo_has_no_unreachable_pipestatus_reads() -> None:
 def test_population_is_not_vacuous() -> None:
     """⚠️ 反空轉下限：母體不得為空、也不得暴跌到不合理的低點。
 
-    量測時（TRK-381）母體是 264 個 shell 單元（64 scripts / 200 workflow run
-    blocks）。下限取 100 —— 遠低於現況、又足以在 glob 壞掉時立刻紅。
+    量測時（TRK-381 第 2 輪）母體是 360 個 shell 單元（64 scripts / 296
+    workflow run blocks）。⚠️ 第 1 輪是 264（200 個 run 區塊）——那版用 regex
+    比對 ``run: |`` 的縮排，**漏掉 96 個 run step**（單行 ``run:`` 與縮排不合
+    的區塊）。改由 YAML parser 枚舉後獨立複核：296 個 ``run:`` step，相符。
+    下限取 250 —— 遠低於現況、又足以在枚舉壞掉時立刻紅。
     """
     data = _findings(_REPO_ROOT)
-    assert data["units"] >= 100, (
-        f"母體只剩 {data['units']} 個 shell 單元（量測時 264）。"
+    assert data["units"] >= 250, (
+        f"母體只剩 {data['units']} 個 shell 單元（量測時 360）。"
         "這比較像枚舉壞了，而不是檔案真的變少 —— 工具失能長得就像零命中。"
     )
 
@@ -184,3 +188,127 @@ def test_workflow_run_block_with_shell_bash_gets_pipefail(tmp_path: Path) -> Non
     repo = _git_fixture(tmp_path, {".github/workflows/w.yml": wf})
     findings = _findings(repo)["findings"]
     assert len(findings) == 1, findings
+
+
+# ---------------------------------------------------------------------------
+# 第 2 輪盲審（TRK-381）找到的形狀 —— 每一格都以 bash 為 ground truth 驗過
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "name,body",
+    [
+        # ⛔ 誤紅：heredoc 內文含 ${PIPESTATUS[0]} 只是文字，不是讀取
+        #    bash 實測 rc=0 且後續行照跑
+        (
+            "heredoc_body.sh",
+            "set -euo pipefail\ntrue | cat <<'DOC'\n"
+            "docs: ${PIPESTATUS[0]} is example text, not code\nDOC\necho end\n",
+        ),
+        # ⛔ 誤紅：不帶引號的 $(cmd1|cmd2) 當引數時，管線失敗不觸發 errexit
+        #    bash 實測 rc=0、REACHED 有印
+        (
+            "cmdsub_arg.sh",
+            'set -euo pipefail\necho $(false | true) end\n'
+            'RC="${PIPESTATUS[0]}"\necho "REACHED $RC"\n',
+        ),
+        # ⛔ 誤紅：管線被 && 接住 ⇒ errexit 不觸發（第 1 輪對這半完全零覆蓋，
+        #    盲審用 mutation 證明刪掉 &&/|| 子句 11 格仍全綠）
+        (
+            "and_chained.sh",
+            'set -euo pipefail\nfalse | true && RC="${PIPESTATUS[0]}"\necho ok\n',
+        ),
+        (
+            "or_chained.sh",
+            'set -euo pipefail\nfalse | true || RC="${PIPESTATUS[0]}"\necho ok\n',
+        ),
+    ],
+)
+def test_round2_false_positives_stay_green(tmp_path: Path, name: str, body: str) -> None:
+    """⛔ 這四格全部是**合法**寫法，bash 實測都跑完 —— 判違規就是誤紅。"""
+    repo = _git_fixture(tmp_path, {name: body})
+    assert _findings(repo)["findings"] == [], name
+
+
+@pytest.mark.parametrize(
+    "name,body,line",
+    [
+        # 同一行以 ; 接 —— 逐行掃描看不到，bash 實測 rc=1、下一行不可達
+        (
+            "semicolon.sh",
+            'set -euo pipefail\nfalse | true; RC="${PIPESTATUS[0]}"\necho "$RC"\n',
+            2,
+        ),
+        # shebang 內嵌旗標 —— bash 實測 rc=1、REACHED 沒印
+        (
+            "shebang_e.sh",
+            '#!/bin/bash -e\nset -o pipefail\nfalse | true\n'
+            'RC="${PIPESTATUS[0]}"\necho "REACHED"\n',
+            4,
+        ),
+        # 函式定義在 set 之前、呼叫在之後 —— bash 實測 rc=1、REACHED 沒印
+        (
+            "func_before_set.sh",
+            'check_it() {\n  false | true\n  RC="${PIPESTATUS[0]}"\n  echo "REACHED"\n}\n'
+            'set -euo pipefail\ncheck_it\n',
+            3,
+        ),
+    ],
+)
+def test_round2_false_negatives_now_caught(tmp_path: Path, name: str, body: str, line: int) -> None:
+    """這三格都是**真缺陷**（bash 逐一驗過），第 1 輪的逐行掃描全部漏抓。"""
+    repo = _git_fixture(tmp_path, {name: body})
+    findings = _findings(repo)["findings"]
+    assert len(findings) == 1, f"{name}: {findings}"
+    assert findings[0]["line"] == line, f"{name}: {findings}"
+
+
+@pytest.mark.parametrize("scope", ["job", "workflow"])
+def test_defaults_run_shell_is_resolved(tmp_path: Path, scope: str) -> None:
+    """``defaults.run.shell: bash`` 與 step 層的 ``shell: bash`` 等效。
+
+    ⚠️ 第 1 輪往上掃字串，只看得到 step 層那一行 ⇒ job／workflow 層完全隱形。
+    現在由 YAML parser 回答繼承。
+    """
+    step = ('      - name: s\n        run: |\n          false | true\n'
+            '          rc="${PIPESTATUS[0]}"\n          echo "$rc"\n')
+    defaults = "    defaults:\n      run:\n        shell: bash\n"
+    if scope == "job":
+        wf = f"on: push\njobs:\n  j:\n    runs-on: ubuntu-latest\n{defaults}    steps:\n{step}"
+    else:
+        wf = ("on: push\ndefaults:\n  run:\n    shell: bash\n"
+              f"jobs:\n  j:\n    runs-on: ubuntu-latest\n    steps:\n{step}")
+    repo = _git_fixture(tmp_path, {".github/workflows/w.yml": wf})
+    findings = _findings(repo)["findings"]
+    assert len(findings) == 1, f"{scope}: {findings}"
+
+
+def test_shell_bash_with_trailing_comment_still_resolves(tmp_path: Path) -> None:
+    """``shell: bash  # 註解`` —— 第 1 輪的行尾錨定 regex 會漏掉。"""
+    wf = ("on: push\njobs:\n  j:\n    runs-on: ubuntu-latest\n    steps:\n"
+          "      - name: s\n        shell: bash  # explicit\n        run: |\n"
+          '          false | true\n          rc="${PIPESTATUS[0]}"\n          echo "$rc"\n')
+    repo = _git_fixture(tmp_path, {".github/workflows/w.yml": wf})
+    assert len(_findings(repo)["findings"]) == 1
+
+
+def test_missing_pyyaml_is_rc2_not_rc1(tmp_path: Path) -> None:
+    """⛔ PyYAML 不可用是「量不到」(rc 2)，不是「有違規」(rc 1)。
+
+    實測燒過：hook 少宣告 ``additional_dependencies: ['pyyaml']`` 時，在
+    pre-commit 的隔離 venv 裡以 ``ModuleNotFoundError`` **exit 1**，版面上與
+    「找到違規」一模一樣——而直接在 repo 裡跑卻是綠的。
+    """
+    shim = tmp_path / "shim"
+    shim.mkdir()
+    (shim / "yaml.py").write_text(
+        'raise ModuleNotFoundError("No module named yaml")', encoding="utf-8"
+    )
+    env = {**os.environ, "PYTHONPATH": str(shim)}
+    proc = subprocess.run(
+        [sys.executable, str(_CHECKER), "--repo", str(_REPO_ROOT), "--ci"],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=120,
+    )
+    assert proc.returncode == 2, f"rc={proc.returncode}\n{proc.stdout}\n{proc.stderr}"
+    assert "量不到" in proc.stderr

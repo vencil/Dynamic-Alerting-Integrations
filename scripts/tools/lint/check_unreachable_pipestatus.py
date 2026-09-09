@@ -69,82 +69,171 @@ import subprocess
 import sys
 from pathlib import Path
 
+try:
+    import yaml
+except ModuleNotFoundError:  # pragma: no cover - 由 pre-commit 隔離 venv 觸發
+    yaml = None  # type: ignore[assignment]
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 _PIPESTATUS_RE = re.compile(r"PIPESTATUS\[")
 _WORKFLOW_DIR = Path(".github") / "workflows"
 
+# heredoc 開頭：<<EOF / <<-EOF / <<'EOF' / <<"EOF"
+_HEREDOC_RE = re.compile(r"<<-?\s*([\'\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
 
-# --------------------------------------------------------------------------
-# shell 文字處理
-# --------------------------------------------------------------------------
-def strip_comment(line: str) -> str:
-    """去掉未被引號包住的 ``#`` 之後的內容。
 
-    ``#`` 只有在行首或前面是空白時才起始註解（``foo#bar`` 不是註解），
-    這與 bash 的 token 規則一致。
+class Stmt:
+    """一個邏輯語句（已依 ; && || 換行切開，並知道自己有沒有 top-level 管線）。"""
+
+    __slots__ = ("line", "text", "top_pipe", "sub_pipe", "sep_before", "in_func")
+
+    def __init__(self, line, text, top_pipe, sub_pipe, sep_before, in_func):
+        self.line = line
+        self.text = text
+        self.top_pipe = top_pipe      # 深度 0、不在引號內的 `|`
+        self.sub_pipe = sub_pipe      # 只出現在 $(...) / `...` 內的 `|`
+        self.sep_before = sep_before  # 前一個分隔符：'\n' ';' '&&' '||' '' (檔首)
+        self.in_func = in_func
+
+
+def lex(lines: list[tuple[int, str]]) -> list[Stmt]:
+    """把 (行號, 原始行) 串列切成邏輯語句。
+
+    ⛔ 這一版刻意處理三件手刻逐行掃描做不到、而且已實測會出錯的事
+    （TRK-381 第 2 輪盲審，三條各附重現）：
+
+    1. **heredoc 內文不是程式碼**。``true | cat <<'DOC'`` 之後的內文若含
+       ``${PIPESTATUS[0]}`` 字樣，逐行掃描會把它當成一次讀取而**誤紅**。
+    2. **``$(...)`` / 反引號裡的管線不是本語句的 top-level 管線**。
+       ``echo $(false | true) end`` 的管線失敗**不會**觸發 errexit（實測
+       rc=0、後續行照跑），把它當 top-level 會**誤紅**。
+    3. **``;`` 也是語句分隔符**。``false | true; RC="${PIPESTATUS[0]}"``
+       在同一物理行上，逐行掃描看不到，於是**漏抓**（實測 rc=1、下一行不可達）。
     """
-    out = []
-    quote: str | None = None
-    prev_ws = True
-    i = 0
-    while i < len(line):
-        ch = line[i]
-        if quote:
-            out.append(ch)
-            if ch == "\\" and quote == '"' and i + 1 < len(line):
-                out.append(line[i + 1])
-                i += 2
-                continue
-            if ch == quote:
-                quote = None
-            prev_ws = False
-        elif ch in ("'", '"'):
-            quote = ch
-            out.append(ch)
-            prev_ws = False
-        elif ch == "\\" and i + 1 < len(line):
-            out.append(ch)
-            out.append(line[i + 1])
-            i += 2
-            prev_ws = False
-            continue
-        elif ch == "#" and prev_ws:
-            break
-        else:
-            out.append(ch)
-            prev_ws = ch.isspace()
-        i += 1
-    return "".join(out)
+    stmts: list[Stmt] = []
+    quote = None
+    depth = 0                     # $( ) / ` ` 巢狀深度
+    heredocs: list[str] = []      # 待關閉的 heredoc 終止詞
+    pending_heredoc: list[str] = []
+    func_depth = 0                # { } 巢狀，用來粗判是否在函式體內
+    buf, buf_line = "", None
+    top_pipe = sub_pipe = False
+    sep = ""
+    next_sep = "\n"
 
+    def flush(new_sep):
+        nonlocal buf, buf_line, top_pipe, sub_pipe, sep
+        if buf.strip():
+            stmts.append(Stmt(buf_line or 0, buf.strip(), top_pipe, sub_pipe, sep, func_depth > 0))
+        buf, buf_line, top_pipe, sub_pipe = "", None, False, False
+        sep = new_sep
 
-def has_bare_pipe(code: str) -> bool:
-    """該段程式碼是否含有未被引號包住、且不是 ``||`` 的管線符號。"""
-    quote: str | None = None
-    i = 0
-    while i < len(code):
-        ch = code[i]
-        if quote:
-            if ch == "\\" and quote == '"' and i + 1 < len(code):
-                i += 2
-                continue
-            if ch == quote:
-                quote = None
-        elif ch in ("'", '"'):
-            quote = ch
-        elif ch == "\\" and i + 1 < len(code):
-            i += 2
+    for lineno, raw in lines:
+        # --- heredoc 內文：整行跳過，只找終止詞 ---
+        if heredocs:
+            if raw.strip() == heredocs[0] or raw.lstrip("\t").strip() == heredocs[0]:
+                heredocs.pop(0)
             continue
-        elif ch == "|":
-            if i + 1 < len(code) and code[i + 1] == "|":
-                i += 2
-                continue
-            if i > 0 and code[i - 1] == "|":
+        i = 0
+        line_had_content = False
+        while i < len(raw):
+            ch = raw[i]
+            if quote:
+                buf += ch
+                if ch == "\\" and quote == '"' and i + 1 < len(raw):
+                    buf += raw[i + 1]
+                    i += 2
+                    continue
+                if ch == quote:
+                    quote = None
                 i += 1
                 continue
-            return True
-        i += 1
-    return False
+            if ch in ("'", '"'):
+                quote = ch
+                buf += ch
+                if buf_line is None:
+                    buf_line = lineno
+                i += 1
+                continue
+            if ch == "\\" and i + 1 < len(raw):
+                buf += raw[i : i + 2]
+                i += 2
+                continue
+            if ch == "#" and (i == 0 or raw[i - 1].isspace()):
+                break  # 行內註解
+            # --- 巢狀 ---
+            if raw.startswith("$(", i):
+                depth += 1
+                buf += "$("
+                if buf_line is None:
+                    buf_line = lineno
+                i += 2
+                continue
+            if ch == "`":
+                depth += 1 if depth == 0 else -1
+                buf += ch
+                i += 1
+                continue
+            if ch == ")" and depth > 0:
+                depth -= 1
+                buf += ch
+                i += 1
+                continue
+            # --- heredoc 開頭 ---
+            m = _HEREDOC_RE.match(raw, i)
+            if m:
+                pending_heredoc.append(m.group(2))
+                buf += m.group(0)
+                if buf_line is None:
+                    buf_line = lineno
+                i = m.end()
+                continue
+            # --- 分隔符（只在深度 0 有效）---
+            if depth == 0 and ch == ";":
+                flush(";")
+                i += 1
+                continue
+            if depth == 0 and raw.startswith("&&", i):
+                flush("&&")
+                i += 2
+                continue
+            if depth == 0 and raw.startswith("||", i):
+                flush("||")
+                i += 2
+                continue
+            if ch == "|":
+                if depth == 0:
+                    top_pipe = True
+                else:
+                    sub_pipe = True
+                buf += ch
+                if buf_line is None:
+                    buf_line = lineno
+                i += 1
+                continue
+            if ch == "{" and depth == 0 and buf.strip().endswith("()"):
+                func_depth += 1
+            if ch == "}" and depth == 0 and func_depth > 0 and not buf.strip():
+                func_depth -= 1
+            buf += ch
+            if not ch.isspace():
+                line_had_content = True
+                if buf_line is None:
+                    buf_line = lineno
+            i += 1
+        # 行尾
+        if buf.rstrip().endswith("\\"):
+            buf = buf.rstrip()[:-1] + " "        # 續行
+        elif quote is None and depth == 0:
+            flush("\n")
+        if pending_heredoc:
+            heredocs.extend(pending_heredoc)
+            pending_heredoc = []
+        if not line_had_content and not buf.strip():
+            continue
+    flush("\n")
+    return stmts
 
 
 def apply_set(code: str, errexit: bool, pipefail: bool) -> tuple[bool, bool]:
@@ -152,7 +241,11 @@ def apply_set(code: str, errexit: bool, pipefail: bool) -> tuple[bool, bool]:
     toks = code.strip().split()
     if not toks or toks[0] != "set":
         return errexit, pipefail
-    i = 1
+    return _apply_flags(toks[1:], errexit, pipefail)
+
+
+def _apply_flags(toks: list[str], errexit: bool, pipefail: bool) -> tuple[bool, bool]:
+    i = 0
     while i < len(toks):
         t = toks[i]
         if t in ("-o", "+o"):
@@ -163,85 +256,104 @@ def apply_set(code: str, errexit: bool, pipefail: bool) -> tuple[bool, bool]:
             i += 2
             continue
         if t.startswith("-") and not t.startswith("--"):
-            # 例如 -euo pipefail：字母旗標可與 o 連寫
             letters = t[1:]
             if "e" in letters:
                 errexit = True
-            if letters.endswith("o") and i + 1 < len(toks):
-                if toks[i + 1] == "pipefail":
-                    pipefail = True
-                    i += 2
-                    continue
+            if letters.endswith("o") and i + 1 < len(toks) and toks[i + 1] == "pipefail":
+                pipefail = True
+                i += 2
+                continue
         elif t.startswith("+"):
             letters = t[1:]
             if "e" in letters:
                 errexit = False
-            if letters.endswith("o") and i + 1 < len(toks):
-                if toks[i + 1] == "pipefail":
-                    pipefail = False
-                    i += 2
-                    continue
+            if letters.endswith("o") and i + 1 < len(toks) and toks[i + 1] == "pipefail":
+                pipefail = False
+                i += 2
+                continue
         i += 1
     return errexit, pipefail
+
+
+def shebang_flags(lines: list[tuple[int, str]]) -> tuple[bool, bool]:
+    """``#!/bin/bash -e`` 這種內嵌旗標也會生效（實測 rc=1、守衛區段不可達）。"""
+    if not lines:
+        return False, False
+    first = lines[0][1]
+    if not first.startswith("#!"):
+        return False, False
+    toks = first[2:].split()
+    return _apply_flags(toks[1:], False, False) if len(toks) > 1 else (False, False)
 
 
 _GUARD_PREFIX = re.compile(r"^\s*(if|while|until|elif)\b|^\s*!\s")
 
 
-def is_protected(code: str) -> bool:
-    """管線是否被 if/while/until/! 條件或 ``||`` / ``&&`` 接住。"""
-    if _GUARD_PREFIX.search(code):
-        return True
-    return "||" in code or "&&" in code
+def is_protected(stmt: Stmt) -> bool:
+    """管線是否被 if/while/until/! 條件或 ``||`` / ``&&`` 接住。
+
+    ⚠️ ``sep_before`` 也算：``pipeline && next`` 之後的語句，其前導分隔符就是
+    ``&&`` ⇒ 那條管線的失敗被接住了，errexit 不觸發。
+    """
+    return bool(_GUARD_PREFIX.search(stmt.text))
 
 
-# --------------------------------------------------------------------------
-# 掃描
-# --------------------------------------------------------------------------
 def scan_unit(lines: list[tuple[int, str]], errexit: bool, pipefail: bool) -> list[dict]:
     """掃一個 shell 單元。``lines`` 是 (行號, 原始行) 串列。"""
-    violations: list[dict] = []
-    # 把 `\` 續行併成一個邏輯語句；記住每個邏輯語句的起始行
-    logical: list[tuple[int, str]] = []
-    buf, start = "", None
-    for lineno, raw in lines:
-        code = strip_comment(raw).rstrip()
-        if start is None:
-            start = lineno
-        if code.endswith("\\"):
-            buf += code[:-1] + " "
-            continue
-        buf += code
-        logical.append((start, buf))
-        buf, start = "", None
-    if buf.strip():
-        logical.append((start or 0, buf))
+    se, sp = shebang_flags(lines)
+    errexit, pipefail = errexit or se, pipefail or sp
 
-    prev_stmt: str | None = None
-    for lineno, stmt in logical:
-        stripped = stmt.strip()
-        if not stripped:
+    stmts = lex(lines)
+
+    # 函式體的選項狀態：用「該函式最早一次 top-level 呼叫」當生效點。
+    # 這是為了抓「函式定義在 set 之前、呼叫在之後」那一類（實測會漏）。
+    func_names = set()
+    for st in stmts:
+        m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*\(\)", st.text)
+        if m:
+            func_names.add(m.group(1))
+    state_at: dict[str, tuple[bool, bool]] = {}
+    e, pf = errexit, pipefail
+    for st in stmts:
+        if st.text.split()[:1] == ["set"]:
+            e, pf = apply_set(st.text, e, pf)
+        head = st.text.split()[0] if st.text.split() else ""
+        if head in func_names and not st.in_func and head not in state_at:
+            state_at[head] = (e, pf)
+
+    violations: list[dict] = []
+    e, pf = errexit, pipefail
+    cur_func: str | None = None
+    prev: Stmt | None = None
+    for st in stmts:
+        m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*\(\)", st.text)
+        if m:
+            cur_func = m.group(1)
+        if st.text.split()[:1] == ["set"]:
+            e, pf = apply_set(st.text, e, pf)
+            prev = st
             continue
-        if stripped.split()[:1] == ["set"]:
-            errexit, pipefail = apply_set(stripped, errexit, pipefail)
-            prev_stmt = stripped
-            continue
-        if _PIPESTATUS_RE.search(stripped):
+        # 函式體內改用「呼叫點」的狀態；查不到呼叫就保守跳過
+        if st.in_func and cur_func:
+            if cur_func not in state_at:
+                prev = st
+                continue
+            ce, cpf = state_at[cur_func]
+        else:
+            ce, cpf = e, pf
+        if _PIPESTATUS_RE.search(st.text):
             if (
-                errexit
-                and pipefail
-                and prev_stmt is not None
-                and has_bare_pipe(prev_stmt)
-                and not is_protected(prev_stmt)
+                ce
+                and cpf
+                and prev is not None
+                and prev.top_pipe          # ⛔ 只認 top-level 管線，$(...) 內的不算
+                and not is_protected(prev)
+                and st.sep_before not in ("&&", "||")   # 被 &&/|| 接住就不會終止
             ):
                 violations.append(
-                    {
-                        "line": lineno,
-                        "code": stripped[:120],
-                        "pipeline": prev_stmt[:120],
-                    }
+                    {"line": st.line, "code": st.text[:120], "pipeline": prev.text[:120]}
                 )
-        prev_stmt = stripped
+        prev = st
     return violations
 
 
@@ -280,53 +392,68 @@ def iter_shell_units(repo: Path) -> list[dict]:
     return units
 
 
-_RUN_RE = re.compile(r"^(\s*)(?:-\s+)?run:\s*\|")
-_SHELL_BASH_RE = re.compile(r"^\s*(?:-\s+)?shell:\s*bash\s*$")
+def _shell_is_pipefail(shell: object) -> bool:
+    """GitHub 的 shell 解析：``bash`` ⇒ ``bash --noprofile --norc -eo pipefail {0}``。
+
+    不指定 ``shell:`` 時是 ``bash -e {0}``（errexit 開、pipefail **關**）。
+    """
+    return isinstance(shell, str) and shell.strip() == "bash"
 
 
 def _workflow_run_units(rel: str, text: str) -> list[dict]:
-    """把 workflow 的 ``run: |`` 區塊切出來。
+    """把 workflow 的 ``run:`` 區塊切出來，並依 YAML 解析 shell 的繼承。
 
-    ⚠️ 起始狀態照 GitHub 的預設：``bash -e {0}`` ⇒ errexit 開、pipefail 關；
-    同一 step 出現 ``shell: bash`` 才兩者皆開。
+    ⚠️ 先前這裡是往上掃「同一 step 內有沒有一行 ``shell: bash``」的字串比對，
+    實測三種形狀會判錯（TRK-381 第 2 輪盲審）：行尾帶註解、``shell:`` 與
+    ``run:`` 之間有空行、以及 **job / workflow 層的 ``defaults.run.shell``**
+    —— 後者與 step 層等效，卻整個看不見。現在改由 YAML parser 回答。
     """
-    lines = text.splitlines()
+    try:
+        doc = yaml.safe_load(text)
+    except yaml.YAMLError:
+        return []
+    if not isinstance(doc, dict):
+        return []
+
+    wf_shell = (((doc.get("defaults") or {}).get("run") or {}).get("shell"))
     units: list[dict] = []
-    for idx, line in enumerate(lines):
-        m = _RUN_RE.match(line)
-        if not m:
+    lines = text.splitlines()
+
+    for job in (doc.get("jobs") or {}).values():
+        if not isinstance(job, dict):
             continue
-        indent = len(m.group(1))
-        body: list[tuple[int, str]] = []
-        j = idx + 1
-        while j < len(lines):
-            cur = lines[j]
-            if cur.strip() and (len(cur) - len(cur.lstrip())) <= indent:
-                break
-            body.append((j + 1, cur))
-            j += 1
-        if not body:
-            continue
-        # 往上找同一 step 的 `shell: bash`
-        pipefail = False
-        k = idx - 1
-        while k >= 0 and lines[k].strip():
-            if _SHELL_BASH_RE.match(lines[k]):
-                pipefail = True
-                break
-            if re.match(r"^\s*-\s+name:", lines[k]):
-                break
-            k -= 1
-        units.append(
-            {
-                "path": f"{rel}:{idx + 1}",
-                "kind": "workflow-run",
-                "errexit": True,
-                "pipefail": pipefail,
-                "lines": body,
-            }
-        )
+        job_shell = (((job.get("defaults") or {}).get("run") or {}).get("shell"))
+        for step in job.get("steps") or []:
+            if not isinstance(step, dict) or "run" not in step:
+                continue
+            body = step.get("run")
+            if not isinstance(body, str):
+                continue
+            shell = step.get("shell", job_shell if job_shell is not None else wf_shell)
+            start = _locate_block(lines, body)
+            units.append(
+                {
+                    "path": f"{rel}:{start}" if start else rel,
+                    "kind": "workflow-run",
+                    "errexit": True,          # GitHub 預設就是 bash -e
+                    "pipefail": _shell_is_pipefail(shell),
+                    "lines": [(start + i if start else i + 1, ln)
+                              for i, ln in enumerate(body.splitlines())],
+                }
+            )
     return units
+
+
+def _locate_block(lines: list[str], body: str) -> int:
+    """在原始檔裡找 run 區塊第一行的行號，讓回報指得回去。"""
+    first = next((l for l in body.splitlines() if l.strip()), None)
+    if first is None:
+        return 0
+    needle = first.strip()
+    for idx, ln in enumerate(lines, start=1):
+        if ln.strip() == needle:
+            return idx
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -337,6 +464,14 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     repo = Path(args.repo).resolve()
+    if yaml is None:
+        print(
+            "[unreachable-pipestatus] ⛔ 量不到：PyYAML 不可用，workflow run 區塊無法解析。"
+            "（pre-commit 需要 additional_dependencies: ['pyyaml']）",
+            file=sys.stderr,
+        )
+        return 2
+
     if not (repo / ".git").exists():
         print(f"[unreachable-pipestatus] ⛔ 量不到：{repo} 不是 git repo", file=sys.stderr)
         return 2
