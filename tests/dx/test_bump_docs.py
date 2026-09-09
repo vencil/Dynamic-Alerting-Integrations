@@ -3404,6 +3404,47 @@ class TestDatoolsPinCapability:
         return [r for r in bump_docs._build_tools_rules()
                 if self._PIN_PATTERN in r.get("pattern", "")]
 
+    def test_every_graded_doc_carrying_a_pin_is_also_bumped(self):
+        """Graded and bumped must be the same set (#1534 M1).
+
+        `components/da-tools/app/QUICKSTART.md` was in the check's corpus but
+        in none of the bump rules: a release would grade the command it teaches
+        against vNEW while leaving its pin at vOLD forever. That is worse than
+        either failure alone — the customer copies a stale image, and the grade
+        it passed was about a different one.
+
+        This asserts the INVARIANT, not the one file: any doc the check grades
+        that carries a `:vX.Y.Z` pin must also be a bump target, so the next
+        page added to `_EXTRA_DOC_FILES` cannot re-open the hole silently.
+        """
+        import re
+        import check_doc_datools_cmds as gate
+
+        pin_re = re.compile(r"ghcr\.io/vencil/da-tools:v[0-9]+\.[0-9]+\.[0-9]+")
+        # Bump targets, as PATHS: a glob rule covers everything under its dir.
+        literal, globs = set(), []
+        for r in self._pin_rules():
+            if r["file"] == "__glob__":
+                globs.append(bump_docs.REPO_ROOT / r["glob_dir"])
+            else:
+                literal.add((bump_docs.REPO_ROOT / r["file"]).resolve())
+
+        def is_bumped(p):
+            p = p.resolve()
+            return p in literal or any(g.resolve() in p.parents for g in globs)
+
+        unbumped = []
+        for f in gate.pin_capability_doc_files(bump_docs.REPO_ROOT):
+            if not f.is_file():
+                continue
+            if pin_re.search(f.read_text(encoding="utf-8", errors="ignore")) \
+                    and not is_bumped(f):
+                unbumped.append(str(f.relative_to(bump_docs.REPO_ROOT)))
+        assert not unbumped, (
+            "these docs are graded against the tag being cut but nothing "
+            "repoints their pins — add them to _build_tools_rules(): "
+            f"{unbumped}")
+
     def test_the_gap_this_check_closes_still_exists(self):
         """The premise: most pin-rewriting rules land outside the gate's surface.
 
@@ -3442,14 +3483,30 @@ class TestDatoolsPinCapability:
         documented invocation looks unknown (or, if the emptiness short-circuits
         the loop, every one looks fine) and the release reports success.
         """
-        monkeypatch.setattr(bump_docs, "parse_command_map_keys", lambda: set())
+        monkeypatch.setattr(bump_docs, "parse_command_map", dict)
+        assert bump_docs._check_datools_pin_capability("9.9.9") == 1
+
+    def test_empty_tool_files_fails_closed(self, monkeypatch):
+        """build.sh parsing that returns nothing must fail the bump too.
+
+        The other half of the oracle: an empty TOOL_FILES would make every
+        dispatched command look unshipped.
+        """
+        monkeypatch.setattr(bump_docs, "parse_build_sh_tools", set)
         assert bump_docs._check_datools_pin_capability("9.9.9") == 1
 
     def test_unreadable_entrypoint_fails_closed(self, monkeypatch):
         def _boom():
             raise OSError("simulated missing entrypoint")
 
-        monkeypatch.setattr(bump_docs, "parse_command_map_keys", _boom)
+        monkeypatch.setattr(bump_docs, "parse_command_map", _boom)
+        assert bump_docs._check_datools_pin_capability("9.9.9") == 1
+
+    def test_unreadable_build_sh_fails_closed(self, monkeypatch):
+        def _boom():
+            raise OSError("simulated missing build.sh")
+
+        monkeypatch.setattr(bump_docs, "parse_build_sh_tools", _boom)
         assert bump_docs._check_datools_pin_capability("9.9.9") == 1
 
     @pytest.mark.parametrize("exc", [RuntimeError("corpus lost a file"),

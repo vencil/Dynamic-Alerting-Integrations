@@ -79,7 +79,7 @@ from _version_patterns import DOCS_TREE_SYMLINK_ALIASES  # noqa: E402
 # `_lint_helpers` reads the working tree's COMMAND_MAP (what the tag being cut
 # will ship), and check_doc_datools_cmds owns the fenced-block / docker-run /
 # `_image_index` extraction. Importing beats a fourth copy of either.
-from _lint_helpers import parse_command_map_keys  # noqa: E402
+from _lint_helpers import parse_build_sh_tools, parse_command_map  # noqa: E402
 from check_doc_datools_cmds import (  # noqa: E402
     check_pinned_subcommands_against,
     iter_pinned_invocations,
@@ -230,7 +230,15 @@ def _build_tools_rules():
     # docker wrapper — flags, env, argument order — and the version is
     # incidental to it; keeping the two in step is the same service this tool
     # performs for every README that quotes a pinned image.
+    #
+    # ⛔ QUICKSTART.md is here because the #1534 check GRADES it: it is in
+    # `check_doc_datools_cmds._EXTRA_DOC_FILES`, so the subcommand it teaches is
+    # judged against the tag being cut — while nothing was repointing its pin.
+    # A doc that is graded against vNEW but frozen at vOLD is the worst of both:
+    # the customer copies a stale image, and the grade it passes is about a
+    # different one. Graded and bumped have to be the same set.
     for f in ["components/da-tools/README.md",
+              "components/da-tools/app/QUICKSTART.md",
               "tools/portal/tests/cli-playground-engine.test.ts"]:
         rules.append({
             "file": f,
@@ -2381,17 +2389,23 @@ def _check_datools_pin_capability(new_ver: str) -> int:
     `v<new_ver>` regardless. Keying on the old tag value would make the check
     pass in dry-run and fail for real, or vice versa.
     """
+    # Both halves of "can the image run this": COMMAND_MAP says it dispatches,
+    # TOOL_FILES says the script is actually copied in. See
+    # check_pinned_subcommands_against for why asking only the first is the
+    # #1044 shape.
     try:
-        command_map_keys = set(parse_command_map_keys())
+        command_map = parse_command_map()
+        tool_files = set(parse_build_sh_tools())
     except OSError as exc:
-        print(f"\n❌ could not read the da-tools entrypoint to determine what "
-              f"v{new_ver} will be able to run: {exc}", file=sys.stderr)
+        print(f"\n❌ could not read the da-tools entrypoint / build.sh to "
+              f"determine what v{new_ver} will be able to run: {exc}",
+              file=sys.stderr)
         return 1
-    if not command_map_keys:
-        print(f"\n❌ parsed 0 COMMAND_MAP entries from the da-tools entrypoint "
-              f"— refusing to grade documented invocations against an empty "
-              f"capability set (the parser is out of step with the source "
-              f"layout).", file=sys.stderr)
+    if not command_map or not tool_files:
+        print(f"\n❌ parsed 0 COMMAND_MAP entries and/or 0 TOOL_FILES from the "
+              f"da-tools sources — refusing to grade documented invocations "
+              f"against an empty capability set (the parser is out of step "
+              f"with the source layout).", file=sys.stderr)
         return 1
     # ⛔ A corpus that lost files, or collapsed to nothing, raises rather than
     # returning fewer invocations — otherwise "checked, all clean" and "checked
@@ -2404,7 +2418,7 @@ def _check_datools_pin_capability(new_ver: str) -> int:
               f"{exc}", file=sys.stderr)
         return 1
     issues = check_pinned_subcommands_against(
-        command_map_keys, doc_files, REPO_ROOT)
+        command_map, tool_files, doc_files, REPO_ROOT)
     # ⛔ Say what was checked even when nothing is wrong. Without this line a
     # silently blind extractor and a genuinely clean tree produce the same
     # output — which is the failure mode this whole check exists to prevent, so

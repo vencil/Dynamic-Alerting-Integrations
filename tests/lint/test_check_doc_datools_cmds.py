@@ -880,11 +880,17 @@ class TestPinnedInvocationCapability:
               tests/dx/test_bump_docs.py -q
     """
 
-    CAPS = {"validate", "cutover", "threshold-govern"}
+    # subcommand -> the script COMMAND_MAP maps it to, mirroring the real pair.
+    CAPS = {"validate": "validate_config.py",
+            "cutover": "cutover.py",
+            "threshold-govern": "threshold_govern.py"}
+    # ...and the scripts build.sh actually copies into the image.
+    SHIPPED = {"validate_config.py", "cutover.py", "threshold_govern.py"}
 
-    def _issues(self, tmp_path, body, caps=None):
+    def _issues(self, tmp_path, body, caps=None, shipped=None):
         return mod.check_pinned_subcommands_against(
             self.CAPS if caps is None else caps,
+            self.SHIPPED if shipped is None else shipped,
             [_doc(tmp_path, body)], tmp_path)
 
     # --- the defect this exists to catch ---
@@ -982,6 +988,35 @@ class TestPinnedInvocationCapability:
             "docker run ghcr.io/vencil/da-tools:v2.9.0 frobnicate"))
         assert self._issues(tmp_path, body)[0].line == 4
 
+    # --- registered but never shipped (#1044 shape) ---
+    def test_flags_command_registered_but_not_in_tool_files(self, tmp_path):
+        """Dispatched is not the same as runnable.
+
+        `check_image_pin_capability.evaluate` asks both questions of a
+        workload; asking only COMMAND_MAP here would report a doc as covered
+        while the customer's container dies on a missing file.
+        """
+        issues = self._issues(
+            tmp_path,
+            _FENCE.format("docker run ghcr.io/vencil/da-tools:v2.9.0 cutover"),
+            shipped={"validate_config.py"})   # cutover.py not copied in
+        assert len(issues) == 1
+        assert issues[0].check == "datools-pin-not-shipped"
+        assert "cutover.py" in issues[0].message
+        assert "TOOL_FILES" in issues[0].message
+
+    def test_unknown_command_wins_over_not_shipped(self, tmp_path):
+        """A command that is not in COMMAND_MAP has no script to ship.
+
+        Reporting both would name a remedy (add X to TOOL_FILES) for a file
+        that does not exist.
+        """
+        issues = self._issues(
+            tmp_path,
+            _FENCE.format("docker run ghcr.io/vencil/da-tools:v2.9.0 nope"),
+            shipped=set(self.SHIPPED))
+        assert [i.check for i in issues] == ["datools-pin-capability"]
+
     # --- fail-closed branches (both were the regression class flagged by the
     #     coverage bot on the previous ticket in this line) ---
     def test_empty_capability_set_is_refused(self, tmp_path):
@@ -989,7 +1024,19 @@ class TestPinnedInvocationCapability:
         with pytest.raises(ValueError, match="empty COMMAND_MAP"):
             self._issues(tmp_path, _FENCE.format(
                 "docker run ghcr.io/vencil/da-tools:v2.9.0 validate"),
-                caps=set())
+                caps={})
+
+    def test_empty_tool_files_is_refused(self, tmp_path):
+        """Half an oracle is still an oracle that knows nothing.
+
+        An empty TOOL_FILES would make EVERY dispatched command look
+        unshipped — a wall of findings that reads as a broken parser, not a
+        broken build.sh — so it is refused at the door like the empty map.
+        """
+        with pytest.raises(ValueError, match="empty COMMAND_MAP"):
+            self._issues(tmp_path, _FENCE.format(
+                "docker run ghcr.io/vencil/da-tools:v2.9.0 validate"),
+                shipped=set())
 
     def test_unreadable_doc_fails_closed(self, tmp_path, monkeypatch):
         """A doc that cannot be read must not silently leave the corpus.
@@ -1006,7 +1053,8 @@ class TestPinnedInvocationCapability:
 
         monkeypatch.setattr(Path, "read_text", _boom)
         with pytest.raises(RuntimeError, match="could not be read"):
-            mod.check_pinned_subcommands_against(self.CAPS, [f], tmp_path)
+            mod.check_pinned_subcommands_against(
+                self.CAPS, self.SHIPPED, [f], tmp_path)
 
     # --- the corpus must stay the same one the standalone gate scans ---
     def test_corpus_matches_the_gate_corpus(self):
@@ -1027,11 +1075,13 @@ class TestPinnedInvocationPrecision:
     escape is editing a customer-facing file to add a lint pragma.
     """
 
-    CAPS = {"validate", "cutover"}
+    CAPS = {"validate": "validate_config.py", "cutover": "cutover.py"}
+    SHIPPED = {"validate_config.py", "cutover.py"}
 
     def _issues(self, tmp_path, cmd):
         return mod.check_pinned_subcommands_against(
-            self.CAPS, [_doc(tmp_path, _FENCE.format(cmd))], tmp_path)
+            self.CAPS, self.SHIPPED,
+            [_doc(tmp_path, _FENCE.format(cmd))], tmp_path)
 
     @pytest.mark.parametrize("cmd", [
         "docker run ghcr.io/vencil/da-tools:v2.9.0 validate; echo done",

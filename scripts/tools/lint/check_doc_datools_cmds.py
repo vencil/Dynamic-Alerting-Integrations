@@ -641,33 +641,59 @@ def iter_pinned_invocations(doc_files: List[Path],
     return found
 
 
-def check_pinned_subcommands_against(command_map_keys: Set[str],
+def check_pinned_subcommands_against(command_map: Dict[str, str],
+                                     tool_files: Set[str],
                                      doc_files: List[Path],
                                      repo_root: Path = REPO_ROOT
                                      ) -> List[Issue]:
-    """Documented pinned invocations must name a command the image dispatches.
+    """Documented pinned invocations must be RUNNABLE by the image, not merely
+    dispatched by it.
 
-    *command_map_keys* is the capability set of the image the pins will point
-    at. ⛔ An empty set is refused rather than reported clean — an oracle that
-    knows nothing marks every invocation bad or (if inverted) every invocation
-    fine, and both are indistinguishable from "no findings" at the call site.
-    `capabilities_for_tag` in check_image_pin_capability.py refuses the same
-    way, for the same reason.
+    Two questions, the same pair `check_image_pin_capability.evaluate` asks of a
+    workload, because "can this image run this" has the same answer here:
+
+      1. is the subcommand in COMMAND_MAP?  (else `Unknown command`)
+      2. is the script it maps to in build.sh TOOL_FILES?  (else the command
+         dispatches and the container dies on a missing file)
+
+    ⛔ Asking only (1) is the #1044 shape — registered but never copied into the
+    image. It reads as covered while the customer's run fails at a different
+    layer. The two are separate findings because the fixes differ: (1) is the
+    doc naming the wrong command, (2) is build.sh not shipping a real one.
+
+    ⛔ An empty COMMAND_MAP or TOOL_FILES is refused rather than reported clean
+    — an oracle that knows nothing marks every invocation bad or (if inverted)
+    every invocation fine, and both are indistinguishable from "no findings" at
+    the call site. `capabilities_for_tag` refuses the same way, for the reason.
     """
-    if not command_map_keys:
+    if not command_map or not tool_files:
         raise ValueError(
             "refusing to check documented invocations against an empty "
-            "COMMAND_MAP — the capability oracle is the thing being trusted "
-            "here, and an empty one silently grades everything."
+            "COMMAND_MAP and/or TOOL_FILES — the capability oracle is the "
+            "thing being trusted here, and an empty one silently grades "
+            "everything."
         )
-    return [Issue("datools-pin-capability", inv.file, inv.line,
-                  f"documented `da-tools:{inv.tag}` runs '{inv.subcommand}', "
-                  f"which the image does not dispatch (it exits with "
-                  f"`Unknown command`). Either the doc names a command that "
-                  f"was renamed/removed, or the command is new and this "
-                  f"release does not ship it yet.")
-            for inv in iter_pinned_invocations(doc_files, repo_root)
-            if inv.subcommand not in command_map_keys]
+    issues: List[Issue] = []
+    for inv in iter_pinned_invocations(doc_files, repo_root):
+        script = command_map.get(inv.subcommand)
+        if script is None:
+            issues.append(Issue(
+                "datools-pin-capability", inv.file, inv.line,
+                f"documented `da-tools:{inv.tag}` runs '{inv.subcommand}', "
+                f"which the image does not dispatch (it exits with "
+                f"`Unknown command`). Either the doc names a command that was "
+                f"renamed/removed, or the command is new and this release does "
+                f"not ship it yet."))
+        elif script not in tool_files:
+            issues.append(Issue(
+                "datools-pin-not-shipped", inv.file, inv.line,
+                f"documented `da-tools:{inv.tag}` runs '{inv.subcommand}', "
+                f"which COMMAND_MAP maps to {script} — but that file is NOT in "
+                f"build.sh TOOL_FILES, so it is registered and never copied "
+                f"into the image. The command dispatches and then fails on a "
+                f"missing file. Add {script} to TOOL_FILES, or stop "
+                f"documenting the command."))
+    return issues
 
 
 def pin_capability_doc_files(repo_root: Path = REPO_ROOT) -> List[Path]:
