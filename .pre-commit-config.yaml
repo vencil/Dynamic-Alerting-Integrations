@@ -693,8 +693,9 @@ repos:
         # 這個形狀出現過兩次（TRK-376 / #1734 的 workflow、TRK-381 / #1771 的
         # bench_wrapper.sh）：管線之後讀 PIPESTATUS，但 set -e + pipefail 讓腳本
         # 在管線那一行就終止 ⇒ 守衛看起來存在、實際上從來沒有守過。
-        # 母體是 git ls-files 的 *.sh + workflow run 區塊（量測時 360 個單元），
-        # 掃全樹而非只掃 staged，所以 always_run。<1s。
+        # 母體是 git ls-files 的 *.sh + workflow run 區塊（量測時 360 個單元，
+        # 其中 21 個因為 lexer 決定不了而**拒絕判定**——報告會點名，「跳過」不等於
+        # 「乾淨」）。掃全樹而非只掃 staged，所以 always_run。<1s。
         always_run: true
 
       - id: routing-profiles-check

@@ -35,6 +35,21 @@ Why this exists
 第 3、4 條讓述詞保守：讀不到管線就不判違規，寧可漏也不誤紅（D-05e——誤紅才是
 守衛被刪掉的原因）。
 
+⛔ **不確定就不判**（第 5 輪，owner 裁決）
+-----------------------------------------
+這支工具的 shell 半邊經過**兩輪**對抗式盲審都沒收斂：第 1 輪的逐行掃描被挑出 10
+條（含 2 個誤紅），換成 lexer 之後第 3 輪又挑出 6 條，其中 4 條是新 lexer 自己
+帶進來的。沒有權威 shell parser 可用（`bashlex` / `shfmt` / `shellcheck` 都不在
+容器內），所以**不再寫第 3 版述詞**——改成碰到 lexer 決定不了的構造就整個單元
+**拒絕判定並在報告裡點名**（見 ``_HARD_CONSTRUCTS``）。
+
+⚠️ 這是用**覆蓋面換正確性**：量測時 360 個單元裡 **21 個（5.8%）**被拒判，實際
+掃過 339 個。⛔ 「跳過」與「掃過且乾淨」在輸出與 JSON 裡都分得開（``skipped``
+／``scanned``），因為兩者混在一起正是本條線要防的那個病。
+
+⚠️ **拒判也要有證據**：第一版把 `case` 與**任何** brace group 都列進去，實測
+lexer 對它們給出與 bash 一致的答案 ⇒ 那兩條各自白白跳過 37 / 70 個單元，已移除。
+
 母體
 ----
 - git 追蹤的 ``*.sh``
@@ -57,8 +72,11 @@ Exit codes
 ----------
 - ``0`` — 掃過了，沒有違規（**量了沒事**）
 - ``1`` — 有違規（``--ci``）
-- ``2`` — **量不到**：不是 git repo、git 不可用、或母體是空的。⛔ 空母體絕不
-  回 0——「工具失能」長得就像「零命中」（D-07d），必須大聲失敗。
+- ``2`` — **量不到**：不是 git repo、git 不可用、母體是空的、PyYAML 不可用、
+  或**任一 workflow 檔 YAML 解析失敗**。⛔ 空母體絕不回 0——「工具失能」長得就像
+  「零命中」（D-07d），必須大聲失敗。⚠️ workflow 解析失敗特別列出來，是因為它
+  先前 ``except yaml.YAMLError: return []``：一處與 ``run:`` 無關的語法錯就讓整個
+  檔案貢獻 0 個單元、零診斷，而母體被別的檔案撐著 ⇒ 工具照樣印「✅ 量了沒事」。
 """
 from __future__ import annotations
 
@@ -89,6 +107,58 @@ _WORKFLOW_DIR = Path(".github") / "workflows"
 
 # heredoc 開頭：<<EOF / <<-EOF / <<'EOF' / <<"EOF"
 _HEREDOC_RE = re.compile(r"<<-?\s*([\'\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+
+
+# ⛔ 「不確定就不判」的清單（TRK-381 第 5 輪，owner 裁決）。
+#
+# 這支工具的 shell 半邊經過**兩輪**對抗式盲審都沒收斂：第 1 輪的逐行掃描被挑出
+# 10 條（含 2 個誤紅），換成 lexer 之後第 3 輪又挑出 6 條，其中 4 條是新 lexer
+# 自己帶進來的。沒有權威 shell parser 可用（bashlex / shfmt / shellcheck 都不在
+# 容器內），所以**不再寫第 3 版述詞**——改成：碰到手刻 lexer 決定不了的構造，
+# 整個單元**拒絕判定並在報告裡點名**，而不是猜。
+#
+# 每一條都有實測依據（bash 為 ground truth）：
+#   <<<        herestring 被 _HEREDOC_RE 當成 heredoc 開頭 ⇒ 之後整個檔案被跳過
+#   case       `foo|bar)` 的模式交替與管線同形
+#   function   關鍵字式函式定義對 `()` 為準的函式追蹤完全不可見
+#   { } group  函式體內的命令群組會提早關掉巢狀計數
+#
+# ⚠️ 這是**用覆蓋面換正確性**：被跳過的單元不會有 finding，報告會說出有幾個、
+# 為什麼。⛔ 「跳過」與「掃過且乾淨」在輸出裡必須分得開。
+# ⚠️ 這張清單**只收有實測重現的構造**。第一版把 `case` 與**任何** brace group 都
+# 列進來，實測是過度收窄：把兩者的拒判關掉之後，lexer 對
+#   case "$x" in foo|bar) … esac ; false|true ; RC=${PIPESTATUS[0]}   → 命中（對）
+#   cmd || { echo x; exit 2; } ; false|true ; RC=${PIPESTATUS[0]}      → 命中（對）
+# 兩個 fixture 都給出與 bash 一致的答案 ⇒ 那兩條拒判各自白白跳過 37 / 70 個單元。
+# ⛔ 拒判要有證據，跟 finding 一樣。
+_HARD_CONSTRUCTS = (
+    # G1：`cat <<< var` 被 _HEREDOC_RE 當成 heredoc 開頭，終止詞永不出現 ⇒
+    #     之後整個檔案被 lex 跳過（實測 bash rc=1、守衛 0 findings）。
+    ("herestring", re.compile(r"<<<")),
+    # G3：關鍵字式函式定義對以 `()` 為準的函式追蹤完全不可見
+    #     （實測 bash rc=1、守衛 0 findings）。
+    ("function-keyword", re.compile(r"(?:^|\s)function\s+[\w-]+")),
+)
+
+# G4 是**組合**才會壞：命令群組 `{ … }` 出現在 `name() { … }` 函式體內時，
+# 群組的 `}` 會提早關掉巢狀計數（實測 bash rc=1、守衛 0 findings）。
+# 函式外的 `|| { …; }` 是最常見的慣用法且 lexer 判得對，所以不能一起拒判。
+_FUNC_DEF_RE = re.compile(r"^\s*[A-Za-z_][A-Za-z0-9_]*\s*\(\)", re.M)
+# ⚠️ 只認**群組的開頭**，不認函式自己的大括號。第一版把 `^\s*\}$` 也算進來，於是
+# 每一個 `name() { … }` 函式的結尾 `}` 都命中 ⇒ 所有具名函式的檔案全被拒判
+# （44 個單元），連第 2 輪明確修好的 func_before_set 形狀都被吞掉。
+# 群組開頭的形狀是「行首的 `{ `」或「`;` / `&&` / `||` 之後的 `{ `」；
+# `name() {` 的 `{` 前面是 `)`，兩者都不match。
+_BRACE_GROUP_RE = re.compile(r"(?:^\s*|[;&|]\s*)\{\s", re.M)
+
+
+def hard_constructs(lines: list[tuple[int, str]]) -> list[str]:
+    """回傳這個單元裡出現的、lexer 決定不了的構造名稱（去重、排序）。"""
+    body = "\n".join(raw for _, raw in lines)
+    found = {name for name, rx in _HARD_CONSTRUCTS if rx.search(body)}
+    if _FUNC_DEF_RE.search(body) and _BRACE_GROUP_RE.search(body):
+        found.add("brace-group-in-function")
+    return sorted(found)
 
 
 class Stmt:
@@ -307,7 +377,12 @@ def is_protected(stmt: Stmt) -> bool:
 
 
 def scan_unit(lines: list[tuple[int, str]], errexit: bool, pipefail: bool) -> list[dict]:
-    """掃一個 shell 單元。``lines`` 是 (行號, 原始行) 串列。"""
+    """掃一個 shell 單元。``lines`` 是 (行號, 原始行) 串列。
+
+    ⛔ 碰到 ``_HARD_CONSTRUCTS`` 一律**不判定**（回空），由呼叫端記成 skipped。
+    """
+    if hard_constructs(lines):
+        return []
     se, sp = shebang_flags(lines)
     errexit, pipefail = errexit or se, pipefail or sp
 
@@ -400,6 +475,10 @@ def iter_shell_units(repo: Path) -> list[dict]:
     return units
 
 
+class WorkflowParseError(RuntimeError):
+    """⛔ workflow 解析不出來 —— 這是「量不到」，不是「量了沒事」。"""
+
+
 def _shell_is_pipefail(shell: object) -> bool:
     """GitHub 的 shell 解析：``bash`` ⇒ ``bash --noprofile --norc -eo pipefail {0}``。
 
@@ -408,60 +487,76 @@ def _shell_is_pipefail(shell: object) -> bool:
     return isinstance(shell, str) and shell.strip() == "bash"
 
 
+def _scalar(node: object) -> object:
+    return node.value if isinstance(node, yaml.ScalarNode) else None
+
+
+def _get(node: object, key: str):
+    """從 MappingNode 取一個 key 的 value node。"""
+    if not isinstance(node, yaml.MappingNode):
+        return None
+    for k, v in node.value:
+        if isinstance(k, yaml.ScalarNode) and k.value == key:
+            return v
+    return None
+
+
+def _defaults_shell(node: object) -> object:
+    return _scalar(_get(_get(_get(node, "defaults"), "run"), "shell"))
+
+
 def _workflow_run_units(rel: str, text: str) -> list[dict]:
     """把 workflow 的 ``run:`` 區塊切出來，並依 YAML 解析 shell 的繼承。
 
-    ⚠️ 先前這裡是往上掃「同一 step 內有沒有一行 ``shell: bash``」的字串比對，
-    實測三種形狀會判錯（TRK-381 第 2 輪盲審）：行尾帶註解、``shell:`` 與
-    ``run:`` 之間有空行、以及 **job / workflow 層的 ``defaults.run.shell``**
-    —— 後者與 step 層等效，卻整個看不見。現在改由 YAML parser 回答。
+    ⛔ **YAML 解析失敗一律拋 WorkflowParseError，不回空**（TRK-381 第 5 輪）。
+    先前它 ``except yaml.YAMLError: return []``：一處與 ``run:`` 完全無關的語法錯
+    就讓**整個檔案**貢獻 0 個單元、零診斷，工具照樣印「✅ 量了沒事」。實測：同一個
+    含真違規的檔案，加一處無關語法錯 ⇒ rc 0；拿掉 ⇒ rc 1 並命中。那正是本條線的
+    核心禁忌（「量不到」被呈現成「量了沒事」）出現在自己的工具裡。
+
+    ⚠️ 行號取自 YAML 節點的 ``start_mark``，不是拿首行去全檔比對。先前那個作法在
+    本 repo 實測會誤植：296 個 run step 裡 **138 個（46%）**首行與別的 step 相同
+    （光 ``set -euo pipefail`` 就 66 個）。
     """
     try:
-        doc = yaml.safe_load(text)
-    except yaml.YAMLError:
-        return []
-    if not isinstance(doc, dict):
+        root = yaml.compose(text)
+    except yaml.YAMLError as exc:
+        raise WorkflowParseError(f"{rel}: {exc}") from exc
+    if not isinstance(root, yaml.MappingNode):
         return []
 
-    wf_shell = (((doc.get("defaults") or {}).get("run") or {}).get("shell"))
+    wf_shell = _defaults_shell(root)
     units: list[dict] = []
-    lines = text.splitlines()
+    jobs = _get(root, "jobs")
+    if not isinstance(jobs, yaml.MappingNode):
+        return []
 
-    for job in (doc.get("jobs") or {}).values():
-        if not isinstance(job, dict):
+    for _, job in jobs.value:
+        job_shell = _defaults_shell(job)
+        steps = _get(job, "steps")
+        if not isinstance(steps, yaml.SequenceNode):
             continue
-        job_shell = (((job.get("defaults") or {}).get("run") or {}).get("shell"))
-        for step in job.get("steps") or []:
-            if not isinstance(step, dict) or "run" not in step:
+        for step in steps.value:
+            run = _get(step, "run")
+            if not isinstance(run, yaml.ScalarNode) or not isinstance(run.value, str):
                 continue
-            body = step.get("run")
-            if not isinstance(body, str):
-                continue
-            shell = step.get("shell", job_shell if job_shell is not None else wf_shell)
-            start = _locate_block(lines, body)
+            step_shell = _scalar(_get(step, "shell"))
+            shell = step_shell if step_shell is not None else (
+                job_shell if job_shell is not None else wf_shell
+            )
+            # block scalar（`|` / `>`）的內容從標記行的下一行開始；
+            # plain scalar 的內容就在標記行上。
+            base = run.start_mark.line + (2 if run.style in ("|", ">") else 1)
             units.append(
                 {
-                    "path": f"{rel}:{start}" if start else rel,
+                    "path": f"{rel}:{run.start_mark.line + 1}",
                     "kind": "workflow-run",
                     "errexit": True,          # GitHub 預設就是 bash -e
                     "pipefail": _shell_is_pipefail(shell),
-                    "lines": [(start + i if start else i + 1, ln)
-                              for i, ln in enumerate(body.splitlines())],
+                    "lines": [(base + i, ln) for i, ln in enumerate(run.value.splitlines())],
                 }
             )
     return units
-
-
-def _locate_block(lines: list[str], body: str) -> int:
-    """在原始檔裡找 run 區塊第一行的行號，讓回報指得回去。"""
-    first = next((l for l in body.splitlines() if l.strip()), None)
-    if first is None:
-        return 0
-    needle = first.strip()
-    for idx, ln in enumerate(lines, start=1):
-        if ln.strip() == needle:
-            return idx
-    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -500,9 +595,15 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         units = iter_shell_units(repo)
+    except WorkflowParseError as exc:
+        print(
+            f"[unreachable-pipestatus] ⛔ 量不到：workflow 解析失敗，整個檔案沒有被掃到 —— {exc}",
+            file=sys.stderr,
+        )
+        return EXIT_CALLER_ERROR
     except RuntimeError as exc:
         print(f"[unreachable-pipestatus] ⛔ 量不到：{exc}", file=sys.stderr)
-        return 2
+        return EXIT_CALLER_ERROR
 
     if not units:
         print(
@@ -513,16 +614,31 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     findings: list[dict] = []
+    skipped: list[dict] = []
     for u in units:
+        hard = hard_constructs(u["lines"])
+        if hard:
+            # ⛔ 拒絕判定 ≠ 判定為乾淨。記下來、印出來、進 JSON。
+            skipped.append({"path": u["path"], "reason": hard})
+            continue
         for v in scan_unit(u["lines"], u["errexit"], u["pipefail"]):
             findings.append({"path": u["path"], "kind": u["kind"], **v})
 
     if args.json:
-        print(json.dumps({"units": len(units), "findings": findings}, ensure_ascii=False, indent=2))
+        print(json.dumps(
+            {"units": len(units), "scanned": len(units) - len(skipped),
+             "skipped": skipped, "findings": findings},
+            ensure_ascii=False, indent=2))
     else:
         print(f"[unreachable-pipestatus] 母體：{len(units)} 個 shell 單元 "
               f"（{sum(1 for u in units if u['kind'] == 'script')} scripts / "
               f"{sum(1 for u in units if u['kind'] == 'workflow-run')} workflow run blocks）")
+        if skipped:
+            from collections import Counter
+            why = Counter(r for sk in skipped for r in sk["reason"])
+            print(f"[unreachable-pipestatus] ⚠️ 其中 {len(skipped)} 個**拒絕判定**"
+                  f"（lexer 決定不了的構造：{', '.join(f'{k}×{v}' for k, v in why.most_common())}）"
+                  f" —— 這些單元不會有 finding，⛔「跳過」不等於「乾淨」。")
         if findings:
             for f in findings:
                 print(f"  ✗ {f['path']}:{f['line']} — PIPESTATUS 讀取不可達"
@@ -530,11 +646,12 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"      pipeline: {f['pipeline']}")
                 print(f"      read:     {f['code']}")
         else:
-            print("[unreachable-pipestatus] ✅ 量了沒事：沒有不可達的 PIPESTATUS 讀取")
+            print(f"[unreachable-pipestatus] ✅ 量了沒事："
+                  f"實際掃過的 {len(units) - len(skipped)} 個單元裡沒有不可達的 PIPESTATUS 讀取")
 
     if findings and args.ci:
-        return 1
-    return 0
+        return EXIT_VIOLATION
+    return EXIT_OK
 
 
 if __name__ == "__main__":

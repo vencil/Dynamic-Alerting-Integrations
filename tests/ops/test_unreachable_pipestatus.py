@@ -399,3 +399,148 @@ def test_shebang_flags_unit() -> None:
 def test_shell_is_pipefail_unit(shell: object, expect: bool) -> None:
     """只有**恰好** `bash` 才是 `-eo pipefail`；`bash -e` 是自訂命令列，不是。"""
     assert _mod._shell_is_pipefail(shell) is expect
+
+
+# ---------------------------------------------------------------------------
+# 第 3 輪盲審（TRK-381）→ 第 5 輪修法：不確定就不判，而且「跳過」要說出來
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "name,body,reason",
+    [
+        # G1 —— `<<<` 被 _HEREDOC_RE 當成 heredoc 開頭，終止詞永不出現 ⇒
+        #        之後整個檔案被 lex 跳過（bash 實測 rc=1、REACHED 未印）
+        (
+            "herestring.sh",
+            'set -euo pipefail\nmyvar=hello\ncat <<< myvar\nfalse | true\n'
+            'RC="${PIPESTATUS[0]}"\necho "REACHED $RC"\n',
+            "herestring",
+        ),
+        # G3 —— 關鍵字式函式定義對以 `()` 為準的函式追蹤不可見
+        (
+            "func_keyword.sh",
+            'function check_it {\n  false | true\n  RC="${PIPESTATUS[0]}"\n'
+            '  echo "REACHED"\n}\nset -euo pipefail\ncheck_it\n',
+            "function-keyword",
+        ),
+        # G4 —— 函式體**內**的 `{ … }` 群組提早關掉巢狀計數
+        (
+            "nested_group.sh",
+            'check_it() {\n  { echo a; echo b; }\n  false | true\n'
+            '  RC="${PIPESTATUS[0]}"\n  echo "REACHED"\n}\n'
+            'set -euo pipefail\ncheck_it\n',
+            "brace-group-in-function",
+        ),
+    ],
+)
+def test_undecidable_shapes_are_skipped_and_named(
+    tmp_path: Path, name: str, body: str, reason: str
+) -> None:
+    """⛔ 這三種 bash 實測都是**真缺陷**，而 lexer 判不了它們。
+
+    ⚠️ 判不了的正解是**拒絕判定並點名**，不是猜——猜的那兩輪各自帶進新的誤紅與
+    漏抓。所以斷言的是「出現在 skipped 且理由對」，**而不是**「被抓到」。
+    """
+    repo = _git_fixture(tmp_path, {name: body})
+    data = _findings(repo)
+    assert data["findings"] == [], f"{name} 不該產生 finding（lexer 判不了它）"
+    assert len(data["skipped"]) == 1, data
+    assert reason in data["skipped"][0]["reason"], data
+
+
+@pytest.mark.parametrize(
+    "name,body,line",
+    [
+        # ⚠️ 控制項：這兩種**不可以**被拒判。第一版把 `case` 與任何 brace group
+        #    都列進拒判，實測是過度收窄（各自白白跳過 37 / 70 個單元），而 lexer
+        #    對它們給出與 bash 一致的答案。
+        (
+            "case_ok.sh",
+            'set -euo pipefail\nx=foo\ncase "$x" in\n  foo|bar) echo m ;;\n'
+            '  *) echo n ;;\nesac\nfalse | true\nRC="${PIPESTATUS[0]}"\n',
+            8,
+        ),
+        (
+            "brace_outside_fn.sh",
+            'set -euo pipefail\ncommand -v ls >/dev/null || { echo miss; exit 2; }\n'
+            'false | true\nRC="${PIPESTATUS[0]}"\n',
+            4,
+        ),
+    ],
+)
+def test_shapes_that_must_stay_decidable(tmp_path: Path, name: str, body: str, line: int) -> None:
+    """⛔ 拒判要有證據，跟 finding 一樣 —— 沒重現的就不准拒判。"""
+    repo = _git_fixture(tmp_path, {name: body})
+    data = _findings(repo)
+    assert data["skipped"] == [], f"{name} 不該被拒判：{data['skipped']}"
+    assert [f["line"] for f in data["findings"]] == [line], data
+
+
+def test_skipped_is_reported_and_not_counted_as_clean(tmp_path: Path) -> None:
+    """⛔「跳過」與「掃過且乾淨」必須在輸出裡分得開。"""
+    repo = _git_fixture(tmp_path, {
+        "hs.sh": 'set -euo pipefail\ncat <<< v\n',
+        "ok.sh": 'set -euo pipefail\necho hi\n',
+    })
+    proc = _run(repo)
+    assert "拒絕判定" in proc.stdout, proc.stdout
+    assert "herestring" in proc.stdout, proc.stdout
+    data = _findings(repo)
+    assert data["scanned"] == data["units"] - len(data["skipped"])
+
+
+# ---------------------------------------------------------------------------
+# workflow 半邊：解析失敗要大聲，行號要算得出來
+# ---------------------------------------------------------------------------
+_BROKEN_WF = (
+    "on: push\njobs:\n  j:\n    runs-on: ubuntu-latest\n    steps:\n"
+    "      - name: s\n        shell: bash\n        run: |\n          false | true\n"
+    '          rc="${PIPESTATUS[0]}"\n          echo "$rc"\n'
+    "      - name: bad\n        with:\n          a: [unclosed\n"
+)
+
+
+def test_yaml_parse_error_is_rc2_not_a_clean_pass(tmp_path: Path) -> None:
+    """⛔ 一處與 ``run:`` 無關的 YAML 語法錯，整個檔案就掃不到。
+
+    ⚠️ 先前它 ``except yaml.YAMLError: return []``：母體被別的檔案撐著，於是工具
+    印「✅ 量了沒事」而那個檔裡的**真違規**完全隱形。實測 rc 0 ⇒ 拿掉語法錯後
+    rc 1 並命中。那正是本條線的核心禁忌出現在自己的工具裡。
+    """
+    ok = ("on: push\njobs:\n  j:\n    runs-on: ubuntu-latest\n    steps:\n"
+          "      - name: fine\n        run: |\n          echo hello\n")
+    repo = _git_fixture(tmp_path, {
+        ".github/workflows/ok.yml": ok,
+        ".github/workflows/broken.yml": _BROKEN_WF,
+    })
+    proc = _run(repo, "--ci")
+    assert proc.returncode == 2, f"rc={proc.returncode}\n{proc.stdout}\n{proc.stderr}"
+    assert "量不到" in proc.stderr
+    assert "broken.yml" in proc.stderr
+
+
+def test_same_file_without_the_yaml_error_finds_the_violation(tmp_path: Path) -> None:
+    """對照組：語法錯是唯一差異，拿掉就必須抓到。"""
+    fixed = _BROKEN_WF.replace("      - name: bad\n        with:\n          a: [unclosed\n", "")
+    repo = _git_fixture(tmp_path, {".github/workflows/w.yml": fixed})
+    assert _run(repo, "--ci").returncode == 1
+
+
+def test_run_block_line_number_comes_from_the_yaml_node(tmp_path: Path) -> None:
+    """⚠️ 行號不能拿首行去全檔比對取第一個命中。
+
+    本 repo 實測 296 個 run step 裡 **138 個（46%）**首行與別的 step 相同
+    （光 ``set -euo pipefail`` 就 66 個）⇒ 舊作法最多讓 46% 的 workflow finding
+    指到錯的位置。這一格的兩個 step 首行**刻意相同**。
+    """
+    wf = ("on: push\njobs:\n  j:\n    runs-on: ubuntu-latest\n    steps:\n"
+          "      - name: first\n        shell: bash\n        run: |\n"
+          "          set -euo pipefail\n          echo ok\n"
+          "      - name: second\n        shell: bash\n        run: |\n"
+          "          set -euo pipefail\n          false | true\n"
+          '          rc="${PIPESTATUS[0]}"\n          echo "$rc"\n')
+    repo = _git_fixture(tmp_path, {".github/workflows/w.yml": wf})
+    findings = _findings(repo)["findings"]
+    assert len(findings) == 1, findings
+    # 違規在第二個 step：run 區塊起於第 13 行，讀取在第 16 行
+    assert findings[0]["path"].endswith(":13"), findings
+    assert findings[0]["line"] == 16, findings
