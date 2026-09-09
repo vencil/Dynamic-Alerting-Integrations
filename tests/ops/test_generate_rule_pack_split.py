@@ -45,12 +45,36 @@ class TestI18n:
 # _safe_write — file write
 # ---------------------------------------------------------------------------
 class TestSafeWrite:
-    def test_fallback_path_write_text(self, tmp_path, monkeypatch):
-        # Force the fallback branch (shared writer unavailable).
-        monkeypatch.setattr(grps, "write_text_or_die", None)
-        f = tmp_path / "out.yaml"
-        grps._safe_write(str(f), "groups: []\n")
-        assert f.read_text(encoding="utf-8") == "groups: []\n"
+    def test_the_no_lib_fallback_is_gone_because_it_was_unreachable(
+            self, tmp_path, monkeypatch):
+        """#1789: `_safe_write`'s `else: Path(path).write_text(...)` arm was
+        deleted, and this pins the REASON rather than the deletion.
+
+        The arm ran only when `write_text_or_die` was None, i.e. when the
+        `from _lib_python import ...` at the top raised ImportError — which
+        means PyYAML is missing, because the only non-stdlib thing behind
+        that facade is `_lib_io`'s bare `import yaml`. PyYAML missing also
+        makes this module's own `yaml` None, and `load_rule_pack` raises
+        before either `_safe_write` call site (both downstream of it) runs.
+        So the arm was an unguarded raw sink no run could ever reach.
+        """
+        monkeypatch.setattr(grps, "yaml", None)
+        with pytest.raises(RuntimeError, match="YAML"):
+            grps.load_rule_pack(str(tmp_path / "anything.yaml"))
+
+    def test_safe_mkdir_keeps_its_fallback_because_that_one_is_reachable(
+            self, tmp_path, monkeypatch):
+        """The other half of the same decision, so it cannot be "tidied" away.
+
+        `_safe_mkdir` runs BEFORE any rule pack is parsed, so the no-PyYAML
+        run really does reach its fallback — deleting it (or wrapping it in
+        `output_write`, which lives in the very module that is unimportable
+        then) would break the degraded path this file still supports.
+        """
+        monkeypatch.setattr(grps, "ensure_dir_or_die", None)
+        d = tmp_path / "edge-rules"
+        grps._safe_mkdir(d)
+        assert d.is_dir()
 
     def test_uses_shared_writer_when_available(self, tmp_path, monkeypatch):
         """#1641: the shared writer is the _or_die form and is told which
@@ -736,6 +760,23 @@ class TestMain:
         assert "WARN: wrong-name: no groups" in out
         assert "y.yaml" in out
         assert "foo" in out
+
+    def test_safe_write_without_the_shared_writer_says_so(self, monkeypatch, tmp_path):
+        """#1789 F9: `write_text_or_die` is None when the `_lib_python` import
+        block failed. Calling it anyway is `TypeError: 'NoneType' object is
+        not callable` — a traceback that names neither the cause nor the fix.
+
+        The reachability argument in `_safe_write`'s docstring says this
+        cannot happen (a missing PyYAML kills `load_rule_pack` first). This
+        pins what happens if that argument ever stops holding, so the failure
+        arrives as a sentence instead of as a type error.
+
+        A specific break that reddens this: delete the
+        `if write_text_or_die is None: raise RuntimeError(...)` guard.
+        """
+        monkeypatch.setattr(grps, "write_text_or_die", None)
+        with pytest.raises(RuntimeError, match="shared writer unavailable"):
+            grps._safe_write(str(tmp_path / "x.yaml"), "content\n")
 
     def test_text_output_error_branch(self, monkeypatch, capsys, cli_argv):
         monkeypatch.setattr(grps, "process_rule_packs", lambda **kw: {

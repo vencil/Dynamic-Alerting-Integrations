@@ -286,3 +286,37 @@ def test_gen_defaults_yaml_extra_defaults_rejects_bool(fixture_module):
         fixture_module._gen_defaults_yaml(
             rng, extra_defaults={"bad_bool": True}
         )
+
+
+# ---------------------------------------------------------------------------
+# #1789: which flag the write error names
+# ---------------------------------------------------------------------------
+def test_a_blocked_output_dir_names_the_flag_the_operator_gave(
+        fixture_module, tmp_path):
+    """The normal case: `-o/--output` was typed, so the message names it."""
+    from _lib_io import OutputWriteError
+
+    blocker = tmp_path / "blocker"
+    blocker.write_text("not a directory\n", encoding="utf-8")
+    with pytest.raises(OutputWriteError) as ei:
+        fixture_module.generate_flat(1, blocker / "conf.d", False, 42)
+    assert ei.value.flag == "-o/--output"
+    assert "check the value given to -o/--output" in str(ei.value)
+
+
+def test_the_default_output_dir_names_no_flag(fixture_module, tmp_path):
+    """⛔ `-o/--output` NOT given ⇒ the path is derived in-repo, and telling
+    the operator to "check the value given to -o/--output" would send them to
+    a flag they never typed. `main` passes `flag=None` for that branch.
+
+    A specific break that reddens this: hardcode `flag="-o/--output"` in
+    `generate_flat` / `_write_yaml` again.
+    """
+    from _lib_io import OutputWriteError
+
+    blocker = tmp_path / "blocker"
+    blocker.write_text("not a directory\n", encoding="utf-8")
+    with pytest.raises(OutputWriteError) as ei:
+        fixture_module.generate_flat(1, blocker / "conf.d", False, 42, flag=None)
+    assert ei.value.flag is None
+    assert "internal output path" in str(ei.value)

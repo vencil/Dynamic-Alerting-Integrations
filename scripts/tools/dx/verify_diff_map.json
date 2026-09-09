@@ -81,9 +81,13 @@
    "tests/shared/test_property_tools.py"
   ],
   "scripts/tools/_lib_io.py": [
+   "tests/dx/test_generate_tenant_fixture.py",
    "tests/dx/test_line_ending_policy.py",
+   "tests/dx/test_run_chaos_soak.py",
+   "tests/ops/test_da_assembler.py",
    "tests/ops/test_policy_opa_bridge.py",
    "tests/shared/test_confd_name_classification_parity.py",
+   "tests/shared/test_lib_io_output_write.py",
    "tests/shared/test_property_tools.py",
    "tests/shared/test_write_failure_class.py",
    "tests/shared/test_yaml_file_error.py"
@@ -232,7 +236,8 @@
    "tests/dx/test_pr_preflight_orchestrator.py"
   ],
   "scripts/tools/dx/run_chaos_soak.py": [
-   "tests/dx/test_run_chaos_soak.py"
+   "tests/dx/test_run_chaos_soak.py",
+   "tests/shared/test_output_path_write_failure.py"
   ],
   "scripts/tools/dx/scaffold_jsx_dep.py": [
    "tests/dx/test_scaffold_jsx_dep.py"
@@ -818,10 +823,13 @@
   ],
   "tests/shared/test_tool_exit_codes.py": [
    "tests/shared/test_bilingual_help_contract.py"
+  ],
+  "tests/shared/test_write_failure_class.py": [
+   "tests/shared/test_output_write_sites_stay_guarded.py"
   ]
  },
  "parse_errors": [],
- "source_digest": "18b710f38e7ed7be519d16cd4ab53e3972ca9741add287f3e59ceea184509c6e",
+ "source_digest": "1406eeb83aaf2a73c85980edcee7f4bd50d9b550e3e5300759823eb86b0024fe",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1145,6 +1153,7 @@
   "tests/shared/test_lib_confd.py",
   "tests/shared/test_lib_godispatch.py",
   "tests/shared/test_lib_helpers.py",
+  "tests/shared/test_lib_io_output_write.py",
   "tests/shared/test_lib_python.py",
   "tests/shared/test_lib_toolcount.py",
   "tests/shared/test_mutation_catalog.py",
@@ -1152,6 +1161,7 @@
   "tests/shared/test_nginx_proxy.py",
   "tests/shared/test_output_label_escaping.py",
   "tests/shared/test_output_path_write_failure.py",
+  "tests/shared/test_output_write_sites_stay_guarded.py",
   "tests/shared/test_pipeline_integration.py",
   "tests/shared/test_probe_health.py",
   "tests/shared/test_projection_gate_exposer.py",
@@ -1642,7 +1652,8 @@
    "tests/dx/test_bump_docs.py",
    "tests/dx/test_scan_component_health.py",
    "tests/dx/test_sync_tool_registry.py",
-   "tests/lint/test_check_portal_asset_shipping.py"
+   "tests/lint/test_check_portal_asset_shipping.py",
+   "tests/shared/test_output_path_write_failure.py"
   ],
   "docs/cli-reference.md": [
    "tests/ops/test_generate_routes_orchestration.py",
@@ -1718,7 +1729,8 @@
    "tests/dx/test_paired_trend_watch.py"
   ],
   "docs/internal/audit-reports/bench-paired-2026-08/nights.json": [
-   "tests/dx/test_paired_trend_watch.py"
+   "tests/dx/test_paired_trend_watch.py",
+   "tests/shared/test_output_path_write_failure.py"
   ],
   "docs/internal/audit-reports/bench-probe-2026-09": [
    "tests/dx/test_analyze_probe.py"
@@ -2172,6 +2184,9 @@
    "tests/lint/test_check_k8s_manifests.py",
    "tests/ops/test_generate_routes_orchestration.py"
   ],
+  "k8s/crd/examples/example-thresholdconfig.yaml": [
+   "tests/shared/test_output_path_write_failure.py"
+  ],
   "mkdocs.yml": [
    "tests/lint/test_check_head_blob_hygiene.py",
    "tests/lint/test_mkdocs_strict_check.py",
@@ -2385,6 +2400,7 @@
    "tests/shared/test_lib_toolcount.py",
    "tests/shared/test_output_label_escaping.py",
    "tests/shared/test_output_path_write_failure.py",
+   "tests/shared/test_output_write_sites_stay_guarded.py",
    "tests/shared/test_prometheus_url_fallback_guard.py",
    "tests/shared/test_property_tools.py",
    "tests/shared/test_sast.py",
@@ -2458,6 +2474,9 @@
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/shared/test_lib_toolcount.py"
   ],
+  "scripts/tools/dx/compile_custom_alerts.py": [
+   "tests/shared/test_output_write_sites_stay_guarded.py"
+  ],
   "scripts/tools/dx/converge_status.py": [
    "tests/dx/test_converge_status.py"
   ],
@@ -2469,7 +2488,9 @@
    "tests/golden/test_merge_parity.py",
    "tests/ops/test_ci_baseline_substitution.py",
    "tests/ops/test_property_based.py",
-   "tests/shared/test_confd_case_parity_across_tools.py"
+   "tests/shared/test_confd_case_parity_across_tools.py",
+   "tests/shared/test_output_path_write_failure.py",
+   "tests/shared/test_output_write_sites_stay_guarded.py"
   ],
   "scripts/tools/dx/doc_coverage.py": [
    "tests/dx/test_doc_coverage.py"
@@ -2496,10 +2517,12 @@
   ],
   "scripts/tools/dx/generate_tenant_fixture.py": [
    "tests/dx/test_generate_tenant_fixture.py",
+   "tests/shared/test_output_write_sites_stay_guarded.py",
    "tests/shared/test_sast.py"
   ],
   "scripts/tools/dx/generate_tenant_metadata.py": [
-   "tests/lint/test_check_makefile_targets.py"
+   "tests/lint/test_check_makefile_targets.py",
+   "tests/shared/test_output_write_sites_stay_guarded.py"
   ],
   "scripts/tools/dx/generate_tool_map.py": [
    "tests/dx/test_atomic_write.py",
@@ -2510,12 +2533,17 @@
    "tests/dx/test_inject_waveform.py",
    "tests/dx/test_waveform_score.py"
   ],
+  "scripts/tools/dx/migrate_conf_d.py": [
+   "tests/shared/test_output_write_sites_stay_guarded.py"
+  ],
   "scripts/tools/dx/pair_bench_ratio.py": [
-   "tests/dx/test_paired_trend_watch.py"
+   "tests/dx/test_paired_trend_watch.py",
+   "tests/shared/test_output_write_sites_stay_guarded.py"
   ],
   "scripts/tools/dx/paired_trend_watch.py": [
    "tests/dx/test_canary_quotation_pins.py",
-   "tests/dx/test_paired_trend_watch.py"
+   "tests/dx/test_paired_trend_watch.py",
+   "tests/shared/test_output_write_sites_stay_guarded.py"
   ],
   "scripts/tools/dx/pr_preflight.py": [
    "tests/dx/test_gen_agent_adapters.py",
@@ -2523,7 +2551,11 @@
    "tests/dx/test_preflight_msg_validator.py",
    "tests/ops/test_ci_aggregate_gate_contract.py"
   ],
+  "scripts/tools/dx/render_soak_diff.py": [
+   "tests/shared/test_output_write_sites_stay_guarded.py"
+  ],
   "scripts/tools/dx/run_chaos_soak.py": [
+   "tests/shared/test_output_write_sites_stay_guarded.py",
    "tests/shared/test_sast.py"
   ],
   "scripts/tools/dx/scaffold_lint.py": [
@@ -2531,6 +2563,9 @@
    "tests/lint/test_check_hardcode_tenant.py",
    "tests/lint/test_check_jsx_loader_compat.py",
    "tests/lint/test_check_undefined_tokens.py"
+  ],
+  "scripts/tools/dx/scan_component_health.py": [
+   "tests/shared/test_output_write_sites_stay_guarded.py"
   ],
   "scripts/tools/dx/sync_schema.py": [
    "tests/shared/test_reserved_key_py_go_parity.py"
@@ -2560,7 +2595,8 @@
    "tests/dx/test_waveform_score.py"
   ],
   "scripts/tools/dx/write_baseline_marker.py": [
-   "tests/dx/test_write_baseline_marker.py"
+   "tests/dx/test_write_baseline_marker.py",
+   "tests/shared/test_output_write_sites_stay_guarded.py"
   ],
   "scripts/tools/lint": [
    "tests/dx/test_line_ending_policy.py",
@@ -2730,7 +2766,8 @@
    "tests/ops/test_prepush_hook_wiring.py"
   ],
   "scripts/tools/lint/trufflehog_to_sarif.py": [
-   "tests/ops/test_secret_scan_gate.py"
+   "tests/ops/test_secret_scan_gate.py",
+   "tests/shared/test_output_write_sites_stay_guarded.py"
   ],
   "scripts/tools/lint/validate_docs_versions.py": [
    "tests/lint/test_validate_docs_versions.py",
@@ -2785,10 +2822,17 @@
   "scripts/tools/ops/analyze_rule_pack_gaps.py": [
    "tests/shared/test_yaml_file_error.py"
   ],
+  "scripts/tools/ops/assemble_config_dir.py": [
+   "tests/shared/test_output_path_write_failure.py",
+   "tests/shared/test_output_write_sites_stay_guarded.py"
+  ],
   "scripts/tools/ops/backtest_threshold.py": [
    "tests/shared/test_confd_case_parity_across_tools.py",
    "tests/shared/test_confd_path_encoding_across_git_calls.py",
    "tests/shared/test_yaml_file_error.py"
+  ],
+  "scripts/tools/ops/baseline_discovery.py": [
+   "tests/shared/test_output_write_sites_stay_guarded.py"
   ],
   "scripts/tools/ops/bench-canary/canary_test.go": [
    "tests/dx/test_analyze_bench_history.py",
@@ -2802,7 +2846,8 @@
    "tests/ops/test_nightly_scan_matrix_drift.py"
   ],
   "scripts/tools/ops/blast_radius.py": [
-   "tests/ops/test_blast_radius.py"
+   "tests/ops/test_blast_radius.py",
+   "tests/shared/test_output_write_sites_stay_guarded.py"
   ],
   "scripts/tools/ops/blind_spot_discovery.py": [
    "tests/shared/test_yaml_file_error.py"
@@ -2815,6 +2860,12 @@
    "tests/shared/test_help_contract.py",
    "tests/shared/test_yaml_file_error.py"
   ],
+  "scripts/tools/ops/config_history.py": [
+   "tests/shared/test_output_write_sites_stay_guarded.py"
+  ],
+  "scripts/tools/ops/da_assembler.py": [
+   "tests/shared/test_output_write_sites_stay_guarded.py"
+  ],
   "scripts/tools/ops/deprecate_rule.py": [
    "tests/shared/test_yaml_file_error.py"
   ],
@@ -2823,6 +2874,9 @@
   ],
   "scripts/tools/ops/drift_detect.py": [
    "tests/dx/test_coverage_gap_analysis.py"
+  ],
+  "scripts/tools/ops/federation_keygen.py": [
+   "tests/shared/test_output_write_sites_stay_guarded.py"
   ],
   "scripts/tools/ops/generate_alertmanager_routes.py": [
    "tests/ops/test_ci_path_filter_coverage.py",
@@ -2833,6 +2887,7 @@
   ],
   "scripts/tools/ops/generate_rule_pack_split.py": [
    "tests/ops/test_rule_pack_split_real_packs.py",
+   "tests/shared/test_output_write_sites_stay_guarded.py",
    "tests/shared/test_sast.py"
   ],
   "scripts/tools/ops/generate_tenant_mapping_rules.py": [
@@ -2880,6 +2935,9 @@
    "tests/shared/test_help_contract.py",
    "tests/shared/test_pipeline_integration.py"
   ],
+  "scripts/tools/ops/state_reconcile.py": [
+   "tests/shared/test_output_write_sites_stay_guarded.py"
+  ],
   "scripts/tools/ops/threshold_recommend.py": [
    "tests/shared/test_yaml_file_error.py"
   ],
@@ -2916,6 +2974,7 @@
    "tests/ops/test_image_flat_layout.py",
    "tests/shared/test_bilingual_help_contract.py",
    "tests/shared/test_console_encoding_resilience.py",
+   "tests/shared/test_lib_io_output_write.py",
    "tests/shared/test_property_tools.py",
    "tests/shared/test_write_failure_class.py"
   ],
@@ -2956,7 +3015,8 @@
    "tests/dx/test_dx_json_stdout_contract.py"
   ],
   "tests/dx/fixtures/waveform/tolerances/selftest_tolerances.yaml": [
-   "tests/dx/test_dx_json_stdout_contract.py"
+   "tests/dx/test_dx_json_stdout_contract.py",
+   "tests/shared/test_output_path_write_failure.py"
   ],
   "tests/dx/test_analyze_bench_history.py": [
    "tests/dx/test_canary_quotation_pins.py"
@@ -2982,6 +3042,9 @@
   "tests/dx/test_generate_adr_index.py": [
    "tests/dx/test_line_ending_policy.py"
   ],
+  "tests/dx/test_inject_waveform.py": [
+   "tests/shared/test_output_path_write_failure.py"
+  ],
   "tests/dx/test_paired_trend_watch.py": [
    "tests/dx/test_canary_quotation_pins.py"
   ],
@@ -3005,6 +3068,9 @@
   ],
   "tests/dx/test_waveform_score.py": [
    "tests/dx/test_dx_json_stdout_contract.py"
+  ],
+  "tests/dx/test_write_baseline_marker.py": [
+   "tests/shared/test_output_path_write_failure.py"
   ],
   "tests/e2e": [
    "tests/lint/test_check_playwright_rtl_drift.py",
@@ -3189,6 +3255,9 @@
   "tests/ops/test_domain_policy.py": [
    "tests/ops/test_generate_alertmanager_routes.py"
   ],
+  "tests/ops/test_federation_keygen.py": [
+   "tests/shared/test_output_path_write_failure.py"
+  ],
   "tests/ops/test_federation_revocation_reconciler.py": [
    "tests/helm/test_federation_store_sentinel_guard.py"
   ],
@@ -3261,7 +3330,8 @@
   ],
   "tests/shared": [
    "tests/ops/test_ci_path_filter_coverage.py",
-   "tests/shared/test_output_path_write_failure.py"
+   "tests/shared/test_output_path_write_failure.py",
+   "tests/shared/test_output_write_sites_stay_guarded.py"
   ],
   "tests/shared/_go_mutation_pilot.py": [
    "tests/shared/test_go_mutation_pilot.py"
@@ -3323,7 +3393,11 @@
    "tests/shared/test_yaml_file_error.py"
   ],
   "tests/shared/test_output_path_write_failure.py": [
+   "tests/ops/test_generate_routes_orchestration.py",
    "tests/shared/test_write_failure_class.py"
+  ],
+  "tests/shared/test_output_write_sites_stay_guarded.py": [
+   "tests/shared/test_output_path_write_failure.py"
   ],
   "tests/shared/test_property.py": [
    "tests/shared/test_property_tools.py"
@@ -3363,7 +3437,8 @@
    "tests/dx/test_bump_docs.py",
    "tests/lint/test_check_threshold_reachability.py",
    "tests/ops/test_ci_path_filter_coverage.py",
-   "tests/ops/test_wrapped_path_references.py"
+   "tests/ops/test_wrapped_path_references.py",
+   "tests/shared/test_output_path_write_failure.py"
   ],
   "tools/portal/build.mjs": [
    "tests/ops/test_generated_ci_artifacts.py"

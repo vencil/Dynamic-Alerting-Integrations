@@ -64,6 +64,7 @@ from _lib_exitcodes import (  # noqa: E402
     EXIT_OK,
     EXIT_VIOLATION,
 )
+from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
 
 SARIF_SCHEMA = "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json"
 SARIF_VERSION = "2.1.0"
@@ -72,7 +73,9 @@ SARIF_VERSION = "2.1.0"
 # EXIT_OK is re-exported as-is; the other two name this tool's specific
 # semantics for the same codes.
 EXIT_VERIFIED_FINDING = EXIT_VIOLATION  # >=1 verified secret → block the PR
-EXIT_USAGE = EXIT_CALLER_ERROR          # input missing / output unwritable
+EXIT_USAGE = EXIT_CALLER_ERROR          # input missing (an unwritable
+                                        # --output takes the same code
+                                        # through _lib_io, #1789)
 
 
 def _extract_location(finding: dict[str, Any]) -> tuple[str, int]:
@@ -199,6 +202,7 @@ def parse_ndjson(raw: str) -> list[dict[str, Any]]:
     return findings
 
 
+@exit_on_output_write_error
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Convert trufflehog JSON findings to SARIF 2.1.0 (#445 AC ii).",
@@ -221,14 +225,17 @@ def main() -> int:
     findings = parse_ndjson(in_path.read_text(encoding="utf-8", errors="replace"))
     sarif, verified_count = convert(findings, args.tool_version)
 
-    try:
+    # #1789: the rc was already EXIT_USAGE (2), but the message was this
+    # tool's own — it printed the `OSError` message and never named the flag
+    # to fix. The wrapper keeps the write EXACTLY as it is (raw `write_text`,
+    # so the bytes and the 0644 the SARIF uploader reads do not move) and
+    # turns the failure into the one line every tool in the batch prints,
+    # via the decorator on `main`.
+    with output_write(args.output, flag="--output"):
         Path(args.output).write_text(
             json.dumps(sarif, indent=2, ensure_ascii=False) + "\n",
             encoding="utf-8", newline="\n",
         )
-    except OSError as e:
-        print(f"❌ could not write SARIF to {args.output}: {e}", file=sys.stderr)
-        return EXIT_USAGE
 
     total = len(findings)
     unverified_count = total - verified_count

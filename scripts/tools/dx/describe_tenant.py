@@ -37,6 +37,7 @@ from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
     unusable_reason,
 )
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
 
 try:
     import yaml
@@ -385,6 +386,7 @@ class ConfDScanner:
 # CLI
 # ---------------------------------------------------------------------------
 
+@exit_on_output_write_error
 def main() -> None:
     try_utf8_stdout()
     parser = argparse.ArgumentParser(
@@ -504,7 +506,8 @@ def main() -> None:
             result[tid] = info
         out = _output(result)
         if args.output:
-            Path(args.output).write_text(out, encoding="utf-8", newline="\n")
+            with output_write(args.output, flag="-o/--output"):
+                Path(args.output).write_text(out, encoding="utf-8", newline="\n")
             print(f"✅ Written {len(result)} tenants to {args.output}", file=sys.stderr)
         else:
             print(out)

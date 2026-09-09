@@ -35,6 +35,11 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_io import (  # noqa: E402  (#1789)
+    OutputWriteError,
+    exit_on_output_write_error,
+    output_write,
+)
 
 try:
     import yaml
@@ -130,19 +135,36 @@ def write_rendered(
     """Write rendered YAML to config-dir.  Returns True if file changed."""
     dest = config_dir / filename
 
-    # Skip write if content is identical
-    if dest.exists():
-        existing = dest.read_text(encoding="utf-8")
-        if existing == content:
-            return False
+    # Skip write if content is identical.
+    # #1789: the idempotence read is wrapped TOO, because it reads the very
+    # file this function exists to produce — when `dest` is a directory this
+    # is where the run actually dies (measured), and "cannot write <dest>: Is
+    # a directory" is the true statement about it. Contrast
+    # `ops/config_history._load_history`, whose read is left alone: that one
+    # reads a DIFFERENT path (the history state) from the one being written.
+    with output_write(dest, flag="--config-dir"):
+        if dest.exists():
+            existing = dest.read_text(encoding="utf-8")
+            if existing == content:
+                return False
 
     if dry_run:
         log.info("DRY-RUN: would write %s (%d bytes)", filename, len(content))
         return True
 
-    config_dir.mkdir(parents=True, exist_ok=True)
-    dest.write_text(content, encoding="utf-8", newline="\n")
-    os.chmod(dest, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+    # #1789: the wrapper is given the PARENT — the directory this mkdir
+    # actually creates. Handing it the output FILE makes the message a
+    # sentence about a path nobody was creating (worked example in
+    # `_lib_io.output_write`). The ancestor rule still converts the
+    # failure, and the write below keeps naming the file.
+    with output_write(config_dir, flag="--config-dir", action="create directory"):
+        config_dir.mkdir(parents=True, exist_ok=True)
+    # The 0644 chmod is inside the same block as the write: the rendered file
+    # is read by the exporter, and a chmod that failed would leave a mode the
+    # tool did not choose.
+    with output_write(dest, flag="--config-dir"):
+        dest.write_text(content, encoding="utf-8", newline="\n")
+        os.chmod(dest, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
     return True
 
 
@@ -205,8 +227,19 @@ def reconcile_one(
     *,
     dry_run: bool = False,
     api: Any = None,
+    cli: bool = False,
 ) -> None:
-    """Reconcile a single ThresholdConfig CR."""
+    """Reconcile a single ThresholdConfig CR.
+
+    *cli* says which of the two callers this is: ``render_cr_file``
+    (``--render-cr``, one CR, the rc is the operator's answer) or the
+    controller loop (``run_once`` / ``run_watch``, one item among many).
+    ⛔ It is an EXPLICIT flag and not ``api is None``, because the controller
+    passes ``api=None`` too whenever ``--dry-run`` is set — inferring the
+    caller from it made a dry-run controller re-raise, which aborts
+    ``run_once`` after the first bad CR and turns ``run_watch`` into an
+    endless "Watch interrupted … Reconnecting" loop.
+    """
     name = cr["metadata"]["name"]
     namespace = cr["metadata"].get("namespace", "default")
     filename = _output_filename(cr)
@@ -228,6 +261,21 @@ def reconcile_one(
                              message=f"Written to {filename}")
 
     except Exception as e:
+        # #1789: an unusable `--config-dir` used to be logged here and then
+        # forgotten — `render_cr_file` returned EXIT_OK unconditionally, so
+        # the CLI exited 0 having written nothing at all (measured). Re-raise
+        # so `main`'s decorator turns it into the standard one-line rc=2.
+        #
+        # ⛔ ONLY on the CLI path (`cli=True`, i.e. `--render-cr`). In the
+        # CONTROLLER path a reconcile is one item in a watch loop: a write
+        # failure has to be reported on the CR's status and the loop has to
+        # keep going, or one bad CR stops every other tenant from being
+        # rendered. That path is unchanged — it still logs, still sets the
+        # Error status, still returns. ⚠️ `api is None` is NOT the test: the
+        # controller nulls `api` under `--dry-run`, so it would take this
+        # branch too (see the docstring).
+        if cli and isinstance(e, OutputWriteError):
+            raise
         log.error("Failed to reconcile %s/%s: %s", namespace, name, e)
         if api and not dry_run:
             update_cr_status(api, cr, "Error", message=str(e)[:200])
@@ -344,12 +392,13 @@ def render_cr_file(
         log.error("%s is not a ThresholdConfig resource", cr_path)
         return EXIT_CALLER_ERROR
 
-    reconcile_one(cr, config_dir, dry_run=dry_run)
+    reconcile_one(cr, config_dir, dry_run=dry_run, cli=True)
     return EXIT_OK
 
 
 # ── Main ─────────────────────────────────────────────────────────────
 
+@exit_on_output_write_error
 def main() -> int:
     """CLI entry point: Lightweight ThresholdConfig CRD → YAML renderer."""
     parser = argparse.ArgumentParser(

@@ -69,6 +69,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 import check_rulepack_sync as sync  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
+from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
 
 try:
     from _lib_compat import try_utf8_stdout  # noqa: E402
@@ -532,6 +533,7 @@ def _nothing_compiled_diagnosis(config_dir: Path, quarantined: int) -> str:
             f"     3. the last declaration really was removed — that is a legitimate end state.")
 
 
+@exit_on_output_write_error
 def main() -> int:
     try_utf8_stdout()
     parser = argparse.ArgumentParser(description="Compile custom-alert recipes → rule pack")
@@ -715,7 +717,8 @@ def main() -> int:
               f"genuinely empty.", file=sys.stderr)
         return EXIT_VIOLATION
 
-    out_path.write_text(_render(groups), encoding="utf-8", newline="\n")
+    with output_write(out_path, flag="--out"):
+        out_path.write_text(_render(groups), encoding="utf-8", newline="\n")
     if meta["shapes"]:
         print(f"✅ Compiled {meta['shapes']} shape(s) → {shown}")
     else:

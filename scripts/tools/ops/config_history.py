@@ -32,6 +32,7 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_python import detect_cli_lang, format_json_report  # noqa: E402
 from _lib_confd import has_yaml_extension, is_hidden_name, warn_nested  # noqa: E402
+from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
 
 # Canonical lang detection (da-tools ROI r3 W2 bug fix): the former local
 # `_detect_lang` only checked the zh prefix per variable, so DA_LANG=en fell
@@ -124,9 +125,15 @@ def _scan_config_dir(config_dir):
 
 
 def _history_dir(config_dir):
-    """Get or create history directory."""
+    """Get or create history directory.
+
+    #1789: this tool has no output flag — every path it writes is DERIVED
+    from ``--config-dir`` (``<parent>/.da-history``), so that is the flag the
+    operator has to fix and the one the message names.
+    """
     hdir = Path(config_dir).parent / '.da-history'
-    hdir.mkdir(exist_ok=True)
+    with output_write(hdir, flag="--config-dir", action="create directory"):
+        hdir.mkdir(exist_ok=True)
     return hdir
 
 
@@ -135,6 +142,17 @@ def _load_history(config_dir):
     hdir = _history_dir(config_dir)
     history_file = hdir / 'history.json'
     if history_file.exists():
+        # ⚠️ NOT GUARDED (#1789), on purpose: this is a READ, and the ticket's
+        # axis is the WRITE direction — "the output path the operator named is
+        # unusable ⇒ rc 2 naming the flag". An unreadable history.json is a
+        # corrupt state directory, not a mistyped flag, and wrapping it would
+        # print "cannot write …" for a read. It stays a traceback at rc=1,
+        # unchanged, and it MASKS the guarded write at `_save_history` below
+        # for any shape that makes history.json unreadable — which is why no
+        # row drives that sink and only the static pin speaks for it.
+        # ⛔ It is not in that pin's NOT_GUARDED list either: the list is
+        # exit-locked against SINKS, and a read is not one, so an entry for
+        # this line would be rejected as stale. This comment is the record.
         return json.loads(history_file.read_text(encoding='utf-8'))
     return []
 
@@ -143,8 +161,9 @@ def _save_history(config_dir, history):
     """Save history to disk."""
     hdir = _history_dir(config_dir)
     history_file = hdir / 'history.json'
-    history_file.write_text(format_json_report(history),
-                            encoding='utf-8', newline='\n')
+    with output_write(history_file, flag="--config-dir", action="write"):
+        history_file.write_text(format_json_report(history),
+                                encoding='utf-8', newline='\n')
 
 
 def cmd_snapshot(config_dir, message=None):
@@ -189,11 +208,15 @@ def cmd_snapshot(config_dir, message=None):
     # Save snapshot content
     hdir = _history_dir(config_dir)
     snap_dir = hdir / f"snap-{entry['id']}"
-    snap_dir.mkdir(exist_ok=True)
+    with output_write(snap_dir, flag="--config-dir", action="create directory"):
+        snap_dir.mkdir(exist_ok=True)
     for f in files:
         fp = snap_dir / f['name']
-        fp.write_text(f['content'], encoding='utf-8', newline='\n')
-        os.chmod(fp, 0o600)  # Restrict snapshot files (may contain sensitive config)
+        # The 0o600 is inside the block with the write: a snapshot may hold
+        # sensitive config, so a chmod that fails is not a success (#1789).
+        with output_write(fp, flag="--config-dir", action="write"):
+            fp.write_text(f['content'], encoding='utf-8', newline='\n')
+            os.chmod(fp, 0o600)  # Restrict snapshot files (may contain sensitive config)
 
     history.append(entry)
     _save_history(config_dir, history)
@@ -338,6 +361,7 @@ def cmd_diff(config_dir, id_a, id_b):
         print(_t('  ⊘ 無差異', '  ⊘ No differences'))
 
 
+@exit_on_output_write_error
 def main():
     try_utf8_stdout()
     parser = argparse.ArgumentParser(

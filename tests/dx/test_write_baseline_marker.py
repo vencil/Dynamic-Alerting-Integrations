@@ -327,8 +327,9 @@ def test_out_pointing_at_a_directory_is_a_controlled_error(tmp_path: Path):
     via a raw `IsADirectoryError` traceback — and a stack trace in the nightly's
     log reads like the benchmark crashed rather than like a mis-set path.
 
-    A specific break that reddens this: remove the `except OSError` around the
-    write in `write_baseline_marker.main`.
+    A specific break that reddens this: remove the
+    `except OutputWriteError` around the `write_marker` call in
+    `write_baseline_marker.main`.
     """
     outdir = tmp_path / "iam_a_dir"
     outdir.mkdir()

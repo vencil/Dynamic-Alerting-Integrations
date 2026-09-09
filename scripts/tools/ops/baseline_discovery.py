@@ -65,6 +65,7 @@ from _lib_python import (  # noqa: E402
     add_prometheus_arg, DOCS_INSTALL_URL,
 )
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
 
 # Alias for backward-compat within this module
 query_prometheus = query_prometheus_instant
@@ -176,6 +177,7 @@ def suggest_threshold(stats, metric_name):
     return {"warning": warning, "critical": critical, "note": "基於 p95×1.2 / p99×1.5"}
 
 
+@exit_on_output_write_error
 def main():
     """CLI entry point: Baseline Discovery 工具。."""
     try_utf8_stdout()
@@ -305,12 +307,21 @@ def main():
     # write in binary mode (UTF-8 + BOM) so the writer's terminators
     # reach disk verbatim. Matches write_text_secure's UTF-8 + 0o600
     # contract without the newline translation step.
-    os.makedirs(args.output_dir, exist_ok=True)
+    with output_write(args.output_dir, flag="-o/--output-dir",
+                      action="create directory"):
+        os.makedirs(args.output_dir, exist_ok=True)
 
     def _write_csv_secure(path: str, body_with_bom: str) -> None:
-        with open(path, "wb") as fh:
-            fh.write(body_with_bom.encode("utf-8"))
-        os.chmod(path, 0o600)
+        # #1789: the `with` lives INSIDE this helper, not around its two call
+        # sites: the static pin walks up from a sink and stops at the
+        # enclosing `def`, so a wrapper around the CALL would leave these two
+        # sinks reading as bare. The chmod is inside the same block as the
+        # open — 0o600 is part of producing this file, and a chmod that fails
+        # leaves the operator a CSV whose mode is not the promised one.
+        with output_write(path, flag="-o/--output-dir"):
+            with open(path, "wb") as fh:
+                fh.write(body_with_bom.encode("utf-8"))
+            os.chmod(path, 0o600)
 
     # 原始時間序列
     ts_path = str(Path(args.output_dir) / f"baseline-{args.tenant}-timeseries.csv")

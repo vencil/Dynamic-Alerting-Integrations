@@ -492,7 +492,14 @@ def test_out_write_failure_exits_two(tmp_path, monkeypatch, capsys):
         "--allow-selftest", "--json",
         "--out", str(tmp_path / "no_such_dir" / "report.json")])
     assert iw.main() == 2
-    assert "報告輸出失敗" in capsys.readouterr().err
+    # #1789: the wording is the SHARED one-line write-failure message now —
+    # it names the path AND `--out`, where "報告輸出失敗: <OSError repr>" named
+    # neither the flag nor what to do. rc is unchanged, and `main` still
+    # RETURNS it rather than raising SystemExit (this assertion is what pins
+    # that half).
+    err = capsys.readouterr().err
+    assert "ERROR: cannot write " in err, err
+    assert "check the value given to --out" in err, err
 
 
 # ── T0/STEP 雙 pin tripwire（_waveform_lib 與 vm_harness 各自 pin，
