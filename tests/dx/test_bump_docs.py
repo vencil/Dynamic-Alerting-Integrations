@@ -3388,3 +3388,222 @@ class TestRoundEightMutationSurvivors:
         assert "GLOB-EMPTY" not in out, (
             "--scope docs 因為 scope 之外的缺陷而出聲\n" + out)
         assert exc.value.code == 0, (exc.value.code, out)
+
+
+class TestDatoolsPinCapability:
+    """#1534 — bump_docs checks pins for capability at the moment it repoints them.
+
+    Direction (1) of the ticket. The extractor and its precision are graded in
+    tests/lint/test_check_doc_datools_cmds.py; what is pinned here is the
+    WIRING and the fail-closed behaviour of the oracle lookup.
+    """
+
+    _PIN_PATTERN = r"ghcr\.io/vencil/da-tools:v?"
+
+    def _pin_rules(self):
+        return [r for r in bump_docs._build_tools_rules()
+                if self._PIN_PATTERN in r.get("pattern", "")]
+
+    def test_every_graded_doc_carrying_a_pin_is_also_bumped(self):
+        """Graded and bumped must be the same set (#1534 M1).
+
+        `components/da-tools/app/QUICKSTART.md` was in the check's corpus but
+        in none of the bump rules: a release would grade the command it teaches
+        against vNEW while leaving its pin at vOLD forever. That is worse than
+        either failure alone — the customer copies a stale image, and the grade
+        it passed was about a different one.
+
+        This asserts the INVARIANT, not the one file: any doc the check grades
+        that carries a `:vX.Y.Z` pin must also be a bump target, so the next
+        page added to `_EXTRA_DOC_FILES` cannot re-open the hole silently.
+        """
+        import re
+        import check_doc_datools_cmds as gate
+
+        pin_re = re.compile(r"ghcr\.io/vencil/da-tools:v[0-9]+\.[0-9]+\.[0-9]+")
+        # Bump targets, as PATHS: a glob rule covers everything under its dir.
+        literal, globs = set(), []
+        for r in self._pin_rules():
+            if r["file"] == "__glob__":
+                globs.append(bump_docs.REPO_ROOT / r["glob_dir"])
+            else:
+                literal.add((bump_docs.REPO_ROOT / r["file"]).resolve())
+
+        def is_bumped(p):
+            p = p.resolve()
+            return p in literal or any(g.resolve() in p.parents for g in globs)
+
+        unbumped = []
+        for f in gate.pin_capability_doc_files(bump_docs.REPO_ROOT):
+            if not f.is_file():
+                continue
+            if pin_re.search(f.read_text(encoding="utf-8", errors="ignore")) \
+                    and not is_bumped(f):
+                unbumped.append(str(f.relative_to(bump_docs.REPO_ROOT)))
+        assert not unbumped, (
+            "these docs are graded against the tag being cut but nothing "
+            "repoints their pins — add them to _build_tools_rules(): "
+            f"{unbumped}")
+
+    def test_the_gap_this_check_closes_still_exists(self):
+        """The premise: most pin-rewriting rules land outside the gate's surface.
+
+        `check_image_pin_capability.py` scans `k8s/**` + `helm/*` only. If a
+        future change brings every pin target inside that surface, this check
+        becomes redundant and should be deleted rather than left running — so
+        the premise is asserted, not assumed.
+
+        Re-measure the split (pin-rewriting rules only, not all tools rules):
+          python3 -c "import importlib.util,pathlib; \
+            s=importlib.util.spec_from_file_location('b',pathlib.Path('scripts/tools/dx/bump_docs.py')); \
+            m=importlib.util.module_from_spec(s); s.loader.exec_module(m); \
+            print([r.get('glob_dir', r['file']) for r in m._build_tools_rules() \
+                   if 'ghcr\\.io/vencil/da-tools:v?' in r.get('pattern','')])"
+        """
+        rules = self._pin_rules()
+        inside = [r for r in rules
+                  if r["file"] != "__glob__"
+                  and (r["file"].startswith("k8s/")
+                       or r["file"].startswith("helm/"))]
+        assert len(rules) > len(inside), (
+            "every da-tools pin rewrite now lands inside the image-pin gate's "
+            "scan surface — this check has no gap left to cover")
+        assert inside, (
+            "no pin rule targets k8s/ or helm/ any more; the image-pin gate "
+            "and this check may now be looking at disjoint trees")
+
+    def test_head_tree_is_clean(self):
+        """The release path is green today — so a future red means a real drift."""
+        assert bump_docs._check_datools_pin_capability("9.9.9") == 0
+
+    def test_empty_command_map_fails_closed(self, monkeypatch):
+        """An unparseable entrypoint must fail the bump, not pass it.
+
+        The dangerous shape is silence: with an empty capability set every
+        documented invocation looks unknown (or, if the emptiness short-circuits
+        the loop, every one looks fine) and the release reports success.
+        """
+        monkeypatch.setattr(bump_docs, "parse_command_map", dict)
+        assert bump_docs._check_datools_pin_capability("9.9.9") == 1
+
+    def test_empty_tool_files_fails_closed(self, monkeypatch):
+        """build.sh parsing that returns nothing must fail the bump too.
+
+        The other half of the oracle: an empty TOOL_FILES would make every
+        dispatched command look unshipped.
+        """
+        monkeypatch.setattr(bump_docs, "parse_build_sh_tools", set)
+        assert bump_docs._check_datools_pin_capability("9.9.9") == 1
+
+    def test_unreadable_entrypoint_fails_closed(self, monkeypatch):
+        def _boom():
+            raise OSError("simulated missing entrypoint")
+
+        monkeypatch.setattr(bump_docs, "parse_command_map", _boom)
+        assert bump_docs._check_datools_pin_capability("9.9.9") == 1
+
+    def test_zero_extracted_invocations_fails_closed(self, monkeypatch):
+        """A corpus that yields no invocations must fail, not pass.
+
+        `pin_capability_doc_files()` returning files proves the corpus was
+        found, not that anything was read out of it. An extractor that stops
+        recognising the docs' command shape would otherwise print a green tick
+        over a check that graded nothing — the exact "量不到 vs 量了沒事"
+        collapse this check exists to prevent.
+        """
+        monkeypatch.setattr(bump_docs, "iter_pinned_invocations",
+                            lambda *a, **kw: [])
+        assert bump_docs._check_datools_pin_capability("9.9.9") == 1
+
+    def test_unreadable_build_sh_fails_closed(self, monkeypatch):
+        def _boom():
+            raise OSError("simulated missing build.sh")
+
+        monkeypatch.setattr(bump_docs, "parse_build_sh_tools", _boom)
+        assert bump_docs._check_datools_pin_capability("9.9.9") == 1
+
+    @pytest.mark.parametrize("exc", [RuntimeError("corpus lost a file"),
+                                     OSError("docs tree unreadable")])
+    def test_broken_corpus_fails_the_bump(self, monkeypatch, capsys, exc):
+        """A corpus that cannot be assembled must fail, never report clean.
+
+        `pin_capability_doc_files` raises when `docs/` yields nothing or an
+        `_EXTRA_DOC_FILES` entry was renamed. If this call site swallowed that,
+        the release would print no findings and proceed — the exact
+        "scanned nothing, looked green" shape the check exists to prevent.
+        """
+        def _boom(*a, **kw):
+            raise exc
+
+        monkeypatch.setattr(bump_docs, "pin_capability_doc_files", _boom)
+        assert bump_docs._check_datools_pin_capability("9.9.9") == 1
+        assert "corpus" in capsys.readouterr().err
+
+    def test_findings_are_counted_not_just_printed(self, monkeypatch):
+        """The return value is what main() adds to its failure tally."""
+        import check_doc_datools_cmds as gate
+
+        fake = [gate.Issue("datools-pin-capability", "docs/a.md", 3, "m1"),
+                gate.Issue("datools-pin-capability", "docs/b.md", 7, "m2")]
+        monkeypatch.setattr(bump_docs, "check_pinned_subcommands_against",
+                            lambda *a, **kw: fake)
+        assert bump_docs._check_datools_pin_capability("9.9.9") == 2
+
+    # --- the wiring itself, driven through main() -------------------------
+    #
+    # ⛔ Everything above grades the CHECK; none of it grades the two lines
+    # that make a finding matter — the `if line == "tools"` call site and
+    # `pin_capability_issues` in main()'s exit condition. Both were mutated
+    # away with the whole suite still green, i.e. the gate could be deleted
+    # and no test would notice. These two drive main() and read the exit code.
+
+    def _fake_finding(self):
+        import check_doc_datools_cmds as gate
+        return [gate.Issue("datools-pin-capability", "docs/a.md", 3, "m1")]
+
+    def test_main_exits_nonzero_when_a_documented_command_is_unrunnable(
+            self, monkeypatch, cli_argv):
+        monkeypatch.setattr(bump_docs, "check_pinned_subcommands_against",
+                            lambda *a, **kw: self._fake_finding())
+        cli_argv("bump_docs", "--tools", "9.9.9", "--dry-run")
+        with pytest.raises(SystemExit) as exc:
+            bump_docs.main()
+        assert exc.value.code != 0, (
+            "a documented invocation the released image cannot run must fail "
+            "the bump; otherwise the check prints and the release proceeds")
+
+    def test_main_is_green_when_the_check_is(self, monkeypatch, cli_argv):
+        """The counterpart: the finding, not merely running it, is what fails."""
+        monkeypatch.setattr(bump_docs, "check_pinned_subcommands_against",
+                            lambda *a, **kw: [])
+        cli_argv("bump_docs", "--tools", "9.9.9", "--dry-run")
+        bump_docs.main()  # must not SystemExit
+
+    def test_the_check_actually_runs_on_the_tools_line(self, monkeypatch,
+                                                       capsys, cli_argv):
+        """Pins the `if line == "tools"` call site AND the not-silent summary.
+
+        Renaming that guard left the whole suite green before this existed.
+        """
+        called = []
+        monkeypatch.setattr(bump_docs, "check_pinned_subcommands_against",
+                            lambda *a, **kw: called.append(1) or [])
+        cli_argv("bump_docs", "--tools", "9.9.9", "--dry-run")
+        bump_docs.main()
+        assert called, "the tools line did not invoke the pin capability check"
+        assert "da-tools pin capability" in capsys.readouterr().out
+
+    def test_real_corpus_is_not_empty(self):
+        """A blind extractor must not read as 'checked, all clean'.
+
+        `test_head_tree_is_clean` passes just as happily when
+        `iter_pinned_invocations` returns nothing at all, so on its own it
+        cannot tell a clean tree from a check that scanned zero commands.
+        """
+        import check_doc_datools_cmds as gate
+
+        docs = gate.pin_capability_doc_files(bump_docs.REPO_ROOT)
+        inv = gate.iter_pinned_invocations(docs, bump_docs.REPO_ROOT)
+        assert inv, ("the docs pin da-tools images and document subcommands "
+                     "against them; extracting none means the extractor is "
+                     "blind, not that the tree is clean")

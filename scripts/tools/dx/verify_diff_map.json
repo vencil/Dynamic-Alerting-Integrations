@@ -338,6 +338,9 @@
   "scripts/tools/lint/check_devrules_size.py": [
    "tests/lint/test_check_devrules_size.py"
   ],
+  "scripts/tools/lint/check_doc_datools_cmds.py": [
+   "tests/dx/test_bump_docs.py"
+  ],
   "scripts/tools/lint/check_doc_freshness.py": [
    "tests/lint/test_check_doc_freshness.py"
   ],
@@ -834,7 +837,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "e392c325029280a523dc9189b15300790bb0510da72ee3f1b69650d63150f579",
+ "source_digest": "57bccf33427c4ea98c36bdc654f0dc3c989676dfd80e51a547892868c59924dd",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1455,6 +1458,7 @@
    "tests/ops/test_ci_baseline_substitution.py"
   ],
   "components/da-tools/app/QUICKSTART.md": [
+   "tests/dx/test_bump_docs.py",
    "tests/lint/test_check_doc_datools_cmds.py",
    "tests/ops/test_ci_path_filter_coverage.py"
   ],
@@ -3057,6 +3061,7 @@
   ],
   "tests/dx/test_bump_docs.py": [
    "tests/dx/test_verify_diff.py",
+   "tests/lint/test_check_doc_datools_cmds.py",
    "tests/shared/test_dry_run_no_write.py"
   ],
   "tests/dx/test_coverage_delta.py": [
@@ -3229,6 +3234,9 @@
   ],
   "tests/lint/test_check_devcontainer_dep_parity.py": [
    "tests/ops/test_ci_path_filter_coverage.py"
+  ],
+  "tests/lint/test_check_doc_datools_cmds.py": [
+   "tests/dx/test_bump_docs.py"
   ],
   "tests/lint/test_check_hub_badge_drift.py": [
    "tests/dx/test_verify_diff.py"

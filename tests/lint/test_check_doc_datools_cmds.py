@@ -860,3 +860,325 @@ class TestPositionCheckDoesNotFireOutsideItsDomain:
             '  -v "$(pwd)/conf.d:/etc/config:ro"',
             "  ghcr.io/vencil/da-tools:v2.9.0 validate-config"))
         assert mod.check_writable_mount_has_user([p], tmp_path) == []
+
+
+class TestPinnedInvocationCapability:
+    """#1534 — documented pinned invocations vs the image's capability set.
+
+    Direction (1): the check runs inside `dx/bump_docs.py` at the moment it
+    repoints a pin. These tests grade the extractor + oracle that bump_docs
+    calls; the wiring itself is pinned in tests/dx/test_bump_docs.py.
+
+    Intentional-break dogfood (testing-playbook §v2.8.0 "Intentional-break
+    dogfood"): each test below whose name states a guarantee was verified by
+    mutating away the code path it names and confirming it goes red. The one
+    mutation the names do NOT give you is the comparison itself — turn
+    `inv.subcommand not in command_map_keys` into `False` and the flagging
+    tests must fail; if they do not, this class is decorative.
+
+      python3 -m pytest tests/lint/test_check_doc_datools_cmds.py \
+              tests/dx/test_bump_docs.py -q
+    """
+
+    # subcommand -> the script COMMAND_MAP maps it to, mirroring the real pair.
+    CAPS = {"validate": "validate_config.py",
+            "cutover": "cutover.py",
+            "threshold-govern": "threshold_govern.py"}
+    # ...and the scripts build.sh actually copies into the image.
+    SHIPPED = {"validate_config.py", "cutover.py", "threshold_govern.py"}
+
+    def _issues(self, tmp_path, body, caps=None, shipped=None):
+        return mod.check_pinned_subcommands_against(
+            self.CAPS if caps is None else caps,
+            self.SHIPPED if shipped is None else shipped,
+            [_doc(tmp_path, body)], tmp_path)
+
+    # --- the defect this exists to catch ---
+    def test_flags_subcommand_the_pinned_image_cannot_run(self, tmp_path):
+        issues = self._issues(tmp_path, _FENCE.format(
+            "docker run ghcr.io/vencil/da-tools:v2.9.0 frobnicate"))
+        assert len(issues) == 1
+        assert issues[0].check == "datools-pin-capability"
+        assert "frobnicate" in issues[0].message
+        assert "v2.9.0" in issues[0].message
+
+    def test_passes_subcommand_the_image_ships(self, tmp_path):
+        assert self._issues(tmp_path, _FENCE.format(
+            "docker run ghcr.io/vencil/da-tools:v2.9.0 validate")) == []
+
+    # --- declared boundary: only tagged pins are judgeable (#1534) ---
+    def test_skips_latest_tag(self, tmp_path):
+        assert self._issues(tmp_path, _FENCE.format(
+            "docker run ghcr.io/vencil/da-tools:latest frobnicate")) == []
+
+    def test_skips_untagged_image(self, tmp_path):
+        assert self._issues(tmp_path, _FENCE.format(
+            "docker run ghcr.io/vencil/da-tools frobnicate")) == []
+
+    # --- shapes that assert nothing, and so must not be graded ---
+    def test_skips_placeholder_operand(self, tmp_path):
+        assert self._issues(tmp_path, _FENCE.format(
+            "docker run ghcr.io/vencil/da-tools:v2.9.0 <command>")) == []
+
+    def test_skips_bare_image_and_help(self, tmp_path):
+        assert self._issues(tmp_path, _FENCE.format(
+            "docker run ghcr.io/vencil/da-tools:v2.9.0 --help")) == []
+
+    def test_ignores_prose_outside_a_fence(self, tmp_path):
+        assert self._issues(
+            tmp_path,
+            "Run `docker run ghcr.io/vencil/da-tools:v2.9.0 frobnicate`.\n") == []
+
+    def test_respects_inline_ignore(self, tmp_path):
+        assert self._issues(tmp_path, _FENCE.format(
+            "docker run ghcr.io/vencil/da-tools:v2.9.0 frobnicate  "
+            "# datools-cmd-ignore")) == []
+
+    # --- precision: the reused `_image_index` must survive here too ---
+    def test_mount_path_containing_da_tools_is_not_the_image(self, tmp_path):
+        """`-v $(pwd)/da-tools-out:/data/output` must not be read as the image.
+
+        Taking the first da-tools-shaped TOKEN instead of the first bare
+        OPERAND makes the mount spec the image, so the "subcommand" becomes the
+        real image reference — a finding whose message names a token that is
+        not a command at all.
+        """
+        issues = self._issues(tmp_path, _FENCE.format(
+            "docker run --rm -v $(pwd)/da-tools-out:/data/output "
+            "ghcr.io/vencil/da-tools:v2.9.0 frobnicate"))
+        assert len(issues) == 1
+        assert "frobnicate" in issues[0].message
+        assert "ghcr.io" not in issues[0].message.split("runs '")[1]
+
+    def test_skips_block_with_no_operand_at_all(self, tmp_path):
+        """`_image_index` returning None must skip, not index into an empty list.
+
+        Reachable shape: every token is a flag or a flag's value, so there is
+        no bare operand to be the image — here the only mention of da-tools is
+        inside the mount path of a truncated example. Without the guard this
+        raises IndexError during a release bump.
+        """
+        assert self._issues(tmp_path, _FENCE.format(
+            "docker run --rm -v $(pwd)/da-tools-out:/data/output")) == []
+
+    def test_reads_blockquoted_fence(self, tmp_path):
+        body = ("> ```bash\n"
+                "> docker run ghcr.io/vencil/da-tools:v2.9.0 frobnicate\n"
+                "> ```\n")
+        assert len(self._issues(tmp_path, body)) == 1
+
+    def test_reads_tilde_fence(self, tmp_path):
+        body = ("~~~bash\n"
+                "docker run ghcr.io/vencil/da-tools:v2.9.0 frobnicate\n"
+                "~~~\n")
+        assert len(self._issues(tmp_path, body)) == 1
+
+    def test_follows_line_continuation_to_the_subcommand(self, tmp_path):
+        body = _FENCE.format(
+            "docker run --rm \\\n"
+            "  -v $(pwd)/conf.d:/conf.d \\\n"
+            "  ghcr.io/vencil/da-tools:v2.9.0 \\\n"
+            "  frobnicate")
+        issues = self._issues(tmp_path, body)
+        assert len(issues) == 1
+        assert "frobnicate" in issues[0].message
+
+    def test_reports_the_line_the_command_starts_on(self, tmp_path):
+        body = ("intro\n\n" + _FENCE.format(
+            "docker run ghcr.io/vencil/da-tools:v2.9.0 frobnicate"))
+        assert self._issues(tmp_path, body)[0].line == 4
+
+    # --- registered but never shipped (#1044 shape) ---
+    def test_flags_command_registered_but_not_in_tool_files(self, tmp_path):
+        """Dispatched is not the same as runnable.
+
+        `check_image_pin_capability.evaluate` asks both questions of a
+        workload; asking only COMMAND_MAP here would report a doc as covered
+        while the customer's container dies on a missing file.
+        """
+        issues = self._issues(
+            tmp_path,
+            _FENCE.format("docker run ghcr.io/vencil/da-tools:v2.9.0 cutover"),
+            shipped={"validate_config.py"})   # cutover.py not copied in
+        assert len(issues) == 1
+        assert issues[0].check == "datools-pin-not-shipped"
+        assert "cutover.py" in issues[0].message
+        assert "TOOL_FILES" in issues[0].message
+
+    def test_unknown_command_wins_over_not_shipped(self, tmp_path):
+        """A command that is not in COMMAND_MAP has no script to ship.
+
+        Reporting both would name a remedy (add X to TOOL_FILES) for a file
+        that does not exist.
+        """
+        issues = self._issues(
+            tmp_path,
+            _FENCE.format("docker run ghcr.io/vencil/da-tools:v2.9.0 nope"),
+            shipped=set(self.SHIPPED))
+        assert [i.check for i in issues] == ["datools-pin-capability"]
+
+    # --- fail-closed branches (both were the regression class flagged by the
+    #     coverage bot on the previous ticket in this line) ---
+    def test_empty_capability_set_is_refused(self, tmp_path):
+        """An oracle that knows nothing must raise, not grade everything."""
+        with pytest.raises(ValueError, match="empty COMMAND_MAP"):
+            self._issues(tmp_path, _FENCE.format(
+                "docker run ghcr.io/vencil/da-tools:v2.9.0 validate"),
+                caps={})
+
+    def test_empty_tool_files_is_refused(self, tmp_path):
+        """Half an oracle is still an oracle that knows nothing.
+
+        An empty TOOL_FILES would make EVERY dispatched command look
+        unshipped — a wall of findings that reads as a broken parser, not a
+        broken build.sh — so it is refused at the door like the empty map.
+        """
+        with pytest.raises(ValueError, match="empty COMMAND_MAP"):
+            self._issues(tmp_path, _FENCE.format(
+                "docker run ghcr.io/vencil/da-tools:v2.9.0 validate"),
+                shipped=set())
+
+    def test_unreadable_doc_fails_closed(self, tmp_path, monkeypatch):
+        """A doc that cannot be read must not silently leave the corpus.
+
+        ⚠️ monkeypatch, not `chmod`: the dev container runs as root (#1264),
+        so a chmod-based version of this test passes vacuously — it would go
+        green locally while never exercising the branch.
+        """
+        f = _doc(tmp_path, _FENCE.format(
+            "docker run ghcr.io/vencil/da-tools:v2.9.0 validate"))
+
+        def _boom(self, *a, **kw):
+            raise OSError("simulated unreadable file")
+
+        monkeypatch.setattr(Path, "read_text", _boom)
+        with pytest.raises(RuntimeError, match="could not be read"):
+            mod.check_pinned_subcommands_against(
+                self.CAPS, self.SHIPPED, [f], tmp_path)
+
+    # --- the corpus must stay the same one the standalone gate scans ---
+    def test_corpus_matches_the_gate_corpus(self):
+        from_helper = set(mod.pin_capability_doc_files(REPO_ROOT))
+        gate_docs = set(mod._doc_files(REPO_ROOT / "docs"))
+        assert gate_docs <= from_helper
+        assert from_helper - gate_docs == {
+            REPO_ROOT / rel for rel in mod._EXTRA_DOC_FILES
+            if (REPO_ROOT / rel).is_file()}
+
+
+class TestPinnedInvocationPrecision:
+    """#1534 round 2 — the false-positive and fail-open classes an adversarial
+    review found after the first cut.
+
+    Every case here is a doc that is ALREADY CORRECT. For a release gate a
+    false red is the expensive direction: it blocks a good release and the only
+    escape is editing a customer-facing file to add a lint pragma.
+    """
+
+    CAPS = {"validate": "validate_config.py", "cutover": "cutover.py"}
+    SHIPPED = {"validate_config.py", "cutover.py"}
+
+    def _issues(self, tmp_path, cmd):
+        return mod.check_pinned_subcommands_against(
+            self.CAPS, self.SHIPPED,
+            [_doc(tmp_path, _FENCE.format(cmd))], tmp_path)
+
+    @pytest.mark.parametrize("cmd", [
+        "docker run ghcr.io/vencil/da-tools:v2.9.0 validate; echo done",
+        "OUT=$(docker run ghcr.io/vencil/da-tools:v2.9.0 validate)",
+        'docker run ghcr.io/vencil/da-tools:v2.9.0 "validate"',
+        "docker run ghcr.io/vencil/da-tools:v2.9.0 validate|jq .",
+        "docker run ghcr.io/vencil/da-tools:v2.9.0 validate | jq .",
+        "docker run ghcr.io/vencil/da-tools:v2.9.0 validate && echo ok",
+    ])
+    def test_shell_punctuation_does_not_make_a_valid_command_unknown(
+            self, tmp_path, cmd):
+        """⚠️ `validate|jq` ends in `q` — rstrip cannot fix it, only a split."""
+        assert self._issues(tmp_path, cmd) == [], cmd
+
+    def test_punctuation_does_not_hide_a_real_finding(self, tmp_path):
+        """The counterpart: cleaning the token must not swallow the defect."""
+        assert len(self._issues(
+            tmp_path,
+            "docker run ghcr.io/vencil/da-tools:v2.9.0 frobnicate; echo x")) == 1
+
+    def test_entrypoint_override_is_not_graded(self, tmp_path):
+        """After `--entrypoint`, the operands are that program's argv."""
+        assert self._issues(
+            tmp_path,
+            "docker run --rm --entrypoint /bin/sh "
+            "ghcr.io/vencil/da-tools:v2.9.0 -c 'ls /opt/da-tools'") == []
+
+    def test_entrypoint_equals_form_is_not_graded(self, tmp_path):
+        """`--entrypoint=<value>` is the same flag; docker accepts both.
+
+        Matching only the space-separated spelling let this shape through and
+        graded the shell's argv — measured: reported `runs 'ls'`.
+        """
+        assert self._issues(
+            tmp_path,
+            "docker run --rm --entrypoint=/bin/sh "
+            "ghcr.io/vencil/da-tools:v2.9.0 -c 'ls /opt/da-tools'") == []
+
+    def test_entrypoint_after_the_image_still_grades_the_subcommand(
+            self, tmp_path):
+        """Only flags BEFORE the image are docker's; after it they are argv.
+
+        Scanning the whole token list skipped these blocks, which is fail-OPEN:
+        the entrypoint is untouched, so the subcommand is judgeable and a bogus
+        one must still be reported. Measured: reported 0 before this.
+        """
+        issues = self._issues(
+            tmp_path,
+            "docker run --rm ghcr.io/vencil/da-tools:v2.9.0 "
+            "frobnicate --entrypoint x")
+        assert len(issues) == 1
+        assert "frobnicate" in issues[0].message
+
+    def test_tag_without_v_prefix_is_still_checked(self, tmp_path):
+        """bump_docs rewrites `da-tools:v?<semver>`; the check must match both.
+
+        Requiring the `v` left `:2.9.0` repointed by every release yet invisible
+        here — a pin that is bumped but never verified.
+        """
+        assert len(self._issues(
+            tmp_path,
+            "docker run ghcr.io/vencil/da-tools:2.9.0 frobnicate")) == 1
+
+
+class TestPinCapabilityCorpusFailsClosed:
+    """The corpus must never shrink silently — a smaller corpus reads as clean.
+
+    ⛔ Neither `components/da-tools/app/QUICKSTART.md` nor `try-local/README.md`
+    is a bump-rule target, so if one is renamed nothing else in the release path
+    notices. `run()` already reports that case; this corpus builder used to drop
+    it with an `if …is_file()` filter, which is the fail-open half.
+    """
+
+    def _tree(self, tmp_path):
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "docs" / "a.md").write_text("x\n", encoding="utf-8")
+        for rel in mod._EXTRA_DOC_FILES:
+            p = tmp_path / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text("x\n", encoding="utf-8")
+        return tmp_path
+
+    def test_complete_tree_is_accepted(self, tmp_path):
+        root = self._tree(tmp_path)
+        got = mod.pin_capability_doc_files(root)
+        assert len(got) == 1 + len(mod._EXTRA_DOC_FILES)
+
+    def test_a_renamed_landing_page_raises(self, tmp_path):
+        root = self._tree(tmp_path)
+        victim = root / mod._EXTRA_DOC_FILES[0]
+        victim.rename(victim.with_name("renamed.md"))
+        with pytest.raises(RuntimeError, match="_EXTRA_DOC_FILES"):
+            mod.pin_capability_doc_files(root)
+
+    def test_empty_docs_tree_raises(self, tmp_path):
+        """#1790's shape: 'scanned nothing' must not print as 'all clean'."""
+        root = self._tree(tmp_path)
+        (root / "docs" / "a.md").unlink()
+        with pytest.raises(RuntimeError, match="no markdown"):
+            mod.pin_capability_doc_files(root)

@@ -75,6 +75,16 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_toolcount import count_by_subdir, count_scope  # noqa: E402
 from _version_patterns import DOCS_TREE_SYMLINK_ALIASES  # noqa: E402
+# #1534: the capability oracle and the doc extractor both already exist —
+# `_lint_helpers` reads the working tree's COMMAND_MAP (what the tag being cut
+# will ship), and check_doc_datools_cmds owns the fenced-block / docker-run /
+# `_image_index` extraction. Importing beats a fourth copy of either.
+from _lint_helpers import parse_build_sh_tools, parse_command_map  # noqa: E402
+from check_doc_datools_cmds import (  # noqa: E402
+    check_pinned_subcommands_against,
+    iter_pinned_invocations,
+    pin_capability_doc_files,
+)
 
 # ---------------------------------------------------------------------------
 # Repo root detection
@@ -220,7 +230,15 @@ def _build_tools_rules():
     # docker wrapper — flags, env, argument order — and the version is
     # incidental to it; keeping the two in step is the same service this tool
     # performs for every README that quotes a pinned image.
+    #
+    # ⛔ QUICKSTART.md is here because the #1534 check GRADES it: it is in
+    # `check_doc_datools_cmds._EXTRA_DOC_FILES`, so the subcommand it teaches is
+    # judged against the tag being cut — while nothing was repointing its pin.
+    # A doc that is graded against vNEW but frozen at vOLD is the worst of both:
+    # the customer copies a stale image, and the grade it passes is about a
+    # different one. Graded and bumped have to be the same set.
     for f in ["components/da-tools/README.md",
+              "components/da-tools/app/QUICKSTART.md",
               "tools/portal/tests/cli-playground-engine.test.ts"]:
         rules.append({
             "file": f,
@@ -2344,6 +2362,99 @@ def _scope_empty_note(line, all_rules, scope):
             f"was NOT checked. Widen or drop --scope to cover it.")
 
 
+def _check_datools_pin_capability(new_ver: str) -> int:
+    """Documented da-tools invocations must be runnable by the tag being cut.
+
+    Direction (1) of #1534: check AT THE MOMENT the pin is rewritten. Of the
+    rules in `_build_tools_rules()` that repoint
+    `ghcr.io/vencil/da-tools:vX.Y.Z`, only the `k8s/03-monitoring/cronjob-*`
+    ones are inside the scan surface of check_image_pin_capability.py — the
+    rest move pins through prose that no capability gate reads. The premise is
+    asserted by
+    tests/dx/test_bump_docs.py::TestDatoolsPinCapability::test_the_gap_this_check_closes_still_exists,
+    which fails if that stops being true.
+
+    ⛔ The oracle is the WORKING TREE's `entrypoint.py`, not
+    `capabilities_for_tag("tools/v<new_ver>")`. That function starts with
+    `tag_exists()`, and at release wrap the tag being bumped to has not been
+    cut yet — so asking it would raise `CapabilityError` on every single
+    release, i.e. the check would be structurally impossible to pass. The
+    working tree IS what that tag will contain, which is exactly the question.
+    `capabilities_for_tag` remains the right reader for a pin that points at an
+    EXISTING tag — that is the other gate's job, not this one's.
+
+    ⚠️ Reads the pins as they stand, which under `--check` / `--dry-run` is
+    still the OLD tag. That is deliberate and not a bug: the selector is "this
+    block pins SOME da-tools version", and after the bump every one of them is
+    `v<new_ver>` regardless. Keying on the old tag value would make the check
+    pass in dry-run and fail for real, or vice versa.
+    """
+    # Both halves of "can the image run this": COMMAND_MAP says it dispatches,
+    # TOOL_FILES says the script is actually copied in. See
+    # check_pinned_subcommands_against for why asking only the first is the
+    # #1044 shape.
+    try:
+        command_map = parse_command_map()
+        tool_files = set(parse_build_sh_tools())
+    except OSError as exc:
+        print(f"\n❌ could not read the da-tools entrypoint / build.sh to "
+              f"determine what v{new_ver} will be able to run: {exc}",
+              file=sys.stderr)
+        return 1
+    if not command_map or not tool_files:
+        print(f"\n❌ parsed 0 COMMAND_MAP entries and/or 0 TOOL_FILES from the "
+              f"da-tools sources — refusing to grade documented invocations "
+              f"against an empty capability set (the parser is out of step "
+              f"with the source layout).", file=sys.stderr)
+        return 1
+    # ⛔ A corpus that lost files, or collapsed to nothing, raises rather than
+    # returning fewer invocations — otherwise "checked, all clean" and "checked
+    # almost nothing" print identically (#1790's lesson, applied here).
+    try:
+        doc_files = pin_capability_doc_files(REPO_ROOT)
+        invocations = iter_pinned_invocations(doc_files, REPO_ROOT)
+    except (RuntimeError, OSError) as exc:
+        print(f"\n❌ could not assemble the documented-invocation corpus: "
+              f"{exc}", file=sys.stderr)
+        return 1
+    # ⛔ Zero extracted invocations is a FAILURE, not a pass. `doc_files` being
+    # non-empty proves the corpus was found, not that anything was read out of
+    # it: a fence style the extractor stops recognising, or a docs reorg that
+    # moves every `docker run` example, both land here — and the release would
+    # print a green tick over a check that graded nothing. Same rule as
+    # `capabilities_for_tag` refusing an empty capability set, and as #1790
+    # making an empty frontmatter corpus rc 2.
+    if not invocations:
+        print(f"\n❌ extracted 0 documented da-tools invocations from "
+              f"{len(doc_files)} doc(s) — refusing to report this bump as "
+              f"checked. Either the extractor stopped recognising the docs' "
+              f"command shape (see iter_pinned_invocations in "
+              f"check_doc_datools_cmds.py), or the docs genuinely stopped "
+              f"pinning any image — if it is the latter, delete this check "
+              f"rather than letting it pass over nothing.", file=sys.stderr)
+        return 1
+    issues = check_pinned_subcommands_against(
+        command_map, tool_files, doc_files, REPO_ROOT)
+    # ⛔ Say what was checked even when nothing is wrong. Without this line a
+    # silently blind extractor and a genuinely clean tree produce the same
+    # output — which is the failure mode this whole check exists to prevent, so
+    # it must not be how the check reports itself.
+    print(f"  ✅ da-tools pin capability: {len(invocations)} documented "
+          f"invocation(s) across {len(doc_files)} doc(s) checked against "
+          f"v{new_ver}")
+    for it in issues:
+        print(f"  ❌ [{it.check}] {it.file}:{it.line} — {it.message}",
+              file=sys.stderr)
+    if issues:
+        print(f"\n❌ {len(issues)} documented da-tools invocation(s) name a "
+              f"subcommand that v{new_ver} does not dispatch. The pins were "
+              f"repointed at v{new_ver}, so shipping this leaves the docs "
+              f"teaching a command the released image answers with "
+              f"`Unknown command`. Fix the doc, or ship the command.",
+              file=sys.stderr)
+    return len(issues)
+
+
 def main():
     """CLI entry point: 版號一致性管理工具."""
     try_utf8_stdout()
@@ -2864,6 +2975,7 @@ def main():
     dead_rules = 0
     missing_rules = 0
     glob_broken = 0
+    pin_capability_issues = 0
 
     for line, new_ver in requested:
 
@@ -2894,6 +3006,9 @@ def main():
             elif status in ("GLOB-EMPTY", "GLOB-DEAD"):
                 glob_broken += 1
 
+        if line == "tools":
+            pin_capability_issues += _check_datools_pin_capability(new_ver)
+
     # MISSING 與 DEAD 在這裡同等對待，理由一致：explicit bump 是 release 動作，
     # 「這條規則沒 bump 到任何東西」不論成因是 pattern 撈不到（DEAD）還是檔案
     # 不在（MISSING），結果都是某個版號引用被留在舊版本、而 release 流程回報成功。
@@ -2914,7 +3029,7 @@ def main():
               f"A release bump ran with those trees UNTOUCHED — fix "
               f"glob_dir/glob_pattern or the \"pattern\" in _build_*_rules().")
 
-    if dead_rules or missing_rules or glob_broken:
+    if dead_rules or missing_rules or glob_broken or pin_capability_issues:
         sys.exit(EXIT_VIOLATION)
 
     if args.check:

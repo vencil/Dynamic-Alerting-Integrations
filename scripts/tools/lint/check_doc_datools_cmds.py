@@ -517,6 +517,233 @@ def check_writable_mount_has_user(doc_files: List[Path],
     return issues
 
 
+# --- pinned invocations, for dx/bump_docs.py (#1534) ------------------------
+#
+# `bump_docs --tools X.Y.Z` mechanically repoints every documented
+# `ghcr.io/vencil/da-tools:vX.Y.Z` pin. Only the `k8s/03-monitoring/cronjob-*`
+# targets land inside the scan surface of check_image_pin_capability.py
+# (`k8s/**` + `helm/*`); the rest rewrite pins in prose that NOTHING checks for
+# capability — so a doc could keep teaching `docker run ...:vNEW <subcommand>`
+# for a subcommand the new image does not dispatch, and every gate stays green.
+# These helpers give bump_docs the missing oracle. List the split with:
+#
+#   python3 -c "import importlib.util,pathlib; s=importlib.util.spec_from_file_location('b',pathlib.Path('scripts/tools/dx/bump_docs.py')); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); \
+#     print([r.get('glob_dir', r['file']) for r in m._build_tools_rules() if 'ghcr\\\\.io/vencil/da-tools:v?' in r.get('pattern','')])"
+#
+# ⛔ This is deliberately NOT a new standalone gate over every documented
+# subcommand. That shape was prototyped and rejected as too FP-heavy (#405) —
+# see the Scope decision in this module's docstring. What keeps the precision
+# here is the narrowing, not the capability lookup: only fenced blocks, only
+# `docker run`, and only the first bare operand AFTER the image as located by
+# `_image_index`.
+
+# The image reference must carry a real `:vX.Y.Z`. `:latest` and untagged
+# mentions are OUT OF SCOPE by declaration, not by oversight: they name no tag,
+# so there is no capability set to check them against (#1534 records this as a
+# separate problem).
+# ⛔ `v?`, matching the bump rules' own `da-tools:v?<SEMVER>` pattern. Requiring
+# the `v` left `…/da-tools:2.9.0` rewritten by every release but invisible to
+# this check — the exact "bumped but never verified" gap this exists to close.
+_PINNED_TAG_RE = re.compile(
+    r"da-tools:(v?[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?)")
+
+# Shell punctuation that can abut the subcommand token. No da-tools subcommand
+# contains any of these, so cutting at the first one is lossless.
+_SHELL_META_RE = re.compile(r"[;|&()<>]")
+
+
+class PinnedInvocation(NamedTuple):
+    file: str
+    line: int
+    tag: str
+    subcommand: str
+
+
+def iter_pinned_invocations(doc_files: List[Path],
+                            repo_root: Path = REPO_ROOT
+                            ) -> List[PinnedInvocation]:
+    """Every `docker run <da-tools:vX.Y.Z> <subcommand>` in a fenced block."""
+    found: List[PinnedInvocation] = []
+    for f in doc_files:
+        # ⛔ NOT `except OSError: continue`. `check_datools_subcommands` above
+        # can afford that (it is one of several rules over the same corpus, and
+        # a skipped file merely under-reports one advisory check). Here the
+        # caller is a RELEASE gate whose whole claim is "every documented
+        # invocation was checked" — a file that silently drops out turns that
+        # claim false while the release reports success. Fail closed instead.
+        try:
+            lines = f.read_text(encoding="utf-8",
+                                errors="ignore").splitlines()
+        except OSError as exc:
+            raise RuntimeError(
+                f"{f} could not be read, so the invocations it documents "
+                f"cannot be checked against the tag being released. Refusing "
+                f"to report a clean result over a corpus that lost a file."
+            ) from exc
+        rel = str(f.relative_to(repo_root)).replace("\\", "/")
+        in_code = False
+        i = 0
+        while i < len(lines):
+            line = _unquote_md(lines[i])
+            if _is_fence(line):
+                in_code = not in_code
+                i += 1
+                continue
+            if not in_code or not _DOCKER_RUN_RE.search(line):
+                i += 1
+                continue
+            start = i
+            buf = [line]
+            while (buf[-1].rstrip().endswith("\\")
+                   and i + 1 < len(lines)
+                   and not _is_fence(_unquote_md(lines[i + 1]))):
+                i += 1
+                buf.append(_unquote_md(lines[i]))
+            blk = "\n".join(buf)
+            i += 1
+            if INLINE_IGNORE in blk:
+                continue
+            flat = " ".join(blk.split())
+            if not _DATOOLS_IMAGE_RE.search(flat):
+                continue
+            toks = [t for t in _normalise(flat).split() if t != "\\"]
+            k = _image_index(toks)
+            if k is None:
+                continue
+            # ⛔ `--entrypoint` replaces the program, so what follows the image
+            # is that program's argv, not a da-tools subcommand. Grading it
+            # reports a "subcommand" the CLI was never asked to run — a red on
+            # a correct example, which for a release gate is the costly
+            # direction. Measured: `--entrypoint /bin/sh … -c 'ls'` reported
+            # `runs 'ls'`.
+            #
+            # ⛔ Two things the first version of this got wrong, both measured:
+            #   * `in toks` missed `--entrypoint=/bin/sh`. Docker accepts the
+            #     `=` form, and the un-skipped block then graded the shell's
+            #     argv — the same 誤紅 this skip exists to prevent, via a
+            #     spelling it did not cover.
+            #   * Scanning the WHOLE token list also skipped blocks where
+            #     `--entrypoint` appears AFTER the image, i.e. as an argument
+            #     handed to da-tools rather than a docker flag. Docker only
+            #     applies flags before the image, so such a block has a normal
+            #     entrypoint and its subcommand is judgeable; skipping it was
+            #     fail-OPEN (`… :v2.9.0 frobnicate --entrypoint x` reported 0).
+            # Hence: only the tokens BEFORE the image, and both spellings.
+            if any(t == "--entrypoint" or t.startswith("--entrypoint=")
+                   for t in toks[:k]):
+                continue
+            tag_m = _PINNED_TAG_RE.search(toks[k])
+            if tag_m is None:
+                continue
+            sub = next((t for t in toks[k + 1:] if not t.startswith("-")), None)
+            # ⛔ Cut at the first shell metacharacter, then unquote — the same
+            # over-reporting concern `_mounts` documents: a guard that
+            # over-reports goes red on examples that are already correct. A
+            # subcommand is routinely followed by `;`, `| jq`, or the closing
+            # `)` of `$(…)`, and may be quoted. ⚠️ rstrip alone is not enough:
+            # `validate|jq` ends in `q`, so the pipe has to be SPLIT on, not
+            # stripped. All four shapes reported a valid `validate` as unknown
+            # before this; no real subcommand contains any of these characters.
+            if sub is not None:
+                sub = _SHELL_META_RE.split(sub, 1)[0].strip("\"'").rstrip("\\,")
+            # No operand at all is `--help` or a bare image — nothing claimed,
+            # nothing to check. A placeholder (`<command>`) is a deliberate
+            # "fill this in", not an assertion that the command exists.
+            if not sub or any(c in sub for c in _PLACEHOLDER_CHARS):
+                continue
+            found.append(PinnedInvocation(rel, start + 1, tag_m.group(1), sub))
+    return found
+
+
+def check_pinned_subcommands_against(command_map: Dict[str, str],
+                                     tool_files: Set[str],
+                                     doc_files: List[Path],
+                                     repo_root: Path = REPO_ROOT
+                                     ) -> List[Issue]:
+    """Documented pinned invocations must be RUNNABLE by the image, not merely
+    dispatched by it.
+
+    Two questions, the same pair `check_image_pin_capability.evaluate` asks of a
+    workload, because "can this image run this" has the same answer here:
+
+      1. is the subcommand in COMMAND_MAP?  (else `Unknown command`)
+      2. is the script it maps to in build.sh TOOL_FILES?  (else the command
+         dispatches and the container dies on a missing file)
+
+    ⛔ Asking only (1) is the #1044 shape — registered but never copied into the
+    image. It reads as covered while the customer's run fails at a different
+    layer. The two are separate findings because the fixes differ: (1) is the
+    doc naming the wrong command, (2) is build.sh not shipping a real one.
+
+    ⛔ An empty COMMAND_MAP or TOOL_FILES is refused rather than reported clean
+    — an oracle that knows nothing marks every invocation bad or (if inverted)
+    every invocation fine, and both are indistinguishable from "no findings" at
+    the call site. `capabilities_for_tag` refuses the same way, for the reason.
+    """
+    if not command_map or not tool_files:
+        raise ValueError(
+            "refusing to check documented invocations against an empty "
+            "COMMAND_MAP and/or TOOL_FILES — the capability oracle is the "
+            "thing being trusted here, and an empty one silently grades "
+            "everything."
+        )
+    issues: List[Issue] = []
+    for inv in iter_pinned_invocations(doc_files, repo_root):
+        script = command_map.get(inv.subcommand)
+        if script is None:
+            issues.append(Issue(
+                "datools-pin-capability", inv.file, inv.line,
+                f"documented `da-tools:{inv.tag}` runs '{inv.subcommand}', "
+                f"which the image does not dispatch (it exits with "
+                f"`Unknown command`). Either the doc names a command that was "
+                f"renamed/removed, or the command is new and this release does "
+                f"not ship it yet."))
+        elif script not in tool_files:
+            issues.append(Issue(
+                "datools-pin-not-shipped", inv.file, inv.line,
+                f"documented `da-tools:{inv.tag}` runs '{inv.subcommand}', "
+                f"which COMMAND_MAP maps to {script} — but that file is NOT in "
+                f"build.sh TOOL_FILES, so it is registered and never copied "
+                f"into the image. The command dispatches and then fails on a "
+                f"missing file. Add {script} to TOOL_FILES, or stop "
+                f"documenting the command."))
+    return issues
+
+
+def pin_capability_doc_files(repo_root: Path = REPO_ROOT) -> List[Path]:
+    """The corpus bump_docs checks: docs/ plus the customer-facing landing pages.
+
+    Deliberately the SAME corpus `run()` uses, so widening one widens the other
+    and the two cannot drift into disagreeing about what "the docs" means.
+
+    ⛔ Missing inputs RAISE; they are never quietly dropped. An earlier version
+    filtered the extras with `if …is_file()` — the exact fail-open shape the ⛔
+    note in `run()` calls "the same silent-gap shape this whole checker exists
+    to close". Renaming a landing page would have shrunk the release check's
+    corpus with no signal, and neither `components/da-tools/app/QUICKSTART.md`
+    nor `try-local/README.md` is a bump-rule target, so nothing else would have
+    noticed. The empty-`docs/` floor is the #1790 lesson applied here: a corpus
+    that collapsed to nothing must not read as "checked, all clean".
+    """
+    docs = _doc_files(repo_root / "docs")
+    if not docs:
+        raise RuntimeError(
+            f"{repo_root / 'docs'} yielded no markdown — refusing to report "
+            f"documented invocations as clean over an empty corpus."
+        )
+    missing = [rel for rel in _EXTRA_DOC_FILES
+               if not (repo_root / rel).is_file()]
+    if missing:
+        raise RuntimeError(
+            "listed in _EXTRA_DOC_FILES but not found: "
+            + ", ".join(missing)
+            + ". Point the tuple at each file's current path (if it moved, "
+              "this is a rename — follow it). Dropping the entry instead stops "
+              "that page being checked at all (#1495)."
+        )
+    return docs + [repo_root / rel for rel in _EXTRA_DOC_FILES]
+
+
 def run(repo_root: Path = REPO_ROOT) -> List[Issue]:
     docs = _doc_files(repo_root / "docs")
     # ⛔ A missing entry is reported, never silently skipped. The previous
