@@ -349,10 +349,11 @@ repos:
         entry: python3 -X utf8 scripts/tools/dx/verify_diff.py --check
         language: python
         pass_filenames: false
-        # 觸發面須對齊 build_map 的輸入（build_module_index 掃 scripts/** +
-        # components/da-tools/app/** + tests/**）：映射結果同時取決於 test 檔
-        # 與這些路徑存在與否。窄於此 → 只改 scripts/** 的 commit 可能讓某個
-        # test 檔映射不到卻不觸發本 hook，只在 CI 尾端才紅。
+        # 觸發面是 build_module_index 掃的三個根（scripts/** +
+        # components/da-tools/app/** + tests/**）。test 檔以文字引用的其他
+        # tracked 路徑（k8s/、helm/…）不在觸發面內：只刪那類檔的 commit 可能
+        # 改變 --check 的判定而本 hook 不跑，由 CI 全量 pytest 裡的
+        # test_repo_check_is_green 攔。
         files: ^(scripts/|components/da-tools/app/|tests/)
         additional_dependencies: ['pyyaml']
 

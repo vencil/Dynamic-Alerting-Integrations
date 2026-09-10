@@ -4,14 +4,14 @@
 給一組 changed files（`git diff --name-only` 輸出），選出「該跑哪些 Python
 測試檔」並附理由。設計結論（方案 (a) 規則映射，owner 拍板）：
 
-  1. **AST import 反查**（主力，~70.8% 覆蓋）：tests/ 下每個 test 檔的靜態
+  1. **AST import 反查**（主力）：tests/ 下每個 test 檔的靜態
      import（含 importlib.import_module / __import__ 常數引數）反查到 repo
      內同名模組（conftest.py 的 sys.path 注入使測試以裸模組名 import）。
-  2. **文字路徑掃描**（+動態載入/subprocess 路徑，回收到 ~86.2%）：test 原始
+  2. **文字路徑掃描**（補動態載入/subprocess 路徑）：test 原始
      碼中出現的 repo 路徑字串（scripts/…、rule-packs/…、helm/… 等）與少數
      特例 basename（Makefile / .pre-commit-config.yaml / tool-registry.yaml
      / mkdocs.yml）。
-  3. **目錄規則 + 例外表**（剩餘 ~35 檔）：verify_diff_rules.yaml 的
+  3. **目錄規則 + 例外表**（前兩層構不到的剩餘檔）：verify_diff_rules.yaml 的
      dir_rules / overrides / safe_ignore / unmapped_test_ok（全帶
      justification 欄位）。
 
