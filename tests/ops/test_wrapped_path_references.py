@@ -240,7 +240,7 @@ sentence and was wrong by half.)
 happens to NAME. Wrap a path somewhere else and a local `verify_diff --base
 origin/main` will not pick this test. That is a dev-loop latency cost, not a
 hole in the same sense: the pre-commit hook only runs `verify_diff --check`
-(map freshness), never selection, and CI's `python-tests-run` runs `pytest
+(test-file reachability), never selection, and CI's `python-tests-run` runs `pytest
 tests/` in full. The rules schema cannot express "any tracked file" —
 `always_run` takes a single `trigger` (`verify_diff.py` validates it) — so
 widening selection would mean changing that schema. Raised by CodeRabbit

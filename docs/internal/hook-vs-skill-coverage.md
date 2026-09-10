@@ -93,7 +93,7 @@ lang: zh
 | **doc 連結 / 雙語** | `doc-links-check` `html-doc-links-check` `structure-check` `bilingual-structure-check` `bilingual-content-check` `bilingual-annotations-check` `includes-sync` | #9 #10 雙語政策、#4 | 連結有效性、ZH/EN 結構同步、CJK 純度 |
 | **JSX / portal** | `design-token-usage` `axe-lite-static` `jsx-i18n-check` `jsx-babel-check` `undefined-tokens-check` `jsx-loader-compat-check` `dist-source-consistency-check` `skip-a11y-justification-check` `playwright-lint` `playwright-rtl-drift-check` `tool-consistency-check` `cli-coverage-check` `build-completeness-check` | #9 i18n、TRK-237/239 | token 合規、a11y、ESM、dist↔source |
 | **平台資料 / routing** | `platform-data-check` `routing-profiles-check` `metric-dictionary-check` | 四層路由、Cardinality | Rule Pack ↔ metric 交叉驗證 |
-| **測試治理** | `flaky-registry-check` `property-coverage-check` `verify-diff-check` | TRK-010、property-pilot、#1185 PR2 | flaky registry schema、coverage drift、source→test 映射保鮮（`verify_diff --check`；原 ⚙️ CI-only，#1185 PR2 接成 hook） |
+| **測試治理** | `flaky-registry-check` `property-coverage-check` `verify-diff-check` | TRK-010、property-pilot、#1185 PR2 | flaky registry schema、coverage drift、source→test 映射檢查（每個 test 檔都映射得到；`verify_diff --check`；原 ⚙️ CI-only，#1185 PR2 接成 hook） |
 | **Python 安全 / 可攜** | `subprocess-timeout-audit`（FATAL）`open-encoding-audit`（warn） | S#74、PR-2.5 | timeout kwarg、encoding kwarg |
 | **Shell 正確性** | `shellcheck`（OSS engine，`--norc --include=SC2006,SC1071,SC1072,SC1073,SC1008`） | lint-policy hybrid | 反引號命令替換：把 `` `cmd` `` 當排版引號寫進雙引號字串，bash 會**執行**它（`recover_index.sh` 曾因此在 diagnose-only 路徑重建 index、清掉 operator 暫存區）。額外的 SC10xx ＋ `--norc` 是 fail-closed 用——ShellCheck 只要對一個檔案**沉默**就零輸出、exit 0，而沉默有三道門：parse 失敗（SC1072/1073）、不支援的 shebang（**SC1071**）、以及 `disable=` 抑制（`.shellcheckrc` 由 `--norc` 擋掉；**檔內 `# shellcheck disable=` 刻意不擋**——那是工具正式的 opt-out 且會出現在 diff 裡，但要知道 `disable=all` 會連 SC2006 一起關掉）。⚠️ SC1008 **不是**門（實測：無法辨識的 shebang 仍會被完整分析、SC2006 照樣觸發），列入僅為防禦未來版本改變行為 |
 | **可達性** | `makefile-targets-check` | — | DX tools ↔ Makefile/pre-commit 可達 |
@@ -141,7 +141,7 @@ lang: zh
 
 > ⚠️ **行尾這條與 §3 的 `open-encoding-audit` hook 是姊妹規則、卻在不同執行點**：忘記 `encoding=` 在 commit 當下就會看到警告（該 hook 是 **warn-only**、exit 0、**不擋 commit**——見 §3 line 85 的 `(warn)` 與 `.pre-commit-config.yaml` 的 `--ci` 註解，殘留約 72 個 latent site 待清理後才會 flip 成 `--strict-open-encoding`）；忘記 `newline=` 則本地完全無聲，要 push 後才從 CI 紅燈得知。兩者掃的是**高度重疊的呼叫站點**（`_violations_in` 的 fail-closed 分支甚至刻意依賴 `encoding=` 的存在當「這是文字串流」的證據）。之所以先落在 pytest 而非 hook，是因為新增 pre-commit hook 有一串連鎖 gate（索引、`files:` regex、雙語 help、exit-code 契約…）；**若這條開始頻繁跳閘，判準同 `verify_diff` 的遷移先例——升為 hook 併進 `check_open_encoding.py`**（該支已有 `--ci` / `--strict` 嚴重度階梯與 `# …: ignore` 慣例可直接複用）。
 
-> **遷移範例**：`verify_diff --check`（source→test 映射保鮮）**曾是本類**（唯一防線在 CI pytest 尾端的 `test_repo_check_is_green`），#1185 PR2 已接成 pre-commit hook `verify-diff-check` → 現屬 §3 hook-enforced，不在此表。判準「CI-only gate 若本地成本低、跳閘頻繁、可用 `files:` 限縮，就升為 hook」見 #1185（TRK-336）。
+> **遷移範例**：`verify_diff --check`（source→test 映射檢查）**曾是本類**（唯一防線在 CI pytest 尾端的 `test_repo_check_is_green`），#1185 PR2 已接成 pre-commit hook `verify-diff-check` → 現屬 §3 hook-enforced，不在此表。判準「CI-only gate 若本地成本低、跳閘頻繁、可用 `files:` 限縮，就升為 hook」見 #1185（TRK-336）。
 
 ---
 

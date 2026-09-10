@@ -175,9 +175,6 @@ overrides:
   - source: "scripts/tools/dx/verify_diff_rules.yaml"
     tests: [tests/dx/test_verify_diff.py]
     justification: 工具自身的規則檔（測試經 DEFAULT_RULES_PATH 常數引用，非字面路徑，掃描構不到）
-  - source: "scripts/tools/dx/verify_diff_map.json"
-    tests: [tests/dx/test_verify_diff.py]
-    justification: 工具自身的預生成映射檔（同上；test_repo_check_is_green 驗其保鮮）
   - source: "docs/internal/dev-rules.md"
     tests: [tests/lint/test_check_dev_rules_enforcement.py]
     justification: live-file dogfood via 模組常數（cdre.DEV_RULES_PATH，test_live_dev_rules_has_no_drift 讀 live 檔）；紀律 #1（外審 F2）

@@ -461,7 +461,7 @@ def test_an_occupied_chained_slot_is_never_overwritten(tmp_path: Path) -> None:
 def test_deleting_a_branch_does_not_require_a_green_docs_build(tmp_path: Path) -> None:
     """Deleting a remote branch must not be gated on ``scripts/ops/pre_push_mkdocs_strict.sh``.
 
-    ⛔ That full path is deliberate, not decoration. `verify_diff_map.json` keys
+    ⛔ That full path is deliberate, not decoration. `verify_diff`'s text_map keys
     test selection on literal paths appearing in the test, and this guard was
     the ONE of the five that appeared only as a bare filename — so a change to
     it fell back to the broad `scripts/ops` rule, which selects five tests, none

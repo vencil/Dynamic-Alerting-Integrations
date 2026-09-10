@@ -26,20 +26,19 @@
 Go 側不做選擇（W6-D 線：build cache 已增量）；本工具只處理 Python 測試選擇。
 tenant-api Go 變更由 dir_rule 先攔到 tests/contract（make contract-test）。
 
-映射檔 `verify_diff_map.json` 預生成進 repo（快速載入）；以 content-hash
-（source_digest）做陳舊偵測，stale 時警告 + 現場重生（不落盤；要落盤用
---write-map）。
+映射每次呼叫時現場從 tests/ 建置，不落盤。它曾預生成進 repo，但那是一份
+每支動到 tests/ 的 PR 都得重生、rebase 必衝突的衍生快取，而唯一的讀者
+就是能現場重建它的本工具。
 
 用法:
   git diff --name-only origin/main | python3 scripts/tools/dx/verify_diff.py --stdin
   python3 scripts/tools/dx/verify_diff.py --base origin/main --run
   python3 scripts/tools/dx/verify_diff.py scripts/tools/dx/bump_docs.py --dry-run
-  python3 scripts/tools/dx/verify_diff.py --write-map     # 重生映射檔（進 repo）
-  python3 scripts/tools/dx/verify_diff.py --check         # 映射保鮮 lint（Phase 2）
+  python3 scripts/tools/dx/verify_diff.py --check         # 每個 test 檔都映射得到（Phase 2）
 
 輸出:
   標準輸出: 選中測試清單 + 命中規則；--json 時為單一 JSON 文件
-  標準錯誤: 警告（stale map / fail-closed）與進度訊息
+  標準錯誤: 警告（fail-closed）與進度訊息
   exit code: 0 = OK；1 = violation（--check 失敗、--run 測試紅、或有外部
   套件未跑且未帶 --ack-external）；2 = caller error
 
@@ -55,7 +54,6 @@ from __future__ import annotations
 
 import argparse
 import ast
-import hashlib
 import json
 import os
 import re
@@ -68,13 +66,9 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _atomic_write import atomic_write_text  # noqa: E402
 
 REPO_ROOT = Path(_THIS_DIR).resolve().parents[2]
-DEFAULT_MAP_PATH = Path(_THIS_DIR) / "verify_diff_map.json"
 DEFAULT_RULES_PATH = Path(_THIS_DIR) / "verify_diff_rules.yaml"
-
-MAP_VERSION = 1
 
 # 掃描時一律跳過的目錄名（fixture .py 是測試資料、不是可 import 的模組來源）
 _SKIP_DIR_NAMES = {
@@ -403,37 +397,16 @@ def collect_test_files(repo_root: Path, tracked=None) -> list:
     return sorted(out)
 
 
-def compute_source_digest(repo_root: Path, module_index: dict,
-                          tracked=None) -> str:
-    """映射輸入的 content-hash：全部 test 檔內容 + 模組索引路徑清單。
-
-    test 檔內容變 → import/文字掃描結果可能變；模組索引路徑集合變
-    （工具改名/新增/移動）→ 反查結果可能變。兩者其一變即視為 stale。
-
-    行尾正規化（CRLF→LF）後才 hash：Windows host working tree 是 CRLF、
-    CI / dev container 是 LF——不正規化的話 host 產的映射檔在 CI 必被
-    誤判 stale（test_repo_check_is_green 會假紅）。
-    """
-    h = hashlib.sha256()
-    for rel in collect_test_files(repo_root, tracked):
-        h.update(rel.encode("utf-8"))
-        h.update((repo_root / rel).read_bytes().replace(b"\r\n", b"\n"))
-    for name in sorted(module_index):
-        for p in module_index[name]:
-            h.update(p.encode("utf-8"))
-    return h.hexdigest()
-
-
 def build_map(repo_root: Path) -> dict:
-    """全量建置映射（import_map / text_map / tests_scanned / digest）。
+    """全量建置映射（import_map / text_map / tests_scanned / parse_errors）。
 
     存在性判定以 git tracked 集合為準（跨平台決定性）；非 git 環境警告後
-    退回檔案系統判定（僅供合成測試 repo 等場景，產物不應 commit）。
+    退回檔案系統判定（僅供合成測試 repo 等場景）。
     """
     tracked = git_tracked_paths(repo_root)
     if tracked is None:
         _warn("非 git 環境（git ls-files 不可用）——存在性判定退回檔案系統，"
-              "建置結果不具跨平台決定性，產物不應 commit")
+              "建置結果不具跨平台決定性")
     module_index = build_module_index(repo_root, tracked)
     import_map: dict = {}
     text_map: dict = {}
@@ -460,47 +433,11 @@ def build_map(repo_root: Path) -> dict:
             text_map.setdefault(ref, set()).add(rel)
 
     return {
-        "version": MAP_VERSION,
-        "source_digest": compute_source_digest(repo_root, module_index, tracked),
         "import_map": {k: sorted(v) for k, v in sorted(import_map.items())},
         "text_map": {k: sorted(v) for k, v in sorted(text_map.items())},
         "tests_scanned": tests_scanned,
         "parse_errors": sorted(parse_errors),
     }
-
-
-def write_map(vmap: dict, path: Path) -> None:
-    """映射 JSON 落盤（atomic、LF、sorted → regen 冪等，diff 乾淨）。"""
-    content = json.dumps(vmap, indent=1, ensure_ascii=False, sort_keys=True) + "\n"
-    atomic_write_text(path, content, newline="\n")
-
-
-def load_or_rebuild_map(repo_root: Path, map_path: Path) -> tuple:
-    """載入映射檔；缺失或 stale → 警告 + 現場重生（不落盤）。
-
-    Returns: (vmap, was_stale: bool)
-    """
-    on_disk = None
-    if map_path.exists():
-        try:
-            with open(map_path, encoding="utf-8") as f:
-                on_disk = json.load(f)
-        except (json.JSONDecodeError, OSError) as e:
-            _warn(f"映射檔損壞（{e}），現場重生")
-            on_disk = None
-
-    if on_disk is not None and on_disk.get("version") == MAP_VERSION:
-        tracked = git_tracked_paths(repo_root)
-        current_digest = compute_source_digest(
-            repo_root, build_module_index(repo_root, tracked), tracked)
-        if on_disk.get("source_digest") == current_digest:
-            return on_disk, False
-        _warn("映射檔陳舊（tests/ 或工具集已變），現場重生。"
-              "建議跑 `--write-map` 更新進 repo。")
-    elif on_disk is None and map_path == DEFAULT_MAP_PATH:
-        _warn("映射檔不存在，現場重生。建議跑 `--write-map` 產生。")
-
-    return build_map(repo_root), True
 
 
 # =============================================================================
@@ -683,11 +620,11 @@ def run_pytest(result: dict, xdist_threshold: int, timeout_s: int,
 
 
 # =============================================================================
-# 映射保鮮 lint（--check，Phase 2）
+# test 檔可達性 lint（--check，Phase 2）
 # =============================================================================
 
-def check_map(repo_root: Path, map_path: Path, rules: dict) -> tuple:
-    """--check：(1) 落盤映射檔須新鮮；(2) 每個 test 檔須有映射路徑或例外。
+def check_map(repo_root: Path, rules: dict) -> tuple:
+    """--check：每個 test 檔都解析得了，且有映射路徑或例外。
 
     「有映射路徑」= 出現在 import_map/text_map 的 value、位於某 dir_rule 的
     suite 之下、或屬 always_run 集。identity（自身變更）不算——那對「改到
@@ -705,31 +642,6 @@ def check_map(repo_root: Path, map_path: Path, rules: dict) -> tuple:
         problems.append(
             f"test 檔 AST 解析失敗: {rel} —— import/文字反查全數落空，映射"
             "不可靠（且該檔本來就會 fail pytest collection；修語法錯誤）")
-
-    if not map_path.exists():
-        problems.append(f"映射檔缺失: {map_path.name}（跑 --write-map 產生）")
-    else:
-        try:
-            with open(map_path, encoding="utf-8") as f:
-                on_disk = json.load(f)
-            if on_disk.get("source_digest") != fresh["source_digest"]:
-                problems.append(
-                    f"映射檔陳舊: {map_path.name} 的 source_digest 與現況不符"
-                    "（跑 --write-map 更新）")
-            else:
-                # F5：digest 同不代表內容同——手改 map、舊版工具產出、或
-                # digest 未覆蓋的輸入（fixture 後補）都可能讓 committed map
-                # 缺 ref 卻「永遠新鮮」。fresh 已經 build 好，dict 相等比對
-                # 成本近零，直接收掉這個洞。
-                for key in ("import_map", "text_map", "tests_scanned",
-                            "parse_errors"):
-                    if on_disk.get(key) != fresh[key]:
-                        problems.append(
-                            f"映射內容不符: {map_path.name} 的 {key} 與現場重建"
-                            "結果不同（digest 相同仍不符＝map 被手改或由不同"
-                            "版本工具產生；跑 --write-map 重生）")
-        except (json.JSONDecodeError, OSError) as e:
-            problems.append(f"映射檔無法解析: {e}（跑 --write-map 重生）")
 
     covered: set = set()
     for tests in fresh["import_map"].values():
@@ -863,11 +775,7 @@ def main() -> None:
     parser.add_argument("--json", action="store_true",
                         help="stdout 輸出單一 JSON 文件")
     parser.add_argument("--check", action="store_true",
-                        help="映射保鮮 lint：映射檔 stale 或有未映射 test 檔 → exit 1")
-    parser.add_argument("--write-map", action="store_true",
-                        help="重生映射檔並寫入 repo（進 commit）")
-    parser.add_argument("--map", default=str(DEFAULT_MAP_PATH),
-                        help="映射 JSON 路徑（預設 scripts/tools/dx/verify_diff_map.json）")
+                        help="test 檔可達性 lint：有 test 檔映射不到或解析失敗 → exit 1")
     parser.add_argument("--rules", default=str(DEFAULT_RULES_PATH),
                         help="規則 YAML 路徑（預設 scripts/tools/dx/verify_diff_rules.yaml）")
     parser.add_argument("--repo-root", default=str(REPO_ROOT),
@@ -879,7 +787,6 @@ def main() -> None:
     args = parser.parse_args()
 
     repo_root = Path(args.repo_root).resolve()
-    map_path = Path(args.map)
     rules_path = Path(args.rules)
 
     try:
@@ -888,16 +795,8 @@ def main() -> None:
         print(f"Error: rules 檔驗證失敗: {e}", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
-    if args.write_map:
-        vmap = build_map(repo_root)
-        write_map(vmap, map_path)
-        _warn(f"映射檔已更新: {map_path}（{len(vmap['tests_scanned'])} 個 test 檔、"
-              f"import_map {len(vmap['import_map'])} 條、"
-              f"text_map {len(vmap['text_map'])} 條）")
-        sys.exit(EXIT_OK)
-
     if args.check:
-        problems, fresh = check_map(repo_root, map_path, rules)
+        problems, fresh = check_map(repo_root, rules)
         payload = {"ok": not problems, "problems": problems,
                    "tests_scanned": len(fresh["tests_scanned"])}
         if args.json:
@@ -908,7 +807,7 @@ def main() -> None:
                 for p in problems:
                     print(f"  - {p}")
             else:
-                print(f"✓ 映射新鮮且 {len(fresh['tests_scanned'])} 個 test 檔全數"
+                print(f"✓ {len(fresh['tests_scanned'])} 個 test 檔全數"
                       "可達（import/text/dir-rule/always-run/例外表）")
         sys.exit(EXIT_VIOLATION if problems else EXIT_OK)
 
@@ -918,7 +817,7 @@ def main() -> None:
               file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
-    vmap, _stale = load_or_rebuild_map(repo_root, map_path)
+    vmap = build_map(repo_root)
     result = select_tests(changed, vmap, rules, repo_root)
 
     if args.json:

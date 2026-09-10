@@ -49,7 +49,7 @@ EXIT-CODE FACE
 --------------
 Where a recipe's terminal path has a deterministic 0/1/2 outcome, ``expect_exit``
 pins it (clean report → 0; the ``coverage_delta`` reject → 2).  Recipes whose exit
-code depends on repo state (``verify_diff --check`` gates on map freshness) leave
+code depends on repo state (``verify_diff --check`` gates on every test file being mapped) leave
 ``expect_exit=None`` and assert JSON purity only — the honest boundary.  The exit
 codes themselves are additionally gated by ``tests/shared/test_tool_exit_codes.py``;
 this file's exit assertions are a secondary cross-check tied to the JSON path.
@@ -428,7 +428,7 @@ RECIPES: list[Recipe] = [
       lambda t: ["--all", "--conf-d", str(SEED_CONF_D), "--json"],
       expect_exit=EXIT_OK),
 
-    # ── verify_diff  (--check emits one doc; exit gates on map freshness) ──
+    # ── verify_diff  (--check emits one doc; exit gates on unmapped tests) ──
     R("verify_diff", "check-json",
       lambda t: ["--check", "--json"], expect_exit=None),
 

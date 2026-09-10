@@ -2330,7 +2330,7 @@ def test_covers_matches_only_the_shapes_in_use() -> None:
     touches the filesystem, so fixtures are pure strings and fake ones assert
     exactly as much — but a real one gets harvested by this module's own
     shape-B scanner as "a file this test reads", which both pollutes
-    `verify_diff_map.json` and can red the python-half assertion demanding a
+    verify_diff's text_map and can red the python-half assertion demanding a
     fixture path be added to the `python` filter. Keep them fictional.
     """
     assert _covers("Zfile", "Zfile")
