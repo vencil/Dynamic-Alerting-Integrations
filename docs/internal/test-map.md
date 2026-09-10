@@ -18,10 +18,10 @@ lang: zh
 tests/
 ├── conftest.py          # 全域 sys.path + pytest fixtures
 ├── factories.py         # 共用 factory helpers + PipelineBuilder
-├── ops/                 # scripts/tools/ops 對應測試（55 檔）
-├── dx/                  # scripts/tools/dx 對應測試（8 檔）
-├── lint/                # scripts/tools/lint 對應測試（20 檔）
-├── shared/              # 跨類別 / 基礎設施測試（15 檔）
+├── ops/                 # scripts/tools/ops 對應測試
+├── dx/                  # scripts/tools/dx 對應測試
+├── lint/                # scripts/tools/lint 對應測試
+├── shared/              # 跨類別 / 基礎設施測試
 ├── e2e/                 # Playwright E2E 測試
 ├── fixtures/            # 共用測試資料
 ├── snapshots/           # 快照基線（JSON / snap）

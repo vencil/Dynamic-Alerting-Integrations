@@ -140,7 +140,7 @@ da-tools validate-config --config-dir conf.d/ --json
 
 ### SAST Automation (7 Rules)
 
-`tests/shared/test_sast.py` performs AST-level scanning on all Python files in `scripts/tools/` (1500+ tests), **executed in CI (`ci.yml`), not as a pre-commit hook** — run `pytest tests/shared/test_sast.py` locally after changing `scripts/tools/**`.
+`tests/shared/test_sast.py` performs AST-level scanning on all Python files in `scripts/tools/`, **executed in CI (`ci.yml`), not as a pre-commit hook** — run `pytest tests/shared/test_sast.py` locally after changing `scripts/tools/**`.
 
 | # | Rule | Detection Method | Severity |
 |---|------|---------|--------|

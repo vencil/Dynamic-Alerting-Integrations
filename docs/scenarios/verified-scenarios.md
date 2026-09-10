@@ -13,7 +13,7 @@ lang: zh
 >
 > **相關文件**：[架構與設計](../architecture-and-design.md) · [性能基準](../benchmarks.md) · [場景指南導覽](README.md)
 
-這份文件展示平台在關鍵情境下的**行為**，以及這些行為都經**端到端驗證**——給評估者與 SRE 看的成熟度證據。完整測試數量、CI 指令與 benchmark 清單屬內部 QA 紀錄（見[覆蓋總覽](#覆蓋總覽)）。
+這份文件展示平台在關鍵情境下的**行為**，以及這些行為都經**端到端驗證**——給評估者與 SRE 看的成熟度證據。CI 指令與 benchmark 清單屬內部 QA 紀錄（見[覆蓋總覽](#覆蓋總覽)）。
 
 ## 維護模式與複合警報
 
@@ -97,7 +97,7 @@ sequenceDiagram
 ## 覆蓋總覽
 
 - **6 個核心場景**（A–F）全部 **E2E 端到端驗證**（`make test-scenario-*` 在真實 K8s 叢集內跑）。
-- **2,000+ unit / integration 測試**覆蓋各企業功能域：Silent Mode、Severity Dedup、Config-driven Routing、Per-rule Overrides、Cardinality Guard、Schema Validation、Migration Engine、Shadow Monitoring Cutover、Policy-as-Code、Alert Quality Scoring 等約 20 個域。
+- **unit / integration 測試**覆蓋各企業功能域：Silent Mode、Severity Dedup、Config-driven Routing、Per-rule Overrides、Cardinality Guard、Schema Validation、Migration Engine、Shadow Monitoring Cutover、Policy-as-Code、Alert Quality Scoring 等。
 - **Tier 2 性能 benchmark**（1000–5000 租戶 hot-path 延遲 / 記憶體 / goroutine）為 SLO 與 sharding 決策提供 empirical 依據——數字見[性能基準](../benchmarks.md)。
 - CI pipeline 在**每次 PR** 自動執行全套測試。
 
