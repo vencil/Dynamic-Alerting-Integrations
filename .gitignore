@@ -49,6 +49,14 @@ package-lock.json
 tmp/
 kubeconfig
 
+# bench_wrapper.sh 的預設 BENCH_OUT_DIR 就是「當前工作目錄」（見該檔檔頭），
+# 所以從 repo 根跑一次就會留下這三個產出物。⛔ 三個要一起蓋：`bench.err.log`
+# 本來就被上面的 `*.log` 蓋掉了，另外兩個沒有，於是 `git status` 只冒出兩個檔，
+# 讀起來像「只產生了兩個」——一蓋二不蓋比三個都不蓋更容易誤導。
+bench.out.txt
+bench.raw.jsonl
+bench.err.log
+
 # --- Test Artifacts ---
 # 測試腳本產生的可重複產物，不需追蹤
 tests/_test_output/
