@@ -252,16 +252,16 @@ class TestCheckLocalHooks:
         self._assume_installed(monkeypatch, installed=False)
 
         def _boom(*a, **k):  # pragma: no cover - must not be reached
-            raise AssertionError("pre-commit was run despite unwired pre-push guards")
+            raise AssertionError(f"pp.run was called with {(a[0] if a else k)!r} despite unwired pre-push guards")
 
         monkeypatch.setattr(pp, "run", _boom)
         result = pp.check_local_hooks()
         assert result.status == pp.Status.FAIL
         assert "pre-push" in result.message
         # ⛔ The remedy has to be the one that works. This assertion demanded
-        # `pre-commit install --hook-type pre-push` before #1689; that installs
-        # a hook which is shown ONE refspec, and it exits 1 outright while
-        # core.hooksPath is set — a remedy that cannot reach green.
+        # `pre-commit install --hook-type pre-push` before #1689; that never
+        # installs the guards, and it exits 1 outright while core.hooksPath is
+        # set — a remedy that cannot reach green.
         assert "bash scripts/ops/install_prepush_hook.sh" in result.detail
         # ⛔ NOT ASSERTED, on purpose: "the detail must not RECOMMEND the old
         # command". The detail names it inside a ⛔ prohibition, so any
@@ -279,9 +279,6 @@ class TestCheckLocalHooks:
 
         `--skip-hooks` used to take the whole row out, which took out the only
         place that answers "are the pre-push guards still on the push path?".
-        Splitting it is affordable because the two halves differ by three
-        orders of magnitude: the probe is pure Python plus one `git rev-parse`,
-        the run is `pre-commit --all-files` at `timeout=300`.
         """
         probed = []
 
@@ -292,7 +289,7 @@ class TestCheckLocalHooks:
         monkeypatch.setattr(pp, "_prepush_guards_wired", _probe)
 
         def _boom(*a, **k):  # pragma: no cover - must not be reached
-            raise AssertionError("pre-commit was run despite run_precommit=False")
+            raise AssertionError(f"pp.run was called with {(a[0] if a else k)!r} despite run_precommit=False")
 
         monkeypatch.setattr(pp, "run", _boom)
 
@@ -311,13 +308,42 @@ class TestCheckLocalHooks:
         self._assume_installed(monkeypatch, installed=False)
 
         def _boom(*a, **k):  # pragma: no cover - must not be reached
-            raise AssertionError("pre-commit was run despite unwired pre-push guards")
+            raise AssertionError(f"pp.run was called with {(a[0] if a else k)!r} despite unwired pre-push guards")
 
         monkeypatch.setattr(pp, "run", _boom)
 
         result = pp.check_local_hooks(run_precommit=False)
         assert result.status == pp.Status.FAIL
         assert "bash scripts/ops/install_prepush_hook.sh" in result.detail
+
+    def test_an_unmeasurable_wiring_probe_is_not_reported_as_not_installed(
+        self, monkeypatch
+    ):
+        """git that cannot run is "cannot tell", not "the guards are missing".
+
+        The Windows escape hatch supports a PATH without git and passes
+        `--skip-hooks`, so it reaches this probe. Reporting "not installed"
+        there prescribes the installer, which cannot fix it. Still a FAIL.
+        """
+        missing = pp.subprocess.CompletedProcess(
+            ["git"], returncode=127, stdout="", stderr="command not found: git"
+        )
+        monkeypatch.setattr(pp, "run", lambda *a, **k: missing)
+
+        result = pp.check_local_hooks(run_precommit=False)
+        assert result.status == pp.Status.FAIL
+        assert "command not found: git" in result.detail
+        assert "install_prepush_hook.sh" not in result.detail
+
+    def test_clearing_markers_does_not_crash_when_git_cannot_run(
+        self, monkeypatch, tmp_path
+    ):
+        """A Local hooks FAIL clears markers; that path must survive a missing git."""
+        def _no_git(*a, **k):
+            raise FileNotFoundError("git")
+
+        monkeypatch.setattr(pp.subprocess, "run", _no_git)
+        assert pp.clear_markers(tmp_path) == 0
 
     def test_failed_hooks_parsed(self, monkeypatch):
         self._assume_installed(monkeypatch)

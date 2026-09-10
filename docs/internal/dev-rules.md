@@ -181,10 +181,10 @@ lang: zh
 - ✅ 這兩支 pre-push guard 取得 refspec 的通道見 `scripts/ops/_prepush_refs.sh`。**「只看得到一列、而且是字典序最前那一列」的殘差已由 [#1689](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1689) 修掉**——它們不再註冊為 pre-commit 的 pre-push stage（那條路只餵 hook 一列），改由 `scripts/ops/prepush_dispatch.sh` 用 git 的完整 stdin 呼叫。成因仍是活的（那是 pre-commit 的行為，不是我們能改的），所以量測與邊界仍保留在該檔檔頭與 `docs/internal/hook-vs-skill-coverage.md` §1
 - 七項檢查：branch 身份 / behind main / conflict / local hooks / scope drift / CI 狀態 / PR mergeable
 
-**執行入口**（三條等價）：`make pr-preflight` ｜ `win_git_escape.bat pr-preflight [PR#]` ｜ `win_git_escape.ps1 pr-preflight [PR#]`。
+**執行入口**：`make pr-preflight` ｜ `win_git_escape.bat pr-preflight [PR#]` ｜ `win_git_escape.ps1 pr-preflight [PR#]`（後兩者寫死 `--skip-hooks`）。
 Status 處理 / hotfix 例外 / A vs B CI 分類細節見 [`github-release-playbook.md`](github-release-playbook.md)。
 
-**快速路徑（ROI r6 D 波 codified）**：剛 commit 完、pre-commit hooks 已在 commit 時證綠 → 用 `make pr-preflight-quick`（`--skip-hooks`）。**就 marker 而言等價**——一樣寫 `.git/.preflight-ok.<SHA>` marker——省掉 hooks 的第二次全跑（commit→preflight→CI 三重執行去掉一重）。commit 後又改過 working tree、或 hooks 綠的是別的 SHA → 回頭跑完整 `make pr-preflight`。⛔ **`--skip-hooks` 只跳 `pre-commit run --all-files` 那一半**（[#1811](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1811)）：「守衛還在不在 push 路徑上」全 repo 只有一個答案點（`_prepush_guards_wired()`，唯一呼叫端是 `Local hooks` 那一列），quick 也會跑它——**沒接上就是 FAIL，本項沒有旗標出路**，唯一出路是 `bash scripts/ops/install_prepush_hook.sh`。⚠️ 於是全新 clone 上 quick 會紅一次（真紅：守衛確實不在 push 路徑上），裝完就綠。
+**快速路徑**：剛 commit 完、pre-commit hooks 已在 commit 時證綠 → 用 `make pr-preflight-quick`（`--skip-hooks`）。**就 marker 而言等價**——一樣寫 `.git/.preflight-ok.<SHA>` marker——省掉 hooks 的第二次全跑（commit→preflight→CI 三重執行去掉一重）。commit 後又改過 working tree、或 hooks 綠的是別的 SHA → 回頭跑完整 `make pr-preflight`。⛔ **`--skip-hooks` 只跳 `pre-commit run --all-files` 那一半**（[#1811](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1811)）：quick 也會跑「守衛還在不在 push 路徑上」那一問——**沒接上就是 FAIL，本項沒有旗標出路**，唯一出路是 `bash scripts/ops/install_prepush_hook.sh`。⚠️ 於是全新 clone 上 quick 會紅一次（真紅：守衛確實不在 push 路徑上），裝完就綠。
 ⚠️ **Scope 差異與適用邊界**：commit 時的 hooks 只掃 **staged 檔**，完整版 `pr-preflight` 的 Local hooks 跑 **`--all-files`**——「commit 剛證綠」≠「all-files 綠」。file-scoped hooks（staged-vs-all 是燒過的坑）對本次沒動到的檔的 pre-existing drift，只有 all-files 掃得到；quick 路徑下這類 drift 由 CI 的 all-files 兜底（push 後才知道）。連續多 commit 迭代的 branch 建議週期性（至少 PR 收尾前一次）跑完整 `make pr-preflight` 補 all-files 掃描。
 
 ### 13. da-tools 子命令 exit-code / `--json` / `--ci` 約定（#452）

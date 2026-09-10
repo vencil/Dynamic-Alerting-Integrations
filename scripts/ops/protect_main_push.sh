@@ -56,8 +56,7 @@ if [ ! -r "$_prepush_dir/_prepush_refs.sh" ]; then
 
 ⛔ 不要自己 printf 一個只掛本檔的 hook：那會把 require_preflight_pass 與
 mkdocs strict 靜默拆掉，而畫面上本守衛還在。⛔ 也不要用
-`pre-commit install --hook-type pre-push`：經它安裝的 hook 只看得到一個
-refspec（#1689）。
+`pre-commit install --hook-type pre-push`：它不會把守衛裝上（#1689）。
 
 ⛔ 不要用 --no-verify、也不要刪掉 .git/hooks/pre-push 來轉綠——那會把擋直推
 main 這道閘門永久關掉，正是 #1664 修掉的那件事。

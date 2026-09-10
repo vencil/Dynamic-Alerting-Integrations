@@ -155,14 +155,7 @@ It is running under pre-commit, but neither channel carried a refspec: git's
 stdin was empty (pre-commit consumes it before the hook runs, #1664) and
 PRE_COMMIT_REMOTE_BRANCH is unset.
 
-⛔ SINCE #1689 THIS GUARD IS NOT SUPPOSED TO RUN UNDER pre-commit AT ALL.
-The pre-push guards were moved out of .pre-commit-config.yaml because a hook
-run by pre-commit is shown exactly ONE refspec, so a push carrying `feat/x`
-and `main` together hid `main` from the guard whose entire job is to block it.
-They are run by scripts/ops/prepush_dispatch.sh now, which reads git's stdin
-itself and hands every guard the whole thing.
-
-So reaching this message means one of:
+Common ways to reach this message:
 
   * a `stages: [pre-push]` entry for this guard was added back to
     .pre-commit-config.yaml — remove it; the copy pre-commit runs is the blind
@@ -183,8 +176,7 @@ case: that is exactly the defect #1664 removed. To ask whether the guards are
 on the push path at all:
 
     make pr-preflight          (its `Local hooks` row answers exactly that)
-    make pr-preflight-quick    (same answer, without the --all-files run: #1811
-                                made --skip-hooks skip only that half)
+    make pr-preflight-quick    (same answer, without the --all-files run)
 
 PREPUSH_MSG
 }

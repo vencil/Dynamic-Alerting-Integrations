@@ -13,9 +13,9 @@
 #   `mv`/`chmod` and says so when those are missing.
 #
 # ⛔ IT CHAINS WHAT WAS ALREADY THERE — NOT A CONVENIENCE. This repo has
-#   `filter=lfs` paths and `git lfs install` is global, so EVERY FRESH CLONE
+#   `filter=lfs` paths and `git lfs install` is global, so a fresh clone
 #   arrives with .git/hooks/pre-push owned by git-lfs. Refusing it made the
-#   shipped remedy a dead end for every new clone; `pre-commit install
+#   shipped remedy a dead end on such a clone; `pre-commit install
 #   --hook-type pre-push` instead migrates lfs's `#!/bin/sh` hook and then every
 #   push dies on `/bin/sh not found`. The foreign hook is moved to
 #   pre-push.chained and run by prepush_dispatch.sh with the same argv and stdin.

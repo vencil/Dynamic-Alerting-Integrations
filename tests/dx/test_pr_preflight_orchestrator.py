@@ -378,20 +378,18 @@ class TestMainOrchestrator:
         cli_argv("pr_preflight.py")
         assert pp.main() == 0
 
-    def test_skip_hooks_still_runs_the_wiring_half_and_gates_on_it(
-        self, monkeypatch, tmp_path, capsys, cli_argv
+    @pytest.mark.parametrize(
+        "flags, want_run_precommit",
+        [(("--skip-hooks",), False), ((), True)],
+        ids=["skip-hooks", "full"],
+    )
+    def test_local_hooks_is_called_on_both_poles_of_skip_hooks(
+        self, monkeypatch, tmp_path, capsys, cli_argv, flags, want_run_precommit
     ):
-        """#1811 — `--skip-hooks` must not skip the whole `Local hooks` row.
+        """#1811 — `check_local_hooks` is called with or without `--skip-hooks`.
 
-        Before #1811 the orchestrator short-circuited to a hardcoded SKIP and
-        never called `check_local_hooks` at all, so `_prepush_guards_wired()`
-        — the repo's ONLY answer to "are the guards still on the push path?" —
-        ran zero times on the daily path (`make pr-preflight-quick`, and the
-        `--skip-hooks` hardcoded into `win_git_escape.bat` / `.ps1`).
-
-        This pins both halves of the seam: the function is still called, it is
-        told to skip only the pre-commit run, and a FAIL coming back from it
-        still reaches the exit code (i.e. quick mode cannot fail open).
+        The flag decides only whether pre-commit runs; without it the run must
+        still happen. A FAIL from the check reaches the exit code either way.
         """
         self._stub_repo_root_and_marker(monkeypatch, tmp_path)
         self._stub_all_checks(monkeypatch)
@@ -406,9 +404,9 @@ class TestMainOrchestrator:
 
         monkeypatch.setattr(pp, "check_local_hooks", _recording_check)
 
-        cli_argv("pr_preflight.py", "--skip-hooks", "--ci")
+        cli_argv("pr_preflight.py", *flags, "--ci")
         assert pp.main() == 1
-        assert seen == {"run_precommit": False}
+        assert seen == {"run_precommit": want_run_precommit}
         out = capsys.readouterr().out
         assert "Local hooks" in out
         assert "stubbed-unwired" in out
