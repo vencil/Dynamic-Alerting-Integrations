@@ -92,7 +92,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 def coverage_sources(repo: Path) -> tuple[list[str], set[str]]:
     """從 pyproject.toml 讀 coverage 的 source 與 omit —— 用 stdlib ``tomllib``。
 
-    ⛔ 這裡**不能**用 regex。先前的版本用 ``re.search(r"\[tool\.coverage\.run\]…")``
+    ⛔ 這裡**不能**用 regex。先前的版本用 ``re.search`` 配一個 ``[tool.coverage.run]`` 的 header pattern
     加 ``re.findall(r'"([^"]+)"')``，與真 TOML 有四種已量到的分歧，其中兩種是
     **靜默拿錯母體**（比「壞掉」更糟，因為它會算出一個看起來正常的答案）：
 
@@ -124,9 +124,21 @@ def coverage_sources(repo: Path) -> tuple[list[str], set[str]]:
             f"pyproject.toml 不是合法的 UTF-8（TOML 規格要求 UTF-8）：{exc}"
         ) from exc
 
-    run = doc.get("tool", {}).get("coverage", {}).get("run", {})
-    if not isinstance(run, dict):
-        return [], set()
+    # ⛔ 逐層檢查，不能只檢查葉子。`doc.get("tool", {}).get("coverage", {})` 這種鏈式
+    #   寫法在 `tool` 或 `tool.coverage` 是純量時會丟 `AttributeError`——它是
+    #   `ValueError`／`OSError` 之外的第三種，呼叫端的 `except` 攔不到 ⇒ 裸 traceback
+    #   + rc 1，正是本函式宣稱已經收口的那個病。⚠️ 第一版只守了葉子的 source/omit，
+    #   盲審用 `tool = "not-a-table"` 一句就打穿。釘住：`test_non_table_*_is_rc2`。
+    node: object = doc
+    for key in ("tool", "coverage", "run"):
+        if not isinstance(node, dict):
+            raise RuntimeError(
+                f"pyproject.toml 的 [tool.coverage.run] 路徑上 {key!r} 的上層不是 table"
+            )
+        node = node.get(key, {})
+    if not isinstance(node, dict):
+        raise RuntimeError("pyproject.toml 的 [tool.coverage.run] 不是 table")
+    run = node
 
     def _strs(value: object, key: str) -> list[str]:
         # coverage.py 的 source/omit 是字串陣列。給了別的形狀就是設定寫錯，
