@@ -430,15 +430,15 @@ tenant-api 的 PR/MR write-back（`internal/github` / `internal/gitlab`）除了
 
 ### 架構概覽
 
-5 個 spec 檔案（33 tests）覆蓋 Portal 首頁、Tenant Manager、Group Management、Auth Flow、Batch Operations。全部使用 Chromium，由 `tests/e2e/playwright.config.ts` 統一配置。
+下列 spec 覆蓋 Portal 首頁、Tenant Manager、Group Management、Auth Flow、Batch Operations。全部使用 Chromium，由 `tests/e2e/playwright.config.ts` 統一配置。
 
-| 檔案 | 測試數 | 涵蓋範圍 |
-|------|--------|---------|
-| `portal-home.spec.ts` | 5 | 首頁載入、工具卡片渲染、Phase 標題、語言切換、RWD |
-| `tenant-manager.spec.ts` | 6 | 載入、名稱過濾、metadata 過濾、計數、狀態持久、降級 |
-| `group-management.spec.ts` | 7 | 導覽、建立群組、API 隔離、sidebar、成員管理 |
-| `auth-flow.spec.ts` | 8 | Dev 模式、OAuth2 redirect、/api/v1/me mock、401 處理、session 過期 |
-| `batch-operations.spec.ts` | 7 | 群組選取、批次選單、silent mode、確認對話框、API payload |
+| 檔案 | 涵蓋範圍 |
+|------|---------|
+| `portal-home.spec.ts` | 首頁載入、工具卡片渲染、Phase 標題、語言切換、RWD |
+| `tenant-manager.spec.ts` | 載入、名稱過濾、metadata 過濾、計數、狀態持久、降級 |
+| `group-management.spec.ts` | 導覽、建立群組、API 隔離、sidebar、成員管理 |
+| `auth-flow.spec.ts` | Dev 模式、OAuth2 redirect、/api/v1/me mock、401 處理、session 過期 |
+| `batch-operations.spec.ts` | 群組選取、批次選單、silent mode、確認對話框、API payload |
 
 ### 本地執行
 

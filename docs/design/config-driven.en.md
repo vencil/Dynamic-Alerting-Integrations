@@ -427,7 +427,7 @@ tenants:
 - **`ScheduledValue` custom YAML type**: Supports dual-format parsing — scalar strings (backward compatible) and structured `{default, overrides[{window, value}]}`
 - **`ResolveAt(now time.Time)`**: Resolves the applicable threshold based on current UTC time, ensuring determinism and testability
 - **Time window format**: `HH:MM-HH:MM` (UTC), cross-midnight support (e.g., `22:00-06:00` means 10 PM to 6 AM next day)
-- **45 test cases**: Covering boundary conditions — window overlap, cross-midnight, scalar fallback, empty overrides
+- **Test cases**: Covering boundary conditions — window overlap, cross-midnight, scalar fallback, empty overrides
 
 ### 2.7 Three-State Operational Modes
 

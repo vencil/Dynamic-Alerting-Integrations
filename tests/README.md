@@ -19,11 +19,11 @@ lang: zh
 ```
 tests/
 ├── conftest.py / factories.py    # 全域 sys.path + factory helpers
-├── ops/        (55 檔)            # scripts/tools/ops 對應 unit tests
-├── dx/         (8 檔)             # scripts/tools/dx 對應 unit tests
-├── lint/       (20 檔)            # scripts/tools/lint 對應 unit tests
-├── shared/     (15 檔)            # 跨類別 / 基礎設施 / property-based
-├── e2e/        (23 specs)         # Playwright E2E (TypeScript)
+├── ops/                           # scripts/tools/ops 對應 unit tests
+├── dx/                            # scripts/tools/dx 對應 unit tests
+├── lint/                          # scripts/tools/lint 對應 unit tests
+├── shared/                        # 跨類別 / 基礎設施 / property-based
+├── e2e/                           # Playwright E2E (TypeScript)
 │   └── fixtures/                 # diagnostic-matchers / axe-helper / mocks
 ├── e2e-bench/                    # Playwright E2E benchmark (有自己的 README)
 ├── fixtures/                     # Python 共用測試資料

@@ -18,10 +18,10 @@ lang: zh
 tests/
 ├── conftest.py          # 全域 sys.path + pytest fixtures
 ├── factories.py         # 共用 factory helpers + PipelineBuilder
-├── ops/                 # scripts/tools/ops 對應測試（55 檔）
-├── dx/                  # scripts/tools/dx 對應測試（8 檔）
-├── lint/                # scripts/tools/lint 對應測試（20 檔）
-├── shared/              # 跨類別 / 基礎設施測試（15 檔）
+├── ops/                 # scripts/tools/ops 對應測試
+├── dx/                  # scripts/tools/dx 對應測試
+├── lint/                # scripts/tools/lint 對應測試
+├── shared/              # 跨類別 / 基礎設施測試
 ├── e2e/                 # Playwright E2E 測試
 ├── fixtures/            # 共用測試資料
 ├── snapshots/           # 快照基線（JSON / snap）
@@ -172,84 +172,81 @@ if !waitFor(t, 2*time.Second, func() bool {
 
 ## 測試檔案對照
 
-⚠️ **「測試數」是指示性快照，沒有任何 gate 在對帳。** 三個數字在一次 PR 內就被
-同一個 PR 的後續 commit 作廢過（`test_bump_docs.py` 11 → 191 → 199），所以帶 `~`
-的是「這個量級」而不是精確值；要精確值請跑 `pytest <file> --collect-only -q`。
+要看某支測試檔實際有幾個測試：`pytest <file> --collect-only -q`。
 
-| 測試檔案 | 測試目標 | 測試數 | 備註 |
-|---------|---------|--------|------|
-| `ops/test_generate_alertmanager_routes.py` | routing / receiver / inhibit / enforced | 142 | 最大功能測試（Wave 13 去重 -13） |
-| `ops/test_scaffold_db.py` | RULE_PACKS catalogue / scaffold generation / YAML validation | 129 | parametrize 瘦身後 |
-| `ops/test_scaffold_tenant.py` | scaffold_tenant.py 核心功能 | 72 | 覆蓋率 49→62% |
-| `shared/test_lib_python.py` | _lib_python 共用函式庫 | 82 | |
-| `shared/test_entrypoint.py` | da-tools CLI entrypoint | 24 | monkeypatch 完成 |
-| `ops/test_onboard_platform.py` | 完整 onboard 管線 | 71 | parametrize receiver types |
-| `ops/test_integration.py` | 跨模組 routing + PipelineBuilder | 17 | integration marker |
-| `shared/test_help_contract.py` | 5 個 CLI `--help` 結構契約（flag 存在 / required / choices） | 5 | 取代全文 help 快照（py-version 無關） |
-| `ops/test_domain_policy.py` | webhook domain allowlist + fnmatch | 26 | |
-| `ops/test_error_consistency.py` | warning format 一致性 | 14 | |
-| `shared/test_mutation_guards.py` | 函式行為精確值 | 49 | |
-| `ops/test_regression.py` | 已知 bug 回歸 | 9 | regression marker |
-| `ops/test_validate_config.py` | validate_config.py 配置驗證 | 25 | Wave 12 unittest→pytest |
-| `ops/test_config_diff.py` | config_diff.py 差異偵測 | 40 | Wave 12 unittest→pytest |
-| `dx/test_bump_docs.py` | bump_docs.py 六條版號線 + 計數同步 + 診斷 × gating mode | ~214 | Wave 12 unittest→pytest；#1407 大幅擴充 |
-| `ops/test_init_project.py` | `da-tools init` 產生器：GitLab root 五態分類、子目錄接線、summary 真話、CLI 契約 | ~341 | #1357 |
-| `ops/test_generated_ci_artifacts.py` | 產出的 CI YAML 本身（可解析 / 可達 / image pin / 不含 `git`） | ~312 | #1357 / #1358 / #1408 |
-| `dx/test_line_ending_policy.py` | 行尾政策：出貨/生產 Python（`scripts`+`components`+`helm`）的寫檔 site 必須明確表態 `newline=` | 292 | ⚠️ 三層：正反例樣本證明偵測器活著／static AST guard 跨平台會紅／行為測試只在 Windows 具鑑別力 |
-| `ops/test_maintenance_scheduler.py` | maintenance_scheduler.py 排程 | 55 | Wave 12 mock 統一 |
-| `ops/test_performance.py` | 效能曲線（scaling / load） | 7 | slow marker |
-| `ops/test_benchmark.py` | 效能基線 | 14 | benchmark + slow markers |
-| `shared/test_property.py` | Hypothesis property-based | 15 | slow marker |
-| `ops/test_analyze_gaps.py` | analyze_rule_pack_gaps.py gap 分析 | 34 | Wave 15 unittest→pytest + 新增 |
-| `ops/test_assemble_config_dir.py` | assemble_config_dir.py 組裝工具 | 100 | Wave 15 unittest→pytest + 新增 |
-| `shared/test_validate_all.py` | validate_all.py 驗證入口 | 58 | Wave 16 覆蓋率攻略（14→41%） |
-| `ops/test_baseline_discovery.py` | baseline_discovery.py 基線觀測 | 38 | Wave 17 覆蓋率攻略（31→55%） |
-| `ops/test_backtest_threshold.py` | backtest_threshold.py 閾值回測 | 39 | Wave 17 覆蓋率攻略（32→70%）+ W18 parametrize |
-| `ops/test_batch_diagnose.py` | batch_diagnose.py 批次診斷 | 25 | Wave 17 覆蓋率攻略（49→71%） |
-| `ops/test_alert_quality.py` | alert_quality.py 警報品質評估 | 57 | v2.0.0 新功能，89.8% 覆蓋率 |
-| `ops/test_policy_engine.py` | policy_engine.py Policy-as-Code 引擎 | 106 | v2.0.0 新功能，94.0% 覆蓋率 |
-| `ops/test_cardinality_forecasting.py` | cardinality_forecasting.py 基數預測 | 61 | v2.0.0 新功能，93.5% 覆蓋率 |
-| `shared/test_sast.py` | 全倉庫 SAST 合規掃描（6 類；dev-rules §5 第 4 條自 #1643 起改由 bandit B506 強制，不在本檔） | 6 類 × `scripts/tools/` 語料（隨檔數變動，勿釘死成常數） | encoding + BOM + shell + chmod + credentials + dangerous functions + stderr routing |
-| `ops/test_migrate_ast.py` | migrate_rule AST 引擎 | 67 | |
-| `ops/test_migrate_v3.py` | migrate_rule v3 引擎 | 38 | |
-| `ops/test_blind_spot_discovery.py` | blind_spot_discovery.py 盲區掃描 | 39 | |
-| `ops/test_lint_custom_rules.py` | lint_custom_rules.py 規則 lint | 40 | |
-| `ops/test_offboard_deprecate.py` | offboard/deprecate 生命週期 | 34 | |
-| `ops/test_cutover_tenant.py` | cutover_tenant.py 自動切換 | 26 | |
-| `ops/test_patch_config.py` | patch_config.py 局部更新 | 38 | 覆蓋率 54→99% |
-| `ops/test_diagnose_inheritance.py` | diagnose 繼承鏈 | 7 | |
-| `ops/test_da_assembler.py` | da_assembler 組裝 | 36 | 覆蓋率 48→70% |
-| `shared/test_lib_helpers.py` | _lib 輔助函式 | 34 | |
-| `ops/test_alert_correlate.py` | alert_correlate.py 警報關聯分析 | 46 | v2.1.0 新功能 |
-| `lint/test_check_bilingual_content.py` | check_bilingual_content.py 雙語內容 lint | 24 | v2.1.0 新功能 |
-| `lint/test_check_cli_coverage.py` | check_cli_coverage.py CLI 覆蓋率 lint | 29 | v2.1.0 新功能 |
-| `lint/test_check_frontmatter_versions.py` | check_frontmatter_versions.py 版號 lint | 29 | v2.1.0 新功能 |
-| `dx/test_coverage_gap_analysis.py` | coverage_gap_analysis.py 覆蓋率差距分析 | 22 | v2.1.0 新功能 |
-| `ops/test_diagnose.py` | diagnose.py 租戶健康診斷 | 38 | 覆蓋率 40→88% |
-| `ops/test_drift_detect.py` | drift_detect.py 配置漂移偵測 | 40 | v2.1.0 新功能 |
-| `ops/test_notification_tester.py` | notification_tester.py 通知測試 | 57 | v2.1.0 新功能 |
-| `lint/test_snapshot_v2.py` | v2 snapshot 穩定性 | 6 | snapshot marker |
-| `ops/test_threshold_recommend.py` | threshold_recommend.py 閾值推薦 | 54 | v2.1.0 新功能 |
-| `ops/test_validate_migration.py` | validate_migration.py 遷移驗證 | 49 | 覆蓋率 22→99% |
-| `lint/test_check_routing_profiles.py` | check_routing_profiles.py 路由設定檔 lint | 28 | v2.1.0 ADR-007 |
-| `ops/test_explain_route.py` | explain_route.py 路由偵錯 | 25 | v2.1.0 ADR-007 |
-| `ops/test_generate_tenant_mapping_rules.py` | generate_tenant_mapping_rules.py 租戶映射 | 36 | v2.1.0 ADR-006 |
-| `ops/test_scaffold_tenant.py` | scaffold_tenant.py 租戶建立 | 81 | +9 routing profile/topology tests |
-| `ops/test_e2e_routing_profile.py` | 路由設定檔 E2E 管線 | 12 | v2.1.0 ADR-007 integration |
-| `ops/test_parse_platform_config.py` | _parse_platform_config 解析器單元測試 | 35 | v2.1.0 refactor 驗證 |
-| `lint/test_check_doc_freshness.py` | check_doc_freshness.py 文件新鮮度檢查 | 32 | v2.1.0 |
-| `lint/test_check_structure.py` | check_structure.py 目錄結構驗證 | 18 | v2.1.0 |
-| `lint/test_lint_tool_consistency.py` | lint_tool_consistency.py 工具一致性驗證 | 72 | v2.1.0 |
-| `lint/test_check_bilingual_annotations.py` | check_bilingual_annotations.py 雙語標註驗證 | 19 | v2.1.0 |
-| `lint/test_check_includes_sync.py` | check_includes_sync.py 中英 include 同步 | 23 | v2.1.0 |
-| `lint/test_check_doc_links.py` | check_doc_links.py 文件交叉引用一致性 | 32 | v2.1.0 |
-| `ops/test_discover_instance_mappings.py` | discover_instance_mappings.py 1:N 映射自動發現 | 18 | v2.1.0 ADR-006 |
-| `ops/test_explain_route_trace.py` | explain_route.py --trace 路由追蹤模擬 | 12 | v2.1.0 ADR-007 |
-| `ops/test_byo_check.py` | byo_check.py BYO 整合前檢驗證 | 14 | v2.1.0 |
-| `ops/test_federation_check.py` | federation_check.py 聯邦式多叢集驗證 | 18 | v2.1.0 |
-| `lint/test_check_repo_name.py` | check_repo_name.py 倉庫名稱一致性 | 14 | v2.1.0 |
-| `ops/test_shadow_verify.py` | shadow_verify.py Shadow Monitoring 三階段驗證 | 16 | v2.1.0 |
-| `ops/test_offboard_tenant.py` | offboard_tenant.py 安全 Tenant 下架工具 | 22 | v2.1.0 |
+| 測試檔案 | 測試目標 | 備註 |
+|---------|---------|------|
+| `ops/test_generate_alertmanager_routes.py` | routing / receiver / inhibit / enforced | 最大功能測試（Wave 13 去重 -13） |
+| `ops/test_scaffold_db.py` | RULE_PACKS catalogue / scaffold generation / YAML validation | parametrize 瘦身後 |
+| `ops/test_scaffold_tenant.py` | scaffold_tenant.py 核心功能與租戶建立 | 覆蓋率 49→62%；含 routing profile / topology |
+| `shared/test_lib_python.py` | _lib_python 共用函式庫 | |
+| `shared/test_entrypoint.py` | da-tools CLI entrypoint | monkeypatch 完成 |
+| `ops/test_onboard_platform.py` | 完整 onboard 管線 | parametrize receiver types |
+| `ops/test_integration.py` | 跨模組 routing + PipelineBuilder | integration marker |
+| `shared/test_help_contract.py` | 5 個 CLI `--help` 結構契約（flag 存在 / required / choices） | 取代全文 help 快照（py-version 無關） |
+| `ops/test_domain_policy.py` | webhook domain allowlist + fnmatch | |
+| `ops/test_error_consistency.py` | warning format 一致性 | |
+| `shared/test_mutation_guards.py` | 函式行為精確值 | |
+| `ops/test_regression.py` | 已知 bug 回歸 | regression marker |
+| `ops/test_validate_config.py` | validate_config.py 配置驗證 | Wave 12 unittest→pytest |
+| `ops/test_config_diff.py` | config_diff.py 差異偵測 | Wave 12 unittest→pytest |
+| `dx/test_bump_docs.py` | bump_docs.py 六條版號線 + 計數同步 + 診斷 × gating mode | Wave 12 unittest→pytest；#1407 大幅擴充 |
+| `ops/test_init_project.py` | `da-tools init` 產生器：GitLab root 五態分類、子目錄接線、summary 真話、CLI 契約 | #1357 |
+| `ops/test_generated_ci_artifacts.py` | 產出的 CI YAML 本身（可解析 / 可達 / image pin / 不含 `git`） | #1357 / #1358 / #1408 |
+| `dx/test_line_ending_policy.py` | 行尾政策：出貨/生產 Python（`scripts`+`components`+`helm`）的寫檔 site 必須明確表態 `newline=` | ⚠️ 三層：正反例樣本證明偵測器活著／static AST guard 跨平台會紅／行為測試只在 Windows 具鑑別力 |
+| `ops/test_maintenance_scheduler.py` | maintenance_scheduler.py 排程 | Wave 12 mock 統一 |
+| `ops/test_performance.py` | 效能曲線（scaling / load） | slow marker |
+| `ops/test_benchmark.py` | 效能基線 | benchmark + slow markers |
+| `shared/test_property.py` | Hypothesis property-based | slow marker |
+| `ops/test_analyze_gaps.py` | analyze_rule_pack_gaps.py gap 分析 | Wave 15 unittest→pytest + 新增 |
+| `ops/test_assemble_config_dir.py` | assemble_config_dir.py 組裝工具 | Wave 15 unittest→pytest + 新增 |
+| `shared/test_validate_all.py` | validate_all.py 驗證入口 | Wave 16 覆蓋率攻略（14→41%） |
+| `ops/test_baseline_discovery.py` | baseline_discovery.py 基線觀測 | Wave 17 覆蓋率攻略（31→55%） |
+| `ops/test_backtest_threshold.py` | backtest_threshold.py 閾值回測 | Wave 17 覆蓋率攻略（32→70%）+ W18 parametrize |
+| `ops/test_batch_diagnose.py` | batch_diagnose.py 批次診斷 | Wave 17 覆蓋率攻略（49→71%） |
+| `ops/test_alert_quality.py` | alert_quality.py 警報品質評估 | v2.0.0 新功能，89.8% 覆蓋率 |
+| `ops/test_policy_engine.py` | policy_engine.py Policy-as-Code 引擎 | v2.0.0 新功能，94.0% 覆蓋率 |
+| `ops/test_cardinality_forecasting.py` | cardinality_forecasting.py 基數預測 | v2.0.0 新功能，93.5% 覆蓋率 |
+| `shared/test_sast.py` | 全倉庫 SAST 合規掃描（6 類；dev-rules §5 第 4 條自 #1643 起改由 bandit B506 強制，不在本檔） | encoding + BOM + shell + chmod + credentials + dangerous functions + stderr routing |
+| `ops/test_migrate_ast.py` | migrate_rule AST 引擎 | |
+| `ops/test_migrate_v3.py` | migrate_rule v3 引擎 | |
+| `ops/test_blind_spot_discovery.py` | blind_spot_discovery.py 盲區掃描 | |
+| `ops/test_lint_custom_rules.py` | lint_custom_rules.py 規則 lint | |
+| `ops/test_offboard_deprecate.py` | offboard/deprecate 生命週期 | |
+| `ops/test_cutover_tenant.py` | cutover_tenant.py 自動切換 | |
+| `ops/test_patch_config.py` | patch_config.py 局部更新 | 覆蓋率 54→99% |
+| `ops/test_diagnose_inheritance.py` | diagnose 繼承鏈 | |
+| `ops/test_da_assembler.py` | da_assembler 組裝 | 覆蓋率 48→70% |
+| `shared/test_lib_helpers.py` | _lib 輔助函式 | |
+| `ops/test_alert_correlate.py` | alert_correlate.py 警報關聯分析 | v2.1.0 新功能 |
+| `lint/test_check_bilingual_content.py` | check_bilingual_content.py 雙語內容 lint | v2.1.0 新功能 |
+| `lint/test_check_cli_coverage.py` | check_cli_coverage.py CLI 覆蓋率 lint | v2.1.0 新功能 |
+| `lint/test_check_frontmatter_versions.py` | check_frontmatter_versions.py 版號 lint | v2.1.0 新功能 |
+| `dx/test_coverage_gap_analysis.py` | coverage_gap_analysis.py 覆蓋率差距分析 | v2.1.0 新功能 |
+| `ops/test_diagnose.py` | diagnose.py 租戶健康診斷 | 覆蓋率 40→88% |
+| `ops/test_drift_detect.py` | drift_detect.py 配置漂移偵測 | v2.1.0 新功能 |
+| `ops/test_notification_tester.py` | notification_tester.py 通知測試 | v2.1.0 新功能 |
+| `lint/test_snapshot_v2.py` | v2 snapshot 穩定性 | snapshot marker |
+| `ops/test_threshold_recommend.py` | threshold_recommend.py 閾值推薦 | v2.1.0 新功能 |
+| `ops/test_validate_migration.py` | validate_migration.py 遷移驗證 | 覆蓋率 22→99% |
+| `lint/test_check_routing_profiles.py` | check_routing_profiles.py 路由設定檔 lint | v2.1.0 ADR-007 |
+| `ops/test_explain_route.py` | explain_route.py 路由偵錯 | v2.1.0 ADR-007 |
+| `ops/test_generate_tenant_mapping_rules.py` | generate_tenant_mapping_rules.py 租戶映射 | v2.1.0 ADR-006 |
+| `ops/test_e2e_routing_profile.py` | 路由設定檔 E2E 管線 | v2.1.0 ADR-007 integration |
+| `ops/test_parse_platform_config.py` | _parse_platform_config 解析器單元測試 | v2.1.0 refactor 驗證 |
+| `lint/test_check_doc_freshness.py` | check_doc_freshness.py 文件新鮮度檢查 | v2.1.0 |
+| `lint/test_check_structure.py` | check_structure.py 目錄結構驗證 | v2.1.0 |
+| `lint/test_lint_tool_consistency.py` | lint_tool_consistency.py 工具一致性驗證 | v2.1.0 |
+| `lint/test_check_bilingual_annotations.py` | check_bilingual_annotations.py 雙語標註驗證 | v2.1.0 |
+| `lint/test_check_includes_sync.py` | check_includes_sync.py 中英 include 同步 | v2.1.0 |
+| `lint/test_check_doc_links.py` | check_doc_links.py 文件交叉引用一致性 | v2.1.0 |
+| `ops/test_discover_instance_mappings.py` | discover_instance_mappings.py 1:N 映射自動發現 | v2.1.0 ADR-006 |
+| `ops/test_explain_route_trace.py` | explain_route.py --trace 路由追蹤模擬 | v2.1.0 ADR-007 |
+| `ops/test_byo_check.py` | byo_check.py BYO 整合前檢驗證 | v2.1.0 |
+| `ops/test_federation_check.py` | federation_check.py 聯邦式多叢集驗證 | v2.1.0 |
+| `lint/test_check_repo_name.py` | check_repo_name.py 倉庫名稱一致性 | v2.1.0 |
+| `ops/test_shadow_verify.py` | shadow_verify.py Shadow Monitoring 三階段驗證 | v2.1.0 |
+| `ops/test_offboard_tenant.py` | offboard_tenant.py 安全 Tenant 下架工具 | v2.1.0 |
 
 ## Import 慣例
 

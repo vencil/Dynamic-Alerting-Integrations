@@ -569,7 +569,7 @@ foreach ($r in $fails) {
    目標：無孤兒文件（doc-map 有但實際不存在）、無遺漏文件（存在但 map 未收錄）
 
 2. **test-coverage-matrix.md 現況更新**（手動）
-   確認「進階場景與測試覆蓋」中的場景列表、測試數量、工具引用是否反映最新版本。
+   確認「進階場景與測試覆蓋」中的場景列表、工具引用是否反映最新版本。
 
 3. **Backlog + Roadmap 衛生**（手動）
    - `dx-tooling-backlog.md`：只保留未完成項目。已交付功能從 backlog 徹底刪除（CHANGELOG 是唯一的交付紀錄）

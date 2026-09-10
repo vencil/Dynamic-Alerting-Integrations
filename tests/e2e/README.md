@@ -4,10 +4,6 @@ purpose: |
   Playwright spec 作者的速查：tag 怎麼選、fixture 怎麼用、新 spec 從哪裡開始。
   父 README（tests/README.md）回答「我要寫什麼測試該擺哪」；本檔回答
   「進到 tests/e2e/ 後，怎麼下手」。
-
-  最新對齊現況：24 specs / 136 tests / 5 fixtures。先前版本只列
-  5 個 critical path spec、未文件化任何 fixture 或 tag 語意，已於本次
-  改寫汰換。
 audience: [contributors, ai-agent]
 lang: zh
 ---
@@ -16,12 +12,12 @@ lang: zh
 
 父 README：[`tests/README.md`](../README.md)。先看父檔的決策樹（測試擺哪、CI 對應、跑法 cheat sheet）；本檔處理進到 `tests/e2e/` 之後的細節：tag 語意、fixture 契約、新 spec 模板、TRK 回歸編號制度。
 
-## 目前規模（最新 snapshot）
+## 組成
 
-- **24 specs / 136 tests**（chromium-only smoke + 互動）
-- **5 fixtures**（`fixtures/`）：portal-tool-smoke / axe-helper / diagnostic-matchers / mock-data / test-helpers
-- **2 規範 tag**：`@critical`（22 specs）/ `@visual`（1 spec）
-- **a11y 是預設 gate**：`runToolSmokeChecks` 預設 `allowedNonCriticalViolations: 0` + `skipA11y: false`，13 個 spec 已強制過 axe
+- chromium-only smoke + 互動
+- **fixtures**（`fixtures/`）：portal-tool-smoke / axe-helper / diagnostic-matchers / mock-data / test-helpers
+- **規範 tag**：`@critical` / `@visual`
+- **a11y 是預設 gate**：`runToolSmokeChecks` 預設 `allowedNonCriticalViolations: 0` + `skipA11y: false`
 
 ## Tag taxonomy（測試標籤語意）
 
@@ -105,7 +101,7 @@ test.describe('<Tool Display Name> @critical', () => {
 - `page.route('**/api/v1/<endpoint>', ...)` 在 spec 開頭 `beforeEach` 或 navigate 前掛
 - mock data 優先放 `fixtures/mock-data.ts`；spec 專屬的 inline 即可
 - 預設**不 mock**——`@critical` 路徑與 deterministic 要求的 spec 才 stub
-- 8 / 24 spec 用 `page.route`，其他依賴 dev container 的 mock backend
+- 沒用 `page.route` 的 spec 依賴 dev container 的 mock backend
 
 ```typescript
 // 完整範例
