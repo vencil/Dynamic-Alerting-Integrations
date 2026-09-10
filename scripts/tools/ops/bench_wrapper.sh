@@ -53,18 +53,28 @@
 #   BENCH_GO        — go binary path (default: `go` in PATH).
 #
 # Exit codes
+#   ⛔ This wrapper deliberately does NOT normalise exit codes, so this list is a
+#      census of the paths that can exit — not a contract enforced by code.
 #   0   — benchmark run completed (regardless of PASS / FAIL of individual
 #         benchmarks; check bench.out.txt for "FAIL" summary line).
-#   1   — go test itself failed (compile error, panic, missing deps), or the
-#         bench_filter.go stage failed. Details: bench.raw.jsonl and the
+#   2   — refused by an EXPLICIT pre-flight check, of which there are exactly
+#         three: no args, $BENCH_GO not on PATH, bench_filter.go missing. All
+#         three `exit 2` BEFORE the pipeline runs.
+#   1   — usually `go test` itself failed (compile error, panic, missing deps),
+#         or the bench_filter.go stage failed. Details: bench.raw.jsonl and the
 #         "FAIL …" line in bench.out.txt; bench.err.log is EMPTY on go1.24+
 #         (see the Behaviour note above).
-#   2   — argument / environment error (wrapper refused to run) — emitted by the
-#         pre-flight checks below, which all `exit 2` BEFORE the pipeline runs.
-#   ⚠️ Anything else is the pipeline's own rc escaping verbatim, because this
-#      wrapper deliberately does NOT normalise it (see the ⛔ note at the
-#      pipeline). Measured: a SIGKILLed `go test` leaves rc 137. Every ordinary
-#      go test failure mode measured so far collapses to 1.
+#         ⚠️ But NOT exclusively that. `mkdir -p "$OUT_DIR"` is NOT one of the
+#         three pre-flight checks (nor is the SCRIPT_DIR command substitution),
+#         so an unwritable BENCH_OUT_DIR — a variable the Concurrency note below
+#         actively tells you to set — dies under `set -e` carrying mkdir's own
+#         rc. Measured: BENCH_OUT_DIR=/proc/1/nonexistent_dir → rc 1 with stderr
+#         "mkdir: cannot create directory" and the "[bench_wrapper] cmd: …"
+#         preamble NEVER printed. ⇒ rc 1 with no preamble is an environment
+#         error, not a go test failure; read stderr before blaming the tests.
+#   ⚠️ Anything else is the pipeline's own rc escaping verbatim (see the ⛔ note
+#      at the pipeline). Measured: a SIGKILLed `go test` leaves rc 137. Every
+#      ordinary go test failure mode measured so far collapses to 1.
 #
 # Concurrency
 #   Like run_hooks_sandbox.sh, the default output paths are shared. If you
