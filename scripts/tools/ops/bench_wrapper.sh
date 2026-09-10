@@ -66,8 +66,13 @@
 #   • 0 means the run completed, NOT that every benchmark passed — read the
 #     "FAIL" summary line in bench.out.txt. (A benchmark that merely prints the
 #     word FAIL lands there too, so the line is a hint, not a verdict.)
-#   • Any rc with NO "[bench_wrapper] cmd: …" preamble means the script died
-#     before the pipeline ⇒ environment error, not a test failure; read stderr.
+#   • An rc with NO "[bench_wrapper] cmd: …" preamble USUALLY means the script
+#     died before the pipeline ⇒ environment error, not a test failure; read
+#     stderr. ⛔ NOT sufficient on its own: if this script's stdout had a
+#     consumer that closed immediately, SIGPIPE kills the very first preamble
+#     echo and you get rc 141 with no preamble AND an empty stderr (measured;
+#     see the 141 bullet). So: no preamble AND non-empty stderr ⇒ environment
+#     error. No preamble AND empty stderr ⇒ look at who was reading stdout.
 #     Measured: an unwritable BENCH_OUT_DIR — a variable the Concurrency note
 #     below tells you to set — gives rc 1 and `mkdir: cannot create directory`.
 #   • ⛔ Do NOT read 137 as OOM. It means the `go test` DRIVER was SIGKILLed.
@@ -77,14 +82,20 @@
 #     SIGKILL to the test binary (os.Getpid()) → 1, with go test printing an
 #     ordinary FAIL line. So the realistic OOM case looks like any other 1.
 #   • ⚠️ 141 means SIGPIPE, not anything about your tests: a consumer of this
-#     script's stdout closed early. Measured 3/3, WITH the preamble already
-#     printed (so the "no preamble" rule above does NOT cover it):
-#       bench_wrapper.sh -bench=. 2>/dev/null | head      → rc 141
-#       bench_wrapper.sh -bench=. 2>/dev/null | grep -q PASS → rc 141
-#     `| head`, `| grep -q`, or a CI step reading only part of the log all
-#     reach this, and it can happen before go test produces anything.
-#     ⛔ This bullet was once deleted as part of trimming an over-long list and
-#        had to be restored — it is the trap ad-hoc usage hits most often.
+#     script's stdout closed early. ⛔ Read it with ${PIPESTATUS[0]}, NOT $? —
+#     in a plain shell $? is the CONSUMER's status, so the check silently
+#     reports 0. (Yes: the rc-through-a-pipeline trap this whole file is about.
+#     An earlier version of this bullet made exactly that mistake.) Measured:
+#       cmd='bench_wrapper.sh -bench=. 2>/dev/null'
+#       eval "$cmd" | head       ; echo "$? / ${PIPESTATUS[0]}"   → 0 / 141
+#       eval "$cmd" | grep -q .  ; echo "${PIPESTATUS[0]}"        → 141
+#     ⛔ The preamble may or may not have printed — it depends on WHEN the
+#     consumer closed, and both halves were measured:
+#       | head        → rc 141, preamble printed (consumer read, then closed)
+#       | true        → rc 141, preamble NOT printed, stderr 0 bytes
+#       | head -c 0   → rc 141, preamble NOT printed, stderr 0 bytes
+#     ⇒ the second and third cases are counterexamples to the preamble rule
+#     above; see the caveat there.
 #   • The arg/env refusals below `exit 2` before the pipeline runs (hence no
 #     preamble). ⚠️ rc 2 does NOT imply one of them fired: `go test
 #     -timeout=notaduration` and `go test -help` also leave rc 2, from inside
