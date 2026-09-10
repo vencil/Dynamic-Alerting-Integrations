@@ -10,7 +10,13 @@ lang: zh
 
 > 這份是**路由表 + 不可協商項**。專案細節（架構、版本歷程、四層防線、工具清單）一律在被連結的檔案裡，**這裡刻意不複製**——複製出來的第二份必然先腐爛，而讀者無從得知讀到的是哪一份。
 >
-> 同理，本檔**不寫沒有 validator 在維持的計數**（有幾支 lint、幾個 skill、幾條規範）。那種數字要嘛靠人一次次追、要嘛悄悄變錯，而知道「有東西在守、去哪裡跑它」才是有用的。repo 已有的先例：工具數與 ADR 數由 `validate_docs_versions.py` 機械比對，所以那兩個可以寫。
+> 同理，本檔**不寫沒有機制在維持的計數**（有幾個 skill、幾個設計概念、幾條規範）。那種數字要嘛靠人一次次追、要嘛悄悄變錯，而知道「有東西在守、去哪裡跑它」才是有用的。
+>
+> ⛔ **反過來也成立：本檔裡凡是還留著的數字，都是有機制的，動它會弄紅閘門。** 目前只有兩個，各自在原地標註了守它的是誰。要判斷某個數字屬哪一類，別用 grep 找那個數字——機制是「算出來再比對」而不是把數字寫死。權威清單在 `bump_docs.py` 的 `_build_count_rules()`：
+>
+> ```bash
+> python3 scripts/tools/dx/bump_docs.py --sync-counts --check   # 對帳；DEAD 規則會 fail-closed
+> ```
 
 ## ⛔ 起手式：先確認閘門在不在
 
@@ -97,7 +103,11 @@ CLAUDE_CODE_REMOTE=true CLAUDE_PROJECT_DIR="$PWD" bash .claude/hooks/session-sta
 
 ## Pre-commit 品質閘門
 
-清單見 [`.pre-commit-config.yaml`](.pre-commit-config.yaml)。手動觸發：
+110 auto-run + 13 manual-stage hooks，清單見 [`.pre-commit-config.yaml`](.pre-commit-config.yaml)。
+
+⛔ 上面那組數字由 `bump_docs.py --sync-counts` 自動同步——**改寫這個句型會讓同步規則變 DEAD、`Version Consistency` 轉紅**（它 fail-closed 在「規則撈不到東西」而不是靜默放行）。要改句型請一併改 `_build_count_rules()` 的 `pattern`。
+
+手動觸發：
 
 ```bash
 pre-commit run --all-files                       # auto stage
