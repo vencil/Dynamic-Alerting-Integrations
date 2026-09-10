@@ -242,7 +242,6 @@ lang: zh
 | `check_trk_index_coverage.py` | 被引用的 TRK 必須出現在 planning SSOT 的索引裡。 |
 | `check_undefined_tokens.py` | Detect JSX/CSS/HTML references to --da-* tokens not defined in design-tokens.css (with --report-orphans discovery mode). |
 | `check_unpinned_deps.py` | block unpinned dependency-acquisition in CI/build. |
-| `check_unreachable_pipestatus.py` | 找出 ``set -e`` + ``pipefail`` 之下不可達的 ``PIPESTATUS`` 讀取。 |
 | `check_vmalert_coverage.py` | check_vmalert_coverage — rule-pack alert FIRING-decision coverage baseline guard. |
 | `check_window_x_no_fallback.py` | Forbid module-scope `const X = window.__X;` no-fallback reads (dev-rules.md §S6). |
 | `check_workflow_git_push_permissions.py` | guard against a silently no-op `git push`. |
