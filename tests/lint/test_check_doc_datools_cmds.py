@@ -1109,6 +1109,32 @@ class TestPinnedInvocationPrecision:
             "docker run --rm --entrypoint /bin/sh "
             "ghcr.io/vencil/da-tools:v2.9.0 -c 'ls /opt/da-tools'") == []
 
+    def test_entrypoint_equals_form_is_not_graded(self, tmp_path):
+        """`--entrypoint=<value>` is the same flag; docker accepts both.
+
+        Matching only the space-separated spelling let this shape through and
+        graded the shell's argv — measured: reported `runs 'ls'`.
+        """
+        assert self._issues(
+            tmp_path,
+            "docker run --rm --entrypoint=/bin/sh "
+            "ghcr.io/vencil/da-tools:v2.9.0 -c 'ls /opt/da-tools'") == []
+
+    def test_entrypoint_after_the_image_still_grades_the_subcommand(
+            self, tmp_path):
+        """Only flags BEFORE the image are docker's; after it they are argv.
+
+        Scanning the whole token list skipped these blocks, which is fail-OPEN:
+        the entrypoint is untouched, so the subcommand is judgeable and a bogus
+        one must still be reported. Measured: reported 0 before this.
+        """
+        issues = self._issues(
+            tmp_path,
+            "docker run --rm ghcr.io/vencil/da-tools:v2.9.0 "
+            "frobnicate --entrypoint x")
+        assert len(issues) == 1
+        assert "frobnicate" in issues[0].message
+
     def test_tag_without_v_prefix_is_still_checked(self, tmp_path):
         """bump_docs rewrites `da-tools:v?<semver>`; the check must match both.
 

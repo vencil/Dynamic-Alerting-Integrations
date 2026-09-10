@@ -3502,6 +3502,19 @@ class TestDatoolsPinCapability:
         monkeypatch.setattr(bump_docs, "parse_command_map", _boom)
         assert bump_docs._check_datools_pin_capability("9.9.9") == 1
 
+    def test_zero_extracted_invocations_fails_closed(self, monkeypatch):
+        """A corpus that yields no invocations must fail, not pass.
+
+        `pin_capability_doc_files()` returning files proves the corpus was
+        found, not that anything was read out of it. An extractor that stops
+        recognising the docs' command shape would otherwise print a green tick
+        over a check that graded nothing — the exact "量不到 vs 量了沒事"
+        collapse this check exists to prevent.
+        """
+        monkeypatch.setattr(bump_docs, "iter_pinned_invocations",
+                            lambda *a, **kw: [])
+        assert bump_docs._check_datools_pin_capability("9.9.9") == 1
+
     def test_unreadable_build_sh_fails_closed(self, monkeypatch):
         def _boom():
             raise OSError("simulated missing build.sh")

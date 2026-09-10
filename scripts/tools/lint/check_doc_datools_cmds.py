@@ -607,16 +607,30 @@ def iter_pinned_invocations(doc_files: List[Path],
             if not _DATOOLS_IMAGE_RE.search(flat):
                 continue
             toks = [t for t in _normalise(flat).split() if t != "\\"]
+            k = _image_index(toks)
+            if k is None:
+                continue
             # ⛔ `--entrypoint` replaces the program, so what follows the image
             # is that program's argv, not a da-tools subcommand. Grading it
             # reports a "subcommand" the CLI was never asked to run — a red on
             # a correct example, which for a release gate is the costly
             # direction. Measured: `--entrypoint /bin/sh … -c 'ls'` reported
             # `runs 'ls'`.
-            if "--entrypoint" in toks:
-                continue
-            k = _image_index(toks)
-            if k is None:
+            #
+            # ⛔ Two things the first version of this got wrong, both measured:
+            #   * `in toks` missed `--entrypoint=/bin/sh`. Docker accepts the
+            #     `=` form, and the un-skipped block then graded the shell's
+            #     argv — the same 誤紅 this skip exists to prevent, via a
+            #     spelling it did not cover.
+            #   * Scanning the WHOLE token list also skipped blocks where
+            #     `--entrypoint` appears AFTER the image, i.e. as an argument
+            #     handed to da-tools rather than a docker flag. Docker only
+            #     applies flags before the image, so such a block has a normal
+            #     entrypoint and its subcommand is judgeable; skipping it was
+            #     fail-OPEN (`… :v2.9.0 frobnicate --entrypoint x` reported 0).
+            # Hence: only the tokens BEFORE the image, and both spellings.
+            if any(t == "--entrypoint" or t.startswith("--entrypoint=")
+                   for t in toks[:k]):
                 continue
             tag_m = _PINNED_TAG_RE.search(toks[k])
             if tag_m is None:

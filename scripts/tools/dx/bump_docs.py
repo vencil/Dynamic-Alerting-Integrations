@@ -2417,6 +2417,22 @@ def _check_datools_pin_capability(new_ver: str) -> int:
         print(f"\n❌ could not assemble the documented-invocation corpus: "
               f"{exc}", file=sys.stderr)
         return 1
+    # ⛔ Zero extracted invocations is a FAILURE, not a pass. `doc_files` being
+    # non-empty proves the corpus was found, not that anything was read out of
+    # it: a fence style the extractor stops recognising, or a docs reorg that
+    # moves every `docker run` example, both land here — and the release would
+    # print a green tick over a check that graded nothing. Same rule as
+    # `capabilities_for_tag` refusing an empty capability set, and as #1790
+    # making an empty frontmatter corpus rc 2.
+    if not invocations:
+        print(f"\n❌ extracted 0 documented da-tools invocations from "
+              f"{len(doc_files)} doc(s) — refusing to report this bump as "
+              f"checked. Either the extractor stopped recognising the docs' "
+              f"command shape (see iter_pinned_invocations in "
+              f"check_doc_datools_cmds.py), or the docs genuinely stopped "
+              f"pinning any image — if it is the latter, delete this check "
+              f"rather than letting it pass over nothing.", file=sys.stderr)
+        return 1
     issues = check_pinned_subcommands_against(
         command_map, tool_files, doc_files, REPO_ROOT)
     # ⛔ Say what was checked even when nothing is wrong. Without this line a
