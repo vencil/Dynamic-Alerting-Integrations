@@ -45,7 +45,7 @@ CLAUDE_CODE_REMOTE=true CLAUDE_PROJECT_DIR="$PWD" bash .claude/hooks/session-sta
 違反這幾條會燒掉至少一輪。每條都附機制理由，不是慣例偏好。
 
 1. **回應語言** — 對人的輸出一律**繁體中文**（本則回應、PR / issue 留言、commit 訊息、`docs/**`）。⚠️ **repo 內工具印給 operator 的字串不在此列**，沿用該工具既有語言慣例（`scripts/tools/**` 目前為英文）；改既有字串時不得只翻被改到的那幾行。詳 [`dev-rules.md` §9c](docs/internal/dev-rules.md)。
-2. **Commit trailer block** — 所有 trailer 行須為**最底部單一連續段落、全 `Key: value` 格式**。夾空行或無冒號的裸行會劈裂 block，git 丟棄其上各行，CI gate 因此紅。多項目 / 純文件 commit 依 [`dev-rules.md` §P1](docs/internal/dev-rules.md) 改在 body prose 列 ID，**不寫 `Resolves` 裸行**。
+2. **Commit trailer block** — trailer 行（`Refs:` / `Self-Review-Pass-2:` / `Co-authored-by:`）須為**最底部單一連續段落、全 `Key: value` 格式**。夾空行或無冒號的裸行會劈裂 block，git 丟棄其上各行，CI gate 因此紅。多項目 / 純文件 commit 依 [`dev-rules.md` §P1](docs/internal/dev-rules.md) 改在 body prose 列 ID，**不寫 `Resolves` 裸行**。⛔ `Self-Review-Pass-2` 這個字串是被釘住的：`test_the_enforced_trailer_key_is_named_in_both_always_on_files` 要求 CLAUDE.md 與 [`AGENTS.md`](AGENTS.md) **都**指名它，否則只讀可攜檔的 agent 永遠不會知道有這道閘門（TRK-377）。刪掉它會讓 Python Tests 轉紅。
 3. **Worktree edit path** — 在 worktree 內編輯須 anchor worktree 路徑。main repo 同時 checked out，用 main-repo 路徑會**悄悄**落到 main。
 4. **`git add` 括號 glob** — bash `[01]` 只配 `0`/`1` 不配 `2`。任何括號 glob 後必跑 `git diff --cached --stat` 驗 staged set。
 5. **⛔ 沒有本則訊息內的驗證輸出，就不准宣稱通過** — 「測試過了 / lint 乾淨 / 修好了」都是**主張**，每一個都要對得上**這一輪實際跑過**的指令與其輸出。上一輪的結果不算、部分檢查不算、「應該會過」不算、subagent 回報成功不算（自己看 diff）。⚠️ 本 repo 燒過的具體形狀是**管線遮蔽 exit code**：`cmd | head; echo $?` 讀到的是 `head` 的 rc；要 rc 就別接管線。跑不了就說跑不了——**「量不到」與「量了沒事」必須可區分**。
