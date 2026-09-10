@@ -52,47 +52,34 @@
 #                     Created if missing.
 #   BENCH_GO        — go binary path (default: `go` in PATH).
 #
-# Exit codes — ⛔ there is NO exit-code contract, and this list is NOT exhaustive
-#   This script runs under `set -euo pipefail` and deliberately does NOT
-#   normalise anything, so ANY statement can terminate it carrying its own rc.
-#   The set of possible exit codes is therefore not enumerable from here.
-#   ⚠️ An earlier version of this header tried to be an exhaustive census; it
-#      was wrong within the same review round (it missed 141, below). Do not
-#      write a third census — treat the rule above as the contract and the
-#      entries below as MEASURED EXAMPLES, not as buckets that cover the space.
+# Exit codes — ⛔ there is no exit-code contract, and this comment must not
+#   pretend otherwise. `set -euo pipefail`, and nothing is normalised: whichever
+#   statement dies first ends the script carrying its own rc, so the reachable
+#   set is not enumerable from here.
+#   ⛔ Three attempts to enumerate it have been written in this header and each
+#      was falsified in the very next review round by the case nobody thought of
+#      (a `mkdir` that is not a pre-flight check → 1; SIGPIPE from `… | head`
+#      → 141; `go test` rejecting a flag → 2, with none of this script's own
+#      `exit`s running). DO NOT ADD A FOURTH LIST. Read stderr and the
+#      artefacts. What follows is only what a caller can act on:
 #
-#   0   — benchmark run completed (regardless of PASS / FAIL of individual
-#         benchmarks; check bench.out.txt for "FAIL" summary line).
-#   2   — refused by one of the three EXPLICIT pre-flight checks: no args,
-#         $BENCH_GO not on PATH, bench_filter.go missing. These are the only
-#         `exit` statements in the file, and all three run BEFORE the pipeline.
-#   1   — most commonly `go test` itself failed (compile error, panic, bad flag,
-#         timeout, missing deps) or the bench_filter.go stage failed. Details:
-#         bench.raw.jsonl and the "FAIL …" line in bench.out.txt; bench.err.log
-#         is EMPTY on go1.24+ (see the Behaviour note above).
-#         ⚠️ Also reached WITHOUT go test having run at all: `mkdir -p
-#         "$OUT_DIR"` is not a pre-flight check (nor is the SCRIPT_DIR command
-#         substitution), so an unwritable BENCH_OUT_DIR — a variable the
-#         Concurrency note below actively tells you to set — dies under `set -e`
-#         carrying mkdir's rc. Measured: BENCH_OUT_DIR=/proc/1/nonexistent_dir
-#         → rc 1, stderr "mkdir: cannot create directory", and the
-#         "[bench_wrapper] cmd: …" preamble NEVER printed.
-#         ⇒ rc 1 with no preamble is an environment error, not a test failure.
-#   137 — the `go test` DRIVER process was SIGKILLed; the pipeline rc escapes.
-#         ⛔ This is NOT the OOM shape, despite what this header used to imply.
-#         A real OOM kill targets the highest-badness process, which is the
-#         compiled test binary (it holds the memory), not the thin driver.
-#         Measured, same wrapper and module, only the signal target differing:
-#           SIGKILL to the driver      (os.Getppid() from the bench) → rc 137
-#           SIGKILL to the test binary (os.Getpid()  from the bench) → rc 1,
-#             with go test reporting an ordinary "FAIL" line.
-#         ⇒ In the realistic OOM case the wrapper exits 1, indistinguishable
-#           from any other failure. Do not rely on 137 to detect OOM.
-#   141 — SIGPIPE: the wrapper's own `echo "[bench_wrapper] …"` preamble died
-#         because a consumer of the wrapper's stdout closed early. Measured 3/3:
-#           bench_wrapper.sh -bench=. 2>/dev/null | head -c 0   → rc 141
-#         Ordinary usage (`| head`, `| grep -q`, a CI step reading part of the
-#         log) reaches this, and it happens before go test even starts.
+#   • 0 means the run completed, NOT that every benchmark passed — read the
+#     "FAIL" summary line in bench.out.txt. (A benchmark that merely prints the
+#     word FAIL lands there too, so the line is a hint, not a verdict.)
+#   • Any rc with NO "[bench_wrapper] cmd: …" preamble means the script died
+#     before the pipeline ⇒ environment error, not a test failure; read stderr.
+#     Measured: an unwritable BENCH_OUT_DIR — a variable the Concurrency note
+#     below tells you to set — gives rc 1 and `mkdir: cannot create directory`.
+#   • ⛔ Do NOT read 137 as OOM. It means the `go test` DRIVER was SIGKILLed.
+#     A real OOM kill takes the highest-badness process, i.e. the compiled test
+#     binary, not the thin driver. Measured, same wrapper and module, only the
+#     signal target differing: SIGKILL to the driver (os.Getppid()) → 137;
+#     SIGKILL to the test binary (os.Getpid()) → 1, with go test printing an
+#     ordinary FAIL line. So the realistic OOM case looks like any other 1.
+#   • The arg/env refusals below `exit 2` before the pipeline runs (hence no
+#     preamble). ⚠️ rc 2 does NOT imply one of them fired: `go test
+#     -timeout=notaduration` and `go test -help` also leave rc 2, from inside
+#     the pipeline, with the preamble already printed.
 #
 # Concurrency
 #   Like run_hooks_sandbox.sh, the default output paths are shared. If you
@@ -148,8 +135,10 @@ echo "---"
 #   ⚠️ 機制是「**最右邊**的非零」，不是最左邊（本行原文寫 leftmost，是錯的）：
 #   實測 `set -o pipefail; (exit 5)|(exit 0)|(exit 7)|(exit 0)` → rc **7**。
 #   實務上 go test 把所有失敗模式都正規化成 rc 1、`go run` 也把 filter 的任何非零
-#   壓成 1，所以「最左／最右」今天觀察不到差別 —— 唯一的例外是 go test 自己被
-#   SIGKILL，rc **137** 會原樣逃出去。
+#   壓成 1，所以「最左／最右」今天觀察不到差別。⛔ 本行原文寫「唯一的例外是
+#   go test 自己被 SIGKILL」——**那個「唯一」是假的**，已刪：`go test` 自己拒收旗標
+#   （實測 `-timeout=notaduration`、`-help`）就讓管線 rc 是 **2**。要看有哪些已量到
+#   的逃出值，讀檔頭的 Exit codes 段，並注意它明說自己不窮盡。
 "$GO_BIN" test -json "$@" 2>"$ERR_LOG" \
     | tee "$RAW_JSONL" \
     | "$GO_BIN" run "$FILTER" \
