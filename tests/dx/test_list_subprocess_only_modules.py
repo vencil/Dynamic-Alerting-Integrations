@@ -360,17 +360,33 @@ def test_build_partition_is_exact_in_process() -> None:
 # B2 — TOML 一律以 stdlib tomllib 為準（tomllib 當 oracle，不自己寫第二套判準）
 # ---------------------------------------------------------------------------
 _TOML_CASES = {
-    # ⛔ 前四案在舊的 regex 版本下與 tomllib 分歧；第五案是對照組（本來就一致），
-    # 沒有它的話，一個「永遠回 tomllib 的答案」與「永遠回空」都可能矇混過去。
-    "single_quoted": "[tool.coverage.run]\nsource = ['scripts/tools']\n",
-    "commented_out_source": '[tool.coverage.run]\n# source = ["WRONG/from/comment"]\n'
-                            'source = ["scripts/tools"]\n',
-    "decoy_header_inside_a_string": '[tool.other]\n'
-                                    'note = "see [tool.coverage.run] for details"\n'
-                                    'source = ["BOGUS/never/used"]\n\n'
-                                    '[tool.coverage.run]\nsource = ["scripts/tools"]\n',
-    "dotted_key": '[tool.coverage]\nrun.source = ["scripts/tools"]\n',
-    "control_plain": '[tool.coverage.run]\nsource = ["scripts/tools"]\n',
+    # ⛔ 每一案的**正確答案必須互不相同**。第一版全部設計成 `["scripts/tools"]`，
+    #   於是一個「完全不讀檔、永遠回傳那個硬編值」的實作五案全過——盲審實測 5 passed。
+    #   ⇒ 對照組沒有在對照它宣稱的東西。答案互異之後，任何常數實作至少會錯四案。
+    #   釘住這件事的是下面的 `test_a_constant_parser_cannot_pass_the_toml_cases`。
+    "single_quoted": ("[tool.coverage.run]\nsource = ['scripts/tools/dx']\n",
+                      ["scripts/tools/dx"]),
+    "commented_out_source": ('[tool.coverage.run]\n# source = ["WRONG/from/comment"]\n'
+                             'source = ["scripts/tools/lint"]\n',
+                             ["scripts/tools/lint"]),
+    "decoy_header_inside_a_string": ('[tool.other]\n'
+                                     'note = "see [tool.coverage.run] for details"\n'
+                                     'source = ["BOGUS/never/used"]\n\n'
+                                     '[tool.coverage.run]\nsource = ["scripts/tools/ops"]\n',
+                                     ["scripts/tools/ops"]),
+    "dotted_key": ('[tool.coverage]\nrun.source = ["scripts/tools"]\n',
+                   ["scripts/tools"]),
+    "control_plain": ('[tool.coverage.run]\n'
+                      'source = ["scripts/tools/dx", "scripts/tools/lint"]\n',
+                      ["scripts/tools/dx", "scripts/tools/lint"]),
+}
+
+_TOML_TREE = {
+    "scripts/tools/top.py": "def main(): return 0\n",
+    "scripts/tools/dx/d.py": "def main(): return 0\n",
+    "scripts/tools/lint/l.py": "def main(): return 0\n",
+    "scripts/tools/ops/o.py": "def main(): return 0\n",
+    "tests/test_any.py": "def test_x():\n    assert True\n",
 }
 
 
@@ -382,15 +398,31 @@ def test_toml_parsing_matches_tomllib(tmp_path: Path, case: str) -> None:
     （於是對一份 coverage.py 讀得好好的設定回 rc 2）；註解裡的 source 與別處字串裡的
     假 header 則**贏過真的那行**——那是靜默拿錯母體，比壞掉更糟。
     """
-    text = _TOML_CASES[case]
-    repo = _fixture(tmp_path, {"scripts/tools/only.py": "def main(): return 0\n",
-                               "tests/test_only.py": "def test_x():\n    assert True\n"})
+    text, expected = _TOML_CASES[case]
+    repo = _fixture(tmp_path, dict(_TOML_TREE))
     (repo / "pyproject.toml").write_text(text, encoding="utf-8")
 
+    # tomllib 是 oracle：測試資料自己也要對得上，否則我們在對一個錯的期望值斷言。
     run = tomllib.loads(text).get("tool", {}).get("coverage", {}).get("run", {})
-    assert run.get("source") == ["scripts/tools"], "測試資料自己寫錯了"
+    assert run.get("source") == expected, "測試資料自己寫錯了"
 
-    assert _json(repo)["sources"] == run["source"]
+    assert _json(repo)["sources"] == expected
+
+
+def test_a_constant_parser_cannot_pass_the_toml_cases() -> None:
+    """⛔ 上面那組案例的**期望值必須互不相同**，否則對照組不成立。
+
+    盲審實測打穿過第一版：五案的答案全是 ``["scripts/tools"]``，於是一個完全不讀檔、
+    永遠回傳那個常數的實作**五案全過**。這一格是那個教訓的機械化——它不驗工具，
+    它驗**測試資料本身還有沒有鑑別力**：任何常數實作至少要錯四案。
+    """
+    answers = [tuple(expected) for _, expected in _TOML_CASES.values()]
+    for candidate in set(answers):
+        passes = sum(1 for a in answers if a == candidate)
+        assert passes <= 1, (
+            f"常數實作回傳 {list(candidate)} 就能過 {passes} 案 —— "
+            "期望值撞在一起，這組案例失去鑑別力"
+        )
 
 
 def test_non_utf8_pyproject_is_rc2(tmp_path: Path) -> None:
@@ -408,6 +440,29 @@ def test_non_utf8_pyproject_is_rc2(tmp_path: Path) -> None:
     assert proc.returncode == 2, f"rc={proc.returncode}\n{proc.stdout}\n{proc.stderr}"
     assert "UTF-8" in proc.stderr
     assert "Traceback" not in proc.stderr, "契約要求指名成因，不是吐 traceback"
+
+
+@pytest.mark.parametrize("toml_text", [
+    'tool = "not-a-table"',
+    '[tool]\ncoverage = "nope"',
+    '[tool.coverage]\nrun = "nope"',
+])
+def test_non_table_on_the_tool_coverage_run_path_is_rc2(
+    tmp_path: Path, toml_text: str
+) -> None:
+    """⛔ 逐層都要守，不能只守葉子。
+
+    `doc.get("tool", {}).get("coverage", {}).get("run", {})` 這種鏈式寫法，在路徑上任何
+    一層是純量時會丟 `AttributeError`——那是 `ValueError`／`OSError` 之外的第三種，
+    呼叫端的 `except` 攔不到 ⇒ 裸 traceback + rc 1。⚠️ 第一版只守了葉子的
+    `source`/`omit` 形狀，盲審用 `tool = "not-a-table"` 一句就打穿。
+    """
+    repo = _fixture(tmp_path, {"scripts/tools/only.py": "x = 1\n",
+                               "tests/test_any.py": "def test_x():\n    assert True\n"})
+    (repo / "pyproject.toml").write_text(toml_text, encoding="utf-8")
+    proc = _run(repo)
+    assert proc.returncode == 2, f"rc={proc.returncode}\n{proc.stdout}\n{proc.stderr}"
+    assert "Traceback" not in proc.stderr
 
 
 def test_malformed_toml_is_rc2(tmp_path: Path) -> None:
