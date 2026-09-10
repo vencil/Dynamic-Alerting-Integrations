@@ -76,6 +76,15 @@
 #     signal target differing: SIGKILL to the driver (os.Getppid()) → 137;
 #     SIGKILL to the test binary (os.Getpid()) → 1, with go test printing an
 #     ordinary FAIL line. So the realistic OOM case looks like any other 1.
+#   • ⚠️ 141 means SIGPIPE, not anything about your tests: a consumer of this
+#     script's stdout closed early. Measured 3/3, WITH the preamble already
+#     printed (so the "no preamble" rule above does NOT cover it):
+#       bench_wrapper.sh -bench=. 2>/dev/null | head      → rc 141
+#       bench_wrapper.sh -bench=. 2>/dev/null | grep -q PASS → rc 141
+#     `| head`, `| grep -q`, or a CI step reading only part of the log all
+#     reach this, and it can happen before go test produces anything.
+#     ⛔ This bullet was once deleted as part of trimming an over-long list and
+#        had to be restored — it is the trap ad-hoc usage hits most often.
 #   • The arg/env refusals below `exit 2` before the pipeline runs (hence no
 #     preamble). ⚠️ rc 2 does NOT imply one of them fired: `go test
 #     -timeout=notaduration` and `go test -help` also leave rc 2, from inside
