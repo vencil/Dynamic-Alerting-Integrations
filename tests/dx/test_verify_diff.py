@@ -8,8 +8,7 @@ Coverage:
   - 選擇引擎：import / identity / dir-rule(pytest 與 external) /
     always-run additive / full-run trigger / safe-ignore / fail-closed /
     suite 去重
-  - 映射保鮮：digest 陳舊偵測 + 現場重生；--check 未映射 fail 與例外表、
-    殭屍例外條目
+  - --check：未映射 fail 與例外表、殭屍例外條目、語法壞的 test 檔
   - CLI：無輸入 → exit 2；--json 單一 JSON 文件；--check exit code
   - 真實 repo 煙霧測試：bump_docs.py → test_bump_docs.py 映射存在
 """
@@ -187,13 +186,6 @@ class TestBuildMap:
         assert "scripts/tools/dx/orphantool.py" not in vmap["import_map"]
         assert "scripts/tools/dx/orphantool.py" not in vmap["text_map"]
 
-    def test_digest_changes_when_test_edited(self, synth_repo):
-        d1 = vd.build_map(synth_repo)["source_digest"]
-        _write(synth_repo / "tests" / "dx" / "test_mytool.py",
-               "import mytool\n\ndef test_x2():\n    assert mytool.X == 1\n")
-        d2 = vd.build_map(synth_repo)["source_digest"]
-        assert d1 != d2
-
 
 # ============================================================
 # 選擇引擎
@@ -315,73 +307,28 @@ class TestPytestArgv:
 
 
 # ============================================================
-# 映射保鮮（staleness + --check）
+# --check（test 檔可達性）
 # ============================================================
 
-class TestFreshness:
-    def test_stale_map_rebuilt_with_warning(self, synth_repo, tmp_path,
-                                            capsys):
-        map_path = tmp_path / "map.json"
-        vd.write_map(vd.build_map(synth_repo), map_path)
-        _write(synth_repo / "tests" / "dx" / "test_new.py",
-               "import mytool\n\ndef test_n():\n    assert True\n")
-        vmap, stale = vd.load_or_rebuild_map(synth_repo, map_path)
-        assert stale is True
-        assert "陳舊" in capsys.readouterr().err
-        assert "tests/dx/test_new.py" in vmap["tests_scanned"]
-
-    def test_fresh_map_used_as_is(self, synth_repo, tmp_path):
-        map_path = tmp_path / "map.json"
-        vd.write_map(vd.build_map(synth_repo), map_path)
-        _, stale = vd.load_or_rebuild_map(synth_repo, map_path)
-        assert stale is False
-
+class TestCheck:
     def test_check_flags_unmapped_test(self, synth_repo, tmp_path):
-        map_path = tmp_path / "map.json"
-        vd.write_map(vd.build_map(synth_repo), map_path)
-        problems, _ = vd.check_map(synth_repo, map_path, _rules())
+        problems, _ = vd.check_map(synth_repo, _rules())
         assert any("test_orphan.py" in p for p in problems)
 
     def test_check_respects_exception_table(self, synth_repo, tmp_path):
-        map_path = tmp_path / "map.json"
-        vd.write_map(vd.build_map(synth_repo), map_path)
         rules = _rules(unmapped_test_ok=[
             {"test": "tests/ops/test_orphan.py", "justification": "純語意測試"},
         ])
-        problems, _ = vd.check_map(synth_repo, map_path, rules)
+        problems, _ = vd.check_map(synth_repo, rules)
         assert not any("未映射" in p for p in problems)
 
     def test_check_flags_zombie_exception(self, synth_repo, tmp_path):
-        map_path = tmp_path / "map.json"
-        vd.write_map(vd.build_map(synth_repo), map_path)
         rules = _rules(unmapped_test_ok=[
             {"test": "tests/ops/test_orphan.py", "justification": "ok"},
             {"test": "tests/gone/test_gone.py", "justification": "殭屍"},
         ])
-        problems, _ = vd.check_map(synth_repo, map_path, rules)
+        problems, _ = vd.check_map(synth_repo, rules)
         assert any("殭屍" in p for p in problems)
-
-    def test_check_flags_stale_map_file(self, synth_repo, tmp_path):
-        map_path = tmp_path / "map.json"
-        vd.write_map(vd.build_map(synth_repo), map_path)
-        _write(synth_repo / "tests" / "dx" / "test_more.py",
-               "import mytool\n\ndef test_m():\n    assert True\n")
-        problems, _ = vd.check_map(synth_repo, map_path, _rules())
-        assert any("陳舊" in p for p in problems)
-
-    def test_check_flags_tampered_map_content(self, synth_repo, tmp_path):
-        """F5：digest 相同但 import_map 被手改（缺 ref）→ --check 必抓。
-
-        digest 只蓋輸入（test 檔內容 + 模組索引路徑），不蓋 map 內容——
-        手改 committed map 可以在 digest 檢查下「永遠新鮮」。內容相等比對
-        收掉這個洞。
-        """
-        map_path = tmp_path / "map.json"
-        vmap = vd.build_map(synth_repo)
-        del vmap["import_map"]["scripts/tools/dx/mytool.py"]  # 假裝缺 ref
-        vd.write_map(vmap, map_path)
-        problems, _ = vd.check_map(synth_repo, map_path, _rules())
-        assert any("映射內容不符" in p for p in problems)
 
     def test_check_flags_syntax_broken_test(self, synth_repo, tmp_path):
         """F2（CodeRabbit #3608510382）：語法壞的 test 檔 → --check 必紅。
@@ -391,9 +338,7 @@ class TestFreshness:
         """
         _write(synth_repo / "tests" / "ops" / "test_broken.py",
                "def test_x(:\n    pass\n")  # 故意語法錯
-        map_path = tmp_path / "map.json"
-        vd.write_map(vd.build_map(synth_repo), map_path)
-        problems, _ = vd.check_map(synth_repo, map_path, _rules())
+        problems, _ = vd.check_map(synth_repo, _rules())
         assert any("AST 解析失敗" in p and "test_broken.py" in p
                    for p in problems)
 
@@ -409,13 +354,10 @@ class TestFreshness:
 
 @pytest.fixture
 def synth_cli(synth_repo, tmp_path):
-    """合成 repo 的 CLI 參數組（rules YAML 落地 + map 落地）。"""
+    """合成 repo 的 CLI 參數組（rules YAML 落地）。"""
     rules_path = _write(tmp_path / "rules.yaml",
                         yaml.safe_dump(_rules(), allow_unicode=True))
-    map_path = tmp_path / "map.json"
-    vd.write_map(vd.build_map(synth_repo), map_path)
-    return ["--repo-root", str(synth_repo), "--rules", str(rules_path),
-            "--map", str(map_path)]
+    return ["--repo-root", str(synth_repo), "--rules", str(rules_path)]
 
 
 class TestCli:
@@ -449,11 +391,9 @@ class TestCli:
             yaml.safe_dump(_rules(unmapped_test_ok=[
                 {"test": "tests/ops/test_orphan.py",
                  "justification": "純語意測試"}]), allow_unicode=True))
-        map_path = tmp_path / "map2.json"
-        vd.write_map(vd.build_map(synth_repo), map_path)
         code = self._run_main(cli_argv, [
             "--repo-root", str(synth_repo), "--rules", str(rules_path),
-            "--map", str(map_path), "--check"])
+            "--check"])
         assert code == 0
 
     def test_check_fails_on_unmapped(self, cli_argv, synth_cli):
@@ -489,18 +429,6 @@ class TestCli:
         assert doc["unrun_external"] == [
             {"suite": "tests/contract", "runner": "make contract-test"}]
 
-    def test_write_map_roundtrip(self, cli_argv, synth_repo, tmp_path):
-        rules_path = _write(tmp_path / "r3.yaml",
-                            yaml.safe_dump(_rules(), allow_unicode=True))
-        map_path = tmp_path / "m3.json"
-        code = self._run_main(cli_argv, [
-            "--repo-root", str(synth_repo), "--rules", str(rules_path),
-            "--map", str(map_path), "--write-map"])
-        assert code == 0
-        with open(map_path, encoding="utf-8") as f:
-            on_disk = json.load(f)
-        assert on_disk["version"] == vd.MAP_VERSION
-
     def test_run_external_only_no_full_collection(self, cli_argv, synth_cli,
                                                   monkeypatch):
         """F1（CodeRabbit #3608510380）：external-only diff + --run 不得退化成
@@ -531,7 +459,7 @@ class TestCli:
                                              monkeypatch):
         """external-only + --run + --ack-external → 不跑 pytest、exit 0。
 
-        （只攔 pytest；git ls-files 等保鮮探測仍需放行。）
+        （只攔 pytest；映射建置用的 git ls-files 仍需放行。）
         """
         real_run = subprocess.run
 
@@ -650,9 +578,8 @@ class TestRealRepoSmoke:
             real_map["import_map"]["scripts/tools/dx/bump_docs.py"]
 
     def test_repo_check_is_green(self, real_rules):
-        """映射檔新鮮 + 全 test 檔可達（--check 的 repo 守門）。"""
-        problems, _ = vd.check_map(vd.REPO_ROOT, vd.DEFAULT_MAP_PATH,
-                                   real_rules)
+        """全 test 檔可達（--check 的 repo 守門）。"""
+        problems, _ = vd.check_map(vd.REPO_ROOT, real_rules)
         assert problems == [], problems
 
     # ── 外審 F1-F3 反例釘死：非 pytest gate 輸入 / module 常數間接依賴 ──

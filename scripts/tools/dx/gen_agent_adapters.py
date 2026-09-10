@@ -27,7 +27,7 @@ repo's own test suite records three tests erroring on a Windows host because tar
 could not create a symlink (PR #1457), and the Windows escape hatch
 (`make win-commit`) is a supported path. Copies plus a drift gate is the same
 shape the repo already uses for every other generated artifact (tool-map,
-verify_diff_map, README counts).
+README counts).
 
 The cost is honest: every skill edit touches two files, and ~40KB of skill text
 exists twice in git. The gate below is what keeps the second copy from becoming

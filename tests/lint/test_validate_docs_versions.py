@@ -2267,7 +2267,7 @@ class TestBilingualNumbersReadsRealCounts:
         """`### 1.2 Alerts don't fire` — an English heading with a plural noun.
 
         Shipped text: the troubleshooting-checklist bilingual pair.
-        ⚠️ Named without a full path on purpose: `verify_diff --write-map`
+        ⚠️ Named without a full path on purpose: `verify_diff`
         scans docstrings for paths, and one here would make editing that
         document select this ~100-second module, which never reads it.
         ⚠️ That pair WAS a MISMATCH before the narrowing, but not because

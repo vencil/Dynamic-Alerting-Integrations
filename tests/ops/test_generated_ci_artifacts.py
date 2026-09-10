@@ -359,7 +359,7 @@ def test_generator_sources_exist() -> None:
 
     Also keeps ``_INIT_PROJECT`` / ``_PORTAL_GENERATORS`` referenced: those two
     literal path strings are what registers this guard in
-    ``scripts/tools/dx/verify_diff_map.json``, so an "unused constant" cleanup
+    verify_diff's text_map, so an "unused constant" cleanup
     would quietly stop a change to either generator from selecting this test.
     """
     for p in (_INIT_PROJECT, _PORTAL_GENERATORS):

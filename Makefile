@@ -1089,9 +1089,8 @@ verify-diff-dry: ## 只列 verify-diff 的 Python 測試選集與外部套件提
 	@python3 scripts/tools/dx/verify_diff.py --base $(or $(BASE),origin/main) --dry-run $(ARGS)
 
 .PHONY: verify-diff-check
-verify-diff-check: ## 映射保鮮 lint：verify_diff_map.json stale 或有未映射 test 檔 → fail
-	@python3 scripts/tools/dx/verify_diff.py --check || \
-		(echo "Hint: run 'python3 scripts/tools/dx/verify_diff.py --write-map' 更新映射檔" && exit 1)
+verify-diff-check: ## test 檔可達性 lint：有 test 檔映射不到或解析失敗 → fail
+	@python3 scripts/tools/dx/verify_diff.py --check
 
 .PHONY: hook-profile
 hook-profile: ## Pre-commit hook 逐一計時 profiling

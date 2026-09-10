@@ -185,7 +185,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 # ⛔ ONE literal path string each — a `/ ".github" / "workflows"` split form
-# registers this module against nothing in verify_diff_map.json.
+# registers this module against nothing in verify_diff's text_map.
 CI_WORKFLOW = ROOT / ".github/workflows/ci.yml"
 WORKFLOW_DIR = ROOT / ".github/workflows"
 
