@@ -391,7 +391,7 @@ tools:
 ### 相關自動化
 
 - `scan_component_health.py`：實作於 `scripts/tools/dx/scan_component_health.py`，含 `_is_archive_candidate()` helper
-- `tests/dx/test_scan_component_health.py`：12 個測試覆蓋 tier / archived / candidate 三條路徑
+- `tests/dx/test_scan_component_health.py`：覆蓋 tier / archived / candidate 三條路徑
 - 與 Q2 policy 對齊：警告型（不 fail），可在 CI 印出 `archived_tools` + `archive_candidates` 供 PR review
 
 ## §P 流程紀律

@@ -101,7 +101,7 @@ sequenceDiagram
 - **Tier 2 performance benchmarks** (1000–5000 tenant hot-path latency / memory / goroutines) give empirical grounding for SLO and sharding decisions — see [Benchmarks](../benchmarks.en.md) for the numbers.
 - The CI pipeline runs the full test suite on **every PR**.
 
-> The full test inventory (per-domain test counts, `make` commands, Tier 2 benchmark function mapping, measurement methodology) is an internal QA record; maintainers see `docs/internal/test-coverage-matrix.md`.
+> The full test inventory (`make` commands, Tier 2 benchmark function mapping, measurement methodology) is an internal QA record; maintainers see `docs/internal/test-coverage-matrix.md`.
 
 ## Interactive Tools
 

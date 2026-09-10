@@ -408,7 +408,7 @@ tenants:
 - **`ScheduledValue` 自訂 YAML 型別**：支援雙格式解析——純量字串（向後相容）和結構化 `{default, overrides[{window, value}]}`
 - **`ResolveAt(now time.Time)`**：根據當前 UTC 時間解析應使用的閾值，確保確定性與可測試性
 - **時間窗口格式**：`HH:MM-HH:MM` (UTC)，支援跨午夜（如 `22:00-06:00` 表示晚上十點到隔天早上六點）
-- **45 個測試案例**：覆蓋邊界條件——窗口重疊、跨午夜、純量退化、空 overrides
+- **測試案例**：覆蓋邊界條件——窗口重疊、跨午夜、純量退化、空 overrides
 
 ### 2.7 三態運營模式 (Operational Modes)
 

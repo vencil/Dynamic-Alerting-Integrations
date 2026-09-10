@@ -101,7 +101,7 @@ sequenceDiagram
 - **Tier 2 性能 benchmark**（1000–5000 租戶 hot-path 延遲 / 記憶體 / goroutine）為 SLO 與 sharding 決策提供 empirical 依據——數字見[性能基準](../benchmarks.md)。
 - CI pipeline 在**每次 PR** 自動執行全套測試。
 
-> 完整測試清單（逐域測試數、`make` 指令、Tier 2 benchmark 函式對照、量測方法論）屬內部 QA 紀錄，維護者見 `docs/internal/test-coverage-matrix.md`。
+> 完整測試清單（`make` 指令、Tier 2 benchmark 函式對照、量測方法論）屬內部 QA 紀錄，維護者見 `docs/internal/test-coverage-matrix.md`。
 
 ## 互動工具
 
