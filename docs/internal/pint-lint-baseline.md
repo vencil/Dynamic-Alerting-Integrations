@@ -79,7 +79,7 @@ updated_at: 2026-08-07
 
 **原盲區**：平台 pack 只有「有 promtool 測試的」才有 extract，其餘對 pint 隱形。**已由 `parser.relaxed` + 直掃 `configmap-rules-platform*.y(a)ml` 關閉**——現在掃的是**實際部署的那份**，不再依賴 extract 的覆蓋率。
 
-關閉盲區當時（#1259，2026-07-28）的量測（數字用 parse 數出、非 grep）：
+關閉盲區當時（#1370，2026-08-09）的量測（數字用 parse 數出、非 grep）：
 
 | 量測 | 值 |
 |---|---:|
