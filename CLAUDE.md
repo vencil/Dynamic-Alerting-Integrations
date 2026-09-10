@@ -144,4 +144,15 @@ Vibe 專案內建 **八個本地 skills**，在對應情境自動觸發。
 - **K8s MCP** 常 timeout → fallback docker exec；**Prometheus/Alertmanager** `port-forward` + `localhost:9090/9093`
 - **測試**: Python tests Cowork VM 直接跑；Go tests 需 Dev Container（`make dc-go-test`，支援 `MOD=`/`PKG=` 縮小範圍——單 package 秒級）。**檔案清理** `docker exec ... rm -f`（Cowork VM 無法直接 rm 掛載路徑）
 
+### Agent 開的 PR：review 迴路上四個「看起來綠／看起來卡」的坑（#1833 實測）
+
+⛔ 這四項都不是偶發，是**結構性**的，每個 agent-opened PR 都會遇到：
+
+1. **CodeRabbit 不會審 agent 開的 PR。** PR 作者是 `claude[bot]`（`type: Bot`），CodeRabbit 直接 `Review skipped — Bot user detected`。⇒ **agent 開的 PR 預設沒有 CodeRabbit 這層**，把它算進安全網會高估覆蓋。
+2. **就算觸發過一次，後續 push 也不會自動再審**——[`.coderabbit.yaml`](.coderabbit.yaml) 設了 `auto_incremental_review: false`。⚠️ 連帶效果：PR 頁面的 **Merge Risk 橫幅會停在被審過的那個 commit**，修完之後它仍寫著舊 finding，容易被讀成現況。要更新只能再觸發一次。
+3. **agent 解不開「未 resolve 的 review thread」。** resolve 只有 GraphQL 的 `resolveReviewThread`，而 agent session 的 GraphQL 只開放釘選的 PR-review 操作（其餘 403），REST 無對應端點。⇒ 若 branch protection 要求 conversation resolution，**CI 全綠的 PR 會停在 `mergeable_state: blocked` 而 agent 無法推進**，只能請人在 UI 按。
+4. **「為什麼 blocked」在 agent 這側量不到**：`GET /branches/main/protection` 對 app token 回 403。能做的是**差分**——比對前後兩個 head 的 check 名單＋結論，相同就代表 blocked 不是 CI 造成的，再往 review／thread 方向找。
+
+⚠️ 另有一個容易誤讀的讀數：本 repo 只用 check-runs、不用 legacy status，所以 `GET /commits/<sha>/status` **一律回 `state: pending` 且 `contexts` 為空**。那是空集合的既有行為，不是「還有東西沒跑完」；權威訊號是 `mergeable_state` 與 check-runs 本身。
+
 任務→Playbook 章節對照（K8s / docker / release / benchmark / E2E 等）→ 觸發 `vibe-playbook-nav` skill。
