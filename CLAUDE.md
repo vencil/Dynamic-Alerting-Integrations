@@ -8,17 +8,21 @@ lang: zh
 
 # CLAUDE.md — AI 開發上下文指引
 
-## ⛔ Agent 起手式（已自動化 🛡️）
+> 這份是**路由表 + 不可協商項**。專案細節（架構、版本歷程、四層防線、工具清單）一律在被連結的檔案裡，**這裡刻意不複製**——複製出來的第二份必然先腐爛，而讀者無從得知讀到的是哪一份。
+>
+> 同理，本檔**不寫沒有機制在維持的計數**（有幾個 skill、幾個設計概念、幾條規範）。那種數字要嘛靠人一次次追、要嘛悄悄變錯，而知道「有東西在守、去哪裡跑它」才是有用的。
+>
+> ⛔ **反過來也成立：本檔裡凡是還留著的數字，都是有機制的，動它會弄紅閘門。** 目前只有兩個，各自在原地標註了守它的是誰。要判斷某個數字屬哪一類，別用 grep 找那個數字——機制是「算出來再比對」而不是把數字寫死。權威清單在 `bump_docs.py` 的 `_build_count_rules()`：
+>
+> ```bash
+> python3 scripts/tools/dx/bump_docs.py --sync-counts --check   # 對帳；DEAD 規則會 fail-closed
+> ```
 
-Session 起手式 codified 為 **PreToolUse hook** (v2.8.0；#824 改經 `run-hooks.sh` launcher 做直譯器功能性探測) — 第一次 `Bash`/`Write`/`Edit`/`MultiEdit` 自動跑 `scripts/session-guards/session-init.py`（關 VS Code Git + 寫 session marker + 刷 liveness heartbeat），後續 O(1) no-op。手動觸發 / telemetry / dev-container 啟動 / session 結束清理 → 觸發 `vibe-workflow` skill 或 `make dc-*` / `make session-cleanup`。
+## ⛔ 起手式：先確認閘門在不在
 
-第二支 PreToolUse hook：`scripts/session-guards/preflight_bash.py`（audit-2026-04 §H1+H2）— 攔 `sed -i` + 掛載路徑（dev-rules #11，免 token 浪費 fix file hygiene）+ 攔 `_*.bat`/`_*.ps1`/`_*.cmd` 寫到 whitelist 之外（Trap #54 防再造輪子）。被擋時 stderr 直接告訴 Claude 該用什麼替代（Read+Edit / `win_git_escape.bat raw <args>`）。
+⛔ **不要假設 hook 跑過了。** 在**多 repo 的 web session** 裡，Claude Code 的 project root 是本 repo 的**上層**，於是它讀 `/home/user/.claude/settings.json`，本 repo 的 `.claude/settings.json` **整份不載入**——連同兩支 PreToolUse guard 與 `permissions` 區塊（[#1719](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1719)）。
 
-第三支 hook（**SessionStart**，`.claude/hooks/session-start.sh`）：**只在 Claude Code on the web 跑**（`CLAUDE_CODE_REMOTE=true` 才動作，本機 checkout 直接 exit 0）。remote session 每次都從**全新 shallow clone** 起，前一個 session 裝的東西一律不存活，而缺的那幾樣會讓閘門**靜默或誤導性地**失效：① 沒有 `pre-commit` ⇒ `.git/hooks/` 是空的、105 道閘門一道都不跑，且**沒有任何提示**；② shallow clone 無 tag ⇒ `image-pin-capability-check` 報「git tag 不 resolve」，讀起來像 pin 打錯；③ 無 `tests/e2e/node_modules` ⇒ `playwright-lint` 失敗；④ 無 `pytest` ⇒ 整族 Python 測試 uncollectable，「沒有失敗」與「什麼都沒跑」無法區分；⑤ 無 `mkdocs` ⇒ 步驟 ② 裝上的 `mkdocs-strict-pre-push` 退成 warn-only 並 exit 0，**看起來接好了其實空轉**。版本一律取自 `requirements/ci-constraints.txt`（本 repo 的 SSOT），本機與 CI 對得上。⚠️ ②③ 曾被交接紀錄誤記為「既有債 / BLOCKED hook」——兩支都不是，它們就是這張清單。
-
-⛔ **但這三支 hook 可能一次都不會執行（[#1719](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1719)）**。在**多 repo 的 web session**裡，Claude Code 的 project root 是本 repo 的**上層**（`/home/user`），於是它讀的是 `/home/user/.claude/settings.json`，本 repo 的 `.claude/settings.json` **整份不載入**——連同上面兩支 PreToolUse guard 與 `permissions` 區塊。實測：帶 mount-path token 的 `sed -i` 沒有被 `preflight_bash.py` 攔下，`session-init.py` 的 marker 與 telemetry log 全樹零命中。⇒ **本段開頭那句「已自動化 🛡️」在 web session 不成立**。
-
-⭐ **所以起手式的第一件事是確認它到底跑了沒**，而不是假設它跑了：
+第一件事是量它，不是信它：
 
 ```bash
 cat /tmp/vibe-session-start-hook.ran     # 沒有這個檔 = hook 沒跑
@@ -30,118 +34,129 @@ cat /tmp/vibe-session-start-hook.ran     # 沒有這個檔 = hook 沒跑
 CLAUDE_CODE_REMOTE=true CLAUDE_PROJECT_DIR="$PWD" bash .claude/hooks/session-start.sh
 ```
 
-⚠️ 在那之前，`.git/hooks/` 很可能是空的——**commit 不受任何閘門保護**，且 `dev-rules #11` 的 `sed -i` 攔截也不存在。
+⚠️ **在那之前 `.git/hooks/` 可能是空的——commit 不受任何閘門保護**，且 `dev-rules #11` 的 `sed -i` 攔截也不存在。
 
-### 設計原則：主路徑 / 逃生門
+**為什麼非跑不可**：remote session 每次都從全新 shallow clone 起，前一個 session 裝的東西不存活。而缺件的失敗方向**一律是靜默或誤導**，不是明顯的紅——沒有 `pre-commit` 則 `.git/hooks/` 全空且無提示；shallow clone 無 tag 會讓 image-pin 檢查報「git tag 不 resolve」，讀起來像 pin 打錯；沒有 `pytest` 則整族測試 uncollectable，「沒有失敗」與「什麼都沒跑」無法區分。`session-start.sh` 補齊這些，版本一律取自 `requirements/ci-constraints.txt`（本 repo 的 SSOT）。
 
-> **主路徑** Dev Container 做所有事（code/test/commit/push，優先 `make dc-*`）；**逃生門** FUSE 卡死用 Windows 原生 git（`make win-commit` / `scripts/ops/win_git_escape.bat`）。目標：不讓任何 session 因 FUSE 卡死。
+⚠️ shallow clone 會讓 `tests/lint/` 的凍結量測 error，`git fetch --depth=1000 origin main` 後就過。
 
-## ⛔ 高頻地雷（always-on，已升 root；TRK-302）
+## ⛔ 不可協商
 
-被燒過 ≥2 次或高頻的規則，從 lazy-load feedback 升為 always-on（不靠 keyword 觸發）：
+違反這幾條會燒掉至少一輪。每條都附機制理由，不是慣例偏好。
 
-1. **回應語言** — user-facing prose 一律**繁體中文**（非日文 / 英文）。⚠️ 指的是 **AI 對人的輸出**（本則回應、PR / issue 留言、commit 訊息、`docs/**`）；**repo 內工具印給 operator 的字串不在此列**，沿用該工具既有語言慣例（`scripts/tools/**` 目前為英文），改既有字串時不得只翻被改到的那幾行。詳 [`dev-rules.md` §9c](docs/internal/dev-rules.md)
-2. **Commit trailer block** — 所有 trailer 行（`Refs:` / `Self-Review-Pass-2:` / `Co-authored-by:`）須為**最底部單一連續段落、全 `Key: value` 格式**；夾空行或無冒號裸行會劈裂 block → git 丟棄上方行 → CI gate fail（燒過 #515/#522/#543）。多項目 / 純文件 commit 依 [`dev-rules.md` §P1](docs/internal/dev-rules.md) 改在 body prose 列 ID，**不寫 `Resolves` 裸行**
-3. **Worktree edit path** — 在 git worktree 內編輯須 anchor worktree 路徑；main repo 同時 checked out，用 main-repo 路徑會悄悄落到 main（燒過 #562）
-4. **`git add` 括號 glob** — bash `[01]` 只配 `0`/`1` 不配 `2`；任何括號 glob 後必跑 `git diff --cached --stat` 驗 staged set（燒過 #485 ~2h）
-5. **⛔ 沒有本則訊息內的驗證輸出，就不准宣稱通過** — 「測試過了 / lint 乾淨 / build 成功 / 修好了」都是**主張**，每一個都要對得上**這一輪實際跑過**的指令與其輸出。上一輪的結果不算、部分檢查不算、「應該會過」不算、subagent 回報成功不算（自己看 diff）。⚠️ 本 repo 燒過的具體形狀是**管線遮蔽 exit code**——`cmd | head; echo $?` 讀到的是 `head` 的 rc，不是 `cmd` 的；要 rc 就別接管線（本 session 連燒 3 次）。跑不了就說跑不了：**「量不到」與「量了沒事」必須可區分**
-6. **commit / push 前先觸發 `vibe-dev-rules` skill** — pre-commit hook 不攔所有 Vibe gate（如 `make lint-docs-mkdocs`）；skip-and-recover 浪費 2+ push cycle
+1. **回應語言** — 對人的輸出一律**繁體中文**（本則回應、PR / issue 留言、commit 訊息、`docs/**`）。⚠️ **repo 內工具印給 operator 的字串不在此列**，沿用該工具既有語言慣例（`scripts/tools/**` 目前為英文）；改既有字串時不得只翻被改到的那幾行。詳 [`dev-rules.md` §9c](docs/internal/dev-rules.md)。
+2. **Commit trailer block** — trailer 行（`Refs:` / `Self-Review-Pass-2:` / `Co-authored-by:`）須為**最底部單一連續段落、全 `Key: value` 格式**。夾空行或無冒號的裸行會劈裂 block，git 丟棄其上各行，CI gate 因此紅。多項目 / 純文件 commit 依 [`dev-rules.md` §P1](docs/internal/dev-rules.md) 改在 body prose 列 ID，**不寫 `Resolves` 裸行**。⛔ `Self-Review-Pass-2` 這個字串是被釘住的：`test_the_enforced_trailer_key_is_named_in_both_always_on_files` 要求 CLAUDE.md 與 [`AGENTS.md`](AGENTS.md) **都**指名它，否則只讀可攜檔的 agent 永遠不會知道有這道閘門（TRK-377）。刪掉它會讓 Python Tests 轉紅。
+3. **Worktree edit path** — 在 worktree 內編輯須 anchor worktree 路徑。main repo 同時 checked out，用 main-repo 路徑會**悄悄**落到 main。
+4. **`git add` 括號 glob** — bash `[01]` 只配 `0`/`1` 不配 `2`。任何括號 glob 後必跑 `git diff --cached --stat` 驗 staged set。
+5. **⛔ 沒有本則訊息內的驗證輸出，就不准宣稱通過** — 「測試過了 / lint 乾淨 / 修好了」都是**主張**，每一個都要對得上**這一輪實際跑過**的指令與其輸出。上一輪的結果不算、部分檢查不算、「應該會過」不算、subagent 回報成功不算（自己看 diff）。⚠️ 本 repo 燒過的具體形狀是**管線遮蔽 exit code**：`cmd | head; echo $?` 讀到的是 `head` 的 rc；要 rc 就別接管線。跑不了就說跑不了——**「量不到」與「量了沒事」必須可區分**。
+6. **禁止直推 main** — 一律 branch → PR → owner 明示後 merge。pre-push hook 攔截（`scripts/ops/protect_main_push.sh` + `require_preflight_pass.sh`）。
+7. **禁止對掛載路徑用 `sed -i`** — 會截斷缺少 EOF 換行的檔案。用 Read+Edit 或 pipe。
+8. **Doc-as-Code** — 影響 API / schema / CLI 的變更須同步 `CHANGELOG.md` + `CLAUDE.md` + `README.md`。
+9. **Tenant-Agnostic** — Go / PromQL / fixture 禁止 hardcode tenant id（例如 `db-a`）。
+10. **commit / push 前先觸發 `vibe-dev-rules` skill** — pre-commit hook 不攔所有 Vibe gate（如 `make lint-docs-mkdocs`），skip-and-recover 會多燒 2+ 個 push cycle。
+
+完整規範（受眾是 contributor／人）見 [`dev-rules.md`](docs/internal/dev-rules.md)。
+
+⚠️ **跨 repo 的 AI 行為約束是另一份**：[`agent-rulebook.md`](docs/internal/agent-rulebook.md)（D-01～D-09，含路由表與成本上限）。⛔ 兩份刻意分開——不要把認識論紀律寫進 `dev-rules.md`。
+
+## 往哪裡看
+
+⛔ 先查這張表再開始，不要靠記憶重建規則。
+
+| 情境 | 去哪 |
+|---|---|
+| session 起手 / FUSE 卡死 / docker exec 無輸出 / port-forward 殘留 | `vibe-workflow` skill |
+| commit / push / refactor 前 | `vibe-dev-rules` skill → [`dev-rules.md`](docs/internal/dev-rules.md) |
+| 寫 lint 或守衛前、宣稱買到偵測力前、寫「沒有 X 涵蓋」前、判 CI 綠燈前 | [`agent-rulebook.md`](docs/internal/agent-rulebook.md) |
+| K8s / docker / release / conf.d / benchmark / E2E 要看哪份 playbook | `vibe-playbook-nav` skill |
+| multi-file PR、`Agent` 跑完後、spawn 長時 reviewer 前 | `vibe-subagent-review` skill |
+| release 收尾 / 打 tag | `vibe-release` skill → [`github-release-playbook.md`](docs/internal/github-release-playbook.md) |
+| 新 ADR / 新 component / epic 拆解 / 技術選型 | `vibe-brainstorm` skill |
+| 同一缺陷進入第 2 輪修正、或每修一輪就冒新洞 | `vibe-converge` skill |
+| 新信任邊界 GA 前 / incident 後 / 季度深稽核 | `vibe-security-audit` skill |
+| 架構概念、設計原理 | [`architecture-and-design.md`](docs/architecture-and-design.md)、spoke 在 [`docs/design/`](docs/design/) |
+| 測試怎麼寫、注入 seam、`t.Parallel` 決策 | [`test-map.md`](docs/internal/test-map.md) |
+| 公開文件在哪 | [`doc-map.md`](docs/internal/doc-map.md) |
+| Python 工具在哪（CLI：`da-tools <cmd> --help`） | [`tool-map.md`](docs/internal/tool-map.md)；JSX 工具 SOT 在 [`tool-registry.yaml`](docs/assets/tool-registry.yaml) |
+| Planning / Tracking ID（新項目一律 `TRK-NNN`） | [`planning-id-mapping.md`](docs/internal/planning-id-mapping.md)、[ADR-019](docs/adr/019-planning-ssot.md) |
+| 本機起整套 stack | [`try-local/README.md`](try-local/README.md) |
+| secret 洩漏處置（ASSUME COMPROMISE / ROTATE FIRST） | [`secret-leak-remediation-sop.md`](docs/internal/secret-leak-remediation-sop.md) |
+| IaC lint baseline、Severity→Action、豁免列管 | [`iac-lint-baseline.md`](docs/internal/iac-lint-baseline.md) |
+| 哪些事機械強制、哪些要 AI 自覺、哪裡漏接 | [`hook-vs-skill-coverage.md`](docs/internal/hook-vs-skill-coverage.md) |
+| 版本歷程、in-flight 工作 | [`CHANGELOG.md`](CHANGELOG.md) |
+
+⚠️ **測試注入 seam 的適用範圍是 `components/threshold-exporter/app/*_test.go`，不是全 repo 鐵則**。該範圍內鐵則是「metrics / logger / watch 這三者一律走 seam」，不等於全面禁止 global swap。**由 `t.Parallel()` 測試寫入的 process-global 必須用冪等 reset**，不能 save-then-restore（那是「最後一個 cleanup 贏」，會還原掉別的測試的寫入）；且 reset 只解決清理、**不提供隔離**——平行測試各自需要不同值時，全域本身就是錯的機制。完整對照表與決策樹見 test-map.md。
 
 ## Skill 體系
 
-Vibe 專案內建 **八個本地 skills**，在對應情境自動觸發。
+⛔ **SSOT 在 [`agents/skills/`](agents/skills/)，不是 `.claude/skills/`**（TRK-361）。後者是 `make agent-adapters` 的**生成物**——Claude Code 只認那個路徑所以必須存在，但改它會被 `gen-agent-adapters-check` 擋下、下次重生也會覆蓋。subagent 角色提示詞同理：SSOT 在 [`agents/roles/`](agents/roles/)，`.claude/agents/` 是生成物。
 
-⛔ **SSOT 在 [`agents/skills/`](agents/skills/)，不是 `.claude/skills/`**（TRK-361）——後者是 `make agent-adapters` 的**生成物**，Claude Code 只認那個路徑所以必須存在，但改它會被 `gen-agent-adapters-check` hook 擋下、且下次重生就覆蓋。subagent 角色提示詞同理：SSOT 在 [`agents/roles/`](agents/roles/)，`.claude/agents/` 是生成物。根目錄 [`AGENTS.md`](AGENTS.md)（AAIF 中性標準，Codex / Cursor / Copilot / Gemini CLI / Grok 原生讀）是**手寫散文**，內容為「高頻不可協商項 inline + 其餘以路徑索引」、**刻意不複製規範內容**；其中**只有 `BEGIN/END GENERATED SKILL INDEX` 之間的 skill 索引**由 `agents/skills/` 的 frontmatter 生成，其餘直接編輯該檔即可（產生器不會重寫它們）。
+根目錄 [`AGENTS.md`](AGENTS.md)（AAIF 中性標準，Codex / Cursor / Copilot / Gemini CLI / Grok 原生讀）是**手寫散文**，刻意不複製規範內容；其中**只有 `BEGIN/END GENERATED SKILL INDEX` 之間**由 `agents/skills/` 的 frontmatter 生成，其餘直接編輯即可。
 
+各 skill 的觸發時機見上方路由表；每支的完整內容在它自己的 `SKILL.md`，本檔不複述。
 
-- **`vibe-workflow`** — session 起手式、7 個常見陷阱、標準開發工作流（session 開始或遇到 FUSE / docker / port-forward 類問題時自動觸發）
-- **`vibe-dev-rules`** — 13 條開發規範 + Top 4 違反熱點（commit / push / refactor 前自動觸發）
-- **`vibe-playbook-nav`** — 任務→Playbook 章節路由（涉及 K8s / docker / release / conf.d / benchmark / E2E 時自動觸發）
-- **`vibe-subagent-review`** — IaC-aware 兩階段 review（code 走 spec→quality、IaC 走 blast-radius）+ 對抗式 review 紀律（finder≠verifier 自審 / verify-before-assert / only-actionable）+ 長時驗證 agent 可觀測性協議（Workflow-first / `dev/<scope>/PROGRESS.jsonl` ledger / 單 agent ~15 min 上限 / `make agent-progress`）（multi-file PR / `Agent` 跑完後、commit 前、或 spawn 長時 reviewer/verifier 前自動觸發；TRK-305）
-- **`vibe-release`** — 六線版號 release 收尾 SOP（make pre-tag → CHANGELOG distill + project-face refresh → **未發布 draft advisory 檢查** → 六線 tag → gh release ×6；release 收尾 / phase e 時觸發；TRK-306 + TRK-354，延伸 #474 Layer 3）
-- **`vibe-brainstorm`** — 設計階段 Socratic ideation（MVP 範圍 / explicit trade-off / defer-with-trigger + proposer≠critic 內部對抗 + 外部 adversarial review；新 ADR / component / epic 拆解 / RFC 時觸發；TRK-308）
-- **`vibe-converge`** — 多輪修正的收斂協議（decidability gate「這題用手上的證據判得出來嗎」／跨輪只傳 verified claim + open question + 已打死方向表／面積預算／**輪數上限 5**；⛔ 停止條件**不是**「審到零 finding」，且本協議**沒有**終止條件 + `dev/<scope>/ROUNDS.jsonl` 帳本 + `make converge-status`；同一缺陷進入第 2 輪修正、或「每修一輪就冒出新洞」時觸發；TRK-360）
-- **`vibe-security-audit`** — 全 component 週期性深度安全稽核 harness（Recon→平行 Hunt→對抗式 Validate→Synthesize，跑在隔離 worktree 快照；借 Cloudflare `security-audit-skill` pattern wrap Vibe 攻擊面向，per-role 走 `.claude/agents/vibe-sec-*`；新信任邊界 GA 前 / incident 後 / 季度觸發，與 diff-scoped `/security-review` 互補、不進 CI）
-
-環境層 skills（`docx` / `pptx` / `xlsx` / `pdf` / `engineering:*` / `data:*` / `design:*` / `marketing:*` 等）**Claude 自主判斷使用**，不需逐次徵詢：判斷符合即讀 SKILL.md 執行（使用前單行說明，如「跑 `engineering:debug` reproduce 步驟」）、多 skill 自主串接、發現該裝沒裝的用 `mcp__plugins__search_plugins` / `mcp__mcp-registry__search_mcp_registry` 主動找 + 建議。
+環境層 skills（`docx` / `pptx` / `xlsx` / `pdf` / `engineering:*` / `data:*` 等）**Claude 自主判斷使用**，不需逐次徵詢：判斷符合即讀 SKILL.md 執行（使用前單行說明用途）、可多 skill 串接；發現該裝沒裝的可主動搜尋並建議。
 
 ### Skill 優先級宣告（衝突仲裁；TRK-301）
 
-多 skill 同時匹配時，本地 `vibe-*` 優先於環境層 generic（僅「Vibe 已有專屬流程」範圍）：`vibe-workflow` > 環境層 session-bootstrap 指引、`vibe-dev-rules` > `engineering:code-review` 的 git/commit/branch/trailer 部分、`vibe-playbook-nav` > 跨 K8s/Helm/release/E2E generic。環境層 skill 仍負責其專業領域（`engineering:debug` reproduce、`data:*` 分析等），不在此範圍者照常自主使用。
-
-## 專案概覽
-
-**Multi-Tenant Dynamic Alerting 平台 (v2.9.0)** — Config-driven, SHA-256 hot-reload, Directory Scanner。完整架構速覽見 [architecture-and-design.md](docs/architecture-and-design.md)；版本歷程見 [CHANGELOG.md](CHANGELOG.md)。**v2.9.0 已發版**（2026-06-06，五線 tag GA — 租戶自助告警 Custom Alerts（ADR-024 能力 B）+ 租戶聯邦（ADR-020 outline→可部署）+ 寫入平面 single-writer 韌性（ADR-023）+ 平台日誌彙整；詳 CHANGELOG `## [v2.9.0]`）。前兩版 **v2.8.1**（2026-05-16，平台 tag only 的 DX / 內部工具 interim：secret-scan 四層防線 + Planning SSOT 自動化）、**v2.8.0**（2026-05-12，客戶導入管線 + 千租戶 Scale 驗證 + supply-chain provenance）。目前 **v2.10.0 開發中**（in-flight 工作見 CHANGELOG `## [Unreleased]`）。
-
-## 架構速查
-
-9 個核心設計概念（Severity Dedup / Sentinel Alert / Routing Guardrails / Schema Validation / Cardinality Guard / 三態 / Dual-Perspective / 四層路由 / Tenant API）見 [architecture-and-design.md §設計概念總覽](docs/architecture-and-design.md#設計概念總覽)。spoke 文件在 [`docs/design/`](docs/design/)。
-
-**try-local 一鍵體驗**（#449 epic）：`cd try-local && cp .env.example .env && docker compose up -d`（不需 K8s）起整套 showcase stack，~1min 看到真實 critical 告警紅燈；Mode 0 核心雙星 `docker compose up da-portal tenant-api` 只起 live Tenant Manager（Save→真實 git commit）。tenant-api 本機用 `--dev-bypass-auth`（[ADR-022](docs/adr/022-dev-auth-bypass-four-layer-containment.md) 四層防線）。見 [`try-local/README.md`](try-local/README.md)。
-
-**Secret-scan 四層防線**（v2.8.1 #445）：L0 GitHub native push-protection → L1 pre-commit hook `secrets-scan-staged` → L2 server-side `secret-scan.yml`（一定會跑；⚠️ 但**不是** required check，見 dev-rules §安全紀律）→ L3 release-time image digest verification。incident response 走 [`secret-leak-remediation-sop.md`](docs/internal/secret-leak-remediation-sop.md)（ASSUME COMPROMISE / ROTATE FIRST）；規範見 [`dev-rules.md` §安全紀律](docs/internal/dev-rules.md)。
-
-**Container/k8s IaC SAST 四層防線**（v2.9.0 #448，與上互補）：L1 Dockerfile（hadolint）／ L2 Helm template + L4 raw k8s manifest（kube-linter）／ L3 values+manifest secret-shape（Vibe wrapper，與 #445 trufflehog 高熵互補）。**hybrid policy**（open-source engine + Vibe wrapper 取代 DIY-only，僅 greenfield）；Critical → BLOCK（required status check）、High → 中央 EXEMPTIONS 列管。consolidated baseline + Severity→Action SSOT + branch-protection checklist 見 [`iac-lint-baseline.md`](docs/internal/iac-lint-baseline.md)。
-
-## 開發規範（Top 4 熱點）
-
-13 條完整規範見 [`docs/internal/dev-rules.md`](docs/internal/dev-rules.md)；完整 Top 4 說明 + 互動工具變更 SOP → 觸發 `vibe-dev-rules` skill。
-
-⚠️ **那 13 條的受眾是 contributor（人）。跨 repo 的 AI 行為約束是另一份**：[`docs/internal/agent-rulebook.md`](docs/internal/agent-rulebook.md)（D-01～D-09，含路由表與成本上限）——寫 lint／守衛前、宣稱買到偵測力前、寫「沒有 X 涵蓋」前、判 CI 綠燈前、每修一輪就冒新洞時觸發。⛔ 兩份刻意分開，不要把認識論紀律寫進 `dev-rules.md`。
-
-1. **#12 Branch + PR** — ⛔ **禁止直推 main**。一律開 branch → PR → owner 同意後 merge。pre-push hook 攔截（`scripts/ops/protect_main_push.sh` + `scripts/ops/require_preflight_pass.sh`）
-2. **#11 檔案衛生** — 禁止對掛載路徑用 `sed -i`（會截斷缺少 EOF 換行的檔案）。用 Read+Edit 或 pipe
-3. **#4 Doc-as-Code** — 影響 API / schema / CLI / 計數的變更須同步 `CHANGELOG.md` + `CLAUDE.md` + `README.md`
-4. **#2 Tenant-Agnostic** — Go / PromQL / fixture 禁止 hardcode tenant id（例如 `db-a`）
-
-## 測試注入 Seam（v2.8.0 後標準）
-
-**適用範圍：`components/threshold-exporter/app/*_test.go`**（與 [`test-map.md` §測試注入 Seam](docs/internal/test-map.md#測試注入-seam-v280-後標準) 開頭的範圍宣告一致；本節原本沒複述這個範圍，容易被讀成全 repo 鐵則）。
-
-該範圍內：`ConfigManager` 三個 test-only setter（`SetMetrics` / `SetLogger` / `startWatchLoopWithFakeClock`）取代了 v2.7.x 的 global-swap antipatterns。**鐵則是「metrics / logger / watch 這三者一律走 seam」，不是「全面禁止 global swap」**——同 package 的 `main_test.go:8-9` 就明文保留了 `configDir` / `configPath` 的 defer-restore，並註明「因此刻意不 `t.Parallel`」。完整對照表（freshMetrics / fake clock / 已移除的 withIsolatedMetrics 等）+ 加 `t.Parallel` 的 RISKY 決策樹見 test-map.md（`add_t_parallel.py` 的 RISKY tuple 同時當 lint tripwire）。
-
-**tenant-api 的等價慣例**：`NewForTest`（`internal/rbac` / `internal/policy` / `internal/configwatcher` / `internal/tenantorg`）、`NewManagerForTest`（`internal/federation/fedpolicy` / `internal/federation/token`）、以及 `platform.ResetMetricsRegistriesForTest`（#1274）。
-
-**process-global 的清理形式取決於誰寫它**：序列測試用 defer-restore（如上述 `main_test.go`）；**由 `t.Parallel()` 測試寫入的則必須用冪等 reset**——save-then-restore 是「最後一個 cleanup 贏」，會把別的測試的寫入還原回去（#1274 實測 3 次紅 2 次，reset 形式 5/5 穩定）。⚠️ **reset 只解決清理，不提供隔離**：它讓「測試跑完後的狀態」與順序無關，但不會讓平行測試之間互不干擾。若平行測試各自需要**不同**的值，全域本身就是錯的機制——改用 per-test state，或讓該測試不平行。
-
-## 語言策略（SSOT Language）
-
-**Policy locked（v2.8.0 S#101 closure）**：**中文為主 SSOT + 英文為輔**（`foo.md` ZH / `foo.en.md` EN）。**不執行 ZH→EN 遷移**；既有客戶與貢獻者社群均為中文母語，原 v2.5.0 評估文 §7 推薦的「open-source SSOT 應為英文」premise 未驗證。Phase 1 pilot 工具（`migrate_ssot_language.py` + dual-mode bilingual lint）保留為 dormant option，不執行也不刪除。**Trigger conditions for re-evaluation**：(1) 收到 ≥3 個非中文母語 contributor PR/issue；(2) 客戶 RFP 顯式要求英文 SSOT；(3) Maintainer 主動 pivot 為 international-positioning project。詳細評估報告（v2.5.0 影響評估 + Phase 1 pilot）全文已歸檔於 closed issue [#145](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/145#issuecomment-4587136920)（status: superseded by S#101 / execution phase cancelled）；trigger 觸發時 reopen #145 取評估依據。
+多 skill 同時匹配時，本地 `vibe-*` 優先於環境層 generic，**僅限「Vibe 已有專屬流程」的範圍**：`vibe-workflow` > 環境層 session-bootstrap；`vibe-dev-rules` > `engineering:code-review` 的 git / commit / branch / trailer 部分；`vibe-playbook-nav` > 跨 K8s / Helm / release / E2E 的 generic 指引。環境層 skill 仍負責其專業領域（`engineering:debug` 的 reproduce、`data:*` 的分析等），不在此範圍者照常自主使用。
 
 ## Pre-commit 品質閘門
 
-110 auto-run + 13 manual-stage hooks，清單見 [`.pre-commit-config.yaml`](.pre-commit-config.yaml)。手動觸發：`pre-commit run --all-files`（auto）/ `pre-commit run --hook-stage manual --all-files`（manual）。**hook ↔ skill 職責邊界**（哪些機械強制 / 哪些 AI 須自覺 / 漏接）見 [`hook-vs-skill-coverage.md`](docs/internal/hook-vs-skill-coverage.md)（TRK-304）。
+110 auto-run + 13 manual-stage hooks，清單見 [`.pre-commit-config.yaml`](.pre-commit-config.yaml)。
 
-**pre-push 守衛不在上面那份清單裡**（#1689）——擋直推 main／要求 preflight marker／mkdocs strict 由 [`scripts/ops/prepush_dispatch.sh`](scripts/ops/prepush_dispatch.sh) 執行，安裝走 `bash scripts/ops/install_prepush_hook.sh`（冪等；它會把既有的 pre-push hook——全新 clone 上那是 git-lfs 的——移到 `pre-push.chained` 並繼續執行它）。「守衛在不在 push 路徑上」由 `make pr-preflight` 的 `Local hooks` 回答。⛔ 它們**不能**放回 `.pre-commit-config.yaml`：pre-commit 只會餵 hook **一個** refspec，於是「同時推 `feat/x` 和 `main`」會讓 main 對守衛隱形。
+⛔ 上面那組數字由 `bump_docs.py --sync-counts` 自動同步——**改寫這個句型會讓同步規則變 DEAD、`Version Consistency` 轉紅**（它 fail-closed 在「規則撈不到東西」而不是靜默放行）。要改句型請一併改 `_build_count_rules()` 的 `pattern`。
 
-## 文件 / 工具 / Makefile
+手動觸發：
 
-公開文件對照表 → [`doc-map.md`](docs/internal/doc-map.md)（`docs/internal/**` 由 CLAUDE.md / skills 直接引用，不入 catalog）；Python 工具 → [`tool-map.md`](docs/internal/tool-map.md)（CLI: `da-tools <cmd> --help`）；JSX 工具 SOT → [`tool-registry.yaml`](docs/assets/tool-registry.yaml)。
+```bash
+pre-commit run --all-files                       # auto stage
+pre-commit run --hook-stage manual --all-files   # manual stage（較重）
+```
 
-**Planning / Tracking ID 對照** → [`planning-id-mapping.md`](docs/internal/planning-id-mapping.md)（v2.8.1 起 `TRK-NNN` 為**唯一新進入點**，取代既有 `TECH-DEBT-NNN` / `TD-NN` / `HA-NN` / `REG-NN`；舊 ID 仍可 grep，本表給對映 + 三段編號分區邏輯）。新追蹤項目一律 `TRK-NNN`（commit trailer 寫 `Resolves: TRK-NNN`，見 [`dev-rules.md` §P1](docs/internal/dev-rules.md)）；政策依據與 frontmatter spec 見 [ADR-019 §Namespace Policy](docs/adr/019-planning-ssot.md#namespace-policy三-namespace-共存)。`ADR-NNN` 與 `S#NNN` 為獨立 namespace，不參與 TRK 對映。
+⚠️ **pre-push 守衛不在那份清單裡**（[#1689](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1689)）。擋直推 main／要求 preflight marker／mkdocs strict 由 [`prepush_dispatch.sh`](scripts/ops/prepush_dispatch.sh) 執行，安裝走 `bash scripts/ops/install_prepush_hook.sh`（冪等；會把既有的 pre-push hook——全新 clone 上是 git-lfs 的——移到 `pre-push.chained` 並繼續執行）。「守衛在不在 push 路徑上」由 `make pr-preflight` 的 `Local hooks` 列回答。
 
-**Makefile** 必記 Top 11：
+⛔ 它們**不能**放回 `.pre-commit-config.yaml`：pre-commit 只餵 hook **一個** refspec，於是「同時推 `feat/x` 和 `main`」會讓 main 對守衛隱形。
 
-- `make pr-preflight` — ⛔ PR merge 前必跑（七項檢查 + 寫 `.git/.preflight-ok.<SHA>` marker）；commit 剛證 hooks 綠 → `make pr-preflight-quick`（`--skip-hooks`，marker 等價）
-- `make pre-tag` — ⛔ 打 tag 前必跑（version-check + lint-docs + **`draft-advisory-check`**（#1269，未發布 draft advisory 就擋 tag；雙向 fail-closed，`ADVISORY_ACK=1` 明示略過）+ `docker-build-all` hard gate + `trivy-scan-all` informational；#474 Layer 2，需 docker+trivy+**gh**）
-- `make win-commit MSG=_msg.txt FILES="a b"` — FUSE 卡死時 hook-gated Windows commit（siblings：`make fuse-commit` / `make fuse-locks` / `make recover-index`）
-- `make dc-up` / `make dc-test` / `make dc-run CMD="..."` — Dev Container 統一入口
-- `make session-cleanup` — session 結束清理
-- `make lint-docs` — 一站式文件 lint
-- `make platform-data` — 重新產生 Rule Pack 數據
-- `make api-docs` — 從 tenant-api swag 標註產生 OpenAPI spec（編輯 handler `@Router`/`@Param` 標註後必跑；CI 有 drift check）
-- `make contract-test` — schemathesis 契約測試（build tenant-api + 全 method fuzz，git-repo fixture + wildcard RBAC；TRK-222/TRK-228，CI 已啟用）
-- `make portal-build` / `portal-build-watch` — esbuild ESM bundle for portal JSX tools（TRK-230 Option C；entries in `tools/portal/manifest.json`）
-- `make test-portal` — Vitest unit tests for portal components（TRK-230）
+## 專案概覽
 
-## Release 流程
+**Multi-Tenant Dynamic Alerting 平台 (v2.9.0)** — config-driven、SHA-256 hot-reload、Directory Scanner。架構見 [`architecture-and-design.md`](docs/architecture-and-design.md)；**版本歷程與 in-flight 工作一律以 [`CHANGELOG.md`](CHANGELOG.md) 為準**，本檔不複述。
 
-六線版號（`v*` / `exporter/v*` / `tools/v*` / `portal/v*` / `recipe-preview/v*` / `tenant-api/v*`）。`recipe-preview/v*` 為「同步升」線（每次平台 release 重 tag、非獨立 cadence——防 bundled-compiler drift；#657 PR-D2）。完整步驟、distribution artifacts、benchmark gate（Phase 1/2/3 rollout）、踩坑記錄見 [`github-release-playbook.md`](docs/internal/github-release-playbook.md)。
+⛔ 上面那個版號**不是裝飾**：`_lib_versions.read_platform_version()` 以 `## 專案概覽` 標題為錨、抓 `Multi-Tenant Dynamic Alerting 平台 (vX.Y.Z)` 這個確切句型，`check_frontmatter_versions` / doc-map / tool-map / version-consistency 四處共用它。**改動這一行或這個標題名會讓那四支 lint 一起 rc 2**——要改版號請連同 release 流程一起改，不要順手重寫句型。
 
-## AI Agent 環境
+**語言策略（policy locked）**：**中文為主 SSOT + 英文為輔**（`foo.md` ZH / `foo.en.md` EN），**不執行 ZH→EN 遷移**。Phase 1 pilot 工具保留為 dormant option，不執行也不刪除。重新評估的觸發條件與完整評估依據見 [#145](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/145#issuecomment-4587136920)（trigger 觸發時 reopen 取用）。
 
-- **Dev Container**: `docker exec -w /workspaces/vibe-k8s-lab vibe-dev-container <cmd>`（或 `make dc-run`）；重開機後 `docker start vibe-dev-container` / `make dc-up`。⚠️ raw `docker exec` 走的是 **root**（`Config.User=root`，非 `remoteUser`）——依賴一律 system-wide 安裝以確保兩種身分皆可用（#1264）。`make dc-run`／`dc-test` 會先跑活體依賴檢查，容器落後於 `devcontainer.json` 時 **exit 4** 並提示 rebuild（`VIBE_SKIP_DC_DOCTOR=1` 可繞過）
-- **K8s MCP** 常 timeout → fallback docker exec；**Prometheus/Alertmanager** `port-forward` + `localhost:9090/9093`
-- **測試**: Python tests Cowork VM 直接跑；Go tests 需 Dev Container（`make dc-go-test`，支援 `MOD=`/`PKG=` 縮小範圍——單 package 秒級）。**檔案清理** `docker exec ... rm -f`（Cowork VM 無法直接 rm 掛載路徑）
+**Release** 走六線版號（`v*` / `exporter/v*` / `tools/v*` / `portal/v*` / `recipe-preview/v*` / `tenant-api/v*`）。`recipe-preview/v*` 是「同步升」線——每次平台 release 重 tag、非獨立 cadence，防 bundled-compiler drift。完整步驟見 [`github-release-playbook.md`](docs/internal/github-release-playbook.md)。
 
-任務→Playbook 章節對照（K8s / docker / release / benchmark / E2E 等）→ 觸發 `vibe-playbook-nav` skill。
+## 開發環境
+
+> **主路徑** Dev Container 做所有事（code / test / commit / push，優先 `make dc-*`）；**逃生門** FUSE 卡死時用 Windows 原生 git（`make win-commit` / `scripts/ops/win_git_escape.bat`）。目標：不讓任何 session 因 FUSE 卡死。
+
+- **Dev Container**：`make dc-up` / `dc-test` / `dc-run CMD="..."`（或 `docker exec -w /workspaces/vibe-k8s-lab vibe-dev-container <cmd>`）。⚠️ raw `docker exec` 走的是 **root**（非 `remoteUser`）——依賴一律 system-wide 安裝以確保兩種身分皆可用。容器落後於 `devcontainer.json` 時 `make dc-run` 會 **exit 4** 並提示 rebuild（`VIBE_SKIP_DC_DOCTOR=1` 可繞過）。
+- **測試**：Python 測試直接跑；**Go 測試需 Dev Container**（`make dc-go-test`，用 `MOD=` / `PKG=` 縮小範圍，單 package 秒級）。掛載路徑的檔案清理要走 `docker exec ... rm -f`。
+- **K8s MCP** 常 timeout → fallback `docker exec`；**Prometheus / Alertmanager** 走 `port-forward` + `localhost:9090/9093`。
+
+必記的 Makefile 入口：
+
+- `make pr-preflight` — ⛔ PR merge 前必跑，寫 `.git/.preflight-ok.<SHA>` marker（marker 綁 sha，commit 後要重跑）。剛證 hooks 綠可用 `make pr-preflight-quick`。
+- `make pre-tag` — ⛔ 打 tag 前必跑（version-check + lint-docs + 未發布 draft advisory 檢查 + docker build hard gate；需 docker / trivy / gh）。
+- `make lint-docs` — 一站式文件 lint。
+- `make session-cleanup` — session 結束清理。
+- `make api-docs` — 從 tenant-api swag 標註產生 OpenAPI spec（改 handler 標註後必跑，CI 有 drift check）。
+- `make contract-test` — schemathesis 契約測試。
+- `make platform-data` — 重新產生 Rule Pack 數據。
+- `make portal-build` / `make test-portal` — portal JSX bundle 與 Vitest。
+- `make win-commit MSG=_msg.txt FILES="a b"` — FUSE 卡死時的 hook-gated Windows commit（siblings：`fuse-commit` / `fuse-locks` / `recover-index`）。
+
+### Agent 開的 PR：review 迴路上四個「看起來綠／看起來卡」的坑
+
+⛔ 這四項都不是偶發，是**結構性**的，每個 agent-opened PR 都會遇到：
+
+1. **CodeRabbit 不會審 agent 開的 PR。** 作者是 bot 帳號時它直接 `Review skipped — Bot user detected`。⇒ **agent 開的 PR 預設沒有 CodeRabbit 這層**，把它算進安全網會高估 review 覆蓋。
+2. **就算觸發過一次，後續 push 也不會自動再審**——[`.coderabbit.yaml`](.coderabbit.yaml) 設了 `auto_incremental_review: false`。⚠️ 連帶效果：PR 頁面的 **Merge Risk 橫幅停在被審過的那個 commit**，修完之後仍寫著舊 finding，容易被讀成現況。
+3. **agent 解不開未 resolve 的 review thread。** resolve 只有 GraphQL 的 `resolveReviewThread`，而 agent session 的 GraphQL 只開放釘選的 PR-review 操作（其餘 403），REST 無對應端點。⇒ 若 branch protection 要求 conversation resolution，**CI 全綠的 PR 會停在 `mergeable_state: blocked` 而 agent 推不動**，只能請人在 UI 按。
+4. **「為什麼 blocked」在 agent 這側量不到**：`GET /branches/main/protection` 對 app token 回 403。能做的是**差分**——比對前後兩個 head 的 check 名單＋結論，相同就代表不是 CI 造成的，再往 review / thread 方向找。
+
+⚠️ 兩個容易誤讀的讀數：本 repo 只用 check-runs，`GET /commits/<sha>/status` **一律回 `state: pending` 且 `contexts` 為空**——那是空集合的既有行為，不是「還有東西沒跑完」；權威訊號是 `mergeable_state`。另外 `mergeable_state: unstable` 的意思是 required checks 都過了、只有非必要的 check 紅，**可以 merge**。
+
+⚠️ 編輯 PR body 會重觸發帶 `edited` 的 workflow，多燒一輪 CI——改 body 前先想清楚代價。
