@@ -27,12 +27,32 @@ Why this exists
 
 分類：`subprocess(M) and not imported(M)` ⇒ **盲點**。
 
-⚠️ `subprocess(M)` 是字串啟發式（測試檔怎麼組指令沒有統一寫法），所以**它會高估**。
-⛔ 因此本工具的清單要用 `--verify` 拿真 coverage 抽驗：對每個候選跑
-`pytest <test> --cov=<模組名>`，看是不是真的 `No data was collected`。
+⚠️ `subprocess(M)` 是字串啟發式（測試檔怎麼組指令沒有統一寫法），所以**它會高估**：
+只要測試檔的**任何文字**出現 `<stem>.py`，該模組就被算成被 subprocess 測到——一句提到
+`legacy_report.py` 的 docstring 就足以把 `report` 列成盲點，還附一份指向那個無關測試檔
+的 `tests` 清單。⛔ **這份清單是待查名單，不是判定**。
 
-⚠️ **量法本身有一個坑，票裡記著、這裡再記一次**：`--cov` 給**路徑**時，**連
-in-process 測試都會報 `never imported`**——那是壞掉的儀器不是結果。要給**模組名**。
+⛔ **本工具曾有一個 `--verify` 子功能（拿真 coverage 抽驗），已移除**。三個各自都足夠的
+理由，全部量過：
+
+1. **結構上只能修假陽性**。它只走訪 `blind_spots`，所以任何被**錯誤排除**在清單外的模組
+   （見下面「已知界線」）對它永遠不可見。
+2. **它自己就是壞掉的儀器**。它跑 `--cov=<stem>`，而 stem 撞到已安裝套件時量到的是那個
+   套件：對一支叫 `json.py` 的專案工具實測，`--cov=json` 量到的是
+   `/usr/lib/python3.11/json/*`（22%／3%／0%／0%）⇒ 它會回報「有資料 ⇒ 本工具高估」，
+   而其實它根本沒量到受測模組。這正是本 docstring 原本只針對「`--cov` 給路徑」提出的
+   警告，**同一個機制在它推薦的模組名形式上照樣成立**。
+3. **零測試釘住**。mutation 實測：把 `--cov={stem}` 改回它自己警告過的 `--cov={module}`，
+   全套 20 格**仍然全過**。
+
+⇒ 想抽驗請自己跑，並且**確認 `--cov` 指到的真的是你要的那個模組**（`--cov-report=term`
+會把量到的檔案路徑印出來，看那個路徑）。
+
+⛔ **已知界線（會造成假陰性，也就是真盲點被吃掉）**：分類以檔名 stem 為鍵。⑴ 兩個不同的
+專案檔共用 stem 會被合併成一筆（實測：`a/dup.py` 只被 subprocess 測、`b/dup.py` 被 import，
+結果整個 stem 記成 `both`，真盲點連痕跡都不留）；⑵ 測試檔 `import` 一個**同名的 stdlib
+或第三方套件**也會被算成 in-process 進入點（實測：`import json` 讓專案的
+`scripts/tools/ops/json.py` 從盲點變成 `both`）。這兩條**本輪未修**。
 
 Usage
 -----
@@ -40,7 +60,6 @@ Usage
 
     python3 scripts/tools/dx/list_subprocess_only_modules.py            # 報告
     python3 scripts/tools/dx/list_subprocess_only_modules.py --json
-    python3 scripts/tools/dx/list_subprocess_only_modules.py --verify N # 抽驗 N 支
 
 Exit codes
 ----------
@@ -56,6 +75,7 @@ import os
 import re
 import subprocess
 import sys
+import tomllib
 from collections import defaultdict
 from pathlib import Path
 
@@ -70,16 +90,56 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def coverage_sources(repo: Path) -> tuple[list[str], set[str]]:
-    """從 pyproject.toml 讀 coverage 的 source 與 omit —— 不硬編。"""
-    text = (repo / "pyproject.toml").read_text(encoding="utf-8")
-    m = re.search(r"\[tool\.coverage\.run\](.*?)(?=\n\[|\Z)", text, re.S)
-    if not m:
+    """從 pyproject.toml 讀 coverage 的 source 與 omit —— 用 stdlib ``tomllib``。
+
+    ⛔ 這裡**不能**用 regex。先前的版本用 ``re.search(r"\[tool\.coverage\.run\]…")``
+    加 ``re.findall(r'"([^"]+)"')``，與真 TOML 有四種已量到的分歧，其中兩種是
+    **靜默拿錯母體**（比「壞掉」更糟，因為它會算出一個看起來正常的答案）：
+
+    ==========================================  ==================  ==================
+    輸入（都是合法 TOML）                        tomllib             舊的 regex
+    ==========================================  ==================  ==================
+    ``source = ['a', 'b']``（單引號）            ``['a','b']``       ``[]`` → rc 2
+    ``[tool.coverage]`` + ``run.source = […]``   讀到                ``[]`` → rc 2
+    陣列裡有 ``# not "b"`` 這樣的註解             ``['a']``           ``['a','b']`` ⚠️
+    別處字串裡含 ``[tool.coverage.run]``         真的那個            那個假的 ⚠️
+    ==========================================  ==================  ==================
+
+    釘住這四案的是 ``test_toml_parsing_matches_tomllib``（參數化，tomllib 當 oracle）。
+
+    ⚠️ TOML 規格要求檔案是 UTF-8。非 UTF-8 會讓 ``tomllib.load`` 丟
+    ``UnicodeDecodeError``——它是 ``ValueError`` 的子類、**不是** ``OSError``，
+    所以呼叫端的 ``except`` 攔不到，會以裸 traceback + rc 1 逃出去。rc 1 在本 repo
+    是 ``EXIT_VIOLATION``（量了、有問題），而這其實是「量不到」⇒ 這裡轉成
+    ``RuntimeError``，讓它走 rc 2。釘住：``test_non_utf8_pyproject_is_rc2``。
+    """
+    path = repo / "pyproject.toml"
+    try:
+        with path.open("rb") as fh:
+            doc = tomllib.load(fh)
+    except tomllib.TOMLDecodeError as exc:
+        raise RuntimeError(f"pyproject.toml 不是合法的 TOML：{exc}") from exc
+    except UnicodeDecodeError as exc:
+        raise RuntimeError(
+            f"pyproject.toml 不是合法的 UTF-8（TOML 規格要求 UTF-8）：{exc}"
+        ) from exc
+
+    run = doc.get("tool", {}).get("coverage", {}).get("run", {})
+    if not isinstance(run, dict):
         return [], set()
-    block = m.group(1)
-    src = re.search(r"source\s*=\s*\[(.*?)\]", block, re.S)
-    omit = re.search(r"omit\s*=\s*\[(.*?)\]", block, re.S)
-    q = lambda s: re.findall(r'"([^"]+)"', s or "")
-    return q(src.group(1) if src else ""), set(q(omit.group(1) if omit else ""))
+
+    def _strs(value: object, key: str) -> list[str]:
+        # coverage.py 的 source/omit 是字串陣列。給了別的形狀就是設定寫錯，
+        # 而「設定寫錯」屬於量不到，不該被當成零命中。
+        if value is None:
+            return []
+        if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
+            raise RuntimeError(
+                f"[tool.coverage.run] {key} 必須是字串陣列，讀到 {type(value).__name__}"
+            )
+        return list(value)
+
+    return _strs(run.get("source"), "source"), set(_strs(run.get("omit"), "omit"))
 
 
 def tracked(repo: Path, *patterns: str) -> list[str]:
@@ -164,25 +224,6 @@ def build(repo: Path) -> dict:
     }
 
 
-def verify(repo: Path, data: dict, limit: int) -> list[dict]:
-    """對前 N 個候選跑真 coverage —— ⚠️ `--cov` 必須給**模組名**不是路徑。"""
-    out = []
-    for entry in data["blind_spots"][:limit]:
-        test = entry["tests"][0]
-        proc = subprocess.run(
-            [sys.executable, "-m", "pytest", test, f"--cov={entry['stem']}",
-             "--cov-report=term", "--cov-fail-under=0", "-q", "-p", "no:randomly"],
-            cwd=repo, capture_output=True, text=True, timeout=900,
-        )
-        blob = proc.stdout + proc.stderr
-        out.append({
-            "module": entry["module"],
-            "test": test,
-            "no_data": "No data was collected" in blob,
-        })
-    return out
-
-
 def main(argv: list[str] | None = None) -> int:
     # ⛔ try_utf8_stdout() 要在 argparse 之前：`--help` 裡的 CJK 在 legacy Windows
     # console（cp950/cp936）會在 argparse 印出來之前就 UnicodeEncodeError。
@@ -200,9 +241,6 @@ def main(argv: list[str] | None = None) -> int:
                     help=i18n_text("要掃描的 repo 根目錄", "repository root to scan"))
     ap.add_argument("--json", action="store_true",
                     help=i18n_text("輸出 JSON", "emit JSON"))
-    ap.add_argument("--verify", type=int, default=0, metavar="N",
-                    help=i18n_text("對前 N 個候選跑真 coverage 抽驗",
-                                   "spot-check the first N candidates with real coverage"))
     args = ap.parse_args(argv)
 
     repo = Path(args.repo).resolve()
@@ -218,9 +256,6 @@ def main(argv: list[str] | None = None) -> int:
         print("[subproc-only] ⛔ 量不到：母體是空的（模組或測試檔為 0）。"
               "工具失能與零命中長得一樣。", file=sys.stderr)
         return EXIT_CALLER_ERROR
-
-    if args.verify:
-        data["verified"] = verify(repo, data, args.verify)
 
     if args.json:
         print(json.dumps(data, ensure_ascii=False, indent=2))
@@ -241,12 +276,6 @@ def main(argv: list[str] | None = None) -> int:
     print()
     for e in data["blind_spots"]:
         print(f"    {e['module']}")
-    if "verified" in data:
-        print()
-        print("  -- 真 coverage 抽驗（--cov 給模組名，給路徑會是壞掉的儀器）--")
-        for v in data["verified"]:
-            mark = "No data was collected（確認是盲點）" if v["no_data"] else "有資料（本工具高估）"
-            print(f"    {v['module']}: {mark}")
     return EXIT_OK
 
 

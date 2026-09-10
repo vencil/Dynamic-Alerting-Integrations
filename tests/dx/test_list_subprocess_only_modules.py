@@ -9,15 +9,24 @@
 不是 git repo、讀不到 coverage source、或母體為空，一律 rc 2。
 
 ⚠️ 這支工具的 `subprocess(M)` 是**字串啟發式**（測試檔怎麼組指令沒有統一寫法），
-所以它會**高估**。工具自己提供 `--verify` 拿真 coverage 抽驗，docstring 也寫明了
-`--cov` 要給**模組名**不是路徑（給路徑時連 in-process 測試都會報 never imported，
-那是壞掉的儀器不是結果）。
+所以它會**高估** —— 那份清單是待查名單不是判定。
+
+⛔ **`--verify` 已移除**（B1）。它結構上只能修假陽性、它自己的 `--cov=<stem>` 會在
+撞名時量到別的套件（實測 `--cov=json` 量到 stdlib），而且零測試釘住（mutation 實測：
+改回它自己警告過的形式，全套仍全過）。理由與實測寫在工具 docstring。
+
+⛔ **TOML 一律由 stdlib `tomllib` 解**（B2），本檔用 `tomllib` 當 oracle 逐案比對：
+`test_toml_parsing_matches_tomllib`。舊的 regex 有四種已量到的分歧，其中兩種是
+**靜默拿錯母體**。
 """
 from __future__ import annotations
 
 import json
 import subprocess
 import sys
+import tomllib
+
+import pytest
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -345,3 +354,116 @@ def test_build_partition_is_exact_in_process() -> None:
     total = (len(d["blind_spots"]) + len(d["both"])
              + len(d["import_only"]) + len(d["untested"]))
     assert total == d["stems"]
+
+
+# ---------------------------------------------------------------------------
+# B2 — TOML 一律以 stdlib tomllib 為準（tomllib 當 oracle，不自己寫第二套判準）
+# ---------------------------------------------------------------------------
+_TOML_CASES = {
+    # ⛔ 前四案在舊的 regex 版本下與 tomllib 分歧；第五案是對照組（本來就一致），
+    # 沒有它的話，一個「永遠回 tomllib 的答案」與「永遠回空」都可能矇混過去。
+    "single_quoted": "[tool.coverage.run]\nsource = ['scripts/tools']\n",
+    "commented_out_source": '[tool.coverage.run]\n# source = ["WRONG/from/comment"]\n'
+                            'source = ["scripts/tools"]\n',
+    "decoy_header_inside_a_string": '[tool.other]\n'
+                                    'note = "see [tool.coverage.run] for details"\n'
+                                    'source = ["BOGUS/never/used"]\n\n'
+                                    '[tool.coverage.run]\nsource = ["scripts/tools"]\n',
+    "dotted_key": '[tool.coverage]\nrun.source = ["scripts/tools"]\n',
+    "control_plain": '[tool.coverage.run]\nsource = ["scripts/tools"]\n',
+}
+
+
+@pytest.mark.parametrize("case", sorted(_TOML_CASES))
+def test_toml_parsing_matches_tomllib(tmp_path: Path, case: str) -> None:
+    """⛔ 判準不是「我覺得對」，是「與 stdlib tomllib 逐字相等」。
+
+    每一案都是**合法 TOML**。舊版用 regex，四案分歧：單引號與 dotted key 讀成空
+    （於是對一份 coverage.py 讀得好好的設定回 rc 2）；註解裡的 source 與別處字串裡的
+    假 header 則**贏過真的那行**——那是靜默拿錯母體，比壞掉更糟。
+    """
+    text = _TOML_CASES[case]
+    repo = _fixture(tmp_path, {"scripts/tools/only.py": "def main(): return 0\n",
+                               "tests/test_only.py": "def test_x():\n    assert True\n"})
+    (repo / "pyproject.toml").write_text(text, encoding="utf-8")
+
+    run = tomllib.loads(text).get("tool", {}).get("coverage", {}).get("run", {})
+    assert run.get("source") == ["scripts/tools"], "測試資料自己寫錯了"
+
+    assert _json(repo)["sources"] == run["source"]
+
+
+def test_non_utf8_pyproject_is_rc2(tmp_path: Path) -> None:
+    """⛔「量不到」不得偽裝成「量了、有問題」。
+
+    TOML 規格要求 UTF-8。非 UTF-8 會讓 `tomllib.load` 丟 `UnicodeDecodeError`，
+    而它是 `ValueError` 子類、不是 `OSError` ⇒ 不加處理會以裸 traceback + **rc 1**
+    逃出去，而 rc 1 在本 repo 是 `EXIT_VIOLATION`。
+    """
+    repo = _fixture(tmp_path, {"scripts/tools/only.py": "x = 1\n"})
+    (repo / "pyproject.toml").write_bytes(
+        b'[tool.coverage.run]\nsource = ["scripts/tools"]  # caf\xe9\n'
+    )
+    proc = _run(repo)
+    assert proc.returncode == 2, f"rc={proc.returncode}\n{proc.stdout}\n{proc.stderr}"
+    assert "UTF-8" in proc.stderr
+    assert "Traceback" not in proc.stderr, "契約要求指名成因，不是吐 traceback"
+
+
+def test_malformed_toml_is_rc2(tmp_path: Path) -> None:
+    """語法壞掉的 TOML 也是「量不到」，不是零命中。"""
+    repo = _fixture(tmp_path, {"scripts/tools/only.py": "x = 1\n"})
+    (repo / "pyproject.toml").write_text("[tool.coverage.run\nsource = [", encoding="utf-8")
+    proc = _run(repo)
+    assert proc.returncode == 2, f"rc={proc.returncode}\n{proc.stderr}"
+    assert "Traceback" not in proc.stderr
+
+
+def test_coverage_source_of_the_wrong_shape_is_rc2(tmp_path: Path) -> None:
+    """`source` 不是字串陣列 ⇒ 設定寫錯 ⇒ 量不到，不得當成零命中。"""
+    repo = _fixture(tmp_path, {"scripts/tools/only.py": "x = 1\n"})
+    (repo / "pyproject.toml").write_text(
+        '[tool.coverage.run]\nsource = "scripts/tools"\n', encoding="utf-8"
+    )
+    proc = _run(repo)
+    assert proc.returncode == 2, f"rc={proc.returncode}\n{proc.stderr}"
+    assert "字串陣列" in proc.stderr
+
+
+# ---------------------------------------------------------------------------
+# 已知界線 —— ⛔ 這兩格釘的是「目前就是這樣」，不是「應該這樣」
+# 它們存在的理由是：工具 docstring 明寫了這兩條界線，而沒有機制的宣稱一定會漂。
+# 若日後有人修好其中一條，這裡會紅 ⇒ 請連同 docstring 的「已知界線」一起改。
+# ---------------------------------------------------------------------------
+def test_known_limit_two_project_files_sharing_a_stem_are_merged(tmp_path: Path) -> None:
+    """兩個不同專案檔共用 stem ⇒ 被合併成一筆，真盲點連痕跡都不留。"""
+    repo = _fixture(tmp_path, {
+        "scripts/tools/a/dup.py": "def main(): return 0\n",
+        "scripts/tools/b/dup.py": "def main(): return 0\n",
+        "tests/test_a.py": 'import subprocess, sys\n'
+                           'def test_a():\n'
+                           '    subprocess.run([sys.executable, "scripts/tools/a/dup.py"])\n',
+        "tests/test_b.py": 'import sys\nsys.path.insert(0, "scripts/tools/b")\n'
+                           'import dup\ndef test_b():\n    assert dup.main() == 0\n',
+    })
+    data = _json(repo)
+    assert data["modules"] == 2 and data["stems"] == 1, "測試資料沒造出撞名"
+    # a/dup.py 只被 subprocess 測到 ⇒ 依工具自己的定義是盲點，但它被 b/dup.py 吃掉了
+    assert data["blind_spots"] == []
+    assert data["both"] == ["dup"]
+
+
+def test_known_limit_a_stdlib_import_shadows_a_project_stem(tmp_path: Path) -> None:
+    """測試檔 `import json`（stdlib）會讓專案的 `json.py` 從盲點變成 both。"""
+    repo = _fixture(tmp_path, {
+        "scripts/tools/ops/json.py": "def main(): return 0\n",
+        "tests/test_json_tool.py": 'import json, subprocess, sys\n'
+                                   'def test_x():\n'
+                                   '    out = subprocess.run(\n'
+                                   '        [sys.executable, "scripts/tools/ops/json.py"],\n'
+                                   '        capture_output=True)\n'
+                                   '    json.loads(out.stdout or b"{}")\n',
+    })
+    data = _json(repo)
+    assert data["blind_spots"] == []
+    assert data["both"] == ["json"]
