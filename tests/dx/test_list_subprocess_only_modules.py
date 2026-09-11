@@ -429,6 +429,15 @@ def test_a_constant_parser_cannot_pass_the_toml_cases() -> None:
     **最後一個** ``source = [...]``，不管它在哪個 table」——當時六案裡的前五案全過。
     ⇒ 補了 ``decoy_source_after_the_real_block`` 把誘餌放在真區塊**之後**，專門殺那一類。
     ⚠️ 這仍然不是「所有退化實作都擋得掉」的保證；那種保證不存在，**加一案只殺一類**。
+    ⛔ 而「不存在」若只是散文，讀者無從知道邊界在哪 ⇒ 盲審實際去撞了，以下三種**非常數**
+    且一樣不看 TOML 結構的實作，對現有六案**仍然全過**（實測）：
+
+    - 取檔案裡所有以 ``scripts/`` 開頭的引號字串
+    - 取**最長**的那個 ``source = [...]`` 清單（平手取後者）
+    - 取第一個 header 含 ``coverage`` 的表底下的 ``source``（非錨定、會跳過註解行）
+
+    這張清單就是這組案例的**已知邊界**。要殺掉其中一種，加一個專門讓它答錯的案例並把它
+    從清單移走；⛔ 不要改成宣稱「現在都擋得掉了」。
     """
     answers = [tuple(expected) for _, expected in _TOML_CASES.values()]
     for candidate in set(answers):
