@@ -379,6 +379,14 @@ _TOML_CASES = {
     "control_plain": ('[tool.coverage.run]\n'
                       'source = ["scripts/tools/dx", "scripts/tools/lint"]\n',
                       ["scripts/tools/dx", "scripts/tools/lint"]),
+    # ⛔ 第六案專門殺「取全檔**最後一個** source = [...]」那種 context-blind 啟發式。
+    #   盲審指出：前五案全部把真答案放在檔案較後面，於是一個完全不看 table 歸屬、
+    #   只取最後一個 match 的 regex **五案全過**（實測）。這一案把誘餌放在**後面**。
+    "decoy_source_after_the_real_block": ('[tool.coverage.run]\n'
+                                          'source = ["scripts/tools/lint", "scripts/tools/ops"]\n\n'
+                                          '[tool.something_else]\n'
+                                          'source = ["DECOY/later/in/file"]\n',
+                                          ["scripts/tools/lint", "scripts/tools/ops"]),
 }
 
 _TOML_TREE = {
@@ -414,7 +422,13 @@ def test_a_constant_parser_cannot_pass_the_toml_cases() -> None:
 
     盲審實測打穿過第一版：五案的答案全是 ``["scripts/tools"]``，於是一個完全不讀檔、
     永遠回傳那個常數的實作**五案全過**。這一格是那個教訓的機械化——它不驗工具，
-    它驗**測試資料本身還有沒有鑑別力**：任何常數實作至少要錯四案。
+    它驗**測試資料本身還有沒有鑑別力**。
+
+    ⛔ **精確地說，它擋的只有「常數」這一類**，不要讀成「擋掉所有退化實作」。
+    第二次盲審就示範了一個**非常數**但一樣不看 TOML 結構的退化實作——「取全檔
+    **最後一個** ``source = [...]``，不管它在哪個 table」——當時六案裡的前五案全過。
+    ⇒ 補了 ``decoy_source_after_the_real_block`` 把誘餌放在真區塊**之後**，專門殺那一類。
+    ⚠️ 這仍然不是「所有退化實作都擋得掉」的保證；那種保證不存在，**加一案只殺一類**。
     """
     answers = [tuple(expected) for _, expected in _TOML_CASES.values()]
     for candidate in set(answers):
@@ -522,3 +536,69 @@ def test_known_limit_a_stdlib_import_shadows_a_project_stem(tmp_path: Path) -> N
     data = _json(repo)
     assert data["blind_spots"] == []
     assert data["both"] == ["json"]
+
+
+# ---------------------------------------------------------------------------
+# `subprocess(M)` 啟發式的**兩個方向** —— ⛔ 只釘一個方向等於宣稱另一個方向不存在
+# ---------------------------------------------------------------------------
+def test_prose_mentioning_a_stem_creates_a_false_positive(tmp_path: Path) -> None:
+    """高估：一句無關的 docstring 就能讓模組被列成盲點，還附一份無關的 tests 清單。"""
+    repo = _fixture(tmp_path, {
+        "scripts/tools/ops/report.py": "def main(): return 0\n",
+        "scripts/tools/ops/other_tool.py": "def main(): return 0\n",
+        "tests/test_unrelated.py":
+            '"""Unrelated. See legacy_report.py for the behaviour we replaced."""\n'
+            'import subprocess, sys\n'
+            'def test_unrelated():\n'
+            '    subprocess.run([sys.executable, "scripts/tools/ops/other_tool.py"])\n',
+    })
+    blind = {e["stem"]: e["tests"] for e in _json(repo)["blind_spots"]}
+    assert "report" in blind, "假陽性沒重現——這格失去意義了，請檢查述詞是否已改"
+    assert blind["report"] == ["tests/test_unrelated.py"], (
+        "被歸因的測試檔根本沒碰過該模組，這正是這格要記錄的形狀"
+    )
+
+
+def test_indirectly_built_paths_are_a_false_negative(tmp_path: Path) -> None:
+    """⛔ 低估，而且方向與本工具的用途相反。
+
+    測試檔真的以 subprocess 跑了該模組，但路徑是從 `conftest.py` 的常數組出來的，
+    檔案內文沒有 `mytool.py` 這串字 ⇒ 落進 `untested`（無害桶）而不是 `blind_spots`。
+    一個真盲點被讀成「根本沒測試」。⚠️ 這格釘的是**現況**不是期望行為。
+    """
+    repo = _fixture(tmp_path, {
+        "scripts/tools/ops/mytool.py": "def main(): return 0\n",
+        "tests/conftest.py":
+            'import pathlib\n'
+            'TOOL_PATH = pathlib.Path("scripts") / "tools" / "ops" / ("my" + "tool" + ".py")\n',
+        "tests/test_real_exercise.py":
+            'import subprocess, sys\n'
+            'from conftest import TOOL_PATH\n'
+            'def test_x():\n'
+            '    subprocess.run([sys.executable, str(TOOL_PATH)], capture_output=True)\n',
+    })
+    data = _json(repo)
+    assert data["blind_spots"] == [], "假陰性沒重現——若已修好，請一併更新工具 docstring"
+    assert data["untested"] == ["mytool"], (
+        "真正只被 subprocess 跑到的模組落在 untested，這就是那個假陰性"
+    )
+
+
+def test_known_limit_a_third_party_import_also_shadows_a_project_stem(
+    tmp_path: Path,
+) -> None:
+    """docstring 寫的是「stdlib **或**第三方套件」，但原本只有 stdlib 那半有測試。
+
+    ⚠️ 盲審指出：只釘一種形狀，等於讓另一種形狀的宣稱沒有機制背書。
+    """
+    repo = _fixture(tmp_path, {
+        "scripts/tools/ops/pytest.py": "def main(): return 0\n",
+        "tests/test_shadow.py":
+            'import pytest, subprocess, sys\n'
+            'def test_x():\n'
+            '    subprocess.run([sys.executable, "scripts/tools/ops/pytest.py"])\n'
+            '    assert pytest is not None\n',
+    })
+    data = _json(repo)
+    assert data["blind_spots"] == []
+    assert data["both"] == ["pytest"]

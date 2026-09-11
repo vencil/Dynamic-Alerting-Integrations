@@ -27,10 +27,21 @@ Why this exists
 
 分類：`subprocess(M) and not imported(M)` ⇒ **盲點**。
 
-⚠️ `subprocess(M)` 是字串啟發式（測試檔怎麼組指令沒有統一寫法），所以**它會高估**：
-只要測試檔的**任何文字**出現 `<stem>.py`，該模組就被算成被 subprocess 測到——一句提到
-`legacy_report.py` 的 docstring 就足以把 `report` 列成盲點，還附一份指向那個無關測試檔
-的 `tests` 清單。⛔ **這份清單是待查名單，不是判定**。
+⚠️ `subprocess(M)` 是字串啟發式（測試檔怎麼組指令沒有統一寫法），**兩個方向都會錯**。
+⛔ 這句原本只寫「它會高估」——那是**方向上的過度宣稱**，盲審用一個真實形狀打穿了。
+
+**高估（假陽性）**：只要測試檔的**任何文字**出現 `<stem>.py`，該模組就被算成被 subprocess
+測到——一句提到 `legacy_report.py` 的 docstring 就足以把 `report` 列成盲點，還附一份指向
+那個無關測試檔的 `tests` 清單。釘住：`test_prose_mentioning_a_stem_creates_a_false_positive`。
+
+**低估（假陰性，⛔ 更危險）**：測試檔若**間接**組出路徑——例如 `conftest.py` 放
+``TOOL = Path("scripts")/"tools"/"ops"/"mytool.py"``，測試檔只 import 那個常數——檔案內文
+就沒有 `mytool.py` 這串字，該模組於是落進 **``untested``（無害桶）而不是 ``blind_spots``**。
+一個真的盲點被歸類成「根本沒測試」，方向與本工具的用途相反。
+釘住：`test_indirectly_built_paths_are_a_false_negative`。
+
+⛔ **這份清單是待查名單，不是判定**，而且它**兩邊都漏**：名單上的不一定是盲點，
+不在名單上的也不一定不是。
 
 ⛔ **本工具曾有一個 `--verify` 子功能（拿真 coverage 抽驗），已移除**。三個各自都足夠的
 理由，全部量過：
