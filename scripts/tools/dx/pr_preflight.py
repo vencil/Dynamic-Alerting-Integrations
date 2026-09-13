@@ -120,6 +120,15 @@ def run(cmd: List[str], capture: bool = True, timeout: int = 120) -> subprocess.
         return subprocess.CompletedProcess(
             cmd, returncode=124, stdout="", stderr=f"timeout after {timeout}s"
         )
+    except OSError as exc:
+        # ⛔ 啟動期失敗不只「找不到」：git 在但不可執行（PermissionError）、
+        # ENOEXEC 等都在 subprocess.run 交出 CompletedProcess 之前就丟出來。
+        # 讓它逃出去 = 整支 preflight 以 traceback 收場，而 traceback 與
+        # 「量了、沒事」在呼叫端分不開——正是本 PR 在接線判定那一格修掉的分辨。
+        # 127 留給「找不到」，126 是 POSIX 給「找到了但起不來」的碼。
+        return subprocess.CompletedProcess(
+            cmd, returncode=126, stdout="", stderr=f"cannot launch {cmd[0]}: {exc}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -841,7 +850,9 @@ def _head_sha(repo_root: Path) -> Optional[str]:
             ["git", "rev-parse", "HEAD"],
             cwd=repo_root, capture_output=True, text=True, check=False, timeout=10,
         )
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired):
+        # ⛔ OSError 不是 FileNotFoundError：上面那段 docstring 說要吞掉「啟動失敗」，
+        # 而 git 在但不可執行丟的是 PermissionError，原本會逃出去。
         return None
     if r.returncode == 0 and r.stdout.strip():
         return r.stdout.strip()

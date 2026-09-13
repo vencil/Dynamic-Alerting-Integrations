@@ -855,3 +855,59 @@ class TestCheckCommitScopeRange:
         assert result.status == pp.Status.FAIL
         assert "1/1" in result.message
         assert "threshold-exporter" in (result.detail or "")
+
+
+# ---------------------------------------------------------------------------
+# 啟動期失敗必須變成可判讀的結果，不是 traceback
+# ---------------------------------------------------------------------------
+class TestLaunchFailuresAreMeasurable:
+    """⛔ 這一族守的是本 PR 的主不變式在「工具起不來」時也成立。
+
+    `--skip-hooks` 現在會走到接線判定，而那一問唯一的資料來源是
+    `run(["git", ...])`。若 git 起不來時例外逃出去，preflight 以 traceback
+    收場——而 traceback 與「量了、沒事」在呼叫端分不開。
+    """
+
+    @staticmethod
+    def _denied(*a, **k):
+        raise PermissionError(13, "Permission denied")
+
+    @staticmethod
+    def _missing(*a, **k):
+        raise FileNotFoundError("git")
+
+    def test_run_converts_a_launch_permission_error_into_a_result(self, monkeypatch):
+        monkeypatch.setattr(pp.subprocess, "run", self._denied)
+        r = pp.run(["git", "rev-parse", "HEAD"])
+        assert r.returncode == 126
+        assert "cannot launch git" in r.stderr
+
+    def test_run_still_tells_missing_apart_from_not_executable(self, monkeypatch):
+        """必不響對照組：127（找不到）不可以被 126（起不來）蓋掉。
+
+        兩者的出路不同——前者是 PATH，後者是權限／檔案本身。
+        """
+        monkeypatch.setattr(pp.subprocess, "run", self._missing)
+        r = pp.run(["git", "rev-parse", "HEAD"])
+        assert r.returncode == 127
+        assert "command not found: git" in r.stderr
+
+    def test_the_wiring_probe_says_unmeasurable_when_git_cannot_launch(
+        self, monkeypatch
+    ):
+        """整條路徑：PermissionError -> FAIL「量不到」，而不是 traceback。
+
+        ⛔ 也不可以退成「守衛沒裝」——那會開出安裝器這帖藥，而 git 起不來時
+        照做回不到綠。
+        """
+        monkeypatch.setattr(pp.subprocess, "run", self._denied)
+        result = pp.check_local_hooks(run_precommit=False)
+        assert result.status == pp.Status.FAIL
+        assert "量不到" in result.message
+        assert "cannot launch git" in result.detail
+        assert "install_prepush_hook.sh" not in result.detail
+
+    def test_head_sha_returns_none_when_git_cannot_launch(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(pp.subprocess, "run", self._denied)
+        assert pp._head_sha(tmp_path) is None
+
