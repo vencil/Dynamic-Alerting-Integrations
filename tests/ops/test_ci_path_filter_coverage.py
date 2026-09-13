@@ -1181,6 +1181,14 @@ PYTHON_ENTRIES_THIS_SCANNER_JUSTIFIES = {
     # points this scanner at `rule-packs/**`. Recorded per this test's own
     # instruction ("A GAINED entry is normally fine: add it here").
     "rule-packs/**",
+    # GAINED by #1746 / TRK-379: the coverage-blind-spot lister's omit guard
+    # (`test_the_real_omit_config_stays_inside_the_matchers_agreement_region`)
+    # reads the repo's real `[tool.coverage.run]` config, so a pytest now reads
+    # `pyproject.toml` — the first read that points this scanner at that entry.
+    # Recorded per this test's own instruction ("A GAINED entry is normally
+    # fine: add it here"). ⚠️ Measured, not assumed, that it is not a catch-all:
+    # it covers 1 of 226 out-of-tree reads (`**/*.py` covers 101).
+    "pyproject.toml",
 }
 
 
