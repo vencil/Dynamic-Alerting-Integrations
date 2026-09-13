@@ -119,6 +119,7 @@ lang: en
 | `generate_tool_map.py` | 工具導覽自動生成 |
 | `inject_related_docs.py` | Auto-generate "相關資源 / Related Resources" tables in documentation files. |
 | `inject_waveform.py` | fault-waveform 注入執行器（ADR-030 決策層驗證 PR-2） |
+| `list_subprocess_only_modules.py` | 哪些模組**只**被 subprocess 測到（coverage 盲點）。 |
 | `migrate_conf_d.py` | Migrate flat conf.d/ to hierarchical domain/region/env/ layout. |
 | `migrate_ssot_language.py` | SSOT 語言切換遷移工具 (DORMANT, S#101 policy lock) |
 | `pair_bench_ratio.py` | Turn one night's PAIRED benchmark run into per-benchmark ratios (ADR-032). |

@@ -388,6 +388,16 @@ RECIPES: list[Recipe] = [
       lambda t: ["--json", "--coverage-text", _coverage_text(t)],
       expect_exit=EXIT_OK),
 
+    # ── list_subprocess_only_modules — 掃真實 repo（本工具的母體就是這棵樹）──
+    #    ⚠️ 它是**報告不是閘門**：有盲點也回 EXIT_OK，所以正常路徑就是 rc 0 + 一份
+    #    JSON。人類可讀的那份走 else 分支，不會污染 stdout。
+    R("list_subprocess_only_modules", "json",
+      lambda t: ["--json"], expect_exit=EXIT_OK),
+    # 不是 git repo ⇒「量不到」路徑：rc 2 且 stdout **完全空**（診斷走 stderr）。
+    # ⛔ 這一格釘住的是「量不到」不得偽裝成一份空的 JSON 清單。
+    R("list_subprocess_only_modules", "not-a-git-repo",
+      lambda t: ["--json", "--repo", str(t)], expect_caller_error=True),
+
     # ── describe_tenant  (JSON via --format json, the default) ─────────────
     R("describe_tenant", "all-format-json",
       lambda t: ["--all", "--conf-d", str(SEED_CONF_D), "--format", "json"],
@@ -469,8 +479,8 @@ def test_recipe_table_covers_every_json_tool():
         f"recipe in RECIPES: {uncovered}"
     )
     assert not stale, f"RECIPES names dx tool(s) that no longer exist: {stale}"
-    assert len(JSON_TOOLS) == 14, (
-        f"expected 14 dx JSON-output tools (13 --json/--json-output + 1 "
+    assert len(JSON_TOOLS) == 15, (
+        f"expected 15 dx JSON-output tools (14 --json/--json-output + 1 "
         f"describe_tenant --format json), found {len(JSON_TOOLS)}: "
         f"{sorted(JSON_TOOLS)}"
     )
