@@ -49,13 +49,14 @@ Usage / Exit codes
     python3 scripts/tools/dx/list_subprocess_only_modules.py [--json]
 
 - ``0`` — 產出了清單（**不**因為有盲點而失敗：這是界定範圍用的報告，不是閘門）
-- ``2`` — **量不到**：不是 git repo、讀不到 pyproject 的 coverage source、或母體為空
+- ``2`` — **量不到**：不是 git repo、讀不到 pyproject 的 coverage source、母體為空、
+  或 **coverage 拒絕 ``omit`` 裡的某條 pattern**（設定讀不懂 ⇒ 量不到，不是換個 matcher
+  的理由）
 """
 from __future__ import annotations
 
 import argparse
 import ast
-import fnmatch
 import json
 import os
 import re
@@ -63,6 +64,7 @@ import subprocess
 import sys
 import tomllib
 from collections import defaultdict
+from collections.abc import Callable
 from pathlib import Path
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -136,49 +138,65 @@ def tracked(repo: Path, *patterns: str) -> list[str]:
     return [p for p in out.decode("utf-8").split("\0") if p]
 
 
-def _omitted(path: str, omit: set[str]) -> bool:
-    """coverage.py 的 ``omit`` 是 **shell-style filename pattern**，不是字面相等。
+def omit_matcher(omit: set[str]) -> "Callable[[str], bool] | None":
+    """coverage 自己的 matcher；`omit` 為空時回 ``None``（完全不碰 coverage）。
 
-    ⛔ **不能寫成 ``p in omit``**：對帶 wildcard 的 omit 無感，於是一個 coverage.py
-    **根本不會量**的檔被回報成盲點——那是**類別錯誤**。⛔ 也不要補 ``"/vendor/" in p``
-    這類 hardcode 子字串，那讓覆蓋來自寫死的字串而不是 ``omit`` 本身。
+    ⛔ **權威 oracle 是 coverage 的 ``GlobMatcher``，不是 ``fnmatch``。** 兩者實測**兩個
+    方向都分歧**——``fnmatch`` 的 ``*`` **跨目錄分隔符**，多配時會把一個真盲點靜默吃掉
+    （``a/b/d/c.py`` 對 ``a/*/c.py``：fnmatch 配到、coverage 不配）；而它不認 coverage 的
+    ``**``，少配時把被 omit 的檔回報成盲點。⇒ 用 ``fnmatch`` 近似**沒有安全側**，而這支
+    工具的整個用途就是回答「coverage 看不看得到這個檔」。
 
-    ⛔ **用 stdlib ``fnmatch``，而它不等於 coverage 的 ``GlobMatcher``**，**兩個方向都分歧**
-    （下表由 ``test_known_limit_fnmatch_diverges_from_coverage_in_both_directions`` 對當下
-    裝的 coverage 逐列重算）：
+    ⛔ **coverage 拒絕一條 omit pattern 時，那是「量不到」，不是換個 matcher 的理由。**
+    ``GlobMatcher`` 對自己 glob 文法不收的 pattern（``"***"``、未閉合的 ``[`` 等）在
+    **建構期**丟 ``ConfigError``——它的 MRO 不含 ``RuntimeError``／``OSError``，直接讓它
+    逃出去會是裸 traceback + rc 1（本 repo 的 ``EXIT_VIOLATION``＝量了有問題），而真相是
+    **設定讀不懂所以量不到**。⇒ 這裡轉成 ``RuntimeError`` 走 rc 2，與 TOML 解析失敗、
+    omit 形狀不對走的是同一條路。
 
-    ===============================  =======================  =========  ==========
-    path                             pattern                  fnmatch    coverage
-    ===============================  =======================  =========  ==========
-    ``a/c.py``                       ``a/**/c.py``            False      **True**
-    ``vendor/x.py``                  ``*/vendor/*``           False      **True**
-    ``__pycache__/x.py``             ``*/__pycache__/*``      False      **True**
-    ``a/b/d/c.py``                   ``a/*/c.py``             **True**   False
-    ``scripts/tools/gen/d/x.py``     ``scripts/tools/*/x.py`` **True**   False
-    ``scripts/tools/vendor/x.py``    ``*/vendor/*``           True       True
-    ===============================  =======================  =========  ==========
-
-    ⛔ **沒有「安全側」可以倚賴**：少配（上半）把被 omit 的檔回報成盲點（吵但看得見）；
-    多配（下半，``fnmatch`` 的 ``*`` **跨目錄分隔符**）把真盲點**靜默**吃掉。
-
-    ⚠️ **不要改成呼叫 ``coverage.files.GlobMatcher``。** 它對本 repo 買到的差異是 0 個檔，
-    代價是兩個真破口：``GlobMatcher(...)`` 對 coverage 自己 glob 文法不收的 omit 丟
-    ``ConfigError``（MRO 不含 ``RuntimeError``／``OSError``）⇒ 逃出 ``main()`` 的 catch-list、
-    裸 traceback + rc 1；而它取不到時的退路是**靜默**的，兩者對同一路徑給相反答案卻零訊號。
+    ⚠️ ``omit`` 非空卻匯入不到 ``coverage`` 時同樣是 rc 2：沒有它就沒有 omit 的語意，
+    而**靜默改用別的 matcher 會讓「量不到」與「量了沒事」長得一樣**。
+    ⚠️ matcher 只建一次（在 `build()` 裡），不是每個檔重建一次。
 
     釘住：``test_wildcard_omit_is_honoured``（漏判側）、
     ``test_non_matching_omit_does_not_exclude``（誤排除側）、
-    ``test_the_real_omit_config_stays_inside_the_matchers_agreement_region``（設定漂進分歧區）。
+    ``test_a_coverage_rejected_omit_pattern_is_rc2``（拒絕 ⇒ rc 2 而非 rc 1）、
+    ``test_the_matcher_follows_coverage_not_fnmatch``（兩者分歧時跟著 coverage）。
     """
     if not omit:
-        return False
-    return any(fnmatch.fnmatch(path, pat) for pat in omit)
+        return None
+    try:
+        from coverage.files import GlobMatcher  # type: ignore[import-not-found]
+    except Exception as exc:
+        raise RuntimeError(
+            f"[tool.coverage.run] omit 有 {len(omit)} 條 pattern，但匯入 coverage 失敗，"
+            f"因此無從得知 omit 的語意：{exc}"
+        ) from exc
+
+    patterns = sorted(omit)
+    try:
+        matcher = GlobMatcher(patterns, "omit")
+    except Exception as exc:
+        raise RuntimeError(
+            f"coverage 不接受 [tool.coverage.run] omit 裡的 pattern（{patterns}）：{exc}"
+        ) from exc
+
+    def _match(path: str) -> bool:
+        try:
+            return bool(matcher.match(path))
+        except Exception as exc:
+            raise RuntimeError(
+                f"coverage 的 omit matcher 對 {path!r} 失敗：{exc}"
+            ) from exc
+
+    return _match
 
 
 def build(repo: Path) -> dict:
     sources, omit = coverage_sources(repo)
     if not sources:
         raise RuntimeError("pyproject.toml 讀不到 [tool.coverage.run] source")
+    is_omitted = omit_matcher(omit)
 
     modules: dict[str, str] = {}
     for src in sources:
@@ -189,7 +207,7 @@ def build(repo: Path) -> dict:
         # 釘住：`test_top_level_modules_are_in_the_population` /
         #       `test_top_level_test_files_are_in_the_population`
         for p in tracked(repo, f"{src}/*.py", f"{src}/**/*.py"):
-            if _omitted(p, omit):
+            if is_omitted is not None and is_omitted(p):
                 continue
             modules[p] = Path(p).stem
     stem_to_paths: dict[str, list[str]] = defaultdict(list)

@@ -5,7 +5,6 @@
 """
 from __future__ import annotations
 
-import fnmatch
 import json
 import subprocess
 import sys
@@ -847,95 +846,6 @@ def test_known_limit_ast_walk_ignores_reachability(tmp_path: Path) -> None:
     assert data["both"] == ["nevercalled"]
 
 
-def test_the_real_omit_config_stays_inside_the_matchers_agreement_region() -> None:
-    """⛔ 本檔的 `_omitted` 用 stdlib `fnmatch`，它**不等於** coverage 自己的 `GlobMatcher`。
-
-    ⛔ 這格問的是**設定**，不是工具走哪個 matcher：本 repo 真實的 `omit` × 真實的檔案清單，
-    兩個 matcher 排除的集合是否相同。（工具為什麼不呼叫 `GlobMatcher`，理由在 `_omitted`
-    的 docstring。）
-
-    ⛔ 這格紅了**不代表工具壞了**，代表設定漂進了分歧區，要人看一眼決定怎麼辦——
-    失敗訊息會指名是哪一個檔、哪一條 pattern、以及分歧往哪個方向。
-
-    ⛔ **oracle 不能只是 `rc == 2` 加一句泛用錯誤字串**：那樣任何把母體清空的原因都讓它綠
-    （`_omitted` 無條件 `return True` 也會過）。這格直接比對兩個集合並印出差集。
-    """
-    glob_matcher = pytest.importorskip(
-        "coverage.files", reason="沒有 coverage 就量不到分歧——這是 skip 不是 pass"
-    ).GlobMatcher
-
-    cfg = tomllib.loads((_REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    run = cfg["tool"]["coverage"]["run"]
-    omit = list(run.get("omit", []))
-    assert omit, "本 repo 的 omit 是空的 ⇒ 這格什麼都沒量到，要嘛設定變了要嘛路徑寫錯"
-
-    # ⛔ 用**工具自己的** `tracked()` 取母體，不要自己再拼一次 `git ls-files`。
-    #    自拼的版本會用 `.split()` 切 stdout，而 `tracked()` 用 `-z` + NUL 切。
-    #    今天兩者答案相同（source root 底下沒有帶空白的檔名），但那是**巧合不是機制**——
-    #    哪天有一個，自拼版會把一個路徑切成好幾個假檔名，守衛守的母體就與工具的悄悄分家。
-    files: list[str] = []
-    for src in run["source"]:
-        files += _mod.tracked(_REPO_ROOT, f"{src}/*.py", f"{src}/**/*.py")
-    files = sorted(set(files))
-    assert files, "母體是空的 ⇒ 量不到，不是量了沒事"
-
-    by_fnmatch = {f for f in files if _mod._omitted(f, set(omit))}
-    by_coverage = {f for f in files if glob_matcher(list(omit), "omit").match(f)}
-
-    def _why(path: str) -> str:
-        fn = [q for q in omit if fnmatch.fnmatch(path, q)]
-        cv = [q for q in omit if glob_matcher([q], "omit").match(path)]
-        return f"{path}: fnmatch 配到 {fn or '無'}／coverage 配到 {cv or '無'}"
-
-    only_fnmatch = sorted(by_fnmatch - by_coverage)
-    only_coverage = sorted(by_coverage - by_fnmatch)
-    assert not (only_fnmatch or only_coverage), (
-        f"本 repo 的 omit 設定踩進了 fnmatch 與 coverage.GlobMatcher 的分歧區"
-        f"（母體 {len(files)} 個檔，omit {omit}）。\n"
-        "⛔ fnmatch **多配**（會靜默吃掉真盲點）：\n  "
-        + ("\n  ".join(_why(f) for f in only_fnmatch) or "（無）")
-        + "\n⛔ fnmatch **少配**（會把被 omit 的檔回報成盲點，吵但看得見）：\n  "
-        + ("\n  ".join(_why(f) for f in only_coverage) or "（無）")
-        + "\n⇒ 改那條 pattern，或接受並把它寫進 `_omitted` 的已知界線。"
-    )
-
-
-def test_known_limit_fnmatch_diverges_from_coverage_in_both_directions() -> None:
-    """⛔ `_omitted` 的 docstring 列了一張分歧表；這格釘住那張表**兩個方向都成立**。
-
-    ⚠️ 只釘一個方向會讓讀者以為這把儀器只往一邊壞。實測兩邊都會：`fnmatch` 的 `*`
-    **跨目錄分隔符**（多配 ⇒ 靜默吃掉真盲點），而它不認 coverage 的 `**`（少配 ⇒ 吵）。
-    ⛔ **沒有「安全側」可以倚賴。**
-    """
-    glob_matcher = pytest.importorskip(
-        "coverage.files", reason="沒有 coverage 就量不到分歧——這是 skip 不是 pass"
-    ).GlobMatcher
-
-    # (path, pattern, fnmatch 預期, coverage 預期)
-    cases = [
-        ("a/c.py", "a/**/c.py", False, True),
-        ("vendor/x.py", "*/vendor/*", False, True),
-        ("__pycache__/x.py", "*/__pycache__/*", False, True),
-        ("a/b/d/c.py", "a/*/c.py", True, False),
-        ("scripts/tools/gen/d/x.py", "scripts/tools/*/x.py", True, False),
-        ("scripts/tools/vendor/x.py", "*/vendor/*", True, True),
-    ]
-    for path, pat, want_fn, want_cv in cases:
-        got_fn = fnmatch.fnmatch(path, pat)
-        got_cv = bool(glob_matcher([pat], "omit").match(path))
-        assert got_fn is want_fn, f"fnmatch({path!r}, {pat!r}) = {got_fn}，表上寫 {want_fn}"
-        assert got_cv is want_cv, f"coverage({path!r}, {pat!r}) = {got_cv}，表上寫 {want_cv}"
-
-    assert [c for c in cases if c[2] and not c[3]], "多配方向沒有案例 ⇒ 只釘了一半"
-    assert [c for c in cases if c[3] and not c[2]], "少配方向沒有案例 ⇒ 只釘了一半"
-
-    # ⛔ 而工具走的是 fnmatch 那一欄，不是 coverage 那一欄——這行才是「它用哪個」的斷言。
-    for path, pat, want_fn, _want_cv in cases:
-        assert _mod._omitted(path, {pat}) is want_fn, (
-            f"_omitted 對 ({path!r}, {pat!r}) 的答案偏離 fnmatch ⇒ 判定器被換掉了"
-        )
-
-
 def test_known_limit_a_function_body_import_also_counts_as_an_entry_point(
     tmp_path: Path,
 ) -> None:
@@ -1048,36 +958,69 @@ def test_a_relative_import_does_reach_a_module_when_source_is_tests(tmp_path: Pa
     )
 
 
-def test_tracked_survives_a_filename_with_whitespace(tmp_path: Path) -> None:
-    """⛔ `tracked()` 用 `git ls-files -z` + NUL 切，不是 `.split()`——帶空白的檔名不會被切碎。
+def test_a_coverage_rejected_omit_pattern_is_rc2(tmp_path: Path) -> None:
+    """⛔ coverage 拒絕一條 omit pattern ⇒ **rc 2（量不到）**，不是 rc 1、不是裸 traceback。
 
-    ⚠️ 這格是 dogfood 逼出來的。`test_the_real_omit_config_stays_inside_the_matchers_
-    agreement_region` 原本自己拼一次 `git ls-files` 並用 `.split()` 切 stdout；今天兩者答案
-    相同（source root 底下沒有帶空白的檔名），但那是**巧合不是機制**。改成呼叫工具自己的
-    `tracked()` 之後「兩邊母體相同」變成**構造上為真**，可是那個修法本身**沒有測試打得到**
-    ——把 pathspec 改壞讓母體縮水，那個守衛仍然是綠的（實測 rc 0）。⇒ 這格直接釘機制本身。
+    `GlobMatcher` 對自己 glob 文法不收的 pattern 在**建構期**丟 `ConfigError`，其 MRO 不含
+    `RuntimeError`／`OSError`——放它逃出去就是裸 traceback + rc 1，而 rc 1 在本 repo 是
+    `EXIT_VIOLATION`（量了、有問題）。真相是**設定讀不懂所以量不到**。
 
-    兩個方向都釘：`tracked()` 回傳完整路徑（漏判側），而 `.split()` 會把它切成兩段（誤判側）。
+    ⚠️ 這格是先前那一版死掉的地方：當時 `try` 只包住 import、沒包住建構，於是同樣的輸入
+    給出 rc 1。⛔ 那次的處置是退回 `fnmatch`——**那是繞開不是修好**，因為 `fnmatch` 與
+    coverage 兩個方向都分歧。
     """
-    repo = tmp_path
-    (repo / "scripts" / "tools" / "ops").mkdir(parents=True)
-    weird = "scripts/tools/ops/has space.py"
-    (repo / weird).write_text(_TOOL_SRC, encoding="utf-8")
-    subprocess.run(["git", "init", "-q"], cwd=repo, check=True, timeout=60)
-    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, timeout=60)
-    subprocess.run(
-        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "fx"],
-        cwd=repo, check=True, timeout=60,
-    )
+    for pattern in ("***", "[unclosed", "**"):
+        repo = _fixture(tmp_path / pattern.replace("*", "s").replace("[", "b"), {
+            "scripts/tools/ops/t.py": _TOOL_SRC,
+            "tests/test_a.py":
+                'import subprocess, sys\n'
+                'def test_s():\n'
+                '    subprocess.run([sys.executable, "scripts/tools/ops/t.py"])\n',
+        })
+        (repo / "pyproject.toml").write_text(
+            f'[tool.coverage.run]\nsource = ["scripts/tools"]\nomit = ["{pattern}"]\n',
+            encoding="utf-8",
+        )
+        proc = _run(repo, "--json")
+        assert proc.returncode == 2, (
+            f"omit={pattern!r} 應為 rc 2（量不到），實得 rc={proc.returncode}\n{proc.stderr[-800:]}"
+        )
+        assert "Traceback" not in proc.stderr, (
+            f"omit={pattern!r} 漏出裸 traceback ⇒ 契約破了：\n{proc.stderr[-800:]}"
+        )
+        assert "量不到" in proc.stderr
 
-    got = _mod.tracked(repo, "scripts/tools/*.py", "scripts/tools/**/*.py")
-    assert got == [weird], f"tracked() 沒有原樣回傳帶空白的路徑：{got!r}"
 
-    # ⚠️ 對照組：證明這格量得到差別——換成 `.split()` 的話同一個檔會被切成兩段
-    raw = subprocess.run(
-        ["git", "-C", str(repo), "ls-files", "scripts/tools/*.py", "scripts/tools/**/*.py"],
-        capture_output=True, text=True, check=True, timeout=60,
-    ).stdout
-    naive = raw.split()
-    assert naive != got, "對照組失效：`.split()` 給出了和 `tracked()` 相同的答案，這格沒鑑別力"
-    assert len(naive) == 2, f"預期 `.split()` 把一個路徑切成兩段，實得 {naive!r}"
+def test_the_matcher_follows_coverage_not_fnmatch() -> None:
+    """⛔ 兩者分歧時跟 **coverage**——這支工具回答的就是「coverage 看不看得到這個檔」。
+
+    ⚠️ 兩個方向都分歧，所以近似**沒有安全側**：`fnmatch` 的 `*` 跨目錄分隔符（多配 ⇒ 靜默
+    吃掉真盲點），而它不認 coverage 的 `**`（少配 ⇒ 把被 omit 的檔回報成盲點）。下表兩個
+    方向各有案例，並對**當下裝的** coverage 逐列重算。
+    """
+    glob_matcher = pytest.importorskip(
+        "coverage.files", reason="沒有 coverage 就量不到分歧——這是 skip 不是 pass"
+    ).GlobMatcher
+    import fnmatch as _fnmatch
+
+    cases = [
+        ("a/b/d/c.py", "a/*/c.py"),               # fnmatch 多配
+        ("scripts/tools/gen/d/x.py", "scripts/tools/*/x.py"),
+        ("a/c.py", "a/**/c.py"),                  # fnmatch 少配
+        ("vendor/x.py", "*/vendor/*"),
+        ("__pycache__/x.py", "*/__pycache__/*"),
+    ]
+    over = under = 0
+    for path, pat in cases:
+        want = bool(glob_matcher([pat], "omit").match(path))
+        got = _mod.omit_matcher({pat})(path)
+        assert got is want, (
+            f"({path!r}, {pat!r}) 工具答 {got}，coverage 答 {want} ⇒ 判定器偏離權威 oracle"
+        )
+        fn = _fnmatch.fnmatch(path, pat)
+        if fn and not want:
+            over += 1
+        elif want and not fn:
+            under += 1
+    assert over, "案例表沒有『fnmatch 多配』的方向 ⇒ 只釘了一半"
+    assert under, "案例表沒有『fnmatch 少配』的方向 ⇒ 只釘了一半"
