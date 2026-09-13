@@ -69,9 +69,14 @@ def _fixture(tmp_path: Path, files: dict[str, str]) -> Path:
 # 生產樹：母體與分類
 # ---------------------------------------------------------------------------
 def test_runs_on_the_real_repo_and_reports_a_list() -> None:
-    """⛔ 清單必須是**跑出來的**，不是寫死的。"""
+    """⛔ 清單必須是**跑出來的**，不是寫死的——但只斷言**不變式**，不綁當下分布。
+
+    ⚠️ 本格原本還斷言 `data["blind_spots"]` 非空。那與工具自己的契約矛盾
+    （docstring：「不因為有盲點而失敗……不是閘門」），而且**它會懲罰成功**：
+    TRK-379 這條線的目標就是消滅盲點，哪天全樹真的歸零，這格會紅。已刪。
+    各桶的分類行為由合成 fixture 驗，不綁真樹分布。
+    """
     data = _json(_REPO_ROOT)
-    assert data["blind_spots"], "盲點清單是空的——這比較像枚舉壞了"
     for e in data["blind_spots"]:
         assert e["module"].endswith(".py")
         assert e["tests"], f"{e['module']} 被判為盲點卻沒有任何測試檔？"
@@ -110,16 +115,29 @@ def test_classification_is_an_exact_partition() -> None:
     )
 
 
-def test_overlap_is_the_dominant_bucket() -> None:
-    """⚠️ 這一格釘住票的核心結論：**重疊很大**，盲點遠少於 subprocess 測試檔數。
+def test_overlap_is_classified_as_both_not_blind(tmp_path: Path) -> None:
+    """同時有 subprocess 與 in-process 進入點的模組必須落在 `both`，不是 `blind_spots`。
 
-    「含 sys.executable 的測試檔數」與「盲點數」差一個數量級，就是因為多數模組同時
-    有 in-process 進入點。若哪天重疊塌到比盲點還少，那是分類邏輯壞了，不是真的變差。
+    ⚠️ 本格取代原本的 `test_overlap_is_the_dominant_bucket`，它斷言的是**真樹當下的
+    分布**（`len(both) > len(blind_spots)`）而不是分類邏輯，合法的樹變動就會讓它紅。
+    ⛔ 它的 docstring 還寫著「差一個數量級」——**那句是假的**：實測 `blind=31`、
+    `both=199`、含 `sys.executable` 的測試檔 `88` ⇒ **2.8×**，不是 ~10×。
+    同一句我在 CHANGELOG 已刪，卻漏了這一份——同一宣稱兩份拷貝只修了一份。
+    這裡連同那句一起刪，改為斷言**分類行為**，不寫任何倍數。
     """
-    data = _json(_REPO_ROOT)
-    assert len(data["both"]) > len(data["blind_spots"]), (
-        f"重疊 {len(data['both'])} 不再大於盲點 {len(data['blind_spots'])}"
-    )
+    repo = _fixture(tmp_path, {
+        "scripts/tools/ops/dual.py": _TOOL_SRC,
+        "tests/test_dual_inproc.py":
+            'import sys\nsys.path.insert(0, "scripts/tools/ops")\n'
+            'import dual\ndef test_i():\n    assert dual.main() == 0\n',
+        "tests/test_dual_sub.py":
+            'import subprocess, sys\n'
+            'def test_s():\n'
+            '    subprocess.run([sys.executable, "scripts/tools/ops/dual.py"])\n',
+    })
+    data = _json(repo)
+    assert data["both"] == ["dual"]
+    assert data["blind_spots"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -611,3 +629,101 @@ def test_known_limit_a_third_party_import_also_shadows_a_project_stem(
     data = _json(repo)
     assert data["blind_spots"] == []
     assert data["both"] == ["pytest"]
+
+
+# ---------------------------------------------------------------------------
+# CodeRabbit #1830 的三條 —— 每條兩個方向各一格
+# ---------------------------------------------------------------------------
+def test_wildcard_omit_is_honoured(tmp_path: Path) -> None:
+    """coverage.py 的 `omit` 是 shell-style pattern。帶 wildcard 的必須真的排除。
+
+    ⛔ 修前是 `p in omit`（字面相等），於是一個 coverage.py **根本不會量**的檔被回報成
+    「coverage 盲點」——類別錯誤，不是多一筆。
+    """
+    repo = _fixture(tmp_path, {
+        "scripts/tools/gen/generated.py": _TOOL_SRC,
+        "scripts/tools/keep/kept.py": _TOOL_SRC,
+        "tests/test_g.py":
+            'import subprocess, sys\n'
+            'def test_g():\n'
+            '    subprocess.run([sys.executable, "scripts/tools/gen/generated.py"])\n'
+            '    subprocess.run([sys.executable, "scripts/tools/keep/kept.py"])\n',
+    })
+    (repo / "pyproject.toml").write_text(
+        '[tool.coverage.run]\nsource = ["scripts/tools"]\n'
+        'omit = ["scripts/tools/gen/*.py"]\n', encoding="utf-8"
+    )
+    mods = [e["module"] for e in _json(repo)["blind_spots"]]
+    assert "scripts/tools/gen/generated.py" not in mods, "wildcard omit 沒被遵守"
+    assert mods == ["scripts/tools/keep/kept.py"], "只有未被 omit 的那個該留下"
+
+
+def test_non_matching_omit_does_not_exclude(tmp_path: Path) -> None:
+    """⚠️ 反向：不匹配的 omit pattern 不得誤排除任何東西。
+
+    只釘「會排除」那一側，等於沒有防住一個過度貪婪的 pattern 實作。
+    """
+    repo = _fixture(tmp_path, {
+        "scripts/tools/keep/kept.py": _TOOL_SRC,
+        "tests/test_k.py":
+            'import subprocess, sys\n'
+            'def test_k():\n'
+            '    subprocess.run([sys.executable, "scripts/tools/keep/kept.py"])\n',
+    })
+    (repo / "pyproject.toml").write_text(
+        '[tool.coverage.run]\nsource = ["scripts/tools"]\n'
+        'omit = ["scripts/tools/somewhere/else/*.py"]\n', encoding="utf-8"
+    )
+    assert [e["module"] for e in _json(repo)["blind_spots"]] == [
+        "scripts/tools/keep/kept.py"
+    ]
+
+
+def test_package_level_from_import_counts_as_in_process(tmp_path: Path) -> None:
+    """`from scripts.tools.ops import mytool` 是真的 in-process 進入點。
+
+    ⛔ 修前只看 `node.module`（末段是 `ops`），不看 `node.names` ⇒ 一個**確實被
+    in-process 測到**的模組被列進 `blind_spots`（假陽性，實測）。
+    """
+    repo = _fixture(tmp_path, {
+        "scripts/tools/ops/mytool.py": _TOOL_SRC,
+        "tests/test_inproc.py":
+            'from scripts.tools.ops import mytool\n'
+            'def test_i():\n    assert mytool.main() == 0\n',
+        "tests/test_sub.py":
+            'import subprocess, sys\n'
+            'def test_s():\n'
+            '    subprocess.run([sys.executable, "scripts/tools/ops/mytool.py"])\n',
+    })
+    data = _json(repo)
+    assert data["blind_spots"] == []
+    assert data["both"] == ["mytool"]
+
+
+def test_known_limit_a_from_imported_symbol_shadows_a_module_stem(
+    tmp_path: Path,
+) -> None:
+    """⛔ 修 `ImportFrom` 的假陽性換來一個新的假陰性——這格釘住它，不假裝它不存在。
+
+    從 AST 看不出 `from pkg import name` 的 `name` 是**模組**還是**符號**（函式／類別／
+    常數），要分辨得解析 pkg 本身。⇒ 為了讓 `from scripts.tools.ops import mytool` 算成
+    in-process 進入點（CodeRabbit 報的假陽性，真的存在），就必須接受一個同名的**符號**
+    也會被算進去，於是遮蔽一個真盲點。
+
+    ⚠️ 這格斷言的是**現況**不是期望行為。若日後有人把它修好（例如解析 pkg 判斷是否為
+    模組），這格會紅——請連同工具 docstring 的「已知界線」一起改。
+
+    實測：測試檔只有 `from dataclasses import lonely`（一個符號名，剛好撞到模組 stem）
+    加一個 subprocess 呼叫，該模組就從 `blind_spots` 移到 `both`。
+    """
+    repo = _fixture(tmp_path, {
+        "scripts/tools/ops/lonely.py": _TOOL_SRC,
+        "tests/test_unrelated.py":
+            'from dataclasses import lonely\n'
+            'import subprocess, sys\n'
+            'def test_s():\n'
+            '    subprocess.run([sys.executable, "scripts/tools/ops/lonely.py"])\n',
+    })
+    data = _json(repo)
+    assert data["blind_spots"] == [], "假陰性沒重現——若已修好請一併更新 docstring"
+    assert data["both"] == ["lonely"]
