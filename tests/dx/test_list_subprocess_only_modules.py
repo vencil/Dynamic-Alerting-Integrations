@@ -1,30 +1,12 @@
 """coverage 盲點清單產生器的測試 (TRK-379 / #1746)。
 
-票的驗收條件寫得很清楚：**有一份機械產生的清單**，⛔ 不是靠檢視或印象；而且
-「若採方案 1 或 2，要有對照組 —— 只斷言『今天的 coverage 數字』的話，一個掃描面
-歸零的實作也會過」。
-
-⚠️ 本工具是**界定範圍**用的報告，不是閘門：有盲點也回 0。這是刻意的，票的第一
-交付物是「產出母體與重疊」而不是修。⛔ 但「量不到」仍必須與「量了沒事」分開：
-不是 git repo、讀不到 coverage source、或母體為空，一律 rc 2。
-
-⚠️ 這支工具的 `subprocess(M)` 是**字串啟發式**（測試檔怎麼組指令沒有統一寫法），
-所以它會**高估** —— 那份清單是待查名單不是判定。
-
-⛔ **`--verify` 已移除**（B1）。它結構上只能修假陽性、它自己的 `--cov=<stem>` 會在
-撞名時量到別的套件（實測 `--cov=json` 量到 stdlib），而且零測試釘住（mutation 實測：
-改回它自己警告過的形式，全套仍全過）。理由與實測寫在工具 docstring。
-
-⛔ **TOML 一律由 stdlib `tomllib` 解**（B2），本檔用 `tomllib` 當 oracle 逐案比對：
-`test_toml_parsing_matches_tomllib`。舊的 regex 有四種已量到的分歧，其中兩種是
-**靜默拿錯母體**。
+⛔ 工具的述詞、rc 契約與六條已知界線**只寫在工具自己的 docstring 裡**，這裡不複製——
+重複的宣稱必然有一份先腐爛（這份的舊版就把「兩個方向都會錯」寫成只會高估）。
 """
 from __future__ import annotations
 
-import ast
 import fnmatch
 import json
-import re
 import subprocess
 import sys
 import tomllib
@@ -476,25 +458,18 @@ def test_toml_parsing_matches_tomllib(tmp_path: Path, case: str) -> None:
 
 
 def test_a_constant_parser_cannot_pass_the_toml_cases() -> None:
-    """⛔ 上面那組案例的**期望值必須互不相同**，否則對照組不成立。
+    """⛔ 上面那組案例的**期望值必須互不相同**——這一格驗的是**測試資料的鑑別力**，不是工具。
 
-    ⛔ 這一格**不驗工具，它驗測試資料本身還有沒有鑑別力**：若各案的正確答案彼此相同，
-    一個完全不讀檔、永遠回傳那個常數的實作就會全過。
-
-    ⛔ **精確地說，它擋的只有「常數」這一類**，不要讀成「擋掉所有退化實作」。
-    第二次盲審就示範了一個**非常數**但一樣不看 TOML 結構的退化實作——「取全檔
-    **最後一個** ``source = [...]``，不管它在哪個 table」——當時六案裡的前五案全過。
-    ⇒ 補了 ``decoy_source_after_the_real_block`` 把誘餌放在真區塊**之後**，專門殺那一類。
-    ⚠️ 這仍然不是「所有退化實作都擋得掉」的保證；那種保證不存在，**加一案只殺一類**。
-    ⛔ 而「不存在」若只是散文，讀者無從知道邊界在哪 ⇒ 盲審實際去撞了，以下三種**非常數**
-    且一樣不看 TOML 結構的實作，對現有六案**仍然全過**（實測）：
+    若各案答案相同，一個完全不讀檔、永遠回傳那個常數的實作就會全過。
+    ⛔ 但它只殺得掉「常數」那一類。**已知邊界**：以下三種**非常數**、一樣不看 TOML 結構的
+    實作，對現有案例**仍然全過**（實測）——
 
     - 取檔案裡所有以 ``scripts/`` 開頭的引號字串
     - 取**最長**的那個 ``source = [...]`` 清單（平手取後者）
     - 取第一個 header 含 ``coverage`` 的表底下的 ``source``（非錨定、會跳過註解行）
 
-    這張清單就是這組案例的**已知邊界**。要殺掉其中一種，加一個專門讓它答錯的案例並把它
-    從清單移走；⛔ 不要改成宣稱「現在都擋得掉了」。
+    要殺掉其中一種，加一個專門讓它答錯的案例並把它從這張清單移走；
+    ⛔ 不要改成宣稱「現在都擋得掉了」。
     """
     answers = [tuple(expected) for _, expected in _TOML_CASES.values()]
     for candidate in set(answers):
@@ -1106,168 +1081,3 @@ def test_tracked_survives_a_filename_with_whitespace(tmp_path: Path) -> None:
     naive = raw.split()
     assert naive != got, "對照組失效：`.split()` 給出了和 `tracked()` 相同的答案，這格沒鑑別力"
     assert len(naive) == 2, f"預期 `.split()` 把一個路徑切成兩段，實得 {naive!r}"
-
-
-# ---------------------------------------------------------------------------
-# 散文守衛 —— ⛔ 只剩**一件事**：散文指名的測試必須存在
-# ---------------------------------------------------------------------------
-# ⛔ **不要把「散文裡不准有沒機制的數字」那支守衛加回來。** 它存在過兩版，兩版都被盲審
-#   打穿，合計 11 條自身缺陷，而它防的病在整條線上只發生過 3 次——**守衛製造缺陷的速度
-#   是它防的病的三倍以上**，其中最糟的一條是「我寫來證明守衛有效的那格測試本身是空砲」。
-#   ⚠️ 根因是述詞：「這個數字有沒有機制撐著」要靠**辨識數字的形狀**，而形狀是開放集合
-#   （連字號範圍、負號、科學記號、全形符號、中文數字＋任意量詞、跨行被拆開的兩個半截…），
-#   每補一種就多一條偽造／誤報路徑。⇒ 那條線改用**砍散文**處理，不用機器守。
-#
-# ⚠️ 留下的這支不一樣：它問的是「這個名字存不存在」——**二元、封閉、沒有述詞**，
-#   答案由 AST 給，不需要辨識任何形狀。
-_PROSE_FILES = (
-    _TOOL,
-    Path(__file__).resolve(),
-)
-
-# ⛔ 測試名只在 backtick 之內認。不限制範圍的話，「把區塊內的換行接掉」會**偽造**出從來
-#   沒人寫過的名字：一行以半截識別字結尾、下一行以識別字開頭，接起來就憑空多一個名字。
-#   釘住這件事的是 `test_the_backtick_restriction_is_what_prevents_fabrication`。
-_PROSE_BACKTICKED = re.compile(r"`{1,2}([^`]+?)`{1,2}", re.S)
-_PROSE_TESTNAME = re.compile(r"\Atest_[a-z0-9_]+\Z")
-
-
-def _prose_of(path: Path) -> list[tuple[str, int, str]]:
-    """回傳 [(kind, lineno, text)] —— 只有 docstring 與註解，**不含字串字面**。
-
-    ⛔ 用 `ast` 取 docstring、`tokenize` 取註解。用 regex 掃原始碼會把 fixture 裡的
-    程式碼字串一起掃進來（那裡面滿是 `test_*.py` 檔名），整個守衛就變成雜訊。
-    ⚠️ 已知界線：**不是第一個 statement 的三引號字串**（對人是散文，對 `ast` 不是
-    docstring）看不到。
-    """
-    import io
-    import tokenize
-
-    src = path.read_text(encoding="utf-8")
-    out: list[tuple[str, int, str]] = []
-    for node in ast.walk(ast.parse(src)):
-        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            doc = ast.get_docstring(node, clean=False)
-            if doc:
-                out.append(("docstring", getattr(node, "lineno", 1), doc))
-    buf: list[str] = []
-    start = prev = None
-    for tok in tokenize.generate_tokens(io.StringIO(src).readline):
-        if tok.type == tokenize.COMMENT:
-            ln = tok.start[0]
-            if prev is not None and ln != prev + 1:
-                out.append(("comment", start or ln, "\n".join(buf)))
-                buf, start = [], None
-            if start is None:
-                start = ln
-            buf.append(tok.string.lstrip("#").strip())
-            prev = ln
-    if buf:
-        out.append(("comment", start or 1, "\n".join(buf)))
-    return out
-
-
-def _backticked_test_names(path: Path) -> list[tuple[int, str]]:
-    """散文裡 backtick 包起來、長得像測試名的東西。backtick **之內**的換行接掉。"""
-    found: list[tuple[int, str]] = []
-    for _kind, ln, text in _prose_of(path):
-        for span in _PROSE_BACKTICKED.findall(text):
-            name = re.sub(r"\s+", "", span)
-            if _PROSE_TESTNAME.match(name):
-                found.append((ln, name))
-    return found
-
-
-def _locally_defined() -> set[str]:
-    return {
-        n.name
-        for f in _PROSE_FILES
-        for n in ast.walk(ast.parse(f.read_text(encoding="utf-8")))
-        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
-    }
-
-
-def _defined_anywhere_in_tests(names: set[str]) -> set[str]:
-    """`names` 裡有哪些在整棵 `tests/` 樹底下定義過。
-
-    ⛔ **延遲呼叫**：只有本地兩個檔解析不掉的名字才走到這裡。整棵樹掃描要約兩秒，而實測
-    現行散文裡的引用**沒有任何一個**需要它——先付那兩秒等於每次跑都在買 0。但完全不做
-    又會把「合法地指到別檔的測試」誤報成死指標，所以保留為退路。
-    """
-    if not names:
-        return set()
-    listed = subprocess.run(
-        ["git", "-C", str(_REPO_ROOT), "ls-files", "tests/*.py", "tests/**/*.py"],
-        capture_output=True, text=True, check=True, timeout=120,
-    ).stdout.split()
-    found: set[str] = set()
-    for rel in listed:
-        try:
-            tree = ast.parse((_REPO_ROOT / rel).read_text(encoding="utf-8", errors="replace"))
-        except SyntaxError:
-            continue
-        found |= {
-            n.name for n in ast.walk(tree)
-            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
-        } & names
-    return found
-
-
-def test_prose_names_no_test_that_does_not_exist() -> None:
-    """⛔ 散文裡 backtick 包起來的測試名，指到的每一格都必須真的存在。
-
-    死掉的指標比沒有指標更糟：它讓讀者以為那個宣稱有機制背書。改名或刪測試時**很容易**
-    漏掉散文裡的引用（本檔漏過），而那是靜默的。
-
-    ⚠️ **已知界線**：沒加 backtick 的引用看不到。那是刻意的取捨——不限制在 backtick 內
-    就會偽造出名字（見 `test_the_backtick_restriction_is_what_prevents_fabrication`），
-    而偽造出來的假警報比漏掉一個裸引用更會讓人把整支守衛關掉。
-    """
-    local = _locally_defined()
-    refs = [(f, ln, name) for f in _PROSE_FILES for ln, name in _backticked_test_names(f)]
-    unresolved = {name for _f, _ln, name in refs if name not in local}
-    elsewhere = _defined_anywhere_in_tests(unresolved)
-
-    dangling = sorted(
-        {f"{f.name}:{ln} → {name}"
-         for f, ln, name in refs
-         if name not in local and name not in elsewhere}
-    )
-    assert not dangling, (
-        "散文指到不存在的測試：\n  " + "\n  ".join(dangling)
-        + "\n⇒ 改名就把引用一起改，刪掉就把那句話一起刪。"
-    )
-    assert refs, "散文裡一個 backtick 測試名引用都沒有 ⇒ 這格什麼都沒量到"
-
-
-def test_the_backtick_restriction_is_what_prevents_fabrication(tmp_path: Path) -> None:
-    """⛔ 釘住 backtick 限制**本身**，而且是拿出貨的 `_backticked_test_names()` 去跑。
-
-    ⚠️ 這格取代一個空砲：先前那格的 fixture 裡**一個 backtick 都沒有**，於是
-    `_PROSE_BACKTICKED.findall()` 恆為 `[]`，斷言平凡為真——把 backtick 限制整個拿掉、
-    甚至把修好前的壞形狀放回去，它照樣綠。⇒ fixture 必須**同時**含兩種形狀，斷言才有內容：
-
-    ⑴ 一個**跨行的 backtick span**（合法，必須被接回成完整名字）
-    ⑵ 一組**跨行但不在同一個 backtick 內**的半截識別字（偽造，絕不可被認成名字）
-    """
-    probe = tmp_path / "probe.py"
-    head = "test" + chr(95)
-    probe.write_text(
-        '"""\n'
-        # ⑴ 合法：名字被折行，但整段在同一對 backtick 內
-        f"    \u91d8\u4f4f\uff1a`{head}legit_reference_that_\n"
-        "    spans_a_line`\u3002\n"
-        # ⑵ 偽造：半截識別字在行尾，下一行接著識別字，兩者都不在 backtick 內
-        f"    \u4e0a\u9762\u90a3\u500b\u53eb {head}\n"
-        "    fabricated_name \u800c\u4e0d\u662f\u5225\u7684\u3002\n"
-        '"""\n',
-        encoding="utf-8",
-    )
-    names = {name for _ln, name in _backticked_test_names(probe)}
-
-    assert head + "legit_reference_that_spans_a_line" in names, (
-        f"跨行的 backtick span 沒被接回完整名字 ⇒ 合法引用會被誤報成死指標。實得 {names}"
-    )
-    assert head + "fabricated_name" not in names, (
-        f"⛔ backtick 限制失效：跨行的半截識別字被拼成了一個沒人寫過的名字。實得 {names}"
-    )

@@ -1,19 +1,9 @@
 #!/usr/bin/env python3
 """list_subprocess_only_modules.py — 哪些模組**只**被 subprocess 測到（coverage 盲點）。
 
-Why this exists
----------------
-coverage `source` 涵蓋 `scripts/tools` 與 `components/da-tools/app`，但 **以 subprocess
-呼叫工具的測試對 coverage.py 完全不可見**——它預設不追子行程。結果是一支工具可以有完整
-且有偵測力的測試，而 coverage 報表把它讀成「從未被 import」
+以 subprocess 呼叫工具的測試**對 coverage.py 完全不可見**（它預設不追子行程）⇒ 一支工具
+可以有完整且有偵測力的測試，而報表把它讀成「從未被 import」
 （TRK-379 / [#1746](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1746)）。
-
-⛔ **這正是「量不到」被呈現成「量了沒事」**：coverage delta bot 對這種檔案印的是
-「無 per-file 變化」，與「這個檔沒問題」在版面上長得一模一樣。
-
-⚠️ **母體 ≠ 盲點數**：出現 `sys.executable` 的測試檔遠多於真盲點，因為多數模組**同時**
-有 in-process 進入點。本工具產出的就是扣掉重疊之後的那份清單。⛔ 絕對數字本檔一律不寫
-（母體就是這棵樹，寫死的計數必然漂）——跑一次就是當下真值。
 
 述詞
 ----
@@ -26,72 +16,40 @@ coverage `source` 涵蓋 `scripts/tools` 與 `components/da-tools/app`，但 **�
 
 分類：`subprocess(M) and not imported(M)` ⇒ **盲點**。
 
-⚠️ `subprocess(M)` 是字串啟發式（測試檔怎麼組指令沒有統一寫法），**兩個方向都會錯**：
+⚠️ `subprocess(M)` 是字串啟發式，**兩個方向都會錯**，所以這份清單是**待查名單不是判定**：
 
-- **高估（假陽性）**：測試檔的**任何文字**出現 `<stem>.py` 就算數——一句提到
-  `legacy_report.py` 的 docstring 足以把 `report` 列成盲點。
-  釘住：`test_prose_mentioning_a_stem_creates_a_false_positive`。
-- **低估（假陰性，⛔ 更危險）**：路徑若是**間接**組出來的（`conftest.py` 放
-  ``Path("scripts")/"tools"/"ops"/"mytool.py"``），檔案內文就沒有那串字，該模組落進
-  ``untested``（無害桶）而不是 ``blind_spots``——真盲點被歸類成「根本沒測試」。
-  釘住：`test_indirectly_built_paths_are_a_false_negative`。
+- 高估：測試檔的**任何文字**出現 `<stem>.py` 就算數
+  （`test_prose_mentioning_a_stem_creates_a_false_positive`）。
+- 低估（⛔ 更危險）：路徑若是**間接**組出來的，該模組落進 `untested` 而不是 `blind_spots`
+  ——真盲點被歸成「根本沒測試」（`test_indirectly_built_paths_are_a_false_negative`）。
 
-⛔ **這份清單是待查名單，不是判定**，而且它**兩邊都漏**。
+⛔ **不要重新引入 `--verify`**（拿真 coverage 抽驗那個子功能，已移除）：它只走訪
+`blind_spots` 所以結構上看不到被錯誤排除的模組；它跑 `--cov=<stem>`，stem 撞到已安裝套件
+時量到的是**那個套件**（對專案的 `json.py` 實測 `--cov=json` 量到 stdlib），沒資料 ⇒ 假確認、
+有資料 ⇒ 假否定；而且它零測試釘住。
 
-⛔ **不要重新引入 `--verify`**（拿真 coverage 抽驗那個子功能，已移除）。三個各自都足夠的
-理由：⑴ 它只走訪 `blind_spots`，被**錯誤排除**在清單外的模組對它結構上不可見；⑵ 它跑
-`--cov=<stem>`，stem 撞到已安裝套件時量到的是**那個套件**——對專案的 `json.py` 實測
-`--cov=json` 量到 `/usr/lib/python3.11/json/*`，而它報什麼取決於那支測試檔碰巧有沒有用到
-stdlib `json`，**兩個方向都會壞**（沒資料 ⇒ 假確認；有資料 ⇒ 假否定）；⑶ 它零測試釘住。
+已知界線（都造成假陰性，本工具不修）
+------------------------------------
+分類以檔名 stem 為鍵，所以任何撞到 stem 的東西都會遮蔽真盲點。六條各有一格
+`test_known_limit_*`（⑷ 兩半各一格）：⑴ 兩個專案檔共用 stem；⑵ 同名的 stdlib 或第三方
+套件被 import；⑶ `from pkg import name` 的 `name` 從 AST 看不出是模組還是符號；
+⑷ `ast.walk` 不看可達性（`if TYPE_CHECKING:` 之下、以及函式 body 內的 import）；
+⑸ `from __future__ import annotations` 遮蔽 `annotations.py`；⑹ 測試檔的**相對** import
+在本 repo 的設定下指不到 source root（⛔ 那是設定的性質不是定理——`source = ["tests"]` 時
+就指得到，反例釘在 `test_a_relative_import_does_reach_a_module_when_source_is_tests`）。
 
-⇒ 想抽驗請自己跑，並且**確認 `--cov` 指到的真的是你要的那個模組**（`--cov-report=term`
-會把量到的檔案路徑印出來，看那個路徑）。
-
-已知界線
---------
-⛔ **以下六條都造成假陰性（真盲點被吃掉），且本工具不修**。分類以檔名 stem 為鍵：
-
-⑴ 兩個專案檔共用 stem 會被併成一筆——只被 subprocess 測的那個連痕跡都不留。
-   釘住：`test_known_limit_two_project_files_sharing_a_stem_are_merged`。
-⑵ 測試檔 `import` 一個**同名的 stdlib 或第三方套件**也算成 in-process 進入點。
-   釘住：`test_known_limit_a_stdlib_import_shadows_a_project_stem` 與
-   `test_known_limit_a_third_party_import_also_shadows_a_project_stem`。
-⑶ `from pkg import name` 的 `name` 從 AST 看不出是**模組**還是**符號**，同名符號同樣遮蔽。
-   釘住：`test_known_limit_a_from_imported_symbol_shadows_a_module_stem`。
-   ⚠️ 這條是**換來的**：不看 `node.names` 會讓 `from scripts.tools.ops import mytool` 這種
-   真進入點被漏掉。兩個方向都會錯，這裡選了這一側。
-⑷ `ast.walk` **不看可達性**：`if TYPE_CHECKING:` 之下與函式 body 內的 import 執行期可能
-   永遠不跑，卻都算成進入點。兩半各有一格：
-   `test_known_limit_ast_walk_ignores_reachability` 與
-   `test_known_limit_a_function_body_import_also_counts_as_an_entry_point`。
-   ⚠️ 只修 `TYPE_CHECKING` 會給出**部分覆蓋與虛假的安全感**——函式內 import 同構且無法從
-   AST 判定 ⇒ 整條列為界線。
-⑸ `from __future__ import annotations` 讓任何名為 `annotations.py` 的模組**永久**被遮蔽。
-   機制同 ⑵／⑶，但普遍得多——它是多數測試檔的第一行。
-   釘住：`test_known_limit_future_annotations_shadows_a_module_named_annotations`
-   （該格對**當下**母體重算並斷言它仍是多數，紅的時候印出實際比例）。
-⑹ 測試檔裡的**相對** import（`node.level > 0`）在**本 repo 的設定下**指不到 source root
-   的模組（source root 與 `tests/` 不相交）⇒ 算成進入點是撞名。
-   ⛔ **這是設定的性質，不是結構定理**：`source = ["tests"]` 時它就指得到，而 `build()` 的
-   測試 pathspec 是**寫死**的、與 `source` 互不參照，沒有東西保證兩者不相交。兩側各一格：
-   `test_known_limit_a_relative_import_in_tests_can_never_name_a_source_module`（本 repo 設定，
-   自己會斷言不相交）與 `test_a_relative_import_does_reach_a_module_when_source_is_tests`（反例）。
-
-⛔ **不要為 ⑵⑶⑷⑸⑹ 再寫一版述詞。** 它們全是同一個 decidability 問題的實例：從 AST 看不出
+⛔ **不要為 ⑵⑶⑷⑸⑹ 再寫一版述詞。** 它們全是同一個 decidability 問題：從 AST 看不出
 `import X` 解析到誰。要真的修得換到有權威 oracle 的那一面（import 系統／coverage 自己的
 量測），那是另一張票。
 
-Usage
------
+Usage / Exit codes
+------------------
 ::
 
-    python3 scripts/tools/dx/list_subprocess_only_modules.py            # 報告
-    python3 scripts/tools/dx/list_subprocess_only_modules.py --json
+    python3 scripts/tools/dx/list_subprocess_only_modules.py [--json]
 
-Exit codes
-----------
-- ``0`` — 產出了清單（**不**因為有盲點而失敗：本工具是**界定範圍**用的，不是閘門）
-- ``2`` — **量不到**：不是 git repo、讀不到 pyproject 的 coverage source、或母體為空。
+- ``0`` — 產出了清單（**不**因為有盲點而失敗：這是界定範圍用的報告，不是閘門）
+- ``2`` — **量不到**：不是 git repo、讀不到 pyproject 的 coverage source、或母體為空
 """
 from __future__ import annotations
 
@@ -120,25 +78,14 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 def coverage_sources(repo: Path) -> tuple[list[str], set[str]]:
     """從 pyproject.toml 讀 coverage 的 source 與 omit —— 用 stdlib ``tomllib``。
 
-    ⛔ 這裡**不能**用 regex。與真 TOML 有四種已量到的分歧，其中兩種是**靜默拿錯母體**
-    （比「壞掉」更糟，因為它會算出一個看起來正常的答案）：
+    ⛔ **不能用 regex。** 與真 TOML 有四種已量到的分歧，其中兩種是**靜默拿錯母體**
+    （比壞掉更糟，它會算出一個看起來正常的答案）。四案由
+    ``test_toml_parsing_matches_tomllib`` 以 ``tomllib`` 當 oracle 逐案釘住：單引號陣列、
+    ``[tool.coverage]`` + ``run.source``、陣列裡的註解、別處字串裡的假 header。
 
-    ==========================================  ==================  ==================
-    輸入（都是合法 TOML）                        tomllib             regex
-    ==========================================  ==================  ==================
-    ``source = ['a', 'b']``（單引號）            ``['a','b']``       ``[]`` → rc 2
-    ``[tool.coverage]`` + ``run.source = […]``   讀到                ``[]`` → rc 2
-    陣列裡有 ``# not "b"`` 這樣的註解             ``['a']``           ``['a','b']`` ⚠️
-    別處字串裡含 ``[tool.coverage.run]``         真的那個            那個假的 ⚠️
-    ==========================================  ==================  ==================
-
-    釘住這四案的是 ``test_toml_parsing_matches_tomllib``（參數化，tomllib 當 oracle）。
-
-    ⚠️ TOML 規格要求檔案是 UTF-8。非 UTF-8 會讓 ``tomllib.load`` 丟
-    ``UnicodeDecodeError``——它是 ``ValueError`` 的子類、**不是** ``OSError``，
-    所以呼叫端的 ``except`` 攔不到，會以裸 traceback + rc 1 逃出去。rc 1 在本 repo
-    是 ``EXIT_VIOLATION``（量了、有問題），而這其實是「量不到」⇒ 這裡轉成
-    ``RuntimeError``，讓它走 rc 2。釘住：``test_non_utf8_pyproject_is_rc2``。
+    ⚠️ 非 UTF-8 會讓 ``tomllib.load`` 丟 ``UnicodeDecodeError``——它是 ``ValueError`` 的
+    子類、**不是** ``OSError``，呼叫端攔不到 ⇒ 裸 traceback + rc 1，而這其實是「量不到」。
+    這裡轉成 ``RuntimeError`` 走 rc 2。釘住：``test_non_utf8_pyproject_is_rc2``。
     """
     path = repo / "pyproject.toml"
     try:
@@ -192,14 +139,13 @@ def tracked(repo: Path, *patterns: str) -> list[str]:
 def _omitted(path: str, omit: set[str]) -> bool:
     """coverage.py 的 ``omit`` 是 **shell-style filename pattern**，不是字面相等。
 
-    ⛔ **不能寫成 ``p in omit``**（字面相等）：對任何帶 wildcard 的 omit 都無感，於是一個
-    coverage.py **根本不會量**的檔被回報成「coverage 盲點」。那是**類別錯誤**——它不是
-    「只被 subprocess 測到所以看不見」，它是**被刻意排除在量測之外**。
-    ⛔ 也**不要**補 ``"/vendor/" in p`` 這類 hardcode 子字串來蓋住它：那讓覆蓋來自寫死的
-    字串而不是 ``omit`` 本身，換一條 glob omit 就破。
+    ⛔ **不能寫成 ``p in omit``**：對帶 wildcard 的 omit 無感，於是一個 coverage.py
+    **根本不會量**的檔被回報成盲點——那是**類別錯誤**。⛔ 也不要補 ``"/vendor/" in p``
+    這類 hardcode 子字串，那讓覆蓋來自寫死的字串而不是 ``omit`` 本身。
 
-    ⛔ **這裡用 stdlib ``fnmatch``，而它不等於 coverage 自己的 ``GlobMatcher``**
-    （**兩個方向都分歧**，下表由 `test_known_limit_fnmatch_diverges_from_coverage_in_both_directions` 對**當下裝的** coverage 逐列重算）：
+    ⛔ **用 stdlib ``fnmatch``，而它不等於 coverage 的 ``GlobMatcher``**，**兩個方向都分歧**
+    （下表由 ``test_known_limit_fnmatch_diverges_from_coverage_in_both_directions`` 對當下
+    裝的 coverage 逐列重算）：
 
     ===============================  =======================  =========  ==========
     path                             pattern                  fnmatch    coverage
@@ -212,26 +158,17 @@ def _omitted(path: str, omit: set[str]) -> bool:
     ``scripts/tools/vendor/x.py``    ``*/vendor/*``           True       True
     ===============================  =======================  =========  ==========
 
-    ⛔ **兩個方向都會壞，沒有「安全側」可以倚賴**：``fnmatch`` 少配（上半）會把一個被
-    omit 的檔回報成盲點（吵，但看得見）；多配（下半，因為它的 ``*`` **跨目錄分隔符**）
-    會把一個真盲點**靜默**吃掉。
+    ⛔ **沒有「安全側」可以倚賴**：少配（上半）把被 omit 的檔回報成盲點（吵但看得見）；
+    多配（下半，``fnmatch`` 的 ``*`` **跨目錄分隔符**）把真盲點**靜默**吃掉。
 
-    ⚠️ **不要改成呼叫 ``coverage.files.GlobMatcher``。** 那是伸手進第三方 internals，
-    而且它**沒有買到任何東西**——對本 repo 真實的母體與 ``omit``，兩個 matcher 排除的
-    集合完全相同（對稱差為空集合）。代價則是兩個真實的破口：``GlobMatcher(...)`` 會對
-    coverage 自己 glob 文法不收的 omit（如 ``"***"``）丟 ``ConfigError``，其 MRO 不含
-    ``RuntimeError`` / ``OSError`` ⇒ 逃出 ``main()`` 的 catch-list、**裸 traceback + rc 1**，
-    而本檔的契約說那種情況要 rc 2；而它取不到時的退路是**靜默**的，兩個 matcher 對同一個
-    路徑給相反答案卻零訊號——直接違反「量不到與量了沒事必須可區分」。
-
-    ⇒ 這支工具**不自稱**是 coverage matcher 的等價物。「本 repo 的 omit 設定有沒有踩進
-    分歧區」改由測試用 coverage 自己當 oracle 去問，而且是在**測試裡**問、不在熱路徑上問：
-    設定哪天漂進分歧區，那格會紅並指名哪一條 pattern、哪一個檔、哪個方向。
+    ⚠️ **不要改成呼叫 ``coverage.files.GlobMatcher``。** 它對本 repo 買到的差異是 0 個檔，
+    代價是兩個真破口：``GlobMatcher(...)`` 對 coverage 自己 glob 文法不收的 omit 丟
+    ``ConfigError``（MRO 不含 ``RuntimeError``／``OSError``）⇒ 逃出 ``main()`` 的 catch-list、
+    裸 traceback + rc 1；而它取不到時的退路是**靜默**的，兩者對同一路徑給相反答案卻零訊號。
 
     釘住：``test_wildcard_omit_is_honoured``（漏判側）、
     ``test_non_matching_omit_does_not_exclude``（誤排除側）、
-    ``test_the_real_omit_config_stays_inside_the_matchers_agreement_region``（分歧區守衛）、
-    ``test_known_limit_fnmatch_diverges_from_coverage_in_both_directions``（兩個方向的現況）。
+    ``test_the_real_omit_config_stays_inside_the_matchers_agreement_region``（設定漂進分歧區）。
     """
     if not omit:
         return False
