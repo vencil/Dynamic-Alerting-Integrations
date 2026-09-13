@@ -77,7 +77,13 @@ Why this exists
 ⚠️ ⑶ 是**修 `ImportFrom` 假陽性換來的**，不是原本就有的：不看 `node.names` 會讓
 `from scripts.tools.ops import mytool` 這種**真的 in-process 進入點**被漏掉；看了就得
 接受符號撞名。兩個方向都會錯，這裡選了 CodeRabbit 實際報出來的那一側。
-這三條**本輪未修**，各有一格 `test_known_limit_*` 釘住現況。
+⑷ in-process 的判定走 `ast.walk`，它**不看可達性**：
+`if TYPE_CHECKING:` 之下的 import（執行期永遠不跑）與函式內的 import（該函式可能從未被
+呼叫）都會被算成進入點（實測：只有 `if TYPE_CHECKING: import nevercalled` 的測試檔，
+讓該模組從 `blind_spots` 移到 `both`）。⚠️ 只修 `TYPE_CHECKING` 這一種會給出**部分覆蓋
+與虛假的安全感**——函式內 import 同構且無法從 AST 判定 ⇒ 整條列為已知界線。
+
+這四條**本輪未修**，各有一格 `test_known_limit_*` 釘住現況。
 
 Usage
 -----
@@ -200,10 +206,37 @@ def _omitted(path: str, omit: set[str]) -> bool:
        **剛好**被那兩個字面判斷蓋掉。那是**巧合不是機制**，換一條 glob omit 就破。
        ⇒ 一併刪除，讓覆蓋來自 ``omit`` 本身而不是兩個寫死的字串。
 
+    ⛔ **權威 oracle 是 coverage 自己的 ``GlobMatcher``，不是 ``fnmatch``。**
+    先前這裡寫 ``fnmatch``，並在註解裡說那就是「coverage.py 的 shell-style pattern」——
+    **那是過度宣稱**，兩者實測分歧（`coverage==7.16` 對照）：
+
+    ==============================  ====================  =========  ==========
+    path                            pattern               fnmatch    coverage
+    ==============================  ====================  =========  ==========
+    ``a/c.py``                      ``a/**/c.py``         False      **True**
+    ``vendor/x.py``                 ``*/vendor/*``        False      **True**
+    ``__pycache__/x.py``            ``*/__pycache__/*``   False      **True**
+    ``scripts/tools/vendor/x.py``   ``*/vendor/*``        True       True
+    ==============================  ====================  =========  ==========
+
+    ⚠️ 那些分歧對本 repo **今天**是惰性的（兩個 source root 都是多段路徑，所以
+    ``vendor`` / ``__pycache__`` 一定帶前綴 ``/``，兩個 matcher 同意）——但那是
+    **設定的巧合**，不是述詞的性質。⇒ 直接用 coverage 的 matcher，`fnmatch` 只當
+    coverage 沒安裝時的退路，並在該處寫明它不等價。
+
     釘住：``test_wildcard_omit_is_honoured``（漏判側）與
     ``test_non_matching_omit_does_not_exclude``（誤排除側）。
     """
-    return any(fnmatch.fnmatch(path, pat) for pat in omit)
+    if not omit:
+        return False
+    try:
+        from coverage.files import GlobMatcher  # type: ignore[import-not-found]
+    except Exception:
+        # ⚠️ 退路，**不等價**：`fnmatch` 不認 coverage 的 `**`（跨目錄），也不把
+        #    `*/vendor/*` 配到頂層的 `vendor/x.py`。實測分歧見下方 docstring。
+        #    這條路只在 coverage 沒安裝時走；本 repo 的 CI 一定裝得到（pytest-cov）。
+        return any(fnmatch.fnmatch(path, pat) for pat in omit)
+    return bool(GlobMatcher(list(omit), "omit").match(path))
 
 
 def build(repo: Path) -> dict:
@@ -246,14 +279,20 @@ def build(repo: Path) -> dict:
                 names: list[str] = []
                 if isinstance(node, ast.Import):
                     names = [a.name for a in node.names]
-                elif isinstance(node, ast.ImportFrom) and node.module:
+                elif isinstance(node, ast.ImportFrom):
+                    # ⛔ 不能加 `and node.module`：`from . import mytool` 的 node.module
+                    #   是 None，那個 guard 會讓整個分支跳過，`node.names` 一次都不讀——
+                    #   而讀 names 正是這個分支存在的理由。實測：修前
+                    #   `from . import mytool` 仍讓該模組留在 blind_spots。
+                    #   釘住：`test_relative_from_import_counts_as_in_process`
                     # ⛔ 不能只看 `node.module`。`from scripts.tools.ops import mytool`
                     #   的 `node.module` 末段是 `ops`，真正的模組名在 `node.names` 裡；
                     #   只看前者會讓一個**確實有 in-process 進入點**的模組被列進
                     #   `blind_spots`（假陽性，實測）。
                     #   釘住：`test_package_level_from_import_counts_as_in_process`
                     #   與其反向對照 `test_from_import_of_a_non_module_name_is_not_an_entry`。
-                    names = [node.module] + [a.name for a in node.names]
+                    names = ([node.module] if node.module else []) \
+                        + [a.name for a in node.names]
                 for n in names:
                     last = n.split(".")[-1]
                     if last in stem_to_paths:
