@@ -134,7 +134,7 @@ try {
         }
 
         'pr-preflight' {
-            # PR 收尾前六項檢查 — 呼叫 pr_preflight.py
+            # PR 收尾前檢查 — 呼叫 pr_preflight.py
             $preflight_args = @('scripts/tools/dx/pr_preflight.py', '--skip-hooks')
             if ($Arg1) { $preflight_args += @('--pr', $Arg1) }
             Write-Host "=== PR Preflight Check ===" -ForegroundColor Cyan

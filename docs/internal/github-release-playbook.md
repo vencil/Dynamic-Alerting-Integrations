@@ -217,7 +217,7 @@ GitHub Release page 是客戶下載 binary 必經的入口；release body 兼任
 - ✅ <feature/component> — `<test surface>`（例：`tenant-api`：unit + race + 1000-tenant benchmark baseline）
 - ✅ <feature/component> — `<test surface>`
 - ✅ Trivy <version> CVE audit — <X HIGH + Y CRITICAL → 0/0 clean OR 殘留說明>
-- ✅ `make pr-preflight` 全綠（七項檢查）
+- ✅ `make pr-preflight` 全綠
 - ✅ `make pre-tag` 全綠（version-check + lint-docs + draft-advisory-check + docker-build-all；若用 `ADVISORY_ACK=1` 放行請一併記錄理由）
 
 ## Known limits
