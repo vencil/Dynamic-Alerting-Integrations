@@ -28,7 +28,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import Dict, List, NamedTuple, Set
+from typing import Dict, Iterator, List, NamedTuple, Set, Tuple
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
@@ -228,6 +228,54 @@ def _is_fence(line: str) -> bool:
     return s.startswith("```") or s.startswith("~~~")
 
 
+def _iter_docker_run_blocks(lines: List[str]) -> Iterator[Tuple[int, str]]:
+    """Yield ``(start_index, block_text)`` per `docker run` inside a fence.
+
+    ⛔ ONE state machine for both callers (`check_writable_mount_has_user`,
+    `iter_pinned_invocations`), which each carried a byte-identical copy. The
+    fence VOCABULARY was already shared — `_is_fence` / `_unquote_md` — so a
+    new spelling of a fence always reached both copies. What did not was
+    anything needing loop STATE: a nested fence has to remember the marker that
+    opened it, an indented block has no marker at all, and every scanner here
+    is blind to both today. Fixing that class meant editing each copy, and the
+    second one silently keeping the old behaviour is how this file already lost
+    blockquote and `~~~` coverage twice.
+
+    ⚠️ This buys NO detection today — measured, not assumed: both callers
+    report the same findings over the same corpus before and after (#1835).
+
+    ⛔ `check_datools_subcommands` deliberately does NOT use this. It judges
+    LINES, and its `_PLACEHOLDER_CHARS` skip is per-line BY DESIGN. Routed
+    through flattened blocks that skip becomes block-level, so a block whose
+    first line carries `$(pwd)` swallows a wrapper sitting on a clean
+    continuation line. Measured on the shipped corpus: the judged surface drops
+    from 36 wrapper invocations to 34, the two lost being the ZH/EN
+    `da-tools:latest guard defaults-impact` pair in
+    `docs/integration/troubleshooting-checklist{,.en}.md` — precisely the
+    `guard <sub>` class this file exists for.
+    """
+    in_code = False
+    i = 0
+    while i < len(lines):
+        line = _unquote_md(lines[i])
+        if _is_fence(line):
+            in_code = not in_code
+            i += 1
+            continue
+        if not in_code or not _DOCKER_RUN_RE.search(line):
+            i += 1
+            continue
+        start = i
+        buf = [line]
+        while (buf[-1].rstrip().endswith("\\")
+               and i + 1 < len(lines)
+               and not _is_fence(_unquote_md(lines[i + 1]))):
+            i += 1
+            buf.append(_unquote_md(lines[i]))
+        i += 1
+        yield start, "\n".join(buf)
+
+
 # `${{ github.workspace }}` — a CI template whose INTERNAL spaces would split
 # a mount spec into fragments. Collapsed to a space-free token so the spec
 # stays parseable. ⛔ It is deliberately NOT skipped: an earlier version
@@ -398,26 +446,7 @@ def check_writable_mount_has_user(doc_files: List[Path],
         except OSError:
             continue
         rel = str(f.relative_to(repo_root)).replace("\\", "/")
-        in_code = False
-        i = 0
-        while i < len(lines):
-            line = _unquote_md(lines[i])
-            if _is_fence(line):
-                in_code = not in_code
-                i += 1
-                continue
-            if not in_code or not _DOCKER_RUN_RE.search(line):
-                i += 1
-                continue
-            start = i
-            buf = [line]
-            while (buf[-1].rstrip().endswith("\\")
-                   and i + 1 < len(lines)
-                   and not _is_fence(_unquote_md(lines[i + 1]))):
-                i += 1
-                buf.append(_unquote_md(lines[i]))
-            blk = "\n".join(buf)
-            i += 1
+        for start, blk in _iter_docker_run_blocks(lines):
             flat = " ".join(blk.split())
             if not _DATOOLS_IMAGE_RE.search(flat):
                 continue
@@ -600,26 +629,7 @@ def iter_pinned_invocations(doc_files: List[Path],
                 f"to report a clean result over a corpus that lost a file."
             ) from exc
         rel = str(f.relative_to(repo_root)).replace("\\", "/")
-        in_code = False
-        i = 0
-        while i < len(lines):
-            line = _unquote_md(lines[i])
-            if _is_fence(line):
-                in_code = not in_code
-                i += 1
-                continue
-            if not in_code or not _DOCKER_RUN_RE.search(line):
-                i += 1
-                continue
-            start = i
-            buf = [line]
-            while (buf[-1].rstrip().endswith("\\")
-                   and i + 1 < len(lines)
-                   and not _is_fence(_unquote_md(lines[i + 1]))):
-                i += 1
-                buf.append(_unquote_md(lines[i]))
-            blk = "\n".join(buf)
-            i += 1
+        for start, blk in _iter_docker_run_blocks(lines):
             if INLINE_IGNORE in blk:
                 continue
             flat = " ".join(blk.split())
