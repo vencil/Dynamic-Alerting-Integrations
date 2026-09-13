@@ -150,7 +150,7 @@ pre-commit run --hook-stage manual --all-files   # manual stage（較重）
 
 ### Agent 開的 PR：review 迴路上「看起來綠／看起來卡」的坑
 
-⛔ 這些不是偶發，是**結構性**的。⚠️ 只有第 1 項取決於**本 session 以什麼身分在操作 GitHub**——看 PR 作者的 `user.type` 是 `Bot` 還是 `User`，別假設。第 2、4 項與身分無關；第 3 項的 GraphQL 那半也與身分無關（那是**通道**限制），只有它的 REST 寫入端僅在 `User` 身分下量過。
+⛔ 這些不是偶發，是**結構性**的。⚠️ 第 1 項取決於**本 session 以什麼身分在操作 GitHub**——看 PR 作者的 `user.type` 是 `Bot` 還是 `User`，別假設。第 2、4 項與身分無關。**第 3 項要拆成兩半**：GraphQL 那半與身分無關（那是**通道**限制），REST 寫入那半**只在 `User` 下量過、`Bot` 未知**——⛔ 不可因為前半與身分無關就把後半也讀成如此。
 
 1. **CodeRabbit 對 `Bot` 作者的 PR 直接 `Review skipped — Bot user detected`；`User` 作者的會審。** 實據：[#1838](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1838)（`claude[bot]`）被跳過、[#1841](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1841)（`vencil`）審了。⇒ 看作者型別，不看你用哪個工具開 PR——同一個 `GH_TOKEN` 在不同 session 可能是不同身分。
 2. **就算觸發過一次，後續 push 也不會自動再審**——[`.coderabbit.yaml`](.coderabbit.yaml) 設了 `auto_incremental_review: false`。⚠️ 連帶效果：PR 頁面的 **Merge Risk 橫幅停在被審過的那個 commit**，修完之後仍寫著舊 finding，容易被讀成現況。⛔ 而它可以比「舊」更糟：force-push／squash 之後，橫幅釘的那個 commit **可能已經不在分支上**（[#1830](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1830) 實測 `git merge-base --is-ancestor <橫幅 sha> HEAD` rc 1），照它讀等於讀一個分支上不存在的狀態。
