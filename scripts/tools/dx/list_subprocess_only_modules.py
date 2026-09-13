@@ -70,7 +70,14 @@ Why this exists
 專案檔共用 stem 會被合併成一筆（實測：`a/dup.py` 只被 subprocess 測、`b/dup.py` 被 import，
 結果整個 stem 記成 `both`，真盲點連痕跡都不留）；⑵ 測試檔 `import` 一個**同名的 stdlib
 或第三方套件**也會被算成 in-process 進入點（實測：`import json` 讓專案的
-`scripts/tools/ops/json.py` 從盲點變成 `both`）。這兩條**本輪未修**。
+`scripts/tools/ops/json.py` 從盲點變成 `both`）；⑶ `from pkg import name` 的 `name`
+從 AST 看不出是**模組**還是**符號**，所以一個同名的符號（函式／類別／常數）同樣會遮蔽
+真盲點（實測：`from dataclasses import lonely` 讓 `ops/lonely.py` 從盲點變成 `both`）。
+
+⚠️ ⑶ 是**修 `ImportFrom` 假陽性換來的**，不是原本就有的：不看 `node.names` 會讓
+`from scripts.tools.ops import mytool` 這種**真的 in-process 進入點**被漏掉；看了就得
+接受符號撞名。兩個方向都會錯，這裡選了 CodeRabbit 實際報出來的那一側。
+這三條**本輪未修**，各有一格 `test_known_limit_*` 釘住現況。
 
 Usage
 -----
@@ -88,6 +95,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import fnmatch
 import json
 import os
 import re
@@ -180,6 +188,24 @@ def tracked(repo: Path, *patterns: str) -> list[str]:
     return [p for p in out.decode("utf-8").split("\0") if p]
 
 
+def _omitted(path: str, omit: set[str]) -> bool:
+    """coverage.py 的 ``omit`` 是 **shell-style filename pattern**，不是字面相等。
+
+    ⛔ 先前這裡寫 ``p in omit or "/vendor/" in p or "__pycache__" in p``：
+    ⑴ ``p in omit`` 對任何帶 wildcard 的 omit 都無感——實測 ``omit = ["…/gen/*.py"]``
+       之下，一個 coverage.py **根本不會量**的檔被回報成「coverage 盲點」。那是類別錯誤：
+       它不是「只被 subprocess 測到所以看不見」，它是**被刻意排除在量測之外**。
+    ⑵ 那兩個 hardcode 的 ``in`` 判斷讓這個缺陷今天看起來沒事——真 ``pyproject.toml`` 的
+       ``omit`` 有三條帶 glob（``tests/*`` / ``*/__pycache__/*`` / ``*/vendor/*``），其中兩條
+       **剛好**被那兩個字面判斷蓋掉。那是**巧合不是機制**，換一條 glob omit 就破。
+       ⇒ 一併刪除，讓覆蓋來自 ``omit`` 本身而不是兩個寫死的字串。
+
+    釘住：``test_wildcard_omit_is_honoured``（漏判側）與
+    ``test_non_matching_omit_does_not_exclude``（誤排除側）。
+    """
+    return any(fnmatch.fnmatch(path, pat) for pat in omit)
+
+
 def build(repo: Path) -> dict:
     sources, omit = coverage_sources(repo)
     if not sources:
@@ -192,7 +218,7 @@ def build(repo: Path) -> dict:
         # 釘住：`test_top_level_modules_are_in_the_population` /
         #       `test_top_level_test_files_are_in_the_population`
         for p in tracked(repo, f"{src}/*.py", f"{src}/**/*.py"):
-            if p in omit or "/vendor/" in p or "__pycache__" in p:
+            if _omitted(p, omit):
                 continue
             modules[p] = Path(p).stem
     stem_to_paths: dict[str, list[str]] = defaultdict(list)
@@ -221,7 +247,13 @@ def build(repo: Path) -> dict:
                 if isinstance(node, ast.Import):
                     names = [a.name for a in node.names]
                 elif isinstance(node, ast.ImportFrom) and node.module:
-                    names = [node.module]
+                    # ⛔ 不能只看 `node.module`。`from scripts.tools.ops import mytool`
+                    #   的 `node.module` 末段是 `ops`，真正的模組名在 `node.names` 裡；
+                    #   只看前者會讓一個**確實有 in-process 進入點**的模組被列進
+                    #   `blind_spots`（假陽性，實測）。
+                    #   釘住：`test_package_level_from_import_counts_as_in_process`
+                    #   與其反向對照 `test_from_import_of_a_non_module_name_is_not_an_entry`。
+                    names = [node.module] + [a.name for a in node.names]
                 for n in names:
                     last = n.split(".")[-1]
                     if last in stem_to_paths:
