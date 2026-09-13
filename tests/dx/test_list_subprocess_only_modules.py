@@ -21,6 +21,7 @@
 """
 from __future__ import annotations
 
+import fnmatch
 import json
 import subprocess
 import sys
@@ -64,6 +65,22 @@ def _fixture(tmp_path: Path, files: dict[str, str]) -> Path:
     )
     return tmp_path
 
+
+def _assert_fixture_actually_runs(repo: Path, rel: str) -> None:
+    """⛔ 把 fixture 的測試檔**真的跑一次**——「AST 認得這個形狀」不等於「它能執行」。
+
+    盲審打穿過一次：一格 fixture 寫了 `from . import relmod`，AST 分支處理得好好的，
+    而那個檔在 pytest 下收集期就 ImportError。docstring 宣稱它是「真的 in-process 進入點」
+    ——那是讀出來的，不是跑出來的。
+    """
+    proc = subprocess.run(
+        [sys.executable, "-m", "pytest", rel, "-q"],
+        cwd=repo, capture_output=True, text=True, timeout=300,
+    )
+    assert proc.returncode == 0, (
+        f"fixture 的 {rel} 根本跑不起來 ⇒ 「它是真的 in-process 進入點」這句話沒有依據。\n"
+        f"rc={proc.returncode}\nstdout:\n{proc.stdout[-2000:]}\nstderr:\n{proc.stderr[-1000:]}"
+    )
 
 # ---------------------------------------------------------------------------
 # 生產樹：母體與分類
@@ -740,26 +757,87 @@ def test_known_limit_a_from_imported_symbol_shadows_a_module_stem(
     assert data["both"] == ["lonely"]
 
 
-def test_relative_from_import_counts_as_in_process(tmp_path: Path) -> None:
-    """`from . import mytool` 的 `node.module` 是 `None`，但它是真的 in-process 進入點。
+def test_known_limit_a_relative_import_in_tests_can_never_name_a_source_module(
+    tmp_path: Path,
+) -> None:
+    """⛔ 這格取代 `test_relative_from_import_counts_as_in_process`，因為那格的前提是錯的。
 
-    ⛔ 修前 `elif isinstance(node, ast.ImportFrom) and node.module:` 的 guard 讓整個分支
-    跳過，`node.names` 一次都不讀——而讀 names 正是那個分支存在的理由。盲審實測：
-    修前該模組仍留在 `blind_spots`。
+    那格的 docstring 說 `from . import relmod` 「是真的 in-process 進入點」。⛔ **不是。**
+    兩個實測把它打死：
+
+    ⑴ 它**根本跑不起來**：fixture 的 `tests/` 沒有 `__init__.py`，pytest 收集期就
+       `ImportError: attempted relative import with no known parent package`（rc 2）。
+    ⑵ 補上 `__init__.py` 讓它跑得起來之後，它 import 到的是 **`tests/relmod.py`**
+       ——那個相對 import 的錨是**測試自己的 package**，不是 source root。
+
+    ⛔ 而這是**結構性**的，不是 fixture 寫壞：`build()` 只從 `tests/**` 底下取 `test_*.py`
+    當測試（實測：本 repo 住在 source root 底下的 `test_*.py` 共 **0 個**），所以測試檔裡
+    任何 `node.level > 0` 的 import 都只能解析到 `tests/` 裡面，**永遠不可能**指到
+    `scripts/tools` 或 `components/da-tools/app` 底下的模組。
+
+    ⇒ 工具把它的 `node.names` 當成該 stem 的 in-process 進入點，**一律是撞名**（已知界線
+    ⑶ 的同一個機制），沒有真陽性可言。方向是**靜默假陰性**：真盲點被吃掉、報告上不留痕跡。
+
+    ⚠️ 那為什麼不直接改述詞（跳過 `level > 0`）？因為那會是同一個受審主體上的第 4 版述詞，
+    而 `vibe-converge` 的 `CHANGE-SUBJECT` 禁止第 3 版之後再寫下一版。決策性的理由是
+    decidability：從 AST 看，`import X` 到底解析到專案模組還是同名的 stdlib／測試 helper
+    **本來就判不出來**（已知界線 ⑵⑶⑷⑸ 全都是這一件事的實例）。要真的修，得換到有權威
+    oracle 的那一面（import 系統本身／coverage 自己的量測），那是另一張票的範圍。
+    ⇒ 本輪**砍掉過度宣稱的散文、把現況釘住**，不寫第 4 版述詞。
+
+    ⚠️ 今天本 repo 的 `tests/` 底下有 **0 個 `__init__.py`**、**0 個真的 relative import**，
+    所以這條界線是預備性的——它守的是「哪天有人這樣寫，報告會靜默少一筆」這件事被記得。
+    """
+    repo = _fixture(tmp_path, {
+        # 專案模組：只被 subprocess 測到 ⇒ 本該是盲點
+        "scripts/tools/ops/relmod.py": _TOOL_SRC,
+        "scripts/tools/ops/control.py": _TOOL_SRC,
+        # ⛔ 測試自己的 package 裡有一個**同名**的 helper，相對 import 真正指到的是它
+        "tests/__init__.py": "",
+        "tests/relmod.py": "def helper():\n    return 'I am tests/relmod.py'\n",
+        "tests/test_rel.py":
+            'from . import relmod\n'
+            'import subprocess, sys\n'
+            'def test_i():\n'
+            "    assert relmod.helper() == 'I am tests/relmod.py'\n"
+            'def test_s():\n'
+            '    subprocess.run([sys.executable, "scripts/tools/ops/relmod.py"])\n'
+            '    subprocess.run([sys.executable, "scripts/tools/ops/control.py"])\n',
+    })
+    # ⛔ 先證明這個 fixture 真的跑得起來——上一版就是敗在「AST 認得」不等於「能執行」
+    _assert_fixture_actually_runs(repo, "tests/test_rel.py")
+
+    data = _json(repo)
+    assert data["both"] == ["relmod"], (
+        "假陰性沒重現。⚠️ 若已改成跳過 level > 0 的 import，請一併更新本格與工具 docstring"
+    )
+    assert [e["stem"] for e in data["blind_spots"]] == ["control"], (
+        "⚠️ 對照組：同一顆 fixture 裡沒被撞名遮到的那個必須留在 blind_spots，"
+        "否則這格量到的是「母體塌了」而不是「遮蔽發生了」"
+    )
+
+
+def test_the_relative_import_fixture_needs_its_package_marker(tmp_path: Path) -> None:
+    """⚠️ 反向對照：拿掉 `tests/__init__.py`，同一個 fixture 就**跑不起來**。
+
+    ⛔ 沒有這格的話，上一格補的 `__init__.py` 看起來只是多寫一行。它釘的是：
+    `from . import x` 這個形狀**只在 package 裡**才是真的進入點，而 `_assert_fixture_
+    actually_runs` 確實分得出跑得起來與跑不起來（否則它是個永遠回真的裝飾）。
     """
     repo = _fixture(tmp_path, {
         "scripts/tools/ops/relmod.py": _TOOL_SRC,
         "tests/test_rel.py":
             'from . import relmod\n'
             'def test_i():\n    assert relmod.main() == 0\n',
-        "tests/test_sub.py":
-            'import subprocess, sys\n'
-            'def test_s():\n'
-            '    subprocess.run([sys.executable, "scripts/tools/ops/relmod.py"])\n',
     })
-    data = _json(repo)
-    assert data["blind_spots"] == []
-    assert data["both"] == ["relmod"]
+    proc = subprocess.run(
+        [sys.executable, "-m", "pytest", "tests/test_rel.py", "-q"],
+        cwd=repo, capture_output=True, text=True, timeout=300,
+    )
+    assert proc.returncode != 0, "沒有 __init__.py 卻跑得起來 ⇒ 上一格的對照前提不成立"
+    assert "attempted relative import" in (proc.stdout + proc.stderr), (
+        f"紅的原因不是相對 import ⇒ 這格量到的不是它要量的東西。stdout={proc.stdout[-800:]}"
+    )
 
 
 def test_known_limit_ast_walk_ignores_reachability(tmp_path: Path) -> None:
@@ -787,30 +865,155 @@ def test_known_limit_ast_walk_ignores_reachability(tmp_path: Path) -> None:
     assert data["both"] == ["nevercalled"]
 
 
-def test_omit_matching_uses_coverages_own_matcher(tmp_path: Path) -> None:
-    """⛔ 判準是 coverage 自己的 `GlobMatcher`，不是 `fnmatch`——兩者實測分歧。
+def test_the_real_omit_config_stays_inside_the_matchers_agreement_region() -> None:
+    """⛔ 本檔的 `_omitted` 用 stdlib `fnmatch`，它**不等於** coverage 自己的 `GlobMatcher`。
 
-    ⚠️ 這格的第一版用 `source = ["vendored"]` + `*/vendor/*`，**抓不到差別**：
-    `fnmatch` 的 `*` **會跨目錄分隔符**，所以 `vendored/vendor/x.py` 兩個 matcher 都配到，
-    mutation（退回純 fnmatch）沒被打死。真正的分歧在**頂層**——`vendor/x.py` 前面沒有東西
-    可以給 `*/` 吃，`fnmatch` 配不到，coverage 配得到。
+    ⚠️ 受審主體換過：先前這格叫 `test_omit_matching_uses_coverages_own_matcher`，斷言工具
+    走的是 `GlobMatcher`。那條路死了兩次（`ConfigError` 逃出 `main()` 的 catch-list ⇒ rc 1
+    而非契約要求的 rc 2；`GlobMatcher` 取不到時**靜默**退回 `fnmatch`），而它在本 repo 買到
+    的差異實測是 **0 個檔**。⇒ 工具不再自稱是 coverage matcher 的等價物；**這格改問設定**：
+    本 repo 真實的 `omit` × 真實的檔案清單，兩個 matcher 排除的集合是否相同。
+
+    ⛔ 這格紅了**不代表工具壞了**，代表設定漂進了分歧區，要人看一眼決定怎麼辦——
+    失敗訊息會指名是哪一個檔、哪一條 pattern、以及分歧往哪個方向。
+
+    ⚠️ 另一個舊問題：那格的 oracle 只有 `rc == 2` 加一個泛用字串「母體是空的」，於是
+    **任何**把母體清空的原因都讓它綠（實測：把 `_omitted` 改成無條件 `return True`，該格
+    仍 1 passed）。這格的斷言直接比對兩個集合並印出差集，沒有那條退路。
+    """
+    glob_matcher = pytest.importorskip(
+        "coverage.files", reason="沒有 coverage 就量不到分歧——這是 skip 不是 pass"
+    ).GlobMatcher
+
+    cfg = tomllib.loads((_REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    run = cfg["tool"]["coverage"]["run"]
+    omit = list(run.get("omit", []))
+    assert omit, "本 repo 的 omit 是空的 ⇒ 這格什麼都沒量到，要嘛設定變了要嘛路徑寫錯"
+
+    files: list[str] = []
+    for src in run["source"]:
+        proc = subprocess.run(
+            ["git", "ls-files", f"{src}/*.py", f"{src}/**/*.py"],
+            cwd=_REPO_ROOT, capture_output=True, text=True, check=True, timeout=60,
+        )
+        files += proc.stdout.split()
+    files = sorted(set(files))
+    assert files, "母體是空的 ⇒ 量不到，不是量了沒事"
+
+    by_fnmatch = {f for f in files if _mod._omitted(f, set(omit))}
+    by_coverage = {f for f in files if glob_matcher(list(omit), "omit").match(f)}
+
+    def _why(path: str) -> str:
+        fn = [q for q in omit if fnmatch.fnmatch(path, q)]
+        cv = [q for q in omit if glob_matcher([q], "omit").match(path)]
+        return f"{path}: fnmatch 配到 {fn or '無'}／coverage 配到 {cv or '無'}"
+
+    only_fnmatch = sorted(by_fnmatch - by_coverage)
+    only_coverage = sorted(by_coverage - by_fnmatch)
+    assert not (only_fnmatch or only_coverage), (
+        f"本 repo 的 omit 設定踩進了 fnmatch 與 coverage.GlobMatcher 的分歧區"
+        f"（母體 {len(files)} 個檔，omit {omit}）。\n"
+        "⛔ fnmatch **多配**（會靜默吃掉真盲點）：\n  "
+        + ("\n  ".join(_why(f) for f in only_fnmatch) or "（無）")
+        + "\n⛔ fnmatch **少配**（會把被 omit 的檔回報成盲點，吵但看得見）：\n  "
+        + ("\n  ".join(_why(f) for f in only_coverage) or "（無）")
+        + "\n⇒ 改那條 pattern，或接受並把它寫進 `_omitted` 的已知界線。"
+    )
+
+
+def test_known_limit_fnmatch_diverges_from_coverage_in_both_directions() -> None:
+    """⛔ `_omitted` 的 docstring 列了一張分歧表；這格釘住那張表**兩個方向都成立**。
+
+    ⚠️ 只釘一個方向會讓讀者以為這把儀器只往一邊壞。實測兩邊都會：`fnmatch` 的 `*`
+    **跨目錄分隔符**（多配 ⇒ 靜默吃掉真盲點），而它不認 coverage 的 `**`（少配 ⇒ 吵）。
+    ⛔ 所以**沒有「安全側」可以倚賴**——上一版的註解暗示過有，那是錯的。
+    """
+    glob_matcher = pytest.importorskip(
+        "coverage.files", reason="沒有 coverage 就量不到分歧——這是 skip 不是 pass"
+    ).GlobMatcher
+
+    # (path, pattern, fnmatch 預期, coverage 預期)
+    cases = [
+        ("a/c.py", "a/**/c.py", False, True),
+        ("vendor/x.py", "*/vendor/*", False, True),
+        ("__pycache__/x.py", "*/__pycache__/*", False, True),
+        ("a/b/d/c.py", "a/*/c.py", True, False),
+        ("scripts/tools/gen/d/x.py", "scripts/tools/*/x.py", True, False),
+        ("scripts/tools/vendor/x.py", "*/vendor/*", True, True),
+    ]
+    for path, pat, want_fn, want_cv in cases:
+        got_fn = fnmatch.fnmatch(path, pat)
+        got_cv = bool(glob_matcher([pat], "omit").match(path))
+        assert got_fn is want_fn, f"fnmatch({path!r}, {pat!r}) = {got_fn}，表上寫 {want_fn}"
+        assert got_cv is want_cv, f"coverage({path!r}, {pat!r}) = {got_cv}，表上寫 {want_cv}"
+
+    assert [c for c in cases if c[2] and not c[3]], "多配方向沒有案例 ⇒ 只釘了一半"
+    assert [c for c in cases if c[3] and not c[2]], "少配方向沒有案例 ⇒ 只釘了一半"
+
+    # ⛔ 而工具走的是 fnmatch 那一欄，不是 coverage 那一欄——這行才是「它用哪個」的斷言。
+    for path, pat, want_fn, _want_cv in cases:
+        assert _mod._omitted(path, {pat}) is want_fn, (
+            f"_omitted 對 ({path!r}, {pat!r}) 的答案偏離 fnmatch ⇒ 判定器被換掉了"
+        )
+
+
+def test_known_limit_a_function_body_import_also_counts_as_an_entry_point(
+    tmp_path: Path,
+) -> None:
+    """⛔ 已知界線 ⑷ 的**另一半**：函式內的 import 也被算成 in-process 進入點。
+
+    ⚠️ 先前只有 `test_known_limit_ast_walk_ignores_reachability` 釘住 `if TYPE_CHECKING:`
+    那一半，而工具 docstring 卻寫「這四條各有一格釘住」——⑷ 的函式內 import 那一半屬實
+    但沒有任何測試守著，可以靜默回歸。這格補上。
+
+    `never_called()` 從來沒被呼叫，`import neverfunc` 執行期永遠不跑，但 `ast.walk` 看得到。
     """
     repo = _fixture(tmp_path, {
-        "vendor/thirdparty.py": _TOOL_SRC,
-        "vendor/sub/mine.py": _TOOL_SRC,
-        "tests/test_v.py":
+        "scripts/tools/ops/neverfunc.py": _TOOL_SRC,
+        "scripts/tools/ops/control.py": _TOOL_SRC,
+        "tests/test_fn.py":
             'import subprocess, sys\n'
-            'def test_v():\n'
-            '    subprocess.run([sys.executable, "vendor/thirdparty.py"])\n'
-            '    subprocess.run([sys.executable, "vendor/sub/mine.py"])\n',
+            'def never_called():\n'
+            '    import neverfunc\n'
+            '    return neverfunc\n'
+            'def test_s():\n'
+            '    subprocess.run([sys.executable, "scripts/tools/ops/neverfunc.py"])\n'
+            '    subprocess.run([sys.executable, "scripts/tools/ops/control.py"])\n',
     })
-    (repo / "pyproject.toml").write_text(
-        '[tool.coverage.run]\nsource = ["vendor"]\nomit = ["*/vendor/*"]\n',
-        encoding="utf-8",
+    data = _json(repo)
+    assert data["both"] == ["neverfunc"], (
+        "假陰性沒重現——若已修好（能判可達性）請一併更新工具 docstring 的已知界線 ⑷"
     )
-    proc = _run(repo, "--json")
-    assert proc.returncode == 2, (
-        "coverage 的 matcher 會把 vendor/ 底下兩個檔都排除 ⇒ 母體歸零 ⇒ rc 2；"
-        f"純 fnmatch 只排除得到帶前綴的那個，會留下母體並回 rc 0。實得 rc={proc.returncode}"
+    assert [e["stem"] for e in data["blind_spots"]] == ["control"], (
+        "⚠️ 對照組：同一顆 fixture 裡沒被函式內 import 遮到的那個必須留在 blind_spots，"
+        "否則這格量到的是「母體塌了」而不是「遮蔽發生了」"
     )
-    assert "母體是空的" in proc.stderr
+
+
+def test_known_limit_future_annotations_shadows_a_module_named_annotations(
+    tmp_path: Path,
+) -> None:
+    """⛔ 已知界線 ⑸：`from __future__ import annotations` 遮蔽 `annotations.py`。
+
+    ⚠️ 機制與 ⑵ / ⑶ 相同（from-import 的 name 撞上模組 stem），但**普遍得多**——它是本
+    repo 幾乎每個測試檔的第一行（實測 283 / 366），不是「剛好 import 到同名套件」。
+    ⛔ 這條先前沒被列進已知界線，讓那份清單看起來比實際完整；**不是本輪新增的行為**
+    （`node.module` 本來就是 `'__future__'`，移除 `and node.module` guard 之前就這樣）。
+    """
+    repo = _fixture(tmp_path, {
+        "scripts/tools/ops/annotations.py": _TOOL_SRC,
+        "scripts/tools/ops/control.py": _TOOL_SRC,
+        "tests/test_fut.py":
+            'from __future__ import annotations\n'
+            'import subprocess, sys\n'
+            'def test_s():\n'
+            '    subprocess.run([sys.executable, "scripts/tools/ops/annotations.py"])\n'
+            '    subprocess.run([sys.executable, "scripts/tools/ops/control.py"])\n',
+    })
+    data = _json(repo)
+    assert data["both"] == ["annotations"], (
+        "假陰性沒重現——若已修好（`__future__` 被特判掉）請一併更新已知界線 ⑸"
+    )
+    assert [e["stem"] for e in data["blind_spots"]] == ["control"], (
+        "⚠️ 對照組：沒被遮到的那個必須留在 blind_spots，否則量到的是母體塌了"
+    )
