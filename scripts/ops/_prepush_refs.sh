@@ -67,9 +67,22 @@
 #       feature branch with no marker           blocked, both ways
 #       the same push with GIT_PREFLIGHT_BYPASS=1   ALLOWED
 #   The sibling flag releases a push that would otherwise be stopped; this one
-#   cannot, because a push that is doing something carries rows, and rows are
-#   answered one branch above. Its whole reach is hand-invoking a guard with no
-#   rows — and there is nothing there to guard.
+#   cannot, because a real push carries rows on stdin and rows are answered one
+#   branch above.
+#   ⛔ But its reach is "no rows ON STDIN", which is NOT the same as "nothing to
+#   guard". It also covers invocations where the env channel would have supplied
+#   a real refspec, and this branch discards that. Measured: with the variable
+#   set, zero stdin rows and PRE_COMMIT_REMOTE_BRANCH=refs/heads/main, the guard
+#   allows; unset, it blocks with the direct-push banner. Exported into the
+#   ambient environment, nine cells of tests/ops/test_prepush_hook_wiring.py go
+#   red (clean environment: all green), six of them because an env-channel push
+#   at a protected branch was allowed.
+#   That is safe TODAY for one mechanical reason only: the dispatcher is a CHILD
+#   process of pre-commit's hook_impl, and a child's export cannot reach the
+#   siblings its parent spawns afterwards (measured, with a control). ⛔ So never
+#   export this variable from anywhere but the dispatcher — not a wrapper, not
+#   the installer, not CI. The sentence that used to sit here said "there is
+#   nothing there to guard", which would have licensed exactly that.
 #
 #   For the same reason this channel is SILENT, unlike the two sibling flags
 #   which announce themselves: it is taken on every up-to-date push, which is
@@ -89,9 +102,12 @@
 #       .pre-commit-config.yaml declares NO pre-push hook in ANY spelling.
 #       That assertion is load-bearing for this paragraph, not housekeeping.
 #   ⚠️ What is left is a person exporting the variable and then invoking a
-#   guard by hand. ⛔ Do not write that `pre-commit run --hook-stage pre-push`
-#   is that route: measured on this repo's own config, that command runs ZERO
-#   hooks and exits 0, because there are no pre-push stanzas for it to run.
+#   guard by hand, e.g. `bash scripts/ops/protect_main_push.sh`. ⛔ Do not write
+#   that `pre-commit run --hook-stage pre-push` is that route — not here and not
+#   in the refusal message below: measured on this repo's own config, that
+#   command runs ZERO hooks and exits 0, because there are no pre-push stanzas
+#   for it to run. It reaches a guard only in a config that declares one, which
+#   is what this file's own tests synthesise.
 #   ⛔ Do NOT generalise this to "zero rows always passes" — that is the #1664
 #   defect. "Nothing to push" and "cannot see what is being pushed" have to
 #   stay two different answers; this only says who is allowed to give the first.
@@ -187,8 +203,11 @@ _prepush_rows() {
     # with it below: zero rows plus a stale refs/heads/main produced a phantom
     # row and the guard blocked a push that was already up to date — the same
     # dead end as the one above, one door along.
-    # ⛔ Exact value, like both sibling flags (require_preflight_pass.sh and
-    # pre_push_mkdocs_strict.sh test `= "1"`): `-n` would read `=0` as ON.
+    # ⛔ Exact value, not a presence test. Only the dispatcher writes this, and
+    # it writes `1`; matching exactly sends every other inherited value — `0`,
+    # `true`, someone's leftover export — back to the conservative branch below.
+    # ⛔ Do not read this as "same family as the bypass flags": for those, unset
+    # is the safe side, and here unset is the #1846 mis-refusal.
     if [ "${VIBE_PREPUSH_FROM_DISPATCH:-0}" = "1" ]; then
         return 0
     fi
@@ -236,9 +255,9 @@ PRE_COMMIT_REMOTE_BRANCH is unset.
 
 Common ways to reach this message:
 
-  * you invoked a guard by hand under a pre-commit environment — including
-    `pre-commit run --hook-stage pre-push` — in which case there is genuinely
-    nothing to judge;
+  * you invoked a guard by hand (`bash scripts/ops/protect_main_push.sh`, say)
+    while PRE_COMMIT was set in your environment, in which case there is
+    genuinely nothing to judge;
   * something exported PRE_COMMIT before `git push`, and the guard was reached
     WITHOUT scripts/ops/prepush_dispatch.sh (a hand-wired .git/hooks/pre-push,
     for instance). See CALLER CHANNEL in scripts/ops/_prepush_refs.sh.

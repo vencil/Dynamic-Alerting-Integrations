@@ -106,6 +106,21 @@ def test_pre_commit_present_when_required() -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _no_ambient_caller_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    """⛔ Scrub the dispatcher's caller flag (#1846) from the environment.
+
+    Every "the guard refuses" assertion in this file flips if that variable
+    happens to be exported in the shell that runs pytest — measured: nine cells
+    go red that way, for a reason that has nothing to do with the code under
+    test. ``_prepush_refs.sh``'s own CHANNEL ORDER section gives the reason this
+    matters: an inherited variable "is not a property anyone controls". Neither
+    is this one, so the file controls it once here instead of filtering it in
+    each test that remembers to.
+    """
+    monkeypatch.delenv("VIBE_PREPUSH_FROM_DISPATCH", raising=False)
+
+
 def _git(repo: Path, *args: str, **kw) -> subprocess.CompletedProcess:
     env = {**os.environ, **kw.pop("env_extra", {})}
     env.setdefault("GIT_AUTHOR_NAME", "t")
@@ -682,17 +697,10 @@ def test_an_up_to_date_push_is_allowed_with_pre_commit_in_the_environment(
       * a push that really does carry a row at ``main`` must still be BLOCKED
         while the dispatcher is the caller. Without that row, "the dispatcher
         called me" collapsing into "allow everything" would satisfy this test —
-        which is #1664 rebuilt one layer up. ⛔ It is also the only thing in the
-        suite that pins it: hoisting the caller-channel return to the top of
-        ``_prepush_rows`` leaves ``test_stdin_wins_over_a_stray_precommit_
-        environment`` green, because that test never sets this variable.
-
-    ⛔ The zero-row rows do NOT silence ``require_preflight_pass``: it reads the
-    refspec through the same helper, so bypassing it would leave only one of the
-    two stdin-reading guards exercised on the path this test exists for. Only
-    the mkdocs sibling is off, and the dispatcher skips it on a no-commit push
-    anyway. The ``main`` row keeps both siblings off so the banner it asserts on
-    is unambiguously the direct-push guard's.
+        which is #1664 rebuilt one layer up. That hoist reds every test in this
+        file that drives the installed dispatcher and expects a block, which is
+        several; the reason it is spelled out here is that this is where the
+        caller channel is introduced, not that nothing else notices.
     """
     work = _make_repo(tmp_path, _PROTECT_ONLY)
     # Publish the branch BEFORE installing, so the pushes below are genuinely
@@ -702,14 +710,13 @@ def test_an_up_to_date_push_is_allowed_with_pre_commit_in_the_environment(
     assert _git(work, "push", "-q", "origin", "HEAD:refs/heads/feat/x").returncode == 0
     assert _install_guards(work).returncode == 0
 
-    mkdocs_off = {"MKDOCS_STRICT_BYPASS": "1"}
-    clean, clean_out = _push(work, "HEAD:refs/heads/feat/x", env_extra=mkdocs_off)
+    clean, clean_out = _push(work, "HEAD:refs/heads/feat/x", env_extra=_SIBLINGS_OFF)
     assert clean.returncode == 0, (
         f"CONTROL FAILED: an up-to-date push was blocked without PRE_COMMIT "
         f"even set:\n{clean_out}"
     )
 
-    inherited = {**mkdocs_off, "PRE_COMMIT": "1"}
+    inherited = {**_SIBLINGS_OFF, "PRE_COMMIT": "1"}
     synced, synced_out = _push(work, "HEAD:refs/heads/feat/x", env_extra=inherited)
     assert synced.returncode == 0, (
         f"a push with nothing to push was refused as unguardable:\n{synced_out}"
@@ -724,8 +731,7 @@ def test_an_up_to_date_push_is_allowed_with_pre_commit_in_the_environment(
     )
     assert _BANNER not in ghost_out, ghost_out
 
-    blocked, blocked_out = _push(work, "HEAD:refs/heads/main",
-                                 env_extra={**_SIBLINGS_OFF, "PRE_COMMIT": "1"})
+    blocked, blocked_out = _push(work, "HEAD:refs/heads/main", env_extra=inherited)
     assert blocked.returncode != 0, (
         f"CONTROL FAILED: with the dispatcher as caller, a real push at main "
         f"was allowed — that is #1664 one layer up:\n{blocked_out}"
@@ -752,26 +758,20 @@ def test_only_the_dispatcher_may_read_zero_rows_as_nothing_to_push(
     ``test_guard_refuses_when_no_channel_carries_a_refspec`` pins through
     ``pre-commit run``, unchanged by #1846.
 
-    The ``0`` row is not tidiness. Both sibling escape hatches in this family
-    test an exact value (``[ "${GIT_PREFLIGHT_BYPASS:-0}" = "1" ]`` in
-    require_preflight_pass.sh, the same shape for ``MKDOCS_STRICT_BYPASS``), so
-    ``=0`` means off there; a presence test here would have read it as ON and
-    made this the one flag in the family that cannot be turned off by value.
+    The ``0`` row is not tidiness: only the dispatcher writes this variable and
+    it writes ``1``, so an exact-value test sends every other inherited value
+    back to the refusal. A presence test read ``0`` as ON.
 
     ⛔ What this test does NOT pin: that a push carrying rows is judged either
-    way. That lives in ``test_an_up_to_date_push_is_allowed_with_pre_commit_in_
-    the_environment``'s ``main`` row — measured, because hoisting the
-    caller-channel return to the top of ``_prepush_rows`` leaves this test AND
-    ``test_stdin_wins_over_a_stray_precommit_environment`` green and reds only
-    that one.
+    way. That needs the installed dispatcher, so it lives in
+    ``test_an_up_to_date_push_is_allowed_with_pre_commit_in_the_environment``.
 
     ⛔ The guard is invoked with a RELATIVE path from inside the temp repo: Git
     Bash mangles ``C:\\path\\file`` arguments.
     """
     work = _make_repo(tmp_path, _PROTECT_ONLY)
     assert _BASH
-    env = {k: v for k, v in os.environ.items()
-           if k != "VIBE_PREPUSH_FROM_DISPATCH"}
+    env = dict(os.environ)
     env["PRE_COMMIT"] = "1"
     env.pop("PRE_COMMIT_REMOTE_BRANCH", None)
     env.pop("PRE_COMMIT_TO_REF", None)
