@@ -2011,7 +2011,7 @@ class TestFixDoesNotSwitchOffJson:
                             lambda *a, **k: list(issues))
         for name in ("check_bilingual_badge", "check_bilingual_number_consistency",
                      "check_rule_pack_counts", "check_tool_count_in_docs",
-                     "check_roadmap_changelog_overlap", "check_doc_map_coverage",
+                     "check_doc_map_coverage",
                      "check_tool_map_coverage", "check_adr_count_in_docs",
                      "check_doc_file_count_in_docs", "check_scenario_count_in_docs",
                      "check_image_tag_v_prefix", "check_mkdocs_extra_versions",
