@@ -3607,3 +3607,176 @@ class TestDatoolsPinCapability:
         assert inv, ("the docs pin da-tools images and document subcommands "
                      "against them; extracting none means the extractor is "
                      "blind, not that the tree is clean")
+
+
+class TestPortalPlaygroundPinCapability:
+    """#1836 — the portal CLI Playground's subcommands are graded too.
+
+    Same defect and same oracle as `TestDatoolsPinCapability`, different
+    extraction source. What is pinned here is the BOUND on the extractor (the
+    trap that made the first attempt report three false findings), its
+    fail-closed behaviour, and the wiring into the bump.
+    """
+
+    _SYNTHETIC = "\n".join([
+        "const COMMANDS = {",
+        "  'alpha': {",
+        "    label: 'alpha'",
+        "  },",
+        "  'beta-two': {",
+        "    label: 'beta'",
+        "  }",
+        "};",
+        "",
+        "const NETWORK_MODES = {",
+        "  'k8s': {",
+        "    label: 'k8s'",
+        "  }",
+        "};",
+    ])
+
+    def _oracle(self):
+        return bump_docs.parse_command_map(), set(bump_docs.parse_build_sh_tools())
+
+    # -- the extractor -----------------------------------------------------
+
+    def test_keys_come_back_with_the_line_they_sit_on(self):
+        """The line number is what points a human at the offending entry."""
+        from _lint_helpers import parse_portal_playground_commands_text
+
+        assert parse_portal_playground_commands_text(self._SYNTHETIC) == [
+            ("alpha", 2), ("beta-two", 5)]
+
+    def test_network_modes_are_not_mistaken_for_subcommands(self):
+        """The bound must be doing work, not merely happening to be harmless.
+
+        ⚠️ `NETWORK_MODES` sits directly under `COMMANDS` in the same file and
+        its keys match the identical shape, so an unbounded scan reports
+        `k8s` / `docker-desktop` / `linux` as three subcommands the image does
+        not dispatch — three false findings on a release gate.
+
+        Asserting only "no network modes in the result" would pass just as
+        happily against an extractor that had stopped reading anything. So
+        this measures BOTH sides: the unbounded regex finds them, the bounded
+        parser does not.
+        """
+        from _lint_helpers import (_PORTAL_COMMAND_KEY_RE,
+                                   parse_portal_playground_commands,
+                                   parse_portal_playground_commands_text)
+
+        modes = {"k8s", "docker-desktop", "linux"}
+        text = bump_docs.PORTAL_PLAYGROUND_PATH.read_text(encoding="utf-8-sig")
+        unbounded = {m.group(1) for m in _PORTAL_COMMAND_KEY_RE.finditer(text)}
+        assert modes <= unbounded, (
+            "the unbounded scan no longer reaches the network modes, so this "
+            "test is not measuring the trap it was written for — re-check "
+            "where NETWORK_MODES lives before trusting the bound")
+
+        for got in (parse_portal_playground_commands_text(text),
+                    parse_portal_playground_commands()):
+            keys = {k for k, _ in got}
+            assert not (keys & modes), (
+                f"network-mode keys leaked into the subcommand set: "
+                f"{sorted(keys & modes)}")
+            assert keys, "bounded parse returned nothing"
+
+    def test_a_moved_catalog_raises_rather_than_returning_nothing(self):
+        """Both anchors are checked, and each failure names its own remedy."""
+        from _lint_helpers import parse_portal_playground_commands_text
+
+        with pytest.raises(ValueError, match="const COMMANDS"):
+            parse_portal_playground_commands_text("const OTHER = {\n  'a': {\n")
+        with pytest.raises(ValueError, match="NETWORK_MODES"):
+            parse_portal_playground_commands_text(
+                "const COMMANDS = {\n  'a': {\n  }\n};\n")
+
+    def test_zero_extracted_keys_raises(self):
+        """Anchors present but nothing read out is a FAILURE, not an empty set.
+
+        A reindent or a switch to double-quoted keys lands here. Returning
+        `[]` would be indistinguishable from a clean catalog at the call site
+        — the exact 「量不到 vs 量了沒事」 collapse this line of work exists
+        to prevent.
+        """
+        from _lint_helpers import parse_portal_playground_commands_text
+
+        with pytest.raises(ValueError, match="0 command keys"):
+            parse_portal_playground_commands_text(
+                'const COMMANDS = {\n    "alpha": {\n    }\n};\n'
+                'const NETWORK_MODES = {};\n')
+
+    # -- the wiring --------------------------------------------------------
+
+    def test_head_tree_is_clean(self):
+        """Green today — so a future red is real drift, not a new gate settling in."""
+        cm, tf = self._oracle()
+        assert bump_docs._check_portal_playground_capability(cm, tf, "9.9.9") == 0
+
+    def test_it_says_how_many_it_checked(self, capsys):
+        """A blind extractor and a clean catalog must not print the same thing."""
+        from _lint_helpers import parse_portal_playground_commands
+
+        cm, tf = self._oracle()
+        bump_docs._check_portal_playground_capability(cm, tf, "9.9.9")
+        out = capsys.readouterr().out
+        assert f"{len(parse_portal_playground_commands())} subcommand(s)" in out
+
+    def test_an_undispatched_command_fails_the_bump(self, monkeypatch, capsys):
+        """The control: a catalog key the image does not know must go red."""
+        monkeypatch.setattr(bump_docs, "parse_portal_playground_commands",
+                            lambda *a, **kw: [("frobnicate", 42)])
+        cm, tf = self._oracle()
+        assert bump_docs._check_portal_playground_capability(cm, tf, "9.9.9") == 1
+        err = capsys.readouterr().err
+        assert "datools-portal-pin-capability" in err
+        assert ":42" in err, "the report must point at the catalog line"
+
+    def test_a_dispatched_but_unshipped_command_fails_the_bump(self, monkeypatch,
+                                                               capsys):
+        """The #1044 half: registered in COMMAND_MAP, never copied into the image.
+
+        Kept a separate finding from the one above because the fixes differ —
+        this one is build.sh not shipping a real command, not the catalog
+        naming a fake one.
+        """
+        monkeypatch.setattr(bump_docs, "parse_portal_playground_commands",
+                            lambda *a, **kw: [("ghost", 7)])
+        cm, tf = self._oracle()
+        cm = dict(cm, ghost="ghost_tool.py")
+        assert "ghost_tool.py" not in tf
+        assert bump_docs._check_portal_playground_capability(cm, tf, "9.9.9") == 1
+        assert "datools-portal-pin-not-shipped" in capsys.readouterr().err
+
+    @pytest.mark.parametrize("exc", [ValueError("catalog moved"),
+                                     OSError("catalog missing")])
+    def test_an_unreadable_catalog_fails_closed(self, monkeypatch, exc):
+        """Extractor failure fails the bump; it is never a skipped check."""
+        def _boom(*a, **kw):
+            raise exc
+
+        monkeypatch.setattr(bump_docs, "parse_portal_playground_commands", _boom)
+        cm, tf = self._oracle()
+        assert bump_docs._check_portal_playground_capability(cm, tf, "9.9.9") == 1
+
+    def test_the_portal_half_runs_even_when_the_doc_half_is_red(self,
+                                                                monkeypatch):
+        """⛔ No short-circuit.
+
+        Hiding the portal finding whenever the doc half is already red would
+        hide it exactly when a release is being fixed under time pressure —
+        one round of fixes would look like it covered both.
+        """
+        seen = []
+        monkeypatch.setattr(
+            bump_docs, "check_pinned_subcommands_against",
+            lambda *a, **kw: [bump_docs.Issue("x", "doc.md", 1, "synthetic")])
+        real = bump_docs._check_portal_playground_capability
+
+        def _spy(*a, **kw):
+            seen.append(True)
+            return real(*a, **kw)
+
+        monkeypatch.setattr(bump_docs, "_check_portal_playground_capability",
+                            _spy)
+        assert bump_docs._check_datools_pin_capability("9.9.9") == 1
+        assert seen, "the portal half was skipped because the doc half was red"

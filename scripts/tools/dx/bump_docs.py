@@ -79,8 +79,14 @@ from _version_patterns import DOCS_TREE_SYMLINK_ALIASES  # noqa: E402
 # `_lint_helpers` reads the working tree's COMMAND_MAP (what the tag being cut
 # will ship), and check_doc_datools_cmds owns the fenced-block / docker-run /
 # `_image_index` extraction. Importing beats a fourth copy of either.
-from _lint_helpers import parse_build_sh_tools, parse_command_map  # noqa: E402
+from _lint_helpers import (  # noqa: E402
+    PORTAL_PLAYGROUND_PATH,
+    parse_build_sh_tools,
+    parse_command_map,
+    parse_portal_playground_commands,
+)
 from check_doc_datools_cmds import (  # noqa: E402
+    Issue,
     check_pinned_subcommands_against,
     iter_pinned_invocations,
     pin_capability_doc_files,
@@ -2362,8 +2368,84 @@ def _scope_empty_note(line, all_rules, scope):
             f"was NOT checked. Widen or drop --scope to cover it.")
 
 
+def _check_portal_playground_capability(command_map: dict, tool_files: set,
+                                        new_ver: str) -> int:
+    """The portal CLI Playground's subcommands must be runnable by the tag too.
+
+    #1836. Same defect as #1534, same oracle, different extraction source —
+    and that difference is the whole point. `iter_pinned_invocations` is a
+    markdown extractor keyed on "image, then the first bare operand"; the
+    portal's pin is not shaped like that:
+
+        cmd += 'ghcr.io/vencil/da-tools:v2.9.0 ';   # engine.js
+        cmd += selectedCommand;                     # a COMMANDS key
+
+    The pin lives in the command ASSEMBLER with no literal subcommand beside
+    it, so widening the doc extractor's corpus could never reach this. Hence a
+    second extractor over `commands.js`, graded by the same two questions.
+
+    `bump_docs --tools` repoints that pin on every release (the
+    `PORTAL_JSX_DIR` globs in `_build_tools_rules()`), so without this the
+    Copy button hands customers a `docker run` pinned at a tag nobody asked
+    whether it dispatches the command being copied.
+
+    ⛔ The oracle is the WORKING TREE's, for the reason spelled out in
+    `_check_datools_pin_capability`: at release wrap the new tag does not
+    exist yet, so `capabilities_for_tag` would raise on every release.
+    """
+    try:
+        commands = parse_portal_playground_commands()
+    except (OSError, ValueError) as exc:
+        # ⛔ Every failure of the extractor is a failed bump, never a skipped
+        # one. A catalog that moved, got reindented, or became generated all
+        # land here, and all three would otherwise let the release repoint the
+        # pin and report success over a catalog it never read.
+        print(f"\n❌ could not read the portal CLI Playground command catalog, "
+              f"so the subcommands its Copy button pins at v{new_ver} were NOT "
+              f"checked: {exc}", file=sys.stderr)
+        return 1
+    rel = PORTAL_PLAYGROUND_PATH.relative_to(REPO_ROOT).as_posix()
+    issues = []
+    for sub, line in commands:
+        script = command_map.get(sub)
+        if script is None:
+            issues.append(Issue(
+                "datools-portal-pin-capability", rel, line,
+                f"the CLI Playground offers '{sub}', which the image does not "
+                f"dispatch (it exits with `Unknown command`). The playground "
+                f"pins the image it builds, so pressing Copy hands a customer "
+                f"a line that cannot run. Either drop the command from the "
+                f"catalog, or ship it."))
+        elif script not in tool_files:
+            issues.append(Issue(
+                "datools-portal-pin-not-shipped", rel, line,
+                f"the CLI Playground offers '{sub}', which COMMAND_MAP maps to "
+                f"{script} — but that file is NOT in build.sh TOOL_FILES, so it "
+                f"is registered and never copied into the image. The command "
+                f"dispatches and then dies on a missing file. Add {script} to "
+                f"TOOL_FILES, or stop offering the command."))
+    # Same reason the doc half prints its count: a blind extractor and a clean
+    # catalog must not produce identical output.
+    print(f"  ✅ portal CLI Playground pin capability: {len(commands)} "
+          f"subcommand(s) in {rel} checked against v{new_ver}")
+    for it in issues:
+        print(f"  ❌ [{it.check}] {it.file}:{it.line} — {it.message}",
+              file=sys.stderr)
+    if issues:
+        print(f"\n❌ {len(issues)} CLI Playground subcommand(s) are not runnable "
+              f"by v{new_ver}. The playground's pin was repointed at v{new_ver}, "
+              f"so shipping this leaves the portal handing customers a "
+              f"copy-paste command the released image cannot run.",
+              file=sys.stderr)
+    return len(issues)
+
+
 def _check_datools_pin_capability(new_ver: str) -> int:
-    """Documented da-tools invocations must be runnable by the tag being cut.
+    """Every pinned da-tools invocation must be runnable by the tag being cut.
+
+    Two extraction sources, one oracle: the docs (#1534, below) and the portal
+    CLI Playground (#1836, `_check_portal_playground_capability`). The returned
+    count covers both.
 
     Direction (1) of #1534: check AT THE MOMENT the pin is rewritten. Of the
     rules in `_build_tools_rules()` that repoint
@@ -2452,7 +2534,17 @@ def _check_datools_pin_capability(new_ver: str) -> int:
               f"teaching a command the released image answers with "
               f"`Unknown command`. Fix the doc, or ship the command.",
               file=sys.stderr)
-    return len(issues)
+    # #1836: the portal's pin is repointed by this same `--tools` bump, and its
+    # subcommands come from a source the doc extractor structurally cannot
+    # reach. Shares the oracle built above rather than rebuilding it, so the
+    # two halves cannot end up grading against different capability sets.
+    #
+    # ⛔ Runs unconditionally — NOT `if not issues`. Short-circuiting would
+    # hide the portal half exactly when the doc half is already red, i.e. when
+    # someone is fixing a release under time pressure and would ship the second
+    # defect believing one round of fixes covered both.
+    return len(issues) + _check_portal_playground_capability(
+        command_map, tool_files, new_ver)
 
 
 def main():
