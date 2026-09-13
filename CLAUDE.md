@@ -153,10 +153,12 @@ pre-commit run --hook-stage manual --all-files   # manual stage（較重）
 ⛔ 這些不是偶發，是**結構性**的。⚠️ 第 1、3 項取決於**本 session 以什麼身分在操作 GitHub**——看 PR 作者的 `user.type` 是 `Bot` 還是 `User`，別假設。第 2、4 項與身分無關。
 
 1. **CodeRabbit 對 `Bot` 作者的 PR 直接 `Review skipped — Bot user detected`；`User` 作者的會審。** 實據：[#1838](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1838)（`claude[bot]`）被跳過、[#1841](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1841)（`vencil`）審了。⇒ 看作者型別，不看你用哪個工具開 PR——同一個 `GH_TOKEN` 在不同 session 可能是不同身分。
-2. **就算觸發過一次，後續 push 也不會自動再審**——[`.coderabbit.yaml`](.coderabbit.yaml) 設了 `auto_incremental_review: false`。⚠️ 連帶效果：PR 頁面的 **Merge Risk 橫幅停在被審過的那個 commit**，修完之後仍寫著舊 finding，容易被讀成現況。
+2. **就算觸發過一次，後續 push 也不會自動再審**——[`.coderabbit.yaml`](.coderabbit.yaml) 設了 `auto_incremental_review: false`。⚠️ 連帶效果：PR 頁面的 **Merge Risk 橫幅停在被審過的那個 commit**，修完之後仍寫著舊 finding，容易被讀成現況。⛔ 而它可以比「舊」更糟：force-push／squash 之後，橫幅釘的那個 commit **可能已經不在分支上**（[#1830](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1830) 實測 `git merge-base --is-ancestor <橫幅 sha> HEAD` rc 1），照它讀等於讀一個分支上不存在的狀態。
 3. **resolve review thread 只有 GraphQL（REST 無端點），搆不搆得到取決於身分。** `User` 身分實測**可用**（[#1844](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1844) 上 resolve 成功）。`Bot` 身分下先前記到 403，**未重測** ⇒ 遇到時先實際呼叫一次，別預設推不動、直接請人按。
 4. **「為什麼 blocked」量不到**：`GET /branches/main/protection` 回 403。⚠️ **與身分無關**——`User` token 實測同樣 403。能做的是**差分**：比對前後兩個 head 的 check 名單＋結論，相同就代表不是 CI 造成的，再往 review / thread 方向找。
 
-⚠️ 兩個容易誤讀的讀數：本 repo 只用 check-runs，`GET /commits/<sha>/status` **一律回 `state: pending` 且 `contexts` 為空**——那是空集合的既有行為，不是「還有東西沒跑完」；權威訊號是 `mergeable_state`。另外 `mergeable_state: unstable` 的意思是 required checks 都過了、只有非必要的 check 紅，**可以 merge**。
+⚠️ 兩個容易誤讀的讀數：權威訊號是 `mergeable_state`，而 `mergeable_state: unstable` 的意思是 required checks 都過了、只有非必要的 check 紅，**可以 merge**。另一個是 combined-status（`GET /commits/<sha>/status`）：本 repo 的 CI 走 check-runs，`.github/workflows/` 裡沒有任何一支提到 `statuses:`（grep 零命中），所以它**常常**回空 `contexts`。⛔ 但先前這裡寫的「**一律**回 `state: pending` 且 `contexts` 為空」不成立——第三方 App 仍會寫 legacy status：[#1830](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1830) 兩個 head 上實測皆回 `state: success` + 一筆 `context: CodeRabbit`。⇒ 空集合**不能**拿來判斷「還有東西沒跑完」，非空也**不代表** CI 有結論；兩個方向都要回頭看 `mergeable_state` 與 check-runs。
 
-⚠️ 編輯 PR body 會重觸發帶 `edited` 的 workflow，多燒一輪 CI——改 body 前先想清楚代價。
+⚠️ 編輯 PR body 只會重觸發**自己在 `on.pull_request.types` 宣告了 `edited` 的那些 workflow**，不是全部。[#1830](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1830) 實測：`commitlint` / `planning-status-sync` / `self-review-pass2` 三支重跑，**主 `CI` 沒有**（`ci.yml` 沒寫 `types:`，預設值不含 `edited`）。⇒ 別預設改 body 就是一輪完整 CI。
+
+⛔ 而「哪些 workflow 吃 `edited`」**不能用 grep 問**：`grep -l 'edited' .github/workflows/*` 會撈到 `ci.yml`，而它的命中**全在英文註解裡**（`a matrix edited to match one side` 之類），沒有一個是 trigger。要問就解析 YAML 的 `on.pull_request.types`（解析失敗要當成量不到、列出來，不可靜默跳過）——這條本身就是本檔反覆在講的那個形狀的活例：**述詞比對的是字串，而問題問的是結構。**
