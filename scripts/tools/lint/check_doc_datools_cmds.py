@@ -537,15 +537,34 @@ def check_writable_mount_has_user(doc_files: List[Path],
 # `docker run`, and only the first bare operand AFTER the image as located by
 # `_image_index`.
 
-# The image reference must carry a real `:vX.Y.Z`. `:latest` and untagged
-# mentions are OUT OF SCOPE by declaration, not by oversight: they name no tag,
-# so there is no capability set to check them against (#1534 records this as a
-# separate problem).
+# The image reference must carry a real `:vX.Y.Z` or `:latest`.
+#
 # ⛔ `v?`, matching the bump rules' own `da-tools:v?<SEMVER>` pattern. Requiring
 # the `v` left `…/da-tools:2.9.0` rewritten by every release but invisible to
 # this check — the exact "bumped but never verified" gap this exists to close.
+#
+# #1843 admits `:latest`. #1534 had declared it out of scope on the reasoning
+# that it "names no tag, so there is no capability set to check it against" —
+# but that premise does not survive its own file: the oracle here is the WORKING
+# TREE, never `capabilities_for_tag(tag)`, precisely because at release wrap the
+# tag being cut does not exist yet. The working tree is equally what `:latest`
+# will point at next. Measured when admitting it: 80 → 97 invocations, +7
+# subcommands no gate had been reading at all, 0 new findings.
+#
+# ⚠️ THE LIMIT, and it must not be overstated anywhere this reports: for a
+# `:latest` reference the question answered is "does the thing we are about to
+# ship dispatch this command", NOT "does the image the customer pulls right now
+# dispatch it". The latter is unanswerable locally — what `:latest` resolves to
+# at the customer's clock is not knowable from this tree. What this buys is a
+# red when the docs teach a command that never existed or was removed; what it
+# does not buy is the drift of a customer sitting on an older `:latest`.
+#
+# ⛔ UNTAGGED references stay out, and that is a different boundary, not an
+# oversight repeated: `…/da-tools frobnicate` names no version AND has no
+# "resolves to what we ship next" semantics to stand in for one. Pinned by
+# test_skips_untagged_image.
 _PINNED_TAG_RE = re.compile(
-    r"da-tools:(v?[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?)")
+    r"da-tools:(v?[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?|latest)")
 
 # Shell punctuation that can abut the subcommand token. No da-tools subcommand
 # contains any of these, so cutting at the first one is lossless.

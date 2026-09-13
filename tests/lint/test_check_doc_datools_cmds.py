@@ -906,12 +906,45 @@ class TestPinnedInvocationCapability:
         assert self._issues(tmp_path, _FENCE.format(
             "docker run ghcr.io/vencil/da-tools:v2.9.0 validate")) == []
 
-    # --- declared boundary: only tagged pins are judgeable (#1534) ---
-    def test_skips_latest_tag(self, tmp_path):
+    # --- the boundary, as it now stands (#1534 drew it, #1843 moved it) ---
+    def test_grades_latest_tag(self, tmp_path):
+        """#1843 — `:latest` IS judged, against the working tree.
+
+        #1534 had declared it out of scope because it "names no tag, so there
+        is no capability set to check it against". That premise did not survive
+        its own file: the oracle is the WORKING TREE, never
+        `capabilities_for_tag(tag)`, precisely because at release wrap the tag
+        being cut does not exist yet — and the working tree is equally what
+        `:latest` will point at next.
+
+        ⚠️ What this asserts is deliberately narrow: the docs must not teach a
+        command that never existed or was removed. It says NOTHING about the
+        image a customer pulls right now; that is unanswerable from this tree.
+        """
+        issues = self._issues(tmp_path, _FENCE.format(
+            "docker run ghcr.io/vencil/da-tools:latest frobnicate"))
+        assert len(issues) == 1
+        assert issues[0].check == "datools-pin-capability"
+        assert "frobnicate" in issues[0].message
+        assert "latest" in issues[0].message
+
+    def test_still_grades_a_latest_command_the_image_ships(self, tmp_path):
+        """The other direction: admitting `:latest` must not flag valid ones.
+
+        ⛔ Without this, `test_grades_latest_tag` alone is satisfied by an
+        extractor that flags EVERY `:latest` line regardless of the subcommand.
+        """
         assert self._issues(tmp_path, _FENCE.format(
-            "docker run ghcr.io/vencil/da-tools:latest frobnicate")) == []
+            "docker run ghcr.io/vencil/da-tools:latest validate")) == []
 
     def test_skips_untagged_image(self, tmp_path):
+        """⛔ A different boundary, and it did NOT move with #1843.
+
+        `…/da-tools frobnicate` names no version AND, unlike `:latest`, carries
+        no "resolves to what we ship next" semantics to stand in for one. It
+        stays unjudgeable. This test is the guard against the widening being
+        quietly extended past what #1843 decided.
+        """
         assert self._issues(tmp_path, _FENCE.format(
             "docker run ghcr.io/vencil/da-tools frobnicate")) == []
 
