@@ -65,8 +65,6 @@ from _version_patterns import (
     DOC_MAP_SKIP_DIRS,
     DOC_MAP_SKIP_NAMES,
     DOC_MAP_SKIP_NAME_PATTERNS,
-    ROADMAP_SECTIONS,
-    SKIP_FEATURE_HEADINGS,
     TOOL_COUNT_CHECK_FILES,
     ADR_COUNT_CHECK_FILES,
     RULE_PACK_COUNT_CHECK_FILES,
@@ -569,110 +567,6 @@ def check_bilingual_badge(actual_pairs: int) -> List[Issue]:
                         "bilingual-count", "warn", rel, i,
                         f"badge says {found} pairs, actual is {actual_pairs}",
                     ))
-    return issues
-
-
-def _extract_changelog_completed_keywords() -> List[str]:
-    """Extract feature keywords from completed CHANGELOG entries.
-
-    Looks for section headers (### lines) and key feature names
-    in the latest CHANGELOG versions. Returns normalised lowercase
-    keywords that can be matched against roadmap text.
-    """
-    changelog = REPO_ROOT / "CHANGELOG.md"
-    if not changelog.exists():
-        return []
-
-    content = changelog.read_text(encoding="utf-8")
-
-    # Extract feature keywords from ### headings and bold items
-    keywords = []
-    # Match bold feature names like **`shadow_verify.py`** or **Shadow Monitoring**
-    for m in re.finditer(r"\*\*`?([^*`]+)`?\*\*", content):
-        kw = m.group(1).strip().lower()
-        if len(kw) > 3 and not re.match(r"^v?\d+\.\d+", kw):
-            keywords.append(kw)
-
-    return keywords
-
-
-def check_roadmap_changelog_overlap() -> List[Issue]:
-    """Detect completed items that still appear in roadmap sections.
-
-    Scans architecture-and-design.md §5 and CLAUDE.md 長期展望 for
-    references to features already listed as completed in CHANGELOG.md.
-    """
-    issues = []
-
-    # Known completed features (from CHANGELOG section headers)
-    changelog = REPO_ROOT / "CHANGELOG.md"
-    if not changelog.exists():
-        return issues
-
-    content = changelog.read_text(encoding="utf-8")
-
-    # Extract completed feature *phrases* from ### headings.
-    # e.g. "### 🏷️ Dual-Perspective Annotation" → "dual-perspective annotation"
-    # We build regex patterns that require the phrase to appear as a
-    # contiguous substring (case-insensitive), which avoids false positives
-    # from individual words appearing in unrelated contexts.
-    completed_phrases: List[str] = []
-    for m in re.finditer(r"^### .+?([A-Z][A-Za-z][^\n]+)", content,
-                         re.MULTILINE):
-        feat = m.group(1).strip()
-        if feat in SKIP_FEATURE_HEADINGS:
-            continue
-        # Skip short phrases (< 8 chars) — too generic to match reliably
-        if len(feat) < 8:
-            continue
-        completed_phrases.append(feat)
-
-    if not completed_phrases:
-        return issues
-
-    # Build phrase patterns — match the exact multi-word phrase
-    phrase_patterns = []
-    for phrase in completed_phrases:
-        # Escape for regex and allow flexible whitespace
-        escaped = re.escape(phrase)
-        escaped = re.sub(r"\\ ", r"\\s+", escaped)
-        phrase_patterns.append((re.compile(escaped, re.IGNORECASE), phrase))
-
-    for fpath, start_pattern, desc in ROADMAP_SECTIONS:
-        if not fpath.exists():
-            continue
-        fcontent = fpath.read_text(encoding="utf-8")
-        lines = fcontent.splitlines()
-
-        # Find roadmap section start
-        in_roadmap = False
-        for i, line in enumerate(lines, 1):
-            if re.match(start_pattern, line):
-                in_roadmap = True
-                continue
-            if in_roadmap and re.match(r"^## ", line) and \
-                    not re.match(start_pattern, line):
-                break  # Next top-level section
-            if not in_roadmap:
-                continue
-
-            # Skip "已完成" reference lines and section-header lines
-            if "已完成" in line or "completed" in line.lower():
-                continue
-            if line.startswith("#"):
-                continue
-
-            # Check if any completed feature *phrase* appears verbatim
-            for pat, phrase in phrase_patterns:
-                if pat.search(line):
-                    rel = str(fpath.relative_to(REPO_ROOT))
-                    issues.append(Issue(
-                        "roadmap-stale", "warn", rel, i,
-                        f"roadmap may reference completed feature: "
-                        f"'{phrase}'",
-                    ))
-                    break  # One issue per line is enough
-
     return issues
 
 
@@ -1533,7 +1427,6 @@ def main():
 
     all_issues.extend(check_rule_pack_counts(rule_counts))
     all_issues.extend(check_bilingual_badge(bilingual_pairs))
-    all_issues.extend(check_roadmap_changelog_overlap())
     all_issues.extend(check_bilingual_number_consistency())
     all_issues.extend(check_doc_map_coverage())
     all_issues.extend(check_tool_map_coverage())

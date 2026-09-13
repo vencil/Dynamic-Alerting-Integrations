@@ -2528,11 +2528,28 @@ def _check_datools_pin_capability(new_ver: str) -> int:
         print(f"  ❌ [{it.check}] {it.file}:{it.line} — {it.message}",
               file=sys.stderr)
     if issues:
+        # ⚠️ Two pin shapes reach here and only one of them was repointed by
+        # this bump. Saying "the pins were repointed at vNEW" of a `:latest`
+        # line is simply false — the bump rules rewrite `:vX.Y.Z` only — and
+        # overstating what a `:latest` finding means is the specific failure
+        # #1843 warns against in `_PINNED_TAG_RE`'s comment.
+        # ⚠️ Failure-NEUTRAL, because two kinds of issue reach this aggregate
+        # and only one of them is "not dispatched". `datools-pin-not-shipped`
+        # IS dispatched and then dies on a script build.sh never copied in
+        # (#1044) — saying "`Unknown command`" of that one misdiagnoses it and
+        # points the fixer at the wrong layer. The per-invocation lines above
+        # already name which, so the aggregate only has to stop overstating.
         print(f"\n❌ {len(issues)} documented da-tools invocation(s) name a "
-              f"subcommand that v{new_ver} does not dispatch. The pins were "
-              f"repointed at v{new_ver}, so shipping this leaves the docs "
-              f"teaching a command the released image answers with "
-              f"`Unknown command`. Fix the doc, or ship the command.",
+              f"subcommand v{new_ver} cannot run, so shipping this leaves the "
+              f"docs teaching a command that fails against the released image. "
+              f"Fix the doc, or ship the command — the per-invocation lines "
+              f"above say WHICH failure, and the two fixes differ: not "
+              f"dispatched at all (`Unknown command`) vs dispatched and then "
+              f"dying on a missing file (#1044).\n"
+              f"   ⚠️ `:vX.Y.Z` lines were just repointed at v{new_ver} by this "
+              f"bump; `:latest` lines were NOT repointed — for those the claim "
+              f"is only that what we are about to ship lacks the command, never "
+              f"anything about the image a customer pulls today (#1843).",
               file=sys.stderr)
     # #1836: the portal's pin is repointed by this same `--tools` bump, and its
     # subcommands come from a source the doc extractor structurally cannot

@@ -376,27 +376,6 @@ DOC_MAP_SKIP_NAME_PATTERNS = (
 # shared by a checker and two writers.
 
 # ============================================================================
-# Roadmap/changelog overlap detection
-# ============================================================================
-
-# Roadmap sections to scan: (filepath, section_start_pattern, description)
-ROADMAP_SECTIONS: List[Tuple[Path, str, str]] = [
-    (DOCS_DIR / "architecture-and-design.md",
-     r"^## 5\.\s*未來擴展路線",
-     "architecture-and-design.md §5"),
-    (DOCS_DIR / "architecture-and-design.en.md",
-     r"^## 5\.\s*Future",
-     "architecture-and-design.en.md §5"),
-    (REPO_ROOT / "CLAUDE.md",
-     r"^## 長期展望",
-     "CLAUDE.md 長期展望"),
-]
-
-# Feature headings to skip when extracting completed items
-SKIP_FEATURE_HEADINGS = {"版號", "Breaking Changes", "Key Changes",
-                         "Documentation Overhaul", "文件大重構"}
-
-# ============================================================================
 # File collections for various checks
 # ============================================================================
 

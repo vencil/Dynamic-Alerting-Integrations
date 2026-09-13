@@ -148,14 +148,14 @@ pre-commit run --hook-stage manual --all-files   # manual stage（較重）
 - `make portal-build` / `make test-portal` — portal JSX bundle 與 Vitest。
 - `make win-commit MSG=_msg.txt FILES="a b"` — FUSE 卡死時的 hook-gated Windows commit（siblings：`fuse-commit` / `fuse-locks` / `recover-index`）。
 
-### Agent 開的 PR：review 迴路上四個「看起來綠／看起來卡」的坑
+### Agent 開的 PR：review 迴路上「看起來綠／看起來卡」的坑
 
-⛔ 這四項都不是偶發，是**結構性**的，每個 agent-opened PR 都會遇到：
+⛔ 這些不是偶發，是**結構性**的。⚠️ 第 1、3 項取決於**本 session 以什麼身分在操作 GitHub**——看 PR 作者的 `user.type` 是 `Bot` 還是 `User`，別假設。第 2、4 項與身分無關。
 
-1. **CodeRabbit 不會審 agent 開的 PR。** 作者是 bot 帳號時它直接 `Review skipped — Bot user detected`。⇒ **agent 開的 PR 預設沒有 CodeRabbit 這層**，把它算進安全網會高估 review 覆蓋。
+1. **CodeRabbit 對 `Bot` 作者的 PR 直接 `Review skipped — Bot user detected`；`User` 作者的會審。** 實據：[#1838](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1838)（`claude[bot]`）被跳過、[#1841](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1841)（`vencil`）審了。⇒ 看作者型別，不看你用哪個工具開 PR——同一個 `GH_TOKEN` 在不同 session 可能是不同身分。
 2. **就算觸發過一次，後續 push 也不會自動再審**——[`.coderabbit.yaml`](.coderabbit.yaml) 設了 `auto_incremental_review: false`。⚠️ 連帶效果：PR 頁面的 **Merge Risk 橫幅停在被審過的那個 commit**，修完之後仍寫著舊 finding，容易被讀成現況。
-3. **agent 解不開未 resolve 的 review thread。** resolve 只有 GraphQL 的 `resolveReviewThread`，而 agent session 的 GraphQL 只開放釘選的 PR-review 操作（其餘 403），REST 無對應端點。⇒ 若 branch protection 要求 conversation resolution，**CI 全綠的 PR 會停在 `mergeable_state: blocked` 而 agent 推不動**，只能請人在 UI 按。
-4. **「為什麼 blocked」在 agent 這側量不到**：`GET /branches/main/protection` 對 app token 回 403。能做的是**差分**——比對前後兩個 head 的 check 名單＋結論，相同就代表不是 CI 造成的，再往 review / thread 方向找。
+3. **resolve review thread 只有 GraphQL（REST 無端點），搆不搆得到取決於身分。** `User` 身分實測**可用**（[#1844](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1844) 上 resolve 成功）。`Bot` 身分下先前記到 403，**未重測** ⇒ 遇到時先實際呼叫一次，別預設推不動、直接請人按。
+4. **「為什麼 blocked」量不到**：`GET /branches/main/protection` 回 403。⚠️ **與身分無關**——`User` token 實測同樣 403。能做的是**差分**：比對前後兩個 head 的 check 名單＋結論，相同就代表不是 CI 造成的，再往 review / thread 方向找。
 
 ⚠️ 兩個容易誤讀的讀數：本 repo 只用 check-runs，`GET /commits/<sha>/status` **一律回 `state: pending` 且 `contexts` 為空**——那是空集合的既有行為，不是「還有東西沒跑完」；權威訊號是 `mergeable_state`。另外 `mergeable_state: unstable` 的意思是 required checks 都過了、只有非必要的 check 紅，**可以 merge**。
 
