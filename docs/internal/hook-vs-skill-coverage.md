@@ -181,6 +181,20 @@ lang: zh
 - **Commit trailer 規則 = 4 層**：dev-rules §P1（文件）+ `commit-msg` hook `validate_pass2_trailer_placement`（機械擋）+ `vibe-dev-rules` skill（commit 前提醒）+ CLAUDE.md 高頻地雷（always-on）。**唯一機械擋的是 commit-msg hook**；其餘 3 層是 advisory。→ TRK-310 收尾時 CLAUDE.md 版可縮 1-liner 指 dev-rules §P1（DRY）。
 - **檔案衛生（sed -i）= 5 層**：dev-rule #11 + `preflight_bash.py`（PreToolUse 機械擋）+ `sed-damage-guard`（pre-commit）+ CLAUDE.md 高頻地雷 + `vibe-workflow`。機械擋有 2 層（PreToolUse + pre-commit）——⛔ **但這個「2 層」有 checkout 形態前提**：`.claude/settings.json` 不載入的 web session 形態下 `preflight_bash.py` 不會跑（§2 的 ⛔、#1719），該形態下機械擋只剩 pre-commit 1 層。
 
+- **「散文裡指名的東西必須真的存在」= 4 層，而且四層互不涵蓋**（TRK-379 收尾時清點）。⛔ **沒有任何一層是全樹的**——四支各自盯著自己那一小塊，合起來也不構成覆蓋：
+
+  | 機制 | 述詞 | 來源 | 範圍 | 跑在哪 |
+  |---|---|---|---|---|
+  | `tests/ops/test_wrapped_path_references.py` | **折行**（接合後出現、原文不出現，且 resolve） | 全樹註解／散文 | 全 repo | CI（pytest） |
+  | `tests/shared/test_mutation_catalog.py::TestKillTestNamesAnchored` | **懸空測試名** | dataclass `kill_test` 欄位 | mutation catalog | CI（pytest） |
+  | `scripts/tools/lint/check_dev_rules_enforcement.py` | **懸空 hook 名** | `dev-rules.md` 的 inline-code | **一個檔** | 🔧 **pre-commit** |
+  | `tests/dx/test_list_subprocess_only_modules.py::test_prose_names_no_test_that_does_not_exist` | **懸空測試名** | 兩個檔的 docstring／註解，**backtick 內** | **兩個檔** | CI（pytest） |
+
+  ⚠️ **唯一的 pre-commit 機械擋是第三支，而它只看一個 doc 檔**；其餘三支要等 CI。
+  ⛔ **第二支與第四支述詞相同但來源互斥**：第二支的 docstring 明文寫著 comment/docstring 裡的名字**不算**（"a name that survives only inside a comment/docstring cannot…"），所以它不能吸收第四支——那是它刻意排除的東西，不是它的缺口。
+  ⚠️ **第四支錨在 backtick 上，是已知的覆蓋界線**：[#1453](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1453) 在**全樹混合載體**（YAML／Go／Dockerfile）量到帶 backtick 的只有 10／22，據此結論「不要錨在反引號上」；而在第四支自己的兩個檔裡實測是 23／24 帶 backtick。⇒ 那條約束成立但強度隨語料變，不能直接互搬。
+  ⚠️ 放寬那個錨點會**同時放大誤紅面**——實測把接行從 backtick 內放寬到整段，會**偽造**出從來沒人寫過的名字（兩行的半截識別字黏在一起）。這正是 [#1640](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1640) 要決定的同一件事（「錨點該不該從字面字串換成可推導的述詞」），該票明寫**誤紅面要在選定述詞之前量**。
+
 ### ⚖️ Conflict（優先級歧義，由 TRK-301 仲裁）
 
 - `vibe-workflow` vs 環境層 session-bootstrap generic skill → vibe-workflow 優先（已宣告）
