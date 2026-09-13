@@ -33,6 +33,30 @@
 #   Checking the environment first would have made every stdin-fed caller
 #   depend on PRE_COMMIT being absent, which is not a property anyone controls.
 #
+# CALLER CHANNEL — the dispatcher says so, because nothing else can (#1846;
+# that issue and the commits closing it hold the measurements)
+#   With zero rows on stdin and no PRE_COMMIT_REMOTE_BRANCH, "git had nothing
+#   to feed" and "pre-commit ate the refspec" are indistinguishable here. An
+#   inherited PRE_COMMIT=1 was read as the second, so a push with nothing in it
+#   was refused. prepush_dispatch.sh — the one place that reads git's pre-push
+#   stdin — therefore says so, and under it zero rows means nothing to push.
+#
+#   ⛔ Consulted BEFORE the env channel: under the dispatcher a value in
+#   PRE_COMMIT_REMOTE_BRANCH can only have been inherited, so it names a ref
+#   this push is not touching.
+#
+#   ⛔ Only the dispatcher may export it — not a wrapper, not the installer,
+#   not CI; anywhere else a guard reached through the env channel gets the same
+#   licence with a real refspec in hand. Enforced by
+#   test_only_the_dispatcher_exports_the_caller_flag, not by this comment.
+#
+#   ⛔ Do NOT generalise to "zero rows always passes" — that is the #1664
+#   defect. "Nothing to push" and "cannot see what is being pushed" stay two
+#   different answers; this only says who may give the first.
+#
+#   ⚠️ Silent by design, unlike the two sibling bypass flags: this branch is
+#   taken on every up-to-date push, which is ordinary, not an override.
+#
 # OUTPUT — TWO shapes, ONE channel decision
 #   prepush_refs        <remote_ref> <local_sha>
 #   prepush_refs_full   <remote_ref> <local_sha> <remote_sha>
@@ -68,7 +92,8 @@
 # EXIT STATUS
 #   0 — rows written to stdout. Zero rows is a legitimate answer: nothing is
 #       being pushed (git only feeds lines for refs it is going to update).
-#   3 — running under pre-commit with neither channel carrying a refspec.
+#   3 — running under pre-commit with neither channel carrying a refspec, AND
+#       not invoked by the dispatcher (see CALLER CHANNEL).
 #       Callers MUST treat this as "I cannot see what I am guarding" and exit
 #       non-zero. Warning-and-allowing is not an option here: a PASSING hook's
 #       stdout and stderr are both swallowed by pre-commit (measured — a hook
@@ -111,6 +136,14 @@ _prepush_rows() {
 
     if [ "${#_rows[@]}" -gt 0 ]; then
         printf '%s\n' "${_rows[@]}"
+        return 0
+    fi
+
+    # Zero rows, dispatcher calling — see CALLER CHANNEL in the header.
+    # ⛔ ABOVE the env channel, and an exact value, not a presence test: the
+    # dispatcher writes `1`, so every other inherited value belongs in the
+    # conservative branch below.
+    if [ "${VIBE_PREPUSH_FROM_DISPATCH:-0}" = "1" ]; then
         return 0
     fi
 
@@ -157,11 +190,16 @@ PRE_COMMIT_REMOTE_BRANCH is unset.
 
 Common ways to reach this message:
 
-  * a `stages: [pre-push]` entry for this guard was added back to
-    .pre-commit-config.yaml — remove it; the copy pre-commit runs is the blind
-    one, and it will not stop shadowing the dispatcher by being green;
-  * you invoked it by hand under a pre-commit environment, in which case there
-    is genuinely nothing to judge.
+  * you invoked a guard by hand (`bash scripts/ops/protect_main_push.sh`, say)
+    while PRE_COMMIT was set in your environment, in which case there is
+    genuinely nothing to judge;
+  * something exported PRE_COMMIT before `git push`, and the guard was reached
+    WITHOUT scripts/ops/prepush_dispatch.sh (a hand-wired .git/hooks/pre-push,
+    for instance). See CALLER CHANNEL in scripts/ops/_prepush_refs.sh.
+
+⛔ A `stages: [pre-push]` entry re-added to .pre-commit-config.yaml does NOT
+print this — that copy is handed one refspec and looks green while shadowing
+the dispatcher. Remove it anyway.
 
 To exercise the guards for real, push something:
 
