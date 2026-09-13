@@ -1,21 +1,10 @@
-"""Tests for the 7 individual check_* functions in pr_preflight.py.
+"""Tests for the individual check_* functions in pr_preflight.py.
 
 Follow-up to test_pr_preflight_orchestrator.py (which covered the
 PreflightReport aggregation + main() orchestration). This file fills
 the remaining coverage gap by exercising each individual check that
 shells out to git / gh / pre-commit / python — all subprocess calls
 are monkeypatched so no real external tools are invoked.
-
-Covered:
-  - check_branch_identity — feature / main / master / HEAD / unknown
-  - check_behind_main     — synced / 1-5 / >5 / git failure
-  - check_conflict        — synced / merge-tree pass+fail / fallback
-                            merge --no-commit / FUSE-lock detection
-  - check_local_hooks     — pass / failed hooks / subprocess error
-  - check_scope_drift     — pass / fail with parsed FAIL line / no-output
-  - check_ci_status       — SKIP / WARN / PASS / pending / fail+A/B
-  - check_pr_mergeable    — SKIP / CONFLICTING / BLOCKED+review /
-                            MERGEABLE+CLEAN
 """
 from __future__ import annotations
 

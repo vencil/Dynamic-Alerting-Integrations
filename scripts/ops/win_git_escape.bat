@@ -339,7 +339,7 @@ echo === Preflight complete ===
 goto :done
 
 :do_pr_preflight
-REM pr-preflight: 6-point PR closing check (conflict/CI/hooks/mergeable)
+REM pr-preflight: PR closing check -- calls pr_preflight.py
 echo === PR Preflight Check ===
 set "PR_NUM=%~2"
 if "%PR_NUM%"=="" (
@@ -382,7 +382,7 @@ echo   branch [name]       List or create+switch branch
 echo   log                 Show recent commits
 echo   diff                Show diff --stat
 echo   preflight           Quick 3-point preflight (locks/status/remote)
-echo   pr-preflight [N]    PR closing check (conflict/CI/hooks/mergeable)
+echo   pr-preflight [N]    PR closing check
 echo   fix-hooks           Fix CRLF/shebang issues in .git/hooks/*
 echo.
 echo Tip: For commit messages with CJK, em-dash, or other non-ASCII:
