@@ -1,0 +1,22 @@
+[
+  {"query": "我要跑一次完整 benchmark 比對這次 reload 改動有沒有退化，動手前需要先看什麼", "should_trigger": true},
+  {"query": "Go 的 TestWatchLoop 偶爾 race flake，這個 repo 之前是怎麼處理這類問題的", "should_trigger": true},
+  {"query": "我要在 K8s 叢集上驗證新的 configmap 有沒有被 exporter 撿到，該看哪份文件", "should_trigger": true},
+  {"query": "Playwright E2E 在本機跑不起來，要先看哪一節", "should_trigger": true},
+  {"query": "conf.d 的 yaml 有什麼格式陷阱要注意，我要加一個租戶檔", "should_trigger": true},
+  {"query": "我要改 helm chart 的 service 設定，需要看哪份 Playbook？", "should_trigger": true},
+  {"query": "用 PowerShell 呼叫 GitHub REST API 建 release 要注意什麼", "should_trigger": true},
+  {"query": "FUSE 卡死要走 Windows 逃生門，步驟寫在哪裡", "should_trigger": true},
+  {"query": "推了 tag 之後 CI 的 release workflow 沒觸發，去哪查", "should_trigger": true},
+  {"query": "幫我改 README 第三段的錯字", "should_trigger": false},
+  {"query": "這個函式的 if 條件反了，幫我修", "should_trigger": false},
+  {"query": "解釋一下 Cardinality Guard 是怎麼設計的", "should_trigger": false},
+  {"query": "幫我開 branch 並 commit 這三個檔案", "should_trigger": false},
+  {"query": "這份 PR merge 前要跑什麼", "should_trigger": false},
+  {"query": "Kubernetes 的 HPA 一般怎麼設定 target utilization", "should_trigger": false},
+  {"query": "幫我設計 federation token 的撤銷機制", "should_trigger": false},
+  {"query": "幫我把 memory 裡命中率高的原則搬進 repo", "should_trigger": false},
+  {"query": "pytest 有一個測試失敗，assert 差一個字元，幫我看", "should_trigger": false},
+  {"query": "try-local 的 .env 少了哪些變數會起不來", "should_trigger": false},
+  {"query": "golangci-lint 在 CI 紅但本機綠，怎麼對齊", "should_trigger": false}
+]

@@ -88,6 +88,7 @@ lang: zh
 | `_recipe_preview.py` | recipe would-fire preview core (#657 P2). |
 | `_waveform_lib.py` | fault-waveform pack 合成核心（ADR-030 決策層驗證 PR-1，純函式庫） |
 | `add_frontmatter.py` | Add YAML front matter to documentation files for MkDocs/Docusaurus integration. |
+| `agent_output_metrics.py` | Measure how much prose agents ship in CHANGELOG entries and PR bodies, and whether PR bodies carry evidence blocks. |
 | `analyze_bench_history.py` | Aggregate bench-record nightly history into per-benchmark stats. |
 | `analyze_probe.py` | Summarise BenchmarkProbeWriteLatency PROBE records - write vs load attribution. |
 | `analyze_tier1_fp_rate.py` | Tier 1 bench-gate friction-rate observer (issue #433 W3). |

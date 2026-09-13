@@ -244,6 +244,28 @@ def test_references_subdirs_are_projected_too(tmp_path, monkeypatch):
     assert out.read_bytes().endswith(b"# why\n")
 
 
+def test_evals_subdir_is_ssot_only_and_a_stale_copy_is_removed(tmp_path, monkeypatch):
+    """`evals/` measures a skill; it is not instruction text and gets no adapter.
+
+    Both halves are asserted: the plan never lists it, and a copy that some
+    earlier generator version left under `.claude/skills/` is deleted as
+    stale by the next `--generate` (otherwise the provenance invariant test
+    would keep failing on a file nobody re-creates).
+    """
+    _fake_ssot(tmp_path, monkeypatch)
+    evals = tmp_path / gaa.SSOT_SKILLS / "alpha" / gaa.NOT_PROJECTED_DIR
+    evals.mkdir()
+    (evals / "trigger.json").write_bytes(b'[{"query": "q", "should_trigger": true}]\n')
+    stale = tmp_path / gaa.OUT_SKILLS / "alpha" / gaa.NOT_PROJECTED_DIR / "trigger.json"
+    stale.parent.mkdir(parents=True)
+    stale.write_bytes(b"[]\n")
+    plan = gaa.planned_outputs()
+    assert not any(gaa.NOT_PROJECTED_DIR + "/" in k for k in plan), sorted(plan)
+    gaa.write_outputs(plan)
+    assert not stale.exists()
+    assert not stale.parent.exists()
+
+
 # ============================================================
 # main — exit-code contract
 # ============================================================

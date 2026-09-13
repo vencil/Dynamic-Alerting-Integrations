@@ -1,0 +1,22 @@
+[
+  {"query": "實作 agent 改完 6 個檔，含 helm values 跟 alert rules，commit 前幫我 review", "should_trigger": true},
+  {"query": "我改了 threshold-exporter 的 selector label，會不會連動 NetworkPolicy 或 ServiceMonitor", "should_trigger": true},
+  {"query": "這份 diff 動到 vector 的 VRL transform，幫我看下游 schema 會不會斷", "should_trigger": true},
+  {"query": "我要派三個 reviewer 去審 PR #1831，各自要跑 30 分鐘以上，要怎麼安排才看得到進度", "should_trigger": true},
+  {"query": "新增的 Prometheus recording rule 會不會炸 cardinality，幫我審", "should_trigger": true},
+  {"query": "幫我做對抗式 review，finder 跟 verifier 要分開", "should_trigger": true},
+  {"query": "拿到 CodeRabbit 的 12 條 finding，要怎麼分類處理、哪些該 reject", "should_trigger": true},
+  {"query": "這支 PR 改了 values.yaml 的 replicaCount 跟 pdb，爆炸半徑多大", "should_trigger": true},
+  {"query": "agent 跑完實作了，我要驗它有沒有照 spec 做", "should_trigger": true},
+  {"query": "幫我寫一條新的 alert rule 給 mysql cpu saturation", "should_trigger": false},
+  {"query": "只改了一個測試檔的 docstring，這種要 review 嗎", "should_trigger": false},
+  {"query": "跑 /security-review 看這個 PR 有沒有注入風險", "should_trigger": false},
+  {"query": "finder≠verifier 這個詞是什麼意思", "should_trigger": false},
+  {"query": "幫我設計中央 log 三層查閱管理的 ADR", "should_trigger": false},
+  {"query": "第三輪修 finding 了，每輪冒新洞怎麼收斂", "should_trigger": false},
+  {"query": "幫我 benchmark 這次 reload 改動", "should_trigger": false},
+  {"query": "這份 helm chart 要怎麼安裝到 kind 叢集", "should_trigger": false},
+  {"query": "季度安全稽核要怎麼跑", "should_trigger": false},
+  {"query": "git diff 顯示整檔 CRLF 都變了，怎麼辦", "should_trigger": false},
+  {"query": "幫我看 README 的段落順序順不順", "should_trigger": false}
+]

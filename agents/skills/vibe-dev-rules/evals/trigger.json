@@ -1,0 +1,22 @@
+[
+  {"query": "我準備 commit 了，先幫我檢查這批改動有沒有違反這個 repo 的規範", "should_trigger": true},
+  {"query": "可以直接 push 到 main 嗎？只是改 README 一行錯字", "should_trigger": true},
+  {"query": "幫我用 sed -i 把 conf.d 底下所有 yaml 的 severity: warn 改成 warning", "should_trigger": true},
+  {"query": "da-tools 新增了 --dry-run 旗標，除了 code 還要同步改哪些文件", "should_trigger": true},
+  {"query": "Go 測試裡我直接把 tenant 寫成 db-a 比較方便，可以嗎", "should_trigger": true},
+  {"query": "我要重構 tenant routing 的四層路由邏輯，有什麼 multi-tenant 規範要注意", "should_trigger": true},
+  {"query": "我要寫一支 lint 擋掉 CHANGELOG 裡的 TBD 字樣，述詞要怎麼設計才不會被繞", "should_trigger": true},
+  {"query": "這支 PR 加了新的 gate，我想在 PR body 寫『新增偵測力』，寫之前要先做什麼", "should_trigger": true},
+  {"query": "我 grep 過了，repo 裡沒有任何檢查在管 frontmatter 的 version 欄位，我要開票", "should_trigger": true},
+  {"query": "CI 全綠了，可以 merge 了吧", "should_trigger": true},
+  {"query": "幫我解釋 Severity Dedup 這個設計概念是怎麼運作的", "should_trigger": false},
+  {"query": "conventional commit 的 type 有哪些可以用", "should_trigger": false},
+  {"query": "幫我把 fix/1846 這條分支 rebase 到最新的 origin/main", "should_trigger": false},
+  {"query": "rule-pack-oracle.yaml 的 lock-wait 閾值一般建議設多少", "should_trigger": false},
+  {"query": "tenant-api 的 /effective endpoint 回 500，幫我 debug", "should_trigger": false},
+  {"query": "幫我看這份 helm values diff 的爆炸半徑有多大", "should_trigger": false},
+  {"query": "release 前一定要跑 make pre-tag 嗎，它做了什麼", "should_trigger": false},
+  {"query": "這個 repo 的 Python 測試要怎麼跑，Go 測試呢", "should_trigger": false},
+  {"query": "幫我 review 這個 PR 的 Go code 有沒有 data race", "should_trigger": false},
+  {"query": "幫我把 benchmark 的 p99 latency 結果畫成折線圖", "should_trigger": false}
+]
