@@ -9,6 +9,7 @@
   {"query": "這支 PR 加了新的 gate，我想在 PR body 寫『新增偵測力』，寫之前要先做什麼", "should_trigger": true},
   {"query": "我 grep 過了，repo 裡沒有任何檢查在管 frontmatter 的 version 欄位，我要開票", "should_trigger": true},
   {"query": "CI 全綠了，可以 merge 了吧", "should_trigger": true},
+  {"query": "commit message 的 trailer 要怎麼寫才不會被 CI 擋", "should_trigger": true},
   {"query": "幫我解釋 Severity Dedup 這個設計概念是怎麼運作的", "should_trigger": false},
   {"query": "conventional commit 的 type 有哪些可以用", "should_trigger": false},
   {"query": "幫我把 fix/1846 這條分支 rebase 到最新的 origin/main", "should_trigger": false},
@@ -16,7 +17,6 @@
   {"query": "tenant-api 的 /effective endpoint 回 500，幫我 debug", "should_trigger": false},
   {"query": "幫我看這份 helm values diff 的爆炸半徑有多大", "should_trigger": false},
   {"query": "release 前一定要跑 make pre-tag 嗎，它做了什麼", "should_trigger": false},
-  {"query": "這個 repo 的 Python 測試要怎麼跑，Go 測試呢", "should_trigger": false},
   {"query": "幫我 review 這個 PR 的 Go code 有沒有 data race", "should_trigger": false},
   {"query": "幫我把 benchmark 的 p99 latency 結果畫成折線圖", "should_trigger": false}
 ]

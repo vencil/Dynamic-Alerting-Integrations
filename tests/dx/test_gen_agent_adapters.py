@@ -247,10 +247,11 @@ def test_references_subdirs_are_projected_too(tmp_path, monkeypatch):
 def test_evals_subdir_is_ssot_only_and_a_stale_copy_is_removed(tmp_path, monkeypatch):
     """`evals/` measures a skill; it is not instruction text and gets no adapter.
 
-    Both halves are asserted: the plan never lists it, and a copy that some
-    earlier generator version left under `.claude/skills/` is deleted as
-    stale by the next `--generate` (otherwise the provenance invariant test
-    would keep failing on a file nobody re-creates).
+    Both halves are asserted: the plan never lists it, and a copy left under
+    `.claude/skills/` (by hand, or by a generator that projected it) is
+    removed by the next `--generate` as an output with no SSOT source --
+    otherwise `--check` would keep reporting it as `extra` on a file nobody
+    re-creates.
     """
     _fake_ssot(tmp_path, monkeypatch)
     evals = tmp_path / gaa.SSOT_SKILLS / "alpha" / gaa.NOT_PROJECTED_DIR

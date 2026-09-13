@@ -1,10 +1,10 @@
 [
-  {"query": "v2.10.0 要進入 phase e 了，開始 release 收尾", "should_trigger": true},
-  {"query": "release 準備好了嗎？CHANGELOG 還有什麼要 distill", "should_trigger": true},
-  {"query": "幫我開 chore/v2.10.0-release-wrapup 分支並列出要做的事", "should_trigger": true},
+  {"query": "v2.10.0 的功能都合併了，開始準備發版", "should_trigger": true},
+  {"query": "v2.10.0 可以出了嗎，CHANGELOG 還要整理什麼", "should_trigger": true},
+  {"query": "要發 v2.10.0 了，幫我開分支並列出發版前要做的事", "should_trigger": true},
   {"query": "make pre-tag 被 draft-advisory-check 擋下來，怎麼處理", "should_trigger": true},
   {"query": "六線 tag 要怎麼打，順序有講究嗎", "should_trigger": true},
-  {"query": "gh release create 要建幾個 release，各自的 notes 從哪來", "should_trigger": true},
+  {"query": "GitHub 上要建幾個 release，各自的 notes 從哪來", "should_trigger": true},
   {"query": "這次只有平台 tag 要升，像 v2.8.1 那樣，流程一樣嗎", "should_trigger": true},
   {"query": "打完 tag 才發現 CHANGELOG 漏一條，能補嗎", "should_trigger": true},
   {"query": "recipe-preview 的 tag 要跟平台一起升嗎", "should_trigger": true},
@@ -16,7 +16,7 @@
   {"query": "客戶問 v2.8.0 升到 v2.9.0 有沒有 breaking change", "should_trigger": false},
   {"query": "semantic-release 一般怎麼設定 conventional commits", "should_trigger": false},
   {"query": "幫我把 [Unreleased] 裡的某一條從 Added 移到 Fixed", "should_trigger": false},
-  {"query": "push tag 被 pre-push hook 擋住，說沒有 preflight marker", "should_trigger": false},
-  {"query": "幫我確認五個 docker image 都能 build", "should_trigger": false},
+  {"query": "push feature 分支被 pre-push hook 擋住，說沒有 preflight marker", "should_trigger": false},
+  {"query": "try-local 的 image 在本機 build 失敗，幫我看 Dockerfile", "should_trigger": false},
   {"query": "try-local stack 升版的 SOP 在哪", "should_trigger": false}
 ]

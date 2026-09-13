@@ -115,10 +115,41 @@ def test_continuation_nested_wrapped_and_blank_do_not_close():
     assert "after a blank, still two" in two
 
 
-def test_column0_non_bullet_closes_entry():
-    four = _entries()[3][1]
-    assert "inside a column-0 fence" not in four
-    assert four == "- **entry four** in Added"
+def test_column0_fence_content_is_no_entry_and_closes_the_previous_one():
+    ents = _entries()
+    assert all("inside a column-0 fence" not in body for _, body in ents)
+    assert ents[3][1] == "- **entry four** in Added"
+
+
+def test_column0_heading_closes_entry():
+    """`### Added` follows entry three at column 0 -- it must not be absorbed."""
+    assert _entries()[2][1] == "- **entry three** only line"
+
+
+def test_tilde_fence_at_column0_hides_bullets_and_only_its_own_marker_closes_it():
+    block = ["- e1", "~~~", "- not an entry", "```", "- still not", "~~~", "- e2"]
+    got = [b for _, b in aom.iter_entries(block, 1)]
+    assert got == ["- e1", "- e2"]
+
+
+def test_one_space_indent_closes_entry():
+    block = ["- one", "  cont", " single", "- two"]
+    assert [b for _, b in aom.iter_entries(block, 1)] == ["- one\n  cont", "- two"]
+
+
+def test_section_name_with_spaces_is_reachable():
+    assert aom.section_lines("## [Release Notes] - x\n- a\n", "Release Notes") == (1, ["- a"])
+
+
+# ============================================================
+# prose_len
+# ============================================================
+
+
+def test_prose_len_drops_indented_fences_and_table_rows():
+    entry = "- head\n  prose\n  ```\n  $ cmd\n  out\n  ```\n  | a | b |\n  |---|---|\n  tail"
+    assert aom.prose_len(entry) == len("- head\n  prose\n  tail")
+    assert aom.prose_len("- only") == len("- only")
 
 
 # ============================================================
@@ -155,6 +186,11 @@ def test_fence_whose_first_line_is_not_a_command_is_not_evidence():
     assert not aom.has_evidence_fence("```python\nx = 1\n```\n")
 
 
+def test_tilde_inside_backtick_fence_does_not_close_it():
+    assert aom.has_evidence_fence("```\n~~~\n$ ls\n```\n") is False
+    assert aom.has_evidence_fence("```\n$ ls\n~~~\n```\n") is True
+
+
 # ============================================================
 # measure_changelog
 # ============================================================
@@ -166,6 +202,13 @@ def test_measure_changelog_counts_cap_and_longest():
     assert r["over_cap"] == sum(1 for _, b in _entries() if len(b) > 40) == 1
     assert [e["head"] for e in r["longest"]][0].startswith("- **entry two**")
     assert len(r["longest"]) == 2
+    assert r["prose_chars"]["max"] == r["chars"]["max"]   # SAMPLE has no evidence lines
+    assert r["over_cap_prose"] == 1
+    assert r["longest"][0]["prose_chars"] == r["longest"][0]["chars"]
+
+
+def test_top_zero_lists_nothing():
+    assert aom.measure_changelog(SAMPLE, "Unreleased", cap=40, top=0)["longest"] == []
 
 
 # ============================================================
@@ -213,6 +256,40 @@ def test_text_output_mentions_counts(tmp_path):
     p = _run(["changelog", "--path", str(f)])
     assert p.returncode == 0
     assert "5 entries" in p.stdout
+
+
+def test_json_flag_is_accepted_after_the_subcommand(tmp_path):
+    """The module docstring's own example puts --json last; it must work."""
+    f = tmp_path / "CHANGELOG.md"
+    f.write_text(SAMPLE, encoding="utf-8")
+    p = _run(["changelog", "--path", str(f), "--json"])
+    assert p.returncode == 0, p.stderr
+    assert json.loads(p.stdout)["entries"] == 5
+
+
+def test_negative_top_or_cap_is_a_caller_error(tmp_path):
+    f = tmp_path / "CHANGELOG.md"
+    f.write_text(SAMPLE, encoding="utf-8")
+    assert _run(["changelog", "--path", str(f), "--top", "-1"]).returncode == 2
+    assert _run(["changelog", "--path", str(f), "--cap", "-5"]).returncode == 2
+
+
+def test_pr_bodies_gh_failure_reports_the_first_stderr_line(monkeypatch, capsys):
+    def boom(*a, **k):
+        raise subprocess.CalledProcessError(1, ["gh"], stderr="invalid value for --limit: 0\n\nUsage: ...\n  -w, --web\n")
+    monkeypatch.setattr(aom.subprocess, "run", boom)
+    assert aom.main(["pr-bodies", "--limit", "0"]) == 2
+    err = capsys.readouterr().err
+    assert "invalid value for --limit: 0" in err
+    assert "--web" not in err
+
+
+def test_pr_bodies_wrong_element_shape_is_a_caller_error(monkeypatch, capsys):
+    monkeypatch.setattr(aom, "_run_gh", lambda state, limit: json.dumps([1, 2]))
+    assert aom.main(["--json", "pr-bodies"]) == 2
+    assert capsys.readouterr().out == ""
+    monkeypatch.setattr(aom, "_run_gh", lambda state, limit: json.dumps([{"body": "x"}]))
+    assert aom.main(["pr-bodies"]) == 2
 
 
 def test_pr_bodies_gh_missing_is_caller_error(monkeypatch):

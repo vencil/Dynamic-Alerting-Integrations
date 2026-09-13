@@ -365,8 +365,26 @@ class Recipe:
         return f"{self.tool}[{self.mode}]"
 
 
+def _changelog(tmp: Path) -> str:
+    """A two-section CHANGELOG with one nested entry (shape agent_output_metrics parses)."""
+    return _write(tmp / "CHANGELOG.md", (
+        "# Changelog\n\n## [Unreleased]\n\n### Added\n\n"
+        "- **one** first line\n  second line\n  - nested\n"
+        "- **two** only line\n\n## [v0.0.1] - 2026-01-01\n\n- old\n"
+    ))
+
+
 R = Recipe
 RECIPES: list[Recipe] = [
+    # ── agent_output_metrics — changelog path only (pr-bodies needs real gh) ─
+    R("agent_output_metrics", "changelog-json",
+      lambda t: ["--json", "changelog", "--path", _changelog(t)],
+      expect_exit=EXIT_OK),
+    # A section that does not exist is a caller error: exit 2, nothing on stdout.
+    R("agent_output_metrics", "reject-missing-section",
+      lambda t: ["--json", "changelog", "--path", _changelog(t), "--section", "v9.9.9"],
+      expect_caller_error=True),
+
     # ── analyze_tier1_fp_rate — empty run list short-circuits to a clean doc ─
     R("analyze_tier1_fp_rate", "json",
       lambda t: ["--json"], expect_exit=EXIT_OK, needs_gh=True),
@@ -469,7 +487,7 @@ def test_fixture_paths_exist():
 def test_recipe_table_covers_every_json_tool():
     """A dx tool that grows a JSON-output flag must gain a recipe, or this rots.
 
-    (13 declare `--json`/`--json-output`; describe_tenant declares `--format json`.)
+    (14 declare `--json`/`--json-output`; describe_tenant declares `--format json`.)
     """
     covered = {r.tool for r in RECIPES}
     uncovered = sorted(set(JSON_TOOLS) - covered)

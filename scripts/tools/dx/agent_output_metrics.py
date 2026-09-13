@@ -6,7 +6,9 @@ only a docstring's FIRST LINE into docs/internal/tool-map{,.en}.md.
 
     python3 scripts/tools/dx/agent_output_metrics.py changelog
     python3 scripts/tools/dx/agent_output_metrics.py changelog --section v2.9.0 --cap 1000 --json
-    python3 scripts/tools/dx/agent_output_metrics.py pr-bodies --limit 25
+    python3 scripts/tools/dx/agent_output_metrics.py --json pr-bodies --limit 25
+
+(``--json`` is accepted before or after the subcommand.)
 
 WHAT THIS IS FOR
 ================
@@ -29,6 +31,11 @@ METRICS
     median / p75 / p90 / max (nearest-rank percentiles over ``len(str)``,
     i.e. code points, not bytes -- CJK-safe), how many entries exceed
     ``--cap``, and the ``--top`` longest entries with their line numbers.
+    Two lengths are reported per entry: ``chars`` counts everything, and
+    ``prose_chars`` drops the lines that are evidence rather than prose
+    (lines inside an indented fenced block, and table rows starting with
+    ``|``). A future cap that wants to penalise narrative but not evidence
+    has the second number to key on.
 
 ``pr-bodies``
     ``gh pr list --state <state> --limit <n> --json number,body``. Reported:
@@ -44,11 +51,19 @@ Length is a proxy for prose, not a measure of it: a 3,000-character entry
 may be a legitimate table. Read the ``longest`` list before drawing a
 conclusion. An evidence fence proves the SHAPE, not that the command ran.
 
+Column-0 content after a bullet (a table or a paragraph written at column 0
+instead of indented) CLOSES the entry, so that text belongs to no entry and
+the entry's length is under-reported. A cap built on this definition must
+therefore treat such column-0 content as an error in its own right, or it
+can be walked around by out-denting. Nested fences (a 4-backtick block
+containing a 3-backtick one) are not modelled: each fence line toggles.
+
 EXIT CODES (scripts/tools/_lib_exitcodes.py)
 ============================================
   0  measured (a metric that is merely "bad" is still exit 0)
-  2  cannot do the job: no subcommand, CHANGELOG path or section missing,
-     ``gh`` missing / failing / returning something that is not JSON
+  2  cannot do the job: no subcommand, a negative ``--top``/``--cap``,
+     CHANGELOG path or section missing, ``gh`` missing / failing /
+     returning something that is not a JSON list of PR objects
 """
 from __future__ import annotations
 
@@ -72,9 +87,20 @@ DEFAULT_TOP = 5
 DEFAULT_PR_LIMIT = 25
 GH_TIMEOUT_S = 120
 
-_HEADING_RE = re.compile(r"^## \[?(?P<name>[^\]\s]+)\]?")
+# `## [Name With Spaces] — suffix` or `## bare-name suffix`: the bracketed
+# form may contain spaces, the bare form is the first whitespace-free token.
+_HEADING_RE = re.compile(r"^## (?:\[(?P<bracketed>[^\]]+)\]|(?P<bare>\S+))")
 _FENCE_RE = re.compile(r"^\s*(```|~~~)")
+_INDENTED_FENCE_RE = re.compile(r"^\s+(```|~~~)")
+_TABLE_ROW_RE = re.compile(r"^\s*\|")
 _EVIDENCE_FIRST_LINE_RE = re.compile(r"^\s*\$ \S")
+
+
+def non_negative_int(value: str) -> int:
+    n = int(value)
+    if n < 0:
+        raise argparse.ArgumentTypeError(f"must be >= 0, got {n}")
+    return n
 
 
 # ============================================================
@@ -93,7 +119,7 @@ def section_lines(text: str, section: str) -> Optional[Tuple[int, List[str]]]:
     start = None
     for i, line in enumerate(lines):
         m = _HEADING_RE.match(line)
-        if m and m.group("name") == section:
+        if m and (m.group("bracketed") or m.group("bare")) == section:
             start = i
             break
     if start is None:
@@ -110,23 +136,30 @@ def iter_entries(block: Sequence[str], first_line_no: int) -> Iterator[Tuple[int
     """Yield (1-based line number, entry text) for every top-level bullet.
 
     ``first_line_no`` is the line number of ``block[0]`` in the source file.
-    Continuation = lines starting with two spaces or a tab (non-blank). Blank
-    lines are skipped without closing the entry. Any other column-0 line
-    closes it. Lines inside a column-0 fenced block (three backticks or
-    ``~~~`` at column 0) are neither bullets nor continuation: a ``- `` there
-    is code, not an entry.
+    Continuation = non-blank lines starting with two spaces or a tab. Blank
+    lines are skipped without closing the entry. Any other line that is not
+    a bullet (column-0 text, a ``### `` heading, a comment, a one-space
+    indent) closes it. Lines inside a column-0 fenced block (three backticks
+    or ``~~~`` at column 0, closed by the SAME marker) are neither bullets
+    nor continuation: a ``- `` there is code, not an entry. Entry text is
+    the raw lines joined by newlines, so the ``- `` prefix, indentation and
+    newlines all count toward its length.
     """
     cur_no: Optional[int] = None
     cur: List[str] = []
-    in_fence = False
+    fence: Optional[str] = None   # the marker that opened the current fence
     for offset, line in enumerate(block):
         if line.startswith("```") or line.startswith("~~~"):
-            in_fence = not in_fence
+            marker = line[:3]
+            if fence is None:
+                fence = marker
+            elif fence == marker:
+                fence = None
             if cur_no is not None:
                 yield cur_no, "\n".join(cur)
             cur_no, cur = None, []
             continue
-        if in_fence:
+        if fence is not None:
             continue
         if line.startswith("- "):
             if cur_no is not None:
@@ -153,6 +186,26 @@ def nearest_rank(sorted_values: Sequence[int], p: float) -> int:
     return sorted_values[k - 1]
 
 
+def prose_len(entry: str) -> int:
+    """Length of an entry with its evidence lines removed.
+
+    Evidence = lines inside an indented fenced block (the fence lines
+    themselves included) and table rows (first non-blank char ``|``).
+    Everything else, including the bullet line, is prose.
+    """
+    kept: List[str] = []
+    fence: Optional[str] = None
+    for line in entry.splitlines():
+        m = _INDENTED_FENCE_RE.match(line)
+        if m and (fence is None or m.group(1) == fence):
+            fence = m.group(1) if fence is None else None
+            continue
+        if fence is not None or _TABLE_ROW_RE.match(line):
+            continue
+        kept.append(line)
+    return len("\n".join(kept))
+
+
 def length_stats(values: Sequence[int]) -> dict:
     s = sorted(values)
     return {
@@ -170,17 +223,21 @@ def measure_changelog(text: str, section: str, cap: int, top: int) -> Optional[d
     heading_no, block = found
     entries = list(iter_entries(block, heading_no + 1))
     lengths = [len(body) for _, body in entries]
-    longest = sorted(entries, key=lambda e: len(e[1]), reverse=True)[:top]
+    prose = [prose_len(body) for _, body in entries]
+    longest = sorted(entries, key=lambda e: len(e[1]), reverse=True)[:max(top, 0)]
     return {
         "status": "ok",
         "metric": "changelog",
         "section": section,
         "entries": len(entries),
         "chars": length_stats(lengths),
+        "prose_chars": length_stats(prose),
         "cap": cap,
         "over_cap": sum(1 for n in lengths if n > cap),
+        "over_cap_prose": sum(1 for n in prose if n > cap),
         "longest": [
-            {"line": no, "chars": len(body), "head": body.splitlines()[0][:80]}
+            {"line": no, "chars": len(body), "prose_chars": prose_len(body),
+             "head": body.splitlines()[0][:80]}
             for no, body in longest
         ],
     }
@@ -192,15 +249,20 @@ def measure_changelog(text: str, section: str, cap: int, top: int) -> Optional[d
 
 
 def has_evidence_fence(body: str) -> bool:
-    """True when some fenced block's first non-blank line starts with ``$ ``."""
-    in_fence = False
+    """True when some fenced block's first non-blank line starts with ``$ ``.
+
+    A fence is closed only by the marker that opened it, so a ``~~~`` line
+    inside a backtick block is content, not a closer.
+    """
+    fence: Optional[str] = None
     awaiting_first = False
     for line in body.splitlines():
-        if _FENCE_RE.match(line):
-            in_fence = not in_fence
-            awaiting_first = in_fence
+        m = _FENCE_RE.match(line)
+        if m and (fence is None or m.group(1) == fence):
+            fence = m.group(1) if fence is None else None
+            awaiting_first = fence is not None
             continue
-        if in_fence and awaiting_first and line.strip():
+        if fence is not None and awaiting_first and line.strip():
             if _EVIDENCE_FIRST_LINE_RE.match(line):
                 return True
             awaiting_first = False
@@ -217,6 +279,18 @@ def _run_gh(state: str, limit: int) -> str:
         timeout=GH_TIMEOUT_S, check=True,
     )
     return proc.stdout
+
+
+def pr_shape_error(prs: object) -> Optional[str]:
+    """Why ``prs`` is not what ``gh pr list --json number,body`` returns, or None."""
+    if not isinstance(prs, list):
+        return "gh pr list returned JSON that is not a list"
+    for i, p in enumerate(prs):
+        if not isinstance(p, dict) or not isinstance(p.get("number"), int):
+            return f"gh pr list element {i} is not an object with an integer 'number'"
+        if p.get("body") is not None and not isinstance(p["body"], str):
+            return f"gh pr list element {i} has a non-string 'body'"
+    return None
 
 
 def measure_pr_bodies(prs: Sequence[dict], state: str, limit: int) -> dict:
@@ -242,11 +316,14 @@ def measure_pr_bodies(prs: Sequence[dict], state: str, limit: int) -> dict:
 
 def _print_changelog(r: dict) -> None:
     c = r["chars"]
+    p = r["prose_chars"]
     print(f"changelog [{r['section']}]: {r['entries']} entries; chars median "
           f"{c['median']} p75 {c['p75']} p90 {c['p90']} max {c['max']}; "
           f"over cap {r['cap']}: {r['over_cap']}")
+    print(f"  prose only (no indented fences / table rows): median {p['median']} "
+          f"p75 {p['p75']} p90 {p['p90']} max {p['max']}; over cap: {r['over_cap_prose']}")
     for e in r["longest"]:
-        print(f"  L{e['line']:<6} {e['chars']:>6}  {e['head']}")
+        print(f"  L{e['line']:<6} {e['chars']:>6} ({e['prose_chars']:>6} prose)  {e['head']}")
 
 
 def _print_pr_bodies(r: dict) -> None:
@@ -265,20 +342,27 @@ def build_parser() -> argparse.ArgumentParser:
                      "and how many PR bodies carry an evidence fence. Not a gate."),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    # `--json` is accepted both before and after the subcommand: the parent
+    # parser owns it, and each subparser inherits it through `parents=`.
+    json_flag = argparse.ArgumentParser(add_help=False)
+    json_flag.add_argument("--json", action="store_true", default=argparse.SUPPRESS,
+                           help="emit one JSON document on stdout and nothing else")
     parser.add_argument("--json", action="store_true",
                         help="emit one JSON document on stdout and nothing else")
     sub = parser.add_subparsers(dest="metric")
 
-    ch = sub.add_parser("changelog", help="entry length distribution for one CHANGELOG section")
+    ch = sub.add_parser("changelog", parents=[json_flag],
+                        help="entry length distribution for one CHANGELOG section")
     ch.add_argument("--path", default=DEFAULT_CHANGELOG, help="CHANGELOG file (default: CHANGELOG.md)")
     ch.add_argument("--section", default=DEFAULT_SECTION,
                     help="section name as written in the '## [...]' heading (default: Unreleased)")
-    ch.add_argument("--cap", type=int, default=DEFAULT_CAP,
+    ch.add_argument("--cap", type=non_negative_int, default=DEFAULT_CAP,
                     help="report how many entries exceed this many characters (default: 1000)")
-    ch.add_argument("--top", type=int, default=DEFAULT_TOP,
+    ch.add_argument("--top", type=non_negative_int, default=DEFAULT_TOP,
                     help="how many longest entries to list (default: 5)")
 
-    pr = sub.add_parser("pr-bodies", help="PR body length distribution and evidence-fence count via gh")
+    pr = sub.add_parser("pr-bodies", parents=[json_flag],
+                        help="PR body length distribution and evidence-fence count via gh")
     pr.add_argument("--limit", type=int, default=DEFAULT_PR_LIMIT, help="how many PRs (default: 25)")
     pr.add_argument("--state", default="merged", choices=("merged", "open", "closed", "all"),
                     help="gh pr list --state (default: merged)")
@@ -328,13 +412,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     except subprocess.TimeoutExpired:
         return _fail(f"gh pr list timed out after {GH_TIMEOUT_S}s")
     except subprocess.CalledProcessError as exc:
-        return _fail(f"gh pr list failed (rc {exc.returncode}): {(exc.stderr or '').strip()[-300:]}")
+        # gh puts the real reason on its FIRST non-empty stderr line and
+        # follows it with pages of usage text; report the reason.
+        first = next((ln for ln in (exc.stderr or "").splitlines() if ln.strip()), "")
+        return _fail(f"gh pr list failed (rc {exc.returncode}): {first.strip()[:300]}")
     try:
         prs = json.loads(raw)
     except json.JSONDecodeError as exc:
         return _fail(f"gh pr list did not return JSON: {exc}")
-    if not isinstance(prs, list):
-        return _fail("gh pr list returned JSON that is not a list")
+    shape = pr_shape_error(prs)
+    if shape:
+        return _fail(shape)
     _emit(measure_pr_bodies(prs, args.state, args.limit), args.json)
     return EXIT_OK
 
