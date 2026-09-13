@@ -152,7 +152,7 @@ pre-commit run --hook-stage manual --all-files   # manual stage（較重）
 
 ⛔ 這四項都不是偶發，是**結構性**的，每個 agent-opened PR 都會遇到：
 
-1. **CodeRabbit 不會審 agent 開的 PR。** 作者是 bot 帳號時它直接 `Review skipped — Bot user detected`。⇒ **agent 開的 PR 預設沒有 CodeRabbit 這層**，把它算進安全網會高估 review 覆蓋。
+1. **CodeRabbit 會不會審，取決於 PR 是用哪條路徑開的。** 作者是 **bot 帳號**（`claude[bot]`，例如走 `GH_TOKEN` + REST 開的）它直接 `Review skipped — Bot user detected`；作者是**人的帳號**（例如經 GitHub MCP 以 owner 身分開的）它**會審**。實據：[#1838](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1838)（`claude[bot]`）被跳過、[#1841](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1841)（`vencil`）審完並回 `No actionable comments`。⇒ **要知道這層在不在，先看 PR 的作者是誰**——預設「有」會高估 review 覆蓋，預設「沒有」會漏掉它真的給過的訊號。
 2. **就算觸發過一次，後續 push 也不會自動再審**——[`.coderabbit.yaml`](.coderabbit.yaml) 設了 `auto_incremental_review: false`。⚠️ 連帶效果：PR 頁面的 **Merge Risk 橫幅停在被審過的那個 commit**，修完之後仍寫著舊 finding，容易被讀成現況。
 3. **agent 解不開未 resolve 的 review thread。** resolve 只有 GraphQL 的 `resolveReviewThread`，而 agent session 的 GraphQL 只開放釘選的 PR-review 操作（其餘 403），REST 無對應端點。⇒ 若 branch protection 要求 conversation resolution，**CI 全綠的 PR 會停在 `mergeable_state: blocked` 而 agent 推不動**，只能請人在 UI 按。
 4. **「為什麼 blocked」在 agent 這側量不到**：`GET /branches/main/protection` 對 app token 回 403。能做的是**差分**——比對前後兩個 head 的 check 名單＋結論，相同就代表不是 CI 造成的，再往 review / thread 方向找。
