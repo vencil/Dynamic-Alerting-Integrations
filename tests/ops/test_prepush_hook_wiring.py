@@ -649,6 +649,120 @@ def test_guard_refuses_when_no_channel_carries_a_refspec(
 
 
 # ---------------------------------------------------------------------------
+# ... but "nothing to push" is not blindness, and under the dispatcher the two
+# are distinguishable (#1846)
+# ---------------------------------------------------------------------------
+
+
+def test_an_up_to_date_push_is_allowed_with_pre_commit_in_the_environment(
+    tmp_path: Path,
+) -> None:
+    """#1846: a push with nothing to push must go through, not be refused.
+
+    git feeds the pre-push hook one row per ref it is going to update, so an
+    already-synced push runs the hooks with ZERO rows. With ``PRE_COMMIT=1``
+    inherited from an unrelated parent — a push issued from inside some other
+    hook, or from a tool that exports it — the helper used to read those zero
+    rows as "pre-commit ate the refspec" and refuse, and every cause its
+    refusal message lists was inapplicable, so doing what it said could not get
+    the push out either.
+
+    Both control rows matter and both are the SAME harness, one env var apart:
+
+      * without ``PRE_COMMIT`` the up-to-date push was always allowed, so it is
+        that variable, not the harness, that decides the first row;
+      * a push that really does carry a row at ``main`` must still be BLOCKED
+        while the dispatcher is the caller. Without that row, "the dispatcher
+        called me" collapsing into "allow everything" would satisfy this test —
+        which is #1664 rebuilt one layer up.
+    """
+    work = _make_repo(tmp_path, _PROTECT_ONLY)
+    # Publish the branch BEFORE installing, so the pushes below are genuinely
+    # up to date. ⛔ `_push` is --dry-run; setting this up through it would
+    # leave the remote without the branch and every push below would carry a
+    # row, making the assertions pass for the wrong reason.
+    assert _git(work, "push", "-q", "origin", "HEAD:refs/heads/feat/x").returncode == 0
+    assert _install_guards(work).returncode == 0
+
+    clean, clean_out = _push(work, "HEAD:refs/heads/feat/x", env_extra=_SIBLINGS_OFF)
+    assert clean.returncode == 0, (
+        f"CONTROL FAILED: an up-to-date push was blocked without PRE_COMMIT "
+        f"even set:\n{clean_out}"
+    )
+
+    inherited = {**_SIBLINGS_OFF, "PRE_COMMIT": "1"}
+    synced, synced_out = _push(work, "HEAD:refs/heads/feat/x", env_extra=inherited)
+    assert synced.returncode == 0, (
+        f"a push with nothing to push was refused as unguardable:\n{synced_out}"
+    )
+    assert "cannot see what is being pushed" not in synced_out, synced_out
+
+    blocked, blocked_out = _push(work, "HEAD:refs/heads/main", env_extra=inherited)
+    assert blocked.returncode != 0, (
+        f"CONTROL FAILED: with the dispatcher as caller, a real push at main "
+        f"was allowed — that is #1664 one layer up:\n{blocked_out}"
+    )
+    assert _BANNER in blocked_out, blocked_out
+
+
+@pytest.mark.skipif(
+    _BASH is None and os.environ.get("VIBE_REQUIRE_SHELL_TOOLS") != "1",
+    reason="no bash on PATH to invoke the guard",
+)
+@pytest.mark.parametrize(
+    ("from_dispatch", "expect_refusal"),
+    [(False, True), (True, False)],
+    ids=["reached-some-other-way", "dispatcher-said-so"],
+)
+def test_only_the_dispatcher_may_read_zero_rows_as_nothing_to_push(
+    tmp_path: Path, from_dispatch: bool, expect_refusal: bool
+) -> None:
+    """The predicate behind #1846, with the two rows one variable apart.
+
+    Reached any other way, a guard still cannot tell "git fed nothing" from
+    "pre-commit already ate the refspec", so it must keep refusing — the cell
+    ``test_guard_refuses_when_no_channel_carries_a_refspec`` pins through
+    ``pre-commit run``, unchanged by #1846.
+
+    The second row is also the honest record of what #1846 costs:
+    ``VIBE_PREPUSH_FROM_DISPATCH`` is settable by hand, so this is a bypass
+    surface of the same class as ``GIT_PREFLIGHT_BYPASS``. It only ever
+    converts a refusal into a pass when there is no row to judge — with a row
+    on stdin the guard judges it either way, which
+    ``test_stdin_wins_over_a_stray_precommit_environment`` pins.
+
+    ⛔ The guard is invoked with a RELATIVE path from inside the temp repo: Git
+    Bash mangles ``C:\\path\\file`` arguments.
+    """
+    work = _make_repo(tmp_path, _PROTECT_ONLY)
+    assert _BASH
+    env = {k: v for k, v in os.environ.items()
+           if k != "VIBE_PREPUSH_FROM_DISPATCH"}
+    env["PRE_COMMIT"] = "1"
+    env.pop("PRE_COMMIT_REMOTE_BRANCH", None)
+    env.pop("PRE_COMMIT_TO_REF", None)
+    if from_dispatch:
+        env["VIBE_PREPUSH_FROM_DISPATCH"] = "1"
+    r = subprocess.run(  # subprocess-timeout: ignore
+        [_BASH, "scripts/ops/protect_main_push.sh"],
+        cwd=work, input="", capture_output=True, text=True,
+        encoding="utf-8", errors="replace", env=env,
+    )
+    out = r.stdout + r.stderr
+    if expect_refusal:
+        assert r.returncode != 0, (
+            f"a guard that cannot see the refspec allowed the push:\n{out}"
+        )
+        assert "cannot see what is being pushed" in out, out
+    else:
+        assert r.returncode == 0, (
+            f"the dispatcher said there was nothing to push and the guard "
+            f"still refused:\n{out}"
+        )
+        assert "cannot see what is being pushed" not in out, out
+
+
+# ---------------------------------------------------------------------------
 # The first push of a branch to an empty remote — pre-commit exports no TO_REF
 # ---------------------------------------------------------------------------
 

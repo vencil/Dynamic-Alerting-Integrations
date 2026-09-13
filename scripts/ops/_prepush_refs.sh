@@ -33,6 +33,40 @@
 #   Checking the environment first would have made every stdin-fed caller
 #   depend on PRE_COMMIT being absent, which is not a property anyone controls.
 #
+# CALLER CHANNEL — the dispatcher has to say so, because nothing else can (#1846)
+#   With zero rows on stdin and no PRE_COMMIT_REMOTE_BRANCH, two answers are
+#   indistinguishable from inside this file: "git had nothing to feed" and
+#   "pre-commit ate the refspec". An inherited PRE_COMMIT=1 was read as the
+#   second, so the guards refused a push that had nothing to judge — while
+#   every cause the refusal message lists was inapplicable, so following it
+#   could not get that push out.
+#
+#   prepush_dispatch.sh therefore exports VIBE_PREPUSH_FROM_DISPATCH=1. Under
+#   it, zero rows IS "nothing to push": the dispatcher is the only thing in
+#   this repo that reads git's pre-push stdin, and when pre-commit owns
+#   .git/hooks/pre-push it hands the legacy hook — the dispatcher — the WHOLE
+#   stdin. Read on pre-commit 4.6.0 (the ci-constraints pin): hook_impl.py
+#   `_run_legacy` does `sys.stdin.buffer.read()` for pre-push and passes it as
+#   `input=`. So a dispatcher that read nothing was fed nothing.
+#
+#   ⛔ This adds a manually settable variable, i.e. a new bypass surface, same
+#   class as GIT_PREFLIGHT_BYPASS. What keeps it narrow is that it can only
+#   turn a refusal into a pass when there is no row to judge at all:
+#     * a guard run by pre-commit as a `stages: [pre-push]` hook during a real
+#       push always has PRE_COMMIT_REMOTE_BRANCH, so it is answered one branch
+#       above and never reaches here. Not an assumption — all three non-None
+#       returns of hook_impl._pre_push_ns set `remote_branch=`, and when it
+#       returns None (`# nothing to push`) hook_impl returns before running any
+#       hook. The remaining route is `pre-commit run --hook-stage pre-push` by
+#       hand, which the dispatcher is not the caller of, so it still refuses.
+#     * the dispatcher must not be that stanza either, and is not: half 2 of
+#       test_the_shipped_wiring_runs_exactly_the_three_guards asserts
+#       .pre-commit-config.yaml declares NO pre-push hook in ANY spelling.
+#       That assertion is load-bearing for this paragraph, not housekeeping.
+#   ⛔ Do NOT generalise this to "zero rows always passes" — that is the #1664
+#   defect. "Nothing to push" and "cannot see what is being pushed" have to
+#   stay two different answers; this only says who is allowed to give the first.
+#
 # OUTPUT — TWO shapes, ONE channel decision
 #   prepush_refs        <remote_ref> <local_sha>
 #   prepush_refs_full   <remote_ref> <local_sha> <remote_sha>
@@ -68,7 +102,9 @@
 # EXIT STATUS
 #   0 — rows written to stdout. Zero rows is a legitimate answer: nothing is
 #       being pushed (git only feeds lines for refs it is going to update).
-#   3 — running under pre-commit with neither channel carrying a refspec.
+#   3 — running under pre-commit with neither channel carrying a refspec, AND
+#       not invoked by the dispatcher (see CALLER CHANNEL — under it zero rows
+#       is answered as 0, because there it means nothing is being pushed).
 #       Callers MUST treat this as "I cannot see what I am guarding" and exit
 #       non-zero. Warning-and-allowing is not an option here: a PASSING hook's
 #       stdout and stderr are both swallowed by pre-commit (measured — a hook
@@ -116,6 +152,12 @@ _prepush_rows() {
 
     if [ -n "${PRE_COMMIT_REMOTE_BRANCH:-}" ]; then
         printf '%s %s -\n' "${PRE_COMMIT_REMOTE_BRANCH}" "${PRE_COMMIT_TO_REF:--}"
+        return 0
+    fi
+
+    # Reached zero rows with the dispatcher as the caller — see CALLER CHANNEL
+    # in the header. There, and only there, zero rows means "nothing to push".
+    if [ -n "${VIBE_PREPUSH_FROM_DISPATCH:-}" ]; then
         return 0
     fi
 

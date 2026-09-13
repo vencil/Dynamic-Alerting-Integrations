@@ -44,6 +44,18 @@ _CHAINED_NAME="pre-push.chained"
 # every later guard with EOF — the #1664 picture, relocated.
 _refs="$(cat)"
 
+# Tell the guards who is calling (#1846). This file is the only reader of git's
+# pre-push stdin in this repo, and pre-commit hands its legacy hook the whole
+# thing, so zero rows read HERE means git had nothing to feed. A guard reached
+# any other way cannot tell that apart from "pre-commit already ate it" and
+# must keep refusing — _prepush_refs.sh's CALLER CHANNEL section has the
+# reasoning and the cost of this variable existing.
+# ⛔ Exported unconditionally and before any guard runs: it states who the
+# caller IS, not what the caller saw. Gating it on "$_refs" being empty would
+# move the "nothing to push" verdict into this file, away from the one place
+# that documents why that verdict is allowed.
+export VIBE_PREPUSH_FROM_DISPATCH=1
+
 _feed() {
     if [ -n "$_refs" ]; then
         printf '%s\n' "$_refs"
