@@ -667,14 +667,32 @@ def test_an_up_to_date_push_is_allowed_with_pre_commit_in_the_environment(
     refusal message lists was inapplicable, so doing what it said could not get
     the push out either.
 
-    Both control rows matter and both are the SAME harness, one env var apart:
+    Three control rows matter, and each is the SAME harness one variable apart:
 
       * without ``PRE_COMMIT`` the up-to-date push was always allowed, so it is
         that variable, not the harness, that decides the first row;
+      * a stale ``PRE_COMMIT_REMOTE_BRANCH`` must not resurrect the refusal by
+        another door. Under the dispatcher that value is necessarily inherited
+        from an outer process — pre-commit exports it only on the path it takes
+        AFTER running the legacy hook — so a row synthesised from it names a ref
+        this push is not touching. Measured before the caller channel was moved
+        above the env one: an up-to-date push was blocked as a direct push to
+        ``main``, while the dispatcher in the same run had concluded the push
+        carried no commits;
       * a push that really does carry a row at ``main`` must still be BLOCKED
         while the dispatcher is the caller. Without that row, "the dispatcher
         called me" collapsing into "allow everything" would satisfy this test —
-        which is #1664 rebuilt one layer up.
+        which is #1664 rebuilt one layer up. ⛔ It is also the only thing in the
+        suite that pins it: hoisting the caller-channel return to the top of
+        ``_prepush_rows`` leaves ``test_stdin_wins_over_a_stray_precommit_
+        environment`` green, because that test never sets this variable.
+
+    ⛔ The zero-row rows do NOT silence ``require_preflight_pass``: it reads the
+    refspec through the same helper, so bypassing it would leave only one of the
+    two stdin-reading guards exercised on the path this test exists for. Only
+    the mkdocs sibling is off, and the dispatcher skips it on a no-commit push
+    anyway. The ``main`` row keeps both siblings off so the banner it asserts on
+    is unambiguously the direct-push guard's.
     """
     work = _make_repo(tmp_path, _PROTECT_ONLY)
     # Publish the branch BEFORE installing, so the pushes below are genuinely
@@ -684,20 +702,30 @@ def test_an_up_to_date_push_is_allowed_with_pre_commit_in_the_environment(
     assert _git(work, "push", "-q", "origin", "HEAD:refs/heads/feat/x").returncode == 0
     assert _install_guards(work).returncode == 0
 
-    clean, clean_out = _push(work, "HEAD:refs/heads/feat/x", env_extra=_SIBLINGS_OFF)
+    mkdocs_off = {"MKDOCS_STRICT_BYPASS": "1"}
+    clean, clean_out = _push(work, "HEAD:refs/heads/feat/x", env_extra=mkdocs_off)
     assert clean.returncode == 0, (
         f"CONTROL FAILED: an up-to-date push was blocked without PRE_COMMIT "
         f"even set:\n{clean_out}"
     )
 
-    inherited = {**_SIBLINGS_OFF, "PRE_COMMIT": "1"}
+    inherited = {**mkdocs_off, "PRE_COMMIT": "1"}
     synced, synced_out = _push(work, "HEAD:refs/heads/feat/x", env_extra=inherited)
     assert synced.returncode == 0, (
         f"a push with nothing to push was refused as unguardable:\n{synced_out}"
     )
     assert "cannot see what is being pushed" not in synced_out, synced_out
 
-    blocked, blocked_out = _push(work, "HEAD:refs/heads/main", env_extra=inherited)
+    stale = {**inherited, "PRE_COMMIT_REMOTE_BRANCH": "refs/heads/main"}
+    ghost, ghost_out = _push(work, "HEAD:refs/heads/feat/x", env_extra=stale)
+    assert ghost.returncode == 0, (
+        f"an inherited PRE_COMMIT_REMOTE_BRANCH turned an up-to-date push into "
+        f"a verdict about a ref it is not touching:\n{ghost_out}"
+    )
+    assert _BANNER not in ghost_out, ghost_out
+
+    blocked, blocked_out = _push(work, "HEAD:refs/heads/main",
+                                 env_extra={**_SIBLINGS_OFF, "PRE_COMMIT": "1"})
     assert blocked.returncode != 0, (
         f"CONTROL FAILED: with the dispatcher as caller, a real push at main "
         f"was allowed — that is #1664 one layer up:\n{blocked_out}"
@@ -710,26 +738,32 @@ def test_an_up_to_date_push_is_allowed_with_pre_commit_in_the_environment(
     reason="no bash on PATH to invoke the guard",
 )
 @pytest.mark.parametrize(
-    ("from_dispatch", "expect_refusal"),
-    [(False, True), (True, False)],
-    ids=["reached-some-other-way", "dispatcher-said-so"],
+    ("flag", "expect_refusal"),
+    [(None, True), ("1", False), ("0", True)],
+    ids=["unset-reached-some-other-way", "dispatcher-said-so", "off-means-off"],
 )
 def test_only_the_dispatcher_may_read_zero_rows_as_nothing_to_push(
-    tmp_path: Path, from_dispatch: bool, expect_refusal: bool
+    tmp_path: Path, flag: str | None, expect_refusal: bool
 ) -> None:
-    """The predicate behind #1846, with the two rows one variable apart.
+    """The predicate behind #1846, three rows apart on one variable's value.
 
     Reached any other way, a guard still cannot tell "git fed nothing" from
     "pre-commit already ate the refspec", so it must keep refusing — the cell
     ``test_guard_refuses_when_no_channel_carries_a_refspec`` pins through
     ``pre-commit run``, unchanged by #1846.
 
-    The second row is also the honest record of what #1846 costs:
-    ``VIBE_PREPUSH_FROM_DISPATCH`` is settable by hand, so this is a bypass
-    surface of the same class as ``GIT_PREFLIGHT_BYPASS``. It only ever
-    converts a refusal into a pass when there is no row to judge — with a row
-    on stdin the guard judges it either way, which
-    ``test_stdin_wins_over_a_stray_precommit_environment`` pins.
+    The ``0`` row is not tidiness. Both sibling escape hatches in this family
+    test an exact value (``[ "${GIT_PREFLIGHT_BYPASS:-0}" = "1" ]`` in
+    require_preflight_pass.sh, the same shape for ``MKDOCS_STRICT_BYPASS``), so
+    ``=0`` means off there; a presence test here would have read it as ON and
+    made this the one flag in the family that cannot be turned off by value.
+
+    ⛔ What this test does NOT pin: that a push carrying rows is judged either
+    way. That lives in ``test_an_up_to_date_push_is_allowed_with_pre_commit_in_
+    the_environment``'s ``main`` row — measured, because hoisting the
+    caller-channel return to the top of ``_prepush_rows`` leaves this test AND
+    ``test_stdin_wins_over_a_stray_precommit_environment`` green and reds only
+    that one.
 
     ⛔ The guard is invoked with a RELATIVE path from inside the temp repo: Git
     Bash mangles ``C:\\path\\file`` arguments.
@@ -741,8 +775,8 @@ def test_only_the_dispatcher_may_read_zero_rows_as_nothing_to_push(
     env["PRE_COMMIT"] = "1"
     env.pop("PRE_COMMIT_REMOTE_BRANCH", None)
     env.pop("PRE_COMMIT_TO_REF", None)
-    if from_dispatch:
-        env["VIBE_PREPUSH_FROM_DISPATCH"] = "1"
+    if flag is not None:
+        env["VIBE_PREPUSH_FROM_DISPATCH"] = flag
     r = subprocess.run(  # subprocess-timeout: ignore
         [_BASH, "scripts/ops/protect_main_push.sh"],
         cwd=work, input="", capture_output=True, text=True,

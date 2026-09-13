@@ -50,10 +50,17 @@ _refs="$(cat)"
 # any other way cannot tell that apart from "pre-commit already ate it" and
 # must keep refusing — _prepush_refs.sh's CALLER CHANNEL section has the
 # reasoning and the cost of this variable existing.
-# ⛔ Exported unconditionally and before any guard runs: it states who the
-# caller IS, not what the caller saw. Gating it on "$_refs" being empty would
-# move the "nothing to push" verdict into this file, away from the one place
-# that documents why that verdict is allowed.
+# ⛔ Exported unconditionally and before any guard runs, because it states who
+# the caller IS — a fact that does not depend on what this run happened to see.
+# Gating it on "$_refs" would make one fact (who is calling) travel in a channel
+# that also encodes another (what arrived), and the guards read them apart.
+# ⚠️ This file already renders one zero-row verdict of its own, ten lines below:
+# _pushes_commits=0 skips the mkdocs guard. That one decides which guards RUN;
+# the variable lets the helper answer a different zero-row question — what the
+# rows MEAN — in the one file that documents why that answer is allowed.
+# ⚠️ Also inherited by pre-push.chained and by every descendant of every guard.
+# Harmless for git-lfs, which owns that slot on a fresh clone, but it is why
+# the variable's name says where it came from.
 export VIBE_PREPUSH_FROM_DISPATCH=1
 
 _feed() {
