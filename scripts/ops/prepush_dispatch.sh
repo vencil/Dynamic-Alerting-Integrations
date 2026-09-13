@@ -44,6 +44,13 @@ _CHAINED_NAME="pre-push.chained"
 # every later guard with EOF — the #1664 picture, relocated.
 _refs="$(cat)"
 
+# Tell the guards who is calling, so zero rows read HERE can mean "nothing to
+# push" (#1846). Reasoning and the cost: _prepush_refs.sh's CALLER CHANNEL.
+# ⛔ Unconditional — it states who the caller IS, not what this run saw. ⛔ And
+# only here: any other exporter re-opens the hole that section describes.
+# ⚠️ Inherited by pre-push.chained and every descendant of every guard.
+export VIBE_PREPUSH_FROM_DISPATCH=1
+
 _feed() {
     if [ -n "$_refs" ]; then
         printf '%s\n' "$_refs"
