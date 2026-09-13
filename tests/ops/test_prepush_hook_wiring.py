@@ -110,13 +110,13 @@ def test_pre_commit_present_when_required() -> None:
 def _no_ambient_caller_flag(monkeypatch: pytest.MonkeyPatch) -> None:
     """⛔ Scrub the dispatcher's caller flag (#1846) from the environment.
 
-    Every "the guard refuses" assertion in this file flips if that variable
-    happens to be exported in the shell that runs pytest — measured: nine cells
-    go red that way, for a reason that has nothing to do with the code under
-    test. ``_prepush_refs.sh``'s own CHANNEL ORDER section gives the reason this
-    matters: an inherited variable "is not a property anyone controls". Neither
-    is this one, so the file controls it once here instead of filtering it in
-    each test that remembers to.
+    Refusal cells that reach the caller channel with no stdin rows flip to green
+    if that variable is exported in the shell running pytest — a red that says
+    nothing about the code under test.
+
+    ⚠️ The cost is that "export it and watch tests go red" stops being a check
+    anyone can run. ``test_only_the_dispatcher_exports_the_caller_flag`` took
+    over that job; ⛔ do not delete this fixture without checking it is there.
     """
     monkeypatch.delenv("VIBE_PREPUSH_FROM_DISPATCH", raising=False)
 
@@ -682,25 +682,22 @@ def test_an_up_to_date_push_is_allowed_with_pre_commit_in_the_environment(
     refusal message lists was inapplicable, so doing what it said could not get
     the push out either.
 
-    Three control rows matter, and each is the SAME harness one variable apart:
+    Three control rows, each the SAME harness one variable apart:
 
-      * without ``PRE_COMMIT`` the up-to-date push was always allowed, so it is
-        that variable, not the harness, that decides the first row;
+      * without ``PRE_COMMIT`` the up-to-date push was always allowed, so that
+        variable, not the harness, decides the first row;
       * a stale ``PRE_COMMIT_REMOTE_BRANCH`` must not resurrect the refusal by
-        another door. Under the dispatcher that value is necessarily inherited
-        from an outer process — pre-commit exports it only on the path it takes
-        AFTER running the legacy hook — so a row synthesised from it names a ref
-        this push is not touching. Measured before the caller channel was moved
-        above the env one: an up-to-date push was blocked as a direct push to
-        ``main``, while the dispatcher in the same run had concluded the push
-        carried no commits;
+        another door — under the dispatcher it can only have been inherited, so
+        a row synthesised from it names a ref this push is not touching;
       * a push that really does carry a row at ``main`` must still be BLOCKED
-        while the dispatcher is the caller. Without that row, "the dispatcher
-        called me" collapsing into "allow everything" would satisfy this test —
-        which is #1664 rebuilt one layer up. That hoist reds every test in this
-        file that drives the installed dispatcher and expects a block, which is
-        several; the reason it is spelled out here is that this is where the
-        caller channel is introduced, not that nothing else notices.
+        while the dispatcher is the caller. Without it, "the dispatcher called
+        me" collapsing into "allow everything" would satisfy this test — #1664
+        rebuilt one layer up.
+
+    ⛔ The zero-row rows silence only the mkdocs sibling, never
+    ``require_preflight_pass``: bypassing that one here lets a break in its own
+    no-commit exit survive. The ``main`` row silences both, because there the
+    banner it asserts on must unambiguously be the direct-push guard's.
     """
     work = _make_repo(tmp_path, _PROTECT_ONLY)
     # Publish the branch BEFORE installing, so the pushes below are genuinely
@@ -710,13 +707,14 @@ def test_an_up_to_date_push_is_allowed_with_pre_commit_in_the_environment(
     assert _git(work, "push", "-q", "origin", "HEAD:refs/heads/feat/x").returncode == 0
     assert _install_guards(work).returncode == 0
 
-    clean, clean_out = _push(work, "HEAD:refs/heads/feat/x", env_extra=_SIBLINGS_OFF)
+    mkdocs_off = {"MKDOCS_STRICT_BYPASS": "1"}
+    clean, clean_out = _push(work, "HEAD:refs/heads/feat/x", env_extra=mkdocs_off)
     assert clean.returncode == 0, (
         f"CONTROL FAILED: an up-to-date push was blocked without PRE_COMMIT "
         f"even set:\n{clean_out}"
     )
 
-    inherited = {**_SIBLINGS_OFF, "PRE_COMMIT": "1"}
+    inherited = {**mkdocs_off, "PRE_COMMIT": "1"}
     synced, synced_out = _push(work, "HEAD:refs/heads/feat/x", env_extra=inherited)
     assert synced.returncode == 0, (
         f"a push with nothing to push was refused as unguardable:\n{synced_out}"
@@ -731,7 +729,8 @@ def test_an_up_to_date_push_is_allowed_with_pre_commit_in_the_environment(
     )
     assert _BANNER not in ghost_out, ghost_out
 
-    blocked, blocked_out = _push(work, "HEAD:refs/heads/main", env_extra=inherited)
+    blocked, blocked_out = _push(work, "HEAD:refs/heads/main",
+                                 env_extra={**_SIBLINGS_OFF, "PRE_COMMIT": "1"})
     assert blocked.returncode != 0, (
         f"CONTROL FAILED: with the dispatcher as caller, a real push at main "
         f"was allowed — that is #1664 one layer up:\n{blocked_out}"
@@ -754,16 +753,14 @@ def test_only_the_dispatcher_may_read_zero_rows_as_nothing_to_push(
     """The predicate behind #1846, three rows apart on one variable's value.
 
     Reached any other way, a guard still cannot tell "git fed nothing" from
-    "pre-commit already ate the refspec", so it must keep refusing — the cell
-    ``test_guard_refuses_when_no_channel_carries_a_refspec`` pins through
-    ``pre-commit run``, unchanged by #1846.
+    "pre-commit already ate the refspec", so it must keep refusing.
 
     The ``0`` row is not tidiness: only the dispatcher writes this variable and
     it writes ``1``, so an exact-value test sends every other inherited value
     back to the refusal. A presence test read ``0`` as ON.
 
-    ⛔ What this test does NOT pin: that a push carrying rows is judged either
-    way. That needs the installed dispatcher, so it lives in
+    ⛔ What this does NOT pin: that the real caller sets the flag at all. That
+    needs the installed dispatcher and lives in
     ``test_an_up_to_date_push_is_allowed_with_pre_commit_in_the_environment``.
 
     ⛔ The guard is invoked with a RELATIVE path from inside the temp repo: Git
@@ -794,6 +791,64 @@ def test_only_the_dispatcher_may_read_zero_rows_as_nothing_to_push(
             f"still refused:\n{out}"
         )
         assert "cannot see what is being pushed" not in out, out
+
+
+_CALLER_FLAG = "VIBE_PREPUSH_FROM_DISPATCH"
+# Where a variable set in this repo can end up in a guard's environment. ⛔ Not
+# "every tracked file": prose mentions it (CHANGELOG, the helper's own header)
+# and this suite sets it deliberately, and neither puts it on a push path.
+_ENV_CAPABLE_PREFIXES = ("scripts/", ".github/workflows/", ".devcontainer/")
+_ENV_CAPABLE_FILES = ("Makefile", ".pre-commit-config.yaml")
+
+
+def test_only_the_dispatcher_exports_the_caller_flag() -> None:
+    """The ⛔ in ``_prepush_refs.sh``'s CALLER CHANNEL section, mechanised.
+
+    Anything else exporting that flag hands a guard reached through the env
+    channel the same licence with a real refspec in ``PRE_COMMIT_REMOTE_BRANCH``.
+    ⛔ This replaces a check the same change removed: before the autouse fixture
+    above, ambient pollution was at least loud.
+
+    ⚠️ Scope: it reads files, so it cannot see a contributor's shell or a hook
+    installed outside version control — which is why the helper consults stdin
+    before the environment. This only keeps the repo from being the source.
+    """
+    tracked = subprocess.run(  # subprocess-timeout: ignore
+        ["git", "ls-files"], cwd=_REPO_ROOT, capture_output=True, text=True,
+    ).stdout.split()
+    # ⛔ Must-respond control. A scan whose population is empty asserts nothing,
+    # and `git ls-files` has returned zero rows in this repo before (in a
+    # container, against a worktree) — which would have made this test a green
+    # that never looked at anything.
+    assert len(tracked) > 1000, (
+        f"only {len(tracked)} tracked files found; the scan population is wrong, "
+        "so a passing assertion below would mean nothing"
+    )
+    candidates = [
+        p for p in tracked
+        if p.startswith(_ENV_CAPABLE_PREFIXES) or p in _ENV_CAPABLE_FILES
+    ]
+    assert candidates, "no env-capable files matched; the prefixes drifted"
+
+    assign = re.compile(rf"(?:^|\s|;)(?:export\s+)?{_CALLER_FLAG}\s*=")
+    exporters = set()
+    for rel in candidates:
+        text = (_REPO_ROOT / rel).read_text(encoding="utf-8", errors="replace")
+        for line in text.splitlines():
+            stripped = line.lstrip()
+            if stripped.startswith("#") or stripped.startswith("//"):
+                continue
+            if assign.search(line):
+                exporters.add(rel)
+                break
+
+    assert exporters == {"scripts/ops/prepush_dispatch.sh"}, (
+        f"{_CALLER_FLAG} is assigned outside the dispatcher: "
+        f"{sorted(exporters - {'scripts/ops/prepush_dispatch.sh'})}. Only the "
+        "one place that reads git's pre-push stdin may claim to be the caller — "
+        "see CALLER CHANNEL in scripts/ops/_prepush_refs.sh. If the dispatcher "
+        f"itself stopped assigning it, got={sorted(exporters)}"
+    )
 
 
 # ---------------------------------------------------------------------------

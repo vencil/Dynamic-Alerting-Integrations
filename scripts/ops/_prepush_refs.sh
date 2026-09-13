@@ -33,84 +33,29 @@
 #   Checking the environment first would have made every stdin-fed caller
 #   depend on PRE_COMMIT being absent, which is not a property anyone controls.
 #
-# CALLER CHANNEL — the dispatcher has to say so, because nothing else can (#1846)
-#   With zero rows on stdin and no PRE_COMMIT_REMOTE_BRANCH, two answers are
-#   indistinguishable from inside this file: "git had nothing to feed" and
-#   "pre-commit ate the refspec". An inherited PRE_COMMIT=1 was read as the
-#   second, so the guards refused a push that had nothing to judge — while
-#   every cause the refusal message lists was inapplicable, so following it
-#   could not get that push out.
+# CALLER CHANNEL — the dispatcher says so, because nothing else can (#1846;
+# that issue and the commits closing it hold the measurements)
+#   With zero rows on stdin and no PRE_COMMIT_REMOTE_BRANCH, "git had nothing
+#   to feed" and "pre-commit ate the refspec" are indistinguishable here. An
+#   inherited PRE_COMMIT=1 was read as the second, so a push with nothing in it
+#   was refused. prepush_dispatch.sh — the one place that reads git's pre-push
+#   stdin — therefore says so, and under it zero rows means nothing to push.
 #
-#   prepush_dispatch.sh therefore exports VIBE_PREPUSH_FROM_DISPATCH=1. Under
-#   it, zero rows IS "nothing to push": the dispatcher is the only thing in
-#   this repo that reads git's pre-push stdin, and when pre-commit owns
-#   .git/hooks/pre-push it hands the legacy hook — the dispatcher — the WHOLE
-#   stdin. Read on pre-commit 4.6.0 (the ci-constraints pin): hook_impl.py
-#   `_run_legacy` does `sys.stdin.buffer.read()` for pre-push and passes it as
-#   `input=`. So a dispatcher that read nothing was fed nothing.
+#   ⛔ Consulted BEFORE the env channel: under the dispatcher a value in
+#   PRE_COMMIT_REMOTE_BRANCH can only have been inherited, so it names a ref
+#   this push is not touching.
 #
-#   ⛔ PRECEDENCE: this channel is consulted BEFORE the env one, and that order
-#   is as load-bearing as the stdin-before-env order above. pre-commit does not
-#   set PRE_COMMIT_REMOTE_BRANCH for the legacy path (it is exported in
-#   commands/run.py, which hook_impl reaches only AFTER _run_legacy), so any
-#   value visible under the dispatcher came from some outer process and names a
-#   ref this push is not touching. Measured with the order reversed: an
-#   up-to-date push carrying a stale refs/heads/main was blocked as a direct
-#   push to main, while this same file's dispatcher had already concluded the
-#   push carried no commits at all.
+#   ⛔ Only the dispatcher may export it — not a wrapper, not the installer,
+#   not CI; anywhere else a guard reached through the env channel gets the same
+#   licence with a real refspec in hand. Enforced by
+#   test_only_the_dispatcher_exports_the_caller_flag, not by this comment.
 #
-#   ⛔ This adds a manually settable variable, i.e. a new bypass surface. But
-#   it is NOT the equal of GIT_PREFLIGHT_BYPASS, and saying so would invite
-#   hardening against an attack surface that does not exist. Measured, real
-#   installs and real pushes, with the variable exported by hand in the shell:
-#       real commit -> main                     blocked (banner), both ways
-#       feature branch with no marker           blocked, both ways
-#       the same push with GIT_PREFLIGHT_BYPASS=1   ALLOWED
-#   The sibling flag releases a push that would otherwise be stopped; this one
-#   cannot, because a real push carries rows on stdin and rows are answered one
-#   branch above.
-#   ⛔ But its reach is "no rows ON STDIN", which is NOT the same as "nothing to
-#   guard". It also covers invocations where the env channel would have supplied
-#   a real refspec, and this branch discards that. Measured: with the variable
-#   set, zero stdin rows and PRE_COMMIT_REMOTE_BRANCH=refs/heads/main, the guard
-#   allows; unset, it blocks with the direct-push banner. Exported into the
-#   ambient environment, nine cells of tests/ops/test_prepush_hook_wiring.py go
-#   red (clean environment: all green), six of them because an env-channel push
-#   at a protected branch was allowed.
-#   That is safe TODAY for one mechanical reason only: the dispatcher is a CHILD
-#   process of pre-commit's hook_impl, and a child's export cannot reach the
-#   siblings its parent spawns afterwards (measured, with a control). ⛔ So never
-#   export this variable from anywhere but the dispatcher — not a wrapper, not
-#   the installer, not CI. The sentence that used to sit here said "there is
-#   nothing there to guard", which would have licensed exactly that.
+#   ⛔ Do NOT generalise to "zero rows always passes" — that is the #1664
+#   defect. "Nothing to push" and "cannot see what is being pushed" stay two
+#   different answers; this only says who may give the first.
 #
-#   For the same reason this channel is SILENT, unlike the two sibling flags
-#   which announce themselves: it is taken on every up-to-date push, which is
-#   an ordinary event, not an override.
-#
-#   The two routes that could have made it matter are both closed:
-#     * a guard run by pre-commit as a `stages: [pre-push]` hook during a real
-#       push always has PRE_COMMIT_REMOTE_BRANCH, so it is answered above and
-#       never reaches here. Not an assumption, but the citation is a
-#       CONJUNCTION, not just _pre_push_ns: all three of its non-None returns
-#       set remote_branch, local_branch, remote_name and remote_url, and
-#       commands/run.py exports the variable only when all four are present.
-#       A future pre-commit that changed either half would break this
-#       paragraph with nothing in this repo watching, so re-read both.
-#     * the dispatcher must not be that stanza either, and is not: half 2 of
-#       test_the_shipped_wiring_runs_exactly_the_three_guards asserts
-#       .pre-commit-config.yaml declares NO pre-push hook in ANY spelling.
-#       That assertion is load-bearing for this paragraph, not housekeeping.
-#   ⚠️ What is left is a person exporting the variable and then invoking a
-#   guard by hand, e.g. `bash scripts/ops/protect_main_push.sh`. ⛔ Do not write
-#   that `pre-commit run --hook-stage pre-push` is that route — not here and not
-#   in the refusal message below: measured on this repo's own config, that
-#   command runs ZERO hooks and exits 0, because there are no pre-push stanzas
-#   for it to run. It reaches a guard only in a config that declares one, which
-#   is what this file's own tests synthesise.
-#   ⛔ Do NOT generalise this to "zero rows always passes" — that is the #1664
-#   defect. "Nothing to push" and "cannot see what is being pushed" have to
-#   stay two different answers; this only says who is allowed to give the first.
+#   ⚠️ Silent by design, unlike the two sibling bypass flags: this branch is
+#   taken on every up-to-date push, which is ordinary, not an override.
 #
 # OUTPUT — TWO shapes, ONE channel decision
 #   prepush_refs        <remote_ref> <local_sha>
@@ -148,8 +93,7 @@
 #   0 — rows written to stdout. Zero rows is a legitimate answer: nothing is
 #       being pushed (git only feeds lines for refs it is going to update).
 #   3 — running under pre-commit with neither channel carrying a refspec, AND
-#       not invoked by the dispatcher (see CALLER CHANNEL — under it zero rows
-#       is answered as 0, because there it means nothing is being pushed).
+#       not invoked by the dispatcher (see CALLER CHANNEL).
 #       Callers MUST treat this as "I cannot see what I am guarding" and exit
 #       non-zero. Warning-and-allowing is not an option here: a PASSING hook's
 #       stdout and stderr are both swallowed by pre-commit (measured — a hook
@@ -195,19 +139,10 @@ _prepush_rows() {
         return 0
     fi
 
-    # Zero rows with the dispatcher as the caller — see CALLER CHANNEL in the
-    # header. There, and only there, zero rows means "nothing to push".
-    # ⛔ ABOVE the env channel, not below it. The dispatcher reads git's stdin
-    # in full, so a PRE_COMMIT_REMOTE_BRANCH still set under it was inherited
-    # from an outer process and names a ref THIS push is not touching. Measured
-    # with it below: zero rows plus a stale refs/heads/main produced a phantom
-    # row and the guard blocked a push that was already up to date — the same
-    # dead end as the one above, one door along.
-    # ⛔ Exact value, not a presence test. Only the dispatcher writes this, and
-    # it writes `1`; matching exactly sends every other inherited value — `0`,
-    # `true`, someone's leftover export — back to the conservative branch below.
-    # ⛔ Do not read this as "same family as the bypass flags": for those, unset
-    # is the safe side, and here unset is the #1846 mis-refusal.
+    # Zero rows, dispatcher calling — see CALLER CHANNEL in the header.
+    # ⛔ ABOVE the env channel, and an exact value, not a presence test: the
+    # dispatcher writes `1`, so every other inherited value belongs in the
+    # conservative branch below.
     if [ "${VIBE_PREPUSH_FROM_DISPATCH:-0}" = "1" ]; then
         return 0
     fi
@@ -262,11 +197,9 @@ Common ways to reach this message:
     WITHOUT scripts/ops/prepush_dispatch.sh (a hand-wired .git/hooks/pre-push,
     for instance). See CALLER CHANNEL in scripts/ops/_prepush_refs.sh.
 
-⛔ One cause is NOT on that list, deliberately: a `stages: [pre-push]` entry
-re-added to .pre-commit-config.yaml. On a real push that copy is handed ONE
-refspec, so it prints a verdict about that instead of this message — it looks
-green while shadowing the dispatcher, and this text will never tell you.
-Measured: it reaches this message only when pre-commit is run by hand.
+⛔ A `stages: [pre-push]` entry re-added to .pre-commit-config.yaml does NOT
+print this — that copy is handed one refspec and looks green while shadowing
+the dispatcher. Remove it anyway.
 
 To exercise the guards for real, push something:
 

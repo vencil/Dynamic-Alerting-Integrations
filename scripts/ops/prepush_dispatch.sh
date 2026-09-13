@@ -44,23 +44,11 @@ _CHAINED_NAME="pre-push.chained"
 # every later guard with EOF — the #1664 picture, relocated.
 _refs="$(cat)"
 
-# Tell the guards who is calling (#1846). This file is the only reader of git's
-# pre-push stdin in this repo, and pre-commit hands its legacy hook the whole
-# thing, so zero rows read HERE means git had nothing to feed. A guard reached
-# any other way cannot tell that apart from "pre-commit already ate it" and
-# must keep refusing — _prepush_refs.sh's CALLER CHANNEL section has the
-# reasoning and the cost of this variable existing.
-# ⛔ Exported unconditionally and before any guard runs, because it states who
-# the caller IS — a fact that does not depend on what this run happened to see.
-# Gating it on "$_refs" would make one fact (who is calling) travel in a channel
-# that also encodes another (what arrived), and the guards read them apart.
-# ⚠️ This file already renders one zero-row verdict of its own, ten lines below:
-# _pushes_commits=0 skips the mkdocs guard. That one decides which guards RUN;
-# the variable lets the helper answer a different zero-row question — what the
-# rows MEAN — in the one file that documents why that answer is allowed.
-# ⚠️ Also inherited by pre-push.chained and by every descendant of every guard.
-# Harmless for git-lfs, which owns that slot on a fresh clone, but it is why
-# the variable's name says where it came from.
+# Tell the guards who is calling, so zero rows read HERE can mean "nothing to
+# push" (#1846). Reasoning and the cost: _prepush_refs.sh's CALLER CHANNEL.
+# ⛔ Unconditional — it states who the caller IS, not what this run saw. ⛔ And
+# only here: any other exporter re-opens the hole that section describes.
+# ⚠️ Inherited by pre-push.chained and every descendant of every guard.
 export VIBE_PREPUSH_FROM_DISPATCH=1
 
 _feed() {
