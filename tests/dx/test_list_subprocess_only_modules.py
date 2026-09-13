@@ -68,15 +68,26 @@ def _fixture(tmp_path: Path, files: dict[str, str]) -> Path:
 # ---------------------------------------------------------------------------
 # 生產樹：母體與分類
 # ---------------------------------------------------------------------------
-def test_runs_on_the_real_repo_and_reports_a_list() -> None:
-    """⛔ 清單必須是**跑出來的**，不是寫死的——但只斷言**不變式**，不綁當下分布。
+def test_blind_spot_entries_are_well_formed(tmp_path: Path) -> None:
+    """每個 `blind_spots` 條目必須是 `.py` 路徑且附上歸因的測試檔。
 
-    ⚠️ 本格原本還斷言 `data["blind_spots"]` 非空。那與工具自己的契約矛盾
-    （docstring：「不因為有盲點而失敗……不是閘門」），而且**它會懲罰成功**：
-    TRK-379 這條線的目標就是消滅盲點，哪天全樹真的歸零，這格會紅。已刪。
-    各桶的分類行為由合成 fixture 驗，不綁真樹分布。
+    ⛔ 本格取代 `test_runs_on_the_real_repo_and_reports_a_list`，那格有兩個問題：
+    ⑴ 它原本斷言真樹的 `blind_spots` 非空——與工具契約矛盾（「不因為有盲點而失敗、
+       不是閘門」），而且**會懲罰成功**：這條線的目標就是消滅盲點。
+    ⑵ 拿掉那句之後，它只剩一個 `for e in data["blind_spots"]:` 迴圈，**對空清單平凡為真**
+       ⇒ 一個永遠回空報告的工具也會過（盲審實測：全空 mutation 之下 19 紅，而那格是綠的）。
+       它的 docstring 卻寫著「只斷言不變式」。
+    ⇒ 搬到**保證有條目**的合成 fixture 上，斷言才有內容。
     """
-    data = _json(_REPO_ROOT)
+    repo = _fixture(tmp_path, {
+        "scripts/tools/ops/only_sub.py": _TOOL_SRC,
+        "tests/test_s.py":
+            'import subprocess, sys\n'
+            'def test_s():\n'
+            '    subprocess.run([sys.executable, "scripts/tools/ops/only_sub.py"])\n',
+    })
+    data = _json(repo)
+    assert data["blind_spots"], "fixture 沒造出盲點——這格失去意義了"
     for e in data["blind_spots"]:
         assert e["module"].endswith(".py")
         assert e["tests"], f"{e['module']} 被判為盲點卻沒有任何測試檔？"
@@ -727,3 +738,79 @@ def test_known_limit_a_from_imported_symbol_shadows_a_module_stem(
     data = _json(repo)
     assert data["blind_spots"] == [], "假陰性沒重現——若已修好請一併更新 docstring"
     assert data["both"] == ["lonely"]
+
+
+def test_relative_from_import_counts_as_in_process(tmp_path: Path) -> None:
+    """`from . import mytool` 的 `node.module` 是 `None`，但它是真的 in-process 進入點。
+
+    ⛔ 修前 `elif isinstance(node, ast.ImportFrom) and node.module:` 的 guard 讓整個分支
+    跳過，`node.names` 一次都不讀——而讀 names 正是那個分支存在的理由。盲審實測：
+    修前該模組仍留在 `blind_spots`。
+    """
+    repo = _fixture(tmp_path, {
+        "scripts/tools/ops/relmod.py": _TOOL_SRC,
+        "tests/test_rel.py":
+            'from . import relmod\n'
+            'def test_i():\n    assert relmod.main() == 0\n',
+        "tests/test_sub.py":
+            'import subprocess, sys\n'
+            'def test_s():\n'
+            '    subprocess.run([sys.executable, "scripts/tools/ops/relmod.py"])\n',
+    })
+    data = _json(repo)
+    assert data["blind_spots"] == []
+    assert data["both"] == ["relmod"]
+
+
+def test_known_limit_ast_walk_ignores_reachability(tmp_path: Path) -> None:
+    """⛔ `ast.walk` 不看可達性：`if TYPE_CHECKING:` 之下的 import 執行期永遠不跑，
+    卻被算成 in-process 進入點 ⇒ 真盲點被遮蔽（假陰性）。
+
+    ⚠️ 本格釘的是**現況**。只修 `TYPE_CHECKING` 這一種會給出部分覆蓋與虛假的安全感——
+    函式內的 import 同構（該函式可能從未被呼叫）且**無法從 AST 判定**，所以整條列為
+    已知界線而不是修掉一半。日後若真的處理了可達性，這格會紅，請連 docstring 一起改。
+    """
+    repo = _fixture(tmp_path, {
+        "scripts/tools/ops/nevercalled.py": _TOOL_SRC,
+        "tests/test_tc.py":
+            'from typing import TYPE_CHECKING\n'
+            'if TYPE_CHECKING:\n'
+            '    import nevercalled\n'
+            'def test_x():\n    pass\n',
+        "tests/test_sub2.py":
+            'import subprocess, sys\n'
+            'def test_s():\n'
+            '    subprocess.run([sys.executable, "scripts/tools/ops/nevercalled.py"])\n',
+    })
+    data = _json(repo)
+    assert data["blind_spots"] == [], "假陰性沒重現——若已修好請一併更新 docstring"
+    assert data["both"] == ["nevercalled"]
+
+
+def test_omit_matching_uses_coverages_own_matcher(tmp_path: Path) -> None:
+    """⛔ 判準是 coverage 自己的 `GlobMatcher`，不是 `fnmatch`——兩者實測分歧。
+
+    ⚠️ 這格的第一版用 `source = ["vendored"]` + `*/vendor/*`，**抓不到差別**：
+    `fnmatch` 的 `*` **會跨目錄分隔符**，所以 `vendored/vendor/x.py` 兩個 matcher 都配到，
+    mutation（退回純 fnmatch）沒被打死。真正的分歧在**頂層**——`vendor/x.py` 前面沒有東西
+    可以給 `*/` 吃，`fnmatch` 配不到，coverage 配得到。
+    """
+    repo = _fixture(tmp_path, {
+        "vendor/thirdparty.py": _TOOL_SRC,
+        "vendor/sub/mine.py": _TOOL_SRC,
+        "tests/test_v.py":
+            'import subprocess, sys\n'
+            'def test_v():\n'
+            '    subprocess.run([sys.executable, "vendor/thirdparty.py"])\n'
+            '    subprocess.run([sys.executable, "vendor/sub/mine.py"])\n',
+    })
+    (repo / "pyproject.toml").write_text(
+        '[tool.coverage.run]\nsource = ["vendor"]\nomit = ["*/vendor/*"]\n',
+        encoding="utf-8",
+    )
+    proc = _run(repo, "--json")
+    assert proc.returncode == 2, (
+        "coverage 的 matcher 會把 vendor/ 底下兩個檔都排除 ⇒ 母體歸零 ⇒ rc 2；"
+        f"純 fnmatch 只排除得到帶前綴的那個，會留下母體並回 rc 0。實得 rc={proc.returncode}"
+    )
+    assert "母體是空的" in proc.stderr
