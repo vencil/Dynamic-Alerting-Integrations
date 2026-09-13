@@ -1215,3 +1215,88 @@ class TestPinCapabilityCorpusFailsClosed:
         (root / "docs" / "a.md").unlink()
         with pytest.raises(RuntimeError, match="no markdown"):
             mod.pin_capability_doc_files(root)
+
+
+class TestSharedFenceScannerHasDirectCoverage:
+    """`_iter_docker_run_blocks` is the seam BOTH block-level rules now sit on.
+
+    Before #1835 each rule carried its own byte-identical copy, so the suite
+    only ever reached this logic through a caller's predicate. A shared seam
+    tested that way is tested by proxy: a caller whose predicate happens not to
+    fire hides the seam's regression. These walk it directly.
+    """
+
+    @staticmethod
+    def _blocks(body):
+        return list(mod._iter_docker_run_blocks(body.splitlines()))
+
+    def test_yields_zero_based_start_and_block_text(self):
+        body = "intro\n```bash\ndocker run alpine\n```\n"
+        assert self._blocks(body) == [(2, "docker run alpine")]
+
+    def test_prose_docker_run_outside_a_fence_is_not_yielded(self):
+        """Only fenced blocks hold runnable invocations."""
+        assert self._blocks("just say docker run alpine in prose\n") == []
+
+    def test_a_fenced_line_that_is_not_docker_run_is_not_yielded(self):
+        assert self._blocks("```bash\nls -la\n```\n") == []
+
+    def test_line_continuations_are_flattened_into_one_block(self):
+        body = ("```bash\n"
+                "docker run --rm \\\n"
+                "  -v $(pwd)/out:/data/output \\\n"
+                "  alpine init\n"
+                "```\n")
+        (start, blk), = self._blocks(body)
+        assert start == 1
+        assert blk.splitlines() == ["docker run --rm \\",
+                                    "  -v $(pwd)/out:/data/output \\",
+                                    "  alpine init"]
+
+    def test_flattening_stops_at_the_closing_fence(self):
+        """⛔ A trailing `\\` on the last line must not swallow the fence and
+        run on into the prose below — that silently merges two documents."""
+        body = ("```bash\n"
+                "docker run --rm \\\n"
+                "```\n"
+                "docker run NOT-IN-A-FENCE\n")
+        (start, blk), = self._blocks(body)
+        assert blk == "docker run --rm \\"
+
+    def test_reaches_blockquoted_and_tilde_fences(self):
+        """The fence VOCABULARY is shared (`_is_fence` / `_unquote_md`); this
+        pins that the one remaining state machine still honours it."""
+        quoted = "> ```bash\n> docker run alpine\n> ```\n"
+        tilde = "~~~bash\ndocker run alpine\n~~~\n"
+        assert self._blocks(quoted) == [(1, "docker run alpine")]
+        assert self._blocks(tilde) == [(1, "docker run alpine")]
+
+    def test_the_subcommand_rule_is_deliberately_NOT_on_this_seam(self, tmp_path):
+        """⛔ The regression this class exists for.
+
+        `check_datools_subcommands` judges LINES, and its `_PLACEHOLDER_CHARS`
+        skip is per-line by design. Route it through flattened blocks and that
+        skip becomes block-level, so a block whose FIRST line carries `$(pwd)`
+        swallows a wrapper sitting on a clean continuation line. Measured on
+        the shipped corpus when #1835 was scoped: 36 judged wrapper
+        invocations become 34, the two lost being the ZH/EN
+        `da-tools:latest guard defaults-impact` pair in
+        `docs/integration/troubleshooting-checklist{,.en}.md`.
+
+        So the invariant is not "the generator has two callers" (a count a
+        refactor can satisfy while breaking this) but "this exact shape is
+        still judged". Unify the third rule onto the seam and this goes red.
+        """
+        p = _doc(tmp_path, "```bash\n"
+                           "docker run --rm -v $(pwd):/work:ro \\\n"
+                           "    ghcr.io/vencil/da-tools:latest guard bogus-sub\n"
+                           "```\n")
+        issues = mod.check_datools_subcommands(
+            [p], mod.WRAPPER_SUBCOMMANDS, tmp_path)
+        assert len(issues) == 1, issues
+        assert issues[0].check == "datools-bad-subcommand"
+        # ...and the block-level reading really would lose it: the same block
+        # flattened is skipped wholesale by that placeholder set.
+        (_, blk), = self._blocks(p.read_text(encoding="utf-8"))
+        flat = " ".join(blk.split())
+        assert any(c in flat for c in mod._PLACEHOLDER_CHARS)
