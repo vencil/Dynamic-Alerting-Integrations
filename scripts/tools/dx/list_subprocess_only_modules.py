@@ -3,18 +3,17 @@
 
 Why this exists
 ---------------
-`pyproject.toml` 的 coverage `source` 是 `["scripts/tools", "components/da-tools/app"]`，
-但 **以 subprocess 呼叫工具的測試對 coverage.py 完全不可見**——它預設不追子行程。
-結果是一支工具可以有完整且有偵測力的測試，而 coverage 報表把它讀成「從未被 import」
+coverage `source` 涵蓋 `scripts/tools` 與 `components/da-tools/app`，但 **以 subprocess
+呼叫工具的測試對 coverage.py 完全不可見**——它預設不追子行程。結果是一支工具可以有完整
+且有偵測力的測試，而 coverage 報表把它讀成「從未被 import」
 （TRK-379 / [#1746](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1746)）。
 
 ⛔ **這正是「量不到」被呈現成「量了沒事」**：coverage delta bot 對這種檔案印的是
 「無 per-file 變化」，與「這個檔沒問題」在版面上長得一模一樣。
 
-⚠️ **母體 ≠ 盲點數**。票裡量到「78 個測試檔出現 `sys.executable`」，但那**不是**
-78 個盲點：另有一大批檔案**同時**直接 import 同一個模組，重疊多少票裡明寫沒有量過。
-本工具產出的就是那份沒有人產生過的清單：**coverage source 範圍內、只被 subprocess
-測到、沒有任何 in-process 進入點**的模組。
+⚠️ **母體 ≠ 盲點數**：出現 `sys.executable` 的測試檔遠多於真盲點，因為多數模組**同時**
+有 in-process 進入點。本工具產出的就是扣掉重疊之後的那份清單。⛔ 絕對數字本檔一律不寫
+（母體就是這棵樹，寫死的計數必然漂）——跑一次就是當下真值。
 
 述詞
 ----
@@ -27,97 +26,60 @@ Why this exists
 
 分類：`subprocess(M) and not imported(M)` ⇒ **盲點**。
 
-⚠️ `subprocess(M)` 是字串啟發式（測試檔怎麼組指令沒有統一寫法），**兩個方向都會錯**。
-⛔ 這句原本只寫「它會高估」——那是**方向上的過度宣稱**，盲審用一個真實形狀打穿了。
+⚠️ `subprocess(M)` 是字串啟發式（測試檔怎麼組指令沒有統一寫法），**兩個方向都會錯**：
 
-**高估（假陽性）**：只要測試檔的**任何文字**出現 `<stem>.py`，該模組就被算成被 subprocess
-測到——一句提到 `legacy_report.py` 的 docstring 就足以把 `report` 列成盲點，還附一份指向
-那個無關測試檔的 `tests` 清單。釘住：`test_prose_mentioning_a_stem_creates_a_false_positive`。
+- **高估（假陽性）**：測試檔的**任何文字**出現 `<stem>.py` 就算數——一句提到
+  `legacy_report.py` 的 docstring 足以把 `report` 列成盲點。
+  釘住：`test_prose_mentioning_a_stem_creates_a_false_positive`。
+- **低估（假陰性，⛔ 更危險）**：路徑若是**間接**組出來的（`conftest.py` 放
+  ``Path("scripts")/"tools"/"ops"/"mytool.py"``），檔案內文就沒有那串字，該模組落進
+  ``untested``（無害桶）而不是 ``blind_spots``——真盲點被歸類成「根本沒測試」。
+  釘住：`test_indirectly_built_paths_are_a_false_negative`。
 
-**低估（假陰性，⛔ 更危險）**：測試檔若**間接**組出路徑——例如 `conftest.py` 放
-``TOOL = Path("scripts")/"tools"/"ops"/"mytool.py"``，測試檔只 import 那個常數——檔案內文
-就沒有 `mytool.py` 這串字，該模組於是落進 **``untested``（無害桶）而不是 ``blind_spots``**。
-一個真的盲點被歸類成「根本沒測試」，方向與本工具的用途相反。
-釘住：`test_indirectly_built_paths_are_a_false_negative`。
+⛔ **這份清單是待查名單，不是判定**，而且它**兩邊都漏**。
 
-⛔ **這份清單是待查名單，不是判定**，而且它**兩邊都漏**：名單上的不一定是盲點，
-不在名單上的也不一定不是。
-
-⛔ **本工具曾有一個 `--verify` 子功能（拿真 coverage 抽驗），已移除**。三個各自都足夠的
-理由，全部量過：
-
-1. **結構上只能修假陽性**。它只走訪 `blind_spots`，所以任何被**錯誤排除**在清單外的模組
-   （見下面「已知界線」）對它永遠不可見。
-2. **它自己就是壞掉的儀器，而且兩個方向都會壞**。它跑 `--cov=<stem>`，stem 撞到已安裝
-   套件時量到的是**那個套件**，不是受測模組。對一支叫 `json.py` 的專案工具實測，
-   `--cov=json` 量到的是 `/usr/lib/python3.11/json/*`，而它報什麼**取決於那支測試檔
-   碰巧有沒有用到 stdlib `json`**：
-
-     測試檔沒用到 stdlib json → `No data was collected` → 判讀成「確認是盲點」⇒ **假確認**
-     測試檔有用到 stdlib json → 有資料              → 判讀成「本工具高估」  ⇒ **假否定**
-
-   ⛔ **本段原本只寫了下面那一列，而且附了一組百分比**——那組數字隨情境漂動（重跑就變），
-   而只寫一個方向更糟：它讓讀者以為這把儀器只會往一邊壞。⇒ 數字已刪，兩個方向都寫上。
-   這正是本 docstring 原本只針對「`--cov` 給路徑」提出的警告，**同一個機制在它推薦的
-   模組名形式上照樣成立**。
-3. **零測試釘住**。mutation 實測：把 `--cov={stem}` 改回它自己警告過的 `--cov={module}`，
-   全套 20 格**仍然全過**。
+⛔ **不要重新引入 `--verify`**（拿真 coverage 抽驗那個子功能，已移除）。三個各自都足夠的
+理由：⑴ 它只走訪 `blind_spots`，被**錯誤排除**在清單外的模組對它結構上不可見；⑵ 它跑
+`--cov=<stem>`，stem 撞到已安裝套件時量到的是**那個套件**——對專案的 `json.py` 實測
+`--cov=json` 量到 `/usr/lib/python3.11/json/*`，而它報什麼取決於那支測試檔碰巧有沒有用到
+stdlib `json`，**兩個方向都會壞**（沒資料 ⇒ 假確認；有資料 ⇒ 假否定）；⑶ 它零測試釘住。
 
 ⇒ 想抽驗請自己跑，並且**確認 `--cov` 指到的真的是你要的那個模組**（`--cov-report=term`
 會把量到的檔案路徑印出來，看那個路徑）。
 
-⛔ **已知界線（會造成假陰性，也就是真盲點被吃掉）**：分類以檔名 stem 為鍵。⑴ 兩個不同的
-專案檔共用 stem 會被合併成一筆（實測：`a/dup.py` 只被 subprocess 測、`b/dup.py` 被 import，
-結果整個 stem 記成 `both`，真盲點連痕跡都不留）；⑵ 測試檔 `import` 一個**同名的 stdlib
-或第三方套件**也會被算成 in-process 進入點（實測：`import json` 讓專案的
-`scripts/tools/ops/json.py` 從盲點變成 `both`）；⑶ `from pkg import name` 的 `name`
-從 AST 看不出是**模組**還是**符號**，所以一個同名的符號（函式／類別／常數）同樣會遮蔽
-真盲點（實測：`from dataclasses import lonely` 讓 `ops/lonely.py` 從盲點變成 `both`）。
+已知界線
+--------
+⛔ **以下六條都造成假陰性（真盲點被吃掉），且本工具不修**。分類以檔名 stem 為鍵：
 
-⚠️ ⑶ 是**修 `ImportFrom` 假陽性換來的**，不是原本就有的：不看 `node.names` 會讓
-`from scripts.tools.ops import mytool` 這種**真的 in-process 進入點**被漏掉；看了就得
-接受符號撞名。兩個方向都會錯，這裡選了 CodeRabbit 實際報出來的那一側。
-⑷ in-process 的判定走 `ast.walk`，它**不看可達性**：
-`if TYPE_CHECKING:` 之下的 import（執行期永遠不跑）與函式內的 import（該函式可能從未被
-呼叫）都會被算成進入點。兩半各有一次實測：只有 `if TYPE_CHECKING: import nevercalled`
-的測試檔，讓該模組從 `blind_spots` 移到 `both`；另一格只在一個**從未被呼叫**的函式 body
-裡 `import neverfunc`，同樣讓它落到 `both`，而同 fixture 的對照模組留在 `blind_spots`。
-⚠️ 只修 `TYPE_CHECKING` 這一種會給出**部分覆蓋與虛假的安全感**——函式內 import 同構
-且無法從 AST 判定 ⇒ 整條列為已知界線。
-⑸ `from __future__ import annotations` 會讓專案裡任何名為 `annotations.py` 的模組
-**永久**被遮蔽（`node.names` 帶 `annotations`，撞上該模組的 stem）。⚠️ 機制與 ⑵ / ⑶ 相同，
-但**普遍得多**：它是本 repo 多數測試檔的第一行，不是某個測試「剛好 import 到同名套件」。
-⛔ **這裡不寫比例**——前一版寫了「283 / 366」，而那組數字錯了兩次：在**錯的 worktree**
-（另一條 branch）上量的，而且 pathspec 只給 `tests/**/*.py`、漏掉頂層的 `tests/*.py`
-（正是本檔自己在母體枚舉那裡踩過、並且已經寫在註解裡的同一個 `**/` 坑）。⇒ 改由
-`test_known_limit_future_annotations_shadows_a_module_named_annotations` 對**當下**的
-`build()` 母體重算並斷言它仍是多數，紅的時候會把實際比例印出來。
-實測：fixture 只放這行＋一個 subprocess 呼叫，`annotations` 就從 `blind_spots` 落到
-`both`，對照模組不受影響。
-⚠️ ⑸ **不是本輪新增的行為**：`node.module` 本來就是 `'__future__'`（truthy），移除
-`and node.module` guard 之前它就已經這樣。它先前沒被列出來，讓這份清單看起來比實際完整。
+⑴ 兩個專案檔共用 stem 會被併成一筆——只被 subprocess 測的那個連痕跡都不留。
+   釘住：`test_known_limit_two_project_files_sharing_a_stem_are_merged`。
+⑵ 測試檔 `import` 一個**同名的 stdlib 或第三方套件**也算成 in-process 進入點。
+   釘住：`test_known_limit_a_stdlib_import_shadows_a_project_stem` 與
+   `test_known_limit_a_third_party_import_also_shadows_a_project_stem`。
+⑶ `from pkg import name` 的 `name` 從 AST 看不出是**模組**還是**符號**，同名符號同樣遮蔽。
+   釘住：`test_known_limit_a_from_imported_symbol_shadows_a_module_stem`。
+   ⚠️ 這條是**換來的**：不看 `node.names` 會讓 `from scripts.tools.ops import mytool` 這種
+   真進入點被漏掉。兩個方向都會錯，這裡選了這一側。
+⑷ `ast.walk` **不看可達性**：`if TYPE_CHECKING:` 之下與函式 body 內的 import 執行期可能
+   永遠不跑，卻都算成進入點。兩半各有一格：
+   `test_known_limit_ast_walk_ignores_reachability` 與
+   `test_known_limit_a_function_body_import_also_counts_as_an_entry_point`。
+   ⚠️ 只修 `TYPE_CHECKING` 會給出**部分覆蓋與虛假的安全感**——函式內 import 同構且無法從
+   AST 判定 ⇒ 整條列為界線。
+⑸ `from __future__ import annotations` 讓任何名為 `annotations.py` 的模組**永久**被遮蔽。
+   機制同 ⑵／⑶，但普遍得多——它是多數測試檔的第一行。
+   釘住：`test_known_limit_future_annotations_shadows_a_module_named_annotations`
+   （該格對**當下**母體重算並斷言它仍是多數，紅的時候印出實際比例）。
+⑹ 測試檔裡的**相對** import（`node.level > 0`）在**本 repo 的設定下**指不到 source root
+   的模組（source root 與 `tests/` 不相交）⇒ 算成進入點是撞名。
+   ⛔ **這是設定的性質，不是結構定理**：`source = ["tests"]` 時它就指得到，而 `build()` 的
+   測試 pathspec 是**寫死**的、與 `source` 互不參照，沒有東西保證兩者不相交。兩側各一格：
+   `test_known_limit_a_relative_import_in_tests_can_never_name_a_source_module`（本 repo 設定，
+   自己會斷言不相交）與 `test_a_relative_import_does_reach_a_module_when_source_is_tests`（反例）。
 
-⑹ 測試檔裡的**相對** import（`node.level > 0`，如 `from . import x` / `from .. import y`）
-在**本 repo 的設定下**指不到 source root 的模組——它的錨是 `tests/` 這個 package，而本 repo
-的 source root（`scripts/tools` / `components/da-tools/app`）與 `tests/` **不相交**。⇒ 把它的
-`node.names` 算成進入點是撞名，方向是**靜默假陰性**（真盲點被吃掉、報告不留痕跡）。
-⛔ **這是設定的性質，不是結構定理**——前一版寫「**永遠**指不到」，盲審用一個反例打穿：
-`source = ["tests"]` 時，`from . import sibling` 指到的 `tests/sibling.py` **就是**一個 source
-root 底下的模組，工具把它算進 `both` 完全正確（實測 `both: ['sibling']`）。成因讀 code 就看得到：
-`build()` 的測試 pathspec 是**寫死**的 `tests/*.py` / `tests/**/*.py`，與 `source` 互不參照，
-所以沒有任何東西保證兩者不相交。釘住兩側：
-`test_known_limit_a_relative_import_in_tests_can_never_name_a_source_module`（本 repo 設定，
-且它自己會斷言兩者不相交）與 `test_a_relative_import_does_reach_a_module_when_source_is_tests`（反例）。
-⛔ 先前這裡的註解寫「`from . import mytool` 是真的 in-process 進入點所以不能加
-`and node.module` guard」——**那句話是錯的**，而且它的測試 fixture 在 pytest 下根本跑不起來
-（收集期 `attempted relative import with no known parent package`）。補上 `__init__.py` 讓它
-跑得起來之後，它 import 到的是 `tests/x.py`，不是專案模組。
-⚠️ 那為什麼不改成跳過 `level > 0`？因為那會是同一個受審主體上的**第 4 版述詞**，而根本
-問題是 decidability——從 AST 看不出 `import X` 解析到誰（⑵⑶⑷⑸⑹ 全是這一件事）。要真的修
-得換到有權威 oracle 的那一面（import 系統／coverage 自己的量測），那是另一張票。
-⚠️ 今天本 repo `tests/` 底下 0 個 `__init__.py`、0 個真的 relative import ⇒ 這條是預備性的。
-這六條**本輪未修**，⑷ 的兩半算兩條，**各有一格 `test_known_limit_*` 釘住現況**。
-⛔ 先前這裡寫「這四條各有一格釘住」，而 ⑷ 只釘了 `TYPE_CHECKING` 那一半——那是過度宣稱。
+⛔ **不要為 ⑵⑶⑷⑸⑹ 再寫一版述詞。** 它們全是同一個 decidability 問題的實例：從 AST 看不出
+`import X` 解析到誰。要真的修得換到有權威 oracle 的那一面（import 系統／coverage 自己的
+量測），那是另一張票。
 
 Usage
 -----
@@ -158,12 +120,11 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 def coverage_sources(repo: Path) -> tuple[list[str], set[str]]:
     """從 pyproject.toml 讀 coverage 的 source 與 omit —— 用 stdlib ``tomllib``。
 
-    ⛔ 這裡**不能**用 regex。先前的版本用 ``re.search`` 配一個 ``[tool.coverage.run]`` 的 header pattern
-    加 ``re.findall(r'"([^"]+)"')``，與真 TOML 有四種已量到的分歧，其中兩種是
-    **靜默拿錯母體**（比「壞掉」更糟，因為它會算出一個看起來正常的答案）：
+    ⛔ 這裡**不能**用 regex。與真 TOML 有四種已量到的分歧，其中兩種是**靜默拿錯母體**
+    （比「壞掉」更糟，因為它會算出一個看起來正常的答案）：
 
     ==========================================  ==================  ==================
-    輸入（都是合法 TOML）                        tomllib             舊的 regex
+    輸入（都是合法 TOML）                        tomllib             regex
     ==========================================  ==================  ==================
     ``source = ['a', 'b']``（單引號）            ``['a','b']``       ``[]`` → rc 2
     ``[tool.coverage]`` + ``run.source = […]``   讀到                ``[]`` → rc 2
@@ -193,8 +154,8 @@ def coverage_sources(repo: Path) -> tuple[list[str], set[str]]:
     # ⛔ 逐層檢查，不能只檢查葉子。`doc.get("tool", {}).get("coverage", {})` 這種鏈式
     #   寫法在 `tool` 或 `tool.coverage` 是純量時會丟 `AttributeError`——它是
     #   `ValueError`／`OSError` 之外的第三種，呼叫端的 `except` 攔不到 ⇒ 裸 traceback
-    #   + rc 1，正是本函式宣稱已經收口的那個病。⚠️ 第一版只守了葉子的 source/omit，
-    #   盲審用 `tool = "not-a-table"` 一句就打穿。釘住：`test_non_table_*_is_rc2`。
+    #   + rc 1，正是本函式要收口的那個病。
+    #   釘住：`test_non_table_on_the_tool_coverage_run_path_is_rc2`。
     node: object = doc
     for key in ("tool", "coverage", "run"):
         if not isinstance(node, dict):
@@ -231,19 +192,14 @@ def tracked(repo: Path, *patterns: str) -> list[str]:
 def _omitted(path: str, omit: set[str]) -> bool:
     """coverage.py 的 ``omit`` 是 **shell-style filename pattern**，不是字面相等。
 
-    ⛔ 先前這裡寫 ``p in omit or "/vendor/" in p or "__pycache__" in p``：
-    ⑴ ``p in omit`` 對任何帶 wildcard 的 omit 都無感——實測 ``omit = ["…/gen/*.py"]``
-       之下，一個 coverage.py **根本不會量**的檔被回報成「coverage 盲點」。那是類別錯誤：
-       它不是「只被 subprocess 測到所以看不見」，它是**被刻意排除在量測之外**。
-    ⑵ 那兩個 hardcode 的 ``in`` 判斷讓這個缺陷今天看起來沒事——真 ``pyproject.toml`` 的
-       ``omit`` 有三條帶 glob（``tests/*`` / ``*/__pycache__/*`` / ``*/vendor/*``），其中兩條
-       **剛好**被那兩個字面判斷蓋掉。那是**巧合不是機制**，換一條 glob omit 就破。
-       ⇒ 一併刪除，讓覆蓋來自 ``omit`` 本身而不是兩個寫死的字串。
+    ⛔ **不能寫成 ``p in omit``**（字面相等）：對任何帶 wildcard 的 omit 都無感，於是一個
+    coverage.py **根本不會量**的檔被回報成「coverage 盲點」。那是**類別錯誤**——它不是
+    「只被 subprocess 測到所以看不見」，它是**被刻意排除在量測之外**。
+    ⛔ 也**不要**補 ``"/vendor/" in p`` 這類 hardcode 子字串來蓋住它：那讓覆蓋來自寫死的
+    字串而不是 ``omit`` 本身，換一條 glob omit 就破。
 
-    ⛔ **這裡用 stdlib ``fnmatch``，而它不等於 coverage 自己的 ``GlobMatcher``。**
-    這句話先前有兩個版本都是錯的：先是寫「``fnmatch`` 就是 coverage.py 的 shell-style
-    pattern」（過度宣稱），然後改成呼叫 ``coverage.files.GlobMatcher``（伸手進第三方
-    internals，見下）。現在寫的是實測分歧本身，**兩個方向都列**（``coverage==7.16``）：
+    ⛔ **這裡用 stdlib ``fnmatch``，而它不等於 coverage 自己的 ``GlobMatcher``**
+    （``coverage==7.16`` 實測，**兩個方向都分歧**）：
 
     ===============================  =======================  =========  ==========
     path                             pattern                  fnmatch    coverage
@@ -256,31 +212,21 @@ def _omitted(path: str, omit: set[str]) -> bool:
     ``scripts/tools/vendor/x.py``    ``*/vendor/*``           True       True
     ===============================  =======================  =========  ==========
 
-    ⛔ **兩個方向都會壞，不要只記住一邊**：``fnmatch`` 少配（上半）會把一個被 omit 的檔
-    回報成盲點（吵，但看得見）；``fnmatch`` 多配（下半，因為它的 ``*`` **跨目錄分隔符**）
-    會把一個真盲點靜默吃掉。⇒ **沒有「安全側」可以倚賴。**
+    ⛔ **兩個方向都會壞，沒有「安全側」可以倚賴**：``fnmatch`` 少配（上半）會把一個被
+    omit 的檔回報成盲點（吵，但看得見）；多配（下半，因為它的 ``*`` **跨目錄分隔符**）
+    會把一個真盲點**靜默**吃掉。
 
-    ⚠️ 那為什麼還是用 ``fnmatch``？因為**判定器的取得方式**才是這裡反覆出事的地方，
-    不是述詞本身。呼叫 ``coverage.files.GlobMatcher`` 的那一版死了兩次（實測，兩條都
-    是盲審打出來的）：⑴ ``try`` 只包住 import、沒包住兩行後的 ``.match()``，於是一條
-    coverage 自己 glob 文法不收的 omit（如 ``"***"``）丟出 ``ConfigError``——它的 MRO
-    不含 ``RuntimeError`` / ``OSError``，逃出 ``main()`` 的 catch-list ⇒ **裸 traceback
-    + rc 1**，而本檔的契約說那種情況要 rc 2；⑵ ``GlobMatcher`` 取不到時**靜默**退回
-    ``fnmatch``，兩者對 ``vendor/x.py`` 給相反答案而 stdout / stderr / JSON 全都沒有
-    訊號——直接違反本檔自己反覆寫的「量不到與量了沒事必須可區分」。
+    ⚠️ **不要改成呼叫 ``coverage.files.GlobMatcher``。** 那是伸手進第三方 internals，
+    而且它**沒有買到任何東西**——對本 repo 真實的母體與 ``omit``，兩個 matcher 排除的
+    集合完全相同（對稱差為空集合）。代價則是兩個真實的破口：``GlobMatcher(...)`` 會對
+    coverage 自己 glob 文法不收的 omit（如 ``"***"``）丟 ``ConfigError``，其 MRO 不含
+    ``RuntimeError`` / ``OSError`` ⇒ 逃出 ``main()`` 的 catch-list、**裸 traceback + rc 1**，
+    而本檔的契約說那種情況要 rc 2；而它取不到時的退路是**靜默**的，兩個 matcher 對同一個
+    路徑給相反答案卻零訊號——直接違反「量不到與量了沒事必須可區分」。
 
-    ⚠️ 而它買到的東西是 **0**：對本 repo 真實的母體與真實的 ``omit``，兩個 matcher
-    排除的集合**完全相同**（對稱差為空集合）。付兩條 HIGH 換 0 個檔的差別。
-    ⛔ **這句話不寫成數字**：母體隨每次提交而動，寫死的計數必然漂（本檔前一版就寫了
-    「249 個」，而那個數字同時是**在錯的 worktree 上量的**、而且拿的是 omit **之後**的
-    模組數當成 omit **之前**的母體）。⇒ 由
-    ``test_the_real_omit_config_stays_inside_the_matchers_agreement_region``
-    **每次執行時重算**，它紅的時候會把當下的母體大小與差集一起印出來。
-
-    ⇒ 所以換掉的是**受審主體**：這支工具不再自稱是 coverage matcher 的等價物；
-    「本 repo 的 omit 設定有沒有踩進分歧區」改由一格測試用 coverage 自己當 oracle 去
-    問，而且是在**測試裡**問、不在工具的熱路徑上問。設定哪天漂進分歧區，那格會紅並
-    指名是哪一條 pattern、哪一個檔。
+    ⇒ 這支工具**不自稱**是 coverage matcher 的等價物。「本 repo 的 omit 設定有沒有踩進
+    分歧區」改由測試用 coverage 自己當 oracle 去問，而且是在**測試裡**問、不在熱路徑上問：
+    設定哪天漂進分歧區，那格會紅並指名哪一條 pattern、哪一個檔、哪個方向。
 
     釘住：``test_wildcard_omit_is_honoured``（漏判側）、
     ``test_non_matching_omit_does_not_exclude``（誤排除側）、
@@ -299,8 +245,10 @@ def build(repo: Path) -> dict:
 
     modules: dict[str, str] = {}
     for src in sources:
-        # ⚠️ `**/` 至少要吃一層目錄 ⇒ 只給 `{src}/**/*.py` 會**漏掉該目錄的頂層檔案**。
-        # 兩個 pathspec 都給，git ls-files 會取聯集。
+        # ⚠️ `**/` 至少要吃一層目錄 ⇒ **只給 `{src}/**/*.py` 會漏掉該目錄的頂層檔案**。
+        # 兩個 pathspec 都給（git ls-files 取聯集）。⛔ 不要「精簡」成一個：哪一個是
+        # 全集取決於 git 的 pathspec 設定（預設 `*` 跨 `/`，`:(glob)` magic 則否），
+        # 而漏掉頂層那一次是**靜默**的——母體少一截，報告仍然長得正常。
         # 釘住：`test_top_level_modules_are_in_the_population` /
         #       `test_top_level_test_files_are_in_the_population`
         for p in tracked(repo, f"{src}/*.py", f"{src}/**/*.py"):
@@ -333,21 +281,15 @@ def build(repo: Path) -> dict:
                 if isinstance(node, ast.Import):
                     names = [a.name for a in node.names]
                 elif isinstance(node, ast.ImportFrom):
-                    # ⚠️ 這裡**不分 `node.level`**，而那是已知的假陰性通道，不是疏忽：
-                    #   測試只從 `tests/**` 取（住在 source root 底下的 test_*.py 實測 0 個），
-                    #   所以 `node.level > 0` 的 import 只會解析到 `tests/` 裡面，永遠指不到
-                    #   source root 的模組 ⇒ 把它的 names 算成進入點**一律是撞名**。
-                    # ⛔ 不寫「跳過 level > 0」那一版：那是同一個受審主體上的第 4 版述詞，
-                    #   而從 AST 判不出 `import X` 解析到誰（已知界線 ⑵⑶⑷⑸ 都是這件事）。
-                    #   釘住現況：test_known_limit_a_relative_import_in_tests_can_never_
-                    #   name_a_source_module。
-                    #   釘住：`test_relative_from_import_counts_as_in_process`
+                    # ⚠️ 這裡**不分 `node.level`**，而那是已知的假陰性通道（界線 ⑹），
+                    #   不是疏忽——理由與「不要再寫一版述詞」的理由都在模組 docstring。
+                    #   釘住：`test_known_limit_a_relative_import_in_tests_can_never_name_a_source_module`
+                    #   與反例 `test_a_relative_import_does_reach_a_module_when_source_is_tests`。
                     # ⛔ 不能只看 `node.module`。`from scripts.tools.ops import mytool`
                     #   的 `node.module` 末段是 `ops`，真正的模組名在 `node.names` 裡；
                     #   只看前者會讓一個**確實有 in-process 進入點**的模組被列進
-                    #   `blind_spots`（假陽性，實測）。
-                    #   釘住：`test_package_level_from_import_counts_as_in_process`
-                    #   與其反向對照 `test_from_import_of_a_non_module_name_is_not_an_entry`。
+                    #   `blind_spots`（假陽性）。
+                    #   釘住：`test_package_level_from_import_counts_as_in_process`。
                     names = ([node.module] if node.module else []) \
                         + [a.name for a in node.names]
                 for n in names:

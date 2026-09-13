@@ -21,8 +21,10 @@
 """
 from __future__ import annotations
 
+import ast
 import fnmatch
 import json
+import re
 import subprocess
 import sys
 import tomllib
@@ -69,9 +71,9 @@ def _fixture(tmp_path: Path, files: dict[str, str]) -> Path:
 def _assert_fixture_actually_runs(repo: Path, rel: str) -> None:
     """⛔ 把 fixture 的測試檔**真的跑一次**——「AST 認得這個形狀」不等於「它能執行」。
 
-    盲審打穿過一次：一格 fixture 寫了 `from . import relmod`，AST 分支處理得好好的，
-    而那個檔在 pytest 下收集期就 ImportError。docstring 宣稱它是「真的 in-process 進入點」
-    ——那是讀出來的，不是跑出來的。
+    ⚠️ 一格 fixture 可以在 AST 上長得完全正確，而在 pytest 下收集期就 ImportError
+    （`from . import x` 沒有 `__init__.py` 就是這樣）。⇒ 要主張 fixture「真的執行過」，
+    唯一的辦法是把它跑起來。
     """
     proc = subprocess.run(
         [sys.executable, "-m", "pytest", rel, "-q"],
@@ -104,13 +106,10 @@ def _assert_fixture_actually_runs(repo: Path, rel: str) -> None:
 def test_blind_spot_entries_are_well_formed(tmp_path: Path) -> None:
     """每個 `blind_spots` 條目必須是 `.py` 路徑且附上歸因的測試檔。
 
-    ⛔ 本格取代 `test_runs_on_the_real_repo_and_reports_a_list`，那格有兩個問題：
-    ⑴ 它原本斷言真樹的 `blind_spots` 非空——與工具契約矛盾（「不因為有盲點而失敗、
-       不是閘門」），而且**會懲罰成功**：這條線的目標就是消滅盲點。
-    ⑵ 拿掉那句之後，它只剩一個 `for e in data["blind_spots"]:` 迴圈，**對空清單平凡為真**
-       ⇒ 一個永遠回空報告的工具也會過（盲審實測：全空 mutation 之下 19 紅，而那格是綠的）。
-       它的 docstring 卻寫著「只斷言不變式」。
-    ⇒ 搬到**保證有條目**的合成 fixture 上，斷言才有內容。
+    ⛔ **不要把這格搬回真樹**。對真樹斷言 `blind_spots` 非空與工具契約矛盾（「不因為有
+    盲點而失敗、不是閘門」），而且**會懲罰成功**——這條線的目標就是消滅盲點。而拿掉那句
+    之後，剩下的 `for e in data["blind_spots"]:` 迴圈**對空清單平凡為真**：一個永遠回空
+    報告的工具也會過。⇒ 只在**保證有條目**的合成 fixture 上斷言。
     """
     repo = _fixture(tmp_path, {
         "scripts/tools/ops/only_sub.py": _TOOL_SRC,
@@ -133,9 +132,9 @@ def test_population_is_not_vacuous() -> None:
     ``untested`` → ``blind_spots`` → ``both``），所以這裡只放**下限**，不放快照——
     下限取得遠低於現況，但足以在枚舉壞掉時立刻紅。
 
-    ⛔ 下限擋的是「歸零」，不是「少一截」：曾經有一版枚舉只給 ``{src}/**/*.py``，
-    而 ``**/`` 至少要吃一層目錄 ⇒ ``{src}/*.py`` 整層不在母體裡，數字仍遠高於這裡
-    的下限。真正抓到它的是 ``test_top_level_modules_are_in_the_population`` 那幾格。
+    ⛔ 下限擋的是「歸零」，不是「少一截」：枚舉若只給 ``{src}/**/*.py``（``**/`` 至少要吃
+    一層目錄 ⇒ ``{src}/*.py`` 整層不在母體裡），數字仍遠高於這裡的下限。抓「少一截」的是
+    ``test_top_level_modules_are_in_the_population`` 那幾格。
     """
     data = _json(_REPO_ROOT)
     assert data["stems"] >= 150, f"模組母體只剩 {data['stems']}"
@@ -148,8 +147,8 @@ def test_population_is_not_vacuous() -> None:
 def test_classification_is_an_exact_partition() -> None:
     """四個桶互斥且窮盡——否則「重疊多少」這個問題本身就沒有答案。
 
-    ⛔ 這一格才是票真正要的東西：票問的是「78 個測試檔不等於 78 個盲點，重疊多少
-    沒人量過」。沒有 partition 保證，任何重疊數字都可能重複計數。
+    ⛔ 這一格才是票真正要的東西：票問的是「含 `sys.executable` 的測試檔數不等於盲點數，
+    重疊多少沒人量過」。沒有 partition 保證，任何重疊數字都可能重複計數。
     """
     data = _json(_REPO_ROOT)
     total = (len(data["blind_spots"]) + len(data["both"])
@@ -162,12 +161,9 @@ def test_classification_is_an_exact_partition() -> None:
 def test_overlap_is_classified_as_both_not_blind(tmp_path: Path) -> None:
     """同時有 subprocess 與 in-process 進入點的模組必須落在 `both`，不是 `blind_spots`。
 
-    ⚠️ 本格取代原本的 `test_overlap_is_the_dominant_bucket`，它斷言的是**真樹當下的
-    分布**（`len(both) > len(blind_spots)`）而不是分類邏輯，合法的樹變動就會讓它紅。
-    ⛔ 它的 docstring 還寫著「差一個數量級」——**那句是假的**：實測 `blind=31`、
-    `both=199`、含 `sys.executable` 的測試檔 `88` ⇒ **2.8×**，不是 ~10×。
-    同一句我在 CHANGELOG 已刪，卻漏了這一份——同一宣稱兩份拷貝只修了一份。
-    這裡連同那句一起刪，改為斷言**分類行為**，不寫任何倍數。
+    ⛔ **不要改成斷言真樹當下的分布**（`len(both) > len(blind_spots)` 之類）：那不是分類
+    邏輯，合法的樹變動就會讓它紅。⛔ 也**不要寫倍數**——沒有機制撐著的比例一定會漂。
+    這格斷言的是**分類行為**本身。
     """
     repo = _fixture(tmp_path, {
         "scripts/tools/ops/dual.py": _TOOL_SRC,
@@ -422,9 +418,9 @@ def test_build_partition_is_exact_in_process() -> None:
 # B2 — TOML 一律以 stdlib tomllib 為準（tomllib 當 oracle，不自己寫第二套判準）
 # ---------------------------------------------------------------------------
 _TOML_CASES = {
-    # ⛔ 每一案的**正確答案必須互不相同**。第一版全部設計成 `["scripts/tools"]`，
-    #   於是一個「完全不讀檔、永遠回傳那個硬編值」的實作五案全過——盲審實測 5 passed。
-    #   ⇒ 對照組沒有在對照它宣稱的東西。答案互異之後，任何常數實作至少會錯四案。
+    # ⛔ 每一案的**正確答案必須互不相同**：若都相同，一個「完全不讀檔、永遠回傳那個硬編
+    #   值」的實作會全過，對照組就沒有在對照它宣稱的東西。答案互異之後，任何常數實作
+    #   至少會錯 N−1 案。
     #   釘住這件事的是下面的 `test_a_constant_parser_cannot_pass_the_toml_cases`。
     "single_quoted": ("[tool.coverage.run]\nsource = ['scripts/tools/dx']\n",
                       ["scripts/tools/dx"]),
@@ -441,9 +437,9 @@ _TOML_CASES = {
     "control_plain": ('[tool.coverage.run]\n'
                       'source = ["scripts/tools/dx", "scripts/tools/lint"]\n',
                       ["scripts/tools/dx", "scripts/tools/lint"]),
-    # ⛔ 第六案專門殺「取全檔**最後一個** source = [...]」那種 context-blind 啟發式。
-    #   盲審指出：前五案全部把真答案放在檔案較後面，於是一個完全不看 table 歸屬、
-    #   只取最後一個 match 的 regex **五案全過**（實測）。這一案把誘餌放在**後面**。
+    # ⛔ 這一案專門殺「取全檔**最後一個** source = [...]」那種 context-blind 啟發式：
+    #   其餘各案都把真答案放在檔案較後面，於是一個完全不看 table 歸屬、只取最後一個
+    #   match 的 regex 會全過。這一案把誘餌放在**後面**，所以它一定要留著。
     "decoy_source_after_the_real_block": ('[tool.coverage.run]\n'
                                           'source = ["scripts/tools/lint", "scripts/tools/ops"]\n\n'
                                           '[tool.something_else]\n'
@@ -482,9 +478,8 @@ def test_toml_parsing_matches_tomllib(tmp_path: Path, case: str) -> None:
 def test_a_constant_parser_cannot_pass_the_toml_cases() -> None:
     """⛔ 上面那組案例的**期望值必須互不相同**，否則對照組不成立。
 
-    盲審實測打穿過第一版：五案的答案全是 ``["scripts/tools"]``，於是一個完全不讀檔、
-    永遠回傳那個常數的實作**五案全過**。這一格是那個教訓的機械化——它不驗工具，
-    它驗**測試資料本身還有沒有鑑別力**。
+    ⛔ 這一格**不驗工具，它驗測試資料本身還有沒有鑑別力**：若各案的正確答案彼此相同，
+    一個完全不讀檔、永遠回傳那個常數的實作就會全過。
 
     ⛔ **精確地說，它擋的只有「常數」這一類**，不要讀成「擋掉所有退化實作」。
     第二次盲審就示範了一個**非常數**但一樣不看 TOML 結構的退化實作——「取全檔
@@ -539,8 +534,8 @@ def test_non_table_on_the_tool_coverage_run_path_is_rc2(
 
     `doc.get("tool", {}).get("coverage", {}).get("run", {})` 這種鏈式寫法，在路徑上任何
     一層是純量時會丟 `AttributeError`——那是 `ValueError`／`OSError` 之外的第三種，
-    呼叫端的 `except` 攔不到 ⇒ 裸 traceback + rc 1。⚠️ 第一版只守了葉子的
-    `source`/`omit` 形狀，盲審用 `tool = "not-a-table"` 一句就打穿。
+    呼叫端的 `except` 攔不到 ⇒ 裸 traceback + rc 1。⚠️ **只守葉子的 `source`/`omit` 形狀
+    不夠**：`tool = "not-a-table"` 一句就從上層打穿。
     """
     repo = _fixture(tmp_path, {"scripts/tools/only.py": "x = 1\n",
                                "tests/test_any.py": "def test_x():\n    assert True\n"})
@@ -658,9 +653,9 @@ def test_indirectly_built_paths_are_a_false_negative(tmp_path: Path) -> None:
 def test_known_limit_a_third_party_import_also_shadows_a_project_stem(
     tmp_path: Path,
 ) -> None:
-    """docstring 寫的是「stdlib **或**第三方套件」，但原本只有 stdlib 那半有測試。
+    """界線 ⑵ 寫的是「stdlib **或**第三方套件」，兩半各要有一格。
 
-    ⚠️ 盲審指出：只釘一種形狀，等於讓另一種形狀的宣稱沒有機制背書。
+    ⚠️ 只釘一種形狀，等於讓另一種形狀的宣稱沒有機制背書。
     """
     repo = _fixture(tmp_path, {
         "scripts/tools/ops/pytest.py": "def main(): return 0\n",
@@ -747,7 +742,7 @@ def test_package_level_from_import_counts_as_in_process(tmp_path: Path) -> None:
 def test_known_limit_a_from_imported_symbol_shadows_a_module_stem(
     tmp_path: Path,
 ) -> None:
-    """⛔ 修 `ImportFrom` 的假陽性換來一個新的假陰性——這格釘住它，不假裝它不存在。
+    """⛔ 這是修 `ImportFrom` 假陽性**換來**的假陰性（界線 ⑶），不是可以順手修掉的東西。
 
     從 AST 看不出 `from pkg import name` 的 `name` 是**模組**還是**符號**（函式／類別／
     常數），要分辨得解析 pkg 本身。⇒ 為了讓 `from scripts.tools.ops import mytool` 算成
@@ -776,33 +771,19 @@ def test_known_limit_a_from_imported_symbol_shadows_a_module_stem(
 def test_known_limit_a_relative_import_in_tests_can_never_name_a_source_module(
     tmp_path: Path,
 ) -> None:
-    """⛔ 這格取代 `test_relative_from_import_counts_as_in_process`，因為那格的前提是錯的。
+    """⛔ `from . import x` 在**本 repo 的設定下**不是指向專案模組的 in-process 進入點。
 
-    那格的 docstring 說 `from . import relmod` 「是真的 in-process 進入點」。⛔ **不是。**
-    兩個實測把它打死：
+    相對 import 的錨是**測試自己的 package**：`from . import relmod` 指到的是
+    `tests/relmod.py`，不是 `scripts/tools/ops/relmod.py`。而本 repo 的 source root 與
+    `tests/` 不相交，所以工具把 `node.names` 算成該 stem 的進入點**是撞名**（界線 ⑶ 的同一
+    個機制），方向是**靜默假陰性**：真盲點被吃掉、報告上不留痕跡。
 
-    ⑴ 它**根本跑不起來**：fixture 的 `tests/` 沒有 `__init__.py`，pytest 收集期就
-       `ImportError: attempted relative import with no known parent package`（rc 2）。
-    ⑵ 補上 `__init__.py` 讓它跑得起來之後，它 import 到的是 **`tests/relmod.py`**
-       ——那個相對 import 的錨是**測試自己的 package**，不是 source root。
-
-    ⛔ 而這是**結構性**的，不是 fixture 寫壞：`build()` 只從 `tests/**` 底下取 `test_*.py`
-    當測試（實測：本 repo 住在 source root 底下的 `test_*.py` 共 **0 個**），所以測試檔裡
-    任何 `node.level > 0` 的 import 都只能解析到 `tests/` 裡面，**永遠不可能**指到
-    `scripts/tools` 或 `components/da-tools/app` 底下的模組。
-
-    ⇒ 工具把它的 `node.names` 當成該 stem 的 in-process 進入點，**一律是撞名**（已知界線
-    ⑶ 的同一個機制），沒有真陽性可言。方向是**靜默假陰性**：真盲點被吃掉、報告上不留痕跡。
-
-    ⚠️ 那為什麼不直接改述詞（跳過 `level > 0`）？因為那會是同一個受審主體上的第 4 版述詞，
-    而 `vibe-converge` 的 `CHANGE-SUBJECT` 禁止第 3 版之後再寫下一版。決策性的理由是
-    decidability：從 AST 看，`import X` 到底解析到專案模組還是同名的 stdlib／測試 helper
-    **本來就判不出來**（已知界線 ⑵⑶⑷⑸ 全都是這一件事的實例）。要真的修，得換到有權威
-    oracle 的那一面（import 系統本身／coverage 自己的量測），那是另一張票的範圍。
-    ⇒ 本輪**砍掉過度宣稱的散文、把現況釘住**，不寫第 4 版述詞。
-
-    ⚠️ 今天本 repo 的 `tests/` 底下有 **0 個 `__init__.py`**、**0 個真的 relative import**，
-    所以這條界線是預備性的——它守的是「哪天有人這樣寫，報告會靜默少一筆」這件事被記得。
+    ⛔ **不要改成跳過 `level > 0`**：理由（decidability，以及「不要再寫一版述詞」）寫在
+    工具的模組 docstring，不在這裡複述。
+    ⚠️ 這條界線目前是**預備性**的：本 repo 的 `tests/` 底下沒有 `__init__.py`，也沒有真的
+    relative import。它守的是「哪天有人這樣寫，報告會靜默少一筆」這件事被記得。
+    ⚠️ 前提是 source root 與 `tests/` 不相交——那**不是**結構定理，下面有斷言，反例釘在
+    `test_a_relative_import_does_reach_a_module_when_source_is_tests`。
     """
     repo = _fixture(tmp_path, {
         # 專案模組：只被 subprocess 測到 ⇒ 本該是盲點
@@ -820,12 +801,12 @@ def test_known_limit_a_relative_import_in_tests_can_never_name_a_source_module(
             '    subprocess.run([sys.executable, "scripts/tools/ops/relmod.py"])\n'
             '    subprocess.run([sys.executable, "scripts/tools/ops/control.py"])\n',
     })
-    # ⛔ 先證明這個 fixture 真的跑得起來——上一版就是敗在「AST 認得」不等於「能執行」
+    # ⛔ 先證明這個 fixture 真的跑得起來：「AST 認得」不等於「能執行」
     _assert_fixture_actually_runs(repo, "tests/test_rel.py")
 
     # ⛔ 這格成立的**前提**是 source root 與 tests/ 不相交，把它變成斷言而不是假設：
-    #    盲審打穿過「永遠指不到」這個說法——`source = ["tests"]` 時相對 import 真的指得到
-    #    （反例釘在 test_a_relative_import_does_reach_a_module_when_source_is_tests）。
+    #    `source = ["tests"]` 時相對 import 真的指得到（反例釘在
+    #    test_a_relative_import_does_reach_a_module_when_source_is_tests）。
     fixture_sources = tomllib.loads(
         (repo / "pyproject.toml").read_text(encoding="utf-8")
     )["tool"]["coverage"]["run"]["source"]
@@ -894,18 +875,15 @@ def test_known_limit_ast_walk_ignores_reachability(tmp_path: Path) -> None:
 def test_the_real_omit_config_stays_inside_the_matchers_agreement_region() -> None:
     """⛔ 本檔的 `_omitted` 用 stdlib `fnmatch`，它**不等於** coverage 自己的 `GlobMatcher`。
 
-    ⚠️ 受審主體換過：先前這格叫 `test_omit_matching_uses_coverages_own_matcher`，斷言工具
-    走的是 `GlobMatcher`。那條路死了兩次（`ConfigError` 逃出 `main()` 的 catch-list ⇒ rc 1
-    而非契約要求的 rc 2；`GlobMatcher` 取不到時**靜默**退回 `fnmatch`），而它在本 repo 買到
-    的差異實測是 **0 個檔**。⇒ 工具不再自稱是 coverage matcher 的等價物；**這格改問設定**：
-    本 repo 真實的 `omit` × 真實的檔案清單，兩個 matcher 排除的集合是否相同。
+    ⛔ 這格問的是**設定**，不是工具走哪個 matcher：本 repo 真實的 `omit` × 真實的檔案清單，
+    兩個 matcher 排除的集合是否相同。（工具為什麼不呼叫 `GlobMatcher`，理由在 `_omitted`
+    的 docstring。）
 
     ⛔ 這格紅了**不代表工具壞了**，代表設定漂進了分歧區，要人看一眼決定怎麼辦——
     失敗訊息會指名是哪一個檔、哪一條 pattern、以及分歧往哪個方向。
 
-    ⚠️ 另一個舊問題：那格的 oracle 只有 `rc == 2` 加一個泛用字串「母體是空的」，於是
-    **任何**把母體清空的原因都讓它綠（實測：把 `_omitted` 改成無條件 `return True`，該格
-    仍 1 passed）。這格的斷言直接比對兩個集合並印出差集，沒有那條退路。
+    ⛔ **oracle 不能只是 `rc == 2` 加一句泛用錯誤字串**：那樣任何把母體清空的原因都讓它綠
+    （`_omitted` 無條件 `return True` 也會過）。這格直接比對兩個集合並印出差集。
     """
     glob_matcher = pytest.importorskip(
         "coverage.files", reason="沒有 coverage 就量不到分歧——這是 skip 不是 pass"
@@ -917,7 +895,7 @@ def test_the_real_omit_config_stays_inside_the_matchers_agreement_region() -> No
     assert omit, "本 repo 的 omit 是空的 ⇒ 這格什麼都沒量到，要嘛設定變了要嘛路徑寫錯"
 
     # ⛔ 用**工具自己的** `tracked()` 取母體，不要自己再拼一次 `git ls-files`。
-    #    盲審打穿過：自拼的版本用 `.split()` 切 stdout，而 `tracked()` 用 `-z` + NUL 切。
+    #    自拼的版本會用 `.split()` 切 stdout，而 `tracked()` 用 `-z` + NUL 切。
     #    今天兩者答案相同（source root 底下沒有帶空白的檔名），但那是**巧合不是機制**——
     #    哪天有一個，自拼版會把一個路徑切成好幾個假檔名，守衛守的母體就與工具的悄悄分家。
     files: list[str] = []
@@ -952,7 +930,7 @@ def test_known_limit_fnmatch_diverges_from_coverage_in_both_directions() -> None
 
     ⚠️ 只釘一個方向會讓讀者以為這把儀器只往一邊壞。實測兩邊都會：`fnmatch` 的 `*`
     **跨目錄分隔符**（多配 ⇒ 靜默吃掉真盲點），而它不認 coverage 的 `**`（少配 ⇒ 吵）。
-    ⛔ 所以**沒有「安全側」可以倚賴**——上一版的註解暗示過有，那是錯的。
+    ⛔ **沒有「安全側」可以倚賴。**
     """
     glob_matcher = pytest.importorskip(
         "coverage.files", reason="沒有 coverage 就量不到分歧——這是 skip 不是 pass"
@@ -988,9 +966,9 @@ def test_known_limit_a_function_body_import_also_counts_as_an_entry_point(
 ) -> None:
     """⛔ 已知界線 ⑷ 的**另一半**：函式內的 import 也被算成 in-process 進入點。
 
-    ⚠️ 先前只有 `test_known_limit_ast_walk_ignores_reachability` 釘住 `if TYPE_CHECKING:`
-    那一半，而工具 docstring 卻寫「這四條各有一格釘住」——⑷ 的函式內 import 那一半屬實
-    但沒有任何測試守著，可以靜默回歸。這格補上。
+    ⚠️ 界線 ⑷ 有**兩半**：`if TYPE_CHECKING:`（釘在
+    `test_known_limit_ast_walk_ignores_reachability`）與函式 body 內的 import（這格）。
+    只釘一半，另一半可以靜默回歸。
 
     `never_called()` 從來沒被呼叫，`import neverfunc` 執行期永遠不跑，但 `ast.walk` 看得到。
     """
@@ -1021,10 +999,9 @@ def test_known_limit_future_annotations_shadows_a_module_named_annotations(
 ) -> None:
     """⛔ 已知界線 ⑸：`from __future__ import annotations` 遮蔽 `annotations.py`。
 
-    ⚠️ 機制與 ⑵ / ⑶ 相同（from-import 的 name 撞上模組 stem），但**普遍得多**——它是本
-    repo 幾乎每個測試檔的第一行（實測 283 / 366），不是「剛好 import 到同名套件」。
-    ⛔ 這條先前沒被列進已知界線，讓那份清單看起來比實際完整；**不是本輪新增的行為**
-    （`node.module` 本來就是 `'__future__'`，移除 `and node.module` guard 之前就這樣）。
+    ⚠️ 機制與 ⑵ / ⑶ 相同（from-import 的 name 撞上模組 stem），但**普遍得多**——它是多數
+    測試檔的第一行，不是「剛好 import 到同名套件」。⛔ **這裡不寫比例**：下面的斷言對當下
+    的母體重算，紅的時候會印出實際值。
     """
     repo = _fixture(tmp_path, {
         "scripts/tools/ops/annotations.py": _TOOL_SRC,
@@ -1044,9 +1021,8 @@ def test_known_limit_future_annotations_shadows_a_module_named_annotations(
         "⚠️ 對照組：沒被遮到的那個必須留在 blind_spots，否則量到的是母體塌了"
     )
 
-    # ⛔ 「普遍得多」這句話在 docstring 裡**沒有數字**（寫死的計數必然漂，而前一版那組
-    #    283/366 是在錯的 worktree、又用了漏掉頂層的 pathspec 量出來的）。改在這裡對
-    #    **當下**的母體重算，紅的時候把實際比例印出來——這才是那句話的機制。
+    # ⛔ 「普遍得多」那句話的**機制就在這裡**：對當下的母體重算，不寫死任何比例。
+    #    母體用工具自己的 `tracked()` + 同一個 `test_*` 濾法，與 `build()` 掃的完全一致。
     scanned = [
         t for t in _mod.tracked(_REPO_ROOT, "tests/*.py", "tests/**/*.py")
         if Path(t).name.startswith("test_")
@@ -1066,9 +1042,8 @@ def test_known_limit_future_annotations_shadows_a_module_named_annotations(
 def test_a_relative_import_does_reach_a_module_when_source_is_tests(tmp_path: Path) -> None:
     """⚠️ 反例：`source = ["tests"]` 時，測試檔的相對 import **真的**指到 source root 的模組。
 
-    ⛔ 這格是為了不讓上一格的散文變成假的結構定理。前一版寫「測試檔裡的相對 import
-    **永遠**指不到 source root 的模組」——盲審用這個形狀打穿了：`tests/sibling.py` 同時是
-    測試自己的 package 成員**與**一個 source root 底下的模組，工具把它算進 `both` 完全正確。
+    ⛔ 這格是為了不讓上一格的界線被讀成結構定理。`tests/sibling.py` 同時是測試自己的
+    package 成員**與**一個 source root 底下的模組，工具把它算進 `both` 完全正確。
 
     成因讀 `build()` 就看得到：測試的 pathspec 是**寫死**的 `tests/*.py` / `tests/**/*.py`，
     與 `source` 互不參照 ⇒ 沒有任何東西保證兩者不相交。⇒ ⑹ 是**設定的性質**，不是定理。
@@ -1131,4 +1106,108 @@ def test_tracked_survives_a_filename_with_whitespace(tmp_path: Path) -> None:
     naive = raw.split()
     assert naive != got, "對照組失效：`.split()` 給出了和 `tracked()` 相同的答案，這格沒鑑別力"
     assert len(naive) == 2, f"預期 `.split()` 把一個路徑切成兩段，實得 {naive!r}"
+
+
+# ---------------------------------------------------------------------------
+# 散文本身的守衛 —— ⛔ 這兩個檔的 docstring／註解不得夾帶沒有機制撐著的東西
+# ---------------------------------------------------------------------------
+# ⛔ 為什麼這裡需要一支守衛，而 #1457 才剛砍掉一批「守衛的守衛」：因為同一個病在這條線上
+#   **實際發生過三次**（同一組比例寫錯兩次、母體數寫錯一次，其中一次還是在錯的 worktree
+#   上量的），而且每次都是**靜默**的——一個過期的數字與一個正確的數字在版面上長得一樣。
+#   範圍也只有這兩個檔，不是全 repo。
+_PROSE_FILES = (
+    _TOOL,
+    Path(__file__).resolve(),
+)
+# 允許留在散文裡的數字：穩定識別碼，不是會漂的量測值。
+_ALLOWED_NUMBERS = {"1746", "1830", "379", "1457"}
+
+
+def _prose_of(path: Path) -> list[tuple[str, int, str]]:
+    """回傳 [(kind, lineno, text)] —— 只有 docstring 與註解，**不含字串字面**。
+
+    ⛔ 用 `ast` 取 docstring、`tokenize` 取註解。用 regex 掃原始碼會把 fixture 裡的
+    程式碼字串一起掃進來（那裡面滿是 `test_*.py` 檔名與數字），整個守衛就變成雜訊。
+    """
+    import io
+    import tokenize
+
+    src = path.read_text(encoding="utf-8")
+    out: list[tuple[str, int, str]] = []
+    for node in ast.walk(ast.parse(src)):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            doc = ast.get_docstring(node, clean=False)
+            if doc:
+                out.append(("docstring", getattr(node, "lineno", 1), doc))
+    buf: list[str] = []
+    start = prev = None
+    for tok in tokenize.generate_tokens(io.StringIO(src).readline):
+        if tok.type == tokenize.COMMENT:
+            ln = tok.start[0]
+            if prev is not None and ln != prev + 1:
+                out.append(("comment", start or ln, "\n".join(buf)))
+                buf, start = [], None
+            if start is None:
+                start = ln
+            buf.append(tok.string.lstrip("#").strip())
+            prev = ln
+    if buf:
+        out.append(("comment", start or 1, "\n".join(buf)))
+    return out
+
+
+def _unwrapped(text: str) -> str:
+    """區塊內把換行接掉——識別字被折行時仍然找得到。"""
+    return re.sub(r"[ \t]*\n[ \t]*", "", text)
+
+
+def test_prose_names_no_test_that_does_not_exist() -> None:
+    """⛔ 散文裡「釘住：`test_x`」指到的每一格都必須真的存在。
+
+    死掉的指標比沒有指標更糟：它讓讀者以為那個宣稱有機制背書。改名或刪測試時**很容易**
+    漏掉散文裡的引用（本檔就漏過），而那是靜默的。
+    """
+    defined: set[str] = set()
+    for f in _PROSE_FILES:
+        defined |= {
+            n.name
+            for n in ast.walk(ast.parse(f.read_text(encoding="utf-8")))
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+
+    dangling: list[str] = []
+    for f in _PROSE_FILES:
+        for _kind, ln, text in _prose_of(f):
+            for name in set(re.findall(r"\btest_[a-z0-9_]{4,}\b", _unwrapped(text))):
+                if name not in defined:
+                    dangling.append(f"{f.name}:{ln} → {name}")
+    assert not dangling, (
+        "散文指到不存在的測試：\n  " + "\n  ".join(sorted(dangling))
+        + "\n⇒ 改名就把引用一起改，刪掉就把那句話一起刪。"
+    )
+
+
+def test_prose_carries_no_unmechanised_repo_measurement() -> None:
+    """⛔ 這兩個檔的散文裡不得出現沒有機制撐著的 repo 量測數字。
+
+    ⚠️ 白名單只放**穩定識別碼**（issue／PR／TRK 號）。任何母體大小、比例、命中數都不准
+    寫死——母體就是這棵樹，寫死的計數必然漂，而漂掉的數字與正確的數字在版面上長得一樣。
+    要講量級就寫**關係**（「多數」「遠多於」），並在測試裡對當下的母體重算，例如
+    `test_known_limit_future_annotations_shadows_a_module_named_annotations` 與
+    `test_the_real_omit_config_stays_inside_the_matchers_agreement_region`。
+    """
+    offenders: list[str] = []
+    for f in _PROSE_FILES:
+        for _kind, ln, text in _prose_of(f):
+            j = _unwrapped(text)
+            for mo in re.finditer(r"(?<![\w.\-/])\d{2,}(?![\w.])", j):
+                if mo.group() in _ALLOWED_NUMBERS:
+                    continue
+                offenders.append(
+                    f"{f.name}:{ln} → {mo.group()}  …{j[max(0, mo.start() - 45):mo.end() + 35]}…"
+                )
+    assert not offenders, (
+        "散文裡有沒登錄的數字：\n  " + "\n  ".join(offenders)
+        + "\n⇒ 砍掉它、改寫成關係、或（若真的是穩定識別碼）加進 _ALLOWED_NUMBERS。"
+    )
 
