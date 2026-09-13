@@ -79,11 +79,33 @@ Why this exists
 接受符號撞名。兩個方向都會錯，這裡選了 CodeRabbit 實際報出來的那一側。
 ⑷ in-process 的判定走 `ast.walk`，它**不看可達性**：
 `if TYPE_CHECKING:` 之下的 import（執行期永遠不跑）與函式內的 import（該函式可能從未被
-呼叫）都會被算成進入點（實測：只有 `if TYPE_CHECKING: import nevercalled` 的測試檔，
-讓該模組從 `blind_spots` 移到 `both`）。⚠️ 只修 `TYPE_CHECKING` 這一種會給出**部分覆蓋
-與虛假的安全感**——函式內 import 同構且無法從 AST 判定 ⇒ 整條列為已知界線。
+呼叫）都會被算成進入點。兩半各有一次實測：只有 `if TYPE_CHECKING: import nevercalled`
+的測試檔，讓該模組從 `blind_spots` 移到 `both`；另一格只在一個**從未被呼叫**的函式 body
+裡 `import neverfunc`，同樣讓它落到 `both`，而同 fixture 的對照模組留在 `blind_spots`。
+⚠️ 只修 `TYPE_CHECKING` 這一種會給出**部分覆蓋與虛假的安全感**——函式內 import 同構
+且無法從 AST 判定 ⇒ 整條列為已知界線。
+⑸ `from __future__ import annotations` 會讓專案裡任何名為 `annotations.py` 的模組
+**永久**被遮蔽（`node.names` 帶 `annotations`，撞上該模組的 stem）。⚠️ 機制與 ⑵ / ⑶ 相同，
+但**普遍得多**：本 repo `tests/**/*.py` 帶這行的有 **283 / 366** 個檔——它不是某個測試
+「剛好 import 到同名套件」，而是幾乎每個測試檔的第一行。實測：fixture 只放這行＋一個
+subprocess 呼叫，`annotations` 就從 `blind_spots` 落到 `both`，對照模組不受影響。
+⚠️ ⑸ **不是本輪新增的行為**：`node.module` 本來就是 `'__future__'`（truthy），移除
+`and node.module` guard 之前它就已經這樣。它先前沒被列出來，讓這份清單看起來比實際完整。
 
-這四條**本輪未修**，各有一格 `test_known_limit_*` 釘住現況。
+⑹ 測試檔裡的**相對** import（`node.level > 0`，如 `from . import x` / `from .. import y`）
+**永遠指不到 source root 的模組**——它的錨是 `tests/` 這個 package，而 `build()` 只從
+`tests/**` 取測試（實測：住在 source root 底下的 `test_*.py` 共 0 個）。⇒ 把它的 `node.names`
+算成進入點**一律是撞名**，方向是**靜默假陰性**（真盲點被吃掉、報告不留痕跡）。
+⛔ 先前這裡的註解寫「`from . import mytool` 是真的 in-process 進入點所以不能加
+`and node.module` guard」——**那句話是錯的**，而且它的測試 fixture 在 pytest 下根本跑不起來
+（收集期 `attempted relative import with no known parent package`）。補上 `__init__.py` 讓它
+跑得起來之後，它 import 到的是 `tests/x.py`，不是專案模組。
+⚠️ 那為什麼不改成跳過 `level > 0`？因為那會是同一個受審主體上的**第 4 版述詞**，而根本
+問題是 decidability——從 AST 看不出 `import X` 解析到誰（⑵⑶⑷⑸⑹ 全是這一件事）。要真的修
+得換到有權威 oracle 的那一面（import 系統／coverage 自己的量測），那是另一張票。
+⚠️ 今天本 repo `tests/` 底下 0 個 `__init__.py`、0 個真的 relative import ⇒ 這條是預備性的。
+這六條**本輪未修**，⑷ 的兩半算兩條，**各有一格 `test_known_limit_*` 釘住現況**。
+⛔ 先前這裡寫「這四條各有一格釘住」，而 ⑷ 只釘了 `TYPE_CHECKING` 那一半——那是過度宣稱。
 
 Usage
 -----
@@ -206,37 +228,52 @@ def _omitted(path: str, omit: set[str]) -> bool:
        **剛好**被那兩個字面判斷蓋掉。那是**巧合不是機制**，換一條 glob omit 就破。
        ⇒ 一併刪除，讓覆蓋來自 ``omit`` 本身而不是兩個寫死的字串。
 
-    ⛔ **權威 oracle 是 coverage 自己的 ``GlobMatcher``，不是 ``fnmatch``。**
-    先前這裡寫 ``fnmatch``，並在註解裡說那就是「coverage.py 的 shell-style pattern」——
-    **那是過度宣稱**，兩者實測分歧（`coverage==7.16` 對照）：
+    ⛔ **這裡用 stdlib ``fnmatch``，而它不等於 coverage 自己的 ``GlobMatcher``。**
+    這句話先前有兩個版本都是錯的：先是寫「``fnmatch`` 就是 coverage.py 的 shell-style
+    pattern」（過度宣稱），然後改成呼叫 ``coverage.files.GlobMatcher``（伸手進第三方
+    internals，見下）。現在寫的是實測分歧本身，**兩個方向都列**（``coverage==7.16``）：
 
-    ==============================  ====================  =========  ==========
-    path                            pattern               fnmatch    coverage
-    ==============================  ====================  =========  ==========
-    ``a/c.py``                      ``a/**/c.py``         False      **True**
-    ``vendor/x.py``                 ``*/vendor/*``        False      **True**
-    ``__pycache__/x.py``            ``*/__pycache__/*``   False      **True**
-    ``scripts/tools/vendor/x.py``   ``*/vendor/*``        True       True
-    ==============================  ====================  =========  ==========
+    ===============================  =======================  =========  ==========
+    path                             pattern                  fnmatch    coverage
+    ===============================  =======================  =========  ==========
+    ``a/c.py``                       ``a/**/c.py``            False      **True**
+    ``vendor/x.py``                  ``*/vendor/*``           False      **True**
+    ``__pycache__/x.py``             ``*/__pycache__/*``      False      **True**
+    ``a/b/d/c.py``                   ``a/*/c.py``             **True**   False
+    ``scripts/tools/gen/d/x.py``     ``scripts/tools/*/x.py`` **True**   False
+    ``scripts/tools/vendor/x.py``    ``*/vendor/*``           True       True
+    ===============================  =======================  =========  ==========
 
-    ⚠️ 那些分歧對本 repo **今天**是惰性的（兩個 source root 都是多段路徑，所以
-    ``vendor`` / ``__pycache__`` 一定帶前綴 ``/``，兩個 matcher 同意）——但那是
-    **設定的巧合**，不是述詞的性質。⇒ 直接用 coverage 的 matcher，`fnmatch` 只當
-    coverage 沒安裝時的退路，並在該處寫明它不等價。
+    ⛔ **兩個方向都會壞，不要只記住一邊**：``fnmatch`` 少配（上半）會把一個被 omit 的檔
+    回報成盲點（吵，但看得見）；``fnmatch`` 多配（下半，因為它的 ``*`` **跨目錄分隔符**）
+    會把一個真盲點靜默吃掉。⇒ **沒有「安全側」可以倚賴。**
 
-    釘住：``test_wildcard_omit_is_honoured``（漏判側）與
-    ``test_non_matching_omit_does_not_exclude``（誤排除側）。
+    ⚠️ 那為什麼還是用 ``fnmatch``？因為**判定器的取得方式**才是這裡反覆出事的地方，
+    不是述詞本身。呼叫 ``coverage.files.GlobMatcher`` 的那一版死了兩次（實測，兩條都
+    是盲審打出來的）：⑴ ``try`` 只包住 import、沒包住兩行後的 ``.match()``，於是一條
+    coverage 自己 glob 文法不收的 omit（如 ``"***"``）丟出 ``ConfigError``——它的 MRO
+    不含 ``RuntimeError`` / ``OSError``，逃出 ``main()`` 的 catch-list ⇒ **裸 traceback
+    + rc 1**，而本檔的契約說那種情況要 rc 2；⑵ ``GlobMatcher`` 取不到時**靜默**退回
+    ``fnmatch``，兩者對 ``vendor/x.py`` 給相反答案而 stdout / stderr / JSON 全都沒有
+    訊號——直接違反本檔自己反覆寫的「量不到與量了沒事必須可區分」。
+
+    ⚠️ 而它買到的東西實測是 **0**：本 repo 249 個 source 範圍內的 ``.py``、真
+    ``omit`` 四條，兩個 matcher 排除的集合**完全相同**（都只有
+    ``scripts/tools/validate_all.py``，對稱差為空集合）。付兩條 HIGH 換 0 個檔的差別。
+
+    ⇒ 所以換掉的是**受審主體**：這支工具不再自稱是 coverage matcher 的等價物；
+    「本 repo 的 omit 設定有沒有踩進分歧區」改由一格測試用 coverage 自己當 oracle 去
+    問，而且是在**測試裡**問、不在工具的熱路徑上問。設定哪天漂進分歧區，那格會紅並
+    指名是哪一條 pattern、哪一個檔。
+
+    釘住：``test_wildcard_omit_is_honoured``（漏判側）、
+    ``test_non_matching_omit_does_not_exclude``（誤排除側）、
+    ``test_the_real_omit_config_stays_inside_the_matchers_agreement_region``（分歧區守衛）、
+    ``test_known_limit_fnmatch_diverges_from_coverage_in_both_directions``（兩個方向的現況）。
     """
     if not omit:
         return False
-    try:
-        from coverage.files import GlobMatcher  # type: ignore[import-not-found]
-    except Exception:
-        # ⚠️ 退路，**不等價**：`fnmatch` 不認 coverage 的 `**`（跨目錄），也不把
-        #    `*/vendor/*` 配到頂層的 `vendor/x.py`。實測分歧見下方 docstring。
-        #    這條路只在 coverage 沒安裝時走；本 repo 的 CI 一定裝得到（pytest-cov）。
-        return any(fnmatch.fnmatch(path, pat) for pat in omit)
-    return bool(GlobMatcher(list(omit), "omit").match(path))
+    return any(fnmatch.fnmatch(path, pat) for pat in omit)
 
 
 def build(repo: Path) -> dict:
@@ -280,10 +317,14 @@ def build(repo: Path) -> dict:
                 if isinstance(node, ast.Import):
                     names = [a.name for a in node.names]
                 elif isinstance(node, ast.ImportFrom):
-                    # ⛔ 不能加 `and node.module`：`from . import mytool` 的 node.module
-                    #   是 None，那個 guard 會讓整個分支跳過，`node.names` 一次都不讀——
-                    #   而讀 names 正是這個分支存在的理由。實測：修前
-                    #   `from . import mytool` 仍讓該模組留在 blind_spots。
+                    # ⚠️ 這裡**不分 `node.level`**，而那是已知的假陰性通道，不是疏忽：
+                    #   測試只從 `tests/**` 取（住在 source root 底下的 test_*.py 實測 0 個），
+                    #   所以 `node.level > 0` 的 import 只會解析到 `tests/` 裡面，永遠指不到
+                    #   source root 的模組 ⇒ 把它的 names 算成進入點**一律是撞名**。
+                    # ⛔ 不寫「跳過 level > 0」那一版：那是同一個受審主體上的第 4 版述詞，
+                    #   而從 AST 判不出 `import X` 解析到誰（已知界線 ⑵⑶⑷⑸ 都是這件事）。
+                    #   釘住現況：test_known_limit_a_relative_import_in_tests_can_never_
+                    #   name_a_source_module。
                     #   釘住：`test_relative_from_import_counts_as_in_process`
                     # ⛔ 不能只看 `node.module`。`from scripts.tools.ops import mytool`
                     #   的 `node.module` 末段是 `ops`，真正的模組名在 `node.names` 裡；
