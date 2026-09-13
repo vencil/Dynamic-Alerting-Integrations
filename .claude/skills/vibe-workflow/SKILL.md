@@ -48,7 +48,7 @@ Hook 設定見 [`.claude/settings.json`](../../../.claude/settings.json)。完�
 3. **Benchmark**（效能相關變更）：完整 benchmark（idle + routing + Go micro-bench）→ 記錄到 CHANGELOG + architecture docs
 4. **文件同步**：`make version-check`（= `bump_docs.py --check` + `--sync-counts --check`）→ 只**檢查**版號與計數，不改檔；要更新計數跑 `python3 scripts/tools/dx/bump_docs.py --sync-counts`（⚠️ `make bump-docs` 是**版號** bump，吃 `PLATFORM=` 等變數，不做計數）。⚠️ 沒有任何 pre-commit hook 跑 bump_docs，Doc-as-Code #4 靠自覺 + `make pre-tag`
 5. **Commit**：`git commit`（或 FUSE 卡住時 `make win-commit`）→ pre-commit hooks 自動執行品質檢查
-6. **PR 收尾**：`make pr-preflight`（七項檢查 + 寫 `.git/.preflight-ok.<SHA>` marker）→ `gh pr create`
+6. **PR 收尾**：`make pr-preflight`（寫 `.git/.preflight-ok.<SHA>` marker）→ `gh pr create`
 7. **Lesson Learned**：遇到新陷阱回寫對應 Playbook + 更新 `vibe-workflow` 或 `vibe-playbook-nav` skill
 
 ## 使用法

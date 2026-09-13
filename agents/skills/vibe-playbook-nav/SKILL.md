@@ -25,7 +25,7 @@ Vibe 專案有五份 Playbook（`docs/internal/*-playbook.md`），每份數千�
 | 版號管理 / bump | github-release-playbook §版號驗證 + §da-tools 獨立 Release | — | — |
 | FUSE 卡死需 Windows 逃生門 | windows-mcp-playbook §修復層 C + §Git 操作決策樹 | — | FUSE 正常運作時不需讀 |
 | **git commit / push** | **不需讀 Playbook** | — | ✅ FUSE 正常時直接操作；卡住才查逃生門 |
-| **PR merge 前收尾** | **不需讀 Playbook** | — | ✅ `make pr-preflight` 自動七項檢查 |
+| **PR merge 前收尾** | **不需讀 Playbook** | — | ✅ `make pr-preflight` 自動檢查 |
 
 ## Playbook 索引
 
