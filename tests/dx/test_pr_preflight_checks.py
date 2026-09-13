@@ -252,16 +252,16 @@ class TestCheckLocalHooks:
         self._assume_installed(monkeypatch, installed=False)
 
         def _boom(*a, **k):  # pragma: no cover - must not be reached
-            raise AssertionError("pre-commit was run despite unwired pre-push guards")
+            raise AssertionError(f"pp.run was called with {(a[0] if a else k)!r} despite unwired pre-push guards")
 
         monkeypatch.setattr(pp, "run", _boom)
         result = pp.check_local_hooks()
         assert result.status == pp.Status.FAIL
         assert "pre-push" in result.message
         # ⛔ The remedy has to be the one that works. This assertion demanded
-        # `pre-commit install --hook-type pre-push` before #1689; that installs
-        # a hook which is shown ONE refspec, and it exits 1 outright while
-        # core.hooksPath is set — a remedy that cannot reach green.
+        # `pre-commit install --hook-type pre-push` before #1689; that never
+        # installs the guards, and it exits 1 outright while core.hooksPath is
+        # set — a remedy that cannot reach green.
         assert "bash scripts/ops/install_prepush_hook.sh" in result.detail
         # ⛔ NOT ASSERTED, on purpose: "the detail must not RECOMMEND the old
         # command". The detail names it inside a ⛔ prohibition, so any
@@ -271,6 +271,79 @@ class TestCheckLocalHooks:
         # actually wrote was a tautology (`... or "⛔" in detail`).
         # the stub's own explanation is surfaced rather than swallowed
         assert "stubbed by _assume_installed" in result.detail
+
+    def test_run_precommit_false_skips_the_run_but_not_the_wiring_probe(
+        self, monkeypatch
+    ):
+        """#1811 — the quick path drops `pre-commit run`, never the wiring probe.
+
+        `--skip-hooks` used to take the whole row out, which took out the only
+        place that answers "are the pre-push guards still on the push path?".
+        """
+        probed = []
+
+        def _probe():
+            probed.append(1)
+            return True, "stubbed-wired"
+
+        monkeypatch.setattr(pp, "_prepush_guards_wired", _probe)
+
+        def _boom(*a, **k):  # pragma: no cover - must not be reached
+            raise AssertionError(f"pp.run was called with {(a[0] if a else k)!r} despite run_precommit=False")
+
+        monkeypatch.setattr(pp, "run", _boom)
+
+        result = pp.check_local_hooks(run_precommit=False)
+        assert probed == [1]
+        assert result.status == pp.Status.SKIP
+        assert "stubbed-wired" in result.message
+
+    def test_run_precommit_false_still_fails_when_unwired(self, monkeypatch):
+        """The quick path must not fail open — an unwired clone is still red.
+
+        Counterpart to the test above: proving the probe *runs* is not the same
+        as proving its verdict still gates. Before #1811 the quick path
+        reported SKIP unconditionally, whatever the probe would have said.
+        """
+        self._assume_installed(monkeypatch, installed=False)
+
+        def _boom(*a, **k):  # pragma: no cover - must not be reached
+            raise AssertionError(f"pp.run was called with {(a[0] if a else k)!r} despite unwired pre-push guards")
+
+        monkeypatch.setattr(pp, "run", _boom)
+
+        result = pp.check_local_hooks(run_precommit=False)
+        assert result.status == pp.Status.FAIL
+        assert "bash scripts/ops/install_prepush_hook.sh" in result.detail
+
+    def test_an_unmeasurable_wiring_probe_is_not_reported_as_not_installed(
+        self, monkeypatch
+    ):
+        """git that cannot run is "cannot tell", not "the guards are missing".
+
+        The Windows escape hatch supports a PATH without git and passes
+        `--skip-hooks`, so it reaches this probe. Reporting "not installed"
+        there prescribes the installer, which cannot fix it. Still a FAIL.
+        """
+        missing = pp.subprocess.CompletedProcess(
+            ["git"], returncode=127, stdout="", stderr="command not found: git"
+        )
+        monkeypatch.setattr(pp, "run", lambda *a, **k: missing)
+
+        result = pp.check_local_hooks(run_precommit=False)
+        assert result.status == pp.Status.FAIL
+        assert "command not found: git" in result.detail
+        assert "install_prepush_hook.sh" not in result.detail
+
+    def test_clearing_markers_does_not_crash_when_git_cannot_run(
+        self, monkeypatch, tmp_path
+    ):
+        """A Local hooks FAIL clears markers; that path must survive a missing git."""
+        def _no_git(*a, **k):
+            raise FileNotFoundError("git")
+
+        monkeypatch.setattr(pp.subprocess, "run", _no_git)
+        assert pp.clear_markers(tmp_path) == 0
 
     def test_failed_hooks_parsed(self, monkeypatch):
         self._assume_installed(monkeypatch)
@@ -782,3 +855,59 @@ class TestCheckCommitScopeRange:
         assert result.status == pp.Status.FAIL
         assert "1/1" in result.message
         assert "threshold-exporter" in (result.detail or "")
+
+
+# ---------------------------------------------------------------------------
+# 啟動期失敗必須變成可判讀的結果，不是 traceback
+# ---------------------------------------------------------------------------
+class TestLaunchFailuresAreMeasurable:
+    """⛔ 這一族守的是本 PR 的主不變式在「工具起不來」時也成立。
+
+    `--skip-hooks` 現在會走到接線判定，而那一問唯一的資料來源是
+    `run(["git", ...])`。若 git 起不來時例外逃出去，preflight 以 traceback
+    收場——而 traceback 與「量了、沒事」在呼叫端分不開。
+    """
+
+    @staticmethod
+    def _denied(*a, **k):
+        raise PermissionError(13, "Permission denied")
+
+    @staticmethod
+    def _missing(*a, **k):
+        raise FileNotFoundError("git")
+
+    def test_run_converts_a_launch_permission_error_into_a_result(self, monkeypatch):
+        monkeypatch.setattr(pp.subprocess, "run", self._denied)
+        r = pp.run(["git", "rev-parse", "HEAD"])
+        assert r.returncode == 126
+        assert "cannot launch git" in r.stderr
+
+    def test_run_still_tells_missing_apart_from_not_executable(self, monkeypatch):
+        """必不響對照組：127（找不到）不可以被 126（起不來）蓋掉。
+
+        兩者的出路不同——前者是 PATH，後者是權限／檔案本身。
+        """
+        monkeypatch.setattr(pp.subprocess, "run", self._missing)
+        r = pp.run(["git", "rev-parse", "HEAD"])
+        assert r.returncode == 127
+        assert "command not found: git" in r.stderr
+
+    def test_the_wiring_probe_says_unmeasurable_when_git_cannot_launch(
+        self, monkeypatch
+    ):
+        """整條路徑：PermissionError -> FAIL「量不到」，而不是 traceback。
+
+        ⛔ 也不可以退成「守衛沒裝」——那會開出安裝器這帖藥，而 git 起不來時
+        照做回不到綠。
+        """
+        monkeypatch.setattr(pp.subprocess, "run", self._denied)
+        result = pp.check_local_hooks(run_precommit=False)
+        assert result.status == pp.Status.FAIL
+        assert "量不到" in result.message
+        assert "cannot launch git" in result.detail
+        assert "install_prepush_hook.sh" not in result.detail
+
+    def test_head_sha_returns_none_when_git_cannot_launch(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(pp.subprocess, "run", self._denied)
+        assert pp._head_sha(tmp_path) is None
+

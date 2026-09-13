@@ -4,17 +4,9 @@
 在 merge PR 前執行，確保 branch 處於可合併狀態。
 純檢查 + 報告，不自動修改任何東西。
 
-檢查項目：
-  1. Branch 身份：是否在 feature branch（非 main/master）
-  2. 同步狀態：behind main 幾個 commit（>0 = 可能有 conflict）
-  3. Conflict 偵測：dry-run merge 看有無衝突
-  4. Local hooks：pre-commit run --all-files（可選）
-  5. CI 狀態：透過 gh pr checks 查詢（需 gh CLI）
-  6. PR mergeable：透過 gh pr view 查詢
-
 用法：
   python scripts/tools/dx/pr_preflight.py                    # 完整檢查
-  python scripts/tools/dx/pr_preflight.py --skip-hooks       # 跳過 local hooks
+  python scripts/tools/dx/pr_preflight.py --skip-hooks       # 跳過 pre-commit --all-files（守衛 wiring 仍會檢查）
   python scripts/tools/dx/pr_preflight.py --ci               # CI 模式（exit 1 on failure）
   python scripts/tools/dx/pr_preflight.py --pr 23            # 指定 PR 號碼
 
@@ -127,6 +119,15 @@ def run(cmd: List[str], capture: bool = True, timeout: int = 120) -> subprocess.
     except subprocess.TimeoutExpired:
         return subprocess.CompletedProcess(
             cmd, returncode=124, stdout="", stderr=f"timeout after {timeout}s"
+        )
+    except OSError as exc:
+        # ⛔ 啟動期失敗不只「找不到」：git 在但不可執行（PermissionError）、
+        # ENOEXEC 等都在 subprocess.run 交出 CompletedProcess 之前就丟出來。
+        # 讓它逃出去 = 整支 preflight 以 traceback 收場，而 traceback 與
+        # 「量了、沒事」在呼叫端分不開——正是本 PR 在接線判定那一格修掉的分辨。
+        # 127 留給「找不到」，126 是 POSIX 給「找到了但起不來」的碼。
+        return subprocess.CompletedProcess(
+            cmd, returncode=126, stdout="", stderr=f"cannot launch {cmd[0]}: {exc}"
         )
 
 
@@ -826,10 +827,13 @@ def _git_dir(repo_root: Path) -> Path:
     `scripts/ops/require_preflight_pass.sh` reads the same place; the two must
     not drift apart.
     """
-    r = subprocess.run(
-        ["git", "rev-parse", "--git-common-dir"],
-        cwd=repo_root, capture_output=True, text=True, check=False, timeout=10,
-    )
+    try:
+        r = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            cwd=repo_root, capture_output=True, text=True, check=False, timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return repo_root / ".git"
     if r.returncode == 0 and r.stdout.strip():
         p = Path(r.stdout.strip())
         return p if p.is_absolute() else (repo_root / p).resolve()
@@ -846,7 +850,9 @@ def _head_sha(repo_root: Path) -> Optional[str]:
             ["git", "rev-parse", "HEAD"],
             cwd=repo_root, capture_output=True, text=True, check=False, timeout=10,
         )
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired):
+        # ⛔ OSError 不是 FileNotFoundError：上面那段 docstring 說要吞掉「啟動失敗」，
+        # 而 git 在但不可執行丟的是 PermissionError，原本會逃出去。
         return None
     if r.returncode == 0 and r.stdout.strip():
         return r.stdout.strip()
@@ -1023,23 +1029,11 @@ def _hook_body(path: Path) -> Optional[str]:
         return None
 
 
-def _prepush_guards_wired() -> Tuple[bool, str]:
+def _prepush_guards_wired() -> Tuple[Optional[bool], str]:
     """三支 pre-push 守衛在這個 clone 上真的在 push 路徑上嗎？
 
-    ⛔ #1664 續辦，#1689 改寫。**這裡是這個判定的唯一實作**，而且刻意是純
-    Python、零子行程。前一版把判定放進 `install_prepush_hook.sh --check` 再由
-    本函式 shell out，理由是「安裝器與閘門不要各寫一份」；那個理由仍然對，但
-    載體選錯了，而且錯的方向是**給出錯誤的判決**而不是大聲失敗：
-
-      * 由 PowerShell 發動的 Python，`shutil.which("bash")` 命中的是
-        `C:\\WINDOWS\\System32\\bash.EXE`＝**WSL**，它看不到這個 repo
-        （`--check` rc=127「No such file or directory」）⇒ 假紅。
-      * `Git\\usr\\bin\\bash.exe` 在非 MSYS 父行程下 PATH 上**沒有 `grep`**，
-        而 `grep -q … 2>/dev/null` 把「指令不存在」吞掉 ⇒ 對一個裝好的 shim
-        回報「沒裝」⇒ 也是假紅。
-
-    而假紅的最省事轉綠是 `--skip-hooks`，那條**寫死在 Windows 逃生門裡**
-    （`win_git_escape.bat` / `.ps1`）⇒ 這道閘門會變成恆為 SKIP。
+    ⛔ #1664 續辦，#1689 改寫。**這裡是這個判定的唯一實作**。⛔ 不要改回
+    shell out 到 `install_prepush_hook.sh --check`：理由見該檔檔頭。
 
     **兩種正確狀態**（兩種安裝順序各一）：shim 直接住 `.git/hooks/pre-push`，
     或 pre-commit 擁有該檔而 shim 住 `pre-push.legacy`（pre-commit 用**完整**
@@ -1055,7 +1049,10 @@ def _prepush_guards_wired() -> Tuple[bool, str]:
     """
     r = run(["git", "rev-parse", "--git-path", "hooks/pre-push"], timeout=30)
     if r.returncode != 0:
-        return False, "查不出來：git rev-parse --git-path 失敗（不在 work tree 裡？）"
+        # ⛔ None，不是 False：git 跑不了或不在 work tree，都量不到守衛在不在；
+        # 說成「沒裝」會開出安裝器這帖藥，而那兩種情況下它照做也回不到綠。
+        reason = (r.stderr or "").strip() or f"rc={r.returncode}"
+        return None, f"量不到：git rev-parse --git-path 失敗（{reason}）"
     hook = Path((r.stdout or "").strip())
     legacy = hook.with_name("pre-push.legacy")
 
@@ -1099,9 +1096,20 @@ def _prepush_guards_wired() -> Tuple[bool, str]:
     )
 
 
-def check_local_hooks() -> CheckResult:
-    """跑 pre-commit run --all-files，並確認 pre-push 守衛真的在 push 路徑上。"""
+def check_local_hooks(*, run_precommit: bool = True) -> CheckResult:
+    """確認 pre-push 守衛真的在 push 路徑上，並（可選）跑 pre-commit run --all-files。"""
     wired, why = _prepush_guards_wired()
+    if wired is None:
+        return CheckResult(
+            "Local hooks",
+            Status.FAIL,
+            "量不到 pre-push 守衛在不在 push 路徑上",
+            detail=(
+                f"{why}\n\n"
+                "這不代表守衛沒裝。請在 `git` 可執行、且位於 work tree 內的 shell 重跑"
+                "（Windows：Git Bash）。"
+            ),
+        )
     if not wired:
         return CheckResult(
             "Local hooks",
@@ -1109,13 +1117,21 @@ def check_local_hooks() -> CheckResult:
             "pre-push 守衛不在 push 路徑上——擋直推 main 那道閘門現在不存在",
             detail=(
                 f"{why}\n\n"
-                "修法（一次性、可重複跑）：\n"
+                "修法（一次性、可重複跑；在 Git Bash 或 Linux shell 裡跑——Windows 的 "
+                "PowerShell／cmd 裡 `bash` 可能是 WSL，在 linked worktree 會失敗）：\n"
                 "    bash scripts/ops/install_prepush_hook.sh\n"
-                "⛔ 不要改用 `pre-commit install --hook-type pre-push`：那條在 "
-                "#1689 之後只會讓守衛看到**一個** refspec，而且只要設了 "
-                "core.hooksPath 就會直接 rc=1 拒絕安裝。\n"
-                "跳過本項：make pr-preflight-quick（--skip-hooks）"
+                "⛔ 不要改用 `pre-commit install --hook-type pre-push`：它不會把"
+                "守衛裝上，而且只要設了 core.hooksPath 就直接 rc=1 拒絕安裝。\n"
+                # ⛔ 不要把「跳過本項：--skip-hooks」加回來（#1811）：那個旗標
+                # 現在跳不掉本項，那句話是循環——出路只有上面那條安裝指令。
+                "⛔ 本項不能跳過：--skip-hooks 只跳 pre-commit run --all-files。"
             ),
+        )
+    if not run_precommit:
+        return CheckResult(
+            "Local hooks",
+            Status.SKIP,
+            f"pre-push 守衛已接上；pre-commit --all-files 已跳過（--skip-hooks）｜{why}",
         )
     r = run(["pre-commit", "run", "--all-files"], timeout=300)
     if r.returncode == 0:
@@ -1493,12 +1509,17 @@ def main() -> int:
         epilog="""
 範例：
   %(prog)s                    # 完整檢查（含 local hooks）
-  %(prog)s --skip-hooks       # 跳過 pre-commit（快速檢查）
+  %(prog)s --skip-hooks       # 跳過 pre-commit --all-files（快速檢查；守衛 wiring 仍會檢查）
   %(prog)s --ci               # CI 模式（有 FAIL 則 exit 1）
   %(prog)s --pr 23            # 指定 PR 號碼
 """,
     )
-    parser.add_argument("--skip-hooks", action="store_true", help="跳過 local pre-commit hooks（快速模式）")
+    parser.add_argument(
+        "--skip-hooks",
+        action="store_true",
+        help="跳過 pre-commit run --all-files（快速模式）。"
+             "⛔ 不跳「pre-push 守衛在不在 push 路徑上」那一半（#1811）",
+    )
     parser.add_argument("--ci", action="store_true", help="CI 模式：有 FAIL 時 exit 1")
     parser.add_argument("--pr", type=int, default=None, help="指定 PR 號碼（不指定則自動偵測）")
     parser.add_argument(
@@ -1556,11 +1577,8 @@ def main() -> int:
     # 3. Conflict detection
     report.add(check_conflict())
 
-    # 4. Local hooks (optional)
-    if args.skip_hooks:
-        report.add(CheckResult("Local hooks", Status.SKIP, "已跳過（--skip-hooks）"))
-    else:
-        report.add(check_local_hooks())
+    # 4. Local hooks
+    report.add(check_local_hooks(run_precommit=not args.skip_hooks))
 
     # 5. Scope drift (code-driven §P2 rule)
     report.add(check_scope_drift())

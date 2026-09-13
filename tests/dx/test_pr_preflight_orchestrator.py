@@ -12,7 +12,8 @@ Covers:
   - detect_commit_msg_bom: UTF-8 / UTF-16 LE/BE BOM detection + clean files
   - _classify_ci_failures: A/B classification with mocked gh
   - main() exit codes: --check-commit-msg / --check-pr-title fast paths,
-    --ci with passing/failing checks, --skip-hooks SKIPs the hooks check
+    --ci with passing/failing checks, --skip-hooks skips only the pre-commit
+    half of the hooks check (#1811)
 """
 from __future__ import annotations
 
@@ -315,8 +316,10 @@ class TestMainOrchestrator:
             else:
                 status = pp.Status.PASS
                 msg = "stubbed-pass"
-            # check_ci_status / check_pr_mergeable take args; wrap accordingly.
-            if fn_name in {"check_ci_status", "check_pr_mergeable"}:
+            # check_ci_status / check_pr_mergeable / check_local_hooks take
+            # args; wrap accordingly. (check_local_hooks grew a keyword-only
+            # `run_precommit` in #1811.)
+            if fn_name in {"check_ci_status", "check_pr_mergeable", "check_local_hooks"}:
                 monkeypatch.setattr(
                     pp, fn_name,
                     lambda *a, _label=label, _status=status, _msg=msg, **kw:
@@ -375,20 +378,38 @@ class TestMainOrchestrator:
         cli_argv("pr_preflight.py")
         assert pp.main() == 0
 
-    def test_skip_hooks_records_skip_status(self, monkeypatch, tmp_path, capsys, cli_argv):
+    @pytest.mark.parametrize(
+        "flags, want_run_precommit",
+        [(("--skip-hooks",), False), ((), True)],
+        ids=["skip-hooks", "full"],
+    )
+    def test_local_hooks_is_called_on_both_poles_of_skip_hooks(
+        self, monkeypatch, tmp_path, capsys, cli_argv, flags, want_run_precommit
+    ):
+        """#1811 — `check_local_hooks` is called with or without `--skip-hooks`.
+
+        The flag decides only whether pre-commit runs; without it the run must
+        still happen. A FAIL from the check reaches the exit code either way.
+        """
         self._stub_repo_root_and_marker(monkeypatch, tmp_path)
         self._stub_all_checks(monkeypatch)
 
-        # Sentinel: if check_local_hooks IS called, fail loudly.
-        def fail_if_called():
-            raise AssertionError("check_local_hooks should be skipped")
-        monkeypatch.setattr(pp, "check_local_hooks", fail_if_called)
+        seen = {}
 
-        cli_argv("pr_preflight.py", "--skip-hooks", "--ci")
-        assert pp.main() == 0
+        def _recording_check(*, run_precommit=True):
+            seen["run_precommit"] = run_precommit
+            return pp.CheckResult(
+                "Local hooks", pp.Status.FAIL, "stubbed-unwired"
+            )
+
+        monkeypatch.setattr(pp, "check_local_hooks", _recording_check)
+
+        cli_argv("pr_preflight.py", *flags, "--ci")
+        assert pp.main() == 1
+        assert seen == {"run_precommit": want_run_precommit}
         out = capsys.readouterr().out
         assert "Local hooks" in out
-        assert "已跳過" in out  # SKIP message
+        assert "stubbed-unwired" in out
 
 
 # ---------------------------------------------------------------------------
