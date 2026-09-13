@@ -1119,8 +1119,26 @@ _PROSE_FILES = (
     _TOOL,
     Path(__file__).resolve(),
 )
-# 允許留在散文裡的數字：穩定識別碼，不是會漂的量測值。
-_ALLOWED_NUMBERS = {"1746", "1830", "379", "1457"}
+
+# ⛔ **不要加數字白名單。** 一個 `_ALLOWED_NUMBERS` 之類的集合是後門：把一個會漂的數字
+#   加進去，就能在同一個 PR 裡消音掉這支守衛要擋的那個缺陷，而且不需要說任何謊。
+#   ⇒ 改成**結構性**規則：數字只有寫成**識別碼引用**時才放行（`#1746` / `TRK-379` /
+#   `issues/1746` / `pull/1830`），那是從文字本身判得出來的，沒有名單可以加。
+#   ⚠️ 仍可用「把計數寫成假的 issue 引用」繞過——那需要說謊，本守衛刻意不防。
+_PROSE_NUMBER = re.compile(
+    # 一般的量測值：兩位以上，或帶小數點／底線分組
+    r"(?<![\w.\-/#])(?:\d+(?:[._]\d+)+|\d{2,})(?![\w.])"
+    # 帶單位的比值 —— 它們的尾巴是 \w，上面那條吃不到，而「倍數」正是本檔漂掉過的形狀
+    r"|(?<![\w.\-/#])\d+(?:\.\d+)?(?=\s*[x×倍%])"
+)
+# ⚠️ 中文數字：只在**後面接量詞**時才算，否則「一律」「每一」這種詞會把整份散文淹掉。
+_PROSE_CJK_NUMBER = re.compile(r"[〇零一二三四五六七八九十百千萬兩]{2,}\s*(?=[個筆支格條行次段位])")
+
+# ⛔ 測試名只在 **backtick 之內**認。散文裡的測試名一律寫在 backtick 裡，而不限制範圍會
+#   讓「把區塊內的換行接掉」這個動作**偽造出**從來沒人寫過的名字：一行註解結尾的半截
+#   識別字接上下一行開頭，就憑空拼出一個名字。案例見 `_PROSE_GUARD_CASES`。
+_PROSE_BACKTICKED = re.compile(r"`{1,2}([^`]+?)`{1,2}", re.S)
+_PROSE_TESTNAME = re.compile(r"\Atest_[a-z0-9_]+\Z")
 
 
 def _prose_of(path: Path) -> list[tuple[str, int, str]]:
@@ -1156,33 +1174,111 @@ def _prose_of(path: Path) -> list[tuple[str, int, str]]:
     return out
 
 
-def _unwrapped(text: str) -> str:
-    """區塊內把換行接掉——識別字被折行時仍然找得到。"""
-    return re.sub(r"[ \t]*\n[ \t]*", "", text)
+def _repo_test_function_names() -> set[str]:
+    """整棵 `tests/` 樹裡定義過的函式名 —— 給「這個名字存不存在」用。
+
+    ⛔ 不能只看這兩個檔：散文合法地可以指到別處的測試，而只認本地定義會把那種引用
+    誤報成死指標（實測過：一個真的存在於別檔的名字被報成 dangling）。
+    """
+    names: set[str] = {
+        n.name
+        for f in _PROSE_FILES
+        for n in ast.walk(ast.parse(f.read_text(encoding="utf-8")))
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    listed = subprocess.run(
+        ["git", "-C", str(_REPO_ROOT), "ls-files", "tests/*.py", "tests/**/*.py"],
+        capture_output=True, text=True, check=True, timeout=120,
+    ).stdout.split()
+    for rel in listed:
+        try:
+            tree = ast.parse((_REPO_ROOT / rel).read_text(encoding="utf-8", errors="replace"))
+        except SyntaxError:
+            continue
+        names |= {
+            n.name for n in ast.walk(tree)
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+    return names
+
+
+# ⛔ 守衛自己的案例表。這些例子**不能**寫在 docstring 裡——散文裡的數字會被守衛自己抓到
+#   （實測過），而寫成資料之後它們順便變成守衛本身的兩方向釘子。
+#   每列：(文字, 應不應該被判為「沒有機制撐著的數字」)
+_PROSE_GUARD_CASES: tuple[tuple[str, bool], ...] = (
+    # 漏判側：這些**必須**抓到
+    ("\u6bd4\u4f8b\u662f 77.3%", True),
+    ("\u6bcd\u9ad4 1_000 \u500b", True),
+    ("\u6709 88 \u500b", True),
+    ("28.83 \u500d", True),
+    ("78%", True),
+    ("1.6x", True),
+    ("\u516b\u5341\u516b \u500b", True),
+    # 過度拒判側：這些**不准**抓到
+    ("[#1746](x)", False),
+    ("TRK-379", False),
+    ("issues/1746", False),
+    ("COUNT_88", False),
+    ("\u7b2c 3 \u500b", False),
+    ("\u4e00\u5f8b \u8981\u9019\u6a23", False),
+    ("\u6bcf\u4e00 \u683c\u90fd\u8981", False),
+)
+
+
+def test_the_prose_guard_predicates_discriminate_in_both_directions() -> None:
+    """⛔ 守衛自己也要有兩個方向的釘子，否則它只是看起來在守。
+
+    漏判側（該抓沒抓）會讓一個漂掉的數字混進散文；過度拒判側（不該抓卻抓）會逼人把合法
+    的 issue 引用改寫掉，最後守衛被關掉。兩者都會靜默地讓這支守衛失去意義。
+    """
+    wrong: list[str] = []
+    for text, should_flag in _PROSE_GUARD_CASES:
+        flagged = bool(_PROSE_NUMBER.search(text) or _PROSE_CJK_NUMBER.search(text))
+        if flagged is not should_flag:
+            wrong.append(f"{text!r}: 期望 {should_flag}，實得 {flagged}")
+    assert not wrong, "守衛述詞的判定與案例表不符：\n  " + "\n  ".join(wrong)
+    assert any(f for _, f in _PROSE_GUARD_CASES), "案例表沒有漏判側 ⇒ 只釘了一半"
+    assert any(not f for _, f in _PROSE_GUARD_CASES), "案例表沒有過度拒判側 ⇒ 只釘了一半"
+
+
+def test_the_prose_guard_does_not_invent_names_across_lines() -> None:
+    """⛔ 接行不得**偽造**出一個沒人寫過的測試名。
+
+    一行註解以半截識別字結尾、下一行以識別字開頭，若把換行接成空字串就會拼出一個名字，
+    而那個名字沒有任何人寫過——守衛會據此報一個不存在的死指標，或反過來把它當成一個真的
+    引用。⇒ 名字只在 backtick 之內認。
+    """
+    head = "test" + chr(95)
+    # ⛔ 要忠實模擬 `_prose_of`：它是先把每行的 `#` 去掉、再用 "\n" 串起來的，
+    #    直接把帶 `#` 的原文拿來接會接出 `test_# real_module`，那就不是要量的東西。
+    fabricated = f"\u2026\u53eb {head}\nreal_module \u800c\u4e0d\u662f\u5225\u7684"
+    joined_tight = re.sub(r"[ \t]*\n[ \t]*", "", fabricated)
+    assert head + "real_module" in joined_tight, (
+        "前提沒重現：接成空字串本來就應該拼出那個名字，否則這格量到的不是它要量的東西"
+    )
+    names = [re.sub(r"\s+", "", span) for span in _PROSE_BACKTICKED.findall(fabricated)]
+    assert not [n for n in names if _PROSE_TESTNAME.match(n)], (
+        f"backtick 限制失效，偽造出來的名字仍被認成引用：{names}"
+    )
 
 
 def test_prose_names_no_test_that_does_not_exist() -> None:
-    """⛔ 散文裡「釘住：`test_x`」指到的每一格都必須真的存在。
+    """⛔ 散文裡 backtick 包起來的測試名，指到的每一格都必須真的存在（repo 任何地方都算）。
 
     死掉的指標比沒有指標更糟：它讓讀者以為那個宣稱有機制背書。改名或刪測試時**很容易**
-    漏掉散文裡的引用（本檔就漏過），而那是靜默的。
+    漏掉散文裡的引用（本檔就漏過兩次），而那是靜默的。
     """
-    defined: set[str] = set()
-    for f in _PROSE_FILES:
-        defined |= {
-            n.name
-            for n in ast.walk(ast.parse(f.read_text(encoding="utf-8")))
-            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
-        }
-
+    defined = _repo_test_function_names()
     dangling: list[str] = []
     for f in _PROSE_FILES:
         for _kind, ln, text in _prose_of(f):
-            for name in set(re.findall(r"\btest_[a-z0-9_]{4,}\b", _unwrapped(text))):
-                if name not in defined:
+            for span in _PROSE_BACKTICKED.findall(text):
+                # backtick 之內才把換行接掉——名字可以被折行，但不能跨 backtick 拼出來
+                name = re.sub(r"\s+", "", span)
+                if _PROSE_TESTNAME.match(name) and name not in defined:
                     dangling.append(f"{f.name}:{ln} → {name}")
     assert not dangling, (
-        "散文指到不存在的測試：\n  " + "\n  ".join(sorted(dangling))
+        "散文指到不存在的測試：\n  " + "\n  ".join(sorted(set(dangling)))
         + "\n⇒ 改名就把引用一起改，刪掉就把那句話一起刪。"
     )
 
@@ -1190,24 +1286,31 @@ def test_prose_names_no_test_that_does_not_exist() -> None:
 def test_prose_carries_no_unmechanised_repo_measurement() -> None:
     """⛔ 這兩個檔的散文裡不得出現沒有機制撐著的 repo 量測數字。
 
-    ⚠️ 白名單只放**穩定識別碼**（issue／PR／TRK 號）。任何母體大小、比例、命中數都不准
-    寫死——母體就是這棵樹，寫死的計數必然漂，而漂掉的數字與正確的數字在版面上長得一樣。
-    要講量級就寫**關係**（「多數」「遠多於」），並在測試裡對當下的母體重算，例如
+    ⚠️ 放行的只有**識別碼引用**（`#1746` / `TRK-379` / `issues/1746`）——那是**結構**，
+    不是名單。任何母體大小、比例、倍數、命中數都不准寫死：母體就是這棵樹，寫死的計數
+    必然漂，而漂掉的數字與正確的數字在版面上長得一樣。要講量級就寫**關係**（「多數」
+    「遠多於」），並在測試裡對當下的母體重算，例如
     `test_known_limit_future_annotations_shadows_a_module_named_annotations` 與
     `test_the_real_omit_config_stays_inside_the_matchers_agreement_region`。
+
+    ⚠️ **已知界線**（寫出來而不是假裝沒有）：英文數字詞（`eighty-eight`）與
+    識別字內嵌的數字（`COUNT_88`）不在偵測範圍內。中文數字只在**後接量詞**時才算，
+    否則「一律」「每一」這類詞會把整份散文淹掉。
     """
     offenders: list[str] = []
     for f in _PROSE_FILES:
         for _kind, ln, text in _prose_of(f):
-            j = _unwrapped(text)
-            for mo in re.finditer(r"(?<![\w.\-/])\d{2,}(?![\w.])", j):
-                if mo.group() in _ALLOWED_NUMBERS:
-                    continue
-                offenders.append(
-                    f"{f.name}:{ln} → {mo.group()}  …{j[max(0, mo.start() - 45):mo.end() + 35]}…"
-                )
+            # ⛔ 接行時補一個空白，**不是**接成空字串：接成空字串會把兩行各自的半截數字
+            #   黏成一個從來不存在的數字，甚至黏成一個看起來像識別碼的數字。
+            #   案例見 `_PROSE_GUARD_CASES`。
+            joined = re.sub(r"[ \t]*\n[ \t]*", " ", text)
+            for rx in (_PROSE_NUMBER, _PROSE_CJK_NUMBER):
+                for mo in rx.finditer(joined):
+                    offenders.append(
+                        f"{f.name}:{ln} → {mo.group().strip()}"
+                        f"  …{joined[max(0, mo.start() - 45):mo.end() + 35]}…"
+                    )
     assert not offenders, (
-        "散文裡有沒登錄的數字：\n  " + "\n  ".join(offenders)
-        + "\n⇒ 砍掉它、改寫成關係、或（若真的是穩定識別碼）加進 _ALLOWED_NUMBERS。"
+        "散文裡有沒有機制撐著的數字：\n  " + "\n  ".join(offenders)
+        + "\n⇒ 砍掉它、改寫成關係、或寫成識別碼引用（`#1234` / `TRK-123`）。"
     )
-

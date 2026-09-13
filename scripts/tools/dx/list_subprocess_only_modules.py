@@ -199,7 +199,7 @@ def _omitted(path: str, omit: set[str]) -> bool:
     字串而不是 ``omit`` 本身，換一條 glob omit 就破。
 
     ⛔ **這裡用 stdlib ``fnmatch``，而它不等於 coverage 自己的 ``GlobMatcher``**
-    （``coverage==7.16`` 實測，**兩個方向都分歧**）：
+    （**兩個方向都分歧**，下表由 `test_known_limit_fnmatch_diverges_from_coverage_in_both_directions` 對**當下裝的** coverage 逐列重算）：
 
     ===============================  =======================  =========  ==========
     path                             pattern                  fnmatch    coverage
