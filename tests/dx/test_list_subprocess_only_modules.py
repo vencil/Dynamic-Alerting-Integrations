@@ -81,6 +81,22 @@ def _assert_fixture_actually_runs(repo: Path, rel: str) -> None:
         f"fixture 的 {rel} 根本跑不起來 ⇒ 「它是真的 in-process 進入點」這句話沒有依據。\n"
         f"rc={proc.returncode}\nstdout:\n{proc.stdout[-2000:]}\nstderr:\n{proc.stderr[-1000:]}"
     )
+    # ⛔ rc 0 **不等於**「那個 import 真的執行過」：pytest 對「收集到的測試全部 skip」也回 0
+    #    （實測：一格 `pytest.skip()` ⇒ rc 0；零格收集到 ⇒ rc 5）。只看 rc 的話，一個被
+    #    吞掉例外後 skip 掉的 fixture 會被這個 helper 蓋章成「跑起來了」。
+    # ⚠️ 而「有一格 passed」這個較弱的版本**也不夠**——dogfood 打死過：fixture 有兩格，
+    #    只 skip 掉帶 import 的那格，另一格照樣 passed，輸出是 `1 passed, 1 skipped`。
+    #    ⇒ 這裡要的是**全數通過**：有 passed，且沒有 skipped／error／xfail。
+    assert " passed" in proc.stdout, (
+        f"fixture 的 {rel} rc 是 0，但沒有任何一格真的 passed ⇒ 那個 import 有沒有執行過"
+        f"量不到，不能當成證據。\nstdout:\n{proc.stdout[-2000:]}"
+    )
+    for weasel in ("skipped", "error", "xfail", "xpass"):
+        assert weasel not in proc.stdout, (
+            f"fixture 的 {rel} 有 {weasel} ⇒ 不能保證帶 import 的那格真的執行過。"
+            f"⛔ 這個 helper 的全部價值就是「跑過」與「看起來跑過」可區分。\n"
+            f"stdout:\n{proc.stdout[-2000:]}"
+        )
 
 # ---------------------------------------------------------------------------
 # 生產樹：母體與分類
@@ -807,6 +823,16 @@ def test_known_limit_a_relative_import_in_tests_can_never_name_a_source_module(
     # ⛔ 先證明這個 fixture 真的跑得起來——上一版就是敗在「AST 認得」不等於「能執行」
     _assert_fixture_actually_runs(repo, "tests/test_rel.py")
 
+    # ⛔ 這格成立的**前提**是 source root 與 tests/ 不相交，把它變成斷言而不是假設：
+    #    盲審打穿過「永遠指不到」這個說法——`source = ["tests"]` 時相對 import 真的指得到
+    #    （反例釘在 test_a_relative_import_does_reach_a_module_when_source_is_tests）。
+    fixture_sources = tomllib.loads(
+        (repo / "pyproject.toml").read_text(encoding="utf-8")
+    )["tool"]["coverage"]["run"]["source"]
+    assert not any(src == "tests" or src.startswith("tests/") for src in fixture_sources), (
+        f"fixture 的 source root {fixture_sources} 與 tests/ 相交 ⇒ 這格的前提不成立"
+    )
+
     data = _json(repo)
     assert data["both"] == ["relmod"], (
         "假陰性沒重現。⚠️ 若已改成跳過 level > 0 的 import，請一併更新本格與工具 docstring"
@@ -890,13 +916,13 @@ def test_the_real_omit_config_stays_inside_the_matchers_agreement_region() -> No
     omit = list(run.get("omit", []))
     assert omit, "本 repo 的 omit 是空的 ⇒ 這格什麼都沒量到，要嘛設定變了要嘛路徑寫錯"
 
+    # ⛔ 用**工具自己的** `tracked()` 取母體，不要自己再拼一次 `git ls-files`。
+    #    盲審打穿過：自拼的版本用 `.split()` 切 stdout，而 `tracked()` 用 `-z` + NUL 切。
+    #    今天兩者答案相同（source root 底下沒有帶空白的檔名），但那是**巧合不是機制**——
+    #    哪天有一個，自拼版會把一個路徑切成好幾個假檔名，守衛守的母體就與工具的悄悄分家。
     files: list[str] = []
     for src in run["source"]:
-        proc = subprocess.run(
-            ["git", "ls-files", f"{src}/*.py", f"{src}/**/*.py"],
-            cwd=_REPO_ROOT, capture_output=True, text=True, check=True, timeout=60,
-        )
-        files += proc.stdout.split()
+        files += _mod.tracked(_REPO_ROOT, f"{src}/*.py", f"{src}/**/*.py")
     files = sorted(set(files))
     assert files, "母體是空的 ⇒ 量不到，不是量了沒事"
 
@@ -1017,3 +1043,92 @@ def test_known_limit_future_annotations_shadows_a_module_named_annotations(
     assert [e["stem"] for e in data["blind_spots"]] == ["control"], (
         "⚠️ 對照組：沒被遮到的那個必須留在 blind_spots，否則量到的是母體塌了"
     )
+
+    # ⛔ 「普遍得多」這句話在 docstring 裡**沒有數字**（寫死的計數必然漂，而前一版那組
+    #    283/366 是在錯的 worktree、又用了漏掉頂層的 pathspec 量出來的）。改在這裡對
+    #    **當下**的母體重算，紅的時候把實際比例印出來——這才是那句話的機制。
+    scanned = [
+        t for t in _mod.tracked(_REPO_ROOT, "tests/*.py", "tests/**/*.py")
+        if Path(t).name.startswith("test_")
+    ]
+    assert scanned, "母體是空的 ⇒ 量不到，不是量了沒事"
+    carriers = [
+        t for t in scanned
+        if "from __future__ import annotations"
+        in (_REPO_ROOT / t).read_text(encoding="utf-8", errors="replace")
+    ]
+    assert len(carriers) * 2 > len(scanned), (
+        "⚠️ `from __future__ import annotations` 已經不是多數測試檔的寫法了"
+        f"（{len(carriers)} / {len(scanned)}）⇒ 已知界線 ⑸ 的「普遍得多」要改寫"
+    )
+
+
+def test_a_relative_import_does_reach_a_module_when_source_is_tests(tmp_path: Path) -> None:
+    """⚠️ 反例：`source = ["tests"]` 時，測試檔的相對 import **真的**指到 source root 的模組。
+
+    ⛔ 這格是為了不讓上一格的散文變成假的結構定理。前一版寫「測試檔裡的相對 import
+    **永遠**指不到 source root 的模組」——盲審用這個形狀打穿了：`tests/sibling.py` 同時是
+    測試自己的 package 成員**與**一個 source root 底下的模組，工具把它算進 `both` 完全正確。
+
+    成因讀 `build()` 就看得到：測試的 pathspec 是**寫死**的 `tests/*.py` / `tests/**/*.py`，
+    與 `source` 互不參照 ⇒ 沒有任何東西保證兩者不相交。⇒ ⑹ 是**設定的性質**，不是定理。
+    """
+    repo = _fixture(tmp_path, {
+        "tests/__init__.py": "",
+        "tests/sibling.py": _TOOL_SRC,
+        "tests/test_x.py":
+            'from . import sibling\n'
+            'import subprocess, sys\n'
+            'def test_i():\n    assert sibling.main() == 0\n'
+            'def test_s():\n'
+            '    subprocess.run([sys.executable, "tests/sibling.py"])\n',
+    })
+    (repo / "pyproject.toml").write_text(
+        '[tool.coverage.run]\nsource = ["tests"]\nomit = []\n', encoding="utf-8"
+    )
+    _assert_fixture_actually_runs(repo, "tests/test_x.py")
+
+    data = _json(repo)
+    assert data["both"] == ["sibling"], (
+        "反例沒重現 ⇒ 上一格的「本 repo 設定下指不到」可能被讀成無條件的結構定理。"
+        f"實得 both={data['both']} blind={[e['stem'] for e in data['blind_spots']]}"
+    )
+    assert data["blind_spots"] == [], (
+        "⚠️ 這裡不該有盲點：sibling 兩種進入點都有，而 __init__ / test_x 沒被 subprocess 跑過"
+    )
+
+
+def test_tracked_survives_a_filename_with_whitespace(tmp_path: Path) -> None:
+    """⛔ `tracked()` 用 `git ls-files -z` + NUL 切，不是 `.split()`——帶空白的檔名不會被切碎。
+
+    ⚠️ 這格是 dogfood 逼出來的。`test_the_real_omit_config_stays_inside_the_matchers_
+    agreement_region` 原本自己拼一次 `git ls-files` 並用 `.split()` 切 stdout；今天兩者答案
+    相同（source root 底下沒有帶空白的檔名），但那是**巧合不是機制**。改成呼叫工具自己的
+    `tracked()` 之後「兩邊母體相同」變成**構造上為真**，可是那個修法本身**沒有測試打得到**
+    ——把 pathspec 改壞讓母體縮水，那個守衛仍然是綠的（實測 rc 0）。⇒ 這格直接釘機制本身。
+
+    兩個方向都釘：`tracked()` 回傳完整路徑（漏判側），而 `.split()` 會把它切成兩段（誤判側）。
+    """
+    repo = tmp_path
+    (repo / "scripts" / "tools" / "ops").mkdir(parents=True)
+    weird = "scripts/tools/ops/has space.py"
+    (repo / weird).write_text(_TOOL_SRC, encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True, timeout=60)
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, timeout=60)
+    subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "fx"],
+        cwd=repo, check=True, timeout=60,
+    )
+
+    got = _mod.tracked(repo, "scripts/tools/*.py", "scripts/tools/**/*.py")
+    assert got == [weird], f"tracked() 沒有原樣回傳帶空白的路徑：{got!r}"
+
+    # ⚠️ 對照組：證明這格量得到差別——換成 `.split()` 的話同一個檔會被切成兩段
+    raw = subprocess.run(
+        ["git", "-C", str(repo), "ls-files", "scripts/tools/*.py", "scripts/tools/**/*.py"],
+        capture_output=True, text=True, check=True, timeout=60,
+    ).stdout
+    naive = raw.split()
+    assert naive != got, "對照組失效：`.split()` 給出了和 `tracked()` 相同的答案，這格沒鑑別力"
+    assert len(naive) == 2, f"預期 `.split()` 把一個路徑切成兩段，實得 {naive!r}"
+

@@ -86,16 +86,28 @@ Why this exists
 且無法從 AST 判定 ⇒ 整條列為已知界線。
 ⑸ `from __future__ import annotations` 會讓專案裡任何名為 `annotations.py` 的模組
 **永久**被遮蔽（`node.names` 帶 `annotations`，撞上該模組的 stem）。⚠️ 機制與 ⑵ / ⑶ 相同，
-但**普遍得多**：本 repo `tests/**/*.py` 帶這行的有 **283 / 366** 個檔——它不是某個測試
-「剛好 import 到同名套件」，而是幾乎每個測試檔的第一行。實測：fixture 只放這行＋一個
-subprocess 呼叫，`annotations` 就從 `blind_spots` 落到 `both`，對照模組不受影響。
+但**普遍得多**：它是本 repo 多數測試檔的第一行，不是某個測試「剛好 import 到同名套件」。
+⛔ **這裡不寫比例**——前一版寫了「283 / 366」，而那組數字錯了兩次：在**錯的 worktree**
+（另一條 branch）上量的，而且 pathspec 只給 `tests/**/*.py`、漏掉頂層的 `tests/*.py`
+（正是本檔自己在母體枚舉那裡踩過、並且已經寫在註解裡的同一個 `**/` 坑）。⇒ 改由
+`test_known_limit_future_annotations_shadows_a_module_named_annotations` 對**當下**的
+`build()` 母體重算並斷言它仍是多數，紅的時候會把實際比例印出來。
+實測：fixture 只放這行＋一個 subprocess 呼叫，`annotations` 就從 `blind_spots` 落到
+`both`，對照模組不受影響。
 ⚠️ ⑸ **不是本輪新增的行為**：`node.module` 本來就是 `'__future__'`（truthy），移除
 `and node.module` guard 之前它就已經這樣。它先前沒被列出來，讓這份清單看起來比實際完整。
 
 ⑹ 測試檔裡的**相對** import（`node.level > 0`，如 `from . import x` / `from .. import y`）
-**永遠指不到 source root 的模組**——它的錨是 `tests/` 這個 package，而 `build()` 只從
-`tests/**` 取測試（實測：住在 source root 底下的 `test_*.py` 共 0 個）。⇒ 把它的 `node.names`
-算成進入點**一律是撞名**，方向是**靜默假陰性**（真盲點被吃掉、報告不留痕跡）。
+在**本 repo 的設定下**指不到 source root 的模組——它的錨是 `tests/` 這個 package，而本 repo
+的 source root（`scripts/tools` / `components/da-tools/app`）與 `tests/` **不相交**。⇒ 把它的
+`node.names` 算成進入點是撞名，方向是**靜默假陰性**（真盲點被吃掉、報告不留痕跡）。
+⛔ **這是設定的性質，不是結構定理**——前一版寫「**永遠**指不到」，盲審用一個反例打穿：
+`source = ["tests"]` 時，`from . import sibling` 指到的 `tests/sibling.py` **就是**一個 source
+root 底下的模組，工具把它算進 `both` 完全正確（實測 `both: ['sibling']`）。成因讀 code 就看得到：
+`build()` 的測試 pathspec 是**寫死**的 `tests/*.py` / `tests/**/*.py`，與 `source` 互不參照，
+所以沒有任何東西保證兩者不相交。釘住兩側：
+`test_known_limit_a_relative_import_in_tests_can_never_name_a_source_module`（本 repo 設定，
+且它自己會斷言兩者不相交）與 `test_a_relative_import_does_reach_a_module_when_source_is_tests`（反例）。
 ⛔ 先前這裡的註解寫「`from . import mytool` 是真的 in-process 進入點所以不能加
 `and node.module` guard」——**那句話是錯的**，而且它的測試 fixture 在 pytest 下根本跑不起來
 （收集期 `attempted relative import with no known parent package`）。補上 `__init__.py` 讓它
@@ -257,9 +269,13 @@ def _omitted(path: str, omit: set[str]) -> bool:
     ``fnmatch``，兩者對 ``vendor/x.py`` 給相反答案而 stdout / stderr / JSON 全都沒有
     訊號——直接違反本檔自己反覆寫的「量不到與量了沒事必須可區分」。
 
-    ⚠️ 而它買到的東西實測是 **0**：本 repo 249 個 source 範圍內的 ``.py``、真
-    ``omit`` 四條，兩個 matcher 排除的集合**完全相同**（都只有
-    ``scripts/tools/validate_all.py``，對稱差為空集合）。付兩條 HIGH 換 0 個檔的差別。
+    ⚠️ 而它買到的東西是 **0**：對本 repo 真實的母體與真實的 ``omit``，兩個 matcher
+    排除的集合**完全相同**（對稱差為空集合）。付兩條 HIGH 換 0 個檔的差別。
+    ⛔ **這句話不寫成數字**：母體隨每次提交而動，寫死的計數必然漂（本檔前一版就寫了
+    「249 個」，而那個數字同時是**在錯的 worktree 上量的**、而且拿的是 omit **之後**的
+    模組數當成 omit **之前**的母體）。⇒ 由
+    ``test_the_real_omit_config_stays_inside_the_matchers_agreement_region``
+    **每次執行時重算**，它紅的時候會把當下的母體大小與差集一起印出來。
 
     ⇒ 所以換掉的是**受審主體**：這支工具不再自稱是 coverage matcher 的等價物；
     「本 repo 的 omit 設定有沒有踩進分歧區」改由一格測試用 coverage 自己當 oracle 去
