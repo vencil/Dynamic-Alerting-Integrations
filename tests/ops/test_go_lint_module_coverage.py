@@ -21,10 +21,13 @@ raises on both for this job (`GATED_LEGS` contains `("validate.yaml",
 
 from __future__ import annotations
 
+import contextlib
 import re
 import sys
+import warnings
 from pathlib import Path
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -137,7 +140,23 @@ def _module_config(module: str) -> dict:
     assert config.is_file(), (
         f"{module} has no .golangci.yml — golangci-lint then runs its own "
         "defaults and the step still prints `0 issues`.")
+    shadowing = _shadowing_configs(ROOT / module)
+    assert not shadowing, (
+        f"{module} carries {shadowing} next to .golangci.yml; golangci may "
+        "read one of those while this guard reads .golangci.yml. Keep one.")
     return yaml.safe_load(config.read_text(encoding="utf-8")) or {}
+
+
+def _shadowing_configs(directory: Path) -> list[str]:
+    """Sibling config files golangci could pick over `.golangci.yml`.
+
+    Measured: a clean `.yml` beside a `.golangci.yaml` carrying
+    `paths: ['.*']` runs to `0 issues`. Exact names of regular files only —
+    a directory of that name, or a differently-cased one on Windows, is not
+    a config to golangci and must not read as one here.
+    """
+    present = {p.name for p in directory.iterdir() if p.is_file()}
+    return sorted(present & {".golangci.json", ".golangci.toml", ".golangci.yaml"})
 
 
 def _build_tags() -> dict[str, list[str]]:
@@ -252,7 +271,8 @@ def test_build_tags_are_pinned_and_enrolled() -> None:
             f"tag {tag!r} is marked `enrol` but none of its files sits under a "
             "go.mod, so nothing can enrol it — the disposition is unreachable.")
         for module in owners:
-            declared = (_module_config(module).get("run") or {}).get("build-tags") or []
+            declared = _as_list((_module_config(module).get("run") or {}).get("build-tags"),
+                                "run.build-tags")
             assert tag in [str(t) for t in declared], (
                 f"{module}/.golangci.yml does not list {tag!r} under "
                 "`run.build-tags`, so `run ./...` loads none of its tagged "
@@ -262,35 +282,199 @@ def test_build_tags_are_pinned_and_enrolled() -> None:
 # ── the step must be able to report ────────────────────────────────────────
 
 
-def _excludes_every_go_file(patterns: list[str | None], files: list[str]) -> bool:
-    """Would these exclusion `path`s together swallow the module's corpus?
+def _as_list(value: object, where: str) -> list:
+    """golangci list fields, read as lists only.
 
-    ⛔ Derived, not enumerated. A blacklist of spellings (`.*`, `^`, …) was
-    measured to miss every natural one — including `_test\\.go` in a module
-    whose files are ALL tests, which is this repo's most-copied exclusion.
-    A rule with no `path` applies to everything, hence None -> True.
-
-    ⛔ `files` must be MODULE-relative. golangci-lint matches these patterns
-    against the path as seen from the module root, so `^foo\\.go$` excludes
-    everything in a one-file module while matching no repo-relative path at
-    all — measured: it took `run ./...` from rc=1 to `0 issues.` while an
-    earlier revision of this predicate called it harmless.
-
-    ⛔ Patterns are evaluated as a UNION, the way golangci applies them.
-    Asking one at a time answers a narrower question than the config does —
-    two patterns covering a file each silence a two-file module while neither
-    is a catch-all on its own.
+    `config verify` rejects a scalar in these fields; `run` — all CI executes
+    — reinterprets it (a comma-separated string becomes several linters).
+    Measured: `linters: godoclint` under a rule silences godoclint. Reading
+    it any other way here would be a second, wrong parser.
     """
-    compiled = []
-    for pattern in patterns:
-        if pattern is None:
-            return True
-        try:
-            compiled.append(re.compile(pattern))
-        except re.error:
-            continue  # golangci would reject it; not this guard's judgement
-    return bool(files) and bool(compiled) and all(
-        any(rx.search(f) for rx in compiled) for f in files)
+    if value is None:
+        return []
+    assert isinstance(value, list), (
+        f"`{where}` is {value!r}, not a list; golangci `run` reads it in a "
+        "way this guard does not model. Write it as `- item`.")
+    return value
+
+
+def _matching(pattern: object, files: list[str]) -> set[str]:
+    """Files the exclusion regex hits.
+
+    ⛔ Reject-to-score, never fail-open. golangci matches with Go RE2, this
+    guard with Python `re`, and a pattern only one of them reads was a silent
+    green in an earlier revision — measured: `\\pL` and `[[:alpha:]]` each
+    take `run ./...` to `0 issues` while Python rejects the first and reads
+    the second as a different set (caught through the FutureWarning Python
+    emits for nested-set spellings). A YAML `!!binary` scalar is not a str
+    and is refused for the same reason.
+    """
+    assert isinstance(pattern, str), (
+        f"exclusion pattern {pattern!r} is not a string; golangci reads it as "
+        "a regex and this guard cannot. Quote it.")
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", FutureWarning)
+            # The warning is emitted while PARSING; a pattern already in
+            # `re`'s compile cache is not parsed again and would pass here.
+            re.purge()
+            rx = re.compile(pattern)
+    except (re.error, FutureWarning) as exc:
+        raise AssertionError(
+            f"exclusion pattern {pattern!r} is not readable by this guard "
+            f"({exc}). golangci uses Go RE2, this guard uses Python `re`; a "
+            "pattern only one of them reads is unmodelled, not harmless. Spell "
+            "it in the subset both dialects share.") from exc
+    return {f for f in files if rx.search(f)}
+
+
+def _silenced_files(cfg: dict, checker: str, files: list[str], *,
+                    formatter: bool) -> set[str]:
+    """Module-relative files on which `checker` can never report.
+
+    ONE union over every carrier golangci applies, each measured on
+    golangci-lint 2.12.2 (cells in this file's #1821 commit):
+
+      linters.exclusions.paths         every checker, formatters included
+      linters.exclusions.paths-except  every checker; a file survives when
+                                       ANY pattern matches it
+      linters.exclusions.rules         the linters a rule names, or every
+                                       checker when `linters:` is absent;
+                                       `path-except` inverts `path`
+      formatters.exclusions.paths      formatters only
+
+    ⛔ `files` must be MODULE-relative: golangci matches against the path as
+    seen from the module root, so `^foo\\.go$` silences a one-file module
+    while matching no repo-relative path at all.
+
+    ⛔ `text:` and `source:` are NOT evaluated: `text: .*` is a total filter,
+    `text: zzz` an empty one, and nothing static tells them apart — so a rule
+    is taken to be as wide as its path and linters allow. Fail-closed on
+    purpose: the cheapest way to green a catch-all rule must not be to add a
+    `text:` to it. The price: a text/source rule that names no linter (the
+    shape `golangci-lint migrate` emits for v1 `issues.exclude`) or names a
+    required one reads as retiring every checker it reaches.
+
+    Not read, so not guarded: `linters.settings.<name>` (a linter can be
+    emptied from inside), `exclusions.presets` / `generated` (text- and
+    header-scoped, never total), `issues.new*` (drops every finding already
+    on the branch), `issues.fix` (rewrites the file instead of reporting).
+    """
+    silenced: set[str] = set()
+    exclusions = (cfg.get("linters") or {}).get("exclusions") or {}
+
+    for pattern in _as_list(exclusions.get("paths"), "linters.exclusions.paths"):
+        silenced |= _matching(pattern, files)
+
+    excepts = _as_list(exclusions.get("paths-except"), "linters.exclusions.paths-except")
+    if excepts:
+        kept: set[str] = set()
+        for pattern in excepts:
+            kept |= _matching(pattern, files)
+        silenced |= set(files) - kept
+
+    for rule in _as_list(exclusions.get("rules"), "linters.exclusions.rules"):
+        named = [str(n) for n in _as_list(rule.get("linters"), "rule.linters")]
+        if named and checker not in named:
+            continue
+        scope = set(files)
+        if rule.get("path") is not None:
+            scope &= _matching(rule["path"], files)
+        if rule.get("path-except") is not None:
+            scope -= _matching(rule["path-except"], files)
+        silenced |= scope
+
+    if formatter:
+        formatters = (cfg.get("formatters") or {}).get("exclusions") or {}
+        for pattern in _as_list(formatters.get("paths"), "formatters.exclusions.paths"):
+            silenced |= _matching(pattern, files)
+
+    return silenced
+
+
+_MIXED = ["a.go", "b.go", "a_test.go"]
+_ALL_TESTS = ["x_test.go", "y_test.go"]
+
+# One row per axis of `_silenced_files`. An `E<n>` id is the shape of that
+# cell in the #1821 commit's golangci matrix; other ids are guard-side only.
+_SILENCING_CASES = [
+    ("E5 two half rules naming the checker silence the whole module",
+     _MIXED, {"linters": {"exclusions": {"rules": [
+         {"path": "^a", "linters": ["godoclint", "gofmt"]},
+         {"path": "^b", "linters": ["godoclint", "gofmt"]}]}}},
+     "godoclint", False, {"a.go", "b.go", "a_test.go"}),
+    ("E9 a rule naming another linter silences nothing for this one",
+     _ALL_TESTS, {"linters": {"exclusions": {"rules": [
+         {"path": r"_test\.go", "linters": ["errcheck"]}]}}},
+     "gofmt", True, set()),
+    ("E8 formatters.exclusions.paths reaches the formatter",
+     _MIXED, {"formatters": {"exclusions": {"paths": [".*"]}}},
+     "gofmt", True, {"a.go", "b.go", "a_test.go"}),
+    ("E4 path-except inverts path",
+     _MIXED, {"linters": {"exclusions": {"rules": [
+         {"path-except": r"_test\.go", "linters": ["godoclint"]}]}}},
+     "godoclint", False, {"a.go", "b.go"}),
+    ("E28 paths-except keeps a file ANY of its patterns matches",
+     _MIXED, {"linters": {"exclusions": {"paths-except": [r"^a\.go$", r"^b\.go$"]}}},
+     "godoclint", False, {"a_test.go"}),
+    ("E8-linter-side formatters.exclusions.paths does not reach a linter",
+     _MIXED, {"formatters": {"exclusions": {"paths": [".*"]}}},
+     "godoclint", False, set()),
+    ("E7 linters.exclusions.paths reaches the formatter",
+     _MIXED, {"linters": {"exclusions": {"paths": [".*"]}}},
+     "gofmt", True, {"a.go", "b.go", "a_test.go"}),
+    # POLICY, not a measured cell: golangci silences nothing for `text: zzz`
+    # (measured with `linters: [gofmt]` added, E23); this guard reads the rule
+    # as wide as its path, on purpose.
+    ("P1 a rule with no linters reaches the formatter; text is not evaluated",
+     _MIXED, {"linters": {"exclusions": {"rules": [{"path": ".*", "text": "zzz"}]}}},
+     "gofmt", True, {"a.go", "b.go", "a_test.go"}),
+]
+
+
+@pytest.mark.parametrize("label, files, cfg, checker, formatter, expected",
+                         _SILENCING_CASES,
+                         ids=[c[0].split()[0] for c in _SILENCING_CASES])
+def test_silencing_reads_every_carrier(label, files, cfg, checker, formatter,
+                                       expected) -> None:
+    assert _silenced_files(cfg, checker, files, formatter=formatter) == expected, label
+
+
+@pytest.mark.parametrize("pattern", [r"\pL", "[[:alpha:]]", b".*"],
+                         ids=["E34-re2-only", "E35-posix-class", "E33-binary"])
+def test_a_pattern_this_guard_cannot_read_is_red(pattern) -> None:
+    """Each of these silenced a checker in golangci; none may read as harmless."""
+    if isinstance(pattern, str):
+        # Only a pattern Python compiles can sit in `re`'s cache; put it
+        # there first, so the verdict does not depend on who compiled it.
+        with warnings.catch_warnings(), contextlib.suppress(re.error):
+            warnings.simplefilter("ignore")
+            re.compile(pattern)
+    with pytest.raises(AssertionError, match="exclusion pattern"):
+        _silenced_files({"linters": {"exclusions": {"paths": [pattern]}}},
+                        "godoclint", _MIXED, formatter=False)
+
+
+@pytest.mark.parametrize("cfg", [
+    {"linters": {"exclusions": {"rules": [{"path": ".*", "linters": "godoclint"}]}}},
+    {"linters": {"exclusions": {"paths": ".*"}}},
+], ids=["E32-rule-linters", "scalar-paths"])
+def test_a_scalar_where_golangci_wants_a_list_is_red(cfg) -> None:
+    """`run` reads these; `config verify` (which CI never runs) rejects them."""
+    with pytest.raises(AssertionError, match="not a list"):
+        _silenced_files(cfg, "godoclint", _MIXED, formatter=False)
+
+
+def test_a_sibling_config_file_is_red(tmp_path, monkeypatch) -> None:
+    """Through `_module_config`, not the helper: the assert lives at the call."""
+    monkeypatch.setattr(sys.modules[__name__], "ROOT", tmp_path)
+    (tmp_path / "m").mkdir()
+    (tmp_path / "m" / ".golangci.yml").write_text("version: '2'\n", encoding="utf-8")
+    (tmp_path / "m" / ".golangci.yaml").mkdir()    # a directory is not a config
+    assert _module_config("m") == {"version": "2"}
+    (tmp_path / "m" / ".golangci.json").write_text("{}\n", encoding="utf-8")
+    with pytest.raises(AssertionError, match="carries"):
+        _module_config("m")
 
 
 def test_every_linted_module_reports_something() -> None:
@@ -320,8 +504,8 @@ def test_every_linted_module_reports_something() -> None:
             f"{module}/.golangci.yml sets `linters.default: none`; the step "
             "runs and reports nothing.")
 
-        enabled = set(linters.get("enable") or [])
-        disabled = set(linters.get("disable") or [])
+        enabled = set(_as_list(linters.get("enable"), "linters.enable"))
+        disabled = set(_as_list(linters.get("disable"), "linters.disable"))
         missing = sorted((_REQUIRED_LINTERS - enabled) | (_REQUIRED_LINTERS & disabled))
         assert not missing, (
             f"{module}/.golangci.yml does not run {missing} — the workflow's "
@@ -357,37 +541,30 @@ def test_every_linted_module_reports_something() -> None:
             "pinned to `gofmt`: swapping in a stricter formatter is not a "
             "regression, and pinning would report one.")
 
-        # ⛔ ONE set, not one per section: `linters.exclusions.paths` filters
-        # formatter findings too, so a config splitting the corpus between the
-        # two sections silences the formatter while each section on its own
-        # looks narrow. Measured: `run ./...` rc=1 -> `0 issues.`.
-        silencing = [
-            str(p)
-            for section in ("formatters", "linters")
-            for p in ((cfg.get(section) or {}).get("exclusions") or {}).get("paths") or []
-        ]
-        assert not _excludes_every_go_file(silencing, rel), (
-            f"{module}/.golangci.yml has `exclusions.paths` (formatters and "
-            f"linters combined: {silencing}) matching all {len(rel)} of its "
-            ".go files, so NO file in this module is format-checked any more. "
-            "Other linters may still report — this says the formatter cannot. "
-            "Narrow the patterns or drop them; reformatting the files cannot "
-            "clear it, because the exclusion is what silences them.")
-
-        # ⛔ DECLARED GAP — judging a rule by its `path` alone is the wrong
-        # dimension, in both directions, and this change does not fix it
-        # (#1821 carries the measurements). A rule silences only the linters it
-        # names — including a formatter, if named — so `path` on its own
-        # neither proves nor disproves that the module can still report.
-        # Nothing in the tree trips either direction today.
-        for rule in (linters.get("exclusions") or {}).get("rules") or []:
-            pattern = rule.get("path")
-            assert not _excludes_every_go_file(
-                [None if pattern is None else str(pattern)], rel), (
-                f"{module}/.golangci.yml has an exclusion matching all "
-                f"{len(rel)} of its .go files (`path: {pattern}`). In a module "
-                "that is entirely tests, `_test\\.go` is exactly this. Narrow "
-                "it, or drop the linter deliberately.")
+        # Per checker, not per rule: a rule silences only the linters it
+        # names, so its `path` alone proves nothing either way (#1821).
+        # `_test\.go` + `[errcheck]` in an all-tests module retires errcheck
+        # and nothing else — legal; the same path naming godoclint retires
+        # the linter this job promises for every module.
+        checkers = [(name, False) for name in sorted(_REQUIRED_LINTERS)]
+        checkers += [(str(name), True)
+                     for name in _as_list(formatters["enable"], "formatters.enable")]
+        for checker, is_formatter in checkers:
+            silenced = _silenced_files(cfg, checker, rel, formatter=is_formatter)
+            assert set(rel) - silenced, (
+                f"{module}/.golangci.yml: as this guard reads it, {checker} is "
+                f"excluded on all {len(rel)} of the module's .go files — by "
+                "`linters.exclusions.paths` / `paths-except`, by a rule that "
+                "lists it or lists no linters, or (formatters) by "
+                "`formatters.exclusions.paths`. `text:`/`source:` are not "
+                "evaluated, so a rule narrowed only by text counts as wide as "
+                "its path. Enrolled and silent reads exactly like clean. To "
+                "green: make the exclusion reach fewer files (a narrower "
+                "`path`, a wider `paths-except`), or point the rule at the "
+                f"linters the text actually comes from instead of {checker}. A "
+                f"text-only rule naming just {checker} cannot be narrowed here "
+                f"— drop it and use `//nolint:{checker}` at the site. "
+                "Reformatting or fixing the code cannot clear it.")
 
 
 # ── toolchain ──────────────────────────────────────────────────────────────
