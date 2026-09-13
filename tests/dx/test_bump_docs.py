@@ -3476,6 +3476,31 @@ class TestDatoolsPinCapability:
         """The release path is green today — so a future red means a real drift."""
         assert bump_docs._check_datools_pin_capability("9.9.9") == 0
 
+    def test_the_summary_does_not_misdiagnose_an_unshipped_command(
+            self, monkeypatch, capsys):
+        """The aggregate must stay failure-NEUTRAL (#1844 review).
+
+        `check_pinned_subcommands_against` returns two kinds and the fixes
+        differ: `datools-pin-capability` is not dispatched at all, while
+        `datools-pin-not-shipped` IS dispatched and then dies on a script
+        build.sh never copied into the image (#1044). The summary fires for
+        ANY non-empty issue list, so asserting "does not dispatch" /
+        "`Unknown command`" there points the fixer at the wrong layer for
+        half of its inputs.
+
+        \u26d4 The per-invocation line may still name `Unknown command` — it knows
+        which kind it is. Only the AGGREGATE is constrained, so this asserts
+        on the summary sentence alone.
+        """
+        only_unshipped = [bump_docs.Issue("datools-pin-not-shipped", "d.md", 7,
+                                          "synthetic not-shipped finding")]
+        monkeypatch.setattr(bump_docs, "check_pinned_subcommands_against",
+                            lambda *a, **kw: only_unshipped)
+        bump_docs._check_datools_pin_capability("9.9.9")
+        summary = capsys.readouterr().err.split("\n\u274c ", 1)[1]
+        assert "does not dispatch" not in summary, summary
+        assert "cannot run" in summary, summary
+
     def test_empty_command_map_fails_closed(self, monkeypatch):
         """An unparseable entrypoint must fail the bump, not pass it.
 
