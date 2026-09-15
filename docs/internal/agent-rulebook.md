@@ -9,7 +9,7 @@ tags: [internal, ai-tooling]
 
 # Agent Rulebook
 
-受眾是 agent；給人讀的專案規範在 [`dev-rules.md`](dev-rules.md)，兩者刻意分開。每條只有**觸發時刻／約束／機械判準／Traced To**；為什麼與已知失敗形狀在 [`agent-rulebook-shapes.md`](agent-rulebook-shapes.md)，不確定怎麼套用時才讀。本檔不寫量測數字（owner 2026-09-06 拍板；判準見 [#1620](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1620)），逐格量測住在 `Traced To` 指向的 issue 與 commit 訊息。正要寫下宣稱時的路由在 `verifying-claims` skill。
+受眾是 agent；給人讀的專案規範在 [`dev-rules.md`](dev-rules.md)，兩者刻意分開。每條只有**觸發時刻／約束／機械判準／Traced To**（D-05 另附八軸索引）；為什麼與已知失敗形狀在 [`agent-rulebook-shapes.md`](agent-rulebook-shapes.md)，不確定怎麼套用時才讀。本檔不寫量測數字（owner 2026-09-06 拍板；判準見 [#1620](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1620)），逐格量測住在 `Traced To` 指向的 issue 與 commit 訊息。正要寫下宣稱時的路由在 `verifying-claims` skill。
 
 ## 仲裁：規則互相衝突時
 

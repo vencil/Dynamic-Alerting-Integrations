@@ -6,7 +6,7 @@ description: Routes a claim the agent is about to make to the agent-rulebook rul
 
 # verifying-claims — 宣稱之前先走哪一條
 
-完整規則（觸發時刻／約束／為什麼／已知失敗形狀）在 [`agent-rulebook.md`](../../../docs/internal/agent-rulebook.md)。本檔只做路由：找到那一條，做最小動作。
+完整規則（觸發時刻／約束／機械判準）在 [`agent-rulebook.md`](../../../docs/internal/agent-rulebook.md)，為什麼與已知失敗形狀在 [`agent-rulebook-shapes.md`](../../../docs/internal/agent-rulebook-shapes.md)。本檔只做路由：找到那一條，做最小動作。
 
 ## 路由表（判準是你站在哪個時點，不是缺陷屬哪一類）
 
