@@ -17,8 +17,8 @@ description: 設計階段的 Socratic ideation — 用提問逼出 MVP 範圍、
 
 ## 收斂：locked decision 清單
 
-每條一句加 trade-off；未定的標 open question。必列**考慮過但 reject 的替代方案與理由**（防 first-idea anchoring，讓後人能重評）。深挖 HOW 之前先用 field-data 確認 WHAT 對；locked 之後換帽子當 critic 試著打穿自己的設計（最脆的假設、不可接受的 trade-off、護欄真擋得住嗎），打不穿才算收斂。
+每條一句加 trade-off；未定的標 open question。必列**考慮過但 reject 的替代方案與理由**（防 first-idea anchoring，讓後人能重評）。深挖 HOW 之前先用 field-data 確認 WHAT 對（方向沒驗過，HOW 再漂亮都可能白做；別把 core-correctness 當 gold-plating 延後）；locked 之後換帽子當 critic 試著打穿自己的設計（最脆的假設、不可接受的 trade-off、護欄真擋得住嗎），打不穿才算收斂。
 
 ## 外審
 
-locked decision 後、實作前走一輪外部 adversarial review（Gemini / o3）。外審意見走 take / reframe / reject，外審也會杜撰路徑與前提，先驗再收。設計空間真的很寬、選錯代價高時，才升級成多 agent 提案 panel（reuse [`vibe-security-audit`](../vibe-security-audit/SKILL.md) 的 Workflow harness，換 lens 成設計）；小題不要起它。
+locked decision 後、實作前走一輪外部 adversarial review（Gemini / o3）。外審意見走 take / reframe / reject，外審也會杜撰路徑與前提，先驗再收。設計空間真的很寬、選錯代價高時，才升級成多 agent 提案 panel（reuse [`vibe-security-audit`](../vibe-security-audit/SKILL.md) 的 Workflow harness：平行獨立提案彼此盲 → 不同模型 critic 打穿 → judge 打分收斂）；它不取代外審——內部 panel 抓內部矛盾，外審抓內部共有的盲點；小題不要起它。已 locked 的執行直接做，不再回到本 skill。

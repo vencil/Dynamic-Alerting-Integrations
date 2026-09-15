@@ -7,10 +7,10 @@ description: Vibe session 起手式 + 最常踩的 7 個坑 + 標準開發 sessi
 
 ## 起手式
 
-先照 [CLAUDE.md §起手式](../../../CLAUDE.md) 量 hook 有沒有跑（`cat /tmp/vibe-session-start-hook.ran`），沒有就手動跑 `session-start.sh`。本機 session 的 PreToolUse hook 第一次 `Bash`/`Write`/`Edit` 時跑 `scripts/session-guards/session-init.py`（關 VS Code Git 背景操作、寫 session marker）；web 多 repo session 這支不會被載入（#1719）。
+先照 [CLAUDE.md §起手式](../../../CLAUDE.md) 量 hook 有沒有跑（`cat /tmp/vibe-session-start-hook.ran`），沒有就手動跑 `session-start.sh`。本機 session 的 PreToolUse hook 第一次 `Bash`/`Write`/`Edit` 時跑 `scripts/session-guards/session-init.py`（關 VS Code Git 背景操作、寫 session marker `/tmp/vibe-session-init.<hash>`，session 以 `CLAUDE_SESSION_ID` 區分）；web 多 repo session 這支不會被載入（#1719）。原理見 [windows-mcp-playbook §FUSE Phantom Lock 防治](../../../docs/internal/windows-mcp-playbook.md#fuse-phantom-lock-防治)。
 
 - 手動觸發／偵錯：`python scripts/session-guards/session-init.py [--status|--force|--stats]`
-- Telemetry：`~/.cache/vibe/session-init.log`（Windows：`%LOCALAPPDATA%\vibe\session-init.log`）；`VIBE_SESSION_LOG=/dev/null` 停用
+- Telemetry：`~/.cache/vibe/session-init.log`（Windows：`%LOCALAPPDATA%\vibe\session-init.log`）；查看 `session-init.py --stats [--json] [--session <SID>]`；`VIBE_SESSION_LOG=/dev/null` 停用
 - Dev Container（K8s / Go test / Helm）：`docker start vibe-dev-container`、`make dc-up`、`make dc-test`
 - Session 結束：`make session-cleanup`
 
@@ -18,8 +18,8 @@ description: Vibe session 起手式 + 最常踩的 7 個坑 + 標準開發 sessi
 
 ## 七個坑與救援指令
 
-1. ⛔ **`sed -i`** — 改用 Read+Edit；批次替換走 pipe：`sed '...' < file > file.tmp && mv file.tmp file`。`preflight_bash.py` 會攔掛載路徑上的 `sed -i`（web session 除外）。
-2. **FUSE phantom lock** → `make git-preflight`（或 `make git-lock ARGS="--clean"`）；頑強殘影 `make fuse-reset`（Level 2/4/5 見 [windows-mcp-playbook §修復層 B](../../../docs/internal/windows-mcp-playbook.md#修復層-bfuse-cache-重建level-1--5)）；反覆卡住走 Windows 逃生門（[§修復層 C](../../../docs/internal/windows-mcp-playbook.md#修復層-cwindows-原生-git-fallbackfuse-側卡死時的備援路徑)）。
+1. ⛔ **`sed -i`** — 改用 Read+Edit；批次替換走 pipe：`sed '...' < file > file.tmp && mv file.tmp file`。`preflight_bash.py`（PreToolUse）與 `scripts/ops/vibe-sed-guard.sh`（shell 層）會攔掛載路徑上的 `sed -i`；web session 只剩後者與 pre-commit 的 `sed-damage-guard`。
+2. **FUSE phantom lock** → `make git-preflight`（或 `make git-lock ARGS="--clean"`）；頑強殘影 `make fuse-reset`（Level 1+3 自動；Level 2/4/5 見 [windows-mcp-playbook §修復層 B](../../../docs/internal/windows-mcp-playbook.md#修復層-bfuse-cache-重建level-1--5)）；反覆卡住走 Windows 逃生門（[§修復層 C](../../../docs/internal/windows-mcp-playbook.md#修復層-cwindows-原生-git-fallbackfuse-側卡死時的備援路徑)）。
    ⛔ 不要用 FUSE temp index（`GIT_INDEX_FILE=/tmp/xxx`）commit：FUSE 側 `.git/index` 永遠 stale，`commit-tree` 產出的 tree 不含修改。git add/commit/push 從 Windows 側執行：`make win-commit MSG=_msg.txt FILES="a b"`。
 3. **docker exec stdout 為空** → 重導向 `> /workspaces/.../_out.txt 2>&1` 再 `cat`，或 `make dc-run CMD="..."`（[§核心原則](../../../docs/internal/windows-mcp-playbook.md)）。
 4. **pre-commit 中斷留下 .git lock** → `make git-lock ARGS="--clean"`，不要 `--no-verify`。
@@ -32,7 +32,7 @@ description: Vibe session 起手式 + 最常踩的 7 個坑 + 標準開發 sessi
 1. 依任務類型讀對應 Playbook（`vibe-playbook-nav`）。
 2. 改碼 → Go test / Python test → 場景驗證（`make dc-*`）。
 3. 效能相關變更跑完整 benchmark（idle + routing + Go micro-bench），記到 CHANGELOG 與 architecture docs。
-4. 文件同步：`make version-check` 只檢查；要更新計數跑 `python3 scripts/tools/dx/bump_docs.py --sync-counts`（`make bump-docs` 是版號 bump，不做計數）。沒有 pre-commit hook 跑 bump_docs。
+4. 文件同步：`make version-check` 只檢查；要更新計數跑 `python3 scripts/tools/dx/bump_docs.py --sync-counts`（`make bump-docs` 是版號 bump，不做計數）。沒有 pre-commit hook 跑 bump_docs：Doc-as-Code #4 靠自覺＋`make pre-tag`。
 5. `git commit`（FUSE 卡住時 `make win-commit`）。
 6. `make pr-preflight`（寫 `.git/.preflight-ok.<SHA>` marker）→ `gh pr create`。
 7. 新陷阱回寫對應 Playbook；跨 session 高頻才升到 CLAUDE.md 或本 skill。

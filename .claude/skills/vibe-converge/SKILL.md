@@ -20,11 +20,11 @@ description: 多輪修正的收斂協議 —— decidability gate（開工前先
 | `question`，status=`open` | 一句話，寫明誰能回答／要什麼證據才能收掉 |
 | `dead-end` | 判準 + 怎麼死的（實測）。每輪必帶 |
 
-`verified`＝本輪跑過、帳本有指令與輸出；`inferred`＝讀碼推導，本輪內可用、不跨輪；`speculative` 不進帳本。上一輪的 commit body、review 對話、修法敘事不跨輪（可取回：寫 SHA / PR 連結）。
+`verified`＝本輪跑過、帳本有指令與輸出；`inferred`＝讀碼推導，本輪內可用、⛔ 不跨輪；`speculative`（「我覺得可能還有」）⛔ 禁止進帳本。上一輪的 commit body、review 對話、修法敘事不跨輪（可取回：寫 SHA / PR 連結）。
 
 ## 停止規則（`make converge-status SCOPE=dev/<scope>` 會判）
 
-1. **ROUND-CAP**：輪數上限 5。超過 ⇒ 帶兩個數字去找 owner：這一輪幾條、其中幾條是我上一輪修出來的。找不到人 ⇒ 停在原地寫 handoff（受審主體／未關 finding／dead-end），不開第二本帳。
+1. **ROUND-CAP**：輪數上限 5（5 輪是允許的，上限是天花板不是最後一輪）。超過 ⇒ 帶兩個數字去找 owner：這一輪幾條、其中幾條是我上一輪修出來的。找不到人 ⇒ 停在原地寫 handoff（受審主體／未關 finding／dead-end），不開第二本帳。
 2. **CHANGE-SUBJECT**：同一受審主體 `dead-end` ≥ 2 ⇒ 禁止第 3 版述詞，回第 0 步。
 3. **UNREVIEWED-FIX**：最後一個 `status=fixed` 之後沒有任何輪次宣告受審主體 ⇒ 開一輪以那個修法為 subject。
 4. **LEDGER-GAP**：輪號不連續 ⇒ blocking。
@@ -35,7 +35,7 @@ description: 多輪修正的收斂協議 —— decidability gate（開工前先
 
 ## 帳本 `dev/<scope>/ROUNDS.jsonl`
 
-append-only、UTF-8、一行一筆：
+append-only、一行一筆、必須是 UTF-8（Windows shell 預設寫本地 codepage，工具會對那一行報 `not UTF-8` 並 exit 2）；`subject` 的 `insertions` / `deletions` 若寫了必須是非負整數：
 
 ```text
 {"ts":"<date -u +%FT%TZ>","round":1,"kind":"subject","subject":"<受審主體>","insertions":814,"deletions":12,"reviewer":"blind|self"}
@@ -45,4 +45,4 @@ append-only、UTF-8、一行一筆：
 {"ts":"...","round":1,"kind":"question","status":"open","claim":"<問題>","evidence":"<要什麼證據才能收掉>"}
 ```
 
-`finding`（verified）與 `dead-end` 的 `evidence` 不得為空。host 無 `make` 時跑 `python scripts/tools/dx/converge_status.py --scope dev/<scope>`。帳本是自陳的：工具只驗格式，不驗 evidence 是否真的跑過。
+`finding`（verified）與 `dead-end` 的 `evidence` 不得為空。host 無 `make` 時跑 `py scripts/tools/dx/converge_status.py --scope dev/<scope>`（或 `python`）。帳本是自陳的：工具只驗格式，不驗 evidence 是否真的跑過。

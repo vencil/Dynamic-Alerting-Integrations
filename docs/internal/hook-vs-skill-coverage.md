@@ -128,12 +128,12 @@ lang: zh
 | `verifying-claims` | 宣稱前的路由 → agent-rulebook | 無對應 hook |
 | `vibe-playbook-nav` | 任務→Playbook 章節路由 | 無對應 hook |
 | `vibe-subagent-review` | 副檔名路由 review（code spec→quality / IaC blast-radius）、收 review 處置、長時 agent ledger | 補集 #448：機械層單檔 SAST 由 #448，本 skill 顧跨檔 cascade（TRK-305） |
-| `vibe-release` | 六線版號 release 收尾 SOP | #474 機械化 Layer 1/2；`draft-advisory-check` 只在本地 `make pre-tag` 路徑（TRK-306） |
+| `vibe-release` | 六線版號 release 收尾 SOP | #474 機械化 Layer 1/2；`draft-advisory-check` 只在本地 `make pre-tag` 路徑，直接 push tag 仍繞過（TRK-306） |
 | `vibe-brainstorm` | 設計階段五問 + locked decision + 外審 | 無對應 hook（TRK-308） |
 | `vibe-converge` | 多輪修正：decidability gate、跨輪三類、停止規則、`ROUNDS.jsonl` | 刻意無 hook：`make converge-status` 只觀測不擋（TRK-360） |
 | `vibe-security-audit` | 週期性深度安全稽核 harness | 與 diff-scoped `/security-review` 互補、不進 CI（#1001） |
 
-優先級仲裁見 CLAUDE.md §Skill 優先級宣告（TRK-301）。
+優先級仲裁見 [CLAUDE.md §Skill 優先級宣告](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/CLAUDE.md)（TRK-301）：衝突時 `vibe-*` supersede 環境層 generic skill（`vibe-workflow` > session-bootstrap、repo 規範 > `engineering:code-review` 的 git/commit 部分、`vibe-playbook-nav` > 跨 K8s/Helm/release/E2E generic）。
 
 ---
 
@@ -176,8 +176,8 @@ lang: zh
 | **多輪修正不收斂** | 🧠 `vibe-converge` + `make converge-status`（不進 CI / pre-commit） | 每輪淨增未受審面；對不可判的問題連寫多版述詞 | 刻意不做成 gate（#1457）；工具只驗帳本格式，不驗 evidence 是否跑過 |
 | **Agent 指引 SSOT 漂移**（改 `.claude/**` 而非 `.agents/`） | 🔧 `gen-agent-adapters-check` | 轉接檔被手改後重生即丟失 | 已機械化（stale / missing / extra / SSOT 缺失）；不保證內容正確 |
 | **SAST 7 條的 1/3/7**（encoding/chmod/stderr） | 👁️ reviewer convention（bandit 只蓋 2/4/5/6） | 進 repo | dev-rule #5 明列 |
-| **A-13**（`test.skip()` / `test.fixme()`）在 worktree 內 | 🔧 `playwright-lint`，但只在有 `tests/e2e/node_modules` 的 checkout 跑得起來 | 新 worktree 對它是壞的 | [#1428](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1428)：三入口收斂到 `e2e_spec_lint.sh`；CI job 非 required |
-| **起手式 + `sed -i` 衛生**在 web session 內 | 🔧 `.claude/settings.json` 的 hook，只在 project root == 本 repo 時載入 | hook 根本沒被註冊，畫面與「沒有這條規則」無法區分 | [#1719](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1719)：SessionStart marker 可觀測；根因修法未裁決 |
+| **A-13**（`test.skip()` / `test.fixme()`）在 worktree 內 | 🔧 `playwright-lint`，但只在有 `tests/e2e/node_modules` 的 checkout 跑得起來 | 新 worktree 對它是壞的 | [#1428](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1428)：三入口收斂到 `e2e_spec_lint.sh`，`tests/lint/test_e2e_spec_lint.py` 釘住三者真的執行它且 CI job 不得帶 `if:` / `continue-on-error`；該 job 非 required |
+| **起手式 + `sed -i` 衛生**在 web session 內 | 🔧 `.claude/settings.json` 的 hook，只在 project root == 本 repo 時載入 | hook 根本沒被註冊，畫面與「沒有這條規則」無法區分 | [#1719](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1719)：SessionStart hook + `/tmp/vibe-session-start-hook.ran` marker 可觀測；⛔ marker 只有「有／無」兩態，分不出「hook 沒被呼叫」與「被呼叫但定位 repo root 時就 exit 1」（後者發生在 marker 寫入前）；根因修法未裁決 |
 | **nested `CLAUDE.md`**（`tools/portal/CLAUDE.md`） | 🔧 Claude Code 原生，但只在 Read 工具讀該子樹時帶入 | Bash `cat` 不觸發 | [#1757](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1757)：推廣前先量真實觸發率 |
 
 最後三列同族：機制存在但只在某形態下能執行——缺依賴（A-13）、缺註冊（#1719）、缺叫用形式（nested）。判「有沒有 hook」時要連問依賴在不在、註冊載入了沒、叫用方式會不會觸發。
