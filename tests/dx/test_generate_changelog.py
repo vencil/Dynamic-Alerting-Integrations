@@ -750,3 +750,141 @@ class TestMain:
         cli_argv('generate_changelog.py', '--since', 'v2.5.0')
         assert gc.main() == 0
         assert captured["since"] == "v2.5.0"
+
+
+# ── Entry cap: new [Unreleased] entries only (agent 指引改善計畫 PR-C) ──
+
+
+def _entry(head: str, chars: int) -> str:
+    """A top-level entry padded to exactly ``chars`` characters."""
+    body = f"- **{head}**: "
+    return body + "x" * (chars - len(body))
+
+
+def _unreleased(*entries: str) -> str:
+    return "## [Unreleased]\n\n### Changed\n" + "\n".join(entries) + "\n"
+
+
+class TestNewEntryCap:
+    """Cap on NEW entries; existing ones are never retroactive (the file has
+    hundreds over the cap and #1737 decided not to rewrite history)."""
+
+    def test_new_oversize_entry_is_flagged_and_the_split_is_clean(self):
+        base = _unreleased(_entry("old", 200))
+        big = _unreleased(_entry("old", 200), _entry("new", 1500))
+        issues = gc.lint_entry_caps(big, base)
+        assert len(issues) == 1 and "1500 chars (> 1000)" in issues[0], issues
+        split = _unreleased(_entry("old", 200), _entry("new-a", 700), _entry("new-b", 700))
+        assert gc.lint_entry_caps(split, base) == []
+
+    def test_boundary_exactly_cap_is_clean_and_one_over_is_not(self):
+        base = _unreleased(_entry("old", 200))
+        assert gc.lint_entry_caps(_unreleased(_entry("old", 200), _entry("n", 1000)), base) == []
+        assert len(gc.lint_entry_caps(_unreleased(_entry("old", 200), _entry("n", 1001)), base)) == 1
+
+    def test_existing_oversize_entry_is_not_retroactive(self):
+        text = _unreleased(_entry("legacy", 3000))
+        assert gc.lint_entry_caps(text, text) == []
+
+    def test_editing_a_legacy_entry_below_its_bullet_line_keeps_it_exempt(self):
+        legacy = _entry("legacy", 3000)
+        base = _unreleased(legacy)
+        edited = _unreleased(legacy + "\n  - a new sub-bullet added later")
+        assert gc.lint_entry_caps(edited, base) == []
+
+    def test_no_base_means_everything_is_new(self):
+        text = _unreleased(_entry("a", 1500))
+        assert len(gc.lint_entry_caps(text, None)) == 1
+
+    def test_sub_bullets_and_evidence_count_toward_the_length(self):
+        base = _unreleased(_entry("old", 200))
+        short_head = "- **n**: x"
+        padding = "\n  - " + "y" * 1200
+        text = _unreleased(_entry("old", 200), short_head + padding)
+        assert len(gc.lint_entry_caps(text, base)) == 1
+
+    def test_other_sections_are_not_capped(self):
+        text = "## [v2.9.0] — T (2026-06-06)\n\n### Fixed\n" + _entry("released", 5000) + "\n"
+        assert gc.lint_entry_caps(text, "") == []
+
+    def test_cap_zero_disables_via_cli(self, tmp_path, monkeypatch, capsys):
+        f = tmp_path / "history.md"
+        f.write_text(_unreleased(_entry("n", 1500)), encoding="utf-8")
+        monkeypatch.setattr(gc, "_git_show", lambda ref, path: _unreleased(_entry("old", 5)))
+        monkeypatch.setattr(sys, "argv", ["gc", "--cap", "0", "--lint", str(f)])
+        assert gc.main() == 0
+        monkeypatch.setattr(sys, "argv", ["gc", "--lint", str(f)])
+        assert gc.main() == 1
+        out = capsys.readouterr().out
+        assert "1500 chars (> 1000)" in out
+
+
+class TestColumnZeroTextIsAnError:
+    """A column-0 line closes the entry above it (that is how
+    `agent_output_metrics.iter_entries` reads the file), so it is the one way
+    to split an entry around the cap. New ones are errors; legacy ones stay."""
+
+    def test_new_column0_text_is_flagged_with_its_line_number(self):
+        base = _unreleased(_entry("old", 200))
+        text = "## [Unreleased]\n\n### Changed\n" + _entry("old", 200) + "\n⇒ out-dented conclusion\n"
+        issues = gc.lint_entry_caps(text, base)
+        assert len(issues) == 1 and issues[0].startswith("L5:") and "column-0" in issues[0], issues
+
+    def test_legacy_column0_lines_are_keyed_against_the_base(self):
+        text = "## [Unreleased]\n\n### Changed\n" + _entry("old", 200) + "\n| a | b |\n|---|---|\n"
+        assert gc.lint_entry_caps(text, text) == []
+
+    @pytest.mark.parametrize("line", ["### Fixed", "<!-- note -->", "- another bullet", "  indented", "\tindented"])
+    def test_structural_lines_are_not_column0_text(self, line):
+        base = _unreleased(_entry("old", 200))
+        text = "## [Unreleased]\n\n### Changed\n" + _entry("old", 200) + "\n" + line + "\n"
+        assert [i for i in gc.lint_entry_caps(text, base) if "column-0" in i] == []
+
+    def test_splitting_an_oversize_entry_with_column0_text_does_not_evade(self):
+        """The evasion this check exists for: 600 + out-dent + 600 would be
+        two entries of 600 without it."""
+        base = _unreleased(_entry("old", 200))
+        text = "## [Unreleased]\n\n### Changed\n" + _entry("old", 200) + "\n" + _entry("n", 600) + "\ntail " + "z" * 600 + "\n"
+        issues = gc.lint_entry_caps(text, base)
+        assert any("column-0" in i for i in issues), issues
+
+
+class TestCapBase:
+    def test_default_base_is_head_without_github_base_ref(self, monkeypatch):
+        monkeypatch.setattr(gc, "_ref_exists", lambda ref: True)
+        assert gc.default_cap_base({}) == "HEAD"
+
+    def test_pr_run_uses_origin_base_when_fetched(self, monkeypatch):
+        monkeypatch.setattr(gc, "_ref_exists", lambda ref: ref == "origin/main")
+        assert gc.default_cap_base({"GITHUB_BASE_REF": "main"}) == "origin/main"
+
+    def test_pr_run_falls_back_to_head_when_base_is_not_fetched(self, monkeypatch):
+        monkeypatch.setattr(gc, "_ref_exists", lambda ref: False)
+        assert gc.default_cap_base({"GITHUB_BASE_REF": "main"}) == "HEAD"
+
+    def test_missing_base_file_prints_a_notice_and_counts_everything(self, tmp_path, monkeypatch, capsys):
+        f = tmp_path / "history.md"
+        f.write_text(_unreleased(_entry("n", 1500)), encoding="utf-8")
+        monkeypatch.setattr(gc, "_git_show", lambda ref, path: None)
+        monkeypatch.setattr(sys, "argv", ["gc", "--base", "HEAD", "--lint", str(f)])
+        assert gc.main() == 1
+        captured = capsys.readouterr()
+        assert "counts as new" in captured.err and "1500 chars" in captured.out
+
+    def test_git_show_reads_the_committed_version(self, tmp_path, monkeypatch):
+        """Real git, no mocks: the working tree may differ from HEAD."""
+        repo = tmp_path / "r"
+        repo.mkdir()
+        run = lambda *a: subprocess.run(["git", *a], cwd=repo, check=True, capture_output=True, timeout=60)
+        run("init", "-q")
+        run("config", "user.email", "t@t")
+        run("config", "user.name", "t")
+        f = repo / "history.md"
+        f.write_text("committed\n", encoding="utf-8")
+        run("add", "history.md")
+        run("commit", "-q", "-m", "c")
+        f.write_text("working tree\n", encoding="utf-8")
+        monkeypatch.chdir(repo)
+        assert gc._git_show("HEAD", "history.md") == "committed\n"
+        assert gc._git_show("HEAD", "MISSING.md") is None
+        assert gc._git_show("nosuchref", "history.md") is None

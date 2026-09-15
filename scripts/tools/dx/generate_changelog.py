@@ -39,6 +39,14 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo tools root
 from _lib_python import write_text_or_die  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+# ⛔ One ruler. `agent_output_metrics` is the tool that MEASURED the changelog
+# (entry definition, cap); the lint below must count with the same functions
+# or "over the cap" here and "over the cap" there will drift apart.
+from agent_output_metrics import (  # noqa: E402
+    DEFAULT_CAP as ENTRY_CAP,
+    iter_entries,
+    section_lines,
+)
 
 # ── Constants ────────────────────────────────────────────────────────
 
@@ -368,6 +376,121 @@ def lint_changelog(changelog_path: str = "CHANGELOG.md") -> List[str]:
     return issues
 
 
+# ── Entry cap (new entries only) ────────────────────────────────────
+
+CAP_SECTION = "Unreleased"
+
+# Column-0 lines that are structure, not text, inside a `## [Unreleased]`
+# block. Anything else at column 0 closes the entry above it (see
+# `agent_output_metrics.iter_entries`), which is exactly how an entry could be
+# split around the cap — so a NEW line of that shape is an error, not a style
+# nit. The legacy ones already in CHANGELOG.md are keyed against the base.
+_STRUCTURAL_PREFIXES = ("- ", "  ", "\t", "### ", "<!--")
+
+
+def _entry_key(body: str) -> str:
+    """The bullet line identifies an entry across edits: touching a legacy
+    entry's second paragraph must not pull the whole entry under the cap."""
+    return body.splitlines()[0]
+
+
+def lint_entry_caps(
+    text: str,
+    base_text: Optional[str],
+    cap: int = ENTRY_CAP,
+    section: str = CAP_SECTION,
+) -> List[str]:
+    """Cap NEW top-level entries of ``## [section]`` at ``cap`` characters.
+
+    New = the bullet line does not occur in ``base_text``'s same section
+    (``None`` = no base, everything is new). Length is the raw entry text,
+    sub-bullets and evidence included: the cap is on what a reader scrolls
+    past, and when this file was measured only one over-cap entry owed it to
+    a table (#1737). Also flags NEW column-0 non-structural lines in the
+    section: they close the entry above them, which is the one way to hide
+    length from this check.
+    """
+    found = section_lines(text, section)
+    if found is None:
+        return []
+    heading_no, block = found
+    base_found = section_lines(base_text, section) if base_text is not None else None
+    base_block = base_found[1] if base_found else []
+    base_keys = {_entry_key(body) for _, body in iter_entries(base_block, 1)}
+    base_lines = set(base_block)
+    issues: List[str] = []
+    for no, body in iter_entries(block, heading_no + 1):
+        if _entry_key(body) in base_keys:
+            continue
+        n = len(body)
+        if n > cap:
+            issues.append(
+                f"L{no}: new entry is {n} chars (> {cap}); keep the conclusion "
+                f"here and move the measurements to the PR body or an issue comment"
+            )
+    for offset, line in enumerate(block):
+        if not line.strip() or line.startswith(_STRUCTURAL_PREFIXES):
+            continue
+        if line in base_lines:
+            continue
+        issues.append(
+            f"L{heading_no + 1 + offset}: column-0 text inside [{section}] "
+            f"closes the entry above it; indent it by two spaces (an out-dented "
+            f"line would split an entry around the {cap}-char cap)"
+        )
+    return issues
+
+
+def _ref_exists(ref: str) -> bool:
+    try:
+        r = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", ref + "^{commit}"],
+            capture_output=True, text=True, timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return r.returncode == 0
+
+
+def default_cap_base(env: Optional[Dict[str, str]] = None) -> str:
+    """Which commit "new" is measured against.
+
+    On a PR run GitHub sets ``GITHUB_BASE_REF`` (e.g. ``main``) and the merge
+    ref's HEAD already CONTAINS the new entries, so HEAD would see nothing
+    new; use ``origin/<base>`` when it is fetched. Otherwise HEAD, which is
+    what the pre-commit hook wants: staged file vs last commit.
+    """
+    env = os.environ if env is None else env
+    base_ref = env.get("GITHUB_BASE_REF", "").strip()
+    if base_ref:
+        candidate = f"origin/{base_ref}"
+        if _ref_exists(candidate):
+            return candidate
+    return "HEAD"
+
+
+def _git_show(ref: str, path: str) -> Optional[str]:
+    """Contents of ``path`` at ``ref``; None when git cannot produce it
+    (not a repo, ref unknown, file absent at that ref)."""
+    try:
+        top = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=30,
+        )
+        if top.returncode != 0:
+            return None
+        rel = Path(path).resolve().relative_to(Path(top.stdout.strip()).resolve())
+        r = subprocess.run(
+            ["git", "show", f"{ref}:{rel.as_posix()}"],
+            capture_output=True, timeout=60,
+        )
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0:
+        return None
+    return r.stdout.decode("utf-8", errors="replace")
+
+
 # ── Main ─────────────────────────────────────────────────────────────
 
 def main() -> int:
@@ -403,7 +526,21 @@ def main() -> int:
         # it also matches CHANGELOG-archive.md, and editing that would have run
         # a check that never opened it (#1765).
         help="Lint changelog file format (semver/Unreleased headers, dates, "
-             "subsections); defaults to CHANGELOG.md",
+             "subsections) and cap NEW [Unreleased] entries; defaults to CHANGELOG.md",
+    )
+    parser.add_argument(
+        "--cap",
+        type=int,
+        default=ENTRY_CAP,
+        metavar="N",
+        help=f"Max characters per NEW [Unreleased] entry in --lint "
+             f"(default {ENTRY_CAP}; 0 disables). Existing entries are never checked.",
+    )
+    parser.add_argument(
+        "--base",
+        metavar="REF",
+        help="Git ref that decides which entries are new (default: "
+             "origin/$GITHUB_BASE_REF on a PR run, else HEAD)",
     )
     args = parser.parse_args()
 
@@ -429,6 +566,20 @@ def main() -> int:
                 print(f"ERROR: could not read {target}: {exc}", file=sys.stderr)
                 return EXIT_CALLER_ERROR
             issues += [f"{target}: {i}" for i in found]
+            if args.cap > 0:
+                base = args.base or default_cap_base()
+                base_text = _git_show(base, target)
+                if base_text is None:
+                    print(f"notice: {target} not found at {base}; every "
+                          f"[{CAP_SECTION}] entry counts as new for the cap",
+                          file=sys.stderr)
+                try:
+                    text = p.read_text(encoding="utf-8")
+                except (OSError, UnicodeDecodeError) as exc:
+                    print(f"ERROR: could not read {target}: {exc}", file=sys.stderr)
+                    return EXIT_CALLER_ERROR
+                issues += [f"{target}: {i}"
+                           for i in lint_entry_caps(text, base_text, args.cap)]
         if issues:
             print(f"❌ {len(issues)} changelog format issue(s):")
             for issue in issues:

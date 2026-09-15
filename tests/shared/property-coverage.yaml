@@ -132,6 +132,11 @@ modules:
       lint_changelog: "Multi-rule walker over commit list; covered by tests/dx/test_generate_changelog* unit tests"
       format_changelog: "Pure but template-heavy; output churn would dominate; covered by snapshot/golden tests"
       main: "CLI entry point; covered by CLI integration tests"
+      lint_entry_caps: "Example-driven cap lint over parsed entries; the boundary/retro/column-0 cases are pinned in tests/dx/test_generate_changelog.py (TestNewEntryCap, TestColumnZeroTextIsAnError)"
+      _entry_key: "One-line accessor (first line of an entry); covered by the cap tests"
+      default_cap_base: "Env + git ref probe; three branches pinned in TestCapBase"
+      _ref_exists: "Side-effecting (git subprocess)"
+      _git_show: "Side-effecting (git subprocess); real-repo test in TestCapBase"
 
   scripts/tools/dx/axe_lite_static.py:
     covered:

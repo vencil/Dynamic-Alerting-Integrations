@@ -377,7 +377,7 @@ repos:
         additional_dependencies: ['pyyaml']
 
       - id: changelog-format
-        name: Changelog file structure (headers, dates, subsections)
+        name: Changelog file structure (headers, dates, subsections) + new-entry cap vs HEAD
         entry: python3 -X utf8 scripts/tools/dx/generate_changelog.py --lint
         language: python
         files: ^CHANGELOG.*\.md$
