@@ -8,7 +8,7 @@ description: IaC-aware 兩階段 review — code 走 spec→quality、IaC 走 bl
 
 機械層的單檔 SAST 由 [#448](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/448) 的 hadolint／kube-linter／trivy 與 pre-commit 顧；本 skill 顧**跨檔語義 cascade**（owner 分類見 [`hook-vs-skill-coverage.md`](../../../docs/internal/hook-vs-skill-coverage.md)）。輪與輪之間怎麼傳、何時停，由 [`vibe-converge`](../vibe-converge/SKILL.md) 管；commit／branch／trailer 紀律以 [`dev-rules.md`](../../../docs/internal/dev-rules.md) 與 CLAUDE.md／AGENTS.md 不可協商項為準，本 skill 不重做；與環境層 skill 衝突時依 [CLAUDE.md §Skill 優先級宣告](../../../CLAUDE.md)，`vibe-*` supersede `engineering:code-review` 的 git/commit/branch/trailer 部分。
 
-⛔ `.claude/**` 是 `.agents/**` 的生成鏡像，不進 review 範圍（實測一輪 7 條 finding 有 3 條打在鏡像上、同一條審兩次）。
+⛔ `.claude/skills/**` 與 `.claude/agents/**` 是 `.agents/**` 的生成鏡像，不進 review 範圍（`.claude/hooks/` 與 `settings.json` 是手寫來源，照審）（實測一輪 7 條 finding 有 3 條打在鏡像上、同一條審兩次）。
 
 ## 副檔名路由
 

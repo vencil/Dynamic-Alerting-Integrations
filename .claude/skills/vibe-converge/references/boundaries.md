@@ -1,7 +1,7 @@
 <!-- 此檔為產生物，來源 .agents/skills/vibe-converge/references/boundaries.md —— 請改那份 SSOT，再跑 `make agent-adapters`；不要直接編輯這份複本。 -->
 # vibe-converge：規則全文、來源與工具守不到的邊界（從 SKILL.md 逐字搬出；不自動載入）
 
-> 主檔是本檔的濃縮版（第 0 步、跨輪三類、停止規則、帳本格式各留可執行的一句）。本檔是 PR-B2 之前主檔的全文，逐字搬出、僅調整相對連結深度，以及把兩處指向已搬走的〈預設檔位〉改指 `vibe-subagent-review/references/discipline.md`；規則的推導與量測仍在 [`derivation.md`](derivation.md)。
+> 主檔是本檔的濃縮版（第 0 步、跨輪三類、停止規則、帳本格式各留可執行的一句）。本檔是 PR-B2 之前主檔的正文各節（frontmatter、標題、導言由本檔頭取代），逐字搬出、僅調整相對連結深度，以及把兩處指向已搬走的〈預設檔位〉改指 `vibe-subagent-review/references/discipline.md`；規則的推導與量測仍在 [`derivation.md`](derivation.md)。
 
 ## 第 0 步 — decidability gate（每輪開工前，30 秒）
 

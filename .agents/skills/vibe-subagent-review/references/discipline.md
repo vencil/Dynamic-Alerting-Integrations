@@ -1,6 +1,6 @@
 # vibe-subagent-review：Review 紀律（從 SKILL.md 逐字搬出；不自動載入）
 
-> 主檔只留副檔名路由、三張 checklist、收 review 處置表與長時 agent 入口。本檔收 PR-B2 之前主檔的九節：Review 紀律／收 review／鷹架准入／預設檔位／升級多 agent／Spec→Quality／Worked examples／長時驗證協議／與既有體系關係，逐字搬出、僅調整相對連結深度；原〈何時觸發／何時跳過〉一節未搬，觸發與跳過條件只在 frontmatter description。怎麼報、怎麼驗、怎麼派、何時砍鷹架，不確定時再讀。第 2 輪起派盲審的 prompt 骨架在 [`scoped-re-review.md`](scoped-re-review.md)。
+> 主檔只留副檔名路由、三張 checklist、收 review 處置表與長時 agent 入口。本檔收 PR-B2 之前主檔的九節：Review 紀律／收 review／鷹架准入／預設檔位／升級多 agent／Spec→Quality／Worked examples／長時驗證協議／與既有體系關係，逐字搬出、僅調整相對連結深度，另把〈與既有體系關係〉的 supersede 射程補上「git/commit/branch/trailer 部分」以對齊 CLAUDE.md；原〈何時觸發／何時跳過〉一節未搬，觸發與跳過條件只在 frontmatter description。怎麼報、怎麼驗、怎麼派、何時砍鷹架，不確定時再讀。第 2 輪起派盲審的 prompt 骨架在 [`scoped-re-review.md`](scoped-re-review.md)。
 
 ## Review 紀律（所有 lens 通用）
 
@@ -190,4 +190,4 @@ note 禁含單/雙引號、反斜線、換行（要引用改全形「」）；�
 - **[`dev-rules.md`](../../../../docs/internal/dev-rules.md)**：commit / branch / trailer 紀律以它與 CLAUDE.md／AGENTS.md 不可協商項為準（本 skill 不重做）。
 - **[vibe-converge](../../vibe-converge/SKILL.md)**：本 skill 管**一輪之內**怎麼審；輪與輪之間傳什麼、何時停、何時換受審主體由它管。第 2 輪起兩者一起用。
 - **vibe-security-audit**：稽核 harness 本體已是 Workflow 編排（原生串流）；稽核後 fix 的對抗式重驗 verifier 屬本 skill 長時驗證協議的適用對象。
-- 優先級仲裁見 [CLAUDE.md §Skill 優先級宣告](../../../../CLAUDE.md)；衝突時 `vibe-*` supersede 環境層 `engineering:code-review`。
+- 優先級仲裁見 [CLAUDE.md §Skill 優先級宣告](../../../../CLAUDE.md)；衝突時 `vibe-*` supersede 環境層 `engineering:code-review` 的 git/commit/branch/trailer 部分。

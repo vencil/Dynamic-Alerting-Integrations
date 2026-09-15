@@ -6,7 +6,7 @@ description: 多輪修正的收斂協議 —— decidability gate（開工前先
 
 # vibe-converge
 
-`vibe-subagent-review` 決定一輪怎麼審；本 skill 決定輪與輪之間傳什麼、什麼時候該停、什麼時候該換題目。規則的推導、量測與已打死的版本在 [`references/derivation.md`](references/derivation.md)；四條停止規則的細則、各自怎麼消解、以及工具守不到的邊界在 [`references/boundaries.md`](references/boundaries.md)（規則響了、或想知道某條怎麼轉綠時讀）。
+`vibe-subagent-review` 決定一輪怎麼審；本 skill 決定輪與輪之間傳什麼、什麼時候該停、什麼時候該換題目。規則的推導、量測與已打死的版本在 [`references/derivation.md`](references/derivation.md)；四條停止規則的細則、`CHANGE-SUBJECT` 怎麼消解與其餘三條為何不消解、以及工具守不到的邊界在 [`references/boundaries.md`](references/boundaries.md)（規則響了、或想知道它有哪些便宜繞法時讀——那張表是揭露不是指引）。
 
 ## 第 0 步：decidability gate（每輪開工前）
 
