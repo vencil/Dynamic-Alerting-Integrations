@@ -137,17 +137,3 @@ components/recipe-preview/promtool.openvex.json
 # truncated copy of either file reds that test.
 tests/alertmanager-inhibit/.golangci.yml
 scripts/tools/ops/bench-canary/.golangci.yml
-
-# PR-B2 (agent 指引改善計畫，前身 #1737): 四支 skill 主檔與 agent-rulebook.md
-# 刻意縮減——紀律／失敗形狀逐字搬到同目錄 references/ 與
-# agent-rulebook-shapes.md（一層深）。主檔只留路由、checklist、判準。
-# .claude/** 是 gen_agent_adapters.py 的生成鏡像，同樣縮小。Genuine refactor.
-# guard 只比 HEAD 大小，PR-B2 merge 後這八條就沒有作用，可整段移除。
-.agents/skills/vibe-subagent-review/SKILL.md
-.agents/skills/vibe-converge/SKILL.md
-.agents/skills/vibe-brainstorm/SKILL.md
-.claude/skills/vibe-subagent-review/SKILL.md
-.claude/skills/vibe-converge/SKILL.md
-.claude/skills/vibe-brainstorm/SKILL.md
-docs/internal/agent-rulebook.md
-docs/internal/hook-vs-skill-coverage.md

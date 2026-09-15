@@ -1,7 +1,7 @@
 <!-- 此檔為產生物，來源 .agents/skills/vibe-subagent-review/references/discipline.md —— 請改那份 SSOT，再跑 `make agent-adapters`；不要直接編輯這份複本。 -->
 # vibe-subagent-review：Review 紀律（從 SKILL.md 逐字搬出；不自動載入）
 
-> 主檔只留副檔名路由、三張 checklist、收 review 處置表與長時 agent 入口。本檔收 PR-B2 之前主檔的九節：Review 紀律／收 review／鷹架准入／預設檔位／升級多 agent／Spec→Quality／Worked examples／長時驗證協議／與既有體系關係，逐字搬出、僅調整相對連結深度，另把〈與既有體系關係〉的 supersede 射程補上「git/commit/branch/trailer 部分」以對齊 CLAUDE.md；原〈何時觸發／何時跳過〉一節未搬，觸發與跳過條件只在 frontmatter description。怎麼報、怎麼驗、怎麼派、何時砍鷹架，不確定時再讀。第 2 輪起派盲審的 prompt 骨架在 [`scoped-re-review.md`](scoped-re-review.md)。
+> 主檔只留副檔名路由、三張 checklist、收 review 處置表與長時 agent 入口。本檔收 PR-B2 之前主檔的九節：Review 紀律／收 review／鷹架准入／預設檔位／升級多 agent／Spec→Quality／Worked examples／長時驗證協議／與既有體系關係，逐字搬出、僅調整相對連結深度，另三處改寫：〈與既有體系關係〉的 supersede 射程補上「git/commit/branch/trailer 部分」以對齊 CLAUDE.md、〈Review 紀律〉的生成物排除收成 `.claude/skills/**` 與 `.claude/agents/**`、〈收 review〉的 #1481 計數改成該 PR review body 的機械數字；原〈何時觸發／何時跳過〉一節未搬，觸發與跳過條件只在 frontmatter description。怎麼報、怎麼驗、怎麼派、何時砍鷹架，不確定時再讀。第 2 輪起派盲審的 prompt 骨架在 [`scoped-re-review.md`](scoped-re-review.md)。
 
 ## Review 紀律（所有 lens 通用）
 
@@ -24,7 +24,7 @@
 
 ⚠️ **判別語**：一條指示若讓 reviewer 依「有多嚴重／有多少條」決定閉嘴，放收件端；若讓它依「這是不是一個具體的失效」決定，放 prompt 端。
 
-⛔ **生成物不進 review 視野**（`.claude/**` 是由 `.agents/**` 產生的鏡像，內容相同但**第 1 行多一列產生物標頭**，所以不是逐位元副本）。實測：一輪外部 review 的 7 條 finding 裡 **3 條落在生成鏡像上**——同一條 finding 被審了兩次。
+⛔ **生成物不進 review 視野**（`.claude/skills/**` 與 `.claude/agents/**` 是由 `.agents/**` 產生的鏡像；`.claude/hooks/` 與 `settings.json` 是手寫來源，照審，內容相同但**第 1 行多一列產生物標頭**，所以不是逐位元副本）。實測：一輪外部 review 的 7 條 finding 裡 **3 條落在生成鏡像上**——同一條 finding 被審了兩次。
 
 **2. verify-before-asserting（review finding 是一個 claim）**
 - 報 finding 前先 **grep + cite 實際 code** 佐證，不照 pattern-match 的直覺報。（燒過：外部 reviewer 對合法 Workflow-DSL top-level `return` 誤報 illegal-return、對 repo 未 enforce 的 lint 規則亂標——plausible-but-wrong；take / reframe / **reject** 前先驗那條規則 repo CI 真的擋嗎。）
@@ -48,7 +48,7 @@
 - **reframe**：症狀對、診斷錯 ⇒ 修真正的那個，並說明差在哪。
 - **reject**：驗過不成立 ⇒ **附證據**駁回，不是「我覺得還好」。
 
-⛔ **收到的「這是 bug」是 claim 不是事實**，適用上節的 verify-before-asserting。實測（#1481）：CodeRabbit 開 14 條，逐條驗證後 **11 條成立、1 條 reject（附雙模式解析實測，reviewer 自行撤回並記為 learning）、3 條交 owner 判為範圍外**。若照單全收，那 1 條會讓一支能跑的 workflow 被改壞。
+⛔ **收到的「這是 bug」是 claim 不是事實**，適用上節的 verify-before-asserting。實測（#1481）：CodeRabbit 開 14 條 inline 與 3 條 outside-diff（該 PR review body 的 `Actionable comments posted: 14` / `Outside diff range comments (3)`），逐條驗證後**多數成立、1 條 reject（附雙模式解析實測，reviewer 自行撤回並記為 learning）、其餘交 owner 判為範圍外**。若照單全收，那 1 條會讓一支能跑的 workflow 被改壞。
 
 **2. 禁止表演性同意。** 不寫「你說得對」「好建議」再開始查。要嘛先驗完再回，要嘛直接動手讓 diff 說話。回覆的價值在**證據與處置**，不在態度。
 
