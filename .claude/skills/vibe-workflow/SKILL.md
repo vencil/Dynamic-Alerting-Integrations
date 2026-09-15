@@ -4,55 +4,36 @@ description: Vibe session 起手式 + 最常踩的 7 個坑 + 標準開發 sessi
 ---
 <!-- 此檔為產生物，來源 .agents/skills/vibe-workflow/SKILL.md —— 請改那份 SSOT，再跑 `make agent-adapters`；不要直接編輯這份複本。 -->
 
-# vibe-workflow — Session 起手式 + 7 個坑 + 標準工作流
+# vibe-workflow
 
-## Session 起手式（已自動化 🛡️）
+## 起手式
 
-起手式已 codified 為 **PreToolUse hook**（v2.8.0）— 第一次 `Bash`/`Write`/`Edit`/`MultiEdit` 呼叫自動跑 `scripts/session-guards/session-init.py`（關 VS Code Git 背景操作 + 寫 session marker），後續同 session 呼叫 O(1) no-op。Session 用 `CLAUDE_SESSION_ID` 區分，marker 在 `/tmp/vibe-session-init.<hash>`。
+先照 [CLAUDE.md §起手式](../../../CLAUDE.md) 量 hook 有沒有跑（`cat /tmp/vibe-session-start-hook.ran`），沒有就手動跑 `session-start.sh`。本機 session 的 PreToolUse hook 第一次 `Bash`/`Write`/`Edit` 時跑 `scripts/session-guards/session-init.py`（關 VS Code Git 背景操作、寫 session marker `/tmp/vibe-session-init.<hash>`，session 以 `CLAUDE_SESSION_ID` 區分）；web 多 repo session 這支不會被載入（#1719）。原理見 [windows-mcp-playbook §FUSE Phantom Lock 防治](../../../docs/internal/windows-mcp-playbook.md#fuse-phantom-lock-防治)。
 
-- **手動觸發**（偵錯）：`python scripts/session-guards/session-init.py [--status|--force|--stats]`
-- **Telemetry**（v2.8.0 Phase .b）：每次 hook 呼叫自動 append JSON Lines 到 `~/.cache/vibe/session-init.log`（Windows：`%LOCALAPPDATA%\vibe\session-init.log`）。用 `--stats` 印 counts + 最近事件；`--stats --json` 供 `jq` pipe；`--stats --session <SID>` 過濾；`VIBE_SESSION_LOG=/dev/null` 停用
-- **Dev Container**（K8s / Go test / Helm）：`docker start vibe-dev-container`（或用 `make dc-up` / `make dc-test`）
-- **Session 結束**：`make session-cleanup`
+- 手動觸發／偵錯：`python scripts/session-guards/session-init.py [--status|--force|--stats]`
+- Telemetry：`~/.cache/vibe/session-init.log`（Windows：`%LOCALAPPDATA%\vibe\session-init.log`）；查看 `session-init.py --stats [--json] [--session <SID>]`；`VIBE_SESSION_LOG=/dev/null` 停用
+- Dev Container（K8s / Go test / Helm）：`docker start vibe-dev-container`、`make dc-up`、`make dc-test`
+- Session 結束：`make session-cleanup`
 
-Hook 設定見 [`.claude/settings.json`](../../../.claude/settings.json)。完整原理見 [windows-mcp-playbook §FUSE Phantom Lock 防治](../../../docs/internal/windows-mcp-playbook.md#fuse-phantom-lock-防治)。
+主路徑是 Dev Container 做所有事（`make dc-run CMD="..."` / `make dc-test` / `make dc-go-test`）；逃生門是 FUSE 卡死時用 Windows 原生 git（`scripts/ops/win_git_escape.bat` 或 `make win-commit`）。
 
-### 設計原則：主路徑 / 逃生門
+## 七個坑與救援指令
 
-> **主路徑**：Dev Container 層做所有事（code / test / commit / push）。用 `make dc-run CMD="..."` / `make dc-test` / `make dc-go-test` 統一入口。
-> **逃生門**：FUSE 卡死時，用 Windows 原生 git 完成操作（`scripts/ops/win_git_escape.bat` 或 `make win-commit`）。
-> **目標**：不讓任何 session 因 FUSE 問題整個卡死。
+1. ⛔ **`sed -i`** — 改用 Read+Edit；批次替換走 pipe：`sed '...' < file > file.tmp && mv file.tmp file`。`preflight_bash.py`（PreToolUse）會攔掛載路徑上的 `sed -i`；多 repo 的 web session（project root 不是本 repo）那層不載入（#1719），該形態下機械擋只剩 pre-commit 的 `sed-damage-guard`，且要先跑過 `session-start.sh` 才裝得上。`scripts/ops/vibe-sed-guard.sh` 是 shell function，須自行 `source` 後才生效（repo 內無自動安裝點；non-interactive 的 `docker exec` 也不 source），Claude Code 的 Bash tool 不觸發。
+2. **FUSE phantom lock** → `make git-preflight`（或 `make git-lock ARGS="--clean"`）；頑強殘影 `make fuse-reset`（Level 1+3 自動；Level 2/4/5 見 [windows-mcp-playbook §修復層 B](../../../docs/internal/windows-mcp-playbook.md#修復層-bfuse-cache-重建level-1--5)）；反覆卡住走 Windows 逃生門（[§修復層 C](../../../docs/internal/windows-mcp-playbook.md#修復層-cwindows-原生-git-fallbackfuse-側卡死時的備援路徑)）。
+   ⛔ 不要用 FUSE temp index（`GIT_INDEX_FILE=/tmp/xxx`）commit：FUSE 側 `.git/index` 永遠 stale，`commit-tree` 產出的 tree 不含修改。git add/commit/push 從 Windows 側執行：`make win-commit MSG=_msg.txt FILES="a b"`。
+3. **docker exec stdout 為空** → 重導向 `> /workspaces/.../_out.txt 2>&1` 再 `cat`，或 `make dc-run CMD="..."`（[§核心原則](../../../docs/internal/windows-mcp-playbook.md)）。
+4. **pre-commit 中斷留下 .git lock** → `make git-lock ARGS="--clean"`，不要 `--no-verify`。
+5. **port-forward 殘留佔用端口** → `pkill -f "port-forward.*prometheus"` 或 `make session-cleanup`。
+6. ⛔ **不寫 `_foo.bat` / `_p*_commit.ps1` throw-away script** — `check_ad_hoc_git_scripts` 會擋。GitHub CLI 用 `scripts/ops/win_gh.bat`（`pr-checks`/`pr-view`/`pr-create`/`run-view`/`run-log`/`raw`），git 用 `scripts/ops/win_git_escape.bat`（`status`/`add`/`commit-file`/`push`/`preflight`）；缺子命令就擴充 wrapper（[LL #54](../../../docs/internal/windows-mcp-playbook.md#已知陷阱速查)）。
+7. **UTF-8 commit message 亂碼**（cmd.exe codepage）→ `make win-commit` 或 `python scripts/ops/commit_helper.py commit-file <msg>`（[LL #58](../../../docs/internal/windows-mcp-playbook.md#已知陷阱速查)）。
 
-## 最常踩的 7 個坑
+## 從改動到 PR
 
-1. **⛔ 永遠不要用 Bash 工具執行 `sed -i`** — 改用 Read+Edit 工具。已有 shell wrapper 攔截（`vibe-sed-guard.sh`），違反時會直接報錯阻止。如需批次替換用 pipe：`sed '...' < file > file.tmp && mv file.tmp file`
-
-2. **FUSE phantom lock** → `make git-preflight`（或 `make git-lock ARGS="--clean"`）；頑強殘影升級 `make fuse-reset`（Level 1+3 自動，Level 2/4/5 指引見 [windows-mcp-playbook §修復層 B](../../../docs/internal/windows-mcp-playbook.md#修復層-bfuse-cache-重建level-1--5)）。FUSE 側 git 操作反覆卡住時 → **Windows 逃生門**：`scripts/ops/win_git_escape.bat`（[§修復層 C](../../../docs/internal/windows-mcp-playbook.md#修復層-cwindows-原生-git-fallbackfuse-側卡死時的備援路徑)）
-
-   **2b. ⛔ 不要用 FUSE temp index（`GIT_INDEX_FILE=/tmp/xxx`）做 git commit** — `.git/index` 在 FUSE 側永遠是 stale 的，`commit-tree` 產出的 tree 不含修改。**所有 git add/commit/push 必須從 Windows 側執行**：`make win-commit MSG=_msg.txt FILES="a b"`（hook-gated wrapper），或手動 `cd C:\Users\vencs\vibe-k8s-lab && git add ... && git commit --no-verify -F _msg.txt && git push --no-verify`
-
-3. **docker exec stdout 為空** → 用 `> /workspaces/.../_out.txt 2>&1` 重導向再 `cat`，或直接用 `make dc-run CMD="..."`（已封裝此 pattern）。見 [windows-mcp-playbook §核心原則](../../../docs/internal/windows-mcp-playbook.md)
-
-4. **pre-commit hook 中斷留下 .git lock** → `make git-lock ARGS="--clean"`，**不要** `--no-verify`
-
-5. **port-forward 殘留佔用端口** → `pkill -f "port-forward.*prometheus"` 或 `make session-cleanup`
-
-6. **⛔ 絕對不要寫 `_foo.bat` / `_p*_commit.ps1` 這類 throw-away script** — `check_ad_hoc_git_scripts` (L1 pre-commit) 會 whitelist block。需要 GitHub CLI 用 `scripts/ops/win_gh.bat`（`pr-checks`/`pr-view`/`pr-create`/`run-view`/`run-log`/`raw`），需要 git 用 `scripts/ops/win_git_escape.bat`（`status`/`add`/`commit-file`/`push`/`preflight` 等）。**缺子命令就擴充 wrapper，不寫 sibling script**。見 [windows-mcp-playbook LL #54](../../../docs/internal/windows-mcp-playbook.md#已知陷阱速查)
-
-7. **UTF-8 commit message 亂碼**（cmd.exe codepage）→ 用 `make win-commit` 或 `python scripts/ops/commit_helper.py commit-file <msg>`（pipes bytes via `git commit -F -`，繞過 cmd.exe 重編碼）。見 [windows-mcp-playbook LL #58](../../../docs/internal/windows-mcp-playbook.md#已知陷阱速查)
-
-## 標準開發 Session 工作流
-
-1. **起手式**：PreToolUse hook 自動跑；任務開始前根據任務類型讀對應 Playbook（見 `vibe-playbook-nav` skill）
-2. **開發**：程式碼修改 → Go test / Python test → 場景驗證（偏好 `make dc-*` 統一入口）
-3. **Benchmark**（效能相關變更）：完整 benchmark（idle + routing + Go micro-bench）→ 記錄到 CHANGELOG + architecture docs
-4. **文件同步**：`make version-check`（= `bump_docs.py --check` + `--sync-counts --check`）→ 只**檢查**版號與計數，不改檔；要更新計數跑 `python3 scripts/tools/dx/bump_docs.py --sync-counts`（⚠️ `make bump-docs` 是**版號** bump，吃 `PLATFORM=` 等變數，不做計數）。⚠️ 沒有任何 pre-commit hook 跑 bump_docs，Doc-as-Code #4 靠自覺 + `make pre-tag`
-5. **Commit**：`git commit`（或 FUSE 卡住時 `make win-commit`）→ pre-commit hooks 自動執行品質檢查
-6. **PR 收尾**：`make pr-preflight`（寫 `.git/.preflight-ok.<SHA>` marker）→ `gh pr create`
-7. **Lesson Learned**：遇到新陷阱回寫對應 Playbook + 更新 `vibe-workflow` 或 `vibe-playbook-nav` skill
-
-## 使用法
-
-- Session 開始 → hook 自動跑，直接動手即可
-- 遇到上述 7 種症狀 → 對照本文找到救援指令
-- 新陷阱 → 優先回寫對應 Playbook，僅當跨 session 高頻才升級到 CLAUDE.md / 本 skill
+1. 依任務類型讀對應 Playbook（`vibe-playbook-nav`）。
+2. 改碼 → Go test / Python test → 場景驗證（`make dc-*`）。
+3. 效能相關變更跑完整 benchmark（idle + routing + Go micro-bench），記到 CHANGELOG 與 architecture docs。
+4. 文件同步：`make version-check` 只檢查；要更新計數跑 `python3 scripts/tools/dx/bump_docs.py --sync-counts`（`make bump-docs` 是版號 bump，不做計數）。沒有 pre-commit hook 跑 bump_docs：Doc-as-Code #4 靠自覺＋`make pre-tag`。
+5. `git commit`（FUSE 卡住時 `make win-commit`）。
+6. `make pr-preflight`（寫 `.git/.preflight-ok.<SHA>` marker）→ `gh pr create`。
+7. 新陷阱回寫對應 Playbook；跨 session 高頻才升到 CLAUDE.md 或本 skill。

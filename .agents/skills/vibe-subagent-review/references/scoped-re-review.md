@@ -1,6 +1,6 @@
 # Scoped re-review 骨架（第 2 輪起派 reviewer 用）
 
-〈預設檔位〉說第 2 輪起改派**換 context 的盲審**。這份檔給那一棒的 prompt 骨架。
+[`discipline.md`](discipline.md)〈預設檔位〉說第 2 輪起改派**換 context 的盲審**。這份檔給那一棒的 prompt 骨架。
 
 借 obra/superpowers `subagent-driven-development/re-review-prompt.md`（2026-08-26 逐字取得）。⛔ **不是照抄**：其中「不要重跑測試套件」那條與本 repo 的 always-on 規則 #5 直接衝突，改法與理由見〈與原版的三處分歧〉。
 
@@ -23,7 +23,7 @@
 
 > `if you notice an issue entirely outside the fix diff, report it under Out-of-Scope Observations — it does not block this task and does not extend the loop`
 
-⇒ reviewer **照報**（符合本 skill〈Review 紀律〉的音量軸：不要叫它閉嘴），但那些條目**不進本輪的處置清單**、不觸發下一輪。差別在收件端，不在 prompt 端。
+⇒ reviewer **照報**（符合 `discipline.md`〈Review 紀律〉的音量軸：不要叫它閉嘴），但那些條目**不進本輪的處置清單**、不觸發下一輪。差別在收件端，不在 prompt 端。
 
 ⚠️ **這一格在本 repo 從未存在過。** 上表那 20 條沒有任何一條被分類成「範圍外、不延長迴圈」——每一輪的 finding 都餵進了下一輪。所以有這個桶會剩幾條是**未知數**，不是預測。第一次用完請把兩個數字記進帳本：本輪幾條、其中幾條落進 out-of-scope。
 
@@ -99,7 +99,7 @@ head：[HEAD_SHA]
 
 | 報告的區塊 | 處置 | 進帳本的 `kind` |
 |---|---|---|
-| 逐條裁決 = NOT ADDRESSED | 進本輪處置清單，走〈收 review〉的 take/reframe/reject | `finding`（`tier` 依你自己驗過沒有） |
+| 逐條裁決 = NOT ADDRESSED | 進本輪處置清單，走 SKILL.md〈收 review〉的 take/reframe/reject | `finding`（`tier` 依你自己驗過沒有） |
 | 修法本身的新破壞 | 同上 | 同上 |
 | **範圍外觀察** | ⛔ **不進本輪、不開下一輪**。有價值就開票 | `question`，`status=open`，`claim` 寫觀察、`evidence` 寫「要什麼證據才能收掉」 |
 | 標 `[未驗證]` 的主張 | 你自己重量一次才寫進出貨物 | — |
@@ -111,12 +111,12 @@ head：[HEAD_SHA]
 | 原版 | 本 repo | 為什麼 |
 |---|---|---|
 | `Do not re-run the suite to confirm their report` | 改成「不重跑整套；有具體疑點才跑對準的那一支；沒跑過的標 `[未驗證]`」 | always-on 規則 #5：沒有本輪輸出就不准宣稱通過。原版把驗證責任整個移出 reviewer，本 repo 是移到 **PM 出貨前**那一關，所以 reviewer 必須把「哪些沒驗」標出來讓它可以被接手 |
-| 讀預先產好的 `[DIFF_FILE]`、`Do not re-run git commands` | 改成 reviewer 自己下 `git diff` | 本 repo 沒有 `scripts/review-package` 那套前置產物；為了省一次 git 而先造一支打包腳本，會撞〈鷹架准入〉門 2 |
+| 讀預先產好的 `[DIFF_FILE]`、`Do not re-run git commands` | 改成 reviewer 自己下 `git diff` | 本 repo 沒有 `scripts/review-package` 那套前置產物；為了省一次 git 而先造一支打包腳本，會撞 `discipline.md`〈鷹架准入〉門 2 |
 | `[MODEL] — REQUIRED` | 不強制 | 本 repo 沒有 SKILL.md Model Selection 那一節；要換模型是刻意動作，不是每次填的欄位 |
 
 ## ⚠️ 誠實邊界
 
-- **這份檔本身就是〈預設檔位〉那個未解前提的一部分**：當前模型的官方指引逐字說 `The same applies to legacy harness scaffolding that adds separate verification steps`、`do not use subagents to verify or double-check your own work`。派一位 scoped re-reviewer 正是那種鷹架。它沒有被關掉，理由與關掉它的方法（同一顆 SHA 自審 vs 一位盲審，比差集）見〈預設檔位〉的引文區塊。
+- **這份檔本身就是〈預設檔位〉那個未解前提的一部分**：當前模型的官方指引逐字說 `The same applies to legacy harness scaffolding that adds separate verification steps`、`do not use subagents to verify or double-check your own work`。派一位 scoped re-reviewer 正是那種鷹架。它沒有被關掉，理由與關掉它的方法（同一顆 SHA 自審 vs 一位盲審，比差集）見 `discipline.md`〈預設檔位〉的引文區塊。
 - **out-of-scope 桶的效果未量**（見本檔第二節）。
 - 骨架**不擋任何東西**：沒有 hook、沒有 CI、沒有工具會檢查你有沒有用它。與 `vibe-converge` 同一個分類（🧠 skill-advised）。
 - 上游原版可能改動。本檔取自 2026-08-26 的 `main`；出現分歧以本檔的三處分歧表為準，不自動跟上游走。
