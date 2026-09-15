@@ -19,7 +19,7 @@ description: 多輪修正的收斂協議 —— decidability gate（開工前先
 | `question`，status=`open` | 一句話，寫明誰能回答／要什麼證據才能收掉 |
 | `dead-end` | 判準 + 怎麼死的（實測）。每輪必帶 |
 
-`verified`＝本輪跑過、帳本有指令與輸出；`inferred`＝讀碼推導，本輪內可用、⛔ 不跨輪；`speculative`（「我覺得可能還有」）⛔ 禁止進帳本。上一輪的 commit body、review 對話、修法敘事不跨輪（可取回：寫 SHA / PR 連結）。
+`verified`＝本輪跑過、帳本有指令與輸出；`inferred`＝讀碼推導，本輪內可用、⛔ 不跨輪；`speculative` ⛔ 禁止進帳本（想寫它代表該去跑一次）。上一輪的 commit body、review 對話、修法敘事、「我覺得可能還有」不跨輪（可取回：寫 SHA / PR 連結）。
 
 ## 停止規則（`make converge-status SCOPE=dev/<scope>` 會判）
 
