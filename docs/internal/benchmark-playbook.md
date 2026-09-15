@@ -552,7 +552,7 @@ workflow_dispatch 跑完後讀 step summary，決定要不要 tag。
 >
 > ⛔ 本行原文括號裡的「`bench_wrapper.sh` 的 exit code 1 就指向它」**是假的**，已刪：那個 `exit 1` 是 `set -euo pipefail` 下的死碼，從來沒有執行過（TRK-381）。exit code 與 err.log 的**當前**語意以 `scripts/tools/ops/bench_wrapper.sh` 檔頭為 SSOT，不在本檔複述。
 >
-> 消除 log 污染的機制不是「分流」，而是 `bench_filter.go` 依 event 形狀**篩選**：所有測試輸出都被包成 JSON event，過濾器只保留 benchmark 結果與 suite header/summary。`bench_filter.go:12-16` 對這一段的敘述一直是對的，可以當 SSOT。
+> 消除 log 污染的機制不是「分流」，而是 `bench_filter.go` 依 event 形狀**篩選**：所有測試輸出都被包成 JSON event，過濾器只保留 benchmark 結果與 suite header/summary。`bench_filter.go` 檔頭「Why this exists」那一段對這件事的敘述一直是對的，可以當 SSOT（刻意不寫行號：沒有機制在守行號引用，`gofmt` 一次重排就會讓它指錯）。
 
 **以下原 v2.1.0 LL 保留為背景，供 `bench_wrapper.sh` 出問題時的 root-cause 參考：**
 

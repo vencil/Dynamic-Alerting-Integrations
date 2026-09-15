@@ -38,8 +38,8 @@
 #
 #      This line previously read "raw stderr (log.Printf, compile errors)":
 #      the log.Printf half was wrong, the compile-errors half was right.
-#      bench_filter.go:12-16 has always described the log.Printf behaviour
-#      correctly and is the SSOT for it.
+#      The "Why this exists" paragraph at the top of bench_filter.go has always
+#      described the log.Printf behaviour correctly and is the SSOT for it.
 #
 # Usage
 #   scripts/tools/ops/bench_wrapper.sh -bench=. -benchmem -run=^$ \

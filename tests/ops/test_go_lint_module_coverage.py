@@ -4,8 +4,9 @@ Goal: every tracked Go source file is analysed by some linter. It did not hold,
 and every gap was silent — enrolled modules print `0 issues`, which reads like
 whole-repo coverage.
 
-⛔ The goal is NOT fully asserted. `_EXEMPT_GO_FILES` names what is still
-outside. Read it as the list of holes.
+⛔ `_EXEMPT_GO_FILES` names any tracked .go still outside every linted
+module. Read it as the list of holes; empty (since #1816) means the goal is
+fully asserted.
 
 ⛔ Nothing here runs golangci-lint; the executable control is the `Go Lint` job.
 A probe inside pytest was measured and rejected: `ci.yml::python-tests-run` has
@@ -63,12 +64,9 @@ _IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_.]*")
 
 # ⛔ Tracked .go outside every go.mod. golangci-lint needs a module, so these
 # are read by no linter and no gofmt. This records holes; it closes none.
-_EXEMPT_GO_FILES = {
-    "scripts/tools/ops/bench_filter.go":
-        "`go run <file>` from bench_wrapper.sh, and copied standalone into the "
-        "release bench harness — giving it a go.mod changes the module context "
-        "both callers run it in, so that is its own change (#1751).",
-}
+# Empty since #1816 gave scripts/tools/ops/bench_filter.go its own module;
+# the reverse assertion below keeps a stale entry from lingering.
+_EXEMPT_GO_FILES: dict[str, str] = {}
 
 # Build-tag disposition. Only `enrol` is machine-verified; the other two assert
 # that a gap is acceptable and are claims a human made.

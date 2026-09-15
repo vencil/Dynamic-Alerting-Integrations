@@ -1,0 +1,23 @@
+version: "2"
+# Module for the one .go file that lives directly in this directory
+# (bench_filter.go). It exists so golangci-lint reads that file at all — a
+# tracked .go outside every go.mod is read by no linter and no gofmt (#1816).
+# bench-canary/ underneath is its own module; `run ./...` here does not
+# descend into it. Which modules must be enrolled, and the linter floor below,
+# are derived by tests/ops/test_go_lint_module_coverage.py.
+linters:
+  default: standard
+  enable:
+    - godoclint
+
+# ⛔ v2 moved gofmt OUT of `linters` into this section; with only `linters:` a
+# mis-formatted tree still exits 0. tests/ops/test_go_lint_module_coverage.py
+# asserts this section stays able to report.
+formatters:
+  enable:
+    - gofmt
+
+# Both default to truncating; 0 = report everything.
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

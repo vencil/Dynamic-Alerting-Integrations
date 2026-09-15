@@ -327,6 +327,11 @@ jobs:
       - name: Lint e2e-bench receiver
         working-directory: tests/e2e-bench/receiver
         run: golangci-lint run ./...
+      # #1816: the module that exists only so bench_filter.go — the one tracked
+      # .go beside, not inside, a module — is read by a linter at all.
+      - name: Lint bench-filter
+        working-directory: scripts/tools/ops
+        run: golangci-lint run ./...
 
   validate-config:
     name: Validate Tenant Config & Routes
