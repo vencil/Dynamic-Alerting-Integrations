@@ -49,4 +49,4 @@ description: IaC-aware 兩階段 review — code 走 spec→quality、IaC 走 bl
 
 ## 紀律（不確定怎麼審、怎麼派、怎麼判鷹架時讀）
 
-[`references/discipline.md`](references/discipline.md)：報什麼與過濾放哪一端、verify-before-asserting、finder≠verifier 自審、鷹架准入兩道門、第 1 輪與第 2 輪起的預設檔位、升級多 agent 的條件、Go `Close()` 讀寫不對稱、長時 agent 協議全文。第 2 輪起派盲審的 prompt 骨架在 [`references/scoped-re-review.md`](references/scoped-re-review.md)。
+[`references/discipline.md`](references/discipline.md)：Review 紀律（報什麼、過濾放哪一端、verify-before-asserting、finder≠verifier 自審）、收 review 全文、鷹架准入兩道門、第 1 輪與第 2 輪起的預設檔位、升級多 agent 的條件、Spec → Quality 與 Go `Close()` 讀寫不對稱、長時 agent 協議全文。第 2 輪起派盲審的 prompt 骨架在 [`references/scoped-re-review.md`](references/scoped-re-review.md)。

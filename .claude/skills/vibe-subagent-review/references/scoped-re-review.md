@@ -24,7 +24,7 @@
 
 > `if you notice an issue entirely outside the fix diff, report it under Out-of-Scope Observations — it does not block this task and does not extend the loop`
 
-⇒ reviewer **照報**（符合 `discipline.md`〈報什麼，以及過濾放哪一端〉的音量軸：不要叫它閉嘴），但那些條目**不進本輪的處置清單**、不觸發下一輪。差別在收件端，不在 prompt 端。
+⇒ reviewer **照報**（符合 `discipline.md`〈Review 紀律〉的音量軸：不要叫它閉嘴），但那些條目**不進本輪的處置清單**、不觸發下一輪。差別在收件端，不在 prompt 端。
 
 ⚠️ **這一格在本 repo 從未存在過。** 上表那 20 條沒有任何一條被分類成「範圍外、不延長迴圈」——每一輪的 finding 都餵進了下一輪。所以有這個桶會剩幾條是**未知數**，不是預測。第一次用完請把兩個數字記進帳本：本輪幾條、其中幾條落進 out-of-scope。
 
