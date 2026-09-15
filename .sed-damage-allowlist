@@ -137,7 +137,3 @@ components/recipe-preview/promtool.openvex.json
 # truncated copy of either file reds that test.
 tests/alertmanager-inhibit/.golangci.yml
 scripts/tools/ops/bench-canary/.golangci.yml
-
-# agent 指引改善計畫 PR-C: PR 範本 5,648 → ~900 bytes 是刻意的減法（三段 checklist 刪除，
-# 承重項併入 vibe-subagent-review）。guard 只比 HEAD，本條在這顆 commit 落地後即移除。
-.github/PULL_REQUEST_TEMPLATE.md
