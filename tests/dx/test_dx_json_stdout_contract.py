@@ -30,8 +30,8 @@ gate flushed out) lands as a red here, not in a caller's ``| jq``.
 
 SCOPE — WHAT THIS GATE ASSERTS
 ------------------------------
-* Exactly the 15 dx tools that DECLARE a JSON-output flag as an argparse
-  ``add_argument`` — 14 via ``--json`` / ``--json-output`` and 1
+* Exactly the 16 dx tools that DECLARE a JSON-output flag as an argparse
+  ``add_argument`` — 15 via ``--json`` / ``--json-output`` and 1
   (``describe_tenant``) via ``--format`` with a ``json`` choice.
   ``collect_json_tools()`` is **AST-based, not regex-based**, precisely because a
   literal ``"--json"`` substring scan (what the ops gate uses) would also match
@@ -487,7 +487,7 @@ def test_fixture_paths_exist():
 def test_recipe_table_covers_every_json_tool():
     """A dx tool that grows a JSON-output flag must gain a recipe, or this rots.
 
-    (14 declare `--json`/`--json-output`; describe_tenant declares `--format json`.)
+    (15 declare `--json`/`--json-output`; describe_tenant declares `--format json`.)
     """
     covered = {r.tool for r in RECIPES}
     uncovered = sorted(set(JSON_TOOLS) - covered)
@@ -497,8 +497,8 @@ def test_recipe_table_covers_every_json_tool():
         f"recipe in RECIPES: {uncovered}"
     )
     assert not stale, f"RECIPES names dx tool(s) that no longer exist: {stale}"
-    assert len(JSON_TOOLS) == 15, (
-        f"expected 15 dx JSON-output tools (14 --json/--json-output + 1 "
+    assert len(JSON_TOOLS) == 16, (
+        f"expected 16 dx JSON-output tools (15 --json/--json-output + 1 "
         f"describe_tenant --format json), found {len(JSON_TOOLS)}: "
         f"{sorted(JSON_TOOLS)}"
     )
