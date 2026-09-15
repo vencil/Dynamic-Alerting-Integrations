@@ -13,6 +13,11 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 <!-- 下一版 in-flight 工作暫存區。每筆 entry 目標 3-6 行使用者重點 + 一行指回內部 artifact；session 過程 / FUSE trap / 完整 commit list 不入此處。release 收尾時做最終 condensation 並切正式 `## [vX.Y.Z]` heading。 -->
 
+### Removed
+
+- **`docs/assets/badge-data.json` — 零讀者的死檔（dx；[#1848](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1848)）**：這個 JSON 除了 `version` 之外全是手寫計數，repo 內沒有任何工具重算它們、也沒有任何 gate 對帳，而 `bump_docs.py` 唯一那條寫入規則只替換 `version` 欄位。它與 README 上的 badge **無關**——那些數字寫死在 shields.io 網址裡，由 `_version_patterns.py` + `version-consistency` 守著（#1268）。依「不是刪掉，就是給它機械化的 SSOT」：沒有消費端的數字補 SSOT 買不到偵測力，所以刪檔；`bump_docs.py` 那條規則必須同一顆 commit 一起刪，否則 `tests/dx/test_bump_docs.py::TestLiveRepoRuleTargetsExist::test_every_rule_target_file_exists` 會紅（規則指向不存在的檔）。
+- ⚠️ **未排除的風險**：`docs/assets/**` 會隨 MkDocs 發佈，repo 外的消費者查不到。已量到的是 repo 內零引用、da-portal 映像的 Dockerfile 沒有 COPY 它。若日後真出現外部消費者，正確的處置是**先接上寫入端與檢查端再加回來**，不是把手寫數字放回去。
+
 ### Fixed
 
 - **go-lint 守衛看不見「住在受檢 module 底下、但 `./...` 走不進去」的 `.go`——主不變式的述詞補上 cmd/go 的可達規則（lint；[#1798](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1798)）**：`test_every_go_file_is_under_a_linted_module` 原本只問「owning module 有沒有 lint step」，一個放在 `internal/x/testdata/gen.go` 的檔 owning module 是 tenant-api、有 step、`0 issues`，而 `golangci-lint run ./...` 從來不載入它。規則取自 `go help packages`（目錄或檔名以 `.`／`_` 開頭、`testdata` 目錄、`vendor` 的**子目錄**——vendor 本身有碼就是一般套件，`./...` 會配到；盲審實測 `vendor/x.go` 與 `internal/vendor/x.go` 都被讀，第一版述詞對它們誤紅），在 golangci-lint 2.12.2 上逐格實測：這些形狀一筆都不報，而 v1 預設 skip list 的 `examples/`、`third_party/`、`Godeps/`、`builtin/` v2 **全部照報**——所以它們不在集合裡。⛔ **與 #1781 撤回的 `_UNREACHABLE_DIRS` 的差別**：那版只有一支 helper 測試、主不變式對述詞的任何改動都無感。這次照票面形狀做——述詞抽成 `_unlinted(...)` 由主不變式呼叫，控制項打**同一支**函式，並且 `test_the_invariant_itself_reds_on_a_file_dotdotdot_skips` 用 monkeypatch 把一條合成路徑餵給**主不變式本身**（`internal/testdata/zz.go` 必紅、`internal/zz/zz.go` 必綠）；變異實測：述詞殺成恆真 ⇒ 兩支控制項紅；主不變式改回舊表達式繞過 `_unlinted` ⇒ 注入測試紅（第一版沒有這支時全綠）。今天樹上 0 個實例，這張票買的是「下一個出現時會紅」。失敗訊息分兩路：要 lint 的碼搬到 `./...` 到得了的地方；刻意不編譯的 `testdata/*.go` fixture 登記 `_EXEMPT_GO_FILES` 附理由。內部 artifact：`tests/ops/test_go_lint_module_coverage.py::test_unlinted_reads_what_dotdotdot_skips`、`::test_the_invariant_itself_reds_on_a_file_dotdotdot_skips`。
