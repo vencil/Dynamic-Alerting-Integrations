@@ -268,6 +268,8 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ### Added
 
+- **agent 產出量測工具 `agent_output_metrics.py` ＋ skill 觸發評測集（dx；agent 指引改善計畫 PR-A，前身 [#1737](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1737)）**：`changelog` 量一個 section 內每個條目（頂層 bullet 含子彈）的字元長度分佈、超過 `--cap` 的條數，與去掉表格列／縮排圍籬的 `prose_chars`；`pr-bodies` 經 `gh` 量 PR body 長度與含證據區塊（圍籬內第一行以 `$` 加一個空白起頭）的支數。條目與圍籬的定義在工具 docstring，後續的條目上限 lint 要 import 它、不另寫。不是閘門：量到即 exit 0。每支 skill 的 `evals/trigger.json` 收 should／should-not 觸發查詢，供 skill-creator 的 `run_eval.py` 用；只住在 SSOT，不投影到 `.claude/skills/`。基線數字在 PR body。
+
 - **文件裡教客戶抄的 da-tools 命令，對著活的 argparse 契約驗（lint；[#1379](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1379) / TRK-370）**：新 `check_cli_contract.py` 從 `COMMAND_MAP` 推出 subcommand→script、用 runpy 攔下每支 script 真正的 `ArgumentParser`（含 entrypoint 注入的 `--prometheus`），再對 fenced block 的命令段、fence 之外的 inline code span、manifest 的 `command:`／`args:`、shell 真的會執行的 `sh -c` 字串，以及 cli-reference 的選項表與結束碼表比對。五個判定：V0 未知子命令、V1 未宣告旗標（含二層子命令）、V2 前綴縮寫（argparse `allow_abbrev` 會收下並綁到別的旗標，一律違規）、V3 選項表幻影列、V4 可達但未列的結束碼。
   - **帳本帶紅上線**：既有內容票的紅記在 `docs/internal/cli-contract-baseline.yaml`（每列 file／command／verdict／token／count／ticket，ticket 必須是 `#NNNN`）；比對是集合相等——少於 count 是 stale 硬錯、多出來的是新紅；`--write-baseline` 重生帳本，新列 ticket 留 `#TODO` 而閘門拒收它。
   - **逃生門要理由**：fence 行尾與 manifest `args:`／`command:` 行尾 `# datools-cmd-ignore: <why>`、散文行尾／表格末格 `<!-- datools-cmd-ignore: <why> -->`；理由空是硬錯，該行沒有 finding 可豁免是 stale 硬錯，同一 finding 同時被帳本與 ignore 豁免是硬錯。

@@ -1,0 +1,22 @@
+[
+  {"query": "federation 要 GA 了，上線前做一次全面安全稽核", "should_trigger": true},
+  {"query": "這一季的深度安全稽核該跑了", "should_trigger": true},
+  {"query": "上週 tenant-api 的寫入路徑被繞過一次，補完那個洞之後想整個元件再掃一輪", "should_trigger": true},
+  {"query": "L7 caller identity 是新的信任邊界，要不要先打一輪紅隊", "should_trigger": true},
+  {"query": "想對 threshold-exporter 整個元件做一次攻擊面盤點，先摸清楚邊界再讓人去打", "should_trigger": true},
+  {"query": "machine identity 上線前的安全審查怎麼做", "should_trigger": true},
+  {"query": "我想找人專門去打 tenant isolation，不是看 diff", "should_trigger": true},
+  {"query": "incident 之後想確認還有沒有同類的洞沒被發現，要怎麼安排", "should_trigger": true},
+  {"query": "對 da-portal 做一次 component 級的攻擊面稽核", "should_trigger": true},
+  {"query": "這支 PR 有沒有注入風險，幫我看 diff", "should_trigger": false},
+  {"query": "trufflehog 掃到一個 secret，怎麼 rotate", "should_trigger": false},
+  {"query": "kube-linter 報 Critical 要怎麼修", "should_trigger": false},
+  {"query": "幫我 debug 為什麼 RBAC 判斷錯", "should_trigger": false},
+  {"query": "解釋 ADR-022 的四層防線", "should_trigger": false},
+  {"query": "單一檔案的 token 驗證函式幫我 review", "should_trigger": false},
+  {"query": "GHSA advisory 什麼時候可以發布", "should_trigger": false},
+  {"query": "幫我寫 threat model 的文件範本", "should_trigger": false},
+  {"query": "CodeQL alert 怎麼 dismiss", "should_trigger": false},
+  {"query": "pen test 報告要給客戶看的格式", "should_trigger": false},
+  {"query": "federation key rotation 的 runbook 在哪", "should_trigger": false}
+]

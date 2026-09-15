@@ -1,0 +1,22 @@
+[
+  {"query": "新 session，我要開始改 threshold-exporter 的 reload 邏輯，先幫我確認起手式跑了沒", "should_trigger": true},
+  {"query": "git status 卡住不動兩分鐘了，之前好像是 FUSE 的問題，怎麼處理", "should_trigger": true},
+  {"query": "docker exec 進 vibe-dev-container 跑 go test，stdout 什麼都沒印，rc 也是 0，這正常嗎", "should_trigger": true},
+  {"query": "pre-commit 跑到一半被我 Ctrl+C，之後 .git/index.lock 一直在，commit 不了", "should_trigger": true},
+  {"query": "localhost:9090 被之前的 port-forward 佔住，Prometheus 連不上，怎麼清", "should_trigger": true},
+  {"query": "我想寫一支 _tmp_commit.bat 在 Windows 側幫我 commit，可以嗎", "should_trigger": true},
+  {"query": "這個 repo 從改 code 到開 PR 的標準流程是什麼？我第一次在這裡工作", "should_trigger": true},
+  {"query": "commit message 有中文，用 cmd 提交後在 GitHub 上變亂碼", "should_trigger": true},
+  {"query": "make win-commit 是做什麼的，什麼情況該用它而不是直接 git commit", "should_trigger": true},
+  {"query": "幫我把 tenant-api 的 RBAC middleware 加一個單元測試，覆蓋 wildcard 角色", "should_trigger": false},
+  {"query": "這段 PromQL 用 increase() 在只有兩個樣本的序列上為什麼會外推出很大的值", "should_trigger": false},
+  {"query": "hadolint 報 DL3008 要 pin apt 版本，components/da-tools 的 Dockerfile 怎麼改", "should_trigger": false},
+  {"query": "幫我看 #1549 的 issue body，摘要它的驗收條件", "should_trigger": false},
+  {"query": "v2.10.0 release 收尾要跑哪些步驟", "should_trigger": false},
+  {"query": "同一個 finding 修到第三輪了，每輪 reviewer 都挖出新洞，怎麼收斂", "should_trigger": false},
+  {"query": "helm values 改了 exporter 的 selector label，會不會連動 NetworkPolicy 或 ServiceMonitor", "should_trigger": false},
+  {"query": "try-local 的 docker compose up 之後 Grafana 看不到 dashboard", "should_trigger": false},
+  {"query": "在 K8s 上 port-forward alertmanager 要用哪個 service name，playbook 哪一節有寫", "should_trigger": false},
+  {"query": "幫我寫一份 ADR 討論 gateway 要不要引入 Envoy", "should_trigger": false},
+  {"query": "pytest tests/lint 全紅，錯誤都是 ModuleNotFoundError: yaml", "should_trigger": false}
+]

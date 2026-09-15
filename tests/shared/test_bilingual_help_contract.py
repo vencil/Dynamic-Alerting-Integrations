@@ -152,6 +152,7 @@ ENGLISH_ONLY: dict[str, str] = {
     "state_reconcile.py": _R_OPS,
     # ── scripts/tools/dx ───────────────────────────────────────────────
     "add_frontmatter.py": _R_DX,
+    "agent_output_metrics.py": _R_DX,
     "analyze_bench_history.py": _R_DX,
     "analyze_probe.py": _R_DX,
     "analyze_tier1_fp_rate.py": _R_DX,
@@ -537,8 +538,10 @@ def test_allowlists_shrink_only_count_pin():
     # check_cli_default_drift.py beside it: a `scripts/tools/lint/` gate wired
     # to Drift Detection, `make lint-docs` and pre-commit, never invoked by a
     # customer; that directory is English-only across the board.
-    assert len(ENGLISH_ONLY) <= 148, (
-        f"ENGLISH_ONLY grew to {len(ENGLISH_ONLY)} (pin=148). Adding an "
+    # pin 149: bumped from 148 for agent_output_metrics.py (agent-harness
+    # plan PR-A): a dx measurement CLI for maintainers, never customer-facing.
+    assert len(ENGLISH_ONLY) <= 149, (
+        f"ENGLISH_ONLY grew to {len(ENGLISH_ONLY)} (pin=149). Adding an "
         "English-only tool is allowed but must be an explicit, reviewed "
         "decision — bump this pin in the same commit and justify it."
     )

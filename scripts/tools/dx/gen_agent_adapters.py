@@ -81,6 +81,12 @@ OUT_SKILLS = ".claude/skills"
 OUT_ROLES = ".claude/agents"
 OUT_ENTRY = "AGENTS.md"
 
+# A skill's `evals/` directory stays SSOT-only: it holds trigger eval sets
+# (JSON) that MEASURE the skill, not instruction text. No vendor reads it, and
+# JSON has no comment syntax for a provenance line -- projecting it would break
+# the pinned invariant that every adapter names its source.
+NOT_PROJECTED_DIR = "evals"
+
 # AGENTS.md is BOTH source and output: its prose is hand-written and its skill
 # index is machine-maintained between these two markers. It is not a projected
 # copy like the files under .claude/, and deliberately so -- it must sit at the
@@ -210,6 +216,8 @@ def iter_ssot(root):
     that reviewers read as repo content. Refusing is safe because the SSOT has
     no legitimate symlink today, and this repo cannot rely on symlinks anyway
     (they do not survive a Windows host -- PR #1457).
+
+    `NOT_PROJECTED_DIR` (`evals/`) is pruned from the walk: see the constant.
     """
     src_abs = os.path.join(REPO_ROOT, root)
     out = []
@@ -219,6 +227,8 @@ def iter_ssot(root):
                 raise UnsafePath(
                     f"{os.path.relpath(os.path.join(dirpath, name), REPO_ROOT)} "
                     "is a symlinked directory; the SSOT must be real files")
+        if NOT_PROJECTED_DIR in dirs:
+            dirs.remove(NOT_PROJECTED_DIR)
         for name in sorted(files):
             abs_path = os.path.join(dirpath, name)
             if os.path.islink(abs_path):

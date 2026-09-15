@@ -1,0 +1,22 @@
+[
+  {"query": "第二輪修 #1549 的 finding 了，上一輪修完 reviewer 又挖出五條", "should_trigger": true},
+  {"query": "修了三輪，reviewer 每次都挖出上一輪修法造成的新問題，看不到盡頭", "should_trigger": true},
+  {"query": "上一輪修完，這輪又拿到 9 條 finding，要怎麼安排修的順序", "should_trigger": true},
+  {"query": "這個守衛的判斷式改了兩版都被打穿，我在想第三版之前是不是根本判不了", "should_trigger": true},
+  {"query": "make converge-status 說 ROUND-CAP 了，接下來怎麼辦", "should_trigger": true},
+  {"query": "上一輪修完驗過的東西，下一輪 reviewer 要怎麼接手才不用重驗", "should_trigger": true},
+  {"query": "同一個守衛已經改了四次還是被打穿", "should_trigger": true},
+  {"query": "reviewer 說我的修法製造了新的假紅，這已經是第三輪", "should_trigger": true},
+  {"query": "dev/1443/ROUNDS.jsonl 要怎麼記", "should_trigger": true},
+  {"query": "第一次實作這個功能，幫我規劃", "should_trigger": false},
+  {"query": "這個單檔 doc 修一下錯字", "should_trigger": false},
+  {"query": "設計階段，還沒寫 code，幫我想架構", "should_trigger": false},
+  {"query": "幫我跑一次 review", "should_trigger": false},
+  {"query": "CI 第一次紅了，幫我看 log", "should_trigger": false},
+  {"query": "benchmark 結果不收斂，方差很大", "should_trigger": false},
+  {"query": "git rebase 衝突解了三次還是有", "should_trigger": false},
+  {"query": "Prometheus 的 for: 5m 讓 alert 一直 pending 不 fire", "should_trigger": false},
+  {"query": "幫我把這輪的修法寫進 CHANGELOG", "should_trigger": false},
+  {"query": "這個 finding 我覺得是誤報，怎麼回 CodeRabbit", "should_trigger": false},
+  {"query": "安全稽核這一季要重跑", "should_trigger": false}
+]
