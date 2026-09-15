@@ -9,20 +9,22 @@ skill-creator eval loop. Coverage:
   - each set parses, is a non-empty list of {query: str, should_trigger: bool}
     objects with exactly those keys
   - both classes are present, and no query repeats within a set
-  - no query names the skill under test (a query that says "vibe-release"
-    measures name recall, not description quality)
+  - no query names any skill or subagent role (a query that says
+    "vibe-release" or "vibe-sec-hunter" measures name recall, not
+    description quality)
 """
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SKILLS = REPO_ROOT / "agents" / "skills"
+ROLES = REPO_ROOT / "agents" / "roles"
 SKILL_DIRS = sorted(d for d in SKILLS.iterdir() if (d / "SKILL.md").is_file())
+AGENT_NAMES = sorted({d.name for d in SKILL_DIRS} | {p.stem for p in ROLES.glob("*.md")})
 
 
 def _load(d: Path) -> list:
@@ -51,6 +53,7 @@ def test_eval_set_shape(skill_dir: Path):
 
 
 @pytest.mark.parametrize("skill_dir", SKILL_DIRS, ids=[d.name for d in SKILL_DIRS])
-def test_no_query_names_the_skill_under_test(skill_dir: Path):
-    leaks = [it["query"] for it in _load(skill_dir) if skill_dir.name in it["query"]]
-    assert not leaks, f"queries naming the skill itself: {leaks}"
+def test_no_query_names_a_skill_or_role(skill_dir: Path):
+    assert len(AGENT_NAMES) > len(SKILL_DIRS), "roles must be in the name set too"
+    leaks = [(it["query"], n) for it in _load(skill_dir) for n in AGENT_NAMES if n in it["query"]]
+    assert not leaks, f"queries naming a skill/role: {leaks}"

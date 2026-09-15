@@ -33,9 +33,12 @@ METRICS
     ``--cap``, and the ``--top`` longest entries with their line numbers.
     Two lengths are reported per entry: ``chars`` counts everything, and
     ``prose_chars`` drops the lines that are evidence rather than prose
-    (lines inside an indented fenced block, and table rows starting with
-    ``|``). A future cap that wants to penalise narrative but not evidence
-    has the second number to key on.
+    (table rows starting with ``|``, and lines inside an INDENTED fenced
+    block). A fence at column 0 is not part of any entry (it ends the list
+    item, as in CommonMark), so on a CHANGELOG that writes its fences at
+    column 0 the second number differs from the first only by table rows.
+    A future cap that wants to penalise narrative but not evidence has the
+    second number to key on, and must decide what a column-0 fence means.
 
 ``pr-bodies``
     ``gh pr list --state <state> --limit <n> --json number,body``. Reported:
@@ -55,8 +58,9 @@ Column-0 content after a bullet (a table or a paragraph written at column 0
 instead of indented) CLOSES the entry, so that text belongs to no entry and
 the entry's length is under-reported. A cap built on this definition must
 therefore treat such column-0 content as an error in its own right, or it
-can be walked around by out-denting. Nested fences (a 4-backtick block
-containing a 3-backtick one) are not modelled: each fence line toggles.
+can be walked around by out-denting. Fences pair the CommonMark way: a
+closer must use the same character and be at least as long as the opener,
+so a 4-backtick block may contain a 3-backtick one.
 
 EXIT CODES (scripts/tools/_lib_exitcodes.py)
 ============================================
@@ -90,10 +94,21 @@ GH_TIMEOUT_S = 120
 # `## [Name With Spaces] — suffix` or `## bare-name suffix`: the bracketed
 # form may contain spaces, the bare form is the first whitespace-free token.
 _HEADING_RE = re.compile(r"^## (?:\[(?P<bracketed>[^\]]+)\]|(?P<bare>\S+))")
-_FENCE_RE = re.compile(r"^\s*(```|~~~)")
-_INDENTED_FENCE_RE = re.compile(r"^\s+(```|~~~)")
+_FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})")
+_INDENTED_FENCE_RE = re.compile(r"^\s+(`{3,}|~{3,})")
+_COLUMN0_FENCE_RE = re.compile(r"^(`{3,}|~{3,})")
 _TABLE_ROW_RE = re.compile(r"^\s*\|")
 _EVIDENCE_FIRST_LINE_RE = re.compile(r"^\s*\$ \S")
+
+
+def fence_step(fence: Optional[str], marker: str) -> Tuple[Optional[str], bool]:
+    """CommonMark fence pairing: a fence closes only on a run of the SAME
+    character at least as long as the opener. Returns (new_fence, toggled)."""
+    if fence is None:
+        return marker, True
+    if marker[0] == fence[0] and len(marker) >= len(fence):
+        return None, True
+    return fence, False
 
 
 def non_negative_int(value: str) -> int:
@@ -149,12 +164,9 @@ def iter_entries(block: Sequence[str], first_line_no: int) -> Iterator[Tuple[int
     cur: List[str] = []
     fence: Optional[str] = None   # the marker that opened the current fence
     for offset, line in enumerate(block):
-        if line.startswith("```") or line.startswith("~~~"):
-            marker = line[:3]
-            if fence is None:
-                fence = marker
-            elif fence == marker:
-                fence = None
+        m = _COLUMN0_FENCE_RE.match(line)
+        if m:
+            fence, _ = fence_step(fence, m.group(1))
             if cur_no is not None:
                 yield cur_no, "\n".join(cur)
             cur_no, cur = None, []
@@ -197,9 +209,10 @@ def prose_len(entry: str) -> int:
     fence: Optional[str] = None
     for line in entry.splitlines():
         m = _INDENTED_FENCE_RE.match(line)
-        if m and (fence is None or m.group(1) == fence):
-            fence = m.group(1) if fence is None else None
-            continue
+        if m:
+            fence, toggled = fence_step(fence, m.group(1))
+            if toggled:
+                continue
         if fence is not None or _TABLE_ROW_RE.match(line):
             continue
         kept.append(line)
@@ -258,10 +271,11 @@ def has_evidence_fence(body: str) -> bool:
     awaiting_first = False
     for line in body.splitlines():
         m = _FENCE_RE.match(line)
-        if m and (fence is None or m.group(1) == fence):
-            fence = m.group(1) if fence is None else None
-            awaiting_first = fence is not None
-            continue
+        if m:
+            fence, toggled = fence_step(fence, m.group(1))
+            if toggled:
+                awaiting_first = fence is not None
+                continue
         if fence is not None and awaiting_first and line.strip():
             if _EVIDENCE_FIRST_LINE_RE.match(line):
                 return True
@@ -286,7 +300,7 @@ def pr_shape_error(prs: object) -> Optional[str]:
     if not isinstance(prs, list):
         return "gh pr list returned JSON that is not a list"
     for i, p in enumerate(prs):
-        if not isinstance(p, dict) or not isinstance(p.get("number"), int):
+        if not isinstance(p, dict) or type(p.get("number")) is not int:
             return f"gh pr list element {i} is not an object with an integer 'number'"
         if p.get("body") is not None and not isinstance(p["body"], str):
             return f"gh pr list element {i} has a non-string 'body'"
@@ -363,7 +377,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     pr = sub.add_parser("pr-bodies", parents=[json_flag],
                         help="PR body length distribution and evidence-fence count via gh")
-    pr.add_argument("--limit", type=int, default=DEFAULT_PR_LIMIT, help="how many PRs (default: 25)")
+    pr.add_argument("--limit", type=non_negative_int, default=DEFAULT_PR_LIMIT,
+                    help="how many PRs (default: 25)")
     pr.add_argument("--state", default="merged", choices=("merged", "open", "closed", "all"),
                     help="gh pr list --state (default: merged)")
     return parser

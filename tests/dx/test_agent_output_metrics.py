@@ -187,8 +187,19 @@ def test_fence_whose_first_line_is_not_a_command_is_not_evidence():
 
 
 def test_tilde_inside_backtick_fence_does_not_close_it():
-    assert aom.has_evidence_fence("```\n~~~\n$ ls\n```\n") is False
-    assert aom.has_evidence_fence("```\n$ ls\n~~~\n```\n") is True
+    # Discriminating case: an any-marker toggle would close on the first
+    # `~~~`, reopen on the second, and read `$ ls` as a first line -> True.
+    assert aom.has_evidence_fence("```\nx\n~~~\n~~~\n$ ls\n```\n") is False
+    assert aom.has_evidence_fence("~~~\nx\n```\n```\n$ ls\n~~~\n") is False
+
+
+def test_longer_fence_may_contain_shorter_one():
+    assert aom.has_evidence_fence("````\n```\n$ ls\n```\n````\n") is False
+    assert aom.has_evidence_fence("````\n$ ls\n```\n````\n") is True
+    entry = "- head\n  ````\n  ```\n  $ out\n  ```\n  ````\n  tail"
+    assert aom.prose_len(entry) == len("- head\n  tail")
+    block = ["- e1", "````", "```", "- inner", "```", "````", "- e2"]
+    assert [b for _, b in aom.iter_entries(block, 1)] == ["- e1", "- e2"]
 
 
 # ============================================================
@@ -272,6 +283,7 @@ def test_negative_top_or_cap_is_a_caller_error(tmp_path):
     f.write_text(SAMPLE, encoding="utf-8")
     assert _run(["changelog", "--path", str(f), "--top", "-1"]).returncode == 2
     assert _run(["changelog", "--path", str(f), "--cap", "-5"]).returncode == 2
+    assert _run(["pr-bodies", "--limit", "-1"]).returncode == 2
 
 
 def test_pr_bodies_gh_failure_reports_the_first_stderr_line(monkeypatch, capsys):
@@ -290,6 +302,8 @@ def test_pr_bodies_wrong_element_shape_is_a_caller_error(monkeypatch, capsys):
     assert capsys.readouterr().out == ""
     monkeypatch.setattr(aom, "_run_gh", lambda state, limit: json.dumps([{"body": "x"}]))
     assert aom.main(["pr-bodies"]) == 2
+    assert aom.pr_shape_error([{"number": True, "body": "x"}]) is not None
+    assert aom.pr_shape_error([{"number": 7, "body": None}]) is None
 
 
 def test_pr_bodies_gh_missing_is_caller_error(monkeypatch):
