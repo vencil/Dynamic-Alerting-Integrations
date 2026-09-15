@@ -53,11 +53,10 @@ CLAUDE_CODE_REMOTE=true CLAUDE_PROJECT_DIR="$PWD" bash .claude/hooks/session-sta
 7. **禁止對掛載路徑用 `sed -i`** — 會截斷缺少 EOF 換行的檔案。用 Read+Edit 或 pipe。
 8. **Doc-as-Code** — 影響 API / schema / CLI 的變更須同步 `CHANGELOG.md` + `CLAUDE.md` + `README.md`。
 9. **Tenant-Agnostic** — Go / PromQL / fixture 禁止 hardcode tenant id（例如 `db-a`）。
-10. **commit / push 前先觸發 `vibe-dev-rules` skill** — pre-commit hook 不攔所有 Vibe gate（如 `make lint-docs-mkdocs`），skip-and-recover 會多燒 2+ 個 push cycle。
 
 完整規範（受眾是 contributor／人）見 [`dev-rules.md`](docs/internal/dev-rules.md)。
 
-⚠️ **跨 repo 的 AI 行為約束是另一份**：[`agent-rulebook.md`](docs/internal/agent-rulebook.md)（D-01～D-09，含路由表與成本上限）。⛔ 兩份刻意分開——不要把認識論紀律寫進 `dev-rules.md`。
+⚠️ **跨 repo 的 AI 行為約束是另一份**：[`agent-rulebook.md`](docs/internal/agent-rulebook.md)（含路由表與仲裁）；正要寫下宣稱時的路由在 `verifying-claims` skill。⛔ 兩份刻意分開——不要把認識論紀律寫進 `dev-rules.md`。
 
 ## 往哪裡看
 
@@ -66,8 +65,8 @@ CLAUDE_CODE_REMOTE=true CLAUDE_PROJECT_DIR="$PWD" bash .claude/hooks/session-sta
 | 情境 | 去哪 |
 |---|---|
 | session 起手 / FUSE 卡死 / docker exec 無輸出 / port-forward 殘留 | `vibe-workflow` skill |
-| commit / push / refactor 前 | `vibe-dev-rules` skill → [`dev-rules.md`](docs/internal/dev-rules.md) |
-| 寫 lint 或守衛前、宣稱買到偵測力前、寫「沒有 X 涵蓋」前、判 CI 綠燈前 | [`agent-rulebook.md`](docs/internal/agent-rulebook.md) |
+| commit / push / refactor 前 | 上方不可協商項＋[`dev-rules.md`](docs/internal/dev-rules.md)；mkdocs strict 由 pre-push 守衛擋，提早看用 `make lint-docs-mkdocs` |
+| 正要寫「通過／修好」、「沒有 X 涵蓋」、任何數字、宣稱買到偵測力、判 CI 綠燈、修 finding 前 | `verifying-claims` skill → [`agent-rulebook.md`](docs/internal/agent-rulebook.md) |
 | K8s / docker / release / conf.d / benchmark / E2E 要看哪份 playbook | `vibe-playbook-nav` skill |
 | multi-file PR、`Agent` 跑完後、spawn 長時 reviewer 前 | `vibe-subagent-review` skill |
 | release 收尾 / 打 tag | `vibe-release` skill → [`github-release-playbook.md`](docs/internal/github-release-playbook.md) |
@@ -89,9 +88,9 @@ CLAUDE_CODE_REMOTE=true CLAUDE_PROJECT_DIR="$PWD" bash .claude/hooks/session-sta
 
 ## Skill 體系
 
-⛔ **SSOT 在 [`agents/skills/`](agents/skills/)，不是 `.claude/skills/`**（TRK-361）。後者是 `make agent-adapters` 的**生成物**——Claude Code 只認那個路徑所以必須存在，但改它會被 `gen-agent-adapters-check` 擋下、下次重生也會覆蓋。subagent 角色提示詞同理：SSOT 在 [`agents/roles/`](agents/roles/)，`.claude/agents/` 是生成物。
+⛔ **SSOT 在 [`.agents/skills/`](.agents/skills/)，不是 `.claude/skills/`**（TRK-361）。後者是 `make agent-adapters` 的**生成物**——Claude Code 只認那個路徑所以必須存在，但改它會被 `gen-agent-adapters-check` 擋下、下次重生也會覆蓋。subagent 角色提示詞同理：SSOT 在 [`.agents/roles/`](.agents/roles/)，`.claude/agents/` 是生成物。
 
-根目錄 [`AGENTS.md`](AGENTS.md)（AAIF 中性標準，Codex / Cursor / Copilot / Gemini CLI / Grok 原生讀）是**手寫散文**，刻意不複製規範內容；其中**只有 `BEGIN/END GENERATED SKILL INDEX` 之間**由 `agents/skills/` 的 frontmatter 生成，其餘直接編輯即可。
+根目錄 [`AGENTS.md`](AGENTS.md)（AAIF 中性標準，Codex / Cursor / Copilot / Gemini CLI / Grok 原生讀）是**手寫散文**，刻意不複製規範內容；其中**只有 `BEGIN/END GENERATED SKILL INDEX` 之間**由 `.agents/skills/` 的 frontmatter 生成，其餘直接編輯即可。
 
 各 skill 的觸發時機見上方路由表；每支的完整內容在它自己的 `SKILL.md`，本檔不複述。
 
@@ -99,7 +98,7 @@ CLAUDE_CODE_REMOTE=true CLAUDE_PROJECT_DIR="$PWD" bash .claude/hooks/session-sta
 
 ### Skill 優先級宣告（衝突仲裁；TRK-301）
 
-多 skill 同時匹配時，本地 `vibe-*` 優先於環境層 generic，**僅限「Vibe 已有專屬流程」的範圍**：`vibe-workflow` > 環境層 session-bootstrap；`vibe-dev-rules` > `engineering:code-review` 的 git / commit / branch / trailer 部分；`vibe-playbook-nav` > 跨 K8s / Helm / release / E2E 的 generic 指引。環境層 skill 仍負責其專業領域（`engineering:debug` 的 reproduce、`data:*` 的分析等），不在此範圍者照常自主使用。
+多 skill 同時匹配時，本地 `vibe-*` 優先於環境層 generic，**僅限「Vibe 已有專屬流程」的範圍**：`vibe-workflow` > 環境層 session-bootstrap；本檔不可協商項與 [`dev-rules.md`](docs/internal/dev-rules.md) > `engineering:code-review` 的 git / commit / branch / trailer 部分；`vibe-playbook-nav` > 跨 K8s / Helm / release / E2E 的 generic 指引。環境層 skill 仍負責其專業領域（`engineering:debug` 的 reproduce、`data:*` 的分析等），不在此範圍者照常自主使用。
 
 ## Pre-commit 品質閘門
 

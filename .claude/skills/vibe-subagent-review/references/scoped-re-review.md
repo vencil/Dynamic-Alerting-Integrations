@@ -1,4 +1,4 @@
-<!-- 此檔為產生物，來源 agents/skills/vibe-subagent-review/references/scoped-re-review.md —— 請改那份 SSOT，再跑 `make agent-adapters`；不要直接編輯這份複本。 -->
+<!-- 此檔為產生物，來源 .agents/skills/vibe-subagent-review/references/scoped-re-review.md —— 請改那份 SSOT，再跑 `make agent-adapters`；不要直接編輯這份複本。 -->
 # Scoped re-review 骨架（第 2 輪起派 reviewer 用）
 
 〈預設檔位〉說第 2 輪起改派**換 context 的盲審**。這份檔給那一棒的 prompt 骨架。

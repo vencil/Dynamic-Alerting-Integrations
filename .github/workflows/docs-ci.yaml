@@ -72,6 +72,8 @@ jobs:
               - "README.md"
               - "README.en.md"
               - "CLAUDE.md"
+              - "AGENTS.md"
+              - ".agents/**"
               - "CHANGELOG.md"
               - "mkdocs.yml"
               - "scripts/tools/**/*.py"

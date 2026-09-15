@@ -172,7 +172,7 @@ overrides:
   - source: "**/.golangci.yml"
     tests: [tests/ops/test_go_lint_module_coverage.py]
     justification: 守衛斷言每份 config 的 linter 下限與 run.build-tags；自動映射選得到別的測試，選不到這一支
-  - source: "agents/skills/**"
+  - source: ".agents/skills/**"
     tests: [tests/dx/test_skill_trigger_evals.py]
     justification: 受測物是 skill 目錄下的 evals/trigger.json 資料檔與 SKILL.md 的存在，非 .py 來源；測試經 REPO_ROOT 常數列目錄，掃描構不到
   - source: "scripts/tools/dx/verify_diff_rules.yaml"

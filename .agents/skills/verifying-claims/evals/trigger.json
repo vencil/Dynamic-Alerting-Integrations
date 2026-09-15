@@ -1,0 +1,22 @@
+[
+  {"query": "我要寫一支 lint 擋掉 CHANGELOG 裡的 TBD 字樣，述詞要怎麼設計才不會被繞", "should_trigger": true},
+  {"query": "這支 PR 加了新的 gate，我想在 PR body 寫『新增偵測力』，寫之前要先做什麼", "should_trigger": true},
+  {"query": "我 grep 過了，repo 裡沒有任何檢查在管 frontmatter 的 version 欄位，我要開票", "should_trigger": true},
+  {"query": "CI 全綠了，可以 merge 了吧", "should_trigger": true},
+  {"query": "reviewer 給了一條 finding 指到 validate_config.py 第 212 行，我改那一行就好了吧", "should_trigger": true},
+  {"query": "我要在 CHANGELOG 寫「全 repo 還剩 3 處」，這個 3 要怎麼算才算數", "should_trigger": true},
+  {"query": "測試說有問題但我確定程式沒錯，我想把那條斷言放寬", "should_trigger": true},
+  {"query": "這條線審了五輪，每輪都只審當輪的 diff，可以宣布審過了嗎", "should_trigger": true},
+  {"query": "我準備在 PR body 寫「測試過了，lint 乾淨」，要附什麼", "should_trigger": true},
+  {"query": "我想在 docstring 寫「這個 bug 以前發生過所以要加守衛」，但我沒查過 git log", "should_trigger": true},
+  {"query": "幫我寫一份 ADR 的 trade-off 段落", "should_trigger": false},
+  {"query": "這個 API 該用 PUT 還是 PATCH", "should_trigger": false},
+  {"query": "幫我把 tests/dx 裡一個 flaky 測試加 retry", "should_trigger": false},
+  {"query": "這個 repo 的 Python 測試要怎麼跑，Go 測試呢", "should_trigger": false},
+  {"query": "幫我看這份 helm values diff 的爆炸半徑有多大", "should_trigger": false},
+  {"query": "第二輪修 finding 了，上一輪修完 reviewer 又挖出五條，怎麼安排", "should_trigger": false},
+  {"query": "幫我開 branch 並 commit 這三個檔案", "should_trigger": false},
+  {"query": "rule-pack-oracle.yaml 的 lock-wait 閾值一般建議設多少", "should_trigger": false},
+  {"query": "可以直接 push 到 main 嗎？只是改 README 一行錯字", "should_trigger": false},
+  {"query": "幫我把 benchmark 的 p99 latency 結果畫成折線圖", "should_trigger": false}
+]
