@@ -4,9 +4,9 @@ Goal: every tracked Go source file is analysed by some linter. It did not hold,
 and every gap was silent — enrolled modules print `0 issues`, which reads like
 whole-repo coverage.
 
-⛔ `_EXEMPT_GO_FILES` names any tracked .go still outside every linted
-module. Read it as the list of holes; empty (since #1816) means the goal is
-fully asserted.
+⛔ `_EXEMPT_GO_FILES` names any tracked .go no lint step reads — outside
+every linted module, or where `./...` never descends. Read it as the list of
+holes; empty (since #1816) means the goal is fully asserted.
 
 ⛔ Nothing here runs golangci-lint; the executable control is the `Go Lint` job.
 A probe inside pytest was measured and rejected: `ci.yml::python-tests-run` has
@@ -62,8 +62,9 @@ _LINT_RUN = re.compile(r"^golangci-lint\s+run\s+\./\.\.\.$")
 _BUILD_LINE = re.compile(r"^//go:build\s+(.+?)\s*$", re.MULTILINE)
 _IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_.]*")
 
-# ⛔ Tracked .go outside every go.mod. golangci-lint needs a module, so these
-# are read by no linter and no gofmt. This records holes; it closes none.
+# ⛔ Tracked .go read by no linter and no gofmt: outside every go.mod, or
+# under a linted module where `./...` never descends (#1798). This records
+# holes; it closes none.
 # Empty since #1816 gave scripts/tools/ops/bench_filter.go its own module;
 # the reverse assertion below keeps a stale entry from lingering.
 _EXEMPT_GO_FILES: dict[str, str] = {}
@@ -133,6 +134,37 @@ def _owning_module(rel: str, modules: frozenset[str]) -> str | None:
     return max(candidates, key=len) if candidates else None
 
 
+def _reachable_by_dotdotdot(rel: str, module: str) -> bool:
+    """Does `golangci-lint run ./...` from `module` ever load `rel`?
+
+    The rule is cmd/go's, from `go help packages`: directory and file names
+    that begin with `.` or `_` are ignored, as are directories named
+    `testdata`; `./...` does not match packages in SUBDIRECTORIES of a
+    `vendor` directory — a `vendor` directory that itself holds code is an
+    ordinary package and is matched. Measured on golangci-lint 2.12.2 with
+    one finding per file: those shapes stay silent while `examples/`,
+    `third_party/`, `Godeps/`, `builtin/` — v1's default skip list — are all
+    reported, so they are NOT in this set (#1798).
+    """
+    segments = rel[len(module) + 1:].split("/")
+    dirs, name = segments[:-1], segments[-1]
+    return not (
+        name.startswith((".", "_"))
+        or any(d.startswith((".", "_")) or d == "testdata" for d in dirs)
+        or "vendor" in dirs[:-1]
+    )
+
+
+def _unlinted(go_files: list[str], modules: frozenset[str],
+              linted: set[str]) -> list[str]:
+    """Tracked .go files no lint step reads — the main invariant's predicate."""
+    return [
+        rel for rel in go_files
+        if (owner := _owning_module(rel, modules)) not in linted
+        or not _reachable_by_dotdotdot(rel, owner)
+    ]
+
+
 def _module_config(module: str) -> dict:
     config = ROOT / module / ".golangci.yml"
     assert config.is_file(), (
@@ -192,13 +224,18 @@ def test_every_go_file_is_under_a_linted_module() -> None:
 
     modules = _go_modules()
     linted = set(_lint_steps().values())
-    orphans = [r for r in go_files if _owning_module(r, modules) not in linted]
+    orphans = _unlinted(go_files, modules, linted)
 
     undisclosed = sorted(set(orphans) - set(_EXEMPT_GO_FILES))
     assert not undisclosed, (
-        f"tracked .go read by no lint step: {undisclosed}. Move it under a "
-        "linted module. Adding it to _EXEMPT_GO_FILES silences this and lints "
-        "nothing — that is a last resort, not the fix.")
+        f"tracked .go read by no lint step: {undisclosed}. Either no linted "
+        "module owns it, or `./...` never descends to it (a `testdata` "
+        "directory, a subdirectory of `vendor`, or a directory or file name "
+        "starting with `.` or `_`) — the step prints `0 issues` either way. "
+        "Code meant to be linted: move it where `./...` reaches. A fixture "
+        "that must NOT compile (a `testdata/*.go` template): it is a hole by "
+        "design — record it in _EXEMPT_GO_FILES with that reason. Adding "
+        "anything else there silences this and lints nothing.")
 
     stale = sorted(set(_EXEMPT_GO_FILES) - set(orphans))
     assert not stale, (
@@ -209,6 +246,57 @@ def test_every_go_file_is_under_a_linted_module() -> None:
     assert not unbacked, (
         f"{VALIDATE.name}::{LINT_JOB} lints director(ies) holding no go.mod: "
         f"{unbacked}. golangci-lint exits 0 there — coverage in appearance only.")
+
+
+def test_unlinted_reads_what_dotdotdot_skips() -> None:
+    """Synthetic corpus, production predicate — the tree has no such file.
+
+    Each row is a measured cell (golangci-lint 2.12.2 and `go list ./...`
+    agreeing); `n/x.go` exercises the older "no linted owner" clause.
+    """
+    files = [
+        "m/x.go",
+        "m/internal/ok/x.go",
+        "m/internal/testdata/x.go",
+        "m/internal/_under/x.go",
+        "m/internal/.hidden/x.go",
+        "m/vendor/vend/x.go",
+        "m/vendor/x.go",
+        "m/internal/vendor/x.go",
+        "m/internal/ok/_skip.go",
+        "m/internal/ok/.hid.go",
+        "m/examples/x.go",
+        "m/third_party/x.go",
+        "m/internal/Godeps/x.go",
+        "m/internal/builtin/x.go",
+        "n/x.go",
+    ]
+    assert _unlinted(files, frozenset({"m", "n"}), {"m"}) == [
+        "m/internal/testdata/x.go",
+        "m/internal/_under/x.go",
+        "m/internal/.hidden/x.go",
+        "m/vendor/vend/x.go",
+        "m/internal/ok/_skip.go",
+        "m/internal/ok/.hid.go",
+        "n/x.go",
+    ]
+
+
+def test_the_invariant_itself_reds_on_a_file_dotdotdot_skips(monkeypatch) -> None:
+    """Drives the main invariant, not its helper — the call site is the witness.
+
+    A tree with no such file cannot tell `_unlinted` from the older, narrower
+    expression it replaced; feeding the invariant one synthetic path can.
+    """
+    real = _tracked_files()
+    module = sys.modules[__name__]
+    skipped = f"{_ANCHOR_MODULE}/internal/testdata/zz.go"
+    monkeypatch.setattr(module, "_tracked_files", lambda: real + (skipped,))
+    with pytest.raises(AssertionError, match="testdata/zz.go"):
+        test_every_go_file_is_under_a_linted_module()
+    reached = f"{_ANCHOR_MODULE}/internal/zz/zz.go"
+    monkeypatch.setattr(module, "_tracked_files", lambda: real + (reached,))
+    test_every_go_file_is_under_a_linted_module()
 
 
 def test_editing_a_module_wakes_the_lint_job() -> None:
