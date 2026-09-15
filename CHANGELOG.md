@@ -13,6 +13,11 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 <!-- 下一版 in-flight 工作暫存區。每筆 entry 目標 3-6 行使用者重點 + 一行指回內部 artifact；session 過程 / FUSE trap / 完整 commit list 不入此處。release 收尾時做最終 condensation 並切正式 `## [vX.Y.Z]` heading。 -->
 
+### Removed
+
+- **`docs/assets/badge-data.json` — 零讀者的死檔（dx；[#1848](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1848)）**：這個 JSON 除了 `version` 之外全是手寫計數，repo 內沒有任何工具重算它們、也沒有任何 gate 對帳，而 `bump_docs.py` 唯一那條寫入規則只替換 `version` 欄位。它與 README 上的 badge **無關**——那些數字寫死在 shields.io 網址裡，由 `_version_patterns.py` + `version-consistency` 守著（#1268）。依「不是刪掉，就是給它機械化的 SSOT」：沒有消費端的數字補 SSOT 買不到偵測力，所以刪檔；`bump_docs.py` 那條規則必須同一顆 commit 一起刪，否則 `tests/dx/test_bump_docs.py::TestLiveRepoRuleTargetsExist::test_every_rule_target_file_exists` 會紅（規則指向不存在的檔）。
+- ⚠️ **未排除的風險**：`docs/assets/**` 會隨 MkDocs 發佈，repo 外的消費者查不到。已量到的是 repo 內零引用、da-portal 映像的 Dockerfile 沒有 COPY 它。若日後真出現外部消費者，正確的處置是**先接上寫入端與檢查端再加回來**，不是把手寫數字放回去。
+
 ### Fixed
 
 - **`bench_filter.go` 迴圈結束後不讀 `sc.Err()`，於是一條達到 16 MiB 的單行會被靜默吃掉（ops；[#1864](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1864)）**：`bufio.Scanner` 碰到達到 buffer 上限的行會停止掃描，而 `Scan()` 回 false 的方式與 EOF **一模一樣**；#1816 為 `Flush` 加的錯誤處理只涵蓋**寫入**端，讀取端從來沒有讀者。⭐ **修法改變的不是產物，是 exit code**：那一行之後的 benchmark 結果**在修法前後一樣會消失**，`bench.out.txt` 逐位元組相同；改掉的是「一個無法據以行動的 rc」——舊版視資料量而定，要嘛以 rc 0 帶著一個看起來乾淨的短檔收場，要嘛讓上游 `tee` 吃到 SIGPIPE 而回 141，而 141 正是 `bench_wrapper.sh` 自己警告會被讀成「下游提前關閉」的那個值。現在一律 rc 1 並在 stderr 指名成因。⚠️ **今天的 benchmark 產不出這種行（實測最長單行不到 1 KiB），所以這是「防下一個」不是修一個活的缺陷**——逐格量測與 counterfactual 只放在 commit 訊息，這裡不複述數字。連帶更正 `scripts/ops/parse_go_test_json.py` 檔頭一句自 #1816 起就不成立的散文（「它沒有 module home」——它有了；結論仍成立但理由換成「每支跑 `go test` 的 workflow 都是逐條列舉模組，而它不在任何一張清單上」，並在原地標明那是今天的設定快照、不是結構性事實）。
