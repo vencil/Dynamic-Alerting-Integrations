@@ -1,6 +1,6 @@
 # vibe-converge：規則全文、來源與工具守不到的邊界（從 SKILL.md 逐字搬出；不自動載入）
 
-> 主檔是本檔的濃縮版（第 0 步、跨輪三類、停止規則、帳本格式各留可執行的一句）。本檔是 PR-B2 之前主檔的全文，逐字搬出、僅調整相對連結深度；規則的推導與量測仍在 [`derivation.md`](derivation.md)。
+> 主檔是本檔的濃縮版（第 0 步、跨輪三類、停止規則、帳本格式各留可執行的一句）。本檔是 PR-B2 之前主檔的全文，逐字搬出、僅調整相對連結深度，以及把兩處指向已搬走的〈預設檔位〉改指 `vibe-subagent-review/references/discipline.md`；規則的推導與量測仍在 [`derivation.md`](derivation.md)。
 
 ## 第 0 步 — decidability gate（每輪開工前，30 秒）
 
@@ -108,7 +108,7 @@ append-only，一行一筆 JSON（沿用 `PROGRESS.jsonl` 的慣例：不重寫�
 - ⚠️ **`status` 的 `rejected` 與 `deferred` 是合法值，但沒有任何規則讀它們**（`converge_status.py` 只在 `STATUSES` 驗證集裡出現一次；會分支的只有 `fixed`）。寫它們是給人看的紀錄，不會改變任何判定。⛔ 這條寫出來是因為**已經有人被它騙過**：[#1564](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1564) 的帳本刻意用 `tier=verified, status=rejected` 來區分「沒查」與「查了沒事」，而工具對那個區分完全無感。**不要移除這兩個值**——移除詞彙會讓所有寫過它的既有帳本永久報格式違規（見下面 `KINDS` 那條）。
 - **`ROUND-CAP` 的預算只由有審查活動的輪次支出**——該輪至少有一筆 `subject` / `finding` / `dead-end`。只帶 `question` 的記帳列不花錢。在這之前它會花掉一輪（實測：5 個真審查輪 rc=0，同樣 5 輪加一列記帳 rc=1），於是**寫下記帳列的人被罰、不寫的人不被罰**。⛔ 換來的最便宜轉綠寫在上一條：把 finding 記成 `question`——那會讓那些 finding 失去 `status`，`UNREVIEWED-FIX` 因此看不到後續的 `fixed`（`converge_status.py` 的 `question` 分支只累加 `open_questions`）。另外三件同段揭露：⑴ **只記了 `decidability` 而沒宣告 `subject` 的輪次也不花錢**——這是刻意的，第 0 步判定 undecidable 而換主體正是本協議要你做的事，不該被課稅；⑵ **一輪只做一次審查是慣例，不是工具檢查的事**；⑶ ⛔ **預算不看 `tier`**——任何一筆 `kind=finding` 都讓那一輪算數，`tier` 寫壞、寫成 `speculative`、或整個沒寫都一樣。**`tier=verified` 決定的是什麼東西跨輪，不是那一輪有沒有發生。** 兩者綁在一起的話，只要把 `tier` 寫錯就能讓一輪不算數。
 - 🔴 **比「拆成兩支帳本」更便宜的繞法：不遞增輪號。** 把第 5、6、7、8 次審查全部記在 `round: 5` 底下，`ROUND-CAP` 就數不到（實測：4 個真輪 + 第 5 輪塞 4 次審查 ⇒ rc=0）。⚠️ **這在本次改動之前就存在、行為完全相同**（同一份帳本在 `origin/main` 的工具上也是 rc=0），不是新缺陷；列在這裡是因為既有揭露只寫了較貴的那個繞法，而**只揭露較貴的那一個，等於暗示較便宜的那個不存在**。
-- ⚠️ **`SELF-REVIEW-ZERO` 仍然在數 finding**（它是 advisory 不是停止規則），而且把 `reviewer` 從 `"self"` 改成任何別的字就會消音。**沒有動它**：見 `vibe-subagent-review`〈預設檔位〉的未解前提。
+- ⚠️ **`SELF-REVIEW-ZERO` 仍然在數 finding**（它是 advisory 不是停止規則），而且把 `reviewer` 從 `"self"` 改成任何別的字就會消音。**沒有動它**：見 `vibe-subagent-review` references/discipline.md〈預設檔位〉的未解前提。
 - `LEDGER-GAP` 只檢查輪號連續，**不檢查是否從 1 開始**。從鏈中途才開帳的 scope 合法且靜默。
 - ⚠️ **`KINDS` 是往前看的：拿掉一個 kind，所有寫過它的既有帳本就永久報格式違規、rc=1**，沒有遷移路徑，也沒有「這個 kind 已撤回，予以容忍」的概念。實例：TRK-360 撤回宣告式 oracle 後，`dev/stopcond` 那本帳本裡 5 筆 `oracle` / `oracle-result` 讓**每一次執行**都 rc=1，而那與任何停止規則無關——讀報告時要先把 `-- FORMAT --` 區塊和停止規則分開看。
 - 本工具**不進 CI、不進 pre-commit**、不擋任何東西。這是刻意的：#1457 剛刪掉六支「守衛的守衛」，對 review 流程再造一支 gate 會重演同一個病。owner 分類 = 🧠 **skill-advised**（見 [`hook-vs-skill-coverage.md`](../../../../docs/internal/hook-vs-skill-coverage.md)）。
@@ -116,6 +116,6 @@ append-only，一行一筆 JSON（沿用 `PROGRESS.jsonl` 的慣例：不重寫�
 
 ## 與既有體系關係
 
-- **[`vibe-subagent-review`](../../vibe-subagent-review/SKILL.md)**：管一輪之內怎麼審（lens 路由、finder≠verifier、只報站得住的）。多輪情境下，該 skill 的預設檔位改由本 skill 決定（見該 skill〈預設檔位〉節）。
+- **[`vibe-subagent-review`](../../vibe-subagent-review/SKILL.md)**：管一輪之內怎麼審（lens 路由、finder≠verifier、只報站得住的）。多輪情境下，該 skill 的預設檔位改由本 skill 決定（見該 skill references/discipline.md〈預設檔位〉節）。
 - **[`vibe-brainstorm`](../../vibe-brainstorm/SKILL.md)**：還沒開始寫 code 時用它。第 0 步與 brainstorm 的 blast-radius 提問互補——一個問「這題可判嗎」，一個問「炸掉多大」。
 - **`PROGRESS.jsonl`**（`vibe-subagent-review` 長時 agent 協議）：那個是**單一 agent 的存活訊號**；`ROUNDS.jsonl` 是**跨輪的知識交接**。格式慣例相同、用途不重疊，同一個 `dev/<scope>/` 下可並存。

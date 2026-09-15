@@ -22,4 +22,4 @@ description: 設計階段的 Socratic ideation — 用提問逼出 MVP 範圍、
 
 ## 外審
 
-locked decision 後、實作前走一輪外部 adversarial review（Gemini / o3）。外審意見走 take / reframe / reject，外審也會杜撰路徑與前提，先驗再收。設計空間真的很寬、選錯代價高時，才升級成多 agent 提案 panel（reuse [`vibe-security-audit`](../vibe-security-audit/SKILL.md) 的 Workflow harness：平行獨立提案彼此盲 → 不同模型 critic 打穿 → judge 打分收斂）；它不取代外審——內部 panel 抓內部矛盾，外審抓內部共有的盲點；小題不要起它。已 locked 的執行直接做，不再回到本 skill。
+locked decision 後、實作前走一輪外部 adversarial review（Gemini / o3）。外審意見走 take / reframe / reject，外審也會杜撰路徑與前提，先驗再收。設計空間真的很寬、選錯代價高時，才升級成多 agent 提案 panel（reuse [`vibe-security-audit`](../vibe-security-audit/SKILL.md) 的 Workflow harness：多個 agent 各從不同角度（MVP-first / risk-first / cost-first / user-first）平行獨立提案、彼此盲、不 anchor 同一起點 → 不同模型 critic 打穿 → judge 打分收斂）；它不取代外審——內部 panel 抓內部矛盾，外審抓內部共有的盲點；小題不要起它。已 locked 的執行直接做，不再回到本 skill。

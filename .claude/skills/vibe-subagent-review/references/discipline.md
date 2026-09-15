@@ -1,7 +1,7 @@
 <!-- 此檔為產生物，來源 .agents/skills/vibe-subagent-review/references/discipline.md —— 請改那份 SSOT，再跑 `make agent-adapters`；不要直接編輯這份複本。 -->
 # vibe-subagent-review：Review 紀律（從 SKILL.md 逐字搬出；不自動載入）
 
-> 主檔只留副檔名路由、三張 checklist、收 review 處置表與長時 agent 入口。本檔是 PR-B2 之前主檔的其餘各節，逐字搬出、僅調整相對連結深度；怎麼報、怎麼驗、怎麼派、何時砍鷹架，不確定時再讀。第 2 輪起派盲審的 prompt 骨架在 [`scoped-re-review.md`](scoped-re-review.md)。
+> 主檔只留副檔名路由、三張 checklist、收 review 處置表與長時 agent 入口。本檔收 PR-B2 之前主檔的九節：Review 紀律／收 review／鷹架准入／預設檔位／升級多 agent／Spec→Quality／Worked examples／長時驗證協議／與既有體系關係，逐字搬出、僅調整相對連結深度；原〈何時觸發／何時跳過〉一節未搬，觸發與跳過條件只在 frontmatter description。怎麼報、怎麼驗、怎麼派、何時砍鷹架，不確定時再讀。第 2 輪起派盲審的 prompt 骨架在 [`scoped-re-review.md`](scoped-re-review.md)。
 
 ## Review 紀律（所有 lens 通用）
 

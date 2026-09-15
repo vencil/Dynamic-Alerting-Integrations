@@ -9,7 +9,7 @@ tags: [internal, ai-tooling]
 
 # Agent Rulebook
 
-受眾是 agent；給人讀的專案規範在 [`dev-rules.md`](dev-rules.md)，兩者刻意分開。每條只有**觸發時刻／約束／機械判準／Traced To**（D-05 另附八軸索引）；為什麼與已知失敗形狀在 [`agent-rulebook-shapes.md`](agent-rulebook-shapes.md)，不確定怎麼套用時才讀。本檔不寫量測數字（owner 2026-09-06 拍板；判準見 [#1620](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1620)），逐格量測住在 `Traced To` 指向的 issue 與 commit 訊息。正要寫下宣稱時的路由在 `verifying-claims` skill。
+受眾是 agent；給人讀的專案規範在 [`dev-rules.md`](dev-rules.md)，兩者刻意分開。每條只有**觸發時刻／約束／Traced To**（D-01 另有機械判準、D-05 另附八軸索引）；為什麼與已知失敗形狀在 [`agent-rulebook-shapes.md`](agent-rulebook-shapes.md)，不確定怎麼套用時才讀。本檔不寫量測數字（owner 2026-09-06 拍板；判準見 [#1620](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1620)），逐格量測住在 `Traced To` 指向的 issue 與 commit 訊息。正要寫下宣稱時的路由在 `verifying-claims` skill。
 
 ## 仲裁：規則互相衝突時
 
@@ -68,7 +68,7 @@ D-06 與 D-07 是前後段（要數什麼／怎麼數才算數），同時觸發
 ## D-04 有 gate ≠ gate 會跑
 
 **觸發時刻**：正要判 CI 綠燈，或宣稱「這個改動有 gate 守著」。
-**約束**：**一支斷言「某件事會發生」的守衛，必須讀完所有能讓它不發生的機制。**「檢查 `if:`」是這條的一個實例，不是規則本身；已知的失效層（path filter、hook 未被 workflow 叫到、輸入被截斷、掛在非強制路徑、PR CONFLICTING 時 workflow 不建立、gate 驗的狀態接著被自動步驟摧毀……）逐條在 shapes，每一層都與「gate 正常運作」畫面相同。「零 finding」是歧義訊號不是成功訊號。
+**約束**：**一支斷言「某件事會發生」的守衛，必須讀完所有能讓它不發生的機制。**「檢查 `if:`」是這條的一個實例，不是規則本身；已知的失效層（非窮舉：path filter、hook 未被 workflow 叫到、輸入被截斷、掛在非強制路徑、PR CONFLICTING 時 workflow 不建立、gate 驗的狀態接著被自動步驟摧毀……）逐條在 shapes，每一層都與「gate 正常運作」畫面相同。「零 finding」是歧義訊號不是成功訊號。
 **Traced To**: #1223 / #1226 / #1240 / #1270 / #1293 / #1310 / #1327 / #1330 / #1369 / #1402 / #1419 / #1509 / #1648 / #1664 / #1687 / #1689 / #1725 / #1741
 
 ## D-05 守衛要可推導，不要列舉語法

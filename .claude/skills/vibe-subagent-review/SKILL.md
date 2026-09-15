@@ -8,6 +8,8 @@ description: IaC-aware 兩階段 review — code 走 spec→quality、IaC 走 bl
 
 機械層的單檔 SAST 由 [#448](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/448) 的 hadolint／kube-linter／trivy 與 pre-commit 顧；本 skill 顧**跨檔語義 cascade**（owner 分類見 [`hook-vs-skill-coverage.md`](../../../docs/internal/hook-vs-skill-coverage.md)）。輪與輪之間怎麼傳、何時停，由 [`vibe-converge`](../vibe-converge/SKILL.md) 管；commit／branch／trailer 紀律以 [`dev-rules.md`](../../../docs/internal/dev-rules.md) 為準，本 skill 不重做；與環境層 skill 衝突時依 [CLAUDE.md §Skill 優先級宣告](../../../CLAUDE.md)，`vibe-*` supersede `engineering:code-review`。
 
+⛔ `.claude/**` 是 `.agents/**` 的生成鏡像，不進 review 範圍（實測一輪 7 條 finding 有 3 條打在鏡像上、同一條審兩次）。
+
 ## 副檔名路由
 
 | 改動檔 | lens | 核心問題 |
@@ -46,7 +48,9 @@ description: IaC-aware 兩階段 review — code 走 spec→quality、IaC 走 bl
 
 ## 長時 reviewer / verifier（預估 >15 分鐘）
 
-多階段用 `Workflow` 編排；不得已用單一背景 `Agent` 時，spawn prompt 必貼 [`references/discipline.md`](references/discipline.md) 的 ledger 契約，之後用 `make agent-progress SCOPE=dev/<scope>` 看進度，不要 tail transcript。單 agent 上限約 15 分鐘，超過就拆段。
+多階段（≥2 個里程碑、或預估 >15 分鐘）一律用 `Workflow` 編排；不得已用單一背景 `Agent`（單一不可分割里程碑）時，spawn prompt 必貼 [`references/discipline.md`](references/discipline.md) 的 ledger 契約，之後用 `make agent-progress SCOPE=dev/<scope>` 看進度，不要 tail transcript；看到 `blocked` 或連續 `fail` 就主動介入（停掉、帶著 ledger 尾端 reframe 後重 spawn），不陪它燒完。單 agent 上限約 15 分鐘，超過就拆段。
+
+⛔ **同一缺陷第 2 輪起（修法、re-fix），自審降為 pre-check，預設改派不帶本輪對話的盲審**（[`references/discipline.md`](references/discipline.md)〈預設檔位〉；prompt 骨架在 [`references/scoped-re-review.md`](references/scoped-re-review.md)）。
 
 ## 紀律（不確定怎麼審、怎麼派、怎麼判鷹架時讀）
 

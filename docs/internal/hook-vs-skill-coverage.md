@@ -81,7 +81,7 @@ lang: zh
 
 ## 4. Pre-commit manual hooks — 🔧 需手動觸發
 
-`pre-commit run --hook-stage manual --all-files` 或 `make lint-docs` 觸發；不在 commit 時自動跑。
+`pre-commit run --hook-stage manual --all-files` 或 `make lint-docs` 觸發；不在 commit 時自動跑——最容易被誤當「自動會擋」，其實不會。
 
 | hook id | 用途 | 何時該手動跑 |
 |---|---|---|
