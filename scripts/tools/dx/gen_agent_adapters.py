@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the per-vendor agent adapters from the neutral agents/ SSOT (TRK-361).
+"""Generate the per-vendor agent adapters from the neutral .agents/ SSOT (TRK-361).
 
     python3 scripts/tools/dx/gen_agent_adapters.py --generate
     python3 scripts/tools/dx/gen_agent_adapters.py --check     # drift gate
@@ -9,8 +9,8 @@ WHAT THIS IS FOR
 The project's agent instructions used to live only under `.claude/`, which made
 them unusable by any other coding agent. They now live in a vendor-neutral tree:
 
-    agents/skills/<name>/SKILL.md   workflow skills (+ references/**)
-    agents/roles/<name>.md          subagent role prompts
+    .agents/skills/<name>/SKILL.md   workflow skills (+ references/**)
+    .agents/roles/<name>.md          subagent role prompts
 
 and this script projects that tree into whatever each vendor actually reads:
 
@@ -44,7 +44,7 @@ No reformatting, no frontmatter rewriting, no template expansion. Two reasons:
     text needs a fuzzy comparison, and a fuzzy drift gate is one that some real
     drift slips through.
 
-Relative links survive the projection for free: `agents/skills/<n>/SKILL.md` and
+Relative links survive the projection for free: `.agents/skills/<n>/SKILL.md` and
 `.claude/skills/<n>/SKILL.md` sit at the same depth, so every `../../../docs/...`
 in the corpus resolves identically from both. That was verified over all 29 such
 links before the move, and `tests/dx/test_gen_agent_adapters.py` pins it.
@@ -74,8 +74,8 @@ from _lib_exitcodes import (  # noqa: E402
 
 REPO_ROOT = os.path.normpath(os.path.join(_THIS_DIR, "..", "..", ".."))
 
-SSOT_SKILLS = "agents/skills"
-SSOT_ROLES = "agents/roles"
+SSOT_SKILLS = ".agents/skills"
+SSOT_ROLES = ".agents/roles"
 
 OUT_SKILLS = ".claude/skills"
 OUT_ROLES = ".claude/agents"
@@ -397,7 +397,7 @@ def write_outputs(plan):
 
 def build_parser():
     parser = argparse.ArgumentParser(
-        description=("Project the neutral agents/ SSOT into the per-vendor "
+        description=("Project the neutral .agents/ SSOT into the per-vendor "
                      "adapter files (.claude/**), and refresh the AGENTS.md "
                      "skill index."),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -437,7 +437,7 @@ def main(argv=None):
             for item in items:
                 print(f"  {label}: {item}", file=sys.stderr)
         print("❌ agent adapters drifted — run `make agent-adapters` "
-              "(edit the agents/ SSOT, never the adapter)", file=sys.stderr)
+              "(edit the .agents/ SSOT, never the adapter)", file=sys.stderr)
         return EXIT_VIOLATION
 
     try:
@@ -445,7 +445,7 @@ def main(argv=None):
     except UnsafePath as exc:
         print(f"ERROR: refusing to write — {exc}", file=sys.stderr)
         return EXIT_CALLER_ERROR
-    print(f"✅ Wrote {len(plan)} adapter file(s) from the agents/ SSOT")
+    print(f"✅ Wrote {len(plan)} adapter file(s) from the .agents/ SSOT")
     for item in removed:
         print(f"   removed stale adapter: {item}")
     return EXIT_OK

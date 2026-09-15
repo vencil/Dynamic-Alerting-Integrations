@@ -128,13 +128,13 @@ class DocLinkChecker:
         self.verbose = verbose
 
         # 掃描範圍
-        # `agents/` is the neutral agent-instruction SSOT (TRK-361). Scanned
+        # `.agents/` is the neutral agent-instruction SSOT (TRK-361). Scanned
         # here rather than its generated `.claude/**` mirror: the mirror is a
         # byte-copy at the same depth, so the two carry identical links, and
         # scanning both would double-report every break. Measured before this
         # line existed: a deliberately broken link in AGENTS.md left all four
         # doc gates green.
-        self.scan_dirs = ["docs", "rule-packs", "agents"]
+        self.scan_dirs = ["docs", "rule-packs", ".agents"]
         self.root_md_files = ["README.md", "README.en.md", "CHANGELOG.md",
                               "CLAUDE.md", "AGENTS.md"]
 
@@ -145,7 +145,7 @@ class DocLinkChecker:
             "docs/internal/",
             # Agent instructions: ZH-primary SSOT policy (v2.8.0 S#101), same
             # class as docs/internal/ — read by tooling and maintainers.
-            "agents/",
+            ".agents/",
             "AGENTS.md",
             "docs/CHANGELOG.md",
             "docs/includes/",

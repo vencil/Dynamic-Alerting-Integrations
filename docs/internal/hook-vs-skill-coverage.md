@@ -40,7 +40,7 @@ lang: zh
 | 要求 preflight marker | 每次 `git push`，但 **main/master 直接放行**（那歸擋直推 main 那支） | 確保 `make pr-preflight` 跑過 | push 被拒（無 marker） | `scripts/ops/require_preflight_pass.sh` |
 | mkdocs strict | push 含 `docs/**` / `mkdocs.yml` / `README.md` | dev-rule #4 mkdocs site-root 語意 | push 被拒（Tier 1）/ CI backstop（Tier 2） | `scripts/ops/pre_push_mkdocs_strict.sh` |
 
-> **AI 注意**：mkdocs strict 是 push 時才跑——但 `vibe-dev-rules` skill 要你 **commit 前**先跑（`feedback_vibe_dev_rules_skill_before_commit`），別等 push 才發現 site-root link 壞掉。
+> **AI 注意**：mkdocs strict 是 push 時才跑；動到 `docs/**` 想提早看就跑 `make lint-docs-mkdocs`，別等 push 才發現 site-root link 壞掉。
 
 > ⛔ **本表沒有 `hook id` 欄，因為這三支不再是 pre-commit hook（[#1689](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1689)）。** 它們由 `scripts/ops/prepush_dispatch.sh` 執行，`.pre-commit-config.yaml` 裡**沒有**對應的 `stages: [pre-push]` 條目——有一支測試釘住「零條目」，因為重新加回去的那一份**是瞎的**（見下）而且會印 Passed。
 
@@ -150,7 +150,7 @@ lang: zh
 | Skill | 涵蓋 | owner 性質 | 與 hook 關係 |
 |---|---|---|---|
 | `vibe-workflow` | 起手式、7 陷阱、FUSE/docker/port-forward | advisory（起手式部分已被 session-init hook 機械化） | **補集**：hook 做機械起手式，skill 講「卡住時怎麼救」 |
-| `vibe-dev-rules` | 13 規範 + Top 4 | advisory（多數規範有對應 hook，但 commit 前提醒靠 skill） | **前置**：在 hook 擋下之前先自覺（省 push cycle） |
+| `verifying-claims` | 宣稱前的路由（通過／沒有 X／數字／偵測力／綠燈／finding）→ agent-rulebook | advisory（認識論紀律，無機械對應） | 無對應 hook；PR-D 的 Stop hook 只驗證據區塊的形狀 |
 | `vibe-playbook-nav` | 任務→Playbook 章節路由 | advisory | 無對應 hook（純導航） |
 | `vibe-subagent-review` | IaC-aware 兩階段 review（code spec→quality / IaC blast-radius） | advisory（cross-file 語義層，機械 SAST 抓不到） | **補集 #448**：機械層單檔 SAST 由 #448；本 skill 顧跨檔 cascade（TRK-305） |
 | `vibe-release` | 六線版號 release 收尾 SOP（pre-tag / project-face / milestone-link） | advisory（release 紀律；docker+Trivy 部分已被 #474 機械化進 pre-tag，**Rule 4 未發布 draft advisory 檢查已被 #1295 機械化為 `draft-advisory-check`** — 但只在本地 `make pre-tag` 路徑，直接 push tag 仍繞過） | **延伸**：#474 把 Layer 1/2 機械化，本 skill 系統化 Layer 3 discipline（TRK-306） |
@@ -166,9 +166,9 @@ lang: zh
 
 | engineering: skill | Vibe 對應 owner | 結論 |
 |---|---|---|
-| `engineering:code-review` | `vibe-dev-rules` + 全部 pre-commit + commit-msg hook | git/commit/trailer 部分以 vibe-dev-rules 為準（TRK-301） |
+| `engineering:code-review` | CLAUDE.md／AGENTS.md 不可協商項 + dev-rules.md + 全部 pre-commit + commit-msg hook | git/commit/trailer 部分以 repo 規範為準（TRK-301） |
 | `engineering:debug` | `vibe-playbook-nav`（debug 章節） | 互補：reproduce 方法用 engineering，環境 trap 用 playbook |
-| `engineering:testing-strategy` | `test-map.md` + vibe-dev-rules（測試 seam） | 策略用 engineering，Vibe 專屬 seam 用 test-map |
+| `engineering:testing-strategy` | `test-map.md`（測試 seam） | 策略用 engineering，Vibe 專屬 seam 用 test-map |
 | `engineering:deploy-checklist` | `github-release-playbook` + `make pre-tag` + #474 | Vibe release 用 playbook + TRK-306（規劃中） |
 | `engineering:incident-response` | `secret-leak-remediation-sop` | secret 事故用 Vibe SOP |
 
@@ -178,7 +178,7 @@ lang: zh
 
 ### 🔁 Overlap（冗餘，多半 intentional 為安全）
 
-- **Commit trailer 規則 = 4 層**：dev-rules §P1（文件）+ `commit-msg` hook `validate_pass2_trailer_placement`（機械擋）+ `vibe-dev-rules` skill（commit 前提醒）+ CLAUDE.md 高頻地雷（always-on）。**唯一機械擋的是 commit-msg hook**；其餘 3 層是 advisory。→ TRK-310 收尾時 CLAUDE.md 版可縮 1-liner 指 dev-rules §P1（DRY）。
+- **Commit trailer 規則 = 3 層**：dev-rules §P1（文件）+ `commit-msg` hook `validate_pass2_trailer_placement`（機械擋）+ CLAUDE.md／AGENTS.md 不可協商項（always-on）。**唯一機械擋的是 commit-msg hook**；其餘 2 層是 advisory。→ TRK-310 收尾時 CLAUDE.md 版可縮 1-liner 指 dev-rules §P1（DRY）。
 - **檔案衛生（sed -i）= 5 層**：dev-rule #11 + `preflight_bash.py`（PreToolUse 機械擋）+ `sed-damage-guard`（pre-commit）+ CLAUDE.md 高頻地雷 + `vibe-workflow`。機械擋有 2 層（PreToolUse + pre-commit）——⛔ **但這個「2 層」有 checkout 形態前提**：`.claude/settings.json` 不載入的 web session 形態下 `preflight_bash.py` 不會跑（§2 的 ⛔、#1719），該形態下機械擋只剩 pre-commit 1 層。
 
 - **「散文裡指名的東西必須真的存在」= 4 層，而且四層互不涵蓋**（TRK-379 收尾時清點）。⛔ **沒有任何一層是全樹的**——四支各自盯著自己那一小塊，合起來也不構成覆蓋：
@@ -198,7 +198,7 @@ lang: zh
 ### ⚖️ Conflict（優先級歧義，由 TRK-301 仲裁）
 
 - `vibe-workflow` vs 環境層 session-bootstrap generic skill → vibe-workflow 優先（已宣告）
-- `vibe-dev-rules` vs `engineering:code-review`（git/commit）→ vibe-dev-rules 優先（已宣告）
+- repo 不可協商項／`dev-rules.md` vs `engineering:code-review`（git/commit）→ repo 規範優先（已宣告）
 - `vibe-playbook-nav` vs 跨 K8s/Helm/release/E2E generic 指引 → vibe-playbook-nav 優先（已宣告）
 
 ### 🕳️ 漏接（機械防線缺席**或只在某一種 checkout 形態下存在** — AI 必須自覺，最高風險）
@@ -211,7 +211,7 @@ lang: zh
 | **架構圖 drift**（Mermaid/C4） | 🧠 skill-advised（TRK-303 第 6 lens）+ dev-rule #4 | code 改了圖沒同步 | 人工 lens；6 個月後評估 auto-detector |
 | **IaC cross-file cascade** | 🧠 `vibe-subagent-review`（TRK-305 已上線）；機械層仍待 #448 | 改 selector 連動 NetworkPolicy/ServiceMonitor 漏改 | skill 補語義層；#448 補機械層 SAST |
 | **多輪修正不收斂**（同一缺陷第 2 輪起） | 🧠 `vibe-converge`（TRK-360）+ `make converge-status`（觀測，**不進 CI / 不進 pre-commit**） | 每輪淨增約 1000 行未受審新面；對資訊上不可判的問題連寫三版述詞；修法 commit 無人審；**以「零 finding」當終止條件把力氣導向鷹架**（`bf16d303` 實測：最近 60 顆 first-parent commit 中 self-serving 47 / product 13） | 刻意不做成 gate——#1457 剛刪掉六支「守衛的守衛」，對 review 流程再造一支會重演同一個病。工具檢查的是帳本**格式**（verified 有沒有附 evidence），**不檢查那段 evidence 是否真的跑過** |
-| **Agent 指引 SSOT 漂移**（有人改 `.claude/**` 轉接檔而非 `agents/` SSOT） | 🔧 `gen-agent-adapters-check`（pre-commit，TRK-361） | 轉接檔被手改後下次重生就丟失；或 SSOT 已刪的 skill 仍被 vendor 探索到 | 已機械化：四類漂移（stale / missing / extra / SSOT 缺失）皆實測會擋。⚠️ 但**內容正確性**不在此 gate 範圍——它只保證兩側一致，不保證寫得對 |
+| **Agent 指引 SSOT 漂移**（有人改 `.claude/**` 轉接檔而非 `.agents/` SSOT） | 🔧 `gen-agent-adapters-check`（pre-commit，TRK-361） | 轉接檔被手改後下次重生就丟失；或 SSOT 已刪的 skill 仍被 vendor 探索到 | 已機械化：四類漂移（stale / missing / extra / SSOT 缺失）皆實測會擋。⚠️ 但**內容正確性**不在此 gate 範圍——它只保證兩側一致，不保證寫得對 |
 | **SAST 7 條的 1/3/7**（encoding/chmod/stderr） | 👁️ reviewer convention（bandit 只 native 蓋 2/4/5/6） | 進 repo | dev-rule #5 已明列；reviewer 把關 |
 | **A-13**（`test.skip()` / `test.fixme()`，任何寫法）在 **worktree** 內 | 🔧 `playwright-lint` hook，但**只在有 `tests/e2e/node_modules` 的 checkout 跑得起來** | `node_modules` 是 gitignored ⇒ 每一棵新開的 worktree 對它都是壞的、且不會自己好 | #1428：三個入口（hook／`make lint-e2e`／CI job）收斂到 `scripts/tools/lint/e2e_spec_lint.sh`（缺依賴時印 `cd tests/e2e && npm ci` 並 fail），並由 `tests/lint/test_e2e_spec_lint.py` 釘住三者真的**執行**它、以及 CI job 不得帶 `if:` / `continue-on-error`。⚠️ **CI 腿目前是 advisory**——`E2E Spec Lint (A-13)` **這個 job 自己**不在 main 的 required checks 內（`Smoke Tests (Chromium)` 也不在，但把後者設成 required 不會讓前者變 blocking）。要 blocking 見該票 |
 
@@ -236,5 +236,4 @@ lang: zh
 - [CLAUDE.md §Pre-commit 品質閘門](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/CLAUDE.md)
 - [`dev-rules.md`](dev-rules.md)（13 規範 + §P trailer 紀律）
 - [`.pre-commit-config.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/.pre-commit-config.yaml)（hook SSOT）
-- [`skill-system-feature-requests.md`](skill-system-feature-requests.md)（本表是 Vibe 內部能做的；upstream 需 Anthropic/Cowork 做的見該表，TRK-309）
 - epic [#570](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/570) / TRK-307（季度 audit 消費本表）/ TRK-310（CLAUDE.md 瘦身參考本表 overlap 段）

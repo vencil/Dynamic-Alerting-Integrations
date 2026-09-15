@@ -6,13 +6,13 @@ version: v2.9.0
 verified-at-version: v2.9.0
 lang: zh
 ---
-<!-- 此檔為產生物，來源 agents/skills/vibe-converge/references/derivation.md —— 請改那份 SSOT，再跑 `make agent-adapters`；不要直接編輯這份複本。 -->
+<!-- 此檔為產生物，來源 .agents/skills/vibe-converge/references/derivation.md —— 請改那份 SSOT，再跑 `make agent-adapters`；不要直接編輯這份複本。 -->
 
 # vibe-converge — 推導與出處（TRK-360）
 
 > **這份檔案不會自動載入。** `SKILL.md` 只留會改變下一個動作的東西；規則怎麼來的、閾值憑什麼是那個數字、哪些方向已經被打死，全部在這裡，需要時才讀。
 >
-> 為什麼這樣切：SKILL.md 是**整份載入**的（skill-creator 三層 progressive disclosure：metadata 恆載 → SKILL.md 觸發時整份 → bundled resources 按需；[`skill-system-feature-requests.md` FR-05](../../../../docs/internal/skill-system-feature-requests.md) 也逐字記錄了「Skill tool 一次讀整份 SKILL.md…常只需其中一段」）。出處敘述每次觸發都付費、卻不改變任何一個動作，所以搬到這裡——**搬走不是刪除**，指標留在 SKILL.md 每條規則旁。
+> 為什麼這樣切：SKILL.md 是**整份載入**的（skill-creator 三層 progressive disclosure：metadata 恆載 → SKILL.md 觸發時整份 → bundled resources 按需）。出處敘述每次觸發都付費、卻不改變任何一個動作，所以搬到這裡——**搬走不是刪除**，指標留在 SKILL.md 每條規則旁。
 
 ## 目錄
 

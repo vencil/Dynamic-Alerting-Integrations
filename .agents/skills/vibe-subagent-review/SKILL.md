@@ -44,7 +44,7 @@ description: IaC-aware 兩階段 review — code 走 spec→quality、IaC 走 bl
 
 ⚠️ **判別語**：一條指示若讓 reviewer 依「有多嚴重／有多少條」決定閉嘴，放收件端；若讓它依「這是不是一個具體的失效」決定，放 prompt 端。
 
-⛔ **生成物不進 review 視野**（`.claude/**` 是由 `agents/**` 產生的鏡像，內容相同但**第 1 行多一列產生物標頭**，所以不是逐位元副本）。實測：一輪外部 review 的 7 條 finding 裡 **3 條落在生成鏡像上**——同一條 finding 被審了兩次。
+⛔ **生成物不進 review 視野**（`.claude/**` 是由 `.agents/**` 產生的鏡像，內容相同但**第 1 行多一列產生物標頭**，所以不是逐位元副本）。實測：一輪外部 review 的 7 條 finding 裡 **3 條落在生成鏡像上**——同一條 finding 被審了兩次。
 
 **2. verify-before-asserting（review finding 是一個 claim）**
 - 報 finding 前先 **grep + cite 實際 code** 佐證，不照 pattern-match 的直覺報。（燒過：外部 reviewer 對合法 Workflow-DSL top-level `return` 誤報 illegal-return、對 repo 未 enforce 的 lint 規則亂標——plausible-but-wrong；take / reframe / **reject** 前先驗那條規則 repo CI 真的擋嗎。）
@@ -230,7 +230,7 @@ note 禁含單/雙引號、反斜線、換行（要引用改全形「」）；�
 ## 與既有體系關係
 
 - **[#448](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/448)**（container/k8s SAST lint）：機械層單檔 violation（runAsNonRoot / hostNetwork / ALLOW_EMPTY_PASSWORD…）。本 skill 是 AI 跨檔語義層——**互補不重做機械 lint**。
-- **vibe-dev-rules**：commit / branch / trailer 紀律仍以 dev-rules 為準（本 skill 不重做）。
+- **[`dev-rules.md`](../../../docs/internal/dev-rules.md)**：commit / branch / trailer 紀律以它與 CLAUDE.md／AGENTS.md 不可協商項為準（本 skill 不重做）。
 - **[vibe-converge](../vibe-converge/SKILL.md)**：本 skill 管**一輪之內**怎麼審；輪與輪之間傳什麼、何時停、何時換受審主體由它管。第 2 輪起兩者一起用。
 - **vibe-security-audit**：稽核 harness 本體已是 Workflow 編排（原生串流）；稽核後 fix 的對抗式重驗 verifier 屬本 skill 長時驗證協議的適用對象。
 - 優先級仲裁見 [CLAUDE.md §Skill 優先級宣告](../../../CLAUDE.md)；衝突時 `vibe-*` supersede 環境層 `engineering:code-review`。

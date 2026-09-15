@@ -1,4 +1,4 @@
-"""Shape guard for `agents/skills/<name>/evals/trigger.json`: every skill has
+"""Shape guard for `.agents/skills/<name>/evals/trigger.json`: every skill has
 one, it parses to {query, should_trigger} items of both classes without
 duplicates, and no query names a skill or role (that would measure name
 recall, not description quality)."""
@@ -10,8 +10,8 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SKILLS = REPO_ROOT / "agents" / "skills"
-ROLES = REPO_ROOT / "agents" / "roles"
+SKILLS = REPO_ROOT / ".agents" / "skills"
+ROLES = REPO_ROOT / ".agents" / "roles"
 SKILL_DIRS = sorted(d for d in SKILLS.iterdir() if (d / "SKILL.md").is_file())
 AGENT_NAMES = sorted({d.name for d in SKILL_DIRS} | {p.stem for p in ROLES.glob("*.md")})
 

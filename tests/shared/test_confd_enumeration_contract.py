@@ -307,7 +307,7 @@ def test_legitimate_shapes_are_not_flagged(name, tmp_path: pathlib.Path):
 
 FLAT_OUTSIDE_POPULATION: dict[str, str] = {
     "dx/gen_agent_adapters.py":
-        "os.listdir over agents/skills — the repo-owned skill SSOT it generates adapters from",
+        "os.listdir over .agents/skills — the repo-owned skill SSOT it generates adapters from",
     "dx/inject_waveform.py":
         "`--rules` is a PrometheusRule candidate file/dir (glob *.yaml/*.yml), not a tenant conf.d",
     "dx/pr_preflight.py":

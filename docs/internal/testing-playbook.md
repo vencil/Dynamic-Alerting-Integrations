@@ -631,7 +631,7 @@ Phase .a0 已將主要互動工具加 `data-testid`（wizard、playground、conf
 3. **拒絕「再等一下」誘惑** — wait loop 內 elapsed > SLA 時就要切到 (2)；繼續等只是把時間白燒進 prompt cache。
 4. **`Monitor` / `run_in_background` 工具預設要設 timeout**，不要用 default 5min 不思考；有 prior 就設 prior，沒 prior 就想 1 分鐘有沒有理由要這麼久。
 
-**衍生規則 — verify-reference applies to hook scripts too**：S#73（`vibe-dev-rules` 的 self-review check #6）原本只要求 verify 自己寫的 code 引用的 API；S#74 extension：**讀別人寫的 hook / lint script 假設「它跑得通」前，最好先讀關鍵 path（subprocess Popen / pipe handling / file I/O）跟自己 verify 一遍**。本次 Popen 死鎖是 PR #164 之前就在的 latent bug，但所有 session 都假設「pre-commit hook = 跑得通」沒檢查；這個 prior 是錯的，要 calibrate 下來。
+**衍生規則 — verify-reference applies to hook scripts too**：S#73（`dev-rules.md` self-review check #6，原住在已刪除的 `vibe-dev-rules` skill）原本只要求 verify 自己寫的 code 引用的 API；S#74 extension：**讀別人寫的 hook / lint script 假設「它跑得通」前，最好先讀關鍵 path（subprocess Popen / pipe handling / file I/O）跟自己 verify 一遍**。本次 Popen 死鎖是 PR #164 之前就在的 latent bug，但所有 session 都假設「pre-commit hook = 跑得通」沒檢查；這個 prior 是錯的，要 calibrate 下來。
 
 ### 5. Self-review pass 2 (user-prompted) 抓 pass 1 沒抓到的真 bug（PR #166 amend / S#77）
 

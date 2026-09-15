@@ -38,10 +38,6 @@ report 寫到 `docs/internal/audit-reports/rules-drift-YYYY-MM.md`（atomic writ
 | 4. Feedback cross-ref | 🕳️ orphan / broken ref | 補進 `MEMORY.md` index 或修連結 |
 | 5. Stale feedback | ⏳ > 120 天未更新 | 確認是否仍適用；已升 CLAUDE.md root 的可考慮下放 deep-dive |
 
-## 附帶巡檢：上游 skill-system FR（TRK-309）
-
-跑季度 audit 時，順手巡檢 [`skill-system-feature-requests.md`](skill-system-feature-requests.md) 的 FR-01~06：上游（Anthropic / Cowork）是否已**靜默**解決任一項（skill-spec 改版常不大肆宣傳，該表的被動 trigger 抓不到）？已解決的標 ✅ / 移除。此步把那份「upstream 願望表」綁進 recurring 主動流程，避免它變成不準確的技術債。
-
 ## 編輯 always-on context 後：recall test（TRK-310 驗證的方法）
 
 動到 always-on tier-1 context（CLAUDE.md 高頻地雷 / dev-rules Top 4 / skill 清單）後——尤其**為瘦身而壓縮**時——跑 recall test 驗死線沒被埋：
