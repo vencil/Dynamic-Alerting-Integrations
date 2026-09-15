@@ -176,6 +176,21 @@ def test_tilde_inside_backtick_fence_does_not_close_it():
     assert aom.has_evidence_fence("~~~\nx\n```\n```\n$ ls\n~~~\n") is False
 
 
+def test_fence_closer_must_be_bare_and_backtick_info_string_may_not_contain_backtick():
+    # "``` trailing" is content, not a closer -> `$ ls` is still inside the block
+    assert aom.has_evidence_fence("```\nx\n``` trailing\n$ ls\n```\n") is False
+    # "```a`b" cannot open a backtick fence -> `$ ls` is prose, not evidence
+    assert aom.has_evidence_fence("```a`b\n$ ls\n```\n") is False
+    assert aom.has_evidence_fence("```bash\n$ ls\n```   \n") is True
+    block = ["- e1", "```", "- x", "``` not a closer", "- y", "```", "- e2"]
+    assert [b for _, b in aom.iter_entries(block, 1)] == ["- e1", "- e2"]
+
+
+def test_blank_lines_inside_an_entry_count_but_trailing_ones_do_not():
+    block = ["- a", "", "  b", "", "", "- c", ""]
+    assert [b for _, b in aom.iter_entries(block, 1)] == ["- a\n\n  b", "- c"]
+
+
 def test_longer_fence_may_contain_shorter_one():
     assert aom.has_evidence_fence("````\n```\n$ ls\n```\n````\n") is False
     assert aom.has_evidence_fence("````\n$ ls\n```\n````\n") is True

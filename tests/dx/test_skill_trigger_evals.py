@@ -44,5 +44,7 @@ def test_eval_set_shape(skill_dir: Path):
 @pytest.mark.parametrize("skill_dir", SKILL_DIRS, ids=[d.name for d in SKILL_DIRS])
 def test_no_query_names_a_skill_or_role(skill_dir: Path):
     assert len(AGENT_NAMES) > len(SKILL_DIRS), "roles must be in the name set too"
-    leaks = [(it["query"], n) for it in _load(skill_dir) for n in AGENT_NAMES if n in it["query"]]
+    assert [n for n in AGENT_NAMES if n.casefold() in "用 VIBE-RELEASE 收尾".casefold()] == ["vibe-release"]
+    leaks = [(it["query"], n) for it in _load(skill_dir) for n in AGENT_NAMES
+             if n.casefold() in it["query"].casefold()]
     assert not leaks, f"queries naming a skill/role: {leaks}"

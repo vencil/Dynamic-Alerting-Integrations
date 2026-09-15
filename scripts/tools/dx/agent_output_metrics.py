@@ -7,14 +7,17 @@
 Definitions (the contract a later cap must reuse, not re-derive):
 
 * ENTRY: a column-0 ``- `` bullet inside one ``## [section]`` block plus its
-  indented continuation lines (two spaces or a tab). Blank lines do not close
-  it; any other line does (``### ``, comment, column-0 fence, column-0 text).
-  Lines inside a column-0 fence are neither bullets nor continuation.
+  indented continuation lines (two spaces or a tab). Blank lines inside it
+  count (trailing ones dropped); any other line closes it (``### ``, comment,
+  column-0 fence, column-0 text). Lines inside a column-0 fence are neither
+  bullets nor continuation.
 * ``chars``: ``len(str)`` of the raw entry text (code points; prefix,
   indentation and newlines included). ``prose_chars``: the same minus table
   rows (``|``) and lines inside an INDENTED fence.
 * EVIDENCE FENCE: a fenced block whose first non-blank line starts with ``$ ``.
-  Fences pair the CommonMark way (same character, closer not shorter).
+  Fences pair the CommonMark way: opener may carry an info string (no backtick
+  in a backtick fence's), closer is the same character, not shorter, and
+  nothing else on the line.
 * Percentiles are nearest-rank.
 
 Caveats: length is a proxy for prose; an evidence fence proves shape, not that
@@ -50,19 +53,26 @@ GH_TIMEOUT_S = 120
 # `## [Name With Spaces] — suffix` or `## bare-name suffix`: the bracketed
 # form may contain spaces, the bare form is the first whitespace-free token.
 _HEADING_RE = re.compile(r"^## (?:\[(?P<bracketed>[^\]]+)\]|(?P<bare>\S+))")
-_FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})")
-_INDENTED_FENCE_RE = re.compile(r"^\s+(`{3,}|~{3,})")
-_COLUMN0_FENCE_RE = re.compile(r"^(`{3,}|~{3,})")
+# A fence line = optional indent, a run of 3+ backticks or tildes, the rest.
+_FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
+_INDENTED_FENCE_RE = re.compile(r"^\s+(`{3,}|~{3,})(.*)$")
+_COLUMN0_FENCE_RE = re.compile(r"^(`{3,}|~{3,})(.*)$")
 _TABLE_ROW_RE = re.compile(r"^\s*\|")
 _EVIDENCE_FIRST_LINE_RE = re.compile(r"^\s*\$ \S")
 
 
-def fence_step(fence: Optional[str], marker: str) -> Tuple[Optional[str], bool]:
-    """CommonMark fence pairing: a fence closes only on a run of the SAME
-    character at least as long as the opener. Returns (new_fence, toggled)."""
+def fence_step(fence: Optional[str], marker: str, rest: str) -> Tuple[Optional[str], bool]:
+    """CommonMark fence pairing on one candidate line (``marker`` + ``rest``).
+
+    Opening: any info string is allowed except that a backtick fence's info
+    string may not contain a backtick. Closing: only the same character, at
+    least as long as the opener, followed by nothing but whitespace. Any other
+    line is content. Returns (new_fence, toggled)."""
     if fence is None:
+        if marker[0] == "`" and "`" in rest:
+            return None, False
         return marker, True
-    if marker[0] == fence[0] and len(marker) >= len(fence):
+    if marker[0] == fence[0] and len(marker) >= len(fence) and not rest.strip():
         return None, True
     return fence, False
 
@@ -108,7 +118,7 @@ def iter_entries(block: Sequence[str], first_line_no: int) -> Iterator[Tuple[int
 
     ``first_line_no`` is the line number of ``block[0]`` in the source file.
     Continuation = non-blank lines starting with two spaces or a tab. Blank
-    lines are skipped without closing the entry. Any other line that is not
+    lines inside an entry are kept (trailing ones dropped). Any other line that is not
     a bullet (column-0 text, a ``### `` heading, a comment, a one-space
     indent) closes it. Lines inside a column-0 fenced block (three backticks
     or ``~~~`` at column 0, closed by the SAME marker) are neither bullets
@@ -122,28 +132,38 @@ def iter_entries(block: Sequence[str], first_line_no: int) -> Iterator[Tuple[int
     for offset, line in enumerate(block):
         m = _COLUMN0_FENCE_RE.match(line)
         if m:
-            fence, _ = fence_step(fence, m.group(1))
-            if cur_no is not None:
-                yield cur_no, "\n".join(cur)
-            cur_no, cur = None, []
-            continue
+            fence, toggled = fence_step(fence, m.group(1), m.group(2))
+            if toggled:
+                if cur_no is not None:
+                    yield cur_no, _strip_trailing_blank(cur)
+                cur_no, cur = None, []
+                continue
         if fence is not None:
             continue
         if line.startswith("- "):
             if cur_no is not None:
-                yield cur_no, "\n".join(cur)
+                yield cur_no, _strip_trailing_blank(cur)
             cur_no = first_line_no + offset
             cur = [line]
         elif not line.strip():
-            continue
+            if cur_no is not None:
+                cur.append("")
         elif cur_no is not None and (line.startswith("  ") or line.startswith("\t")):
             cur.append(line)
         else:
             if cur_no is not None:
-                yield cur_no, "\n".join(cur)
+                yield cur_no, _strip_trailing_blank(cur)
             cur_no, cur = None, []
     if cur_no is not None:
-        yield cur_no, "\n".join(cur)
+        yield cur_no, _strip_trailing_blank(cur)
+
+
+def _strip_trailing_blank(lines: List[str]) -> str:
+    """Join an entry's lines; blank lines INSIDE it count, trailing ones do not."""
+    end = len(lines)
+    while end > 1 and not lines[end - 1].strip():
+        end -= 1
+    return "\n".join(lines[:end])
 
 
 def nearest_rank(sorted_values: Sequence[int], p: float) -> int:
@@ -166,7 +186,7 @@ def prose_len(entry: str) -> int:
     for line in entry.splitlines():
         m = _INDENTED_FENCE_RE.match(line)
         if m:
-            fence, toggled = fence_step(fence, m.group(1))
+            fence, toggled = fence_step(fence, m.group(1), m.group(2))
             if toggled:
                 continue
         if fence is not None or _TABLE_ROW_RE.match(line):
@@ -228,7 +248,7 @@ def has_evidence_fence(body: str) -> bool:
     for line in body.splitlines():
         m = _FENCE_RE.match(line)
         if m:
-            fence, toggled = fence_step(fence, m.group(1))
+            fence, toggled = fence_step(fence, m.group(1), m.group(2))
             if toggled:
                 awaiting_first = fence is not None
                 continue
