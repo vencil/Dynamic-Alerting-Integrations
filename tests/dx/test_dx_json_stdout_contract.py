@@ -30,8 +30,8 @@ gate flushed out) lands as a red here, not in a caller's ``| jq``.
 
 SCOPE — WHAT THIS GATE ASSERTS
 ------------------------------
-* Exactly the 14 dx tools that DECLARE a JSON-output flag as an argparse
-  ``add_argument`` — 13 via ``--json`` / ``--json-output`` and 1
+* Exactly the 15 dx tools that DECLARE a JSON-output flag as an argparse
+  ``add_argument`` — 14 via ``--json`` / ``--json-output`` and 1
   (``describe_tenant``) via ``--format`` with a ``json`` choice.
   ``collect_json_tools()`` is **AST-based, not regex-based**, precisely because a
   literal ``"--json"`` substring scan (what the ops gate uses) would also match

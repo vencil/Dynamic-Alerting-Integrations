@@ -1,22 +1,5 @@
-"""Tests for scripts/tools/dx/agent_output_metrics.py.
-
-The tool is the BEFORE/AFTER instrument for the agent-harness plan (evidence
-contract, CHANGELOG entry cap, PR template). Nothing else re-derives these
-numbers, so a parser that silently miscounts entries would make every later
-"it helped" claim unfalsifiable. Coverage:
-
-  - section_lines: bracketed and bare headings, block ends at next ``## ``,
-    ``### `` stays inside, missing section -> None
-  - iter_entries: nested bullets and wrapped lines are continuation; blank
-    lines do not close; a column-0 non-bullet line does; line numbers are
-    1-based and point at the bullet
-  - nearest_rank: the pinned convention (ceil(p*n), 1-based), empty -> 0
-  - has_evidence_fence: positive; ``$`` in prose is not evidence; a fence
-    whose first line is not a command is not evidence; ``~~~`` fences count
-  - CLI: --help 0; no subcommand 2; missing file 2; missing section 2;
-    --json stdout is exactly one JSON document; pr-bodies with gh missing
-    -> 2, with gh output stubbed -> 0 and the fence count is right
-"""
+"""Tests for scripts/tools/dx/agent_output_metrics.py: the entry / fence /
+percentile definitions in its module docstring, and the CLI exit-code contract."""
 from __future__ import annotations
 
 import json

@@ -1,73 +1,29 @@
 #!/usr/bin/env python3
-"""Measure how much prose agents ship in CHANGELOG entries and PR bodies, and whether PR bodies carry evidence blocks.
+"""Measure CHANGELOG entry lengths and PR-body evidence blocks; a ruler, not a gate.
 
-The first line above is deliberately one sentence: generate_tool_map.py publishes
-only a docstring's FIRST LINE into docs/internal/tool-map{,.en}.md.
+    agent_output_metrics.py changelog [--path F] [--section S] [--cap N] [--top N] [--json]
+    agent_output_metrics.py pr-bodies [--limit N] [--state S] [--json]
 
-    python3 scripts/tools/dx/agent_output_metrics.py changelog
-    python3 scripts/tools/dx/agent_output_metrics.py changelog --section v2.9.0 --cap 1000 --json
-    python3 scripts/tools/dx/agent_output_metrics.py --json pr-bodies --limit 25
+Definitions (the contract a later cap must reuse, not re-derive):
 
-(``--json`` is accepted before or after the subcommand.)
+* ENTRY: a column-0 ``- `` bullet inside one ``## [section]`` block plus its
+  indented continuation lines (two spaces or a tab). Blank lines do not close
+  it; any other line does (``### ``, comment, column-0 fence, column-0 text).
+  Lines inside a column-0 fence are neither bullets nor continuation.
+* ``chars``: ``len(str)`` of the raw entry text (code points; prefix,
+  indentation and newlines included). ``prose_chars``: the same minus table
+  rows (``|``) and lines inside an INDENTED fence.
+* EVIDENCE FENCE: a fenced block whose first non-blank line starts with ``$ ``.
+  Fences pair the CommonMark way (same character, closer not shorter).
+* Percentiles are nearest-rank.
 
-WHAT THIS IS FOR
-================
-The agent-harness plan (2026-09-13) changes how agents are asked to write:
-evidence blocks instead of narrative, a per-entry cap on CHANGELOG prose, a
-four-section PR template. Every one of those changes needs a BEFORE number
-and the same measurement run again AFTER, or "it helped" is a feeling. This
-tool is that measurement. It is not a gate: exit 0 whenever it measured
-something, and the cap is reported, never enforced (the enforcing lint is a
-separate change in generate_changelog.py --lint).
+Caveats: length is a proxy for prose; an evidence fence proves shape, not that
+the command ran; column-0 text after a bullet belongs to no entry, so a cap on
+this definition must also reject such text or it can be walked around.
 
-METRICS
-=======
-``changelog``
-    An ENTRY is one column-0 ``- `` bullet inside one ``## [<section>]`` block,
-    plus every indented continuation line under it (nested bullets, wrapped
-    prose, indented fences). A blank line does not close an entry; the next
-    column-0 line that is not a bullet does (a ``### `` heading, an HTML
-    comment, a column-0 fence). Reported: entry count, character length at
-    median / p75 / p90 / max (nearest-rank percentiles over ``len(str)``,
-    i.e. code points, not bytes -- CJK-safe), how many entries exceed
-    ``--cap``, and the ``--top`` longest entries with their line numbers.
-    Two lengths are reported per entry: ``chars`` counts everything, and
-    ``prose_chars`` drops the lines that are evidence rather than prose
-    (table rows starting with ``|``, and lines inside an INDENTED fenced
-    block). A fence at column 0 is not part of any entry (it ends the list
-    item, as in CommonMark), so on a CHANGELOG that writes its fences at
-    column 0 the second number differs from the first only by table rows.
-    A future cap that wants to penalise narrative but not evidence has the
-    second number to key on, and must decide what a column-0 fence means.
-
-``pr-bodies``
-    ``gh pr list --state <state> --limit <n> --json number,body``. Reported:
-    PR count, body length distribution (same percentiles), and how many
-    bodies contain an EVIDENCE FENCE: a fenced code block whose first
-    non-blank line starts with ``$ `` (a command the author claims to have
-    run). That shape is the contract the plan asks agents to follow; before
-    the contract exists the count is the baseline.
-
-WHAT IT CANNOT TELL YOU
-=======================
-Length is a proxy for prose, not a measure of it: a 3,000-character entry
-may be a legitimate table. Read the ``longest`` list before drawing a
-conclusion. An evidence fence proves the SHAPE, not that the command ran.
-
-Column-0 content after a bullet (a table or a paragraph written at column 0
-instead of indented) CLOSES the entry, so that text belongs to no entry and
-the entry's length is under-reported. A cap built on this definition must
-therefore treat such column-0 content as an error in its own right, or it
-can be walked around by out-denting. Fences pair the CommonMark way: a
-closer must use the same character and be at least as long as the opener,
-so a 4-backtick block may contain a 3-backtick one.
-
-EXIT CODES (scripts/tools/_lib_exitcodes.py)
-============================================
-  0  measured (a metric that is merely "bad" is still exit 0)
-  2  cannot do the job: no subcommand, a negative ``--top``/``--cap``,
-     CHANGELOG path or section missing, ``gh`` missing / failing /
-     returning something that is not a JSON list of PR objects
+Exit codes (scripts/tools/_lib_exitcodes.py): 0 measured; 2 caller/env error
+(no subcommand, negative counts, missing file or section, gh missing/failing
+or not returning a JSON list of PR objects).
 """
 from __future__ import annotations
 

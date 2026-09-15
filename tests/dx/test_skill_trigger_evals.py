@@ -1,18 +1,7 @@
-"""Shape guard for `agents/skills/<name>/evals/trigger.json`.
-
-The trigger eval sets are the ruler the skill-description rewrites will be
-measured against, and nothing else in the repo parses them: a broken comma or
-a leaked skill name would only surface the next time someone runs the
-skill-creator eval loop. Coverage:
-
-  - every skill dir with a SKILL.md ships an eval set, and vice versa
-  - each set parses, is a non-empty list of {query: str, should_trigger: bool}
-    objects with exactly those keys
-  - both classes are present, and no query repeats within a set
-  - no query names any skill or subagent role (a query that says
-    "vibe-release" or "vibe-sec-hunter" measures name recall, not
-    description quality)
-"""
+"""Shape guard for `agents/skills/<name>/evals/trigger.json`: every skill has
+one, it parses to {query, should_trigger} items of both classes without
+duplicates, and no query names a skill or role (that would measure name
+recall, not description quality)."""
 from __future__ import annotations
 
 import json
