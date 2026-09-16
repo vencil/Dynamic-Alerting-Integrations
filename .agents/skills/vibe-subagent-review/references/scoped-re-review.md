@@ -72,7 +72,7 @@ head：[HEAD_SHA]
 實作者宣稱跑過的東西一律當成**未驗證的主張**。你要做的是：確認它有指名是哪幾
 支測試、有貼出該次輸出，並拿那些主張去對 diff。⛔ 不要為了確認它而重跑整個
 套件。只有在讀碼讀出**具體疑點**、而現有的任何一次執行都答不了時，才自己跑一
-支對準那個疑點的測試。你沒跑過的主張，在報告裡標 [未驗證]。
+支對準那個疑點的測試。你沒跑過的主張，在報告裡標 [未驗]。
 
 ## 輸出格式
 你的最後一則訊息就是報告本身：從第一條裁決開始寫。
@@ -102,7 +102,7 @@ head：[HEAD_SHA]
 | 逐條裁決 = NOT ADDRESSED | 進本輪處置清單，走 SKILL.md〈收 review〉的 take/reframe/reject | `finding`（`tier` 依你自己驗過沒有） |
 | 修法本身的新破壞 | 同上 | 同上 |
 | **範圍外觀察** | ⛔ **不進本輪、不開下一輪**。有價值就開票 | `question`，`status=open`，`claim` 寫觀察、`evidence` 寫「要什麼證據才能收掉」 |
-| 標 `[未驗證]` 的主張 | 你自己重量一次才寫進出貨物 | — |
+| 標 `[未驗]` 的主張 | 你自己重量一次才寫進出貨物 | — |
 
 ⚠️ 用 `question` 是刻意的：`converge_status.py` 對 `question` 只計數不判定（`:302`、`:477`），所以範圍外觀察**不會**經由 `UNREVIEWED-FIX` 把迴圈拉長。**沒有為此新增任何 `kind` 或規則。**
 
@@ -110,7 +110,7 @@ head：[HEAD_SHA]
 
 | 原版 | 本 repo | 為什麼 |
 |---|---|---|
-| `Do not re-run the suite to confirm their report` | 改成「不重跑整套；有具體疑點才跑對準的那一支；沒跑過的標 `[未驗證]`」 | always-on 規則 #5：沒有本輪輸出就不准宣稱通過。原版把驗證責任整個移出 reviewer，本 repo 是移到 **PM 出貨前**那一關，所以 reviewer 必須把「哪些沒驗」標出來讓它可以被接手 |
+| `Do not re-run the suite to confirm their report` | 改成「不重跑整套；有具體疑點才跑對準的那一支；沒跑過的標 `[未驗]`」 | always-on 規則 #5：沒有本輪輸出就不准宣稱通過。原版把驗證責任整個移出 reviewer，本 repo 是移到 **PM 出貨前**那一關，所以 reviewer 必須把「哪些沒驗」標出來讓它可以被接手 |
 | 讀預先產好的 `[DIFF_FILE]`、`Do not re-run git commands` | 改成 reviewer 自己下 `git diff` | 本 repo 沒有 `scripts/review-package` 那套前置產物；為了省一次 git 而先造一支打包腳本，會撞 `discipline.md`〈鷹架准入〉門 2 |
 | `[MODEL] — REQUIRED` | 不強制 | 本 repo 沒有 SKILL.md Model Selection 那一節；要換模型是刻意動作，不是每次填的欄位 |
 

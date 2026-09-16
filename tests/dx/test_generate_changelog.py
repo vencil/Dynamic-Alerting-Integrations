@@ -18,6 +18,16 @@ import generate_changelog as gc
 from _lib_exitcodes import EXIT_CALLER_ERROR
 
 
+@pytest.fixture(autouse=True)
+def _no_pr_environment(monkeypatch):
+    """GitHub sets GITHUB_BASE_REF for EVERY job of a pull_request run, the
+    Python Tests job included. `default_cap_base()` reads it, so without this
+    every in-process `main()` test would resolve the base against the runner
+    (origin/main present → base_label changes; absent → exit 2). Blind
+    review, PR-C: three tests red on every PR. Tests choose their own base."""
+    monkeypatch.delenv("GITHUB_BASE_REF", raising=False)
+
+
 def _cp(returncode: int = 0, stdout: str = "", stderr: str = ""):
     """subprocess.CompletedProcess fixture for monkeypatched git_cmd tests."""
     return subprocess.CompletedProcess(
@@ -436,6 +446,23 @@ class TestLintCannotBeSilencedByTheFileItself:
         issues = gc.lint_changelog(str(f))
         assert any("not a recognised section heading" in i for i in issues), issues
 
+    def test_u2028_cannot_forge_structure_for_the_structural_lint(self, tmp_path):
+        """`splitlines()` broke on U+2028, so one source line could satisfy
+        the ###-subsection check (false negative) or fake a duplicate
+        heading (false positive). Both directions pinned."""
+        forged_sub = self._make(tmp_path, "## [Unreleased]\n- a\u2028### Fixed\n")
+        assert any("has no ### subsections" in i for i in gc.lint_changelog(str(forged_sub)))
+        forged_dup = self._make(tmp_path, "## [Unreleased]\n\n### Fixed\n- a\u2028## [Unreleased]\n")
+        assert gc.lint_changelog(str(forged_dup)) == []
+
+    def test_a_double_spaced_unreleased_heading_is_named(self, tmp_path):
+        """`##  [Unreleased]` (two spaces) matched neither the semver pattern
+        nor the old `## [` heading pattern, so the section vanished from this
+        lint AND the entry cap with no output (blind review, PR-C)."""
+        f = self._make(tmp_path, "##  [Unreleased]\n\n### Fixed\n- a\n")
+        issues = gc.lint_changelog(str(f))
+        assert any("not a recognised section heading" in i for i in issues), issues
+
     def test_a_fenced_heading_is_not_real_structure(self, tmp_path):
         """An entry that DOCUMENTS changelog markup must not be read as
         markup. Both directions: no phantom duplicate from the fence…"""
@@ -750,3 +777,308 @@ class TestMain:
         cli_argv('generate_changelog.py', '--since', 'v2.5.0')
         assert gc.main() == 0
         assert captured["since"] == "v2.5.0"
+
+
+# ── Entry cap: new [Unreleased] entries only (agent 指引改善計畫 PR-C) ──
+
+
+def _entry(head: str, chars: int) -> str:
+    """A top-level entry padded to exactly ``chars`` characters."""
+    body = f"- **{head}**: "
+    return body + "x" * (chars - len(body))
+
+
+def _unreleased(*entries: str) -> str:
+    return "## [Unreleased]\n\n### Changed\n" + "\n".join(entries) + "\n"
+
+
+class TestSectionGrowthCap:
+    """The cap is on how much [Unreleased] GROWS over the base, per new
+    entry. There is no entry matching: five review rounds showed every
+    "which entry is new" exemption was a splitter. Growth of the whole block
+    has none, so nothing hides from it."""
+
+    @staticmethod
+    def _growth(head: str, base: str) -> int:
+        return gc._section_size(head, "Unreleased")[0] - gc._section_size(base, "Unreleased")[0]
+
+    def test_new_oversize_entry_is_flagged_and_the_split_is_clean(self):
+        base = _unreleased(_entry("old", 200))
+        big = _unreleased(_entry("old", 200), _entry("new", 1500))
+        issues = gc.lint_entry_caps(big, base)
+        assert len(issues) == 1 and "with 1 new entry" in issues[0] and "allowed 1000" in issues[0], issues
+        assert f"grew by {self._growth(big, base)} chars" in issues[0]
+        split = _unreleased(_entry("old", 200), _entry("new-a", 700), _entry("new-b", 700))
+        assert gc.lint_entry_caps(split, base) == []
+
+    def test_boundary_is_exactly_the_cap_per_new_entry(self):
+        base = _unreleased(_entry("old", 200))
+        at = _unreleased(_entry("old", 200), _entry("n", 999))       # entry + its newline = 1000
+        assert self._growth(at, base) == 1000 and gc.lint_entry_caps(at, base) == []
+        over = _unreleased(_entry("old", 200), _entry("n", 1000))
+        assert self._growth(over, base) == 1001 and len(gc.lint_entry_caps(over, base)) == 1
+
+    def test_existing_oversize_entries_are_not_retroactive(self):
+        text = _unreleased(_entry("legacy", 3000), _entry("legacy-2", 5000))
+        assert gc.lint_entry_caps(text, text) == []
+
+    def test_a_legacy_entry_may_be_corrected_but_not_fattened(self):
+        legacy = _entry("legacy", 3000)
+        base = _unreleased(legacy)
+        corrected = legacy.replace("- **legacy**:", "- **legacy (typo fixed)**:", 1) + "\n  - one more sub-bullet"
+        assert gc.lint_entry_caps(_unreleased(corrected), base) == []
+        fattened = _unreleased(legacy + "\n  - " + "f" * 1200)
+        issues = gc.lint_entry_caps(fattened, base)
+        assert len(issues) == 1 and "with 0 new entries" in issues[0], issues
+
+    def test_growth_in_a_legacy_entry_is_not_hidden_behind_a_new_one(self):
+        """One new 700-char entry plus 900 chars of fattening: growth 1,600
+        against one new entry — the fattening does not ride along."""
+        legacy = _entry("legacy", 300)
+        base = _unreleased(legacy)
+        text = _unreleased(legacy + "\n  - " + "f" * 895, _entry("new", 700))
+        issues = gc.lint_entry_caps(text, base)
+        assert len(issues) == 1 and "with 1 new entry" in issues[0], issues
+
+    def test_no_base_means_everything_is_new(self):
+        assert gc.lint_entry_caps(_unreleased(_entry("a", 700), _entry("b", 700)), None) == []
+        assert len(gc.lint_entry_caps(_unreleased(_entry("a", 1500)), None)) == 1
+
+    def test_sub_bullets_and_evidence_count_toward_growth(self):
+        base = _unreleased(_entry("old", 200))
+        text = _unreleased(_entry("old", 200), "- **n**: x\n  - " + "y" * 1200)
+        assert len(gc.lint_entry_caps(text, base)) == 1
+
+    def test_text_outside_any_entry_still_counts(self):
+        """The reason there is no gap rule: out-dented text, an indented
+        bullet before any entry, a long heading — all are section characters."""
+        base = _unreleased(_entry("old", 200))
+        for shape in ("\n⇒ " + "z" * 1200, "\n### Fixed — " + "z" * 1200):
+            text = "## [Unreleased]\n\n### Changed\n" + _entry("old", 200) + shape + "\n"
+            assert len(gc.lint_entry_caps(text, base)) == 1, shape[:20]
+        before_any_entry = "## [Unreleased]\n\n### Changed\n  - " + "z" * 1200 + "\n" + _entry("old", 200) + "\n"
+        assert len(gc.lint_entry_caps(before_any_entry, base)) == 1
+
+    def test_bullets_inside_a_column0_fence_are_not_new_entries(self):
+        """The per-new-entry allowance cannot be inflated by fenced `- ` lines
+        (iter_entries reads a column-0 fence as code)."""
+        base = _unreleased(_entry("old", 200))
+        fenced = "```\n" + "\n".join("- b" + str(i) for i in range(10)) + "\n```"
+        text = _unreleased(_entry("old", 200), _entry("n", 1500), fenced)
+        issues = gc.lint_entry_caps(text, base)
+        assert len(issues) == 1 and "with 1 new entry" in issues[0], issues
+
+    def test_text_on_the_heading_line_counts(self):
+        base = _unreleased(_entry("old", 200))
+        text = "## [Unreleased] " + "y" * 1200 + "\n\n### Changed\n" + _entry("old", 200) + "\n"
+        assert len(gc.lint_entry_caps(text, base)) == 1
+
+    def test_a_fenced_h2_line_does_not_end_the_section(self):
+        """`section_lines` used to stop at any `## ` line, fenced or not, so a
+        fenced changelog example ended the section and everything below it
+        was invisible to the cap — and to the metrics — with no output."""
+        base = _unreleased(_entry("old", 200))
+        for fence in ("```md", "~~~"):
+            closer = fence[:3]
+            text = ("## [Unreleased]\n\n### Changed\n" + _entry("old", 200) + "\n" + fence +
+                    "\n## [v0.0.0] (2020-01-01)\n" + closer + "\n" + _entry("hidden", 4000) + "\n")
+            issues = gc.lint_entry_caps(text, base)
+            assert len(issues) == 1 and "with 1 new entry" in issues[0], (fence, issues)
+
+    def test_u2028_is_not_a_line_break(self):
+        """`str.splitlines()` breaks on U+2028, which let one source line forge
+        a `## [vX]` heading and end the section."""
+        base = _unreleased(_entry("old", 200))
+        forged = "- new\u2028## [v0.0.0] (2020-01-01)\u2028### Fixed\u2028" + _entry("hidden", 4000)
+        text = _unreleased(_entry("old", 200), forged)
+        assert len(gc.lint_entry_caps(text, base)) == 1
+
+    def test_an_unclosed_fence_above_the_heading_does_not_hide_the_section(self):
+        """Round 2 of the reset budget: fence tracking while LOOKING for the
+        heading let one unclosed ``` above `## [Unreleased]` hide the section,
+        and the cap exited clean. The heading is found regardless of fences."""
+        base = _unreleased(_entry("old", 200))
+        text = "```\n" + _unreleased(_entry("old", 200), _entry("new", 9000))
+        issues = gc.lint_entry_caps(text, base)
+        assert len(issues) == 1 and "with 1 new entry" in issues[0], issues
+
+    def test_an_unclosed_fence_inside_the_section_runs_to_end_of_file_loudly(self):
+        """Documented, not hidden: the section then swallows the released
+        history below it and the cap goes RED, which is visible."""
+        base = _unreleased(_entry("old", 200)) + "\n## [v1.0.0] (2026-01-01)\n\n### Fixed\n" + _entry("released", 3000) + "\n"
+        text = _unreleased(_entry("old", 200), "```") + "\n## [v1.0.0] (2026-01-01)\n\n### Fixed\n" + _entry("released", 3000) + "\n"
+        assert len(gc.lint_entry_caps(text, base)) == 1
+
+    def test_a_base_without_the_section_is_not_zero(self):
+        """A one-character heading fix (`Unrelesed` → `Unreleased`) reported
+        'grew by 4577 chars with 3 new entries'. Base has the file but not
+        the section: nothing to compare, so nothing to report (main() prints
+        the notice)."""
+        entries = [_entry(f"e{i}", 1500) for i in range(3)]
+        base = _unreleased(*entries).replace("## [Unreleased]", "## [Unrelesed]", 1)
+        assert gc.lint_entry_caps(_unreleased(*entries), base) == []
+
+    def test_main_really_compares_against_the_base_it_resolved(self, tmp_path, monkeypatch, capsys):
+        """Wiring test: `_git_show` and `lint_entry_caps` each have unit
+        tests; this pins that main() hands the committed base to the cap.
+        Judged against nothing (None), the legacy 3,000-char entry would be
+        growth and the run would be red."""
+        repo = tmp_path / "r"
+        repo.mkdir()
+        run = lambda *a: subprocess.run(["git", *a], cwd=repo, check=True, capture_output=True, timeout=60)
+        run("init", "-q")
+        run("config", "user.email", "t@t")
+        run("config", "user.name", "t")
+        f = repo / "history.md"
+        legacy = _entry("legacy", 3000)
+        f.write_text(_unreleased(legacy), encoding="utf-8")
+        run("add", "history.md")
+        run("commit", "-q", "-m", "c")
+        f.write_text(_unreleased(legacy + "\n  - ten more"), encoding="utf-8")
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(sys, "argv", ["gc", "--base", "HEAD", "--lint", "history.md"])
+        assert gc.main() == 0, capsys.readouterr().out
+        # control: the same working file against an empty base section is red
+        f2 = repo / "history.md"
+        run("rm", "-q", "--cached", "history.md")
+        (repo / "history.md").write_text("## [Unreleased]\n\n### Changed\n", encoding="utf-8")
+        run("add", "history.md")
+        run("commit", "-q", "-m", "empty")
+        f2.write_text(_unreleased(legacy + "\n  - ten more"), encoding="utf-8")
+        assert gc.main() == 1
+        assert "grew by" in capsys.readouterr().out
+
+    def test_deleting_old_text_credits_new_text_by_design(self):
+        """Stated boundary: the section did not grow, and the deletion is in
+        the diff for the reviewer."""
+        base = _unreleased(_entry("legacy", 3000))
+        assert gc.lint_entry_caps(_unreleased(_entry("brand-new", 2500)), base) == []
+
+    def test_other_sections_are_not_capped(self):
+        text = "## [v2.9.0] — T (2026-06-06)\n\n### Fixed\n" + _entry("released", 5000) + "\n"
+        assert gc.lint_entry_caps(text, "") == []
+
+    def test_cap_zero_disables_via_cli_and_says_so(self, tmp_path, monkeypatch, capsys):
+        f = tmp_path / "history.md"
+        f.write_text(_unreleased(_entry("n", 1500)), encoding="utf-8")
+        monkeypatch.setattr(gc, "_git_show", lambda ref, path: _unreleased(_entry("old", 5)))
+        monkeypatch.setattr(sys, "argv", ["gc", "--cap", "0", "--lint", str(f)])
+        assert gc.main() == 0
+        assert "cap is off" in capsys.readouterr().out
+        monkeypatch.setattr(sys, "argv", ["gc", "--lint", str(f)])
+        assert gc.main() == 1
+        out = capsys.readouterr().out
+        assert "grew by" in out and "over HEAD" in out
+
+
+class TestEveryCiCallerFetchesThePrBase:
+    """`default_cap_base` exits 2 on a PR run without origin/<base>; a caller
+    that runs the lint without the fetch step turns every PR red (round 3
+    found the third caller, `make lint-docs`, without it).
+
+    Population = jobs that run the lint as a shell command. The fourth
+    execution path — this test file itself, in-process, under the Python
+    Tests job — is not a caller: the autouse `_no_pr_environment` fixture
+    strips GITHUB_BASE_REF so it never consults the runner's refs."""
+
+    FETCH = 'git fetch --no-tags origin "${GITHUB_BASE_REF}"'
+
+    def test_each_workflow_job_that_runs_the_lint_fetches_the_base_first(self):
+        import yaml
+        repo = Path(__file__).resolve().parents[2]
+        hits = []
+        for rel in ((".github", "workflows", "ci.yml"), (".github", "workflows", "docs-ci.yaml")):
+            wf = yaml.safe_load(repo.joinpath(*rel).read_text(encoding="utf-8"))
+            for job_name, job in wf.get("jobs", {}).items():
+                runs = [s.get("run", "") for s in job.get("steps", []) if isinstance(s, dict)]
+                if not any(("changelog-format" in r or "changelog_format" in r or re.search(r"make lint-docs(\s|$)", r)) for r in runs):
+                    continue
+                hits.append(job_name)
+                assert any(self.FETCH in r for r in runs), (
+                    f"{rel[-1]}::{job_name} runs the changelog lint without fetching "
+                    f"origin/$GITHUB_BASE_REF; on a PR the cap exits 2 there")
+        assert sorted(hits) == ["drift-checks", "lint", "lint-docs"], hits
+
+
+class TestCapBase:
+    def test_default_base_is_head_without_github_base_ref(self, monkeypatch):
+        monkeypatch.setattr(gc, "_ref_exists", lambda ref: True)
+        assert gc.default_cap_base({}) == "HEAD"
+
+    def test_pr_run_uses_origin_base_when_fetched(self, monkeypatch):
+        monkeypatch.setattr(gc, "_ref_exists", lambda ref: ref == "origin/main")
+        assert gc.default_cap_base({"GITHUB_BASE_REF": "main"}) == "origin/main"
+
+    def test_pr_run_without_the_fetched_base_is_none_not_head(self, monkeypatch):
+        """Falling back to HEAD on a PR run would be a cap that silently does
+        not exist; the answer is None and main() turns it into exit 2."""
+        monkeypatch.setattr(gc, "_ref_exists", lambda ref: False)
+        assert gc.default_cap_base({"GITHUB_BASE_REF": "main"}) is None
+
+    def test_unfetched_pr_base_is_a_caller_error_naming_the_fetch(self, tmp_path, monkeypatch, capsys):
+        f = tmp_path / "history.md"
+        f.write_text(_unreleased(_entry("n", 10)), encoding="utf-8")
+        monkeypatch.setenv("GITHUB_BASE_REF", "main")
+        monkeypatch.setattr(gc, "_ref_exists", lambda ref: False)
+        monkeypatch.setattr(sys, "argv", ["gc", "--lint", str(f)])
+        assert gc.main() == EXIT_CALLER_ERROR
+        captured = capsys.readouterr()
+        # both streams: validate_all's runner shows stdout only
+        assert "git fetch --no-tags origin main" in captured.err
+        assert "git fetch --no-tags origin main" in captured.out
+
+    def test_negative_cap_is_a_caller_error_not_a_silent_off_switch(self, tmp_path, monkeypatch):
+        f = tmp_path / "history.md"
+        f.write_text(_unreleased(_entry("n", 1500)), encoding="utf-8")
+        monkeypatch.setattr(sys, "argv", ["gc", "--cap", "-1", "--lint", str(f)])
+        with pytest.raises(SystemExit) as exc:
+            gc.main()
+        assert exc.value.code == 2
+
+    def test_missing_base_file_skips_the_cap_with_a_notice(self, tmp_path, monkeypatch, capsys):
+        """A first commit or a renamed file has no base; judging it against
+        zero would make any real changelog of legacy-sized entries red."""
+        f = tmp_path / "history.md"
+        f.write_text(_unreleased(_entry("n", 1500)), encoding="utf-8")
+        monkeypatch.setattr(gc, "_git_show", lambda ref, path: None)
+        monkeypatch.setattr(sys, "argv", ["gc", "--base", "HEAD", "--lint", str(f)])
+        assert gc.main() == 0
+        out = capsys.readouterr().out
+        assert "is skipped" in out and "grew by" not in out
+
+    def test_a_file_without_the_section_gets_no_notice(self, tmp_path, monkeypatch, capsys):
+        """CHANGELOG-archive.md has no [Unreleased] by design and is linted on
+        every run; a notice blaming the base there would be noise."""
+        f = tmp_path / "history.md"
+        f.write_text("## [v1.0.0] (2026-01-01)\n\n### Fixed\n- a\n", encoding="utf-8")
+        monkeypatch.setattr(gc, "_git_show", lambda ref, path: "## [v1.0.0] (2026-01-01)\n\n### Fixed\n- a\n")
+        monkeypatch.setattr(sys, "argv", ["gc", "--base", "HEAD", "--lint", str(f)])
+        assert gc.main() == 0
+        assert "notice" not in capsys.readouterr().out
+
+    def test_base_without_the_section_skips_the_cap_with_a_notice(self, tmp_path, monkeypatch, capsys):
+        f = tmp_path / "history.md"
+        f.write_text(_unreleased(_entry("n", 1500)), encoding="utf-8")
+        monkeypatch.setattr(gc, "_git_show", lambda ref, path: "## [v1.0.0] (2026-01-01)\n\n### Fixed\n- a\n")
+        monkeypatch.setattr(sys, "argv", ["gc", "--base", "HEAD", "--lint", str(f)])
+        assert gc.main() == 0
+        out = capsys.readouterr().out
+        assert "has no [Unreleased] section" in out and "is skipped" in out
+
+    def test_git_show_reads_the_committed_version(self, tmp_path, monkeypatch):
+        """Real git, no mocks: the working tree may differ from HEAD."""
+        repo = tmp_path / "r"
+        repo.mkdir()
+        run = lambda *a: subprocess.run(["git", *a], cwd=repo, check=True, capture_output=True, timeout=60)
+        run("init", "-q")
+        run("config", "user.email", "t@t")
+        run("config", "user.name", "t")
+        f = repo / "history.md"
+        f.write_text("committed\n", encoding="utf-8")
+        run("add", "history.md")
+        run("commit", "-q", "-m", "c")
+        f.write_text("working tree\n", encoding="utf-8")
+        monkeypatch.chdir(repo)
+        assert gc._git_show("HEAD", "history.md") == "committed\n"
+        assert gc._git_show("HEAD", "MISSING.md") is None
+        assert gc._git_show("nosuchref", "history.md") is None

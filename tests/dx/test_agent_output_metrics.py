@@ -63,6 +63,54 @@ def test_section_ends_at_next_h2_and_keeps_h3():
     assert "old entry" not in joined
 
 
+def test_section_does_not_end_at_a_fenced_h2_line():
+    text = "## [Unreleased]\n- a\n```md\n## [v1.0.0]\n```\n- b\n## [v2.0.0]\n- c\n"
+    no, block = aom.section_lines(text, "Unreleased")
+    assert no == 1 and block == ["- a", "```md", "## [v1.0.0]", "```", "- b"]
+
+
+def test_heading_is_found_even_below_an_unclosed_fence():
+    """Fence tracking while looking for the heading let one unclosed fence
+    above it hide the whole section (blind review, PR-C round 2)."""
+    text = "```\n## [Unreleased]\n- a\n"
+    assert aom.section_lines(text, "Unreleased") == (2, ["- a"])
+
+
+def test_a_fenced_example_above_the_real_heading_is_not_the_heading():
+    """Round 3: a fence-blind heading lookup took the fenced example as the
+    heading and then read the example's closing fence as an opener, so the
+    section ran to EOF (false red, and `new` stuck at 0)."""
+    text = ("```md\n## [Unreleased]\n- example\n```\n\n## [Unreleased]\n- real\n\n"
+            "## [v1.0.0] (2026-01-01)\n- released\n")
+    assert aom.section_lines(text, "Unreleased") == (6, ["- real", ""])
+
+
+def test_fallback_to_a_fenced_heading_keeps_the_fence_state():
+    """When every match is fenced (unclosed fence above), the first match
+    counts AND the end scan starts inside that fence, so the fence's closer
+    closes it and the next `## ` really ends the section."""
+    text = "```\n## [Unreleased]\n- a\n```\n## [v1.0.0]\n- b\n"
+    assert aom.section_lines(text, "Unreleased") == (2, ["- a", "```"])
+
+
+def test_longest_head_is_the_real_first_line():
+    text = "## [Unreleased]\n- head\u2028tail " + "x" * 30 + "\n"
+    r = aom.measure_changelog(text, "Unreleased", 1000, 1)
+    assert r["longest"][0]["head"].startswith("- head\u2028tail")
+
+
+def test_prose_len_splits_only_on_real_line_breaks():
+    entry = "- head\u2028  ```\u2028hidden\u2028  ```"
+    assert aom.prose_len(entry) == len(entry)
+
+
+def test_section_splits_only_on_real_line_breaks():
+    text = "## [Unreleased]\n- a\u2028## [v1.0.0]\n- b\n"
+    no, block = aom.section_lines(text, "Unreleased")
+    assert block == ["- a\u2028## [v1.0.0]", "- b"]
+    assert aom.split_lines("a\r\nb\rc\nd\n") == ["a", "b", "c", "d"]
+
+
 def test_section_missing_is_none():
     assert aom.section_lines(SAMPLE, "v3.0.0") is None
 

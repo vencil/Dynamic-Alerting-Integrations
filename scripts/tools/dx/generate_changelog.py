@@ -39,6 +39,16 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo tools root
 from _lib_python import write_text_or_die  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+# ⛔ One ruler. `agent_output_metrics` is the tool that MEASURED the changelog
+# (entry definition, cap); the lint below must count with the same functions
+# or "over the cap" here and "over the cap" there will drift apart.
+from agent_output_metrics import (  # noqa: E402
+    DEFAULT_CAP as ENTRY_CAP,
+    iter_entries,
+    non_negative_int,
+    section_lines,
+    split_lines,
+)
 
 # ── Constants ────────────────────────────────────────────────────────
 
@@ -274,7 +284,10 @@ def lint_changelog(changelog_path: str = "CHANGELOG.md") -> List[str]:
         return [f"{changelog_path} not found"]
 
     content = path.read_text(encoding="utf-8")
-    lines = content.splitlines()
+    # ⛔ Not `splitlines()`: it also breaks on U+2028 / U+2029, so one source
+    # line could forge headings (blind review, PR-C). Same splitter as the
+    # section reader in agent_output_metrics.
+    lines = split_lines(content)
     issues: List[str] = []
     seen_versions: Dict[str, int] = {}
     current_version: Optional[str] = None
@@ -297,7 +310,10 @@ def lint_changelog(changelog_path: str = "CHANGELOG.md") -> List[str]:
     # heading does not fail — it makes its whole section invisible, silently.
     # `## [Unrelesed]` (typo) and `## [2.10.0]` (missing `v`, which
     # `bump_docs._RELEASED_CHANGELOG_HEADING` requires) both linted clean.
-    heading_re = re.compile(r"^\#\# \[")
+    # ⛔ `^##\s` not `^## \[`: `##  [Unreleased]` (two spaces) matched
+    # neither pattern, so the section vanished from BOTH this lint and the
+    # entry cap with no output at all (blind review, PR-C).
+    heading_re = re.compile(r"^##\s")
     date_re = re.compile(r"\((\d{4}-\d{2}-\d{2})\)")
     subsection_re = re.compile(r"^### ")
     # Fence tracking: without it a fenced example of changelog markup is read
@@ -368,6 +384,132 @@ def lint_changelog(changelog_path: str = "CHANGELOG.md") -> List[str]:
     return issues
 
 
+# ── Entry cap (new entries only) ────────────────────────────────────
+
+CAP_SECTION = "Unreleased"
+
+
+def _section_size(text: str, section: str) -> Optional[Tuple[int, int]]:
+    """(characters, top-level entries) of ``## [section]``; None when absent.
+    Characters are the heading line plus the whole block (text appended to
+    the heading line itself counts too); entries are counted by
+    ``agent_output_metrics.iter_entries``, so a `- ` inside a column-0 fence
+    is code, not a new entry."""
+    found = section_lines(text, section)
+    if found is None:
+        return None
+    heading_no, block = found
+    heading = split_lines(text)[heading_no - 1]
+    return len("\n".join([heading] + block)), sum(1 for _ in iter_entries(block, heading_no + 1))
+
+
+def lint_entry_caps(
+    text: str,
+    base_text: Optional[str],
+    cap: int = ENTRY_CAP,
+    section: str = CAP_SECTION,
+    base_label: str = "the base",
+) -> List[str]:
+    """Cap how much ``## [section]`` GROWS over the base, per new entry.
+
+    ``growth`` = the section's characters minus the base's; ``new`` = its
+    entries minus the base's. The section may grow by ``cap`` per new entry,
+    and by ``cap`` in total when it adds none (so a legacy entry may be
+    corrected or extended a little, but not fattened). One finding, or none.
+
+    This deliberately does NOT match entries to each other. Five review
+    rounds of "which entry is new" found a hole in every version: each
+    exemption (same headline, similar headline, same tail, structural line)
+    was a splitter, and the matching machinery itself grew bugs. Growth of
+    the section has no exemptions inside the section. Boundaries, stated
+    rather than defended: deleting old text credits new text (the section
+    did not grow); every extra top-level bullet buys ``cap`` more, even an
+    empty one or one inside an HTML comment; text placed in a released
+    section or above the heading is not this section. All of these are in
+    plain sight in the diff, which is where a reviewer catches them.
+    """
+    head = _section_size(text, section)
+    if head is None:
+        return []
+    head_chars, head_entries = head
+    if base_text is None:
+        base_chars, base_entries = 0, 0          # no base at all: everything is growth
+    else:
+        base = _section_size(base_text, section)
+        if base is None:
+            # ⛔ The base has the file but not the section (a heading typo
+            # being fixed; wrap-up here always leaves an empty [Unreleased],
+            # so that case is hypothetical): judged against zero, a
+            # one-character diff was reported as ~4.5k chars of growth with
+            # 3 new entries. The caller prints the notice.
+            return []
+        base_chars, base_entries = base
+    growth = head_chars - base_chars
+    new = max(head_entries - base_entries, 0)
+    allowed = cap * max(new, 1)
+    if growth <= allowed:
+        return []
+    return [
+        f"[{section}] grew by {growth} chars over {base_label} with {new} new "
+        f"entr{'y' if new == 1 else 'ies'} (allowed {allowed} = {cap} per new entry, "
+        f"or {cap} in total with none); keep the conclusions in the changelog and "
+        f"move the measurements to the PR body or an issue comment"
+    ]
+
+
+def _ref_exists(ref: str) -> bool:
+    try:
+        r = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", ref + "^{commit}"],
+            capture_output=True, text=True, timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return r.returncode == 0
+
+
+def default_cap_base(env: Optional[Dict[str, str]] = None) -> Optional[str]:
+    """Which commit "new" is measured against.
+
+    On a PR run GitHub sets ``GITHUB_BASE_REF`` (e.g. ``main``) and the merge
+    ref's HEAD already CONTAINS the new entries, so HEAD would see nothing
+    new; the answer is ``origin/<base>``. ⛔ If that ref is not fetched the
+    answer is None, NOT HEAD: falling back to HEAD on a PR is a cap that
+    silently does not exist, and a green run would look identical. The
+    caller turns None into a caller error naming the fetch. Off a PR run
+    it is HEAD, which is what the pre-commit hook wants: staged file vs
+    last commit.
+    """
+    env = os.environ if env is None else env
+    base_ref = env.get("GITHUB_BASE_REF", "").strip()
+    if base_ref:
+        candidate = f"origin/{base_ref}"
+        return candidate if _ref_exists(candidate) else None
+    return "HEAD"
+
+
+def _git_show(ref: str, path: str) -> Optional[str]:
+    """Contents of ``path`` at ``ref``; None when git cannot produce it
+    (not a repo, ref unknown, file absent at that ref)."""
+    try:
+        top = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=30,
+        )
+        if top.returncode != 0:
+            return None
+        rel = Path(path).resolve().relative_to(Path(top.stdout.strip()).resolve())
+        r = subprocess.run(
+            ["git", "show", f"{ref}:{rel.as_posix()}"],
+            capture_output=True, timeout=60,
+        )
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0:
+        return None
+    return r.stdout.decode("utf-8", errors="replace")
+
+
 # ── Main ─────────────────────────────────────────────────────────────
 
 def main() -> int:
@@ -403,7 +545,23 @@ def main() -> int:
         # it also matches CHANGELOG-archive.md, and editing that would have run
         # a check that never opened it (#1765).
         help="Lint changelog file format (semver/Unreleased headers, dates, "
-             "subsections); defaults to CHANGELOG.md",
+             "subsections) and cap how much [Unreleased] grows over the base per "
+             "new entry; defaults to CHANGELOG.md",
+    )
+    parser.add_argument(
+        "--cap",
+        type=non_negative_int,
+        default=ENTRY_CAP,
+        metavar="N",
+        help=f"Max characters [Unreleased] may grow over the base per new entry in "
+             f"--lint (default {ENTRY_CAP}; 0 disables); with no new entry the whole "
+             f"section may grow by at most that.",
+    )
+    parser.add_argument(
+        "--base",
+        metavar="REF",
+        help="Git ref that decides which entries are new (default: "
+             "origin/$GITHUB_BASE_REF on a PR run, else HEAD)",
     )
     args = parser.parse_args()
 
@@ -429,6 +587,41 @@ def main() -> int:
                 print(f"ERROR: could not read {target}: {exc}", file=sys.stderr)
                 return EXIT_CALLER_ERROR
             issues += [f"{target}: {i}" for i in found]
+            if args.cap == 0:
+                print(f"notice: --cap 0, the new-entry cap is off for {target}")
+            if args.cap > 0:
+                base = args.base or default_cap_base()
+                if base is None:
+                    ref = os.environ.get("GITHUB_BASE_REF", "").strip()
+                    msg = (f"ERROR: GITHUB_BASE_REF={ref} is set but origin/{ref} "
+                           f"is not fetched, so the new-entry cap has no base; run "
+                           f"`git fetch --no-tags origin {ref}` (checkout "
+                           f"fetch-depth: 0 alone does not guarantee that ref)")
+                    # Both streams on purpose: validate_all's runner shows
+                    # stdout only, the hook shows both.
+                    print(msg)
+                    print(msg, file=sys.stderr)
+                    return EXIT_CALLER_ERROR
+                base_text = _git_show(base, target)
+                try:
+                    text = p.read_text(encoding="utf-8")
+                except (OSError, UnicodeDecodeError) as exc:
+                    print(f"ERROR: could not read {target}: {exc}", file=sys.stderr)
+                    return EXIT_CALLER_ERROR
+                if section_lines(text, CAP_SECTION) is None:
+                    pass   # nothing to cap (CHANGELOG-archive.md has no [Unreleased] by design)
+                elif base_text is None or section_lines(base_text, CAP_SECTION) is None:
+                    # stdout on purpose: validate_all's runner shows stdout only.
+                    # Skipped, not "everything is new": a first commit, a
+                    # renamed file or a base without the section would be
+                    # judged against zero, and a real changelog of
+                    # legacy-sized entries is always over.
+                    what = "not found" if base_text is None else f"has no [{CAP_SECTION}] section"
+                    print(f"notice: {target} {what} at {base}; the "
+                          f"[{CAP_SECTION}] growth cap has no base and is skipped")
+                else:
+                    issues += [f"{target}: {i}" for i in
+                               lint_entry_caps(text, base_text, args.cap, base_label=base)]
         if issues:
             print(f"❌ {len(issues)} changelog format issue(s):")
             for issue in issues:

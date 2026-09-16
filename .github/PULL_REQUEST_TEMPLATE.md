@@ -1,87 +1,17 @@
 ## Summary
 
-<!-- Brief description of the changes -->
+<!-- ≤ 3 行：改了什麼、為什麼。過程敘事（第一次怎麼錯、後來怎麼改）進 commit body，不進這裡。 -->
 
-## Type of Change
+## Evidence
 
-- [ ] Feature (new functionality)
-- [ ] Bug fix
-- [ ] Documentation
-- [ ] Refactoring (no behavior change)
-- [ ] CI/CD / Tooling
-- [ ] Release
+<!-- 每一句「通過／乾淨／修好／綠」配一個區塊：`$ 指令` 一行，接該次實際輸出節錄（≤ 8 行，不含 `$` 那行與 fence；含 rc 或 pass/fail 那行）。指令必須在本 PR 的 head 上跑過。數字要附產生它的指令。 -->
 
-## Documentation Checklist
+## Not verified
 
-<!-- For documentation-related PRs, check applicable items -->
+<!-- 沒跑的宣稱各列一行 `[未驗] <宣稱>`，跑不了的補一句擋住它的那件事，不寫辯解；全部驗過就寫「無」。「量不到」與「量了沒事」必須分得開。 -->
 
-- [ ] Frontmatter `version` updated (`check_frontmatter_versions.py --fix`)
-- [ ] Cross-language counterpart updated (ZH ↔ EN)
-- [ ] No orphan documents introduced (new .md files linked from at least one other doc)
-- [ ] CHANGELOG.md updated (if user-facing change)
-- [ ] Numbers accurate (tool count, scenario count, Rule Pack count match source of truth)
-- [ ] **No internal codenames in customer-facing text** — any new proper noun in `docs/**` (excluding `docs/internal/**`), `README*.md`, or `components/*/README.md` must be registered in [`docs/glossary.md`](../docs/glossary.md): customer-facing terms in the A–Z dictionary, planning/tracking codenames in the "內部代號 — 禁止用於對外文件" section (which the gate then rejects in customer docs). Use feature names + version labels instead of codenames. Verify with `python scripts/tools/lint/check_codename_leak.py --full-scan` (Layer 1, fast-path) and `python scripts/tools/lint/check_codename_gate.py` (Layer 2, glossary-driven) ([#462](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/462) / [#469](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/469))
+## Refs
 
-## Quality Gates
-
-```bash
-make version-check                                    # Version consistency
-make lint-docs                                        # Documentation lint
-pre-commit run --all-files                            # Auto hooks
-pre-commit run --hook-stage manual --all-files        # Manual hooks (heavier)
-```
-
-## Test Plan
-
-<!-- How was this tested? -->
-
-## Pre-merge Self-Review
-
-> **Discipline**: pre-merge deep self-review is **default for every PR**, not opt-in. If user has to prompt "做 self-review 了嗎?" before merge, you skipped this section. See [`docs/internal/testing-playbook.md`](../docs/internal/testing-playbook.md) §v2.8.0 LL §5 (Self-review pass 2) + §6 (Intentional-break dogfood) for rationale — search for "Self-review pass 2" inside the file.
-
-### Pass 1 — 5+1 standard checks (S#73)
-
-<!-- Strikethrough N/A items rather than ticking them. -->
-
-- [ ] (1) Function/API signatures match every caller; no orphan signature changes
-- [ ] (2) Module-level constants for stable identity where `useMemo`/`useCallback` deps care
-- [ ] (3) Rules-of-Hooks discipline (hooks invoked unconditionally above early returns)
-- [ ] (4) Wiring triple complete (front-matter `dependencies` + `import` block + `window.__X` self-register)
-- [ ] (5) Conditional **usage** (not conditional invocation) for hooks
-- [ ] (6) **Verify-reference**: APIs / library behaviors / hook scripts read & empirically confirmed (not assumed). Includes hooks I didn't write — PR #164 found `_batch_cat_blobs` Popen pipe deadlock latent for months because nobody verified the hook script.
-
-### Pass 2 — deeper scrutiny (S#77 / PR #166 amend)
-
-- [ ] **Counts / numbers in PR body / CHANGELOG / docstrings cross-checked** against `pytest --collect-only`, file `wc -l`, raw audit. (LL §5 case (i): "Path derivation × 5" vs actual 10 — exact instance happened in PR #171 v1.)
-- [ ] **Internal helper functions have direct tests**, not only via integration / parametrized fixtures. If you wrote an `if`-branch but no test walks it, it's hidden dead code.
-- [ ] **Edge cases tested**: paths-outside-`PROJECT_ROOT` / single-element / empty / boundary values. PR #166 amend caught `BlobViolation.render()` crash on `tmp_path` exactly because new `TestMain` fixtures landed.
-- [ ] `tmp_path` (or equivalent) fixtures stress assumptions about where input comes from.
-
-### Pass 2 — regression tests specifically (LL §6)
-
-- [ ] **Intentional-break dogfood loop** done: backup fix → revert to broken pattern → run test → confirm fail → restore → re-run pass. **Without this loop, the regression test is article-of-faith** (see PR #166's 300×1KB headline test that didn't actually trigger Windows pipe-buffer deadlock; only 1000×2KB did).
-- [ ] Defense-in-depth ladder: pytest-timeout marker (Layer 1 fast-fail) + soft `assert elapsed < X.0` budget (Layer 2 slow-regression catch) + inner production timeout (Layer 3 actual fix).
-- [ ] Empirical threshold table in docstring if test parameters are tuned (path count vs total bytes vs OS pipe buffer).
-
-### Anti-patterns to flag yourself for
-
-- [ ] I'm NOT skipping pass 2 because "this PR is small / doc-only / refactor"
-- [ ] I'm NOT confusing `pass` with `pytest.skip("TODO")` in stub methods (silent green vs xfail-style visible — see PR #171 amend Fix 2)
-- [ ] I'm NOT reactively expanding the PR scope to fix things I noticed during self-review without bumping the PR description / commits accordingly
-
-### `Self-Review-Pass-2:` trailer (expected default)
-
-Add to **any** commit message in this PR (CI strict-mode gate via `self-review-pass2.yaml` — soft-fail today, will flip to hard-fail once adoption plateaus, #454):
-
-```
-Self-Review-Pass-2: dogfood mutated <function>; <test_name> caught (✓)
-```
-
-The trailer must be on its own line in the bottom paragraph, separated from the body by a blank line — that's the git native trailer convention the check enforces (case-insensitive, multi-line values OK).
-
-Skip only if the PR is **doc-only / chore-only with zero logic change**; in that case state so in the Summary section above so the soft-fail status row is interpretable.
-
----
-
-<!-- Don't tick boxes you didn't actually do. The honesty contract is the point. -->
-
+<!-- `Refs: #N`。不用 closing 動詞（Close(s) / Fix(es) / Resolve(s)），它們會自動關票。
+     `Self-Review-Pass-2: <改了什麼>; <哪支測試抓到> (✓)` 寫在 commit 訊息底部的 trailer block（CLAUDE.md 不可協商 #2）；doc-only／chore-only 零邏輯變更可略，在 Summary 註明。
+     回歸測試的 intentional-break 驗法見 vibe-subagent-review；要跳過某支 lint 的逃生門是 body 裡的 `bypass-lint: <lint-name>`（docs/internal/lint-policy.md §4）。 -->

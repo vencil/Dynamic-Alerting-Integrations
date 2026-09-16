@@ -44,6 +44,8 @@ description: IaC-aware 兩階段 review — code 走 spec→quality、IaC 走 bl
 | reframe（症狀對、診斷錯） | 修真正那個 → 回覆說明差在哪 → resolve |
 | reject（驗過不成立） | 回覆**附證據** → resolve |
 
+新增或修改的回歸測試要做一次 intentional-break：還原修法 → 跑測試轉紅 → 恢復 → 轉綠（[testing-playbook §v2.8.0 LL 第 6 條 Intentional-break dogfood](../../../docs/internal/testing-playbook.md)）；沒做過這一輪的測試是 article-of-faith。
+
 ⛔ **GitHub 的 `is_outdated` 不等於 `is_resolved`；分支保護只看後者，reject 沒有 code fix 所以最容易漏 resolve。** 一次一條、各自驗收，不要多條一起修（fix-masking）。收到的「這是 bug」是 claim，先驗再回，不寫表演性同意。
 
 ## 長時 reviewer / verifier（預估 >15 分鐘）

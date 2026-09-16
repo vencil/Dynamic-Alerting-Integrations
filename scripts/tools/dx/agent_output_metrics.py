@@ -21,8 +21,10 @@ Definitions (the contract a later cap must reuse, not re-derive):
 * Percentiles are nearest-rank.
 
 Caveats: length is a proxy for prose; an evidence fence proves shape, not that
-the command ran; column-0 text after a bullet belongs to no entry, so a cap on
-this definition must also reject such text or it can be walked around.
+the command ran; column-0 text after a bullet belongs to no entry here, so
+per-entry numbers undercount such text — the changelog cap in
+``generate_changelog.py`` therefore measures the whole section's growth, not
+entries.
 
 Exit codes (scripts/tools/_lib_exitcodes.py): 0 measured; 2 caller/env error
 (no subcommand, negative counts, missing file or section, gh missing/failing
@@ -61,6 +63,18 @@ _TABLE_ROW_RE = re.compile(r"^\s*\|")
 _EVIDENCE_FIRST_LINE_RE = re.compile(r"^\s*\$ \S")
 
 
+_LINE_BREAK_RE = re.compile(r"\r\n|\r|\n")
+
+
+def split_lines(text: str) -> List[str]:
+    """Split on the three real line breaks only (no trailing empty element
+    for a trailing newline, like ``splitlines()``)."""
+    lines = _LINE_BREAK_RE.split(text)
+    if lines and lines[-1] == "":
+        lines.pop()
+    return lines
+
+
 def fence_step(fence: Optional[str], marker: str, rest: str) -> Tuple[Optional[str], bool]:
     """CommonMark fence pairing on one candidate line (``marker`` + ``rest``).
 
@@ -94,20 +108,48 @@ def section_lines(text: str, section: str) -> Optional[Tuple[int, List[str]]]:
     ``## [<section>]`` or ``## <section>``; None when the heading is absent.
 
     The block runs to the next ``## `` heading (exclusive). ``### `` headings
-    stay inside the block.
+    stay inside the block. A ``## `` line inside a column-0 fenced block
+    INSIDE the section is code, not the section's end: without fence
+    tracking there a fenced changelog example ended the section silently,
+    and everything after it fell out of both the metrics and the cap built
+    on them (blind review, PR-C). An unclosed fence runs to end of file, so
+    the section then does too (loud, not silent). The heading is the first
+    match OUTSIDE a fence; only when every match is fenced (an unclosed
+    fence above the heading swallows the rest of the file) does the first
+    match count, so that shape cannot hide the section either (round 2 found
+    it hidden, round 3 found a fenced example above the heading misread as
+    the heading). The section end is then scanned with the fence state at
+    the heading. Lines are split on CRLF / LF / CR only —
+    ``str.splitlines()`` also breaks on U+2028 and friends, which let one
+    source line forge headings.
     """
-    lines = text.splitlines()
+    lines = split_lines(text)
     start = None
+    first_hit: Optional[Tuple[int, Optional[str]]] = None
+    fence: Optional[str] = None
     for i, line in enumerate(lines):
+        mf = _COLUMN0_FENCE_RE.match(line)
+        if mf:
+            fence, _ = fence_step(fence, mf.group(1), mf.group(2))
+            continue
         m = _HEADING_RE.match(line)
         if m and (m.group("bracketed") or m.group("bare")) == section:
-            start = i
-            break
+            if first_hit is None:
+                first_hit = (i, fence)
+            if fence is None:
+                start = i
+                break
     if start is None:
-        return None
+        if first_hit is None:
+            return None
+        start, fence = first_hit
     end = len(lines)
     for j in range(start + 1, len(lines)):
-        if lines[j].startswith("## "):
+        m = _COLUMN0_FENCE_RE.match(lines[j])
+        if m:
+            fence, _ = fence_step(fence, m.group(1), m.group(2))
+            continue
+        if fence is None and lines[j].startswith("## "):
             end = j
             break
     return start + 1, lines[start + 1:end]
@@ -183,7 +225,7 @@ def prose_len(entry: str) -> int:
     """
     kept: List[str] = []
     fence: Optional[str] = None
-    for line in entry.splitlines():
+    for line in split_lines(entry):
         m = _INDENTED_FENCE_RE.match(line)
         if m:
             fence, toggled = fence_step(fence, m.group(1), m.group(2))
@@ -226,7 +268,7 @@ def measure_changelog(text: str, section: str, cap: int, top: int) -> Optional[d
         "over_cap_prose": sum(1 for n in prose if n > cap),
         "longest": [
             {"line": no, "chars": len(body), "prose_chars": prose_len(body),
-             "head": body.splitlines()[0][:80]}
+             "head": split_lines(body)[0][:80]}
             for no, body in longest
         ],
     }
