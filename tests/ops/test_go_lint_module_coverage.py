@@ -557,6 +557,16 @@ def _config_silencers(cfg: dict) -> list[str]:
     ⛔ Values of vetted keys are not judged here. `max-issues-per-linter: 5`
     truncates while being a perfectly vetted key; the caller asserts that
     separately. This answers only "is there a knob nobody has looked at".
+
+    ⚠️ The `or {}` below normalises a falsy non-mapping (`issues: []`, `""`)
+    to an empty one, so such a config reads as carrying no knob. Deliberate,
+    and measured rather than assumed: golangci REJECTS all four of those
+    shapes — `issues: []` / `issues: ""` / `linters.settings: []` /
+    `linters: []` each make `golangci-lint run` exit 3, so the step fails
+    loudly and this guard's verdict cannot produce a false green. That is the
+    opposite of `_as_list`, which exists precisely because `run` ACCEPTS and
+    reinterprets a scalar there. The distinction to keep: guard the shapes
+    `run` swallows, not the ones it refuses.
     """
     reasons: list[str] = []
 
