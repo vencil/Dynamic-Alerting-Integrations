@@ -304,9 +304,47 @@ jobs:
           bash scripts/ops/_verify_download.sh "$BIN/golangci-lint" "$GOLANGCI_BIN_SHA256"
           echo "$BIN" >> "$GITHUB_PATH"
           "$BIN/golangci-lint" version
+      # #1870. Which linters a module runs is golangci's own answer — default
+      # group ∪ enable − disable — so the floor is checked against
+      # `golangci-lint linters --json` rather than modelled in Python (the
+      # groups differ across versions; on 2.12.2 `fast` drops errcheck, govet,
+      # staticcheck and unused). Every tracked .golangci.yml is checked, which
+      # covers each lint step below: each is required to have one.
+      # tests/ops/test_go_lint_module_coverage.py pins that GOLANGCI_FLOOR keeps
+      # the standard linters. ⚠️ NOT pinned: that this loop reads every config
+      # rather than a hand-written module list — keep it derived.
+      - name: Linter floor
+        env:
+          GOLANGCI_FLOOR: errcheck govet ineffassign staticcheck unused godoclint
+        run: |
+          set -euo pipefail
+          configs=$(git ls-files -- ':(glob)**/.golangci.yml')
+          if [ -z "$configs" ]; then
+            echo "::error::no tracked .golangci.yml, so there is nothing to check"
+            exit 1
+          fi
+          status=0
+          for cfg in $configs; do
+            dir=$(dirname "$cfg")
+            enabled=$(cd "$dir" && golangci-lint linters --json | jq -r '(.Enabled // [])[].name')
+            if [ -z "$enabled" ]; then
+              echo "::error file=$cfg::golangci-lint reports no enabled linters for $dir"
+              status=1
+              continue
+            fi
+            for linter in $GOLANGCI_FLOOR; do
+              if ! grep -qxF "$linter" <<<"$enabled"; then
+                echo "::error file=$cfg::$dir does not run $linter (GOLANGCI_FLOOR)"
+                status=1
+              fi
+            done
+          done
+          exit "$status"
       # The two production modules. Their per-module .golangci.yml adds the
       # depguard dependency-direction ratchets (domain↛handler for tenant-api,
-      # logic↛net/http for exporter) on top of the standard set.
+      # logic↛net/http for exporter) on top of the standard set. The same two
+      # directions are also asserted by import_direction_test.go in each
+      # module, which does not depend on this config (#1870).
       - name: Lint tenant-api
         working-directory: components/tenant-api
         run: golangci-lint run ./...
