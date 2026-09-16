@@ -99,6 +99,25 @@ _VETTED_RUN_KEYS = frozenset({
     "allow-parallel-runners", "allow-serial-runners",
 })
 
+# `issues:` keys someone has looked at. Same contract as _VETTED_RUN_KEYS: a
+# CHANGE DETECTOR, not a safety proof. Well-founded as an accept-set because
+# golangci closes this key space itself — measured: an unknown `issues` key
+# makes `config verify` exit 3 — so a key that is not here is a key that did
+# not exist when this was written, not one someone chose to omit.
+# `uniq-by-line` is in because it is an ordinary knob that cannot retire a
+# checker (it drops a second finding on a line that already has one).
+_VETTED_ISSUES_KEYS = frozenset({
+    "max-issues-per-linter", "max-same-issues", "uniq-by-line",
+})
+
+# Per linter in _REQUIRED_LINTERS: the `linters.settings.<name>` keys someone
+# has looked at. Empty because no config in the tree sets settings on a linter
+# this job promises — so this defends the next one, and the injection test
+# below drives the MAIN invariant rather than only its helper (#1798).
+# ⛔ Deliberately stricter than golangci, which is no oracle here: measured,
+# `godoclint.zzz-not-a-real-key` passes `config verify` clean.
+_VETTED_LINTER_SETTINGS: dict[str, frozenset[str]] = {}
+
 
 def _go_modules() -> frozenset[str]:
     """Module directories, from git (which carries the truncation floor)."""
@@ -163,6 +182,26 @@ def _unlinted(go_files: list[str], modules: frozenset[str],
         if (owner := _owning_module(rel, modules)) not in linted
         or not _reachable_by_dotdotdot(rel, owner)
     ]
+
+
+def _module_corpus(go_files: list[str], modules: frozenset[str],
+                   module: str) -> list[str]:
+    """The .go files `golangci-lint run ./...` in `module` actually loads.
+
+    ⛔ Not `startswith(module + "/")`. A NESTED module's files sit under that
+    prefix and `./...` does not descend into them, so counting them inflates
+    the survivor set of the reporting invariant below — and a survivor that
+    golangci never reads is exactly the shape that makes the assertion true
+    without being satisfied. Measured on the tree's one nested case
+    (`scripts/tools/ops`, holding `bench-canary/`): excluding the single file
+    golangci really reads there left the whole module green.
+
+    Both predicates are the ones the orphan invariant already uses; this is a
+    second caller, not a second model.
+    """
+    return [f for f in go_files
+            if _owning_module(f, modules) == module
+            and _reachable_by_dotdotdot(f, module)]
 
 
 def _module_config(module: str) -> dict:
@@ -441,10 +480,14 @@ def _silenced_files(cfg: dict, checker: str, files: list[str], *,
     shape `golangci-lint migrate` emits for v1 `issues.exclude`) or names a
     required one reads as retiring every checker it reaches.
 
-    Not read, so not guarded: `linters.settings.<name>` (a linter can be
-    emptied from inside), `exclusions.presets` / `generated` (text- and
-    header-scoped, never total), `issues.new*` (drops every finding already
-    on the branch), `issues.fix` (rewrites the file instead of reporting).
+    Carriers that never reach the per-file question — `issues.new*`,
+    `issues.fix`, `linters.settings.<name>` — are not read here either; they
+    retire a checker from OUTSIDE the exclusion machinery and are held by
+    `_config_silencers` (#1863).
+
+    ⚠️ Still not guarded anywhere: `exclusions.presets` / `generated`. Both
+    are text- and header-scoped, so neither can silence a whole module — that
+    is the reason, and it is the thing to re-measure before assuming it holds.
     """
     silenced: set[str] = set()
     exclusions = (cfg.get("linters") or {}).get("exclusions") or {}
@@ -476,6 +519,76 @@ def _silenced_files(cfg: dict, checker: str, files: list[str], *,
             silenced |= _matching(pattern, files)
 
     return silenced
+
+
+def _config_silencers(cfg: dict) -> list[str]:
+    """Knobs nobody vetted, on the two carriers that skip the per-file question.
+
+    `_silenced_files` asks which files a checker can still see. These retire a
+    checker — or the whole run — from outside that machinery, so no exclusion
+    pattern is involved and no `path` argument would help. Measured on
+    golangci-lint 2.12.2 against a synthetic module (3 godoclint + 4 gofmt
+    findings, `config verify` clean in every row; cells in this file's #1863
+    commit):
+
+      issues.new            with a git repo carrying a base commit, the run
+                            goes to rc=0 / `0 issues` while `gofmt -l` still
+                            lists every file. Without a repo it changes
+                            nothing — which is why an earlier measurement of
+                            this key read as harmless. CI always checks out
+                            history, so there the precondition always holds.
+      issues.fix            gofmt reports nothing and the SOURCES are
+                            rewritten (`gofmt -l` empty afterwards).
+      linters.settings.*    `godoclint.default: none` → zero godoclint
+                            findings on every file, every other linter
+                            reporting normally.
+
+    Both are read as ACCEPT-SETS, for two different reasons:
+
+    `issues` — golangci closes the key space itself (unknown key → `config
+    verify` rc=3), so the authority is not this file.
+
+    `linters.settings.<name>` — golangci does NOT close it (an invented key
+    verifies clean), so this guard is stricter than the tool on purpose, and
+    only for `_REQUIRED_LINTERS`: those are the linters the job promises for
+    every module. A settings block on any other linter is none of this
+    guard's business — tenant-api carries three and must stay green.
+
+    ⛔ Values of vetted keys are not judged here. `max-issues-per-linter: 5`
+    truncates while being a perfectly vetted key; the caller asserts that
+    separately. This answers only "is there a knob nobody has looked at".
+
+    ⚠️ The `or {}` below normalises a falsy non-mapping (`issues: []`, `""`)
+    to an empty one, so such a config reads as carrying no knob. Deliberate,
+    and measured rather than assumed: golangci REJECTS all four of those
+    shapes — `issues: []` / `issues: ""` / `linters.settings: []` /
+    `linters: []` each make `golangci-lint run` exit 3, so the step fails
+    loudly and this guard's verdict cannot produce a false green. That is the
+    opposite of `_as_list`, which exists precisely because `run` ACCEPTS and
+    reinterprets a scalar there. The distinction to keep: guard the shapes
+    `run` swallows, not the ones it refuses.
+    """
+    reasons: list[str] = []
+
+    issues = cfg.get("issues") or {}
+    if not isinstance(issues, dict):
+        return [f"issues (not a mapping: {issues!r})"]
+    reasons += [f"issues.{k}" for k in sorted(set(issues) - _VETTED_ISSUES_KEYS)]
+
+    settings = (cfg.get("linters") or {}).get("settings") or {}
+    if not isinstance(settings, dict):
+        return reasons + [f"linters.settings (not a mapping: {settings!r})"]
+    for linter in sorted(_REQUIRED_LINTERS & set(settings)):
+        block = settings.get(linter)
+        if not isinstance(block, dict):
+            # Unreadable is not a free pass: this guard cannot tell an empty
+            # block from one that retires the linter.
+            reasons.append(f"linters.settings.{linter}")
+            continue
+        vetted = _VETTED_LINTER_SETTINGS.get(linter, frozenset())
+        reasons += [f"linters.settings.{linter}.{k}"
+                    for k in sorted(set(block) - vetted)]
+    return reasons
 
 
 _MIXED = ["a.go", "b.go", "a_test.go"]
@@ -563,6 +676,108 @@ def test_a_sibling_config_file_is_red(tmp_path, monkeypatch) -> None:
         _module_config("m")
 
 
+# Both directions, because a classifier that rejects everything passes the
+# "carriers are caught" half on its own. The green rows are the shapes the
+# tree actually carries today.
+_SILENCER_CASES = [
+    ("C1 issues.new retires every checker on committed lines",
+     {"issues": {"new": True}}, ["issues.new"]),
+    ("C2 issues.fix rewrites the sources instead of reporting",
+     {"issues": {"fix": True}}, ["issues.fix"]),
+    ("C3 new-from-rev is the same carrier, spelled differently",
+     {"issues": {"new-from-rev": "HEAD"}}, ["issues.new-from-rev"]),
+    ("C4 a promised linter emptied from inside its own settings",
+     {"linters": {"settings": {"godoclint": {"default": "none"}}}},
+     ["linters.settings.godoclint.default"]),
+    ("C5 an unreadable settings block is not a free pass",
+     {"linters": {"settings": {"godoclint": "none"}}},
+     ["linters.settings.godoclint"]),
+    ("C6 the vetted issues keys stay green",
+     {"issues": {"max-issues-per-linter": 0, "max-same-issues": 0,
+                 "uniq-by-line": True}}, []),
+    ("C7 settings on linters this job does not promise stay green",
+     {"linters": {"settings": {
+         "errcheck": {"exclude-functions": ["fmt.Fprintf"]},
+         "forbidigo": {"forbid": [{"pattern": "x"}]},
+         "depguard": {"rules": {"domain-no-handler": {"list-mode": "lax"}}}}}},
+     []),
+]
+
+
+@pytest.mark.parametrize("label, cfg, expected", _SILENCER_CASES,
+                         ids=[c[0].split()[0] for c in _SILENCER_CASES])
+def test_config_silencers_reads_both_carriers(label, cfg, expected) -> None:
+    assert _config_silencers(cfg) == expected, label
+
+
+def test_the_invariant_itself_reds_on_a_config_level_silencer(monkeypatch) -> None:
+    """Driven through the main invariant, not `_config_silencers`.
+
+    #1781 built a predicate whose only witnesses were its own unit tests and
+    had to delete it: killing the predicate left both main invariants green.
+    The check that would have caught it is this one — inject the carrier into
+    the config the LOOP reads, and require the loop to red.
+    """
+    real = _module_config
+
+    def with_carrier(module: str) -> dict:
+        cfg = real(module)
+        if module == _ANCHOR_MODULE:
+            cfg.setdefault("issues", {})["new"] = True
+        return cfg
+
+    monkeypatch.setattr(sys.modules[__name__], "_module_config", with_carrier)
+    with pytest.raises(AssertionError, match=r"issues\.new"):
+        test_every_linted_module_reports_something()
+
+
+def test_the_corpus_stops_at_a_nested_module() -> None:
+    """A nested module's files are under the prefix but outside `./...`."""
+    files = ["m/a.go", "m/sub/b.go", "m/testdata/c.go", "m/_x/d.go"]
+    mods = frozenset({"m", "m/sub"})
+    assert _module_corpus(files, mods, "m") == ["m/a.go"]
+    assert _module_corpus(files, mods, "m/sub") == ["m/sub/b.go"]
+
+
+def test_the_invariant_itself_reds_when_a_modules_own_files_are_excluded(
+        monkeypatch) -> None:
+    """Driven through the main invariant, on the tree's real nested module.
+
+    The control above pins the derivation; this pins that the LOOP uses it. A
+    prefix-based corpus counts the nested module's files as survivors, so the
+    same exclusion reads as harmless — that is the defect this replaced, and
+    only a test at this level can see it.
+    """
+    modules = sorted(set(_lint_steps().values()))
+    parents = sorted({outer for outer in modules for inner in modules
+                      if inner != outer and inner.startswith(outer + "/")})
+    assert parents, (
+        "no linted module sits inside another any more, so this test asserts "
+        "nothing. Do not delete it silently — either point it at whatever "
+        "shape now inflates a module's corpus, or record here that the tree "
+        "no longer has one.")
+
+    parent = parents[0]
+    go_files = [p for p in _tracked_files() if p.endswith(".go")]
+    rel = [f[len(parent) + 1:]
+           for f in _module_corpus(go_files, _go_modules(), parent)]
+    assert rel, f"{parent} owns no reachable .go; nothing to exclude"
+
+    real = _module_config
+
+    def excluding_its_own_files(module: str) -> dict:
+        cfg = real(module)
+        if module == parent:
+            exclusions = cfg.setdefault("linters", {}).setdefault("exclusions", {})
+            exclusions["paths"] = [f"^{re.escape(r)}$" for r in rel]
+        return cfg
+
+    monkeypatch.setattr(sys.modules[__name__], "_module_config",
+                        excluding_its_own_files)
+    with pytest.raises(AssertionError, match="excluded on all"):
+        test_every_linted_module_reports_something()
+
+
 def test_every_linted_module_reports_something() -> None:
     """Enrolment is a step; this is whether the step can ever report.
 
@@ -581,10 +796,11 @@ def test_every_linted_module_reports_something() -> None:
         "loop below would assert nothing.")
 
     go_files = [p for p in _tracked_files() if p.endswith(".go")]
+    all_modules = _go_modules()
     for module in modules:
         cfg = _module_config(module)
         linters = cfg.get("linters") or {}
-        own = [f for f in go_files if f.startswith(module + "/")]
+        own = _module_corpus(go_files, all_modules, module)
 
         assert linters.get("default") != "none", (
             f"{module}/.golangci.yml sets `linters.default: none`; the step "
@@ -604,6 +820,20 @@ def test_every_linted_module_reports_something() -> None:
                 f"{module}/.golangci.yml leaves `issues.{key}` at its default, "
                 "which truncates the report — #1751 mis-measured this repo by "
                 "exactly that. Set it to 0.")
+
+        silencers = _config_silencers(cfg)
+        assert not silencers, (
+            f"{module}/.golangci.yml sets {silencers}, which nobody has looked "
+            "at and this guard does not model. Three shapes were measured to "
+            "turn a reporting config into `0 issues` with `config verify` "
+            "clean: `issues.new` (and `new-from-rev` / `new-from-merge-base` / "
+            "`new-from-patch`) drops every finding on already-committed lines, "
+            "so a CI checkout reports nothing at all; `issues.fix` rewrites the "
+            "sources instead of reporting them; a `linters.settings` block on a "
+            "linter this job promises can empty it from inside (`godoclint."
+            "default: none` measured at zero findings). Check yours against "
+            "those three, then add the key to _VETTED_ISSUES_KEYS or "
+            "_VETTED_LINTER_SETTINGS in this file.")
 
         # Module-relative, because that is the base golangci matches against.
         rel = [f[len(module) + 1:] for f in own]
