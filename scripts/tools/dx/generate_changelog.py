@@ -432,8 +432,17 @@ def lint_entry_caps(
     if head is None:
         return []
     head_chars, head_entries = head
-    base = _section_size(base_text, section) if base_text is not None else None
-    base_chars, base_entries = base if base else (0, 0)
+    if base_text is None:
+        base_chars, base_entries = 0, 0          # no base at all: everything is growth
+    else:
+        base = _section_size(base_text, section)
+        if base is None:
+            # ⛔ The base has the file but not the section (heading typo being
+            # fixed, wrap-up that left no empty [Unreleased]): judged against
+            # zero this reported "grew by 4577 chars with 3 new entries" for a
+            # one-character diff. The caller prints the notice.
+            return []
+        base_chars, base_entries = base
     growth = head_chars - base_chars
     new = max(head_entries - base_entries, 0)
     allowed = cap * max(new, 1)
@@ -593,12 +602,14 @@ def main() -> int:
                     print(msg, file=sys.stderr)
                     return EXIT_CALLER_ERROR
                 base_text = _git_show(base, target)
-                if base_text is None:
+                if base_text is None or section_lines(base_text, CAP_SECTION) is None:
                     # stdout on purpose: validate_all's runner shows stdout only.
-                    # Skipped, not "everything is new": a first commit or a
-                    # renamed file would be judged against zero and a real
-                    # changelog of legacy-sized entries is always over.
-                    print(f"notice: {target} not found at {base}; the "
+                    # Skipped, not "everything is new": a first commit, a
+                    # renamed file or a base without the section would be
+                    # judged against zero, and a real changelog of
+                    # legacy-sized entries is always over.
+                    what = "not found" if base_text is None else f"has no [{CAP_SECTION}] section"
+                    print(f"notice: {target} {what} at {base}; the "
                           f"[{CAP_SECTION}] growth cap has no base and is skipped")
                 else:
                     try:

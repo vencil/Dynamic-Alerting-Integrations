@@ -108,23 +108,21 @@ def section_lines(text: str, section: str) -> Optional[Tuple[int, List[str]]]:
     ``## [<section>]`` or ``## <section>``; None when the heading is absent.
 
     The block runs to the next ``## `` heading (exclusive). ``### `` headings
-    stay inside the block. A ``## `` line inside a column-0 fenced block is
-    code, not a heading: without fence tracking here a fenced changelog
-    example ended the section silently, and everything after it fell out of
-    both the metrics and the cap built on them (blind review, PR-C). Lines
-    are split on ``\r\n`` / ``\n`` / ``\r`` only — ``str.splitlines()`` also
-    breaks on U+2028 and friends, which let one source line forge headings.
+    stay inside the block. A ``## `` line inside a column-0 fenced block
+    INSIDE the section is code, not the section's end: without fence
+    tracking there a fenced changelog example ended the section silently,
+    and everything after it fell out of both the metrics and the cap built
+    on them (blind review, PR-C). An unclosed fence runs to end of file, so
+    the section then does too (loud, not silent). ⛔ The heading itself is
+    looked up WITHOUT fence tracking: tracking fences from line 1 let one
+    unclosed fence above the heading hide the section and switch the cap
+    off with a clean exit (blind review, PR-C, round 2). Lines are split on
+    CRLF / LF / CR only — ``str.splitlines()`` also breaks on U+2028 and
+    friends, which let one source line forge headings.
     """
     lines = split_lines(text)
     start = None
-    fence: Optional[str] = None
     for i, line in enumerate(lines):
-        m = _COLUMN0_FENCE_RE.match(line)
-        if m:
-            fence, _ = fence_step(fence, m.group(1), m.group(2))
-            continue
-        if fence is not None:
-            continue
         m = _HEADING_RE.match(line)
         if m and (m.group("bracketed") or m.group("bare")) == section:
             start = i
@@ -132,7 +130,7 @@ def section_lines(text: str, section: str) -> Optional[Tuple[int, List[str]]]:
     if start is None:
         return None
     end = len(lines)
-    fence = None
+    fence: Optional[str] = None
     for j in range(start + 1, len(lines)):
         m = _COLUMN0_FENCE_RE.match(lines[j])
         if m:
@@ -214,7 +212,7 @@ def prose_len(entry: str) -> int:
     """
     kept: List[str] = []
     fence: Optional[str] = None
-    for line in entry.splitlines():
+    for line in split_lines(entry):
         m = _INDENTED_FENCE_RE.match(line)
         if m:
             fence, toggled = fence_step(fence, m.group(1), m.group(2))

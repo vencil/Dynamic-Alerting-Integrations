@@ -446,6 +446,15 @@ class TestLintCannotBeSilencedByTheFileItself:
         issues = gc.lint_changelog(str(f))
         assert any("not a recognised section heading" in i for i in issues), issues
 
+    def test_u2028_cannot_forge_structure_for_the_structural_lint(self, tmp_path):
+        """`splitlines()` broke on U+2028, so one source line could satisfy
+        the ###-subsection check (false negative) or fake a duplicate
+        heading (false positive). Both directions pinned."""
+        forged_sub = self._make(tmp_path, "## [Unreleased]\n- a\u2028### Fixed\n")
+        assert any("has no ### subsections" in i for i in gc.lint_changelog(str(forged_sub)))
+        forged_dup = self._make(tmp_path, "## [Unreleased]\n\n### Fixed\n- a\u2028## [Unreleased]\n")
+        assert gc.lint_changelog(str(forged_dup)) == []
+
     def test_a_double_spaced_unreleased_heading_is_named(self, tmp_path):
         """`##  [Unreleased]` (two spaces) matched neither the semver pattern
         nor the old `## [` heading pattern, so the section vanished from this
@@ -884,6 +893,61 @@ class TestSectionGrowthCap:
         text = _unreleased(_entry("old", 200), forged)
         assert len(gc.lint_entry_caps(text, base)) == 1
 
+    def test_an_unclosed_fence_above_the_heading_does_not_hide_the_section(self):
+        """Round 2 of the reset budget: fence tracking while LOOKING for the
+        heading let one unclosed ``` above `## [Unreleased]` hide the section,
+        and the cap exited clean. The heading is found regardless of fences."""
+        base = _unreleased(_entry("old", 200))
+        text = "```\n" + _unreleased(_entry("old", 200), _entry("new", 9000))
+        issues = gc.lint_entry_caps(text, base)
+        assert len(issues) == 1 and "with 1 new entry" in issues[0], issues
+
+    def test_an_unclosed_fence_inside_the_section_runs_to_end_of_file_loudly(self):
+        """Documented, not hidden: the section then swallows the released
+        history below it and the cap goes RED, which is visible."""
+        base = _unreleased(_entry("old", 200)) + "\n## [v1.0.0] (2026-01-01)\n\n### Fixed\n" + _entry("released", 3000) + "\n"
+        text = _unreleased(_entry("old", 200), "```") + "\n## [v1.0.0] (2026-01-01)\n\n### Fixed\n" + _entry("released", 3000) + "\n"
+        assert len(gc.lint_entry_caps(text, base)) == 1
+
+    def test_a_base_without_the_section_is_not_zero(self):
+        """A one-character heading fix (`Unrelesed` → `Unreleased`) reported
+        'grew by 4577 chars with 3 new entries'. Base has the file but not
+        the section: nothing to compare, so nothing to report (main() prints
+        the notice)."""
+        entries = [_entry(f"e{i}", 1500) for i in range(3)]
+        base = _unreleased(*entries).replace("## [Unreleased]", "## [Unrelesed]", 1)
+        assert gc.lint_entry_caps(_unreleased(*entries), base) == []
+
+    def test_main_really_compares_against_the_base_it_resolved(self, tmp_path, monkeypatch, capsys):
+        """Wiring test: `_git_show` and `lint_entry_caps` each have unit
+        tests; this pins that main() hands the committed base to the cap.
+        Judged against nothing (None), the legacy 3,000-char entry would be
+        growth and the run would be red."""
+        repo = tmp_path / "r"
+        repo.mkdir()
+        run = lambda *a: subprocess.run(["git", *a], cwd=repo, check=True, capture_output=True, timeout=60)
+        run("init", "-q")
+        run("config", "user.email", "t@t")
+        run("config", "user.name", "t")
+        f = repo / "history.md"
+        legacy = _entry("legacy", 3000)
+        f.write_text(_unreleased(legacy), encoding="utf-8")
+        run("add", "history.md")
+        run("commit", "-q", "-m", "c")
+        f.write_text(_unreleased(legacy + "\n  - ten more"), encoding="utf-8")
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(sys, "argv", ["gc", "--base", "HEAD", "--lint", "history.md"])
+        assert gc.main() == 0, capsys.readouterr().out
+        # control: the same working file against an empty base section is red
+        f2 = repo / "history.md"
+        run("rm", "-q", "--cached", "history.md")
+        (repo / "history.md").write_text("## [Unreleased]\n\n### Changed\n", encoding="utf-8")
+        run("add", "history.md")
+        run("commit", "-q", "-m", "empty")
+        f2.write_text(_unreleased(legacy + "\n  - ten more"), encoding="utf-8")
+        assert gc.main() == 1
+        assert "grew by" in capsys.readouterr().out
+
     def test_deleting_old_text_credits_new_text_by_design(self):
         """Stated boundary: the section did not grow, and the deletion is in
         the diff for the reviewer."""
@@ -981,6 +1045,15 @@ class TestCapBase:
         assert gc.main() == 0
         out = capsys.readouterr().out
         assert "is skipped" in out and "grew by" not in out
+
+    def test_base_without_the_section_skips_the_cap_with_a_notice(self, tmp_path, monkeypatch, capsys):
+        f = tmp_path / "history.md"
+        f.write_text(_unreleased(_entry("n", 1500)), encoding="utf-8")
+        monkeypatch.setattr(gc, "_git_show", lambda ref, path: "## [v1.0.0] (2026-01-01)\n\n### Fixed\n- a\n")
+        monkeypatch.setattr(sys, "argv", ["gc", "--base", "HEAD", "--lint", str(f)])
+        assert gc.main() == 0
+        out = capsys.readouterr().out
+        assert "has no [Unreleased] section" in out and "is skipped" in out
 
     def test_git_show_reads_the_committed_version(self, tmp_path, monkeypatch):
         """Real git, no mocks: the working tree may differ from HEAD."""

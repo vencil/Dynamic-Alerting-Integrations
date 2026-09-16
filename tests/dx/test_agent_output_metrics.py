@@ -69,6 +69,18 @@ def test_section_does_not_end_at_a_fenced_h2_line():
     assert no == 1 and block == ["- a", "```md", "## [v1.0.0]", "```", "- b"]
 
 
+def test_heading_is_found_even_below_an_unclosed_fence():
+    """Fence tracking while looking for the heading let one unclosed fence
+    above it hide the whole section (blind review, PR-C round 2)."""
+    text = "```\n## [Unreleased]\n- a\n"
+    assert aom.section_lines(text, "Unreleased") == (2, ["- a"])
+
+
+def test_prose_len_splits_only_on_real_line_breaks():
+    entry = "- head\u2028  ```\u2028hidden\u2028  ```"
+    assert aom.prose_len(entry) == len(entry)
+
+
 def test_section_splits_only_on_real_line_breaks():
     text = "## [Unreleased]\n- a\u2028## [v1.0.0]\n- b\n"
     no, block = aom.section_lines(text, "Unreleased")
