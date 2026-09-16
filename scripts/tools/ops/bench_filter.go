@@ -42,7 +42,17 @@
 //     golangci-lint reads it; `go run` still works on a bare copy outside any
 //     module, which is how the release bench harness stashes it.
 //   - Bufio scanner buffer is bumped to 16 MiB to survive large -json events
-//     (some tests emit long log messages in a single Output field).
+//     (some tests emit long log messages in a single Output field). A line
+//     that REACHES that ceiling stops the scan (bufio errors at >=, not >),
+//     and `Scan` reports it the same way it reports EOF — so the read error
+//     is checked at the end of main. Everything from that line onward is
+//     dropped either way; what the check adds is a non-zero rc and a named
+//     reason. Not reachable from today's benchmarks: the longest single line
+//     measured across the exporter and canary suites is under a kilobyte,
+//     four orders of magnitude below the ceiling (exact figures in the #1864
+//     commit; the raw streams they came from are gitignored, so treat them as
+//     a one-off reading, not a maintained number). This guards the next
+//     producer, not a live defect.
 //   - Malformed JSON lines are silently skipped — benchmark framework
 //     occasionally interleaves non-JSON preamble on some Go versions.
 package main
@@ -141,6 +151,34 @@ func main() {
 	}
 	if err := w.Flush(); err != nil {
 		fmt.Fprintln(os.Stderr, "bench_filter: writing stdout:", err)
+		os.Exit(1)
+	}
+
+	// The comment above covers the WRITE side only; this is the read side of
+	// the same contract. `Scan` returning false means EOF or a line at the
+	// buffer ceiling, and nothing distinguishes them but `Err`.
+	//
+	// ⛔ What this does NOT do: the partial output is already flushed above, so
+	// bench.out.txt is byte-for-byte what it was before this check existed —
+	// measured, every case. The truncation still happens; only the exit code
+	// and this stderr line are new.
+	//
+	// What it replaces is a rc that could not be acted on. Under
+	// bench_wrapper.sh the old rc depended on whether the bytes left unread
+	// when the scanner gave up fit in a pipe buffer: they did (measured at the
+	// ceiling and +64 B) and the pipeline exited 0 with a silently short file;
+	// they did not (+64 KiB, +4 MiB) and the upstream `tee` took SIGPIPE, so
+	// the pipeline exited 141 — the value this repo's own wrapper warns is
+	// read as "a consumer of this script's stdout closed early", i.e. a
+	// failure attributed to the wrong thing. Now it is 1 either way, with the
+	// reason named.
+	//
+	// ⚠️ A write failure in the branch above exits first and hides this one.
+	// Deliberate — the write error is the more proximate fact — but it means
+	// "no space left on device" can be the only thing an operator sees when
+	// there is also an oversized line waiting.
+	if err := sc.Err(); err != nil {
+		fmt.Fprintln(os.Stderr, "bench_filter: reading stdin:", err)
 		os.Exit(1)
 	}
 }
