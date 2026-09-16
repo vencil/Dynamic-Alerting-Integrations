@@ -403,6 +403,14 @@ _BASE_MISMATCH_THRESHOLD = 25
 # charged as that entry's excess, which is what makes copying pointless.
 _NEAR_KEY_RATIO = 0.85
 
+# Similarity is O(unmatched head entries x base entries) and CJK headlines
+# share so much template text that difflib's cheap upper bounds rarely prune
+# (measured: ~0.12 s per unmatched entry against this file's base). A normal
+# PR has a handful of unmatched headlines; past this many, fall back to
+# exact-headline / tail matching only, which is still safe (an unmatched
+# entry is charged in full).
+_SIMILARITY_BUDGET = 50
+
 # A `### ` or `<!--` line longer than this is prose wearing a structural
 # prefix, not structure; it is charged like any other new line.
 _STRUCTURAL_LINE_MAX = 200
@@ -426,6 +434,9 @@ def _match_key(key: str, base_keys: Sequence[str]) -> Optional[str]:
         return key
     best, best_ratio = None, 0.0
     for candidate in base_keys:
+        shorter, longer = sorted((len(key), len(candidate)))
+        if longer == 0 or shorter / longer < _NEAR_KEY_RATIO:
+            continue   # length alone rules the ratio out; skip building the matcher
         sm = difflib.SequenceMatcher(None, key, candidate)
         if sm.real_quick_ratio() < _NEAR_KEY_RATIO or sm.quick_ratio() < _NEAR_KEY_RATIO:
             continue
@@ -444,25 +455,29 @@ def lint_entry_caps(
 ) -> List[str]:
     """Cap what ``## [section]`` ADDS, per entry, at ``cap`` characters.
 
-    Every entry is matched to what the base already had for it — the base
-    entry with the same (or a near-identical) bullet line, else the base
-    entry with the same tail (the lines below the bullet), else nothing —
-    and the entries that share one match form a group. A group is charged
-    ``sum(len of its entries) - sum(len of the base entries it matched)``:
-    a typo fix in a legacy headline or a new sub-bullet under it costs its
-    delta; a brand-new entry costs its full length; a copy of a base entry
-    costs its excess wherever it sits, so duplicating a headline (or pasting
-    a base tail under a new headline) buys nothing. Length is the raw entry
-    text, sub-bullets and evidence included: when this file was measured
-    only one over-cap entry owed it to a table (#1737). ⛔ Rewriting a
-    legacy entry's body UNDER its own headline is an edit of history, not
-    new length, by design — a reviewer sees that diff.
+    Every entry is matched to the base entries it is a version of — the ones
+    with the same (or a near-identical) bullet line, else the ones with the
+    same tail (the lines below the bullet), else none — and entries whose
+    matches overlap form one group (union-find over base entries, so a base
+    entry funds exactly one group: keeping a legacy entry AND pasting its
+    tail under a new headline lands both in the same group). A group is
+    charged ``sum(len of its entries) - sum(len of the base entries it
+    matched)``: a typo fix in a legacy headline or a new sub-bullet under it
+    costs its delta; a brand-new entry costs its full length; a copy of a
+    base headline or tail costs the copy's own length wherever it sits.
+    Length is the raw entry text, sub-bullets and evidence included: when
+    this file was measured only one over-cap entry owed it to a table
+    (#1737). ⛔ Rewriting a legacy entry's body UNDER its own headline is an
+    edit of history, not new length, by design — a reviewer sees that diff.
+    Splitting new content across several entries each under the cap is the
+    per-entry cap's nature, not a hole it claims to close.
 
     Every non-blank line in the section must be part of an entry, or a
-    short ``### `` / ``<!--`` structural line, or a line the base already
-    had. Anything else (out-dented text, a bullet indented before any entry
-    is open, text after a heading/comment/column-0 fence that closed the
-    entry above) is what ``iter_entries`` cannot see, so it is an error.
+    ``### `` / ``<!--`` line of at most ``_STRUCTURAL_LINE_MAX`` chars, or a
+    line the base already had. Anything else (out-dented text, a bullet
+    indented before any entry is open, text after a heading/comment/column-0
+    fence that closed the entry above) is what ``iter_entries`` cannot see,
+    so it is an error.
     """
     found = section_lines(text, section)
     if found is None:
@@ -471,52 +486,90 @@ def lint_entry_caps(
     base_found = section_lines(base_text, section) if base_text is not None else None
     base_block = base_found[1] if base_found else []
     base_entries = [b for _, b in iter_entries(base_block, 1)]
-    base_by_key: Dict[str, List[str]] = defaultdict(list)
-    base_by_tail: Dict[str, List[str]] = defaultdict(list)
-    for b in base_entries:
-        base_by_key[_entry_key(b)].append(b)
+    by_key: Dict[str, List[int]] = defaultdict(list)
+    by_tail: Dict[str, List[int]] = defaultdict(list)
+    for i, b in enumerate(base_entries):
+        by_key[_entry_key(b)].append(i)
         tail = _entry_tail(b)
         if tail:
-            base_by_tail[tail].append(b)
-    base_keys = list(base_by_key)
+            by_tail[tail].append(i)
+    base_keys = list(by_key)
     base_lines = set(base_block)
 
-    # group id -> (line numbers, head total, base total)
-    groups: Dict[str, Tuple[List[int], int, int]] = {}
+    # union-find over base entry indices: a base entry funds ONE group
+    parent = list(range(len(base_entries)))
+
+    def find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    def union(ids: List[int]) -> int:
+        root = find(ids[0])
+        for j in ids[1:]:
+            parent[find(j)] = root
+        return root
+
+    head: List[Tuple[int, str, Optional[List[int]]]] = []   # (line, body, matched base ids)
     consumed = set()
+    similarity_left = _SIMILARITY_BUDGET
     for no, body in iter_entries(block, heading_no + 1):
         start = no - (heading_no + 1)
         consumed.update(range(start, start + body.count("\n") + 1))
         key = _entry_key(body)
-        matched = _match_key(key, base_keys)
-        if matched is not None:
-            gid, had = "key:" + matched, sum(len(b) for b in base_by_key[matched])
+        if key in by_key:
+            matched = by_key[key]
         else:
-            tail = _entry_tail(body)
-            if tail and tail in base_by_tail:
-                gid, had = "tail:" + tail, sum(len(b) for b in base_by_tail[tail])
+            near = None
+            if similarity_left > 0:
+                similarity_left -= 1
+                near = _match_key(key, base_keys)
+            if near is not None:
+                matched = by_key[near]
             else:
-                gid, had = f"new:{no}", 0
-        nos, total, _ = groups.get(gid, ([], 0, had))
-        groups[gid] = (nos + [no], total + len(body), had)
+                tail = _entry_tail(body)
+                matched = by_tail.get(tail) if tail else None
+        if matched:
+            union(matched)
+        head.append((no, body, matched))
+
+    # group id -> (line numbers, head total, base ids)
+    groups: Dict[str, Tuple[List[int], int, List[int]]] = {}
+    for no, body, matched in head:
+        if matched:
+            root = find(matched[0])
+            gid = f"base:{root}"
+            base_ids = [i for i in range(len(base_entries)) if find(i) == root]
+        else:
+            gid, base_ids = f"new:{no}", []
+        nos, total, _ = groups.get(gid, ([], 0, base_ids))
+        groups[gid] = (nos + [no], total + len(body), base_ids)
 
     over: List[str] = []
-    for nos, total, had in groups.values():
+    for nos, total, base_ids in groups.values():
+        had = sum(len(base_entries[i]) for i in base_ids)
         added = total - had
         if added <= cap:
             continue
         where = ", ".join(f"L{n}" for n in nos)
-        what = "new entry" if had == 0 else "entries sharing this headline"
-        over.append(
-            f"{where}: {what} add{'s' if len(nos) == 1 else ''} {added} chars over "
-            f"{base_label} (> {cap}); keep the conclusion here and move the "
-            f"measurements to the PR body or an issue comment"
-        )
+        tail_msg = (f"; keep the conclusion here and move the measurements to the "
+                    f"PR body or an issue comment")
+        if not base_ids:
+            over.append(f"{where}: new entry adds {added} chars over {base_label} (> {cap}){tail_msg}")
+            continue
+        headline = _entry_key(base_entries[base_ids[0]])[:40]
+        if len(nos) == 1:
+            over.append(f"{where}: entry grew by {added} chars over its version in {base_label} "
+                        f"«{headline}…» (> {cap}){tail_msg}")
+        else:
+            over.append(f"{where}: entries matched to the entry «{headline}…» in {base_label} "
+                        f"add {added} chars in total (> {cap}){tail_msg}")
     if len(over) > _BASE_MISMATCH_THRESHOLD:
-        head = "; ".join(o.split(":")[0] for o in over[:3])
+        first = "; ".join(o.split(":")[0] for o in over[:3])
         over = [
             f"{len(over)} entries add more than {cap} chars over {base_label} "
-            f"(first: {head}). Either {base_label} is not the commit this branch "
+            f"(first: {first}). Either {base_label} is not the commit this branch "
             f"grew from (release wrap-up, unrelated ref: pass --base <that commit>) "
             f"or the section really grew that much"
         ]
@@ -625,15 +678,17 @@ def main() -> int:
         # it also matches CHANGELOG-archive.md, and editing that would have run
         # a check that never opened it (#1765).
         help="Lint changelog file format (semver/Unreleased headers, dates, "
-             "subsections) and cap NEW [Unreleased] entries; defaults to CHANGELOG.md",
+             "subsections) and cap what each [Unreleased] entry ADDS over the base; "
+             "defaults to CHANGELOG.md",
     )
     parser.add_argument(
         "--cap",
         type=non_negative_int,
         default=ENTRY_CAP,
         metavar="N",
-        help=f"Max characters per NEW [Unreleased] entry in --lint "
-             f"(default {ENTRY_CAP}; 0 disables). Existing entries are never checked.",
+        help=f"Max characters an [Unreleased] entry may ADD over the base in --lint "
+             f"(default {ENTRY_CAP}; 0 disables). A legacy entry is charged only "
+             f"its growth; a new entry its full length.",
     )
     parser.add_argument(
         "--base",

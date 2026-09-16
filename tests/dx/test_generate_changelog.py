@@ -811,7 +811,7 @@ class TestNewEntryCap:
         copy = _entry("old", 200) + "\n  " + "x" * 1200
         text = _unreleased(copy, _entry("old", 200)) if copy_first else _unreleased(_entry("old", 200), copy)
         issues = gc.lint_entry_caps(text, base)
-        assert len(issues) == 1 and "sharing this headline" in issues[0] and "(> 1000)" in issues[0], issues
+        assert len(issues) == 1 and "matched to the entry" in issues[0] and f"add {len(copy)} chars in total" in issues[0], issues
 
     def test_a_base_tail_pasted_under_a_new_fat_headline_is_charged_the_headline(self):
         """Round 3 BLOCK: the tail exemption skipped the whole entry, so any
@@ -824,6 +824,30 @@ class TestNewEntryCap:
         # both copies share the pasted tail, so they are ONE group charged with
         # both headlines' excess; the finding names both lines
         assert len(issues) == 1 and "L6, L8" in issues[0] and "(> 1000)" in issues[0], issues
+
+    def test_a_kept_legacy_entry_funds_only_one_group(self):
+        """Round 4 BLOCK: the legacy entry stayed (exact headline match) AND
+        its tail was pasted under a new fat headline (tail match); the base
+        entry's length was counted as budget in BOTH groups, so a 4,000-char
+        tail bought ~1,400 chars of new prose. One base entry, one group."""
+        legacy = _entry("legacy", 490) + "\n  - " + "t" * 4000
+        base = _unreleased(legacy)
+        fat = "- **" + "F" * 1400 + "**: x\n  - " + "t" * 4000
+        issues = gc.lint_entry_caps(_unreleased(legacy, fat), base)
+        assert len(issues) == 1 and "L4, L6" in issues[0] and f"add {len(fat)} chars in total" in issues[0], issues
+        # control: the same new prose without the pasted tail is a plain new entry
+        bare = "- **" + "F" * 1400 + "**: x"
+        control = gc.lint_entry_caps(_unreleased(legacy, bare), base)
+        assert len(control) == 1 and f"new entry adds {len(bare)} chars" in control[0], control
+
+    def test_finding_wording_names_the_situation(self):
+        base = _unreleased(_entry("old", 100) + "\n  - tail")
+        growth = "\n  - " + "g" * 1200
+        grown = gc.lint_entry_caps(_unreleased(_entry("old", 100) + "\n  - tail" + growth), base)
+        assert len(grown) == 1 and grown[0].startswith(
+            f"L4: entry grew by {len(growth)} chars over its version in the base «- **old**:"), grown
+        fresh = gc.lint_entry_caps(_unreleased(_entry("old", 100) + "\n  - tail", _entry("brand-new", 1500)), base)
+        assert len(fresh) == 1 and fresh[0].startswith("L6: new entry adds 1500 chars"), fresh
 
     def test_rewording_a_legacy_bullet_line_keeps_the_entry_exempt(self):
         """Fixing a typo in the bullet line of an 18,905-char legacy entry must
@@ -853,6 +877,17 @@ class TestNewEntryCap:
         text = _unreleased(*entries)
         issues = gc.lint_entry_caps(text, _unreleased(_entry("other", 50)), base_label="origin/main")
         assert len(issues) == 1 and "30 entries" in issues[0] and "origin/main" in issues[0] and "L4" in issues[0], issues
+
+    def test_similarity_budget_falls_back_to_exact_and_tail_matching(self, monkeypatch):
+        """Past the budget, unmatched headlines are not probed for similarity:
+        they fall to tail matching, else count in full — safe, just stricter."""
+        monkeypatch.setattr(gc, "_SIMILARITY_BUDGET", 1)
+        legacy_a = _entry("alpha", 1500)
+        legacy_b = _entry("bravo", 1500)
+        base = _unreleased(legacy_a, legacy_b)
+        text = _unreleased(legacy_a.replace("alpha", "alpha2"), legacy_b.replace("bravo", "bravo2"))
+        issues = gc.lint_entry_caps(text, base)
+        assert len(issues) == 1, issues          # first typo fix probed and matched; second exhausted the budget
 
     def test_no_base_means_everything_is_new(self):
         text = _unreleased(_entry("a", 1500))
