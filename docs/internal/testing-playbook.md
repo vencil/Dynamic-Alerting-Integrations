@@ -722,7 +722,7 @@ fatal: not a git repository: /workspaces/vibe-k8s-lab/.claude/worktrees/<name>/C
 
 **問題**：PR #172 PR template Pass 1 check #4「Wiring triple complete」原是針對 JSX components 設計（front-matter `dependencies` + `import` block + `window.__X` self-register）。**對 Python lint 而言 wiring triple 是另一組 artifact**，但 template 沒寫，agent tick 過不檢查就直接過。
 
-**規範**：當 PR 修改 `scripts/tools/lint/check_*.py` 或 `scripts/tools/dx/*.py` 並改變功能/scope 時，Pass 1 check #4 **必須執行下列三步驗證**（不是聲稱，是執行）：
+**規範**：當 PR 修改 `scripts/tools/lint/check_*.py` 或 `scripts/tools/dx/*.py` 並改變功能/scope 時，**必須執行下列三步驗證**（不是聲稱，是執行）：
 
 1. **Docstring 第一行**：scope statement 是否反映新功能？例：S#88 加 `.html` scan + `--report-orphans` mode 時，原 docstring「Detect JSX/CSS references...」需改為「Detect JSX/CSS/HTML references... (with --report-orphans discovery mode)」。**Verification**：`head -3 scripts/tools/lint/check_<name>.py` 人眼檢視。
 2. **`scripts/tools/validate_all.py` 對應 row**：description string 是否與新 scope 一致？**Verification**：`grep -n "<lint_name>" scripts/tools/validate_all.py` 人眼比對。

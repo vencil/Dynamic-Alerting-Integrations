@@ -30,7 +30,7 @@ make pr-preflight                # ⛔ PR merge 前必跑
 4. **禁止對掛載路徑用 `sed -i`** — 會截斷缺少 EOF 換行的檔案。用讀取 + 改寫，或 pipe。
 5. **`git add` 用括號 glob 後必驗** — bash 的 `[01]` 只配 `0`/`1` 不配 `2`；跑 `git diff --cached --stat` 確認 staged set。
 6. **Doc-as-Code** — 影響 API / schema / CLI / 計數的變更，須同步 `CHANGELOG.md` + `CLAUDE.md` + `README.md`。
-7. **⛔ 宣稱要配證據區塊，沒有就不准宣稱** — 「測試過了」「lint 乾淨」「build 成功」「修好了」「CI 綠」每一句都是**主張**，同一則訊息裡要配一個證據區塊：以 `$ <指令>` 開頭的 fenced block，接該次實際輸出的節錄（≤ 8 行，含 rc 或 pass/fail 那行）。指令必須是**這一輪**跑過的：上一輪的結果不算、部分檢查不算、「應該會過」不算、agent 回報成功不算（自己看 diff）。沒跑就寫一行 `[未驗] <宣稱>`，不寫理由——**「量不到」與「量了沒事」必須可區分**。過程敘事（第一次怎麼錯、後來怎麼改）只進 commit body，不進回覆、PR body 與 CHANGELOG。判別語：讀者要拿這段做什麼？拍板 → 結論＋改變裁決的量測；重做或驗證 → 指令與輸出；不再重蹈 → commit／docstring／CHANGELOG。
+7. **⛔ 宣稱要配證據區塊，沒有就不准宣稱** — 「測試過了」「lint 乾淨」「build 成功」「修好了」「CI 綠」每一句都是**主張**，同一則訊息裡要配一個證據區塊：以 `$ <指令>` 開頭的 fenced block，接該次實際輸出的節錄（≤ 8 行，不含 `$` 那行與 fence；含 rc 或 pass/fail 那行）。指令必須是**這一輪**跑過的：上一輪的結果不算、部分檢查不算、「應該會過」不算、agent 回報成功不算（自己看 diff）。沒跑就寫一行 `[未驗] <宣稱>`；跑不了的補一句擋住它的那件事，不寫辯解——**「量不到」與「量了沒事」必須可區分**。過程敘事（第一次怎麼錯、後來怎麼改）只進 commit body，不進回覆、PR body 與 CHANGELOG。判別語：讀者要拿這段做什麼？拍板 → 結論＋改變裁決的量測；重做或驗證 → 指令與輸出；不再重蹈 → commit／docstring／CHANGELOG。 ⚠️ 本 repo 燒過的具體形狀是**管線遮蔽 exit code**：`cmd | head; echo $?` 讀到的是 `head` 的 rc；要 rc 就別接管線。
 
 ## 規範在哪裡（索引，非複本）
 
