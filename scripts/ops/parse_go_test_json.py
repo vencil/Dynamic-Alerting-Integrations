@@ -13,8 +13,10 @@ report job can dedup and compare against.
 Why Python rather than Go
 -------------------------
 The sibling `go test -json` reader in this repo (scripts/tools/ops/bench_filter.go)
-is a `go run` one-off with NO tests — it has no module home, so there is nowhere
-for a `_test.go` to live that CI would run. This parser is the ONLY thing standing
+is a `go run` one-off with NO tests. It has had a module home since #1816, so a
+`_test.go` now has somewhere to live — but `ci.yml` names its `go-tests-*` legs
+one by one and none of them is that module, so CI would still never run it. This
+parser is the ONLY thing standing
 between a red nightly and a silent one, so it has to be tested. Python puts its
 unit tests in `tests/ops/`, which the existing "Python Tests (3.13)" required check
 already runs (and whose path filter already includes `.github/workflows/**` and

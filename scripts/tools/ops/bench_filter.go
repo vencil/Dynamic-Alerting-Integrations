@@ -42,7 +42,13 @@
 //     golangci-lint reads it; `go run` still works on a bare copy outside any
 //     module, which is how the release bench harness stashes it.
 //   - Bufio scanner buffer is bumped to 16 MiB to survive large -json events
-//     (some tests emit long log messages in a single Output field).
+//     (some tests emit long log messages in a single Output field). A line
+//     past that ceiling stops the scan, and `Scan` reports it the same way it
+//     reports EOF — so the read error is checked at the end of main, or the
+//     stream would end truncated at rc=0. Not reachable from today's
+//     benchmarks: the longest single line measured across the exporter and
+//     canary suites is under a kilobyte, four orders of magnitude below the
+//     ceiling. This guards the next producer, not a live defect.
 //   - Malformed JSON lines are silently skipped — benchmark framework
 //     occasionally interleaves non-JSON preamble on some Go versions.
 package main
@@ -141,6 +147,19 @@ func main() {
 	}
 	if err := w.Flush(); err != nil {
 		fmt.Fprintln(os.Stderr, "bench_filter: writing stdout:", err)
+		os.Exit(1)
+	}
+
+	// The comment above covers the WRITE side only; this is the read side of
+	// the same contract. `Scan` returning false means EOF or a line past the
+	// buffer ceiling, and nothing distinguishes them but `Err`. Unlike the
+	// Flush branch, this one is reachable through bench_wrapper.sh: the error
+	// comes from the input, not from a pipe, so there is no SIGPIPE to end the
+	// process first, and the wrapper's `set -o pipefail` turns the non-zero
+	// into a failed benchmark run instead of a short bench.out.txt that reads
+	// like a clean one.
+	if err := sc.Err(); err != nil {
+		fmt.Fprintln(os.Stderr, "bench_filter: reading stdin:", err)
 		os.Exit(1)
 	}
 }
