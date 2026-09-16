@@ -403,13 +403,12 @@ _BASE_MISMATCH_THRESHOLD = 25
 # charged as that entry's excess, which is what makes copying pointless.
 _NEAR_KEY_RATIO = 0.85
 
-# Similarity is O(unmatched head entries x base entries) and CJK headlines
-# share so much template text that difflib's cheap upper bounds rarely prune
-# (measured: ~0.12 s per unmatched entry against this file's base). A normal
-# PR has a handful of unmatched headlines; past this many, fall back to
-# exact-headline / tail matching only, which is still safe (an unmatched
-# entry is charged in full).
-_SIMILARITY_BUDGET = 50
+# Similarity is O(unmatched head entries x base entries). With the length
+# bound below it is ~0.02 s per unmatched headline against this file's base;
+# the worst case (every legacy headline rewritten at once) is a one-off cost,
+# not a reason for a budget: a budget that stops probing turns a near-copy
+# into its own group, and per-group charging is not additive, so it is
+# LENIENT, not strict (blind review, round 5).
 
 # A `### ` or `<!--` line longer than this is prose wearing a structural
 # prefix, not structure; it is charged like any other new line.
@@ -435,8 +434,13 @@ def _match_key(key: str, base_keys: Sequence[str]) -> Optional[str]:
     best, best_ratio = None, 0.0
     for candidate in base_keys:
         shorter, longer = sorted((len(key), len(candidate)))
-        if longer == 0 or shorter / longer < _NEAR_KEY_RATIO:
-            continue   # length alone rules the ratio out; skip building the matcher
+        # difflib's own upper bound (its real_quick_ratio) is 2s/(s+l), NOT
+        # s/l: the latter pruned true matches with length ratio in
+        # [0.739, 0.85) — every legacy headline trimmed by 16-28% read as a
+        # brand-new entry (blind review, round 5). Skip only what the bound
+        # rules out, before paying for the matcher.
+        if longer == 0 or 2 * shorter / (shorter + longer) < _NEAR_KEY_RATIO:
+            continue
         sm = difflib.SequenceMatcher(None, key, candidate)
         if sm.real_quick_ratio() < _NEAR_KEY_RATIO or sm.quick_ratio() < _NEAR_KEY_RATIO:
             continue
@@ -465,6 +469,8 @@ def lint_entry_caps(
     matched)``: a typo fix in a legacy headline or a new sub-bullet under it
     costs its delta; a brand-new entry costs its full length; a copy of a
     base headline or tail costs the copy's own length wherever it sits.
+    Within one group a deleted base entry credits the others (the group did
+    not grow) — that is the same "editing history" boundary as below.
     Length is the raw entry text, sub-bullets and evidence included: when
     this file was measured only one over-cap entry owed it to a table
     (#1737). ⛔ Rewriting a legacy entry's body UNDER its own headline is an
@@ -513,7 +519,6 @@ def lint_entry_caps(
 
     head: List[Tuple[int, str, Optional[List[int]]]] = []   # (line, body, matched base ids)
     consumed = set()
-    similarity_left = _SIMILARITY_BUDGET
     for no, body in iter_entries(block, heading_no + 1):
         start = no - (heading_no + 1)
         consumed.update(range(start, start + body.count("\n") + 1))
@@ -521,10 +526,7 @@ def lint_entry_caps(
         if key in by_key:
             matched = by_key[key]
         else:
-            near = None
-            if similarity_left > 0:
-                similarity_left -= 1
-                near = _match_key(key, base_keys)
+            near = _match_key(key, base_keys)
             if near is not None:
                 matched = by_key[near]
             else:
@@ -553,8 +555,8 @@ def lint_entry_caps(
         if added <= cap:
             continue
         where = ", ".join(f"L{n}" for n in nos)
-        tail_msg = (f"; keep the conclusion here and move the measurements to the "
-                    f"PR body or an issue comment")
+        tail_msg = ("; keep the conclusion here and move the measurements to the "
+                    "PR body or an issue comment")
         if not base_ids:
             over.append(f"{where}: new entry adds {added} chars over {base_label} (> {cap}){tail_msg}")
             continue
@@ -686,9 +688,9 @@ def main() -> int:
         type=non_negative_int,
         default=ENTRY_CAP,
         metavar="N",
-        help=f"Max characters an [Unreleased] entry may ADD over the base in --lint "
-             f"(default {ENTRY_CAP}; 0 disables). A legacy entry is charged only "
-             f"its growth; a new entry its full length.",
+        help=f"Max characters an [Unreleased] entry (or the entries sharing one base "
+             f"entry) may ADD over the base in --lint (default {ENTRY_CAP}; 0 disables). "
+             f"A legacy entry is charged only its growth; a new entry its full length.",
     )
     parser.add_argument(
         "--base",

@@ -878,16 +878,33 @@ class TestNewEntryCap:
         issues = gc.lint_entry_caps(text, _unreleased(_entry("other", 50)), base_label="origin/main")
         assert len(issues) == 1 and "30 entries" in issues[0] and "origin/main" in issues[0] and "L4" in issues[0], issues
 
-    def test_similarity_budget_falls_back_to_exact_and_tail_matching(self, monkeypatch):
-        """Past the budget, unmatched headlines are not probed for similarity:
-        they fall to tail matching, else count in full — safe, just stricter."""
-        monkeypatch.setattr(gc, "_SIMILARITY_BUDGET", 1)
-        legacy_a = _entry("alpha", 1500)
-        legacy_b = _entry("bravo", 1500)
-        base = _unreleased(legacy_a, legacy_b)
-        text = _unreleased(legacy_a.replace("alpha", "alpha2"), legacy_b.replace("bravo", "bravo2"))
-        issues = gc.lint_entry_caps(text, base)
-        assert len(issues) == 1, issues          # first typo fix probed and matched; second exhausted the budget
+    @pytest.mark.parametrize("trim", [0.16, 0.20, 0.25], ids=["16pct", "20pct", "25pct"])   # 2s/(s+l) >= 0.85 holds up to ~26%
+    def test_trimming_a_legacy_headline_is_still_that_entry(self, trim):
+        """Round 5 BLOCK: the length pre-filter used s/l instead of difflib's
+        2s/(s+l) bound and pruned true matches with length ratio in
+        [0.739, 0.85) — exactly the §P4 prescription (shorten a legacy
+        entry) read as a brand-new over-cap entry."""
+        legacy = _entry("legacy", 1500)
+        base = _unreleased(legacy)
+        kept = legacy[: int(len(legacy) * (1 - trim))]
+        assert 1000 < len(kept) < len(legacy)
+        assert gc.lint_entry_caps(_unreleased(kept), base) == [], trim
+
+    def test_a_base_entry_funds_exactly_one_group_when_matches_overlap(self):
+        """Union-find is what merges overlapping matches. Base A and B share a
+        tail; the head keeps A (headline match → {A}) and adds N whose pasted
+        tail matches {A, B}. With the union, A and B fund ONE group holding A
+        and N, so B's deletion credits N (the section did not grow: editing
+        history). Without it, N's group is keyed by A alone, B's length is
+        never credited, and N is charged in full."""
+        tail = "\n  - " + "t" * 3000
+        a = _entry("alpha", 100) + tail
+        b = _entry("bravo", 100) + tail
+        base = _unreleased(a, b)
+        n = "- **" + "N" * 1000 + "**: x" + tail   # headline grows ~900 over B's: under the cap only if B credits it
+        assert gc.lint_entry_caps(_unreleased(a, n), base) == []
+        # control: without a deleted sibling to credit it, the same N is charged
+        assert len(gc.lint_entry_caps(_unreleased(a, b, n), base)) == 1
 
     def test_no_base_means_everything_is_new(self):
         text = _unreleased(_entry("a", 1500))
