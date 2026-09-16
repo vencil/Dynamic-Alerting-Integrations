@@ -773,149 +773,85 @@ def _unreleased(*entries: str) -> str:
     return "## [Unreleased]\n\n### Changed\n" + "\n".join(entries) + "\n"
 
 
-class TestNewEntryCap:
-    """Cap on NEW entries; existing ones are never retroactive (the file has
-    hundreds over the cap and #1737 decided not to rewrite history)."""
+class TestSectionGrowthCap:
+    """The cap is on how much [Unreleased] GROWS over the base, per new
+    entry. There is no entry matching: five review rounds showed every
+    "which entry is new" exemption was a splitter. Growth of the whole block
+    has none, so nothing hides from it."""
+
+    @staticmethod
+    def _growth(head: str, base: str) -> int:
+        return gc._section_size(head, "Unreleased")[0] - gc._section_size(base, "Unreleased")[0]
 
     def test_new_oversize_entry_is_flagged_and_the_split_is_clean(self):
         base = _unreleased(_entry("old", 200))
         big = _unreleased(_entry("old", 200), _entry("new", 1500))
         issues = gc.lint_entry_caps(big, base)
-        assert len(issues) == 1 and "adds 1500 chars" in issues[0] and "(> 1000)" in issues[0], issues
+        assert len(issues) == 1 and "with 1 new entry" in issues[0] and "allowed 1000" in issues[0], issues
+        assert f"grew by {self._growth(big, base)} chars" in issues[0]
         split = _unreleased(_entry("old", 200), _entry("new-a", 700), _entry("new-b", 700))
         assert gc.lint_entry_caps(split, base) == []
 
-    def test_boundary_exactly_cap_is_clean_and_one_over_is_not(self):
+    def test_boundary_is_exactly_the_cap_per_new_entry(self):
         base = _unreleased(_entry("old", 200))
-        assert gc.lint_entry_caps(_unreleased(_entry("old", 200), _entry("n", 1000)), base) == []
-        assert len(gc.lint_entry_caps(_unreleased(_entry("old", 200), _entry("n", 1001)), base)) == 1
+        at = _unreleased(_entry("old", 200), _entry("n", 999))       # entry + its newline = 1000
+        assert self._growth(at, base) == 1000 and gc.lint_entry_caps(at, base) == []
+        over = _unreleased(_entry("old", 200), _entry("n", 1000))
+        assert self._growth(over, base) == 1001 and len(gc.lint_entry_caps(over, base)) == 1
 
-    def test_existing_oversize_entry_is_not_retroactive(self):
-        text = _unreleased(_entry("legacy", 3000))
+    def test_existing_oversize_entries_are_not_retroactive(self):
+        text = _unreleased(_entry("legacy", 3000), _entry("legacy-2", 5000))
         assert gc.lint_entry_caps(text, text) == []
 
-    def test_editing_a_legacy_entry_below_its_bullet_line_keeps_it_exempt(self):
+    def test_a_legacy_entry_may_be_corrected_but_not_fattened(self):
         legacy = _entry("legacy", 3000)
         base = _unreleased(legacy)
-        edited = _unreleased(legacy + "\n  - a new sub-bullet added later")
-        assert gc.lint_entry_caps(edited, base) == []
+        corrected = legacy.replace("- **legacy**:", "- **legacy (typo fixed)**:", 1) + "\n  - one more sub-bullet"
+        assert gc.lint_entry_caps(_unreleased(corrected), base) == []
+        fattened = _unreleased(legacy + "\n  - " + "f" * 1200)
+        issues = gc.lint_entry_caps(fattened, base)
+        assert len(issues) == 1 and "with 0 new entries" in issues[0], issues
 
-    @pytest.mark.parametrize("copy_first", [False, True], ids=["after-original", "before-original"])
-    def test_copying_a_base_headline_is_charged_as_the_group_excess_wherever_it_sits(self, copy_first):
-        """Blind review rounds 2+3: keys were a set (a pasted headline made the
-        whole entry 'existing'), then a Counter that handed out exemptions in
-        file order (put the copy first and it was the original that got
-        checked). Now the entries sharing a headline are one group charged
-        with their total excess over the base."""
-        base = _unreleased(_entry("old", 200))
-        copy = _entry("old", 200) + "\n  " + "x" * 1200
-        text = _unreleased(copy, _entry("old", 200)) if copy_first else _unreleased(_entry("old", 200), copy)
+    def test_growth_in_a_legacy_entry_is_not_hidden_behind_a_new_one(self):
+        """One new 700-char entry plus 900 chars of fattening: growth 1,600
+        against one new entry — the fattening does not ride along."""
+        legacy = _entry("legacy", 300)
+        base = _unreleased(legacy)
+        text = _unreleased(legacy + "\n  - " + "f" * 895, _entry("new", 700))
         issues = gc.lint_entry_caps(text, base)
-        assert len(issues) == 1 and "matched to the entry" in issues[0] and f"add {len(copy)} chars in total" in issues[0], issues
-
-    def test_a_base_tail_pasted_under_a_new_fat_headline_is_charged_the_headline(self):
-        """Round 3 BLOCK: the tail exemption skipped the whole entry, so any
-        headline + a copied tail was free, any number of times."""
-        legacy = _entry("legacy", 60) + "\n  - " + "t" * 300
-        base = _unreleased(legacy)
-        fat = "- **" + "F" * 1200 + "**: x\n  - " + "t" * 300
-        text = _unreleased(legacy, fat, fat.replace("F" * 3, "G" * 3, 1))
-        issues = gc.lint_entry_caps(text, base)
-        # both copies share the pasted tail, so they are ONE group charged with
-        # both headlines' excess; the finding names both lines
-        assert len(issues) == 1 and "L6, L8" in issues[0] and "(> 1000)" in issues[0], issues
-
-    def test_a_kept_legacy_entry_funds_only_one_group(self):
-        """Round 4 BLOCK: the legacy entry stayed (exact headline match) AND
-        its tail was pasted under a new fat headline (tail match); the base
-        entry's length was counted as budget in BOTH groups, so a 4,000-char
-        tail bought ~1,400 chars of new prose. One base entry, one group."""
-        legacy = _entry("legacy", 490) + "\n  - " + "t" * 4000
-        base = _unreleased(legacy)
-        fat = "- **" + "F" * 1400 + "**: x\n  - " + "t" * 4000
-        issues = gc.lint_entry_caps(_unreleased(legacy, fat), base)
-        assert len(issues) == 1 and "L4, L6" in issues[0] and f"add {len(fat)} chars in total" in issues[0], issues
-        # control: the same new prose without the pasted tail is a plain new entry
-        bare = "- **" + "F" * 1400 + "**: x"
-        control = gc.lint_entry_caps(_unreleased(legacy, bare), base)
-        assert len(control) == 1 and f"new entry adds {len(bare)} chars" in control[0], control
-
-    def test_finding_wording_names_the_situation(self):
-        base = _unreleased(_entry("old", 100) + "\n  - tail")
-        growth = "\n  - " + "g" * 1200
-        grown = gc.lint_entry_caps(_unreleased(_entry("old", 100) + "\n  - tail" + growth), base)
-        assert len(grown) == 1 and grown[0].startswith(
-            f"L4: entry grew by {len(growth)} chars over its version in the base «- **old**:"), grown
-        fresh = gc.lint_entry_caps(_unreleased(_entry("old", 100) + "\n  - tail", _entry("brand-new", 1500)), base)
-        assert len(fresh) == 1 and fresh[0].startswith("L6: new entry adds 1500 chars"), fresh
-
-    def test_rewording_a_legacy_bullet_line_keeps_the_entry_exempt(self):
-        """Fixing a typo in the bullet line of an 18,905-char legacy entry must
-        not demand that the history be rewritten: the tail identifies it."""
-        legacy = _entry("legacy", 100) + "\n  - " + "x" * 2900   # bullet line + a tail
-        base = _unreleased(legacy)
-        reworded = legacy.replace("- **legacy**:", "- **legacy (typo fixed)**:", 1)
-        assert gc.lint_entry_caps(_unreleased(reworded), base) == []
-        # Round 3: 323 legacy entries are one line and over the cap; a typo fix
-        # in such a headline is the same entry (near-identical headline)...
-        one_liner = _entry("solo", 1500)
-        assert gc.lint_entry_caps(_unreleased(one_liner.replace("solo", "solo2")), _unreleased(one_liner)) == []
-        # ...a different headline of the same length is a new entry.
-        other = "- **" + "z" * 1490 + "**: "
-        assert len(gc.lint_entry_caps(_unreleased(other), _unreleased(one_liner))) == 1
-
-    def test_rewording_the_headline_and_adding_a_sub_bullet_at_once_costs_the_delta(self):
-        legacy = _entry("legacy", 100) + "\n  - " + "x" * 2900
-        base = _unreleased(legacy)
-        both = legacy.replace("- **legacy**:", "- **legacy, clearer**:", 1) + "\n  - one more sub-bullet"
-        assert gc.lint_entry_caps(_unreleased(both), base) == []
-
-    def test_a_base_that_is_not_the_parent_collapses_to_one_finding(self):
-        """Release wrap-up moved [Unreleased] out of the base: 400 'new
-        entries' are one fact, not 400 findings."""
-        entries = [_entry(f"e{i}", 1500) for i in range(30)]
-        text = _unreleased(*entries)
-        issues = gc.lint_entry_caps(text, _unreleased(_entry("other", 50)), base_label="origin/main")
-        assert len(issues) == 1 and "30 entries" in issues[0] and "origin/main" in issues[0] and "L4" in issues[0], issues
-
-    @pytest.mark.parametrize("trim", [0.16, 0.20, 0.25], ids=["16pct", "20pct", "25pct"])   # 2s/(s+l) >= 0.85 holds up to ~26%
-    def test_trimming_a_legacy_headline_is_still_that_entry(self, trim):
-        """Round 5 BLOCK: the length pre-filter used s/l instead of difflib's
-        2s/(s+l) bound and pruned true matches with length ratio in
-        [0.739, 0.85) — exactly the §P4 prescription (shorten a legacy
-        entry) read as a brand-new over-cap entry."""
-        legacy = _entry("legacy", 1500)
-        base = _unreleased(legacy)
-        kept = legacy[: int(len(legacy) * (1 - trim))]
-        assert 1000 < len(kept) < len(legacy)
-        assert gc.lint_entry_caps(_unreleased(kept), base) == [], trim
-
-    def test_a_base_entry_funds_exactly_one_group_when_matches_overlap(self):
-        """Union-find is what merges overlapping matches. Base A and B share a
-        tail; the head keeps A (headline match → {A}) and adds N whose pasted
-        tail matches {A, B}. With the union, A and B fund ONE group holding A
-        and N, so B's deletion credits N (the section did not grow: editing
-        history). Without it, N's group is keyed by A alone, B's length is
-        never credited, and N is charged in full."""
-        tail = "\n  - " + "t" * 3000
-        a = _entry("alpha", 100) + tail
-        b = _entry("bravo", 100) + tail
-        base = _unreleased(a, b)
-        n = "- **" + "N" * 1000 + "**: x" + tail   # headline grows ~900 over B's: under the cap only if B credits it
-        assert gc.lint_entry_caps(_unreleased(a, n), base) == []
-        # control: without a deleted sibling to credit it, the same N is charged
-        assert len(gc.lint_entry_caps(_unreleased(a, b, n), base)) == 1
+        assert len(issues) == 1 and "with 1 new entry" in issues[0], issues
 
     def test_no_base_means_everything_is_new(self):
-        text = _unreleased(_entry("a", 1500))
-        assert len(gc.lint_entry_caps(text, None)) == 1
+        assert gc.lint_entry_caps(_unreleased(_entry("a", 700), _entry("b", 700)), None) == []
+        assert len(gc.lint_entry_caps(_unreleased(_entry("a", 1500)), None)) == 1
 
-    def test_sub_bullets_and_evidence_count_toward_the_length(self):
+    def test_sub_bullets_and_evidence_count_toward_growth(self):
         base = _unreleased(_entry("old", 200))
-        short_head = "- **n**: x"
-        padding = "\n  - " + "y" * 1200
-        text = _unreleased(_entry("old", 200), short_head + padding)
+        text = _unreleased(_entry("old", 200), "- **n**: x\n  - " + "y" * 1200)
         assert len(gc.lint_entry_caps(text, base)) == 1
+
+    def test_text_outside_any_entry_still_counts(self):
+        """The reason there is no gap rule: out-dented text, an indented
+        bullet before any entry, a long heading — all are section characters."""
+        base = _unreleased(_entry("old", 200))
+        for shape in ("\n⇒ " + "z" * 1200, "\n### Fixed — " + "z" * 1200, "\n  - " + "z" * 1200 + "\n" + _entry("old", 200)):
+            text = "## [Unreleased]\n\n### Changed\n" + _entry("old", 200) + shape + "\n"
+            assert len(gc.lint_entry_caps(text, base)) == 1, shape[:20]
+
+    def test_bullets_inside_a_column0_fence_are_not_new_entries(self):
+        """The per-new-entry allowance cannot be inflated by fenced `- ` lines
+        (iter_entries reads a column-0 fence as code)."""
+        base = _unreleased(_entry("old", 200))
+        fenced = "```\n" + "\n".join("- b" + str(i) for i in range(10)) + "\n```"
+        text = _unreleased(_entry("old", 200), _entry("n", 1500), fenced)
+        issues = gc.lint_entry_caps(text, base)
+        assert len(issues) == 1 and "with 1 new entry" in issues[0], issues
+
+    def test_deleting_old_text_credits_new_text_by_design(self):
+        """Stated boundary: the section did not grow, and the deletion is in
+        the diff for the reviewer."""
+        base = _unreleased(_entry("legacy", 3000))
+        assert gc.lint_entry_caps(_unreleased(_entry("brand-new", 2500)), base) == []
 
     def test_other_sections_are_not_capped(self):
         text = "## [v2.9.0] — T (2026-06-06)\n\n### Fixed\n" + _entry("released", 5000) + "\n"
@@ -931,77 +867,7 @@ class TestNewEntryCap:
         monkeypatch.setattr(sys, "argv", ["gc", "--lint", str(f)])
         assert gc.main() == 1
         out = capsys.readouterr().out
-        assert "1500 chars" in out and "(> 1000)" in out
-
-
-class TestColumnZeroTextIsAnError:
-    """A column-0 line closes the entry above it (that is how
-    `agent_output_metrics.iter_entries` reads the file), so it is the one way
-    to split an entry around the cap. New ones are errors; legacy ones stay."""
-
-    def test_new_column0_text_is_flagged_with_its_line_number(self):
-        base = _unreleased(_entry("old", 200))
-        text = "## [Unreleased]\n\n### Changed\n" + _entry("old", 200) + "\n⇒ out-dented conclusion\n"
-        issues = gc.lint_entry_caps(text, base)
-        assert len(issues) == 1 and issues[0].startswith("L5:") and "belongs to no entry" in issues[0], issues
-
-    def test_legacy_column0_lines_are_keyed_against_the_base(self):
-        text = "## [Unreleased]\n\n### Changed\n" + _entry("old", 200) + "\n| a | b |\n|---|---|\n"
-        assert gc.lint_entry_caps(text, text) == []
-
-    @pytest.mark.parametrize("line", ["### Fixed", "<!-- note -->", "- another bullet", "  continuation", "\tcontinuation"])
-    def test_structural_and_continuation_lines_belong_somewhere(self, line):
-        """A heading/comment is structure; an indented line directly under an
-        open bullet is that bullet's continuation. None of these is a gap."""
-        base = _unreleased(_entry("old", 200))
-        text = "## [Unreleased]\n\n### Changed\n" + _entry("old", 200) + "\n" + line + "\n"
-        assert [i for i in gc.lint_entry_caps(text, base) if "belongs to no entry" in i] == []
-
-    def test_indented_bullet_before_any_entry_is_open_is_a_gap(self):
-        """Blind-review BLOCK: `  - **fat**` as the first thing under a
-        heading renders as a normal list item but `iter_entries` drops it,
-        so 1200 chars were invisible to the cap. Same for a tab."""
-        base = _unreleased(_entry("old", 200))
-        for indent in ("  ", "\t"):
-            text = "## [Unreleased]\n\n### Changed\n" + indent + _entry("fat", 1200) + "\n" + _entry("old", 200) + "\n"
-            issues = gc.lint_entry_caps(text, base)
-            assert any("belongs to no entry" in i for i in issues), (indent, issues)
-
-    @pytest.mark.parametrize("splitter", ["<!-- -->", "### 續"])
-    def test_text_split_off_by_a_comment_or_heading_is_a_gap(self, splitter):
-        """The splitter itself is structure, but the indented text after it
-        belongs to no entry — that text is what the split was hiding."""
-        base = _unreleased(_entry("old", 200))
-        text = ("## [Unreleased]\n\n### Changed\n" + _entry("n", 900) + "\n" + splitter + "\n"
-                + "  " + "y" * 900 + "\n  " + "y" * 900 + "\n")
-        issues = gc.lint_entry_caps(text, base)
-        assert sum("belongs to no entry" in i for i in issues) == 2, issues
-
-    def test_a_long_heading_or_comment_line_is_not_structure(self):
-        """Round 3: `### Fixed — <3300 chars>` was exempt in full because the
-        prefix was structural. Structure is short."""
-        base = _unreleased(_entry("old", 200))
-        for line in ("### Fixed — " + "w" * 300, "<!-- " + "w" * 300 + " -->"):
-            text = "## [Unreleased]\n\n### Changed\n" + _entry("old", 200) + "\n" + line + "\n"
-            assert any("belongs to no entry" in i for i in gc.lint_entry_caps(text, base)), line[:20]
-        short = "## [Unreleased]\n\n### Changed\n" + _entry("old", 200) + "\n### Fixed\n<!-- ok -->\n"
-        assert gc.lint_entry_caps(short, base) == []
-
-    def test_a_legacy_column0_line_reused_as_a_splitter_still_exposes_the_tail(self):
-        base = "## [Unreleased]\n\n### Changed\n" + _entry("old", 200) + "\n|---|---|\n"
-        text = ("## [Unreleased]\n\n### Changed\n" + _entry("old", 200) + "\n|---|---|\n"
-                + _entry("n", 900) + "\n|---|---|\n  " + "y" * 900 + "\n")
-        issues = gc.lint_entry_caps(text, base)
-        assert sum("belongs to no entry" in i for i in issues) == 1, issues
-
-    def test_splitting_an_oversize_entry_with_column0_text_does_not_evade(self):
-        """One shape of the evasion this check exists for: 600 + out-dent +
-        600 would be two entries of 600 without it (the other shapes —
-        indented bullet, comment, heading, legacy splitter — are above)."""
-        base = _unreleased(_entry("old", 200))
-        text = "## [Unreleased]\n\n### Changed\n" + _entry("old", 200) + "\n" + _entry("n", 600) + "\ntail " + "z" * 600 + "\n"
-        issues = gc.lint_entry_caps(text, base)
-        assert any("belongs to no entry" in i for i in issues), issues
+        assert "grew by" in out and "over HEAD" in out
 
 
 class TestEveryCiCallerFetchesThePrBase:
@@ -1070,7 +936,7 @@ class TestCapBase:
         monkeypatch.setattr(sys, "argv", ["gc", "--base", "HEAD", "--lint", str(f)])
         assert gc.main() == 1
         captured = capsys.readouterr()
-        assert "counts as new" in captured.out and "1500 chars" in captured.out
+        assert "counts as new" in captured.out and "grew by" in captured.out
 
     def test_git_show_reads_the_committed_version(self, tmp_path, monkeypatch):
         """Real git, no mocks: the working tree may differ from HEAD."""

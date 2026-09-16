@@ -19,14 +19,13 @@ Usage:
 """
 
 import argparse
-import difflib
 import os
 import re
 import subprocess
 import sys
-from collections import Counter, defaultdict
+from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Tuple
 
 # Add script dir to path for lib imports
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -385,69 +384,17 @@ def lint_changelog(changelog_path: str = "CHANGELOG.md") -> List[str]:
 
 CAP_SECTION = "Unreleased"
 
-# Column-0 lines that are structure inside a `## [Unreleased]` block and may
-# legitimately sit between entries. Everything else in the block must belong
-# to an entry: `iter_entries` drops any other line (out-dented text, a bullet
-# indented before any entry is open, text after a splitter) and a dropped
-# line is exactly how length hides from the cap. New lines of that shape are
-# errors; the legacy ones already in CHANGELOG.md are keyed against the base.
-_STRUCTURAL_PREFIXES = ("### ", "<!--")
 
-# Above this many over-cap groups the base is probably not the commit this
-# branch grew from (release wrap-up moved [Unreleased], unrelated ref...).
-# Listing 400 findings hides that one fact, so say it and show the first few.
-_BASE_MISMATCH_THRESHOLD = 25
-
-# A bullet line this similar to a base bullet line IS that entry (a typo fix
-# in a legacy headline). A near-copy of a legacy headline above new prose is
-# charged as that entry's excess, which is what makes copying pointless.
-_NEAR_KEY_RATIO = 0.85
-
-# Similarity is O(unmatched head entries x base entries). With the length
-# bound below it is ~0.02 s per unmatched headline against this file's base;
-# the worst case (every legacy headline rewritten at once) is a one-off cost,
-# not a reason for a budget: a budget that stops probing turns a near-copy
-# into its own group, and per-group charging is not additive, so it is
-# LENIENT, not strict (blind review, round 5).
-
-# A `### ` or `<!--` line longer than this is prose wearing a structural
-# prefix, not structure; it is charged like any other new line.
-_STRUCTURAL_LINE_MAX = 200
-
-
-def _entry_key(body: str) -> str:
-    """The bullet line identifies an entry across edits below it."""
-    return body.splitlines()[0]
-
-
-def _entry_tail(body: str) -> str:
-    """Everything after the bullet line; identifies a multi-line legacy entry
-    whose bullet line was rewritten beyond recognition."""
-    return "\n".join(body.splitlines()[1:]).strip()
-
-
-def _match_key(key: str, base_keys: Sequence[str]) -> Optional[str]:
-    """The base bullet line this one is (exact, else the most similar one at
-    or above ``_NEAR_KEY_RATIO``); None when it is a new headline."""
-    if key in base_keys:
-        return key
-    best, best_ratio = None, 0.0
-    for candidate in base_keys:
-        shorter, longer = sorted((len(key), len(candidate)))
-        # difflib's own upper bound (its real_quick_ratio) is 2s/(s+l), NOT
-        # s/l: the latter pruned true matches with length ratio in
-        # [0.739, 0.85) — every legacy headline trimmed by 16-28% read as a
-        # brand-new entry (blind review, round 5). Skip only what the bound
-        # rules out, before paying for the matcher.
-        if longer == 0 or 2 * shorter / (shorter + longer) < _NEAR_KEY_RATIO:
-            continue
-        sm = difflib.SequenceMatcher(None, key, candidate)
-        if sm.real_quick_ratio() < _NEAR_KEY_RATIO or sm.quick_ratio() < _NEAR_KEY_RATIO:
-            continue
-        ratio = sm.ratio()
-        if ratio > best_ratio:
-            best, best_ratio = candidate, ratio
-    return best if best_ratio >= _NEAR_KEY_RATIO else None
+def _section_size(text: str, section: str) -> Optional[Tuple[int, int]]:
+    """(characters, top-level entries) of ``## [section]``; None when absent.
+    Characters are the whole block, so nothing written there can hide from
+    the cap; entries are counted by ``agent_output_metrics.iter_entries``,
+    so a `- ` inside a column-0 fence is code, not a new entry."""
+    found = section_lines(text, section)
+    if found is None:
+        return None
+    heading_no, block = found
+    return len("\n".join(block)), sum(1 for _ in iter_entries(block, heading_no + 1))
 
 
 def lint_entry_caps(
@@ -457,139 +404,40 @@ def lint_entry_caps(
     section: str = CAP_SECTION,
     base_label: str = "the base",
 ) -> List[str]:
-    """Cap what ``## [section]`` ADDS, per entry, at ``cap`` characters.
+    """Cap how much ``## [section]`` GROWS over the base, per new entry.
 
-    Every entry is matched to the base entries it is a version of — the ones
-    with the same (or a near-identical) bullet line, else the ones with the
-    same tail (the lines below the bullet), else none — and entries whose
-    matches overlap form one group (union-find over base entries, so a base
-    entry funds exactly one group: keeping a legacy entry AND pasting its
-    tail under a new headline lands both in the same group). A group is
-    charged ``sum(len of its entries) - sum(len of the base entries it
-    matched)``: a typo fix in a legacy headline or a new sub-bullet under it
-    costs its delta; a brand-new entry costs its full length; a copy of a
-    base headline or tail costs the copy's own length wherever it sits.
-    Within one group a deleted base entry credits the others (the group did
-    not grow) — that is the same "editing history" boundary as below.
-    Length is the raw entry text, sub-bullets and evidence included: when
-    this file was measured only one over-cap entry owed it to a table
-    (#1737). ⛔ Rewriting a legacy entry's body UNDER its own headline is an
-    edit of history, not new length, by design — a reviewer sees that diff.
-    Splitting new content across several entries each under the cap is the
-    per-entry cap's nature, not a hole it claims to close.
+    ``growth`` = the section's characters minus the base's; ``new`` = its
+    entries minus the base's. The section may grow by ``cap`` per new entry,
+    and by ``cap`` in total when it adds none (so a legacy entry may be
+    corrected or extended a little, but not fattened). One finding, or none.
 
-    Every non-blank line in the section must be part of an entry, or a
-    ``### `` / ``<!--`` line of at most ``_STRUCTURAL_LINE_MAX`` chars, or a
-    line the base already had. Anything else (out-dented text, a bullet
-    indented before any entry is open, text after a heading/comment/column-0
-    fence that closed the entry above) is what ``iter_entries`` cannot see,
-    so it is an error.
+    This deliberately does NOT match entries to each other. Five review
+    rounds of "which entry is new" found a hole in every version: each
+    exemption (same headline, similar headline, same tail, structural line)
+    was a splitter, and the matching machinery itself grew bugs. Growth of
+    the whole block has no exemptions, so nothing can hide length from it.
+    Boundaries, stated rather than defended: deleting old text credits new
+    text (the section did not grow); adding extra bullets dilutes the
+    average. Both are in plain sight in the diff, which is where a reviewer
+    catches them.
     """
-    found = section_lines(text, section)
-    if found is None:
+    head = _section_size(text, section)
+    if head is None:
         return []
-    heading_no, block = found
-    base_found = section_lines(base_text, section) if base_text is not None else None
-    base_block = base_found[1] if base_found else []
-    base_entries = [b for _, b in iter_entries(base_block, 1)]
-    by_key: Dict[str, List[int]] = defaultdict(list)
-    by_tail: Dict[str, List[int]] = defaultdict(list)
-    for i, b in enumerate(base_entries):
-        by_key[_entry_key(b)].append(i)
-        tail = _entry_tail(b)
-        if tail:
-            by_tail[tail].append(i)
-    base_keys = list(by_key)
-    base_lines = set(base_block)
-
-    # union-find over base entry indices: a base entry funds ONE group
-    parent = list(range(len(base_entries)))
-
-    def find(i: int) -> int:
-        while parent[i] != i:
-            parent[i] = parent[parent[i]]
-            i = parent[i]
-        return i
-
-    def union(ids: List[int]) -> int:
-        root = find(ids[0])
-        for j in ids[1:]:
-            parent[find(j)] = root
-        return root
-
-    head: List[Tuple[int, str, Optional[List[int]]]] = []   # (line, body, matched base ids)
-    consumed = set()
-    for no, body in iter_entries(block, heading_no + 1):
-        start = no - (heading_no + 1)
-        consumed.update(range(start, start + body.count("\n") + 1))
-        key = _entry_key(body)
-        if key in by_key:
-            matched = by_key[key]
-        else:
-            near = _match_key(key, base_keys)
-            if near is not None:
-                matched = by_key[near]
-            else:
-                tail = _entry_tail(body)
-                matched = by_tail.get(tail) if tail else None
-        if matched:
-            union(matched)
-        head.append((no, body, matched))
-
-    # group id -> (line numbers, head total, base ids)
-    groups: Dict[str, Tuple[List[int], int, List[int]]] = {}
-    for no, body, matched in head:
-        if matched:
-            root = find(matched[0])
-            gid = f"base:{root}"
-            base_ids = [i for i in range(len(base_entries)) if find(i) == root]
-        else:
-            gid, base_ids = f"new:{no}", []
-        nos, total, _ = groups.get(gid, ([], 0, base_ids))
-        groups[gid] = (nos + [no], total + len(body), base_ids)
-
-    over: List[str] = []
-    for nos, total, base_ids in groups.values():
-        had = sum(len(base_entries[i]) for i in base_ids)
-        added = total - had
-        if added <= cap:
-            continue
-        where = ", ".join(f"L{n}" for n in nos)
-        tail_msg = ("; keep the conclusion here and move the measurements to the "
-                    "PR body or an issue comment")
-        if not base_ids:
-            over.append(f"{where}: new entry adds {added} chars over {base_label} (> {cap}){tail_msg}")
-            continue
-        headline = _entry_key(base_entries[base_ids[0]])[:40]
-        if len(nos) == 1:
-            over.append(f"{where}: entry grew by {added} chars over its version in {base_label} "
-                        f"«{headline}…» (> {cap}){tail_msg}")
-        else:
-            over.append(f"{where}: entries matched to the entry «{headline}…» in {base_label} "
-                        f"add {added} chars in total (> {cap}){tail_msg}")
-    if len(over) > _BASE_MISMATCH_THRESHOLD:
-        first = "; ".join(o.split(":")[0] for o in over[:3])
-        over = [
-            f"{len(over)} entries add more than {cap} chars over {base_label} "
-            f"(first: {first}). Either {base_label} is not the commit this branch "
-            f"grew from (release wrap-up, unrelated ref: pass --base <that commit>) "
-            f"or the section really grew that much"
-        ]
-    issues = over
-    for offset, line in enumerate(block):
-        if offset in consumed or not line.strip() or line in base_lines:
-            continue
-        if line.startswith(_STRUCTURAL_PREFIXES) and len(line) <= _STRUCTURAL_LINE_MAX:
-            continue
-        issues.append(
-            f"L{heading_no + 1 + offset}: line belongs to no entry in [{section}] "
-            f"(out-dented, indented before any bullet, split off by a "
-            f"heading/comment/column-0 fence, or a heading/comment longer than "
-            f"{_STRUCTURAL_LINE_MAX} chars), so no cap can see it; make it "
-            f"continuation of the `- ` bullet above (two-space indent under an "
-            f"open bullet) or its own `- ` entry"
-        )
-    return issues
+    head_chars, head_entries = head
+    base = _section_size(base_text, section) if base_text is not None else None
+    base_chars, base_entries = base if base else (0, 0)
+    growth = head_chars - base_chars
+    new = max(head_entries - base_entries, 0)
+    allowed = cap * max(new, 1)
+    if growth <= allowed:
+        return []
+    return [
+        f"[{section}] grew by {growth} chars over {base_label} with {new} new "
+        f"entr{'y' if new == 1 else 'ies'} (allowed {allowed} = {cap} per new entry, "
+        f"or {cap} in total with none); keep the conclusions in the changelog and "
+        f"move the measurements to the PR body or an issue comment"
+    ]
 
 
 def _ref_exists(ref: str) -> bool:
@@ -680,17 +528,17 @@ def main() -> int:
         # it also matches CHANGELOG-archive.md, and editing that would have run
         # a check that never opened it (#1765).
         help="Lint changelog file format (semver/Unreleased headers, dates, "
-             "subsections) and cap what each [Unreleased] entry ADDS over the base; "
-             "defaults to CHANGELOG.md",
+             "subsections) and cap how much [Unreleased] grows over the base per "
+             "new entry; defaults to CHANGELOG.md",
     )
     parser.add_argument(
         "--cap",
         type=non_negative_int,
         default=ENTRY_CAP,
         metavar="N",
-        help=f"Max characters an [Unreleased] entry (or the entries sharing one base "
-             f"entry) may ADD over the base in --lint (default {ENTRY_CAP}; 0 disables). "
-             f"A legacy entry is charged only its growth; a new entry its full length.",
+        help=f"Max characters [Unreleased] may grow over the base per new entry in "
+             f"--lint (default {ENTRY_CAP}; 0 disables); with no new entry the whole "
+             f"section may grow by at most that.",
     )
     parser.add_argument(
         "--base",
