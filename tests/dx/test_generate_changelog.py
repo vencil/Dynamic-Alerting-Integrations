@@ -436,6 +436,14 @@ class TestLintCannotBeSilencedByTheFileItself:
         issues = gc.lint_changelog(str(f))
         assert any("not a recognised section heading" in i for i in issues), issues
 
+    def test_a_double_spaced_unreleased_heading_is_named(self, tmp_path):
+        """`##  [Unreleased]` (two spaces) matched neither the semver pattern
+        nor the old `## [` heading pattern, so the section vanished from this
+        lint AND the entry cap with no output (blind review, PR-C)."""
+        f = self._make(tmp_path, "##  [Unreleased]\n\n### Fixed\n- a\n")
+        issues = gc.lint_changelog(str(f))
+        assert any("not a recognised section heading" in i for i in issues), issues
+
     def test_a_fenced_heading_is_not_real_structure(self, tmp_path):
         """An entry that DOCUMENTS changelog markup must not be read as
         markup. Both directions: no phantom duplicate from the fence…"""
@@ -792,6 +800,34 @@ class TestNewEntryCap:
         edited = _unreleased(legacy + "\n  - a new sub-bullet added later")
         assert gc.lint_entry_caps(edited, base) == []
 
+    def test_copying_a_base_bullet_line_does_not_buy_a_second_exempt_entry(self):
+        """Blind review: keys were a set, so pasting an existing bullet line
+        above 1200 new chars made the whole entry 'existing'."""
+        base = _unreleased(_entry("old", 200))
+        text = _unreleased(_entry("old", 200), _entry("old", 200) + "\n  " + "x" * 1200)
+        issues = gc.lint_entry_caps(text, base)
+        assert len(issues) == 1 and "chars (> 1000)" in issues[0], issues
+
+    def test_rewording_a_legacy_bullet_line_keeps_the_entry_exempt(self):
+        """Fixing a typo in the bullet line of an 18,905-char legacy entry must
+        not demand that the history be rewritten: the tail identifies it."""
+        legacy = _entry("legacy", 100) + "\n  - " + "x" * 2900   # bullet line + a tail
+        base = _unreleased(legacy)
+        reworded = legacy.replace("- **legacy**:", "- **legacy (typo fixed)**:", 1)
+        assert gc.lint_entry_caps(_unreleased(reworded), base) == []
+        # A one-line entry HAS no tail: rewording its bullet line rewrites the
+        # whole entry, and that is new content.
+        one_liner = _entry("solo", 1500)
+        assert len(gc.lint_entry_caps(_unreleased(one_liner.replace("solo", "solo2")), _unreleased(one_liner))) == 1
+
+    def test_a_base_that_is_not_the_parent_collapses_to_one_finding(self):
+        """Release wrap-up moved [Unreleased] out of the base: 400 'new
+        entries' are one fact, not 400 findings."""
+        entries = [_entry(f"e{i}", 1500) for i in range(30)]
+        text = _unreleased(*entries)
+        issues = gc.lint_entry_caps(text, _unreleased(_entry("other", 50)), base_label="origin/main")
+        assert len(issues) == 1 and "30 new entries" in issues[0] and "origin/main" in issues[0], issues
+
     def test_no_base_means_everything_is_new(self):
         text = _unreleased(_entry("a", 1500))
         assert len(gc.lint_entry_caps(text, None)) == 1
@@ -828,25 +864,55 @@ class TestColumnZeroTextIsAnError:
         base = _unreleased(_entry("old", 200))
         text = "## [Unreleased]\n\n### Changed\n" + _entry("old", 200) + "\n⇒ out-dented conclusion\n"
         issues = gc.lint_entry_caps(text, base)
-        assert len(issues) == 1 and issues[0].startswith("L5:") and "column-0" in issues[0], issues
+        assert len(issues) == 1 and issues[0].startswith("L5:") and "belongs to no entry" in issues[0], issues
 
     def test_legacy_column0_lines_are_keyed_against_the_base(self):
         text = "## [Unreleased]\n\n### Changed\n" + _entry("old", 200) + "\n| a | b |\n|---|---|\n"
         assert gc.lint_entry_caps(text, text) == []
 
-    @pytest.mark.parametrize("line", ["### Fixed", "<!-- note -->", "- another bullet", "  indented", "\tindented"])
-    def test_structural_lines_are_not_column0_text(self, line):
+    @pytest.mark.parametrize("line", ["### Fixed", "<!-- note -->", "- another bullet", "  continuation", "\tcontinuation"])
+    def test_structural_and_continuation_lines_belong_somewhere(self, line):
+        """A heading/comment is structure; an indented line directly under an
+        open bullet is that bullet's continuation. None of these is a gap."""
         base = _unreleased(_entry("old", 200))
         text = "## [Unreleased]\n\n### Changed\n" + _entry("old", 200) + "\n" + line + "\n"
-        assert [i for i in gc.lint_entry_caps(text, base) if "column-0" in i] == []
+        assert [i for i in gc.lint_entry_caps(text, base) if "belongs to no entry" in i] == []
+
+    def test_indented_bullet_before_any_entry_is_open_is_a_gap(self):
+        """Blind-review BLOCK: `  - **fat**` as the first thing under a
+        heading renders as a normal list item but `iter_entries` drops it,
+        so 1200 chars were invisible to the cap. Same for a tab."""
+        base = _unreleased(_entry("old", 200))
+        for indent in ("  ", "\t"):
+            text = "## [Unreleased]\n\n### Changed\n" + indent + _entry("fat", 1200) + "\n" + _entry("old", 200) + "\n"
+            issues = gc.lint_entry_caps(text, base)
+            assert any("belongs to no entry" in i for i in issues), (indent, issues)
+
+    @pytest.mark.parametrize("splitter", ["<!-- -->", "### 續"])
+    def test_text_split_off_by_a_comment_or_heading_is_a_gap(self, splitter):
+        """The splitter itself is structure, but the indented text after it
+        belongs to no entry — that text is what the split was hiding."""
+        base = _unreleased(_entry("old", 200))
+        text = ("## [Unreleased]\n\n### Changed\n" + _entry("n", 900) + "\n" + splitter + "\n"
+                + "  " + "y" * 900 + "\n  " + "y" * 900 + "\n")
+        issues = gc.lint_entry_caps(text, base)
+        assert sum("belongs to no entry" in i for i in issues) == 2, issues
+
+    def test_a_legacy_column0_line_reused_as_a_splitter_still_exposes_the_tail(self):
+        base = "## [Unreleased]\n\n### Changed\n" + _entry("old", 200) + "\n|---|---|\n"
+        text = ("## [Unreleased]\n\n### Changed\n" + _entry("old", 200) + "\n|---|---|\n"
+                + _entry("n", 900) + "\n|---|---|\n  " + "y" * 900 + "\n")
+        issues = gc.lint_entry_caps(text, base)
+        assert sum("belongs to no entry" in i for i in issues) == 1, issues
 
     def test_splitting_an_oversize_entry_with_column0_text_does_not_evade(self):
-        """The evasion this check exists for: 600 + out-dent + 600 would be
-        two entries of 600 without it."""
+        """One shape of the evasion this check exists for: 600 + out-dent +
+        600 would be two entries of 600 without it (the other shapes —
+        indented bullet, comment, heading, legacy splitter — are above)."""
         base = _unreleased(_entry("old", 200))
         text = "## [Unreleased]\n\n### Changed\n" + _entry("old", 200) + "\n" + _entry("n", 600) + "\ntail " + "z" * 600 + "\n"
         issues = gc.lint_entry_caps(text, base)
-        assert any("column-0" in i for i in issues), issues
+        assert any("belongs to no entry" in i for i in issues), issues
 
 
 class TestCapBase:
@@ -858,9 +924,28 @@ class TestCapBase:
         monkeypatch.setattr(gc, "_ref_exists", lambda ref: ref == "origin/main")
         assert gc.default_cap_base({"GITHUB_BASE_REF": "main"}) == "origin/main"
 
-    def test_pr_run_falls_back_to_head_when_base_is_not_fetched(self, monkeypatch):
+    def test_pr_run_without_the_fetched_base_is_none_not_head(self, monkeypatch):
+        """Falling back to HEAD on a PR run would be a cap that silently does
+        not exist; the answer is None and main() turns it into exit 2."""
         monkeypatch.setattr(gc, "_ref_exists", lambda ref: False)
-        assert gc.default_cap_base({"GITHUB_BASE_REF": "main"}) == "HEAD"
+        assert gc.default_cap_base({"GITHUB_BASE_REF": "main"}) is None
+
+    def test_unfetched_pr_base_is_a_caller_error_naming_the_fetch(self, tmp_path, monkeypatch, capsys):
+        f = tmp_path / "history.md"
+        f.write_text(_unreleased(_entry("n", 10)), encoding="utf-8")
+        monkeypatch.setenv("GITHUB_BASE_REF", "main")
+        monkeypatch.setattr(gc, "_ref_exists", lambda ref: False)
+        monkeypatch.setattr(sys, "argv", ["gc", "--lint", str(f)])
+        assert gc.main() == EXIT_CALLER_ERROR
+        assert "git fetch --no-tags origin main" in capsys.readouterr().err
+
+    def test_negative_cap_is_a_caller_error_not_a_silent_off_switch(self, tmp_path, monkeypatch):
+        f = tmp_path / "history.md"
+        f.write_text(_unreleased(_entry("n", 1500)), encoding="utf-8")
+        monkeypatch.setattr(sys, "argv", ["gc", "--cap", "-1", "--lint", str(f)])
+        with pytest.raises(SystemExit) as exc:
+            gc.main()
+        assert exc.value.code == 2
 
     def test_missing_base_file_prints_a_notice_and_counts_everything(self, tmp_path, monkeypatch, capsys):
         f = tmp_path / "history.md"
@@ -869,7 +954,7 @@ class TestCapBase:
         monkeypatch.setattr(sys, "argv", ["gc", "--base", "HEAD", "--lint", str(f)])
         assert gc.main() == 1
         captured = capsys.readouterr()
-        assert "counts as new" in captured.err and "1500 chars" in captured.out
+        assert "counts as new" in captured.out and "1500 chars" in captured.out
 
     def test_git_show_reads_the_committed_version(self, tmp_path, monkeypatch):
         """Real git, no mocks: the working tree may differ from HEAD."""

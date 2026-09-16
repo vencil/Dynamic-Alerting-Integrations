@@ -23,7 +23,7 @@ import os
 import re
 import subprocess
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -45,6 +45,7 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E
 from agent_output_metrics import (  # noqa: E402
     DEFAULT_CAP as ENTRY_CAP,
     iter_entries,
+    non_negative_int,
     section_lines,
 )
 
@@ -305,7 +306,10 @@ def lint_changelog(changelog_path: str = "CHANGELOG.md") -> List[str]:
     # heading does not fail — it makes its whole section invisible, silently.
     # `## [Unrelesed]` (typo) and `## [2.10.0]` (missing `v`, which
     # `bump_docs._RELEASED_CHANGELOG_HEADING` requires) both linted clean.
-    heading_re = re.compile(r"^\#\# \[")
+    # ⛔ `^##\s` not `^## \[`: `##  [Unreleased]` (two spaces) matched
+    # neither pattern, so the section vanished from BOTH this lint and the
+    # entry cap with no output at all (blind review, PR-C).
+    heading_re = re.compile(r"^##\s")
     date_re = re.compile(r"\((\d{4}-\d{2}-\d{2})\)")
     subsection_re = re.compile(r"^### ")
     # Fence tracking: without it a fenced example of changelog markup is read
@@ -380,18 +384,30 @@ def lint_changelog(changelog_path: str = "CHANGELOG.md") -> List[str]:
 
 CAP_SECTION = "Unreleased"
 
-# Column-0 lines that are structure, not text, inside a `## [Unreleased]`
-# block. Anything else at column 0 closes the entry above it (see
-# `agent_output_metrics.iter_entries`), which is exactly how an entry could be
-# split around the cap — so a NEW line of that shape is an error, not a style
-# nit. The legacy ones already in CHANGELOG.md are keyed against the base.
-_STRUCTURAL_PREFIXES = ("- ", "  ", "\t", "### ", "<!--")
+# Column-0 lines that are structure inside a `## [Unreleased]` block and may
+# legitimately sit between entries. Everything else in the block must belong
+# to an entry: `iter_entries` drops any other line (out-dented text, a bullet
+# indented before any entry is open, text after a splitter) and a dropped
+# line is exactly how length hides from the cap. New lines of that shape are
+# errors; the legacy ones already in CHANGELOG.md are keyed against the base.
+_STRUCTURAL_PREFIXES = ("### ", "<!--")
+
+# Above this many over-cap NEW entries the base is not the commit this branch
+# grew from (release wrap-up moved [Unreleased], unrelated ref...). Listing
+# 400 findings hides that one fact, so say it instead.
+_BASE_MISMATCH_THRESHOLD = 25
 
 
 def _entry_key(body: str) -> str:
-    """The bullet line identifies an entry across edits: touching a legacy
-    entry's second paragraph must not pull the whole entry under the cap."""
+    """The bullet line identifies an entry across edits below it."""
     return body.splitlines()[0]
+
+
+def _entry_tail(body: str) -> str:
+    """Everything after the bullet line; identifies a legacy entry whose
+    bullet line was reworded (a typo fix must not pull 18,905 chars of
+    history under the cap)."""
+    return "\n".join(body.splitlines()[1:]).strip()
 
 
 def lint_entry_caps(
@@ -399,16 +415,24 @@ def lint_entry_caps(
     base_text: Optional[str],
     cap: int = ENTRY_CAP,
     section: str = CAP_SECTION,
+    base_label: str = "the base",
 ) -> List[str]:
     """Cap NEW top-level entries of ``## [section]`` at ``cap`` characters.
 
-    New = the bullet line does not occur in ``base_text``'s same section
-    (``None`` = no base, everything is new). Length is the raw entry text,
+    New = neither the bullet line (counted: the n-th copy of a base bullet
+    line is only exempt while the base has n of them) nor the tail (the
+    lines below the bullet) occurs in ``base_text``'s same section;
+    ``None`` = no base, everything is new. Length is the raw entry text,
     sub-bullets and evidence included: the cap is on what a reader scrolls
-    past, and when this file was measured only one over-cap entry owed it to
-    a table (#1737). Also flags NEW column-0 non-structural lines in the
-    section: they close the entry above them, which is the one way to hide
-    length from this check.
+    past, and when this file was measured only one over-cap entry owed it
+    to a table (#1737).
+
+    Every non-blank line in the section must be part of an entry or a
+    ``### `` / ``<!--`` structural line. A line that belongs to no entry
+    (out-dented text, a bullet indented before any entry is open, text
+    after a heading/comment/column-0 fence that closed the entry above)
+    is what ``iter_entries`` cannot see, so it is an error unless the base
+    already had that exact line.
     """
     found = section_lines(text, section)
     if found is None:
@@ -416,27 +440,48 @@ def lint_entry_caps(
     heading_no, block = found
     base_found = section_lines(base_text, section) if base_text is not None else None
     base_block = base_found[1] if base_found else []
-    base_keys = {_entry_key(body) for _, body in iter_entries(base_block, 1)}
+    base_entries = list(iter_entries(base_block, 1))
+    base_keys: Counter = Counter(_entry_key(b) for _, b in base_entries)
+    base_tails = {tail for tail in (_entry_tail(b) for _, b in base_entries) if tail}
     base_lines = set(base_block)
-    issues: List[str] = []
+
+    over: List[str] = []
+    seen: Counter = Counter()
+    consumed = set()
     for no, body in iter_entries(block, heading_no + 1):
-        if _entry_key(body) in base_keys:
+        start = no - (heading_no + 1)
+        consumed.update(range(start, start + body.count("\n") + 1))
+        key = _entry_key(body)
+        seen[key] += 1
+        if seen[key] <= base_keys[key]:
+            continue
+        if _entry_tail(body) in base_tails:
             continue
         n = len(body)
         if n > cap:
-            issues.append(
+            over.append(
                 f"L{no}: new entry is {n} chars (> {cap}); keep the conclusion "
                 f"here and move the measurements to the PR body or an issue comment"
             )
+    if len(over) > _BASE_MISMATCH_THRESHOLD:
+        over = [
+            f"{len(over)} new entries over {cap} chars against {base_label}: that "
+            f"many means {base_label} is not the commit this branch grew from "
+            f"(release wrap-up, unrelated ref), not a changelog problem; pass "
+            f"--base <the commit this branch grew from>"
+        ]
+    issues = over
     for offset, line in enumerate(block):
-        if not line.strip() or line.startswith(_STRUCTURAL_PREFIXES):
+        if offset in consumed or not line.strip():
             continue
-        if line in base_lines:
+        if line.startswith(_STRUCTURAL_PREFIXES) or line in base_lines:
             continue
         issues.append(
-            f"L{heading_no + 1 + offset}: column-0 text inside [{section}] "
-            f"closes the entry above it; indent it by two spaces (an out-dented "
-            f"line would split an entry around the {cap}-char cap)"
+            f"L{heading_no + 1 + offset}: line belongs to no entry in [{section}] "
+            f"(out-dented, indented before any bullet, or split off by a "
+            f"heading/comment/column-0 fence), so no cap can see it; make it "
+            f"continuation of the `- ` bullet above (two-space indent under an "
+            f"open bullet) or its own `- ` entry"
         )
     return issues
 
@@ -452,20 +497,23 @@ def _ref_exists(ref: str) -> bool:
     return r.returncode == 0
 
 
-def default_cap_base(env: Optional[Dict[str, str]] = None) -> str:
+def default_cap_base(env: Optional[Dict[str, str]] = None) -> Optional[str]:
     """Which commit "new" is measured against.
 
     On a PR run GitHub sets ``GITHUB_BASE_REF`` (e.g. ``main``) and the merge
     ref's HEAD already CONTAINS the new entries, so HEAD would see nothing
-    new; use ``origin/<base>`` when it is fetched. Otherwise HEAD, which is
-    what the pre-commit hook wants: staged file vs last commit.
+    new; the answer is ``origin/<base>``. ⛔ If that ref is not fetched the
+    answer is None, NOT HEAD: falling back to HEAD on a PR is a cap that
+    silently does not exist, and a green run would look identical. The
+    caller turns None into a caller error naming the fetch. Off a PR run
+    it is HEAD, which is what the pre-commit hook wants: staged file vs
+    last commit.
     """
     env = os.environ if env is None else env
     base_ref = env.get("GITHUB_BASE_REF", "").strip()
     if base_ref:
         candidate = f"origin/{base_ref}"
-        if _ref_exists(candidate):
-            return candidate
+        return candidate if _ref_exists(candidate) else None
     return "HEAD"
 
 
@@ -530,7 +578,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--cap",
-        type=int,
+        type=non_negative_int,
         default=ENTRY_CAP,
         metavar="N",
         help=f"Max characters per NEW [Unreleased] entry in --lint "
@@ -568,18 +616,26 @@ def main() -> int:
             issues += [f"{target}: {i}" for i in found]
             if args.cap > 0:
                 base = args.base or default_cap_base()
+                if base is None:
+                    ref = os.environ.get("GITHUB_BASE_REF", "").strip()
+                    print(f"ERROR: GITHUB_BASE_REF={ref} is set but origin/{ref} "
+                          f"is not fetched, so the new-entry cap has no base; run "
+                          f"`git fetch --no-tags origin {ref}` (checkout "
+                          f"fetch-depth: 0 alone does not guarantee that ref)",
+                          file=sys.stderr)
+                    return EXIT_CALLER_ERROR
                 base_text = _git_show(base, target)
                 if base_text is None:
+                    # stdout on purpose: validate_all's runner shows stdout only.
                     print(f"notice: {target} not found at {base}; every "
-                          f"[{CAP_SECTION}] entry counts as new for the cap",
-                          file=sys.stderr)
+                          f"[{CAP_SECTION}] entry counts as new for the cap")
                 try:
                     text = p.read_text(encoding="utf-8")
                 except (OSError, UnicodeDecodeError) as exc:
                     print(f"ERROR: could not read {target}: {exc}", file=sys.stderr)
                     return EXIT_CALLER_ERROR
-                issues += [f"{target}: {i}"
-                           for i in lint_entry_caps(text, base_text, args.cap)]
+                issues += [f"{target}: {i}" for i in
+                           lint_entry_caps(text, base_text, args.cap, base_label=base)]
         if issues:
             print(f"❌ {len(issues)} changelog format issue(s):")
             for issue in issues:

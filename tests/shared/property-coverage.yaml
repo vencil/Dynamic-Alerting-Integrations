@@ -134,6 +134,7 @@ modules:
       main: "CLI entry point; covered by CLI integration tests"
       lint_entry_caps: "Example-driven cap lint over parsed entries; the boundary/retro/column-0 cases are pinned in tests/dx/test_generate_changelog.py (TestNewEntryCap, TestColumnZeroTextIsAnError)"
       _entry_key: "One-line accessor (first line of an entry); covered by the cap tests"
+      _entry_tail: "One-line accessor (lines below the bullet); the reworded-bullet exemption is pinned in TestNewEntryCap"
       default_cap_base: "Env + git ref probe; three branches pinned in TestCapBase"
       _ref_exists: "Side-effecting (git subprocess)"
       _git_show: "Side-effecting (git subprocess); real-repo test in TestCapBase"
