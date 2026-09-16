@@ -15,6 +15,7 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ### Removed
 
+- **`docs/assets/social-preview.svg` — 零讀者、隨 MkDocs 發佈、圖面數字已過期（dx；[#1868](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1868)）**：圖面上手寫的 rule-pack 數與版本號沒有寫入端、也沒有 gate 對帳；repo 內零引用，GitHub repo 也沒有把它設成 social preview。判準同下一則，刪檔。要對外的社群卡片時，先接上產生器再加回來，不要放回手寫數字。
 - **`docs/assets/badge-data.json` — 零讀者的死檔（dx；[#1848](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1848)）**：這個 JSON 除了 `version` 之外全是手寫計數，repo 內沒有任何工具重算它們、也沒有任何 gate 對帳，而 `bump_docs.py` 唯一那條寫入規則只替換 `version` 欄位。它與 README 上的 badge **無關**——那些數字寫死在 shields.io 網址裡，由 `_version_patterns.py` + `version-consistency` 守著（#1268）。依「不是刪掉，就是給它機械化的 SSOT」：沒有消費端的數字補 SSOT 買不到偵測力，所以刪檔；`bump_docs.py` 那條規則必須同一顆 commit 一起刪，否則 `tests/dx/test_bump_docs.py::TestLiveRepoRuleTargetsExist::test_every_rule_target_file_exists` 會紅（規則指向不存在的檔）。
 - ⚠️ **未排除的風險**：`docs/assets/**` 會隨 MkDocs 發佈，repo 外的消費者查不到。已量到的是 repo 內零引用、da-portal 映像的 Dockerfile 沒有 COPY 它。若日後真出現外部消費者，正確的處置是**先接上寫入端與檢查端再加回來**，不是把手寫數字放回去。
 
