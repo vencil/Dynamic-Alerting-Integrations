@@ -38,6 +38,7 @@ import argparse
 import datetime as _dt
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -62,6 +63,19 @@ _INTERPRETER_CANDIDATES: tuple[tuple[str, ...], ...] = (
     ("python3",),
     ("python",),
 )
+
+# `run-hooks.sh <guard.py>`：launcher 後第一個以 .py 結尾的字。
+_GUARD_SCRIPT_RE = re.compile(r"run-hooks\.sh\"?\s+([A-Za-z0-9_.-]+\.py)")
+
+# 每支 guard 該掛的 event 與 matcher 必須涵蓋的工具名（agent 指引改善計畫
+# PR-D 把 2 支擴成 5 支）。空 tuple ＝ 該 event 不用 matcher（Stop）。
+_REQUIRED_WIRING: dict[str, tuple[str, tuple[str, ...]]] = {
+    "session-init.py": ("PreToolUse", ("Bash", "Write", "Edit")),
+    "preflight_bash.py": ("PreToolUse", ("Bash", "Write")),
+    "skill_usage.py": ("PreToolUse", ("Skill",)),
+    "paths_map.py": ("PreToolUse", ("Edit", "Write", "Bash")),
+    "stop_evidence.py": ("Stop", ()),
+}
 
 
 def _iter_hook_commands(settings: dict) -> list[str]:
@@ -119,10 +133,82 @@ def check_settings_routing(settings_path: Path) -> list[str]:
             )
     if guard_cmds and not _LAUNCHER.exists():
         violations.append(f"launcher 不存在: {_LAUNCHER}")
-    for guard in ("session-init.py", "preflight_bash.py"):
-        if any(guard in c for c in guard_cmds) and not (_GUARD_DIR / guard).exists():
-            violations.append(f"guard script 不存在: {_GUARD_DIR / guard}")
+    # 被引用的 guard script 從命令字串推導（`run-hooks.sh <guard.py>`），不列舉：
+    # 列舉表只認得寫進去的那幾支，新掛的 hook 指到不存在的檔會靜默放行。
+    for cmd in guard_cmds:
+        for guard in _GUARD_SCRIPT_RE.findall(cmd):
+            if not (_GUARD_DIR / guard).exists():
+                violations.append(f"guard script 不存在: {_GUARD_DIR / guard}")
     return violations
+
+
+def check_required_wiring(settings_path: Path) -> list[str]:
+    """Check 1b：每支 guard 都掛在它該掛的 event／matcher 上。
+
+    這是規格釘，不是推導：hook 被拿掉或 matcher 改成配不到的字串，
+    guard 檔還在、routing 檢查仍綠，但 guard 再也不會被叫到（#824 的另一種
+    死法）。matcher 比對照 Claude Code 的規則——純字元的 `A|B` 是精確字串
+    表；含 regex 字元時當 regex 對工具名 search。
+    """
+    violations: list[str] = []
+    if not settings_path.exists():
+        return violations
+    try:
+        settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return violations  # check_settings_routing 已回報
+    for guard, (event, tools) in _REQUIRED_WIRING.items():
+        wired = False
+        for entry in (settings.get("hooks") or {}).get(event) or []:
+            cmds = [(h or {}).get("command") or "" for h in (entry or {}).get("hooks") or []]
+            if not any(guard in c for c in cmds):
+                continue
+            matcher = (entry or {}).get("matcher")
+            if all(_matcher_hits(matcher, t) for t in tools):
+                wired = True
+                break
+        if not wired:
+            need = f"{event}" + (f" matcher 涵蓋 {'/'.join(tools)}" if tools else "")
+            violations.append(f"{guard} 未接線：需要 {need}（.claude/settings.json）")
+    return violations
+
+
+def _matcher_hits(matcher: object, tool: str) -> bool:
+    """Claude Code matcher 語意：空／缺＝全配；純字元＝`|`／`,` 分隔的精確表；否則 regex。"""
+    if not matcher:
+        return True
+    if not isinstance(matcher, str):
+        return False
+    if re.fullmatch(r"[A-Za-z0-9_\- ,|]+", matcher):
+        return tool in [m.strip() for m in re.split(r"[|,]", matcher)]
+    try:
+        return re.search(matcher, tool) is not None
+    except re.error:
+        return False
+
+
+def check_paths_map() -> list[str]:
+    """Check 1c：paths_map.py 讀的 `.agents/paths-map.json` 必須能通過它自己的驗證。
+
+    hook 端對壞掉的 map 只會 fail-loud 一次；把驗證放在 commit 時才是擋得住
+    「map 改壞了、每個 session 都沒有路徑指引」的地方。走 subprocess 而非
+    import：guard 是 script 不是 module，且要用 gate 自己的直譯器跑一次。
+    """
+    script = _GUARD_DIR / "paths_map.py"
+    if not script.exists():
+        return []  # 缺檔由 check_settings_routing 回報
+    try:
+        result = subprocess.run(
+            [sys.executable, "-X", "utf8", str(script), "--validate"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=30, stdin=subprocess.DEVNULL, cwd=str(_REPO_ROOT),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return [f"paths_map.py --validate 跑不起來: {exc}"]
+    if result.returncode != 0:
+        return [f"paths-map 無效（paths_map.py --validate rc={result.returncode}）: "
+                f"{(result.stderr or result.stdout).strip()}"]
+    return []
 
 
 def check_heartbeat() -> str | None:
@@ -157,6 +243,8 @@ def main() -> int:
     parser.parse_args()
 
     violations = check_settings_routing(_SETTINGS)
+    violations += check_required_wiring(_SETTINGS)
+    violations += check_paths_map()
 
     # Check 3 只在 settings 真的掛了 guard 時才有意義
     if not violations and _SETTINGS.exists():

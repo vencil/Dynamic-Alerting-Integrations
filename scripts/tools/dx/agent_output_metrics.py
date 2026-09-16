@@ -279,26 +279,44 @@ def measure_changelog(text: str, section: str, cap: int, top: int) -> Optional[d
 # ============================================================
 
 
-def has_evidence_fence(body: str) -> bool:
-    """True when some fenced block's first non-blank line starts with ``$ ``.
+def evidence_commands(body: str) -> List[str]:
+    """Every ``$ <command>`` line inside an evidence fence, command text only.
 
-    A fence is closed only by the marker that opened it, so a ``~~~`` line
-    inside a backtick block is content, not a closer.
+    An evidence fence is a fenced block whose first non-blank line starts with
+    ``$ ``; later ``$ `` lines in the same block are further commands, other
+    lines are output. A fence is closed only by the marker that opened it, so a
+    ``~~~`` line inside a backtick block is content, not a closer.
+
+    This is the one ruler for "is there evidence, and of what": the PR-body
+    metric asks whether the list is non-empty, the Stop hook
+    (`scripts/session-guards/stop_evidence.py`) asks whether each command in
+    it was actually run this turn.
     """
     fence: Optional[str] = None
     awaiting_first = False
-    for line in body.splitlines():
+    in_evidence = False
+    out: List[str] = []
+    for line in body.split("\n"):
         m = _FENCE_RE.match(line)
         if m:
             fence, toggled = fence_step(fence, m.group(1), m.group(2))
             if toggled:
                 awaiting_first = fence is not None
+                in_evidence = False
                 continue
-        if fence is not None and awaiting_first and line.strip():
-            if _EVIDENCE_FIRST_LINE_RE.match(line):
-                return True
+        if fence is None or not line.strip():
+            continue
+        if awaiting_first:
             awaiting_first = False
-    return False
+            in_evidence = bool(_EVIDENCE_FIRST_LINE_RE.match(line))
+        if in_evidence and _EVIDENCE_FIRST_LINE_RE.match(line):
+            out.append(line.strip()[2:].strip())
+    return out
+
+
+def has_evidence_fence(body: str) -> bool:
+    """True when some fenced block's first non-blank line starts with ``$ ``."""
+    return bool(evidence_commands(body))
 
 
 def _run_gh(state: str, limit: int) -> str:

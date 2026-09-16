@@ -50,7 +50,7 @@ report 寫到 `docs/internal/audit-reports/rules-drift-YYYY-MM.md`（atomic writ
 
 ## vibe-* skill 汰除（dead-weight 防治；epic #570 retrospective）
 
-每季 audit 逐一檢查每個本地 `vibe-*` skill **過去一季是否在其領域內被實際觸發**（subagent-review: multi-file PR review；release: 發版；brainstorm: 設計討論；workflow/dev-rules/playbook-nav: 日常）。**連續 2 季 0 觸發 = dead weight，audit 時強制刪除**（對齊 `feedback_speculative_drift_prefer_remove`）。觸發案例寫進 CHANGELOG / PR body 當佐證。**理由**：epic #570 交付 3 個新 skill 但收尾時 subagent-review/release **0 觸發**、brainstorm 僅 1（Gap A）；無問責機制會養出沒人用的 skill。
+每季 audit 逐一檢查每個本地 `vibe-*` skill **過去一季是否在其領域內被實際觸發**（subagent-review: multi-file PR review；release: 發版；brainstorm: 設計討論；workflow/dev-rules/playbook-nav: 日常）。**連續 2 季 0 觸發 = dead weight，audit 時強制刪除**（對齊 `feedback_speculative_drift_prefer_remove`）。觸發案例寫進 CHANGELOG / PR body 當佐證。**理由**：epic #570 交付 3 個新 skill 但收尾時 subagent-review/release **0 觸發**、brainstorm 僅 1（Gap A）；無問責機制會養出沒人用的 skill。本機 Claude Code session 的觸發次數由 PreToolUse `Skill` hook 寫成帳本，audit 時直接讀：`bash scripts/session-guards/run-hooks.sh skill_usage.py --stats --since-days 90`（只涵蓋 project root 是本 repo checkout 的 session，web 多 repo session 不在內）。
 
 ## 文件 staleness 防線：lint 層 vs dogfood 層（#141）
 

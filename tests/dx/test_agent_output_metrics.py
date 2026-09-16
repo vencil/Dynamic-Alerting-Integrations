@@ -212,6 +212,26 @@ def test_dollar_in_prose_is_not_evidence():
     assert not aom.has_evidence_fence("cost is $ 5 and\n$ nope outside fence\n")
 
 
+def test_evidence_commands_lists_every_command_line_of_an_evidence_fence():
+    body = "claim\n```\n$ make test\nok\n  $ pytest -q\n3 passed\n```\n"
+    assert aom.evidence_commands(body) == ["make test", "pytest -q"]
+
+
+def test_evidence_commands_ignores_fences_that_do_not_open_with_a_command():
+    # `$ later` inside an output-first block is output, not a command
+    assert aom.evidence_commands("```\nplain\n$ later\n```\n") == []
+    # an evidence fence after a non-evidence one is still found
+    assert aom.evidence_commands("```\nplain\n```\n```\n$ ls\n```\n") == ["ls"]
+    # a `$ ` line after a non-`$` output line in an evidence fence is still a command
+    assert aom.evidence_commands("```\n$ a\nout\n$ b\n```\n") == ["a", "b"]
+
+
+def test_evidence_commands_and_has_evidence_fence_are_one_ruler():
+    for body in ("```\n$ a\n```\n", "```\nx\n```\n", "prose $ a\n", "~~~\n\n$ a\n~~~\n",
+                 "```\nx\n~~~\n~~~\n$ ls\n```\n"):
+        assert aom.has_evidence_fence(body) is bool(aom.evidence_commands(body)), body
+
+
 def test_fence_whose_first_line_is_not_a_command_is_not_evidence():
     assert not aom.has_evidence_fence("```\nplain output\n$ later line\n```\n")
     assert not aom.has_evidence_fence("```python\nx = 1\n```\n")

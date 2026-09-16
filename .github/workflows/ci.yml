@@ -236,6 +236,18 @@ jobs:
               - "k8s/**"
               - "try-local/**"
               - "pyproject.toml"
+              #   - .agents/** — tests/dx/test_paths_map.py reads the real
+              #     .agents/paths-map.json (every `read` target must exist and
+              #     name a live heading); tests/dx/test_gen_agent_adapters.py
+              #     re-projects the whole SSOT tree to assert the checked-in
+              #     adapters are in sync. .cursor/** and .github/instructions/**
+              #     are that projection's OUTPUT roots: a hand edit there is
+              #     drift the same in-sync test exists to catch, so a PR touching
+              #     only those files must run it (the pre-commit hook covers the
+              #     local side; this covers the PR side).
+              - ".agents/**"
+              - ".cursor/**"
+              - ".github/instructions/**"
               # ⛔ The pin SSOT this job INSTALLS FROM, not a file any test
               # reads. Every `pip install … -c requirements/ci-constraints.txt`
               # in CI (#1158) resolves versions here, so this file decides the

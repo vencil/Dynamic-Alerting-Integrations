@@ -18,6 +18,35 @@
             "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/session-guards/run-hooks.sh\" preflight_bash.py"
           }
         ]
+      },
+      {
+        "matcher": "Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/session-guards/run-hooks.sh\" skill_usage.py"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/session-guards/run-hooks.sh\" paths_map.py"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/session-guards/run-hooks.sh\" stop_evidence.py",
+            "timeout": 30
+          }
+        ]
       }
     ],
     "SessionStart": [

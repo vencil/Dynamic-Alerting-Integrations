@@ -20,6 +20,22 @@ and this script projects that tree into whatever each vendor actually reads:
                                     read natively by Codex, Cursor, Copilot,
                                     Gemini CLI and Grok
 
+A second, smaller SSOT rides along (agent 指引改善計畫 PR-D):
+
+    .agents/paths-map.json          glob -> "read this section" + one constraint
+
+projected into each vendor's own path-scoped mechanism, so the three agree on
+what a path means without three hand-kept copies:
+
+    .cursor/skills/vibe-paths-<id>/SKILL.md      Cursor: `paths:` frontmatter
+    .github/instructions/vibe-paths-<id>.instructions.md
+                                                 Copilot: `applyTo:` frontmatter
+    (Claude Code reads the JSON directly, from the PreToolUse hook
+     scripts/session-guards/paths_map.py; nothing to project)
+
+Both output roots are OWNED by this generator: a stray file under either is
+reported as `extra` and removed by `--generate`, exactly like `.claude/skills`.
+
 WHY COPIES AND NOT SYMLINKS
 ===========================
 Symlinks are not an option here, and that is measured rather than assumed: this
@@ -58,6 +74,8 @@ EXIT CODES (scripts/tools/_lib_exitcodes.py)
 from __future__ import annotations
 
 import argparse
+import importlib.util
+import json
 import os
 import stat
 import sys
@@ -80,6 +98,18 @@ SSOT_ROLES = ".agents/roles"
 OUT_SKILLS = ".claude/skills"
 OUT_ROLES = ".claude/agents"
 OUT_ENTRY = "AGENTS.md"
+
+# Path-triggered guidance (PR-D). One JSON SSOT, two projected roots. JSON and
+# not YAML because both consumers run without pyyaml: the Claude hook on the
+# host interpreter, this generator in the pre-commit venv.
+SSOT_PATHS_MAP = ".agents/paths-map.json"
+OUT_CURSOR = ".cursor/skills"
+OUT_COPILOT = ".github/instructions"
+PATHS_PREFIX = "vibe-paths-"
+PATHS_MAP_VALIDATOR = "scripts/session-guards/paths_map.py"
+
+# Every directory this generator owns outright (walked for stale files).
+OUT_ROOTS = (OUT_SKILLS, OUT_ROLES, OUT_CURSOR, OUT_COPILOT)
 
 # A skill's `evals/` directory stays SSOT-only: it holds trigger eval sets
 # (JSON) that MEASURE the skill, not instruction text. No vendor reads it, and
@@ -122,13 +152,15 @@ COMMENT_STYLES = {
 }
 
 
-def provenance(source_rel, eol=b"\n"):
+def provenance(source_rel, eol=b"\n", style_of=None):
     """The single line that separates an adapter from its source, or b"" .
 
     Returns empty bytes for a suffix with no known comment syntax: silence is
-    recoverable, a syntactically invalid marker is not.
+    recoverable, a syntactically invalid marker is not. `style_of` picks the
+    comment syntax from a different path than the one named — the paths-map
+    outputs are markdown generated from a JSON source.
     """
-    style = COMMENT_STYLES.get(os.path.splitext(source_rel)[1].lower())
+    style = COMMENT_STYLES.get(os.path.splitext(style_of or source_rel)[1].lower())
     if style is None:
         return b""
     open_tag, close_tag = style
@@ -200,7 +232,91 @@ def source_of(dest_rel):
     for ssot_root, out_root in ((SSOT_SKILLS, OUT_SKILLS), (SSOT_ROLES, OUT_ROLES)):
         if dest_rel == out_root or dest_rel.startswith(out_root + "/"):
             return ssot_root + dest_rel[len(out_root):]
+    for out_root in (OUT_CURSOR, OUT_COPILOT):
+        if dest_rel.startswith(out_root + "/"):
+            return SSOT_PATHS_MAP
     raise KeyError(f"{dest_rel} is not a projected adapter path")
+
+
+# ============================================================
+# paths-map projection
+# ============================================================
+
+
+def paths_map_entries():
+    """The validated entry list of `.agents/paths-map.json`.
+
+    Validation is borrowed from the hook that consumes the same file
+    (`paths_map.validate_map`), so the generator and the runtime reader cannot
+    disagree about what a well-formed map is. Raises FileNotFoundError when
+    either file is absent and ValueError when the map is malformed.
+    """
+    # The validator is code shipped next to this generator, so it resolves
+    # from this file's own tree; REPO_ROOT names the SSOT/adapter tree, which
+    # tests point at a fixture directory that carries no scripts/.
+    validator_abs = os.path.normpath(os.path.join(_THIS_DIR, "..", "..", "..", PATHS_MAP_VALIDATOR))
+    map_abs = os.path.join(REPO_ROOT, SSOT_PATHS_MAP)
+    if not os.path.isfile(map_abs):
+        return []  # no map, no projections; --generate then prunes stale ones
+    if not os.path.isfile(validator_abs):
+        raise FileNotFoundError(PATHS_MAP_VALIDATOR)
+    spec = importlib.util.spec_from_file_location("_paths_map_validator", validator_abs)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    with open(map_abs, encoding="utf-8") as fh:
+        data = json.load(fh)
+    try:
+        return mod.validate_map(data)
+    except mod.MapError as exc:
+        raise ValueError(f"{SSOT_PATHS_MAP}: {exc}") from exc
+
+
+def _yaml_str(value):
+    """A double-quoted YAML scalar; JSON's escaping is a valid subset."""
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _paths_map_body(entry):
+    lines = [f"# {PATHS_PREFIX}{entry['id']}", ""]
+    reads = entry.get("read") or []
+    if reads:
+        lines.append("先讀：")
+        for r in reads:
+            lines.append(f"- `{r['file']}`" + (f" §{r['section']}" if r.get("section") else ""))
+        lines.append("")
+    lines.append(f"約束：{entry['note']}")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def cursor_skill_bytes(entry):
+    """`.cursor/skills/<name>/SKILL.md` — Cursor attaches it while the agent
+    reads or edits a file matching `paths:` (cursor.com/docs/skills)."""
+    name = PATHS_PREFIX + entry["id"]
+    desc = f"Vibe 路徑觸發指引：動到 {'、'.join(entry['paths'])} 之前先讀的章節與一句約束。"
+    fm = ["---", f"name: {name}", f"description: {_yaml_str(desc)}", "paths:"]
+    fm += [f"  - {_yaml_str(p)}" for p in entry["paths"]]
+    fm.append("---")
+    head = ("\n".join(fm) + "\n").encode("utf-8")
+    return head + provenance(SSOT_PATHS_MAP, style_of="x.md") + _paths_map_body(entry).encode("utf-8")
+
+
+def copilot_instruction_bytes(entry):
+    """`.github/instructions/<name>.instructions.md` — Copilot applies it to
+    files matching the comma-joined `applyTo` globs (docs.github.com)."""
+    fm = ["---", f"applyTo: {_yaml_str(','.join(entry['paths']))}", "---"]
+    head = ("\n".join(fm) + "\n").encode("utf-8")
+    return head + provenance(SSOT_PATHS_MAP, style_of="x.md") + _paths_map_body(entry).encode("utf-8")
+
+
+def paths_map_outputs():
+    """dest_rel -> bytes for every paths-map projection."""
+    plan = {}
+    for entry in paths_map_entries():
+        name = PATHS_PREFIX + entry["id"]
+        plan[f"{OUT_CURSOR}/{name}/SKILL.md"] = cursor_skill_bytes(entry)
+        plan[f"{OUT_COPILOT}/{name}.instructions.md"] = copilot_instruction_bytes(entry)
+    return plan
 
 
 class UnsafePath(Exception):
@@ -292,6 +408,7 @@ def planned_outputs():
             with open(os.path.join(REPO_ROOT, source_rel), "rb") as fh:
                 plan[dest_rel] = project(fh.read(), source_rel)
     plan[OUT_ENTRY] = build_entry()
+    plan.update(paths_map_outputs())
     return plan
 
 
@@ -342,7 +459,7 @@ def build_entry():
 def existing_outputs():
     """Adapter files currently on disk, so stale ones can be reported/removed."""
     found = set()
-    for out_root in (OUT_SKILLS, OUT_ROLES):
+    for out_root in OUT_ROOTS:
         abs_root = os.path.join(REPO_ROOT, out_root)
         for dirpath, _dirs, files in os.walk(abs_root):
             for name in files:
@@ -387,7 +504,7 @@ def write_outputs(plan):
         os.remove(os.path.join(REPO_ROOT, dest_rel))
         removed.append(dest_rel)
     # An emptied skill dir left behind would still be discovered by the vendor.
-    for out_root in (OUT_SKILLS, OUT_ROLES):
+    for out_root in OUT_ROOTS:
         for dirpath, dirs, files in os.walk(os.path.join(REPO_ROOT, out_root),
                                             topdown=False):
             if not files and not dirs and dirpath != os.path.join(REPO_ROOT, out_root):
@@ -430,7 +547,8 @@ def main(argv=None):
         missing, stale, extra = diff_against_disk(plan)
         if not (missing or stale or extra):
             print(f"✅ agent adapters in sync ({len(plan)} files from "
-                  f"{SSOT_SKILLS}/, {SSOT_ROLES}/, and the {OUT_ENTRY} index)")
+                  f"{SSOT_SKILLS}/, {SSOT_ROLES}/, {SSOT_PATHS_MAP}, and the "
+                  f"{OUT_ENTRY} index)")
             return EXIT_OK
         for label, items in (("missing", missing), ("stale", stale),
                              ("extra (no SSOT source)", extra)):

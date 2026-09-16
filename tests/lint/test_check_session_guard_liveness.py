@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -167,3 +168,155 @@ class TestHeartbeat:
         mod, *_ = env
         monkeypatch.setenv("CI", "true")
         assert mod.check_heartbeat() is None
+
+
+# ---------------------------------------------------------------------------
+# PR-D: guard derivation, required wiring, paths-map validation
+# ---------------------------------------------------------------------------
+
+_LAUNCH = 'bash "$CLAUDE_PROJECT_DIR/scripts/session-guards/run-hooks.sh" '
+
+
+def _full_wiring():
+    """The shape `.claude/settings.json` ships with (five guards, three events)."""
+    return {
+        "PreToolUse": [
+            ("Bash|Write|Edit|MultiEdit", _LAUNCH + "session-init.py"),
+            ("Bash|Write", _LAUNCH + "preflight_bash.py"),
+            ("Skill", _LAUNCH + "skill_usage.py"),
+            ("Edit|Write|MultiEdit|Bash", _LAUNCH + "paths_map.py"),
+        ],
+        "Stop": [(None, _LAUNCH + "stop_evidence.py")],
+    }
+
+
+def _write_wiring(path: Path, wiring: dict) -> None:
+    hooks = {}
+    for event, entries in wiring.items():
+        hooks[event] = []
+        for matcher, cmd in entries:
+            entry = {"hooks": [{"type": "command", "command": cmd}]}
+            if matcher is not None:
+                entry["matcher"] = matcher
+            hooks[event].append(entry)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"hooks": hooks}), encoding="utf-8")
+
+
+class TestGuardDerivation:
+    def test_a_referenced_guard_that_does_not_exist_is_flagged_whatever_its_name(self, env):
+        """Discriminating against the old two-name tuple: `ghost.py` was not in
+        it, so a hook pointing at a missing script passed the gate silently."""
+        mod, settings, guard_dir, launcher = env
+        launcher.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+        _write_settings(settings, [_LAUNCH + "ghost.py"])
+        violations = mod.check_settings_routing(settings)
+        assert any("ghost.py" in v for v in violations), violations
+
+    def test_the_script_name_is_taken_from_the_command_not_guessed(self, mod=None):
+        mod = _load_module()
+        assert mod._GUARD_SCRIPT_RE.findall(_LAUNCH + "paths_map.py") == ["paths_map.py"]
+        assert mod._GUARD_SCRIPT_RE.findall(_LAUNCH + "skill_usage.py --stats") == ["skill_usage.py"]
+        assert mod._GUARD_SCRIPT_RE.findall('bash run-hooks.sh session-init.py') == ["session-init.py"]
+
+
+class TestMatcherSemantics:
+    @pytest.mark.parametrize("matcher,tool,expected", [
+        (None, "Skill", True),
+        ("", "Skill", True),
+        ("Skill", "Skill", True),
+        ("Skill", "Bash", False),
+        ("Edit|Write|Bash", "Write", True),
+        ("Edit, Write", "Write", True),
+        ("Bash|Write", "Skill", False),
+        (".*", "Skill", True),
+        ("Sk.*", "Skill", True),
+        ("mcp__.*", "Skill", False),
+        ("Skil", "Skill", False),   # plain text is an exact match, not a substring
+        ("(", "Skill", False),      # broken regex never matches
+    ])
+    def test_matcher_hits(self, matcher, tool, expected):
+        mod = _load_module()
+        assert mod._matcher_hits(matcher, tool) is expected
+
+
+class TestRequiredWiring:
+    def test_the_shipped_shape_passes(self, env):
+        mod, settings, *_ = env
+        _write_wiring(settings, _full_wiring())
+        assert mod.check_required_wiring(settings) == []
+
+    def test_absent_settings_is_not_a_wiring_error(self, env):
+        mod, settings, *_ = env
+        assert mod.check_required_wiring(settings) == []
+
+    @pytest.mark.parametrize("drop", ["session-init.py", "preflight_bash.py", "skill_usage.py",
+                                      "paths_map.py", "stop_evidence.py"])
+    def test_each_missing_guard_is_named(self, env, drop):
+        mod, settings, *_ = env
+        wiring = {ev: [(m, c) for m, c in entries if drop not in c]
+                  for ev, entries in _full_wiring().items()}
+        _write_wiring(settings, wiring)
+        violations = mod.check_required_wiring(settings)
+        assert len(violations) == 1 and drop in violations[0], violations
+
+    def test_a_matcher_that_cannot_reach_the_tool_is_flagged(self, env):
+        """The guard file exists and is launcher-routed, but `Skill` calls
+        never reach it — the #824 death with a different face."""
+        mod, settings, *_ = env
+        wiring = _full_wiring()
+        wiring["PreToolUse"][2] = ("Bash", _LAUNCH + "skill_usage.py")
+        _write_wiring(settings, wiring)
+        violations = mod.check_required_wiring(settings)
+        assert len(violations) == 1 and "skill_usage.py" in violations[0] and "Skill" in violations[0]
+
+    def test_a_regex_matcher_that_covers_the_tools_passes(self, env):
+        mod, settings, *_ = env
+        wiring = _full_wiring()
+        wiring["PreToolUse"][2] = (".*", _LAUNCH + "skill_usage.py")
+        _write_wiring(settings, wiring)
+        assert mod.check_required_wiring(settings) == []
+
+    def test_stop_guard_wired_on_the_wrong_event_is_flagged(self, env):
+        mod, settings, *_ = env
+        wiring = _full_wiring()
+        wiring["PreToolUse"].append((None, wiring.pop("Stop")[0][1]))
+        _write_wiring(settings, wiring)
+        violations = mod.check_required_wiring(settings)
+        assert len(violations) == 1 and "stop_evidence.py" in violations[0] and "Stop" in violations[0]
+
+
+class TestPathsMapGate:
+    def test_absent_validator_is_another_checks_job(self, env):
+        mod, *_ = env  # env's guard_dir is empty
+        assert mod.check_paths_map() == []
+
+    def test_the_checked_in_map_validates(self):
+        mod = _load_module()
+        assert mod.check_paths_map() == []
+
+    def test_a_failing_validator_is_flagged_with_its_message(self, env):
+        mod, _settings, guard_dir, _launcher = env
+        (guard_dir / "paths_map.py").write_text(
+            "import sys\nsys.stderr.write('[paths-map] INVALID: boom\\n')\nsys.exit(1)\n",
+            encoding="utf-8")
+        violations = mod.check_paths_map()
+        assert len(violations) == 1 and "boom" in violations[0]
+
+    def test_main_includes_all_three_new_checks(self, env, monkeypatch, capsys):
+        """`main()` must actually call them — a helper nobody wires is the
+        gate-exists-but-never-runs shape."""
+        mod, settings, guard_dir, launcher = env
+        launcher.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+        for g in ("session-init.py", "preflight_bash.py", "skill_usage.py", "paths_map.py"):
+            (guard_dir / g).write_text("", encoding="utf-8")
+        # stop_evidence.py deliberately absent AND unwired → both derivations fire
+        wiring = _full_wiring()
+        wiring.pop("Stop")
+        _write_wiring(settings, wiring)
+        monkeypatch.setattr(sys, "argv", ["x", "--ci"])
+        monkeypatch.setenv("CI", "true")
+        rc = mod.main()
+        out = capsys.readouterr().out
+        assert rc == mod.EXIT_VIOLATION
+        assert "stop_evidence.py 未接線" in out

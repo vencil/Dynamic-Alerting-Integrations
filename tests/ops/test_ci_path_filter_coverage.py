@@ -1181,6 +1181,11 @@ PYTHON_ENTRIES_THIS_SCANNER_JUSTIFIES = {
     # points this scanner at `rule-packs/**`. Recorded per this test's own
     # instruction ("A GAINED entry is normally fine: add it here").
     "rule-packs/**",
+    # GAINED by agent 指引改善計畫 PR-D: tests/dx/test_paths_map.py reads the
+    # real `.agents/paths-map.json` (every `read` target must exist and name a
+    # live heading), the first pytest read under `.agents/`. Recorded per this
+    # test's own instruction.
+    ".agents/**",
 }
 
 
