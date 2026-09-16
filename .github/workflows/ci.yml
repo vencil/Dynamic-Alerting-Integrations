@@ -417,9 +417,10 @@ jobs:
       - name: Fetch the PR base (changelog-format's new-entry cap diffs against origin/$GITHUB_BASE_REF)
         # fetch-depth: 0 does not guarantee an origin/<base> ref; the cap
         # exits 2 rather than silently falling back to HEAD when it is absent.
-        # Shell-guarded, not a step `if:`: tests/ops/test_ci_path_filter_coverage.py
-        # refuses step conditions on computed values inside a path-gated job.
-        # GITHUB_BASE_REF is empty on push / schedule runs, so this is a no-op there.
+        # Shell-guarded rather than a step `if:` so the three callers stay
+        # identical (docs-ci's copy sits in a path-gated job, where
+        # tests/ops/test_ci_path_filter_coverage.py refuses computed step
+        # conditions). GITHUB_BASE_REF is empty on push / schedule runs.
         run: |
           if [ -n "${GITHUB_BASE_REF}" ]; then
             git fetch --no-tags origin "${GITHUB_BASE_REF}"
@@ -1944,6 +1945,14 @@ jobs:
           # by GitHub, not a conventional commit) and fails. Same root
           # cause as the Lint job fix in #9 — apply it here too.
           fetch-depth: 0
+
+      - name: Fetch the PR base (changelog_format's new-entry cap diffs against origin/$GITHUB_BASE_REF)
+        # Same step as the Lint job: the cap exits 2 when the base ref is
+        # absent rather than silently falling back to HEAD.
+        run: |
+          if [ -n "${GITHUB_BASE_REF}" ]; then
+            git fetch --no-tags origin "${GITHUB_BASE_REF}"
+          fi
 
       - name: Set up Python 3.13
         uses: actions/setup-python@v6

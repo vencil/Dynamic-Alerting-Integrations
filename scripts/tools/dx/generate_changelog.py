@@ -19,13 +19,14 @@ Usage:
 """
 
 import argparse
+import difflib
 import os
 import re
 import subprocess
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 # Add script dir to path for lib imports
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -392,10 +393,19 @@ CAP_SECTION = "Unreleased"
 # errors; the legacy ones already in CHANGELOG.md are keyed against the base.
 _STRUCTURAL_PREFIXES = ("### ", "<!--")
 
-# Above this many over-cap NEW entries the base is not the commit this branch
-# grew from (release wrap-up moved [Unreleased], unrelated ref...). Listing
-# 400 findings hides that one fact, so say it instead.
+# Above this many over-cap groups the base is probably not the commit this
+# branch grew from (release wrap-up moved [Unreleased], unrelated ref...).
+# Listing 400 findings hides that one fact, so say it and show the first few.
 _BASE_MISMATCH_THRESHOLD = 25
+
+# A bullet line this similar to a base bullet line IS that entry (a typo fix
+# in a legacy headline). A near-copy of a legacy headline above new prose is
+# charged as that entry's excess, which is what makes copying pointless.
+_NEAR_KEY_RATIO = 0.85
+
+# A `### ` or `<!--` line longer than this is prose wearing a structural
+# prefix, not structure; it is charged like any other new line.
+_STRUCTURAL_LINE_MAX = 200
 
 
 def _entry_key(body: str) -> str:
@@ -404,10 +414,25 @@ def _entry_key(body: str) -> str:
 
 
 def _entry_tail(body: str) -> str:
-    """Everything after the bullet line; identifies a legacy entry whose
-    bullet line was reworded (a typo fix must not pull 18,905 chars of
-    history under the cap)."""
+    """Everything after the bullet line; identifies a multi-line legacy entry
+    whose bullet line was rewritten beyond recognition."""
     return "\n".join(body.splitlines()[1:]).strip()
+
+
+def _match_key(key: str, base_keys: Sequence[str]) -> Optional[str]:
+    """The base bullet line this one is (exact, else the most similar one at
+    or above ``_NEAR_KEY_RATIO``); None when it is a new headline."""
+    if key in base_keys:
+        return key
+    best, best_ratio = None, 0.0
+    for candidate in base_keys:
+        sm = difflib.SequenceMatcher(None, key, candidate)
+        if sm.real_quick_ratio() < _NEAR_KEY_RATIO or sm.quick_ratio() < _NEAR_KEY_RATIO:
+            continue
+        ratio = sm.ratio()
+        if ratio > best_ratio:
+            best, best_ratio = candidate, ratio
+    return best if best_ratio >= _NEAR_KEY_RATIO else None
 
 
 def lint_entry_caps(
@@ -417,22 +442,27 @@ def lint_entry_caps(
     section: str = CAP_SECTION,
     base_label: str = "the base",
 ) -> List[str]:
-    """Cap NEW top-level entries of ``## [section]`` at ``cap`` characters.
+    """Cap what ``## [section]`` ADDS, per entry, at ``cap`` characters.
 
-    New = neither the bullet line (counted: the n-th copy of a base bullet
-    line is only exempt while the base has n of them) nor the tail (the
-    lines below the bullet) occurs in ``base_text``'s same section;
-    ``None`` = no base, everything is new. Length is the raw entry text,
-    sub-bullets and evidence included: the cap is on what a reader scrolls
-    past, and when this file was measured only one over-cap entry owed it
-    to a table (#1737).
+    Every entry is matched to what the base already had for it — the base
+    entry with the same (or a near-identical) bullet line, else the base
+    entry with the same tail (the lines below the bullet), else nothing —
+    and the entries that share one match form a group. A group is charged
+    ``sum(len of its entries) - sum(len of the base entries it matched)``:
+    a typo fix in a legacy headline or a new sub-bullet under it costs its
+    delta; a brand-new entry costs its full length; a copy of a base entry
+    costs its excess wherever it sits, so duplicating a headline (or pasting
+    a base tail under a new headline) buys nothing. Length is the raw entry
+    text, sub-bullets and evidence included: when this file was measured
+    only one over-cap entry owed it to a table (#1737). ⛔ Rewriting a
+    legacy entry's body UNDER its own headline is an edit of history, not
+    new length, by design — a reviewer sees that diff.
 
-    Every non-blank line in the section must be part of an entry or a
-    ``### `` / ``<!--`` structural line. A line that belongs to no entry
-    (out-dented text, a bullet indented before any entry is open, text
-    after a heading/comment/column-0 fence that closed the entry above)
-    is what ``iter_entries`` cannot see, so it is an error unless the base
-    already had that exact line.
+    Every non-blank line in the section must be part of an entry, or a
+    short ``### `` / ``<!--`` structural line, or a line the base already
+    had. Anything else (out-dented text, a bullet indented before any entry
+    is open, text after a heading/comment/column-0 fence that closed the
+    entry above) is what ``iter_entries`` cannot see, so it is an error.
     """
     found = section_lines(text, section)
     if found is None:
@@ -440,46 +470,67 @@ def lint_entry_caps(
     heading_no, block = found
     base_found = section_lines(base_text, section) if base_text is not None else None
     base_block = base_found[1] if base_found else []
-    base_entries = list(iter_entries(base_block, 1))
-    base_keys: Counter = Counter(_entry_key(b) for _, b in base_entries)
-    base_tails = {tail for tail in (_entry_tail(b) for _, b in base_entries) if tail}
+    base_entries = [b for _, b in iter_entries(base_block, 1)]
+    base_by_key: Dict[str, List[str]] = defaultdict(list)
+    base_by_tail: Dict[str, List[str]] = defaultdict(list)
+    for b in base_entries:
+        base_by_key[_entry_key(b)].append(b)
+        tail = _entry_tail(b)
+        if tail:
+            base_by_tail[tail].append(b)
+    base_keys = list(base_by_key)
     base_lines = set(base_block)
 
-    over: List[str] = []
-    seen: Counter = Counter()
+    # group id -> (line numbers, head total, base total)
+    groups: Dict[str, Tuple[List[int], int, int]] = {}
     consumed = set()
     for no, body in iter_entries(block, heading_no + 1):
         start = no - (heading_no + 1)
         consumed.update(range(start, start + body.count("\n") + 1))
         key = _entry_key(body)
-        seen[key] += 1
-        if seen[key] <= base_keys[key]:
+        matched = _match_key(key, base_keys)
+        if matched is not None:
+            gid, had = "key:" + matched, sum(len(b) for b in base_by_key[matched])
+        else:
+            tail = _entry_tail(body)
+            if tail and tail in base_by_tail:
+                gid, had = "tail:" + tail, sum(len(b) for b in base_by_tail[tail])
+            else:
+                gid, had = f"new:{no}", 0
+        nos, total, _ = groups.get(gid, ([], 0, had))
+        groups[gid] = (nos + [no], total + len(body), had)
+
+    over: List[str] = []
+    for nos, total, had in groups.values():
+        added = total - had
+        if added <= cap:
             continue
-        if _entry_tail(body) in base_tails:
-            continue
-        n = len(body)
-        if n > cap:
-            over.append(
-                f"L{no}: new entry is {n} chars (> {cap}); keep the conclusion "
-                f"here and move the measurements to the PR body or an issue comment"
-            )
+        where = ", ".join(f"L{n}" for n in nos)
+        what = "new entry" if had == 0 else "entries sharing this headline"
+        over.append(
+            f"{where}: {what} add{'s' if len(nos) == 1 else ''} {added} chars over "
+            f"{base_label} (> {cap}); keep the conclusion here and move the "
+            f"measurements to the PR body or an issue comment"
+        )
     if len(over) > _BASE_MISMATCH_THRESHOLD:
+        head = "; ".join(o.split(":")[0] for o in over[:3])
         over = [
-            f"{len(over)} new entries over {cap} chars against {base_label}: that "
-            f"many means {base_label} is not the commit this branch grew from "
-            f"(release wrap-up, unrelated ref), not a changelog problem; pass "
-            f"--base <the commit this branch grew from>"
+            f"{len(over)} entries add more than {cap} chars over {base_label} "
+            f"(first: {head}). Either {base_label} is not the commit this branch "
+            f"grew from (release wrap-up, unrelated ref: pass --base <that commit>) "
+            f"or the section really grew that much"
         ]
     issues = over
     for offset, line in enumerate(block):
-        if offset in consumed or not line.strip():
+        if offset in consumed or not line.strip() or line in base_lines:
             continue
-        if line.startswith(_STRUCTURAL_PREFIXES) or line in base_lines:
+        if line.startswith(_STRUCTURAL_PREFIXES) and len(line) <= _STRUCTURAL_LINE_MAX:
             continue
         issues.append(
             f"L{heading_no + 1 + offset}: line belongs to no entry in [{section}] "
-            f"(out-dented, indented before any bullet, or split off by a "
-            f"heading/comment/column-0 fence), so no cap can see it; make it "
+            f"(out-dented, indented before any bullet, split off by a "
+            f"heading/comment/column-0 fence, or a heading/comment longer than "
+            f"{_STRUCTURAL_LINE_MAX} chars), so no cap can see it; make it "
             f"continuation of the `- ` bullet above (two-space indent under an "
             f"open bullet) or its own `- ` entry"
         )
@@ -614,15 +665,20 @@ def main() -> int:
                 print(f"ERROR: could not read {target}: {exc}", file=sys.stderr)
                 return EXIT_CALLER_ERROR
             issues += [f"{target}: {i}" for i in found]
+            if args.cap == 0:
+                print(f"notice: --cap 0, the new-entry cap is off for {target}")
             if args.cap > 0:
                 base = args.base or default_cap_base()
                 if base is None:
                     ref = os.environ.get("GITHUB_BASE_REF", "").strip()
-                    print(f"ERROR: GITHUB_BASE_REF={ref} is set but origin/{ref} "
-                          f"is not fetched, so the new-entry cap has no base; run "
-                          f"`git fetch --no-tags origin {ref}` (checkout "
-                          f"fetch-depth: 0 alone does not guarantee that ref)",
-                          file=sys.stderr)
+                    msg = (f"ERROR: GITHUB_BASE_REF={ref} is set but origin/{ref} "
+                           f"is not fetched, so the new-entry cap has no base; run "
+                           f"`git fetch --no-tags origin {ref}` (checkout "
+                           f"fetch-depth: 0 alone does not guarantee that ref)")
+                    # Both streams on purpose: validate_all's runner shows
+                    # stdout only, the hook shows both.
+                    print(msg)
+                    print(msg, file=sys.stderr)
                     return EXIT_CALLER_ERROR
                 base_text = _git_show(base, target)
                 if base_text is None:

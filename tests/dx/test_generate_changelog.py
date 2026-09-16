@@ -781,7 +781,7 @@ class TestNewEntryCap:
         base = _unreleased(_entry("old", 200))
         big = _unreleased(_entry("old", 200), _entry("new", 1500))
         issues = gc.lint_entry_caps(big, base)
-        assert len(issues) == 1 and "1500 chars (> 1000)" in issues[0], issues
+        assert len(issues) == 1 and "adds 1500 chars" in issues[0] and "(> 1000)" in issues[0], issues
         split = _unreleased(_entry("old", 200), _entry("new-a", 700), _entry("new-b", 700))
         assert gc.lint_entry_caps(split, base) == []
 
@@ -800,13 +800,30 @@ class TestNewEntryCap:
         edited = _unreleased(legacy + "\n  - a new sub-bullet added later")
         assert gc.lint_entry_caps(edited, base) == []
 
-    def test_copying_a_base_bullet_line_does_not_buy_a_second_exempt_entry(self):
-        """Blind review: keys were a set, so pasting an existing bullet line
-        above 1200 new chars made the whole entry 'existing'."""
+    @pytest.mark.parametrize("copy_first", [False, True], ids=["after-original", "before-original"])
+    def test_copying_a_base_headline_is_charged_as_the_group_excess_wherever_it_sits(self, copy_first):
+        """Blind review rounds 2+3: keys were a set (a pasted headline made the
+        whole entry 'existing'), then a Counter that handed out exemptions in
+        file order (put the copy first and it was the original that got
+        checked). Now the entries sharing a headline are one group charged
+        with their total excess over the base."""
         base = _unreleased(_entry("old", 200))
-        text = _unreleased(_entry("old", 200), _entry("old", 200) + "\n  " + "x" * 1200)
+        copy = _entry("old", 200) + "\n  " + "x" * 1200
+        text = _unreleased(copy, _entry("old", 200)) if copy_first else _unreleased(_entry("old", 200), copy)
         issues = gc.lint_entry_caps(text, base)
-        assert len(issues) == 1 and "chars (> 1000)" in issues[0], issues
+        assert len(issues) == 1 and "sharing this headline" in issues[0] and "(> 1000)" in issues[0], issues
+
+    def test_a_base_tail_pasted_under_a_new_fat_headline_is_charged_the_headline(self):
+        """Round 3 BLOCK: the tail exemption skipped the whole entry, so any
+        headline + a copied tail was free, any number of times."""
+        legacy = _entry("legacy", 60) + "\n  - " + "t" * 300
+        base = _unreleased(legacy)
+        fat = "- **" + "F" * 1200 + "**: x\n  - " + "t" * 300
+        text = _unreleased(legacy, fat, fat.replace("F" * 3, "G" * 3, 1))
+        issues = gc.lint_entry_caps(text, base)
+        # both copies share the pasted tail, so they are ONE group charged with
+        # both headlines' excess; the finding names both lines
+        assert len(issues) == 1 and "L6, L8" in issues[0] and "(> 1000)" in issues[0], issues
 
     def test_rewording_a_legacy_bullet_line_keeps_the_entry_exempt(self):
         """Fixing a typo in the bullet line of an 18,905-char legacy entry must
@@ -815,10 +832,19 @@ class TestNewEntryCap:
         base = _unreleased(legacy)
         reworded = legacy.replace("- **legacy**:", "- **legacy (typo fixed)**:", 1)
         assert gc.lint_entry_caps(_unreleased(reworded), base) == []
-        # A one-line entry HAS no tail: rewording its bullet line rewrites the
-        # whole entry, and that is new content.
+        # Round 3: 323 legacy entries are one line and over the cap; a typo fix
+        # in such a headline is the same entry (near-identical headline)...
         one_liner = _entry("solo", 1500)
-        assert len(gc.lint_entry_caps(_unreleased(one_liner.replace("solo", "solo2")), _unreleased(one_liner))) == 1
+        assert gc.lint_entry_caps(_unreleased(one_liner.replace("solo", "solo2")), _unreleased(one_liner)) == []
+        # ...a different headline of the same length is a new entry.
+        other = "- **" + "z" * 1490 + "**: "
+        assert len(gc.lint_entry_caps(_unreleased(other), _unreleased(one_liner))) == 1
+
+    def test_rewording_the_headline_and_adding_a_sub_bullet_at_once_costs_the_delta(self):
+        legacy = _entry("legacy", 100) + "\n  - " + "x" * 2900
+        base = _unreleased(legacy)
+        both = legacy.replace("- **legacy**:", "- **legacy, clearer**:", 1) + "\n  - one more sub-bullet"
+        assert gc.lint_entry_caps(_unreleased(both), base) == []
 
     def test_a_base_that_is_not_the_parent_collapses_to_one_finding(self):
         """Release wrap-up moved [Unreleased] out of the base: 400 'new
@@ -826,7 +852,7 @@ class TestNewEntryCap:
         entries = [_entry(f"e{i}", 1500) for i in range(30)]
         text = _unreleased(*entries)
         issues = gc.lint_entry_caps(text, _unreleased(_entry("other", 50)), base_label="origin/main")
-        assert len(issues) == 1 and "30 new entries" in issues[0] and "origin/main" in issues[0], issues
+        assert len(issues) == 1 and "30 entries" in issues[0] and "origin/main" in issues[0] and "L4" in issues[0], issues
 
     def test_no_base_means_everything_is_new(self):
         text = _unreleased(_entry("a", 1500))
@@ -843,16 +869,17 @@ class TestNewEntryCap:
         text = "## [v2.9.0] — T (2026-06-06)\n\n### Fixed\n" + _entry("released", 5000) + "\n"
         assert gc.lint_entry_caps(text, "") == []
 
-    def test_cap_zero_disables_via_cli(self, tmp_path, monkeypatch, capsys):
+    def test_cap_zero_disables_via_cli_and_says_so(self, tmp_path, monkeypatch, capsys):
         f = tmp_path / "history.md"
         f.write_text(_unreleased(_entry("n", 1500)), encoding="utf-8")
         monkeypatch.setattr(gc, "_git_show", lambda ref, path: _unreleased(_entry("old", 5)))
         monkeypatch.setattr(sys, "argv", ["gc", "--cap", "0", "--lint", str(f)])
         assert gc.main() == 0
+        assert "cap is off" in capsys.readouterr().out
         monkeypatch.setattr(sys, "argv", ["gc", "--lint", str(f)])
         assert gc.main() == 1
         out = capsys.readouterr().out
-        assert "1500 chars (> 1000)" in out
+        assert "1500 chars" in out and "(> 1000)" in out
 
 
 class TestColumnZeroTextIsAnError:
@@ -898,6 +925,16 @@ class TestColumnZeroTextIsAnError:
         issues = gc.lint_entry_caps(text, base)
         assert sum("belongs to no entry" in i for i in issues) == 2, issues
 
+    def test_a_long_heading_or_comment_line_is_not_structure(self):
+        """Round 3: `### Fixed — <3300 chars>` was exempt in full because the
+        prefix was structural. Structure is short."""
+        base = _unreleased(_entry("old", 200))
+        for line in ("### Fixed — " + "w" * 300, "<!-- " + "w" * 300 + " -->"):
+            text = "## [Unreleased]\n\n### Changed\n" + _entry("old", 200) + "\n" + line + "\n"
+            assert any("belongs to no entry" in i for i in gc.lint_entry_caps(text, base)), line[:20]
+        short = "## [Unreleased]\n\n### Changed\n" + _entry("old", 200) + "\n### Fixed\n<!-- ok -->\n"
+        assert gc.lint_entry_caps(short, base) == []
+
     def test_a_legacy_column0_line_reused_as_a_splitter_still_exposes_the_tail(self):
         base = "## [Unreleased]\n\n### Changed\n" + _entry("old", 200) + "\n|---|---|\n"
         text = ("## [Unreleased]\n\n### Changed\n" + _entry("old", 200) + "\n|---|---|\n"
@@ -913,6 +950,30 @@ class TestColumnZeroTextIsAnError:
         text = "## [Unreleased]\n\n### Changed\n" + _entry("old", 200) + "\n" + _entry("n", 600) + "\ntail " + "z" * 600 + "\n"
         issues = gc.lint_entry_caps(text, base)
         assert any("belongs to no entry" in i for i in issues), issues
+
+
+class TestEveryCiCallerFetchesThePrBase:
+    """`default_cap_base` exits 2 on a PR run without origin/<base>; a caller
+    that runs the lint without the fetch step turns every PR red (round 3
+    found the third caller, `make lint-docs`, without it)."""
+
+    FETCH = 'git fetch --no-tags origin "${GITHUB_BASE_REF}"'
+
+    def test_each_workflow_job_that_runs_the_lint_fetches_the_base_first(self):
+        import yaml
+        repo = Path(__file__).resolve().parents[2]
+        hits = []
+        for rel in ((".github", "workflows", "ci.yml"), (".github", "workflows", "docs-ci.yaml")):
+            wf = yaml.safe_load(repo.joinpath(*rel).read_text(encoding="utf-8"))
+            for job_name, job in wf.get("jobs", {}).items():
+                runs = [s.get("run", "") for s in job.get("steps", []) if isinstance(s, dict)]
+                if not any(("changelog-format" in r or "changelog_format" in r or re.search(r"make lint-docs(\s|$)", r)) for r in runs):
+                    continue
+                hits.append(job_name)
+                assert any(self.FETCH in r for r in runs), (
+                    f"{rel[-1]}::{job_name} runs the changelog lint without fetching "
+                    f"origin/$GITHUB_BASE_REF; on a PR the cap exits 2 there")
+        assert sorted(hits) == ["drift-checks", "lint", "lint-docs"], hits
 
 
 class TestCapBase:
@@ -937,7 +998,10 @@ class TestCapBase:
         monkeypatch.setattr(gc, "_ref_exists", lambda ref: False)
         monkeypatch.setattr(sys, "argv", ["gc", "--lint", str(f)])
         assert gc.main() == EXIT_CALLER_ERROR
-        assert "git fetch --no-tags origin main" in capsys.readouterr().err
+        captured = capsys.readouterr()
+        # both streams: validate_all's runner shows stdout only
+        assert "git fetch --no-tags origin main" in captured.err
+        assert "git fetch --no-tags origin main" in captured.out
 
     def test_negative_cap_is_a_caller_error_not_a_silent_off_switch(self, tmp_path, monkeypatch):
         f = tmp_path / "history.md"
