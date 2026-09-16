@@ -63,6 +63,19 @@ def test_section_ends_at_next_h2_and_keeps_h3():
     assert "old entry" not in joined
 
 
+def test_section_does_not_end_at_a_fenced_h2_line():
+    text = "## [Unreleased]\n- a\n```md\n## [v1.0.0]\n```\n- b\n## [v2.0.0]\n- c\n"
+    no, block = aom.section_lines(text, "Unreleased")
+    assert no == 1 and block == ["- a", "```md", "## [v1.0.0]", "```", "- b"]
+
+
+def test_section_splits_only_on_real_line_breaks():
+    text = "## [Unreleased]\n- a\u2028## [v1.0.0]\n- b\n"
+    no, block = aom.section_lines(text, "Unreleased")
+    assert block == ["- a\u2028## [v1.0.0]", "- b"]
+    assert aom.split_lines("a\r\nb\rc\nd\n") == ["a", "b", "c", "d"]
+
+
 def test_section_missing_is_none():
     assert aom.section_lines(SAMPLE, "v3.0.0") is None
 

@@ -47,6 +47,7 @@ from agent_output_metrics import (  # noqa: E402
     iter_entries,
     non_negative_int,
     section_lines,
+    split_lines,
 )
 
 # ── Constants ────────────────────────────────────────────────────────
@@ -283,7 +284,10 @@ def lint_changelog(changelog_path: str = "CHANGELOG.md") -> List[str]:
         return [f"{changelog_path} not found"]
 
     content = path.read_text(encoding="utf-8")
-    lines = content.splitlines()
+    # ⛔ Not `splitlines()`: it also breaks on U+2028 / U+2029, so one source
+    # line could forge headings (blind review, PR-C). Same splitter as the
+    # section reader in agent_output_metrics.
+    lines = split_lines(content)
     issues: List[str] = []
     seen_versions: Dict[str, int] = {}
     current_version: Optional[str] = None
@@ -387,14 +391,16 @@ CAP_SECTION = "Unreleased"
 
 def _section_size(text: str, section: str) -> Optional[Tuple[int, int]]:
     """(characters, top-level entries) of ``## [section]``; None when absent.
-    Characters are the whole block, so nothing written there can hide from
-    the cap; entries are counted by ``agent_output_metrics.iter_entries``,
-    so a `- ` inside a column-0 fence is code, not a new entry."""
+    Characters are the heading line plus the whole block (text appended to
+    the heading line itself counts too); entries are counted by
+    ``agent_output_metrics.iter_entries``, so a `- ` inside a column-0 fence
+    is code, not a new entry."""
     found = section_lines(text, section)
     if found is None:
         return None
     heading_no, block = found
-    return len("\n".join(block)), sum(1 for _ in iter_entries(block, heading_no + 1))
+    heading = split_lines(text)[heading_no - 1]
+    return len("\n".join([heading] + block)), sum(1 for _ in iter_entries(block, heading_no + 1))
 
 
 def lint_entry_caps(
@@ -415,11 +421,12 @@ def lint_entry_caps(
     rounds of "which entry is new" found a hole in every version: each
     exemption (same headline, similar headline, same tail, structural line)
     was a splitter, and the matching machinery itself grew bugs. Growth of
-    the whole block has no exemptions, so nothing can hide length from it.
-    Boundaries, stated rather than defended: deleting old text credits new
-    text (the section did not grow); adding extra bullets dilutes the
-    average. Both are in plain sight in the diff, which is where a reviewer
-    catches them.
+    the section has no exemptions inside the section. Boundaries, stated
+    rather than defended: deleting old text credits new text (the section
+    did not grow); every extra top-level bullet buys ``cap`` more, even an
+    empty one or one inside an HTML comment; text placed in a released
+    section or above the heading is not this section. All of these are in
+    plain sight in the diff, which is where a reviewer catches them.
     """
     head = _section_size(text, section)
     if head is None:
@@ -588,15 +595,19 @@ def main() -> int:
                 base_text = _git_show(base, target)
                 if base_text is None:
                     # stdout on purpose: validate_all's runner shows stdout only.
-                    print(f"notice: {target} not found at {base}; every "
-                          f"[{CAP_SECTION}] entry counts as new for the cap")
-                try:
-                    text = p.read_text(encoding="utf-8")
-                except (OSError, UnicodeDecodeError) as exc:
-                    print(f"ERROR: could not read {target}: {exc}", file=sys.stderr)
-                    return EXIT_CALLER_ERROR
-                issues += [f"{target}: {i}" for i in
-                           lint_entry_caps(text, base_text, args.cap, base_label=base)]
+                    # Skipped, not "everything is new": a first commit or a
+                    # renamed file would be judged against zero and a real
+                    # changelog of legacy-sized entries is always over.
+                    print(f"notice: {target} not found at {base}; the "
+                          f"[{CAP_SECTION}] growth cap has no base and is skipped")
+                else:
+                    try:
+                        text = p.read_text(encoding="utf-8")
+                    except (OSError, UnicodeDecodeError) as exc:
+                        print(f"ERROR: could not read {target}: {exc}", file=sys.stderr)
+                        return EXIT_CALLER_ERROR
+                    issues += [f"{target}: {i}" for i in
+                               lint_entry_caps(text, base_text, args.cap, base_label=base)]
         if issues:
             print(f"❌ {len(issues)} changelog format issue(s):")
             for issue in issues:

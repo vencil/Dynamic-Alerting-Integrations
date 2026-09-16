@@ -18,6 +18,16 @@ import generate_changelog as gc
 from _lib_exitcodes import EXIT_CALLER_ERROR
 
 
+@pytest.fixture(autouse=True)
+def _no_pr_environment(monkeypatch):
+    """GitHub sets GITHUB_BASE_REF for EVERY job of a pull_request run, the
+    Python Tests job included. `default_cap_base()` reads it, so without this
+    every in-process `main()` test would resolve the base against the runner
+    (origin/main present → base_label changes; absent → exit 2). Blind
+    review, PR-C: three tests red on every PR. Tests choose their own base."""
+    monkeypatch.delenv("GITHUB_BASE_REF", raising=False)
+
+
 def _cp(returncode: int = 0, stdout: str = "", stderr: str = ""):
     """subprocess.CompletedProcess fixture for monkeypatched git_cmd tests."""
     return subprocess.CompletedProcess(
@@ -834,9 +844,11 @@ class TestSectionGrowthCap:
         """The reason there is no gap rule: out-dented text, an indented
         bullet before any entry, a long heading — all are section characters."""
         base = _unreleased(_entry("old", 200))
-        for shape in ("\n⇒ " + "z" * 1200, "\n### Fixed — " + "z" * 1200, "\n  - " + "z" * 1200 + "\n" + _entry("old", 200)):
+        for shape in ("\n⇒ " + "z" * 1200, "\n### Fixed — " + "z" * 1200):
             text = "## [Unreleased]\n\n### Changed\n" + _entry("old", 200) + shape + "\n"
             assert len(gc.lint_entry_caps(text, base)) == 1, shape[:20]
+        before_any_entry = "## [Unreleased]\n\n### Changed\n  - " + "z" * 1200 + "\n" + _entry("old", 200) + "\n"
+        assert len(gc.lint_entry_caps(before_any_entry, base)) == 1
 
     def test_bullets_inside_a_column0_fence_are_not_new_entries(self):
         """The per-new-entry allowance cannot be inflated by fenced `- ` lines
@@ -846,6 +858,31 @@ class TestSectionGrowthCap:
         text = _unreleased(_entry("old", 200), _entry("n", 1500), fenced)
         issues = gc.lint_entry_caps(text, base)
         assert len(issues) == 1 and "with 1 new entry" in issues[0], issues
+
+    def test_text_on_the_heading_line_counts(self):
+        base = _unreleased(_entry("old", 200))
+        text = "## [Unreleased] " + "y" * 1200 + "\n\n### Changed\n" + _entry("old", 200) + "\n"
+        assert len(gc.lint_entry_caps(text, base)) == 1
+
+    def test_a_fenced_h2_line_does_not_end_the_section(self):
+        """`section_lines` used to stop at any `## ` line, fenced or not, so a
+        fenced changelog example ended the section and everything below it
+        was invisible to the cap — and to the metrics — with no output."""
+        base = _unreleased(_entry("old", 200))
+        for fence in ("```md", "~~~"):
+            closer = fence[:3]
+            text = ("## [Unreleased]\n\n### Changed\n" + _entry("old", 200) + "\n" + fence +
+                    "\n## [v0.0.0] (2020-01-01)\n" + closer + "\n" + _entry("hidden", 4000) + "\n")
+            issues = gc.lint_entry_caps(text, base)
+            assert len(issues) == 1 and "with 1 new entry" in issues[0], (fence, issues)
+
+    def test_u2028_is_not_a_line_break(self):
+        """`str.splitlines()` breaks on U+2028, which let one source line forge
+        a `## [vX]` heading and end the section."""
+        base = _unreleased(_entry("old", 200))
+        forged = "- new\u2028## [v0.0.0] (2020-01-01)\u2028### Fixed\u2028" + _entry("hidden", 4000)
+        text = _unreleased(_entry("old", 200), forged)
+        assert len(gc.lint_entry_caps(text, base)) == 1
 
     def test_deleting_old_text_credits_new_text_by_design(self):
         """Stated boundary: the section did not grow, and the deletion is in
@@ -873,7 +910,12 @@ class TestSectionGrowthCap:
 class TestEveryCiCallerFetchesThePrBase:
     """`default_cap_base` exits 2 on a PR run without origin/<base>; a caller
     that runs the lint without the fetch step turns every PR red (round 3
-    found the third caller, `make lint-docs`, without it)."""
+    found the third caller, `make lint-docs`, without it).
+
+    Population = jobs that run the lint as a shell command. The fourth
+    execution path — this test file itself, in-process, under the Python
+    Tests job — is not a caller: the autouse `_no_pr_environment` fixture
+    strips GITHUB_BASE_REF so it never consults the runner's refs."""
 
     FETCH = 'git fetch --no-tags origin "${GITHUB_BASE_REF}"'
 
@@ -929,14 +971,16 @@ class TestCapBase:
             gc.main()
         assert exc.value.code == 2
 
-    def test_missing_base_file_prints_a_notice_and_counts_everything(self, tmp_path, monkeypatch, capsys):
+    def test_missing_base_file_skips_the_cap_with_a_notice(self, tmp_path, monkeypatch, capsys):
+        """A first commit or a renamed file has no base; judging it against
+        zero would make any real changelog of legacy-sized entries red."""
         f = tmp_path / "history.md"
         f.write_text(_unreleased(_entry("n", 1500)), encoding="utf-8")
         monkeypatch.setattr(gc, "_git_show", lambda ref, path: None)
         monkeypatch.setattr(sys, "argv", ["gc", "--base", "HEAD", "--lint", str(f)])
-        assert gc.main() == 1
-        captured = capsys.readouterr()
-        assert "counts as new" in captured.out and "grew by" in captured.out
+        assert gc.main() == 0
+        out = capsys.readouterr().out
+        assert "is skipped" in out and "grew by" not in out
 
     def test_git_show_reads_the_committed_version(self, tmp_path, monkeypatch):
         """Real git, no mocks: the working tree may differ from HEAD."""

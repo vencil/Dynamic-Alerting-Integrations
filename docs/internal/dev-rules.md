@@ -433,7 +433,7 @@ tools:
 
 ### P4. 數據 claim 須附量測；新機制須附驗證法（epic #570 retrospective）
 
-**規則**：PR 宣稱的數字（token / 行數 / coverage / 節省）須附**可重現量測指令**（`wc` / `git diff --stat` / recall subagent）；新機制的 PR body 須含「**怎麼證明它有效**」（harness run / CI job / recall test）。量測的載體是 PR body 的 Evidence 區塊或 issue 留言，不是 CHANGELOG：`changelog-format` 對 `[Unreleased]` 設上限——整段對 base 長出的字元，每個新增 bullet 可帶 1,000，沒有新 bullet 時整段最多長 1,000（`generate_changelog.py --lint --cap`）；超限的處置是把量測搬走、條目只留結論。無量測佐證的數字 claim = 杜撰（#570 燒過：110 行 / 138 peak / ~1000 token 省全是估值，實測 CLAUDE.md token 反而 +19%；line count 等 proxy 會誤導）。
+**規則**：PR 宣稱的數字（token / 行數 / coverage / 節省）須附**可重現量測指令**（`wc` / `git diff --stat` / recall subagent）；新機制的 PR body 須含「**怎麼證明它有效**」（harness run / CI job / recall test）。量測的載體是 PR body 的 Evidence 區塊或 issue 留言，不是 CHANGELOG：`changelog-format` 對 `[Unreleased]` 設上限——整段對 base 長出的字元，每個新增 bullet 可帶 1,000，沒有新 bullet 時整段最多長 1,000（`generate_changelog.py --lint --cap`）；現行條目中位數高於這個上限，新條目要比現行文風短，超限的處置是把量測搬走、條目只留結論。無量測佐證的數字 claim = 杜撰（#570 燒過：110 行 / 138 peak / ~1000 token 省全是估值，實測 CLAUDE.md token 反而 +19%；line count 等 proxy 會誤導）。
 
 ### P5. Artifact payload 的必需鍵集合變更必須同時 bump schema 字串（TRK-367 / #1571）
 
