@@ -437,10 +437,11 @@ def lint_entry_caps(
     else:
         base = _section_size(base_text, section)
         if base is None:
-            # ⛔ The base has the file but not the section (heading typo being
-            # fixed, wrap-up that left no empty [Unreleased]): judged against
-            # zero this reported "grew by 4577 chars with 3 new entries" for a
-            # one-character diff. The caller prints the notice.
+            # ⛔ The base has the file but not the section (a heading typo
+            # being fixed; wrap-up here always leaves an empty [Unreleased],
+            # so that case is hypothetical): judged against zero, a
+            # one-character diff was reported as ~4.5k chars of growth with
+            # 3 new entries. The caller prints the notice.
             return []
         base_chars, base_entries = base
     growth = head_chars - base_chars
@@ -602,7 +603,14 @@ def main() -> int:
                     print(msg, file=sys.stderr)
                     return EXIT_CALLER_ERROR
                 base_text = _git_show(base, target)
-                if base_text is None or section_lines(base_text, CAP_SECTION) is None:
+                try:
+                    text = p.read_text(encoding="utf-8")
+                except (OSError, UnicodeDecodeError) as exc:
+                    print(f"ERROR: could not read {target}: {exc}", file=sys.stderr)
+                    return EXIT_CALLER_ERROR
+                if section_lines(text, CAP_SECTION) is None:
+                    pass   # nothing to cap (CHANGELOG-archive.md has no [Unreleased] by design)
+                elif base_text is None or section_lines(base_text, CAP_SECTION) is None:
                     # stdout on purpose: validate_all's runner shows stdout only.
                     # Skipped, not "everything is new": a first commit, a
                     # renamed file or a base without the section would be
@@ -612,11 +620,6 @@ def main() -> int:
                     print(f"notice: {target} {what} at {base}; the "
                           f"[{CAP_SECTION}] growth cap has no base and is skipped")
                 else:
-                    try:
-                        text = p.read_text(encoding="utf-8")
-                    except (OSError, UnicodeDecodeError) as exc:
-                        print(f"ERROR: could not read {target}: {exc}", file=sys.stderr)
-                        return EXIT_CALLER_ERROR
                     issues += [f"{target}: {i}" for i in
                                lint_entry_caps(text, base_text, args.cap, base_label=base)]
         if issues:

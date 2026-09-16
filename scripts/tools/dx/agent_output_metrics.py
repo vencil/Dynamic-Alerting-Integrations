@@ -113,24 +113,37 @@ def section_lines(text: str, section: str) -> Optional[Tuple[int, List[str]]]:
     tracking there a fenced changelog example ended the section silently,
     and everything after it fell out of both the metrics and the cap built
     on them (blind review, PR-C). An unclosed fence runs to end of file, so
-    the section then does too (loud, not silent). ⛔ The heading itself is
-    looked up WITHOUT fence tracking: tracking fences from line 1 let one
-    unclosed fence above the heading hide the section and switch the cap
-    off with a clean exit (blind review, PR-C, round 2). Lines are split on
-    CRLF / LF / CR only — ``str.splitlines()`` also breaks on U+2028 and
-    friends, which let one source line forge headings.
+    the section then does too (loud, not silent). The heading is the first
+    match OUTSIDE a fence; only when every match is fenced (an unclosed
+    fence above the heading swallows the rest of the file) does the first
+    match count, so that shape cannot hide the section either (round 2 found
+    it hidden, round 3 found a fenced example above the heading misread as
+    the heading). The section end is then scanned with the fence state at
+    the heading. Lines are split on CRLF / LF / CR only —
+    ``str.splitlines()`` also breaks on U+2028 and friends, which let one
+    source line forge headings.
     """
     lines = split_lines(text)
     start = None
+    first_hit: Optional[Tuple[int, Optional[str]]] = None
+    fence: Optional[str] = None
     for i, line in enumerate(lines):
+        mf = _COLUMN0_FENCE_RE.match(line)
+        if mf:
+            fence, _ = fence_step(fence, mf.group(1), mf.group(2))
+            continue
         m = _HEADING_RE.match(line)
         if m and (m.group("bracketed") or m.group("bare")) == section:
-            start = i
-            break
+            if first_hit is None:
+                first_hit = (i, fence)
+            if fence is None:
+                start = i
+                break
     if start is None:
-        return None
+        if first_hit is None:
+            return None
+        start, fence = first_hit
     end = len(lines)
-    fence: Optional[str] = None
     for j in range(start + 1, len(lines)):
         m = _COLUMN0_FENCE_RE.match(lines[j])
         if m:
@@ -255,7 +268,7 @@ def measure_changelog(text: str, section: str, cap: int, top: int) -> Optional[d
         "over_cap_prose": sum(1 for n in prose if n > cap),
         "longest": [
             {"line": no, "chars": len(body), "prose_chars": prose_len(body),
-             "head": body.splitlines()[0][:80]}
+             "head": split_lines(body)[0][:80]}
             for no, body in longest
         ],
     }

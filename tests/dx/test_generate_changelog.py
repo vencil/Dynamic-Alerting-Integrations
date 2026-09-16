@@ -1046,6 +1046,16 @@ class TestCapBase:
         out = capsys.readouterr().out
         assert "is skipped" in out and "grew by" not in out
 
+    def test_a_file_without_the_section_gets_no_notice(self, tmp_path, monkeypatch, capsys):
+        """CHANGELOG-archive.md has no [Unreleased] by design and is linted on
+        every run; a notice blaming the base there would be noise."""
+        f = tmp_path / "history.md"
+        f.write_text("## [v1.0.0] (2026-01-01)\n\n### Fixed\n- a\n", encoding="utf-8")
+        monkeypatch.setattr(gc, "_git_show", lambda ref, path: "## [v1.0.0] (2026-01-01)\n\n### Fixed\n- a\n")
+        monkeypatch.setattr(sys, "argv", ["gc", "--base", "HEAD", "--lint", str(f)])
+        assert gc.main() == 0
+        assert "notice" not in capsys.readouterr().out
+
     def test_base_without_the_section_skips_the_cap_with_a_notice(self, tmp_path, monkeypatch, capsys):
         f = tmp_path / "history.md"
         f.write_text(_unreleased(_entry("n", 1500)), encoding="utf-8")

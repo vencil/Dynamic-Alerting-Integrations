@@ -76,6 +76,29 @@ def test_heading_is_found_even_below_an_unclosed_fence():
     assert aom.section_lines(text, "Unreleased") == (2, ["- a"])
 
 
+def test_a_fenced_example_above_the_real_heading_is_not_the_heading():
+    """Round 3: a fence-blind heading lookup took the fenced example as the
+    heading and then read the example's closing fence as an opener, so the
+    section ran to EOF (false red, and `new` stuck at 0)."""
+    text = ("```md\n## [Unreleased]\n- example\n```\n\n## [Unreleased]\n- real\n\n"
+            "## [v1.0.0] (2026-01-01)\n- released\n")
+    assert aom.section_lines(text, "Unreleased") == (6, ["- real", ""])
+
+
+def test_fallback_to_a_fenced_heading_keeps_the_fence_state():
+    """When every match is fenced (unclosed fence above), the first match
+    counts AND the end scan starts inside that fence, so the fence's closer
+    closes it and the next `## ` really ends the section."""
+    text = "```\n## [Unreleased]\n- a\n```\n## [v1.0.0]\n- b\n"
+    assert aom.section_lines(text, "Unreleased") == (2, ["- a", "```"])
+
+
+def test_longest_head_is_the_real_first_line():
+    text = "## [Unreleased]\n- head\u2028tail " + "x" * 30 + "\n"
+    r = aom.measure_changelog(text, "Unreleased", 1000, 1)
+    assert r["longest"][0]["head"].startswith("- head\u2028tail")
+
+
 def test_prose_len_splits_only_on_real_line_breaks():
     entry = "- head\u2028  ```\u2028hidden\u2028  ```"
     assert aom.prose_len(entry) == len(entry)
