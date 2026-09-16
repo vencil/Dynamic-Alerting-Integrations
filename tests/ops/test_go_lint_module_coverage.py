@@ -184,6 +184,26 @@ def _unlinted(go_files: list[str], modules: frozenset[str],
     ]
 
 
+def _module_corpus(go_files: list[str], modules: frozenset[str],
+                   module: str) -> list[str]:
+    """The .go files `golangci-lint run ./...` in `module` actually loads.
+
+    ⛔ Not `startswith(module + "/")`. A NESTED module's files sit under that
+    prefix and `./...` does not descend into them, so counting them inflates
+    the survivor set of the reporting invariant below — and a survivor that
+    golangci never reads is exactly the shape that makes the assertion true
+    without being satisfied. Measured on the tree's one nested case
+    (`scripts/tools/ops`, holding `bench-canary/`): excluding the single file
+    golangci really reads there left the whole module green.
+
+    Both predicates are the ones the orphan invariant already uses; this is a
+    second caller, not a second model.
+    """
+    return [f for f in go_files
+            if _owning_module(f, modules) == module
+            and _reachable_by_dotdotdot(f, module)]
+
+
 def _module_config(module: str) -> dict:
     config = ROOT / module / ".golangci.yml"
     assert config.is_file(), (
@@ -701,6 +721,53 @@ def test_the_invariant_itself_reds_on_a_config_level_silencer(monkeypatch) -> No
         test_every_linted_module_reports_something()
 
 
+def test_the_corpus_stops_at_a_nested_module() -> None:
+    """A nested module's files are under the prefix but outside `./...`."""
+    files = ["m/a.go", "m/sub/b.go", "m/testdata/c.go", "m/_x/d.go"]
+    mods = frozenset({"m", "m/sub"})
+    assert _module_corpus(files, mods, "m") == ["m/a.go"]
+    assert _module_corpus(files, mods, "m/sub") == ["m/sub/b.go"]
+
+
+def test_the_invariant_itself_reds_when_a_modules_own_files_are_excluded(
+        monkeypatch) -> None:
+    """Driven through the main invariant, on the tree's real nested module.
+
+    The control above pins the derivation; this pins that the LOOP uses it. A
+    prefix-based corpus counts the nested module's files as survivors, so the
+    same exclusion reads as harmless — that is the defect this replaced, and
+    only a test at this level can see it.
+    """
+    modules = sorted(set(_lint_steps().values()))
+    parents = sorted({outer for outer in modules for inner in modules
+                      if inner != outer and inner.startswith(outer + "/")})
+    assert parents, (
+        "no linted module sits inside another any more, so this test asserts "
+        "nothing. Do not delete it silently — either point it at whatever "
+        "shape now inflates a module's corpus, or record here that the tree "
+        "no longer has one.")
+
+    parent = parents[0]
+    go_files = [p for p in _tracked_files() if p.endswith(".go")]
+    rel = [f[len(parent) + 1:]
+           for f in _module_corpus(go_files, _go_modules(), parent)]
+    assert rel, f"{parent} owns no reachable .go; nothing to exclude"
+
+    real = _module_config
+
+    def excluding_its_own_files(module: str) -> dict:
+        cfg = real(module)
+        if module == parent:
+            exclusions = cfg.setdefault("linters", {}).setdefault("exclusions", {})
+            exclusions["paths"] = [f"^{re.escape(r)}$" for r in rel]
+        return cfg
+
+    monkeypatch.setattr(sys.modules[__name__], "_module_config",
+                        excluding_its_own_files)
+    with pytest.raises(AssertionError, match="excluded on all"):
+        test_every_linted_module_reports_something()
+
+
 def test_every_linted_module_reports_something() -> None:
     """Enrolment is a step; this is whether the step can ever report.
 
@@ -719,10 +786,11 @@ def test_every_linted_module_reports_something() -> None:
         "loop below would assert nothing.")
 
     go_files = [p for p in _tracked_files() if p.endswith(".go")]
+    all_modules = _go_modules()
     for module in modules:
         cfg = _module_config(module)
         linters = cfg.get("linters") or {}
-        own = [f for f in go_files if f.startswith(module + "/")]
+        own = _module_corpus(go_files, all_modules, module)
 
         assert linters.get("default") != "none", (
             f"{module}/.golangci.yml sets `linters.default: none`; the step "
