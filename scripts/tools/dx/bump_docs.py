@@ -856,14 +856,6 @@ def _build_platform_rules():
         "replacement": lambda v: f"**Version**: v{v}",
     })
 
-    # Badge data JSON: docs/assets/badge-data.json
-    rules.append({
-        "file": "docs/assets/badge-data.json",
-        "desc": "badge-data.json version field",
-        "pattern": r'"version"\s*:\s*"v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?"',
-        "replacement": lambda v: f'"version": "v{v}"',
-    })
-
     # mkdocs.yml extra.platform_version / tools_version
     rules.append({
         "file": "mkdocs.yml",
