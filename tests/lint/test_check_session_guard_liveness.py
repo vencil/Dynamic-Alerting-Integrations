@@ -219,11 +219,33 @@ class TestGuardDerivation:
         assert mod._GUARD_SCRIPT_RE.findall(_LAUNCH + "skill_usage.py --stats") == ["skill_usage.py"]
         assert mod._GUARD_SCRIPT_RE.findall('bash run-hooks.sh session-init.py') == ["session-init.py"]
 
+    @pytest.mark.parametrize("cmd", [
+        'bash "$D/run-hooks.sh" "does_not_exist.py"',
+        "bash '$D/run-hooks.sh' 'does_not_exist.py'",
+        'bash "$D/run-hooks.sh" does_not_exist.py',
+    ])
+    def test_a_quoted_guard_argument_is_still_derived(self, env, cmd):
+        """Blind-review finding: the shell strips the quotes and run-hooks.sh
+        runs the script, so the gate must read the same name."""
+        mod, settings, guard_dir, launcher = env
+        launcher.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+        _write_settings(settings, [cmd.replace("$D", "$CLAUDE_PROJECT_DIR/scripts/session-guards")])
+        assert any("does_not_exist.py" in v for v in mod.check_settings_routing(settings))
+
+    def test_wiring_does_not_count_a_guard_name_mentioned_in_a_comment(self, env):
+        mod, settings, *_ = env
+        wiring = _full_wiring()
+        wiring["Stop"] = [(None, 'bash "$CLAUDE_PROJECT_DIR/scripts/session-guards/run-hooks.sh" '
+                                 'other.py  # stop_evidence.py')]
+        _write_wiring(settings, wiring)
+        assert any("stop_evidence.py 未接線" in v for v in mod.check_required_wiring(settings))
+
 
 class TestMatcherSemantics:
     @pytest.mark.parametrize("matcher,tool,expected", [
         (None, "Skill", True),
         ("", "Skill", True),
+        ("*", "Skill", True),       # documented "match all", not a broken regex
         ("Skill", "Skill", True),
         ("Skill", "Bash", False),
         ("Edit|Write|Bash", "Write", True),
@@ -269,6 +291,21 @@ class TestRequiredWiring:
         _write_wiring(settings, wiring)
         violations = mod.check_required_wiring(settings)
         assert len(violations) == 1 and "skill_usage.py" in violations[0] and "Skill" in violations[0]
+
+    @pytest.mark.parametrize("guard,dropped", [
+        ("paths_map.py", "MultiEdit"), ("session-init.py", "MultiEdit"), ("paths_map.py", "Bash"),
+    ])
+    def test_each_documented_tool_of_a_matcher_is_pinned(self, env, guard, dropped):
+        """The §2 table and CHANGELOG name these tools; a matcher that quietly
+        drops one must red here, not stay green while the docs go false."""
+        mod, settings, *_ = env
+        wiring = _full_wiring()
+        wiring["PreToolUse"] = [
+            ("|".join(t for t in m.split("|") if t != dropped) if guard in c else m, c)
+            for m, c in wiring["PreToolUse"]]
+        _write_wiring(settings, wiring)
+        violations = mod.check_required_wiring(settings)
+        assert len(violations) == 1 and guard in violations[0] and dropped in violations[0]
 
     def test_a_regex_matcher_that_covers_the_tools_passes(self, env):
         mod, settings, *_ = env

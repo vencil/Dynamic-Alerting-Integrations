@@ -10,4 +10,4 @@ paths:
 先讀：
 - `AGENTS.md`
 
-約束：改完跑 `python3 scripts/tools/dx/gen_agent_adapters.py --generate`；`.claude/skills`、`.claude/agents`、`.cursor/skills`、`.github/instructions` 全是它的產物，`gen-agent-adapters-check` 擋漂移。
+約束：改完跑 `python3 scripts/tools/dx/gen_agent_adapters.py --generate`；`.claude/skills`、`.claude/agents`、`.cursor/skills/vibe-paths-*`、`.github/instructions/vibe-paths-*` 全是它的產物，`gen-agent-adapters-check` 擋漂移。

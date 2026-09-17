@@ -4,7 +4,7 @@
 Why
 ---
 Nested `CLAUDE.md` files only fire when a file under them is *Read*; a Bash
-command that edits the same file triggers nothing (TRK-377 measured it). This
+command that edits the same file triggers nothing (TRK-380 measured it). This
 hook closes that gap for Claude Code and, more importantly, reads the same
 `.agents/paths-map.json` that `gen_agent_adapters.py` projects into Cursor's
 `paths:` frontmatter and Copilot's `applyTo` — one map, three vendors.
@@ -21,9 +21,12 @@ What it does
    ancestor holding `.git` (a directory for the main checkout, a file for a
    worktree), so an edit inside `vibe-wt/impl-x/helm/...` matches `helm/**`
    exactly like one inside the main checkout does.
-3. Match against every entry's globs; each entry is injected **once per
-   session** as `additionalContext` (marker in the harness scratchpad dir),
-   so the map costs tokens once, not on every tool call.
+3. Match against every entry's globs; each entry is injected as
+   `additionalContext` at most **once per session per tool class** (once for
+   a command, once for an edit; marker in the harness scratchpad dir), so
+   the map costs tokens once or twice, not on every tool call, and a
+   read-only `cat` does not spend the injection the later `Edit` is for.
+   A directory token (`ls helm`) matches `helm/**` like a file under it.
 
 Failure policy: never blocks. An unreadable map is reported once per session
 through `additionalContext` (fail-loud, like run-hooks.sh does for a missing
@@ -56,7 +59,7 @@ except Exception:  # pragma: no cover — standalone fallback, never block
 
 TAG = "paths-map"
 MAP_REL = ".agents/paths-map.json"
-EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
+EDIT_TOOLS = ("Edit", "Write", "MultiEdit")  # == the settings.json matcher minus Bash
 COMMAND_TOOLS = ("Bash",)
 LOAD_ERROR_ID = "__load_error__"
 
@@ -89,6 +92,10 @@ def validate_map(data: object) -> list[dict]:
         if not isinstance(paths, list) or not paths or not all(
                 isinstance(p, str) and p and not p.startswith("/") for p in paths):
             raise MapError(f"{where} ({eid}): `paths` must be a non-empty list of relative globs")
+        if any("," in p for p in paths):
+            # Copilot's `applyTo` is one comma-joined string; a comma inside a
+            # glob would split it into globs the map never declared.
+            raise MapError(f"{where} ({eid}): a glob may not contain a comma")
         reads = e.get("read")
         if not isinstance(reads, list) or not all(
                 isinstance(r, dict) and isinstance(r.get("file"), str) and r["file"]
@@ -184,15 +191,21 @@ def to_repo_relative(token: str, cwd: str | None) -> str | None:
         if not p.exists():
             return None
         p = p.resolve()
+        is_dir = p.is_dir()
     except OSError:
         return None
     root = repo_root_of(p)
     if root is None:
         return None
     try:
-        return _norm(str(p.relative_to(root)))
+        rel = _norm(str(p.relative_to(root)))
     except ValueError:
         return None
+    if rel == ".":
+        return None
+    # A directory is written as `helm/` so that `helm/**` covers "the whole
+    # directory" the way it covers any file inside it.
+    return rel + "/" if is_dir else rel
 
 
 def bash_tokens(command: str) -> list[str]:
@@ -209,6 +222,15 @@ def bash_tokens(command: str) -> list[str]:
     return out
 
 
+def tool_class(tool: str) -> str | None:
+    """`edit` for the editing tools, `bash` for command tools, else None."""
+    if tool in EDIT_TOOLS:
+        return "edit"
+    if tool in COMMAND_TOOLS:
+        return "bash"
+    return None
+
+
 def candidate_paths(payload: dict) -> list[str]:
     tool = payload.get("tool_name") or ""
     tool_input = payload.get("tool_input") or {}
@@ -217,7 +239,7 @@ def candidate_paths(payload: dict) -> list[str]:
     cwd = payload.get("cwd") or None
     cands: list[str] = []
     if tool in EDIT_TOOLS:
-        fp = tool_input.get("file_path") or tool_input.get("notebook_path") or ""
+        fp = tool_input.get("file_path") or ""
         if isinstance(fp, str) and fp:
             rel = to_repo_relative(fp, cwd)
             if rel is None:
@@ -244,7 +266,11 @@ def _relative_without_existence(fp: str, cwd: str | None) -> str | None:
         if not cwd:
             return _norm(str(p))
         p = Path(cwd) / p
-    root = repo_root_of(p.parent) if p.parent.exists() else None
+    # Nearest ancestor that exists: a Write may create several directories.
+    anchor = p.parent
+    while not anchor.exists() and anchor.parent != anchor:
+        anchor = anchor.parent
+    root = repo_root_of(anchor) if anchor.exists() else None
     if root is None:
         return None
     try:
@@ -275,6 +301,13 @@ def marker_path(payload: dict) -> Path:
 
 
 def load_fired(marker: Path) -> set[str]:
+    """Keys already injected this session, as `<entry id>:<tool class>`.
+
+    Keyed per tool class on purpose: a read-only `cat helm/values.yaml` must
+    not spend the one injection the later `Edit` of that file is meant to get.
+    So an entry can fire at most twice per session — once for a command, once
+    for an edit.
+    """
     try:
         data = json.loads(marker.read_text(encoding="utf-8"))
         return set(x for x in data if isinstance(x, str)) if isinstance(data, list) else set()
@@ -289,11 +322,17 @@ def save_fired(marker: Path, fired: set[str]) -> None:
         print(f"[{TAG}] warning: could not write marker {marker}: {exc}", file=sys.stderr)
 
 
-def select_hits(entries: list[dict], paths: list[str], fired: set[str]) -> list[tuple[dict, str, str]]:
-    """(entry, path, pattern) for every not-yet-fired entry some path matches."""
+def fired_key(entry_id: str, klass: str) -> str:
+    return f"{entry_id}:{klass}"
+
+
+def select_hits(entries: list[dict], paths: list[str], fired: set[str],
+                klass: str = "edit") -> list[tuple[dict, str, str]]:
+    """(entry, path, pattern) for every entry some path matches that has not
+    yet fired for this tool class."""
     hits: list[tuple[dict, str, str]] = []
     for entry in entries:
-        if entry["id"] in fired:
+        if fired_key(entry["id"], klass) in fired:
             continue
         for rel in paths:
             pat = matches(rel, entry["paths"])
@@ -327,14 +366,17 @@ def run_hook(payload: dict, map_path: Path) -> int:
                          f"`session-guard-liveness-check` validates it.")
         print(f"[{TAG}] warning: {exc}", file=sys.stderr)
         return 0
+    klass = tool_class(payload.get("tool_name") or "")
+    if klass is None:
+        return 0
     paths = candidate_paths(payload)
     if not paths:
         return 0
-    hits = select_hits(entries, paths, fired)
+    hits = select_hits(entries, paths, fired, klass)
     if not hits:
         return 0
     for entry, _rel, _pat in hits:
-        fired.add(entry["id"])
+        fired.add(fired_key(entry["id"], klass))
     save_fired(marker, fired)
     emit_context("\n".join(render_hit(e, rel, pat) for e, rel, pat in hits))
     return 0

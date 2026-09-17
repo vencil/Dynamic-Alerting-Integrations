@@ -12,4 +12,4 @@ paths:
 先讀：
 - `docs/internal/testing-playbook.md` §conf.d/ YAML 格式陷阱
 
-約束：conf.d 是 wrapped format（`tenants:` 包一層）；rule-pack 改動後 `make platform-data` 重生數據，`rule-pack-stats-check` 與 `platform-data-check` 會擋 drift；Go／PromQL／fixture 不得 hardcode tenant id。
+約束：conf.d 是 wrapped format（`tenants:` 包一層）；rule-pack 改動後的產物各有各的重生指令與 drift hook——`python3 scripts/tools/dx/generate_rule_pack_stats.py --generate --lang all`（`rule-pack-stats-check`）、`make rulepack-configmaps`（`rulepack-configmaps-check`）、`make platform-data`（`platform-data-check`）——一支跑完不代表另兩道會綠；Go／PromQL／fixture 不得 hardcode tenant id。

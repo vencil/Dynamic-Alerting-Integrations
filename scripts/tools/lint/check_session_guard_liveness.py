@@ -64,16 +64,17 @@ _INTERPRETER_CANDIDATES: tuple[tuple[str, ...], ...] = (
     ("python",),
 )
 
-# `run-hooks.sh <guard.py>`：launcher 後第一個以 .py 結尾的字。
-_GUARD_SCRIPT_RE = re.compile(r"run-hooks\.sh\"?\s+([A-Za-z0-9_.-]+\.py)")
+# `run-hooks.sh <guard.py>`：launcher 後第一個以 .py 結尾的字；launcher 路徑
+# 與參數各自可帶引號（shell 會剝掉，launcher 照常執行，所以 gate 也要認）。
+_GUARD_SCRIPT_RE = re.compile(r"run-hooks\.sh[\"']?\s+[\"']?([A-Za-z0-9_.-]+\.py)")
 
-# 每支 guard 該掛的 event 與 matcher 必須涵蓋的工具名（agent 指引改善計畫
-# PR-D 把 2 支擴成 5 支）。空 tuple ＝ 該 event 不用 matcher（Stop）。
+# 每支 guard 該掛的 event 與 matcher 必須涵蓋的工具名。空 tuple ＝ 該 event
+# 不用 matcher（Stop）。要與 hook-vs-skill-coverage.md §2 的觸發欄一致。
 _REQUIRED_WIRING: dict[str, tuple[str, tuple[str, ...]]] = {
-    "session-init.py": ("PreToolUse", ("Bash", "Write", "Edit")),
+    "session-init.py": ("PreToolUse", ("Bash", "Write", "Edit", "MultiEdit")),
     "preflight_bash.py": ("PreToolUse", ("Bash", "Write")),
     "skill_usage.py": ("PreToolUse", ("Skill",)),
-    "paths_map.py": ("PreToolUse", ("Edit", "Write", "Bash")),
+    "paths_map.py": ("PreToolUse", ("Edit", "Write", "MultiEdit", "Bash")),
     "stop_evidence.py": ("Stop", ()),
 }
 
@@ -161,7 +162,9 @@ def check_required_wiring(settings_path: Path) -> list[str]:
         wired = False
         for entry in (settings.get("hooks") or {}).get(event) or []:
             cmds = [(h or {}).get("command") or "" for h in (entry or {}).get("hooks") or []]
-            if not any(guard in c for c in cmds):
+            # 同一把尺：guard 名從命令字串推導，不做子字串比對（否則註解裡
+            # 提到檔名也算接線）。
+            if not any(guard in _GUARD_SCRIPT_RE.findall(c) for c in cmds):
                 continue
             matcher = (entry or {}).get("matcher")
             if all(_matcher_hits(matcher, t) for t in tools):
@@ -174,8 +177,8 @@ def check_required_wiring(settings_path: Path) -> list[str]:
 
 
 def _matcher_hits(matcher: object, tool: str) -> bool:
-    """Claude Code matcher 語意：空／缺＝全配；純字元＝`|`／`,` 分隔的精確表；否則 regex。"""
-    if not matcher:
+    """Claude Code matcher 語意：空／缺／`*`＝全配；純字元＝`|`／`,` 分隔的精確表；否則 regex。"""
+    if not matcher or matcher == "*":
         return True
     if not isinstance(matcher, str):
         return False

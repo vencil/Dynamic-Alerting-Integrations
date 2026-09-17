@@ -280,7 +280,7 @@ agent-progress: ## 長時 agent progress ledger 快照 + liveness 探針（協�
 	done
 
 .PHONY: agent-adapters
-agent-adapters: ## 由 .agents/ 中性 SSOT 重生跨 AI 轉接檔（.claude/** + AGENTS.md；改完 SSOT 必跑）
+agent-adapters: ## 由 .agents/ 中性 SSOT 重生跨 AI 轉接檔（.claude/** + .cursor/skills/vibe-paths-* + .github/instructions/vibe-paths-* + AGENTS.md；改完 SSOT 必跑）
 	@python3 scripts/tools/dx/gen_agent_adapters.py --generate
 
 .PHONY: converge-status

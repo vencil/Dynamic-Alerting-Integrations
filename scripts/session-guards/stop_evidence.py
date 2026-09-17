@@ -1,26 +1,28 @@
 #!/usr/bin/env python3
 """Stop hook: a claim needs an evidence block, and the evidence must have run.
 
-Rule (AGENTS.md #7 / CLAUDE.md 地雷 #5, agent 指引改善計畫 PR-C)
------------------------------------------------------------------
-A sentence that claims an outcome (通過／乾淨／修好／綠／passed／fixed) is paired
+Rule (AGENTS.md #7 / CLAUDE.md 不可協商 #5, agent 指引改善計畫 PR-C, #1737)
+------------------------------------------------------------------------
+A clause that claims an outcome (通過／乾淨／修好／綠／passed／fixed) is paired
 with an evidence block — a fenced block whose first non-blank line starts with
 ``$ `` — or is marked ``[未驗]``. The shape half is the same ruler PR-C landed
 (`agent_output_metrics.has_evidence_fence`); this hook adds the only *source*
-check that can be done mechanically: every ``$ <command>`` line cited in an
-evidence block must be a command this turn actually ran through the Bash /
-PowerShell tool, as recorded in the session transcript.
-
-Decision (owner 2026-09-13, plan §5 決策 3): shape + source.
+check that can be done mechanically: every ``$ <command>`` line in ANY fence
+(`agent_output_metrics.fence_commands`) must equal a command — or one
+`&&`/`;`/`|` segment of a command — this turn actually ran through the Bash /
+PowerShell tool, as recorded in the session transcript. Commands a subagent
+ran are not this turn's (CLAUDE.md #5: agent 回報成功不算).
 
 How "this turn" is found
 ------------------------
-The Stop payload carries `prompt_id`; every `tool_result` record of the turn
-carries the same `promptId` and a `sourceToolAssistantUUID` pointing at the
-assistant record that holds the `tool_use`. Following that link yields exactly
-the commands of this prompt — no boundary heuristics over "the last user
-message" (task notifications and hook messages are user records too). Without
-a `prompt_id` the hook falls back to "after the last human prompt".
+The Stop payload carries `prompt_id`; the human prompt record carries the same
+`promptId`. The turn is that record up to the next human prompt with another
+id, and the commands are the `tool_use` blocks of the assistant records in
+between — written when the tool is called, so a transcript that still lags by
+the last tool_result names every command. No boundary heuristics over "the
+last user message" (task notifications and hook messages are user records
+too). Without a `prompt_id` the hook falls back to "after the last human
+prompt".
 
 Blocking: exit 2 with the reason on stderr, **at most once per prompt**
 (`stop_hook_active` in the payload, plus a marker keyed by prompt_id for
@@ -66,11 +68,13 @@ LOG_NAME = "stop-evidence.log"
 UNVERIFIED_MARK = "[未驗]"
 COMMAND_TOOLS = ("Bash", "PowerShell")
 
-# The claim words are the plan's list verbatim (§4 PR-D). `綠` on its own is
+# The claim words are the owner's list (#1737 line, PR-D). `綠` on its own is
 # broad by design: the cost of a false positive is bounded to one re-issue per
 # prompt (see module docstring), the cost of a missed claim is not.
 CLAIM_RE = re.compile(r"通過|乾淨|修好|綠|\bpassed\b|\bfixed\b", re.IGNORECASE)
-_SENTENCE_SPLIT_RE = re.compile(r"[。！？\n]|(?<=[.!?])\s")
+# Clause-level: CJK commas / semicolons / enumeration marks split too, so one
+# trailing `[未驗]` cannot exempt a whole comma-chained line of claims.
+_SENTENCE_SPLIT_RE = re.compile(r"[。！？，；、\n]|(?<=[.!?;])\s")
 _INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
 
 
@@ -118,26 +122,50 @@ def normalize_command(cmd: str) -> str:
     return " ".join(cmd.strip().rstrip("\\").split())
 
 
+_SEGMENT_SPLIT_RE = re.compile(r"\s*(?:&&|\|\||;|\|)\s*")
+
+
+def command_segments(cmd: str) -> set[str]:
+    """The whole command plus each `&&` / `||` / `;` / `|` separated segment,
+    whitespace-normalised. A citation must EQUAL one of these: quoting the
+    interesting half of `cd x && pytest -q t.py` is honest, quoting `$ pytest`
+    or `$ pytest tests/` when only one file ran is not (substring matching
+    let exactly that over-claim through)."""
+    whole = normalize_command(cmd)
+    segs = {whole}
+    for part in _SEGMENT_SPLIT_RE.split(whole):
+        part = part.strip()
+        if part:
+            segs.add(part)
+    return segs
+
+
 def missing_commands(cited: list[str], executed: list[str]) -> list[str]:
-    """Cited commands that are not a substring of any executed command."""
-    ex = [normalize_command(e) for e in executed]
+    """Cited commands that equal no executed command nor one of its segments."""
+    ran: set[str] = set()
+    for e in executed:
+        ran |= command_segments(e)
     out: list[str] = []
     for c in cited:
         nc = normalize_command(c)
-        if not nc:
-            continue
-        if not any(nc in e for e in ex):
+        if nc and nc not in ran:
             out.append(nc)
     return out
 
 
 def verdict(message: str, executed: list[str] | None) -> tuple[bool, list[str]]:
-    """(ok, reasons). `executed=None` means the transcript was unmeasurable."""
+    """(ok, reasons). `executed=None` means the transcript was unmeasurable.
+
+    Shape: a claim clause needs an evidence fence (`has_evidence_fence`).
+    Source: every `$ ` command line in ANY fence (`fence_commands`) must have
+    run — checked whether or not the message makes a claim, since a fabricated
+    `$ cmd` is a false claim whatever the prose says.
+    """
     aom = _aom()
     claims = claim_sentences(message)
-    cited = aom.evidence_commands(message)
+    cited = aom.fence_commands(message)
     reasons: list[str] = []
-    if claims and not cited:
+    if claims and not aom.has_evidence_fence(message):
         shown = "；".join(c[:60] for c in claims[:3])
         reasons.append(
             f"宣稱句沒有證據區塊：{shown}。每句「通過／修好／乾淨／綠」要配一個 fenced "
@@ -147,8 +175,9 @@ def verdict(message: str, executed: list[str] | None) -> tuple[bool, list[str]]:
         if missing:
             shown = "；".join(f"`$ {m[:80]}`" for m in missing[:3])
             reasons.append(
-                f"證據區塊引用的指令在本回合沒有跑過：{shown}。只准引用這一回合真的透過 "
-                f"Bash 執行的指令（逐字節錄），或改標 `{UNVERIFIED_MARK}`。")
+                f"證據區塊引用的指令在本回合沒有跑過：{shown}。只准逐字引用這一回合自己透過 "
+                f"Bash／PowerShell 執行的指令（整條或 `&&`／`;`／`|` 切出的一段；子代理跑的不算，"
+                f"輸出裡的 `$ ` 行請縮排），或改標 `{UNVERIFIED_MARK}`。")
     return (not reasons), reasons
 
 
@@ -214,29 +243,31 @@ def executed_commands(transcript_path: str | None, prompt_id: str | None) -> lis
         recs = list(_iter_records(path))
     except OSError:
         return None
-    if prompt_id:
-        source_uuids = {
-            rec.get("sourceToolAssistantUUID")
-            for rec in recs
-            if rec.get("type") == "user" and rec.get("promptId") == prompt_id
-        }
-        source_uuids.discard(None)
-        if not source_uuids and not any(rec.get("promptId") == prompt_id for rec in recs):
-            return None  # nothing of this prompt written yet
-        cmds: list[str] = []
-        for rec in recs:
-            if rec.get("type") == "assistant" and rec.get("uuid") in source_uuids:
-                cmds.extend(_commands_in(rec))
-        return cmds
-    # Fallback: everything after the last human prompt.
+    # The turn starts at the human prompt record carrying this promptId and
+    # runs to the next human prompt with a different one. Commands are read
+    # from the assistant `tool_use` records in between — those are written
+    # when the tool is CALLED, so a transcript that lags by the last
+    # tool_result still names every command (reading commands back through
+    # tool_result.sourceToolAssistantUUID would turn that lag into a false
+    # "never ran"). Only a missing prompt record means "not written yet".
     start = None
-    for i, rec in enumerate(recs):
-        if _is_human_prompt(rec):
-            start = i
-    if start is None:
-        return None
-    cmds = []
+    if prompt_id:
+        for i, rec in enumerate(recs):
+            if _is_human_prompt(rec) and rec.get("promptId") == prompt_id:
+                start = i
+                break
+        if start is None:
+            return None  # nothing of this prompt written yet
+    else:
+        for i, rec in enumerate(recs):
+            if _is_human_prompt(rec):
+                start = i
+        if start is None:
+            return None
+    cmds: list[str] = []
     for rec in recs[start + 1:]:
+        if _is_human_prompt(rec) and (not prompt_id or rec.get("promptId") not in (None, prompt_id)):
+            break
         if rec.get("type") == "assistant":
             cmds.extend(_commands_in(rec))
     return cmds
@@ -304,7 +335,7 @@ def run_hook(payload: dict) -> int:
     ok, reasons = verdict(message, executed)
     entry = {**base, "verdict": "pass" if ok else "block", "reasons": reasons,
              "claims": len(claim_sentences(message)),
-             "cited": len(_aom().evidence_commands(message)),
+             "cited": len(_aom().fence_commands(message)),
              "executed": None if executed is None else len(executed)}
     gl.append_jsonl(log, entry, tag=TAG)
     if ok:
@@ -316,7 +347,7 @@ def run_hook(payload: dict) -> int:
     print(f"[{TAG}] BLOCKED (一次)：", file=sys.stderr)
     for r in reasons:
         print(f"  - {r}", file=sys.stderr)
-    print("  規則：AGENTS.md #7 / CLAUDE.md 地雷 #5；重送這則訊息時補上證據區塊或 `[未驗]`。",
+    print("  規則：AGENTS.md #7 / CLAUDE.md 不可協商 #5；重送這則訊息時補上證據區塊或 `[未驗]`。",
           file=sys.stderr)
     return 2
 

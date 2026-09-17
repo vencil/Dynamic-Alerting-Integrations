@@ -319,6 +319,34 @@ def has_evidence_fence(body: str) -> bool:
     return bool(evidence_commands(body))
 
 
+def fence_commands(body: str) -> List[str]:
+    """Every command line in EVERY fenced block, whatever its first line is.
+
+    A command line is ``$ <cmd>`` at the fence's own indentation (a ``$ ``
+    line indented deeper than the fence marker is output — a quoted usage
+    text, a nested prompt). This is the *source* ruler: the Stop hook checks
+    each of these against the commands the turn really ran. Gating on "the
+    fence opens with ``$ ``" would let a block that opens with one output
+    line carry any number of unrun ``$ `` lines past the check.
+    """
+    fence: Optional[str] = None
+    indent = ""
+    out: List[str] = []
+    for line in body.split("\n"):
+        m = _FENCE_RE.match(line)
+        if m:
+            fence, toggled = fence_step(fence, m.group(1), m.group(2))
+            if toggled:
+                indent = line[:len(line) - len(line.lstrip())] if fence is not None else ""
+                continue
+        if fence is None:
+            continue
+        if line.startswith(indent) and line[len(indent):].startswith("$ ") \
+                and line[len(indent) + 2:].strip():
+            out.append(line[len(indent) + 2:].strip())
+    return out
+
+
 def _run_gh(state: str, limit: int) -> str:
     """Return gh's stdout. Raises FileNotFoundError / CalledProcessError /
     subprocess.TimeoutExpired; the caller maps them to exit 2."""

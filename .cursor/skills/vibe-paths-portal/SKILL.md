@@ -11,4 +11,4 @@ paths:
 先讀：
 - `docs/internal/jsx-multi-file-pattern.md` §Build & verify loop
 
-約束：`make portal-build` 後 dist 必須與 source 一致（`dist-source-consistency-check`）；`make test-portal` 跑 Vitest；Windows host 要在 worktree 內 build，別讓 main checkout 的 dist 混進來。
+約束：改 source 後自己跑 `make portal-build` 重生提交的 dist——「改了 source 忘了重 build」沒有任何 hook 擋（`dist-source-consistency-check` 只抓反向：提交了 dist 卻沒有 source 變更）；`make test-portal` 跑 Vitest；Windows host 要在 worktree 內 build。

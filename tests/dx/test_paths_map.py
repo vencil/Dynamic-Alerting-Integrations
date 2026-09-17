@@ -96,6 +96,7 @@ class TestValidate:
         (_valid_map(_entry(paths=())), "paths"),
         (_valid_map(_entry(paths=("/abs/**",))), "relative"),
         (_valid_map(_entry(paths=("",))), "paths"),
+        (_valid_map(_entry(paths=("a,b/**",))), "comma"),
         (_valid_map(_entry(read=[{"section": "S"}])), "read"),
         (_valid_map(_entry(read=[{"file": "a", "section": 3}])), "read"),
         (_valid_map(_entry(note="  ")), "note"),
@@ -136,6 +137,13 @@ class TestCandidates:
         main, wt = fake_repo
         assert mod.to_repo_relative(str(main / "helm" / "values.yaml"), None) == "helm/values.yaml"
         assert mod.to_repo_relative(str(wt / "helm" / "values.yaml"), None) == "helm/values.yaml"
+
+    def test_a_directory_is_written_with_a_trailing_slash_and_the_root_is_dropped(self, fake_repo):
+        mod = _load_module()
+        main, _wt = fake_repo
+        assert mod.to_repo_relative(str(main / "helm"), None) == "helm/"
+        assert mod.to_repo_relative("helm", str(main)) == "helm/"
+        assert mod.to_repo_relative(".", str(main)) is None
 
     def test_relative_token_resolves_against_cwd(self, fake_repo):
         mod = _load_module()
@@ -229,6 +237,30 @@ class TestHook:
                      map_path)
         assert _context(other), "a new session gets the entry again"
 
+    def test_a_read_only_bash_does_not_spend_the_edit_injection(self, env):
+        """Blind-review finding: `cat helm/values.yaml` then `Edit` is the
+        normal rhythm; the guidance must still arrive at the edit."""
+        main, map_path, scratch = env
+        bash = self._payload(main, scratch, tool_name="Bash",
+                             tool_input={"command": "cat helm/values.yaml"})
+        assert "helm-chart" in (_context(_run(bash, map_path)) or "")
+        assert _context(_run(bash, map_path)) is None, "second Bash hit of the same entry is silent"
+        edit = self._payload(main, scratch, tool_name="Edit",
+                             tool_input={"file_path": str(main / "helm" / "values.yaml")})
+        assert "helm-chart" in (_context(_run(edit, map_path)) or ""), "the edit still gets it"
+        assert _context(_run(edit, map_path)) is None
+
+    def test_a_directory_token_matches_its_globstar_entry(self, env):
+        main, map_path, scratch = env
+        p = self._payload(main, scratch, tool_name="Bash", tool_input={"command": "ls helm"})
+        assert "helm-chart" in (_context(_run(p, map_path)) or "")
+
+    def test_write_into_a_directory_that_does_not_exist_yet_is_still_matched(self, env):
+        main, map_path, scratch = env
+        p = self._payload(main, scratch, tool_name="Write",
+                          tool_input={"file_path": str(main / "helm" / "new" / "deep" / "values.yaml")})
+        assert "helm-chart" in (_context(_run(p, map_path)) or "")
+
     def test_bash_hit_via_existing_path_token(self, env):
         main, map_path, scratch = env
         p = self._payload(main, scratch, tool_name="Bash",
@@ -268,9 +300,10 @@ class TestHook:
         assert _run("{nope", map_path).returncode == 0
         assert _run("", map_path).returncode == 0
 
-    def test_unknown_tool_is_ignored(self, env):
+    @pytest.mark.parametrize("tool", ["Read", "NotebookEdit"])
+    def test_tools_outside_the_matcher_are_ignored(self, env, tool):
         main, map_path, scratch = env
-        p = self._payload(main, scratch, tool_name="Read",
+        p = self._payload(main, scratch, tool_name=tool,
                           tool_input={"file_path": str(main / "helm" / "values.yaml")})
         proc = _run(p, map_path)
         assert proc.returncode == 0 and proc.stdout == ""

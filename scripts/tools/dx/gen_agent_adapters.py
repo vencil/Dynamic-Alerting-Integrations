@@ -464,10 +464,30 @@ def existing_outputs():
         for dirpath, _dirs, files in os.walk(abs_root):
             for name in files:
                 abs_path = os.path.join(dirpath, name)
-                found.add(os.path.relpath(abs_path, REPO_ROOT).replace(os.sep, "/"))
+                rel = os.path.relpath(abs_path, REPO_ROOT).replace(os.sep, "/")
+                if owns(rel):
+                    found.add(rel)
     if os.path.isfile(os.path.join(REPO_ROOT, OUT_ENTRY)):
         found.add(OUT_ENTRY)
     return found
+
+
+def owns(dest_rel):
+    """Whether this generator may report/remove `dest_rel` as an adapter.
+
+    `.claude/skills` and `.claude/agents` are owned outright — nothing else
+    writes there. `.cursor/skills` and `.github/instructions` are the vendors'
+    own user directories, so ownership there stops at the `vibe-paths-`
+    prefix: a hand-written `team-style.instructions.md` or `my-skill/` next to
+    the projections is neither `extra` nor deleted.
+    """
+    for out_root in (OUT_SKILLS, OUT_ROLES):
+        if dest_rel.startswith(out_root + "/"):
+            return True
+    for out_root in (OUT_CURSOR, OUT_COPILOT):
+        if dest_rel.startswith(out_root + "/"):
+            return dest_rel[len(out_root) + 1:].startswith(PATHS_PREFIX)
+    return False
 
 
 def diff_against_disk(plan):
@@ -507,7 +527,9 @@ def write_outputs(plan):
     for out_root in OUT_ROOTS:
         for dirpath, dirs, files in os.walk(os.path.join(REPO_ROOT, out_root),
                                             topdown=False):
-            if not files and not dirs and dirpath != os.path.join(REPO_ROOT, out_root):
+            rel = os.path.relpath(dirpath, REPO_ROOT).replace(os.sep, "/")
+            if (not files and not dirs and dirpath != os.path.join(REPO_ROOT, out_root)
+                    and owns(rel + "/x")):  # never prune a vendor dir we do not own
                 os.rmdir(dirpath)
     return removed
 

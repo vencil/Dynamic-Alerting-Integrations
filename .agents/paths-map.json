@@ -1,5 +1,5 @@
 {
-  "$comment": "路徑觸發指引的 SSOT（agent 指引改善計畫 PR-D）。每一列：paths（glob，對 repo 相對路徑比對）→ read（先讀哪份文件的哪一節）＋ note（一句約束）。Claude Code 由 scripts/session-guards/paths_map.py 在 Edit/Write/Bash 前注入；Cursor（.cursor/skills/vibe-paths-*/SKILL.md 的 paths:）與 Copilot（.github/instructions/*.instructions.md 的 applyTo）由 gen_agent_adapters.py 投影，三家共用這一份。JSON 而非 YAML：hook 跑在 host 直譯器、產生器跑在 pre-commit venv，兩處都沒有 pyyaml。",
+  "$comment": "路徑觸發指引的 SSOT（agent 指引改善計畫 PR-D，#1737 線）。每一列：paths（glob，對 repo 相對路徑比對）→ read（先讀哪份文件的哪一節）＋ note（一句約束）。Claude Code 由 scripts/session-guards/paths_map.py 在 Edit/Write/Bash 前注入；Cursor（.cursor/skills/vibe-paths-*/SKILL.md 的 paths:）與 Copilot（.github/instructions/vibe-paths-*.instructions.md 的 applyTo）由 gen_agent_adapters.py 投影，三家共用這一份。JSON 而非 YAML：hook 跑在 host 直譯器、產生器跑在 pre-commit venv，兩處都沒有 pyyaml。note 是會被注入到 agent 上下文的宣稱，寫之前對照 Makefile／.pre-commit-config.yaml／被點名的測試核對；read 的檔與章節有測試釘住，note 沒有。",
   "version": 1,
   "entries": [
     {
@@ -17,7 +17,7 @@
       "read": [
         {"file": "docs/internal/iac-lint-baseline.md", "section": "Layer 4 — k8s raw manifest"}
       ],
-      "note": "raw manifest 的 SAST L4 是 manual hook：`pre-commit run --hook-stage manual --all-files k8s-manifests-sast-check`；`k8s/03-monitoring/configmap-rules-*.yaml` 是 rule-packs 的產物，改來源再重生。"
+      "note": "raw manifest 的 SAST L4 是 manual hook：`pre-commit run --hook-stage manual --all-files k8s-manifests-sast-check`；`k8s/03-monitoring/configmap-rules-*.yaml` 是 rule-packs 的產物，改來源再 `make rulepack-configmaps`。"
     },
     {
       "id": "rule-packs-confd",
@@ -25,15 +25,16 @@
       "read": [
         {"file": "docs/internal/testing-playbook.md", "section": "conf.d/ YAML 格式陷阱"}
       ],
-      "note": "conf.d 是 wrapped format（`tenants:` 包一層）；rule-pack 改動後 `make platform-data` 重生數據，`rule-pack-stats-check` 與 `platform-data-check` 會擋 drift；Go／PromQL／fixture 不得 hardcode tenant id。"
+      "note": "conf.d 是 wrapped format（`tenants:` 包一層）；rule-pack 改動後的產物各有各的重生指令與 drift hook——`python3 scripts/tools/dx/generate_rule_pack_stats.py --generate --lang all`（`rule-pack-stats-check`）、`make rulepack-configmaps`（`rulepack-configmaps-check`）、`make platform-data`（`platform-data-check`）——一支跑完不代表另兩道會綠；Go／PromQL／fixture 不得 hardcode tenant id。"
     },
     {
       "id": "go-code",
-      "paths": ["components/**/*.go"],
+      "paths": ["**/*.go"],
       "read": [
+        {"file": "docs/internal/test-map.md", "section": "Go tests（Dev Container"},
         {"file": "docs/internal/test-map.md", "section": "測試注入 Seam"}
       ],
-      "note": "Go 測試在 Dev Container（`make dc-go-test MOD=… PKG=…`）；`go vet` 不是 CI 的 linter——推前在容器裡跑 `golangci-lint run ./...`（tenant-api 與 threshold-exporter/app 各一次）。"
+      "note": "Go 測試在 Dev Container（`make dc-go-test MOD=… PKG=…`），且 `dc-*` 恆定作用於主 worktree 掛載——在 worktree 改完直接跑會測到舊 code（Trap #62）；`go vet` 不是 CI 的 linter，推前在容器裡對改到的每個 go module 跑一次 `golangci-lint run ./...`。"
     },
     {
       "id": "portal",
@@ -41,7 +42,7 @@
       "read": [
         {"file": "docs/internal/jsx-multi-file-pattern.md", "section": "Build & verify loop"}
       ],
-      "note": "`make portal-build` 後 dist 必須與 source 一致（`dist-source-consistency-check`）；`make test-portal` 跑 Vitest；Windows host 要在 worktree 內 build，別讓 main checkout 的 dist 混進來。"
+      "note": "改 source 後自己跑 `make portal-build` 重生提交的 dist——「改了 source 忘了重 build」沒有任何 hook 擋（`dist-source-consistency-check` 只抓反向：提交了 dist 卻沒有 source 變更）；`make test-portal` 跑 Vitest；Windows host 要在 worktree 內 build。"
     },
     {
       "id": "playwright-e2e",
@@ -58,7 +59,7 @@
         {"file": "docs/internal/testing-playbook.md", "section": "SAST 合規"},
         {"file": "docs/internal/dev-rules.md", "section": "13. da-tools 子命令 exit-code"}
       ],
-      "note": "新工具要守 exit code 0/1/2 與 `--ci`／`--json` 約定，`subprocess` 帶 timeout、`open` 帶 encoding；docstring 改了跑 `generate_tool_map.py --generate --lang all`；新 module-level 函式要進 `tests/shared/property-coverage.yaml` triage。"
+      "note": "新工具要守 exit code 0/1/2 與 `--ci`／`--json` 約定，`subprocess` 帶 timeout、`open` 帶 encoding；docstring 改了跑 `generate_tool_map.py --generate --lang all`；改到 `tests/shared/property-coverage.yaml` 已宣告的那幾個模組時，新 module-level 函式要進它的 triage（其他模組不受該 lint 管）。"
     },
     {
       "id": "changelog",
@@ -74,15 +75,15 @@
       "read": [
         {"file": "AGENTS.md"}
       ],
-      "note": "改完跑 `python3 scripts/tools/dx/gen_agent_adapters.py --generate`；`.claude/skills`、`.claude/agents`、`.cursor/skills`、`.github/instructions` 全是它的產物，`gen-agent-adapters-check` 擋漂移。"
+      "note": "改完跑 `python3 scripts/tools/dx/gen_agent_adapters.py --generate`；`.claude/skills`、`.claude/agents`、`.cursor/skills/vibe-paths-*`、`.github/instructions/vibe-paths-*` 全是它的產物，`gen-agent-adapters-check` 擋漂移。"
     },
     {
       "id": "generated-adapters",
-      "paths": [".claude/skills/**", ".claude/agents/**", ".cursor/skills/**", ".github/instructions/**"],
+      "paths": [".claude/skills/**", ".claude/agents/**", ".cursor/skills/vibe-paths-*/**", ".github/instructions/vibe-paths-*"],
       "read": [
         {"file": "AGENTS.md"}
       ],
-      "note": "⛔ 這是產生物：改 `.agents/` 的來源再重生；直接改這裡會被 `gen-agent-adapters-check` 擋下，下次 `--generate` 也會覆蓋。"
+      "note": "⛔ 這是產生物：改 `.agents/` 的來源再重生；直接改這裡會被 `gen-agent-adapters-check` 擋下，下次 `--generate` 也會覆蓋（同目錄裡非 `vibe-paths-` 前綴的檔不是產物，產生器不碰）。"
     },
     {
       "id": "docs",
@@ -97,9 +98,10 @@
       "id": "workflows",
       "paths": [".github/workflows/**"],
       "read": [
-        {"file": "docs/internal/hook-vs-skill-coverage.md", "section": "4.5 ⚙️ CI-only gates"}
+        {"file": "docs/internal/agent-rulebook-shapes.md", "section": "D-04 有 gate ≠ gate 會跑"},
+        {"file": "tests/ops/test_ci_path_filter_coverage.py"}
       ],
-      "note": "path-gated job 裡的 step 不得帶計算式 `if:`（條件寫進 shell）；pytest 讀到的 repo 檔要在 `python` filter 內——`tests/ops/test_ci_path_filter_coverage.py` 是那道守衛，且 fixture 檔名別用真實 repo 檔名。"
+      "note": "path-gated job 裡的 step 不得帶計算式 `if:`（條件寫進 shell）；pytest 讀到的 repo 檔要在 `python` filter 內（且進 `PYTHON_ENTRIES_THIS_SCANNER_JUSTIFIES`）——`tests/ops/test_ci_path_filter_coverage.py` 是那道守衛，其 docstring 列了它拒收與看不見的形狀；fixture 檔名別用真實 repo 檔名。"
     },
     {
       "id": "session-guards",

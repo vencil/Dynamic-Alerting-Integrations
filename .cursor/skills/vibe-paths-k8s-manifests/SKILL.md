@@ -11,4 +11,4 @@ paths:
 先讀：
 - `docs/internal/iac-lint-baseline.md` §Layer 4 — k8s raw manifest
 
-約束：raw manifest 的 SAST L4 是 manual hook：`pre-commit run --hook-stage manual --all-files k8s-manifests-sast-check`；`k8s/03-monitoring/configmap-rules-*.yaml` 是 rule-packs 的產物，改來源再重生。
+約束：raw manifest 的 SAST L4 是 manual hook：`pre-commit run --hook-stage manual --all-files k8s-manifests-sast-check`；`k8s/03-monitoring/configmap-rules-*.yaml` 是 rule-packs 的產物，改來源再 `make rulepack-configmaps`。

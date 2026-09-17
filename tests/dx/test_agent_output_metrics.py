@@ -226,6 +226,14 @@ def test_evidence_commands_ignores_fences_that_do_not_open_with_a_command():
     assert aom.evidence_commands("```\n$ a\nout\n$ b\n```\n") == ["a", "b"]
 
 
+def test_fence_commands_reads_every_fence_at_the_fence_indent():
+    # output-first fence: no evidence for shape, but its `$ ` lines ARE citations
+    body = "```\nlog\n$ make test\n```\n- item\n  ```\n  $ pytest -q\n    $ nested prompt in output\n  ```\n"
+    assert aom.has_evidence_fence(body), "the indented fence opens with a command"
+    assert aom.fence_commands(body) == ["make test", "pytest -q"]
+    assert aom.fence_commands("prose $ not in a fence\n") == []
+
+
 def test_evidence_commands_and_has_evidence_fence_are_one_ruler():
     for body in ("```\n$ a\n```\n", "```\nx\n```\n", "prose $ a\n", "~~~\n\n$ a\n~~~\n",
                  "```\nx\n~~~\n~~~\n$ ls\n```\n"):

@@ -84,6 +84,35 @@ class TestVerdict:
         ok, reasons = mod.verdict(EVIDENCE, executed=["cd /r && pytest tests/x.py -q"])
         assert ok and reasons == []
 
+    def test_a_fence_that_opens_with_output_still_has_its_commands_checked(self):
+        """Bypass shape from blind review: an output-first fence used to carry
+        any number of unrun `$ ` lines past the source check as long as one
+        real evidence fence existed elsewhere in the message."""
+        mod = _load_module()
+        msg = ("通過。\n\n```\n$ pytest tests/x.py -q\n3 passed\n```\n\n"
+               "```console\n# log\n$ make test\n$ helm lint helm/x\nok\n```\n")
+        ok, reasons = mod.verdict(msg, executed=["pytest tests/x.py -q"])
+        assert not ok and "make test" in reasons[0] and "helm lint" in reasons[0]
+
+    def test_a_dollar_line_indented_deeper_than_the_fence_is_output(self):
+        mod = _load_module()
+        msg = ("乾淨。\n```\n$ pytest tests/x.py -q\nusage: run-hooks.sh <guard.py>\n"
+               "  $ bash run-hooks.sh stop_evidence.py\n3 passed\n```\n")
+        assert mod.verdict(msg, executed=["pytest tests/x.py -q"]) == (True, [])
+
+    @pytest.mark.parametrize("cited,executed,ok", [
+        ("pytest tests/x.py -q", "cd /r && pytest tests/x.py -q", True),   # a segment
+        ("cd /r && pytest tests/x.py -q", "cd /r && pytest tests/x.py -q", True),
+        ("pytest", "cd /r && pytest tests/x.py -q", False),                # over-claim: substring
+        ("pytest tests/", "pytest tests/x.py -q", False),                   # over-claim: prefix
+        ("git status", "git status | head", True),                          # pipe segment
+        ("head", "git status | head", True),
+        ("echo a; echo b", "echo a; echo b", True),
+    ])
+    def test_citation_must_equal_a_command_or_one_of_its_segments(self, cited, executed, ok):
+        mod = _load_module()
+        assert (mod.missing_commands([cited], [executed]) == []) is ok
+
     def test_cited_command_that_never_ran_blocks_even_without_claim_words(self):
         """Source is checked independently of shape: a fabricated `$ cmd` is
         a false claim whatever the prose around it says."""
@@ -108,6 +137,13 @@ class TestVerdict:
         mod = _load_module()
         assert mod.missing_commands(["pytest   -q  tests"], ["pytest -q tests && echo ok"]) == []
         assert mod.missing_commands(["pytest -q tests"], ["pytest -x tests"]) == ["pytest -q tests"]
+
+    def test_unverified_mark_exempts_only_its_own_clause(self):
+        """CJK commas split clauses: one trailing `[未驗]` used to exempt a whole
+        comma-chained line of claims."""
+        mod = _load_module()
+        found = mod.claim_sentences("我把 lint 修好了、測試全部通過、mkdocs 也乾淨，CI 那格還沒跑 [未驗]")
+        assert found == ["我把 lint 修好了", "測試全部通過", "mkdocs 也乾淨"]
 
     def test_unverified_message_with_no_fence_passes(self):
         mod = _load_module()
@@ -170,6 +206,19 @@ class TestTranscript:
     def test_unknown_prompt_id_is_unmeasurable(self, two_turns):
         mod = _load_module()
         assert mod.executed_commands(str(two_turns), "p-not-yet-written") is None
+
+    def test_a_transcript_lagging_by_the_tool_result_still_names_the_command(self, tmp_path):
+        """The harness writes the transcript asynchronously; the tail that lags
+        is the tool_result. Commands come from the tool_use record, which is
+        already there, so the citation is not reported as 'never ran'."""
+        mod = _load_module()
+        recs = [_prompt("ask", "p1", "u1"), _tool_use("pytest -q new", "a1")]  # no tool_result yet
+        assert mod.executed_commands(str(_transcript(tmp_path, recs)), "p1") == ["pytest -q new"]
+
+    def test_a_turn_that_ran_nothing_is_measured_as_empty_not_unmeasurable(self, tmp_path):
+        mod = _load_module()
+        recs = [_prompt("ask", "p1", "u1"), _text("just prose", "a1")]
+        assert mod.executed_commands(str(_transcript(tmp_path, recs)), "p1") == []
 
     def test_fallback_without_prompt_id_uses_the_last_human_prompt(self, two_turns):
         mod = _load_module()
@@ -235,6 +284,10 @@ class TestHook:
         rows = [json.loads(l) for l in log.read_text(encoding="utf-8").splitlines()]
         assert [r["verdict"] for r in rows] == ["block", "pass"]
         assert rows[1]["why"] == "already-blocked-once"
+        # Surviving mutant from blind review: the marker must be per PROMPT —
+        # a new prompt in the same session is checked again.
+        third = _run(self._payload(transcript, scratch, CLAIM_ONLY, pid="p1"), envx)
+        assert third.returncode == 2, "a different prompt of the same session is checked afresh"
 
     def test_stop_hook_active_always_passes(self, env):
         transcript, scratch, envx, _log = env
@@ -253,6 +306,12 @@ class TestHook:
         msg = "通過。\n```\n$ pytest -q old\n1 passed\n```\n"
         proc = _run(self._payload(transcript, scratch, msg), envx)
         assert proc.returncode == 2 and "沒有跑過" in proc.stderr
+
+    def test_evidence_of_a_segment_of_a_command_passes(self, env):
+        transcript, scratch, envx, _log = env
+        recs_path = transcript
+        msg = "通過。\n```\n$ pytest -q new\n1 passed\n```\n"
+        assert _run(self._payload(recs_path, scratch, msg), envx).returncode == 0
 
     def test_transcript_not_yet_written_skips_source_check(self, env):
         transcript, scratch, envx, log = env
