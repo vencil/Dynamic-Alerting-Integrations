@@ -12,7 +12,6 @@ from __future__ import annotations
 import importlib.util as _ilu
 import json
 import os
-import sys
 import subprocess
 import sys
 import tomllib
@@ -42,9 +41,14 @@ def _json(repo: Path) -> dict:
 # ⛔ 不要在這裡再寫一次字面量。context 名稱的 SSOT 是工具自己的常數；測試端另立一份
 # 副本時，改了生產端卻漏改這裡，會讓本檔十餘格以「不認得的 context ⇒ rc 2」一起紅，
 # 而失敗訊息不會指向真正的根因。⇒ 直接取用，讓副本不存在。
-_spec = _ilu.spec_from_file_location("list_subprocess_only_modules", _TOOL)
+# ⛔ 註冊名刻意**不是**真實模組名。`tests/conftest.py` 把 scripts/tools/dx 放進
+# sys.path，所以別的測試檔可以直接 `import list_subprocess_only_modules`——若這裡用
+# 真實名稱佔住 sys.modules，那個 import 會拿到這裡 exec 過、可能已被別格 monkeypatch
+# 的物件，而不是一次乾淨載入。那是「兩份事實、一份先腐爛」透過行程全域快取發生。
+_MOD_NAME = "_subproc_only_under_test"
+_spec = _ilu.spec_from_file_location(_MOD_NAME, _TOOL)
 _mod = _ilu.module_from_spec(_spec)
-sys.modules["list_subprocess_only_modules"] = _mod
+sys.modules[_MOD_NAME] = _mod
 _spec.loader.exec_module(_mod)
 
 IN_PROCESS = _mod.IN_PROCESS_CONTEXT

@@ -101,12 +101,21 @@ def test_check_portal_bundle_size_returns_an_int(argv, capsys):
     out = capsys.readouterr().out
     assert isinstance(rc, int) and not isinstance(rc, bool), f"main() 回了 {rc!r}"
     assert rc in (0, 1), rc
-    # ⛔ 只斷言 rc 的話，一支 `def main(): return 0` 的 stub 也會過（盲審指出）。
-    #    改為斷言它**真的量了東西**：輸出裡要有非零的檔案數與實際位元組數。
+
+    # ⛔ 斷言「輸出的形狀」擋不住把數字寫死的 stub——驗證輪實測一支完全不碰檔案系統、
+    #    回報 file_count=1 / total_bytes=1 的假實作通過了前一版的全部斷言。⇒ 改用
+    #    **獨立算出來的事實**交叉核對：自己走一次 dist 目錄，數字必須逐項相等。
+    dist = _REPO_ROOT / "docs" / "assets" / "dist"
+    assert dist.is_dir(), f"dist 目錄不在 {dist} ⇒ 本格會變成平凡為真"
+    js_files = sorted(dist.rglob("*.js"))
+    assert js_files, "dist 裡沒有 .js ⇒ 本格會變成平凡為真"
     report = json.loads(out)
-    assert report["stats"]["file_count"] > 0, report["stats"]
-    assert report["stats"]["total_bytes"] > 0, report["stats"]
-    assert report["limits"], "沒有讀到門檻設定 ⇒ 可能根本沒去量"
+    assert report["stats"]["file_count"] == len(js_files), (
+        f"報告說 {report['stats']['file_count']} 個檔，實際走目錄數到 {len(js_files)} 個"
+    )
+    assert report["stats"]["total_bytes"] == sum(f.stat().st_size for f in js_files), (
+        f"總位元組數對不上：報告 {report['stats']['total_bytes']}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -125,17 +134,29 @@ def test_generate_nav_exits_with_caller_error_without_a_docs_dir(argv, tmp_path,
     assert excinfo.value.code == 2
 
 
-def test_generate_nav_does_not_exit_with_caller_error_on_the_real_repo(argv, capsys):
-    """對照組：真實 repo 下它跑得起來，離開碼不是 2（0 或 1 都算跑過）。"""
-    argv("--check", "--repo-root", str(_REPO_ROOT))
+@pytest.mark.parametrize("doc_count", [1, 4])
+def test_generate_nav_reports_the_number_of_docs_it_actually_scanned(
+    argv, tmp_path, capsys, doc_count
+):
+    """對照組：它報出來的掃描數必須等於**我放進去的檔案數**。
+
+    ⚠️ 這支工具沒有任何已知輸入能讓它回 0（`--check` 對最小 docs 樹也回 1），所以
+    拿不到「釘死 0」那種強斷言。前一版改斷言輸出含 `Scanned`——驗證輪實測那擋不住
+    一支「只檢查 docs/ 存在、印死字串、永遠 exit 1」的 stub。⇒ 改用我自己控制的
+    獨立事實：`doc_count` 由本格決定，寫死的輸出不可能同時對上 1 和 4。
+    """
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    for i in range(doc_count):
+        (docs / f"d{i}.md").write_text(f"# d{i}\n", encoding="utf-8")
+    argv("--check", "--repo-root", str(tmp_path))
     with pytest.raises(SystemExit) as excinfo:
         generate_nav.main()
     out = capsys.readouterr().out
     assert excinfo.value.code in (0, 1), excinfo.value.code
-    # ⚠️ 這支工具沒有任何已知輸入能讓它回 0（`--check` 對最小 docs 樹也回 1），所以
-    #    這裡拿不到「釘死 0」那種強斷言。改以**做過事的證據**取代：它必須印出掃描
-    #    結果。少了這條，一支不讀 docs、一律 sys.exit(1) 的 stub 會過。
-    assert "Scanned" in out, f"沒有掃描的跡象：{out[:200]!r}"
+    assert f"Scanned {doc_count} docs" in out, (
+        f"報出來的掃描數與實際放進去的 {doc_count} 個不符：{out[:200]!r}"
+    )
 
 
 # ---------------------------------------------------------------------------
