@@ -60,6 +60,21 @@ function cicdGenerateInitCommand(config) {
   if (config.deploy) parts.push(`--deploy ${config.deploy}`);
   if (config.tenants.length > 0) parts.push(`--tenants ${config.tenants.join(',')}`);
   if (config.packs.length > 0) parts.push(`--rule-packs ${config.packs.join(',')}`);
+  // ⛔ The flag is NOT redundant with the image the docker wrapper runs. It
+  // decides what `init` WRITES: `--da-tools-image X` is what puts
+  // `DA_TOOLS_IMAGE: X` into the .github workflow, the GitLab pipeline and the
+  // pre-commit snippet. Measured on a real run of init_project.py — with and
+  // without the flag, the generated workflow differs on exactly that line.
+  // Without this, a customer who set an image here would read a preview naming
+  // their registry and then get `:latest` in the file `init` actually wrote,
+  // which is #1351's headline defect ("預覽與 init 寫出的是兩個不同的東西")
+  // reintroduced by the very change meant to close that row.
+  //
+  // Emitted only when it differs from the default, because the CLI's own
+  // default IS that value: at the default the flag would be a no-op the
+  // customer has to read past.
+  const image = cicdDaToolsImage(config);
+  if (image !== CICD_DEFAULT_DA_TOOLS_IMAGE) parts.push(`--da-tools-image ${image}`);
   parts.push('--non-interactive');
   return parts.join(' \\\n  ');
 }

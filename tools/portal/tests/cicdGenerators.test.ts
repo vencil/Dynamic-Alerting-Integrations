@@ -350,6 +350,50 @@ describe('da-tools image is configurable (#1351)', () => {
       .toBe('registry.internal/da-tools:v1');
   });
 
+  it('puts --da-tools-image into the init command a custom image implies', () => {
+    // ⛔ Not cosmetic. The flag is what decides the CONTENT `init` writes:
+    // scripts/tools/ops/init_project.py threads it into _gen_github_actions /
+    // _gen_gitlab_ci / _gen_precommit_snippet. Running the real init_project.py
+    // twice, with and without the flag, the generated .github workflow differs
+    // on exactly `DA_TOOLS_IMAGE:`. Omit it here and the customer reads a
+    // preview naming their registry, runs the command we showed them, and gets
+    // :latest in the file on disk — #1351's headline defect, re-created by the
+    // change that closes #1351's image row.
+    const out = cicdGenerateInitCommand(baseConfig({ daToolsImage: 'registry.internal:5000/da-tools:v1' }));
+    expect(out).toContain('--da-tools-image registry.internal:5000/da-tools:v1');
+    expect(out.indexOf('--da-tools-image')).toBeLessThan(out.indexOf('--non-interactive'));
+  });
+
+  it('omits the flag at the default, where it would be a no-op', () => {
+    // The CLI's own default IS this value (init_project.py DA_TOOLS_IMAGE), so
+    // emitting it would add a line the customer has to read past. Pinned in
+    // both directions so "omit" cannot quietly become "never emit".
+    for (const cfg of [baseConfig(), baseConfig({ daToolsImage: '  ' }),
+      baseConfig({ daToolsImage: CICD_DEFAULT_DA_TOOLS_IMAGE })]) {
+      expect(cicdGenerateInitCommand(cfg)).not.toContain('--da-tools-image');
+    }
+  });
+
+  it('shows the same image in the init flag, the docker wrapper and the preview', () => {
+    // The three artifacts sit on one screen. Any pair disagreeing is the
+    // wizard telling the customer two different things at once.
+    const daToolsImage = 'registry.internal:5000/da-tools:v1';
+    const cfg = baseConfig({ daToolsImage });
+    expect(cicdGenerateInitCommand(cfg)).toContain(`--da-tools-image ${daToolsImage}`);
+    expect(cicdGenerateDockerCommand(cfg)).toContain(`--da-tools-image ${daToolsImage}`);
+    expect(cicdGenerateGitHubActionsPreview(cfg)).toContain(daToolsImage);
+  });
+
+  it('still strips only the leading "da-tools " when nesting into docker', () => {
+    // The nesting is `init.replace('da-tools ', '')`, a first-match replace.
+    // `--da-tools-image` is not a match (no space after `da-tools`), but the
+    // flag put a second `da-tools` substring into the string being rewritten,
+    // so the invariant the older test pins is re-checked with it present.
+    const out = cicdGenerateDockerCommand(baseConfig({ daToolsImage: 'registry.internal:5000/da-tools:v1' }));
+    expect(out.match(/da-tools init/g) ?? []).toHaveLength(0);
+    expect(out).toContain('--da-tools-image registry.internal:5000/da-tools:v1');
+  });
+
   it('carries a custom image into the docker one-liner', () => {
     const out = cicdGenerateDockerCommand(baseConfig({ daToolsImage: 'registry.internal/da-tools:v1' }));
     expect(out).toContain('registry.internal/da-tools:v1');
