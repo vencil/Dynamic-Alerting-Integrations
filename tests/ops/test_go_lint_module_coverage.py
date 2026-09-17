@@ -23,6 +23,7 @@ raises on both for this job (`GATED_LEGS` contains `("validate.yaml",
 from __future__ import annotations
 
 import contextlib
+import copy
 import re
 import sys
 import warnings
@@ -80,10 +81,28 @@ _TAG_DISPOSITION = {
 }
 _DISPOSITIONS = frozenset({"enrol", "default-build", "unlinted"})
 
-# The linter floor this repo's own configs and workflow comments promise.
-# Asserted rather than described — prose nobody checks is how the promise and
-# the tree drift apart.
+# Linters checked per checker against every silencing carrier below (enable /
+# disable, exclusions, settings). A subset of the Go Lint job's GOLANGCI_FLOOR,
+# the full ENABLEMENT floor, asked of golangci itself (#1870). ⚠️ NOT GUARDED:
+# the floor's other members can be enabled yet silenced module-wide by an
+# `exclusions.rules` entry or their own `settings` (measured: `path: .*` naming
+# errcheck, or `staticcheck.checks: ["-all"]`, leave everything here green) —
+# only the members of this set get the per-checker check (#1877).
 _REQUIRED_LINTERS = frozenset({"godoclint"})
+
+# The `standard` group, named here so the floor cannot shrink below it without
+# this file changing. A pin on what the floor must contain, not a model of
+# golangci's groups: which linters `standard` enables is golangci's answer, and
+# the Go Lint job gets it from `golangci-lint linters --json`.
+_STANDARD_LINTERS = frozenset({"errcheck", "govet", "ineffassign", "staticcheck", "unused"})
+
+# `linters.default` values that keep every standard linter. golangci closes
+# the enum itself (jsonschema: standard | all | none | fast); `none` enables
+# only the listed linters and `fast` retires errcheck, govet, staticcheck and
+# unused (measured, #1870). An absent `default` means `standard`. ⛔ This is the
+# pytest-visible half only — `disable:` shrinks the set too, and the effective
+# set is checked by the Go Lint job's floor step.
+_DEFAULTS_KEEPING_STANDARD = frozenset({"standard", "all"})
 
 # `run:` keys this repo has looked at. ⛔ This is a CHANGE DETECTOR, not a
 # safety proof — the honest claim is "someone reviewed this key once", and even
@@ -267,14 +286,16 @@ def test_every_go_file_is_under_a_linted_module() -> None:
 
     undisclosed = sorted(set(orphans) - set(_EXEMPT_GO_FILES))
     assert not undisclosed, (
-        f"tracked .go read by no lint step: {undisclosed}. Either no linted "
-        "module owns it, or `./...` never descends to it (a `testdata` "
-        "directory, a subdirectory of `vendor`, or a directory or file name "
-        "starting with `.` or `_`) — the step prints `0 issues` either way. "
-        "Code meant to be linted: move it where `./...` reaches. A fixture "
-        "that must NOT compile (a `testdata/*.go` template): it is a hole by "
-        "design — record it in _EXEMPT_GO_FILES with that reason. Adding "
-        "anything else there silences this and lints nothing.")
+        f"tracked .go read by no lint step: {undisclosed}. The step prints "
+        "`0 issues` either way; the two causes have different fixes. No linted "
+        "module owns it: give its directory a go.mod and a lint step, or move "
+        "the file into a linted module (#1816 did the former). `./...` never "
+        "descends to it (a `testdata` directory, a subdirectory of `vendor`, or "
+        "a name starting with `.` or `_`): move it where `./...` reaches — "
+        "unless it is a fixture that must NOT compile (a `testdata/*.go` "
+        "template), the one hole by design, which goes in _EXEMPT_GO_FILES with "
+        "that reason. ⛔ Never exempt a file no module owns: that undoes an "
+        "enrolment rather than recording a hole.")
 
     stale = sorted(set(_EXEMPT_GO_FILES) - set(orphans))
     assert not stale, (
@@ -778,6 +799,110 @@ def test_the_invariant_itself_reds_when_a_modules_own_files_are_excluded(
         test_every_linted_module_reports_something()
 
 
+def test_the_linter_floor_is_asked_of_golangci_itself() -> None:
+    """The Go Lint job checks each module's effective linter set against a
+    floor, and that floor keeps the standard linters (#1870).
+
+    `linters.default`, `enable` and `disable` all move the effective set; only
+    golangci knows the group memberships, so the check runs as a step that
+    reads `golangci-lint linters --json` — the pytest job does not install
+    golangci-lint.
+    This pins the parts a Python test can read without re-implementing that
+    step: it exists, exactly once, GOLANGCI_FLOOR has not shrunk, and the
+    modules it checks are discovered rather than listed.
+
+    ⚠️ Discovery is pinned two ways because each alone is fooled: the positive
+    check reads code lines only, but a trailing `# git ls-files …` comment on a
+    hand-written line still satisfies it; the negative check catches that line
+    because a hand-written list has to name a linted module. Neither catches an
+    enumeration that names no module literally (a shell glob, say).
+    """
+    steps = [s for s in _load_workflow(VALIDATE)["jobs"][LINT_JOB]["steps"]
+             if "golangci-lint linters --json" in str(s.get("run", ""))]
+    assert len(steps) == 1, (
+        f"{VALIDATE.name}::{LINT_JOB} has {len(steps)} steps asking "
+        "`golangci-lint linters --json` for the effective linter set; expected "
+        "one. Without it, `linters.disable` can retire a standard linter and "
+        "every test here stays green.")
+    floor = set(str((steps[0].get("env") or {}).get("GOLANGCI_FLOOR", "")).split())
+    missing = sorted((_STANDARD_LINTERS | _REQUIRED_LINTERS) - floor)
+    assert not missing, (
+        f"GOLANGCI_FLOOR in {VALIDATE.name}::{LINT_JOB} no longer names "
+        f"{missing}. The floor may grow; shrinking it is a decision to stop "
+        "requiring those linters, made here in _STANDARD_LINTERS / "
+        "_REQUIRED_LINTERS, not in the workflow alone.")
+
+    # A hand-written module list passes every check above while a config added
+    # later is never floor-checked; the `default` accept-set would still see
+    # that module, but not a `disable:` in it.
+    code = "\n".join(line for line in str(steps[0]["run"]).splitlines()
+                     if not line.lstrip().startswith("#"))
+    assert re.search(r"git\s+ls-files\b[^\n]*\.golangci\.yml", code), (
+        f"the floor step in {VALIDATE.name}::{LINT_JOB} no longer discovers the "
+        "configs with `git ls-files … .golangci.yml`, so a module added later is "
+        "not floor-checked.")
+    named = sorted(m for m in set(_lint_steps().values()) if m in code)
+    assert not named, (
+        f"the floor step in {VALIDATE.name}::{LINT_JOB} names module directories "
+        f"{named} itself. A hand-written list skips the next module silently.")
+
+
+_DISCOVERY = "configs=$(git ls-files -- ':(glob)**/.golangci.yml')"
+
+
+@pytest.mark.parametrize("edit", [
+    "shrink the floor",
+    "drop the step",
+    "drop the discovery",
+    "hand-write the modules, keeping the words in a trailing comment",
+])
+def test_the_floor_pin_reds_when_the_step_weakens(edit, monkeypatch) -> None:
+    """Through the pin above, on a copy of the real workflow."""
+    real = _load_workflow
+
+    def weakened(path):
+        wf = copy.deepcopy(real(path))
+        steps = wf["jobs"][LINT_JOB]["steps"]
+        floor_step = next(s for s in steps
+                          if "golangci-lint linters --json" in str(s.get("run", "")))
+        run = floor_step["run"]
+        if edit == "shrink the floor":
+            floor_step["env"]["GOLANGCI_FLOOR"] = "govet ineffassign staticcheck unused godoclint"
+        elif edit == "drop the step":
+            steps.remove(floor_step)
+        elif edit == "drop the discovery":
+            floor_step["run"] = run.replace(_DISCOVERY, "configs=''")
+        else:
+            floor_step["run"] = run.replace(
+                _DISCOVERY,
+                f"configs='{_ANCHOR_MODULE}/.golangci.yml'  # was: git ls-files .golangci.yml")
+        # An edit that misses its anchor leaves the real step, which the pin
+        # accepts. Not an AssertionError: pytest.raises below would swallow it.
+        if edit.startswith(("drop the discovery", "hand-write")) and floor_step["run"] == run:
+            raise RuntimeError(f"control edit {edit!r} did not change the step")
+        return wf
+
+    monkeypatch.setattr(sys.modules[__name__], "_load_workflow", weakened)
+    with pytest.raises(AssertionError):
+        test_the_linter_floor_is_asked_of_golangci_itself()
+
+
+@pytest.mark.parametrize("value", ["fast", "none"])
+def test_the_invariant_itself_reds_on_a_default_that_drops_standard(value, monkeypatch) -> None:
+    """Every real config says `standard`, so only an injected value reaches this."""
+    real = _module_config
+
+    def with_default(module: str) -> dict:
+        cfg = real(module)
+        if module == _ANCHOR_MODULE:
+            cfg.setdefault("linters", {})["default"] = value
+        return cfg
+
+    monkeypatch.setattr(sys.modules[__name__], "_module_config", with_default)
+    with pytest.raises(AssertionError, match=rf"linters\.default: {value}"):
+        test_every_linted_module_reports_something()
+
+
 def test_every_linted_module_reports_something() -> None:
     """Enrolment is a step; this is whether the step can ever report.
 
@@ -802,17 +927,19 @@ def test_every_linted_module_reports_something() -> None:
         linters = cfg.get("linters") or {}
         own = _module_corpus(go_files, all_modules, module)
 
-        assert linters.get("default") != "none", (
-            f"{module}/.golangci.yml sets `linters.default: none`; the step "
-            "runs and reports nothing.")
+        default = linters.get("default", "standard")
+        assert default in _DEFAULTS_KEEPING_STANDARD, (
+            f"{module}/.golangci.yml sets `linters.default: {default}`, which "
+            "does not keep the standard linters: `none` enables only what is "
+            "listed, `fast` drops errcheck, govet, staticcheck and unused. Use "
+            "`standard` or `all`.")
 
         enabled = set(_as_list(linters.get("enable"), "linters.enable"))
         disabled = set(_as_list(linters.get("disable"), "linters.disable"))
         missing = sorted((_REQUIRED_LINTERS - enabled) | (_REQUIRED_LINTERS & disabled))
         assert not missing, (
-            f"{module}/.golangci.yml does not run {missing} — the workflow's "
-            "own description of this job says every module does. Enable it, or "
-            "change that description.")
+            f"{module}/.golangci.yml does not run {missing}, which the Go Lint "
+            "job's GOLANGCI_FLOOR requires of every module. Enable it.")
 
         issues = cfg.get("issues") or {}
         for key in ("max-issues-per-linter", "max-same-issues"):
