@@ -91,7 +91,7 @@ SCOPE — WHAT THIS GATE DOES *NOT* ASSERT (honest boundaries)
    path is unreachable, so the recipe ``skip``s (guarded on ``shutil.which`` so it
    RUNS wherever the harness exists) — the single tool this gate cannot execute
    for real here.  Flagged for Wave-2 follow-up, not silently dropped.
-3. **Non-JSON output flags** (``--markdown`` / ``--badge`` / ``--format yaml`` /
+3. **Non-JSON output flags** (``--markdown`` / ``--format yaml`` /
    ``--summary``) are a different contract and not gated.
 4. **Data-shape coverage is one-deep** — each mode is driven with one input shape;
    the contract is about *where the bytes go*, not report content.

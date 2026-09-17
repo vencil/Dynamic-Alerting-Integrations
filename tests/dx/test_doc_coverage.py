@@ -10,8 +10,8 @@ Closes the audit gap (P1-5 / 596 LOC tool was 0% covered). Targets the spine:
   - _is_in_code_block — fence-count parity
   - _resolve_link_path — relative + anchor + out-of-repo
   - analyze + get_statistics — end-to-end on tmp_path repo
-  - get_json_report + get_badge_json — output shapes + color thresholds
-  - main() CLI — text / --json / --badge / --ci paths
+  - get_json_report — output shape
+  - main() CLI — text / --json / --ci paths
 """
 from __future__ import annotations
 
@@ -555,7 +555,7 @@ class TestAnalyzeEndToEnd:
 
 
 # ---------------------------------------------------------------------------
-# get_json_report + get_badge_json
+# get_json_report
 # ---------------------------------------------------------------------------
 class TestReportShapes:
     def test_json_report_has_required_keys(self, tmp_path):
@@ -569,23 +569,6 @@ class TestReportShapes:
         rep = a.get_json_report()
         assert set(rep.keys()) >= {"timestamp", "statistics", "files", "broken_links"}
         assert isinstance(rep["files"], list)
-
-    def test_badge_color_green_at_high_coverage(self, tmp_path):
-        # Empty repo → all coverages default 100% / link_health 100%.
-        a = dc.DocCoverageAnalyzer(str(tmp_path))
-        a.analyze()
-        badge = a.get_badge_json()
-        assert badge["schemaVersion"] == 1
-        assert badge["label"] == "docs coverage"
-        # All defaults add to (0+0+100)/3 ≈ 33% for empty (frontmatter+bilingual=0).
-        # Color at 33% is "red".
-        assert badge["color"] in {"red", "orange", "yellow", "green"}
-
-    def test_badge_message_format(self, tmp_path):
-        a = dc.DocCoverageAnalyzer(str(tmp_path))
-        a.analyze()
-        badge = a.get_badge_json()
-        assert badge["message"].endswith("%")
 
 
 # ---------------------------------------------------------------------------
@@ -607,14 +590,6 @@ class TestMainCLI:
         parsed = json.loads(capsys.readouterr().out)
         assert "statistics" in parsed
         assert "files" in parsed
-
-    def test_badge_mode_emits_shield_json(self, tmp_path, capsys, cli_argv):
-        cli_argv("doc_coverage.py", "--badge", "--repo-root", str(tmp_path))
-        rc = dc.main()
-        assert rc == 0
-        parsed = json.loads(capsys.readouterr().out)
-        assert parsed["schemaVersion"] == 1
-        assert parsed["label"] == "docs coverage"
 
     def test_nonexistent_repo_returns_caller_error(self, tmp_path, capsys, cli_argv):
         cli_argv("doc_coverage.py", "--repo-root", str(tmp_path / "ghost"))
