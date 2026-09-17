@@ -206,6 +206,27 @@ class TestCheckConflict:
         assert "1 個檔案衝突" in result.message
         assert "file.txt" in result.detail
 
+    @pytest.mark.parametrize(
+        "responses",
+        [
+            [_cp(0, "3\n"), _cp(1, "CONFLICT (content): Merge conflict in a.txt\n", "")],
+            [_cp(0, "3\n"), _cp(1, "", "unknown"),
+             _cp(1, "CONFLICT (content): Merge conflict in a.txt\n", ""), _cp(0)],
+        ],
+        ids=["merge-tree", "merge-fallback"],
+    )
+    def test_both_conflict_paths_disclose_the_origin_main_limit(
+        self, monkeypatch, tmp_path, responses
+    ):
+        """#1476 — the base is always origin/main, so a stacked PR can inherit
+        every conflict listed here. Both FAIL paths have to say so; the note is
+        compared as a constant so this pins disclosure, not wording."""
+        monkeypatch.chdir(tmp_path)
+        _stub_run_sequence(monkeypatch, responses)
+        result = pp.check_conflict()
+        assert result.status == pp.Status.FAIL
+        assert pp._STACKED_PR_NOTE in result.detail
+
 
 # ---------------------------------------------------------------------------
 # check_local_hooks
