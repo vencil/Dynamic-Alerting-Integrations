@@ -121,8 +121,10 @@ _BENCH_RE = re.compile(
 
 # Suite header emitted by `go test -bench`, e.g.
 #   "cpu: AMD EPYC 7763 64-Core Processor"
-# `bench_filter.go` has always RETAINED this line in the artifact (see its
-# `retainPrefixes`); until #1396 nothing ever read it. The nightly runner pool is
+# The line reaches the artifact two ways, and only one of them filters: the
+# paired path (bench_interleave.sh) appends the test binary's raw stdout, while
+# the fallback path and the release harness go through `bench_filter.go`, which
+# retains it (its `retainPrefixes`). Until #1396 nothing read it. The pool is
 # heterogeneous (Intel Xeon / AMD EPYC 7763 / AMD EPYC 9V74 observed in a single
 # 30-night window, with IO/CPU ratios 11.8 / 19.1 / 25.3 — completely separated),
 # so this string is the stratification key for the trend watchdog.
