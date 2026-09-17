@@ -104,7 +104,11 @@ def test_the_child_config_carries_the_context_the_tool_reads(clean_env) -> None:
 
 
 def _measure_child(tmp_path: Path, env_extra: dict) -> set:
-    """跑一個子行程並回傳它在資料檔裡留下的 context 集合（空集合＝完全沒被量到）。"""
+    """跑一個子行程並回傳它在資料檔裡留下的 context 集合（空集合＝完全沒被量到）。
+
+    ⛔ context 名稱取自工具的常數，不在這裡再寫一次字面量：測試端的副本漂掉時，
+    失敗會以一堆看似無關的測試同時紅的形狀出現，而訊息不指向真正的根因。
+    """
     import coverage
 
     target = tmp_path / "child_tool.py"
@@ -115,7 +119,7 @@ def _measure_child(tmp_path: Path, env_extra: dict) -> set:
     config.source = [str(tmp_path)]
     config.parallel = True
     config.data_file = str(data_file)
-    config.context = "subprocess"
+    config.context = _load(_TOOL, "_wiring_tool_for_context").SUBPROCESS_CONTEXT
 
     env = {k: v for k, v in os.environ.items() if k not in _ENV_KEYS}
     env.update({k: (config.serialize() if v is True else v)
@@ -138,8 +142,9 @@ def _measure_child(tmp_path: Path, env_extra: dict) -> set:
 def test_a_child_with_the_config_is_measured_under_the_subprocess_context(
     tmp_path: Path,
 ) -> None:
+    expected = _load(_TOOL, "_wiring_tool_for_context").SUBPROCESS_CONTEXT
     contexts = _measure_child(tmp_path, {"COVERAGE_PROCESS_CONFIG": True})
-    assert contexts == {"subprocess"}, contexts
+    assert contexts == {expected}, contexts
 
 
 def test_a_child_without_the_config_is_not_measured_at_all(tmp_path: Path) -> None:

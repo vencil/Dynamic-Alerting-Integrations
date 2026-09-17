@@ -36,9 +36,12 @@ in-process（測試直接 import 後呼叫）、subprocess（測試起子行程�
 本工具答不出來的事（刻意留白，不是疏忽）
 ----------------------------------------
 ⚠️ `unexecuted` **合併了兩件事**：真的沒有任何測試碰它、以及有測試碰它但那次執行
-**沒被記錄**。後者的已知成因是測試以 `env={...}` 從頭組環境而不帶 `os.environ`，子行程
-因此收不到 `COVERAGE_PROCESS_CONFIG`。⛔ 從 coverage 資料**無法**區分這兩者——那正是本
-工具倚賴的 oracle 的邊界。要縮小它只能去改那些測試，不能靠這裡多寫一條述詞。
+**沒被記錄**。後者有兩個已知成因：(a) 測試以 `env={...}` 從頭組環境而不帶 `os.environ`，
+子行程因此收不到 `COVERAGE_PROCESS_CONFIG`；(b) 該檔是 symlink 而它的目標落在 coverage
+`source` 之外——coverage 以 realpath 過 `source` 過濾器，整段執行連進資料庫的機會都沒有。
+⛔ 從 coverage 資料**無法**區分這兩者與「真的沒測試」——那正是本工具倚賴的 oracle 的
+邊界。要縮小它只能去改那些測試或那個 symlink，不能靠這裡多寫一條述詞。
+（目標**在** `source` 內的 symlink 則是量得到的，兩側都以 realpath 正規化後可對上。）
 
 ⚠️ 本工具**不再回報「哪些測試檔碰到這個模組」**。coverage 的靜態 context 記錄的是行程
 種類不是測試身分；要那個資訊得改用 `--cov-context=test` 的動態 context，那會取代本工具
@@ -235,32 +238,39 @@ def read_coverage_data(path: Path):
     return data
 
 
-def _relative_to(repo: Path, measured: str) -> "str | None":
-    """把 coverage 記錄的絕對路徑折回 repo 相對路徑；不在 repo 內回 ``None``。
+def _measured_key(repo: Path, measured: str) -> str:
+    """把 coverage 記錄的一筆路徑正規化成可與母體比對的鍵。
 
-    ⚠️ 用 ``os.path.relpath`` 之後檢查 ``..``，不是用字串 prefix 比對——後者會把
-    ``/repo-backup/x.py`` 當成 ``/repo`` 底下的檔。
+    ⛔ **不能直接 `os.path.realpath(measured)`。** coverage 在 `relative_files` 模式下
+    記錄的是**字面相對字串**（實測：`measured_files()` 回 `'scripts/tools/ops/a.py'`，
+    `os.path.isabs` 為 False），而 `realpath` 會拿**讀取端的 cwd** 去解它。於是同一份
+    資料、同一個 `--repo`，只要工具不是從 repo 根目錄跑，真正被執行過的模組就會靜默
+    落進 `unexecuted`——一份看起來完全正常的錯答案。相對路徑一律先接到 `repo` 底下。
+    釘住：`test_relative_path_coverage_data_is_resolved_against_the_repo_not_the_cwd`。
+
+    ⚠️ 兩邊都取 `realpath`（母體那側見 `build()`）是為了 symlink：coverage 記錄的是
+    `os.path.realpath` 解過的目標路徑，而 `git ls-files` 列的是 symlink 自己的路徑。
+    只正規化一邊的話，一個被 symlink 指到、確實跑過的模組會永遠落進 `unexecuted`。
+    釘住：`test_a_symlinked_module_matches_its_measured_target`。
     """
-    try:
-        rel = os.path.relpath(os.path.realpath(measured), os.path.realpath(repo))
-    except ValueError:  # 跨磁碟機（Windows）
-        return None
-    if rel.startswith(".."):
-        return None
-    return rel.replace(os.sep, "/")
+    if not os.path.isabs(measured):
+        measured = os.path.join(str(repo), measured)
+    return os.path.realpath(measured)
 
 
 def contexts_by_module(repo: Path, data) -> dict:
-    """repo 相對路徑 -> 該檔被記錄到的 context 集合（只含真的執行過的行）。"""
+    """realpath -> 該檔被記錄到的 context 集合（只含真的執行過的行）。
+
+    鍵是 realpath 而不是 repo 相對路徑，理由見 `_measured_key`；`build()` 以同樣的
+    正規化去查母體，兩側必須用同一把尺。
+    """
     out = {}
     for measured in data.measured_files():
-        rel = _relative_to(repo, measured)
-        if rel is None:
-            continue
-        ctxs = set()
-        for line_ctxs in data.contexts_by_lineno(measured).values():
-            ctxs.update(line_ctxs)
-        out[rel] = ctxs
+        key = _measured_key(repo, measured)
+        contexts = set()
+        for line_contexts in data.contexts_by_lineno(measured).values():
+            contexts.update(line_contexts)
+        out[key] = contexts
     return out
 
 
@@ -309,11 +319,14 @@ def build(repo: Path, data_path: Path) -> dict:
         )
 
     ctx_map = contexts_by_module(repo, data)
+    # 母體那側用同一把尺正規化（realpath），否則 symlink 與相對路徑資料兩種情況下
+    # 兩邊的鍵永遠對不上，而對不上的表現是「全部 unexecuted」——看起來正常的錯答案。
+    keys = {module: os.path.realpath(str(repo / module)) for module in modules}
 
     # ⛔ 母體與資料完全不相交 ⇒ 這份資料描述的不是這棵樹（例如從別的 worktree 複製
     #   過來的 .coverage）。全部落進 unexecuted 會長得像「整個 repo 都沒測試」，那是
     #   一個看起來正常的錯答案。釘住：`test_data_describing_another_tree_is_rc2`。
-    if not any(m in ctx_map for m in modules):
+    if not any(keys[m] in ctx_map for m in modules):
         raise RuntimeError(
             f"coverage 資料檔（{data_path}）與母體完全不相交："
             f"{len(modules)} 個模組沒有任何一個出現在資料裡"
@@ -321,7 +334,7 @@ def build(repo: Path, data_path: Path) -> dict:
 
     buckets = {name: [] for name in BUCKETS}
     for module in modules:
-        ctxs = ctx_map.get(module) or set()
+        ctxs = ctx_map.get(keys[module]) or set()
         if not ctxs:
             buckets["unexecuted"].append(module)
         elif ctxs == {SUBPROCESS_CONTEXT}:

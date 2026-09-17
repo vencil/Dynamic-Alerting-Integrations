@@ -9,7 +9,10 @@
 """
 from __future__ import annotations
 
+import importlib.util as _ilu
 import json
+import os
+import sys
 import subprocess
 import sys
 import tomllib
@@ -36,11 +39,19 @@ def _json(repo: Path) -> dict:
     return json.loads(proc.stdout)
 
 
-IN_PROCESS = ""
-SUBPROCESS = "subprocess"
+# ⛔ 不要在這裡再寫一次字面量。context 名稱的 SSOT 是工具自己的常數；測試端另立一份
+# 副本時，改了生產端卻漏改這裡，會讓本檔十餘格以「不認得的 context ⇒ rc 2」一起紅，
+# 而失敗訊息不會指向真正的根因。⇒ 直接取用，讓副本不存在。
+_spec = _ilu.spec_from_file_location("list_subprocess_only_modules", _TOOL)
+_mod = _ilu.module_from_spec(_spec)
+sys.modules["list_subprocess_only_modules"] = _mod
+_spec.loader.exec_module(_mod)
+
+IN_PROCESS = _mod.IN_PROCESS_CONTEXT
+SUBPROCESS = _mod.SUBPROCESS_CONTEXT
 
 
-def _write_coverage(repo: Path, mapping: dict) -> Path:
+def _write_coverage(repo: Path, mapping: dict, relative: bool = False) -> Path:
     """在 `repo` 寫一份合成的 coverage 資料檔。
 
     `mapping` 是 `{repo 相對路徑: set(contexts)}`。**空 set 代表「被量到但零執行行」**
@@ -52,7 +63,9 @@ def _write_coverage(repo: Path, mapping: dict) -> Path:
     path = repo / ".coverage"
     data = coverage.CoverageData(basename=str(path))
     for rel, contexts in mapping.items():
-        absolute = str(repo / rel)
+        # `relative=True` 重現 coverage 的 `relative_files` 模式：資料檔裡存的是字面
+        # 相對字串，不是絕對路徑（實測 measured_files() 回 'scripts/tools/ops/a.py'）。
+        absolute = rel if relative else str(repo / rel)
         if not contexts:
             data.set_context(IN_PROCESS)
             data.add_lines({absolute: []})
@@ -89,39 +102,6 @@ def _fixture(tmp_path: Path, files: dict, coverage_map: "dict | None" = None) ->
     if coverage_map:
         _write_coverage(tmp_path, coverage_map)
     return tmp_path
-
-
-def _assert_fixture_actually_runs(repo: Path, rel: str) -> None:
-    """⛔ 把 fixture 的測試檔**真的跑一次**——「AST 認得這個形狀」不等於「它能執行」。
-
-    ⚠️ 一格 fixture 可以在 AST 上長得完全正確，而在 pytest 下收集期就 ImportError
-    （`from . import x` 沒有 `__init__.py` 就是這樣）。⇒ 要主張 fixture「真的執行過」，
-    唯一的辦法是把它跑起來。
-    """
-    proc = subprocess.run(
-        [sys.executable, "-m", "pytest", rel, "-q"],
-        cwd=repo, capture_output=True, text=True, timeout=300,
-    )
-    assert proc.returncode == 0, (
-        f"fixture 的 {rel} 根本跑不起來 ⇒ 「它是真的 in-process 進入點」這句話沒有依據。\n"
-        f"rc={proc.returncode}\nstdout:\n{proc.stdout[-2000:]}\nstderr:\n{proc.stderr[-1000:]}"
-    )
-    # ⛔ rc 0 **不等於**「那個 import 真的執行過」：pytest 對「收集到的測試全部 skip」也回 0
-    #    （實測：一格 `pytest.skip()` ⇒ rc 0；零格收集到 ⇒ rc 5）。只看 rc 的話，一個被
-    #    吞掉例外後 skip 掉的 fixture 會被這個 helper 蓋章成「跑起來了」。
-    # ⚠️ 而「有一格 passed」這個較弱的版本**也不夠**——dogfood 打死過：fixture 有兩格，
-    #    只 skip 掉帶 import 的那格，另一格照樣 passed，輸出是 `1 passed, 1 skipped`。
-    #    ⇒ 這裡要的是**全數通過**：有 passed，且沒有 skipped／error／xfail。
-    assert " passed" in proc.stdout, (
-        f"fixture 的 {rel} rc 是 0，但沒有任何一格真的 passed ⇒ 那個 import 有沒有執行過"
-        f"量不到，不能當成證據。\nstdout:\n{proc.stdout[-2000:]}"
-    )
-    for weasel in ("skipped", "error", "xfail", "xpass"):
-        assert weasel not in proc.stdout, (
-            f"fixture 的 {rel} 有 {weasel} ⇒ 不能保證帶 import 的那格真的執行過。"
-            f"⛔ 這個 helper 的全部價值就是「跑過」與「看起來跑過」可區分。\n"
-            f"stdout:\n{proc.stdout[-2000:]}"
-        )
 
 # ---------------------------------------------------------------------------
 # 生產樹：母體與分類
@@ -235,12 +215,6 @@ def test_top_level_modules_are_in_the_population(tmp_path: Path) -> None:
 # 它的測試全是 subprocess。那不只是笑話，是本票論點的又一個實例，而且發生在專門
 # 用來量這個問題的工具上。⇒ 補 in-process 進入點；下面第一格就拿「它不再回報自己」
 # 當控制項——這是這支工具獨有的、可自證的驗法。
-import importlib.util as _ilu
-
-_spec = _ilu.spec_from_file_location("list_subprocess_only_modules", _TOOL)
-_mod = _ilu.module_from_spec(_spec)
-_spec.loader.exec_module(_mod)
-
 
 # ⚰️ `test_the_tool_no_longer_reports_itself` 在換底時退役（TRK-379）。它問「本工具有沒有
 #    in-process 進入點」，而換底後那個答案只能從**整輪跑完才存在**的 coverage 資料讀出來
@@ -722,3 +696,56 @@ def test_json_mode_does_emit_a_document_on_the_happy_path(tmp_path: Path) -> Non
     assert proc.returncode == 0, proc.stderr
     payload = json.loads(proc.stdout)
     assert payload["subprocess_only"] == ["scripts/tools/ops/a.py"]
+
+
+# ---------------------------------------------------------------------------
+# 路徑正規化 —— 兩側必須用同一把尺（盲審 finding）
+# ---------------------------------------------------------------------------
+def test_relative_path_coverage_data_is_resolved_against_the_repo_not_the_cwd(
+    tmp_path: Path,
+) -> None:
+    """⛔ `relative_files` 模式的資料檔存的是字面相對字串；解它要用 `--repo`，不是 cwd。
+
+    ⚠️ 本格由盲審找出。用 cwd 去解的話，工具只要不是從受掃 repo 的根目錄跑，真正被
+    執行過的模組就會靜默落進 `unexecuted`——rc 0、報告長得完全正常。這一格的 `_run`
+    本來就從別的目錄啟動子行程，所以它同時也是那個情境的重現。
+    """
+    repo = _fixture(tmp_path, {
+        "scripts/tools/ops/a.py": _TOOL_SRC,
+        "scripts/tools/ops/b.py": _TOOL_SRC,
+    }, coverage_map={})
+    _write_coverage(repo, {
+        "scripts/tools/ops/a.py": {SUBPROCESS},
+        "scripts/tools/ops/b.py": {IN_PROCESS},
+    }, relative=True)
+    data = _json(repo)
+    assert data["subprocess_only"] == ["scripts/tools/ops/a.py"], data
+    assert data["in_process_only"] == ["scripts/tools/ops/b.py"], data
+    assert data["unexecuted"] == [], (
+        "相對路徑被拿 cwd 去解了 ⇒ 執行過的模組被誤報成從未執行"
+    )
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="平台不支援 symlink")
+def test_a_symlinked_module_matches_its_measured_target(tmp_path: Path) -> None:
+    """⛔ `git ls-files` 列 symlink 自己的路徑，coverage 記錄 realpath 解過的目標。
+
+    ⚠️ 本格由盲審找出。只正規化一邊的話，一個被 symlink 指到、確實跑過的模組會永遠
+    落進 `unexecuted`，而且 rc 是 0。
+    """
+    repo = _fixture(tmp_path, {"scripts/tools/ops/real.py": _TOOL_SRC}, coverage_map={})
+    link = repo / "scripts" / "tools" / "ops" / "link.py"
+    try:
+        os.symlink(repo / "scripts" / "tools" / "ops" / "real.py", link)
+    except (OSError, NotImplementedError) as exc:       # Windows 無權限時
+        pytest.skip(f"建不了 symlink：{exc}")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, timeout=60)
+    subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t",
+                    "commit", "-qm", "link"], cwd=repo, check=True, timeout=60)
+    _write_coverage(repo, {"scripts/tools/ops/real.py": {SUBPROCESS}})
+
+    data = _json(repo)
+    assert "scripts/tools/ops/link.py" in data["subprocess_only"], (
+        f"symlink 沒有對應到它被量測的目標：{data}"
+    )
+    assert "scripts/tools/ops/link.py" not in data["unexecuted"], data
