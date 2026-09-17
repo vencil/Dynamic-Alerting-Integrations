@@ -73,12 +73,15 @@ subagent 角色提示詞在 [`.agents/roles/`](.agents/roles/)。
 .agents/                     ← SSOT，改這裡
   skills/<name>/SKILL.md
   roles/<name>.md
+  paths-map.json             ← 路徑 → 先讀哪一節 ＋ 一句約束（三家共用）
 
 .claude/skills/**           ← 生成物（Claude Code 只認這個路徑）
 .claude/agents/**           ← 生成物
+.cursor/skills/vibe-paths-*/            ← 生成物：paths-map 投影成 Cursor 的 `paths:` skill
+.github/instructions/vibe-paths-*.instructions.md  ← 生成物：同一份投影成 Copilot 的 `applyTo`
 AGENTS.md                   ← 手寫散文 + 機器維護的 skill 索引區塊（本檔）
 ```
 
-改完 SSOT 跑 `make agent-adapters`。`gen-agent-adapters-check` pre-commit hook 會擋住漂移；轉接檔頭部的 `GENERATED from ...` 那行就是它的來源位址。⛔ 不要編輯 `.claude/` 底下的轉接檔——下一次 `--generate` 會覆蓋掉。**本檔（`AGENTS.md`）是例外**：散文直接改這裡，只有 `BEGIN/END GENERATED SKILL INDEX` 之間那塊由機器維護。
+`paths-map.json` 是「動到這種路徑之前先讀哪一節」的對照表：Cursor 與 Copilot 靠上面兩種投影原生套用，Claude Code 靠 `scripts/session-guards/paths_map.py`（PreToolUse hook）在 Edit／Write／Bash 前注入同一段文字，每個 session 每列只注入一次。改完 SSOT 跑 `make agent-adapters`。`gen-agent-adapters-check` pre-commit hook 會擋住漂移；轉接檔頭部的 `GENERATED from ...` 那行就是它的來源位址。⛔ 不要編輯 `.claude/` 底下的轉接檔——下一次 `--generate` 會覆蓋掉。**本檔（`AGENTS.md`）是例外**：散文直接改這裡，只有 `BEGIN/END GENERATED SKILL INDEX` 之間那塊由機器維護。
 
 ⚠️ 用複製而非 symlink，是因為本 repo 支援 Windows 逃生門，而 Windows host 上 symlink 實測會壞（PR #1457 有三支測試因此 error）。代價是每次 skill 編輯動到兩個檔、skill 文字在 git 裡存在兩份；drift gate 就是防第二份變成第二個真相源的東西。

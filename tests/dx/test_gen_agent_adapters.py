@@ -28,6 +28,7 @@ Coverage:
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import sys
@@ -265,6 +266,143 @@ def test_evals_subdir_is_ssot_only_and_a_stale_copy_is_removed(tmp_path, monkeyp
     gaa.write_outputs(plan)
     assert not stale.exists()
     assert not stale.parent.exists()
+
+
+# ============================================================
+# paths-map projection (PR-D)
+# ============================================================
+
+
+def _fake_paths_map(tmp_path, entries=None):
+    if entries is None:
+        entries = [{"id": "helm-chart", "paths": ["helm/**", "k8s/*.yaml"],
+                    "read": [{"file": "docs/internal/x.md", "section": "Helm"}, {"file": "AGENTS.md"}],
+                    "note": "one \"quoted\" constraint: yes"}]
+    (tmp_path / gaa.SSOT_PATHS_MAP).write_text(
+        json.dumps({"version": 1, "entries": entries}), encoding="utf-8")
+
+
+def test_without_a_paths_map_nothing_is_projected(tmp_path, monkeypatch):
+    _fake_ssot(tmp_path, monkeypatch)
+    plan = gaa.planned_outputs()
+    assert not any(k.startswith((gaa.OUT_CURSOR, gaa.OUT_COPILOT)) for k in plan)
+
+
+def test_paths_map_projects_a_cursor_skill_and_a_copilot_instruction(tmp_path, monkeypatch):
+    _fake_ssot(tmp_path, monkeypatch)
+    _fake_paths_map(tmp_path)
+    plan = gaa.planned_outputs()
+    cursor = plan[f"{gaa.OUT_CURSOR}/vibe-paths-helm-chart/SKILL.md"].decode("utf-8")
+    copilot = plan[f"{gaa.OUT_COPILOT}/vibe-paths-helm-chart.instructions.md"].decode("utf-8")
+    # Cursor: frontmatter at byte 0, name == folder, paths as a YAML list
+    assert cursor.startswith("---\nname: vibe-paths-helm-chart\n")
+    assert '\npaths:\n  - "helm/**"\n  - "k8s/*.yaml"\n---\n' in cursor
+    # Copilot: comma-joined applyTo
+    assert copilot.startswith('---\napplyTo: "helm/**,k8s/*.yaml"\n---\n')
+    # both name their source and carry the body
+    for text in (cursor, copilot):
+        assert gaa.SSOT_PATHS_MAP in text
+        assert "`docs/internal/x.md` §Helm" in text and "`AGENTS.md`" in text
+        assert 'one \\"quoted\\" constraint: yes' not in text, "body is markdown, not YAML-escaped"
+        assert 'one "quoted" constraint: yes' in text
+    # the YAML description IS escaped (it sits inside frontmatter)
+    assert 'description: "' in cursor
+
+
+def test_paths_map_outputs_survive_generate_then_check(tmp_path, monkeypatch):
+    _fake_ssot(tmp_path, monkeypatch)
+    _fake_paths_map(tmp_path)
+    assert gaa.main(["--generate"]) == gaa.EXIT_OK
+    assert gaa.main(["--check"]) == gaa.EXIT_OK
+    assert (tmp_path / gaa.OUT_CURSOR / "vibe-paths-helm-chart" / "SKILL.md").is_file()
+
+
+def test_a_stale_projection_under_a_paths_map_root_is_extra_and_removed(tmp_path, monkeypatch):
+    _fake_ssot(tmp_path, monkeypatch)
+    _fake_paths_map(tmp_path)
+    gaa.write_outputs(gaa.planned_outputs())
+    stale = tmp_path / gaa.OUT_COPILOT / f"{gaa.PATHS_PREFIX}ghost.instructions.md"
+    stale.write_text("x", encoding="utf-8")
+    stale_dir = tmp_path / gaa.OUT_CURSOR / f"{gaa.PATHS_PREFIX}ghost"
+    stale_dir.mkdir()
+    (stale_dir / "SKILL.md").write_text("x", encoding="utf-8")
+    _m, _s, extra = gaa.diff_against_disk(gaa.planned_outputs())
+    assert extra == [f"{gaa.OUT_CURSOR}/{gaa.PATHS_PREFIX}ghost/SKILL.md",
+                     f"{gaa.OUT_COPILOT}/{gaa.PATHS_PREFIX}ghost.instructions.md"]
+    gaa.write_outputs(gaa.planned_outputs())
+    assert not stale.exists() and not stale_dir.exists()
+
+
+def test_hand_written_vendor_files_next_to_the_projections_are_left_alone(tmp_path, monkeypatch):
+    """`.cursor/skills` and `.github/instructions` are the vendors' user dirs.
+    Ownership stops at the `vibe-paths-` prefix (blind-review finding: the
+    first hand-written *.instructions.md used to vanish at commit time)."""
+    _fake_ssot(tmp_path, monkeypatch)
+    _fake_paths_map(tmp_path)
+    gaa.write_outputs(gaa.planned_outputs())
+    theirs = tmp_path / gaa.OUT_COPILOT / "team-style.instructions.md"
+    theirs.write_text("keep me", encoding="utf-8")
+    their_skill = tmp_path / gaa.OUT_CURSOR / "my-own-skill"
+    their_skill.mkdir()
+    (their_skill / "SKILL.md").write_text("keep me", encoding="utf-8")
+    their_empty_dir = tmp_path / gaa.OUT_CURSOR / "skill-in-progress"
+    their_empty_dir.mkdir()
+    assert gaa.diff_against_disk(gaa.planned_outputs()) == ([], [], [])
+    assert gaa.write_outputs(gaa.planned_outputs()) == []
+    assert theirs.read_text(encoding="utf-8") == "keep me"
+    assert (their_skill / "SKILL.md").read_text(encoding="utf-8") == "keep me"
+    assert their_empty_dir.is_dir(), "an unowned empty dir is not pruned either"
+    assert gaa.main(["--check"]) == gaa.EXIT_OK
+
+
+def test_a_refused_target_leaves_no_directory_behind(tmp_path, monkeypatch):
+    """Validate, then mkdir. `makedirs` follows a symlinked ancestor, so the
+    old order could create `vibe-paths-*` outside the tree before the write was
+    refused. Pinned on the ordering (a symlink fixture cannot run on the
+    Windows hosts this repo supports)."""
+    _fake_ssot(tmp_path, monkeypatch)
+    _fake_paths_map(tmp_path)
+
+    def refuse(dest_rel):
+        if dest_rel.startswith(gaa.OUT_CURSOR):
+            raise gaa.UnsafePath(f"{dest_rel} resolves outside the repository")
+        return os.path.join(gaa.REPO_ROOT, dest_rel)
+
+    monkeypatch.setattr(gaa, "assert_writable_target", refuse)
+    with pytest.raises(gaa.UnsafePath):
+        gaa.write_outputs(gaa.planned_outputs())
+    assert not (tmp_path / gaa.OUT_CURSOR).exists(), "mkdir ran before validation"
+
+
+def test_projected_frontmatter_is_valid_yaml_even_with_awkward_globs(tmp_path, monkeypatch):
+    """Surviving mutant from blind review: bare-quote concatenation passed
+    the substring assertion and produced unparsable frontmatter."""
+    yaml = pytest.importorskip("yaml")
+    _fake_ssot(tmp_path, monkeypatch)
+    _fake_paths_map(tmp_path, entries=[{"id": "odd", "paths": ['a"b/**', "c\\d/**", "e#f/**", "g: h/**"],
+                                        "read": [], "note": "n"}])
+    plan = gaa.planned_outputs()
+    for dest in (f"{gaa.OUT_CURSOR}/vibe-paths-odd/SKILL.md",
+                 f"{gaa.OUT_COPILOT}/vibe-paths-odd.instructions.md"):
+        text = plan[dest].decode("utf-8")
+        fm = text.split("---\n")[1]
+        data = yaml.safe_load(fm)
+        if "paths" in data:
+            assert data["paths"] == ['a"b/**', "c\\d/**", "e#f/**", "g: h/**"]
+        else:
+            assert data["applyTo"] == 'a"b/**,c\\d/**,e#f/**,g: h/**'
+
+
+def test_an_invalid_paths_map_is_a_caller_error(tmp_path, monkeypatch, capsys):
+    _fake_ssot(tmp_path, monkeypatch)
+    _fake_paths_map(tmp_path, entries=[{"id": "Bad", "paths": [], "read": [], "note": ""}])
+    assert gaa.main(["--check"]) == gaa.EXIT_CALLER_ERROR
+    assert gaa.SSOT_PATHS_MAP in capsys.readouterr().err
+
+
+def test_source_of_maps_both_paths_map_roots_to_the_json():
+    assert gaa.source_of(f"{gaa.OUT_CURSOR}/vibe-paths-x/SKILL.md") == gaa.SSOT_PATHS_MAP
+    assert gaa.source_of(f"{gaa.OUT_COPILOT}/vibe-paths-x.instructions.md") == gaa.SSOT_PATHS_MAP
 
 
 # ============================================================

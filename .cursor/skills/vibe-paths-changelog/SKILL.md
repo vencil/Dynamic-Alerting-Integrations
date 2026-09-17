@@ -1,0 +1,13 @@
+---
+name: vibe-paths-changelog
+description: "Vibe 路徑觸發指引：動到 CHANGELOG.md 之前先讀的章節與一句約束。"
+paths:
+  - "CHANGELOG.md"
+---
+<!-- 此檔為產生物，來源 .agents/paths-map.json —— 請改那份 SSOT，再跑 `make agent-adapters`；不要直接編輯這份複本。 -->
+# vibe-paths-changelog
+
+先讀：
+- `docs/internal/hook-vs-skill-coverage.md` §3. Pre-commit auto hooks
+
+約束：只動 `## [Unreleased]`；整段對 base 每新 bullet ≤ 1,000 字元，量測數字放 commit／issue 不放這裡：`python3 scripts/tools/dx/generate_changelog.py --base origin/main --lint CHANGELOG.md`。

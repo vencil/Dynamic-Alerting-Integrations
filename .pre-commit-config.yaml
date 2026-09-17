@@ -333,7 +333,7 @@ repos:
         additional_dependencies: ['pyyaml']
 
       - id: gen-agent-adapters-check
-        name: Agent adapter drift (.agents/ SSOT → .claude/** + AGENTS.md)
+        name: Agent adapter drift (.agents/ SSOT → .claude/** + .cursor/** + .github/instructions/** + AGENTS.md)
         entry: python3 -X utf8 scripts/tools/dx/gen_agent_adapters.py --check
         language: python
         pass_filenames: false
@@ -342,7 +342,10 @@ repos:
         # 最容易發生的漂移（轉接檔看起來就是一般的 skill 檔）。
         # 產生器自身也算觸發面：只改 gen_agent_adapters.py 就能讓已提交的
         # .claude/** 過期，而本地 gate 仍全綠——那是「守衛改了但沒人重驗」的形狀。
-        files: ^(\.agents/|\.claude/(skills|agents)/|AGENTS\.md$|scripts/tools/dx/gen_agent_adapters\.py$)
+        # paths-map 的投影根（.cursor/skills、.github/instructions）與它借用的
+        # 驗證器（scripts/session-guards/paths_map.py）同理：改了驗證器就可能讓
+        # 已提交的投影變成「產生器現在拒收的 map」的產物。
+        files: ^(\.agents/|\.claude/(skills|agents)/|\.cursor/skills/|\.github/instructions/|AGENTS\.md$|scripts/tools/dx/gen_agent_adapters\.py$|scripts/session-guards/paths_map\.py$)
 
       - id: verify-diff-check
         name: verify_diff test-file reachability (source→test mapping)

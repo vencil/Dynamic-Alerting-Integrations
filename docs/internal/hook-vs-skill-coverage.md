@@ -44,12 +44,16 @@ lang: zh
 |---|---|---|---|
 | `session-init.py` | 第一次 `Bash`/`Write`/`Edit`/`MultiEdit` | 關 VS Code Git + session marker + liveness heartbeat | `scripts/session-guards/session-init.py` |
 | `preflight_bash.py` | 每次 `Bash`/`Write` | 攔 `sed -i` 掛載路徑（dev-rule #11）+ 攔 `_*.bat`/`_*.ps1`/`_*.cmd` 出 whitelist（Trap #54） | `scripts/session-guards/preflight_bash.py` |
+| `skill_usage.py` | 每次 `Skill` | skill 觸發帳本（JSONL；`--stats` 給 quarterly audit 的汰除判準） | `scripts/session-guards/skill_usage.py` |
+| `paths_map.py` | 每次 `Edit`/`Write`/`MultiEdit`/`Bash` | 命中 `.agents/paths-map.json` 的 glob 就以 `additionalContext` 注入「先讀哪一節＋一句約束」；每 session 每列最多兩次（Bash 命中一次、編輯類命中一次，唯讀的 `cat` 不會吃掉編輯時的那次）；Bash 只認指令裡**存在於磁碟**的路徑 | `scripts/session-guards/paths_map.py` |
+| `stop_evidence.py` | `Stop`（主 agent 每回合結束） | 最後一則訊息含宣稱詞卻無 `$ ` 證據區塊、或任一 fence 裡的 `$ 指令`（任意縮排）不等於本回合 transcript 的 Bash/PowerShell tool_use 跑過的整條指令或其 `&&`／`;`／`\|` 一段 ⇒ exit 2 **一次**（`stop_hook_active` 與 per-prompt marker 保證不迴圈；transcript 還沒寫到這個 prompt 時只查形狀並在 stderr 說明；子代理跑的指令不算本回合） | `scripts/session-guards/stop_evidence.py` |
 
 已知不涵蓋：
-- 多 repo web session（project root 是本 repo 上層）整份 `.claude/settings.json` 不載入，兩支涵蓋為零（[#1719](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1719)；起手式先查 `/tmp/vibe-session-start-hook.ran`）。
-- matcher 不含 `PowerShell` 工具與 MCP 寫入類工具。
+- 多 repo web session（project root 是本 repo 上層）整份 `.claude/settings.json` 不載入，上表全部涵蓋為零（[#1719](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1719)；起手式先查 `/tmp/vibe-session-start-hook.ran`）。
+- matcher 不含 `PowerShell` 工具與 MCP 寫入類工具（`stop_evidence.py` 的來源比對認 PowerShell tool_use，但 `paths_map.py` 不看它的指令）。
 - `sed -i` 攔截只認絕對掛載路徑；相對路徑放行（#824）。
-- hook 失敗不 block 也不餵 stderr（只有 exit 2 會）；launcher 對「找不到直譯器」以 `additionalContext` fail-loud，其餘由 `session-guard-liveness-check` 在 commit 時攔。
+- `paths_map.py` 看不見 Bash 即將**建立**的檔案（存在性是它過濾雜訊 token 的唯一方法）；`stop_evidence.py` 不套 `SubagentStop`、不是 required check。
+- hook 失敗不 block 也不餵 stderr（只有 exit 2 會）；launcher 對「找不到直譯器」以 `additionalContext` fail-loud，其餘由 `session-guard-liveness-check` 在 commit 時攔（它從命令字串推導 guard 檔、釘五支的 event／matcher 接線、並驗 paths-map）。
 
 | 失敗策略（#824） | 類型 | 理由 |
 |---|---|---|
