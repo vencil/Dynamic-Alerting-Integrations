@@ -83,7 +83,11 @@ _DISPOSITIONS = frozenset({"enrol", "default-build", "unlinted"})
 
 # Linters checked per checker against every silencing carrier below (enable /
 # disable, exclusions, settings). A subset of the Go Lint job's GOLANGCI_FLOOR,
-# which is the full floor and is asked of golangci itself (#1870).
+# the full ENABLEMENT floor, asked of golangci itself (#1870). ⚠️ NOT GUARDED:
+# the floor's other members can be enabled yet silenced module-wide by an
+# `exclusions.rules` entry or their own `settings` (measured: `path: .*` naming
+# errcheck, or `staticcheck.checks: ["-all"]`, leave everything here green) —
+# only the members of this set get the per-checker check.
 _REQUIRED_LINTERS = frozenset({"godoclint"})
 
 # The `standard` group, named here so the floor cannot shrink below it without
@@ -801,9 +805,17 @@ def test_the_linter_floor_is_asked_of_golangci_itself() -> None:
 
     `linters.default`, `enable` and `disable` all move the effective set; only
     golangci knows the group memberships, so the check runs as a step that
-    reads `golangci-lint linters --json` — pytest has no Go toolchain in CI.
+    reads `golangci-lint linters --json` — the pytest job does not install
+    golangci-lint.
     This pins the parts a Python test can read without re-implementing that
-    step: it exists, exactly once, and GOLANGCI_FLOOR has not shrunk.
+    step: it exists, exactly once, GOLANGCI_FLOOR has not shrunk, and the
+    modules it checks are discovered rather than listed.
+
+    ⚠️ Discovery is pinned two ways because each alone is fooled: the positive
+    check reads code lines only, but a trailing `# git ls-files …` comment on a
+    hand-written line still satisfies it; the negative check catches that line
+    because a hand-written list has to name a linted module. Neither catches an
+    enumeration that names no module literally (a shell glob, say).
     """
     steps = [s for s in _load_workflow(VALIDATE)["jobs"][LINT_JOB]["steps"]
              if "golangci-lint linters --json" in str(s.get("run", ""))]
@@ -820,8 +832,30 @@ def test_the_linter_floor_is_asked_of_golangci_itself() -> None:
         "requiring those linters, made here in _STANDARD_LINTERS / "
         "_REQUIRED_LINTERS, not in the workflow alone.")
 
+    # A hand-written module list passes every check above while a config added
+    # later is never floor-checked; the `default` accept-set would still see
+    # that module, but not a `disable:` in it.
+    code = "\n".join(line for line in str(steps[0]["run"]).splitlines()
+                     if not line.lstrip().startswith("#"))
+    assert re.search(r"git\s+ls-files\b[^\n]*\.golangci\.yml", code), (
+        f"the floor step in {VALIDATE.name}::{LINT_JOB} no longer discovers the "
+        "configs with `git ls-files … .golangci.yml`, so a module added later is "
+        "not floor-checked.")
+    named = sorted(m for m in set(_lint_steps().values()) if m in code)
+    assert not named, (
+        f"the floor step in {VALIDATE.name}::{LINT_JOB} names module directories "
+        f"{named} itself. A hand-written list skips the next module silently.")
 
-@pytest.mark.parametrize("edit", ["shrink the floor", "drop the step"])
+
+_DISCOVERY = "configs=$(git ls-files -- ':(glob)**/.golangci.yml')"
+
+
+@pytest.mark.parametrize("edit", [
+    "shrink the floor",
+    "drop the step",
+    "drop the discovery",
+    "hand-write the modules, keeping the words in a trailing comment",
+])
 def test_the_floor_pin_reds_when_the_step_weakens(edit, monkeypatch) -> None:
     """Through the pin above, on a copy of the real workflow."""
     real = _load_workflow
@@ -831,10 +865,21 @@ def test_the_floor_pin_reds_when_the_step_weakens(edit, monkeypatch) -> None:
         steps = wf["jobs"][LINT_JOB]["steps"]
         floor_step = next(s for s in steps
                           if "golangci-lint linters --json" in str(s.get("run", "")))
+        run = floor_step["run"]
         if edit == "shrink the floor":
             floor_step["env"]["GOLANGCI_FLOOR"] = "govet ineffassign staticcheck unused godoclint"
-        else:
+        elif edit == "drop the step":
             steps.remove(floor_step)
+        elif edit == "drop the discovery":
+            floor_step["run"] = run.replace(_DISCOVERY, "configs=''")
+        else:
+            floor_step["run"] = run.replace(
+                _DISCOVERY,
+                f"configs='{_ANCHOR_MODULE}/.golangci.yml'  # was: git ls-files .golangci.yml")
+        # An edit that misses its anchor leaves the real step, which the pin
+        # accepts. Not an AssertionError: pytest.raises below would swallow it.
+        if edit.startswith(("drop the discovery", "hand-write")) and floor_step["run"] == run:
+            raise RuntimeError(f"control edit {edit!r} did not change the step")
         return wf
 
     monkeypatch.setattr(sys.modules[__name__], "_load_workflow", weakened)

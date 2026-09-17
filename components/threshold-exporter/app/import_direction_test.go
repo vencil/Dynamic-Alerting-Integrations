@@ -4,23 +4,24 @@ package main
 // declares in .golangci.yml: the pure-logic packages reused by the CLI tools
 // (da-parser / da-guard) must not import net/http (#1870).
 //
-// depguard enforces the same rule in the Go Lint job. This test exists so the
-// rule survives the lint config being edited: dropping depguard from
-// `linters.enable`, emptying its `rules`, narrowing `files:`, or switching
-// `linters.default` all leave depguard silent while the import graph is left
-// unguarded.
+// depguard enforces the same rule in the Go Lint job. This test does not read
+// the lint config, so dropping depguard from `linters.enable` (measured: the
+// violation then passes golangci and fails here) does not retire the rule.
 //
-// Parity with depguard, measured on golangci-lint 2.12.2 so this test is not
+// Parity with depguard on golangci-lint 2.12.2, measured, so this test is not
 // the narrower of the two:
-//   - deny is a path-segment prefix: `net/http/httptest` is rejected as well
-//     as `net/http`; `net/url` is not.
+//   - deny is a raw string prefix, like depguard's: `net/http/httptest` is
+//     rejected along with `net/http`.
 //   - _test.go files in scope are checked; depguard lints them too.
-//   - directories `./...` never loads (testdata, vendor, `.`/`_` prefix) are
-//     skipped, as golangci skips them.
+//   - a `vendor` directory that holds code is a package and is read; its
+//     subdirectories, `testdata`, and `.`/`_`-prefixed directories are
+//     skipped, as `./...` skips them.
 //
 // ⛔ Two enforcers, two package lists, deliberately independent: each covers
 // what it names, so a package is unguarded only when BOTH omit it. A new
-// logic package goes into both.
+// logic package goes into both. ⚠️ NOT GUARDED: deleting this file together
+// with the depguard rule; and tenant-api carries a byte-identical copy of
+// scanDeniedImports that nothing keeps in step.
 
 import (
 	"go/parser"
@@ -84,8 +85,8 @@ func exporterModuleRoot(t *testing.T) string {
 }
 
 // scanDeniedImports parses the imports of every .go file under each scope and
-// returns the ones naming deny or a package below it, plus a per-scope count
-// of files read.
+// returns the ones whose path starts with deny (a raw string prefix, as
+// depguard matches), plus a per-scope count of files read.
 func scanDeniedImports(root string, scopes []string, deny string) ([]string, map[string]int, error) {
 	var violations []string
 	scanned := make(map[string]int, len(scopes))
@@ -97,8 +98,9 @@ func scanDeniedImports(root string, scopes []string, deny string) ([]string, map
 			}
 			if d.IsDir() {
 				name := d.Name()
-				if path != base && (name == "testdata" || name == "vendor" ||
-					strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_")) {
+				if path != base && (name == "testdata" ||
+					strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_") ||
+					filepath.Base(filepath.Dir(path)) == "vendor") {
 					return filepath.SkipDir
 				}
 				return nil
@@ -117,7 +119,7 @@ func scanDeniedImports(root string, scopes []string, deny string) ([]string, map
 				if uerr != nil {
 					return uerr
 				}
-				if imported == deny || strings.HasPrefix(imported, deny+"/") {
+				if strings.HasPrefix(imported, deny) {
 					violations = append(violations, fset.Position(spec.Pos()).String()+" imports "+imported)
 				}
 			}
@@ -144,9 +146,13 @@ func TestScanDeniedImportsReadsWhatDepguardReads(t *testing.T) {
 	}{
 		{"exact package", map[string]string{"a.go": deny}, 1},
 		{"package below it", map[string]string{"a.go": deny + "/httptest"}, 1},
-		{"shared raw prefix, different segment", map[string]string{"a.go": deny + "x"}, 0},
+		{"raw-prefix sibling, as depguard matches", map[string]string{"a.go": deny + "x"}, 1},
+		{"unrelated import", map[string]string{"a.go": "strings"}, 0},
 		{"test file", map[string]string{"a_test.go": deny}, 1},
+		{"nested subdirectory", map[string]string{"sub/a.go": deny}, 1},
 		{"testdata is not loaded by ./...", map[string]string{"testdata/a.go": deny}, 0},
+		{"vendor holding code is a package", map[string]string{"vendor/a.go": deny}, 1},
+		{"below vendor is not loaded", map[string]string{"vendor/x/a.go": deny}, 0},
 	}
 	for _, tc := range cases {
 		root := t.TempDir()

@@ -311,8 +311,12 @@ jobs:
       # staticcheck and unused). Every tracked .golangci.yml is checked, which
       # covers each lint step below: each is required to have one.
       # tests/ops/test_go_lint_module_coverage.py pins that GOLANGCI_FLOOR keeps
-      # the standard linters. ⚠️ NOT pinned: that this loop reads every config
-      # rather than a hand-written module list — keep it derived.
+      # the standard linters, that configs are discovered with `git ls-files`,
+      # and that no linted module is named here. ⚠️ NOT pinned: an enumeration
+      # that names no module literally (a shell glob) — keep it `git ls-files`.
+      # ⚠️ NOT GUARDED: this checks ENABLEMENT only. A floor linter can be
+      # enabled and still silenced module-wide by an `exclusions.rules` entry or
+      # its own `settings`; only godoclint gets a per-checker check in pytest.
       - name: Linter floor
         env:
           GOLANGCI_FLOOR: errcheck govet ineffassign staticcheck unused godoclint
