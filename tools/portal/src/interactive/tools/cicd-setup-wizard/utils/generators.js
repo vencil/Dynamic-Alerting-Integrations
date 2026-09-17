@@ -10,6 +10,8 @@ purpose: |
   matches the operator-setup-wizard pattern from PR-portal-4.
 
   Public API:
+    CICD_DEFAULT_DA_TOOLS_IMAGE                default da-tools image ref
+    cicdDaToolsImage(config)                   image ref this config resolves to
     cicdGenerateInitCommand(config)            build da-tools CLI
     cicdGenerateDockerCommand(config)          docker wrapper
     cicdGeneratedPaths(config)                 paths `init` will write
@@ -18,6 +20,39 @@ purpose: |
 
   Closure deps: none. Pure functions; receive config as arg.
 ---
+
+// ⛔ The ONE place in the portal that spells the da-tools image. The CLI leg
+// keeps its own default in scripts/tools/ops/init_project.py
+// (`DA_TOOLS_IMAGE`) and exposes it as `--da-tools-image`; this hand-kept twin
+// had the same string typed into four template literals with no way for a
+// customer to change it, which is the "da-tools 映像" row of #1351's divergence
+// table. Same default as the CLI, deliberately: `cicdGenerators.test.ts` pins
+// the literal, so changing it here alone goes red.
+const CICD_DEFAULT_DA_TOOLS_IMAGE = 'ghcr.io/vencil/da-tools:latest';
+
+// Empty / whitespace-only falls back rather than emitting `docker run  init`,
+// because the field this reads is a free-text input the customer can clear.
+function cicdDaToolsImage(config) {
+  const raw = config && config.daToolsImage;
+  const trimmed = typeof raw === 'string' ? raw.trim() : '';
+  return trimmed === '' ? CICD_DEFAULT_DA_TOOLS_IMAGE : trimmed;
+}
+
+// "Floating" = what the reference resolves to can change while the workflow
+// file does not. A digest cannot, and neither does a version tag under the
+// policy components/da-tools/README.md already hands customers: "quick-start
+// 用 :latest 即可；production 請釘特定版號如 :v2.8.0". So only a missing tag
+// (Docker implies `:latest`) or a literal `:latest` counts.
+//
+// ⚠️ The tag is what follows the LAST `/`; a colon before it is a registry
+// port (`registry.internal:5000/da-tools` has no tag), which is why this
+// cannot be a bare `image.includes(':latest')`.
+function _cicdImageIsFloating(image) {
+  if (image.includes('@')) return false;
+  const name = image.slice(image.lastIndexOf('/') + 1);
+  const colon = name.indexOf(':');
+  return colon === -1 || name.slice(colon + 1) === 'latest';
+}
 
 function cicdGenerateInitCommand(config) {
   const parts = ['da-tools init'];
@@ -43,7 +78,7 @@ function cicdGenerateInitCommand(config) {
 // failure rather than as drift.
 function cicdGenerateDockerCommand(config) {
   const init = cicdGenerateInitCommand(config);
-  return `docker run --rm -it \\\n  --user $(id -u):$(id -g) \\\n  -v "$(pwd):/workspace" -w /workspace \\\n  ghcr.io/vencil/da-tools:latest \\\n  ${init.replace('da-tools ', '')}`;
+  return `docker run --rm -it \\\n  --user $(id -u):$(id -g) \\\n  -v "$(pwd):/workspace" -w /workspace \\\n  ${cicdDaToolsImage(config)} \\\n  ${init.replace('da-tools ', '')}`;
 }
 
 // ⛔ This list is a CLAIM about another program's behaviour, so it is held to
@@ -142,6 +177,17 @@ function cicdGenerateFileTree(config) {
 // Both are held by the reachability assertion in
 // tests/ops/test_generated_ci_artifacts.py.
 function cicdGenerateGitHubActionsPreview(config) {
+  const image = cicdDaToolsImage(config);
+  // ⚠️ Emitted only when the reference actually floats, because this YAML is a
+  // file the customer pastes into their own repo: telling a reader who pinned
+  // a digest that their image "can change" ships a false statement into their
+  // tree. Not reusable from the prose leg — the warning in
+  // docs/scenarios/gitops-ci-integration.md is about the same tag but answers
+  // a different question (how to tell whether the artifact you already have
+  // carries a fix the doc describes, "不要看版號、直接看產物").
+  const pinNote = _cicdImageIsFloating(image)
+    ? `# ${image} is a floating tag - what it resolves to can change without this file changing. Pin a version tag or a digest before you rely on this in production.\n`
+    : '';
   return `name: Dynamic Alerting CI/CD
 on:
   pull_request:
@@ -163,7 +209,7 @@ on:
 permissions:
   contents: read
 
-jobs:
+${pinNote}jobs:
   validate:
     runs-on: ubuntu-latest
     steps:
@@ -172,7 +218,7 @@ jobs:
         run: |
           docker run --rm \\
             -v \${{ github.workspace }}/conf.d:/data/conf.d:ro \\
-            ghcr.io/vencil/da-tools:latest \\
+            ${image} \\
             validate-config --config-dir /data/conf.d
 
   generate:
@@ -189,13 +235,13 @@ jobs:
           # used, and the tool now refuses the two together.
           docker run --rm \\
             -v \${{ github.workspace }}/conf.d:/data/conf.d:ro \\
-            ghcr.io/vencil/da-tools:latest \\
+            ${image} \\
             generate-routes --config-dir /data/conf.d --validate
       - name: Compute blast radius
         run: |
           docker run --rm \\
             -v \${{ github.workspace }}/conf.d:/data/conf.d:ro \\
-            ghcr.io/vencil/da-tools:latest \\
+            ${image} \\
             config-diff --old-dir /data/conf.d.base --new-dir /data/conf.d --format markdown > .output/blast-radius.md
 
   apply:
@@ -220,4 +266,4 @@ jobs:
         run: argocd app sync dynamic-alerting --force`}`;
 }
 
-export { cicdGenerateInitCommand, cicdGenerateDockerCommand, cicdGeneratedPaths, cicdGenerateFileTree, cicdGenerateGitHubActionsPreview };
+export { CICD_DEFAULT_DA_TOOLS_IMAGE, cicdDaToolsImage, cicdGenerateInitCommand, cicdGenerateDockerCommand, cicdGeneratedPaths, cicdGenerateFileTree, cicdGenerateGitHubActionsPreview };

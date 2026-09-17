@@ -14,6 +14,8 @@
 import { describe, it, expect } from 'vitest';
 import fc from 'fast-check';
 import {
+  CICD_DEFAULT_DA_TOOLS_IMAGE,
+  cicdDaToolsImage,
   cicdGenerateInitCommand,
   cicdGenerateDockerCommand,
   cicdGeneratedPaths,
@@ -313,5 +315,112 @@ describe('cicdGenerateGitHubActionsPreview', () => {
     const out = cicdGenerateGitHubActionsPreview(baseConfig());
     expect(out).toContain('validate:');
     expect(out).toContain('runs-on: ubuntu-latest');
+  });
+});
+
+describe('da-tools image is configurable (#1351)', () => {
+  // The CLI leg has had `--da-tools-image` (scripts/tools/ops/init_project.py,
+  // default DA_TOOLS_IMAGE) since it shipped; this hand-kept twin had the
+  // reference typed into four template literals. These pin the asymmetry
+  // closed from the wizard's side. The drift gate holding the two DEFAULTS
+  // equal is a separate step and is deliberately not asserted here.
+
+  it('defaults to the same reference the CLI defaults to', () => {
+    // ⚠️ The literal, not a re-export dance: `cicdGenerateDockerCommand`'s own
+    // `toContain('ghcr.io/vencil/da-tools:latest')` above would still pass if
+    // the constant and the generator drifted apart in the same direction, so
+    // this names the value once more at the source of truth.
+    expect(CICD_DEFAULT_DA_TOOLS_IMAGE).toBe('ghcr.io/vencil/da-tools:latest');
+    expect(cicdDaToolsImage(baseConfig())).toBe(CICD_DEFAULT_DA_TOOLS_IMAGE);
+  });
+
+  it('falls back to the default when the field is blank or whitespace', () => {
+    // The field is a free-text input the customer can clear; an empty value
+    // reaching the template would emit `docker run  init` (two spaces, no
+    // image) and `docker` would treat `init` as the image name.
+    for (const daToolsImage of ['', '   ', '\t']) {
+      expect(cicdDaToolsImage(baseConfig({ daToolsImage }))).toBe(CICD_DEFAULT_DA_TOOLS_IMAGE);
+    }
+    expect(cicdGenerateDockerCommand(baseConfig({ daToolsImage: '  ' })))
+      .toContain(CICD_DEFAULT_DA_TOOLS_IMAGE);
+  });
+
+  it('trims surrounding whitespace off a real value', () => {
+    expect(cicdDaToolsImage(baseConfig({ daToolsImage: '  registry.internal/da-tools:v1  ' })))
+      .toBe('registry.internal/da-tools:v1');
+  });
+
+  it('carries a custom image into the docker one-liner', () => {
+    const out = cicdGenerateDockerCommand(baseConfig({ daToolsImage: 'registry.internal/da-tools:v1' }));
+    expect(out).toContain('registry.internal/da-tools:v1');
+    expect(out).not.toContain('ghcr.io/vencil/da-tools');
+  });
+
+  it('carries a custom image into EVERY docker run in the workflow preview', () => {
+    // Derived, not counted: a `toContain` would pass while two of the three
+    // steps kept the hardcoded reference. Walk the blocks and require each to
+    // name the configured image and nothing else.
+    const yaml = cicdGenerateGitHubActionsPreview(baseConfig({ daToolsImage: 'registry.internal/da-tools:v1' }));
+    const blocks = yaml.split('docker run').slice(1);
+    expect(blocks.length).toBeGreaterThan(0);
+    for (const b of blocks) {
+      expect(b).toContain('registry.internal/da-tools:v1');
+    }
+    expect(yaml).not.toContain('ghcr.io/vencil/da-tools');
+  });
+
+  it('keeps the default in the preview when nothing is configured', () => {
+    const yaml = cicdGenerateGitHubActionsPreview(baseConfig());
+    const blocks = yaml.split('docker run').slice(1);
+    expect(blocks.length).toBeGreaterThan(0);
+    for (const b of blocks) {
+      expect(b).toContain(CICD_DEFAULT_DA_TOOLS_IMAGE);
+    }
+  });
+});
+
+describe('workflow preview warns about a floating tag (#1351)', () => {
+  const noteLines = (yaml: string) => yaml.split('\n').filter((l) => l.includes('is a floating tag'));
+
+  it('emits exactly one note, and it is a YAML comment', () => {
+    const lines = noteLines(cicdGenerateGitHubActionsPreview(baseConfig()));
+    expect(lines).toHaveLength(1);
+    expect(lines[0].startsWith('#')).toBe(true);
+    expect(lines[0]).toContain(CICD_DEFAULT_DA_TOOLS_IMAGE);
+  });
+
+  it('stays silent once the customer pins a version tag or a digest', () => {
+    // ⛔ The note is a claim about the reader's own image. Printed above a
+    // pinned reference it is simply false, and it would be false inside a file
+    // they committed to their repo.
+    for (const daToolsImage of [
+      'ghcr.io/vencil/da-tools:v2.9.0',
+      'ghcr.io/vencil/da-tools@sha256:0000000000000000000000000000000000000000000000000000000000000000',
+    ]) {
+      expect(noteLines(cicdGenerateGitHubActionsPreview(baseConfig({ daToolsImage })))).toHaveLength(0);
+    }
+  });
+
+  it('reads the tag after the LAST slash, so a registry port is not a tag', () => {
+    // `registry.internal:5000/da-tools` carries no tag at all — Docker resolves
+    // it as `:latest`, so it floats. A `includes(':latest')` check would miss
+    // it and an `includes(':')` check would call it pinned; both were the
+    // obvious one-liners here.
+    const yaml = cicdGenerateGitHubActionsPreview(baseConfig({ daToolsImage: 'registry.internal:5000/da-tools' }));
+    const lines = noteLines(yaml);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('registry.internal:5000/da-tools');
+
+    const pinned = cicdGenerateGitHubActionsPreview(baseConfig({ daToolsImage: 'registry.internal:5000/da-tools:v1' }));
+    expect(noteLines(pinned)).toHaveLength(0);
+  });
+
+  it('places the note where it cannot break the workflow header', () => {
+    // It has to survive `yaml.safe_load` and actionlint in the customer's
+    // repo, so it sits on its own line directly above `jobs:` — the same spot
+    // the CLI leg declares DA_TOOLS_IMAGE in.
+    const yaml = cicdGenerateGitHubActionsPreview(baseConfig());
+    expect(yaml).toMatch(/^name: Dynamic Alerting CI\/CD/);
+    expect(yaml).toMatch(/\n# \S[^\n]*is a floating tag[^\n]*\njobs:\n/);
   });
 });
