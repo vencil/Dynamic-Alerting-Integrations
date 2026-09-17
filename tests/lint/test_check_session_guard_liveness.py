@@ -223,6 +223,8 @@ class TestGuardDerivation:
         'bash "$D/run-hooks.sh" "does_not_exist.py"',
         "bash '$D/run-hooks.sh' 'does_not_exist.py'",
         'bash "$D/run-hooks.sh" does_not_exist.py',
+        'bash "$D/run-hooks.sh" ./does_not_exist.py',
+        'bash "$D/run-hooks.sh" sub/does_not_exist.py',
     ])
     def test_a_quoted_guard_argument_is_still_derived(self, env, cmd):
         """Blind-review finding: the shell strips the quotes and run-hooks.sh

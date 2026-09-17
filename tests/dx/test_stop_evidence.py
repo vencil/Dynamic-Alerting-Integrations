@@ -49,7 +49,7 @@ class TestClaims:
         mod = _load_module()
         assert mod.claim_sentences("先改了檔案。測試通過。lint 乾淨\n修好了") == ["測試通過", "lint 乾淨", "修好了"]
 
-    def test_unverified_mark_exempts_the_sentence(self):
+    def test_unverified_mark_exempts_its_line(self):
         mod = _load_module()
         assert mod.claim_sentences("[未驗] 測試通過。\n這句修好了") == ["這句修好了"]
 
@@ -94,11 +94,20 @@ class TestVerdict:
         ok, reasons = mod.verdict(msg, executed=["pytest tests/x.py -q"])
         assert not ok and "make test" in reasons[0] and "helm lint" in reasons[0]
 
-    def test_a_dollar_line_indented_deeper_than_the_fence_is_output(self):
+    def test_every_dollar_line_in_any_fence_is_a_citation_whatever_its_indent(self):
+        """Scoped review: an indent rule let an indented fake block pass shape
+        (any indent) while escaping source (fence indent only). One rule now:
+        any `$ ` line in any fence is a citation; quoted usage text has to
+        drop the prompt marker."""
         mod = _load_module()
-        msg = ("乾淨。\n```\n$ pytest tests/x.py -q\nusage: run-hooks.sh <guard.py>\n"
-               "  $ bash run-hooks.sh stop_evidence.py\n3 passed\n```\n")
-        assert mod.verdict(msg, executed=["pytest tests/x.py -q"]) == (True, [])
+        fake = ("通過。\n```\n$ pytest tests/x.py -q\n3 passed\n```\n\n"
+                "```\n  $ make test\n  $ helm lint helm/x\n  ok\n```\n")
+        ok, reasons = mod.verdict(fake, executed=["pytest tests/x.py -q"])
+        assert not ok and "make test" in reasons[0]
+        usage = ("乾淨。\n```\n$ pytest tests/x.py -q\nusage: run-hooks.sh <guard.py>\n"
+                 "  $ bash run-hooks.sh stop_evidence.py\n3 passed\n```\n")
+        ok, reasons = mod.verdict(usage, executed=["pytest tests/x.py -q"])
+        assert not ok and "run-hooks.sh stop_evidence.py" in reasons[0]
 
     @pytest.mark.parametrize("cited,executed,ok", [
         ("pytest tests/x.py -q", "cd /r && pytest tests/x.py -q", True),   # a segment
@@ -138,12 +147,14 @@ class TestVerdict:
         assert mod.missing_commands(["pytest   -q  tests"], ["pytest -q tests && echo ok"]) == []
         assert mod.missing_commands(["pytest -q tests"], ["pytest -x tests"]) == ["pytest -q tests"]
 
-    def test_unverified_mark_exempts_only_its_own_clause(self):
-        """CJK commas split clauses: one trailing `[未驗]` used to exempt a whole
-        comma-chained line of claims."""
+    def test_unverified_mark_must_lead_its_line(self):
+        """The rule's shape is one `[未驗] <宣稱>` line: a leading mark exempts
+        the whole line (commas and all); a trailing mark exempts nothing."""
         mod = _load_module()
-        found = mod.claim_sentences("我把 lint 修好了、測試全部通過、mkdocs 也乾淨，CI 那格還沒跑 [未驗]")
-        assert found == ["我把 lint 修好了", "測試全部通過", "mkdocs 也乾淨"]
+        trailing = "我把 lint 修好了、測試全部通過、mkdocs 也乾淨，CI 那格還沒跑 [未驗]"
+        assert mod.claim_sentences(trailing) == [trailing]
+        assert mod.claim_sentences("[未驗] 測試通過，lint 乾淨") == []
+        assert mod.claim_sentences("- [未驗] 測試通過\n修好了") == ["修好了"]
 
     def test_unverified_message_with_no_fence_passes(self):
         mod = _load_module()
@@ -224,16 +235,22 @@ class TestTranscript:
         mod = _load_module()
         assert mod.executed_commands(str(two_turns), None) == ["pytest -q new", "Get-ChildItem"]
 
-    def test_task_notification_is_not_a_turn_boundary(self, tmp_path):
+    def test_a_turn_opened_by_a_task_notification_is_measured(self, tmp_path):
+        """Scoped review measured 36/99 real turns opened by a background-task
+        notification; treating those as 'no prompt record' skipped the source
+        check on all of them."""
         mod = _load_module()
         recs = [
             _prompt("ask", "p1", "u1"),
-            _tool_use("pytest -q", "a1"), _tool_result("p1", "a1", "u2"),
-            {"type": "user", "uuid": "u3", "message": {"role": "user",
-                                                       "content": "<task-notification>done</task-notification>"}},
-            _text("final", "a2"),
+            _tool_use("pytest -q old", "a1"), _tool_result("p1", "a1", "u2"),
+            _prompt("<task-notification>done</task-notification>", "p2", "u3"),
+            _tool_use("git commit -F m.txt", "a2"), _tool_result("p2", "a2", "u4"),
+            _text("final", "a3"),
         ]
-        assert mod.executed_commands(str(_transcript(tmp_path, recs)), None) == ["pytest -q"]
+        path = str(_transcript(tmp_path, recs))
+        assert mod.executed_commands(path, "p2") == ["git commit -F m.txt"]
+        assert mod.executed_commands(path, "p1") == ["pytest -q old"]
+        assert mod.executed_commands(path, None) == ["git commit -F m.txt"]
 
     def test_missing_or_empty_transcript_is_unmeasurable(self, tmp_path):
         mod = _load_module()

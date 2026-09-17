@@ -66,7 +66,7 @@ _INTERPRETER_CANDIDATES: tuple[tuple[str, ...], ...] = (
 
 # `run-hooks.sh <guard.py>`：launcher 後第一個以 .py 結尾的字；launcher 路徑
 # 與參數各自可帶引號（shell 會剝掉，launcher 照常執行，所以 gate 也要認）。
-_GUARD_SCRIPT_RE = re.compile(r"run-hooks\.sh[\"']?\s+[\"']?([A-Za-z0-9_.-]+\.py)")
+_GUARD_SCRIPT_RE = re.compile(r"run-hooks\.sh[\"']?\s+[\"']?([A-Za-z0-9_./-]+\.py)")
 
 # 每支 guard 該掛的 event 與 matcher 必須涵蓋的工具名。空 tuple ＝ 該 event
 # 不用 matcher（Stop）。要與 hook-vs-skill-coverage.md §2 的觸發欄一致。

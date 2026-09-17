@@ -8,11 +8,9 @@ triggers, and until now "zero" was unmeasurable — nothing recorded whether a
 skill was ever invoked. This ledger is the local measurement. It is written
 by the harness, not by the model, so a skill listed here was really loaded.
 
-Probe (agent 指引改善計畫 PR-D): the `Skill` matcher is not named in the hook
-docs' examples. Measured on Claude Code 2.1.233 — a `PreToolUse` entry with
-`"matcher": "Skill"` fires with `tool_name = "Skill"` and
-`tool_input = {"skill": "<name>", ...}`; the payload also carries
-`session_id`, `prompt_id`, `cwd`, `transcript_path`.
+Payload contract this relies on (the `Skill` matcher is not named in the hook
+docs' examples; the wiring is pinned by `check_session_guard_liveness.py`):
+`tool_name == "Skill"`, `tool_input.skill`, plus `session_id` / `prompt_id`.
 
 Ledger
 ------

@@ -3,26 +3,27 @@
 
 Rule (AGENTS.md #7 / CLAUDE.md 不可協商 #5, agent 指引改善計畫 PR-C, #1737)
 ------------------------------------------------------------------------
-A clause that claims an outcome (通過／乾淨／修好／綠／passed／fixed) is paired
+A sentence that claims an outcome (通過／乾淨／修好／綠／passed／fixed) is paired
 with an evidence block — a fenced block whose first non-blank line starts with
-``$ `` — or is marked ``[未驗]``. The shape half is the same ruler PR-C landed
-(`agent_output_metrics.has_evidence_fence`); this hook adds the only *source*
-check that can be done mechanically: every ``$ <command>`` line in ANY fence
-(`agent_output_metrics.fence_commands`) must equal a command — or one
-`&&`/`;`/`|` segment of a command — this turn actually ran through the Bash /
-PowerShell tool, as recorded in the session transcript. Commands a subagent
-ran are not this turn's (CLAUDE.md #5: agent 回報成功不算).
+``$ `` — or sits on a line that starts with ``[未驗]``. The shape half is the
+same ruler PR-C landed (`agent_output_metrics.has_evidence_fence`); this hook
+adds the only *source* check that can be done mechanically: every ``$ <command>``
+line in ANY fence (`agent_output_metrics.fence_commands`) must equal a command
+— or one `&&`/`||`/`;`/`|` segment of a command — this turn actually ran through
+the Bash / PowerShell tool, as recorded in the session transcript. Commands a
+subagent ran are not this turn's (CLAUDE.md #5: agent 回報成功不算). Known
+boundary: the transcript records tool *calls*, not exit codes, so the `B` of a
+`A && B` that never executed still counts as run.
 
 How "this turn" is found
 ------------------------
-The Stop payload carries `prompt_id`; the human prompt record carries the same
-`promptId`. The turn is that record up to the next human prompt with another
-id, and the commands are the `tool_use` blocks of the assistant records in
-between — written when the tool is called, so a transcript that still lags by
-the last tool_result names every command. No boundary heuristics over "the
-last user message" (task notifications and hook messages are user records
-too). Without a `prompt_id` the hook falls back to "after the last human
-prompt".
+The Stop payload carries `prompt_id`; the prompt record (a human message or a
+background-task notification — the harness gives each its own promptId)
+carries the same `promptId`. The turn is that record up to the next prompt
+record with another id, and the commands are the `tool_use` blocks of the
+assistant records in between — written when the tool is called, so a
+transcript that still lags by the last tool_result names every command.
+Without a `prompt_id` the hook falls back to "after the last prompt record".
 
 Blocking: exit 2 with the reason on stderr, **at most once per prompt**
 (`stop_hook_active` in the payload, plus a marker keyed by prompt_id for
@@ -72,9 +73,7 @@ COMMAND_TOOLS = ("Bash", "PowerShell")
 # broad by design: the cost of a false positive is bounded to one re-issue per
 # prompt (see module docstring), the cost of a missed claim is not.
 CLAIM_RE = re.compile(r"通過|乾淨|修好|綠|\bpassed\b|\bfixed\b", re.IGNORECASE)
-# Clause-level: CJK commas / semicolons / enumeration marks split too, so one
-# trailing `[未驗]` cannot exempt a whole comma-chained line of claims.
-_SENTENCE_SPLIT_RE = re.compile(r"[。！？，；、\n]|(?<=[.!?;])\s")
+_SENTENCE_SPLIT_RE = re.compile(r"[。！？\n]|(?<=[.!?])\s")
 _INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
 
 
@@ -105,16 +104,25 @@ def prose_only(body: str) -> str:
     return "\n".join(out)
 
 
+_LINE_LEAD_RE = re.compile(r"^[\s>*+\-]*(?:\d+[.)]\s*)?")
+
+
 def claim_sentences(body: str) -> list[str]:
-    """Sentences outside fences that contain a claim word and no `[未驗]`."""
+    """Sentences outside fences that contain a claim word, minus `[未驗]` lines.
+
+    The exemption unit is the LINE, and the mark must LEAD it — exactly the
+    shape the rule text prescribes (`[未驗] <宣稱>`, one line each). A mark
+    tacked onto the end of a comma-chained line of claims exempts nothing.
+    """
     prose = _INLINE_CODE_RE.sub("", prose_only(body))
     found: list[str] = []
-    for sent in _SENTENCE_SPLIT_RE.split(prose):
-        s = sent.strip()
-        if not s or UNVERIFIED_MARK in s:
+    for line in prose.split("\n"):
+        if _LINE_LEAD_RE.sub("", line, count=1).startswith(UNVERIFIED_MARK):
             continue
-        if CLAIM_RE.search(s):
-            found.append(s)
+        for sent in _SENTENCE_SPLIT_RE.split(line):
+            s = sent.strip()
+            if s and CLAIM_RE.search(s):
+                found.append(s)
     return found
 
 
@@ -176,8 +184,8 @@ def verdict(message: str, executed: list[str] | None) -> tuple[bool, list[str]]:
             shown = "；".join(f"`$ {m[:80]}`" for m in missing[:3])
             reasons.append(
                 f"證據區塊引用的指令在本回合沒有跑過：{shown}。只准逐字引用這一回合自己透過 "
-                f"Bash／PowerShell 執行的指令（整條或 `&&`／`;`／`|` 切出的一段；子代理跑的不算，"
-                f"輸出裡的 `$ ` 行請縮排），或改標 `{UNVERIFIED_MARK}`。")
+                f"Bash／PowerShell 執行的指令（整條或 `&&`／`;`／`|` 切出的一段；子代理跑的不算；"
+                f"輸出節錄裡以 `$ ` 開頭的行請刪掉或去掉 `$ `），或整行改成 `{UNVERIFIED_MARK} <宣稱>`。")
     return (not reasons), reasons
 
 
@@ -198,12 +206,18 @@ def _iter_records(path: Path):
                 yield rec
 
 
-def _is_human_prompt(rec: dict) -> bool:
+def _is_prompt_record(rec: dict) -> bool:
+    """A user record that opens a turn: prose content, not a tool_result.
+
+    A background-task notification opens a turn too (the harness gives it its
+    own promptId) — excluding it made a third of real turns unmeasurable and
+    silently skipped the source check on them.
+    """
     if rec.get("type") != "user" or rec.get("isMeta"):
         return False
     content = (rec.get("message") or {}).get("content")
     if isinstance(content, str):
-        return not content.lstrip().startswith("<task-notification>")
+        return True
     if isinstance(content, list) and content:
         return all(isinstance(b, dict) and b.get("type") == "text" for b in content)
     return False
@@ -253,20 +267,20 @@ def executed_commands(transcript_path: str | None, prompt_id: str | None) -> lis
     start = None
     if prompt_id:
         for i, rec in enumerate(recs):
-            if _is_human_prompt(rec) and rec.get("promptId") == prompt_id:
+            if _is_prompt_record(rec) and rec.get("promptId") == prompt_id:
                 start = i
                 break
         if start is None:
             return None  # nothing of this prompt written yet
     else:
         for i, rec in enumerate(recs):
-            if _is_human_prompt(rec):
+            if _is_prompt_record(rec):
                 start = i
         if start is None:
             return None
     cmds: list[str] = []
     for rec in recs[start + 1:]:
-        if _is_human_prompt(rec) and (not prompt_id or rec.get("promptId") not in (None, prompt_id)):
+        if _is_prompt_record(rec) and (not prompt_id or rec.get("promptId") not in (None, prompt_id)):
             break
         if rec.get("type") == "assistant":
             cmds.extend(_commands_in(rec))
