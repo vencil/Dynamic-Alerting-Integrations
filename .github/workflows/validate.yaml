@@ -316,7 +316,8 @@ jobs:
       # that names no module literally (a shell glob) — keep it `git ls-files`.
       # ⚠️ NOT GUARDED: this checks ENABLEMENT only. A floor linter can be
       # enabled and still silenced module-wide by an `exclusions.rules` entry or
-      # its own `settings`; only godoclint gets a per-checker check in pytest.
+      # its own `settings`; only godoclint gets a per-checker check in pytest
+      # (#1877).
       - name: Linter floor
         env:
           GOLANGCI_FLOOR: errcheck govet ineffassign staticcheck unused godoclint
@@ -328,9 +329,14 @@ jobs:
             exit 1
           fi
           status=0
+          checked=0
           for cfg in $configs; do
             dir=$(dirname "$cfg")
             enabled=$(cd "$dir" && golangci-lint linters --json | jq -r '(.Enabled // [])[].name')
+            # `checked=$((…))`, not `((checked++))`: the latter returns 1 when the
+            # old value is 0, and `set -e` would end the step on the first config.
+            checked=$((checked + 1))
+            echo "checked $cfg"
             if [ -z "$enabled" ]; then
               echo "::error file=$cfg::golangci-lint reports no enabled linters for $dir"
               status=1
@@ -343,6 +349,8 @@ jobs:
               fi
             done
           done
+          # A green step is otherwise silent, which reads the same as checking nothing.
+          echo "floor: checked $checked config(s) against: $GOLANGCI_FLOOR"
           exit "$status"
       # The two production modules. Their per-module .golangci.yml adds the
       # depguard dependency-direction ratchets (domain↛handler for tenant-api,

@@ -87,7 +87,7 @@ _DISPOSITIONS = frozenset({"enrol", "default-build", "unlinted"})
 # the floor's other members can be enabled yet silenced module-wide by an
 # `exclusions.rules` entry or their own `settings` (measured: `path: .*` naming
 # errcheck, or `staticcheck.checks: ["-all"]`, leave everything here green) —
-# only the members of this set get the per-checker check.
+# only the members of this set get the per-checker check (#1877).
 _REQUIRED_LINTERS = frozenset({"godoclint"})
 
 # The `standard` group, named here so the floor cannot shrink below it without
