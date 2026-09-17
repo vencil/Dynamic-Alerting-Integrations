@@ -48,6 +48,8 @@ v2.7.0 將 98 個 `test_*.py` 從 `tests/` 根目錄搬入 `ops/` / `dx/` / `lin
 | WatchLoop / 計時 | `startWatchLoopWithFakeClock(t, m, interval)` + `Advance` + `waitFor(state)` | ~~`time.Sleep` 等 ticker / debounce~~（PR #369 移除 WatchLoop tests） |
 | Scanner 直接呼叫 | `scanDirHierarchicalWithMetrics(dir, nil, fresh, nil)` | (legacy `scanDirHierarchical(dir, nil)` 仍 OK) |
 
+⛔ **seam 的另一半在 production 端**：新增 metric 寫入時走既有的 DI 路徑（`m.getMetrics().Foo()`／`c.manager.getMetrics().Foo()`，見 `collector.go`），不要呼叫 package-level 的全域 helper——後者繞過 `SetMetrics(fresh)`，注入 fresh metrics 的測試會看不到那次寫入而假綠。
+
 ### 完整 patterns
 
 **Metrics injection** — assert 計數 / histogram bucket：
@@ -312,5 +314,7 @@ make dc-go-test MOD=tenant-api ARGS="-run TestX -v"
 ```
 
 **增量原則**：本機（container）go test 靠 Go build/test cache 天然增量——只重跑受改動影響的 package，**勿加 `-count=1`**。`-count=1` 是 CI-only flag（ci.yml 用它防 cache 遮 flake）；本機加了會放棄增量、每次全量重跑。其餘 CI-only delta：`-race`（本機需要時 `ARGS="-race"`）與 tenant-api 的 `-tags forge_e2e` compile-check（ci.yml 獨立 step）不在 `dc-go-test` 預設內。
+
+⛔ **`go vet` 不是 CI 的 linter**：CI 的 Go Lint 跑的是 `golangci-lint run ./...`（每個帶 `.golangci.yml` 的 module 各一次；版本釘在 `.github/workflows/validate.yaml` 的 `GOLANGCI_VERSION`，dev container 同版）。`go vet`＋`gofmt -l`＋`go test ./...` 全綠不代表它會綠（例：`ineffassign` 不在 `go vet` 裡）⇒ 推 Go 改動前在 dev container 對改到的 module 跑同一道指令；判讀看最後的 `0 issues.` 與 exit code，別處 worktree 路徑的 cache warning 是雜訊。
 
 ⚠️ **Trap #62（worktree 假綠）**：`dc-*` targets 經 dx-run 恆定作用於**主 worktree 掛載**——在 claude worktree 編輯後直接跑會測到主 worktree 的舊 code；單檔同步工作流（cp → 跑 → revert）見 [testing-playbook](testing-playbook.md) §7「Dev Container mount scope」。

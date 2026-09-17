@@ -21,6 +21,7 @@ lang: zh
 | K8s 環境問題排錯 | [§K8s 環境問題](#k8s-環境問題) |
 | 負載注入（connections/cpu） | [§負載注入](#負載注入-load-injection) |
 | conf.d/ YAML 格式問題 | [§conf.d/ YAML 格式陷阱](#confd-yaml-格式陷阱) |
+| 寫 PromQL 規則或它的 promtool 測試 | [§PromQL rule-test traps](#promql-rule-test-traps) |
 | SAST 規則合規 | [§SAST 合規](#sast-合規) |
 | Playwright E2E | [§Playwright E2E](#playwright-e2e-測試portal-smoke-tests) |
 | Go 並發 flake 修法 | [§v2.6.x Go 並發測試 flake](#v26x-lessons-learned--go-並發測試-flake2026-04-11) |
@@ -150,6 +151,17 @@ threshold-exporter 多 replica 時，每個 Pod 匯出相同 `user_threshold`。
 Kill Pod → 驗證：1) PDB 保護 1 Pod Running；2) Alert 持續不中斷；3) 閾值不翻倍。
 
 `helm upgrade` 後 replicas 可能被覆蓋 → `kubectl scale deploy threshold-exporter -n monitoring --replicas=2`。
+
+## PromQL rule-test traps
+
+（標題刻意用 ASCII：mkdocs 的 slugify 會剝掉 CJK，中文標題的頁內錨點在 github.com 與 mkdocs 兩邊對不上。）
+
+- **`scalar - vector` 繼承 vector 的 label**（例：`time() - gauge`）；含它的 `and` 兩側 label 集合要相符才配得上。聚合後接 `and` 時別用裸 `sum()`——label 全清空，永遠配不到帶 scrape topology label 的另一側；用 `sum without (<雜訊維度>)` 只收斂雜訊維度。
+- **promtool fixture 的 `input_series` 要帶真實 scrape label**（`instance`／`job`／`namespace`／`pod`），否則量不到上一條那種「兩側 label 不匹配」的靜默失敗。
+- **跨 rule group 的精確 `$value` 斷言會 flake**：alert 讀另一個 group 的 recording rule 時，promtool 同一個 tick 內的 group 求值順序不固定。改用與值無關的斷言；要 end-to-end 的 firing 斷言就寫 `count(ALERTS{alertname="…",alertstate="firing"}) == 1`——裸 `ALERTS{}` 的 label 集合在 vmalert 多一個 `alertgroup`，會打紅 `make rulepack-vmalert-test`。⛔ 別為了修測試把 recording rule 搬進 alert 的 group：那是拿出貨的 rule pack 去解 harness 的問題。
+- **promtool flake 沒有 retry 墊片**：`scripts/ops/ci_flake_retry.py`／`flaky-tests.yaml` 只重試 Go 測試 ⇒ promtool 的 flake 只能根治，不能登記。
+- **數離散事件的規則，回歸測試要含「短命 series」形狀**（多條各自從 0 起算、活不滿整個窗的 series）；驗收法＝把規則還原成 `increase()`，新測試必須轉紅。為什麼不用 `increase()` 見 `rule-packs/rule-pack-kubernetes.yaml` 的 OOM 規則註解。
+- **fire 與 no-fire 兩個 case 的 alertname 要一起改**：規則不存在時 promtool 對 `exp_alerts: []` 也回空 ⇒「空對空」假綠（`tests/dx/fixtures/custom_alerts_promtool/`）。
 
 ## JSX Dependency Loading & Portal Modularization
 

@@ -331,6 +331,12 @@ scripts/ops/win_git_escape.bat push origin <branch>
 
 每筆 3-5 行，避免敘事化（per CHANGELOG editorial guideline）。
 
+### 8.4 PR 上的 `CodeQL` check 因誤報而紅
+
+- **要 dismiss 的是 PR head 上的那一筆，不是 `main` 的**：重構把被標記的 sink 搬了位置時，code scanning 會在 `refs/pull/<N>/head` 下開一筆**新** alert；dismiss `main` baseline 上的舊 alert 不會讓 PR 的 check 轉綠。
+- 找：`gh api 'repos/<owner>/<repo>/code-scanning/alerts?ref=refs/pull/<N>/head&state=open'`；關：`gh api -X PATCH repos/<owner>/<repo>/code-scanning/alerts/<alert> -f state=dismissed -f dismissed_reason='false positive' -f dismissed_comment='<理由>'`。`dismissed_reason` 只收 `false positive`／`won't fix`／`used in tests`，`dismissed_comment` 上限 280 字元（超過回 422）。
+- default setup 的 CodeQL run 不能 `gh run rerun`；dismiss 對的那一筆之後 check 會自己重新評估，不需要再推 commit。
+
 ---
 
 ## 9. Conflict patterns（多 PR 並行）
