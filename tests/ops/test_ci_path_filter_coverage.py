@@ -1682,8 +1682,8 @@ def _job_step_files(workflow_path: Path, job_id: str) -> set[str]:
                 "this predicate is too broad — but do NOT narrow it to "
                 "`_run_script_files`-resolves-a-tracked-file: that helper "
                 "deliberately does not resolve DIRECTORY arguments, so "
-                "`pytest tests/` resolves to nothing — when this was written "
-                "that put 3 of the 5 gated legs' primary test steps outside it. "
+                "`pytest tests/` resolves to nothing, so every gated leg whose "
+                "primary test step names a directory falls outside it. "
                 "Narrow on an axis "
                 "that cannot swallow the test step: steps with no `run:`.")
         if gating_step_if:
@@ -3463,10 +3463,9 @@ def test_guard_actually_sees_the_known_two_ended_gates() -> None:
         "components/tenant-api/internal/rbac/testdata/wizard",
         # ⛔ shape B (ROOT_CONST + READER + REPO_RELATIVE_LITERAL) had NO pin,
         # so it could go blind while these three shape-A paths kept the test
-        # green — when blind review narrowed any of its three conditions, six
-        # of the nine detections at the time vanished, including the two
-        # rule-pack drift gates. One anchor per shape, same rule as the python
-        # half.
+        # green — six of the nine detections, including the two rule-pack
+        # drift gates, vanish if any of its three conditions is narrowed
+        # (blind review). One anchor per shape, same rule as the python half.
         "rule-packs/threshold-registry.yaml",
     }
     missing = sorted(e for e in expected if e not in reads)
