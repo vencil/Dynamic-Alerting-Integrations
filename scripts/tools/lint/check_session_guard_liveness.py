@@ -39,6 +39,7 @@ import datetime as _dt
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -64,9 +65,27 @@ _INTERPRETER_CANDIDATES: tuple[tuple[str, ...], ...] = (
     ("python",),
 )
 
-# `run-hooks.sh <guard.py>`：launcher 後第一個以 .py 結尾的字；launcher 路徑
-# 與參數各自可帶引號（shell 會剝掉，launcher 照常執行，所以 gate 也要認）。
-_GUARD_SCRIPT_RE = re.compile(r"run-hooks\.sh[\"']?\s+[\"']?([A-Za-z0-9_./-]+\.py)")
+
+def _guard_scripts(cmd: str) -> list[str]:
+    """launcher 真的會收到的 guard 參數。
+
+    用 shell 語意切詞（`shlex`：引號剝掉、`#` 註解丟掉），取每個
+    `…/run-hooks.sh` token 的**下一個** token。對原始字串跑 regex 會把註解裡的
+    `run-hooks.sh x.py` 也算成接線——guard 沒被執行，gate 卻綠（#824 的形狀）。
+    切不動（引號不成對）回空清單：該 guard 會被接線檢查報成未接線。
+    """
+    try:
+        tokens = shlex.split(cmd, comments=True, posix=True)
+    except ValueError:
+        return []
+    out: list[str] = []
+    for i, tok in enumerate(tokens[:-1]):
+        if tok.replace("\\", "/").rsplit("/", 1)[-1] == "run-hooks.sh":
+            arg = tokens[i + 1]
+            if arg.endswith(".py"):
+                out.append(arg[2:] if arg.startswith("./") else arg)
+    return out
+
 
 # 每支 guard 該掛的 event 與 matcher 必須涵蓋的工具名。空 tuple ＝ 該 event
 # 不用 matcher（Stop）。要與 hook-vs-skill-coverage.md §2 的觸發欄一致。
@@ -137,7 +156,7 @@ def check_settings_routing(settings_path: Path) -> list[str]:
     # 被引用的 guard script 從命令字串推導（`run-hooks.sh <guard.py>`），不列舉：
     # 列舉表只認得寫進去的那幾支，新掛的 hook 指到不存在的檔會靜默放行。
     for cmd in guard_cmds:
-        for guard in _GUARD_SCRIPT_RE.findall(cmd):
+        for guard in _guard_scripts(cmd):
             if not (_GUARD_DIR / guard).exists():
                 violations.append(f"guard script 不存在: {_GUARD_DIR / guard}")
     return violations
@@ -162,9 +181,9 @@ def check_required_wiring(settings_path: Path) -> list[str]:
         wired = False
         for entry in (settings.get("hooks") or {}).get(event) or []:
             cmds = [(h or {}).get("command") or "" for h in (entry or {}).get("hooks") or []]
-            # 同一把尺：guard 名從命令字串推導，不做子字串比對（否則註解裡
-            # 提到檔名也算接線）。
-            if not any(guard in _GUARD_SCRIPT_RE.findall(c) for c in cmds):
+            # 同一把尺：guard 名由 `_guard_scripts` 推導，不做子字串或原始字串
+            # 比對（否則註解裡提到檔名也算接線）。
+            if not any(guard in _guard_scripts(c) for c in cmds):
                 continue
             matcher = (entry or {}).get("matcher")
             if all(_matcher_hits(matcher, t) for t in tools):

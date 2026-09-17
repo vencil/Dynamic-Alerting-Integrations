@@ -17,7 +17,9 @@ Ledger
 Path: `$VIBE_SKILL_USAGE_LOG` / `%LOCALAPPDATA%\\vibe\\skill-usage.log` /
 `$XDG_CACHE_HOME/vibe/skill-usage.log` / `~/.cache/vibe/skill-usage.log`
 (same resolver policy as session-init.py; `/dev/null` or `NUL` disables).
-Fields: ts / session_id / prompt_id / skill / args / cwd / repo_root / pid.
+Fields: ts / session_id / prompt_id / skill / cwd / repo_root / pid. The
+skill's `args` are deliberately NOT recorded: the ledger exists to count
+triggers, and args are free-form user text with no place in a durable log.
 
 Failure policy: never blocks. Any error → stderr warning, exit 0.
 
@@ -66,7 +68,6 @@ def record_from_payload(payload: dict, *, env: dict, pid: int) -> dict | None:
         "session_id": payload.get("session_id") or "",
         "prompt_id": payload.get("prompt_id") or "",
         "skill": skill,
-        "args": tool_input.get("args") or "",
         "cwd": payload.get("cwd") or "",
         "repo_root": env.get("CLAUDE_PROJECT_DIR") or "",
         "pid": pid,

@@ -46,7 +46,7 @@ lang: zh
 | `preflight_bash.py` | 每次 `Bash`/`Write` | 攔 `sed -i` 掛載路徑（dev-rule #11）+ 攔 `_*.bat`/`_*.ps1`/`_*.cmd` 出 whitelist（Trap #54） | `scripts/session-guards/preflight_bash.py` |
 | `skill_usage.py` | 每次 `Skill` | skill 觸發帳本（JSONL；`--stats` 給 quarterly audit 的汰除判準） | `scripts/session-guards/skill_usage.py` |
 | `paths_map.py` | 每次 `Edit`/`Write`/`MultiEdit`/`Bash` | 命中 `.agents/paths-map.json` 的 glob 就以 `additionalContext` 注入「先讀哪一節＋一句約束」；每 session 每列最多兩次（Bash 命中一次、編輯類命中一次，唯讀的 `cat` 不會吃掉編輯時的那次）；Bash 只認指令裡**存在於磁碟**的路徑 | `scripts/session-guards/paths_map.py` |
-| `stop_evidence.py` | `Stop`（主 agent 每回合結束） | 最後一則訊息含宣稱詞卻無 `$ ` 證據區塊、或任一 fence 裡的 `$ 指令`（與 fence 同縮排的那些）不等於本回合 transcript 的 Bash/PowerShell tool_use 跑過的整條指令或其 `&&`／`;`／`\|` 一段 ⇒ exit 2 **一次**（`stop_hook_active` 與 per-prompt marker 保證不迴圈；transcript 還沒寫到這個 prompt 時只查形狀並在 stderr 說明；子代理跑的指令不算本回合） | `scripts/session-guards/stop_evidence.py` |
+| `stop_evidence.py` | `Stop`（主 agent 每回合結束） | 最後一則訊息含宣稱詞卻無 `$ ` 證據區塊、或任一 fence 裡的 `$ 指令`（任意縮排）不等於本回合 transcript 的 Bash/PowerShell tool_use 跑過的整條指令或其 `&&`／`;`／`\|` 一段 ⇒ exit 2 **一次**（`stop_hook_active` 與 per-prompt marker 保證不迴圈；transcript 還沒寫到這個 prompt 時只查形狀並在 stderr 說明；子代理跑的指令不算本回合） | `scripts/session-guards/stop_evidence.py` |
 
 已知不涵蓋：
 - 多 repo web session（project root 是本 repo 上層）整份 `.claude/settings.json` 不載入，上表全部涵蓋為零（[#1719](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1719)；起手式先查 `/tmp/vibe-session-start-hook.ran`）。

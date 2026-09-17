@@ -56,9 +56,11 @@ def _payload(skill: str = "vibe-workflow", tool: str = "Skill", **extra) -> dict
 class TestRecord:
     def test_skill_payload_is_recorded_with_ids(self):
         mod = _load_module()
-        rec = mod.record_from_payload(_payload(args="--fast"), env={"CLAUDE_PROJECT_DIR": "/r"}, pid=7)
+        rec = mod.record_from_payload(_payload(args="--fast secret/path"),
+                                      env={"CLAUDE_PROJECT_DIR": "/r"}, pid=7)
         assert rec["skill"] == "vibe-workflow"
-        assert rec["args"] == "--fast"
+        # args are free-form user text: counted triggers need none of it
+        assert "args" not in rec and "secret/path" not in json.dumps(rec)
         assert rec["session_id"] == "sess-1" and rec["prompt_id"] == "p-1"
         assert rec["repo_root"] == "/r" and rec["pid"] == 7
         assert rec["ts"].endswith("+00:00")

@@ -355,6 +355,25 @@ def test_hand_written_vendor_files_next_to_the_projections_are_left_alone(tmp_pa
     assert gaa.main(["--check"]) == gaa.EXIT_OK
 
 
+def test_a_refused_target_leaves_no_directory_behind(tmp_path, monkeypatch):
+    """Validate, then mkdir. `makedirs` follows a symlinked ancestor, so the
+    old order could create `vibe-paths-*` outside the tree before the write was
+    refused. Pinned on the ordering (a symlink fixture cannot run on the
+    Windows hosts this repo supports)."""
+    _fake_ssot(tmp_path, monkeypatch)
+    _fake_paths_map(tmp_path)
+
+    def refuse(dest_rel):
+        if dest_rel.startswith(gaa.OUT_CURSOR):
+            raise gaa.UnsafePath(f"{dest_rel} resolves outside the repository")
+        return os.path.join(gaa.REPO_ROOT, dest_rel)
+
+    monkeypatch.setattr(gaa, "assert_writable_target", refuse)
+    with pytest.raises(gaa.UnsafePath):
+        gaa.write_outputs(gaa.planned_outputs())
+    assert not (tmp_path / gaa.OUT_CURSOR).exists(), "mkdir ran before validation"
+
+
 def test_projected_frontmatter_is_valid_yaml_even_with_awkward_globs(tmp_path, monkeypatch):
     """Surviving mutant from blind review: bare-quote concatenation passed
     the substring assertion and produced unparsable frontmatter."""

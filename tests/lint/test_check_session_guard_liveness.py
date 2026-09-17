@@ -215,9 +215,24 @@ class TestGuardDerivation:
 
     def test_the_script_name_is_taken_from_the_command_not_guessed(self, mod=None):
         mod = _load_module()
-        assert mod._GUARD_SCRIPT_RE.findall(_LAUNCH + "paths_map.py") == ["paths_map.py"]
-        assert mod._GUARD_SCRIPT_RE.findall(_LAUNCH + "skill_usage.py --stats") == ["skill_usage.py"]
-        assert mod._GUARD_SCRIPT_RE.findall('bash run-hooks.sh session-init.py') == ["session-init.py"]
+        assert mod._guard_scripts(_LAUNCH + "paths_map.py") == ["paths_map.py"]
+        assert mod._guard_scripts(_LAUNCH + "skill_usage.py --stats") == ["skill_usage.py"]
+        assert mod._guard_scripts('bash run-hooks.sh session-init.py') == ["session-init.py"]
+        assert mod._guard_scripts('cd x && bash ./run-hooks.sh ./sub/g.py') == ["sub/g.py"]
+        assert mod._guard_scripts(_LAUNCH + "--probe") == []
+        assert mod._guard_scripts('bash "unbalanced run-hooks.sh x.py') == []
+
+    def test_a_launcher_invocation_inside_a_shell_comment_is_not_wiring(self, env):
+        """CodeRabbit on #1878: a raw-text regex also matched
+        `… other.py # run-hooks.sh skill_usage.py`, so a guard the shell never
+        runs counted as wired."""
+        mod, settings, *_ = env
+        assert mod._guard_scripts(_LAUNCH + "other.py # run-hooks.sh skill_usage.py") == ["other.py"]
+        wiring = _full_wiring()
+        wiring["PreToolUse"][2] = ("Skill", _LAUNCH + "other.py # run-hooks.sh skill_usage.py")
+        _write_wiring(settings, wiring)
+        violations = mod.check_required_wiring(settings)
+        assert len(violations) == 1 and "skill_usage.py 未接線" in violations[0]
 
     @pytest.mark.parametrize("cmd", [
         'bash "$D/run-hooks.sh" "does_not_exist.py"',

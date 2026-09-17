@@ -33,8 +33,10 @@ what a path means without three hand-kept copies:
     (Claude Code reads the JSON directly, from the PreToolUse hook
      scripts/session-guards/paths_map.py; nothing to project)
 
-Both output roots are OWNED by this generator: a stray file under either is
-reported as `extra` and removed by `--generate`, exactly like `.claude/skills`.
+Ownership there is prefix-scoped (`owns()`): only `vibe-paths-*` under those
+two roots is reported as `extra` or removed by `--generate`. They are the
+vendors' own user directories, so a hand-written file next to the projections
+is left alone — unlike `.claude/skills`, which this generator owns outright.
 
 WHY COPIES AND NOT SYMLINKS
 ===========================
@@ -508,9 +510,11 @@ def diff_against_disk(plan):
 
 def write_outputs(plan):
     for dest_rel, data in sorted(plan.items()):
-        abs_path = os.path.join(REPO_ROOT, dest_rel)
-        os.makedirs(os.path.dirname(abs_path) or ".", exist_ok=True)
+        # Validate BEFORE creating the parent: makedirs follows a symlinked
+        # ancestor, and a directory created outside the tree is not undone by
+        # refusing the file write afterwards.
         abs_path = assert_writable_target(dest_rel)
+        os.makedirs(os.path.dirname(abs_path) or ".", exist_ok=True)
         with open(abs_path, "wb") as fh:
             fh.write(data)
         # Generated artefacts ship 0644, the same mode every sibling generator
