@@ -118,7 +118,7 @@ jobs:
               #     — which passes by construction — while every Go leg skipped
               #     and `Go Tests (1.26)` reported PASS.
               #     ⛔ No scanner DERIVES `go` entries from what Go tests READ
-              #     (python and portal have one each), so 14 of these 16 are
+              #     (python and portal have one each), so the entries here are
               #     unpinned — only ci_flake_retry.py + tests/contract/** are.
               #     All three were found BY HAND, the third only after the first
               #     two were "fixed": treat the class as open until #1399 lands
@@ -130,12 +130,12 @@ jobs:
               #   - **/conf.d/** and components/da-tools/** — the tenant-config
               #     guards in internal/gitops (TestRealTenantFilesAreNowhereNearTheCap,
               #     TestCapClearsTheRecipeCeiling) walk the repo for real tenant
-              #     configs; all 20 of them today live under a conf.d/ directory.
-              #     Counted, not assumed: exactly ONE of the 20 falls outside
-              #     every other entry —
+              #     configs. Counted when these entries were added (`b2297bae`):
+              #     every one lived under a conf.d/ directory, and exactly ONE
+              #     fell outside every other entry —
               #     components/da-tools/app/examples/cardinality-demo/conf.d/over-budget-tenant.yaml
-              #     — and components/da-tools/** alone covers it, so **/conf.d/** buys
-              #     no coverage today and is here for the next such file, which is
+              #     — which components/da-tools/** alone covered, so **/conf.d/**
+              #     bought no coverage then and is here for the next such file,
               #     far likelier to land under a conf.d/ than under da-tools.
               #     Without them the Go leg skips on a PR that only grows that
               #     file, so the guard never runs (#1722).
@@ -285,8 +285,8 @@ jobs:
               - "Makefile"
               - ".pre-commit-config.yaml"
               - ".github/custom-rule-policy.yaml"
-              # ⛔ ALL of docs/, not a hand-picked few. Python tests read at
-              # least eight documentation files as CONTRACT inputs (the
+              # ⛔ ALL of docs/, not a hand-picked few. Python tests read
+              # documentation files as CONTRACT inputs (the
               # for-tenants key-group counts, the ADR planning index, the
               # alerting-fundamentals cross-links, recommendation-data.json),
               # and `check_threshold_unit_sanity` walks `docs/**/*.md` looking
@@ -344,15 +344,15 @@ jobs:
             # tools/portal/.../_common/data/rule-packs.js mirrors, and
             # tests/rule-packs-fallback-drift.test.ts (a Vitest) is the only
             # gate on that pair. Without this path a rule-pack PR that only
-            # regenerates platform-data.json never runs the gate: 9 of the
-            # last 10 commits touching this file matched no portal path, and
-            # PR #1215 landed a real mariadb-defaults drift that way.
+            # regenerates platform-data.json never runs the gate, and PR #1215
+            # landed a real mariadb-defaults drift that way.
             # tenant-config.schema.json is the same shape, one gate over:
             # recipe-enums.drift.test.ts binds the portal's recipe-enums.json
             # to it (the cross-language enum contract the Python compiler and
-            # the Go preflight also read). Not yet burned — 3 schema edits
-            # since that test was added matched no portal path, none of them
-            # happened to touch a MIRRORED property — but the only thing
+            # the Go preflight also read). Not burned as of `55bbf231`, which
+            # added this path: the schema edits between that test landing and
+            # then matched no portal path, but none touched a MIRRORED
+            # property — and the only thing
             # keeping it green is that editing an enum usually makes the
             # author edit recipe-enums.json too, i.e. the failure mode IS
             # "author forgot", which is exactly when no portal path matches.
@@ -1118,7 +1118,7 @@ jobs:
         run: python3 -m pip install --quiet pyyaml -c requirements/ci-constraints.txt
 
       - name: Run Container SAST Layer 4 (raw k8s manifests)
-        # Real layer (NOT a stub): k8s/ holds 42 raw manifests. kube-linter
+        # Real layer (NOT a stub): k8s/ holds real raw manifests. kube-linter
         # over the tree, reusing L2's severity + a (path, check) exemption
         # registry. 0 Critical / baseline-High exempt -> exit 0; a new Critical
         # or unregistered High -> exit 1 (fails this required-check job).
@@ -1161,7 +1161,7 @@ jobs:
       # gate: this job installs Vector below, and `vector test` over
       # helm/vector/tests/projection_tests.yaml is the ONLY place the shipped
       # VRL is executed rather than string-matched (tenant fail-closed routing,
-      # the ADR-028 §D3 PII drop, the #1293 origin-spoof truth table). Those 4
+      # the ADR-028 §D3 PII drop, the #1293 origin-spoof truth table). Those
       # tests are `skipif`-gated on the binary, so a broken Install step would
       # turn the whole behaviour gate into a green no-op.
       VIBE_REQUIRE_VECTOR: "1"
@@ -1175,7 +1175,7 @@ jobs:
       # GitHub Actions workflow to CUSTOMER repos, and actionlint is the only
       # thing here that reads it the way GitHub does — it is what catches the
       # shipped-broken `apply` block. This job installs actionlint below; a
-      # regressed install step must fail rather than skip the 6 combinations.
+      # regressed install step must fail rather than skip those combinations.
       VIBE_REQUIRE_ACTIONLINT: "1"
       # Same again for the GitLab half of that gate: check-jsonschema validates
       # the generated .gitlab-ci.yml against the vendored GitLab schema and is

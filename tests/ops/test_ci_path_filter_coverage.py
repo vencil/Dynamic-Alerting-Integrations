@@ -1109,8 +1109,9 @@ def test_detect_outputs_are_forced_true_off_a_pull_request() -> None:
                     "redundant; the catch-all lives in the FILTER, which on a "
                     "push is never evaluated.")
     assert checked >= 4, (
-        f"only {checked} PR-gated detect output(s) were checked; ci.yml has "
-        "four today (go/python/portal/docs) and this floor has NO headroom.\n"
+        f"only {checked} PR-gated detect output(s) were checked; this floor "
+        "was set to ci.yml's outputs at the time (go/python/portal/docs) with "
+        "NO headroom.\n"
         "⛔ Workflows untouched? Then discovery regressed and this test would "
         "otherwise pass by examining nothing. ⚠️ Deliberately retired a "
         "filter? Lower this floor in the SAME commit and name the filter.")
@@ -1143,7 +1144,7 @@ def test_paths_filter_action_stays_on_the_verified_major() -> None:
         "  * a different MAJOR (`@v4`): read the action's `MatchOptions` "
         "upstream FIRST. Still `dot: true` -> update `verified`. `dot` now "
         "defaults OFF -> updating `verified` IS the disarm: `**` stops "
-        "matching the 94 dot-bearing tracked paths while `_is_catch_all` "
+        "matching every dot-bearing tracked path while `_is_catch_all` "
         "keeps insisting it covers them. Teach `_covers` the new default "
         "BEFORE touching this line.\n"
         "  * a SHA pin: strictly better and the matcher is unchanged. Record "
@@ -1452,8 +1453,8 @@ def _gated_jobs(workflow_path: Path) -> dict[str, list[str]]:
          This workflow tree already relies on the escape hatch — every
          aggregate gate (`python-tests`, `all-checks`, …) writes `if: always()`
          precisely to opt out — so the first contributor who forgets it creates
-         a silently gated leg. Today that changes nothing: all four such jobs
-         carry `always()`, which is what makes this cheap to add now.
+         a silently gated leg. When this was written it changed nothing: every
+         such job carried `always()`, which is what made it cheap to add.
 
     ⛔ Still an idiom, not a semantics. What is DETECTED but NOT PARSED now
     raises below. What is not even detected: a gate expressed without touching
@@ -1633,9 +1634,9 @@ def _job_step_files(workflow_path: Path, job_id: str) -> set[str]:
     relative script argument resolves against the step's directory, not the
     repo root, so `working-directory: tools/portal` + `node ci/gen.js` was
     tested as `<root>/ci/gen.js`, found missing, and dropped — the dependency
-    became invisible with every test green. Ten steps across the gated legs
-    already set `working-directory`; none of them names a relative script
-    TODAY, which is the only reason this was latent rather than live. The
+    became invisible with every test green. Steps across the gated legs
+    already set `working-directory`; when this was fixed none of them named a
+    relative script, the only reason it was latent rather than live. The
     step directory is tried FIRST and the repo root second, which is right for
     both spellings: a genuinely relative path resolves where the shell would,
     and a root-anchored one (VAR_PREFIX / WORKSPACE_EXPR already stripped) does
@@ -1679,8 +1680,9 @@ def _job_step_files(workflow_path: Path, job_id: str) -> set[str]:
                 "this predicate is too broad — but do NOT narrow it to "
                 "`_run_script_files`-resolves-a-tracked-file: that helper "
                 "deliberately does not resolve DIRECTORY arguments, so "
-                "`pytest tests/` resolves to nothing and 3 of the 5 gated legs' "
-                "primary test steps would fall outside it. Narrow on an axis "
+                "`pytest tests/` resolves to nothing and every gated leg whose "
+                "primary test step names a directory would fall outside it. "
+                "Narrow on an axis "
                 "that cannot swallow the test step: steps with no `run:`.")
         if gating_step_if:
             raise AssertionError(
@@ -2865,10 +2867,9 @@ def test_looks_like_a_path_bounds_are_reference_pinned() -> None:
     # and the one bound that IS pinned by effect, kept here for completeness
     assert not _looks_like_a_path("index.md")
 
-    # A NUL byte must be judged "not a path", never crash the scan. `tests/**`
-    # already holds three such literals (none with a `/`, so none reaches the
-    # filesystem today). Review raised this as a ValueError risk needing its
-    # own `except`; measured on both platforms, `Path.is_file()` returns False
+    # A NUL byte must be judged "not a path", never crash the scan: `tests/**`
+    # does hold such literals. Review raised this as a ValueError risk needing
+    # its own `except`; measured on both platforms, `Path.is_file()` returns False
     # rather than raising (it has swallowed ValueError since 3.8), so no extra handler was added — an
     # `except` clause that can never fire reads like a second line of defence
     # while being none. This pins the OUTCOME, which is what matters if that
@@ -3420,12 +3421,11 @@ def test_gated_scanner_still_justifies_every_filter_entry_it_used_to() -> None:
             step_files = _job_step_files(workflow_path, job)
             for name in names:
                 files_by_filter[name] |= step_files
-        # ⛔ Keyed by (filter, pattern). The same pattern STRING appears in two
-        # filters of one workflow five times in ci.yml (`rule-packs/**`,
-        # `try-local/**`, `flaky-tests.yaml`, `.github/workflows/ci.yml`,
-        # `docs/**`), and a bare-string set would call it justified when either
-        # filter's legs matched — reintroducing, one level down, the exact
-        # cross-filter credit this rescope removed.
+        # ⛔ Keyed by (filter, pattern). The same pattern STRING can appear in
+        # two filters of one workflow (ci.yml does it, e.g. `rule-packs/**`
+        # in both `go` and `python`), and a bare-string set would call it
+        # justified when either filter's legs matched — reintroducing, one
+        # level down, the exact cross-filter credit this rescope removed.
         justified = {
             (name, pattern)
             for name in filters for pattern in filters[name]
