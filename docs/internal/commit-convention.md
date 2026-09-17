@@ -92,10 +92,12 @@ Optional trailers go on separate lines after a blank line below the body. Use th
 When a commit resolves a registered tracking item, include a trailer naming the ID:
 
 ```
-Resolves TRK-228
-Closes TRK-103
-Fixes Trap #12
+Resolves: TRK-228
+Closes: TRK-103
+Fixes: Trap #12
 ```
+
+⛔ **The colon is load-bearing.** `check_planning_status_sync.py` reads these with `git log --format='%(trailers:key=Resolves,…)'`, and git only recognises `Key: value` lines as trailers. A colon-less `Resolves TRK-228` is not merely ignored: sitting in the last paragraph it makes git treat the **whole** paragraph as prose, so `Refs:` / `Self-Review-Pass-2:` / `Co-Authored-By:` next to it vanish too (both `git interpret-trailers --parse` and `%(trailers)` return nothing).
 
 The verb (`Resolves` / `Closes` / `Fixes` / `Fix`) is **case-insensitive**; the ID itself must be `\b`-bounded so that `TRK-1` does not eat `TRK-100`. CI's `check_planning_status_sync.py` (chunk 2b, pending) verifies that the matching `frontmatter status:` flips to `done` and the `pr_ref:` field is populated in the same PR.
 
@@ -122,12 +124,22 @@ Fixes #228
 Closes #242
 ```
 
+That bare form is for PR bodies and commit-body prose. GitHub also accepts the colon form (`Fixes: #228`), and **inside a commit's trailer paragraph the colon form is the only safe one** — a bare `Fixes #228` line there voids the whole block (⛔ above).
+
 This is **orthogonal** to the TRK trailer above — issues live in GitHub; TRK items live in the repo. A PR commonly carries both:
 
 ```
-Resolves TRK-228
-Fixes #242
+Resolves: TRK-228
+Fixes: #242
 ```
+
+⛔ **GitHub's parser reads adjacency, not meaning.** A closing verb next to `#NNN` anywhere in a PR body or commit message links the issue for auto-close — including a sentence that *negates* it, quotes it, or explains this very trap. To say "this PR does not close N", write `Refs: #N` and name the verb without the number beside it. After opening a PR or editing its body, check the link list: `gh pr view <N> --json closingIssuesReferences`.
+
+### Trailer block traps
+
+- **Every line after the header is capped at 100 characters** by the local `commit-msg` hook (`pr_preflight.py`, `POST_HEADER_MAX_LINE_LENGTH`) — trailers included, independent of commitlint's own body limit.
+- **A body line that starts with `---` is a patch divider to `git interpret-trailers`**: everything after it, trailer block included, is dropped from `--parse` output (`git log --format='%(trailers)'` still sees it, so the two readers disagree). Do not start a body line with `---`.
+- **One contiguous last paragraph, all `Key: value`.** A blank line inside it, or one line without a colon, splits or voids the block (see the colon note above).
 
 ### Co-Authorship
 
@@ -145,8 +157,8 @@ fix(exporter): tighten cardinality guard for nested group_left joins
 Adds an upper bound on cross-product cardinality during PromQL rule
 evaluation so that misbehaving rule packs cannot OOM the exporter.
 
-Resolves TRK-228
-Fixes #242
+Resolves: TRK-228
+Fixes: #242
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 ```
 
@@ -223,6 +235,12 @@ Conventional Commits are automatically parsed to generate the CHANGELOG:
 Breaking changes (marked with `!` or `BREAKING CHANGE:`) appear prominently at the top or in a dedicated section.
 
 Other types (`style`, `refactor`, `test`, `build`, `ci`, `chore`) are grouped and may be collapsed in the CHANGELOG.
+
+### Editing `CHANGELOG.md` by hand
+
+- **A rebase can silently drop or duplicate a bullet with zero conflict markers** — equal bullet *counts* hide it. After any rebase that touched `CHANGELOG.md`, compare bullet **sets** against the oracle `expected = main ∪ (mine − base)` (`base` = the fork point before this rebase). `mine ∪ main` is the wrong oracle: it reports bullets that upstream legitimately rewrote as "missing". A union-style conflict resolution errs the other way — it keeps both the old and the rewritten text of one bullet — so look for extras, not only losses. Then run `python3 scripts/tools/dx/bump_docs.py --sync-counts --check`: two PRs that each bumped the same count rebase cleanly into a wrong number.
+- **An edit at a section boundary can swallow the next `### heading`** (the last bullet under `### Added`, right above `### Fixed`): every entry below then files under the wrong section, and nothing is red. After editing, list the headings: `sed -n '/^## \[Unreleased\]/,/^## \[v/p' CHANGELOG.md | grep '^###'` (keep both `^` anchors: bullets and the placeholder comment quote those headings mid-line, and an unanchored range skips headings).
+- **Links from `CHANGELOG.md` to anything outside `docs/` use the absolute GitHub URL.** The mkdocs strict gate exempts only `CHANGELOG.md` → `docs/<…>.md` links (`mkdocs_strict_check.sh`); a link to a non-`.md` file under `docs/`, or to `helm/`, `scripts/`, `try-local/`, fails `MkDocs Build Verification`.
 
 ## CI Validation
 

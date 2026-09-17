@@ -399,7 +399,7 @@ tools:
 
 ### P1. Commit trailer 必含 `Resolves <ID>`（追蹤項目修復時）
 
-修復已登錄的追蹤項目（`TRK-NNN` 統一 namespace；或 `windows-mcp-playbook.md` 的 `Trap #N`）時，commit message 必須含 trailer：`Resolves TRK-205` / `Fixes Trap #12` / `Closes TRK-103`（動詞大小寫不敏感）。
+修復已登錄的追蹤項目（`TRK-NNN` 統一 namespace；或 `windows-mcp-playbook.md` 的 `Trap #N`）時，commit message 必須含 trailer：`Resolves: TRK-205` / `Fixes: Trap #12` / `Closes: TRK-103`（動詞大小寫不敏感；⛔ 冒號不可省——無冒號的裸行會讓 git 把整個 trailer 段落當散文丟掉，見 [`commit-convention.md` §Trailer block traps](commit-convention.md#trailer-block-traps)）。
 
 **原因**：沒有 trailer 時 backlog frontmatter 的 `status:` 與 git log 失聯，下次 session 會把已修項目當新項目再 audit 一次。⛔ **但在 merge 後的 main 上考古要用 `git log --grep`，不要用 `%(trailers:key=...)`**——squash merge 會在空行後附加 `Co-authored-by:`，把整段 trailer 推出 block（[#1741](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1741)）；字面文字完好，兩道 gate 都跑在 merge 前的 `<base>..HEAD` 上、不受影響。
 

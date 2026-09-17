@@ -313,6 +313,12 @@ python3 scripts/tools/lint/check_doc_template.py --fix
 python3 scripts/tools/lint/check_doc_template.py --version v2.3.0 --check-version
 ```
 
+**這支工具不檢查、但新文件一樣要過的三件事**：
+
+- **登錄**：新的 `docs/*.md` 要進 doc-map（`python3 scripts/tools/dx/generate_doc_map.py --generate --lang all`，`doc-map-check` hook 擋漂移）與 `mkdocs.yml` 的 `nav`（含 en locale 的 `nav_translations`）。`docs/internal/**` 不入 doc-map。
+- **雙語標題同步**：有 `.en.md` 配對的文件（`docs/internal/**` 以外），改 h2／h3 標題要在同一顆 commit 改 `.en.md`。⚠️ `bilingual-structure-check` 的 `files:` 只配 `.en.md`／`.zh.md`——只 staged 中文那一份時本地 hook 不會跑。
+- **frontmatter `version:`** 填**已發布**的平台版本，不是開發中的目標版本。
+
 ---
 
 ## 6. 模板快速複製

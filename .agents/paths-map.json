@@ -9,7 +9,7 @@
         {"file": "docs/internal/windows-mcp-playbook.md", "section": "Helm Upgrade 防衝突"},
         {"file": "docs/internal/iac-lint-baseline.md", "section": "Layer 2 — Helm template"}
       ],
-      "note": "Helm SAST L2 只在 CI 硬擋，本地要手動跑 `pre-commit run --hook-stage manual --all-files iac-helm-sast-check`；values 裡的 secret-shape 是 L3，同一份 baseline 列管。"
+      "note": "Helm SAST L2 只在 CI 硬擋，本地要手動跑 `pre-commit run --hook-stage manual --all-files iac-helm-sast-check`；values 裡的 secret-shape 是 L3，同一份 baseline 列管。新增 value→env 接線後跑 `helm template` 並 grep 那個 env：`{{- with X }}` 區塊內 `.` 被重綁成 X——裡面用 `.foo` 去拿 root 的 key 會靜默輸出空字串、X 的路徑拼錯則整段靜默不輸出，兩種 `helm template` 都 rc=0（寫 `.Values.foo` 反而會報錯）；要 root 用 `$.Values.foo`。"
     },
     {
       "id": "k8s-manifests",
@@ -23,7 +23,8 @@
       "id": "rule-packs-confd",
       "paths": ["rule-packs/**", "components/threshold-exporter/config/conf.d/**", "try-local/seed/conf.d/**"],
       "read": [
-        {"file": "docs/internal/testing-playbook.md", "section": "conf.d/ YAML 格式陷阱"}
+        {"file": "docs/internal/testing-playbook.md", "section": "conf.d/ YAML 格式陷阱"},
+        {"file": "docs/internal/testing-playbook.md", "section": "PromQL rule-test traps"}
       ],
       "note": "conf.d 是 wrapped format（`tenants:` 包一層）；rule-pack 改動後的產物各有各的重生指令與 drift hook——`python3 scripts/tools/dx/generate_rule_pack_stats.py --generate --lang all`（`rule-pack-stats-check`）、`make rulepack-configmaps`（副本 drift 由 `rulepack-configmap-drift`／`rulepack-3copy-drift` 擋）、`make platform-data`（`platform-data-check`）——一支跑完不代表另幾道會綠；Go／PromQL／fixture 不得 hardcode tenant id。"
     },
@@ -35,6 +36,14 @@
         {"file": "docs/internal/test-map.md", "section": "測試注入 Seam"}
       ],
       "note": "Go 測試在 Dev Container（`make dc-go-test MOD=… PKG=…`），且 `dc-*` 恆定作用於主 worktree 掛載——在 worktree 改完直接跑會測到舊 code（Trap #62）；`go vet` 不是 CI 的 linter，推前在容器裡對改到的每個 go module 跑一次 `golangci-lint run ./...`。"
+    },
+    {
+      "id": "tenant-api-go",
+      "paths": ["components/tenant-api/**/*.go"],
+      "read": [
+        {"file": "docs/internal/hook-vs-skill-coverage.md", "section": "4.5 ⚙️ CI-only gates"}
+      ],
+      "note": "OpenAPI spec 會因為任何 swag 標註可達的 struct 改動而漂移，不只 handler 標註：改完跑 `make api-docs`，再 `git diff --exit-code components/tenant-api/docs/`。CI 上它紅在 `go-tests-tenant-api` job 的「Verify OpenAPI spec is up-to-date」步驟，看起來像 Go 測試失敗。"
     },
     {
       "id": "portal",
@@ -50,14 +59,15 @@
       "read": [
         {"file": "docs/internal/testing-playbook.md", "section": "Playwright E2E 測試"}
       ],
-      "note": "`playwright-lint` pre-commit 需要 `tests/e2e/node_modules`（web session 由 session-start hook 裝）；spec 內的 `test.fixme()` 有治理規則，別拿它當跳過。"
+      "note": "`playwright-lint` pre-commit 需要 `tests/e2e/node_modules`（web session 由 session-start hook 裝）；spec 內的 `test.fixme()` 有治理規則，別拿它當跳過。`@visual` 的 baseline（`tests/e2e/*-snapshots/*.png`）走 Git LFS 且與環境相依，重生用 `.github/workflows/visual-baseline.yaml` 的 workflow_dispatch，不在本機產。"
     },
     {
       "id": "python-tools",
       "paths": ["scripts/tools/**/*.py"],
       "read": [
         {"file": "docs/internal/testing-playbook.md", "section": "SAST 合規"},
-        {"file": "docs/internal/dev-rules.md", "section": "13. da-tools 子命令 exit-code"}
+        {"file": "docs/internal/dev-rules.md", "section": "13. da-tools 子命令 exit-code"},
+        {"file": "docs/internal/lint-policy.md", "section": "7. 新增 lint 的審核 checklist"}
       ],
       "note": "新工具要守 exit code 0/1/2 與 `--ci`／`--json` 約定，`subprocess` 帶 timeout、`open` 帶 encoding；docstring 改了跑 `generate_tool_map.py --generate --lang all`；改到 `tests/shared/property-coverage.yaml` 已宣告的那幾個模組時，新 module-level 函式要進它的 triage（其他模組不受該 lint 管）。"
     },
@@ -65,6 +75,7 @@
       "id": "changelog",
       "paths": ["CHANGELOG.md"],
       "read": [
+        {"file": "docs/internal/commit-convention.md", "section": "Editing `CHANGELOG.md` by hand"},
         {"file": "docs/internal/hook-vs-skill-coverage.md", "section": "3. Pre-commit auto hooks"}
       ],
       "note": "只動 `## [Unreleased]`；整段對 base 每新 bullet ≤ 1,000 字元，量測數字放 commit／issue 不放這裡：`python3 scripts/tools/dx/generate_changelog.py --base origin/main --lint CHANGELOG.md`。"
@@ -90,7 +101,8 @@
       "paths": ["docs/**/*.md"],
       "read": [
         {"file": "docs/internal/dev-rules.md", "section": "10. 雙語政策"},
-        {"file": "docs/internal/dev-rules.md", "section": "4. Doc-as-Code"}
+        {"file": "docs/internal/dev-rules.md", "section": "4. Doc-as-Code"},
+        {"file": "docs/internal/doc-template.md", "section": "5. 自動化檢查"}
       ],
       "note": "`python3 scripts/tools/lint/check_doc_links.py --ci` 驗連結與錨點；`docs/internal/**` 不需 `.en.md`，其餘外部面向文件雙語同步；push 時 mkdocs strict 對被推的 commit 建站。"
     },

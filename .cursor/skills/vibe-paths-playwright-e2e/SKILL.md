@@ -10,4 +10,4 @@ paths:
 先讀：
 - `docs/internal/testing-playbook.md` §Playwright E2E 測試
 
-約束：`playwright-lint` pre-commit 需要 `tests/e2e/node_modules`（web session 由 session-start hook 裝）；spec 內的 `test.fixme()` 有治理規則，別拿它當跳過。
+約束：`playwright-lint` pre-commit 需要 `tests/e2e/node_modules`（web session 由 session-start hook 裝）；spec 內的 `test.fixme()` 有治理規則，別拿它當跳過。`@visual` 的 baseline（`tests/e2e/*-snapshots/*.png`）走 Git LFS 且與環境相依，重生用 `.github/workflows/visual-baseline.yaml` 的 workflow_dispatch，不在本機產。
