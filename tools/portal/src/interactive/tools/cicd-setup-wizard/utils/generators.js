@@ -12,6 +12,8 @@ purpose: |
   Public API:
     CICD_DEFAULT_DA_TOOLS_IMAGE                default da-tools image ref
     cicdDaToolsImage(config)                   image ref this config resolves to
+    cicdImageIsMutable(image)                  can this ref be repointed?
+    cicdSplitImageRef(image)                   {repo, tag, digest} of a ref
     cicdGenerateInitCommand(config)            build da-tools CLI
     cicdGenerateDockerCommand(config)          docker wrapper
     cicdGeneratedPaths(config)                 paths `init` will write
@@ -38,20 +40,53 @@ function cicdDaToolsImage(config) {
   return trimmed === '' ? CICD_DEFAULT_DA_TOOLS_IMAGE : trimmed;
 }
 
-// "Floating" = what the reference resolves to can change while the workflow
-// file does not. A digest cannot, and neither does a version tag under the
-// policy components/da-tools/README.md already hands customers: "quick-start
-// 用 :latest 即可；production 請釘特定版號如 :v2.8.0". So only a missing tag
-// (Docker implies `:latest`) or a literal `:latest` counts.
+// Split a reference into {repo, tag, digest}. Deliberately NOT a full OCI
+// grammar: the tag separator is the first `:` of the LAST `/`-segment, so a
+// colon ahead of that is a registry port (`registry.internal:5000/da-tools`
+// carries no tag). A digest makes the tag irrelevant and is reported alone.
 //
-// ⚠️ The tag is what follows the LAST `/`; a colon before it is a registry
-// port (`registry.internal:5000/da-tools` has no tag), which is why this
-// cannot be a bare `image.includes(':latest')`.
-function _cicdImageIsFloating(image) {
-  if (image.includes('@')) return false;
-  const name = image.slice(image.lastIndexOf('/') + 1);
+// ⛔ Exported for its own sake, not for reuse. `cicdImageIsMutable` cannot
+// observe the port branch — our registry has no port, so every port-bearing
+// reference is foreign and mutable however it is split, and a mutation that
+// deleted the `/`-anchoring left all 49 tests green. Reaching the parse
+// directly is what turns that from correct-looking code nothing measures into
+// something a test can fail on.
+function cicdSplitImageRef(image) {
+  const at = image.indexOf('@');
+  if (at !== -1) return { repo: image.slice(0, at), tag: null, digest: true };
+  const slash = image.lastIndexOf('/');
+  const name = image.slice(slash + 1);
   const colon = name.indexOf(':');
-  return colon === -1 || name.slice(colon + 1) === 'latest';
+  if (colon === -1) return { repo: image, tag: null, digest: false };
+  return {
+    repo: image.slice(0, slash + 1) + name.slice(0, colon),
+    tag: name.slice(colon + 1),
+    digest: false,
+  };
+}
+
+// The one repository whose tag policy this project can speak for.
+const CICD_DA_TOOLS_REPOSITORY = cicdSplitImageRef(CICD_DEFAULT_DA_TOOLS_IMAGE).repo;
+
+// "Mutable" = the reference can be repointed at different code while the
+// workflow file stays byte-identical. Only a digest rules that out.
+//
+// ⛔ The version-tag exemption is scoped to OUR repository, and that scoping is
+// the whole point. components/da-tools/README.md does say "quick-start 用
+// :latest 即可；production 請釘特定版號如 :v2.8.0" — but the line under it is
+// `docker pull ghcr.io/vencil/da-tools:latest`, so that policy is a promise
+// about tags WE publish, not a property of tags. An earlier revision of this
+// function read it as the latter and went silent for
+// `registry.internal/da-tools:v1`, telling a customer their own registry's tag
+// is immutable when nothing here can know that (CWE-494, raised in review on
+// #1880). Tags are mutable by default in OCI; the exemption is a statement
+// about us, so it may only be applied to us.
+//
+function cicdImageIsMutable(image) {
+  const { repo, tag, digest } = cicdSplitImageRef(image);
+  if (digest) return false;
+  if (tag === null || tag === 'latest') return true;
+  return repo !== CICD_DA_TOOLS_REPOSITORY;
 }
 
 function cicdGenerateInitCommand(config) {
@@ -193,15 +228,18 @@ function cicdGenerateFileTree(config) {
 // tests/ops/test_generated_ci_artifacts.py.
 function cicdGenerateGitHubActionsPreview(config) {
   const image = cicdDaToolsImage(config);
-  // ⚠️ Emitted only when the reference actually floats, because this YAML is a
-  // file the customer pastes into their own repo: telling a reader who pinned
-  // a digest that their image "can change" ships a false statement into their
-  // tree. Not reusable from the prose leg — the warning in
+  // ⚠️ Emitted only when the reference can actually be repointed, because this
+  // YAML is a file the customer pastes into their own repo: telling a reader
+  // who pinned a digest that their image "can change" ships a false statement
+  // into their tree. One sentence covers both remaining cases truthfully — our
+  // :latest, which we move on purpose, and a foreign tag, whose registry we
+  // cannot speak for — so there is only ever one claim to keep true. Not
+  // reusable from the prose leg: the warning in
   // docs/scenarios/gitops-ci-integration.md is about the same tag but answers
   // a different question (how to tell whether the artifact you already have
   // carries a fix the doc describes, "不要看版號、直接看產物").
-  const pinNote = _cicdImageIsFloating(image)
-    ? `# ${image} is a floating tag - what it resolves to can change without this file changing. Pin a version tag or a digest before you rely on this in production.\n`
+  const pinNote = cicdImageIsMutable(image)
+    ? `# ${image} can be repointed at different code without this file changing - :latest moves by design, any other tag at its registry's discretion. Pin a digest if this pipeline has to be reproducible.\n`
     : '';
   return `name: Dynamic Alerting CI/CD
 on:
@@ -281,4 +319,4 @@ ${pinNote}jobs:
         run: argocd app sync dynamic-alerting --force`}`;
 }
 
-export { CICD_DEFAULT_DA_TOOLS_IMAGE, cicdDaToolsImage, cicdGenerateInitCommand, cicdGenerateDockerCommand, cicdGeneratedPaths, cicdGenerateFileTree, cicdGenerateGitHubActionsPreview };
+export { CICD_DEFAULT_DA_TOOLS_IMAGE, cicdDaToolsImage, cicdImageIsMutable, cicdSplitImageRef, cicdGenerateInitCommand, cicdGenerateDockerCommand, cicdGeneratedPaths, cicdGenerateFileTree, cicdGenerateGitHubActionsPreview };

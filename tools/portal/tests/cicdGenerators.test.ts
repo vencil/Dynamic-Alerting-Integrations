@@ -16,6 +16,8 @@ import fc from 'fast-check';
 import {
   CICD_DEFAULT_DA_TOOLS_IMAGE,
   cicdDaToolsImage,
+  cicdImageIsMutable,
+  cicdSplitImageRef,
   cicdGenerateInitCommand,
   cicdGenerateDockerCommand,
   cicdGeneratedPaths,
@@ -423,40 +425,46 @@ describe('da-tools image is configurable (#1351)', () => {
   });
 });
 
-describe('workflow preview warns about a floating tag (#1351)', () => {
-  const noteLines = (yaml: string) => yaml.split('\n').filter((l) => l.includes('is a floating tag'));
+describe('a reference we cannot vouch for is called out (#1351, review on #1880)', () => {
+  const noteLines = (yaml: string) =>
+    yaml.split('\n').filter((l) => l.includes('can be repointed'));
 
-  it('emits exactly one note, and it is a YAML comment', () => {
+  // ⛔ The predicate's exemption is a statement about US, so it may only be
+  // applied to us. An earlier revision read components/da-tools/README.md's
+  // "production 請釘特定版號" as a property of version tags in general and went
+  // silent for `registry.internal/da-tools:v1` — telling a customer their own
+  // registry's tag is immutable, which nothing in this file can know (CWE-494).
+  // Measured before the fix: that reference produced 0 note lines.
+  it('warns for a version tag on a registry whose policy is not ours', () => {
+    const yaml = cicdGenerateGitHubActionsPreview(
+      baseConfig({ daToolsImage: 'registry.internal/da-tools:v1' }));
+    const lines = noteLines(yaml);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('registry.internal/da-tools:v1');
+  });
+
+  it('stays silent for a version tag on the repository we publish', () => {
+    // The README policy is exactly this case and no wider: the sentence sits
+    // directly above `docker pull ghcr.io/vencil/da-tools:latest`.
+    expect(noteLines(cicdGenerateGitHubActionsPreview(
+      baseConfig({ daToolsImage: 'ghcr.io/vencil/da-tools:v2.9.0' })))).toHaveLength(0);
+  });
+
+  it('stays silent for a digest, whatever the registry', () => {
+    // ⛔ A digest is the only thing that actually cannot be repointed, so this
+    // is the one exemption that needs no policy behind it.
+    const digest = '@sha256:' + '0'.repeat(64);
+    for (const repo of ['ghcr.io/vencil/da-tools', 'registry.internal/da-tools']) {
+      expect(noteLines(cicdGenerateGitHubActionsPreview(
+        baseConfig({ daToolsImage: repo + digest })))).toHaveLength(0);
+    }
+  });
+
+  it('emits exactly one note for the default, and it is a YAML comment', () => {
     const lines = noteLines(cicdGenerateGitHubActionsPreview(baseConfig()));
     expect(lines).toHaveLength(1);
     expect(lines[0].startsWith('#')).toBe(true);
     expect(lines[0]).toContain(CICD_DEFAULT_DA_TOOLS_IMAGE);
-  });
-
-  it('stays silent once the customer pins a version tag or a digest', () => {
-    // ⛔ The note is a claim about the reader's own image. Printed above a
-    // pinned reference it is simply false, and it would be false inside a file
-    // they committed to their repo.
-    for (const daToolsImage of [
-      'ghcr.io/vencil/da-tools:v2.9.0',
-      'ghcr.io/vencil/da-tools@sha256:0000000000000000000000000000000000000000000000000000000000000000',
-    ]) {
-      expect(noteLines(cicdGenerateGitHubActionsPreview(baseConfig({ daToolsImage })))).toHaveLength(0);
-    }
-  });
-
-  it('reads the tag after the LAST slash, so a registry port is not a tag', () => {
-    // `registry.internal:5000/da-tools` carries no tag at all — Docker resolves
-    // it as `:latest`, so it floats. A `includes(':latest')` check would miss
-    // it and an `includes(':')` check would call it pinned; both were the
-    // obvious one-liners here.
-    const yaml = cicdGenerateGitHubActionsPreview(baseConfig({ daToolsImage: 'registry.internal:5000/da-tools' }));
-    const lines = noteLines(yaml);
-    expect(lines).toHaveLength(1);
-    expect(lines[0]).toContain('registry.internal:5000/da-tools');
-
-    const pinned = cicdGenerateGitHubActionsPreview(baseConfig({ daToolsImage: 'registry.internal:5000/da-tools:v1' }));
-    expect(noteLines(pinned)).toHaveLength(0);
   });
 
   it('places the note where it cannot break the workflow header', () => {
@@ -465,6 +473,58 @@ describe('workflow preview warns about a floating tag (#1351)', () => {
     // the CLI leg declares DA_TOOLS_IMAGE in.
     const yaml = cicdGenerateGitHubActionsPreview(baseConfig());
     expect(yaml).toMatch(/^name: Dynamic Alerting CI\/CD/);
-    expect(yaml).toMatch(/\n# \S[^\n]*is a floating tag[^\n]*\njobs:\n/);
+    expect(yaml).toMatch(/\n# \S[^\n]*can be repointed[^\n]*\njobs:\n/);
+  });
+});
+
+describe('cicdImageIsMutable', () => {
+  // Exported because the note above is the only other observer, and a
+  // whole-YAML assertion cannot say WHICH input produced the answer.
+  it('calls a digest immutable and everything else mutable, except our own version tags', () => {
+    const cases: Array<[string, boolean]> = [
+      [CICD_DEFAULT_DA_TOOLS_IMAGE, true],
+      ['ghcr.io/vencil/da-tools', true],
+      ['ghcr.io/vencil/da-tools:v2.9.0', false],
+      ['ghcr.io/vencil/da-tools@sha256:' + '0'.repeat(64), false],
+      ['registry.internal/da-tools:v1', true],
+      ['registry.internal/da-tools:latest', true],
+      ['registry.internal/da-tools', true],
+      ['registry.internal/da-tools@sha256:' + '0'.repeat(64), false],
+    ];
+    for (const [image, expected] of cases) {
+      expect(cicdImageIsMutable(image), image).toBe(expected);
+    }
+  });
+
+});
+
+describe('cicdSplitImageRef', () => {
+  // ⛔ Tested here rather than through `cicdImageIsMutable`, because through
+  // that predicate the port branch is INVISIBLE: our registry has no port, so
+  // every port-bearing reference is foreign and mutable however it is split.
+  // Measured — deleting the `/`-anchoring left all 49 tests green, which is
+  // why this describe exists at all rather than a comment claiming coverage.
+  it('takes the tag from the last path segment, so a registry port is not a tag', () => {
+    expect(cicdSplitImageRef('registry.internal:5000/da-tools')).toEqual({
+      repo: 'registry.internal:5000/da-tools', tag: null, digest: false,
+    });
+    expect(cicdSplitImageRef('registry.internal:5000/da-tools:v1')).toEqual({
+      repo: 'registry.internal:5000/da-tools', tag: 'v1', digest: false,
+    });
+  });
+
+  it('reports a digest without inventing a tag', () => {
+    const d = '@sha256:' + '0'.repeat(64);
+    expect(cicdSplitImageRef('ghcr.io/vencil/da-tools' + d)).toEqual({
+      repo: 'ghcr.io/vencil/da-tools', tag: null, digest: true,
+    });
+  });
+
+  it('splits the shipped default the way the repository comparison needs', () => {
+    // The exemption compares `repo` against this value, so a parse that put
+    // the tag into `repo` would silence the note for every ghcr.io reference.
+    expect(cicdSplitImageRef(CICD_DEFAULT_DA_TOOLS_IMAGE)).toEqual({
+      repo: 'ghcr.io/vencil/da-tools', tag: 'latest', digest: false,
+    });
   });
 });
