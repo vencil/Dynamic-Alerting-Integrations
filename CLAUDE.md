@@ -141,7 +141,7 @@ pre-commit run --hook-stage manual --all-files   # manual stage（較重）
 - `make pre-tag` — ⛔ 打 tag 前必跑（version-check + lint-docs + 未發布 draft advisory 檢查 + docker build hard gate；需 docker / trivy / gh）。
 - `make lint-docs` — 一站式文件 lint。
 - `make session-cleanup` — session 結束清理。
-- `make api-docs` — 從 tenant-api swag 標註產生 OpenAPI spec（改 handler 標註後必跑，CI 有 drift check）。
+- `make api-docs` — 從 tenant-api swag 標註產生 OpenAPI spec（改 handler 標註或標註可達的 struct 後必跑，CI 有 drift check）。
 - `make contract-test` — schemathesis 契約測試。
 - `make platform-data` — 重新產生 Rule Pack 數據。
 - `make portal-build` / `make test-portal` — portal JSX bundle 與 Vitest。

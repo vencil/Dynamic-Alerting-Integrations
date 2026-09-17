@@ -124,6 +124,8 @@ Fixes #228
 Closes #242
 ```
 
+That bare form is for PR bodies and commit-body prose. GitHub also accepts the colon form (`Fixes: #228`), and **inside a commit's trailer paragraph the colon form is the only safe one** — a bare `Fixes #228` line there voids the whole block (⛔ above).
+
 This is **orthogonal** to the TRK trailer above — issues live in GitHub; TRK items live in the repo. A PR commonly carries both:
 
 ```
@@ -237,7 +239,7 @@ Other types (`style`, `refactor`, `test`, `build`, `ci`, `chore`) are grouped an
 ### Editing `CHANGELOG.md` by hand
 
 - **A rebase can silently drop or duplicate a bullet with zero conflict markers** — equal bullet *counts* hide it. After any rebase that touched `CHANGELOG.md`, compare bullet **sets** against the oracle `expected = main ∪ (mine − base)` (`base` = the fork point before this rebase). `mine ∪ main` is the wrong oracle: it reports bullets that upstream legitimately rewrote as "missing". A union-style conflict resolution errs the other way — it keeps both the old and the rewritten text of one bullet — so look for extras, not only losses. Then run `python3 scripts/tools/dx/bump_docs.py --sync-counts --check`: two PRs that each bumped the same count rebase cleanly into a wrong number.
-- **An edit at a section boundary can swallow the next `### heading`** (the last bullet under `### Added`, right above `### Fixed`): every entry below then files under the wrong section, and nothing is red. After editing, list the headings: `sed -n '/## \[Unreleased\]/,/## \[v/p' CHANGELOG.md | grep '^###'`.
+- **An edit at a section boundary can swallow the next `### heading`** (the last bullet under `### Added`, right above `### Fixed`): every entry below then files under the wrong section, and nothing is red. After editing, list the headings: `sed -n '/^## \[Unreleased\]/,/^## \[v/p' CHANGELOG.md | grep '^###'` (keep both `^` anchors: bullets and the placeholder comment quote those headings mid-line, and an unanchored range stops at the first quote).
 - **Links from `CHANGELOG.md` to anything outside `docs/` use the absolute GitHub URL.** The mkdocs strict gate exempts only `CHANGELOG.md` → `docs/<…>.md` links (`mkdocs_strict_check.sh`); a link to a non-`.md` file under `docs/`, or to `helm/`, `scripts/`, `try-local/`, fails `MkDocs Build Verification`.
 
 ## CI Validation

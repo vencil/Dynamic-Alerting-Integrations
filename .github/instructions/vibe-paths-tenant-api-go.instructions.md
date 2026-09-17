@@ -5,6 +5,6 @@ applyTo: "components/tenant-api/**/*.go"
 # vibe-paths-tenant-api-go
 
 先讀：
-- `docs/internal/test-map.md` §Go tests（Dev Container
+- `docs/internal/hook-vs-skill-coverage.md` §4.5 ⚙️ CI-only gates
 
 約束：OpenAPI spec 會因為任何 swag 標註可達的 struct 改動而漂移，不只 handler 標註：改完跑 `make api-docs`，再 `git diff --exit-code components/tenant-api/docs/`。CI 上它紅在 `go-tests-tenant-api` job 的「Verify OpenAPI spec is up-to-date」步驟，看起來像 Go 測試失敗。
