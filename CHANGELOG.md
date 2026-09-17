@@ -13,6 +13,11 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 <!-- 下一版 in-flight 工作暫存區。每筆 entry 目標 3-6 行使用者重點 + 一行指回內部 artifact；session 過程 / FUSE trap / 完整 commit list 不入此處。release 收尾時做最終 condensation 並切正式 `## [vX.Y.Z]` heading。 -->
 
+### Changed
+
+- **測試以 subprocess 呼叫的工具現在對 coverage 可見，進入點判定器改讀實測資料（dx；[#1746](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1746)）**：本 repo 大量測試以 `subprocess.run([sys.executable, <tool>, ...])` 驅動工具，那些子行程預設完全不被 coverage 追蹤，於是「量不到」在報表上與「量了沒事」同形。`pyproject.toml` 補上 `parallel`，`tests/conftest.py` 在 `--cov` 開著時把從 pyproject 衍生的子行程設定匯出給子行程（不是第二份設定檔），並替它標上 coverage context。CI 設定不需要改動，本機與 CI 行為一致。⚠️ 連帶：任何裸 `coverage report/xml` 之前必須先 `coverage combine`；`pytest --cov` 會自己處理。
+- **`list_subprocess_only_modules.py` 的判定由 AST 換底為 coverage 實測（dx；[#1746](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1746)）**：四桶改名為 `subprocess_only` / `both` / `in_process_only` / `unexecuted`，以檔案路徑為鍵、由 coverage context 判定，前一版六條以檔名 stem 為鍵的已知界線整組退役。新增 `--coverage-data`。⛔ 語意一併修正：「只被 subprocess 執行到」**不再等於盲點**——接線之後那些模組是被量到的，它是進入點型態不是量測缺口。該工具現在需要一份既有的 coverage 資料檔才能回答，讀不到／資料未接線／出現未知 context／與母體不相交一律 rc 2。
+
 ### Removed
 
 - **`docs/assets/social-preview.svg` — repo 內零引用、隨 MkDocs 發佈、圖面數字已過期（dx；[#1868](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1868)）**：圖面上手寫的 rule-pack 數與版本號沒有寫入端、也沒有 gate 對帳；repo 內零引用，GitHub repo 也沒有把它設成 social preview。判準同下一則，刪檔。要對外的社群卡片時，先接上產生器再加回來，不要放回手寫數字。

@@ -314,6 +314,28 @@ def _coverage_text(tmp: Path) -> str:
     ))
 
 
+def _subprocess_coverage_data(tmp: Path) -> str:
+    """A tiny coverage data file whose one measured line carries the `subprocess`
+    context, pointing at a REAL module of this repo.
+
+    list_subprocess_only_modules reads measured coverage rather than scanning the
+    AST, so its happy path needs data that (a) exists and (b) intersects the
+    population of the tree being scanned — an empty or foreign data file is rc 2
+    by design. Mirrors _coverage_text: a saved fixture, never a pytest run.
+    """
+    import coverage
+
+    path = tmp / ".coverage-subproc"
+    data = coverage.CoverageData(basename=str(path))
+    data.set_context("subprocess")
+    data.add_lines({
+        str(REPO_ROOT / "scripts" / "tools" / "dx"
+            / "list_subprocess_only_modules.py"): [1],
+    })
+    data.write()
+    return str(path)
+
+
 def _waveform_report(tmp: Path) -> str:
     """A synthetic inject_waveform report (VM-free), shape mirrored from
     tests/dx/test_waveform_score.py `_report()`; one in-window hit → verdict PASS.
@@ -409,8 +431,12 @@ RECIPES: list[Recipe] = [
     # ── list_subprocess_only_modules — 掃真實 repo（本工具的母體就是這棵樹）──
     #    ⚠️ 它是**報告不是閘門**：有盲點也回 EXIT_OK，所以正常路徑就是 rc 0 + 一份
     #    JSON。人類可讀的那份走 else 分支，不會污染 stdout。
+    #    ⚠️ 必須餵一份 coverage 資料：換底後（TRK-379）它讀的是實測資料而不是掃 AST，
+    #    而測試執行當下真實樹上的 `.coverage` 要嘛不存在、要嘛是上一輪的。存檔 fixture
+    #    的作法與上面的 coverage_gap_analysis 一致。
     R("list_subprocess_only_modules", "json",
-      lambda t: ["--json"], expect_exit=EXIT_OK),
+      lambda t: ["--json", "--coverage-data", _subprocess_coverage_data(t)],
+      expect_exit=EXIT_OK),
     # 不是 git repo ⇒「量不到」路徑：rc 2 且 stdout **完全空**（診斷走 stderr）。
     # ⛔ 這一格釘住的是「量不到」不得偽裝成一份空的 JSON 清單。
     R("list_subprocess_only_modules", "not-a-git-repo",

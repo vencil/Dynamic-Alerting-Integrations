@@ -253,5 +253,70 @@ def patch_repo_root(monkeypatch, tmp_path):
         monkeypatch.setattr(module, attr, target)
         return tmp_path
     return _patch
+# ── Subprocess coverage (TRK-379) ────────────────────────────────────
+#
+# Much of this suite drives tools as `subprocess.run([sys.executable, tool,
+# ...])`. Those children are invisible to coverage by default, so a module
+# reached ONLY that way reports exactly like a module no test reaches at all:
+# "could not measure" and "measured, nothing wrong" become the same reading.
+#
+# The mechanism is coverage's own `a1_coverage.pth`, which every interpreter
+# runs at startup: it calls `coverage.process_startup()` when
+# COVERAGE_PROCESS_START is set. Exporting it in the parent is therefore
+# enough -- a hand-written sitecustomize.py (what #1746 originally prescribed)
+# is NOT needed and would be a second copy of a mechanism coverage ships.
+#
+# There is no alternative route: pytest-cov 7.x removed its own subprocess
+# support entirely (the package no longer contains the string COV_CORE), so
+# COVERAGE_PROCESS_START is the only thing that makes these children visible.
+#
+# COVERAGE_FILE must be absolute. A relative data_file is resolved against
+# each CHILD's cwd, and 161 subprocess call sites in this suite pass
+# `cwd=<tmp_path>`; those data files would be deleted with the tmp dir and the
+# measurement would vanish silently. Pinning it to the repo root keeps every
+# child's data beside the parent's, where `coverage combine` finds it.
+# `parallel = true` in pyproject.toml is what stops the children from
+# overwriting each other (see the comment there).
+#
+# Gated on coverage actually being active: `get_plugin("_cov")` is None
+# without --cov. Setting it unconditionally would litter .coverage.* files
+# over ordinary test runs.
+#
+# ⛔ Deliberately NOT handled here: a test that builds `env={...}` from
+# scratch instead of `{**os.environ, ...}` gives its child no
+# COVERAGE_PROCESS_START, so that child stays unmeasured. This suite has that
+# shape. It is not a silent failure -- list_subprocess_only_modules.py reads
+# real coverage data, so such a module is reported as a blind spot, which is
+# the truth.
+#
+# The child config is passed as COVERAGE_PROCESS_CONFIG (serialized config)
+# rather than COVERAGE_PROCESS_START (a config FILE PATH) for one reason: it
+# lets us tag the child's measurement with a coverage CONTEXT. Without that
+# tag, once subprocess coverage is on, the data says "this module was covered"
+# but not "by which kind of entry point" -- and the whole point of
+# list_subprocess_only_modules.py is to answer the second question. With it,
+# that tool reads an authoritative oracle instead of guessing from the AST.
+SUBPROCESS_CONTEXT = "subprocess"
 
 
+def pytest_configure(config):
+    """Make subprocess-invoked tools visible to coverage, when coverage is on."""
+    if config.pluginmanager.get_plugin("_cov") is None:
+        return
+    import coverage
+
+    data_file = os.path.join(REPO_ROOT, ".coverage")
+    os.environ.setdefault("COVERAGE_FILE", data_file)
+
+    # Derive the child config FROM the project config rather than shipping a
+    # second config file: a copy of source/omit would rot out of step with
+    # pyproject.toml and nothing would say so.
+    # ⚠️ `parallel` 不在這裡設：它是從 pyproject.toml 繼承來的，再寫一次是冗餘的第二
+    # 份。dogfood 打死過那個寫法——刪掉那行時測試**全綠**，因為斷言讀到的是繼承值。
+    # 守住它的是 test_the_child_config_carries_the_context_the_tool_reads 對衍生設定的
+    # 斷言，而那一格對「pyproject 裡的 parallel 被拿掉」會轉紅。
+    child = coverage.Coverage(config_file=os.path.join(REPO_ROOT, "pyproject.toml")).config
+    child.data_file = data_file
+    child.context = SUBPROCESS_CONTEXT
+    os.environ["COVERAGE_PROCESS_CONFIG"] = child.serialize()
+    os.environ.pop("COVERAGE_PROCESS_START", None)
