@@ -10,6 +10,10 @@ purpose: |
   matches the operator-setup-wizard pattern from PR-portal-4.
 
   Public API:
+    CICD_DEFAULT_DA_TOOLS_IMAGE                default da-tools image ref
+    cicdDaToolsImage(config)                   image ref this config resolves to
+    cicdImageIsMutable(image)                  can this ref be repointed?
+    cicdSplitImageRef(image)                   {repo, tag, digest} of a ref
     cicdGenerateInitCommand(config)            build da-tools CLI
     cicdGenerateDockerCommand(config)          docker wrapper
     cicdGeneratedPaths(config)                 paths `init` will write
@@ -19,12 +23,93 @@ purpose: |
   Closure deps: none. Pure functions; receive config as arg.
 ---
 
+// ⛔ The ONE place in the portal that spells the da-tools image. The CLI leg
+// keeps its own default in scripts/tools/ops/init_project.py
+// (`DA_TOOLS_IMAGE`) and exposes it as `--da-tools-image`; this hand-kept twin
+// had the same string typed into four template literals with no way for a
+// customer to change it, which is the "da-tools 映像" row of #1351's divergence
+// table. Same default as the CLI, deliberately: `cicdGenerators.test.ts` pins
+// the literal, so changing it here alone goes red.
+const CICD_DEFAULT_DA_TOOLS_IMAGE = 'ghcr.io/vencil/da-tools:latest';
+
+// Empty / whitespace-only falls back rather than emitting `docker run  init`,
+// because the field this reads is a free-text input the customer can clear.
+function cicdDaToolsImage(config) {
+  const raw = config && config.daToolsImage;
+  const trimmed = typeof raw === 'string' ? raw.trim() : '';
+  return trimmed === '' ? CICD_DEFAULT_DA_TOOLS_IMAGE : trimmed;
+}
+
+// Split a reference into {repo, tag, digest}. Deliberately NOT a full OCI
+// grammar: the tag separator is the first `:` of the LAST `/`-segment, so a
+// colon ahead of that is a registry port (`registry.internal:5000/da-tools`
+// carries no tag). A digest makes the tag irrelevant and is reported alone.
+//
+// ⛔ Exported for its own sake, not for reuse. `cicdImageIsMutable` cannot
+// observe the port branch — our registry has no port, so every port-bearing
+// reference is foreign and mutable however it is split, and a mutation that
+// deleted the `/`-anchoring left all 49 tests green. Reaching the parse
+// directly is what turns that from correct-looking code nothing measures into
+// something a test can fail on.
+function cicdSplitImageRef(image) {
+  const at = image.indexOf('@');
+  if (at !== -1) return { repo: image.slice(0, at), tag: null, digest: true };
+  const slash = image.lastIndexOf('/');
+  const name = image.slice(slash + 1);
+  const colon = name.indexOf(':');
+  if (colon === -1) return { repo: image, tag: null, digest: false };
+  return {
+    repo: image.slice(0, slash + 1) + name.slice(0, colon),
+    tag: name.slice(colon + 1),
+    digest: false,
+  };
+}
+
+// The one repository whose tag policy this project can speak for.
+const CICD_DA_TOOLS_REPOSITORY = cicdSplitImageRef(CICD_DEFAULT_DA_TOOLS_IMAGE).repo;
+
+// "Mutable" = the reference can be repointed at different code while the
+// workflow file stays byte-identical. Only a digest rules that out.
+//
+// ⛔ The version-tag exemption is scoped to OUR repository, and that scoping is
+// the whole point. components/da-tools/README.md does say "quick-start 用
+// :latest 即可；production 請釘特定版號如 :v2.8.0" — but the line under it is
+// `docker pull ghcr.io/vencil/da-tools:latest`, so that policy is a promise
+// about tags WE publish, not a property of tags. An earlier revision of this
+// function read it as the latter and went silent for
+// `registry.internal/da-tools:v1`, telling a customer their own registry's tag
+// is immutable when nothing here can know that (CWE-494, raised in review on
+// #1880). Tags are mutable by default in OCI; the exemption is a statement
+// about us, so it may only be applied to us.
+//
+function cicdImageIsMutable(image) {
+  const { repo, tag, digest } = cicdSplitImageRef(image);
+  if (digest) return false;
+  if (tag === null || tag === 'latest') return true;
+  return repo !== CICD_DA_TOOLS_REPOSITORY;
+}
+
 function cicdGenerateInitCommand(config) {
   const parts = ['da-tools init'];
   if (config.ci) parts.push(`--ci ${config.ci}`);
   if (config.deploy) parts.push(`--deploy ${config.deploy}`);
   if (config.tenants.length > 0) parts.push(`--tenants ${config.tenants.join(',')}`);
   if (config.packs.length > 0) parts.push(`--rule-packs ${config.packs.join(',')}`);
+  // ⛔ The flag is NOT redundant with the image the docker wrapper runs. It
+  // decides what `init` WRITES: `--da-tools-image X` is what puts
+  // `DA_TOOLS_IMAGE: X` into the .github workflow, the GitLab pipeline and the
+  // pre-commit snippet. Measured on a real run of init_project.py — with and
+  // without the flag, the generated workflow differs on exactly that line.
+  // Without this, a customer who set an image here would read a preview naming
+  // their registry and then get `:latest` in the file `init` actually wrote,
+  // which is #1351's headline defect ("預覽與 init 寫出的是兩個不同的東西")
+  // reintroduced by the very change meant to close that row.
+  //
+  // Emitted only when it differs from the default, because the CLI's own
+  // default IS that value: at the default the flag would be a no-op the
+  // customer has to read past.
+  const image = cicdDaToolsImage(config);
+  if (image !== CICD_DEFAULT_DA_TOOLS_IMAGE) parts.push(`--da-tools-image ${image}`);
   parts.push('--non-interactive');
   return parts.join(' \\\n  ');
 }
@@ -43,7 +128,7 @@ function cicdGenerateInitCommand(config) {
 // failure rather than as drift.
 function cicdGenerateDockerCommand(config) {
   const init = cicdGenerateInitCommand(config);
-  return `docker run --rm -it \\\n  --user $(id -u):$(id -g) \\\n  -v "$(pwd):/workspace" -w /workspace \\\n  ghcr.io/vencil/da-tools:latest \\\n  ${init.replace('da-tools ', '')}`;
+  return `docker run --rm -it \\\n  --user $(id -u):$(id -g) \\\n  -v "$(pwd):/workspace" -w /workspace \\\n  ${cicdDaToolsImage(config)} \\\n  ${init.replace('da-tools ', '')}`;
 }
 
 // ⛔ This list is a CLAIM about another program's behaviour, so it is held to
@@ -142,6 +227,20 @@ function cicdGenerateFileTree(config) {
 // Both are held by the reachability assertion in
 // tests/ops/test_generated_ci_artifacts.py.
 function cicdGenerateGitHubActionsPreview(config) {
+  const image = cicdDaToolsImage(config);
+  // ⚠️ Emitted only when the reference can actually be repointed, because this
+  // YAML is a file the customer pastes into their own repo: telling a reader
+  // who pinned a digest that their image "can change" ships a false statement
+  // into their tree. One sentence covers both remaining cases truthfully — our
+  // :latest, which we move on purpose, and a foreign tag, whose registry we
+  // cannot speak for — so there is only ever one claim to keep true. Not
+  // reusable from the prose leg: the warning in
+  // docs/scenarios/gitops-ci-integration.md is about the same tag but answers
+  // a different question (how to tell whether the artifact you already have
+  // carries a fix the doc describes, "不要看版號、直接看產物").
+  const pinNote = cicdImageIsMutable(image)
+    ? `# ${image} can be repointed at different code without this file changing - :latest moves by design, any other tag at its registry's discretion. Pin a digest if this pipeline has to be reproducible.\n`
+    : '';
   return `name: Dynamic Alerting CI/CD
 on:
   pull_request:
@@ -163,7 +262,7 @@ on:
 permissions:
   contents: read
 
-jobs:
+${pinNote}jobs:
   validate:
     runs-on: ubuntu-latest
     steps:
@@ -172,7 +271,7 @@ jobs:
         run: |
           docker run --rm \\
             -v \${{ github.workspace }}/conf.d:/data/conf.d:ro \\
-            ghcr.io/vencil/da-tools:latest \\
+            ${image} \\
             validate-config --config-dir /data/conf.d
 
   generate:
@@ -189,13 +288,13 @@ jobs:
           # used, and the tool now refuses the two together.
           docker run --rm \\
             -v \${{ github.workspace }}/conf.d:/data/conf.d:ro \\
-            ghcr.io/vencil/da-tools:latest \\
+            ${image} \\
             generate-routes --config-dir /data/conf.d --validate
       - name: Compute blast radius
         run: |
           docker run --rm \\
             -v \${{ github.workspace }}/conf.d:/data/conf.d:ro \\
-            ghcr.io/vencil/da-tools:latest \\
+            ${image} \\
             config-diff --old-dir /data/conf.d.base --new-dir /data/conf.d --format markdown > .output/blast-radius.md
 
   apply:
@@ -220,4 +319,4 @@ jobs:
         run: argocd app sync dynamic-alerting --force`}`;
 }
 
-export { cicdGenerateInitCommand, cicdGenerateDockerCommand, cicdGeneratedPaths, cicdGenerateFileTree, cicdGenerateGitHubActionsPreview };
+export { CICD_DEFAULT_DA_TOOLS_IMAGE, cicdDaToolsImage, cicdImageIsMutable, cicdSplitImageRef, cicdGenerateInitCommand, cicdGenerateDockerCommand, cicdGeneratedPaths, cicdGenerateFileTree, cicdGenerateGitHubActionsPreview };

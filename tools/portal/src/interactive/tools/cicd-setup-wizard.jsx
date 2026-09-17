@@ -16,7 +16,7 @@ dependencies: [
 import React, { useState, useMemo } from 'react';
 // TRK-230e: ESM imports.
 import { CICD_STEPS as STEPS, CICD_RULE_PACKS as RULE_PACKS, CICD_CI_OPTIONS as CI_OPTIONS, CICD_DEPLOY_OPTIONS as DEPLOY_OPTIONS } from './cicd-setup-wizard/fixtures/wizard-defaults.js';
-import { cicdGenerateInitCommand as generateInitCommand, cicdGenerateDockerCommand as generateDockerCommand, cicdGenerateFileTree as generateFileTree, cicdGenerateGitHubActionsPreview as generateGitHubActionsPreview } from './cicd-setup-wizard/utils/generators.js';
+import { CICD_DEFAULT_DA_TOOLS_IMAGE, cicdGenerateInitCommand as generateInitCommand, cicdGenerateDockerCommand as generateDockerCommand, cicdGenerateFileTree as generateFileTree, cicdGenerateGitHubActionsPreview as generateGitHubActionsPreview } from './cicd-setup-wizard/utils/generators.js';
 // PR-portal-11: per-step subtree boundary (see operator-setup-wizard).
 import { ErrorBoundary } from './_common/components/ErrorBoundary.jsx';
 import { useCopyToClipboard } from './_common/hooks/useCopyToClipboard.js';
@@ -260,7 +260,7 @@ function StepTenants({ config, onChange }) {
   );
 }
 
-function StepReview({ config }) {
+function StepReview({ config, onChange }) {
   const cmd = useCopyToClipboard();
   const docker = useCopyToClipboard();
   const [showPipeline, setShowPipeline] = useState(false);
@@ -313,6 +313,34 @@ function StepReview({ config }) {
 
       {isComplete && (
         <>
+          {/* Sits with the artifacts rather than as a 6th step: it has a
+              working default, and the only reason to touch it is to watch the
+              outputs below change. #1351 — the CLI leg has carried
+              --da-tools-image since it shipped; this hand-kept twin had the
+              reference typed into its template literals with no way out. */}
+          <div className="mb-4">
+            <label
+              htmlFor="cicd-da-tools-image"
+              className="block text-sm font-medium text-[color:var(--da-color-fg)] mb-1"
+            >
+              {t('da-tools 映像', 'da-tools image')}
+            </label>
+            <input
+              id="cicd-da-tools-image"
+              type="text"
+              value={config.daToolsImage ?? ''}
+              onChange={(e) => onChange({ ...config, daToolsImage: e.target.value })}
+              placeholder={CICD_DEFAULT_DA_TOOLS_IMAGE}
+              aria-label={t('da-tools 映像', 'da-tools image')}
+              aria-describedby="cicd-da-tools-image-help"
+              className="w-full px-3 py-2 border border-[color:var(--da-color-surface-border)] rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-[color:var(--da-color-focus-ring)]"
+            />
+            <p id="cicd-da-tools-image-help" className="mt-1 text-xs text-[color:var(--da-color-muted)]">
+              {t('留空則用預設。等同 CLI 的 --da-tools-image。:latest 我們會移動；換成你自己的 registry 時，tag 一樣可能被重指——要可重現請釘 digest。',
+                 'Blank uses the default. Same knob as the CLI --da-tools-image. We move :latest; a tag on your own registry can be repointed too — pin a digest if you need reproducibility.')}
+            </p>
+          </div>
+
           {/* da-tools init command */}
           <div className="mb-4">
             <div className="flex items-center justify-between mb-1">
@@ -455,6 +483,10 @@ export default function CICDSetupWizard() {
     deploy: 'kustomize',
     packs: ['mariadb', 'kubernetes'],
     tenants: [],
+    // #1351 — same knob and same default as the CLI's --da-tools-image. Not a
+    // step of its own (canNext / STEPS are untouched): it has a working
+    // default and nothing about it can block the wizard.
+    daToolsImage: CICD_DEFAULT_DA_TOOLS_IMAGE,
   });
 
   const canNext = useMemo(() => {
@@ -526,7 +558,7 @@ export default function CICDSetupWizard() {
           {step === 1 && <StepDeploy config={config} onChange={setConfig} />}
           {step === 2 && <StepPacks config={config} onChange={setConfig} />}
           {step === 3 && <StepTenants config={config} onChange={setConfig} />}
-          {step === 4 && <StepReview config={config} />}
+          {step === 4 && <StepReview config={config} onChange={setConfig} />}
         </ErrorBoundary>
       </div>
 

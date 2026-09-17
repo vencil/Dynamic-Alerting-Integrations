@@ -569,7 +569,12 @@ def generated(tmp_path_factory) -> dict[tuple[str, str], Path]:
                 "rule_packs": ["mariadb"],
                 "tenants": ["db-a"],
                 "namespace": "monitoring",
-                "da_tools_image": "ghcr.io/vencil/da-tools:latest",
+                # ⛔ The constant, never the literal. Spelled out here, this
+                # fixture kept generating the OLD image after a bump while
+                # every assertion below went on comparing against the same
+                # stale string — a guard that grades its own copy. #1351's
+                # image row is exactly that shape one level out.
+                "da_tools_image": ip.DA_TOOLS_IMAGE,
             },
             str(target),
         )
@@ -6044,3 +6049,227 @@ class TestGitHubLegDefectsFoundInRoundSeven:
         assert on['push']['paths'] == on['pull_request']['paths'], (
             f"{deploy}: push 與 pull_request 的 paths 不一致——"
             f"push={on['push']['paths']} pr={on['pull_request']['paths']}")
+
+
+# ============================================================
+# ── 6. ONE image pin across BOTH customer-CI generators (#1351) ──
+# ============================================================
+#
+# #1351's divergence table has a "da-tools 映像" row: the CLI takes the image
+# from `--da-tools-image` (default `DA_TOOLS_IMAGE`) while the hand-kept wizard
+# had it typed into four template literals. That row is now closed on the
+# wizard side; this section is the gate that keeps it closed, because the two
+# legs are separate programs in separate languages and nothing else compares
+# them.
+#
+# ⛔ Both sides are READ BY EXECUTION, not by parsing source: `ip.DA_TOOLS_IMAGE`
+# is the real module attribute and the portal value comes from evaluating the
+# real ESM module under node (`_call_portal`). A regex over either source would
+# be a third hand-kept copy of the thing under test — the defect, wearing the
+# costume of the guard. The one anchor check that IS textual exists only so a
+# renamed export dies with a sentence instead of a node stack trace.
+#
+# Two probe images rather than one, and BOTH floating (`:latest`):
+#   * non-default on both sides, so the wizard's conditional `--da-tools-image`
+#     flag and the CLI's flag handling are exercised identically in both runs,
+#     which is what makes the A→B substitution an exact equality;
+#   * both floating, so the wizard's floating-tag note renders in both and does
+#     not itself become a difference;
+#   * `.invalid` is RFC 2606's reserved TLD — nothing resolves, nothing is
+#     pulled, and a probe that escaped into a real artifact fails loudly rather
+#     than quietly pointing at someone's registry.
+_SENTINEL_IMAGE_A = "registry.invalid/da-tools-probe-a:latest"
+_SENTINEL_IMAGE_B = "registry.invalid/da-tools-probe-b:latest"
+
+# The wizard's three customer-facing artifacts. `cicdGeneratedPaths` /
+# `cicdGenerateFileTree` are deliberately absent: they answer "which files",
+# not "which image", and section 5 already holds them to `run_init`.
+_PORTAL_IMAGE_BEARING_GENERATORS = (
+    "cicdGenerateInitCommand",
+    "cicdGenerateDockerCommand",
+    "cicdGenerateGitHubActionsPreview",
+)
+
+
+def _cli_default_image() -> str:
+    """The image a customer gets from `da-tools init` with no flag.
+
+    ⛔ Read off the PARSER, not off ``DA_TOOLS_IMAGE``. The constant is the
+    intended single source, but what reaches the customer is whatever argparse
+    applies; `default="…"` written as its own literal would leave the constant
+    untouched, keep `test_the_cli_spells_the_da_tools_image_exactly_once` at a
+    count of one, and change the default under every check that reads the
+    constant. So take the effective value, then hold the constant to it.
+    """
+    defaults = [a.default for a in ip._build_parser()._actions
+                if a.dest == "da_tools_image"]
+    assert defaults, (
+        "the init parser no longer declares --da-tools-image; re-point this "
+        "gate at whatever now carries the customer-facing default"
+    )
+    assert defaults[0] == ip.DA_TOOLS_IMAGE, (
+        f"`--da-tools-image` defaults to {defaults[0]!r} while DA_TOOLS_IMAGE "
+        f"is {ip.DA_TOOLS_IMAGE!r}. Everything else in this repo that asks "
+        f"'what is the default image' reads the constant, so the two must not "
+        f"differ: the flag's default is what customers actually get."
+    )
+    return defaults[0]
+
+
+@_needs_node
+def test_both_customer_ci_generators_default_to_the_same_image(tmp_path) -> None:
+    """The gate itself: one default, two programs.
+
+    A customer reaches `da-tools init` through the CLI or through the portal
+    wizard. Which one they used must not decide which image their pipeline
+    pulls.
+    """
+    src = _PORTAL_GENERATORS.read_text(encoding="utf-8")
+    assert "cicdDaToolsImage" in src and "CICD_DEFAULT_DA_TOOLS_IMAGE" in src, (
+        "the portal wizard no longer exports `cicdDaToolsImage` / "
+        "`CICD_DEFAULT_DA_TOOLS_IMAGE`, so this gate can no longer read the "
+        "value it exists to compare. Re-point it at wherever the wizard now "
+        "gets its default image; do NOT delete the check, which is the only "
+        "thing standing between a moved default and a gate that grades "
+        "nothing."
+    )
+    cli_default = _cli_default_image()
+    portal_default = _call_portal(tmp_path, "cicdDaToolsImage", {})
+    assert portal_default == cli_default, (
+        f"the two generators that write customer CI disagree on the default "
+        f"da-tools image:\n"
+        f"  CLI    (scripts/tools/ops/init_project.py, the effective "
+        f"--da-tools-image default): {cli_default}\n"
+        f"  portal (cicd-setup-wizard/utils/generators.js "
+        f"CICD_DEFAULT_DA_TOOLS_IMAGE): {portal_default}\n"
+        f"Whichever is right, both must say it — a customer does not know "
+        f"which of the two produced the pipeline they are running."
+    )
+
+
+@_needs_node
+@pytest.mark.parametrize("deploy", DEPLOY_CHOICES)
+def test_no_portal_generator_keeps_its_own_copy_of_the_image(tmp_path, deploy) -> None:
+    """Stops the gate above from grading a decorative constant.
+
+    The constant can be correct while a generator still has the reference typed
+    into its template literal — which is the state #1351 recorded, and the
+    state a partial fix leaves behind.
+    """
+    base = {"ci": "github", "deploy": deploy,
+            "tenants": ["db-a"], "packs": ["mariadb"]}
+    for fn in _PORTAL_IMAGE_BEARING_GENERATORS:
+        a = _call_portal(tmp_path, fn, {**base, "daToolsImage": _SENTINEL_IMAGE_A})
+        b = _call_portal(tmp_path, fn, {**base, "daToolsImage": _SENTINEL_IMAGE_B})
+        assert _SENTINEL_IMAGE_A in a, (
+            f"{fn} (deploy={deploy}) named the configured image nowhere in its "
+            f"output, so the two assertions below would pass on a generator "
+            f"that ignores the setting entirely:\n{a}"
+        )
+        assert ip.DA_TOOLS_IMAGE not in a, (
+            f"{fn} (deploy={deploy}) still emits {ip.DA_TOOLS_IMAGE} while the "
+            f"customer configured {_SENTINEL_IMAGE_A} — a hand-kept copy of "
+            f"the default survives in this generator:\n{a}"
+        )
+        assert a.replace(_SENTINEL_IMAGE_A, _SENTINEL_IMAGE_B) == b, (
+            f"{fn} (deploy={deploy}) changed by more than the image when only "
+            f"the image changed, or by less than the image where it should "
+            f"have. Substituting probe A for probe B in the first output does "
+            f"not reproduce the second."
+        )
+
+
+@pytest.mark.parametrize("ci", CI_CHOICES)
+def test_no_file_da_tools_init_writes_keeps_its_own_copy_of_the_image(
+        tmp_path, ci) -> None:
+    """The CLI half of the same question, asked of the files on disk.
+
+    ⛔ Asked of `run_init`, not of the generator functions: `_gen_github_actions`
+    taking the image faithfully says nothing about `.pre-commit-config.da.yaml`,
+    which used to hardcode it (#1337 ④) and runs on every developer laptop.
+    """
+    def _write(image: str, sub: str) -> dict[Path, str]:
+        target = tmp_path / sub
+        ip.run_init(
+            {
+                "ci": ci,
+                "deploy": "kustomize",
+                "rule_packs": ["mariadb"],
+                "tenants": ["db-a"],
+                "namespace": "monitoring",
+                "da_tools_image": image,
+            },
+            str(target),
+        )
+        return {p.relative_to(target): p.read_text(encoding="utf-8")
+                for p in sorted(target.rglob("*")) if p.is_file()}
+
+    a = _write(_SENTINEL_IMAGE_A, f"{ci}-probe-a")
+    b = _write(_SENTINEL_IMAGE_B, f"{ci}-probe-b")
+
+    for rel, text in sorted(a.items()):
+        assert ip.DA_TOOLS_IMAGE not in text, (
+            f"`da-tools init --ci {ci} --da-tools-image {_SENTINEL_IMAGE_A}` "
+            f"still wrote {ip.DA_TOOLS_IMAGE} into {rel} — the flag is "
+            f"silently ignored on that artifact."
+        )
+
+    carriers = sorted(rel for rel, text in a.items() if _SENTINEL_IMAGE_A in text)
+    assert carriers, (
+        f"no file written for --ci {ci} names the da-tools image at all, so "
+        f"the loop above passed without reading a single image reference. "
+        f"Either run_init stopped emitting the tool image (a customer pipeline "
+        f"with no tool in it) or this test is initialising the wrong thing."
+    )
+    # ⛔ Named, not merely counted: `--ci github` MUST put the tool image in the
+    # workflow it writes. That is the artifact #1351 is about, and "some file
+    # somewhere mentioned it" would stay green if it moved out of the pipeline.
+    if ci in ("github", "both"):
+        assert Path(".github/workflows/dynamic-alerting.yaml") in carriers, carriers
+    if ci in ("gitlab", "both"):
+        assert Path(".gitlab-ci.d/dynamic-alerting.yml") in carriers, carriers
+
+    for rel in carriers:
+        assert a[rel].replace(_SENTINEL_IMAGE_A, _SENTINEL_IMAGE_B) == b[rel], (
+            f"{rel} differs between the two probe runs by more than the image "
+            f"itself — substituting probe A for probe B does not reproduce the "
+            f"second run's file."
+        )
+
+
+def test_the_cli_help_for_da_tools_image_states_the_real_default() -> None:
+    """`--help` is the third place the default is written down, in prose.
+
+    The constant's own comment says "A CONSTANT, not two literals", recording
+    that this exact split (defaults dict + argparse default) had already been
+    fixed once. The help text is the copy that survived: it spells the ref out
+    per language, so a bump moves the value and leaves `--help` telling the
+    customer something that is no longer true.
+    """
+    entry = ip._HELP["da_tools_image"]
+    assert entry, "the --da-tools-image help entry vanished; re-point this check"
+    for lang, text in sorted(entry.items()):
+        assert ip.DA_TOOLS_IMAGE in text, (
+            f"`--da-tools-image` help ({lang}) does not name the actual "
+            f"default {ip.DA_TOOLS_IMAGE}:\n  {text}\n"
+            f"Either update the sentence or derive it from DA_TOOLS_IMAGE."
+        )
+
+
+def test_the_cli_spells_the_da_tools_image_exactly_once() -> None:
+    """One literal, so `--da-tools-image` cannot be honoured in only some places.
+
+    Counts string constants EQUAL to the ref, which is why the two `--help`
+    sentences and the `_gen_precommit_snippet` docstring — both of which merely
+    contain it — do not register here. The test above owns the help strings.
+    """
+    tree = ast.parse(_INIT_PROJECT.read_text(encoding="utf-8"))
+    spelled = [n for n in ast.walk(tree)
+               if isinstance(n, ast.Constant) and n.value == ip.DA_TOOLS_IMAGE]
+    assert len(spelled) == 1, (
+        f"{ip.DA_TOOLS_IMAGE} is spelled as a string constant "
+        f"{len(spelled)} time(s) in init_project.py (lines "
+        f"{[n.lineno for n in spelled]}); it must be exactly one — the "
+        f"DA_TOOLS_IMAGE assignment. A second literal is a code path that "
+        f"keeps shipping ghcr.io after the customer passed --da-tools-image."
+    )
