@@ -1,0 +1,66 @@
+// This file is wrong on purpose: validate.yaml's "Linter floor" step copies it
+// into each module as ./zz_lintprobe/probe.go, lints it with that module's own
+// .golangci.yml, and requires every GOLANGCI_FLOOR linter to report at least
+// once (#1877). Enabled is not reporting: an exclusions rule or a linter's own
+// settings can silence it module-wide while `golangci-lint linters` still lists
+// it. Rules for editing:
+//   - One check per line. The step turns off golangci's same-line dedup, but a
+//     reader counting findings by eye should not have to know that.
+//   - At least two different checks per linter where the linter has more than
+//     one, so a config that legitimately narrows one check stays green.
+//   - Only probe-local symbols in the errcheck calls: `exclude-functions`
+//     naming a real function (os.Remove, say) is a legitimate narrowing.
+//   - Not a _test.go, no generated-code header, no testdata/vendor/_/. path:
+//     each of those is excluded before any config is read.
+package zzlintprobe
+
+import (
+	"fmt"
+	"sync"
+)
+
+func mayFail() error { return nil }
+
+// E1 drops an error (errcheck).
+func E1() { mayFail() }
+
+// E2 drops an error on its own line (errcheck).
+func E2() {
+	mayFail()
+}
+
+// V1 misuses a printf verb (govet printf).
+func V1() { fmt.Printf("%d\n", "probe") }
+
+// V2 has code after return (govet unreachable).
+func V2() int {
+	return 1
+	fmt.Println("unreachable")
+	return 2
+}
+
+// V3 copies a lock (govet copylocks).
+func V3(m sync.Mutex) { _ = &m }
+
+// I1 overwrites a value before reading it (ineffassign).
+func I1(n int) int {
+	v := n + 1
+	v = n + 2
+	return v
+}
+
+// S1 compares an expression with itself (staticcheck SA4000).
+func S1(s string) bool { return s == s }
+
+// S2 compares an unsigned value with zero (staticcheck SA4003).
+func S2(u uint) bool { return u < 0 }
+
+func unusedProbe() {}
+
+type unusedProbeType struct{}
+
+// Reports nothing: the comment does not start with the name (godoclint).
+func G1() {}
+
+// Also does not start with the name (godoclint).
+func G2() {}

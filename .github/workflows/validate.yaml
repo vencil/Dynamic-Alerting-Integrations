@@ -112,15 +112,19 @@ jobs:
               # entering this workflow (ae0cd4fc, #912) — at that point only
               # ci.yml referenced it. It has never been edited since Go Lint
               # started running it. The reachability is what matters; the next
-              # edit has nothing protecting it. File-level on purpose: no
-              # other validate step names
-              # anything under scripts/ops/, and `scripts/ops/**` would pull
+              # edit has nothing protecting it. File-level on purpose: the only
+              # other scripts/ops/ file a validate step reads is the floor probe
+              # below, and `scripts/ops/**` would pull
               # three required checks into every host-side escape-hatch edit.
               # (Widening this to `scripts/ops/_verify_*.sh` would RED the
               # coverage guard in tests/ops/test_ci_path_filter_coverage.py
               # — its `_covers` models `*.ext`, not `prefix_*.ext`. Extend that
               # alphabet first.)
               - "scripts/ops/_verify_download.sh"
+              # The Linter floor step copies this probe into each module (#1877).
+              # ⚠️ Found by hand: that guard's step-input scan does not read
+              # `cp` arguments, so dropping this line keeps it green.
+              - "scripts/ops/golangci_floor_probe.go.txt"
               # The pin SSOT validate-config and version-check INSTALL FROM
               # (`pip install pyyaml -c requirements/ci-constraints.txt`,
               # #1158) — the suite's ENVIRONMENT, not an input any check reads,
@@ -314,10 +318,19 @@ jobs:
       # the standard linters, that configs are discovered with `git ls-files`,
       # and that no linted module is named here. ⚠️ NOT pinned: an enumeration
       # that names no module literally (a shell glob) — keep it `git ls-files`.
-      # ⚠️ NOT GUARDED: this checks ENABLEMENT only. A floor linter can be
-      # enabled and still silenced module-wide by an `exclusions.rules` entry or
-      # its own `settings`; only godoclint gets a per-checker check in pytest
-      # (#1877).
+      # Enablement is not reporting, so each config is also run against probes
+      # (#1877; see the loop's comment). Resolution is one probe per TOP-LEVEL
+      # directory of the module. ⚠️ NOT GUARDED, measured: a rule scoped BELOW
+      # that (`path: ^internal/rbac/`) silences those files while the probe in
+      # `internal/` still reports; a rule written around the probe's own path,
+      # text or symbols; and suppression that is not in the config at all —
+      # `//nolint` directives and files carrying a generated-code header, which
+      # a probe asks nothing about. ⛔ And the nearest miss of all: the verdict
+      # is "at least one finding", so `settings` that cut a linter down to a
+      # single surviving check (`staticcheck.checks: ["-all", "SA4000"]`,
+      # `govet.disable-all` + one `enable:`) pass — measured. Requiring every
+      # planted check instead would red on legitimate narrowing, which is the
+      # trade this predicate makes.
       - name: Linter floor
         env:
           GOLANGCI_FLOOR: errcheck govet ineffassign staticcheck unused godoclint
@@ -347,6 +360,85 @@ jobs:
                 echo "::error file=$cfg::$dir does not run $linter (GOLANGCI_FLOOR)"
                 status=1
               fi
+            done
+            # Enabled is not reporting: an `exclusions` rule or a linter's own
+            # `settings` can silence it without changing the list above
+            # (#1877). So lint a probe with THIS module's config and let
+            # golangci evaluate those carriers.
+            #
+            # ⛔ One probe per directory that holds the module's own .go files,
+            # not one at the module root: `path` rules match the path, and
+            # tenant-api has no .go at its root at all, so a rule naming the
+            # directories where the code actually lives (`^(internal|cmd)/`)
+            # silenced those linters on every real file while a root-only
+            # probe stayed green — measured, and the reason this loop derives
+            # the directories instead of picking one.
+            #
+            # Directories come from git rather than a list, minus anything
+            # under a NESTED go.mod (scripts/tools/ops/bench-canary is its own
+            # module with its own config and its own turn in this loop).
+            if [ ! -f "$dir/go.mod" ]; then
+              echo "floor: $cfg is not at a module root — enablement checked, probe skipped"
+              continue
+            fi
+            nested=$(git ls-files -- ":(glob)$dir/*/**/go.mod" ":(glob)$dir/*/go.mod" | xargs -r -n1 dirname)
+            probe_dirs=$(git ls-files -- ":(glob)$dir/**/*.go" | {
+              [ -z "$nested" ] && cat || grep -vE "^($(tr '\n' '|' <<<"$nested" | sed 's/|$//'))/"
+            } | sed "s|^$dir/||" | awk -F/ '{ print (NF == 1 ? "." : $1) }' | sort -u)
+            if [ -z "$probe_dirs" ]; then
+              echo "floor: $dir tracks no .go of its own — probe skipped"
+              continue
+            fi
+            targets=""
+            probes=""
+            placed=ok
+            for pd in $probe_dirs; do
+              if [ "$pd" = "." ]; then rel_dir="zz_lintprobe"; else rel_dir="$pd/zz_lintprobe"; fi
+              probe="$dir/$rel_dir"
+              if [ -e "$probe" ]; then
+                echo "::error file=$cfg::$probe already exists; the floor probe needs that path"
+                placed=taken
+                break
+              fi
+              mkdir -p "$probe"
+              probes="$probes $probe"
+              if ! cp scripts/ops/golangci_floor_probe.go.txt "$probe/probe.go"; then
+                echo "::error file=$cfg::cannot read the floor probe template for $dir"
+                placed=failed
+                break
+              fi
+              targets="$targets ./$rel_dir/..."
+            done
+            if [ "$placed" != ok ]; then
+              rm -rf $probes
+              status=1
+              continue
+            fi
+            # The flags undo dedup and caps (they hide findings this loop
+            # counts) and pin the output shape the grep below reads: an
+            # `output:` section that drops the linter name or prints absolute
+            # paths would otherwise read as "every linter is silenced".
+            rc=0
+            out=$(cd "$dir" && golangci-lint run --uniq-by-line=false \
+              --max-issues-per-linter=0 --max-same-issues=0 \
+              --output.text.path=stdout --output.text.print-linter-name=true \
+              --output.text.colors=false --path-mode= --path-prefix= \
+              $targets) || rc=$?
+            rm -rf $probes
+            if [ "$rc" -gt 1 ]; then
+              echo "::error file=$cfg::golangci-lint could not lint the floor probe in $dir (rc=$rc)"
+              status=1
+              continue
+            fi
+            for pd in $probe_dirs; do
+              if [ "$pd" = "." ]; then rel="zz_lintprobe/probe.go"; else rel="$pd/zz_lintprobe/probe.go"; fi
+              for linter in $GOLANGCI_FLOOR; do
+                grep -qxF "$linter" <<<"$enabled" || continue
+                if ! grep -qE "^$rel:[0-9]+:[0-9]+: .* \\($linter\\)\$" <<<"$out"; then
+                  echo "::error file=$cfg::$linter is enabled in $dir but reports nothing on the probe at $rel — this config's exclusions or settings do not let it reach that path. If every module and every path says this, the probe is stale instead."
+                  status=1
+                fi
+              done
             done
           done
           # A green step is otherwise silent, which reads the same as checking nothing.

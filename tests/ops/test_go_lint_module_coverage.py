@@ -83,11 +83,11 @@ _DISPOSITIONS = frozenset({"enrol", "default-build", "unlinted"})
 
 # Linters checked per checker against every silencing carrier below (enable /
 # disable, exclusions, settings). A subset of the Go Lint job's GOLANGCI_FLOOR,
-# the full ENABLEMENT floor, asked of golangci itself (#1870). ⚠️ NOT GUARDED:
-# the floor's other members can be enabled yet silenced module-wide by an
-# `exclusions.rules` entry or their own `settings` (measured: `path: .*` naming
-# errcheck, or `staticcheck.checks: ["-all"]`, leave everything here green) —
-# only the members of this set get the per-checker check (#1877).
+# the full ENABLEMENT floor, asked of golangci itself (#1870). The floor's other
+# members are checked by that job's probe run instead (#1877), which pytest
+# cannot execute — and only for TOTAL silencing: a `settings` block that leaves
+# one check alive still reports on the probe and passes. Only the members of
+# this set get the per-checker check here.
 _REQUIRED_LINTERS = frozenset({"godoclint"})
 
 # The `standard` group, named here so the floor cannot shrink below it without
@@ -152,6 +152,11 @@ def _lint_steps() -> dict[str, str]:
         run = str(step.get("run", "")).strip()
         if "golangci-lint run" not in run:
             continue  # the install step names the binary, not a run
+        if "golangci-lint linters --json" in run:
+            # The floor step lints only its probe package (#1877), not a
+            # module's code; test_the_linter_floor_is_asked_of_golangci_itself
+            # pins that exactly one step carries this marker.
+            continue
         if not _LINT_RUN.fullmatch(run):
             raise AssertionError(
                 f"{VALIDATE.name}::{LINT_JOB} runs {run!r}, a shape this guard "
@@ -846,8 +851,28 @@ def test_the_linter_floor_is_asked_of_golangci_itself() -> None:
         f"the floor step in {VALIDATE.name}::{LINT_JOB} names module directories "
         f"{named} itself. A hand-written list skips the next module silently.")
 
+    # Enablement alone lets `exclusions` or `settings` silence a floor linter
+    # module-wide (#1877); the probe run is what asks whether it still reports.
+    assert _PROBE.is_file() and _PROBE_REL in code and _PROBE_RUN.search(code), (
+        f"the floor step in {VALIDATE.name}::{LINT_JOB} no longer lints "
+        f"{_PROBE_REL} as `zz_lintprobe` packages, so a floor linter that is "
+        "enabled but silenced by the module's exclusions or settings passes.")
+    assert _PROBE_DIRS.search(code), (
+        f"the floor step in {VALIDATE.name}::{LINT_JOB} no longer derives the "
+        "probe directories from the module's tracked .go files. A probe at the "
+        "module root alone is blind to a `path` rule naming the directories "
+        "that hold the code — measured on tenant-api, whose root holds none.")
+
 
 _DISCOVERY = "configs=$(git ls-files -- ':(glob)**/.golangci.yml')"
+_PROBE_REL = "scripts/ops/golangci_floor_probe.go.txt"
+_PROBE = ROOT / _PROBE_REL
+_PROBE_RUN = re.compile(r"golangci-lint\s+run\b[^\n]*(?:\\\n[^\n]*)*\$targets")
+# The probe paths are derived from git, one per directory holding the module's
+# own .go files: a root-only probe cannot see a `path` rule that names the
+# directories where the code actually lives, and tenant-api has no .go at its
+# root at all (#1877).
+_PROBE_DIRS = re.compile(r"probe_dirs=\$\(git ls-files[^\n]*\*\.go")
 
 
 @pytest.mark.parametrize("edit", [
@@ -855,6 +880,8 @@ _DISCOVERY = "configs=$(git ls-files -- ':(glob)**/.golangci.yml')"
     "drop the step",
     "drop the discovery",
     "hand-write the modules, keeping the words in a trailing comment",
+    "drop the probe run",
+    "hand-pick one probe directory",
 ])
 def test_the_floor_pin_reds_when_the_step_weakens(edit, monkeypatch) -> None:
     """Through the pin above, on a copy of the real workflow."""
@@ -872,13 +899,18 @@ def test_the_floor_pin_reds_when_the_step_weakens(edit, monkeypatch) -> None:
             steps.remove(floor_step)
         elif edit == "drop the discovery":
             floor_step["run"] = run.replace(_DISCOVERY, "configs=''")
+        elif edit == "drop the probe run":
+            floor_step["run"] = run.replace("$targets", "./nothing/...")
+        elif edit == "hand-pick one probe directory":
+            floor_step["run"] = re.sub(r"probe_dirs=\$\(git ls-files.*?\)\n",
+                                       'probe_dirs="."\n', run, count=1, flags=re.S)
         else:
             floor_step["run"] = run.replace(
                 _DISCOVERY,
                 f"configs='{_ANCHOR_MODULE}/.golangci.yml'  # was: git ls-files .golangci.yml")
         # An edit that misses its anchor leaves the real step, which the pin
         # accepts. Not an AssertionError: pytest.raises below would swallow it.
-        if edit.startswith(("drop the discovery", "hand-write")) and floor_step["run"] == run:
+        if edit.startswith(("drop the discovery", "drop the probe", "hand-write")) and floor_step["run"] == run:
             raise RuntimeError(f"control edit {edit!r} did not change the step")
         return wf
 
