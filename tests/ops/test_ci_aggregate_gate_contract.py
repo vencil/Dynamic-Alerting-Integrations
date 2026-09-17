@@ -1269,10 +1269,11 @@ _COMMAND_SUB = re.compile(r"\$\((?!\()|`")
 # rule applied across the decision path would red an existing best-effort
 # install. Narrowing it to "steps that run tests" is the axis the sibling
 # module documents two failed attempts at — `pytest tests/` resolves to no
-# tracked file, so the obvious predicate excludes 3 of the 5 legs' primary
-# test steps. A gate job has no best-effort work by construction, so the rule
-# is exact there and the leg half is recorded as a gap instead of shipped as
-# a guess. → the `|| true` entry in the module docstring's gap list.
+# tracked file, so the obvious predicate excluded 3 of the 5 legs' primary
+# test steps when this was written. A gate job has no best-effort work by
+# construction, so the rule is exact there and the leg half is recorded as a
+# gap instead of shipped as a guess. → the `|| true` entry in the module
+# docstring's gap list.
 _EXIT_SWALLOW = re.compile(r"\|\|\s*(?:true|:)(?=\s|$|;|&)"
     r"|(?m:^\s*set\s+\+[a-z]*e)"
     r"|(?m:^\s*set\s+\+o\s+errexit)")

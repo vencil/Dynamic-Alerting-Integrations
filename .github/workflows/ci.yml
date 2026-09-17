@@ -434,7 +434,7 @@ jobs:
       - name: Fetch the PR base (changelog-format's new-entry cap diffs against origin/$GITHUB_BASE_REF)
         # fetch-depth: 0 does not guarantee an origin/<base> ref; the cap
         # exits 2 rather than silently falling back to HEAD when it is absent.
-        # Shell-guarded rather than a step `if:` so the three callers stay
+        # Shell-guarded rather than a step `if:` so the callers stay
         # identical (docs-ci's copy sits in a path-gated job, where
         # tests/ops/test_ci_path_filter_coverage.py refuses computed step
         # conditions). GITHUB_BASE_REF is empty on push / schedule runs.
@@ -1242,8 +1242,9 @@ jobs:
       # projection AC behavior gate (tests/shared/test_vector_projection_vrl.py
       # TestVectorValidateAndTest: `vector validate` + `vector test` proving
       # fail-closed tenant isolation, topology strip, parse-error→0:0) is gated
-      # on `vector` being on PATH (shutil.which); without it those 3 SILENTLY
-      # SKIP and the security-critical fan-out behavior gets zero CI coverage.
+      # on `vector` being on PATH (shutil.which); without it those tests
+      # SILENTLY SKIP and the security-critical fan-out behavior gets zero CI
+      # coverage.
       # Pinned + checksum-verified, mirroring the promtool install above.
       #
       # Download-cache for the 2 pinned tarballs this job curls every run
