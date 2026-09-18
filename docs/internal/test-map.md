@@ -304,10 +304,10 @@ pytest -m regression               # 僅跑回歸測試
 
 ### Go tests（Dev Container；`make dc-go-test`）
 
-Repo root **沒有 go.work**——`go test ./...` 必須逐 module 跑；module 對照表（exporter / tenant-api / am-inhibit / receiver，與 ci.yml `go-tests-*` jobs 同步）維護在 `scripts/ops/dc_go_test.sh`。
+Repo root **沒有 go.work**——`go test ./...` 必須逐 module 跑；module 對照表（exporter / tenant-api / am-inhibit / receiver / bench-filter，與 ci.yml `go-tests-*` jobs 同步）維護在 `scripts/ops/dc_go_test.sh`。
 
 ```bash
-make dc-go-test                          # 全部 CI module（exporter + tenant-api + am-inhibit + receiver）
+make dc-go-test                          # 全部 CI module（exporter + tenant-api + am-inhibit + receiver + bench-filter）
 make dc-go-test MOD=tenant-api           # 單 module
 make dc-go-test PKG=./internal/rbac/...  # 單 package（module 自動推斷；實測 ~7s vs 整 module ~147s）
 make dc-go-test MOD=tenant-api ARGS="-run TestX -v"
