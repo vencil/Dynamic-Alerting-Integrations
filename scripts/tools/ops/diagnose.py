@@ -30,6 +30,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import TextIO
 
 import yaml
 
@@ -464,7 +465,21 @@ def _format_chain_summary(inheritance):
     return summary
 
 
-def check(tenant: str, prom_url: str, config_dir: str | None = None) -> str:
+def check(tenant: str, prom_url: str, config_dir: str | None = None,
+          *, out: TextIO | None = None) -> None:
+    """Emit one JSON health document for `tenant`.
+
+    ⛔ `out` exists because the caller may need the document WITHOUT touching
+    process-global state. `contextlib.redirect_stdout` rebinds `sys.stdout` for
+    the whole process, so two threads capturing concurrently can restore each
+    other's buffer and leave the real stdout permanently replaced — the process
+    then exits 0 having written nothing at all. batch_diagnose.py ran exactly
+    that shape; test_check_writes_to_the_given_stream_not_sys_stdout pins the
+    seam that replaced it.
+
+    ⚠️ Resolved at CALL time, not as a default argument value: binding
+    `sys.stdout` at def time would freeze the stream pytest's capsys swaps in.
+    """
     errors = []
 
     # 1. 檢查 Pod 狀態
@@ -512,6 +527,8 @@ def check(tenant: str, prom_url: str, config_dir: str | None = None) -> str:
     inheritance = resolve_inheritance_chain(tenant, config_dir) if config_dir else None
 
     # 5. 輸出結果 (Token Saving 核心：正常時只回傳極簡 JSON)
+    stream = sys.stdout if out is None else out
+
     if not errors:
         result = {"status": "healthy", "tenant": tenant}
         if operational_mode != "normal":
@@ -520,7 +537,7 @@ def check(tenant: str, prom_url: str, config_dir: str | None = None) -> str:
             result["profile"] = profile_name
         if inheritance:
             result["inheritance_chain"] = _format_chain_summary(inheritance)
-        print(json.dumps(result))
+        print(json.dumps(result), file=stream)
     else:
         # 只有異常時，嘗試抓取最近的 error log
         logs = run_cmd(["kubectl", "logs", "-n", tenant, "deploy/mariadb", "-c", "mariadb", "--tail=20"])
@@ -538,7 +555,7 @@ def check(tenant: str, prom_url: str, config_dir: str | None = None) -> str:
             result["profile"] = profile_name
         if inheritance:
             result["inheritance_chain"] = _format_chain_summary(inheritance)
-        print(json.dumps(result, ensure_ascii=False))
+        print(json.dumps(result, ensure_ascii=False), file=stream)
 
 
 if __name__ == "__main__":
