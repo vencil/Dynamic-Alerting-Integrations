@@ -139,7 +139,7 @@ def test_generate_nav_reports_the_number_of_docs_it_actually_scanned(
 ):
     """驗到的：它報出來的掃描數等於**本格放進去的**檔案數，所以輸出不是寫死的。
 
-    ⛔ **沒有**驗到：nav 比對、front matter 解析、section 分類、`--update` 寫回。一支
+    ⛔ **沒有**驗到：nav 比對、front matter 解析、section 分類、`--check` 的判定。一支
     「只數 docs/**/*.md 個數並印出來、其他什麼都不做」的實作會通過本格。⇒ 這格買到的
     是「有去讀那棵樹」，不是「nav 產生邏輯正確」。這支工具沒有專屬測試檔，那個缺口
     現在沒有任何東西在守。

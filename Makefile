@@ -792,7 +792,7 @@ generate-alert-reference: ## 從 Rule Pack YAML 產生 ALERT-REFERENCE.md (使�
 	@python3 ./scripts/tools/dx/generate_alert_reference.py
 
 .PHONY: generate-nav
-generate-nav: ## 從文件 front matter 產生 MkDocs nav 結構 (使用: make generate-nav 或 --update)
+generate-nav: ## 從文件 front matter 產生 MkDocs nav 結構（只讀；nav 依報告手動更新）
 	@python3 ./scripts/tools/dx/generate_nav.py
 
 .PHONY: generate-rule-pack-readme
