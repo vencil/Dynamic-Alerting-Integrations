@@ -973,7 +973,8 @@ make win-commit MSG=_msg.txt FILES="scripts/ops/run_hooks_sandbox.sh docs/intern
 
 #### Layer 1 — A/B 驗證 one-liner（機械化 self-check）
 
-pre-push hook 擋路時，第一件事：**證明失敗是否跟這次 commits 有關**。用 `git worktree` 跳到 base commit 重跑同一個 hook，若結果一樣 → drift 跟這次無關，**用那一格自己的旗標繞過**（mkdocs strict：`MKDOCS_STRICT_BYPASS=1`；preflight marker：`GIT_PREFLIGHT_BYPASS=1`，需 owner 核准）；若結果不同 → 這次 commits 引入新問題，必須修。⛔ **不要用 `--no-verify`**：它一次關掉 pre-push 上的**每一道**守衛，而不是你剛證明無關的那一道（包含擋直推 main 那道，它沒有旗標是刻意的）；`protect_main_push.sh` / `require_preflight_pass.sh` / `prepush_dispatch.sh` 的檔頭都逐字禁止它。
+pre-push hook 擋路時，第一件事：**證明失敗是否跟這次 commits 有關**。用 `git worktree` 跳到 base commit 重跑同一個 hook，若結果一樣 → drift 跟這次無關，**用那一格自己的旗標繞過**（mkdocs strict：`MKDOCS_STRICT_BYPASS=1`；preflight marker：`GIT_PREFLIGHT_BYPASS=1`，需 owner 核准）；若結果不同 → 這次 commits 引入新問題，必須修。⛔ **不要用 `--no-verify`**：它一次關掉 pre-push 上的**每一道**守衛（含擋直推 main 那道——實測它不認任何 bypass 變數，也含串接的 git-lfs hook），而不是你剛證明無關的那一道。三支守衛逐字禁止它的那幾句住在「helper 不見」的錯誤訊息與註解裡，**不在檔頭**（去檔頭找會撲空）。⚠️ 兩處相反的活字仍在：`protect_main_push.sh` 被擋時的橫幅印著「緊急 hotfix？加 `--no-verify`」，而 `win_git_escape.bat push` 無條件帶它——行為面在 [#1487](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1487) 追蹤。
+⛔ 上面那個 A/B 一行式（`pre-commit run <hook-id>`）**對這三道 pre-push 守衛不適用**：它們不是 pre-commit hook、沒有 hook id（以 `yaml.safe_load` 數過，123 個 id 裡 0 個），照做會得到「CI 沒有這個 hook ⇒ 本地假紅」這個錯結論。要 A/B 就直接跑 `scripts/ops/prepush_dispatch.sh`（remote 名與 URL 走 argv，`<local_ref> <local_sha> <remote_ref> <remote_sha>` 走 stdin）。
 
 ```bash
 # 假設 broken hook 是 bilingual-structure-check，當前 branch 是 feat/xxx
@@ -1021,7 +1022,8 @@ Q1. base/head error count 一樣嗎？（用 Layer 1 one-liner）
 
 #### Layer 1 — A/B 驗證 one-liner（機械化 self-check）
 
-pre-push hook 擋路時，第一件事：**證明失敗是否跟這次 commits 有關**。用 `git worktree` 跳到 base commit 重跑同一個 hook，若結果一樣 → drift 跟這次無關，**用那一格自己的旗標繞過**（mkdocs strict：`MKDOCS_STRICT_BYPASS=1`；preflight marker：`GIT_PREFLIGHT_BYPASS=1`，需 owner 核准）；若結果不同 → 這次 commits 引入新問題，必須修。⛔ **不要用 `--no-verify`**：它一次關掉 pre-push 上的**每一道**守衛，而不是你剛證明無關的那一道（包含擋直推 main 那道，它沒有旗標是刻意的）；`protect_main_push.sh` / `require_preflight_pass.sh` / `prepush_dispatch.sh` 的檔頭都逐字禁止它。
+pre-push hook 擋路時，第一件事：**證明失敗是否跟這次 commits 有關**。用 `git worktree` 跳到 base commit 重跑同一個 hook，若結果一樣 → drift 跟這次無關，**用那一格自己的旗標繞過**（mkdocs strict：`MKDOCS_STRICT_BYPASS=1`；preflight marker：`GIT_PREFLIGHT_BYPASS=1`，需 owner 核准）；若結果不同 → 這次 commits 引入新問題，必須修。⛔ **不要用 `--no-verify`**：它一次關掉 pre-push 上的**每一道**守衛（含擋直推 main 那道——實測它不認任何 bypass 變數，也含串接的 git-lfs hook），而不是你剛證明無關的那一道。三支守衛逐字禁止它的那幾句住在「helper 不見」的錯誤訊息與註解裡，**不在檔頭**（去檔頭找會撲空）。⚠️ 兩處相反的活字仍在：`protect_main_push.sh` 被擋時的橫幅印著「緊急 hotfix？加 `--no-verify`」，而 `win_git_escape.bat push` 無條件帶它——行為面在 [#1487](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1487) 追蹤。
+⛔ 上面那個 A/B 一行式（`pre-commit run <hook-id>`）**對這三道 pre-push 守衛不適用**：它們不是 pre-commit hook、沒有 hook id（以 `yaml.safe_load` 數過，123 個 id 裡 0 個），照做會得到「CI 沒有這個 hook ⇒ 本地假紅」這個錯結論。要 A/B 就直接跑 `scripts/ops/prepush_dispatch.sh`（remote 名與 URL 走 argv，`<local_ref> <local_sha> <remote_ref> <remote_sha>` 走 stdin）。
 
 ```bash
 # 假設 broken hook 是 bilingual-structure-check，當前 branch 是 feat/xxx
