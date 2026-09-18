@@ -14,6 +14,8 @@ Thumbs.db
 *.exe
 *.test
 components/*/app/threshold-exporter
+# `go build` in scripts/tools/ops names its binary after the module (#1873)
+scripts/tools/ops/benchfilter
 
 # --- Python ---
 __pycache__/

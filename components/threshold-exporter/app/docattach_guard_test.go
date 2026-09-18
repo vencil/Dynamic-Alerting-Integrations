@@ -24,12 +24,12 @@ package main
 // so what this test READS is inside what TRIGGERS it. ⚠️ That containment is
 // accidental, not structural: components/ also holds da-portal, da-tools and
 // recipe-preview, and it holds only because those three carry zero .go files
-// today. Two of the repo's other Go modules — scripts/tools/ops/bench-canary
-// and tests/e2e-bench/receiver — are outside the filter, so scanning them here
-// would be a guard a PR can edit without waking (#1399 is that failure shape;
-// #1751 tracks their lint coverage). The third, tests/alertmanager-inhibit,
-// IS in the filter and has its own test leg — an earlier version of this
-// comment wrongly lumped it in with the other two.
+// today. Widening the scan to the repo's other Go modules would need each of
+// them checked against that filter first — some are covered and some are not,
+// and a scan of an uncovered one is a guard a PR can edit without waking
+// (#1399 is that failure shape). Deliberately not listed here: which modules
+// are covered has changed twice (#1280, #1873) and a list in this comment has
+// nothing reading it. Read `ci.yml`'s `go` filter.
 //
 // ⚠️ THE FALSE-POSITIVE SURFACE IS BIGGER THAN TODAY'S ZERO. Measured: 37
 // paragraphs under components/ already name a known declaration and are held

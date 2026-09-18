@@ -418,7 +418,7 @@ dc-test: ## 在 Dev Container 內跑 pytest（可選 ARGS="-k foo"）
 dc-go-test: ## 在 Dev Container 內跑 Go tests（預設全 CI module；MOD= / PKG= 縮小範圍；Go 僅在 container 內可用）
 	@# Root 無 go.work——go test 必須逐 module 跑；module 對照表（與 ci.yml
 	@# go-tests-* jobs 同步）維護在 scripts/ops/dc_go_test.sh。用法：
-	@#   make dc-go-test                          # exporter + tenant-api + am-inhibit + receiver 全跑
+	@#   make dc-go-test                          # exporter + tenant-api + am-inhibit + receiver + bench-filter 全跑
 	@#   make dc-go-test MOD=tenant-api           # 單 module
 	@#   make dc-go-test PKG=./internal/rbac/...  # 單 package（module 自動推斷，秒級）
 	@#   make dc-go-test MOD=tenant-api ARGS="-run TestX -v"

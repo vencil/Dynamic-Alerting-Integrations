@@ -32,6 +32,7 @@ MODULES=(
   "tenant-api|components/tenant-api|./cmd/... ./internal/..."
   "am-inhibit|tests/alertmanager-inhibit|./..."
   "receiver|tests/e2e-bench/receiver|./..."
+  "bench-filter|scripts/tools/ops|./..."
 )
 
 MOD="" PKG=""
@@ -65,7 +66,7 @@ resolve_mod() { # <alias-or-dir> → 全域 R_DIR / R_PKGS
 
 if [ -n "$MOD" ]; then
   if ! resolve_mod "$MOD"; then
-    echo "❌ unknown module '$MOD'（aliases: exporter / tenant-api / am-inhibit / receiver，或含 go.mod 的目錄路徑）" >&2
+    echo "❌ unknown module '$MOD'（aliases: exporter / tenant-api / am-inhibit / receiver / bench-filter，或含 go.mod 的目錄路徑）" >&2
     exit 2
   fi
   # shellcheck disable=SC2086  # pkg patterns 有意 word-split
@@ -87,7 +88,7 @@ if [ -n "$PKG" ]; then
       # shellcheck disable=SC2086
       run_mod "${matches[0]}" $PKG; exit 0 ;;
     0)
-      echo "❌ PKG '$PKG' 不在任何 Go module 底下（exporter / tenant-api / am-inhibit / receiver）。改用 MOD=<alias> 指定。" >&2
+      echo "❌ PKG '$PKG' 不在任何 Go module 底下（exporter / tenant-api / am-inhibit / receiver / bench-filter）。改用 MOD=<alias> 指定。" >&2
       exit 2 ;;
     *)
       echo "❌ PKG '$PKG' 命中多個 module：${matches[*]}——用 MOD=<alias> 消歧。" >&2

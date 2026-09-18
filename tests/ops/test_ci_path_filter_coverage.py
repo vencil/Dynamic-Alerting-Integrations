@@ -1986,6 +1986,7 @@ GATED_LEGS = {
     ("ci.yml", "go-tests-tenant-api"),
     ("ci.yml", "go-tests-am-inhibit"),
     ("ci.yml", "go-tests-e2e-bench-receiver"),
+    ("ci.yml", "go-tests-bench-filter"),
     ("docs-ci.yaml", "validate-mermaid"),
     ("docs-ci.yaml", "check-links"),
     ("docs-ci.yaml", "check-frontmatter"),
@@ -2010,6 +2011,9 @@ KNOWN_VACUOUS_LEGS = {
     ("ci.yml", "go-tests-e2e-bench-receiver"):
         "only `go test ./...` under working-directory: tests/e2e-bench/"
         "receiver — directory-shaped, same as am-inhibit",
+    ("ci.yml", "go-tests-bench-filter"):
+        "only `go test ./...` under working-directory: scripts/tools/ops — "
+        "directory-shaped, same as am-inhibit",
     ("docs-ci.yaml", "doc-line-count"):
         "only `find docs rule-packs -name '*.md' | wc -l` — directory-shaped",
 }

@@ -67,7 +67,7 @@ jobs:
         uses: dorny/paths-filter@v3
         with:
           filters: |
-            # Go legs (threshold-exporter / tenant-api / am-inhibit / e2e-bench receiver):
+            # Go legs (threshold-exporter / tenant-api / am-inhibit / e2e-bench receiver / bench-filter):
             #   - components/{threshold-exporter,tenant-api}/** — the two
             #     module trees (code, go.mod/sum, embedded config/goldens;
             #     conf.d lives under threshold-exporter/config/**).
@@ -102,6 +102,11 @@ jobs:
               #     edit; this entry makes an edit to main.go / main_test.go
               #     wake them too.
               - "tests/e2e-bench/receiver/**"
+              #   - scripts/tools/ops/*.go — the bench-filter leg (#1873); its
+              #     go.mod is already matched by `**/go.mod`. One `*`, not `**`:
+              #     scripts/tools/ops/bench-canary underneath is its own module,
+              #     which this leg does not run.
+              - "scripts/tools/ops/*.go"
               - "tests/shared/**"
               #   - tests/golden/**, tests/rulepacks/** and tests/dx/fixtures/**
               #     — same asymmetry as tests/shared/** above, in three sibling
@@ -1761,6 +1766,36 @@ jobs:
         working-directory: tests/e2e-bench/receiver
         run: go test ./... -race -count=1
 
+  go-tests-bench-filter:
+    name: Go Tests — bench-filter
+    runs-on: ubuntu-latest
+    # #1873: scripts/tools/ops/bench_filter.go had no runner on any PR path —
+    # on CI it runs only in bench-gate-release.yaml (release /
+    # workflow_dispatch) and, on a night whose paired reference is unusable,
+    # in bench-record.yaml's `make benchmark-report` fallback (the paired path
+    # appends the test binary's stdout unfiltered). So a change first ran after
+    # merge. On those paths it is what keeps the `cpu:` header that
+    # analyze_bench_history.py stratifies the trend watchdog by, and
+    # bench_filter_test.go pins that. Stdlib-only module, single
+    # goroutine: no go.sum, no module cache, no -race. `./...` here does not
+    # descend into the nested bench-canary module.
+    needs: detect-changes
+    if: needs.detect-changes.outputs.go_changed == 'true'
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+
+      - name: Run bench-filter unit tests
+        working-directory: scripts/tools/ops
+        run: go test ./... -count=1
+
   go-tests:
     # Aggregation gate for the split Go jobs above. The job name is kept
     # EXACTLY "Go Tests (1.26)" — the check name the former matrix job
@@ -1779,7 +1814,7 @@ jobs:
     runs-on: ubuntu-latest
     # Pure result-aggregation gate — touches no repo content, needs no token.
     permissions: {}
-    needs: [detect-changes, go-tests-threshold-exporter, go-tests-tenant-api, go-tests-am-inhibit, go-tests-e2e-bench-receiver]
+    needs: [detect-changes, go-tests-threshold-exporter, go-tests-tenant-api, go-tests-am-inhibit, go-tests-e2e-bench-receiver, go-tests-bench-filter]
     # always(): without it a failed dependency SKIPS this job, and a skipped
     # check would satisfy branch protection — the gate must FAIL, not skip,
     # when any split job fails.
@@ -1799,17 +1834,19 @@ jobs:
           R_TA: ${{ needs.go-tests-tenant-api.result }}
           R_AM: ${{ needs.go-tests-am-inhibit.result }}
           R_RX: ${{ needs.go-tests-e2e-bench-receiver.result }}
+          R_BF: ${{ needs.go-tests-bench-filter.result }}
         run: |
           echo "detect-changes:     $DETECT_RESULT (go_changed=$GO_CHANGED)"
           echo "threshold-exporter: $R_TE"
           echo "tenant-api:         $R_TA"
           echo "am-inhibit:         $R_AM"
           echo "e2e-bench receiver: $R_RX"
+          echo "bench-filter:       $R_BF"
           if [ "$DETECT_RESULT" != "success" ]; then
             echo "::error::detect-changes did not succeed — refusing to treat skipped tests as green"
             exit 1
           fi
-          for r in "$R_TE" "$R_TA" "$R_AM" "$R_RX"; do
+          for r in "$R_TE" "$R_TA" "$R_AM" "$R_RX" "$R_BF"; do
             if [ "$r" = "success" ]; then
               continue
             fi

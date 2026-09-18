@@ -61,6 +61,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"regexp"
 	"strings"
@@ -110,8 +111,11 @@ func keepLine(raw string) bool {
 	return false
 }
 
-func main() {
-	sc := bufio.NewScanner(os.Stdin)
+// filter copies the retained lines of a `go test -json` stream from in to
+// out. It is main minus the exit codes, so bench_filter_test.go exercises the
+// same loop the release harness runs; main decides what the two errors mean.
+func filter(in io.Reader, out io.Writer) (readErr, writeErr error) {
+	sc := bufio.NewScanner(in)
 	sc.Buffer(make([]byte, 1024*1024), 16*1024*1024)
 
 	// bufio.Writer keeps the first write error and turns every later write
@@ -122,7 +126,7 @@ func main() {
 	// bench_wrapper.sh it is a pipe, whose only write error is EPIPE, and the
 	// Go runtime ends the process with SIGPIPE (rc 141, as before) before
 	// Flush can report it.
-	w := bufio.NewWriter(os.Stdout)
+	w := bufio.NewWriter(out)
 
 	for sc.Scan() {
 		var ev event
@@ -149,8 +153,13 @@ func main() {
 			}
 		}
 	}
-	if err := w.Flush(); err != nil {
-		fmt.Fprintln(os.Stderr, "bench_filter: writing stdout:", err)
+	return sc.Err(), w.Flush()
+}
+
+func main() {
+	readErr, writeErr := filter(os.Stdin, os.Stdout)
+	if writeErr != nil {
+		fmt.Fprintln(os.Stderr, "bench_filter: writing stdout:", writeErr)
 		os.Exit(1)
 	}
 
@@ -177,8 +186,8 @@ func main() {
 	// Deliberate — the write error is the more proximate fact — but it means
 	// "no space left on device" can be the only thing an operator sees when
 	// there is also an oversized line waiting.
-	if err := sc.Err(); err != nil {
-		fmt.Fprintln(os.Stderr, "bench_filter: reading stdin:", err)
+	if readErr != nil {
+		fmt.Fprintln(os.Stderr, "bench_filter: reading stdin:", readErr)
 		os.Exit(1)
 	}
 }
