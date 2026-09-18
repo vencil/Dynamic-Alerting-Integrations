@@ -788,7 +788,7 @@ migrate-conf-d: ## 遷移 flat conf.d/ 至分層結構 (使用: make migrate-con
 	@python3 ./scripts/tools/dx/migrate_conf_d.py $(ARGS)
 
 .PHONY: generate-alert-reference
-generate-alert-reference: ## 從 Rule Pack YAML 產生 ALERT-REFERENCE.md (使用: make generate-alert-reference 或 --update)
+generate-alert-reference: ## 從 Rule Pack YAML 產生 ALERT-REFERENCE.md（預設直接寫檔；--dry-run 只印、--check 偵測 drift）
 	@python3 ./scripts/tools/dx/generate_alert_reference.py
 
 .PHONY: generate-nav
