@@ -6,7 +6,6 @@
 用法:
   python3 scripts/tools/doc_coverage.py              # 文字報告
   python3 scripts/tools/doc_coverage.py --json        # JSON 輸出
-  python3 scripts/tools/doc_coverage.py --badge       # Shield.io badge JSON
   python3 scripts/tools/doc_coverage.py --ci          # CI 模式（exit 1 if below 80%）
 """
 
@@ -514,34 +513,6 @@ class DocCoverageAnalyzer:
             "broken_links": self.broken_links,
         }
 
-    def get_badge_json(self) -> Dict:
-        """取得 shield.io badge 格式的 JSON"""
-        stats = self.get_statistics()
-
-        # 計算平均覆蓋率
-        avg_coverage = (
-            stats["frontmatter_coverage_percent"] +
-            stats["bilingual_coverage_percent"] +
-            stats["link_health_percent"]
-        ) / 3
-
-        # 決定顏色
-        if avg_coverage >= 90:
-            color = "green"
-        elif avg_coverage >= 70:
-            color = "yellow"
-        elif avg_coverage >= 50:
-            color = "orange"
-        else:
-            color = "red"
-
-        return {
-            "schemaVersion": 1,
-            "label": "docs coverage",
-            "message": f"{round(avg_coverage, 0):.0f}%",
-            "color": color,
-        }
-
 
 def main():
     """CLI entry point: 文件覆蓋率 Dashboard."""
@@ -553,11 +524,6 @@ def main():
         "--json",
         action="store_true",
         help="Output JSON report"
-    )
-    parser.add_argument(
-        "--badge",
-        action="store_true",
-        help="Output shield.io badge JSON"
     )
     parser.add_argument(
         "--ci",
@@ -592,9 +558,6 @@ def main():
     if args.json:
         report = analyzer.get_json_report()
         print(json.dumps(report, indent=2, ensure_ascii=False))
-    elif args.badge:
-        badge = analyzer.get_badge_json()
-        print(json.dumps(badge, indent=2, ensure_ascii=False))
     else:
         analyzer.print_text_report()
 
